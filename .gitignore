@@ -29,6 +29,8 @@ target/
 # Environment
 .env
 .env.*
+# 例外：允许 .env.example 提交（仅作模板，不含真实密钥）
+!.env.example
 
 # Database
 *.db

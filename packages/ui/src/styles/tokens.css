@@ -1,0 +1,101 @@
+/* ============================================================
+ * IcePaw Design Tokens (CSS Variables)
+ * 前缀约定：--ip-（IcePaw）
+ * 阶段 1 占位 — 阶段 2 落地设计稿后补充完整值
+ * ============================================================ */
+
+:root {
+  /* --- 颜色 --- */
+  --ip-color-primary: #3b82f6;
+  --ip-color-primary-light: #60a5fa;
+  --ip-color-primary-dark: #2563eb;
+
+  --ip-color-secondary: #6b7280;
+  --ip-color-secondary-light: #9ca3af;
+  --ip-color-secondary-dark: #4b5563;
+
+  --ip-color-success: #22c55e;
+  --ip-color-warning: #f59e0b;
+  --ip-color-danger: #ef4444;
+  --ip-color-info: #06b6d4;
+
+  --ip-color-text-primary: #111827;
+  --ip-color-text-secondary: #6b7280;
+  --ip-color-text-disabled: #9ca3af;
+
+  --ip-color-bg-primary: #ffffff;
+  --ip-color-bg-secondary: #f9fafb;
+  --ip-color-bg-tertiary: #f3f4f6;
+  --ip-color-bg-disabled: #e5e7eb;
+
+  --ip-color-border: #e5e7eb;
+  --ip-color-border-focus: #3b82f6;
+
+  /* --- 间距 --- */
+  --ip-spacing-xs: 4px;
+  --ip-spacing-sm: 8px;
+  --ip-spacing-md: 12px;
+  --ip-spacing-lg: 16px;
+  --ip-spacing-xl: 24px;
+  --ip-spacing-2xl: 32px;
+
+  /* --- 字号 --- */
+  --ip-font-size-xs: 12px;
+  --ip-font-size-sm: 14px;
+  --ip-font-size-base: 16px;
+  --ip-font-size-lg: 18px;
+  --ip-font-size-xl: 20px;
+  --ip-font-size-2xl: 24px;
+
+  --ip-font-weight-normal: 400;
+  --ip-font-weight-medium: 500;
+  --ip-font-weight-semibold: 600;
+  --ip-font-weight-bold: 700;
+
+  --ip-line-height-tight: 1.25;
+  --ip-line-height-normal: 1.5;
+  --ip-line-height-relaxed: 1.75;
+
+  /* --- 圆角 --- */
+  --ip-radius-sm: 4px;
+  --ip-radius-md: 6px;
+  --ip-radius-lg: 8px;
+  --ip-radius-xl: 12px;
+  --ip-radius-full: 9999px;
+
+  /* --- 阴影 --- */
+  --ip-shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --ip-shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  --ip-shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+
+  /* --- 过渡 --- */
+  --ip-transition-fast: 150ms ease;
+  --ip-transition-normal: 250ms ease;
+  --ip-transition-slow: 350ms ease;
+
+  /* --- z-index --- */
+  --ip-z-index-dropdown: 100;
+  --ip-z-index-sticky: 200;
+  --ip-z-index-overlay: 300;
+  --ip-z-index-modal: 400;
+  --ip-z-index-toast: 500;
+}
+
+/* 暗色主题覆盖 */
+[data-theme='dark'] {
+  --ip-color-primary: #60a5fa;
+  --ip-color-primary-light: #93bbfd;
+  --ip-color-primary-dark: #3b82f6;
+
+  --ip-color-text-primary: #f9fafb;
+  --ip-color-text-secondary: #9ca3af;
+  --ip-color-text-disabled: #6b7280;
+
+  --ip-color-bg-primary: #111827;
+  --ip-color-bg-secondary: #1f2937;
+  --ip-color-bg-tertiary: #374151;
+  --ip-color-bg-disabled: #4b5563;
+
+  --ip-color-border: #374151;
+  --ip-color-border-focus: #60a5fa;
+}

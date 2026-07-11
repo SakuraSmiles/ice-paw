@@ -1,0 +1,6 @@
+# 格式化忽略清单
+dist/
+node_modules/
+src-tauri/
+pnpm-lock.yaml
+*.lock

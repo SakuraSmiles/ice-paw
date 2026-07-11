@@ -1,2 +1,6 @@
+packages:
+  - "packages/*"
+
+# 允许 esbuild 原生构建（在某些 Linux 环境下需要）
 allowBuilds:
   esbuild: true

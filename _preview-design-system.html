@@ -1,0 +1,2360 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1920, initial-scale=1">
+<title>IcePaw Design System V2 — Full Preview</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* ================================================================
+   IcePaw Design Tokens V2 — Complete CSS Variable System
+   ================================================================ */
+
+:root {
+  /* ── Brand ── */
+  --color-brand-50:  #EBF2FF;
+  --color-brand-100: #D6E4FF;
+  --color-brand-200: #ADC9FF;
+  --color-brand-300: #85AFFF;
+  --color-brand-400: #5C94FF;
+  --color-brand-500: #2C6FEE;
+  --color-brand-600: #2358CC;
+  --color-brand-700: #1A42A3;
+  --color-brand-800: #112E7A;
+  --color-brand-900: #0A1C52;
+
+  /* ── Neutral (warm gray) ── */
+  --color-neutral-0:   #FFFFFF;
+  --color-neutral-25:  #FCFCFA;
+  --color-neutral-50:  #FAFAF8;
+  --color-neutral-100: #F5F5F2;
+  --color-neutral-150: #F0F0EC;
+  --color-neutral-200: #E8E8E4;
+  --color-neutral-300: #D4D4D0;
+  --color-neutral-400: #A8A8A4;
+  --color-neutral-500: #787874;
+  --color-neutral-600: #585854;
+  --color-neutral-700: #383834;
+  --color-neutral-800: #1E1E1C;
+  --color-neutral-900: #0A0A08;
+
+  /* ── Semantic ── */
+  --color-success-50:  #EDF9F2;
+  --color-success-500: #0CA678;
+  --color-success-600: #0A8F66;
+  --color-success-700: #087855;
+  --color-warning-50:  #FDF6E8;
+  --color-warning-500: #D97706;
+  --color-warning-600: #C06805;
+  --color-warning-700: #A65904;
+  --color-error-50:    #FEF2F2;
+  --color-error-500:   #DC2626;
+  --color-error-600:   #C42020;
+  --color-error-700:   #A81A1A;
+
+  /* ── Semantic mappings ── */
+  --color-bg-page:        var(--color-neutral-50);
+  --color-bg-sidebar:     var(--color-neutral-150);
+  --color-bg-card:        var(--color-neutral-0);
+  --color-bg-code:        var(--color-neutral-100);
+  --color-bg-input:       var(--color-neutral-0);
+  --color-bg-overlay:     var(--color-neutral-0);
+  --color-bg-hover:       var(--color-neutral-100);
+  --color-bg-pressed:     var(--color-neutral-150);
+  --color-bg-selected:    var(--color-brand-50);
+
+  --color-border:         var(--color-neutral-200);
+  --color-border-strong:  var(--color-neutral-300);
+  --color-border-focus:   var(--color-brand-500);
+
+  --color-text-primary:   var(--color-neutral-800);
+  --color-text-secondary: var(--color-neutral-600);
+  --color-text-tertiary:  var(--color-neutral-500);
+  --color-text-disabled:  var(--color-neutral-400);
+  --color-text-on-brand:  var(--color-neutral-0);
+
+  --color-bubble-user:    var(--color-brand-500);
+  --color-bubble-user-text: var(--color-neutral-0);
+  --color-bubble-ai:      var(--color-neutral-0);
+  --color-bubble-ai-border: var(--color-neutral-200);
+  --color-bubble-ai-text: var(--color-neutral-800);
+
+  --color-accent:         var(--color-brand-500);
+  --color-accent-hover:   var(--color-brand-600);
+  --color-accent-active:  var(--color-brand-700);
+  --color-accent-subtle:  var(--color-brand-50);
+
+  /* ── Typography ── */
+  --font-sans: 'Inter', 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Menlo', 'Consolas', monospace;
+
+  --text-2xs:  0.625rem;
+  --text-xs:   0.6875rem;
+  --text-sm:   0.8125rem;
+  --text-md:   0.875rem;
+  --text-lg:   1rem;
+  --text-xl:   1.25rem;
+  --text-2xl:  1.5rem;
+  --text-3xl:  1.875rem;
+  --text-4xl:  2.25rem;
+  --text-code: 0.8125rem;
+
+  --leading-tight:   1.25;
+  --leading-snug:    1.4;
+  --leading-normal:  1.6;
+  --leading-relaxed: 1.75;
+  --leading-code:    1.55;
+
+  --weight-normal:   400;
+  --weight-medium:   500;
+  --weight-semibold: 600;
+  --weight-bold:     700;
+
+  /* ── Spacing (4px baseline) ── */
+  --space-1:  0.25rem;
+  --space-2:  0.5rem;
+  --space-3:  0.75rem;
+  --space-4:  1rem;
+  --space-5:  1.25rem;
+  --space-6:  1.5rem;
+  --space-8:  2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
+  --space-16: 4rem;
+
+  /* ── Border Radius ── */
+  --radius-xs:   0.25rem;
+  --radius-sm:   0.375rem;
+  --radius-md:   0.5rem;
+  --radius-lg:   0.75rem;
+  --radius-xl:   1rem;
+  --radius-2xl:  1.5rem;
+  --radius-full: 9999px;
+
+  /* ── Shadows ── */
+  --shadow-xs:  0 1px 2px  rgba(0, 0, 0, 0.03);
+  --shadow-sm:  0 1px 3px  rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.06);
+  --shadow-md:  0 4px 8px  rgba(0, 0, 0, 0.06), 0 2px 4px rgba(0, 0, 0, 0.04);
+  --shadow-lg:  0 10px 24px rgba(0, 0, 0, 0.08), 0 4px 8px rgba(0, 0, 0, 0.04);
+  --shadow-xl:  0 20px 48px rgba(0, 0, 0, 0.12), 0 8px 16px rgba(0, 0, 0, 0.06);
+  --shadow-focus: 0 0 0 3px rgba(44, 111, 238, 0.2);
+  --shadow-error: 0 0 0 3px rgba(220, 38, 38, 0.15);
+  --shadow-card-hover: 0 4px 12px rgba(0, 0, 0, 0.08), 0 2px 4px rgba(0, 0, 0, 0.04);
+  --shadow-toast: 0 8px 24px rgba(0, 0, 0, 0.12);
+
+  /* ── Animation ── */
+  --ease-out:         cubic-bezier(0, 0, 0.2, 1);
+  --ease-in:          cubic-bezier(0.4, 0, 1, 1);
+  --ease-in-out:      cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-spring:      cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  --duration-instant: 50ms;
+  --duration-fast:    120ms;
+  --duration-normal:  200ms;
+  --duration-slow:    300ms;
+  --duration-gentle:  500ms;
+
+  /* ── Z-index ── */
+  --z-base:     0;
+  --z-dropdown: 100;
+  --z-sticky:   200;
+  --z-overlay:  300;
+  --z-tooltip:  400;
+  --z-toast:    500;
+  --z-spinner:  600;
+
+  /* ── Layout ── */
+  --sidebar-width: 260px;
+}
+
+/* ================================================================
+   Global Reset
+   ================================================================ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+html {
+  font-size: 16px;
+  scroll-behavior: smooth;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: var(--text-md);
+  line-height: var(--leading-normal);
+  color: var(--color-text-primary);
+  background: var(--color-bg-page);
+}
+
+/* ================================================================
+   Preview Layout
+   ================================================================ */
+.preview-wrapper {
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: var(--space-8) var(--space-6);
+}
+
+.preview-header {
+  text-align: center;
+  padding: var(--space-12) var(--space-6) var(--space-8);
+  border-bottom: 1px solid var(--color-border);
+  margin-bottom: var(--space-8);
+}
+
+.preview-header h1 {
+  font-size: var(--text-4xl);
+  font-weight: var(--weight-bold);
+  color: var(--color-text-primary);
+  letter-spacing: -0.02em;
+}
+.preview-header p {
+  font-size: var(--text-lg);
+  color: var(--color-text-secondary);
+  margin-top: var(--space-2);
+}
+
+/* Section */
+.section {
+  margin-bottom: var(--space-12);
+}
+.section-title {
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-primary);
+  margin-bottom: var(--space-2);
+  padding-bottom: var(--space-2);
+  border-bottom: 2px solid var(--color-brand-500);
+  display: inline-block;
+}
+.section-desc {
+  font-size: var(--text-md);
+  color: var(--color-text-secondary);
+  margin-bottom: var(--space-6);
+}
+
+/* Sub-section */
+.sub-section {
+  margin-bottom: var(--space-6);
+}
+.sub-title {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-primary);
+  margin-bottom: var(--space-3);
+}
+
+/* ================================================================
+   Color Palette Display
+   ================================================================ */
+.palette-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: var(--space-3);
+}
+.swatch {
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  box-shadow: var(--shadow-xs);
+}
+.swatch-color {
+  height: 64px;
+  position: relative;
+}
+.swatch-color--brand-50  { background: #EBF2FF; }
+.swatch-color--brand-100 { background: #D6E4FF; }
+.swatch-color--brand-200 { background: #ADC9FF; }
+.swatch-color--brand-300 { background: #85AFFF; }
+.swatch-color--brand-400 { background: #5C94FF; }
+.swatch-color--brand-500 { background: #2C6FEE; }
+.swatch-color--brand-600 { background: #2358CC; }
+.swatch-color--brand-700 { background: #1A42A3; }
+.swatch-color--brand-800 { background: #112E7A; }
+.swatch-color--brand-900 { background: #0A1C52; }
+
+.swatch-color--neutral-0   { background: #FFFFFF; }
+.swatch-color--neutral-25  { background: #FCFCFA; }
+.swatch-color--neutral-50  { background: #FAFAF8; }
+.swatch-color--neutral-100 { background: #F5F5F2; }
+.swatch-color--neutral-150 { background: #F0F0EC; }
+.swatch-color--neutral-200 { background: #E8E8E4; }
+.swatch-color--neutral-300 { background: #D4D4D0; }
+.swatch-color--neutral-400 { background: #A8A8A4; }
+.swatch-color--neutral-500 { background: #787874; }
+.swatch-color--neutral-600 { background: #585854; }
+.swatch-color--neutral-700 { background: #383834; }
+.swatch-color--neutral-800 { background: #1E1E1C; }
+.swatch-color--neutral-900 { background: #0A0A08; }
+
+.swatch-color--success-500 { background: #0CA678; }
+.swatch-color--warning-500 { background: #D97706; }
+.swatch-color--error-500   { background: #DC2626; }
+.swatch-color--success-50  { background: #EDF9F2; }
+.swatch-color--warning-50  { background: #FDF6E8; }
+.swatch-color--error-50    { background: #FEF2F2; }
+
+.swatch-label {
+  padding: 6px 8px;
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  color: var(--color-text-secondary);
+  background: var(--color-bg-card);
+}
+.swatch-label strong {
+  display: block;
+  color: var(--color-text-primary);
+  font-size: var(--text-xs);
+  margin-bottom: 2px;
+}
+
+/* ================================================================
+   Type Scale Display
+   ================================================================ */
+.type-sample {
+  margin-bottom: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-left: 3px solid var(--color-brand-200);
+  background: var(--color-bg-card);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+}
+.type-sample .label {
+  font-size: var(--text-xs);
+  color: var(--color-text-tertiary);
+  font-family: var(--font-mono);
+  margin-bottom: var(--space-1);
+}
+
+/* ================================================================
+   Spacing Demo
+   ================================================================ */
+.spacing-demo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.spacing-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+.spacing-block {
+  height: 24px;
+  border-radius: var(--radius-xs);
+  background: var(--color-brand-200);
+  flex-shrink: 0;
+}
+.spacing-label {
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  min-width: 72px;
+}
+
+/* ================================================================
+   Radius Demo
+   ================================================================ */
+.radius-demo {
+  display: flex;
+  gap: var(--space-6);
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+.radius-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+}
+.radius-box {
+  width: 72px;
+  height: 72px;
+  background: var(--color-brand-100);
+  border: 2px solid var(--color-brand-400);
+  transition: all var(--duration-fast) var(--ease-in-out);
+}
+.radius-box:hover {
+  background: var(--color-brand-200);
+  transform: scale(1.05);
+}
+.radius-label {
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  color: var(--color-text-secondary);
+}
+
+/* ================================================================
+   Shadows Demo
+   ================================================================ */
+.shadow-demo {
+  display: flex;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+.shadow-card {
+  width: 140px;
+  height: 100px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-card);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  color: var(--color-text-secondary);
+  transition: all var(--duration-normal) var(--ease-in-out);
+  cursor: pointer;
+}
+.shadow-card:hover {
+  transform: translateY(-2px);
+}
+
+/* ================================================================
+   Cursor Demo
+   ================================================================ */
+.cursor-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: var(--space-2);
+}
+.cursor-demo {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  font-size: var(--text-sm);
+  cursor: var(--cursor, default);
+  transition: all var(--duration-fast) var(--ease-in-out);
+}
+.cursor-demo:hover {
+  background: var(--color-bg-hover);
+  border-color: var(--color-border-strong);
+}
+.cursor-demo code {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-brand-600);
+  background: var(--color-brand-50);
+  padding: 1px 6px;
+  border-radius: var(--radius-xs);
+}
+
+/* ================================================================
+   Button Component
+   ================================================================ */
+.btn-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-family: var(--font-sans);
+  font-weight: var(--weight-medium);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  user-select: none;
+  transition: background-color var(--duration-fast) var(--ease-in-out),
+              color var(--duration-fast) var(--ease-in-out),
+              border-color var(--duration-fast) var(--ease-in-out),
+              transform var(--duration-instant) var(--ease-out),
+              box-shadow var(--duration-normal) var(--ease-in-out);
+  white-space: nowrap;
+}
+.btn:active:not(:disabled) {
+  transform: scale(0.97);
+}
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.btn:focus-visible {
+  outline: 2px solid var(--color-brand-500);
+  outline-offset: 2px;
+  box-shadow: none;
+}
+
+/* Sizes */
+.btn--sm { height: 28px; padding: 0 12px; font-size: 12px; border-radius: 6px; }
+.btn--md { height: 36px; padding: 0 16px; font-size: 14px; }
+.btn--lg { height: 44px; padding: 0 20px; font-size: 16px; }
+
+/* Primary */
+.btn--primary {
+  background: var(--color-brand-500);
+  color: var(--color-neutral-0);
+}
+.btn--primary:hover:not(:disabled) {
+  background: var(--color-brand-600);
+}
+.btn--primary:active:not(:disabled) {
+  background: var(--color-brand-700);
+}
+
+/* Secondary */
+.btn--secondary {
+  background: var(--color-neutral-100);
+  color: var(--color-text-primary);
+  border-color: var(--color-border);
+}
+.btn--secondary:hover:not(:disabled) {
+  background: var(--color-brand-50);
+  border-color: var(--color-brand-500);
+  color: var(--color-brand-600);
+}
+.btn--secondary:active:not(:disabled) {
+  background: var(--color-brand-100);
+}
+
+/* Ghost */
+.btn--ghost {
+  background: transparent;
+  color: var(--color-text-primary);
+}
+.btn--ghost:hover:not(:disabled) {
+  background: var(--color-neutral-100);
+}
+.btn--ghost:active:not(:disabled) {
+  background: var(--color-neutral-150);
+}
+
+/* Danger */
+.btn--danger {
+  background: var(--color-error-500);
+  color: var(--color-neutral-0);
+}
+.btn--danger:hover:not(:disabled) {
+  background: var(--color-error-600);
+}
+.btn--danger:active:not(:disabled) {
+  background: var(--color-error-700);
+}
+
+/* Text */
+.btn--text {
+  background: transparent;
+  color: var(--color-brand-500);
+  border: none;
+  padding: 0 var(--space-2);
+}
+.btn--text:hover:not(:disabled) {
+  color: var(--color-brand-600);
+  background: var(--color-brand-50);
+}
+.btn--text:active:not(:disabled) {
+  color: var(--color-brand-700);
+}
+
+/* Loading state */
+.btn--loading {
+  position: relative;
+  color: transparent !important;
+  pointer-events: none;
+}
+.btn--loading::after {
+  content: '';
+  position: absolute;
+  width: 16px; height: 16px;
+  border: 2px solid transparent;
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: spin 800ms linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ================================================================
+   Input Component
+   ================================================================ */
+.input-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-width: 400px;
+}
+.input-field {
+  height: 36px;
+  padding: 0 12px;
+  font-family: var(--font-sans);
+  font-size: var(--text-md);
+  color: var(--color-text-primary);
+  background: var(--color-bg-input);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  outline: none;
+  transition: border-color var(--duration-normal) var(--ease-out),
+              box-shadow var(--duration-normal) var(--ease-out);
+}
+.input-field::placeholder {
+  color: var(--color-text-tertiary);
+}
+.input-field:hover {
+  border-color: var(--color-border-strong);
+}
+.input-field:focus {
+  border-color: var(--color-border-focus);
+  box-shadow: var(--shadow-focus);
+}
+.input-field:disabled {
+  background: var(--color-neutral-100);
+  color: var(--color-text-disabled);
+  cursor: not-allowed;
+  border-color: var(--color-border);
+}
+.input-field--error {
+  border-color: var(--color-error-500);
+  background: var(--color-error-50);
+}
+.input-field--error:focus {
+  box-shadow: var(--shadow-error);
+}
+.input-error-text {
+  font-size: var(--text-xs);
+  color: var(--color-error-500);
+  margin-top: 2px;
+}
+
+.textarea-field {
+  min-height: 44px;
+  height: 44px;
+  max-height: 200px;
+  padding: 10px 12px;
+  font-family: var(--font-sans);
+  font-size: var(--text-md);
+  color: var(--color-text-primary);
+  background: var(--color-bg-input);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  outline: none;
+  resize: vertical;
+  transition: border-color var(--duration-normal) var(--ease-out),
+              box-shadow var(--duration-normal) var(--ease-out);
+}
+.textarea-field:focus {
+  border-color: var(--color-border-focus);
+  box-shadow: var(--shadow-focus);
+}
+
+/* ================================================================
+   Card Component
+   ================================================================ */
+.card-row {
+  display: flex;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+.card {
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  box-shadow: var(--shadow-sm);
+  width: 240px;
+  transition: transform var(--duration-normal) var(--ease-out),
+              box-shadow var(--duration-normal) var(--ease-out);
+  cursor: pointer;
+}
+.card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-card-hover);
+}
+.card-title {
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  margin-bottom: var(--space-2);
+}
+.card-body {
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+  line-height: var(--leading-normal);
+}
+
+/* Card variants */
+.card--raised {
+  box-shadow: var(--shadow-md);
+}
+.card--raised:hover {
+  box-shadow: var(--shadow-lg);
+}
+.card--flat {
+  box-shadow: none;
+}
+.card--flat:hover {
+  box-shadow: var(--shadow-sm);
+}
+
+/* ================================================================
+   Modal Component
+   ================================================================ */
+.modal-demo {
+  display: flex;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.modal-preview {
+  width: 320px;
+  background: var(--color-bg-card);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+.modal-header {
+  padding: var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.modal-header h4 {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+}
+.modal-body {
+  padding: var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+  line-height: var(--leading-normal);
+}
+.modal-footer {
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--color-border);
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+/* ================================================================
+   Badge Component
+   ================================================================ */
+.badge-row {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  align-items: center;
+}
+.badge {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-sans);
+}
+.badge--default { background: var(--color-neutral-100); color: var(--color-text-secondary); }
+.badge--brand   { background: var(--color-brand-50);   color: var(--color-brand-600); }
+.badge--success { background: var(--color-success-50); color: var(--color-success-600); }
+.badge--warning { background: var(--color-warning-50); color: var(--color-warning-600); }
+.badge--error   { background: var(--color-error-50);   color: var(--color-error-600); }
+.badge--pill    { border-radius: var(--radius-full); }
+
+.badge-dot {
+  display: inline-block;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.badge-dot--brand   { background: var(--color-brand-500); }
+.badge-dot--success { background: var(--color-success-500); }
+.badge-dot--warning { background: var(--color-warning-500); }
+.badge-dot--error   { background: var(--color-error-500); }
+.badge-dot--default { background: var(--color-neutral-400); }
+
+/* ================================================================
+   Toast Component
+   ================================================================ */
+.toast-demo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-width: 400px;
+}
+.toast {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 12px 16px;
+  background: var(--color-bg-card);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-toast);
+  border-left: 3px solid;
+  font-size: var(--text-sm);
+}
+.toast--info    { border-left-color: var(--color-brand-500); }
+.toast--success { border-left-color: var(--color-success-500); }
+.toast--warning { border-left-color: var(--color-warning-500); }
+.toast--error   { border-left-color: var(--color-error-500); }
+.toast-icon {
+  font-size: var(--text-lg);
+  flex-shrink: 0;
+}
+.toast--info .toast-icon    { color: var(--color-brand-500); }
+.toast--success .toast-icon { color: var(--color-success-500); }
+.toast--warning .toast-icon { color: var(--color-warning-500); }
+.toast--error .toast-icon   { color: var(--color-error-500); }
+.toast-text { flex: 1; }
+.toast-close {
+  background: none; border: none;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  font-size: var(--text-md);
+  padding: 2px;
+  opacity: 0.6;
+  transition: opacity var(--duration-fast);
+}
+.toast-close:hover { opacity: 1; }
+
+/* ================================================================
+   Avatar Component
+   ================================================================ */
+.avatar-row {
+  display: flex;
+  gap: var(--space-4);
+  align-items: center;
+  flex-wrap: wrap;
+}
+.avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: var(--weight-semibold);
+  color: white;
+  background: var(--color-brand-500);
+  border-radius: var(--radius-md);
+  flex-shrink: 0;
+  position: relative;
+  cursor: default;
+}
+.avatar--xs  { width: 20px; height: 20px; font-size: 10px; }
+.avatar--sm  { width: 28px; height: 28px; font-size: 12px; }
+.avatar--md  { width: 36px; height: 36px; font-size: 14px; }
+.avatar--lg  { width: 48px; height: 48px; font-size: 18px; }
+.avatar--xl  { width: 64px; height: 64px; font-size: 24px; }
+.avatar--circle { border-radius: 50%; }
+.avatar--rounded { border-radius: var(--radius-md); }
+.avatar-status {
+  position: absolute;
+  bottom: 0; right: 0;
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  border: 2px solid white;
+}
+.avatar-status--online  { background: var(--color-success-500); }
+.avatar-status--offline { background: var(--color-neutral-400); }
+
+/* ================================================================
+   Switch Component
+   ================================================================ */
+.switch-row {
+  display: flex;
+  gap: var(--space-4);
+  align-items: center;
+  flex-wrap: wrap;
+}
+.switch {
+  position: relative;
+  display: inline-block;
+  cursor: pointer;
+}
+.switch-track {
+  display: block;
+  background: var(--color-neutral-300);
+  border-radius: 12px;
+  transition: background var(--duration-normal) var(--ease-in-out);
+  position: relative;
+}
+.switch--sm .switch-track { width: 32px; height: 18px; }
+.switch--md .switch-track { width: 44px; height: 24px; }
+.switch--lg .switch-track { width: 56px; height: 30px; }
+
+.switch-thumb {
+  position: absolute;
+  top: 50%;
+  left: 2px;
+  transform: translateY(-50%);
+  background: var(--color-neutral-0);
+  border: 2px solid var(--color-neutral-300);
+  border-radius: 50%;
+  transition: left var(--duration-normal) var(--ease-spring),
+              border-color var(--duration-normal) var(--ease-in-out);
+}
+.switch--sm .switch-thumb { width: 14px; height: 14px; }
+.switch--md .switch-thumb { width: 20px; height: 20px; }
+.switch--lg .switch-thumb { width: 26px; height: 26px; }
+
+.switch--on .switch-track { background: var(--color-brand-500); }
+.switch--on .switch-thumb {
+  border-color: var(--color-brand-500);
+}
+.switch--sm.switch--on .switch-thumb { left: calc(100% - 16px); }
+.switch--md.switch--on .switch-thumb { left: calc(100% - 22px); }
+.switch--lg.switch--on .switch-thumb { left: calc(100% - 28px); }
+
+.switch--disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.switch input { display: none; }
+
+/* ================================================================
+   Tooltip Component
+   ================================================================ */
+.tooltip-demo {
+  display: flex;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  align-items: center;
+}
+.tooltip-trigger {
+  position: relative;
+  display: inline-block;
+  cursor: help;
+}
+.tooltip-content {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%) translateY(-6px);
+  background: var(--color-neutral-800);
+  color: var(--color-neutral-0);
+  font-size: var(--text-xs);
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  box-shadow: var(--shadow-md);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-fast) var(--ease-out),
+              transform var(--duration-fast) var(--ease-out);
+  z-index: var(--z-tooltip);
+}
+.tooltip-trigger:hover .tooltip-content {
+  opacity: 1;
+  transform: translateX(-50%) translateY(-8px);
+}
+.tooltip-content::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: var(--color-neutral-800);
+}
+
+/* ================================================================
+   Select Component
+   ================================================================ */
+.select-group {
+  max-width: 300px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.select-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 36px;
+  padding: 0 12px;
+  background: var(--color-bg-input);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  font-size: var(--text-md);
+  color: var(--color-text-primary);
+  cursor: pointer;
+  transition: border-color var(--duration-normal) var(--ease-out),
+              box-shadow var(--duration-normal) var(--ease-out);
+  position: relative;
+}
+.select-trigger:hover {
+  border-color: var(--color-border-strong);
+}
+.select-trigger--open {
+  border-color: var(--color-brand-500);
+  box-shadow: var(--shadow-focus);
+}
+.select-arrow {
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+  transition: transform var(--duration-normal) var(--ease-in-out);
+}
+.select-trigger--open .select-arrow {
+  transform: rotate(180deg);
+}
+
+.select-menu {
+  margin-top: 4px;
+  background: var(--color-bg-overlay);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  padding: 4px;
+  max-height: 256px;
+  overflow-y: auto;
+}
+.select-option {
+  display: flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 12px;
+  margin: 0 4px;
+  font-size: var(--text-md);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-in-out);
+}
+.select-option:hover {
+  background: var(--color-neutral-100);
+}
+.select-option--selected {
+  background: var(--color-brand-50);
+  color: var(--color-brand-600);
+  font-weight: var(--weight-medium);
+}
+.select-group-header {
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 8px 12px 2px;
+  cursor: default;
+}
+
+/* ================================================================
+   Sidebar Component
+   ================================================================ */
+.sidebar-demo {
+  width: var(--sidebar-width);
+  background: var(--color-bg-sidebar);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+}
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  padding: var(--space-4);
+  height: 56px;
+  border-bottom: 1px solid var(--color-border);
+  gap: var(--space-2);
+}
+.sidebar-brand {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+}
+.sidebar-body {
+  padding: var(--space-2);
+}
+.sidebar-new-btn {
+  width: 100%;
+  height: 36px;
+  background: var(--color-brand-500);
+  color: white;
+  border: none;
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  margin-bottom: var(--space-3);
+  transition: background var(--duration-fast) var(--ease-in-out);
+  display: flex; align-items: center; justify-content: center; gap: 4px;
+}
+.sidebar-new-btn:hover { background: var(--color-brand-600); }
+
+.sidebar-agent {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 32px;
+  padding: 4px 12px;
+  background: var(--color-neutral-200);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  margin-bottom: var(--space-2);
+  cursor: pointer;
+  transition: background var(--duration-fast);
+}
+.sidebar-agent:hover { background: var(--color-neutral-300); }
+
+.sidebar-conv-item {
+  display: flex;
+  align-items: center;
+  height: 40px;
+  padding: 0 12px;
+  margin: 2px 4px;
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-in-out);
+  position: relative;
+  border-left: 3px solid transparent;
+}
+.sidebar-conv-item:hover {
+  background: var(--color-neutral-100);
+}
+.sidebar-conv-item--active {
+  background: var(--color-neutral-0);
+  border-left-color: var(--color-brand-500);
+}
+.sidebar-conv-time {
+  margin-left: auto;
+  font-size: var(--text-2xs);
+  color: var(--color-text-tertiary);
+}
+.sidebar-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 48px;
+  padding: 0 var(--space-4);
+  border-top: 1px solid var(--color-border);
+  font-size: var(--text-sm);
+}
+
+/* ================================================================
+   ChatMessage Component
+   ================================================================ */
+.chat-demo {
+  max-width: 720px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+.msg-row {
+  display: flex;
+  max-width: 75%;
+}
+.msg-row--user {
+  align-self: flex-end;
+  justify-content: flex-end;
+}
+.msg-row--agent {
+  align-self: flex-start;
+  gap: 10px;
+}
+.msg-avatar {
+  width: 28px; height: 28px;
+  border-radius: var(--radius-md);
+  background: var(--color-brand-500);
+  color: white;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 600;
+  flex-shrink: 0;
+}
+.msg-agent-info {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.msg-agent-name {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-secondary);
+}
+.msg-model-tag {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--color-brand-600);
+  background: var(--color-brand-50);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+.msg-bubble {
+  padding: 10px 16px;
+  font-size: var(--text-md);
+  line-height: var(--leading-normal);
+  position: relative;
+  transition: box-shadow var(--duration-normal) var(--ease-in-out);
+}
+.msg-bubble--user {
+  background: var(--color-bubble-user);
+  color: var(--color-bubble-user-text);
+  border-radius: var(--radius-md) 4px var(--radius-md) var(--radius-md);
+}
+.msg-bubble--agent {
+  background: var(--color-bubble-ai);
+  color: var(--color-bubble-ai-text);
+  border: 1px solid var(--color-bubble-ai-border);
+  border-radius: 4px var(--radius-md) var(--radius-md) var(--radius-md);
+  box-shadow: var(--shadow-xs);
+}
+.msg-bubble--agent:hover {
+  box-shadow: var(--shadow-sm);
+}
+.msg-action-bar {
+  position: absolute;
+  top: 6px; right: 6px;
+  display: flex; gap: 2px;
+  opacity: 0;
+  transition: opacity var(--duration-fast) var(--ease-out);
+}
+.msg-bubble--agent:hover .msg-action-bar {
+  opacity: 1;
+}
+.msg-action-btn {
+  width: 24px; height: 24px;
+  border: none; border-radius: 6px;
+  background: var(--color-neutral-100);
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px;
+  transition: all var(--duration-fast) var(--ease-in-out);
+}
+.msg-action-btn:hover {
+  background: var(--color-neutral-200);
+  color: var(--color-text-primary);
+}
+.msg-time {
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  text-align: center;
+  margin: var(--space-2) 0;
+}
+.msg-code-block {
+  margin-top: var(--space-3);
+  background: var(--color-bg-code);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  font-family: var(--font-mono);
+  font-size: var(--text-code);
+  line-height: var(--leading-code);
+  overflow-x: auto;
+  position: relative;
+}
+.msg-code-lang {
+  position: absolute;
+  top: 4px; right: 8px;
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+  font-family: var(--font-sans);
+  text-transform: uppercase;
+}
+
+/* ================================================================
+   ChatInput Component
+   ================================================================ */
+.chat-input-demo {
+  max-width: 720px;
+  margin: 0 auto;
+  width: 100%;
+  padding: 12px 20px;
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+.chat-input-row {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+}
+.chat-input-textarea {
+  flex: 1;
+  min-height: 44px;
+  max-height: 120px;
+  padding: 12px 14px;
+  font-family: var(--font-sans);
+  font-size: var(--text-md);
+  line-height: var(--leading-normal);
+  color: var(--color-text-primary);
+  background: var(--color-bg-input);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  outline: none;
+  resize: none;
+  transition: border-color var(--duration-normal) var(--ease-out),
+              box-shadow var(--duration-normal) var(--ease-out);
+}
+.chat-input-textarea::placeholder { color: var(--color-text-tertiary); }
+.chat-input-textarea:focus {
+  border-color: var(--color-border-focus);
+  box-shadow: var(--shadow-focus);
+}
+.chat-input-actions {
+  display: flex;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+}
+.chat-input-tool-btn {
+  width: 28px; height: 28px;
+  background: transparent; border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--color-text-tertiary);
+  transition: all var(--duration-fast) var(--ease-in-out);
+}
+.chat-input-tool-btn:hover {
+  background: var(--color-neutral-100);
+  color: var(--color-text-primary);
+}
+.chat-input-send {
+  height: 36px;
+  padding: 0 16px;
+  background: var(--color-brand-500);
+  color: white;
+  border: none;
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-in-out);
+  flex-shrink: 0;
+}
+.chat-input-send:hover:not(:disabled) {
+  background: var(--color-brand-600);
+}
+.chat-input-send:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ================================================================
+   AgentPicker Component
+   ================================================================ */
+.agent-picker-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 34px;
+  min-width: 150px;
+  padding: 0 8px 0 12px;
+  background: var(--color-neutral-100);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-primary);
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-in-out);
+}
+.agent-picker-trigger:hover {
+  background: var(--color-neutral-150);
+  border-color: var(--color-border-strong);
+}
+.agent-picker-trigger--open {
+  background: var(--color-neutral-150);
+  border-color: var(--color-brand-500);
+}
+.agent-picker-arrow {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+  transition: transform var(--duration-normal) var(--ease-in-out);
+}
+.agent-picker-trigger--open .agent-picker-arrow {
+  transform: rotate(180deg);
+}
+
+/* ================================================================
+   ConversationList with Context Menu
+   ================================================================ */
+.ctx-menu-demo {
+  position: relative;
+  display: inline-block;
+}
+.ctx-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  min-width: 160px;
+  background: var(--color-bg-overlay);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  padding: 4px;
+  z-index: var(--z-dropdown);
+  opacity: 0;
+  pointer-events: none;
+  transform: scale(0.95) translateY(-4px);
+  transition: all var(--duration-normal) var(--ease-out);
+}
+.ctx-menu-demo:hover .ctx-menu {
+  opacity: 1;
+  pointer-events: auto;
+  transform: scale(1) translateY(0);
+}
+.ctx-menu-item {
+  display: flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  gap: var(--space-2);
+  transition: background var(--duration-fast);
+}
+.ctx-menu-item:hover {
+  background: var(--color-neutral-100);
+}
+.ctx-menu-item--danger:hover {
+  background: var(--color-error-50);
+  color: var(--color-error-500);
+}
+.ctx-menu-divider {
+  height: 1px;
+  background: var(--color-border);
+  margin: 4px 8px;
+}
+
+/* ================================================================
+   EmptyState Component
+   ================================================================ */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 280px;
+  padding: var(--space-8);
+  text-align: center;
+}
+.empty-illustration {
+  width: 120px;
+  height: 120px;
+  margin-bottom: var(--space-6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-brand-50);
+  border-radius: var(--radius-2xl);
+}
+.empty-illustration svg {
+  width: 56px;
+  height: 56px;
+  color: var(--color-brand-400);
+}
+.empty-title {
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-primary);
+  margin-bottom: var(--space-2);
+}
+.empty-desc {
+  font-size: var(--text-md);
+  color: var(--color-text-secondary);
+  max-width: 360px;
+  line-height: var(--leading-normal);
+  margin-bottom: var(--space-4);
+}
+.empty--inline {
+  min-height: 200px;
+  padding: var(--space-6);
+}
+.empty--compact .empty-illustration {
+  width: 64px; height: 64px;
+}
+.empty--compact .empty-illustration svg {
+  width: 32px; height: 32px;
+}
+.empty--compact .empty-title {
+  font-size: var(--text-md);
+}
+
+/* ================================================================
+   Animation Demo
+   ================================================================ */
+.anim-demo {
+  display: flex;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+.anim-card {
+  width: 160px;
+  padding: var(--space-4);
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  text-align: center;
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: all var(--duration-normal) var(--ease-in-out);
+}
+.anim-card:hover {
+  transform: translateY(-4px);
+  box-shadow: var(--shadow-card-hover);
+  border-color: var(--color-brand-300);
+}
+.anim-card:active {
+  transform: scale(0.96);
+}
+
+.anim-pulse {
+  display: inline-block;
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  background: var(--color-success-500);
+  animation: pulse 2s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(1.3); }
+}
+
+.anim-shimmer {
+  width: 200px; height: 16px;
+  border-radius: var(--radius-xs);
+  background: linear-gradient(90deg, var(--color-neutral-150) 25%, var(--color-neutral-200) 50%, var(--color-neutral-150) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ================================================================
+   Hover / Focus / Active demo (micro-interactions showcase)
+   ================================================================ */
+.interaction-row {
+  display: flex;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  align-items: center;
+}
+.interaction-label {
+  font-size: var(--text-xs);
+  color: var(--color-text-tertiary);
+  margin-bottom: var(--space-2);
+}
+
+/* ================================================================
+   Label annotations
+   ================================================================ */
+.annotation {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+  font-family: var(--font-mono);
+  background: var(--color-neutral-100);
+  padding: 1px 6px;
+  border-radius: var(--radius-xs);
+  white-space: nowrap;
+  margin-left: var(--space-1);
+}
+
+.pill-label {
+  display: inline-block;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--color-brand-600);
+  background: var(--color-brand-50);
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  margin-right: var(--space-2);
+}
+
+/* ================================================================
+   Focus-visible demo notes
+   ================================================================ */
+.note {
+  font-size: var(--text-xs);
+  color: var(--color-text-tertiary);
+  font-style: italic;
+  margin-top: var(--space-1);
+}
+
+/* ================================================================
+   Reduce motion respect
+   ================================================================ */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+</style>
+</head>
+<body>
+
+<div class="preview-wrapper">
+
+  <!-- Header -->
+  <div class="preview-header">
+    <h1>🧊 IcePaw Design System V2</h1>
+    <p>Warm Lab 极简暖白 × 精致微交互 — 完整视觉预览 &amp; 交互规范</p>
+  </div>
+
+  <!-- ============================================================
+       Section 1: Color Palette
+       ============================================================ -->
+  <section class="section">
+    <h2 class="section-title">1. 颜色系统</h2>
+    <p class="section-desc">品牌色阶梯 + 暖灰中性色 + 语义色。含 Dark Mode 预留变量（见规范文档）。</p>
+
+    <div class="sub-section">
+      <h3 class="sub-title">品牌色（冰爪蓝）<span class="annotation">--color-brand-50 → 900</span></h3>
+      <div class="palette-grid">
+        <div class="swatch"><div class="swatch-color swatch-color--brand-50"></div><div class="swatch-label"><strong>brand-50</strong> #EBF2FF</div></div>
+        <div class="swatch"><div class="swatch-color swatch-color--brand-100"></div><div class="swatch-label"><strong>brand-100</strong> #D6E4FF</div></div>
+        <div class="swatch"><div class="swatch-color swatch-color--brand-200"></div><div class="swatch-label"><strong>brand-200</strong> #ADC9FF</div></div>
+        <div class="swatch"><div class="swatch-color swatch-color--brand-300"></div><div class="swatch-label"><strong>brand-300</strong> #85AFFF</div></div>
+        <div class="swatch"><div class="swatch-color swatch-color--brand-400"></div><div class="swatch-label"><strong>brand-400</strong> #5C94FF</div></div>
+        <div class="swatch"><div class="swatch-color swatch-color--brand-500"></div><div class="swatch-label"><strong>brand-500 ★</strong> #2C6FEE</div></div>
+        <div class="swatch"><div class="swatch-color swatch-color--brand-600"></div><div class="swatch-label"><strong>brand-600</strong> #2358CC</div></div>
+        <div class="swatch"><div class="swatch-color swatch-color--brand-700"></div><div class="swatch-label"><strong>brand-700</strong> #1A42A3</div></div>
+        <div class="swatch"><div class="swatch-color swatch-color--brand-800"></div><div class="swatch-label"><strong>brand-800</strong> #112E7A</div></div>
+        <div class="swatch"><div class="swatch-color swatch-color--brand-900"></div><div class="swatch-label"><strong>brand-900</strong> #0A1C52</div></div>
+      </div>
+    </div>
+
+    <div class="sub-section">
+      <h3 class="sub-title">中性色（暖灰）<span class="annotation">--color-neutral-0 → 900</span></h3>
+      <div class="palette-grid">
+        <div class="swatch"><div class="swatch-color swatch-color--neutral-0"></div><div class="swatch-label"><strong>neutral-0</strong> #FFFFFF</div></div>
+        <div class="swatch"><div class="swatch-color swatch-color--neutral-25"></div><div class="swatch-label"><strong>neutral-25</strong> #FCFCFA</div></div>
+        <div class="swatch"><div class="swatch-color swatch-color--neutral-50"></div><div class="swatch-label"><strong>neutral-50 ★页</strong> #FAFAF8</div></div>
+        <div class="swatch"><div class="swatch-color swatch-color--neutral-100"></div><div class="swatch-label"><strong>neutral-100</strong> #F5F5F2</div></div>
+        <div class="swatch"><div class="swatch-color swatch-color--neutral-150"></div><div class="swatch-label"><strong>neutral-150 侧</strong> #F0F0EC</div></div>
+        <div class="swatch"><div class="swatch-color swatch-color--neutral-200"></div><div class="swatch-label"><strong>neutral-200 框</strong> #E8E8E4</div></div>
+        <div class="swatch"><div class="swatch-color swatch-color--neutral-300"></div><div class="swatch-label"><strong>neutral-300</strong> #D4D4D0</div></div>
+        <div class="swatch"><div class="swatch-color swatch-color--neutral-400"></div><div class="swatch-label"><strong>neutral-400</strong> #A8A8A4</div></div>
+        <div class="swatch"><div class="swatch-color swatch-color--neutral-500"></div><div class="swatch-label"><strong>neutral-500 位</strong> #787874</div></div>
+        <div class="swatch"><div class="swatch-color swatch-color--neutral-600"></div><div class="swatch-label"><strong>neutral-600 次</strong> #585854</div></div>
+        <div class="swatch"><div class="swatch-color swatch-color--neutral-700"></div><div class="swatch-label"><strong>neutral-700</strong> #383834</div></div>
+        <div class="swatch"><div class="swatch-color swatch-color--neutral-800"></div><div class="swatch-label"><strong>neutral-800 ★文</strong> #1E1E1C</div></div>
+        <div class="swatch"><div class="swatch-color swatch-color--neutral-900"></div><div class="swatch-label"><strong>neutral-900</strong> #0A0A08</div></div>
+      </div>
+    </div>
+
+    <div class="sub-section">
+      <h3 class="sub-title">语义色 <span class="annotation">--color-success / warning / error</span></h3>
+      <div class="palette-grid">
+        <div class="swatch"><div class="swatch-color swatch-color--success-500"></div><div class="swatch-label"><strong>success-500</strong> #0CA678</div></div>
+        <div class="swatch"><div class="swatch-color swatch-color--warning-500"></div><div class="swatch-label"><strong>warning-500</strong> #D97706</div></div>
+        <div class="swatch"><div class="swatch-color swatch-color--error-500"></div><div class="swatch-label"><strong>error-500</strong> #DC2626</div></div>
+        <div class="swatch"><div class="swatch-color swatch-color--success-50"></div><div class="swatch-label"><strong>success-50</strong> #EDF9F2</div></div>
+        <div class="swatch"><div class="swatch-color swatch-color--warning-50"></div><div class="swatch-label"><strong>warning-50</strong> #FDF6E8</div></div>
+        <div class="swatch"><div class="swatch-color swatch-color--error-50"></div><div class="swatch-label"><strong>error-50</strong> #FEF2F2</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       Section 2: Typography
+       ============================================================ -->
+  <section class="section">
+    <h2 class="section-title">2. 字体系统</h2>
+    <p class="section-desc">Inter + JetBrains Mono。基准 14px，4px 梯度。</p>
+
+    <div class="type-sample"><div class="label">--text-4xl / 36px / 2.25rem</div><div style="font-size:var(--text-4xl);font-weight:700;line-height:1.25">Heading 4XL — 大标题展示</div></div>
+    <div class="type-sample"><div class="label">--text-3xl / 30px / 1.875rem</div><div style="font-size:var(--text-3xl);font-weight:700;line-height:1.25">Heading 3XL — 页面主标题</div></div>
+    <div class="type-sample"><div class="label">--text-2xl / 24px / 1.5rem</div><div style="font-size:var(--text-2xl);font-weight:600;line-height:1.3">Heading 2XL — 区块标题</div></div>
+    <div class="type-sample"><div class="label">--text-xl / 20px / 1.25rem</div><div style="font-size:var(--text-xl);font-weight:600;line-height:1.3">Heading XL — 子标题</div></div>
+    <div class="type-sample"><div class="label">--text-lg / 16px / 1rem</div><div style="font-size:var(--text-lg);font-weight:500;line-height:1.4">Subheading LG — 小标题、卡片标题</div></div>
+    <div class="type-sample"><div class="label">--text-md / 14px / 0.875rem ★ 基准字号</div><div style="font-size:var(--text-md);font-weight:400;line-height:1.6">Body text — 正文内容，消息气泡，主要阅读区域。IcePaw design system is built on a 4px baseline grid with a 14px default body size. Line height is 1.6 for comfortable reading in both English and Chinese 中文排版。</div></div>
+    <div class="type-sample"><div class="label">--text-sm / 13px / 0.8125rem</div><div style="font-size:var(--text-sm);font-weight:400;line-height:1.5">Secondary text — used in sidebar items, descriptions, metadata</div></div>
+    <div class="type-sample"><div class="label">--text-xs / 11px / 0.6875rem</div><div style="font-size:var(--text-xs);font-weight:400;line-height:1.4;color:var(--color-text-tertiary)">Tertiary / Caption — timestamps, badges, keyboard shortcuts</div></div>
+    <div class="type-sample"><div class="label">--text-2xs / 10px / 0.625rem</div><div style="font-size:var(--text-2xs);font-weight:400;line-height:1.3;color:var(--color-text-tertiary)">Micro text — overlines, tiny badges</div></div>
+    <div class="type-sample"><div class="label">--text-code / 13px / JetBrains Mono</div><div style="font-size:var(--text-code);font-family:var(--font-mono);line-height:var(--leading-code);color:var(--color-text-primary);background:var(--color-bg-code);padding:8px 12px;border-radius:var(--radius-sm);display:inline-block;max-width:100%">const designSystem = "IcePaw V2"</div></div>
+  </section>
+
+  <!-- ============================================================
+       Section 3: Spacing
+       ============================================================ -->
+  <section class="section">
+    <h2 class="section-title">3. 间距系统</h2>
+    <p class="section-desc">4px 基线网格。所有间距均从 --space-* token 取值。</p>
+    <div class="spacing-demo">
+      <div class="spacing-row"><span class="spacing-label">--space-1 4px</span><div class="spacing-block" style="width:4px"></div></div>
+      <div class="spacing-row"><span class="spacing-label">--space-2 8px</span><div class="spacing-block" style="width:8px"></div></div>
+      <div class="spacing-row"><span class="spacing-label">--space-3 12px</span><div class="spacing-block" style="width:12px"></div></div>
+      <div class="spacing-row"><span class="spacing-label">--space-4 16px ★</span><div class="spacing-block" style="width:16px;background:var(--color-brand-400)"></div></div>
+      <div class="spacing-row"><span class="spacing-label">--space-5 20px</span><div class="spacing-block" style="width:20px"></div></div>
+      <div class="spacing-row"><span class="spacing-label">--space-6 24px</span><div class="spacing-block" style="width:24px"></div></div>
+      <div class="spacing-row"><span class="spacing-label">--space-8 32px</span><div class="spacing-block" style="width:32px"></div></div>
+      <div class="spacing-row"><span class="spacing-label">--space-10 40px</span><div class="spacing-block" style="width:40px"></div></div>
+      <div class="spacing-row"><span class="spacing-label">--space-12 48px</span><div class="spacing-block" style="width:48px"></div></div>
+      <div class="spacing-row"><span class="spacing-label">--space-16 64px</span><div class="spacing-block" style="width:64px"></div></div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       Section 4: Border Radius
+       ============================================================ -->
+  <section class="section">
+    <h2 class="section-title">4. 圆角系统</h2>
+    <p class="section-desc">从极细节到全圆角。默认 8px（--radius-md）。</p>
+    <div class="radius-demo">
+      <div class="radius-item"><div class="radius-box" style="border-radius:0"></div><div class="radius-label">none 0</div></div>
+      <div class="radius-item"><div class="radius-box" style="border-radius:4px"></div><div class="radius-label">xs 4px</div></div>
+      <div class="radius-item"><div class="radius-box" style="border-radius:6px"></div><div class="radius-label">sm 6px</div></div>
+      <div class="radius-item"><div class="radius-box" style="border-radius:8px;background:var(--color-brand-200)"></div><div class="radius-label">md 8px ★</div></div>
+      <div class="radius-item"><div class="radius-box" style="border-radius:12px"></div><div class="radius-label">lg 12px</div></div>
+      <div class="radius-item"><div class="radius-box" style="border-radius:16px"></div><div class="radius-label">xl 16px</div></div>
+      <div class="radius-item"><div class="radius-box" style="border-radius:24px"></div><div class="radius-label">2xl 24px</div></div>
+      <div class="radius-item"><div class="radius-box" style="border-radius:9999px;width:72px"></div><div class="radius-label">full ∞</div></div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       Section 5: Shadows
+       ============================================================ -->
+  <section class="section">
+    <h2 class="section-title">5. 阴影系统</h2>
+    <p class="section-desc">5 级梯度，柔和分层。hover 可看到完整效果。</p>
+    <div class="shadow-demo">
+      <div class="shadow-card"><span>shadow-xs</span></div>
+      <div class="shadow-card" style="box-shadow:var(--shadow-sm)"><span>shadow-sm</span></div>
+      <div class="shadow-card" style="box-shadow:var(--shadow-md)"><span>shadow-md</span></div>
+      <div class="shadow-card" style="box-shadow:var(--shadow-lg)"><span>shadow-lg</span></div>
+      <div class="shadow-card" style="box-shadow:var(--shadow-xl)"><span>shadow-xl</span></div>
+      <div class="shadow-card" style="box-shadow:var(--shadow-card-hover)"><span>card-hover</span></div>
+      <div class="shadow-card" style="box-shadow:var(--shadow-focus);border-color:var(--color-brand-500)"><span>focus ring</span></div>
+      <div class="shadow-card" style="box-shadow:var(--shadow-toast)"><span>toast</span></div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       Section 6: Cursor Styles
+       ============================================================ -->
+  <section class="section">
+    <h2 class="section-title">6. 鼠标样式规范</h2>
+    <p class="section-desc">按场景定义的 cursor 值。Hover 此区域可体验各 cursor 效果。</p>
+    <div class="cursor-grid">
+      <div class="cursor-demo" style="--cursor:pointer"><code>pointer</code> 可点击</div>
+      <div class="cursor-demo" style="--cursor:text"><code>text</code> 文本选中</div>
+      <div class="cursor-demo" style="--cursor:default"><code>default</code> 正常</div>
+      <div class="cursor-demo" style="--cursor:grab"><code>grab</code> 可拖拽</div>
+      <div class="cursor-demo" style="--cursor:grabbing"><code>grabbing</code> 拖拽中</div>
+      <div class="cursor-demo" style="--cursor:col-resize"><code>col-resize</code> 横向调节</div>
+      <div class="cursor-demo" style="--cursor:row-resize"><code>row-resize</code> 纵向调节</div>
+      <div class="cursor-demo" style="--cursor:not-allowed"><code>not-allowed</code> 禁用</div>
+      <div class="cursor-demo" style="--cursor:zoom-in"><code>zoom-in</code> 放大查看</div>
+      <div class="cursor-demo" style="--cursor:move"><code>move</code> 移动</div>
+      <div class="cursor-demo" style="--cursor:alias"><code>alias</code> 快捷方式</div>
+      <div class="cursor-demo" style="--cursor:context-menu"><code>context-menu</code> 右键</div>
+      <div class="cursor-demo" style="--cursor:help"><code>help</code> 帮助</div>
+      <div class="cursor-demo" style="--cursor:copy"><code>copy</code> 复制</div>
+      <div class="cursor-demo" style="--cursor:cell"><code>cell</code> 单元格</div>
+      <div class="cursor-demo" style="--cursor:wait"><code>wait</code> 等待</div>
+      <div class="cursor-demo" style="--cursor:crosshair"><code>crosshair</code> 十字</div>
+      <div class="cursor-demo" style="--cursor:progress"><code>progress</code> 加载中</div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       Section 7: Buttons — All Variants & States
+       ============================================================ -->
+  <section class="section">
+    <h2 class="section-title">7. Button 组件</h2>
+    <p class="section-desc">5 变体 × 3 尺寸 × 5 状态。Hover/Click 体验微交互。</p>
+
+    <div class="sub-section">
+      <h3 class="sub-title">尺寸对比 <span class="annotation">sm 28px / md 36px / lg 44px</span></h3>
+      <div class="btn-group">
+        <button class="btn btn--primary btn--sm">Small</button>
+        <button class="btn btn--primary btn--md">Medium ★</button>
+        <button class="btn btn--primary btn--lg">Large</button>
+      </div>
+    </div>
+
+    <div class="sub-section">
+      <h3 class="sub-title">全部变体 (md size) <span class="annotation">primary / secondary / ghost / danger / text</span></h3>
+      <div class="btn-group">
+        <button class="btn btn--primary btn--md">Primary</button>
+        <button class="btn btn--secondary btn--md">Secondary</button>
+        <button class="btn btn--ghost btn--md">Ghost</button>
+        <button class="btn btn--danger btn--md">Danger</button>
+        <button class="btn btn--text btn--md">Text Link</button>
+      </div>
+    </div>
+
+    <div class="sub-section">
+      <h3 class="sub-title">状态展示 (primary) <span class="annotation">default / hover / active / disabled / loading</span></h3>
+      <div class="btn-group">
+        <button class="btn btn--primary btn--md">Default</button>
+        <button class="btn btn--primary btn--md" style="background:var(--color-brand-600)">Hover</button>
+        <button class="btn btn--primary btn--md" style="background:var(--color-brand-700);transform:scale(0.97)">Active</button>
+        <button class="btn btn--primary btn--md" disabled>Disabled</button>
+        <button class="btn btn--primary btn--md btn--loading">Loading...</button>
+      </div>
+      <p class="note">↑ active 有 scale(0.97) 按压反馈。loading 保持按钮原宽，spinner 自动居中。</p>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       Section 8: Input & Textarea
+       ============================================================ -->
+  <section class="section">
+    <h2 class="section-title">8. Input / Textarea 组件</h2>
+    <p class="section-desc">各状态展示。点击聚焦体验 focus ring + 边框高亮。</p>
+
+    <div class="sub-section">
+      <h3 class="sub-title">Input 状态 <span class="annotation">default / disabled / error / readonly</span></h3>
+      <div class="input-group">
+        <input class="input-field" type="text" placeholder="默认输入框 (hover me, focus me)">
+        <input class="input-field" type="text" disabled value="禁用状态 (disabled)">
+        <div>
+          <input class="input-field input-field--error" type="text" value="错误状态">
+          <div class="input-error-text">⚠ 请输入有效的邮箱地址</div>
+        </div>
+        <input class="input-field" type="text" readonly value="只读状态 (readonly)">
+      </div>
+    </div>
+
+    <div class="sub-section">
+      <h3 class="sub-title">Textarea <span class="annotation">自动扩展 min 44px → max 200px</span></h3>
+      <textarea class="textarea-field" placeholder="输入多行文本... (可拖拽调整高度)" style="width:400px"></textarea>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       Section 9: Select
+       ============================================================ -->
+  <section class="section">
+    <h2 class="section-title">9. Select 组件</h2>
+    <p class="section-desc">触发器样式 + 下拉面板 + 分组选项。</p>
+    <div class="select-group">
+      <div class="select-trigger">
+        <span>选择 Agent...</span>
+        <span class="select-arrow">▼</span>
+      </div>
+      <div class="select-trigger select-trigger--open" style="margin-top:0">
+        <span>GPT-4o</span>
+        <span class="select-arrow">▼</span>
+      </div>
+      <div class="select-menu">
+        <div class="select-group-header">OpenClaw 平台</div>
+        <div class="select-option">GPT-4 Turbo</div>
+        <div class="select-option select-option--selected">GPT-4o ✓</div>
+        <div class="select-option">Claude 3.5 Sonnet</div>
+        <div class="select-option">Gemini Pro</div>
+        <div style="height:4px"></div>
+        <div class="select-group-header">OpenCode 平台</div>
+        <div class="select-option">DeepSeek V3</div>
+        <div class="select-option">Qwen 2.5</div>
+      </div>
+    </div>
+    <p class="note">↑ 上方：默认触发器。下方：展开态（边框高亮 + 箭头旋转180°）+ 下拉面板。</p>
+  </section>
+
+  <!-- ============================================================
+       Section 10: Card
+       ============================================================ -->
+  <section class="section">
+    <h2 class="section-title">10. Card 组件</h2>
+    <p class="section-desc">hover 上浮 translateY(-2px) + 阴影增强。200ms ease-out。</p>
+    <div class="card-row">
+      <div class="card">
+        <div class="card-title">Default Card</div>
+        <div class="card-body">Hover me → 上浮 2px + shadow 变化。标准 8px 圆角，16px 内边距。</div>
+      </div>
+      <div class="card card--raised">
+        <div class="card-title">Raised Card</div>
+        <div class="card-body">起始阴影更重 (shadow-md)，hover 升至 shadow-lg。</div>
+      </div>
+      <div class="card card--flat">
+        <div class="card-title">Flat Card</div>
+        <div class="card-body">无初始阴影，hover 出现 subtle shadow，背景不变。</div>
+      </div>
+      <div class="card" style="background:var(--color-brand-50);border-color:var(--color-brand-200)">
+        <div class="card-title">Brand Card</div>
+        <div class="card-body">品牌色变体。背景 brand-50 + 边框 brand-200。</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       Section 11: Modal
+       ============================================================ -->
+  <section class="section">
+    <h2 class="section-title">11. Modal 组件</h2>
+    <p class="section-desc">12px 圆角 + shadow-lg + header/body/footer 三段式。</p>
+    <div class="modal-demo">
+      <div class="modal-preview">
+        <div class="modal-header">
+          <h4>确认操作</h4>
+          <button style="border:none;background:none;cursor:pointer;font-size:18px;color:var(--color-text-tertiary)">✕</button>
+        </div>
+        <div class="modal-body">
+          确定要删除这个对话吗？此操作不可撤销。对话中的所有消息都会被永久删除。
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn--ghost btn--sm">取消</button>
+          <button class="btn btn--danger btn--sm">删除</button>
+        </div>
+      </div>
+      <div style="padding:var(--space-4);max-width:320px">
+        <p style="font-size:var(--text-sm);color:var(--color-text-secondary);line-height:1.6">
+          <strong>蒙层：</strong>rgba(10,10,8,0.35)<br>
+          <strong>入场：</strong>opacity 0→1 (500ms) + scale 0.95→1 (400ms spring)<br>
+          <strong>退场：</strong>opacity 1→0 (300ms) + scale 1→0.95 (200ms)
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       Section 12: Badge
+       ============================================================ -->
+  <section class="section">
+    <h2 class="section-title">12. Badge 组件</h2>
+    <p class="section-desc">5 色变体 + dot 模式 + pill 圆角。</p>
+    <div class="sub-section">
+      <h3 class="sub-title">标准徽章 <span class="annotation">22px 高 / 8px padding / 12px 字</span></h3>
+      <div class="badge-row">
+        <span class="badge badge--default">Default</span>
+        <span class="badge badge--brand">Brand</span>
+        <span class="badge badge--success">Success</span>
+        <span class="badge badge--warning">Warning</span>
+        <span class="badge badge--error">Error</span>
+      </div>
+    </div>
+    <div class="sub-section">
+      <h3 class="sub-title">Pill 圆角变体</h3>
+      <div class="badge-row">
+        <span class="badge badge--brand badge--pill">24 Messages</span>
+        <span class="badge badge--success badge--pill">Online</span>
+        <span class="badge badge--error badge--pill">3 Alerts</span>
+      </div>
+    </div>
+    <div class="sub-section">
+      <h3 class="sub-title">Dot 模式 <span class="annotation">8px 直径圆点</span></h3>
+      <div class="badge-row" style="gap:var(--space-4)">
+        <span style="display:flex;align-items:center;gap:6px;font-size:var(--text-sm)"><span class="badge-dot badge-dot--brand"></span> Brand</span>
+        <span style="display:flex;align-items:center;gap:6px;font-size:var(--text-sm)"><span class="badge-dot badge-dot--success"></span> Success</span>
+        <span style="display:flex;align-items:center;gap:6px;font-size:var(--text-sm)"><span class="badge-dot badge-dot--warning"></span> Warning</span>
+        <span style="display:flex;align-items:center;gap:6px;font-size:var(--text-sm)"><span class="badge-dot badge-dot--error"></span> Error</span>
+        <span style="display:flex;align-items:center;gap:6px;font-size:var(--text-sm)"><span class="badge-dot badge-dot--default"></span> Offline</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       Section 13: Toast
+       ============================================================ -->
+  <section class="section">
+    <h2 class="section-title">13. Toast 组件</h2>
+    <p class="section-desc">4 种类型，左侧 3px 色条 + 图标。</p>
+    <div class="toast-demo">
+      <div class="toast toast--info">
+        <span class="toast-icon">ℹ</span>
+        <span class="toast-text">这是一条信息提示</span>
+        <button class="toast-close">✕</button>
+      </div>
+      <div class="toast toast--success">
+        <span class="toast-icon">✓</span>
+        <span class="toast-text">操作已成功完成</span>
+        <button class="toast-close">✕</button>
+      </div>
+      <div class="toast toast--warning">
+        <span class="toast-icon">⚠</span>
+        <span class="toast-text">请注意：数据可能未保存</span>
+        <button class="toast-close">✕</button>
+      </div>
+      <div class="toast toast--error">
+        <span class="toast-icon">✕</span>
+        <span class="toast-text">错误：连接已断开</span>
+        <button class="toast-close">✕</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       Section 14: Avatar
+       ============================================================ -->
+  <section class="section">
+    <h2 class="section-title">14. Avatar 组件</h2>
+    <p class="section-desc">5 尺寸 + 2 形状 + 状态指示器。</p>
+    <div class="sub-section">
+      <h3 class="sub-title">尺寸梯度 <span class="annotation">xs 20 / sm 28 / md 36 / lg 48 / xl 64</span></h3>
+      <div class="avatar-row">
+        <div class="avatar avatar--xs">B</div>
+        <div class="avatar avatar--sm">B</div>
+        <div class="avatar avatar--md">B</div>
+        <div class="avatar avatar--lg">B</div>
+        <div class="avatar avatar--xl">B</div>
+      </div>
+    </div>
+    <div class="sub-section">
+      <h3 class="sub-title">Rounded vs Circle <span class="annotation">8px 圆角 / 50% 正圆</span></h3>
+      <div class="avatar-row">
+        <div class="avatar avatar--md avatar--rounded" style="background:#2358CC">A</div>
+        <div class="avatar avatar--md avatar--circle" style="background:#DC2626">B</div>
+        <div style="font-size:var(--text-sm);color:var(--color-text-secondary)">rounded (8px) → ← circle (50%)</div>
+      </div>
+    </div>
+    <div class="sub-section">
+      <h3 class="sub-title">状态指示器 <span class="annotation">右下角 10px 圆点</span></h3>
+      <div class="avatar-row">
+        <div class="avatar avatar--md">
+          U
+          <span class="avatar-status avatar-status--online"></span>
+        </div>
+        <div class="avatar avatar--md" style="background:var(--color-neutral-400)">
+          U
+          <span class="avatar-status avatar-status--offline"></span>
+        </div>
+        <span style="font-size:var(--text-sm);color:var(--color-text-secondary)">online · offline</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       Section 15: Switch
+       ============================================================ -->
+  <section class="section">
+    <h2 class="section-title">15. Switch 组件</h2>
+    <p class="section-desc">3 尺寸。Thumb 滑动使用 spring 曲线 (cubic-bezier 0.34,1.56,0.64,1)。</p>
+    <div class="switch-row">
+      <div style="display:flex;flex-direction:column;align-items:center;gap:var(--space-2)">
+        <label class="switch switch--sm"><input type="checkbox"><span class="switch-track"><span class="switch-thumb"></span></span></label>
+        <label class="switch switch--sm switch--on"><input type="checkbox" checked><span class="switch-track"><span class="switch-thumb"></span></span></label>
+        <span style="font-size:var(--text-2xs);color:var(--color-text-tertiary)">sm off/on</span>
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:center;gap:var(--space-2)">
+        <label class="switch switch--md"><input type="checkbox"><span class="switch-track"><span class="switch-thumb"></span></span></label>
+        <label class="switch switch--md switch--on"><input type="checkbox" checked><span class="switch-track"><span class="switch-thumb"></span></span></label>
+        <span style="font-size:var(--text-2xs);color:var(--color-text-tertiary)">md off/on ★</span>
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:center;gap:var(--space-2)">
+        <label class="switch switch--lg"><input type="checkbox"><span class="switch-track"><span class="switch-thumb"></span></span></label>
+        <label class="switch switch--lg switch--on"><input type="checkbox" checked><span class="switch-track"><span class="switch-thumb"></span></span></label>
+        <span style="font-size:var(--text-2xs);color:var(--color-text-tertiary)">lg off/on</span>
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:center;gap:var(--space-2)">
+        <label class="switch switch--md switch--on switch--disabled"><input type="checkbox" checked disabled><span class="switch-track"><span class="switch-thumb"></span></span></label>
+        <span style="font-size:var(--text-2xs);color:var(--color-text-tertiary)">disabled</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       Section 16: Tooltip
+       ============================================================ -->
+  <section class="section">
+    <h2 class="section-title">16. Tooltip 组件</h2>
+    <p class="section-desc">Hover 文本查看 tooltip（300ms 延迟，箭头指向触发元素）。</p>
+    <div class="tooltip-demo">
+      <span class="tooltip-trigger" style="padding:8px 16px;background:var(--color-neutral-100);border-radius:var(--radius-md);font-size:var(--text-sm);border:1px solid var(--color-border)">
+        Hover me →
+        <span class="tooltip-content">这是一个 Tooltip 提示</span>
+      </span>
+      <span class="tooltip-trigger" style="padding:8px 16px;background:var(--color-neutral-100);border-radius:var(--radius-md);font-size:var(--text-sm);border:1px solid var(--color-border)">
+        Keyboard shortcut
+        <span class="tooltip-content">⌘ + K</span>
+      </span>
+      <span class="tooltip-trigger" style="padding:8px 16px;background:var(--color-neutral-100);border-radius:var(--radius-md);font-size:var(--text-sm);border:1px solid var(--color-border)">
+        Longer description
+        <span class="tooltip-content" style="max-width:200px;white-space:normal;text-align:center">删除后数据不可恢复，请谨慎操作</span>
+      </span>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       Section 17: Sidebar (Business Component)
+       ============================================================ -->
+  <section class="section">
+    <h2 class="section-title">17. Sidebar 业务组件</h2>
+    <p class="section-desc">260px 固定宽度，完整侧边栏布局。</p>
+    <div class="sidebar-demo">
+      <div class="sidebar-header">
+        <span style="font-size:20px">🧊</span>
+        <span class="sidebar-brand">IcePaw AI</span>
+      </div>
+      <div class="sidebar-body">
+        <button class="sidebar-new-btn">+ 新建对话</button>
+        <div class="sidebar-agent">
+          <span>🧠 GPT-4o</span>
+          <span style="font-size:10px;color:var(--color-text-tertiary)">▼</span>
+        </div>
+        <div class="sidebar-conv-item sidebar-conv-item--active">
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">帮我想一个论文标题</span>
+          <span class="sidebar-conv-time">刚刚</span>
+        </div>
+        <div class="sidebar-conv-item">
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">解释一下量子纠缠的原理</span>
+          <span class="sidebar-conv-time">18:30</span>
+        </div>
+        <div class="sidebar-conv-item">
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Rust 生命周期详解</span>
+          <span class="sidebar-conv-time">7月8日</span>
+        </div>
+        <div class="sidebar-conv-item">
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Python 异步编程最佳实践</span>
+          <span class="sidebar-conv-time">7月7日</span>
+        </div>
+      </div>
+      <div class="sidebar-footer">
+        <div style="display:flex;align-items:center;gap:8px">
+          <div class="avatar avatar--sm" style="background:var(--color-success-500)">张</div>
+          <span>张小明</span>
+        </div>
+        <span style="color:var(--color-text-tertiary);cursor:pointer">⚙</span>
+      </div>
+    </div>
+    <p class="note" style="margin-top:var(--space-2)">↑ 激活项左边框 3px brand-500 + 白色背景。hover 项 bg neutral-100。</p>
+  </section>
+
+  <!-- ============================================================
+       Section 18: ChatMessage (Business Component)
+       ============================================================ -->
+  <section class="section">
+    <h2 class="section-title">18. ChatMessage 业务组件</h2>
+    <p class="section-desc">用户/ AI 气泡 + 头像 + 时间戳 + 操作栏 + 代码块。</p>
+    <div class="chat-demo">
+
+      <!-- User message -->
+      <div class="msg-row msg-row--user">
+        <div class="msg-bubble msg-bubble--user">
+          你好！请帮我解释一下<br>什么是量子纠缠？
+        </div>
+      </div>
+
+      <!-- AI message -->
+      <div class="msg-row msg-row--agent">
+        <div class="msg-avatar">G</div>
+        <div style="flex:1;min-width:0">
+          <div class="msg-agent-info">
+            <span class="msg-agent-name">GPT-4o</span>
+            <span class="msg-model-tag">gpt-4o</span>
+          </div>
+          <div class="msg-bubble msg-bubble--agent">
+            <div class="msg-action-bar">
+              <button class="msg-action-btn" title="复制">📋</button>
+              <button class="msg-action-btn" title="重新生成">🔄</button>
+            </div>
+            <p>量子纠缠是量子力学中的一种现象，当两个或多个粒子以某种方式相互作用后，它们的状态变得不可独立描述，即使相隔很远也会相互关联。</p>
+            <div class="msg-code-block">
+              <span class="msg-code-lang">python</span>
+              <code># Quantum entanglement state<br>from qiskit import QuantumCircuit<br>qc = QuantumCircuit(2)<br>qc.h(0)<br>qc.cx(0, 1)</code>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Timestamp -->
+      <div class="msg-time">今天 18:30</div>
+
+      <!-- Another user message -->
+      <div class="msg-row msg-row--user">
+        <div class="msg-bubble msg-bubble--user">
+          谢谢，这个解释很清楚！
+        </div>
+      </div>
+    </div>
+    <p class="note" style="margin-top:var(--space-2);text-align:center">↑ AI 气泡 hover 显示右上角操作栏（复制 + 重新生成）。</p>
+  </section>
+
+  <!-- ============================================================
+       Section 19: ChatInput (Business Component)
+       ============================================================ -->
+  <section class="section">
+    <h2 class="section-title">19. ChatInput 业务组件</h2>
+    <p class="section-desc">输入区 + 工具栏 + 发送按钮。自适应高度。</p>
+    <div class="chat-input-demo">
+      <div class="chat-input-row">
+        <textarea class="chat-input-textarea" placeholder="输入消息... (Enter 发送, Shift+Enter 换行)">帮我优化一下这段代码</textarea>
+        <button class="chat-input-send">发送 →</button>
+      </div>
+      <div class="chat-input-actions">
+        <button class="chat-input-tool-btn" title="附件">📎</button>
+        <button class="chat-input-tool-btn" title="语音">🎤</button>
+        <span style="margin-left:auto;font-size:var(--text-xs);color:var(--color-text-tertiary);align-self:center">Enter 发送 · Shift+Enter 换行</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       Section 20: AgentPicker (Business Component)
+       ============================================================ -->
+  <section class="section">
+    <h2 class="section-title">20. AgentPicker 业务组件</h2>
+    <p class="section-desc">Agent 选择触发器 + 下拉面板。</p>
+    <div style="display:flex;gap:var(--space-4);flex-wrap:wrap;align-items:center">
+      <div class="agent-picker-trigger">
+        <span>🧠 GPT-4o</span>
+        <span style="font-size:10px;color:var(--color-text-tertiary);margin-left:4px">OpenClaw</span>
+        <span class="agent-picker-arrow" style="margin-left:auto">▼</span>
+      </div>
+      <div class="agent-picker-trigger agent-picker-trigger--open">
+        <span>🧠 GPT-4o</span>
+        <span style="font-size:10px;color:var(--color-text-tertiary);margin-left:4px">OpenClaw</span>
+        <span class="agent-picker-arrow" style="margin-left:auto">▼</span>
+      </div>
+    </div>
+    <p class="note">↑ 默认态 → 展开态（边框变蓝 + 箭头旋转180°）。</p>
+  </section>
+
+  <!-- ============================================================
+       Section 21: ConversationList + Context Menu (Business)
+       ============================================================ -->
+  <section class="section">
+    <h2 class="section-title">21. ConversationList + 右键菜单</h2>
+    <p class="section-desc">对话列表项 + context menu。Hover 下方区域显示菜单。</p>
+    <div style="display:flex;gap:var(--space-6);flex-wrap:wrap;align-items:flex-start">
+      <div style="width:260px;background:var(--color-bg-sidebar);border-radius:var(--radius-md);padding:var(--space-2);border:1px solid var(--color-border)">
+        <div class="sidebar-conv-item sidebar-conv-item--active ctx-menu-demo" style="margin:2px 4px">
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0">右键菜单演示</span>
+          <span class="sidebar-conv-time">刚刚</span>
+          <div class="ctx-menu">
+            <div class="ctx-menu-item">✏️ 重命名</div>
+            <div class="ctx-menu-item">📌 置顶</div>
+            <div class="ctx-menu-item">📋 复制链接</div>
+            <div class="ctx-menu-divider"></div>
+            <div class="ctx-menu-item ctx-menu-item--danger">🗑 删除</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="note">↑ Hover 对话项显示右键菜单。危险操作（删除）hover 时变红。scale(0.95)→1 展开动画。</p>
+  </section>
+
+  <!-- ============================================================
+       Section 22: EmptyState (Business Component)
+       ============================================================ -->
+  <section class="section">
+    <h2 class="section-title">22. EmptyState 业务组件</h2>
+    <p class="section-desc">3 种尺寸变体。插画区 + 标题 + 描述 + CTA 按钮。</p>
+    <div style="display:flex;gap:var(--space-6);flex-wrap:wrap">
+      <!-- Full page empty -->
+      <div class="empty-state" style="background:var(--color-bg-card);border-radius:var(--radius-md);min-width:320px;flex:1">
+        <div class="empty-illustration">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+          </svg>
+        </div>
+        <div class="empty-title">开始新对话</div>
+        <div class="empty-desc">选择一个 Agent，输入你的问题，开始与 AI 对话。</div>
+        <button class="btn btn--primary btn--md">+ 新建对话</button>
+      </div>
+
+      <!-- Inline compact empty -->
+      <div class="empty-state empty--inline empty--compact" style="background:var(--color-bg-card);border-radius:var(--radius-md);min-width:280px;flex:1">
+        <div class="empty-illustration">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+          </svg>
+        </div>
+        <div class="empty-title">暂无文件</div>
+        <div class="empty-desc">上传文件或创建新文档开始工作。</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       Section 23: Micro-interactions Demo
+       ============================================================ -->
+  <section class="section">
+    <h2 class="section-title">23. 微交互演示</h2>
+    <p class="section-desc">动画曲线、shimmer、pulse、卡片交互综合演示。</p>
+
+    <div class="sub-section">
+      <h3 class="sub-title">动画效果预览</h3>
+      <div class="anim-demo">
+        <div class="anim-card">
+          <strong>Hover 上浮</strong>
+          <p style="font-size:var(--text-xs);color:var(--color-text-tertiary);margin-top:8px">translateY(-4px)<br>200ms ease-out</p>
+        </div>
+        <div class="anim-card" onclick="this.style.transform='scale(0.96)';setTimeout(()=>this.style.transform='',120)">
+          <strong>Click 按压</strong>
+          <p style="font-size:var(--text-xs);color:var(--color-text-tertiary);margin-top:8px">scale(0.96)<br>50ms ease-out</p>
+        </div>
+        <div class="anim-card" style="display:flex;flex-direction:column;align-items:center;gap:8px">
+          <span class="anim-pulse"></span>
+          <span style="font-size:var(--text-xs);color:var(--color-text-tertiary)">Pulse 脉冲<br>2s infinite</span>
+        </div>
+        <div class="anim-card" style="display:flex;flex-direction:column;align-items:center;gap:8px">
+          <div class="anim-shimmer"></div>
+          <span style="font-size:var(--text-xs);color:var(--color-text-tertiary)">Shimmer 扫光<br>1.5s infinite</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="sub-section">
+      <h3 class="sub-title">过渡动画时长速查 <span class="annotation">实际 hover 此处的按钮体验</span></h3>
+      <div style="display:flex;gap:var(--space-4);flex-wrap:wrap;margin-bottom:var(--space-3)">
+        <div class="interaction-row" style="flex-direction:column;align-items:flex-start">
+          <span class="interaction-label">120ms — hover 色彩变化</span>
+          <button class="btn btn--secondary btn--sm">Hover Me</button>
+        </div>
+        <div class="interaction-row" style="flex-direction:column;align-items:flex-start">
+          <span class="interaction-label">200ms — focus / state 变化</span>
+          <input class="input-field" type="text" placeholder="Focus Me" style="width:160px">
+        </div>
+        <div class="interaction-row" style="flex-direction:column;align-items:flex-start">
+          <span class="interaction-label">300ms — 面板展开</span>
+          <div class="select-menu" style="margin-top:0;width:160px">
+            <div class="select-option">展开面板</div>
+            <div class="select-option">200ms ease-out</div>
+          </div>
+        </div>
+        <div class="interaction-row" style="flex-direction:column;align-items:flex-start">
+          <span class="interaction-label">500ms — modal 入场</span>
+          <div style="width:160px;height:48px;background:var(--color-bg-card);border:1px solid var(--color-border);border-radius:var(--radius-md);display:flex;align-items:center;justify-content:center;font-size:var(--text-xs);color:var(--color-text-tertiary);box-shadow:var(--shadow-lg)">Modal Preview</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       Section 24: Focus States
+       ============================================================ -->
+  <section class="section">
+    <h2 class="section-title">24. Focus 状态规范</h2>
+    <p class="section-desc">Tab 键聚焦体验：默认隐藏 outline，focus-visible 显示蓝色 ring。</p>
+    <div style="display:flex;gap:var(--space-4);flex-wrap:wrap;align-items:center;margin-bottom:var(--space-4)">
+      <button class="btn btn--primary btn--md" id="focus-btn">Tab 聚焦我 →</button>
+      <input class="input-field" type="text" placeholder="Tab 聚焦输入框" style="width:200px">
+      <button class="btn btn--ghost btn--md" style="border-radius:9999px">Pill Button</button>
+      <label class="switch switch--md" tabindex="0" style="border-radius:12px"><span class="switch-track"><span class="switch-thumb"></span></span></label>
+    </div>
+    <div style="display:flex;gap:var(--space-4)">
+      <div style="font-size:var(--text-sm);color:var(--color-text-secondary)">
+        <strong>规则：</strong><br>
+        • 使用 <code style="background:var(--color-bg-code);padding:1px 4px;border-radius:2px;font-size:11px">:focus-visible</code> 而非 <code style="background:var(--color-bg-code);padding:1px 4px;border-radius:2px;font-size:11px">:focus</code><br>
+        • 鼠标点击不显示 ring（focus-visible 特性）<br>
+        • ring 规格：<code style="background:var(--color-bg-code);padding:1px 4px;border-radius:2px;font-size:11px">0 0 0 3px rgba(44,111,238,0.2)</code><br>
+        • 按钮额外：<code style="background:var(--color-bg-code);padding:1px 4px;border-radius:2px;font-size:11px">outline: 2px solid + outline-offset: 2px</code>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <div style="text-align:center;padding:var(--space-8) 0;border-top:1px solid var(--color-border);margin-top:var(--space-8)">
+    <p style="font-size:var(--text-sm);color:var(--color-text-tertiary)">
+      IcePaw Design System V2 — Warm Lab × Crafted Micro-interactions<br>
+      All design tokens available via CSS custom properties. Full spec: <code style="background:var(--color-bg-code);padding:2px 6px;border-radius:2px;font-size:11px">icepaw-design-system-v2.md</code>
+    </p>
+  </div>
+
+</div>
+
+<!-- Auto-focus script for demo purposes -->
+<script>
+// Demonstrate focus-visible by auto-focusing the first button on Tab
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Tab' && document.activeElement === document.body) {
+    // Let browser handle natural tab order
+  }
+});
+</script>
+
+</body>
+</html>

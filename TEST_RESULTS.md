@@ -9,32 +9,32 @@
 
 ## 实际安装
 
-| 包名 | 版本 | 说明 |
-|------|------|------|
+| 包名         | 版本      | 说明                                                         |
+| ------------ | --------- | ------------------------------------------------------------ |
 | `vue-router` | **5.1.0** | 通过 `pnpm add vue-router` 安装（已自动加入 `dependencies`） |
 
 > **注**：任务原文要求 Vue Router 4，但 `pnpm add vue-router` 当前默认拉取的是 Vue Router 5.1.0（Vue 3 对应的当前主流版本）。两个版本的 API 完全兼容（`createRouter`、`createWebHistory`、`useRouter`、`useRoute`、`RouterView`、`RouterLink` 均存在且签名一致），本项目代码无需任何修改即可在 v5 上运行。如需锁定 v4，可改用 `pnpm add vue-router@4`。
 
 ## 文件清单
 
-| 路径 | 状态 | 说明 |
-|------|------|------|
-| `src/router/index.ts` | ✅ 新建 | 路由配置，含 4 条路由 + 兜底重定向 + 标题钩子 |
-| `src/pages/HomePage.vue` | ✅ 新建 | 首页：IcePaw 欢迎 + 导航 |
-| `src/pages/CounterPage.vue` | ✅ 新建 | 计数器页：保留 Tauri `greet` 调用 + 计数器 |
-| `src/pages/TestRouterPage.vue` | ✅ 新建 | 路由测试页：动态参数 + 查询参数 + 编程式导航 |
-| `src/main.ts` | ✅ 修改 | 注册 router |
-| `src/App.vue` | ✅ 重写 | 顶部导航 + `<RouterView />` |
+| 路径                           | 状态    | 说明                                          |
+| ------------------------------ | ------- | --------------------------------------------- |
+| `src/router/index.ts`          | ✅ 新建 | 路由配置，含 4 条路由 + 兜底重定向 + 标题钩子 |
+| `src/pages/HomePage.vue`       | ✅ 新建 | 首页：IcePaw 欢迎 + 导航                      |
+| `src/pages/CounterPage.vue`    | ✅ 新建 | 计数器页：保留 Tauri `greet` 调用 + 计数器    |
+| `src/pages/TestRouterPage.vue` | ✅ 新建 | 路由测试页：动态参数 + 查询参数 + 编程式导航  |
+| `src/main.ts`                  | ✅ 修改 | 注册 router                                   |
+| `src/App.vue`                  | ✅ 重写 | 顶部导航 + `<RouterView />`                   |
 
 ## 路由表
 
-| 路径 | 名称 | 组件 |
-|------|------|------|
-| `/` | `Home` | `HomePage.vue` |
-| `/counter` | `Counter` | `CounterPage.vue` |
-| `/test-router` | `TestRouter` | `TestRouterPage.vue` |
+| 路径               | 名称               | 组件                             |
+| ------------------ | ------------------ | -------------------------------- |
+| `/`                | `Home`             | `HomePage.vue`                   |
+| `/counter`         | `Counter`          | `CounterPage.vue`                |
+| `/test-router`     | `TestRouter`       | `TestRouterPage.vue`             |
 | `/test-router/:id` | `TestRouterWithId` | `TestRouterPage.vue`（动态参数） |
-| `/:pathMatch(.*)*` | — | 重定向到 `Home` |
+| `/:pathMatch(.*)*` | —                  | 重定向到 `Home`                  |
 
 ## 验证结果
 
@@ -93,15 +93,15 @@ pnpm dev
 
 通过 `curl` 探测 dev server 返回的关键模块：
 
-| URL | 状态 |
-|-----|------|
-| `http://localhost:1420/` | `200 OK`（返回 `index.html`） |
-| `http://localhost:1420/src/main.ts` | `200 OK` |
-| `http://localhost:1420/src/App.vue` | `200 OK` |
-| `http://localhost:1420/src/router/index.ts` | `200 OK` |
-| `http://localhost:1420/src/pages/HomePage.vue` | `200 OK` |
-| `http://localhost:1420/src/pages/CounterPage.vue` | `200 OK` |
-| `http://localhost:1420/src/pages/TestRouterPage.vue` | `200 OK` |
+| URL                                                  | 状态                          |
+| ---------------------------------------------------- | ----------------------------- |
+| `http://localhost:1420/`                             | `200 OK`（返回 `index.html`） |
+| `http://localhost:1420/src/main.ts`                  | `200 OK`                      |
+| `http://localhost:1420/src/App.vue`                  | `200 OK`                      |
+| `http://localhost:1420/src/router/index.ts`          | `200 OK`                      |
+| `http://localhost:1420/src/pages/HomePage.vue`       | `200 OK`                      |
+| `http://localhost:1420/src/pages/CounterPage.vue`    | `200 OK`                      |
+| `http://localhost:1420/src/pages/TestRouterPage.vue` | `200 OK`                      |
 
 所有路由相关模块的 `import` 依赖（`vue-router`、`vue`、`@tauri-apps/api/core`）都被 Vite 的依赖预构建正确解析。
 
@@ -147,6 +147,7 @@ pnpm dev
 ## 总结
 
 ✅ **全部验证通过**：
+
 - TypeScript 编译零错误
 - 生产构建零错误（含代码分割）
 - 开发服务器正常启动并能解析所有路由模块

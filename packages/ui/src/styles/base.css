@@ -1,0 +1,8 @@
+/* IcePaw Base Styles — reset + global baseline */
+/* 阶段 1 占位，后续补充 */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
