@@ -1,0 +1,67 @@
+[package]
+name = "ice-paw"
+version = "0.1.0"
+description = "IcePaw - 本地优先的 LLM 对话工作站"
+authors = ["dabai"]
+edition = "2021"
+
+# 详见 https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# 使用 `_lib` 后缀让 lib name 与 bin name 不冲突（Windows 上必需）
+name = "ice_paw_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# === Tauri 主框架 ===
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-stronghold = "2"
+
+# === 序列化 ===
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# === 数据库（sqlx + 异步运行时）===
+sqlx = { version = "0.8", features = [
+    "runtime-tokio",
+    "sqlite",
+    "uuid",
+    "chrono",
+    "macros",
+    "migrate",
+] }
+tokio = { version = "1", features = ["full"] }
+
+# === 通用工具 ===
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# === HTTP / 流式 LLM ===
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+tokio-stream = "0.1"
+futures = "0.3"
+async-trait = "0.1"
+
+# === 密码学（用于 stronghold password → 32 字节 key 派生）===
+# Stronghold 的 `KeyProvider::try_from` 要求密码恰好 32 字节，
+# 这里用 blake2b256 把任意长度 passphrase 哈希到 32 字节后再传入，
+# 既规避了"密码必须 32 字节"的 footgun，也与 stronghold 文档推荐做法一致。
+blake2 = { version = "0.10", features = ["std"] }
+
+# 注：dev 上 iota_stronghold 依赖 scrypt 较慢，按官方推荐打开 opt-level=3
+[profile.dev.package.scrypt]
+opt-level = 3
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

@@ -1,0 +1,785 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IcePaw — Chat</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   IcePaw Chat Page — Warm Lab Design Tokens (hardcoded)
+   ============================================================ */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  /* Surfaces */
+  --bg-page: #FAFAF8;
+  --bg-sidebar: #F2F2EF;
+  --bg-card: #FFFFFF;
+  --bg-code: #F4F4F1;
+  --bg-input: #FFFFFF;
+  --bg-hover: #EEEEEB;
+  --border: #E8E8E5;
+  --accent: #2C6FEE;
+  --accent-hover: #1E5BD8;
+  --accent-soft: rgba(44,111,238,0.08);
+  --accent-muted: rgba(44,111,238,0.12);
+  --bubble-user: #2C6FEE;
+  --bubble-ai: #FFFFFF;
+  --bubble-ai-border: #E8E8E5;
+  --text-primary: #1A1A1A;
+  --text-secondary: #6B7280;
+  --text-placeholder: #9CA3AF;
+  --text-on-accent: #FFFFFF;
+  --code-bg-dark: #1E1E2E;
+  --code-keyword: #2C6FEE;
+  --code-string: #0CA678;
+  --code-comment: #9CA3AF;
+  --code-function: #D97706;
+  --code-number: #DC2626;
+  --success: #0CA678;
+
+  /* Spaces */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 24px;
+  --space-xxl: 32px;
+
+  /* Radius */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-md: 0 2px 8px rgba(0,0,0,0.06);
+  --shadow-lg: 0 8px 24px rgba(0,0,0,0.08);
+
+  /* Sidebar */
+  --sidebar-width: 260px;
+
+  /* Font */
+  --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+
+  /* Transitions */
+  --fast: 120ms ease;
+  --normal: 200ms ease;
+}
+
+html, body { height: 100%; overflow: hidden; }
+body {
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--text-primary);
+  background: var(--bg-page);
+  display: flex;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ===== SIDEBAR ===== */
+.sidebar {
+  width: var(--sidebar-width);
+  flex-shrink: 0;
+  background: var(--bg-sidebar);
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  border-right: 1px solid var(--border);
+}
+
+.sidebar-header {
+  padding: var(--space-lg);
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  height: 56px;
+}
+
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.sidebar-brand-icon {
+  width: 28px;
+  height: 28px;
+  background: var(--accent);
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.sidebar-brand-text {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+/* Agent Selector */
+.agent-selector {
+  padding: 8px var(--space-lg) var(--space-md);
+}
+
+.agent-selector-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 8px var(--space-md);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background var(--fast), box-shadow var(--fast);
+}
+
+.agent-selector-btn:hover {
+  background: var(--bg-hover);
+  box-shadow: var(--shadow-sm);
+}
+
+.agent-selector-left {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  min-width: 0;
+}
+
+.agent-selector-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.agent-selector-info {
+  min-width: 0;
+}
+
+.agent-selector-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-selector-model {
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-selector-chevron {
+  flex-shrink: 0;
+  color: var(--text-placeholder);
+}
+
+.sidebar-divider {
+  margin: 0 var(--space-lg);
+  height: 1px;
+  background: var(--border);
+}
+
+/* Conversation List */
+.sidebar-conversations {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-sm) var(--space-sm);
+}
+
+.sidebar-label {
+  padding: var(--space-md) var(--space-md) var(--space-sm);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.conv-item {
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-md);
+  height: 40px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background var(--fast);
+  position: relative;
+  margin-bottom: 1px;
+}
+
+.conv-item:hover { background: var(--bg-hover); }
+
+.conv-item.active {
+  background: var(--bg-card);
+  box-shadow: var(--shadow-sm);
+}
+
+.conv-item.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  background: var(--accent);
+  border-radius: 0 2px 2px 0;
+}
+
+.conv-item-icon {
+  width: 16px;
+  height: 16px;
+  color: var(--text-secondary);
+  margin-right: var(--space-sm);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  opacity: 0.6;
+}
+
+.conv-item.active .conv-item-icon { opacity: 1; }
+
+.conv-item-title {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.conv-item.active .conv-item-title { font-weight: 500; }
+
+.conv-item-time {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-left: var(--space-sm);
+  flex-shrink: 0;
+}
+
+/* Sidebar Footer */
+.sidebar-footer {
+  padding: var(--space-md) var(--space-lg);
+  border-top: 1px solid var(--border);
+}
+
+.new-chat-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-sm);
+  width: 100%;
+  height: 36px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--fast);
+}
+
+.new-chat-btn:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--text-on-accent);
+}
+
+.new-chat-btn svg {
+  transition: transform var(--fast);
+}
+
+.new-chat-btn:hover svg {
+  transform: rotate(90deg);
+}
+
+/* ===== MAIN CHAT AREA ===== */
+.main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--bg-page);
+}
+
+/* Chat Header */
+.chat-header {
+  height: 56px;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-xl);
+  flex-shrink: 0;
+}
+
+.chat-header-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Messages Area */
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-xl);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-xl);
+}
+
+.message-row {
+  width: 100%;
+  max-width: 720px;
+  display: flex;
+  gap: var(--space-md);
+}
+
+.message-row.user {
+  justify-content: flex-end;
+}
+
+.message-row.assistant {
+  justify-content: flex-start;
+}
+
+/* AI Avatar */
+.msg-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-md);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* Bubbles */
+.msg-bubble-wrapper {
+  max-width: 620px;
+  display: flex;
+  flex-direction: column;
+}
+
+.msg-bubble {
+  font-size: 14px;
+  line-height: 1.65;
+  word-break: break-word;
+}
+
+.user .msg-bubble {
+  background: var(--bubble-user);
+  color: var(--text-on-accent);
+  padding: 10px 16px;
+  border-radius: var(--radius-md);
+}
+
+.assistant .msg-bubble {
+  background: var(--bubble-ai);
+  color: var(--text-primary);
+  padding: 14px 18px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--bubble-ai-border);
+  box-shadow: var(--shadow-sm);
+}
+
+.msg-meta {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+
+.user .msg-meta { text-align: right; }
+
+.user .msg-meta { display: none; }
+
+.assistant .msg-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: 0 2px;
+}
+
+/* AI message content styling */
+.assistant .msg-bubble p {
+  margin-bottom: var(--space-md);
+}
+
+.assistant .msg-bubble p:last-child {
+  margin-bottom: 0;
+}
+
+.assistant .msg-bubble ol,
+.assistant .msg-bubble ul {
+  margin: var(--space-md) 0;
+  padding-left: var(--space-xl);
+}
+
+.assistant .msg-bubble ol li,
+.assistant .msg-bubble ul li {
+  margin-bottom: var(--space-sm);
+  line-height: 1.65;
+}
+
+.assistant .msg-bubble ol li:last-child,
+.assistant .msg-bubble ul li:last-child {
+  margin-bottom: 0;
+}
+
+.assistant .msg-bubble strong {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.assistant .msg-bubble li::marker {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+/* Code Block */
+.code-block {
+  margin: var(--space-md) 0;
+  background: var(--code-bg-dark);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  border: none;
+}
+
+.code-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  background: rgba(255,255,255,0.04);
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+
+.code-block-lang {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: rgba(255,255,255,0.4);
+  font-weight: 500;
+}
+
+.code-block-copy {
+  font-family: var(--font-ui);
+  font-size: 11px;
+  color: rgba(255,255,255,0.3);
+  background: none;
+  border: none;
+  cursor: pointer;
+  transition: color var(--fast);
+}
+
+.code-block-copy:hover { color: rgba(255,255,255,0.7); }
+
+.code-block pre {
+  padding: 14px 16px;
+  margin: 0;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: #E4E4E7;
+  background: transparent;
+}
+
+/* Syntax highlighting for code */
+.code-block .kw  { color: #2C6FEE; font-weight: 500; }
+.code-block .str { color: #0CA678; }
+.code-block .cmt { color: #6B7280; font-style: italic; }
+.code-block .fn  { color: #D97706; }
+.code-block .num { color: #DC2626; }
+.code-block .ty  { color: #D97706; font-weight: 500; }
+.code-block .mac { color: #D97706; }
+.code-block .att { color: #2C6FEE; }
+
+/* Input Area */
+.input-container {
+  background: var(--bg-card);
+  border-top: 1px solid var(--border);
+  padding: 12px 20px;
+  flex-shrink: 0;
+}
+
+.input-wrapper {
+  max-width: 720px;
+  margin: 0 auto;
+  display: flex;
+  gap: var(--space-sm);
+  align-items: flex-end;
+}
+
+.input-box {
+  flex: 1;
+  min-height: 44px;
+  max-height: 120px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--text-primary);
+  background: var(--bg-input);
+  resize: none;
+  outline: none;
+  transition: border-color var(--fast), box-shadow var(--fast);
+}
+
+.input-box::placeholder {
+  color: var(--text-placeholder);
+}
+
+.input-box:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.send-btn {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-md);
+  background: var(--accent);
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background var(--fast), transform var(--fast);
+}
+
+.send-btn:hover {
+  background: var(--accent-hover);
+  transform: scale(1.04);
+}
+
+.send-btn:active {
+  transform: scale(0.96);
+}
+
+.send-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-placeholder); }
+</style>
+</head>
+<body>
+
+<!-- ===== SIDEBAR ===== -->
+<aside class="sidebar">
+  <!-- Header -->
+  <div class="sidebar-header">
+    <div class="sidebar-brand">
+      <div class="sidebar-brand-icon">🐾</div>
+      <span class="sidebar-brand-text">IcePaw AI</span>
+    </div>
+  </div>
+
+  <!-- Agent Selector -->
+  <div class="agent-selector">
+    <button class="agent-selector-btn" title="切换 Agent">
+      <div class="agent-selector-left">
+        <div class="agent-selector-avatar">G</div>
+        <div class="agent-selector-info">
+          <div class="agent-selector-name">GPT-4o</div>
+          <div class="agent-selector-model">OpenAI / gpt-4o</div>
+        </div>
+      </div>
+      <svg class="agent-selector-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
+    </button>
+  </div>
+
+  <!-- Divider -->
+  <div class="sidebar-divider"></div>
+
+  <!-- Conversations -->
+  <div class="sidebar-conversations">
+    <div class="sidebar-label">会话列表</div>
+
+    <div class="conv-item active">
+      <svg class="conv-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+      <span class="conv-item-title">如何学习 Rust 编程</span>
+      <span class="conv-item-time">刚刚</span>
+    </div>
+
+    <div class="conv-item">
+      <svg class="conv-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+      <span class="conv-item-title">Vue 3 组合式 API 详解</span>
+      <span class="conv-item-time">2小时前</span>
+    </div>
+
+    <div class="conv-item">
+      <svg class="conv-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+      <span class="conv-item-title">Python 数据分析项目</span>
+      <span class="conv-item-time">昨天</span>
+    </div>
+
+    <div class="conv-item">
+      <svg class="conv-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+      <span class="conv-item-title">Docker 部署问题排查</span>
+      <span class="conv-item-time">3天前</span>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div class="sidebar-footer">
+    <button class="new-chat-btn">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <line x1="12" y1="5" x2="12" y2="19"/>
+        <line x1="5" y1="12" x2="19" y2="12"/>
+      </svg>
+      新建会话
+    </button>
+  </div>
+</aside>
+
+<!-- ===== MAIN CHAT AREA ===== -->
+<main class="main">
+  <!-- Chat Header -->
+  <header class="chat-header">
+    <span class="chat-header-title">如何学习 Rust 编程</span>
+  </header>
+
+  <!-- Messages -->
+  <div class="messages">
+    <!-- User Message 1 -->
+    <div class="message-row user">
+      <div class="msg-bubble-wrapper">
+        <div class="msg-bubble">Rust 的所有权机制和 C++ 的智能指针有什么本质区别？</div>
+      </div>
+    </div>
+
+    <!-- AI Message 1 -->
+    <div class="message-row assistant">
+      <div class="msg-avatar">G</div>
+      <div class="msg-bubble-wrapper">
+        <div class="msg-bubble">
+          <p>Rust 的所有权和 C++ 的智能指针虽然在概念上有相似之处，但在核心理念上有三个关键区别：</p>
+
+          <ol>
+            <li>
+              <strong>编译期 vs 运行时检查。</strong> Rust 的所有权规则在编译期由 borrow checker 强制执行——如果违反所有权规则，代码根本编译不过。而 C++ 的 <code style="background:var(--bg-hover);padding:1px 5px;border-radius:3px;font-family:var(--font-mono);font-size:12.5px;">unique_ptr</code> 和 <code style="background:var(--bg-hover);padding:1px 5px;border-radius:3px;font-family:var(--font-mono);font-size:12.5px;">shared_ptr</code> 依赖运行时引用计数，违反规则不会阻止编译，可能导致运行时崩溃或内存泄漏。
+            </li>
+            <li>
+              <strong>默认不可变 vs 默认可变。</strong> Rust 中所有变量默认不可变，需要显式声明 <code style="background:var(--bg-hover);padding:1px 5px;border-radius:3px;font-family:var(--font-mono);font-size:12.5px;">mut</code>。所有权的借用规则确保了同一时刻只有一个可变引用或多个不可变引用。C++ 默认可变，没有编译级别的借用检查，完全依赖开发者自律。
+            </li>
+            <li>
+              <strong>生命周期标注 vs RAII。</strong> Rust 的生命周期标注让编译器在编译期就能验证引用不会悬垂。C++ 依赖 RAII 和智能指针管理生命周期，但无法在编译期保证引用有效性——一个悬垂的 <code style="background:var(--bg-hover);padding:1px 5px;border-radius:3px;font-family:var(--font-mono);font-size:12.5px;">shared_ptr</code> 同样会导致 use-after-free。
+            </li>
+          </ol>
+
+          <p>下面是一个对比示例，展示 Rust 的所有权转移：</p>
+
+          <div class="code-block">
+            <div class="code-block-header">
+              <span class="code-block-lang">rust</span>
+              <button class="code-block-copy">复制</button>
+            </div>
+            <pre><span class="cmt">// Rust: 所有权转移 —— 编译时保证安全</span>
+<span class="kw">fn</span> <span class="fn">main</span>() {
+    <span class="kw">let</span> <span class="fn">s1</span> = <span class="ty">String</span>::<span class="fn">from</span>(<span class="str">"hello"</span>);
+    <span class="kw">let</span> <span class="fn">s2</span> = s1;          <span class="cmt">// s1 的所有权转移给 s2</span>
+
+    <span class="kw">let</span> <span class="fn">s3</span> = <span class="fn">calculate_length</span>(s2);
+    <span class="mac">println!</span>(<span class="str">"Length: {}"</span>, s3);
+    <span class="cmt">// println!("{}", s2); // 编译错误！s2 已被 move</span>
+}
+
+<span class="kw">fn</span> <span class="fn">calculate_length</span>(s: <span class="ty">String</span>) -> <span class="ty">String</span> {
+    <span class="kw">let</span> <span class="fn">len</span> = s.<span class="fn">len</span>();
+    <span class="mac">println!</span>(<span class="str">"The string '{s}' has {len} chars."</span>);
+    s  <span class="cmt">// 所有权返回给调用者</span>
+}</pre>
+          </div>
+
+          <p>总结来说，Rust 的所有权系统通过编译期静态分析消除了整类内存安全问题（use-after-free、double-free、数据竞态），而 C++ 的智能指针只是将手动管理的负担降低，并未从根本上消除这些隐患。这也是 Rust 能在不依赖 GC 的前提下实现内存安全的核心原因。</p>
+        </div>
+        <div class="msg-meta">GPT-4o · 12:34</div>
+      </div>
+    </div>
+
+    <!-- User Message 2 -->
+    <div class="message-row user">
+      <div class="msg-bubble-wrapper">
+        <div class="msg-bubble">那如果我想从 C++ 转到 Rust，应该按照什么顺序学习？</div>
+      </div>
+    </div>
+
+    <!-- AI Message 2 -->
+    <div class="message-row assistant">
+      <div class="msg-avatar">G</div>
+      <div class="msg-bubble-wrapper">
+        <div class="msg-bubble">
+          <p>从 C++ 转到 Rust 是很好的选择！你的 C++ 背景会让你对很多概念有天然的亲近感。我推荐按以下顺序学习：</p>
+          <p><strong>1. 基础语法 + 所有权（2周）</strong> —— 变量绑定、模式匹配、所有权/借用/生命周期。这是 Rust 的核心，也是 C++ 程序员最容易感到 "反直觉" 的地方。重点理解为什么 <code style="background:var(--bg-hover);padding:1px 5px;border-radius:3px;font-family:var(--font-mono);font-size:12.5px;">let a = b;</code> 是一个 move 操作。</p>
+          <p><strong>2. 枚举与错误处理（1周）</strong> —— <code style="background:var(--bg-hover);padding:1px 5px;border-radius:3px;font-family:var(--font-mono);font-size:12.5px;">Option&lt;T&gt;</code>、<code style="background:var(--bg-hover);padding:1px 5px;border-radius:3px;font-family:var(--font-mono);font-size:12.5px;">Result&lt;T, E&gt;</code> 代替了空指针和异常，配合 <code style="background:var(--bg-hover);padding:1px 5px;border-radius:3px;font-family:var(--font-mono);font-size:12.5px;">match</code> 和 <code style="background:var(--bg-hover);padding:1px 5px;border-radius:3px;font-family:var(--font-mono);font-size:12.5px;">?</code> 运算符，会让错误处理变得优雅而安全。</p>
+          <p><strong>3. 实战项目（持续）</strong> —— 用 Rust 重写一个你熟悉的 C++ 小项目，比如一个命令行工具或网络服务。遇到编译错误不要怕，每一次 borrow checker 的拒绝都是在帮你发现潜在 bug。</p>
+          <p>推荐资源：<em>The Rust Programming Language</em>（官方书，免费）+ Rustlings 练习。有问题随时问我！</p>
+        </div>
+        <div class="msg-meta">GPT-4o · 12:36</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Input Area -->
+  <div class="input-container">
+    <div class="input-wrapper">
+      <textarea class="input-box" rows="3" placeholder="输入消息..."></textarea>
+      <button class="send-btn" title="发送">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="22" y1="2" x2="11" y2="13"/>
+          <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+</main>
+
+</body>
+</html>
