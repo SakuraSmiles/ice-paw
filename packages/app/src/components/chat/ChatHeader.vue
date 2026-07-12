@@ -3,7 +3,9 @@
 //
 // 职责：
 //   - 显示当前 Agent 名 + 当前会话标题 + 模型名
-//   - 右侧：流式中显示「停止」按钮，否则留空（占位）
+//   - 右侧：流式中显示「停止」按钮（lucide Square 图标），否则留空（占位）
+//   - 半透明毛玻璃背景（backdrop-filter: blur(8px) + 半透明底色）
+//   - 高度 48px，颜色全部走 --ip-* Design Token
 //
 // props: 无（直接读 store）
 //
@@ -11,6 +13,7 @@
 //   - stop  点击停止按钮时触发（外层接住后调 chatStore.stopGeneration）
 
 import { computed } from "vue";
+import { Square } from "lucide-vue-next";
 import { useAgentsStore } from "../../stores/agents";
 import { useConversationsStore } from "../../stores/conversations";
 import { useChatStore } from "../../stores/chat";
@@ -34,6 +37,13 @@ const agentName = computed<string>(() => agentsStore.current?.name ?? "未选择
 /** 当前 Agent 模型（无则空串） */
 const agentModel = computed<string>(() => agentsStore.current?.model ?? "");
 
+/** 标题层：优先用会话标题，无则用 Agent 名 */
+const headerTitle = computed<string>(() => {
+  const t = convTitle.value;
+  if (t && t !== "新会话") return t;
+  return agentName.value;
+});
+
 /** 停止按钮点击 */
 function onStop(): void {
   emit("stop");
@@ -44,12 +54,10 @@ function onStop(): void {
   <header class="chat-header">
     <div class="header-main">
       <div class="title-row">
-        <span class="conv-title">{{ convTitle }}</span>
+        <span class="conv-title">{{ headerTitle }}</span>
       </div>
-      <div class="meta-row">
-        <span class="agent-name">{{ agentName }}</span>
-        <span v-if="agentModel" class="dot">·</span>
-        <span v-if="agentModel" class="model-name">{{ agentModel }}</span>
+      <div v-if="agentModel" class="meta-row">
+        <span class="model-name">{{ agentModel }}</span>
       </div>
     </div>
     <div class="header-actions">
@@ -58,9 +66,11 @@ function onStop(): void {
         class="btn-stop"
         type="button"
         title="停止生成"
+        aria-label="停止生成"
         @click="onStop"
       >
-        停止
+        <Square :size="14" aria-hidden="true" />
+        <span class="btn-label">停止</span>
       </button>
     </div>
   </header>
@@ -68,23 +78,34 @@ function onStop(): void {
 
 <style scoped>
 .chat-header {
+  /* 高度 48px：弹性盒 + 8px 上下 padding + 内容垂直居中 */
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 12px 20px;
-  border-bottom: 1px solid var(--header-border, #e0e0e0);
-  background: var(--header-bg, #ffffff);
+  height: 48px;
+  padding: 0 20px;
+
+  /* 毛玻璃：半透明背景 + 8px 模糊 */
+  background-color: var(--ip-color-bg-header-backdrop, rgba(250, 250, 250, 0.72));
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+
+  border-bottom: 1px solid var(--ip-color-border-default, #e5e7eb);
+  color: var(--ip-color-text-primary, #1a1a1a);
   flex-shrink: 0;
-  min-height: 56px;
+  position: relative;
+  z-index: var(--ip-z-sticky, 200);
 }
 
 .header-main {
   display: flex;
   flex-direction: column;
+  justify-content: center;
   gap: 2px;
   min-width: 0;
   flex: 1;
+  overflow: hidden;
 }
 
 .title-row {
@@ -94,9 +115,10 @@ function onStop(): void {
 }
 
 .conv-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--text-primary, #1a1a1a);
+  font-size: var(--ip-text-body-size, 15px);
+  font-weight: var(--ip-font-weight-semibold, 600);
+  color: var(--ip-color-text-primary, #1a1a1a);
+  line-height: 1.2;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -106,28 +128,20 @@ function onStop(): void {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
-  color: var(--text-secondary, #888);
+  font-size: var(--ip-text-caption-size, 12px);
+  line-height: 1.2;
+  color: var(--ip-color-text-tertiary, #8c8c8c);
   min-width: 0;
-}
-
-.agent-name {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 220px;
-}
-
-.dot {
-  color: var(--text-secondary, #888);
 }
 
 .model-name {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 220px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  max-width: 280px;
+  font-family: var(--ip-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: var(--ip-text-caption-size, 12px);
+  letter-spacing: var(--ip-letter-spacing-normal, 0);
 }
 
 .header-actions {
@@ -138,41 +152,57 @@ function onStop(): void {
 }
 
 .btn-stop {
-  padding: 6px 16px;
-  font-size: 13px;
-  font-weight: 500;
-  border: 1px solid var(--danger-border, #d93025);
-  border-radius: 4px;
-  background: var(--danger-bg, #ffffff);
-  color: var(--danger-fg, #d93025);
-  cursor: pointer;
-  transition: background 100ms ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--ip-btn-h-sm, 28px);
+  padding: 0 12px;
+  font-size: var(--ip-text-body-sm-size, 13px);
+  font-weight: var(--ip-font-weight-medium, 500);
   font-family: inherit;
+  border: 1px solid var(--ip-danger-border, #fca5a5);
+  border-radius: var(--ip-btn-radius, 8px);
+  background: var(--ip-danger-bg, #fee2e2);
+  color: var(--ip-danger-text, #991b1b);
+  cursor: pointer;
+  transition: var(--ip-transition-colors, background-color 150ms ease, color 150ms ease, border-color 150ms ease);
 }
 
 .btn-stop:hover {
-  background: var(--danger-bg-hover, #fde8e8);
+  background: var(--ip-danger-base, #dc2626);
+  color: var(--ip-color-text-on-danger, #ffffff);
+  border-color: var(--ip-danger-hover, #b91c1c);
+}
+
+.btn-stop:focus-visible {
+  outline: none;
+  box-shadow: var(--ip-shadow-focus, 0 0 0 3px rgba(59, 130, 246, 0.3));
+}
+
+.btn-stop:active {
+  background: var(--ip-danger-active, #991b1b);
+  border-color: var(--ip-danger-active, #991b1b);
+}
+
+.btn-label {
+  line-height: 1;
 }
 
 /* 暗色模式 */
 @media (prefers-color-scheme: dark) {
   .chat-header {
-    --header-bg: #1e1e2e;
-    --header-border: #3a3a4a;
+    /* 暗色毛玻璃覆盖由 --ip-color-bg-header-backdrop token 自动提供 */
+    background-color: var(--ip-color-bg-header-backdrop, rgba(20, 20, 20, 0.72));
+    border-bottom-color: var(--ip-color-border-default, #3a3a4a);
+    color: var(--ip-color-text-primary, #f0f0f0);
   }
+
   .conv-title {
-    --text-primary: #f0f0f0;
+    color: var(--ip-color-text-primary, #f0f0f0);
   }
+
   .meta-row {
-    --text-secondary: #888;
-  }
-  .btn-stop {
-    --danger-bg: #2a2a3a;
-    --danger-fg: #ff6b6b;
-    --danger-border: #5a2a2a;
-  }
-  .btn-stop:hover {
-    --danger-bg-hover: #3a2020;
+    color: var(--ip-color-text-tertiary, #8c8c8c);
   }
 }
 </style>
