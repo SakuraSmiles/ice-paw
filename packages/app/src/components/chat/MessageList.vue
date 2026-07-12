@@ -78,10 +78,11 @@ function onRetry(msg: Message): void {
   <div ref="listRef" class="message-list" @scroll="onScroll">
     <div class="message-list-inner">
       <MessageBubble
-        v-for="msg in messages"
+        v-for="(msg, idx) in messages"
         :key="msg.id"
         :message="msg"
         :is-streaming="msg.id === streamingId"
+        :prev-role="idx > 0 ? messages[idx - 1]!.role : null"
         @retry="onRetry"
       />
     </div>
