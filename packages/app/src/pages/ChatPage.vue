@@ -1,44 +1,40 @@
 <script setup lang="ts">
 // 聊天主页面（Phase 1 P0 模块 3 前端）
 //
-// 布局：
-//   - 顶部：ChatHeader（会话标题 + Agent 信息 + 停止按钮）
-//   - 中部：MessageList（flex: 1，可滚动）
-//   - 底部：ChatInput（多行输入 + 工具栏）
+// 三态渲染：
+//   1. hasAgents === false            → InlineAgentCreate（首页内联创建）
+//   2. hasAgents && !hasConversation  → WelcomeScreen（居中头像 + 提示词 + WelcomeInput）
+//   3. hasConversation                → 完整聊天界面（ChatHeader + MessageList + ChatInput）
 //
 // 行为：
 //   - onMounted：注册 4 个 chat:* 事件监听（chatStore.setupListeners）
 //   - 监听 conversationsStore.currentId 变化：调 chatStore.loadMessages 拉历史
-//   - 无当前会话：显示「选择或创建一个会话开始聊天」全屏空状态
-//   - 有当前会话但无消息：显示 EmptyChatHint
+//   - 首条消息即创建会话：由 WelcomeInput 自动创建后再 sendMessage
 //   - 错误：通过 Toast 提示（chatStore.error）
 //
 // 重试功能：P1 占位 — 目前仅 Toast 提示「重试功能开发中」
 
 import { computed, onMounted, onUnmounted, watch } from "vue";
-import { useRouter } from "vue-router";
 import { useAgentsStore } from "../stores/agents";
 import { useConversationsStore } from "../stores/conversations";
 import { useChatStore } from "../stores/chat";
 import { useToast } from "../composables/useToast";
-import { Button } from "@ice-paw/ui";
-import { Plus } from "lucide-vue-next";
 import ChatHeader from "../components/chat/ChatHeader.vue";
 import MessageList from "../components/chat/MessageList.vue";
 import ChatInput from "../components/chat/ChatInput.vue";
-import EmptyChatHint from "../components/chat/EmptyChatHint.vue";
+import WelcomeInput from "../components/chat/WelcomeInput.vue";
+import InlineAgentCreate from "../components/agent/InlineAgentCreate.vue";
 
 const agentsStore = useAgentsStore();
 const conversationsStore = useConversationsStore();
 const chatStore = useChatStore();
 const toast = useToast();
-const router = useRouter();
 
 // ============================================================================
 // 派生状态
 // ============================================================================
 
-/** 当前是否有 Agent（用于区分两种空态） */
+/** 当前是否有 Agent（用于三态分支的第一道门） */
 const hasAgents = computed<boolean>(() => agentsStore.hasAgents);
 
 /** 当前是否有选中会话 */
@@ -46,6 +42,12 @@ const hasConversation = computed<boolean>(() => !!conversationsStore.currentId);
 
 /** 当前会话 ID（用于触发 watch） */
 const currentConvId = computed<string | null>(() => conversationsStore.currentId);
+
+/** 当前 Agent 名称（WelcomeScreen 用） */
+const currentAgentName = computed<string>(() => agentsStore.current?.name ?? "");
+
+/** 当前 Agent 模型名（WelcomeScreen 用） */
+const currentAgentModel = computed<string>(() => agentsStore.current?.model ?? "");
 
 /** 流式中助手消息 ID（取 messages 末尾且 role=assistant 且无 error 的项） */
 const streamingMessageId = computed<string | null>(() => {
@@ -118,13 +120,34 @@ watch(
 // 事件处理
 // ============================================================================
 
-/** 用户点击发送 */
+/** 正常聊天界面：用户点击发送 */
 async function onSend(content: string): Promise<void> {
   try {
     await chatStore.sendMessage(content);
   } catch {
     // sendMessage 内部已写入 error，watch 会兜底弹 Toast
   }
+}
+
+/** WelcomeScreen 触发：会话已在 WelcomeInput 内创建完成，此处只需发送 */
+async function onWelcomeSend(content: string): Promise<void> {
+  // 此时 conversationsStore.currentId 应已被设置
+  // 但 loadMessages 还未触发（conversations.watchAgentChange 会自动触发 loadFor，
+  // 但 store 手动 setCurrent 不触发 watch）；此处显式加载一次。
+  const convId = conversationsStore.currentId;
+  if (!convId) {
+    toast.error("会话未就绪，请稍后再试");
+    return;
+  }
+  // 确保消息列表已加载（首次进入会话）
+  if (chatStore.messages.length === 0 && !chatStore.isStreaming) {
+    try {
+      await chatStore.loadMessages(convId);
+    } catch {
+      // 加载失败仍尝试发送（极端情况下允许发送）
+    }
+  }
+  await onSend(content);
 }
 
 /** 用户点击停止 */
@@ -136,45 +159,23 @@ async function onStop(): Promise<void> {
 function onRetry(_msg: import("../types").Message): void {
   toast.info("重试功能开发中");
 }
-
-/**
- * 无 Agent 状态点击「创建 Agent」→ 跳转到 AgentManagerPage。
- * 不再由 AppLayout 全局拦截处理（见 BUG-LAYOUT-002）。
- */
-function goToAgentManager(): void {
-  void router.push({ name: "AgentManager" });
-}
 </script>
 
 <template>
   <div class="chat-page">
-    <!-- 无 Agent：强引导创建（优先于无会话提示） -->
-    <div v-if="!hasAgents && !agentsStore.loading" class="no-conv">
-      <div class="no-conv-card">
-        <h2 class="no-conv-title">欢迎使用 IcePaw</h2>
-        <p class="no-conv-desc">
-          当前还没有 Agent，创建你的第一个 Agent 后即可开始对话。
-        </p>
-        <div class="no-conv-action">
-          <Button variant="primary" size="md" @click="goToAgentManager">
-            <template #icon-left>
-              <Plus :size="16" aria-hidden="true" />
-            </template>
-            创建 Agent
-          </Button>
-        </div>
-      </div>
-    </div>
+    <!-- 三态一：无 Agent → 首页内联创建 -->
+    <InlineAgentCreate v-if="!hasAgents && !agentsStore.loading" />
 
-    <!-- 无当前会话：选择 / 新建会话提示 -->
-    <div v-else-if="!hasConversation" class="no-conv">
-      <div class="no-conv-card">
-        <h2 class="no-conv-title">选择或创建一个会话开始聊天</h2>
-        <p class="no-conv-desc">在左侧侧栏选择一个已有会话，或点击「+ 新建会话」开始新的对话。</p>
-      </div>
-    </div>
+    <!-- 三态二：有 Agent 无会话 → WelcomeScreen（居中输入框 + 提示词） -->
+    <WelcomeInput
+      v-else-if="hasAgents && !hasConversation"
+      :agent-name="currentAgentName"
+      :model-name="currentAgentModel"
+      @send="onWelcomeSend"
+      @stop="onStop"
+    />
 
-    <!-- 有当前会话：完整聊天界面 -->
+    <!-- 三态三：有会话 → 完整聊天界面 -->
     <template v-else>
       <ChatHeader @stop="onStop" />
       <MessageList
@@ -182,9 +183,6 @@ function goToAgentManager(): void {
         :streaming-id="streamingMessageId"
         @retry="onRetry"
       />
-      <div v-if="chatStore.isEmpty" class="empty-overlay-wrap">
-        <EmptyChatHint />
-      </div>
       <ChatInput
         :disabled="false"
         :streaming="chatStore.isStreaming"
@@ -203,58 +201,5 @@ function goToAgentManager(): void {
   width: 100%;
   background: var(--ip-color-bg-secondary);
   overflow: hidden;
-}
-
-.no-conv {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 48px var(--ip-spacing-6);
-}
-
-.no-conv-card {
-  max-width: 420px;
-  text-align: center;
-  padding: var(--ip-spacing-8) var(--ip-spacing-6);
-  border: 1px dashed var(--ip-color-border-default);
-  border-radius: var(--ip-radius-xl);
-  background: var(--ip-color-bg-elevated);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--ip-spacing-4);
-}
-
-.no-conv-action {
-  display: flex;
-  justify-content: center;
-  margin-top: var(--ip-spacing-2);
-}
-
-.no-conv-title {
-  margin: 0 0 var(--ip-spacing-2);
-  font-size: var(--ip-text-body-lg-size);
-  font-weight: var(--ip-font-weight-semibold);
-  color: var(--ip-color-text-primary);
-}
-
-.no-conv-desc {
-  margin: 0;
-  font-size: var(--ip-text-body-sm-size);
-  line-height: var(--ip-line-height-loose);
-  color: var(--ip-color-text-tertiary);
-}
-
-.empty-overlay-wrap {
-  position: absolute;
-  inset: 56px 0 0; /* 减去 header 高度 56px */
-  display: flex;
-  pointer-events: none;
-}
-
-.empty-overlay-wrap > * {
-  flex: 1;
-  pointer-events: auto;
 }
 </style>
