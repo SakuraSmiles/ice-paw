@@ -3,7 +3,7 @@
 //
 // 职责：
 //   - 展示单个 Agent 的摘要信息：名称、Provider、Model、创建时间
-//   - 提供「编辑」和「删除」操作按钮
+//   - 提供「编辑」和「删除」操作按钮（@ice-paw/ui Button + lucide 图标）
 //
 // props:
 //   - agent: Agent 实体
@@ -12,6 +12,8 @@
 //   - edit:   点击编辑按钮时触发
 //   - delete: 点击删除按钮时触发
 
+import { Button } from "@ice-paw/ui";
+import { Pencil, Trash2 } from "lucide-vue-next";
 import type { Agent } from "../../types";
 
 const props = defineProps<{
@@ -50,13 +52,30 @@ function formatDate(iso: string): string {
       <div class="agent-time">{{ formatDate(props.agent.created_at) }}</div>
     </div>
     <div class="agent-card-actions">
-      <button class="btn-action btn-edit" title="编辑" @click="emit('edit', props.agent)">
-        <!-- 铅笔图标用纯文字替代 -->
-        <span>编辑</span>
-      </button>
-      <button class="btn-action btn-delete" title="删除" @click="emit('delete', props.agent)">
-        <span>删除</span>
-      </button>
+      <Button
+        variant="secondary"
+        size="sm"
+        :title="`编辑 ${props.agent.name}`"
+        :aria-label="`编辑 ${props.agent.name}`"
+        @click="emit('edit', props.agent)"
+      >
+        <template #icon-left>
+          <Pencil :size="14" aria-hidden="true" />
+        </template>
+        编辑
+      </Button>
+      <Button
+        variant="ghost"
+        size="sm"
+        :title="`删除 ${props.agent.name}`"
+        :aria-label="`删除 ${props.agent.name}`"
+        @click="emit('delete', props.agent)"
+      >
+        <template #icon-left>
+          <Trash2 :size="14" aria-hidden="true" />
+        </template>
+        删除
+      </Button>
     </div>
   </div>
 </template>
@@ -66,12 +85,15 @@ function formatDate(iso: string): string {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 14px 18px;
+  gap: var(--ip-spacing-3);
+  padding: var(--ip-spacing-3) var(--ip-spacing-4);
   background: var(--ip-color-bg-secondary);
   border: 1px solid var(--ip-color-border-default);
   border-radius: var(--ip-radius-lg);
-  transition: box-shadow var(--ip-duration-fast) var(--ip-ease-out), border-color var(--ip-duration-fast) var(--ip-ease-out);
+  box-shadow: var(--ip-shadow-xs);
+  transition:
+    box-shadow var(--ip-duration-fast) var(--ip-ease-out),
+    border-color var(--ip-duration-fast) var(--ip-ease-out);
 }
 .agent-card:hover {
   box-shadow: var(--ip-shadow-sm);
@@ -81,11 +103,15 @@ function formatDate(iso: string): string {
 .agent-card-body {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ip-spacing-1);
 }
 
 .agent-name {
   font-size: var(--ip-text-body-size);
   font-weight: var(--ip-font-weight-semibold);
+  line-height: var(--ip-line-height-relaxed);
   color: var(--ip-color-text-primary);
   white-space: nowrap;
   overflow: hidden;
@@ -94,22 +120,23 @@ function formatDate(iso: string): string {
 
 .agent-meta {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--ip-spacing-2);
-  margin-top: 6px;
 }
 
 .agent-tag {
   display: inline-block;
   padding: 2px var(--ip-spacing-2);
   font-size: var(--ip-text-caption-size);
+  line-height: var(--ip-line-height-relaxed);
   border-radius: var(--ip-radius-sm);
   background: var(--ip-color-bg-tertiary);
   color: var(--ip-gray-600);
 }
 
 .agent-time {
-  margin-top: var(--ip-spacing-1);
   font-size: var(--ip-text-caption-size);
+  line-height: var(--ip-line-height-relaxed);
   color: var(--ip-color-text-tertiary);
 }
 
@@ -117,27 +144,5 @@ function formatDate(iso: string): string {
   display: flex;
   gap: var(--ip-spacing-2);
   flex-shrink: 0;
-}
-
-.btn-action {
-  padding: var(--ip-spacing-1) var(--ip-spacing-3);
-  font-size: var(--ip-text-body-sm-size);
-  border: 1px solid var(--ip-color-border-default);
-  border-radius: var(--ip-radius-sm);
-  background: var(--ip-color-bg-primary);
-  color: var(--ip-gray-600);
-  cursor: pointer;
-  transition: background-color var(--ip-duration-fast) var(--ip-ease-out), border-color var(--ip-duration-fast) var(--ip-ease-out);
-}
-.btn-action:hover {
-  background: var(--ip-color-bg-tertiary);
-}
-
-.btn-delete {
-  color: var(--ip-danger-base);
-  border-color: var(--ip-danger-border);
-}
-.btn-delete:hover {
-  background: var(--ip-danger-bg);
 }
 </style>
