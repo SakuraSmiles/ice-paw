@@ -1,68 +1,1795 @@
 <script setup lang="ts">
-// IcePaw UI 预览站根组件 — 阶段 1 最小骨架
+/**
+ * IcePaw UI · 预览站
+ *
+ * v1 — 按 icepaw-dev-site-spec.md v1.0.1 重写
+ * 布局：sticky header → hero → 6 sections → footer
+ * 右侧浮动 TOC + 手绘风 SVG 装饰
+ */
+import { ref, onMounted, onUnmounted, h } from 'vue'
+import {
+  Button,
+  Input,
+  Textarea,
+  MessageBubble,
+  Modal,
+  ToastContainer,
+  provideToast,
+  IpFlex,
+  IpContainer,
+  type ToastApi,
+} from '../src'
+import {
+  Search,
+  AtSign,
+  Hash,
+  Copy,
+  RotateCcw,
+  Settings,
+  MoreHorizontal,
+  Plus,
+  Send,
+} from 'lucide-vue-next'
+
+/* ── Theme ── */
+const theme = ref<'light' | 'dark'>('light')
+function toggleTheme(): void {
+  theme.value = theme.value === 'light' ? 'dark' : 'light'
+  document.documentElement.setAttribute('data-theme', theme.value)
+}
+
+/* ── Toast API ── */
+const toast: ToastApi = provideToast()
+
+/* ── Demo state ── */
+const inputValue = ref<string>('你好')
+const inputError = ref<boolean>(false)
+const inputErrorMessage = ref<string>('')
+
+const taValue = ref<string>(
+  '今天天气不错，适合写代码。\n不过下午可能要开会。',
+)
+
+const modalOpenSm = ref(false)
+const modalOpenMd = ref(false)
+const modalOpenLg = ref(false)
+
+const btnLoading = ref(false)
+function triggerLoading(): void {
+  btnLoading.value = true
+  setTimeout(() => { btnLoading.value = false }, 1500)
+}
+
+function showInputError(): void {
+  inputError.value = false
+  inputErrorMessage.value = ''
+  setTimeout(() => {
+    inputError.value = true
+    inputErrorMessage.value = '用户名不能为空'
+  }, 50)
+}
+
+function clearInputError(): void {
+  inputError.value = false
+  inputErrorMessage.value = ''
+}
+
+const longMessage = ref<string>(
+  '推荐使用 `fetch` + `AbortController` 实现可中断的请求。' +
+  '配合 `useRef` 持有 controller 实例，在 cleanup 里调用 `abort()` 即可取消挂起的请求。',
+)
+
+function toastSuccess(): void { toast.success('保存成功') }
+function toastError(): void { toast.error('保存失败') }
+function toastWarning(): void { toast.warning('网络连接不稳定') }
+function toastInfo(): void { toast.info('检测到新版本') }
+function toastMergeDemo(): void {
+  toast.success('第一次保存', { title: '保存中' })
+  setTimeout(() => toast.success('第二次保存'), 800)
+  setTimeout(() => toast.success('第三次保存'), 1600)
+}
+
+/* ── VNode separator demo ── */
+const hCaretVNode = h(
+  'svg',
+  { width: 10, height: 10, viewBox: '0 0 10 10', 'aria-hidden': true },
+  h('path', {
+    d: 'M3 1 L7 5 L3 9',
+    fill: 'none',
+    stroke: 'currentColor',
+    'stroke-width': '1.5',
+    'stroke-linecap': 'round',
+    'stroke-linejoin': 'round',
+  }),
+)
+
+/* ── TOC + Scroll ── */
+const tocItems = [
+  { id: 'button',    label: 'Button' },
+  { id: 'input',     label: 'Input' },
+  { id: 'textarea',  label: 'Textarea' },
+  { id: 'message',   label: 'Message' },
+  { id: 'modal',     label: 'Modal' },
+  { id: 'toast',     label: 'Toast' },
+  { id: 'flex',      label: 'Flex' },
+  { id: 'container', label: 'Container' },
+]
+
+const activeId = ref<string>('button')
+const isScrolled = ref(false)
+
+function scrollTo(id: string): void {
+  const el = document.getElementById(id)
+  if (el) {
+    const top = el.getBoundingClientRect().top + window.scrollY - 80
+    window.scrollTo({ top, behavior: 'smooth' })
+  }
+}
+
+function onScroll(): void {
+  isScrolled.value = window.scrollY > 8
+}
+
+/* ── Wavy line draw animation ── */
+function initWavyAnimations(): void {
+  const observer = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('is-drawn')
+          observer.unobserve(entry.target)
+        }
+      })
+    },
+    { threshold: 0.5 },
+  )
+  document.querySelectorAll('.hand-drawn-divider').forEach((el) => observer.observe(el))
+}
+
+/* ── TOC section detection ── */
+function initTocObserver(): void {
+  const observer = new IntersectionObserver(
+    (entries) => {
+      const visible = entries
+        .filter((e) => e.isIntersecting)
+        .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)
+      if (visible.length > 0) {
+        activeId.value = visible[0].target.id
+      }
+    },
+    { rootMargin: '-30% 0px -60% 0px', threshold: 0 },
+  )
+  tocItems.forEach((item) => {
+    const el = document.getElementById(item.id)
+    if (el) observer.observe(el)
+  })
+  return () => observer.disconnect()
+}
+
+let cleanupToc: (() => void) | undefined
+
+onMounted(() => {
+  window.addEventListener('scroll', onScroll, { passive: true })
+  initWavyAnimations()
+  cleanupToc = initTocObserver()
+})
+
+onUnmounted(() => {
+  window.removeEventListener('scroll', onScroll)
+  if (cleanupToc) cleanupToc()
+})
 </script>
 
 <template>
-  <div class="preview-root">
-    <header class="preview-header">
-      <h1>IcePaw UI · 预览站</h1>
-      <p class="preview-subtitle">组件库骨架已搭建，阶段 1 无可预览组件</p>
-    </header>
-    <main class="preview-main">
-      <div class="preview-empty">
-        <p>🎉 Monorepo 骨架搭建完成</p>
-        <p>后续阶段将在此展示所有组件</p>
+  <div class="preview-root" :data-theme="theme">
+    <!-- Toast 容器 -->
+    <ToastContainer />
+
+    <!-- ── Header ── -->
+    <header class="preview-header" :class="{ 'is-scrolled': isScrolled }">
+      <div class="preview-header__inner">
+        <!-- Brand -->
+        <div class="preview-header__brand">
+          <!-- Hand-drawn paw print SVG -->
+          <svg class="hand-drawn-paw" width="22" height="22" viewBox="0 0 22 22" fill="none" aria-hidden="true">
+            <ellipse cx="6"  cy="6"  rx="1.6" ry="2.2" transform="rotate(-25 6 6)"  fill="currentColor"/>
+            <ellipse cx="11" cy="3"  rx="1.6" ry="2.2" fill="currentColor"/>
+            <ellipse cx="16" cy="6"  rx="1.6" ry="2.2" transform="rotate(25 16 6)"  fill="currentColor"/>
+            <path d="M 5 13 Q 5 10, 8 9.5 L 14 9.5 Q 17 10, 17 13 Q 17 17, 11 18 Q 5 17, 5 13 Z" fill="currentColor"/>
+          </svg>
+          <span class="preview-header__name">IcePaw</span>
+          <span class="preview-header__dot" aria-hidden="true">·</span>
+          <span class="preview-header__meta">组件 · 基础</span>
+          <code class="preview-header__version">v1.0.1</code>
+        </div>
+
+        <!-- Theme toggle -->
+        <button
+          type="button"
+          class="theme-toggle"
+          :aria-label="theme === 'light' ? '切换到暗色模式' : '切换到亮色模式'"
+          @click="toggleTheme"
+        >
+          <span class="theme-toggle__icon" aria-hidden="true">☀</span>
+          <span class="theme-toggle__label">{{ theme === 'light' ? '浅色' : '深色' }}</span>
+        </button>
       </div>
-    </main>
+    </header>
+
+    <!-- ── Hero ── -->
+    <section class="preview-intro">
+      <p class="preview-intro__index">01 — 08</p>
+      <h1>IcePaw Design System</h1>
+      <p class="preview-intro__subtitle">为 AI 对话界面打造的 Vue 3 组件库。</p>
+
+      <!-- Wavy divider -->
+      <svg class="hand-drawn-divider" width="200" height="12" viewBox="0 0 200 12" fill="none" aria-hidden="true">
+        <path d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
+              stroke="currentColor" stroke-width="1.5"
+              stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
+      </svg>
+
+      <p class="preview-intro__lede">
+        8 个原子与布局组件，覆盖按钮、输入、消息、对话框等基础交互。
+      </p>
+
+      <!-- Anchor pills -->
+      <nav class="preview-anchor-pills" aria-label="组件导航">
+        <button
+          v-for="item in tocItems"
+          :key="item.id"
+          type="button"
+          class="hero-anchor"
+          @click="scrollTo(item.id)"
+        >
+          {{ item.label }}
+        </button>
+      </nav>
+
+      <!-- Scroll hint -->
+      <div class="hero-scroll-hint" aria-hidden="true">
+        <span>向下滚动</span>
+        <svg width="14" height="20" viewBox="0 0 14 20" fill="none">
+          <path d="M7 1 L7 15 M2 10 L7 15 L12 10" stroke="currentColor" stroke-width="1.5"
+                stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+    </section>
+
+    <!-- ── 01 / Button ── -->
+    <section id="button" class="preview-section">
+      <div class="preview-section__top">
+        <svg class="hand-drawn-divider" width="200" height="12" viewBox="0 0 200 12" fill="none" aria-hidden="true">
+          <path d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
+                stroke="currentColor" stroke-width="1.5"
+                stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
+        </svg>
+      </div>
+      <p class="preview-section__index">01 / 08</p>
+      <h2 class="preview-section__title">Buttons</h2>
+      <p class="preview-section__subtitle">按钮用于触发即时操作。</p>
+
+      <span class="preview-label">变体</span>
+      <div class="preview-row">
+        <Button variant="primary"  @click="toastSuccess">主要</Button>
+        <Button variant="secondary">次要</Button>
+        <Button variant="ghost">幽灵</Button>
+        <Button variant="danger"   @click="toastError">危险</Button>
+      </div>
+      <p class="preview-caption">主要按钮代表页面最关键的操作。</p>
+
+      <span class="preview-label">尺寸</span>
+      <div class="preview-row">
+        <Button size="sm">小号</Button>
+        <Button size="md">中号</Button>
+        <Button size="lg">大号</Button>
+      </div>
+      <p class="preview-caption">小号用于密集界面，大号保留给首屏 CTA。</p>
+
+      <span class="preview-label">尺寸 × 变体</span>
+      <div class="preview-row">
+        <Button variant="primary"   size="sm">主要 小</Button>
+        <Button variant="primary"   size="md">主要 中</Button>
+        <Button variant="primary"   size="lg">主要 大</Button>
+      </div>
+      <div class="preview-row">
+        <Button variant="secondary" size="sm">次要 小</Button>
+        <Button variant="secondary" size="md">次要 中</Button>
+        <Button variant="secondary" size="lg">次要 大</Button>
+      </div>
+
+      <span class="preview-label">状态</span>
+      <div class="preview-row">
+        <Button variant="primary">默认</Button>
+        <Button variant="primary" disabled>禁用</Button>
+        <Button variant="primary" :loading="btnLoading" @click="triggerLoading">
+          {{ btnLoading ? '加载中…' : '加载' }}
+        </Button>
+      </div>
+      <div class="preview-row">
+        <Button variant="danger">默认</Button>
+        <Button variant="danger" disabled>禁用</Button>
+        <Button variant="danger" loading>加载中</Button>
+      </div>
+
+      <span class="preview-label">带图标</span>
+      <div class="preview-row">
+        <Button variant="primary">
+          <template #icon-left>
+            <Plus :size="16" :stroke-width="2" />
+          </template>
+          新对话
+        </Button>
+        <Button variant="secondary">
+          发送
+          <template #icon-right>
+            <Send :size="16" :stroke-width="2" />
+          </template>
+        </Button>
+      </div>
+
+      <span class="preview-label">通栏与仅图标</span>
+      <div class="preview-row">
+        <Button variant="primary" block>通栏按钮</Button>
+      </div>
+      <div class="preview-row">
+        <Button variant="ghost" icon-only aria-label="设置">
+          <Settings :size="16" :stroke-width="2" />
+        </Button>
+        <Button variant="secondary" size="lg" icon-only aria-label="更多">
+          <MoreHorizontal :size="18" :stroke-width="2" />
+        </Button>
+      </div>
+
+      <span class="preview-label">使用场景</span>
+      <p class="preview-prose">
+        用于触发操作；每个视图区域只保留一个主按钮。
+      </p>
+
+      <span class="preview-label">反面示例</span>
+      <ul class="preview-dont-list">
+        <li>
+          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
+          </svg>
+          一个行内不要放置多个主按钮
+        </li>
+        <li>
+          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
+          </svg>
+          取消操作不要用主按钮
+        </li>
+        <li>
+          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
+          </svg>
+          禁用按钮时需配合文案说明
+        </li>
+      </ul>
+
+      <!-- End wavy divider -->
+      <svg class="hand-drawn-divider hand-drawn-divider--center" width="320" height="12" viewBox="0 0 320 12" fill="none" aria-hidden="true">
+        <path d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
+              stroke="currentColor" stroke-width="1.5"
+              stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
+      </svg>
+    </section>
+
+    <!-- ── 02 / Input ── -->
+    <section id="input" class="preview-section">
+      <div class="preview-section__top">
+        <svg class="hand-drawn-divider" width="200" height="12" viewBox="0 0 200 12" fill="none" aria-hidden="true">
+          <path d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
+                stroke="currentColor" stroke-width="1.5"
+                stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
+        </svg>
+      </div>
+      <p class="preview-section__index">02 / 08</p>
+      <h2 class="preview-section__title">Inputs</h2>
+      <p class="preview-section__subtitle">用于收集单行文本的输入控件。</p>
+
+      <span class="preview-label">尺寸</span>
+      <div class="preview-stack">
+        <Input v-model="inputValue" size="sm" placeholder="搜索会话…" />
+        <Input v-model="inputValue" size="md" placeholder="输入用户名" />
+        <Input v-model="inputValue" size="lg" placeholder="给代理起个名字" />
+      </div>
+      <p class="preview-caption">小号用于紧凑场景，大号用于突出表单。</p>
+
+      <span class="preview-label">状态</span>
+      <div class="preview-stack">
+        <Input :model-value="'预填充内容'" />
+        <Input :model-value="'禁用字段'" disabled />
+        <Input :model-value="'只读字段'" readonly />
+        <Input
+          v-model="inputValue"
+          placeholder="请输入用户名"
+          :error="inputError"
+          :error-message="inputErrorMessage"
+          @blur="inputValue.length === 0 ? showInputError() : clearInputError()"
+        />
+      </div>
+
+      <span class="preview-label">前缀与后缀</span>
+      <div class="preview-stack">
+        <Input v-model="inputValue" placeholder="搜索…">
+          <template #prefix>
+            <Search :size="14" :stroke-width="2" />
+          </template>
+        </Input>
+        <Input :model-value="'用户'" placeholder="用户名">
+          <template #prefix>
+            <AtSign :size="14" :stroke-width="2" />
+          </template>
+        </Input>
+        <Input :model-value="'#general'" placeholder="频道">
+          <template #prefix>
+            <Hash :size="14" :stroke-width="2" />
+          </template>
+        </Input>
+        <Input :model-value="'用户'" placeholder="用户名">
+          <template #suffix>
+            <span style="font-size: 12px; color: var(--ip-color-text-tertiary);">@icepaw.dev</span>
+          </template>
+        </Input>
+      </div>
+
+      <span class="preview-label">可清除</span>
+      <div class="preview-stack">
+        <Input v-model="inputValue" placeholder="搜索会话…" clearable />
+      </div>
+
+      <span class="preview-label">错误抖动</span>
+      <div class="preview-row">
+        <Button variant="secondary" size="sm" @click="showInputError">触发错误</Button>
+        <Button variant="ghost"    size="sm" @click="clearInputError">清除错误</Button>
+      </div>
+
+      <span class="preview-label">使用场景</span>
+      <p class="preview-prose">
+        用于收集单行文本；前缀图标和后缀提示帮助用户理解字段含义。
+      </p>
+
+      <span class="preview-label">反面示例</span>
+      <ul class="preview-dont-list">
+        <li>
+          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
+          </svg>
+          禁用输入框时需配合文案说明
+        </li>
+        <li>
+          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
+          </svg>
+          窄表单不要并排多个输入框
+        </li>
+        <li>
+          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
+          </svg>
+          空字段不显示清除按钮
+        </li>
+      </ul>
+
+      <svg class="hand-drawn-divider hand-drawn-divider--center" width="320" height="12" viewBox="0 0 320 12" fill="none" aria-hidden="true">
+        <path d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
+              stroke="currentColor" stroke-width="1.5"
+              stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
+      </svg>
+    </section>
+
+    <!-- ── 03 / Textarea ── -->
+    <section id="textarea" class="preview-section">
+      <div class="preview-section__top">
+        <svg class="hand-drawn-divider" width="200" height="12" viewBox="0 0 200 12" fill="none" aria-hidden="true">
+          <path d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
+                stroke="currentColor" stroke-width="1.5"
+                stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
+        </svg>
+      </div>
+      <p class="preview-section__index">03 / 08</p>
+      <h2 class="preview-section__title">Textareas</h2>
+      <p class="preview-section__subtitle">用于收集多行文本的输入控件。</p>
+
+      <span class="preview-label">尺寸</span>
+      <div class="preview-stack">
+        <Textarea v-model="taValue" size="sm" placeholder="写下你的想法…" />
+        <Textarea v-model="taValue" size="md" placeholder="描述这个代理的用途…" />
+        <Textarea v-model="taValue" size="lg" placeholder="系统提示词…" />
+      </div>
+      <p class="preview-caption">小号约 4 行，大号约 8 行，可按场景选择。</p>
+
+      <span class="preview-label">自动调整高度</span>
+      <div class="preview-stack">
+        <Textarea
+          v-model="taValue"
+          placeholder="写下你的想法…"
+          auto-resize
+          :rows="2"
+        />
+      </div>
+      <p class="preview-caption">高度自动撑高，最大高度受尺寸限制。</p>
+
+      <span class="preview-label">可拖拽调整手柄</span>
+      <div class="preview-stack">
+        <Textarea v-model="taValue" resizable placeholder="系统提示词…" />
+      </div>
+
+      <span class="preview-label">状态</span>
+      <div class="preview-stack">
+        <Textarea :model-value="'已禁用'" disabled />
+        <Textarea :model-value="'只读'" readonly />
+        <Textarea placeholder="写下你的想法…" error error-message="内容不能为空" />
+      </div>
+
+      <span class="preview-label">使用场景</span>
+      <p class="preview-prose">
+        用于收集多行文本，如提示词、说明、系统消息。
+      </p>
+
+      <span class="preview-label">反面示例</span>
+      <ul class="preview-dont-list">
+        <li>
+          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
+          </svg>
+          短的单行回答使用 Input
+        </li>
+        <li>
+          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
+          </svg>
+          需要设置最大高度
+        </li>
+        <li>
+          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
+          </svg>
+          自动调整高度和手动拖拽不要同时启用
+        </li>
+      </ul>
+
+      <svg class="hand-drawn-divider hand-drawn-divider--center" width="320" height="12" viewBox="0 0 320 12" fill="none" aria-hidden="true">
+        <path d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
+              stroke="currentColor" stroke-width="1.5"
+              stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
+      </svg>
+    </section>
+
+    <!-- ── 04 / Message ── -->
+    <section id="message" class="preview-section">
+      <div class="preview-section__top">
+        <svg class="hand-drawn-divider" width="200" height="12" viewBox="0 0 200 12" fill="none" aria-hidden="true">
+          <path d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
+                stroke="currentColor" stroke-width="1.5"
+                stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
+        </svg>
+      </div>
+      <p class="preview-section__index">04 / 08</p>
+      <h2 class="preview-section__title">Messages</h2>
+      <p class="preview-section__subtitle">用于展示对话中的用户、助手和系统消息。</p>
+
+      <span class="preview-label">对话</span>
+      <div class="preview-chat-frame">
+        <MessageBubble role="user" timestamp="10:30">
+          帮我看看这段代码哪里有 bug？我本地跑不起来。
+        </MessageBubble>
+
+        <MessageBubble role="assistant" name="IcePaw" timestamp="10:30" meta="3.2s · 128 token">
+          好的，看起来你的 <code>fetch</code> 调用缺少 <code>await</code>，所以返回的是 Promise 而不是实际数据。
+          <template #footer-actions>
+            <button
+              type="button"
+              class="ip-message__action-btn"
+              aria-label="重新生成"
+              @click="toastInfo"
+            >
+              <RotateCcw :size="14" :stroke-width="2" />
+            </button>
+          </template>
+        </MessageBubble>
+
+        <MessageBubble role="user" timestamp="10:31">
+          明白了 👍
+        </MessageBubble>
+
+        <MessageBubble role="user" timestamp="10:32">
+          那如果是异步的，怎么同时发起多个请求？
+        </MessageBubble>
+
+        <MessageBubble role="assistant" name="IcePaw" timestamp="10:32" meta="2.1s · 95 token" streaming>
+          推荐使用 <code>Promise.all</code>，它会并发地等待所有 Promise 完成，然后按顺序返回结果数组。
+        </MessageBubble>
+
+        <MessageBubble role="system">
+          连接已断开，正在重连…
+        </MessageBubble>
+
+        <MessageBubble role="assistant" name="IcePaw" timestamp="10:33" error="连接超时">
+          回复失败
+        </MessageBubble>
+
+        <MessageBubble role="assistant" name="IcePaw" timestamp="10:34" meta="5.4s · 312 token">
+          {{ longMessage }}
+        </MessageBubble>
+      </div>
+      <p class="preview-caption">长消息自动折叠，点击展开。</p>
+
+      <span class="preview-label">使用场景</span>
+      <p class="preview-prose">
+        三种角色：用户消息靠右、助手消息靠左、系统消息居中。
+      </p>
+
+      <span class="preview-label">反面示例</span>
+      <ul class="preview-dont-list">
+        <li>
+          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
+          </svg>
+          单条消息不要放置多个主操作
+        </li>
+        <li>
+          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
+          </svg>
+          关键信息不要只放在系统消息中
+        </li>
+      </ul>
+
+      <svg class="hand-drawn-divider hand-drawn-divider--center" width="320" height="12" viewBox="0 0 320 12" fill="none" aria-hidden="true">
+        <path d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
+              stroke="currentColor" stroke-width="1.5"
+              stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
+      </svg>
+    </section>
+
+    <!-- ── 05 / Modal ── -->
+    <section id="modal" class="preview-section">
+      <div class="preview-section__top">
+        <svg class="hand-drawn-divider" width="200" height="12" viewBox="0 0 200 12" fill="none" aria-hidden="true">
+          <path d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
+                stroke="currentColor" stroke-width="1.5"
+                stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
+        </svg>
+      </div>
+      <p class="preview-section__index">05 / 08</p>
+      <h2 class="preview-section__title">Modals</h2>
+      <p class="preview-section__subtitle">用于需要用户全部注意力的决策或编辑。</p>
+
+      <span class="preview-label">尺寸</span>
+      <div class="preview-row">
+        <Button variant="primary" size="sm" @click="modalOpenSm = true">打开（480px）</Button>
+        <Button variant="primary" size="md" @click="modalOpenMd = true">打开（560px）</Button>
+        <Button variant="primary" size="lg" @click="modalOpenLg = true">打开（720px）</Button>
+      </div>
+
+      <Modal v-model="modalOpenSm" title="删除会话" size="sm">
+        <p style="color: var(--ip-color-text-body);">将永久删除该会话及其所有消息，无法恢复。</p>
+        <template #footer>
+          <Button variant="ghost" @click="modalOpenSm = false">取消</Button>
+          <Button variant="danger"   @click="modalOpenSm = false">删除</Button>
+        </template>
+      </Modal>
+
+      <Modal v-model="modalOpenMd" title="编辑代理" size="md">
+        <Input :model-value="'通用助手'" placeholder="代理名称" style="margin-bottom: 12px;" />
+        <Textarea :model-value="'你是一个乐于助人的助手。三思而后行。'" placeholder="你是一个乐于助人的助手…" :rows="4" />
+        <template #footer>
+          <Button variant="ghost" @click="modalOpenMd = false">取消</Button>
+          <Button variant="primary" @click="modalOpenMd = false">保存</Button>
+        </template>
+      </Modal>
+
+      <Modal v-model="modalOpenLg" title="系统提示词" size="lg">
+        <Textarea v-model="taValue" placeholder="你是一个乐于助人的助手…" :rows="6" />
+        <template #footer>
+          <Button variant="ghost" @click="modalOpenLg = false">取消</Button>
+          <Button variant="primary" @click="modalOpenLg = false">保存</Button>
+        </template>
+      </Modal>
+
+      <span class="preview-label">使用场景</span>
+      <p class="preview-prose">
+        用于确认、编辑、详情等需要用户全部注意力的场景。
+      </p>
+
+      <span class="preview-label">反面示例</span>
+      <ul class="preview-dont-list">
+        <li>
+          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
+          </svg>
+          弹窗嵌套不要超过两层
+        </li>
+        <li>
+          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
+          </svg>
+          成功提示使用 Toast
+        </li>
+        <li>
+          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
+          </svg>
+          主要操作放在底部按钮区
+        </li>
+      </ul>
+
+      <svg class="hand-drawn-divider hand-drawn-divider--center" width="320" height="12" viewBox="0 0 320 12" fill="none" aria-hidden="true">
+        <path d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
+              stroke="currentColor" stroke-width="1.5"
+              stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
+      </svg>
+    </section>
+
+    <!-- ── 06 / Toast ── -->
+    <section id="toast" class="preview-section">
+      <div class="preview-section__top">
+        <svg class="hand-drawn-divider" width="200" height="12" viewBox="0 0 200 12" fill="none" aria-hidden="true">
+          <path d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
+                stroke="currentColor" stroke-width="1.5"
+                stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
+        </svg>
+      </div>
+      <p class="preview-section__index">06 / 08</p>
+      <h2 class="preview-section__title">Toasts</h2>
+      <p class="preview-section__subtitle">用于非关键、瞬时的操作反馈。</p>
+
+      <span class="preview-label">类型</span>
+      <div class="preview-row">
+        <Button variant="primary"   @click="toastSuccess">成功</Button>
+        <Button variant="secondary" @click="toastInfo">信息</Button>
+        <Button variant="primary"   @click="toastWarning">警告</Button>
+        <Button variant="danger"    @click="toastError">错误</Button>
+      </div>
+
+      <span class="preview-label">合并策略</span>
+      <div class="preview-row">
+        <Button variant="primary" @click="toastMergeDemo">连续触发 3 次</Button>
+      </div>
+      <p class="preview-caption">
+        同类型连续提示自动合并为一条，计时重置。
+      </p>
+
+      <span class="preview-label">使用场景</span>
+      <p class="preview-prose">
+        用于保存、错误、状态更新等非关键反馈；需要确认时改用 Modal。
+      </p>
+
+      <span class="preview-label">反面示例</span>
+      <ul class="preview-dont-list">
+        <li>
+          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
+          </svg>
+          关键错误不要使用 Toast
+        </li>
+        <li>
+          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
+          </svg>
+          Toast 不要堆叠超过三条
+        </li>
+        <li>
+          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
+          </svg>
+          需要操作按钮时使用 Modal
+        </li>
+      </ul>
+
+      <svg class="hand-drawn-divider hand-drawn-divider--center" width="320" height="12" viewBox="0 0 320 12" fill="none" aria-hidden="true">
+        <path d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
+              stroke="currentColor" stroke-width="1.5"
+              stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
+      </svg>
+    </section>
+
+    <!-- ── 07 / Flex ── -->
+    <section id="flex" class="preview-section">
+      <div class="preview-section__top">
+        <svg class="hand-drawn-divider" width="200" height="12" viewBox="0 0 200 12" fill="none" aria-hidden="true">
+          <path d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
+                stroke="currentColor" stroke-width="1.5"
+                stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
+        </svg>
+      </div>
+      <p class="preview-section__index">07 / 08</p>
+      <h2 class="preview-section__title">Flex</h2>
+      <p class="preview-section__subtitle">用于布局子元素的弹性容器。</p>
+
+      <span class="preview-label">基础用法</span>
+      <IpFlex size="sm" align="center">
+        <Button variant="primary">发送</Button>
+        <Button variant="secondary">存草稿</Button>
+        <Button variant="ghost">取消</Button>
+      </IpFlex>
+
+      <span class="preview-label">尺寸预设</span>
+      <div class="preview-stack" style="max-width: 100%;">
+        <div class="preview-axis-row">
+          <code class="preview-axis-label">xs · 8px</code>
+          <IpFlex size="xs">
+            <span class="preview-chip">A</span>
+            <span class="preview-chip">B</span>
+            <span class="preview-chip">C</span>
+          </IpFlex>
+        </div>
+        <div class="preview-axis-row">
+          <code class="preview-axis-label">sm · 12px</code>
+          <IpFlex size="sm">
+            <span class="preview-chip">A</span>
+            <span class="preview-chip">B</span>
+            <span class="preview-chip">C</span>
+          </IpFlex>
+        </div>
+        <div class="preview-axis-row">
+          <code class="preview-axis-label">md · 16px</code>
+          <IpFlex size="md">
+            <span class="preview-chip">A</span>
+            <span class="preview-chip">B</span>
+            <span class="preview-chip">C</span>
+          </IpFlex>
+        </div>
+        <div class="preview-axis-row">
+          <code class="preview-axis-label">lg · 24px</code>
+          <IpFlex size="lg">
+            <span class="preview-chip">A</span>
+            <span class="preview-chip">B</span>
+            <span class="preview-chip">C</span>
+          </IpFlex>
+        </div>
+        <div class="preview-axis-row">
+          <code class="preview-axis-label">xl · 32px</code>
+          <IpFlex size="xl">
+            <span class="preview-chip">A</span>
+            <span class="preview-chip">B</span>
+            <span class="preview-chip">C</span>
+          </IpFlex>
+        </div>
+      </div>
+
+      <span class="preview-label">垂直</span>
+      <IpFlex vertical size="sm">
+        <span class="preview-chip">第 1 行</span>
+        <span class="preview-chip">第 2 行</span>
+        <span class="preview-chip">第 3 行</span>
+      </IpFlex>
+
+      <span class="preview-label">方向</span>
+      <div class="preview-stack" style="max-width: 100%;">
+        <div class="preview-axis-row">
+          <code class="preview-axis-label">row</code>
+          <IpFlex direction="row" size="sm">
+            <span class="preview-chip">A</span>
+            <span class="preview-chip">B</span>
+            <span class="preview-chip">C</span>
+          </IpFlex>
+        </div>
+        <div class="preview-axis-row">
+          <code class="preview-axis-label">row-reverse</code>
+          <IpFlex direction="row-reverse" size="sm">
+            <span class="preview-chip">A</span>
+            <span class="preview-chip">B</span>
+            <span class="preview-chip">C</span>
+          </IpFlex>
+        </div>
+        <div class="preview-axis-row">
+          <code class="preview-axis-label">column</code>
+          <IpFlex direction="column" size="sm">
+            <span class="preview-chip">A</span>
+            <span class="preview-chip">B</span>
+            <span class="preview-chip">C</span>
+          </IpFlex>
+        </div>
+        <div class="preview-axis-row">
+          <code class="preview-axis-label">column-reverse</code>
+          <IpFlex direction="column-reverse" size="sm">
+            <span class="preview-chip">A</span>
+            <span class="preview-chip">B</span>
+            <span class="preview-chip">C</span>
+          </IpFlex>
+        </div>
+      </div>
+
+      <span class="preview-label">行内</span>
+      <IpFlex inline size="xs" align="baseline">
+        <span>Vue</span>
+        <span class="preview-chip preview-chip--inline">3.5+</span>
+        <span>推荐使用</span>
+        <span class="preview-chip preview-chip--inline">Composition API</span>
+        <span>组织逻辑。</span>
+      </IpFlex>
+      <p class="preview-caption">inline 模式用于在文字段落中嵌入内联元素。</p>
+
+      <span class="preview-label">自动填满</span>
+      <IpFlex size="sm" align="center" style="border: 1px dashed var(--ip-color-border-default); border-radius: 8px; padding: 8px 12px;">
+        <strong style="color: var(--ip-color-text-primary);">Logo</strong>
+        <IpFlex flex="1" size="xs" justify="center">
+          <span class="preview-chip preview-chip--inline">对话</span>
+          <span class="preview-chip preview-chip--inline">知识库</span>
+          <span class="preview-chip preview-chip--inline">代理</span>
+        </IpFlex>
+        <Button variant="primary" size="sm">设置</Button>
+      </IpFlex>
+      <p class="preview-caption">flex="1" 占据剩余空间，子元素自适应伸缩。</p>
+
+      <span class="preview-label">反向</span>
+      <div class="preview-stack" style="max-width: 100%;">
+        <div class="preview-axis-row">
+          <code class="preview-axis-label">reverse · true</code>
+          <IpFlex reverse size="sm">
+            <span class="preview-chip">A</span>
+            <span class="preview-chip">B</span>
+            <span class="preview-chip">C</span>
+          </IpFlex>
+        </div>
+        <div class="preview-axis-row">
+          <code class="preview-axis-label">direction="row-reverse"</code>
+          <IpFlex direction="row-reverse" size="sm">
+            <span class="preview-chip">A</span>
+            <span class="preview-chip">B</span>
+            <span class="preview-chip">C</span>
+          </IpFlex>
+        </div>
+      </div>
+      <p class="preview-caption">reverse 与 direction 等价。</p>
+
+      <span class="preview-label">分隔符 · 默认线</span>
+      <IpFlex separator>
+        <a class="preview-link">2 分钟前</a>
+        <a class="preview-link">已读</a>
+        <a class="preview-link">删除</a>
+      </IpFlex>
+      <p class="preview-caption">separator 在相邻元素间渲染分隔线，行排列时为竖线。</p>
+
+      <span class="preview-label">分隔符 · 自定义字符</span>
+      <IpFlex separator="·">
+        <a class="preview-link">首页</a>
+        <a class="preview-link">资源库</a>
+        <a class="preview-link">设置</a>
+      </IpFlex>
+
+      <span class="preview-label">分隔符 · VNode 插槽</span>
+      <IpFlex size="sm" align="center">
+        <template #separator>
+          <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+            <path d="M3 1 L7 5 L3 9" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </template>
+        <a class="preview-link">设置</a>
+        <a class="preview-link">模型</a>
+        <a class="preview-link">高级</a>
+        <span style="color: var(--ip-color-text-primary);">温度 0.7</span>
+      </IpFlex>
+      <p class="preview-caption">slot 分隔符优先级最高，适合面包屑等场景。</p>
+
+      <span class="preview-label">分隔符 · VNode 属性</span>
+      <IpFlex :separator="hCaretVNode" size="sm" align="center">
+        <a class="preview-link">项目 A</a>
+        <a class="preview-link">项目 B</a>
+        <a class="preview-link">项目 C</a>
+      </IpFlex>
+      <p class="preview-caption">separator 支持字符串、字符或 VNode。</p>
+
+      <span class="preview-label">自动换行</span>
+      <div style="max-width: 360px; border: 1px dashed var(--ip-color-border-default); border-radius: 8px; padding: 12px;">
+        <IpFlex size="sm" wrap>
+          <span class="preview-chip">标签一</span>
+          <span class="preview-chip">标签二</span>
+          <span class="preview-chip">标签三</span>
+          <span class="preview-chip">标签四</span>
+          <span class="preview-chip">标签五</span>
+          <span class="preview-chip">标签六</span>
+          <span class="preview-chip">标签七</span>
+        </IpFlex>
+      </div>
+      <p class="preview-caption">当容器宽度不足时自动换行。</p>
+
+      <span class="preview-label">Justify — 主轴对齐</span>
+      <div class="preview-stack" style="max-width: 100%;">
+        <div class="preview-axis-row">
+          <code class="preview-axis-label">start</code>
+          <div class="preview-justify-track">
+            <IpFlex justify="start" size="sm">
+              <span class="preview-chip">A</span>
+              <span class="preview-chip">B</span>
+            </IpFlex>
+          </div>
+        </div>
+        <div class="preview-axis-row">
+          <code class="preview-axis-label">center</code>
+          <div class="preview-justify-track">
+            <IpFlex justify="center" size="sm">
+              <span class="preview-chip">A</span>
+              <span class="preview-chip">B</span>
+            </IpFlex>
+          </div>
+        </div>
+        <div class="preview-axis-row">
+          <code class="preview-axis-label">end</code>
+          <div class="preview-justify-track">
+            <IpFlex justify="end" size="sm">
+              <span class="preview-chip">A</span>
+              <span class="preview-chip">B</span>
+            </IpFlex>
+          </div>
+        </div>
+        <div class="preview-axis-row">
+          <code class="preview-axis-label">space-between</code>
+          <div class="preview-justify-track">
+            <IpFlex justify="space-between" size="sm">
+              <span class="preview-chip">A</span>
+              <span class="preview-chip">B</span>
+            </IpFlex>
+          </div>
+        </div>
+        <div class="preview-axis-row">
+          <code class="preview-axis-label">space-around</code>
+          <div class="preview-justify-track">
+            <IpFlex justify="space-around" size="sm">
+              <span class="preview-chip">A</span>
+              <span class="preview-chip">B</span>
+            </IpFlex>
+          </div>
+        </div>
+      </div>
+
+      <span class="preview-label">Align — 交叉轴对齐</span>
+      <div class="preview-stack" style="max-width: 100%;">
+        <div class="preview-align-track">
+          <code class="preview-axis-label">start</code>
+          <IpFlex align="start" size="sm" style="width: 100%;">
+            <span class="preview-chip preview-chip--tall">高块</span>
+            <span class="preview-chip">矮块</span>
+          </IpFlex>
+        </div>
+        <div class="preview-align-track">
+          <code class="preview-axis-label">center</code>
+          <IpFlex align="center" size="sm" style="width: 100%;">
+            <span class="preview-chip preview-chip--tall">高块</span>
+            <span class="preview-chip">矮块</span>
+          </IpFlex>
+        </div>
+        <div class="preview-align-track">
+          <code class="preview-axis-label">end</code>
+          <IpFlex align="end" size="sm" style="width: 100%;">
+            <span class="preview-chip preview-chip--tall">高块</span>
+            <span class="preview-chip">矮块</span>
+          </IpFlex>
+        </div>
+      </div>
+
+      <span class="preview-label">Gap — 自定义值</span>
+      <IpFlex :size="48" align="center">
+        <span class="preview-chip">A</span>
+        <span class="preview-chip">B</span>
+        <span class="preview-chip">C</span>
+      </IpFlex>
+
+      <span class="preview-label">使用场景</span>
+      <p class="preview-prose">
+        作为任意兄弟元素集合的通用布局容器。
+      </p>
+
+      <span class="preview-label">反面示例</span>
+      <ul class="preview-dont-list">
+        <li>
+          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
+          </svg>
+          不要在 Flex 中只放一个子元素
+        </li>
+        <li>
+          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
+          </svg>
+          不要无谓地嵌套 Flex
+        </li>
+        <li>
+          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
+          </svg>
+          布局间距使用 gap，分隔符用于视觉连接
+        </li>
+      </ul>
+
+      <svg class="hand-drawn-divider hand-drawn-divider--center" width="320" height="12" viewBox="0 0 320 12" fill="none" aria-hidden="true">
+        <path d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
+              stroke="currentColor" stroke-width="1.5"
+              stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
+      </svg>
+    </section>
+
+    <!-- ── 08 / Container ── -->
+    <section id="container" class="preview-section">
+      <div class="preview-section__top">
+        <svg class="hand-drawn-divider" width="200" height="12" viewBox="0 0 200 12" fill="none" aria-hidden="true">
+          <path d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
+                stroke="currentColor" stroke-width="1.5"
+                stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
+        </svg>
+      </div>
+      <p class="preview-section__index">08 / 08</p>
+      <h2 class="preview-section__title">Container</h2>
+      <p class="preview-section__subtitle">用于约束内容宽度的布局容器。</p>
+
+      <span class="preview-label">最大宽度预设</span>
+      <div class="preview-stack" style="max-width: 100%;">
+        <IpContainer max-width="sm" padding-x="md" padding-y="sm">
+          <div class="preview-container-frame">小 · 480px</div>
+        </IpContainer>
+        <IpContainer max-width="md" padding-x="md" padding-y="sm">
+          <div class="preview-container-frame">中 · 720px（默认）</div>
+        </IpContainer>
+        <IpContainer max-width="lg" padding-x="md" padding-y="sm">
+          <div class="preview-container-frame">大 · 960px</div>
+        </IpContainer>
+        <IpContainer max-width="xl" padding-x="md" padding-y="sm">
+          <div class="preview-container-frame">特大 · 1200px</div>
+        </IpContainer>
+      </div>
+
+      <span class="preview-label">居中</span>
+      <div class="preview-row">
+        <IpContainer max-width="md" centered padding-x="md" padding-y="sm">
+          <div class="preview-container-frame preview-container-frame--small">居中 · 启用</div>
+        </IpContainer>
+      </div>
+      <div class="preview-row" style="position: relative; background: var(--ip-color-bg-tertiary); border-radius: 8px; padding: 8px;">
+        <IpContainer max-width="md" :centered="false" padding-x="md" padding-y="sm">
+          <div class="preview-container-frame preview-container-frame--small">居中 · 关闭</div>
+        </IpContainer>
+      </div>
+
+      <span class="preview-label">内边距</span>
+      <div class="preview-stack" style="max-width: 100%;">
+        <IpContainer max-width="md" padding-x="xs" padding-y="xs">
+          <div class="preview-container-frame">内边距 xs</div>
+        </IpContainer>
+        <IpContainer max-width="md" padding-x="lg" padding-y="lg">
+          <div class="preview-container-frame">内边距 lg</div>
+        </IpContainer>
+        <IpContainer max-width="md" :padding-x="false" :padding-y="false">
+          <div class="preview-container-frame">内边距 0</div>
+        </IpContainer>
+      </div>
+
+      <span class="preview-label">Fluid</span>
+      <div class="preview-stack" style="max-width: 100%;">
+        <IpContainer max-width="md" fluid padding-x="md" padding-y="sm">
+          <div class="preview-container-frame preview-container-frame--fluid">fluid · 启用（忽略最大宽度）</div>
+        </IpContainer>
+      </div>
+
+      <span class="preview-label">消息区对齐</span>
+      <p class="preview-caption">此容器应与上方消息区域左右边界对齐。</p>
+      <IpContainer max-width="md" padding-x="md" padding-y="sm">
+        <div class="preview-container-frame">
+          容器 中 · 720px + padding-x 中 · 16px
+          <span style="color: var(--ip-color-text-tertiary);">← 边界应与上方对话框边界一致</span>
+        </div>
+      </IpContainer>
+
+      <span class="preview-label">使用场景</span>
+      <p class="preview-prose">
+        用于约束内容宽度，确保聊天内容与 Container 在同一行长。
+      </p>
+
+      <span class="preview-label">反面示例</span>
+      <ul class="preview-dont-list">
+        <li>
+          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
+          </svg>
+          子元素不要手动设置最大宽度
+        </li>
+        <li>
+          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
+          </svg>
+          不要无意义地嵌套 Container
+        </li>
+        <li>
+          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
+          </svg>
+          fluid 不要用来绕开布局约束
+        </li>
+      </ul>
+
+      <svg class="hand-drawn-divider hand-drawn-divider--center" width="320" height="12" viewBox="0 0 320 12" fill="none" aria-hidden="true">
+        <path d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
+              stroke="currentColor" stroke-width="1.5"
+              stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
+      </svg>
+    </section>
+
+    <!-- ── Footer ── -->
+    <footer class="preview-footer">
+      <div class="preview-footer__row">
+        <span>IcePaw UI · v1.0.1 · 第二阶段</span>
+        <span>·</span>
+        <a href="#button" @click.prevent="scrollTo('button')">设计令牌</a>
+        <span>·</span>
+        <a href="https://github.com" target="_blank" rel="noopener">源码</a>
+      </div>
+      <p class="preview-footer__hint">克制的小工具，用心打磨。</p>
+    </footer>
+
+    <!-- ── Right floating TOC ── -->
+    <nav class="toc-rail" aria-label="目录">
+      <a
+        v-for="item in tocItems"
+        :key="item.id"
+        :href="`#${item.id}`"
+        class="toc-rail__item"
+        :title="item.label"
+        @click.prevent="scrollTo(item.id)"
+      >
+        <span class="toc-rail__dot" :data-active="item.id === activeId" />
+        <span class="toc-rail__label">{{ item.label }}</span>
+      </a>
+    </nav>
   </div>
 </template>
 
+<style>
+/* Global: smooth scroll (not scoped so it applies to html) */
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+</style>
+
 <style scoped>
+/* ============================================================
+ * Page root
+ * ============================================================ */
 .preview-root {
   min-height: 100vh;
+  background: var(--ip-color-bg-primary);
+  color: var(--ip-color-text-body);
+  font-family: var(--ip-font-sans);
+  animation: page-fade-in 200ms var(--ip-ease-out) both;
+}
+
+/* ============================================================
+ * Header
+ * ============================================================ */
+.preview-header {
+  position: sticky;
+  top: 0;
+  height: 56px;
+  background: var(--ip-color-bg-header-backdrop);
+  backdrop-filter: blur(12px) saturate(180%);
+  -webkit-backdrop-filter: blur(12px) saturate(180%);
+  border-bottom: 1px solid transparent;
+  transition: border-color 200ms var(--ip-ease-out),
+              background-color 200ms var(--ip-ease-out);
+  z-index: 200;
+}
+.preview-header.is-scrolled {
+  border-bottom-color: var(--ip-color-border-default);
+  background: var(--ip-color-bg-header-backdrop-scrolled);
+}
+
+.preview-header__inner {
+  max-width: 1200px;
+  height: 100%;
+  margin: 0 auto;
+  padding: 0 var(--ip-spacing-12);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ip-spacing-6);
+}
+
+.preview-header__brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.preview-header__name {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--ip-color-text-primary);
+}
+
+.preview-header__dot {
+  color: var(--ip-color-text-tertiary);
+}
+
+.preview-header__meta {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--ip-color-text-tertiary);
+}
+
+.preview-header__version {
+  font-family: var(--ip-font-mono);
+  font-size: 12px;
+  color: var(--ip-color-text-tertiary);
+  background: var(--ip-color-bg-tertiary);
+  padding: 1px 6px;
+  border-radius: var(--ip-radius-sm);
+}
+
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  background: transparent;
+  border: 1px solid var(--ip-color-border-default);
+  border-radius: 999px;
+  color: var(--ip-color-text-body);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 150ms var(--ip-ease-out),
+              border-color 150ms var(--ip-ease-out),
+              transform 100ms var(--ip-ease-out);
+}
+.theme-toggle:hover {
+  background: var(--ip-color-bg-tertiary);
+  border-color: var(--ip-color-border-strong);
+}
+.theme-toggle:active { transform: scale(0.97); }
+.theme-toggle:focus-visible {
+  outline: none;
+  box-shadow: var(--ip-shadow-focus);
+}
+.theme-toggle__icon {
+  font-size: 14px;
+  line-height: 1;
+  transition: transform 300ms var(--ip-ease-emphasized);
+}
+.theme-toggle:active .theme-toggle__icon { transform: rotate(180deg); }
+
+/* ============================================================
+ * Hero block
+ * ============================================================ */
+.preview-intro {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 120px var(--ip-spacing-6) 96px;
+}
+.preview-intro__index {
+  font-family: var(--ip-font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  color: var(--ip-color-border-focus);
+  margin-bottom: 24px;
+  animation: hero-rise 400ms var(--ip-ease-out) both;
+}
+.preview-intro h1 {
+  margin: 0 0 16px;
+  font-size: 40px;
+  line-height: 44px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--ip-color-text-primary);
+  animation: hero-rise 400ms var(--ip-ease-out) 80ms both;
+}
+.preview-intro__subtitle {
+  margin: 0 0 32px;
+  font-size: 17px;
+  line-height: 28px;
+  font-weight: 400;
+  color: var(--ip-color-text-secondary);
+  animation: hero-rise 400ms var(--ip-ease-out) 160ms both;
+}
+.preview-intro__lede {
+  max-width: 560px;
+  margin: 0 0 40px;
+  font-size: 15px;
+  line-height: 24px;
+  color: var(--ip-color-text-body);
+  animation: hero-rise 400ms var(--ip-ease-out) 240ms both;
+}
+.preview-intro__lede em {
+  display: block;
+  margin-top: 16px;
+  font-size: 13px;
+  color: var(--ip-color-text-tertiary);
+  font-style: italic;
+}
+
+.preview-anchor-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 64px;
+  animation: hero-rise 400ms var(--ip-ease-out) 320ms both;
+}
+.hero-anchor {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 14px;
+  background: transparent;
+  border: 1px solid var(--ip-color-border-default);
+  border-radius: 999px;
+  color: var(--ip-color-text-body);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 150ms var(--ip-ease-out),
+              border-color 150ms var(--ip-ease-out),
+              color 150ms var(--ip-ease-out),
+              transform 100ms var(--ip-ease-out);
+}
+.hero-anchor:hover {
+  background: var(--ip-color-bg-tertiary);
+  border-color: var(--ip-color-border-strong);
+  color: var(--ip-color-text-primary);
+  transform: translateY(-1px);
+}
+.hero-anchor:active { transform: translateY(0) scale(0.98); }
+.hero-anchor:focus-visible {
+  outline: none;
+  box-shadow: var(--ip-shadow-focus);
+}
+
+.hero-scroll-hint {
   display: flex;
   flex-direction: column;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  color: var(--ip-color-text-primary, #111827);
-  background: var(--ip-color-bg-secondary, #f9fafb);
+  align-items: center;
+  gap: 8px;
+  color: var(--ip-color-text-tertiary);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  animation: hero-rise 400ms var(--ip-ease-out) 400ms both;
+}
+.hero-scroll-hint svg { animation: scroll-hint-bounce 1800ms ease-in-out infinite; }
+@keyframes scroll-hint-bounce {
+  0%, 100% { transform: translateY(0); opacity: 0.5; }
+  50%      { transform: translateY(4px); opacity: 1; }
 }
 
-.preview-header {
-  padding: var(--ip-spacing-xl, 24px) var(--ip-spacing-2xl, 32px);
-  border-bottom: 1px solid var(--ip-color-border, #e5e7eb);
-  background: var(--ip-color-bg-primary, #fff);
+/* ============================================================
+ * Section
+ * ============================================================ */
+.preview-section {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 0 var(--ip-spacing-6);
+  position: relative;
+}
+.preview-section + .preview-section { padding-top: 96px; }
+
+.preview-section__top { margin-bottom: 16px; }
+
+.preview-section__index {
+  font-family: var(--ip-font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  color: var(--ip-color-border-focus);
+  margin-bottom: 16px;
+}
+.preview-section__title {
+  font-size: 28px;
+  line-height: 34px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--ip-color-text-primary);
+  margin: 0 0 8px;
+}
+.preview-section__subtitle {
+  font-size: 17px;
+  line-height: 28px;
+  font-weight: 400;
+  color: var(--ip-color-text-secondary);
+  margin: 0 0 32px;
+  max-width: 560px;
 }
 
-.preview-header h1 {
+.preview-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ip-color-text-tertiary);
+  margin: 48px 0 16px;
+}
+.preview-label:first-of-type { margin-top: 24px; }
+
+.preview-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+.preview-row + .preview-row { margin-top: 16px; }
+
+.preview-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 480px;
+}
+.preview-stack + .preview-stack,
+.preview-row + .preview-stack,
+.preview-stack + .preview-row { margin-top: 16px; }
+.preview-caption {
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--ip-color-text-secondary);
+  max-width: 560px;
+  margin: 8px 0 0;
+}
+.preview-prose {
+  max-width: 560px;
+  font-size: 15px;
+  line-height: 24px;
+  color: var(--ip-color-text-body);
+  margin: 0 0 16px;
+}
+
+.preview-dont-list {
+  list-style: none;
+  padding: 0;
   margin: 0;
-  font-size: var(--ip-font-size-2xl, 24px);
-  font-weight: var(--ip-font-weight-semibold, 600);
+  max-width: 480px;
+}
+.preview-dont-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  font-size: 13px;
+  line-height: 22px;
+  color: var(--ip-color-text-secondary);
+  margin-bottom: 8px;
+}
+.preview-dont-list .bullet-dot {
+  color: var(--ip-color-border-default);
+  flex-shrink: 0;
+  margin-top: 7px;
 }
 
-.preview-subtitle {
-  margin: var(--ip-spacing-xs, 4px) 0 0;
-  color: var(--ip-color-text-secondary, #6b7280);
-  font-size: var(--ip-font-size-sm, 14px);
+.preview-chat-frame {
+  border: 1px solid var(--ip-color-border-default);
+  border-radius: var(--ip-radius-lg);
+  background: var(--ip-color-bg-secondary);
+  padding: var(--ip-spacing-4) 0;
+  overflow: hidden;
 }
 
-.preview-main {
+/* ============================================================
+ * Flex / Container preview helpers
+ * ============================================================ */
+.preview-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+  padding: 0 12px;
+  background: var(--ip-color-bg-tertiary);
+  border: 1px solid var(--ip-color-border-default);
+  border-radius: var(--ip-radius-md);
+  color: var(--ip-color-text-body);
+  font-size: 13px;
+  font-weight: 500;
+}
+.preview-chip--tall { height: 56px; align-self: stretch; }
+.preview-link {
+  color: var(--ip-color-text-body);
+  font-size: 13px;
+  cursor: pointer;
+  text-decoration: none;
+  transition: color 150ms var(--ip-ease-out);
+}
+.preview-link:hover { color: var(--ip-color-text-primary); }
+
+.preview-axis-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.preview-axis-row + .preview-axis-row { margin-top: 12px; }
+.preview-axis-label {
+  font-family: var(--ip-font-mono);
+  font-size: 12px;
+  color: var(--ip-color-text-tertiary);
+  flex-shrink: 0;
+  width: 130px;
+}
+
+.preview-justify-track {
   flex: 1;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  background: repeating-linear-gradient(
+    -45deg,
+    transparent 0 6px,
+    var(--ip-color-bg-tertiary) 6px 7px
+  );
+  border-radius: var(--ip-radius-sm);
+  padding: 0 8px;
+}
+
+.preview-align-track {
+  height: 64px;
+  display: flex;
+  align-items: stretch;
+  gap: 16px;
+  padding: 4px 12px;
+  background: var(--ip-color-bg-tertiary);
+  border-radius: var(--ip-radius-sm);
+}
+.preview-align-track + .preview-align-track { margin-top: 12px; }
+.preview-align-track .preview-axis-label { align-self: center; }
+
+.preview-container-frame {
+  border: 1px dashed var(--ip-color-border-default);
+  border-radius: var(--ip-radius-sm);
+  padding: 12px 16px;
+  background: var(--ip-color-bg-secondary);
+  font-family: var(--ip-font-mono);
+  font-size: 12px;
+  color: var(--ip-color-text-body);
+  text-align: center;
+}
+.preview-container-frame em {
+  font-style: normal;
+  color: var(--ip-color-text-tertiary);
+  margin-left: 6px;
+}
+.preview-container-frame--small { padding: 8px 12px; font-size: 11px; }
+.preview-container-frame--fluid { background: var(--ip-color-bg-tertiary); }
+
+/* ============================================================
+ * TOC rail
+ * ============================================================ */
+.toc-rail {
+  position: fixed;
+  top: 50%;
+  right: 32px;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  z-index: 100;
+}
+.toc-rail__item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-decoration: none;
+  color: var(--ip-color-text-tertiary);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  padding: 4px 0;
+  transition: color 200ms var(--ip-ease-out);
+  cursor: pointer;
+}
+.toc-rail__item:hover { color: var(--ip-color-text-primary); }
+.toc-rail__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ip-color-border-default);
+  flex-shrink: 0;
+  transition: background-color 200ms var(--ip-ease-out),
+              transform 200ms var(--ip-ease-out);
+}
+.toc-rail__item:hover .toc-rail__dot { transform: scale(1.4); }
+.toc-rail__dot[data-active="true"] {
+  background: var(--ip-color-border-focus);
+  transform: scale(1.4);
+}
+@media (max-width: 1199px) { .toc-rail { display: none; } }
+
+/* ============================================================
+ * Hand-drawn assets
+ * ============================================================ */
+.hand-drawn-divider {
+  color: var(--ip-color-border-default);
+  display: block;
+}
+.hand-drawn-divider path {
+  stroke-dasharray: 100;
+  stroke-dashoffset: 100;
+  transition: stroke-dashoffset 800ms var(--ip-ease-out);
+}
+.hand-drawn-divider.is-drawn path { stroke-dashoffset: 0; }
+.hand-drawn-divider--center {
+  margin: 64px auto 0;
+  opacity: 0.5;
+}
+[data-theme="dark"] .hand-drawn-divider { color: var(--ip-color-border-strong); }
+
+.hand-drawn-paw {
+  color: var(--ip-color-text-primary);
+  display: inline-block;
+  vertical-align: -3px;
+}
+
+/* ============================================================
+ * Footer
+ * ============================================================ */
+.preview-footer {
+  max-width: 720px;
+  margin: 120px auto 0;
+  padding: 64px var(--ip-spacing-6);
+  text-align: center;
+  border-top: 1px solid var(--ip-color-border-default);
+}
+.preview-footer__row {
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--ip-color-text-tertiary);
+  margin-bottom: 12px;
+}
+.preview-footer__row a {
+  color: var(--ip-color-text-secondary);
+  text-decoration: none;
+  transition: color 150ms var(--ip-ease-out);
+}
+.preview-footer__row a:hover { color: var(--ip-color-text-primary); }
+.preview-footer__hint {
+  font-size: 12px;
+  font-style: italic;
+  color: var(--ip-color-text-tertiary);
+  margin: 0;
 }
 
-.preview-empty {
-  text-align: center;
-  color: var(--ip-color-text-secondary, #6b7280);
+/* ============================================================
+ * Animations
+ * ============================================================ */
+@keyframes page-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes hero-rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
-.preview-empty p {
-  margin: var(--ip-spacing-sm, 8px) 0;
+/* ============================================================
+ * Reduced motion
+ * ============================================================ */
+@media (prefers-reduced-motion: reduce) {
+  .preview-root,
+  .preview-intro h1,
+  .preview-intro__index,
+  .preview-intro__subtitle,
+  .preview-intro__lede,
+  .preview-anchor-pills,
+  .hero-scroll-hint {
+    animation: none !important;
+  }
+  .hand-drawn-divider path {
+    stroke-dashoffset: 0 !important;
+    transition: none !important;
+  }
+  .hero-scroll-hint svg { animation: none !important; }
 }
 
-.preview-empty p:first-child {
-  font-size: var(--ip-font-size-xl, 20px);
-  font-weight: var(--ip-font-weight-medium, 500);
+/* ============================================================
+ * Responsive
+ * ============================================================ */
+@media (max-width: 767px) {
+  .preview-header__meta,
+  .preview-header__dot,
+  .preview-header__version { display: none; }
+  .preview-intro h1 { font-size: 32px; line-height: 38px; }
+  .preview-section { padding-top: 64px; }
+  .preview-section + .preview-section { padding-top: 64px; }
+  .preview-section__title { font-size: 24px; line-height: 30px; }
+  .preview-anchor-pills { gap: 6px; }
+  .hero-anchor { font-size: 12px; padding: 5px 12px; }
 }
 </style>

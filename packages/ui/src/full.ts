@@ -1,11 +1,41 @@
-// @ice-paw/ui 全量注册入口
-// 阶段 1 骨架 — 空导出，后续按需补充
+/**
+ * @ice-paw/ui 全量注册入口
+ *
+ * 用法（Tauri app）：
+ *   import { createApp } from 'vue'
+ *   import App from './App.vue'
+ *   import IcePawUI from '@ice-paw/ui/full'
+ *
+ *   const app = createApp(App)
+ *   app.use(IcePawUI)
+ *   app.mount('#app')
+ */
+
 import type { App } from 'vue'
+import { Button } from './components/button'
+import { Input } from './components/input'
+import { Textarea } from './components/textarea'
+import { MessageBubble } from './components/message-bubble'
+import { Modal } from './components/modal'
+import { Toast, ToastContainer } from './components/toast'
+import { Flex as IpFlex } from './components/flex'
+import { Container as IpContainer } from './components/container'
+
+import './styles/index.css'
 
 const IcePawUI = {
-  install(_app: App) {
-    // 阶段 2+：app.component('IpButton', Button) 逐个注册
+  install(app: App): void {
+    app.component('IpButton', Button)
+    app.component('IpInput', Input)
+    app.component('IpTextarea', Textarea)
+    app.component('IpMessageBubble', MessageBubble)
+    app.component('IpModal', Modal)
+    app.component('IpToast', Toast)
+    app.component('IpToastContainer', ToastContainer)
+    app.component('IpFlex', IpFlex)
+    app.component('IpContainer', IpContainer)
   },
 }
 
 export default IcePawUI
+export { IcePawUI }
