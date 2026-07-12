@@ -1,101 +1,563 @@
 /* ============================================================
- * IcePaw Design Tokens (CSS Variables)
- * 前缀约定：--ip-（IcePaw）
- * 阶段 1 占位 — 阶段 2 落地设计稿后补充完整值
+ * IcePaw Design Tokens (CSS Custom Properties)
+ * Version: v1.0.2 (matches icepaw-design-system.md v1.0.1
+ *                   + icepaw-layout-system.md v1.1 §1.4)
+ * Prefix convention: --ip- (IcePaw)
+ *
+ * 结构：
+ *  1. 原始色板（仅 tokens 层内部引用，组件严禁直接引用 gray- / primary-）
+ *  2. 字体栈 / 字号梯度 / 字重 / 字距
+ *  3. 间距梯度
+ *  4. 圆角
+ *  5. 阴影
+ *  6. 动效（duration / easing）
+ *  7. z-index 层级
+ *  7b. 响应式断点（layout-system §1.4 新增）
+ *  8. 组件级 token（--ip-btn- / --ip-message-gap-）
+ *  9. 语义色（success/warning/danger/info）
+ *  10. 语义层 token（组件代码直接引用这一层）
+ *  11. 暗色模式覆盖
+ *  12. 减少动效（a11y）
  * ============================================================ */
 
 :root {
-  /* --- 颜色 --- */
-  --ip-color-primary: #3b82f6;
-  --ip-color-primary-light: #60a5fa;
-  --ip-color-primary-dark: #2563eb;
+  /* ------------------- 1. 原始色板 ------------------- */
 
-  --ip-color-secondary: #6b7280;
-  --ip-color-secondary-light: #9ca3af;
-  --ip-color-secondary-dark: #4b5563;
+  /* 主色梯度（Tailwind Blue） */
+  --ip-primary-50:  #EFF6FF;
+  --ip-primary-100: #DBEAFE;
+  --ip-primary-200: #BFDBFE;
+  --ip-primary-300: #93C5FD;
+  --ip-primary-400: #60A5FA;
+  --ip-primary-500: #3B82F6;
+  --ip-primary-600: #2563EB;
+  --ip-primary-700: #1D4ED8;
+  --ip-primary-800: #1E40AF;
+  --ip-primary-900: #1E3A8A;
 
-  --ip-color-success: #22c55e;
-  --ip-color-warning: #f59e0b;
-  --ip-color-danger: #ef4444;
-  --ip-color-info: #06b6d4;
+  /* 灰度（亮色 10 级 / 暗色 11 级通过同一套变量实现语义分离） */
+  --ip-gray-50:  #FAFAFA;
+  --ip-gray-100: #F5F5F5;
+  --ip-gray-200: #EBEBEB;
+  --ip-gray-300: #D9D9D9;
+  --ip-gray-400: #BFBFBF;
+  --ip-gray-500: #8C8C8C;
+  --ip-gray-600: #595959;
+  --ip-gray-700: #434343;
+  --ip-gray-800: #262626;
+  --ip-gray-850: #1A1A1A;
+  --ip-gray-900: #141414;
+  --ip-gray-950: #0A0A0A;
 
-  --ip-color-text-primary: #111827;
-  --ip-color-text-secondary: #6b7280;
-  --ip-color-text-disabled: #9ca3af;
+  /* 透明白 / 透明黑（用于 overlay、focus ring） */
+  --ip-white: #FFFFFF;
+  --ip-black: #000000;
+  --ip-overlay-light: rgba(0, 0, 0, 0.5);
+  --ip-overlay-dark:  rgba(0, 0, 0, 0.7);
+  --ip-focus-ring-light: rgba(59, 130, 246, 0.30);
+  --ip-focus-ring-dark:  rgba(96, 165, 250, 0.35);
+  --ip-focus-ring-danger-light: rgba(220, 38, 38, 0.20);
 
-  --ip-color-bg-primary: #ffffff;
-  --ip-color-bg-secondary: #f9fafb;
-  --ip-color-bg-tertiary: #f3f4f6;
-  --ip-color-bg-disabled: #e5e7eb;
+  /* ------------------- 2. 字体栈 / 排版 ------------------- */
 
-  --ip-color-border: #e5e7eb;
-  --ip-color-border-focus: #3b82f6;
+  /* 系统 UI 字体栈（正文） */
+  --ip-font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+                  'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC',
+                  'Helvetica Neue', Helvetica, Arial, sans-serif;
 
-  /* --- 间距 --- */
-  --ip-spacing-xs: 4px;
-  --ip-spacing-sm: 8px;
-  --ip-spacing-md: 12px;
-  --ip-spacing-lg: 16px;
-  --ip-spacing-xl: 24px;
-  --ip-spacing-2xl: 32px;
+  /* 等宽字体栈（代码块） */
+  --ip-font-mono: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'SF Mono',
+                  Consolas, 'Source Code Pro', Menlo, 'Courier New', monospace;
 
-  /* --- 字号 --- */
-  --ip-font-size-xs: 12px;
-  --ip-font-size-sm: 14px;
-  --ip-font-size-base: 16px;
-  --ip-font-size-lg: 18px;
-  --ip-font-size-xl: 20px;
-  --ip-font-size-2xl: 24px;
+  /* 字号梯度（v1.0.1 §1.2.2） */
+  --ip-text-display-size:  40px; --ip-text-display-lh: 44px;
+  --ip-text-h1-size:       28px; --ip-text-h1-lh:      34px;
+  --ip-text-h2-size:       22px; --ip-text-h2-lh:      28px;
+  --ip-text-h3-size:       18px; --ip-text-h3-lh:      24px;
+  --ip-text-body-lg-size:  17px; --ip-text-body-lg-lh: 28px;
+  --ip-text-body-size:     15px; --ip-text-body-lh:    24px;
+  --ip-text-body-sm-size:  13px; --ip-text-body-sm-lh: 20px;
+  --ip-text-caption-size:  12px; --ip-text-caption-lh: 18px;
+  --ip-text-code-size:     14px; --ip-text-code-lh:    22px;
 
-  --ip-font-weight-normal: 400;
-  --ip-font-weight-medium: 500;
+  /* 行高倍率 token */
+  --ip-line-height-tight:    1.10;
+  --ip-line-height-snug:     1.21;
+  --ip-line-height-snug2:    1.27;
+  --ip-line-height-relaxed:  1.33;
+  --ip-line-height-loose:    1.60;
+  --ip-line-height-loose2:   1.54;
+  --ip-line-height-loose3:   1.50;
+  --ip-line-height-monospace: 1.57;
+
+  /* 字重 token */
+  --ip-font-weight-regular:  400;
+  --ip-font-weight-medium:   500;
   --ip-font-weight-semibold: 600;
-  --ip-font-weight-bold: 700;
+  --ip-font-weight-bold:     700;
 
-  --ip-line-height-tight: 1.25;
-  --ip-line-height-normal: 1.5;
-  --ip-line-height-relaxed: 1.75;
+  /* 字距 token */
+  --ip-letter-spacing-tight:  -0.02em;
+  --ip-letter-spacing-snug:   -0.01em;
+  --ip-letter-spacing-normal: 0;
+  --ip-letter-spacing-wide:    0.01em;
 
-  /* --- 圆角 --- */
-  --ip-radius-sm: 4px;
-  --ip-radius-md: 6px;
-  --ip-radius-lg: 8px;
-  --ip-radius-xl: 12px;
+  /* 数字等宽 */
+  --ip-font-variant-numeric: tabular-nums;
+
+  /* ------------------- 3. 间距梯度 ------------------- */
+
+  --ip-spacing-0:    0px;
+  --ip-spacing-0_5:  2px;
+  --ip-spacing-1:    4px;
+  --ip-spacing-2:    8px;
+  --ip-spacing-3:    12px;
+  --ip-spacing-4:    16px;
+  --ip-spacing-5:    20px;
+  --ip-spacing-6:    24px;
+  --ip-spacing-7:    28px;
+  --ip-spacing-8:    32px;
+  --ip-spacing-10:   40px;
+  --ip-spacing-12:   48px;
+  --ip-spacing-16:   64px;
+  --ip-spacing-20:   80px;
+  --ip-spacing-24:   96px;
+
+  /* ------------------- 4. 圆角 ------------------- */
+
+  --ip-radius-none: 0px;
+  --ip-radius-sm:   4px;
+  --ip-radius-md:   6px;
+  --ip-radius-lg:   8px;
+  --ip-radius-xl:   12px;
+  --ip-radius-2xl:  16px;
+  --ip-radius-3xl:  24px;
   --ip-radius-full: 9999px;
 
-  /* --- 阴影 --- */
-  --ip-shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
-  --ip-shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
-  --ip-shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+  /* ------------------- 5. 阴影 ------------------- */
 
-  /* --- 过渡 --- */
-  --ip-transition-fast: 150ms ease;
-  --ip-transition-normal: 250ms ease;
-  --ip-transition-slow: 350ms ease;
+  /* 亮色模式阴影 */
+  --ip-shadow-xs: 0 1px 2px 0 rgba(0, 0, 0, 0.04);
+  --ip-shadow-sm: 0 1px 3px 0 rgba(0, 0, 0, 0.08), 0 1px 2px -1px rgba(0, 0, 0, 0.04);
+  --ip-shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.06), 0 2px 4px -2px rgba(0, 0, 0, 0.04);
+  --ip-shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -4px rgba(0, 0, 0, 0.04);
+  --ip-shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.10), 0 8px 10px -6px rgba(0, 0, 0, 0.04);
 
-  /* --- z-index --- */
-  --ip-z-index-dropdown: 100;
-  --ip-z-index-sticky: 200;
-  --ip-z-index-overlay: 300;
-  --ip-z-index-modal: 400;
-  --ip-z-index-toast: 500;
+  /* 暗色模式阴影（更强） */
+  --ip-shadow-xs-dark: 0 1px 2px 0 rgba(0, 0, 0, 0.30);
+  --ip-shadow-sm-dark: 0 1px 3px 0 rgba(0, 0, 0, 0.40), 0 1px 2px -1px rgba(0, 0, 0, 0.30);
+  --ip-shadow-md-dark: 0 4px 6px -1px rgba(0, 0, 0, 0.50), 0 2px 4px -2px rgba(0, 0, 0, 0.40);
+  --ip-shadow-lg-dark: 0 10px 15px -3px rgba(0, 0, 0, 0.60), 0 4px 6px -4px rgba(0, 0, 0, 0.50);
+  --ip-shadow-xl-dark: 0 20px 25px -5px rgba(0, 0, 0, 0.70), 0 8px 10px -6px rgba(0, 0, 0, 0.60);
+
+  /* 焦点发光环（语义映射，亮/暗分别为不同的 RGB 透明度） */
+  --ip-shadow-focus:        0 0 0 3px var(--ip-focus-ring-light);
+  --ip-shadow-focus-dark:   0 0 0 3px var(--ip-focus-ring-dark);
+  --ip-shadow-focus-danger: 0 0 0 3px var(--ip-focus-ring-danger-light);
+
+  /* ------------------- 6. 动效 ------------------- */
+
+  /* Duration scale（v1.0.1 §1.6.1） */
+  --ip-duration-instant:   0ms;
+  --ip-duration-immediate: 50ms;
+  --ip-duration-fast:      100ms;
+  --ip-duration-base:      150ms;
+  --ip-duration-message:   200ms;
+  --ip-duration-modal:     250ms;
+  --ip-duration-panel:     300ms;
+  --ip-duration-page:      400ms;
+  --ip-duration-toast-in:  200ms;
+  --ip-duration-toast-out: 150ms;
+  --ip-duration-skeleton:  1800ms;
+  --ip-duration-cursor:    1000ms;
+  --ip-duration-spinner:   720ms;
+  --ip-duration-shake:     400ms;
+  --ip-duration-btn-press: 50ms;
+  --ip-duration-modal-out: 200ms;
+  --ip-duration-toast-collapse: 200ms;
+
+  /* Easing functions（v1.0.1 §1.6.2） */
+  --ip-ease-out:        cubic-bezier(0.0, 0.0, 0.2, 1);
+  --ip-ease-in:         cubic-bezier(0.4, 0.0, 1, 1);
+  --ip-ease-in-out:     cubic-bezier(0.4, 0.0, 0.2, 1);
+  --ip-ease-emphasized: cubic-bezier(0.2, 0.0, 0.0, 1);
+
+  /* 复合过渡（§7.4 全局微交互 — 组件可整体引用） */
+  --ip-transition-colors:
+    background-color var(--ip-duration-base) var(--ip-ease-out),
+    border-color     var(--ip-duration-base) var(--ip-ease-out),
+    color            var(--ip-duration-base) var(--ip-ease-out);
+  --ip-transition-transform: transform var(--ip-duration-fast) var(--ip-ease-out);
+  --ip-transition-shadow:    box-shadow var(--ip-duration-base) var(--ip-ease-out);
+
+  /* ------------------- 7. z-index 层级 ------------------- */
+
+  --ip-z-base:            0;
+  --ip-z-badge:           10;
+  --ip-z-dropdown:        100;
+  --ip-z-sticky:          200;
+  --ip-z-sidebar:         300;
+  --ip-z-popover:         1000;
+  --ip-z-tooltip:         1100;
+  --ip-z-modal-overlay:   1300;
+  --ip-z-modal-content:   1310;
+  --ip-z-toast:           1400;
+  --ip-z-notification:    1500;
+
+  /* ------------------- 7b. 响应式断点(layout-system §1.4 新增) ------------------- */
+  /* 桌面 Tauri 场景窗口集中在 800-1920px;与 Tailwind 断点对齐以保持开发直觉一致 */
+
+  --ip-bp-sm:   640px;   /* 超窄窗口(800×600 最小尺寸参考) */
+  --ip-bp-md:   768px;   /* 默认(侧边栏展开后主区域常见宽度) */
+  --ip-bp-lg:   1024px;  /* 中等窗口(双列布局起点) */
+  --ip-bp-xl:   1280px;  /* 大窗口(多列布局) */
+  --ip-bp-2xl:  1536px;  /* 超大窗口(4K 适配) */
+
+  /* ------------------- 8. 组件级 token ------------------- */
+
+  /* Button 组件级（§2.1） */
+  --ip-btn-h-sm:           28px;
+  --ip-btn-h-md:           36px;
+  --ip-btn-h-lg:           44px;
+  --ip-btn-px-sm:          12px;
+  --ip-btn-px-md:          16px;
+  --ip-btn-px-lg:          20px;
+  --ip-btn-py-sm:          4px;
+  --ip-btn-py-md:          8px;
+  --ip-btn-py-lg:          12px;
+  --ip-btn-fs-sm:          var(--ip-text-body-sm-size);
+  --ip-btn-fs-md:          var(--ip-text-body-size);
+  --ip-btn-fs-lg:          var(--ip-text-body-lg-size);
+  --ip-btn-gap:            var(--ip-spacing-2);
+  --ip-btn-radius:         var(--ip-radius-lg);            /* 8px */
+
+  /* Input 组件级（§2.2） */
+  --ip-input-h-sm:         32px;
+  --ip-input-h-md:         40px;
+  --ip-input-h-lg:         48px;
+  --ip-input-px-sm:        12px;
+  --ip-input-px-md:        12px;
+  --ip-input-px-lg:        16px;
+  --ip-input-py-sm:        4px;
+  --ip-input-py-md:        8px;
+  --ip-input-py-lg:        12px;
+  --ip-input-radius:       var(--ip-radius-md);            /* 6px */
+
+  /* Textarea 组件级（§2.2.3） */
+  --ip-textarea-min-h-sm:  64px;
+  --ip-textarea-min-h-md:  96px;
+  --ip-textarea-min-h-lg:  128px;
+  --ip-textarea-max-h-sm:  160px;
+  --ip-textarea-max-h-md:  240px;
+  --ip-textarea-max-h-lg:  320px;
+
+  /* MessageBubble 组件级（§2.3） */
+  --ip-message-gap-same:   12px;  /* 同角色连续排布 */
+  --ip-message-gap-first:  24px;  /* 首条消息 */
+  --ip-message-gap-cross:  32px;  /* 跨角色 */
+  --ip-message-meta-gap:   8px;
+  --ip-message-px:         var(--ip-spacing-12);  /* 消息区域水平边距 48px */
+  --ip-message-max-w:      720px;
+  --ip-message-user-max-w: 504px;  /* 70% */
+
+  /* Modal 组件级（§2.5） */
+  --ip-modal-w-sm:         400px;
+  --ip-modal-w-md:         560px;
+  --ip-modal-w-lg:         720px;
+  --ip-modal-radius:       var(--ip-radius-xl);            /* 12px */
+
+  /* Toast 组件级（§2.6） */
+  --ip-toast-min-w:        280px;
+  --ip-toast-max-w:        480px;
+  --ip-toast-offset:       16px;
+  --ip-toast-gap:          8px;
+  --ip-toast-duration-success: 3000ms;
+  --ip-toast-duration-info:    3000ms;
+  --ip-toast-duration-warning: 5000ms;
+  --ip-toast-duration-danger:  8000ms;
+
+  /* ------------------- 9. 语义色（独立 tone） ------------------- */
+
+  /* success（亮色） */
+  --ip-success-base:    #16A34A;
+  --ip-success-hover:   #15803D;
+  --ip-success-active:  #166534;
+  --ip-success-bg:      #DCFCE7;
+  --ip-success-text:    #166534;
+  --ip-success-border:  #86EFAC;
+
+  /* warning */
+  --ip-warning-base:    #F59E0B;
+  --ip-warning-hover:   #D97706;
+  --ip-warning-active:  #B45309;
+  --ip-warning-bg:      #FEF3C7;
+  --ip-warning-text:    #92400E;
+  --ip-warning-border:  #FCD34D;
+
+  /* danger */
+  --ip-danger-base:    #DC2626;
+  --ip-danger-hover:   #B91C1C;
+  --ip-danger-active:  #991B1B;
+  --ip-danger-bg:      #FEE2E2;
+  --ip-danger-text:    #991B1B;
+  --ip-danger-border:  #FCA5A5;
+
+  /* info */
+  --ip-info-base:    #0EA5E9;
+  --ip-info-hover:   #0284C7;
+  --ip-info-active:  #075985;
+  --ip-info-bg:      #E0F2FE;
+  --ip-info-text:    #075985;
+  --ip-info-border:  #7DD3FC;
+
+  /* ------------------- 10. 语义层 token（组件引用的统一入口） ------------------- */
+
+  /* 背景层次（§1.1.4） */
+  --ip-color-bg-primary:      var(--ip-gray-50);            /* 主背景 */
+  --ip-color-bg-secondary:    var(--ip-white);              /* 卡片、面板 */
+  --ip-color-bg-tertiary:     var(--ip-gray-100);           /* 嵌套容器、悬停态 */
+  --ip-color-bg-elevated:     var(--ip-white);              /* 浮层 */
+  --ip-color-bg-overlay:      var(--ip-overlay-light);      /* 模态遮罩 */
+  --ip-color-bg-user-bubble:  #EBEBEB;                      /* 用户消息气泡（暖灰，对齐 ChatGPT/Claude） */
+  /* sticky header 半透明背靠（glassmorphism）— 对应 --ip-gray-50 / 72% / 88% 透明度 */
+  --ip-color-bg-header-backdrop:          rgba(250, 250, 250, 0.72);
+  --ip-color-bg-header-backdrop-scrolled:  rgba(250, 250, 250, 0.88);
+
+  /* 文字 */
+  --ip-color-text-primary:    var(--ip-gray-900);
+  --ip-color-text-body:       var(--ip-gray-700);
+  --ip-color-text-secondary:  var(--ip-gray-600);
+  --ip-color-text-tertiary:   var(--ip-gray-500);
+  --ip-color-text-disabled:   var(--ip-gray-400);
+  --ip-color-text-on-primary: var(--ip-white);
+  --ip-color-text-on-danger:  var(--ip-white);
+  --ip-color-text-on-user-bubble: #1A1A1A;                   /* 用户气泡文字色（暖灰底配近黑） */
+  --ip-color-text-link:       var(--ip-primary-600);
+
+  /* 边框 */
+  --ip-color-border-default:  var(--ip-gray-300);
+  --ip-color-border-strong:   var(--ip-gray-500);
+  --ip-color-border-focus:    var(--ip-primary-500);
+  --ip-color-border-error:    var(--ip-danger-base);
+
+  /* 图标 */
+  --ip-color-icon-default:    var(--ip-gray-700);
+  --ip-color-icon-muted:      var(--ip-gray-500);
+  --ip-color-icon-on-primary: var(--ip-white);
+
+  /* 选择高亮 */
+  --ip-color-selection-bg:    var(--ip-primary-100);
+
+  /* 标记当前模式（数据属性 + 媒体查询共存时给组件判断用） */
+  color-scheme: light;
 }
 
-/* 暗色主题覆盖 */
-[data-theme='dark'] {
-  --ip-color-primary: #60a5fa;
-  --ip-color-primary-light: #93bbfd;
-  --ip-color-primary-dark: #3b82f6;
+/* ------------------- 11. 暗色模式覆盖 ------------------- */
 
-  --ip-color-text-primary: #f9fafb;
-  --ip-color-text-secondary: #9ca3af;
-  --ip-color-text-disabled: #6b7280;
+[data-theme='dark'],
+.dark {
+  /* 原始色板：暗色专属 gray-50/950 在组件代码里不直接出现，仅保留内部 token */
+  --ip-success-base:    #4ADE80;
+  --ip-success-hover:   #22C55E;
+  --ip-success-active:  #16A34A;
+  --ip-success-bg:      #052E16;
+  --ip-success-text:    #86EFAC;
+  --ip-success-border:  #15803D;
 
-  --ip-color-bg-primary: #111827;
-  --ip-color-bg-secondary: #1f2937;
-  --ip-color-bg-tertiary: #374151;
-  --ip-color-bg-disabled: #4b5563;
+  --ip-warning-base:    #FBBF24;
+  --ip-warning-hover:   #F59E0B;
+  --ip-warning-active:  #D97706;
+  --ip-warning-bg:      #451A03;
+  --ip-warning-text:    #FCD34D;
+  --ip-warning-border:  #B45309;
 
-  --ip-color-border: #374151;
-  --ip-color-border-focus: #60a5fa;
+  --ip-danger-base:    #F87171;
+  --ip-danger-hover:   #EF4444;
+  --ip-danger-active:  #DC2626;
+  --ip-danger-bg:      #450A0A;
+  --ip-danger-text:    #FCA5A5;
+  --ip-danger-border:  #991B1B;
+
+  --ip-info-base:    #38BDF8;
+  --ip-info-hover:   #0EA5E9;
+  --ip-info-active:  #0284C7;
+  --ip-info-bg:      #082F49;
+  --ip-info-text:    #7DD3FC;
+  --ip-info-border:  #075985;
+
+  /* 语义层重映射 */
+  --ip-color-bg-primary:      var(--ip-gray-900);
+  --ip-color-bg-secondary:    var(--ip-gray-850);
+  --ip-color-bg-tertiary:     var(--ip-gray-800);
+  --ip-color-bg-elevated:     var(--ip-gray-800);                  /* v1.0.1: #262626，与 secondary 12 阶对比 */
+  --ip-color-bg-overlay:      var(--ip-overlay-dark);
+  --ip-color-bg-user-bubble:  #262626;                      /* 暗色用户气泡：近黑灰，避免饱和蓝刺眼 */
+  /* sticky header 半透明背靠 — 对应 --ip-gray-900 / 72% / 88% 透明度 */
+  --ip-color-bg-header-backdrop:          rgba(20, 20, 20, 0.72);
+  --ip-color-bg-header-backdrop-scrolled:  rgba(20, 20, 20, 0.88);
+
+  --ip-color-text-primary:    var(--ip-gray-100);
+  --ip-color-text-body:       var(--ip-gray-200);
+  --ip-color-text-secondary:  var(--ip-gray-300);
+  --ip-color-text-tertiary:   var(--ip-gray-400);
+  --ip-color-text-disabled:   var(--ip-gray-500);
+  --ip-color-text-link:       var(--ip-primary-400);
+  --ip-color-text-on-user-bubble: #E5E5E5;                  /* 暗色用户气泡文字色（近白） */
+
+  --ip-color-border-default:  var(--ip-gray-700);
+  --ip-color-border-strong:   var(--ip-gray-600);
+  --ip-color-border-focus:    var(--ip-primary-400);
+
+  --ip-color-icon-default:    var(--ip-gray-200);
+  --ip-color-icon-muted:      var(--ip-gray-400);
+
+  --ip-color-selection-bg:    var(--ip-primary-900);
+
+  /* 阴影：暗色模式感知弱，使用更深的版本 */
+  --ip-shadow-focus:          0 0 0 3px var(--ip-focus-ring-dark);
+
+  color-scheme: dark;
+}
+
+/* ------------------- 11b. 跟随系统（无显式 data-theme） ------------------- */
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']):not(.light) {
+    --ip-color-bg-primary:     var(--ip-gray-900);
+    --ip-color-bg-secondary:   var(--ip-gray-850);
+    --ip-color-bg-tertiary:    var(--ip-gray-800);
+    --ip-color-bg-elevated:    var(--ip-gray-800);
+    --ip-color-bg-overlay:     var(--ip-overlay-dark);
+    --ip-color-bg-user-bubble: #262626;
+    --ip-color-bg-header-backdrop:          rgba(20, 20, 20, 0.72);
+    --ip-color-bg-header-backdrop-scrolled:  rgba(20, 20, 20, 0.88);
+
+    --ip-color-text-primary:   var(--ip-gray-100);
+    --ip-color-text-body:      var(--ip-gray-200);
+    --ip-color-text-secondary: var(--ip-gray-300);
+    --ip-color-text-tertiary:  var(--ip-gray-400);
+    --ip-color-text-disabled:  var(--ip-gray-500);
+    --ip-color-text-link:      var(--ip-primary-400);
+    --ip-color-text-on-user-bubble: #E5E5E5;
+
+    --ip-color-border-default: var(--ip-gray-700);
+    --ip-color-border-strong:  var(--ip-gray-600);
+    --ip-color-border-focus:   var(--ip-primary-400);
+
+    --ip-color-icon-default:   var(--ip-gray-200);
+    --ip-color-icon-muted:     var(--ip-gray-400);
+
+    --ip-color-selection-bg:   var(--ip-primary-900);
+
+    /* 语义色（仅阴影用，其他已在 light 中定义；为简洁保留指针指向 dark 调色板） */
+    --ip-success-base:    #4ADE80;
+    --ip-warning-base:    #FBBF24;
+    --ip-danger-base:     #F87171;
+    --ip-info-base:       #38BDF8;
+
+    --ip-shadow-focus:    0 0 0 3px var(--ip-focus-ring-dark);
+
+    color-scheme: dark;
+  }
+}
+
+/* ------------------- 12. 减少动效（WCAG 2.3.3 AAA + §7.1） ------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
+  /* 但保留必要的状态可见性变化（让用户仍能看到状态反馈） */
+  .ip-input,
+  .ip-textarea__field,
+  .ip-btn {
+    transition:
+      border-color 0.01ms,
+      box-shadow 0.01ms,
+      background-color 0.01ms !important;
+  }
+}
+
+/* ------------------- 关键帧（跨组件使用） ------------------- */
+
+/* §1.6 Button spinner：720ms 旋转，scale 收尾避免抖动 */
+@keyframes ip-spin {
+  to { transform: scale(1) rotate(360deg); }
+}
+
+/* §2.8 Input error shake：4px→2px 衰减，4 关键帧 */
+@keyframes ip-input-shake {
+  0%   { transform: translateX(0); }
+  20%  { transform: translateX(-4px); }
+  40%  { transform: translateX(4px); }
+  60%  { transform: translateX(-2px); }
+  80%  { transform: translateX(2px); }
+  100% { transform: translateX(0); }
+}
+
+/* §2.9 Error message slide-in */
+@keyframes ip-error-msg-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* §4.2 MessageBubble enter（translateY 8px，v1.0 修正为 8px） */
+@keyframes ip-message-enter {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* §4.3 流式末尾光标闪烁 */
+@keyframes ip-cursor-blink {
+  0%, 50%       { opacity: 1; }
+  50.01%, 100%  { opacity: 0; }
+}
+
+/* §4.4 长消息折叠：max-height 过渡用，单独抽 keyframes 不需要，
+   Vue Transition class + max-height 切换即可 */
+
+/* §5.2 Modal open */
+@keyframes ip-modal-overlay-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes ip-modal-overlay-out {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+
+@keyframes ip-modal-content-in {
+  from { opacity: 0; transform: scale(0.96) translateY(8px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes ip-modal-content-out {
+  from { opacity: 1; transform: scale(1) translateY(0); }
+  to   { opacity: 0; transform: scale(0.96) translateY(8px); }
+}
+
+/* §6.6 Toast 同类型合并 crossfade */
+@keyframes ip-toast-content-fade {
+  from { opacity: 0.3; }
+  to   { opacity: 1; }
+}
+
+/* §6.3 Toast 入场 */
+@keyframes ip-toast-in {
+  from { opacity: 0; transform: translateX(20px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+/* §6.4 Toast 退场 */
+@keyframes ip-toast-out {
+  from { opacity: 1; transform: translateX(0); }
+  to   { opacity: 0; transform: translateX(20px); }
 }

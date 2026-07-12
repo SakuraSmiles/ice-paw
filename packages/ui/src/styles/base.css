@@ -1,8 +1,132 @@
-/* IcePaw Base Styles — reset + global baseline */
-/* 阶段 1 占位，后续补充 */
+/* ============================================================
+ * IcePaw Base Styles — modern-css-reset + 全局基线
+ * 参考：icepaw-design-system.md §7.3.1
+ *
+ * 原则：
+ *  - reset：box-sizing / margin / line-height / font-smoothing
+ *  - 保留：button / input / select / textarea 默认行为
+ *  - 不激进重置（避免后续逆向重造表单控件）
+ * ============================================================ */
 
 *,
 *::before,
 *::after {
   box-sizing: border-box;
+}
+
+* {
+  margin: 0;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  tab-size: 4;
+}
+
+body {
+  font-family: var(--ip-font-sans);
+  font-size: var(--ip-text-body-size);
+  line-height: var(--ip-line-height-loose);
+  font-weight: var(--ip-font-weight-regular);
+  color: var(--ip-color-text-body);
+  background: var(--ip-color-bg-primary);
+
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+
+  font-variant-numeric: var(--ip-font-variant-numeric);
+  font-kerning: normal;
+}
+
+/* 中英文自动间距（Chrome 123+） */
+:lang(zh) {
+  text-spacing: ideograph-alpha ideograph-numeric;
+}
+
+img,
+picture,
+video,
+canvas,
+svg {
+  display: block;
+  max-width: 100%;
+}
+
+input,
+button,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  color: inherit;
+}
+
+p,
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  overflow-wrap: break-word;
+}
+
+ul,
+ol {
+  list-style: none;
+  padding: 0;
+}
+
+a {
+  color: var(--ip-color-text-link);
+  text-decoration: inherit;
+}
+
+/* ---- 文本选择高亮 ---- */
+::selection {
+  background: var(--ip-color-selection-bg);
+  color: var(--ip-color-text-primary);
+}
+
+/* ---- 通用焦点环 ---- */
+:focus {
+  outline: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--ip-color-border-focus);
+  outline-offset: 2px;
+  border-radius: var(--ip-radius-sm);
+}
+
+/* ---- 滚动条基础（跨桌面端应用） ---- */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--ip-color-border-strong) transparent;
+}
+
+/* ---- 排版基础工具类（可选，组件库不强制） ---- */
+.ip-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }

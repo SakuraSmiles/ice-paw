@@ -1,3 +1,7 @@
-/* IcePaw 样式入口 — 汇总 tokens + base */
-@forward './tokens.css';
-@forward './base.css';
+/* ============================================================
+ * IcePaw 样式入口 — 汇总 tokens + base
+ * 由组件库主入口自动引入
+ * ============================================================ */
+
+@import './tokens.css';
+@import './base.css';
