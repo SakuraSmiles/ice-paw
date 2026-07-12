@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use crate::error::{AppError, AppResult};
 use crate::llm::cancel::CancellationToken;
 
 /// 全局聊天状态（注入到 Tauri managed state）
@@ -22,20 +23,32 @@ impl ChatState {
         }
     }
 
+    /// 获取锁，自动从毒化状态恢复
+    ///
+    /// 当持有锁的线程 panic 时，Mutex 会被标记为 "poisoned"。
+    /// 我们选择恢复数据而非 panic 传播，因为 ChatState 是全局状态，
+    /// 单次 panic 不应导致整个应用不可用。
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, CancellationToken>> {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// 注册一个会话的生成任务
     ///
     /// 返回新建的 CancellationToken，供流式协程持有。
-    /// 如果同一会话已有在途生成，会被覆盖（理论上不应发生，前端应做串行守门）。
-    pub fn start(&self, conv_id: &str) -> CancellationToken {
+    /// 如果同一会话已有在途生成，返回错误而非静默覆盖。
+    pub fn start(&self, conv_id: &str) -> AppResult<CancellationToken> {
+        let mut map = self.lock();
+        if map.contains_key(conv_id) {
+            return Err(AppError::Internal("会话已有在途生成任务".into()));
+        }
         let token = CancellationToken::new();
-        let mut map = self.inner.lock().expect("ChatState: mutex poisoned");
         map.insert(conv_id.to_string(), token.clone());
-        token
+        Ok(token)
     }
 
     /// 直接注册一个已有的 CancellationToken
     pub fn register(&self, conv_id: &str, token: CancellationToken) {
-        let mut map = self.inner.lock().expect("ChatState: mutex poisoned");
+        let mut map = self.lock();
         map.insert(conv_id.to_string(), token);
     }
 
@@ -43,7 +56,7 @@ impl ChatState {
     ///
     /// 返回是否命中（true = 确有在途生成并被取消）
     pub fn stop(&self, conv_id: &str) -> bool {
-        let map = self.inner.lock().expect("ChatState: mutex poisoned");
+        let map = self.lock();
         if let Some(token) = map.get(conv_id) {
             token.cancel();
             true
@@ -54,13 +67,13 @@ impl ChatState {
 
     /// 注销某会话的令牌（流式协程结束时调用）
     pub fn unregister(&self, conv_id: &str) {
-        let mut map = self.inner.lock().expect("ChatState: mutex poisoned");
+        let mut map = self.lock();
         map.remove(conv_id);
     }
 
     /// 某会话是否正在流式生成
     pub fn is_streaming(&self, conv_id: &str) -> bool {
-        let map = self.inner.lock().expect("ChatState: mutex poisoned");
+        let map = self.lock();
         map.contains_key(conv_id)
     }
 }

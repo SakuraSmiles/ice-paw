@@ -12,6 +12,7 @@
 //! 实现策略：用 `tokio::sync::mpsc` 通道将同步解析逻辑转换为异步 Stream。
 
 use std::pin::Pin;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::Stream;
@@ -43,10 +44,17 @@ impl OpenAiAdapter {
     /// - `model`：模型名称
     /// - `base_url`：API 根地址，如 `https://api.openai.com`
     pub fn new(model: String, base_url: String) -> Self {
+        let client = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .read_timeout(Duration::from_secs(120))
+            .timeout(Duration::from_secs(300))
+            .build()
+            .expect("reqwest client build");
+
         Self {
             model,
             base_url,
-            client: reqwest::Client::new(),
+            client,
         }
     }
 }

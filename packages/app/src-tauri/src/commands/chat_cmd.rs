@@ -184,8 +184,14 @@ pub async fn send_message(
     )
     .await?;
 
-    // --- 注册 CancellationToken ---
-    let cancel_token = chat_state.start(&conv_id);
+    // --- 注册 CancellationToken（检查重复）---
+    let cancel_token = chat_state.start(&conv_id).inspect_err(|_| {
+        tracing::warn!(
+            target: "ice_paw.chat",
+            "send_message: 会话 {} 已有在途生成任务",
+            conv_id
+        );
+    })?;
 
     // --- emit chat:start ---
     app.emit(
