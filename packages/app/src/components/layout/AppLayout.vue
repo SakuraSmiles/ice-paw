@@ -7,20 +7,23 @@
 //      加载当前 Agent 的会话列表
 //   3. Sidebar emit chat:select → router.push 跳转到聊天页
 //
-// 无 Agent 时：右侧主区显示 EmptyAgentHint（覆盖 router-view）
-// 有 Agent 时：正常显示 router-view
+// 空状态说明：
+//   - AppLayout 只负责「路由 + 全局 UI 壳」，不做业务拦截。
+//   - 无 Agent 时的引导由各页面自行处理：
+//       • AgentManagerPage → 自己的 EmptyAgentHint（创建入口）
+//       • ChatPage          → 区分「无 Agent」与「无会话」两种空态
+//   - 历史版本在 AppLayout 中覆盖 EmptyAgentHint 会导致 router-view 被替换，
+//     即使点击「创建 Agent」也无法真正跳转到 AgentManagerPage（死锁）。
+//     已在本文件移除该全局拦截。
 
 import { onMounted } from "vue";
-import { useRouter } from "vue-router";
 import { useAgentsStore } from "../../stores/agents";
 import { useConversationsStore } from "../../stores/conversations";
 import Toast from "../common/Toast.vue";
-import EmptyAgentHint from "../agent/EmptyAgentHint.vue";
 import Sidebar from "./Sidebar.vue";
 
 const agentsStore = useAgentsStore();
 const conversationsStore = useConversationsStore();
-const router = useRouter();
 
 onMounted(async () => {
   // 1. 加载 Agent 列表
@@ -30,15 +33,10 @@ onMounted(async () => {
     try {
       await conversationsStore.loadFor(agentsStore.currentId);
     } catch {
-      // 加载失败由 AppLayout 通过 EmptyAgentHint 等 UI 兜底，此处不抛出
+      // 加载失败由各页面 UI 兜底，此处不抛出
     }
   }
 });
-
-/** 从空状态点击「创建 Agent」跳转到管理页 */
-function goToAgents(): void {
-  void router.push({ name: "AgentManager" });
-}
 
 /**
  * Sidebar 选中会话：跳转到聊天页。
@@ -46,7 +44,7 @@ function goToAgents(): void {
  * 后续 chat 模块会监听 conversationsStore.currentId 自动加载消息。
  */
 function onChatSelect(_conversationId: string | null): void {
-  void router.push({ name: "Chat" });
+  // 路由跳转由 ChatPage / store 监听自动完成，保留事件位以备扩展
 }
 </script>
 
@@ -57,16 +55,10 @@ function onChatSelect(_conversationId: string | null): void {
       <Sidebar @chat:select="onChatSelect" />
     </aside>
 
-    <!-- 右侧：主内容区 -->
+    <!-- 右侧：主内容区：永远渲染 router-view，由各页面自行处理空状态 -->
     <main class="app-main">
       <router-view v-slot="{ Component }">
-        <!-- 无 Agent 时：全局显示空状态提示 -->
-        <EmptyAgentHint
-          v-if="!agentsStore.hasAgents && !agentsStore.loading"
-          @create="goToAgents"
-        />
-        <!-- 有 Agent 或加载中时：正常渲染路由页面 -->
-        <component :is="Component" v-else />
+        <component :is="Component" />
       </router-view>
     </main>
 
