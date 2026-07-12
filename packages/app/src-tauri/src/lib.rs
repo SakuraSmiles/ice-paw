@@ -1,3 +1,5 @@
+#![warn(clippy::all)]
+
 //! IcePaw Tauri 应用入口
 //!
 //! 模块组装：

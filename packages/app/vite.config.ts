@@ -18,6 +18,8 @@ export default defineConfig(async () => ({
 
   resolve: {
     alias: {
+      // 与 tsconfig.json paths 保持一致
+      "@ice-paw/ui": resolve(uiRoot, "src/index.ts"),
       "@ice-paw/ui/styles": uiStyles,
     },
   },
