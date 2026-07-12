@@ -1,0 +1,330 @@
+/* ============================================================
+ * Markdown 内容样式
+ *
+ * 命名空间：所有类以 .markdown-body 为前缀（kebab-case）。
+ * 由 MarkdownContent.vue 引入并限定在 .markdown-body 子树内。
+ *
+ * 设计原则：
+ *   - 颜色全部走 --ip-* design token，缺失的用语义默认值
+ *   - 适配亮/暗色模式（token 已自动切换）
+ *   - 代码块：深色背景 + 横向滚动 + 等宽字体
+ *   - 表格、引用、列表层级清晰
+ * ============================================================ */
+
+/* ------------------- 根容器（基础排版） ------------------- */
+
+.markdown-body {
+  font-family: var(--ip-font-sans);
+  font-size: var(--ip-text-body-size, 15px);
+  line-height: var(--ip-line-height-relaxed, 1.55);
+  color: var(--ip-color-text-body, var(--ip-gray-700, #434343));
+}
+
+.markdown-body > *:first-child {
+  margin-top: 0;
+}
+
+.markdown-body > *:last-child {
+  margin-bottom: 0;
+}
+
+/* ------------------- 标题 ------------------- */
+
+.markdown-body-h1,
+.markdown-body h1 {
+  font-size: var(--ip-text-h1-size, 28px);
+  line-height: var(--ip-text-h1-lh, 34px);
+  font-weight: var(--ip-font-weight-semibold, 600);
+  margin: var(--ip-spacing-6, 24px) 0 var(--ip-spacing-3, 12px);
+  color: var(--ip-color-text-primary, var(--ip-gray-900, #141414));
+}
+
+.markdown-body-h2,
+.markdown-body h2 {
+  font-size: var(--ip-text-h2-size, 22px);
+  line-height: var(--ip-text-h2-lh, 28px);
+  font-weight: var(--ip-font-weight-semibold, 600);
+  margin: var(--ip-spacing-5, 20px) 0 var(--ip-spacing-3, 12px);
+  padding-bottom: var(--ip-spacing-2, 8px);
+  border-bottom: 1px solid var(--ip-color-border-default, #d9d9d9);
+  color: var(--ip-color-text-primary, var(--ip-gray-900, #141414));
+}
+
+.markdown-body-h3,
+.markdown-body h3 {
+  font-size: var(--ip-text-h3-size, 18px);
+  line-height: var(--ip-text-h3-lh, 24px);
+  font-weight: var(--ip-font-weight-semibold, 600);
+  margin: var(--ip-spacing-5, 20px) 0 var(--ip-spacing-2, 8px);
+  color: var(--ip-color-text-primary, var(--ip-gray-900, #141414));
+}
+
+.markdown-body-h4,
+.markdown-body h4,
+.markdown-body-h5,
+.markdown-body h5,
+.markdown-body-h6,
+.markdown-body h6 {
+  font-size: var(--ip-text-body-lg-size, 17px);
+  line-height: var(--ip-text-body-lg-lh, 28px);
+  font-weight: var(--ip-font-weight-semibold, 600);
+  margin: var(--ip-spacing-4, 16px) 0 var(--ip-spacing-2, 8px);
+  color: var(--ip-color-text-primary, var(--ip-gray-900, #141414));
+}
+
+/* ------------------- 段落 ------------------- */
+
+.markdown-body-p,
+.markdown-body p {
+  margin: 0 0 var(--ip-spacing-3, 12px);
+  color: var(--ip-color-text-body, var(--ip-gray-700, #434343));
+}
+
+/* ------------------- 强调 ------------------- */
+
+.markdown-body-strong,
+.markdown-body strong {
+  font-weight: var(--ip-font-weight-semibold, 600);
+  color: var(--ip-color-text-primary, var(--ip-gray-900, #141414));
+}
+
+.markdown-body-em,
+.markdown-body em {
+  font-style: italic;
+}
+
+.markdown-body-del,
+.markdown-body del {
+  color: var(--ip-color-text-tertiary, var(--ip-gray-500, #8c8c8c));
+  text-decoration: line-through;
+}
+
+/* ------------------- 链接 ------------------- */
+
+.markdown-body-a,
+.markdown-body a {
+  color: var(--ip-color-text-link, var(--ip-primary-600, #2563eb));
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition:
+    color var(--ip-duration-base, 150ms) var(--ip-ease-out, ease),
+    border-color var(--ip-duration-base, 150ms) var(--ip-ease-out, ease);
+}
+
+.markdown-body-a:hover,
+.markdown-body a:hover {
+  color: var(--ip-primary-700, #1d4ed8);
+  border-bottom-color: currentColor;
+}
+
+/* ------------------- 列表 ------------------- */
+
+.markdown-body-ul,
+.markdown-body ul,
+.markdown-body-ol,
+.markdown-body ol {
+  margin: 0 0 var(--ip-spacing-3, 12px);
+  padding-left: var(--ip-spacing-6, 24px);
+}
+
+.markdown-body-li,
+.markdown-body li {
+  margin: var(--ip-spacing-1, 4px) 0;
+  line-height: var(--ip-line-height-relaxed, 1.55);
+}
+
+.markdown-body-ul,
+.markdown-body ul {
+  list-style: disc;
+}
+
+.markdown-body-ol,
+.markdown-body ol {
+  list-style: decimal;
+}
+
+/* 嵌套列表缩进 */
+.markdown-body li > ul,
+.markdown-body li > ol {
+  margin: var(--ip-spacing-1, 4px) 0;
+  padding-left: var(--ip-spacing-5, 20px);
+}
+
+/* 任务列表 */
+.markdown-body input[type="checkbox"] {
+  margin-right: var(--ip-spacing-2, 8px);
+  vertical-align: middle;
+  cursor: pointer;
+}
+
+/* ------------------- 引用块 ------------------- */
+
+.markdown-body-blockquote,
+.markdown-body blockquote {
+  margin: var(--ip-spacing-3, 12px) 0;
+  padding: var(--ip-spacing-2, 8px) var(--ip-spacing-4, 16px);
+  border-left: 4px solid var(--ip-color-border-default, #d9d9d9);
+  background: var(--ip-color-bg-tertiary, var(--ip-gray-100, #f5f5f5));
+  color: var(--ip-color-text-secondary, var(--ip-gray-600, #595959));
+  border-radius: 0 var(--ip-radius-sm, 4px) var(--ip-radius-sm, 4px) 0;
+}
+
+.markdown-body-blockquote > :first-child,
+.markdown-body blockquote > :first-child {
+  margin-top: 0;
+}
+
+.markdown-body-blockquote > :last-child,
+.markdown-body blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body-blockquote p,
+.markdown-body blockquote p {
+  margin: 0 0 var(--ip-spacing-2, 8px);
+}
+
+/* ------------------- 行内代码 ------------------- */
+
+.markdown-body-code-inline {
+  font-family: var(--ip-font-mono);
+  font-size: 0.875em; /* 比正文略小，符合行业惯例 */
+  padding: 2px 6px;
+  margin: 0 2px;
+  background: var(--ip-color-bg-tertiary, var(--ip-gray-100, #f5f5f5));
+  border: 1px solid var(--ip-color-border-default, #e5e5e5);
+  border-radius: var(--ip-radius-sm, 4px);
+  color: var(--ip-danger-active, #b91c1c);
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+/* ------------------- 代码块 ------------------- */
+
+.markdown-body-code-pre,
+.markdown-body pre {
+  font-family: var(--ip-font-mono);
+  font-size: var(--ip-text-code-size, 14px);
+  line-height: var(--ip-line-height-monospace, 1.57);
+  margin: var(--ip-spacing-3, 12px) 0;
+  padding: var(--ip-spacing-3, 12px) var(--ip-spacing-4, 16px);
+  background: #1a1a1a; /* 代码块始终深色背景，避免与正文色块混淆 */
+  color: #e5e5e5;
+  border-radius: var(--ip-radius-md, 6px);
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.markdown-body-code,
+.markdown-body pre code {
+  font-family: inherit;
+  font-size: inherit;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  color: inherit;
+  display: block;
+  white-space: pre;
+  word-break: normal;
+}
+
+/* 代码块滚动条样式（webkit + firefox） */
+.markdown-body-code-pre::-webkit-scrollbar,
+.markdown-body pre::-webkit-scrollbar {
+  height: 8px;
+}
+
+.markdown-body-code-pre::-webkit-scrollbar-track,
+.markdown-body pre::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.markdown-body-code-pre::-webkit-scrollbar-thumb,
+.markdown-body pre::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: var(--ip-radius-full, 9999px);
+}
+
+.markdown-body-code-pre::-webkit-scrollbar-thumb:hover,
+.markdown-body pre::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.35);
+}
+
+.markdown-body-code-pre,
+.markdown-body pre {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}
+
+/* ------------------- 表格 ------------------- */
+
+.markdown-body-table,
+.markdown-body table {
+  width: 100%;
+  margin: var(--ip-spacing-3, 12px) 0;
+  border-collapse: collapse;
+  border-spacing: 0;
+  font-size: var(--ip-text-body-sm-size, 13px);
+  overflow-x: auto;
+  display: block;
+}
+
+.markdown-body-thead,
+.markdown-body thead,
+.markdown-body-th,
+.markdown-body th {
+  background: var(--ip-color-bg-tertiary, var(--ip-gray-100, #f5f5f5));
+  font-weight: var(--ip-font-weight-semibold, 600);
+  text-align: left;
+  color: var(--ip-color-text-primary, var(--ip-gray-900, #141414));
+}
+
+.markdown-body-th,
+.markdown-body th,
+.markdown-body-td,
+.markdown-body td {
+  padding: var(--ip-spacing-2, 8px) var(--ip-spacing-3, 12px);
+  border: 1px solid var(--ip-color-border-default, #d9d9d9);
+  vertical-align: top;
+}
+
+.markdown-body-tr:nth-child(even) td,
+.markdown-body tbody tr:nth-child(even) td {
+  background: var(--ip-color-bg-secondary, var(--ip-gray-50, #fafafa));
+}
+
+/* ------------------- 分隔线 ------------------- */
+
+.markdown-body-hr,
+.markdown-body hr {
+  border: 0;
+  height: 1px;
+  background: var(--ip-color-border-default, #d9d9d9);
+  margin: var(--ip-spacing-6, 24px) 0;
+}
+
+/* ------------------- 图片 ------------------- */
+
+.markdown-body-img,
+.markdown-body img {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--ip-radius-sm, 4px);
+  margin: var(--ip-spacing-2, 8px) 0;
+}
+
+/* ------------------- 键盘标签 / 缩写 ------------------- */
+
+.markdown-body-kbd,
+.markdown-body kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  font-family: var(--ip-font-mono);
+  font-size: 0.85em;
+  background: var(--ip-color-bg-secondary, var(--ip-gray-50, #fafafa));
+  border: 1px solid var(--ip-color-border-default, #d9d9d9);
+  border-bottom-width: 2px;
+  border-radius: var(--ip-radius-sm, 4px);
+  color: var(--ip-color-text-primary, var(--ip-gray-900, #141414));
+}
