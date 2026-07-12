@@ -37,10 +37,11 @@ export interface Agent {
   base_url: string | null;
   temperature: number;
   max_tokens: number;
-  extra_params: string;
+  extra_params: Record<string, unknown>;
   sort_order: number;
   created_at: string;
   updated_at: string;
+  hasApiKey: boolean;
 }
 
 /**
