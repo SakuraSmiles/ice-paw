@@ -2,8 +2,6 @@ import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 import { resolve } from "path";
 
-const __dirname = import.meta.dirname;
-
 // 读取 Tauri dev 模式下的远程 host（用于局域网真机调试）
 // types: ["node"] 已在 tsconfig.node.json 中声明
 const host = process.env.TAURI_DEV_HOST;
