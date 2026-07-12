@@ -115,27 +115,19 @@ function onBlur(): void {
 .inline-rename {
   display: block;
   width: 100%;
-  padding: 4px 6px;
+  padding: var(--ip-spacing-1) 6px;
   font-family: inherit;
-  font-size: 13px;
-  color: var(--text-primary, #1a1a1a);
-  background: var(--input-bg, #ffffff);
-  border: 1px solid var(--input-border, #1a73e8);
-  border-radius: 4px;
+  font-size: var(--ip-text-body-sm-size);
+  color: var(--ip-color-text-primary);
+  background: var(--ip-color-bg-secondary);
+  border: 1px solid var(--ip-color-border-focus);
+  border-radius: var(--ip-radius-sm);
   outline: none;
   box-sizing: border-box;
 }
 
 .inline-rename:focus {
-  border-color: var(--input-border-focus, #1557b0);
-}
-
-@media (prefers-color-scheme: dark) {
-  .inline-rename {
-    --text-primary: #f0f0f0;
-    --input-bg: #1e1e2e;
-    --input-border: #4a90e2;
-    --input-border-focus: #6ba9e8;
-  }
+  border-color: var(--ip-primary-600);
+  box-shadow: var(--ip-shadow-focus);
 }
 </style>

@@ -163,8 +163,8 @@ const sendDisabled = computed<boolean>(
 .chat-input {
   display: flex;
   flex-direction: column;
-  border-top: 1px solid var(--ip-color-border-default, #e5e7eb);
-  background-color: var(--ip-color-bg-secondary, #ffffff);
+  border-top: 1px solid var(--ip-color-border-default);
+  background-color: var(--ip-color-bg-secondary);
   padding: 12px 16px;
   flex-shrink: 0;
   position: relative;
@@ -175,42 +175,42 @@ const sendDisabled = computed<boolean>(
   width: 100%;
   resize: none;
   /* 由行数动态控制 height（JS autosize 写入） */
-  border: 1px solid var(--ip-input-border, #d0d0d0);
+  border: 1px solid var(--ip-input-border);
   /* 兼容旧版；新设计 token 为 --ip-color-border-default */
-  border-radius: var(--ip-input-radius, 6px);
-  padding: var(--ip-input-py-md, 8px) var(--ip-input-px-md, 12px);
+  border-radius: var(--ip-input-radius);
+  padding: var(--ip-input-py-md) var(--ip-input-px-md);
   font-family: inherit;
-  font-size: var(--ip-text-body-size, 15px);
-  line-height: var(--ip-text-body-lh, 24px);
-  color: var(--ip-color-text-primary, #1a1a1a);
+  font-size: var(--ip-text-body-size);
+  line-height: var(--ip-text-body-lh);
+  color: var(--ip-color-text-primary);
   /* 输入区背景：设计 token 为 --ip-color-bg-primary / --ip-color-bg-secondary */
-  background: var(--ip-input-bg, var(--ip-color-bg-primary, #ffffff));
+  background: var(--ip-input-bg);
   outline: none;
   box-sizing: border-box;
   overflow-y: auto;
   transition:
-    border-color var(--ip-duration-base, 150ms) var(--ip-ease-out, ease),
-    box-shadow var(--ip-duration-base, 150ms) var(--ip-ease-out, ease),
-    background-color var(--ip-duration-base, 150ms) var(--ip-ease-out, ease);
+    border-color var(--ip-duration-base) var(--ip-ease-out),
+    box-shadow var(--ip-duration-base) var(--ip-ease-out),
+    background-color var(--ip-duration-base) var(--ip-ease-out);
 }
 
 .textarea::placeholder {
-  color: var(--ip-color-text-tertiary, #8c8c8c);
+  color: var(--ip-color-text-tertiary);
 }
 
 .textarea:hover:not(:disabled) {
-  border-color: var(--ip-color-border-strong, #595959);
+  border-color: var(--ip-color-border-strong);
 }
 
 .textarea:focus {
-  border-color: var(--ip-color-border-focus, #3b82f6);
+  border-color: var(--ip-color-border-focus);
   /* 焦点发光环：使用设计 token 中的 --ip-shadow-focus */
-  box-shadow: var(--ip-shadow-focus, 0 0 0 3px rgba(59, 130, 246, 0.3));
+  box-shadow: var(--ip-shadow-focus);
 }
 
 .textarea:disabled {
-  background: var(--ip-color-bg-tertiary, #f5f5f5);
-  color: var(--ip-color-text-disabled, #8c8c8c);
+  background: var(--ip-color-bg-tertiary);
+  color: var(--ip-color-text-disabled);
   cursor: not-allowed;
 }
 
@@ -229,8 +229,8 @@ const sendDisabled = computed<boolean>(
 }
 
 .hint-text {
-  font-size: var(--ip-text-caption-size, 12px);
-  color: var(--ip-color-text-tertiary, #8c8c8c);
+  font-size: var(--ip-text-caption-size);
+  color: var(--ip-color-text-tertiary);
 }
 
 .toolbar-right {
@@ -245,20 +245,20 @@ const sendDisabled = computed<boolean>(
   justify-content: center;
   gap: 6px;
   appearance: none;
-  height: var(--ip-btn-h-sm, 28px);
+  height: var(--ip-btn-h-sm);
   padding: 0 14px;
-  font-size: var(--ip-text-body-sm-size, 13px);
-  font-weight: var(--ip-font-weight-medium, 500);
+  font-size: var(--ip-text-body-sm-size);
+  font-weight: var(--ip-font-weight-medium);
   font-family: inherit;
-  border-radius: var(--ip-btn-radius, 8px);
+  border-radius: var(--ip-btn-radius);
   border: 1px solid transparent;
   cursor: pointer;
-  transition: var(--ip-transition-colors, background-color 150ms ease, color 150ms ease, border-color 150ms ease);
+  transition: var(--ip-transition-colors);
 }
 
 .btn:focus-visible {
   outline: none;
-  box-shadow: var(--ip-shadow-focus, 0 0 0 3px rgba(59, 130, 246, 0.3));
+  box-shadow: var(--ip-shadow-focus);
 }
 
 .btn:active:not(:disabled) {
@@ -270,74 +270,53 @@ const sendDisabled = computed<boolean>(
 }
 
 .btn-send {
-  background: var(--ip-primary-600, #2563eb);
-  color: var(--ip-color-text-on-primary, #ffffff);
-  border-color: var(--ip-primary-600, #2563eb);
+  background: var(--ip-primary-600);
+  color: var(--ip-color-text-on-primary);
+  border-color: var(--ip-primary-600);
 }
 
 .btn-send:hover:not(:disabled) {
-  background: var(--ip-primary-700, #1d4ed8);
-  border-color: var(--ip-primary-700, #1d4ed8);
+  background: var(--ip-primary-700);
+  border-color: var(--ip-primary-700);
 }
 
 .btn-send:disabled {
-  background: var(--ip-color-bg-tertiary, #f0f0f0);
-  color: var(--ip-color-text-disabled, #b8b8b8);
-  border-color: var(--ip-color-bg-tertiary, #f0f0f0);
+  background: var(--ip-color-bg-tertiary);
+  color: var(--ip-color-text-disabled);
+  border-color: var(--ip-color-bg-tertiary);
   cursor: not-allowed;
 }
 
 .btn-stop {
   /* 红色高亮：用 danger token */
-  background: var(--ip-danger-base, #dc2626);
-  color: var(--ip-color-text-on-danger, #ffffff);
-  border-color: var(--ip-danger-base, #dc2626);
+  background: var(--ip-danger-base);
+  color: var(--ip-color-text-on-danger);
+  border-color: var(--ip-danger-base);
 }
 
 .btn-stop:hover {
-  background: var(--ip-danger-hover, #b91c1c);
-  border-color: var(--ip-danger-hover, #b91c1c);
+  background: var(--ip-danger-hover);
+  border-color: var(--ip-danger-hover);
 }
 
 .btn-stop:focus-visible {
-  box-shadow: var(--ip-shadow-focus-danger, 0 0 0 3px rgba(220, 38, 38, 0.2));
+  box-shadow: var(--ip-shadow-focus-danger);
 }
 
 .btn-stop:active {
-  background: var(--ip-danger-active, #991b1b);
-  border-color: var(--ip-danger-active, #991b1b);
+  background: var(--ip-danger-active);
+  border-color: var(--ip-danger-active);
 }
 
 /* 流式中整块输入区视觉弱化（仅边框淡化） */
 .chat-input-streaming .textarea {
-  border-color: var(--ip-color-border-default, #d0d0d0);
+  border-color: var(--ip-color-border-default);
 }
 
-/* 暗色模式（仅覆盖 token 与原始色板映射无法覆盖的细节） */
-@media (prefers-color-scheme: dark) {
-  .chat-input {
-    border-top-color: var(--ip-color-border-default, #434343);
-    background-color: var(--ip-color-bg-secondary, #1a1a1a);
-  }
-  .textarea {
-    background: var(--ip-color-bg-primary, #141414);
-    color: var(--ip-color-text-primary, #f5f5f5);
-    border-color: var(--ip-color-border-default, #434343);
-  }
-  .textarea::placeholder {
-    color: var(--ip-color-text-tertiary, #8c8c8c);
-  }
-  .textarea:hover:not(:disabled) {
-    border-color: var(--ip-color-border-strong, #8c8c8c);
-  }
-  .textarea:disabled {
-    background: var(--ip-color-bg-tertiary, #262626);
-    color: var(--ip-color-text-disabled, #595959);
-  }
-  .btn-send:disabled {
-    background: var(--ip-color-bg-tertiary, #262626);
-    color: var(--ip-color-text-disabled, #595959);
-    border-color: var(--ip-color-bg-tertiary, #262626);
-  }
-}
+/* 暗色模式：
+ * --ip-color-bg-* / --ip-color-text-* / --ip-color-border-* 等系列 token
+ * 均在 packages/ui/src/styles/tokens.css 的
+ * @media (prefers-color-scheme: dark) 中自动重映射，
+ * 因此本组件无需重新声明暗色覆盖块。
+ */
 </style>

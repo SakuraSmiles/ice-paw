@@ -73,33 +73,33 @@ function handleOverlayClick(e: any): void {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.4);
+  background: var(--ip-color-bg-overlay);
   /* 让 overlay 接收键盘事件 */
   outline: none;
 }
 
 .dialog-box {
-  width: 400px;
+  width: var(--ip-modal-w-sm);
   max-width: calc(100vw - 32px);
-  padding: 24px;
-  background: var(--dialog-bg, #ffffff);
-  border: 1px solid var(--dialog-border, #e0e0e0);
-  border-radius: 10px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  padding: var(--ip-spacing-6);
+  background: var(--ip-color-bg-elevated);
+  border: 1px solid var(--ip-color-border-default);
+  border-radius: var(--ip-radius-xl);
+  box-shadow: var(--ip-shadow-lg);
 }
 
 .dialog-title {
-  margin: 0 0 12px;
-  font-size: 17px;
-  font-weight: 600;
-  color: var(--text-primary, #1a1a1a);
+  margin: 0 0 var(--ip-spacing-3);
+  font-size: var(--ip-text-body-lg-size);
+  font-weight: var(--ip-font-weight-semibold);
+  color: var(--ip-color-text-primary);
 }
 
 .dialog-message {
-  margin: 0 0 20px;
-  font-size: 14px;
-  line-height: 1.5;
-  color: var(--text-secondary, #555);
+  margin: 0 0 var(--ip-spacing-5);
+  font-size: var(--ip-text-body-sm-size);
+  line-height: var(--ip-line-height-loose);
+  color: var(--ip-gray-700);
 }
 
 .dialog-actions {
@@ -109,68 +109,38 @@ function handleOverlayClick(e: any): void {
 }
 
 .btn {
-  padding: 8px 18px;
-  font-size: 14px;
-  border-radius: 6px;
+  padding: var(--ip-btn-py-md) 18px;
+  font-size: var(--ip-btn-fs-md);
+  border-radius: var(--ip-btn-radius);
   border: 1px solid transparent;
   cursor: pointer;
-  transition: background 100ms ease;
+  transition: background-color var(--ip-duration-fast) var(--ip-ease-out);
 }
 
 .btn-cancel {
-  background: var(--btn-cancel-bg, #f0f0f0);
-  color: var(--text-secondary, #555);
-  border-color: var(--btn-cancel-border, #d0d0d0);
+  background: var(--ip-color-bg-tertiary);
+  color: var(--ip-gray-700);
+  border-color: var(--ip-color-border-default);
 }
 .btn-cancel:hover {
-  background: var(--btn-cancel-bg-hover, #e0e0e0);
+  background: var(--ip-gray-200);
 }
 
 .btn-confirm {
-  background: var(--danger-bg, #d93025);
-  color: #fff;
+  background: var(--ip-danger-base);
+  color: var(--ip-color-text-on-danger);
 }
 .btn-confirm:hover {
-  background: var(--danger-bg-hover, #b52a1f);
+  background: var(--ip-danger-hover);
 }
 
 /* 动画 */
-.dialog-enter-from {
-  opacity: 0;
-}
-.dialog-enter-active {
-  transition: opacity 150ms ease;
-}
+.dialog-enter-from,
 .dialog-leave-to {
   opacity: 0;
 }
+.dialog-enter-active,
 .dialog-leave-active {
-  transition: opacity 150ms ease;
-}
-
-/* 暗色模式 */
-@media (prefers-color-scheme: dark) {
-  .dialog-box {
-    --dialog-bg: #2a2a3a;
-    --dialog-border: #3a3a4a;
-  }
-  .dialog-title {
-    --text-primary: #f0f0f0;
-  }
-  .dialog-message {
-    --text-secondary: #bbb;
-  }
-  .btn-cancel {
-    --btn-cancel-bg: #3a3a4a;
-    --btn-cancel-border: #4a4a5a;
-    --btn-cancel-bg-hover: #4a4a5a;
-    --text-secondary: #ccc;
-  }
-  .btn-confirm {
-    --danger-bg: #c0392b;
-  }
-  .btn-confirm:hover {
-    --danger-bg-hover: #a93226;
-  }
+  transition: opacity var(--ip-duration-base) var(--ip-ease-out);
 }
 </style>

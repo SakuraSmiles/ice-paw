@@ -86,14 +86,14 @@ onUnmounted(() => {
 .context-menu {
   /* 固定定位，由内联 style 写入 left/top */
   position: fixed;
-  z-index: 999;
+  z-index: var(--ip-z-popover);
   min-width: 140px;
   max-width: 240px;
-  padding: 4px;
-  background: var(--menu-bg, #ffffff);
-  border: 1px solid var(--menu-border, #d0d0d0);
-  border-radius: 6px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.14);
+  padding: var(--ip-spacing-1);
+  background: var(--ip-color-bg-elevated);
+  border: 1px solid var(--ip-color-border-default);
+  border-radius: var(--ip-radius-md);
+  box-shadow: var(--ip-shadow-lg);
   display: flex;
   flex-direction: column;
 }
@@ -103,62 +103,37 @@ onUnmounted(() => {
   border: none;
   background: transparent;
   text-align: left;
-  padding: 8px 14px;
+  padding: var(--ip-spacing-2) 14px;
   font-family: inherit;
-  font-size: 13px;
-  color: var(--text-primary, #1a1a1a);
-  border-radius: 4px;
+  font-size: var(--ip-text-body-sm-size);
+  color: var(--ip-color-text-primary);
+  border-radius: var(--ip-radius-sm);
   cursor: pointer;
-  transition: background 80ms ease;
+  transition: background-color var(--ip-duration-immediate) var(--ip-ease-out);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .ctx-item:hover {
-  background: var(--menu-item-hover, #f0f0f0);
+  background: var(--ip-color-bg-tertiary);
 }
 
 .ctx-item-danger {
-  color: var(--danger-fg, #d93025);
+  color: var(--ip-danger-base);
 }
 .ctx-item-danger:hover {
-  background: var(--danger-bg-hover, #fde8e8);
+  background: var(--ip-danger-bg);
 }
 
 /* 进出动画 */
-.ctx-menu-enter-from {
-  opacity: 0;
-  transform: scale(0.96);
-}
-.ctx-menu-enter-active {
-  transition: opacity 120ms ease, transform 120ms ease;
-}
+.ctx-menu-enter-from,
 .ctx-menu-leave-to {
   opacity: 0;
   transform: scale(0.96);
 }
+.ctx-menu-enter-active,
 .ctx-menu-leave-active {
-  transition: opacity 120ms ease, transform 120ms ease;
-}
-
-/* 暗色模式 */
-@media (prefers-color-scheme: dark) {
-  .context-menu {
-    --menu-bg: #2a2a3a;
-    --menu-border: #3a3a4a;
-  }
-  .ctx-item {
-    --text-primary: #f0f0f0;
-  }
-  .ctx-item:hover {
-    --menu-item-hover: #3a3a4a;
-  }
-  .ctx-item-danger {
-    --danger-fg: #ff6b6b;
-  }
-  .ctx-item-danger:hover {
-    --danger-bg-hover: #3a2020;
-  }
+  transition: opacity var(--ip-duration-fast) var(--ip-ease-out), transform var(--ip-duration-fast) var(--ip-ease-out);
 }
 </style>

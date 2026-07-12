@@ -185,15 +185,15 @@ function onRetry(): void {
 
 /* 用户气泡：深色背景 */
 .bubble-user .bubble-text {
-  background: var(--user-bubble-bg, #1a73e8);
-  color: var(--user-bubble-fg, #ffffff);
+  background: var(--ip-color-bg-user-bubble);
+  color: var(--ip-color-text-on-primary);
   border-bottom-right-radius: 4px;
 }
 
 /* 助手气泡：浅色 / 透明背景 */
 .bubble-assistant .bubble-text {
-  background: var(--assistant-bubble-bg, rgba(0, 0, 0, 0.04));
-  color: var(--text-primary, #1a1a1a);
+  background: var(--ip-color-bg-ai-bubble);
+  color: var(--ip-color-text-primary);
   border-bottom-left-radius: 4px;
 }
 
@@ -206,9 +206,9 @@ function onRetry(): void {
 }
 
 .bubble-system-text {
-  font-size: 12px;
-  color: var(--text-secondary, #888);
-  background: var(--system-bg, rgba(0, 0, 0, 0.04));
+  font-size: var(--ip-text-caption-size);
+  color: var(--ip-color-text-tertiary);
+  background: var(--ip-color-bg-tertiary);
   padding: 4px 12px;
   border-radius: 10px;
 }
@@ -255,11 +255,11 @@ function onRetry(): void {
   justify-content: space-between;
   gap: 8px;
   padding: 6px 12px;
-  font-size: 12px;
-  border: 1px solid var(--danger-border, #d93025);
-  border-radius: 6px;
-  background: var(--danger-bg-light, #fde8e8);
-  color: var(--danger-fg, #d93025);
+  font-size: var(--ip-text-caption-size);
+  border: 1px solid var(--ip-danger-border);
+  border-radius: var(--ip-radius-md);
+  background: var(--ip-danger-bg);
+  color: var(--ip-danger-text);
 }
 
 .error-text {
@@ -270,43 +270,17 @@ function onRetry(): void {
 .btn-retry {
   flex-shrink: 0;
   padding: 2px 10px;
-  font-size: 12px;
-  border: 1px solid var(--danger-border, #d93025);
-  border-radius: 4px;
+  font-size: var(--ip-text-caption-size);
+  border: 1px solid var(--ip-danger-border);
+  border-radius: var(--ip-radius-sm);
   background: transparent;
-  color: var(--danger-fg, #d93025);
+  color: var(--ip-danger-text);
   cursor: pointer;
   font-family: inherit;
-  transition: background 100ms ease;
+  transition: background-color var(--ip-duration-fast) var(--ip-ease-out);
 }
 
 .btn-retry:hover {
-  background: var(--danger-bg-hover, #fcd9d9);
-}
-
-/* 暗色模式 */
-@media (prefers-color-scheme: dark) {
-  .bubble-assistant .bubble-text {
-    --assistant-bubble-bg: rgba(255, 255, 255, 0.06);
-    --text-primary: #f0f0f0;
-  }
-  .bubble-user .bubble-text {
-    --user-bubble-bg: #1a73e8;
-    --user-bubble-fg: #ffffff;
-  }
-  .bubble-system-text {
-    --text-secondary: #888;
-    --system-bg: rgba(255, 255, 255, 0.06);
-  }
-  .bubble-error {
-    --danger-border: #c62828;
-    --danger-bg-light: #3a2020;
-    --danger-fg: #ff8a80;
-  }
-  .btn-retry {
-    --danger-border: #c62828;
-    --danger-fg: #ff8a80;
-    --danger-bg-hover: #4a2828;
-  }
+  background: var(--ip-danger-bg);
 }
 </style>
