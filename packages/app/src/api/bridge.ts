@@ -77,13 +77,19 @@ const agents = {
    * 注意：传空字符串视为「清空 key」。
    * 对应 Command：rotate_agent_api_key
    *
+   * Rust 侧入参是结构体 `RotateAgentKey { agent_id, api_key, base_url }`
+   * （无 `#[serde(rename_all)]`，因此需用 snake_case），所以这里走
+   * `{ input: { agent_id, api_key, base_url } }` 包装形式（与 agents.create 同形）。
+   *
    * @param agentId 目标 Agent ID
    * @param apiKey  新 api_key 明文（仅本次传输，Rust 侧会加密落 vault）
    * @param baseUrl 可选；同时更新 base_url
    */
   async rotateKey(agentId: string, apiKey: string, baseUrl?: string): Promise<void> {
     try {
-      await invoke<void>("rotate_agent_api_key", { agentId, apiKey, baseUrl });
+      await invoke<void>("rotate_agent_api_key", {
+        input: { agent_id: agentId, api_key: apiKey, base_url: baseUrl },
+      });
     } catch (err) {
       throw wrapInvokeError("agents.rotateKey", err);
     }
@@ -124,10 +130,16 @@ const conversations = {
    * 新建会话。
    * title 可选；不传时由 Rust 侧默认空串，后续可由首条消息自动补标题。
    * 对应 Command：create_conversation
+   *
+   * Rust 侧入参是结构体 `NewConversation { agent_id, title }`
+   * （无 `#[serde(rename_all)]`，因此需用 snake_case），所以这里走
+   * `{ input: { agent_id, title } }` 包装形式（与 agents.create 同形）。
    */
   async create(agentId: string, title?: string): Promise<Conversation> {
     try {
-      return await invoke<Conversation>("create_conversation", { agentId, title });
+      return await invoke<Conversation>("create_conversation", {
+        input: { agent_id: agentId, title },
+      });
     } catch (err) {
       throw wrapInvokeError("conversations.create", err);
     }
