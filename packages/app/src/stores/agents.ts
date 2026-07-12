@@ -6,7 +6,7 @@
 //   3. 提供 CRUD 操作的 actions，封装 bridge.agents.* 调用与本地状态同步
 //
 // 设计要点：
-//   - Composition API 风格（与 stores/ui.ts 一致）
+//   - Composition API 风格
 //   - state/getters/actions 严格遵循 §1.2 接口契约
 //   - 所有 invoke 通过 src/api/bridge.ts 的 bridge.agents 命名空间，禁止直接调用 Tauri invoke
 //   - 失败状态写入 error 字段，由上层 Toast 提示

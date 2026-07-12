@@ -91,6 +91,11 @@ export default [
     rules: {
       // IcePaw 采用单字组件名（如 Chat、Agent），关闭多字限制
       "vue/multi-word-component-names": "off",
+      // Vue template 规则
+      "vue/html-self-closing": ["error", { html: { void: "always", normal: "always", component: "always" } }],
+      "vue/max-attributes-per-line": "off",
+      "vue/attribute-hyphenation": ["error", "always"],
+      "vue/v-on-event-hyphenation": ["error", "always"],
       // 允许下划线前缀参数/变量视为已使用
       "@typescript-eslint/no-unused-vars": [
         "error",
