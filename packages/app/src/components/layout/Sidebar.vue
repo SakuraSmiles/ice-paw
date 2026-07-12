@@ -188,7 +188,8 @@ function onCancelRename(): void {
   flex-direction: column;
   height: 100%;
   width: 100%;
-  background: var(--ip-color-bg-primary);
+  /* 侧边栏与主区轻微分层：使用 secondary 作为底色 */
+  background: var(--ip-color-bg-secondary);
   border-right: 1px solid var(--ip-color-border-default);
   overflow: hidden;
 }
@@ -206,7 +207,7 @@ function onCancelRename(): void {
 
 .sidebar-bottom {
   flex: 0 0 auto;
-  padding: 10px 12px;
+  padding: var(--ip-spacing-3) var(--ip-spacing-3);
   border-top: 1px solid var(--ip-color-border-default);
 }
 </style>

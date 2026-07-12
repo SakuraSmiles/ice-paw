@@ -11,6 +11,7 @@
 
 import { ref, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
+import { ChevronDown, ArrowRight } from "lucide-vue-next";
 import { useAgentsStore } from "../../stores/agents";
 
 const agentsStore = useAgentsStore();
@@ -55,14 +56,24 @@ onUnmounted(() => {
 
 <template>
   <div class="agent-selector">
-    <button class="selector-trigger" type="button" @click.stop="toggle">
+    <button
+      :class="['selector-trigger', { 'selector-trigger-open': expanded }]"
+      type="button"
+      :aria-expanded="expanded"
+      aria-haspopup="listbox"
+      @click.stop="toggle"
+    >
       <span class="selector-label">Agent</span>
       <span class="selector-name">{{ agentsStore.current?.name ?? "未选择" }}</span>
-      <span :class="['selector-arrow', expanded ? 'arrow-up' : 'arrow-down']">v</span>
+      <ChevronDown
+        :size="14"
+        :class="['selector-arrow', { 'selector-arrow-open': expanded }]"
+        aria-hidden="true"
+      />
     </button>
 
     <Transition name="dropdown">
-      <div v-if="expanded" class="selector-dropdown" @click.stop>
+      <div v-if="expanded" class="selector-dropdown" role="listbox" @click.stop>
         <div v-if="agentsStore.agents.length === 0" class="dropdown-empty">暂无 Agent</div>
         <template v-else>
           <button
@@ -73,6 +84,8 @@ onUnmounted(() => {
               agentsStore.currentId === agent.id ? 'dropdown-item-active' : '',
             ]"
             type="button"
+            role="option"
+            :aria-selected="agentsStore.currentId === agent.id"
             @click="pick(agent.id)"
           >
             <span class="item-name">{{ agent.name }}</span>
@@ -81,7 +94,8 @@ onUnmounted(() => {
         </template>
         <div class="dropdown-divider" />
         <button class="dropdown-item dropdown-manage" type="button" @click="goToManager">
-          管理 Agent →
+          <span>管理 Agent</span>
+          <ArrowRight :size="14" aria-hidden="true" />
         </button>
       </div>
     </Transition>
@@ -91,26 +105,38 @@ onUnmounted(() => {
 <style scoped>
 .agent-selector {
   position: relative;
-  padding: 12px 14px;
+  padding: var(--ip-spacing-3);
   border-bottom: 1px solid var(--ip-color-border-default);
 }
 
 .selector-trigger {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--ip-spacing-2);
   width: 100%;
   padding: var(--ip-spacing-2) var(--ip-spacing-3);
-  background: var(--ip-color-bg-secondary);
+  background: var(--ip-color-bg-primary);
   border: 1px solid var(--ip-color-border-default);
   border-radius: var(--ip-radius-md);
   cursor: pointer;
   font-family: inherit;
   font-size: var(--ip-text-body-sm-size);
-  transition: background-color var(--ip-duration-immediate) var(--ip-ease-out), border-color var(--ip-duration-immediate) var(--ip-ease-out);
+  color: var(--ip-color-text-primary);
+  transition: var(--ip-transition-colors);
 }
 
 .selector-trigger:hover {
+  background: var(--ip-color-bg-tertiary);
+  border-color: var(--ip-color-border-strong);
+}
+
+.selector-trigger:focus-visible {
+  outline: none;
+  border-color: var(--ip-color-border-focus);
+  box-shadow: var(--ip-shadow-focus);
+}
+
+.selector-trigger-open {
   background: var(--ip-color-bg-tertiary);
   border-color: var(--ip-color-border-strong);
 }
@@ -132,25 +158,25 @@ onUnmounted(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .selector-arrow {
-  font-size: 10px;
-  color: var(--ip-color-text-tertiary);
   flex-shrink: 0;
-  font-family: var(--ip-font-mono);
-  transition: transform var(--ip-duration-fast) var(--ip-ease-out);
+  color: var(--ip-color-text-tertiary);
+  transition: transform var(--ip-duration-fast) var(--ip-ease-out), color var(--ip-duration-immediate) var(--ip-ease-out);
 }
 
-.arrow-up {
+.selector-arrow-open {
   transform: rotate(180deg);
+  color: var(--ip-color-text-secondary);
 }
 
 .selector-dropdown {
   position: absolute;
   top: calc(100% - 1px);
-  left: 14px;
-  right: 14px;
+  left: var(--ip-spacing-3);
+  right: var(--ip-spacing-3);
   z-index: var(--ip-z-dropdown);
   max-height: 320px;
   overflow-y: auto;
@@ -184,20 +210,37 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  transition: background-color var(--ip-duration-immediate) var(--ip-ease-out);
+  transition: var(--ip-transition-colors);
 }
 
 .dropdown-item:hover {
   background: var(--ip-color-bg-tertiary);
 }
 
+.dropdown-item:focus-visible {
+  outline: none;
+  background: var(--ip-color-bg-tertiary);
+  box-shadow: var(--ip-shadow-focus);
+}
+
+/* 选中态：亮色 primary-50 + primary-700；暗色 primary-900 + primary-100 */
 .dropdown-item-active {
   background: var(--ip-primary-50);
-  color: var(--ip-color-text-link);
+  color: var(--ip-primary-700);
 }
 
 .dropdown-item-active:hover {
   background: var(--ip-primary-100);
+}
+
+/* 暗色模式：祖先选择器 [data-theme="dark"] 不被 scope，class 选择器自动加上 data-v */
+[data-theme="dark"] .dropdown-item-active {
+  background: var(--ip-primary-900);
+  color: var(--ip-primary-100);
+}
+
+[data-theme="dark"] .dropdown-item-active:hover {
+  background: var(--ip-primary-800);
 }
 
 .item-name {
@@ -215,14 +258,30 @@ onUnmounted(() => {
   text-overflow: ellipsis;
 }
 
+.dropdown-item-active .item-meta {
+  color: var(--ip-primary-600);
+}
+
+[data-theme="dark"] .dropdown-item-active .item-meta {
+  color: var(--ip-primary-300);
+}
+
 .dropdown-divider {
   height: 1px;
-  margin: var(--ip-spacing-1) 6px;
+  margin: var(--ip-spacing-1) var(--ip-spacing-2);
   background: var(--ip-color-border-default);
 }
 
 .dropdown-manage {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
   font-weight: var(--ip-font-weight-medium);
+  color: var(--ip-color-text-link);
+}
+
+.dropdown-manage:hover {
+  background: var(--ip-color-bg-tertiary);
   color: var(--ip-color-text-link);
 }
 
@@ -234,6 +293,8 @@ onUnmounted(() => {
 }
 .dropdown-enter-active,
 .dropdown-leave-active {
-  transition: opacity var(--ip-duration-fast) var(--ip-ease-out), transform var(--ip-duration-fast) var(--ip-ease-out);
+  transition:
+    opacity var(--ip-duration-fast) var(--ip-ease-out),
+    transform var(--ip-duration-fast) var(--ip-ease-out);
 }
 </style>

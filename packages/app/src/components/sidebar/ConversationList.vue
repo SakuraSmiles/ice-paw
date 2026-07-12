@@ -16,6 +16,7 @@
 //   - cancelRename        重命名取消
 
 import { computed } from "vue";
+import { MessageSquare, Pin } from "lucide-vue-next";
 import { useConversationsStore } from "../../stores/conversations";
 import { useAgentsStore } from "../../stores/agents";
 import type { Conversation } from "../../types";
@@ -76,14 +77,20 @@ const emit = defineEmits<{
   <div class="conv-list">
     <!-- 空状态 -->
     <div v-if="isEmpty" class="empty-hint">
-      <span>暂无会话</span>
+      <MessageSquare :size="20" class="empty-hint-icon" aria-hidden="true" />
+      <span class="empty-hint-text">暂无会话</span>
+      <span class="empty-hint-hint">点击下方按钮开始新对话</span>
     </div>
 
     <!-- 有数据 -->
     <template v-else>
       <!-- 已置顶分组 -->
       <template v-if="pinnedList.length > 0">
-        <div class="group-label">已置顶</div>
+        <div class="group-label">
+          <Pin :size="12" class="group-label-icon" aria-hidden="true" />
+          <span>已置顶</span>
+          <span class="group-label-count">{{ pinnedList.length }}</span>
+        </div>
         <ConversationItem
           v-for="conv in pinnedList"
           :key="conv.id"
@@ -98,18 +105,24 @@ const emit = defineEmits<{
         />
       </template>
       <!-- 未置顶列表 -->
-      <ConversationItem
-        v-for="conv in unpinnedList"
-        :key="conv.id"
-        :conv="conv"
-        :active="conversationsStore.currentId === conv.id"
-        :renaming="conversationsStore.renamingId === conv.id"
-        @select="onSelect"
-        @contextmenu="onContextmenu"
-        @request-rename="onRequestRename"
-        @commit-rename="onCommitRename"
-        @cancel-rename="onCancelRename"
-      />
+      <template v-if="unpinnedList.length > 0">
+        <div v-if="pinnedList.length > 0" class="group-label">
+          <span>所有会话</span>
+          <span class="group-label-count">{{ unpinnedList.length }}</span>
+        </div>
+        <ConversationItem
+          v-for="conv in unpinnedList"
+          :key="conv.id"
+          :conv="conv"
+          :active="conversationsStore.currentId === conv.id"
+          :renaming="conversationsStore.renamingId === conv.id"
+          @select="onSelect"
+          @contextmenu="onContextmenu"
+          @request-rename="onRequestRename"
+          @commit-rename="onCommitRename"
+          @cancel-rename="onCancelRename"
+        />
+      </template>
     </template>
   </div>
 </template>
@@ -118,7 +131,7 @@ const emit = defineEmits<{
 .conv-list {
   display: flex;
   flex-direction: column;
-  padding: 6px;
+  padding: var(--ip-spacing-1);
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -126,21 +139,60 @@ const emit = defineEmits<{
 
 .empty-hint {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: var(--ip-spacing-2);
   padding: var(--ip-spacing-8) var(--ip-spacing-4);
-  font-size: var(--ip-text-body-sm-size);
-  color: var(--ip-color-text-tertiary);
   user-select: none;
 }
 
+.empty-hint-icon {
+  color: var(--ip-color-text-tertiary);
+  opacity: 0.6;
+}
+
+.empty-hint-text {
+  font-size: var(--ip-text-body-sm-size);
+  font-weight: var(--ip-font-weight-medium);
+  color: var(--ip-color-text-secondary);
+}
+
+.empty-hint-hint {
+  font-size: var(--ip-text-caption-size);
+  color: var(--ip-color-text-tertiary);
+}
+
 .group-label {
+  display: flex;
+  align-items: center;
+  gap: var(--ip-spacing-2);
   font-size: 10px;
   font-weight: var(--ip-font-weight-semibold);
   color: var(--ip-color-text-tertiary);
-  padding: 12px 14px var(--ip-spacing-1);
+  padding: var(--ip-spacing-3) var(--ip-spacing-3) var(--ip-spacing-1);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   user-select: none;
+}
+
+.group-label-icon {
+  color: var(--ip-color-text-tertiary);
+}
+
+.group-label-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 var(--ip-spacing-1);
+  font-size: 10px;
+  font-weight: var(--ip-font-weight-medium);
+  color: var(--ip-color-text-tertiary);
+  background: var(--ip-color-bg-tertiary);
+  border-radius: var(--ip-radius-full);
+  letter-spacing: 0;
+  text-transform: none;
 }
 </style>

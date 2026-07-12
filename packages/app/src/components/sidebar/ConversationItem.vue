@@ -19,6 +19,7 @@
 //   - commitRename(title) 重命名提交
 //   - cancelRename        重命名取消
 
+import { Pin, MoreHorizontal } from "lucide-vue-next";
 import type { Conversation } from "../../types";
 import InlineRename from "./InlineRename.vue";
 
@@ -111,8 +112,19 @@ function onCancelRename(): void {
         @cancel="onCancelRename"
       />
       <div v-else class="conv-title-row">
-        <span v-if="conv.pinned" class="conv-pin" title="已置顶">置顶</span>
+        <Pin
+          v-if="conv.pinned"
+          :size="12"
+          class="conv-pin"
+          :fill="active ? 'currentColor' : 'none'"
+          aria-label="已置顶"
+        />
         <span class="conv-title">{{ conv.title || "新会话" }}</span>
+        <MoreHorizontal
+          :size="14"
+          class="conv-more"
+          aria-hidden="true"
+        />
       </div>
       <div class="conv-time">{{ formatRelative(conv.updated_at) }}</div>
     </div>
@@ -121,10 +133,11 @@ function onCancelRename(): void {
 
 <style scoped>
 .conv-item {
-  padding: 10px 14px;
-  border-radius: 6px;
+  position: relative;
+  padding: var(--ip-spacing-2) var(--ip-spacing-3);
+  border-radius: var(--ip-radius-md);
   cursor: pointer;
-  transition: background 80ms ease;
+  transition: var(--ip-transition-colors);
   user-select: none;
 }
 
@@ -132,18 +145,34 @@ function onCancelRename(): void {
   background: var(--ip-color-bg-tertiary);
 }
 
+/* 选中态：亮色 primary-50 + primary-700；暗色 primary-900 + primary-100 */
 .conv-item-active {
   background: var(--ip-primary-50);
+  color: var(--ip-primary-700);
 }
 
 .conv-item-active:hover {
   background: var(--ip-primary-100);
 }
 
+/* 暗色模式：Vue scoped 编译时只会给最后一个 class 加 data-v，data-theme 祖先保持原样 */
+[data-theme="dark"] .conv-item-active {
+  background: var(--ip-primary-900);
+  color: var(--ip-primary-100);
+}
+
+[data-theme="dark"] .conv-item-active:hover {
+  background: var(--ip-primary-800);
+}
+
 /* 重命名态下：禁用 hover 变化，提示正在编辑 */
 .conv-item-renaming {
   cursor: text;
   background: var(--ip-primary-50);
+}
+
+[data-theme="dark"] .conv-item-renaming {
+  background: var(--ip-primary-900);
 }
 
 .conv-content {
@@ -156,19 +185,23 @@ function onCancelRename(): void {
 .conv-title-row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--ip-spacing-1);
   min-width: 0;
 }
 
 .conv-pin {
-  font-size: 10px;
-  font-weight: var(--ip-font-weight-semibold);
-  padding: 1px 5px;
-  border-radius: 3px;
-  background: var(--ip-warning-bg);
-  color: var(--ip-warning-text);
   flex-shrink: 0;
-  letter-spacing: 0.02em;
+  color: var(--ip-warning-text);
+  /* 选中态跟随主文字色 */
+  transition: color var(--ip-duration-immediate) var(--ip-ease-out);
+}
+
+.conv-item-active .conv-pin {
+  color: var(--ip-primary-700);
+}
+
+[data-theme="dark"] .conv-item-active .conv-pin {
+  color: var(--ip-primary-100);
 }
 
 .conv-title {
@@ -182,9 +215,47 @@ function onCancelRename(): void {
   min-width: 0;
 }
 
+.conv-item-active .conv-title {
+  color: var(--ip-primary-700);
+}
+
+[data-theme="dark"] .conv-item-active .conv-title {
+  color: var(--ip-primary-100);
+}
+
+.conv-more {
+  flex-shrink: 0;
+  color: var(--ip-color-text-tertiary);
+  opacity: 0;
+  transition: opacity var(--ip-duration-immediate) var(--ip-ease-out);
+}
+
+.conv-item:hover .conv-more,
+.conv-item:focus-within .conv-more {
+  opacity: 1;
+}
+
+.conv-item-active .conv-more {
+  color: var(--ip-primary-700);
+  opacity: 0.7;
+}
+
+[data-theme="dark"] .conv-item-active .conv-more {
+  color: var(--ip-primary-100);
+}
+
 .conv-time {
-  font-size: 11px;
+  font-size: var(--ip-text-caption-size);
   color: var(--ip-color-text-tertiary);
   user-select: none;
+}
+
+.conv-item-active .conv-time {
+  color: var(--ip-primary-600);
+  opacity: 0.85;
+}
+
+[data-theme="dark"] .conv-item-active .conv-time {
+  color: var(--ip-primary-300);
 }
 </style>
