@@ -30,12 +30,15 @@ pub struct AgentRow {
 
 /// 前端可见的 `Agent`（不含敏感引用）
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Agent {
     pub id: String,
     pub name: String,
     pub provider: String,
     pub model: String,
     pub system_prompt: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
     pub temperature: f64,
     pub max_tokens: i32,
     pub extra_params: serde_json::Value,
@@ -43,7 +46,6 @@ pub struct Agent {
     pub created_at: String,
     pub updated_at: String,
     /// 是否已配置 API Key（前端业务提示用），对应 stronghold 中是否存在
-    #[serde(rename = "hasApiKey")]
     pub has_api_key: bool,
 }
 
@@ -59,6 +61,7 @@ impl From<AgentRow> for Agent {
             provider: row.provider,
             model: row.model,
             system_prompt: row.system_prompt,
+            base_url: row.base_url,
             temperature: row.temperature,
             max_tokens: row.max_tokens,
             extra_params: extra,
@@ -96,12 +99,15 @@ fn default_max_tokens() -> i32 { 4096 }
 
 /// 更新 agent 入参（partial update）
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentUpdate {
     pub id: String,
     pub name: Option<String>,
     pub provider: Option<String>,
     pub model: Option<String>,
     pub system_prompt: Option<String>,
+    /// 双层 Option：外层 Some 表示调用方传了该字段，内层 None 表示清空
+    pub base_url: Option<Option<String>>,
     pub temperature: Option<f64>,
     pub max_tokens: Option<i32>,
     pub extra_params: Option<serde_json::Value>,
