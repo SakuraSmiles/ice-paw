@@ -9,9 +9,11 @@
 //   - 错误态：红色边框 + 错误文本 + 「重试」按钮（仅助手；重试功能 P1，目前仅占位）
 //
 // props:
-//   - message:     Message 实体
-//   - isStreaming: 是否为正在流式生成的那条（用于显示光标）
-//   - prevRole:    上一条消息的角色（用于跨 agent 间距；null 表示这是首条）
+//   - message:        Message 实体
+//   - isStreaming:    是否为正在流式生成的那条（用于显示光标）
+//   - renderMarkdown: 是否渲染 Markdown。流式中传 false 走纯文本路径以减轻性能压力；
+//                     流式结束后由父组件切到 true，触发完整 Markdown 渲染。
+//   - prevRole:       上一条消息的角色（用于跨 agent 间距；null 表示这是首条）
 //
 // emits:
 //   - retry: 点击重试按钮时触发
@@ -23,6 +25,13 @@ import MarkdownContent from "./MarkdownContent.vue";
 const props = defineProps<{
   message: Message;
   isStreaming: boolean;
+  /**
+   * 是否渲染 Markdown。
+   * - 流式中（message.id === streamingId）传 false：直接展示原文 + 光标，
+   *   跳过 markdown-it 解析 + highlight.js 高亮，避免每个 chunk 都跑一次完整渲染。
+   * - 流式结束后传 true：切到 MarkdownContent 渲染完整 Markdown。
+   */
+  renderMarkdown: boolean;
   /** 上一条消息的角色；null 表示这是列表里的第一条 */
   prevRole?: MessageRole | null;
 }>();
@@ -63,7 +72,17 @@ function onRetry(): void {
 </script>
 
 <template>
+  <!--
+    列表级 v-memo（作用在外层 bubble-row）：
+      - 依赖项：message.content / message.role / renderMarkdown。
+      - 历史消息稳定 → deps 不变 → Vue 跳过整个子树 patch，
+        避免列表被 stream 增量刷新时把整列历史气泡也连带 patch 一次。
+      - 流式中：deps 每 chunk 都变（content 递增），v-memo 正确触发更新，
+        不会卡死。配合 MessageList 流式期间不传 renderMarkdown=true，
+        单 chunk 成本仅 1 个文本节点 + v-memo 短路检查。
+  -->
   <div
+    v-memo="[message.content, message.role, renderMarkdown]"
     :class="['bubble-row', `bubble-row-${message.role}`]"
     :style="{ marginTop }"
   >
@@ -72,7 +91,7 @@ function onRetry(): void {
       <span class="bubble-system-text">{{ message.content }}</span>
     </div>
 
-    <!-- 用户消息：右侧气泡，纯文本 -->
+    <!-- 用户消息：右侧气泡，纯文本（保持原始换行与空格） -->
     <div v-else-if="isUser" class="bubble-user">
       <div class="bubble-content">
         <div class="bubble-text">
@@ -84,14 +103,25 @@ function onRetry(): void {
       </div>
     </div>
 
-    <!-- 助手消息：左侧气泡，Markdown 渲染 -->
+    <!--
+      助手消息：左侧气泡。
+      流式渲染策略：
+        - 流式中（renderMarkdown=false）→ 直接渲染纯文本 + 光标，跳过 markdown-it
+        - 流式结束（renderMarkdown=true） → 切到 MarkdownContent 完整渲染
+      切换由父组件控制：流式开始传 false，每 chunk 期间保持 false；
+      流式完成（chat:done）那一刻翻转成 true，触发 MarkdownContent 接管。
+    -->
     <div v-else class="bubble-assistant">
       <div class="bubble-content">
         <div
           class="bubble-text"
           :class="{ 'bubble-text-streaming': showCursor }"
         >
-          <MarkdownContent :content="message.content" />
+          <MarkdownContent
+            v-if="renderMarkdown"
+            :content="message.content"
+          />
+          <div v-else class="bubble-text-content">{{ message.content }}</div>
         </div>
         <div v-if="message.error" class="bubble-error">
           <span class="error-text">{{ message.error }}</span>
