@@ -210,35 +210,35 @@ async function handleFormSubmit(payload: AgentFormPayload): Promise<void> {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 24px;
+  margin-bottom: var(--ip-spacing-6);
 }
 
 .page-title {
   margin: 0;
-  font-size: 20px;
-  font-weight: 600;
-  color: var(--text-primary, #1a1a1a);
+  font-size: var(--ip-text-h2-size);
+  font-weight: var(--ip-font-weight-semibold);
+  color: var(--ip-color-text-primary);
 }
 
 .btn-add {
-  padding: 8px 18px;
-  font-size: 14px;
-  font-weight: 500;
+  padding: var(--ip-btn-py-md) 18px;
+  font-size: var(--ip-btn-fs-md);
+  font-weight: var(--ip-font-weight-medium);
   border: none;
-  border-radius: 6px;
-  background: var(--accent-bg, #1a73e8);
-  color: #fff;
+  border-radius: var(--ip-btn-radius);
+  background: var(--ip-primary-500);
+  color: var(--ip-color-text-on-primary);
   cursor: pointer;
-  transition: background 100ms ease;
+  transition: background-color var(--ip-duration-fast) var(--ip-ease-out);
 }
 .btn-add:hover {
-  background: var(--accent-bg-hover, #1557b0);
+  background: var(--ip-primary-600);
 }
 
 .agent-list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--ip-spacing-3);
 }
 
 .loading-hint {
@@ -246,22 +246,6 @@ async function handleFormSubmit(payload: AgentFormPayload): Promise<void> {
   align-items: center;
   justify-content: center;
   padding: 48px;
-  color: var(--text-secondary, #888);
-}
-
-/* 暗色模式 */
-@media (prefers-color-scheme: dark) {
-  .page-title {
-    --text-primary: #f0f0f0;
-  }
-  .btn-add {
-    --accent-bg: #4a90e2;
-  }
-  .btn-add:hover {
-    --accent-bg-hover: #357abd;
-  }
-  .loading-hint {
-    --text-secondary: #888;
-  }
+  color: var(--ip-color-text-tertiary);
 }
 </style>

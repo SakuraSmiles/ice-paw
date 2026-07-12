@@ -85,8 +85,8 @@ function onChatSelect(_conversationId: string | null): void {
 .app-sidebar {
   width: 260px;
   flex-shrink: 0;
-  border-right: 1px solid var(--border, #e0e0e0);
-  background: var(--sidebar-bg, #fafafa);
+  border-right: 1px solid var(--ip-color-border-default);
+  background: var(--ip-color-bg-primary);
   height: 100%;
 }
 
@@ -95,12 +95,5 @@ function onChatSelect(_conversationId: string | null): void {
   overflow: auto;
   min-width: 0;
   height: 100%;
-}
-
-@media (prefers-color-scheme: dark) {
-  .app-sidebar {
-    --border: #2a2a3a;
-    --sidebar-bg: #1a1a2e;
-  }
 }
 </style>

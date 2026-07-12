@@ -128,26 +128,19 @@ const emit = defineEmits<{
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 32px 16px;
-  font-size: 13px;
-  color: var(--text-secondary, #888);
+  padding: var(--ip-spacing-8) var(--ip-spacing-4);
+  font-size: var(--ip-text-body-sm-size);
+  color: var(--ip-color-text-tertiary);
   user-select: none;
 }
 
 .group-label {
   font-size: 10px;
-  font-weight: 600;
-  color: var(--text-secondary, #888);
-  padding: 12px 14px 4px;
+  font-weight: var(--ip-font-weight-semibold);
+  color: var(--ip-color-text-tertiary);
+  padding: 12px 14px var(--ip-spacing-1);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   user-select: none;
-}
-
-@media (prefers-color-scheme: dark) {
-  .empty-hint,
-  .group-label {
-    --text-secondary: #888;
-  }
 }
 </style>

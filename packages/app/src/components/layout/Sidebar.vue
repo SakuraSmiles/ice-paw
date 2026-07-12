@@ -188,8 +188,8 @@ function onCancelRename(): void {
   flex-direction: column;
   height: 100%;
   width: 100%;
-  background: var(--sidebar-bg, #fafafa);
-  border-right: 1px solid var(--border, #e0e0e0);
+  background: var(--ip-color-bg-primary);
+  border-right: 1px solid var(--ip-color-border-default);
   overflow: hidden;
 }
 
@@ -207,13 +207,6 @@ function onCancelRename(): void {
 .sidebar-bottom {
   flex: 0 0 auto;
   padding: 10px 12px;
-  border-top: 1px solid var(--border, #e0e0e0);
-}
-
-@media (prefers-color-scheme: dark) {
-  .sidebar {
-    --sidebar-bg: #1a1a2e;
-    --border: #2a2a3a;
-  }
+  border-top: 1px solid var(--ip-color-border-default);
 }
 </style>

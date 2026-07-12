@@ -26,9 +26,9 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 48px 24px;
+  padding: 48px var(--ip-spacing-6);
   text-align: center;
-  background: var(--chat-bg, #fafafa);
+  background: var(--ip-color-bg-primary);
 }
 
 .hint-icon {
@@ -37,47 +37,29 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 50%;
-  background: var(--hint-icon-bg, rgba(26, 115, 232, 0.08));
-  margin-bottom: 16px;
+  border-radius: var(--ip-radius-full);
+  background: var(--ip-primary-50);
+  margin-bottom: var(--ip-spacing-4);
 }
 
 .hint-icon-text {
   font-size: 28px;
-  color: var(--accent-fg, #1a73e8);
+  color: var(--ip-primary-500);
   font-weight: 300;
 }
 
 .hint-title {
-  margin: 0 0 8px;
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--text-primary, #1a1a1a);
+  margin: 0 0 var(--ip-spacing-2);
+  font-size: var(--ip-text-body-lg-size);
+  font-weight: var(--ip-font-weight-semibold);
+  color: var(--ip-color-text-primary);
 }
 
 .hint-desc {
   margin: 0;
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--text-secondary, #888);
+  font-size: var(--ip-text-body-sm-size);
+  line-height: var(--ip-line-height-loose);
+  color: var(--ip-color-text-tertiary);
   max-width: 320px;
-}
-
-@media (prefers-color-scheme: dark) {
-  .empty-chat-hint {
-    --chat-bg: #181828;
-  }
-  .hint-icon {
-    --hint-icon-bg: rgba(74, 144, 226, 0.16);
-  }
-  .hint-icon-text {
-    --accent-fg: #6ba9e8;
-  }
-  .hint-title {
-    --text-primary: #f0f0f0;
-  }
-  .hint-desc {
-    --text-secondary: #888;
-  }
 }
 </style>

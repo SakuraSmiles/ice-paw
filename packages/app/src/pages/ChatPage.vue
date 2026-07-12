@@ -166,7 +166,7 @@ function onRetry(_msg: import("../types").Message): void {
   flex-direction: column;
   height: 100%;
   width: 100%;
-  background: var(--chat-page-bg, #fafafa);
+  background: var(--ip-color-bg-secondary);
   overflow: hidden;
 }
 
@@ -175,30 +175,30 @@ function onRetry(_msg: import("../types").Message): void {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 48px 24px;
+  padding: 48px var(--ip-spacing-6);
 }
 
 .no-conv-card {
   max-width: 420px;
   text-align: center;
-  padding: 32px 24px;
-  border: 1px dashed var(--border, #d0d0d0);
-  border-radius: 10px;
-  background: var(--card-bg, #ffffff);
+  padding: var(--ip-spacing-8) var(--ip-spacing-6);
+  border: 1px dashed var(--ip-color-border-default);
+  border-radius: var(--ip-radius-xl);
+  background: var(--ip-color-bg-elevated);
 }
 
 .no-conv-title {
-  margin: 0 0 8px;
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--text-primary, #1a1a1a);
+  margin: 0 0 var(--ip-spacing-2);
+  font-size: var(--ip-text-body-lg-size);
+  font-weight: var(--ip-font-weight-semibold);
+  color: var(--ip-color-text-primary);
 }
 
 .no-conv-desc {
   margin: 0;
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--text-secondary, #888);
+  font-size: var(--ip-text-body-sm-size);
+  line-height: var(--ip-line-height-loose);
+  color: var(--ip-color-text-tertiary);
 }
 
 .empty-overlay-wrap {
@@ -211,22 +211,5 @@ function onRetry(_msg: import("../types").Message): void {
 .empty-overlay-wrap > * {
   flex: 1;
   pointer-events: auto;
-}
-
-/* 暗色模式 */
-@media (prefers-color-scheme: dark) {
-  .chat-page {
-    --chat-page-bg: #181828;
-  }
-  .no-conv-card {
-    --card-bg: #1e1e2e;
-    --border: #3a3a4a;
-  }
-  .no-conv-title {
-    --text-primary: #f0f0f0;
-  }
-  .no-conv-desc {
-    --text-secondary: #888;
-  }
 }
 </style>

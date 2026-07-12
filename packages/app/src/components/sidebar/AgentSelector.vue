@@ -92,7 +92,7 @@ onUnmounted(() => {
 .agent-selector {
   position: relative;
   padding: 12px 14px;
-  border-bottom: 1px solid var(--border, #e0e0e0);
+  border-bottom: 1px solid var(--ip-color-border-default);
 }
 
 .selector-trigger {
@@ -100,34 +100,34 @@ onUnmounted(() => {
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 8px 10px;
-  background: var(--selector-bg, #f5f5f5);
-  border: 1px solid var(--selector-border, #e0e0e0);
-  border-radius: 6px;
+  padding: var(--ip-spacing-2) var(--ip-spacing-3);
+  background: var(--ip-color-bg-secondary);
+  border: 1px solid var(--ip-color-border-default);
+  border-radius: var(--ip-radius-md);
   cursor: pointer;
   font-family: inherit;
-  font-size: 13px;
-  transition: background 80ms ease, border-color 80ms ease;
+  font-size: var(--ip-text-body-sm-size);
+  transition: background-color var(--ip-duration-immediate) var(--ip-ease-out), border-color var(--ip-duration-immediate) var(--ip-ease-out);
 }
 
 .selector-trigger:hover {
-  background: var(--selector-bg-hover, #ebebeb);
-  border-color: var(--selector-border-hover, #c0c0c0);
+  background: var(--ip-color-bg-tertiary);
+  border-color: var(--ip-color-border-strong);
 }
 
 .selector-label {
   font-size: 10px;
-  font-weight: 600;
+  font-weight: var(--ip-font-weight-semibold);
   text-transform: uppercase;
-  color: var(--text-secondary, #888);
+  color: var(--ip-color-text-tertiary);
   letter-spacing: 0.05em;
   flex-shrink: 0;
 }
 
 .selector-name {
   flex: 1;
-  font-weight: 600;
-  color: var(--text-primary, #1a1a1a);
+  font-weight: var(--ip-font-weight-semibold);
+  color: var(--ip-color-text-primary);
   text-align: left;
   white-space: nowrap;
   overflow: hidden;
@@ -136,10 +136,10 @@ onUnmounted(() => {
 
 .selector-arrow {
   font-size: 10px;
-  color: var(--text-secondary, #888);
+  color: var(--ip-color-text-tertiary);
   flex-shrink: 0;
-  font-family: monospace;
-  transition: transform 120ms ease;
+  font-family: var(--ip-font-mono);
+  transition: transform var(--ip-duration-fast) var(--ip-ease-out);
 }
 
 .arrow-up {
@@ -151,23 +151,23 @@ onUnmounted(() => {
   top: calc(100% - 1px);
   left: 14px;
   right: 14px;
-  z-index: 50;
+  z-index: var(--ip-z-dropdown);
   max-height: 320px;
   overflow-y: auto;
-  background: var(--menu-bg, #ffffff);
-  border: 1px solid var(--menu-border, #d0d0d0);
-  border-radius: 6px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
-  padding: 4px;
+  background: var(--ip-color-bg-elevated);
+  border: 1px solid var(--ip-color-border-default);
+  border-radius: var(--ip-radius-md);
+  box-shadow: var(--ip-shadow-lg);
+  padding: var(--ip-spacing-1);
   display: flex;
   flex-direction: column;
 }
 
 .dropdown-empty {
-  padding: 16px;
+  padding: var(--ip-spacing-4);
   text-align: center;
-  font-size: 13px;
-  color: var(--text-secondary, #888);
+  font-size: var(--ip-text-body-sm-size);
+  color: var(--ip-color-text-tertiary);
 }
 
 .dropdown-item {
@@ -175,33 +175,33 @@ onUnmounted(() => {
   border: none;
   background: transparent;
   text-align: left;
-  padding: 8px 12px;
-  border-radius: 4px;
+  padding: var(--ip-spacing-2) var(--ip-spacing-3);
+  border-radius: var(--ip-radius-sm);
   cursor: pointer;
   font-family: inherit;
-  font-size: 13px;
-  color: var(--text-primary, #1a1a1a);
+  font-size: var(--ip-text-body-sm-size);
+  color: var(--ip-color-text-primary);
   display: flex;
   flex-direction: column;
   gap: 2px;
-  transition: background 80ms ease;
+  transition: background-color var(--ip-duration-immediate) var(--ip-ease-out);
 }
 
 .dropdown-item:hover {
-  background: var(--menu-item-hover, #f0f0f0);
+  background: var(--ip-color-bg-tertiary);
 }
 
 .dropdown-item-active {
-  background: var(--menu-item-active, rgba(26, 115, 232, 0.1));
-  color: var(--accent-fg, #1a73e8);
+  background: var(--ip-primary-50);
+  color: var(--ip-color-text-link);
 }
 
 .dropdown-item-active:hover {
-  background: var(--menu-item-active-hover, rgba(26, 115, 232, 0.16));
+  background: var(--ip-primary-100);
 }
 
 .item-name {
-  font-weight: 500;
+  font-weight: var(--ip-font-weight-medium);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -209,7 +209,7 @@ onUnmounted(() => {
 
 .item-meta {
   font-size: 11px;
-  color: var(--text-secondary, #888);
+  color: var(--ip-color-text-tertiary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -217,71 +217,23 @@ onUnmounted(() => {
 
 .dropdown-divider {
   height: 1px;
-  margin: 4px 6px;
-  background: var(--divider, #e0e0e0);
+  margin: var(--ip-spacing-1) 6px;
+  background: var(--ip-color-border-default);
 }
 
 .dropdown-manage {
-  font-weight: 500;
-  color: var(--accent-fg, #1a73e8);
+  font-weight: var(--ip-font-weight-medium);
+  color: var(--ip-color-text-link);
 }
 
 /* 下拉动画 */
-.dropdown-enter-from {
-  opacity: 0;
-  transform: translateY(-4px);
-}
-.dropdown-enter-active {
-  transition: opacity 120ms ease, transform 120ms ease;
-}
+.dropdown-enter-from,
 .dropdown-leave-to {
   opacity: 0;
   transform: translateY(-4px);
 }
+.dropdown-enter-active,
 .dropdown-leave-active {
-  transition: opacity 120ms ease, transform 120ms ease;
-}
-
-/* 暗色模式 */
-@media (prefers-color-scheme: dark) {
-  .agent-selector {
-    --border: #3a3a4a;
-  }
-  .selector-trigger {
-    --selector-bg: #2a2a3a;
-    --selector-border: #3a3a4a;
-    --selector-bg-hover: #353548;
-    --selector-border-hover: #4a4a5a;
-  }
-  .selector-label,
-  .selector-arrow,
-  .dropdown-empty,
-  .item-meta {
-    --text-secondary: #888;
-  }
-  .selector-name,
-  .dropdown-item {
-    --text-primary: #f0f0f0;
-  }
-  .selector-dropdown {
-    --menu-bg: #2a2a3a;
-    --menu-border: #3a3a4a;
-  }
-  .dropdown-item:hover {
-    --menu-item-hover: #3a3a4a;
-  }
-  .dropdown-item-active {
-    --menu-item-active: rgba(74, 144, 226, 0.2);
-    --accent-fg: #6ba9e8;
-  }
-  .dropdown-item-active:hover {
-    --menu-item-active-hover: rgba(74, 144, 226, 0.32);
-  }
-  .dropdown-divider {
-    --divider: #3a3a4a;
-  }
-  .dropdown-manage {
-    --accent-fg: #6ba9e8;
-  }
+  transition: opacity var(--ip-duration-fast) var(--ip-ease-out), transform var(--ip-duration-fast) var(--ip-ease-out);
 }
 </style>

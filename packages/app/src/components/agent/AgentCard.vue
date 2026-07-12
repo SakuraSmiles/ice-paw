@@ -68,14 +68,14 @@ function formatDate(iso: string): string {
   justify-content: space-between;
   gap: 12px;
   padding: 14px 18px;
-  background: var(--card-bg, #ffffff);
-  border: 1px solid var(--card-border, #e0e0e0);
-  border-radius: 8px;
-  transition: box-shadow 120ms ease, border-color 120ms ease;
+  background: var(--ip-color-bg-secondary);
+  border: 1px solid var(--ip-color-border-default);
+  border-radius: var(--ip-radius-lg);
+  transition: box-shadow var(--ip-duration-fast) var(--ip-ease-out), border-color var(--ip-duration-fast) var(--ip-ease-out);
 }
 .agent-card:hover {
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
-  border-color: var(--card-border-hover, #c0c0c0);
+  box-shadow: var(--ip-shadow-sm);
+  border-color: var(--ip-color-border-strong);
 }
 
 .agent-card-body {
@@ -84,9 +84,9 @@ function formatDate(iso: string): string {
 }
 
 .agent-name {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--text-primary, #1a1a1a);
+  font-size: var(--ip-text-body-size);
+  font-weight: var(--ip-font-weight-semibold);
+  color: var(--ip-color-text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -94,82 +94,50 @@ function formatDate(iso: string): string {
 
 .agent-meta {
   display: flex;
-  gap: 8px;
+  gap: var(--ip-spacing-2);
   margin-top: 6px;
 }
 
 .agent-tag {
   display: inline-block;
-  padding: 2px 8px;
-  font-size: 12px;
-  border-radius: 4px;
-  background: var(--tag-bg, #f0f0f0);
-  color: var(--tag-fg, #555);
+  padding: 2px var(--ip-spacing-2);
+  font-size: var(--ip-text-caption-size);
+  border-radius: var(--ip-radius-sm);
+  background: var(--ip-color-bg-tertiary);
+  color: var(--ip-gray-600);
 }
 
 .agent-time {
-  margin-top: 4px;
-  font-size: 12px;
-  color: var(--text-secondary, #888);
+  margin-top: var(--ip-spacing-1);
+  font-size: var(--ip-text-caption-size);
+  color: var(--ip-color-text-tertiary);
 }
 
 .agent-card-actions {
   display: flex;
-  gap: 8px;
+  gap: var(--ip-spacing-2);
   flex-shrink: 0;
 }
 
 .btn-action {
-  padding: 4px 12px;
-  font-size: 13px;
-  border: 1px solid var(--btn-border, #d0d0d0);
-  border-radius: 4px;
-  background: var(--btn-bg, #fafafa);
-  color: var(--text-secondary, #555);
+  padding: var(--ip-spacing-1) var(--ip-spacing-3);
+  font-size: var(--ip-text-body-sm-size);
+  border: 1px solid var(--ip-color-border-default);
+  border-radius: var(--ip-radius-sm);
+  background: var(--ip-color-bg-primary);
+  color: var(--ip-gray-600);
   cursor: pointer;
-  transition: background 100ms ease, border-color 100ms ease;
+  transition: background-color var(--ip-duration-fast) var(--ip-ease-out), border-color var(--ip-duration-fast) var(--ip-ease-out);
 }
 .btn-action:hover {
-  background: var(--btn-bg-hover, #f0f0f0);
+  background: var(--ip-color-bg-tertiary);
 }
 
 .btn-delete {
-  color: var(--danger-fg, #d93025);
-  border-color: var(--danger-border, #f5c6cb);
+  color: var(--ip-danger-base);
+  border-color: var(--ip-danger-border);
 }
 .btn-delete:hover {
-  background: var(--danger-bg-hover, #fde8e8);
-}
-
-/* 暗色模式 */
-@media (prefers-color-scheme: dark) {
-  .agent-card {
-    --card-bg: #2a2a3a;
-    --card-border: #3a3a4a;
-    --card-border-hover: #5a5a6a;
-  }
-  .agent-name {
-    --text-primary: #f0f0f0;
-  }
-  .agent-tag {
-    --tag-bg: #3a3a4a;
-    --tag-fg: #bbb;
-  }
-  .agent-time {
-    --text-secondary: #888;
-  }
-  .btn-action {
-    --btn-bg: #3a3a4a;
-    --btn-border: #4a4a5a;
-    --btn-bg-hover: #4a4a5a;
-    --text-secondary: #ccc;
-  }
-  .btn-delete {
-    --danger-fg: #ff6b6b;
-    --danger-border: #5a2a2a;
-  }
-  .btn-delete:hover {
-    --danger-bg-hover: #3a2020;
-  }
+  background: var(--ip-danger-bg);
 }
 </style>

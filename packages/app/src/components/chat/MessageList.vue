@@ -183,7 +183,7 @@ function shouldRenderMarkdown(msg: Message): boolean {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  background: var(--chat-bg, #fafafa);
+  background: var(--ip-color-bg-secondary);
   scroll-behavior: smooth;
 }
 
@@ -193,12 +193,5 @@ function shouldRenderMarkdown(msg: Message): boolean {
   padding: 16px 0 24px;
   min-height: 100%;
   box-sizing: border-box;
-}
-
-/* 滚动条暗色适配 */
-@media (prefers-color-scheme: dark) {
-  .message-list {
-    --chat-bg: #181828;
-  }
 }
 </style>

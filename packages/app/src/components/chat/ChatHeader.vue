@@ -87,15 +87,15 @@ function onStop(): void {
   padding: 0 20px;
 
   /* 毛玻璃：半透明背景 + 8px 模糊 */
-  background-color: var(--ip-color-bg-header-backdrop, rgba(250, 250, 250, 0.72));
+  background-color: var(--ip-color-bg-header-backdrop);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
 
-  border-bottom: 1px solid var(--ip-color-border-default, #e5e7eb);
-  color: var(--ip-color-text-primary, #1a1a1a);
+  border-bottom: 1px solid var(--ip-color-border-default);
+  color: var(--ip-color-text-primary);
   flex-shrink: 0;
   position: relative;
-  z-index: var(--ip-z-sticky, 200);
+  z-index: var(--ip-z-sticky);
 }
 
 .header-main {
@@ -115,9 +115,9 @@ function onStop(): void {
 }
 
 .conv-title {
-  font-size: var(--ip-text-body-size, 15px);
-  font-weight: var(--ip-font-weight-semibold, 600);
-  color: var(--ip-color-text-primary, #1a1a1a);
+  font-size: var(--ip-text-body-size);
+  font-weight: var(--ip-font-weight-semibold);
+  color: var(--ip-color-text-primary);
   line-height: 1.2;
   white-space: nowrap;
   overflow: hidden;
@@ -128,9 +128,9 @@ function onStop(): void {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: var(--ip-text-caption-size, 12px);
+  font-size: var(--ip-text-caption-size);
   line-height: 1.2;
-  color: var(--ip-color-text-tertiary, #8c8c8c);
+  color: var(--ip-color-text-tertiary);
   min-width: 0;
 }
 
@@ -139,9 +139,9 @@ function onStop(): void {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 280px;
-  font-family: var(--ip-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: var(--ip-text-caption-size, 12px);
-  letter-spacing: var(--ip-letter-spacing-normal, 0);
+  font-family: var(--ip-font-mono);
+  font-size: var(--ip-text-caption-size);
+  letter-spacing: var(--ip-letter-spacing-normal);
 }
 
 .header-actions {
@@ -155,54 +155,43 @@ function onStop(): void {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: var(--ip-btn-h-sm, 28px);
+  height: var(--ip-btn-h-sm);
   padding: 0 12px;
-  font-size: var(--ip-text-body-sm-size, 13px);
-  font-weight: var(--ip-font-weight-medium, 500);
+  font-size: var(--ip-text-body-sm-size);
+  font-weight: var(--ip-font-weight-medium);
   font-family: inherit;
-  border: 1px solid var(--ip-danger-border, #fca5a5);
-  border-radius: var(--ip-btn-radius, 8px);
-  background: var(--ip-danger-bg, #fee2e2);
-  color: var(--ip-danger-text, #991b1b);
+  border: 1px solid var(--ip-danger-border);
+  border-radius: var(--ip-btn-radius);
+  background: var(--ip-danger-bg);
+  color: var(--ip-danger-text);
   cursor: pointer;
-  transition: var(--ip-transition-colors, background-color 150ms ease, color 150ms ease, border-color 150ms ease);
+  transition: var(--ip-transition-colors);
 }
 
 .btn-stop:hover {
-  background: var(--ip-danger-base, #dc2626);
-  color: var(--ip-color-text-on-danger, #ffffff);
-  border-color: var(--ip-danger-hover, #b91c1c);
+  background: var(--ip-danger-base);
+  color: var(--ip-color-text-on-danger);
+  border-color: var(--ip-danger-hover);
 }
 
 .btn-stop:focus-visible {
   outline: none;
-  box-shadow: var(--ip-shadow-focus, 0 0 0 3px rgba(59, 130, 246, 0.3));
+  box-shadow: var(--ip-shadow-focus);
 }
 
 .btn-stop:active {
-  background: var(--ip-danger-active, #991b1b);
-  border-color: var(--ip-danger-active, #991b1b);
+  background: var(--ip-danger-active);
+  border-color: var(--ip-danger-active);
 }
 
 .btn-label {
   line-height: 1;
 }
 
-/* 暗色模式 */
-@media (prefers-color-scheme: dark) {
-  .chat-header {
-    /* 暗色毛玻璃覆盖由 --ip-color-bg-header-backdrop token 自动提供 */
-    background-color: var(--ip-color-bg-header-backdrop, rgba(20, 20, 20, 0.72));
-    border-bottom-color: var(--ip-color-border-default, #3a3a4a);
-    color: var(--ip-color-text-primary, #f0f0f0);
-  }
-
-  .conv-title {
-    color: var(--ip-color-text-primary, #f0f0f0);
-  }
-
-  .meta-row {
-    color: var(--ip-color-text-tertiary, #8c8c8c);
-  }
-}
+/* 暗色模式：
+ * --ip-color-bg-header-backdrop / --ip-color-border-default /
+ * --ip-color-text-primary / --ip-color-text-tertiary
+ * 均在 packages/ui/src/styles/tokens.css 的 @media (prefers-color-scheme: dark)
+ * 中已自动覆盖，无需在本组件重新声明。
+ */
 </style>

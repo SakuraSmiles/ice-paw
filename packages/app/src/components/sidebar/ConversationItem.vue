@@ -129,27 +129,27 @@ function onCancelRename(): void {
 }
 
 .conv-item:hover {
-  background: var(--conv-item-hover, rgba(0, 0, 0, 0.04));
+  background: var(--ip-color-bg-tertiary);
 }
 
 .conv-item-active {
-  background: var(--conv-item-active, rgba(26, 115, 232, 0.12));
+  background: var(--ip-primary-50);
 }
 
 .conv-item-active:hover {
-  background: var(--conv-item-active-hover, rgba(26, 115, 232, 0.18));
+  background: var(--ip-primary-100);
 }
 
 /* 重命名态下：禁用 hover 变化，提示正在编辑 */
 .conv-item-renaming {
   cursor: text;
-  background: var(--conv-item-renaming, rgba(26, 115, 232, 0.06));
+  background: var(--ip-primary-50);
 }
 
 .conv-content {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--ip-spacing-1);
   min-width: 0;
 }
 
@@ -162,19 +162,19 @@ function onCancelRename(): void {
 
 .conv-pin {
   font-size: 10px;
-  font-weight: 600;
+  font-weight: var(--ip-font-weight-semibold);
   padding: 1px 5px;
   border-radius: 3px;
-  background: var(--pin-bg, #fff3cd);
-  color: var(--pin-fg, #946c00);
+  background: var(--ip-warning-bg);
+  color: var(--ip-warning-text);
   flex-shrink: 0;
   letter-spacing: 0.02em;
 }
 
 .conv-title {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text-primary, #1a1a1a);
+  font-size: var(--ip-text-body-sm-size);
+  font-weight: var(--ip-font-weight-medium);
+  color: var(--ip-color-text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -184,33 +184,7 @@ function onCancelRename(): void {
 
 .conv-time {
   font-size: 11px;
-  color: var(--text-secondary, #888);
+  color: var(--ip-color-text-tertiary);
   user-select: none;
-}
-
-/* 暗色模式 */
-@media (prefers-color-scheme: dark) {
-  .conv-item:hover {
-    --conv-item-hover: rgba(255, 255, 255, 0.06);
-  }
-  .conv-item-active {
-    --conv-item-active: rgba(74, 144, 226, 0.22);
-  }
-  .conv-item-active:hover {
-    --conv-item-active-hover: rgba(74, 144, 226, 0.32);
-  }
-  .conv-item-renaming {
-    --conv-item-renaming: rgba(74, 144, 226, 0.1);
-  }
-  .conv-title {
-    --text-primary: #f0f0f0;
-  }
-  .conv-time {
-    --text-secondary: #888;
-  }
-  .conv-pin {
-    --pin-bg: #5c4a00;
-    --pin-fg: #ffd966;
-  }
 }
 </style>

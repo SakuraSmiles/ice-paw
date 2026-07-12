@@ -55,14 +55,14 @@ const toast = useToast();
   min-width: 240px;
   max-width: 360px;
   padding: 10px 14px 10px 10px;
-  background: var(--toast-bg, #ffffff);
-  color: var(--toast-fg, #1a1a1a);
-  border: 1px solid var(--toast-border, #e0e0e0);
-  border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  background: var(--ip-color-bg-elevated);
+  color: var(--ip-color-text-primary);
+  border: 1px solid var(--ip-color-border-default);
+  border-radius: var(--ip-radius-md);
+  box-shadow: var(--ip-shadow-md);
   cursor: pointer;
-  font-size: 14px;
-  line-height: 1.4;
+  font-size: var(--ip-text-body-sm-size);
+  line-height: var(--ip-line-height-loose);
   user-select: none;
 }
 
@@ -70,7 +70,7 @@ const toast = useToast();
   /* 左侧色条 */
   flex: 0 0 3px;
   border-radius: 2px;
-  background: var(--toast-bar, #4a90e2);
+  background: var(--toast-bar, var(--ip-primary-500));
 }
 
 .toast-msg {
@@ -80,43 +80,23 @@ const toast = useToast();
 
 /* 类型配色 */
 .toast-success {
-  --toast-bar: #2ea043;
-  --toast-border: #c8e6c9;
+  --toast-bar: var(--ip-success-base);
+  --toast-border: var(--ip-success-border);
 }
 .toast-error {
-  --toast-bar: #d93025;
-  --toast-border: #ffcdd2;
+  --toast-bar: var(--ip-danger-base);
+  --toast-border: var(--ip-danger-border);
 }
 .toast-info {
-  --toast-bar: #1a73e8;
-  --toast-border: #bbdefb;
+  --toast-bar: var(--ip-info-base);
+  --toast-border: var(--ip-info-border);
 }
 .toast-warning {
-  --toast-bar: #f29900;
-  --toast-border: #ffe0b2;
+  --toast-bar: var(--ip-warning-base);
+  --toast-border: var(--ip-warning-border);
 }
 
-/* 暗色模式 */
-@media (prefers-color-scheme: dark) {
-  .toast-item {
-    --toast-bg: #2a2a3a;
-    --toast-fg: #f0f0f0;
-    --toast-border: #3a3a4a;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-  }
-  .toast-success {
-    --toast-border: #2e7d32;
-  }
-  .toast-error {
-    --toast-border: #c62828;
-  }
-  .toast-info {
-    --toast-border: #1565c0;
-  }
-  .toast-warning {
-    --toast-border: #ef6c00;
-  }
-}
+/* 暗色模式（依赖 @ice-paw/ui 已注入 [data-theme=dark] / media 自动适配） */
 
 /* 进入/离开动画：自下而上滑入/滑出 */
 .toast-enter-from {

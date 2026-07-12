@@ -27,53 +27,37 @@ const emit = defineEmits<{
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 48px 24px;
+  padding: 48px var(--ip-spacing-6);
   text-align: center;
 }
 
 .empty-title {
-  margin: 0 0 12px;
-  font-size: 22px;
-  font-weight: 600;
-  color: var(--text-primary, #1a1a1a);
+  margin: 0 0 var(--ip-spacing-3);
+  font-size: var(--ip-text-h2-size);
+  font-weight: var(--ip-font-weight-semibold);
+  color: var(--ip-color-text-primary);
 }
 
 .empty-desc {
-  margin: 0 0 24px;
-  font-size: 14px;
-  line-height: 1.6;
-  color: var(--text-secondary, #888);
+  margin: 0 0 var(--ip-spacing-6);
+  font-size: var(--ip-text-body-sm-size);
+  line-height: var(--ip-line-height-loose);
+  color: var(--ip-color-text-tertiary);
   max-width: 320px;
 }
 
 .btn-create {
-  padding: 10px 24px;
-  font-size: 14px;
-  font-weight: 500;
+  padding: var(--ip-btn-py-md) var(--ip-btn-px-lg);
+  font-size: var(--ip-btn-fs-md);
+  font-weight: var(--ip-font-weight-medium);
   border: none;
-  border-radius: 6px;
-  background: var(--accent-bg, #1a73e8);
-  color: #fff;
+  border-radius: var(--ip-btn-radius);
+  background: var(--ip-primary-500);
+  color: var(--ip-color-text-on-primary);
   cursor: pointer;
-  transition: background 100ms ease;
+  transition: background-color var(--ip-duration-fast) var(--ip-ease-out);
 }
 .btn-create:hover {
-  background: var(--accent-bg-hover, #1557b0);
-}
-
-/* 暗色模式 */
-@media (prefers-color-scheme: dark) {
-  .empty-title {
-    --text-primary: #f0f0f0;
-  }
-  .empty-desc {
-    --text-secondary: #888;
-  }
-  .btn-create {
-    --accent-bg: #4a90e2;
-  }
-  .btn-create:hover {
-    --accent-bg-hover: #357abd;
-  }
+  background: var(--ip-primary-600);
 }
 </style>
