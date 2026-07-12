@@ -1,6 +1,13 @@
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
-import { resolve } from "path";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+// ESM 兼容：vite.config.ts 在 `"type": "module"` 下作为 ESM 加载，
+// 原生作用域里没有 `__dirname` / `__filename`。这里基于 import.meta.url
+// 推导当前文件目录，避免依赖 Vite / esbuild 的 define 注入（更稳）。
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = resolve(__filename, "..");
 
 // 读取 Tauri dev 模式下的远程 host（用于局域网真机调试）
 // types: ["node"] 已在 tsconfig.node.json 中声明
@@ -17,11 +24,22 @@ export default defineConfig(async () => ({
   plugins: [vue()],
 
   resolve: {
-    alias: {
-      // 与 tsconfig.json paths 保持一致
-      "@ice-paw/ui": resolve(uiRoot, "src/index.ts"),
-      "@ice-paw/ui/styles": uiStyles,
-    },
+    // 注意：Vite 的 alias 解析按声明顺序 find-first 匹配，
+    // `@ice-paw/ui` 是 `@ice-paw/ui/styles` 的前缀；必须把更具体的
+    // `@ice-paw/ui/styles` 放在前面，否则 `@ice-paw/ui/styles` 会被
+    // `@ice-paw/ui` 错误地重写为 `<ui>/src/index.ts/styles`。
+    // 用数组形式显式声明顺序，避免依赖对象 key 的插入顺序。
+    alias: [
+      {
+        find: "@ice-paw/ui/styles",
+        replacement: uiStyles,
+      },
+      {
+        // 与 tsconfig.json paths 保持一致
+        find: "@ice-paw/ui",
+        replacement: resolve(uiRoot, "src/index.ts"),
+      },
+    ],
   },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
