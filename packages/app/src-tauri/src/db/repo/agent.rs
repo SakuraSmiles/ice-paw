@@ -83,6 +83,7 @@ pub async fn update(
     provider: Option<&str>,
     model: Option<&str>,
     system_prompt: Option<&str>,
+    base_url: Option<Option<&str>>,
     temperature: Option<f64>,
     max_tokens: Option<i32>,
     extra_params: Option<&serde_json::Value>,
@@ -95,6 +96,7 @@ pub async fn update(
     if let Some(v) = provider { current.provider = v.to_string(); }
     if let Some(v) = model { current.model = v.to_string(); }
     if let Some(v) = system_prompt { current.system_prompt = v.to_string(); }
+    if let Some(v) = base_url { current.base_url = v.map(String::from); }
     if let Some(v) = temperature { current.temperature = v; }
     if let Some(v) = max_tokens { current.max_tokens = v; }
     if let Some(v) = sort_order { current.sort_order = v; }
@@ -103,13 +105,14 @@ pub async fn update(
     sqlx::query(
         "UPDATE agents
             SET name = ?, provider = ?, model = ?, system_prompt = ?,
-                temperature = ?, max_tokens = ?, extra_params = ?, sort_order = ?
+                base_url = ?, temperature = ?, max_tokens = ?, extra_params = ?, sort_order = ?
           WHERE id = ?",
     )
     .bind(&current.name)
     .bind(&current.provider)
     .bind(&current.model)
     .bind(&current.system_prompt)
+    .bind(&current.base_url)
     .bind(current.temperature)
     .bind(current.max_tokens)
     .bind(&current.extra_params)

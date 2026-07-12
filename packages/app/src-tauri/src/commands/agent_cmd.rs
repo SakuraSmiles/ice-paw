@@ -55,6 +55,7 @@ pub async fn update_agent(
         input.provider.as_deref(),
         input.model.as_deref(),
         input.system_prompt.as_deref(),
+        input.base_url.as_ref().map(|opt| opt.as_deref()),
         input.temperature,
         input.max_tokens,
         input.extra_params.as_ref(),
