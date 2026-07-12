@@ -16,21 +16,30 @@
 // 重试功能：P1 占位 — 目前仅 Toast 提示「重试功能开发中」
 
 import { computed, onMounted, onUnmounted, watch } from "vue";
+import { useRouter } from "vue-router";
+import { useAgentsStore } from "../stores/agents";
 import { useConversationsStore } from "../stores/conversations";
 import { useChatStore } from "../stores/chat";
 import { useToast } from "../composables/useToast";
+import { Button } from "@ice-paw/ui";
+import { Plus } from "lucide-vue-next";
 import ChatHeader from "../components/chat/ChatHeader.vue";
 import MessageList from "../components/chat/MessageList.vue";
 import ChatInput from "../components/chat/ChatInput.vue";
 import EmptyChatHint from "../components/chat/EmptyChatHint.vue";
 
+const agentsStore = useAgentsStore();
 const conversationsStore = useConversationsStore();
 const chatStore = useChatStore();
 const toast = useToast();
+const router = useRouter();
 
 // ============================================================================
 // 派生状态
 // ============================================================================
+
+/** 当前是否有 Agent（用于区分两种空态） */
+const hasAgents = computed<boolean>(() => agentsStore.hasAgents);
 
 /** 当前是否有选中会话 */
 const hasConversation = computed<boolean>(() => !!conversationsStore.currentId);
@@ -127,12 +136,38 @@ async function onStop(): Promise<void> {
 function onRetry(_msg: import("../types").Message): void {
   toast.info("重试功能开发中");
 }
+
+/**
+ * 无 Agent 状态点击「创建 Agent」→ 跳转到 AgentManagerPage。
+ * 不再由 AppLayout 全局拦截处理（见 BUG-LAYOUT-002）。
+ */
+function goToAgentManager(): void {
+  void router.push({ name: "AgentManager" });
+}
 </script>
 
 <template>
   <div class="chat-page">
-    <!-- 无当前会话：全屏空状态 -->
-    <div v-if="!hasConversation" class="no-conv">
+    <!-- 无 Agent：强引导创建（优先于无会话提示） -->
+    <div v-if="!hasAgents && !agentsStore.loading" class="no-conv">
+      <div class="no-conv-card">
+        <h2 class="no-conv-title">欢迎使用 IcePaw</h2>
+        <p class="no-conv-desc">
+          当前还没有 Agent，创建你的第一个 Agent 后即可开始对话。
+        </p>
+        <div class="no-conv-action">
+          <Button variant="primary" size="md" @click="goToAgentManager">
+            <template #icon-left>
+              <Plus :size="16" aria-hidden="true" />
+            </template>
+            创建 Agent
+          </Button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 无当前会话：选择 / 新建会话提示 -->
+    <div v-else-if="!hasConversation" class="no-conv">
       <div class="no-conv-card">
         <h2 class="no-conv-title">选择或创建一个会话开始聊天</h2>
         <p class="no-conv-desc">在左侧侧栏选择一个已有会话，或点击「+ 新建会话」开始新的对话。</p>
@@ -185,6 +220,16 @@ function onRetry(_msg: import("../types").Message): void {
   border: 1px dashed var(--ip-color-border-default);
   border-radius: var(--ip-radius-xl);
   background: var(--ip-color-bg-elevated);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--ip-spacing-4);
+}
+
+.no-conv-action {
+  display: flex;
+  justify-content: center;
+  margin-top: var(--ip-spacing-2);
 }
 
 .no-conv-title {
