@@ -1,34 +1,13 @@
 <script setup lang="ts">
 // Agent 创建/编辑表单 — 侧滑面板
-//
-// 职责：
-//   - 右侧滑入面板，新建和编辑共用
-//   - 字段：name（必填）、provider（下拉）、model（联动预设+手输）、api_key、base_url、
-//          system_prompt（多行）、temperature（滑块 0-2）、max_tokens（数字）
-//   - 校验：name 非空、api_key 长度 > 0
-//   - 提交：emit('submit', payload)，由外层调 store action + Toast
-//
-// props:
-//   - mode:  'create' | 'edit'
-//   - agent: 编辑模式下当前 Agent（create 模式为 null）
-//   - open:  是否显示面板
-//
-// emits:
-//   - 'update:open': 关闭面板
-//   - 'submit':     提交表单数据
-
 import { ref, computed, watch } from "vue";
+import { Input, Textarea, Button } from "@ice-paw/ui";
+import { X } from "lucide-vue-next";
 import type { Agent } from "../../types";
 
-// ============================================================================
-// 类型
-// ============================================================================
-
-/** Provider 列表 */
 const PROVIDERS = ["OpenAI", "Anthropic", "GLM", "DeepSeek"] as const;
 type ProviderName = (typeof PROVIDERS)[number];
 
-/** Provider -> 预设模型映射 */
 const MODEL_PRESETS: Record<ProviderName, string[]> = {
   OpenAI: ["gpt-4o", "gpt-4o-mini"],
   Anthropic: ["claude-sonnet-4-20250514"],
@@ -36,7 +15,6 @@ const MODEL_PRESETS: Record<ProviderName, string[]> = {
   DeepSeek: ["deepseek-chat", "deepseek-reasoner"],
 };
 
-/** 提交载荷（create 与 edit 统一为一个结构） */
 export interface AgentFormPayload {
   name: string;
   provider: string;
@@ -46,13 +24,8 @@ export interface AgentFormPayload {
   system_prompt: string;
   temperature: number;
   max_tokens: number;
-  /** 编辑模式独有：需要轮换 key 时为 true */
   rotateApiKey: boolean;
 }
-
-// ============================================================================
-// Props & Emits
-// ============================================================================
 
 const props = defineProps<{
   mode: "create" | "edit";
@@ -65,56 +38,41 @@ const emit = defineEmits<{
   submit: [payload: AgentFormPayload];
 }>();
 
-// ============================================================================
-// 表单状态
-// ============================================================================
-
 const name = ref("");
 const provider = ref<string>(PROVIDERS[0]);
 const model = ref("");
-const customModel = ref(""); // 用户手输的自定义模型名
+const customModel = ref("");
 const useCustomModel = ref(false);
 const apiKey = ref("");
-const rotateApiKey = ref(false); // 编辑模式下是否要更换 key
+const rotateApiKey = ref(false);
 const baseUrl = ref("");
 const systemPrompt = ref("");
 const temperature = ref(0.7);
 const maxTokens = ref(4096);
 
-/** 校验错误信息 */
 const errors = ref<Record<string, string>>({});
 
-// ============================================================================
-// 计算属性
-// ============================================================================
-
-/** 当前 provider 的预设模型列表 */
 const presetModels = computed<string[]>(() => {
   return MODEL_PRESETS[provider.value as ProviderName] ?? [];
 });
 
-/** 实际提交的 model 值 */
 const modelValue = computed(() => {
   return useCustomModel.value ? customModel.value : model.value;
 });
 
-/** 面板标题 */
 const panelTitle = computed(() => {
   return props.mode === "create" ? "新建 Agent" : "编辑 Agent";
 });
 
-// ============================================================================
-// 监听器
-// ============================================================================
+const nameError = computed(() => errors.value.name ?? "");
+const apiKeyError = computed(() => errors.value.api_key ?? "");
 
-/** provider 变化时，重置 model 选择 */
 watch(provider, () => {
   model.value = presetModels.value[0] ?? "";
   useCustomModel.value = false;
   customModel.value = "";
 });
 
-/** 面板打开时，根据 mode 初始化表单 */
 watch(
   () => props.open,
   (val) => {
@@ -126,11 +84,6 @@ watch(
   },
 );
 
-// ============================================================================
-// 方法
-// ============================================================================
-
-/** 重置表单到默认值 */
 function resetForm(): void {
   name.value = "";
   provider.value = PROVIDERS[0];
@@ -146,13 +99,10 @@ function resetForm(): void {
   errors.value = {};
 }
 
-/** 从现有 Agent 填充表单 */
 function populateFromAgent(a: Agent): void {
   name.value = a.name;
-  // 查找匹配的 provider 显示名（大小写不敏感）
   const match = PROVIDERS.find((p) => p.toLowerCase() === a.provider.toLowerCase());
   provider.value = match ?? PROVIDERS[0];
-  // 检查 model 是否在预设中
   const presets = MODEL_PRESETS[provider.value as ProviderName] ?? [];
   if (presets.includes(a.model)) {
     model.value = a.model;
@@ -161,7 +111,7 @@ function populateFromAgent(a: Agent): void {
     customModel.value = a.model;
     useCustomModel.value = true;
   }
-  apiKey.value = ""; // api_key 不回填，显示占位
+  apiKey.value = "";
   rotateApiKey.value = false;
   baseUrl.value = a.base_url ?? "";
   systemPrompt.value = a.system_prompt ?? "";
@@ -169,13 +119,11 @@ function populateFromAgent(a: Agent): void {
   maxTokens.value = a.max_tokens;
 }
 
-/** 校验表单 */
 function validate(): boolean {
   const errs: Record<string, string> = {};
   if (!name.value.trim()) {
     errs.name = "名称不能为空";
   }
-  // create 模式：apiKey 必填；edit 模式仅在 rotateApiKey 时必填
   if (props.mode === "create") {
     if (!apiKey.value.trim()) {
       errs.api_key = "API Key 不能为空";
@@ -189,7 +137,6 @@ function validate(): boolean {
   return Object.keys(errs).length === 0;
 }
 
-/** 提交表单 */
 function handleSubmit(): void {
   if (!validate()) return;
   emit("submit", {
@@ -205,7 +152,6 @@ function handleSubmit(): void {
   });
 }
 
-/** 关闭面板 */
 function close(): void {
   emit("update:open", false);
 }
@@ -216,30 +162,36 @@ function close(): void {
     <Transition name="slide">
       <div v-if="open" class="panel-overlay" @click.self="close">
         <div class="panel">
-          <!-- 面板头部 -->
-          <div class="panel-header">
+          <header class="panel-header">
             <h3 class="panel-title">{{ panelTitle }}</h3>
-            <button class="btn-close" title="关闭" @click="close">X</button>
-          </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              icon-only
+              type="button"
+              title="关闭"
+              aria-label="关闭"
+              @click="close"
+            >
+              <X :size="16" aria-hidden="true" />
+            </Button>
+          </header>
 
-          <!-- 表单内容 -->
           <div class="panel-body">
             <form @submit.prevent="handleSubmit">
-              <!-- 名称 -->
               <div class="form-group">
                 <label class="form-label" for="agent-name">名称 *</label>
-                <input
+                <Input
                   id="agent-name"
                   v-model="name"
-                  class="form-input"
-                  type="text"
+                  size="md"
                   placeholder="例如：论文润色助手"
                   autocomplete="off"
+                  :error="Boolean(nameError)"
+                  :error-message="nameError"
                 />
-                <span v-if="errors.name" class="form-error">{{ errors.name }}</span>
               </div>
 
-              <!-- Provider -->
               <div class="form-group">
                 <label class="form-label" for="agent-provider">Provider *</label>
                 <select id="agent-provider" v-model="provider" class="form-select">
@@ -247,50 +199,47 @@ function close(): void {
                 </select>
               </div>
 
-              <!-- Model -->
               <div class="form-group">
                 <label class="form-label" for="agent-model">Model *</label>
                 <div v-if="!useCustomModel" class="model-row">
-                  <select v-model="model" class="form-select form-select-model">
-                    <option
-                      v-for="m in presetModels"
-                      :key="m"
-                      :value="m"
-                    >
-                      {{ m }}
-                    </option>
+                  <select
+                    id="agent-model"
+                    v-model="model"
+                    class="form-select form-select-model"
+                  >
+                    <option v-for="m in presetModels" :key="m" :value="m">{{ m }}</option>
                   </select>
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     type="button"
-                    class="btn-text"
                     @click="useCustomModel = true"
                   >
                     自定义
-                  </button>
+                  </Button>
                 </div>
                 <div v-else class="model-row">
-                  <input
+                  <Input
                     id="agent-model"
                     v-model="customModel"
-                    class="form-input"
-                    type="text"
+                    size="md"
                     placeholder="输入模型名称"
                     autocomplete="off"
                   />
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     type="button"
-                    class="btn-text"
                     @click="
                       useCustomModel = false;
                       customModel = '';
                     "
                   >
                     预设
-                  </button>
+                  </Button>
                 </div>
               </div>
 
-              <!-- API Key -->
               <div class="form-group">
                 <label class="form-label" for="agent-apikey">
                   API Key *
@@ -301,59 +250,58 @@ function close(): void {
                 <template v-if="mode === 'edit' && !rotateApiKey">
                   <div class="apikey-masked">
                     <span class="masked-text">••••••••••••••••</span>
-                    <button
+                    <Button
+                      variant="ghost"
+                      size="sm"
                       type="button"
-                      class="btn-text"
                       @click="rotateApiKey = true"
                     >
                       更换 Key
-                    </button>
+                    </Button>
                   </div>
                 </template>
                 <template v-else>
-                  <input
+                  <Input
                     id="agent-apikey"
                     v-model="apiKey"
-                    class="form-input"
+                    size="md"
                     type="password"
                     placeholder="sk-..."
                     autocomplete="off"
+                    :error="Boolean(apiKeyError)"
+                    :error-message="apiKeyError"
                   />
-                  <span v-if="errors.api_key" class="form-error">{{ errors.api_key }}</span>
                 </template>
               </div>
 
-              <!-- Base URL -->
               <div class="form-group">
                 <label class="form-label" for="agent-baseurl">Base URL（可选）</label>
-                <input
+                <Input
                   id="agent-baseurl"
                   v-model="baseUrl"
-                  class="form-input"
-                  type="text"
+                  size="md"
                   placeholder="留空使用默认地址"
                   autocomplete="off"
                 />
               </div>
 
-              <!-- System Prompt -->
               <div class="form-group">
                 <label class="form-label" for="agent-systemprompt">System Prompt（可选）</label>
-                <textarea
+                <Textarea
                   id="agent-systemprompt"
                   v-model="systemPrompt"
-                  class="form-textarea"
-                  rows="3"
+                  size="md"
+                  :rows="3"
                   placeholder="系统提示词..."
                 />
               </div>
 
-              <!-- Temperature -->
               <div class="form-group">
-                <label class="form-label">
+                <label class="form-label" for="agent-temperature">
                   Temperature: {{ temperature.toFixed(1) }}
                 </label>
                 <input
+                  id="agent-temperature"
                   v-model.number="temperature"
                   class="form-range"
                   type="range"
@@ -363,29 +311,26 @@ function close(): void {
                 />
               </div>
 
-              <!-- Max Tokens -->
               <div class="form-group">
                 <label class="form-label" for="agent-maxtokens">Max Tokens</label>
-                <input
+                <Input
                   id="agent-maxtokens"
-                  v-model.number="maxTokens"
-                  class="form-input"
+                  :model-value="String(maxTokens)"
+                  size="md"
                   type="number"
-                  min="1"
-                  max="128000"
-                  step="1"
+                  :maxlength="6"
+                  @update:model-value="(v) => (maxTokens = Math.max(1, Number(v) || 1))"
                 />
               </div>
             </form>
           </div>
 
-          <!-- 面板底部 -->
-          <div class="panel-footer">
-            <button class="btn btn-secondary" @click="close">取消</button>
-            <button class="btn btn-primary" @click="handleSubmit">
+          <footer class="panel-footer">
+            <Button variant="secondary" @click="close">取消</Button>
+            <Button variant="primary" @click="handleSubmit">
               {{ mode === "create" ? "创建" : "保存" }}
-            </button>
-          </div>
+            </Button>
+          </footer>
         </div>
       </div>
     </Transition>
@@ -396,7 +341,7 @@ function close(): void {
 .panel-overlay {
   position: fixed;
   inset: 0;
-  z-index: 9000;
+  z-index: var(--ip-z-modal-overlay, 9000);
   background: var(--ip-color-bg-overlay);
 }
 
@@ -418,50 +363,34 @@ function close(): void {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 20px;
+  padding: var(--ip-spacing-4) var(--ip-spacing-5);
   border-bottom: 1px solid var(--ip-color-border-default);
+  flex-shrink: 0;
 }
 
 .panel-title {
   margin: 0;
   font-size: var(--ip-text-h3-size);
   font-weight: var(--ip-font-weight-semibold);
+  line-height: var(--ip-line-height-relaxed);
   color: var(--ip-color-text-primary);
-}
-
-.btn-close {
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  border-radius: var(--ip-radius-sm);
-  background: transparent;
-  color: var(--ip-color-text-tertiary);
-  font-size: 16px;
-  cursor: pointer;
-  transition: background-color var(--ip-duration-fast) var(--ip-ease-out);
-}
-.btn-close:hover {
-  background: var(--ip-color-bg-tertiary);
 }
 
 .panel-body {
   flex: 1;
   overflow-y: auto;
-  padding: 20px;
+  padding: var(--ip-spacing-5);
 }
 
 .panel-footer {
   display: flex;
   justify-content: flex-end;
-  gap: 10px;
-  padding: 14px 20px;
+  gap: var(--ip-spacing-2);
+  padding: var(--ip-spacing-3) var(--ip-spacing-5) var(--ip-spacing-4);
   border-top: 1px solid var(--ip-color-border-default);
+  flex-shrink: 0;
 }
 
-/* 表单 */
 .form-group {
   margin-bottom: var(--ip-spacing-4);
 }
@@ -471,6 +400,7 @@ function close(): void {
   margin-bottom: var(--ip-spacing-1);
   font-size: var(--ip-text-body-sm-size);
   font-weight: var(--ip-font-weight-medium);
+  line-height: var(--ip-line-height-relaxed);
   color: var(--ip-color-text-primary);
 }
 
@@ -479,42 +409,33 @@ function close(): void {
   color: var(--ip-color-text-tertiary);
 }
 
-.form-input,
-.form-select,
-.form-textarea {
+.form-select {
   width: 100%;
   padding: var(--ip-input-py-md) var(--ip-input-px-md);
+  font-family: inherit;
   font-size: var(--ip-text-body-sm-size);
+  line-height: var(--ip-line-height-relaxed);
+  color: var(--ip-color-text-body);
+  background: var(--ip-color-bg-secondary);
   border: 1px solid var(--ip-color-border-default);
   border-radius: var(--ip-input-radius);
-  background: var(--ip-color-bg-secondary);
-  color: var(--ip-color-text-primary);
   outline: none;
-  box-sizing: border-box;
-  transition: border-color var(--ip-duration-fast) var(--ip-ease-out), box-shadow var(--ip-duration-fast) var(--ip-ease-out);
+  transition:
+    border-color var(--ip-duration-fast) var(--ip-ease-out),
+    box-shadow var(--ip-duration-fast) var(--ip-ease-out);
 }
-.form-input:focus,
-.form-select:focus,
-.form-textarea:focus {
+.form-select:hover {
+  border-color: var(--ip-color-border-strong);
+}
+.form-select:focus {
   border-color: var(--ip-color-border-focus);
   box-shadow: var(--ip-shadow-focus);
-}
-
-.form-textarea {
-  resize: vertical;
-  font-family: inherit;
 }
 
 .form-range {
   width: 100%;
   cursor: pointer;
-}
-
-.form-error {
-  display: block;
-  margin-top: var(--ip-spacing-1);
-  font-size: var(--ip-text-caption-size);
-  color: var(--ip-danger-text);
+  accent-color: var(--ip-primary-500);
 }
 
 .model-row {
@@ -542,49 +463,6 @@ function close(): void {
   letter-spacing: 1px;
 }
 
-.btn-text {
-  flex-shrink: 0;
-  padding: var(--ip-spacing-1) var(--ip-spacing-2);
-  font-size: var(--ip-text-caption-size);
-  border: none;
-  border-radius: var(--ip-radius-sm);
-  background: transparent;
-  color: var(--ip-color-text-link);
-  cursor: pointer;
-  transition: background-color var(--ip-duration-fast) var(--ip-ease-out);
-}
-.btn-text:hover {
-  background: var(--ip-color-bg-tertiary);
-}
-
-.btn {
-  padding: var(--ip-btn-py-md) var(--ip-btn-px-lg);
-  font-size: var(--ip-btn-fs-md);
-  border: 1px solid transparent;
-  border-radius: var(--ip-btn-radius);
-  cursor: pointer;
-  transition: background-color var(--ip-duration-fast) var(--ip-ease-out);
-}
-
-.btn-secondary {
-  background: var(--ip-color-bg-tertiary);
-  color: var(--ip-gray-700);
-  border-color: var(--ip-color-border-default);
-}
-.btn-secondary:hover {
-  background: var(--ip-gray-200);
-}
-
-.btn-primary {
-  background: var(--ip-primary-500);
-  color: var(--ip-color-text-on-primary);
-  border-color: var(--ip-primary-500);
-}
-.btn-primary:hover {
-  background: var(--ip-primary-600);
-  border-color: var(--ip-primary-600);
-}
-
 /* 滑入/滑出动画 */
 .slide-enter-from .panel,
 .slide-leave-to .panel {
@@ -592,6 +470,14 @@ function close(): void {
 }
 .slide-enter-active .panel,
 .slide-leave-active .panel {
-  transition: transform var(--ip-duration-panel) var(--ip-ease-out);
+  transition: transform var(--ip-duration-base) var(--ip-ease-out);
+}
+.slide-enter-from,
+.slide-leave-to {
+  opacity: 0;
+}
+.slide-enter-active,
+.slide-leave-active {
+  transition: opacity var(--ip-duration-base) var(--ip-ease-out);
 }
 </style>

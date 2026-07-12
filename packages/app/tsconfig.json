@@ -1,5 +1,12 @@
 {
   "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@ice-paw/ui": ["../ui/src/index.ts"],
+      "@ice-paw/ui/*": ["../ui/src/*"]
+    }
+  },
   "include": ["src/**/*.ts", "src/**/*.d.ts", "src/**/*.tsx", "src/**/*.vue", "env.d.ts"],
   "exclude": ["src-tauri/**", "dist/**", "node_modules/**"],
   "references": [{ "path": "./tsconfig.node.json" }]

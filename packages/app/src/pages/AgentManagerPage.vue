@@ -2,13 +2,15 @@
 // Agent 管理页
 //
 // 职责：
-//   - 顶部「+ 新建 Agent」按钮
+//   - 顶部「+ 新建 Agent」按钮（@ice-paw/ui Button + lucide Plus 图标）
 //   - Agent 卡片列表（v-for AgentCard）
 //   - 无数据时显示 EmptyAgentHint
-//   - 挂载 AgentForm（侧滑面板）+ ConfirmDeleteDialog（确认弹窗）
+//   - 挂载 AgentForm（侧滑面板）+ ConfirmDeleteDialog（Modal）
 //   - 处理创建/编辑/删除的全部业务逻辑
 
 import { ref, onMounted } from "vue";
+import { Button } from "@ice-paw/ui";
+import { Plus } from "lucide-vue-next";
 import { useAgentsStore } from "../stores/agents";
 import { useToast } from "../composables/useToast";
 import type { Agent } from "../types";
@@ -96,8 +98,8 @@ async function confirmDelete(): Promise<void> {
   deleteTarget.value = null;
 }
 
-/** 取消删除 */
-function cancelDelete(): void {
+/** 删除弹窗关闭（取消 / Esc / 遮罩 / 关闭按钮） */
+function onDeleteDialogClose(): void {
   deleteDialogOpen.value = false;
   deleteTarget.value = null;
 }
@@ -155,7 +157,12 @@ async function handleFormSubmit(payload: AgentFormPayload): Promise<void> {
     <!-- 页头 -->
     <div class="page-header">
       <h1 class="page-title">Agent 管理</h1>
-      <button class="btn-add" @click="openCreate">+ 新建 Agent</button>
+      <Button variant="primary" size="md" @click="openCreate">
+        <template #icon-left>
+          <Plus :size="16" aria-hidden="true" />
+        </template>
+        新建 Agent
+      </Button>
     </div>
 
     <!-- 加载中 -->
@@ -191,11 +198,11 @@ async function handleFormSubmit(payload: AgentFormPayload): Promise<void> {
 
   <!-- 删除确认弹窗 -->
   <ConfirmDeleteDialog
-    :open="deleteDialogOpen"
+    v-model:open="deleteDialogOpen"
     title="确认删除"
     :message="`将删除 Agent「${deleteTarget?.name ?? ''}」及其所有会话，此操作不可撤销。`"
     @confirm="confirmDelete"
-    @cancel="cancelDelete"
+    @update:open="onDeleteDialogClose"
   />
 </template>
 
@@ -203,13 +210,14 @@ async function handleFormSubmit(payload: AgentFormPayload): Promise<void> {
 .agent-manager {
   max-width: 720px;
   margin: 0 auto;
-  padding: 32px 24px;
+  padding: var(--ip-spacing-8) var(--ip-spacing-6);
 }
 
 .page-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: var(--ip-spacing-4);
   margin-bottom: var(--ip-spacing-6);
 }
 
@@ -217,22 +225,8 @@ async function handleFormSubmit(payload: AgentFormPayload): Promise<void> {
   margin: 0;
   font-size: var(--ip-text-h2-size);
   font-weight: var(--ip-font-weight-semibold);
+  line-height: var(--ip-line-height-relaxed);
   color: var(--ip-color-text-primary);
-}
-
-.btn-add {
-  padding: var(--ip-btn-py-md) 18px;
-  font-size: var(--ip-btn-fs-md);
-  font-weight: var(--ip-font-weight-medium);
-  border: none;
-  border-radius: var(--ip-btn-radius);
-  background: var(--ip-primary-500);
-  color: var(--ip-color-text-on-primary);
-  cursor: pointer;
-  transition: background-color var(--ip-duration-fast) var(--ip-ease-out);
-}
-.btn-add:hover {
-  background: var(--ip-primary-600);
 }
 
 .agent-list {
@@ -245,7 +239,7 @@ async function handleFormSubmit(payload: AgentFormPayload): Promise<void> {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 48px;
+  padding: var(--ip-spacing-12);
   color: var(--ip-color-text-tertiary);
 }
 </style>
