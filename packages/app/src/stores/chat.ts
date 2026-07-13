@@ -19,10 +19,12 @@
 //   - 错误处理：chat:error 把 message.error 写入助手消息并清流式状态。
 //
 // 注意：
-//   - streamingContent 仅作为响应式累加器，真正展示用的实时内容已写入 messages
-//     中对应助手行的 content 字段（双写以兼容 currentMessages getter）。
-//   - "currentMessages" getter 直接返回 messages + 流式中的虚拟占位行（用于
-//     流式尚未触发 chat:start 的极端边界场景）。
+//   - streamingContent 仅作为响应式累加器用于内部状态；真正展示用的实时内容
+//     已由 chat:chunk 写入 messages 中对应助手行的 content 字段。
+//   - "currentMessages" getter 直接返回 messages.value。早期版本会附加一条
+//     `id: "__streaming_virtual__"` 的虚拟助手行作为「chat:start 晚于 chat:chunk
+//     抵达」的兜底，但与 messages 中已存在的真实助手行同时渲染会导致 **两条
+//     AI 气泡并存** 的回归，已移除（详见该 getter 上的注释）。
 
 import { computed, ref } from "vue";
 import { defineStore } from "pinia";
@@ -58,13 +60,14 @@ let listenersRegistered = false;
  * state:
  *   - messages          当前会话的消息列表（不含流式占位行）
  *   - isStreaming       是否正在生成
- *   - streamingContent  流式增量累积（仅作为响应式 getter 来源）
+ *   - streamingContent  流式增量累积（内部累加器，用于 chat:done 时的统计/调试）
  *   - activeConvId      正在生成的会话 ID（用于事件过滤）
  *   - loading           加载历史消息状态
  *   - error             最近错误描述（供 Toast 显示）
  *
  * getters:
- *   - currentMessages   包含流式虚拟行的完整消息列表（按时间顺序）
+ *   - currentMessages   当前显示的消息列表（= messages.value；真实助手行由
+ *                       chat:start 插入、流式期间由 chat:chunk 实时累加）
  *   - lastMessage       最后一条消息
  *   - isEmpty           列表为空且非流中
  *
@@ -169,25 +172,17 @@ export const useChatStore = defineStore("chat", () => {
 
   /**
    * 当前显示用的消息列表。
-   * 包含 messages 全部 + 流式中追加的虚拟占位行（仅在 chat:start 与 chat:chunk
-   * 之间还未刷新 messages 的极端边界场景下会出现，正常路径下虚拟行内容已
-   * 实时写入 messages，无需依赖此 getter 也能正确渲染）。
+   * 直接返回 messages.value —— chat:start 已经在 messages 中插入助手占位
+   * （content=""），chat:chunk 实时累加 content，无需再附加虚拟行。
+   *
+   * 历史注释：本 getter 早期会附加 `id: "__streaming_virtual__"` 的虚拟助手
+   * 行作为「chat:start 晚于 chat:chunk 抵达」的兜底，但实测发现该虚拟行与
+   * messages.value 中已存在的真实助手行同时渲染，导致 **两条 AI 气泡并存**
+   * 的回归（见修复 commit）。当前实现以「chat:start 必先于 chat:chunk」为
+   * 不变量；为消除理论上的竞态，chat:start 处理器会在收到时清空
+   * streamingContent，确保累加器从空开始。
    */
-  const currentMessages = computed<Message[]>(() => {
-    if (!isStreaming.value) return messages.value;
-    // 流式状态但 streamingContent 有内容：附加一条虚拟 assistant 行（仅用于保险）
-    if (streamingContent.value.length === 0) return messages.value;
-    const virtual: Message = {
-      id: "__streaming_virtual__",
-      conversation_id: activeConvId.value ?? "",
-      role: "assistant",
-      content: streamingContent.value,
-      token_count: null,
-      error: null,
-      created_at: new Date().toISOString(),
-    };
-    return [...messages.value, virtual];
-  });
+  const currentMessages = computed<Message[]>(() => messages.value);
 
   /** 最后一条消息 */
   const lastMessage = computed<Message | null>(() => {
