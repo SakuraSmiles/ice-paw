@@ -26,14 +26,110 @@ use crate::error::{AppError, AppResult};
 use crate::llm::{self, ChatDelta, ChatMessage, CancellationToken, ChatState, LlmProvider};
 
 // =========================================================================
+// 模板渲染（P2-4）
+// =========================================================================
+
+/// 用变量值渲染模板内容。
+///
+/// 规则：扫描文本中的 `{{var_name}}` 段，依次替换为 `values` 中对应 key 的值。
+/// - 变量名必须是 `[a-zA-Z_][a-zA-Z0-9_]*`
+/// - 模板中出现的 `var_name` 不在 `values` 中：保持原样（`{{var_name}}`）
+///   以便 LLM 能看到「未填的占位符」并主动追问
+/// - `values` 中多余的 key 会被忽略
+///
+/// 与 mustache 的差异：
+/// - 不支持 `{{#section}}...{{/section}}` / `{{! comment}}` / `{{>partial}}` 等高级语法
+/// - 不支持 `.` 路径访问
+///
+/// 故意保持简单：模板只是「带变量的纯文本」，不引入模板引擎依赖。
+pub(crate) fn render_template(
+    template: &str,
+    values: &std::collections::HashMap<String, String>,
+) -> String {
+    let mut out = String::with_capacity(template.len());
+    let bytes = template.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        // 查找下一个 {{
+        if i + 1 < bytes.len() && bytes[i] == b'{' && bytes[i + 1] == b'{' {
+            // 寻找匹配的 }}
+            let mut j = i + 2;
+            let mut found = None;
+            while j + 1 < bytes.len() {
+                if bytes[j] == b'}' && bytes[j + 1] == b'}' {
+                    found = Some(j);
+                    break;
+                }
+                j += 1;
+            }
+            if let Some(end) = found {
+                // 取出变量名（trim 空白）
+                let name_raw = &template[i + 2..end];
+                let name = name_raw.trim();
+                // 校验变量名合法性
+                if is_valid_var_name(name) {
+                    if let Some(v) = values.get(name) {
+                        out.push_str(v);
+                    } else {
+                        // 未提供的变量：保持原样
+                        out.push_str(&template[i..end + 2]);
+                    }
+                } else {
+                    // 非法变量名：保持原样
+                    out.push_str(&template[i..end + 2]);
+                }
+                i = end + 2;
+                continue;
+            }
+        }
+        // 加上当前字符
+        out.push(template[i..].chars().next().unwrap());
+        i += template[i..].chars().next().unwrap().len_utf8();
+    }
+    out
+}
+
+/// 变量名合法性：字母/下划线开头 + 字母/数字/下划线
+fn is_valid_var_name(s: &str) -> bool {
+    if s.is_empty() {
+        return false;
+    }
+    let mut chars = s.chars();
+    let first = chars.next().unwrap();
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return false;
+    }
+    for c in chars {
+        if !(c.is_ascii_alphanumeric() || c == '_') {
+            return false;
+        }
+    }
+    true
+}
+
+// =========================================================================
 // 入参 / 事件 Payload 结构
 // =========================================================================
+
+/// `send_message` 入参中的模板部分（P2-4）
+///
+/// - `template_id`  选中的模板 ID
+/// - `values`       变量值字典
+#[derive(Debug, Clone, Deserialize)]
+pub struct TemplateInput {
+    pub template_id: String,
+    #[serde(default)]
+    pub values: std::collections::HashMap<String, String>,
+}
 
 /// `send_message` 入参
 #[derive(Debug, Deserialize)]
 pub struct SendMessageInput {
     pub conversation_id: String,
     pub content: String,
+    /// 可选：附加的模板（应用后会被渲染并注入到 system_prompt / user_prompt_prefix）
+    #[serde(default)]
+    pub template: Option<TemplateInput>,
 }
 
 /// `chat:start` 事件 payload
@@ -125,6 +221,33 @@ pub async fn send_message(
     // --- 创建 provider ---
     let provider = llm::create_provider(&agent.provider, &agent.model, base_url)?;
 
+    // --- 如果传入了模板，查表 + 渲染变量（失败 → 报错给前端）---
+    let rendered_system_prompt: Option<String> = if let Some(tpl_input) = &input.template {
+        let tpl = repo::template::get_by_id(pool.inner(), &tpl_input.template_id).await?;
+        let rendered = render_template(&tpl.system_prompt, &tpl_input.values);
+        // 模板 system_prompt 为空字符串 → 退化为不使用模板 system_prompt（保留 agent 的）
+        if rendered.trim().is_empty() {
+            None
+        } else {
+            Some(rendered)
+        }
+    } else {
+        None
+    };
+    let rendered_user_prefix: String = if let Some(tpl_input) = &input.template {
+        let tpl = repo::template::get_by_id(pool.inner(), &tpl_input.template_id).await?;
+        render_template(&tpl.user_prompt_prefix, &tpl_input.values)
+    } else {
+        String::new()
+    };
+
+    // --- 拼装最终用户消息（prefix + content）---
+    let final_user_content = if rendered_user_prefix.is_empty() {
+        content.clone()
+    } else {
+        format!("{}{}", rendered_user_prefix, content)
+    };
+
     // --- 拉最近 20 条消息作为上下文 ---
     let history = repo::message::list_by_conversation(
         pool.inner(),
@@ -137,11 +260,21 @@ pub async fn send_message(
     // --- 构造上下文消息列表 ---
     let mut messages: Vec<ChatMessage> = Vec::with_capacity(history.len() + 2);
 
-    // system prompt 前置
-    if !agent.system_prompt.is_empty() {
+    // system prompt 优先级：模板 > agent
+    // 模板未提供 system_prompt → 使用 agent 的
+    // 两者都为空 → 不发 system 消息
+    let effective_system_prompt = rendered_system_prompt
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .or(if agent.system_prompt.is_empty() {
+            None
+        } else {
+            Some(agent.system_prompt.as_str())
+        });
+    if let Some(sys) = effective_system_prompt {
         messages.push(ChatMessage {
             role: "system".into(),
-            content: agent.system_prompt.clone(),
+            content: sys.to_string(),
         });
     }
 
@@ -157,13 +290,13 @@ pub async fn send_message(
         });
     }
 
-    // 当前用户消息
+    // 当前用户消息（带模板 prefix）
     messages.push(ChatMessage {
         role: "user".into(),
-        content: content.clone(),
+        content: final_user_content.clone(),
     });
 
-    // --- 写用户消息到 DB ---
+    // --- 写用户消息到 DB（存原始 content；模板 prefix 不入 DB）---
     let user_msg_id = Uuid::new_v4().to_string();
     repo::message::create(
         pool.inner(),
@@ -279,7 +412,8 @@ async fn stream_loop(
     for attempt in 0..MAX_ATTEMPTS {
         // 取消检查（重试前也检查）
         if cancel.is_cancelled() {
-            finish_reason = "abort".into();
+            // 取消：跳出循环，由末尾的清理逻辑处理
+            // （不发 chat:done，cleanup() 路径仅注销 token）
             break;
         }
 
@@ -308,7 +442,7 @@ async fn stream_loop(
 
             // 等待后再次检查取消
             if cancel.is_cancelled() {
-                finish_reason = "abort".into();
+                // 同上：跳出循环，由末尾清理逻辑处理
                 break;
             }
         }
@@ -339,7 +473,6 @@ async fn stream_loop(
 
                 while let Some(item) = stream.next().await {
                     if cancel.is_cancelled() {
-                        finish_reason = "abort".into();
                         // 正常退出循环，不标记 error
                         return cleanup(&app, &pool, &conv_id);
                     }
@@ -525,4 +658,91 @@ pub async fn stop_generation(
         );
     }
     Ok(())
+}
+
+// =========================================================================
+// 单元测试
+// =========================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn vals(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn render_replaces_known_vars() {
+        let mut v = HashMap::new();
+        v.insert("language".into(), "Rust".into());
+        v.insert("framework".into(), "Actix".into());
+        let out = render_template("请用 {{language}} + {{framework}} 实现", &v);
+        assert_eq!(out, "请用 Rust + Actix 实现");
+    }
+
+    #[test]
+    fn render_keeps_unknown_vars_intact() {
+        let v = vals(&[("lang", "TS")]);
+        let out = render_template("Hello {{name}} in {{lang}}", &v);
+        assert_eq!(out, "Hello {{name}} in TS");
+    }
+
+    #[test]
+    fn render_handles_no_vars() {
+        let v = HashMap::new();
+        assert_eq!(render_template("plain text", &v), "plain text");
+    }
+
+    #[test]
+    fn render_handles_unicode_value() {
+        let v = vals(&[("city", "北京")]);
+        let out = render_template("我在 {{city}}", &v);
+        assert_eq!(out, "我在 北京");
+    }
+
+    #[test]
+    fn render_rejects_invalid_var_name_passthrough() {
+        // 变量名含空格 / 点 / 数字开头 → 不替换
+        let v = vals(&[("good", "OK")]);
+        let out = render_template("a {{good}} b {{1bad}} c {{a.b}} d", &v);
+        assert_eq!(out, "a OK b {{1bad}} c {{a.b}} d");
+    }
+
+    #[test]
+    fn render_handles_extra_values() {
+        // values 中多余的 key → 忽略
+        let v = vals(&[("a", "1"), ("b", "2"), ("c", "3")]);
+        let out = render_template("{{a}}/{{b}}", &v);
+        assert_eq!(out, "1/2");
+    }
+
+    #[test]
+    fn render_unmatched_brackets_kept_intact() {
+        // 单独的 { 或 } 不应影响
+        let v = vals(&[("x", "Y")]);
+        let out = render_template("a { single } b {{x}} c { unclosed", &v);
+        assert_eq!(out, "a { single } b Y c { unclosed");
+    }
+
+    #[test]
+    fn render_adjacent_vars() {
+        let v = vals(&[("a", "X"), ("b", "Y")]);
+        assert_eq!(render_template("{{a}}{{b}}", &v), "XY");
+    }
+
+    #[test]
+    fn is_valid_var_name_basic() {
+        assert!(is_valid_var_name("foo"));
+        assert!(is_valid_var_name("_bar"));
+        assert!(is_valid_var_name("a1_b2"));
+        assert!(!is_valid_var_name(""));
+        assert!(!is_valid_var_name("1abc"));
+        assert!(!is_valid_var_name("a-b"));
+        assert!(!is_valid_var_name("a.b"));
+    }
 }

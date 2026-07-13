@@ -8,3 +8,4 @@ pub mod agent_cmd;
 pub mod chat_cmd;
 pub mod conversation_cmd;
 pub mod message_cmd;
+pub mod template_cmd;

@@ -224,3 +224,114 @@ pub struct NewMessage {
 // 用 `DateTime<Utc>` 仅是给上层时间工具备查；当前 SQL 用 TEXT 存 ISO8601，因此保留 String 字段
 #[allow(dead_code)]
 pub type UtcDateTime = DateTime<Utc>;
+
+// =========================================================================
+// Template
+// =========================================================================
+//
+// 用户自定义「Prompt 模板」：带变量占位符的 system prompt + user prompt 前缀。
+// 详情见 icepaw-p0-p2-plan.md §2.4 P2-4。
+
+/// 模板变量定义（来自 `variables` JSON 数组中的单条）
+///
+/// - `name`        变量名（占位符，与 `{{name}}` 替换目标一致）
+/// - `label`       前端展示标签（中文/友好名）
+/// - `type`        控件类型：`text`（单行文本）/ `textarea`（多行）/ `select`（下拉）
+/// - `default`     默认值（字符串）
+/// - `options`     仅 `select` 类型使用：候选值列表
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TemplateVariable {
+    pub name: String,
+    pub label: String,
+    /// `text` | `textarea` | `select`
+    #[serde(rename = "type")]
+    pub var_type: String,
+    #[serde(default)]
+    pub default: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub options: Option<Vec<String>>,
+}
+
+/// 数据库行版本：包含全部字段
+#[derive(Debug, Clone, FromRow)]
+pub struct TemplateRow {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub system_prompt: String,
+    pub user_prompt_prefix: String,
+    pub variables: String,
+    pub tools: String,
+    pub sort_order: i32,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// 前端可见的 `Template`（自动展开 variables / tools JSON）
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Template {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub system_prompt: String,
+    pub user_prompt_prefix: String,
+    pub variables: Vec<TemplateVariable>,
+    pub tools: Vec<String>,
+    pub sort_order: i32,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl From<TemplateRow> for Template {
+    fn from(row: TemplateRow) -> Self {
+        let variables: Vec<TemplateVariable> =
+            serde_json::from_str(&row.variables).unwrap_or_default();
+        let tools: Vec<String> = serde_json::from_str(&row.tools).unwrap_or_default();
+        Template {
+            id: row.id,
+            name: row.name,
+            description: row.description,
+            system_prompt: row.system_prompt,
+            user_prompt_prefix: row.user_prompt_prefix,
+            variables,
+            tools,
+            sort_order: row.sort_order,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        }
+    }
+}
+
+/// 创建模板入参（前端 → Rust）
+#[derive(Debug, Deserialize)]
+pub struct NewTemplate {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub system_prompt: String,
+    #[serde(default)]
+    pub user_prompt_prefix: String,
+    #[serde(default)]
+    pub variables: Option<Vec<TemplateVariable>>,
+    #[serde(default)]
+    pub tools: Option<Vec<String>>,
+    #[serde(default)]
+    pub sort_order: i32,
+}
+
+/// 更新模板入参（partial update）
+#[derive(Debug, Deserialize)]
+pub struct TemplateUpdate {
+    pub id: String,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    /// 字符串字段统一使用单层 Option：要清空就传空串
+    pub system_prompt: Option<String>,
+    pub user_prompt_prefix: Option<String>,
+    /// 数组字段：传 Some(vec![]) 表示清空
+    pub variables: Option<Vec<TemplateVariable>>,
+    pub tools: Option<Vec<String>>,
+    pub sort_order: Option<i32>,
+}

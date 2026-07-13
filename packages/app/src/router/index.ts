@@ -7,6 +7,7 @@ import type { RouteRecordRaw } from "vue-router";
 // 路由懒加载：按需加载页面组件，提升首屏性能
 const ChatPage = () => import("../pages/ChatPage.vue");
 const AgentManagerPage = () => import("../pages/AgentManagerPage.vue");
+const TemplateManagerPage = () => import("../pages/TemplateManagerPage.vue");
 
 // 路由表
 const routes: RouteRecordRaw[] = [
@@ -28,6 +29,13 @@ const routes: RouteRecordRaw[] = [
     name: "AgentManager",
     component: AgentManagerPage,
     meta: { title: "Agent 管理" },
+  },
+  {
+    // 模板管理页
+    path: "/templates",
+    name: "TemplateManager",
+    component: TemplateManagerPage,
+    meta: { title: "模板管理" },
   },
   // 通配兜底：未匹配到的路径重定向到聊天页
   {

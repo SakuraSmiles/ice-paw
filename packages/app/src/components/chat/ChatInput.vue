@@ -5,6 +5,8 @@
 //   - 多行 textarea，自动增高（最多 6 行高度）
 //   - Enter 发送；Shift+Enter / Ctrl+Enter / Meta+Enter 换行
 //   - 右下发送按钮：默认显示 SendHorizontal 图标；流式中切换为 Square + 红色高亮
+//   - 模板芯片行（P2-4）：横向滚动，点击 chip → 选中并应用模板
+//   - @ 自动补全（P2-4）：输入 @ 触发模板补全 popover
 //   - 全部样式走 --ip-input-* Design Token，焦点态使用 --ip-shadow-focus 发光环
 //   - 暗色模式：颜色由 token 自动覆盖
 //
@@ -16,8 +18,11 @@
 //   - send(content: string)  点击发送 / Enter 提交时
 //   - stop()                点击停止按钮时
 
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, ref, watch, useTemplateRef } from "vue";
 import { SendHorizontal, Square } from "lucide-vue-next";
+import { useChatStore } from "../../stores/chat";
+import { useTemplatesStore } from "../../stores/templates";
+import TemplatePicker from "../template/TemplatePicker.vue";
 
 const props = defineProps<{
   disabled: boolean;
@@ -29,11 +34,17 @@ const emit = defineEmits<{
   stop: [];
 }>();
 
-/** 文本草稿 */
+const chatStore = useChatStore();
+const templatesStore = useTemplatesStore();
+
+// ============================================================================
+// 文本草稿
+// ============================================================================
+
 const draft = ref<string>("");
 
 /** textarea DOM 引用 */
-const textareaRef = ref<HTMLTextAreaElement | null>(null);
+const textareaRef = useTemplateRef<HTMLTextAreaElement | null>("textareaRef");
 
 /** 单行高度（与 line-height 一致） */
 const LINE_HEIGHT_PX = 22;
@@ -50,9 +61,127 @@ const maxHeightPx = LINE_HEIGHT_PX * MAX_ROWS + VERTICAL_PADDING_PX;
 /** textarea 的高度（px），由行数动态计算 */
 const heightPx = ref<number>(LINE_HEIGHT_PX + VERTICAL_PADDING_PX);
 
+// ============================================================================
+// 模板选择状态
+// ============================================================================
+
+/** 当前选中的模板 ID（与 chip 行同步） */
+const selectedTemplateId = ref<string | null>(null);
+
+/** TemplatePicker DOM 引用 */
+const pickerRef = useTemplateRef<InstanceType<typeof TemplatePicker> | null>("pickerRef");
+
+/**
+ * @ 自动补全：检测 textarea 内容末尾的 @xxx 模式。
+ * 仅在末尾出现「@xxx」且光标在末尾时触发，简化实现（不做 caret 定位）。
+ */
+const atQuery = computed<{ match: string; index: number } | null>(() => {
+  const text = draft.value;
+  if (!text) return null;
+  // 匹配末尾的 @xxx（不含空白）
+  const m = text.match(/(?:^|\s)@([^\s@]*)$/);
+  if (!m || m.index === undefined) return null;
+  // 跳过前导空白的位置
+  return { match: m[1] ?? "", index: m.index + (m[0]!.length - m[1]!.length - 1) };
+});
+
+/** 是否处于 @ 自动补全态 */
+const atActive = computed<boolean>(() => atQuery.value !== null);
+
+watch(atActive, (active) => {
+  if (active && atQuery.value) {
+    // 估算位置：textarea 右下角
+    void nextTick(() => {
+      const el = textareaRef.value;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      pickerRef.value?.openAutocomplete(
+        { x: rect.left + 16, y: rect.top - 8 },
+        atQuery.value!.match,
+      );
+    });
+  } else {
+    pickerRef.value?.closeAutocomplete();
+  }
+});
+
+watch(atQuery, (q) => {
+  if (q && atActive.value) {
+    pickerRef.value?.openAutocomplete(
+      // 位置以 textarea 左下角为锚
+      computeAutocompleteAnchor(),
+      q.match,
+    );
+  }
+});
+
+function computeAutocompleteAnchor(): { x: number; y: number } {
+  const el = textareaRef.value;
+  if (!el) return { x: 0, y: 0 };
+  const rect = el.getBoundingClientRect();
+  return { x: rect.left + 16, y: rect.top - 8 };
+}
+
+/** 监听 @ 键盘：上/下/Enter/Tab/Esc 由 picker 处理 */
+function onKeydown(e: KeyboardEvent): void {
+  // @ 补全态下优先让 picker 处理
+  if (atActive.value && pickerRef.value) {
+    const handled = pickerRef.value.onAutocompleteKey(e);
+    if (handled) {
+      e.preventDefault();
+      // Enter 触发应用后，picker 关闭，textarea 文本需要去掉 @xxx
+      if (e.key === "Enter" || e.key === "Tab") {
+        stripAtQueryFromDraft();
+      }
+      return;
+    }
+  }
+  if (e.key !== "Enter") return;
+  // Shift+Enter / Ctrl+Enter / Cmd+Enter 走默认换行
+  if (e.shiftKey || e.ctrlKey || e.metaKey) return;
+  // 纯 Enter 触发发送
+  e.preventDefault();
+  handleSend();
+}
+
+/** 去掉 draft 末尾的 @xxx 段 */
+function stripAtQueryFromDraft(): void {
+  if (!atQuery.value) return;
+  const text = draft.value;
+  const start = atQuery.value.index;
+  draft.value = text.slice(0, start);
+  void nextTick(autosize);
+}
+
+// ============================================================================
+// 模板应用回调
+// ============================================================================
+
+/**
+ * TemplatePicker 的 @apply 事件：
+ * - 把模板信息存到 chat store
+ * - draft 同步展示提示：「已应用模板：XXX（变量已填）」
+ *   实际发送时由 sendMessage 携带 templateId + values 给后端
+ */
+function onTemplateApply(payload: { templateId: string; values: Record<string, string> }): void {
+  chatStore.setAppliedTemplate(payload);
+  // 同步 chip 选中态
+  selectedTemplateId.value = payload.templateId;
+}
+
+function onTemplateSelectedChange(id: string | null): void {
+  selectedTemplateId.value = id;
+  if (id === null) {
+    chatStore.setAppliedTemplate(null);
+  }
+}
+
+// ============================================================================
+// autosize
+// ============================================================================
+
 /**
  * 根据 draft 内容计算 textarea 的高度（向上增高，封顶为 maxHeightPx）。
- * 通过临时重置为单行高度再读取 scrollHeight 获取精确高度，避免来回抖动。
  */
 function autosize(): void {
   const el = textareaRef.value;
@@ -64,12 +193,17 @@ function autosize(): void {
   heightPx.value = h;
 }
 
-/** 监听 draft 变化触发 autosize */
+/** 监听 draft 变化触发 autosize；用户编辑时清空已应用模板 */
 watch(draft, () => {
   void nextTick(autosize);
+  // 用户编辑消息 → 清空已应用模板（避免发送时携带与文本不匹配的模板）
+  if (chatStore.appliedTemplate) {
+    chatStore.setAppliedTemplate(null);
+  }
 });
 
-/** 实际是否禁用输入（流中或外层禁用时） */
+// ============================================================================
+// 实际是否禁用输入（流中或外层禁用时） */
 const inputDisabled = computed<boolean>(() => props.disabled || props.streaming);
 
 /** 提交（Enter） */
@@ -80,16 +214,9 @@ function handleSend(): void {
   emit("send", v);
   draft.value = "";
   void nextTick(autosize);
-}
-
-/** 键盘事件：Enter 发送；Shift/Ctrl/Meta + Enter 换行 */
-function onKeydown(e: KeyboardEvent): void {
-  if (e.key !== "Enter") return;
-  // Shift+Enter / Ctrl+Enter / Cmd+Enter 走默认换行
-  if (e.shiftKey || e.ctrlKey || e.metaKey) return;
-  // 纯 Enter 触发发送
-  e.preventDefault();
-  handleSend();
+  // 清空 chip 选中 + 应用模板
+  selectedTemplateId.value = null;
+  chatStore.setAppliedTemplate(null);
 }
 
 /** 工具栏发送按钮点击 */
@@ -106,17 +233,44 @@ function onStopClick(): void {
 const sendDisabled = computed<boolean>(
   () => inputDisabled.value || draft.value.trim().length === 0,
 );
+
+/** 已应用模板的展示文本（chip 旁的小提示） */
+const appliedHint = computed<string | null>(() => {
+  const tpl = chatStore.appliedTemplate;
+  if (!tpl) return null;
+  const meta = templatesStore.byId(tpl.templateId);
+  if (!meta) return null;
+  const filled = Object.keys(tpl.values).filter(
+    (k) => (tpl.values[k] ?? "").length > 0,
+  );
+  return filled.length > 0 ? `${meta.name}（${filled.length} 个变量已填）` : meta.name;
+});
 </script>
 
 <template>
   <div
     :class="['chat-input', { 'chat-input-disabled': disabled, 'chat-input-streaming': streaming }]"
   >
+    <!-- 模板芯片行 -->
+    <div class="picker-area">
+      <TemplatePicker
+        ref="pickerRef"
+        :selected-id="selectedTemplateId"
+        @update:selected-id="onTemplateSelectedChange"
+        @apply="onTemplateApply"
+      />
+    </div>
+
+    <!-- 已应用模板的提示 -->
+    <div v-if="appliedHint && !streaming" class="applied-hint">
+      ✨ 已应用：{{ appliedHint }}
+    </div>
+
     <textarea
       ref="textareaRef"
       v-model="draft"
       class="textarea"
-      :placeholder="streaming ? '生成中...' : '输入消息，回车发送，Shift+Enter 换行'"
+      :placeholder="streaming ? '生成中...' : '输入消息，回车发送，Shift+Enter 换行（输入 @ 触发模板）'"
       :disabled="inputDisabled"
       rows="1"
       :style="{ height: `${heightPx}px` }"
@@ -127,7 +281,7 @@ const sendDisabled = computed<boolean>(
       <div class="toolbar-left">
         <span class="hint-text">
           <template v-if="streaming">生成中 · 可随时停止</template>
-          <template v-else>Enter 发送 · Shift+Enter 换行</template>
+          <template v-else>Enter 发送 · Shift+Enter 换行 · @ 选模板</template>
         </span>
       </div>
       <div class="toolbar-right">
@@ -170,20 +324,34 @@ const sendDisabled = computed<boolean>(
   position: relative;
 }
 
+.picker-area {
+  width: 100%;
+  margin-bottom: var(--ip-spacing-2);
+}
+
+.applied-hint {
+  display: inline-flex;
+  align-items: center;
+  margin-bottom: var(--ip-spacing-2);
+  padding: 4px 10px;
+  font-size: var(--ip-text-caption-size);
+  color: var(--ip-primary-700, #1d4ed8);
+  background: var(--ip-primary-100, #dbeafe);
+  border-radius: var(--ip-radius-sm);
+  align-self: flex-start;
+}
+
 .textarea {
   display: block;
   width: 100%;
   resize: none;
-  /* 由行数动态控制 height（JS autosize 写入） */
   border: 1px solid var(--ip-input-border);
-  /* 兼容旧版；新设计 token 为 --ip-color-border-default */
   border-radius: var(--ip-input-radius);
   padding: var(--ip-input-py-md) var(--ip-input-px-md);
   font-family: inherit;
   font-size: var(--ip-text-body-size);
   line-height: var(--ip-text-body-lh);
   color: var(--ip-color-text-primary);
-  /* 输入区背景：设计 token 为 --ip-color-bg-primary / --ip-color-bg-secondary */
   background: var(--ip-input-bg);
   outline: none;
   box-sizing: border-box;
@@ -204,7 +372,6 @@ const sendDisabled = computed<boolean>(
 
 .textarea:focus {
   border-color: var(--ip-color-border-focus);
-  /* 焦点发光环：使用设计 token 中的 --ip-shadow-focus */
   box-shadow: var(--ip-shadow-focus);
 }
 
@@ -288,7 +455,6 @@ const sendDisabled = computed<boolean>(
 }
 
 .btn-stop {
-  /* 红色高亮：用 danger token */
   background: var(--ip-danger-base);
   color: var(--ip-color-text-on-danger);
   border-color: var(--ip-danger-base);
@@ -308,15 +474,7 @@ const sendDisabled = computed<boolean>(
   border-color: var(--ip-danger-active);
 }
 
-/* 流式中整块输入区视觉弱化（仅边框淡化） */
 .chat-input-streaming .textarea {
   border-color: var(--ip-color-border-default);
 }
-
-/* 暗色模式：
- * --ip-color-bg-* / --ip-color-text-* / --ip-color-border-* 等系列 token
- * 均在 packages/ui/src/styles/tokens.css 的
- * @media (prefers-color-scheme: dark) 中自动重映射，
- * 因此本组件无需重新声明暗色覆盖块。
- */
 </style>

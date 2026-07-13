@@ -17,6 +17,7 @@
 //   - chat:select(conversationId)  当前选中的会话 ID 变化时通知父组件
 
 import { nextTick, onMounted } from "vue";
+import { useRouter } from "vue-router";
 import { useAgentsStore } from "../../stores/agents";
 import { useConversationsStore } from "../../stores/conversations";
 import { useContextMenu } from "../../composables/useContextMenu";
@@ -31,6 +32,12 @@ const agentsStore = useAgentsStore();
 const conversationsStore = useConversationsStore();
 const ctxMenu = useContextMenu();
 const toast = useToast();
+const router = useRouter();
+
+/** 跳转到模板管理页 */
+function goToTemplateManager(): void {
+  void router.push({ name: "TemplateManager" });
+}
 
 const emit = defineEmits<{
   "chat:select": [conversationId: string | null];
@@ -178,6 +185,15 @@ function onCancelRename(): void {
     <!-- 底部：新建会话按钮 -->
     <div class="sidebar-bottom">
       <NewChatButton @create="onCreate" />
+      <!-- 模板管理入口 -->
+      <button
+        type="button"
+        class="sidebar-link"
+        :aria-label="'管理模板'"
+        @click="goToTemplateManager"
+      >
+        管理模板 →
+      </button>
     </div>
 
     <!-- 全局右键菜单浮层（Teleport 到 body） -->
@@ -212,5 +228,26 @@ function onCancelRename(): void {
   flex: 0 0 auto;
   padding: var(--ip-spacing-3) var(--ip-spacing-3);
   border-top: 1px solid var(--ip-color-border-default);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ip-spacing-2);
+}
+
+.sidebar-link {
+  display: block;
+  width: 100%;
+  padding: var(--ip-spacing-2) var(--ip-spacing-3);
+  background: transparent;
+  border: 0;
+  border-radius: var(--ip-radius-md);
+  font-size: var(--ip-text-caption-size);
+  color: var(--ip-color-text-tertiary);
+  text-align: left;
+  cursor: pointer;
+  transition: all var(--ip-duration-fast) var(--ip-ease-out);
+}
+.sidebar-link:hover {
+  background: var(--ip-color-bg-tertiary);
+  color: var(--ip-color-text-primary);
 }
 </style>

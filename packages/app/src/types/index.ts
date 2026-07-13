@@ -240,3 +240,82 @@ export interface ChatRetryingPayload {
   attempt: number;
   max_attempts: number;
 }
+
+// ============================================================================
+// Template（用户自定义模板）
+// ============================================================================
+//
+// 模板是「带变量占位符的 system prompt + user prompt 前缀」组合，
+// 可在聊天中通过 @模板名 或芯片选择注入。详情见 icepaw-p0-p2-plan.md §2.4 P2-4。
+
+/**
+ * 模板变量定义。
+ *
+ * - name    变量名（占位符 {{name}} 替换目标）
+ * - label   前端展示标签（中文友好名）
+ * - type    控件类型：`text` | `textarea` | `select`
+ * - default 默认值
+ * - options 仅 `select` 类型有效
+ */
+export interface TemplateVariable {
+  name: string;
+  label: string;
+  type: "text" | "textarea" | "select";
+  default?: string | null;
+  options?: string[] | null;
+}
+
+/**
+ * 模板实体：对应数据库 `templates` 表中一行记录。
+ *
+ * - id                  主键
+ * - name                模板名（用户可见，@ 触发时按 name 匹配）
+ * - description         描述（列表展示用）
+ * - system_prompt       system prompt 内容
+ * - user_prompt_prefix  用户消息前缀（拼到用户消息前面）
+ * - variables           变量定义列表
+ * - tools               工具名列表（P2-1 落地后实际生效）
+ * - sort_order          列表排序权重
+ * - created_at/updated_at
+ */
+export interface Template {
+  id: string;
+  name: string;
+  description: string;
+  system_prompt: string;
+  user_prompt_prefix: string;
+  variables: TemplateVariable[];
+  tools: string[];
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * 创建模板入参。
+ * 与 Template 差异：不含 id / 时间戳。
+ */
+export interface NewTemplate {
+  name: string;
+  description?: string;
+  system_prompt?: string;
+  user_prompt_prefix?: string;
+  variables?: TemplateVariable[];
+  tools?: string[];
+  sort_order?: number;
+}
+
+/**
+ * 更新模板入参（partial update）。
+ * 字段语义：传了的字段会覆盖；不传的字段保持原值。
+ */
+export interface TemplateUpdate {
+  id: string;
+  name?: string;
+  description?: string;
+  system_prompt?: string;
+  user_prompt_prefix?: string;
+  variables?: TemplateVariable[];
+  tools?: string[];
+  sort_order?: number;
+}
