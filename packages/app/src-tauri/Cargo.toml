@@ -20,6 +20,10 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 tauri-plugin-stronghold = "2"
+# 直接依赖以拿到 `ClientError` 做强类型匹配 —— 启动恢复 `load_client`
+# 时区分 "snapshot 里没有该 client" vs "snapshot 损坏/解密失败"。
+# 版本对齐 transitive（tauri-plugin-stronghold 2.3.1 → iota_stronghold 2.1.0）。
+iota_stronghold = "2.1"
 
 # === 序列化 ===
 serde = { version = "1", features = ["derive"] }
