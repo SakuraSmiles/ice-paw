@@ -3,10 +3,10 @@
 //
 // 职责：
 //   - 居中显示一个大尺寸的多行输入框
-//   - 顶部显示 Agent 头像 + 「有什么可以帮你的？」问候语
-//   - 下方展示可点击的提示词芯片，点击后填入输入框（不自动发送）
-//   - Enter 发送；Shift+Enter 换行（沿用 ChatInput 的键位语义）
-//   - 流式中显示停止按钮（沿用 ChatInput 的视觉规范）
+//   - 顶部显示 Agent 头像（字母缩写色块 / Lucide 图标）+ 个性化问候语
+//   - 下方展示可点击的提示词芯片（优先 meta.promptChips，降级 model 匹配）
+//   - Enter 发送；Shift+Enter 换行
+//   - 流式中显示停止按钮
 //   - 发送时：自动创建会话 → 设为当前 → 发送消息（用户无感）
 //
 // props:
@@ -17,13 +17,14 @@
 //   - send(content: string)  用户提交消息时（已自动创建会话）
 //   - stop()                用户点击停止时
 
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, ref, watch, onMounted } from "vue";
 import { SendHorizontal, Square } from "lucide-vue-next";
 import { useAgentsStore } from "../../stores/agents";
 import { useConversationsStore } from "../../stores/conversations";
 import { useChatStore } from "../../stores/chat";
 import { useToast } from "../../composables/useToast";
-import pawLogo from "../../assets/logo/paw.svg";
+import { useAgentMeta, type AgentMeta } from "../../composables/useAgentMeta";
+import AgentAvatar from "../common/AgentAvatar.vue";
 
 const props = defineProps<{
   agentName: string;
@@ -39,6 +40,7 @@ const agentsStore = useAgentsStore();
 const conversationsStore = useConversationsStore();
 const chatStore = useChatStore();
 const toast = useToast();
+const agentMeta = useAgentMeta();
 
 // ============================================================================
 // 状态
@@ -54,11 +56,39 @@ const submitting = ref<boolean>(false);
 const textareaRef = ref<HTMLTextAreaElement | null>(null);
 
 // ============================================================================
+// Agent 元数据（头像 + 问候语 + 推荐词）
+// ============================================================================
+
+/** 当前 Agent 的完整 meta */
+const meta = computed<AgentMeta | null>(() => {
+  const agent = agentsStore.current;
+  if (!agent) return null;
+  return agentMeta.getFullMeta(agent);
+});
+
+/** 个性化问候语 */
+const greeting = computed<string>(() => {
+  const desc = meta.value?.description;
+  if (desc) {
+    return `我是你的${desc}，有什么可以帮你？`;
+  }
+  if (props.agentName) {
+    return `来和 ${props.agentName} 聊聊吧`;
+  }
+  return "有什么可以帮你的？";
+});
+
+// ============================================================================
 // 提示词芯片
 // ============================================================================
 
-/** 根据 Agent 模型动态生成的提示词芯片 */
+/** 推荐词优先级：meta.promptChips > system_prompt 关键词 > model 匹配 */
 const promptChips = computed<string[]>(() => {
+  // 1. 优先使用 meta.promptChips（模板自带）
+  const chips = meta.value?.promptChips;
+  if (chips && chips.length > 0) return chips;
+
+  // 2. 最终降级：根据 model 名称匹配（meta 不存在时）
   const model = props.modelName.toLowerCase();
   if (model.includes("code") || model.includes("deepseek") || model.includes("gpt-4")) {
     return [
@@ -74,7 +104,6 @@ const promptChips = computed<string[]>(() => {
       "用一段话总结《三体》第一部的核心",
     ];
   }
-  // 默认中文提示词
   return [
     "用一段话总结《三体》第一部的核心",
     "帮我写一份周报模板",
@@ -127,13 +156,11 @@ const sendDisabled = computed<boolean>(
 // 自动聚焦
 // ============================================================================
 
-onMountedFocus();
-
-function onMountedFocus(): void {
+onMounted(() => {
   void nextTick(() => {
     textareaRef.value?.focus();
   });
-}
+});
 
 // ============================================================================
 // 芯片点击：填入但不发送
@@ -145,7 +172,6 @@ function onChipClick(text: string): void {
   void nextTick(() => {
     autosize();
     textareaRef.value?.focus();
-    // 移动光标到末尾
     const el = textareaRef.value;
     if (el) {
       const len = el.value.length;
@@ -169,7 +195,6 @@ async function handleSend(): Promise<void> {
 
   submitting.value = true;
   try {
-    // 1. 若还没有会话，自动创建（首条消息即创建会话）
     if (!conversationsStore.currentId) {
       await conversationsStore.create(agentsStore.currentId);
     }
@@ -178,10 +203,8 @@ async function handleSend(): Promise<void> {
       toast.error("创建会话失败");
       return;
     }
-    // 2. 清空草稿
     draft.value = "";
     void nextTick(autosize);
-    // 3. 触发外层（ChatPage）切换到正常聊天界面 + 加载历史
     emit("send", trimmed);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -209,12 +232,16 @@ function onStopClick(): void {
 
 <template>
   <div class="welcome-root">
-    <!-- 顶部：头像 + 问候语 -->
+    <!-- 顶部：Agent 头像 + 个性化问候语 -->
     <div class="welcome-header">
-      <div class="welcome-avatar" aria-hidden="true">
-        <img :src="pawLogo" alt="" class="welcome-avatar-img" />
-      </div>
-      <h2 class="welcome-title">有什么可以帮你的？</h2>
+      <AgentAvatar
+        v-if="meta"
+        :meta="meta"
+        :size="64"
+        class="welcome-avatar"
+        aria-hidden="true"
+      />
+      <h2 class="welcome-title">{{ greeting }}</h2>
       <p class="welcome-subtitle">{{ agentName }} · {{ modelName }}</p>
     </div>
 
@@ -300,21 +327,8 @@ function onStopClick(): void {
 }
 
 .welcome-avatar {
-  width: 64px;
-  height: 64px;
-  border-radius: var(--ip-radius-full);
-  background: var(--ip-primary-500);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 6px 20px -8px rgba(59, 130, 246, 0.5);
-}
-
-.welcome-avatar-img {
-  width: 32px;
-  height: 32px;
-  color: #fff;
-  filter: brightness(0) invert(1);
+  /* AgentAvatar 组件自带 box-shadow，此处添加外发光效果 */
+  filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.08));
 }
 
 .welcome-title {
@@ -353,10 +367,10 @@ function onStopClick(): void {
   line-height: 1.4;
   cursor: pointer;
   transition:
-    background-color var(--ip-duration-fast, 150ms) var(--ip-ease-out, ease-out),
-    border-color var(--ip-duration-fast, 150ms) var(--ip-ease-out, ease-out),
-    color var(--ip-duration-fast, 150ms) var(--ip-ease-out, ease-out),
-    transform var(--ip-duration-fast, 150ms) var(--ip-ease-out, ease-out);
+    background-color var(--ip-duration-fast, 150ms) var(--ip-ease-out),
+    border-color var(--ip-duration-fast, 150ms) var(--ip-ease-out),
+    color var(--ip-duration-fast, 150ms) var(--ip-ease-out),
+    transform var(--ip-duration-fast, 150ms) var(--ip-ease-out);
 }
 
 .chip:hover:not(:disabled) {
@@ -371,7 +385,7 @@ function onStopClick(): void {
 
 .chip:focus-visible {
   outline: none;
-  box-shadow: var(--ip-shadow-focus, 0 0 0 3px rgba(59, 130, 246, 0.3));
+  box-shadow: var(--ip-shadow-focus);
 }
 
 .chip:disabled {
@@ -388,15 +402,15 @@ function onStopClick(): void {
   border-radius: var(--ip-radius-lg, 12px);
   box-shadow: 0 4px 16px -8px rgba(0, 0, 0, 0.08);
   transition:
-    border-color var(--ip-duration-base, 200ms) var(--ip-ease-out, ease-out),
-    box-shadow var(--ip-duration-base, 200ms) var(--ip-ease-out, ease-out);
+    border-color var(--ip-duration-base, 200ms) var(--ip-ease-out),
+    box-shadow var(--ip-duration-base, 200ms) var(--ip-ease-out);
   display: flex;
   flex-direction: column;
 }
 
 .welcome-input:focus-within {
   border-color: var(--ip-color-border-focus);
-  box-shadow: var(--ip-shadow-focus, 0 0 0 3px rgba(59, 130, 246, 0.25));
+  box-shadow: var(--ip-shadow-focus);
 }
 
 .welcome-input-streaming {
@@ -460,12 +474,12 @@ function onStopClick(): void {
   border-radius: var(--ip-radius-md, 8px);
   border: 1px solid transparent;
   cursor: pointer;
-  transition: var(--ip-transition-colors, all 150ms ease-out);
+  transition: var(--ip-transition-colors);
 }
 
 .welcome-btn:focus-visible {
   outline: none;
-  box-shadow: var(--ip-shadow-focus, 0 0 0 3px rgba(59, 130, 246, 0.3));
+  box-shadow: var(--ip-shadow-focus);
 }
 
 .welcome-btn:active:not(:disabled) {

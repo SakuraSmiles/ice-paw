@@ -2,8 +2,9 @@
 // 聊天页头部
 //
 // 职责：
-//   - 显示当前 Agent 名 + 当前会话标题 + 模型名
-//   - 右侧：流式中显示「停止」按钮（lucide Square 图标），否则留空（占位）
+//   - 标题左侧显示 Agent 小头像（20x20，字母缩写 / Lucide 图标）
+//   - 显示当前会话标题 / Agent 名 + 模型名
+//   - 右侧：流式中显示「停止」按钮（lucide Square 图标）
 //   - 半透明毛玻璃背景（backdrop-filter: blur(8px) + 半透明底色）
 //   - 高度 48px，颜色全部走 --ip-* Design Token
 //
@@ -17,10 +18,13 @@ import { Square } from "lucide-vue-next";
 import { useAgentsStore } from "../../stores/agents";
 import { useConversationsStore } from "../../stores/conversations";
 import { useChatStore } from "../../stores/chat";
+import { useAgentMeta, type AgentMeta } from "../../composables/useAgentMeta";
+import AgentAvatar from "../common/AgentAvatar.vue";
 
 const agentsStore = useAgentsStore();
 const conversationsStore = useConversationsStore();
 const chatStore = useChatStore();
+const agentMeta = useAgentMeta();
 
 const emit = defineEmits<{
   stop: [];
@@ -44,6 +48,13 @@ const headerTitle = computed<string>(() => {
   return agentName.value;
 });
 
+/** 当前 Agent 的完整 meta（用于头像渲染） */
+const meta = computed<AgentMeta | null>(() => {
+  const agent = agentsStore.current;
+  if (!agent) return null;
+  return agentMeta.getFullMeta(agent);
+});
+
 /** 停止按钮点击 */
 function onStop(): void {
   emit("stop");
@@ -54,6 +65,14 @@ function onStop(): void {
   <header class="chat-header">
     <div class="header-main">
       <div class="title-row">
+        <!-- Agent 小头像（20x20） -->
+        <AgentAvatar
+          v-if="meta"
+          :meta="meta"
+          :size="20"
+          class="header-avatar"
+          aria-hidden="true"
+        />
         <span class="conv-title">{{ headerTitle }}</span>
       </div>
       <div v-if="agentModel" class="meta-row">
@@ -78,19 +97,15 @@ function onStop(): void {
 
 <style scoped>
 .chat-header {
-  /* 高度 48px：弹性盒 + 8px 上下 padding + 内容垂直居中 */
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  height: 48px;
-  padding: 0 20px;
-
-  /* 毛玻璃：半透明背景 + 8px 模糊 */
+  gap: var(--ip-spacing-3);
+  height: var(--ip-spacing-12);
+  padding: 0 var(--ip-spacing-5);
   background-color: var(--ip-color-bg-header-backdrop);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
-
   border-bottom: 1px solid var(--ip-color-border-default);
   color: var(--ip-color-text-primary);
   flex-shrink: 0;
@@ -102,7 +117,7 @@ function onStop(): void {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 2px;
+  gap: var(--ip-spacing-0_5);
   min-width: 0;
   flex: 1;
   overflow: hidden;
@@ -111,7 +126,12 @@ function onStop(): void {
 .title-row {
   display: flex;
   align-items: center;
+  gap: var(--ip-spacing-2);
   min-width: 0;
+}
+
+.header-avatar {
+  flex-shrink: 0;
 }
 
 .conv-title {
@@ -127,7 +147,7 @@ function onStop(): void {
 .meta-row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--ip-spacing-2);
   font-size: var(--ip-text-caption-size);
   line-height: 1.2;
   color: var(--ip-color-text-tertiary);
@@ -148,15 +168,15 @@ function onStop(): void {
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--ip-spacing-2);
 }
 
 .btn-stop {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--ip-spacing-2);
   height: var(--ip-btn-h-sm);
-  padding: 0 12px;
+  padding: 0 var(--ip-spacing-3);
   font-size: var(--ip-text-body-sm-size);
   font-weight: var(--ip-font-weight-medium);
   font-family: inherit;
@@ -187,11 +207,4 @@ function onStop(): void {
 .btn-label {
   line-height: 1;
 }
-
-/* 暗色模式：
- * --ip-color-bg-header-backdrop / --ip-color-border-default /
- * --ip-color-text-primary / --ip-color-text-tertiary
- * 均在 packages/ui/src/styles/tokens.css 的 @media (prefers-color-scheme: dark)
- * 中已自动覆盖，无需在本组件重新声明。
- */
 </style>

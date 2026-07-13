@@ -13,6 +13,9 @@ import { Button } from "@ice-paw/ui";
 import { Plus } from "lucide-vue-next";
 import { useAgentsStore } from "../stores/agents";
 import { useToast } from "../composables/useToast";
+import { useAgentMeta } from "../composables/useAgentMeta";
+import { findTemplateById } from "../data/agentTemplates";
+import { initialsFromName } from "../utils/agentAvatar";
 import type { Agent } from "../types";
 import type { AgentFormPayload } from "../components/agent/AgentForm.vue";
 import AgentCard from "../components/agent/AgentCard.vue";
@@ -22,6 +25,7 @@ import EmptyAgentHint from "../components/agent/EmptyAgentHint.vue";
 
 const agentsStore = useAgentsStore();
 const toast = useToast();
+const agentMeta = useAgentMeta();
 
 // ============================================================================
 // 表单状态
@@ -91,6 +95,8 @@ async function confirmDelete(): Promise<void> {
   deleteDialogOpen.value = false;
   try {
     await agentsStore.deleteOne(id);
+    // 同步清理 agentMeta localStorage，避免遗留
+    agentMeta.removeMeta(id);
     toast.success("已删除");
   } catch {
     toast.error("删除失败");
@@ -112,7 +118,7 @@ function onDeleteDialogClose(): void {
 async function handleFormSubmit(payload: AgentFormPayload): Promise<void> {
   try {
     if (formMode.value === "create") {
-      await agentsStore.createOne({
+      const created = await agentsStore.createOne({
         name: payload.name,
         provider: payload.provider,
         model: payload.model,
@@ -122,6 +128,19 @@ async function handleFormSubmit(payload: AgentFormPayload): Promise<void> {
         temperature: payload.temperature,
         max_tokens: payload.max_tokens,
       });
+      // 若用户选中了模板，写 meta 到 localStorage
+      if (payload.templateId) {
+        const tpl = findTemplateById(payload.templateId);
+        if (tpl) {
+          agentMeta.setMeta(created.id, {
+            avatarText: initialsFromName(tpl.name),
+            avatarColor: tpl.color,
+            icon: tpl.icon,
+            description: tpl.description,
+            promptChips: tpl.promptChips,
+          });
+        }
+      }
       toast.success("Agent 已创建");
     } else if (editingAgent.value) {
       // 先更新基本信息（id 由 updateOne 内部拼入 patch）
