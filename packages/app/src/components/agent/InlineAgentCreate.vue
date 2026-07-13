@@ -11,7 +11,7 @@
 //
 // emits: 无（侧边栏保持显示，不需要额外的状态通知）
 
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { Input, Button } from "@ice-paw/ui";
 import { Plus, ArrowRight } from "lucide-vue-next";
@@ -33,8 +33,11 @@ const MODEL_PRESETS: Record<ProviderName, string[]> = {
   DeepSeek: ["deepseek-chat", "deepseek-reasoner"],
 };
 
+/** 下拉框里"自定义..."选项的固定文案 */
+const CUSTOM_MODEL_OPTION = "自定义...";
+
 // ============================================================================
-// Store / Router
+// Store / Router / Composable
 // ============================================================================
 
 const agentsStore = useAgentsStore();
@@ -50,6 +53,11 @@ const provider = ref<string>(PROVIDERS[0]);
 const model = ref<string>(MODEL_PRESETS[PROVIDERS[0]][0]);
 const apiKey = ref<string>("");
 
+/** 是否启用自定义模型名输入（"自定义..." 选项） */
+const useCustomModel = ref<boolean>(false);
+/** 自定义模型名输入框绑定值 */
+const customModel = ref<string>("");
+
 /** 提交状态（防止重复点击） */
 const submitting = ref<boolean>(false);
 
@@ -60,9 +68,16 @@ const errors = ref<Record<string, string>>({});
 // 派生
 // ============================================================================
 
+/** 下拉框的模型选项列表（末尾追加"自定义..."） */
 const presetModels = computed<string[]>(() => {
-  return MODEL_PRESETS[provider.value as ProviderName] ?? [];
+  const presets = MODEL_PRESETS[provider.value as ProviderName] ?? [];
+  return [...presets, CUSTOM_MODEL_OPTION];
 });
+
+/** 提交时实际使用的模型名（自定义场景下取 customModel.trim()） */
+const effectiveModel = computed<string>(() =>
+  useCustomModel.value ? customModel.value.trim() : model.value,
+);
 
 const nameError = computed<string>(() => errors.value.name ?? "");
 const apiKeyError = computed<string>(() => errors.value.api_key ?? "");
@@ -74,6 +89,27 @@ const apiKeyError = computed<string>(() => errors.value.api_key ?? "");
 function onProviderChange(e: Event): void {
   const target = e.target as EventTarget & { value: string };
   provider.value = target.value;
+  // 切换 provider 时退出自定义态，并选中该 provider 的第一个预设
+  useCustomModel.value = false;
+  customModel.value = "";
+  const presets = MODEL_PRESETS[provider.value as ProviderName] ?? [];
+  model.value = presets[0] ?? "";
+}
+
+/** 监听 model 变化：选到"自定义..."时切换为输入框态 */
+watch(model, (val) => {
+  if (val === CUSTOM_MODEL_OPTION) {
+    useCustomModel.value = true;
+    customModel.value = "";
+  } else {
+    useCustomModel.value = false;
+  }
+});
+
+/** 从自定义输入返回到下拉框（默认选中第一个预设） */
+function exitCustomModel(): void {
+  useCustomModel.value = false;
+  customModel.value = "";
   const presets = MODEL_PRESETS[provider.value as ProviderName] ?? [];
   model.value = presets[0] ?? "";
 }
@@ -92,6 +128,10 @@ function validate(): boolean {
   } else if (apiKey.value.trim().length < 10) {
     errs.api_key = "API Key 至少 10 位";
   }
+  // 自定义模型名校验
+  if (useCustomModel.value && !customModel.value.trim()) {
+    errs.model = "请输入自定义模型名";
+  }
   errors.value = errs;
   return Object.keys(errs).length === 0;
 }
@@ -109,13 +149,13 @@ async function handleSubmit(): Promise<void> {
     const input: NewAgent = {
       name: name.value.trim(),
       provider: provider.value.toLowerCase(),
-      model: model.value,
+      model: effectiveModel.value,
       api_key: apiKey.value.trim(),
     };
     const created = await agentsStore.createOne(input);
     // createOne 内部已经 setCurrent；此处显式再设一次以保证 store 状态稳定
     agentsStore.setCurrent(created.id);
-    // 不弹 Toast，由界面切换反馈成功；如有 error 字段可弹
+
     if (agentsStore.error) {
       toast.error(agentsStore.error);
     }
@@ -142,7 +182,7 @@ function goToAgentManager(): void {
       <header class="inline-create-header">
         <h2 class="inline-create-title">创建你的第一个 Agent</h2>
         <p class="inline-create-subtitle">
-          填写下方四个字段，立即开始与 AI 对话。
+          填写名称、Provider、Model 和 API Key，即可开始对话。
         </p>
       </header>
 
@@ -175,9 +215,31 @@ function goToAgentManager(): void {
 
           <div class="form-group">
             <label class="form-label" for="iac-model">模型</label>
-            <select id="iac-model" v-model="model" class="form-select">
+            <select
+              v-if="!useCustomModel"
+              id="iac-model"
+              v-model="model"
+              class="form-select"
+            >
               <option v-for="m in presetModels" :key="m" :value="m">{{ m }}</option>
             </select>
+            <div v-else class="custom-model-row">
+              <Input
+                v-model="customModel"
+                size="md"
+                placeholder="输入自定义模型名"
+                :error="Boolean(errors.model ?? '')"
+                :error-message="errors.model ?? ''"
+              />
+              <button
+                type="button"
+                class="btn-back"
+                aria-label="返回预设列表"
+                @click="exitCustomModel"
+              >
+                ← 返回
+              </button>
+            </div>
           </div>
         </div>
 
@@ -271,6 +333,7 @@ function goToAgentManager(): void {
   gap: var(--ip-spacing-4);
 }
 
+/* ===== 表单通用 ===== */
 .form-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -291,7 +354,7 @@ function goToAgentManager(): void {
 
 .form-select {
   width: 100%;
-  padding: 8px 12px;
+  padding: var(--ip-spacing-2) var(--ip-spacing-3);
   font-family: inherit;
   font-size: var(--ip-text-body-sm-size, 13px);
   color: var(--ip-color-text-body);
@@ -300,8 +363,8 @@ function goToAgentManager(): void {
   border-radius: var(--ip-input-radius, 8px);
   outline: none;
   transition:
-    border-color var(--ip-duration-fast, 150ms) var(--ip-ease-out, ease-out),
-    box-shadow var(--ip-duration-fast, 150ms) var(--ip-ease-out, ease-out);
+    border-color var(--ip-duration-fast, 150ms) var(--ip-ease-out),
+    box-shadow var(--ip-duration-fast, 150ms) var(--ip-ease-out);
   cursor: pointer;
 }
 
@@ -311,13 +374,54 @@ function goToAgentManager(): void {
 
 .form-select:focus {
   border-color: var(--ip-color-border-focus);
-  box-shadow: var(--ip-shadow-focus, 0 0 0 3px rgba(59, 130, 246, 0.3));
+  box-shadow: var(--ip-shadow-focus);
 }
 
 .form-actions {
   display: flex;
   justify-content: flex-end;
   margin-top: var(--ip-spacing-1);
+}
+
+/* ===== 自定义模型行（输入框 + 返回按钮）===== */
+.custom-model-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--ip-spacing-2);
+}
+
+.custom-model-row > :first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.btn-back {
+  appearance: none;
+  flex: 0 0 auto;
+  padding: var(--ip-spacing-2) var(--ip-spacing-3);
+  background: var(--ip-color-bg-secondary);
+  border: 1px solid var(--ip-color-border-default);
+  border-radius: var(--ip-input-radius, 8px);
+  font-family: inherit;
+  font-size: var(--ip-text-body-sm-size, 13px);
+  color: var(--ip-color-text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    border-color var(--ip-duration-fast, 150ms) var(--ip-ease-out),
+    background-color var(--ip-duration-fast, 150ms) var(--ip-ease-out),
+    color var(--ip-duration-fast, 150ms) var(--ip-ease-out);
+}
+
+.btn-back:hover {
+  background: var(--ip-color-bg-tertiary);
+  border-color: var(--ip-color-border-strong);
+  color: var(--ip-color-text-primary);
+}
+
+.btn-back:focus-visible {
+  outline: none;
+  box-shadow: var(--ip-shadow-focus);
 }
 
 .inline-create-footer {
@@ -331,18 +435,18 @@ function goToAgentManager(): void {
   appearance: none;
   background: none;
   border: none;
-  padding: 4px 8px;
+  padding: var(--ip-spacing-1) var(--ip-spacing-2);
   font-family: inherit;
   font-size: var(--ip-text-body-sm-size, 13px);
   color: var(--ip-color-text-tertiary);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--ip-spacing-1);
   border-radius: var(--ip-radius-sm, 4px);
   transition:
-    color var(--ip-duration-fast, 150ms) var(--ip-ease-out, ease-out),
-    background-color var(--ip-duration-fast, 150ms) var(--ip-ease-out, ease-out);
+    color var(--ip-duration-fast, 150ms) var(--ip-ease-out),
+    background-color var(--ip-duration-fast, 150ms) var(--ip-ease-out);
 }
 
 .skip-link:hover {
@@ -352,6 +456,6 @@ function goToAgentManager(): void {
 
 .skip-link:focus-visible {
   outline: none;
-  box-shadow: var(--ip-shadow-focus, 0 0 0 3px rgba(59, 130, 246, 0.3));
+  box-shadow: var(--ip-shadow-focus);
 }
 </style>
