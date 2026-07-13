@@ -31,8 +31,17 @@ const renderedHtml = computed<string>(() => renderMarkdown(props.content ?? ""))
     Code-block content is escaped before highlight.js runs, so <script> etc.
     cannot execute. See useMarkdown.ts for the full hardening.
   -->
+  <!--
+    eslint-disable vue/no-v-html
+    原因：v-html 在多行结构中无法使用 next-line 形式精准定位到属性行。
+    v-html 安全性说明见上方注释（markdown-it html:false + 链接校验）。
+  -->
   <!-- eslint-disable-next-line vue/no-v-html -->
-  <div class="markdown-body" v-html="renderedHtml" />
+  <div
+    class="markdown-body markdown-body--on-ai-bubble"
+    v-html="renderedHtml"
+  />
+  <!-- eslint-enable vue/no-v-html -->
 </template>
 
 <style scoped>

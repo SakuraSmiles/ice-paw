@@ -56,8 +56,8 @@ const isCrossAgent = computed<boolean>(
 
 /**
  * 顶部间距：跨 agent 用更大间距，连续同 agent 用更紧凑间距。
- * token 来自 @ice-paw/ui 的 design system；当前主应用未引入 tokens.css，
- * 因此提供合理 fallback。
+ * token 来自 @ice-paw/ui 的 design system；main.ts 已 import '@ice-paw/ui/styles'，
+ * --ip-* 变量在 :root 已注入，可直接引用无需 fallback。
  */
 const marginTop = computed<string>(() =>
   isCrossAgent.value
@@ -183,16 +183,20 @@ function onRetry(): void {
   word-break: break-word;
 }
 
-/* 用户气泡：深色背景 */
+/* 用户气泡：主题色蓝底白字 */
 .bubble-user .bubble-text {
-  background: var(--ip-color-bg-user-bubble);
-  color: var(--ip-color-text-on-primary);
+  background: var(--ip-color-bg-user-bubble);     /* #2563EB v1.0.3 */
+  color: var(--ip-color-text-on-user-bubble);    /* #FFFFFF v1.0.3 */
   border-bottom-right-radius: 4px;
 }
+/* hover 微亮：filter brightness 让蓝色更明显 */
+.bubble-user:hover .bubble-text {
+  filter: brightness(1.08);
+}
 
-/* 助手气泡：浅色 / 透明背景 */
+/* 助手气泡：浅灰底深字（v1.0.3：与用户气泡形成强视觉分层） */
 .bubble-assistant .bubble-text {
-  background: var(--ip-color-bg-ai-bubble);
+  background: var(--ip-color-bg-ai-bubble);      /* #F5F5F5 v1.0.3 */
   color: var(--ip-color-text-primary);
   border-bottom-left-radius: 4px;
 }
