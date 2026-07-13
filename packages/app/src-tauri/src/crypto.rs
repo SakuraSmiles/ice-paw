@@ -8,6 +8,30 @@
 //!
 //! 注意：调用方应保证**只有一个** stronghold 实例，否则会出现快照冲突。
 //!
+//! ## 启动恢复语义（关键不变量）
+//!
+//! `Stronghold::new(path, key)` 在底层做了：
+//!   1. `iota_stronghold::Stronghold::default()` —— 创建一个空内存结构
+//!      （`self.snapshot = Snapshot::default()`、`self.clients = HashMap::new()`）
+//!   2. 当 `path` 存在时，调用 `load_snapshot(&kp, &path)` —— **只**把整份快照
+//!      加载到 `self.snapshot.states`，**不会**把它恢复到 `self.clients` 这个 HashMap。
+//!
+//! 因此 `Stronghold::new` 之后，`self.snapshot` 与 `self.clients` 是分离的：
+//!   - `get_client(path)` 只查 `self.clients`，若 client 还没被恢复到内存
+//!     就返回 `ClientError::ClientDataNotPresent`。
+//!   - `load_client(path)` 会主动从 `self.snapshot.states` 中把对应 client 的
+//!     `(keystore, vault, store)` **恢复到** `self.clients`，并返回 client 句柄。
+//!
+//! ⚠️ **历史陷阱**：早期实现用 `get_client + create_client + save` 的模式：
+//!   `get_client` 误判 client "不存在" → `create_client` 在 `self.clients` 里
+//!   插入一个**空的** client → `save()` 走 `commit_with_keyprovider`，遍历
+//!   `self.clients` 把当前（含空 client）的状态写回 snapshot 文件 ——
+//!   **覆盖**原本已存在的 client 数据。重启后所有 agent 的 api_key 因此丢失。
+//!
+//! ✅ **正确做法**（见 `init`）：先 `load_client`，只有当它返回
+//! `ClientDataNotPresent`（说明 snapshot 里确实没有该 client）时，才走
+//! `create_client + save` 首次落盘。任何其他错误原样向上抛。
+//!
 //! ---
 //! ## 关于密码长度
 //!
@@ -29,6 +53,7 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use blake2::{Blake2b, Digest};
+use iota_stronghold::ClientError as ShClientError;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_stronghold::stronghold::Stronghold;
@@ -74,9 +99,10 @@ const STRONGHOLD_KEY_LEN: usize = 32;
 /// 提前算好 hash 喂进去，避开 tauri-plugin-stronghold wrapper 那个
 /// `KeyProvider::try_from(Zeroizing<Vec<u8>>)` 的 32 字节硬约束。
 ///
-/// `pub` 是为了让 `lib.rs` 的 stronghold plugin Builder 也能复用同一份 hash 逻辑
-/// （前端 JS API 走的也是同一段路径，避免触发同样的 length 错误）。
-pub fn derive_stronghold_key(passphrase: &[u8]) -> [u8; STRONGHOLD_KEY_LEN] {
+/// `pub(crate)` —— 仅 crate 内使用。原先 `pub` 是为了让 `lib.rs` 的
+/// stronghold plugin Builder 复用同一份 hash 逻辑；该 plugin 已移除，
+/// 现在仅 `crypto::init` 内部使用。
+pub(crate) fn derive_stronghold_key(passphrase: &[u8]) -> [u8; STRONGHOLD_KEY_LEN] {
     type Blake2b256 = Blake2b<blake2::digest::consts::U32>;
     let mut hasher = Blake2b256::new();
     hasher.update(passphrase);
@@ -94,6 +120,22 @@ fn inner_arc(app: &AppHandle) -> Arc<Mutex<Stronghold>> {
 /// 初始化 stronghold：放 `app.manage(CryptoState)`
 ///
 /// 幂等：重复调用仅返回现有实例。
+///
+/// ## 关键修复（P0）：启动恢复语义
+///
+/// `Stronghold::new` 只把 snapshot 数据加载到 `self.snapshot`，**不会**自动把
+/// client 恢复到 `self.clients` HashMap。若直接用 `get_client + create_client + save`
+/// 的模式：
+///   1. `get_client("icepaw")` 查 `self.clients` 找不到 → 返回 `ClientDataNotPresent`
+///   2. 误判为"首次启动"，调用 `create_client("icepaw")` → 在 `self.clients`
+///      里插入一个**空的** client（不会覆盖 self.snapshot 已有的 keystore/vault/store）
+///   3. `save()` 走 `commit_with_keyprovider` —— 遍历 `self.clients` 把当前
+///      （含空 client 的）状态写回 snapshot 文件 → **用空 client 覆盖了原本
+///      已存在的 keystore/vault/store** → 重启后所有 agent 的 api_key 丢失。
+///
+/// 正确顺序：先 `load_client` 主动从 `self.snapshot` 恢复到 `self.clients`；
+/// 仅当 `load_client` 返回 `ClientDataNotPresent`（snapshot 里确实没有该 client）
+/// 时才走 `create_client + save` 首次创建。其他任何错误原样向上抛，不要 fallback。
 pub fn init(app: &AppHandle) -> AppResult<()> {
     if app.try_state::<CryptoState>().is_some() {
         return Ok(());
@@ -115,17 +157,47 @@ pub fn init(app: &AppHandle) -> AppResult<()> {
 
     {
         let guard: MutexGuard<'_, Stronghold> = sh_arc.lock().expect("init: mutex poisoned");
-        match guard.get_client(CLIENT_NAME) {
-            Ok(_) => info!(target: "ice_paw.crypto", "Stronghold client 已存在"),
-            Err(_) => {
-                guard
-                    .create_client(CLIENT_NAME)
-                    .map_err(|e| AppError::Stronghold(format!("create_client: {e}")))?;
-                info!(target: "ice_paw.crypto", "Stronghold client 已创建");
+
+        // ★ P0 修复点：用 `load_client` 而不是 `get_client`。
+        //   `load_client` 走 `self.snapshot → self.clients` 的恢复路径，
+        //   `get_client` 只查 `self.clients`（在 `Stronghold::new` 之后永远为空）。
+        match guard.load_client(CLIENT_NAME) {
+            Ok(_) => {
+                info!(
+                    target: "ice_paw.crypto",
+                    "Stronghold client 已从 snapshot 恢复（不需重新落盘）"
+                );
+                // 不调用 save()：从 snapshot 恢复 = 内存状态与磁盘一致，再 save
+                // 是无意义的 I/O。
             }
-        }
-        if let Err(e) = guard.save() {
-            warn!(target: "ice_paw.crypto", "首次落盘失败（非致命）: {e}");
+            Err(e) => {
+                // 区分"首次启动（snapshot 里没有 client）"和其他错误：
+                //   - `ClientDataNotPresent`：`load_client` 在 snapshot 里查不到
+                //     该 client_id，触发"首次创建"路径。
+                //   - 其他错误（如 `CorruptedContent`、`SnapshotFileMissing`、
+                //     `IllegalKeySize`、`ClientAlreadyLoaded` 等）：原样向上抛，
+                //     绝不 fallback 到 create_client（避免再次覆盖 snapshot）。
+                //
+                // 注：用强类型 `match` 区分 ClientDataNotPresent 与其他错误，
+                // 避免字符串匹配的脆弱性（`ClientError::ClientDataNotPresent` 的
+                // Display 是 "error loading client data; no data present"，**不含**
+                // 字面量 "ClientDataNotPresent"）。`iota_stronghold` 已在 Cargo.toml
+                // 直接依赖。
+                if matches!(e, ShClientError::ClientDataNotPresent) {
+                    info!(
+                        target: "ice_paw.crypto",
+                        "Stronghold client 不存在，首次创建并落盘"
+                    );
+                    guard.create_client(CLIENT_NAME).map_err(|e| {
+                        AppError::Stronghold(format!("create_client: {e}"))
+                    })?;
+                    guard
+                        .save()
+                        .map_err(|e| AppError::Stronghold(format!("init save: {e}")))?;
+                } else {
+                    return Err(AppError::Stronghold(format!("load_client: {e}")));
+                }
+            }
         }
     } // guard dropped here
 
