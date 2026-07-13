@@ -17,6 +17,7 @@
 //     已在本文件移除该全局拦截。
 
 import { onMounted } from "vue";
+import { useRouter } from "vue-router";
 import { useAgentsStore } from "../../stores/agents";
 import { useConversationsStore } from "../../stores/conversations";
 import Toast from "../common/Toast.vue";
@@ -24,6 +25,7 @@ import Sidebar from "./Sidebar.vue";
 
 const agentsStore = useAgentsStore();
 const conversationsStore = useConversationsStore();
+const router = useRouter();
 
 onMounted(async () => {
   // 1. 加载 Agent 列表
@@ -40,11 +42,14 @@ onMounted(async () => {
 
 /**
  * Sidebar 选中会话：跳转到聊天页。
- * 当前 ChatPage 尚未实现会话加载，仅简单跳转。
- * 后续 chat 模块会监听 conversationsStore.currentId 自动加载消息。
+ *
+ * - Sidebar 的 onSelect / onCreate / onDelete 均会 emit chat:select；
+ * - Sidebar 内部已调 conversationsStore.setCurrent / create，本组件只需负责路由跳转。
+ * - ChatPage 监听 conversationsStore.currentId 自动 loadMessages，无需在此处传参。
+ * - 若已在 /chat，push 到同名路由是 no-op（Vue Router 会忽略），无需额外判重。
  */
 function onChatSelect(_conversationId: string | null): void {
-  // 路由跳转由 ChatPage / store 监听自动完成，保留事件位以备扩展
+  void router.push({ name: "Chat" });
 }
 </script>
 
