@@ -33,7 +33,7 @@ type ProviderName = (typeof PROVIDERS)[number];
 const MODEL_PRESETS: Record<ProviderName, string[]> = {
   OpenAI: ["gpt-4o", "gpt-4o-mini"],
   Anthropic: ["claude-sonnet-4-20250514"],
-  GLM: ["glm-4-flash", "glm-4-plus"],
+  GLM: ["glm-5.2", "glm-4.7", "glm-4-flash"], // 5.2 当前旗舰；4.7 通用对话强；4-flash 免费兜底
   DeepSeek: ["deepseek-chat", "deepseek-reasoner"],
 };
 
