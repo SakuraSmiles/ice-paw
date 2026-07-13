@@ -22,10 +22,22 @@ import type { Agent, AgentUpdate, Conversation, Message, NewAgent, NewMessage } 
 /**
  * 将任意 invoke 抛出的异常包装为 Error，便于上层用 message 统一处理。
  * 避免把 Tauri 原始的字符串/对象直接外泄到 UI。
+ *
+ * Tauri v2 invoke 失败时抛出的错误对象格式为 `{ kind, message }`（来自 Rust 侧的
+ * AppError Serialize 实现）。如果直接 `String(err)` 会得到 "[object Object]"，
+ * 因此这里按结构解析：error kind 进入前缀，message 作为正文。
  */
 function wrapInvokeError(op: string, err: unknown): Error {
   if (err instanceof Error) {
     return new Error(`[bridge.${op}] ${err.message}`);
+  }
+  // Tauri 结构化错误对象：{ kind, message }
+  if (typeof err === "object" && err !== null) {
+    const obj = err as Record<string, unknown>;
+    const msg = typeof obj.message === "string" ? obj.message : JSON.stringify(err);
+    const kind = typeof obj.kind === "string" ? obj.kind : undefined;
+    const prefix = kind ? `[${op}/${kind}]` : `[${op}]`;
+    return new Error(`${prefix} ${msg}`);
   }
   return new Error(`[bridge.${op}] ${String(err)}`);
 }

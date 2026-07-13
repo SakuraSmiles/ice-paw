@@ -2,23 +2,45 @@
 // Agent 选择器
 //
 // 职责：
-//   - 顶部横条展示当前 Agent 名称 + 下拉箭头
+//   - 顶部横条展示当前 Agent 头像 + 名称 + 下拉箭头
 //   - 点击展开下拉列表（absolute 定位）
+//   - 下拉项显示头像 + 名称 + 描述
 //   - 点击列表项切换 Agent
 //   - 底部固定项「管理 Agent →」跳转路由
 //
-// 数据源：agentsStore（无需 props）
+// 数据源：agentsStore + useAgentMeta
 
-import { ref, onMounted, onUnmounted } from "vue";
+import { computed, ref, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { ChevronDown, ArrowRight } from "lucide-vue-next";
 import { useAgentsStore } from "../../stores/agents";
+import { useAgentMeta, type AgentMeta } from "../../composables/useAgentMeta";
+import AgentAvatar from "../common/AgentAvatar.vue";
 
 const agentsStore = useAgentsStore();
 const router = useRouter();
+const agentMeta = useAgentMeta();
 
 /** 下拉是否展开 */
 const expanded = ref<boolean>(false);
+
+/**
+ * 获取 Agent 的元数据缓存。
+ * 用 Map 避免在模板中反复调用 getFullMeta（每次返回新对象会触发不必要的更新）。
+ */
+const metaCache = computed(() => {
+  const map = new Map<string, AgentMeta | null>();
+  for (const agent of agentsStore.agents) {
+    map.set(agent.id, agentMeta.getFullMeta(agent));
+  }
+  return map;
+});
+
+/** 当前 Agent 的 meta */
+const currentMeta = computed<AgentMeta | null>(() => {
+  if (!agentsStore.currentId) return null;
+  return metaCache.value.get(agentsStore.currentId) ?? null;
+});
 
 /** 切换展开 */
 function toggle(): void {
@@ -64,6 +86,12 @@ onUnmounted(() => {
       @click.stop="toggle"
     >
       <span class="selector-label">Agent</span>
+      <!-- trigger 小头像（24px） -->
+      <AgentAvatar
+        v-if="currentMeta"
+        :meta="currentMeta"
+        :size="24"
+      />
       <span class="selector-name">{{ agentsStore.current?.name ?? "未选择" }}</span>
       <ChevronDown
         :size="14"
@@ -88,8 +116,21 @@ onUnmounted(() => {
             :aria-selected="agentsStore.currentId === agent.id"
             @click="pick(agent.id)"
           >
-            <span class="item-name">{{ agent.name }}</span>
-            <span class="item-meta">{{ agent.provider }} · {{ agent.model }}</span>
+            <div class="item-row">
+              <AgentAvatar
+                v-if="metaCache.get(agent.id)"
+                :meta="metaCache.get(agent.id)!"
+                :size="24"
+              />
+              <div v-else class="avatar-placeholder" :style="{ width: '24px', height: '24px' }" />
+              <div class="item-text">
+                <span class="item-name">{{ agent.name }}</span>
+                <span
+                  v-if="metaCache.get(agent.id)?.description"
+                  class="item-desc"
+                >{{ metaCache.get(agent.id)!.description }}</span>
+              </div>
+            </div>
           </button>
         </template>
         <div class="dropdown-divider" />
@@ -207,9 +248,6 @@ onUnmounted(() => {
   font-family: inherit;
   font-size: var(--ip-text-body-sm-size);
   color: var(--ip-color-text-primary);
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
   transition: var(--ip-transition-colors);
 }
 
@@ -223,7 +261,7 @@ onUnmounted(() => {
   box-shadow: var(--ip-shadow-focus);
 }
 
-/* 选中态：亮色 primary-50 + primary-700；暗色 primary-900 + primary-100 */
+/* 选中态 */
 .dropdown-item-active {
   background: var(--ip-primary-50);
   color: var(--ip-primary-700);
@@ -233,7 +271,6 @@ onUnmounted(() => {
   background: var(--ip-primary-100);
 }
 
-/* 暗色模式：祖先选择器 [data-theme="dark"] 不被 scope，class 选择器自动加上 data-v */
 [data-theme="dark"] .dropdown-item-active {
   background: var(--ip-primary-900);
   color: var(--ip-primary-100);
@@ -243,6 +280,21 @@ onUnmounted(() => {
   background: var(--ip-primary-800);
 }
 
+/* 下拉项内部布局：头像 + 文字 */
+.item-row {
+  display: flex;
+  align-items: center;
+  gap: var(--ip-spacing-2);
+}
+
+.item-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+
 .item-name {
   font-weight: var(--ip-font-weight-medium);
   white-space: nowrap;
@@ -250,7 +302,7 @@ onUnmounted(() => {
   text-overflow: ellipsis;
 }
 
-.item-meta {
+.item-desc {
   font-size: 11px;
   color: var(--ip-color-text-tertiary);
   white-space: nowrap;
@@ -258,11 +310,11 @@ onUnmounted(() => {
   text-overflow: ellipsis;
 }
 
-.dropdown-item-active .item-meta {
+.dropdown-item-active .item-desc {
   color: var(--ip-primary-600);
 }
 
-[data-theme="dark"] .dropdown-item-active .item-meta {
+[data-theme="dark"] .dropdown-item-active .item-desc {
   color: var(--ip-primary-300);
 }
 
@@ -273,6 +325,7 @@ onUnmounted(() => {
 }
 
 .dropdown-manage {
+  display: flex;
   flex-direction: row;
   align-items: center;
   justify-content: space-between;

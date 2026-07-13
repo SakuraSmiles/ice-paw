@@ -59,6 +59,60 @@ impl OpenAiAdapter {
     }
 }
 
+/// 智能拼接 OpenAI 兼容 Chat Completions 端点。
+///
+/// **为什么需要**：用户填写的 `base_url` 可能已经包含版本路径
+/// （如 GLM coding 的 `https://open.bigmodel.cn/api/coding/paas/v4`），
+/// 也可能不包含（如默认的 `https://api.openai.com`）。盲目追加
+/// `/v1/chat/completions` 会得到 `.../v4/v1/chat/completions`，
+/// 导致 404。
+///
+/// 规则：
+/// - 若末尾路径段匹配 `/vN`（`v` 后跟 ≥1 位数字，如 `v1`/`v4`/`v42`），
+///   则**不再追加** `/v1`，直接拼 `/chat/completions`。
+/// - 否则按 OpenAI 标准路径补 `/v1/chat/completions`。
+/// - 自动 trim 末尾 `/`。
+///
+/// # 示例
+/// - `https://api.openai.com` → `https://api.openai.com/v1/chat/completions`
+/// - `https://api.openai.com/` → `https://api.openai.com/v1/chat/completions`
+/// - `https://api.openai.com/v1` → `https://api.openai.com/v1/chat/completions`
+/// - `https://open.bigmodel.cn/api/coding/paas/v4`
+///   → `https://open.bigmodel.cn/api/coding/paas/v4/chat/completions`
+/// - `https://api.deepseek.com` → `https://api.deepseek.com/v1/chat/completions`
+/// - `https://x.com/version1` → `https://x.com/version1/v1/chat/completions`（非 v+纯数字）
+pub fn build_chat_url(base: &str) -> String {
+    let trimmed = base.trim_end_matches('/');
+    // 提取末尾路径段（rsplit 在空串时返回 [""]，所以 next() 永远拿得到）
+    let last_segment = trimmed.rsplit('/').next().unwrap_or("");
+    if is_version_segment(last_segment) {
+        format!("{}/chat/completions", trimmed)
+    } else {
+        format!("{}/v1/chat/completions", trimmed)
+    }
+}
+
+/// 判断路径段是否形如 `vN`（v 后跟 ≥1 位 ASCII 数字）。
+///
+/// 例如：
+/// - `v1` → true
+/// - `v42` → true
+/// - `v` → false（无数字）
+/// - `version1` → false（v 后不是纯数字）
+/// - `1v` → false（不以 v 开头）
+/// - 空串 → false
+fn is_version_segment(seg: &str) -> bool {
+    if seg.len() < 2 {
+        return false;
+    }
+    let bytes = seg.as_bytes();
+    if bytes[0] != b'v' {
+        return false;
+    }
+    // v 之后必须全部是数字
+    seg[1..].chars().all(|c| c.is_ascii_digit())
+}
+
 // =========================================================================
 // 请求 / 响应 结构
 // =========================================================================
@@ -113,8 +167,8 @@ impl LlmProvider for OpenAiAdapter {
         max_tokens: i32,
         cancel: CancellationToken,
     ) -> AppResult<Pin<Box<dyn Stream<Item = AppResult<ChatDelta>> + Send>>> {
-        // 拼装请求 URL
-        let url = format!("{}/v1/chat/completions", self.base_url.trim_end_matches('/'));
+        // 拼装请求 URL（智能识别 base_url 是否已含版本路径）
+        let url = build_chat_url(&self.base_url);
 
         let body = ChatRequest {
             model: self.model.clone(),
@@ -258,5 +312,175 @@ impl LlmProvider for OpenAiAdapter {
 
         // 返回 ReceiverStream 包装
         Ok(Box::pin(ReceiverStream::new(rx)))
+    }
+}
+
+
+// =========================================================================
+// 单元测试
+// =========================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---------------------------------------------------------------
+    // is_version_segment 边界用例
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn is_version_segment_basic_v1() {
+        assert!(is_version_segment("v1"));
+    }
+
+    #[test]
+    fn is_version_segment_multi_digit_v42() {
+        assert!(is_version_segment("v42"));
+    }
+
+    #[test]
+    fn is_version_segment_all_versions() {
+        // 验证 v1 / v2 / v3 / v4 都能识别
+        for v in &["v1", "v2", "v3", "v4", "v10", "v100"] {
+            assert!(is_version_segment(v), "expected {} to be a version segment", v);
+        }
+    }
+
+    #[test]
+    fn is_version_segment_rejects_lone_v() {
+        assert!(!is_version_segment("v"));
+    }
+
+    #[test]
+    fn is_version_segment_rejects_empty() {
+        assert!(!is_version_segment(""));
+    }
+
+    #[test]
+    fn is_version_segment_rejects_version_word() {
+        // version1 不算 —— v 之后必须是纯数字
+        assert!(!is_version_segment("version1"));
+    }
+
+    #[test]
+    fn is_version_segment_rejects_v_then_letters() {
+        assert!(!is_version_segment("vbeta"));
+        assert!(!is_version_segment("v1a"));
+    }
+
+    #[test]
+    fn is_version_segment_rejects_v_at_end() {
+        // "1v" 不算 —— 必须以 v 开头
+        assert!(!is_version_segment("1v"));
+    }
+
+    #[test]
+    fn is_version_segment_rejects_single_char() {
+        assert!(!is_version_segment("a"));
+        assert!(!is_version_segment("/"));
+    }
+
+    // ---------------------------------------------------------------
+    // build_chat_url 用例
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn url_openai_default() {
+        let url = build_chat_url("https://api.openai.com");
+        assert_eq!(url, "https://api.openai.com/v1/chat/completions");
+    }
+
+    #[test]
+    fn url_openai_default_with_trailing_slash() {
+        let url = build_chat_url("https://api.openai.com/");
+        assert_eq!(url, "https://api.openai.com/v1/chat/completions");
+    }
+
+    #[test]
+    fn url_openai_explicit_v1() {
+        let url = build_chat_url("https://api.openai.com/v1");
+        assert_eq!(url, "https://api.openai.com/v1/chat/completions");
+    }
+
+    #[test]
+    fn url_glm_coding_v4() {
+        // 核心场景：GLM coding 端点已含 v4，必须直接拼接
+        let url = build_chat_url("https://open.bigmodel.cn/api/coding/paas/v4");
+        assert_eq!(
+            url,
+            "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions"
+        );
+    }
+
+    #[test]
+    fn url_glm_paas_v4() {
+        let url = build_chat_url("https://open.bigmodel.cn/api/paas/v4");
+        assert_eq!(url, "https://open.bigmodel.cn/api/paas/v4/chat/completions");
+    }
+
+    #[test]
+    fn url_glm_v4_with_trailing_slash() {
+        let url = build_chat_url("https://open.bigmodel.cn/api/coding/paas/v4/");
+        assert_eq!(
+            url,
+            "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions"
+        );
+    }
+
+    #[test]
+    fn url_deepseek_default() {
+        let url = build_chat_url("https://api.deepseek.com");
+        assert_eq!(url, "https://api.deepseek.com/v1/chat/completions");
+    }
+
+    #[test]
+    fn url_deepseek_explicit_v1() {
+        let url = build_chat_url("https://api.deepseek.com/v1");
+        assert_eq!(url, "https://api.deepseek.com/v1/chat/completions");
+    }
+
+    #[test]
+    fn url_proxy_with_v2() {
+        let url = build_chat_url("https://some-proxy.com/v2");
+        assert_eq!(url, "https://some-proxy.com/v2/chat/completions");
+    }
+
+    #[test]
+    fn url_proxy_with_v42() {
+        let url = build_chat_url("https://some-proxy.com/api/v42");
+        assert_eq!(url, "https://some-proxy.com/api/v42/chat/completions");
+    }
+
+    #[test]
+    fn url_version_word_not_treated_as_version() {
+        // "version1" 不算 v+数字，所以仍然追加 /v1
+        let url = build_chat_url("https://some-proxy.com/version1");
+        assert_eq!(
+            url,
+            "https://some-proxy.com/version1/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn url_lone_v_segment_not_treated_as_version() {
+        // 末尾是 "/v" 但 v 后无数字，应追加 /v1
+        let url = build_chat_url("https://some-proxy.com/v");
+        assert_eq!(url, "https://some-proxy.com/v/v1/chat/completions");
+    }
+
+    #[test]
+    fn url_multiple_trailing_slashes() {
+        // trim_end_matches 会去掉所有末尾 /
+        let url = build_chat_url("https://api.openai.com///");
+        assert_eq!(url, "https://api.openai.com/v1/chat/completions");
+    }
+
+    #[test]
+    fn url_with_path_but_no_version() {
+        let url = build_chat_url("https://example.com/api/openai");
+        assert_eq!(
+            url,
+            "https://example.com/api/openai/v1/chat/completions"
+        );
     }
 }

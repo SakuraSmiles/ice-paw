@@ -2,8 +2,11 @@
 // Agent 卡片组件
 //
 // 职责：
-//   - 展示单个 Agent 的摘要信息：名称、Provider、Model、创建时间
+//   - 展示单个 Agent 的摘要信息：头像（字母缩写/Lucide 图标）+ 名称 + 描述 + provider/model 标签 + 时间
 //   - 提供「编辑」和「删除」操作按钮（@ice-paw/ui Button + lucide 图标）
+//
+// 布局（方案 v2 4.3）：
+//   [头像] [名称 + 描述 + provider/model 标签] ........ [Edit] [Delete]
 //
 // props:
 //   - agent: Agent 实体
@@ -12,9 +15,13 @@
 //   - edit:   点击编辑按钮时触发
 //   - delete: 点击删除按钮时触发
 
+import { computed } from "vue";
 import { Button } from "@ice-paw/ui";
 import { Pencil, Trash2 } from "lucide-vue-next";
 import type { Agent } from "../../types";
+import { useAgentMeta } from "../../composables/useAgentMeta";
+import type { AgentMeta } from "../../composables/useAgentMeta";
+import AgentAvatar from "../common/AgentAvatar.vue";
 
 const props = defineProps<{
   agent: Agent;
@@ -24,6 +31,11 @@ const emit = defineEmits<{
   edit: [agent: Agent];
   delete: [agent: Agent];
 }>();
+
+const agentMeta = useAgentMeta();
+
+/** Agent 完整元数据（含 icon） */
+const meta = computed<AgentMeta | null>(() => agentMeta.getFullMeta(props.agent));
 
 /** 格式化日期为友好文本 */
 function formatDate(iso: string): string {
@@ -43,14 +55,22 @@ function formatDate(iso: string): string {
 
 <template>
   <div class="agent-card">
+    <!-- 头像 -->
+    <AgentAvatar v-if="meta" :meta="meta" :size="48" />
+    <div v-else class="agent-avatar-placeholder" :style="{ width: '48px', height: '48px' }"></div>
+
+    <!-- 信息区 -->
     <div class="agent-card-body">
       <div class="agent-name">{{ props.agent.name }}</div>
+      <div v-if="meta?.description" class="agent-desc">{{ meta.description }}</div>
       <div class="agent-meta">
         <span class="agent-tag">{{ props.agent.provider }}</span>
         <span class="agent-tag">{{ props.agent.model }}</span>
       </div>
       <div class="agent-time">{{ formatDate(props.agent.created_at) }}</div>
     </div>
+
+    <!-- 操作按钮 -->
     <div class="agent-card-actions">
       <Button
         variant="secondary"
@@ -113,6 +133,15 @@ function formatDate(iso: string): string {
   font-weight: var(--ip-font-weight-semibold);
   line-height: var(--ip-line-height-relaxed);
   color: var(--ip-color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-desc {
+  font-size: var(--ip-text-body-sm-size);
+  line-height: var(--ip-line-height-relaxed);
+  color: var(--ip-color-text-tertiary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
