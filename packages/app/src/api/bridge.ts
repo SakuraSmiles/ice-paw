@@ -13,7 +13,17 @@
 //   list_messages / create_message
 
 import { invoke } from "@tauri-apps/api/core";
-import type { Agent, AgentUpdate, Conversation, Message, NewAgent, NewMessage } from "../types";
+import type {
+  Agent,
+  AgentUpdate,
+  Conversation,
+  Message,
+  NewAgent,
+  NewMessage,
+  NewTemplate,
+  Template,
+  TemplateUpdate,
+} from "../types";
 
 // ============================================================================
 // 内部工具：错误归一化
@@ -242,15 +252,26 @@ const chat = {
    * 命令本身立即返回（AppResult<()>），生成进度通过 `chat:start` / `chat:chunk`
    * / `chat:done` / `chat:error` 四个事件下发；前端在 stores/chat.ts 中订阅。
    *
+   * 可选 `template` 参数（P2-4 模板注入）：传入后，Rust 侧会查模板 →
+   * 渲染变量 → 替换/拼接 system_prompt，最后再调 LLM。
+   *
    * 注意：Rust 侧 send_message 的入参是结构体 SendMessageInput，因此这里走
-   * `{ input: { conversation_id, content } }` 包装形式（与 agents.create 同形）。
+   * `{ input: { conversation_id, content, template? } }` 包装形式。
    *
    * 对应 Command：send_message
    */
-  async sendMessage(conversationId: string, content: string): Promise<void> {
+  async sendMessage(
+    conversationId: string,
+    content: string,
+    template?: { template_id: string; values: Record<string, string> },
+  ): Promise<void> {
     try {
       await invoke<void>("send_message", {
-        input: { conversation_id: conversationId, content },
+        input: {
+          conversation_id: conversationId,
+          content,
+          template,
+        },
       });
     } catch (err) {
       throw wrapInvokeError("chat.sendMessage", err);
@@ -274,6 +295,72 @@ const chat = {
 };
 
 // ============================================================================
+// bridge.templates — 模板命名空间
+// ============================================================================
+
+const templates = {
+  /**
+   * 列出全部模板（按 sort_order ASC, created_at ASC）。
+   * 对应 Command：list_templates
+   */
+  async list(): Promise<Template[]> {
+    try {
+      return await invoke<Template[]>("list_templates");
+    } catch (err) {
+      throw wrapInvokeError("templates.list", err);
+    }
+  },
+
+  /**
+   * 按 ID 取一条模板。
+   * 对应 Command：get_template
+   */
+  async get(id: string): Promise<Template> {
+    try {
+      return await invoke<Template>("get_template", { id });
+    } catch (err) {
+      throw wrapInvokeError("templates.get", err);
+    }
+  },
+
+  /**
+   * 创建模板。
+   * 对应 Command：create_template
+   */
+  async create(input: NewTemplate): Promise<Template> {
+    try {
+      return await invoke<Template>("create_template", { input });
+    } catch (err) {
+      throw wrapInvokeError("templates.create", err);
+    }
+  },
+
+  /**
+   * 部分更新模板。
+   * 对应 Command：update_template
+   */
+  async update(input: TemplateUpdate): Promise<Template> {
+    try {
+      return await invoke<Template>("update_template", { input });
+    } catch (err) {
+      throw wrapInvokeError("templates.update", err);
+    }
+  },
+
+  /**
+   * 删除模板。
+   * 对应 Command：delete_template
+   */
+  async delete(id: string): Promise<void> {
+    try {
+      await invoke<void>("delete_template", { id });
+    } catch (err) {
+      throw wrapInvokeError("templates.delete", err);
+    }
+  },
+};
+
+// ============================================================================
 // 统一导出
 // ============================================================================
 
@@ -292,6 +379,7 @@ export const bridge = {
   agents,
   conversations,
   messages,
+  templates,
   chat,
 };
 

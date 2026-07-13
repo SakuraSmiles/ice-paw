@@ -50,6 +50,12 @@ const TEMP_USER_PREFIX = "__temp_user_";
 /** 监听器是否已注册（防止重复 setup） */
 let listenersRegistered = false;
 
+/** 发送时附带的模板信息（P2-4 模板） */
+export interface AppliedTemplate {
+  templateId: string;
+  values: Record<string, string>;
+}
+
 // ============================================================================
 // store
 // ============================================================================
@@ -110,6 +116,13 @@ export const useChatStore = defineStore("chat", () => {
 
   /** listen 返回的 unlisten 函数列表 */
   const unlistens: UnlistenFn[] = [];
+
+  /**
+   * 已应用的模板（下次 sendMessage 时传给后端）。
+   * - null 表示本次发送不携带模板
+   * - 输入框内容被用户修改后会自动清空（由 ChatInput / WelcomeInput 主动调）
+   */
+  const appliedTemplate = ref<AppliedTemplate | null>(null);
 
   // ============================================================================
   // 内部工具
@@ -381,8 +394,18 @@ export const useChatStore = defineStore("chat", () => {
     messages.value = [...messages.value, optimistic];
 
     try {
-      await bridge.chat.sendMessage(convId, trimmed);
-      // 成功：保持乐观插入，由 chat:start 替换真实 ID
+      await bridge.chat.sendMessage(
+        convId,
+        trimmed,
+        appliedTemplate.value
+          ? {
+              template_id: appliedTemplate.value.templateId,
+              values: appliedTemplate.value.values,
+            }
+          : undefined,
+      );
+      // 成功：清空已应用模板，保持乐观插入由 chat:start 替换真实 ID
+      appliedTemplate.value = null;
     } catch (err) {
       // 失败：回滚
       messages.value = messages.value.filter((m) => m.id !== tempId);
@@ -390,6 +413,14 @@ export const useChatStore = defineStore("chat", () => {
       activeConvId.value = null;
       throw err;
     }
+  }
+
+  /**
+   * 设置已应用的模板（由 ChatInput / WelcomeInput 调用）
+   * @param payload 模板 + 变量值；传 null 清空
+   */
+  function setAppliedTemplate(payload: AppliedTemplate | null): void {
+    appliedTemplate.value = payload;
   }
 
   /**
@@ -437,6 +468,7 @@ export const useChatStore = defineStore("chat", () => {
     error,
     retrying,
     retryProgress,
+    appliedTemplate,
     // getters
     currentMessages,
     lastMessage,
@@ -448,5 +480,6 @@ export const useChatStore = defineStore("chat", () => {
     sendMessage,
     stopGeneration,
     clearError,
+    setAppliedTemplate,
   };
 });

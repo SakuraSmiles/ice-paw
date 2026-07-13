@@ -65,6 +65,11 @@ pub fn run() {
             commands::conversation_cmd::delete_conversation,
             commands::message_cmd::list_messages,
             commands::message_cmd::create_message,
+            commands::template_cmd::list_templates,
+            commands::template_cmd::get_template,
+            commands::template_cmd::create_template,
+            commands::template_cmd::update_template,
+            commands::template_cmd::delete_template,
             commands::chat_cmd::send_message,
             commands::chat_cmd::stop_generation,
         ])
