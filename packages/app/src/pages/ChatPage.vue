@@ -91,7 +91,7 @@ watch(currentConvId, async (newId, oldId) => {
   if (newId === oldId) return;
   if (!newId) {
     // 切换到无会话：清空消息
-    chatStore.messages.length = 0;
+    chatStore.messages.splice(0);
     chatStore.clearError();
     return;
   }
@@ -101,6 +101,28 @@ watch(currentConvId, async (newId, oldId) => {
     toast.error("加载历史消息失败");
   }
 });
+
+/**
+ * 防御性 watch：直接监听 conversationsStore.currentId，
+ * 作为 currentConvId 计算之外的兜底。
+ *
+ * 场景：loadFor() 与 create() 之间的时序竞争 —— store 内部
+ * create() 完成后 currentId 已变化，但 ChatPage 因路由切换/重渲
+ * 错过了 currentConvId 的触发时机。此 watch 保证：一旦 currentId
+ * 变为有效会话且消息列表为空，便主动加载历史消息。
+ */
+watch(
+  () => conversationsStore.currentId,
+  async (id) => {
+    if (!id || chatStore.isStreaming) return;
+    if (chatStore.messages.length > 0) return;
+    try {
+      await chatStore.loadMessages(id);
+    } catch {
+      // 主 watch 已 Toast 提示，避免重复弹窗
+    }
+  },
+);
 
 // ============================================================================
 // 监听：chatStore.error 变化触发 Toast
