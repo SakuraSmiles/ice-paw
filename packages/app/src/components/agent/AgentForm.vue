@@ -1,9 +1,31 @@
 <script setup lang="ts">
 // Agent 创建/编辑表单 — 侧滑面板
+//
+// 职责：
+//   - create 模式：顶部展示模板选择器 → 点选后自动填充 name / system_prompt / temperature
+//   - edit   模式：不展示模板选择器，直接编辑现有 Agent
+//   - 字段顺序（按方案 v2 4.1）：
+//       [模板选择器] → Name → [角色设定 System Prompt] → Provider → Model → API Key → [高级折叠：Base URL / Temperature / Max Tokens]
+//   - 创建 / 编辑成功后由父组件（AgentManagerPage）根据 payload.templateId 写入 agentMeta
+//
+// props:
+//   - mode:   "create" | "edit"
+//   - agent:  编辑模式下的目标 Agent
+//   - open:   面板是否显示
+//
+// emits:
+//   - update:open  关闭面板
+//   - submit       提交表单，payload 字段见 AgentFormPayload
+
 import { ref, computed, watch } from "vue";
 import { Input, Textarea, Button } from "@ice-paw/ui";
-import { X } from "lucide-vue-next";
+import { X, Sparkles, ChevronDown } from "lucide-vue-next";
 import type { Agent } from "../../types";
+import {
+  AGENT_TEMPLATES,
+  type AgentTemplate,
+} from "../../data/agentTemplates";
+import { saturatedToBgFg } from "../../utils/agentAvatar";
 
 const PROVIDERS = ["OpenAI", "Anthropic", "GLM", "DeepSeek"] as const;
 type ProviderName = (typeof PROVIDERS)[number];
@@ -11,10 +33,15 @@ type ProviderName = (typeof PROVIDERS)[number];
 const MODEL_PRESETS: Record<ProviderName, string[]> = {
   OpenAI: ["gpt-4o", "gpt-4o-mini"],
   Anthropic: ["claude-sonnet-4-20250514"],
-  GLM: ["glm-4-flash", "glm-4-plus"],
+  GLM: ["glm-5.2", "glm-4.7", "glm-4-flash"], // 5.2 当前旗舰；4.7 通用对话强；4-flash 免费兜底
   DeepSeek: ["deepseek-chat", "deepseek-reasoner"],
 };
 
+/**
+ * 表单提交 payload。
+ * 新增 `templateId` 字段（仅 create 模式可能存在），
+ *   父组件在创建成功后根据该字段写入 agentMeta 到 localStorage。
+ */
 export interface AgentFormPayload {
   name: string;
   provider: string;
@@ -25,6 +52,8 @@ export interface AgentFormPayload {
   temperature: number;
   max_tokens: number;
   rotateApiKey: boolean;
+  /** create 模式下用户选中的模板 id；未选模板或 edit 模式下为 undefined */
+  templateId?: string;
 }
 
 const props = defineProps<{
@@ -38,6 +67,10 @@ const emit = defineEmits<{
   submit: [payload: AgentFormPayload];
 }>();
 
+// ============================================================================
+// 表单状态
+// ============================================================================
+
 const name = ref("");
 const provider = ref<string>(PROVIDERS[0]);
 const model = ref("");
@@ -50,7 +83,17 @@ const systemPrompt = ref("");
 const temperature = ref(0.7);
 const maxTokens = ref(4096);
 
+/** 当前选中的模板 id（create 模式才有意义） */
+const selectedTemplateId = ref<string | null>(null);
+
 const errors = ref<Record<string, string>>({});
+
+/** 高级设置是否展开（默认折叠） */
+const advancedOpen = ref<boolean>(false);
+
+// ============================================================================
+// 派生
+// ============================================================================
 
 const presetModels = computed<string[]>(() => {
   return MODEL_PRESETS[provider.value as ProviderName] ?? [];
@@ -66,6 +109,23 @@ const panelTitle = computed(() => {
 
 const nameError = computed(() => errors.value.name ?? "");
 const apiKeyError = computed(() => errors.value.api_key ?? "");
+
+/**
+ * 高级设置是否需要「默认展开」：
+ *   - edit 模式，且存在任一非默认值时展开，便于用户直接修改
+ */
+const advancedDefaultOpen = computed<boolean>(() => {
+  if (props.mode !== "edit") return false;
+  return (
+    baseUrl.value.trim().length > 0 ||
+    Math.abs(temperature.value - 0.7) > 0.001 ||
+    maxTokens.value !== 4096
+  );
+});
+
+// ============================================================================
+// 联动
+// ============================================================================
 
 watch(provider, () => {
   model.value = presetModels.value[0] ?? "";
@@ -84,6 +144,54 @@ watch(
   },
 );
 
+// ============================================================================
+// 模板选择
+// ============================================================================
+
+/**
+ * 处理模板选择。
+ * 点选后自动填充 name / system_prompt / temperature / provider / model，
+ * 并把模板 id 写入 selectedTemplateId（用于提交后写 meta）。
+ */
+function applyTemplate(tpl: AgentTemplate): void {
+  // 再次点击同一模板 = 取消选择
+  if (selectedTemplateId.value === tpl.id) {
+    selectedTemplateId.value = null;
+    return;
+  }
+  selectedTemplateId.value = tpl.id;
+  name.value = tpl.name;
+  systemPrompt.value = tpl.systemPrompt;
+  temperature.value = tpl.temperature;
+
+  // 若推荐 provider 在可选列表中则预填
+  const matched = PROVIDERS.find(
+    (p) => p.toLowerCase() === tpl.recommendedProvider.toLowerCase(),
+  );
+  if (matched) {
+    provider.value = matched;
+  }
+
+  // 预填 model（若在 preset 列表中）
+  const presets = MODEL_PRESETS[provider.value as ProviderName] ?? [];
+  if (presets.includes(tpl.recommendedModel)) {
+    useCustomModel.value = false;
+    model.value = tpl.recommendedModel;
+  } else {
+    useCustomModel.value = true;
+    customModel.value = tpl.recommendedModel;
+  }
+}
+
+/** 取消模板选择 */
+function clearTemplate(): void {
+  selectedTemplateId.value = null;
+}
+
+// ============================================================================
+// 表单重置 / 回填
+// ============================================================================
+
 function resetForm(): void {
   name.value = "";
   provider.value = PROVIDERS[0];
@@ -96,6 +204,8 @@ function resetForm(): void {
   systemPrompt.value = "";
   temperature.value = 0.7;
   maxTokens.value = 4096;
+  selectedTemplateId.value = null;
+  advancedOpen.value = false;
   errors.value = {};
 }
 
@@ -117,7 +227,13 @@ function populateFromAgent(a: Agent): void {
   systemPrompt.value = a.system_prompt ?? "";
   temperature.value = a.temperature;
   maxTokens.value = a.max_tokens;
+  selectedTemplateId.value = null;
+  advancedOpen.value = advancedDefaultOpen.value;
 }
+
+// ============================================================================
+// 提交
+// ============================================================================
 
 function validate(): boolean {
   const errs: Record<string, string> = {};
@@ -149,11 +265,27 @@ function handleSubmit(): void {
     temperature: temperature.value,
     max_tokens: maxTokens.value,
     rotateApiKey: rotateApiKey.value,
+    templateId: selectedTemplateId.value ?? undefined,
   });
 }
 
 function close(): void {
   emit("update:open", false);
+}
+
+/** 高级设置折叠/展开切换 */
+function onAdvancedToggle(e: Event): void {
+  const target = e.target as HTMLElement & { open?: boolean };
+  advancedOpen.value = Boolean(target?.open);
+}
+
+// ============================================================================
+// 模板卡片视觉辅助
+// ============================================================================
+
+/** 模板卡片的 bg/fg 配对 */
+function templateBgFg(tpl: AgentTemplate): { bg: string; fg: string } {
+  return saturatedToBgFg(tpl.color);
 }
 </script>
 
@@ -179,6 +311,61 @@ function close(): void {
 
           <div class="panel-body">
             <form @submit.prevent="handleSubmit">
+              <!-- 模板选择器（仅 create 模式） -->
+              <section v-if="mode === 'create'" class="template-section">
+                <div class="section-header">
+                  <Sparkles :size="14" class="section-icon" aria-hidden="true" />
+                  <span class="section-title">从模板开始</span>
+                  <button
+                    v-if="selectedTemplateId"
+                    type="button"
+                    class="clear-link"
+                    @click="clearTemplate"
+                  >
+                    清除选择
+                  </button>
+                </div>
+                <div class="template-grid" role="radiogroup" aria-label="Agent 模板">
+                  <button
+                    v-for="tpl in AGENT_TEMPLATES"
+                    :key="tpl.id"
+                    type="button"
+                    role="radio"
+                    :aria-checked="selectedTemplateId === tpl.id"
+                    :class="[
+                      'template-card',
+                      {
+                        'template-card-active': selectedTemplateId === tpl.id,
+                      },
+                    ]"
+                    :style="
+                      selectedTemplateId === tpl.id
+                        ? {
+                            backgroundColor: templateBgFg(tpl).bg,
+                            borderColor: templateBgFg(tpl).fg,
+                          }
+                        : {}
+                    "
+                    @click="applyTemplate(tpl)"
+                  >
+                    <span
+                      class="template-icon"
+                      :style="{
+                        backgroundColor: templateBgFg(tpl).bg,
+                        color: templateBgFg(tpl).fg,
+                      }"
+                    >
+                      <component :is="tpl.icon" :size="18" aria-hidden="true" />
+                    </span>
+                    <span class="template-text">
+                      <span class="template-name">{{ tpl.name }}</span>
+                      <span class="template-desc">{{ tpl.description }}</span>
+                    </span>
+                  </button>
+                </div>
+              </section>
+
+              <!-- 名称 -->
               <div class="form-group">
                 <label class="form-label" for="agent-name">名称 *</label>
                 <Input
@@ -192,6 +379,22 @@ function close(): void {
                 />
               </div>
 
+              <!-- 角色设定（system_prompt） -->
+              <div class="form-group">
+                <label class="form-label" for="agent-systemprompt">
+                  角色设定
+                  <span class="label-hint">描述这个助手的角色、能力和回答风格</span>
+                </label>
+                <Textarea
+                  id="agent-systemprompt"
+                  v-model="systemPrompt"
+                  size="md"
+                  :rows="5"
+                  placeholder="例如：你是一个耐心的代码导师，擅长用通俗易懂的方式解释技术概念..."
+                />
+              </div>
+
+              <!-- Provider -->
               <div class="form-group">
                 <label class="form-label" for="agent-provider">Provider *</label>
                 <select id="agent-provider" v-model="provider" class="form-select">
@@ -199,6 +402,7 @@ function close(): void {
                 </select>
               </div>
 
+              <!-- Model -->
               <div class="form-group">
                 <label class="form-label" for="agent-model">Model *</label>
                 <div v-if="!useCustomModel" class="model-row">
@@ -240,6 +444,7 @@ function close(): void {
                 </div>
               </div>
 
+              <!-- API Key -->
               <div class="form-group">
                 <label class="form-label" for="agent-apikey">
                   API Key *
@@ -274,54 +479,59 @@ function close(): void {
                 </template>
               </div>
 
-              <div class="form-group">
-                <label class="form-label" for="agent-baseurl">Base URL（可选）</label>
-                <Input
-                  id="agent-baseurl"
-                  v-model="baseUrl"
-                  size="md"
-                  placeholder="留空使用默认地址"
-                  autocomplete="off"
-                />
-              </div>
+              <!-- 高级设置（折叠） -->
+              <details
+                :open="advancedOpen || advancedDefaultOpen"
+                class="advanced-section"
+                @toggle="onAdvancedToggle"
+              >
+                <summary class="advanced-summary">
+                  <ChevronDown :size="14" class="advanced-chevron" aria-hidden="true" />
+                  <span>高级设置</span>
+                </summary>
+                <div class="advanced-body">
+                  <div class="form-group">
+                    <label class="form-label" for="agent-baseurl">
+                      Base URL
+                      <span class="label-hint">（可选，留空使用默认地址）</span>
+                    </label>
+                    <Input
+                      id="agent-baseurl"
+                      v-model="baseUrl"
+                      size="md"
+                      placeholder="https://api.example.com/v1"
+                      autocomplete="off"
+                    />
+                  </div>
 
-              <div class="form-group">
-                <label class="form-label" for="agent-systemprompt">System Prompt（可选）</label>
-                <Textarea
-                  id="agent-systemprompt"
-                  v-model="systemPrompt"
-                  size="md"
-                  :rows="3"
-                  placeholder="系统提示词..."
-                />
-              </div>
+                  <div class="form-group">
+                    <label class="form-label" for="agent-temperature">
+                      Temperature: {{ temperature.toFixed(1) }}
+                    </label>
+                    <input
+                      id="agent-temperature"
+                      v-model.number="temperature"
+                      class="form-range"
+                      type="range"
+                      min="0"
+                      max="2"
+                      step="0.1"
+                    />
+                  </div>
 
-              <div class="form-group">
-                <label class="form-label" for="agent-temperature">
-                  Temperature: {{ temperature.toFixed(1) }}
-                </label>
-                <input
-                  id="agent-temperature"
-                  v-model.number="temperature"
-                  class="form-range"
-                  type="range"
-                  min="0"
-                  max="2"
-                  step="0.1"
-                />
-              </div>
-
-              <div class="form-group">
-                <label class="form-label" for="agent-maxtokens">Max Tokens</label>
-                <Input
-                  id="agent-maxtokens"
-                  :model-value="String(maxTokens)"
-                  size="md"
-                  type="number"
-                  :maxlength="6"
-                  @update:model-value="(v) => (maxTokens = Math.max(1, Number(v) || 1))"
-                />
-              </div>
+                  <div class="form-group">
+                    <label class="form-label" for="agent-maxtokens">Max Tokens</label>
+                    <Input
+                      id="agent-maxtokens"
+                      :model-value="String(maxTokens)"
+                      size="md"
+                      type="number"
+                      :maxlength="6"
+                      @update:model-value="(v) => (maxTokens = Math.max(1, Number(v) || 1))"
+                    />
+                  </div>
+                </div>
+              </details>
             </form>
           </div>
 
@@ -391,6 +601,142 @@ function close(): void {
   flex-shrink: 0;
 }
 
+/* ===== 模板选择器 ===== */
+.template-section {
+  margin-bottom: var(--ip-spacing-5);
+  padding-bottom: var(--ip-spacing-4);
+  border-bottom: 1px dashed var(--ip-color-border-default);
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  gap: var(--ip-spacing-2);
+  margin-bottom: var(--ip-spacing-3);
+}
+
+.section-icon {
+  color: var(--ip-color-text-tertiary);
+}
+
+.section-title {
+  flex: 1;
+  font-size: var(--ip-text-body-sm-size);
+  font-weight: var(--ip-font-weight-semibold);
+  color: var(--ip-color-text-primary);
+}
+
+.clear-link {
+  appearance: none;
+  background: none;
+  border: none;
+  padding: 2px 6px;
+  font-family: inherit;
+  font-size: var(--ip-text-caption-size);
+  color: var(--ip-color-text-link);
+  cursor: pointer;
+  border-radius: var(--ip-radius-sm);
+  transition: background-color var(--ip-duration-fast) var(--ip-ease-out);
+}
+
+.clear-link:hover {
+  background: var(--ip-color-bg-tertiary);
+}
+
+.clear-link:focus-visible {
+  outline: none;
+  box-shadow: var(--ip-shadow-focus);
+}
+
+.template-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--ip-spacing-2);
+}
+
+/*
+ * 极窄视口（< 360px）下落单列，避免 2 列把卡片文字挤成省略号。
+ * 8 个模板纵向排成 8 行，依旧全部可见。
+ */
+@media (max-width: 360px) {
+  .template-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.template-card {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: var(--ip-spacing-2);
+  padding: var(--ip-spacing-2) var(--ip-spacing-3);
+  background: var(--ip-color-bg-secondary);
+  border: 1px solid var(--ip-color-border-default);
+  border-radius: var(--ip-radius-md);
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+  transition:
+    border-color var(--ip-duration-fast) var(--ip-ease-out),
+    background-color var(--ip-duration-fast) var(--ip-ease-out),
+    transform var(--ip-duration-fast) var(--ip-ease-out);
+}
+
+.template-card:hover {
+  background: var(--ip-color-bg-tertiary);
+  border-color: var(--ip-color-border-strong);
+}
+
+.template-card:focus-visible {
+  outline: none;
+  border-color: var(--ip-color-border-focus);
+  box-shadow: var(--ip-shadow-focus);
+}
+
+.template-card:active {
+  transform: translateY(0.5px);
+}
+
+.template-card-active {
+  border-width: 1.5px;
+}
+
+.template-icon {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-radius: var(--ip-radius-md);
+}
+
+.template-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.template-name {
+  font-size: var(--ip-text-body-sm-size);
+  font-weight: var(--ip-font-weight-semibold);
+  color: var(--ip-color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.template-desc {
+  font-size: 11px;
+  color: var(--ip-color-text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ===== 表单字段 ===== */
 .form-group {
   margin-bottom: var(--ip-spacing-4);
 }
@@ -405,8 +751,11 @@ function close(): void {
 }
 
 .label-hint {
+  display: inline-block;
+  margin-left: var(--ip-spacing-2);
   font-weight: var(--ip-font-weight-regular);
   color: var(--ip-color-text-tertiary);
+  font-size: var(--ip-text-caption-size);
 }
 
 .form-select {
@@ -461,6 +810,58 @@ function close(): void {
   font-size: var(--ip-text-body-sm-size);
   color: var(--ip-color-text-tertiary);
   letter-spacing: 1px;
+}
+
+/* ===== 高级设置（折叠） ===== */
+.advanced-section {
+  border-top: 1px dashed var(--ip-color-border-default);
+  padding-top: var(--ip-spacing-3);
+  margin-top: var(--ip-spacing-2);
+}
+
+.advanced-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--ip-spacing-2);
+  cursor: pointer;
+  font-size: var(--ip-text-body-sm-size);
+  font-weight: var(--ip-font-weight-medium);
+  color: var(--ip-color-text-secondary);
+  list-style: none;
+  padding: var(--ip-spacing-2) 0;
+  user-select: none;
+  border-radius: var(--ip-radius-sm);
+}
+
+.advanced-summary::-webkit-details-marker {
+  display: none;
+}
+
+.advanced-summary::marker {
+  display: none;
+  content: "";
+}
+
+.advanced-summary:hover {
+  color: var(--ip-color-text-primary);
+}
+
+.advanced-summary:focus-visible {
+  outline: none;
+  color: var(--ip-color-text-primary);
+  box-shadow: var(--ip-shadow-focus);
+}
+
+.advanced-chevron {
+  transition: transform var(--ip-duration-fast) var(--ip-ease-out);
+}
+
+.advanced-section[open] > .advanced-summary .advanced-chevron {
+  transform: rotate(180deg);
+}
+
+.advanced-body {
+  padding-top: var(--ip-spacing-3);
 }
 
 /* 滑入/滑出动画 */

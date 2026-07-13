@@ -36,18 +36,21 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         // 聊天全局状态（CancellationToken 注册表）
         .manage(llm::ChatState::new())
-        // 注册 stronghold（用于 api_key 加密）
+        // 注：原 `tauri_plugin_stronghold::Builder::new(...).build()` 注册已移除。
         //
-        // 插件自带的 password hash fn 仅供前端插件 JS API 使用；
-        // Rust 端我们走 `crypto::init` 自己管理一份 `Stronghold`，
-        // snapshot 落到 app_data_dir/stronghold.hold。
+        // 理由（参见 dev2 评审方案 §3.2）：
+        //   1. 前端 0 处使用 plugin JS API（已 grep 确认无
+        //      `@tauri-apps/plugin-stronghold` 依赖）。
+        //   2. plugin 的 `Builder::build()` 在 setup 阶段**不**自动创建
+        //      Stronghold 实例，只 `app.manage(StrongholdCollection::default())`
+        //      + 注册 password hash fn —— 当前事实上是死权限 +
+        //      `capabilities/default.json` 中的 `stronghold:default` 死权限。
+        //   3. Rust 侧由 `crypto::init` 自己维护一份 `Stronghold`，snapshot
+        //      落盘到 `app_data_dir/stronghold.hold`，不依赖 plugin wrapper。
         //
-        // hash fn 同样走 blake2b256 派生到 32 字节，避免前端 JS API
-        // 触发与 Rust 侧一样的 "illegal non-contiguous size" 错误。
-        // （Phase 2 切 OS keyring 时，hash fn 与 Rust 侧可共用同一份 passphrase 源。）
-        .plugin(tauri_plugin_stronghold::Builder::new(|pwd| {
-            crypto::derive_stronghold_key(pwd.as_bytes()).to_vec()
-        }).build())
+        // 移除后攻击面减小，Phase 2 接 OS keyring 不依赖 plugin。
+        // `tauri-plugin-stronghold` crate 依赖保留（`crypto::init` 仍借用其
+        // `stronghold::Stronghold` 类型 wrapper）。
         // 全部 commands 注册
         .invoke_handler(tauri::generate_handler![
             commands::agent_cmd::list_agents,

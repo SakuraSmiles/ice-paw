@@ -16,7 +16,7 @@
 // emits:
 //   - chat:select(conversationId)  当前选中的会话 ID 变化时通知父组件
 
-import { onMounted } from "vue";
+import { nextTick, onMounted } from "vue";
 import { useAgentsStore } from "../../stores/agents";
 import { useConversationsStore } from "../../stores/conversations";
 import { useContextMenu } from "../../composables/useContextMenu";
@@ -67,6 +67,9 @@ async function onCreate(): Promise<void> {
   }
   try {
     const created = await conversationsStore.create(agentId);
+    // 等 Vue 把 create() 写入的 currentId 推到 ChatPage 的响应式依赖，
+    // 再 emit chat:select，避免父组件在 currentId 同步之前读到旧值。
+    await nextTick();
     emit("chat:select", created.id);
   } catch {
     toast.error("新建会话失败");

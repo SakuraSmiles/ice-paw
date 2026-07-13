@@ -98,8 +98,12 @@ fn default_temperature() -> f64 { 0.7 }
 fn default_max_tokens() -> i32 { 4096 }
 
 /// 更新 agent 入参（partial update）
+///
+/// 与 `NewAgent` 保持一致，使用 snake_case 字段名。
+/// 之前使用 `#[serde(rename_all = "camelCase")]`，会导致前端发来的
+/// snake_case 字段（system_prompt、base_url、max_tokens、extra_params、
+/// sort_order）反序列化时全部命中 None，造成静默更新失败。
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct AgentUpdate {
     pub id: String,
     pub name: Option<String>,
