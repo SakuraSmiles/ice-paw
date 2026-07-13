@@ -236,12 +236,26 @@ export function useAgentMeta() {
 
   /**
    * 获取完整 meta（含 storedAt 时间戳）
-   * @param agentId Agent ID
+   * @param id Agent ID 或 Agent 实体
    * @returns 完整 meta 或 null
    */
-  function getFullMeta(agentId: string): AgentMetaFull | null {
+  function getFullMeta(id: string | Agent): AgentMetaFull | null {
+    const agentId = typeof id === "string" ? id : id.id;
     return readLS(agentId);
   }
 
-  return { getMeta, setMeta, getFullMeta };
+  /**
+   * 删除 Agent 的本地元数据（删除 Agent 时同步清理）
+   * @param id Agent ID 或 Agent 实体
+   */
+  function removeMeta(id: string | Agent): void {
+    const agentId = typeof id === "string" ? id : id.id;
+    try {
+      localStorage.removeItem(LS_PREFIX + agentId);
+    } catch {
+      // localStorage 不可用时静默忽略
+    }
+  }
+
+  return { getMeta, setMeta, getFullMeta, removeMeta };
 }

@@ -221,3 +221,11 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
 export function findTemplate(id: string): AgentTemplate | undefined {
   return AGENT_TEMPLATES.find((t) => t.id === id);
 }
+
+/**
+ * findTemplate 的别名函数（语义更清晰）
+ * @param id 模板 id
+ */
+export function findTemplateById(id: string): AgentTemplate | undefined {
+  return findTemplate(id);
+}
