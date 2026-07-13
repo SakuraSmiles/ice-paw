@@ -3,7 +3,8 @@
 //! 设计要点：
 //! - `LlmProvider` trait 定义统一的流式聊天接口，各厂商 Adapter 实现之
 //! - `ChatMessage` / `ChatDelta` 为跨层数据结构
-//! - `create_provider` 工厂根据 provider 名称返回对应 Adapter（Phase 1 仅 OpenAI 兼容）
+//! - `create_provider` 工厂根据 provider 名称返回对应 Adapter
+//!   （当前 Phase 1：仅 OpenAI Chat Completions 兼容）
 //! - API Key 不存储于 Adapter，每次调用时传入，降低泄露风险
 
 pub mod adapters;
@@ -80,8 +81,10 @@ pub trait LlmProvider: Send + Sync {
 
 /// 按 provider 名称创建对应的 LLM Adapter
 ///
-/// Phase 1 仅支持 OpenAI 兼容协议（OpenAI / GLM / DeepSeek / 自定义 base_url）。
-/// Anthropic 留 Phase 2。
+/// 当前 Phase 1 仅支持 OpenAI Chat Completions 兼容协议
+/// （OpenAI / GLM / DeepSeek / 自定义 base_url）。
+///
+/// 未识别的 provider 兜底走 OpenAI 兼容（向后兼容），并打 warn 日志。
 ///
 /// - `provider`：agent.provider 字段
 /// - `model`：agent.model 字段
@@ -96,15 +99,37 @@ pub fn create_provider(
         _ => default_base_url(provider),
     };
 
+    // 调试用：对 OpenAI 兼容厂商打印最终 chat/completions URL（含智能拼接）。
+    // 排查 base_url 路径问题时一眼看出拼接是否正确。
+    let chat_url_preview: Option<String> = match provider {
+        "openai" | "glm" | "deepseek" => Some(adapters::openai::build_chat_url(&url)),
+        _ => None,
+    };
+
     tracing::info!(
         target: "ice_paw.llm",
-        "创建 Provider: {} | model={} | base_url={}",
-        provider, model, url
+        "创建 Provider: {} | model={} | base_url={}{}",
+        provider,
+        model,
+        url,
+        chat_url_preview
+            .as_deref()
+            .map(|u| format!(" | chat_url={}", u))
+            .unwrap_or_default(),
     );
 
     match provider {
-        "openai" | "glm" | "deepseek" | _ => {
-            // 所有 OpenAI 兼容的 provider 走同一 adapter
+        // OpenAI Chat Completions 兼容厂商
+        "openai" | "glm" | "deepseek" => Ok(Arc::new(
+            adapters::openai::OpenAiAdapter::new(model.to_string(), url),
+        )),
+        // 兜底：未识别 provider 走 OpenAI 兼容（向后兼容）
+        _ => {
+            tracing::warn!(
+                target: "ice_paw.llm",
+                "未知 provider '{}'，兜底走 OpenAI 兼容",
+                provider
+            );
             Ok(Arc::new(adapters::openai::OpenAiAdapter::new(
                 model.to_string(),
                 url,
