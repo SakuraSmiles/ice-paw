@@ -196,7 +196,9 @@ impl LlmProvider for AnthropicAdapter {
         }
 
         // 5. SSE 解析（mpsc 模式）
-        let (tx, rx) = mpsc::channel::<AppResult<ChatDelta>>(64);
+        // 容量 256：长输出（代码生成 5000+ token）时避免 SSE 解析协程因通道满而阻塞。
+        // 与 OpenAI adapter 保持一致。
+        let (tx, rx) = mpsc::channel::<AppResult<ChatDelta>>(256);
         let mut byte_stream = response.bytes_stream();
 
         tokio::spawn(async move {
