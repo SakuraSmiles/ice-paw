@@ -6,6 +6,7 @@
 //! - 实现 `Display` + `Error`（通过 `thiserror`），便于日志和前端展示
 
 use serde::Serialize;
+#[allow(unused_imports)]
 use tauri::ipc::InvokeError;
 
 /// 应用统一错误枚举
@@ -121,6 +122,77 @@ impl Serialize for AppError {
 /// 便捷别名
 pub type AppResult<T> = std::result::Result<T, AppError>;
 
-// `InvokeError` 的引用是给将来扩展用的（例如自定义错误码）；当前未使用。
-#[allow(dead_code)]
-type _InvokeErrorRef = InvokeError;
+// =========================================================================
+// 可重试错误分类
+// =========================================================================
+
+impl AppError {
+    /// 判断错误是否值得重试。
+    ///
+    /// 可重试：网络层错误（连接断开、超时、LLM 侧临时错误、流解析失败）。
+    /// 不可重试：参数校验、资源不存在、取消、鉴权失败（401/403）。
+    ///
+    /// 注意：HTTP 502/503/504 的判断在 `stream_loop` 中根据 HTTP 状态码单独处理，
+    /// 不经过 `AppError::is_retryable()`（因为 `AppError::Llm` 包含了 HTTP 状态码文本，
+    /// 无法精确区分 401 和 502）。
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            // 网络层 / LLM 侧临时错误 → 可重试
+            AppError::Llm(msg) | AppError::Stream(msg) => {
+                // 排除鉴权错误（401/403），这些重试无意义
+                let s = msg.to_lowercase();
+                !s.contains("401") && !s.contains("403")
+            }
+            AppError::Io(_) => true,
+            // 其余一律不重试
+            AppError::Validation(_)
+            | AppError::NotFound { .. }
+            | AppError::Cancelled
+            | AppError::Database(_)
+            | AppError::Migrate(_)
+            | AppError::Stronghold(_)
+            | AppError::Json(_)
+            | AppError::Tauri(_)
+            | AppError::Internal(_) => false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AppError;
+
+    #[test]
+    fn retryable_llm_generic() {
+        assert!(AppError::Llm("HTTP 502: bad gateway".into()).is_retryable());
+        assert!(AppError::Llm("HTTP 503: service unavailable".into()).is_retryable());
+        assert!(AppError::Llm("连接超时".into()).is_retryable());
+    }
+
+    #[test]
+    fn not_retryable_llm_auth() {
+        assert!(!AppError::Llm("HTTP 401: invalid api key".into()).is_retryable());
+        assert!(!AppError::Llm("HTTP 403: forbidden".into()).is_retryable());
+    }
+
+    #[test]
+    fn retryable_stream_error() {
+        assert!(AppError::Stream("连接断开".into()).is_retryable());
+    }
+
+    #[test]
+    fn retryable_io_error() {
+        assert!(AppError::Io(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "connection reset",
+        ))
+        .is_retryable());
+    }
+
+    #[test]
+    fn not_retryable_others() {
+        assert!(!AppError::Validation("bad input".into()).is_retryable());
+        assert!(!AppError::Cancelled.is_retryable());
+        assert!(!AppError::Internal("oops".into()).is_retryable());
+    }
+}

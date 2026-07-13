@@ -227,3 +227,16 @@ export interface ChatErrorPayload {
   kind: string;
   message: string;
 }
+
+/**
+ * `chat:retrying` 事件 payload
+ *
+ * LLM 流式中断后自动重试时触发。
+ * `attempt` 是当前重试序号（从 1 开始），`max_attempts` 是最大重试次数。
+ */
+export interface ChatRetryingPayload {
+  conversation_id: string;
+  message_id: string;
+  attempt: number;
+  max_attempts: number;
+}
