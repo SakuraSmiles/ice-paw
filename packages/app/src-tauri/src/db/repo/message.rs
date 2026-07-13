@@ -2,7 +2,9 @@
 //!
 //! 关键点：
 //! - 列表支持 `limit` 和 `before`（created_at）翻页
-//! - 默认按 `created_at ASC, id ASC` 升序输出（chat 展示顺序）
+//! - 默认按 `created_at ASC` 升序输出（chat 展示顺序）
+//! - 同秒内多条消息的次序：用 `rowid` 做兜底排序，避免 UUID 随机化导致
+//!   「用户/助手 同一对内顺序反转」的 bug（见 `list_by_conversation`）
 
 use sqlx::SqlitePool;
 
@@ -16,6 +18,21 @@ const MAX_LIMIT: i64 = 1000;
 ///
 /// - `before`：传某个 `created_at` 表示「取它之前的」，用于往前翻页
 /// - `limit`：上限 1000，默认 100
+///
+/// 排序策略：`(created_at DESC, rowid DESC)`，反转后等价于
+/// `(created_at ASC, rowid ASC)`。
+///
+/// 关键：**不要把 `id` 当成 tie-breaker**。
+/// `id` 是 TEXT 类型的随机 UUID（v4），字典序与插入顺序无关。
+/// SQLite 的 `datetime('now')` 是秒级精度——`send_message` 内
+/// 「先 INSERT 用户消息，再 INSERT 助手占位」两次写入通常落在同一秒，
+/// 此时如果以 `id` 做兜底排序，约 50% 的概率助手会排在用户之前，
+/// 再被 `rows.reverse()` 反转后变成「助手先、用户后」——
+/// 表现为页面上 `用户 → AI → AI → 用户` 的顺序错乱。
+///
+/// 改用 `rowid`（SQLite 的物理行号，单调递增）后，助手占位一定在
+/// 用户消息之后被 INSERT，`rowid` 也一定更大，排序与插入顺序一致，
+/// 翻转到 ASC 后用户在前、助手在后，行为可预期。
 pub async fn list_by_conversation(
     pool: &SqlitePool,
     conversation_id: &str,
@@ -32,7 +49,7 @@ pub async fn list_by_conversation(
                FROM messages
               WHERE conversation_id = ?
                 AND created_at < ?
-              ORDER BY created_at DESC, id DESC
+              ORDER BY created_at DESC, rowid DESC
               LIMIT ?",
         )
         .bind(conversation_id)
@@ -45,7 +62,7 @@ pub async fn list_by_conversation(
             "SELECT id, conversation_id, role, content, token_count, error, created_at
                FROM messages
               WHERE conversation_id = ?
-              ORDER BY created_at DESC, id DESC
+              ORDER BY created_at DESC, rowid DESC
               LIMIT ?",
         )
         .bind(conversation_id)
