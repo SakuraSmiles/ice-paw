@@ -1,7 +1,9 @@
 /* ============================================================
  * IcePaw Design Tokens (CSS Custom Properties)
- * Version: v1.0.2 (matches icepaw-design-system.md v1.0.1
+ * Version: v1.0.3 (matches icepaw-design-system.md v1.0.1
  *                   + icepaw-layout-system.md v1.1 §1.4)
+ *                   v1.0.3: chat bubble color semantics — user=primary blue/white,
+ *                   AI=light gray/dark, AI link color override
  * Prefix convention: --ip- (IcePaw)
  *
  * 结构：
@@ -318,7 +320,11 @@
   --ip-color-bg-tertiary:     var(--ip-gray-100);           /* 嵌套容器、悬停态 */
   --ip-color-bg-elevated:     var(--ip-white);              /* 浮层 */
   --ip-color-bg-overlay:      var(--ip-overlay-light);      /* 模态遮罩 */
-  --ip-color-bg-user-bubble:  #EBEBEB;                      /* 用户消息气泡（暖灰，对齐 ChatGPT/Claude） */
+  --ip-color-bg-user-bubble:        var(--ip-primary-600);   /* #2563EB  v1.0.3: 主题色蓝 */
+  --ip-color-bg-user-bubble-hover:  var(--ip-primary-700);   /* #1D4ED8  v1.0.3: hover 微亮 */
+  --ip-color-text-on-user-bubble:   var(--ip-white);         /* #FFFFFF  v1.0.3: 蓝底白字 */
+  --ip-color-bg-ai-bubble:          var(--ip-gray-100);      /* #F5F5F5  v1.0.3: AI 消息气泡（浅灰） */
+  --ip-color-text-link-on-ai:       var(--ip-primary-700);   /* #1D4ED8  v1.0.3: AI 气泡内链接色 */
   /* sticky header 半透明背靠（glassmorphism）— 对应 --ip-gray-50 / 72% / 88% 透明度 */
   --ip-color-bg-header-backdrop:          rgba(250, 250, 250, 0.72);
   --ip-color-bg-header-backdrop-scrolled:  rgba(250, 250, 250, 0.88);
@@ -331,7 +337,7 @@
   --ip-color-text-disabled:   var(--ip-gray-400);
   --ip-color-text-on-primary: var(--ip-white);
   --ip-color-text-on-danger:  var(--ip-white);
-  --ip-color-text-on-user-bubble: #1A1A1A;                   /* 用户气泡文字色（暖灰底配近黑） */
+  /* v1.0.3 用户气泡文字色在「背景层次」块统一管理（蓝底白字） */
   --ip-color-text-link:       var(--ip-primary-600);
 
   /* 边框 */
@@ -391,7 +397,11 @@
   --ip-color-bg-tertiary:     var(--ip-gray-800);
   --ip-color-bg-elevated:     var(--ip-gray-800);                  /* v1.0.1: #262626，与 secondary 12 阶对比 */
   --ip-color-bg-overlay:      var(--ip-overlay-dark);
-  --ip-color-bg-user-bubble:  #262626;                      /* 暗色用户气泡：近黑灰，避免饱和蓝刺眼 */
+  --ip-color-bg-user-bubble:        var(--ip-primary-600);   /* v1.0.3: 暗色模式仍用蓝（蓝底白字对比度稳） */
+  --ip-color-bg-user-bubble-hover:  var(--ip-primary-500);   /* v1.0.3: hover 微亮 */
+  --ip-color-text-on-user-bubble:   var(--ip-white);         /* v1.0.3: 蓝底白字 */
+  --ip-color-bg-ai-bubble:          var(--ip-gray-850);      /* #1A1A1A  v1.0.3: 暗色 AI 气泡（近黑） */
+  --ip-color-text-link-on-ai:       var(--ip-primary-400);   /* #60A5FA  v1.0.3: 暗色 AI 气泡内链接色 */
   /* sticky header 半透明背靠 — 对应 --ip-gray-900 / 72% / 88% 透明度 */
   --ip-color-bg-header-backdrop:          rgba(20, 20, 20, 0.72);
   --ip-color-bg-header-backdrop-scrolled:  rgba(20, 20, 20, 0.88);
@@ -402,7 +412,7 @@
   --ip-color-text-tertiary:   var(--ip-gray-400);
   --ip-color-text-disabled:   var(--ip-gray-500);
   --ip-color-text-link:       var(--ip-primary-400);
-  --ip-color-text-on-user-bubble: #E5E5E5;                  /* 暗色用户气泡文字色（近白） */
+  /* v1.0.3 用户气泡文字色在「背景层次」块统一管理（蓝底白字） */
 
   --ip-color-border-default:  var(--ip-gray-700);
   --ip-color-border-strong:   var(--ip-gray-600);
@@ -428,7 +438,11 @@
     --ip-color-bg-tertiary:    var(--ip-gray-800);
     --ip-color-bg-elevated:    var(--ip-gray-800);
     --ip-color-bg-overlay:     var(--ip-overlay-dark);
-    --ip-color-bg-user-bubble: #262626;
+    --ip-color-bg-user-bubble:        var(--ip-primary-600);   /* v1.0.3 */
+    --ip-color-bg-user-bubble-hover:  var(--ip-primary-500);   /* v1.0.3 */
+    --ip-color-text-on-user-bubble:   var(--ip-white);         /* v1.0.3 */
+    --ip-color-bg-ai-bubble:          var(--ip-gray-850);      /* v1.0.3 */
+    --ip-color-text-link-on-ai:       var(--ip-primary-400);   /* v1.0.3 */
     --ip-color-bg-header-backdrop:          rgba(20, 20, 20, 0.72);
     --ip-color-bg-header-backdrop-scrolled:  rgba(20, 20, 20, 0.88);
 
@@ -438,7 +452,7 @@
     --ip-color-text-tertiary:  var(--ip-gray-400);
     --ip-color-text-disabled:  var(--ip-gray-500);
     --ip-color-text-link:      var(--ip-primary-400);
-    --ip-color-text-on-user-bubble: #E5E5E5;
+    /* v1.0.3 用户气泡文字色在「背景层次」块统一管理（蓝底白字） */
 
     --ip-color-border-default: var(--ip-gray-700);
     --ip-color-border-strong:  var(--ip-gray-600);
