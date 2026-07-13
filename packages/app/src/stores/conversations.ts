@@ -192,7 +192,7 @@ export const useConversationsStore = defineStore("conversations", () => {
 
   /**
    * 加载某 Agent 的全部会话。
-   * - 清空 currentId（避免指向已不存在的会话）
+   * - 拉取前记录 prevId：若期间 create() 已设置 currentId，则避免覆盖。
    * - 拉取后写入 byAgent[agentId]
    * - 自动恢复到 localStorage 中保存的 currentId（如果还存在），否则选第一个
    *
@@ -201,10 +201,23 @@ export const useConversationsStore = defineStore("conversations", () => {
   async function loadFor(agentId: string): Promise<void> {
     if (!agentId) return;
     loading.value = true;
-    currentId.value = null;
+    // 仅当 currentId 指向的会话不属于本 Agent（即将被替换）时才清空，
+    // 否则保留 —— 避免覆盖 create() 在 await 期间写入的新会话 id。
+    const prevId = currentId.value;
+    const prevConv = prevId ? findInAgent(agentId, prevId) : null;
+    if (!prevConv) {
+      currentId.value = null;
+    }
     try {
       const list = await bridge.conversations.list(agentId);
       byAgent.value[agentId] = sortConversations(list);
+
+      // 拉取期间可能已有 create() 抢先设置了 currentId。
+      // 若该 id 在新列表里存在，则保留之（不再走恢复逻辑）。
+      if (prevId && list.some((c) => c.id === prevId)) {
+        writeLastConv(agentId, prevId);
+        return;
+      }
 
       // 恢复上次的 currentId
       const saved = readLastConv(agentId);
@@ -214,11 +227,13 @@ export const useConversationsStore = defineStore("conversations", () => {
         currentId.value = list[0].id;
         writeLastConv(agentId, list[0].id);
       } else {
+        currentId.value = null;
         writeLastConv(agentId, null);
       }
     } catch (err) {
       // 加载失败：写入空数组，保留 currentId 为 null
       byAgent.value[agentId] = [];
+      currentId.value = null;
       throw err;
     } finally {
       loading.value = false;
