@@ -34,6 +34,10 @@ const props = defineProps<{
   renderMarkdown: boolean;
   /** 上一条消息的角色；null 表示这是列表里的第一条 */
   prevRole?: MessageRole | null;
+  /** 是否正在重试中（LLM 流式中断后自动重试） */
+  isRetrying?: boolean;
+  /** 重试进度文本，如 "2/4" */
+  retryProgress?: string;
 }>();
 
 const emit = defineEmits<{
@@ -126,6 +130,9 @@ function onRetry(): void {
         <div v-if="message.error" class="bubble-error">
           <span class="error-text">{{ message.error }}</span>
           <button class="btn-retry" type="button" @click="onRetry">重试</button>
+        </div>
+        <div v-else-if="isRetrying" class="bubble-retrying">
+          <span class="retrying-indicator" />正在重新连接... {{ retryProgress }}
         </div>
       </div>
     </div>
@@ -286,5 +293,37 @@ function onRetry(): void {
 
 .btn-retry:hover {
   background: var(--ip-danger-bg);
+}
+
+/* 重试指示器 */
+.bubble-retrying {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  font-size: var(--ip-text-caption-size);
+  color: var(--ip-color-text-tertiary);
+}
+
+.retrying-indicator {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--ip-color-text-tertiary);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: retrying-spin 1s linear infinite;
+}
+
+@keyframes retrying-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .retrying-indicator {
+    animation: none;
+  }
 }
 </style>

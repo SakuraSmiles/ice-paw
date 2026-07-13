@@ -203,7 +203,9 @@ impl LlmProvider for OpenAiAdapter {
         }
 
         // 创建通道：解析协程 → 消费方
-        let (tx, rx) = mpsc::channel::<AppResult<ChatDelta>>(64);
+        // 容量 256：长输出（代码生成 5000+ token）时避免 SSE 解析协程因通道满而阻塞。
+        // 每个 chunk 约几十~几百字节，256 × ~500B ≈ 128KB 内存占用，可接受。
+        let (tx, rx) = mpsc::channel::<AppResult<ChatDelta>>(256);
 
         // 获取字节流
         let byte_stream = response.bytes_stream();

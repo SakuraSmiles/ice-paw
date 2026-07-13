@@ -203,6 +203,8 @@ function onRetry(_msg: import("../types").Message): void {
       <MessageList
         :messages="chatStore.currentMessages"
         :streaming-id="streamingMessageId"
+        :is-retrying="chatStore.retrying"
+        :retry-progress="chatStore.retryProgress"
         @retry="onRetry"
       />
       <ChatInput

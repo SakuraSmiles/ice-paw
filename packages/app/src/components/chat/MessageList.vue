@@ -22,6 +22,8 @@ import MessageBubble from "./MessageBubble.vue";
 const props = defineProps<{
   messages: Message[];
   streamingId: string | null;
+  isRetrying?: boolean;
+  retryProgress?: string;
 }>();
 
 const emit = defineEmits<{
@@ -172,6 +174,8 @@ function shouldRenderMarkdown(msg: Message): boolean {
         :is-streaming="msg.id === streamingId"
         :render-markdown="shouldRenderMarkdown(msg)"
         :prev-role="idx > 0 ? messages[idx - 1]!.role : null"
+        :is-retrying="isRetrying && msg.id === streamingId"
+        :retry-progress="retryProgress"
         @retry="onRetry"
       />
     </div>

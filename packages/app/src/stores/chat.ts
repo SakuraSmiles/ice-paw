@@ -33,6 +33,7 @@ import type {
   ChatChunkPayload,
   ChatDonePayload,
   ChatErrorPayload,
+  ChatRetryingPayload,
   ChatStartPayload,
   Message,
 } from "../types";
@@ -97,6 +98,12 @@ export const useChatStore = defineStore("chat", () => {
 
   /** 最近一次错误描述（供 Toast 显示） */
   const error = ref<string | null>(null);
+
+  /** 是否正在重试中（LLM 流式中断后自动重试） */
+  const retrying = ref<boolean>(false);
+
+  /** 当前重试进度："1/4" 格式 */
+  const retryProgress = ref<string>("1/4");
 
   /** listen 返回的 unlisten 函数列表 */
   const unlistens: UnlistenFn[] = [];
@@ -228,6 +235,8 @@ export const useChatStore = defineStore("chat", () => {
         isStreaming.value = true;
         streamingContent.value = "";
         error.value = null;
+        retrying.value = false;
+        retryProgress.value = "1/4";
       }),
     );
 
@@ -251,6 +260,7 @@ export const useChatStore = defineStore("chat", () => {
         isStreaming.value = false;
         streamingContent.value = "";
         activeConvId.value = null;
+        retrying.value = false;
       }),
     );
 
@@ -261,10 +271,23 @@ export const useChatStore = defineStore("chat", () => {
         if (p.conversation_id !== activeConvId.value) return;
 
         error.value = p.message;
+        retrying.value = false;
+        retryProgress.value = "1/4";
         markMessageError(p.message_id, p.message);
         isStreaming.value = false;
         streamingContent.value = "";
         activeConvId.value = null;
+      }),
+    );
+
+    // ----- chat:retrying -----
+    unlistens.push(
+      await listen<ChatRetryingPayload>("chat:retrying", (e) => {
+        const p = e.payload;
+        if (p.conversation_id !== activeConvId.value) return;
+
+        retrying.value = true;
+        retryProgress.value = `${p.attempt}/${p.max_attempts}`;
       }),
     );
   }
@@ -417,6 +440,8 @@ export const useChatStore = defineStore("chat", () => {
     activeConvId,
     loading,
     error,
+    retrying,
+    retryProgress,
     // getters
     currentMessages,
     lastMessage,
