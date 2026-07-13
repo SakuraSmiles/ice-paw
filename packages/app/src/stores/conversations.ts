@@ -192,9 +192,11 @@ export const useConversationsStore = defineStore("conversations", () => {
 
   /**
    * 加载某 Agent 的全部会话。
-   * - 拉取前记录 prevId：若期间 create() 已设置 currentId，则避免覆盖。
+   * - 拉取前记录 prevId：若当前 currentId 已不属于本 Agent，则清空；
+   *   若已属于本 Agent，则保留（避免被后续恢复逻辑覆盖）。
    * - 拉取后写入 byAgent[agentId]
-   * - 自动恢复到 localStorage 中保存的 currentId（如果还存在），否则选第一个
+   * - 拉取后再读 currentId.value —— 若期间 create() 已抢先设了新 id，
+   *   且该 id 出现在新列表里，则保留；否则恢复到 saved/list[0]。
    *
    * @param agentId 目标 Agent ID；空字符串/null 直接返回
    */
@@ -213,9 +215,12 @@ export const useConversationsStore = defineStore("conversations", () => {
       byAgent.value[agentId] = sortConversations(list);
 
       // 拉取期间可能已有 create() 抢先设置了 currentId。
-      // 若该 id 在新列表里存在，则保留之（不再走恢复逻辑）。
-      if (prevId && list.some((c) => c.id === prevId)) {
-        writeLastConv(agentId, prevId);
+      // 必须读 await 之后的 currentId.value —— 用 await 前的 prevId 是错的，
+      // 因为 prevId 是旧 Agent 的会话 id，永远不在新 Agent 的列表里，
+      // 检查形同虚设。post-await 的 currentNow 才是真正反映当前意图的值。
+      const currentNow = currentId.value;
+      if (currentNow && list.some((c) => c.id === currentNow)) {
+        writeLastConv(agentId, currentNow);
         return;
       }
 
