@@ -117,6 +117,18 @@
   border-bottom-color: currentColor;
 }
 
+/* AI 气泡内的链接色（在 #F5F5F5 浅灰底上感知更稳） */
+.markdown-body--on-ai-bubble.markdown-body-a,
+.markdown-body--on-ai-bubble a {
+  color: var(--ip-color-text-link-on-ai, var(--ip-primary-700, #1d4ed8));
+}
+
+.markdown-body--on-ai-bubble.markdown-body-a:hover,
+.markdown-body--on-ai-bubble a:hover {
+  color: var(--ip-primary-800, #1e40af);
+  border-bottom-color: currentColor;
+}
+
 /* ------------------- 列表 ------------------- */
 
 .markdown-body-ul,
