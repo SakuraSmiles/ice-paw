@@ -17,14 +17,16 @@
 //   - send(content: string)  用户提交消息时（已自动创建会话）
 //   - stop()                用户点击停止时
 
-import { computed, nextTick, ref, watch, onMounted } from "vue";
+import { computed, nextTick, ref, watch, onMounted, useTemplateRef } from "vue";
 import { SendHorizontal, Square } from "lucide-vue-next";
 import { useAgentsStore } from "../../stores/agents";
 import { useConversationsStore } from "../../stores/conversations";
 import { useChatStore } from "../../stores/chat";
+import { useTemplatesStore } from "../../stores/templates";
 import { useToast } from "../../composables/useToast";
 import { useAgentMeta, type AgentMeta } from "../../composables/useAgentMeta";
 import AgentAvatar from "../common/AgentAvatar.vue";
+import TemplatePicker from "../template/TemplatePicker.vue";
 
 const props = defineProps<{
   agentName: string;
@@ -39,6 +41,7 @@ const emit = defineEmits<{
 const agentsStore = useAgentsStore();
 const conversationsStore = useConversationsStore();
 const chatStore = useChatStore();
+const templatesStore = useTemplatesStore();
 const toast = useToast();
 const agentMeta = useAgentMeta();
 
@@ -53,7 +56,62 @@ const draft = ref<string>("");
 const submitting = ref<boolean>(false);
 
 /** textarea DOM 引用（用于自动增高 + 自动聚焦） */
-const textareaRef = ref<HTMLTextAreaElement | null>(null);
+const textareaRef = useTemplateRef<HTMLTextAreaElement | null>("textareaRef");
+
+/** 当前选中的模板 ID（与 TemplatePicker 同步） */
+const selectedTemplateId = ref<string | null>(null);
+
+/** TemplatePicker DOM 引用 */
+const pickerRef = useTemplateRef<InstanceType<typeof TemplatePicker> | null>("pickerRef");
+
+/** @ 补全查询：检测 draft 末尾的 @xxx */
+const atQuery = computed<{ match: string; index: number } | null>(() => {
+  const text = draft.value;
+  if (!text) return null;
+  const m = text.match(/(?:^|\s)@([^\s@]*)$/);
+  if (!m || m.index === undefined) return null;
+  return { match: m[1] ?? "", index: m.index + (m[0]!.length - m[1]!.length - 1) };
+});
+
+const atActive = computed<boolean>(() => atQuery.value !== null);
+
+watch(atActive, (active) => {
+  if (active) {
+    void nextTick(openAtAutocomplete);
+  } else {
+    pickerRef.value?.closeAutocomplete();
+  }
+});
+
+function openAtAutocomplete(): void {
+  const el = textareaRef.value;
+  if (!el || !atQuery.value) return;
+  const rect = el.getBoundingClientRect();
+  pickerRef.value?.openAutocomplete(
+    { x: rect.left + 16, y: rect.top - 8 },
+    atQuery.value.match,
+  );
+}
+
+function stripAtQueryFromDraft(): void {
+  if (!atQuery.value) return;
+  const text = draft.value;
+  const start = atQuery.value.index;
+  draft.value = text.slice(0, start);
+  void nextTick(autosize);
+}
+
+function onTemplateApply(payload: { templateId: string; values: Record<string, string> }): void {
+  chatStore.setAppliedTemplate(payload);
+  selectedTemplateId.value = payload.templateId;
+}
+
+function onTemplateSelectedChange(id: string | null): void {
+  selectedTemplateId.value = id;
+  if (id === null) {
+    chatStore.setAppliedTemplate(null);
+  }
+}
 
 // ============================================================================
 // Agent 元数据（头像 + 问候语 + 推荐词）
@@ -134,6 +192,10 @@ function autosize(): void {
 
 watch(draft, () => {
   void nextTick(autosize);
+  // 用户编辑消息 → 清空已应用模板
+  if (chatStore.appliedTemplate) {
+    chatStore.setAppliedTemplate(null);
+  }
 });
 
 // ============================================================================
@@ -205,6 +267,8 @@ async function handleSend(): Promise<void> {
     }
     draft.value = "";
     void nextTick(autosize);
+    selectedTemplateId.value = null;
+    chatStore.setAppliedTemplate(null);
     emit("send", trimmed);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -215,6 +279,17 @@ async function handleSend(): Promise<void> {
 }
 
 function onKeydown(e: KeyboardEvent): void {
+  // @ 补全态下优先让 picker 处理
+  if (atActive.value && pickerRef.value) {
+    const handled = pickerRef.value.onAutocompleteKey(e);
+    if (handled) {
+      e.preventDefault();
+      if (e.key === "Enter" || e.key === "Tab") {
+        stripAtQueryFromDraft();
+      }
+      return;
+    }
+  }
   if (e.key !== "Enter") return;
   if (e.shiftKey || e.ctrlKey || e.metaKey) return;
   e.preventDefault();
@@ -259,6 +334,16 @@ function onStopClick(): void {
       </button>
     </div>
 
+    <!-- 模板芯片行 -->
+    <div class="welcome-picker">
+      <TemplatePicker
+        ref="pickerRef"
+        :selected-id="selectedTemplateId"
+        @update:selected-id="onTemplateSelectedChange"
+        @apply="onTemplateApply"
+      />
+    </div>
+
     <!-- 居中输入框 -->
     <div
       :class="[
@@ -266,11 +351,14 @@ function onStopClick(): void {
         { 'welcome-input-streaming': isStreaming, 'welcome-input-disabled': inputDisabled },
       ]"
     >
+      <div v-if="chatStore.appliedTemplate" class="welcome-applied-hint">
+        ✨ 已应用模板：{{ templatesStore.byId(chatStore.appliedTemplate.templateId)?.name }}
+      </div>
       <textarea
         ref="textareaRef"
         v-model="draft"
         class="welcome-textarea"
-        :placeholder="isStreaming ? '生成中...' : '输入消息，Enter 发送，Shift+Enter 换行'"
+        :placeholder="isStreaming ? '生成中...' : '输入消息，Enter 发送，Shift+Enter 换行（@ 选模板）'"
         :disabled="inputDisabled"
         rows="1"
         :style="{ height: `${heightPx}px` }"
@@ -278,7 +366,7 @@ function onStopClick(): void {
         @keydown="onKeydown"
       />
       <div class="welcome-toolbar">
-        <span class="welcome-hint">Enter 发送 · Shift+Enter 换行</span>
+        <span class="welcome-hint">Enter 发送 · Shift+Enter 换行 · @ 选模板</span>
         <button
           v-if="isStreaming"
           type="button"
@@ -353,6 +441,26 @@ function onStopClick(): void {
   gap: var(--ip-spacing-2);
   max-width: 640px;
   width: 100%;
+}
+
+/* ===== 模板选择器 ===== */
+.welcome-picker {
+  width: 100%;
+  max-width: 640px;
+  display: flex;
+  justify-content: center;
+}
+
+.welcome-applied-hint {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  margin-bottom: var(--ip-spacing-2);
+  padding: 4px 10px;
+  font-size: var(--ip-text-caption-size);
+  color: var(--ip-primary-700, #1d4ed8);
+  background: var(--ip-primary-100, #dbeafe);
+  border-radius: var(--ip-radius-sm);
 }
 
 .chip {
