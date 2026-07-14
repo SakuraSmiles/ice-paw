@@ -14,7 +14,7 @@
 //
 // 重试功能：P1 占位 — 目前仅 Toast 提示「重试功能开发中」
 
-import { computed, onMounted, onUnmounted, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { useAgentsStore } from "../stores/agents";
 import { useConversationsStore } from "../stores/conversations";
 import { useChatStore } from "../stores/chat";
@@ -60,6 +60,26 @@ const streamingMessageId = computed<string | null>(() => {
   return null;
 });
 
+/**
+ * MessageList 组件引用（用于调用其暴露的 forceBottom()）。
+ *
+ * 切换会话后需要让列表"立即定位到底部"，由于 list 内部默认用
+ * pinnedToBottom 维持底部，新会话还没"被观察到用户就在底部"，所以
+ * 单纯依赖 watch 会出现「先看到顶部再往下滚」的闪烁感。
+ * 通过这个 ref 显式调用 forceBottom() 跳过 pinnedToBottom 判定。
+ */
+const messageListRef = ref<InstanceType<typeof MessageList> | null>(null);
+
+/**
+ * 强制 MessageList 滚动到底部（包装 forceBottom）。
+ * 内部还会做二次 nextTick 兜底 v-for patch 时序。
+ */
+async function scrollMessageListToBottom(): Promise<void> {
+  // 等 Vue 把 messages 数组的变化提交到 DOM
+  await nextTick();
+  messageListRef.value?.forceBottom();
+}
+
 // ============================================================================
 // 生命周期
 // ============================================================================
@@ -68,10 +88,11 @@ onMounted(async () => {
   // 注册 4 个 chat:* 事件监听
   await chatStore.setupListeners();
 
-  // 若已有当前会话，立刻拉历史（处理冷启动）
+  // 若已有当前会话，立刻拉历史（处理冷启动）并立即滚到底部
   if (currentConvId.value) {
     try {
       await chatStore.loadMessages(currentConvId.value);
+      await scrollMessageListToBottom();
     } catch {
       toast.error("加载历史消息失败");
     }
@@ -97,6 +118,9 @@ watch(currentConvId, async (newId, oldId) => {
   }
   try {
     await chatStore.loadMessages(newId);
+    // P2: 加载完成后立即强制滚到底部（不等 MessageList 的 watch 反应）
+    // 用 nextTick + forceBottom 走 messageListRef，避免全局 querySelector
+    await scrollMessageListToBottom();
   } catch {
     toast.error("加载历史消息失败");
   }
@@ -110,6 +134,9 @@ watch(currentConvId, async (newId, oldId) => {
  * create() 完成后 currentId 已变化，但 ChatPage 因路由切换/重渲
  * 错过了 currentConvId 的触发时机。此 watch 保证：一旦 currentId
  * 变为有效会话且消息列表为空，便主动加载历史消息。
+ *
+ * 注意：此处只补一次「从无到有」的加载，不重复滚到底部，避免与主 watch
+ * 双重 forceBottom 引起闪烁。
  */
 watch(
   () => conversationsStore.currentId,
@@ -143,16 +170,22 @@ watch(
 // ============================================================================
 
 /** 正常聊天界面：用户点击发送 */
-async function onSend(content: string): Promise<void> {
+async function onSend(
+  content: string,
+  contentBlocks?: import("../types").ContentBlock[],
+): Promise<void> {
   try {
-    await chatStore.sendMessage(content);
+    await chatStore.sendMessage(content, contentBlocks);
   } catch {
     // sendMessage 内部已写入 error，watch 会兜底弹 Toast
   }
 }
 
 /** WelcomeScreen 触发：会话已在 WelcomeInput 内创建完成，此处只需发送 */
-async function onWelcomeSend(content: string): Promise<void> {
+async function onWelcomeSend(
+  content: string,
+  contentBlocks?: import("../types").ContentBlock[],
+): Promise<void> {
   // 此时 conversationsStore.currentId 应已被设置
   // 但 loadMessages 还未触发（conversations.watchAgentChange 会自动触发 loadFor，
   // 但 store 手动 setCurrent 不触发 watch）；此处显式加载一次。
@@ -165,11 +198,12 @@ async function onWelcomeSend(content: string): Promise<void> {
   if (chatStore.messages.length === 0 && !chatStore.isStreaming) {
     try {
       await chatStore.loadMessages(convId);
+      await scrollMessageListToBottom();
     } catch {
       // 加载失败仍尝试发送（极端情况下允许发送）
     }
   }
-  await onSend(content);
+  await onSend(content, contentBlocks);
 }
 
 /** 用户点击停止 */
@@ -180,6 +214,11 @@ async function onStop(): Promise<void> {
 /** 用户点击重试（P1 占位） */
 function onRetry(_msg: import("../types").Message): void {
   toast.info("重试功能开发中");
+}
+
+/** P2: 用户滚到顶部附近 → 触发向上翻页 */
+async function onLoadOlder(): Promise<void> {
+  await chatStore.loadOlderMessages();
 }
 </script>
 
@@ -201,11 +240,18 @@ function onRetry(_msg: import("../types").Message): void {
     <template v-else>
       <ChatHeader @stop="onStop" />
       <MessageList
+        ref="messageListRef"
         :messages="chatStore.currentMessages"
         :streaming-id="streamingMessageId"
         :is-retrying="chatStore.retrying"
         :retry-progress="chatStore.retryProgress"
+        :active-tool-calls="chatStore.activeToolCalls"
+        :thinking-content="chatStore.thinkingContent"
+        :has-more-older="chatStore.hasMoreOlder"
+        :loading-older="chatStore.loadingOlder"
+        :loading="chatStore.loading"
         @retry="onRetry"
+        @load-older="onLoadOlder"
       />
       <ChatInput
         :disabled="false"
