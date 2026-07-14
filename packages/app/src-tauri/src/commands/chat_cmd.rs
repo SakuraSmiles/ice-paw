@@ -16,7 +16,7 @@
 
 use std::sync::Arc;
 
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
 
 use sqlx::SqlitePool;
@@ -30,8 +30,9 @@ use crate::llm::{
     ContentBlock, LlmProvider, ToolRegistry,
 };
 
+use super::chat_cleanup::{cleanup, cleanup_after_success_with_blocks};
 use super::chat_protocol::{
-    ChatChunkPayload, ChatDonePayload, ChatErrorPayload, ChatRetryingPayload, ChatStartPayload,
+    ChatChunkPayload, ChatErrorPayload, ChatRetryingPayload, ChatStartPayload,
     ChatThinkingPayload, ChatToolCallDeltaPayload, ChatToolCallEndPayload, ChatToolCallStartPayload,
     ChatToolResultPayload, SendMessageInput, validate_images,
 };
@@ -913,44 +914,6 @@ async fn stream_loop(
     );
 }
 
-/// 成功完成后的收尾：回写 content + content_blocks + emit done + 注销 token
-fn cleanup_after_success_with_blocks(
-    app: &AppHandle,
-    pool: &SqlitePool,
-    conv_id: &str,
-    asst_msg_id: &str,
-    content: &str,
-    content_blocks: &[ContentBlock],
-    finish_reason: &str,
-    usage: Option<llm::TokenUsage>,
-) {
-    let pool_clone = pool.clone();
-    let asst_msg_id_clone = asst_msg_id.to_string();
-    let content_clone = content.to_string();
-    let blocks_json = serde_json::to_string(content_blocks).unwrap_or_else(|_| "[]".to_string());
-
-    tokio::spawn(async move {
-        let _ = repo::message::update_content(&pool_clone, &asst_msg_id_clone, &content_clone).await;
-        let _ = repo::message::update_content_blocks(&pool_clone, &asst_msg_id_clone, &blocks_json).await;
-    });
-
-    let _ = app.emit(
-        "chat:done",
-        ChatDonePayload {
-            conversation_id: conv_id.to_string(),
-            message_id: asst_msg_id.to_string(),
-            finish_reason: finish_reason.to_string(),
-            usage,
-        },
-    );
-    cleanup(app, pool, conv_id);
-}
-
-/// 注销 CancellationToken（所有退出路径的公共收尾）
-fn cleanup(app: &AppHandle, _pool: &SqlitePool, conv_id: &str) {
-    let chat_state = app.state::<ChatState>();
-    chat_state.unregister(conv_id);
-}
 
 /// 把 AppError 映射为前端可读的 kind 字符串
 fn error_kind(e: &crate::error::AppError) -> String {
