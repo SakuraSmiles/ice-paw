@@ -31,165 +31,13 @@ use crate::llm::{
 };
 
 use super::chat_cleanup::{cleanup, cleanup_after_success_with_blocks};
+use super::chat_context::assemble_context;
 use super::chat_error::{error_kind, friendly_error};
 use super::chat_protocol::{
     ChatChunkPayload, ChatErrorPayload, ChatRetryingPayload, ChatStartPayload,
     ChatThinkingPayload, ChatToolCallDeltaPayload, ChatToolCallEndPayload, ChatToolCallStartPayload,
     ChatToolResultPayload, SendMessageInput, validate_images,
 };
-
-// =========================================================================
-// 模板渲染（P2-4）
-// =========================================================================
-
-/// 用变量值渲染模板内容。
-///
-/// 规则：扫描文本中的 `{{var_name}}` 段，依次替换为 `values` 中对应 key 的值。
-/// - 变量名必须是 `[a-zA-Z_][a-zA-Z0-9_]*`
-/// - 模板中出现的 `var_name` 不在 `values` 中：保持原样（`{{var_name}}`）
-///   以便 LLM 能看到「未填的占位符」并主动追问
-/// - `values` 中多余的 key 会被忽略
-///
-/// 与 mustache 的差异：
-/// - 不支持 `{{#section}}...{{/section}}` / `{{! comment}}` / `{{>partial}}` 等高级语法
-/// - 不支持 `.` 路径访问
-///
-/// 故意保持简单：模板只是「带变量的纯文本」，不引入模板引擎依赖。
-pub(crate) fn render_template(
-    template: &str,
-    values: &std::collections::HashMap<String, String>,
-) -> String {
-    let mut out = String::with_capacity(template.len());
-    let bytes = template.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        // 查找下一个 {{
-        if i + 1 < bytes.len() && bytes[i] == b'{' && bytes[i + 1] == b'{' {
-            // 寻找匹配的 }}
-            let mut j = i + 2;
-            let mut found = None;
-            while j + 1 < bytes.len() {
-                if bytes[j] == b'}' && bytes[j + 1] == b'}' {
-                    found = Some(j);
-                    break;
-                }
-                j += 1;
-            }
-            if let Some(end) = found {
-                // 取出变量名（trim 空白）
-                let name_raw = &template[i + 2..end];
-                let name = name_raw.trim();
-                // 校验变量名合法性
-                if is_valid_var_name(name) {
-                    if let Some(v) = values.get(name) {
-                        out.push_str(v);
-                    } else {
-                        // 未提供的变量：保持原样
-                        out.push_str(&template[i..end + 2]);
-                    }
-                } else {
-                    // 非法变量名：保持原样
-                    out.push_str(&template[i..end + 2]);
-                }
-                i = end + 2;
-                continue;
-            }
-        }
-        // 加上当前字符
-        out.push(template[i..].chars().next().unwrap());
-        i += template[i..].chars().next().unwrap().len_utf8();
-    }
-    out
-}
-
-/// 变量名合法性：字母/下划线开头 + 字母/数字/下划线
-fn is_valid_var_name(s: &str) -> bool {
-    if s.is_empty() {
-        return false;
-    }
-    let mut chars = s.chars();
-    let first = chars.next().unwrap();
-    if !(first.is_ascii_alphabetic() || first == '_') {
-        return false;
-    }
-    for c in chars {
-        if !(c.is_ascii_alphanumeric() || c == '_') {
-            return false;
-        }
-    }
-    true
-}
-
-// =========================================================================
-// 运行环境上下文（B1-3）
-// =========================================================================
-
-/// 构建运行环境上下文字符串，注入 system prompt
-///
-/// 包含：
-/// - 操作系统类型（Windows / macOS / Linux）
-/// - CPU 架构（如 x86_64 / arm64）
-/// - 用户主目录路径（尽力获取，失败则省略）
-///
-/// 用于帮助 LLM 在工具调用（如 `list_directory`）时使用与当前 OS 兼容的路径，
-/// 避免在 Windows 上调用 Linux 风格的 `/home/user/Desktop` 等错误路径。
-fn build_os_context() -> String {
-    let mut parts: Vec<String> = Vec::new();
-
-    // OS 类型
-    let os_name = match std::env::consts::OS {
-        "macos" => "macOS",
-        "windows" => "Windows",
-        "linux" => "Linux",
-        other => other,
-    };
-    parts.push(format!("操作系统: {}", os_name));
-
-    // CPU 架构（帮助 LLM 理解路径风格，如 arm64 vs x86_64）
-    let arch = match std::env::consts::ARCH {
-        "x86_64" => "x86_64",
-        "aarch64" => "arm64",
-        other => other,
-    };
-    parts.push(format!("架构: {}", arch));
-
-    // 用户主目录
-    let home = get_home_dir();
-    if let Some(h) = &home {
-        parts.push(format!("用户主目录: {}", h));
-    }
-
-    // 组装为提示文本
-    let env_info = parts.join("\n");
-    format!(
-        "## 运行环境\n{}\n\n\
-         注意：文件路径必须使用与当前操作系统兼容的格式。\
-         调用工具时请使用绝对路径。",
-        env_info
-    )
-}
-
-/// 尽力获取用户主目录
-///
-/// 优先级：
-/// 1. Windows: %USERPROFILE%
-/// 2. Unix (macOS/Linux): $HOME
-/// 3. 兜底：返回 None
-fn get_home_dir() -> Option<String> {
-    // Windows: USERPROFILE
-    if let Ok(p) = std::env::var("USERPROFILE") {
-        if !p.is_empty() {
-            return Some(p);
-        }
-    }
-    // Unix: HOME
-    if let Ok(p) = std::env::var("HOME") {
-        if !p.is_empty() {
-            return Some(p);
-        }
-    }
-    None
-}
 
 // =========================================================================
 // Commands
@@ -199,7 +47,7 @@ fn get_home_dir() -> Option<String> {
 ///
 /// 流程：
 /// 1. 取会话 → 取 agent → 取 api_key
-/// 2. 拉历史消息拼上下文
+/// 2. 调用 [`assemble_context`] 拼装 messages + 重排 user_blocks
 /// 3. 写用户消息 + assistant 占位消息
 /// 4. 注册 CancellationToken
 /// 5. emit `chat:start`
@@ -261,60 +109,6 @@ pub async fn send_message(
     // --- 创建 provider ---
     let provider = llm::create_provider(&agent.provider, &agent.model, base_url, agent.cache_prompt != 0)?;
 
-    // --- 如果传入了模板，查表 + 渲染变量（失败 → 报错给前端）---
-    let rendered_system_prompt: Option<String> = if let Some(tpl_input) = &input.template {
-        let tpl = repo::template::get_by_id(pool.inner(), &tpl_input.template_id).await?;
-        let rendered = render_template(&tpl.system_prompt, &tpl_input.values);
-        // 模板 system_prompt 为空字符串 → 退化为不使用模板 system_prompt（保留 agent 的）
-        if rendered.trim().is_empty() {
-            None
-        } else {
-            Some(rendered)
-        }
-    } else {
-        None
-    };
-    let rendered_user_prefix: String = if let Some(tpl_input) = &input.template {
-        let tpl = repo::template::get_by_id(pool.inner(), &tpl_input.template_id).await?;
-        render_template(&tpl.user_prompt_prefix, &tpl_input.values)
-    } else {
-        String::new()
-    };
-
-    // --- P2-2: 拼装最终 user content blocks ---
-    // 模板 prefix 注入到 user 消息块数组头部（与旧版「prefix + content」等效）。
-    // 图片/文本混合时仍按 OpenAI 要求保持「image 在前，text 在后」的顺序：
-    // - Anthropic 无顺序要求
-    // - OpenAI Vision 明确要求 image_url 在 text 之前
-    //
-    // 实现：合并 prefix 与 blocks → 重排为「images → texts」，
-    // 这样后面拼 context messages 时直接 push 即可。
-    let mut user_blocks: Vec<ContentBlock> = if rendered_user_prefix.is_empty() {
-        final_blocks.clone()
-    } else {
-        let mut v = Vec::with_capacity(final_blocks.len() + 1);
-        v.push(ContentBlock::text(rendered_user_prefix));
-        v.extend(final_blocks.iter().cloned());
-        v
-    };
-
-    // 重排：images 在前，texts 在后（OpenAI Vision 要求）
-    // ToolUse / ToolResult / Thinking 在 user 消息中理论上不应出现，保留原顺序
-    let has_image_in_user = user_blocks.iter().any(|b| b.is_image());
-    if has_image_in_user {
-        let mut images: Vec<ContentBlock> = Vec::new();
-        let mut others: Vec<ContentBlock> = Vec::new();
-        for b in user_blocks.drain(..) {
-            if b.is_image() {
-                images.push(b);
-            } else {
-                others.push(b);
-            }
-        }
-        user_blocks = images;
-        user_blocks.extend(others);
-    }
-
     // --- 拉最近 20 条消息作为上下文 ---
     let history = repo::message::list_by_conversation(
         pool.inner(),
@@ -324,60 +118,26 @@ pub async fn send_message(
     )
     .await?;
 
-    // --- 构造上下文消息列表 ---
-    let mut messages: Vec<ChatMessage> = Vec::with_capacity(history.len() + 2);
-
     let tools_enabled = input.tools_enabled;
 
-    // system prompt 优先级：模板 > agent
-    // 模板未提供 system_prompt → 使用 agent 的
-    // 两者都为空 → 不发 system 消息
-    let mut effective_system_prompt = rendered_system_prompt
-        .as_deref()
-        .filter(|s| !s.is_empty())
-        .or(if agent.system_prompt.is_empty() {
-            None
-        } else {
-            Some(agent.system_prompt.as_str())
-        })
-        .map(|s| s.to_string());
-
-    // P2-1: 工具启用时追加工具能力提示（帮助 GLM 等模型识别工具可用）
-    if tools_enabled {
-        let tool_hint = "你已启用工具调用能力。当用户要求读取文件、列出目录等操作时，请使用提供的工具（如 list_directory、read_file）来执行，不要回复“无法访问文件”。";
-        effective_system_prompt = Some(match effective_system_prompt {
-            Some(s) => format!("{}\n\n{}", s, tool_hint),
-            None => tool_hint.to_string(),
-        });
-    }
-
-    // === 注入运行环境信息（始终注入）===
-    let os_info = build_os_context();
-    if !os_info.is_empty() {
-        effective_system_prompt = Some(match effective_system_prompt {
-            Some(s) => format!("{}\n\n{}", s, os_info),
-            None => os_info,
-        });
-    }
-
-    if let Some(sys) = &effective_system_prompt {
-        messages.push(ChatMessage::from_text("system", sys.clone()));
-    }
-
-    // 历史消息
-    for msg in &history {
-        let role = match msg.role.as_str() {
-            "user" | "assistant" | "system" => msg.role.clone(),
-            _ => continue, // 跳过 tool 等不支持的角色
-        };
-        messages.push(ChatMessage::from_text(role, msg.content.clone()));
-    }
-
-    // 当前用户消息（含图片的 content_blocks）
-    messages.push(ChatMessage {
-        role: "user".into(),
-        content: user_blocks.clone(),
-    });
+    // --- 拼装上下文 messages + 重排后的 user_blocks ---
+    // 详情见 `super::chat_context::assemble_context`：
+    // 1. 模板查询 + 渲染（如提供）
+    // 2. user_blocks 拼装 + 图片重排（OpenAI Vision 要求）
+    // 3. system prompt 拼装（template > agent > tool_hint > os_context）
+    // 4. 历史消息转换（多模态支持标记为 TODO）
+    // 5. 当前 user 消息追加
+    let assembled = assemble_context(
+        pool.inner(),
+        &agent,
+        input.template.as_ref(),
+        &history,
+        final_blocks,
+        tools_enabled,
+    )
+    .await?;
+    let messages = assembled.messages;
+    let user_blocks = assembled.user_blocks;
 
     // --- 写用户消息到 DB ---
     // P2-2 双写：
@@ -932,93 +692,4 @@ pub async fn stop_generation(
         );
     }
     Ok(())
-}
-
-// =========================================================================
-// 单元测试
-// =========================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::HashMap;
-
-    fn vals(pairs: &[(&str, &str)]) -> HashMap<String, String> {
-        pairs
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect()
-    }
-
-    #[test]
-    fn render_replaces_known_vars() {
-        let mut v = HashMap::new();
-        v.insert("language".into(), "Rust".into());
-        v.insert("framework".into(), "Actix".into());
-        let out = render_template("请用 {{language}} + {{framework}} 实现", &v);
-        assert_eq!(out, "请用 Rust + Actix 实现");
-    }
-
-    #[test]
-    fn render_keeps_unknown_vars_intact() {
-        let v = vals(&[("lang", "TS")]);
-        let out = render_template("Hello {{name}} in {{lang}}", &v);
-        assert_eq!(out, "Hello {{name}} in TS");
-    }
-
-    #[test]
-    fn render_handles_no_vars() {
-        let v = HashMap::new();
-        assert_eq!(render_template("plain text", &v), "plain text");
-    }
-
-    #[test]
-    fn render_handles_unicode_value() {
-        let v = vals(&[("city", "北京")]);
-        let out = render_template("我在 {{city}}", &v);
-        assert_eq!(out, "我在 北京");
-    }
-
-    #[test]
-    fn render_rejects_invalid_var_name_passthrough() {
-        // 变量名含空格 / 点 / 数字开头 → 不替换
-        let v = vals(&[("good", "OK")]);
-        let out = render_template("a {{good}} b {{1bad}} c {{a.b}} d", &v);
-        assert_eq!(out, "a OK b {{1bad}} c {{a.b}} d");
-    }
-
-    #[test]
-    fn render_handles_extra_values() {
-        // values 中多余的 key → 忽略
-        let v = vals(&[("a", "1"), ("b", "2"), ("c", "3")]);
-        let out = render_template("{{a}}/{{b}}", &v);
-        assert_eq!(out, "1/2");
-    }
-
-    #[test]
-    fn render_unmatched_brackets_kept_intact() {
-        // 单独的 { 或 } 不应影响
-        let v = vals(&[("x", "Y")]);
-        let out = render_template("a { single } b {{x}} c { unclosed", &v);
-        assert_eq!(out, "a { single } b Y c { unclosed");
-    }
-
-    #[test]
-    fn render_adjacent_vars() {
-        let v = vals(&[("a", "X"), ("b", "Y")]);
-        assert_eq!(render_template("{{a}}{{b}}", &v), "XY");
-    }
-
-    #[test]
-    fn is_valid_var_name_basic() {
-        assert!(is_valid_var_name("foo"));
-        assert!(is_valid_var_name("_bar"));
-        assert!(is_valid_var_name("a1_b2"));
-        assert!(!is_valid_var_name(""));
-        assert!(!is_valid_var_name("1abc"));
-        assert!(!is_valid_var_name("a-b"));
-        assert!(!is_valid_var_name("a.b"));
-    }
-
-    // ================================================================
 }
