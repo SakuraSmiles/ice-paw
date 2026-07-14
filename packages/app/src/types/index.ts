@@ -15,8 +15,8 @@
  * 字段说明：
  * - id            主键（UUID 字符串，由 Rust 侧生成）
  * - name          用户自定义名称（例如「论文润色」「代码评审」）
- * - provider      LLM 提供商标识（openai / glm / deepseek / anthropic ...）
- * - model         具体模型名（例如 gpt-4o / glm-4 / deepseek-chat）
+ * - provider      LLM 提供商标识（openai / anthropic / minimax / minimax-cn / deepseek / glm ...）
+ * - model         具体模型名（例如 gpt-4o / claude-sonnet-4-20250514 / minimax-cn/M3 / deepseek-chat / glm-4.7）
  * - system_prompt 系统提示词（对话前固定注入的 prompt）
  * - base_url      自定义 API 地址，可为空（使用 provider 默认地址）
  * - temperature   采样温度（0-2 之间，浮点）
@@ -39,6 +39,8 @@ export interface Agent {
   max_tokens: number;
   extra_params: Record<string, unknown>;
   sort_order: number;
+  /** P2-3: 是否启用 prompt caching */
+  cache_prompt: boolean;
   created_at: string;
   updated_at: string;
   hasApiKey: boolean;
@@ -63,6 +65,8 @@ export interface NewAgent {
   temperature?: number;
   max_tokens?: number;
   extra_params?: string;
+  /** P2-3: 是否启用 prompt caching（默认 true） */
+  cache_prompt?: boolean;
 }
 
 /**
@@ -84,6 +88,8 @@ export interface AgentUpdate {
   temperature?: number;
   max_tokens?: number;
   extra_params?: string;
+  /** P2-3: 是否启用 prompt caching */
+  cache_prompt?: boolean;
 }
 
 // ============================================================================
@@ -141,19 +147,26 @@ export type MessageRole = "user" | "assistant" | "system";
  * - id              主键
  * - conversation_id 所属会话外键
  * - role            角色（见 MessageRole）
- * - content         正文文本
- * - token_count     消耗 token 统计（可空，由 Rust 侧在流式完成后回填）
- * - error           错误信息（成功消息为 null；网络/限流错误时填入描述）
+ * - content         正文文本（兼容旧消息）
+ * - content_blocks  P2-1: JSON 数组字符串（ContentBlock[]），空数组表示纯文本消息
+ * - token_count     消耗 token 统计（可空）
+ * - error           错误信息
  * - created_at      创建时间
+ * - rowid           SQLite 物理行号，用于向上翻页的复合游标
+ *                   `(created_at, rowid)`。前端不展示该字段。
  */
 export interface Message {
   id: string;
   conversation_id: string;
   role: MessageRole;
   content: string;
+  /** P2-1: JSON 数组字符串，解析后为 ContentBlock[] */
+  content_blocks: string;
   token_count: number | null;
   error: string | null;
   created_at: string;
+  /** 分页游标：与后端 MessageRow.rowid 对齐，前端不展示 */
+  rowid: number;
 }
 
 /**
@@ -212,6 +225,12 @@ export interface ChatDonePayload {
   conversation_id: string;
   message_id: string;
   finish_reason: string;
+  /** P2-3: Token 用量 */
+  usage?: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    cached_tokens: number;
+  };
 }
 
 /**
@@ -239,6 +258,70 @@ export interface ChatRetryingPayload {
   message_id: string;
   attempt: number;
   max_attempts: number;
+}
+
+// ============================================================================
+// P2-1 工具调用相关类型
+// ============================================================================
+
+/**
+ * 消息内容块（与 Rust 侧 ContentBlock 对齐）
+ *
+ * P2-2：新增 `image` 变体用于多模态图片输入。
+ * - `data`       base64 编码（**不含** `data:image/...;base64,` 前缀，前缀由 adapter 拼接）
+ * - `media_type` MIME 类型，目前白名单：`image/png | image/jpeg | image/gif | image/webp`
+ */
+export type ContentBlock =
+  | { type: "text"; text: string }
+  | { type: "image"; data: string; media_type: string }
+  | { type: "tool_use"; id: string; name: string; input: string }
+  | { type: "tool_result"; tool_use_id: string; content: string; is_error?: boolean }
+  | { type: "thinking"; thinking: string; signature?: string };
+
+/** `chat:tool-call-start` 事件 payload */
+export interface ChatToolCallStartPayload {
+  conversation_id: string;
+  message_id: string;
+  id: string;
+  name: string;
+}
+
+/** `chat:tool-call-delta` 事件 payload */
+export interface ChatToolCallDeltaPayload {
+  conversation_id: string;
+  message_id: string;
+  id: string;
+  delta: string;
+}
+
+/** `chat:tool-call-end` 事件 payload */
+export interface ChatToolCallEndPayload {
+  conversation_id: string;
+  message_id: string;
+  id: string;
+}
+
+/** `chat:tool-result` 事件 payload */
+export interface ChatToolResultPayload {
+  conversation_id: string;
+  message_id: string;
+  tool_use_id: string;
+  content: string;
+  is_error: boolean;
+}
+
+/** `chat:thinking` 事件 payload */
+export interface ChatThinkingPayload {
+  conversation_id: string;
+  message_id: string;
+  content: string;
+}
+
+/** 工具定义（前端发给后端的 tool schema） */
+export interface ToolDef {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
 }
 
 // ============================================================================

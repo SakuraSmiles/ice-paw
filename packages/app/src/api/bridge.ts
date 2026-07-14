@@ -212,14 +212,20 @@ const messages = {
   /**
    * 列出某会话的消息，支持分页。
    *
-   * @param opts.limit  返回数量上限（默认由 Rust 侧决定，传 0/null 表示不限）
-   * @param opts.before 仅返回 created_at < before 的消息，用于向上翻页
+   * @param opts.limit   返回数量上限（默认由 Rust 侧决定，传 0/null 表示不限）
+   * @param opts.before  复合游标 `[created_at, rowid]`，仅返回同时满足
+   *                     `created_at < ts` 或 `created_at == ts && rowid < rowid`
+   *                     的消息，用于向上翻页。
+   *
+   * 为什么不只用 `created_at`？SQLite 的 `datetime('now')` 是秒级精度，同一秒
+   * 内的 user/assistant 对共享同一时间戳。纯字符串游标会让一次翻页恰好
+   * 跳过整段同秒的历史（详见 icepaw-chat-perf-design.md §2.1）。
    *
    * 对应 Command：list_messages
    */
   async list(
     conversationId: string,
-    opts?: { limit?: number; before?: string },
+    opts?: { limit?: number; before?: [string, number] },
   ): Promise<Message[]> {
     try {
       return await invoke<Message[]>("list_messages", { conversationId, ...opts });
@@ -255,8 +261,11 @@ const chat = {
    * 可选 `template` 参数（P2-4 模板注入）：传入后，Rust 侧会查模板 →
    * 渲染变量 → 替换/拼接 system_prompt，最后再调 LLM。
    *
+   * P2-2 多模态：可选 `contentBlocks` 参数传入文字+图片等多模态块，
+   * 与 `content` 互斥（传 `contentBlocks` 时 Rust 侧优先使用）。
+   *
    * 注意：Rust 侧 send_message 的入参是结构体 SendMessageInput，因此这里走
-   * `{ input: { conversation_id, content, template? } }` 包装形式。
+   * `{ input: { conversation_id, content, template?, tools_enabled? } }` 包装形式。
    *
    * 对应 Command：send_message
    */
@@ -264,6 +273,8 @@ const chat = {
     conversationId: string,
     content: string,
     template?: { template_id: string; values: Record<string, string> },
+    toolsEnabled?: boolean,
+    contentBlocks?: import("../types").ContentBlock[],
   ): Promise<void> {
     try {
       await invoke<void>("send_message", {
@@ -271,6 +282,8 @@ const chat = {
           conversation_id: conversationId,
           content,
           template,
+          tools_enabled: toolsEnabled ?? false,
+          content_blocks: contentBlocks,
         },
       });
     } catch (err) {

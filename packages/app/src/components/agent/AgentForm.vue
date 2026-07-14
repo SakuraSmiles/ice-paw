@@ -27,14 +27,18 @@ import {
 } from "../../data/agentTemplates";
 import { saturatedToBgFg } from "../../utils/agentAvatar";
 
-const PROVIDERS = ["OpenAI", "Anthropic", "GLM", "DeepSeek"] as const;
+// 顺序即默认下拉顺序；首位 = 新建 Agent 的默认 Provider。
+// GLM 保留为可选 Provider（不推荐），以兼容已有 GLM Agent 配置。
+const PROVIDERS = ["MiniMax", "OpenAI", "Anthropic", "DeepSeek", "GLM"] as const;
 type ProviderName = (typeof PROVIDERS)[number];
 
 const MODEL_PRESETS: Record<ProviderName, string[]> = {
+  MiniMax: ["minimax-cn/M3"],
   OpenAI: ["gpt-4o", "gpt-4o-mini"],
   Anthropic: ["claude-sonnet-4-20250514"],
-  GLM: ["glm-5.2", "glm-4.7", "glm-4-flash"], // 5.2 当前旗舰；4.7 通用对话强；4-flash 免费兜底
   DeepSeek: ["deepseek-chat", "deepseek-reasoner"],
+  // 保留 GLM 选项仅供已有 Agent 兼容；新建不再推荐。
+  GLM: ["glm-5.2", "glm-4.7", "glm-4-flash"],
 };
 
 /**
@@ -54,6 +58,8 @@ export interface AgentFormPayload {
   rotateApiKey: boolean;
   /** create 模式下用户选中的模板 id；未选模板或 edit 模式下为 undefined */
   templateId?: string;
+  /** P2-3: 是否启用 prompt caching（默认 true） */
+  cachePrompt?: boolean;
 }
 
 const props = defineProps<{
@@ -82,6 +88,8 @@ const baseUrl = ref("");
 const systemPrompt = ref("");
 const temperature = ref(0.7);
 const maxTokens = ref(4096);
+/** P2-3: 是否启用 prompt caching（默认 true） */
+const cachePrompt = ref(true);
 
 /** 当前选中的模板 id（create 模式才有意义） */
 const selectedTemplateId = ref<string | null>(null);
@@ -204,6 +212,7 @@ function resetForm(): void {
   systemPrompt.value = "";
   temperature.value = 0.7;
   maxTokens.value = 4096;
+  cachePrompt.value = true;
   selectedTemplateId.value = null;
   advancedOpen.value = false;
   errors.value = {};
@@ -227,6 +236,8 @@ function populateFromAgent(a: Agent): void {
   systemPrompt.value = a.system_prompt ?? "";
   temperature.value = a.temperature;
   maxTokens.value = a.max_tokens;
+  // P2-3: 读取缓存设置
+  cachePrompt.value = a.cache_prompt;
   selectedTemplateId.value = null;
   advancedOpen.value = advancedDefaultOpen.value;
 }
@@ -266,6 +277,7 @@ function handleSubmit(): void {
     max_tokens: maxTokens.value,
     rotateApiKey: rotateApiKey.value,
     templateId: selectedTemplateId.value ?? undefined,
+    cachePrompt: cachePrompt.value,
   });
 }
 
@@ -529,6 +541,25 @@ function templateBgFg(tpl: AgentTemplate): { bg: string; fg: string } {
                       :maxlength="6"
                       @update:model-value="(v) => (maxTokens = Math.max(1, Number(v) || 1))"
                     />
+                  </div>
+
+                  <!-- P2-3: Prompt Caching 开关 -->
+                  <div class="form-group">
+                    <label class="form-label form-label-row">
+                      <span>Prompt Caching</span>
+                      <span class="label-hint">Anthropic 缓存加速（OpenAI 自动生效）</span>
+                    </label>
+                    <button
+                      type="button"
+                      class="toggle-btn"
+                      :class="{ 'toggle-btn-on': cachePrompt }"
+                      @click="cachePrompt = !cachePrompt"
+                    >
+                      <span class="toggle-track">
+                        <span class="toggle-thumb" />
+                      </span>
+                      <span class="toggle-text">{{ cachePrompt ? '已启用' : '已关闭' }}</span>
+                    </button>
                   </div>
                 </div>
               </details>
@@ -813,6 +844,59 @@ function templateBgFg(tpl: AgentTemplate): { bg: string; fg: string } {
 }
 
 /* ===== 高级设置（折叠） ===== */
+
+/* P2-3: Toggle 按钮（Prompt Caching 开关） */
+.form-label-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--ip-spacing-2);
+}
+
+.toggle-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--ip-spacing-2);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  font-family: inherit;
+}
+
+.toggle-track {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  border-radius: 10px;
+  background: var(--ip-color-border-default);
+  transition: background var(--ip-duration-fast) var(--ip-ease-out);
+ flex-shrink: 0;
+}
+
+.toggle-btn-on .toggle-track {
+  background: var(--ip-primary-500);
+}
+
+.toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform var(--ip-duration-fast) var(--ip-ease-out);
+ box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+}
+
+.toggle-btn-on .toggle-thumb {
+  transform: translateX(16px);
+}
+
+.toggle-text {
+  font-size: var(--ip-text-caption-size);
+  color: var(--ip-color-text-secondary);
+}
 .advanced-section {
   border-top: 1px dashed var(--ip-color-border-default);
   padding-top: var(--ip-spacing-3);

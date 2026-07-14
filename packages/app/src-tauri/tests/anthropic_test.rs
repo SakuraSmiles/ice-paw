@@ -98,10 +98,7 @@ data: {"type":"error","error":{"type":"api_error","message":"模型过载，请�
 }
 
 fn make_messages() -> Vec<ChatMessage> {
-    vec![ChatMessage {
-        role: "user".into(),
-        content: "你好".into(),
-    }]
+    vec![ChatMessage::from_text("user", "你好")]
 }
 
 #[tokio::test]
@@ -121,7 +118,7 @@ async fn anthropic_normal_text_stream_collects_expected() {
     let cancel = CancellationToken::new();
 
     let stream = adapter
-        .stream_chat("test-key", make_messages(), 0.7, 1024, cancel)
+        .stream_chat("test-key", make_messages(), None, 0.7, 1024, cancel)
         .await
         .expect("stream_chat should succeed");
 
@@ -137,6 +134,7 @@ async fn anthropic_normal_text_stream_collects_expected() {
                 assert_eq!(finish_reason, Some("end_turn".into()));
                 break;
             }
+            Ok(_) => {},
             Err(e) => panic!("unexpected error: {e}"),
         }
     }
@@ -165,7 +163,7 @@ async fn anthropic_mixed_tool_use_only_collects_text() {
     let cancel = CancellationToken::new();
 
     let stream = adapter
-        .stream_chat("test-key", make_messages(), 0.7, 1024, cancel)
+        .stream_chat("test-key", make_messages(), None, 0.7, 1024, cancel)
         .await
         .expect("stream_chat should succeed");
 
@@ -176,6 +174,7 @@ async fn anthropic_mixed_tool_use_only_collects_text() {
         match item {
             Ok(ChatDelta::Delta { content }) => content_parts.push(content),
             Ok(ChatDelta::Done { .. }) => break,
+            Ok(_) => {},
             Err(_) => break,
         }
     }
@@ -201,7 +200,7 @@ async fn anthropic_error_event_returns_llm_error() {
     let cancel = CancellationToken::new();
 
     let stream = adapter
-        .stream_chat("test-key", make_messages(), 0.7, 1024, cancel)
+        .stream_chat("test-key", make_messages(), None, 0.7, 1024, cancel)
         .await
         .expect("stream_chat should succeed");
 
@@ -213,6 +212,7 @@ async fn anthropic_error_event_returns_llm_error() {
         match item {
             Ok(ChatDelta::Delta { content }) => content_parts.push(content),
             Ok(ChatDelta::Done { .. }) => break,
+            Ok(_) => {},
             Err(e) => {
                 got_error = true;
                 match e {
@@ -232,4 +232,101 @@ async fn anthropic_error_event_returns_llm_error() {
     // 应收到 "开始" 文本后遇到 error
     assert_eq!(content_parts, vec!["开始".to_string()]);
     assert!(got_error, "should receive Llm error from stream error event");
+}
+
+// =========================================================================
+// P2-1i: 工具调用事件集成测试
+// =========================================================================
+
+/// P2-1i: Anthropic tool_use stream → ToolCallStart/ToolCallDelta/ToolCallEnd 事件
+#[tokio::test]
+async fn anthropic_tool_use_produces_tool_call_events() {
+    let server = MockServer::start().await;
+
+    Mock::given(matchers::method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(mixed_tool_use_sse()),
+        )
+        .mount(&server)
+        .await;
+
+    let adapter = AnthropicAdapter::new("test-model".into(), server.uri());
+    let cancel = CancellationToken::new();
+
+    let stream = adapter
+        .stream_chat("test-key", make_messages(), None, 0.7, 1024, cancel)
+        .await
+        .expect("stream_chat should succeed");
+
+    let mut stream = Box::pin(stream);
+    let mut start_count = 0;
+    let mut delta_count = 0;
+    let mut end_count = 0;
+    let mut text_count = 0;
+    let mut tool_name = String::new();
+    let mut tool_id = String::new();
+
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(ChatDelta::Delta { .. }) => text_count += 1,
+            Ok(ChatDelta::ToolCallStart { id, name }) => {
+                start_count += 1;
+                tool_id = id;
+                tool_name = name;
+            }
+            Ok(ChatDelta::ToolCallDelta { .. }) => delta_count += 1,
+            Ok(ChatDelta::ToolCallEnd { .. }) => end_count += 1,
+            Ok(ChatDelta::Thinking { .. }) => {},
+            Ok(ChatDelta::Done { .. }) => break,
+            Err(_) => break,
+        }
+    }
+
+    assert_eq!(text_count, 1, "应收到 1 个文本 Delta（前导文本）");
+    assert_eq!(start_count, 1, "应收到 1 个 ToolCallStart");
+    assert_eq!(tool_name, "read_file", "tool name 应为 read_file");
+    assert!(!tool_id.is_empty(), "tool id 不应为空");
+    assert_eq!(end_count, 1, "应收到 1 个 ToolCallEnd");
+    assert!(delta_count >= 1, "应收到至少 1 个 ToolCallDelta");
+}
+
+/// P2-1i: Anthropic tool_use stream 不将 tool_use delta 当作文本
+/// （回归验证：P2-1 工具调用 delta 不能混入文本流）
+#[tokio::test]
+async fn anthropic_tool_use_delta_not_in_text() {
+    let server = MockServer::start().await;
+
+    Mock::given(matchers::method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(mixed_tool_use_sse()),
+        )
+        .mount(&server)
+        .await;
+
+    let adapter = AnthropicAdapter::new("test-model".into(), server.uri());
+    let cancel = CancellationToken::new();
+
+    let stream = adapter
+        .stream_chat("test-key", make_messages(), None, 0.7, 1024, cancel)
+        .await
+        .expect("stream_chat should succeed");
+
+    let mut content_parts: Vec<String> = Vec::new();
+    let mut stream = Box::pin(stream);
+
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(ChatDelta::Delta { content }) => content_parts.push(content),
+            Ok(ChatDelta::Done { .. }) => break,
+            Ok(_) => {},
+            Err(_) => break,
+        }
+    }
+
+    // 只应收集到前导文本，tool_use 的 input_json_delta 不应出现在文本中
+    assert_eq!(content_parts, vec!["让我查一下".to_string()]);
 }

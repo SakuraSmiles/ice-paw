@@ -27,6 +27,8 @@ import { useToast } from "../../composables/useToast";
 import { useAgentMeta, type AgentMeta } from "../../composables/useAgentMeta";
 import AgentAvatar from "../common/AgentAvatar.vue";
 import TemplatePicker from "../template/TemplatePicker.vue";
+import ImagePicker, { type ImageItem } from "./ImagePicker.vue";
+import type { ContentBlock } from "../../types";
 
 const props = defineProps<{
   agentName: string;
@@ -34,7 +36,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  send: [content: string];
+  send: [content: string, contentBlocks?: ContentBlock[]];
   stop: [];
 }>();
 
@@ -51,6 +53,18 @@ const agentMeta = useAgentMeta();
 
 /** 文本草稿 */
 const draft = ref<string>("");
+
+// ============================================================================
+// P2-2 多模态：待发送图片
+// ============================================================================
+
+/** 待发送图片列表（ImagePicker 受控） */
+const pendingImages = ref<ImageItem[]>([]);
+
+/** ImagePicker 的图片更新回调 */
+function onImagesChange(next: ImageItem[]): void {
+  pendingImages.value = next;
+}
 
 /** 提交中（防止双击重复创建会话） */
 const submitting = ref<boolean>(false);
@@ -209,9 +223,11 @@ const inputDisabled = computed<boolean>(
   () => submitting.value || props.agentName.length === 0 || isStreaming.value,
 );
 
-/** 发送按钮是否禁用（无内容 + 其他禁用条件） */
+/** 发送按钮是否禁用（无文本+图片 + 其他禁用条件） */
 const sendDisabled = computed<boolean>(
-  () => inputDisabled.value || draft.value.trim().length === 0,
+  () =>
+    inputDisabled.value ||
+    (draft.value.trim().length === 0 && pendingImages.value.length === 0),
 );
 
 // ============================================================================
@@ -249,10 +265,22 @@ function onChipClick(text: string): void {
 async function handleSend(): Promise<void> {
   if (inputDisabled.value) return;
   const trimmed = draft.value.trim();
-  if (!trimmed) return;
+  const hasImages = pendingImages.value.length > 0;
+  // 必须提供文本或图片二者之一
+  if (!trimmed && !hasImages) return;
   if (!agentsStore.currentId) {
     toast.error("当前没有可用 Agent");
     return;
+  }
+
+  // P2-2 多模态：有图片则构造 content_blocks
+  let contentBlocks: ContentBlock[] | undefined;
+  if (hasImages) {
+    contentBlocks = [];
+    if (trimmed) contentBlocks.push({ type: "text", text: trimmed });
+    for (const img of pendingImages.value) {
+      contentBlocks.push({ type: "image", data: img.data, media_type: img.media_type });
+    }
   }
 
   submitting.value = true;
@@ -266,10 +294,11 @@ async function handleSend(): Promise<void> {
       return;
     }
     draft.value = "";
+    pendingImages.value = [];
     void nextTick(autosize);
     selectedTemplateId.value = null;
     chatStore.setAppliedTemplate(null);
-    emit("send", trimmed);
+    emit("send", trimmed, contentBlocks);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     toast.error(`创建会话失败：${msg}`);
@@ -353,6 +382,14 @@ function onStopClick(): void {
     >
       <div v-if="chatStore.appliedTemplate" class="welcome-applied-hint">
         ✨ 已应用模板：{{ templatesStore.byId(chatStore.appliedTemplate.templateId)?.name }}
+      </div>
+      <!-- P2-2 多模态：图片选择器 -->
+      <div class="welcome-image-picker">
+        <ImagePicker
+          :images="pendingImages"
+          :disabled="inputDisabled"
+          @update:images="onImagesChange"
+        />
       </div>
       <textarea
         ref="textareaRef"
@@ -461,6 +498,14 @@ function onStopClick(): void {
   color: var(--ip-primary-700, #1d4ed8);
   background: var(--ip-primary-100, #dbeafe);
   border-radius: var(--ip-radius-sm);
+}
+
+/* P2-2 多模态：图片选择器区域（缩略图列表与 textarea 间距） */
+.welcome-image-picker {
+  display: flex;
+  width: 100%;
+  padding: 0 2px 8px;
+  box-sizing: border-box;
 }
 
 .chip {

@@ -19,10 +19,12 @@
 //   - stop()                点击停止按钮时
 
 import { computed, nextTick, ref, watch, useTemplateRef } from "vue";
-import { SendHorizontal, Square } from "lucide-vue-next";
+import { SendHorizontal, Square, Wrench } from "lucide-vue-next";
 import { useChatStore } from "../../stores/chat";
 import { useTemplatesStore } from "../../stores/templates";
 import TemplatePicker from "../template/TemplatePicker.vue";
+import ImagePicker, { type ImageItem } from "./ImagePicker.vue";
+import type { ContentBlock } from "../../types";
 
 const props = defineProps<{
   disabled: boolean;
@@ -30,7 +32,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  send: [content: string];
+  send: [content: string, contentBlocks?: ContentBlock[]];
   stop: [];
 }>();
 
@@ -42,6 +44,18 @@ const templatesStore = useTemplatesStore();
 // ============================================================================
 
 const draft = ref<string>("");
+
+// ============================================================================
+// P2-2 多模态：待发送图片
+// ============================================================================
+
+/** 待发送图片列表（ImagePicker 受控） */
+const pendingImages = ref<ImageItem[]>([]);
+
+/** ImagePicker 的图片更新回调 */
+function onImagesChange(next: ImageItem[]): void {
+  pendingImages.value = next;
+}
 
 /** textarea DOM 引用 */
 const textareaRef = useTemplateRef<HTMLTextAreaElement | null>("textareaRef");
@@ -210,9 +224,25 @@ const inputDisabled = computed<boolean>(() => props.disabled || props.streaming)
 function handleSend(): void {
   if (inputDisabled.value) return;
   const v = draft.value.trim();
-  if (!v) return;
-  emit("send", v);
+  const hasImages = pendingImages.value.length > 0;
+  // 必须提供文本或图片二者之一
+  if (!v && !hasImages) return;
+
+  // P2-2 多模态：若有图片则构造 content_blocks，否则只发文本
+  if (hasImages) {
+    const blocks: ContentBlock[] = [];
+    if (v) blocks.push({ type: "text", text: v });
+    for (const img of pendingImages.value) {
+      blocks.push({ type: "image", data: img.data, media_type: img.media_type });
+    }
+    emit("send", v, blocks);
+  } else {
+    emit("send", v);
+  }
+
+  // 重置
   draft.value = "";
+  pendingImages.value = [];
   void nextTick(autosize);
   // 清空 chip 选中 + 应用模板
   selectedTemplateId.value = null;
@@ -229,9 +259,11 @@ function onStopClick(): void {
   emit("stop");
 }
 
-/** 发送按钮是否禁用（无内容或外层禁用） */
+/** 发送按钮是否禁用（无文本且无图片、或外层禁用） */
 const sendDisabled = computed<boolean>(
-  () => inputDisabled.value || draft.value.trim().length === 0,
+  () =>
+    inputDisabled.value ||
+    (draft.value.trim().length === 0 && pendingImages.value.length === 0),
 );
 
 /** 已应用模板的展示文本（chip 旁的小提示） */
@@ -266,6 +298,13 @@ const appliedHint = computed<string | null>(() => {
       ✨ 已应用：{{ appliedHint }}
     </div>
 
+    <!-- P2-2 多模态：图片选择器（附件按钮 + 缩略图列表） -->
+    <ImagePicker
+      :images="pendingImages"
+      :disabled="streaming"
+      @update:images="onImagesChange"
+    />
+
     <textarea
       ref="textareaRef"
       v-model="draft"
@@ -279,6 +318,19 @@ const appliedHint = computed<string | null>(() => {
     />
     <div class="toolbar">
       <div class="toolbar-left">
+        <!-- P2-1: 工具开关按钮 -->
+        <button
+          class="btn-tool-toggle"
+          :class="{ 'btn-tool-toggle-active': chatStore.toolsEnabled }"
+          type="button"
+          :title="chatStore.toolsEnabled ? '已开启工具调用（LLM 可读写本地文件）' : '开启工具调用（LLM 可读写本地文件）'"
+          :aria-label="chatStore.toolsEnabled ? '关闭工具调用' : '开启工具调用'"
+          :aria-pressed="chatStore.toolsEnabled"
+          @click="chatStore.toolsEnabled = !chatStore.toolsEnabled"
+        >
+          <Wrench :size="14" aria-hidden="true" />
+          <span class="tool-toggle-label">工具</span>
+        </button>
         <span class="hint-text">
           <template v-if="streaming">生成中 · 可随时停止</template>
           <template v-else>Enter 发送 · Shift+Enter 换行 · @ 选模板</template>
@@ -476,5 +528,44 @@ const appliedHint = computed<string | null>(() => {
 
 .chat-input-streaming .textarea {
   border-color: var(--ip-color-border-default);
+}
+
+/* P2-1: 工具开关按钮 */
+.btn-tool-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  appearance: none;
+  height: 28px;
+  padding: 0 8px;
+  font-size: var(--ip-text-caption-size);
+  font-weight: var(--ip-font-weight-medium);
+  font-family: inherit;
+  border-radius: var(--ip-radius-sm);
+  border: 1px solid var(--ip-color-border-default);
+  background: transparent;
+  color: var(--ip-color-text-tertiary);
+  cursor: pointer;
+  transition: var(--ip-transition-colors);
+}
+
+.btn-tool-toggle:hover {
+  border-color: var(--ip-color-border-strong);
+  color: var(--ip-color-text-secondary);
+}
+
+.btn-tool-toggle-active {
+  border-color: var(--ip-primary-600);
+  background: var(--ip-primary-100, #dbeafe);
+  color: var(--ip-primary-700, #1d4ed8);
+}
+
+.btn-tool-toggle-active:hover {
+  border-color: var(--ip-primary-600);
+  color: var(--ip-primary-700, #1d4ed8);
+}
+
+.tool-toggle-label {
+  line-height: 1;
 }
 </style>

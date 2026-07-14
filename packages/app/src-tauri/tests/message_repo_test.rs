@@ -291,9 +291,20 @@ async fn list_by_conversation_with_before_preserves_order_within_second() {
     }
 
     // 翻页：取 "2026-07-13 17:11:25" 之前的 → 应是 [1, 2, 3, 4]
-    let rows = message::list_by_conversation(&pool, &conv_id, None, Some("2026-07-13 17:11:25"))
-        .await
-        .unwrap();
+    //
+    // 新签名为复合游标 `(created_at, rowid)`。为了与旧的「只按 created_at 严格 <
+    // ts」语义完全对齐（不包含 ts 当秒的任意消息），传入 `rowid = 0`：
+    // 由于 SQL 实际为 `(created_at < ts) OR (created_at = ts AND rowid < 0)`，
+    // 而 rowid 在 SQLite 中恒为正，第二段恒为假，等价于旧的 `created_at < ts`。
+    // 真实的「同秒内严格小于最末一条」场景下，前端会传最末一条的真实 rowid。
+    let rows = message::list_by_conversation(
+        &pool,
+        &conv_id,
+        None,
+        Some(("2026-07-13 17:11:25".into(), 0)),
+    )
+    .await
+    .unwrap();
     let got: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
     assert_eq!(
         got,
@@ -302,9 +313,14 @@ async fn list_by_conversation_with_before_preserves_order_within_second() {
     );
 
     // 取 "2026-07-13 17:11:24" 之前的 → 应是 [1, 2]
-    let rows = message::list_by_conversation(&pool, &conv_id, None, Some("2026-07-13 17:11:24"))
-        .await
-        .unwrap();
+    let rows = message::list_by_conversation(
+        &pool,
+        &conv_id,
+        None,
+        Some(("2026-07-13 17:11:24".into(), 0)),
+    )
+    .await
+    .unwrap();
     let got: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
     assert_eq!(got, vec!["m-uu-1", "m-aa-1"]);
 }

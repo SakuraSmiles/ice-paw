@@ -127,6 +127,7 @@ async function handleFormSubmit(payload: AgentFormPayload): Promise<void> {
         system_prompt: payload.system_prompt || undefined,
         temperature: payload.temperature,
         max_tokens: payload.max_tokens,
+        cache_prompt: payload.cachePrompt,
       });
       // 若用户选中了模板，写 meta 到 localStorage
       if (payload.templateId) {
@@ -153,6 +154,7 @@ async function handleFormSubmit(payload: AgentFormPayload): Promise<void> {
         system_prompt: payload.system_prompt || undefined,
         temperature: payload.temperature,
         max_tokens: payload.max_tokens,
+        cache_prompt: payload.cachePrompt,
       });
       // 如果需要轮换 key
       if (payload.rotateApiKey && payload.api_key) {

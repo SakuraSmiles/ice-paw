@@ -23,14 +23,18 @@ import type { NewAgent } from "../../types";
 // Provider / Model 预设
 // ============================================================================
 
-const PROVIDERS = ["OpenAI", "Anthropic", "GLM", "DeepSeek"] as const;
+// 顺序即默认下拉顺序；首位 = 新建 Agent 的默认 Provider。
+// GLM 保留为可选 Provider（不推荐），以兼容已有 GLM Agent 配置。
+const PROVIDERS = ["MiniMax", "OpenAI", "Anthropic", "DeepSeek", "GLM"] as const;
 type ProviderName = (typeof PROVIDERS)[number];
 
 const MODEL_PRESETS: Record<ProviderName, string[]> = {
+  MiniMax: ["minimax-cn/M3"],
   OpenAI: ["gpt-4o", "gpt-4o-mini"],
   Anthropic: ["claude-sonnet-4-20250514"],
-  GLM: ["glm-5.2", "glm-4.7", "glm-4-flash"], // 5.2 当前旗舰；4.7 通用对话强；4-flash 免费兜底
   DeepSeek: ["deepseek-chat", "deepseek-reasoner"],
+  // 保留 GLM 选项仅供已有 Agent 兼容；新建不再推荐。
+  GLM: ["glm-5.2", "glm-4.7", "glm-4-flash"],
 };
 
 /** 下拉框里"自定义..."选项的固定文案 */
