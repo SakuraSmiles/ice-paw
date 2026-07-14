@@ -24,6 +24,8 @@ pub struct AgentRow {
     pub max_tokens: i32,
     pub extra_params: String,
     pub sort_order: i32,
+    /// P2-3: 是否启用 Anthropic prompt caching（OpenAI 自动缓存无需此字段）
+    pub cache_prompt: i32,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -43,6 +45,9 @@ pub struct Agent {
     pub max_tokens: i32,
     pub extra_params: serde_json::Value,
     pub sort_order: i32,
+    /// P2-3: 是否启用 prompt caching（Anthropic 显式注入 cache_control 断点）
+    #[serde(default)]
+    pub cache_prompt: bool,
     pub created_at: String,
     pub updated_at: String,
     /// 是否已配置 API Key（前端业务提示用），对应 stronghold 中是否存在
@@ -66,6 +71,8 @@ impl From<AgentRow> for Agent {
             max_tokens: row.max_tokens,
             extra_params: extra,
             sort_order: row.sort_order,
+            // P2-3: i32 0/1 → bool（DB 默认 1，零值兜底为 false）
+            cache_prompt: row.cache_prompt != 0,
             created_at: row.created_at,
             updated_at: row.updated_at,
             has_api_key,
@@ -92,10 +99,14 @@ pub struct NewAgent {
     pub extra_params: Option<serde_json::Value>,
     #[serde(default)]
     pub sort_order: i32,
+    /// P2-3: 是否启用 prompt caching（默认 true）
+    #[serde(default = "default_cache_prompt")]
+    pub cache_prompt: bool,
 }
 
 fn default_temperature() -> f64 { 0.7 }
 fn default_max_tokens() -> i32 { 4096 }
+fn default_cache_prompt() -> bool { true }
 
 /// 更新 agent 入参（partial update）
 ///
@@ -116,6 +127,8 @@ pub struct AgentUpdate {
     pub max_tokens: Option<i32>,
     pub extra_params: Option<serde_json::Value>,
     pub sort_order: Option<i32>,
+    /// P2-3: 是否启用 prompt caching（None 表示不改）
+    pub cache_prompt: Option<bool>,
 }
 
 /// 轮换 API Key 入参
@@ -180,9 +193,18 @@ pub struct MessageRow {
     pub conversation_id: String,
     pub role: String,
     pub content: String,
+    /// P2-1: JSON 数组字符串（ContentBlock[]），默认 '[]' 兼容旧消息
+    pub content_blocks: String,
     pub token_count: Option<i32>,
     pub error: Option<String>,
     pub created_at: String,
+    /// SQLite 物理行号（分页游标用）。
+    ///
+    /// `messages` 表使用 `id TEXT PRIMARY KEY` 但未声明 `WITHOUT ROWID`，
+    /// SQLite 默认会给该表分配一个单调递增的隐式 `rowid` 列。SQLx
+    /// 可在 SELECT 列表里显式取出。`rowid` 是 `INTEGER PRIMARY KEY` 的
+    /// 别名，本身就是 `i64`，分页时用作「同秒消息 tie-breaker」非常稳定。
+    pub rowid: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -191,9 +213,14 @@ pub struct Message {
     pub conversation_id: String,
     pub role: String,
     pub content: String,
+    /// P2-1: JSON 数组字符串（ContentBlock[]），空数组表示旧消息
+    pub content_blocks: String,
     pub token_count: Option<i32>,
     pub error: Option<String>,
     pub created_at: String,
+    /// 分页游标（与 `MessageRow.rowid` 对齐）。
+    /// 前端不展示此字段，仅在向上翻页时回传 `(created_at, rowid)` 复合游标。
+    pub rowid: i64,
 }
 
 impl From<MessageRow> for Message {
@@ -203,9 +230,11 @@ impl From<MessageRow> for Message {
             conversation_id: row.conversation_id,
             role: row.role,
             content: row.content,
+            content_blocks: row.content_blocks,
             token_count: row.token_count,
             error: row.error,
             created_at: row.created_at,
+            rowid: row.rowid,
         }
     }
 }
@@ -222,6 +251,66 @@ pub struct NewMessage {
 }
 
 // 用 `DateTime<Utc>` 仅是给上层时间工具备查；当前 SQL 用 TEXT 存 ISO8601，因此保留 String 字段
+
+// =========================================================================
+// Tool Call（P2-1 工具调用审计日志）
+// =========================================================================
+
+/// 数据库行版本：工具调用记录
+#[derive(Debug, Clone, FromRow)]
+pub struct ToolCallRow {
+    pub id: String,
+    pub message_id: String,
+    pub tool_name: String,
+    pub arguments: String,
+    pub result: Option<String>,
+    pub is_error: i32,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+    pub created_at: String,
+}
+
+/// 前端可见的工具调用记录
+#[derive(Debug, Clone, Serialize)]
+pub struct ToolCall {
+    pub id: String,
+    pub message_id: String,
+    pub tool_name: String,
+    /// JSON 字符串（参数）
+    pub arguments: String,
+    /// JSON 字符串（结果），未完成为 None
+    pub result: Option<String>,
+    pub is_error: bool,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+    pub created_at: String,
+}
+
+impl From<ToolCallRow> for ToolCall {
+    fn from(row: ToolCallRow) -> Self {
+        ToolCall {
+            id: row.id,
+            message_id: row.message_id,
+            tool_name: row.tool_name,
+            arguments: row.arguments,
+            result: row.result,
+            is_error: row.is_error != 0,
+            started_at: row.started_at,
+            finished_at: row.finished_at,
+            created_at: row.created_at,
+        }
+    }
+}
+
+/// 创建工具调用记录入参
+#[derive(Debug, Deserialize)]
+pub struct NewToolCall {
+    pub id: String,
+    pub message_id: String,
+    pub tool_name: String,
+    pub arguments: String,
+}
+
 #[allow(dead_code)]
 pub type UtcDateTime = DateTime<Utc>;
 

@@ -72,8 +72,8 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
     description: "日常问答、通用知识",
     systemPrompt:
       "你是一个友好、专业的 AI 助手。请用简洁清晰的语言回答用户的问题，必要时提供例子和解释。",
-    recommendedProvider: "openai",
-    recommendedModel: "gpt-4o-mini",
+    recommendedProvider: "minimax-cn",
+    recommendedModel: "minimax-cn/M3",
     temperature: 0.7,
     promptChips: [
       "用一段话总结今天的新闻",
@@ -90,8 +90,8 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
     description: "编程、调试、Code Review",
     systemPrompt:
       "你是一个专业的编程助手。你精通多种编程语言和框架，擅长代码编写、调试、code review 和架构设计。请给出简洁、正确的代码和清晰的解释。",
-    recommendedProvider: "deepseek",
-    recommendedModel: "deepseek-chat",
+    recommendedProvider: "minimax-cn",
+    recommendedModel: "minimax-cn/M3",
     temperature: 0.3,
     promptChips: [
       "帮我写一段 Python 批量重命名脚本",
@@ -108,8 +108,8 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
     description: "多语言翻译",
     systemPrompt:
       "你是一个专业翻译。请将用户输入的内容翻译为目标语言（默认中英互译），保持原文的语气和风格。如果用户指定其他语言，按指定语言翻译。",
-    recommendedProvider: "openai",
-    recommendedModel: "gpt-4o-mini",
+    recommendedProvider: "minimax-cn",
+    recommendedModel: "minimax-cn/M3",
     temperature: 0.3,
     promptChips: [
       "把这段中文翻译成英文",
@@ -126,8 +126,8 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
     description: "营销文案、内容创作",
     systemPrompt:
       "你是一个创意文案专家。你擅长撰写营销文案、社交媒体内容、品牌故事和广告语。你的文字富有感染力，能精准抓住目标受众的痛点。",
-    recommendedProvider: "openai",
-    recommendedModel: "gpt-4o",
+    recommendedProvider: "minimax-cn",
+    recommendedModel: "minimax-cn/M3",
     temperature: 0.9,
     promptChips: [
       "帮我写一个咖啡品牌的小红书文案",
@@ -144,8 +144,8 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
     description: "学术写作润色",
     systemPrompt:
       "你是一个学术论文润色专家。请帮用户改善学术论文的语言表达、逻辑结构和专业术语使用，保持原意不变，使文字更加学术化、流畅。",
-    recommendedProvider: "anthropic",
-    recommendedModel: "claude-sonnet-4-20250514",
+    recommendedProvider: "minimax-cn",
+    recommendedModel: "minimax-cn/M3",
     temperature: 0.4,
     promptChips: [
       "帮我润色这段论文摘要",
@@ -162,8 +162,8 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
     description: "创意发散",
     systemPrompt:
       "你是一个创意发散伙伴。请帮助用户进行头脑风暴，提供多样、大胆但可行的想法。不要过早否定任何方向，鼓励用户探索。",
-    recommendedProvider: "openai",
-    recommendedModel: "gpt-4o",
+    recommendedProvider: "minimax-cn",
+    recommendedModel: "minimax-cn/M3",
     temperature: 1.0,
     promptChips: [
       "给我 10 个手机 App 的创业点子",
@@ -180,8 +180,8 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
     description: "概念讲解、学习辅导",
     systemPrompt:
       "你是一个耐心的知识导师。请用通俗易懂的方式解释复杂概念，善于用类比和例子帮助理解，根据用户的水平调整讲解深度。",
-    recommendedProvider: "anthropic",
-    recommendedModel: "claude-sonnet-4-20250514",
+    recommendedProvider: "minimax-cn",
+    recommendedModel: "minimax-cn/M3",
     temperature: 0.6,
     promptChips: [
       "用大白话解释什么是区块链",
@@ -198,8 +198,8 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
     description: "数据解读、报告生成",
     systemPrompt:
       "你是一个数据分析专家。你擅长数据解读、趋势分析、统计建模和可视化建议。请用专业但清晰的方式帮助用户理解数据背后的洞察。",
-    recommendedProvider: "deepseek",
-    recommendedModel: "deepseek-chat",
+    recommendedProvider: "minimax-cn",
+    recommendedModel: "minimax-cn/M3",
     temperature: 0.4,
     promptChips: [
       "帮我分析这组销售数据的趋势",

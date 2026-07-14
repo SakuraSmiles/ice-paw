@@ -60,6 +60,7 @@ pub async fn update_agent(
         input.max_tokens,
         input.extra_params.as_ref(),
         input.sort_order,
+        input.cache_prompt,
     )
     .await?;
     Ok(Agent::from(row))
