@@ -24,7 +24,7 @@ use crate::harness::loop_engine::LoopContext;
 use crate::harness::observable::RoundState;
 use crate::harness::provider;
 use crate::harness::tool_registry::ToolRegistry;
-use crate::context::pipeline::assemble_context;
+use crate::context::pipeline::{AssembledContext, PipelineContext, PipelineRunner};
 
 /// 发送消息 — 触发 LLM 流式生成。
 #[tauri::command]
@@ -68,13 +68,26 @@ pub async fn send_message(
         &agent.provider, &agent.model, base_url, agent.cache_prompt != 0,
     )?;
 
-    // --- 3. 拼装上下文 ---
+    // --- 3. 拼装上下文（A3-1：trait-based Pipeline） ---
     let history =
         repo::message::list_by_conversation(pool.inner(), &conv_id, Some(20), None).await?;
-    let assembled = assemble_context(
-        pool.inner(), &agent, input.template.as_ref(), &history, final_blocks, tools_enabled,
-    )
-    .await?;
+    // 显式走 PipelineRunner：构造 PipelineContext + 注册 5 个 Stage，
+    // 后续 A3-3 / A3-4 在此处追加新 Stage 即可，无需改动业务编排层。
+    let mut pipeline_ctx = PipelineContext::new(
+        pool.inner().clone(),
+        agent.clone(),
+        input.template.clone(),
+        history,
+        final_blocks,
+        tools_enabled,
+    );
+    PipelineRunner::default_pipeline(pool.inner())
+        .run(&mut pipeline_ctx)
+        .await?;
+    let assembled = AssembledContext {
+        messages: pipeline_ctx.messages,
+        user_blocks: pipeline_ctx.user_blocks,
+    };
 
     // --- 4. 写用户消息 + assistant 占位 ---
     let user_msg_id = Uuid::new_v4().to_string();
