@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, AppResult};
 
-use super::Tool;
+use super::{AuthorizationLevel, Tool};
 
 // =========================================================================
 // read_file
@@ -58,6 +58,10 @@ impl Tool for ReadFileTool {
             },
             "required": ["path"]
         })
+    }
+
+    fn authorization_level(&self) -> AuthorizationLevel {
+        AuthorizationLevel::PathWhitelist
     }
 
     async fn execute(&self, args: &str) -> AppResult<String> {

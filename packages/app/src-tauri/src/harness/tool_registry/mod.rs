@@ -1,6 +1,7 @@
 //! 工具注册表（Tool Registry）
 //!
 //! P2-1c: 定义 `Tool` trait 和内置工具，支持注册/查询/分发。
+//! W5.4: 新增 `AuthorizationLevel` 枚举，支持分级权限控制。
 //!
 //! 设计要点：
 //! - `Tool` trait 定义统一的工具接口（name, description, parameters, execute）
@@ -13,7 +14,7 @@
 //!   - `mod.rs` — Tool trait + ToolRegistry struct + 注册/分发逻辑
 //!   - `builtin.rs` — ReadFileTool + ListDirectoryTool + 工具单测
 //!
-//! 后续 Sprint（W5.4–W5.5）将增加 `AuthorizationLevel` 枚举 + 路径白名单策略 + `authority` 子模块。
+//! W5.4: 新增 `AuthorizationLevel` 枚举 + `Tool::authorization_level()` 默认方法。
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -25,6 +26,31 @@ use crate::error::{AppError, AppResult};
 use crate::infra::protocol::ToolDef;
 
 pub mod builtin;
+
+// =========================================================================
+// AuthorizationLevel
+// =========================================================================
+
+/// 工具授权级别
+///
+/// - `Always`：无需授权，直接执行（如 `list_directory`）
+/// - `PathWhitelist`：路径白名单校验（如 `read_file`）
+/// - `Confirm`：需用户确认（未来扩展）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthorizationLevel {
+    /// 无需授权
+    Always,
+    /// 路径白名单校验
+    PathWhitelist,
+    /// 需用户确认（预留）
+    Confirm,
+}
+
+impl Default for AuthorizationLevel {
+    fn default() -> Self {
+        Self::Always
+    }
+}
 
 // =========================================================================
 // Tool Trait
@@ -44,6 +70,11 @@ pub trait Tool: Send + Sync {
 
     /// 参数 JSON Schema（发给 LLM，描述参数结构）
     fn parameters(&self) -> serde_json::Value;
+
+    /// 工具授权级别（默认 `Always`，子类可覆盖）
+    fn authorization_level(&self) -> AuthorizationLevel {
+        AuthorizationLevel::Always
+    }
 
     /// 执行工具
     ///
