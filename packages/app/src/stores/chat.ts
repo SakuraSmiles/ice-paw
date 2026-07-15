@@ -168,6 +168,9 @@ export const useChatStore = defineStore("chat", () => {
     cached_tokens: number;
   } | null>(null);
 
+  /** W4.2: 最近一次 chat:done 的 finish_reason（如 "budget_exceeded"） */
+  const lastFinishReason = ref<string | null>(null);
+
   /** W2.4: 最近一次 round 的可观测性数据（token/轮次/耗时） */
   const lastRoundState = ref<ChatRoundStatePayload | null>(null);
 
@@ -353,6 +356,7 @@ export const useChatStore = defineStore("chat", () => {
         toolResults.value = {};
         // P2-3: 清除上一轮的 usage
         lastUsage.value = null;
+        lastFinishReason.value = null;
         // W2.4: 清除上一轮的 round-state
         lastRoundState.value = null;
       }),
@@ -386,6 +390,8 @@ export const useChatStore = defineStore("chat", () => {
         toolResults.value = {};
         // P2-3: 记录 token usage
         lastUsage.value = p.usage ?? null;
+        // W4.2: 记录 finish_reason
+        lastFinishReason.value = p.finish_reason ?? null;
       }),
     );
 
@@ -773,8 +779,10 @@ export const useChatStore = defineStore("chat", () => {
     thinkingContent,
     toolsEnabled,
     toolResults,
-    // P2-3
+        // P2-3
     lastUsage,
+    // W4.2
+    lastFinishReason,
     // W2.4
     lastRoundState,
     // P2 分页
