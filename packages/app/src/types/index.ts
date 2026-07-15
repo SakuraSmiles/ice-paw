@@ -216,9 +216,11 @@ export interface ChatChunkPayload {
  * `chat:done` 事件 payload
  *
  * 流正常结束时触发；`finish_reason` 由 provider 给出（常见值：
- *   - "stop"   正常结束
- *   - "length" 达到 max_tokens 上限
- *   - "abort"  取消（用户调用 stop_generation）
+ *   - "stop"              正常结束
+ *   - "length"            达到 max_tokens 上限
+ *   - "abort"             取消（用户调用 stop_generation）
+ *   - "budget_exceeded"    Token 预算超限（W4.2）
+ *   - "tool_use"          工具轮数上限（MAX_TOOL_ROUNDS）
  * ）。
  */
 export interface ChatDonePayload {
