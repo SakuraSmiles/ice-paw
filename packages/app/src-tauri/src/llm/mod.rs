@@ -65,7 +65,7 @@ pub fn create_provider(
     // 调试用：对已知协议打印最终 chat URL（含智能拼接）。
     // 排查 base_url 路径问题时一眼看出拼接是否正确。
     let chat_url_preview: Option<String> = match provider {
-        "openai" | "glm" | "deepseek" => Some(adapters::openai::build_chat_url(&url)),
+        "openai" | "glm" | "deepseek" => Some(crate::harness::provider::openai::build_chat_url(&url)),
         "anthropic" | "minimax" | "minimax-cn" => {
             Some(format!("{}/v1/messages", url.trim_end_matches('/')))
         }
@@ -87,7 +87,7 @@ pub fn create_provider(
     match provider {
         // OpenAI Chat Completions 兼容厂商
         "openai" | "glm" | "deepseek" => Ok(Arc::new(
-            adapters::openai::OpenAiAdapter::new(model.to_string(), url),
+            crate::harness::provider::OpenAiAdapter::new(model.to_string(), url),
         )),
         // Anthropic Messages API 兼容厂商（Anthropic 官方 + MiniMax）
         "anthropic" | "minimax" | "minimax-cn" => Ok(Arc::new(
@@ -100,7 +100,7 @@ pub fn create_provider(
                 "未知 provider '{}'，兜底走 OpenAI 兼容",
                 provider
             );
-            Ok(Arc::new(adapters::openai::OpenAiAdapter::new(
+            Ok(Arc::new(crate::harness::provider::OpenAiAdapter::new(
                 model.to_string(),
                 url,
             )))
