@@ -61,6 +61,7 @@ pub async fn update_agent(
         input.extra_params.as_ref(),
         input.sort_order,
         input.cache_prompt,
+        input.max_history_messages,
     )
     .await?;
     Ok(Agent::from(row))

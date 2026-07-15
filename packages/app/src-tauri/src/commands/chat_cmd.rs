@@ -29,6 +29,7 @@ use crate::harness::tool_registry::{
     ToolRegistry,
 };
 use crate::context::pipeline::{AssembledContext, PipelineContext, PipelineRunner};
+use crate::context::history::resolve_window;
 
 /// 发送消息 — 触发 LLM 流式生成。
 #[tauri::command]
@@ -73,8 +74,14 @@ pub async fn send_message(
     )?;
 
     // --- 3. 拼装上下文（A3-1：trait-based Pipeline） ---
+    //
+    // A3-2：根据 Agent 配置的 `max_history_messages` 决定 DB 加载上限。
+    // 该值可能为 None（→ 系统默认）或 Some(N)；上限仍受
+    // `repo::message::MAX_LIMIT` 兜底。Pipeline 内部还会再用一次
+    // `resolve_window` 二次裁剪（保证窗口语义集中）。
+    let db_load_limit = resolve_window(agent.max_history_messages) as i64;
     let history =
-        repo::message::list_by_conversation(pool.inner(), &conv_id, Some(20), None).await?;
+        repo::message::list_by_conversation(pool.inner(), &conv_id, Some(db_load_limit), None).await?;
     // 显式走 PipelineRunner：构造 PipelineContext + 注册 5 个 Stage，
     // 后续 A3-3 / A3-4 在此处追加新 Stage 即可，无需改动业务编排层。
     let mut pipeline_ctx = PipelineContext::new(

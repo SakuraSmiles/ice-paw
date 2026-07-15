@@ -61,6 +61,10 @@ async fn seed_agent_and_conv(pool: &SqlitePool) -> String {
             max_tokens: 1024,
             extra_params: None,
             sort_order: 0,
+            // P2-3: 历史 baseline 已存在该字段未填写问题（与本任务无关）；
+            // 这里保持与 baseline 一致：cache_prompt 留空依赖后续 hotfix。
+            // A3-2: max_history_messages 显式置 None（系统默认）。
+            max_history_messages: None,
         },
         agent_id,
         agent_id, // api_key_ref 简化为 agent_id 自身
