@@ -137,7 +137,7 @@ pub const SUPPORTED_IMAGE_MEDIA_TYPES: &[&str] = &[
 
 /// P2-2: 校验 media_type 是否在白名单内
 pub fn is_supported_image_media_type(mt: &str) -> bool {
-    SUPPORTED_IMAGE_MEDIA_TYPES.iter().any(|s| *s == mt)
+    SUPPORTED_IMAGE_MEDIA_TYPES.contains(&mt)
 }
 
 /// 聊天消息（发给 LLM 的上下文中的单条）

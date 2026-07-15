@@ -130,7 +130,7 @@ impl Tool for ReadFileTool {
 
         let content = tokio::fs::read_to_string(&canonical)
             .await
-            .map_err(|e| AppError::Io(e))?;
+            .map_err(AppError::Io)?;
 
         #[derive(Serialize)]
         struct ReadFileResult {
@@ -215,7 +215,7 @@ impl Tool for ListDirectoryTool {
             size: Option<u64>,
         }
 
-        while let Some(entry) = reader.next_entry().await.map_err(|e| AppError::Io(e))? {
+        while let Some(entry) = reader.next_entry().await.map_err(AppError::Io)? {
             let name = entry.file_name().to_string_lossy().to_string();
             let is_dir = entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false);
             let size = if is_dir {

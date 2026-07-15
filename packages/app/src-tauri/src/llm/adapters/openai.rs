@@ -562,7 +562,7 @@ impl LlmProvider for OpenAiAdapter {
                     // 流结束标志
                     if data == "[DONE]" {
                         // 先发送所有未完成的 ToolCallEnd
-                        for (_idx, (_id, _name, _args, started)) in &tool_call_states {
+                        for (_id, _name, _args, started) in tool_call_states.values() {
                             if *started {
                                 // 已在 finish_reason 处理中发送
                             }
@@ -598,7 +598,7 @@ impl LlmProvider for OpenAiAdapter {
                                 // 有 finish_reason 说明这一轮结束
                                 if let Some(fr) = choice.finish_reason {
                                     // 发送所有已启动工具调用的 End
-                                    for (_, (id, _, _, started)) in &tool_call_states {
+                                    for (id, _, _, started) in tool_call_states.values() {
                                         if *started {
                                             let _ = tx
                                                 .send(Ok(ChatDelta::ToolCallEnd {
@@ -694,7 +694,7 @@ impl LlmProvider for OpenAiAdapter {
 
             // 字节流自然结束（未收到 [DONE]）— 优雅收尾
             // 发送未完成的 ToolCallEnd
-            for (_, (id, _, _, started)) in &tool_call_states {
+            for (id, _, _, started) in tool_call_states.values() {
                 if *started {
                     let _ = tx
                         .send(Ok(ChatDelta::ToolCallEnd { id: id.clone() }))
