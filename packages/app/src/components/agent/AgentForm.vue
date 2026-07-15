@@ -60,6 +60,12 @@ export interface AgentFormPayload {
   templateId?: string;
   /** P2-3: 是否启用 prompt caching（默认 true） */
   cachePrompt?: boolean;
+  /**
+   * A3-2: 历史消息窗口上限。
+   * - `undefined`（留空）→ 使用系统默认
+   * - 正整数 N → 最多加载最近 N 条历史消息注入 LLM 上下文
+   */
+  maxHistoryMessages?: number | null;
 }
 
 const props = defineProps<{
@@ -90,6 +96,12 @@ const temperature = ref(0.7);
 const maxTokens = ref(4096);
 /** P2-3: 是否启用 prompt caching（默认 true） */
 const cachePrompt = ref(true);
+/**
+ * A3-2: 历史消息窗口上限（用户输入字符串，留空 = 系统默认）。
+ * 后端 AgentRow.max_history_messages 是 Option<i32>，前端用字符串方便
+ * 表达「未填写」状态（空串），提交时再转为 number | null。
+ */
+const maxHistoryMessagesInput = ref<string>("");
 
 /** 当前选中的模板 id（create 模式才有意义） */
 const selectedTemplateId = ref<string | null>(null);
@@ -127,7 +139,8 @@ const advancedDefaultOpen = computed<boolean>(() => {
   return (
     baseUrl.value.trim().length > 0 ||
     Math.abs(temperature.value - 0.7) > 0.001 ||
-    maxTokens.value !== 4096
+    maxTokens.value !== 4096 ||
+    maxHistoryMessagesInput.value.trim().length > 0
   );
 });
 
@@ -213,6 +226,7 @@ function resetForm(): void {
   temperature.value = 0.7;
   maxTokens.value = 4096;
   cachePrompt.value = true;
+  maxHistoryMessagesInput.value = "";
   selectedTemplateId.value = null;
   advancedOpen.value = false;
   errors.value = {};
@@ -238,6 +252,9 @@ function populateFromAgent(a: Agent): void {
   maxTokens.value = a.max_tokens;
   // P2-3: 读取缓存设置
   cachePrompt.value = a.cache_prompt;
+  // A3-2: 读取历史窗口（null/undefined → 空串 = 系统默认）
+  maxHistoryMessagesInput.value =
+    a.max_history_messages != null ? String(a.max_history_messages) : "";
   selectedTemplateId.value = null;
   advancedOpen.value = advancedDefaultOpen.value;
 }
@@ -264,6 +281,25 @@ function validate(): boolean {
   return Object.keys(errs).length === 0;
 }
 
+/**
+ * 把字符串输入解析成 number | null | undefined：
+ * - 空串 → undefined（让 Rust 侧保持原值 / 走默认）
+ * - 合法正整数 N → number
+ * - 非法值 → 不提交 maxHistoryMessages 字段（兜底）
+ */
+function parseMaxHistoryInput(): number | null | undefined {
+  const raw = maxHistoryMessagesInput.value.trim();
+  if (raw === "") return undefined;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0 || !Number.isInteger(n)) {
+    // 非法输入 → 不发送该字段，由 Rust 侧保持原值/默认值
+    return undefined;
+  }
+  // 安全上限：防止误输入超大值（例如 1e9）撑爆上下文
+  const MAX_ALLOWED = 1000;
+  return Math.min(n, MAX_ALLOWED);
+}
+
 function handleSubmit(): void {
   if (!validate()) return;
   emit("submit", {
@@ -278,6 +314,7 @@ function handleSubmit(): void {
     rotateApiKey: rotateApiKey.value,
     templateId: selectedTemplateId.value ?? undefined,
     cachePrompt: cachePrompt.value,
+    maxHistoryMessages: parseMaxHistoryInput(),
   });
 }
 
@@ -560,6 +597,27 @@ function templateBgFg(tpl: AgentTemplate): { bg: string; fg: string } {
                       </span>
                       <span class="toggle-text">{{ cachePrompt ? '已启用' : '已关闭' }}</span>
                     </button>
+                  </div>
+
+                  <!-- A3-2: 历史消息数上限 -->
+                  <div class="form-group">
+                    <label class="form-label" for="agent-max-history">
+                      历史消息数上限
+                      <span class="label-hint">
+                        （留空 = 系统默认 20；按上下文长度调整）
+                      </span>
+                    </label>
+                    <Input
+                      id="agent-max-history"
+                      :model-value="maxHistoryMessagesInput"
+                      size="md"
+                      type="number"
+                      placeholder="20"
+                      :min="1"
+                      :max="1000"
+                      autocomplete="off"
+                      @update:model-value="(v) => (maxHistoryMessagesInput = String(v ?? ''))"
+                    />
                   </div>
                 </div>
               </details>

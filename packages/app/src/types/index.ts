@@ -41,6 +41,14 @@ export interface Agent {
   sort_order: number;
   /** P2-3: 是否启用 prompt caching */
   cache_prompt: boolean;
+  /**
+   * A3-2: 历史消息窗口上限。
+   * - `null` / `undefined` 表示使用系统默认（20 条）
+   * - `N` (N > 0) 表示最多加载最近 N 条历史消息注入 LLM 上下文
+   *
+   * 不同 Agent 可拥有不同上下文长度（8K 上下文用 16 条，200K 上下文用 60 条）。
+   */
+  max_history_messages?: number | null;
   created_at: string;
   updated_at: string;
   hasApiKey: boolean;
@@ -67,6 +75,8 @@ export interface NewAgent {
   extra_params?: string;
   /** P2-3: 是否启用 prompt caching（默认 true） */
   cache_prompt?: boolean;
+  /** A3-2: 历史消息窗口上限（null/undefined = 使用系统默认） */
+  max_history_messages?: number | null;
 }
 
 /**
@@ -90,6 +100,13 @@ export interface AgentUpdate {
   extra_params?: string;
   /** P2-3: 是否启用 prompt caching */
   cache_prompt?: boolean;
+  /**
+   * A3-2: 历史消息窗口上限。
+   * - 不传 → 不更新（保留原值）
+   * - 传 null → 清空，恢复系统默认
+   * - 传 N → 设成 N
+   */
+  max_history_messages?: number | null;
 }
 
 // ============================================================================
