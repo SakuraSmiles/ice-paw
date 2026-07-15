@@ -4,14 +4,13 @@
 //! （`MAX_TOOL_ROUNDS`、`MAX_ATTEMPTS` 等）集中起来，便于后续：
 //! - 按 agent 配置覆盖（未来读取 agent.json）
 //! - 运行时调整（用于测试 / 调试）
-//! - 单元测试中独立构造边界值
-//!
-//! 本步骤（W3.1）仅 **定义** `LoopBudget` + `Default` impl，并把
-//! `commands/chat_loop.rs` 中的硬编码常量改为引用 `harness::budget::*`
-//! 中的同名 `pub const`。**暂不**改 `stream_loop` 签名参数化（留待
-//! W4.3 Token 预算终止时一并接入；当前保持行为完全一致）。
+//! `stream_loop` 签名参数化（W4.1 已完成）并启用 Token 预算终止（W4.2）。
 //!
 //! 字段语义：
+//! - `max_tool_rounds`：工具调用最大轮数（防止无限循环）
+//! - `max_attempts`：每轮内最大重试次数（含首次尝试）
+//! - `stuck_threshold`：卡住检测阈值（P2 启用，当前未使用）
+//! - `max_total_tokens`：Token 预算上限（W4.2 启用，默认 128_000）
 //! - `max_tool_rounds`：工具调用最大轮数（防止无限循环）
 //! - `max_attempts`：每轮内最大重试次数（含首次尝试）
 //! - `stuck_threshold`：卡住检测阈值（P2 启用，当前未使用）
@@ -34,7 +33,7 @@ pub const MAX_ATTEMPTS: u32 = 4;
 /// Loop 三道熔断配置：
 /// 1. `max_tool_rounds`：工具调用最大轮数
 /// 2. `max_attempts`：每轮内最大重试次数
-/// 3. `max_total_tokens`：整次对话累计 token 预算（W4.3 启用）
+/// 3. `max_total_tokens`：整次对话累计 token 预算（W4.2 启用，默认 128_000）
 ///
 /// `stuck_threshold` 用于 P2 卡住检测（暂未启用）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,7 +44,7 @@ pub struct LoopBudget {
     pub max_attempts: u32,
     /// 卡住检测阈值（P2 启用，默认 3）
     pub stuck_threshold: u32,
-    /// 整次对话累计 token 预算（W4.3 启用，默认 `usize::MAX` 无限）
+    /// 整次对话累计 token 预算（W4.2 启用，默认 128_000）
     pub max_total_tokens: usize,
 }
 
@@ -55,7 +54,7 @@ impl Default for LoopBudget {
             max_tool_rounds: MAX_TOOL_ROUNDS,
             max_attempts: MAX_ATTEMPTS,
             stuck_threshold: 3,
-            max_total_tokens: usize::MAX,
+            max_total_tokens: 128_000,
         }
     }
 }
@@ -74,7 +73,7 @@ mod tests {
         assert_eq!(budget.max_tool_rounds, 5);
         assert_eq!(budget.max_attempts, 4);
         assert_eq!(budget.stuck_threshold, 3);
-        assert_eq!(budget.max_total_tokens, usize::MAX);
+        assert_eq!(budget.max_total_tokens, 128_000);
     }
 
     #[test]

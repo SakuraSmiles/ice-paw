@@ -99,6 +99,9 @@ pub(crate) async fn stream_loop(
     let mut all_content_blocks: Vec<ContentBlock> = Vec::new();
     let mut collected_usage: Option<TokenUsage> = None;
 
+    // W4.2: Token 预算累计追踪
+    let mut cumulative_tokens: usize = 0;
+
     // === 工具执行循环 ===
     for tool_round in 0..budget.max_tool_rounds {
         if cancel.is_cancelled() {
@@ -281,6 +284,37 @@ pub(crate) async fn stream_loop(
         observable.elapsed_ms = round_timer.elapsed_ms();
         all_text.push_str(&round_text);
 
+        // W4.2: Token 预算累计 — 每个 round 结束后累加 usage
+        if let Some(ref usage) = collected_usage {
+            cumulative_tokens += usage.prompt_tokens as usize + usage.completion_tokens as usize;
+        }
+
+        // W4.2: Token 预算终止检查
+        // 在工具调用继续下一轮之前检查：如果累计 token 超过预算，
+        // 优雅终止循环并设置 finish_reason = "budget_exceeded"
+        if budget.max_total_tokens != usize::MAX && cumulative_tokens > budget.max_total_tokens {
+            tracing::warn!(
+                target: "ice_paw.chat",
+                "Token 预算已超限: cumulative={} > budget={}",
+                cumulative_tokens,
+                budget.max_total_tokens,
+            );
+            let content_for_db = all_text.clone();
+            if !all_text.is_empty() {
+                all_content_blocks.push(ContentBlock::Text { text: all_text });
+            }
+            return cleanup_after_success_with_blocks(
+                &app,
+                &pool,
+                &conv_id,
+                &asst_msg_id,
+                &content_for_db,
+                &all_content_blocks,
+                "budget_exceeded",
+                collected_usage,
+            );
+        }
+
         if !round_think.is_empty() {
             all_content_blocks.push(ContentBlock::Thinking {
                 thinking: round_think,
@@ -367,4 +401,78 @@ pub(crate) async fn stream_loop(
         "tool_use",
         collected_usage,
     );
+}
+
+// ==========================================================================
+// W4.2 单元测试 — Token 预算终止逻辑
+// ==========================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::infra::protocol::TokenUsage;
+
+    /// 验证：默认预算（128_000）不会意外触发终止
+    #[test]
+    fn test_budget_not_exceeded_with_default() {
+        let budget = LoopBudget::default();
+        assert_eq!(budget.max_total_tokens, 128_000);
+        // 模拟一个 round 使用了 5000 tokens → 远低于 128_000
+        let cumulative_tokens: usize = 5_000;
+        let exceeded = budget.max_total_tokens != usize::MAX && cumulative_tokens > budget.max_total_tokens;
+        assert!(!exceeded, "默认预算不应在 5000 tokens 时触发终止");
+    }
+
+    /// 验证：自定义小预算在超限时正确标记 exceeded
+    #[test]
+    fn test_budget_exceeded_with_small_limit() {
+        let budget = LoopBudget {
+            max_tool_rounds: 5,
+            max_attempts: 4,
+            stuck_threshold: 3,
+            max_total_tokens: 1_000,
+        };
+        // 模拟 round 1 用了 800 tokens，round 2 累计到 1600 → 超过 1000
+        let mut cumulative_tokens: usize = 800;
+        let exceeded_1 = budget.max_total_tokens != usize::MAX && cumulative_tokens > budget.max_total_tokens;
+        assert!(!exceeded_1, "800 tokens 不应超过 1000 预算");
+
+        cumulative_tokens += 800; // 1600
+        let exceeded_2 = budget.max_total_tokens != usize::MAX && cumulative_tokens > budget.max_total_tokens;
+        assert!(exceeded_2, "1600 tokens 应超过 1000 预算");
+    }
+
+    /// 验证：usize::MAX 预算永远不触发终止（无限模式）
+    #[test]
+    fn test_budget_unlimited_never_exceeds() {
+        let budget = LoopBudget {
+            max_tool_rounds: 5,
+            max_attempts: 4,
+            stuck_threshold: 3,
+            max_total_tokens: usize::MAX,
+        };
+        // 模拟极端大的累计值
+        let cumulative_tokens: usize = usize::MAX - 1;
+        let exceeded = budget.max_total_tokens != usize::MAX && cumulative_tokens > budget.max_total_tokens;
+        assert!(!exceeded, "usize::MAX 预算永远不应触发终止");
+    }
+
+    /// 验证：TokenUsage 累加准确性
+    #[test]
+    fn test_token_accumulation_accuracy() {
+        let u1 = TokenUsage {
+            prompt_tokens: 100,
+            completion_tokens: 50,
+            cached_tokens: 10,
+        };
+        let u2 = TokenUsage {
+            prompt_tokens: 200,
+            completion_tokens: 80,
+            cached_tokens: 20,
+        };
+        let mut cumulative: usize = 0;
+        cumulative += u1.prompt_tokens as usize + u1.completion_tokens as usize;
+        cumulative += u2.prompt_tokens as usize + u2.completion_tokens as usize;
+        assert_eq!(cumulative, 430, "累计应为 100+50+200+80=430");
+    }
 }
