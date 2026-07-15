@@ -7,6 +7,11 @@
 //! - `db`        —— sqlx 连接池与 migrations
 //! - `crypto`    —— stronghold wrapper
 //! - `commands`  —— 暴露给前端的 invoke 入口
+//! - `llm`       —— LLM provider / adapters / 工具注册
+//! - `context`   —— L2 Context 层（W1.1 建壳占位）
+//! - `harness`   —— L2 Harness 层（W1.1 建壳占位）
+//! - `infra`     —— L0/L1 基础设施层（W1.1 建壳占位）
+//! - `loop`      —— L2 Loop 层占位（raw identifier `r#loop`）
 //!
 //! 启动顺序（setup）：
 //!   1. 初始化 tracing
@@ -15,10 +20,14 @@
 //!   4. 注册全部 commands
 
 pub mod commands;
+pub mod context;
 pub mod crypto;
 pub mod db;
 pub mod error;
+pub mod harness;
+pub mod infra;
 pub mod llm;
+pub mod r#loop;
 
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 

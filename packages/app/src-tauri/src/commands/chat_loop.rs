@@ -45,7 +45,7 @@ use super::chat_protocol::{
 ///       - 将 tool_use + tool_result 作为 content block 追加到 messages
 ///       - emit chat:tool-result
 ///       - 回到步骤 1（最多 5 轮，防止无限循环）
-///    b. 如果没有工具调用 → 正常结束，emit chat:done
+///       b. 如果没有工具调用 → 正常结束，emit chat:done
 ///
 /// 重试策略：
 /// - 首次失败 → 等待 1s → 第 2 次尝试
