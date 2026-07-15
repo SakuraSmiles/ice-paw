@@ -4,7 +4,7 @@
 //! - `stop_generation`：触发 ChatState 上的 CancellationToken
 //!
 //! 业务分布：protocol → infra::protocol | 上下文 → chat_context.rs | 调度 → harness::loop_engine
-//!           错误 → chat_error.rs | 收尾 → chat_cleanup.rs
+//!           错误 → harness::error_mapping | 收尾 → harness::cleanup
 
 use sqlx::SqlitePool;
 use std::sync::Arc;

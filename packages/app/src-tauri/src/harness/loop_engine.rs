@@ -22,8 +22,8 @@ use tauri::{AppHandle, Emitter};
 
 use sqlx::SqlitePool;
 
-use crate::commands::chat_cleanup::{cleanup, cleanup_after_success_with_blocks};
-use crate::commands::chat_error::{error_kind, friendly_error};
+use crate::harness::cleanup::{cleanup, cleanup_after_success_with_blocks};
+use crate::harness::error_mapping::{error_kind, friendly_error};
 use crate::db::repo;
 use crate::error::AppError;
 use crate::infra::protocol::{
