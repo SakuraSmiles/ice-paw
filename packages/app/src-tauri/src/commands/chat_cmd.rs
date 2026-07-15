@@ -18,7 +18,9 @@ use crate::error::{AppError, AppResult};
 use crate::infra::protocol::{
     ChatMessage, ChatStartPayload, ContentBlock, LlmProvider, SendMessageInput, validate_images,
 };
-use crate::llm::{self, CancellationToken, ChatState, ToolRegistry};
+use crate::harness::chat_state::{CancellationToken, ChatState};
+use crate::harness::provider;
+use crate::harness::tool_registry::ToolRegistry;
 use super::chat_context::assemble_context;
 
 /// 发送消息 — 触发 LLM 流式生成。
@@ -59,7 +61,7 @@ pub async fn send_message(
         .as_deref()
         .filter(|s| !s.is_empty())
         .or(vault_base_url.as_deref());
-    let provider = llm::create_provider(
+    let llm_provider = provider::create_provider(
         &agent.provider, &agent.model, base_url, agent.cache_prompt != 0,
     )?;
 
@@ -104,7 +106,7 @@ pub async fn send_message(
 
     // --- 6. spawn 流式协程 ---
     spawn_stream_loop(
-        app, pool.inner().clone(), provider, api_key,
+        app, pool.inner().clone(), llm_provider, api_key,
         assembled.messages, agent.temperature, agent.max_tokens,
         cancel_token, conv_id, asst_msg_id, tools_enabled,
     );

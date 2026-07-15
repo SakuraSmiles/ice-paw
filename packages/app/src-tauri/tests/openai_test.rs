@@ -9,8 +9,9 @@
 
 use futures::StreamExt;
 use ice_paw_lib::error::AppError;
-use ice_paw_lib::llm::adapters::openai::OpenAiAdapter;
-use ice_paw_lib::llm::{CancellationToken, ChatDelta, ChatMessage, LlmProvider};
+use ice_paw_lib::harness::chat_state::CancellationToken;
+use ice_paw_lib::harness::provider::openai::OpenAiAdapter;
+use ice_paw_lib::infra::protocol::{ChatDelta, ChatMessage, LlmProvider};
 use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
 
 /// 构造一个简单的 OpenAI 兼容 SSE 流响应体。
