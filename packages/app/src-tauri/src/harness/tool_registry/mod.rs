@@ -25,6 +25,7 @@ use tokio::sync::RwLock;
 use crate::error::{AppError, AppResult};
 use crate::infra::protocol::ToolDef;
 
+pub mod authority;
 pub mod builtin;
 
 // =========================================================================
