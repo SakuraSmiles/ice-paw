@@ -59,6 +59,7 @@ use crate::infra::protocol::{
 use crate::harness::budget::{MAX_ATTEMPTS, MAX_TOOL_ROUNDS};
 use crate::harness::chat_state::CancellationToken;
 use crate::harness::observable::{RoundState, RoundTimer};
+use crate::harness::retry::{RetryContext, RetryState};
 use crate::harness::tool_registry::ToolRegistry;
 
 use super::chat_cleanup::{cleanup, cleanup_after_success_with_blocks};
@@ -152,21 +153,25 @@ pub(crate) async fn stream_loop(
         let mut tool_calls_map: HashMap<String, CollectedToolCall> = HashMap::new();
         let mut round_success = false;
 
-        // === 重试循环（每轮内）===
-        'retry_loop: for attempt in 0..MAX_ATTEMPTS {
+        // === W3.2: RetryState 驱动的重试循环（替代原 for attempt + 字符串拼接）===
+        let mut retry_state = RetryState::new();
+        let mut last_retry_reason = String::new();
+
+        'retry_loop: loop {
+            if !retry_state.can_retry() {
+                break;
+            }
             if cancel.is_cancelled() {
                 return cleanup(&app, &pool, &conv_id);
             }
 
-            // W2.6: 记录最近一次可重试错误的 reason（用于 chat:retrying payload）
-            let mut last_retry_reason = String::new();
-
-            if attempt > 0 {
-                let wait_secs = 1u64 << (attempt - 1);
+            // sleep（仅 retry 时）
+            let ws = retry_state.wait_secs();
+            if ws > 0 {
                 tracing::info!(
                     target: "ice_paw.chat",
                     "重试 LLM 请求: tool_round={} attempt={}/{}，等待 {}s",
-                    tool_round, attempt + 1, MAX_ATTEMPTS, wait_secs,
+                    tool_round, retry_state.attempt_num() + 1, MAX_ATTEMPTS, ws,
                 );
                 // W2.4: 累积 retry 计数
                 observable.retry_count += 1;
@@ -175,31 +180,23 @@ pub(crate) async fn stream_loop(
                     ChatRetryingPayload {
                         conversation_id: conv_id.clone(),
                         message_id: asst_msg_id.clone(),
-                        attempt: attempt + 1,
+                        attempt: retry_state.attempt_num() + 1,
                         max_attempts: MAX_ATTEMPTS,
                         reason: last_retry_reason.clone(),
                     },
                 );
-                tokio::time::sleep(Duration::from_secs(wait_secs)).await;
+                tokio::time::sleep(Duration::from_secs(ws)).await;
                 if cancel.is_cancelled() {
                     return cleanup(&app, &pool, &conv_id);
                 }
             }
 
-            // 构造重试消息
-            let retry_messages = if !round_text.is_empty() && attempt > 0 {
-                let mut msgs = messages.clone();
-                msgs.push(ChatMessage::from_text(
-                    "assistant",
-                    format!(
-                        "[以下是上一轮因网络中断已收到的部分回复，请从此处继续]\n{}",
-                        &round_text
-                    ),
-                ));
-                msgs
-            } else {
-                messages.clone()
-            };
+            // W3.2: 用 RetryState.prepare_messages 替代字符串拼接
+            let retry_ctx = RetryContext::with_round_text(
+                messages.clone(),
+                round_text.clone(),
+            );
+            let retry_messages = retry_state.prepare_messages(&retry_ctx);
 
             let stream_result = provider
                 .stream_chat(
@@ -314,9 +311,11 @@ pub(crate) async fn stream_loop(
                                     tracing::warn!(
                                         target: "ice_paw.chat",
                                         "流中可重试错误 (round={} attempt={}/{}): {}",
-                                        tool_round, attempt + 1, MAX_ATTEMPTS, e
+                                        tool_round, retry_state.attempt_num() + 1, MAX_ATTEMPTS, e
                                     );
-                                    break; // 跳出 inner while，进入下一轮重试
+                                    // W3.2: 转移状态，下次循环的 wait_secs() 即为新的退避值
+                                    retry_state = retry_state.next_retry(MAX_ATTEMPTS, 1u64 << retry_state.attempt_num());
+                                    break; // 跳出 inner while，进入 'retry_loop 下一轮
                                 } else {
                                     let err_msg = e.to_string();
                                     let _ = app.emit(
@@ -348,8 +347,10 @@ pub(crate) async fn stream_loop(
                         tracing::warn!(
                             target: "ice_paw.chat",
                             "请求失败可重试 (round={} attempt={}/{}): {}",
-                            tool_round, attempt + 1, MAX_ATTEMPTS, e
+                            tool_round, retry_state.attempt_num() + 1, MAX_ATTEMPTS, e
                         );
+                        // W3.2: 转移状态，下次循环的 wait_secs() 即为新的退避值
+                        retry_state = retry_state.next_retry(MAX_ATTEMPTS, 1u64 << retry_state.attempt_num());
                     } else {
                         let err_msg = e.to_string();
                         let _ = app.emit(
@@ -366,6 +367,8 @@ pub(crate) async fn stream_loop(
                     }
                 }
             }
+            // W3.2: 若执行流中 retryable error 后跳出 inner while，
+            // retry_state 已在 match 分支中转移；循环顶部会再次检查 can_retry()
         }
 
         if !round_success {
