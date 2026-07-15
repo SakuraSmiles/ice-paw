@@ -21,7 +21,10 @@
 
 pub mod budget;
 pub mod chat_state;
+pub mod loop_engine;
 pub mod observable;
 pub mod provider;
 pub mod retry;
+pub mod stream_consumer;
+pub mod tool_executor;
 pub mod tool_registry;
