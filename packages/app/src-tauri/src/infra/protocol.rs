@@ -1,16 +1,235 @@
-//! Chat 协议定义：入参结构 / 事件 Payload / 图片校验常量
+//! 跨层协议类型 — 单一数据源
 //!
-//! 纯数据层，不含业务逻辑。
-//! - `SendMessageInput` / `TemplateInput`：前端 → 后端的入参
-//! - 11 个 `ChatXxxPayload`：后端 → 前端的事件结构
-//! - `validate_images`：图片校验（尺寸/张数/类型/base64）
-//! - `MAX_IMAGE_SIZE` / `MAX_IMAGE_COUNT`：校验常量
+//! 本模块是 chat / llm / commands 跨层共享的协议类型"单一数据源"。
+//!
+//! 内容分类：
+//!
+//! 1. **LLM 数据结构**：`ContentBlock` / `ChatMessage` / `ChatDelta` /
+//!    `ToolDef` / `TokenUsage` / `LlmProvider` trait
+//! 2. **图片支持**：`SUPPORTED_IMAGE_MEDIA_TYPES` / `is_supported_image_media_type()` /
+//!    `MAX_IMAGE_SIZE` / `MAX_IMAGE_COUNT` / `validate_images()`
+//! 3. **前端入参**：`SendMessageInput` / `TemplateInput`
+//! 4. **事件 Payload**：`ChatStartPayload` / `ChatChunkPayload` / `ChatDonePayload` /
+//!    `ChatErrorPayload` / `ChatRetryingPayload` / 工具调用 + 思考 payload
 
+use std::pin::Pin;
+
+use async_trait::async_trait;
 use base64::Engine as _;
+use futures::Stream;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, AppResult};
-use crate::llm::{is_supported_image_media_type, ContentBlock};
+
+// =========================================================================
+// LLM 数据结构
+// =========================================================================
+
+/// 消息内容块 — 替代原来的 `content: String`
+///
+/// 采用 `#[serde(tag = "type")]` 实现多态 JSON 序列化，
+/// 与 OpenAI / Anthropic 的 content block 格式自然对齐。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ContentBlock {
+    /// 文本块
+    Text { text: String },
+    /// P2-2: 图片块（Vision 输入）
+    ///
+    /// - `data`：base64 编码的图片数据（**不含** `data:image/...;base64,` 前缀，
+    ///   前缀在 adapter 里拼接；这样前端只传裸 base64，存储/校验更干净）
+    /// - `media_type`：MIME 类型，支持 `"image/png" | "image/jpeg" | "image/gif" | "image/webp"`
+    ///
+    /// 序列化格式（与前端 `types/index.ts` 对齐）：
+    /// ```json
+    /// { "type": "image", "data": "iVBORw0KG...", "media_type": "image/png" }
+    /// ```
+    Image {
+        data: String,
+        media_type: String,
+    },
+    /// 工具调用（LLM 产出）
+    ToolUse {
+        id: String,
+        name: String,
+        /// JSON 字符串（arguments / input）
+        input: String,
+    },
+    /// 工具结果（回传给 LLM）
+    ToolResult {
+        tool_use_id: String,
+        /// 结果内容（JSON 字符串或纯文本）
+        content: String,
+        /// 是否出错
+        #[serde(skip_serializing_if = "Option::is_none")]
+        is_error: Option<bool>,
+    },
+    /// 思考过程（Anthropic extended thinking）
+    Thinking {
+        thinking: String,
+        /// 签名（Anthropic 用于验证）
+        #[serde(skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
+    },
+}
+
+impl ContentBlock {
+    /// 从纯文本构造 Text block
+    pub fn text(s: impl Into<String>) -> Self {
+        ContentBlock::Text { text: s.into() }
+    }
+
+    /// P2-2: 构造 Image block（裸 base64，无 data URL 前缀）
+    pub fn image(data: impl Into<String>, media_type: impl Into<String>) -> Self {
+        ContentBlock::Image {
+            data: data.into(),
+            media_type: media_type.into(),
+        }
+    }
+
+    /// 提取纯文本内容（仅 Text 变体有）
+    pub fn as_text(&self) -> Option<&str> {
+        match self {
+            ContentBlock::Text { text } => Some(text),
+            _ => None,
+        }
+    }
+
+    /// P2-2: 是否是 Image 块
+    pub fn is_image(&self) -> bool {
+        matches!(self, ContentBlock::Image { .. })
+    }
+
+    /// 把所有 Text block 的文本拼接成一个 String（兼容旧代码）
+    pub fn join_text(blocks: &[ContentBlock]) -> String {
+        let mut buf = String::new();
+        for b in blocks {
+            if let ContentBlock::Text { text } = b {
+                buf.push_str(text);
+            }
+        }
+        buf
+    }
+}
+
+/// P2-2: 支持的图片 MIME 类型白名单
+///
+/// 与前端 `ImagePicker.vue` 的 `accept` 属性保持一致。
+/// Anthropic 支持 `image/jpeg | image/png | image/gif | image/webp`；
+/// OpenAI Vision 支持同等集合（部分模型额外支持 `image/png` 高分辨率）。
+pub const SUPPORTED_IMAGE_MEDIA_TYPES: &[&str] = &[
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+];
+
+/// P2-2: 校验 media_type 是否在白名单内
+pub fn is_supported_image_media_type(mt: &str) -> bool {
+    SUPPORTED_IMAGE_MEDIA_TYPES.contains(&mt)
+}
+
+/// 聊天消息（发给 LLM 的上下文中的单条）
+///
+/// P2-1 升级：`content` 改为 `Vec<ContentBlock>`。
+/// 对旧消息（纯文本）使用 `ChatMessage::from_text` 构造。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatMessage {
+    /// 角色："system" | "user" | "assistant" | "tool"
+    pub role: String,
+    /// 消息内容块数组
+    pub content: Vec<ContentBlock>,
+}
+
+impl ChatMessage {
+    /// 从纯文本快速构造（等同旧版行为）
+    pub fn from_text(role: impl Into<String>, content: impl Into<String>) -> Self {
+        ChatMessage {
+            role: role.into(),
+            content: vec![ContentBlock::text(content)],
+        }
+    }
+
+    /// 把所有 content block 拼成纯文本（兼容旧逻辑 / DB 回写）
+    pub fn content_text(&self) -> String {
+        ContentBlock::join_text(&self.content)
+    }
+}
+
+/// P2-3: Token 用量信息
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TokenUsage {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    /// P2-3: 缓存命中的 token 数（Anthropic: cache_read_input_tokens, OpenAI: cached_tokens）
+    #[serde(default)]
+    pub cached_tokens: u32,
+}
+
+/// 流式增量 — LLM 返回的每个 chunk
+///
+/// - `Delta`：文本增量（最常见）
+/// - `ToolCallStart`：工具调用开始（id + name 已知）
+/// - `ToolCallDelta`：工具调用参数 JSON 片段
+/// - `ToolCallEnd`：工具调用参数完毕
+/// - `Thinking`：思考过程增量
+/// - `Usage`：P2-3 token 用量（OpenAI streaming usage 或 Anthropic message_start）
+/// - `Done`：流结束（携带结束原因）
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ChatDelta {
+    /// 文本增量
+    Delta { content: String },
+    /// 工具调用开始
+    ToolCallStart { id: String, name: String },
+    /// 工具调用参数 JSON 增量
+    ToolCallDelta { id: String, delta: String },
+    /// 工具调用参数完成
+    ToolCallEnd { id: String },
+    /// 思考过程增量
+    Thinking { content: String },
+    /// P2-3: Token 用量
+    Usage { usage: TokenUsage },
+    /// 流结束
+    Done { finish_reason: Option<String> },
+}
+
+/// 工具定义（发给 LLM 的 tool schema）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolDef {
+    pub name: String,
+    pub description: String,
+    /// JSON Schema（parameters）
+    pub parameters: serde_json::Value,
+}
+
+// =========================================================================
+// Provider Trait
+// =========================================================================
+
+/// LLM 提供方接口
+///
+/// 实现方需提供 `stream_chat`，返回一个异步 Stream 逐块产出 `ChatDelta`。
+/// 调用方在消费 Stream 时应定期检查 `cancel.is_cancelled()` 以支持用户停止。
+#[async_trait]
+pub trait LlmProvider: Send + Sync {
+    /// 流式聊天
+    ///
+    /// - `api_key`：调用时传入，不在 Adapter 中持久化
+    /// - `messages`：完整上下文（含 system / 历史 / 当前用户消息）
+    /// - `tools`：可选的工具定义列表（None = 不启用工具调用）
+    /// - `temperature` / `max_tokens`：模型参数
+    /// - `cancel`：取消令牌
+    async fn stream_chat(
+        &self,
+        api_key: &str,
+        messages: Vec<ChatMessage>,
+        tools: Option<Vec<ToolDef>>,
+        temperature: f64,
+        max_tokens: i32,
+        cancel: crate::llm::cancel::CancellationToken,
+    ) -> AppResult<Pin<Box<dyn Stream<Item = AppResult<ChatDelta>> + Send>>>;
+}
 
 // =========================================================================
 // 图片校验常量
@@ -136,11 +355,9 @@ pub struct SendMessageInput {
 // 事件 Payload 结构
 // =========================================================================
 
-use crate::llm;
-
 /// `chat:start` 事件 payload
 #[derive(Clone, Serialize)]
-pub(crate) struct ChatStartPayload {
+pub struct ChatStartPayload {
     pub conversation_id: String,
     pub user_message_id: String,
     pub assistant_message_id: String,
@@ -148,7 +365,7 @@ pub(crate) struct ChatStartPayload {
 
 /// `chat:chunk` 事件 payload
 #[derive(Clone, Serialize)]
-pub(crate) struct ChatChunkPayload {
+pub struct ChatChunkPayload {
     pub conversation_id: String,
     pub message_id: String,
     pub delta: String,
@@ -156,18 +373,18 @@ pub(crate) struct ChatChunkPayload {
 
 /// `chat:done` 事件 payload
 #[derive(Clone, Serialize)]
-pub(crate) struct ChatDonePayload {
+pub struct ChatDonePayload {
     pub conversation_id: String,
     pub message_id: String,
     pub finish_reason: String,
     /// P2-3: Token 用量信息
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub usage: Option<llm::TokenUsage>,
+    pub usage: Option<TokenUsage>,
 }
 
 /// `chat:error` 事件 payload
 #[derive(Clone, Serialize)]
-pub(crate) struct ChatErrorPayload {
+pub struct ChatErrorPayload {
     pub conversation_id: String,
     pub message_id: String,
     pub kind: String,
@@ -176,7 +393,7 @@ pub(crate) struct ChatErrorPayload {
 
 /// `chat:retrying` 事件 payload — 通知前端正在重试
 #[derive(Clone, Serialize)]
-pub(crate) struct ChatRetryingPayload {
+pub struct ChatRetryingPayload {
     pub conversation_id: String,
     pub message_id: String,
     pub attempt: u32,
@@ -187,7 +404,7 @@ pub(crate) struct ChatRetryingPayload {
 
 /// `chat:tool-call-start` 事件 payload
 #[derive(Clone, Serialize)]
-pub(crate) struct ChatToolCallStartPayload {
+pub struct ChatToolCallStartPayload {
     pub conversation_id: String,
     pub message_id: String,
     pub id: String,
@@ -196,7 +413,7 @@ pub(crate) struct ChatToolCallStartPayload {
 
 /// `chat:tool-call-delta` 事件 payload
 #[derive(Clone, Serialize)]
-pub(crate) struct ChatToolCallDeltaPayload {
+pub struct ChatToolCallDeltaPayload {
     pub conversation_id: String,
     pub message_id: String,
     pub id: String,
@@ -205,7 +422,7 @@ pub(crate) struct ChatToolCallDeltaPayload {
 
 /// `chat:tool-call-end` 事件 payload
 #[derive(Clone, Serialize)]
-pub(crate) struct ChatToolCallEndPayload {
+pub struct ChatToolCallEndPayload {
     pub conversation_id: String,
     pub message_id: String,
     pub id: String,
@@ -213,7 +430,7 @@ pub(crate) struct ChatToolCallEndPayload {
 
 /// `chat:tool-result` 事件 payload
 #[derive(Clone, Serialize)]
-pub(crate) struct ChatToolResultPayload {
+pub struct ChatToolResultPayload {
     pub conversation_id: String,
     pub message_id: String,
     pub tool_use_id: String,
@@ -223,7 +440,7 @@ pub(crate) struct ChatToolResultPayload {
 
 /// `chat:thinking` 事件 payload
 #[derive(Clone, Serialize)]
-pub(crate) struct ChatThinkingPayload {
+pub struct ChatThinkingPayload {
     pub conversation_id: String,
     pub message_id: String,
     pub content: String,
@@ -236,12 +453,13 @@ pub(crate) struct ChatThinkingPayload {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::llm::ContentBlock;
 
     /// 构造 N 字节原始数据 → base64 字符串
     fn make_b64_bytes(n: usize) -> String {
         base64::engine::general_purpose::STANDARD.encode(vec![0u8; n])
     }
+
+    // --- validate_images ---
 
     #[test]
     fn validate_images_empty_blocks_ok() {
@@ -429,5 +647,93 @@ mod tests {
         assert!(blocks.is_empty());
         assert!(!input.tools_enabled);
         assert!(input.template.is_none());
+    }
+
+    // --- ContentBlock / 白名单（从 llm/mod.rs 迁入）---
+
+    #[test]
+    fn image_block_serde_roundtrip() {
+        let block = ContentBlock::image("iVBORw0KGgo=", "image/png");
+        let json = serde_json::to_string(&block).unwrap();
+        // tag = "type", rename_all = "snake_case"
+        assert_eq!(
+            json,
+            r#"{"type":"image","data":"iVBORw0KGgo=","media_type":"image/png"}"#
+        );
+        // 反序列化回原值
+        let back: ContentBlock = serde_json::from_str(&json).unwrap();
+        match back {
+            ContentBlock::Image { data, media_type } => {
+                assert_eq!(data, "iVBORw0KGgo=");
+                assert_eq!(media_type, "image/png");
+            }
+            _ => panic!("反序列化后类型不对：{:?}", back),
+        }
+    }
+
+    #[test]
+    fn image_block_helper() {
+        let b = ContentBlock::image("abc", "image/jpeg");
+        assert!(b.is_image());
+        assert!(b.as_text().is_none());
+    }
+
+    #[test]
+    fn text_block_not_image() {
+        let b = ContentBlock::text("hello");
+        assert!(!b.is_image());
+        assert_eq!(b.as_text(), Some("hello"));
+    }
+
+    #[test]
+    fn supported_media_types_whitelist() {
+        for mt in ["image/png", "image/jpeg", "image/gif", "image/webp"] {
+            assert!(
+                is_supported_image_media_type(mt),
+                "{} 应在白名单内",
+                mt
+            );
+        }
+        for mt in ["image/bmp", "image/svg+xml", "application/pdf", "", "png"] {
+            assert!(
+                !is_supported_image_media_type(mt),
+                "{} 不应在白名单内",
+                mt
+            );
+        }
+    }
+
+    #[test]
+    fn join_text_skips_images() {
+        // P2-2: join_text 只拼接 Text 块，忽略 Image/ToolUse 等
+        let blocks = vec![
+            ContentBlock::text("hello "),
+            ContentBlock::image("xxxx", "image/png"),
+            ContentBlock::text("world"),
+        ];
+        assert_eq!(ContentBlock::join_text(&blocks), "hello world");
+    }
+
+    /// 混合消息（含图片）的 JSON 序列化结构对齐前端 types/index.ts
+    #[test]
+    fn mixed_message_json_shape() {
+        let blocks = vec![
+            ContentBlock::text("看这张图"),
+            ContentBlock::image("AAAA", "image/png"),
+        ];
+        let json = serde_json::to_string(&blocks).unwrap();
+        // 验证 JSON 数组中两个对象的结构
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let arr = parsed.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+
+        assert_eq!(arr[0]["type"], "text");
+        assert_eq!(arr[0]["text"], "看这张图");
+
+        assert_eq!(arr[1]["type"], "image");
+        assert_eq!(arr[1]["data"], "AAAA");
+        assert_eq!(arr[1]["media_type"], "image/png");
+        // Image 没有其他字段
+        assert_eq!(arr[1].as_object().unwrap().len(), 3);
     }
 }
