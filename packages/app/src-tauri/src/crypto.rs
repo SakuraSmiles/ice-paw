@@ -305,7 +305,7 @@ pub fn has_api_key(app: &AppHandle, agent_id: &str) -> AppResult<bool> {
         .get_client(CLIENT_NAME)
         .map_err(|e| AppError::Stronghold(format!("get_client: {e}")))?;
     let store = client.store();
-    Ok(store
+    store
         .contains_key(agent_id.as_bytes())
-        .map_err(|e| AppError::Stronghold(format!("store.contains_key: {e}")))?)
+        .map_err(|e| AppError::Stronghold(format!("store.contains_key: {e}")))
 }
