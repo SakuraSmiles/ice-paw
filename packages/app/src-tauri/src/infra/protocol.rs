@@ -460,6 +460,44 @@ pub struct ChatThinkingPayload {
     pub content: String,
 }
 
+// === A2-3 工具授权事件 payload ===
+
+/// `chat:tool-auth-request` 事件 payload (Rust → Frontend)
+///
+/// 当工具调用需要用户确认授权（例如路径不在白名单）时，Rust 侧 emit 此事件，
+/// 携带工具名 / 待访问路径 / 参数 / 唯一 request_id，前端弹窗后用同一
+/// `request_id` 响应。
+///
+/// - `request_id`     唯一标识，前后端匹配响应用
+/// - `tool_use_id`    LLM 端的工具调用 ID（用于工具结果回填）
+/// - `tool_name`      工具名
+/// - `file_path`      待访问的路径（可能为空，例如 list_directory 也适用）
+/// - `arguments`      工具调用参数 JSON 字符串（前端展示用）
+/// - `conversation_id` / `message_id` 与其它 chat:* 事件保持一致，便于前端过滤
+/// - `reason`         触发原因（前端展示文案）
+#[derive(Clone, Serialize)]
+pub struct ToolAuthRequestPayload {
+    pub request_id: String,
+    pub tool_use_id: String,
+    pub tool_name: String,
+    pub file_path: String,
+    pub arguments: String,
+    pub conversation_id: String,
+    pub message_id: String,
+    pub reason: String,
+}
+
+/// `chat:tool-auth-response` 事件 payload (Frontend → Rust)
+///
+/// 前端弹窗后通过此事件把用户选择告诉 Rust 侧。
+/// Rust 侧在 `tool_executor` 里用 `request_id` 匹配 oneshot 通道，
+/// 据此决定执行工具还是把工具结果写为「拒绝授权」。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ToolAuthResponse {
+    pub request_id: String,
+    pub allowed: bool,
+}
+
 // =========================================================================
 // 单元测试
 // =========================================================================
@@ -749,5 +787,56 @@ mod tests {
         assert_eq!(arr[1]["media_type"], "image/png");
         // Image 没有其他字段
         assert_eq!(arr[1].as_object().unwrap().len(), 3);
+    }
+
+    // --- A2-3 ToolAuthRequestPayload / ToolAuthResponse ---
+
+    #[test]
+    fn tool_auth_request_payload_serde() {
+        use super::ToolAuthRequestPayload;
+        let p = ToolAuthRequestPayload {
+            request_id: "req-1".into(),
+            tool_use_id: "tc-1".into(),
+            tool_name: "read_file".into(),
+            file_path: "/etc/passwd".into(),
+            arguments: r#"{"path":"/etc/passwd"}"#.into(),
+            conversation_id: "c-1".into(),
+            message_id: "m-1".into(),
+            reason: "路径 '/etc/passwd' 不在白名单中".into(),
+        };
+        let json = serde_json::to_string(&p).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["request_id"], "req-1");
+        assert_eq!(parsed["tool_use_id"], "tc-1");
+        assert_eq!(parsed["tool_name"], "read_file");
+        assert_eq!(parsed["file_path"], "/etc/passwd");
+        assert_eq!(parsed["conversation_id"], "c-1");
+        assert_eq!(parsed["message_id"], "m-1");
+        // 8 个字段
+        assert_eq!(parsed.as_object().unwrap().len(), 8);
+    }
+
+    #[test]
+    fn tool_auth_response_serde_roundtrip() {
+        use super::ToolAuthResponse;
+        let r = ToolAuthResponse {
+            request_id: "req-2".into(),
+            allowed: true,
+        };
+        let json = serde_json::to_string(&r).unwrap();
+        assert_eq!(json, r#"{"request_id":"req-2","allowed":true}"#);
+
+        let back: ToolAuthResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.request_id, "req-2");
+        assert!(back.allowed);
+
+        // false 路径
+        let r2 = ToolAuthResponse {
+            request_id: "req-3".into(),
+            allowed: false,
+        };
+        let json2 = serde_json::to_string(&r2).unwrap();
+        let back2: ToolAuthResponse = serde_json::from_str(&json2).unwrap();
+        assert!(!back2.allowed);
     }
 }

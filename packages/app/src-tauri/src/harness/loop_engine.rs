@@ -36,10 +36,13 @@ use crate::harness::budget::LoopBudget;
 use crate::harness::chat_state::CancellationToken;
 use crate::harness::observable::{RoundState, RoundTimer};
 use crate::harness::retry::{RetryContext, RetryState};
-use crate::harness::tool_registry::ToolRegistry;
+use crate::harness::tool_registry::{
+    authority::{PathAuthSession, PathWhitelistConfig},
+    ToolRegistry,
+};
 
 use super::stream_consumer::{consume_stream, CollectedToolCall};
-use super::tool_executor::execute_tool_round;
+use super::tool_executor::{execute_tool_round, ToolAuthRegistry};
 
 // W2.6: 将 AppError 分类为 retry reason 字符串
 fn classify_retry_reason(e: &AppError) -> String {
@@ -116,6 +119,12 @@ pub(crate) struct LoopContext {
     // ---- 工具 ----
     pub tool_registry: ToolRegistry,
     pub tools_enabled: bool,
+    /// A2-3: 工具授权响应全局注册表（前端响应 → Rust oneshot 解锁）
+    pub auth_registry: ToolAuthRegistry,
+    /// A2-3: 本次会话已授权路径表（同一会话内用户允许过的路径不再弹窗）
+    pub auth_session: PathAuthSession,
+    /// A2-3: 路径白名单配置
+    pub whitelist: PathWhitelistConfig,
 
     // ---- 循环控制 ----
     pub cancel: CancellationToken,
@@ -143,6 +152,9 @@ impl LoopContext {
         tools_enabled: bool,
         cancel: CancellationToken,
         budget: LoopBudget,
+        auth_registry: ToolAuthRegistry,
+        auth_session: PathAuthSession,
+        whitelist: PathWhitelistConfig,
     ) -> Self {
         Self {
             conv_id,
@@ -156,6 +168,9 @@ impl LoopContext {
             messages,
             tool_registry,
             tools_enabled,
+            auth_registry,
+            auth_session,
+            whitelist,
             cancel,
             budget,
         }
@@ -166,7 +181,17 @@ impl LoopContext {
 ///
 /// W6.2: 13 个输入参数已封装到 [`LoopContext`]，仅保留
 /// `observable`（输出遥测状态）作为单独的 `&mut RoundState` 入参。
+///
+/// A2-3: 外层 wrapper 负责在任意退出路径清空会话级授权表；
+///       `stream_loop_inner` 才是真正的循环主体。
 pub(crate) async fn stream_loop(ctx: &mut LoopContext, observable: &mut RoundState) {
+    stream_loop_inner(ctx, observable).await;
+    // A2-3: 不论正常结束 / 取消 / 错误，都清空会话级授权表
+    ctx.auth_session.clear().await;
+}
+
+/// 流式循环主体（A2-3 后被 `stream_loop` wrapper 包裹）
+async fn stream_loop_inner(ctx: &mut LoopContext, observable: &mut RoundState) {
     let mut all_text = String::new();
     let mut all_content_blocks: Vec<ContentBlock> = Vec::new();
     let mut collected_usage: Option<TokenUsage> = None;
@@ -438,9 +463,13 @@ pub(crate) async fn stream_loop(ctx: &mut LoopContext, observable: &mut RoundSta
         let (tool_use_blocks, tool_result_blocks) = execute_tool_round(
             &ctx.app,
             &ctx.tool_registry,
+            &ctx.auth_registry,
+            &ctx.auth_session,
+            &ctx.whitelist,
             &completed_calls,
             &ctx.conv_id,
             &ctx.asst_msg_id,
+            &ctx.cancel,
         )
         .await
         .unwrap_or_else(|e| {

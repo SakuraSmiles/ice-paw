@@ -31,6 +31,9 @@ pub mod r#loop;
 
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
+#[allow(unused_imports)]
+use tauri::Manager; // for handle.manage() in setup
+
 /// 应用入口
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -107,6 +110,13 @@ pub fn run() {
                 "数据库连接池就绪，最大连接数 = {}",
                 pool.size()
             );
+
+            // 3) A2-3: 安装工具授权响应全局监听器（前端 chat:tool-auth-response）
+            let auth_registry = harness::tool_executor::ToolAuthRegistry::new();
+            auth_registry.install_listener(&handle);
+            // 把注册表 manage 起来，方便后续扩展（当前主要给 setup 用）
+            handle.manage(auth_registry);
+
             let _ = pool;
             Ok(())
         })
