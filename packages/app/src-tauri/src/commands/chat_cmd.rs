@@ -3,8 +3,8 @@
 //! - `send_message`：入参校验 → 取 agent/api_key → 拼装上下文 → 写库占位 → spawn stream_loop
 //! - `stop_generation`：触发 ChatState 上的 CancellationToken
 //!
-//! 业务分布：protocol → chat_protocol.rs | 上下文 → chat_context.rs | 调度 → chat_loop.rs
-//!           错误 → chat_error.rs | 收尾 → chat_cleanup.rs
+//! 业务分布：protocol → infra::protocol | 上下文 → chat_context.rs | 调度 → harness::loop_engine
+//!           错误 → harness::error_mapping | 收尾 → harness::cleanup
 
 use sqlx::SqlitePool;
 use std::sync::Arc;
@@ -15,11 +15,15 @@ use crate::crypto;
 use crate::db::models::NewMessage;
 use crate::db::repo;
 use crate::error::{AppError, AppResult};
-use crate::llm::{
-    self, CancellationToken, ChatMessage, ChatState, ContentBlock, LlmProvider, ToolRegistry,
+use crate::infra::protocol::{
+    ChatMessage, ChatRoundStatePayload, ChatStartPayload, ContentBlock, LlmProvider, SendMessageInput, validate_images,
 };
-use super::chat_context::assemble_context;
-use super::chat_protocol::{ChatStartPayload, SendMessageInput, validate_images};
+use crate::harness::budget::LoopBudget;
+use crate::harness::chat_state::{CancellationToken, ChatState};
+use crate::harness::observable::RoundState;
+use crate::harness::provider;
+use crate::harness::tool_registry::ToolRegistry;
+use crate::context::pipeline::assemble_context;
 
 /// 发送消息 — 触发 LLM 流式生成。
 #[tauri::command]
@@ -59,7 +63,7 @@ pub async fn send_message(
         .as_deref()
         .filter(|s| !s.is_empty())
         .or(vault_base_url.as_deref());
-    let provider = llm::create_provider(
+    let llm_provider = provider::create_provider(
         &agent.provider, &agent.model, base_url, agent.cache_prompt != 0,
     )?;
 
@@ -104,7 +108,7 @@ pub async fn send_message(
 
     // --- 6. spawn 流式协程 ---
     spawn_stream_loop(
-        app, pool.inner().clone(), provider, api_key,
+        app, pool.inner().clone(), llm_provider, api_key,
         assembled.messages, agent.temperature, agent.max_tokens,
         cancel_token, conv_id, asst_msg_id, tools_enabled,
     );
@@ -124,7 +128,7 @@ pub async fn stop_generation(
     Ok(())
 }
 
-/// spawn LLM 流式协程，把编排结果交给 `chat_loop::stream_loop`。
+/// spawn LLM 流式协程，把编排结果交给 `harness::loop_engine::stream_loop`。
 #[allow(clippy::too_many_arguments)]
 fn spawn_stream_loop(
     app: AppHandle, pool: SqlitePool, provider: Arc<dyn LlmProvider>,
@@ -137,10 +141,31 @@ fn spawn_stream_loop(
         } else {
             ToolRegistry::new()
         };
-        super::chat_loop::stream_loop(
+        // W2.4: maintain observable state across the stream loop
+        let mut observable = RoundState::default();
+        // W4.1: 传入 LoopBudget（当前用 default，等价于原硬编码常量）
+        let budget = LoopBudget::default();
+        let round_conv_id = conv_id.clone();
+        let emit_app = app.clone();
+        crate::harness::loop_engine::stream_loop(
             app, pool, provider, api_key, messages,
             temperature, max_tokens, cancel_token,
-            conv_id, asst_msg_id, tool_registry, tools_enabled,
+            round_conv_id, asst_msg_id, tool_registry, tools_enabled,
+            budget,
+            &mut observable,
         ).await;
+        // W2.4: emit final round-state after stream_loop completes
+        let _ = emit_app.emit(
+            "chat:round-state",
+            ChatRoundStatePayload {
+                conversation_id: conv_id,
+                round: observable.round,
+                elapsed_ms: observable.elapsed_ms,
+                tokens_prompt: observable.tokens_prompt,
+                tokens_completion: observable.tokens_completion,
+                cached_tokens: observable.cached_tokens,
+                retry_count: observable.retry_count,
+            },
+        );
     });
 }

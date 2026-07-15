@@ -1,16 +1,17 @@
 //! Chat 收尾工具：CancellationToken 注销 + 成功 DB 回写 + 事件 emit
 //!
-//! 提供两个 pub(crate) 函数，供 chat_cmd.rs / stream_loop 调用：
+//! 从 `commands/chat_cleanup.rs` 迁入（W5.6）。
+//!
+//! 提供两个 pub(crate) 函数，供 chat_cmd.rs / loop_engine 调用：
 //! - `cleanup()` — 所有退出路径的公共收尾（注销 CancellationToken）
-//! - `cleanup_after_success_with_blocks()` — 正常完成时的 DB 回写 + emit chat:done + 注销
+//! - `cleanup_after_success_with_blocks()` — 正常完成时的 DB 回写 + emit + 注销
 
-use tauri::{AppHandle, Emitter, Manager};
 use sqlx::SqlitePool;
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::db::repo;
-use crate::llm::{ChatState, ContentBlock};
-
-use super::chat_protocol::ChatDonePayload;
+use crate::harness::chat_state::ChatState;
+use crate::infra::protocol::{ChatDonePayload, ContentBlock, TokenUsage};
 
 /// 成功完成后的收尾：回写 content + content_blocks + emit done + 注销 token
 pub(crate) fn cleanup_after_success_with_blocks(
@@ -21,7 +22,7 @@ pub(crate) fn cleanup_after_success_with_blocks(
     content: &str,
     content_blocks: &[ContentBlock],
     finish_reason: &str,
-    usage: Option<crate::llm::TokenUsage>,
+    usage: Option<TokenUsage>,
 ) {
     let pool_clone = pool.clone();
     let asst_msg_id_clone = asst_msg_id.to_string();
@@ -30,7 +31,8 @@ pub(crate) fn cleanup_after_success_with_blocks(
 
     tokio::spawn(async move {
         let _ = repo::message::update_content(&pool_clone, &asst_msg_id_clone, &content_clone).await;
-        let _ = repo::message::update_content_blocks(&pool_clone, &asst_msg_id_clone, &blocks_json).await;
+        let _ =
+            repo::message::update_content_blocks(&pool_clone, &asst_msg_id_clone, &blocks_json).await;
     });
 
     let _ = app.emit(

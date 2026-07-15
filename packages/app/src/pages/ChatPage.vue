@@ -24,6 +24,7 @@ import MessageList from "../components/chat/MessageList.vue";
 import ChatInput from "../components/chat/ChatInput.vue";
 import WelcomeInput from "../components/chat/WelcomeInput.vue";
 import InlineAgentCreate from "../components/agent/InlineAgentCreate.vue";
+import ChatStatusBar from "../components/chat/ChatStatusBar.vue";
 
 const agentsStore = useAgentsStore();
 const conversationsStore = useConversationsStore();
@@ -239,7 +240,8 @@ async function onLoadOlder(): Promise<void> {
     <!-- 三态三：有会话 → 完整聊天界面 -->
     <template v-else>
       <ChatHeader @stop="onStop" />
-      <MessageList
+      <div class="message-list-wrapper">
+        <MessageList
         ref="messageListRef"
         :messages="chatStore.currentMessages"
         :streaming-id="streamingMessageId"
@@ -253,6 +255,9 @@ async function onLoadOlder(): Promise<void> {
         @retry="onRetry"
         @load-older="onLoadOlder"
       />
+      </div>
+      <!-- W2.4: 状态栏（浮于 MessageList 区域右上角） -->
+      <ChatStatusBar />
       <ChatInput
         :disabled="false"
         :streaming="chatStore.isStreaming"
@@ -271,5 +276,14 @@ async function onLoadOlder(): Promise<void> {
   width: 100%;
   background: var(--ip-color-bg-secondary);
   overflow: hidden;
+}
+
+/* W2.4: 消息列表包装器（用于定位状态栏） */
+.message-list-wrapper {
+  position: relative;
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 </style>

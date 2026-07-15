@@ -56,6 +56,9 @@ pub enum AppError {
 
     #[error("操作已取消")]
     Cancelled,
+
+    #[error("授权失败: 工具 '{tool}' — {reason}")]
+    AuthorizationRequired { tool: String, reason: String },
 }
 
 /// 把 stronghold 错误统一转字符串，简化上层处理
@@ -106,6 +109,7 @@ impl Serialize for AppError {
             AppError::Llm(_) => "llm",
             AppError::Stream(_) => "stream",
             AppError::Cancelled => "cancelled",
+            AppError::AuthorizationRequired { .. } => "authorization_required",
         };
         let mut s = serializer.serialize_struct("AppError", 2)?;
         s.serialize_field("kind", kind)?;
@@ -148,6 +152,7 @@ impl AppError {
             AppError::Validation(_)
             | AppError::NotFound { .. }
             | AppError::Cancelled
+            | AppError::AuthorizationRequired { .. }
             | AppError::Database(_)
             | AppError::Migrate(_)
             | AppError::Stronghold(_)
