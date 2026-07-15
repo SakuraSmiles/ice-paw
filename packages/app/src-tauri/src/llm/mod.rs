@@ -91,7 +91,7 @@ pub fn create_provider(
         )),
         // Anthropic Messages API 兼容厂商（Anthropic 官方 + MiniMax）
         "anthropic" | "minimax" | "minimax-cn" => Ok(Arc::new(
-            adapters::anthropic::AnthropicAdapter::new(model.to_string(), url, cache_prompt),
+            crate::harness::provider::AnthropicAdapter::new(model.to_string(), url, cache_prompt),
         )),
         // 兜底：未识别 provider 走 OpenAI 兼容（向后兼容）
         _ => {
