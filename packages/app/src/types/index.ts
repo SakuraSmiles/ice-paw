@@ -258,6 +258,19 @@ export interface ChatRetryingPayload {
   message_id: string;
   attempt: number;
   max_attempts: number;
+  /** W2.6: reason for retry (e.g. "network_error", "server_error_5xx") */
+  reason?: string;
+}
+
+/** W2.4: `chat:round-state` 事件 payload — token/轮次/耗时可观测性 */
+export interface ChatRoundStatePayload {
+  conversation_id: string;
+  round: number;
+  elapsed_ms: number;
+  tokens_prompt: number;
+  tokens_completion: number;
+  cached_tokens: number;
+  retry_count: number;
 }
 
 // ============================================================================

@@ -40,6 +40,7 @@ import type {
   ChatDonePayload,
   ChatErrorPayload,
   ChatRetryingPayload,
+  ChatRoundStatePayload,
   ChatStartPayload,
   ChatThinkingPayload,
   ChatToolCallDeltaPayload,
@@ -166,6 +167,9 @@ export const useChatStore = defineStore("chat", () => {
     completion_tokens: number;
     cached_tokens: number;
   } | null>(null);
+
+  /** W2.4: 最近一次 round 的可观测性数据（token/轮次/耗时） */
+  const lastRoundState = ref<ChatRoundStatePayload | null>(null);
 
   /** listen 返回的 unlisten 函数列表 */
   const unlistens: UnlistenFn[] = [];
@@ -349,6 +353,8 @@ export const useChatStore = defineStore("chat", () => {
         toolResults.value = {};
         // P2-3: 清除上一轮的 usage
         lastUsage.value = null;
+        // W2.4: 清除上一轮的 round-state
+        lastRoundState.value = null;
       }),
     );
 
@@ -500,6 +506,15 @@ export const useChatStore = defineStore("chat", () => {
         if (p.conversation_id !== activeConvId.value) return;
 
         thinkingContent.value += p.content;
+      }),
+    );
+
+    // ----- W2.4: chat:round-state -----
+    unlistens.push(
+      await listen<ChatRoundStatePayload>("chat:round-state", (e) => {
+        const p = e.payload;
+        if (p.conversation_id !== activeConvId.value) return;
+        lastRoundState.value = p;
       }),
     );
   }
@@ -760,6 +775,8 @@ export const useChatStore = defineStore("chat", () => {
     toolResults,
     // P2-3
     lastUsage,
+    // W2.4
+    lastRoundState,
     // P2 分页
     hasMoreOlder,
     loadingOlder,
