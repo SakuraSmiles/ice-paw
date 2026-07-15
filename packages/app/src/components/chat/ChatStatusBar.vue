@@ -14,8 +14,18 @@ const chatStore = useChatStore();
 /** 当前 round-state 数据（来自 chat:round-state 事件） */
 const state = computed(() => chatStore.lastRoundState);
 
-/** 是否可见：有数据且有活跃会话 */
-const visible = computed(() => !!state.value);
+/** 是否可见：有数据且有活跃会话，或有待显示的 finish_reason */
+const visible = computed(() => !!state.value || !!finishReasonLabel.value);
+
+/** W4.2: finish_reason 标签（非标准原因才显示） */
+const finishReasonLabel = computed(() => {
+  const reason = chatStore.lastFinishReason;
+  if (!reason || reason === 'stop') return null;
+  if (reason === 'budget_exceeded') return 'Token 预算已用尽';
+  if (reason === 'length') return '达到 Token 上限';
+  if (reason === 'tool_use') return '工具轮数已达上限';
+  return reason;
+});
 
 /** 缓存命中率（仅 cached_tokens > 0 时显示） */
 const cachePercent = computed(() => {
@@ -99,6 +109,13 @@ defineExpose({ showRetryReason });
         </div>
       </Transition>
 
+      <!-- W4.2: finish_reason 非标准提示（如 budget_exceeded） -->
+      <Transition name="fade">
+        <div v-if="finishReasonLabel" class="status-finish-reason">
+          ⚠️ {{ finishReasonLabel }}
+        </div>
+      </Transition>
+
       <!-- 主体状态信息 -->
       <div class="status-items">
         <!-- Token 用量 -->
@@ -178,6 +195,19 @@ defineExpose({ showRetryReason });
   border-radius: var(--ip-radius-sm, 4px);
   background: var(--ip-warning-bg, rgba(251, 191, 36, 0.15));
   color: var(--ip-warning-text, #b45309);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+/* W4.2: finish_reason 非标准提示（如 budget_exceeded） */
+.status-finish-reason {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: var(--ip-radius-sm, 4px);
+  background: var(--ip-error-bg, rgba(239, 68, 68, 0.12));
+  color: var(--ip-error-text, #dc2626);
   font-size: 10px;
   font-weight: 500;
 }
