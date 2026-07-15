@@ -27,7 +27,8 @@ use crate::infra::protocol::{
     ChatToolCallStartPayload, ChatToolResultPayload, ContentBlock,
     LlmProvider, TokenUsage,
 };
-use crate::llm::{CancellationToken, ToolRegistry};
+use crate::harness::chat_state::CancellationToken;
+use crate::harness::tool_registry::ToolRegistry;
 
 use super::chat_cleanup::{cleanup, cleanup_after_success_with_blocks};
 use super::chat_error::{error_kind, friendly_error};

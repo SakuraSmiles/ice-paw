@@ -7,11 +7,12 @@
 //! - `db`        —— sqlx 连接池与 migrations
 //! - `crypto`    —— stronghold wrapper
 //! - `commands`  —— 暴露给前端的 invoke 入口
-//! - `llm`       —— LLM provider / adapters / 工具注册
 //! - `context`   —— L2 Context 层（W1.1 建壳占位）
-//! - `harness`   —— L2 Harness 层（W1.1 建壳占位）
+//! - `harness`   —— L2 Harness 层（W2.x 逐步填充）
 //! - `infra`     —— L0/L1 基础设施层（W1.1 建壳占位）
 //! - `loop`      —— L2 Loop 层占位（raw identifier `r#loop`）
+//!
+//! **W2.3 起**：`llm/` 目录已删除（provider / tool_registry / chat_state 全部迁入 `harness/`）。
 //!
 //! 启动顺序（setup）：
 //!   1. 初始化 tracing
@@ -26,7 +27,6 @@ pub mod db;
 pub mod error;
 pub mod harness;
 pub mod infra;
-pub mod llm;
 pub mod r#loop;
 
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -44,7 +44,7 @@ pub fn run() {
         // 仅保留 opener 业务插件
         .plugin(tauri_plugin_opener::init())
         // 聊天全局状态（CancellationToken 注册表）
-        .manage(llm::ChatState::new())
+        .manage(harness::chat_state::ChatState::new())
         // 注：原 `tauri_plugin_stronghold::Builder::new(...).build()` 注册已移除。
         //
         // 理由（参见 dev2 评审方案 §3.2）：

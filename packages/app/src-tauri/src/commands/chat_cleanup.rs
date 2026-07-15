@@ -8,8 +8,8 @@ use tauri::{AppHandle, Emitter, Manager};
 use sqlx::SqlitePool;
 
 use crate::db::repo;
+use crate::harness::chat_state::ChatState;
 use crate::infra::protocol::{ChatDonePayload, ContentBlock};
-use crate::llm::ChatState;
 
 /// 成功完成后的收尾：回写 content + content_blocks + emit done + 注销 token
 pub(crate) fn cleanup_after_success_with_blocks(

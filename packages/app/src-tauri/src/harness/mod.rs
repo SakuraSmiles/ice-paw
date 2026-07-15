@@ -1,13 +1,13 @@
 //! `harness` — L2 Harness 层（Provider / ChatState / Loop / Tools / Observable）
 //!
-//! **当前状态**：W1.1 建壳占位模块，仅声明子模块目录。
+//! - W1.1：建壳占位模块
+//! - W2.1：provider/openai 迁入
+//! - W2.2：provider/anthropic 迁入
+//! - W2.3：chat_state（合并 cancel）+ tool_registry + factory 迁入，`llm/` 目录删除
 //!
-//! 后续 Sprint（W2.x / W3.x / W4.x / W5.6）将逐步从 `commands/chat_loop.rs` /
-//! `llm/` / `commands/chat_cleanup.rs` / `commands/chat_error.rs` 迁入：
+//! 后续 Sprint（W3.x / W4.x / W5.6）将逐步从 `commands/chat_loop.rs` /
+//! `commands/chat_cleanup.rs` / `commands/chat_error.rs` 迁入：
 //!
-//! - `provider`        — LLM provider adapters（openai、anthropic 等）
-//! - `tool_registry`   — 工具注册表 + 内置工具 + 权限策略
-//! - `chat_state`      — 全局 ChatState + CancellationToken（W2.3 合并 cancel.rs）
 //! - `loop_engine`     — 主循环调度（W3.x 拆分 budget/retry/stream_consumer/tool_executor）
 //! - `budget`          — LoopBudget 三道熔断（W3.1）
 //! - `retry`           — RetryState 状态机（W3.2）
@@ -19,7 +19,6 @@
 //!
 //! 详见 Sprint 计划 W2–W5。
 
-// W1.1: 仅声明 W1.1 阶段已建壳的两个子模块。
-// 其他子模块将在后续 Sprint 迁移时再补 `pub mod` 声明。
+pub mod chat_state;
 pub mod provider;
 pub mod tool_registry;
