@@ -81,7 +81,6 @@ pub fn run() {
             commands::template_cmd::delete_template,
             commands::chat_cmd::send_message,
             commands::chat_cmd::stop_generation,
-            commands::seed_cmd::seed_preset_agents,
         ])
         // 启动逻辑
         .setup(|app| {
@@ -107,20 +106,6 @@ pub fn run() {
                 target: "ice_paw",
                 "数据库连接池就绪，最大连接数 = {}",
                 pool.size()
-            );
-
-            // 3) 预置助手植入（幂等）
-            //    从 `~/.openclaw/openclaw.json` 读 apiKey，自动建好 DeepSeek Flash /
-            //    MiniMax M3 两个预置助手。失败不阻塞 App 启动（详见 seed_cmd.rs）。
-            let seed_result = tauri::async_runtime::block_on(async {
-                commands::seed_cmd::seed_preset_agents_impl(&handle, &pool).await
-            });
-            tracing::info!(
-                target: "ice_paw",
-                "preset agents seed 完成: created={} skipped={} errors={}",
-                seed_result.created.len(),
-                seed_result.skipped.len(),
-                seed_result.errors.len()
             );
             let _ = pool;
             Ok(())
