@@ -332,6 +332,45 @@ export interface ChatThinkingPayload {
   content: string;
 }
 
+// ============================================================================
+// A2-3 工具授权事件 payload
+// ============================================================================
+
+/**
+ * `chat:tool-auth-request` 事件 payload (Rust → Frontend)
+ *
+ * 工具执行遇到需要用户确认授权的场景时（例如路径不在白名单内），
+ * Rust 侧 emit 此事件，前端弹窗后通过 `chat:tool-auth-response` 事件回传结果。
+ *
+ * - `request_id`  唯一 ID，与响应中的 `request_id` 对应
+ * - `tool_use_id` LLM 端的工具调用 ID（用于工具结果回填）
+ * - `tool_name`   工具名（人类友好映射）
+ * - `file_path`   待访问的路径
+ * - `arguments`   工具调用参数 JSON 字符串
+ * - `reason`      触发原因（展示文案）
+ */
+export interface ToolAuthRequestPayload {
+  request_id: string;
+  tool_use_id: string;
+  tool_name: string;
+  file_path: string;
+  arguments: string;
+  conversation_id: string;
+  message_id: string;
+  reason: string;
+}
+
+/**
+ * `chat:tool-auth-response` 事件 payload (Frontend → Rust)
+ *
+ * 用户在弹窗中点击「允许」或「拒绝」后由前端 emit，
+ * Rust 侧用 `request_id` 匹配 oneshot 通道。
+ */
+export interface ToolAuthResponse {
+  request_id: string;
+  allowed: boolean;
+}
+
 /** 工具定义（前端发给后端的 tool schema） */
 export interface ToolDef {
   name: string;
