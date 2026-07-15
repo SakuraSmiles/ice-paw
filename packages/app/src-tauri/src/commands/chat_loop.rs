@@ -28,6 +28,7 @@ use crate::infra::protocol::{
     LlmProvider, TokenUsage,
 };
 use crate::harness::chat_state::CancellationToken;
+use crate::harness::observable::{RoundState, RoundTimer};
 use crate::harness::tool_registry::ToolRegistry;
 
 use super::chat_cleanup::{cleanup, cleanup_after_success_with_blocks};
@@ -68,6 +69,7 @@ pub(crate) async fn stream_loop(
     asst_msg_id: String,
     tool_registry: ToolRegistry,
     tools_enabled: bool,
+    observable: &mut RoundState,
 ) {
     use futures::StreamExt;
     use std::collections::HashMap;
@@ -100,6 +102,10 @@ pub(crate) async fn stream_loop(
             return cleanup(&app, &pool, &conv_id);
         }
 
+        // W2.4: 开启本轮计时
+        let mut round_timer = RoundTimer::new(tool_round);
+        observable.round = tool_round + 1;
+
         // 准备本轮的 tools 定义
         // 所有轮次都传 tools：messages 中含 assistant 的 tool_calls 时，
         // 部分 API（GLM 等）要求请求必须带 tools 定义，否则返回 400
@@ -129,6 +135,8 @@ pub(crate) async fn stream_loop(
                     "重试 LLM 请求: tool_round={} attempt={}/{}，等待 {}s",
                     tool_round, attempt + 1, MAX_ATTEMPTS, wait_secs,
                 );
+                // W2.4: 累积 retry 计数
+                observable.retry_count += 1;
                 let _ = app.emit(
                     "chat:retrying",
                     ChatRetryingPayload {
@@ -251,7 +259,11 @@ pub(crate) async fn stream_loop(
                             }
                             // P2-3: Token usage
                             Ok(ChatDelta::Usage { usage: u }) => {
-                                collected_usage = Some(u);
+                                collected_usage = Some(u.clone());
+                                // W2.4: 累积到 observable
+                                observable.tokens_prompt = u.prompt_tokens;
+                                observable.tokens_completion = u.completion_tokens;
+                                observable.cached_tokens = u.cached_tokens;
                             }
                             Ok(ChatDelta::Done { finish_reason: fr }) => {
                                 if let Some(fr) = fr {
@@ -336,6 +348,9 @@ pub(crate) async fn stream_loop(
             );
             return cleanup(&app, &pool, &conv_id);
         }
+
+        // W2.4: 更新本轮耗时
+        observable.elapsed_ms = round_timer.elapsed_ms();
 
         // 累积文本
         all_text.push_str(&round_text);
@@ -464,6 +479,7 @@ pub(crate) async fn stream_loop(
     }
 
     // 达到最大轮数 → 正常结束（所有工具已完成）
+    // W2.4: observable already has latest round data from last iteration
     let content_for_db = all_text.clone();
     if !all_text.is_empty() {
         all_content_blocks.push(ContentBlock::Text {
