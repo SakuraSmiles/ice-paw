@@ -56,6 +56,7 @@ use crate::infra::protocol::{
     ChatToolCallStartPayload, ChatToolResultPayload, ContentBlock,
     LlmProvider, TokenUsage,
 };
+use crate::harness::budget::{MAX_ATTEMPTS, MAX_TOOL_ROUNDS};
 use crate::harness::chat_state::CancellationToken;
 use crate::harness::observable::{RoundState, RoundTimer};
 use crate::harness::tool_registry::ToolRegistry;
@@ -104,8 +105,8 @@ pub(crate) async fn stream_loop(
     use std::collections::HashMap;
     use std::time::Duration;
 
-    const MAX_TOOL_ROUNDS: u32 = 5;
-    const MAX_ATTEMPTS: u32 = 4;
+    // W3.1: 循环上限常量已迁至 `harness::budget::{MAX_TOOL_ROUNDS, MAX_ATTEMPTS}`
+    // （与原硬编码值完全一致，行为不变）
 
     /// 一轮流式消费中收集到的工具调用信息
     #[derive(Debug, Clone)]
