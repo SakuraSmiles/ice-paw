@@ -103,7 +103,7 @@ pub(crate) async fn stream_loop(
         }
 
         // W2.4: 开启本轮计时
-        let mut round_timer = RoundTimer::new(tool_round);
+        let round_timer = RoundTimer::new(tool_round);
         observable.round = tool_round + 1;
 
         // 准备本轮的 tools 定义
