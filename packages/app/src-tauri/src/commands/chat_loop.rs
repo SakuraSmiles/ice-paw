@@ -14,6 +14,35 @@
 //! - `consume_stream()` — 拆出流式消费 + Delta 路由逻辑（~120 行）
 //! - `execute_tools()` — 拆出工具执行 + 结果回传逻辑（~90 行）
 
+// W2.6: 将 AppError 分类为 retry reason 字符串（用于 chat:retrying payload）
+fn classify_retry_reason(e: &crate::error::AppError) -> String {
+    use crate::error::AppError::*;
+    let msg = match e {
+        Llm(s) | Stream(s) | Internal(s) | Stronghold(s) => s.as_str(),
+        Io(_) => return "network_error".into(),
+        Tauri(s) => s.as_str(),
+        _ => return "unknown_error".into(),
+    };
+    let lower = msg.to_lowercase();
+    if lower.contains("timeout") || lower.contains("timed out") {
+        "timeout".into()
+    } else if lower.contains("rate_limit") || lower.contains("429") || lower.contains("too many requests") {
+        "rate_limited".into()
+    } else if lower.contains("500") || lower.contains("502") || lower.contains("503")
+        || lower.contains("server_error") || lower.contains("internal server error")
+        || lower.contains("upstream")
+    {
+        "server_error_5xx".into()
+    } else if lower.contains("connection") || lower.contains("network")
+        || lower.contains("dns") || lower.contains("refused")
+        || lower.contains("broken pipe") || lower.contains("reset")
+    {
+        "network_error".into()
+    } else {
+        "unknown_error".into()
+    }
+}
+
 use std::sync::Arc;
 
 use tauri::{AppHandle, Emitter};
@@ -128,6 +157,9 @@ pub(crate) async fn stream_loop(
                 return cleanup(&app, &pool, &conv_id);
             }
 
+            // W2.6: 记录最近一次可重试错误的 reason（用于 chat:retrying payload）
+            let mut last_retry_reason = String::new();
+
             if attempt > 0 {
                 let wait_secs = 1u64 << (attempt - 1);
                 tracing::info!(
@@ -144,6 +176,7 @@ pub(crate) async fn stream_loop(
                         message_id: asst_msg_id.clone(),
                         attempt: attempt + 1,
                         max_attempts: MAX_ATTEMPTS,
+                        reason: last_retry_reason.clone(),
                     },
                 );
                 tokio::time::sleep(Duration::from_secs(wait_secs)).await;
@@ -275,6 +308,8 @@ pub(crate) async fn stream_loop(
                             Err(e) => {
                                 if e.is_retryable() {
                                     attempt_ok = false;
+                                    // W2.6: 记录重试原因
+                                    last_retry_reason = classify_retry_reason(&e);
                                     tracing::warn!(
                                         target: "ice_paw.chat",
                                         "流中可重试错误 (round={} attempt={}/{}): {}",
@@ -307,6 +342,8 @@ pub(crate) async fn stream_loop(
                 }
                 Err(e) => {
                     if e.is_retryable() {
+                        // W2.6: 记录重试原因
+                        last_retry_reason = classify_retry_reason(&e);
                         tracing::warn!(
                             target: "ice_paw.chat",
                             "请求失败可重试 (round={} attempt={}/{}): {}",
