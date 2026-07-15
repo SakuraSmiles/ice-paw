@@ -38,8 +38,10 @@ pub mod builtin;
 /// - `PathWhitelist`：路径白名单校验（如 `read_file`）
 /// - `Confirm`：需用户确认（未来扩展）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum AuthorizationLevel {
     /// 无需授权
+    #[default]
     Always,
     /// 路径白名单校验
     PathWhitelist,
@@ -47,11 +49,6 @@ pub enum AuthorizationLevel {
     Confirm,
 }
 
-impl Default for AuthorizationLevel {
-    fn default() -> Self {
-        Self::Always
-    }
-}
 
 // =========================================================================
 // Tool Trait
