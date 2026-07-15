@@ -16,9 +16,10 @@ use crate::db::models::NewMessage;
 use crate::db::repo;
 use crate::error::{AppError, AppResult};
 use crate::infra::protocol::{
-    ChatMessage, ChatStartPayload, ContentBlock, LlmProvider, SendMessageInput, validate_images,
+    ChatMessage, ChatRoundStatePayload, ChatStartPayload, ContentBlock, LlmProvider, SendMessageInput, validate_images,
 };
 use crate::harness::chat_state::{CancellationToken, ChatState};
+use crate::harness::observable::RoundState;
 use crate::harness::provider;
 use crate::harness::tool_registry::ToolRegistry;
 use super::chat_context::assemble_context;
@@ -139,10 +140,28 @@ fn spawn_stream_loop(
         } else {
             ToolRegistry::new()
         };
+        // W2.4: maintain observable state across the stream loop
+        let mut observable = RoundState::default();
+        let round_conv_id = conv_id.clone();
+        let emit_app = app.clone();
         super::chat_loop::stream_loop(
             app, pool, provider, api_key, messages,
             temperature, max_tokens, cancel_token,
-            conv_id, asst_msg_id, tool_registry, tools_enabled,
+            round_conv_id, asst_msg_id, tool_registry, tools_enabled,
+            &mut observable,
         ).await;
+        // W2.4: emit final round-state after stream_loop completes
+        let _ = emit_app.emit(
+            "chat:round-state",
+            ChatRoundStatePayload {
+                conversation_id: conv_id,
+                round: observable.round,
+                elapsed_ms: observable.elapsed_ms,
+                tokens_prompt: observable.tokens_prompt,
+                tokens_completion: observable.tokens_completion,
+                cached_tokens: observable.cached_tokens,
+                retry_count: observable.retry_count,
+            },
+        );
     });
 }
