@@ -1,14 +1,13 @@
-//! 聊天上下文组装 Pipeline（逐步迁出中，最终文件将在 W5.3 删除）
+//! Context 组装 Pipeline — 上下文组装主入口
 //!
-//! 当前仍包含 `assemble_context` 主函数，将在 W5.3 迁入 `context/pipeline.rs`。
+//! 从 `commands/chat_context.rs` 迁入（W5.3）。
 //!
-//! 已迁出的子模块：
-//! - `context::template` — 模板渲染（W5.1）
-//! - `context::os_context` — OS 环境信息（W5.2）
-//! - `context::system_prompt` — system prompt 构造（W5.2）
+//! 提供 `pub(crate)` 函数 [`assemble_context`]，将 (agent, template, history, user_blocks)
+//! 转换成最终给 LLM 的 `Vec<ChatMessage>` 和用于 DB 回写的 `user_blocks`。
 
 use sqlx::SqlitePool;
 
+use crate::context::history::load_history;
 use crate::context::os_context::build_os_context;
 use crate::context::system_prompt::build_system_prompt;
 use crate::context::template::render_template;
@@ -18,7 +17,7 @@ use crate::error::AppResult;
 use crate::infra::protocol::{ChatMessage, ContentBlock, TemplateInput};
 
 // =========================================================================
-// assemble_context — 上下文组装 Pipeline
+// AssembledContext + assemble_context
 // =========================================================================
 
 /// `assemble_context` 的返回结构
@@ -26,7 +25,6 @@ use crate::infra::protocol::{ChatMessage, ContentBlock, TemplateInput};
 /// - `messages`：可直接喂给 `provider.stream_chat(messages, ...)` 的完整上下文
 ///   （含 system / 历史 / 当前 user）
 /// - `user_blocks`：含图片重排后的当前用户消息 blocks，供 DB 回写
-///   （`user_blocks_json` 列 + `content_text_for_db` 文本部分）
 #[derive(Debug)]
 pub(crate) struct AssembledContext {
     pub messages: Vec<ChatMessage>,
@@ -37,10 +35,10 @@ pub(crate) struct AssembledContext {
 ///
 /// # Pipeline 流程
 ///
-/// 1. **模板查询 + 渲染**（可选）
-/// 2. **user blocks 拼装 + 图片重排**
-/// 3. **system prompt 构造**（委托 `context::system_prompt::build_system_prompt`）
-/// 4. **历史消息转换**
+/// 1. **模板查询 + 渲染**（可选，副作用：只读 SELECT）
+/// 2. **user blocks 拼装 + 图片重排**（纯计算）
+/// 3. **system prompt 构造**（委托 `context::system_prompt`）
+/// 4. **历史消息转换**（委托 `context::history`）
 /// 5. **当前用户消息追加**
 pub(crate) async fn assemble_context(
     pool: &SqlitePool,
@@ -56,7 +54,6 @@ pub(crate) async fn assemble_context(
     let (rendered_system_prompt, rendered_user_prefix) = if let Some(tpl_input) = template_input {
         let tpl = repo::template::get_by_id(pool, &tpl_input.template_id).await?;
         let sys = render_template(&tpl.system_prompt, &tpl_input.values);
-        // 模板 system_prompt 渲染后为空 → 视为「不覆盖」，fallback 到 agent
         let sys_opt = if sys.trim().is_empty() { None } else { Some(sys) };
         let user_pfx = render_template(&tpl.user_prompt_prefix, &tpl_input.values);
         (sys_opt, user_pfx)
@@ -93,7 +90,7 @@ pub(crate) async fn assemble_context(
     }
 
     // -----------------------------------------------------------------
-    // 3) system prompt 构造（委托 system_prompt 模块）
+    // 3) system prompt 构造
     // -----------------------------------------------------------------
     let os_info = build_os_context();
     let effective_system_prompt = build_system_prompt(
@@ -104,22 +101,20 @@ pub(crate) async fn assemble_context(
     );
 
     // -----------------------------------------------------------------
-    // 4) 构造 messages 列表（system + 历史 + 当前 user）
+    // 4) 历史消息转换
     // -----------------------------------------------------------------
-    let mut messages: Vec<ChatMessage> = Vec::with_capacity(history.len() + 2);
+    let history_messages = load_history(history);
+
+    // -----------------------------------------------------------------
+    // 5) 构造 messages 列表（system + 历史 + 当前 user）
+    // -----------------------------------------------------------------
+    let mut messages: Vec<ChatMessage> = Vec::with_capacity(history_messages.len() + 2);
 
     if let Some(sys) = &effective_system_prompt {
         messages.push(ChatMessage::from_text("system", sys.clone()));
     }
 
-    // 历史消息（仅文本；多模态 TODO）
-    for msg in history {
-        let role = match msg.role.as_str() {
-            "user" | "assistant" | "system" => msg.role.clone(),
-            _ => continue,
-        };
-        messages.push(ChatMessage::from_text(role, msg.content.clone()));
-    }
+    messages.extend(history_messages);
 
     // 当前用户消息（含图片的 content_blocks）
     messages.push(ChatMessage {

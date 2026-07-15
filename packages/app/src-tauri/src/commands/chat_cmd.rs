@@ -23,7 +23,7 @@ use crate::harness::chat_state::{CancellationToken, ChatState};
 use crate::harness::observable::RoundState;
 use crate::harness::provider;
 use crate::harness::tool_registry::ToolRegistry;
-use super::chat_context::assemble_context;
+use crate::context::pipeline::assemble_context;
 
 /// 发送消息 — 触发 LLM 流式生成。
 #[tauri::command]
