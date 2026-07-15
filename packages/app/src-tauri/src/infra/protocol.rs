@@ -410,6 +410,8 @@ pub struct ChatRetryingPayload {
     pub message_id: String,
     pub attempt: u32,
     pub max_attempts: u32,
+    /// W2.6: 重试原因（如 "network_error" / "server_error_5xx"）
+    pub reason: String,
 }
 
 // === P2-1 工具调用事件 payload ===
