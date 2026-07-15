@@ -7,7 +7,6 @@
 pub mod agent_cmd;
 pub mod chat_cmd;
 pub mod chat_cleanup;
-pub mod chat_context;
 pub mod chat_error;
 pub mod conversation_cmd;
 pub mod message_cmd;
