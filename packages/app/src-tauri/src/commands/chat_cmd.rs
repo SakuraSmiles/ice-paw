@@ -3,7 +3,7 @@
 //! - `send_message`：入参校验 → 取 agent/api_key → 拼装上下文 → 写库占位 → spawn stream_loop
 //! - `stop_generation`：触发 ChatState 上的 CancellationToken
 //!
-//! 业务分布：protocol → chat_protocol.rs | 上下文 → chat_context.rs | 调度 → chat_loop.rs
+//! 业务分布：protocol → infra::protocol | 上下文 → chat_context.rs | 调度 → chat_loop.rs
 //!           错误 → chat_error.rs | 收尾 → chat_cleanup.rs
 
 use sqlx::SqlitePool;
@@ -15,11 +15,11 @@ use crate::crypto;
 use crate::db::models::NewMessage;
 use crate::db::repo;
 use crate::error::{AppError, AppResult};
-use crate::llm::{
-    self, CancellationToken, ChatMessage, ChatState, ContentBlock, LlmProvider, ToolRegistry,
+use crate::infra::protocol::{
+    ChatMessage, ChatStartPayload, ContentBlock, LlmProvider, SendMessageInput, validate_images,
 };
+use crate::llm::{self, CancellationToken, ChatState, ToolRegistry};
 use super::chat_context::assemble_context;
-use super::chat_protocol::{ChatStartPayload, SendMessageInput, validate_images};
 
 /// 发送消息 — 触发 LLM 流式生成。
 #[tauri::command]
