@@ -20,6 +20,7 @@ use crate::infra::protocol::{
 };
 use crate::harness::budget::LoopBudget;
 use crate::harness::chat_state::{CancellationToken, ChatState};
+use crate::harness::loop_engine::LoopContext;
 use crate::harness::observable::RoundState;
 use crate::harness::provider;
 use crate::harness::tool_registry::ToolRegistry;
@@ -129,6 +130,13 @@ pub async fn stop_generation(
 }
 
 /// spawn LLM 流式协程，把编排结果交给 `harness::loop_engine::stream_loop`。
+///
+/// W6.2: 入参已封装到 [`LoopContext`] 后传给 `stream_loop`。
+///
+/// 注意：`spawn_stream_loop` 自身的形参列表仍是 11 个（编排层分散收集
+/// 各 Tauri State/输入），所以 `#[allow(clippy::too_many_arguments)]`
+/// 仍需保留；要消除这个 lint 需要更彻底地把编排也下沉到 `LoopContext`
+/// 子构造器（不在 W6.2 范围内）。
 #[allow(clippy::too_many_arguments)]
 fn spawn_stream_loop(
     app: AppHandle, pool: SqlitePool, provider: Arc<dyn LlmProvider>,
@@ -145,15 +153,26 @@ fn spawn_stream_loop(
         let mut observable = RoundState::default();
         // W4.1: 传入 LoopBudget（当前用 default，等价于原硬编码常量）
         let budget = LoopBudget::default();
-        let round_conv_id = conv_id.clone();
         let emit_app = app.clone();
-        crate::harness::loop_engine::stream_loop(
-            app, pool, provider, api_key, messages,
-            temperature, max_tokens, cancel_token,
-            round_conv_id, asst_msg_id, tool_registry, tools_enabled,
+
+        // W6.2: 把 13 个输入字段封装到 LoopContext，
+        // 消除 stream_loop 的 too_many_arguments 告警。
+        let mut ctx = LoopContext::new(
+            conv_id.clone(),
+            asst_msg_id,
+            app,
+            pool,
+            provider,
+            api_key,
+            temperature,
+            max_tokens,
+            messages,
+            tool_registry,
+            tools_enabled,
+            cancel_token,
             budget,
-            &mut observable,
-        ).await;
+        );
+        crate::harness::loop_engine::stream_loop(&mut ctx, &mut observable).await;
         // W2.4: emit final round-state after stream_loop completes
         let _ = emit_app.emit(
             "chat:round-state",

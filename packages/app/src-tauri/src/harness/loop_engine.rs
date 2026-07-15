@@ -1,4 +1,4 @@
-//! L2 Loop Engine — 主循环调度（W3.3 + W4.1）
+//! L2 Loop Engine — 主循环调度（W3.3 + W4.1 + W6.2）
 //!
 //! 职责：编排工具执行循环（tool_round loop）+ 重试循环（retry loop），
 //! 调用 `stream_consumer::consume_stream` 消费 LLM 流，
@@ -13,6 +13,9 @@
 //! W4.1: `stream_loop` 签名增加 `budget: LoopBudget` 参数；原硬编码常量
 //! `MAX_TOOL_ROUNDS` / `MAX_ATTEMPTS` 改为读取 budget 字段。
 //! W4.2: budget.max_total_tokens 启用 Token 预算终止逻辑。
+//! W6.2: 把 `stream_loop` 的 13 个输入参数封装到 `LoopContext` 结构体，
+//! 消除 `clippy::too_many_arguments` 告警；`observable` 作为单独的
+//! `&mut RoundState` 入参保留（属于输出遥测，不属于输入配置）。
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -76,25 +79,94 @@ fn classify_retry_reason(e: &AppError) -> String {
     }
 }
 
+// ==========================================================================
+// W6.2: LoopContext — 流式循环的输入配置封装
+// ==========================================================================
+
+/// `stream_loop` 的输入配置封装。
+///
+/// 13 个原本独立的参数（app / pool / provider / api_key / messages /
+/// temperature / max_tokens / cancel / conv_id / asst_msg_id /
+/// tool_registry / tools_enabled / budget）整合到一个结构体中：
+/// - 消除 `clippy::too_many_arguments`
+/// - 让 `stream_loop` 的 signature 保持 `fn(&mut LoopContext, &mut RoundState)`
+/// - 为后续扩展（如加上 tools 缓存、agent 配置、continue-from 等）提供容器
+///
+/// `RoundState`（observable）刻意未收入此结构体，因为它是循环过程中
+/// 累积写入的**输出**遥测状态，而不是配置输入。
+#[allow(clippy::too_many_arguments)]
+pub(crate) struct LoopContext {
+    // ---- 标识与会话 ----
+    pub conv_id: String,
+    pub asst_msg_id: String,
+
+    // ---- 基础设施 ----
+    pub app: AppHandle,
+    pub pool: SqlitePool,
+
+    // ---- LLM Provider ----
+    pub provider: Arc<dyn LlmProvider>,
+    pub api_key: String,
+    pub temperature: f64,
+    pub max_tokens: i32,
+
+    // ---- 对话消息缓冲（循环中会 push 新消息） ----
+    pub messages: Vec<ChatMessage>,
+
+    // ---- 工具 ----
+    pub tool_registry: ToolRegistry,
+    pub tools_enabled: bool,
+
+    // ---- 循环控制 ----
+    pub cancel: CancellationToken,
+    pub budget: LoopBudget,
+}
+
+impl LoopContext {
+    /// 构造 `LoopContext`。这是 W6.2 引入的唯一构造入口。
+    ///
+    /// 参数数量看似很多，但这就是该结构体的全部职责 —— 把原本散落在
+    /// `stream_loop` 形参列表里的 13 个字段集中起来。允许
+    /// `clippy::too_many_arguments` 因为这就是本结构体的存在意义。
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        conv_id: String,
+        asst_msg_id: String,
+        app: AppHandle,
+        pool: SqlitePool,
+        provider: Arc<dyn LlmProvider>,
+        api_key: String,
+        temperature: f64,
+        max_tokens: i32,
+        messages: Vec<ChatMessage>,
+        tool_registry: ToolRegistry,
+        tools_enabled: bool,
+        cancel: CancellationToken,
+        budget: LoopBudget,
+    ) -> Self {
+        Self {
+            conv_id,
+            asst_msg_id,
+            app,
+            pool,
+            provider,
+            api_key,
+            temperature,
+            max_tokens,
+            messages,
+            tool_registry,
+            tools_enabled,
+            cancel,
+            budget,
+        }
+    }
+}
+
 /// 流式生成内部协程 — 支持指数退避重试 + 工具执行循环
-pub(crate) async fn stream_loop(
-    app: AppHandle,
-    pool: SqlitePool,
-    provider: Arc<dyn LlmProvider>,
-    api_key: String,
-    mut messages: Vec<ChatMessage>,
-    temperature: f64,
-    max_tokens: i32,
-    cancel: CancellationToken,
-    conv_id: String,
-    asst_msg_id: String,
-    tool_registry: ToolRegistry,
-    tools_enabled: bool,
-    budget: LoopBudget,
-    observable: &mut RoundState,
-) {
-
-
+///
+/// W6.2: 13 个输入参数已封装到 [`LoopContext`]，仅保留
+/// `observable`（输出遥测状态）作为单独的 `&mut RoundState` 入参。
+pub(crate) async fn stream_loop(ctx: &mut LoopContext, observable: &mut RoundState) {
     let mut all_text = String::new();
     let mut all_content_blocks: Vec<ContentBlock> = Vec::new();
     let mut collected_usage: Option<TokenUsage> = None;
@@ -103,16 +175,16 @@ pub(crate) async fn stream_loop(
     let mut cumulative_tokens: usize = 0;
 
     // === 工具执行循环 ===
-    for tool_round in 0..budget.max_tool_rounds {
-        if cancel.is_cancelled() {
-            return cleanup(&app, &pool, &conv_id);
+    for tool_round in 0..ctx.budget.max_tool_rounds {
+        if ctx.cancel.is_cancelled() {
+            return cleanup(&ctx.app, &ctx.pool, &ctx.conv_id);
         }
 
         let round_timer = RoundTimer::new(tool_round);
         observable.round = tool_round + 1;
 
-        let tools: Option<Vec<crate::infra::protocol::ToolDef>> = if tools_enabled {
-            Some(tool_registry.list_tool_defs().await)
+        let tools: Option<Vec<crate::infra::protocol::ToolDef>> = if ctx.tools_enabled {
+            Some(ctx.tool_registry.list_tool_defs().await)
         } else {
             None
         };
@@ -131,8 +203,8 @@ pub(crate) async fn stream_loop(
             if !retry_state.can_retry() {
                 break;
             }
-            if cancel.is_cancelled() {
-                return cleanup(&app, &pool, &conv_id);
+            if ctx.cancel.is_cancelled() {
+                return cleanup(&ctx.app, &ctx.pool, &ctx.conv_id);
             }
 
             let ws = retry_state.wait_secs();
@@ -142,37 +214,38 @@ pub(crate) async fn stream_loop(
                     "重试 LLM 请求: tool_round={} attempt={}/{}，等待 {}s",
                     tool_round,
                     retry_state.attempt_num() + 1,
-                    budget.max_attempts,
+                    ctx.budget.max_attempts,
                     ws,
                 );
                 observable.retry_count += 1;
-                let _ = app.emit(
+                let _ = ctx.app.emit(
                     "chat:retrying",
                     ChatRetryingPayload {
-                        conversation_id: conv_id.clone(),
-                        message_id: asst_msg_id.clone(),
+                        conversation_id: ctx.conv_id.clone(),
+                        message_id: ctx.asst_msg_id.clone(),
                         attempt: retry_state.attempt_num() + 1,
-                        max_attempts: budget.max_attempts,
+                        max_attempts: ctx.budget.max_attempts,
                         reason: last_retry_reason.clone(),
                     },
                 );
                 tokio::time::sleep(Duration::from_secs(ws)).await;
-                if cancel.is_cancelled() {
-                    return cleanup(&app, &pool, &conv_id);
+                if ctx.cancel.is_cancelled() {
+                    return cleanup(&ctx.app, &ctx.pool, &ctx.conv_id);
                 }
             }
 
-            let retry_ctx = RetryContext::with_round_text(messages.clone(), round_text.clone());
+            let retry_ctx = RetryContext::with_round_text(ctx.messages.clone(), round_text.clone());
             let retry_messages = retry_state.prepare_messages(&retry_ctx);
 
-            let stream_result = provider
+            let stream_result = ctx
+                .provider
                 .stream_chat(
-                    &api_key,
+                    &ctx.api_key,
                     retry_messages,
                     tools.clone(),
-                    temperature,
-                    max_tokens,
-                    cancel.clone(),
+                    ctx.temperature,
+                    ctx.max_tokens,
+                    ctx.cancel.clone(),
                 )
                 .await;
 
@@ -180,11 +253,11 @@ pub(crate) async fn stream_loop(
                 Ok(mut stream) => {
                     match consume_stream(
                         &mut stream,
-                        &app,
-                        &cancel,
+                        &ctx.app,
+                        &ctx.cancel,
                         observable,
-                        &conv_id,
-                        &asst_msg_id,
+                        &ctx.conv_id,
+                        &ctx.asst_msg_id,
                     )
                     .await
                     {
@@ -207,27 +280,30 @@ pub(crate) async fn stream_loop(
                                     "流中可重试错误 (round={} attempt={}/{}): {}",
                                     tool_round,
                                     retry_state.attempt_num() + 1,
-                                    budget.max_attempts,
+                                    ctx.budget.max_attempts,
                                     e
                                 );
                                 retry_state = retry_state
-                                    .next_retry(budget.max_attempts, 1u64 << retry_state.attempt_num());
+                                    .next_retry(ctx.budget.max_attempts, 1u64 << retry_state.attempt_num());
                                 continue;
                             } else {
                                 let err_msg = e.to_string();
-                                let _ = app.emit(
+                                let _ = ctx.app.emit(
                                     "chat:error",
                                     ChatErrorPayload {
-                                        conversation_id: conv_id.clone(),
-                                        message_id: asst_msg_id.clone(),
+                                        conversation_id: ctx.conv_id.clone(),
+                                        message_id: ctx.asst_msg_id.clone(),
                                         kind: error_kind(&e),
                                         message: friendly_error(&err_msg),
                                     },
                                 );
-                                let _ =
-                                    repo::message::update_error(&pool, &asst_msg_id, &err_msg)
-                                        .await;
-                                return cleanup(&app, &pool, &conv_id);
+                                let _ = repo::message::update_error(
+                                    &ctx.pool,
+                                    &ctx.asst_msg_id,
+                                    &err_msg,
+                                )
+                                .await;
+                                return cleanup(&ctx.app, &ctx.pool, &ctx.conv_id);
                             }
                         }
                     }
@@ -240,45 +316,50 @@ pub(crate) async fn stream_loop(
                             "请求失败可重试 (round={} attempt={}/{}): {}",
                             tool_round,
                             retry_state.attempt_num() + 1,
-                            budget.max_attempts,
+                            ctx.budget.max_attempts,
                             e
                         );
                         retry_state = retry_state
-                            .next_retry(budget.max_attempts, 1u64 << retry_state.attempt_num());
+                            .next_retry(ctx.budget.max_attempts, 1u64 << retry_state.attempt_num());
                     } else {
                         let err_msg = e.to_string();
-                        let _ = app.emit(
+                        let _ = ctx.app.emit(
                             "chat:error",
                             ChatErrorPayload {
-                                conversation_id: conv_id.clone(),
-                                message_id: asst_msg_id.clone(),
+                                conversation_id: ctx.conv_id.clone(),
+                                message_id: ctx.asst_msg_id.clone(),
                                 kind: error_kind(&e),
                                 message: friendly_error(&err_msg),
                             },
                         );
-                        let _ = repo::message::update_error(&pool, &asst_msg_id, &err_msg).await;
-                        return cleanup(&app, &pool, &conv_id);
+                        let _ = repo::message::update_error(&ctx.pool, &ctx.asst_msg_id, &err_msg)
+                            .await;
+                        return cleanup(&ctx.app, &ctx.pool, &ctx.conv_id);
                     }
                 }
             }
         }
 
         if !round_success {
-            let err_msg = format!("连接重试已耗尽（共 {} 次），已收到部分内容", budget.max_attempts);
+            let err_msg = format!(
+                "连接重试已耗尽（共 {} 次），已收到部分内容",
+                ctx.budget.max_attempts
+            );
             if !round_text.is_empty() {
-                let _ = repo::message::update_content(&pool, &asst_msg_id, &round_text).await;
+                let _ = repo::message::update_content(&ctx.pool, &ctx.asst_msg_id, &round_text)
+                    .await;
             }
-            let _ = repo::message::update_error(&pool, &asst_msg_id, &err_msg).await;
-            let _ = app.emit(
+            let _ = repo::message::update_error(&ctx.pool, &ctx.asst_msg_id, &err_msg).await;
+            let _ = ctx.app.emit(
                 "chat:error",
                 ChatErrorPayload {
-                    conversation_id: conv_id.clone(),
-                    message_id: asst_msg_id.clone(),
+                    conversation_id: ctx.conv_id.clone(),
+                    message_id: ctx.asst_msg_id.clone(),
                     kind: "stream".into(),
                     message: friendly_error(&err_msg),
                 },
             );
-            return cleanup(&app, &pool, &conv_id);
+            return cleanup(&ctx.app, &ctx.pool, &ctx.conv_id);
         }
 
         observable.elapsed_ms = round_timer.elapsed_ms();
@@ -292,22 +373,24 @@ pub(crate) async fn stream_loop(
         // W4.2: Token 预算终止检查
         // 在工具调用继续下一轮之前检查：如果累计 token 超过预算，
         // 优雅终止循环并设置 finish_reason = "budget_exceeded"
-        if budget.max_total_tokens != usize::MAX && cumulative_tokens > budget.max_total_tokens {
+        if ctx.budget.max_total_tokens != usize::MAX
+            && cumulative_tokens > ctx.budget.max_total_tokens
+        {
             tracing::warn!(
                 target: "ice_paw.chat",
                 "Token 预算已超限: cumulative={} > budget={}",
                 cumulative_tokens,
-                budget.max_total_tokens,
+                ctx.budget.max_total_tokens,
             );
             let content_for_db = all_text.clone();
             if !all_text.is_empty() {
                 all_content_blocks.push(ContentBlock::Text { text: all_text });
             }
             return cleanup_after_success_with_blocks(
-                &app,
-                &pool,
-                &conv_id,
-                &asst_msg_id,
+                &ctx.app,
+                &ctx.pool,
+                &ctx.conv_id,
+                &ctx.asst_msg_id,
                 &content_for_db,
                 &all_content_blocks,
                 "budget_exceeded",
@@ -334,10 +417,10 @@ pub(crate) async fn stream_loop(
                 all_content_blocks.push(ContentBlock::Text { text: all_text });
             }
             return cleanup_after_success_with_blocks(
-                &app,
-                &pool,
-                &conv_id,
-                &asst_msg_id,
+                &ctx.app,
+                &ctx.pool,
+                &ctx.conv_id,
+                &ctx.asst_msg_id,
                 &content_for_db,
                 &all_content_blocks,
                 &round_finish_reason,
@@ -352,13 +435,18 @@ pub(crate) async fn stream_loop(
             completed_calls.len(),
         );
 
-        let (tool_use_blocks, tool_result_blocks) =
-            execute_tool_round(&app, &tool_registry, &completed_calls, &conv_id, &asst_msg_id)
-                .await
-                .unwrap_or_else(|e| {
-                    tracing::warn!(target: "ice_paw.chat", "工具执行失败: {}", e);
-                    (Vec::new(), Vec::new())
-                });
+        let (tool_use_blocks, tool_result_blocks) = execute_tool_round(
+            &ctx.app,
+            &ctx.tool_registry,
+            &completed_calls,
+            &ctx.conv_id,
+            &ctx.asst_msg_id,
+        )
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(target: "ice_paw.chat", "工具执行失败: {}", e);
+            (Vec::new(), Vec::new())
+        });
 
         all_content_blocks.extend(tool_use_blocks.clone());
         all_content_blocks.extend(tool_result_blocks.clone());
@@ -368,13 +456,13 @@ pub(crate) async fn stream_loop(
             asst_blocks.push(ContentBlock::Text { text: round_text });
         }
         asst_blocks.extend(tool_use_blocks);
-        messages.push(ChatMessage {
+        ctx.messages.push(ChatMessage {
             role: "assistant".into(),
             content: asst_blocks,
         });
 
         for block in &tool_result_blocks {
-            messages.push(ChatMessage {
+            ctx.messages.push(ChatMessage {
                 role: "tool".into(),
                 content: vec![block.clone()],
             });
@@ -392,10 +480,10 @@ pub(crate) async fn stream_loop(
         all_content_blocks.push(ContentBlock::Text { text: all_text });
     }
     cleanup_after_success_with_blocks(
-        &app,
-        &pool,
-        &conv_id,
-        &asst_msg_id,
+        &ctx.app,
+        &ctx.pool,
+        &ctx.conv_id,
+        &ctx.asst_msg_id,
         &content_for_db,
         &all_content_blocks,
         "tool_use",
