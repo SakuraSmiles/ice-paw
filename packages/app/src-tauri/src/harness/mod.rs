@@ -23,4 +23,5 @@ pub mod budget;
 pub mod chat_state;
 pub mod observable;
 pub mod provider;
+pub mod retry;
 pub mod tool_registry;
