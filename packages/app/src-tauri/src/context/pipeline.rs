@@ -19,7 +19,7 @@ use async_trait::async_trait;
 use sqlx::SqlitePool;
 use tracing::debug;
 
-use crate::context::history::load_history;
+use crate::context::history::{load_history_with_window, resolve_window};
 use crate::context::os_context::build_os_context;
 use crate::context::system_prompt::build_system_prompt;
 use crate::context::template::render_template;
@@ -343,10 +343,23 @@ impl PipelineStage for SystemPromptStage {
 
 /// Stage 4：历史消息行 → `ChatMessage` 转换。
 ///
-/// 输入：`ctx.history`（`Vec<MessageRow>`）
+/// 输入：
+/// - `ctx.history`（`Vec<MessageRow>`，按时间正序）
+/// - `ctx.agent.max_history_messages`（`Option<i32>`，A3-2 字段）
+///
 /// 输出：`ctx.history_messages`（`Vec<ChatMessage>`，纯文本）
 ///
-/// 跳过 `tool` 角色（与原 `load_history` 行为一致）。
+/// A3-2 行为变更：
+/// - 根据 `agent.max_history_messages` 解析出有效窗口
+///   （`None` / 非正值 → 系统默认 [`crate::context::history::DEFAULT_HISTORY_WINDOW`]）
+/// - 仅保留**最近** N 条消息注入 LLM 上下文
+/// - 跳过 `tool` 角色（与原 `load_history` 行为一致）
+///
+/// 为什么在 Stage 而非 DB 加载侧裁剪：
+/// - 后续 A3-4 摘要阶段需要读完整历史 → 调用方在 chat_cmd.rs
+///   一次性加载充足数据即可，避免双重查询
+/// - 窗口配置集中在 Stage 内，未来 P3 「按 token 预算动态截断」
+///   可以在同一位置扩展
 pub struct HistoryStage;
 
 #[async_trait]
@@ -356,7 +369,8 @@ impl PipelineStage for HistoryStage {
     }
 
     async fn execute(&self, ctx: &mut PipelineContext) -> AppResult<()> {
-        ctx.history_messages = load_history(&ctx.history);
+        let window = resolve_window(ctx.agent.max_history_messages);
+        ctx.history_messages = load_history_with_window(&ctx.history, Some(window));
         Ok(())
     }
 }
@@ -470,6 +484,7 @@ mod tests {
             extra_params: "{}".into(),
             sort_order: 0,
             cache_prompt: 0,
+            max_history_messages: None, // A3-2: None → 使用系统默认
             created_at: "2026-01-01T00:00:00Z".into(),
             updated_at: "2026-01-01T00:00:00Z".into(),
         }
@@ -669,6 +684,134 @@ mod tests {
         let mut ctx = make_ctx(pool, make_agent(), None, vec![], vec![], false);
         HistoryStage.execute(&mut ctx).await.unwrap();
         assert!(ctx.history_messages.is_empty());
+    }
+
+    // ---- A3-2: HistoryStage 接入 Agent.max_history_messages ----
+
+    /// 构造指定窗口大小的 Agent（仅用于测试）
+    fn make_agent_with_window(window: Option<i32>) -> AgentRow {
+        let mut a = make_agent();
+        a.max_history_messages = window;
+        a
+    }
+
+    /// A3-2 测试夹具：构造 N 条「交替 user/assistant」历史，
+    /// role 都合法（不会因 tool 角色被过滤）
+    fn make_history_n(n: usize) -> Vec<MessageRow> {
+        (0..n)
+            .map(|i| {
+                let role = if i % 2 == 0 { "user" } else { "assistant" };
+                make_msg_row(role, &format!("msg-{i}"))
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn history_stage_uses_agent_window_when_set() {
+        // Agent 配置 N=3，仅保留最近 3 条；超出部分被裁剪
+        let pool = fresh_pool().await;
+        let history = make_history_n(5);
+        let mut ctx = make_ctx(
+            pool,
+            make_agent_with_window(Some(3)),
+            None,
+            history,
+            vec![],
+            false,
+        );
+
+        HistoryStage.execute(&mut ctx).await.unwrap();
+        assert_eq!(ctx.history_messages.len(), 3);
+        assert_eq!(ctx.history_messages[0].content_text(), "msg-2");
+        assert_eq!(ctx.history_messages[1].content_text(), "msg-3");
+        assert_eq!(ctx.history_messages[2].content_text(), "msg-4");
+    }
+
+    #[tokio::test]
+    async fn history_stage_falls_back_to_default_when_agent_window_none() {
+        // Agent 配置 None → 系统默认 DEFAULT_HISTORY_WINDOW（20）
+        // 输入 25 条 → 期望保留最后 20 条
+        let pool = fresh_pool().await;
+        let history = make_history_n(25);
+        let mut ctx = make_ctx(
+            pool,
+            make_agent_with_window(None),
+            None,
+            history,
+            vec![],
+            false,
+        );
+
+        HistoryStage.execute(&mut ctx).await.unwrap();
+        // 25 - 20 = 5 条被裁掉，剩 20 条 msg-5..msg-24
+        assert_eq!(ctx.history_messages.len(), 20);
+        assert_eq!(ctx.history_messages[0].content_text(), "msg-5");
+        assert_eq!(ctx.history_messages[19].content_text(), "msg-24");
+    }
+
+    #[tokio::test]
+    async fn history_stage_falls_back_to_default_when_agent_window_invalid() {
+        // 非法值（0/负数）→ 系统默认
+        let pool = fresh_pool().await;
+        let history = make_history_n(25);
+
+        for bad_window in [Some(0), Some(-1)] {
+            let mut ctx = make_ctx(
+                pool.clone(),
+                make_agent_with_window(bad_window),
+                None,
+                history.clone(),
+                vec![],
+                false,
+            );
+            HistoryStage.execute(&mut ctx).await.unwrap();
+            assert_eq!(
+                ctx.history_messages.len(),
+                20,
+                "非法窗口 {bad_window:?} 应回退默认 20"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn history_stage_window_larger_than_input_keeps_all() {
+        // window > history.len() → 全部保留（不补齐）
+        let pool = fresh_pool().await;
+        let history = make_history_n(3);
+        let mut ctx = make_ctx(
+            pool,
+            make_agent_with_window(Some(100)),
+            None,
+            history,
+            vec![],
+            false,
+        );
+
+        HistoryStage.execute(&mut ctx).await.unwrap();
+        assert_eq!(ctx.history_messages.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn history_stage_window_one_keeps_only_last() {
+        // 极端场景：window=1 → 仅保留最新一条
+        let pool = fresh_pool().await;
+        let history = vec![
+            make_msg_row("user", "old"),
+            make_msg_row("assistant", "middle"),
+            make_msg_row("user", "newest"),
+        ];
+        let mut ctx = make_ctx(
+            pool,
+            make_agent_with_window(Some(1)),
+            None,
+            history,
+            vec![],
+            false,
+        );
+
+        HistoryStage.execute(&mut ctx).await.unwrap();
+        assert_eq!(ctx.history_messages.len(), 1);
+        assert_eq!(ctx.history_messages[0].content_text(), "newest");
     }
 
     // ---- OsContextStage ----

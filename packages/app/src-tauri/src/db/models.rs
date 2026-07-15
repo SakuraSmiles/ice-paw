@@ -26,6 +26,9 @@ pub struct AgentRow {
     pub sort_order: i32,
     /// P2-3: 是否启用 Anthropic prompt caching（OpenAI 自动缓存无需此字段）
     pub cache_prompt: i32,
+    /// A3-2: 历史消息窗口上限（NULL = 使用系统默认）。
+    /// 不同 Agent 可拥有不同上下文长度（8K vs 200K）。
+    pub max_history_messages: Option<i32>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -48,6 +51,10 @@ pub struct Agent {
     /// P2-3: 是否启用 prompt caching（Anthropic 显式注入 cache_control 断点）
     #[serde(default)]
     pub cache_prompt: bool,
+    /// A3-2: 历史消息窗口上限（None 表示使用系统默认值）。
+    /// 前端在「高级设置」中可显式覆盖；不传则保持 NULL。
+    #[serde(default)]
+    pub max_history_messages: Option<i32>,
     pub created_at: String,
     pub updated_at: String,
     /// 是否已配置 API Key（前端业务提示用），对应 stronghold 中是否存在
@@ -73,6 +80,8 @@ impl From<AgentRow> for Agent {
             sort_order: row.sort_order,
             // P2-3: i32 0/1 → bool（DB 默认 1，零值兜底为 false）
             cache_prompt: row.cache_prompt != 0,
+            // A3-2: 历史消息窗口（NULL 由 Option 直接透传）
+            max_history_messages: row.max_history_messages,
             created_at: row.created_at,
             updated_at: row.updated_at,
             has_api_key,
@@ -102,6 +111,10 @@ pub struct NewAgent {
     /// P2-3: 是否启用 prompt caching（默认 true）
     #[serde(default = "default_cache_prompt")]
     pub cache_prompt: bool,
+    /// A3-2: 历史消息窗口上限（None = 使用系统默认）。
+    /// 旧调用方无需关心（`#[serde(default)]` 兜底为 None）。
+    #[serde(default)]
+    pub max_history_messages: Option<i32>,
 }
 
 fn default_temperature() -> f64 { 0.7 }
@@ -129,6 +142,9 @@ pub struct AgentUpdate {
     pub sort_order: Option<i32>,
     /// P2-3: 是否启用 prompt caching（None 表示不改）
     pub cache_prompt: Option<bool>,
+    /// A3-2: 历史消息窗口上限。
+    /// 双层 Option：外层 Some 表示调用方传了该字段，内层 None 表示清空（恢复为系统默认）。
+    pub max_history_messages: Option<Option<i32>>,
 }
 
 /// 轮换 API Key 入参
