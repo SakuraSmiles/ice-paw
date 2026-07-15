@@ -11,6 +11,7 @@ use crate::infra::protocol::ChatMessage;
 ///
 /// 控制从数据库加载多少条历史消息注入到 LLM 上下文。
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct HistoryWindowConfig {
     /// 最近的 N 条消息（默认 20）
     pub recent_n: usize,
