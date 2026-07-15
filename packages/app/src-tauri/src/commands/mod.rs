@@ -12,5 +12,4 @@ pub mod chat_error;
 pub mod chat_loop;
 pub mod conversation_cmd;
 pub mod message_cmd;
-pub mod seed_cmd;
 pub mod template_cmd;
