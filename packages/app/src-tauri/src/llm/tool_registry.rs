@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
 use crate::error::{AppError, AppResult};
-use crate::llm::ToolDef;
+use crate::infra::protocol::ToolDef;
 
 // =========================================================================
 // Tool Trait

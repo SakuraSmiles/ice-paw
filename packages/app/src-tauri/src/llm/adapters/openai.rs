@@ -21,8 +21,8 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::error::{AppError, AppResult};
+use crate::infra::protocol::{ChatDelta, ChatMessage, ContentBlock, LlmProvider, TokenUsage, ToolDef};
 use crate::llm::cancel::CancellationToken;
-use crate::llm::{ChatDelta, ChatMessage, ContentBlock, LlmProvider, TokenUsage, ToolDef};
 
 // =========================================================================
 // Adapter 结构

@@ -29,9 +29,7 @@ use sqlx::SqlitePool;
 use crate::db::models::{AgentRow, MessageRow};
 use crate::db::repo;
 use crate::error::AppResult;
-use crate::llm::{ChatMessage, ContentBlock};
-
-use super::chat_protocol::TemplateInput;
+use crate::infra::protocol::{ChatMessage, ContentBlock, TemplateInput};
 
 // =========================================================================
 // 模板渲染（P2-4）

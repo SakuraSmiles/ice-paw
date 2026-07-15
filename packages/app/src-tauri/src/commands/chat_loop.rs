@@ -8,7 +8,7 @@
 //! - 入口：`chat_cmd::send_message` 通过 `super::chat_loop::stream_loop(...)` 调用
 //! - 错误映射：依赖 `super::chat_error::error_kind` / `friendly_error`
 //! - 收尾：依赖 `super::chat_cleanup::cleanup` / `cleanup_after_success_with_blocks`
-//! - 事件 Payload：来自 `super::chat_protocol::*`
+//! - 事件 Payload：来自 `crate::infra::protocol::*`
 //!
 //! 后续可继续拆分（本步骤不做）：
 //! - `consume_stream()` — 拆出流式消费 + Delta 路由逻辑（~120 行）
@@ -21,18 +21,16 @@ use tauri::{AppHandle, Emitter};
 use sqlx::SqlitePool;
 
 use crate::db::repo;
-use crate::llm::{
-    self, ChatDelta, ChatMessage, CancellationToken, ContentBlock,
-    LlmProvider, ToolRegistry,
+use crate::infra::protocol::{
+    ChatDelta, ChatMessage, ChatChunkPayload, ChatErrorPayload, ChatRetryingPayload,
+    ChatThinkingPayload, ChatToolCallDeltaPayload, ChatToolCallEndPayload,
+    ChatToolCallStartPayload, ChatToolResultPayload, ContentBlock,
+    LlmProvider, TokenUsage,
 };
+use crate::llm::{CancellationToken, ToolRegistry};
 
 use super::chat_cleanup::{cleanup, cleanup_after_success_with_blocks};
 use super::chat_error::{error_kind, friendly_error};
-use super::chat_protocol::{
-    ChatChunkPayload, ChatErrorPayload, ChatRetryingPayload,
-    ChatThinkingPayload, ChatToolCallDeltaPayload, ChatToolCallEndPayload,
-    ChatToolCallStartPayload, ChatToolResultPayload,
-};
 
 /// 流式生成内部协程 — 支持指数退避重试 + 工具执行循环
 ///
@@ -93,7 +91,7 @@ pub(crate) async fn stream_loop(
     // 累积所有轮次的 content_blocks（用于 DB 回写）
     let mut all_content_blocks: Vec<ContentBlock> = Vec::new();
     // P2-3: 累积 token usage（最后一个 Usage delta 覆盖前面的）
-    let mut collected_usage: Option<llm::TokenUsage> = None;
+    let mut collected_usage: Option<TokenUsage> = None;
 
     // === 工具执行循环 ===
     for tool_round in 0..MAX_TOOL_ROUNDS {
@@ -104,7 +102,7 @@ pub(crate) async fn stream_loop(
         // 准备本轮的 tools 定义
         // 所有轮次都传 tools：messages 中含 assistant 的 tool_calls 时，
         // 部分 API（GLM 等）要求请求必须带 tools 定义，否则返回 400
-        let tools: Option<Vec<crate::llm::ToolDef>> = if tools_enabled {
+        let tools: Option<Vec<crate::infra::protocol::ToolDef>> = if tools_enabled {
             Some(tool_registry.list_tool_defs().await)
         } else {
             None
