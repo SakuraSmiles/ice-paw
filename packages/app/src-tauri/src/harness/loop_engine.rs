@@ -1,4 +1,4 @@
-//! L2 Loop Engine — 主循环调度（W3.3）
+//! L2 Loop Engine — 主循环调度（W3.3 + W4.1）
 //!
 //! 职责：编排工具执行循环（tool_round loop）+ 重试循环（retry loop），
 //! 调用 `stream_consumer::consume_stream` 消费 LLM 流，
@@ -9,6 +9,10 @@
 //! - 流式消费 → `stream_consumer::consume_stream`（emit chat:chunk/thinking/tool-call-*）
 //! - 工具执行 → `tool_executor::execute_tool_round`（emit chat:tool-result）
 //! - 主循环骨架 → 本模块（emit chat:retrying / chat:error + DB 回写）
+//!
+//! W4.1: `stream_loop` 签名增加 `budget: LoopBudget` 参数；原硬编码常量
+//! `MAX_TOOL_ROUNDS` / `MAX_ATTEMPTS` 改为读取 budget 字段。
+//! W4.2: budget.max_total_tokens 启用 Token 预算终止逻辑。
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -25,7 +29,7 @@ use crate::error::AppError;
 use crate::infra::protocol::{
     ChatErrorPayload, ChatMessage, ChatRetryingPayload, ContentBlock, LlmProvider, TokenUsage,
 };
-use crate::harness::budget::{MAX_ATTEMPTS, MAX_TOOL_ROUNDS};
+use crate::harness::budget::LoopBudget;
 use crate::harness::chat_state::CancellationToken;
 use crate::harness::observable::{RoundState, RoundTimer};
 use crate::harness::retry::{RetryContext, RetryState};
@@ -86,6 +90,7 @@ pub(crate) async fn stream_loop(
     asst_msg_id: String,
     tool_registry: ToolRegistry,
     tools_enabled: bool,
+    budget: LoopBudget,
     observable: &mut RoundState,
 ) {
 
@@ -95,7 +100,7 @@ pub(crate) async fn stream_loop(
     let mut collected_usage: Option<TokenUsage> = None;
 
     // === 工具执行循环 ===
-    for tool_round in 0..MAX_TOOL_ROUNDS {
+    for tool_round in 0..budget.max_tool_rounds {
         if cancel.is_cancelled() {
             return cleanup(&app, &pool, &conv_id);
         }
@@ -134,7 +139,7 @@ pub(crate) async fn stream_loop(
                     "重试 LLM 请求: tool_round={} attempt={}/{}，等待 {}s",
                     tool_round,
                     retry_state.attempt_num() + 1,
-                    MAX_ATTEMPTS,
+                    budget.max_attempts,
                     ws,
                 );
                 observable.retry_count += 1;
@@ -144,7 +149,7 @@ pub(crate) async fn stream_loop(
                         conversation_id: conv_id.clone(),
                         message_id: asst_msg_id.clone(),
                         attempt: retry_state.attempt_num() + 1,
-                        max_attempts: MAX_ATTEMPTS,
+                        max_attempts: budget.max_attempts,
                         reason: last_retry_reason.clone(),
                     },
                 );
@@ -199,11 +204,11 @@ pub(crate) async fn stream_loop(
                                     "流中可重试错误 (round={} attempt={}/{}): {}",
                                     tool_round,
                                     retry_state.attempt_num() + 1,
-                                    MAX_ATTEMPTS,
+                                    budget.max_attempts,
                                     e
                                 );
                                 retry_state = retry_state
-                                    .next_retry(MAX_ATTEMPTS, 1u64 << retry_state.attempt_num());
+                                    .next_retry(budget.max_attempts, 1u64 << retry_state.attempt_num());
                                 continue;
                             } else {
                                 let err_msg = e.to_string();
@@ -232,11 +237,11 @@ pub(crate) async fn stream_loop(
                             "请求失败可重试 (round={} attempt={}/{}): {}",
                             tool_round,
                             retry_state.attempt_num() + 1,
-                            MAX_ATTEMPTS,
+                            budget.max_attempts,
                             e
                         );
                         retry_state = retry_state
-                            .next_retry(MAX_ATTEMPTS, 1u64 << retry_state.attempt_num());
+                            .next_retry(budget.max_attempts, 1u64 << retry_state.attempt_num());
                     } else {
                         let err_msg = e.to_string();
                         let _ = app.emit(
@@ -256,7 +261,7 @@ pub(crate) async fn stream_loop(
         }
 
         if !round_success {
-            let err_msg = format!("连接重试已耗尽（共 {} 次），已收到部分内容", MAX_ATTEMPTS);
+            let err_msg = format!("连接重试已耗尽（共 {} 次），已收到部分内容", budget.max_attempts);
             if !round_text.is_empty() {
                 let _ = repo::message::update_content(&pool, &asst_msg_id, &round_text).await;
             }

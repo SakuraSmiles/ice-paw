@@ -18,6 +18,7 @@ use crate::error::{AppError, AppResult};
 use crate::infra::protocol::{
     ChatMessage, ChatRoundStatePayload, ChatStartPayload, ContentBlock, LlmProvider, SendMessageInput, validate_images,
 };
+use crate::harness::budget::LoopBudget;
 use crate::harness::chat_state::{CancellationToken, ChatState};
 use crate::harness::observable::RoundState;
 use crate::harness::provider;
@@ -142,12 +143,15 @@ fn spawn_stream_loop(
         };
         // W2.4: maintain observable state across the stream loop
         let mut observable = RoundState::default();
+        // W4.1: 传入 LoopBudget（当前用 default，等价于原硬编码常量）
+        let budget = LoopBudget::default();
         let round_conv_id = conv_id.clone();
         let emit_app = app.clone();
         super::chat_loop::stream_loop(
             app, pool, provider, api_key, messages,
             temperature, max_tokens, cancel_token,
             round_conv_id, asst_msg_id, tool_registry, tools_enabled,
+            budget,
             &mut observable,
         ).await;
         // W2.4: emit final round-state after stream_loop completes
