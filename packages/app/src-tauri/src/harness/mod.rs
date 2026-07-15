@@ -20,5 +20,6 @@
 //! 详见 Sprint 计划 W2–W5。
 
 pub mod chat_state;
+pub mod observable;
 pub mod provider;
 pub mod tool_registry;

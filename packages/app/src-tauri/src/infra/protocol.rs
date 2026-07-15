@@ -391,6 +391,18 @@ pub struct ChatErrorPayload {
     pub message: String,
 }
 
+/// `chat:round-state` 事件 payload — W2.4 可观测性
+#[derive(Clone, Serialize, Debug)]
+pub struct ChatRoundStatePayload {
+    pub conversation_id: String,
+    pub round: u32,
+    pub elapsed_ms: u64,
+    pub tokens_prompt: u32,
+    pub tokens_completion: u32,
+    pub cached_tokens: u32,
+    pub retry_count: u32,
+}
+
 /// `chat:retrying` 事件 payload — 通知前端正在重试
 #[derive(Clone, Serialize)]
 pub struct ChatRetryingPayload {
