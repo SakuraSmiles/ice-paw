@@ -1,20 +1,19 @@
-//! L2 Loop Budget — 三道熔断配置（W3.1）
+//! L2 Loop Budget — 三道熔断配置（W3.1 + W4.1 + W4.2）
 //!
 //! `LoopBudget` 把原本散落在 `commands/chat_loop.rs` 中的硬编码常量
 //! （`MAX_TOOL_ROUNDS`、`MAX_ATTEMPTS` 等）集中起来，便于后续：
-//! - 按 agent 配置覆盖（未来读取 agent.json）
-//! - 运行时调整（用于测试 / 调试）
-//! `stream_loop` 签名参数化（W4.1 已完成）并启用 Token 预算终止（W4.2）。
+//!   - 按 agent 配置覆盖（未来读取 agent.json）
+//!   - 运行时调整（用于测试 / 调试）
+//!   - 单元测试中独立构造边界值
+//!
+//! W4.1: `stream_loop` 签名参数化已完成。
+//! W4.2: `max_total_tokens` Token 预算终止已启用（默认 128_000）。
 //!
 //! 字段语义：
-//! - `max_tool_rounds`：工具调用最大轮数（防止无限循环）
-//! - `max_attempts`：每轮内最大重试次数（含首次尝试）
-//! - `stuck_threshold`：卡住检测阈值（P2 启用，当前未使用）
-//! - `max_total_tokens`：Token 预算上限（W4.2 启用，默认 128_000）
-//! - `max_tool_rounds`：工具调用最大轮数（防止无限循环）
-//! - `max_attempts`：每轮内最大重试次数（含首次尝试）
-//! - `stuck_threshold`：卡住检测阈值（P2 启用，当前未使用）
-//! - `max_total_tokens`：Token 预算上限（W4.3 启用，默认无限）
+//!   - `max_tool_rounds`：工具调用最大轮数（防止无限循环）
+//!   - `max_attempts`：每轮内最大重试次数（含首次尝试）
+//!   - `stuck_threshold`：卡住检测阈值（P2 启用，当前未使用）
+//!   - `max_total_tokens`：Token 预算上限（W4.2 启用，默认 128_000）
 
 // ============================================================================
 // 与 `commands/chat_loop.rs` 中原硬编码常量对齐的 pub const（短期兼容）

@@ -3,7 +3,7 @@
 //! - `send_message`：入参校验 → 取 agent/api_key → 拼装上下文 → 写库占位 → spawn stream_loop
 //! - `stop_generation`：触发 ChatState 上的 CancellationToken
 //!
-//! 业务分布：protocol → infra::protocol | 上下文 → chat_context.rs | 调度 → chat_loop.rs
+//! 业务分布：protocol → infra::protocol | 上下文 → chat_context.rs | 调度 → harness::loop_engine
 //!           错误 → chat_error.rs | 收尾 → chat_cleanup.rs
 
 use sqlx::SqlitePool;
@@ -128,7 +128,7 @@ pub async fn stop_generation(
     Ok(())
 }
 
-/// spawn LLM 流式协程，把编排结果交给 `chat_loop::stream_loop`。
+/// spawn LLM 流式协程，把编排结果交给 `harness::loop_engine::stream_loop`。
 #[allow(clippy::too_many_arguments)]
 fn spawn_stream_loop(
     app: AppHandle, pool: SqlitePool, provider: Arc<dyn LlmProvider>,
@@ -147,7 +147,7 @@ fn spawn_stream_loop(
         let budget = LoopBudget::default();
         let round_conv_id = conv_id.clone();
         let emit_app = app.clone();
-        super::chat_loop::stream_loop(
+        crate::harness::loop_engine::stream_loop(
             app, pool, provider, api_key, messages,
             temperature, max_tokens, cancel_token,
             round_conv_id, asst_msg_id, tool_registry, tools_enabled,
