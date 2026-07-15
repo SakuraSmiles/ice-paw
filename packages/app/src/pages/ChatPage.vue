@@ -19,17 +19,20 @@ import { useAgentsStore } from "../stores/agents";
 import { useConversationsStore } from "../stores/conversations";
 import { useChatStore } from "../stores/chat";
 import { useToast } from "../composables/useToast";
+import { useToolAuth } from "../composables/useToolAuth";
 import ChatHeader from "../components/chat/ChatHeader.vue";
 import MessageList from "../components/chat/MessageList.vue";
 import ChatInput from "../components/chat/ChatInput.vue";
 import WelcomeInput from "../components/chat/WelcomeInput.vue";
 import InlineAgentCreate from "../components/agent/InlineAgentCreate.vue";
 import ChatStatusBar from "../components/chat/ChatStatusBar.vue";
+import ToolAuthDialog from "../components/chat/ToolAuthDialog.vue";
 
 const agentsStore = useAgentsStore();
 const conversationsStore = useConversationsStore();
 const chatStore = useChatStore();
 const toast = useToast();
+const toolAuth = useToolAuth();
 
 // ============================================================================
 // 派生状态
@@ -88,6 +91,8 @@ async function scrollMessageListToBottom(): Promise<void> {
 onMounted(async () => {
   // 注册 4 个 chat:* 事件监听
   await chatStore.setupListeners();
+  // A2-3: 注册工具授权请求监听
+  await toolAuth.setupAuthListener();
 
   // 若已有当前会话，立刻拉历史（处理冷启动）并立即滚到底部
   if (currentConvId.value) {
@@ -103,6 +108,8 @@ onMounted(async () => {
 onUnmounted(() => {
   // 注销监听，避免内存泄漏
   chatStore.teardownListeners();
+  // A2-3: 注销授权监听 + 清空未响应的请求
+  toolAuth.teardownAuthListener();
 });
 
 // ============================================================================
@@ -265,6 +272,9 @@ async function onLoadOlder(): Promise<void> {
         @stop="onStop"
       />
     </template>
+
+    <!-- A2-3: 工具授权确认弹窗（全局唯一实例） -->
+    <ToolAuthDialog />
   </div>
 </template>
 
