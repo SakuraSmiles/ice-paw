@@ -22,7 +22,7 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use crate::error::{AppError, AppResult};
 use crate::infra::protocol::{ChatDelta, ChatMessage, ContentBlock, LlmProvider, TokenUsage, ToolDef};
-use crate::llm::cancel::CancellationToken;
+use crate::harness::chat_state::CancellationToken;
 
 // =========================================================================
 // Adapter 结构

@@ -227,7 +227,7 @@ pub trait LlmProvider: Send + Sync {
         tools: Option<Vec<ToolDef>>,
         temperature: f64,
         max_tokens: i32,
-        cancel: crate::llm::cancel::CancellationToken,
+        cancel: crate::harness::chat_state::CancellationToken,
     ) -> AppResult<Pin<Box<dyn Stream<Item = AppResult<ChatDelta>> + Send>>>;
 }
 

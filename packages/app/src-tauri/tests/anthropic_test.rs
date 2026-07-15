@@ -10,8 +10,9 @@
 
 use futures::StreamExt;
 use ice_paw_lib::error::AppError;
-use ice_paw_lib::llm::adapters::anthropic::AnthropicAdapter;
-use ice_paw_lib::llm::{CancellationToken, ChatDelta, ChatMessage, LlmProvider};
+use ice_paw_lib::harness::chat_state::CancellationToken;
+use ice_paw_lib::harness::provider::anthropic::AnthropicAdapter;
+use ice_paw_lib::infra::protocol::{ChatDelta, ChatMessage, LlmProvider};
 use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
 
 /// 构造正常的 Anthropic SSE 流（双行格式 event+data）。
