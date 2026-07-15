@@ -23,7 +23,11 @@ use crate::harness::chat_state::{CancellationToken, ChatState};
 use crate::harness::loop_engine::LoopContext;
 use crate::harness::observable::RoundState;
 use crate::harness::provider;
-use crate::harness::tool_registry::ToolRegistry;
+use crate::harness::tool_executor::ToolAuthRegistry;
+use crate::harness::tool_registry::{
+    authority::{PathAuthSession, PathWhitelistConfig},
+    ToolRegistry,
+};
 use crate::context::pipeline::{AssembledContext, PipelineContext, PipelineRunner};
 
 /// 发送消息 — 触发 LLM 流式生成。
@@ -168,7 +172,14 @@ fn spawn_stream_loop(
         let budget = LoopBudget::default();
         let emit_app = app.clone();
 
-        // W6.2: 把 13 个输入字段封装到 LoopContext，
+        // A2-3: 工具授权响应注册表（前端响应 → Rust oneshot 解锁）
+        let auth_registry = ToolAuthRegistry::new();
+        // A2-3: 本次会话级已授权路径表
+        let auth_session = PathAuthSession::new();
+        // A2-3: 路径白名单配置（当前为空 → 全部走 Confirm 流程）
+        let whitelist = PathWhitelistConfig::default();
+
+        // W6.2 + A2-3: 把 16 个输入字段封装到 LoopContext，
         // 消除 stream_loop 的 too_many_arguments 告警。
         let mut ctx = LoopContext::new(
             conv_id.clone(),
@@ -184,6 +195,9 @@ fn spawn_stream_loop(
             tools_enabled,
             cancel_token,
             budget,
+            auth_registry,
+            auth_session,
+            whitelist,
         );
         crate::harness::loop_engine::stream_loop(&mut ctx, &mut observable).await;
         // W2.4: emit final round-state after stream_loop completes
