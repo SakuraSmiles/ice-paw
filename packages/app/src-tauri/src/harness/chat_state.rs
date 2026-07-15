@@ -1,13 +1,66 @@
-//! 全局聊天状态管理
+//! 全局聊天状态管理 + 取消令牌
 //!
-//! 维护 `conversation_id → CancellationToken` 映射，
-//! 用于跟踪哪些会话正在流式生成，以及支持用户手动停止。
+//! - `CancellationToken`：可跨线程 clone 的取消令牌（共享 `Arc<AtomicBool>`）
+//! - `ChatState`：维护 `conversation_id → CancellationToken` 映射，
+//!   用于跟踪哪些会话正在流式生成，以及支持用户手动停止。
+//!
+//! **W2.3**：从 `llm/chat_state.rs`（93 行）+ `llm/cancel.rs`（46 行）合并迁入。
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::error::{AppError, AppResult};
-use crate::llm::cancel::CancellationToken;
+
+// =========================================================================
+// CancellationToken（从 llm/cancel.rs 合并）
+// =========================================================================
+
+/// 可跨线程 clone 的取消令牌（共享内部标志位）
+///
+/// 设计简单：内部用 `Arc<AtomicBool>`，clone 后共享同一标志位。
+/// 流式循环每次 yield 前 `is_cancelled()` 检查，发现取消则提前结束。
+#[derive(Clone)]
+pub struct CancellationToken {
+    cancelled: Arc<AtomicBool>,
+}
+
+impl CancellationToken {
+    /// 创建一个未取消的令牌
+    pub fn new() -> Self {
+        Self {
+            cancelled: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// 是否已被取消
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::SeqCst)
+    }
+
+    /// 触发取消（幂等，多次调用无副作用）
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::SeqCst);
+    }
+}
+
+impl Default for CancellationToken {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Debug for CancellationToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CancellationToken")
+            .field("cancelled", &self.is_cancelled())
+            .finish()
+    }
+}
+
+// =========================================================================
+// ChatState（从 llm/chat_state.rs 迁入）
+// =========================================================================
 
 /// 全局聊天状态（注入到 Tauri managed state）
 pub struct ChatState {
