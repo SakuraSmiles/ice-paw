@@ -6,5 +6,7 @@
 //!
 //! 详见 Sprint 计划 W2.1–W2.3。
 
+pub mod anthropic;
 pub mod openai;
+pub use anthropic::AnthropicAdapter;
 pub use openai::OpenAiAdapter;
