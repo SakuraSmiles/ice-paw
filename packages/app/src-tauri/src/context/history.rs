@@ -8,7 +8,7 @@
 //! 该字段为 `None` 时回退到本模块的 [`DEFAULT_HISTORY_WINDOW`]。
 
 use crate::db::models::MessageRow;
-use crate::infra::protocol::ChatMessage;
+use crate::infra::protocol::{ChatMessage, ContentBlock};
 
 /// 系统默认历史窗口大小（最近 N 条消息）
 ///
@@ -76,6 +76,10 @@ pub(crate) fn load_history(history: &[MessageRow]) -> Vec<ChatMessage> {
 ///
 /// `window = Some(n)` → 仅保留最后 n 条
 /// `window = None`    → 不过滤（向后兼容）
+///
+/// P2-2 (G1)：当 [`MessageRow::content_blocks`] 非空时，从该 JSON 还原完整
+/// 多模态消息（含 `ContentBlock::Image`），否则回退到纯文本 [`MessageRow::content`]，
+/// 以兼容旧消息（`content_blocks = "[]"`）。
 pub(crate) fn load_history_with_window(
     history: &[MessageRow],
     window: Option<usize>,
@@ -92,9 +96,35 @@ pub(crate) fn load_history_with_window(
             "user" | "assistant" | "system" => msg.role.clone(),
             _ => continue,
         };
-        messages.push(ChatMessage::from_text(role, msg.content.clone()));
+
+        // P2-2 G1: 优先从 content_blocks 还原多模态消息。
+        // 空数组 / 无效 JSON / 解析失败 → 回退到纯文本（兼容旧消息）。
+        let blocks = parse_content_blocks(&msg.content_blocks);
+        if blocks.is_empty() {
+            messages.push(ChatMessage::from_text(role, msg.content.clone()));
+        } else {
+            messages.push(ChatMessage {
+                role,
+                content: blocks,
+            });
+        }
     }
     messages
+}
+
+/// 解析 `content_blocks` JSON 字符串为 `Vec<ContentBlock>`。
+///
+/// - 空字符串 / `"[]"` / 无效 JSON → 返回空 `Vec`（调用方会回退到纯文本）
+/// - 仅含 `Text` 块 → 返回该 `Vec`（含若干 `Text` 块）
+/// - 含 `Image` 等多模态块 → 返回完整还原的 blocks
+///
+/// **注意**：assistant 消息的 `ToolUse` / `ToolResult` 块也需要通过此路径还原，
+/// 否则多轮工具调用对话的历史上下文会丢失工具调用记录。
+fn parse_content_blocks(json: &str) -> Vec<ContentBlock> {
+    if json.is_empty() || json == "[]" {
+        return Vec::new();
+    }
+    serde_json::from_str::<Vec<ContentBlock>>(json).unwrap_or_default()
 }
 
 // =========================================================================
@@ -222,5 +252,63 @@ mod tests {
         assert_eq!(msgs[0].content_text(), "u2");
         assert_eq!(msgs[1].role, "assistant");
         assert_eq!(msgs[1].content_text(), "a2");
+    }
+
+    // ===== P2-2 G1：历史消息图片重注入 =====
+
+    fn make_row_with_blocks(
+        idx: usize,
+        role: &str,
+        content: &str,
+        content_blocks: &str,
+    ) -> MessageRow {
+        MessageRow {
+            id: format!("msg-{idx}"),
+            conversation_id: "conv".into(),
+            role: role.into(),
+            content: content.into(),
+            content_blocks: content_blocks.into(),
+            token_count: None,
+            error: None,
+            created_at: "2026-01-01T00:00:00Z".into(),
+            rowid: idx as i64,
+        }
+    }
+
+    #[test]
+    fn load_history_restores_image_from_content_blocks() {
+        // 含图片的多模态消息: content_blocks 是权威源，应优先使用
+        let blocks_json = r#"[{"type":"text","text":"看图"},{"type":"image","data":"AAAA","media_type":"image/png"}]"#;
+        let row = make_row_with_blocks(1, "user", "看图", blocks_json);
+        let msgs = load_history(&[row]);
+        assert_eq!(msgs.len(), 1);
+        // content_blocks 还原出 2 个块：Text + Image
+        assert_eq!(msgs[0].content.len(), 2);
+        assert!(!msgs[0].content[0].is_image(), "第一个块应是 Text");
+        assert!(msgs[0].content[1].is_image(), "第二个块应是 Image");
+    }
+
+    #[test]
+    fn load_history_fallback_to_text_when_blocks_empty() {
+        // 纯文本消息（content_blocks = "[]"）走原有路径，行为不变
+        let row = make_row_with_blocks(1, "user", "hello", "[]");
+        let msgs = load_history(&[row]);
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].content_text(), "hello");
+        // 纯文本回退后仅一个 Text 块
+        assert_eq!(msgs[0].content.len(), 1);
+        assert!(!msgs[0].content[0].is_image());
+    }
+
+    #[test]
+    fn load_history_invalid_blocks_json_falls_back_gracefully() {
+        // 无效 JSON 不应崩溃，应静默回退到纯文本
+        let row = make_row_with_blocks(1, "user", "hello", "INVALID JSON {");
+        let msgs = load_history(&[row]);
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].content_text(), "hello");
+        // 回退后仅一个 Text 块
+        assert_eq!(msgs[0].content.len(), 1);
+        assert!(!msgs[0].content[0].is_image());
     }
 }
