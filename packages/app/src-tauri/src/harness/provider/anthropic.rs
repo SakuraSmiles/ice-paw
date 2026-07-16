@@ -335,7 +335,6 @@ impl LlmProvider for AnthropicAdapter {
         let mut system_json: Option<Vec<serde_json::Value>> = system_prompt.map(|s| {
             vec![serde_json::json!({ "type": "text", "text": s })]
         });
-        let system_json_ref: Option<serde_json::Value> = system_json.as_ref().map(|v| serde_json::json!(v));
 
         // P2-3: 将 AnthropicMessage 转为 JSON Value（用于注入 cache_control）
         let mut msgs_json: Vec<serde_json::Value> = msgs
@@ -343,10 +342,15 @@ impl LlmProvider for AnthropicAdapter {
             .filter_map(|m| serde_json::to_value(m).ok())
             .collect();
 
-        // P2-3: 注入 cache_control 断点
+        // P2-3: 注入 cache_control 断点（必须在 system_json_ref 快照前执行，
+        // 否则注入到 system_json 的 cache_control 不会出现在请求体中）。
         if self.cache_prompt {
             Self::inject_cache_breakpoints(&mut system_json, &mut msgs_json);
         }
+
+        // P0: system_json_ref 必须在 inject_cache_breakpoints 之后创建，
+        // 这样 ChatRequest.system 才会包含刚注入的 cache_control 断点。
+        let system_json_ref: Option<serde_json::Value> = system_json.as_ref().map(|v| serde_json::json!(v));
 
         // 2. 转 tool 定义
         let anthropic_tools = tools.map(|t| {
@@ -639,15 +643,41 @@ impl LlmProvider for AnthropicAdapter {
                             #[derive(Deserialize)]
                             struct MessageDeltaPayload {
                                 delta: MessageDeltaBody,
+                                // P2-3: Anthropic 在 message_delta 中提供最终
+                                //   cache_read_input_tokens / output_tokens。
+                                //   message_delta.usage 不含 input_tokens
+                                //   （仅在 message_start 提供），这里用 default 兼容。
+                                #[serde(default)]
+                                usage: Option<MessageDeltaUsage>,
                             }
                             #[derive(Deserialize)]
                             struct MessageDeltaBody {
                                 #[serde(default)]
                                 stop_reason: Option<String>,
                             }
+                            #[derive(Deserialize)]
+                            struct MessageDeltaUsage {
+                                #[serde(default)]
+                                input_tokens: Option<u32>,
+                                #[serde(default)]
+                                cache_read_input_tokens: Option<u32>,
+                                #[serde(default)]
+                                output_tokens: Option<u32>,
+                            }
                             if let Ok(p) = serde_json::from_str::<MessageDeltaPayload>(&data_buf) {
                                 if let Some(sr) = p.delta.stop_reason {
                                     last_stop_reason = Some(sr);
+                                }
+                                // P2-3: 发出最终 token usage，供前端展示 cached_tokens。
+                                // 如果上游未带 usage 字段（比如只发送了 stop_reason）则跳过。
+                                if let Some(usage) = p.usage {
+                                    let _ = tx.send(Ok(ChatDelta::Usage {
+                                        usage: TokenUsage {
+                                            prompt_tokens: usage.input_tokens.unwrap_or(0),
+                                            completion_tokens: usage.output_tokens.unwrap_or(0),
+                                            cached_tokens: usage.cache_read_input_tokens.unwrap_or(0),
+                                        },
+                                    })).await;
                                 }
                             }
                         }
@@ -1016,5 +1046,219 @@ data: {\"type\":\"message_stop\"}\n\
         assert_eq!(arr[0]["type"], "text");
         assert_eq!(arr[1]["type"], "image");
         assert_eq!(arr[1]["source"]["data"], "BBBB");
+    }
+
+    // ================================================================
+    // P2-3: inject_cache_breakpoints 单元测试
+    // ================================================================
+
+    /// 辅助：统计 system + messages 中的 cache_control 断点总数。
+    /// 遍历 system 各 block 以及每个 message 的 content 各 block，
+    /// 检查是否存在 `cache_control.type == "ephemeral"`。
+    fn count_cache_breakpoints(
+        system: &Option<Vec<serde_json::Value>>,
+        messages: &[serde_json::Value],
+    ) -> usize {
+        let mut count = 0;
+
+        if let Some(blocks) = system.as_ref() {
+            for block in blocks {
+                if block.get("cache_control").is_some() {
+                    count += 1;
+                }
+            }
+        }
+
+        for msg in messages {
+            if let Some(content) = msg.get("content") {
+                match content {
+                    serde_json::Value::String(_) => {
+                        // 字符串 content 在注入后会变成数组（不可能保留字符串），
+                        // 此处为防御性兜底：如果遇到，说明函数未处理。
+                    }
+                    serde_json::Value::Array(blocks) => {
+                        for block in blocks {
+                            if block.get("cache_control").is_some() {
+                                count += 1;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        count
+    }
+
+    /// 系统提示存在、消息 ≤ 3 条 → 只在 system 最后一个 block 加 1 个断点；
+    /// messages 上不应有任何 cache_control（因为 len <= 3 直接 return）。
+    #[test]
+    fn inject_cache_breakpoints_system_only() {
+        let mut system = Some(vec![
+            serde_json::json!({ "type": "text", "text": "你是助手" }),
+        ]);
+        let mut msgs = vec![
+            serde_json::json!({ "role": "user", "content": "hi" }),
+            serde_json::json!({ "role": "assistant", "content": "hello" }),
+        ];
+
+        AnthropicAdapter::inject_cache_breakpoints(&mut system, &mut msgs);
+
+        // system 最后一个 block 必须有 cache_control
+        let sys_blocks = system.as_ref().unwrap();
+        assert_eq!(sys_blocks.len(), 1);
+        assert_eq!(sys_blocks[0]["cache_control"]["type"], "ephemeral");
+
+        // messages 不应被改写为数组（因为函数在 len <= 3 时直接 return）
+        assert!(msgs[0]["content"].is_string(), "user content 应保持字符串");
+        assert!(msgs[1]["content"].is_string(), "assistant content 应保持字符串");
+
+        // 总断点数 = 1
+        assert_eq!(count_cache_breakpoints(&system, &msgs), 1);
+    }
+
+    /// 长对话（10 条消息）→ system 1 个 + messages 最多 3 个，总断点数 = 4。
+    /// 验证 Anthropic 的 4 断点硬约束被正确遵守。
+    #[test]
+    fn inject_cache_breakpoints_long_conversation() {
+        let mut system = Some(vec![
+            serde_json::json!({ "type": "text", "text": "你是助手" }),
+        ]);
+        let mut msgs: Vec<serde_json::Value> = (0..10)
+            .map(|i| {
+                let role = if i % 2 == 0 { "user" } else { "assistant" };
+                serde_json::json!({ "role": role, "content": format!("msg-{i}") })
+            })
+            .collect();
+
+        AnthropicAdapter::inject_cache_breakpoints(&mut system, &mut msgs);
+
+        // 总断点数 = 4（Anthropic 硬限制 = MAX_CACHE_BREAKPOINTS）
+        let total = count_cache_breakpoints(&system, &msgs);
+        assert_eq!(
+            total,
+            AnthropicAdapter::MAX_CACHE_BREAKPOINTS,
+            "长对话应达到 4 断点上限，实际 = {total}"
+        );
+
+        // system 一定有 cache_control
+        assert!(system.as_ref().unwrap()[0].get("cache_control").is_some());
+
+        // messages[0]（首条 user）被 skip(1) 跳过 → content 仍为字符串，无 cache_control
+        assert!(msgs[0]["content"].is_string(), "首条 user 的 content 应保持字符串");
+
+        // messages 末尾 3 条（indices 7, 8, 9）不应有 cache_control（cutoff = 7，take(7) 后 skip(1) = indices 1..7）
+        for msg in msgs.iter().skip(7) {
+            assert!(
+                msg["content"].is_string(),
+                "末尾消息 content 应保持字符串"
+            );
+        }
+
+        // messages[1..4] 中的 3 条（indices 1, 2, 3）应有 cache_control（system 已用 1 个，剩 3 个配额）
+        for (idx, msg) in msgs.iter().enumerate().take(4).skip(1) {
+            let blocks = msg["content"].as_array()
+                .unwrap_or_else(|| panic!("idx={idx} content 应被转换为数组"));
+            assert_eq!(blocks.len(), 1, "字符串 content 转换后应有 1 个 block");
+            assert_eq!(
+                blocks[0]["cache_control"]["type"],
+                "ephemeral",
+                "idx={idx} 应该有 cache_control"
+            );
+        }
+
+        // messages[4..7] 应保持字符串（断点配额已用完，不再处理）
+        for msg in msgs.iter().take(7).skip(4) {
+            assert!(
+                msg["content"].is_string(),
+                "断点配额用完，content 应保持字符串"
+            );
+        }
+    }
+
+    /// 没有 system 提示时，所有断点都注入到 messages 上（最多 4 个）。
+    #[test]
+    fn inject_cache_breakpoints_no_system() {
+        let mut system: Option<Vec<serde_json::Value>> = None;
+        let mut msgs: Vec<serde_json::Value> = (0..10)
+            .map(|i| {
+                let role = if i % 2 == 0 { "user" } else { "assistant" };
+                serde_json::json!({ "role": role, "content": format!("msg-{i}") })
+            })
+            .collect();
+
+        AnthropicAdapter::inject_cache_breakpoints(&mut system, &mut msgs);
+
+        // system 必须保持 None
+        assert!(system.is_none());
+
+        // 总断点数应 ≤ 4，且 = 4（无 system 时 messages 可用满 4 个配额）
+        let total = count_cache_breakpoints(&system, &msgs);
+        assert!(
+            total <= AnthropicAdapter::MAX_CACHE_BREAKPOINTS,
+            "总断点数应 ≤ 4，实际 = {total}"
+        );
+        assert_eq!(
+            total,
+            AnthropicAdapter::MAX_CACHE_BREAKPOINTS,
+            "无 system 时 10 条消息应用满 4 个断点配额"
+        );
+
+        // 末尾 3 条不应有断点
+        for msg in msgs.iter().skip(7) {
+            assert!(
+                msg["content"].is_string(),
+                "末尾消息 content 应保持字符串"
+            );
+        }
+
+        // 首条 user（idx=0）不应有断点（被 skip(1) 跳过）
+        assert!(msgs[0]["content"].is_string(), "首条 user content 应保持字符串");
+
+        // messages[1..5] 中的 4 条应有 cache_control
+        for (idx, msg) in msgs.iter().enumerate().take(5).skip(1) {
+            let blocks = msg["content"].as_array()
+                .unwrap_or_else(|| panic!("idx={idx} content 应被转换为数组"));
+            assert_eq!(blocks.len(), 1);
+            assert_eq!(
+                blocks[0]["cache_control"]["type"],
+                "ephemeral",
+                "idx={idx} 应该有 cache_control"
+            );
+        }
+    }
+
+    /// system 含多个 content block → 只在最后一个 block 加 cache_control，
+    /// 前面的 block 必须保持原样不变。
+    #[test]
+    fn inject_cache_breakpoints_mixed_blocks() {
+        let mut system = Some(vec![
+            serde_json::json!({ "type": "text", "text": "block 1" }),
+            serde_json::json!({ "type": "text", "text": "block 2" }),
+            serde_json::json!({ "type": "text", "text": "block 3" }),
+        ]);
+        // 给一个 ≥ 4 条消息的场景，确保 messages 也会被处理
+        let mut msgs = vec![
+            serde_json::json!({ "role": "user", "content": "q1" }),
+            serde_json::json!({ "role": "assistant", "content": "a1" }),
+            serde_json::json!({ "role": "user", "content": "q2" }),
+            serde_json::json!({ "role": "assistant", "content": "a2" }),
+            serde_json::json!({ "role": "user", "content": "q3" }),
+        ];
+
+        AnthropicAdapter::inject_cache_breakpoints(&mut system, &mut msgs);
+
+        let sys_blocks = system.as_ref().unwrap();
+        // block 1 / block 2 不应有 cache_control
+        assert!(sys_blocks[0].get("cache_control").is_none(), "block 1 不应有 cache_control");
+        assert!(sys_blocks[1].get("cache_control").is_none(), "block 2 不应有 cache_control");
+        // 只有 block 3（最后一个）应有 cache_control
+        assert_eq!(sys_blocks[2]["cache_control"]["type"], "ephemeral", "block 3 应有 cache_control");
+
+        // block 1 / 2 的原始 text 必须保留（未被覆盖）
+        assert_eq!(sys_blocks[0]["text"], "block 1");
+        assert_eq!(sys_blocks[1]["text"], "block 2");
+        assert_eq!(sys_blocks[2]["text"], "block 3");
     }
 }
