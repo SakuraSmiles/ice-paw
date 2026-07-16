@@ -115,7 +115,7 @@ async fn anthropic_normal_text_stream_collects_expected() {
         .mount(&server)
         .await;
 
-    let adapter = AnthropicAdapter::new("test-model".into(), server.uri());
+    let adapter = AnthropicAdapter::new("test-model".into(), server.uri(), false);
     let cancel = CancellationToken::new();
 
     let stream = adapter
@@ -160,7 +160,7 @@ async fn anthropic_mixed_tool_use_only_collects_text() {
         .mount(&server)
         .await;
 
-    let adapter = AnthropicAdapter::new("test-model".into(), server.uri());
+    let adapter = AnthropicAdapter::new("test-model".into(), server.uri(), false);
     let cancel = CancellationToken::new();
 
     let stream = adapter
@@ -197,7 +197,7 @@ async fn anthropic_error_event_returns_llm_error() {
         .mount(&server)
         .await;
 
-    let adapter = AnthropicAdapter::new("test-model".into(), server.uri());
+    let adapter = AnthropicAdapter::new("test-model".into(), server.uri(), false);
     let cancel = CancellationToken::new();
 
     let stream = adapter
@@ -253,7 +253,7 @@ async fn anthropic_tool_use_produces_tool_call_events() {
         .mount(&server)
         .await;
 
-    let adapter = AnthropicAdapter::new("test-model".into(), server.uri());
+    let adapter = AnthropicAdapter::new("test-model".into(), server.uri(), false);
     let cancel = CancellationToken::new();
 
     let stream = adapter
@@ -281,6 +281,7 @@ async fn anthropic_tool_use_produces_tool_call_events() {
             Ok(ChatDelta::ToolCallEnd { .. }) => end_count += 1,
             Ok(ChatDelta::Thinking { .. }) => {},
             Ok(ChatDelta::Done { .. }) => break,
+            Ok(ChatDelta::Usage { .. }) => {},
             Err(_) => break,
         }
     }
@@ -308,7 +309,7 @@ async fn anthropic_tool_use_delta_not_in_text() {
         .mount(&server)
         .await;
 
-    let adapter = AnthropicAdapter::new("test-model".into(), server.uri());
+    let adapter = AnthropicAdapter::new("test-model".into(), server.uri(), false);
     let cancel = CancellationToken::new();
 
     let stream = adapter

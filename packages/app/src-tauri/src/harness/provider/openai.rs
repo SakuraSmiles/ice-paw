@@ -886,19 +886,6 @@ mod tests {
     // P2-2: ContentBlock::Image 转换（user 消息含图片）
     // ---------------------------------------------------------------
 
-    /// 转换函数在 crate 内可见但未导出（private fn chat_message_to_openai），
-    /// 这里通过 `ChatMessage` + 序列化为 JSON Value 的方式间接验证结构。
-
-    fn img_msg() -> ChatMessage {
-        ChatMessage {
-            role: "user".into(),
-            content: vec![
-                ContentBlock::text("看这张图"),
-                ContentBlock::image("iVBORw0KGgo", "image/png"),
-            ],
-        }
-    }
-
     #[test]
     fn openai_user_image_only_text_serializes_as_string() {
         // 内部 ChatMessage 的 content 总是数组（Vec<ContentBlock>），
