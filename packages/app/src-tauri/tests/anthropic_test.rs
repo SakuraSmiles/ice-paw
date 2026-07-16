@@ -12,7 +12,7 @@ use futures::StreamExt;
 use ice_paw_lib::error::AppError;
 use ice_paw_lib::harness::chat_state::CancellationToken;
 use ice_paw_lib::harness::provider::anthropic::AnthropicAdapter;
-use ice_paw_lib::infra::protocol::{ChatDelta, ChatMessage, LlmProvider};
+use ice_paw_lib::infra::protocol::{ChatDelta, ChatMessage, LlmProvider, TokenUsage};
 use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
 
 /// 构造正常的 Anthropic SSE 流（双行格式 event+data）。
@@ -331,4 +331,95 @@ async fn anthropic_tool_use_delta_not_in_text() {
 
     // 只应收集到前导文本，tool_use 的 input_json_delta 不应出现在文本中
     assert_eq!(content_parts, vec!["让我查一下".to_string()]);
+}
+
+// =========================================================================
+// P2-3: ChatDelta::Usage 集成测试
+// =========================================================================
+
+/// 构造含 message_start.usage 和 message_delta.usage 的 Anthropic SSE 流。
+/// 验证前端能收到带 cached_tokens 的 ChatDelta::Usage 事件。
+fn usage_sse() -> String {
+    r#"event: message_start
+data: {"type":"message_start","message":{"id":"msg_usage_01","usage":{"input_tokens":100,"cache_creation_input_tokens":50,"cache_read_input_tokens":30,"output_tokens":0}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"cached"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5,"cache_creation_input_tokens":50,"cache_read_input_tokens":30}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+"#.to_string()
+}
+
+/// P2-3: Anthropic SSE 流中的 usage 事件应产生 ChatDelta::Usage
+#[tokio::test]
+async fn anthropic_usage_event_from_stream() {
+    let server = MockServer::start().await;
+
+    Mock::given(matchers::method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(usage_sse()),
+        )
+        .mount(&server)
+        .await;
+
+    let adapter = AnthropicAdapter::new("test-model".into(), server.uri(), false);
+    let cancel = CancellationToken::new();
+
+    let stream = adapter
+        .stream_chat("test-key", make_messages(), None, 0.7, 1024, cancel)
+        .await
+        .expect("stream_chat should succeed");
+
+    let mut stream = Box::pin(stream);
+    let mut usage_events: Vec<TokenUsage> = Vec::new();
+    let mut got_done = false;
+
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(ChatDelta::Usage { usage }) => usage_events.push(usage),
+            Ok(ChatDelta::Done { .. }) => {
+                got_done = true;
+                break;
+            }
+            Ok(_) => {}
+            Err(e) => panic!("unexpected error: {e}"),
+        }
+    }
+
+    assert!(got_done, "应收到 Done 事件");
+    // 应收到 2 个 Usage 事件：message_start + message_delta
+    assert_eq!(usage_events.len(), 2, "应收到 2 个 Usage 事件（message_start + message_delta）");
+
+    // 第 1 个 Usage 来自 message_start：prompt_tokens=100, cached_tokens=30
+    assert_eq!(
+        usage_events[0].prompt_tokens, 100,
+        "message_start usage: prompt_tokens 应为 100"
+    );
+    assert_eq!(
+        usage_events[0].cached_tokens, 30,
+        "message_start usage: cached_tokens 应为 30"
+    );
+
+    // 第 2 个 Usage 来自 message_delta：completion_tokens=5, cached_tokens=30
+    assert_eq!(
+        usage_events[1].completion_tokens, 5,
+        "message_delta usage: completion_tokens 应为 5"
+    );
+    assert_eq!(
+        usage_events[1].cached_tokens, 30,
+        "message_delta usage: cached_tokens 应为 30"
+    );
 }

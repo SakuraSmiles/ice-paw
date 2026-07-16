@@ -130,6 +130,11 @@ const panelTitle = computed(() => {
 const nameError = computed(() => errors.value.name ?? "");
 const apiKeyError = computed(() => errors.value.api_key ?? "");
 
+/** P2-3: 当前 provider 是否为 Anthropic（仅 Anthropic 支持显式 cache_control 断点） */
+const isAnthropicProvider = computed<boolean>(() => {
+  return provider.value.toLowerCase() === "anthropic";
+});
+
 /**
  * 高级设置是否需要「默认展开」：
  *   - edit 模式，且存在任一非默认值时展开，便于用户直接修改
@@ -584,18 +589,21 @@ function templateBgFg(tpl: AgentTemplate): { bg: string; fg: string } {
                   <div class="form-group">
                     <label class="form-label form-label-row">
                       <span>Prompt Caching</span>
-                      <span class="label-hint">Anthropic 缓存加速（OpenAI 自动生效）</span>
+                      <span v-if="isAnthropicProvider" class="label-hint">Anthropic 缓存加速</span>
+                      <span v-else class="label-hint">仅 Anthropic 支持显式缓存控制，OpenAI 会自动缓存</span>
                     </label>
                     <button
                       type="button"
                       class="toggle-btn"
-                      :class="{ 'toggle-btn-on': cachePrompt }"
-                      @click="cachePrompt = !cachePrompt"
+                      :class="{ 'toggle-btn-on': cachePrompt, 'toggle-btn-disabled': !isAnthropicProvider }"
+                      :disabled="!isAnthropicProvider"
+                      :title="isAnthropicProvider ? undefined : '仅 Anthropic 支持显式缓存控制，OpenAI 会自动缓存'"
+                      @click="isAnthropicProvider && (cachePrompt = !cachePrompt)"
                     >
                       <span class="toggle-track">
                         <span class="toggle-thumb" />
                       </span>
-                      <span class="toggle-text">{{ cachePrompt ? '已启用' : '已关闭' }}</span>
+                      <span class="toggle-text">{{ isAnthropicProvider ? (cachePrompt ? '已启用' : '已关闭') : '自动' }}</span>
                     </button>
                   </div>
 
@@ -955,6 +963,20 @@ function templateBgFg(tpl: AgentTemplate): { bg: string; fg: string } {
   font-size: var(--ip-text-caption-size);
   color: var(--ip-color-text-secondary);
 }
+
+.toggle-btn-disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.toggle-btn-disabled .toggle-track {
+  background: var(--ip-color-border-default);
+}
+
+.toggle-btn-disabled .toggle-thumb {
+  transform: translateX(0);
+}
+
 .advanced-section {
   border-top: 1px dashed var(--ip-color-border-default);
   padding-top: var(--ip-spacing-3);
