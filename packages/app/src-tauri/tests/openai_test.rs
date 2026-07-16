@@ -212,6 +212,7 @@ async fn openai_tool_calls_produces_tool_call_events() {
             Ok(ChatDelta::ToolCallEnd { .. }) => end_count += 1,
             Ok(ChatDelta::Thinking { .. }) => {},
             Ok(ChatDelta::Done { .. }) => break,
+            Ok(ChatDelta::Usage { .. }) => {},
             Err(e) => panic!("unexpected error: {e}"),
         }
     }
