@@ -238,6 +238,7 @@ export interface ChatChunkPayload {
  *   - "abort"             取消（用户调用 stop_generation）
  *   - "budget_exceeded"    Token 预算超限（W4.2）
  *   - "tool_use"          工具轮数上限（MAX_TOOL_ROUNDS）
+ *   - "stuck"             LLM 连续多轮无进展，自动终止（M2.1）
  * ）。
  */
 export interface ChatDonePayload {
@@ -347,6 +348,19 @@ export interface ChatThinkingPayload {
   conversation_id: string;
   message_id: string;
   content: string;
+}
+
+/**
+ * `chat:summary-injected` 事件 payload (M1.5 A3-4 滚动摘要)
+ *
+ * 当 MemoryStage 触发摘要压缩后，Rust 侧 emit 此事件，
+ * 前端在 ChatStatusBar 显示「已压缩 N 条」指示器。
+ */
+export interface ChatSummaryInjectedPayload {
+  conversation_id: string;
+  summary_tokens: number;
+  original_count: number;
+  kept_count: number;
 }
 
 // ============================================================================

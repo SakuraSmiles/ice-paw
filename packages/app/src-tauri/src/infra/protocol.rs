@@ -460,6 +460,17 @@ pub struct ChatThinkingPayload {
     pub content: String,
 }
 
+/// `chat:summary-injected` 事件 payload（M1.5 A3-4 滚动摘要）
+///
+/// 当 MemoryStage 触发摘要压缩后，通过此事件通知前端。
+#[derive(Clone, Serialize)]
+pub struct ChatSummaryInjectedPayload {
+    pub conversation_id: String,
+    pub summary_tokens: u32,
+    pub original_count: u32,
+    pub kept_count: u32,
+}
+
 // === A2-3 工具授权事件 payload ===
 
 /// `chat:tool-auth-request` 事件 payload (Rust → Frontend)

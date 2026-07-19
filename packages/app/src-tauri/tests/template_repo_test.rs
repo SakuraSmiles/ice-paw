@@ -138,13 +138,15 @@ async fn update_partial_only_changes_given_fields() {
     let row = template::update(
         &pool,
         "tpl-1",
-        upd.name.as_deref(),
-        upd.description.as_deref(),
-        upd.system_prompt.as_deref(),
-        upd.user_prompt_prefix.as_deref(),
-        upd.variables.as_ref(),
-        upd.tools.as_ref(),
-        upd.sort_order,
+        template::TemplateUpdateFields {
+            name: upd.name.as_deref(),
+            description: upd.description.as_deref(),
+            system_prompt: upd.system_prompt.as_deref(),
+            user_prompt_prefix: upd.user_prompt_prefix.as_deref(),
+            variables: upd.variables.as_ref(),
+            tools: upd.tools.as_ref(),
+            sort_order: upd.sort_order,
+        },
     )
     .await
     .unwrap();
@@ -199,13 +201,15 @@ async fn update_variables_replaces_whole_array() {
     let row = template::update(
         &pool,
         "tpl-1",
-        None,
-        None,
-        None,
-        None,
-        Some(&new_vars),
-        None,
-        None,
+        template::TemplateUpdateFields {
+            name: None,
+            description: None,
+            system_prompt: None,
+            user_prompt_prefix: None,
+            variables: Some(&new_vars),
+            tools: None,
+            sort_order: None,
+        },
     )
     .await
     .unwrap();

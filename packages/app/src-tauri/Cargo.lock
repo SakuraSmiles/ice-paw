@@ -2211,6 +2211,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "blake2",
+ "bytes",
  "chrono",
  "futures",
  "iota_stronghold",

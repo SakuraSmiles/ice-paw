@@ -64,6 +64,8 @@ async fn seed_agent_and_conv(pool: &SqlitePool) -> String {
             cache_prompt: false,
             // A3-2: max_history_messages 显式置 None（系统默认）。
             max_history_messages: None,
+            // 06 migration: tool_trim_threshold 显式置 None（系统默认）。
+            tool_trim_threshold: None,
         },
         agent_id,
         agent_id, // api_key_ref 简化为 agent_id 自身

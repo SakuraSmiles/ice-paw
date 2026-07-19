@@ -42,6 +42,7 @@ import type {
   ChatRetryingPayload,
   ChatRoundStatePayload,
   ChatStartPayload,
+  ChatSummaryInjectedPayload,
   ChatThinkingPayload,
   ChatToolCallDeltaPayload,
   ChatToolCallEndPayload,
@@ -102,6 +103,7 @@ export interface AppliedTemplate {
  *   - hasMoreOlder      是否还有更早的历史可加载（向上翻页用）
  *   - loadingOlder      向上翻页 in-flight 标志
  *   - error             最近错误描述（供 Toast 显示）
+ *   - lastSummary       M1.5: 最近一次 chat:summary-injected 事件 payload
  *
  * getters:
  *   - currentMessages   当前显示的消息列表（= messages.value；真实助手行由
@@ -167,6 +169,29 @@ export const useChatStore = defineStore("chat", () => {
     completion_tokens: number;
     cached_tokens: number;
   } | null>(null);
+
+  /**
+   * M1.3 后半：会话累计 token 用量。
+   *
+   * - key: conversation_id
+   * - value: 截至目前该会话所有 chat:done 事件的 (prompt_tokens + completion_tokens) 累加值
+   * - 切换会话 / 应用重启之间保持累计（不重置）
+   * - 用途：ChatStatusBar 的「Σ 会话累计」展示
+   *
+   * 注：仅在 store 生命周期内累计（应用重启后从 0 开始），
+   * 若需持久化累计值，由后端在 messages.token_count 列累加即可（M1.5+）。
+   */
+  const conversationTokenUsage = ref<Map<string, number>>(new Map());
+
+  /**
+   * M1.5：最近一次摘要注入事件 payload。
+   *
+   * - 来源：Rust 侧 MemoryStage 触发摘要压缩后 emit `chat:summary-injected`
+   * - 用途：ChatStatusBar 显示「已压缩 N 条」指示器
+   * - 重置：切换会话时清空，避免上一会话的摘要被新会话视图继承
+   * - 生命周期：仅在 store 生命周期内保留（应用重启后从 null 开始）
+   */
+  const lastSummary = ref<ChatSummaryInjectedPayload | null>(null);
 
   /** W4.2: 最近一次 chat:done 的 finish_reason（如 "budget_exceeded"） */
   const lastFinishReason = ref<string | null>(null);
@@ -392,6 +417,19 @@ export const useChatStore = defineStore("chat", () => {
         lastUsage.value = p.usage ?? null;
         // W4.2: 记录 finish_reason
         lastFinishReason.value = p.finish_reason ?? null;
+
+        // M1.3 后半：累加会话累计 token（Σ）
+        // 切换会话时不清空，保持累计；只有删除会话时调用方需要主动 reset。
+        if (p.usage) {
+          const turnTotal =
+            (p.usage.prompt_tokens ?? 0) + (p.usage.completion_tokens ?? 0);
+          const prev =
+            conversationTokenUsage.value.get(p.conversation_id) ?? 0;
+          // 触发响应式更新（Map 整体替换，保证 computed 订阅者重算）
+          const next = new Map(conversationTokenUsage.value);
+          next.set(p.conversation_id, prev + turnTotal);
+          conversationTokenUsage.value = next;
+        }
       }),
     );
 
@@ -523,6 +561,18 @@ export const useChatStore = defineStore("chat", () => {
         lastRoundState.value = p;
       }),
     );
+
+    // ----- M1.5: chat:summary-injected -----
+    // Rust 侧 MemoryStage 触发摘要压缩后 emit。前端只在状态栏展示，
+    // 不影响 messages 列表（摘要作为 system 消息已由 Rust 写入 DB）。
+    // 不按 activeConvId 过滤：摘要事件可能在轮次结束后异步 emit，
+    // 此时 activeConvId 已置 null；改用 lastSummary 自身的 conversation_id
+    // 由 UI 层做会话匹配。
+    unlistens.push(
+      await listen<ChatSummaryInjectedPayload>("chat:summary-injected", (e) => {
+        lastSummary.value = e.payload;
+      }),
+    );
   }
 
   /**
@@ -557,6 +607,8 @@ export const useChatStore = defineStore("chat", () => {
       hasMoreOlder.value = false;
       loadingOlder.value = false;
       error.value = null;
+      // M1.5: 切到「无会话」状态时清空摘要指示
+      lastSummary.value = null;
       return;
     }
 
@@ -565,6 +617,12 @@ export const useChatStore = defineStore("chat", () => {
       isStreaming.value = false;
       streamingContent.value = "";
       activeConvId.value = null;
+    }
+
+    // M1.5: 切换会话时重置摘要指示器（避免上一会话的摘要污染当前视图）。
+    // 后续该会话若再次发生摘要压缩，chat:summary-injected 会重新填充。
+    if (lastSummary.value && lastSummary.value.conversation_id !== conversationId) {
+      lastSummary.value = null;
     }
 
     loading.value = true;
@@ -781,6 +839,10 @@ export const useChatStore = defineStore("chat", () => {
     toolResults,
         // P2-3
     lastUsage,
+    // M1.3 后半：会话累计 token（Σ）
+    conversationTokenUsage,
+    // M1.5：最近一次摘要注入事件
+    lastSummary,
     // W4.2
     lastFinishReason,
     // W2.4

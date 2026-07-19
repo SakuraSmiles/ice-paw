@@ -54,7 +54,7 @@ pub async fn list_by_conversation(
 
     let rows = if let Some((before_ts, before_rowid)) = before {
         sqlx::query_as::<_, MessageRow>(
-            "SELECT id, conversation_id, role, content, content_blocks, token_count, error, created_at, rowid
+            "SELECT id, conversation_id, role, content, content_blocks, token_count, error, created_at, rowid, summary_id
                FROM messages
               WHERE conversation_id = ?
                 AND (created_at < ? OR (created_at = ? AND rowid < ?))
@@ -70,7 +70,7 @@ pub async fn list_by_conversation(
         .await?
     } else {
         sqlx::query_as::<_, MessageRow>(
-            "SELECT id, conversation_id, role, content, content_blocks, token_count, error, created_at, rowid
+            "SELECT id, conversation_id, role, content, content_blocks, token_count, error, created_at, rowid, summary_id
                FROM messages
               WHERE conversation_id = ?
               ORDER BY created_at DESC, rowid DESC
@@ -147,7 +147,7 @@ pub async fn create(
 
 async fn get_by_id(pool: &SqlitePool, id: &str) -> AppResult<MessageRow> {
     sqlx::query_as::<_, MessageRow>(
-        "SELECT id, conversation_id, role, content, content_blocks, token_count, error, created_at, rowid
+        "SELECT id, conversation_id, role, content, content_blocks, token_count, error, created_at, rowid, summary_id
            FROM messages WHERE id = ?",
     )
     .bind(id)
@@ -220,4 +220,174 @@ pub async fn update_error(
         });
     }
     Ok(())
+}
+
+/// M1.3: 更新消息的 token_count 字段（流式结束后回填）
+///
+/// - `id`          消息 ID
+/// - `token_count` token 数（应为非负 i32；调用方负责下限保护）
+///
+/// # 错误
+/// - 消息 ID 不存在 → `AppError::NotFound`
+///
+/// # 注意
+/// - 0 视为合法值（被存储）
+/// - 负数应被业务侧拦截；这里仅做最基础的 SQL 执行
+pub async fn update_token_count(
+    pool: &SqlitePool,
+    id: &str,
+    token_count: i32,
+) -> AppResult<()> {
+    let affected = sqlx::query("UPDATE messages SET token_count = ? WHERE id = ?")
+        .bind(token_count)
+        .bind(id)
+        .execute(pool)
+        .await?
+        .rows_affected();
+    if affected == 0 {
+        return Err(AppError::NotFound {
+            resource: "message",
+            id: id.to_string(),
+        });
+    }
+    Ok(())
+}
+
+/// M1.2: 列出会话内最近的工具调用名（从 `tool_calls` 审计表 JOIN `messages` 查询）
+///
+/// # 用途
+/// - 为 `loop_engine` 在每轮调用 `list_tool_defs_with_query` 时的
+///   「调用历史权重」提供输入（M1.4 之前由 `ToolTrimStage` 消费，现已下沉
+///   到 loop_engine 直接打分）
+/// - 按 `tool_calls.created_at DESC` 取最近 `limit` 条，返回顺序不限（按出现次数累计）
+///
+/// # 行为
+/// - 返回 Vec<String>：仅含 `tool_calls.tool_name`，**不去重**（让打分函数按出现次数加权）
+/// - `limit <= 0` → 使用默认值 10
+pub async fn list_recent_tool_names(
+    pool: &SqlitePool,
+    conversation_id: &str,
+    limit: i32,
+) -> AppResult<Vec<String>> {
+    let lim = if limit <= 0 { 10 } else { limit };
+
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT tc.tool_name
+           FROM tool_calls tc
+           JOIN messages m ON m.id = tc.message_id
+          WHERE m.conversation_id = ?
+          ORDER BY tc.created_at DESC
+          LIMIT ?",
+    )
+    .bind(conversation_id)
+    .bind(lim)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows.into_iter().map(|(n,)| n).collect())
+}
+
+// =========================================================================
+// 单元测试（M1.3）
+// =========================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::models::NewMessage;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use std::str::FromStr;
+
+    async fn fresh_pool() -> SqlitePool {
+        let opts = SqliteConnectOptions::from_str("sqlite::memory:")
+            .expect("valid sqlite url")
+            .create_if_missing(true)
+            .foreign_keys(true);
+        SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .expect("connect in-memory sqlite")
+    }
+
+    async fn seed_message(pool: &SqlitePool, id: &str, conv_id: &str) {
+        // 需要 agent 作为 conversation 外键依赖
+        sqlx::query(
+            "INSERT INTO agents (id, name, provider, model, system_prompt, api_key_ref, temperature, max_tokens, extra_params, sort_order, cache_prompt)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        .bind("agent-1")
+        .bind("test-agent")
+        .bind("anthropic")
+        .bind("claude-test")
+        .bind("")
+        .bind("")
+        .bind(0.7)
+        .bind(1024)
+        .bind("{}")
+        .bind(0)
+        .bind(0)
+        .execute(pool)
+        .await
+        .expect("seed agent");
+        sqlx::query("INSERT INTO conversations (id, agent_id, title) VALUES (?, ?, ?)")
+            .bind(conv_id)
+            .bind("agent-1")
+            .bind("test conv")
+            .execute(pool)
+            .await
+            .expect("seed conversation");
+        create(
+            pool,
+            id,
+            &NewMessage {
+                conversation_id: conv_id.to_string(),
+                role: "user".to_string(),
+                content: "hello".to_string(),
+                token_count: None,
+                error: None,
+            },
+        )
+        .await
+        .expect("seed message");
+    }
+
+    #[tokio::test]
+    async fn update_token_count_writes_value() {
+        let pool = fresh_pool().await;
+        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        seed_message(&pool, "msg-1", "conv-1").await;
+
+        update_token_count(&pool, "msg-1", 42).await.unwrap();
+        let row = get_by_id(&pool, "msg-1").await.unwrap();
+        assert_eq!(row.token_count, Some(42));
+    }
+
+    #[tokio::test]
+    async fn update_token_count_unknown_id_returns_err() {
+        let pool = fresh_pool().await;
+        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+
+        let result = update_token_count(&pool, "nonexistent", 10).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            AppError::NotFound { resource, id } => {
+                assert_eq!(resource, "message");
+                assert_eq!(id, "nonexistent");
+            }
+            e => panic!("expected NotFound, got {e:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn update_token_count_zero_is_stored() {
+        let pool = fresh_pool().await;
+        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        seed_message(&pool, "msg-1", "conv-1").await;
+
+        update_token_count(&pool, "msg-1", 0).await.unwrap();
+        let row = get_by_id(&pool, "msg-1").await.unwrap();
+        // 0 作为合法值被存储（业务层会在调用前保护下限）
+        assert_eq!(row.token_count, Some(0));
+    }
 }

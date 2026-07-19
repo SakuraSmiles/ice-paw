@@ -29,6 +29,9 @@ pub struct AgentRow {
     /// A3-2: 历史消息窗口上限（NULL = 使用系统默认）。
     /// 不同 Agent 可拥有不同上下文长度（8K vs 200K）。
     pub max_history_messages: Option<i32>,
+    /// M1.2 A2-4: 工具裁剪阈值（NULL = 使用系统默认 5）。
+    /// 当注册工具数 >= 此值时启用软裁剪（deprioritized 标记）。
+    pub tool_trim_threshold: Option<i32>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -55,6 +58,9 @@ pub struct Agent {
     /// 前端在「高级设置」中可显式覆盖；不传则保持 NULL。
     #[serde(default)]
     pub max_history_messages: Option<i32>,
+    /// M1.2 A2-4: 工具裁剪阈值（None 表示使用系统默认值 5）。
+    #[serde(default)]
+    pub tool_trim_threshold: Option<i32>,
     pub created_at: String,
     pub updated_at: String,
     /// 是否已配置 API Key（前端业务提示用），对应 stronghold 中是否存在
@@ -82,6 +88,8 @@ impl From<AgentRow> for Agent {
             cache_prompt: row.cache_prompt != 0,
             // A3-2: 历史消息窗口（NULL 由 Option 直接透传）
             max_history_messages: row.max_history_messages,
+            // M1.2 A2-4: 工具裁剪阈值
+            tool_trim_threshold: row.tool_trim_threshold,
             created_at: row.created_at,
             updated_at: row.updated_at,
             has_api_key,
@@ -115,6 +123,9 @@ pub struct NewAgent {
     /// 旧调用方无需关心（`#[serde(default)]` 兜底为 None）。
     #[serde(default)]
     pub max_history_messages: Option<i32>,
+    /// M1.2 A2-4: 工具裁剪阈值（None = 使用系统默认 5）。
+    #[serde(default)]
+    pub tool_trim_threshold: Option<i32>,
 }
 
 fn default_temperature() -> f64 { 0.7 }
@@ -145,6 +156,9 @@ pub struct AgentUpdate {
     /// A3-2: 历史消息窗口上限。
     /// 双层 Option：外层 Some 表示调用方传了该字段，内层 None 表示清空（恢复为系统默认）。
     pub max_history_messages: Option<Option<i32>>,
+    /// M1.2 A2-4: 工具裁剪阈值。
+    /// 双层 Option：外层 Some 表示调用方传了该字段，内层 None 表示清空（恢复为系统默认）。
+    pub tool_trim_threshold: Option<Option<i32>>,
 }
 
 /// 轮换 API Key 入参
@@ -221,6 +235,11 @@ pub struct MessageRow {
     /// 可在 SELECT 列表里显式取出。`rowid` 是 `INTEGER PRIMARY KEY` 的
     /// 别名，本身就是 `i64`，分页时用作「同秒消息 tie-breaker」非常稳定。
     pub rowid: i64,
+    /// M1.5: 该消息被某条摘要覆盖时，指向摘要消息（role="system",
+    /// content 以 `[Previous conversation summary]` 开头）。
+    /// 摘要消息本身此列为 NULL（自指无意义）。
+    /// 旧消息（迁移前已存在）此列也为 NULL —— 历史行为完全兼容。
+    pub summary_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -237,6 +256,10 @@ pub struct Message {
     /// 分页游标（与 `MessageRow.rowid` 对齐）。
     /// 前端不展示此字段，仅在向上翻页时回传 `(created_at, rowid)` 复合游标。
     pub rowid: i64,
+    /// M1.5: 摘要外键（参见 `MessageRow.summary_id`）。
+    /// 前端一般用不到，保留以备审计 / UI 展示「已压缩 N 条」之用。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary_id: Option<String>,
 }
 
 impl From<MessageRow> for Message {
@@ -251,6 +274,7 @@ impl From<MessageRow> for Message {
             error: row.error,
             created_at: row.created_at,
             rowid: row.rowid,
+            summary_id: row.summary_id,
         }
     }
 }

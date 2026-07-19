@@ -72,7 +72,7 @@ pub(crate) fn load_history(history: &[MessageRow]) -> Vec<ChatMessage> {
     load_history_with_window(history, None)
 }
 
-/// 带窗口的版本：A3-2 引入，供 [`crate::context::pipeline::HistoryStage`] 使用。
+/// 带窗口的版本：A3-2 引入，供 [`crate::context::stages::HistoryStage`] 使用。
 ///
 /// `window = Some(n)` → 仅保留最后 n 条
 /// `window = None`    → 不过滤（向后兼容）
@@ -146,6 +146,7 @@ mod tests {
             error: None,
             created_at: "2026-01-01T00:00:00Z".into(),
             rowid: idx as i64,
+            summary_id: None,
         }
     }
 
@@ -272,6 +273,7 @@ mod tests {
             error: None,
             created_at: "2026-01-01T00:00:00Z".into(),
             rowid: idx as i64,
+            summary_id: None,
         }
     }
 

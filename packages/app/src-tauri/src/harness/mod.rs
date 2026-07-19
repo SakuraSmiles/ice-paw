@@ -15,5 +15,6 @@ pub mod observable;
 pub mod provider;
 pub mod retry;
 pub mod stream_consumer;
+pub mod summary_provider;
 pub mod tool_executor;
 pub mod tool_registry;

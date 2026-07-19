@@ -8,8 +8,27 @@
 
 import { computed, ref, watch } from "vue";
 import { useChatStore } from "../../stores/chat";
+import { useConversationsStore } from "../../stores/conversations";
 
 const chatStore = useChatStore();
+const conversationsStore = useConversationsStore();
+
+/** 当前会话 ID（来自 conversations store，跨组件共享） */
+const currentConversationId = computed<string | null>(
+  () => conversationsStore.currentId,
+);
+
+/**
+ * M1.3 后半：当前会话累计 token（Σ）。
+ *
+ * 读自 chatStore.conversationTokenUsage map（key=conversation_id），
+ * 切换会话 / 应用重启前一直累计。返回 0 表示无累计或无活跃会话。
+ */
+const sessionTotalTokens = computed<number>(() => {
+  const id = currentConversationId.value;
+  if (!id) return 0;
+  return chatStore.conversationTokenUsage.get(id) ?? 0;
+});
 
 /** 当前 round-state 数据（来自 chat:round-state 事件） */
 const state = computed(() => chatStore.lastRoundState);
@@ -24,6 +43,8 @@ const finishReasonLabel = computed(() => {
   if (reason === 'budget_exceeded') return 'Token 预算已用尽';
   if (reason === 'length') return '达到 Token 上限';
   if (reason === 'tool_use') return '工具轮数已达上限';
+  // M2.1: LLM 连续多轮无进展 → 停滞检测自动终止
+  if (reason === 'stuck') return 'LLM 输出停滞，已自动终止';
   return reason;
 });
 
@@ -127,6 +148,22 @@ defineExpose({ showRetryReason });
             <span class="token-completion" title="Completion tokens">C&nbsp;{{ state?.tokens_completion ?? 0 }}</span>
           </span>
         </span>
+
+        <!-- M1.3 后半：会话累计 Token（Σ） -->
+        <span class="status-divider" aria-hidden="true">·</span>
+        <span class="status-item status-session-total" title="会话累计 Token">
+          <span class="status-label">Σ</span>
+          <span class="status-val">{{ sessionTotalTokens }}</span>
+        </span>
+
+        <!-- M1.5：摘要注入指示器（仅当当前会话发生过摘要压缩时显示） -->
+        <template v-if="chatStore.lastSummary && chatStore.lastSummary.conversation_id === currentConversationId">
+          <span class="status-divider" aria-hidden="true">·</span>
+          <span class="status-item status-summary" title="已压缩历史消息">
+            <span class="status-label">📜</span>
+            <span class="status-val">已压缩 {{ chatStore.lastSummary.original_count }} 条</span>
+          </span>
+        </template>
 
         <span class="status-divider" aria-hidden="true">·</span>
 
@@ -280,6 +317,40 @@ defineExpose({ showRetryReason });
 
 .status-cache .status-val {
   color: var(--ip-primary-500, #3b82f6);
+  font-weight: 500;
+}
+
+/* 会话累计 Token（Σ） */
+.status-session-total {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+}
+
+.status-session-total .status-label {
+  color: var(--ip-primary-500, #3b82f6);
+  font-weight: 600;
+}
+
+.status-session-total .status-val {
+  color: var(--ip-primary-500, #3b82f6);
+  font-weight: 500;
+}
+
+/* M1.5：摘要注入指示器 */
+.status-summary {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+}
+
+.status-summary .status-label {
+  font-size: 11px;
+  /* emoji 本身已有颜色，不覆盖 */
+}
+
+.status-summary .status-val {
+  color: var(--ip-color-text-tertiary, #6b7280);
   font-weight: 500;
 }
 

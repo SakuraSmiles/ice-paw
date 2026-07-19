@@ -59,6 +59,8 @@ pub async fn send_message(
     let conv_id = input.conversation_id.clone();
     let tools_enabled = input.tools_enabled;
     let content_text = ContentBlock::join_text(&final_blocks);
+    // M1.2: 提取当前用户消息的纯文本 query（仅 Text 块拼接；与 LLM 拼装时使用的 content_text 一致）
+    let current_user_query = Some(content_text.clone());
 
     // --- 2. 取会话 + agent + api_key → 创建 provider ---
     let conv = repo::conversation::get_by_id(pool.inner(), &conv_id).await?;
@@ -79,11 +81,28 @@ pub async fn send_message(
     // 该值可能为 None（→ 系统默认）或 Some(N)；上限仍受
     // `repo::message::MAX_LIMIT` 兜底。Pipeline 内部还会再用一次
     // `resolve_window` 二次裁剪（保证窗口语义集中）。
+    //
+    // M1.2: 同时查询「最近 10 次」tool 消息以填充 `tool_call_history`，
+    // M1.4 后供 loop_engine 在每轮调用 list_tool_defs_with_query 打分时使用。
     let db_load_limit = resolve_window(agent.max_history_messages) as i64;
     let history =
         repo::message::list_by_conversation(pool.inner(), &conv_id, Some(db_load_limit), None).await?;
-    // 显式走 PipelineRunner：构造 PipelineContext + 注册 5 个 Stage，
-    // 后续 A3-3 / A3-4 在此处追加新 Stage 即可，无需改动业务编排层。
+    // M1.2: 加载最近 10 条工具消息，提取 tool_use 块中的工具名
+    let tool_call_history =
+        repo::message::list_recent_tool_names(pool.inner(), &conv_id, 10).await?;
+
+    // --- 3.5 注册 cancel token（必须先于 Pipeline，让 MemoryStage 摘要也能响应取消）---
+    let cancel_token = chat_state.start(&conv_id).inspect_err(|_| {
+        tracing::warn!(target: "ice_paw.chat", "send_message: 会话 {} 已有在途生成任务", conv_id);
+    })?;
+
+    // 显式走 PipelineRunner：构造 PipelineContext + 注册 6 个 Stage（M1.4：
+    // Template → OsContext → SystemPrompt → History → Memory → Final；
+    // M1.4 起不再含 ToolTrimStage，工具裁剪下沉到 loop_engine）。
+    // 后续 A3-3 在此处追加新 Stage 即可，无需改动业务编排层。
+    //
+    // M1.5: PipelineContext 现在携带 conversation_id + cancel_token，
+    //       MemoryStage 需要二者才能调 summary_provider 并响应取消。
     let mut pipeline_ctx = PipelineContext::new(
         pool.inner().clone(),
         agent.clone(),
@@ -91,10 +110,28 @@ pub async fn send_message(
         history,
         final_blocks,
         tools_enabled,
+        current_user_query.clone(),
+        tool_call_history.clone(),
+        crate::context::token::ContextBudget::default(),
+        conv_id.clone(),
+        cancel_token.clone(),
     );
-    PipelineRunner::default_pipeline(pool.inner())
+
+    // M1.5: 构造 LlmSummaryProvider 注入 Pipeline
+    use crate::harness::summary_provider::LlmSummaryProvider;
+    use crate::context::memory::SummaryProvider;
+    let summary_provider: Box<dyn SummaryProvider> = Box::new(
+        LlmSummaryProvider::new(llm_provider.clone(), api_key.clone()),
+    );
+    PipelineRunner::default_pipeline(pool.inner(), Some(summary_provider))
         .run(&mut pipeline_ctx)
         .await?;
+
+    // M1.5: emit chat:summary-injected if MemoryStage triggered
+    if let Some(event) = pipeline_ctx.summary_event {
+        let _ = app.emit("chat:summary-injected", event);
+    }
+
     let assembled = AssembledContext {
         messages: pipeline_ctx.messages,
         user_blocks: pipeline_ctx.user_blocks,
@@ -121,10 +158,7 @@ pub async fn send_message(
         },
     ).await?;
 
-    // --- 5. 注册 cancel token + emit chat:start ---
-    let cancel_token = chat_state.start(&conv_id).inspect_err(|_| {
-        tracing::warn!(target: "ice_paw.chat", "send_message: 会话 {} 已有在途生成任务", conv_id);
-    })?;
+    // --- 5. emit chat:start（cancel_token 已在 3.5 注册） ---
     app.emit("chat:start", ChatStartPayload {
         conversation_id: conv_id.clone(),
         user_message_id: user_msg_id.clone(),
@@ -135,7 +169,8 @@ pub async fn send_message(
     spawn_stream_loop(
         app, pool.inner().clone(), llm_provider, api_key,
         assembled.messages, agent.temperature, agent.max_tokens,
-        cancel_token, conv_id, asst_msg_id, tools_enabled,
+        cancel_token, conv_id, user_msg_id, asst_msg_id, tools_enabled,
+        current_user_query, tool_call_history,
     );
     Ok(())
 }
@@ -157,6 +192,9 @@ pub async fn stop_generation(
 ///
 /// W6.2: 入参已封装到 [`LoopContext`] 后传给 `stream_loop`。
 ///
+/// M1.4: 移除 `trimmed_tool_defs` 参数——Pipeline 不再做工具裁剪，
+/// loop_engine 在每轮独立调 `list_tool_defs_with_query()` 打分。
+///
 /// 注意：`spawn_stream_loop` 自身的形参列表仍是 11 个（编排层分散收集
 /// 各 Tauri State/输入），所以 `#[allow(clippy::too_many_arguments)]`
 /// 仍需保留；要消除这个 lint 需要更彻底地把编排也下沉到 `LoopContext`
@@ -165,7 +203,9 @@ pub async fn stop_generation(
 fn spawn_stream_loop(
     app: AppHandle, pool: SqlitePool, provider: Arc<dyn LlmProvider>,
     api_key: String, messages: Vec<ChatMessage>, temperature: f64, max_tokens: i32,
-    cancel_token: CancellationToken, conv_id: String, asst_msg_id: String, tools_enabled: bool,
+    cancel_token: CancellationToken, conv_id: String, user_msg_id: String,
+    asst_msg_id: String, tools_enabled: bool,
+    query: Option<String>, call_history: Vec<String>,
 ) {
     tokio::spawn(async move {
         let tool_registry = if tools_enabled {
@@ -186,11 +226,13 @@ fn spawn_stream_loop(
         // A2-3: 路径白名单配置（当前为空 → 全部走 Confirm 流程）
         let whitelist = PathWhitelistConfig::default();
 
-        // W6.2 + A2-3: 把 16 个输入字段封装到 LoopContext，
+        // W6.2 + A2-3 + M1.2: 把 18 个输入字段封装到 LoopContext，
         // 消除 stream_loop 的 too_many_arguments 告警。
+        // M1.2: query + call_history 用于 list_tool_defs_with_query 打分
         let mut ctx = LoopContext::new(
             conv_id.clone(),
             asst_msg_id,
+            user_msg_id,
             app,
             pool,
             provider,
@@ -205,6 +247,8 @@ fn spawn_stream_loop(
             auth_registry,
             auth_session,
             whitelist,
+            query,
+            call_history,
         );
         crate::harness::loop_engine::stream_loop(&mut ctx, &mut observable).await;
         // W2.4: emit final round-state after stream_loop completes
