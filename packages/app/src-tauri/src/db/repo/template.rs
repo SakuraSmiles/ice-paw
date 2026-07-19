@@ -66,6 +66,20 @@ pub async fn create(pool: &SqlitePool, new: &NewTemplate, id: &str) -> AppResult
     get_by_id(pool, id).await
 }
 
+/// Encapsulates the optional fields for a partial template update.
+///
+/// Each field represents an override: `Some(value)` replaces the current value,
+/// `None` leaves it unchanged.
+pub struct TemplateUpdateFields<'a> {
+    pub name: Option<&'a str>,
+    pub description: Option<&'a str>,
+    pub system_prompt: Option<&'a str>,
+    pub user_prompt_prefix: Option<&'a str>,
+    pub variables: Option<&'a Vec<crate::db::models::TemplateVariable>>,
+    pub tools: Option<&'a Vec<String>>,
+    pub sort_order: Option<i32>,
+}
+
 /// 部分更新（partial update）：None 字段不动
 ///
 /// - `variables` / `tools` 整体替换为新值（Some(vec![]) 表示清空）
@@ -73,36 +87,30 @@ pub async fn create(pool: &SqlitePool, new: &NewTemplate, id: &str) -> AppResult
 pub async fn update(
     pool: &SqlitePool,
     id: &str,
-    name: Option<&str>,
-    description: Option<&str>,
-    system_prompt: Option<&str>,
-    user_prompt_prefix: Option<&str>,
-    variables: Option<&Vec<crate::db::models::TemplateVariable>>,
-    tools: Option<&Vec<String>>,
-    sort_order: Option<i32>,
+    fields: TemplateUpdateFields<'_>,
 ) -> AppResult<TemplateRow> {
     // 先读出来再合并，避免拼接动态 SQL
     let mut current = get_by_id(pool, id).await?;
 
-    if let Some(v) = name {
+    if let Some(v) = fields.name {
         current.name = v.to_string();
     }
-    if let Some(v) = description {
+    if let Some(v) = fields.description {
         current.description = v.to_string();
     }
-    if let Some(v) = system_prompt {
+    if let Some(v) = fields.system_prompt {
         current.system_prompt = v.to_string();
     }
-    if let Some(v) = user_prompt_prefix {
+    if let Some(v) = fields.user_prompt_prefix {
         current.user_prompt_prefix = v.to_string();
     }
-    if let Some(v) = variables {
+    if let Some(v) = fields.variables {
         current.variables = serde_json::to_string(v)?;
     }
-    if let Some(v) = tools {
+    if let Some(v) = fields.tools {
         current.tools = serde_json::to_string(v)?;
     }
-    if let Some(v) = sort_order {
+    if let Some(v) = fields.sort_order {
         current.sort_order = v;
     }
 

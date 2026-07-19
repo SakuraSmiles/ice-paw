@@ -153,6 +153,7 @@ watch(
     if (chatStore.messages.length > 0) return;
     try {
       await chatStore.loadMessages(id);
+      await scrollMessageListToBottom();
     } catch {
       // 主 watch 已 Toast 提示，避免重复弹窗
     }

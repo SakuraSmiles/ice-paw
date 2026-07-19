@@ -146,6 +146,7 @@ impl PathAuthSession {
 
     /// 已授权条目数（仅供测试 / 调试）
     #[cfg(test)]
+    #[allow(clippy::len_without_is_empty)]
     pub async fn len(&self) -> usize {
         let set = self.inner.lock().await;
         set.len()

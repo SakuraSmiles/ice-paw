@@ -108,7 +108,14 @@ function scrollToBottom(): void {
   if (!el) return;
   requestAnimationFrame(() => {
     const target = listRef.value;
-    if (target) target.scrollTop = target.scrollHeight;
+    if (!target) return;
+    // 临时关闭 smooth scrolling，确保立即跳到底部
+    target.style.scrollBehavior = "auto";
+    target.scrollTop = target.scrollHeight;
+    // 恢复 smooth 以便用户手动滚动时平滑
+    requestAnimationFrame(() => {
+      target.style.scrollBehavior = "";
+    });
   });
 }
 

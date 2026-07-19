@@ -14,7 +14,7 @@ pub async fn list(pool: &SqlitePool) -> AppResult<Vec<AgentRow>> {
     let rows = sqlx::query_as::<_, AgentRow>(
         "SELECT id, name, provider, model, system_prompt, api_key_ref, base_url,
                 temperature, max_tokens, extra_params, sort_order, cache_prompt,
-                max_history_messages,
+                max_history_messages, tool_trim_threshold,
                 created_at, updated_at
            FROM agents
           ORDER BY sort_order ASC, created_at ASC",
@@ -29,7 +29,7 @@ pub async fn get_by_id(pool: &SqlitePool, id: &str) -> AppResult<AgentRow> {
     let row = sqlx::query_as::<_, AgentRow>(
         "SELECT id, name, provider, model, system_prompt, api_key_ref, base_url,
                 temperature, max_tokens, extra_params, sort_order, cache_prompt,
-                max_history_messages,
+                max_history_messages, tool_trim_threshold,
                 created_at, updated_at
            FROM agents WHERE id = ?",
     )
@@ -62,8 +62,8 @@ pub async fn create(
         "INSERT INTO agents
            (id, name, provider, model, system_prompt, api_key_ref, base_url,
             temperature, max_tokens, extra_params, sort_order, cache_prompt,
-            max_history_messages)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            max_history_messages, tool_trim_threshold)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(id)
     .bind(&new_agent.name)
@@ -78,6 +78,7 @@ pub async fn create(
     .bind(new_agent.sort_order)
     .bind(cache_prompt_i)
     .bind(new_agent.max_history_messages)
+    .bind(new_agent.tool_trim_threshold)
     .execute(pool)
     .await?;
 
@@ -105,6 +106,7 @@ pub async fn update(
     sort_order: Option<i32>,
     cache_prompt: Option<bool>,
     max_history_messages: Option<Option<i32>>,
+    tool_trim_threshold: Option<Option<i32>>,
 ) -> AppResult<AgentRow> {
     // 先读出来再合并，避免拼接动态 SQL
     let mut current = get_by_id(pool, id).await?;
@@ -122,12 +124,14 @@ pub async fn update(
     if let Some(v) = cache_prompt { current.cache_prompt = if v { 1 } else { 0 }; }
     // A3-2: 双层 Option 语义（None=不改 / Some(None)=清空 / Some(Some(N))=设定）
     if let Some(v) = max_history_messages { current.max_history_messages = v; }
+    // M1.2 A2-4: 双层 Option 语义（同 max_history_messages）
+    if let Some(v) = tool_trim_threshold { current.tool_trim_threshold = v; }
 
     sqlx::query(
         "UPDATE agents
             SET name = ?, provider = ?, model = ?, system_prompt = ?,
                 base_url = ?, temperature = ?, max_tokens = ?, extra_params = ?, sort_order = ?,
-                cache_prompt = ?, max_history_messages = ?
+                cache_prompt = ?, max_history_messages = ?, tool_trim_threshold = ?
           WHERE id = ?",
     )
     .bind(&current.name)
@@ -141,6 +145,7 @@ pub async fn update(
     .bind(current.sort_order)
     .bind(current.cache_prompt)
     .bind(current.max_history_messages)
+    .bind(current.tool_trim_threshold)
     .bind(id)
     .execute(pool)
     .await?;
