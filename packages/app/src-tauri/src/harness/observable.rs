@@ -65,6 +65,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::field_reassign_with_default)]
     fn test_round_state_accumulation() {
         let mut state = RoundState::default();
         // Simulate round 1

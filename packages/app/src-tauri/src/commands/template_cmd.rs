@@ -60,13 +60,15 @@ pub async fn update_template(
     let row = repo::template::update(
         state.inner(),
         &input.id,
-        input.name.as_deref(),
-        input.description.as_deref(),
-        input.system_prompt.as_deref(),
-        input.user_prompt_prefix.as_deref(),
-        input.variables.as_ref(),
-        input.tools.as_ref(),
-        input.sort_order,
+        repo::template::TemplateUpdateFields {
+            name: input.name.as_deref(),
+            description: input.description.as_deref(),
+            system_prompt: input.system_prompt.as_deref(),
+            user_prompt_prefix: input.user_prompt_prefix.as_deref(),
+            variables: input.variables.as_ref(),
+            tools: input.tools.as_ref(),
+            sort_order: input.sort_order,
+        },
     )
     .await?;
     Ok(Template::from(row))

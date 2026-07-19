@@ -49,6 +49,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # === HTTP / 流式 LLM ===
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+# reqwest 0.12 已传递依赖 bytes，显式声明以在 `provider/anthropic/streaming.rs` 中命名 `bytes::Bytes`
+# （用作 `parse_sse_stream<S: Stream<Item = Result<Bytes, _>>>` 的关联类型 bound）。
+bytes = "1"
 tokio-stream = "0.1"
 futures = "0.3"
 async-trait = "0.1"

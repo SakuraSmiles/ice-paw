@@ -12,7 +12,7 @@
 //! 字段语义：
 //!   - `max_tool_rounds`：工具调用最大轮数（防止无限循环）
 //!   - `max_attempts`：每轮内最大重试次数（含首次尝试）
-//!   - `stuck_threshold`：卡住检测阈值（P2 启用，当前未使用）
+//!   - `stuck_threshold`：卡住检测阈值（M2.1 启用，默认 5；降低误判）
 //!   - `max_total_tokens`：Token 预算上限（W4.2 启用，默认 128_000）
 
 // ============================================================================
@@ -34,14 +34,14 @@ pub const MAX_ATTEMPTS: u32 = 4;
 /// 2. `max_attempts`：每轮内最大重试次数
 /// 3. `max_total_tokens`：整次对话累计 token 预算（W4.2 启用，默认 128_000）
 ///
-/// `stuck_threshold` 用于 P2 卡住检测（暂未启用）。
+/// `stuck_threshold` 用于 M2.1 卡住检测（已启用，默认 5）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoopBudget {
     /// 工具调用最大轮数（W3.1 默认 5，对应原 `MAX_TOOL_ROUNDS`）
     pub max_tool_rounds: u32,
     /// 每轮内最大尝试次数（W3.1 默认 4，对应原 `MAX_ATTEMPTS`）
     pub max_attempts: u32,
-    /// 卡住检测阈值（P2 启用，默认 3）
+    /// 卡住检测阈值（M2.1 启用，默认 5；dev1 评审建议降低误判概率）
     pub stuck_threshold: u32,
     /// 整次对话累计 token 预算（W4.2 启用，默认 128_000）
     pub max_total_tokens: usize,
@@ -52,7 +52,9 @@ impl Default for LoopBudget {
         Self {
             max_tool_rounds: MAX_TOOL_ROUNDS,
             max_attempts: MAX_ATTEMPTS,
-            stuck_threshold: 3,
+            // M2.1: 默认阈值从 3 改为 5（dev1 评审建议）
+            // 理由：阈值太小会误判正常多步推理为停滞；5 轮无进展已可确信是 LLM 卡住
+            stuck_threshold: 5,
             max_total_tokens: 128_000,
         }
     }
@@ -71,7 +73,8 @@ mod tests {
         let budget = LoopBudget::default();
         assert_eq!(budget.max_tool_rounds, 5);
         assert_eq!(budget.max_attempts, 4);
-        assert_eq!(budget.stuck_threshold, 3);
+        // M2.1: 默认值从 3 改为 5（dev1 评审）
+        assert_eq!(budget.stuck_threshold, 5);
         assert_eq!(budget.max_total_tokens, 128_000);
     }
 
