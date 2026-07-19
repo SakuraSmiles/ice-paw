@@ -382,8 +382,10 @@ export const useChatStore = defineStore("chat", () => {
         // P2-3: 清除上一轮的 usage
         lastUsage.value = null;
         lastFinishReason.value = null;
-        // W2.4: 清除上一轮的 round-state
-        lastRoundState.value = null;
+        // 注意：此处不再清空 lastRoundState——
+        //   ChatStatusBar 的可见性已改为「当前会话曾有 AI 回复就一直显示」，
+        //   重置会触发胶囊闪没，反而误导用户认为本次请求是新会话。
+        //   round-state 字段仍由新一轮的 chat:round-state 事件自然覆盖。
       }),
     );
 
