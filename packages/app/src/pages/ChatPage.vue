@@ -263,9 +263,9 @@ async function onLoadOlder(): Promise<void> {
         @retry="onRetry"
         @load-older="onLoadOlder"
       />
+        <!-- W2.4: 状态栏（浮于 MessageList 区域右上角） -->
+        <ChatStatusBar />
       </div>
-      <!-- W2.4: 状态栏（浮于 MessageList 区域右上角） -->
-      <ChatStatusBar />
       <ChatInput
         :disabled="false"
         :streaming="chatStore.isStreaming"
@@ -289,7 +289,9 @@ async function onLoadOlder(): Promise<void> {
   overflow: hidden;
 }
 
-/* W2.4: 消息列表包装器（用于定位状态栏） */
+/* 消息列表包装器（用于定位状态栏）。
+   注意：状态栏已改为绝对定位悬浮 + pointer-events:none，
+   不再需要为状态栏预留 padding-top。 */
 .message-list-wrapper {
   position: relative;
   flex: 1;
