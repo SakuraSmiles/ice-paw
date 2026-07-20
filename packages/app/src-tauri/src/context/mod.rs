@@ -21,5 +21,10 @@ pub(crate) mod system_prompt;
 pub(crate) mod template;
 pub(crate) mod token;
 
+// Pub re-exports for integration tests (tests/ use `ice_paw_lib::context::*`)
+pub use memory::{MemoryStage, NoopSummaryProvider, SummaryProvider};
+pub use pipeline::{PipelineContext, PipelineStage};
+pub use token::ContextBudget;
+
 #[cfg(test)]
 mod pipeline_tests;
