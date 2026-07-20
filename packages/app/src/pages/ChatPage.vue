@@ -20,6 +20,7 @@ import { useConversationsStore } from "../stores/conversations";
 import { useChatStore } from "../stores/chat";
 import { useToast } from "../composables/useToast";
 import { useToolAuth } from "../composables/useToolAuth";
+import { ACCEPT_MIMES } from "../composables/useImageFiles";
 import ChatHeader from "../components/chat/ChatHeader.vue";
 import MessageList from "../components/chat/MessageList.vue";
 import ChatInput from "../components/chat/ChatInput.vue";
@@ -28,6 +29,7 @@ import InlineAgentCreate from "../components/agent/InlineAgentCreate.vue";
 import ChatStatusBar from "../components/chat/ChatStatusBar.vue";
 import ToolAuthDialog from "../components/chat/ToolAuthDialog.vue";
 import TemplateCards from "../components/chat/TemplateCards.vue";
+import DragOverlay from "../components/chat/DragOverlay.vue";
 
 const agentsStore = useAgentsStore();
 const conversationsStore = useConversationsStore();
@@ -249,10 +251,94 @@ const showTemplateCards = computed<boolean>(
     !chatStore.loading &&
     !chatStore.isStreaming,
 );
+
+// ============================================================================
+// Task 3a: 拖拽上传
+// ============================================================================
+
+/** 是否显示拖拽 overlay */
+const isDragOver = ref<boolean>(false);
+
+/** 拖拽进入的计数（解决子元素 dragenter/dragleave 冒泡问题） */
+const dragCounter = ref<number>(0);
+
+/** 拖拽区域 ref（聊天页面根元素） */
+const chatDropZoneRef = ref<HTMLElement | null>(null);
+
+/** 拖拽后文件处理：直接写入 ChatInput 的 pendingImages */
+function handleDroppedFiles(files: File[]): void {
+  // 通过 ChatInput 暴露的方法处理拖拽文件
+  chatInputRef.value?.addFiles?.(files);
+}
+
+/** 检查拖拽内容是否包含文件 */
+function hasFiles(e: DragEvent): boolean {
+  if (!e.dataTransfer) return false;
+  const types = e.dataTransfer.types;
+  return types.includes("Files");
+}
+
+/** dragenter */
+function onDragEnter(e: DragEvent): void {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  dragCounter.value++;
+  isDragOver.value = true;
+}
+
+/** dragover — 必须 preventDefault 才能触发 drop */
+function onDragOver(e: DragEvent): void {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  if (e.dataTransfer) {
+    e.dataTransfer.dropEffect = "copy";
+  }
+}
+
+/** dragleave — 使用 dragCounter 解决子元素冒泡问题 */
+function onDragLeave(e: DragEvent): void {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  dragCounter.value--;
+  if (dragCounter.value <= 0) {
+    dragCounter.value = 0;
+    isDragOver.value = false;
+  }
+}
+
+/** drop — 提取文件并处理 */
+function onDrop(e: DragEvent): void {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  dragCounter.value = 0;
+  isDragOver.value = false;
+
+  const files = e.dataTransfer?.files;
+  if (!files || files.length === 0) return;
+
+  // 过滤出图片文件
+  const imageFiles = Array.from(files).filter((f) =>
+    ACCEPT_MIMES.includes(f.type as (typeof ACCEPT_MIMES)[number]),
+  );
+
+  if (imageFiles.length === 0) {
+    toast.warning("仅支持拖拽图片文件（png/jpeg/gif/webp）");
+    return;
+  }
+
+  void handleDroppedFiles(imageFiles);
+}
 </script>
 
 <template>
-  <div class="chat-page">
+  <div
+    ref="chatDropZoneRef"
+    class="chat-page"
+    @dragenter="onDragEnter"
+    @dragover="onDragOver"
+    @dragleave="onDragLeave"
+    @drop="onDrop"
+  >
     <!-- 三态一：无 Agent → 首页内联创建 -->
     <InlineAgentCreate v-if="!hasAgents && !agentsStore.loading" />
 
@@ -303,6 +389,9 @@ const showTemplateCards = computed<boolean>(
 
     <!-- A2-3: 工具授权确认弹窗（全局唯一实例） -->
     <ToolAuthDialog />
+
+    <!-- Task 3a: 拖拽上传 overlay -->
+    <DragOverlay v-if="isDragOver" />
   </div>
 </template>
 

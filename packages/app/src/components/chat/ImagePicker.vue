@@ -17,17 +17,16 @@
 
 import { computed, useTemplateRef } from "vue";
 import { ImagePlus, X } from "lucide-vue-next";
+import {
+  useImageFiles,
+  ACCEPT_ATTR,
+  MAX_COUNT,
+  type ImageItem,
+} from "../../composables/useImageFiles";
 import { useToast } from "../../composables/useToast";
 
-/** 组件对外的图片条目 */
-export interface ImageItem {
-  /** 裸 base64 字符串（不含 `data:image/...;base64,` 前缀） */
-  data: string;
-  /** MIME 类型，例如 `image/png` */
-  media_type: string;
-  /** 完整的 data URL（含前缀，仅用于 `<img src>` 预览） */
-  preview: string;
-}
+// re-export 保持向后兼容（其他组件可能从此处 import type）
+export type { ImageItem };
 
 const props = defineProps<{
   images: ImageItem[];
@@ -41,19 +40,22 @@ const emit = defineEmits<{
 const toast = useToast();
 
 // ============================================================================
-// 常量
+// 常量（从 composable 导入）
 // ============================================================================
 
-/** 接受的文件 MIME（与 Rust 侧白名单 + input accept 属性对齐） */
-const ACCEPT = "image/png,image/jpeg,image/gif,image/webp";
-
-/** 单张最大字节数（5MB） */
-const MAX_FILE_SIZE = 5 * 1024 * 1024;
-
-/** 总数上限（与 Rust 侧校验一致） */
-const MAX_COUNT = 20;
+/** accept 属性（从 composable 导入） */
+const ACCEPT = ACCEPT_ATTR;
 
 const fileInputRef = useTemplateRef<HTMLInputElement | null>("fileInputRef");
+
+// ============================================================================
+// 文件处理（使用 composable）
+// ============================================================================
+
+const { processFiles } = useImageFiles(
+  () => props.images,
+  (images) => emit("update:images", images),
+);
 
 // ============================================================================
 // 派生
@@ -93,72 +95,6 @@ function onFileChange(e: Event): void {
   target.value = "";
 
   void processFiles(fileList);
-}
-
-async function processFiles(files: File[]): Promise<void> {
-  const slots = MAX_COUNT - props.images.length;
-  if (slots <= 0) {
-    toast.warning(`最多 ${MAX_COUNT} 张图片`);
-    return;
-  }
-  const toProcess = files.slice(0, slots);
-  if (files.length > slots) {
-    toast.warning(`超过上限，已截取前 ${slots} 张`);
-  }
-
-  const additions: ImageItem[] = [];
-  for (const f of toProcess) {
-    // 大小预校验
-    if (f.size > MAX_FILE_SIZE) {
-      toast.error(`图片「${f.name || "未命名"}」超过 5MB，已跳过`);
-      continue;
-    }
-    // MIME 预校验（accept 已经过滤一遍，但拖拽/paste 兜底）
-    if (!f.type || !ACCEPT.split(",").includes(f.type)) {
-      toast.error(`不支持的图片格式：${f.type || "未知"}，仅支持 png/jpeg/gif/webp`);
-      continue;
-    }
-
-    // FileReader.readAsDataURL → "data:image/png;base64,xxxx"
-    try {
-      const dataUrl = await readAsDataURL(f);
-      const { base64, mediaType } = splitDataUrl(dataUrl, f.type);
-      additions.push({ data: base64, media_type: mediaType, preview: dataUrl });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      toast.error(`读取图片失败：${msg}`);
-    }
-  }
-
-  if (additions.length > 0) {
-    emit("update:images", [...props.images, ...additions]);
-  }
-}
-
-function readAsDataURL(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const r = reader.result;
-      if (typeof r === "string") resolve(r);
-      else reject(new Error("FileReader 返回非字符串"));
-    };
-    reader.onerror = () => reject(new Error(reader.error?.message ?? "读取失败"));
-    reader.readAsDataURL(file);
-  });
-}
-
-/** 拆出 base64 主段与 media type。FileReader 输出固定是 `data:<type>;base64,<data>` */
-function splitDataUrl(
-  dataUrl: string,
-  fallbackType: string,
-): { base64: string; mediaType: string } {
-  const m = /^data:([^;,]+);base64,(.*)$/.exec(dataUrl);
-  if (!m || !m[1] || !m[2]) {
-    // 极小概率：格式异常 → 返回原 data 段
-    return { base64: dataUrl, mediaType: fallbackType };
-  }
-  return { base64: m[2], mediaType: m[1] };
 }
 
 /** 删除指定下标的图片 */
