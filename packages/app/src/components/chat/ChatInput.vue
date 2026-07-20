@@ -19,7 +19,7 @@
 //   - stop()                点击停止按钮时
 
 import { computed, nextTick, ref, watch, useTemplateRef } from "vue";
-import { SendHorizontal, Square, Wrench } from "lucide-vue-next";
+import { SendHorizontal, Square, Wrench, Library } from "lucide-vue-next";
 import { useChatStore } from "../../stores/chat";
 import { useTemplatesStore } from "../../stores/templates";
 import TemplatePicker from "../template/TemplatePicker.vue";
@@ -191,6 +191,29 @@ function onTemplateSelectedChange(id: string | null): void {
 }
 
 // ============================================================================
+// expose：供父组件填入 draft（模板卡片点击）
+// ============================================================================
+
+/**
+ * 外部设置 textarea 的 draft 内容（模板卡片点击时调用）。
+ * 自动触发 autosize + 聚焦。
+ */
+function setDraft(content: string): void {
+  draft.value = content;
+  void nextTick(() => {
+    autosize();
+    textareaRef.value?.focus();
+    const el = textareaRef.value;
+    if (el) {
+      const len = el.value.length;
+      el.setSelectionRange(len, len);
+    }
+  });
+}
+
+defineExpose({ setDraft });
+
+// ============================================================================
 // autosize
 // ============================================================================
 
@@ -330,6 +353,17 @@ const appliedHint = computed<string | null>(() => {
         >
           <Wrench :size="14" aria-hidden="true" />
           <span class="tool-toggle-label">工具</span>
+        </button>
+        <!-- Phase 1 disabled: 模板库按钮占位 -->
+        <button
+          class="btn-tool-toggle"
+          type="button"
+          disabled
+          title="Phase 1.1 可用"
+          aria-label="模板库（即将推出）"
+        >
+          <Library :size="14" aria-hidden="true" />
+          <span class="tool-toggle-label">模板库</span>
         </button>
         <span class="hint-text">
           <template v-if="streaming">生成中 · 可随时停止</template>
@@ -563,6 +597,17 @@ const appliedHint = computed<string | null>(() => {
 .btn-tool-toggle-active:hover {
   border-color: var(--ip-primary-600);
   color: var(--ip-primary-700, #1d4ed8);
+}
+
+/* 停用状态的按钮（模板库占位） */
+.btn-tool-toggle:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn-tool-toggle:disabled:hover {
+  border-color: var(--ip-color-border-default);
+  color: var(--ip-color-text-tertiary);
 }
 
 .tool-toggle-label {
