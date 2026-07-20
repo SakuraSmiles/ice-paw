@@ -13,7 +13,7 @@ pub async fn list_by_agent(
     agent_id: &str,
 ) -> AppResult<Vec<ConversationRow>> {
     let rows = sqlx::query_as::<_, ConversationRow>(
-        "SELECT id, agent_id, title, pinned, created_at, updated_at, tools_override
+        "SELECT id, agent_id, title, pinned, created_at, updated_at, tools_override, project_id
            FROM conversations
           WHERE agent_id = ?
           ORDER BY pinned DESC, updated_at DESC",
@@ -27,7 +27,7 @@ pub async fn list_by_agent(
 /// 取一条
 pub async fn get_by_id(pool: &SqlitePool, id: &str) -> AppResult<ConversationRow> {
     let row = sqlx::query_as::<_, ConversationRow>(
-        "SELECT id, agent_id, title, pinned, created_at, updated_at, tools_override
+        "SELECT id, agent_id, title, pinned, created_at, updated_at, tools_override, project_id
            FROM conversations WHERE id = ?",
     )
     .bind(id)
@@ -139,6 +139,53 @@ pub async fn delete(pool: &SqlitePool, id: &str) -> AppResult<()> {
         return Err(AppError::NotFound {
             resource: "conversation",
             id: id.to_string(),
+        });
+    }
+    Ok(())
+}
+
+/// Phase 2: 列出某项目下的全部会话（NULL = 默认项目）
+pub async fn list_by_project(
+    pool: &SqlitePool,
+    project_id: Option<&str>,
+) -> AppResult<Vec<ConversationRow>> {
+    let rows = if let Some(pid) = project_id {
+        sqlx::query_as::<_, ConversationRow>(
+            "SELECT id, agent_id, title, pinned, created_at, updated_at, tools_override, project_id
+               FROM conversations WHERE project_id = ?
+               ORDER BY pinned DESC, updated_at DESC",
+        )
+        .bind(pid)
+        .fetch_all(pool)
+        .await?
+    } else {
+        sqlx::query_as::<_, ConversationRow>(
+            "SELECT id, agent_id, title, pinned, created_at, updated_at, tools_override, project_id
+               FROM conversations WHERE project_id IS NULL
+               ORDER BY pinned DESC, updated_at DESC",
+        )
+        .fetch_all(pool)
+        .await?
+    };
+    Ok(rows)
+}
+
+/// Phase 2: 移动会话到指定项目（None = 移回默认项目）
+pub async fn move_to_project(
+    pool: &SqlitePool,
+    conversation_id: &str,
+    project_id: Option<&str>,
+) -> AppResult<()> {
+    let affected = sqlx::query("UPDATE conversations SET project_id = ? WHERE id = ?")
+        .bind(project_id)
+        .bind(conversation_id)
+        .execute(pool)
+        .await?
+        .rows_affected();
+    if affected == 0 {
+        return Err(AppError::NotFound {
+            resource: "conversation",
+            id: conversation_id.to_string(),
         });
     }
     Ok(())

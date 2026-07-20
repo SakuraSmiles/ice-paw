@@ -9,4 +9,5 @@ pub mod chat_cmd;
 pub mod conversation_cmd;
 pub mod message_cmd;
 pub mod preferences_cmd;
+pub mod project_cmd;
 pub mod template_cmd;

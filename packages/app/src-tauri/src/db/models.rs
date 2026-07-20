@@ -214,6 +214,8 @@ pub struct ConversationRow {
     pub updated_at: String,
     /// Task 3b: 对话级工具覆盖（JSON 字符串，NULL = 继承 Agent 配置）
     pub tools_override: Option<String>,
+    /// Phase 2: 所属项目 ID（NULL = 默认项目）
+    pub project_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -227,6 +229,9 @@ pub struct Conversation {
     /// Task 3b: 对话级工具覆盖（None = 继承 Agent 配置）
     #[serde(default)]
     pub tools_override: Option<HashMap<String, bool>>,
+    /// Phase 2: 所属项目 ID（None = 默认项目）
+    #[serde(default)]
+    pub project_id: Option<String>,
 }
 
 impl From<ConversationRow> for Conversation {
@@ -241,6 +246,7 @@ impl From<ConversationRow> for Conversation {
             tools_override: row.tools_override
                 .as_deref()
                 .map(|s| serde_json::from_str::<HashMap<String, bool>>(s).unwrap_or_default()),
+            project_id: row.project_id,
         }
     }
 }
@@ -519,4 +525,80 @@ pub struct TemplateUpdate {
     pub variables: Option<Vec<TemplateVariable>>,
     pub tools: Option<Vec<String>>,
     pub sort_order: Option<i32>,
+}
+
+// =========================================================================
+// Project（Phase 2）
+// =========================================================================
+
+/// 数据库行版本：projects 表
+#[derive(Debug, Clone, FromRow)]
+pub struct ProjectRow {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub icon: String,
+    pub sort_order: i32,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// 前端可见的 Project
+#[derive(Debug, Clone, Serialize)]
+pub struct Project {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub icon: String,
+    pub sort_order: i32,
+    pub created_at: String,
+    pub updated_at: String,
+    /// 项目下的 Agent 列表（简化信息）
+    pub agents: Vec<ProjectMember>,
+}
+
+/// 项目成员（Agent 在项目中的角色）
+#[derive(Debug, Clone, Serialize)]
+pub struct ProjectMember {
+    pub agent_id: String,
+    pub role: String, // 'lead' | 'member'
+}
+
+/// 创建项目入参（前端 → Rust）
+#[derive(Debug, Deserialize)]
+pub struct NewProject {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub icon: Option<String>,
+}
+
+/// From<ProjectRow> for Project（agents 默认空 vec，需要单独查询填充）
+impl From<ProjectRow> for Project {
+    fn from(row: ProjectRow) -> Self {
+        Project {
+            id: row.id,
+            name: row.name,
+            description: row.description,
+            icon: row.icon,
+            sort_order: row.sort_order,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            agents: Vec::new(),
+        }
+    }
+}
+
+// =========================================================================
+// ProjectAgent（关联表）
+// =========================================================================
+
+/// 数据库行版本：project_agents 关联表
+#[derive(Debug, Clone, FromRow)]
+pub struct ProjectAgentRow {
+    pub project_id: String,
+    pub agent_id: String,
+    pub role: String,
+    pub joined_at: String,
 }
