@@ -373,6 +373,31 @@ const templates = {
   },
 };
 
+
+// ============================================================================
+// bridge.preferences — 偏好设置命名空间
+// ============================================================================
+
+const preferences = {
+  async get(): Promise<import("../types").UserPreferences> {
+    try {
+      return await invoke<import("../types").UserPreferences>("get_preferences");
+    } catch (err) {
+      throw wrapInvokeError("preferences.get", err);
+    }
+  },
+
+  async set(key: string, value: unknown): Promise<void> {
+    try {
+      await invoke<void>("set_preference", {
+        key,
+        value: JSON.stringify(value),
+      });
+    } catch (err) {
+      throw wrapInvokeError("preferences.set", err);
+    }
+  },
+};
 // ============================================================================
 // 统一导出
 // ============================================================================
@@ -394,6 +419,7 @@ export const bridge = {
   messages,
   templates,
   chat,
+  preferences,
 };
 
 export default bridge;

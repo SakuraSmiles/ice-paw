@@ -466,6 +466,23 @@ pub struct NewTemplate {
     pub sort_order: i32,
 }
 
+// =========================================================================
+// UserPreferences（全局配置）
+// =========================================================================
+
+/// 用户偏好设置（前端 ↔ 后端传输结构）
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserPreferences {
+    pub default_agent_id: Option<String>,
+    pub default_template_id: Option<String>,
+    pub on_startup: Option<String>,
+    pub language: Option<String>,
+    pub theme: Option<String>,
+    pub code_theme: Option<String>,
+    pub font_size: Option<i32>,
+}
+
 /// 更新模板入参（partial update）
 #[derive(Debug, Deserialize)]
 pub struct TemplateUpdate {
