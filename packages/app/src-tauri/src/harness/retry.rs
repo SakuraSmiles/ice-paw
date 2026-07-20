@@ -155,7 +155,7 @@ impl RetryState {
                     "assistant",
                     format!(
                         "[以下是上一轮因网络中断已收到的部分回复，请从此处继续]\n{}",
-                        &ctx.round_text
+                        ctx.round_text
                     ),
                 ));
                 msgs
