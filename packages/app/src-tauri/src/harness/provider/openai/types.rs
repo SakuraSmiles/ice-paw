@@ -107,6 +107,9 @@ pub(crate) struct SseChoice {
 pub(crate) struct SseDelta {
     #[serde(default)]
     pub content: Option<String>,
+    /// 思考过程增量（GLM / DeepSeek 等 thinking 模式 SSE 字段）
+    #[serde(default)]
+    pub reasoning_content: Option<String>,
     /// 工具调用增量（OpenAI 格式）
     #[serde(default)]
     pub tool_calls: Option<Vec<SseToolCallDelta>>,
