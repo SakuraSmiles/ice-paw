@@ -149,6 +149,23 @@ pub(crate) fn parse_sse_stream<S, E>(
                                 }
                             }
 
+                            // 思考过程增量（GLM / DeepSeek thinking 模式 SSE 字段）
+                            if let Some(rc) = &choice.delta.reasoning_content {
+                                if !rc.is_empty() {
+                                    if let Err(e) = tx
+                                        .send(Ok(ChatDelta::Thinking { content: rc.clone() }))
+                                        .await
+                                    {
+                                        tracing::warn!(
+                                            target: "ice_paw.llm",
+                                            "send Thinking delta 失败: {}",
+                                            e
+                                        );
+                                        break;
+                                    }
+                                }
+                            }
+
                             // 工具调用增量
                             if let Some(tc_deltas) = choice.delta.tool_calls {
                                 process_tool_call_deltas(
@@ -390,5 +407,67 @@ mod tests {
             }
             other => panic!("events[4] 应为 Done，实际: {other:?}"),
         }
+    }
+
+    /// reasoning_content 测试（GLM / DeepSeek thinking 模式）：
+    ///
+    /// SSE chunk 同时携带 `content` 与 `reasoning_content` 字段：
+    /// 1. 第一行：delta 同时含 reasoning_content 与 content
+    ///    → 应产出 `ChatDelta::Thinking` 在前 + `ChatDelta::Delta` 在后
+    /// 2. 第二行：delta 仅含 reasoning_content（无 content）
+    ///    → 应产出 `ChatDelta::Thinking`
+    /// 3. 第三行：delta 含空 reasoning_content + content
+    ///    → 空 reasoning_content 应被跳过，仅产出 `ChatDelta::Delta`
+    /// 4. 第四行：`[DONE]` → `ChatDelta::Done { finish_reason: "stop" }`
+    ///
+    /// 验证：thinking 与 content 互不混淆，空 reasoning_content 被丢弃。
+    #[tokio::test]
+    async fn sse_parse_reasoning_content_flow_synthetic() {
+        // 注：byte string 字面量必须是 ASCII，故 reasoning_content 用英文标签。
+        // 测试聚焦 SSE 字段解析与 ChatDelta::Thinking 转发路径，不依赖 UTF-8。
+        let raw = b"data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"thinking...\",\"content\":\"hi\"}}]}\n\
+                   data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"keep thinking\"}}]}\n\
+                   data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"\",\"content\":\" world\"}}]}\n\
+                   data: [DONE]\n";
+
+        let chunks: Vec<Result<Bytes, std::io::Error>> =
+            vec![Ok(Bytes::copy_from_slice(raw))];
+        let byte_stream = stream::iter(chunks);
+
+        let (tx, mut rx) = mpsc::channel::<AppResult<ChatDelta>>(64);
+        let cancel = CancellationToken::new();
+
+        parse_sse_stream(byte_stream, tx, cancel);
+
+        let mut thinking: Vec<String> = Vec::new();
+        let mut deltas: Vec<String> = Vec::new();
+        let mut done_reason: Option<Option<String>> = None;
+        while let Some(item) = rx.recv().await {
+            match item {
+                Ok(ChatDelta::Thinking { content }) => thinking.push(content),
+                Ok(ChatDelta::Delta { content }) => deltas.push(content),
+                Ok(ChatDelta::Done { finish_reason }) => {
+                    done_reason = Some(finish_reason);
+                }
+                Ok(other) => panic!("不应出现的 ChatDelta 变体: {other:?}"),
+                Err(e) => panic!("不应出现错误: {e:?}"),
+            }
+        }
+
+        assert_eq!(
+            thinking,
+            vec!["thinking...".to_string(), "keep thinking".to_string()],
+            "应收到 2 个思考增量（空 reasoning_content 被跳过）"
+        );
+        assert_eq!(
+            deltas,
+            vec!["hi".to_string(), " world".to_string()],
+            "应收到 2 个文本增量（不含 thinking 内容）"
+        );
+        assert_eq!(
+            done_reason,
+            Some(Some("stop".to_string())),
+            "Done 应携带 finish_reason=stop"
+        );
     }
 }
