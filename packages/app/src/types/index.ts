@@ -153,6 +153,8 @@ export interface Conversation {
   pinned: boolean;
   created_at: string;
   updated_at: string;
+  /** Task 3b: 对话级工具覆盖（null/undefined = 继承 Agent 配置） */
+  toolsOverride?: Record<string, boolean> | null;
 }
 
 /**

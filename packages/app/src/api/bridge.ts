@@ -202,6 +202,27 @@ const conversations = {
       throw wrapInvokeError("conversations.delete", err);
     }
   },
+
+  /**
+   * Task 3b: 更新对话级工具覆盖。
+   * - `null`：清除覆盖，恢复继承 Agent 配置
+   * - `Record<string, boolean>`：per-tool 勾选状态
+   *
+   * 对应 Command：update_conversation_tools_override
+   */
+  async updateToolsOverride(
+    convId: string,
+    override: Record<string, boolean> | null,
+  ): Promise<void> {
+    try {
+      await invoke<void>("update_conversation_tools_override", {
+        conversationId: convId,
+        toolsOverride: override,
+      });
+    } catch (err) {
+      throw wrapInvokeError("conversations.updateToolsOverride", err);
+    }
+  },
 };
 
 // ============================================================================

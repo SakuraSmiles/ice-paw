@@ -75,6 +75,7 @@ pub fn run() {
             commands::conversation_cmd::rename_conversation,
             commands::conversation_cmd::pin_conversation,
             commands::conversation_cmd::delete_conversation,
+            commands::conversation_cmd::update_conversation_tools_override,
             commands::message_cmd::list_messages,
             commands::message_cmd::create_message,
             commands::template_cmd::list_templates,
