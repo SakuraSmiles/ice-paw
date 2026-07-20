@@ -87,6 +87,15 @@ pub fn run() {
             commands::chat_cmd::stop_generation,
             commands::preferences_cmd::get_preferences,
             commands::preferences_cmd::set_preference,
+            commands::project_cmd::list_projects,
+            commands::project_cmd::create_project,
+            commands::project_cmd::update_project,
+            commands::project_cmd::delete_project,
+            commands::project_cmd::reorder_projects,
+            commands::project_cmd::add_project_agent,
+            commands::project_cmd::remove_project_agent,
+            commands::project_cmd::list_conversations_by_project,
+            commands::project_cmd::move_conversation_to_project,
         ])
         // 启动逻辑
         .setup(|app| {
