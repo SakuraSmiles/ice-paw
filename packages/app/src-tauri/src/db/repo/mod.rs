@@ -6,5 +6,6 @@
 pub mod agent;
 pub mod conversation;
 pub mod message;
+pub mod preferences;
 pub mod summary;
 pub mod template;

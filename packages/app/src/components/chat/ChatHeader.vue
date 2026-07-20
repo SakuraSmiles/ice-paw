@@ -14,17 +14,19 @@
 //   - stop  点击停止按钮时触发（外层接住后调 chatStore.stopGeneration）
 
 import { computed } from "vue";
-import { Square } from "lucide-vue-next";
+import { Square, Settings } from "lucide-vue-next";
 import { useAgentsStore } from "../../stores/agents";
 import { useConversationsStore } from "../../stores/conversations";
 import { useChatStore } from "../../stores/chat";
 import { useAgentMeta, type AgentMeta } from "../../composables/useAgentMeta";
+import { useRouter } from "vue-router";
 import AgentAvatar from "../common/AgentAvatar.vue";
 
 const agentsStore = useAgentsStore();
 const conversationsStore = useConversationsStore();
 const chatStore = useChatStore();
 const agentMeta = useAgentMeta();
+const router = useRouter();
 
 const emit = defineEmits<{
   stop: [];
@@ -59,6 +61,10 @@ const meta = computed<AgentMeta | null>(() => {
 function onStop(): void {
   emit("stop");
 }
+
+function openSettings(): void {
+  void router.push("/settings/general");
+}
 </script>
 
 <template>
@@ -80,6 +86,15 @@ function onStop(): void {
       </div>
     </div>
     <div class="header-actions">
+      <button
+        class="btn-settings"
+        type="button"
+        title="设置"
+        aria-label="设置"
+        @click="openSettings"
+      >
+        <Settings :size="16" aria-hidden="true" />
+      </button>
       <button
         v-if="chatStore.isStreaming"
         class="btn-stop"
@@ -197,6 +212,25 @@ function onStop(): void {
 .btn-stop:focus-visible {
   outline: none;
   box-shadow: var(--ip-shadow-focus);
+}
+
+.btn-settings {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: var(--ip-radius-md);
+  background: transparent;
+  color: var(--ip-color-text-secondary);
+  cursor: pointer;
+  transition: var(--ip-transition-colors);
+}
+
+.btn-settings:hover {
+  background-color: var(--ip-color-bg-hover);
+  color: var(--ip-color-text-primary);
 }
 
 .btn-stop:active {
