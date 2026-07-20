@@ -25,8 +25,9 @@ import { useConversationsStore } from "../../stores/conversations";
 import { useAgentsStore } from "../../stores/agents";
 import { bridge } from "../../api/bridge";
 import { useTemplatesStore } from "../../stores/templates";
+import { useImageFiles, type ImageItem } from "../../composables/useImageFiles";
 import TemplatePicker from "../template/TemplatePicker.vue";
-import ImagePicker, { type ImageItem } from "./ImagePicker.vue";
+import ImagePicker from "./ImagePicker.vue";
 import ToolPopover from "./ToolPopover.vue";
 import type { ContentBlock } from "../../types";
 
@@ -62,6 +63,48 @@ const pendingImages = ref<ImageItem[]>([]);
 function onImagesChange(next: ImageItem[]): void {
   pendingImages.value = next;
 }
+
+// ============================================================================
+// Task 3a: 粘贴上传 + 文件处理 composable
+// ============================================================================
+
+const { processFiles } = useImageFiles(
+  () => pendingImages.value,
+  (images) => {
+    pendingImages.value = images;
+  },
+);
+
+/** textarea paste 事件：检测剪贴板中的图片文件并添加 */
+function onPaste(e: ClipboardEvent): void {
+  const items = e.clipboardData?.items;
+  if (!items) return;
+  const imageFiles: File[] = [];
+  for (const item of items) {
+    if (item.type.startsWith("image/")) {
+      const file = item.getAsFile();
+      if (file) imageFiles.push(file);
+    }
+  }
+  if (imageFiles.length > 0) {
+    e.preventDefault(); // 阻止图片以文本形式粘贴
+    void processFiles(imageFiles);
+  }
+}
+
+// ============================================================================
+// Task 3a: supports_vision 联动
+// ============================================================================
+
+/** 当前 Agent 是否支持图片输入 */
+const supportsVision = computed<boolean>(() => {
+  return agentsStore.current?.supports_vision ?? false;
+});
+
+/** ImagePicker 是否禁用：流式中 或 当前 Agent 不支持图片 */
+const imagePickerDisabled = computed<boolean>(
+  () => props.streaming || !supportsVision.value,
+);
 
 /** textarea DOM 引用 */
 const textareaRef = useTemplateRef<HTMLTextAreaElement | null>("textareaRef");
@@ -302,7 +345,22 @@ function setDraft(content: string): void {
   });
 }
 
-defineExpose({ setDraft });
+/**
+ * 外部设置图片列表（拖拽上传时由 ChatPage 调用）。
+ */
+function setImages(images: ImageItem[]): void {
+  pendingImages.value = images;
+}
+
+/**
+ * 外部追加文件（拖拽上传时由 ChatPage 调用）。
+ * 复用 useImageFiles 的 processFiles 逻辑。
+ */
+async function addFiles(files: File[]): Promise<void> {
+  await processFiles(files);
+}
+
+defineExpose({ setDraft, setImages, addFiles });
 
 // ============================================================================
 // autosize
@@ -415,7 +473,7 @@ const appliedHint = computed<string | null>(() => {
     <!-- P2-2 多模态：图片选择器（附件按钮 + 缩略图列表） -->
     <ImagePicker
       :images="pendingImages"
-      :disabled="streaming"
+      :disabled="imagePickerDisabled"
       @update:images="onImagesChange"
     />
 
@@ -429,6 +487,7 @@ const appliedHint = computed<string | null>(() => {
       :style="{ height: `${heightPx}px` }"
       :maxlength="20000"
       @keydown="onKeydown"
+      @paste="onPaste"
     />
     <div class="toolbar">
       <div class="toolbar-left">

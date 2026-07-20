@@ -57,6 +57,7 @@ export default [
         InputEvent: "readonly",
         WheelEvent: "readonly",
         DragEvent: "readonly",
+        ClipboardEvent: "readonly",
         HTMLElement: "readonly",
         HTMLInputElement: "readonly",
         HTMLTextAreaElement: "readonly",
