@@ -1,5 +1,7 @@
 //! `conversations` 表的 SQL 操作
 
+use std::collections::HashMap;
+
 use sqlx::SqlitePool;
 
 use crate::db::models::{ConversationRow, NewConversation};
@@ -11,7 +13,7 @@ pub async fn list_by_agent(
     agent_id: &str,
 ) -> AppResult<Vec<ConversationRow>> {
     let rows = sqlx::query_as::<_, ConversationRow>(
-        "SELECT id, agent_id, title, pinned, created_at, updated_at
+        "SELECT id, agent_id, title, pinned, created_at, updated_at, tools_override
            FROM conversations
           WHERE agent_id = ?
           ORDER BY pinned DESC, updated_at DESC",
@@ -25,7 +27,7 @@ pub async fn list_by_agent(
 /// 取一条
 pub async fn get_by_id(pool: &SqlitePool, id: &str) -> AppResult<ConversationRow> {
     let row = sqlx::query_as::<_, ConversationRow>(
-        "SELECT id, agent_id, title, pinned, created_at, updated_at
+        "SELECT id, agent_id, title, pinned, created_at, updated_at, tools_override
            FROM conversations WHERE id = ?",
     )
     .bind(id)
@@ -94,6 +96,33 @@ pub async fn set_pinned(
         return Err(AppError::NotFound {
             resource: "conversation",
             id: id.to_string(),
+        });
+    }
+    Ok(())
+}
+
+/// Task 3b: 更新对话级工具覆盖。
+///
+/// - `override_map = None`：清除覆盖，恢复继承 Agent 配置。
+/// - `override_map = Some(map)`：写入 JSON 字符串。
+///
+/// 空.HashMap 也会被序列化为 `{}`，语义上表示「全部禁用」。
+pub async fn update_tools_override(
+    pool: &SqlitePool,
+    conv_id: &str,
+    override_map: Option<&HashMap<String, bool>>,
+) -> AppResult<()> {
+    let json = override_map.map(|m| serde_json::to_string(m).unwrap_or_default());
+    let affected = sqlx::query("UPDATE conversations SET tools_override = ? WHERE id = ?")
+        .bind(json)
+        .bind(conv_id)
+        .execute(pool)
+        .await?
+        .rows_affected();
+    if affected == 0 {
+        return Err(AppError::NotFound {
+            resource: "conversation",
+            id: conv_id.to_string(),
         });
     }
     Ok(())

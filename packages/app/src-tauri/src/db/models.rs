@@ -6,6 +6,8 @@
 //! - 列表返回类型 `Agent` 与数据库 `AgentRow` 解耦，可在未来加过滤字段不影响持久化
 //! - 时间字段统一用 `DateTime<Utc>`，序列化时走 RFC3339
 
+use std::collections::HashMap;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
@@ -200,6 +202,8 @@ pub struct RotateAgentKey {
 // Conversation
 // =========================================================================
 
+/// Task 3b: `tools_override` 列存 JSON 字符串（`{"read_file": true, ...}`）。
+/// `NULL` 表示继承 Agent 配置，不覆盖。
 #[derive(Debug, Clone, FromRow)]
 pub struct ConversationRow {
     pub id: String,
@@ -208,6 +212,8 @@ pub struct ConversationRow {
     pub pinned: i32,
     pub created_at: String,
     pub updated_at: String,
+    /// Task 3b: 对话级工具覆盖（JSON 字符串，NULL = 继承 Agent 配置）
+    pub tools_override: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -218,6 +224,9 @@ pub struct Conversation {
     pub pinned: bool,
     pub created_at: String,
     pub updated_at: String,
+    /// Task 3b: 对话级工具覆盖（None = 继承 Agent 配置）
+    #[serde(default)]
+    pub tools_override: Option<HashMap<String, bool>>,
 }
 
 impl From<ConversationRow> for Conversation {
@@ -229,6 +238,9 @@ impl From<ConversationRow> for Conversation {
             pinned: row.pinned != 0,
             created_at: row.created_at,
             updated_at: row.updated_at,
+            tools_override: row.tools_override
+                .as_deref()
+                .map(|s| serde_json::from_str::<HashMap<String, bool>>(s).unwrap_or_default()),
         }
     }
 }

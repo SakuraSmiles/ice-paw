@@ -2,6 +2,8 @@
 //!
 //! Frontend 调用入口见 `icepaw-cleanup-plan.md` §2.3。
 
+use std::collections::HashMap;
+
 use tauri::State;
 use uuid::Uuid;
 
@@ -59,4 +61,22 @@ pub async fn delete_conversation(
     id: String,
 ) -> AppResult<()> {
     repo::conversation::delete(state.inner(), &id).await
+}
+
+/// Task 3b: 更新对话级工具覆盖。
+///
+/// - `tools_override = None`：清除覆盖，恢复继承 Agent 配置。
+/// - `tools_override = Some(map)`：写入 per-tool 勾选状态。
+#[tauri::command]
+pub async fn update_conversation_tools_override(
+    pool: State<'_, SqlitePool>,
+    conversation_id: String,
+    tools_override: Option<HashMap<String, bool>>,
+) -> AppResult<()> {
+    repo::conversation::update_tools_override(
+        pool.inner(),
+        &conversation_id,
+        tools_override.as_ref(),
+    )
+    .await
 }
