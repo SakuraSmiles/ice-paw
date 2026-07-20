@@ -1,37 +1,64 @@
 // IcePaw 会话状态管理 Store
 //
 // 职责：
-//   1. 维护当前 Agent 的会话列表（按 agent_id 分组）
+//   1. 维护当前项目的会话列表（Phase 2: 按项目分组）
 //   2. 维护当前选中会话 ID（持久化到 localStorage）
 //   3. 提供会话的 CRUD 与乐观更新（rename / pin / delete 失败时回滚）
-//   4. 订阅 agentsStore.currentId 变化，自动加载对应 Agent 的会话
+//   4. 订阅 projectsStore.currentId 变化，自动加载对应项目的会话
 //
 // 设计要点：
-//   - Composition API 风格（与 stores/agents.ts 一致）
-//   - state/getters/actions 严格遵循 §2.2 接口契约
-//   - 所有 invoke 通过 src/api/bridge.ts 的 bridge.conversations 命名空间
-//   - 乐观更新：先改本地状态，再调 bridge，失败回滚到原始值
-//   - watchAgentChange() 由 AppLayout 在 agents 加载完成后显式调用一次
+//   - Composition API 风格（与 stores/agents.ts / stores/projects.ts 一致）
+//   - Phase 2: 从 agent 维度切换到 project 维度
+//   - 保留 loadFor(agentId) 向后兼容
+//   - watchProjectChange() 由 Sidebar 在 projects 加载完成后显式调用一次
 //
 // 持久化：
-//   - 当前会话 ID 持久化到 localStorage(`icepaw.lastConv.${agentId}`)
+//   - 当前会话 ID 持久化到 localStorage(`icepaw.lastConv.project.${projectId}`)
 
 import { computed, ref, watch } from "vue";
 import { defineStore } from "pinia";
 import { bridge } from "../api/bridge";
 import { useAgentsStore } from "./agents";
+import { useProjectsStore, DEFAULT_PROJECT_ID } from "./projects";
 import type { Conversation } from "../types";
 
 // ============================================================================
 // localStorage 工具
 // ============================================================================
 
-/** 生成「最近会话」持久化键名 */
+/** 生成「最近会话」持久化键名（项目维度） */
+function lastConvKeyForProject(projectId: string): string {
+  return `icepaw.lastConv.project.${projectId}`;
+}
+
+/** 读取指定项目的最近会话 ID */
+function readLastConvForProject(projectId: string): string | null {
+  try {
+    return localStorage.getItem(lastConvKeyForProject(projectId));
+  } catch {
+    return null;
+  }
+}
+
+/** 写入指定项目的最近会话 ID（null 表示清空） */
+function writeLastConvForProject(projectId: string, id: string | null): void {
+  try {
+    if (id === null) {
+      localStorage.removeItem(lastConvKeyForProject(projectId));
+    } else {
+      localStorage.setItem(lastConvKeyForProject(projectId), id);
+    }
+  } catch {
+    // 忽略 localStorage 失败（隐私模式等）
+  }
+}
+
+/** 生成「最近会话」持久化键名（Agent 维度，向后兼容） */
 function lastConvKey(agentId: string): string {
   return `icepaw.lastConv.${agentId}`;
 }
 
-/** 读取指定 Agent 的最近会话 ID */
+/** 读取指定 Agent 的最近会话 ID（向后兼容） */
 function readLastConv(agentId: string): string | null {
   try {
     return localStorage.getItem(lastConvKey(agentId));
@@ -40,7 +67,7 @@ function readLastConv(agentId: string): string | null {
   }
 }
 
-/** 写入指定 Agent 的最近会话 ID（null 表示清空） */
+/** 写入指定 Agent 的最近会话 ID（向后兼容） */
 function writeLastConv(agentId: string, id: string | null): void {
   try {
     if (id === null) {
@@ -77,41 +104,18 @@ function sortConversations(list: Conversation[]): Conversation[] {
 // store
 // ============================================================================
 
-/**
- * 会话 Store
- *
- * state:
- *   - byAgent     按 Agent ID 分组的会话列表
- *   - currentId   当前选中的会话 ID
- *   - loading     加载状态
- *   - renamingId  处于重命名态的会话 ID（InlineRename 显示条件）
- *
- * getters:
- *   - current          当前会话实体
- *   - listFor(id)      指定 Agent 的全部会话（pinned DESC, updated_at DESC）
- *   - pinned(id)       已置顶会话
- *   - unpinned(id)     未置顶会话
- *
- * actions:
- *   - loadFor(agentId)         加载某 Agent 的会话列表 + 恢复当前选中
- *   - setCurrent(id|null)      切换当前会话（持久化）
- *   - create(agentId)          新建会话，自动设为当前
- *   - rename(id, title)        重命名（乐观更新 + 失败回滚）
- *   - pin(id, pinned)          置顶 / 取消置顶（乐观更新 + 失败回滚）
- *   - delete(id)               删除（乐观删除 + 失败回滚）
- *   - requestRename(id)        进入重命名态
- *   - cancelRename()           退出重命名态
- *   - watchAgentChange()       订阅 agentsStore.currentId 变化（AppLayout 调用）
- */
 export const useConversationsStore = defineStore("conversations", () => {
   // ============================================================================
   // state
   // ============================================================================
 
-  /** 按 Agent ID 分组的会话列表 */
+  /** 按 Agent ID 分组的会话列表（向后兼容，Phase 2 前使用） */
   const byAgent = ref<Record<string, Conversation[]>>({});
 
-  /** 当前选中的会话 ID（跨 Agent 共享同一个 currentId，切换 Agent 时会重置） */
+  /** 按项目 ID 分组的会话列表（Phase 2 新增） */
+  const byProject = ref<Record<string, Conversation[]>>({});
+
+  /** 当前选中的会话 ID */
   const currentId = ref<string | null>(null);
 
   /** 加载状态 */
@@ -121,25 +125,27 @@ export const useConversationsStore = defineStore("conversations", () => {
   const renamingId = ref<string | null>(null);
 
   // ============================================================================
-  // 内部工具
+  // 内部工具 — Agent 维度（向后兼容）
   // ============================================================================
 
-  /**
-   * 在 byAgent 中查找指定会话。
-   * @returns Conversation 或 null
-   */
   function findInAgent(agentId: string, id: string): Conversation | null {
     const list = byAgent.value[agentId];
     if (!list) return null;
     return list.find((c) => c.id === id) ?? null;
   }
 
-  /**
-   * 在 byAgent 中替换一条会话（按 ID 匹配）。
-   * 未找到则静默忽略。
-   */
-  function replaceInAgent(agentId: string, updated: Conversation): void {
-    const list = byAgent.value[agentId];
+  // ============================================================================
+  // 内部工具 — 项目维度（Phase 2）
+  // ============================================================================
+
+  function findInProject(projectId: string, id: string): Conversation | null {
+    const list = byProject.value[projectId];
+    if (!list) return null;
+    return list.find((c) => c.id === id) ?? null;
+  }
+
+  function replaceInProject(projectId: string, updated: Conversation): void {
+    const list = byProject.value[projectId];
     if (!list) return;
     const idx = list.findIndex((c) => c.id === updated.id);
     if (idx >= 0) {
@@ -147,11 +153,10 @@ export const useConversationsStore = defineStore("conversations", () => {
     }
   }
 
-  /** 重新排序指定 Agent 的会话列表 */
-  function resortAgent(agentId: string): void {
-    const list = byAgent.value[agentId];
+  function resortProject(projectId: string): void {
+    const list = byProject.value[projectId];
     if (!list) return;
-    byAgent.value[agentId] = sortConversations(list);
+    byProject.value[projectId] = sortConversations(list);
   }
 
   // ============================================================================
@@ -159,52 +164,101 @@ export const useConversationsStore = defineStore("conversations", () => {
   // ============================================================================
 
   /**
-   * 当前会话实体（依赖 agentsStore.currentId + currentId）。
+   * 当前会话实体（Phase 2: 依赖 projectsStore.currentId + currentId）。
    * 找不到时返回 null。
    */
   const current = computed<Conversation | null>(() => {
-    const agentsStore = useAgentsStore();
-    const agentId = agentsStore.currentId;
-    if (!agentId || !currentId.value) return null;
-    return findInAgent(agentId, currentId.value);
+    const projectsStore = useProjectsStore();
+    const projectId = projectsStore.currentId;
+    if (!projectId || !currentId.value) return null;
+    return findInProject(projectId, currentId.value);
   });
 
-  /**
-   * 获取指定 Agent 的全部会话（已排序：pinned DESC, updated_at DESC）。
-   */
+  // ------------------------------------------------------------------
+  // Agent 维度 getters（向后兼容）
+  // ------------------------------------------------------------------
+
   function listFor(agentId: string): Conversation[] {
     return sortConversations(byAgent.value[agentId] ?? []);
   }
 
-  /** 已置顶的会话 */
   function pinned(agentId: string): Conversation[] {
     return listFor(agentId).filter((c) => c.pinned);
   }
 
-  /** 未置顶的会话 */
   function unpinned(agentId: string): Conversation[] {
     return listFor(agentId).filter((c) => !c.pinned);
   }
 
+  // ------------------------------------------------------------------
+  // 项目维度 getters（Phase 2 新增）
+  // ------------------------------------------------------------------
+
+  /** 获取指定项目的全部会话（已排序） */
+  function listForProject(projectId: string): Conversation[] {
+    return sortConversations(byProject.value[projectId] ?? []);
+  }
+
+  /** 指定项目的已置顶会话 */
+  function pinnedForProject(projectId: string): Conversation[] {
+    return listForProject(projectId).filter((c) => c.pinned);
+  }
+
+  /** 指定项目的未置顶会话 */
+  function unpinnedForProject(projectId: string): Conversation[] {
+    return listForProject(projectId).filter((c) => !c.pinned);
+  }
+
   // ============================================================================
-  // actions
+  // actions — 加载
   // ============================================================================
 
   /**
-   * 加载某 Agent 的全部会话。
-   * - 拉取前记录 prevId：若当前 currentId 已不属于本 Agent，则清空；
-   *   若已属于本 Agent，则保留（避免被后续恢复逻辑覆盖）。
-   * - 拉取后写入 byAgent[agentId]
-   * - 拉取后再读 currentId.value —— 若期间 create() 已抢先设了新 id，
-   *   且该 id 出现在新列表里，则保留；否则恢复到 saved/list[0]。
+   * 加载某项目的全部会话（Phase 2）。
+   * - DEFAULT_PROJECT_ID 映射为 null（后端语义）
+   * - 拉取后写入 byProject[projectId]
+   * - 恢复上次 currentId
    *
-   * @param agentId 目标 Agent ID；空字符串/null 直接返回
+   * @param projectId 项目 ID（DEFAULT_PROJECT_ID 或实际 UUID）
+   */
+  async function loadForProject(projectId: string): Promise<void> {
+    loading.value = true;
+    const actualId = projectId === DEFAULT_PROJECT_ID ? null : projectId;
+
+    // 清空当前选中（新项目加载前）
+    currentId.value = null;
+
+    try {
+      const list = await bridge.projects.listConversations(actualId);
+      byProject.value[projectId] = sortConversations(list);
+
+      // 恢复上次的 currentId
+      const saved = readLastConvForProject(projectId);
+      if (saved && list.some((c) => c.id === saved)) {
+        currentId.value = saved;
+      } else if (list.length > 0) {
+        currentId.value = list[0]!.id;
+        writeLastConvForProject(projectId, list[0]!.id);
+      } else {
+        currentId.value = null;
+        writeLastConvForProject(projectId, null);
+      }
+    } catch (err) {
+      byProject.value[projectId] = [];
+      currentId.value = null;
+      throw err;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  /**
+   * 加载某 Agent 的全部会话（向后兼容）。
+   * 保留原有行为，Phase 2 后不再由 UI 触发。
    */
   async function loadFor(agentId: string): Promise<void> {
     if (!agentId) return;
     loading.value = true;
-    // 仅当 currentId 指向的会话不属于本 Agent（即将被替换）时才清空，
-    // 否则保留 —— 避免覆盖 create() 在 await 期间写入的新会话 id。
     const prevId = currentId.value;
     const prevConv = prevId ? findInAgent(agentId, prevId) : null;
     if (!prevConv) {
@@ -214,29 +268,23 @@ export const useConversationsStore = defineStore("conversations", () => {
       const list = await bridge.conversations.list(agentId);
       byAgent.value[agentId] = sortConversations(list);
 
-      // 拉取期间可能已有 create() 抢先设置了 currentId。
-      // 必须读 await 之后的 currentId.value —— 用 await 前的 prevId 是错的，
-      // 因为 prevId 是旧 Agent 的会话 id，永远不在新 Agent 的列表里，
-      // 检查形同虚设。post-await 的 currentNow 才是真正反映当前意图的值。
       const currentNow = currentId.value;
       if (currentNow && list.some((c) => c.id === currentNow)) {
         writeLastConv(agentId, currentNow);
         return;
       }
 
-      // 恢复上次的 currentId
       const saved = readLastConv(agentId);
       if (saved && list.some((c) => c.id === saved)) {
         currentId.value = saved;
       } else if (list.length > 0) {
-        currentId.value = list[0].id;
-        writeLastConv(agentId, list[0].id);
+        currentId.value = list[0]!.id;
+        writeLastConv(agentId, list[0]!.id);
       } else {
         currentId.value = null;
         writeLastConv(agentId, null);
       }
     } catch (err) {
-      // 加载失败：写入空数组，保留 currentId 为 null
       byAgent.value[agentId] = [];
       currentId.value = null;
       throw err;
@@ -245,53 +293,70 @@ export const useConversationsStore = defineStore("conversations", () => {
     }
   }
 
+  // ============================================================================
+  // actions — 选中
+  // ============================================================================
+
   /**
-   * 切换当前会话。
+   * 切换当前会话（Phase 2: 项目维度持久化）。
    * @param id 目标会话 ID；传 null 表示清空
-   * 同时持久化到 localStorage(`icepaw.lastConv.${agentId}`)
    */
   function setCurrent(id: string | null): void {
-    const agentsStore = useAgentsStore();
-    const agentId = agentsStore.currentId;
-    // 校验：非 null 的 id 必须存在于 byAgent[currentAgentId]
-    if (id !== null && agentId) {
-      const list = byAgent.value[agentId] ?? [];
+    const projectsStore = useProjectsStore();
+    const projectId = projectsStore.currentId;
+    if (id !== null && projectId) {
+      const list = byProject.value[projectId] ?? [];
       if (!list.some((c) => c.id === id)) {
-        // 非法 id：忽略（保护 localStorage 不被污染）
         return;
       }
     }
     currentId.value = id;
-    if (agentId) {
-      writeLastConv(agentId, id);
+    if (projectId) {
+      writeLastConvForProject(projectId, id);
     }
   }
 
+  // ============================================================================
+  // actions — 创建
+  // ============================================================================
+
   /**
    * 新建会话。成功后自动设为当前 + 持久化。
+   * @param agentId 关联的 Agent ID
+   * @param projectId 可选；所属项目 ID（不传则使用当前项目）
    * @returns 新创建的会话
    */
-  async function create(agentId: string): Promise<Conversation> {
-    const created = await bridge.conversations.create(agentId);
-    const list = byAgent.value[agentId] ?? [];
-    byAgent.value[agentId] = sortConversations([created, ...list]);
+  async function create(
+    agentId: string,
+    projectId?: string | null,
+  ): Promise<Conversation> {
+    const projectsStore = useProjectsStore();
+    const effectiveProjectId = projectId ?? projectsStore.currentId;
+    const actualProjectId =
+      effectiveProjectId === DEFAULT_PROJECT_ID ? null : effectiveProjectId;
+
+    const created = await bridge.conversations.create(agentId, undefined, actualProjectId);
+
+    // 写入项目维度缓存
+    const storeKey = effectiveProjectId ?? DEFAULT_PROJECT_ID;
+    const list = byProject.value[storeKey] ?? [];
+    byProject.value[storeKey] = sortConversations([created, ...list]);
     currentId.value = created.id;
-    writeLastConv(agentId, created.id);
-    // 退出重命名态（防止新会话继承旧态）
+    writeLastConvForProject(storeKey, created.id);
     renamingId.value = null;
     return created;
   }
 
-  /**
-   * 重命名会话（乐观更新 + 失败回滚）。
-   * 空标题或与原标题相同视为 no-op。
-   */
-  async function rename(id: string, title: string): Promise<void> {
-    const agentsStore = useAgentsStore();
-    const agentId = agentsStore.currentId;
-    if (!agentId) throw new Error("没有当前 Agent，无法重命名会话");
+  // ============================================================================
+  // actions — 重命名 / 置顶 / 删除（Phase 2: 项目维度）
+  // ============================================================================
 
-    const original = findInAgent(agentId, id);
+  async function rename(id: string, title: string): Promise<void> {
+    const projectsStore = useProjectsStore();
+    const projectId = projectsStore.currentId;
+    if (!projectId) throw new Error("没有当前项目，无法重命名会话");
+
+    const original = findInProject(projectId, id);
     if (!original) throw new Error("会话不存在");
 
     const trimmed = title.trim();
@@ -300,72 +365,56 @@ export const useConversationsStore = defineStore("conversations", () => {
       return;
     }
 
-    // 乐观更新
-    replaceInAgent(agentId, { ...original, title: trimmed });
+    replaceInProject(projectId, { ...original, title: trimmed });
     try {
       await bridge.conversations.rename(id, trimmed);
       renamingId.value = null;
     } catch (err) {
-      // 回滚
-      replaceInAgent(agentId, original);
+      replaceInProject(projectId, original);
       renamingId.value = null;
       throw err;
     }
   }
 
-  /**
-   * 置顶 / 取消置顶会话（乐观更新 + 失败回滚）。
-   * 与当前值相同时为 no-op。
-   */
   async function pin(id: string, pinnedValue: boolean): Promise<void> {
-    const agentsStore = useAgentsStore();
-    const agentId = agentsStore.currentId;
-    if (!agentId) throw new Error("没有当前 Agent，无法置顶会话");
+    const projectsStore = useProjectsStore();
+    const projectId = projectsStore.currentId;
+    if (!projectId) throw new Error("没有当前项目，无法置顶会话");
 
-    const original = findInAgent(agentId, id);
+    const original = findInProject(projectId, id);
     if (!original) throw new Error("会话不存在");
-
     if (original.pinned === pinnedValue) return;
 
-    // 乐观更新 + 立即重排（保持 pinned 在前）
-    replaceInAgent(agentId, { ...original, pinned: pinnedValue });
-    resortAgent(agentId);
+    replaceInProject(projectId, { ...original, pinned: pinnedValue });
+    resortProject(projectId);
     try {
       await bridge.conversations.pin(id, pinnedValue);
     } catch (err) {
-      // 回滚
-      replaceInAgent(agentId, original);
-      resortAgent(agentId);
+      replaceInProject(projectId, original);
+      resortProject(projectId);
       throw err;
     }
   }
 
-  /**
-   * 删除会话（乐观删除 + 失败回滚）。
-   * 删除后：若被删的是当前会话，则切换到剩余的第一个会话（如果有）。
-   *
-   * @returns 切换后的 currentId（供 Sidebar 同步通知父组件）
-   */
   async function deleteConv(id: string): Promise<string | null> {
-    const agentsStore = useAgentsStore();
-    const agentId = agentsStore.currentId;
-    if (!agentId) throw new Error("没有当前 Agent，无法删除会话");
+    const projectsStore = useProjectsStore();
+    const projectId = projectsStore.currentId;
+    if (!projectId) throw new Error("没有当前项目，无法删除会话");
 
-    const list = byAgent.value[agentId] ?? [];
+    const list = byProject.value[projectId] ?? [];
     const idx = list.findIndex((c) => c.id === id);
     if (idx < 0) throw new Error("会话不存在");
 
-    const removed = list[idx];
+    const removed = list[idx]!;
     const newList = list.slice();
     newList.splice(idx, 1);
     const previousCurrent = currentId.value;
 
-    // 乐观删除
-    byAgent.value[agentId] = newList;
+    byProject.value[projectId] = newList;
     if (currentId.value === id) {
       const next = newList[0]?.id ?? null;
       currentId.value = next;
-      writeLastConv(agentId, next);
+      writeLastConvForProject(projectId, next);
     }
     if (renamingId.value === id) {
       renamingId.value = null;
@@ -375,39 +424,66 @@ export const useConversationsStore = defineStore("conversations", () => {
       await bridge.conversations.delete(id);
       return currentId.value;
     } catch (err) {
-      // 回滚：恢复被删的会话到原位置
       const restored = newList.slice();
       restored.splice(idx, 0, removed);
-      byAgent.value[agentId] = sortConversations(restored);
+      byProject.value[projectId] = sortConversations(restored);
       currentId.value = previousCurrent;
-      writeLastConv(agentId, previousCurrent);
+      writeLastConvForProject(projectId, previousCurrent);
       throw err;
     }
   }
 
-  /** 进入重命名态 */
+  // ============================================================================
+  // actions — 重命名态管理
+  // ============================================================================
+
   function requestRename(id: string): void {
     renamingId.value = id;
   }
 
-  /** 退出重命名态 */
   function cancelRename(): void {
     renamingId.value = null;
   }
 
   // ============================================================================
-  // 副作用：监听 Agent 切换（仅注册一次）
+  // 副作用：监听项目切换（Phase 2，仅注册一次）
   // ============================================================================
 
-  /** watch 是否已注册（防止 AppLayout 多次调用导致重复监听） */
+  /** watch 是否已注册 */
+  let watchProjectRegistered = false;
+
+  /** Agent watch 是否已注册（向后兼容） */
   let watchRegistered = false;
 
   /**
-   * 订阅 agentsStore.currentId 变化：
-   *   - 启动时若已有 currentId（来自 localStorage 恢复），触发一次 loadFor
-   *   - 切换 Agent 时重新 loadFor + 重置 currentId
+   * 订阅 projectsStore.currentId 变化：
+   *   - 切换项目时重新 loadForProject + 重置 currentId
    *
-   * 由 AppLayout 在 agentsStore.ensureLoaded() 完成后调用一次。
+   * 由 Sidebar 在 projectsStore.loadAll() 完成后调用一次。
+   */
+  function watchProjectChange(): void {
+    if (watchProjectRegistered) return;
+    watchProjectRegistered = true;
+
+    const projectsStore = useProjectsStore();
+
+    // 监听项目切换
+    watch(
+      () => projectsStore.currentId,
+      (newId, oldId) => {
+        if (newId === oldId) return;
+        if (!newId) {
+          currentId.value = null;
+          renamingId.value = null;
+          return;
+        }
+        void loadForProject(newId);
+      },
+    );
+  }
+
+  /**
+   * 订阅 agentsStore.currentId 变化（向后兼容，Phase 2 前使用）。
    */
   function watchAgentChange(): void {
     if (watchRegistered) return;
@@ -415,23 +491,19 @@ export const useConversationsStore = defineStore("conversations", () => {
 
     const agentsStore = useAgentsStore();
 
-    // 立即检查一次：若当前已有 currentId 则主动加载
     if (agentsStore.currentId && !byAgent.value[agentsStore.currentId]) {
       void loadFor(agentsStore.currentId);
     }
 
-    // 监听后续切换
     watch(
       () => agentsStore.currentId,
       (newId, oldId) => {
         if (newId === oldId) return;
         if (!newId) {
-          // 没有当前 Agent：清空状态
           currentId.value = null;
           renamingId.value = null;
           return;
         }
-        // 切换到新 Agent：重新加载会话列表
         void loadFor(newId);
       },
     );
@@ -440,6 +512,7 @@ export const useConversationsStore = defineStore("conversations", () => {
   return {
     // state
     byAgent,
+    byProject,
     currentId,
     loading,
     renamingId,
@@ -448,8 +521,12 @@ export const useConversationsStore = defineStore("conversations", () => {
     listFor,
     pinned,
     unpinned,
+    listForProject,
+    pinnedForProject,
+    unpinnedForProject,
     // actions
     loadFor,
+    loadForProject,
     setCurrent,
     create,
     rename,
@@ -458,5 +535,6 @@ export const useConversationsStore = defineStore("conversations", () => {
     requestRename,
     cancelRename,
     watchAgentChange,
+    watchProjectChange,
   };
 });

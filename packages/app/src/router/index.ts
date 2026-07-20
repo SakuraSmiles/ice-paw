@@ -1,6 +1,12 @@
-// 路由配置
+// 路由配置（Phase 2 重构版）
+//
+// Phase 2 变更：
+//   - 从扁平路由改为嵌套路由：/projects/:projectId/chat
+//   - 兼容旧 /chat 路由（redirect 到默认项目）
+//   - 新增 ProjectSettings 路由
+//
 // 使用 HTML5 History 模式（Tauri 内嵌 WebView 支持 history 模式）
-// 仅保留 /chat 与 /agents 两个主路由，所有页面级组件均按需懒加载
+
 import { createRouter, createWebHistory } from "vue-router";
 import type { RouteRecordRaw } from "vue-router";
 
@@ -14,20 +20,43 @@ const SettingsAppearance = () => import("../pages/settings/SettingsAppearance.vu
 const SettingsKeyboard = () => import("../pages/settings/SettingsKeyboard.vue");
 const SettingsStorage = () => import("../pages/settings/SettingsStorage.vue");
 const SettingsAbout = () => import("../pages/settings/SettingsAbout.vue");
+const ProjectManagerPage = () => import("../pages/ProjectManagerPage.vue");
 
 // 路由表
 const routes: RouteRecordRaw[] = [
   {
-    // 首页重定向到聊天页
+    // 首页重定向到默认项目的聊天页
     path: "/",
-    redirect: { name: "Chat" },
+    redirect: { name: "ProjectChat", params: { projectId: "default" } },
   },
   {
-    // 聊天主页面
+    // Phase 2: 嵌套路由 — 项目维度
+    path: "/projects/:projectId",
+    children: [
+      {
+        path: "chat",
+        name: "ProjectChat",
+        component: ChatPage,
+        meta: { title: "聊天" },
+      },
+      {
+        path: "chat/:conversationId",
+        name: "ProjectChatConversation",
+        component: ChatPage,
+        meta: { title: "聊天" },
+      },
+      {
+        path: "settings",
+        name: "ProjectSettings",
+        component: ProjectManagerPage,
+        meta: { title: "项目管理" },
+      },
+    ],
+  },
+  // 兼容旧 /chat 路由（redirect 到默认项目）
+  {
     path: "/chat",
-    name: "Chat",
-    component: ChatPage,
-    meta: { title: "聊天" },
+    redirect: { name: "ProjectChat", params: { projectId: "default" } },
   },
   {
     // Agent 管理页
@@ -56,10 +85,10 @@ const routes: RouteRecordRaw[] = [
       { path: "about", name: "SettingsAbout", component: SettingsAbout, meta: { title: "关于" } },
     ],
   },
-  // 通配兜底：未匹配到的路径重定向到聊天页
+  // 通配兜底：未匹配到的路径重定向到默认项目聊天页
   {
     path: "/:pathMatch(.*)*",
-    redirect: { name: "Chat" },
+    redirect: { name: "ProjectChat", params: { projectId: "default" } },
   },
 ];
 

@@ -1,55 +1,57 @@
 <script setup lang="ts">
-// 应用整体布局：左侧 Sidebar + 右侧内容区
+// 应用整体布局（Phase 2 重构版）：左侧 Sidebar + 右侧内容区
 //
-// 启动流程：
+// 启动流程（Phase 2）：
 //   1. onMounted → agentsStore.ensureLoaded()  加载 Agent 列表
-//   2. agents 加载完成后 → Sidebar.vue 内部 onMounted 自动调 watchAgentChange()
-//      加载当前 Agent 的会话列表
-//   3. Sidebar emit chat:select → router.push 跳转到聊天页
+//   2. projectsStore.loadAll()  加载项目列表
+//   3. conversationsStore.loadForProject()  加载当前项目的会话
+//   4. Sidebar.vue 内部 onMounted 自动调 watchProjectChange()
+//   5. Sidebar emit chat:select → router.push 跳转到项目聊天页
 //
 // 空状态说明：
 //   - AppLayout 只负责「路由 + 全局 UI 壳」，不做业务拦截。
-//   - 无 Agent 时的引导由各页面自行处理：
-//       • AgentManagerPage → 自己的 EmptyAgentHint（创建入口）
-//       • ChatPage          → 区分「无 Agent」与「无会话」两种空态
-//   - 历史版本在 AppLayout 中覆盖 EmptyAgentHint 会导致 router-view 被替换，
-//     即使点击「创建 Agent」也无法真正跳转到 AgentManagerPage（死锁）。
-//     已在本文件移除该全局拦截。
+//   - 无 Agent 时的引导由各页面自行处理。
 
 import { onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { useAgentsStore } from "../../stores/agents";
+import { useProjectsStore, DEFAULT_PROJECT_ID } from "../../stores/projects";
 import { useConversationsStore } from "../../stores/conversations";
 import Toast from "../common/Toast.vue";
 import Sidebar from "./Sidebar.vue";
 
 const agentsStore = useAgentsStore();
+const projectsStore = useProjectsStore();
 const conversationsStore = useConversationsStore();
 const router = useRouter();
 
 onMounted(async () => {
-  // 1. 加载 Agent 列表
+  // 1. 加载 Agent 列表（后续仍需要 Agent 数据）
   await agentsStore.ensureLoaded();
-  // 2. 若已有当前 Agent，主动加载会话列表（让 Sidebar 立即有数据可显示）
-  if (agentsStore.currentId) {
-    try {
-      await conversationsStore.loadFor(agentsStore.currentId);
-    } catch {
-      // 加载失败由各页面 UI 兜底，此处不抛出
-    }
+  // 2. 加载项目列表
+  try {
+    await projectsStore.loadAll();
+  } catch {
+    // 加载失败不阻塞，使用默认项目
+  }
+  // 3. 加载当前项目的会话列表
+  try {
+    await conversationsStore.loadForProject(projectsStore.currentId || DEFAULT_PROJECT_ID);
+  } catch {
+    // 加载失败由各页面 UI 兜底
   }
 });
 
 /**
- * Sidebar 选中会话：跳转到聊天页。
+ * Sidebar 选中会话：跳转到项目聊天页。
  *
- * - Sidebar 的 onSelect / onCreate / onDelete 均会 emit chat:select；
- * - Sidebar 内部已调 conversationsStore.setCurrent / create，本组件只需负责路由跳转。
- * - ChatPage 监听 conversationsStore.currentId 自动 loadMessages，无需在此处传参。
- * - 若已在 /chat，push 到同名路由是 no-op（Vue Router 会忽略），无需额外判重。
+ * Phase 2: 路由从 /chat 改为 /projects/:projectId/chat
+ * - projectId 为 "default" 时映射 DEFAULT_PROJECT_ID
  */
 function onChatSelect(_conversationId: string | null): void {
-  void router.push({ name: "Chat" });
+  const rawId = projectsStore.currentId || DEFAULT_PROJECT_ID;
+  const projectId = rawId === DEFAULT_PROJECT_ID ? "default" : rawId;
+  void router.push({ name: "ProjectChat", params: { projectId } });
 }
 
 function onGlobalKeydown(e: KeyboardEvent): void {

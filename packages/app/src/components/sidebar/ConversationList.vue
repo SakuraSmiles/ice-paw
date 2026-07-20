@@ -1,16 +1,14 @@
 <script setup lang="ts">
-// 会话列表
+// 会话列表（Phase 2 重构版）
 //
 // 职责：
-//   - 从 conversationsStore 读取当前 Agent 的会话列表
+//   - 从 conversationsStore 读取当前项目的会话列表（Phase 2: 按项目分组）
 //   - 渲染「已置顶」分组 + 未置顶列表
 //   - 无数据时显示「暂无会话」提示
 //
-// props: 无（直接读 conversationsStore）
-//
 // emits:
 //   - select              点击项 → 选中
-//   - contextmenu         右键项 → 弹出菜单（外层 useContextMenu）
+//   - contextmenu         右键项 → 弹出菜单
 //   - requestRename       双击项 → 进入重命名
 //   - commitRename(title) 重命名提交
 //   - cancelRename        重命名取消
@@ -18,25 +16,25 @@
 import { computed } from "vue";
 import { MessageSquare, Pin } from "lucide-vue-next";
 import { useConversationsStore } from "../../stores/conversations";
-import { useAgentsStore } from "../../stores/agents";
+import { useProjectsStore } from "../../stores/projects";
 import type { Conversation } from "../../types";
 import ConversationItem from "./ConversationItem.vue";
 
 const conversationsStore = useConversationsStore();
-const agentsStore = useAgentsStore();
+const projectsStore = useProjectsStore();
 
-/** 当前 Agent 的已置顶会话（响应式） */
+/** 当前项目的已置顶会话（响应式） */
 const pinnedList = computed<Conversation[]>(() => {
-  const agentId = agentsStore.currentId;
-  if (!agentId) return [];
-  return conversationsStore.pinned(agentId);
+  const projectId = projectsStore.currentId;
+  if (!projectId) return [];
+  return conversationsStore.pinnedForProject(projectId);
 });
 
-/** 当前 Agent 的未置顶会话（响应式） */
+/** 当前项目的未置顶会话（响应式） */
 const unpinnedList = computed<Conversation[]>(() => {
-  const agentId = agentsStore.currentId;
-  if (!agentId) return [];
-  return conversationsStore.unpinned(agentId);
+  const projectId = projectsStore.currentId;
+  if (!projectId) return [];
+  return conversationsStore.unpinnedForProject(projectId);
 });
 
 /** 列表是否为空 */
