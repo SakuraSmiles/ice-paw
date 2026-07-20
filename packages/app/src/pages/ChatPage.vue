@@ -1,30 +1,29 @@
 <script setup lang="ts">
-// 聊天主页面（Phase 1 P0 模块 3 前端）
+// 聊天主页面（Phase 2 版）
 //
 // 三态渲染：
 //   1. hasAgents === false            → InlineAgentCreate（首页内联创建）
-//   2. hasAgents && !hasConversation  → WelcomeScreen（居中头像 + 提示词 + WelcomeInput）
+//   2. hasAgents && !hasConversation  → ProjectWelcome（项目级欢迎页）
 //   3. hasConversation                → 完整聊天界面（ChatHeader + MessageList + ChatInput）
 //
 // 行为：
 //   - onMounted：注册 4 个 chat:* 事件监听（chatStore.setupListeners）
 //   - 监听 conversationsStore.currentId 变化：调 chatStore.loadMessages 拉历史
-//   - 首条消息即创建会话：由 WelcomeInput 自动创建后再 sendMessage
+//   - ProjectWelcome 点击「新建会话」→ onProjectCreate 创建会话
 //   - 错误：通过 Toast 提示（chatStore.error）
-//
-// 重试功能：P1 占位 — 目前仅 Toast 提示「重试功能开发中」
 
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { useAgentsStore } from "../stores/agents";
 import { useConversationsStore } from "../stores/conversations";
 import { useChatStore } from "../stores/chat";
+import { useProjectsStore, DEFAULT_PROJECT_ID } from "../stores/projects";
 import { useToast } from "../composables/useToast";
 import { useToolAuth } from "../composables/useToolAuth";
 import { ACCEPT_MIMES } from "../composables/useImageFiles";
 import ChatHeader from "../components/chat/ChatHeader.vue";
 import MessageList from "../components/chat/MessageList.vue";
 import ChatInput from "../components/chat/ChatInput.vue";
-import WelcomeInput from "../components/chat/WelcomeInput.vue";
+import ProjectWelcome from "../components/chat/ProjectWelcome.vue";
 import InlineAgentCreate from "../components/agent/InlineAgentCreate.vue";
 import ChatStatusBar from "../components/chat/ChatStatusBar.vue";
 import ToolAuthDialog from "../components/chat/ToolAuthDialog.vue";
@@ -34,6 +33,7 @@ import DragOverlay from "../components/chat/DragOverlay.vue";
 const agentsStore = useAgentsStore();
 const conversationsStore = useConversationsStore();
 const chatStore = useChatStore();
+const projectsStore = useProjectsStore();
 const toast = useToast();
 const toolAuth = useToolAuth();
 
@@ -49,12 +49,6 @@ const hasConversation = computed<boolean>(() => !!conversationsStore.currentId);
 
 /** 当前会话 ID（用于触发 watch） */
 const currentConvId = computed<string | null>(() => conversationsStore.currentId);
-
-/** 当前 Agent 名称（WelcomeScreen 用） */
-const currentAgentName = computed<string>(() => agentsStore.current?.name ?? "");
-
-/** 当前 Agent 模型名（WelcomeScreen 用） */
-const currentAgentModel = computed<string>(() => agentsStore.current?.model ?? "");
 
 /** 流式中助手消息 ID（取 messages 末尾且 role=assistant 且无 error 的项） */
 const streamingMessageId = computed<string | null>(() => {
@@ -198,29 +192,40 @@ async function onSend(
   }
 }
 
-/** WelcomeScreen 触发：会话已在 WelcomeInput 内创建完成，此处只需发送 */
-async function onWelcomeSend(
-  content: string,
-  contentBlocks?: import("../types").ContentBlock[],
-): Promise<void> {
-  // 此时 conversationsStore.currentId 应已被设置
-  // 但 loadMessages 还未触发（conversations.watchAgentChange 会自动触发 loadFor，
-  // 但 store 手动 setCurrent 不触发 watch）；此处显式加载一次。
-  const convId = conversationsStore.currentId;
-  if (!convId) {
-    toast.error("会话未就绪，请稍后再试");
+/** ProjectWelcome: 点击「新建会话」 */
+async function onProjectCreate(): Promise<void> {
+  const currentProject = projectsStore.current;
+  const isDefault = projectsStore.currentId === DEFAULT_PROJECT_ID;
+  const projectAgents = currentProject?.agents ?? [];
+
+  let agentId: string | null = null;
+
+  // 优先使用项目 Agent 成员中的 lead
+  if (projectAgents.length > 0) {
+    const lead = projectAgents.find((a) => a.role === "lead");
+    agentId = lead?.agent_id ?? projectAgents[0]!.agent_id;
+  }
+
+  // 默认项目回退到 currentId
+  if (!agentId && isDefault) {
+    agentId = agentsStore.currentId;
+  }
+
+  // 回退到第一个 Agent
+  if (!agentId && agentsStore.hasAgents) {
+    agentId = agentsStore.agents[0]!.id;
+  }
+
+  if (!agentId) {
+    toast.warning("请先创建一个 Agent");
     return;
   }
-  // 确保消息列表已加载（首次进入会话）
-  if (chatStore.messages.length === 0 && !chatStore.isStreaming) {
-    try {
-      await chatStore.loadMessages(convId);
-      await scrollMessageListToBottom();
-    } catch {
-      // 加载失败仍尝试发送（极端情况下允许发送）
-    }
+
+  try {
+    await conversationsStore.create(agentId, projectsStore.currentId);
+  } catch {
+    toast.error("新建会话失败");
   }
-  await onSend(content, contentBlocks);
 }
 
 /** 用户点击停止 */
@@ -342,13 +347,10 @@ function onDrop(e: DragEvent): void {
     <!-- 三态一：无 Agent → 首页内联创建 -->
     <InlineAgentCreate v-if="!hasAgents && !agentsStore.loading" />
 
-    <!-- 三态二：有 Agent 无会话 → WelcomeScreen（居中输入框 + 提示词） -->
-    <WelcomeInput
+    <!-- 三态二：有 Agent 无会话 → ProjectWelcome（项目级欢迎页） -->
+    <ProjectWelcome
       v-else-if="hasAgents && !hasConversation"
-      :agent-name="currentAgentName"
-      :model-name="currentAgentModel"
-      @send="onWelcomeSend"
-      @stop="onStop"
+      @create="onProjectCreate"
     />
 
     <!-- 三态三：有会话 → 完整聊天界面 -->
