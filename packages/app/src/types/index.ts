@@ -49,6 +49,13 @@ export interface Agent {
    * 不同 Agent 可拥有不同上下文长度（8K 上下文用 16 条，200K 上下文用 60 条）。
    */
   max_history_messages?: number | null;
+  /**
+   * Task 4: 工具白名单。
+   * - `null` / `undefined` = 全部启用（向后兼容）
+   * - `string[]` = 仅启用列出的工具
+   * - `[]`（空数组）= 全部禁用
+   */
+  enabled_tools?: string[] | null;
   created_at: string;
   updated_at: string;
   hasApiKey: boolean;
@@ -77,6 +84,8 @@ export interface NewAgent {
   cache_prompt?: boolean;
   /** A3-2: 历史消息窗口上限（null/undefined = 使用系统默认） */
   max_history_messages?: number | null;
+  /** Task 4: 工具白名单（null/undefined = 全部启用） */
+  enabled_tools?: string[] | null;
 }
 
 /**
@@ -107,6 +116,13 @@ export interface AgentUpdate {
    * - 传 N → 设成 N
    */
   max_history_messages?: number | null;
+  /**
+   * Task 4: 工具白名单。
+   * - 不传 → 不更新（保留原值）
+   * - 传 null → 清空，恢复为全部启用
+   * - 传 string[] → 仅启用列出的工具
+   */
+  enabled_tools?: string[] | null;
 }
 
 // ============================================================================

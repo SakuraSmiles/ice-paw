@@ -32,6 +32,9 @@ pub struct AgentRow {
     /// M1.2 A2-4: 工具裁剪阈值（NULL = 使用系统默认 5）。
     /// 当注册工具数 >= 此值时启用软裁剪（deprioritized 标记）。
     pub tool_trim_threshold: Option<i32>,
+    /// Task 4: 工具白名单（NULL = 全部启用）。
+    /// JSON 数组格式：`["read_file", "list_directory"]`
+    pub enabled_tools: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -61,6 +64,9 @@ pub struct Agent {
     /// M1.2 A2-4: 工具裁剪阈值（None 表示使用系统默认值 5）。
     #[serde(default)]
     pub tool_trim_threshold: Option<i32>,
+    /// Task 4: 工具白名单（None = 全部启用，Some(空 vec) = 全部禁用）。
+    #[serde(default)]
+    pub enabled_tools: Option<Vec<String>>,
     pub created_at: String,
     pub updated_at: String,
     /// 是否已配置 API Key（前端业务提示用），对应 stronghold 中是否存在
@@ -90,6 +96,10 @@ impl From<AgentRow> for Agent {
             max_history_messages: row.max_history_messages,
             // M1.2 A2-4: 工具裁剪阈值
             tool_trim_threshold: row.tool_trim_threshold,
+            // Task 4: 工具白名单（JSON 数组字符串 → Vec<String>）
+            enabled_tools: row.enabled_tools
+                .as_deref()
+                .map(|s| serde_json::from_str::<Vec<String>>(s).unwrap_or_default()),
             created_at: row.created_at,
             updated_at: row.updated_at,
             has_api_key,
@@ -126,6 +136,9 @@ pub struct NewAgent {
     /// M1.2 A2-4: 工具裁剪阈值（None = 使用系统默认 5）。
     #[serde(default)]
     pub tool_trim_threshold: Option<i32>,
+    /// Task 4: 工具白名单（None = 全部启用，Some(vec) = 仅启用列出的工具）。
+    #[serde(default)]
+    pub enabled_tools: Option<Vec<String>>,
 }
 
 fn default_temperature() -> f64 { 0.7 }
@@ -159,6 +172,9 @@ pub struct AgentUpdate {
     /// M1.2 A2-4: 工具裁剪阈值。
     /// 双层 Option：外层 Some 表示调用方传了该字段，内层 None 表示清空（恢复为系统默认）。
     pub tool_trim_threshold: Option<Option<i32>>,
+    /// Task 4: 工具白名单。双层 Option：外层 Some = 调用方传了，内层 None = 清空（全部启用）。
+    #[serde(default)]
+    pub enabled_tools: Option<Option<Vec<String>>>,
 }
 
 /// 轮换 API Key 入参

@@ -148,6 +148,22 @@ impl ToolRegistry {
         registry
     }
 
+    /// Task 4: 仅注册指定名称的内置工具。
+    /// 未识别的工具名静默跳过（容错）。
+    pub fn with_filter(names: &[String]) -> Self {
+        let registry = Self::new();
+        let all_builtins: Vec<(&str, Arc<dyn Tool>)> = vec![
+            ("read_file", Arc::new(builtin::ReadFileTool)),
+            ("list_directory", Arc::new(builtin::ListDirectoryTool)),
+        ];
+        for name in names {
+            if let Some((_, tool)) = all_builtins.iter().find(|(n, _)| n == name) {
+                registry.register_sync(tool.clone());
+            }
+        }
+        registry
+    }
+
     /// 注册一个工具
     pub async fn register(&self, tool: Arc<dyn Tool>) {
         let name = tool.name().to_string();
