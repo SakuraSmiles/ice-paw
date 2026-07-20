@@ -16,7 +16,7 @@
 //     即使点击「创建 Agent」也无法真正跳转到 AgentManagerPage（死锁）。
 //     已在本文件移除该全局拦截。
 
-import { onMounted } from "vue";
+import { onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { useAgentsStore } from "../../stores/agents";
 import { useConversationsStore } from "../../stores/conversations";
@@ -51,6 +51,21 @@ onMounted(async () => {
 function onChatSelect(_conversationId: string | null): void {
   void router.push({ name: "Chat" });
 }
+
+function onGlobalKeydown(e: KeyboardEvent): void {
+  if ((e.ctrlKey || e.metaKey) && e.key === ",") {
+    e.preventDefault();
+    void router.push("/settings/general");
+  }
+}
+
+onMounted(() => {
+  window.addEventListener("keydown", onGlobalKeydown);
+});
+
+onUnmounted(() => {
+  window.removeEventListener("keydown", onGlobalKeydown);
+});
 </script>
 
 <template>

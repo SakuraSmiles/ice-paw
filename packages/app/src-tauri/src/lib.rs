@@ -84,6 +84,8 @@ pub fn run() {
             commands::template_cmd::delete_template,
             commands::chat_cmd::send_message,
             commands::chat_cmd::stop_generation,
+            commands::preferences_cmd::get_preferences,
+            commands::preferences_cmd::set_preference,
         ])
         // 启动逻辑
         .setup(|app| {

@@ -8,6 +8,12 @@ import type { RouteRecordRaw } from "vue-router";
 const ChatPage = () => import("../pages/ChatPage.vue");
 const AgentManagerPage = () => import("../pages/AgentManagerPage.vue");
 const TemplateManagerPage = () => import("../pages/TemplateManagerPage.vue");
+const SettingsPage = () => import("../pages/SettingsPage.vue");
+const SettingsGeneral = () => import("../pages/settings/SettingsGeneral.vue");
+const SettingsAppearance = () => import("../pages/settings/SettingsAppearance.vue");
+const SettingsKeyboard = () => import("../pages/settings/SettingsKeyboard.vue");
+const SettingsStorage = () => import("../pages/settings/SettingsStorage.vue");
+const SettingsAbout = () => import("../pages/settings/SettingsAbout.vue");
 
 // 路由表
 const routes: RouteRecordRaw[] = [
@@ -36,6 +42,19 @@ const routes: RouteRecordRaw[] = [
     name: "TemplateManager",
     component: TemplateManagerPage,
     meta: { title: "模板管理" },
+  },
+  {
+    path: "/settings",
+    component: SettingsPage,
+    meta: { title: "设置" },
+    children: [
+      { path: "", redirect: { name: "SettingsGeneral" } },
+      { path: "general", name: "SettingsGeneral", component: SettingsGeneral, meta: { title: "通用" } },
+      { path: "appearance", name: "SettingsAppearance", component: SettingsAppearance, meta: { title: "外观" } },
+      { path: "keyboard", name: "SettingsKeyboard", component: SettingsKeyboard, meta: { title: "快捷键" } },
+      { path: "storage", name: "SettingsStorage", component: SettingsStorage, meta: { title: "存储" } },
+      { path: "about", name: "SettingsAbout", component: SettingsAbout, meta: { title: "关于" } },
+    ],
   },
   // 通配兜底：未匹配到的路径重定向到聊天页
   {

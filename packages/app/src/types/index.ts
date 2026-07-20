@@ -503,3 +503,17 @@ export interface TemplateUpdate {
   tools?: string[];
   sort_order?: number;
 }
+
+// ============================================================================
+// UserPreferences（全局配置）
+// ============================================================================
+
+export interface UserPreferences {
+  defaultAgentId?: string;
+  defaultTemplateId?: string;
+  onStartup?: string;
+  language?: string;
+  theme?: string;
+  codeTheme?: string;
+  fontSize?: number;
+}
