@@ -35,6 +35,8 @@ pub struct AgentRow {
     /// Task 4: 工具白名单（NULL = 全部启用）。
     /// JSON 数组格式：`["read_file", "list_directory"]`
     pub enabled_tools: Option<String>,
+    /// 是否支持图片输入（0 = 不支持, 1 = 支持）
+    pub supports_vision: i32,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -67,6 +69,9 @@ pub struct Agent {
     /// Task 4: 工具白名单（None = 全部启用，Some(空 vec) = 全部禁用）。
     #[serde(default)]
     pub enabled_tools: Option<Vec<String>>,
+    /// 是否支持图片输入
+    #[serde(default)]
+    pub supports_vision: bool,
     pub created_at: String,
     pub updated_at: String,
     /// 是否已配置 API Key（前端业务提示用），对应 stronghold 中是否存在
@@ -100,6 +105,7 @@ impl From<AgentRow> for Agent {
             enabled_tools: row.enabled_tools
                 .as_deref()
                 .map(|s| serde_json::from_str::<Vec<String>>(s).unwrap_or_default()),
+            supports_vision: row.supports_vision != 0,
             created_at: row.created_at,
             updated_at: row.updated_at,
             has_api_key,
@@ -139,6 +145,9 @@ pub struct NewAgent {
     /// Task 4: 工具白名单（None = 全部启用，Some(vec) = 仅启用列出的工具）。
     #[serde(default)]
     pub enabled_tools: Option<Vec<String>>,
+    /// 是否支持图片输入（默认 false）
+    #[serde(default)]
+    pub supports_vision: bool,
 }
 
 fn default_temperature() -> f64 { 0.7 }
@@ -175,6 +184,8 @@ pub struct AgentUpdate {
     /// Task 4: 工具白名单。双层 Option：外层 Some = 调用方传了，内层 None = 清空（全部启用）。
     #[serde(default)]
     pub enabled_tools: Option<Option<Vec<String>>>,
+    /// 是否支持图片输入（None = 不改）
+    pub supports_vision: Option<bool>,
 }
 
 /// 轮换 API Key 入参

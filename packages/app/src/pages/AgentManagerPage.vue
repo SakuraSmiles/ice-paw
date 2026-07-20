@@ -132,6 +132,7 @@ async function handleFormSubmit(payload: AgentFormPayload): Promise<void> {
         max_history_messages: payload.maxHistoryMessages ?? undefined,
         // Task 4: 工具白名单（null = 全部启用）
         enabled_tools: payload.enabledTools ?? undefined,
+        supports_vision: payload.supportsVision,
       });
       // 若用户选中了模板，写 meta 到 localStorage
       if (payload.templateId) {
@@ -163,6 +164,7 @@ async function handleFormSubmit(payload: AgentFormPayload): Promise<void> {
         max_history_messages: payload.maxHistoryMessages,
         // Task 4: 工具白名单（undefined=不更新 / null=清空即全部启用 / 数组=设定白名单）
         enabled_tools: payload.enabledTools,
+        supports_vision: payload.supportsVision,
       });
       // 如果需要轮换 key
       if (payload.rotateApiKey && payload.api_key) {

@@ -56,6 +56,8 @@ export interface Agent {
    * - `[]`（空数组）= 全部禁用
    */
   enabled_tools?: string[] | null;
+  /** 是否支持图片输入 */
+  supports_vision?: boolean;
   created_at: string;
   updated_at: string;
   hasApiKey: boolean;
@@ -86,6 +88,8 @@ export interface NewAgent {
   max_history_messages?: number | null;
   /** Task 4: 工具白名单（null/undefined = 全部启用） */
   enabled_tools?: string[] | null;
+  /** 是否支持图片输入（默认 false） */
+  supports_vision?: boolean;
 }
 
 /**
@@ -123,6 +127,8 @@ export interface AgentUpdate {
    * - 传 string[] → 仅启用列出的工具
    */
   enabled_tools?: string[] | null;
+  /** 是否支持图片输入 */
+  supports_vision?: boolean;
 }
 
 // ============================================================================
