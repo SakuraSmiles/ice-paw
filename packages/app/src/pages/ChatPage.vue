@@ -27,6 +27,7 @@ import WelcomeInput from "../components/chat/WelcomeInput.vue";
 import InlineAgentCreate from "../components/agent/InlineAgentCreate.vue";
 import ChatStatusBar from "../components/chat/ChatStatusBar.vue";
 import ToolAuthDialog from "../components/chat/ToolAuthDialog.vue";
+import TemplateCards from "../components/chat/TemplateCards.vue";
 
 const agentsStore = useAgentsStore();
 const conversationsStore = useConversationsStore();
@@ -63,6 +64,11 @@ const streamingMessageId = computed<string | null>(() => {
   }
   return null;
 });
+
+/**
+ * ChatInput 组件引用（用于调用 setDraft 填入模板内容）。
+ */
+const chatInputRef = ref<InstanceType<typeof ChatInput> | null>(null);
 
 /**
  * MessageList 组件引用（用于调用其暴露的 forceBottom()）。
@@ -229,6 +235,20 @@ function onRetry(_msg: import("../types").Message): void {
 async function onLoadOlder(): Promise<void> {
   await chatStore.loadOlderMessages();
 }
+
+/** 模板卡片点击 → 填入 ChatInput 的 draft */
+function onTemplateSelect(content: string): void {
+  chatInputRef.value?.setDraft(content);
+}
+
+/** 是否显示模板卡片空状态（有会话但无消息且非加载中） */
+const showTemplateCards = computed<boolean>(
+  () =>
+    hasConversation.value &&
+    chatStore.messages.length === 0 &&
+    !chatStore.loading &&
+    !chatStore.isStreaming,
+);
 </script>
 
 <template>
@@ -249,24 +269,31 @@ async function onLoadOlder(): Promise<void> {
     <template v-else>
       <ChatHeader @stop="onStop" />
       <div class="message-list-wrapper">
+        <!-- 空状态：有会话但无消息时显示模板卡片 -->
+        <TemplateCards
+          v-if="showTemplateCards"
+          @select="onTemplateSelect"
+        />
         <MessageList
-        ref="messageListRef"
-        :messages="chatStore.currentMessages"
-        :streaming-id="streamingMessageId"
-        :is-retrying="chatStore.retrying"
-        :retry-progress="chatStore.retryProgress"
-        :active-tool-calls="chatStore.activeToolCalls"
-        :thinking-content="chatStore.thinkingContent"
-        :has-more-older="chatStore.hasMoreOlder"
-        :loading-older="chatStore.loadingOlder"
-        :loading="chatStore.loading"
-        @retry="onRetry"
-        @load-older="onLoadOlder"
-      />
+          v-else
+          ref="messageListRef"
+          :messages="chatStore.currentMessages"
+          :streaming-id="streamingMessageId"
+          :is-retrying="chatStore.retrying"
+          :retry-progress="chatStore.retryProgress"
+          :active-tool-calls="chatStore.activeToolCalls"
+          :thinking-content="chatStore.thinkingContent"
+          :has-more-older="chatStore.hasMoreOlder"
+          :loading-older="chatStore.loadingOlder"
+          :loading="chatStore.loading"
+          @retry="onRetry"
+          @load-older="onLoadOlder"
+        />
         <!-- W2.4: 状态栏（浮于 MessageList 区域右上角） -->
         <ChatStatusBar />
       </div>
       <ChatInput
+        ref="chatInputRef"
         :disabled="false"
         :streaming="chatStore.isStreaming"
         @send="onSend"
