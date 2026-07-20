@@ -19,6 +19,7 @@
 
 import { computed, onUnmounted, ref, watch } from "vue";
 import { onClickOutside, useDebounceFn, useWindowSize } from "@vueuse/core";
+import { Clipboard, Check } from "lucide-vue-next";
 import { useChatStore } from "../../stores/chat";
 import { useConversationsStore } from "../../stores/conversations";
 
@@ -271,11 +272,65 @@ const pushThrottledSnapshot = useDebounceFn(
 
 watch(state, () => pushThrottledSnapshot(), { immediate: true });
 
+// ============================================================================
+// 复制明细
+// ============================================================================
+
+/** 复制按钮是否刚刚点击过（显示"已复制"反馈） */
+const copied = ref<boolean>(false);
+
+/** 复制按钮临时计时器 */
+let copyFeedbackTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** 构建明细文本并写入剪贴板 */
+async function copyDetails(): Promise<void> {
+  const now = new Date();
+  const ts = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")} ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+
+  const convTitle = conversationsStore.current?.title ?? "未命名会话";
+
+  const s = state.value;
+  const p = s?.tokens_prompt ?? 0;
+  const c = s?.tokens_completion ?? 0;
+  const totalSession = sessionTotalTokens.value;
+  const cache = cachePercent.value;
+
+  const lines: string[] = [
+    "IcePaw Token 用量",
+    `时间: ${ts}`,
+    `会话: ${convTitle}`,
+    "",
+    "本轮:",
+    `  Prompt: ${p} tokens`,
+    `  Completion: ${c} tokens`,
+    "",
+    "会话累计:",
+    `  Prompt+Completion: ${totalSession} tokens`,
+  ];
+  if (cache !== null) {
+    lines.push(`  缓存命中: ${cache}%`);
+  }
+
+  const text = lines.join("\n");
+  try {
+    await navigator.clipboard.writeText(text);
+    copied.value = true;
+    if (copyFeedbackTimer) clearTimeout(copyFeedbackTimer);
+    copyFeedbackTimer = setTimeout(() => {
+      copied.value = false;
+      copyFeedbackTimer = null;
+    }, 2000);
+  } catch {
+    // clipboard API 不可用（非 HTTPS / 权限拒绝）→ 静默忽略
+  }
+}
+
 // 卸载时清理定时器
 onUnmounted(() => {
   if (autoCollapseTimer) clearTimeout(autoCollapseTimer);
   if (pulseTimer) clearTimeout(pulseTimer);
   if (retryTimer) clearTimeout(retryTimer);
+  if (copyFeedbackTimer) clearTimeout(copyFeedbackTimer);
 });
 </script>
 
@@ -367,6 +422,17 @@ onUnmounted(() => {
               </div>
             </div>
           </section>
+
+          <!-- 复制明细按钮 -->
+          <button
+            type="button"
+            class="panel-copy-btn"
+            :class="{ 'panel-copy-btn--done': copied }"
+            @click="copyDetails"
+          >
+            <component :is="copied ? Check : Clipboard" :size="14" aria-hidden="true" />
+            <span>{{ copied ? '已复制' : '复制明细' }}</span>
+          </button>
 
           <!-- 状态（retry） -->
           <section v-if="retryReason" class="panel-section">
@@ -572,6 +638,47 @@ onUnmounted(() => {
 .panel-token-sep {
   color: rgba(148, 163, 184, 0.5);
   margin: 0 2px;
+}
+
+/* ============================================================================
+ * 复制明细按钮
+ * ============================================================================ */
+.panel-copy-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  height: 30px;
+  border-radius: 8px;
+  border: 1px solid rgba(125, 211, 252, 0.18);
+  background: rgba(125, 211, 252, 0.06);
+  color: rgba(226, 232, 240, 0.86);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  appearance: none;
+  outline: none;
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease;
+}
+
+.panel-copy-btn:hover {
+  background: rgba(125, 211, 252, 0.14);
+  border-color: rgba(125, 211, 252, 0.32);
+}
+
+.panel-copy-btn:focus-visible {
+  box-shadow: 0 0 0 2px rgba(125, 211, 252, 0.25);
+}
+
+.panel-copy-btn--done {
+  border-color: rgba(74, 222, 128, 0.4);
+  background: rgba(74, 222, 128, 0.1);
+  color: #4ade80;
 }
 
 /* ============================================================================

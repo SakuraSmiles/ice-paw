@@ -68,6 +68,8 @@ export interface AgentFormPayload {
   maxHistoryMessages?: number | null;
   /** Task 4: 工具白名单（null/undefined = 全部启用） */
   enabledTools?: string[] | null;
+  /** 是否支持图片输入 */
+  supportsVision?: boolean;
 }
 
 const props = defineProps<{
@@ -108,6 +110,8 @@ const maxHistoryMessagesInput = ref<string>("");
  * - string[] = 仅启用选中的工具
  */
 const enabledTools = ref<string[] | null>(null);
+/** 是否支持图片输入 */
+const supportsVision = ref<boolean>(false);
 
 /** 可用工具列表 */
 const AVAILABLE_TOOLS: { name: string; label: string; description: string }[] = [
@@ -276,6 +280,8 @@ function populateFromAgent(a: Agent): void {
     a.max_history_messages != null ? String(a.max_history_messages) : "";
   // Task 4: 读取工具白名单（undefined → null = 全部启用）
   enabledTools.value = a.enabled_tools ?? null;
+  // supports_vision
+  supportsVision.value = a.supports_vision ?? false;
   selectedTemplateId.value = null;
   advancedOpen.value = advancedDefaultOpen.value;
 }
@@ -337,6 +343,7 @@ function handleSubmit(): void {
     cachePrompt: cachePrompt.value,
     maxHistoryMessages: parseMaxHistoryInput(),
     enabledTools: enabledTools.value,
+    supportsVision: supportsVision.value,
   });
 }
 
@@ -705,6 +712,25 @@ function templateBgFg(tpl: AgentTemplate): { bg: string; fg: string } {
                     <div v-else class="tools-hint">
                       已启用 {{ enabledTools.length }} / {{ AVAILABLE_TOOLS.length }} 个工具
                     </div>
+                  </div>
+
+                  <!-- supports_vision 开关 -->
+                  <div class="form-group">
+                    <label class="form-label form-label-row">
+                      <span>支持图片</span>
+                      <span class="label-hint">允许在对话中上传图片（多模态）</span>
+                    </label>
+                    <button
+                      type="button"
+                      class="toggle-btn"
+                      :class="{ 'toggle-btn-on': supportsVision }"
+                      @click="supportsVision = !supportsVision"
+                    >
+                      <span class="toggle-track">
+                        <span class="toggle-thumb" />
+                      </span>
+                      <span class="toggle-text">{{ supportsVision ? '已启用' : '已关闭' }}</span>
+                    </button>
                   </div>
                 </div>
               </details>
