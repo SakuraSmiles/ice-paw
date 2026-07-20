@@ -49,6 +49,12 @@ pub async fn update_project(
     name: Option<String>,
     description: Option<String>,
 ) -> AppResult<Project> {
+    // 校验：如果传了 name，不能为空字符串
+    if let Some(ref n) = name {
+        if n.trim().is_empty() {
+            return Err(AppError::Validation("项目名称不能为空".into()));
+        }
+    }
     let row = repo::project::update(
         pool.inner(),
         &id,
@@ -83,6 +89,13 @@ pub async fn add_project_agent(
     role: Option<String>,
 ) -> AppResult<()> {
     let role = role.as_deref().unwrap_or("member");
+    // 校验 role 合法值
+    if role != "lead" && role != "member" {
+        return Err(AppError::Validation(format!(
+            "无效的角色: {}，只支持 lead/member",
+            role
+        )));
+    }
     repo::project::add_agent(pool.inner(), &project_id, &agent_id, role).await
 }
 

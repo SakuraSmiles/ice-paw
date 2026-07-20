@@ -256,6 +256,9 @@ pub struct NewConversation {
     pub agent_id: String,
     #[serde(default)]
     pub title: Option<String>,
+    /// Phase 2: 所属项目 ID（None = 默认项目）
+    #[serde(default)]
+    pub project_id: Option<String>,
 }
 
 // =========================================================================
