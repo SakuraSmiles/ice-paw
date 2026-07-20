@@ -57,32 +57,21 @@ pub async fn create(
 }
 
 /// 重命名 / 更新描述（None = 不改该字段）
+///
+/// 使用事务保证原子性：name 和 description 要么同时成功，要么同时回滚。
 pub async fn update(
     pool: &SqlitePool,
     id: &str,
     name: Option<&str>,
     description: Option<&str>,
 ) -> AppResult<ProjectRow> {
-    // 只更新非 None 的字段
+    let mut tx = pool.begin().await?;
+
     if let Some(n) = name {
         let affected = sqlx::query("UPDATE projects SET name = ?, updated_at = datetime('now') WHERE id = ?")
             .bind(n)
             .bind(id)
-            .execute(pool)
-            .await?
-            .rows_affected();
-        if affected == 0 {
-            return Err(AppError::NotFound {
-                resource: "project",
-                id: id.to_string(),
-            });
-        }
-    }
-    if let Some(d) = description {
-        let affected = sqlx::query("UPDATE projects SET description = ?, updated_at = datetime('now') WHERE id = ?")
-            .bind(d)
-            .bind(id)
-            .execute(pool)
+            .execute(&mut *tx)
             .await?
             .rows_affected();
         if affected == 0 {
@@ -93,6 +82,22 @@ pub async fn update(
         }
     }
 
+    if let Some(d) = description {
+        let affected = sqlx::query("UPDATE projects SET description = ?, updated_at = datetime('now') WHERE id = ?")
+            .bind(d)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+        if affected == 0 {
+            return Err(AppError::NotFound {
+                resource: "project",
+                id: id.to_string(),
+            });
+        }
+    }
+
+    tx.commit().await?;
     get_by_id(pool, id).await
 }
 
@@ -161,11 +166,20 @@ pub async fn add_agent(
 }
 
 /// 从项目移除 Agent
+///
+/// 如果记录不存在，返回 `NotFound` 错误（而非静默成功）。
 pub async fn remove_agent(pool: &SqlitePool, project_id: &str, agent_id: &str) -> AppResult<()> {
-    sqlx::query("DELETE FROM project_agents WHERE project_id = ? AND agent_id = ?")
+    let affected = sqlx::query("DELETE FROM project_agents WHERE project_id = ? AND agent_id = ?")
         .bind(project_id)
         .bind(agent_id)
         .execute(pool)
-        .await?;
+        .await?
+        .rows_affected();
+    if affected == 0 {
+        return Err(AppError::NotFound {
+            resource: "project_agent",
+            id: format!("{}::{}", project_id, agent_id),
+        });
+    }
     Ok(())
 }

@@ -48,11 +48,12 @@ pub async fn create(
 ) -> AppResult<ConversationRow> {
     let title = new_conv.title.as_deref().unwrap_or("");
     sqlx::query(
-        "INSERT INTO conversations (id, agent_id, title) VALUES (?, ?, ?)",
+        "INSERT INTO conversations (id, agent_id, title, project_id) VALUES (?, ?, ?, ?)",
     )
     .bind(id)
     .bind(&new_conv.agent_id)
     .bind(title)
+    .bind(&new_conv.project_id)
     .execute(pool)
     .await?;
 

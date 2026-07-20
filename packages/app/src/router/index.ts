@@ -58,6 +58,17 @@ const routes: RouteRecordRaw[] = [
     path: "/chat",
     redirect: { name: "ProjectChat", params: { projectId: "default" } },
   },
+  // 兼容旧 /chat/:conversationId 路由（保留会话 ID）
+  {
+    path: "/chat/:conversationId",
+    redirect: (to) => ({
+      name: "ProjectChatConversation",
+      params: {
+        projectId: "default",
+        conversationId: to.params.conversationId,
+      },
+    }),
+  },
   {
     // Agent 管理页
     path: "/agents",
