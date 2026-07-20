@@ -16,10 +16,10 @@
 // emits:
 //   - chat:select(conversationId)  当前选中的会话 ID 变化时通知父组件
 
-import { nextTick, onMounted } from "vue";
+import { computed, nextTick, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { useAgentsStore } from "../../stores/agents";
-import { useProjectsStore } from "../../stores/projects";
+import { useProjectsStore, DEFAULT_PROJECT_ID } from "../../stores/projects";
 import { useConversationsStore } from "../../stores/conversations";
 import { useContextMenu } from "../../composables/useContextMenu";
 import { useToast } from "../../composables/useToast";
@@ -67,38 +67,75 @@ function onSelect(conv: Conversation): void {
 // 新建会话
 // ============================================================================
 
+// ============================================================================
+// 新建会话：Agent 选择逻辑
+// ============================================================================
+
+/** Agent 选择浮层是否打开（多个 Agent 时弹出选择） */
+const showAgentPicker = ref<boolean>(false);
+
+/** 当前项目可用的 Agent 列表（id + name） */
+const projectAgentOptions = computed<Array<{ id: string; name: string }>>(() => {
+  const p = projectsStore.current;
+  if (!p || !p.agents || p.agents.length === 0) return [];
+  return p.agents.map((member) => {
+    const agent = agentsStore.byId(member.agent_id);
+    return {
+      id: member.agent_id,
+      name: agent?.name ?? "Unknown",
+    };
+  });
+});
+
 /**
- * 点击「+ 新建会话」按钮。
- * Phase 2: 不再依赖 agentsStore.currentId 作为侧边栏的核心维度。
- * - 如果当前项目有 Agent 成员，优先使用 lead agent
- * - 否则使用 agentsStore.currentId 或第一个 Agent
+ * 点击「+ 新建会话」按钮（Phase 2 改进版）。
+ *
+ * Agent 选择策略：
+ * - 项目无 Agent 成员 + 非默认项目 → toast 提示并跳转项目设置
+ * - 项目无 Agent 成员 + 默认项目   → 回退到 currentId / 第一个 Agent
+ * - 项目仅 1 个 Agent 成员         → 直接用该 Agent 创建
+ * - 项目有多个 Agent 成员          → 弹出选择浮层
  */
 async function onCreate(): Promise<void> {
-  // 获取当前项目的 Agent 成员
   const currentProject = projectsStore.current;
-  let agentId: string | null = null;
+  const isDefault = projectsStore.currentId === DEFAULT_PROJECT_ID;
+  const projectAgents = currentProject?.agents ?? [];
 
-  if (currentProject && currentProject.agents.length > 0) {
-    // 优先使用 lead agent
-    const lead = currentProject.agents.find((a) => a.role === "lead");
-    agentId = lead?.agent_id ?? currentProject.agents[0]!.agent_id;
-  }
-
-  // 回退到 agentsStore
-  if (!agentId) {
-    agentId = agentsStore.currentId;
-  }
-
-  // 回退到第一个 Agent
-  if (!agentId && agentsStore.hasAgents) {
-    agentId = agentsStore.agents[0]!.id;
-  }
-
-  if (!agentId) {
-    toast.warning("请先创建一个 Agent");
+  // 场景 1：项目无 Agent 成员
+  if (projectAgents.length === 0) {
+    if (isDefault) {
+      // 默认项目：回退到全局 Agent
+      const fallbackId =
+        agentsStore.currentId ??
+        (agentsStore.hasAgents ? agentsStore.agents[0]!.id : null);
+      if (!fallbackId) {
+        toast.warning("请先创建一个 Agent");
+        return;
+      }
+      await doCreate(fallbackId);
+      return;
+    }
+    // 非默认项目：提示并跳转设置
+    toast.warning("请先在项目设置中添加 Agent", { duration: 4000 });
+    const id = projectsStore.currentId;
+    const routeId = id === DEFAULT_PROJECT_ID ? "default" : id;
+    void router.push({ name: "ProjectSettings", params: { projectId: routeId } });
     return;
   }
 
+  // 场景 2：仅 1 个 Agent 成员 → 直接创建
+  if (projectAgents.length === 1) {
+    await doCreate(projectAgents[0]!.agent_id);
+    return;
+  }
+
+  // 场景 3：多个 Agent 成员 → 弹出选择浮层
+  showAgentPicker.value = true;
+}
+
+/** 执行创建会话 */
+async function doCreate(agentId: string): Promise<void> {
+  showAgentPicker.value = false;
   try {
     const created = await conversationsStore.create(agentId, projectsStore.currentId);
     await nextTick();
@@ -106,6 +143,11 @@ async function onCreate(): Promise<void> {
   } catch {
     toast.error("新建会话失败");
   }
+}
+
+/** 取消 Agent 选择 */
+function cancelAgentPicker(): void {
+  showAgentPicker.value = false;
 }
 
 // ============================================================================
@@ -204,6 +246,22 @@ function onCancelRename(): void {
 
     <!-- 底部：新建会话按钮 -->
     <div class="sidebar-bottom">
+      <!-- Agent 选择浮层（多个 Agent 时显示） -->
+      <div v-if="showAgentPicker" class="agent-picker-backdrop" @click="cancelAgentPicker" />
+      <Transition name="agent-picker">
+        <div v-if="showAgentPicker" class="agent-picker">
+          <p class="agent-picker-title">选择 Agent</p>
+          <button
+            v-for="agent in projectAgentOptions"
+            :key="agent.id"
+            type="button"
+            class="agent-picker-item"
+            @click="doCreate(agent.id)"
+          >
+            {{ agent.name }}
+          </button>
+        </div>
+      </Transition>
       <NewChatButton @create="onCreate" />
       <!-- 模板管理入口 -->
       <button
@@ -268,5 +326,74 @@ function onCancelRename(): void {
 .sidebar-link:hover {
   background: var(--ip-color-bg-tertiary);
   color: var(--ip-color-text-primary);
+}
+
+/* ===== Agent 选择浮层 ===== */
+.agent-picker-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--ip-z-popover, 100);
+}
+
+.agent-picker {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: var(--ip-spacing-3);
+  right: var(--ip-spacing-3);
+  z-index: calc(var(--ip-z-popover, 100) + 1);
+  background: var(--ip-color-bg-elevated);
+  border: 1px solid var(--ip-color-border-default);
+  border-radius: var(--ip-radius-lg, 12px);
+  box-shadow: 0 -4px 16px -4px rgba(0, 0, 0, 0.12);
+  padding: var(--ip-spacing-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ip-spacing-1);
+}
+
+.agent-picker-title {
+  margin: 0 0 var(--ip-spacing-1);
+  padding: var(--ip-spacing-1) var(--ip-spacing-2);
+  font-size: var(--ip-text-caption-size, 12px);
+  font-weight: var(--ip-font-weight-medium, 500);
+  color: var(--ip-color-text-tertiary);
+}
+
+.agent-picker-item {
+  display: block;
+  width: 100%;
+  padding: var(--ip-spacing-2) var(--ip-spacing-3);
+  border: none;
+  border-radius: var(--ip-radius-md, 8px);
+  background: transparent;
+  font-family: inherit;
+  font-size: var(--ip-text-body-sm-size, 13px);
+  color: var(--ip-color-text-primary);
+  text-align: left;
+  cursor: pointer;
+  transition: var(--ip-transition-colors);
+}
+
+.agent-picker-item:hover {
+  background: var(--ip-color-bg-hover);
+}
+
+.agent-picker-item:focus-visible {
+  outline: none;
+  box-shadow: var(--ip-shadow-focus);
+}
+
+/* Agent picker transition */
+.agent-picker-enter-active,
+.agent-picker-leave-active {
+  transition:
+    opacity var(--ip-duration-fast, 150ms) var(--ip-ease-out),
+    transform var(--ip-duration-fast, 150ms) var(--ip-ease-out);
+}
+
+.agent-picker-enter-from,
+.agent-picker-leave-to {
+  opacity: 0;
+  transform: translateY(8px);
 }
 </style>
