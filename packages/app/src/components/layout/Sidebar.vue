@@ -1,9 +1,9 @@
 <script setup lang="ts">
-// 侧边栏（拼装版）
+// 侧边栏（Phase 2 重构版）
 //
 // 职责：
-//   - 顶部：AgentSelector（Agent 切换 + 管理入口）
-//   - 中部：ConversationList（pinned 分组 + 列表）
+//   - 顶部：ProjectSelector（项目切换 + 管理入口）
+//   - 中部：ConversationList（pinned 分组 + 列表，按项目加载）
 //   - 底部：NewChatButton
 //   - 浮层：ContextMenu（右键菜单）+ InlineRename（由 ConversationItem 内部渲染）
 //
@@ -19,16 +19,18 @@
 import { nextTick, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { useAgentsStore } from "../../stores/agents";
+import { useProjectsStore } from "../../stores/projects";
 import { useConversationsStore } from "../../stores/conversations";
 import { useContextMenu } from "../../composables/useContextMenu";
 import { useToast } from "../../composables/useToast";
 import type { Conversation } from "../../types";
-import AgentSelector from "../sidebar/AgentSelector.vue";
+import ProjectSelector from "../sidebar/ProjectSelector.vue";
 import ConversationList from "../sidebar/ConversationList.vue";
 import NewChatButton from "../sidebar/NewChatButton.vue";
 import ContextMenu from "../sidebar/ContextMenu.vue";
 
 const agentsStore = useAgentsStore();
+const projectsStore = useProjectsStore();
 const conversationsStore = useConversationsStore();
 const ctxMenu = useContextMenu();
 const toast = useToast();
@@ -44,11 +46,11 @@ const emit = defineEmits<{
 }>();
 
 // ============================================================================
-// 生命周期：启动监听 Agent 切换（在确保 agents 加载完成后调用更稳妥）
+// 生命周期：启动监听项目切换
 // ============================================================================
 
 onMounted(() => {
-  conversationsStore.watchAgentChange();
+  conversationsStore.watchProjectChange();
 });
 
 // ============================================================================
@@ -65,17 +67,40 @@ function onSelect(conv: Conversation): void {
 // 新建会话
 // ============================================================================
 
-/** 点击「+ 新建会话」按钮 */
+/**
+ * 点击「+ 新建会话」按钮。
+ * Phase 2: 不再依赖 agentsStore.currentId 作为侧边栏的核心维度。
+ * - 如果当前项目有 Agent 成员，优先使用 lead agent
+ * - 否则使用 agentsStore.currentId 或第一个 Agent
+ */
 async function onCreate(): Promise<void> {
-  const agentId = agentsStore.currentId;
+  // 获取当前项目的 Agent 成员
+  const currentProject = projectsStore.current;
+  let agentId: string | null = null;
+
+  if (currentProject && currentProject.agents.length > 0) {
+    // 优先使用 lead agent
+    const lead = currentProject.agents.find((a) => a.role === "lead");
+    agentId = lead?.agent_id ?? currentProject.agents[0]!.agent_id;
+  }
+
+  // 回退到 agentsStore
   if (!agentId) {
-    toast.warning("请先选择或创建一个 Agent");
+    agentId = agentsStore.currentId;
+  }
+
+  // 回退到第一个 Agent
+  if (!agentId && agentsStore.hasAgents) {
+    agentId = agentsStore.agents[0]!.id;
+  }
+
+  if (!agentId) {
+    toast.warning("请先创建一个 Agent");
     return;
   }
+
   try {
-    const created = await conversationsStore.create(agentId);
-    // 等 Vue 把 create() 写入的 currentId 推到 ChatPage 的响应式依赖，
-    // 再 emit chat:select，避免父组件在 currentId 同步之前读到旧值。
+    const created = await conversationsStore.create(agentId, projectsStore.currentId);
     await nextTick();
     emit("chat:select", created.id);
   } catch {
@@ -89,7 +114,6 @@ async function onCreate(): Promise<void> {
 
 /** 右键会话项：构建菜单项并打开浮层 */
 function onContextMenu(event: MouseEvent, conv: Conversation): void {
-  // 先切换选中（与桌面客户端常见行为一致：右键即选中）
   conversationsStore.setCurrent(conv.id);
   emit("chat:select", conv.id);
 
@@ -117,7 +141,7 @@ function onContextMenu(event: MouseEvent, conv: Conversation): void {
   ctxMenu.openMenu(event.clientX, event.clientY, items);
 }
 
-/** 切换置顶（包装 store action + 错误提示） */
+/** 切换置顶 */
 async function onTogglePin(conv: Conversation): Promise<void> {
   try {
     await conversationsStore.pin(conv.id, !conv.pinned);
@@ -126,11 +150,10 @@ async function onTogglePin(conv: Conversation): Promise<void> {
   }
 }
 
-/** 删除会话（包装 store action + 错误提示 + 切换通知） */
+/** 删除会话 */
 async function onDelete(conv: Conversation): Promise<void> {
   try {
     const newCurrentId = await conversationsStore.delete(conv.id);
-    // 通知父组件当前会话可能已变化
     emit("chat:select", newCurrentId);
   } catch {
     toast.error("删除失败");
@@ -141,12 +164,10 @@ async function onDelete(conv: Conversation): Promise<void> {
 // 重命名
 // ============================================================================
 
-/** 双击 → 进入重命名态 */
 function onRequestRename(conv: Conversation): void {
   conversationsStore.requestRename(conv.id);
 }
 
-/** 重命名提交（store.rename 失败时由 toast 提示并退出编辑态） */
 async function onCommitRename(title: string): Promise<void> {
   const renamingId = conversationsStore.renamingId;
   if (!renamingId) return;
@@ -158,7 +179,6 @@ async function onCommitRename(title: string): Promise<void> {
   }
 }
 
-/** 重命名取消 */
 function onCancelRename(): void {
   conversationsStore.cancelRename();
 }
@@ -166,9 +186,9 @@ function onCancelRename(): void {
 
 <template>
   <aside class="sidebar">
-    <!-- 顶部：Agent 选择器 -->
+    <!-- 顶部：项目选择器 -->
     <div class="sidebar-top">
-      <AgentSelector />
+      <ProjectSelector />
     </div>
 
     <!-- 中部：会话列表（滚动区域） -->
@@ -207,7 +227,6 @@ function onCancelRename(): void {
   flex-direction: column;
   height: 100%;
   width: 100%;
-  /* 侧边栏与主区轻微分层：使用 secondary 作为底色 */
   background: var(--ip-color-bg-secondary);
   border-right: 1px solid var(--ip-color-border-default);
   overflow: hidden;

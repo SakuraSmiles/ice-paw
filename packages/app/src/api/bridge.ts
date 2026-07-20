@@ -159,10 +159,10 @@ const conversations = {
    * （无 `#[serde(rename_all)]`，因此需用 snake_case），所以这里走
    * `{ input: { agent_id, title } }` 包装形式（与 agents.create 同形）。
    */
-  async create(agentId: string, title?: string): Promise<Conversation> {
+  async create(agentId: string, title?: string, projectId?: string | null): Promise<Conversation> {
     try {
       return await invoke<Conversation>("create_conversation", {
-        input: { agent_id: agentId, title },
+        input: { agent_id: agentId, title, project_id: projectId },
       });
     } catch (err) {
       throw wrapInvokeError("conversations.create", err);

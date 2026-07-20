@@ -16,6 +16,7 @@
 import { computed } from "vue";
 import { Square, Settings } from "lucide-vue-next";
 import { useAgentsStore } from "../../stores/agents";
+import { useProjectsStore } from "../../stores/projects";
 import { useConversationsStore } from "../../stores/conversations";
 import { useChatStore } from "../../stores/chat";
 import { useAgentMeta, type AgentMeta } from "../../composables/useAgentMeta";
@@ -23,6 +24,7 @@ import { useRouter } from "vue-router";
 import AgentAvatar from "../common/AgentAvatar.vue";
 
 const agentsStore = useAgentsStore();
+const projectsStore = useProjectsStore();
 const conversationsStore = useConversationsStore();
 const chatStore = useChatStore();
 const agentMeta = useAgentMeta();
@@ -31,6 +33,11 @@ const router = useRouter();
 const emit = defineEmits<{
   stop: [];
 }>();
+
+/** 当前项目名（Phase 2: 面包屑导航用） */
+const projectName = computed<string>(() => {
+  return projectsStore.current?.name ?? "默认项目";
+});
 
 /** 当前会话标题（无则显示「新会话」） */
 const convTitle = computed<string>(() => {
@@ -79,6 +86,9 @@ function openSettings(): void {
           class="header-avatar"
           aria-hidden="true"
         />
+        <!-- Phase 2: 面包屑导航 项目名 / 会话标题 -->
+        <span class="project-breadcrumb">{{ projectName }}</span>
+        <span class="breadcrumb-sep">/</span>
         <span class="conv-title">{{ headerTitle }}</span>
       </div>
       <div v-if="agentModel" class="meta-row">
@@ -146,6 +156,22 @@ function openSettings(): void {
 }
 
 .header-avatar {
+  flex-shrink: 0;
+}
+
+/* Phase 2: 面包屑导航 */
+.project-breadcrumb {
+  font-size: var(--ip-text-caption-size);
+  font-weight: var(--ip-font-weight-medium);
+  color: var(--ip-color-text-tertiary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.breadcrumb-sep {
+  font-size: var(--ip-text-caption-size);
+  color: var(--ip-color-text-tertiary);
+  opacity: 0.5;
   flex-shrink: 0;
 }
 

@@ -168,6 +168,8 @@ export interface Conversation {
 export interface NewConversation {
   agent_id: string;
   title?: string;
+  /** Phase 2: 所属项目 ID（null/undefined = 默认项目） */
+  project_id?: string | null;
 }
 
 // ============================================================================
