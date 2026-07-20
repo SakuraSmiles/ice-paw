@@ -20,7 +20,9 @@ import type {
   Message,
   NewAgent,
   NewMessage,
+  NewProject,
   NewTemplate,
+  Project,
   Template,
   TemplateUpdate,
 } from "../types";
@@ -396,6 +398,136 @@ const templates = {
 
 
 // ============================================================================
+// bridge.projects — 项目命名空间（Phase 2）
+// ============================================================================
+
+const projects = {
+  /**
+   * 列出全部项目（含每个项目下的 Agent 成员）。
+   * 对应 Command：list_projects
+   */
+  async list(): Promise<Project[]> {
+    try {
+      return await invoke<Project[]>("list_projects");
+    } catch (err) {
+      throw wrapInvokeError("projects.list", err);
+    }
+  },
+
+  /**
+   * 创建项目。
+   * 对应 Command：create_project
+   */
+  async create(input: NewProject): Promise<Project> {
+    try {
+      return await invoke<Project>("create_project", { input });
+    } catch (err) {
+      throw wrapInvokeError("projects.create", err);
+    }
+  },
+
+  /**
+   * 更新项目名称 / 描述。
+   * 对应 Command：update_project
+   */
+  async update(
+    id: string,
+    name?: string,
+    description?: string,
+  ): Promise<Project> {
+    try {
+      return await invoke<Project>("update_project", { id, name, description });
+    } catch (err) {
+      throw wrapInvokeError("projects.update", err);
+    }
+  },
+
+  /**
+   * 删除项目（conversations.project_id → NULL，project_agents CASCADE 删除）。
+   * 对应 Command：delete_project
+   */
+  async delete(id: string): Promise<void> {
+    try {
+      await invoke<void>("delete_project", { id });
+    } catch (err) {
+      throw wrapInvokeError("projects.delete", err);
+    }
+  },
+
+  /**
+   * 排序（批量更新 sort_order）。
+   * 对应 Command：reorder_projects
+   */
+  async reorder(orderedIds: string[]): Promise<void> {
+    try {
+      await invoke<void>("reorder_projects", { orderedIds });
+    } catch (err) {
+      throw wrapInvokeError("projects.reorder", err);
+    }
+  },
+
+  /**
+   * 添加 Agent 到项目。
+   * 对应 Command：add_project_agent
+   */
+  async addAgent(
+    projectId: string,
+    agentId: string,
+    role?: string,
+  ): Promise<void> {
+    try {
+      await invoke<void>("add_project_agent", { projectId, agentId, role });
+    } catch (err) {
+      throw wrapInvokeError("projects.addAgent", err);
+    }
+  },
+
+  /**
+   * 从项目移除 Agent。
+   * 对应 Command：remove_project_agent
+   */
+  async removeAgent(projectId: string, agentId: string): Promise<void> {
+    try {
+      await invoke<void>("remove_project_agent", { projectId, agentId });
+    } catch (err) {
+      throw wrapInvokeError("projects.removeAgent", err);
+    }
+  },
+
+  /**
+   * 列出某项目下的全部会话（projectId = null → 默认项目）。
+   * 对应 Command：list_conversations_by_project
+   */
+  async listConversations(projectId: string | null): Promise<Conversation[]> {
+    try {
+      return await invoke<Conversation[]>("list_conversations_by_project", {
+        projectId,
+      });
+    } catch (err) {
+      throw wrapInvokeError("projects.listConversations", err);
+    }
+  },
+
+  /**
+   * 移动会话到指定项目（projectId = null → 移回默认项目）。
+   * 对应 Command：move_conversation_to_project
+   */
+  async moveConversation(
+    conversationId: string,
+    projectId: string | null,
+  ): Promise<void> {
+    try {
+      await invoke<void>("move_conversation_to_project", {
+        conversationId,
+        projectId,
+      });
+    } catch (err) {
+      throw wrapInvokeError("projects.moveConversation", err);
+    }
+  },
+};
+
+// ============================================================================
 // bridge.preferences — 偏好设置命名空间
 // ============================================================================
 
@@ -440,6 +572,7 @@ export const bridge = {
   messages,
   templates,
   chat,
+  projects,
   preferences,
 };
 

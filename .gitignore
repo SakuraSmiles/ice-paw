@@ -35,3 +35,5 @@ target/
 # Database
 *.db
 *.sqlite
+backup-data.sql
+restore-data.py

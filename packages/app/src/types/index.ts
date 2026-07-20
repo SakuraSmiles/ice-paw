@@ -155,6 +155,8 @@ export interface Conversation {
   updated_at: string;
   /** Task 3b: 对话级工具覆盖（null/undefined = 继承 Agent 配置） */
   toolsOverride?: Record<string, boolean> | null;
+  /** Phase 2: 所属项目 ID（null/undefined = 默认项目） */
+  project_id?: string | null;
 }
 
 /**
@@ -510,6 +512,58 @@ export interface TemplateUpdate {
   variables?: TemplateVariable[];
   tools?: string[];
   sort_order?: number;
+}
+
+// ============================================================================
+// UserPreferences（全局配置）
+// ============================================================================
+
+// ============================================================================
+// Project（Phase 2）
+// ============================================================================
+
+/**
+ * 项目成员（Agent 在项目中的角色）
+ * Rust 侧 ProjectMember 序列化默认 snake_case
+ */
+export interface ProjectMember {
+  agent_id: string;
+  role: string; // 'lead' | 'member'
+}
+
+/**
+ * 项目实体：对应数据库 `projects` 表。
+ *
+ * 字段说明：
+ * - id          主键（UUID）
+ * - name        项目名称
+ * - description 项目描述
+ * - icon        图标标识
+ * - sort_order  排序权重（值小者靠前）
+ * - created_at  创建时间
+ * - updated_at  最近更新时间
+ * - agents      项目下的 Agent 成员列表
+ */
+export interface Project {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+  agents: ProjectMember[];
+}
+
+/**
+ * 创建项目入参。
+ * - name 必传
+ * - description / icon 可选
+ */
+export interface NewProject {
+  name: string;
+  description?: string;
+  icon?: string;
 }
 
 // ============================================================================
