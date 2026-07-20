@@ -63,6 +63,7 @@ pub async fn update_agent(
         input.cache_prompt,
         input.max_history_messages,
         input.tool_trim_threshold,
+        input.enabled_tools,
     )
     .await?;
     Ok(Agent::from(row))
