@@ -23,7 +23,6 @@ import {
   Search,
   AtSign,
   Hash,
-  Copy,
   RotateCcw,
   Settings,
   MoreHorizontal,
@@ -224,7 +223,8 @@ onUnmounted(() => {
 
       <!-- Wavy divider -->
       <svg class="hand-drawn-divider" width="200" height="12" viewBox="0 0 200 12" fill="none" aria-hidden="true">
-        <path d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
+        <path
+          d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
               stroke="currentColor" stroke-width="1.5"
               stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
       </svg>
@@ -250,7 +250,8 @@ onUnmounted(() => {
       <div class="hero-scroll-hint" aria-hidden="true">
         <span>向下滚动</span>
         <svg width="14" height="20" viewBox="0 0 14 20" fill="none">
-          <path d="M7 1 L7 15 M2 10 L7 15 L12 10" stroke="currentColor" stroke-width="1.5"
+          <path
+            d="M7 1 L7 15 M2 10 L7 15 L12 10" stroke="currentColor" stroke-width="1.5"
                 stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       </div>
@@ -260,7 +261,8 @@ onUnmounted(() => {
     <section id="button" class="preview-section">
       <div class="preview-section__top">
         <svg class="hand-drawn-divider" width="200" height="12" viewBox="0 0 200 12" fill="none" aria-hidden="true">
-          <path d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
+          <path
+            d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
                 stroke="currentColor" stroke-width="1.5"
                 stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
         </svg>
@@ -370,7 +372,8 @@ onUnmounted(() => {
 
       <!-- End wavy divider -->
       <svg class="hand-drawn-divider hand-drawn-divider--center" width="320" height="12" viewBox="0 0 320 12" fill="none" aria-hidden="true">
-        <path d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
+        <path
+          d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
               stroke="currentColor" stroke-width="1.5"
               stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
       </svg>
@@ -380,7 +383,8 @@ onUnmounted(() => {
     <section id="input" class="preview-section">
       <div class="preview-section__top">
         <svg class="hand-drawn-divider" width="200" height="12" viewBox="0 0 200 12" fill="none" aria-hidden="true">
-          <path d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
+          <path
+            d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
                 stroke="currentColor" stroke-width="1.5"
                 stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
         </svg>
@@ -474,7 +478,8 @@ onUnmounted(() => {
       </ul>
 
       <svg class="hand-drawn-divider hand-drawn-divider--center" width="320" height="12" viewBox="0 0 320 12" fill="none" aria-hidden="true">
-        <path d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
+        <path
+          d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
               stroke="currentColor" stroke-width="1.5"
               stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
       </svg>
@@ -484,7 +489,8 @@ onUnmounted(() => {
     <section id="textarea" class="preview-section">
       <div class="preview-section__top">
         <svg class="hand-drawn-divider" width="200" height="12" viewBox="0 0 200 12" fill="none" aria-hidden="true">
-          <path d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
+          <path
+            d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
                 stroke="currentColor" stroke-width="1.5"
                 stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
         </svg>
@@ -552,7 +558,8 @@ onUnmounted(() => {
       </ul>
 
       <svg class="hand-drawn-divider hand-drawn-divider--center" width="320" height="12" viewBox="0 0 320 12" fill="none" aria-hidden="true">
-        <path d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
+        <path
+          d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
               stroke="currentColor" stroke-width="1.5"
               stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
       </svg>
@@ -562,7 +569,8 @@ onUnmounted(() => {
     <section id="message" class="preview-section">
       <div class="preview-section__top">
         <svg class="hand-drawn-divider" width="200" height="12" viewBox="0 0 200 12" fill="none" aria-hidden="true">
-          <path d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
+          <path
+            d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
                 stroke="currentColor" stroke-width="1.5"
                 stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
         </svg>
@@ -639,7 +647,8 @@ onUnmounted(() => {
       </ul>
 
       <svg class="hand-drawn-divider hand-drawn-divider--center" width="320" height="12" viewBox="0 0 320 12" fill="none" aria-hidden="true">
-        <path d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
+        <path
+          d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
               stroke="currentColor" stroke-width="1.5"
               stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
       </svg>
@@ -649,7 +658,8 @@ onUnmounted(() => {
     <section id="modal" class="preview-section">
       <div class="preview-section__top">
         <svg class="hand-drawn-divider" width="200" height="12" viewBox="0 0 200 12" fill="none" aria-hidden="true">
-          <path d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
+          <path
+            d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
                 stroke="currentColor" stroke-width="1.5"
                 stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
         </svg>
@@ -718,7 +728,8 @@ onUnmounted(() => {
       </ul>
 
       <svg class="hand-drawn-divider hand-drawn-divider--center" width="320" height="12" viewBox="0 0 320 12" fill="none" aria-hidden="true">
-        <path d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
+        <path
+          d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
               stroke="currentColor" stroke-width="1.5"
               stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
       </svg>
@@ -728,7 +739,8 @@ onUnmounted(() => {
     <section id="toast" class="preview-section">
       <div class="preview-section__top">
         <svg class="hand-drawn-divider" width="200" height="12" viewBox="0 0 200 12" fill="none" aria-hidden="true">
-          <path d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
+          <path
+            d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
                 stroke="currentColor" stroke-width="1.5"
                 stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
         </svg>
@@ -781,7 +793,8 @@ onUnmounted(() => {
       </ul>
 
       <svg class="hand-drawn-divider hand-drawn-divider--center" width="320" height="12" viewBox="0 0 320 12" fill="none" aria-hidden="true">
-        <path d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
+        <path
+          d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
               stroke="currentColor" stroke-width="1.5"
               stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
       </svg>
@@ -791,7 +804,8 @@ onUnmounted(() => {
     <section id="flex" class="preview-section">
       <div class="preview-section__top">
         <svg class="hand-drawn-divider" width="200" height="12" viewBox="0 0 200 12" fill="none" aria-hidden="true">
-          <path d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
+          <path
+            d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
                 stroke="currentColor" stroke-width="1.5"
                 stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
         </svg>
@@ -1097,7 +1111,8 @@ onUnmounted(() => {
       </ul>
 
       <svg class="hand-drawn-divider hand-drawn-divider--center" width="320" height="12" viewBox="0 0 320 12" fill="none" aria-hidden="true">
-        <path d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
+        <path
+          d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
               stroke="currentColor" stroke-width="1.5"
               stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
       </svg>
@@ -1107,7 +1122,8 @@ onUnmounted(() => {
     <section id="container" class="preview-section">
       <div class="preview-section__top">
         <svg class="hand-drawn-divider" width="200" height="12" viewBox="0 0 200 12" fill="none" aria-hidden="true">
-          <path d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
+          <path
+            d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
                 stroke="currentColor" stroke-width="1.5"
                 stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
         </svg>
@@ -1201,7 +1217,8 @@ onUnmounted(() => {
       </ul>
 
       <svg class="hand-drawn-divider hand-drawn-divider--center" width="320" height="12" viewBox="0 0 320 12" fill="none" aria-hidden="true">
-        <path d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
+        <path
+          d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
               stroke="currentColor" stroke-width="1.5"
               stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
       </svg>
