@@ -66,6 +66,8 @@ export interface AgentFormPayload {
    * - 正整数 N → 最多加载最近 N 条历史消息注入 LLM 上下文
    */
   maxHistoryMessages?: number | null;
+  /** Task 4: 工具白名单（null/undefined = 全部启用） */
+  enabledTools?: string[] | null;
 }
 
 const props = defineProps<{
@@ -98,10 +100,20 @@ const maxTokens = ref(4096);
 const cachePrompt = ref(true);
 /**
  * A3-2: 历史消息窗口上限（用户输入字符串，留空 = 系统默认）。
- * 后端 AgentRow.max_history_messages 是 Option<i32>，前端用字符串方便
- * 表达「未填写」状态（空串），提交时再转为 number | null。
  */
 const maxHistoryMessagesInput = ref<string>("");
+/**
+ * Task 4: 工具白名单。
+ * - null = 全部启用（默认）
+ * - string[] = 仅启用选中的工具
+ */
+const enabledTools = ref<string[] | null>(null);
+
+/** 可用工具列表 */
+const AVAILABLE_TOOLS: { name: string; label: string; description: string }[] = [
+  { name: "read_file", label: "读取文件", description: "读取指定文件内容" },
+  { name: "list_directory", label: "列出目录", description: "列出目录下的文件和子目录" },
+];
 
 /** 当前选中的模板 id（create 模式才有意义） */
 const selectedTemplateId = ref<string | null>(null);
@@ -145,7 +157,8 @@ const advancedDefaultOpen = computed<boolean>(() => {
     baseUrl.value.trim().length > 0 ||
     Math.abs(temperature.value - 0.7) > 0.001 ||
     maxTokens.value !== 4096 ||
-    maxHistoryMessagesInput.value.trim().length > 0
+    maxHistoryMessagesInput.value.trim().length > 0 ||
+    (enabledTools.value !== null && enabledTools.value.length !== AVAILABLE_TOOLS.length)
   );
 });
 
@@ -232,6 +245,7 @@ function resetForm(): void {
   maxTokens.value = 4096;
   cachePrompt.value = true;
   maxHistoryMessagesInput.value = "";
+  enabledTools.value = null;
   selectedTemplateId.value = null;
   advancedOpen.value = false;
   errors.value = {};
@@ -260,6 +274,8 @@ function populateFromAgent(a: Agent): void {
   // A3-2: 读取历史窗口（null/undefined → 空串 = 系统默认）
   maxHistoryMessagesInput.value =
     a.max_history_messages != null ? String(a.max_history_messages) : "";
+  // Task 4: 读取工具白名单（undefined → null = 全部启用）
+  enabledTools.value = a.enabled_tools ?? null;
   selectedTemplateId.value = null;
   advancedOpen.value = advancedDefaultOpen.value;
 }
@@ -320,6 +336,7 @@ function handleSubmit(): void {
     templateId: selectedTemplateId.value ?? undefined,
     cachePrompt: cachePrompt.value,
     maxHistoryMessages: parseMaxHistoryInput(),
+    enabledTools: enabledTools.value,
   });
 }
 
@@ -331,6 +348,21 @@ function close(): void {
 function onAdvancedToggle(e: Event): void {
   const target = e.target as HTMLElement & { open?: boolean };
   advancedOpen.value = Boolean(target?.open);
+}
+
+/** Task 4: 切换单个工具的启用/禁用状态 */
+function toggleTool(toolName: string): void {
+  if (enabledTools.value === null) {
+    // 从「全部启用」切换到手动选择：默认全部选中，再取消当前项
+    enabledTools.value = AVAILABLE_TOOLS.map((t) => t.name).filter((n) => n !== toolName);
+    return;
+  }
+  const idx = enabledTools.value.indexOf(toolName);
+  if (idx >= 0) {
+    enabledTools.value = enabledTools.value.filter((n) => n !== toolName);
+  } else {
+    enabledTools.value = [...enabledTools.value, toolName];
+  }
 }
 
 // ============================================================================
@@ -626,6 +658,53 @@ function templateBgFg(tpl: AgentTemplate): { bg: string; fg: string } {
                       autocomplete="off"
                       @update:model-value="(v) => (maxHistoryMessagesInput = String(v ?? ''))"
                     />
+                  </div>
+
+                  <!-- Task 4: 工具权限 -->
+                  <div class="form-group">
+                    <label class="form-label">
+                      工具权限
+                      <span class="label-hint">
+                        （不勾选任何项 = 全部启用；勾选后仅启用选中项）
+                      </span>
+                    </label>
+                    <div class="tools-toggle-row">
+                      <button
+                        type="button"
+                        class="toggle-btn"
+                        :class="{ 'toggle-btn-on': enabledTools === null }"
+                        @click="enabledTools = null"
+                      >
+                        <span class="toggle-track">
+                          <span class="toggle-thumb" />
+                        </span>
+                        <span class="toggle-text">全部启用（默认）</span>
+                      </button>
+                    </div>
+                    <div v-if="enabledTools !== null" class="tools-checkbox-list">
+                      <label
+                        v-for="tool in AVAILABLE_TOOLS"
+                        :key="tool.name"
+                        class="tools-checkbox-item"
+                      >
+                        <input
+                          type="checkbox"
+                          :checked="enabledTools.includes(tool.name)"
+                          @change="toggleTool(tool.name)"
+                        />
+                        <span class="tools-checkbox-label">{{ tool.label }}</span>
+                        <span class="tools-checkbox-desc">{{ tool.description }}</span>
+                      </label>
+                    </div>
+                    <div v-if="enabledTools === null" class="tools-hint">
+                      当前模式：Agent 可使用全部内置工具
+                    </div>
+                    <div v-else-if="enabledTools.length === 0" class="tools-hint tools-hint-warning">
+                      ⚠️ 未选中任何工具，Agent 将无法使用工具
+                    </div>
+                    <div v-else class="tools-hint">
+                      已启用 {{ enabledTools.length }} / {{ AVAILABLE_TOOLS.length }} 个工具
+                    </div>
                   </div>
                 </div>
               </details>
@@ -975,6 +1054,55 @@ function templateBgFg(tpl: AgentTemplate): { bg: string; fg: string } {
 
 .toggle-btn-disabled .toggle-thumb {
   transform: translateX(0);
+}
+
+/* ===== Task 4: 工具权限 ===== */
+.tools-toggle-row {
+  margin-bottom: var(--ip-spacing-2);
+}
+
+.tools-checkbox-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ip-spacing-2);
+  padding: var(--ip-spacing-2) var(--ip-spacing-3);
+  background: var(--ip-color-bg-secondary);
+  border: 1px solid var(--ip-color-border-default);
+  border-radius: var(--ip-radius-md);
+}
+
+.tools-checkbox-item {
+  display: flex;
+  align-items: baseline;
+  gap: var(--ip-spacing-2);
+  cursor: pointer;
+}
+
+.tools-checkbox-item input[type="checkbox"] {
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--ip-primary-500);
+}
+
+.tools-checkbox-label {
+  font-size: var(--ip-text-body-sm-size);
+  font-weight: var(--ip-font-weight-medium);
+  color: var(--ip-color-text-primary);
+}
+
+.tools-checkbox-desc {
+  font-size: var(--ip-text-caption-size);
+  color: var(--ip-color-text-tertiary);
+}
+
+.tools-hint {
+  margin-top: var(--ip-spacing-1);
+  font-size: var(--ip-text-caption-size);
+  color: var(--ip-color-text-tertiary);
+}
+
+.tools-hint-warning {
+  color: var(--ip-color-text-warning, #d97706);
 }
 
 .advanced-section {

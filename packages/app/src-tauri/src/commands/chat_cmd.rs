@@ -65,6 +65,13 @@ pub async fn send_message(
     // --- 2. 取会话 + agent + api_key → 创建 provider ---
     let conv = repo::conversation::get_by_id(pool.inner(), &conv_id).await?;
     let agent = repo::agent::get_by_id(pool.inner(), &conv.agent_id).await?;
+
+    // Task 4: 从 Agent 配置读取工具白名单（NULL = 全部启用）
+    let agent_enabled_tools: Option<Vec<String>> = agent
+        .enabled_tools
+        .as_deref()
+        .map(|s| serde_json::from_str(s).unwrap_or_default());
+
     let (api_key, vault_base_url) = crypto::fetch_api_key(&app, &agent.id)?;
     let base_url = agent
         .base_url
@@ -170,6 +177,7 @@ pub async fn send_message(
         app, pool.inner().clone(), llm_provider, api_key,
         assembled.messages, agent.temperature, agent.max_tokens,
         cancel_token, conv_id, user_msg_id, asst_msg_id, tools_enabled,
+        agent_enabled_tools,
         current_user_query, tool_call_history,
     );
     Ok(())
@@ -205,11 +213,17 @@ fn spawn_stream_loop(
     api_key: String, messages: Vec<ChatMessage>, temperature: f64, max_tokens: i32,
     cancel_token: CancellationToken, conv_id: String, user_msg_id: String,
     asst_msg_id: String, tools_enabled: bool,
+    agent_enabled_tools: Option<Vec<String>>,
     query: Option<String>, call_history: Vec<String>,
 ) {
     tokio::spawn(async move {
+        // Task 4: 工具列表来自 Agent 配置（enabled_tools），对话 toggle 控制是否启用
         let tool_registry = if tools_enabled {
-            ToolRegistry::with_builtin()
+            match &agent_enabled_tools {
+                Some(names) if !names.is_empty() => ToolRegistry::with_filter(names),
+                Some(_) => ToolRegistry::new(), // 空 vec = 全部禁用
+                None => ToolRegistry::with_builtin(), // None = 全部启用（向后兼容）
+            }
         } else {
             ToolRegistry::new()
         };
