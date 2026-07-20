@@ -21,9 +21,13 @@
 import { computed, nextTick, ref, watch, useTemplateRef } from "vue";
 import { SendHorizontal, Square, Wrench, Library } from "lucide-vue-next";
 import { useChatStore } from "../../stores/chat";
+import { useConversationsStore } from "../../stores/conversations";
+import { useAgentsStore } from "../../stores/agents";
+import { bridge } from "../../api/bridge";
 import { useTemplatesStore } from "../../stores/templates";
 import TemplatePicker from "../template/TemplatePicker.vue";
 import ImagePicker, { type ImageItem } from "./ImagePicker.vue";
+import ToolPopover from "./ToolPopover.vue";
 import type { ContentBlock } from "../../types";
 
 const props = defineProps<{
@@ -38,6 +42,8 @@ const emit = defineEmits<{
 
 const chatStore = useChatStore();
 const templatesStore = useTemplatesStore();
+const conversationsStore = useConversationsStore();
+const agentsStore = useAgentsStore();
 
 // ============================================================================
 // 文本草稿
@@ -74,6 +80,91 @@ const maxHeightPx = LINE_HEIGHT_PX * MAX_ROWS + VERTICAL_PADDING_PX;
 
 /** textarea 的高度（px），由行数动态计算 */
 const heightPx = ref<number>(LINE_HEIGHT_PX + VERTICAL_PADDING_PX);
+
+// ============================================================================
+// Task 3b: 工具 Popover
+// ============================================================================
+
+/** Popover 是否打开 */
+const toolPopoverOpen = ref<boolean>(false);
+
+/** Popover 定位样式 */
+const toolPopoverStyle = ref<Record<string, string>>({});
+
+/** 内置工具列表 */
+const BUILTIN_TOOLS = ["read_file", "list_directory"];
+
+/** 当前 Agent 配置的可选工具列表 */
+const availableTools = computed<string[]>(() => {
+  const agent = agentsStore.current;
+  if (!agent) return BUILTIN_TOOLS;
+  const enabled = agent.enabled_tools;
+  if (enabled === null || enabled === undefined) return BUILTIN_TOOLS;
+  return enabled;
+});
+
+/** 当前会话的 tools_override */
+const toolOverride = computed<Record<string, boolean> | null>(() => {
+  const conv = conversationsStore.current;
+  return conv?.toolsOverride ?? null;
+});
+
+/** 打开 Popover */
+function openToolPopover(): void {
+  if (!chatStore.toolsEnabled) {
+    // 总开关关闭时，先打开总开关
+    chatStore.toolsEnabled = true;
+  }
+  toolPopoverOpen.value = true;
+  // 定位到按钮上方
+  nextTick(() => {
+    const btn = document.querySelector(".btn-tool-toggle");
+    if (btn) {
+      const rect = btn.getBoundingClientRect();
+      toolPopoverStyle.value = {
+        position: "fixed",
+        left: `${rect.left}px`,
+        bottom: `${window.innerHeight - rect.top + 4}px`,
+      };
+    }
+  });
+}
+
+/** Popover 更新回调 */
+async function onToolOverrideUpdate(value: Record<string, boolean> | null): Promise<void> {
+  const convId = conversationsStore.currentId;
+  if (!convId) return;
+  // 乐观更新本地会话
+  if (conversationsStore.current) {
+    const updated = { ...conversationsStore.current, toolsOverride: value };
+    const agentId = agentsStore.currentId!;
+    const list = conversationsStore.byAgent[agentId];
+    if (list) {
+      const idx = list.findIndex((c) => c.id === convId);
+      if (idx >= 0) {
+        list.splice(idx, 1, updated);
+      }
+    }
+  }
+  try {
+    await bridge.conversations.updateToolsOverride(convId, value);
+  } catch {
+    // 静默失败：override 仅影响本次对话，不阻塞用户
+  }
+}
+
+/** Popover 关闭 */
+function onToolPopoverClose(): void {
+  toolPopoverOpen.value = false;
+}
+
+// 切换会话时关闭 Popover
+watch(
+  () => conversationsStore.currentId,
+  () => {
+    toolPopoverOpen.value = false;
+  },
+);
 
 // ============================================================================
 // 模板选择状态
@@ -341,19 +432,30 @@ const appliedHint = computed<string | null>(() => {
     />
     <div class="toolbar">
       <div class="toolbar-left">
-        <!-- P2-1: 工具开关按钮 -->
+        <!-- Task 3b: 工具按钮 → Popover -->
         <button
           class="btn-tool-toggle"
           :class="{ 'btn-tool-toggle-active': chatStore.toolsEnabled }"
           type="button"
-          :title="chatStore.toolsEnabled ? '已开启工具调用（LLM 可读写本地文件）' : '开启工具调用（LLM 可读写本地文件）'"
-          :aria-label="chatStore.toolsEnabled ? '关闭工具调用' : '开启工具调用'"
+          :title="chatStore.toolsEnabled ? '已开启工具调用（点击配置）' : '开启工具调用（点击配置）'"
+          :aria-label="chatStore.toolsEnabled ? '配置工具调用' : '开启工具调用'"
           :aria-pressed="chatStore.toolsEnabled"
-          @click="chatStore.toolsEnabled = !chatStore.toolsEnabled"
+          @click="openToolPopover"
         >
           <Wrench :size="14" aria-hidden="true" />
           <span class="tool-toggle-label">工具</span>
         </button>
+        <!-- Task 3b: Popover 浮层 -->
+        <Teleport to="body">
+          <div v-if="toolPopoverOpen" :style="toolPopoverStyle">
+            <ToolPopover
+              :available-tools="availableTools"
+              :tool-override="toolOverride"
+              @update:tool-override="onToolOverrideUpdate"
+              @close="onToolPopoverClose"
+            />
+          </div>
+        </Teleport>
         <!-- Phase 1 disabled: 模板库按钮占位 -->
         <button
           class="btn-tool-toggle"
