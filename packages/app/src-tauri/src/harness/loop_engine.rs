@@ -88,6 +88,33 @@ fn classify_retry_reason(e: &AppError) -> String {
     }
 }
 
+/// 中间 round-state 事件发射 — 供前端 ChatStatusBar 实时显示进度。
+/// 失败仅记录 warn，不影响主流程。
+fn emit_intermediate_round_state(
+    app: &AppHandle,
+    conv_id: &str,
+    observable: &RoundState,
+) {
+    use crate::infra::protocol::ChatRoundStatePayload;
+    let payload = ChatRoundStatePayload {
+        conversation_id: conv_id.to_string(),
+        round: observable.round,
+        elapsed_ms: observable.elapsed_ms,
+        tokens_prompt: observable.tokens_prompt,
+        tokens_completion: observable.tokens_completion,
+        cached_tokens: observable.cached_tokens,
+        retry_count: observable.retry_count,
+    };
+    if let Err(e) = app.emit("chat:round-state", payload) {
+        tracing::warn!(
+            target: "ice_paw.chat",
+            "emit intermediate chat:round-state 失败: conv_id={}, err={}",
+            conv_id,
+            e
+        );
+    }
+}
+
 // ==========================================================================
 // W6.2: LoopContext — 流式循环的输入配置封装
 // ==========================================================================
@@ -583,6 +610,7 @@ async fn stream_loop_inner(ctx: &mut LoopContext, observable: &mut RoundState) {
         }
 
         observable.elapsed_ms = round_timer.elapsed_ms();
+        emit_intermediate_round_state(&ctx.app, &ctx.conv_id, observable);
         all_text.push_str(&round_text);
 
         // W4.2: Token 预算累计 — 每个 round 结束后累加 usage
