@@ -15,7 +15,7 @@ pub async fn list(pool: &SqlitePool) -> AppResult<Vec<AgentRow>> {
         "SELECT id, name, provider, model, system_prompt, api_key_ref, base_url,
                 temperature, max_tokens, extra_params, sort_order, cache_prompt,
                 max_history_messages, tool_trim_threshold, enabled_tools,
-                created_at, updated_at
+                supports_vision, created_at, updated_at
            FROM agents
           ORDER BY sort_order ASC, created_at ASC",
     )
@@ -30,7 +30,7 @@ pub async fn get_by_id(pool: &SqlitePool, id: &str) -> AppResult<AgentRow> {
         "SELECT id, name, provider, model, system_prompt, api_key_ref, base_url,
                 temperature, max_tokens, extra_params, sort_order, cache_prompt,
                 max_history_messages, tool_trim_threshold, enabled_tools,
-                created_at, updated_at
+                supports_vision, created_at, updated_at
            FROM agents WHERE id = ?",
     )
     .bind(id)
@@ -57,13 +57,14 @@ pub async fn create(
     let extra_str = serde_json::to_string(&extra)?;
     // P2-3: bool → i32 (0/1) for SQLite storage
     let cache_prompt_i = if new_agent.cache_prompt { 1i32 } else { 0i32 };
+    let supports_vision_i = if new_agent.supports_vision { 1i32 } else { 0i32 };
 
     sqlx::query(
         "INSERT INTO agents
            (id, name, provider, model, system_prompt, api_key_ref, base_url,
             temperature, max_tokens, extra_params, sort_order, cache_prompt,
-            max_history_messages, tool_trim_threshold, enabled_tools)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            max_history_messages, tool_trim_threshold, enabled_tools, supports_vision)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(id)
     .bind(&new_agent.name)
@@ -80,6 +81,7 @@ pub async fn create(
     .bind(new_agent.max_history_messages)
     .bind(new_agent.tool_trim_threshold)
     .bind(new_agent.enabled_tools.as_ref().map(|v| serde_json::to_string(v).unwrap_or_default()))
+    .bind(supports_vision_i)
     .execute(pool)
     .await?;
 
@@ -109,6 +111,7 @@ pub async fn update(
     max_history_messages: Option<Option<i32>>,
     tool_trim_threshold: Option<Option<i32>>,
     enabled_tools: Option<Option<Vec<String>>>,
+    supports_vision: Option<bool>,
 ) -> AppResult<AgentRow> {
     // 先读出来再合并，避免拼接动态 SQL
     let mut current = get_by_id(pool, id).await?;
@@ -132,12 +135,16 @@ pub async fn update(
     if let Some(v) = enabled_tools {
         current.enabled_tools = v.map(|names| serde_json::to_string(&names).unwrap_or_default());
     }
+    if let Some(v) = supports_vision {
+        current.supports_vision = if v { 1 } else { 0 };
+    }
 
     sqlx::query(
         "UPDATE agents
             SET name = ?, provider = ?, model = ?, system_prompt = ?,
                 base_url = ?, temperature = ?, max_tokens = ?, extra_params = ?, sort_order = ?,
-                cache_prompt = ?, max_history_messages = ?, tool_trim_threshold = ?, enabled_tools = ?
+                cache_prompt = ?, max_history_messages = ?, tool_trim_threshold = ?,
+                enabled_tools = ?, supports_vision = ?
           WHERE id = ?",
     )
     .bind(&current.name)
@@ -153,6 +160,7 @@ pub async fn update(
     .bind(current.max_history_messages)
     .bind(current.tool_trim_threshold)
     .bind(&current.enabled_tools)
+    .bind(current.supports_vision)
     .bind(id)
     .execute(pool)
     .await?;
