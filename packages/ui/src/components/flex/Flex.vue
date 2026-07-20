@@ -327,7 +327,6 @@ if (import.meta.env && import.meta.env.DEV) {
   // 运行时类型守卫:在开发模式下捕获旧值 'horizontal' / 'vertical'(规范 §2.4.5)
   const dir = props.direction as string
   if (dir === 'horizontal' || dir === 'vertical') {
-    // eslint-disable-next-line no-console
     console.warn(
       `[IcePaw IpFlex] direction="${dir}" 已废弃(规范 v1.1):` +
         `请改用 "row" 或 "column"。` +
@@ -341,8 +340,8 @@ if (import.meta.env && import.meta.env.DEV) {
 <template>
   <!-- 模式 A:Gap 模式(默认,separator=false / undefined)— 零包裹(规范 §2.4.1) -->
   <component
-    v-if="!hasSeparator"
     :is="as"
+    v-if="!hasSeparator"
     :class="rootClass"
     :style="rootStyle"
   >
@@ -351,8 +350,8 @@ if (import.meta.env && import.meta.env.DEV) {
 
   <!-- 模式 B:Separator 模式 — 遍历子元素 + 插入分隔符(规范 §2.4.1) -->
   <component
-    v-else
     :is="as"
+    v-else
     :class="rootClass"
     :style="rootStyle"
   >
@@ -361,8 +360,8 @@ if (import.meta.env && import.meta.env.DEV) {
       :key="getChildKey(child, idx)"
     >
       <component
-        v-if="idx > 0"
         :is="'span'"
+        v-if="idx > 0"
         :class="separatorClass"
         :aria-hidden="true"
       >
@@ -372,8 +371,8 @@ if (import.meta.env && import.meta.env.DEV) {
             {{ props.separator }}
           </template>
           <component
-            v-else-if="props.separator && typeof props.separator === 'object'"
             :is="props.separator"
+            v-else-if="props.separator && typeof props.separator === 'object'"
           />
         </slot>
       </component>
