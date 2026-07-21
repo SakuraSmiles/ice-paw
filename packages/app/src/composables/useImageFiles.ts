@@ -19,6 +19,8 @@ export interface ImageItem {
   media_type: string;
   /** 完整的 data URL（含前缀，仅用于 `<img src>` 预览） */
   preview: string;
+  /** 原文件名（UI 展示用，旧调用方可能未填） */
+  fileName?: string;
 }
 
 /** 接受的文件 MIME 列表（与 Rust 侧白名单 + input accept 属性对齐） */
@@ -78,7 +80,12 @@ export function useImageFiles(
       try {
         const dataUrl = await readAsDataURL(f);
         const { base64, mediaType } = splitDataUrl(dataUrl, f.type);
-        additions.push({ data: base64, media_type: mediaType, preview: dataUrl });
+        additions.push({
+          data: base64,
+          media_type: mediaType,
+          preview: dataUrl,
+          fileName: f.name || undefined,
+        });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         toast.error(`读取图片失败：${msg}`);
