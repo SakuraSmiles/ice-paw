@@ -22,6 +22,8 @@
 
 import { computed } from "vue";
 import { Modal, Button } from "@ice-paw/ui";
+import type { LucideIcon } from "lucide-vue-next";
+import { File, Pen, Pencil, FolderOpen, Play, Wrench } from "lucide-vue-next";
 import { useToolAuth } from "../../composables/useToolAuth";
 
 const { pendingRequest, respond } = useToolAuth();
@@ -48,23 +50,23 @@ const displayToolName = computed<string>(() => {
   return map[name] || name;
 });
 
-/** 工具图标（与 ToolCallBlock 风格保持一致） */
-const toolIcon = computed<string>(() => {
+/** 工具图标组件（与 ToolCallBlock 风格保持一致） */
+const toolIconComponent = computed<LucideIcon>(() => {
   switch (pendingRequest.value?.tool_name) {
     case "read_file":
-      return "📄";
+      return File;
     case "write_file":
-      return "✍️";
+      return Pen;
     case "edit_file":
-      return "🩹";
+      return Pencil;
     case "list_directory":
-      return "📂";
+      return FolderOpen;
     case "run_command":
     case "execute_command":
     case "exec":
-      return "▶️";
+      return Play;
     default:
-      return "🔧";
+      return Wrench;
   }
 });
 
@@ -110,7 +112,7 @@ async function onAllow(): Promise<void> {
   >
     <!-- 工具标识 + 触发原因 -->
     <div class="ta-header">
-      <span class="ta-icon">{{ toolIcon }}</span>
+      <component :is="toolIconComponent" class="ta-icon" :size="24" />
       <div class="ta-info">
         <div class="ta-tool-name">
           <code>{{ displayToolName }}</code>

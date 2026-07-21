@@ -534,23 +534,36 @@ export interface ProjectMember {
 }
 
 /**
+ * 创建/编辑项目时一次性传入成员列表的入参
+ * （与 ProjectMember 字段一致，独立类型便于语义区分）
+ */
+export interface ProjectMemberInput {
+  agent_id: string;
+  role: string; // 'lead' | 'member'
+}
+
+/**
  * 项目实体：对应数据库 `projects` 表。
  *
  * 字段说明：
- * - id          主键（UUID）
- * - name        项目名称
- * - description 项目描述
- * - icon        图标标识
- * - sort_order  排序权重（值小者靠前）
- * - created_at  创建时间
- * - updated_at  最近更新时间
- * - agents      项目下的 Agent 成员列表
+ * - id              主键（UUID）
+ * - name            项目名称
+ * - description     项目描述
+ * - icon            图标标识（lucide 图标名）
+ * - workspace_path  本地工作区根目录的绝对路径（null/undefined = 未设置）
+ *                   用于工具调用（read_file / list_dir）时锚定根目录
+ * - sort_order      排序权重（值小者靠前）
+ * - created_at      创建时间
+ * - updated_at      最近更新时间
+ * - agents          项目下的 Agent 成员列表
  */
 export interface Project {
   id: string;
   name: string;
   description: string;
   icon: string;
+  /** 本地工作区路径（绝对路径），未设置则为 null */
+  workspace_path: string | null;
   sort_order: number;
   created_at: string;
   updated_at: string;
@@ -559,13 +572,51 @@ export interface Project {
 
 /**
  * 创建项目入参。
+ *
  * - name 必传
- * - description / icon 可选
+ * - description / icon / workspace_path 可选
+ * - agents 可选；传了就一次性写入 project_agents（事务）
  */
 export interface NewProject {
   name: string;
   description?: string;
   icon?: string;
+  /** 项目空间路径（绝对路径），不传则未设置 */
+  workspace_path?: string | null;
+  /** 初始 Agent 成员列表（创建时一次性写入） */
+  agents?: ProjectMemberInput[];
+}
+
+/**
+ * 编辑项目入参（partial update）。
+ *
+ * 字段语义（双层 Optional，对应 Rust 侧 `Option<Option<T>>`）：
+ * - 字段缺失（undefined）       → 后端不更新
+ * - 字段为 null                 → 后端清空（description/icon 置空，workspace_path 置 NULL）
+ * - 字段为 string               → 后端覆盖
+ *
+ * 注意：不要用 `Partial<Project>`，因为它无法表达「字段存在但要清空」语义。
+ *
+ * @example
+ * ```ts
+ * // 只改名字
+ * const p1: ProjectPatch = { name: "新名字" };
+ * // 只清空 workspace_path
+ * const p2: ProjectPatch = { workspace_path: null };
+ * // 完整替换
+ * const p3: ProjectPatch = {
+ *   name: "x",
+ *   description: "y",
+ *   icon: "book",
+ *   workspace_path: "/abs/path",
+ * };
+ * ```
+ */
+export interface ProjectPatch {
+  name?: string;
+  description?: string | null;
+  icon?: string | null;
+  workspace_path?: string | null;
 }
 
 // ============================================================================
