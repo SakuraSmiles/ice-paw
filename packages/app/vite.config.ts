@@ -21,7 +21,16 @@ const uiStyles = resolve(uiRoot, "src/styles/index.css");
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
-  plugins: [vue()],
+  plugins: [
+    vue({
+      template: {
+        compilerOptions: {
+          // cropperjs v2 Web Components 自定义元素
+          isCustomElement: (tag) => tag.startsWith('cropper-'),
+        },
+      },
+    }),
+  ],
 
   resolve: {
     // 注意：Vite 的 alias 解析按声明顺序 find-first 匹配，
