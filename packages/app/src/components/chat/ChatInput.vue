@@ -29,7 +29,7 @@
 
 import { computed, nextTick, ref, watch, useTemplateRef } from "vue";
 import { SendHorizontal, Square, Paperclip, X } from "lucide-vue-next";
-import { IpToolDrawer } from "@ice-paw/ui";
+import { IpToolDrawer, IpPopconfirm } from "@ice-paw/ui";
 import type { IpToolDrawerTab } from "@ice-paw/ui";
 import { useChatStore } from "../../stores/chat";
 import { useTemplatesStore } from "../../stores/templates";
@@ -102,6 +102,21 @@ const visibleImages = computed<ImageItem[]>(() =>
 const overflowCount = computed<number>(() =>
   Math.max(0, pendingImages.value.length - MAX_VISIBLE_CHIPS),
 );
+
+/** 溢出图片列表（超出 MAX_VISIBLE_CHIPS 的部分） */
+const overflowImages = computed<ImageItem[]>(() =>
+  pendingImages.value.slice(MAX_VISIBLE_CHIPS),
+);
+
+/** 溢出图片文件名列表，用于 title / Popconfirm description */
+const overflowNamesText = computed<string>(() =>
+  overflowImages.value
+    .map((img, idx) => img.fileName ?? `图片 ${idx + 1}`)
+    .join("\n"),
+);
+
+/** +N Popconfirm 显隐状态 */
+const overflowPopoverOpen = ref<boolean>(false);
 
 function triggerFilePicker(): void {
   if (imagePickerDisabled.value) return;
@@ -601,13 +616,33 @@ watch(
             <X :size="10" aria-hidden="true" />
           </button>
         </div>
+        <!-- +N 溢出 chip：<=3 用 title，>3 用 Popconfirm -->
+        <IpPopconfirm
+          v-if="overflowCount > 3"
+          v-model="overflowPopoverOpen"
+          :title="`还有 ${overflowCount} 张图片`"
+          :description="overflowNamesText"
+          confirm-text="关闭"
+          cancel-text="关闭"
+          placement="top"
+          width="240"
+        >
+          <template #trigger>
+            <button
+              type="button"
+              class="image-chip image-chip--more"
+              :aria-label="`还有 ${overflowCount} 张图片，点击查看`"
+            >
+              +{{ overflowCount }}
+            </button>
+          </template>
+        </IpPopconfirm>
         <button
-          v-if="overflowCount > 0"
+          v-else-if="overflowCount > 0"
           type="button"
           class="image-chip image-chip--more"
-          :title="`还有 ${overflowCount} 张图片`"
+          :title="`还有 ${overflowCount} 张图片：${overflowNamesText}`"
           :aria-label="`还有 ${overflowCount} 张图片`"
-          disabled
         >
           +{{ overflowCount }}
         </button>
@@ -753,8 +788,8 @@ watch(
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: var(--ip-btn-h-toolbar);
+  height: var(--ip-btn-h-toolbar);
   padding: 0;
   color: var(--ip-color-text-tertiary);
   background: transparent;
@@ -850,10 +885,14 @@ watch(
   font-size: var(--ip-text-caption-size);
   font-weight: var(--ip-font-weight-medium);
   color: var(--ip-color-text-secondary);
-  cursor: not-allowed;
+  cursor: pointer;
   justify-content: center;
   gap: 0;
-  opacity: 0.7;
+}
+
+.image-chip--more:hover {
+  border-color: var(--ip-color-border-strong);
+  color: var(--ip-color-text-primary);
 }
 
 /* ============ 发送 / 停止按钮 ============ */
@@ -863,7 +902,7 @@ watch(
   justify-content: center;
   gap: 6px;
   appearance: none;
-  height: var(--ip-btn-h-sm);
+  height: var(--ip-btn-h-toolbar);
   padding: 0 14px;
   font-size: var(--ip-text-body-sm-size);
   font-weight: var(--ip-font-weight-medium);

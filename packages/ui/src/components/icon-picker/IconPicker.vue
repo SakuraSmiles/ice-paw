@@ -29,6 +29,8 @@ const searchQuery = ref('')
 const activeCategory = ref<string | null>(null)
 const scrollContainerRef = ref<HTMLElement | null>(null)
 const searchInputRef = ref<HTMLInputElement | null>(null)
+const focusedIndex = ref(-1)
+const COLS = 8 // 固定列数，与 grid-template-columns 配合
 
 /* ----- 全量图标列表（过滤掉内部 key） ----- */
 const allIconNames = computed(() => {
@@ -98,6 +100,98 @@ watch(
     searchQuery.value = ''
   },
 )
+
+/* ----- 过滤变化时重置焦点 ----- */
+watch(filteredIcons, () => {
+  focusedIndex.value = -1
+})
+
+/* ----- 键盘导航（WAI-ARIA listbox aria-activedescendant） ----- */
+function gridItemId(index: number): string {
+  return `ip-icon-${filteredIcons.value[index]}`
+}
+
+function scrollToFocused(): void {
+  const container = scrollContainerRef.value
+  if (!container || focusedIndex.value < 0) return
+  const id = gridItemId(focusedIndex.value)
+  const el = container.querySelector(`#${id}`) as HTMLElement | null
+  el?.scrollIntoView({ block: 'nearest' })
+}
+
+function handleGridKeydown(e: KeyboardEvent): void {
+  const total = filteredIcons.value.length
+  if (total === 0) return
+
+  let idx = focusedIndex.value
+
+  // 首次进入网格（Tab 进来）
+  if (idx < 0) {
+    if (['ArrowRight', 'ArrowLeft', 'ArrowDown', 'ArrowUp', 'Home', 'End', 'PageUp', 'PageDown'].includes(e.key)) {
+      idx = 0
+    } else {
+      return
+    }
+  }
+
+  const col = idx % COLS
+  const row = Math.floor(idx / COLS)
+
+  switch (e.key) {
+    case 'ArrowRight':
+      if (idx < total - 1) idx++
+      break
+    case 'ArrowLeft':
+      if (idx > 0) idx--
+      break
+    case 'ArrowDown': {
+      const next = idx + COLS
+      idx = next < total ? next : total - 1
+      break
+    }
+    case 'ArrowUp': {
+      const prev = idx - COLS
+      idx = prev >= 0 ? prev : col
+      break
+    }
+    case 'Home':
+      idx = row * COLS
+      break
+    case 'End': {
+      const rowEnd = Math.min((row + 1) * COLS, total) - 1
+      idx = rowEnd
+      break
+    }
+    case 'PageDown': {
+      // 向下移动可见行数（约 7 行，每行 COLS）
+      const pageRows = 7
+      const nextIdx = idx + pageRows * COLS
+      idx = nextIdx < total ? nextIdx : total - 1
+      break
+    }
+    case 'PageUp': {
+      const pageRows = 7
+      const prevIdx = idx - pageRows * COLS
+      idx = prevIdx >= 0 ? prevIdx : row * COLS
+      break
+    }
+    case 'Enter':
+    case ' ':
+      e.preventDefault()
+      selectIcon(filteredIcons.value[idx])
+      return
+    case 'Escape':
+      searchInputRef.value?.focus()
+      focusedIndex.value = -1
+      return
+    default:
+      return
+  }
+
+  e.preventDefault()
+  focusedIndex.value = idx
+  nextTick(scrollToFocused)
+}
 </script>
 
 <template>
@@ -150,16 +244,28 @@ watch(
     </div>
 
     <!-- 图标网格 -->
-    <div ref="scrollContainerRef" class="ip-icon-picker__grid" role="listbox" aria-label="图标列表">
+    <div
+      ref="scrollContainerRef"
+      class="ip-icon-picker__grid"
+      tabindex="0"
+      role="grid"
+      :aria-label="'图标列表 (' + filteredIcons.length + '个)'"
+      :aria-activedescendant="focusedIndex >= 0 ? gridItemId(focusedIndex) : undefined"
+      @keydown="handleGridKeydown"
+    >
       <button
-        v-for="name in filteredIcons"
+        v-for="(name, index) in filteredIcons"
         :key="name"
+        :id="gridItemId(index)"
         type="button"
         :class="[
           'ip-icon-picker__item',
-          { 'ip-icon-picker__item--selected': modelValue === name },
+          {
+            'ip-icon-picker__item--selected': modelValue === name,
+            'ip-icon-picker__item--focused': focusedIndex === index,
+          },
         ]"
-        role="option"
+        role="gridcell"
         :aria-selected="modelValue === name"
         :aria-label="name"
         :disabled="disabled"
@@ -348,6 +454,13 @@ watch(
 .ip-icon-picker__grid::-webkit-scrollbar-thumb {
   background: var(--ip-color-bg-tertiary);
   border-radius: 3px;
+}
+
+/* ----- 焦态（aria-activedescendant 视觉提示） ----- */
+.ip-icon-picker__item--focused {
+  background: var(--ip-color-bg-tertiary);
+  outline: 2px solid var(--ip-primary-500);
+  outline-offset: -2px;
 }
 
 /* ----- 图标项 ----- */
