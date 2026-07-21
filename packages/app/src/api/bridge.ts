@@ -23,6 +23,8 @@ import type {
   NewProject,
   NewTemplate,
   Project,
+  ProjectMemberInput,
+  ProjectPatch,
   Template,
   TemplateUpdate,
 } from "../types";
@@ -415,7 +417,8 @@ const projects = {
   },
 
   /**
-   * 创建项目。
+   * 创建项目（仅基础信息，不含 members）。
+   * 保留作向后兼容；新弹窗主流程走 `createWithAgents`。
    * 对应 Command：create_project
    */
   async create(input: NewProject): Promise<Project> {
@@ -427,8 +430,20 @@ const projects = {
   },
 
   /**
-   * 更新项目名称 / 描述。
-   * 对应 Command：update_project
+   * 创建项目 + 一次性写入初始 Agent 成员（推荐入口，弹窗主流程走这里）。
+   * 对应 Command：create_project_with_agents
+   */
+  async createWithAgents(input: NewProject): Promise<Project> {
+    try {
+      return await invoke<Project>("create_project_with_agents", { input });
+    } catch (err) {
+      throw wrapInvokeError("projects.createWithAgents", err);
+    }
+  },
+
+  /**
+   * 更新项目（旧入口，仅 name/description，向后兼容）。
+   * 对应 Command：update_project（保留不动）
    */
   async update(
     id: string,
@@ -439,6 +454,62 @@ const projects = {
       return await invoke<Project>("update_project", { id, name, description });
     } catch (err) {
       throw wrapInvokeError("projects.update", err);
+    }
+  },
+
+  /**
+   * 原子更新项目（字段 + 可选成员替换，推荐入口）。
+   *
+   * 事务保证：字段更新与成员替换在同一后端事务内。
+   *
+   * 注意：传给 Tauri invoke 的对象 key 必须用 snake_case：
+   * - `agent_id`（非 agentId）
+   * - `project_id`（非 projectId）
+   * - `workspace_path`（非 workspacePath）
+   *
+   * @example
+   * ```ts
+   * // 只改名字（不动成员）
+   * await bridge.projects.updateFull(id, { name: "新名字" });
+   * // 字段 + 成员一次性原子提交
+   * await bridge.projects.updateFull(id, { workspace_path: null }, [
+   *   { agent_id: "x", role: "lead" },
+   * ]);
+   * ```
+   *
+   * 对应 Command：update_project_full
+   */
+  async updateFull(
+    id: string,
+    patch: ProjectPatch,
+    members?: ProjectMemberInput[] | null,
+  ): Promise<Project> {
+    try {
+      return await invoke<Project>("update_project_full", {
+        id,
+        patch,
+        members: members ?? null,
+      });
+    } catch (err) {
+      throw wrapInvokeError("projects.updateFull", err);
+    }
+  },
+
+  /**
+   * 编辑场景：整体替换项目的 Agent 成员（事务保证原子性）。
+   * - 传空数组 → 清空所有成员
+   * - 传非空数组 → 替换为新成员列表
+   *
+   * 对应 Command：set_project_agents
+   */
+  async setAgents(
+    projectId: string,
+    agents: ProjectMemberInput[],
+  ): Promise<void> {
+    try {
+      await invoke<void>("set_project_agents", { projectId, agents });
+    } catch (err) {
+      throw wrapInvokeError("projects.setAgents", err);
     }
   },
 
@@ -467,7 +538,7 @@ const projects = {
   },
 
   /**
-   * 添加 Agent 到项目。
+   * 添加 Agent 到项目（细粒度入口，弹窗主流程不走）。
    * 对应 Command：add_project_agent
    */
   async addAgent(
@@ -483,7 +554,7 @@ const projects = {
   },
 
   /**
-   * 从项目移除 Agent。
+   * 从项目移除 Agent（细粒度入口）。
    * 对应 Command：remove_project_agent
    */
   async removeAgent(projectId: string, agentId: string): Promise<void> {
