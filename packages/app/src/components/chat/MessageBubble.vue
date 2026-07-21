@@ -19,6 +19,7 @@
 //   - retry: 点击重试按钮时触发
 
 import { computed, onUnmounted, ref } from "vue";
+import { X } from "lucide-vue-next";
 import type { Message, MessageRole } from "../../types";
 import MarkdownContent from "./MarkdownContent.vue";
 import ToolCallBlock from "./ToolCallBlock.vue";
@@ -271,7 +272,7 @@ onUnmounted(() => {
         title="关闭（Esc）"
         @click="closeLightbox"
       >
-        ✕
+        <X :size="14" aria-hidden="true" />
       </button>
       <img :src="lightboxSrc" :alt="lightboxAlt" class="bubble-image-lightbox-img" />
     </div>

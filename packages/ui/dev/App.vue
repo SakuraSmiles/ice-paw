@@ -44,6 +44,8 @@ import {
   ChevronDown,
   LogOut,
   Share2,
+  Sun,
+  Moon,
 } from 'lucide-vue-next'
 
 /* ── Theme ── */
@@ -199,6 +201,14 @@ const ddFullItems = [
   { type: 'item' as const, key: 'logout', label: '退出登录', icon: LogOut, danger: true, onClick: () => ddAction('退出登录') },
 ]
 
+const ddDisabledItems = [
+  { type: 'item' as const, key: 'view', label: '查看', icon: Search, onClick: () => ddAction('查看') },
+  { type: 'item' as const, key: 'edit-disabled', label: '编辑', icon: Pencil, disabled: true },
+  { type: 'item' as const, key: 'delete-disabled', label: '删除', icon: Trash2, danger: true, disabled: true },
+  { type: 'divider' as const, key: 'div-disabled' },
+  { type: 'item' as const, key: 'export', label: '导出', icon: Download, onClick: () => ddAction('导出') },
+]
+
 /* ── VNode separator demo ── */
 const hCaretVNode = h(
   'svg',
@@ -326,7 +336,8 @@ onUnmounted(() => {
           :aria-label="theme === 'light' ? '切换到暗色模式' : '切换到亮色模式'"
           @click="toggleTheme"
         >
-          <span class="theme-toggle__icon" aria-hidden="true">☀</span>
+          <Sun v-if="theme === 'light'" :size="16" :stroke-width="2" class="theme-toggle__icon" aria-hidden="true" />
+          <Moon v-else :size="16" :stroke-width="2" class="theme-toggle__icon" aria-hidden="true" />
           <span class="theme-toggle__label">{{ theme === 'light' ? '浅色' : '深色' }}</span>
         </button>
       </div>
@@ -717,7 +728,7 @@ onUnmounted(() => {
         </MessageBubble>
 
         <MessageBubble role="user" timestamp="10:31">
-          明白了 👍
+          明白了
         </MessageBubble>
 
         <MessageBubble role="user" timestamp="10:32">
@@ -1503,6 +1514,33 @@ onUnmounted(() => {
       </IpFlex>
       <p class="preview-caption">interactive hover 抬升；selected 显示主色描边；disabled 灰态。</p>
 
+      <span class="preview-label">as="button" 渲染</span>
+      <IpFlex size="sm" align="center" wrap>
+        <IpCard
+          as="button"
+          variant="bordered"
+          padding="md"
+          :interactive="true"
+          style="max-width: 200px;"
+          @click="toastSuccess"
+        >
+          <p style="font-size: 13px; margin: 0; color: var(--ip-color-text-body);">点击此卡片</p>
+          <p style="font-size: 12px; margin: 4px 0 0; color: var(--ip-color-text-tertiary);">as="button" + interactive</p>
+        </IpCard>
+        <IpCard
+          as="button"
+          variant="filled"
+          padding="md"
+          :interactive="true"
+          :disabled="true"
+          style="max-width: 200px;"
+        >
+          <p style="font-size: 13px; margin: 0; color: var(--ip-color-text-disabled);">禁用按钮卡片</p>
+          <p style="font-size: 12px; margin: 4px 0 0; color: var(--ip-color-text-disabled);">as="button" + disabled</p>
+        </IpCard>
+      </IpFlex>
+      <p class="preview-caption">as="button" 时渲染为原生 &lt;button&gt;，支持键盘 Enter/Space 触发 click 和原生 disabled。</p>
+
       <span class="preview-label">使用场景</span>
       <p class="preview-prose">
         用于会话卡片、项目卡片等需要分块展示的内容区。
@@ -1593,6 +1631,12 @@ onUnmounted(() => {
         <Button variant="secondary" size="sm" @click="triggerSelectError">触发错误</Button>
       </div>
 
+      <span class="preview-label">展开态</span>
+      <div class="preview-stack" style="max-width: 320px;">
+        <p class="preview-caption" style="margin: 0 0 8px;">点击下方 Select 展开下拉列表。浮层通过 Teleport 渲染到 body，支持键盘导航（方向键 + Enter + Escape）。</p>
+        <IpSelect v-model="selectValue" :options="modelOptions" placeholder="点击展开查看模型列表" />
+      </div>
+
       <span class="preview-label">使用场景</span>
       <p class="preview-prose">
         用于单选场景；多选或复杂筛选场景建议使用独立的下拉组件。
@@ -1655,7 +1699,10 @@ onUnmounted(() => {
         <IpEmptyState title="md" icon-size="md" :icon="Inbox" style="width: 160px;" />
         <IpEmptyState title="lg" icon-size="lg" :icon="Inbox" style="width: 160px;" />
         <IpEmptyState title="xl" icon-size="xl" :icon="Inbox" style="width: 160px;" />
+        <IpEmptyState title="2xl" icon-size="2xl" :icon="Inbox" style="width: 160px;" />
+        <IpEmptyState title="3xl" icon-size="3xl" :icon="Inbox" style="width: 160px;" />
       </IpFlex>
+      <p class="preview-caption">sm=24px 到 3xl=80px，覆盖从内联到全屏的所有场景。</p>
 
       <span class="preview-label">带次要操作</span>
       <IpEmptyState
@@ -1681,6 +1728,18 @@ onUnmounted(() => {
         />
       </div>
       <p class="preview-caption">compact 模式适合嵌入卡片等小容器内。</p>
+
+      <span class="preview-label">左对齐（卡片内嵌）</span>
+      <div style="max-width: 320px; border: 1px dashed var(--ip-color-border-default); border-radius: 8px; padding: 12px;">
+        <IpEmptyState
+          title="暂无代理"
+          description="点击上方按钮添加你的第一个 AI 代理。"
+          :centered="false"
+          :icon="Inbox"
+          :primary-action="{ label: '添加代理', onClick: toastInfo }"
+        />
+      </div>
+      <p class="preview-caption">centered=false 时左对齐，适合嵌入卡片或侧边栏。</p>
 
       <span class="preview-label">使用场景</span>
       <p class="preview-prose">
@@ -1769,6 +1828,21 @@ onUnmounted(() => {
         </template>
       </IpDropdownMenu>
       <p class="preview-caption">item / divider / label 三种类型；item 支持 icon、shortcut、danger。</p>
+
+      <span class="preview-label">禁用项</span>
+      <div class="preview-row">
+        <IpDropdownMenu :model-value="false" :items="ddDisabledItems" placement="bottom-end">
+          <template #trigger>
+            <Button variant="secondary" size="sm">
+              含禁用项
+              <template #icon-right>
+                <ChevronDown :size="14" :stroke-width="2" />
+              </template>
+            </Button>
+          </template>
+        </IpDropdownMenu>
+      </div>
+      <p class="preview-caption">禁用项显示灰态，不可点击。</p>
 
       <span class="preview-label">使用场景</span>
       <p class="preview-prose">
@@ -2064,8 +2138,9 @@ html { scroll-behavior: smooth; }
   box-shadow: var(--ip-shadow-focus);
 }
 .theme-toggle__icon {
-  font-size: 14px;
-  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  color: currentColor;
   transition: transform 300ms var(--ip-ease-emphasized);
 }
 .theme-toggle:active .theme-toggle__icon { transform: rotate(180deg); }

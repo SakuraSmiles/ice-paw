@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { Sparkles } from "lucide-vue-next";
 // 聊天区空状态提示
 //
 // 职责：
@@ -12,7 +13,7 @@
 <template>
   <div class="empty-chat-hint">
     <div class="hint-icon" aria-hidden="true">
-      <span class="hint-icon-text">⌬</span>
+      <Sparkles :size="24" class="hint-icon-text" aria-hidden="true" />
     </div>
     <h3 class="hint-title">开始一段对话</h3>
     <p class="hint-desc">在下方输入框中输入你的第一条消息，回车发送给 AI。</p>

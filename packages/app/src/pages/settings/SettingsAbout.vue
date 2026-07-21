@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
-import { ChevronDown } from "lucide-vue-next";
+import { ChevronDown, PawPrint } from "lucide-vue-next";
 
 const appVersion = ref<string>("");
 const showSysInfo = ref(false);
@@ -27,7 +27,7 @@ function toggleSysInfo(): void { showSysInfo.value = !showSysInfo.value; }
   <div class="settings-about">
     <h2 class="section-title">关于</h2>
     <div class="app-info">
-      <div class="app-logo"><span class="logo-icon">🐾</span></div>
+      <div class="app-logo"><PawPrint :size="28" class="logo-icon" aria-hidden="true" /></div>
       <div class="app-meta">
         <span class="app-name">IcePaw</span>
         <span class="app-version">v{{ appVersion || "..." }}</span>
