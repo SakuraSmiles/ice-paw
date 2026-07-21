@@ -5,7 +5,7 @@
  * 仅 Anthropic 模型支持 extended thinking。
  *
  * 功能：
- * - 折叠态："💭 思考中..."（灰色小字，带 loading 动画）
+ * - 折叠态："思考中..."（灰色小字，带 loading 动画）
  * - 展开态：完整思考内容（淡灰色背景，等宽字体）
  *
  * Props:
@@ -14,6 +14,7 @@
  */
 
 import { computed, ref, watch } from "vue";
+import { Brain } from "lucide-vue-next";
 
 const props = defineProps<{
   content: string;
@@ -52,10 +53,8 @@ watch(
     >
       <!-- 图标 -->
       <span class="text-sm shrink-0">
-        <span v-if="streaming" class="inline-flex items-center gap-1">
-          <span class="animate-pulse">💭</span>
-        </span>
-        <span v-else>💭</span>
+        <Brain v-if="streaming" :size="14" class="animate-pulse" aria-hidden="true" />
+        <Brain v-else :size="14" aria-hidden="true" />
       </span>
 
       <!-- 标题 -->

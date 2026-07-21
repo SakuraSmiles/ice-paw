@@ -4,7 +4,7 @@
 // 职责：
 //   - 附件按钮（lucide ImagePlus）→ 打开系统文件选择器（accept 限定 png/jpeg/gif/webp）
 //   - 选择后读取为 data URL，显示缩略图
-//   - 每张图带 ✕ 删除按钮
+//   - 每张图带 X 删除按钮
 //   - 限制 20 张 + 单张 5MB 前端预校验
 //   - 输出 `{ data: base64, media_type, preview: data URL }[]`
 //

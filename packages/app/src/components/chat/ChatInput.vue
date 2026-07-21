@@ -19,7 +19,7 @@
 //   - stop()                点击停止按钮时
 
 import { computed, nextTick, ref, watch, useTemplateRef } from "vue";
-import { SendHorizontal, Square, Wrench, Library } from "lucide-vue-next";
+import { SendHorizontal, Square, Wrench, Library, Sparkles } from "lucide-vue-next";
 import { useChatStore } from "../../stores/chat";
 import { useConversationsStore } from "../../stores/conversations";
 import { useAgentsStore } from "../../stores/agents";
@@ -467,7 +467,7 @@ const appliedHint = computed<string | null>(() => {
 
     <!-- 已应用模板的提示 -->
     <div v-if="appliedHint && !streaming" class="applied-hint">
-      ✨ 已应用：{{ appliedHint }}
+      <Sparkles :size="12" class="shrink-0" aria-hidden="true" /> 已应用：{{ appliedHint }}
     </div>
 
     <!-- P2-2 多模态：图片选择器（附件按钮 + 缩略图列表） -->
