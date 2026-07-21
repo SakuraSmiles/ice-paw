@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
+import { Copy } from "lucide-vue-next";
 import SettingRow from "../../components/common/SettingRow.vue";
 
 const appDataDir = ref<string>("");
@@ -35,7 +36,7 @@ function confirmClearCache(): void { showClearConfirm.value = false; }
     <SettingRow label="数据位置" description="应用数据存储目录">
       <div class="dir-row">
         <span class="dir-text">{{ appDataDir || "加载中..." }}</span>
-        <button class="btn-icon-sm" type="button" title="复制路径" @click="copyDataDir">📋</button>
+        <button class="btn-icon-sm" type="button" title="复制路径" @click="copyDataDir"><Copy :size="14" /></button>
       </div>
     </SettingRow>
     <SettingRow label="数据大小" description="本地数据库占用的磁盘空间">

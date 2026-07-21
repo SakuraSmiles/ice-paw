@@ -3,7 +3,7 @@
  * ToolCallBlock — 工具调用展示组件 (P2-1f)
  *
  * 功能：
- * - 折叠态：左侧竖线 + 图标 + 函数名 + 自然语言参数摘要 + 状态图标（成功✓ / 失败⚠ / 执行中 spinner）
+ * - 折叠态：左侧竖线 + 图标 + 函数名 + 自然语言参数摘要 + 状态图标（成功 / 失败 / 执行中 spinner）
  * - 展开态：完整参数 JSON + 智能结果展示（file-list / key-value / json / text 四种模式）
  * - 透明背景 + 左侧 2px 竖线：融入助手气泡内部，避免双层灰色背景糊成一团
  * - 全 Token 化：颜色 / 间距 / 圆角 / 字号全部走 --ip-* 设计 Token
@@ -17,6 +17,27 @@
  */
 
 import { computed, ref } from "vue";
+import {
+  File,
+  FolderOpen,
+  Search,
+  Globe,
+  Play,
+  Pen,
+  Pencil,
+  Wrench,
+  TriangleAlert,
+  CircleCheck,
+  Folder,
+  FileCode,
+  Code,
+  FileJson,
+  FilePen,
+  FileImage,
+  FileCog,
+  Lock,
+  type LucideIcon,
+} from "lucide-vue-next";
 
 const props = defineProps<{
   name: string;
@@ -49,28 +70,28 @@ const displayName = computed(() => {
   return nameMap[props.name] || props.name;
 });
 
-/** 工具图标 */
-const icon = computed(() => {
+/** 工具图标（Lucide 组件） */
+const toolIconComponent = computed<LucideIcon>(() => {
   switch (props.name) {
     case "read_file":
-      return "📄";
+      return File;
     case "list_directory":
-      return "📂";
+      return FolderOpen;
     case "web_search":
     case "search":
-      return "🔍";
+      return Search;
     case "web_fetch":
-      return "🌐";
+      return Globe;
     case "run_command":
     case "execute_command":
     case "exec":
-      return "▶️";
+      return Play;
     case "write_file":
-      return "✍️";
+      return Pen;
     case "edit_file":
-      return "🩹";
+      return Pencil;
     default:
-      return "🔧";
+      return Wrench;
   }
 });
 
@@ -118,7 +139,7 @@ const argSummary = computed(() => {
 const statusInfo = computed(() => {
   if (!props.ended) {
     return {
-      icon: "⏳",
+      icon: CircleCheck as LucideIcon,
       text: "等待参数…",
       color: "var(--ip-color-text-tertiary)",
       spin: false,
@@ -126,7 +147,7 @@ const statusInfo = computed(() => {
   }
   if (props.result === undefined) {
     return {
-      icon: "⏳",
+      icon: CircleCheck as LucideIcon,
       text: "执行中…",
       color: "var(--ip-info-base)",
       spin: true,
@@ -134,14 +155,14 @@ const statusInfo = computed(() => {
   }
   if (props.isError) {
     return {
-      icon: "⚠️",
+      icon: TriangleAlert as LucideIcon,
       text: "执行失败",
       color: "var(--ip-danger-text)",
       spin: false,
     };
   }
   return {
-    icon: "✓",
+    icon: CircleCheck as LucideIcon,
     text: "已完成",
     color: "var(--ip-success-text)",
     spin: false,
@@ -230,44 +251,43 @@ function parseToolResult(_toolName: string, raw: string): ResultDisplay {
   return { mode: "json", content: JSON.stringify(parsed, null, 2) };
 }
 
-/** 文件项图标 */
-function getItemIcon(item: Record<string, unknown>): string {
+/** 文件项图标（Lucide 组件） */
+function getFileItemIcon(item: Record<string, unknown>): LucideIcon {
   const isDir =
     item.isDir || item.is_dir || item.type === "directory" || item.type === "dir";
-  if (isDir) return "📁";
+  if (isDir) return Folder;
 
   const name = (item.name || item.path || "") as string;
   const ext = name.split(".").pop()?.toLowerCase();
   switch (ext) {
     case "rs":
-      return "🦀";
+      return FileCode;
     case "ts":
     case "tsx":
-      return "📜";
     case "js":
     case "jsx":
-      return "📜";
+      return FileCode;
     case "vue":
-      return "💚";
+      return Code;
     case "json":
-      return "📋";
+      return FileJson;
     case "md":
-      return "📝";
+      return FilePen;
     case "png":
     case "jpg":
     case "jpeg":
     case "gif":
     case "svg":
     case "webp":
-      return "🖼️";
+      return FileImage;
     case "toml":
     case "yaml":
     case "yml":
-      return "⚙️";
+      return FileCog;
     case "lock":
-      return "🔒";
+      return Lock;
     default:
-      return "📄";
+      return File;
   }
 }
 
@@ -291,7 +311,7 @@ function formatSize(bytes: unknown): string {
       @click="expanded = !expanded"
     >
       <!-- 工具图标 -->
-      <span class="tc-icon">{{ icon }}</span>
+      <component :is="toolIconComponent" class="tc-icon" :size="14" />
 
       <!-- 函数名 + 自然语言摘要 -->
       <span class="tc-label">
@@ -302,7 +322,7 @@ function formatSize(bytes: unknown): string {
       <!-- 状态 -->
       <span class="tc-status" :style="{ color: statusInfo.color }">
         <span v-if="statusInfo.spin" class="tc-spinner" />
-        <span v-else class="tc-status-icon">{{ statusInfo.icon }}</span>
+        <component v-else :is="statusInfo.icon" class="tc-status-icon" :size="11" />
         <span class="tc-status-text">{{ statusInfo.text }}</span>
       </span>
 
@@ -348,7 +368,7 @@ function formatSize(bytes: unknown): string {
               :key="i"
               class="tc-file-item"
             >
-              <span class="tc-file-icon">{{ getItemIcon(item) }}</span>
+              <component :is="getFileItemIcon(item)" class="tc-file-icon" :size="14" />
               <span class="tc-file-name">
                 {{ item.name || item.path || JSON.stringify(item) }}
               </span>

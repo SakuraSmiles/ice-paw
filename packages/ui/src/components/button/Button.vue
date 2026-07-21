@@ -14,7 +14,7 @@
  *              spinner 720ms linear 旋转
  *  - disabled: gray-200 bg + gray-400 text，pointer-events none
  */
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import type { ButtonEmits, ButtonProps } from './types'
 
 const props = withDefaults(defineProps<ButtonProps>(), {
@@ -40,10 +40,21 @@ function onClick(ev: MouseEvent): void {
   }
   emit('click', ev)
 }
+
+/* W6: 暴露 focus / blur 方法，供 Popconfirm 等父组件直接调用（如打开时聚焦 confirm） */
+const rootEl = ref<HTMLButtonElement | null>(null)
+function focus(): void {
+  rootEl.value?.focus()
+}
+function blur(): void {
+  rootEl.value?.blur()
+}
+defineExpose({ focus, blur })
 </script>
 
 <template>
   <button
+    ref="rootEl"
     :type="type"
     :class="[
       'ip-btn',

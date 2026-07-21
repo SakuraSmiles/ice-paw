@@ -4,6 +4,8 @@
  * 阶段 2：导出 P0 原子组件 + composables
  *  - Button / Input / Textarea / MessageBubble / Modal / Toast
  *  - IpFlex / IpContainer(布局组件，规范 icepaw-layout-system.md v1.1)
+ *  - IpAvatar / IpCard / IpSelect / IpEmptyState / IpDropdownMenu / IpPopconfirm
+ *    （P0 组件，规范 icepaw-p0-component-specs.md）
  *  - useToast / provideToast
  *  - 类型定义
  */
@@ -63,6 +65,58 @@ export type {
   ToastInstance,
   ToastApi,
 } from './components/toast/types'
+
+/* P0 组件（规范 icepaw-p0-component-specs.md） */
+export { Avatar as IpAvatar } from './components/avatar'
+export type {
+  AvatarProps as IpAvatarProps,
+  AvatarEmits as IpAvatarEmits,
+  AvatarSource as IpAvatarSource,
+  AvatarShape as IpAvatarShape,
+  AvatarSize as IpAvatarSize,
+  AvatarUploadError as IpAvatarUploadError,
+} from './components/avatar/types'
+
+export { Card as IpCard } from './components/card'
+export type {
+  CardProps as IpCardProps,
+  CardEmits as IpCardEmits,
+  CardVariant as IpCardVariant,
+  CardPadding as IpCardPadding,
+  CardAs as IpCardAs,
+} from './components/card/types'
+
+export { Select as IpSelect } from './components/select'
+export type {
+  SelectProps as IpSelectProps,
+  SelectEmits as IpSelectEmits,
+  SelectOption as IpSelectOption,
+  SelectSize as IpSelectSize,
+} from './components/select/types'
+
+export { EmptyState as IpEmptyState } from './components/empty-state'
+export type {
+  EmptyStateProps as IpEmptyStateProps,
+  EmptyStateEmits as IpEmptyStateEmits,
+  EmptyStateAction as IpEmptyStateAction,
+  EmptyStateIconSize as IpEmptyStateIconSize,
+} from './components/empty-state/types'
+
+export { DropdownMenu as IpDropdownMenu } from './components/dropdown'
+export type {
+  DropdownProps as IpDropdownMenuProps,
+  DropdownEmits as IpDropdownMenuEmits,
+  DropdownItem as IpDropdownMenuItem,
+  DropdownPlacement as IpDropdownMenuPlacement,
+} from './components/dropdown/types'
+
+export { Popconfirm as IpPopconfirm } from './components/popconfirm'
+export type {
+  PopconfirmProps as IpPopconfirmProps,
+  PopconfirmEmits as IpPopconfirmEmits,
+  PopconfirmPlacement as IpPopconfirmPlacement,
+  PopconfirmTrigger as IpPopconfirmTrigger,
+} from './components/popconfirm/types'
 
 /* 布局组件（规范 icepaw-layout-system.md v1.1 P0） */
 export { Flex as IpFlex } from './components/flex'
