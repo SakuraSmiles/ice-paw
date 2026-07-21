@@ -55,7 +55,7 @@ function onPopCancel(): void {
 
 /* ── DropdownMenu ── */
 const ddOpen = ref(false)
-const ddItems = [
+const _ddItems = [
   { key: 'copy', label: '复制', shortcut: '⌘C' },
   { key: 'paste', label: '粘贴', shortcut: '⌘V' },
   { key: 'duplicate', label: '复制副本', shortcut: '⌘D' },
