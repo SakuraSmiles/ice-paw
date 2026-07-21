@@ -83,6 +83,7 @@ async fn seed_agent_and_conv(pool: &SqlitePool) -> String {
         &ice_paw_lib::db::models::NewConversation {
             agent_id: agent_id.to_string(),
             title: Some("test".into()),
+            project_id: None,
         },
     )
     .await
