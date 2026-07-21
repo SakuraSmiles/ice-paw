@@ -541,6 +541,9 @@ pub struct ProjectRow {
     pub name: String,
     pub description: String,
     pub icon: String,
+    /// 项目空间路径（本地文件系统绝对路径，NULL 表示未设置）
+    /// 不在数据库层做规范化，原文存；展示与打开时按平台处理
+    pub workspace_path: Option<String>,
     pub sort_order: i32,
     pub created_at: String,
     pub updated_at: String,
@@ -553,6 +556,7 @@ pub struct Project {
     pub name: String,
     pub description: String,
     pub icon: String,
+    pub workspace_path: Option<String>,
     pub sort_order: i32,
     pub created_at: String,
     pub updated_at: String,
@@ -567,7 +571,22 @@ pub struct ProjectMember {
     pub role: String, // 'lead' | 'member'
 }
 
+/// 一次性传入成员列表的入参（用于创建/编辑项目时批量配置）
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProjectAgentInput {
+    pub agent_id: String,
+    /// 角色：'lead' | 'member'，默认 'member'
+    #[serde(default = "default_project_agent_role")]
+    pub role: String,
+}
+
+fn default_project_agent_role() -> String {
+    "member".to_string()
+}
+
 /// 创建项目入参（前端 → Rust）
+///
+/// - agents 为可选：传了就一次性写入 project_agents（事务内），不传则项目下为空成员
 #[derive(Debug, Deserialize)]
 pub struct NewProject {
     pub name: String,
@@ -575,9 +594,42 @@ pub struct NewProject {
     pub description: Option<String>,
     #[serde(default)]
     pub icon: Option<String>,
+    #[serde(default)]
+    pub workspace_path: Option<String>,
+    /// 一次性写入的初始成员列表
+    #[serde(default)]
+    pub agents: Vec<ProjectAgentInput>,
 }
 
-/// From<ProjectRow> for Project（agents 默认空 vec，需要单独查询填充）
+/// 编辑项目入参（partial update）
+///
+/// 字段语义（双层 Option，与 `AgentUpdate` 对齐）：
+/// - 字段缺失（None） → 后端不更新该列
+/// - 字段为 Some(None)  → 后端清空该列（description 设为 '' 因为 NOT NULL，icon 设为默认值，workspace_path 设为 NULL）
+/// - 字段为 Some(Some(v)) → 后端覆盖为 v
+///
+/// ⚠️ description 列 DDL 为 `TEXT NOT NULL DEFAULT ''`（见 13_projects.sql），
+/// 因此 Some(None) 实际写入空字符串 ''，不是 NULL。
+///
+/// ⚠️ name 为单层 Option<String>（非 Option<Option<String>>），
+/// 原因：业务上不允许空项目名，不存在"清空 name"的语义。
+/// 前端必须保证 name 非空，后端 command 层也会校验。
+#[derive(Debug, Default, Deserialize)]
+pub struct ProjectPatch {
+    /// 单层 Option：None=不更新，Some(v)=覆盖为 v
+    /// 不支持"清空 name"（业务不允许空项目名）
+    pub name: Option<String>,
+    /// 双层 Option：None=不更新，Some(None)=置空（写入 ''），Some(Some(v))=覆盖
+    pub description: Option<Option<String>>,
+    /// 双层 Option：None=不更新，Some(None)=置默认值，Some(Some(v))=覆盖
+    pub icon: Option<Option<String>>,
+    /// 双层 Option：None=不更新，Some(None)=置 NULL，Some(Some(v))=覆盖
+    /// ⚠️ 安全提示：workspace_path 存储用户指定的本地路径原文。
+    /// Agent 执行工具调用时必须做运行时路径 containment 检查
+    /// （即 resolved_path 必须以 workspace_path 为前缀），防止路径逃逸。
+    pub workspace_path: Option<Option<String>>,
+}
+
 impl From<ProjectRow> for Project {
     fn from(row: ProjectRow) -> Self {
         Project {
@@ -585,10 +637,11 @@ impl From<ProjectRow> for Project {
             name: row.name,
             description: row.description,
             icon: row.icon,
+            workspace_path: row.workspace_path,
             sort_order: row.sort_order,
             created_at: row.created_at,
             updated_at: row.updated_at,
-            agents: Vec::new(),
+            agents: Vec::new(), // 默认空 vec，由命令层单独填充
         }
     }
 }

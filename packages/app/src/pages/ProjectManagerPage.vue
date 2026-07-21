@@ -3,32 +3,38 @@
 //
 // 职责：
 //   - 列出所有项目（含默认项目）
-//   - 项目 CRUD：创建、编辑名称/描述、删除
-//   - 项目成员管理：添加/移除 Agent
+//   - 项目 CRUD：创建、编辑（基本信息 + 成员）、删除
+//   - 排序
+//   - 删除项目前的二次确认（保留旧行为）
+//
+// 本页不再内联成员管理；统一由 ProjectFormModal 处理创建/编辑两态。
 
-import { computed, onMounted, ref } from "vue";
+import { onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useProjectsStore, DEFAULT_PROJECT_ID } from "../stores/projects";
+import { useConversationsStore } from "../stores/conversations";
 import { useAgentsStore } from "../stores/agents";
 import { useToast } from "../composables/useToast";
-import { Plus, Trash2, FolderClosed, ArrowLeft, UserPlus, X } from "lucide-vue-next";
-import type { Project } from "../types";
+import { Plus, Trash2, ArrowLeft, Clipboard, FolderOpen } from "lucide-vue-next";
+import { resolveProjectIcon } from "../utils/projectIconMap";
+import ProjectFormModal from "../components/project/ProjectFormModal.vue";
+import type { Project, NewProject, ProjectMemberInput, ProjectPatch } from "../types";
 
 const projectsStore = useProjectsStore();
+const conversationsStore = useConversationsStore();
 const agentsStore = useAgentsStore();
 const toast = useToast();
 const route = useRoute();
 const router = useRouter();
 
-/** 是否显示新建表单 */
-const showCreate = ref(false);
-const newName = ref("");
-const newDesc = ref("");
+/** Modal 状态 */
+const showModal = ref<boolean>(false);
+const modalMode = ref<"create" | "edit">("create");
+const editing = ref<Project | null>(null);
 
-/** 当前选中的项目 ID（从路由参数获取） */
+/** 当前选中的项目 ID（保留旧行为：用于详情区视觉聚焦） */
 const selectedProjectId = ref<string>("");
 
-/** 从路由参数初始化 */
 onMounted(async () => {
   await projectsStore.loadAll();
   await agentsStore.ensureLoaded();
@@ -38,85 +44,70 @@ onMounted(async () => {
   }
 });
 
-/** 选中的项目实体 */
-const selectedProject = computed<Project | null>(() => {
-  if (!selectedProjectId.value || selectedProjectId.value === DEFAULT_PROJECT_ID) {
-    return null;
-  }
-  return projectsStore.projects.find((p) => p.id === selectedProjectId.value) ?? null;
-});
+function openCreate(): void {
+  modalMode.value = "create";
+  editing.value = null;
+  showModal.value = true;
+}
 
-/** 选中项目 */
+function openEdit(p: Project): void {
+  modalMode.value = "edit";
+  editing.value = p;
+  showModal.value = true;
+}
+
 function selectProject(id: string): void {
   selectedProjectId.value = id;
   const routeParam = id === DEFAULT_PROJECT_ID ? "default" : id;
   void router.replace({ name: "ProjectSettings", params: { projectId: routeParam } });
 }
 
-/** 创建项目 */
-async function handleCreate(): Promise<void> {
-  const name = newName.value.trim();
-  if (!name) {
-    toast.warning("项目名称不能为空");
-    return;
-  }
+async function handleCreate(payload: NewProject): Promise<void> {
   try {
-    const created = await projectsStore.create({ name, description: newDesc.value.trim() || undefined });
-    selectedProjectId.value = created.id;
-    showCreate.value = false;
-    newName.value = "";
-    newDesc.value = "";
-    toast.success(`项目「${created.name}」已创建`);
-  } catch {
-    toast.error("创建项目失败");
+    await projectsStore.create(payload);
+    toast.success(`项目「${payload.name}」已创建`);
+  } catch (e) {
+    toast.error(`创建项目失败：${(e as Error).message ?? "未知错误"}`);
   }
 }
 
-/** 删除项目 */
+async function handleEdit(payload: {
+  patch: ProjectPatch;
+  members: ProjectMemberInput[];
+}): Promise<void> {
+  if (!editing.value) return;
+  try {
+    // 原子提交：字段 + 成员在同一后端事务内
+    await projectsStore.updateFull(
+      editing.value.id,
+      payload.patch,
+      payload.members,
+    );
+    toast.success(`项目「${editing.value.name}」已更新`);
+  } catch (e) {
+    toast.error(`更新项目失败：${(e as Error).message ?? "未知错误"}`);
+  }
+}
+
 async function handleDelete(project: Project): Promise<void> {
   if (project.id === DEFAULT_PROJECT_ID) {
     toast.warning("默认项目无法删除");
     return;
   }
+  if (!confirm(`确认删除项目「${project.name}」？该操作不可撤销。`)) return;
   try {
     await projectsStore.remove(project.id);
     if (selectedProjectId.value === project.id) {
       selectedProjectId.value = "";
     }
+    // 刷新当前项目的会话列表，确保被删项目的会话缓存同步
+    await conversationsStore.loadForProject(projectsStore.currentId || DEFAULT_PROJECT_ID);
     toast.success(`项目「${project.name}」已删除`);
   } catch {
     toast.error("删除项目失败");
   }
 }
 
-/** 添加 Agent 到项目 */
-async function handleAddAgent(project: Project, agentId: string): Promise<void> {
-  try {
-    await projectsStore.addAgent(project.id, agentId, "member");
-    toast.success("Agent 已添加到项目");
-  } catch {
-    toast.error("添加 Agent 失败");
-  }
-}
-
-/** 从项目移除 Agent */
-async function handleRemoveAgent(project: Project, agentId: string): Promise<void> {
-  try {
-    await projectsStore.removeAgent(project.id, agentId);
-    toast.success("Agent 已从项目移除");
-  } catch {
-    toast.error("移除 Agent 失败");
-  }
-}
-
-/** 获取不属于当前选中项目的 Agent 列表 */
-function availableAgents(project: Project | null): typeof agentsStore.agents {
-  if (!project) return [];
-  const memberIds = new Set(project.agents.map((a) => a.agent_id));
-  return agentsStore.agents.filter((a) => !memberIds.has(a.id));
-}
-
-/** 返回聊天页 */
 function goBack(): void {
   void router.push({ name: "ProjectChat", params: { projectId: "default" } });
 }
@@ -137,39 +128,10 @@ function goBack(): void {
       <div class="pm-section">
         <div class="section-header">
           <h2 class="section-title">所有项目</h2>
-          <button
-            v-if="!showCreate"
-            class="add-btn"
-            type="button"
-            @click="showCreate = true"
-          >
+          <button class="add-btn" type="button" @click="openCreate">
             <Plus :size="16" aria-hidden="true" />
             <span>新建</span>
           </button>
-        </div>
-
-        <!-- 新建表单 -->
-        <div v-if="showCreate" class="create-form">
-          <input
-            v-model="newName"
-            class="form-input"
-            type="text"
-            placeholder="项目名称"
-            @keyup.enter="handleCreate"
-            @keyup.escape="showCreate = false"
-          />
-          <input
-            v-model="newDesc"
-            class="form-input"
-            type="text"
-            placeholder="描述（可选）"
-            @keyup.enter="handleCreate"
-            @keyup.escape="showCreate = false"
-          />
-          <div class="form-actions">
-            <button class="btn btn-cancel" type="button" @click="showCreate = false">取消</button>
-            <button class="btn btn-confirm" type="button" @click="handleCreate">创建</button>
-          </div>
         </div>
 
         <!-- 默认项目 -->
@@ -177,7 +139,7 @@ function goBack(): void {
           :class="['project-card', { 'project-card-active': selectedProjectId === '' || selectedProjectId === DEFAULT_PROJECT_ID }]"
           @click="selectProject(DEFAULT_PROJECT_ID)"
         >
-          <span class="project-icon-emoji">📋</span>
+          <Clipboard :size="20" class="project-icon-lucide" aria-hidden="true" />
           <div class="project-info">
             <span class="project-name">默认项目</span>
             <span class="project-desc">未分配项目的会话</span>
@@ -189,12 +151,13 @@ function goBack(): void {
           v-for="proj in projectsStore.sortedProjects"
           :key="proj.id"
           :class="['project-card', { 'project-card-active': selectedProjectId === proj.id }]"
-          @click="selectProject(proj.id)"
+          @click="openEdit(proj)"
         >
-          <FolderClosed :size="20" class="project-icon" aria-hidden="true" />
+          <component :is="resolveProjectIcon(proj.icon)" :size="20" class="project-icon-lucide" aria-hidden="true" />
           <div class="project-info">
             <span class="project-name">{{ proj.name }}</span>
             <span v-if="proj.description" class="project-desc">{{ proj.description }}</span>
+            <span v-if="proj.workspace_path" class="project-meta"><FolderOpen :size="10" class="project-meta-icon" aria-hidden="true" /> {{ proj.workspace_path }}</span>
             <span v-if="proj.agents.length > 0" class="project-meta">{{ proj.agents.length }} 个 Agent</span>
           </div>
           <button
@@ -208,51 +171,17 @@ function goBack(): void {
           </button>
         </div>
       </div>
-
-      <!-- 选中项目详情 -->
-      <div v-if="selectedProject" class="pm-section">
-        <h2 class="section-title">{{ selectedProject.name }} — 成员管理</h2>
-
-        <!-- 当前成员 -->
-        <div v-if="selectedProject.agents.length > 0" class="member-list">
-          <div
-            v-for="member in selectedProject.agents"
-            :key="member.agent_id"
-            class="member-item"
-          >
-            <span class="member-name">{{ agentsStore.byId(member.agent_id)?.name ?? member.agent_id }}</span>
-            <span class="member-role">{{ member.role }}</span>
-            <button
-              class="member-remove"
-              type="button"
-              title="移除"
-              @click="handleRemoveAgent(selectedProject, member.agent_id)"
-            >
-              <X :size="14" aria-hidden="true" />
-            </button>
-          </div>
-        </div>
-        <div v-else class="empty-text">暂无 Agent 成员</div>
-
-        <!-- 添加 Agent -->
-        <div v-if="availableAgents(selectedProject).length > 0" class="add-agent-row">
-          <UserPlus :size="16" class="add-agent-icon" aria-hidden="true" />
-          <select
-            class="agent-select"
-            @change="(e) => { const target = e.target as HTMLSelectElement; if (target.value && selectedProject) handleAddAgent(selectedProject, target.value); target.value = ''; }"
-          >
-            <option value="">添加 Agent…</option>
-            <option
-              v-for="agent in availableAgents(selectedProject)"
-              :key="agent.id"
-              :value="agent.id"
-            >
-              {{ agent.name }}
-            </option>
-          </select>
-        </div>
-      </div>
     </div>
+
+    <!-- 创建/编辑弹窗 -->
+    <ProjectFormModal
+      v-model="showModal"
+      :mode="modalMode"
+      :initial="editing"
+      :agents="agentsStore.agents"
+      @submit-create="handleCreate"
+      @submit-edit="handleEdit"
+    />
   </div>
 </template>
 
@@ -351,71 +280,6 @@ function goBack(): void {
   border-color: var(--ip-color-border-strong);
 }
 
-.create-form {
-  display: flex;
-  flex-direction: column;
-  gap: var(--ip-spacing-2);
-  padding: var(--ip-spacing-4);
-  margin-bottom: var(--ip-spacing-3);
-  background: var(--ip-color-bg-primary);
-  border: 1px solid var(--ip-color-border-default);
-  border-radius: var(--ip-radius-md);
-}
-
-.form-input {
-  width: 100%;
-  padding: var(--ip-spacing-2) var(--ip-spacing-3);
-  font-family: inherit;
-  font-size: var(--ip-text-body-sm-size);
-  color: var(--ip-color-text-primary);
-  background: var(--ip-color-bg-secondary);
-  border: 1px solid var(--ip-color-border-default);
-  border-radius: var(--ip-radius-sm);
-  outline: none;
-  transition: var(--ip-transition-colors);
-}
-
-.form-input:focus {
-  border-color: var(--ip-color-border-focus);
-  box-shadow: var(--ip-shadow-focus);
-}
-
-.form-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--ip-spacing-2);
-}
-
-.btn {
-  padding: var(--ip-spacing-1) var(--ip-spacing-4);
-  font-family: inherit;
-  font-size: var(--ip-text-caption-size);
-  font-weight: var(--ip-font-weight-medium);
-  border-radius: var(--ip-radius-sm);
-  cursor: pointer;
-  transition: var(--ip-transition-colors);
-}
-
-.btn-cancel {
-  background: var(--ip-color-bg-primary);
-  color: var(--ip-color-text-secondary);
-  border: 1px solid var(--ip-color-border-default);
-}
-
-.btn-cancel:hover {
-  background: var(--ip-color-bg-hover);
-}
-
-.btn-confirm {
-  background: var(--ip-primary-500);
-  color: white;
-  border: 1px solid var(--ip-primary-500);
-}
-
-.btn-confirm:hover {
-  background: var(--ip-primary-600);
-}
-
 .project-card {
   display: flex;
   align-items: center;
@@ -442,15 +306,16 @@ function goBack(): void {
   background: var(--ip-primary-900);
 }
 
-.project-icon-emoji {
-  font-size: 20px;
+.project-icon-lucide {
   flex-shrink: 0;
   line-height: 1;
+  color: var(--ip-color-text-secondary);
 }
 
-.project-icon {
+.project-meta-icon {
+  display: inline-block;
+  vertical-align: middle;
   flex-shrink: 0;
-  color: var(--ip-color-text-secondary);
 }
 
 .project-info {
@@ -501,84 +366,5 @@ function goBack(): void {
 .project-delete:hover {
   background: var(--ip-danger-bg);
   color: var(--ip-danger-text);
-}
-
-.member-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--ip-spacing-2);
-}
-
-.member-item {
-  display: flex;
-  align-items: center;
-  gap: var(--ip-spacing-3);
-  padding: var(--ip-spacing-2) var(--ip-spacing-3);
-  background: var(--ip-color-bg-primary);
-  border: 1px solid var(--ip-color-border-default);
-  border-radius: var(--ip-radius-sm);
-}
-
-.member-name {
-  flex: 1;
-  font-size: var(--ip-text-body-sm-size);
-  font-weight: var(--ip-font-weight-medium);
-  color: var(--ip-color-text-primary);
-}
-
-.member-role {
-  font-size: var(--ip-text-caption-size);
-  color: var(--ip-color-text-tertiary);
-  text-transform: uppercase;
-}
-
-.member-remove {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border: none;
-  border-radius: var(--ip-radius-sm);
-  background: transparent;
-  color: var(--ip-color-text-tertiary);
-  cursor: pointer;
-  transition: var(--ip-transition-colors);
-}
-
-.member-remove:hover {
-  background: var(--ip-danger-bg);
-  color: var(--ip-danger-text);
-}
-
-.empty-text {
-  padding: var(--ip-spacing-4);
-  text-align: center;
-  font-size: var(--ip-text-body-sm-size);
-  color: var(--ip-color-text-tertiary);
-}
-
-.add-agent-row {
-  display: flex;
-  align-items: center;
-  gap: var(--ip-spacing-2);
-  margin-top: var(--ip-spacing-3);
-}
-
-.add-agent-icon {
-  color: var(--ip-color-text-tertiary);
-}
-
-.agent-select {
-  flex: 1;
-  padding: var(--ip-spacing-2) var(--ip-spacing-3);
-  font-family: inherit;
-  font-size: var(--ip-text-body-sm-size);
-  color: var(--ip-color-text-primary);
-  background: var(--ip-color-bg-primary);
-  border: 1px solid var(--ip-color-border-default);
-  border-radius: var(--ip-radius-sm);
-  cursor: pointer;
-  outline: none;
 }
 </style>
