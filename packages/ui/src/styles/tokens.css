@@ -278,6 +278,58 @@
   --ip-toast-duration-warning: 5000ms;
   --ip-toast-duration-danger:  8000ms;
 
+  /* P0 组件级 token（icepaw-p0-component-specs.md §7.1） */
+  /* Avatar */
+  --ip-avatar-border-shadow:        inset 0 0 0 1px rgba(0, 0, 0, 0.04);
+  --ip-avatar-overlay-light:        rgba(0, 0, 0, 0.08);
+  --ip-avatar-overlay-light-active: rgba(0, 0, 0, 0.12);
+  --ip-avatar-overlay-dark:         rgba(255, 255, 255, 0.10);
+  --ip-avatar-overlay-dark-active:  rgba(255, 255, 255, 0.14);
+  --ip-avatar-remove-bg:            rgba(0, 0, 0, 0.6);
+
+  /* Card */
+  --ip-card-radius:                  var(--ip-radius-lg);
+  --ip-card-padding-none:            0;
+  --ip-card-padding-sm:              var(--ip-spacing-3);
+  --ip-card-padding-md:              var(--ip-spacing-4);
+  --ip-card-padding-lg:              var(--ip-spacing-6);
+
+  /* Select */
+  --ip-select-popover-min-w:         180px;
+  --ip-select-popover-max-w:         280px;
+  --ip-select-popover-max-h:         280px;
+  --ip-select-option-h:              36px;
+
+  /* Dropdown */
+  --ip-dropdown-popover-min-w:       180px;
+  --ip-dropdown-popover-max-w:       280px;
+  --ip-dropdown-popover-max-h:       360px;
+  --ip-dropdown-item-h:              32px;
+
+  /* Popconfirm */
+  --ip-popconfirm-popover-min-w:     200px;
+  --ip-popconfirm-popover-max-w:     280px;
+
+  /* EmptyState */
+  --ip-empty-icon-sm:                24px;
+  --ip-empty-icon-md:                32px;
+  --ip-empty-icon-lg:                40px;
+  --ip-empty-icon-xl:                48px;
+  --ip-empty-icon-2xl:               64px;
+  --ip-empty-icon-3xl:               80px;
+  --ip-empty-text-max-w:             320px;
+
+  /* 通用 placeholder 文字色（P0 新增） */
+  --ip-color-text-placeholder:       var(--ip-gray-400);
+
+  /* 间距补齐（P0 新增：1_5=6px） */
+  --ip-spacing-1_5:                  6px;
+
+  /* 图标尺寸通用 token（P0 新增） */
+  --ip-icon-sm:                      14px;
+  --ip-icon-md:                      16px;
+  --ip-icon-lg:                      20px;
+
   /* ------------------- 9. 语义色（独立 tone） ------------------- */
 
   /* success（亮色） */
@@ -426,6 +478,10 @@
   /* 阴影：暗色模式感知弱，使用更深的版本 */
   --ip-shadow-focus:          0 0 0 3px var(--ip-focus-ring-dark);
 
+  /* P0 暗色模式覆盖（icepaw-p0-component-specs.md §7.3） */
+  --ip-avatar-border-shadow:        inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  --ip-color-text-placeholder:      var(--ip-gray-500);
+
   color-scheme: dark;
 }
 
@@ -470,6 +526,10 @@
     --ip-info-base:       #38BDF8;
 
     --ip-shadow-focus:    0 0 0 3px var(--ip-focus-ring-dark);
+
+    /* P0 暗色模式覆盖（system-prefers） */
+    --ip-avatar-border-shadow:        inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+    --ip-color-text-placeholder:      var(--ip-gray-500);
 
     color-scheme: dark;
   }
@@ -574,4 +634,28 @@
 @keyframes ip-toast-out {
   from { opacity: 1; transform: translateX(0); }
   to   { opacity: 0; transform: translateX(20px); }
+}
+
+/* ------------------- P0 组件 keyframes（icepaw-p0-component-specs.md §7.2） ------------------- */
+
+/* 通用 popover enter（Select / Dropdown / Popconfirm 共用） */
+@keyframes ip-popover-in {
+  from { opacity: 0; transform: translateY(-4px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes ip-popover-out {
+  from { opacity: 1; transform: translateY(0) scale(1); }
+  to   { opacity: 0; transform: translateY(-4px) scale(0.96); }
+}
+
+/* EmptyState 入场 */
+@keyframes ip-empty-state-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Spinner 缩放入场（P0 Avatar 用） */
+@keyframes ip-spinner-in {
+  from { opacity: 0; transform: scale(0.5); }
+  to   { opacity: 1; transform: scale(1); }
 }

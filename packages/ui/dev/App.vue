@@ -17,6 +17,12 @@ import {
   provideToast,
   IpFlex,
   IpContainer,
+  IpAvatar,
+  IpCard,
+  IpSelect,
+  IpEmptyState,
+  IpDropdownMenu,
+  IpPopconfirm,
   type ToastApi,
 } from '../src'
 import {
@@ -28,6 +34,19 @@ import {
   MoreHorizontal,
   Plus,
   Send,
+  Camera,
+  Trash2,
+  User as UserIcon,
+  Bot,
+  Inbox,
+  Sparkles,
+  Pencil,
+  Copy,
+  Download,
+  ChevronDown,
+  AlertTriangle,
+  LogOut,
+  Share2,
 } from 'lucide-vue-next'
 
 /* ── Theme ── */
@@ -88,6 +107,101 @@ function toastMergeDemo(): void {
   setTimeout(() => toast.success('第三次保存'), 1600)
 }
 
+/* ── Avatar demo state ── */
+const avatarSrc = ref<string>(
+  'https://api.dicebear.com/9.x/notionists/svg?seed=icepaw&backgroundColor=d1d4f9',
+)
+function clearAvatar(): void {
+  avatarSrc.value = ''
+  toast.info('已重置为默认头像')
+}
+function onAvatarUpload(file: File): void {
+  // 模拟异步上传：用 FileReader 读取为 dataURL
+  const reader = new FileReader()
+  reader.onload = (ev) => {
+    avatarSrc.value = String(ev.target?.result ?? '')
+    toast.success(`已上传 ${file.name}`)
+  }
+  reader.readAsDataURL(file)
+}
+function onAvatarError(err: { code: string; message: string }): void {
+  toast.error(err.message)
+}
+
+/* ── Card demo state ── */
+const cardSelected = ref(false)
+
+/* ── Select demo state ── */
+const selectValue = ref<string | null>('balanced')
+const selectError = ref(false)
+const selectErrorMessage = ref('')
+const selectClearable = ref<string | null>('gemini-2.5-pro')
+
+const modelOptions = [
+  { value: 'gpt-4o', label: 'GPT-4o', description: 'OpenAI · 多模态旗舰', icon: Sparkles },
+  { value: 'claude-sonnet-4', label: 'Claude Sonnet 4', description: 'Anthropic · 长上下文', icon: Bot },
+  { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro', description: 'Google · 超大上下文窗口', icon: Sparkles },
+  { value: 'deepseek-v3', label: 'DeepSeek V3', description: '深度求索 · 高性价比', icon: Sparkles },
+  { value: 'llama-local', label: 'Llama (本地)', description: '离线可用', icon: Bot, disabled: true },
+]
+
+const toneOptions = [
+  { value: 'concise', label: '简洁' },
+  { value: 'balanced', label: '均衡' },
+  { value: 'detailed', label: '详尽' },
+  { value: 'creative', label: '创意' },
+]
+
+function triggerSelectError(): void {
+  selectError.value = !selectError.value
+  selectErrorMessage.value = selectError.value ? '请选择一个模型' : ''
+}
+
+/* ── Dropdown demo state ── */
+const ddOpen = ref(false)
+const ddOpenHover = ref(false)
+const ddAction = (label: string): void => {
+  toast.info(`${label}`)
+}
+
+/* ── Popconfirm demo state ── */
+const popOpen = ref(false)
+const popDangerOpen = ref(false)
+const popLoading = ref(false)
+const popTop = ref(false)
+const popBottom = ref(false)
+const popLeft = ref(false)
+const popRight = ref(false)
+function confirmDelete(): void {
+  popLoading.value = true
+  setTimeout(() => {
+    popLoading.value = false
+    popOpen.value = false
+    toast.success('已删除')
+  }, 1200)
+}
+
+/* ── Dropdown demo data ── */
+const ddItems = [
+  { type: 'item' as const, key: 'edit', label: '编辑', icon: Pencil, onClick: () => ddAction('编辑') },
+  { type: 'item' as const, key: 'duplicate', label: '复制', icon: Copy, onClick: () => ddAction('复制') },
+  { type: 'item' as const, key: 'share', label: '分享', icon: Share2, onClick: () => ddAction('分享') },
+  { type: 'divider' as const, key: 'div1' },
+  { type: 'item' as const, key: 'download', label: '导出', icon: Download, onClick: () => ddAction('导出') },
+  { type: 'item' as const, key: 'delete', label: '删除', icon: Trash2, danger: true, onClick: () => ddAction('删除') },
+]
+
+const ddFullItems = [
+  { type: 'label' as const, text: '操作', key: 'ops-label' },
+  { type: 'item' as const, key: 'edit2', label: '编辑', icon: Pencil, shortcut: 'E', onClick: () => ddAction('编辑') },
+  { type: 'item' as const, key: 'duplicate2', label: '复制', icon: Copy, shortcut: 'D', onClick: () => ddAction('复制') },
+  { type: 'item' as const, key: 'share2', label: '分享', icon: Share2, shortcut: 'S', onClick: () => ddAction('分享') },
+  { type: 'divider' as const, key: 'div2' },
+  { type: 'item' as const, key: 'download2', label: '导出', icon: Download, onClick: () => ddAction('导出') },
+  { type: 'divider' as const, key: 'div3' },
+  { type: 'item' as const, key: 'logout', label: '退出登录', icon: LogOut, danger: true, onClick: () => ddAction('退出登录') },
+]
+
 /* ── VNode separator demo ── */
 const hCaretVNode = h(
   'svg',
@@ -112,6 +226,12 @@ const tocItems = [
   { id: 'toast',     label: 'Toast' },
   { id: 'flex',      label: 'Flex' },
   { id: 'container', label: 'Container' },
+  { id: 'avatar',    label: 'Avatar' },
+  { id: 'card',      label: 'Card' },
+  { id: 'select',    label: 'Select' },
+  { id: 'empty',     label: 'EmptyState' },
+  { id: 'dropdown',  label: 'DropdownMenu' },
+  { id: 'popconfirm',label: 'Popconfirm' },
 ]
 
 const activeId = ref<string>('button')
@@ -217,7 +337,7 @@ onUnmounted(() => {
 
     <!-- ── Hero ── -->
     <section class="preview-intro">
-      <p class="preview-intro__index">01 — 08</p>
+      <p class="preview-intro__index">01 — 14</p>
       <h1>IcePaw Design System</h1>
       <p class="preview-intro__subtitle">为 AI 对话界面打造的 Vue 3 组件库。</p>
 
@@ -230,7 +350,7 @@ onUnmounted(() => {
       </svg>
 
       <p class="preview-intro__lede">
-        8 个原子与布局组件，覆盖按钮、输入、消息、对话框等基础交互。
+        14 个原子与布局组件，覆盖按钮、输入、消息、对话框、头像、卡片、选择器等基础交互。
       </p>
 
       <!-- Anchor pills -->
@@ -267,7 +387,7 @@ onUnmounted(() => {
                 stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
         </svg>
       </div>
-      <p class="preview-section__index">01 / 08</p>
+      <p class="preview-section__index">01 / 14</p>
       <h2 class="preview-section__title">Buttons</h2>
       <p class="preview-section__subtitle">按钮用于触发即时操作。</p>
 
@@ -389,7 +509,7 @@ onUnmounted(() => {
                 stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
         </svg>
       </div>
-      <p class="preview-section__index">02 / 08</p>
+      <p class="preview-section__index">02 / 14</p>
       <h2 class="preview-section__title">Inputs</h2>
       <p class="preview-section__subtitle">用于收集单行文本的输入控件。</p>
 
@@ -495,7 +615,7 @@ onUnmounted(() => {
                 stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
         </svg>
       </div>
-      <p class="preview-section__index">03 / 08</p>
+      <p class="preview-section__index">03 / 14</p>
       <h2 class="preview-section__title">Textareas</h2>
       <p class="preview-section__subtitle">用于收集多行文本的输入控件。</p>
 
@@ -575,7 +695,7 @@ onUnmounted(() => {
                 stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
         </svg>
       </div>
-      <p class="preview-section__index">04 / 08</p>
+      <p class="preview-section__index">04 / 14</p>
       <h2 class="preview-section__title">Messages</h2>
       <p class="preview-section__subtitle">用于展示对话中的用户、助手和系统消息。</p>
 
@@ -664,7 +784,7 @@ onUnmounted(() => {
                 stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
         </svg>
       </div>
-      <p class="preview-section__index">05 / 08</p>
+      <p class="preview-section__index">05 / 14</p>
       <h2 class="preview-section__title">Modals</h2>
       <p class="preview-section__subtitle">用于需要用户全部注意力的决策或编辑。</p>
 
@@ -745,7 +865,7 @@ onUnmounted(() => {
                 stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
         </svg>
       </div>
-      <p class="preview-section__index">06 / 08</p>
+      <p class="preview-section__index">06 / 14</p>
       <h2 class="preview-section__title">Toasts</h2>
       <p class="preview-section__subtitle">用于非关键、瞬时的操作反馈。</p>
 
@@ -810,7 +930,7 @@ onUnmounted(() => {
                 stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
         </svg>
       </div>
-      <p class="preview-section__index">07 / 08</p>
+      <p class="preview-section__index">07 / 14</p>
       <h2 class="preview-section__title">Flex</h2>
       <p class="preview-section__subtitle">用于布局子元素的弹性容器。</p>
 
@@ -1128,7 +1248,7 @@ onUnmounted(() => {
                 stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
         </svg>
       </div>
-      <p class="preview-section__index">08 / 08</p>
+      <p class="preview-section__index">08 / 14</p>
       <h2 class="preview-section__title">Container</h2>
       <p class="preview-section__subtitle">用于约束内容宽度的布局容器。</p>
 
@@ -1224,10 +1344,596 @@ onUnmounted(() => {
       </svg>
     </section>
 
+    <!-- ── 09 / Avatar ── -->
+    <section id="avatar" class="preview-section">
+      <div class="preview-section__top">
+        <svg class="hand-drawn-divider" width="200" height="12" viewBox="0 0 200 12" fill="none" aria-hidden="true">
+          <path
+            d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
+                stroke="currentColor" stroke-width="1.5"
+                stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
+        </svg>
+      </div>
+      <p class="preview-section__index">09 / 14</p>
+      <h2 class="preview-section__title">Avatars</h2>
+      <p class="preview-section__subtitle">用于展示用户、项目或实体的头像与图标。</p>
+
+      <span class="preview-label">尺寸档</span>
+      <IpFlex size="sm" align="center">
+        <IpAvatar :source="{ type: 'image', src: avatarSrc || 'https://api.dicebear.com/9.x/notionists/svg?seed=felix', alt: '用户头像' }" size="xs" />
+        <IpAvatar :source="{ type: 'image', src: avatarSrc || 'https://api.dicebear.com/9.x/notionists/svg?seed=felix', alt: '用户头像' }" size="sm" />
+        <IpAvatar :source="{ type: 'image', src: avatarSrc || 'https://api.dicebear.com/9.x/notionists/svg?seed=felix', alt: '用户头像' }" size="md" />
+        <IpAvatar :source="{ type: 'image', src: avatarSrc || 'https://api.dicebear.com/9.x/notionists/svg?seed=felix', alt: '用户头像' }" size="lg" />
+        <IpAvatar :source="{ type: 'image', src: avatarSrc || 'https://api.dicebear.com/9.x/notionists/svg?seed=felix', alt: '用户头像' }" size="xl" />
+        <IpAvatar :source="{ type: 'image', src: avatarSrc || 'https://api.dicebear.com/9.x/notionists/svg?seed=felix', alt: '用户头像' }" size="xxl" />
+      </IpFlex>
+      <p class="preview-caption">xs=20px 到 xxl=96px，覆盖所有使用场景。</p>
+
+      <span class="preview-label">内容类型</span>
+      <IpFlex size="md" align="center">
+        <IpAvatar :source="{ type: 'image', src: 'https://api.dicebear.com/9.x/notionists/svg?seed=aria&backgroundColor=b6e3f4', alt: '图片头像' }" size="md" />
+        <IpAvatar :source="{ type: 'initials', text: 'ZP', bgColor: '#6366f1', fgColor: '#fff' }" size="md" />
+        <IpAvatar :source="{ type: 'icon', icon: Bot, color: 'var(--ip-color-icon-default)' }" size="md" />
+        <IpAvatar :source="{ type: 'default' }" size="md" />
+      </IpFlex>
+      <p class="preview-caption">image / initials（自定义背景色）/ icon / default（文件夹图标）。</p>
+
+      <span class="preview-label">形状</span>
+      <IpFlex size="md" align="center">
+        <IpAvatar :source="{ type: 'initials', text: 'R', bgColor: '#f97316' }" size="lg" shape="rounded" />
+        <IpAvatar :source="{ type: 'initials', text: 'C', bgColor: '#22c55e' }" size="lg" shape="circle" />
+      </IpFlex>
+      <p class="preview-caption">rounded（默认，与 AgentAvatar 一致）/ circle（用户头像）。</p>
+
+      <span class="preview-label">上传模式</span>
+      <IpFlex size="md" align="center">
+        <IpAvatar :source="{ type: 'image', src: avatarSrc || 'https://api.dicebear.com/9.x/notionists/svg?seed=felix', alt: '可上传头像' }" size="lg" :uploadable="true" @upload="onAvatarUpload" @upload-error="onAvatarError" />
+        <IpAvatar :source="{ type: 'image', src: avatarSrc || 'https://api.dicebear.com/9.x/notionists/svg?seed=felix', alt: '可移除头像' }" size="lg" :uploadable="true" :removable="true" @upload="onAvatarUpload" @upload-error="onAvatarError" @remove="clearAvatar" />
+        <IpAvatar :source="{ type: 'image', src: avatarSrc || 'https://api.dicebear.com/9.x/notionists/svg?seed=felix', alt: '上传中' }" size="lg" :uploadable="true" :loading="true" @upload="onAvatarUpload" @upload-error="onAvatarError" />
+        <IpAvatar :source="{ type: 'image', src: avatarSrc || 'https://api.dicebear.com/9.x/notionists/svg?seed=felix', alt: '禁用' }" size="lg" :uploadable="true" :disabled="true" @upload="onAvatarUpload" @upload-error="onAvatarError" />
+      </IpFlex>
+      <p class="preview-caption">hover 显示相机蒙层；removable 显示 X 按钮；loading 显示 spinner；disabled 不可交互。</p>
+
+      <span class="preview-label">使用场景</span>
+      <p class="preview-prose">
+        用于用户头像、项目图标、上传预览。initials 模式在头像加载失败时降级展示。
+      </p>
+
+      <span class="preview-label">反面示例</span>
+      <ul class="preview-dont-list">
+        <li>
+          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
+          </svg>
+          image 模式下不要在 src 为空时渲染（应降级到 default）
+        </li>
+        <li>
+          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
+          </svg>
+          uploadable 模式下不要在 loading 时同时显示蒙层
+        </li>
+        <li>
+          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
+          </svg>
+          initials 的 bgColor 不要使用透明色
+        </li>
+      </ul>
+
+      <svg class="hand-drawn-divider hand-drawn-divider--center" width="320" height="12" viewBox="0 0 320 12" fill="none" aria-hidden="true">
+        <path
+          d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
+              stroke="currentColor" stroke-width="1.5"
+              stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
+      </svg>
+    </section>
+
+    <!-- ── 10 / Card ── -->
+    <section id="card" class="preview-section">
+      <div class="preview-section__top">
+        <svg class="hand-drawn-divider" width="200" height="12" viewBox="0 0 200 12" fill="none" aria-hidden="true">
+          <path
+            d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
+                stroke="currentColor" stroke-width="1.5"
+                stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
+        </svg>
+      </div>
+      <p class="preview-section__index">10 / 14</p>
+      <h2 class="preview-section__title">Cards</h2>
+      <p class="preview-section__subtitle">用于组织相关内容的容器卡片。</p>
+
+      <span class="preview-label">视觉变体</span>
+      <IpFlex size="sm" align="center" wrap>
+        <IpCard variant="bordered" padding="md" style="max-width: 200px;">
+          <p style="font-size: 13px; margin: 0; color: var(--ip-color-text-body);">Bordered</p>
+          <p style="font-size: 12px; margin: 4px 0 0; color: var(--ip-color-text-tertiary);">默认内敛风格</p>
+        </IpCard>
+        <IpCard variant="filled" padding="md" style="max-width: 200px;">
+          <p style="font-size: 13px; margin: 0; color: var(--ip-color-text-body);">Filled</p>
+          <p style="font-size: 12px; margin: 4px 0 0; color: var(--ip-color-text-tertiary);">实色填充</p>
+        </IpCard>
+        <IpCard variant="shadow" padding="md" style="max-width: 200px;">
+          <p style="font-size: 13px; margin: 0; color: var(--ip-color-text-body);">Shadow</p>
+          <p style="font-size: 12px; margin: 4px 0 0; color: var(--ip-color-text-tertiary);">浮起风格</p>
+        </IpCard>
+      </IpFlex>
+      <p class="preview-caption">bordered（默认）/ filled / shadow。</p>
+
+      <span class="preview-label">内边距</span>
+      <IpFlex size="sm" align="center" wrap>
+        <IpCard variant="bordered" padding="none" style="max-width: 120px;">
+          <p style="font-size: 12px; margin: 0; color: var(--ip-color-text-tertiary);">none · 0</p>
+        </IpCard>
+        <IpCard variant="bordered" padding="sm" style="max-width: 120px;">
+          <p style="font-size: 12px; margin: 0; color: var(--ip-color-text-tertiary);">sm · 12px</p>
+        </IpCard>
+        <IpCard variant="bordered" padding="md" style="max-width: 120px;">
+          <p style="font-size: 12px; margin: 0; color: var(--ip-color-text-tertiary);">md · 16px</p>
+        </IpCard>
+        <IpCard variant="bordered" padding="lg" style="max-width: 120px;">
+          <p style="font-size: 12px; margin: 0; color: var(--ip-color-text-tertiary);">lg · 24px</p>
+        </IpCard>
+      </IpFlex>
+
+      <span class="preview-label">Header / Body / Footer</span>
+      <IpCard variant="bordered" padding="md" style="max-width: 360px;">
+        <template #header>
+          <span style="font-size: 15px; font-weight: 600; color: var(--ip-color-text-primary);">会话记录</span>
+        </template>
+        <p style="font-size: 13px; margin: 0; color: var(--ip-color-text-body);">
+          上一轮对话：讨论了 fetch 与 AbortController 的用法。
+        </p>
+        <template #footer>
+          <span style="font-size: 12px; color: var(--ip-color-text-tertiary);">2 分钟前 · 12 条消息</span>
+        </template>
+      </IpCard>
+
+      <span class="preview-label">交互态与选中态</span>
+      <IpFlex size="sm" align="center" wrap>
+        <IpCard variant="bordered" padding="md" :interactive="true" style="max-width: 180px; cursor: pointer;">
+          <p style="font-size: 13px; margin: 0; color: var(--ip-color-text-body);">Hover 抬升</p>
+          <p style="font-size: 12px; margin: 4px 0 0; color: var(--ip-color-text-tertiary);">interactive</p>
+        </IpCard>
+        <IpCard variant="bordered" padding="md" :interactive="true" :selected="cardSelected" style="max-width: 180px; cursor: pointer;" @click="cardSelected = !cardSelected">
+          <p style="font-size: 13px; margin: 0; color: var(--ip-color-text-body);">选中态</p>
+          <p style="font-size: 12px; margin: 4px 0 0; color: var(--ip-color-text-tertiary);">selected</p>
+        </IpCard>
+        <IpCard variant="bordered" padding="md" :disabled="true" style="max-width: 180px;">
+          <p style="font-size: 13px; margin: 0; color: var(--ip-color-text-disabled);">禁用态</p>
+          <p style="font-size: 12px; margin: 4px 0 0; color: var(--ip-color-text-disabled);">disabled</p>
+        </IpCard>
+      </IpFlex>
+      <p class="preview-caption">interactive hover 抬升；selected 显示主色描边；disabled 灰态。</p>
+
+      <span class="preview-label">使用场景</span>
+      <p class="preview-prose">
+        用于会话卡片、项目卡片等需要分块展示的内容区。
+      </p>
+
+      <span class="preview-label">反面示例</span>
+      <ul class="preview-dont-list">
+        <li>
+          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
+          </svg>
+          不要将卡片内间距设为零后由子元素管理（应通过 padding prop）
+        </li>
+        <li>
+          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
+          </svg>
+          不要在单个视图中堆叠过多卡片
+        </li>
+        <li>
+          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
+          </svg>
+          简单文字不要用卡片包裹
+        </li>
+      </ul>
+
+      <svg class="hand-drawn-divider hand-drawn-divider--center" width="320" height="12" viewBox="0 0 320 12" fill="none" aria-hidden="true">
+        <path
+          d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
+              stroke="currentColor" stroke-width="1.5"
+              stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
+      </svg>
+    </section>
+
+    <!-- ── 11 / Select ── -->
+    <section id="select" class="preview-section">
+      <div class="preview-section__top">
+        <svg class="hand-drawn-divider" width="200" height="12" viewBox="0 0 200 12" fill="none" aria-hidden="true">
+          <path
+            d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
+                stroke="currentColor" stroke-width="1.5"
+                stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
+        </svg>
+      </div>
+      <p class="preview-section__index">11 / 14</p>
+      <h2 class="preview-section__title">Selects</h2>
+      <p class="preview-section__subtitle">用于从预定义列表中选择单个值的受控下拉选择器。</p>
+
+      <span class="preview-label">尺寸</span>
+      <div class="preview-stack" style="max-width: 320px;">
+        <IpSelect v-model="selectValue" :options="toneOptions" size="sm" placeholder="选择语气（sm）" />
+        <IpSelect v-model="selectValue" :options="toneOptions" size="md" placeholder="选择语气（md）" />
+        <IpSelect v-model="selectValue" :options="toneOptions" size="lg" placeholder="选择语气（lg）" />
+      </div>
+      <p class="preview-caption">与 Input 尺寸完全对齐。</p>
+
+      <span class="preview-label">状态</span>
+      <div class="preview-stack" style="max-width: 320px;">
+        <IpSelect :model-value="'concise'" :options="toneOptions" placeholder="已选中状态" />
+        <IpSelect :model-value="'llama-local'" :options="modelOptions" placeholder="禁用选项" />
+        <IpSelect :model-value="null" :options="toneOptions" placeholder="禁用状态" disabled />
+      </div>
+
+      <span class="preview-label">可清除</span>
+      <div class="preview-stack" style="max-width: 320px;">
+        <IpSelect v-model="selectClearable" :options="modelOptions" placeholder="选择一个模型" :clearable="true" />
+      </div>
+      <p class="preview-caption">hover 或键盘聚焦时显示清除按钮。</p>
+
+      <span class="preview-label">自定义选项（带图标和描述）</span>
+      <div class="preview-stack" style="max-width: 320px;">
+        <IpSelect v-model="selectValue" :options="modelOptions" placeholder="选择模型" />
+      </div>
+      <p class="preview-caption">选项支持 icon（Lucide 组件）和 description。</p>
+
+      <span class="preview-label">错误状态</span>
+      <div class="preview-stack" style="max-width: 320px;">
+        <IpSelect
+          v-model="selectValue"
+          :options="modelOptions"
+          placeholder="选择一个模型"
+          :error="selectError"
+          :error-message="selectErrorMessage"
+        />
+      </div>
+      <div class="preview-row">
+        <Button variant="secondary" size="sm" @click="triggerSelectError">触发错误</Button>
+      </div>
+
+      <span class="preview-label">使用场景</span>
+      <p class="preview-prose">
+        用于单选场景；多选或复杂筛选场景建议使用独立的下拉组件。
+      </p>
+
+      <span class="preview-label">反面示例</span>
+      <ul class="preview-dont-list">
+        <li>
+          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
+          </svg>
+          选项超过 20 项时不要用 Select，改用搜索输入
+        </li>
+        <li>
+          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
+          </svg>
+          多选场景不要用单选 Select
+        </li>
+        <li>
+          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
+          </svg>
+          错误信息不要只靠颜色传递，应配合 error-message 文案
+        </li>
+      </ul>
+
+      <svg class="hand-drawn-divider hand-drawn-divider--center" width="320" height="12" viewBox="0 0 320 12" fill="none" aria-hidden="true">
+        <path
+          d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
+              stroke="currentColor" stroke-width="1.5"
+              stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
+      </svg>
+    </section>
+
+    <!-- ── 12 / EmptyState ── -->
+    <section id="empty" class="preview-section">
+      <div class="preview-section__top">
+        <svg class="hand-drawn-divider" width="200" height="12" viewBox="0 0 200 12" fill="none" aria-hidden="true">
+          <path
+            d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
+                stroke="currentColor" stroke-width="1.5"
+                stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
+        </svg>
+      </div>
+      <p class="preview-section__index">12 / 14</p>
+      <h2 class="preview-section__title">EmptyState</h2>
+      <p class="preview-section__subtitle">用于展示无数据、无结果等空状态，提供视觉引导和操作入口。</p>
+
+      <span class="preview-label">基础用法</span>
+      <IpEmptyState
+        title="暂无会话"
+        description="开始一个新对话，IcePaw 会记住上下文。"
+        :primary-action="{ label: '新建对话', onClick: toastInfo }"
+      />
+
+      <span class="preview-label">图标尺寸</span>
+      <IpFlex size="md" align="center" wrap>
+        <IpEmptyState title="sm" icon-size="sm" :icon="Inbox" style="width: 160px;" />
+        <IpEmptyState title="md" icon-size="md" :icon="Inbox" style="width: 160px;" />
+        <IpEmptyState title="lg" icon-size="lg" :icon="Inbox" style="width: 160px;" />
+        <IpEmptyState title="xl" icon-size="xl" :icon="Inbox" style="width: 160px;" />
+      </IpFlex>
+
+      <span class="preview-label">带次要操作</span>
+      <IpEmptyState
+        title="暂无搜索结果"
+        description="尝试换一个关键词，或者调整筛选条件。"
+        :primary-action="{ label: '清除筛选', onClick: toastInfo }"
+        :secondary-action="{ label: '查看全部', onClick: toastInfo }"
+      />
+
+      <span class="preview-label">仅图标</span>
+      <IpEmptyState
+        title="暂无通知"
+        :icon="Inbox"
+      />
+
+      <span class="preview-label">紧凑模式</span>
+      <div style="max-width: 280px; border: 1px dashed var(--ip-color-border-default); border-radius: 8px; padding: 12px;">
+        <IpEmptyState
+          title="空列表"
+          description="暂无数据"
+          :compact="true"
+          :primary-action="{ label: '添加', onClick: toastInfo }"
+        />
+      </div>
+      <p class="preview-caption">compact 模式适合嵌入卡片等小容器内。</p>
+
+      <span class="preview-label">使用场景</span>
+      <p class="preview-prose">
+        用于列表为空、搜索无结果、上传区域等场景，给用户提供视觉引导和下一步操作。
+      </p>
+
+      <span class="preview-label">反面示例</span>
+      <ul class="preview-dont-list">
+        <li>
+          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
+          </svg>
+          加载中不要用空状态展示（用骨架屏或 Spinner）
+        </li>
+        <li>
+          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
+          </svg>
+          不要在空状态中放多个主要操作
+        </li>
+        <li>
+          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
+          </svg>
+          空状态图标不要使用有歧义的 emoji
+        </li>
+      </ul>
+
+      <svg class="hand-drawn-divider hand-drawn-divider--center" width="320" height="12" viewBox="0 0 320 12" fill="none" aria-hidden="true">
+        <path
+          d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
+              stroke="currentColor" stroke-width="1.5"
+              stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
+      </svg>
+    </section>
+
+    <!-- ── 13 / DropdownMenu ── -->
+    <section id="dropdown" class="preview-section">
+      <div class="preview-section__top">
+        <svg class="hand-drawn-divider" width="200" height="12" viewBox="0 0 200 12" fill="none" aria-hidden="true">
+          <path
+            d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
+                stroke="currentColor" stroke-width="1.5"
+                stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
+        </svg>
+      </div>
+      <p class="preview-section__index">13 / 14</p>
+      <h2 class="preview-section__title">DropdownMenu</h2>
+      <p class="preview-section__subtitle">用于溢出操作菜单的下拉触发器。</p>
+
+      <span class="preview-label">点击触发</span>
+      <IpDropdownMenu v-model="ddOpen" :items="ddItems" placement="bottom-end">
+        <template #trigger>
+          <Button variant="secondary" size="sm">
+            操作
+            <template #icon-right>
+              <ChevronDown :size="14" :stroke-width="2" />
+            </template>
+          </Button>
+        </template>
+      </IpDropdownMenu>
+      <p class="preview-caption">点击触发器打开菜单；选中菜单项或点击外部关闭。</p>
+
+      <span class="preview-label">悬停触发</span>
+      <IpDropdownMenu v-model="ddOpenHover" :items="ddItems" trigger-action="hover" placement="bottom-end">
+        <template #trigger>
+          <Button variant="ghost" size="sm">
+            悬停打开
+            <template #icon-right>
+              <ChevronDown :size="14" :stroke-width="2" />
+            </template>
+          </Button>
+        </template>
+      </IpDropdownMenu>
+      <p class="preview-caption">hover 模式有 100ms 延迟，防止误触。</p>
+
+      <span class="preview-label">菜单项类型</span>
+      <IpDropdownMenu :model-value="false" :items="ddFullItems" placement="bottom-start">
+        <template #trigger>
+          <Button variant="secondary" size="sm">
+            完整菜单
+            <template #icon-right>
+              <ChevronDown :size="14" :stroke-width="2" />
+            </template>
+          </Button>
+        </template>
+      </IpDropdownMenu>
+      <p class="preview-caption">item / divider / label 三种类型；item 支持 icon、shortcut、danger。</p>
+
+      <span class="preview-label">使用场景</span>
+      <p class="preview-prose">
+        用于操作菜单、工具栏溢出、用户菜单等场景。
+      </p>
+
+      <span class="preview-label">反面示例</span>
+      <ul class="preview-dont-list">
+        <li>
+          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
+          </svg>
+          不要把下拉菜单用于需要表单输入的场景
+        </li>
+        <li>
+          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
+          </svg>
+          菜单项不要超过 8 项（需要分组和分隔线）
+        </li>
+        <li>
+          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
+          </svg>
+          危险操作放在菜单底部
+        </li>
+      </ul>
+
+      <svg class="hand-drawn-divider hand-drawn-divider--center" width="320" height="12" viewBox="0 0 320 12" fill="none" aria-hidden="true">
+        <path
+          d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
+              stroke="currentColor" stroke-width="1.5"
+              stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
+      </svg>
+    </section>
+
+    <!-- ── 14 / Popconfirm ── -->
+    <section id="popconfirm" class="preview-section">
+      <div class="preview-section__top">
+        <svg class="hand-drawn-divider" width="200" height="12" viewBox="0 0 200 12" fill="none" aria-hidden="true">
+          <path
+            d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
+                stroke="currentColor" stroke-width="1.5"
+                stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
+        </svg>
+      </div>
+      <p class="preview-section__index">14 / 14</p>
+      <h2 class="preview-section__title">Popconfirm</h2>
+      <p class="preview-section__subtitle">用于轻量气泡式操作确认，替代 window.confirm。</p>
+
+      <span class="preview-label">基础确认</span>
+      <IpPopconfirm
+        v-model="popOpen"
+        title="确定要删除吗？"
+        description="此操作不可撤销，所有相关数据将被永久删除。"
+        @confirm="confirmDelete"
+        @cancel="toastInfo('已取消')"
+      >
+        <template #trigger>
+          <Button variant="danger" size="sm">删除会话</Button>
+        </template>
+      </IpPopconfirm>
+      <p class="preview-caption">点击触发，打开后焦点自动移到确认按钮。</p>
+
+      <span class="preview-label">危险样式</span>
+      <IpPopconfirm
+        v-model="popDangerOpen"
+        title="删除代理？"
+        :danger="true"
+        confirm-text="删除"
+        cancel-text="保留"
+        placement="bottom"
+      >
+        <template #trigger>
+          <Button variant="ghost" size="sm">
+            <Trash2 :size="14" :stroke-width="2" />
+            删除
+          </Button>
+        </template>
+      </IpPopconfirm>
+
+      <span class="preview-label">异步确认（Loading）</span>
+      <IpPopconfirm
+        v-model="popLoading"
+        title="正在删除…"
+        :loading="true"
+        confirm-text="确认"
+        placement="bottom"
+      >
+        <template #trigger>
+          <Button variant="secondary" size="sm">异步删除</Button>
+        </template>
+      </IpPopconfirm>
+      <p class="preview-caption">loading 时确认按钮显示 spinner，确认/取消均禁用。</p>
+
+      <span class="preview-label">浮层位置</span>
+      <IpFlex size="sm" align="center" wrap>
+        <IpPopconfirm
+        v-model="popTop"
+        title="上方"
+        placement="top">
+          <template #trigger><Button variant="secondary" size="sm">top</Button></template>
+        </IpPopconfirm>
+        <IpPopconfirm
+          v-model="popBottom"
+          title="下方"
+          placement="bottom">
+          <template #trigger><Button variant="secondary" size="sm">bottom</Button></template>
+        </IpPopconfirm>
+        <IpPopconfirm
+          v-model="popLeft"
+          title="左侧"
+          placement="left">
+          <template #trigger><Button variant="secondary" size="sm">left</Button></template>
+        </IpPopconfirm>
+        <IpPopconfirm
+          v-model="popRight"
+          title="右侧"
+          placement="right">
+          <template #trigger><Button variant="secondary" size="sm">right</Button></template>
+        </IpPopconfirm>
+      </IpFlex>
+
+      <span class="preview-label">使用场景</span>
+      <p class="preview-prose">
+        用于删除、退出等不可逆操作的确认；与 Modal 的区别在于更轻量，适合内联触发。
+      </p>
+
+      <span class="preview-label">反面示例</span>
+      <ul class="preview-dont-list">
+        <li>
+          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
+          </svg>
+          需要填写表单或复杂决策时不要用 Popconfirm
+        </li>
+        <li>
+          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
+          </svg>
+          Popconfirm 不要嵌套使用
+        </li>
+        <li>
+          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
+          </svg>
+          高频操作不要每次都弹出确认（用 Toast 或直接执行）
+        </li>
+      </ul>
+
+      <svg class="hand-drawn-divider hand-drawn-divider--center" width="320" height="12" viewBox="0 0 320 12" fill="none" aria-hidden="true">
+        <path
+          d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
+              stroke="currentColor" stroke-width="1.5"
+              stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
+      </svg>
+    </section>
+
     <!-- ── Footer ── -->
     <footer class="preview-footer">
       <div class="preview-footer__row">
-        <span>IcePaw UI · v1.0.1 · 第二阶段</span>
+        <span>IcePaw UI · v1.1.0 · 第二阶段</span>
         <span>·</span>
         <a href="#button" @click.prevent="scrollTo('button')">设计令牌</a>
         <span>·</span>

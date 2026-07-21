@@ -707,7 +707,7 @@ function templateBgFg(tpl: AgentTemplate): { bg: string; fg: string } {
                       当前模式：Agent 可使用全部内置工具
                     </div>
                     <div v-else-if="enabledTools.length === 0" class="tools-hint tools-hint-warning">
-                      ⚠️ 未选中任何工具，Agent 将无法使用工具
+                      注意：未选中任何工具，Agent 将无法使用工具
                     </div>
                     <div v-else class="tools-hint">
                       已启用 {{ enabledTools.length }} / {{ AVAILABLE_TOOLS.length }} 个工具
