@@ -34,9 +34,7 @@ import {
   MoreHorizontal,
   Plus,
   Send,
-  Camera,
   Trash2,
-  User as UserIcon,
   Bot,
   Inbox,
   Sparkles,
@@ -44,7 +42,6 @@ import {
   Copy,
   Download,
   ChevronDown,
-  AlertTriangle,
   LogOut,
   Share2,
 } from 'lucide-vue-next'
