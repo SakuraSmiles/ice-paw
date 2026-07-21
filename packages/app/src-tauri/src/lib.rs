@@ -46,6 +46,7 @@ pub fn run() {
     tauri::Builder::default()
         // 仅保留 opener 业务插件
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         // 聊天全局状态（CancellationToken 注册表）
         .manage(harness::chat_state::ChatState::new())
         // 注：原 `tauri_plugin_stronghold::Builder::new(...).build()` 注册已移除。
@@ -89,7 +90,10 @@ pub fn run() {
             commands::preferences_cmd::set_preference,
             commands::project_cmd::list_projects,
             commands::project_cmd::create_project,
+            commands::project_cmd::create_project_with_agents,
             commands::project_cmd::update_project,
+            commands::project_cmd::update_project_full,
+            commands::project_cmd::set_project_agents,
             commands::project_cmd::delete_project,
             commands::project_cmd::reorder_projects,
             commands::project_cmd::add_project_agent,

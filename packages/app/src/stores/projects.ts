@@ -13,7 +13,7 @@
 import { computed, ref } from "vue";
 import { defineStore } from "pinia";
 import { bridge } from "../api/bridge";
-import type { Project, NewProject } from "../types";
+import type { Project, NewProject, ProjectMemberInput, ProjectPatch } from "../types";
 
 /** 默认项目的虚拟 ID（对应后端 project_id = NULL） */
 export const DEFAULT_PROJECT_ID = "__default__";
@@ -41,6 +41,7 @@ export const useProjectsStore = defineStore("projects", () => {
         name: "默认项目",
         description: "",
         icon: "folder",
+        workspace_path: null,
         sort_order: -1,
         created_at: "",
         updated_at: "",
@@ -79,22 +80,47 @@ export const useProjectsStore = defineStore("projects", () => {
     }
   }
 
-  /** 创建项目 */
+  /**
+   * 创建项目（推荐入口，自动写入初始 members）。
+   *
+   * @param input NewProject，包含 name/description/icon/workspace_path/agents
+   */
   async function create(input: NewProject): Promise<Project> {
-    const project = await bridge.projects.create(input);
+    const project = await bridge.projects.createWithAgents(input);
     projects.value.push(project);
     return project;
   }
 
-  /** 更新项目 */
+  /**
+   * 旧入口：部分更新项目（仅 name/description，向后兼容）。
+   */
   async function update(
     id: string,
     name?: string,
     description?: string,
-  ): Promise<void> {
+  ): Promise<Project> {
     const updated = await bridge.projects.update(id, name, description);
     const idx = projects.value.findIndex((p) => p.id === id);
     if (idx >= 0) projects.value[idx] = updated;
+    return updated;
+  }
+
+  /**
+   * 原子更新项目（字段 + 可选成员替换，推荐入口）。
+   *
+   * @param id      项目 ID
+   * @param patch   ProjectPatch（字段缺失=不改，null=清空，string=覆盖）
+   * @param members 可选成员列表（传了就整体替换，不传则不动）
+   */
+  async function updateFull(
+    id: string,
+    patch: ProjectPatch,
+    members?: ProjectMemberInput[] | null,
+  ): Promise<Project> {
+    const updated = await bridge.projects.updateFull(id, patch, members);
+    const idx = projects.value.findIndex((p) => p.id === id);
+    if (idx >= 0) projects.value[idx] = updated;
+    return updated;
   }
 
   /** 删除项目 */
@@ -106,21 +132,46 @@ export const useProjectsStore = defineStore("projects", () => {
     }
   }
 
-  /** 添加 Agent 到项目 */
+  /**
+   * 编辑场景：整体替换项目成员。
+   * 走单次 invoke，事务保证原子性；本地单点更新避免 loadAll 全量刷新。
+   */
+  async function setAgents(
+    projectId: string,
+    members: ProjectMemberInput[],
+  ): Promise<void> {
+    await bridge.projects.setAgents(projectId, members);
+    const p = projects.value.find((p) => p.id === projectId);
+    if (p) {
+      p.agents = members.map((m) => ({
+        agent_id: m.agent_id,
+        role: m.role,
+      }));
+    }
+  }
+
+  /** 添加 Agent 到项目（细粒度入口，弹窗主流程不走） */
   async function addAgent(
     projectId: string,
     agentId: string,
     role: string = "member",
   ): Promise<void> {
     await bridge.projects.addAgent(projectId, agentId, role);
-    // 重新加载该项目
-    await loadAll();
+    // 本地单点更新，避免全量 loadAll 导致 UI 闪烁
+    const proj = projects.value.find((p) => p.id === projectId);
+    if (proj) {
+      proj.agents.push({ agent_id: agentId, role });
+    }
   }
 
-  /** 从项目移除 Agent */
+  /** 从项目移除 Agent（细粒度入口） */
   async function removeAgent(projectId: string, agentId: string): Promise<void> {
     await bridge.projects.removeAgent(projectId, agentId);
-    await loadAll();
+    // 本地单点更新，避免全量 loadAll 导致 UI 闪烁
+    const proj = projects.value.find((p) => p.id === projectId);
+    if (proj) {
+      proj.agents = proj.agents.filter((a) => a.agent_id !== agentId);
+    }
   }
 
   /** 排序 */
@@ -150,7 +201,9 @@ export const useProjectsStore = defineStore("projects", () => {
     setCurrent,
     create,
     update,
+    updateFull,
     remove,
+    setAgents,
     addAgent,
     removeAgent,
     reorder,

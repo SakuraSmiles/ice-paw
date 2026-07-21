@@ -4,7 +4,7 @@
 // 职责：
 //   - 顶部横条展示当前项目名 + 图标 + 下拉箭头
 //   - 点击展开下拉列表（absolute 定位）
-//   - 下拉项：第一项固定为「📋 默认项目」，后续为用户创建的项目
+//   - 下拉项：第一项固定为「默认项目」，后续为用户创建的项目
 //   - 底部：「+ 新建项目」内联创建、「管理项目 →」跳转路由
 //   - 点击切换项目 → projectsStore.setCurrent(id) → 触发会话列表重新加载
 //
@@ -13,7 +13,7 @@
 
 import { computed, ref, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
-import { ChevronDown, FolderClosed, Plus, ArrowRight } from "lucide-vue-next";
+import { ChevronDown, FolderClosed, Plus, ArrowRight, Clipboard } from "lucide-vue-next";
 import { useProjectsStore, DEFAULT_PROJECT_ID } from "../../stores/projects";
 import { useToast } from "../../composables/useToast";
 import type { Project } from "../../types";
@@ -164,7 +164,7 @@ onUnmounted(() => {
           @click="pick(DEFAULT_PROJECT_ID)"
         >
           <div class="item-row">
-            <span class="item-icon">📋</span>
+            <Clipboard :size="16" class="item-icon-lucide" aria-hidden="true" />
             <div class="item-text">
               <span class="item-name">默认项目</span>
               <span class="item-desc">未分配项目的会话</span>
