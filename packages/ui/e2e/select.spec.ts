@@ -14,27 +14,31 @@
  *
  * 预览站：必须运行于 http://localhost:5173
  * 夹具：/test/fixtures
+ *
+ * 注意：Select 弹层使用 <Teleport to="body">，因此 popover/listbox 不在
+ * 组件 wrapper 的 DOM 子树内。需要用 page.locator('.ip-select__popover')
+ * 而非 wrap.getByRole('listbox') 来定位弹层。
  */
 
 import { test, expect } from '@playwright/test'
 
 /* ──────────────────────────────────────────────
- * Helper
+ * Helpers
  * ────────────────────────────────────────────── */
-async function openSelect(page: import('@playwright/test').Page): Promise<void> {
-  await page.getByTestId('select-basic-wrap').getByRole('combobox').click()
+
+/** 基础 Select 的 trigger */
+function basicTrigger(page: import('@playwright/test').Page) {
+  return page.getByTestId('select-basic-wrap').locator('[role="combobox"]')
 }
 
-function selectLocator(page: import('@playwright/test').Page) {
-  return page.getByTestId('select-basic-wrap').getByRole('combobox')
+/** 基础 Select 的 popover（Teleport 到 body，需跨 DOM 层级查找） */
+function basicPopover(page: import('@playwright/test').Page) {
+  return page.locator('.ip-select__popover').first()
 }
 
-function popoverLocator(page: import('@playwright/test').Page) {
-  return page.getByTestId('select-basic-wrap').getByRole('listbox')
-}
-
-function optionLocator(page: import('@playwright/test').Page, label: string) {
-  return page.getByTestId('select-basic-wrap').getByRole('option', { name: label })
+/** 基础 Select 内指定选项 */
+function basicOption(page: import('@playwright/test').Page, label: string) {
+  return page.locator('.ip-select__option', { hasText: label }).first()
 }
 
 /* ──────────────────────────────────────────────
@@ -49,27 +53,28 @@ test.describe('Select — 基本交互', () => {
   })
 
   test('1. 点击 trigger 展开下拉面板', async ({ page }) => {
-    const trigger = selectLocator(page)
+    const trigger = basicTrigger(page)
     await trigger.click()
 
-    // 面板展开
-    const popover = popoverLocator(page)
+    // 面板展开（popover Teleport 到 body，需 page 级查找）
+    const popover = basicPopover(page)
     await expect(popover).toBeVisible()
+    await expect(popover).toHaveAttribute('role', 'listbox')
 
     // aria-expanded 状态
     await expect(trigger).toHaveAttribute('aria-expanded', 'true')
   })
 
   test('2. 点击选项 → 选中并关闭面板', async ({ page }) => {
-    const trigger = selectLocator(page)
-    const popover = popoverLocator(page)
+    const trigger = basicTrigger(page)
+    const popover = basicPopover(page)
 
     // 打开面板
     await trigger.click()
     await expect(popover).toBeVisible()
 
     // 点击选项 "友好"
-    await optionLocator(page, '友好').click()
+    await basicOption(page, '友好').click()
 
     // 面板关闭
     await expect(popover).not.toBeVisible()
@@ -80,8 +85,8 @@ test.describe('Select — 基本交互', () => {
   })
 
   test('3. 再次点击 trigger → 关闭面板', async ({ page }) => {
-    const trigger = selectLocator(page)
-    const popover = popoverLocator(page)
+    const trigger = basicTrigger(page)
+    const popover = basicPopover(page)
 
     // 打开
     await trigger.click()
@@ -93,20 +98,20 @@ test.describe('Select — 基本交互', () => {
   })
 
   test('4. 点击外部 → 关闭面板', async ({ page }) => {
-    const trigger = selectLocator(page)
-    const popover = popoverLocator(page)
+    const trigger = basicTrigger(page)
+    const popover = basicPopover(page)
 
     await trigger.click()
     await expect(popover).toBeVisible()
 
-    // 点击 body 外部区域
-    await page.click('body', { position: { x: 10, y: 10 } })
+    // 点击页面左上角空白区域（fixture-select section 之外）
+    await page.mouse.click(10, 10)
     await expect(popover).not.toBeVisible()
   })
 
   test('5. 按 Escape → 关闭面板', async ({ page }) => {
-    const trigger = selectLocator(page)
-    const popover = popoverLocator(page)
+    const trigger = basicTrigger(page)
+    const popover = basicPopover(page)
 
     await trigger.click()
     await expect(popover).toBeVisible()

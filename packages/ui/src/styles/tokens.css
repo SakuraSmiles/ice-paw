@@ -330,6 +330,14 @@
   --ip-icon-md:                      16px;
   --ip-icon-lg:                      20px;
 
+  /* ToolDrawer 组件级 token (icepaw-tool-drawer-specs.md §六) */
+  --ip-tool-drawer-toggle-h:         28px;
+  --ip-tool-drawer-badge-bg:         var(--ip-primary-50);
+  --ip-tool-drawer-badge-color:      var(--ip-primary-600);
+  --ip-tool-drawer-chip-h:           28px;
+  --ip-tool-drawer-chip-max-w:       140px;
+  --ip-tool-drawer-max-h:            280px;
+
   /* ------------------- 9. 语义色（独立 tone） ------------------- */
 
   /* success（亮色） */
@@ -482,6 +490,14 @@
   --ip-avatar-border-shadow:        inset 0 0 0 1px rgba(255, 255, 255, 0.06);
   --ip-color-text-placeholder:      var(--ip-gray-500);
 
+  /* Avatar overlay 暗色模式切换 */
+  --ip-avatar-overlay-light:        var(--ip-avatar-overlay-dark);
+  --ip-avatar-overlay-light-active: var(--ip-avatar-overlay-dark-active);
+
+  /* ToolDrawer 暗色覆盖 (icepaw-tool-drawer-specs.md §五) */
+  --ip-tool-drawer-badge-bg:         var(--ip-primary-900);
+  --ip-tool-drawer-badge-color:      var(--ip-primary-300);
+
   color-scheme: dark;
 }
 
@@ -530,6 +546,10 @@
     /* P0 暗色模式覆盖（system-prefers） */
     --ip-avatar-border-shadow:        inset 0 0 0 1px rgba(255, 255, 255, 0.06);
     --ip-color-text-placeholder:      var(--ip-gray-500);
+
+    /* ToolDrawer 暗色覆盖 (system-prefers) */
+    --ip-tool-drawer-badge-bg:        var(--ip-primary-900);
+    --ip-tool-drawer-badge-color:     var(--ip-primary-300);
 
     color-scheme: dark;
   }
@@ -658,4 +678,24 @@
 @keyframes ip-spinner-in {
   from { opacity: 0; transform: scale(0.5); }
   to   { opacity: 1; transform: scale(1); }
+}
+
+/* ------------------- ToolDrawer keyframes (icepaw-tool-drawer-specs.md §七) ------------------- */
+
+/* Tab 下划线入场 */
+@keyframes ip-tool-drawer-underline-in {
+  from { transform: scaleX(0.3); opacity: 0; }
+  to   { transform: scaleX(1); opacity: 1; }
+}
+
+/* 遮罩层 fade-in (窄屏 modal 使用) */
+@keyframes ip-overlay-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* 遮罩层 fade-out */
+@keyframes ip-overlay-out {
+  from { opacity: 1; }
+  to   { opacity: 0; }
 }

@@ -11,9 +11,27 @@
  *
  * 预览站：必须运行于 http://localhost:5173
  * 夹具：/test/fixtures
+ *
+ * 注意：DropdownMenu 弹层使用 <Teleport to="body">，因此 popover 不在
+ * wrapper 的 DOM 子树内。需要用 page.locator('.ip-dropdown__popover')
+ * 在页面级别查找弹层。
  */
 
 import { test, expect } from '@playwright/test'
+
+/* ──────────────────────────────────────────────
+ * Helpers
+ * ────────────────────────────────────────────── */
+
+/** Dropdown 的触发器 */
+function ddTrigger(page: import('@playwright/test').Page) {
+  return page.getByTestId('dropdown-divider-wrap').locator('.ip-dropdown__trigger')
+}
+
+/** Dropdown 的菜单（Teleport 到 body，需跨 DOM 层级查找） */
+function ddPopover(page: import('@playwright/test').Page) {
+  return page.locator('.ip-dropdown__popover').first()
+}
 
 /* ──────────────────────────────────────────────
  * Tests
@@ -26,9 +44,8 @@ test.describe('DropdownMenu — 基本交互', () => {
   })
 
   test('1. 点击触发器 → 菜单展开', async ({ page }) => {
-    const wrap = page.getByTestId('dropdown-divider-wrap')
-    const trigger = wrap.locator('.ip-dropdown__trigger')
-    const popover = wrap.locator('.ip-dropdown__popover')
+    const trigger = ddTrigger(page)
+    const popover = ddPopover(page)
 
     // 初始关闭
     await expect(popover).not.toBeVisible()
@@ -45,16 +62,16 @@ test.describe('DropdownMenu — 基本交互', () => {
     // trigger aria-expanded
     await expect(trigger).toHaveAttribute('aria-expanded', 'true')
 
-    // 有菜单项
+    // 有菜单项（7 个 item，3 个 divider/label）
     const items = popover.locator('.ip-dropdown__item')
     await expect(items).toHaveCount(7)
   })
 
   test('2. hover 菜单项 → 高亮', async ({ page }) => {
-    const wrap = page.getByTestId('dropdown-divider-wrap')
-    await wrap.locator('.ip-dropdown__trigger').click()
+    const trigger = ddTrigger(page)
+    const popover = ddPopover(page)
 
-    const popover = wrap.locator('.ip-dropdown__popover')
+    await trigger.click()
     await expect(popover).toBeVisible()
 
     // hover 第一个菜单项
@@ -66,10 +83,10 @@ test.describe('DropdownMenu — 基本交互', () => {
   })
 
   test('3. 点击菜单项 → 菜单关闭', async ({ page }) => {
-    const wrap = page.getByTestId('dropdown-divider-wrap')
-    await wrap.locator('.ip-dropdown__trigger').click()
+    const trigger = ddTrigger(page)
+    const popover = ddPopover(page)
 
-    const popover = wrap.locator('.ip-dropdown__popover')
+    await trigger.click()
     await expect(popover).toBeVisible()
 
     // 点击第一个菜单项 "复制"
@@ -80,10 +97,10 @@ test.describe('DropdownMenu — 基本交互', () => {
   })
 
   test('4. 分隔线验证', async ({ page }) => {
-    const wrap = page.getByTestId('dropdown-divider-wrap')
-    await wrap.locator('.ip-dropdown__trigger').click()
+    const trigger = ddTrigger(page)
+    const popover = ddPopover(page)
 
-    const popover = wrap.locator('.ip-dropdown__popover')
+    await trigger.click()
     await expect(popover).toBeVisible()
 
     // 分隔线存在且有 role=separator
@@ -97,23 +114,23 @@ test.describe('DropdownMenu — 基本交互', () => {
   })
 
   test('5. 点击外部 → 关闭', async ({ page }) => {
-    const wrap = page.getByTestId('dropdown-divider-wrap')
-    await wrap.locator('.ip-dropdown__trigger').click()
+    const trigger = ddTrigger(page)
+    const popover = ddPopover(page)
 
-    const popover = wrap.locator('.ip-dropdown__popover')
+    await trigger.click()
     await expect(popover).toBeVisible()
 
-    // 点击页面空白区域
-    await page.click('body', { position: { x: 10, y: 10 } })
+    // 点击页面左上角空白区域
+    await page.mouse.click(10, 10)
 
     await expect(popover).not.toBeVisible()
   })
 
   test('6. 按 Escape → 关闭', async ({ page }) => {
-    const wrap = page.getByTestId('dropdown-divider-wrap')
-    await wrap.locator('.ip-dropdown__trigger').click()
+    const trigger = ddTrigger(page)
+    const popover = ddPopover(page)
 
-    const popover = wrap.locator('.ip-dropdown__popover')
+    await trigger.click()
     await expect(popover).toBeVisible()
 
     await page.keyboard.press('Escape')

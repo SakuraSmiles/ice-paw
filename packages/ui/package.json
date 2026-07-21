@@ -45,6 +45,7 @@
   },
   "dependencies": {
     "@vueuse/core": "^11.0.0",
+    "cropperjs": "^2.1.1",
     "lucide-vue-next": "^1.0.0"
   },
   "devDependencies": {

@@ -5,9 +5,18 @@
 //   - 多行 textarea，自动增高（最多 6 行高度）
 //   - Enter 发送；Shift+Enter / Ctrl+Enter / Meta+Enter 换行
 //   - 右下发送按钮：默认显示 SendHorizontal 图标；流式中切换为 Square + 红色高亮
-//   - 模板芯片行（P2-4）：横向滚动，点击 chip → 选中并应用模板
-//   - @ 自动补全（P2-4）：输入 @ 触发模板补全 popover
-//   - 全部样式走 --ip-input-* Design Token，焦点态使用 --ip-shadow-focus 发光环
+//
+//   - IpToolDrawer（折叠/展开）：text 上方折叠条 + Tools
+//     - Templates tab：TemplatePicker（@ 自动补全 + 应用模板）
+//     - Tools tab：ToolConfigPanel（per-tool 勾选 + 总开关工具调用）
+//     - Model tab：ModelSelector（当前 Agent 模型展示 + 切换提示）
+//
+//   - 应用模板角标：textarea 右上角小角标（不再使用紫色胶囊）
+//   - 图片附件：toolbar 左侧 Paperclip 按钮 + 中间 28px chip 行（最多 4 个 + "+N"）
+//   - @ 自动补全 + / 命令面板占位文案（保留）
+//
+//   - 全部样式走 --ip-input-* / --ip-tool-drawer-* Design Token，
+//     焦点态使用 --ip-shadow-focus 发光环
 //   - 暗色模式：颜色由 token 自动覆盖
 //
 // props:
@@ -15,20 +24,26 @@
 //   - streaming:  是否正在流式生成
 //
 // emits:
-//   - send(content: string)  点击发送 / Enter 提交时
-//   - stop()                点击停止按钮时
+//   - send(content: string, contentBlocks?: ContentBlock[])  发送时
+//   - stop()                                                  停止生成
 
 import { computed, nextTick, ref, watch, useTemplateRef } from "vue";
-import { SendHorizontal, Square, Wrench, Library, Sparkles } from "lucide-vue-next";
+import { SendHorizontal, Square, Paperclip, X } from "lucide-vue-next";
+import { IpToolDrawer } from "@ice-paw/ui";
+import type { IpToolDrawerTab } from "@ice-paw/ui";
 import { useChatStore } from "../../stores/chat";
+import { useTemplatesStore } from "../../stores/templates";
 import { useConversationsStore } from "../../stores/conversations";
 import { useAgentsStore } from "../../stores/agents";
 import { bridge } from "../../api/bridge";
-import { useTemplatesStore } from "../../stores/templates";
-import { useImageFiles, type ImageItem } from "../../composables/useImageFiles";
+import {
+  ACCEPT_ATTR,
+  useImageFiles,
+  type ImageItem,
+} from "../../composables/useImageFiles";
 import TemplatePicker from "../template/TemplatePicker.vue";
-import ImagePicker from "./ImagePicker.vue";
-import ToolPopover from "./ToolPopover.vue";
+import ToolConfigPanel from "./ToolConfigPanel.vue";
+import ModelSelector from "./ModelSelector.vue";
 import type { ContentBlock } from "../../types";
 
 const props = defineProps<{
@@ -53,20 +68,14 @@ const agentsStore = useAgentsStore();
 const draft = ref<string>("");
 
 // ============================================================================
-// P2-2 多模态：待发送图片
+// P2-2 多模态：待发送图片（拆分自原 ImagePicker.vue → 仅保留核心逻辑）
 // ============================================================================
 
-/** 待发送图片列表（ImagePicker 受控） */
+/** 待发送图片列表 */
 const pendingImages = ref<ImageItem[]>([]);
 
-/** ImagePicker 的图片更新回调 */
-function onImagesChange(next: ImageItem[]): void {
-  pendingImages.value = next;
-}
-
-// ============================================================================
-// Task 3a: 粘贴上传 + 文件处理 composable
-// ============================================================================
+/** 隐藏的 file input 引用 */
+const fileInputRef = useTemplateRef<HTMLInputElement | null>("fileInputRef");
 
 const { processFiles } = useImageFiles(
   () => pendingImages.value,
@@ -74,6 +83,48 @@ const { processFiles } = useImageFiles(
     pendingImages.value = images;
   },
 );
+
+/** 当前 Agent 是否支持图片输入 */
+const supportsVision = computed<boolean>(
+  () => agentsStore.current?.supports_vision ?? false,
+);
+
+/** 附件按钮是否禁用：流式中 或 当前 Agent 不支持图片 */
+const imagePickerDisabled = computed<boolean>(
+  () => props.streaming || !supportsVision.value,
+);
+
+// 图片缩略图预览：超过上限的折叠进 +N 按钮
+const MAX_VISIBLE_CHIPS = 4;
+const visibleImages = computed<ImageItem[]>(() =>
+  pendingImages.value.slice(0, MAX_VISIBLE_CHIPS),
+);
+const overflowCount = computed<number>(() =>
+  Math.max(0, pendingImages.value.length - MAX_VISIBLE_CHIPS),
+);
+
+function triggerFilePicker(): void {
+  if (imagePickerDisabled.value) return;
+  fileInputRef.value?.click();
+}
+
+function onFileChange(e: Event): void {
+  const target = e.target as HTMLInputElement | null;
+  if (!target) return;
+  const files = target.files;
+  if (!files || files.length === 0) return;
+  const fileList = Array.from(files);
+  target.value = "";
+  void processFiles(fileList);
+}
+
+function removeImage(idx: number): void {
+  if (props.streaming) return;
+  if (idx < 0 || idx >= pendingImages.value.length) return;
+  const next = [...pendingImages.value];
+  next.splice(idx, 1);
+  pendingImages.value = next;
+}
 
 /** textarea paste 事件：检测剪贴板中的图片文件并添加 */
 function onPaste(e: ClipboardEvent): void {
@@ -87,26 +138,15 @@ function onPaste(e: ClipboardEvent): void {
     }
   }
   if (imageFiles.length > 0) {
-    e.preventDefault(); // 阻止图片以文本形式粘贴
+    e.preventDefault();
     void processFiles(imageFiles);
   }
 }
 
 // ============================================================================
-// Task 3a: supports_vision 联动
+// Textarea: 自动增高
 // ============================================================================
 
-/** 当前 Agent 是否支持图片输入 */
-const supportsVision = computed<boolean>(() => {
-  return agentsStore.current?.supports_vision ?? false;
-});
-
-/** ImagePicker 是否禁用：流式中 或 当前 Agent 不支持图片 */
-const imagePickerDisabled = computed<boolean>(
-  () => props.streaming || !supportsVision.value,
-);
-
-/** textarea DOM 引用 */
 const textareaRef = useTemplateRef<HTMLTextAreaElement | null>("textareaRef");
 
 /** 单行高度（与 line-height 一致） */
@@ -125,14 +165,8 @@ const maxHeightPx = LINE_HEIGHT_PX * MAX_ROWS + VERTICAL_PADDING_PX;
 const heightPx = ref<number>(LINE_HEIGHT_PX + VERTICAL_PADDING_PX);
 
 // ============================================================================
-// Task 3b: 工具 Popover
+// Task 3b: 工具 override（迁移至 ToolDrawer > Tools tab）
 // ============================================================================
-
-/** Popover 是否打开 */
-const toolPopoverOpen = ref<boolean>(false);
-
-/** Popover 定位样式 */
-const toolPopoverStyle = ref<Record<string, string>>({});
 
 /** 内置工具列表 */
 const BUILTIN_TOOLS = ["read_file", "list_directory"];
@@ -152,29 +186,14 @@ const toolOverride = computed<Record<string, boolean> | null>(() => {
   return conv?.toolsOverride ?? null;
 });
 
-/** 打开 Popover */
-function openToolPopover(): void {
+/** ToolConfigPanel 更新回调 */
+async function onToolOverrideUpdate(
+  value: Record<string, boolean> | null,
+): Promise<void> {
+  // 任意修改都意味着要开启工具调用
   if (!chatStore.toolsEnabled) {
-    // 总开关关闭时，先打开总开关
     chatStore.toolsEnabled = true;
   }
-  toolPopoverOpen.value = true;
-  // 定位到按钮上方
-  nextTick(() => {
-    const btn = document.querySelector(".btn-tool-toggle");
-    if (btn) {
-      const rect = btn.getBoundingClientRect();
-      toolPopoverStyle.value = {
-        position: "fixed",
-        left: `${rect.left}px`,
-        bottom: `${window.innerHeight - rect.top + 4}px`,
-      };
-    }
-  });
-}
-
-/** Popover 更新回调 */
-async function onToolOverrideUpdate(value: Record<string, boolean> | null): Promise<void> {
   const convId = conversationsStore.currentId;
   if (!convId) return;
   // 乐观更新本地会话
@@ -196,18 +215,39 @@ async function onToolOverrideUpdate(value: Record<string, boolean> | null): Prom
   }
 }
 
-/** Popover 关闭 */
-function onToolPopoverClose(): void {
-  toolPopoverOpen.value = false;
-}
+// ============================================================================
+// IpToolDrawer 状态（折叠/展开 + tabs）
+// ============================================================================
 
-// 切换会话时关闭 Popover
-watch(
-  () => conversationsStore.currentId,
-  () => {
-    toolPopoverOpen.value = false;
-  },
+const drawerOpen = ref<boolean>(false);
+const drawerActiveTab = ref<string>("templates");
+
+const drawerTabs = computed<IpToolDrawerTab[]>(() => [
+  { id: "templates", label: "模板" },
+  { id: "tools", label: "工具" },
+  { id: "model", label: "模型" },
+]);
+
+/** 当前 Agent 模型名（用于 Model tab 展示） */
+const currentModel = computed<string>(
+  () => agentsStore.current?.model ?? "",
 );
+
+const currentAgentName = computed<string>(
+  () => agentsStore.current?.name ?? "",
+);
+
+/** Tab 切换：切换到 Tools tab 时自动开启工具调用总开关 */
+function onDrawerTabChange(tabId: string): void {
+  drawerActiveTab.value = tabId;
+  if (tabId === "tools" && !chatStore.toolsEnabled) {
+    chatStore.toolsEnabled = true;
+  }
+  // 切换到非工具的 tab 时关闭 drawer（符合"浏览即关"的直觉）
+  if (tabId !== "tools" && tabId !== "templates" && tabId !== "model") {
+    drawerOpen.value = false;
+  }
+}
 
 // ============================================================================
 // 模板选择状态
@@ -216,8 +256,10 @@ watch(
 /** 当前选中的模板 ID（与 chip 行同步） */
 const selectedTemplateId = ref<string | null>(null);
 
-/** TemplatePicker DOM 引用 */
-const pickerRef = useTemplateRef<InstanceType<typeof TemplatePicker> | null>("pickerRef");
+/** TemplatePicker DOM 引用（@ 自动补全、变量弹窗） */
+const pickerRef = useTemplateRef<InstanceType<typeof TemplatePicker> | null>(
+  "pickerRef",
+);
 
 /**
  * @ 自动补全：检测 textarea 内容末尾的 @xxx 模式。
@@ -226,19 +268,18 @@ const pickerRef = useTemplateRef<InstanceType<typeof TemplatePicker> | null>("pi
 const atQuery = computed<{ match: string; index: number } | null>(() => {
   const text = draft.value;
   if (!text) return null;
-  // 匹配末尾的 @xxx（不含空白）
   const m = text.match(/(?:^|\s)@([^\s@]*)$/);
   if (!m || m.index === undefined) return null;
-  // 跳过前导空白的位置
-  return { match: m[1] ?? "", index: m.index + (m[0]!.length - m[1]!.length - 1) };
+  return {
+    match: m[1] ?? "",
+    index: m.index + (m[0]!.length - m[1]!.length - 1),
+  };
 });
 
-/** 是否处于 @ 自动补全态 */
 const atActive = computed<boolean>(() => atQuery.value !== null);
 
 watch(atActive, (active) => {
   if (active && atQuery.value) {
-    // 估算位置：textarea 右下角
     void nextTick(() => {
       const el = textareaRef.value;
       if (!el) return;
@@ -255,11 +296,7 @@ watch(atActive, (active) => {
 
 watch(atQuery, (q) => {
   if (q && atActive.value) {
-    pickerRef.value?.openAutocomplete(
-      // 位置以 textarea 左下角为锚
-      computeAutocompleteAnchor(),
-      q.match,
-    );
+    pickerRef.value?.openAutocomplete(computeAutocompleteAnchor(), q.match);
   }
 });
 
@@ -270,14 +307,13 @@ function computeAutocompleteAnchor(): { x: number; y: number } {
   return { x: rect.left + 16, y: rect.top - 8 };
 }
 
-/** 监听 @ 键盘：上/下/Enter/Tab/Esc 由 picker 处理 */
+/** 键盘：@ 补全态优先让 picker 处理 */
 function onKeydown(e: KeyboardEvent): void {
   // @ 补全态下优先让 picker 处理
   if (atActive.value && pickerRef.value) {
     const handled = pickerRef.value.onAutocompleteKey(e);
     if (handled) {
       e.preventDefault();
-      // Enter 触发应用后，picker 关闭，textarea 文本需要去掉 @xxx
       if (e.key === "Enter" || e.key === "Tab") {
         stripAtQueryFromDraft();
       }
@@ -285,9 +321,7 @@ function onKeydown(e: KeyboardEvent): void {
     }
   }
   if (e.key !== "Enter") return;
-  // Shift+Enter / Ctrl+Enter / Cmd+Enter 走默认换行
   if (e.shiftKey || e.ctrlKey || e.metaKey) return;
-  // 纯 Enter 触发发送
   e.preventDefault();
   handleSend();
 }
@@ -305,15 +339,11 @@ function stripAtQueryFromDraft(): void {
 // 模板应用回调
 // ============================================================================
 
-/**
- * TemplatePicker 的 @apply 事件：
- * - 把模板信息存到 chat store
- * - draft 同步展示提示：「已应用模板：XXX（变量已填）」
- *   实际发送时由 sendMessage 携带 templateId + values 给后端
- */
-function onTemplateApply(payload: { templateId: string; values: Record<string, string> }): void {
+function onTemplateApply(payload: {
+  templateId: string;
+  values: Record<string, string>;
+}): void {
   chatStore.setAppliedTemplate(payload);
-  // 同步 chip 选中态
   selectedTemplateId.value = payload.templateId;
 }
 
@@ -325,13 +355,9 @@ function onTemplateSelectedChange(id: string | null): void {
 }
 
 // ============================================================================
-// expose：供父组件填入 draft（模板卡片点击）
+// expose：供父组件填入 draft（模板卡片点击、WelcomeInput 等）
 // ============================================================================
 
-/**
- * 外部设置 textarea 的 draft 内容（模板卡片点击时调用）。
- * 自动触发 autosize + 聚焦。
- */
 function setDraft(content: string): void {
   draft.value = content;
   void nextTick(() => {
@@ -345,17 +371,10 @@ function setDraft(content: string): void {
   });
 }
 
-/**
- * 外部设置图片列表（拖拽上传时由 ChatPage 调用）。
- */
 function setImages(images: ImageItem[]): void {
   pendingImages.value = images;
 }
 
-/**
- * 外部追加文件（拖拽上传时由 ChatPage 调用）。
- * 复用 useImageFiles 的 processFiles 逻辑。
- */
 async function addFiles(files: File[]): Promise<void> {
   await processFiles(files);
 }
@@ -366,9 +385,6 @@ defineExpose({ setDraft, setImages, addFiles });
 // autosize
 // ============================================================================
 
-/**
- * 根据 draft 内容计算 textarea 的高度（向上增高，封顶为 maxHeightPx）。
- */
 function autosize(): void {
   const el = textareaRef.value;
   if (!el) return;
@@ -379,28 +395,46 @@ function autosize(): void {
   heightPx.value = h;
 }
 
-/** 监听 draft 变化触发 autosize；用户编辑时清空已应用模板 */
 watch(draft, () => {
   void nextTick(autosize);
-  // 用户编辑消息 → 清空已应用模板（避免发送时携带与文本不匹配的模板）
+  // 用户编辑消息 → 清空已应用模板
   if (chatStore.appliedTemplate) {
     chatStore.setAppliedTemplate(null);
   }
 });
 
 // ============================================================================
-// 实际是否禁用输入（流中或外层禁用时） */
-const inputDisabled = computed<boolean>(() => props.disabled || props.streaming);
+// 应用模板角标（textarea 右上角，绝对定位）
+// ============================================================================
 
-/** 提交（Enter） */
+const appliedHint = computed<string | null>(() => {
+  const tpl = chatStore.appliedTemplate;
+  if (!tpl) return null;
+  const meta = templatesStore.byId(tpl.templateId);
+  if (!meta) return null;
+  const filledCount = Object.keys(tpl.values).filter(
+    (k) => (tpl.values[k] ?? "").length > 0,
+  ).length;
+  if (filledCount > 0) {
+    return `已应用：${meta.name}（${filledCount} 个变量已填）`;
+  }
+  return `已应用：${meta.name}`;
+});
+
+// ============================================================================
+// 提交
+// ============================================================================
+
+const inputDisabled = computed<boolean>(
+  () => props.disabled || props.streaming,
+);
+
 function handleSend(): void {
   if (inputDisabled.value) return;
   const v = draft.value.trim();
   const hasImages = pendingImages.value.length > 0;
-  // 必须提供文本或图片二者之一
   if (!v && !hasImages) return;
 
-  // P2-2 多模态：若有图片则构造 content_blocks，否则只发文本
   if (hasImages) {
     const blocks: ContentBlock[] = [];
     if (v) blocks.push({ type: "text", text: v });
@@ -412,180 +446,235 @@ function handleSend(): void {
     emit("send", v);
   }
 
-  // 重置
   draft.value = "";
   pendingImages.value = [];
   void nextTick(autosize);
-  // 清空 chip 选中 + 应用模板
   selectedTemplateId.value = null;
   chatStore.setAppliedTemplate(null);
 }
 
-/** 工具栏发送按钮点击 */
 function onSendClick(): void {
   handleSend();
 }
 
-/** 工具栏停止按钮点击 */
 function onStopClick(): void {
   emit("stop");
 }
 
-/** 发送按钮是否禁用（无文本且无图片、或外层禁用） */
 const sendDisabled = computed<boolean>(
   () =>
     inputDisabled.value ||
     (draft.value.trim().length === 0 && pendingImages.value.length === 0),
 );
 
-/** 已应用模板的展示文本（chip 旁的小提示） */
-const appliedHint = computed<string | null>(() => {
-  const tpl = chatStore.appliedTemplate;
-  if (!tpl) return null;
-  const meta = templatesStore.byId(tpl.templateId);
-  if (!meta) return null;
-  const filled = Object.keys(tpl.values).filter(
-    (k) => (tpl.values[k] ?? "").length > 0,
-  );
-  return filled.length > 0 ? `${meta.name}（${filled.length} 个变量已填）` : meta.name;
+/** textarea 占位文案（不同状态下不同） */
+const placeholderText = computed<string>(() => {
+  if (props.streaming) return "生成中…";
+  return "输入消息，Enter 发送，Shift+Enter 换行（@ 选模板 / 选命令）";
 });
+
+// ============================================================================
+// 切换会话时关闭 drawer
+// ============================================================================
+
+watch(
+  () => conversationsStore.currentId,
+  () => {
+    drawerOpen.value = false;
+    selectedTemplateId.value = null;
+    chatStore.setAppliedTemplate(null);
+  },
+);
 </script>
 
 <template>
   <div
-    :class="['chat-input', { 'chat-input-disabled': disabled, 'chat-input-streaming': streaming }]"
+    :class="[
+      'ip-chat-input',
+      {
+        'ip-chat-input--disabled': disabled,
+        'ip-chat-input--streaming': streaming,
+      },
+    ]"
   >
-    <!-- 模板芯片行 -->
-    <div class="picker-area">
-      <TemplatePicker
-        ref="pickerRef"
-        :selected-id="selectedTemplateId"
-        @update:selected-id="onTemplateSelectedChange"
-        @apply="onTemplateApply"
+    <!-- =================================================================== -->
+    <!-- ToolDrawer：textarea 上方折叠抽屉（Templates / Tools / Model）       -->
+    <!-- =================================================================== -->
+    <IpToolDrawer
+      v-model:open="drawerOpen"
+      :active-tab="drawerActiveTab"
+      :tabs="drawerTabs"
+      :disabled="streaming"
+      @tab-change="onDrawerTabChange"
+    >
+      <template #tab-templates>
+        <TemplatePicker
+          ref="pickerRef"
+          :selected-id="selectedTemplateId"
+          @update:selected-id="onTemplateSelectedChange"
+          @apply="onTemplateApply"
+        />
+      </template>
+      <template #tab-tools>
+        <ToolConfigPanel
+          :available-tools="availableTools"
+          :tool-override="toolOverride"
+          @update:tool-override="onToolOverrideUpdate"
+        />
+      </template>
+      <template #tab-model>
+        <ModelSelector
+          :current="currentModel"
+          :agent-name="currentAgentName"
+        />
+      </template>
+    </IpToolDrawer>
+
+    <!-- =================================================================== -->
+    <!-- textarea + applied-hint 角标（右上角）                                -->
+    <!-- =================================================================== -->
+    <div class="textarea-wrapper">
+      <textarea
+        ref="textareaRef"
+        v-model="draft"
+        class="textarea"
+        :placeholder="placeholderText"
+        :disabled="inputDisabled"
+        rows="1"
+        :style="{ height: `${heightPx}px` }"
+        :maxlength="20000"
+        @keydown="onKeydown"
+        @paste="onPaste"
       />
+      <span
+        v-if="appliedHint && !streaming"
+        class="textarea-badge"
+        :title="appliedHint"
+      >
+        {{ appliedHint }}
+      </span>
     </div>
 
-    <!-- 已应用模板的提示 -->
-    <div v-if="appliedHint && !streaming" class="applied-hint">
-      <Sparkles :size="12" class="shrink-0" aria-hidden="true" /> 已应用：{{ appliedHint }}
-    </div>
-
-    <!-- P2-2 多模态：图片选择器（附件按钮 + 缩略图列表） -->
-    <ImagePicker
-      :images="pendingImages"
-      :disabled="imagePickerDisabled"
-      @update:images="onImagesChange"
-    />
-
-    <textarea
-      ref="textareaRef"
-      v-model="draft"
-      class="textarea"
-      :placeholder="streaming ? '生成中...' : '输入消息，回车发送，Shift+Enter 换行（输入 @ 触发模板）'"
-      :disabled="inputDisabled"
-      rows="1"
-      :style="{ height: `${heightPx}px` }"
-      :maxlength="20000"
-      @keydown="onKeydown"
-      @paste="onPaste"
-    />
+    <!-- =================================================================== -->
+    <!-- toolbar: [Paperclip] [chip][chip]…[+N] [spacer] [发送/停止]            -->
+    <!-- =================================================================== -->
     <div class="toolbar">
-      <div class="toolbar-left">
-        <!-- Task 3b: 工具按钮 → Popover -->
-        <button
-          class="btn-tool-toggle"
-          :class="{ 'btn-tool-toggle-active': chatStore.toolsEnabled }"
-          type="button"
-          :title="chatStore.toolsEnabled ? '已开启工具调用（点击配置）' : '开启工具调用（点击配置）'"
-          :aria-label="chatStore.toolsEnabled ? '配置工具调用' : '开启工具调用'"
-          :aria-pressed="chatStore.toolsEnabled"
-          @click="openToolPopover"
+      <button
+        type="button"
+        class="btn-attach"
+        :disabled="imagePickerDisabled"
+        :title="
+          imagePickerDisabled
+            ? !supportsVision
+              ? '当前 Agent 不支持图片输入'
+              : '生成中，无法添加'
+            : '添加图片（最多 20 张，单张 5MB）'
+        "
+        aria-label="添加附件"
+        @click="triggerFilePicker"
+      >
+        <Paperclip :size="16" aria-hidden="true" />
+      </button>
+
+      <!-- 图片 chip 行（最多 4 个 + "+N"） -->
+      <div
+        v-if="pendingImages.length > 0"
+        class="image-chips"
+        :aria-label="`已添加 ${pendingImages.length} 张图片`"
+      >
+        <div
+          v-for="(img, idx) in visibleImages"
+          :key="img.preview"
+          class="image-chip"
         >
-          <Wrench :size="14" aria-hidden="true" />
-          <span class="tool-toggle-label">工具</span>
-        </button>
-        <!-- Task 3b: Popover 浮层 -->
-        <Teleport to="body">
-          <div v-if="toolPopoverOpen" :style="toolPopoverStyle">
-            <ToolPopover
-              :available-tools="availableTools"
-              :tool-override="toolOverride"
-              @update:tool-override="onToolOverrideUpdate"
-              @close="onToolPopoverClose"
-            />
-          </div>
-        </Teleport>
-        <!-- Phase 1 disabled: 模板库按钮占位 -->
+          <img class="image-chip__thumb" :src="img.preview" alt="" />
+          <span class="image-chip__name" :title="img.fileName ?? `图片 ${idx + 1}`">
+            {{ img.fileName ?? `图片 ${idx + 1}` }}
+          </span>
+          <button
+            type="button"
+            class="image-chip__remove"
+            :disabled="streaming"
+            :aria-label="`移除第 ${idx + 1} 张图片`"
+            @click="removeImage(idx)"
+          >
+            <X :size="10" aria-hidden="true" />
+          </button>
+        </div>
         <button
-          class="btn-tool-toggle"
+          v-if="overflowCount > 0"
           type="button"
+          class="image-chip image-chip--more"
+          :title="`还有 ${overflowCount} 张图片`"
+          :aria-label="`还有 ${overflowCount} 张图片`"
           disabled
-          title="Phase 1.1 可用"
-          aria-label="模板库（即将推出）"
         >
-          <Library :size="14" aria-hidden="true" />
-          <span class="tool-toggle-label">模板库</span>
-        </button>
-        <span class="hint-text">
-          <template v-if="streaming">生成中 · 可随时停止</template>
-          <template v-else>Enter 发送 · Shift+Enter 换行 · @ 选模板</template>
-        </span>
-      </div>
-      <div class="toolbar-right">
-        <button
-          v-if="streaming"
-          class="btn btn-stop"
-          type="button"
-          title="停止生成"
-          aria-label="停止生成"
-          @click="onStopClick"
-        >
-          <Square :size="14" aria-hidden="true" />
-          <span class="btn-label">停止</span>
-        </button>
-        <button
-          v-else
-          class="btn btn-send"
-          type="button"
-          :disabled="sendDisabled"
-          title="发送（Enter）"
-          aria-label="发送消息"
-          @click="onSendClick"
-        >
-          <SendHorizontal :size="16" aria-hidden="true" />
-          <span class="btn-label">发送</span>
+          +{{ overflowCount }}
         </button>
       </div>
+
+      <div class="toolbar-spacer" />
+
+      <button
+        v-if="streaming"
+        type="button"
+        class="btn btn-stop"
+        title="停止生成"
+        aria-label="停止生成"
+        @click="onStopClick"
+      >
+        <Square :size="14" aria-hidden="true" />
+        <span class="btn-label">停止</span>
+      </button>
+      <button
+        v-else
+        type="button"
+        class="btn btn-send"
+        :disabled="sendDisabled"
+        title="发送（Enter）"
+        aria-label="发送消息"
+        @click="onSendClick"
+      >
+        <SendHorizontal :size="16" aria-hidden="true" />
+        <span class="btn-label">发送</span>
+      </button>
     </div>
+
+    <!-- 隐藏的 file input（驱动附件按钮 click） -->
+    <input
+      ref="fileInputRef"
+      type="file"
+      :accept="ACCEPT_ATTR"
+      multiple
+      class="file-input-hidden"
+      aria-hidden="true"
+      tabindex="-1"
+      @change="onFileChange"
+    />
   </div>
 </template>
 
 <style scoped>
-.chat-input {
+/* ============================================================================
+ * ChatInput 视觉实现
+ * 规范：icepaw-tool-drawer-specs.md §三
+ * ========================================================================== */
+
+.ip-chat-input {
   display: flex;
   flex-direction: column;
+  gap: var(--ip-spacing-2);
   border-top: 1px solid var(--ip-color-border-default);
   background-color: var(--ip-color-bg-secondary);
-  padding: 12px 16px;
+  padding: var(--ip-spacing-3) var(--ip-spacing-4);
   flex-shrink: 0;
   position: relative;
 }
 
-.picker-area {
+/* ============ Textarea 容器（relative 给角标定位） ============ */
+.textarea-wrapper {
+  position: relative;
   width: 100%;
-  margin-bottom: var(--ip-spacing-2);
-}
-
-.applied-hint {
-  display: inline-flex;
-  align-items: center;
-  margin-bottom: var(--ip-spacing-2);
-  padding: 4px 10px;
-  font-size: var(--ip-text-caption-size);
-  color: var(--ip-primary-700, #1d4ed8);
-  background: var(--ip-primary-100, #dbeafe);
-  border-radius: var(--ip-radius-sm);
-  align-self: flex-start;
 }
 
 .textarea {
@@ -628,31 +717,146 @@ const appliedHint = computed<string | null>(() => {
   cursor: not-allowed;
 }
 
+/* ============ Applied-hint 角标（textarea 右上角） ============ */
+.textarea-badge {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  padding: 2px 8px;
+  font-size: var(--ip-text-caption-size);
+  font-weight: var(--ip-font-weight-medium);
+  color: var(--ip-tool-drawer-badge-color);
+  background: var(--ip-tool-drawer-badge-bg);
+  border-radius: var(--ip-radius-sm);
+  z-index: 1;
+  pointer-events: none;
+  white-space: nowrap;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ============ Toolbar ============ */
 .toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  margin-top: 10px;
+  gap: var(--ip-spacing-2);
   min-height: 32px;
 }
 
-.toolbar-left {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.toolbar-spacer {
+  flex: 1;
 }
 
-.hint-text {
-  font-size: var(--ip-text-caption-size);
+/* ============ Paperclip 附件按钮 ============ */
+.btn-attach {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
   color: var(--ip-color-text-tertiary);
+  background: transparent;
+  border: none;
+  border-radius: var(--ip-radius-sm);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: var(--ip-transition-colors);
 }
 
-.toolbar-right {
+.btn-attach:hover:not(:disabled) {
+  color: var(--ip-color-text-secondary);
+  background: var(--ip-color-bg-tertiary);
+}
+
+.btn-attach:focus-visible {
+  outline: none;
+  box-shadow: var(--ip-shadow-focus);
+}
+
+.btn-attach:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ============ 图片 chip 行（28px 高） ============ */
+.image-chips {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: var(--ip-spacing-1_5);
+  flex: 1;
+  overflow: hidden;
 }
 
+.image-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ip-spacing-1);
+  height: var(--ip-tool-drawer-chip-h, 28px);
+  padding: 0 4px 0 8px;
+  max-width: var(--ip-tool-drawer-chip-max-w, 140px);
+  background: var(--ip-color-bg-tertiary);
+  border: 1px solid var(--ip-color-border-default);
+  border-radius: var(--ip-radius-sm);
+  flex-shrink: 0;
+  transition: border-color var(--ip-duration-fast) var(--ip-ease-out);
+}
+
+.image-chip:hover {
+  border-color: var(--ip-color-border-strong);
+}
+
+.image-chip__thumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 3px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.image-chip__name {
+  font-size: var(--ip-text-body-sm-size);
+  color: var(--ip-color-text-secondary);
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.image-chip__remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  color: var(--ip-color-text-tertiary);
+  background: transparent;
+  border: none;
+  border-radius: var(--ip-radius-sm);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color var(--ip-duration-fast) var(--ip-ease-out);
+}
+
+.image-chip__remove:hover {
+  color: var(--ip-danger-base);
+}
+
+.image-chip--more {
+  padding: 0 8px;
+  font-size: var(--ip-text-caption-size);
+  font-weight: var(--ip-font-weight-medium);
+  color: var(--ip-color-text-secondary);
+  cursor: not-allowed;
+  justify-content: center;
+  gap: 0;
+  opacity: 0.7;
+}
+
+/* ============ 发送 / 停止按钮 ============ */
 .btn {
   display: inline-flex;
   align-items: center;
@@ -721,57 +925,27 @@ const appliedHint = computed<string | null>(() => {
   border-color: var(--ip-danger-active);
 }
 
-.chat-input-streaming .textarea {
+.ip-chat-input--streaming .textarea {
   border-color: var(--ip-color-border-default);
 }
 
-/* P2-1: 工具开关按钮 */
-.btn-tool-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  appearance: none;
-  height: 28px;
-  padding: 0 8px;
-  font-size: var(--ip-text-caption-size);
-  font-weight: var(--ip-font-weight-medium);
-  font-family: inherit;
-  border-radius: var(--ip-radius-sm);
-  border: 1px solid var(--ip-color-border-default);
-  background: transparent;
-  color: var(--ip-color-text-tertiary);
-  cursor: pointer;
-  transition: var(--ip-transition-colors);
+/* ============ 流式 / 禁用 状态 ============ */
+.ip-chat-input--disabled {
+  opacity: 0.6;
+  pointer-events: none;
 }
 
-.btn-tool-toggle:hover {
-  border-color: var(--ip-color-border-strong);
-  color: var(--ip-color-text-secondary);
-}
-
-.btn-tool-toggle-active {
-  border-color: var(--ip-primary-600);
-  background: var(--ip-primary-100, #dbeafe);
-  color: var(--ip-primary-700, #1d4ed8);
-}
-
-.btn-tool-toggle-active:hover {
-  border-color: var(--ip-primary-600);
-  color: var(--ip-primary-700, #1d4ed8);
-}
-
-/* 停用状态的按钮（模板库占位） */
-.btn-tool-toggle:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.btn-tool-toggle:disabled:hover {
-  border-color: var(--ip-color-border-default);
-  color: var(--ip-color-text-tertiary);
-}
-
-.tool-toggle-label {
-  line-height: 1;
+/* ============ 隐藏的 file input ============ */
+.file-input-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+  pointer-events: none;
 }
 </style>

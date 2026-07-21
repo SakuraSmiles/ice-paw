@@ -118,6 +118,14 @@ export type {
   PopconfirmTrigger as IpPopconfirmTrigger,
 } from './components/popconfirm/types'
 
+/* ToolDrawer（规范 icepaw-tool-drawer-specs.md） */
+export { ToolDrawer as IpToolDrawer } from './components/tool-drawer'
+export type {
+  ToolDrawerProps as IpToolDrawerProps,
+  ToolDrawerEmits as IpToolDrawerEmits,
+  ToolDrawerTab as IpToolDrawerTab,
+} from './components/tool-drawer/types'
+
 /* 布局组件（规范 icepaw-layout-system.md v1.1 P0） */
 export { Flex as IpFlex } from './components/flex'
 export type {
@@ -137,6 +145,21 @@ export type {
   ContainerMaxWidth,
   ContainerPadding,
 } from './components/container/types'
+
+/* IconPicker / AvatarUpload */
+export { IconPicker as IpIconPicker } from './components/icon-picker'
+export type {
+  IconPickerProps as IpIconPickerProps,
+  IconPickerEmits as IpIconPickerEmits,
+  IconPickerCategory as IpIconPickerCategory,
+} from './components/icon-picker/types'
+
+export { AvatarUpload as IpAvatarUpload } from './components/avatar-upload'
+export type {
+  AvatarUploadProps as IpAvatarUploadProps,
+  AvatarUploadEmits as IpAvatarUploadEmits,
+  AvatarUploadErrorInfo as IpAvatarUploadErrorInfo,
+} from './components/avatar-upload/types'
 
 /* 工具 */
 export {

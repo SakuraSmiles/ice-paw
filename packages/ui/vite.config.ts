@@ -3,7 +3,17 @@ import vue from '@vitejs/plugin-vue'
 import { resolve } from 'path'
 
 export default defineConfig({
-  plugins: [vue()],
+  plugins: [
+    vue({
+      template: {
+        compilerOptions: {
+          // cropperjs v2 使用 Web Components（<cropper-canvas> 等），
+          // Vue 模板编译器遇到这些标签会尝试解析为 Vue 组件导致运行时失败
+          isCustomElement: (tag) => tag.startsWith('cropper-'),
+        },
+      },
+    }),
+  ],
 
   // lib 模式构建
   build: {
