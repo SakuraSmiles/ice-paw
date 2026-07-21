@@ -103,25 +103,25 @@ function onTabKeydown(e: KeyboardEvent, idx: number): void {
   const tabs = props.tabs
   if (tabs.length === 0) return
 
-  let nextIdx = idx
+  let targetIdx: number
   switch (e.key) {
     case 'ArrowRight':
     case 'ArrowDown':
       e.preventDefault()
-      nextIdx = (idx + 1) % tabs.length
+      targetIdx = (idx + 1) % tabs.length
       break
     case 'ArrowLeft':
     case 'ArrowUp':
       e.preventDefault()
-      nextIdx = (idx - 1 + tabs.length) % tabs.length
+      targetIdx = (idx - 1 + tabs.length) % tabs.length
       break
     case 'Home':
       e.preventDefault()
-      nextIdx = 0
+      targetIdx = 0
       break
     case 'End':
       e.preventDefault()
-      nextIdx = tabs.length - 1
+      targetIdx = tabs.length - 1
       break
     case 'Enter':
     case ' ':
@@ -135,7 +135,7 @@ function onTabKeydown(e: KeyboardEvent, idx: number): void {
     default:
       return
   }
-  selectTab(tabs[nextIdx]!.id, nextIdx)
+  selectTab(tabs[targetIdx]!.id, targetIdx)
 }
 
 /* ----- max-height CSS var ----- */
@@ -193,7 +193,7 @@ defineExpose({ toggle, close: closeViaButton })
       >
         <!-- 头部栏 -->
         <div class="ip-tool-drawer__header">
-          <slot name="header" :tabs="tabs" :activeTab="activeTabId">
+          <slot name="header" :tabs="tabs" :active-tab="activeTabId">
             <!-- 关闭按钮 -->
             <button
               type="button"
@@ -260,7 +260,7 @@ defineExpose({ toggle, close: closeViaButton })
               </template>
 
               <!-- 兜底 slot -->
-              <slot v-if="$slots.body" name="body" :activeTab="activeTabId" />
+              <slot v-if="$slots.body" name="body" :active-tab="activeTabId" />
 
               <!-- 完全无内容时显示空状态 -->
               <div
