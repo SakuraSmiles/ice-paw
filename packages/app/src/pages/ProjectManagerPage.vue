@@ -94,7 +94,7 @@ async function handleDelete(project: Project): Promise<void> {
     toast.warning("默认项目无法删除");
     return;
   }
-  if (!confirm(`确认删除项目「${project.name}」？该操作不可撤销。`)) return;
+  if (!window.confirm(`确认删除项目「${project.name}」？该操作不可撤销。`)) return;
   try {
     await projectsStore.remove(project.id);
     if (selectedProjectId.value === project.id) {
