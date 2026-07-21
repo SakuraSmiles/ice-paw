@@ -18,7 +18,7 @@
 //   - stop()                用户点击停止时
 
 import { computed, nextTick, ref, watch, onMounted, useTemplateRef } from "vue";
-import { SendHorizontal, Square } from "lucide-vue-next";
+import { SendHorizontal, Square, Sparkles } from "lucide-vue-next";
 import { useAgentsStore } from "../../stores/agents";
 import { useConversationsStore } from "../../stores/conversations";
 import { useChatStore } from "../../stores/chat";
@@ -381,7 +381,7 @@ function onStopClick(): void {
       ]"
     >
       <div v-if="chatStore.appliedTemplate" class="welcome-applied-hint">
-        ✨ 已应用模板：{{ templatesStore.byId(chatStore.appliedTemplate.templateId)?.name }}
+        <Sparkles :size="12" class="shrink-0" aria-hidden="true" /> 已应用模板：{{ templatesStore.byId(chatStore.appliedTemplate.templateId)?.name }}
       </div>
       <!-- P2-2 多模态：图片选择器 -->
       <div class="welcome-image-picker">

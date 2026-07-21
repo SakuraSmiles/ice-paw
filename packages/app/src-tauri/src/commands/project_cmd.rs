@@ -1,5 +1,7 @@
 //! Project 相关 Tauri Commands（Phase 2）
 
+use std::path::PathBuf;
+
 use tauri::State;
 use uuid::Uuid;
 
@@ -8,6 +10,50 @@ use sqlx::SqlitePool;
 use crate::db::models::{Conversation, NewProject, ProjectAgentInput, Project, ProjectMember, ProjectPatch};
 use crate::db::repo;
 use crate::error::{AppError, AppResult};
+
+/// 安全规范化 `workspace_path` 输入（路径 containment 防御）
+///
+/// ## 行为
+/// - 空字符串 / 纯空白 → 返回 `None`（表示用户没填或想清空）
+/// - 非空字符串 → 调用 `PathBuf::canonicalize()`：
+///   - 路径已存在 → 返回 canonicalized 绝对路径
+///   - 路径不存在 → 返回原路径，不抛错（用户可能输入一个还未创建的目录）
+///
+/// ## 设计决策
+/// - **不做存在性校验**：用户可能输入"还没创建的路径"作为目标 workspace
+/// - **不做"必须在家目录/特定目录"约束**：这是桌面应用，用户的本机就是沙箱；
+///   任意绝对路径（包括外接硬盘、NAS 挂载点）都应允许
+/// - **仍然做 canonicalize**：消除 `..` / 软链接歧义，保证下游 path 比较稳定
+///
+/// ## 为什么不限制在某个根目录？
+/// 1. 跨平台家目录探测复杂（Windows 多盘符、macOS Sandbox、Linux mount points）
+/// 2. 用户可能用 WSL、外部 SSD、企业域账户，路径模式千变万化
+/// 3. 真正的安全边界是 Agent 工具调用时的运行时 containment
+///    （执行前必须做 resolved_path.starts_with(workspace_path) 校验）
+///
+/// ⚠️ **真正的安全边界在 Agent runtime**（tool executor）：
+/// 这里只保证存进 DB 的路径是规范的、不会含 `..` 段；
+/// 路径逃逸防护必须在 tool dispatch 链路里做，不能依赖 DB 内容。
+fn sanitize_workspace_path(raw: Option<&str>) -> AppResult<Option<String>> {
+    let Some(s) = raw else {
+        return Ok(None);
+    };
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+
+    let pb = PathBuf::from(trimmed);
+    match pb.canonicalize() {
+        // 已存在 → 用规范化的绝对路径（消除 .. / 软链接）
+        Ok(canonical) => {
+            let s = canonical.to_string_lossy().to_string();
+            Ok(Some(s))
+        }
+        // 不存在 → 用户可能尚未创建该目录，原样保留（不做存在性校验）
+        Err(_) => Ok(Some(trimmed.to_string())),
+    }
+}
 
 /// 列出全部项目（含每个项目下的 Agent 成员）
 #[tauri::command]
@@ -50,7 +96,7 @@ pub async fn create_project(
 #[tauri::command]
 pub async fn create_project_with_agents(
     pool: State<'_, SqlitePool>,
-    input: NewProject,
+    mut input: NewProject,
 ) -> AppResult<Project> {
     if input.name.trim().is_empty() {
         return Err(AppError::Validation("项目名称不能为空".into()));
@@ -68,6 +114,10 @@ pub async fn create_project_with_agents(
             )));
         }
     }
+
+    // workspace_path 规范化（消除 .. / 软链接），不校验存在性、不限制目录范围
+    // 详见 `sanitize_workspace_path` 的注释
+    input.workspace_path = sanitize_workspace_path(input.workspace_path.as_deref())?;
 
     let id = Uuid::new_v4().to_string();
     let row = repo::project::create_with_agents(pool.inner(), &id, &input).await?;
@@ -142,7 +192,7 @@ pub async fn update_project(
 pub async fn update_project_full(
     pool: State<'_, SqlitePool>,
     id: String,
-    patch: ProjectPatch,
+    mut patch: ProjectPatch,
     members: Option<Vec<ProjectAgentInput>>,
 ) -> AppResult<Project> {
     // 显式校验：传了 name 但为空
@@ -150,6 +200,17 @@ pub async fn update_project_full(
         if n.trim().is_empty() {
             return Err(AppError::Validation("项目名称不能为空".into()));
         }
+    }
+
+    // workspace_path 规范化（双层 Option）：
+    // - 外层 None → 用户没传，不更新；跳过
+    // - 外层 Some(内层 None) → 用户想清空（DB 写 NULL）；不做 canonicalize
+    // - 外层 Some(内层 Some(s)) → 用户给了路径；canonicalize 后写入
+    // 详见 `sanitize_workspace_path` 的注释
+    if let Some(ref inner) = patch.workspace_path {
+        let sanitized = sanitize_workspace_path(inner.as_deref())?;
+        // sanitize 已把空字符串归一为 None，对应"清空 workspace_path"语义
+        patch.workspace_path = Some(sanitized);
     }
 
     // 校验 members 中的 agent_id 不能重复（去重校验）

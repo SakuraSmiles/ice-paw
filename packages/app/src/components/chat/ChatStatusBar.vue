@@ -19,7 +19,7 @@
 
 import { computed, onUnmounted, ref, watch } from "vue";
 import { onClickOutside, useDebounceFn, useWindowSize } from "@vueuse/core";
-import { Clipboard, Check } from "lucide-vue-next";
+import { Clipboard, Check, TriangleAlert, Zap, ScrollText } from "lucide-vue-next";
 import { useChatStore } from "../../stores/chat";
 import { useConversationsStore } from "../../stores/conversations";
 
@@ -399,7 +399,7 @@ onUnmounted(() => {
               </div>
               <div v-if="finishReasonLabel" class="panel-row panel-row-warn">
                 <span class="panel-label">Finish</span>
-                <span class="panel-val">⚠ {{ finishReasonLabel }}</span>
+                <span class="panel-val"><TriangleAlert :size="12" class="inline" aria-hidden="true" /> {{ finishReasonLabel }}</span>
               </div>
             </div>
           </section>
@@ -414,10 +414,10 @@ onUnmounted(() => {
               </div>
               <div v-if="cachePercent !== null" class="panel-row">
                 <span class="panel-label">Cache</span>
-                <span class="panel-val panel-val-accent">⚡ {{ cachePercent }}%</span>
+                <span class="panel-val panel-val-accent"><Zap :size="12" class="inline" aria-hidden="true" /> {{ cachePercent }}%</span>
               </div>
               <div v-if="chatStore.lastSummary && chatStore.lastSummary.conversation_id === currentConversationId" class="panel-row">
-                <span class="panel-label">📜</span>
+                <span class="panel-label"><ScrollText :size="12" class="inline" aria-hidden="true" /></span>
                 <span class="panel-val">已压缩 {{ chatStore.lastSummary.original_count }} 条</span>
               </div>
             </div>
@@ -440,7 +440,7 @@ onUnmounted(() => {
             <div class="panel-grid">
               <div class="panel-row panel-row-warn">
                 <span class="panel-label">Retry</span>
-                <span class="panel-val">⚡ {{ retryReason }} · {{ chatStore.retryProgress }}</span>
+                <span class="panel-val"><Zap :size="12" class="inline" aria-hidden="true" /> {{ retryReason }} · {{ chatStore.retryProgress }}</span>
               </div>
             </div>
           </section>
