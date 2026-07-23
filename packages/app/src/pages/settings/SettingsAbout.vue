@@ -54,10 +54,6 @@ function toggleSysInfo(): void { showSysInfo.value = !showSysInfo.value; }
       <a class="link-item" href="https://github.com/nicepkg/ice-paw#readme" target="_blank" rel="noopener noreferrer">文档</a>
       <a class="link-item" href="https://github.com/nicepkg/ice-paw/issues" target="_blank" rel="noopener noreferrer">问题反馈</a>
     </div>
-    <div class="update-row">
-      <button class="btn-secondary" type="button" disabled>检查更新</button>
-      <span class="update-hint">当前已是最新版本</span>
-    </div>
   </div>
 </template>
 
@@ -101,19 +97,4 @@ function toggleSysInfo(): void { showSysInfo.value = !showSysInfo.value; }
 .links-section { display: flex; gap: var(--ip-spacing-4); margin-bottom: var(--ip-spacing-6); }
 .link-item { font-size: var(--ip-text-body-size); color: var(--ip-color-accent-text); text-decoration: none; transition: var(--ip-transition-colors); }
 .link-item:hover { text-decoration: underline; }
-.update-row { display: flex; align-items: center; gap: var(--ip-spacing-3); }
-.btn-secondary {
-  display: inline-flex; align-items: center; justify-content: center;
-  height: var(--ip-btn-h-sm); padding: 0 var(--ip-spacing-3);
-  font-size: var(--ip-text-body-sm-size); font-family: inherit; font-weight: var(--ip-font-weight-medium);
-  color: var(--ip-color-text-secondary); background: transparent;
-  border: 1px solid var(--ip-color-border-default); border-radius: var(--ip-btn-radius);
-  cursor: pointer; transition: var(--ip-transition-colors);
-}
-.btn-secondary:hover:not(:disabled) {
-  color: var(--ip-color-text-primary); border-color: var(--ip-color-border-hover);
-  background-color: var(--ip-color-bg-hover);
-}
-.btn-secondary:disabled { opacity: 0.5; cursor: not-allowed; }
-.update-hint { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
 </style>
