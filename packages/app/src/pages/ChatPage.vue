@@ -13,12 +13,14 @@
 //   - 错误：通过 Toast 提示（chatStore.error）
 
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import { useRouter } from "vue-router";
 import { useAgentsStore } from "../stores/agents";
 import { useConversationsStore } from "../stores/conversations";
 import { useChatStore } from "../stores/chat";
 import { useProjectsStore, DEFAULT_PROJECT_ID } from "../stores/projects";
 import { useToast } from "../composables/useToast";
 import { useToolAuth } from "../composables/useToolAuth";
+import { useAgentMeta } from "../composables/useAgentMeta";
 import { ACCEPT_MIMES } from "../composables/useImageFiles";
 import ChatHeader from "../components/chat/ChatHeader.vue";
 import MessageList from "../components/chat/MessageList.vue";
@@ -29,6 +31,7 @@ import ChatStatusBar from "../components/chat/ChatStatusBar.vue";
 import ToolAuthDialog from "../components/chat/ToolAuthDialog.vue";
 import TemplateCards from "../components/chat/TemplateCards.vue";
 import DragOverlay from "../components/chat/DragOverlay.vue";
+import WelcomePanel from "../components/chat/WelcomePanel.vue";
 
 const agentsStore = useAgentsStore();
 const conversationsStore = useConversationsStore();
@@ -36,6 +39,8 @@ const chatStore = useChatStore();
 const projectsStore = useProjectsStore();
 const toast = useToast();
 const toolAuth = useToolAuth();
+const agentMeta = useAgentMeta();
+const router = useRouter();
 
 // ============================================================================
 // 派生状态
@@ -43,6 +48,16 @@ const toolAuth = useToolAuth();
 
 /** 当前是否有 Agent（用于三态分支的第一道门） */
 const hasAgents = computed<boolean>(() => agentsStore.hasAgents);
+
+/** 当前是否有已选中的 Agent（控制 WelcomePanel vs ProjectWelcome） */
+const hasAgent = computed<boolean>(() => !!agentsStore.currentId);
+
+/** 当前 Agent 的完整 meta */
+const currentAgentMeta = computed(() => {
+  const agent = agentsStore.current;
+  if (!agent) return null;
+  return agentMeta.getFullMeta(agent);
+});
 
 /** 当前是否有选中会话 */
 const hasConversation = computed<boolean>(() => !!conversationsStore.currentId);
@@ -248,6 +263,16 @@ function onTemplateSelect(content: string): void {
   chatInputRef.value?.setDraft(content);
 }
 
+/** WelcomePanel：用户点击 ScenarioCard → 只填入草稿，不发送 */
+function onUsePrompt(text: string): void {
+  chatInputRef.value?.setDraft(text);
+}
+
+/** WelcomePanel：用户点击创建 Agent */
+function onCreateAgent(): void {
+  void router.push({ name: "Agents" });
+}
+
 /** 是否显示模板卡片空状态（有会话但无消息且非加载中） */
 const showTemplateCards = computed<boolean>(
   () =>
@@ -347,7 +372,19 @@ function onDrop(e: DragEvent): void {
     <!-- 三态一：无 Agent → 首页内联创建 -->
     <InlineAgentCreate v-if="!hasAgents && !agentsStore.loading" />
 
-    <!-- 三态二：有 Agent 无会话 → ProjectWelcome（项目级欢迎页） -->
+    <!-- 三态二-a：有 Agent 无会话 → WelcomePanel（品牌化欢迎页，Wave 2） -->
+    <WelcomePanel
+      v-else-if="hasAgent && !hasConversation"
+      :agentName="agentsStore.current?.name ?? ''"
+      :modelName="agentsStore.current?.model ?? ''"
+      :agentMeta="currentAgentMeta"
+      @send="onSend"
+      @stop="onStop"
+      @use-prompt="onUsePrompt"
+      @create-agent="onCreateAgent"
+    />
+
+    <!-- 三态二-b：无 Agent 无会话 → ProjectWelcome（项目级欢迎页 fallback） -->
     <ProjectWelcome
       v-else-if="hasAgents && !hasConversation"
       @create="onProjectCreate"
