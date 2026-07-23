@@ -98,6 +98,7 @@ const ROWID_SENTINEL = -1;
  *   - loadingOlder      向上翻页 in-flight 标志
  *   - error             最近错误描述（供 Toast 显示）
  *   - lastSummary       M1.5: 最近一次 chat:summary-injected 事件 payload
+ *   - modelOverride     P0-3: 当前会话的 model override（null = 使用 Agent 默认）
  *
  * getters:
  *   - currentMessages   当前显示的消息列表（= messages.value；真实助手行由
@@ -113,6 +114,7 @@ const ROWID_SENTINEL = -1;
  *   - sendMessage(content)    发送用户消息并触发流式生成
  *   - stopGeneration()        主动停止当前会话的流式生成
  *   - clearError()            清空 error 字段
+ *   - setModelOverride(model) P0-3: 设置会话级 model override（null = 清除）
  */
 export const useChatStore = defineStore("chat", () => {
   // ============================================================================
@@ -192,6 +194,9 @@ export const useChatStore = defineStore("chat", () => {
 
   /** W2.4: 最近一次 round 的可观测性数据（token/轮次/耗时） */
   const lastRoundState = ref<ChatRoundStatePayload | null>(null);
+
+  /** P0-3: 当前会话的 model override（null = 使用 Agent 默认 model） */
+  const modelOverride = ref<string | null>(null);
 
   /** listen 返回的 unlisten 函数列表 */
   const unlistens: UnlistenFn[] = [];
@@ -599,6 +604,8 @@ export const useChatStore = defineStore("chat", () => {
       error.value = null;
       // M1.5: 切到「无会话」状态时清空摘要指示
       lastSummary.value = null;
+      // P0-3: 切到「无会话」状态时清空 model override
+      modelOverride.value = null;
       return;
     }
 
@@ -614,6 +621,10 @@ export const useChatStore = defineStore("chat", () => {
     if (lastSummary.value && lastSummary.value.conversation_id !== conversationId) {
       lastSummary.value = null;
     }
+
+    // P0-3: 切换会话时重置 model override（会话级 model 独立，
+    // 避免上一个会话选过的模型串扰新会话）
+    modelOverride.value = null;
 
     loading.value = true;
     error.value = null;
@@ -748,6 +759,8 @@ export const useChatStore = defineStore("chat", () => {
         trimmed,
         toolsEnabled.value,
         hasBlocks ? contentBlocks : undefined,
+        // P0-3: 透传 model override（null → Rust 侧走 Agent 默认）
+        modelOverride.value ?? undefined,
       );
       // 成功：保持乐观插入由 chat:start 替换真实 ID
     } catch (err) {
@@ -793,6 +806,18 @@ export const useChatStore = defineStore("chat", () => {
     error.value = null;
   }
 
+  /**
+   * P0-3: 设置会话级 model override。
+   *
+   * - `model = null`  → 清除 override，下次 sendMessage 走 Agent 默认 model
+   * - `model = "xxx"` → 下次 sendMessage 用该 model（仅本次会话，不改 Agent 配置）
+   *
+   * 切会话时由 `loadMessages` 自动清空，无需手动 reset。
+   */
+  function setModelOverride(model: string | null): void {
+    modelOverride.value = model;
+  }
+
   // ============================================================================
   // 返回
   // ============================================================================
@@ -812,7 +837,7 @@ export const useChatStore = defineStore("chat", () => {
     thinkingContent,
     toolsEnabled,
     toolResults,
-        // P2-3
+    // P2-3
     lastUsage,
     // M1.3 后半：会话累计 token（Σ）
     conversationTokenUsage,
@@ -825,6 +850,8 @@ export const useChatStore = defineStore("chat", () => {
     // P2 分页
     hasMoreOlder,
     loadingOlder,
+    // P0-3: 会话级 model override
+    modelOverride,
     // getters
     currentMessages,
     lastMessage,
@@ -837,5 +864,7 @@ export const useChatStore = defineStore("chat", () => {
     sendMessage,
     stopGeneration,
     clearError,
+    // P0-3
+    setModelOverride,
   };
 });

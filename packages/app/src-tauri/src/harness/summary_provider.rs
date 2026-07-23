@@ -100,6 +100,7 @@ impl SummaryProvider for LlmSummaryProvider {
                 None, // 摘要不启用工具
                 0.0,  // temperature = 0：摘要应稳定可复现
                 SUMMARY_MAX_TOKENS,
+                None, // 摘要固定走 Agent 默认 model（不受会话级 override 影响）
                 cancel.clone(),
             )
             .await?;

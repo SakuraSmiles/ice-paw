@@ -135,8 +135,14 @@ impl LlmProvider for OpenAiAdapter {
         tools: Option<Vec<ToolDef>>,
         temperature: f64,
         max_tokens: i32,
+        model: Option<&str>,
         cancel: CancellationToken,
     ) -> AppResult<Pin<Box<dyn Stream<Item = AppResult<ChatDelta>> + Send>>> {
+        // P0-3: 会话级 model override —— 优先使用调用方传入的 model，
+        // 否则回退到 Adapter 构造时绑定的默认 model（self.model）。
+        // 注意：不会改写 self.model，下次 None 调用仍走默认。
+        let effective_model = model.unwrap_or(&self.model);
+
         // 拼装请求 URL（智能识别 base_url 是否已含版本路径）
         let url = build_chat_url(&self.base_url);
 
@@ -163,7 +169,7 @@ impl LlmProvider for OpenAiAdapter {
         let tool_choice = if openai_tools.is_some() { Some("auto") } else { None };
 
         let body = ChatRequest {
-            model: &self.model,
+            model: effective_model,
             messages: openai_msgs,
             tools: openai_tools,
             tool_choice,

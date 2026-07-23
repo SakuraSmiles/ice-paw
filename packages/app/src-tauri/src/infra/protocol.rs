@@ -220,6 +220,11 @@ pub trait LlmProvider: Send + Sync {
     /// - `messages`：完整上下文（含 system / 历史 / 当前用户消息）
     /// - `tools`：可选的工具定义列表（None = 不启用工具调用）
     /// - `temperature` / `max_tokens`：模型参数
+    /// - `model`：会话级 model 覆盖（Phase 1 P0-3）。
+    ///   - `Some(name)` → 使用 `name` 作为本次请求的模型
+    ///   - `None` → 回退到 Adapter 构造时绑定的默认模型（`self.model`）
+    ///   - 注意：Provider 仅在**本次请求**使用 `model`，不会改写
+    ///     Adapter 自身的 `self.model`，下次 `None` 调用仍走默认
     /// - `cancel`：取消令牌
     async fn stream_chat(
         &self,
@@ -228,6 +233,7 @@ pub trait LlmProvider: Send + Sync {
         tools: Option<Vec<ToolDef>>,
         temperature: f64,
         max_tokens: i32,
+        model: Option<&str>,
         cancel: crate::harness::chat_state::CancellationToken,
     ) -> AppResult<Pin<Box<dyn Stream<Item = AppResult<ChatDelta>> + Send>>>;
 
@@ -337,6 +343,10 @@ pub struct TemplateInput {
 ///
 /// 优先级：`content_blocks` 存在时优先使用；否则 fallback 到 `content`。
 /// 两者都不提供 → 校验失败（与旧版「content 不能为空」一致）。
+///
+/// P0-3: 可选 `model` 覆盖 —— 会话级 model override。
+/// - `None` 或缺省 → 使用 Agent 配置的默认 model
+/// - `Some(name)` → 本次请求使用 `name`（不修改 Agent 配置，仅本次生效）
 #[derive(Debug, Deserialize)]
 pub struct SendMessageInput {
     pub conversation_id: String,
@@ -350,6 +360,9 @@ pub struct SendMessageInput {
     /// P2-1: 是否启用工具调用
     #[serde(default)]
     pub tools_enabled: bool,
+    /// P0-3: 会话级 model 覆盖（None = 使用 Agent 默认 model）
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 // =========================================================================
