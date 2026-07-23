@@ -229,6 +229,9 @@ pub trait LlmProvider: Send + Sync {
         max_tokens: i32,
         cancel: crate::harness::chat_state::CancellationToken,
     ) -> AppResult<Pin<Box<dyn Stream<Item = AppResult<ChatDelta>> + Send>>>;
+
+    /// 返回当前 Provider 实际使用的模型名（用于消息级记录）
+    fn model_name(&self) -> &str;
 }
 
 // =========================================================================

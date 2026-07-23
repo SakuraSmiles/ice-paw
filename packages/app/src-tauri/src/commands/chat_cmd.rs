@@ -151,6 +151,7 @@ pub async fn send_message(
         &NewMessage {
             conversation_id: conv_id.clone(), role: "user".into(),
             content: content_text, token_count: None, error: None,
+            model: None,
         },
     ).await?;
     let blocks_json = serde_json::to_string(&assembled.user_blocks).unwrap_or_else(|_| "[]".into());
@@ -162,6 +163,7 @@ pub async fn send_message(
         &NewMessage {
             conversation_id: conv_id.clone(), role: "assistant".into(),
             content: String::new(), token_count: None, error: None,
+            model: Some(agent.model.clone()),
         },
     ).await?;
 
