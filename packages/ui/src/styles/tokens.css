@@ -25,51 +25,53 @@
 :root {
   /* ------------------- 1. 原始色板 ------------------- */
 
-  /* 主色梯度（Tailwind Blue） */
-  --ip-primary-50:  #EFF6FF;
-  --ip-primary-100: #DBEAFE;
-  --ip-primary-200: #BFDBFE;
-  --ip-primary-300: #93C5FD;
-  --ip-primary-400: #60A5FA;
-  --ip-primary-500: #3B82F6;
-  --ip-primary-600: #2563EB;
-  --ip-primary-700: #1D4ED8;
-  --ip-primary-800: #1E40AF;
-  --ip-primary-900: #1E3A8A;
+  /* 主色梯度（IcePaw 品牌冷蓝） */
+  --ip-primary-50:  #F0F6FC;
+  --ip-primary-100: #E1EDF9;
+  --ip-primary-200: #C5DCF2;
+  --ip-primary-300: #9BC2E6;
+  --ip-primary-400: #6FA1D6;
+  --ip-primary-500: #4680C2;
+  --ip-primary-600: #3565A8;
+  --ip-primary-700: #2A4F85;
+  --ip-primary-800: #1F3D6B;
+  --ip-primary-900: #152B4D;
 
   /* 灰度（亮色 10 级 / 暗色 11 级通过同一套变量实现语义分离） */
-  --ip-gray-50:  #FAFAFA;
-  --ip-gray-100: #F5F5F5;
-  --ip-gray-200: #EBEBEB;
-  --ip-gray-300: #D9D9D9;
-  --ip-gray-400: #BFBFBF;
-  --ip-gray-500: #8C8C8C;
-  --ip-gray-600: #595959;
-  --ip-gray-700: #434343;
-  --ip-gray-800: #262626;
-  --ip-gray-850: #1A1A1A;
-  --ip-gray-900: #141414;
-  --ip-gray-950: #0A0A0A;
+  --ip-gray-50:  #FAFBFC;
+  --ip-gray-100: #F4F6F8;
+  --ip-gray-200: #E6EAEF;
+  --ip-gray-300: #CFD5DD;
+  --ip-gray-400: #9BA3AF;
+  --ip-gray-500: #6B7785;
+  --ip-gray-600: #4B5563;
+  --ip-gray-700: #3A4350;
+  --ip-gray-800: #252C36;
+  --ip-gray-850: #1C222B;
+  --ip-gray-900: #14181F;
+  --ip-gray-950: #0B0E12;
 
   /* 透明白 / 透明黑（用于 overlay、focus ring） */
   --ip-white: #FFFFFF;
   --ip-black: #000000;
-  --ip-overlay-light: rgba(0, 0, 0, 0.5);
-  --ip-overlay-dark:  rgba(0, 0, 0, 0.7);
-  --ip-focus-ring-light: rgba(59, 130, 246, 0.30);
-  --ip-focus-ring-dark:  rgba(96, 165, 250, 0.35);
-  --ip-focus-ring-danger-light: rgba(220, 38, 38, 0.20);
+  --ip-overlay-light: rgba(20, 24, 31, 0.5);
+  --ip-overlay-dark:  rgba(20, 24, 31, 0.7);
+  --ip-focus-ring-light: rgba(70, 128, 194, 0.30);
+  --ip-focus-ring-dark:  rgba(111, 161, 214, 0.35);
+  --ip-focus-ring-danger-light: rgba(184, 61, 61, 0.20);
 
   /* ------------------- 2. 字体栈 / 排版 ------------------- */
 
   /* 系统 UI 字体栈（正文） */
-  --ip-font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
-                  'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC',
-                  'Helvetica Neue', Helvetica, Arial, sans-serif;
+  --ip-font-sans: 'DM Sans', 'Noto Sans SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+                  'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
 
   /* 等宽字体栈（代码块） */
   --ip-font-mono: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'SF Mono',
                   Consolas, 'Source Code Pro', Menlo, 'Courier New', monospace;
+
+  /* 展示字体（Hero / 大标题） */
+  --ip-font-display: 'Instrument Serif', 'LXGW WenKai TC', 'LXGW WenKai', 'Source Han Serif SC', 'Songti SC', serif;
 
   /* 字号梯度（v1.0.1 §1.2.2） */
   --ip-text-display-size:  40px; --ip-text-display-lh: 44px;
@@ -139,18 +141,18 @@
   /* ------------------- 5. 阴影 ------------------- */
 
   /* 亮色模式阴影 */
-  --ip-shadow-xs: 0 1px 2px 0 rgba(0, 0, 0, 0.04);
-  --ip-shadow-sm: 0 1px 3px 0 rgba(0, 0, 0, 0.08), 0 1px 2px -1px rgba(0, 0, 0, 0.04);
-  --ip-shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.06), 0 2px 4px -2px rgba(0, 0, 0, 0.04);
-  --ip-shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -4px rgba(0, 0, 0, 0.04);
-  --ip-shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.10), 0 8px 10px -6px rgba(0, 0, 0, 0.04);
+  --ip-shadow-xs: 0 1px 2px 0 rgba(20, 24, 31, 0.04);
+  --ip-shadow-sm: 0 1px 3px 0 rgba(20, 24, 31, 0.08), 0 1px 2px -1px rgba(20, 24, 31, 0.04);
+  --ip-shadow-md: 0 4px 6px -1px rgba(20, 24, 31, 0.06), 0 2px 4px -2px rgba(20, 24, 31, 0.04);
+  --ip-shadow-lg: 0 10px 15px -3px rgba(20, 24, 31, 0.08), 0 4px 6px -4px rgba(20, 24, 31, 0.04);
+  --ip-shadow-xl: 0 20px 25px -5px rgba(20, 24, 31, 0.10), 0 8px 10px -6px rgba(20, 24, 31, 0.04);
 
   /* 暗色模式阴影（更强） */
-  --ip-shadow-xs-dark: 0 1px 2px 0 rgba(0, 0, 0, 0.30);
-  --ip-shadow-sm-dark: 0 1px 3px 0 rgba(0, 0, 0, 0.40), 0 1px 2px -1px rgba(0, 0, 0, 0.30);
-  --ip-shadow-md-dark: 0 4px 6px -1px rgba(0, 0, 0, 0.50), 0 2px 4px -2px rgba(0, 0, 0, 0.40);
-  --ip-shadow-lg-dark: 0 10px 15px -3px rgba(0, 0, 0, 0.60), 0 4px 6px -4px rgba(0, 0, 0, 0.50);
-  --ip-shadow-xl-dark: 0 20px 25px -5px rgba(0, 0, 0, 0.70), 0 8px 10px -6px rgba(0, 0, 0, 0.60);
+  --ip-shadow-xs-dark: 0 1px 2px 0 rgba(11, 14, 18, 0.40);
+  --ip-shadow-sm-dark: 0 1px 3px 0 rgba(11, 14, 18, 0.50), 0 1px 2px -1px rgba(11, 14, 18, 0.40);
+  --ip-shadow-md-dark: 0 4px 6px -1px rgba(11, 14, 18, 0.60), 0 2px 4px -2px rgba(11, 14, 18, 0.50);
+  --ip-shadow-lg-dark: 0 10px 15px -3px rgba(11, 14, 18, 0.70), 0 4px 6px -4px rgba(11, 14, 18, 0.60);
+  --ip-shadow-xl-dark: 0 20px 25px -5px rgba(11, 14, 18, 0.80), 0 8px 10px -6px rgba(11, 14, 18, 0.70);
 
   /* 焦点发光环（语义映射，亮/暗分别为不同的 RGB 透明度） */
   --ip-shadow-focus:        0 0 0 3px var(--ip-focus-ring-light);
@@ -331,47 +333,39 @@
   --ip-icon-md:                      16px;
   --ip-icon-lg:                      20px;
 
-  /* ToolDrawer 组件级 token (icepaw-tool-drawer-specs.md §六) */
-  --ip-tool-drawer-toggle-h:         28px;
-  --ip-tool-drawer-badge-bg:         var(--ip-primary-50);
-  --ip-tool-drawer-badge-color:      var(--ip-primary-600);
-  --ip-tool-drawer-chip-h:           28px;
-  --ip-tool-drawer-chip-max-w:       140px;
-  --ip-tool-drawer-max-h:            280px;
-
   /* ------------------- 9. 语义色（独立 tone） ------------------- */
 
-  /* success（亮色） */
-  --ip-success-base:    #16A34A;
-  --ip-success-hover:   #15803D;
-  --ip-success-active:  #166534;
-  --ip-success-bg:      #DCFCE7;
-  --ip-success-text:    #166534;
-  --ip-success-border:  #86EFAC;
+  /* Success — teal-green */
+  --ip-success-base:    #2D8B66;
+  --ip-success-hover:   #237A58;
+  --ip-success-active:  #1A5D42;
+  --ip-success-bg:      #E8F5EF;
+  --ip-success-text:    #1A5D42;
+  --ip-success-border:  #A3D9C4;
 
-  /* warning */
-  --ip-warning-base:    #F59E0B;
-  --ip-warning-hover:   #D97706;
-  --ip-warning-active:  #B45309;
-  --ip-warning-bg:      #FEF3C7;
-  --ip-warning-text:    #92400E;
-  --ip-warning-border:  #FCD34D;
+  /* Warning — 琥珀棕 */
+  --ip-warning-base:    #B8862A;
+  --ip-warning-hover:   #9E6F1E;
+  --ip-warning-active:  #7D5614;
+  --ip-warning-bg:      #FBF0DB;
+  --ip-warning-text:    #7D5614;
+  --ip-warning-border:  #E5C887;
 
-  /* danger */
-  --ip-danger-base:    #DC2626;
-  --ip-danger-hover:   #B91C1C;
-  --ip-danger-active:  #991B1B;
-  --ip-danger-bg:      #FEE2E2;
-  --ip-danger-text:    #991B1B;
-  --ip-danger-border:  #FCA5A5;
+  /* Danger — 暗红 */
+  --ip-danger-base:    #B83D3D;
+  --ip-danger-hover:   #9E2F2F;
+  --ip-danger-active:  #7D2323;
+  --ip-danger-bg:      #FAECEC;
+  --ip-danger-text:    #7D2323;
+  --ip-danger-border:  #E0B0B0;
 
-  /* info */
-  --ip-info-base:    #0EA5E9;
-  --ip-info-hover:   #0284C7;
-  --ip-info-active:  #075985;
-  --ip-info-bg:      #E0F2FE;
-  --ip-info-text:    #075985;
-  --ip-info-border:  #7DD3FC;
+  /* Info — 复用 primary */
+  --ip-info-base:    #4680C2;
+  --ip-info-hover:   #3565A8;
+  --ip-info-active:  #2A4F85;
+  --ip-info-bg:      #F0F6FC;
+  --ip-info-text:    #2A4F85;
+  --ip-info-border:  #9BC2E6;
 
   /* ------------------- 10. 语义层 token（组件引用的统一入口） ------------------- */
 
@@ -424,33 +418,33 @@
 [data-theme='dark'],
 .dark {
   /* 原始色板：暗色专属 gray-50/950 在组件代码里不直接出现，仅保留内部 token */
-  --ip-success-base:    #4ADE80;
-  --ip-success-hover:   #22C55E;
-  --ip-success-active:  #16A34A;
-  --ip-success-bg:      #052E16;
-  --ip-success-text:    #86EFAC;
-  --ip-success-border:  #15803D;
+  --ip-success-base:    #3BAF7A;
+  --ip-success-hover:   #2D8B66;
+  --ip-success-active:  #237A58;
+  --ip-success-bg:      #0A2418;
+  --ip-success-text:    #A3D9C4;
+  --ip-success-border:  #1A5D42;
 
-  --ip-warning-base:    #FBBF24;
-  --ip-warning-hover:   #F59E0B;
-  --ip-warning-active:  #D97706;
-  --ip-warning-bg:      #451A03;
-  --ip-warning-text:    #FCD34D;
-  --ip-warning-border:  #B45309;
+  --ip-warning-base:    #D4A03C;
+  --ip-warning-hover:   #B8862A;
+  --ip-warning-active:  #9E6F1E;
+  --ip-warning-bg:      #2B1F0A;
+  --ip-warning-text:    #E5C887;
+  --ip-warning-border:  #7D5614;
 
-  --ip-danger-base:    #F87171;
-  --ip-danger-hover:   #EF4444;
-  --ip-danger-active:  #DC2626;
-  --ip-danger-bg:      #450A0A;
-  --ip-danger-text:    #FCA5A5;
-  --ip-danger-border:  #991B1B;
+  --ip-danger-base:    #D46B6B;
+  --ip-danger-hover:   #B83D3D;
+  --ip-danger-active:  #9E2F2F;
+  --ip-danger-bg:      #2B0F0F;
+  --ip-danger-text:    #E0B0B0;
+  --ip-danger-border:  #7D2323;
 
-  --ip-info-base:    #38BDF8;
-  --ip-info-hover:   #0EA5E9;
-  --ip-info-active:  #0284C7;
-  --ip-info-bg:      #082F49;
-  --ip-info-text:    #7DD3FC;
-  --ip-info-border:  #075985;
+  --ip-info-base:    #6FA1D6;
+  --ip-info-hover:   #4680C2;
+  --ip-info-active:  #3565A8;
+  --ip-info-bg:      #0D1A2B;
+  --ip-info-text:    #9BC2E6;
+  --ip-info-border:  #2A4F85;
 
   /* 语义层重映射 */
   --ip-color-bg-primary:      var(--ip-gray-900);
@@ -495,10 +489,6 @@
   --ip-avatar-overlay-light:        var(--ip-avatar-overlay-dark);
   --ip-avatar-overlay-light-active: var(--ip-avatar-overlay-dark-active);
 
-  /* ToolDrawer 暗色覆盖 (icepaw-tool-drawer-specs.md §五) */
-  --ip-tool-drawer-badge-bg:         var(--ip-primary-900);
-  --ip-tool-drawer-badge-color:      var(--ip-primary-300);
-
   color-scheme: dark;
 }
 
@@ -537,20 +527,16 @@
     --ip-color-selection-bg:   var(--ip-primary-900);
 
     /* 语义色（仅阴影用，其他已在 light 中定义；为简洁保留指针指向 dark 调色板） */
-    --ip-success-base:    #4ADE80;
-    --ip-warning-base:    #FBBF24;
-    --ip-danger-base:     #F87171;
-    --ip-info-base:       #38BDF8;
+    --ip-success-base:    #3BAF7A;
+    --ip-warning-base:    #D4A03C;
+    --ip-danger-base:     #D46B6B;
+    --ip-info-base:       #6FA1D6;
 
     --ip-shadow-focus:    0 0 0 3px var(--ip-focus-ring-dark);
 
     /* P0 暗色模式覆盖（system-prefers） */
     --ip-avatar-border-shadow:        inset 0 0 0 1px rgba(255, 255, 255, 0.06);
     --ip-color-text-placeholder:      var(--ip-gray-500);
-
-    /* ToolDrawer 暗色覆盖 (system-prefers) */
-    --ip-tool-drawer-badge-bg:        var(--ip-primary-900);
-    --ip-tool-drawer-badge-color:     var(--ip-primary-300);
 
     color-scheme: dark;
   }
@@ -681,22 +667,24 @@
   to   { opacity: 1; transform: scale(1); }
 }
 
-/* ------------------- ToolDrawer keyframes (icepaw-tool-drawer-specs.md §七) ------------------- */
+/* ------------------- Paw signature animations (Wave 2) ------------------- */
 
-/* Tab 下划线入场 */
-@keyframes ip-tool-drawer-underline-in {
-  from { transform: scaleX(0.3); opacity: 0; }
-  to   { transform: scaleX(1); opacity: 1; }
+/* 呼吸：paw-trail 常驻装饰 */
+@keyframes paw-breathe {
+  0%, 100% { transform: scale(1) rotate(0deg); }
+  50%      { transform: scale(1.06) rotate(-3deg); }
 }
 
-/* 遮罩层 fade-in (窄屏 modal 使用) */
-@keyframes ip-overlay-in {
-  from { opacity: 0; }
-  to   { opacity: 1; }
+/* 轻摇：PawBrandMark hover 触发 */
+@keyframes paw-sway {
+  0%, 100% { transform: rotate(0deg); }
+  25%      { transform: rotate(-4deg); }
+  75%      { transform: rotate(4deg); }
 }
 
-/* 遮罩层 fade-out */
-@keyframes ip-overlay-out {
-  from { opacity: 1; }
-  to   { opacity: 0; }
+/* 脉冲：活动指示光圈 */
+@keyframes paw-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(70, 128, 194, 0.35); }
+  50%      { box-shadow: 0 0 0 6px rgba(70, 128, 194, 0); }
 }
+
