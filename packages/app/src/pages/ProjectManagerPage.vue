@@ -23,6 +23,7 @@ import { useToast } from "../composables/useToast";
 import ProjectFormModal from "../components/project/ProjectFormModal.vue";
 import ProjectCard from "../components/project/ProjectCard.vue";
 import EmptyProjectCard from "../components/project/EmptyProjectCard.vue";
+import { PROJECT_TEMPLATES } from "../data/projectTemplates";
 import { accentFromName, type ProjectAccent } from "../utils/projectAccent";
 import type { Project, NewProject, ProjectMemberInput, ProjectPatch } from "../types";
 
@@ -38,6 +39,12 @@ const router = useRouter();
 const showModal = ref<boolean>(false);
 const modalMode = ref<"create" | "edit">("create");
 const editing = ref<Project | null>(null);
+
+/**
+ * 创建模式下的预填值（P0-7：EmptyProjectCard 推荐卡点击带入）。
+ * 仅 modalMode === "create" 时生效；打开 modal 前同步赋值。
+ */
+const pendingPrefill = ref<{ name: string; description: string } | null>(null);
 
 /** 当前选中的项目 ID（保留旧行为：用于详情区视觉聚焦） */
 const selectedProjectId = ref<string>("");
@@ -202,6 +209,7 @@ const isEmpty = computed<boolean>(
 function openCreate(): void {
   modalMode.value = "create";
   editing.value = null;
+  pendingPrefill.value = null;
   showModal.value = true;
 }
 
@@ -277,6 +285,25 @@ function listDelete(project: Project): void {
 /** 列表视图下的编辑 */
 function listEdit(project: Project): void {
   openEdit(project);
+}
+
+/**
+ * 处理 EmptyProjectCard 推荐卡点击（P0-7）：
+ *   - 通过 key 在 PROJECT_TEMPLATES 中查找模板
+ *   - 打开 ProjectFormModal 创建态，预填 name + description
+ *
+ * @param templateKey 模板 key（由 EmptyProjectCard emit 出来）
+ */
+function handleSelectTemplate(templateKey: string): void {
+  const tpl = PROJECT_TEMPLATES.find((t) => t.key === templateKey);
+  if (!tpl) return;
+  modalMode.value = "create";
+  editing.value = null;
+  pendingPrefill.value = {
+    name: tpl.title,
+    description: tpl.description,
+  };
+  showModal.value = true;
 }
 </script>
 
@@ -400,7 +427,7 @@ function listEdit(project: Project): void {
         />
 
         <!-- 空状态 -->
-        <EmptyProjectCard v-if="isEmpty" />
+        <EmptyProjectCard v-if="isEmpty" @select-template="handleSelectTemplate" />
       </section>
 
       <!-- 列表视图（保留旧行为：简单列表） -->
@@ -446,6 +473,7 @@ function listEdit(project: Project): void {
       v-model="showModal"
       :mode="modalMode"
       :initial="editing"
+      :prefill="pendingPrefill"
       :agents="agentsStore.agents"
       @submit-create="handleCreate"
       @submit-edit="handleEdit"
