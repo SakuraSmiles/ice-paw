@@ -180,6 +180,10 @@ impl LlmProvider for AnthropicAdapter {
         // 返回 ReceiverStream 包装
         Ok(Box::pin(ReceiverStream::new(rx)))
     }
+
+    fn model_name(&self) -> &str {
+        &self.model
+    }
 }
 
 // =========================================================================
