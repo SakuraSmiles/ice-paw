@@ -366,6 +366,7 @@ export const useChatStore = defineStore("chat", () => {
           // 占位消息尚无 DB rowid，使用哨兵；流式结束后也不会刷新
           // （游标永远取 messages[0]，sentinel 必在尾部，不影响分页）。
           rowid: ROWID_SENTINEL,
+          model: null,
         });
 
         // 置流式状态
@@ -750,6 +751,7 @@ export const useChatStore = defineStore("chat", () => {
       created_at: new Date().toISOString(),
       // 哨兵 rowid：本地乐观消息，不会作为向上翻页的游标
       rowid: ROWID_SENTINEL,
+      model: null,
     };
     messages.value = [...messages.value, optimistic];
 

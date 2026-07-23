@@ -279,7 +279,7 @@ onUnmounted(() => {
   </Teleport>
 
   <div
-    v-memo="[message.content, message.content_blocks, message.role, renderMarkdown]"
+    v-memo="[message.content, message.content_blocks, message.role, renderMarkdown, message.model]"
     :class="['bubble-row', `bubble-row-${message.role}`]"
     :style="{ marginTop }"
   >
@@ -395,6 +395,10 @@ onUnmounted(() => {
         </div>
         <div v-else-if="isRetrying" class="bubble-retrying">
           <span class="retrying-indicator" />正在重新连接... {{ retryProgress }}
+        </div>
+        <!-- 模型标签（仅 assistant 消息、非流式中、有 model 值时显示） -->
+        <div v-if="!isStreaming && isAssistant && message.model" class="bubble-model">
+          <span class="model-label">{{ message.model }}</span>
         </div>
         <!-- P2-3: Token 用量（仅流式结束后显示在助手消息底部） -->
         <div
@@ -606,6 +610,14 @@ onUnmounted(() => {
   .retrying-indicator {
     animation: none;
   }
+}
+
+/* 模型标签 */
+.bubble-model {
+  padding: 2px 0;
+  font-size: var(--ip-text-caption-size, 11px);
+  color: var(--ip-color-text-tertiary);
+  font-family: var(--ip-font-mono, ui-monospace, monospace);
 }
 
 /* P2-3: Token usage display */

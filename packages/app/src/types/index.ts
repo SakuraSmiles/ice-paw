@@ -212,6 +212,8 @@ export interface Message {
   created_at: string;
   /** 分页游标：与后端 MessageRow.rowid 对齐，前端不展示 */
   rowid: number;
+  /** 该消息实际使用的模型名（仅 assistant 消息有值；历史消息为 null） */
+  model: string | null;
 }
 
 /**
@@ -227,6 +229,8 @@ export interface NewMessage {
   role: string;
   content: string;
   token_count?: number;
+  /** 消息模型名（仅 assistant 消息需要传） */
+  model?: string;
 }
 
 // ============================================================================

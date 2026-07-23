@@ -333,6 +333,7 @@ defineExpose({
           streamingId === msg.id,
           idx === messages.length - 1,
           idx === messages.length - 1 ? chatStore.lastUsage : null,
+          msg.model,
         ]"
         :message="msg"
         :is-streaming="msg.id === streamingId"
