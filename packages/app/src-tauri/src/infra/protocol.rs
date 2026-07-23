@@ -9,6 +9,7 @@
 //! 2. **图片支持**：`SUPPORTED_IMAGE_MEDIA_TYPES` / `is_supported_image_media_type()` /
 //!    `MAX_IMAGE_SIZE` / `MAX_IMAGE_COUNT` / `validate_images()`
 //! 3. **前端入参**：`SendMessageInput` / `TemplateInput`
+//!    - `TemplateInput` 当前未在前端发送链路消费（详见 PipelineContext 预留字段）
 //! 4. **事件 Payload**：`ChatStartPayload` / `ChatChunkPayload` / `ChatDonePayload` /
 //!    `ChatErrorPayload` / `ChatRetryingPayload` / 工具调用 + 思考 payload
 
@@ -346,9 +347,6 @@ pub struct SendMessageInput {
     /// P2-2: 新接口：富文本块（含 Image 等多模态）
     #[serde(default)]
     pub content_blocks: Option<Vec<ContentBlock>>,
-    /// 可选：附加的模板（应用后会被渲染并注入到 system_prompt / user_prompt_prefix）
-    #[serde(default)]
-    pub template: Option<TemplateInput>,
     /// P2-1: 是否启用工具调用
     #[serde(default)]
     pub tools_enabled: bool,
@@ -712,7 +710,6 @@ mod tests {
         let blocks = input.content_blocks.unwrap();
         assert!(blocks.is_empty());
         assert!(!input.tools_enabled);
-        assert!(input.template.is_none());
     }
 
     // --- ContentBlock / 白名单（从 llm/mod.rs 迁入）---
