@@ -23,7 +23,6 @@
 import { computed, nextTick, ref, watch, useTemplateRef } from "vue";
 import { SendHorizontal, Square, Paperclip, X } from "lucide-vue-next";
 import { IpPopconfirm } from "@ice-paw/ui";
-import { useChatStore } from "../../stores/chat";
 import { useAgentsStore } from "../../stores/agents";
 import {
   ACCEPT_ATTR,
@@ -42,7 +41,6 @@ const emit = defineEmits<{
   stop: [];
 }>();
 
-const chatStore = useChatStore();
 const agentsStore = useAgentsStore();
 
 // ============================================================================
@@ -206,10 +204,6 @@ function autosize(): void {
 
 watch(draft, () => {
   void nextTick(autosize);
-  // 用户编辑消息 → 清空已应用模板
-  if (chatStore.appliedTemplate) {
-    chatStore.setAppliedTemplate(null);
-  }
 });
 
 // ============================================================================
@@ -251,7 +245,6 @@ function handleSend(): void {
   draft.value = "";
   pendingImages.value = [];
   void nextTick(autosize);
-  chatStore.setAppliedTemplate(null);
 }
 
 function onSendClick(): void {
