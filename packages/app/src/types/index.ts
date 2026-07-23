@@ -60,7 +60,7 @@ export interface Agent {
   supports_vision?: boolean;
   created_at: string;
   updated_at: string;
-  hasApiKey: boolean;
+  has_api_key: boolean;
 }
 
 /**
@@ -628,11 +628,11 @@ export interface ProjectPatch {
 // ============================================================================
 
 export interface UserPreferences {
-  defaultAgentId?: string;
-  defaultTemplateId?: string;
-  onStartup?: string;
+  default_agent_id?: string;
+  default_template_id?: string;
+  on_startup?: string;
   language?: string;
   theme?: string;
-  codeTheme?: string;
-  fontSize?: number;
+  code_theme?: string;
+  font_size?: number;
 }

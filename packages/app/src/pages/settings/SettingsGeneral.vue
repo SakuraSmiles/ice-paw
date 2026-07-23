@@ -23,18 +23,18 @@ const startupOptions = [
 ];
 
 const onStartup = computed<string>({
-  get: () => settingsStore.prefs.onStartup ?? "chat",
-  set: (v: string) => settingsStore.update("onStartup", v),
+  get: () => settingsStore.prefs.on_startup ?? "chat",
+  set: (v: string) => settingsStore.update("on_startup", v),
 });
 
 const defaultAgentId = computed<string>({
-  get: () => settingsStore.prefs.defaultAgentId ?? "",
-  set: (v: string) => settingsStore.update("defaultAgentId", v || null),
+  get: () => settingsStore.prefs.default_agent_id ?? "",
+  set: (v: string) => settingsStore.update("default_agent_id", v || null),
 });
 
 const defaultTemplateId = computed<string>({
-  get: () => settingsStore.prefs.defaultTemplateId ?? "",
-  set: (v: string) => settingsStore.update("defaultTemplateId", v || null),
+  get: () => settingsStore.prefs.default_template_id ?? "",
+  set: (v: string) => settingsStore.update("default_template_id", v || null),
 });
 
 function onAgentChange(e: Event): void {

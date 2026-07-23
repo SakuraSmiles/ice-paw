@@ -147,6 +147,7 @@ mod tests {
             created_at: "2026-01-01T00:00:00Z".into(),
             rowid: idx as i64,
             summary_id: None,
+            model: None,
         }
     }
 
@@ -274,6 +275,7 @@ mod tests {
             created_at: "2026-01-01T00:00:00Z".into(),
             rowid: idx as i64,
             summary_id: None,
+            model: None,
         }
     }
 

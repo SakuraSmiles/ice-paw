@@ -74,6 +74,7 @@ pub(super) fn make_msg_row(role: &str, content: &str) -> MessageRow {
         created_at: "2026-01-01T00:00:00Z".into(),
         rowid: 0,
         summary_id: None,
+        model: None,
     }
 }
 

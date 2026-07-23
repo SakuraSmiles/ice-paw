@@ -45,7 +45,6 @@ pub struct AgentRow {
 
 /// 前端可见的 `Agent`（不含敏感引用）
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct Agent {
     pub id: String,
     pub name: String,
@@ -455,7 +454,6 @@ pub struct TemplateRow {
 
 /// 前端可见的 `Template`（自动展开 variables / tools JSON）
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct Template {
     pub id: String,
     pub name: String,
@@ -513,7 +511,6 @@ pub struct NewTemplate {
 
 /// 用户偏好设置（前端 ↔ 后端传输结构）
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct UserPreferences {
     pub default_agent_id: Option<String>,
     pub default_template_id: Option<String>,
