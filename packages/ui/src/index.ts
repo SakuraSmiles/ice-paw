@@ -118,14 +118,6 @@ export type {
   PopconfirmTrigger as IpPopconfirmTrigger,
 } from './components/popconfirm/types'
 
-/* ToolDrawer（规范 icepaw-tool-drawer-specs.md） */
-export { ToolDrawer as IpToolDrawer } from './components/tool-drawer'
-export type {
-  ToolDrawerProps as IpToolDrawerProps,
-  ToolDrawerEmits as IpToolDrawerEmits,
-  ToolDrawerTab as IpToolDrawerTab,
-} from './components/tool-drawer/types'
-
 /* 布局组件（规范 icepaw-layout-system.md v1.1 P0） */
 export { Flex as IpFlex } from './components/flex'
 export type {
