@@ -9,7 +9,6 @@
 //   - 点击切换项目 → projectsStore.setCurrent(id) → 触发会话列表重新加载
 //
 // 数据源：projectsStore
-// 设计参考：AgentSelector.vue（保持一致的视觉风格与交互模式）
 
 import { computed, ref, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
