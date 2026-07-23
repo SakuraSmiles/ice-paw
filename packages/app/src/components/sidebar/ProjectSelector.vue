@@ -14,6 +14,7 @@
 import { computed, ref, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { ChevronDown, FolderClosed, Plus, ArrowRight, Clipboard } from "lucide-vue-next";
+import PawBrandMark from "../common/PawBrandMark.vue";
 import { useProjectsStore, DEFAULT_PROJECT_ID } from "../../stores/projects";
 import { useToast } from "../../composables/useToast";
 import type { Project } from "../../types";
@@ -137,10 +138,10 @@ onUnmounted(() => {
       @click.stop="toggle"
     >
       <span class="selector-label">项目</span>
-      <FolderClosed
-        :size="16"
+      <PawBrandMark
+        :size="24"
+        :animated="true"
         class="selector-icon"
-        aria-hidden="true"
       />
       <span class="selector-name">{{ currentName }}</span>
       <ChevronDown
