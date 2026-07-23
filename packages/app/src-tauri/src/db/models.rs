@@ -288,6 +288,8 @@ pub struct MessageRow {
     /// 摘要消息本身此列为 NULL（自指无意义）。
     /// 旧消息（迁移前已存在）此列也为 NULL —— 历史行为完全兼容。
     pub summary_id: Option<String>,
+    /// 消息实际使用的模型名（仅 assistant 消息有值；历史消息可能为 NULL）。
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -308,6 +310,9 @@ pub struct Message {
     /// 前端一般用不到，保留以备审计 / UI 展示「已压缩 N 条」之用。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary_id: Option<String>,
+    /// 实际使用的模型名（仅 assistant 消息有值）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 impl From<MessageRow> for Message {
@@ -323,6 +328,7 @@ impl From<MessageRow> for Message {
             created_at: row.created_at,
             rowid: row.rowid,
             summary_id: row.summary_id,
+            model: row.model,
         }
     }
 }
@@ -336,6 +342,9 @@ pub struct NewMessage {
     pub token_count: Option<i32>,
     #[serde(default)]
     pub error: Option<String>,
+    /// 消息实际使用的模型名（仅 assistant 消息需要传）
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 // 用 `DateTime<Utc>` 仅是给上层时间工具备查；当前 SQL 用 TEXT 存 ISO8601，因此保留 String 字段

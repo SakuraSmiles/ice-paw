@@ -54,7 +54,7 @@ pub async fn list_by_conversation(
 
     let rows = if let Some((before_ts, before_rowid)) = before {
         sqlx::query_as::<_, MessageRow>(
-            "SELECT id, conversation_id, role, content, content_blocks, token_count, error, created_at, rowid, summary_id
+            "SELECT id, conversation_id, role, content, content_blocks, token_count, error, created_at, rowid, summary_id, model
                FROM messages
               WHERE conversation_id = ?
                 AND (created_at < ? OR (created_at = ? AND rowid < ?))
@@ -70,7 +70,7 @@ pub async fn list_by_conversation(
         .await?
     } else {
         sqlx::query_as::<_, MessageRow>(
-            "SELECT id, conversation_id, role, content, content_blocks, token_count, error, created_at, rowid, summary_id
+            "SELECT id, conversation_id, role, content, content_blocks, token_count, error, created_at, rowid, summary_id, model
                FROM messages
               WHERE conversation_id = ?
               ORDER BY created_at DESC, rowid DESC
@@ -121,8 +121,8 @@ pub async fn create(
 
     sqlx::query(
         "INSERT INTO messages
-            (id, conversation_id, role, content, content_blocks, token_count, error)
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (id, conversation_id, role, content, content_blocks, token_count, error, model)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(id)
     .bind(&new_msg.conversation_id)
@@ -131,6 +131,7 @@ pub async fn create(
     .bind("[]")  // content_blocks 默认空数组
     .bind(new_msg.token_count)
     .bind(new_msg.error.as_deref())
+    .bind(new_msg.model.as_deref())
     .execute(pool)
     .await?;
 
@@ -147,7 +148,7 @@ pub async fn create(
 
 async fn get_by_id(pool: &SqlitePool, id: &str) -> AppResult<MessageRow> {
     sqlx::query_as::<_, MessageRow>(
-        "SELECT id, conversation_id, role, content, content_blocks, token_count, error, created_at, rowid, summary_id
+        "SELECT id, conversation_id, role, content, content_blocks, token_count, error, created_at, rowid, summary_id, model
            FROM messages WHERE id = ?",
     )
     .bind(id)
@@ -346,6 +347,7 @@ mod tests {
                 content: "hello".to_string(),
                 token_count: None,
                 error: None,
+                model: None,
             },
         )
         .await
