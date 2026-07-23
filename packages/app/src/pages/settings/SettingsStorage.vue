@@ -4,7 +4,6 @@ import { Copy } from "lucide-vue-next";
 import SettingRow from "../../components/common/SettingRow.vue";
 
 const appDataDir = ref<string>("");
-const showClearConfirm = ref(false);
 
 onMounted(async () => {
   try {
@@ -25,9 +24,6 @@ async function openDataDir(): Promise<void> {
     await openPath(appDataDir.value);
   } catch { /* noop */ }
 }
-
-function askClearCache(): void { showClearConfirm.value = true; }
-function confirmClearCache(): void { showClearConfirm.value = false; }
 </script>
 
 <template>
@@ -39,30 +35,9 @@ function confirmClearCache(): void { showClearConfirm.value = false; }
         <button class="btn-icon-sm" type="button" title="复制路径" @click="copyDataDir"><Copy :size="14" /></button>
       </div>
     </SettingRow>
-    <SettingRow label="数据大小" description="本地数据库占用的磁盘空间">
-      <span class="placeholder-text">计算中...</span>
-    </SettingRow>
-    <SettingRow label="导出数据" description="导出所有会话和 Agent 配置为文件">
-      <button class="btn-secondary" type="button" disabled>导出</button>
-    </SettingRow>
-    <SettingRow label="清除缓存" description="清除本地缓存数据（不影响会话记录）">
-      <button class="btn-danger" type="button" @click="askClearCache">清除</button>
-    </SettingRow>
     <SettingRow label="打开数据文件夹" description="在系统文件管理器中打开数据目录">
       <button class="btn-secondary" type="button" :disabled="!appDataDir" @click="openDataDir">打开</button>
     </SettingRow>
-    <Teleport to="body">
-      <div v-if="showClearConfirm" class="modal-overlay" @click.self="showClearConfirm = false">
-        <div class="modal-dialog">
-          <h3 class="modal-title">确认清除缓存</h3>
-          <p class="modal-desc">此操作将清除本地缓存数据，不会影响已有的会话记录。确定要继续吗？</p>
-          <div class="modal-actions">
-            <button class="btn-secondary" type="button" @click="showClearConfirm = false">取消</button>
-            <button class="btn-danger" type="button" @click="confirmClearCache">确认清除</button>
-          </div>
-        </div>
-      </div>
-    </Teleport>
   </div>
 </template>
 
@@ -78,7 +53,6 @@ function confirmClearCache(): void { showClearConfirm.value = false; }
   font-family: var(--ip-font-mono); max-width: 260px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.placeholder-text { font-size: var(--ip-text-body-sm-size); color: var(--ip-color-text-tertiary); }
 .btn-icon-sm {
   display: inline-flex; align-items: center; justify-content: center;
   width: 28px; height: 28px; border: none; border-radius: var(--ip-radius-sm);
@@ -98,35 +72,4 @@ function confirmClearCache(): void { showClearConfirm.value = false; }
   background-color: var(--ip-color-bg-hover);
 }
 .btn-secondary:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn-danger {
-  display: inline-flex; align-items: center; justify-content: center;
-  height: var(--ip-btn-h-sm); padding: 0 var(--ip-spacing-3);
-  font-size: var(--ip-text-body-sm-size); font-family: inherit; font-weight: var(--ip-font-weight-medium);
-  color: var(--ip-danger-text); background: var(--ip-danger-bg);
-  border: 1px solid var(--ip-danger-border); border-radius: var(--ip-btn-radius);
-  cursor: pointer; transition: var(--ip-transition-colors);
-}
-.btn-danger:hover {
-  background: var(--ip-danger-base); color: var(--ip-color-text-on-danger);
-  border-color: var(--ip-danger-hover);
-}
-.modal-overlay {
-  position: fixed; inset: 0; z-index: 9999;
-  display: flex; align-items: center; justify-content: center;
-  background: rgba(0, 0, 0, 0.4);
-}
-.modal-dialog {
-  width: 360px; padding: var(--ip-spacing-6);
-  background: var(--ip-color-bg-primary); border-radius: var(--ip-radius-lg);
-  box-shadow: var(--ip-color-shadow);
-}
-.modal-title {
-  font-size: var(--ip-text-body-size); font-weight: var(--ip-font-weight-semibold);
-  color: var(--ip-color-text-primary); margin-bottom: var(--ip-spacing-2);
-}
-.modal-desc {
-  font-size: var(--ip-text-body-sm-size); color: var(--ip-color-text-secondary);
-  line-height: 1.5; margin-bottom: var(--ip-spacing-4);
-}
-.modal-actions { display: flex; justify-content: flex-end; gap: var(--ip-spacing-2); }
 </style>

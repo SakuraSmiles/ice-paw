@@ -283,21 +283,17 @@ const chat = {
    * 命令本身立即返回（AppResult<()>），生成进度通过 `chat:start` / `chat:chunk`
    * / `chat:done` / `chat:error` 四个事件下发；前端在 stores/chat.ts 中订阅。
    *
-   * 可选 `template` 参数（P2-4 模板注入）：传入后，Rust 侧会查模板 →
-   * 渲染变量 → 替换/拼接 system_prompt，最后再调 LLM。
-   *
    * P2-2 多模态：可选 `contentBlocks` 参数传入文字+图片等多模态块，
    * 与 `content` 互斥（传 `contentBlocks` 时 Rust 侧优先使用）。
    *
    * 注意：Rust 侧 send_message 的入参是结构体 SendMessageInput，因此这里走
-   * `{ input: { conversation_id, content, template?, tools_enabled? } }` 包装形式。
+   * `{ input: { conversation_id, content, tools_enabled? } }` 包装形式。
    *
    * 对应 Command：send_message
    */
   async sendMessage(
     conversationId: string,
     content: string,
-    template?: { template_id: string; values: Record<string, string> },
     toolsEnabled?: boolean,
     contentBlocks?: import("../types").ContentBlock[],
   ): Promise<void> {
@@ -306,7 +302,6 @@ const chat = {
         input: {
           conversation_id: conversationId,
           content,
-          template,
           tools_enabled: toolsEnabled ?? false,
           content_blocks: contentBlocks,
         },

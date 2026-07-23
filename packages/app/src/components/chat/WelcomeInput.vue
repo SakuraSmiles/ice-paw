@@ -148,10 +148,6 @@ function autosize(): void {
 
 watch(draft, () => {
   void nextTick(autosize);
-  // 用户编辑消息 → 清空已应用模板
-  if (chatStore.appliedTemplate) {
-    chatStore.setAppliedTemplate(null);
-  }
 });
 
 // ============================================================================
@@ -238,7 +234,6 @@ async function handleSend(): Promise<void> {
     draft.value = "";
     pendingImages.value = [];
     void nextTick(autosize);
-    chatStore.setAppliedTemplate(null);
     emit("send", trimmed, contentBlocks);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

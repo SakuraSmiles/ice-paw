@@ -113,7 +113,7 @@ pub async fn send_message(
     let mut pipeline_ctx = PipelineContext::new(
         pool.inner().clone(),
         agent.clone(),
-        input.template.clone(),
+        None,
         history,
         final_blocks,
         tools_enabled,
