@@ -33,8 +33,8 @@ const theme = computed<string>({
 });
 
 const fontSize = computed<number>({
-  get: () => settingsStore.prefs.fontSize ?? 14,
-  set: (v: number) => settingsStore.update("fontSize", v),
+  get: () => settingsStore.prefs.font_size ?? 14,
+  set: (v: number) => settingsStore.update("font_size", v),
 });
 
 function applyTheme(value: string): void {
