@@ -170,6 +170,12 @@ pub(crate) struct LoopContext {
     pub query: Option<String>,
     /// M1.2: 最近调用过的工具名列表（顺序不限；用于打分历史权重）
     pub call_history: Vec<String>,
+
+    // ---- P0-3: 会话级 model override ----
+    /// P0-3: 覆盖 Agent 默认 model（None = 使用 Agent 默认）。
+    /// 透传给 `provider.stream_chat(model: ...)`，
+    /// 仅影响本次请求，不改写 Agent 配置。
+    pub model: Option<String>,
 }
 
 impl LoopContext {
@@ -203,6 +209,7 @@ impl LoopContext {
         whitelist: PathWhitelistConfig,
         query: Option<String>,
         call_history: Vec<String>,
+        model: Option<String>,
     ) -> Self {
         Self {
             conv_id,
@@ -224,6 +231,7 @@ impl LoopContext {
             budget,
             query,
             call_history,
+            model,
         }
     }
 }
@@ -434,6 +442,7 @@ async fn stream_loop_inner(ctx: &mut LoopContext, observable: &mut RoundState) {
                     tools.clone(),
                     ctx.temperature,
                     ctx.max_tokens,
+                    ctx.model.as_deref(),
                     ctx.cancel.clone(),
                 )
                 .await;

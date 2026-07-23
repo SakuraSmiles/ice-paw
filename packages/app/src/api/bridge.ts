@@ -286,8 +286,12 @@ const chat = {
    * P2-2 多模态：可选 `contentBlocks` 参数传入文字+图片等多模态块，
    * 与 `content` 互斥（传 `contentBlocks` 时 Rust 侧优先使用）。
    *
+   * P0-3 会话级 model 切换：可选 `model` 参数传入 model override。
+   * - 传 `model`：本次请求使用该模型（不改 Agent 配置）
+   * - 不传：使用 Agent 配置的默认 model
+   *
    * 注意：Rust 侧 send_message 的入参是结构体 SendMessageInput，因此这里走
-   * `{ input: { conversation_id, content, tools_enabled? } }` 包装形式。
+   * `{ input: { conversation_id, content, tools_enabled?, model? } }` 包装形式。
    *
    * 对应 Command：send_message
    */
@@ -296,6 +300,7 @@ const chat = {
     content: string,
     toolsEnabled?: boolean,
     contentBlocks?: import("../types").ContentBlock[],
+    model?: string,
   ): Promise<void> {
     try {
       await invoke<void>("send_message", {
@@ -304,6 +309,7 @@ const chat = {
           content,
           tools_enabled: toolsEnabled ?? false,
           content_blocks: contentBlocks,
+          model,
         },
       });
     } catch (err) {

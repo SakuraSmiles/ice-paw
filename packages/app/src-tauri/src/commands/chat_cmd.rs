@@ -58,6 +58,8 @@ pub async fn send_message(
 
     let conv_id = input.conversation_id.clone();
     let tools_enabled = input.tools_enabled;
+    // P0-3: 会话级 model override（None = 使用 Agent 默认 model）
+    let model_override = input.model.clone();
     let content_text = ContentBlock::join_text(&final_blocks);
     // M1.2: 提取当前用户消息的纯文本 query（仅 Text 块拼接；与 LLM 拼装时使用的 content_text 一致）
     let current_user_query = Some(content_text.clone());
@@ -158,12 +160,15 @@ pub async fn send_message(
     repo::message::update_content_blocks(pool.inner(), &user_msg_id, &blocks_json).await?;
 
     let asst_msg_id = Uuid::new_v4().to_string();
+    // P0-3: 助手消息的 model 字段使用 override（若有），否则回退 Agent 默认 model。
+    // 这样 messages 表能正确记录每次回复实际使用的模型。
+    let effective_model = model_override.clone().unwrap_or_else(|| agent.model.clone());
     repo::message::create(
         pool.inner(), &asst_msg_id,
         &NewMessage {
             conversation_id: conv_id.clone(), role: "assistant".into(),
             content: String::new(), token_count: None, error: None,
-            model: Some(agent.model.clone()),
+            model: Some(effective_model),
         },
     ).await?;
 
@@ -181,6 +186,7 @@ pub async fn send_message(
         cancel_token, conv_id, user_msg_id, asst_msg_id, tools_enabled,
         agent_enabled_tools,
         current_user_query, tool_call_history,
+        model_override,
     );
     Ok(())
 }
@@ -205,7 +211,10 @@ pub async fn stop_generation(
 /// M1.4: 移除 `trimmed_tool_defs` 参数——Pipeline 不再做工具裁剪，
 /// loop_engine 在每轮独立调 `list_tool_defs_with_query()` 打分。
 ///
-/// 注意：`spawn_stream_loop` 自身的形参列表仍是 11 个（编排层分散收集
+/// P0-3: 新增 `model_override` 参数（会话级 model 覆盖，None = 用 Agent 默认），
+/// 透传到 LoopContext.model，由 stream_loop 传给 provider.stream_chat()。
+///
+/// 注意：`spawn_stream_loop` 自身的形参列表仍是 12 个（编排层分散收集
 /// 各 Tauri State/输入），所以 `#[allow(clippy::too_many_arguments)]`
 /// 仍需保留；要消除这个 lint 需要更彻底地把编排也下沉到 `LoopContext`
 /// 子构造器（不在 W6.2 范围内）。
@@ -217,6 +226,7 @@ fn spawn_stream_loop(
     asst_msg_id: String, tools_enabled: bool,
     agent_enabled_tools: Option<Vec<String>>,
     query: Option<String>, call_history: Vec<String>,
+    model_override: Option<String>,
 ) {
     tokio::spawn(async move {
         // Task 4: 工具列表来自 Agent 配置（enabled_tools），对话 toggle 控制是否启用
@@ -242,9 +252,10 @@ fn spawn_stream_loop(
         // A2-3: 路径白名单配置（当前为空 → 全部走 Confirm 流程）
         let whitelist = PathWhitelistConfig::default();
 
-        // W6.2 + A2-3 + M1.2: 把 18 个输入字段封装到 LoopContext，
+        // W6.2 + A2-3 + M1.2 + P0-3: 把 19 个输入字段封装到 LoopContext，
         // 消除 stream_loop 的 too_many_arguments 告警。
         // M1.2: query + call_history 用于 list_tool_defs_with_query 打分
+        // P0-3: model_override 透传到 provider.stream_chat() 实现会话级切换
         let mut ctx = LoopContext::new(
             conv_id.clone(),
             asst_msg_id,
@@ -265,6 +276,7 @@ fn spawn_stream_loop(
             whitelist,
             query,
             call_history,
+            model_override,
         );
         crate::harness::loop_engine::stream_loop(&mut ctx, &mut observable).await;
         // W2.4: emit final round-state after stream_loop completes
