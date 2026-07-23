@@ -96,8 +96,14 @@ impl LlmProvider for AnthropicAdapter {
         tools: Option<Vec<ToolDef>>,
         temperature: f64,
         max_tokens: i32,
+        model: Option<&str>,
         cancel: CancellationToken,
     ) -> AppResult<Pin<Box<dyn Stream<Item = AppResult<ChatDelta>> + Send>>> {
+        // P0-3: 会话级 model override —— 优先使用调用方传入的 model，
+        // 否则回退到 Adapter 构造时绑定的默认 model（self.model）。
+        // 注意：不会改写 self.model，下次 None 调用仍走默认。
+        let effective_model = model.unwrap_or(&self.model);
+
         // 1. 拆分 system + 把 ChatMessage 转换为 AnthropicMessage
         let (system_prompt, msgs) = types::split_system_prompt(&messages);
 
@@ -137,7 +143,7 @@ impl LlmProvider for AnthropicAdapter {
         // 3. 拼 URL + body
         let url = format!("{}/v1/messages", self.base_url.trim_end_matches('/'));
         let body = ChatRequest {
-            model: &self.model,
+            model: effective_model,
             max_tokens,
             temperature,
             system: system_json_ref.as_ref(),
