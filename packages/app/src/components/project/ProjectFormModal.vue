@@ -21,6 +21,20 @@ import type { Agent, Project, ProjectMemberInput, NewProject, ProjectPatch } fro
 
 type Mode = "create" | "edit";
 
+/**
+ * 创建模式下的预填值（P0-7 EmptyProjectCard 点击后传入）。
+ *
+ * 仅在 mode === "create" 时生效：
+ *   - name        项目名预填值
+ *   - description 项目描述预填值
+ *
+ * edit 模式忽略该字段（编辑已有项目，值由 initial 决定）。
+ */
+export interface ProjectFormPrefill {
+  name?: string;
+  description?: string;
+}
+
 interface Props {
   modelValue: boolean;
   mode: Mode;
@@ -28,6 +42,8 @@ interface Props {
   initial?: Project | null;
   /** 由父组件传入的全部 Agent 列表 */
   agents: Agent[];
+  /** 创建模式下的预填值（P0-7：EmptyProjectCard 推荐卡点击带入） */
+  prefill?: ProjectFormPrefill | null;
 }
 
 interface Emits {
@@ -39,6 +55,7 @@ interface Emits {
 
 const props = withDefaults(defineProps<Props>(), {
   initial: null,
+  prefill: null,
 });
 const emit = defineEmits<Emits>();
 
@@ -85,7 +102,7 @@ function workspaceError(): string {
 
 // ===== 初始化 / 同步 initial =====
 watch(
-  () => [props.modelValue, props.mode, props.initial?.id],
+  () => [props.modelValue, props.mode, props.initial?.id, props.prefill],
   () => {
     if (!props.modelValue) return; // 关闭时不重置，避免父组件销毁态被覆盖
     if (props.mode === "edit" && props.initial) {
@@ -98,8 +115,10 @@ watch(
         role: m.role,
       }));
     } else {
-      name.value = "";
-      description.value = "";
+      // create 模式：使用 props.prefill（P0-7）预填，否则留空
+      const pf = props.prefill;
+      name.value = pf?.name ?? "";
+      description.value = pf?.description ?? "";
       icon.value = "folder";
       workspacePath.value = "";
       members.value = [];
