@@ -1,10 +1,18 @@
 <script setup lang="ts">
 /**
- * IcePaw UI · 预览站
+ * IcePaw UI · 预览站 v2
  *
- * v1 — 按 icepaw-dev-site-spec.md v1.0.1 重写
- * 布局：sticky header → hero → 6 sections → footer
- * 右侧浮动 TOC + 手绘风 SVG 装饰
+ * 类型: 品牌展示落地页（取代 v1 的组件文档目录）
+ * 规范: wave2-preview-site-spec.md（ui-designer 出品）
+ * 视觉基准: previews/ui-hero-v2.html
+ *
+ * 实现要点:
+ * - Hero 双栏 grid（左文案 + 右聊天预览 + 4 个浮动卡 + 冰晶 SVG 背景）
+ * - 13 个 section，每个 section 布局不同（无 5 段式模板）
+ * - 14 个组件 demo 数据全部保留
+ * - 字体三层: display (Instrument Serif) / sans (DM Sans) / mono (JetBrains Mono)
+ * - 暗色模式: [data-theme="dark"]
+ * - 响应式: <1024px / <768px 断点
  */
 import { ref, onMounted, onUnmounted, h } from 'vue'
 import {
@@ -42,6 +50,8 @@ import {
   Copy,
   Download,
   ChevronDown,
+  CheckCircle,
+  AlertCircle,
   LogOut,
   Share2,
   Sun,
@@ -58,7 +68,7 @@ function toggleTheme(): void {
 /* ── Toast API ── */
 const toast: ToastApi = provideToast()
 
-/* ── Demo state ── */
+/* ── Demo state (preserved from v1) ── */
 const inputValue = ref<string>('你好')
 const inputError = ref<boolean>(false)
 const inputErrorMessage = ref<string>('')
@@ -77,12 +87,19 @@ function triggerLoading(): void {
   setTimeout(() => { btnLoading.value = false }, 1500)
 }
 
+let inputErrorTimer: ReturnType<typeof setTimeout> | undefined
 function showInputError(): void {
+  if (inputErrorTimer) clearTimeout(inputErrorTimer)
   inputError.value = false
   inputErrorMessage.value = ''
   setTimeout(() => {
     inputError.value = true
-    inputErrorMessage.value = '用户名不能为空'
+    inputErrorMessage.value = '用户名已被占用'
+    inputErrorTimer = setTimeout(() => {
+      inputError.value = false
+      inputErrorMessage.value = ''
+      inputErrorTimer = undefined
+    }, 3000)
   }, 50)
 }
 
@@ -106,16 +123,64 @@ function toastMergeDemo(): void {
   setTimeout(() => toast.success('第三次保存'), 1600)
 }
 
-/* ── Avatar demo state ── */
+/* ── Nav active 联动 ── */
+const navItems = [
+  { label: '概览', href: '#hero', id: 'hero' },
+  { label: '组件', href: '#components', id: 'components' },
+] as const
+const activeNav = ref<typeof navItems[number]['label']>('概览')
+
+let cleanupActiveObserver: (() => void) | undefined
+function initActiveObserver(): () => void {
+  const observer = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting && entry.target.id) {
+          const match = navItems.find((n) => n.id === entry.target.id)
+          if (match) activeNav.value = match.label
+        }
+      })
+    },
+    { threshold: 0.3 },
+  )
+  navItems.forEach((n) => {
+    const el = document.getElementById(n.id)
+    if (el) observer.observe(el)
+  })
+  return () => observer.disconnect()
+}
+
+/* ── Section 1 Buttons demo state ── */
+const stateView = ref<'default' | 'hover' | 'active' | 'disabled' | 'loading'>('default')
+const btnVariants = [
+  { key: 'primary',   label: 'Primary',   sub: '主操作' },
+  { key: 'secondary', label: 'Secondary', sub: '次要操作' },
+  { key: 'ghost',     label: 'Ghost',     sub: '弱操作' },
+  { key: 'danger',    label: 'Danger',    sub: '危险操作' },
+] as const
+
+/* ── Section 4 Inputs demo state ── */
+const auxValue = ref<string>('你好')
+const agentName = ref<string>('代码伙伴')
+const agentPrompt = ref<string>('你是一个乐于助人的代码伙伴。')
+
+/* ── Section 7 Avatar demo state ── */
 const avatarSrc = ref<string>(
   'https://api.dicebear.com/9.x/notionists/svg?seed=icepaw&backgroundColor=d1d4f9',
 )
+const defaultAvatar = avatarSrc.value
+const avatarCleared = ref(false)
+
 function clearAvatar(): void {
   avatarSrc.value = ''
-  toast.info('已重置为默认头像')
+  avatarCleared.value = true
+  toast.info('已清除头像')
+  setTimeout(() => {
+    avatarSrc.value = defaultAvatar
+    avatarCleared.value = false
+  }, 1000)
 }
 function onAvatarUpload(file: File): void {
-  // 模拟异步上传：用 FileReader 读取为 dataURL
   const reader = new FileReader()
   reader.onload = (ev) => {
     avatarSrc.value = String(ev.target?.result ?? '')
@@ -127,14 +192,15 @@ function onAvatarError(err: { code: string; message: string }): void {
   toast.error(err.message)
 }
 
-/* ── Card demo state ── */
+/* ── Section 2 Cards demo state ── */
 const cardSelected = ref(false)
 
-/* ── Select demo state ── */
+/* ── Section 8 Select demo state ── */
 const selectValue = ref<string | null>('balanced')
 const selectError = ref(false)
 const selectErrorMessage = ref('')
 const selectClearable = ref<string | null>('gemini-2.5-pro')
+const selectTone = ref<string | null>('balanced')
 
 const modelOptions = [
   { value: 'gpt-4o', label: 'GPT-4o', description: 'OpenAI · 多模态旗舰', icon: Sparkles },
@@ -156,14 +222,16 @@ function triggerSelectError(): void {
   selectErrorMessage.value = selectError.value ? '请选择一个模型' : ''
 }
 
-/* ── Dropdown demo state ── */
+/* ── Section 10 Dropdown demo state ── */
 const ddOpen = ref(false)
 const ddOpenHover = ref(false)
+const ddOpenFull = ref(false)
+const ddOpenDisabled = ref(false)
 const ddAction = (label: string): void => {
   toast.info(`${label}`)
 }
 
-/* ── Popconfirm demo state ── */
+/* ── Section 11 Popconfirm demo state ── */
 const popOpen = ref(false)
 const popDangerOpen = ref(false)
 const popLoading = ref(false)
@@ -175,7 +243,7 @@ function confirmDelete(): void {
   popLoading.value = true
   setTimeout(() => {
     popLoading.value = false
-    popOpen.value = false
+    popDangerOpen.value = false
     toast.success('已删除')
   }, 1200)
 }
@@ -223,86 +291,42 @@ const hCaretVNode = h(
   }),
 )
 
-/* ── TOC + Scroll ── */
-const tocItems = [
-  { id: 'button',    label: 'Button' },
-  { id: 'input',     label: 'Input' },
-  { id: 'textarea',  label: 'Textarea' },
-  { id: 'message',   label: 'Message' },
-  { id: 'modal',     label: 'Modal' },
-  { id: 'toast',     label: 'Toast' },
-  { id: 'flex',      label: 'Flex' },
-  { id: 'container', label: 'Container' },
-  { id: 'avatar',    label: 'Avatar' },
-  { id: 'card',      label: 'Card' },
-  { id: 'select',    label: 'Select' },
-  { id: 'empty',     label: 'EmptyState' },
-  { id: 'dropdown',  label: 'DropdownMenu' },
-  { id: 'popconfirm',label: 'Popconfirm' },
-]
-
-const activeId = ref<string>('button')
-const isScrolled = ref(false)
-
-function scrollTo(id: string): void {
-  const el = document.getElementById(id)
-  if (el) {
-    const top = el.getBoundingClientRect().top + window.scrollY - 80
-    window.scrollTo({ top, behavior: 'smooth' })
-  }
-}
-
-function onScroll(): void {
-  isScrolled.value = window.scrollY > 8
-}
-
-/* ── Wavy line draw animation ── */
-function initWavyAnimations(): void {
+/* ── Section reveal (single fade-in, no stagger) ── */
+function initSectionReveal(): () => void {
   const observer = new IntersectionObserver(
     (entries) => {
       entries.forEach((entry) => {
         if (entry.isIntersecting) {
-          entry.target.classList.add('is-drawn')
+          entry.target.classList.add('is-revealed')
           observer.unobserve(entry.target)
         }
       })
     },
-    { threshold: 0.5 },
+    { threshold: 0.15, rootMargin: '0px 0px -10% 0px' },
   )
-  document.querySelectorAll('.hand-drawn-divider').forEach((el) => observer.observe(el))
-}
-
-/* ── TOC section detection ── */
-function initTocObserver(): void {
-  const observer = new IntersectionObserver(
-    (entries) => {
-      const visible = entries
-        .filter((e) => e.isIntersecting)
-        .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)
-      if (visible.length > 0) {
-        activeId.value = visible[0].target.id
-      }
-    },
-    { rootMargin: '-30% 0px -60% 0px', threshold: 0 },
+  const targets = document.querySelectorAll(
+    '.section-divider, .buttons-section, .cards-section, .message-section, ' +
+    '.inputs-section, .modals-section, .toast-section, .avatar-section, ' +
+    '.select-section, .empty-section, .dropdown-section, .popconfirm-section, ' +
+    '.flex-section, .container-section',
   )
-  tocItems.forEach((item) => {
-    const el = document.getElementById(item.id)
-    if (el) observer.observe(el)
+  targets.forEach((el) => {
+    el.classList.add('reveal-init')
+    observer.observe(el)
   })
   return () => observer.disconnect()
 }
 
-let cleanupToc: (() => void) | undefined
+let cleanupReveal: (() => void) | undefined
 
 onMounted(() => {
-  window.addEventListener('scroll', onScroll, { passive: true })
-  initWavyAnimations()
-  cleanupToc = initTocObserver()
+  cleanupReveal = initSectionReveal()
+  cleanupActiveObserver = initActiveObserver()
 })
 
 onUnmounted(() => {
-  window.removeEventListener('scroll', onScroll)
-  if (cleanupToc) cleanupToc()
+  if (cleanupReveal) cleanupReveal()
+  cleanupActiveObserver?.()
 })
 </script>
 
@@ -311,2280 +335,3113 @@ onUnmounted(() => {
     <!-- Toast 容器 -->
     <ToastContainer />
 
-    <!-- ── Header ── -->
-    <header class="preview-header" :class="{ 'is-scrolled': isScrolled }">
-      <div class="preview-header__inner">
-        <!-- Brand -->
-        <div class="preview-header__brand">
-          <!-- Hand-drawn paw print SVG -->
-          <svg class="hand-drawn-paw" width="22" height="22" viewBox="0 0 22 22" fill="none" aria-hidden="true">
-            <ellipse cx="6"  cy="6"  rx="1.6" ry="2.2" transform="rotate(-25 6 6)"  fill="currentColor"/>
-            <ellipse cx="11" cy="3"  rx="1.6" ry="2.2" fill="currentColor"/>
-            <ellipse cx="16" cy="6"  rx="1.6" ry="2.2" transform="rotate(25 16 6)"  fill="currentColor"/>
-            <path d="M 5 13 Q 5 10, 8 9.5 L 14 9.5 Q 17 10, 17 13 Q 17 17, 11 18 Q 5 17, 5 13 Z" fill="currentColor"/>
-          </svg>
-          <span class="preview-header__name">IcePaw</span>
-          <span class="preview-header__dot" aria-hidden="true">·</span>
-          <span class="preview-header__meta">组件 · 基础</span>
-          <code class="preview-header__version">v1.0.1</code>
+    <!-- ══════════════ 顶部导航 ══════════════ -->
+    <nav class="nav" aria-label="主导航">
+      <div class="nav-inner">
+        <a class="brand" href="#hero">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 32 32" width="26" height="26">
+              <rect width="32" height="32" rx="7" fill="var(--ip-primary-50)"/>
+              <g transform="translate(5, 5)" fill="var(--ip-primary-500)">
+                <ellipse cx="6"  cy="6"  rx="1.7" ry="2.3" transform="rotate(-25 6 6)"/>
+                <ellipse cx="11" cy="2.8" rx="1.7" ry="2.3"/>
+                <ellipse cx="16" cy="6"  rx="1.7" ry="2.3" transform="rotate(25 16 6)"/>
+                <path d="M 4.5 12.5 Q 4.5 9.8, 7.8 9.3 L 14.2 9.3 Q 17.5 9.8, 17.5 12.5 Q 17.5 17.2, 11 18.2 Q 4.5 17.2, 4.5 12.5 Z"/>
+              </g>
+            </svg>
+          </span>
+          IcePaw<span class="accent"> · Design System</span>
+        </a>
+
+        <div class="nav-links">
+          <a
+            v-for="link in navItems"
+            :key="link.label"
+            class="nav-link"
+            :class="{ active: activeNav === link.label }"
+            :href="link.href"
+          >{{ link.label }}</a>
         </div>
 
-        <!-- Theme toggle -->
-        <button
-          type="button"
-          class="theme-toggle"
-          :aria-label="theme === 'light' ? '切换到暗色模式' : '切换到亮色模式'"
-          @click="toggleTheme"
-        >
-          <Sun v-if="theme === 'light'" :size="16" :stroke-width="2" class="theme-toggle__icon" aria-hidden="true" />
-          <Moon v-else :size="16" :stroke-width="2" class="theme-toggle__icon" aria-hidden="true" />
-          <span class="theme-toggle__label">{{ theme === 'light' ? '浅色' : '深色' }}</span>
-        </button>
-      </div>
-    </header>
-
-    <!-- ── Hero ── -->
-    <section class="preview-intro">
-      <p class="preview-intro__index">01 — 14</p>
-      <h1>IcePaw Design System</h1>
-      <p class="preview-intro__subtitle">为 AI 对话界面打造的 Vue 3 组件库。</p>
-
-      <!-- Wavy divider -->
-      <svg class="hand-drawn-divider" width="200" height="12" viewBox="0 0 200 12" fill="none" aria-hidden="true">
-        <path
-          d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
-              stroke="currentColor" stroke-width="1.5"
-              stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
-      </svg>
-
-      <p class="preview-intro__lede">
-        14 个原子与布局组件，覆盖按钮、输入、消息、对话框、头像、卡片、选择器等基础交互。
-      </p>
-
-      <!-- Anchor pills -->
-      <nav class="preview-anchor-pills" aria-label="组件导航">
-        <button
-          v-for="item in tocItems"
-          :key="item.id"
-          type="button"
-          class="hero-anchor"
-          @click="scrollTo(item.id)"
-        >
-          {{ item.label }}
-        </button>
-      </nav>
-
-      <!-- Scroll hint -->
-      <div class="hero-scroll-hint" aria-hidden="true">
-        <span>向下滚动</span>
-        <svg width="14" height="20" viewBox="0 0 14 20" fill="none">
-          <path
-            d="M7 1 L7 15 M2 10 L7 15 L12 10" stroke="currentColor" stroke-width="1.5"
-                stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-      </div>
-    </section>
-
-    <!-- ── 01 / Button ── -->
-    <section id="button" class="preview-section">
-      <div class="preview-section__top">
-        <svg class="hand-drawn-divider" width="200" height="12" viewBox="0 0 200 12" fill="none" aria-hidden="true">
-          <path
-            d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
-                stroke="currentColor" stroke-width="1.5"
-                stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
-        </svg>
-      </div>
-      <p class="preview-section__index">01 / 14</p>
-      <h2 class="preview-section__title">Buttons</h2>
-      <p class="preview-section__subtitle">按钮用于触发即时操作。</p>
-
-      <span class="preview-label">变体</span>
-      <div class="preview-row">
-        <Button variant="primary"  @click="toastSuccess">主要</Button>
-        <Button variant="secondary">次要</Button>
-        <Button variant="ghost">幽灵</Button>
-        <Button variant="danger"   @click="toastError">危险</Button>
-      </div>
-      <p class="preview-caption">主要按钮代表页面最关键的操作。</p>
-
-      <span class="preview-label">尺寸</span>
-      <div class="preview-row">
-        <Button size="sm">小号</Button>
-        <Button size="md">中号</Button>
-        <Button size="lg">大号</Button>
-      </div>
-      <p class="preview-caption">小号用于密集界面，大号保留给首屏 CTA。</p>
-
-      <span class="preview-label">尺寸 × 变体</span>
-      <div class="preview-row">
-        <Button variant="primary"   size="sm">主要 小</Button>
-        <Button variant="primary"   size="md">主要 中</Button>
-        <Button variant="primary"   size="lg">主要 大</Button>
-      </div>
-      <div class="preview-row">
-        <Button variant="secondary" size="sm">次要 小</Button>
-        <Button variant="secondary" size="md">次要 中</Button>
-        <Button variant="secondary" size="lg">次要 大</Button>
-      </div>
-
-      <span class="preview-label">状态</span>
-      <div class="preview-row">
-        <Button variant="primary">默认</Button>
-        <Button variant="primary" disabled>禁用</Button>
-        <Button variant="primary" :loading="btnLoading" @click="triggerLoading">
-          {{ btnLoading ? '加载中…' : '加载' }}
-        </Button>
-      </div>
-      <div class="preview-row">
-        <Button variant="danger">默认</Button>
-        <Button variant="danger" disabled>禁用</Button>
-        <Button variant="danger" loading>加载中</Button>
-      </div>
-
-      <span class="preview-label">带图标</span>
-      <div class="preview-row">
-        <Button variant="primary">
-          <template #icon-left>
-            <Plus :size="16" :stroke-width="2" />
-          </template>
-          新对话
-        </Button>
-        <Button variant="secondary">
-          发送
-          <template #icon-right>
-            <Send :size="16" :stroke-width="2" />
-          </template>
-        </Button>
-      </div>
-
-      <span class="preview-label">通栏与仅图标</span>
-      <div class="preview-row">
-        <Button variant="primary" block>通栏按钮</Button>
-      </div>
-      <div class="preview-row">
-        <Button variant="ghost" icon-only aria-label="设置">
-          <Settings :size="16" :stroke-width="2" />
-        </Button>
-        <Button variant="secondary" size="lg" icon-only aria-label="更多">
-          <MoreHorizontal :size="18" :stroke-width="2" />
-        </Button>
-      </div>
-
-      <span class="preview-label">使用场景</span>
-      <p class="preview-prose">
-        用于触发操作；每个视图区域只保留一个主按钮。
-      </p>
-
-      <span class="preview-label">反面示例</span>
-      <ul class="preview-dont-list">
-        <li>
-          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
-          </svg>
-          一个行内不要放置多个主按钮
-        </li>
-        <li>
-          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
-          </svg>
-          取消操作不要用主按钮
-        </li>
-        <li>
-          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
-          </svg>
-          禁用按钮时需配合文案说明
-        </li>
-      </ul>
-
-      <!-- End wavy divider -->
-      <svg class="hand-drawn-divider hand-drawn-divider--center" width="320" height="12" viewBox="0 0 320 12" fill="none" aria-hidden="true">
-        <path
-          d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
-              stroke="currentColor" stroke-width="1.5"
-              stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
-      </svg>
-    </section>
-
-    <!-- ── 02 / Input ── -->
-    <section id="input" class="preview-section">
-      <div class="preview-section__top">
-        <svg class="hand-drawn-divider" width="200" height="12" viewBox="0 0 200 12" fill="none" aria-hidden="true">
-          <path
-            d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
-                stroke="currentColor" stroke-width="1.5"
-                stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
-        </svg>
-      </div>
-      <p class="preview-section__index">02 / 14</p>
-      <h2 class="preview-section__title">Inputs</h2>
-      <p class="preview-section__subtitle">用于收集单行文本的输入控件。</p>
-
-      <span class="preview-label">尺寸</span>
-      <div class="preview-stack">
-        <Input v-model="inputValue" size="sm" placeholder="搜索会话…" />
-        <Input v-model="inputValue" size="md" placeholder="输入用户名" />
-        <Input v-model="inputValue" size="lg" placeholder="给代理起个名字" />
-      </div>
-      <p class="preview-caption">小号用于紧凑场景，大号用于突出表单。</p>
-
-      <span class="preview-label">状态</span>
-      <div class="preview-stack">
-        <Input :model-value="'预填充内容'" />
-        <Input :model-value="'禁用字段'" disabled />
-        <Input :model-value="'只读字段'" readonly />
-        <Input
-          v-model="inputValue"
-          placeholder="请输入用户名"
-          :error="inputError"
-          :error-message="inputErrorMessage"
-          @blur="inputValue.length === 0 ? showInputError() : clearInputError()"
-        />
-      </div>
-
-      <span class="preview-label">前缀与后缀</span>
-      <div class="preview-stack">
-        <Input v-model="inputValue" placeholder="搜索…">
-          <template #prefix>
-            <Search :size="14" :stroke-width="2" />
-          </template>
-        </Input>
-        <Input :model-value="'用户'" placeholder="用户名">
-          <template #prefix>
-            <AtSign :size="14" :stroke-width="2" />
-          </template>
-        </Input>
-        <Input :model-value="'#general'" placeholder="频道">
-          <template #prefix>
-            <Hash :size="14" :stroke-width="2" />
-          </template>
-        </Input>
-        <Input :model-value="'用户'" placeholder="用户名">
-          <template #suffix>
-            <span style="font-size: 12px; color: var(--ip-color-text-tertiary);">@icepaw.dev</span>
-          </template>
-        </Input>
-      </div>
-
-      <span class="preview-label">可清除</span>
-      <div class="preview-stack">
-        <Input v-model="inputValue" placeholder="搜索会话…" clearable />
-      </div>
-
-      <span class="preview-label">错误抖动</span>
-      <div class="preview-row">
-        <Button variant="secondary" size="sm" @click="showInputError">触发错误</Button>
-        <Button variant="ghost"    size="sm" @click="clearInputError">清除错误</Button>
-      </div>
-
-      <span class="preview-label">使用场景</span>
-      <p class="preview-prose">
-        用于收集单行文本；前缀图标和后缀提示帮助用户理解字段含义。
-      </p>
-
-      <span class="preview-label">反面示例</span>
-      <ul class="preview-dont-list">
-        <li>
-          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
-          </svg>
-          禁用输入框时需配合文案说明
-        </li>
-        <li>
-          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
-          </svg>
-          窄表单不要并排多个输入框
-        </li>
-        <li>
-          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
-          </svg>
-          空字段不显示清除按钮
-        </li>
-      </ul>
-
-      <svg class="hand-drawn-divider hand-drawn-divider--center" width="320" height="12" viewBox="0 0 320 12" fill="none" aria-hidden="true">
-        <path
-          d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
-              stroke="currentColor" stroke-width="1.5"
-              stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
-      </svg>
-    </section>
-
-    <!-- ── 03 / Textarea ── -->
-    <section id="textarea" class="preview-section">
-      <div class="preview-section__top">
-        <svg class="hand-drawn-divider" width="200" height="12" viewBox="0 0 200 12" fill="none" aria-hidden="true">
-          <path
-            d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
-                stroke="currentColor" stroke-width="1.5"
-                stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
-        </svg>
-      </div>
-      <p class="preview-section__index">03 / 14</p>
-      <h2 class="preview-section__title">Textareas</h2>
-      <p class="preview-section__subtitle">用于收集多行文本的输入控件。</p>
-
-      <span class="preview-label">尺寸</span>
-      <div class="preview-stack">
-        <Textarea v-model="taValue" size="sm" placeholder="写下你的想法…" />
-        <Textarea v-model="taValue" size="md" placeholder="描述这个代理的用途…" />
-        <Textarea v-model="taValue" size="lg" placeholder="系统提示词…" />
-      </div>
-      <p class="preview-caption">小号约 4 行，大号约 8 行，可按场景选择。</p>
-
-      <span class="preview-label">自动调整高度</span>
-      <div class="preview-stack">
-        <Textarea
-          v-model="taValue"
-          placeholder="写下你的想法…"
-          auto-resize
-          :rows="2"
-        />
-      </div>
-      <p class="preview-caption">高度自动撑高，最大高度受尺寸限制。</p>
-
-      <span class="preview-label">可拖拽调整手柄</span>
-      <div class="preview-stack">
-        <Textarea v-model="taValue" resizable placeholder="系统提示词…" />
-      </div>
-
-      <span class="preview-label">状态</span>
-      <div class="preview-stack">
-        <Textarea :model-value="'已禁用'" disabled />
-        <Textarea :model-value="'只读'" readonly />
-        <Textarea placeholder="写下你的想法…" error error-message="内容不能为空" />
-      </div>
-
-      <span class="preview-label">使用场景</span>
-      <p class="preview-prose">
-        用于收集多行文本，如提示词、说明、系统消息。
-      </p>
-
-      <span class="preview-label">反面示例</span>
-      <ul class="preview-dont-list">
-        <li>
-          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
-          </svg>
-          短的单行回答使用 Input
-        </li>
-        <li>
-          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
-          </svg>
-          需要设置最大高度
-        </li>
-        <li>
-          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
-          </svg>
-          自动调整高度和手动拖拽不要同时启用
-        </li>
-      </ul>
-
-      <svg class="hand-drawn-divider hand-drawn-divider--center" width="320" height="12" viewBox="0 0 320 12" fill="none" aria-hidden="true">
-        <path
-          d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
-              stroke="currentColor" stroke-width="1.5"
-              stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
-      </svg>
-    </section>
-
-    <!-- ── 04 / Message ── -->
-    <section id="message" class="preview-section">
-      <div class="preview-section__top">
-        <svg class="hand-drawn-divider" width="200" height="12" viewBox="0 0 200 12" fill="none" aria-hidden="true">
-          <path
-            d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
-                stroke="currentColor" stroke-width="1.5"
-                stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
-        </svg>
-      </div>
-      <p class="preview-section__index">04 / 14</p>
-      <h2 class="preview-section__title">Messages</h2>
-      <p class="preview-section__subtitle">用于展示对话中的用户、助手和系统消息。</p>
-
-      <span class="preview-label">对话</span>
-      <div class="preview-chat-frame">
-        <MessageBubble role="user" timestamp="10:30">
-          帮我看看这段代码哪里有 bug？我本地跑不起来。
-        </MessageBubble>
-
-        <MessageBubble role="assistant" name="IcePaw" timestamp="10:30" meta="3.2s · 128 token">
-          好的，看起来你的 <code>fetch</code> 调用缺少 <code>await</code>，所以返回的是 Promise 而不是实际数据。
-          <template #footer-actions>
-            <button
-              type="button"
-              class="ip-message__action-btn"
-              aria-label="重新生成"
-              @click="toastInfo"
-            >
-              <RotateCcw :size="14" :stroke-width="2" />
-            </button>
-          </template>
-        </MessageBubble>
-
-        <MessageBubble role="user" timestamp="10:31">
-          明白了
-        </MessageBubble>
-
-        <MessageBubble role="user" timestamp="10:32">
-          那如果是异步的，怎么同时发起多个请求？
-        </MessageBubble>
-
-        <MessageBubble role="assistant" name="IcePaw" timestamp="10:32" meta="2.1s · 95 token" streaming>
-          推荐使用 <code>Promise.all</code>，它会并发地等待所有 Promise 完成，然后按顺序返回结果数组。
-        </MessageBubble>
-
-        <MessageBubble role="system">
-          连接已断开，正在重连…
-        </MessageBubble>
-
-        <MessageBubble role="assistant" name="IcePaw" timestamp="10:33" error="连接超时">
-          回复失败
-        </MessageBubble>
-
-        <MessageBubble role="assistant" name="IcePaw" timestamp="10:34" meta="5.4s · 312 token">
-          {{ longMessage }}
-        </MessageBubble>
-      </div>
-      <p class="preview-caption">长消息自动折叠，点击展开。</p>
-
-      <span class="preview-label">使用场景</span>
-      <p class="preview-prose">
-        三种角色：用户消息靠右、助手消息靠左、系统消息居中。
-      </p>
-
-      <span class="preview-label">反面示例</span>
-      <ul class="preview-dont-list">
-        <li>
-          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
-          </svg>
-          单条消息不要放置多个主操作
-        </li>
-        <li>
-          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
-          </svg>
-          关键信息不要只放在系统消息中
-        </li>
-      </ul>
-
-      <svg class="hand-drawn-divider hand-drawn-divider--center" width="320" height="12" viewBox="0 0 320 12" fill="none" aria-hidden="true">
-        <path
-          d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
-              stroke="currentColor" stroke-width="1.5"
-              stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
-      </svg>
-    </section>
-
-    <!-- ── 05 / Modal ── -->
-    <section id="modal" class="preview-section">
-      <div class="preview-section__top">
-        <svg class="hand-drawn-divider" width="200" height="12" viewBox="0 0 200 12" fill="none" aria-hidden="true">
-          <path
-            d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
-                stroke="currentColor" stroke-width="1.5"
-                stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
-        </svg>
-      </div>
-      <p class="preview-section__index">05 / 14</p>
-      <h2 class="preview-section__title">Modals</h2>
-      <p class="preview-section__subtitle">用于需要用户全部注意力的决策或编辑。</p>
-
-      <span class="preview-label">尺寸</span>
-      <div class="preview-row">
-        <Button variant="primary" size="sm" @click="modalOpenSm = true">打开（480px）</Button>
-        <Button variant="primary" size="md" @click="modalOpenMd = true">打开（560px）</Button>
-        <Button variant="primary" size="lg" @click="modalOpenLg = true">打开（720px）</Button>
-      </div>
-
-      <Modal v-model="modalOpenSm" title="删除会话" size="sm">
-        <p style="color: var(--ip-color-text-body);">将永久删除该会话及其所有消息，无法恢复。</p>
-        <template #footer>
-          <Button variant="ghost" @click="modalOpenSm = false">取消</Button>
-          <Button variant="danger"   @click="modalOpenSm = false">删除</Button>
-        </template>
-      </Modal>
-
-      <Modal v-model="modalOpenMd" title="编辑代理" size="md">
-        <Input :model-value="'通用助手'" placeholder="代理名称" style="margin-bottom: 12px;" />
-        <Textarea :model-value="'你是一个乐于助人的助手。三思而后行。'" placeholder="你是一个乐于助人的助手…" :rows="4" />
-        <template #footer>
-          <Button variant="ghost" @click="modalOpenMd = false">取消</Button>
-          <Button variant="primary" @click="modalOpenMd = false">保存</Button>
-        </template>
-      </Modal>
-
-      <Modal v-model="modalOpenLg" title="系统提示词" size="lg">
-        <Textarea v-model="taValue" placeholder="你是一个乐于助人的助手…" :rows="6" />
-        <template #footer>
-          <Button variant="ghost" @click="modalOpenLg = false">取消</Button>
-          <Button variant="primary" @click="modalOpenLg = false">保存</Button>
-        </template>
-      </Modal>
-
-      <span class="preview-label">使用场景</span>
-      <p class="preview-prose">
-        用于确认、编辑、详情等需要用户全部注意力的场景。
-      </p>
-
-      <span class="preview-label">反面示例</span>
-      <ul class="preview-dont-list">
-        <li>
-          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
-          </svg>
-          弹窗嵌套不要超过两层
-        </li>
-        <li>
-          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
-          </svg>
-          成功提示使用 Toast
-        </li>
-        <li>
-          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
-          </svg>
-          主要操作放在底部按钮区
-        </li>
-      </ul>
-
-      <svg class="hand-drawn-divider hand-drawn-divider--center" width="320" height="12" viewBox="0 0 320 12" fill="none" aria-hidden="true">
-        <path
-          d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
-              stroke="currentColor" stroke-width="1.5"
-              stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
-      </svg>
-    </section>
-
-    <!-- ── 06 / Toast ── -->
-    <section id="toast" class="preview-section">
-      <div class="preview-section__top">
-        <svg class="hand-drawn-divider" width="200" height="12" viewBox="0 0 200 12" fill="none" aria-hidden="true">
-          <path
-            d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
-                stroke="currentColor" stroke-width="1.5"
-                stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
-        </svg>
-      </div>
-      <p class="preview-section__index">06 / 14</p>
-      <h2 class="preview-section__title">Toasts</h2>
-      <p class="preview-section__subtitle">用于非关键、瞬时的操作反馈。</p>
-
-      <span class="preview-label">类型</span>
-      <div class="preview-row">
-        <Button variant="primary"   @click="toastSuccess">成功</Button>
-        <Button variant="secondary" @click="toastInfo">信息</Button>
-        <Button variant="primary"   @click="toastWarning">警告</Button>
-        <Button variant="danger"    @click="toastError">错误</Button>
-      </div>
-
-      <span class="preview-label">合并策略</span>
-      <div class="preview-row">
-        <Button variant="primary" @click="toastMergeDemo">连续触发 3 次</Button>
-      </div>
-      <p class="preview-caption">
-        同类型连续提示自动合并为一条，计时重置。
-      </p>
-
-      <span class="preview-label">使用场景</span>
-      <p class="preview-prose">
-        用于保存、错误、状态更新等非关键反馈；需要确认时改用 Modal。
-      </p>
-
-      <span class="preview-label">反面示例</span>
-      <ul class="preview-dont-list">
-        <li>
-          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
-          </svg>
-          关键错误不要使用 Toast
-        </li>
-        <li>
-          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
-          </svg>
-          Toast 不要堆叠超过三条
-        </li>
-        <li>
-          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
-          </svg>
-          需要操作按钮时使用 Modal
-        </li>
-      </ul>
-
-      <svg class="hand-drawn-divider hand-drawn-divider--center" width="320" height="12" viewBox="0 0 320 12" fill="none" aria-hidden="true">
-        <path
-          d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
-              stroke="currentColor" stroke-width="1.5"
-              stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
-      </svg>
-    </section>
-
-    <!-- ── 07 / Flex ── -->
-    <section id="flex" class="preview-section">
-      <div class="preview-section__top">
-        <svg class="hand-drawn-divider" width="200" height="12" viewBox="0 0 200 12" fill="none" aria-hidden="true">
-          <path
-            d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
-                stroke="currentColor" stroke-width="1.5"
-                stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
-        </svg>
-      </div>
-      <p class="preview-section__index">07 / 14</p>
-      <h2 class="preview-section__title">Flex</h2>
-      <p class="preview-section__subtitle">用于布局子元素的弹性容器。</p>
-
-      <span class="preview-label">基础用法</span>
-      <IpFlex size="sm" align="center">
-        <Button variant="primary">发送</Button>
-        <Button variant="secondary">存草稿</Button>
-        <Button variant="ghost">取消</Button>
-      </IpFlex>
-
-      <span class="preview-label">尺寸预设</span>
-      <div class="preview-stack" style="max-width: 100%;">
-        <div class="preview-axis-row">
-          <code class="preview-axis-label">xs · 8px</code>
-          <IpFlex size="xs">
-            <span class="preview-chip">A</span>
-            <span class="preview-chip">B</span>
-            <span class="preview-chip">C</span>
-          </IpFlex>
-        </div>
-        <div class="preview-axis-row">
-          <code class="preview-axis-label">sm · 12px</code>
-          <IpFlex size="sm">
-            <span class="preview-chip">A</span>
-            <span class="preview-chip">B</span>
-            <span class="preview-chip">C</span>
-          </IpFlex>
-        </div>
-        <div class="preview-axis-row">
-          <code class="preview-axis-label">md · 16px</code>
-          <IpFlex size="md">
-            <span class="preview-chip">A</span>
-            <span class="preview-chip">B</span>
-            <span class="preview-chip">C</span>
-          </IpFlex>
-        </div>
-        <div class="preview-axis-row">
-          <code class="preview-axis-label">lg · 24px</code>
-          <IpFlex size="lg">
-            <span class="preview-chip">A</span>
-            <span class="preview-chip">B</span>
-            <span class="preview-chip">C</span>
-          </IpFlex>
-        </div>
-        <div class="preview-axis-row">
-          <code class="preview-axis-label">xl · 32px</code>
-          <IpFlex size="xl">
-            <span class="preview-chip">A</span>
-            <span class="preview-chip">B</span>
-            <span class="preview-chip">C</span>
-          </IpFlex>
+        <div class="nav-right">
+          <a class="nav-link-quiet" href="#" aria-label="GitHub">GitHub</a>
+          <button class="btn-sm primary" type="button">查看组件库</button>
+          <button
+            class="theme-toggle"
+            type="button"
+            :aria-label="theme === 'light' ? '切换到暗色模式' : '切换到亮色模式'"
+            @click="toggleTheme"
+          >
+            <Sun v-if="theme === 'light'" :size="16" :stroke-width="2" aria-hidden="true" />
+            <Moon v-else :size="16" :stroke-width="2" aria-hidden="true" />
+          </button>
         </div>
       </div>
-
-      <span class="preview-label">垂直</span>
-      <IpFlex vertical size="sm">
-        <span class="preview-chip">第 1 行</span>
-        <span class="preview-chip">第 2 行</span>
-        <span class="preview-chip">第 3 行</span>
-      </IpFlex>
-
-      <span class="preview-label">方向</span>
-      <div class="preview-stack" style="max-width: 100%;">
-        <div class="preview-axis-row">
-          <code class="preview-axis-label">row</code>
-          <IpFlex direction="row" size="sm">
-            <span class="preview-chip">A</span>
-            <span class="preview-chip">B</span>
-            <span class="preview-chip">C</span>
-          </IpFlex>
-        </div>
-        <div class="preview-axis-row">
-          <code class="preview-axis-label">row-reverse</code>
-          <IpFlex direction="row-reverse" size="sm">
-            <span class="preview-chip">A</span>
-            <span class="preview-chip">B</span>
-            <span class="preview-chip">C</span>
-          </IpFlex>
-        </div>
-        <div class="preview-axis-row">
-          <code class="preview-axis-label">column</code>
-          <IpFlex direction="column" size="sm">
-            <span class="preview-chip">A</span>
-            <span class="preview-chip">B</span>
-            <span class="preview-chip">C</span>
-          </IpFlex>
-        </div>
-        <div class="preview-axis-row">
-          <code class="preview-axis-label">column-reverse</code>
-          <IpFlex direction="column-reverse" size="sm">
-            <span class="preview-chip">A</span>
-            <span class="preview-chip">B</span>
-            <span class="preview-chip">C</span>
-          </IpFlex>
-        </div>
-      </div>
-
-      <span class="preview-label">行内</span>
-      <IpFlex inline size="xs" align="baseline">
-        <span>Vue</span>
-        <span class="preview-chip preview-chip--inline">3.5+</span>
-        <span>推荐使用</span>
-        <span class="preview-chip preview-chip--inline">Composition API</span>
-        <span>组织逻辑。</span>
-      </IpFlex>
-      <p class="preview-caption">inline 模式用于在文字段落中嵌入内联元素。</p>
-
-      <span class="preview-label">自动填满</span>
-      <IpFlex size="sm" align="center" style="border: 1px dashed var(--ip-color-border-default); border-radius: 8px; padding: 8px 12px;">
-        <strong style="color: var(--ip-color-text-primary);">Logo</strong>
-        <IpFlex flex="1" size="xs" justify="center">
-          <span class="preview-chip preview-chip--inline">对话</span>
-          <span class="preview-chip preview-chip--inline">知识库</span>
-          <span class="preview-chip preview-chip--inline">代理</span>
-        </IpFlex>
-        <Button variant="primary" size="sm">设置</Button>
-      </IpFlex>
-      <p class="preview-caption">flex="1" 占据剩余空间，子元素自适应伸缩。</p>
-
-      <span class="preview-label">反向</span>
-      <div class="preview-stack" style="max-width: 100%;">
-        <div class="preview-axis-row">
-          <code class="preview-axis-label">reverse · true</code>
-          <IpFlex reverse size="sm">
-            <span class="preview-chip">A</span>
-            <span class="preview-chip">B</span>
-            <span class="preview-chip">C</span>
-          </IpFlex>
-        </div>
-        <div class="preview-axis-row">
-          <code class="preview-axis-label">direction="row-reverse"</code>
-          <IpFlex direction="row-reverse" size="sm">
-            <span class="preview-chip">A</span>
-            <span class="preview-chip">B</span>
-            <span class="preview-chip">C</span>
-          </IpFlex>
-        </div>
-      </div>
-      <p class="preview-caption">reverse 与 direction 等价。</p>
-
-      <span class="preview-label">分隔符 · 默认线</span>
-      <IpFlex separator>
-        <a class="preview-link">2 分钟前</a>
-        <a class="preview-link">已读</a>
-        <a class="preview-link">删除</a>
-      </IpFlex>
-      <p class="preview-caption">separator 在相邻元素间渲染分隔线，行排列时为竖线。</p>
-
-      <span class="preview-label">分隔符 · 自定义字符</span>
-      <IpFlex separator="·">
-        <a class="preview-link">首页</a>
-        <a class="preview-link">资源库</a>
-        <a class="preview-link">设置</a>
-      </IpFlex>
-
-      <span class="preview-label">分隔符 · VNode 插槽</span>
-      <IpFlex size="sm" align="center">
-        <template #separator>
-          <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-            <path d="M3 1 L7 5 L3 9" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-        </template>
-        <a class="preview-link">设置</a>
-        <a class="preview-link">模型</a>
-        <a class="preview-link">高级</a>
-        <span style="color: var(--ip-color-text-primary);">温度 0.7</span>
-      </IpFlex>
-      <p class="preview-caption">slot 分隔符优先级最高，适合面包屑等场景。</p>
-
-      <span class="preview-label">分隔符 · VNode 属性</span>
-      <IpFlex :separator="hCaretVNode" size="sm" align="center">
-        <a class="preview-link">项目 A</a>
-        <a class="preview-link">项目 B</a>
-        <a class="preview-link">项目 C</a>
-      </IpFlex>
-      <p class="preview-caption">separator 支持字符串、字符或 VNode。</p>
-
-      <span class="preview-label">自动换行</span>
-      <div style="max-width: 360px; border: 1px dashed var(--ip-color-border-default); border-radius: 8px; padding: 12px;">
-        <IpFlex size="sm" wrap>
-          <span class="preview-chip">标签一</span>
-          <span class="preview-chip">标签二</span>
-          <span class="preview-chip">标签三</span>
-          <span class="preview-chip">标签四</span>
-          <span class="preview-chip">标签五</span>
-          <span class="preview-chip">标签六</span>
-          <span class="preview-chip">标签七</span>
-        </IpFlex>
-      </div>
-      <p class="preview-caption">当容器宽度不足时自动换行。</p>
-
-      <span class="preview-label">Justify — 主轴对齐</span>
-      <div class="preview-stack" style="max-width: 100%;">
-        <div class="preview-axis-row">
-          <code class="preview-axis-label">start</code>
-          <div class="preview-justify-track">
-            <IpFlex justify="start" size="sm">
-              <span class="preview-chip">A</span>
-              <span class="preview-chip">B</span>
-            </IpFlex>
-          </div>
-        </div>
-        <div class="preview-axis-row">
-          <code class="preview-axis-label">center</code>
-          <div class="preview-justify-track">
-            <IpFlex justify="center" size="sm">
-              <span class="preview-chip">A</span>
-              <span class="preview-chip">B</span>
-            </IpFlex>
-          </div>
-        </div>
-        <div class="preview-axis-row">
-          <code class="preview-axis-label">end</code>
-          <div class="preview-justify-track">
-            <IpFlex justify="end" size="sm">
-              <span class="preview-chip">A</span>
-              <span class="preview-chip">B</span>
-            </IpFlex>
-          </div>
-        </div>
-        <div class="preview-axis-row">
-          <code class="preview-axis-label">space-between</code>
-          <div class="preview-justify-track">
-            <IpFlex justify="space-between" size="sm">
-              <span class="preview-chip">A</span>
-              <span class="preview-chip">B</span>
-            </IpFlex>
-          </div>
-        </div>
-        <div class="preview-axis-row">
-          <code class="preview-axis-label">space-around</code>
-          <div class="preview-justify-track">
-            <IpFlex justify="space-around" size="sm">
-              <span class="preview-chip">A</span>
-              <span class="preview-chip">B</span>
-            </IpFlex>
-          </div>
-        </div>
-      </div>
-
-      <span class="preview-label">Align — 交叉轴对齐</span>
-      <div class="preview-stack" style="max-width: 100%;">
-        <div class="preview-align-track">
-          <code class="preview-axis-label">start</code>
-          <IpFlex align="start" size="sm" style="width: 100%;">
-            <span class="preview-chip preview-chip--tall">高块</span>
-            <span class="preview-chip">矮块</span>
-          </IpFlex>
-        </div>
-        <div class="preview-align-track">
-          <code class="preview-axis-label">center</code>
-          <IpFlex align="center" size="sm" style="width: 100%;">
-            <span class="preview-chip preview-chip--tall">高块</span>
-            <span class="preview-chip">矮块</span>
-          </IpFlex>
-        </div>
-        <div class="preview-align-track">
-          <code class="preview-axis-label">end</code>
-          <IpFlex align="end" size="sm" style="width: 100%;">
-            <span class="preview-chip preview-chip--tall">高块</span>
-            <span class="preview-chip">矮块</span>
-          </IpFlex>
-        </div>
-      </div>
-
-      <span class="preview-label">Gap — 自定义值</span>
-      <IpFlex :size="48" align="center">
-        <span class="preview-chip">A</span>
-        <span class="preview-chip">B</span>
-        <span class="preview-chip">C</span>
-      </IpFlex>
-
-      <span class="preview-label">使用场景</span>
-      <p class="preview-prose">
-        作为任意兄弟元素集合的通用布局容器。
-      </p>
-
-      <span class="preview-label">反面示例</span>
-      <ul class="preview-dont-list">
-        <li>
-          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
-          </svg>
-          不要在 Flex 中只放一个子元素
-        </li>
-        <li>
-          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
-          </svg>
-          不要无谓地嵌套 Flex
-        </li>
-        <li>
-          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
-          </svg>
-          布局间距使用 gap，分隔符用于视觉连接
-        </li>
-      </ul>
-
-      <svg class="hand-drawn-divider hand-drawn-divider--center" width="320" height="12" viewBox="0 0 320 12" fill="none" aria-hidden="true">
-        <path
-          d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
-              stroke="currentColor" stroke-width="1.5"
-              stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
-      </svg>
-    </section>
-
-    <!-- ── 08 / Container ── -->
-    <section id="container" class="preview-section">
-      <div class="preview-section__top">
-        <svg class="hand-drawn-divider" width="200" height="12" viewBox="0 0 200 12" fill="none" aria-hidden="true">
-          <path
-            d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
-                stroke="currentColor" stroke-width="1.5"
-                stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
-        </svg>
-      </div>
-      <p class="preview-section__index">08 / 14</p>
-      <h2 class="preview-section__title">Container</h2>
-      <p class="preview-section__subtitle">用于约束内容宽度的布局容器。</p>
-
-      <span class="preview-label">最大宽度预设</span>
-      <div class="preview-stack" style="max-width: 100%;">
-        <IpContainer max-width="sm" padding-x="md" padding-y="sm">
-          <div class="preview-container-frame">小 · 480px</div>
-        </IpContainer>
-        <IpContainer max-width="md" padding-x="md" padding-y="sm">
-          <div class="preview-container-frame">中 · 720px（默认）</div>
-        </IpContainer>
-        <IpContainer max-width="lg" padding-x="md" padding-y="sm">
-          <div class="preview-container-frame">大 · 960px</div>
-        </IpContainer>
-        <IpContainer max-width="xl" padding-x="md" padding-y="sm">
-          <div class="preview-container-frame">特大 · 1200px</div>
-        </IpContainer>
-      </div>
-
-      <span class="preview-label">居中</span>
-      <div class="preview-row">
-        <IpContainer max-width="md" centered padding-x="md" padding-y="sm">
-          <div class="preview-container-frame preview-container-frame--small">居中 · 启用</div>
-        </IpContainer>
-      </div>
-      <div class="preview-row" style="position: relative; background: var(--ip-color-bg-tertiary); border-radius: 8px; padding: 8px;">
-        <IpContainer max-width="md" :centered="false" padding-x="md" padding-y="sm">
-          <div class="preview-container-frame preview-container-frame--small">居中 · 关闭</div>
-        </IpContainer>
-      </div>
-
-      <span class="preview-label">内边距</span>
-      <div class="preview-stack" style="max-width: 100%;">
-        <IpContainer max-width="md" padding-x="xs" padding-y="xs">
-          <div class="preview-container-frame">内边距 xs</div>
-        </IpContainer>
-        <IpContainer max-width="md" padding-x="lg" padding-y="lg">
-          <div class="preview-container-frame">内边距 lg</div>
-        </IpContainer>
-        <IpContainer max-width="md" :padding-x="false" :padding-y="false">
-          <div class="preview-container-frame">内边距 0</div>
-        </IpContainer>
-      </div>
-
-      <span class="preview-label">Fluid</span>
-      <div class="preview-stack" style="max-width: 100%;">
-        <IpContainer max-width="md" fluid padding-x="md" padding-y="sm">
-          <div class="preview-container-frame preview-container-frame--fluid">fluid · 启用（忽略最大宽度）</div>
-        </IpContainer>
-      </div>
-
-      <span class="preview-label">消息区对齐</span>
-      <p class="preview-caption">此容器应与上方消息区域左右边界对齐。</p>
-      <IpContainer max-width="md" padding-x="md" padding-y="sm">
-        <div class="preview-container-frame">
-          容器 中 · 720px + padding-x 中 · 16px
-          <span style="color: var(--ip-color-text-tertiary);">← 边界应与上方对话框边界一致</span>
-        </div>
-      </IpContainer>
-
-      <span class="preview-label">使用场景</span>
-      <p class="preview-prose">
-        用于约束内容宽度，确保聊天内容与 Container 在同一行长。
-      </p>
-
-      <span class="preview-label">反面示例</span>
-      <ul class="preview-dont-list">
-        <li>
-          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
-          </svg>
-          子元素不要手动设置最大宽度
-        </li>
-        <li>
-          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
-          </svg>
-          不要无意义地嵌套 Container
-        </li>
-        <li>
-          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
-          </svg>
-          fluid 不要用来绕开布局约束
-        </li>
-      </ul>
-
-      <svg class="hand-drawn-divider hand-drawn-divider--center" width="320" height="12" viewBox="0 0 320 12" fill="none" aria-hidden="true">
-        <path
-          d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
-              stroke="currentColor" stroke-width="1.5"
-              stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
-      </svg>
-    </section>
-
-    <!-- ── 09 / Avatar ── -->
-    <section id="avatar" class="preview-section">
-      <div class="preview-section__top">
-        <svg class="hand-drawn-divider" width="200" height="12" viewBox="0 0 200 12" fill="none" aria-hidden="true">
-          <path
-            d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
-                stroke="currentColor" stroke-width="1.5"
-                stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
-        </svg>
-      </div>
-      <p class="preview-section__index">09 / 14</p>
-      <h2 class="preview-section__title">Avatars</h2>
-      <p class="preview-section__subtitle">用于展示用户、项目或实体的头像与图标。</p>
-
-      <span class="preview-label">尺寸档</span>
-      <IpFlex size="sm" align="center">
-        <IpAvatar :source="{ type: 'image', src: avatarSrc || 'https://api.dicebear.com/9.x/notionists/svg?seed=felix', alt: '用户头像' }" size="xs" />
-        <IpAvatar :source="{ type: 'image', src: avatarSrc || 'https://api.dicebear.com/9.x/notionists/svg?seed=felix', alt: '用户头像' }" size="sm" />
-        <IpAvatar :source="{ type: 'image', src: avatarSrc || 'https://api.dicebear.com/9.x/notionists/svg?seed=felix', alt: '用户头像' }" size="md" />
-        <IpAvatar :source="{ type: 'image', src: avatarSrc || 'https://api.dicebear.com/9.x/notionists/svg?seed=felix', alt: '用户头像' }" size="lg" />
-        <IpAvatar :source="{ type: 'image', src: avatarSrc || 'https://api.dicebear.com/9.x/notionists/svg?seed=felix', alt: '用户头像' }" size="xl" />
-        <IpAvatar :source="{ type: 'image', src: avatarSrc || 'https://api.dicebear.com/9.x/notionists/svg?seed=felix', alt: '用户头像' }" size="xxl" />
-      </IpFlex>
-      <p class="preview-caption">xs=20px 到 xxl=96px，覆盖所有使用场景。</p>
-
-      <span class="preview-label">内容类型</span>
-      <IpFlex size="md" align="center">
-        <IpAvatar :source="{ type: 'image', src: 'https://api.dicebear.com/9.x/notionists/svg?seed=aria&backgroundColor=b6e3f4', alt: '图片头像' }" size="md" />
-        <IpAvatar :source="{ type: 'initials', text: 'ZP', bgColor: '#6366f1', fgColor: '#fff' }" size="md" />
-        <IpAvatar :source="{ type: 'icon', icon: Bot, color: 'var(--ip-color-icon-default)' }" size="md" />
-        <IpAvatar :source="{ type: 'default' }" size="md" />
-      </IpFlex>
-      <p class="preview-caption">image / initials（自定义背景色）/ icon / default（文件夹图标）。</p>
-
-      <span class="preview-label">形状</span>
-      <IpFlex size="md" align="center">
-        <IpAvatar :source="{ type: 'initials', text: 'R', bgColor: '#f97316' }" size="lg" shape="rounded" />
-        <IpAvatar :source="{ type: 'initials', text: 'C', bgColor: '#22c55e' }" size="lg" shape="circle" />
-      </IpFlex>
-      <p class="preview-caption">rounded（默认，与 AgentAvatar 一致）/ circle（用户头像）。</p>
-
-      <span class="preview-label">上传模式</span>
-      <IpFlex size="md" align="center">
-        <IpAvatar :source="{ type: 'image', src: avatarSrc || 'https://api.dicebear.com/9.x/notionists/svg?seed=felix', alt: '可上传头像' }" size="lg" :uploadable="true" @upload="onAvatarUpload" @upload-error="onAvatarError" />
-        <IpAvatar :source="{ type: 'image', src: avatarSrc || 'https://api.dicebear.com/9.x/notionists/svg?seed=felix', alt: '可移除头像' }" size="lg" :uploadable="true" :removable="true" @upload="onAvatarUpload" @upload-error="onAvatarError" @remove="clearAvatar" />
-        <IpAvatar :source="{ type: 'image', src: avatarSrc || 'https://api.dicebear.com/9.x/notionists/svg?seed=felix', alt: '上传中' }" size="lg" :uploadable="true" :loading="true" @upload="onAvatarUpload" @upload-error="onAvatarError" />
-        <IpAvatar :source="{ type: 'image', src: avatarSrc || 'https://api.dicebear.com/9.x/notionists/svg?seed=felix', alt: '禁用' }" size="lg" :uploadable="true" :disabled="true" @upload="onAvatarUpload" @upload-error="onAvatarError" />
-      </IpFlex>
-      <p class="preview-caption">hover 显示相机蒙层；removable 显示 X 按钮；loading 显示 spinner；disabled 不可交互。</p>
-
-      <span class="preview-label">使用场景</span>
-      <p class="preview-prose">
-        用于用户头像、项目图标、上传预览。initials 模式在头像加载失败时降级展示。
-      </p>
-
-      <span class="preview-label">反面示例</span>
-      <ul class="preview-dont-list">
-        <li>
-          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
-          </svg>
-          image 模式下不要在 src 为空时渲染（应降级到 default）
-        </li>
-        <li>
-          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
-          </svg>
-          uploadable 模式下不要在 loading 时同时显示蒙层
-        </li>
-        <li>
-          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
-          </svg>
-          initials 的 bgColor 不要使用透明色
-        </li>
-      </ul>
-
-      <svg class="hand-drawn-divider hand-drawn-divider--center" width="320" height="12" viewBox="0 0 320 12" fill="none" aria-hidden="true">
-        <path
-          d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
-              stroke="currentColor" stroke-width="1.5"
-              stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
-      </svg>
-    </section>
-
-    <!-- ── 10 / Card ── -->
-    <section id="card" class="preview-section">
-      <div class="preview-section__top">
-        <svg class="hand-drawn-divider" width="200" height="12" viewBox="0 0 200 12" fill="none" aria-hidden="true">
-          <path
-            d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
-                stroke="currentColor" stroke-width="1.5"
-                stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
-        </svg>
-      </div>
-      <p class="preview-section__index">10 / 14</p>
-      <h2 class="preview-section__title">Cards</h2>
-      <p class="preview-section__subtitle">用于组织相关内容的容器卡片。</p>
-
-      <span class="preview-label">视觉变体</span>
-      <IpFlex size="sm" align="center" wrap>
-        <IpCard variant="bordered" padding="md" style="max-width: 200px;">
-          <p style="font-size: 13px; margin: 0; color: var(--ip-color-text-body);">Bordered</p>
-          <p style="font-size: 12px; margin: 4px 0 0; color: var(--ip-color-text-tertiary);">默认内敛风格</p>
-        </IpCard>
-        <IpCard variant="filled" padding="md" style="max-width: 200px;">
-          <p style="font-size: 13px; margin: 0; color: var(--ip-color-text-body);">Filled</p>
-          <p style="font-size: 12px; margin: 4px 0 0; color: var(--ip-color-text-tertiary);">实色填充</p>
-        </IpCard>
-        <IpCard variant="shadow" padding="md" style="max-width: 200px;">
-          <p style="font-size: 13px; margin: 0; color: var(--ip-color-text-body);">Shadow</p>
-          <p style="font-size: 12px; margin: 4px 0 0; color: var(--ip-color-text-tertiary);">浮起风格</p>
-        </IpCard>
-      </IpFlex>
-      <p class="preview-caption">bordered（默认）/ filled / shadow。</p>
-
-      <span class="preview-label">内边距</span>
-      <IpFlex size="sm" align="center" wrap>
-        <IpCard variant="bordered" padding="none" style="max-width: 120px;">
-          <p style="font-size: 12px; margin: 0; color: var(--ip-color-text-tertiary);">none · 0</p>
-        </IpCard>
-        <IpCard variant="bordered" padding="sm" style="max-width: 120px;">
-          <p style="font-size: 12px; margin: 0; color: var(--ip-color-text-tertiary);">sm · 12px</p>
-        </IpCard>
-        <IpCard variant="bordered" padding="md" style="max-width: 120px;">
-          <p style="font-size: 12px; margin: 0; color: var(--ip-color-text-tertiary);">md · 16px</p>
-        </IpCard>
-        <IpCard variant="bordered" padding="lg" style="max-width: 120px;">
-          <p style="font-size: 12px; margin: 0; color: var(--ip-color-text-tertiary);">lg · 24px</p>
-        </IpCard>
-      </IpFlex>
-
-      <span class="preview-label">Header / Body / Footer</span>
-      <IpCard variant="bordered" padding="md" style="max-width: 360px;">
-        <template #header>
-          <span style="font-size: 15px; font-weight: 600; color: var(--ip-color-text-primary);">会话记录</span>
-        </template>
-        <p style="font-size: 13px; margin: 0; color: var(--ip-color-text-body);">
-          上一轮对话：讨论了 fetch 与 AbortController 的用法。
-        </p>
-        <template #footer>
-          <span style="font-size: 12px; color: var(--ip-color-text-tertiary);">2 分钟前 · 12 条消息</span>
-        </template>
-      </IpCard>
-
-      <span class="preview-label">交互态与选中态</span>
-      <IpFlex size="sm" align="center" wrap>
-        <IpCard variant="bordered" padding="md" :interactive="true" style="max-width: 180px; cursor: pointer;">
-          <p style="font-size: 13px; margin: 0; color: var(--ip-color-text-body);">Hover 抬升</p>
-          <p style="font-size: 12px; margin: 4px 0 0; color: var(--ip-color-text-tertiary);">interactive</p>
-        </IpCard>
-        <IpCard variant="bordered" padding="md" :interactive="true" :selected="cardSelected" style="max-width: 180px; cursor: pointer;" @click="cardSelected = !cardSelected">
-          <p style="font-size: 13px; margin: 0; color: var(--ip-color-text-body);">选中态</p>
-          <p style="font-size: 12px; margin: 4px 0 0; color: var(--ip-color-text-tertiary);">selected</p>
-        </IpCard>
-        <IpCard variant="bordered" padding="md" :disabled="true" style="max-width: 180px;">
-          <p style="font-size: 13px; margin: 0; color: var(--ip-color-text-disabled);">禁用态</p>
-          <p style="font-size: 12px; margin: 4px 0 0; color: var(--ip-color-text-disabled);">disabled</p>
-        </IpCard>
-      </IpFlex>
-      <p class="preview-caption">interactive hover 抬升；selected 显示主色描边；disabled 灰态。</p>
-
-      <span class="preview-label">as="button" 渲染</span>
-      <IpFlex size="sm" align="center" wrap>
-        <IpCard
-          as="button"
-          variant="bordered"
-          padding="md"
-          :interactive="true"
-          style="max-width: 200px;"
-          @click="toastSuccess"
-        >
-          <p style="font-size: 13px; margin: 0; color: var(--ip-color-text-body);">点击此卡片</p>
-          <p style="font-size: 12px; margin: 4px 0 0; color: var(--ip-color-text-tertiary);">as="button" + interactive</p>
-        </IpCard>
-        <IpCard
-          as="button"
-          variant="filled"
-          padding="md"
-          :interactive="true"
-          :disabled="true"
-          style="max-width: 200px;"
-        >
-          <p style="font-size: 13px; margin: 0; color: var(--ip-color-text-disabled);">禁用按钮卡片</p>
-          <p style="font-size: 12px; margin: 4px 0 0; color: var(--ip-color-text-disabled);">as="button" + disabled</p>
-        </IpCard>
-      </IpFlex>
-      <p class="preview-caption">as="button" 时渲染为原生 &lt;button&gt;，支持键盘 Enter/Space 触发 click 和原生 disabled。</p>
-
-      <span class="preview-label">使用场景</span>
-      <p class="preview-prose">
-        用于会话卡片、项目卡片等需要分块展示的内容区。
-      </p>
-
-      <span class="preview-label">反面示例</span>
-      <ul class="preview-dont-list">
-        <li>
-          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
-          </svg>
-          不要将卡片内间距设为零后由子元素管理（应通过 padding prop）
-        </li>
-        <li>
-          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
-          </svg>
-          不要在单个视图中堆叠过多卡片
-        </li>
-        <li>
-          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
-          </svg>
-          简单文字不要用卡片包裹
-        </li>
-      </ul>
-
-      <svg class="hand-drawn-divider hand-drawn-divider--center" width="320" height="12" viewBox="0 0 320 12" fill="none" aria-hidden="true">
-        <path
-          d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
-              stroke="currentColor" stroke-width="1.5"
-              stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
-      </svg>
-    </section>
-
-    <!-- ── 11 / Select ── -->
-    <section id="select" class="preview-section">
-      <div class="preview-section__top">
-        <svg class="hand-drawn-divider" width="200" height="12" viewBox="0 0 200 12" fill="none" aria-hidden="true">
-          <path
-            d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
-                stroke="currentColor" stroke-width="1.5"
-                stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
-        </svg>
-      </div>
-      <p class="preview-section__index">11 / 14</p>
-      <h2 class="preview-section__title">Selects</h2>
-      <p class="preview-section__subtitle">用于从预定义列表中选择单个值的受控下拉选择器。</p>
-
-      <span class="preview-label">尺寸</span>
-      <div class="preview-stack" style="max-width: 320px;">
-        <IpSelect v-model="selectValue" :options="toneOptions" size="sm" placeholder="选择语气（sm）" />
-        <IpSelect v-model="selectValue" :options="toneOptions" size="md" placeholder="选择语气（md）" />
-        <IpSelect v-model="selectValue" :options="toneOptions" size="lg" placeholder="选择语气（lg）" />
-      </div>
-      <p class="preview-caption">与 Input 尺寸完全对齐。</p>
-
-      <span class="preview-label">状态</span>
-      <div class="preview-stack" style="max-width: 320px;">
-        <IpSelect :model-value="'concise'" :options="toneOptions" placeholder="已选中状态" />
-        <IpSelect :model-value="'llama-local'" :options="modelOptions" placeholder="禁用选项" />
-        <IpSelect :model-value="null" :options="toneOptions" placeholder="禁用状态" disabled />
-      </div>
-
-      <span class="preview-label">可清除</span>
-      <div class="preview-stack" style="max-width: 320px;">
-        <IpSelect v-model="selectClearable" :options="modelOptions" placeholder="选择一个模型" :clearable="true" />
-      </div>
-      <p class="preview-caption">hover 或键盘聚焦时显示清除按钮。</p>
-
-      <span class="preview-label">自定义选项（带图标和描述）</span>
-      <div class="preview-stack" style="max-width: 320px;">
-        <IpSelect v-model="selectValue" :options="modelOptions" placeholder="选择模型" />
-      </div>
-      <p class="preview-caption">选项支持 icon（Lucide 组件）和 description。</p>
-
-      <span class="preview-label">错误状态</span>
-      <div class="preview-stack" style="max-width: 320px;">
-        <IpSelect
-          v-model="selectValue"
-          :options="modelOptions"
-          placeholder="选择一个模型"
-          :error="selectError"
-          :error-message="selectErrorMessage"
-        />
-      </div>
-      <div class="preview-row">
-        <Button variant="secondary" size="sm" @click="triggerSelectError">触发错误</Button>
-      </div>
-
-      <span class="preview-label">展开态</span>
-      <div class="preview-stack" style="max-width: 320px;">
-        <p class="preview-caption" style="margin: 0 0 8px;">点击下方 Select 展开下拉列表。浮层通过 Teleport 渲染到 body，支持键盘导航（方向键 + Enter + Escape）。</p>
-        <IpSelect v-model="selectValue" :options="modelOptions" placeholder="点击展开查看模型列表" />
-      </div>
-
-      <span class="preview-label">使用场景</span>
-      <p class="preview-prose">
-        用于单选场景；多选或复杂筛选场景建议使用独立的下拉组件。
-      </p>
-
-      <span class="preview-label">反面示例</span>
-      <ul class="preview-dont-list">
-        <li>
-          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
-          </svg>
-          选项超过 20 项时不要用 Select，改用搜索输入
-        </li>
-        <li>
-          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
-          </svg>
-          多选场景不要用单选 Select
-        </li>
-        <li>
-          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
-          </svg>
-          错误信息不要只靠颜色传递，应配合 error-message 文案
-        </li>
-      </ul>
-
-      <svg class="hand-drawn-divider hand-drawn-divider--center" width="320" height="12" viewBox="0 0 320 12" fill="none" aria-hidden="true">
-        <path
-          d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
-              stroke="currentColor" stroke-width="1.5"
-              stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
-      </svg>
-    </section>
-
-    <!-- ── 12 / EmptyState ── -->
-    <section id="empty" class="preview-section">
-      <div class="preview-section__top">
-        <svg class="hand-drawn-divider" width="200" height="12" viewBox="0 0 200 12" fill="none" aria-hidden="true">
-          <path
-            d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
-                stroke="currentColor" stroke-width="1.5"
-                stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
-        </svg>
-      </div>
-      <p class="preview-section__index">12 / 14</p>
-      <h2 class="preview-section__title">EmptyState</h2>
-      <p class="preview-section__subtitle">用于展示无数据、无结果等空状态，提供视觉引导和操作入口。</p>
-
-      <span class="preview-label">基础用法</span>
-      <IpEmptyState
-        title="暂无会话"
-        description="开始一个新对话，IcePaw 会记住上下文。"
-        :primary-action="{ label: '新建对话', onClick: toastInfo }"
-      />
-
-      <span class="preview-label">图标尺寸</span>
-      <IpFlex size="md" align="center" wrap>
-        <IpEmptyState title="sm" icon-size="sm" :icon="Inbox" style="width: 160px;" />
-        <IpEmptyState title="md" icon-size="md" :icon="Inbox" style="width: 160px;" />
-        <IpEmptyState title="lg" icon-size="lg" :icon="Inbox" style="width: 160px;" />
-        <IpEmptyState title="xl" icon-size="xl" :icon="Inbox" style="width: 160px;" />
-        <IpEmptyState title="2xl" icon-size="2xl" :icon="Inbox" style="width: 160px;" />
-        <IpEmptyState title="3xl" icon-size="3xl" :icon="Inbox" style="width: 160px;" />
-      </IpFlex>
-      <p class="preview-caption">sm=24px 到 3xl=80px，覆盖从内联到全屏的所有场景。</p>
-
-      <span class="preview-label">带次要操作</span>
-      <IpEmptyState
-        title="暂无搜索结果"
-        description="尝试换一个关键词，或者调整筛选条件。"
-        :primary-action="{ label: '清除筛选', onClick: toastInfo }"
-        :secondary-action="{ label: '查看全部', onClick: toastInfo }"
-      />
-
-      <span class="preview-label">仅图标</span>
-      <IpEmptyState
-        title="暂无通知"
-        :icon="Inbox"
-      />
-
-      <span class="preview-label">紧凑模式</span>
-      <div style="max-width: 280px; border: 1px dashed var(--ip-color-border-default); border-radius: 8px; padding: 12px;">
-        <IpEmptyState
-          title="空列表"
-          description="暂无数据"
-          :compact="true"
-          :primary-action="{ label: '添加', onClick: toastInfo }"
-        />
-      </div>
-      <p class="preview-caption">compact 模式适合嵌入卡片等小容器内。</p>
-
-      <span class="preview-label">左对齐（卡片内嵌）</span>
-      <div style="max-width: 320px; border: 1px dashed var(--ip-color-border-default); border-radius: 8px; padding: 12px;">
-        <IpEmptyState
-          title="暂无代理"
-          description="点击上方按钮添加你的第一个 AI 代理。"
-          :centered="false"
-          :icon="Inbox"
-          :primary-action="{ label: '添加代理', onClick: toastInfo }"
-        />
-      </div>
-      <p class="preview-caption">centered=false 时左对齐，适合嵌入卡片或侧边栏。</p>
-
-      <span class="preview-label">使用场景</span>
-      <p class="preview-prose">
-        用于列表为空、搜索无结果、上传区域等场景，给用户提供视觉引导和下一步操作。
-      </p>
-
-      <span class="preview-label">反面示例</span>
-      <ul class="preview-dont-list">
-        <li>
-          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
-          </svg>
-          加载中不要用空状态展示（用骨架屏或 Spinner）
-        </li>
-        <li>
-          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
-          </svg>
-          不要在空状态中放多个主要操作
-        </li>
-        <li>
-          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
-          </svg>
-          空状态图标不要使用有歧义的 emoji
-        </li>
-      </ul>
-
-      <svg class="hand-drawn-divider hand-drawn-divider--center" width="320" height="12" viewBox="0 0 320 12" fill="none" aria-hidden="true">
-        <path
-          d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
-              stroke="currentColor" stroke-width="1.5"
-              stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
-      </svg>
-    </section>
-
-    <!-- ── 13 / DropdownMenu ── -->
-    <section id="dropdown" class="preview-section">
-      <div class="preview-section__top">
-        <svg class="hand-drawn-divider" width="200" height="12" viewBox="0 0 200 12" fill="none" aria-hidden="true">
-          <path
-            d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
-                stroke="currentColor" stroke-width="1.5"
-                stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
-        </svg>
-      </div>
-      <p class="preview-section__index">13 / 14</p>
-      <h2 class="preview-section__title">DropdownMenu</h2>
-      <p class="preview-section__subtitle">用于溢出操作菜单的下拉触发器。</p>
-
-      <span class="preview-label">点击触发</span>
-      <IpDropdownMenu v-model="ddOpen" :items="ddItems" placement="bottom-end">
-        <template #trigger>
-          <Button variant="secondary" size="sm">
-            操作
-            <template #icon-right>
-              <ChevronDown :size="14" :stroke-width="2" />
-            </template>
-          </Button>
-        </template>
-      </IpDropdownMenu>
-      <p class="preview-caption">点击触发器打开菜单；选中菜单项或点击外部关闭。</p>
-
-      <span class="preview-label">悬停触发</span>
-      <IpDropdownMenu v-model="ddOpenHover" :items="ddItems" trigger-action="hover" placement="bottom-end">
-        <template #trigger>
-          <Button variant="ghost" size="sm">
-            悬停打开
-            <template #icon-right>
-              <ChevronDown :size="14" :stroke-width="2" />
-            </template>
-          </Button>
-        </template>
-      </IpDropdownMenu>
-      <p class="preview-caption">hover 模式有 100ms 延迟，防止误触。</p>
-
-      <span class="preview-label">菜单项类型</span>
-      <IpDropdownMenu :model-value="false" :items="ddFullItems" placement="bottom-start">
-        <template #trigger>
-          <Button variant="secondary" size="sm">
-            完整菜单
-            <template #icon-right>
-              <ChevronDown :size="14" :stroke-width="2" />
-            </template>
-          </Button>
-        </template>
-      </IpDropdownMenu>
-      <p class="preview-caption">item / divider / label 三种类型；item 支持 icon、shortcut、danger。</p>
-
-      <span class="preview-label">禁用项</span>
-      <div class="preview-row">
-        <IpDropdownMenu :model-value="false" :items="ddDisabledItems" placement="bottom-end">
-          <template #trigger>
-            <Button variant="secondary" size="sm">
-              含禁用项
-              <template #icon-right>
-                <ChevronDown :size="14" :stroke-width="2" />
-              </template>
-            </Button>
-          </template>
-        </IpDropdownMenu>
-      </div>
-      <p class="preview-caption">禁用项显示灰态，不可点击。</p>
-
-      <span class="preview-label">使用场景</span>
-      <p class="preview-prose">
-        用于操作菜单、工具栏溢出、用户菜单等场景。
-      </p>
-
-      <span class="preview-label">反面示例</span>
-      <ul class="preview-dont-list">
-        <li>
-          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
-          </svg>
-          不要把下拉菜单用于需要表单输入的场景
-        </li>
-        <li>
-          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
-          </svg>
-          菜单项不要超过 8 项（需要分组和分隔线）
-        </li>
-        <li>
-          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
-          </svg>
-          危险操作放在菜单底部
-        </li>
-      </ul>
-
-      <svg class="hand-drawn-divider hand-drawn-divider--center" width="320" height="12" viewBox="0 0 320 12" fill="none" aria-hidden="true">
-        <path
-          d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
-              stroke="currentColor" stroke-width="1.5"
-              stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
-      </svg>
-    </section>
-
-    <!-- ── 14 / Popconfirm ── -->
-    <section id="popconfirm" class="preview-section">
-      <div class="preview-section__top">
-        <svg class="hand-drawn-divider" width="200" height="12" viewBox="0 0 200 12" fill="none" aria-hidden="true">
-          <path
-            d="M2 6 Q 18 1, 34 6 T 66 6 T 98 6 T 130 6 T 162 6 T 198 6"
-                stroke="currentColor" stroke-width="1.5"
-                stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
-        </svg>
-      </div>
-      <p class="preview-section__index">14 / 14</p>
-      <h2 class="preview-section__title">Popconfirm</h2>
-      <p class="preview-section__subtitle">用于轻量气泡式操作确认，替代 window.confirm。</p>
-
-      <span class="preview-label">基础确认</span>
-      <IpPopconfirm
-        v-model="popOpen"
-        title="确定要删除吗？"
-        description="此操作不可撤销，所有相关数据将被永久删除。"
-        @confirm="confirmDelete"
-        @cancel="toastInfo('已取消')"
-      >
-        <template #trigger>
-          <Button variant="danger" size="sm">删除会话</Button>
-        </template>
-      </IpPopconfirm>
-      <p class="preview-caption">点击触发，打开后焦点自动移到确认按钮。</p>
-
-      <span class="preview-label">危险样式</span>
-      <IpPopconfirm
-        v-model="popDangerOpen"
-        title="删除代理？"
-        :danger="true"
-        confirm-text="删除"
-        cancel-text="保留"
-        placement="bottom"
-      >
-        <template #trigger>
-          <Button variant="ghost" size="sm">
-            <Trash2 :size="14" :stroke-width="2" />
-            删除
-          </Button>
-        </template>
-      </IpPopconfirm>
-
-      <span class="preview-label">异步确认（Loading）</span>
-      <IpPopconfirm
-        v-model="popLoading"
-        title="正在删除…"
-        :loading="true"
-        confirm-text="确认"
-        placement="bottom"
-      >
-        <template #trigger>
-          <Button variant="secondary" size="sm">异步删除</Button>
-        </template>
-      </IpPopconfirm>
-      <p class="preview-caption">loading 时确认按钮显示 spinner，确认/取消均禁用。</p>
-
-      <span class="preview-label">浮层位置</span>
-      <IpFlex size="sm" align="center" wrap>
-        <IpPopconfirm
-        v-model="popTop"
-        title="上方"
-        placement="top">
-          <template #trigger><Button variant="secondary" size="sm">top</Button></template>
-        </IpPopconfirm>
-        <IpPopconfirm
-          v-model="popBottom"
-          title="下方"
-          placement="bottom">
-          <template #trigger><Button variant="secondary" size="sm">bottom</Button></template>
-        </IpPopconfirm>
-        <IpPopconfirm
-          v-model="popLeft"
-          title="左侧"
-          placement="left">
-          <template #trigger><Button variant="secondary" size="sm">left</Button></template>
-        </IpPopconfirm>
-        <IpPopconfirm
-          v-model="popRight"
-          title="右侧"
-          placement="right">
-          <template #trigger><Button variant="secondary" size="sm">right</Button></template>
-        </IpPopconfirm>
-      </IpFlex>
-
-      <span class="preview-label">使用场景</span>
-      <p class="preview-prose">
-        用于删除、退出等不可逆操作的确认；与 Modal 的区别在于更轻量，适合内联触发。
-      </p>
-
-      <span class="preview-label">反面示例</span>
-      <ul class="preview-dont-list">
-        <li>
-          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
-          </svg>
-          需要填写表单或复杂决策时不要用 Popconfirm
-        </li>
-        <li>
-          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
-          </svg>
-          Popconfirm 不要嵌套使用
-        </li>
-        <li>
-          <svg class="bullet-dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-            <path d="M 4 1 Q 7 2, 7 5 Q 6 7, 3 6.5 Q 0.5 5, 1.5 2.5 Q 2.5 0.5, 4 1 Z" fill="currentColor"/>
-          </svg>
-          高频操作不要每次都弹出确认（用 Toast 或直接执行）
-        </li>
-      </ul>
-
-      <svg class="hand-drawn-divider hand-drawn-divider--center" width="320" height="12" viewBox="0 0 320 12" fill="none" aria-hidden="true">
-        <path
-          d="M2 6 Q 28 1, 54 6 T 106 6 T 158 6 T 210 6 T 262 6 T 318 6"
-              stroke="currentColor" stroke-width="1.5"
-              stroke-linecap="round" stroke-linejoin="round" pathLength="100"/>
-      </svg>
-    </section>
-
-    <!-- ── Footer ── -->
-    <footer class="preview-footer">
-      <div class="preview-footer__row">
-        <span>IcePaw UI · v1.1.0 · 第二阶段</span>
-        <span>·</span>
-        <a href="#button" @click.prevent="scrollTo('button')">设计令牌</a>
-        <span>·</span>
-        <a href="https://github.com" target="_blank" rel="noopener">源码</a>
-      </div>
-      <p class="preview-footer__hint">克制的小工具，用心打磨。</p>
-    </footer>
-
-    <!-- ── Right floating TOC ── -->
-    <nav class="toc-rail" aria-label="目录">
-      <a
-        v-for="item in tocItems"
-        :key="item.id"
-        :href="`#${item.id}`"
-        class="toc-rail__item"
-        :title="item.label"
-        @click.prevent="scrollTo(item.id)"
-      >
-        <span class="toc-rail__dot" :data-active="item.id === activeId" />
-        <span class="toc-rail__label">{{ item.label }}</span>
-      </a>
     </nav>
+
+    <!-- ══════════════ HERO ══════════════ -->
+    <section class="page hero" id="hero">
+      <div class="hero-text">
+        <div class="hero-eyebrow">
+          <span class="pulse">v2</span>
+          冰蓝品牌系统 · 2026 春季更新
+        </div>
+
+        <h1>
+          为多 Agent<br/>
+          项目打造的<em>对话界面</em>。
+        </h1>
+
+        <p class="hero-sub">
+          14 个精心打磨的 Vue 3 组件 · 一套极地冰蓝的色彩体系 ·
+          从消息气泡到模态框，每一处都兼顾克制与温度。
+        </p>
+
+        <div class="hero-cta">
+          <a class="btn-lg primary" href="#components">
+            浏览组件
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+              <path d="M3 7h8m0 0L7.5 3.5M11 7l-3.5 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </a>
+          <a class="btn-lg ghost" href="#components">查看组件</a>
+        </div>
+
+        <div class="hero-meta">
+          <a href="#">npm i @icepaw/ui</a>
+          <span class="dot"></span>
+          <span>Vue 3.4+ · TypeScript · Tree-shakable</span>
+          <span class="dot"></span>
+          <a href="#">下载 v2 设计稿 (Figma)</a>
+        </div>
+      </div>
+
+      <div class="hero-visual">
+        <!-- 背景冰晶 SVG -->
+        <div class="crystal-bg" aria-hidden="true">
+          <svg viewBox="0 0 600 480" fill="none">
+            <g stroke="var(--ip-primary-500)" stroke-width="1" stroke-linecap="round" opacity="0.6">
+              <path d="M300 40 L300 440"/>
+              <path d="M100 240 L500 240"/>
+              <path d="M160 100 L440 380"/>
+              <path d="M440 100 L160 380"/>
+              <path d="M220 60 L380 60 M220 420 L380 420"/>
+              <path d="M60 220 L60 260 M540 220 L540 260"/>
+            </g>
+            <g stroke="var(--ip-primary-500)" stroke-width="0.6" opacity="0.4">
+              <path d="M300 100 L260 140 L260 180 L300 220"/>
+              <path d="M300 100 L340 140 L340 180 L300 220"/>
+              <path d="M220 240 L180 280 M380 240 L420 280"/>
+              <path d="M260 240 L240 200 M340 240 L360 200"/>
+            </g>
+            <circle cx="300" cy="240" r="6" fill="var(--ip-primary-500)" opacity="0.5"/>
+          </svg>
+        </div>
+
+        <!-- 浮动卡 1: Avatar -->
+        <div class="float-card f1">
+          <div class="label">Avatar</div>
+          <div class="fc-row">
+            <IpAvatar size="xs" :source="{ type: 'initials', text: '主', bgColor: 'var(--ip-primary-500)' }" />
+            <IpAvatar size="xs" :source="{ type: 'initials', text: '研', bgColor: 'var(--ip-success-base)' }" />
+            <IpAvatar size="xs" :source="{ type: 'initials', text: '审', bgColor: 'var(--ip-warning-base)' }" />
+          </div>
+        </div>
+
+        <!-- 浮动卡 2: Badge -->
+        <div class="float-card f2">
+          <div class="label">Badge</div>
+          <span class="mini-pill"><span class="dot"></span>已验证</span>
+        </div>
+
+        <!-- 浮动卡 3: Empty -->
+        <div class="float-card f3">
+          <div class="label">Empty</div>
+          <div class="fc-text">项目里还没有 Agent</div>
+        </div>
+
+        <!-- 浮动卡 4: Toast -->
+        <div class="float-card f4">
+          <div class="label">Toast</div>
+          <div class="fc-row">
+            <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+              <circle cx="6" cy="6" r="5" stroke="var(--ip-success-base)" stroke-width="1.4" fill="none"/>
+              <path d="M4 6l1.5 1.5L8 4.5" stroke="var(--ip-success-base)" stroke-width="1.4" stroke-linecap="round" fill="none"/>
+            </svg>
+            <span class="fc-text fc-text-strong">已发送</span>
+          </div>
+        </div>
+
+        <!-- 中心聊天预览窗口 -->
+        <div class="preview-stage">
+          <div class="preview-stage-header">
+            <span class="stage-dot"></span>
+            <span class="stage-name">代码伙伴 · 默认项目</span>
+            <span class="stage-meta">3 msgs</span>
+          </div>
+          <div class="preview-stage-body">
+            <div class="msg user">
+              <div class="av">我</div>
+              <div class="bubble">
+                帮我看看这个 <code>useChat</code> hook 的渲染次数为什么这么多？
+              </div>
+            </div>
+            <div class="msg ai">
+              <div class="av">码</div>
+              <div>
+                <div class="bubble">
+                  看了你的代码，问题是 <code>messages</code> 数组每次都创建新引用，
+                  <code>useEffect</code> 的依赖比较失败。<span class="cursor"></span>
+                </div>
+                <div class="msg-toolbar">
+                  <span>
+                    <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+                      <path d="M5 1v8M2 6l3 3 3-3" stroke="currentColor" stroke-width="1.2" fill="none" stroke-linecap="round"/>
+                    </svg>
+                    复制
+                  </span>
+                  <span>
+                    <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+                      <path d="M7 1L3 5l4 4" stroke="currentColor" stroke-width="1.2" fill="none" stroke-linecap="round"/>
+                    </svg>
+                    重新生成
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══════════════ 主内容容器 ══════════════ -->
+    <div class="page">
+
+      <!-- ─── Section 1: Buttons · 不对称双栏 ─── -->
+      <div class="section-divider">
+        <h2 class="h2">按钮 · <em>主角与配角</em></h2>
+        <p class="lead">
+          Primary 按钮应当真正承担"主角"地位 —— 放大、加阴影、独站一行。
+          其它变体退到背景。
+        </p>
+      </div>
+
+      <section class="buttons-section" id="components">
+        <div class="buttons-stage">
+          <h3>主按钮（默认态）</h3>
+          <p class="stage-sub">高 52px · 圆角 10px · 冰蓝 500 + 12% 阴影</p>
+
+          <div class="btn-display">
+            <div class="label">button / md / primary</div>
+            <Button
+              variant="primary"
+              size="lg"
+              :class="{
+                'demo-force-hover': stateView === 'hover',
+                'demo-force-active': stateView === 'active',
+              }"
+              :loading="stateView === 'loading'"
+              :disabled="stateView === 'disabled'"
+            >
+              <template #icon-left>
+                <Plus :size="16" :stroke-width="2" />
+              </template>
+              创建 Agent
+            </Button>
+          </div>
+
+          <div class="btn-state-row">
+            <button
+              v-for="s in ['default','hover','active','disabled','loading']"
+              :key="s"
+              type="button"
+              class="btn-pill"
+              :class="{ active: stateView === s }"
+              @click="stateView = s as typeof stateView.value"
+            >{{ s === 'default' ? '默认' : s === 'hover' ? '悬停' : s === 'active' ? '激活' : s === 'disabled' ? '禁用' : '加载中' }}</button>
+          </div>
+        </div>
+
+        <div class="btn-matrix">
+          <div
+            v-for="variant in btnVariants"
+            :key="variant.key"
+            class="matrix-row"
+          >
+            <div class="row-label">
+              {{ variant.label }}
+              <span class="sub">{{ variant.sub }}</span>
+            </div>
+            <div class="row-items">
+              <Button :variant="variant.key" size="sm">小尺寸</Button>
+              <Button :variant="variant.key" size="md">默认</Button>
+              <Button :variant="variant.key" size="lg">大尺寸</Button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ─── Section 2: Cards · 三栏不等比 ─── -->
+      <div class="section-divider">
+        <h2 class="h2">卡片 · <em>真实场景</em></h2>
+        <p class="lead">
+          演示三种不同质感的卡片：带封面图的项目卡、悬浮会话卡、统计指标卡。
+          不用 12 个相同的占位符。
+        </p>
+      </div>
+
+      <section class="cards-section">
+        <!-- 主卡: 项目卡(含封面) -->
+        <IpCard variant="shadow" padding="lg" interactive>
+          <template #header>
+            <div class="card-cover">
+              <div class="paw-stamp">
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor" aria-hidden="true">
+                  <circle cx="5" cy="6.5" r="2.4"/>
+                  <circle cx="2.4" cy="3.6" r="1"/>
+                  <circle cx="5" cy="2" r="1.1"/>
+                  <circle cx="7.6" cy="3.6" r="1"/>
+                </svg>
+                Phase 2 项目
+              </div>
+            </div>
+          </template>
+          <div class="card-pad">
+            <div class="card-meta-row">
+              <span>2 天前更新</span>
+              <span class="dot"></span>
+              <span>3 个 Agent 团队</span>
+              <span class="dot"></span>
+              <span>12 次会话</span>
+            </div>
+            <h3 class="card-title">IcePaw 的 <em>项目维度</em> 设计</h3>
+            <p class="card-desc">
+              探索多 Agent 协作的项目架构：项目选择器、Agent 团队编排、跨项目会话管理。
+            </p>
+            <div class="team-stack">
+              <div class="stack-av" style="background: linear-gradient(135deg, var(--ip-primary-500), var(--ip-primary-700));">主</div>
+              <div class="stack-av" style="background: linear-gradient(135deg, var(--ip-success-base), var(--ip-success-active));">研</div>
+              <div class="stack-av" style="background: linear-gradient(135deg, var(--ip-warning-base), var(--ip-warning-active));">审</div>
+              <div class="stack-av more">+1</div>
+              <span class="team-label">4 位 Agent · 在线</span>
+            </div>
+          </div>
+        </IpCard>
+
+        <!-- tinted 会话卡 -->
+        <IpCard variant="filled" padding="md" class="real-card--tinted">
+          <div class="card-pad">
+            <div class="card-meta-row">
+              <span class="meta-active">进行中</span>
+              <span class="dot"></span>
+              <span>18 分钟前</span>
+            </div>
+            <h3 class="card-title card-title-sm">
+              调试 <em>useChat</em> hook
+            </h3>
+            <p class="card-desc card-desc-sm">
+              messages 引用比较问题，可能要重构成 useReducer。
+            </p>
+            <div class="session-foot">
+              <div class="stack-av stack-av-sm" style="background: linear-gradient(135deg, var(--ip-primary-500), var(--ip-primary-700));">码</div>
+              <span class="session-foot-label">代码伙伴</span>
+            </div>
+          </div>
+        </IpCard>
+
+        <!-- metric 指标卡 -->
+        <IpCard variant="bordered" padding="md" class="mini-card">
+          <div class="icon-tile a">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M3 12L7 6l3 4 3-6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <div class="mini-title">本月会话</div>
+          <div class="mini-number">142</div>
+          <div class="mini-meta">↑ 12% vs 上月</div>
+        </IpCard>
+      </section>
+
+      <!-- ─── Section 3: Message · 单栏聊天场景 ─── -->
+      <div class="section-divider">
+        <h2 class="h2">消息 · <em>对话场景</em></h2>
+        <p class="lead">
+          8 条真实对话消息演示：用户、助手、系统、错误、流式、折叠。
+        </p>
+      </div>
+
+      <section class="message-section">
+        <div class="message-stage">
+          <div class="preview-stage-header">
+            <span class="stage-dot"></span>
+            <span class="stage-name">代码伙伴 · 默认项目</span>
+            <span class="stage-meta">实时</span>
+          </div>
+          <div class="preview-stage-body">
+            <MessageBubble role="user" timestamp="10:30">
+              帮我看看这段代码哪里有 bug？我本地跑不起来。
+            </MessageBubble>
+
+            <MessageBubble role="assistant" name="IcePaw" timestamp="10:30" meta="3.2s · 128 token">
+              好的，看起来你的 <code>fetch</code> 调用缺少 <code>await</code>，所以返回的是 Promise 而不是实际数据。
+              <template #footer-actions>
+                <button type="button" class="ip-message__action-btn" aria-label="重新生成" @click="toastInfo">
+                  <RotateCcw :size="14" :stroke-width="2" />
+                </button>
+              </template>
+            </MessageBubble>
+
+            <MessageBubble role="user" timestamp="10:31">明白了</MessageBubble>
+
+            <MessageBubble role="user" timestamp="10:32">
+              那如果是异步的，怎么同时发起多个请求？
+            </MessageBubble>
+
+            <MessageBubble role="assistant" name="IcePaw" timestamp="10:32" meta="2.1s · 95 token" streaming>
+              推荐使用 <code>Promise.all</code>，它会并发地等待所有 Promise 完成，然后按顺序返回结果数组。
+            </MessageBubble>
+
+            <MessageBubble role="system">连接已断开，正在重连…</MessageBubble>
+
+            <MessageBubble role="assistant" name="IcePaw" timestamp="10:33" error="连接超时">
+              回复失败
+            </MessageBubble>
+
+            <MessageBubble role="assistant" name="IcePaw" timestamp="10:34" meta="5.4s · 312 token">
+              推荐使用 <code>fetch</code> + <code>AbortController</code> 实现可中断的请求。
+              配合 <code>useRef</code> 持有 controller 实例，在 cleanup 里调用 <code>abort()</code> 即可取消挂起的请求。
+            </MessageBubble>
+          </div>
+        </div>
+      </section>
+
+      <!-- ─── Section 4: Inputs · 非对称 inline 表单 ─── -->
+      <div class="section-divider">
+        <h2 class="h2">输入 · <em>表单场景</em></h2>
+        <p class="lead">
+          表单 + 辅助控件：尺寸、状态、前缀后缀、可清除、错误抖动。
+        </p>
+      </div>
+
+      <section class="inputs-section">
+        <!-- 左侧: 表单舞台 -->
+        <div class="inputs-form">
+          <h3>创建 Agent</h3>
+          <p class="stage-sub">真实表单场景：用户名 + 描述 + 模型</p>
+
+          <div class="form-row">
+            <label>Agent 名称</label>
+            <Input v-model="agentName" placeholder="例如：代码伙伴" />
+          </div>
+
+          <div class="form-row">
+            <label>提示词</label>
+            <Textarea v-model="agentPrompt" placeholder="你是一个乐于助人的助手…" :rows="3" />
+          </div>
+
+          <div class="form-row">
+            <label>模型</label>
+            <IpSelect v-model="selectValue" :options="modelOptions" placeholder="选择模型" />
+          </div>
+
+          <div class="form-row form-row--cta">
+            <Button variant="ghost">取消</Button>
+            <Button variant="primary" @click="toastSuccess">保存</Button>
+          </div>
+        </div>
+
+        <!-- 右侧: 辅助态 -->
+        <div class="inputs-aux">
+          <h3>辅助态</h3>
+
+          <span class="aux-label">尺寸</span>
+          <div class="aux-stack">
+            <Input v-model="auxValue" size="sm" placeholder="小号" />
+            <Input v-model="auxValue" size="md" placeholder="中号（默认）" />
+            <Input v-model="auxValue" size="lg" placeholder="大号" />
+          </div>
+
+          <span class="aux-label">前缀 / 后缀</span>
+          <div class="aux-stack">
+            <Input v-model="auxValue" placeholder="搜索…">
+              <template #prefix><Search :size="14" /></template>
+            </Input>
+            <Input :model-value="'user'" placeholder="用户名">
+              <template #prefix><AtSign :size="14" /></template>
+            </Input>
+            <Input :model-value="'#general'" placeholder="频道">
+              <template #prefix><Hash :size="14" /></template>
+            </Input>
+            <Input :model-value="'user'" placeholder="用户名">
+              <template #suffix>
+                <span class="aux-suffix-text">@icepaw.dev</span>
+              </template>
+            </Input>
+          </div>
+
+          <span class="aux-label">可清除</span>
+          <Input v-model="auxValue" placeholder="搜索会话…" clearable />
+
+          <span class="aux-label">错误抖动</span>
+          <div class="aux-row">
+            <Button variant="secondary" size="sm" @click="showInputError">触发错误</Button>
+            <Button variant="ghost" size="sm" @click="clearInputError">清除</Button>
+          </div>
+
+          <span class="aux-label">禁用 / 只读</span>
+          <div class="aux-stack">
+            <Input :model-value="'禁用字段'" disabled />
+            <Input :model-value="'只读字段'" readonly />
+          </div>
+
+          <span class="aux-label">错误提示（带消息）</span>
+          <div class="aux-row">
+            <Input
+              :model-value="'zhangsan'"
+              :error="inputError"
+              :error-message="inputErrorMessage"
+              placeholder="用户名"
+            />
+            <Button variant="secondary" size="sm" @click="showInputError">触发错误</Button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ─── Section 5: Modal · 双联对照 ─── -->
+      <div class="section-divider">
+        <h2 class="h2">模态 · <em>三个尺寸</em></h2>
+        <p class="lead">
+          400 / 560 / 720 三档宽度，覆盖确认、编辑、详情场景。
+        </p>
+      </div>
+
+      <section class="modals-section">
+        <div class="modal-triggers">
+          <h3>三档尺寸</h3>
+          <p class="stage-sub">400 / 560 / 720 — 覆盖确认、编辑、详情</p>
+
+          <div class="trigger-stack">
+            <Button variant="primary" size="sm" @click="modalOpenSm = true">
+              打开（400px） · 确认操作
+            </Button>
+            <Button variant="primary" size="md" @click="modalOpenMd = true">
+              打开（560px） · 编辑表单
+            </Button>
+            <Button variant="primary" size="lg" @click="modalOpenLg = true">
+              打开（720px） · 详情视图
+            </Button>
+          </div>
+
+          <Modal v-model="modalOpenSm" title="删除会话" size="sm">
+            <p class="modal-body-text">将永久删除该会话及其所有消息，无法恢复。</p>
+            <template #footer>
+              <Button variant="ghost" @click="modalOpenSm = false">取消</Button>
+              <Button variant="danger" @click="modalOpenSm = false">删除</Button>
+            </template>
+          </Modal>
+
+          <Modal v-model="modalOpenMd" title="编辑代理" size="md">
+            <Input :model-value="'通用助手'" placeholder="代理名称" class="modal-form-field" />
+            <Textarea :model-value="'你是一个乐于助人的助手。三思而后行。'" placeholder="…" :rows="4" />
+            <template #footer>
+              <Button variant="ghost" @click="modalOpenMd = false">取消</Button>
+              <Button variant="primary" @click="modalOpenMd = false">保存</Button>
+            </template>
+          </Modal>
+
+          <Modal v-model="modalOpenLg" title="系统提示词" size="lg">
+            <Textarea v-model="taValue" placeholder="你是一个乐于助人的助手…" :rows="6" />
+            <template #footer>
+              <Button variant="ghost" @click="modalOpenLg = false">取消</Button>
+              <Button variant="primary" @click="modalOpenLg = false">保存</Button>
+            </template>
+          </Modal>
+        </div>
+
+        <div class="modal-preview">
+          <h3>Modal 解构</h3>
+          <p class="stage-sub">静态预览 — 不触发，用于展示结构</p>
+
+          <div class="modal-anatomy">
+            <div class="anatomy-row anatomy-row--header">
+              <div class="anatomy-label">标题</div>
+              <div class="anatomy-close" aria-hidden="true">×</div>
+            </div>
+
+            <hr class="anatomy-divider" />
+
+            <div class="anatomy-body">
+              <p>正文内容。Modal 的核心是聚焦点 —— 用户的所有注意力在这里。</p>
+              <p class="anatomy-body-meta">内容应控制在 720px 宽度以内。超过这个宽度，建议改用侧滑面板或独立页面。</p>
+            </div>
+
+            <hr class="anatomy-divider" />
+
+            <div class="anatomy-row anatomy-row--footer">
+              <Button variant="ghost">取消</Button>
+              <Button variant="primary">确认</Button>
+            </div>
+          </div>
+
+          <ul class="anatomy-list">
+            <li><strong>Header</strong> · 标题 + 关闭按钮</li>
+            <li><strong>Body</strong> · 主要内容，最大 720px</li>
+            <li><strong>Footer</strong> · 主要操作右对齐</li>
+            <li><strong>遮罩</strong> · rgba(20, 24, 31, 0.5) 暗化背景</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- ─── Section 6: Toast · 横向时间线 ─── -->
+      <div class="section-divider">
+        <h2 class="h2">提示 · <em>四类反馈</em></h2>
+        <p class="lead">
+          成功 / 信息 / 警告 / 错误 + 合并策略。
+        </p>
+      </div>
+
+      <section class="toast-section">
+        <div class="toast-timeline">
+          <div class="toast-step">
+            <div class="toast-step-marker success"></div>
+            <div class="toast-step-content">
+              <h4>成功 · Success</h4>
+              <p>保存、发送等正向操作反馈。</p>
+              <code>toast.success('保存成功')</code>
+            </div>
+            <Button variant="primary" @click="toastSuccess">触发</Button>
+          </div>
+
+          <div class="toast-step">
+            <div class="toast-step-marker info"></div>
+            <div class="toast-step-content">
+              <h4>信息 · Info</h4>
+              <p>中性通知，不需要立即动作。</p>
+              <code>toast.info('检测到新版本')</code>
+            </div>
+            <Button variant="secondary" @click="toastInfo">触发</Button>
+          </div>
+
+          <div class="toast-step">
+            <div class="toast-step-marker warning"></div>
+            <div class="toast-step-content">
+              <h4>警告 · Warning</h4>
+              <p>非阻塞问题，需要用户注意。</p>
+              <code>toast.warning('网络连接不稳定')</code>
+            </div>
+            <Button variant="primary" @click="toastWarning">触发</Button>
+          </div>
+
+          <div class="toast-step">
+            <div class="toast-step-marker error"></div>
+            <div class="toast-step-content">
+              <h4>错误 · Error</h4>
+              <p>操作失败，需要修复或重试。</p>
+              <code>toast.error('保存失败')</code>
+            </div>
+            <Button variant="danger" @click="toastError">触发</Button>
+          </div>
+        </div>
+
+        <div class="toast-merge">
+          <h4>合并策略</h4>
+          <p>同类型连续提示自动合并为一条，计时重置。</p>
+          <Button variant="primary" @click="toastMergeDemo">连续触发 3 次</Button>
+        </div>
+      </section>
+
+      <!-- ─── Section 7: Avatar · 3 行布局 ─── -->
+      <div class="section-divider">
+        <h2 class="h2">头像 · <em>多场景</em></h2>
+        <p class="lead">
+          6 档尺寸 × 4 种内容类型 × 2 种形状 + 上传态。
+        </p>
+      </div>
+
+      <section class="avatar-section">
+        <div class="avatar-size-strip">
+          <span class="strip-label">尺寸档 · 6 档</span>
+          <IpFlex size="md" align="center">
+            <IpAvatar :source="{ type: 'initials', text: 'A', bgColor: 'var(--ip-primary-500)' }" size="xs" />
+            <IpAvatar :source="{ type: 'initials', text: 'B', bgColor: 'var(--ip-primary-500)' }" size="sm" />
+            <IpAvatar :source="{ type: 'initials', text: 'C', bgColor: 'var(--ip-primary-500)' }" size="md" />
+            <IpAvatar :source="{ type: 'initials', text: 'D', bgColor: 'var(--ip-primary-500)' }" size="lg" />
+            <IpAvatar :source="{ type: 'initials', text: 'E', bgColor: 'var(--ip-primary-500)' }" size="xl" />
+            <IpAvatar :source="{ type: 'initials', text: 'F', bgColor: 'var(--ip-primary-500)' }" size="xxl" />
+          </IpFlex>
+          <span class="strip-meta">xs=20px · sm=28px · md=36px · lg=48px · xl=64px · xxl=96px</span>
+        </div>
+
+        <div class="avatar-type-row">
+          <span class="strip-label">内容类型 · 4 种</span>
+          <IpFlex size="lg" align="center">
+            <div class="avatar-type">
+              <IpAvatar v-if="avatarSrc" :source="{ type: 'image', src: avatarSrc, alt: '图片' }" size="lg" />
+              <IpAvatar v-else :source="{ type: 'default' }" size="lg" />
+              <span class="type-name">image</span>
+              <span class="type-desc">网络或本地图片</span>
+            </div>
+            <div class="avatar-type">
+              <IpAvatar :source="{ type: 'initials', text: 'ZP', bgColor: 'var(--ip-info-base)', fgColor: 'var(--ip-white)' }" size="lg" />
+              <span class="type-name">initials</span>
+              <span class="type-desc">首字母 + 自定义色</span>
+            </div>
+            <div class="avatar-type">
+              <IpAvatar :source="{ type: 'icon', icon: Bot, color: 'var(--ip-color-icon-default)' }" size="lg" />
+              <span class="type-name">icon</span>
+              <span class="type-desc">Lucide 图标</span>
+            </div>
+            <div class="avatar-type">
+              <IpAvatar :source="{ type: 'default' }" size="lg" />
+              <span class="type-name">default</span>
+              <span class="type-desc">降级占位</span>
+            </div>
+          </IpFlex>
+        </div>
+
+        <div class="avatar-shape-row">
+          <span class="strip-label">形状 + 上传态 · 5 种</span>
+          <IpFlex size="lg" align="center">
+            <div class="avatar-type">
+              <IpAvatar :source="{ type: 'initials', text: 'R', bgColor: 'var(--ip-warning-base)' }" size="lg" shape="rounded" />
+              <span class="type-name">rounded</span>
+              <span class="type-desc">默认 · 项目头像</span>
+            </div>
+            <div class="avatar-type">
+              <IpAvatar :source="{ type: 'initials', text: 'C', bgColor: 'var(--ip-success-base)' }" size="lg" shape="circle" />
+              <span class="type-name">circle</span>
+              <span class="type-desc">用户头像</span>
+            </div>
+            <div class="avatar-type">
+              <IpAvatar
+                v-if="avatarSrc"
+                :source="{ type: 'image', src: avatarSrc }"
+                size="lg"
+                :uploadable="true"
+                @upload="onAvatarUpload"
+                @upload-error="onAvatarError"
+              />
+              <IpAvatar v-else :source="{ type: 'default' }" size="lg" />
+              <span class="type-name">uploadable</span>
+              <span class="type-desc">hover 相机蒙层</span>
+            </div>
+            <div class="avatar-type">
+              <IpAvatar
+                v-if="avatarSrc"
+                :source="{ type: 'image', src: avatarSrc }"
+                size="lg"
+                :uploadable="true"
+                :removable="true"
+                @remove="clearAvatar"
+              />
+              <IpAvatar v-else :source="{ type: 'default' }" size="lg" />
+              <span class="type-name">removable</span>
+              <span class="type-desc">X 按钮清除</span>
+            </div>
+            <div class="avatar-type">
+              <IpAvatar
+                v-if="avatarSrc"
+                :source="{ type: 'image', src: avatarSrc }"
+                size="lg"
+                :uploadable="true"
+                :loading="true"
+              />
+              <IpAvatar v-else :source="{ type: 'default' }" size="lg" :loading="true" />
+              <span class="type-name">loading</span>
+              <span class="type-desc">spinner 状态</span>
+            </div>
+          </IpFlex>
+        </div>
+      </section>
+
+      <!-- ─── Section 8: Select · 带描述的选项 ─── -->
+      <div class="section-divider">
+        <h2 class="h2">选择 · <em>带描述的选项</em></h2>
+        <p class="lead">
+          模型选择器模拟场景：icon + label + description + disabled。
+        </p>
+      </div>
+
+      <section class="select-section">
+        <div class="select-stage">
+          <h3>模型选择器</h3>
+          <p class="stage-sub">icon + label + description + disabled 的组合场景</p>
+
+          <div class="form-row">
+            <label>主模型</label>
+            <IpSelect v-model="selectValue" :options="modelOptions" />
+          </div>
+
+          <div class="form-row">
+            <label>语气</label>
+            <IpSelect v-model="selectTone" :options="toneOptions" />
+          </div>
+
+          <div class="form-row">
+            <label>带错误态</label>
+            <IpSelect
+              v-model="selectValue"
+              :options="modelOptions"
+              :error="selectError"
+              :error-message="selectErrorMessage"
+            />
+            <Button
+              variant="ghost"
+              size="sm"
+              class="select-error-trigger"
+              @click="triggerSelectError"
+            >
+              {{ selectError ? '清除错误' : '触发错误' }}
+            </Button>
+          </div>
+
+          <div class="form-row">
+            <label>可清除</label>
+            <IpSelect v-model="selectClearable" :options="modelOptions" clearable />
+          </div>
+        </div>
+      </section>
+
+      <!-- ─── Section 9: Empty · 四种差异化空状态 ─── -->
+      <div class="section-divider">
+        <h2 class="h2">空状态 · <em>四种表达</em></h2>
+        <p class="lead">
+          探索 / 实用 / 引导 / 专业 —— 不同空态不同情绪。
+        </p>
+      </div>
+
+      <section class="empty-section">
+        <div class="empty-grid">
+          <!-- 探索型 · 引导用户开始 -->
+          <IpEmptyState
+            :icon="Plus"
+            title="开始第一个项目"
+            description="项目是 IcePaw 的一等公民。在项目里组织 Agent 团队、管理会话。"
+            :primary-action="{ label: '创建项目' }"
+            :secondary-action="{ label: '浏览模板' }"
+          />
+
+          <!-- 实用型 · 任务已完成 -->
+          <IpEmptyState
+            :icon="CheckCircle"
+            title="所有会话已读"
+            description="12 个会话 · 0 个未读"
+            compact
+            :centered="false"
+            :primary-action="{ label: '查看历史' }"
+          />
+
+          <!-- 引导型 · 步骤列表 -->
+          <IpEmptyState title="5 分钟上手 IcePaw" :centered="false">
+            <ol class="empty-steps">
+              <li><span class="step-num">1</span> 选择或创建项目</li>
+              <li><span class="step-num">2</span> 配置 Agent 团队</li>
+              <li><span class="step-num">3</span> 开始第一次对话</li>
+            </ol>
+            <template #primary-action>
+              <Button variant="primary" block>继续</Button>
+            </template>
+          </IpEmptyState>
+
+          <!-- 专业型 · 无权限 / 错误 -->
+          <IpEmptyState
+            :icon="AlertCircle"
+            title="无法访问此项目"
+            description="权限不足或项目已归档"
+            :centered="false"
+            :primary-action="{ label: '申请权限' }"
+            :secondary-action="{ label: '联系管理员' }"
+          />
+        </div>
+      </section>
+
+      <!-- ─── Section 10: Dropdown · 命令面板 ─── -->
+      <div class="section-divider">
+        <h2 class="h2">菜单 · <em>命令面板</em></h2>
+        <p class="lead">
+          shortcut + section + danger 的完整命令面板形态。
+        </p>
+      </div>
+
+      <section class="dropdown-section">
+        <div class="dropdown-grid">
+          <!-- 基础菜单 -->
+          <div class="dropdown-demo-block">
+            <h4>基础菜单</h4>
+            <p class="stage-sub">icon + divider + danger</p>
+            <IpDropdownMenu v-model="ddOpen" :items="ddItems">
+              <template #trigger>
+                <Button variant="secondary" size="sm">
+                  <template #icon-right><MoreHorizontal :size="14" /></template>
+                  操作
+                </Button>
+              </template>
+            </IpDropdownMenu>
+          </div>
+
+          <!-- 完整菜单（含分组+shortcut） -->
+          <div class="dropdown-demo-block">
+            <h4>完整菜单</h4>
+            <p class="stage-sub">label + shortcut + 多分组</p>
+            <IpDropdownMenu v-model="ddOpenFull" :items="ddFullItems">
+              <template #trigger>
+                <Button variant="secondary" size="sm">
+                  <template #icon-right><ChevronDown :size="14" /></template>
+                  更多选项
+                </Button>
+              </template>
+            </IpDropdownMenu>
+          </div>
+
+          <!-- 受限菜单（disabled 项） -->
+          <div class="dropdown-demo-block">
+            <h4>受限菜单</h4>
+            <p class="stage-sub">disabled + danger</p>
+            <IpDropdownMenu v-model="ddOpenDisabled" :items="ddDisabledItems">
+              <template #trigger>
+                <Button variant="secondary" size="sm">
+                  <template #icon-right><MoreHorizontal :size="14" /></template>
+                  受限操作
+                </Button>
+              </template>
+            </IpDropdownMenu>
+          </div>
+
+          <!-- hover 触发 -->
+          <div class="dropdown-demo-block">
+            <h4>Hover 触发</h4>
+            <p class="stage-sub">triggerAction="hover"</p>
+            <IpDropdownMenu v-model="ddOpenHover" :items="ddItems" trigger-action="hover">
+              <template #trigger>
+                <Button variant="secondary" size="sm">
+                  <template #icon-right><MoreHorizontal :size="14" /></template>
+                  悬停打开
+                </Button>
+              </template>
+            </IpDropdownMenu>
+          </div>
+        </div>
+      </section>
+
+      <!-- ─── Section 11: Popconfirm · 危险操作确认 ─── -->
+      <div class="section-divider">
+        <h2 class="h2">确认 · <em>危险操作</em></h2>
+        <p class="lead">
+          4 个方向定位 + loading + danger 反馈。
+        </p>
+      </div>
+
+      <section class="popconfirm-section">
+        <div class="popconfirm-stage">
+          <h3>四个方向 + loading + danger</h3>
+          <p class="stage-sub">点击按钮触发确认气泡，危险操作有 loading 反馈</p>
+
+          <div class="pop-grid">
+            <div class="pop-item">
+              <IpPopconfirm v-model="popTop" title="上方确认" placement="top" @confirm="toastSuccess">
+                确认删除这个会话吗？
+                <template #trigger>
+                  <Button variant="secondary" size="sm">上方</Button>
+                </template>
+              </IpPopconfirm>
+            </div>
+
+            <div class="pop-item">
+              <IpPopconfirm v-model="popBottom" title="下方确认" placement="bottom" @confirm="toastSuccess">
+                确认删除这个会话吗？
+                <template #trigger>
+                  <Button variant="secondary" size="sm">下方（默认）</Button>
+                </template>
+              </IpPopconfirm>
+            </div>
+
+            <div class="pop-item">
+              <IpPopconfirm v-model="popLeft" title="左侧确认" placement="left" @confirm="toastSuccess">
+                确认删除这个会话吗？
+                <template #trigger>
+                  <Button variant="secondary" size="sm">左侧</Button>
+                </template>
+              </IpPopconfirm>
+            </div>
+
+            <div class="pop-item">
+              <IpPopconfirm v-model="popRight" title="右侧确认" placement="right" @confirm="toastSuccess">
+                确认删除这个会话吗？
+                <template #trigger>
+                  <Button variant="secondary" size="sm">右侧</Button>
+                </template>
+              </IpPopconfirm>
+            </div>
+
+            <div class="pop-item pop-item--wide">
+              <h4>危险操作 + loading 反馈</h4>
+              <IpPopconfirm
+                v-model="popDangerOpen"
+                title="删除会话"
+                :danger="true"
+                :loading="popLoading"
+                @confirm="confirmDelete"
+              >
+                将永久删除该会话及其所有消息。
+                <template #trigger>
+                  <Button variant="danger">删除会话</Button>
+                </template>
+              </IpPopconfirm>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ─── Section 12: Flex · 轴线矩阵 ─── -->
+      <div class="section-divider">
+        <h2 class="h2">弹性 · <em>轴线矩阵</em></h2>
+        <p class="lead">
+          gap × direction × justify × align 全矩阵对照。
+        </p>
+      </div>
+
+      <section class="flex-section">
+        <div class="flex-matrix">
+          <div class="matrix-block">
+            <h4>方向 · direction</h4>
+            <IpFlex direction="row" size="sm">
+              <span class="chip">A</span><span class="chip">B</span><span class="chip">C</span>
+            </IpFlex>
+            <IpFlex direction="row-reverse" size="sm">
+              <span class="chip">A</span><span class="chip">B</span><span class="chip">C</span>
+            </IpFlex>
+            <IpFlex direction="column" size="sm">
+              <span class="chip">A</span><span class="chip">B</span><span class="chip">C</span>
+            </IpFlex>
+            <IpFlex direction="column-reverse" size="sm">
+              <span class="chip">A</span><span class="chip">B</span><span class="chip">C</span>
+            </IpFlex>
+          </div>
+
+          <div class="matrix-block">
+            <h4>gap · 5 档</h4>
+            <div class="gap-row">
+              <code>xs · 8px</code>
+              <IpFlex size="xs"><span class="chip">A</span><span class="chip">B</span></IpFlex>
+            </div>
+            <div class="gap-row">
+              <code>sm · 12px</code>
+              <IpFlex size="sm"><span class="chip">A</span><span class="chip">B</span></IpFlex>
+            </div>
+            <div class="gap-row">
+              <code>md · 16px</code>
+              <IpFlex size="md"><span class="chip">A</span><span class="chip">B</span></IpFlex>
+            </div>
+            <div class="gap-row">
+              <code>lg · 24px</code>
+              <IpFlex size="lg"><span class="chip">A</span><span class="chip">B</span></IpFlex>
+            </div>
+            <div class="gap-row">
+              <code>xl · 32px</code>
+              <IpFlex size="xl"><span class="chip">A</span><span class="chip">B</span></IpFlex>
+            </div>
+          </div>
+
+          <div class="matrix-block">
+            <h4>justify · 主轴对齐</h4>
+            <IpFlex justify="start" size="sm" class="justify-track">
+              <span class="chip">A</span><span class="chip">B</span>
+            </IpFlex>
+            <IpFlex justify="center" size="sm" class="justify-track">
+              <span class="chip">A</span><span class="chip">B</span>
+            </IpFlex>
+            <IpFlex justify="end" size="sm" class="justify-track">
+              <span class="chip">A</span><span class="chip">B</span>
+            </IpFlex>
+            <IpFlex justify="space-between" size="sm" class="justify-track">
+              <span class="chip">A</span><span class="chip">B</span>
+            </IpFlex>
+            <IpFlex justify="space-around" size="sm" class="justify-track">
+              <span class="chip">A</span><span class="chip">B</span>
+            </IpFlex>
+          </div>
+
+          <div class="matrix-block">
+            <h4>align · 交叉轴</h4>
+            <div class="align-track">
+              <IpFlex align="start" size="sm" class="align-row">
+                <span class="chip chip-tall">高</span><span class="chip">矮</span>
+              </IpFlex>
+            </div>
+            <div class="align-track">
+              <IpFlex align="center" size="sm" class="align-row">
+                <span class="chip chip-tall">高</span><span class="chip">矮</span>
+              </IpFlex>
+            </div>
+            <div class="align-track">
+              <IpFlex align="end" size="sm" class="align-row">
+                <span class="chip chip-tall">高</span><span class="chip">矮</span>
+              </IpFlex>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ─── Section 13: Container · 宽度阶梯 ─── -->
+      <div class="section-divider">
+        <h2 class="h2">容器 · <em>宽度阶梯</em></h2>
+        <p class="lead">
+          sm / md / lg / xl + fluid + centered 组合。
+        </p>
+      </div>
+
+      <section class="container-section">
+        <div class="container-stage">
+          <h3>sm / md / lg / xl 阶梯</h3>
+          <p class="stage-sub">默认 md（720px）与消息区对齐</p>
+
+          <IpContainer max-width="sm" padding-x="md" padding-y="sm">
+            <div class="container-frame">小 · 480px</div>
+          </IpContainer>
+
+          <IpContainer max-width="md" padding-x="md" padding-y="sm">
+            <div class="container-frame">中 · 720px（默认）</div>
+          </IpContainer>
+
+          <IpContainer max-width="lg" padding-x="md" padding-y="sm">
+            <div class="container-frame">大 · 960px</div>
+          </IpContainer>
+
+          <IpContainer max-width="xl" padding-x="md" padding-y="sm">
+            <div class="container-frame">特大 · 1200px</div>
+          </IpContainer>
+        </div>
+
+        <div class="container-extras">
+          <h4>居中 · centered</h4>
+          <div class="extra-pair">
+            <IpContainer max-width="md" centered padding-x="md" padding-y="sm">
+              <div class="container-frame container-frame--small">居中 · 启用</div>
+            </IpContainer>
+            <div class="extra-context">
+              <code>centered={true}</code>
+              <p>默认行为，子内容居中显示。</p>
+            </div>
+          </div>
+
+          <h4>流体 · fluid</h4>
+          <div class="extra-pair">
+            <IpContainer max-width="md" fluid padding-x="md" padding-y="sm">
+              <div class="container-frame container-frame--fluid">fluid · 忽略最大宽度</div>
+            </IpContainer>
+            <div class="extra-context">
+              <code>fluid</code>
+              <p>无视 max-width 限制，用于全宽横幅。</p>
+            </div>
+          </div>
+
+          <h4>内边距预设</h4>
+          <div class="extra-pair">
+            <IpContainer max-width="md" padding-x="xs" padding-y="xs">
+              <div class="container-frame">padding xs</div>
+            </IpContainer>
+            <div class="extra-context">
+              <code>padding-x="xs"</code>
+              <p>4 种预设：xs/sm/md/lg</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ══════════════ Footer ══════════════ -->
+      <footer class="footer">
+        <div class="footer-brand-col">
+          <div class="footer-brand">IcePaw Design System</div>
+          <div class="footer-tag">
+            为多 Agent 项目协作打造的对话界面组件库。
+            冰蓝色调 · 极地意象 · 克制表达。
+          </div>
+          <div class="footer-snow">
+            <svg viewBox="0 0 12 12" fill="none" aria-hidden="true">
+              <path d="M6 1v10M1 6h10M2 2l8 8M10 2l-8 8" stroke="currentColor" stroke-width="1" stroke-linecap="round"/>
+            </svg>
+            <svg viewBox="0 0 12 12" fill="none" aria-hidden="true">
+              <path d="M6 1v10M1 6h10M2 2l8 8M10 2l-8 8" stroke="currentColor" stroke-width="1" stroke-linecap="round"/>
+            </svg>
+            <svg viewBox="0 0 12 12" fill="none" aria-hidden="true">
+              <path d="M6 1v10M1 6h10M2 2l8 8M10 2l-8 8" stroke="currentColor" stroke-width="1" stroke-linecap="round"/>
+            </svg>
+            <span class="footer-snow-text">crafted for polar clarity</span>
+          </div>
+        </div>
+
+        <div class="footer-col">
+          <h4>组件</h4>
+          <a href="#components">Buttons</a>
+          <a href="#components">Messages</a>
+          <a href="#components">Inputs</a>
+          <a href="#components">Modals</a>
+          <a href="#components">Empty States</a>
+        </div>
+
+        <div class="footer-col">
+          <h4>资源</h4>
+          <a href="#components">组件</a>
+          <a href="#">Figma 文件</a>
+          <a href="#">图标库</a>
+          <a href="#">动效指南</a>
+        </div>
+
+        <div class="footer-col">
+          <h4>项目</h4>
+          <a href="#">GitHub</a>
+          <a href="#">更新日志</a>
+          <a href="#">路线图</a>
+          <a href="#">反馈</a>
+        </div>
+      </footer>
+    </div>
   </div>
 </template>
 
-<style>
-/* Global: smooth scroll (not scoped so it applies to html) */
-html { scroll-behavior: smooth; }
-@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
-</style>
-
 <style scoped>
-/* ============================================================
- * Page root
- * ============================================================ */
+/* ================================================================
+   IcePaw UI · Preview v2 — Brand Showcase Landing
+   规范: wave2-preview-site-spec.md
+   ================================================================ */
+
+/* ── Global reset ── */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  tab-size: 4;
+}
+
+body {
+  font-family: var(--ip-font-sans);
+  font-size: var(--ip-text-body-size);
+  line-height: var(--ip-line-height-loose2);
+  color: var(--ip-color-text-primary);
+  background: var(--ip-color-bg-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+[data-theme='dark'] body {
+  background: var(--ip-color-bg-primary);
+  color: var(--ip-white);
+}
+
 .preview-root {
   min-height: 100vh;
   background: var(--ip-color-bg-primary);
-  color: var(--ip-color-text-body);
-  font-family: var(--ip-font-sans);
-  animation: page-fade-in 200ms var(--ip-ease-out) both;
+  color: inherit;
+  overflow-x: hidden;
 }
 
-/* ============================================================
- * Header
- * ============================================================ */
-.preview-header {
+/* ── Page container ── */
+.page {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 0 var(--ip-spacing-8);
+}
+
+.page.hero {
+  padding: var(--ip-spacing-20) var(--ip-spacing-8) var(--ip-spacing-16);
+}
+
+/* ================================================================
+   Top nav
+   ================================================================ */
+.nav {
   position: sticky;
   top: 0;
-  height: 56px;
-  background: var(--ip-color-bg-header-backdrop);
-  backdrop-filter: blur(12px) saturate(180%);
-  -webkit-backdrop-filter: blur(12px) saturate(180%);
-  border-bottom: 1px solid transparent;
-  transition: border-color 200ms var(--ip-ease-out),
-              background-color 200ms var(--ip-ease-out);
-  z-index: 200;
-}
-.preview-header.is-scrolled {
-  border-bottom-color: var(--ip-color-border-default);
-  background: var(--ip-color-bg-header-backdrop-scrolled);
+  z-index: var(--ip-z-sticky);
+  height: 60px;
+  background: rgba(250, 251, 252, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--ip-gray-200);
+  display: flex;
+  align-items: center;
+  padding: 0 var(--ip-spacing-8);
 }
 
-.preview-header__inner {
-  max-width: 1200px;
-  height: 100%;
+[data-theme='dark'] .nav {
+  background: rgba(20, 24, 31, 0.85);
+  border-bottom-color: var(--ip-gray-800);
+}
+
+.nav-inner {
+  max-width: 1280px;
   margin: 0 auto;
-  padding: 0 var(--ip-spacing-12);
+  width: 100%;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: var(--ip-spacing-6);
+  gap: var(--ip-spacing-8);
 }
 
-.preview-header__brand {
+.brand {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--ip-spacing-2);
+  font-weight: var(--ip-font-weight-semibold);
+  font-size: 15px;
+  color: var(--ip-color-text-primary);
+  text-decoration: none;
 }
 
-.preview-header__name {
-  font-size: 17px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
+[data-theme='dark'] .brand { color: var(--ip-white); }
+
+.brand-mark {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--ip-radius-sm);
+  display: grid;
+  place-items: center;
+  box-shadow: 0 1px 2px rgba(20, 24, 31, 0.04);
+}
+
+.brand-mark svg { width: 26px; height: 26px; display: block; }
+
+.brand .accent {
+  color: var(--ip-primary-700);
+  font-weight: var(--ip-font-weight-regular);
+  margin-left: 2px;
+}
+
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: var(--ip-spacing-6);
+}
+
+.nav-link {
+  font-size: 13px;
+  color: var(--ip-color-text-body);
+  padding: 6px 12px;
+  border-radius: var(--ip-radius-md);
+  text-decoration: none;
+  transition: all var(--ip-duration-base) var(--ip-ease-out);
+}
+
+.nav-link:hover {
+  background: var(--ip-gray-100);
   color: var(--ip-color-text-primary);
 }
 
-.preview-header__dot {
-  color: var(--ip-color-text-tertiary);
+.nav-link.active {
+  color: var(--ip-primary-700);
+  background: var(--ip-primary-50);
 }
 
-.preview-header__meta {
+[data-theme='dark'] .nav-link.active {
+  background: rgba(70, 128, 194, 0.15);
+}
+
+.nav-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--ip-spacing-3);
+}
+
+.nav-link-quiet {
   font-size: 13px;
-  font-weight: 400;
   color: var(--ip-color-text-tertiary);
+  text-decoration: none;
 }
 
-.preview-header__version {
-  font-family: var(--ip-font-mono);
-  font-size: 12px;
-  color: var(--ip-color-text-tertiary);
-  background: var(--ip-color-bg-tertiary);
-  padding: 1px 6px;
-  border-radius: var(--ip-radius-sm);
-}
+.nav-link-quiet:hover { color: var(--ip-color-text-primary); }
 
-.theme-toggle {
+.btn-sm {
+  height: 32px;
+  padding: 0 14px;
+  border-radius: var(--ip-radius-md);
+  font-size: 13px;
+  font-weight: var(--ip-font-weight-medium);
+  border: none;
+  cursor: pointer;
+  font-family: var(--ip-font-sans);
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  transition: all var(--ip-duration-base) var(--ip-ease-out);
+}
+
+.btn-sm.primary {
+  background: var(--ip-primary-500);
+  color: var(--ip-white);
+}
+
+.btn-sm.primary:hover { background: var(--ip-primary-600); }
+
+.theme-toggle {
+  width: 32px;
   height: 32px;
-  padding: 0 12px;
+  border-radius: var(--ip-radius-md);
+  border: none;
   background: transparent;
-  border: 1px solid var(--ip-color-border-default);
-  border-radius: 999px;
-  color: var(--ip-color-text-body);
-  font-size: 13px;
-  font-weight: 500;
   cursor: pointer;
-  transition: background-color 150ms var(--ip-ease-out),
-              border-color 150ms var(--ip-ease-out),
-              transform 100ms var(--ip-ease-out);
+  display: grid;
+  place-items: center;
+  color: var(--ip-color-text-tertiary);
+  transition: all var(--ip-duration-base) var(--ip-ease-out);
 }
+
 .theme-toggle:hover {
-  background: var(--ip-color-bg-tertiary);
-  border-color: var(--ip-color-border-strong);
-}
-.theme-toggle:active { transform: scale(0.97); }
-.theme-toggle:focus-visible {
-  outline: none;
-  box-shadow: var(--ip-shadow-focus);
-}
-.theme-toggle__icon {
-  display: inline-flex;
-  align-items: center;
-  color: currentColor;
-  transition: transform 300ms var(--ip-ease-emphasized);
-}
-.theme-toggle:active .theme-toggle__icon { transform: rotate(180deg); }
-
-/* ============================================================
- * Hero block
- * ============================================================ */
-.preview-intro {
-  max-width: 720px;
-  margin: 0 auto;
-  padding: 120px var(--ip-spacing-6) 96px;
-}
-.preview-intro__index {
-  font-family: var(--ip-font-mono);
-  font-size: 12px;
-  font-weight: 500;
-  letter-spacing: 0.08em;
-  color: var(--ip-color-border-focus);
-  margin-bottom: 24px;
-  animation: hero-rise 400ms var(--ip-ease-out) both;
-}
-.preview-intro h1 {
-  margin: 0 0 16px;
-  font-size: 40px;
-  line-height: 44px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
+  background: var(--ip-gray-100);
   color: var(--ip-color-text-primary);
-  animation: hero-rise 400ms var(--ip-ease-out) 80ms both;
-}
-.preview-intro__subtitle {
-  margin: 0 0 32px;
-  font-size: 17px;
-  line-height: 28px;
-  font-weight: 400;
-  color: var(--ip-color-text-secondary);
-  animation: hero-rise 400ms var(--ip-ease-out) 160ms both;
-}
-.preview-intro__lede {
-  max-width: 560px;
-  margin: 0 0 40px;
-  font-size: 15px;
-  line-height: 24px;
-  color: var(--ip-color-text-body);
-  animation: hero-rise 400ms var(--ip-ease-out) 240ms both;
-}
-.preview-intro__lede em {
-  display: block;
-  margin-top: 16px;
-  font-size: 13px;
-  color: var(--ip-color-text-tertiary);
-  font-style: italic;
 }
 
-.preview-anchor-pills {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 64px;
-  animation: hero-rise 400ms var(--ip-ease-out) 320ms both;
+[data-theme='dark'] .theme-toggle:hover {
+  background: var(--ip-gray-800);
 }
-.hero-anchor {
-  display: inline-flex;
+
+/* ================================================================
+   HERO
+   ================================================================ */
+.hero {
+  padding: var(--ip-spacing-20) 0 var(--ip-spacing-16);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--ip-spacing-12);
   align-items: center;
-  padding: 6px 14px;
-  background: transparent;
-  border: 1px solid var(--ip-color-border-default);
-  border-radius: 999px;
-  color: var(--ip-color-text-body);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background-color 150ms var(--ip-ease-out),
-              border-color 150ms var(--ip-ease-out),
-              color 150ms var(--ip-ease-out),
-              transform 100ms var(--ip-ease-out);
-}
-.hero-anchor:hover {
-  background: var(--ip-color-bg-tertiary);
-  border-color: var(--ip-color-border-strong);
-  color: var(--ip-color-text-primary);
-  transform: translateY(-1px);
-}
-.hero-anchor:active { transform: translateY(0) scale(0.98); }
-.hero-anchor:focus-visible {
-  outline: none;
-  box-shadow: var(--ip-shadow-focus);
-}
-
-.hero-scroll-hint {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  color: var(--ip-color-text-tertiary);
-  font-size: 11px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  animation: hero-rise 400ms var(--ip-ease-out) 400ms both;
-}
-.hero-scroll-hint svg { animation: scroll-hint-bounce 1800ms ease-in-out infinite; }
-@keyframes scroll-hint-bounce {
-  0%, 100% { transform: translateY(0); opacity: 0.5; }
-  50%      { transform: translateY(4px); opacity: 1; }
-}
-
-/* ============================================================
- * Section
- * ============================================================ */
-.preview-section {
-  max-width: 720px;
-  margin: 0 auto;
-  padding: 0 var(--ip-spacing-6);
   position: relative;
 }
-.preview-section + .preview-section { padding-top: 96px; }
 
-.preview-section__top { margin-bottom: 16px; }
+.hero-text { max-width: 540px; }
 
-.preview-section__index {
-  font-family: var(--ip-font-mono);
-  font-size: 12px;
-  font-weight: 500;
-  letter-spacing: 0.05em;
-  color: var(--ip-color-border-focus);
-  margin-bottom: 16px;
-}
-.preview-section__title {
-  font-size: 28px;
-  line-height: 34px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  color: var(--ip-color-text-primary);
-  margin: 0 0 8px;
-}
-.preview-section__subtitle {
-  font-size: 17px;
-  line-height: 28px;
-  font-weight: 400;
-  color: var(--ip-color-text-secondary);
-  margin: 0 0 32px;
-  max-width: 560px;
-}
-
-.preview-label {
-  display: block;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--ip-color-text-tertiary);
-  margin: 48px 0 16px;
-}
-.preview-label:first-of-type { margin-top: 24px; }
-
-.preview-row {
-  display: flex;
-  flex-wrap: wrap;
+.hero-eyebrow {
+  display: inline-flex;
   align-items: center;
-  gap: 12px;
-}
-.preview-row + .preview-row { margin-top: 16px; }
-
-.preview-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  max-width: 480px;
-}
-.preview-stack + .preview-stack,
-.preview-row + .preview-stack,
-.preview-stack + .preview-row { margin-top: 16px; }
-.preview-caption {
-  font-size: 13px;
-  line-height: 20px;
-  color: var(--ip-color-text-secondary);
-  max-width: 560px;
-  margin: 8px 0 0;
-}
-.preview-prose {
-  max-width: 560px;
-  font-size: 15px;
-  line-height: 24px;
+  gap: var(--ip-spacing-2);
+  padding: 4px 10px 4px 4px;
+  background: var(--ip-white);
+  border: 1px solid var(--ip-gray-200);
+  border-radius: var(--ip-radius-full);
+  font-size: 12px;
   color: var(--ip-color-text-body);
-  margin: 0 0 16px;
+  margin-bottom: var(--ip-spacing-6);
+  box-shadow: var(--ip-shadow-xs);
 }
 
-.preview-dont-list {
-  list-style: none;
-  padding: 0;
-  margin: 0;
+[data-theme='dark'] .hero-eyebrow {
+  background: var(--ip-gray-800);
+  border-color: var(--ip-gray-700);
+  color: var(--ip-gray-300);
+}
+
+.hero-eyebrow .pulse {
+  width: 18px;
+  height: 18px;
+  background: var(--ip-primary-100);
+  color: var(--ip-primary-700);
+  border-radius: var(--ip-radius-full);
+  display: grid;
+  place-items: center;
+  font-family: var(--ip-font-mono);
+  font-size: 10px;
+  font-weight: var(--ip-font-weight-semibold);
+}
+
+.hero h1 {
+  font-family: var(--ip-font-display);
+  font-weight: var(--ip-font-weight-regular);
+  font-size: clamp(2.8rem, 5.6vw, 4.4rem);
+  line-height: 1.02;
+  letter-spacing: -0.03em;
+  color: var(--ip-color-text-primary);
+  text-wrap: balance;
+  margin-bottom: var(--ip-spacing-5);
+}
+
+[data-theme='dark'] .hero h1 { color: var(--ip-white); }
+
+.hero h1 em {
+  font-style: italic;
+  color: var(--ip-primary-600);
+}
+
+.hero-sub {
+  font-size: 17px;
+  line-height: 1.55;
+  color: var(--ip-color-text-body);
+  margin-bottom: var(--ip-spacing-8);
   max-width: 480px;
 }
-.preview-dont-list li {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  font-size: 13px;
-  line-height: 22px;
-  color: var(--ip-color-text-secondary);
-  margin-bottom: 8px;
-}
-.preview-dont-list .bullet-dot {
-  color: var(--ip-color-border-default);
-  flex-shrink: 0;
-  margin-top: 7px;
+
+[data-theme='dark'] .hero-sub { color: var(--ip-gray-300); }
+
+.hero-cta { display: flex; align-items: center; gap: var(--ip-spacing-3); }
+
+.hero-cta .btn-lg {
+  height: 46px;
+  padding: 0 var(--ip-spacing-6);
+  font-size: 14px;
+  font-weight: var(--ip-font-weight-medium);
+  border-radius: var(--ip-radius-md);
+  border: none;
+  cursor: pointer;
+  font-family: var(--ip-font-sans);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  transition: all var(--ip-duration-message) var(--ip-ease-out);
+  text-decoration: none;
 }
 
-.preview-chat-frame {
-  border: 1px solid var(--ip-color-border-default);
+.hero-cta .btn-lg.primary {
+  background: var(--ip-primary-500);
+  color: var(--ip-white);
+  box-shadow: 0 2px 10px rgba(70, 128, 194, 0.3);
+}
+
+.hero-cta .btn-lg.primary:hover {
+  background: var(--ip-primary-600);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(70, 128, 194, 0.4);
+}
+
+.hero-cta .btn-lg.ghost {
+  background: transparent;
+  color: var(--ip-color-text-primary);
+  border: 1px solid var(--ip-gray-300);
+}
+
+.hero-cta .btn-lg.ghost:hover {
+  background: var(--ip-gray-100);
+  border-color: var(--ip-gray-500);
+}
+
+[data-theme='dark'] .hero-cta .btn-lg.ghost {
+  color: var(--ip-white);
+  border-color: var(--ip-gray-700);
+}
+
+.hero-meta {
+  margin-top: var(--ip-spacing-8);
+  display: flex;
+  align-items: center;
+  gap: var(--ip-spacing-5);
+  color: var(--ip-color-text-tertiary);
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+
+.hero-meta .dot {
+  width: 4px;
+  height: 4px;
+  background: var(--ip-gray-300);
+  border-radius: var(--ip-radius-full);
+}
+
+.hero-meta a {
+  color: var(--ip-color-text-body);
+  text-decoration: none;
+  border-bottom: 1px dotted var(--ip-gray-300);
+  padding-bottom: 1px;
+  font-family: var(--ip-font-mono);
+}
+
+.hero-meta a:hover {
+  color: var(--ip-primary-700);
+  border-color: var(--ip-primary-400);
+}
+
+/* ---- Hero right column ---- */
+.hero-visual {
+  position: relative;
+  height: 480px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.crystal-bg {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+.crystal-bg svg { width: 100%; height: 100%; }
+
+.float-card {
+  position: absolute;
+  background: var(--ip-white);
+  border: 1px solid var(--ip-gray-200);
   border-radius: var(--ip-radius-lg);
-  background: var(--ip-color-bg-secondary);
-  padding: var(--ip-spacing-4) 0;
+  box-shadow: var(--ip-shadow-lg);
+  padding: var(--ip-spacing-3);
+  z-index: 2;
+  animation: float-in 600ms var(--ip-ease-out) backwards;
+}
+
+[data-theme='dark'] .float-card {
+  background: var(--ip-gray-800);
+  border-color: var(--ip-gray-700);
+}
+
+.float-card.f1 {
+  top: 30px; left: 10px;
+  --rot: -3deg;
+  animation-delay: 200ms;
+}
+.float-card.f2 {
+  bottom: 50px; left: 0;
+  --rot: 2deg;
+  animation-delay: 350ms;
+}
+.float-card.f3 {
+  top: 60px; right: 20px;
+  --rot: 4deg;
+  animation-delay: 500ms;
+}
+.float-card.f4 {
+  bottom: 30px; right: 10px;
+  --rot: -2deg;
+  animation-delay: 650ms;
+}
+
+@keyframes float-in {
+  from { opacity: 0; transform: translateY(8px) rotate(var(--rot, 0deg)); }
+  to { opacity: 1; transform: translateY(0) rotate(var(--rot, 0deg)); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .float-card {
+    animation: none;
+  }
+}
+
+.float-card .label {
+  font-size: 10.5px;
+  color: var(--ip-color-text-tertiary);
+  font-weight: var(--ip-font-weight-medium);
+  margin-bottom: 6px;
+  font-family: var(--ip-font-mono);
+}
+
+.float-card .fc-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.float-card .fc-text {
+  font-size: 11.5px;
+  color: var(--ip-color-text-tertiary);
+  max-width: 120px;
+  line-height: 1.45;
+}
+
+.float-card .fc-text-strong {
+  color: var(--ip-color-text-primary);
+}
+
+[data-theme='dark'] .float-card .fc-text-strong { color: var(--ip-white); }
+
+.mini-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  padding: 2px 8px;
+  background: var(--ip-primary-50);
+  color: var(--ip-primary-700);
+  border-radius: var(--ip-radius-full);
+  font-weight: var(--ip-font-weight-medium);
+}
+
+.mini-pill .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--ip-radius-full);
+  background: var(--ip-success-base);
+}
+
+/* ---- Center preview stage ---- */
+.preview-stage {
+  position: relative;
+  z-index: 3;
+  width: 100%;
+  max-width: 480px;
+  background: var(--ip-white);
+  border-radius: var(--ip-radius-3xl);
+  border: 1px solid var(--ip-gray-200);
+  box-shadow:
+    0 20px 50px rgba(20, 24, 31, 0.12),
+    0 8px 20px rgba(20, 24, 31, 0.06);
   overflow: hidden;
 }
 
-/* ============================================================
- * Flex / Container preview helpers
- * ============================================================ */
-.preview-chip {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: 32px;
-  padding: 0 12px;
-  background: var(--ip-color-bg-tertiary);
-  border: 1px solid var(--ip-color-border-default);
-  border-radius: var(--ip-radius-md);
-  color: var(--ip-color-text-body);
-  font-size: 13px;
-  font-weight: 500;
+[data-theme='dark'] .preview-stage {
+  background: var(--ip-gray-800);
+  border-color: var(--ip-gray-700);
 }
-.preview-chip--tall { height: 56px; align-self: stretch; }
-.preview-link {
-  color: var(--ip-color-text-body);
-  font-size: 13px;
-  cursor: pointer;
-  text-decoration: none;
-  transition: color 150ms var(--ip-ease-out);
-}
-.preview-link:hover { color: var(--ip-color-text-primary); }
 
-.preview-axis-row {
+.preview-stage-header {
+  height: 44px;
+  padding: 0 var(--ip-spacing-4);
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: var(--ip-spacing-2);
+  border-bottom: 1px solid var(--ip-gray-200);
+  background: var(--ip-gray-50);
 }
-.preview-axis-row + .preview-axis-row { margin-top: 12px; }
-.preview-axis-label {
-  font-family: var(--ip-font-mono);
-  font-size: 12px;
+
+[data-theme='dark'] .preview-stage-header {
+  background: var(--ip-gray-850);
+  border-bottom-color: var(--ip-gray-700);
+}
+
+.preview-stage-header .stage-dot {
+  width: 8px;
+  height: 8px;
+  background: var(--ip-primary-400);
+  border-radius: var(--ip-radius-full);
+}
+
+.preview-stage-header .stage-name {
+  font-size: 12.5px;
+  font-weight: var(--ip-font-weight-medium);
+  color: var(--ip-color-text-primary);
+}
+
+[data-theme='dark'] .preview-stage-header .stage-name { color: var(--ip-white); }
+
+.preview-stage-header .stage-meta {
+  margin-left: auto;
+  font-size: 11px;
   color: var(--ip-color-text-tertiary);
-  flex-shrink: 0;
-  width: 130px;
-}
-
-.preview-justify-track {
-  flex: 1;
-  height: 40px;
-  display: flex;
-  align-items: center;
-  background: repeating-linear-gradient(
-    -45deg,
-    transparent 0 6px,
-    var(--ip-color-bg-tertiary) 6px 7px
-  );
-  border-radius: var(--ip-radius-sm);
-  padding: 0 8px;
-}
-
-.preview-align-track {
-  height: 64px;
-  display: flex;
-  align-items: stretch;
-  gap: 16px;
-  padding: 4px 12px;
-  background: var(--ip-color-bg-tertiary);
-  border-radius: var(--ip-radius-sm);
-}
-.preview-align-track + .preview-align-track { margin-top: 12px; }
-.preview-align-track .preview-axis-label { align-self: center; }
-
-.preview-container-frame {
-  border: 1px dashed var(--ip-color-border-default);
-  border-radius: var(--ip-radius-sm);
-  padding: 12px 16px;
-  background: var(--ip-color-bg-secondary);
   font-family: var(--ip-font-mono);
-  font-size: 12px;
-  color: var(--ip-color-text-body);
-  text-align: center;
 }
-.preview-container-frame em {
-  font-style: normal;
-  color: var(--ip-color-text-tertiary);
-  margin-left: 6px;
-}
-.preview-container-frame--small { padding: 8px 12px; font-size: 11px; }
-.preview-container-frame--fluid { background: var(--ip-color-bg-tertiary); }
 
-/* ============================================================
- * TOC rail
- * ============================================================ */
-.toc-rail {
-  position: fixed;
-  top: 50%;
-  right: 32px;
-  transform: translateY(-50%);
+.preview-stage-body {
+  padding: var(--ip-spacing-5);
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  z-index: 100;
+  gap: var(--ip-spacing-4);
+  min-height: 320px;
 }
-.toc-rail__item {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  text-decoration: none;
-  color: var(--ip-color-text-tertiary);
+
+.msg { display: flex; gap: var(--ip-spacing-2); align-items: flex-start; }
+.msg.user { flex-direction: row-reverse; }
+
+.msg .av {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--ip-radius-md);
+  display: grid;
+  place-items: center;
   font-size: 12px;
-  font-weight: 500;
-  letter-spacing: 0.02em;
-  padding: 4px 0;
-  transition: color 200ms var(--ip-ease-out);
+  font-weight: var(--ip-font-weight-semibold);
+  flex-shrink: 0;
+  color: var(--ip-white);
+}
+
+.msg.user .av { background: linear-gradient(135deg, var(--ip-primary-600), var(--ip-primary-800)); }
+.msg.ai .av { background: linear-gradient(135deg, var(--ip-success-base), var(--ip-success-active)); }
+
+.msg .bubble {
+  max-width: 320px;
+  padding: 10px 14px;
+  border-radius: 14px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ip-color-text-primary);
+}
+
+.msg.user .bubble {
+  background: var(--ip-primary-500);
+  color: var(--ip-white);
+  border-bottom-right-radius: 4px;
+}
+
+.msg.ai .bubble {
+  background: var(--ip-gray-50);
+  border: 1px solid var(--ip-gray-200);
+  border-bottom-left-radius: 4px;
+}
+
+[data-theme='dark'] .msg.ai .bubble {
+  background: var(--ip-gray-700);
+  border-color: var(--ip-gray-600);
+  color: var(--ip-white);
+}
+
+.msg.ai .bubble code {
+  font-family: var(--ip-font-mono);
+  font-size: 11.5px;
+  background: var(--ip-gray-100);
+  padding: 1px 5px;
+  border-radius: 4px;
+  color: var(--ip-primary-700);
+}
+
+[data-theme='dark'] .msg.ai .bubble code {
+  background: var(--ip-gray-600);
+  color: var(--ip-primary-300);
+}
+
+.cursor {
+  display: inline-block;
+  width: 6px;
+  height: 13px;
+  background: var(--ip-primary-500);
+  margin-left: 2px;
+  vertical-align: -2px;
+  animation: blink 1s steps(2) infinite;
+}
+
+@keyframes blink { 50% { opacity: 0; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .cursor { animation: none; }
+}
+
+.msg-toolbar {
+  display: flex;
+  gap: 4px;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--ip-color-text-tertiary);
+}
+
+.msg-toolbar span {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  border-radius: var(--ip-radius-sm);
   cursor: pointer;
 }
-.toc-rail__item:hover { color: var(--ip-color-text-primary); }
-.toc-rail__dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--ip-color-border-default);
-  flex-shrink: 0;
-  transition: background-color 200ms var(--ip-ease-out),
-              transform 200ms var(--ip-ease-out);
-}
-.toc-rail__item:hover .toc-rail__dot { transform: scale(1.4); }
-.toc-rail__dot[data-active="true"] {
-  background: var(--ip-color-border-focus);
-  transform: scale(1.4);
-}
-@media (max-width: 1199px) { .toc-rail { display: none; } }
 
-/* ============================================================
- * Hand-drawn assets
- * ============================================================ */
-.hand-drawn-divider {
-  color: var(--ip-color-border-default);
-  display: block;
-}
-.hand-drawn-divider path {
-  stroke-dasharray: 100;
-  stroke-dashoffset: 100;
-  transition: stroke-dashoffset 800ms var(--ip-ease-out);
-}
-.hand-drawn-divider.is-drawn path { stroke-dashoffset: 0; }
-.hand-drawn-divider--center {
-  margin: 64px auto 0;
-  opacity: 0.5;
-}
-[data-theme="dark"] .hand-drawn-divider { color: var(--ip-color-border-strong); }
-
-.hand-drawn-paw {
+.msg-toolbar span:hover {
+  background: var(--ip-gray-100);
   color: var(--ip-color-text-primary);
-  display: inline-block;
-  vertical-align: -3px;
 }
 
-/* ============================================================
- * Footer
- * ============================================================ */
-.preview-footer {
-  max-width: 720px;
-  margin: 120px auto 0;
-  padding: 64px var(--ip-spacing-6);
-  text-align: center;
-  border-top: 1px solid var(--ip-color-border-default);
+[data-theme='dark'] .msg-toolbar span:hover {
+  background: var(--ip-gray-700);
+  color: var(--ip-white);
 }
-.preview-footer__row {
+
+/* ================================================================
+   Section divider
+   ================================================================ */
+.section-divider {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
+  align-items: baseline;
+  gap: var(--ip-spacing-3);
+  margin: var(--ip-spacing-16) 0 var(--ip-spacing-8);
+  padding-top: var(--ip-spacing-12);
+  border-top: 1px solid var(--ip-gray-200);
+}
+
+[data-theme='dark'] .section-divider { border-top-color: var(--ip-gray-800); }
+
+.section-divider .h2 {
+  font-family: var(--ip-font-display);
+  font-size: 32px;
+  font-weight: var(--ip-font-weight-regular);
+  color: var(--ip-color-text-primary);
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+
+[data-theme='dark'] .section-divider .h2 { color: var(--ip-white); }
+
+.section-divider .h2 em {
+  font-style: normal;
+  color: var(--ip-primary-600);
+}
+
+.section-divider .lead {
+  margin-left: auto;
+  max-width: 360px;
+  font-size: 13.5px;
+  color: var(--ip-color-text-body);
+  line-height: 1.55;
+  text-align: right;
+}
+
+[data-theme='dark'] .section-divider .lead { color: var(--ip-gray-300); }
+
+/* ================================================================
+   Section 1: Buttons · 不对称双栏 (1.2fr / 1fr)
+   ================================================================ */
+.buttons-section {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr;
+  gap: var(--ip-spacing-10);
+  align-items: start;
+}
+
+.buttons-stage {
+  background: var(--ip-color-bg-tertiary);
+  border-radius: var(--ip-radius-xl);
+  padding: var(--ip-spacing-8);
+  border: 1px solid var(--ip-gray-200);
+  position: sticky;
+  top: 80px;
+}
+
+[data-theme='dark'] .buttons-stage {
+  background: var(--ip-gray-850);
+  border-color: var(--ip-gray-800);
+}
+
+.buttons-stage h3 {
+  font-family: var(--ip-font-display);
+  font-size: 22px;
+  font-weight: var(--ip-font-weight-regular);
+  color: var(--ip-color-text-primary);
+  margin-bottom: var(--ip-spacing-2);
+}
+
+[data-theme='dark'] .buttons-stage h3 { color: var(--ip-white); }
+
+.buttons-stage .stage-sub {
   font-size: 13px;
   color: var(--ip-color-text-tertiary);
+  margin-bottom: var(--ip-spacing-6);
+}
+
+.btn-display {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--ip-spacing-10);
+  background: var(--ip-white);
+  border-radius: var(--ip-radius-lg);
+  border: 1px solid var(--ip-gray-200);
+  margin-bottom: var(--ip-spacing-5);
+}
+
+[data-theme='dark'] .btn-display {
+  background: var(--ip-gray-800);
+  border-color: var(--ip-gray-700);
+}
+
+.btn-display .label {
+  font-size: 11.5px;
+  color: var(--ip-color-text-tertiary);
+  margin-bottom: var(--ip-spacing-4);
+  font-family: var(--ip-font-mono);
+}
+
+.btn-state-row {
+  display: flex;
+  gap: var(--ip-spacing-2);
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.btn-pill {
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: var(--ip-radius-full);
+  font-family: var(--ip-font-mono);
+  cursor: pointer;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--ip-color-text-body);
+  transition: all var(--ip-duration-base) var(--ip-ease-out);
+}
+
+.btn-pill.active {
+  background: var(--ip-primary-500);
+  color: var(--ip-white);
+  border-color: var(--ip-primary-500);
+}
+
+.btn-pill:not(.active) { border-color: var(--ip-gray-200); }
+.btn-pill:not(.active):hover { border-color: var(--ip-primary-300); }
+
+.demo-force-hover { opacity: 0.85; transform: translateY(-1px); }
+.demo-force-active { transform: translateY(1px); filter: brightness(0.95); }
+
+.btn-matrix { display: grid; gap: var(--ip-spacing-4); }
+
+.matrix-row {
+  display: grid;
+  grid-template-columns: 80px 1fr;
+  gap: var(--ip-spacing-4);
+  align-items: center;
+  padding-bottom: var(--ip-spacing-4);
+  border-bottom: 1px solid var(--ip-gray-200);
+}
+
+.matrix-row:last-child { border-bottom: none; padding-bottom: 0; }
+
+.matrix-row .row-label {
+  font-size: 12px;
+  color: var(--ip-color-text-tertiary);
+  font-weight: var(--ip-font-weight-medium);
+}
+
+.matrix-row .row-label .sub {
+  display: block;
+  font-size: 11px;
+  color: var(--ip-color-text-tertiary);
+  font-weight: var(--ip-font-weight-regular);
+  margin-top: 2px;
+}
+
+.matrix-row .row-items {
+  display: flex;
+  align-items: center;
+  gap: var(--ip-spacing-3);
+  flex-wrap: wrap;
+}
+
+/* ================================================================
+   Section 2: Cards · 三栏不等比 (2fr / 1fr / 1fr)
+   ================================================================ */
+.cards-section {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr;
+  gap: var(--ip-spacing-5);
+}
+
+.real-card--tinted {
+  background: linear-gradient(180deg, var(--ip-primary-50) 0%, var(--ip-white) 60%) !important;
+  border-color: var(--ip-primary-100) !important;
+}
+
+[data-theme='dark'] .real-card--tinted {
+  background: linear-gradient(180deg, var(--ip-gray-850) 0%, var(--ip-gray-800) 60%) !important;
+  border-color: var(--ip-gray-700) !important;
+}
+
+.card-meta-row {
+  display: flex;
+  align-items: center;
+  gap: var(--ip-spacing-2);
+  font-size: 11px;
+  color: var(--ip-color-text-tertiary);
+}
+
+.card-meta-row .dot {
+  width: 3px;
+  height: 3px;
+  background: var(--ip-gray-300);
+  border-radius: var(--ip-radius-full);
+}
+
+.card-meta-row .meta-active {
+  color: var(--ip-primary-700);
+  font-weight: var(--ip-font-weight-medium);
+}
+
+.card-title {
+  font-family: var(--ip-font-display);
+  font-size: 22px;
+  line-height: 1.15;
+  font-weight: var(--ip-font-weight-regular);
+  color: var(--ip-color-text-primary);
+  letter-spacing: -0.015em;
+}
+
+.card-title-sm { font-size: 18px; }
+
+[data-theme='dark'] .card-title { color: var(--ip-white); }
+
+.card-title em { font-style: normal; color: var(--ip-primary-600); }
+
+.card-desc {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ip-color-text-body);
+}
+
+.card-desc-sm { font-size: 12.5px; }
+
+[data-theme='dark'] .card-desc { color: var(--ip-gray-300); }
+
+/* 团队头像栈 */
+.team-stack {
+  display: flex;
+  align-items: center;
+  margin-top: auto;
+  padding-top: var(--ip-spacing-3);
+  border-top: 1px solid var(--ip-gray-200);
+}
+
+[data-theme='dark'] .team-stack { border-top-color: var(--ip-gray-700); }
+
+.team-stack .stack-av {
+  width: 26px;
+  height: 26px;
+  border-radius: var(--ip-radius-full);
+  border: 2px solid var(--ip-white);
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: var(--ip-font-weight-semibold);
+  color: var(--ip-white);
+  margin-left: -8px;
+}
+
+[data-theme='dark'] .team-stack .stack-av { border-color: var(--ip-gray-800); }
+
+.team-stack .stack-av:first-child { margin-left: 0; }
+
+.team-stack .stack-av.more {
+  background: var(--ip-gray-100);
+  color: var(--ip-color-text-body);
+  font-family: var(--ip-font-mono);
+  font-size: 10.5px;
+}
+
+[data-theme='dark'] .team-stack .stack-av.more {
+  background: var(--ip-gray-700);
+  color: var(--ip-gray-300);
+}
+
+.team-stack .team-label {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--ip-color-text-tertiary);
+}
+
+.session-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: auto;
+}
+
+.session-foot .stack-av {
+  margin-left: 0;
+}
+
+.session-foot-label {
+  font-size: 11.5px;
+  color: var(--ip-color-text-tertiary);
+}
+
+/* metric card (nested selectors kept for layout) */
+.mini-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ip-spacing-3);
+}
+
+.mini-card .icon-tile {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--ip-radius-md);
+  display: grid;
+  place-items: center;
+  color: var(--ip-white);
+}
+
+.mini-card .icon-tile.a { background: linear-gradient(135deg, var(--ip-primary-500), var(--ip-primary-700)); }
+.mini-card .icon-tile.b { background: linear-gradient(135deg, var(--ip-success-base), var(--ip-success-active)); }
+.mini-card .icon-tile.c { background: linear-gradient(135deg, var(--ip-warning-base), var(--ip-warning-active)); }
+
+.mini-card .mini-title {
+  font-family: var(--ip-font-display);
+  font-size: 18px;
+  font-weight: var(--ip-font-weight-regular);
+  color: var(--ip-color-text-primary);
+  line-height: 1.2;
+}
+
+[data-theme='dark'] .mini-card .mini-title { color: var(--ip-white); }
+
+.mini-card .mini-number {
+  font-family: var(--ip-font-display);
+  font-size: 36px;
+  line-height: 1;
+  color: var(--ip-color-text-primary);
+}
+
+[data-theme='dark'] .mini-card .mini-number { color: var(--ip-white); }
+
+.mini-card .mini-meta {
+  font-size: 12px;
+  color: var(--ip-color-text-tertiary);
+  margin-top: auto;
+}
+
+/* ================================================================
+   Section 3: Message · 单栏聊天场景
+   ================================================================ */
+.message-section {
+  max-width: var(--ip-message-max-w);
+  margin: 0 auto;
+}
+
+.message-stage {
+  background: var(--ip-color-bg-elevated);
+  border-radius: var(--ip-radius-3xl);
+  border: 1px solid var(--ip-gray-200);
+  box-shadow:
+    0 20px 50px rgba(20, 24, 31, 0.08),
+    0 8px 20px rgba(20, 24, 31, 0.04);
+  overflow: hidden;
+}
+
+[data-theme='dark'] .message-stage {
+  background: var(--ip-gray-800);
+  border-color: var(--ip-gray-700);
+}
+
+/* ================================================================
+   Section 4: Inputs · 非对称 inline 表单 (2fr / 1fr)
+   ================================================================ */
+.inputs-section {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: var(--ip-spacing-8);
+  align-items: start;
+}
+
+.inputs-form {
+  background: var(--ip-color-bg-elevated);
+  border: 1px solid var(--ip-gray-200);
+  border-radius: var(--ip-radius-xl);
+  padding: var(--ip-spacing-8);
+}
+
+[data-theme='dark'] .inputs-form {
+  background: var(--ip-gray-800);
+  border-color: var(--ip-gray-700);
+}
+
+.inputs-form h3,
+.inputs-aux h3 {
+  font-family: var(--ip-font-display);
+  font-size: 22px;
+  font-weight: var(--ip-font-weight-regular);
+  color: var(--ip-color-text-primary);
+  margin-bottom: var(--ip-spacing-2);
+}
+
+[data-theme='dark'] .inputs-form h3,
+[data-theme='dark'] .inputs-aux h3 { color: var(--ip-white); }
+
+.inputs-form .stage-sub,
+.inputs-aux .stage-sub {
+  font-size: 13px;
+  color: var(--ip-color-text-tertiary);
+  margin-bottom: var(--ip-spacing-6);
+}
+
+.form-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ip-spacing-2);
+  margin-bottom: var(--ip-spacing-5);
+}
+
+.form-row label {
+  font-size: 12px;
+  font-weight: var(--ip-font-weight-medium);
+  color: var(--ip-color-text-body);
+}
+
+[data-theme='dark'] .form-row label { color: var(--ip-gray-300); }
+
+.form-row--cta {
+  flex-direction: row;
+  justify-content: flex-end;
+  gap: var(--ip-spacing-3);
+  margin-top: var(--ip-spacing-6);
+  padding-top: var(--ip-spacing-5);
+  border-top: 1px solid var(--ip-gray-200);
+  margin-bottom: 0;
+}
+
+[data-theme='dark'] .form-row--cta { border-top-color: var(--ip-gray-700); }
+
+.inputs-aux {
+  /* 不加 border */
+}
+
+.aux-label {
+  display: block;
+  font-size: 11px;
+  font-weight: var(--ip-font-weight-medium);
+  color: var(--ip-color-text-tertiary);
+  font-family: var(--ip-font-mono);
+  margin: var(--ip-spacing-5) 0 var(--ip-spacing-3);
+  letter-spacing: 0.01em;
+}
+
+.aux-label:first-of-type { margin-top: 0; }
+
+.aux-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ip-spacing-2);
+}
+
+.aux-row {
+  display: flex;
+  gap: var(--ip-spacing-2);
+}
+
+.aux-suffix-text {
+  font-size: 12px;
+  color: var(--ip-color-text-tertiary);
+}
+
+/* ================================================================
+   Section 5: Modal · 双联对照 (1fr / 1.4fr)
+   ================================================================ */
+.modals-section {
+  display: grid;
+  grid-template-columns: 1fr 1.4fr;
+  gap: var(--ip-spacing-8);
+  align-items: start;
+}
+
+.modal-triggers h3,
+.modal-preview h3 {
+  font-family: var(--ip-font-display);
+  font-size: 22px;
+  font-weight: var(--ip-font-weight-regular);
+  color: var(--ip-color-text-primary);
+  margin-bottom: var(--ip-spacing-2);
+}
+
+[data-theme='dark'] .modal-triggers h3,
+[data-theme='dark'] .modal-preview h3 { color: var(--ip-white); }
+
+.modal-triggers .stage-sub,
+.modal-preview .stage-sub {
+  font-size: 13px;
+  color: var(--ip-color-text-tertiary);
+  margin-bottom: var(--ip-spacing-6);
+}
+
+.trigger-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ip-spacing-3);
+}
+
+.modal-body-text {
+  color: var(--ip-color-text-body);
+}
+
+.modal-form-field {
   margin-bottom: 12px;
 }
-.preview-footer__row a {
-  color: var(--ip-color-text-secondary);
-  text-decoration: none;
-  transition: color 150ms var(--ip-ease-out);
+
+.modal-anatomy {
+  background: var(--ip-color-bg-elevated);
+  border: 1px solid var(--ip-gray-200);
+  border-radius: var(--ip-radius-xl);
+  box-shadow: var(--ip-shadow-lg);
+  overflow: hidden;
+  max-width: 560px;
+  margin-bottom: var(--ip-spacing-6);
 }
-.preview-footer__row a:hover { color: var(--ip-color-text-primary); }
-.preview-footer__hint {
-  font-size: 12px;
-  font-style: italic;
+
+[data-theme='dark'] .modal-anatomy {
+  background: var(--ip-gray-800);
+  border-color: var(--ip-gray-700);
+}
+
+.anatomy-row {
+  padding: var(--ip-spacing-4) var(--ip-spacing-5);
+  display: flex;
+}
+
+.anatomy-row--header { justify-content: space-between; align-items: center; }
+.anatomy-row--footer { justify-content: flex-end; gap: 8px; }
+
+.anatomy-label {
+  font-size: 15px;
+  font-weight: var(--ip-font-weight-semibold);
+  color: var(--ip-color-text-primary);
+}
+
+[data-theme='dark'] .anatomy-label { color: var(--ip-white); }
+
+.anatomy-close {
+  font-size: 20px;
   color: var(--ip-color-text-tertiary);
+  cursor: pointer;
+  line-height: 1;
+}
+
+.anatomy-divider {
+  border: 0;
+  border-top: 1px solid var(--ip-gray-200);
   margin: 0;
 }
 
-/* ============================================================
- * Animations
- * ============================================================ */
-@keyframes page-fade-in {
-  from { opacity: 0; }
-  to   { opacity: 1; }
-}
-@keyframes hero-rise {
-  from { opacity: 0; transform: translateY(8px); }
-  to   { opacity: 1; transform: translateY(0); }
+[data-theme='dark'] .anatomy-divider { border-top-color: var(--ip-gray-700); }
+
+.anatomy-body {
+  padding: var(--ip-spacing-5);
+  font-size: 13px;
+  color: var(--ip-color-text-body);
+  line-height: 1.6;
 }
 
-/* ============================================================
- * Reduced motion
- * ============================================================ */
+.anatomy-body-meta {
+  color: var(--ip-color-text-tertiary);
+  margin-top: 12px;
+}
+
+[data-theme='dark'] .anatomy-body { color: var(--ip-gray-300); }
+
+.anatomy-list {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  gap: var(--ip-spacing-2);
+}
+
+.anatomy-list li {
+  font-size: 13px;
+  color: var(--ip-color-text-body);
+  padding-left: var(--ip-spacing-4);
+  position: relative;
+}
+
+.anatomy-list li::before {
+  content: "·";
+  position: absolute;
+  left: var(--ip-spacing-2);
+  color: var(--ip-primary-500);
+  font-weight: bold;
+}
+
+.anatomy-list strong {
+  color: var(--ip-color-text-primary);
+  font-weight: var(--ip-font-weight-semibold);
+  margin-right: 6px;
+}
+
+[data-theme='dark'] .anatomy-list strong { color: var(--ip-white); }
+
+/* ================================================================
+   Section 6: Toast · 横向时间线
+   ================================================================ */
+.toast-timeline {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--ip-spacing-4);
+  margin-bottom: var(--ip-spacing-8);
+}
+
+.toast-step {
+  background: var(--ip-color-bg-elevated);
+  border: 1px solid var(--ip-gray-200);
+  border-radius: var(--ip-radius-lg);
+  padding: var(--ip-spacing-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ip-spacing-3);
+  position: relative;
+}
+
+[data-theme='dark'] .toast-step {
+  background: var(--ip-gray-800);
+  border-color: var(--ip-gray-700);
+}
+
+.toast-step-marker {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--ip-radius-full);
+  position: absolute;
+  top: var(--ip-spacing-5);
+  right: var(--ip-spacing-5);
+}
+
+.toast-step-marker.success { background: var(--ip-success-base); }
+.toast-step-marker.info { background: var(--ip-info-base); }
+.toast-step-marker.warning { background: var(--ip-warning-base); }
+.toast-step-marker.error { background: var(--ip-danger-base); }
+
+.toast-step-content h4 {
+  font-family: var(--ip-font-display);
+  font-size: 18px;
+  font-weight: var(--ip-font-weight-regular);
+  color: var(--ip-color-text-primary);
+  margin-bottom: 4px;
+}
+
+[data-theme='dark'] .toast-step-content h4 { color: var(--ip-white); }
+
+.toast-step-content p {
+  font-size: 12px;
+  color: var(--ip-color-text-tertiary);
+  line-height: 1.5;
+}
+
+.toast-step-content code {
+  font-family: var(--ip-font-mono);
+  font-size: 11px;
+  color: var(--ip-primary-700);
+  background: var(--ip-primary-50);
+  padding: 2px 6px;
+  border-radius: var(--ip-radius-sm);
+  display: inline-block;
+  margin-top: 4px;
+}
+
+.toast-merge {
+  background: var(--ip-color-bg-tertiary);
+  border-radius: var(--ip-radius-lg);
+  padding: var(--ip-spacing-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ip-spacing-3);
+  align-items: flex-start;
+}
+
+[data-theme='dark'] .toast-merge {
+  background: var(--ip-gray-850);
+}
+
+.toast-merge h4 {
+  font-family: var(--ip-font-display);
+  font-size: 18px;
+  font-weight: var(--ip-font-weight-regular);
+  color: var(--ip-color-text-primary);
+}
+
+[data-theme='dark'] .toast-merge h4 { color: var(--ip-white); }
+
+.toast-merge p {
+  font-size: 13px;
+  color: var(--ip-color-text-body);
+}
+
+/* ================================================================
+   Section 7: Avatar · 3 行布局
+   ================================================================ */
+.avatar-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ip-spacing-6);
+}
+
+.avatar-size-strip,
+.avatar-type-row,
+.avatar-shape-row {
+  background: var(--ip-color-bg-elevated);
+  border: 1px solid var(--ip-gray-200);
+  border-radius: var(--ip-radius-lg);
+  padding: var(--ip-spacing-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ip-spacing-4);
+}
+
+[data-theme='dark'] .avatar-size-strip,
+[data-theme='dark'] .avatar-type-row,
+[data-theme='dark'] .avatar-shape-row {
+  background: var(--ip-gray-800);
+  border-color: var(--ip-gray-700);
+}
+
+.strip-label {
+  font-size: 11px;
+  font-weight: var(--ip-font-weight-medium);
+  color: var(--ip-color-text-tertiary);
+  font-family: var(--ip-font-mono);
+  letter-spacing: 0.01em;
+}
+
+.strip-meta {
+  font-size: 11px;
+  color: var(--ip-color-text-tertiary);
+  font-family: var(--ip-font-mono);
+}
+
+.avatar-type {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+  min-width: 80px;
+}
+
+.avatar-type .type-name {
+  font-size: 12px;
+  font-weight: var(--ip-font-weight-medium);
+  color: var(--ip-color-text-primary);
+}
+
+[data-theme='dark'] .avatar-type .type-name { color: var(--ip-white); }
+
+.avatar-type .type-desc {
+  font-size: 11px;
+  color: var(--ip-color-text-tertiary);
+}
+
+/* ================================================================
+   Section 8: Select · 带描述的选项
+   ================================================================ */
+.select-section {
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.select-stage {
+  background: var(--ip-color-bg-elevated);
+  border: 1px solid var(--ip-gray-200);
+  border-radius: var(--ip-radius-xl);
+  padding: var(--ip-spacing-8);
+}
+
+[data-theme='dark'] .select-stage {
+  background: var(--ip-gray-800);
+  border-color: var(--ip-gray-700);
+}
+
+.select-stage h3 {
+  font-family: var(--ip-font-display);
+  font-size: 22px;
+  font-weight: var(--ip-font-weight-regular);
+  color: var(--ip-color-text-primary);
+  margin-bottom: var(--ip-spacing-2);
+}
+
+[data-theme='dark'] .select-stage h3 { color: var(--ip-white); }
+
+.select-stage .stage-sub {
+  font-size: 13px;
+  color: var(--ip-color-text-tertiary);
+  margin-bottom: var(--ip-spacing-6);
+}
+
+.select-error-trigger {
+  align-self: flex-start;
+  margin-top: 8px;
+}
+
+/* ================================================================
+   Section 9: Empty · 2x2 grid 四种差异化空状态
+   ================================================================ */
+.empty-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--ip-spacing-5);
+}
+
+.empty-steps {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ip-spacing-3);
+  margin: var(--ip-spacing-2) 0;
+}
+
+.empty-steps li {
+  display: flex;
+  align-items: center;
+  gap: var(--ip-spacing-3);
+  font-size: 13px;
+  color: var(--ip-color-text-body);
+}
+
+[data-theme='dark'] .empty-steps li { color: var(--ip-gray-300); }
+
+.step-num {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--ip-radius-full);
+  background: var(--ip-primary-100);
+  color: var(--ip-primary-700);
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: var(--ip-font-weight-semibold);
+  font-family: var(--ip-font-mono);
+}
+
+/* ================================================================
+   Section 10: Dropdown · demo grid
+   ================================================================ */
+.dropdown-section {
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.dropdown-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--ip-spacing-5);
+}
+
+.dropdown-demo-block {
+  background: var(--ip-color-bg-elevated);
+  border: 1px solid var(--ip-gray-200);
+  border-radius: var(--ip-radius-lg);
+  padding: var(--ip-spacing-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ip-spacing-3);
+  align-items: flex-start;
+}
+
+[data-theme='dark'] .dropdown-demo-block {
+  background: var(--ip-gray-800);
+  border-color: var(--ip-gray-700);
+}
+
+.dropdown-demo-block h4 {
+  font-size: 14px;
+  font-weight: var(--ip-font-weight-medium);
+  color: var(--ip-color-text-primary);
+}
+
+[data-theme='dark'] .dropdown-demo-block h4 { color: var(--ip-white); }
+
+/* ================================================================
+   Section 11: Popconfirm
+   ================================================================ */
+.popconfirm-section {
+  max-width: var(--ip-message-max-w);
+  margin: 0 auto;
+}
+
+.popconfirm-stage {
+  background: var(--ip-color-bg-elevated);
+  border: 1px solid var(--ip-gray-200);
+  border-radius: var(--ip-radius-xl);
+  padding: var(--ip-spacing-8);
+}
+
+[data-theme='dark'] .popconfirm-stage {
+  background: var(--ip-gray-800);
+  border-color: var(--ip-gray-700);
+}
+
+.popconfirm-stage h3 {
+  font-family: var(--ip-font-display);
+  font-size: 22px;
+  font-weight: var(--ip-font-weight-regular);
+  color: var(--ip-color-text-primary);
+  margin-bottom: var(--ip-spacing-2);
+}
+
+[data-theme='dark'] .popconfirm-stage h3 { color: var(--ip-white); }
+
+.popconfirm-stage .stage-sub {
+  font-size: 13px;
+  color: var(--ip-color-text-tertiary);
+  margin-bottom: var(--ip-spacing-6);
+}
+
+.pop-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--ip-spacing-4);
+}
+
+.pop-item {
+  display: flex;
+  align-items: center;
+  gap: var(--ip-spacing-3);
+  padding: var(--ip-spacing-4);
+  background: var(--ip-gray-50);
+  border-radius: var(--ip-radius-md);
+}
+
+[data-theme='dark'] .pop-item { background: var(--ip-gray-850); }
+
+.pop-item--wide {
+  grid-column: 1 / -1;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.pop-item--wide h4 {
+  font-size: 13px;
+  font-weight: var(--ip-font-weight-medium);
+  color: var(--ip-color-text-body);
+  margin-bottom: var(--ip-spacing-2);
+}
+
+[data-theme='dark'] .pop-item--wide h4 { color: var(--ip-gray-300); }
+
+.pop-trigger {
+  font-size: 12px;
+  color: var(--ip-color-text-tertiary);
+  padding: 4px 8px;
+  background: var(--ip-white);
+  border: 1px dashed var(--ip-gray-300);
+  border-radius: var(--ip-radius-sm);
+}
+
+[data-theme='dark'] .pop-trigger {
+  background: var(--ip-gray-800);
+  border-color: var(--ip-gray-700);
+}
+
+/* ================================================================
+   Section 12: Flex · 轴线矩阵
+   ================================================================ */
+.flex-matrix {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--ip-spacing-5);
+}
+
+.matrix-block {
+  background: var(--ip-color-bg-elevated);
+  border: 1px solid var(--ip-gray-200);
+  border-radius: var(--ip-radius-lg);
+  padding: var(--ip-spacing-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ip-spacing-3);
+}
+
+[data-theme='dark'] .matrix-block {
+  background: var(--ip-gray-800);
+  border-color: var(--ip-gray-700);
+}
+
+.matrix-block h4 {
+  font-size: 12px;
+  font-weight: var(--ip-font-weight-medium);
+  color: var(--ip-color-text-tertiary);
+  font-family: var(--ip-font-mono);
+  margin-bottom: var(--ip-spacing-2);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 10px;
+  background: var(--ip-primary-50);
+  color: var(--ip-primary-700);
+  border-radius: var(--ip-radius-md);
+  font-size: 12px;
+  font-weight: var(--ip-font-weight-medium);
+}
+
+.chip-tall { height: 60px; }
+
+.gap-row {
+  display: grid;
+  grid-template-columns: 100px 1fr;
+  align-items: center;
+  gap: var(--ip-spacing-3);
+}
+
+.gap-row code {
+  font-family: var(--ip-font-mono);
+  font-size: 11px;
+  color: var(--ip-color-text-tertiary);
+}
+
+.justify-track {
+  background: var(--ip-gray-50);
+  padding: var(--ip-spacing-2);
+  border-radius: var(--ip-radius-sm);
+  width: 100%;
+}
+
+[data-theme='dark'] .justify-track { background: var(--ip-gray-850); }
+
+.align-track {
+  background: var(--ip-gray-50);
+  padding: var(--ip-spacing-2);
+  border-radius: var(--ip-radius-sm);
+  height: 80px;
+  display: flex;
+  align-items: center;
+}
+
+[data-theme='dark'] .align-track { background: var(--ip-gray-850); }
+
+.align-row { width: 100%; }
+
+/* ================================================================
+   Section 13: Container · 宽度阶梯
+   ================================================================ */
+.container-section {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--ip-spacing-8);
+  align-items: start;
+}
+
+.container-stage,
+.container-extras {
+  background: var(--ip-color-bg-elevated);
+  border: 1px solid var(--ip-gray-200);
+  border-radius: var(--ip-radius-xl);
+  padding: var(--ip-spacing-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ip-spacing-3);
+}
+
+[data-theme='dark'] .container-stage,
+[data-theme='dark'] .container-extras {
+  background: var(--ip-gray-800);
+  border-color: var(--ip-gray-700);
+}
+
+.container-stage h3,
+.container-extras h4 {
+  font-family: var(--ip-font-display);
+  font-size: 20px;
+  font-weight: var(--ip-font-weight-regular);
+  color: var(--ip-color-text-primary);
+}
+
+[data-theme='dark'] .container-stage h3,
+[data-theme='dark'] .container-extras h4 { color: var(--ip-white); }
+
+.container-stage .stage-sub {
+  font-size: 13px;
+  color: var(--ip-color-text-tertiary);
+  margin-bottom: var(--ip-spacing-3);
+}
+
+.container-frame {
+  background: var(--ip-primary-50);
+  border: 1px dashed var(--ip-primary-300);
+  border-radius: var(--ip-radius-md);
+  padding: var(--ip-spacing-3);
+  font-size: 12px;
+  color: var(--ip-primary-700);
+  font-family: var(--ip-font-mono);
+  text-align: center;
+}
+
+.container-frame--small { font-size: 11px; padding: 6px; }
+.container-frame--fluid {
+  background: var(--ip-warning-bg);
+  border-color: var(--ip-warning-base);
+  color: var(--ip-warning-base);
+}
+
+.extra-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--ip-spacing-3);
+  align-items: center;
+}
+
+.extra-context code {
+  font-family: var(--ip-font-mono);
+  font-size: 11px;
+  color: var(--ip-primary-700);
+  background: var(--ip-primary-50);
+  padding: 2px 6px;
+  border-radius: var(--ip-radius-sm);
+  display: inline-block;
+  margin-bottom: 4px;
+}
+
+.extra-context p {
+  font-size: 11px;
+  color: var(--ip-color-text-tertiary);
+  line-height: 1.4;
+}
+
+/* ================================================================
+   Footer
+   ================================================================ */
+.footer {
+  margin-top: var(--ip-spacing-24);
+  padding: var(--ip-spacing-10) 0 var(--ip-spacing-12);
+  border-top: 1px solid var(--ip-gray-200);
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1fr;
+  gap: var(--ip-spacing-8);
+}
+
+[data-theme='dark'] .footer {
+  border-top-color: var(--ip-gray-800);
+}
+
+.footer-brand {
+  font-family: var(--ip-font-display);
+  font-size: 22px;
+  color: var(--ip-color-text-primary);
+  margin-bottom: var(--ip-spacing-2);
+}
+
+[data-theme='dark'] .footer-brand { color: var(--ip-white); }
+
+.footer-tag {
+  font-size: 13px;
+  color: var(--ip-color-text-tertiary);
+  max-width: 320px;
+  line-height: 1.55;
+}
+
+.footer-col h4 {
+  font-size: 12px;
+  font-weight: var(--ip-font-weight-medium);
+  color: var(--ip-color-text-tertiary);
+  margin-bottom: var(--ip-spacing-3);
+}
+
+.footer-col a {
+  display: block;
+  font-size: 13px;
+  color: var(--ip-color-text-body);
+  text-decoration: none;
+  padding: 4px 0;
+  transition: color var(--ip-duration-fast) var(--ip-ease-out);
+}
+
+[data-theme='dark'] .footer-col a { color: var(--ip-gray-300); }
+
+.footer-col a:hover { color: var(--ip-primary-700); }
+
+.footer-snow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: var(--ip-spacing-4);
+  color: var(--ip-primary-400);
+}
+
+.footer-snow svg { width: 12px; height: 12px; }
+
+.footer-snow-text {
+  font-size: 11px;
+  color: var(--ip-color-text-tertiary);
+  margin-left: 4px;
+}
+
+/* ================================================================
+   Section reveal (single fade-in, no stagger)
+   ================================================================ */
+.reveal-init {
+  opacity: 0;
+  transform: translateY(12px);
+  transition:
+    opacity var(--ip-duration-page) var(--ip-ease-out),
+    transform var(--ip-duration-page) var(--ip-ease-out);
+}
+
+.reveal-init.is-revealed {
+  opacity: 1;
+  transform: translateY(0);
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .preview-root,
-  .preview-intro h1,
-  .preview-intro__index,
-  .preview-intro__subtitle,
-  .preview-intro__lede,
-  .preview-anchor-pills,
-  .hero-scroll-hint {
-    animation: none !important;
+  .reveal-init {
+    opacity: 1;
+    transform: none;
+    transition: none;
   }
-  .hand-drawn-divider path {
-    stroke-dashoffset: 0 !important;
-    transition: none !important;
-  }
-  .hero-scroll-hint svg { animation: none !important; }
 }
 
-/* ============================================================
- * Responsive
- * ============================================================ */
+/* ================================================================
+   Responsive
+   ================================================================ */
+@media (max-width: 1023px) {
+  .hero {
+    grid-template-columns: 1fr;
+    gap: var(--ip-spacing-8);
+  }
+
+  .hero-visual { height: 400px; }
+
+  .buttons-section,
+  .inputs-section,
+  .modals-section,
+  .empty-grid,
+  .flex-matrix,
+  .container-section {
+    grid-template-columns: 1fr;
+  }
+
+  .cards-section {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .toast-timeline {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .pop-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .footer {
+    grid-template-columns: 1fr 1fr;
+    gap: var(--ip-spacing-6);
+  }
+
+  .dropdown-section,
+  .select-section {
+    max-width: none;
+  }
+}
+
 @media (max-width: 767px) {
-  .preview-header__meta,
-  .preview-header__dot,
-  .preview-header__version { display: none; }
-  .preview-intro h1 { font-size: 32px; line-height: 38px; }
-  .preview-section { padding-top: 64px; }
-  .preview-section + .preview-section { padding-top: 64px; }
-  .preview-section__title { font-size: 24px; line-height: 30px; }
-  .preview-anchor-pills { gap: 6px; }
-  .hero-anchor { font-size: 12px; padding: 5px 12px; }
+  .page { padding: 0 var(--ip-spacing-5); }
+  .page.hero { padding: var(--ip-spacing-12) var(--ip-spacing-5) var(--ip-spacing-10); }
+  .nav-inner { gap: var(--ip-spacing-3); }
+  .nav-links { display: none; }
+  .hero h1 { font-size: clamp(2rem, 8vw, 2.8rem); }
+  .hero-visual { height: 360px; }
+  .float-card.f1 { left: 0; }
+  .float-card.f2 { left: -10px; }
+  .float-card.f3 { right: 0; }
+  .float-card.f4 { right: 0; }
+
+  .cards-section,
+  .toast-timeline,
+  .footer {
+    grid-template-columns: 1fr;
+  }
+
+  .hero-meta {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--ip-spacing-2);
+  }
+
+  .hero-meta .dot { display: none; }
+
+  .section-divider {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--ip-spacing-2);
+  }
+
+  .section-divider .lead {
+    margin-left: 0;
+    text-align: left;
+    max-width: none;
+  }
+
+  .popconfirm-section,
+  .message-section {
+    max-width: none;
+  }
+}
+</style>
+
+
+<!-- Unscoped: smooth scroll must apply to html/body -->
+<style>
+html,
+body {
+  scroll-behavior: smooth;
 }
 </style>
