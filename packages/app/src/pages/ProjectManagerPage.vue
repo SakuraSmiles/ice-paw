@@ -14,7 +14,7 @@
 
 import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { Plus, ArrowLeft, Upload, Layers, LayoutGrid, List as ListIcon, Search } from "lucide-vue-next";
+import { Plus, ArrowLeft, LayoutGrid, List as ListIcon, Search } from "lucide-vue-next";
 import { useProjectsStore, DEFAULT_PROJECT_ID } from "../stores/projects";
 import { useConversationsStore } from "../stores/conversations";
 import { useAgentsStore } from "../stores/agents";
@@ -43,7 +43,7 @@ const editing = ref<Project | null>(null);
 const selectedProjectId = ref<string>("");
 
 /** 过滤 / 搜索 / 排序（spec §2.4） */
-const filter = ref<"all" | "active" | "archived" | "template">("all");
+const filter = ref<"all" | "active">("all");
 const search = ref<string>("");
 const sortBy = ref<"recent" | "name" | "created">("recent");
 const view = ref<"card" | "list">("card");
@@ -121,7 +121,7 @@ const projectStats = computed<Record<string, ProjectStats>>(() => {
 
 /** 过滤：按 category */
 function matchFilter(p: Project, f: typeof filter.value): boolean {
-  // 默认项目始终保留在「全部 / active」中，不出现在 archived/template
+  // 默认项目始终保留在「全部 / active」中
   if (p.id === DEFAULT_PROJECT_ID) {
     return f === "all" || f === "active";
   }
@@ -130,10 +130,6 @@ function matchFilter(p: Project, f: typeof filter.value): boolean {
       return true;
     case "active":
       return true; // Phase 2 无归档/模板字段，全部归 active
-    case "archived":
-      return false;
-    case "template":
-      return false;
     default:
       return true;
   }
@@ -273,16 +269,6 @@ function goBack(): void {
   void router.push({ name: "ProjectChat", params: { projectId: "default" } });
 }
 
-/** 导入项目（占位：Phase 2 暂未实现，保留按钮） */
-function importProject(): void {
-  toast.info("导入功能即将上线");
-}
-
-/** 从模板创建（占位：Phase 2 暂未实现，保留按钮） */
-function createFromTemplate(): void {
-  toast.info("从模板创建即将上线，可前往模板管理查看");
-}
-
 /** 列表视图下的删除 */
 function listDelete(project: Project): void {
   void handleDelete(project);
@@ -315,18 +301,6 @@ function listEdit(project: Project): void {
           </p>
         </div>
         <div class="page-header-actions">
-          <button class="btn btn-ghost btn-md" type="button" @click="importProject">
-            <Upload :size="14" aria-hidden="true" />
-            <span>导入</span>
-          </button>
-          <button
-            class="btn btn-secondary btn-md"
-            type="button"
-            @click="createFromTemplate"
-          >
-            <Layers :size="14" aria-hidden="true" />
-            <span>从模板创建</span>
-          </button>
           <button class="btn btn-primary btn-md" type="button" @click="openCreate">
             <Plus :size="14" aria-hidden="true" />
             <span>新建项目</span>
@@ -351,8 +325,6 @@ function listEdit(project: Project): void {
             v-for="opt in [
               { key: 'all', label: '全部' },
               { key: 'active', label: '活跃' },
-              { key: 'archived', label: '已归档' },
-              { key: 'template', label: '模板' },
             ]"
             :key="opt.key"
             type="button"
