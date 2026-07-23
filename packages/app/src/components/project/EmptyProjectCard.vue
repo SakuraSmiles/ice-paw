@@ -18,49 +18,26 @@
 //     <PawBrandMark :size="64" :animated="false" />
 
 import { useRouter } from "vue-router";
-import { ArrowRight, Code, Search, PenTool, GraduationCap } from "lucide-vue-next";
+import { ArrowRight } from "lucide-vue-next";
+import { PROJECT_TEMPLATES, type ProjectTemplate } from "../../data/projectTemplates";
 
 const router = useRouter();
 
-interface TemplateCard {
-  key: string;
-  icon: typeof Code;
-  title: string;
-  desc: string;
-  /** accent 类名（用于渐变色） */
-  accentClass: string;
-}
+/** 模板数据源（来自 data/projectTemplates，单一来源） */
+const templates = PROJECT_TEMPLATES;
 
-const templates: TemplateCard[] = [
-  {
-    key: "code",
-    icon: Code,
-    title: "软件开发",
-    desc: "主 Agent + 审查 Agent",
-    accentClass: "template-card--ice",
-  },
-  {
-    key: "research",
-    icon: Search,
-    title: "研究调研",
-    desc: "搜索 + 总结 + 写作",
-    accentClass: "template-card--aurora",
-  },
-  {
-    key: "writing",
-    icon: PenTool,
-    title: "内容创作",
-    desc: "大纲 + 文案 + 润色",
-    accentClass: "template-card--violet",
-  },
-  {
-    key: "learning",
-    icon: GraduationCap,
-    title: "学习助手",
-    desc: "讲解 + 测验 + 反馈",
-    accentClass: "template-card--ember",
-  },
-];
+/** 卡片点击 → 触发 selectTemplate emit（P0-7 修复） */
+const emit = defineEmits<{
+  (e: "selectTemplate", key: string): void;
+}>();
+
+/**
+ * 处理模板卡点击：转发 key 给父组件。
+ * 父组件（ProjectManagerPage）负责打开 ProjectFormModal 并预填表单。
+ */
+function onTemplateClick(tpl: ProjectTemplate): void {
+  emit("selectTemplate", tpl.key);
+}
 
 function browseAll(): void {
   void router.push({ name: "TemplateManager" });
@@ -108,12 +85,13 @@ function browseAll(): void {
         :style="{ animationDelay: `${idx * 60}ms` }"
         type="button"
         tabindex="0"
+        @click="onTemplateClick(tpl)"
       >
         <span class="template-card-icon" aria-hidden="true">
           <component :is="tpl.icon" :size="22" :stroke-width="2" />
         </span>
         <span class="template-card-title">{{ tpl.title }}</span>
-        <span class="template-card-desc">{{ tpl.desc }}</span>
+        <span class="template-card-desc">{{ tpl.description }}</span>
       </button>
     </div>
 

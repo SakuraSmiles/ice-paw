@@ -53,6 +53,29 @@ function writeLastConvForProject(projectId: string, id: string | null): void {
   }
 }
 
+/** 全局「最近会话」localStorage 键名（P0-10：onStartup=last 使用） */
+const LAST_CONV_STORAGE_KEY = "icepaw.lastConvId";
+
+/**
+ * 写入全局最近会话 ID（不区分项目，供 AppLayout 启动消费）。
+ *
+ * 注意：仅在确实选中/恢复了某个会话时调用，null 表示清空。
+ * 此键与 icepaw.lastConv.project.${projectId} 并存：
+ *   - 后者用于按项目恢复上次会话（更精确，避免跨项目串扰）
+ *   - 前者用于启动时快速判断「最近是否有会话可自动进入」
+ */
+function writeGlobalLastConv(id: string | null): void {
+  try {
+    if (id === null) {
+      localStorage.removeItem(LAST_CONV_STORAGE_KEY);
+    } else {
+      localStorage.setItem(LAST_CONV_STORAGE_KEY, id);
+    }
+  } catch {
+    // 忽略 localStorage 失败（隐私模式等）
+  }
+}
+
 /** 生成「最近会话」持久化键名（Agent 维度，向后兼容） */
 function lastConvKey(agentId: string): string {
   return `icepaw.lastConv.${agentId}`;
@@ -236,12 +259,15 @@ export const useConversationsStore = defineStore("conversations", () => {
       const saved = readLastConvForProject(projectId);
       if (saved && list.some((c) => c.id === saved)) {
         currentId.value = saved;
+        writeGlobalLastConv(saved); // P0-10：同步全局键
       } else if (list.length > 0) {
         currentId.value = list[0]!.id;
         writeLastConvForProject(projectId, list[0]!.id);
+        writeGlobalLastConv(list[0]!.id); // P0-10：同步全局键
       } else {
         currentId.value = null;
         writeLastConvForProject(projectId, null);
+        writeGlobalLastConv(null); // P0-10：同步全局键
       }
     } catch (err) {
       byProject.value[projectId] = [];
@@ -299,6 +325,11 @@ export const useConversationsStore = defineStore("conversations", () => {
 
   /**
    * 切换当前会话（Phase 2: 项目维度持久化）。
+   *
+   * 同时写入：
+   *   - icepaw.lastConv.project.${projectId}（按项目精确恢复）
+   *   - icepaw.lastConvId（全局，供 AppLayout 启动消费 onStartup=last）
+   *
    * @param id 目标会话 ID；传 null 表示清空
    */
   function setCurrent(id: string | null): void {
@@ -314,6 +345,8 @@ export const useConversationsStore = defineStore("conversations", () => {
     if (projectId) {
       writeLastConvForProject(projectId, id);
     }
+    // P0-10：同步全局键（与 per-project 键并存，AppLayout 启动时读取）
+    writeGlobalLastConv(id);
   }
 
   // ============================================================================
@@ -343,6 +376,7 @@ export const useConversationsStore = defineStore("conversations", () => {
     byProject.value[storeKey] = sortConversations([created, ...list]);
     currentId.value = created.id;
     writeLastConvForProject(storeKey, created.id);
+    writeGlobalLastConv(created.id); // P0-10：同步全局键
     renamingId.value = null;
     return created;
   }
@@ -415,6 +449,7 @@ export const useConversationsStore = defineStore("conversations", () => {
       const next = newList[0]?.id ?? null;
       currentId.value = next;
       writeLastConvForProject(projectId, next);
+      writeGlobalLastConv(next); // P0-10：同步全局键
     }
     if (renamingId.value === id) {
       renamingId.value = null;
@@ -429,6 +464,7 @@ export const useConversationsStore = defineStore("conversations", () => {
       byProject.value[projectId] = sortConversations(restored);
       currentId.value = previousCurrent;
       writeLastConvForProject(projectId, previousCurrent);
+      writeGlobalLastConv(previousCurrent); // P0-10：同步全局键
       throw err;
     }
   }

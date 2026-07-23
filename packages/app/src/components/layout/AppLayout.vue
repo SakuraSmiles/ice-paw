@@ -17,13 +17,32 @@ import { useRouter } from "vue-router";
 import { useAgentsStore } from "../../stores/agents";
 import { useProjectsStore, DEFAULT_PROJECT_ID } from "../../stores/projects";
 import { useConversationsStore } from "../../stores/conversations";
+import { useSettingsStore } from "../../stores/settings";
 import Toast from "../common/Toast.vue";
 import Sidebar from "./Sidebar.vue";
 
 const agentsStore = useAgentsStore();
 const projectsStore = useProjectsStore();
 const conversationsStore = useConversationsStore();
+const settingsStore = useSettingsStore();
 const router = useRouter();
+
+/**
+ * 全局「最近会话」localStorage 键名（P0-10：onStartup=last 使用）。
+ *
+ * 该 key 由 conversationsStore.setCurrent() / loadForProject() 写入；
+ * AppLayout 在 onMounted 末尾读取并按 on_startup 设置决定是否跳转。
+ */
+const LAST_CONV_STORAGE_KEY = "icepaw.lastConvId";
+
+/**
+ * 将项目 ID 转换为路由参数值（默认项目映射为 "default"）。
+ *
+ * 与 ProjectManagerPage / Sidebar 保持一致。
+ */
+function projectIdToRouteParam(projectId: string): string {
+  return projectId === DEFAULT_PROJECT_ID ? "default" : projectId;
+}
 
 onMounted(async () => {
   // 1. 加载 Agent 列表（后续仍需要 Agent 数据）
@@ -40,6 +59,37 @@ onMounted(async () => {
   } catch {
     // 加载失败由各页面 UI 兜底
   }
+
+  // 4. P0-10：消费 on_startup 设置
+  //    - "last"：自动跳转到上次会话（按 icepaw.lastConvId）
+  //    - "chat" / "none"：走默认重定向（router / → ProjectChat/default）
+  try {
+    await settingsStore.load();
+  } catch {
+    // 加载失败不影响启动，使用默认行为
+    return;
+  }
+
+  const startup = settingsStore.prefs.on_startup ?? "chat";
+  if (startup !== "last") return;
+
+  const lastConvId = localStorage.getItem(LAST_CONV_STORAGE_KEY);
+  const currentProjectId = projectsStore.currentId || DEFAULT_PROJECT_ID;
+  if (!lastConvId || !currentProjectId) return;
+
+  // 确认 lastConvId 属于当前项目（防止不同项目间的会话串扰）
+  const exists = conversationsStore
+    .listForProject(currentProjectId)
+    .some((c) => c.id === lastConvId);
+  if (!exists) return;
+
+  await router.push({
+    name: "ProjectChatConversation",
+    params: {
+      projectId: projectIdToRouteParam(currentProjectId),
+      conversationId: lastConvId,
+    },
+  });
 });
 
 /**
@@ -50,7 +100,7 @@ onMounted(async () => {
  */
 function onChatSelect(_conversationId: string | null): void {
   const rawId = projectsStore.currentId || DEFAULT_PROJECT_ID;
-  const projectId = rawId === DEFAULT_PROJECT_ID ? "default" : rawId;
+  const projectId = projectIdToRouteParam(rawId);
   void router.push({ name: "ProjectChat", params: { projectId } });
 }
 
