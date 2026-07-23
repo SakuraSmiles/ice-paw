@@ -8,12 +8,12 @@
  *  - 浮层 exit：反向 100ms ease-in
  *  - ChevronDown open 时旋转 180°
  *  - clearable ✕ hover/focus-within 时 fade-in 150ms
- *  - W4：浮层打开时监听 scroll，scroll 时关闭浮层
+ *  - P3-fix：浮层打开时监听 scroll/resize（document capture），实时重算位置跟随 trigger，不关闭
  * a11y：role=combobox/listbox/option + aria-expanded/controls/activedescendant
  *
  * 泛型：W3 用 `<script setup lang="ts" generic="V extends string | number">`
  */
-import { computed, nextTick, onMounted, onUnmounted, ref, useId } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, onUnmounted, ref, useId } from 'vue'
 import { Check, ChevronDown, X } from 'lucide-vue-next'
 import type { SelectEmits, SelectOption, SelectProps } from './types'
 
@@ -64,6 +64,15 @@ function openPopover(): void {
   const idx = props.options.findIndex((o) => o.value === props.modelValue)
   focusedIndex.value = idx >= 0 ? idx : 0
   measureTrigger()
+  // P2-fix：用 nextTick 等 DOM 渲染后命令式重算 popover 位置
+  nextTick(() => updatePopoverPosition())
+  // 同步监听 trigger 大小变化
+  if (triggerRef.value && !resizeObserver) {
+    resizeObserver = new ResizeObserver(() => {
+      if (open.value) updatePopoverPosition()
+    })
+    resizeObserver.observe(triggerRef.value)
+  }
   emit('open')
 }
 function closePopover(): void {
@@ -183,26 +192,48 @@ function onDocumentClick(ev: MouseEvent): void {
   closePopover()
 }
 
-/* W4：浮层打开时监听 scroll，scroll 时关闭浮层
-   P0-1 fix：忽略浮层内部的滚动（overflow-y: auto），避免滚动选项列表时误关 */
-function onWindowScroll(ev: Event): void {
+/* P3-fix：scroll/resize 时实时重算 popover 位置（跟随 trigger），不关闭
+   - capture 阶段 + document 监听：捕获所有滚动容器（包括自定义滚动容器）
+   - 忽略浮层内部滚动（overflow-y: auto 选项列表）
+   - window resize 时同步重算（trigger 大小已由 ResizeObserver 处理，但 viewport 变化时也要重算） */
+function onScrollOrResize(ev: Event): void {
   if (!open.value) return
-  if (popoverRef.value?.contains(ev.target as Node)) return
-  closePopover()
+  if (popoverRef.value?.contains(ev.target as Node)) return  // 浮层自身滚动忽略
+  updatePopoverPosition()
 }
 
 onMounted(() => {
   document.addEventListener('click', onDocumentClick)
-  window.addEventListener('scroll', onWindowScroll, true)
-})
-onUnmounted(() => {
-  document.removeEventListener('click', onDocumentClick)
-  window.removeEventListener('scroll', onWindowScroll, true)
+  // P3-fix：document capture 监听 scroll + window 监听 resize，捕获所有滚动源
+  document.addEventListener('scroll', onScrollOrResize, { capture: true, passive: true })
+  window.addEventListener('resize', onScrollOrResize)
 })
 
-/* ----- 浮层定位（简化：fixed + 计算）----- */
-const popoverStyle = computed<Record<string, string>>(() => {
-  if (!triggerRef.value) return {}
+onBeforeUnmount(() => {
+  // 清理 ResizeObserver
+  if (resizeObserver) {
+    resizeObserver.disconnect()
+    resizeObserver = null
+  }
+})
+
+onUnmounted(() => {
+  document.removeEventListener('click', onDocumentClick)
+  document.removeEventListener('scroll', onScrollOrResize, { capture: true })
+  window.removeEventListener('resize', onScrollOrResize)
+})
+
+/* ----- 浮层定位（命令式重算 + ResizeObserver）-----
+   P2-fix：watchEffect 不会响应 getBoundingClientRect 变化（不是响应式依赖），
+   改为 nextTick 显式调用 + ResizeObserver 同步 trigger 大小 */
+const popoverStyle = ref<Record<string, string>>({})
+let resizeObserver: ResizeObserver | null = null
+
+function updatePopoverPosition(): void {
+  if (!triggerRef.value || !open.value) {
+    popoverStyle.value = {}
+    return
+  }
   const rect = triggerRef.value.getBoundingClientRect()
   const isTop = props.placement.startsWith('top')
   const isEnd = props.placement.endsWith('end')
@@ -227,8 +258,8 @@ const popoverStyle = computed<Record<string, string>>(() => {
   if (isTop) {
     styles.transform = 'translateY(-100%)'
   }
-  return styles
-})
+  popoverStyle.value = styles
+}
 </script>
 
 <template>

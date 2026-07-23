@@ -81,8 +81,7 @@ function closePopover(): void {
 function onConfirm(): void {
   if (props.loading) return
   emit('confirm')
-  // P0-2 fix：emit 后主动关闭浮层，不依赖父组件
-  open.value = false
+  // 不在此处关闭浮层，让父组件通过 v-model 决定何时关闭
 }
 function onCancel(): void {
   if (props.loading) return
