@@ -5,8 +5,6 @@
 //!
 //! 测试按 Stage 分组，组间用 `// === StageName tests ===` 分隔。
 
-#![cfg(test)]
-
 use async_trait::async_trait;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::SqlitePool;
