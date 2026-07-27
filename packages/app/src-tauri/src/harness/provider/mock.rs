@@ -527,13 +527,12 @@ mod tests {
                 }
             });
 
-            // 在循环里消费 stream
-            while let Some(item) = stream.next().await {
+            // 消费 stream（每次只处理一个 item，无需循环）
+            if let Some(item) = stream.next().await {
                 match item {
                     Ok(ChatDelta::Done { finish_reason }) => {
                         assert_eq!(finish_reason.as_deref(), Some("abort"));
                         got_done = true;
-                        break;
                     }
                     Ok(_) => {
                         // Timeout 场景下不应有 Delta
