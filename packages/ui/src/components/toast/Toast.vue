@@ -36,6 +36,7 @@ const icon = computed<string>(() => {
     case 'error':   return 'x-circle'
     case 'warning': return 'alert-triangle'
     case 'info':    return 'info'
+    case 'loading': return 'loading' // REQ-UI-006B
     default:        return 'info'
   }
 })
@@ -73,6 +74,10 @@ function onResume(): void {
         <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
         <line x1="12" y1="9" x2="12" y2="13" />
         <line x1="12" y1="17" x2="12.01" y2="17" />
+      </svg>
+      <svg v-else-if="icon === 'loading'" class="ip-toast__spinner" width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-opacity="0.25" stroke-width="2" />
+        <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
       </svg>
       <svg v-else width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <circle cx="12" cy="12" r="10" />
@@ -130,11 +135,13 @@ function onResume(): void {
 .ip-toast--warning { border-left-color: var(--ip-warning-base); }
 .ip-toast--error   { border-left-color: var(--ip-danger-base); }
 .ip-toast--info    { border-left-color: var(--ip-info-base); }
+.ip-toast--loading { border-left-color: var(--ip-info-base); }
 
 .ip-toast--success .ip-toast__icon { color: var(--ip-success-base); }
 .ip-toast--warning .ip-toast__icon { color: var(--ip-warning-base); }
 .ip-toast--error   .ip-toast__icon { color: var(--ip-danger-base); }
 .ip-toast--info    .ip-toast__icon { color: var(--ip-info-base); }
+.ip-toast--loading .ip-toast__icon { color: var(--ip-info-base); }
 
 /* Icon */
 .ip-toast__icon {
@@ -149,6 +156,16 @@ function onResume(): void {
 .ip-toast__icon svg {
   width: 20px;
   height: 20px;
+}
+
+/* REQ-UI-006B：loading 图标旋转动画 */
+.ip-toast__spinner {
+  animation: ip-toast-spin var(--ip-duration-spinner) linear infinite;
+}
+
+@keyframes ip-toast-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
 }
 
 /* Body — 合并时内容 crossfade（§6.6） */

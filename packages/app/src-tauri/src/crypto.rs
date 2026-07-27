@@ -53,7 +53,11 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use blake2::{Blake2b, Digest};
+use chacha20poly1305::aead::{Aead, KeyInit};
+use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
 use iota_stronghold::ClientError as ShClientError;
+use rand::rngs::OsRng;
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_stronghold::stronghold::Stronghold;
@@ -308,4 +312,137 @@ pub fn has_api_key(app: &AppHandle, agent_id: &str) -> AppResult<bool> {
     store
         .contains_key(agent_id.as_bytes())
         .map_err(|e| AppError::Stronghold(format!("store.contains_key: {e}")))
+}
+
+// =========================================================================
+// memory_store 加密（XChaCha20-Poly1305，REQ-CHAT-048）
+// =========================================================================
+//
+// 提供:
+//   - `encrypt_blob`:加密任意字节 → `[nonce 24B][ciphertext+tag]` BLOB
+//   - `decrypt_blob`:反向：解 BLOB → 原文
+//
+// 加密参数:
+//   - 算法: XChaCha20-Poly1305（与 Stronghold vault 内部一致）
+//   - Key 派生: blake2b256(DEFAULT_PASSPHRASE || MEMORY_KEY_DOMAIN) → 32B
+//     与 `derive_stronghold_key` 走同一套 blake2b256 派生，但拼接了不同的
+//     domain 字符串，确保 memory_store 与 Stronghold vault 不共享 key
+//   - Nonce: 每次 `encrypt_blob` 调用 OsRng 生成 24 字节随机值，前置到密文
+//
+// BLOB 布局:
+// ```text
+// [nonce: 24 bytes][ciphertext: N bytes][poly1305 tag: 16 bytes]
+// ```
+//   - 最小长度 = 24 + 16 = 40 字节（空明文）
+//   - `decrypt_blob` 长度校验在调用 AEAD 之前完成，避免错误输入触发越界
+
+/// memory_store 加密 key 的派生域常量
+///
+/// 与 Stronghold vault 完全隔离的 domain 字节串：两者共用
+/// `DEFAULT_PASSPHRASE` 但拼接了不同的 domain，最终 blake2b256 输出
+/// 32 字节 key 互不复用（避免 cross-domain 密钥复用风险）。
+///
+/// **不要**改成复用 `derive_stronghold_key` 的输出 —— 加密用途不同、
+/// 攻击面不同，应保持 key 隔离。
+pub(crate) const MEMORY_KEY_DOMAIN: &[u8] = b"ice-paw:memory-store";
+
+/// XChaCha20-Poly1305 nonce 长度（字节）
+const MEMORY_NONCE_LEN: usize = 24;
+/// Poly1305 认证 tag 长度（字节）
+const MEMORY_TAG_LEN: usize = 16;
+/// XChaCha20-Poly1305 key 长度（字节）
+const MEMORY_KEY_LEN: usize = 32;
+/// BLOB 最小合法长度（nonce + tag）
+const MEMORY_BLOB_MIN_LEN: usize = MEMORY_NONCE_LEN + MEMORY_TAG_LEN;
+
+/// 把 `DEFAULT_PASSPHRASE || MEMORY_KEY_DOMAIN` 派生为 32 字节 XChaCha20 key
+///
+/// 与 `derive_stronghold_key` 同型（blake2b256 输出 32 字节），但拼接
+/// 了 `MEMORY_KEY_DOMAIN` 后缀做 domain separation。
+///
+/// `pub(crate)` —— 仅 crate 内使用。
+pub(crate) fn derive_memory_key() -> [u8; MEMORY_KEY_LEN] {
+    type Blake2b256 = Blake2b<blake2::digest::consts::U32>;
+    let mut hasher = Blake2b256::new();
+    hasher.update(DEFAULT_PASSPHRASE.as_bytes());
+    hasher.update(MEMORY_KEY_DOMAIN);
+    let out = hasher.finalize();
+    let mut key = [0u8; MEMORY_KEY_LEN];
+    key.copy_from_slice(&out);
+    key
+}
+
+/// 加密任意字节序列，返回 `[nonce 24B][ciphertext+tag]` BLOB
+///
+/// ## 失败模式
+///
+/// 当前实现不会主动失败：
+///   - key 由确定性 blake2b256 派生 → 总成功
+///   - OsRng.fill_bytes 不会失败（OS 拒绝分配熵时 panic 而非 Result）
+///   - XChaCha20-Poly1305 encrypt 仅在 plaintext 长度超 `core::u32::MAX`
+///     时返回错误（约 4 GiB），业务场景不会触及
+///
+/// 为 API 一致性仍返回 `AppResult<Vec<u8>>`；未来若切换确定性 nonce /
+/// 改用 user-supplied key 需在此返回 `AppError::Validation`。
+///
+/// ## 安全属性
+///
+/// - 每次调用都用 `OsRng` 生成新的 24 字节 nonce。XChaCha20-Poly1305
+///   安全要求 nonce 不可复用；24 字节随机碰撞概率 ~2^-192，可视为唯一。
+/// - Poly1305 tag 由 AEAD 框架自动追加到 ciphertext 末尾，16 字节固定。
+/// - Empty plaintext 合法：返回 24 + 0 + 16 = 40 字节 BLOB。
+pub fn encrypt_blob(plaintext: &[u8]) -> AppResult<Vec<u8>> {
+    let key_bytes = derive_memory_key();
+    let cipher = XChaCha20Poly1305::new(Key::from_slice(&key_bytes));
+
+    // 24 字节随机 nonce（每次调用独立）
+    let mut nonce_bytes = [0u8; MEMORY_NONCE_LEN];
+    OsRng.fill_bytes(&mut nonce_bytes);
+    let nonce = XNonce::from_slice(&nonce_bytes);
+
+    // AEAD encrypt：输出 = ciphertext || tag（16B）
+    let ciphertext_with_tag = cipher
+        .encrypt(nonce, plaintext)
+        .map_err(|e| AppError::Validation(format!("memory_store 加密失败: {e}")))?;
+
+    // 组装 BLOB：[nonce || ciphertext||tag]
+    let mut blob = Vec::with_capacity(MEMORY_NONCE_LEN + ciphertext_with_tag.len());
+    blob.extend_from_slice(&nonce_bytes);
+    blob.extend_from_slice(&ciphertext_with_tag);
+    Ok(blob)
+}
+
+/// 解密 BLOB `[nonce 24B][ciphertext+tag]` → 原文
+///
+/// ## 失败模式
+///
+/// - BLOB 长度 < `MEMORY_BLOB_MIN_LEN`（40 字节）→ `AppError::Validation`，
+///   消息包含"长度"（业务可读，便于上层定位"数据损坏 vs 长度不足"）。
+/// - Poly1305 tag 校验失败（nonce 错位 / 密文被篡改 / 非本 key 加密 / empty
+///   ciphertext 错配）→ `AppError::Validation`，消息包含"认证失败"。
+///
+/// **不**区分"长度不足"与"长度恰好但 tag 失败"两种情况下的调用方：
+/// 测试 `decrypt_rejects_short_input` 同时覆盖两种情况，均应返 Validation。
+pub fn decrypt_blob(blob: &[u8]) -> AppResult<Vec<u8>> {
+    if blob.len() < MEMORY_BLOB_MIN_LEN {
+        return Err(AppError::Validation(format!(
+            "memory_store 密文长度不足（需至少 {} 字节，实际 {} 字节）",
+            MEMORY_BLOB_MIN_LEN,
+            blob.len()
+        )));
+    }
+
+    let key_bytes = derive_memory_key();
+    let cipher = XChaCha20Poly1305::new(Key::from_slice(&key_bytes));
+
+    let (nonce_bytes, ciphertext_with_tag) = blob.split_at(MEMORY_NONCE_LEN);
+    let nonce = XNonce::from_slice(nonce_bytes);
+
+    cipher
+        .decrypt(nonce, ciphertext_with_tag)
+        .map_err(|e| {
+            AppError::Validation(format!(
+                "memory_store 解密认证失败（密文被篡改 / nonce 不匹配 / 非本 key 加密）: {e}"
+            ))
+        })
 }

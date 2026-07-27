@@ -137,6 +137,7 @@ async fn list_by_conversation_preserves_insert_order_within_same_second() {
             content: "你好".into(),
             token_count: None,
             error: None,
+            model: None,
         },
     )
     .await
@@ -150,6 +151,7 @@ async fn list_by_conversation_preserves_insert_order_within_same_second() {
             content: String::new(),
             token_count: None,
             error: None,
+            model: None,
         },
     )
     .await
@@ -167,6 +169,7 @@ async fn list_by_conversation_preserves_insert_order_within_same_second() {
             content: "今天天气如何".into(),
             token_count: None,
             error: None,
+            model: None,
         },
     )
     .await
@@ -180,6 +183,7 @@ async fn list_by_conversation_preserves_insert_order_within_same_second() {
             content: String::new(),
             token_count: None,
             error: None,
+            model: None,
         },
     )
     .await
@@ -230,6 +234,7 @@ async fn list_by_conversation_handles_many_pairs_all_same_second() {
                 content: format!("q{i}"),
                 token_count: None,
                 error: None,
+                model: None,
             },
         )
         .await
@@ -243,6 +248,7 @@ async fn list_by_conversation_handles_many_pairs_all_same_second() {
                 content: format!("a{i}"),
                 token_count: None,
                 error: None,
+                model: None,
             },
         )
         .await
@@ -290,6 +296,7 @@ async fn list_by_conversation_with_before_preserves_order_within_second() {
                 content: format!("{id}-content"),
                 token_count: None,
                 error: None,
+                model: None,
             },
         )
         .await

@@ -17,6 +17,7 @@ const props = withDefaults(defineProps<IconPickerProps>(), {
   categories: () => [],
   searchPlaceholder: '搜索图标...',
   disabled: false,
+  pageSize: 24,
 })
 
 const emit = defineEmits<IconPickerEmits>()
@@ -31,6 +32,14 @@ const scrollContainerRef = ref<HTMLElement | null>(null)
 const searchInputRef = ref<HTMLInputElement | null>(null)
 const focusedIndex = ref(-1)
 const COLS = 8 // 固定列数，与 grid-template-columns 配合
+
+/* ----- 分页（v4 REQ-UI-009A）----- */
+const PAGE_SIZE_DEFAULT = 24
+const pageSize = computed<number>(() => Math.max(1, props.pageSize ?? PAGE_SIZE_DEFAULT))
+const currentPage = ref(1) // 当前页码（1-indexed）
+// 防止 vue-tsc 静态分析误报（pageSize / currentPage 在 watch / computed / template 中均被引用）
+void pageSize.value
+void currentPage.value
 
 /* ----- 全量图标列表（过滤掉内部 key） ----- */
 const allIconNames = computed(() => {
@@ -48,12 +57,33 @@ const activeIcons = computed(() => {
   return allIconNames.value
 })
 
-/* ----- 搜索过滤 ----- */
-const filteredIcons = computed(() => {
+/* ----- 搜索过滤（全量，分页前）----- */
+const filteredAllIcons = computed(() => {
   const q = searchQuery.value.trim().toLowerCase()
   if (!q) return activeIcons.value
   return activeIcons.value.filter((name) => name.toLowerCase().includes(q))
 })
+
+/* ----- 分页计算（v4 REQ-UI-009A）----- */
+const totalPages = computed<number>(() => {
+  return Math.max(1, Math.ceil(filteredAllIcons.value.length / pageSize.value))
+})
+
+/** 超出总页数时自动钳位 */
+watch([filteredAllIcons, pageSize], () => {
+  if (currentPage.value > totalPages.value) {
+    currentPage.value = totalPages.value
+  }
+}, { immediate: true })
+
+/** 当前页可见图标列表 */
+const filteredIcons = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return filteredAllIcons.value.slice(start, start + pageSize.value)
+})
+
+/** 总图数过少时（不足一页）不显示分页 */
+const showPagination = computed<boolean>(() => filteredAllIcons.value.length > pageSize.value)
 
 /* ----- 派生分类列表（自动推断 categories 为空时） ----- */
 const displayCategories = computed(() => {
@@ -76,6 +106,7 @@ function selectIcon(name: string): void {
 function switchCategory(catId: string): void {
   activeCategory.value = catId === '__all__' ? null : catId
   searchQuery.value = ''
+  currentPage.value = 1 /* REQ-UI-009A：切换分类回到第 1 页 */
   nextTick(() => scrollContainerRef.value?.scrollTo({ top: 0 }))
 }
 
@@ -98,12 +129,56 @@ watch(
   () => {
     activeCategory.value = null
     searchQuery.value = ''
+    currentPage.value = 1
   },
 )
 
-/* ----- 过滤变化时重置焦点 ----- */
-watch(filteredIcons, () => {
+/* 搜索/分类变化时回到第 1 页 */
+watch([searchQuery, activeCategory], () => {
+  currentPage.value = 1
+})
+
+/* 过滤变化时重置焦点 */
+watch(filteredAllIcons, () => {
   focusedIndex.value = -1
+})
+
+/* ----- 分页交互（REQ-UI-009A）----- */
+function goPrev(): void {
+  if (currentPage.value <= 1) return
+  currentPage.value -= 1
+  nextTick(() => scrollContainerRef.value?.scrollTo({ top: 0 }))
+}
+
+function goNext(): void {
+  if (currentPage.value >= totalPages.value) return
+  currentPage.value += 1
+  nextTick(() => scrollContainerRef.value?.scrollTo({ top: 0 }))
+}
+
+function goToPage(p: number): void {
+  if (p < 1 || p > totalPages.value || p === currentPage.value) return
+  currentPage.value = p
+  nextTick(() => scrollContainerRef.value?.scrollTo({ top: 0 }))
+}
+
+/** 可见页码省略号列表 */
+const visiblePages = computed<Array<number | 'ellipsis'>>(() => {
+  const total = totalPages.value
+  const cur = currentPage.value
+  if (total <= 7) {
+    return Array.from({ length: total }, (_, i) => i + 1)
+  }
+  const out: Array<number | 'ellipsis'> = []
+  const add = (v: number | 'ellipsis') => out.push(v)
+  add(1)
+  if (cur > 4) add('ellipsis')
+  const start = Math.max(2, cur - 2)
+  const end = Math.min(total - 1, cur + 2)
+  for (let i = start; i <= end; i++) add(i)
+  if (cur < total - 3) add('ellipsis')
+  add(total)
+  return out
 })
 
 /* ----- 键盘导航（WAI-ARIA listbox aria-activedescendant） ----- */
@@ -249,14 +324,14 @@ function handleGridKeydown(e: KeyboardEvent): void {
       class="ip-icon-picker__grid"
       tabindex="0"
       role="grid"
-      :aria-label="'图标列表 (' + filteredIcons.length + '个)'"
+      :aria-label="'图标列表 共 ' + filteredAllIcons.length + ' 个，当前第 ' + currentPage + ' / ' + totalPages + ' 页'"
       :aria-activedescendant="focusedIndex >= 0 ? gridItemId(focusedIndex) : undefined"
       @keydown="handleGridKeydown"
     >
       <button
         v-for="(name, index) in filteredIcons"
-        :key="name"
         :id="gridItemId(index)"
+        :key="name"
         type="button"
         :class="[
           'ip-icon-picker__item',
@@ -285,6 +360,51 @@ function handleGridKeydown(e: KeyboardEvent): void {
         未找到匹配图标
       </div>
     </div>
+
+    <!-- REQ-UI-009A：分页控件 -->
+    <nav
+      v-if="showPagination"
+      class="ip-icon-picker__pagination"
+      role="navigation"
+      aria-label="图标分页"
+    >
+      <button
+        type="button"
+        class="ip-icon-picker__page-btn"
+        :disabled="disabled || currentPage <= 1"
+        aria-label="上一页"
+        @click="goPrev"
+      >‹</button>
+
+      <template v-for="(item, i) in visiblePages" :key="`p-${i}`">
+        <button
+          v-if="item !== 'ellipsis'"
+          type="button"
+          :class="[
+            'ip-icon-picker__page-btn',
+            'ip-icon-picker__page-btn--num',
+            { 'ip-icon-picker__page-btn--active': item === currentPage },
+          ]"
+          :disabled="disabled"
+          :aria-current="item === currentPage ? 'page' : undefined"
+          :aria-label="`第 ${item} 页 / 共 ${totalPages} 页`"
+          @click="goToPage(item as number)"
+        >{{ item }}</button>
+        <span v-else class="ip-icon-picker__page-ellipsis" aria-hidden="true">…</span>
+      </template>
+
+      <button
+        type="button"
+        class="ip-icon-picker__page-btn"
+        :disabled="disabled || currentPage >= totalPages"
+        aria-label="下一页"
+        @click="goNext"
+      >›</button>
+
+      <span class="ip-icon-picker__page-info" aria-live="polite">
+        {{ filteredAllIcons.length }} 个 · 第 {{ currentPage }} / {{ totalPages }} 页
+      </span>
+    </nav>
   </div>
 </template>
 
@@ -516,5 +636,73 @@ function handleGridKeydown(e: KeyboardEvent): void {
   padding: var(--ip-spacing-6);
   font-size: var(--ip-text-caption-size);
   color: var(--ip-color-text-tertiary);
+}
+
+/* ============================================================
+ * 分页控件（v4 REQ-UI-009A）
+ * ============================================================ */
+.ip-icon-picker__pagination {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--ip-spacing-1);
+  padding: var(--ip-spacing-2) var(--ip-spacing-3);
+  background: var(--ip-color-bg-secondary);
+  border: 1px solid var(--ip-color-border-default);
+  border-top: none;
+  border-radius: 0 0 var(--ip-input-radius) var(--ip-input-radius);
+  flex-wrap: wrap;
+}
+.ip-icon-picker__page-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 var(--ip-spacing-2);
+  font-size: var(--ip-text-caption-size);
+  font-family: inherit;
+  font-weight: var(--ip-font-weight-medium);
+  color: var(--ip-color-text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--ip-radius-sm);
+  cursor: pointer;
+  line-height: 1;
+  transition: background-color var(--ip-duration-fast) var(--ip-ease-out),
+    border-color var(--ip-duration-fast) var(--ip-ease-out),
+    color var(--ip-duration-fast) var(--ip-ease-out);
+}
+.ip-icon-picker__page-btn:hover:not(:disabled) {
+  background: var(--ip-color-bg-tertiary);
+  border-color: var(--ip-color-border-default);
+  color: var(--ip-color-text-primary);
+}
+.ip-icon-picker__page-btn:active:not(:disabled) { transform: scale(0.94); }
+.ip-icon-picker__page-btn:focus-visible { outline: none; box-shadow: var(--ip-shadow-focus); }
+.ip-icon-picker__page-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.ip-icon-picker__page-btn--num { font-variant-numeric: tabular-nums; }
+.ip-icon-picker__page-btn--active,
+.ip-icon-picker__page-btn--active:hover {
+  background: var(--ip-primary-500);
+  border-color: var(--ip-primary-500);
+  color: var(--ip-color-text-on-primary, #fff);
+}
+.ip-icon-picker__page-ellipsis {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 28px;
+  font-size: var(--ip-text-caption-size);
+  color: var(--ip-color-text-tertiary);
+  user-select: none;
+}
+.ip-icon-picker__page-info {
+  margin-left: var(--ip-spacing-2);
+  font-size: var(--ip-text-caption-size);
+  color: var(--ip-color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 </style>

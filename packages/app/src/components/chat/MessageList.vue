@@ -1,8 +1,9 @@
 <script setup lang="ts">
-// 消息列表
+// 消息列表（REQ-XC-003 虚拟滚动版）
 //
 // 职责：
-//   - 渲染消息列表（v-for MessageBubble）
+//   - 用 vue-virtual-scroller 的 DynamicScroller 渲染消息（仅渲染可视区域 ± buffer）
+//   - 每条消息初始估算 80px 高，渲染后由 DynamicScrollerItem 通过 ResizeObserver 自动更新
 //   - 新消息 / 流式增量时自动滚动到底部
 //   - 用户向上滚动后不强制回滚到底（让用户继续阅读历史）
 //   - 控制子组件的 renderMarkdown：streaming 中传 false 走纯文本路径，
@@ -24,7 +25,9 @@
 //   - forceBottom()                   命令式方法：强制滚动到底部
 //                                     （切换会话 / 初始加载完成后由父组件调用）
 
-import { nextTick, reactive, ref, watch } from "vue";
+import { computed, nextTick, reactive, ref, watch } from "vue";
+import { DynamicScroller, DynamicScrollerItem } from "vue-virtual-scroller";
+import "vue-virtual-scroller/dist/vue-virtual-scroller.css";
 import type { Message } from "../../types";
 import MessageBubble from "./MessageBubble.vue";
 import { useChatStore } from "../../stores/chat";
@@ -63,8 +66,41 @@ const emit = defineEmits<{
   "load-older": [];
 }>();
 
-/** 列表容器 DOM 引用 */
-const listRef = ref<HTMLDivElement | null>(null);
+/** REQ-XC-003: 初始估算每条消息高度（80px），渲染后由 ResizeObserver 更新 */
+const ESTIMATED_MESSAGE_SIZE = 80;
+
+/**
+ * 为 DynamicScroller 包装 messages：附加 dataField='item' 所需 shape
+ * （DynamicScroller 的默认 keyField='id'，我们的 Message 也有 id 字段，零额外转换）。
+ *
+ * 虚拟滚动要求每条 item 高度已知或可估算。这里统一传 80px，
+ * DynamicScrollerItem 内部使用 ResizeObserver 自动更新实际高度，
+ * 仅在「未渲染过的最末几条」使用估算值（用户无感）。
+ */
+const scrollerItems = computed(() => props.messages);
+
+/**
+ * DynamicScroller 实例引用（暴露的 scrollToBottom / scrollToItem）。
+ *
+ * 注意：`vue-virtual-scroller@3` 用 functional component 形式导出，
+ * `InstanceType<typeof DynamicScroller>` 推导失败（TS2344），故这里
+ * 自定义最小结构类型（仅含实际调用的方法），并通过运行时 `typeof` 检查
+ * 保证安全。
+ */
+interface ScrollToOptionsLite {
+  align?: "start" | "center" | "end" | "nearest";
+  smooth?: boolean;
+  offset?: number;
+}
+interface ScrollerHandle {
+  scrollToBottom: () => void;
+  scrollToItem: (index: number, options?: ScrollToOptionsLite) => void;
+  startSpacerSize: number | { value: number };
+}
+const scrollerRef = ref<ScrollerHandle | null>(null);
+
+/** 虚拟滚动 DOM 容器引用（用于兼容旧的「scroll 事件 / pinnedToBottom」逻辑） */
+const listRef = ref<HTMLElement | null>(null);
 
 /** 用户是否在底部附近（距底部 ≤ 80px 视为「在底部」） */
 const pinnedToBottom = ref<boolean>(true);
@@ -85,67 +121,76 @@ const renderMarkdown = ref<Record<string, boolean>>({});
 const TOP_THRESHOLD = 80;
 
 /**
- * 滚动锚点：记录加载历史前的 scrollHeight + scrollTop，
- * 加载完成后用「new scrollHeight - old scrollHeight」补偿 scrollTop。
+ * 滚动锚点：记录加载历史前的 scrollTop，
+ * 加载完成后用「startSpacerSize 增量」补偿 scrollTop。
  *
- * scrollHeight = 0 表示无未决锚点（避免误判）。
+ * scrollTop = 0 表示无未决锚点（避免误判）。
  */
 const scrollAnchor = reactive({
-  scrollHeight: 0,
   scrollTop: 0,
+  /** 加载历史前的 startSpacerSize（顶部占位高度） */
+  startSpacerSize: 0,
 });
 
 /**
  * 滚动到底部（仅在 pinnedToBottom=true 时由 watch 调用）。
- * 改用 requestAnimationFrame：与浏览器绘制同步，比 nextTick 更节流
- * （nextTick 是 microtask，可能在流式高频 chunk 下反复入队）。
- * rAF 在每帧最多触发 1 次，与显示器刷新率对齐，体感更顺滑。
- *
- * 暴露给外部的 forceBottom() 也走同一套路径。
+ * 用 DynamicScroller 暴露的 scrollToBottom()（直接定位到列表末尾），
+ * 比手动算 scrollTop 更稳定。fallback 到手动滚以应对 ref 未挂载的边界。
  */
 function scrollToBottom(): void {
+  const sc = scrollerRef.value;
+  if (sc && typeof sc.scrollToBottom === "function") {
+    sc.scrollToBottom();
+    return;
+  }
   const el = listRef.value;
   if (!el) return;
+  // 临时关闭 smooth scrolling，确保立即跳到底部
+  el.style.scrollBehavior = "auto";
+  el.scrollTop = el.scrollHeight;
   requestAnimationFrame(() => {
-    const target = listRef.value;
-    if (!target) return;
-    // 临时关闭 smooth scrolling，确保立即跳到底部
-    target.style.scrollBehavior = "auto";
-    target.scrollTop = target.scrollHeight;
-    // 恢复 smooth 以便用户手动滚动时平滑
-    requestAnimationFrame(() => {
-      target.style.scrollBehavior = "";
-    });
+    el.style.scrollBehavior = "";
   });
 }
 
 /**
  * 监听用户手动滚动，更新 pinnedToBottom + 检测顶部触发向上翻页。
  *
- * 底部判定：scrollHeight - scrollTop - clientHeight <= 80
- * 顶部触发：scrollTop <= TOP_THRESHOLD 且 hasMoreOlder 且 非加载中 且 列表非空
- *          → 记录 scrollAnchor（加载前的 scrollHeight / scrollTop）
+ * 底部判定：startSpacerSize + (visible items 总高) 视为「内容总高」；
+ *           scroller viewport 实际可见高度 ≈ scrollParent.clientHeight
+ *           当用户滚到 viewport 底部附近（≤ 80px）→ pinnedToBottom=true
+ * 顶部触发：scrollTop ≤ TOP_THRESHOLD 且 hasMoreOlder 且 非加载中 且 列表非空
+ *          → 记录 scrollAnchor（加载前的 scrollTop）
  *          → emit("load-older")，由父组件调 store.loadOlderMessages()
+ *
+ * 说明：DynamicScroller 把「可视列表容器」放在内部 .vue-recycle-scroller__item-view，
+ * 我们监听其 scroll 事件（该元素天然 overflow-y: auto）。
  */
-function onScroll(): void {
-  const el = listRef.value;
-  if (!el) return;
+function onScroll(evt: Event): void {
+  const target = evt.target as HTMLElement | null;
+  if (!target) return;
 
-  // 底部检测（保持原有逻辑）
-  const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+  // 底部检测（保持原有逻辑）：视口底部距容器底部 ≤ 80px 视为在底部
+  const distanceFromBottom =
+    target.scrollHeight - target.scrollTop - target.clientHeight;
   pinnedToBottom.value = distanceFromBottom <= 80;
 
   // 顶部检测：触发加载更多
   if (
-    el.scrollTop <= TOP_THRESHOLD &&
+    target.scrollTop <= TOP_THRESHOLD &&
     props.hasMoreOlder &&
     !props.loadingOlder &&
     props.messages.length > 0
   ) {
     // 记录锚点：wait for the DOM update after messages prepend,
     // then compensate via the messages.length watcher below.
-    scrollAnchor.scrollHeight = el.scrollHeight;
-    scrollAnchor.scrollTop = el.scrollTop;
+    scrollAnchor.scrollTop = target.scrollTop;
+    // DynamicScroller 暴露的 startSpacerSize（顶部占位）也作为锚点之一
+    const sc = scrollerRef.value;
+    scrollAnchor.startSpacerSize =
+      sc && typeof sc.startSpacerSize !== "undefined"
+        ? Number(sc.startSpacerSize) || 0
+        : 0;
     emit("load-older");
   }
 }
@@ -156,7 +201,7 @@ function onScroll(): void {
  * 三件事一起处理：
  *   1. 维持底部：若用户在底部附近，则滚到底。
  *   2. 滚动补偿：若长度增加且有 anchor，说明是「加载更多历史」导致的 prepend，
- *      用 new scrollHeight - old scrollHeight 补偿 scrollTop。
+ *      用 new startSpacerSize - old startSpacerSize 补偿 scrollTop。
  *   3. anchor 重置：若长度减少（典型：会话切换后清空再加载新数据），
  *      显式重置 anchor（避免下次 prepend 误用陈旧锚点）。
  *
@@ -181,22 +226,24 @@ watch(
     }
 
     // ---------- 2. 滚动补偿（向上翻页 prepend） ----------
-    if (next.length > (prev?.length ?? 0) && scrollAnchor.scrollHeight > 0) {
+    if (next.length > (prev?.length ?? 0) && scrollAnchor.scrollTop > 0) {
       nextTick(() => {
-        const el = listRef.value;
-        if (!el) return;
-        const diff = el.scrollHeight - scrollAnchor.scrollHeight;
-        // 用户滚动条位置保持不变，但视口内容向下平移了 diff 像素，
-        // 让用户看到的是「原本那条消息仍然在原位置，新增的历史在其上方」。
-        el.scrollTop = scrollAnchor.scrollTop + diff;
+        const target = listRef.value;
+        const sc = scrollerRef.value;
+        if (!target || !sc) return;
+        // startSpacerSize 增量 = 新增消息的高度
+        const newStartSpacer = Number(sc.startSpacerSize) || 0;
+        const spacerDelta = newStartSpacer - scrollAnchor.startSpacerSize;
+        // 用户滚动条位置保持不变，但视口内容向下平移了 spacerDelta 像素
+        target.scrollTop = scrollAnchor.scrollTop + spacerDelta;
         // 消费完锚点，避免下次误用
-        scrollAnchor.scrollHeight = 0;
         scrollAnchor.scrollTop = 0;
+        scrollAnchor.startSpacerSize = 0;
       });
     } else if (next.length < (prev?.length ?? 0)) {
       // ---------- 3. anchor 重置（会话切换 / 数据减少） ----------
-      scrollAnchor.scrollHeight = 0;
       scrollAnchor.scrollTop = 0;
+      scrollAnchor.startSpacerSize = 0;
     }
 
     // ---------- 流式结束判定（renderMarkdown 翻转） ----------
@@ -286,7 +333,7 @@ function forceBottom(): void {
   pinnedToBottom.value = true;
   nextTick(() => {
     scrollToBottom();
-    // 二次 nextTick：兜底首屏 v-for 全部 patch 完成
+    // 二次 nextTick：兜首屏 DynamicScroller 测量时序
     nextTick(() => scrollToBottom());
   });
 }
@@ -294,16 +341,27 @@ function forceBottom(): void {
 defineExpose({
   forceBottom,
 });
+
+/**
+ * DynamicScrollerItem 的 size 字段：每条消息初始估算 80px。
+ * 渲染后由 ResizeObserver 回调更新。
+ * （DynamicScrollerItem 接受数字或函数式 resolver；这里用固定值即可，
+ * ResizeObserver 会自动修正动态高度。）
+ */
+function estimatedSize(): number {
+  return ESTIMATED_MESSAGE_SIZE;
+}
 </script>
 
 <template>
-  <div ref="listRef" class="message-list" @scroll="onScroll">
+  <div ref="listRef" class="message-list">
     <!--
       P2 加载指示器区：
         - loading-older → spinner + "加载历史消息..."
         - 否则如果 hasMoreOlder && messages.length > 0 → "向上滚动加载更多"
         - 否则如果 !hasMoreOlder && messages.length > 0 → "已经到顶了"（P3 终止提示）
         - 否则（数据极少 / 初次加载） → 不显示
+      注意：指示器在 DynamicScroller 外部，不参与虚拟滚动。
     -->
     <div v-if="loadingOlder" class="load-indicator load-indicator-loading">
       <span class="load-spinner" aria-hidden="true" />
@@ -322,31 +380,49 @@ defineExpose({
       <span class="load-text">没有更多历史消息了</span>
     </div>
 
-    <div class="message-list-inner">
-      <MessageBubble
-        v-for="(msg, idx) in messages"
-        :key="msg.id"
-        v-memo="[
-          msg.content,
-          msg.error,
-          msg.content_blocks,
-          streamingId === msg.id,
-          idx === messages.length - 1,
-          idx === messages.length - 1 ? chatStore.lastUsage : null,
-          msg.model,
-        ]"
-        :message="msg"
-        :is-streaming="msg.id === streamingId"
-        :render-markdown="shouldRenderMarkdown(msg)"
-        :prev-role="idx > 0 ? messages[idx - 1]!.role : null"
-        :is-retrying="isRetrying && msg.id === streamingId"
-        :retry-progress="retryProgress"
-        :active-tool-calls="msg.id === streamingId ? activeToolCalls : []"
-        :thinking-content="msg.id === streamingId ? thinkingContent : ''"
-        :usage="idx === messages.length - 1 && msg.role === 'assistant' ? chatStore.lastUsage : null"
-        @retry="onRetry"
-      />
-    </div>
+    <!--
+      REQ-XC-003: 虚拟滚动列表
+        - items=scrollerItems（= messages）
+        - minItemSize=80：每条消息初始估算 80px
+        - keyField 默认 = 'id'，与 Message.id 对齐
+        - @scroll=onScroll：监听滚动事件以检测顶部 + 底部
+        - DynamicScrollerItem emit resize 时由库内部 ResizeObserver 自动更新 size
+        - emit resize 事件由库内部消费，这里不用 onResize
+    -->
+    <DynamicScroller
+      ref="scrollerRef"
+      :items="scrollerItems"
+      :min-item-size="ESTIMATED_MESSAGE_SIZE"
+      key-field="id"
+      class="message-list-scroller"
+      @scroll="onScroll"
+    >
+      <template #default="{ item, index, active }">
+        <DynamicScrollerItem
+          :item="item"
+          :active="active"
+          :size="estimatedSize()"
+          :data-index="index"
+        >
+          <MessageBubble
+            :message="item"
+            :is-streaming="item.id === streamingId"
+            :render-markdown="shouldRenderMarkdown(item)"
+            :prev-role="index > 0 ? scrollerItems[index - 1]!.role : null"
+            :is-retrying="isRetrying && item.id === streamingId"
+            :retry-progress="retryProgress"
+            :active-tool-calls="item.id === streamingId ? activeToolCalls : []"
+            :thinking-content="item.id === streamingId ? thinkingContent : ''"
+            :usage="
+              index === scrollerItems.length - 1 && item.role === 'assistant'
+                ? chatStore.lastUsage
+                : null
+            "
+            @retry="onRetry"
+          />
+        </DynamicScrollerItem>
+      </template>
+    </DynamicScroller>
 
     <!--
       P3 体验：初始加载骨架屏 / 占位。
@@ -377,17 +453,19 @@ defineExpose({
 .message-list {
   flex: 1 1 auto;
   min-height: 0;
-  overflow-y: auto;
   background: var(--ip-color-bg-secondary);
-  scroll-behavior: smooth;
-}
-
-.message-list-inner {
   display: flex;
   flex-direction: column;
-  padding: 16px 0 24px;
-  min-height: 100%;
-  box-sizing: border-box;
+  overflow: hidden;
+}
+
+/* DynamicScroller 占满剩余高度 */
+.message-list-scroller {
+  flex: 1 1 auto;
+  min-height: 0;
+  /* 关键：必须让 DynamicScroller 内部容器可滚动
+     （库默认高度 100%，但需父级有确定高度） */
+  height: 100%;
 }
 
 /* ============================================================================

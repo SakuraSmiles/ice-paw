@@ -14,7 +14,7 @@
  * - 暗色模式: [data-theme="dark"]
  * - 响应式: <1024px / <768px 断点
  */
-import { ref, onMounted, onUnmounted, h } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import {
   Button,
   Input,
@@ -38,13 +38,10 @@ import {
   AtSign,
   Hash,
   RotateCcw,
-  Settings,
   MoreHorizontal,
   Plus,
-  Send,
   Trash2,
   Bot,
-  Inbox,
   Sparkles,
   Pencil,
   Copy,
@@ -69,7 +66,6 @@ function toggleTheme(): void {
 const toast: ToastApi = provideToast()
 
 /* ── Demo state (preserved from v1) ── */
-const inputValue = ref<string>('你好')
 const inputError = ref<boolean>(false)
 const inputErrorMessage = ref<string>('')
 
@@ -80,12 +76,6 @@ const taValue = ref<string>(
 const modalOpenSm = ref(false)
 const modalOpenMd = ref(false)
 const modalOpenLg = ref(false)
-
-const btnLoading = ref(false)
-function triggerLoading(): void {
-  btnLoading.value = true
-  setTimeout(() => { btnLoading.value = false }, 1500)
-}
 
 let inputErrorTimer: ReturnType<typeof setTimeout> | undefined
 function showInputError(): void {
@@ -107,11 +97,6 @@ function clearInputError(): void {
   inputError.value = false
   inputErrorMessage.value = ''
 }
-
-const longMessage = ref<string>(
-  '推荐使用 `fetch` + `AbortController` 实现可中断的请求。' +
-  '配合 `useRef` 持有 controller 实例，在 cleanup 里调用 `abort()` 即可取消挂起的请求。',
-)
 
 function toastSuccess(): void { toast.success('保存成功') }
 function toastError(): void { toast.error('保存失败') }
@@ -193,7 +178,6 @@ function onAvatarError(err: { code: string; message: string }): void {
 }
 
 /* ── Section 2 Cards demo state ── */
-const cardSelected = ref(false)
 
 /* ── Section 8 Select demo state ── */
 const selectValue = ref<string | null>('balanced')
@@ -232,7 +216,6 @@ const ddAction = (label: string): void => {
 }
 
 /* ── Section 11 Popconfirm demo state ── */
-const popOpen = ref(false)
 const popDangerOpen = ref(false)
 const popLoading = ref(false)
 const popTop = ref(false)
@@ -276,20 +259,6 @@ const ddDisabledItems = [
   { type: 'divider' as const, key: 'div-disabled' },
   { type: 'item' as const, key: 'export', label: '导出', icon: Download, onClick: () => ddAction('导出') },
 ]
-
-/* ── VNode separator demo ── */
-const hCaretVNode = h(
-  'svg',
-  { width: 10, height: 10, viewBox: '0 0 10 10', 'aria-hidden': true },
-  h('path', {
-    d: 'M3 1 L7 5 L3 9',
-    fill: 'none',
-    stroke: 'currentColor',
-    'stroke-width': '1.5',
-    'stroke-linecap': 'round',
-    'stroke-linejoin': 'round',
-  }),
-)
 
 /* ── Section reveal (single fade-in, no stagger) ── */
 function initSectionReveal(): () => void {
@@ -380,7 +349,7 @@ onUnmounted(() => {
     </nav>
 
     <!-- ══════════════ HERO ══════════════ -->
-    <section class="page hero" id="hero">
+    <section id="hero" class="page hero">
       <div class="hero-text">
         <div class="hero-eyebrow">
           <span class="pulse">v2</span>
@@ -526,7 +495,7 @@ onUnmounted(() => {
         </p>
       </div>
 
-      <section class="buttons-section" id="components">
+      <section id="components" class="buttons-section">
         <div class="buttons-stage">
           <h3>主按钮（默认态）</h3>
           <p class="stage-sub">高 52px · 圆角 10px · 冰蓝 500 + 12% 阴影</p>

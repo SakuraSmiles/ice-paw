@@ -18,6 +18,7 @@ import { useAgentsStore } from "../../stores/agents";
 import { useProjectsStore, DEFAULT_PROJECT_ID } from "../../stores/projects";
 import { useConversationsStore } from "../../stores/conversations";
 import { useSettingsStore } from "../../stores/settings";
+import { useBootstrap } from "../../composables/useBootstrap";
 import Toast from "../common/Toast.vue";
 import Sidebar from "./Sidebar.vue";
 
@@ -25,6 +26,7 @@ const agentsStore = useAgentsStore();
 const projectsStore = useProjectsStore();
 const conversationsStore = useConversationsStore();
 const settingsStore = useSettingsStore();
+const bootstrap = useBootstrap();
 const router = useRouter();
 
 /**
@@ -45,19 +47,25 @@ function projectIdToRouteParam(projectId: string): string {
 }
 
 onMounted(async () => {
-  // 1. 加载 Agent 列表（后续仍需要 Agent 数据）
-  await agentsStore.ensureLoaded();
-  // 2. 加载项目列表
-  try {
-    await projectsStore.loadAll();
-  } catch {
-    // 加载失败不阻塞，使用默认项目
-  }
-  // 3. 加载当前项目的会话列表
-  try {
-    await conversationsStore.loadForProject(projectsStore.currentId || DEFAULT_PROJECT_ID);
-  } catch {
-    // 加载失败由各页面 UI 兜底
+  // REQ-XC-007：若 AppBootstrap 已经完成 store 初始化，跳过重复加载（避免双重网络请求）。
+  // 未 bootstrap 时（本组件被直接使用的场景，如未来单独的测试入口）才走原 onMounted 逻辑。
+  const skipStoreInit = bootstrap.hasBootstrapped();
+
+  if (!skipStoreInit) {
+    // 1. 加载 Agent 列表（后续仍需要 Agent 数据）
+    await agentsStore.ensureLoaded();
+    // 2. 加载项目列表
+    try {
+      await projectsStore.loadAll();
+    } catch {
+      // 加载失败不阻塞，使用默认项目
+    }
+    // 3. 加载当前项目的会话列表
+    try {
+      await conversationsStore.loadForProject(projectsStore.currentId || DEFAULT_PROJECT_ID);
+    } catch {
+      // 加载失败由各页面 UI 兜底
+    }
   }
 
   // 4. P0-10：消费 on_startup 设置

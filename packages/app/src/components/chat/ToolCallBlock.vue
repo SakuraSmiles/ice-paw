@@ -322,7 +322,7 @@ function formatSize(bytes: unknown): string {
       <!-- 状态 -->
       <span class="tc-status" :style="{ color: statusInfo.color }">
         <span v-if="statusInfo.spin" class="tc-spinner" />
-        <component v-else :is="statusInfo.icon" class="tc-status-icon" :size="11" />
+        <component :is="statusInfo.icon" v-else class="tc-status-icon" :size="11" />
         <span class="tc-status-text">{{ statusInfo.text }}</span>
       </span>
 

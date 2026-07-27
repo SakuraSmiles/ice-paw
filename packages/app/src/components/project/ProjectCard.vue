@@ -234,7 +234,7 @@ function onDelete(ev: MouseEvent): void {
       <span class="team-meta">
         {{ totalAgents }} 个 Agent
       </span>
-      <span class="proj-activity" v-if="lastActiveAt">
+      <span v-if="lastActiveAt" class="proj-activity">
         <span class="proj-activity-dot" aria-hidden="true"></span>
         <span class="proj-activity-time">{{ relativeTime }}</span>
       </span>

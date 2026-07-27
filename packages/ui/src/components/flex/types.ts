@@ -9,6 +9,9 @@
  *      - Separator 模式(separator=true/string/VNode):为相邻子元素之间插入分隔符
  *
  * 默认值(规范 §2.2 决策 2):align 始终为 CSS 原生 `stretch`(与 Naive UI n-flex 一致)
+ *
+ * REQ-UI-004:`size` prop 增加 `gap` 别名(语义更明确),两者等价,优先取 `gap`
+ * REQ-UI-004A:`breakpoints` prop + ResizeObserver 实现响应式断点
  */
 
 import type { VNode } from 'vue'
@@ -20,7 +23,7 @@ import type { VNode } from 'vue'
 /** 间距预设(规范 §1.1):xs=8 / sm=12 / md=16 / lg=24 / xl=32 */
 export type SpaceSize = 'xs' | 'sm' | 'md' | 'lg' | 'xl' | number
 
-/** size prop 的二元组形式(规范 §1.2):[rowGap, colGap] */
+/** size / gap prop 的二元组形式(规范 §1.2):[rowGap, colGap] */
 export type SizeProp = SpaceSize | [SpaceSize, SpaceSize]
 
 /** flex-direction(规范 §2.3):采用 CSS 原生命名 */
@@ -54,6 +57,44 @@ export type FlexWrap = boolean | 'nowrap' | 'wrap' | 'wrap-reverse'
 
 /** 分隔符(规范 §2.3,§2.5):true=默认线;string=居中文本;VNode=自定义 */
 export type FlexSeparator = boolean | string | VNode
+
+/* ============================================================
+ * REQ-UI-004A：响应式断点(breakpoints)
+ *  - 单个断点定义:触发该断点时的覆盖配置
+ *  - `width`:触发断点的容器最小宽度(像素)
+ *  - 容器宽度 >= 该值时激活
+ * ============================================================ */
+
+export interface FlexBreakpoint {
+  /** 触发该断点的容器宽度阈值(px);容器宽度 >= width 时该断点生效 */
+  width?: number
+  /** 覆盖 direction(可选) */
+  direction?: FlexDirection
+  /** 覆盖 align(可选) */
+  align?: FlexAlign
+  /** 覆盖 justify(可选) */
+  justify?: FlexJustify
+  /** 覆盖 gap(可选);支持二元组 [row, col] */
+  gap?: SizeProp
+  /** 单独覆盖 row gap */
+  rowGap?: SpaceSize
+  /** 单独覆盖 column gap */
+  colGap?: SpaceSize
+  /** 覆盖 wrap */
+  wrap?: FlexWrap
+  /** 覆盖 inline */
+  inline?: boolean
+  /** 覆盖 reverse */
+  reverse?: boolean
+}
+
+/**
+ * breakpoints prop 的整体形态:
+ *   { mobile: { width: 640, direction: 'column', gap: 8 }, desktop: { width: 1024 } }
+ *
+ * 注:键名任意(作为 ID 用于断点排序);激活规则为"宽度最大且 <= 容器宽度的断点"
+ */
+export type FlexBreakpoints = Record<string, FlexBreakpoint>
 
 /* ============================================================
  * Props
@@ -91,8 +132,17 @@ export interface FlexProps {
    * gap 大小(规范 §1.1,§2.3):沿用 Naive UI n-flex 的 size 命名
    * 接受预设/数字/任意 CSS 字符串;二元组形式分别控制 row/col gap
    * @default 'md'
+   *
+   * REQ-UI-004:`gap` 与 `size` 等价;同时传入时 `gap` 优先。
    */
   size?: SizeProp
+
+  /**
+   * REQ-UI-004:`gap` 是 `size` 的语义别名(推荐命名);
+   * 与 `size` 同时存在时优先;若非法值(非 SpaceSize / 非二元组),console.warn 并忽略。
+   * 单独覆盖 row gap(优先级高于 size 数组的第 0 项)
+   */
+  gap?: SizeProp
 
   /** 单独覆盖 row gap(优先级高于 size 数组的第 0 项) */
   rowGap?: SpaceSize
@@ -142,4 +192,21 @@ export interface FlexProps {
    * @default 'div'
    */
   as?: string
+
+  /**
+   * REQ-UI-004A:响应式断点
+   *
+   *   {
+   *     mobile: { width: 640, direction: 'column', gap: 8 },
+   *     tablet: { width: 768 },
+   *     desktop: { width: 1024, direction: 'row', gap: 16 },
+   *   }
+   *
+   *  - key:任意字符串 ID;内部按 `width` 升序排序
+   *  - 激活规则:"容器宽度 >= 断点 width"的最大 width 断点生效;
+   *    若均不满足则使用基础 props
+   *  - 断点内字段为可选;未提供时使用基础 props
+   *  - 通过 ResizeObserver 监听容器尺寸变化
+   */
+  breakpoints?: FlexBreakpoints
 }

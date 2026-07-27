@@ -11,9 +11,9 @@
  *  - disabled：opacity 0.5 + cursor not-allowed
  * a11y：role="img" + aria-label 推断；uploadable/removable 时键盘 Tab 可达，Enter/Space 触发
  */
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { Camera, FolderOpen, X } from 'lucide-vue-next'
-import type { AvatarEmits, AvatarProps, AvatarSize, AvatarUploadError } from './types'
+import type { AvatarEmits, AvatarProps, AvatarSize, AvatarStatus, AvatarUploadError } from './types'
 
 const props = withDefaults(defineProps<AvatarProps>(), {
   size: 'md',
@@ -24,12 +24,35 @@ const props = withDefaults(defineProps<AvatarProps>(), {
   removable: false,
   loading: false,
   disabled: false,
+  name: '',
+  status: undefined as AvatarStatus | undefined,
 })
 
 const emit = defineEmits<AvatarEmits>()
 
 const hovered = ref(false)
 const fileInputRef = ref<HTMLInputElement | null>(null)
+
+/**
+ * REQ-UI-008：图片加载失败回退标记。
+ * 当 source.type==='image' 且 <img onerror> 触发时，
+ * 把 imageFailed=true，下方改用文字（initials）模式渲染。
+ * 文字内容取自 props.name 首字符（中文/全角取首字符；空则回退 '?'）。
+ */
+const imageFailed = ref(false)
+
+/**
+ * REQ-UI-008：文字头像回退内容。
+ * - 截取 name 首字符（中英文都按首个字符）
+ * - 空时回退 '?'
+ * 不依赖 backgroundColor：保持与 default 模式相同的中性灰底。
+ */
+const fallbackInitial = computed<string>(() => {
+  const raw = (props.name ?? '').trim()
+  if (!raw) return '?'
+  // Array.from 让中文等多字符 unicode 也能正确取第一个字符
+  return Array.from(raw)[0] ?? '?'
+})
 
 /* ----- 尺寸映射（token → px）----- */
 const SIZE_MAP: Record<AvatarSize, number> = {
@@ -72,6 +95,14 @@ const showRemove = computed<boolean>(
     !props.loading &&
     hovered.value,
 )
+
+/** REQ-UI-008A：default 模式下的图标（类型安全的 source.icon / fallbackIcon） */
+const defaultIcon = computed(() => {
+  if (props.source.type === 'default') {
+    return props.source.icon ?? props.source.fallbackIcon ?? FolderOpen
+  }
+  return FolderOpen
+})
 
 /* ----- 文件选择 ----- */
 function triggerFilePicker(): void {
@@ -141,6 +172,33 @@ function onMouseLeave(): void {
   hovered.value = false
   emit('hover', false)
 }
+
+/**
+ * REQ-UI-008：图片 onerror 回退。
+ * 当 <img> 加载失败（404 / CORS / base64 损坏）时切到文字头像。
+ * 文字头像使用 props.name 首字符；色与 default 模式一致（bg-tertiary + 图标色）。
+ */
+function onImageError(): void {
+  if (imageFailed.value) return
+  imageFailed.value = true
+  emit('error', {
+    code: 'load_failed',
+    message: '图片加载失败，已回退为文字头像',
+    fallback: true,
+  })
+}
+
+/**
+ * REQ-UI-008：图片 src 变化时清空错误状态，
+ * 避免用户换图片后一直停留在文字头像。
+ * （v-for key 与 source 整体切换时由父组件复位也能命中）
+ */
+watch(
+  () => (props.source.type === 'image' ? props.source.src : null),
+  () => {
+    imageFailed.value = false
+  },
+)
 </script>
 
 <template>
@@ -168,13 +226,24 @@ function onMouseLeave(): void {
     @mouseenter="onMouseEnter"
     @mouseleave="onMouseLeave"
   >
-    <!-- image 模式 -->
+    <!-- image 模式（REQ-UI-008：加载失败回退为文字头像） -->
     <img
-      v-if="source.type === 'image'"
+      v-if="source.type === 'image' && !imageFailed"
       class="ip-avatar__image"
       :src="source.src"
       :alt="source.alt ?? ''"
+      @error="onImageError"
     >
+
+    <!-- REQ-UI-008：image 加载失败后的文字回退。
+         复用 initials 样式但颜色与 default 一致（bg-tertiary + text-primary）。
+         使用 name prop 首字符，空时回退 '?'。 -->
+    <span
+      v-else-if="source.type === 'image' && imageFailed"
+      class="ip-avatar__initials ip-avatar__initials--fallback"
+      :style="{ fontSize: `${textFontSize}px` }"
+      :aria-label="`${source.alt ?? '头像'}（加载失败回退）`"
+    >{{ fallbackInitial }}</span>
 
     <!-- icon 模式 -->
     <component
@@ -200,7 +269,7 @@ function onMouseLeave(): void {
 
     <!-- default 模式 -->
     <component
-      :is="source.icon ?? source.fallbackIcon ?? FolderOpen"
+      :is="defaultIcon"
       v-else
       class="ip-avatar__icon"
       :size="innerSize"
@@ -253,6 +322,18 @@ function onMouseLeave(): void {
       aria-hidden="true"
       @change="onFileChange"
     >
+
+    <!--
+      REQ-UI-008A：在线状态指示点（右下角）。
+      只在传入 status 时渲染：绿（online）/ 灰（offline）/ 红（busy）。
+      指示点比 ✕ 移除按钮高一层级，避免被遮住。
+    -->
+    <span
+      v-if="props.status"
+      :class="['ip-avatar__status', `ip-avatar__status--${props.status}`]"
+      role="status"
+      :aria-label="`当前状态：${props.status}`"
+    />
   </div>
 </template>
 
@@ -483,4 +564,36 @@ function onMouseLeave(): void {
   pointer-events: none;
   /* keep keyboard focusable via root tabindex=0; hidden input 仅用于 click 触发 */
 }
+
+/* ============================================================
+ * REQ-UI-008：图片 onerror 回退时使用的文字
+ * 与 default 模式颜色一致；不沾 user 的 bgColor。
+ * ============================================================ */
+.ip-avatar__initials--fallback {
+  background: inherit;
+  color: var(--ip-color-text-secondary);
+}
+
+/* ============================================================
+ * REQ-UI-008A：在线状态指示点
+ * 25% 直径、最小 8px，绝对定位右下角 -1px 偏移，
+ * 加 2px 背景色描边以和底色容器区分。
+ * ============================================================ */
+.ip-avatar__status {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  display: inline-block;
+  width: 25%;
+  min-width: 8px;
+  aspect-ratio: 1 / 1;
+  border-radius: 50%;
+  border: 2px solid var(--ip-color-bg-secondary);
+  z-index: 2;
+  pointer-events: none;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.04);
+}
+.ip-avatar__status--online  { background: var(--ip-success-base); }
+.ip-avatar__status--offline { background: var(--ip-color-text-quaternary, #9ca3af); }
+.ip-avatar__status--busy    { background: var(--ip-danger-base); }
 </style>

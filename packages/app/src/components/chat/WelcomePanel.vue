@@ -218,8 +218,8 @@ function handleCreateAgent(): void {
       <!-- 输入区（复用 WelcomeInput） -->
       <div class="welcome-input-wrapper">
         <WelcomeInput
-          :agentName="agentName"
-          :modelName="modelName"
+          :agent-name="agentName"
+          :model-name="modelName"
           @send="handleSend"
           @stop="handleStop"
         />

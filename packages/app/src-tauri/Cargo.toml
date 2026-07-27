@@ -63,6 +63,18 @@ async-trait = "0.1"
 # 既规避了"密码必须 32 字节"的 footgun，也与 stronghold 文档推荐做法一致。
 blake2 = { version = "0.10", features = ["std"] }
 
+# === memory_store 加密（XChaCha20-Poly1305，REQ-CHAT-048）===
+# `memory_store.content_encrypted` 列使用 XChaCha20-Poly1305：
+#   - key 派生自 blake2b256(DEFAULT_PASSPHRASE || MEMORY_KEY_DOMAIN)
+#   - nonce 每次 encrypt 用 OsRng 生成 24 字节随机值并前置到密文
+#   - Poly1305 tag 由 AEAD 自动追加到 ciphertext 末尾（16 字节固定）
+#
+# `chacha20poly1305 0.10.1` 已是 `iota_stronghold` 的传递依赖；显式声明为
+# 直接依赖以拿到清晰语义版本，避免上游 transitive 漂移时无声 break。
+chacha20poly1305 = "0.10"
+# `OsRng` 在 rand 0.8 需 `getrandom` feature（默认 features 不含）。
+rand = { version = "0.8", features = ["getrandom"] }
+
 # === Base64 编解码（P2-2 图片尺寸校验）===
 # 用于把客户端上传的 base64 编码图片解码为原始字节以校验大小。
 # reqwest 0.12 已传递依赖 0.22，这里显式声明避免版本漂移。
