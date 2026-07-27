@@ -375,9 +375,9 @@ function onDrop(e: DragEvent): void {
     <!-- 三态二-a：有 Agent 无会话 → WelcomePanel（品牌化欢迎页，Wave 2） -->
     <WelcomePanel
       v-else-if="hasAgent && !hasConversation"
-      :agentName="agentsStore.current?.name ?? ''"
-      :modelName="agentsStore.current?.model ?? ''"
-      :agentMeta="currentAgentMeta"
+      :agent-name="agentsStore.current?.name ?? ''"
+      :model-name="agentsStore.current?.model ?? ''"
+      :agent-meta="currentAgentMeta"
       @send="onSend"
       @stop="onStop"
       @use-prompt="onUsePrompt"

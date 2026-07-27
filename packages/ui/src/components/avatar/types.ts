@@ -14,6 +14,13 @@ export type AvatarShape = 'circle' | 'rounded'
 export type AvatarSize = 'xs' | 'sm' | 'md' | 'lg' | 'xl' | 'xxl'
 
 /**
+ * REQ-UI-008A：在线状态指示。
+ * online  = 绿点；offline = 灰点；busy = 红点
+ * 不传时根节点不渲染任何状态指示点。
+ */
+export type AvatarStatus = 'online' | 'offline' | 'busy'
+
+/**
  * 内容源（受控）。
  * 由父组件决定渲染哪种模式，本组件只根据 type 渲染对应结构。
  */
@@ -64,6 +71,18 @@ export interface AvatarProps {
 
   /** 自定义根节点 aria-label（默认根据 source.type 推断） */
   ariaLabel?: string
+
+  /**
+   * REQ-UI-008：图片加载失败（onerror）回退到的名称。
+   * 仅对 source.type='image' 生效：图片 URL 加载失败时，自动回退为使用 `name` 首字符渲染的文字头像。
+   */
+  name?: string
+
+  /**
+   * REQ-UI-008A：头像在线状态指示点。
+   * 'online' | 'offline' | 'busy'，不传时根节点不渲染指示点。
+   */
+  status?: AvatarStatus
 }
 
 export interface AvatarEmits {
@@ -81,4 +100,7 @@ export interface AvatarEmits {
 
   /** uploadable hover / focus 状态（用于内部覆盖层显示控制，外部一般不用） */
   (e: 'hover', hovered: boolean): void
+
+  /** REQ-UI-008：图片加载失败时触发 */
+  (e: 'error', payload: { code: 'load_failed'; message: string; fallback: true }): void
 }

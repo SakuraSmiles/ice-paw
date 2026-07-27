@@ -13,10 +13,16 @@
  *  - direction/vertical/reverse 三者优先级(规范 §2.4.5):reverse > vertical > direction
  *  - 数字 flex 简写:flex=1 → "1 1 0%"
  *  - 分隔符 aria-hidden=true(规范 §2.5.3)
+ *  - REQ-UI-004:`gap` 是 `size` 的别名,优先 `gap`;非法值 console.warn
+ *  - REQ-UI-004A:`breakpoints` + ResizeObserver 动态调整
  */
-import { Comment, Fragment, Text, computed, useSlots } from 'vue'
+import { Comment, Fragment, Text, computed, onBeforeUnmount, ref, useSlots, watch } from 'vue'
 import type { VNode } from 'vue'
-import type { FlexProps, SpaceSize } from './types'
+import type {
+  FlexBreakpoint,
+  FlexProps,
+  SpaceSize,
+} from './types'
 import { resolveSpaceSize } from '../shared/space-size'
 
 /* ============================================================
@@ -29,6 +35,7 @@ const props = withDefaults(defineProps<FlexProps>(), {
   align: undefined,
   justify: 'start',
   size: 'md',
+  gap: undefined,
   rowGap: undefined,
   colGap: undefined,
   wrap: false,
@@ -37,6 +44,7 @@ const props = withDefaults(defineProps<FlexProps>(), {
   separator: false,
   flex: undefined,
   as: 'div',
+  breakpoints: undefined,
 })
 
 const slots = useSlots()
@@ -104,18 +112,198 @@ function getChildKey(node: VNode, index: number): string | number {
 }
 
 /* ============================================================
+ * REQ-UI-004:`size` / `gap` 合并 + 非法值 warn
+ *   - `gap` 是 `size` 的语义别名,两者等价;同时传入时 `gap` 优先
+ *   - 非法值(undefined 之外的非 SpaceSize / 非二元组)→ console.warn
+ * ============================================================ */
+
+/**
+ * 校验 size/gap 的合法性:
+ *  - undefined → 合法(未传)
+ *  - number → 合法
+ *  - string → 合法(SpaceSize 预设 或 任意 CSS 字符串)
+ *  - [SpaceSize, SpaceSize] 元组 → 合法
+ *  - 其它 → 非法
+ */
+function isValidSizeLike(v: unknown): boolean {
+  if (v === undefined || v === null) return true
+  if (typeof v === 'number') return true
+  if (typeof v === 'string') return true
+  if (Array.isArray(v) && v.length === 2) {
+    return v.every((item) => typeof item === 'number' || typeof item === 'string')
+  }
+  return false
+}
+
+/** 运行时合并:`gap` 优先,非法值 console.warn */
+const effectiveSizeProp = computed<FlexProps['size']>(() => {
+  const gap = props.gap
+  const size = props.size
+  if (gap !== undefined) {
+    if (!isValidSizeLike(gap)) {
+      if (import.meta.env && import.meta.env.DEV) {
+        console.warn(
+          `[IcePaw IpFlex] gap=${JSON.stringify(gap)} 非法;` +
+            `应为 SpaceSize('xs'|'sm'|'md'|'lg'|'xl'|number)或 [SpaceSize, SpaceSize]。已忽略。`,
+        )
+      }
+      return size
+    }
+    return gap
+  }
+  if (size !== undefined && !isValidSizeLike(size)) {
+    if (import.meta.env && import.meta.env.DEV) {
+      console.warn(
+        `[IcePaw IpFlex] size=${JSON.stringify(size)} 非法;` +
+          `应为 SpaceSize('xs'|'sm'|'md'|'lg'|'xl'|number)或 [SpaceSize, SpaceSize]。已忽略。`,
+      )
+    }
+    return undefined
+  }
+  return size
+})
+
+/* ============================================================
+ * REQ-UI-004A:breakpoints 排序与激活
+ *   - 收集所有断点配置,按 width 升序排序
+ *   - 容器宽度 >= 断点 width 时,该断点"生效"
+ *   - 选取"宽度最大且 <= 容器宽度"的断点;若均不满足,使用基础 props
+ *   - 字段级覆盖:断点中未提供的字段使用基础 props
+ * ============================================================ */
+
+/**
+ * 排序后的断点列表(按 width 升序);空数组表示未启用 breakpoints
+ */
+const sortedBreakpoints = computed<Array<[string, FlexBreakpoint & { width: number }]>>(() => {
+  const bp = props.breakpoints
+  if (!bp || typeof bp !== 'object') return []
+  const list: Array<[string, FlexBreakpoint & { width: number }]> = []
+  for (const [key, value] of Object.entries(bp)) {
+    if (!value || typeof value !== 'object') continue
+    const w = typeof value.width === 'number' && Number.isFinite(value.width) ? value.width : 0
+    list.push([key, { ...value, width: w }])
+  }
+  list.sort((a, b) => a[1].width - b[1].width)
+  return list
+})
+
+/** 容器宽度(由 ResizeObserver 实时更新) */
+const containerWidth = ref<number>(0)
+/** 容器 ref */
+const containerRef = ref<HTMLElement | null>(null)
+
+/**
+ * 当前激活的断点 key(用于渲染调试);null 表示未匹配任何断点
+ */
+const activeBreakpointKey = computed<string | null>(() => {
+  const list = sortedBreakpoints.value
+  if (list.length === 0 || containerWidth.value === 0) return null
+  let key: string | null = null
+  for (const [k, bp] of list) {
+    if (containerWidth.value >= bp.width) key = k
+  }
+  return key
+})
+
+/** 当前激活断点的覆盖配置(可能为 null) */
+const activeBreakpoint = computed<FlexBreakpoint | null>(() => {
+  const k = activeBreakpointKey.value
+  if (!k) return null
+  const list = sortedBreakpoints.value
+  const found = list.find(([key]) => key === k)
+  return found ? found[1] : null
+})
+
+/* ============================================================
+ * ResizeObserver 监听容器宽度
+ * ============================================================ */
+let ro: ResizeObserver | null = null
+
+function initObserver(el: HTMLElement | null): void {
+  if (ro) {
+    ro.disconnect()
+    ro = null
+  }
+  if (!el) return
+  if (typeof ResizeObserver === 'undefined') return
+  // 首次同步当前宽度
+  containerWidth.value = el.clientWidth || el.getBoundingClientRect().width || 0
+  ro = new ResizeObserver((entries) => {
+    for (const entry of entries) {
+      const w = entry.contentRect?.width ?? 0
+      if (w > 0) containerWidth.value = w
+    }
+  })
+  ro.observe(el)
+}
+
+onBeforeUnmount(() => {
+  if (ro) {
+    ro.disconnect()
+    ro = null
+  }
+})
+
+// 响应容器 ref 变化(模板中的 ref) 与 breakpoints 启用状态
+watch(
+  [containerRef, () => props.breakpoints],
+  ([el]) => {
+    if (!props.breakpoints || Object.keys(props.breakpoints).length === 0) {
+      if (ro) {
+        ro.disconnect()
+        ro = null
+      }
+      containerWidth.value = 0
+      return
+    }
+    initObserver(el as HTMLElement | null)
+  },
+  { immediate: true, flush: 'post' },
+)
+
+/* ============================================================
  * 派生样式
  * ============================================================ */
 
 /**
- * gap 样式(规范 §2.4.3)
+ * gap 样式(规范 §2.4.3 + REQ-UI-004 + REQ-UI-004A)
  * 优先级 1:rowGap / colGap 单独覆盖
  * 优先级 2:size 数组形式 [row, col]
- * 优先级 3:size 单一值
+ * 优先级 3:size / gap 单一值
+ *
+ * 断点覆盖:断点中提供的 gap/rowGap/colGap 单独覆盖
  */
 const gapStyle = computed<Record<string, string>>(() => {
   const styles: Record<string, string> = {}
 
+  // 断点覆盖(优先级最高,在基础 rowGap/colGap 之上)
+  const bp = activeBreakpoint.value
+  if (bp) {
+    if (bp.rowGap !== undefined || bp.colGap !== undefined) {
+      const row = resolveGapValue(bp.rowGap)
+      const col = resolveGapValue(bp.colGap)
+      if (row !== undefined) styles.rowGap = row
+      if (col !== undefined) styles.columnGap = col
+      return styles
+    }
+    if (bp.gap !== undefined) {
+      const single = resolveGapValue(bp.gap as SpaceSize)
+      if (single !== undefined) {
+        styles.gap = single
+        return styles
+      }
+      if (Array.isArray(bp.gap)) {
+        const [row, col] = bp.gap as [SpaceSize, SpaceSize]
+        const r = resolveGapValue(row)
+        const c = resolveGapValue(col)
+        if (r !== undefined) styles.rowGap = r
+        if (c !== undefined) styles.columnGap = c
+        return styles
+      }
+    }
+  }
+
+  // 基础 rowGap / colGap 单独覆盖
   if (props.rowGap !== undefined || props.colGap !== undefined) {
     const row = resolveGapValue(props.rowGap)
     const col = resolveGapValue(props.colGap)
@@ -124,8 +312,10 @@ const gapStyle = computed<Record<string, string>>(() => {
     return styles
   }
 
-  if (Array.isArray(props.size)) {
-    const [row, col] = props.size as [SpaceSize, SpaceSize]
+  // size / gap 二元组形式
+  const sizeVal = effectiveSizeProp.value
+  if (Array.isArray(sizeVal)) {
+    const [row, col] = sizeVal as [SpaceSize, SpaceSize]
     const r = resolveGapValue(row)
     const c = resolveGapValue(col)
     if (r !== undefined) styles.rowGap = r
@@ -133,18 +323,21 @@ const gapStyle = computed<Record<string, string>>(() => {
     return styles
   }
 
-  const single = resolveGapValue(props.size as SpaceSize)
+  // size / gap 单一值
+  const single = resolveGapValue(sizeVal as SpaceSize)
   if (single !== undefined) styles.gap = single
   return styles
 })
 
 /**
- * flex 自身属性 + align/justify 样式(规范 §2.4.4)
+ * flex 自身属性 + align/justify 样式(规范 §2.4.4 + REQ-UI-004A)
  *  - 数字 flex 简写:flex=1 → '1 1 0%'
  *  - align 接受预设别名或任意 CSS 值
+ *  - 断点中提供的字段优先于基础 props
  */
 const flexStyle = computed<Record<string, string>>(() => {
   const styles: Record<string, string> = {}
+  const bp = activeBreakpoint.value
 
   if (props.flex !== undefined) {
     styles.flex = typeof props.flex === 'number'
@@ -152,27 +345,38 @@ const flexStyle = computed<Record<string, string>>(() => {
       : props.flex
   }
 
-  if (props.align) {
-    const mapped = ALIGN_MAP[props.align]
-    styles.alignItems = mapped ?? props.align
+  const align = bp?.align ?? props.align
+  if (align) {
+    const mapped = ALIGN_MAP[align]
+    styles.alignItems = mapped ?? align
   }
 
-  if (props.justify) {
-    const mapped = JUSTIFY_MAP[props.justify]
-    styles.justifyContent = mapped ?? props.justify
+  const justify = bp?.justify ?? props.justify
+  if (justify) {
+    const mapped = JUSTIFY_MAP[justify]
+    styles.justifyContent = mapped ?? justify
   }
 
   return styles
 })
 
 /* ============================================================
- * direction / vertical / reverse 三者优先级(规范 §2.4.5)
+ * direction / vertical / reverse 三者优先级(规范 §2.4.5 + REQ-UI-004A)
  *   reverse > vertical > direction
+ *   断点 direction / reverse 优先
  * ============================================================ */
 
-const resolvedDirection = computed<FlexProps['direction']>(() => {
+/** 断点级 reverse,未提供则使用基础 reverse */
+const effectiveReverse = computed<boolean>(() => {
+  const bp = activeBreakpoint.value
+  if (bp && bp.reverse !== undefined) return bp.reverse
+  return props.reverse
+})
+
+/** 断点级 direction;基础 props 中 vertical 别名优先 */
+const baseDirection = computed<FlexProps['direction']>(() => {
   // 1. direction 显式设置为非默认值(非 'row')时直接返回
-  if (props.direction !== 'row' || props.vertical || props.reverse) {
+  if (props.direction !== 'row' || props.vertical || effectiveReverse.value) {
     if (props.direction !== 'row') return props.direction
   }
   // 2. vertical 别名
@@ -181,9 +385,15 @@ const resolvedDirection = computed<FlexProps['direction']>(() => {
   return 'row'
 })
 
+const resolvedDirection = computed<FlexProps['direction']>(() => {
+  const bp = activeBreakpoint.value
+  if (bp && bp.direction !== undefined) return bp.direction
+  return baseDirection.value
+})
+
 const finalDirection = computed<FlexProps['direction']>(() => {
   const base = resolvedDirection.value
-  if (!props.reverse) return base
+  if (!effectiveReverse.value) return base
   // reverse 叠加 / 反转
   if (base === 'row') return 'row-reverse'
   if (base === 'column') return 'column-reverse'
@@ -191,16 +401,28 @@ const finalDirection = computed<FlexProps['direction']>(() => {
 })
 
 /* ============================================================
- * wrap 解析(规范 §2.3)
+ * wrap 解析(规范 §2.3 + REQ-UI-004A)
  *   boolean: true → 'wrap', false → 'nowrap'
  *   字符串: 原样使用
+ *   断点 wrap 覆盖
  * ============================================================ */
 
 const wrapValue = computed<string>(() => {
-  if (typeof props.wrap === 'boolean') {
-    return props.wrap ? 'wrap' : 'nowrap'
+  const bp = activeBreakpoint.value
+  const w = bp?.wrap !== undefined ? bp.wrap : props.wrap
+  if (typeof w === 'boolean') {
+    return w ? 'wrap' : 'nowrap'
   }
-  return props.wrap
+  return w
+})
+
+/* ============================================================
+ * inline(规范 §2.3 + REQ-UI-004A)
+ * ============================================================ */
+const isInline = computed<boolean>(() => {
+  const bp = activeBreakpoint.value
+  if (bp && bp.inline !== undefined) return bp.inline
+  return props.inline
 })
 
 /* ============================================================
@@ -209,7 +431,7 @@ const wrapValue = computed<string>(() => {
 
 const rootClass = computed<string[]>(() => {
   const list: string[] = ['ip-flex']
-  if (props.inline) list.push('ip-flex--inline')
+  if (isInline.value) list.push('ip-flex--inline')
 
   // direction 修饰类
   switch (finalDirection.value) {
@@ -342,6 +564,7 @@ if (import.meta.env && import.meta.env.DEV) {
   <component
     :is="as"
     v-if="!hasSeparator"
+    ref="containerRef"
     :class="rootClass"
     :style="rootStyle"
   >
@@ -352,6 +575,7 @@ if (import.meta.env && import.meta.env.DEV) {
   <component
     :is="as"
     v-else
+    ref="containerRef"
     :class="rootClass"
     :style="rootStyle"
   >

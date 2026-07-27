@@ -58,6 +58,12 @@ export interface Agent {
   enabled_tools?: string[] | null;
   /** 是否支持图片输入 */
   supports_vision?: boolean;
+  /** M2-1: Embedding 模型名称 */
+  embedding_model?: string | null;
+  /** M2-1: Agent 描述 */
+  description?: string;
+  /** M2-1: Agent 头像 */
+  avatar?: string | null;
   created_at: string;
   updated_at: string;
   has_api_key: boolean;
@@ -628,11 +634,30 @@ export interface ProjectPatch {
 // ============================================================================
 
 export interface UserPreferences {
-  default_agent_id?: string;
-  default_template_id?: string;
+  /** 默认 Agent ID（null/undefined = 「自动（第一个）」） */
+  default_agent_id?: string | null;
+  /** 默认模板 ID（null/undefined = 「无模板」） */
+  default_template_id?: string | null;
+  /** 启动动作（"chat" | "settings" | ...） */
   on_startup?: string;
+  /** 语言（如 "zh-CN" / "en-US"） */
   language?: string;
+  /** 主题（"light" | "dark" | "system"） */
   theme?: string;
+  /** 代码主题（如 "auto" / "github-dark" ...） */
   code_theme?: string;
+  /** 字体大小（px） */
   font_size?: number;
+  /** 默认 provider（null/undefined = 「未配置」） */
+  default_provider?: string | null;
+  /** 发送快捷键（"enter" | "ctrl_enter"） */
+  send_shortcut?: string | null;
+  /** 是否自动滚动到底部 */
+  auto_scroll?: boolean | null;
+  /** 是否自动渲染 Markdown */
+  auto_render?: boolean | null;
+  /** 是否显示消息时间戳 */
+  auto_timestamp?: boolean | null;
+  /** 自定义快捷键映射（覆盖默认值） */
+  keyboard_shortcuts?: Record<string, string> | null;
 }

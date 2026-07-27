@@ -26,6 +26,12 @@ export interface IconPickerProps {
 
   /** 禁用 */
   disabled?: boolean
+
+  /**
+   * REQ-UI-009A：每页图标数量。默认 24。
+   * 总量不足一页时不展示分页控件。
+   */
+  pageSize?: number
 }
 
 export interface IconPickerEmits {

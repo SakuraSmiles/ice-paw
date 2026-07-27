@@ -119,7 +119,7 @@ async fn anthropic_normal_text_stream_collects_expected() {
     let cancel = CancellationToken::new();
 
     let stream = adapter
-        .stream_chat("test-key", make_messages(), None, 0.7, 1024, cancel)
+        .stream_chat("test-key", make_messages(), None, 0.7, 1024, None, cancel)
         .await
         .expect("stream_chat should succeed");
 
@@ -164,7 +164,7 @@ async fn anthropic_mixed_tool_use_only_collects_text() {
     let cancel = CancellationToken::new();
 
     let stream = adapter
-        .stream_chat("test-key", make_messages(), None, 0.7, 1024, cancel)
+        .stream_chat("test-key", make_messages(), None, 0.7, 1024, None, cancel)
         .await
         .expect("stream_chat should succeed");
 
@@ -201,7 +201,7 @@ async fn anthropic_error_event_returns_llm_error() {
     let cancel = CancellationToken::new();
 
     let stream = adapter
-        .stream_chat("test-key", make_messages(), None, 0.7, 1024, cancel)
+        .stream_chat("test-key", make_messages(), None, 0.7, 1024, None, cancel)
         .await
         .expect("stream_chat should succeed");
 
@@ -257,7 +257,7 @@ async fn anthropic_tool_use_produces_tool_call_events() {
     let cancel = CancellationToken::new();
 
     let stream = adapter
-        .stream_chat("test-key", make_messages(), None, 0.7, 1024, cancel)
+        .stream_chat("test-key", make_messages(), None, 0.7, 1024, None, cancel)
         .await
         .expect("stream_chat should succeed");
 
@@ -313,7 +313,7 @@ async fn anthropic_tool_use_delta_not_in_text() {
     let cancel = CancellationToken::new();
 
     let stream = adapter
-        .stream_chat("test-key", make_messages(), None, 0.7, 1024, cancel)
+        .stream_chat("test-key", make_messages(), None, 0.7, 1024, None, cancel)
         .await
         .expect("stream_chat should succeed");
 
@@ -379,7 +379,7 @@ async fn anthropic_usage_event_from_stream() {
     let cancel = CancellationToken::new();
 
     let stream = adapter
-        .stream_chat("test-key", make_messages(), None, 0.7, 1024, cancel)
+        .stream_chat("test-key", make_messages(), None, 0.7, 1024, None, cancel)
         .await
         .expect("stream_chat should succeed");
 

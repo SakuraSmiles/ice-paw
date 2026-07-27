@@ -1,29 +1,17 @@
-/**
- * useToast — 全局 Toast composable
- *
- * 规范：icepaw-design-system.md §2.6
- * - 位置：top-right（默认）
- * - 最多同时显示 3 个
- * - 同类型合并策略（v1.0.1）：
- *   - 内容替换（message / title）
- *   - 重置 duration
- *   - 保留原 ID（避免动画闪烁）
- *   - 重启计时器
- * - 悬停暂停（v1.0 §6.7）：记录 remaining 与 pausedAt
- */
-
 import { inject, provide, ref, type Ref } from 'vue'
 import { ToastApiKey, type ToastApi, type ToastInstance, type ToastOptions, type ToastType } from './types'
 
-const MAX_VISIBLE = 3
+/** REQ-UI-006C：最大同时可见 toast 数（v4: 3 → 5） */
+const MAX_VISIBLE = 5
 
-/* 默认 duration 按类型 */
+/* 默认 duration 按类型；REQ-UI-006B: loading 用 Infinity（永不自动关闭） */
 function defaultDuration(type: ToastType): number {
   switch (type) {
     case 'success': return 3000
     case 'info':    return 3000
     case 'warning': return 5000
     case 'error':   return 8000
+    case 'loading': return Number.POSITIVE_INFINITY
     default:        return 3000
   }
 }
@@ -33,10 +21,6 @@ function nanoid(): string {
   return `t-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
 }
 
-/**
- * 创建一个新的 Toast API（用于 app 顶层 provide）。
- * 通常在 app 入口 createApp().provide(...) 一次即可。
- */
 export function createToastApi(): ToastApi {
   const toasts: Ref<ToastInstance[]> = ref<ToastInstance[]>([])
   const timers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -46,7 +30,11 @@ export function createToastApi(): ToastApi {
       clearTimeout(timers.get(t.id)!)
       timers.delete(t.id)
     }
-    if (duration > 0) {
+    /*
+     * REQ-UI-006B：loading 类型用 Infinity 表示永不自动关闭。
+     * Infinity 不是有限正数，必须跳过定时器（否则 setTimeout(fn, Infinity) 立即触发）。
+     */
+    if (Number.isFinite(duration) && duration > 0) {
       const handle = setTimeout(() => {
         remove(t.id)
       }, duration)
@@ -80,7 +68,6 @@ export function createToastApi(): ToastApi {
         existing.createdAt = Date.now()
         existing.isMerging = true
         existing.pausedAt = null
-        // 150ms 后清除 merging 标记（§6.6）
         setTimeout(() => {
           existing.isMerging = false
         }, 150)
@@ -89,7 +76,7 @@ export function createToastApi(): ToastApi {
       }
     }
 
-    /* 添加新 toast，超过 3 个时挤掉最早的 */
+    /* REQ-UI-006C：超过 5 个时挤掉最早的 */
     if (toasts.value.length >= MAX_VISIBLE) {
       const removed = toasts.value.shift()
       if (removed) remove(removed.id)
@@ -131,7 +118,6 @@ export function createToastApi(): ToastApi {
     timers.clear()
   }
 
-  /* 悬停暂停 / 恢复（§6.7） */
   function pause(id: string): void {
     const t = toasts.value.find((x) => x.id === id)
     if (!t || t.pausedAt) return
@@ -159,6 +145,53 @@ export function createToastApi(): ToastApi {
       push({ type, message, ...(opts ?? {}) })
   }
 
+  /**
+   * REQ-UI-006B：loading 类型快捷方法。
+   * 默认 closable=false；不自动消失。
+   * 返回 toast 实例，可用于后续 toast.update(id, ...) 更新为成功/失败。
+   */
+  function loading(message: string, opts?: Partial<ToastOptions>): ToastInstance {
+    return push({
+      type: 'loading',
+      message,
+      closable: false,
+      ...opts,
+    })
+  }
+
+  /**
+   * REQ-UI-006B：按 id 原地更新已有 toast 的部分字段。
+   * 典型场景：loading → success（请求完成）/ loading → error（请求失败）。
+   * 若 id 不存在，返回 undefined。
+   */
+  function update(
+    id: string,
+    patch: Partial<Pick<ToastOptions, 'type' | 'title' | 'message' | 'duration' | 'closable' | 'mergeable'>>,
+  ): ToastInstance | undefined {
+    const t = toasts.value.find((x) => x.id === id)
+    if (!t) return undefined
+    if (patch.type !== undefined) t.type = patch.type
+    if (patch.title !== undefined) t.title = patch.title
+    if (patch.message !== undefined) t.message = patch.message
+    if (patch.closable !== undefined) t.closable = patch.closable
+    if (patch.mergeable !== undefined) t.mergeable = patch.mergeable
+    if (patch.duration !== undefined) t.duration = patch.duration
+    /* 切换 type 涉及到 duration 变更时重置定时器 */
+    const newDur = patch.duration ?? defaultDuration(t.type)
+    if (patch.type !== undefined || patch.duration !== undefined) {
+      t.duration = newDur
+      t.remaining = newDur
+      t.createdAt = Date.now()
+      t.isMerging = true
+      t.pausedAt = null
+      setTimeout(() => {
+        t.isMerging = false
+      }, 150)
+      resetTimer(t, newDur)
+    }
+    return t
+  }
+
   return {
     toasts,
     push,
@@ -170,25 +203,17 @@ export function createToastApi(): ToastApi {
     error:   make('error'),
     warning: make('warning'),
     info:    make('info'),
+    loading,
+    update,
   }
 }
 
-/**
- * 在组件中取 Toast API。
- * 优先取 inject（由 provider 共享），否则创建一个本地实例（独立、单组件作用域）。
- */
 export function useToast(): ToastApi {
   const existing = inject(ToastApiKey, null)
   if (existing) return existing
   return createToastApi()
 }
 
-/**
- * 在 app 顶层注册 Toast API（provide）。
- * 用法（在 main.ts / App.vue 里）：
- *   const toast = provideToast()
- *   // 不需要组件树共享时，可直接 push
- */
 export function provideToast(): ToastApi {
   const api = createToastApi()
   provide(ToastApiKey, api)
