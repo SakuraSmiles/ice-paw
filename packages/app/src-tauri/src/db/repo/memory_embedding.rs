@@ -49,7 +49,7 @@ pub fn encode_embedding(embedding: &[f32]) -> Vec<u8> {
 /// - 字节数不是 4 的倍数 → 返回 `AppError::Validation`（损坏数据）
 /// - 空 BLOB → 返回空 `Vec<f32>`
 pub fn decode_embedding(bytes: &[u8]) -> AppResult<Vec<f32>> {
-    if bytes.len() % 4 != 0 {
+    if !bytes.len().is_multiple_of(4) {
         return Err(AppError::Validation(
             format!(
                 "embedding BLOB 长度 {} 不是 4 的倍数（损坏数据）",
