@@ -11,7 +11,7 @@ env:
 
 jobs:
   backend:
-    name: Rust check · test · clippy
+    name: Rust check, test, clippy
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -36,7 +36,7 @@ jobs:
           restore-keys: |
             cargo-${{ runner.os }}-
 
-      - name: Install system dependencies (Tauri)
+      - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
@@ -44,29 +44,29 @@ jobs:
       - name: cargo check
         run: cargo check
 
-      - name: cargo test (lib)
+      - name: cargo test - lib
         run: cargo test --lib
 
-      - name: cargo test (integration: provider)
+      - name: cargo test - provider
         run: cargo test --test provider_test
 
-      - name: cargo test (integration: message_repo)
+      - name: cargo test - message_repo
         run: cargo test --test message_repo_test
 
-      - name: cargo test (integration: memory_e2e)
+      - name: cargo test - memory_e2e
         run: cargo test --test memory_e2e
 
-      - name: cargo test (integration: template_repo)
+      - name: cargo test - template_repo
         run: cargo test --test template_repo_test
 
       - name: cargo clippy
-        run: cargo clippy --lib -- -D warnings
+        run: "cargo clippy --lib -- -D warnings"
 
-      - name: cargo clippy (tests)
-        run: cargo clippy --tests -- -D warnings
+      - name: cargo clippy - tests
+        run: "cargo clippy --tests -- -D warnings"
 
   frontend:
-    name: Frontend typecheck · lint · build
+    name: Frontend typecheck, lint, build
     runs-on: ubuntu-latest
 
     steps:
@@ -84,8 +84,8 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build @ice-paw/ui (dependency)
-        run: pnpm --filter @ice-paw/ui build
+      - name: Build @ice-paw/ui
+        run: "pnpm --filter @ice-paw/ui build"
 
       - name: Typecheck
         run: pnpm run typecheck
