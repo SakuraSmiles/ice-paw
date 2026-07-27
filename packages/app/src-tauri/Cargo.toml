@@ -89,6 +89,13 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 [profile.dev.package.scrypt]
 opt-level = 3
 
+[profile.ci]
+inherits = "test"
+debug = 0
+strip = true
+lto = "thin"
+codegen-units = 1
+
 [profile.release]
 panic = "abort"
 codegen-units = 1
