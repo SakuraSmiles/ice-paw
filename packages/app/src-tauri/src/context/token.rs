@@ -191,7 +191,7 @@ mod tests {
         // 从尾部累加：累计到 >= 28_000 tokens 且 keep_count >= 20 时 break
         let long_text = "a".repeat(3996); // 3996/4 = 999 tokens，加上前缀约 1000
         let v: Vec<ChatMessage> = (0..40)
-            .map(|_| ChatMessage::from_text("user", format!("{long_text}")))
+            .map(|_| ChatMessage::from_text("user", long_text.to_string()))
             .collect();
         let budget = ContextBudget::default();
         let split = compute_split_idx(&v, &budget);
