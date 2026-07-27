@@ -65,16 +65,28 @@ function onSecondary(ev: MouseEvent): void {
     :aria-label="ariaLabel ?? `${title} 空状态`"
     aria-live="polite"
   >
+    <!-- REQ-UI-007：具名 icon 插槽覆盖 props.icon -->
+    <div v-if="$slots.icon" class="ip-empty-state__icon">
+      <slot name="icon" />
+    </div>
     <component
       :is="FinalIcon"
+      v-else
       class="ip-empty-state__icon"
       :size="effectiveIconSize"
       :stroke-width="1.5"
       aria-hidden="true"
     />
 
-    <h3 v-if="title" class="ip-empty-state__title">{{ title }}</h3>
-    <p v-if="description" class="ip-empty-state__description">{{ description }}</p>
+    <!-- REQ-UI-007：具名 title 插槽覆盖 props.title -->
+    <h3 v-if="$slots.title || title" class="ip-empty-state__title">
+      <slot name="title">{{ title }}</slot>
+    </h3>
+
+    <!-- REQ-UI-007：具名 description 插槽覆盖 props.description -->
+    <p v-if="$slots.description || description" class="ip-empty-state__description">
+      <slot name="description">{{ description }}</slot>
+    </p>
 
     <div v-if="primaryAction || secondaryAction || $slots.actions" class="ip-empty-state__actions">
       <slot name="actions">

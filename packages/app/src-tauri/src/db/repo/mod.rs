@@ -5,6 +5,8 @@
 
 pub mod agent;
 pub mod conversation;
+pub mod memory_embedding;
+pub mod memory_store;
 pub mod message;
 pub mod preferences;
 pub mod project;

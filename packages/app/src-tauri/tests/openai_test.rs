@@ -55,7 +55,7 @@ async fn openai_normal_stream_collects_expected_content() {
     let cancel = CancellationToken::new();
 
     let stream = adapter
-        .stream_chat("test-key", make_messages(), None, 0.7, 1024, cancel)
+        .stream_chat("test-key", make_messages(), None, 0.7, 1024, None, cancel)
         .await
         .expect("stream_chat should succeed");
 
@@ -95,7 +95,7 @@ async fn openai_http_401_returns_llm_error() {
     let cancel = CancellationToken::new();
 
     let result = adapter
-        .stream_chat("bad-key", make_messages(), None, 0.7, 1024, cancel)
+        .stream_chat("bad-key", make_messages(), None, 0.7, 1024, None, cancel)
         .await;
 
     let err = match result {
@@ -127,7 +127,7 @@ async fn openai_truncated_stream_yields_partial_content() {
     let cancel = CancellationToken::new();
 
     let stream = adapter
-        .stream_chat("test-key", make_messages(), None, 0.7, 1024, cancel)
+        .stream_chat("test-key", make_messages(), None, 0.7, 1024, None, cancel)
         .await
         .expect("stream_chat should succeed (error happens during consumption)");
 
@@ -188,7 +188,7 @@ async fn openai_tool_calls_produces_tool_call_events() {
     let cancel = CancellationToken::new();
 
     let stream = adapter
-        .stream_chat("test-key", make_messages(), None, 0.7, 1024, cancel)
+        .stream_chat("test-key", make_messages(), None, 0.7, 1024, None, cancel)
         .await
         .expect("stream_chat should succeed");
 
@@ -243,7 +243,7 @@ async fn openai_tool_calls_delta_not_in_text() {
     let cancel = CancellationToken::new();
 
     let stream = adapter
-        .stream_chat("test-key", make_messages(), None, 0.7, 1024, cancel)
+        .stream_chat("test-key", make_messages(), None, 0.7, 1024, None, cancel)
         .await
         .expect("stream_chat should succeed");
 

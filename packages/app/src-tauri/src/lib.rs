@@ -49,6 +49,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         // 聊天全局状态（CancellationToken 注册表）
         .manage(harness::chat_state::ChatState::new())
+        // REQ-XC-010: AgentCmd trait 抽象注入
+        // （仅在 setup 阶段能拿到 pool+app handle；先在 setup 里 manage ，
+        // 生产路径注入 SqlAgentCmd，测试可在独立 binary 里换 MockAgentCmd）
+        // 这里先用占位（None 路径：交给 setup 重写）；setup 里会 overwrite。
+        .manage::<Option<std::sync::Arc<dyn commands::agent_cmd::AgentCmd>>>(None)
         // 注：原 `tauri_plugin_stronghold::Builder::new(...).build()` 注册已移除。
         //
         // 理由（参见 dev2 评审方案 §3.2）：
@@ -132,6 +137,15 @@ pub fn run() {
             auth_registry.install_listener(&handle);
             // 把注册表 manage 起来，方便后续扩展（当前主要给 setup 用）
             handle.manage(auth_registry);
+
+            // 4) REQ-XC-010: 注入 AgentCmd trait object (生产实现 SqlAgentCmd)
+            // 覆盖 builder 阶段注入的 None 占位。
+            let sql_agent_cmd: std::sync::Arc<dyn commands::agent_cmd::AgentCmd> =
+                std::sync::Arc::new(commands::agent_cmd::SqlAgentCmd::new(
+                    handle.clone(),
+                    pool.clone(),
+                ));
+            handle.manage(sql_agent_cmd);
 
             let _ = pool;
             Ok(())

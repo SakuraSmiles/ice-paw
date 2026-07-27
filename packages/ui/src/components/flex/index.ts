@@ -6,6 +6,8 @@ import type {
   FlexJustify,
   FlexWrap,
   FlexSeparator,
+  FlexBreakpoint,
+  FlexBreakpoints,
   SpaceSize,
   SizeProp,
 } from './types'
@@ -18,6 +20,8 @@ export type {
   FlexJustify,
   FlexWrap,
   FlexSeparator,
+  FlexBreakpoint,
+  FlexBreakpoints,
   SpaceSize,
   SizeProp,
 }

@@ -11,13 +11,13 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
 
-use crate::crypto;
 use crate::db::models::NewMessage;
 use crate::db::repo;
 use crate::error::{AppError, AppResult};
 use crate::infra::protocol::{
     ChatMessage, ChatRoundStatePayload, ChatStartPayload, ContentBlock, LlmProvider, SendMessageInput, validate_images,
 };
+use crate::commands::agent_cmd::AgentCmd;
 use crate::harness::budget::LoopBudget;
 use crate::harness::chat_state::{CancellationToken, ChatState};
 use crate::harness::loop_engine::LoopContext;
@@ -32,11 +32,15 @@ use crate::context::pipeline::{AssembledContext, PipelineContext, PipelineRunner
 use crate::context::history::resolve_window;
 
 /// 发送消息 — 触发 LLM 流式生成。
+///
+/// REQ-XC-010: 依赖 `Arc<dyn AgentCmd>` trait object，而非具体
+/// `SqlAgentCmd` 类型。这样可以在测试中注入 `MockAgentCmd`。
 #[tauri::command]
 pub async fn send_message(
     app: AppHandle,
     pool: State<'_, SqlitePool>,
     chat_state: State<'_, ChatState>,
+    agent_cmd: State<'_, Arc<dyn AgentCmd>>,
     input: SendMessageInput,
 ) -> AppResult<()> {
     // --- 1. 入参校验：content_blocks 优先，回退到 legacy content ---
@@ -66,7 +70,12 @@ pub async fn send_message(
 
     // --- 2. 取会话 + agent + api_key → 创建 provider ---
     let conv = repo::conversation::get_by_id(pool.inner(), &conv_id).await?;
-    let agent = repo::agent::get_by_id(pool.inner(), &conv.agent_id).await?;
+    // REQ-XC-010: 通过 AgentCmd trait 获取 agent 元数据 + 凭据
+    // 默认实现走 SqlAgentCmd → repo + crypto；Mock 实现可注入预置数据。
+    let agent_with_creds = agent_cmd.get_with_credentials(&conv.agent_id).await?;
+    let agent = agent_with_creds.agent;
+    let api_key = agent_with_creds.api_key;
+    let base_url = agent_with_creds.base_url.as_deref();
 
     // Task 4: 从 Agent 配置读取工具白名单（NULL = 全部启用）
     let agent_enabled_tools: Option<Vec<String>> = agent
@@ -74,12 +83,6 @@ pub async fn send_message(
         .as_deref()
         .map(|s| serde_json::from_str(s).unwrap_or_default());
 
-    let (api_key, vault_base_url) = crypto::fetch_api_key(&app, &agent.id)?;
-    let base_url = agent
-        .base_url
-        .as_deref()
-        .filter(|s| !s.is_empty())
-        .or(vault_base_url.as_deref());
     let llm_provider = provider::create_provider(
         &agent.provider, &agent.model, base_url, agent.cache_prompt != 0,
     )?;

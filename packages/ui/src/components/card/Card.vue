@@ -119,7 +119,13 @@ function onDblclick(ev: MouseEvent): void {
       </div>
     </header>
     <section class="ip-card__body">
-      <slot />
+      <!--
+        REQ-UI-005：Card 提供具名 `body` 插槽，便于按区块组合内容。
+        为保持向后兼容，未提供 `body` 时回退到默认插槽内容。
+      -->
+      <slot name="body">
+        <slot />
+      </slot>
     </section>
     <footer v-if="$slots.footer" class="ip-card__footer">
       <slot name="footer" />

@@ -5,9 +5,18 @@ import type {
   AvatarSource,
   AvatarShape,
   AvatarSize,
+  AvatarStatus,
   AvatarUploadError,
 } from './types'
 
 export { Avatar }
-export type { AvatarProps, AvatarEmits, AvatarSource, AvatarShape, AvatarSize, AvatarUploadError }
+export type {
+  AvatarProps,
+  AvatarEmits,
+  AvatarSource,
+  AvatarShape,
+  AvatarSize,
+  AvatarStatus,
+  AvatarUploadError,
+}
 export default Avatar

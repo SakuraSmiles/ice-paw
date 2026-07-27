@@ -74,6 +74,7 @@ export type {
   AvatarSource as IpAvatarSource,
   AvatarShape as IpAvatarShape,
   AvatarSize as IpAvatarSize,
+  AvatarStatus as IpAvatarStatus,
   AvatarUploadError as IpAvatarUploadError,
 } from './components/avatar/types'
 
@@ -92,6 +93,8 @@ export type {
   SelectEmits as IpSelectEmits,
   SelectOption as IpSelectOption,
   SelectSize as IpSelectSize,
+  SelectVariant as IpSelectVariant,
+  SelectModelValue as IpSelectModelValue,
 } from './components/select/types'
 
 export { EmptyState as IpEmptyState } from './components/empty-state'
@@ -127,6 +130,8 @@ export type {
   FlexJustify,
   FlexWrap,
   FlexSeparator,
+  FlexBreakpoint,
+  FlexBreakpoints,
   SpaceSize,
   SizeProp,
 } from './components/flex/types'

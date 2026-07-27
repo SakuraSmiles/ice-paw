@@ -39,6 +39,12 @@ pub struct AgentRow {
     pub enabled_tools: Option<String>,
     /// 是否支持图片输入（0 = 不支持, 1 = 支持）
     pub supports_vision: i32,
+    /// M2-1: Embedding 模型名称（用于语义检索 recall）
+    pub embedding_model: Option<String>,
+    /// M2-1: Agent 描述
+    pub description: String,
+    /// M2-1: Agent 头像（URL 或 base64）
+    pub avatar: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -73,6 +79,15 @@ pub struct Agent {
     /// 是否支持图片输入
     #[serde(default)]
     pub supports_vision: bool,
+    /// M2-1: Embedding 模型名称
+    #[serde(default)]
+    pub embedding_model: Option<String>,
+    /// M2-1: Agent 描述
+    #[serde(default)]
+    pub description: String,
+    /// M2-1: Agent 头像
+    #[serde(default)]
+    pub avatar: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     /// 是否已配置 API Key（前端业务提示用），对应 stronghold 中是否存在
@@ -110,6 +125,9 @@ impl From<AgentRow> for Agent {
             created_at: row.created_at,
             updated_at: row.updated_at,
             has_api_key,
+            embedding_model: row.embedding_model,
+            description: row.description,
+            avatar: row.avatar,
         }
     }
 }

@@ -47,6 +47,7 @@ use crate::harness::tool_registry::{
     ToolRegistry,
 };
 
+use super::batch_writer;
 use super::stream_consumer::{consume_stream, CollectedToolCall};
 use super::tool_executor::{execute_tool_round, ToolAuthRegistry};
 
@@ -274,8 +275,20 @@ fn synthesize_usage(
 ///
 /// A2-3: 外层 wrapper 负责在任意退出路径清空会话级授权表；
 ///       `stream_loop_inner` 才是真正的循环主体。
+///
+/// REQ-XC-004: 外层 wrapper 同时负责关闭 BatchWriter，
+///       确保所有路径（成功 / 取消 / 错误 / 超时）都能 final flush。
 pub(crate) async fn stream_loop(ctx: &mut LoopContext, observable: &mut RoundState) {
-    stream_loop_inner(ctx, observable).await;
+    let (writer, handle) = batch_writer::BatchWriter::spawn(
+        ctx.pool.clone(),
+        ctx.asst_msg_id.clone(),
+        batch_writer::DEFAULT_TICK_INTERVAL,
+    );
+    let writer_for_inner = writer.clone();
+    stream_loop_inner(ctx, observable, writer_for_inner).await;
+    // REQ-XC-004: 不论退出路径，都关闭 BatchWriter 触发 final flush
+    writer.shutdown().await;
+    let _ = handle.await;
     // A2-3: 不论正常结束 / 取消 / 错误，都清空会话级授权表
     ctx.auth_session.clear().await;
 }
@@ -330,7 +343,15 @@ pub(crate) fn should_terminate_stuck(
 }
 
 /// 流式循环主体（A2-3 后被 `stream_loop` wrapper 包裹）
-async fn stream_loop_inner(ctx: &mut LoopContext, observable: &mut RoundState) {
+///
+/// REQ-XC-004: `batch_writer` 由外层 `stream_loop` 创建并传入；
+/// 本函数内部在每轮 consume_stream 之后 push 一次最新全文，
+/// 退出由外层 wrapper 统一 shutdown + final flush。
+async fn stream_loop_inner(
+    ctx: &mut LoopContext,
+    observable: &mut RoundState,
+    batch_writer: batch_writer::BatchWriter,
+) {
     let mut all_text = String::new();
     let mut all_content_blocks: Vec<ContentBlock> = Vec::new();
     let mut collected_usage: Option<TokenUsage> = None;
@@ -471,6 +492,11 @@ async fn stream_loop_inner(ctx: &mut LoopContext, observable: &mut RoundState) {
                                     .saturating_add(u.completion_tokens);
                                 collected_usage = Some(u);
                             }
+                            // REQ-XC-004: 把 latest token_count 推入 BatchWriter
+                            // （取 total_completion_tokens 累计值；后台按时间阈值 flush）
+                            batch_writer
+                                .set_tokens(total_completion_tokens as i32)
+                                .await;
                             round_success = true;
                             break 'retry_loop;
                         }
@@ -621,6 +647,10 @@ async fn stream_loop_inner(ctx: &mut LoopContext, observable: &mut RoundState) {
         observable.elapsed_ms = round_timer.elapsed_ms();
         emit_intermediate_round_state(&ctx.app, &ctx.conv_id, observable);
         all_text.push_str(&round_text);
+
+        // REQ-XC-004: 推入最新全文到 BatchWriter（不立即 flush）
+        // 字符/时间阈值由后台任务检测，阈值达即 flush。
+        batch_writer.push_text(all_text.clone()).await;
 
         // W4.2: Token 预算累计 — 每个 round 结束后累加 usage
         if let Some(ref usage) = collected_usage {
