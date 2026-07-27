@@ -44,13 +44,26 @@ jobs:
       - name: cargo check
         run: cargo check
 
-      - name: cargo test
-        env:
-          RUST_TEST_THREADS: 1
-        run: cargo test --all-targets -- --test-threads=1
+      - name: cargo test (lib)
+        run: cargo test --lib
+
+      - name: cargo test (integration: provider)
+        run: cargo test --test provider_test
+
+      - name: cargo test (integration: message_repo)
+        run: cargo test --test message_repo_test
+
+      - name: cargo test (integration: memory_e2e)
+        run: cargo test --test memory_e2e
+
+      - name: cargo test (integration: template_repo)
+        run: cargo test --test template_repo_test
 
       - name: cargo clippy
         run: cargo clippy --lib -- -D warnings
+
+      - name: cargo clippy (tests)
+        run: cargo clippy --tests -- -D warnings
 
   frontend:
     name: Frontend typecheck · lint · build

@@ -1,23 +1,273 @@
-//! Anthropic Adapter 集成测试
+//! Provider 集成测试（OpenAI + Anthropic）
 //!
-//! 使用 wiremock 模拟 Anthropic Messages API 的 SSE 流，
-//! 验证 `AnthropicAdapter::stream_chat` 的完整行为。
-//!
-//! 三个场景：
-//! 1. 正常文本流 → 收集到预期文本
-//! 2. 含 tool_use 的混合流 → 只收集文本，跳过 tool_use delta
-//! 3. 流中 error 事件 → 升级为 LlmError
+//! 使用 wiremock 模拟各 Provider 的 SSE 流，验证 adapter 的完整行为。
+//! 合并自原 `openai_test.rs` 和 `anthropic_test.rs`，减少一个 integration test binary 的链接开销。
 
 use futures::StreamExt;
 use ice_paw_lib::error::AppError;
 use ice_paw_lib::harness::chat_state::CancellationToken;
 use ice_paw_lib::harness::provider::anthropic::AnthropicAdapter;
+use ice_paw_lib::harness::provider::openai::OpenAiAdapter;
 use ice_paw_lib::infra::protocol::{ChatDelta, ChatMessage, LlmProvider, TokenUsage};
 use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
 
+fn make_messages() -> Vec<ChatMessage> {
+    vec![ChatMessage::from_text("user", "Say hello")]
+}
+
+// =============================================================================
+// OpenAI Adapter 测试
+// =============================================================================
+
+/// 构造一个简单的 OpenAI 兼容 SSE 流响应体。
+fn openai_normal_sse_response() -> String {
+    let chunks = [
+        r#"data: {"choices":[{"delta":{"content":"Hello"},"finish_reason":null}]}"#,
+        r#"data: {"choices":[{"delta":{"content":" "},"finish_reason":null}]}"#,
+        r#"data: {"choices":[{"delta":{"content":"world"},"finish_reason":null}]}"#,
+        r#"data: {"choices":[{"delta":{"content":"!"},"finish_reason":null}]}"#,
+        r#"data: {"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+        "data: [DONE]",
+    ];
+    chunks.join("\n\n")
+}
+
+/// 构造一个中途断开的 SSE 流（只有第一个 chunk，没有 [DONE]）。
+/// 注意：需要尾部换行让 SSE 解析器消费到该行。
+fn openai_truncated_sse_response() -> String {
+    r#"data: {"choices":[{"delta":{"content":"partial"},"finish_reason":null}]}
+"#.to_string()
+}
+
+#[tokio::test]
+async fn openai_normal_stream_collects_expected_content() {
+    let server = MockServer::start().await;
+
+    Mock::given(matchers::method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(openai_normal_sse_response()),
+        )
+        .mount(&server)
+        .await;
+
+    let adapter = OpenAiAdapter::new("test-model".into(), server.uri());
+    let cancel = CancellationToken::new();
+
+    let stream = adapter
+        .stream_chat("test-key", make_messages(), None, 0.7, 1024, None, cancel)
+        .await
+        .expect("stream_chat should succeed");
+
+    let mut content_parts: Vec<String> = Vec::new();
+    let mut got_done = false;
+    let mut stream = Box::pin(stream);
+
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(ChatDelta::Delta { content }) => content_parts.push(content),
+            Ok(ChatDelta::Done { .. }) => {
+                got_done = true;
+                break;
+            }
+            Ok(_) => {},
+            Err(e) => panic!("unexpected error: {e}"),
+        }
+    }
+
+    let joined = content_parts.join("");
+    assert_eq!(joined, "Hello world!");
+    assert!(got_done, "should receive Done event");
+}
+
+#[tokio::test]
+async fn openai_http_401_returns_llm_error() {
+    let server = MockServer::start().await;
+
+    Mock::given(matchers::method("POST"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+            "error": { "message": "Invalid API key", "type": "invalid_request_error" }
+        })))
+        .mount(&server)
+        .await;
+
+    let adapter = OpenAiAdapter::new("test-model".into(), server.uri());
+    let cancel = CancellationToken::new();
+
+    let result = adapter
+        .stream_chat("bad-key", make_messages(), None, 0.7, 1024, None, cancel)
+        .await;
+
+    let err = match result {
+        Err(e) => e,
+        Ok(_) => panic!("expected error, got Ok"),
+    };
+    let msg = err.to_string();
+    assert!(msg.contains("401"), "error should contain HTTP 401: {msg}");
+    match err {
+        AppError::Llm(_) => {} // expected
+        other => panic!("expected Llm error, got: {other}"),
+    }
+}
+
+#[tokio::test]
+async fn openai_truncated_stream_yields_partial_content() {
+    let server = MockServer::start().await;
+
+    Mock::given(matchers::method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(openai_truncated_sse_response()),
+        )
+        .mount(&server)
+        .await;
+
+    let adapter = OpenAiAdapter::new("test-model".into(), server.uri());
+    let cancel = CancellationToken::new();
+
+    let stream = adapter
+        .stream_chat("test-key", make_messages(), None, 0.7, 1024, None, cancel)
+        .await
+        .expect("stream_chat should succeed (error happens during consumption)");
+
+    let mut content_parts: Vec<String> = Vec::new();
+    let mut stream = Box::pin(stream);
+
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(ChatDelta::Delta { content }) => content_parts.push(content),
+            Ok(ChatDelta::Done { .. }) => break,
+            Ok(_) => {},
+            Err(_) => break,
+        }
+    }
+
+    // 截断流：wiremock 返回了完整 body（字节流自然结束），adapter 会优雅地发 Done
+    assert_eq!(content_parts, vec!["partial".to_string()]);
+}
+
+// =========================================================================
+// OpenAI 工具调用事件集成测试
+// =========================================================================
+
+/// 构造 OpenAI SSE 流 — 含 tool_calls 的流式响应。
+fn openai_tool_call_sse_response() -> String {
+    let chunks = [
+        // 1. 前导文本
+        r#"data: {"choices":[{"delta":{"content":"让我查一下"},"finish_reason":null}]}"#,
+        // 2. tool_call 名称（首批）
+        r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_001","type":"function","function":{"name":"read_file","arguments":""}}]},"finish_reason":null}]}"#,
+        // 3. arguments 第一段
+        r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"path\""}}]},"finish_reason":null}]}"#,
+        // 4. arguments 第二段
+        r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":": \"Cargo.toml\"}"}}]},"finish_reason":null}]}"#,
+        // 5. 结束 + stop_reason=tool_calls
+        r#"data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+        "data: [DONE]",
+    ];
+    chunks.join("\n\n")
+}
+
+#[tokio::test]
+async fn openai_tool_calls_produces_tool_call_events() {
+    let server = MockServer::start().await;
+
+    Mock::given(matchers::method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(openai_tool_call_sse_response()),
+        )
+        .mount(&server)
+        .await;
+
+    let adapter = OpenAiAdapter::new("test-model".into(), server.uri());
+    let cancel = CancellationToken::new();
+
+    let stream = adapter
+        .stream_chat("test-key", make_messages(), None, 0.7, 1024, None, cancel)
+        .await
+        .expect("stream_chat should succeed");
+
+    let mut stream = Box::pin(stream);
+    let mut text_parts: Vec<String> = Vec::new();
+    let mut start_count = 0;
+    let mut delta_count = 0;
+    let mut end_count = 0;
+    let mut tool_name = String::new();
+    let mut tool_id = String::new();
+
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(ChatDelta::Delta { content }) => text_parts.push(content),
+            Ok(ChatDelta::ToolCallStart { id, name }) => {
+                start_count += 1;
+                tool_id = id;
+                tool_name = name;
+            }
+            Ok(ChatDelta::ToolCallDelta { .. }) => delta_count += 1,
+            Ok(ChatDelta::ToolCallEnd { .. }) => end_count += 1,
+            Ok(ChatDelta::Thinking { .. }) => {},
+            Ok(ChatDelta::Done { .. }) => break,
+            Ok(ChatDelta::Usage { .. }) => {},
+            Err(e) => panic!("unexpected error: {e}"),
+        }
+    }
+
+    assert_eq!(text_parts.join(""), "让我查一下", "前导文本应完整");
+    assert_eq!(start_count, 1, "应收到 1 个 ToolCallStart");
+    assert!(!tool_id.is_empty(), "tool id 不应为空");
+    assert_eq!(tool_name, "read_file", "tool name 应为 read_file");
+    assert_eq!(end_count, 1, "应收到 1 个 ToolCallEnd");
+    assert!(delta_count >= 1, "应收到至少 1 个 ToolCallDelta");
+}
+
+#[tokio::test]
+async fn openai_tool_calls_delta_not_in_text() {
+    let server = MockServer::start().await;
+
+    Mock::given(matchers::method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(openai_tool_call_sse_response()),
+        )
+        .mount(&server)
+        .await;
+
+    let adapter = OpenAiAdapter::new("test-model".into(), server.uri());
+    let cancel = CancellationToken::new();
+
+    let stream = adapter
+        .stream_chat("test-key", make_messages(), None, 0.7, 1024, None, cancel)
+        .await
+        .expect("stream_chat should succeed");
+
+    let mut content_parts: Vec<String> = Vec::new();
+    let mut stream = Box::pin(stream);
+
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(ChatDelta::Delta { content }) => content_parts.push(content),
+            Ok(ChatDelta::Done { .. }) => break,
+            Ok(_) => {},
+            Err(_) => break,
+        }
+    }
+
+    // 只应收集到前导文本，tool_calls 的 arguments 片段不应混入文本流
+    assert_eq!(content_parts.join(""), "让我查一下");
+}
+
+// =============================================================================
+// Anthropic Adapter 测试
+// =============================================================================
+
 /// 构造正常的 Anthropic SSE 流（双行格式 event+data）。
 /// 输出 "你好世界！"
-fn normal_anthropic_sse() -> String {
+fn anthropic_normal_sse() -> String {
     r#"event: message_start
 data: {"type":"message_start","message":{"id":"msg_01"}}
 
@@ -47,7 +297,7 @@ data: {"type":"message_stop"}
 
 /// 构造含 tool_use 混合流的 Anthropic SSE。
 /// 预期：只收集 text_delta 部分，tool_use/input_json_delta 被跳过。
-fn mixed_tool_use_sse() -> String {
+fn anthropic_mixed_tool_use_sse() -> String {
     r#"event: message_start
 data: {"type":"message_start","message":{"id":"msg_02"}}
 
@@ -82,7 +332,7 @@ data: {"type":"message_stop"}
 }
 
 /// 构造含 error 事件的 Anthropic SSE 流。
-fn error_event_sse() -> String {
+fn anthropic_error_event_sse() -> String {
     r#"event: message_start
 data: {"type":"message_start","message":{"id":"msg_03"}}
 
@@ -98,10 +348,6 @@ data: {"type":"error","error":{"type":"api_error","message":"模型过载，请�
 "#.to_string()
 }
 
-fn make_messages() -> Vec<ChatMessage> {
-    vec![ChatMessage::from_text("user", "你好")]
-}
-
 #[tokio::test]
 async fn anthropic_normal_text_stream_collects_expected() {
     let server = MockServer::start().await;
@@ -110,7 +356,7 @@ async fn anthropic_normal_text_stream_collects_expected() {
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("content-type", "text/event-stream")
-                .set_body_string(normal_anthropic_sse()),
+                .set_body_string(anthropic_normal_sse()),
         )
         .mount(&server)
         .await;
@@ -155,7 +401,7 @@ async fn anthropic_mixed_tool_use_only_collects_text() {
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("content-type", "text/event-stream")
-                .set_body_string(mixed_tool_use_sse()),
+                .set_body_string(anthropic_mixed_tool_use_sse()),
         )
         .mount(&server)
         .await;
@@ -192,7 +438,7 @@ async fn anthropic_error_event_returns_llm_error() {
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("content-type", "text/event-stream")
-                .set_body_string(error_event_sse()),
+                .set_body_string(anthropic_error_event_sse()),
         )
         .mount(&server)
         .await;
@@ -236,10 +482,9 @@ async fn anthropic_error_event_returns_llm_error() {
 }
 
 // =========================================================================
-// P2-1i: 工具调用事件集成测试
+// Anthropic 工具调用事件集成测试
 // =========================================================================
 
-/// P2-1i: Anthropic tool_use stream → ToolCallStart/ToolCallDelta/ToolCallEnd 事件
 #[tokio::test]
 async fn anthropic_tool_use_produces_tool_call_events() {
     let server = MockServer::start().await;
@@ -248,7 +493,7 @@ async fn anthropic_tool_use_produces_tool_call_events() {
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("content-type", "text/event-stream")
-                .set_body_string(mixed_tool_use_sse()),
+                .set_body_string(anthropic_mixed_tool_use_sse()),
         )
         .mount(&server)
         .await;
@@ -294,8 +539,6 @@ async fn anthropic_tool_use_produces_tool_call_events() {
     assert!(delta_count >= 1, "应收到至少 1 个 ToolCallDelta");
 }
 
-/// P2-1i: Anthropic tool_use stream 不将 tool_use delta 当作文本
-/// （回归验证：P2-1 工具调用 delta 不能混入文本流）
 #[tokio::test]
 async fn anthropic_tool_use_delta_not_in_text() {
     let server = MockServer::start().await;
@@ -304,7 +547,7 @@ async fn anthropic_tool_use_delta_not_in_text() {
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("content-type", "text/event-stream")
-                .set_body_string(mixed_tool_use_sse()),
+                .set_body_string(anthropic_mixed_tool_use_sse()),
         )
         .mount(&server)
         .await;
@@ -334,12 +577,11 @@ async fn anthropic_tool_use_delta_not_in_text() {
 }
 
 // =========================================================================
-// P2-3: ChatDelta::Usage 集成测试
+// Anthropic ChatDelta::Usage 集成测试
 // =========================================================================
 
 /// 构造含 message_start.usage 和 message_delta.usage 的 Anthropic SSE 流。
-/// 验证前端能收到带 cached_tokens 的 ChatDelta::Usage 事件。
-fn usage_sse() -> String {
+fn anthropic_usage_sse() -> String {
     r#"event: message_start
 data: {"type":"message_start","message":{"id":"msg_usage_01","usage":{"input_tokens":100,"cache_creation_input_tokens":50,"cache_read_input_tokens":30,"output_tokens":0}}}
 
@@ -361,7 +603,6 @@ data: {"type":"message_stop"}
 "#.to_string()
 }
 
-/// P2-3: Anthropic SSE 流中的 usage 事件应产生 ChatDelta::Usage
 #[tokio::test]
 async fn anthropic_usage_event_from_stream() {
     let server = MockServer::start().await;
@@ -370,7 +611,7 @@ async fn anthropic_usage_event_from_stream() {
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("content-type", "text/event-stream")
-                .set_body_string(usage_sse()),
+                .set_body_string(anthropic_usage_sse()),
         )
         .mount(&server)
         .await;
