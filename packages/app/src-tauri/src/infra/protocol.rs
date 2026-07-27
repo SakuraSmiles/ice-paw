@@ -226,6 +226,7 @@ pub trait LlmProvider: Send + Sync {
     ///   - 注意：Provider 仅在**本次请求**使用 `model`，不会改写
     ///     Adapter 自身的 `self.model`，下次 `None` 调用仍走默认
     /// - `cancel`：取消令牌
+    #[allow(clippy::too_many_arguments)]
     async fn stream_chat(
         &self,
         api_key: &str,
