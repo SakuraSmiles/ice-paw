@@ -26,6 +26,21 @@ dist-ssr
 # Rust / Tauri
 target/
 
+# Native binaries (libsodium)
+sodium-prebuilt/
+sodium-dist/
+
+# Test artifacts
+test-results/
+*.tsbuildinfo
+
+# Preview screenshots
+_preview-*.png
+_preview-*.html
+
+# Backup files
+*.bak
+
 # Environment
 .env
 .env.*
