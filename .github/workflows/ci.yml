@@ -41,14 +41,20 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
 
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghcactions
+          sudo apt-get clean
+          df -h
+
       - name: cargo check
         run: cargo check
 
       - name: cargo test
-        run: cargo test --lib && cargo test --test provider_test && cargo test --test message_repo_test && cargo test --test memory_e2e && cargo test --test template_repo_test
+        run: "cargo test --profile ci --lib && cargo test --profile ci --test provider_test && cargo test --profile ci --test message_repo_test && cargo test --profile ci --test memory_e2e && cargo test --profile ci --test template_repo_test"
 
       - name: cargo clippy
-        run: "cargo clippy --lib -- -D warnings"
+        run: "cargo clippy --profile ci --lib -- -D warnings"
 
       - name: cargo clippy - tests
         run: "cargo clippy --tests -- -D warnings"
