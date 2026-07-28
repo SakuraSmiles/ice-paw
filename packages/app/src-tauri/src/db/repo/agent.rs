@@ -16,7 +16,7 @@ pub async fn list(pool: &SqlitePool) -> AppResult<Vec<AgentRow>> {
                 temperature, max_tokens, extra_params, sort_order, cache_prompt,
                 max_history_messages, tool_trim_threshold, enabled_tools,
                 supports_vision, embedding_model, description, avatar,
-                created_at, updated_at
+                workspace_path, created_at, updated_at
            FROM agents
           ORDER BY sort_order ASC, created_at ASC",
     )
@@ -32,7 +32,7 @@ pub async fn get_by_id(pool: &SqlitePool, id: &str) -> AppResult<AgentRow> {
                 temperature, max_tokens, extra_params, sort_order, cache_prompt,
                 max_history_messages, tool_trim_threshold, enabled_tools,
                 supports_vision, embedding_model, description, avatar,
-                created_at, updated_at
+                workspace_path, created_at, updated_at
            FROM agents WHERE id = ?",
     )
     .bind(id)
@@ -65,8 +65,9 @@ pub async fn create(
         "INSERT INTO agents
            (id, name, provider, model, system_prompt, api_key_ref, base_url,
             temperature, max_tokens, extra_params, sort_order, cache_prompt,
-            max_history_messages, tool_trim_threshold, enabled_tools, supports_vision)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            max_history_messages, tool_trim_threshold, enabled_tools, supports_vision,
+            workspace_path)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(id)
     .bind(&new_agent.name)
@@ -84,6 +85,7 @@ pub async fn create(
     .bind(new_agent.tool_trim_threshold)
     .bind(new_agent.enabled_tools.as_ref().map(|v| serde_json::to_string(v).unwrap_or_default()))
     .bind(supports_vision_i)
+    .bind(new_agent.workspace_path.as_deref())
     .execute(pool)
     .await?;
 
@@ -91,11 +93,6 @@ pub async fn create(
 }
 
 /// 部分更新（partial update）：None 字段不动
-///
-/// `max_history_messages` 字段语义与 `base_url` 一致：
-///   - 外层 `None` → 调用方没传，不更新
-///   - 外层 `Some(None)` → 调用方传了但要清空（恢复为系统默认）
-///   - 外层 `Some(Some(N))` → 设成 N
 #[allow(clippy::too_many_arguments)]
 pub async fn update(
     pool: &SqlitePool,
@@ -114,6 +111,7 @@ pub async fn update(
     tool_trim_threshold: Option<Option<i32>>,
     enabled_tools: Option<Option<Vec<String>>>,
     supports_vision: Option<bool>,
+    workspace_path: Option<Option<&str>>,
 ) -> AppResult<AgentRow> {
     // 先读出来再合并，避免拼接动态 SQL
     let mut current = get_by_id(pool, id).await?;
@@ -140,13 +138,17 @@ pub async fn update(
     if let Some(v) = supports_vision {
         current.supports_vision = if v { 1 } else { 0 };
     }
+    // Phase 3: 双层 Option（None=不改 / Some(None)=清空 / Some(Some)=设定）
+    if let Some(v) = workspace_path {
+        current.workspace_path = v.map(String::from);
+    }
 
     sqlx::query(
         "UPDATE agents
             SET name = ?, provider = ?, model = ?, system_prompt = ?,
                 base_url = ?, temperature = ?, max_tokens = ?, extra_params = ?, sort_order = ?,
                 cache_prompt = ?, max_history_messages = ?, tool_trim_threshold = ?,
-                enabled_tools = ?, supports_vision = ?
+                enabled_tools = ?, supports_vision = ?, workspace_path = ?
           WHERE id = ?",
     )
     .bind(&current.name)
@@ -163,6 +165,7 @@ pub async fn update(
     .bind(current.tool_trim_threshold)
     .bind(&current.enabled_tools)
     .bind(current.supports_vision)
+    .bind(&current.workspace_path)
     .bind(id)
     .execute(pool)
     .await?;

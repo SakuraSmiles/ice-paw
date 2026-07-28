@@ -97,20 +97,20 @@ function navigate(key: string) {
   min-height: 0;
   display: flex;
   align-items: flex-start;
-  gap: 24px;
+  gap: 12px;
 }
 
-/* ===== 左菜单（独立卡片） ===== */
+/* ===== 左菜单（纯文本导航） ===== */
 .settings-nav {
-  width: 180px;
-  min-width: 180px;
+  width: auto;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 12px;
-  background-color: var(--ip-color-bg-secondary);
-  border: 1px solid var(--ip-color-border-default);
-  border-radius: var(--ip-radius-xl);
+  padding: 104px 32px 0 0;
+  background: none;
+  border: none;
+  border-radius: 0;
   flex-shrink: 0;
   position: sticky;
   top: 0;
@@ -119,36 +119,27 @@ function navigate(key: string) {
 .nav-item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   width: 100%;
-  padding: 10px 12px;
+  padding: 8px 0 8px 16px;
   text-align: left;
-  border-radius: var(--ip-radius-lg);
   cursor: pointer;
-  transition: background-color var(--ip-duration-fast) var(--ip-ease-out);
   border: none;
+  border-left: 2px solid transparent;
   background: transparent;
   font: inherit;
   color: inherit;
+  transition:
+    color var(--ip-duration-fast) var(--ip-ease-out),
+    border-color var(--ip-duration-fast) var(--ip-ease-out);
 }
 
-.nav-item:hover {
-  background-color: var(--color-sidebar-item-hover);
+.nav-item:hover .nav-label {
+  color: var(--ip-color-text-primary);
 }
 
 .nav-item.active {
-  background-color: var(--color-sidebar-item-active);
-}
-
-.nav-icon {
-  font-size: 16px;
-  line-height: 1;
-  flex-shrink: 0;
-}
-
-.nav-label {
-  font-size: var(--ip-text-body-sm-size);
-  color: var(--ip-color-text-secondary);
+  border-left-color: var(--ip-primary-500);
 }
 
 .nav-item.active .nav-label {
@@ -156,15 +147,33 @@ function navigate(key: string) {
   font-weight: var(--ip-font-weight-medium);
 }
 
-/* ===== 右内容（融入背景） ===== */
+.nav-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  color: var(--ip-color-icon-muted);
+}
+
+.nav-item.active .nav-icon {
+  color: var(--ip-primary-500);
+}
+
+.nav-item.active .nav-icon svg {
+  stroke-width: 2.5;
+}
+
+.nav-label {
+  font-size: var(--ip-text-body-sm-size);
+  color: var(--ip-color-text-secondary);
+  transition: color var(--ip-duration-fast) var(--ip-ease-out);
+}
+
+/* ===== 右内容 ===== */
 .settings-content {
   flex: 1;
   display: flex;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  align-self: stretch;
-  background-color: var(--ip-color-bg-primary);
-  border-radius: var(--ip-radius-xl);
 }
 </style>

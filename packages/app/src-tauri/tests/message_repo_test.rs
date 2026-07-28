@@ -51,6 +51,7 @@ async fn seed_agent_and_conv(pool: &SqlitePool) -> String {
     agent::create(
         pool,
         &ice_paw_lib::db::models::NewAgent {
+            id: "agent-001".into(),
             name: "test-agent".into(),
             provider: "openai".into(),
             model: "gpt-4o-mini".into(),
@@ -69,6 +70,7 @@ async fn seed_agent_and_conv(pool: &SqlitePool) -> String {
             // Task 4 / Task 3a: 新增字段，测试 fixture 显式置默认值。
             enabled_tools: None,
             supports_vision: false,
+            workspace_path: None,
         },
         agent_id,
         agent_id, // api_key_ref 简化为 agent_id 自身

@@ -123,15 +123,22 @@ impl SqlAgentCmd {
 impl AgentCmd for SqlAgentCmd {
     async fn list(&self) -> AppResult<Vec<Agent>> {
         let rows = repo::agent::list(&self.pool).await?;
-        Ok(rows.into_iter().map(Agent::from).collect())
+        Ok(rows.into_iter().map(Agent::from_row_with_file_config).collect())
     }
 
     async fn get(&self, agent_id: &str) -> AppResult<AgentRow> {
+        // 也读取 agent.yaml 合并到返回的 AgentRow 中
+        // 注意：AgentRow 是 raw DB row，但 chat_cmd 需要的是合并后的值。
+        // 这里返回原始 row，由 chat_cmd 的 get_with_credentials 做合并
         repo::agent::get_by_id(&self.pool, agent_id).await
     }
 
     async fn get_with_credentials(&self, agent_id: &str) -> AppResult<AgentWithCredentials> {
-        let agent = repo::agent::get_by_id(&self.pool, agent_id).await?;
+        let mut agent = repo::agent::get_by_id(&self.pool, agent_id).await?;
+        // 尝试从 workspace_path 加载 agent.yaml 配置，合并到 AgentRow（覆盖 chat_cmd 用的字段）
+        if let Some(file_cfg) = agent.load_file_config() {
+            file_cfg.apply_to_row(&mut agent);
+        }
         let (api_key, vault_base_url) = crypto::fetch_api_key(&self.app, &agent.id)?;
         // base_url：agent 配置优先（如果有），否则回退到 vault 里存的 base_url
         let base_url = agent
@@ -149,6 +156,10 @@ impl AgentCmd for SqlAgentCmd {
 
     async fn create(&self, input: NewAgent) -> AppResult<Agent> {
         // 入参基础校验
+        let id = input.id.trim().to_string();
+        if id.is_empty() {
+            return Err(AppError::Validation("ID 不能为空".into()));
+        }
         if input.name.trim().is_empty() {
             return Err(AppError::Validation("name 不能为空".into()));
         }
@@ -156,11 +167,37 @@ impl AgentCmd for SqlAgentCmd {
             return Err(AppError::Validation("api_key 不能为空".into()));
         }
 
-        let id = Uuid::new_v4().to_string();
+        // 校验 ID 唯一性
+        if repo::agent::get_by_id(&self.pool, &id).await.is_ok() {
+            return Err(AppError::Validation(format!("ID '{}' 已被使用", id)));
+        }
+
         crypto::store_api_key(&self.app, &id, &input.api_key, input.base_url.as_deref())?;
 
-        let row: AgentRow = repo::agent::create(&self.pool, &input, &id, &id).await?;
-        Ok(Agent::from(row))
+        // 工作区路径：用户没填时自动计算 {default}/{id}
+        let workspace_path = if input.workspace_path.as_ref().map_or(false, |p| !p.is_empty()) {
+            input.workspace_path.clone()
+        } else {
+            match repo::preferences::get_all(&self.pool).await {
+                Ok(prefs) => prefs.default_workspace_path
+                    .map(|root| format!("{}/{}", root.trim_end_matches(['/', '\\']), id)),
+                Err(_) => None,
+            }
+        };
+
+        // 如果设了工作区路径，自动创建目录
+        if let Some(ref path) = workspace_path {
+            let dir = std::path::Path::new(path);
+            if !dir.exists() {
+                std::fs::create_dir_all(dir)?;
+            }
+        }
+
+        let mut new_agent = input;
+        new_agent.workspace_path = workspace_path;
+
+        let row: AgentRow = repo::agent::create(&self.pool, &new_agent, &id, &id).await?;
+        Ok(Agent::from_row_with_file_config(row))
     }
 
     async fn update(&self, input: AgentUpdate) -> AppResult<Agent> {
@@ -181,9 +218,19 @@ impl AgentCmd for SqlAgentCmd {
             input.tool_trim_threshold,
             input.enabled_tools,
             input.supports_vision,
+            input.workspace_path.as_ref().map(|opt| opt.as_deref()),
         )
         .await?;
-        Ok(Agent::from(row))
+
+        // 如果更新后的 workspace_path 有值，确保目录存在
+        if let Some(ref path) = row.workspace_path {
+            let dir = std::path::Path::new(path);
+            if !dir.exists() {
+                std::fs::create_dir_all(dir)?;
+            }
+        }
+
+        Ok(Agent::from_row_with_file_config(row))
     }
 
     async fn rotate_key(&self, input: RotateAgentKey) -> AppResult<Agent> {
@@ -312,8 +359,11 @@ impl AgentCmd for MockAgentCmd {
 
     async fn create(&self, input: NewAgent) -> AppResult<Agent> {
         self.log(format!("create({})", input.name));
-        // mock 不强校验 api_key 非空（让测试用例决定）
-        let id = Uuid::new_v4().to_string();
+        let id = if input.id.is_empty() {
+            Uuid::new_v4().to_string()
+        } else {
+            input.id.clone()
+        };
         let row = AgentRow {
             id: id.clone(),
             name: input.name.clone(),
@@ -340,6 +390,7 @@ impl AgentCmd for MockAgentCmd {
             embedding_model: None,
             description: String::new(),
             avatar: None,
+            workspace_path: input.workspace_path.clone(),
             created_at: "2024-01-01 00:00:00".to_string(),
             updated_at: "2024-01-01 00:00:00".to_string(),
         };
@@ -452,6 +503,7 @@ mod tests {
             embedding_model: None,
             description: String::new(),
             avatar: None,
+            workspace_path: None,
             created_at: "2024-01-01 00:00:00".to_string(),
             updated_at: "2024-01-01 00:00:00".to_string(),
         }
@@ -509,6 +561,7 @@ mod tests {
     async fn mock_create_adds_agent() {
         let mock = MockAgentCmd::new();
         let new = NewAgent {
+            id: "test-agent".into(),
             name: "Test Agent".into(),
             provider: "anthropic".into(),
             model: "claude-3-5-sonnet".into(),
@@ -524,6 +577,7 @@ mod tests {
             tool_trim_threshold: None,
             enabled_tools: None,
             supports_vision: false,
+            workspace_path: None,
         };
 
         let a = mock.create(new).await.unwrap();
@@ -552,6 +606,7 @@ mod tests {
             tool_trim_threshold: None,
             enabled_tools: None,
             supports_vision: None,
+            workspace_path: None,
         };
 
         let a = mock.update(input).await.unwrap();

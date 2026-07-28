@@ -80,6 +80,9 @@ rand = { version = "0.8", features = ["getrandom"] }
 # reqwest 0.12 已传递依赖 0.22，这里显式声明避免版本漂移。
 base64 = "0.22"
 
+# === 解析 agent.yaml 文件配置（Phase 3: 工作区行为配置）===
+serde_yaml = "0.9"
+
 # === 集成测试 ===
 [dev-dependencies]
 wiremock = "0.6"
