@@ -140,8 +140,19 @@ const agents = {
 
 const conversations = {
   /**
+   * 列出全部会话（不限 agent），按 pinned、更新时间排序。
+   * 对应 Command：list_all_conversations
+   */
+  async listAll(): Promise<Conversation[]> {
+    try {
+      return await invoke<Conversation[]>("list_all_conversations");
+    } catch (err) {
+      throw wrapInvokeError("conversations.listAll", err);
+    }
+  },
+
+  /**
    * 列出某 Agent 的全部会话。
-   * Rust 侧按 `pinned DESC, updated_at DESC` 排序。
    * 对应 Command：list_conversations
    */
   async list(agentId: string): Promise<Conversation[]> {

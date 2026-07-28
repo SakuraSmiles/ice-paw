@@ -1,187 +1,125 @@
 <script setup lang="ts">
 // ChatMessages.vue — 聊天消息列表
-import { ref, nextTick, watch } from "vue";
+import { watch, nextTick, ref, onMounted, onUnmounted } from "vue";
+import { useChatStore } from "../../stores/chat";
 import MarkdownRenderer from "./MarkdownRenderer.vue";
 
-interface Message {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  time: string;
-}
-
-const messages = ref<Message[]>([
-  {
-    id: "1",
-    role: "assistant",
-    content: "你好！我是 IcePaw 助手，有什么可以帮助你的？你可以问我技术问题、让我帮你写代码、或者只是聊聊天。",
-    time: "10:30",
-  },
-  {
-    id: "2",
-    role: "user",
-    content: "能帮我写一个 Vite 插件，在构建时把项目中的 .env 文件注释生成到 README.md 吗？",
-    time: "10:31",
-  },
-  {
-    id: "3",
-    role: "assistant",
-    content: `当然可以！下面是一个完整的 Vite 插件实现：
-
-\`\`\`ts
-// plugins/generate-env-docs.ts
-import { Plugin } from 'vite'
-import { readFileSync, writeFileSync } from 'fs'
-import { resolve } from 'path'
-
-interface EnvDocOptions {
-  envPath?: string
-  readmePath?: string
-}
-
-export function generateEnvDocs(options: EnvDocOptions = {}): Plugin {
-  const {
-    envPath = resolve(process.cwd(), '.env.example'),
-    readmePath = resolve(process.cwd(), 'README.md'),
-  } = options
-
-  return {
-    name: 'generate-env-docs',
-    enforce: 'post',
-
-    async closeBundle() {
-      try {
-        const content = readFileSync(envPath, 'utf-8')
-        const table = parseEnvToTable(content)
-        injectIntoReadme(readmePath, table)
-        this.info('✅ .env 文档已更新到 README.md')
-      } catch (e) {
-        this.warn(\`[警告] 生成 env 文档失败: \${e}\`)
-      }
-    },
-  }
-}
-\`\`\`
-
-使用方式很简单，在 \`vite.config.ts\` 中注册：
-
-\`\`\`ts
-import { defineConfig } from 'vite'
-import { generateEnvDocs } from './plugins/generate-env-docs'
-
-export default defineConfig({
-  plugins: [
-    generateEnvDocs({
-      envPath: './.env.example',
-      readmePath: './README.md',
-    }),
-  ],
-})
-\`\`\`
-
-## 主要功能
-
-- **自动解析** — 读取 \`.env.example\` 中的注释和变量名
-- **表格生成** — 把环境变量转换成格式化的 Markdown 表格
-- **智能注入** — 在 README 中找到 \`<!-- ENV_DOCS -->\` 标记位并替换内容
-- **构建时执行** — 只在 \`vite build\` 时触发，dev 模式下跳过
-
-### 生成的表格示例
-
-| 变量名 | 类型 | 默认值 | 说明 |
-|--------|------|--------|------|
-| \`VITE_API_BASE\` | string | \`/api\` | API 请求地址 |
-| \`VITE_ENABLE_DEBUG\` | boolean | \`false\` | 是否开启调试模式 |
-| \`VITE_APP_TITLE\` | string | \`MyApp\` | 应用标题 |
-
-### TODO 清单
-
-1. 支持 \`yaml\` 格式的环境变量文件
-2. 添加变量值的有效性校验
-3. 支持多语言文档输出
-4. 集成 CI 自动检查环境变量是否缺失
-
-> **提示**：这只是一个基础实现，你可以根据项目需求灵活扩展。`,
-    time: "10:31",
-  },
-  {
-    id: "4",
-    role: "user",
-    content: "这个插件不错！那能不能再加一个功能：支持从 `.env` 文件（不是 `.env.example`）中读取实际值，生成一份 `env-config.md` 作为内部参考文档？",
-    time: "10:32",
-  },
-  {
-    id: "5",
-    role: "assistant",
-    content: `好思路！下面是对插件的扩展实现：
-
-\`\`\`diff
- export function generateEnvDocs(options: EnvDocOptions = {}): Plugin {
-   const {
-     envPath = resolve(process.cwd(), '.env.example'),
-     readmePath = resolve(process.cwd(), 'README.md'),
-+    mode = 'example',
-   } = options
-\`\`\`
-
-## 两种模式对比
-
-| 特性 | example 模式 | actual 模式 |
-|------|-------------|-------------|
-| 数据来源 | \`.env.example\` 注释 | \`.env\` 实际值 |
-| 安全级别 | 高（无敏感信息） | 低（含真实密钥） |
-| 使用场景 | 公开文档 | 内部开发参考 |
-| 推荐程度 | 推荐 | 仅本地使用 |
-
-### 敏感信息处理
-
-对于 actual 模式，建议在 \`.gitignore\` 中添加：
-
-\`\`\`gitignore
-# 生成的内部参考文档
-env-config.md
-\`\`\`
-
-### 后续优化方向
-
-- [x] 基础插件框架
-- [x] 表格自动生成
-- [x] 双模式支持
-- [ ] 环境变量变动监控
-- [ ] VS Code 插件集成
-- [ ] Web UI 可视化配置面板`,
-    time: "10:32",
-  },
-]);
-
+const chat = useChatStore();
 const listRef = ref<HTMLElement | null>(null);
+const showScrollBtn = ref(false);
+let suppressScrollCheck = false;
 
-// 自动滚到底部
-watch(messages, async () => {
-  await nextTick();
+// 检测滚动位置，非底部时显示按钮
+function onScroll() {
+  if (suppressScrollCheck) return;
+  const el = listRef.value;
+  if (!el) return;
+  const threshold = 80;
+  showScrollBtn.value = el.scrollHeight - el.scrollTop - el.clientHeight > threshold;
+}
+
+function scrollToBottom(smooth?: boolean) {
   if (listRef.value) {
-    listRef.value.scrollTop = listRef.value.scrollHeight;
+    // 启动程序化滚动时抑制 scroll 检测
+    suppressScrollCheck = true;
+    showScrollBtn.value = false;
+    listRef.value.scrollTo({ top: listRef.value.scrollHeight, behavior: smooth !== false ? "smooth" : "instant" });
+    // 平滑滚动完成后恢复检测
+    setTimeout(() => { suppressScrollCheck = false; }, smooth !== false ? 500 : 50);
   }
-}, { deep: true });
+}
+
+onMounted(() => {
+  listRef.value?.addEventListener("scroll", onScroll);
+  scrollToBottom(false);
+});
+onUnmounted(() => { listRef.value?.removeEventListener("scroll", onScroll); });
+
+// 切换会话后等消息加载完成再平滑滚动到底部
+watch(() => chat.msgLoading, async (loading) => {
+  if (!loading && chat.messages.length > 0) {
+    await nextTick();
+    scrollToBottom(true);
+  }
+});
+
+// 自动滚到底部（仅在已到底时自动跟随，用户往上翻页时中断）
+watch(
+  [() => chat.messages.length, () => chat.streamingText],
+  async () => {
+    await nextTick();
+    const el = listRef.value;
+    if (!el) return;
+    // 如果滚动条已经到底（或距离底部很近），新消息到来时自动跟随
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    if (atBottom) {
+      el.scrollTop = el.scrollHeight;
+    }
+  },
+);
+
+function formatTime(createdAt: string): string {
+  const d = new Date(createdAt);
+  if (isNaN(d.getTime())) return "";
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  return `${hh}:${mm}`;
+}
 </script>
 
 <template>
   <div ref="listRef" class="messages-area">
-    <div class="messages-container">
+    <div v-if="chat.msgLoading && chat.messages.length === 0" class="state-hint">
+      <span class="state-dot" />
+      加载中...
+    </div>
+    <div v-else-if="!chat.activeConvId" class="state-hint">
+      选择一个对话开始
+    </div>
+    <div v-else-if="chat.messages.length === 0" class="state-hint">
+      开始一段新的对话
+    </div>
+    <TransitionGroup v-else name="msg" tag="div" class="messages-container">
       <div
-        v-for="msg in messages"
+        v-for="msg in chat.messages"
         :key="msg.id"
         :class="['message-row', msg.role]"
       >
-        <div class="message-content">
+        <div :class="['message-content', { thinking: msg.role === 'assistant' && msg.content === '' && chat.sending }]">
           <div class="message-bubble">
-            <MarkdownRenderer v-if="msg.role === 'assistant'" :content="msg.content" />
+            <!-- AI 思考中状态 -->
+            <div v-if="msg.role === 'assistant' && msg.content === '' && chat.sending" class="thinking-indicator">
+              <span class="think-dot" />
+              <span class="think-dot" />
+              <span class="think-dot" />
+            </div>
+            <!-- AI 正常回复 -->
+            <MarkdownRenderer v-else-if="msg.role === 'assistant'" :content="msg.content" />
+            <!-- 用户消息 -->
             <span v-else>{{ msg.content }}</span>
           </div>
-          <div class="message-time">{{ msg.time }}</div>
+          <div v-if="msg.content" class="message-time">{{ formatTime(msg.created_at) }}</div>
         </div>
       </div>
+    </TransitionGroup>
+
+    <!-- 流式生成指示光标（发送中且至少有一条消息时显示） -->
+    <div v-if="chat.sending && chat.messages.length > 0" class="cursor-bar">
+      <div class="cursor-track">
+        <div class="cursor-glow" />
+        <span class="cursor-label">正在生成…</span>
+      </div>
     </div>
+
+    <!-- 滚动到底按钮 -->
+    <Transition name="fade-up">
+      <button v-if="showScrollBtn && !chat.sending" class="scroll-bottom-btn" @click="scrollToBottom()" title="滚动到底部">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="12" y1="5" x2="12" y2="19" />
+          <polyline points="19 12 12 19 5 12" />
+        </svg>
+      </button>
+    </Transition>
   </div>
 </template>
 
@@ -199,17 +137,32 @@ watch(messages, async () => {
   padding: 0 48px;
 }
 
-.message-row {
-  display: flex;
+/* ===== TransitionGroup 动画 ===== */
+.msg-enter-active {
+  animation: msg-in 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.msg-leave-active {
+  display: none;
+}
+.msg-move {
+  transition: transform 0.3s ease;
 }
 
-.message-row.user {
-  justify-content: flex-end;
+@keyframes msg-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
-.message-row.assistant {
-  justify-content: flex-start;
-}
+/* ===== 消息行 ===== */
+.message-row { display: flex; }
+.message-row.user { justify-content: flex-end; }
+.message-row.assistant { justify-content: flex-start; }
 
 .message-content {
   display: flex;
@@ -218,18 +171,9 @@ watch(messages, async () => {
   min-width: 0;
 }
 
-.message-row.assistant .message-content {
-  width: 100%;
-  max-width: 85%;
-}
-
-.message-row.user .message-content {
-  max-width: 70%;
-}
-
-.message-row.user .message-content {
-  align-items: flex-end;
-}
+.message-row.assistant .message-content { max-width: 85%; }
+.message-row.assistant .message-content.thinking { max-width: 140px; }
+.message-row.user .message-content { max-width: 70%; align-items: flex-end; }
 
 .message-bubble {
   padding: 10px 16px;
@@ -256,5 +200,123 @@ watch(messages, async () => {
   font-size: 11px;
   color: var(--ip-color-text-disabled);
   padding: 0 4px;
+}
+
+/* ===== 思考中动画（三个弹跳点） ===== */
+.thinking-indicator {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 0;
+  min-height: 22px;
+}
+
+.think-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: var(--ip-color-text-secondary);
+  animation: think-bounce 1.4s ease-in-out infinite;
+}
+
+.think-dot:nth-child(2) { animation-delay: 0.16s; }
+.think-dot:nth-child(3) { animation-delay: 0.32s; }
+
+@keyframes think-bounce {
+  0%, 80%, 100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+  40% {
+    transform: translateY(-6px);
+    opacity: 1;
+  }
+}
+
+/* ===== 底部流式指示条 ===== */
+.cursor-bar {
+  display: flex;
+  justify-content: flex-start;
+  padding: 4px 48px 0;
+}
+
+.cursor-track {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.cursor-glow {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--ip-primary-500);
+  animation: cursor-pulse 1.2s ease-in-out infinite;
+}
+
+.cursor-label {
+  font-size: var(--ip-text-caption-size);
+  color: var(--ip-color-text-tertiary);
+}
+
+@keyframes cursor-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.75); }
+}
+
+/* ===== 空状态 ===== */
+.state-hint {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--ip-color-text-tertiary);
+  font-size: var(--ip-text-body-sm-size);
+}
+
+.state-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: var(--ip-primary-500);
+  animation: cursor-pulse 1.2s ease-in-out infinite;
+}
+
+/* ===== 滚动到底按钮 ===== */
+.scroll-bottom-btn {
+  position: fixed;
+  bottom: 160px;
+  right: 32px;
+  z-index: 50;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--ip-color-border-default);
+  background-color: var(--ip-color-bg-elevated);
+  color: var(--ip-color-text-secondary);
+  box-shadow: var(--ip-shadow-md);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--ip-duration-fast) var(--ip-ease-out);
+}
+.scroll-bottom-btn:hover {
+  background-color: var(--ip-color-bg-secondary);
+  color: var(--ip-color-text-primary);
+  box-shadow: var(--ip-shadow-lg);
+}
+
+.fade-up-enter-active {
+  animation: fade-up-in 0.2s ease-out;
+}
+.fade-up-leave-active {
+  animation: fade-up-in 0.15s ease-in reverse;
+}
+@keyframes fade-up-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 </style>

@@ -38,6 +38,19 @@ const md = new MarkdownIt({
   highlight: highlightCode,
 });
 
+// 列表项内 <p> 标签清理（保持序号与内容同行）
+// markdown-it 会在 <li> 内包裹 <p>，导致 display:block 换行
+// 在渲染后把 <li> 直属的 <p> 展开为纯文本，保留内部 HTML
+const origRender = md.render.bind(md);
+md.render = function (src: string): string {
+  let html = origRender(src);
+  // 移除 <li> 内直属 <p> 标签（无论后面是否有嵌套标签）
+  // markdown-it 生成 <li><p>content</p></li> 或 <li><p>content</p><ul>...</ul></li>
+  // <p> 的 display:block 导致序号与内容在不同行
+  html = html.replace(/<li>\s*<p>([\s\S]*?)<\/p>/g, '<li>$1');
+  return html;
+};
+
 const props = defineProps<{
   content: string;
 }>();
