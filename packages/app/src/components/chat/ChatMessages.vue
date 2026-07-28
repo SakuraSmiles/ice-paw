@@ -43,18 +43,15 @@ watch(() => chat.msgLoading, async (loading) => {
   }
 });
 
-// 自动滚到底部（仅在已到底时自动跟随，用户往上翻页时中断）
+// 自动滚到底部：新消息或流式内容到来时始终滚动
+// 用户若想查看历史，可用「滚动到底」按钮回到最新位置
 watch(
   [() => chat.messages.length, () => chat.streamingText],
   async () => {
     await nextTick();
     const el = listRef.value;
     if (!el) return;
-    // 如果滚动条已经到底（或距离底部很近），新消息到来时自动跟随
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-    if (atBottom) {
-      el.scrollTop = el.scrollHeight;
-    }
+    el.scrollTop = el.scrollHeight;
   },
 );
 
