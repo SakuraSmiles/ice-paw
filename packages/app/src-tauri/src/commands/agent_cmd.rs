@@ -163,6 +163,12 @@ impl AgentCmd for SqlAgentCmd {
         if input.name.trim().is_empty() {
             return Err(AppError::Validation("name 不能为空".into()));
         }
+        if input.provider.trim().is_empty() {
+            return Err(AppError::Validation("provider 不能为空".into()));
+        }
+        if input.model.trim().is_empty() {
+            return Err(AppError::Validation("model 不能为空".into()));
+        }
         if input.api_key.trim().is_empty() {
             return Err(AppError::Validation("api_key 不能为空".into()));
         }
