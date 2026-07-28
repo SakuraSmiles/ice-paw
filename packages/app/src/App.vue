@@ -1,7 +1,12 @@
 <script setup lang="ts">
-// App.vue — 应用根组件（重写中）
-//
-// 当前状态：基础壳，等待新前端设计落地
+// App.vue — 应用根组件
+// 初始化全局事件监听（流式聊天事件）
+import { onMounted } from "vue";
+import { useChatStore } from "./stores/chat";
+
+onMounted(() => {
+  useChatStore().initEvents();
+});
 </script>
 
 <template>

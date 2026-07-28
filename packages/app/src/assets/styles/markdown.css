@@ -136,7 +136,8 @@
 .markdown-body-ol,
 .markdown-body ol {
   margin: 0 0 var(--ip-spacing-3, 12px);
-  padding-left: var(--ip-spacing-6, 24px);
+  padding-left: var(--ip-spacing-7, 28px);
+  list-style: decimal;
 }
 
 .markdown-body-li,

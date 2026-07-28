@@ -56,26 +56,55 @@ onMounted(() => {
 // 会话列表
 // =========================================================================
 
-const conversations = ref([
-  { id: "1", title: "项目架构设计讨论", preview: "关于 IcePaw 的分层架构设计...", pinned: true, updated: "10分钟前" },
-  { id: "2", title: "Bug 修复：内存泄漏", preview: "排查了一下 stronghold 的 snapshot 加载...", pinned: false, updated: "2小时前" },
-  { id: "3", title: "代码审查反馈", preview: "PR #42 的 review 意见已经全部处理...", pinned: false, updated: "昨天" },
-  { id: "4", title: "新功能：语义搜索", preview: "基于 embedding 的召回方案初步设计...", pinned: false, updated: "3天前" },
-  { id: "5", title: "性能优化讨论", preview: "数据库查询延迟分析报告已经出...", pinned: false, updated: "5天前" },
-]);
+import { useChatStore } from "../../stores/chat";
+import { useAgentStore } from "../../stores/agent";
+import AgentPicker from "./AgentPicker.vue";
 
-const activeId = ref("1");
+const chat = useChatStore();
+const agent = useAgentStore();
+const showPicker = ref(false);
+
+onMounted(() => {
+  agent.load();
+  chat.loadConversations();
+});
 
 function selectConv(id: string) {
-  activeId.value = id;
-  // 如果当前在设置页，点击会话跳回聊天
+  if (isSettingsPage.value) {
+    router.push("/");
+  }
+  chat.selectConversation(id);
+}
+
+function newChat() {
+  if (agent.list.length === 1) {
+    doCreateChat(agent.list[0].id);
+  } else {
+    showPicker.value = true;
+  }
+}
+
+function doCreateChat(agentId: string) {
+  showPicker.value = false;
+  chat.createConversation(agentId);
   if (isSettingsPage.value) {
     router.push("/");
   }
 }
 
-function newChat() {
-  // TODO: 创建新会话
+// 取相对时间显示
+function timeAgo(dateStr: string): string {
+  const d = new Date(dateStr);
+  const now = new Date();
+  const diff = now.getTime() - d.getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "刚刚";
+  if (mins < 60) return `${mins}分钟前`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}小时前`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}天前`;
+  return dateStr.slice(0, 10);
 }
 </script>
 
@@ -135,23 +164,24 @@ function newChat() {
       <!-- 分隔线 -->
       <div class="conv-divider"></div>
 
+      <div v-if="chat.convLoading" class="conv-loading">加载中...</div>
+      <div v-else-if="chat.conversations.length === 0 && agent.loaded" class="conv-empty">暂无对话</div>
+
       <button
-        v-for="conv in conversations"
+        v-for="conv in chat.conversations"
         :key="conv.id"
-        :class="['conv-item', { active: activeId === conv.id }]"
+        :class="['conv-item', { active: chat.activeConvId === conv.id }]"
         @click="selectConv(conv.id)"
       >
         <div class="conv-item-title">
-          <span v-if="conv.pinned" class="pin-icon">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2z" />
-            </svg>
+          <span class="conv-name">{{ conv.title || "新对话" }}</span>
+          <span v-if="conv.pinned" class="pin-icon-right" title="已置顶">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2z" /></svg>
           </span>
-          <span class="conv-name">{{ conv.title }}</span>
         </div>
-        <div class="conv-preview">{{ conv.preview }}</div>
         <div class="conv-meta">
-          <span class="conv-time">{{ conv.updated }}</span>
+          <span class="conv-agent-tag">{{ agent.getById(conv.agent_id)?.name || "未知" }}</span>
+          <span class="conv-time">{{ timeAgo(conv.updated_at) }}</span>
         </div>
       </button>
     </nav>
@@ -166,6 +196,9 @@ function newChat() {
         <span>设置</span>
       </button>
     </div>
+
+    <!-- Agent 选择器弹窗 -->
+    <AgentPicker v-if="showPicker" @select="doCreateChat" @close="showPicker = false" />
   </aside>
 </template>
 
@@ -281,6 +314,13 @@ function newChat() {
   gap: 2px;
 }
 
+.conv-loading, .conv-empty {
+  padding: 20px 12px;
+  text-align: center;
+  font-size: var(--ip-text-body-sm-size);
+  color: var(--ip-color-text-tertiary);
+}
+
 .conv-item {
   display: flex;
   flex-direction: column;
@@ -310,6 +350,7 @@ function newChat() {
   border-radius: 50%;
   flex-shrink: 0;
   margin-top: 1px;
+  margin-right: 2px;
 }
 
 /* 新建对话项（特殊样式） */
@@ -357,11 +398,15 @@ function newChat() {
   align-items: center;
   gap: 4px;
   overflow: hidden;
+  width: 100%;
 }
 
-.pin-icon {
-  font-size: 12px;
+.pin-icon-right {
+  display: flex;
+  align-items: center;
   flex-shrink: 0;
+  color: var(--ip-color-text-tertiary);
+  margin-left: auto;
 }
 
 .conv-name {
@@ -385,12 +430,25 @@ function newChat() {
 .conv-meta {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  width: 100%;
+}
+
+.conv-agent-tag {
+  font-size: 11px;
+  color: var(--ip-primary-600);
+  font-weight: var(--ip-font-weight-medium);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .conv-time {
   font-size: 11px;
   color: var(--ip-color-text-disabled);
+  margin-left: auto;
+  flex-shrink: 0;
 }
 
 /* 底部 */

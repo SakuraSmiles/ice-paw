@@ -13,6 +13,15 @@ use crate::db::models::{Conversation, NewConversation};
 use crate::db::repo;
 use crate::error::AppResult;
 
+/// 列出全部会话（不限 agent），按 pinned desc, updated_at desc
+#[tauri::command]
+pub async fn list_all_conversations(
+    state: State<'_, SqlitePool>,
+) -> AppResult<Vec<Conversation>> {
+    let rows = repo::conversation::list_all(state.inner()).await?;
+    Ok(rows.into_iter().map(Conversation::from).collect())
+}
+
 /// 列出 agent 下的全部会话（pinned desc, updated_at desc）
 #[tauri::command]
 pub async fn list_conversations(

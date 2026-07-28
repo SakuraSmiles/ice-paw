@@ -76,6 +76,7 @@ pub fn run() {
             commands::agent_cmd::update_agent,
             commands::agent_cmd::rotate_agent_api_key,
             commands::agent_cmd::delete_agent,
+            commands::conversation_cmd::list_all_conversations,
             commands::conversation_cmd::list_conversations,
             commands::conversation_cmd::create_conversation,
             commands::conversation_cmd::rename_conversation,
