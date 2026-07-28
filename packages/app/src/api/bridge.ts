@@ -68,8 +68,8 @@ const conversations = {
 };
 
 const messages = {
-  async list(conversationId: string): Promise<Message[]> {
-    try { return await invoke<Message[]>("list_messages", { conversationId }); }
+  async list(conversationId: string, opts?: { limit?: number; before?: [string, number] }): Promise<Message[]> {
+    try { return await invoke<Message[]>("list_messages", { conversationId, ...opts }); }
     catch (err) { throw wrapInvokeError("messages.list", err); }
   },
 };
