@@ -1,65 +1,48 @@
 <script setup lang="ts">
 // AgentSettings.vue — 智能体设置
-import { ref } from "vue";
+import { ref, onMounted } from "vue";
 import AgentFormModal from "../../components/agent/AgentFormModal.vue";
 import type { Agent } from "../../types";
+import { bridge } from "../../api/bridge";
 
-const agents = ref<Agent[]>([
-  {
-    id: "1", name: "代码助手", provider: "openai", model: "gpt-4o",
-    system_prompt: "你是专业的高级软件工程师，擅长代码审查、架构设计和性能优化。分析问题时请从多个角度考虑（正确性、可维护性、性能、安全性），并给出具体的代码示例。",
-    base_url: null, temperature: 0.3, max_tokens: 4096, extra_params: {}, sort_order: 0,
-    cache_prompt: true, max_history_messages: 40, supports_vision: true,
-    description: "专业的代码审查与架构设计助手，适用于开发和代码分析场景",
-    has_api_key: true, created_at: "2026-07-20T10:00:00Z", updated_at: "2026-07-28T10:00:00Z",
-  },
-  {
-    id: "2", name: "写作助手", provider: "anthropic", model: "claude-sonnet-4-20250514",
-    system_prompt: "你是出色的中文写作专家，擅长润色、改写和创意写作。保持原文风格的同时提升表达质量。",
-    base_url: null, temperature: 0.7, max_tokens: 8192, extra_params: {}, sort_order: 1,
-    cache_prompt: true, description: "中文写作润色与创意文案助手",
-    has_api_key: false, created_at: "2026-07-25T14:00:00Z", updated_at: "2026-07-28T10:00:00Z",
-  },
-  {
-    id: "3", name: "通用问答", provider: "deepseek", model: "deepseek-chat",
-    system_prompt: "", base_url: null, temperature: 0.7, max_tokens: 4096,
-    extra_params: {}, sort_order: 2, cache_prompt: false,
-    description: "通用知识问答助手", has_api_key: true,
-    created_at: "2026-07-22T09:00:00Z", updated_at: "2026-07-27T16:00:00Z",
-  },
-  {
-    id: "4", name: "翻译助手", provider: "glm", model: "glm-4-flash",
-    system_prompt: "你是一名专业的翻译专家，精通中英互译。保持原文语气和风格，准确传达语义。",
-    base_url: null, temperature: 0.3, max_tokens: 4096,
-    extra_params: {}, sort_order: 3, cache_prompt: true,
-    description: "中英翻译与本地化助手", has_api_key: true,
-    created_at: "2026-07-26T11:00:00Z", updated_at: "2026-07-28T09:00:00Z",
-  },
-  {
-    id: "5", name: "数据分析师", provider: "openai", model: "o3-mini",
-    system_prompt: "你是资深数据分析师，擅长数据清洗、统计分析和可视化方案设计。给出结论时附带置信度说明。",
-    base_url: null, temperature: 0.2, max_tokens: 8192,
-    extra_params: {}, sort_order: 4, cache_prompt: false,
-    description: "数据清洗、统计分析与可视化方案设计", has_api_key: true,
-    created_at: "2026-07-24T15:00:00Z", updated_at: "2026-07-28T10:00:00Z",
-  },
-]);
+const agents = ref<Agent[]>([]);
+const loading = ref(true);
 
 const showForm = ref(false);
 const editingAgent = ref<Agent | null>(null);
+
+async function loadAgents() {
+  loading.value = true;
+  try {
+    agents.value = await bridge.agents.list();
+  } catch (e) {
+    console.error("加载 Agent 列表失败:", e);
+  } finally {
+    loading.value = false;
+  }
+}
+
+onMounted(loadAgents);
 
 function openNew() { editingAgent.value = null; showForm.value = true; }
 function openEdit(agent: Agent) { editingAgent.value = agent; showForm.value = true; }
 function closeForm() { showForm.value = false; editingAgent.value = null; }
 
-function onSaved(agent: Agent) {
-  if (editingAgent.value) {
-    const idx = agents.value.findIndex((a) => a.id === agent.id);
-    if (idx >= 0) agents.value[idx] = agent;
-  } else agents.value.unshift(agent);
+async function onSaved(_agent: Agent) {
+  // 刷新列表拿到最新数据（包含后端生成的 id/时间戳等）
+  await loadAgents();
   closeForm();
 }
-function onDelete(agent: Agent) { agents.value = agents.value.filter((a) => a.id !== agent.id); closeForm(); }
+
+async function onDelete(agent: Agent) {
+  try {
+    await bridge.agents.delete(agent.id);
+    await loadAgents();
+    closeForm();
+  } catch (e) {
+    console.error("删除 Agent 失败:", e);
+  }
+}
 
 const providerLabels: Record<string, string> = {
   openai: "OpenAI", anthropic: "Anthropic", deepseek: "DeepSeek", glm: "GLM", minimax: "MiniMax", "minimax-cn": "MiniMax(CN)",
@@ -67,7 +50,7 @@ const providerLabels: Record<string, string> = {
 </script>
 
 <template>
-  <div class="agent-content">
+  <div class="settings-content-inner">
     <!-- 标题行 + 新建按钮 -->
     <div class="content-header">
       <h2 class="content-title">智能体</h2>
@@ -83,17 +66,20 @@ const providerLabels: Record<string, string> = {
           <div class="card-avatar">{{ agent.name.charAt(0) }}</div>
           <div class="card-info">
             <div class="card-name">{{ agent.name }}</div>
+            <div class="card-id">{{ agent.id }}</div>
             <div class="card-model">
               <span class="provider-badge" :class="'provider-' + agent.provider">{{ providerLabels[agent.provider] || agent.provider }}</span>
               {{ agent.model }}
             </div>
           </div>
           <div class="card-status">
+            <span v-if="agent.config_from_file" class="status-badge status-file" title="部分配置来自 agent.yaml">File</span>
             <span v-if="agent.has_api_key" class="status-badge status-ok">已配置</span>
             <span v-else class="status-badge status-warn">未配置 Key</span>
           </div>
         </div>
         <p v-if="agent.description" class="card-desc">{{ agent.description }}</p>
+        <div v-if="agent.workspace_path" class="card-workspace">{{ agent.workspace_path }}</div>
         <div class="card-meta">
           <span v-if="agent.supports_vision" class="meta-tag">Vision</span>
           <span v-if="agent.cache_prompt" class="meta-tag">Cache</span>
@@ -101,7 +87,8 @@ const providerLabels: Record<string, string> = {
         </div>
       </div>
 
-      <div v-if="agents.length === 0" class="empty-state">
+      <div v-if="loading" class="loading-state">加载中...</div>
+      <div v-else-if="agents.length === 0" class="empty-state">
         <div class="empty-icon">
           <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
             <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
@@ -119,11 +106,11 @@ const providerLabels: Record<string, string> = {
 </template>
 
 <style scoped>
-.agent-content { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.settings-content-inner { height: 100%; display: flex; flex-direction: column; padding: 24px; }
 
 .content-header {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 0 0 16px;
+  padding: 0 0 20px;
   flex-shrink: 0;
 }
 .content-title {
@@ -142,7 +129,7 @@ const providerLabels: Record<string, string> = {
 
 .agent-list { flex: 1; overflow-y: auto; padding: 0; display: flex; flex-direction: column; gap: 10px; min-height: 0; }
 .agent-card {
-  padding: 14px 18px; background-color: var(--ip-color-bg-secondary);
+  padding: 16px 20px; background-color: var(--ip-color-bg-secondary);
   border: 1px solid var(--ip-color-border-default); border-radius: var(--ip-radius-xl);
   cursor: pointer; transition: all var(--ip-duration-fast) var(--ip-ease-out);
 }
@@ -156,20 +143,24 @@ const providerLabels: Record<string, string> = {
 }
 .card-info { flex: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .card-name { font-size: var(--ip-text-body-size); font-weight: var(--ip-font-weight-semibold); color: var(--ip-color-text-primary); }
+.card-id { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-disabled); font-family: var(--ip-font-mono); }
 .card-model { font-size: var(--ip-text-body-sm-size); color: var(--ip-color-text-secondary); display: flex; align-items: center; gap: 6px; }
 .provider-badge { display: inline-block; padding: 1px 7px; font-size: 11px; font-weight: var(--ip-font-weight-medium); border-radius: var(--ip-radius-full); background-color: var(--ip-color-bg-tertiary); color: var(--ip-color-text-secondary); }
 .provider-badge.provider-openai { background: #E8F4EE; color: #237552; }
 .provider-badge.provider-anthropic { background: #EDE8F4; color: #5B3D8A; }
 .provider-badge.provider-deepseek { background: #F4E8E8; color: #8A3D3D; }
 .provider-badge.provider-glm { background: #E8EEF4; color: #3D5B8A; }
-.card-status { flex-shrink: 0; }
+.card-status { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .status-badge { display: inline-block; padding: 2px 10px; font-size: var(--ip-text-caption-size); font-weight: var(--ip-font-weight-medium); border-radius: var(--ip-radius-full); }
 .status-ok { background-color: var(--ip-success-bg); color: var(--ip-success-text); }
 .status-warn { background-color: var(--ip-warning-bg); color: var(--ip-warning-text); }
+.status-file { background-color: var(--ip-color-bg-tertiary); color: var(--ip-color-text-tertiary); font-size: 10px; }
 .card-desc { margin: 10px 0 0; font-size: var(--ip-text-body-sm-size); color: var(--ip-color-text-tertiary); line-height: 1.5; }
+.card-workspace { margin: 6px 0 0; font-size: var(--ip-text-caption-size); color: var(--ip-color-text-disabled); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card-meta { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
 .meta-tag { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
 .meta-time { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-disabled); margin-left: auto; }
+.loading-state { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--ip-color-text-tertiary); font-size: var(--ip-text-body-sm-size); }
 .empty-state { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 40px; }
 .empty-icon { width: 48px; height: 48px; margin-bottom: 8px; color: var(--ip-color-text-tertiary); }
 .empty-title { font-size: var(--ip-text-h2-size); font-weight: var(--ip-font-weight-semibold); color: var(--ip-color-text-primary); margin: 0; }

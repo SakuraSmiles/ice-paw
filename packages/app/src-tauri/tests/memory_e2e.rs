@@ -98,6 +98,7 @@ async fn make_ctx(
         tool_trim_threshold: None,
         enabled_tools: None,
         avatar: None,
+        workspace_path: None,
         description: String::new(),
         embedding_model: None,
         supports_vision: 0,

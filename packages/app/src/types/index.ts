@@ -64,6 +64,10 @@ export interface Agent {
   description?: string;
   /** M2-1: Agent 头像 */
   avatar?: string | null;
+  /** Phase 3: 工作区目录路径（存放 agent.yaml 的本地目录） */
+  workspace_path?: string | null;
+  /** Phase 3: 是否从 agent.yaml 读取了部分配置 */
+  config_from_file?: boolean;
   created_at: string;
   updated_at: string;
   has_api_key: boolean;
@@ -73,12 +77,14 @@ export interface Agent {
  * 创建 Agent 时的入参。
  *
  * 与 Agent 的差异：
- * - 不含 id（由 Rust 侧生成）
+ * - id 由用户指定（方案 A：自定义 ID，唯一且不可修改）
  * - 不含时间戳（由 Rust 侧填默认值）
  * - 不含 sort_order（由 Rust 侧默认 0，后续可由 update 接口调整）
  * - 必须显式传入 api_key（仅此入口接收明文，之后 Rust 侧加密入 vault）
  */
 export interface NewAgent {
+  /** 用户自定义 ID，唯一且不可修改 */
+  id: string;
   name: string;
   provider: string;
   model: string;
@@ -96,6 +102,8 @@ export interface NewAgent {
   enabled_tools?: string[] | null;
   /** 是否支持图片输入（默认 false） */
   supports_vision?: boolean;
+  /** Phase 3: 工作区目录路径 */
+  workspace_path?: string;
 }
 
 /**
@@ -135,6 +143,13 @@ export interface AgentUpdate {
   enabled_tools?: string[] | null;
   /** 是否支持图片输入 */
   supports_vision?: boolean;
+  /**
+   * Phase 3: 工作区路径。
+   * - 不传 → 不更新
+   * - 传 null → 清空
+   * - 传 string → 设为该路径
+   */
+  workspace_path?: string | null;
 }
 
 // ============================================================================
@@ -660,4 +675,6 @@ export interface UserPreferences {
   auto_timestamp?: boolean | null;
   /** 自定义快捷键映射（覆盖默认值） */
   keyboard_shortcuts?: Record<string, string> | null;
+  /** Phase 3: 默认工作区根路径 */
+  default_workspace_path?: string | null;
 }
