@@ -107,9 +107,27 @@ async function pickWorkspace() {
   }
 }
 
+const error = ref("");
+
+function validate(): boolean {
+  if (!form.value.id.trim()) { error.value = "ID 不能为空"; return false; }
+  if (!form.value.name.trim()) { error.value = "名称不能为空"; return false; }
+  if (!form.value.model.trim()) { error.value = "模型不能为空"; return false; }
+  if (isEdit.value && form.value.api_key && form.value.api_key.trim().length < 8) {
+    error.value = "API Key 格式不正确"; return false;
+  }
+  if (!isEdit.value && !form.value.api_key.trim()) {
+    error.value = "API Key 不能为空"; return false;
+  }
+  error.value = "";
+  return true;
+}
+
 async function save() {
   if (saving.value) return;
+  if (!validate()) return;
   saving.value = true;
+  error.value = "";
 
   try {
     const currentAgent = props.agent;
@@ -149,6 +167,7 @@ async function save() {
       emit("saved", created);
     }
   } catch (e) {
+    error.value = e instanceof Error ? e.message : "保存失败";
     console.error("保存 Agent 失败:", e);
   } finally {
     saving.value = false;
@@ -184,24 +203,27 @@ function confirmDelete() {
           <span>部分配置来自工作区 <code>agent.yaml</code></span>
         </div>
 
+        <!-- 错误提示 -->
+        <div v-if="error" class="form-error">{{ error }}</div>
+
         <div class="form-grid">
           <div class="form-group">
-            <label class="form-label">名称</label>
+            <label class="form-label">名称 <span class="label-req">*</span></label>
             <input v-model="form.name" type="text" class="form-input" placeholder="例如：代码助手" />
           </div>
 
           <div class="form-group">
-            <label class="form-label">ID <span class="label-opt">唯一，不可修改</span></label>
+            <label class="form-label">ID <span class="label-req">*</span> <span class="label-opt">唯一，不可修改</span></label>
             <input v-model="form.id" type="text" class="form-input" placeholder="例如：code-assistant" :disabled="isEdit" :class="{ 'input-disabled': isEdit }" />
           </div>
 
           <div class="form-group">
-            <label class="form-label">Provider</label>
+            <label class="form-label">Provider <span class="label-req">*</span></label>
             <Combobox v-model="form.provider" :options="providerOptions" />
           </div>
 
           <div class="form-group form-group-wide">
-            <label class="form-label">模型</label>
+            <label class="form-label">模型 <span class="label-req">*</span></label>
             <Combobox v-model="form.model" :options="currentSuggestions" placeholder="输入或选择模型名称" />
           </div>
 
@@ -211,6 +233,7 @@ function confirmDelete() {
               <span v-if="isEdit" :class="props.agent?.has_api_key ? 'key-status ok' : 'key-status warn'">
                 {{ props.agent?.has_api_key ? "已配置" : "未配置" }}
               </span>
+              <span v-if="!isEdit" class="label-req">*</span>
               <span v-if="isEdit && props.agent?.has_api_key" class="key-hint">（留空则不修改）</span>
             </label>
             <input v-model="form.api_key" type="password" class="form-input" :placeholder="isEdit ? '留空保持现有密钥' : '输入 API Key'" />
@@ -297,6 +320,13 @@ function confirmDelete() {
 .form-group { display: flex; flex-direction: column; gap: 5px; }
 .form-group-wide { grid-column: 1 / -1; }
 .form-label { font-size: var(--ip-text-body-sm-size); font-weight: var(--ip-font-weight-medium); color: var(--ip-color-text-primary); }
+.label-req { color: var(--ip-danger-base); margin-left: 2px; font-weight: var(--ip-font-weight-regular); }
+.form-error {
+  padding: 10px 14px; margin-bottom: 16px;
+  background-color: var(--ip-danger-bg); border: 1px solid var(--ip-danger-border);
+  border-radius: var(--ip-radius-md);
+  font-size: var(--ip-text-body-sm-size); color: var(--ip-danger-text);
+}
 .label-opt { font-weight: var(--ip-font-weight-regular); color: var(--ip-color-text-tertiary); font-size: var(--ip-text-caption-size); }
 .key-hint { font-weight: var(--ip-font-weight-regular); color: var(--ip-color-text-tertiary); font-size: var(--ip-text-caption-size); }
 .form-input {

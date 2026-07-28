@@ -107,7 +107,7 @@ function navigate(key: string) {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 104px 32px 0 0;
+  padding: 78px 32px 0 0;
   background: none;
   border: none;
   border-radius: 0;
@@ -121,7 +121,7 @@ function navigate(key: string) {
   align-items: center;
   gap: 10px;
   width: 100%;
-  padding: 8px 0 8px 16px;
+  padding: 10px 12px 10px 16px;
   text-align: left;
   cursor: pointer;
   border: none;
@@ -143,7 +143,7 @@ function navigate(key: string) {
 }
 
 .nav-item.active .nav-label {
-  color: var(--ip-color-text-primary);
+  color: var(--ip-primary-600);
   font-weight: var(--ip-font-weight-medium);
 }
 
@@ -156,10 +156,6 @@ function navigate(key: string) {
 
 .nav-item.active .nav-icon {
   color: var(--ip-primary-500);
-}
-
-.nav-item.active .nav-icon svg {
-  stroke-width: 2.5;
 }
 
 .nav-label {
@@ -175,5 +171,7 @@ function navigate(key: string) {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  align-self: stretch;
+  overflow: hidden;
 }
 </style>
