@@ -1,10 +1,24 @@
 <script setup lang="ts">
 // ChatInput.vue — 聊天输入框 + 停止按钮
-import { computed, watch, nextTick, ref } from "vue";
+import { computed, watch, nextTick, ref, onMounted, onUnmounted } from "vue";
 import { useChatStore } from "../../stores/chat";
 
 const chat = useChatStore();
 const textareaRef = ref<HTMLTextAreaElement | null>(null);
+const inputRootRef = ref<HTMLElement | null>(null);
+
+// 用 ResizeObserver 监测输入区域总高度，供"滚动到底"按钮定位
+let ro: ResizeObserver | null = null;
+onMounted(() => {
+  const el = inputRootRef.value?.parentElement;
+  if (el) {
+    ro = new ResizeObserver(() => {
+      chat.inputAreaHeight = el.offsetHeight;
+    });
+    ro.observe(el);
+  }
+});
+onUnmounted(() => ro?.disconnect());
 
 // 用 store.draftText 替代本地 input ref，跨页面切换保持内容
 const input = computed({
@@ -19,11 +33,22 @@ watch(() => chat.sending, (sending) => {
   }
 });
 
+function autoResize() {
+  const el = textareaRef.value;
+  if (!el) return;
+  el.style.height = "auto";
+  el.style.height = Math.min(el.scrollHeight, 200) + "px";
+}
+
 function send() {
   const text = input.value.trim();
   if (!text || chat.sending) return;
   chat.draftText = "";
   chat.sendMessage(text);
+  nextTick(() => {
+    const el = textareaRef.value;
+    if (el) el.style.height = "auto";
+  });
 }
 
 function handleKeydown(e: KeyboardEvent) {
@@ -46,6 +71,7 @@ function handleKeydown(e: KeyboardEvent) {
           rows="1"
           :disabled="chat.sending"
           @keydown="handleKeydown"
+          @input="autoResize"
         />
         <div class="btn-group">
           <button
