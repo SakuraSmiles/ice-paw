@@ -87,22 +87,35 @@ export const useChatStore = defineStore("chat", () => {
   // 输入区域总高度（按钮定位用）
   const inputAreaHeight = ref(72); // 默认单行高度
 
+  // ===== 图片附件列表 =====
+  const pendingImages = ref<{ data: string; mediaType: string; name: string }[]>([]);
+
   // ===== 流式发送 =====
   const sending = ref(false);
   const streamingText = ref("");
   let sendTimeout: ReturnType<typeof setTimeout> | null = null;
 
-  async function sendMessage(content: string) {
+  async function sendMessage(content: string, contentBlocks?: import("../types").ContentBlock[]) {
     if (!activeConvId.value || sending.value) return;
     sending.value = true;
     streamingText.value = "";
 
+    // 如果有待发送图片，合并到 content_blocks
+    let blocks = contentBlocks ?? [];
+    if (pendingImages.value.length > 0) {
+      for (const img of pendingImages.value) {
+        blocks.push({ type: "image", data: img.data, media_type: img.mediaType });
+      }
+      pendingImages.value = [];
+    }
+
+    const blocksJson = blocks.length > 0 ? JSON.stringify(blocks) : "[]";
     const userMsg: Message = {
       id: "user-" + Date.now(),
       conversation_id: activeConvId.value,
       role: "user",
       content,
-      content_blocks: "[]",
+      content_blocks: blocksJson,
       token_count: null,
       error: null,
       created_at: new Date().toISOString(),
@@ -121,7 +134,7 @@ export const useChatStore = defineStore("chat", () => {
     }, 60000);
 
     try {
-      await bridge.chat.sendMessage(activeConvId.value, content);
+      await bridge.chat.sendMessage(activeConvId.value, content, blocks.length > 0 ? blocks : undefined);
     } catch (e) {
       console.error("发送消息失败:", e);
       sending.value = false;
@@ -263,7 +276,7 @@ export const useChatStore = defineStore("chat", () => {
     conversations, convLoading,
     activeConvId, activeConversation,
     messages, msgLoading, hasMore, loadingMore,
-    sending, streamingText, draftText, inputAreaHeight,
+    sending, streamingText, draftText, inputAreaHeight, pendingImages,
     loadConversations, selectConversation, loadMoreMessages,
     sendMessage, stopGeneration,
     deleteConversation, pinConversation,
