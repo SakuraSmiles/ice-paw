@@ -1,34 +1,56 @@
 /* ============================================================
- * IcePaw App - Global Styles
- * 应用级全局样式：CSS Reset + 基础排版 + 链接/选区/滚动条
+ * IcePaw App - Global Styles（重写中）
  *
- * 依赖：@ice-paw/ui/styles（在 main.ts 中先于本文件导入，
- *       确保 --ip-* design token 已注入 :root）
- *
- * 原则：
- *  - 不重复 UI 库的 base.css（box-sizing / body / focus 等）
- *  - 只补齐应用层需要的全局基线
- *  - 所有颜色/排版 token 必须来自 --ip-*
+ * 覆盖 UI 库的蓝色主色为绿色系（干净简洁风格）
  * ============================================================ */
 
-/* ---- CSS Reset（应用级冗余保护，库未注入时也能生效） ---- */
+:root {
+  /* ---- 绿色主色板（override UI 库的蓝色 --ip-primary-*） ---- */
+  --ip-primary-50:  #F4FAF7;
+  --ip-primary-100: #E8F4EE;
+  --ip-primary-200: #C5E6D4;
+  --ip-primary-300: #9ED4B8;
+  --ip-primary-400: #6DBE95;
+  --ip-primary-500: #44A87A;
+  --ip-primary-600: #2E8D64;
+  --ip-primary-700: #237552;
+  --ip-primary-800: #1A5A3E;
+  --ip-primary-900: #11402B;
 
-*,
-*::before,
-*::after {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
+  /* 重映射 focus ring */
+  --ip-focus-ring-light: rgba(46, 141, 100, 0.30);
+  --ip-focus-ring-dark:  rgba(109, 190, 149, 0.35);
+  --ip-focus-ring-danger-light: rgba(184, 61, 61, 0.20);
+
+  /* ---- 布局层 token ---- */
+  --sidebar-width: 320px;
+
+  /* ---- 自定义语义色 ---- */
+  --color-sidebar-bg:        #FAFBFC;
+  --color-sidebar-border:    #E6EAEF;
+  --color-sidebar-item-hover: #F0F2F5;
+  --color-sidebar-item-active: #E8F4EE;
+  --color-sidebar-item-active-border: #44A87A;
+
+  --color-chat-header-bg:    rgba(255, 255, 255, 0.85);
+  --color-chat-header-border: #E6EAEF;
+
+  --color-input-bg:          #FFFFFF;
+  --color-input-border:      #CFD5DD;
+  --color-input-focus-border: #44A87A;
+
+  --color-message-user-bg:   #2E8D64;
+  --color-message-user-text: #FFFFFF;
+  --color-message-ai-bg:     #F4F6F8;
+  --color-message-ai-text:   #252C36;
 }
 
-html,
-body,
-#app {
+/* ---- body 基础 ---- */
+html, body, #app {
   height: 100%;
   width: 100%;
+  overflow: hidden;
 }
-
-/* ---- body 基础排版（fallback：UI 库 base.css 已设，这里加强覆盖） ---- */
 
 body {
   font-family: var(--ip-font-sans);
@@ -39,62 +61,57 @@ body {
   background-color: var(--ip-color-bg-primary);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  text-rendering: optimizeLegibility;
 }
 
-/* ---- 链接样式（应用层统一） ---- */
-
-a {
-  color: var(--ip-color-text-link);
-  text-decoration: none;
-  transition: color var(--ip-duration-base) var(--ip-ease-out);
-}
-
-a:hover {
-  color: var(--ip-primary-500);
-}
-
-a:focus-visible {
-  outline: 2px solid var(--ip-color-border-focus);
-  outline-offset: 2px;
-  border-radius: var(--ip-radius-sm);
-}
-
-/* ---- 文本选择高亮 ---- */
-
-::selection {
-  background-color: var(--ip-color-selection-bg);
-  color: var(--ip-color-text-primary);
-}
-
-/* ---- WebKit 滚动条（仅 WebKit / Blink 内核生效） ---- */
-
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-
+/* ---- 滚动条 ---- */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
   background-color: var(--ip-color-border-strong);
-  border-radius: var(--ip-radius-full);
-  transition: background-color var(--ip-duration-base) var(--ip-ease-out);
+  border-radius: 9999px;
 }
-
 ::-webkit-scrollbar-thumb:hover {
   background-color: var(--ip-color-text-tertiary);
 }
 
-::-webkit-scrollbar-corner {
-  background: transparent;
+/* ---- 暗色模式 ---- */
+[data-theme='dark'], .dark {
+  --color-sidebar-bg:        #1C222B;
+  --color-sidebar-border:    #2A323E;
+  --color-sidebar-item-hover: #252C36;
+  --color-sidebar-item-active: #1A3A2E;
+  --color-sidebar-item-active-border: #44A87A;
+
+  --color-chat-header-bg:    rgba(20, 24, 31, 0.85);
+  --color-chat-header-border: #2A323E;
+
+  --color-input-bg:          #252C36;
+  --color-input-border:      #3A4350;
+  --color-input-focus-border: #44A87A;
+
+  --color-message-user-bg:   #2E8D64;
+  --color-message-user-text: #FFFFFF;
+  --color-message-ai-bg:     #252C36;
+  --color-message-ai-text:   #E6EAEF;
 }
 
-/* ---- 根容器兜底 ---- */
+/* ---- 暗色模式切换动画（View Transitions API） ---- */
+::view-transition-old(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
 
-#app {
-  isolation: isolate;
-  min-height: 100%;
+::view-transition-new(root) {
+  mix-blend-mode: normal;
+  animation: theme-reveal 500ms cubic-bezier(0.4, 0.0, 1, 1);
+  animation-fill-mode: forwards;
+}
+
+@keyframes theme-reveal {
+  from {
+    clip-path: circle(0% at var(--theme-reveal-x, 50%) var(--theme-reveal-y, 50%));
+  }
+  to {
+    clip-path: circle(100% at var(--theme-reveal-x, 50%) var(--theme-reveal-y, 50%));
+  }
 }

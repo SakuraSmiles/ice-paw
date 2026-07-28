@@ -1,0 +1,53 @@
+<script setup lang="ts">
+// MarkdownRenderer.vue — Markdown 渲染组件
+//
+// 支持流式渲染：每次 content 变化时增量重解析。
+// markdown-it 单次解析在微秒级，流式场景下完全可以承受全量重渲染。
+// highlight.js 只对完整代码块着色，避免流式中途闪烁。
+
+import { computed } from "vue";
+import MarkdownIt from "markdown-it";
+import hljs from "highlight.js";
+// 只导入常用语言，缩小体积
+import "highlight.js/lib/common";
+
+// 高亮函数（独立于 md 实例，避免循环引用 TS 错误）
+function highlightCode(str: string, lang: string): string {
+  if (lang && hljs.getLanguage(lang)) {
+    try {
+      return (
+        '<pre class="markdown-body-code-pre"><code class="hljs language-' +
+        lang +
+        '">' +
+        hljs.highlight(str, { language: lang, ignoreIllegals: true }).value +
+        "</code></pre>"
+      );
+    } catch {
+      // fallback
+    }
+  }
+  // 无语言或不支持 → 不着色
+  return '<pre class="markdown-body-code-pre"><code class="markdown-body-code">' + hljs.highlightAuto(str).value + '</code></pre>';
+}
+
+const md = new MarkdownIt({
+  html: false,
+  linkify: true,
+  typographer: true,
+  breaks: true,
+  highlight: highlightCode,
+});
+
+const props = defineProps<{
+  content: string;
+}>();
+
+const rendered = computed(() => {
+  if (!props.content) return "";
+  return md.render(props.content);
+});
+</script>
+
+<template>
+  <div class="markdown-body" v-html="rendered" />
+</template>
