@@ -185,6 +185,7 @@ export const useChatStore = defineStore("chat", () => {
 
     listen<ChatDonePayload>("chat:done", (e) => {
       if (e.payload.conversation_id !== activeConvId.value) return;
+      if (sendTimeout) { clearTimeout(sendTimeout); sendTimeout = null; }
       sending.value = false;
       streamingText.value = "";
       // 不 reload 消息，避免闪烁
@@ -192,6 +193,7 @@ export const useChatStore = defineStore("chat", () => {
 
     listen<ChatErrorPayload>("chat:error", (e) => {
       if (e.payload.conversation_id !== activeConvId.value) return;
+      if (sendTimeout) { clearTimeout(sendTimeout); sendTimeout = null; }
       sending.value = false;
       streamingText.value = "";
       messages.value = messages.value.map((msg) => {
@@ -221,11 +223,13 @@ export const useChatStore = defineStore("chat", () => {
   }
 
   function reset() {
+    if (sendTimeout) { clearTimeout(sendTimeout); sendTimeout = null; }
     conversations.value = [];
     activeConvId.value = null;
     messages.value = [];
     sending.value = false;
     streamingText.value = "";
+    draftText.value = "";
   }
 
   return {

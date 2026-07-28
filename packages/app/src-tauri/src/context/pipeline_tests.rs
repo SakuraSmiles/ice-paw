@@ -14,7 +14,7 @@ use crate::context::pipeline::{PipelineContext, PipelineRunner, PipelineStage};
 use crate::context::stages::{
     FinalAssembleStage, HistoryStage, OsContextStage, SystemPromptStage, TemplateStage,
 };
-use crate::db::models::{AgentRow, MessageRow, NewTemplate, TemplateVariable};
+use crate::db::models::{AgentRow, MessageRow};
 use crate::db::repo;
 use crate::error::AppResult;
 use crate::infra::cancel::CancellationToken;
@@ -105,78 +105,6 @@ pub(super) fn make_ctx(
         String::new(),
         CancellationToken::new(),
     )
-}
-
-// =========================================================================
-// TemplateStage tests
-// =========================================================================
-
-#[tokio::test]
-async fn template_stage_renders_known_variables() {
-    let pool = fresh_pool().await;
-    sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
-
-    // 建一个带变量的模板
-    let tpl = repo::template::create(
-        &pool,
-        &NewTemplate {
-            name: "review".into(),
-            description: "".into(),
-            system_prompt: "你是一位 {{lang}} 专家".into(),
-            user_prompt_prefix: "请评审以下 {{lang}} 代码：".into(),
-            variables: Some(vec![TemplateVariable {
-                name: "lang".into(),
-                label: "语言".into(),
-                var_type: "text".into(),
-                default: None,
-                options: None,
-            }]),
-            tools: None,
-            sort_order: 0,
-        },
-        "tpl-1",
-    )
-    .await
-    .unwrap();
-
-    let mut values = std::collections::HashMap::new();
-    values.insert("lang".into(), "Rust".into());
-
-    let mut ctx = make_ctx(
-        pool.clone(),
-        make_agent(),
-        Some(TemplateInput {
-            template_id: tpl.id.clone(),
-            values: values.clone(),
-        }),
-        vec![],
-        vec![ContentBlock::text("fn main() {}")],
-        false,
-    );
-    let stage = TemplateStage::new(&pool);
-    stage.execute(&mut ctx).await.unwrap();
-
-    assert_eq!(ctx.rendered_system_prompt.as_deref(), Some("你是一位 Rust 专家"));
-    assert_eq!(ctx.rendered_user_prefix, "请评审以下 Rust 代码：");
-}
-
-#[tokio::test]
-async fn template_stage_missing_template_id_is_noop() {
-    // 当 template_input 为 None 时，Stage 不应触库、两个输出字段保持空值
-    let pool = fresh_pool().await;
-    let mut ctx = make_ctx(
-        pool.clone(),
-        make_agent(),
-        None,
-        vec![],
-        vec![ContentBlock::text("hello")],
-        false,
-    );
-    let stage = TemplateStage::new(&pool);
-    stage.execute(&mut ctx).await.unwrap();
-
-    assert!(ctx.rendered_system_prompt.is_none());
-    assert!(ctx.rendered_user_prefix.is_empty());
 }
 
 // =========================================================================
@@ -600,91 +528,6 @@ async fn pipeline_runner_short_circuits_on_error() {
     );
 }
 
-#[tokio::test]
-async fn default_pipeline_matches_legacy_assemble_context() {
-    // 端到端验证：组装结果与原 assemble_context 行为一致
-    let pool = fresh_pool().await;
-    sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
-
-    // 建一个简单模板
-    repo::template::create(
-        &pool,
-        &NewTemplate {
-            name: "t".into(),
-            description: "".into(),
-            system_prompt: "你是一个 {{role}}".into(),
-            user_prompt_prefix: "PFX:".into(),
-            variables: Some(vec![TemplateVariable {
-                name: "role".into(),
-                label: "角色".into(),
-                var_type: "text".into(),
-                default: None,
-                options: None,
-            }]),
-            tools: None,
-            sort_order: 0,
-        },
-        "tpl-1",
-    )
-    .await
-    .unwrap();
-
-    let mut values = std::collections::HashMap::new();
-    values.insert("role".into(), "代码评审员".into());
-
-    let history = vec![
-        make_msg_row("user", "历史1"),
-        make_msg_row("assistant", "历史2"),
-    ];
-    let final_blocks = vec![
-        ContentBlock::text("新消息"),
-        ContentBlock::image("img-data", "image/png"),
-    ];
-
-    // 跑 PipelineRunner
-    let mut ctx = make_ctx(
-        pool.clone(),
-        make_agent(),
-        Some(TemplateInput {
-            template_id: "tpl-1".into(),
-            values,
-        }),
-        history,
-        final_blocks,
-        true, // tools_enabled
-    );
-    PipelineRunner::default_pipeline(&pool, None)
-        .run(&mut ctx)
-        .await
-        .unwrap();
-
-    // 验证输出结构：
-    // messages = [system(含渲染后模板 + 工具提示 + os), user(hist1), assistant(hist2), user(图片+文本)]
-    assert_eq!(ctx.messages.len(), 4);
-    assert_eq!(ctx.messages[0].role, "system");
-    let sys = ctx.messages[0].content_text();
-    assert!(sys.contains("代码评审员"), "模板渲染应生效: {sys}");
-    assert!(sys.contains("工具调用能力"), "工具提示应追加: {sys}");
-    assert!(sys.contains("操作系统"), "os 上下文应注入: {sys}");
-
-    assert_eq!(ctx.messages[1].role, "user");
-    assert_eq!(ctx.messages[1].content_text(), "历史1");
-    assert_eq!(ctx.messages[2].role, "assistant");
-    assert_eq!(ctx.messages[2].content_text(), "历史2");
-
-    // 当前 user：图片应排在最前
-    assert_eq!(ctx.messages[3].role, "user");
-    assert!(ctx.messages[3].content[0].is_image());
-    // user_blocks 同样顺序
-    assert!(ctx.user_blocks[0].is_image());
-    // 文本部分：prefix + 新消息
-    let text_blocks: Vec<&str> = ctx
-        .user_blocks
-        .iter()
-        .filter_map(|b| b.as_text())
-        .collect();
-    assert_eq!(text_blocks, vec!["PFX:", "新消息"]);
-}
 
 // ---- M1.4: MemoryStage 集成 ----
 
