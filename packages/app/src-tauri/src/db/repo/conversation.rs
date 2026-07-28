@@ -7,6 +7,18 @@ use sqlx::SqlitePool;
 use crate::db::models::{ConversationRow, NewConversation};
 use crate::error::{AppError, AppResult};
 
+/// 列出全部会话（不限 agent），按 `pinned DESC, updated_at DESC`
+pub async fn list_all(pool: &SqlitePool) -> AppResult<Vec<ConversationRow>> {
+    let rows = sqlx::query_as::<_, ConversationRow>(
+        "SELECT id, agent_id, title, pinned, created_at, updated_at, tools_override, project_id
+           FROM conversations
+          ORDER BY pinned DESC, updated_at DESC",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 /// 列出某 agent 下的全部会话，按 `pinned DESC, updated_at DESC`
 pub async fn list_by_agent(
     pool: &SqlitePool,
