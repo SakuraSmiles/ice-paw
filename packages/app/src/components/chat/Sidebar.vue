@@ -63,6 +63,17 @@ import AgentPicker from "./AgentPicker.vue";
 const chat = useChatStore();
 const agent = useAgentStore();
 const showPicker = ref(false);
+const searchQuery = ref("");
+
+const filteredConversations = computed(() => {
+  if (!searchQuery.value.trim()) return chat.conversations;
+  const q = searchQuery.value.toLowerCase();
+  return chat.conversations.filter((c) => {
+    const conv = c;
+    const agentName = agent.getById(conv.agent_id)?.name?.toLowerCase() ?? "";
+    return conv.title?.toLowerCase().includes(q) || agentName.includes(q);
+  });
+});
 
 onMounted(() => {
   agent.load();
@@ -143,7 +154,7 @@ function timeAgo(dateStr: string): string {
           <circle cx="11" cy="11" r="8" />
           <line x1="21" y1="21" x2="16.65" y2="16.65" />
         </svg>
-        <input type="text" class="search-input" placeholder="搜索对话..." />
+        <input v-model="searchQuery" type="text" class="search-input" placeholder="搜索对话..." />
       </div>
     </div>
 
@@ -165,10 +176,11 @@ function timeAgo(dateStr: string): string {
       <div class="conv-divider"></div>
 
       <div v-if="chat.convLoading" class="conv-loading">加载中...</div>
-      <div v-else-if="chat.conversations.length === 0 && agent.loaded" class="conv-empty">暂无对话</div>
+      <div v-else-if="searchQuery && filteredConversations.length === 0" class="conv-empty">无匹配对话</div>
+      <div v-else-if="!searchQuery && chat.conversations.length === 0 && agent.loaded" class="conv-empty">暂无对话</div>
 
       <button
-        v-for="conv in chat.conversations"
+        v-for="conv in filteredConversations"
         :key="conv.id"
         :class="['conv-item', { active: chat.activeConvId === conv.id }]"
         @click="selectConv(conv.id)"

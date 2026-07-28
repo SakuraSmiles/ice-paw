@@ -59,6 +59,8 @@ export const useChatStore = defineStore("chat", () => {
 
   // ===== 输入框草稿（跨页面切换保持） =====
   const draftText = ref("");
+  // 输入区域总高度（按钮定位用）
+  const inputAreaHeight = ref(72); // 默认单行高度
 
   // ===== 流式发送 =====
   const sending = ref(false);
@@ -236,7 +238,7 @@ export const useChatStore = defineStore("chat", () => {
     conversations, convLoading,
     activeConvId, activeConversation,
     messages, msgLoading,
-    sending, streamingText, draftText,
+    sending, streamingText, draftText, inputAreaHeight,
     loadConversations, selectConversation,
     sendMessage, stopGeneration,
     deleteConversation, pinConversation,
