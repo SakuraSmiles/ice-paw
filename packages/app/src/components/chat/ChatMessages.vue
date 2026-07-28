@@ -77,6 +77,14 @@ function copyContent(content: string) {
   navigator.clipboard.writeText(content);
 }
 
+function parseImageBlocks(contentBlocks: string): { data: string; mediaType: string }[] {
+  try {
+    const blocks = JSON.parse(contentBlocks);
+    if (!Array.isArray(blocks)) return [];
+    return blocks.filter((b: any) => b?.type === "image").map((b: any) => ({ data: b.data, mediaType: b.media_type }));
+  } catch { return []; }
+}
+
 function formatTime(createdAt: string): string {
   const d = new Date(createdAt);
   if (isNaN(d.getTime())) return "";
@@ -110,7 +118,12 @@ function formatTime(createdAt: string): string {
                 <span class="think-dot" /><span class="think-dot" /><span class="think-dot" />
               </div>
               <MarkdownRenderer v-else-if="msg.role === 'assistant'" :content="msg.content" />
-              <span v-else>{{ msg.content }}</span>
+              <div v-else class="user-content">
+                <span v-if="msg.content" class="user-text">{{ msg.content }}</span>
+                <div v-if="msg.content_blocks && msg.content_blocks !== '[]'" class="user-images">
+                  <img v-for="(img, i) in parseImageBlocks(msg.content_blocks)" :key="i" :src="`data:${img.mediaType};base64,${img.data}`" class="user-image" loading="lazy" />
+                </div>
+              </div>
             </div>
             <button v-if="msg.content" class="copy-btn" title="复制" @click="copyContent(msg.content)">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -164,6 +177,12 @@ function formatTime(createdAt: string): string {
 .message-bubble { padding:10px 16px; border-radius:12px; font-size:var(--ip-text-body-size); line-height:1.6; white-space:pre-wrap; word-break:break-word; }
 .message-row.user .message-bubble { background-color:var(--color-message-user-bg); color:var(--color-message-user-text); border-bottom-right-radius:4px; }
 .message-row.assistant .message-bubble { background-color:var(--color-message-ai-bg); color:var(--color-message-ai-text); border-bottom-left-radius:4px; }
+
+/* ===== 用户消息内容（含图片） ===== */
+.user-content { display:flex; flex-direction:column; gap:4px; }
+.user-text { display:block; white-space:pre-wrap; }
+.user-images { display:flex; flex-wrap:wrap; gap:4px; margin-top:2px; }
+.user-image { max-width:200px; max-height:200px; border-radius:var(--ip-radius-lg); object-fit:cover; border:1px solid var(--ip-color-border-default); }
 
 /* ===== 复制按钮 ===== */
 .message-bubble-wrap { position:relative; display:flex; align-items:flex-start; gap:4px; }

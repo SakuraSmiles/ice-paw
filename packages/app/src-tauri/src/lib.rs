@@ -47,6 +47,7 @@ pub fn run() {
         // 仅保留 opener 业务插件
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         // 聊天全局状态（CancellationToken 注册表）
         .manage(harness::chat_state::ChatState::new())
         // REQ-XC-010: AgentCmd trait 抽象注入
