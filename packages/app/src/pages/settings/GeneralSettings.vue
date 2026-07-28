@@ -100,7 +100,7 @@ onMounted(load);
 </template>
 
 <style scoped>
-.settings-content-inner { height: 100%; display: flex; flex-direction: column; padding: 24px; }
+.settings-content-inner { flex: 1; display: flex; flex-direction: column; padding: 24px; min-height: 0; }
 
 .content-header {
   display: flex; align-items: center; justify-content: space-between;
