@@ -9,6 +9,5 @@ pub mod memory_embedding;
 pub mod memory_store;
 pub mod message;
 pub mod preferences;
-pub mod project;
 pub mod summary;
 pub mod template;
