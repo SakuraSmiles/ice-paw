@@ -58,6 +58,7 @@ pub(super) fn make_agent() -> AgentRow {
         embedding_model: None,
         description: String::new(),
         avatar: None,
+        workspace_path: None,
         created_at: "2026-01-01T00:00:00Z".into(),
         updated_at: "2026-01-01T00:00:00Z".into(),
     }

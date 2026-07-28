@@ -29,10 +29,8 @@ pub struct AgentRow {
     /// P2-3: 是否启用 Anthropic prompt caching（OpenAI 自动缓存无需此字段）
     pub cache_prompt: i32,
     /// A3-2: 历史消息窗口上限（NULL = 使用系统默认）。
-    /// 不同 Agent 可拥有不同上下文长度（8K vs 200K）。
     pub max_history_messages: Option<i32>,
     /// M1.2 A2-4: 工具裁剪阈值（NULL = 使用系统默认 5）。
-    /// 当注册工具数 >= 此值时启用软裁剪（deprioritized 标记）。
     pub tool_trim_threshold: Option<i32>,
     /// Task 4: 工具白名单（NULL = 全部启用）。
     /// JSON 数组格式：`["read_file", "list_directory"]`
@@ -45,8 +43,84 @@ pub struct AgentRow {
     pub description: String,
     /// M2-1: Agent 头像（URL 或 base64）
     pub avatar: Option<String>,
+    /// Phase 3: 工作区目录路径（存放 agent.yaml 的本地目录）
+    pub workspace_path: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+/// agent.yaml 文件配置（行为层，覆盖 DB 中的对应字段）
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AgentFileConfig {
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub system_prompt: Option<String>,
+    #[serde(default)]
+    pub temperature: Option<f64>,
+    #[serde(default)]
+    pub max_tokens: Option<i32>,
+    #[serde(default)]
+    pub cache_prompt: Option<bool>,
+    #[serde(default)]
+    pub supports_vision: Option<bool>,
+    #[serde(default)]
+    pub max_history_messages: Option<i32>,
+    #[serde(default)]
+    pub tool_trim_threshold: Option<i32>,
+    #[serde(default)]
+    pub enabled_tools: Option<Vec<String>>,
+    #[serde(default)]
+    pub extra_params: Option<serde_json::Value>,
+    #[serde(default)]
+    pub embedding_model: Option<String>,
+}
+
+impl AgentRow {
+    /// 若 workspace_path 存在，尝试读取 `<workspace_path>/agent.yaml` 并解析为文件配置。
+    /// 文件不存在或解析失败静默返回 None（向后兼容）。
+    pub fn load_file_config(&self) -> Option<AgentFileConfig> {
+        let dir = self.workspace_path.as_ref()?;
+        let yaml_path = std::path::Path::new(dir).join("agent.yaml");
+        let content = std::fs::read_to_string(yaml_path).ok()?;
+        serde_yaml::from_str(&content).ok()
+    }
+}
+
+impl AgentFileConfig {
+    /// 把文件配置合并到 Agent 中（文件配置优先覆盖 DB 值）
+    pub fn apply_to(&self, agent: &mut Agent) {
+        if let Some(v) = &self.description { agent.description = v.clone(); }
+        if let Some(v) = &self.system_prompt { agent.system_prompt = v.clone(); }
+        if let Some(v) = self.temperature { agent.temperature = v; }
+        if let Some(v) = self.max_tokens { agent.max_tokens = v; }
+        if let Some(v) = self.cache_prompt { agent.cache_prompt = v; }
+        if let Some(v) = self.supports_vision { agent.supports_vision = v; }
+        if let Some(v) = self.max_history_messages { agent.max_history_messages = Some(v); }
+        if let Some(v) = self.tool_trim_threshold { agent.tool_trim_threshold = Some(v); }
+        if let Some(v) = &self.enabled_tools { agent.enabled_tools = Some(v.clone()); }
+        if let Some(v) = &self.extra_params { agent.extra_params = v.clone(); }
+        if let Some(v) = &self.embedding_model { agent.embedding_model = Some(v.clone()); }
+    }
+
+    /// 把文件配置合并到 AgentRow 中（供 chat_cmd 内部使用）
+    pub fn apply_to_row(&self, row: &mut AgentRow) {
+        if let Some(v) = &self.description { row.description = v.clone(); }
+        if let Some(v) = &self.system_prompt { row.system_prompt = v.clone(); }
+        if let Some(v) = self.temperature { row.temperature = v; }
+        if let Some(v) = self.max_tokens { row.max_tokens = v; }
+        if let Some(v) = self.cache_prompt { row.cache_prompt = if v { 1 } else { 0 }; }
+        if let Some(v) = self.supports_vision { row.supports_vision = if v { 1 } else { 0 }; }
+        if let Some(v) = self.max_history_messages { row.max_history_messages = Some(v); }
+        if let Some(v) = self.tool_trim_threshold { row.tool_trim_threshold = Some(v); }
+        if let Some(v) = &self.enabled_tools {
+            row.enabled_tools = Some(serde_json::to_string(v).unwrap_or_default());
+        }
+        if let Some(v) = &self.extra_params {
+            row.extra_params = serde_json::to_string(v).unwrap_or_default();
+        }
+        if let Some(v) = &self.embedding_model { row.embedding_model = Some(v.clone()); }
+    }
 }
 
 /// 前端可见的 `Agent`（不含敏感引用）
@@ -67,7 +141,6 @@ pub struct Agent {
     #[serde(default)]
     pub cache_prompt: bool,
     /// A3-2: 历史消息窗口上限（None 表示使用系统默认值）。
-    /// 前端在「高级设置」中可显式覆盖；不传则保持 NULL。
     #[serde(default)]
     pub max_history_messages: Option<i32>,
     /// M1.2 A2-4: 工具裁剪阈值（None 表示使用系统默认值 5）。
@@ -88,19 +161,49 @@ pub struct Agent {
     /// M2-1: Agent 头像
     #[serde(default)]
     pub avatar: Option<String>,
+    /// Phase 3: 工作区目录路径
+    #[serde(default)]
+    pub workspace_path: Option<String>,
+    /// Phase 3: 是否从 agent.yaml 读取了部分配置
+    #[serde(default)]
+    pub config_from_file: bool,
     pub created_at: String,
     pub updated_at: String,
-    /// 是否已配置 API Key（前端业务提示用），对应 stronghold 中是否存在
+    /// 是否已配置 API Key（前端业务提示用）
     pub has_api_key: bool,
 }
 
+impl Agent {
+    /// 从 AgentRow 转换，并尝试读取 workspace_path 下的 agent.yaml 合并配置。
+    /// 文件不存在或解析失败时静默回退到 DB 原始值。
+    pub fn from_row_with_file_config(row: AgentRow) -> Self {
+        let mut agent = Agent::from(row);
+        if let Some(file_cfg) = agent.load_file_config() {
+            file_cfg.apply_to(&mut agent);
+            agent.config_from_file = true;
+        }
+        agent
+    }
+
+    /// 尝试从 workspace_path 读取 agent.yaml。
+    /// 注意：此方法在 Agent 上调用时 workspace_path 已通过 AgentRow 赋值。
+    fn load_file_config(&self) -> Option<AgentFileConfig> {
+        let dir = self.workspace_path.as_ref()?;
+        let yaml_path = std::path::Path::new(dir).join("agent.yaml");
+        let content = std::fs::read_to_string(yaml_path).ok()?;
+        serde_yaml::from_str(&content).ok()
+    }
+}
+
+/// 从 AgentRow 转换到 Agent（不含文件配置合并）
 impl From<AgentRow> for Agent {
     fn from(row: AgentRow) -> Self {
         let extra = serde_json::from_str(&row.extra_params)
             .unwrap_or(serde_json::Value::Object(Default::default()));
-        // api_key_ref 非空即视为已配置；强一致需依赖 stronghold，但最少提示给前端
         let has_api_key = !row.api_key_ref.is_empty();
         Agent {
+            workspace_path: row.workspace_path.clone(),
+            config_from_file: false,
             id: row.id,
             name: row.name,
             provider: row.provider,
@@ -111,13 +214,9 @@ impl From<AgentRow> for Agent {
             max_tokens: row.max_tokens,
             extra_params: extra,
             sort_order: row.sort_order,
-            // P2-3: i32 0/1 → bool（DB 默认 1，零值兜底为 false）
             cache_prompt: row.cache_prompt != 0,
-            // A3-2: 历史消息窗口（NULL 由 Option 直接透传）
             max_history_messages: row.max_history_messages,
-            // M1.2 A2-4: 工具裁剪阈值
             tool_trim_threshold: row.tool_trim_threshold,
-            // Task 4: 工具白名单（JSON 数组字符串 → Vec<String>）
             enabled_tools: row.enabled_tools
                 .as_deref()
                 .map(|s| serde_json::from_str::<Vec<String>>(s).unwrap_or_default()),
@@ -135,6 +234,8 @@ impl From<AgentRow> for Agent {
 /// 创建 agent 入参（前端 → Rust）
 #[derive(Debug, Deserialize)]
 pub struct NewAgent {
+    /// 用户自定义 ID（唯一且不可修改）
+    pub id: String,
     pub name: String,
     pub provider: String,
     pub model: String,
@@ -167,6 +268,9 @@ pub struct NewAgent {
     /// 是否支持图片输入（默认 false）
     #[serde(default)]
     pub supports_vision: bool,
+    /// Phase 3: 工作区目录路径（存放 agent.yaml）
+    #[serde(default)]
+    pub workspace_path: Option<String>,
 }
 
 fn default_temperature() -> f64 { 0.7 }
@@ -205,6 +309,12 @@ pub struct AgentUpdate {
     pub enabled_tools: Option<Option<Vec<String>>>,
     /// 是否支持图片输入（None = 不改）
     pub supports_vision: Option<bool>,
+    /// Phase 3: 工作区路径。双层 Option：
+    /// - None = 不更新
+    /// - Some(None) = 清空
+    /// - Some(Some(path)) = 设为 path
+    #[serde(default)]
+    pub workspace_path: Option<Option<String>>,
 }
 
 /// 轮换 API Key 入参
@@ -537,6 +647,8 @@ pub struct UserPreferences {
     pub theme: Option<String>,
     pub code_theme: Option<String>,
     pub font_size: Option<i32>,
+    /// Phase 3: 默认工作区根路径
+    pub default_workspace_path: Option<String>,
 }
 
 /// 更新模板入参（partial update）
