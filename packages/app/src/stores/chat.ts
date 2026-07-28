@@ -57,9 +57,13 @@ export const useChatStore = defineStore("chat", () => {
     }
   }
 
+  // ===== 输入框草稿（跨页面切换保持） =====
+  const draftText = ref("");
+
   // ===== 流式发送 =====
   const sending = ref(false);
   const streamingText = ref("");
+  let sendTimeout: ReturnType<typeof setTimeout> | null = null;
 
   async function sendMessage(content: string) {
     if (!activeConvId.value || sending.value) return;
@@ -80,6 +84,15 @@ export const useChatStore = defineStore("chat", () => {
     };
     messages.value = [...messages.value, userMsg];
 
+    // 前端超时保护：60 秒无响应自动重置
+    sendTimeout = setTimeout(() => {
+      if (sending.value) {
+        console.warn("发送超时（60s），自动重置发送状态");
+        sending.value = false;
+        streamingText.value = "";
+      }
+    }, 60000);
+
     try {
       await bridge.chat.sendMessage(activeConvId.value, content);
     } catch (e) {
@@ -91,6 +104,10 @@ export const useChatStore = defineStore("chat", () => {
 
   async function stopGeneration() {
     if (!activeConvId.value) return;
+    if (sendTimeout) { clearTimeout(sendTimeout); sendTimeout = null; }
+    // 乐观重置发送状态，不依赖后端事件响应
+    sending.value = false;
+    streamingText.value = "";
     try {
       await bridge.chat.stopGeneration(activeConvId.value);
     } catch { /* 静默忽略 */ }
@@ -192,7 +209,13 @@ export const useChatStore = defineStore("chat", () => {
   // ===== 新建会话 =====
   async function createConversation(agentId: string) {
     const conv = await bridge.conversations.create(agentId);
-    conversations.value.unshift(conv);
+    // 未置顶的新会话插入到所有置顶会话之后、第一个未置顶之前
+    const firstUnpinned = conversations.value.findIndex((c) => !c.pinned);
+    if (firstUnpinned === -1) {
+      conversations.value.push(conv);
+    } else {
+      conversations.value.splice(firstUnpinned, 0, conv);
+    }
     selectConversation(conv.id);
     return conv;
   }
@@ -209,7 +232,7 @@ export const useChatStore = defineStore("chat", () => {
     conversations, convLoading,
     activeConvId, activeConversation,
     messages, msgLoading,
-    sending, streamingText,
+    sending, streamingText, draftText,
     loadConversations, selectConversation,
     sendMessage, stopGeneration,
     deleteConversation, pinConversation,
