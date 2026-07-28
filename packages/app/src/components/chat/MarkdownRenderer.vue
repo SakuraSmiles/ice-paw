@@ -5,11 +5,25 @@
 // markdown-it 单次解析在微秒级，流式场景下完全可以承受全量重渲染。
 // highlight.js 只对完整代码块着色，避免流式中途闪烁。
 
-import { computed } from "vue";
+import { computed, ref } from "vue";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import MarkdownIt from "markdown-it";
 import hljs from "highlight.js";
 // 只导入常用语言，缩小体积
 import "highlight.js/lib/common";
+
+const rootRef = ref<HTMLElement | null>(null);
+
+function onRootClick(e: MouseEvent) {
+  const link = (e.target as HTMLElement)?.closest?.("a");
+  if (!link || !link.href) return;
+  // 只拦截外部链接，不拦截锚点
+  if (link.href.startsWith("http://") || link.href.startsWith("https://")) {
+    e.preventDefault();
+    e.stopPropagation();
+    openUrl(link.href);
+  }
+}
 
 // 高亮函数（独立于 md 实例，避免循环引用 TS 错误）
 function highlightCode(str: string, lang: string): string {
@@ -62,5 +76,5 @@ const rendered = computed(() => {
 </script>
 
 <template>
-  <div class="markdown-body" v-html="rendered" />
+  <div ref="rootRef" class="markdown-body" v-html="rendered" @click="onRootClick" />
 </template>

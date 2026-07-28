@@ -53,7 +53,7 @@ onMounted(async () => {
     const prefs = await bridge.preferences.get();
     defaultWorkspace.value = (prefs.default_workspace_path ?? "").replace(/\\/g, "/");
     if (!props.agent && defaultWorkspace.value && form.value.id) {
-      form.value.workspace_path = `${defaultWorkspace.value.replace(/\/$/, "")}/${form.value.id}`;
+      form.value.workspace_path = `${defaultWorkspace.value.replace(/\/$/, "")}/agents/${form.value.id}`;
     }
   } catch {
     // 静默忽略
@@ -63,7 +63,7 @@ onMounted(async () => {
 // 新建模式下，id 变化时自动更新工作区路径
 watch(() => form.value.id, (newId) => {
   if (!props.agent && defaultWorkspace.value && newId) {
-    form.value.workspace_path = `${defaultWorkspace.value.replace(/\/$/, "")}/${newId}`;
+    form.value.workspace_path = `${defaultWorkspace.value.replace(/\/$/, "")}/agents/${newId}`;
   }
 });
 
