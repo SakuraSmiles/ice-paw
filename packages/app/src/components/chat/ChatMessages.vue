@@ -55,6 +55,10 @@ watch(
   },
 );
 
+function copyContent(content: string) {
+  navigator.clipboard.writeText(content);
+}
+
 function formatTime(createdAt: string): string {
   const d = new Date(createdAt);
   if (isNaN(d.getTime())) return "";
@@ -83,24 +87,31 @@ function formatTime(createdAt: string): string {
         :class="['message-row', msg.role]"
       >
         <div :class="['message-content', { thinking: msg.role === 'assistant' && msg.content === '' && chat.sending }]">
-          <div class="message-bubble">
-            <!-- AI 思考中状态 -->
-            <div v-if="msg.role === 'assistant' && msg.content === '' && chat.sending" class="thinking-indicator">
-              <span class="think-dot" />
-              <span class="think-dot" />
-              <span class="think-dot" />
+          <div class="message-bubble-wrap">
+            <div class="message-bubble">
+              <!-- AI 思考中状态 -->
+              <div v-if="msg.role === 'assistant' && msg.content === '' && chat.sending" class="thinking-indicator">
+                <span class="think-dot" />
+                <span class="think-dot" />
+                <span class="think-dot" />
+              </div>
+              <!-- AI 正常回复 -->
+              <MarkdownRenderer v-else-if="msg.role === 'assistant'" :content="msg.content" />
+              <!-- 用户消息 -->
+              <span v-else>{{ msg.content }}</span>
             </div>
-            <!-- AI 正常回复 -->
-            <MarkdownRenderer v-else-if="msg.role === 'assistant'" :content="msg.content" />
-            <!-- 用户消息 -->
-            <span v-else>{{ msg.content }}</span>
+            <button v-if="msg.content" class="copy-btn" title="复制" @click="copyContent(msg.content)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+              </svg>
+            </button>
           </div>
           <div v-if="msg.content" class="message-time">{{ formatTime(msg.created_at) }}</div>
         </div>
       </div>
     </TransitionGroup>
 
-    <!-- 流式生成指示光标（发送中且至少有一条消息时显示） -->
+    <!-- 流式生成指示光标 -->
     <div v-if="chat.sending && chat.messages.length > 0" class="cursor-bar">
       <div class="cursor-track">
         <div class="cursor-glow" />
@@ -125,6 +136,20 @@ function formatTime(createdAt: string): string {
   flex: 1;
   overflow-y: auto;
   padding: 24px 0;
+  position: relative;
+}
+
+.cursor-bar {
+  display: flex;
+  justify-content: flex-start;
+  padding: 4px 48px 0;
+}
+
+.cursor-track {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
 }
 
 .messages-container {
@@ -193,6 +218,41 @@ function formatTime(createdAt: string): string {
   border-bottom-left-radius: 4px;
 }
 
+/* 气泡 + 复制按钮 */
+.message-bubble-wrap {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.copy-btn {
+  position: absolute;
+  top: 4px;
+  right: -32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--ip-radius-md);
+  border: none;
+  background: transparent;
+  color: var(--ip-color-text-tertiary);
+  cursor: pointer;
+  opacity: 0;
+  transition: all var(--ip-duration-fast) var(--ip-ease-out);
+}
+
+.message-bubble-wrap:hover .copy-btn {
+  opacity: 1;
+}
+
+.copy-btn:hover {
+  background-color: var(--ip-color-bg-tertiary);
+  color: var(--ip-color-text-secondary);
+}
+
 .message-time {
   font-size: 11px;
   color: var(--ip-color-text-disabled);
@@ -230,20 +290,7 @@ function formatTime(createdAt: string): string {
   }
 }
 
-/* ===== 底部流式指示条 ===== */
-.cursor-bar {
-  display: flex;
-  justify-content: flex-start;
-  padding: 4px 48px 0;
-}
-
-.cursor-track {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 0;
-}
-
+/* ===== 流式光标 ===== */
 .cursor-glow {
   width: 8px;
   height: 8px;
@@ -284,26 +331,28 @@ function formatTime(createdAt: string): string {
 /* ===== 滚动到底按钮 ===== */
 .scroll-bottom-btn {
   position: fixed;
-  bottom: 160px;
-  right: 32px;
+  top: 80px;
+  right: 48px;
   z-index: 50;
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--ip-radius-lg);
   border: 1px solid var(--ip-color-border-default);
   background-color: var(--ip-color-bg-elevated);
   color: var(--ip-color-text-secondary);
-  box-shadow: var(--ip-shadow-md);
+  box-shadow: var(--ip-shadow-sm);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   transition: all var(--ip-duration-fast) var(--ip-ease-out);
+  backdrop-filter: blur(8px);
 }
 .scroll-bottom-btn:hover {
   background-color: var(--ip-color-bg-secondary);
   color: var(--ip-color-text-primary);
-  box-shadow: var(--ip-shadow-lg);
+  border-color: var(--ip-color-border-strong);
+  box-shadow: var(--ip-shadow-md);
 }
 
 .fade-up-enter-active {
