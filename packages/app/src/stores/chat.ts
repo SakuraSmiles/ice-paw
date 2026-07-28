@@ -42,18 +42,43 @@ export const useChatStore = defineStore("chat", () => {
     loadMessages(id);
   }
 
-  // ===== 消息 =====
+  // ===== 消息（含分页） =====
   const messages = ref<Message[]>([]);
   const msgLoading = ref(false);
+  const hasMore = ref(true);
+  const loadingMore = ref(false);
 
   async function loadMessages(convId: string) {
     msgLoading.value = true;
+    hasMore.value = true;
+    loadingMore.value = false;
     try {
-      messages.value = await bridge.messages.list(convId);
+      messages.value = await bridge.messages.list(convId, { limit: 50 });
+      // 如果返回不足 50 条，说明没有更多了
+      hasMore.value = messages.value.length >= 50;
     } catch (e) {
       console.error("加载消息列表失败:", e);
     } finally {
       msgLoading.value = false;
+    }
+  }
+
+  async function loadMoreMessages() {
+    if (loadingMore.value || !hasMore.value || messages.value.length === 0) return;
+    if (!activeConvId.value) return;
+    loadingMore.value = true;
+    const oldest = messages.value[0];
+    try {
+      const older = await bridge.messages.list(activeConvId.value, {
+        limit: 50,
+        before: [oldest.created_at, oldest.rowid],
+      });
+      if (older.length < 50) hasMore.value = false;
+      messages.value = [...older, ...messages.value];
+    } catch (e) {
+      console.error("加载更早消息失败:", e);
+    } finally {
+      loadingMore.value = false;
     }
   }
 
@@ -237,9 +262,9 @@ export const useChatStore = defineStore("chat", () => {
   return {
     conversations, convLoading,
     activeConvId, activeConversation,
-    messages, msgLoading,
+    messages, msgLoading, hasMore, loadingMore,
     sending, streamingText, draftText, inputAreaHeight,
-    loadConversations, selectConversation,
+    loadConversations, selectConversation, loadMoreMessages,
     sendMessage, stopGeneration,
     deleteConversation, pinConversation,
     initEvents, createConversation, reset,
