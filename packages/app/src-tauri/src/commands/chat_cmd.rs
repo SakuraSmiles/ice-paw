@@ -23,11 +23,9 @@ use crate::harness::chat_state::{CancellationToken, ChatState};
 use crate::harness::loop_engine::LoopContext;
 use crate::harness::observable::RoundState;
 use crate::harness::provider;
-use crate::harness::tool_executor::ToolAuthRegistry;
-use crate::harness::tool_registry::{
-    authority::{PathAuthSession, PathWhitelistConfig},
-    ToolRegistry,
-};
+
+use crate::harness::mcp::McpRegistry;
+use crate::harness::authority::{PathAuthSession, PathWhitelistConfig};
 use crate::context::pipeline::{AssembledContext, PipelineContext, PipelineRunner};
 use crate::context::history::resolve_window;
 
@@ -42,6 +40,8 @@ pub async fn send_message(
     chat_state: State<'_, ChatState>,
     agent_cmd: State<'_, Arc<dyn AgentCmd>>,
     input: SendMessageInput,
+    auth_registry: State<'_, crate::harness::tool_executor::ToolAuthRegistry>,
+    global_registry: State<'_, Arc<McpRegistry>>,
 ) -> AppResult<()> {
     // --- 1. 入参校验：content_blocks 优先，回退到 legacy content ---
     let final_blocks = {
@@ -183,13 +183,21 @@ pub async fn send_message(
     })?;
 
     // --- 6. spawn 流式协程 ---
+    // 从 Agent extra_params 读取工具调用最大轮数（如未配置则 None，走默认 10）
+    let tool_max_rounds = agent.tool_max_rounds();
+    // 使用共享的工具授权注册表（与 lib.rs install_listener 实例一致）
+    let shared_auth_registry = (*auth_registry).clone();
+
+    // 全局 MCP Registry（含外部工具），供对话继承
+    let global_mcp: McpRegistry = (**global_registry).clone();
+
     spawn_stream_loop(
         app, pool.inner().clone(), llm_provider, api_key,
         assembled.messages, agent.temperature, agent.max_tokens,
         cancel_token, conv_id, user_msg_id, asst_msg_id, tools_enabled,
         agent_enabled_tools,
         current_user_query, tool_call_history,
-        model_override,
+        model_override, tool_max_rounds, shared_auth_registry, global_mcp,
     );
     Ok(())
 }
@@ -230,26 +238,38 @@ fn spawn_stream_loop(
     agent_enabled_tools: Option<Vec<String>>,
     query: Option<String>, call_history: Vec<String>,
     model_override: Option<String>,
+    tool_max_rounds: Option<u32>,
+    auth_registry: crate::harness::tool_executor::ToolAuthRegistry,
+    global_registry: McpRegistry,
 ) {
     tokio::spawn(async move {
-        // Task 4: 工具列表来自 Agent 配置（enabled_tools），对话 toggle 控制是否启用
+        // 优先从全局 registry（含外部 MCP Server 工具）构建对话工具列表
         let tool_registry = if tools_enabled {
             match &agent_enabled_tools {
-                Some(names) if !names.is_empty() => ToolRegistry::with_filter(names),
-                Some(_) => ToolRegistry::new(), // 空 vec = 全部禁用
-                None => ToolRegistry::with_builtin(), // None = 全部启用（向后兼容）
+                Some(names) if !names.is_empty() => {
+                    // Agent 指定了白名单：从全局 registry 中筛选
+                    let reg = McpRegistry::new();
+                    reg.register_names_from(&global_registry, names).await;
+                    reg
+                }
+                Some(_) => McpRegistry::new(), // 空 vec = 全部禁用
+                None => global_registry.clone(), // 无过滤 = 继承全局（含外部工具）
             }
         } else {
-            ToolRegistry::new()
+            McpRegistry::new()
         };
         // W2.4: maintain observable state across the stream loop
         let mut observable = RoundState::default();
-        // W4.1: 传入 LoopBudget（当前用 default，等价于原硬编码常量）
-        let budget = LoopBudget::default();
+        // W4.1: 传入 LoopBudget（优先使用 Agent 配置的 tool_max_rounds）
+        let budget = match tool_max_rounds {
+            Some(r) => LoopBudget { max_tool_rounds: r, ..LoopBudget::default() },
+            None => LoopBudget::default(),
+        };
         let emit_app = app.clone();
 
-        // A2-3: 工具授权响应注册表（前端响应 → Rust oneshot 解锁）
-        let auth_registry = ToolAuthRegistry::new();
+        // A2-3: 使用共享的工具授权注册表（与 lib.rs install_listener 同一个实例）
+        // 这样前端 chat:tool-auth-response 事件能匹配到正确的 oneshot sender。
+        let auth_registry = auth_registry;
         // A2-3: 本次会话级已授权路径表
         let auth_session = PathAuthSession::new();
         // A2-3: 路径白名单配置（当前为空 → 全部走 Confirm 流程）

@@ -34,7 +34,8 @@ where
 {
     tokio::spawn(async move {
         let mut byte_stream = byte_stream;
-        let mut buffer = String::new();
+        // 用 Vec<u8> 缓冲区避免 UTF-8 跨 chunk 边界截断
+        let mut buf: Vec<u8> = Vec::new();
         let mut last_stop_reason: Option<String> = None;
         // 追踪 content block：index → (block_type, id?, name?)
         // 用于在 content_block_start 时记录，content_block_delta 时查询
@@ -64,12 +65,24 @@ where
                 }
             };
 
-            // 追加到缓冲区并按 SSE 事件块（\n\n 分隔）切分
-            buffer.push_str(&String::from_utf8_lossy(&chunk));
+            // 追加原始字节到缓冲区（避免 UTF-8 跨 chunk 边界截断）
+            buf.extend_from_slice(&chunk);
 
-            while let Some(pos) = buffer.find("\n\n") {
-                let event_block = buffer[..pos].to_string();
-                buffer = buffer[pos + 2..].to_string();
+            // SSE 事件块以 \n\n 分隔，在字节缓冲区中查找
+            while let Some(pos) = buf.windows(2).position(|w| w == b"\n\n") {
+                // 提取事件块字节并解码（完整块，不会截断 UTF-8）
+                let event_bytes: Vec<u8> = buf[..pos].to_vec();
+                let event_block = String::from_utf8(event_bytes)
+                    .unwrap_or_else(|e| {
+                        tracing::warn!(
+                            target: "ice_paw.llm",
+                            "Anthropic SSE 事件块 UTF-8 解码失败（容错）: {}",
+                            e,
+                        );
+                        String::from_utf8_lossy(&e.into_bytes()).to_string()
+                    });
+                // 从缓冲区移除已处理的事件块（含 \n\n）
+                buf = buf[pos + 2..].to_vec();
 
                 // 事件块内逐行解析 event: / data: 前缀
                 let mut event_type = String::new();

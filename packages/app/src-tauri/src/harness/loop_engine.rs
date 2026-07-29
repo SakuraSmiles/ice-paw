@@ -42,10 +42,8 @@ use crate::harness::budget::LoopBudget;
 use crate::harness::chat_state::CancellationToken;
 use crate::harness::observable::{RoundState, RoundTimer};
 use crate::harness::retry::{RetryContext, RetryState};
-use crate::harness::tool_registry::{
-    authority::{PathAuthSession, PathWhitelistConfig},
-    ToolRegistry,
-};
+use crate::harness::mcp::McpRegistry;
+use crate::harness::authority::{PathAuthSession, PathWhitelistConfig};
 
 use super::batch_writer;
 use super::stream_consumer::{consume_stream, CollectedToolCall};
@@ -153,7 +151,7 @@ pub(crate) struct LoopContext {
     pub messages: Vec<ChatMessage>,
 
     // ---- 工具 ----
-    pub tool_registry: ToolRegistry,
+    pub tool_registry: McpRegistry,
     pub tools_enabled: bool,
     /// A2-3: 工具授权响应全局注册表（前端响应 → Rust oneshot 解锁）
     pub auth_registry: ToolAuthRegistry,
@@ -201,7 +199,7 @@ impl LoopContext {
         temperature: f64,
         max_tokens: i32,
         messages: Vec<ChatMessage>,
-        tool_registry: ToolRegistry,
+        tool_registry: McpRegistry,
         tools_enabled: bool,
         cancel: CancellationToken,
         budget: LoopBudget,
@@ -405,6 +403,17 @@ async fn stream_loop_inner(
         let mut round_finish_reason = "stop".to_string();
         let mut tool_calls_map: HashMap<String, CollectedToolCall> = HashMap::new();
         let mut round_success = false;
+
+        // 第 2 轮起，在消息中注入剩余轮次信息（帮助 LLM 决定是否继续调工具）
+        if tool_round > 0 {
+            ctx.messages.push(ChatMessage {
+                role: "user".into(),
+                content: vec![ContentBlock::text(format!(
+                    "（第 {}/{} 轮工具调用完毕。如果还有未完成的操作请继续，如果已经完成请直接输出最终回答。）",
+                    tool_round, ctx.budget.max_tool_rounds
+                ))],
+            });
+        }
 
         // === RetryState 驱动的重试循环 ===
         let mut retry_state = RetryState::new();

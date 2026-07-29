@@ -29,10 +29,13 @@ pub mod harness;
 pub mod infra;
 pub mod r#loop;
 
+use std::sync::Arc;
+
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
-#[allow(unused_imports)]
-use tauri::Manager; // for handle.manage() in setup
+use tauri::Manager;
+
+use harness::mcp::McpRegistry;
 
 /// 应用入口
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -51,10 +54,10 @@ pub fn run() {
         // 聊天全局状态（CancellationToken 注册表）
         .manage(harness::chat_state::ChatState::new())
         // REQ-XC-010: AgentCmd trait 抽象注入
-        // （仅在 setup 阶段能拿到 pool+app handle；先在 setup 里 manage ，
-        // 生产路径注入 SqlAgentCmd，测试可在独立 binary 里换 MockAgentCmd）
-        // 这里先用占位（None 路径：交给 setup 重写）；setup 里会 overwrite。
         .manage::<Option<std::sync::Arc<dyn commands::agent_cmd::AgentCmd>>>(None)
+        // Phase 2: 全局 MCP 工具注册表 + 外部 Server 管理器
+        .manage(Arc::new(McpRegistry::with_builtin()))
+        .manage(Arc::new(harness::mcp::McpServerManager::new()))
         // 注：原 `tauri_plugin_stronghold::Builder::new(...).build()` 注册已移除。
         //
         // 理由（参见 dev2 评审方案 §3.2）：
@@ -90,6 +93,12 @@ pub fn run() {
             commands::chat_cmd::stop_generation,
             commands::preferences_cmd::get_preferences,
             commands::preferences_cmd::set_preference,
+            commands::mcp_cmd::list_mcp_servers,
+            commands::mcp_cmd::create_mcp_server,
+            commands::mcp_cmd::update_mcp_server,
+            commands::mcp_cmd::delete_mcp_server,
+            commands::mcp_cmd::restart_mcp_server,
+            commands::mcp_cmd::list_active_mcp_servers,
         ])
         // 启动逻辑
         .setup(|app| {
@@ -131,6 +140,34 @@ pub fn run() {
                     pool.clone(),
                 ));
             handle.manage(sql_agent_cmd);
+
+            // 5) Phase 2: 启动已启用的外部 MCP Server
+            let mcp_registry: Arc<McpRegistry> = handle.state::<Arc<McpRegistry>>().inner().clone();
+            let mcp_manager: Arc<harness::mcp::McpServerManager> =
+                handle.state::<Arc<harness::mcp::McpServerManager>>().inner().clone();
+            match tauri::async_runtime::block_on(async {
+                let configs = db::repo::mcp_server::list_all(&pool).await?;
+                for cfg in &configs {
+                    if cfg.enabled {
+                        tracing::info!(
+                            target: "ice_paw.mcp",
+                            "正在启动 MCP Server '{}' (command: {})",
+                            cfg.name, cfg.command,
+                        );
+                        if let Err(e) = mcp_manager.start(cfg, &mcp_registry).await {
+                            tracing::error!(
+                                target: "ice_paw.mcp",
+                                "MCP Server '{}' 启动失败: {}",
+                                cfg.name, e,
+                            );
+                        }
+                    }
+                }
+                Ok::<_, crate::error::AppError>(())
+            }) {
+                Ok(_) => tracing::info!(target: "ice_paw.mcp", "MCP Server 启动完成"),
+                Err(e) => tracing::warn!(target: "ice_paw.mcp", "MCP Server 启动异常: {}", e),
+            }
 
             let _ = pool;
             Ok(())

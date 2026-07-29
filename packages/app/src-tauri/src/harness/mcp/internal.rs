@@ -1,9 +1,8 @@
-//! 内置工具（`read_file` / `list_directory`）
+//! 内置 MCP 工具客户端（read_file / list_directory）
 //!
-//! P2-1c: 安全只读工具。
+//! Phase 1: 从 `tool_registry/builtin.rs` 迁移，实现 `McpClient` trait。
 //!
-//! **W2.3**：从 `llm/tool_registry.rs` 拆出，迁入 `harness/tool_registry/builtin.rs`。
-//! W5.4–W5.5 将在此文件增加 `AuthorizationLevel` 实现 + 路径白名单策略。
+//! 两个工具均为安全只读操作，在 Rust 侧直接执行（不走外部进程）。
 
 use std::path::Path;
 
@@ -12,7 +11,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, AppResult};
 
-use super::{AuthorizationLevel, Tool};
+use super::client::McpClient;
+use super::types::AuthorizationLevel;
 
 // =========================================================================
 // read_file
@@ -33,7 +33,7 @@ fn default_max_read_bytes() -> usize {
 }
 
 #[async_trait]
-impl Tool for ReadFileTool {
+impl McpClient for ReadFileTool {
     fn name(&self) -> &str {
         "read_file"
     }
@@ -77,7 +77,6 @@ impl Tool for ReadFileTool {
             AppError::Validation(format!("文件路径无效: {e}"))
         })?;
 
-        // 拒绝读取 /proc /sys /dev 等
         let path_str = canonical.to_string_lossy();
         if path_str.starts_with("/proc/") || path_str.starts_with("/sys/") || path_str.starts_with("/dev/") {
             return Err(AppError::Validation(
@@ -134,7 +133,7 @@ struct ListDirectoryArgs {
 }
 
 #[async_trait]
-impl Tool for ListDirectoryTool {
+impl McpClient for ListDirectoryTool {
     fn name(&self) -> &str {
         "list_directory"
     }
@@ -203,7 +202,6 @@ impl Tool for ListDirectoryTool {
             entries.push(DirEntry { name, is_dir, size });
         }
 
-        // 按名称排序（目录优先）
         entries.sort_by(|a, b| match (a.is_dir, b.is_dir) {
             (true, false) => std::cmp::Ordering::Less,
             (false, true) => std::cmp::Ordering::Greater,
@@ -215,7 +213,7 @@ impl Tool for ListDirectoryTool {
 }
 
 // =========================================================================
-// 内置工具单测
+// 单测
 // =========================================================================
 
 #[cfg(test)]
@@ -225,7 +223,6 @@ mod tests {
     #[tokio::test]
     async fn read_file_tool_valid() {
         let tool = ReadFileTool;
-        // 读取自身 Cargo.toml（确定存在）
         let args = serde_json::json!({
             "path": "Cargo.toml",
             "max_bytes": 10240
@@ -270,7 +267,6 @@ mod tests {
         let result = tool.execute(args).await;
         assert!(result.is_ok());
         let content = result.unwrap();
-        // 应该是一个 JSON 数组
         assert!(content.starts_with("["));
     }
 
@@ -299,5 +295,17 @@ mod tests {
         assert_eq!(params["type"], "object");
         assert!(params["properties"]["path"].is_object());
         assert_eq!(params["required"][0], "path");
+    }
+
+    #[test]
+    fn read_file_auth_level() {
+        let tool = ReadFileTool;
+        assert_eq!(tool.authorization_level(), AuthorizationLevel::PathWhitelist);
+    }
+
+    #[test]
+    fn list_directory_auth_level() {
+        let tool = ListDirectoryTool;
+        assert_eq!(tool.authorization_level(), AuthorizationLevel::Always);
     }
 }

@@ -42,7 +42,8 @@ pub(crate) fn parse_sse_stream<S, E>(
 {
     tokio::spawn(async move {
         let mut byte_stream = byte_stream;
-        let mut buffer = String::new();
+        // 用 Vec<u8> 缓冲区避免 UTF-8 跨 chunk 边界截断
+        let mut buf: Vec<u8> = Vec::new();
         // 追踪每个工具调用的状态：index → (id, name, arguments_buffer, started)
         let mut tool_call_states: HashMap<usize, (String, String, String, bool)> =
             HashMap::new();
@@ -70,18 +71,36 @@ pub(crate) fn parse_sse_stream<S, E>(
                 }
             };
 
-            // 追加到缓冲区并按行处理
-            buffer.push_str(&String::from_utf8_lossy(&chunk));
+            // 把原始字节追加到缓冲区（避免 from_utf8_lossy 在多字节 UTF-8 边界切断）
+            buf.extend_from_slice(&chunk);
 
-            while let Some(newline_pos) = buffer.find('\n') {
-                let line = buffer[..newline_pos].trim_end_matches('\r').to_string();
-                // 剩余保留
-                buffer = buffer[newline_pos + 1..].to_string();
+            // 按字节查找 \n，提取完整行
+            while let Some(newline_pos) = buf.iter().position(|&b| b == b'\n') {
+                // 提取这行（不含 \n），去除尾部的 \r
+                let line_bytes: Vec<u8> = buf[..newline_pos]
+                    .iter()
+                    .copied()
+                    .filter(|&b| b != b'\r')
+                    .collect();
+                // 从缓冲区移除已处理的行（含 \n）
+                buf = buf[newline_pos + 1..].to_vec();
 
                 // 空行跳过（SSE 事件分隔符）
-                if line.is_empty() {
+                if line_bytes.is_empty() {
                     continue;
                 }
+
+                // 只解码完整的行，确保 UTF-8 不会被截断
+                let line = String::from_utf8(line_bytes)
+                    .unwrap_or_else(|e| {
+                        tracing::warn!(
+                            target: "ice_paw.llm",
+                            "SSE 行 UTF-8 解码失败（容错回退）: {}",
+                            e,
+                        );
+                        // 容错：丢弃无效字节
+                        String::from_utf8_lossy(&e.into_bytes()).to_string()
+                    });
 
                 // 只处理 `data: ` 开头的行
                 let Some(data) = line.strip_prefix("data: ") else {

@@ -21,6 +21,7 @@ const KNOWN_KEYS: &[&str] = &[
     "code_theme",
     "font_size",
     "default_workspace_path",
+    "timezone",
 ];
 
 /// 系统默认工作空间根路径（安装即用，自动创建）

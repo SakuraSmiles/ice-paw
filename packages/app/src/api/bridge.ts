@@ -75,14 +75,14 @@ const messages = {
 };
 
 const chat = {
-  async sendMessage(conversationId: string, content: string, contentBlocks?: import("../types").ContentBlock[]): Promise<void> {
+  async sendMessage(conversationId: string, content: string, contentBlocks?: import("../types").ContentBlock[], toolsEnabled?: boolean): Promise<void> {
     try {
       await invoke<void>("send_message", {
         input: {
           conversation_id: conversationId,
           content: content || undefined,
           content_blocks: contentBlocks?.length ? contentBlocks : undefined,
-          tools_enabled: false,
+          tools_enabled: toolsEnabled ?? true,
         },
       });
     } catch (err) { throw wrapInvokeError("chat.sendMessage", err); }

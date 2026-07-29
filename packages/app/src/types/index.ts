@@ -210,5 +210,6 @@ export interface UserPreferences {
   auto_render?: boolean | null;
   auto_timestamp?: boolean | null;
   keyboard_shortcuts?: Record<string, string> | null;
+  timezone?: string;
   default_workspace_path?: string | null;
 }
