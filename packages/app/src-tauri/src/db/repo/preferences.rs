@@ -71,7 +71,7 @@ pub async fn get_all(pool: &SqlitePool) -> AppResult<UserPreferences> {
         .unwrap_or_default();
 
     // 首次启动：用户没设置过 → 自动初始化合理的默认值
-    let needs_init = prefs.default_workspace_path.as_ref().map_or(true, |s| s.is_empty());
+    let needs_init = prefs.default_workspace_path.as_ref().is_none_or(|s| s.is_empty());
     if needs_init {
         let path = default_workspace_path();
         ensure_dir(&path);

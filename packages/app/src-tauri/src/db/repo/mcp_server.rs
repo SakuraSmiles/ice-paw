@@ -139,7 +139,7 @@ impl From<McpServerRow> for McpServerConfig {
             args: serde_json::from_str(&row.args).unwrap_or_default(),
             env: serde_json::from_str(&row.env).unwrap_or(serde_json::json!({})),
             enabled: row.enabled != 0,
-            trust_level: TrustLevel::from_str(&row.trust_level),
+            trust_level: row.trust_level.parse::<TrustLevel>().unwrap_or_default(),
             created_at: row.created_at,
             updated_at: row.updated_at,
         }

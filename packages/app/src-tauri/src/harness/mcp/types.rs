@@ -156,25 +156,26 @@ pub struct McpContentItem {
 // =========================================================================
 
 /// Server 信任级别：控制该 Server 下的工具是否需要授权确认
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TrustLevel {
     /// 不信任：每次调用需用户确认弹窗
+    #[default]
     Untrusted,
     /// 信任：工具调用免检（直接执行）
     Trusted,
-}
-
-impl Default for TrustLevel {
-    fn default() -> Self { TrustLevel::Untrusted }
 }
 
 impl TrustLevel {
     pub fn as_str(&self) -> &'static str {
         match self { TrustLevel::Trusted => "trusted", TrustLevel::Untrusted => "untrusted" }
     }
-    pub fn from_str(s: &str) -> Self {
-        match s { "trusted" => TrustLevel::Trusted, _ => TrustLevel::Untrusted }
+}
+
+impl std::str::FromStr for TrustLevel {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s { "trusted" => Ok(TrustLevel::Trusted), _ => Ok(TrustLevel::Untrusted) }
     }
 }
 
@@ -294,9 +295,9 @@ mod tests {
 
     #[test]
     fn trust_level_roundtrip() {
-        assert_eq!(TrustLevel::from_str("trusted"), TrustLevel::Trusted);
-        assert_eq!(TrustLevel::from_str("untrusted"), TrustLevel::Untrusted);
-        assert_eq!(TrustLevel::from_str("unknown"), TrustLevel::Untrusted);
+        assert_eq!("trusted".parse::<TrustLevel>().unwrap(), TrustLevel::Trusted);
+        assert_eq!("untrusted".parse::<TrustLevel>().unwrap(), TrustLevel::Untrusted);
+        assert_eq!("unknown".parse::<TrustLevel>().unwrap(), TrustLevel::Untrusted);
         assert_eq!(TrustLevel::Trusted.as_str(), "trusted");
         assert_eq!(TrustLevel::Untrusted.as_str(), "untrusted");
     }
