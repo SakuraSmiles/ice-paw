@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(netstat -ano)"
+      "Bash(netstat -ano)",
+      "Bash(git commit -m 'fix: 新消息底部信息实时显示 + 日期分组样式优化 *)"
     ]
   }
 }

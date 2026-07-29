@@ -11,6 +11,7 @@ import type {
   ChatErrorPayload,
 } from "../types";
 import { bridge } from "../api/bridge";
+import { useAgentStore } from "./agent";
 
 export const useChatStore = defineStore("chat", () => {
   // ===== 会话列表（全部会话，不限 agent） =====
@@ -92,6 +93,7 @@ export const useChatStore = defineStore("chat", () => {
   const sending = ref(false);
   const streamingText = ref("");
   const lastFinishReason = ref<string | null>(null);
+  const currentModel = ref<string | null>(null);
   let sendTimeout: ReturnType<typeof setTimeout> | null = null;
 
   async function sendMessage(content: string, contentBlocks?: import("../types").ContentBlock[]) {
@@ -99,6 +101,12 @@ export const useChatStore = defineStore("chat", () => {
     sending.value = true;
     streamingText.value = "";
     lastFinishReason.value = null;
+
+    // 从当前 Agent 获取模型名
+    const agentStore = useAgentStore();
+    const conv = activeConversation.value;
+    const agent = conv ? agentStore.getById(conv.agent_id) : null;
+    currentModel.value = agent?.model ?? null;
 
     // 如果有待发送图片，合并到 content_blocks
     let blocks = contentBlocks ?? [];
@@ -120,7 +128,7 @@ export const useChatStore = defineStore("chat", () => {
       error: null,
       created_at: new Date().toISOString(),
       rowid: 0,
-      model: null,
+      model: currentModel.value,
     };
     messages.value = [...messages.value, userMsg];
 
@@ -208,7 +216,7 @@ export const useChatStore = defineStore("chat", () => {
         error: null,
         created_at: new Date().toISOString(),
         rowid: 0,
-        model: null,
+        model: currentModel.value,
       });
     });
 
@@ -285,7 +293,7 @@ export const useChatStore = defineStore("chat", () => {
     conversations, convLoading,
     activeConvId, activeConversation,
     messages, msgLoading, hasMore, loadingMore,
-    sending, streamingText, draftText, pendingImages, lastFinishReason,
+    sending, streamingText, draftText, pendingImages, lastFinishReason, currentModel,
     loadConversations, selectConversation, loadMoreMessages,
     sendMessage, stopGeneration,
     deleteConversation, pinConversation,
