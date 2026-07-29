@@ -12,10 +12,9 @@ use std::str::FromStr;
 
 use crate::context::pipeline::{PipelineContext, PipelineRunner, PipelineStage};
 use crate::context::stages::{
-    FinalAssembleStage, HistoryStage, OsContextStage, SystemPromptStage, TemplateStage,
+    FinalAssembleStage, HistoryStage, OsContextStage, SystemPromptStage,
 };
 use crate::db::models::{AgentRow, MessageRow};
-use crate::db::repo;
 use crate::error::AppResult;
 use crate::infra::cancel::CancellationToken;
 use crate::infra::protocol::{ChatMessage, ContentBlock, TemplateInput};
