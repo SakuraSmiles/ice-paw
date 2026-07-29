@@ -84,8 +84,6 @@ export const useChatStore = defineStore("chat", () => {
 
   // ===== 输入框草稿（跨页面切换保持） =====
   const draftText = ref("");
-  // 输入区域总高度（按钮定位用）
-  const inputAreaHeight = ref(72); // 默认单行高度
 
   // ===== 图片附件列表 =====
   const pendingImages = ref<{ data: string; mediaType: string; name: string }[]>([]);
@@ -276,7 +274,7 @@ export const useChatStore = defineStore("chat", () => {
     conversations, convLoading,
     activeConvId, activeConversation,
     messages, msgLoading, hasMore, loadingMore,
-    sending, streamingText, draftText, inputAreaHeight, pendingImages,
+    sending, streamingText, draftText, pendingImages,
     loadConversations, selectConversation, loadMoreMessages,
     sendMessage, stopGeneration,
     deleteConversation, pinConversation,
