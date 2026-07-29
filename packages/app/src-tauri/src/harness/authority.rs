@@ -166,9 +166,7 @@ pub async fn check_authorization_with_session(
             reason: "此工具需要用户确认授权".to_string(),
         },
         AuthorizationLevel::PathWhitelist => {
-            if is_path_allowed(path, config) {
-                AuthorizationDecision::Allow
-            } else if session.is_authorized(path).await {
+            if is_path_allowed(path, config) || session.is_authorized(path).await {
                 AuthorizationDecision::Allow
             } else {
                 AuthorizationDecision::Confirm {
