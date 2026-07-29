@@ -45,7 +45,7 @@ onMounted(async () => {
   try {
     const prefs = await bridge.preferences.get();
     userTimezone.value = prefs.timezone || "";
-  } catch {}
+  } catch { /* 静默忽略 */ }
 });
 
 const toolCallList = computed(() => {
@@ -74,11 +74,11 @@ function truncateJson(str: string, maxLen = 80): string {
 }
 
 /** 判断一个 assistant 消息是否有非 text 的附属内容（tool/thinking） */
-function hasExtras(msg: any): boolean {
+function hasExtras(msg: { content_blocks?: string }): boolean {
   if (!msg.content_blocks || msg.content_blocks === '[]') return false;
   try {
     const blocks = JSON.parse(msg.content_blocks);
-    return Array.isArray(blocks) && blocks.some((b: any) => b.type === 'tool_use' || b.type === 'thinking');
+    return Array.isArray(blocks) && blocks.some((b: Record<string, unknown>) => b.type === 'tool_use' || b.type === 'thinking');
   } catch { return false; }
 }
 
@@ -150,33 +150,41 @@ function copyContent(content: string) {
 
 function parseImageBlocks(contentBlocks: string): { data: string; mediaType: string }[] {
   try {
-    const blocks = JSON.parse(contentBlocks);
+    const blocks: unknown[] = JSON.parse(contentBlocks);
     if (!Array.isArray(blocks)) return [];
-    return blocks.filter((b: any) => b?.type === "image").map((b: any) => ({ data: b.data, mediaType: b.media_type }));
+    return blocks.filter((b): b is { data: string; media_type: string; type: string } =>
+      typeof b === 'object' && b !== null && (b as Record<string, unknown>).type === 'image'
+    ).map((b) => ({ data: b.data, mediaType: b.media_type }));
   } catch { return []; }
 }
 
 function parseToolUseBlocks(contentBlocks: string): { id: string; name: string; input: string }[] {
   try {
-    const blocks = JSON.parse(contentBlocks);
+    const blocks: unknown[] = JSON.parse(contentBlocks);
     if (!Array.isArray(blocks)) return [];
-    return blocks.filter((b: any) => b?.type === "tool_use").map((b: any) => ({ id: b.id, name: b.name, input: b.input }));
+    return blocks.filter((b): b is { id: string; name: string; input: string; type: string } =>
+      typeof b === 'object' && b !== null && (b as Record<string, unknown>).type === 'tool_use'
+    ).map((b) => ({ id: b.id, name: b.name, input: b.input }));
   } catch { return []; }
 }
 
 function parseToolResultBlocks(contentBlocks: string): { toolUseId: string; content: string; isError: boolean }[] {
   try {
-    const blocks = JSON.parse(contentBlocks);
+    const blocks: unknown[] = JSON.parse(contentBlocks);
     if (!Array.isArray(blocks)) return [];
-    return blocks.filter((b: any) => b?.type === "tool_result").map((b: any) => ({ toolUseId: b.tool_use_id, content: b.content, isError: b.is_error ?? false }));
+    return blocks.filter((b): b is { tool_use_id: string; content: string; is_error?: boolean; type: string } =>
+      typeof b === 'object' && b !== null && (b as Record<string, unknown>).type === 'tool_result'
+    ).map((b) => ({ toolUseId: b.tool_use_id, content: b.content, isError: b.is_error ?? false }));
   } catch { return []; }
 }
 
 function parseThinkingBlocks(contentBlocks: string): string[] {
   try {
-    const blocks = JSON.parse(contentBlocks);
+    const blocks: unknown[] = JSON.parse(contentBlocks);
     if (!Array.isArray(blocks)) return [];
-    return blocks.filter((b: any) => b?.type === "thinking").map((b: any) => b.thinking);
+    return blocks.filter((b): b is { thinking: string; type: string } =>
+      typeof b === 'object' && b !== null && (b as Record<string, unknown>).type === 'thinking'
+    ).map((b) => b.thinking);
   } catch { return []; }
 }
 
@@ -201,7 +209,7 @@ function getDateLabel(dateStr: string): string | null {
         const m = parts.find(p => p.type === "month")?.value || "";
         const day = parts.find(p => p.type === "day")?.value || "";
         return `${y}-${m}-${day}`;
-      } catch {}
+      } catch { /* 忽略无效时区 */ }
     }
     return `${dt.getFullYear()}-${dt.getMonth()}-${dt.getDate()}`;
   };
@@ -235,7 +243,7 @@ function formatTime(createdAt: string): string {
         minute: "2-digit",
         hour12: false
       }).format(d);
-    } catch {}
+    } catch { /* 忽略无效时区 */ }
   }
   const hh = String(d.getHours()).padStart(2, "0");
   const mm = String(d.getMinutes()).padStart(2, "0");
@@ -424,7 +432,7 @@ const finishReasonLabels: Record<string, string> = {
     </div>
 
     <Transition name="fade-up">
-      <button v-if="showScrollBtn && !chat.sending" class="scroll-bottom-btn" @click="scrollToBottom()" title="滚动到底部">
+      <button v-if="showScrollBtn && !chat.sending" class="scroll-bottom-btn" title="滚动到底部" @click="scrollToBottom()">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <line x1="12" y1="5" x2="12" y2="19" /><polyline points="19 12 12 19 5 12" />
         </svg>

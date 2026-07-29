@@ -25,8 +25,8 @@ function toggleTheme() {
   if (document.startViewTransition) {
     const btn = document.querySelector(".btn-theme-toggle");
     const rect = btn?.getBoundingClientRect();
-    const x = rect ? (rect.left + rect.width / 2) / innerWidth * 100 : 50;
-    const y = rect ? (rect.top + rect.height / 2) / innerHeight * 100 : 50;
+    const x = rect ? (rect.left + rect.width / 2) / window.innerWidth * 100 : 50;
+    const y = rect ? (rect.top + rect.height / 2) / window.innerHeight * 100 : 50;
 
     // 用 CSS 变量传递圆心位置，纯 CSS keyframe 驱动动画
     document.documentElement.style.setProperty("--theme-reveal-x", x + "%");
@@ -127,7 +127,7 @@ function timeAgo(dateStr: string): string {
         <span class="brand-icon">✦</span>
         <span class="brand-name">IcePaw</span>
       </div>
-      <button class="btn-theme-toggle" @click="toggleTheme" :title="isDark ? '切换到亮色模式' : '切换到暗色模式'">
+      <button class="btn-theme-toggle" :title="isDark ? '切换到亮色模式' : '切换到暗色模式'" @click="toggleTheme">
         <!-- 月亮（亮色模式显示 → 点击变暗）-->
         <svg v-if="!isDark" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />

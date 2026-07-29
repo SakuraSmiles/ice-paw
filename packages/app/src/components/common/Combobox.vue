@@ -98,10 +98,10 @@ function handleKeydown(e: KeyboardEvent) {
         type="button"
         class="combobox-chevron"
         :class="{ rotated: open }"
-        @mousedown.prevent
-        @click="toggle"
         tabindex="-1"
         aria-label="展开选项"
+        @mousedown.prevent
+        @click="toggle"
       >
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="6 9 12 15 18 9" />
