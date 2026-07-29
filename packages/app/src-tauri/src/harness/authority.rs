@@ -1,20 +1,11 @@
-//! 工具权限策略 — 路径白名单 + 用户确认授权 (A2-3)
+//! 工具权限策略 — 路径白名单 + 用户确认授权
 //!
-//! W5.5: 实现 `PathWhitelistConfig` + `is_path_allowed()` 判断逻辑。
-//! A2-3: 新增 `AuthorizationDecision` 枚举表达「直接放行 / 需要用户确认 / 拒绝」
-//!       三态授权结果，配套 `PathAuthSession` 跟踪「本次会话已授权的路径」。
+//! Phase 1: 从 `tool_registry/authority.rs` 迁出，位于 `harness/` 顶层。
 //!
 //! 设计要点：
-//! - `AuthorizationDecision::Allow` — 路径在白名单内 / 工具级别为 `Always`，直接放行
-//! - `AuthorizationDecision::Confirm { .. }` — 需要前端弹窗确认
-//!   - 路径白名单校验未通过（`PathWhitelist` 工具请求非白名单路径）
-//!   - 工具级别本身就是 `Confirm`
-//! - `AuthorizationDecision::Deny { .. }` — 永久拒绝（保留语义，当前未使用，留作扩展）
-//!
-//! **会话级记忆**：本模块的 `PathAuthSession`（独立类型，本文件内）保存「本轮
-//! 流式生成中已被用户 `Allow` 的路径」。同一会话后续相同路径不再弹窗。
-//! 会话结束由上层（`tool_executor::execute_tool_round` 结束或取消）调用
-//! `clear()` 清空。
+//! - `PathWhitelistConfig` 定义路径白名单配置
+//! - `PathAuthSession` 跟踪「本次会话已授权的路径」
+//! - `AuthorizationDecision` 表达「直接放行 / 需要用户确认 / 拒绝」三态
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -23,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use super::AuthorizationLevel;
+use crate::harness::mcp::AuthorizationLevel;
 
 // =========================================================================
 // PathWhitelistConfig — 路径白名单配置
@@ -53,10 +44,10 @@ pub fn is_path_allowed(path: &str, config: &PathWhitelistConfig) -> bool {
 }
 
 // =========================================================================
-// AuthorizationDecision — 授权决策 (A2-3)
+// AuthorizationDecision — 授权决策
 // =========================================================================
 
-/// A2-3: 授权决策结果
+/// 授权决策结果
 ///
 /// 由 `check_authorization_with_session()` 返回，调用方根据结果决定
 /// 直接执行 / 弹窗 / 拒绝。
@@ -65,7 +56,7 @@ pub fn is_path_allowed(path: &str, config: &PathWhitelistConfig) -> bool {
 pub enum AuthorizationDecision {
     /// 直接放行（路径在白名单 / 工具 Always）
     Allow,
-    /// 需要用户在前端弹窗确认（已携带上下文：tool_name / path / request_id / args）
+    /// 需要用户在前端弹窗确认
     Confirm {
         /// 唯一请求 ID（用于匹配前端响应）
         request_id: String,
@@ -78,7 +69,7 @@ pub enum AuthorizationDecision {
         /// 触发原因（前端展示文案）
         reason: String,
     },
-    /// 永久拒绝（保留：未来扩展按 allowlist / 工具级别做硬阻断）
+    /// 永久拒绝（保留：未来扩展）
     Deny {
         reason: String,
     },
@@ -97,16 +88,14 @@ impl AuthorizationDecision {
 }
 
 // =========================================================================
-// PathAuthSession — 会话级已授权路径表 (A2-3)
+// PathAuthSession — 会话级已授权路径表
 // =========================================================================
 
-/// 会话级已授权路径表（A2-3）
+/// 会话级已授权路径表
 ///
 /// 跟踪「本次 LLM 流式循环中已被用户 `Allow` 的路径」，
 /// 同一会话内再次访问相同路径不再弹窗。
 /// 会话结束 / 流式取消时由上层调 `clear()` 清空。
-///
-/// 线程安全：用 `tokio::sync::Mutex` 保护内部 `HashSet`。
 #[derive(Debug, Clone, Default)]
 pub struct PathAuthSession {
     inner: Arc<Mutex<HashSet<String>>>,
@@ -132,12 +121,6 @@ impl PathAuthSession {
         set.insert(path.to_string());
     }
 
-    /// 同步插入（测试便利）
-    #[cfg(test)]
-    pub async fn mark_authorized_sync_for_test(&self, path: &str) {
-        self.mark_authorized(path).await;
-    }
-
     /// 清空会话授权（流式结束 / 取消时调用）
     pub async fn clear(&self) {
         let mut set = self.inner.lock().await;
@@ -146,7 +129,6 @@ impl PathAuthSession {
 
     /// 已授权条目数（仅供测试 / 调试）
     #[cfg(test)]
-    #[allow(clippy::len_without_is_empty)]
     pub async fn len(&self) -> usize {
         let set = self.inner.lock().await;
         set.len()
@@ -154,21 +136,18 @@ impl PathAuthSession {
 }
 
 // =========================================================================
-// check_authorization_with_session — 升级版授权判断 (A2-3)
+// check_authorization_with_session — 升级版授权判断
 // =========================================================================
 
-/// A2-3: 检查工具授权，结合会话级已授权路径表。
+/// 检查工具授权，结合会话级已授权路径表。
 ///
 /// 决策逻辑：
 /// - `Always` → `Allow`
-/// - `Confirm` → 总是 `Confirm`（前端弹窗；同会话内同 tool_name 不会重复触发，
-///   因为每次工具调用都会生成新的 `request_id`）
+/// - `Confirm` → 总是 `Confirm`
 /// - `PathWhitelist`:
 ///   - 路径在白名单 → `Allow`
-///   - 路径在会话已授权集合中 → `Allow`（不重复弹窗）
-///   - 都不满足 → `Confirm`（前端弹窗询问用户是否本次会话内放行）
-///
-/// `tool_args` 用于把当前工具调用的参数 JSON 透传给前端展示。
+///   - 路径在会话已授权集合中 → `Allow`
+///   - 都不满足 → `Confirm`
 pub async fn check_authorization_with_session(
     level: AuthorizationLevel,
     path: &str,
@@ -190,7 +169,6 @@ pub async fn check_authorization_with_session(
             if is_path_allowed(path, config) {
                 AuthorizationDecision::Allow
             } else if session.is_authorized(path).await {
-                // 本会话内用户已确认过该路径 → 免弹窗放行
                 AuthorizationDecision::Allow
             } else {
                 AuthorizationDecision::Confirm {
@@ -205,11 +183,7 @@ pub async fn check_authorization_with_session(
     }
 }
 
-// =========================================================================
-// 兼容旧 API — 同步 / 无会话版本 (保留以避免破坏已有测试)
-// =========================================================================
-
-/// 非白名单路径的授权错误（保留 — 旧 API / 测试用）
+/// 非白名单路径的授权错误
 pub fn path_not_whitelisted_error(tool: &str, path: &str) -> crate::error::AppError {
     crate::error::AppError::AuthorizationRequired {
         tool: tool.to_string(),
@@ -219,13 +193,7 @@ pub fn path_not_whitelisted_error(tool: &str, path: &str) -> crate::error::AppEr
 
 /// 检查工具授权（同步版本，旧 API）
 ///
-/// - `Always`：直接放行
-/// - `PathWhitelist`：检查路径白名单
-/// - `Confirm`：暂未实现，视为拒绝（保留旧行为）
-///
-/// **注意**：A2-3 起，工具执行路径（`tool_executor::execute_tool_round`）
-/// 不再依赖此函数；改用 `check_authorization_with_session()`。
-/// 本函数保留是为了不破坏 `tests` 模块里的既有测试用例。
+/// 保留以确保与既有测试兼容；生产路径已改用 `check_authorization_with_session`。
 pub fn check_authorization(
     level: AuthorizationLevel,
     path: &str,
@@ -249,7 +217,7 @@ pub fn check_authorization(
 }
 
 // =========================================================================
-// 单元测试
+// 单测
 // =========================================================================
 
 #[cfg(test)]
@@ -262,7 +230,7 @@ mod tests {
         }
     }
 
-    // ----- 旧白名单逻辑（兼容） -----
+    // ----- 白名单逻辑 -----
 
     #[test]
     fn whitelist_allows() {
@@ -294,16 +262,13 @@ mod tests {
     fn whitelist_exact_match() {
         let cfg = whitelist(&["/tmp/test.txt"]);
         assert!(is_path_allowed("/tmp/test.txt", &cfg));
-        // 前缀匹配：/tmp/test.txt.bak 以 /tmp/test.txt 开头，所以放行
         assert!(is_path_allowed("/tmp/test.txt.bak", &cfg));
-        // 但 /tmp/test2.txt 不以 /tmp/test.txt 开头
         assert!(!is_path_allowed("/tmp/test2.txt", &cfg));
     }
 
     #[test]
     fn whitelist_partial_rejected() {
         let cfg = whitelist(&["/workspace/"]);
-        // /workspace-secret/ 不应以 /workspace/ 匹配（前缀不包含 -secret）
         assert!(!is_path_allowed("/workspace-secret/file.txt", &cfg));
     }
 
@@ -436,7 +401,6 @@ mod tests {
         let cfg = whitelist(&["/workspace/"]);
         let session = PathAuthSession::new();
 
-        // 第一次：路径不在白名单 → Confirm
         let d1 = check_authorization_with_session(
             AuthorizationLevel::PathWhitelist,
             "/tmp/foo.txt",
@@ -448,10 +412,8 @@ mod tests {
         .await;
         assert!(d1.needs_confirm());
 
-        // 用户确认后写入会话
         session.mark_authorized("/tmp/foo.txt").await;
 
-        // 第二次：相同路径 → Allow（不再弹窗）
         let d2 = check_authorization_with_session(
             AuthorizationLevel::PathWhitelist,
             "/tmp/foo.txt",
@@ -463,10 +425,8 @@ mod tests {
         .await;
         assert!(d2.is_allowed());
 
-        // 已授权集合大小
         assert_eq!(session.len().await, 1);
 
-        // 但不同路径仍需 Confirm
         let d3 = check_authorization_with_session(
             AuthorizationLevel::PathWhitelist,
             "/tmp/bar.txt",
@@ -492,7 +452,6 @@ mod tests {
 
     #[tokio::test]
     async fn session_clone_shares_state() {
-        // 验证 PathAuthSession 的 Clone 语义是共享同一 HashSet
         let session1 = PathAuthSession::new();
         let session2 = session1.clone();
         session1.mark_authorized("/shared").await;

@@ -83,7 +83,15 @@ impl PipelineStage for TemplateStage {
 ///
 /// 输入：无（基于 `std::env::consts` 派生）
 /// 输出：`ctx.os_context`
-pub(crate) struct OsContextStage;
+pub(crate) struct OsContextStage {
+    pool: SqlitePool,
+}
+
+impl OsContextStage {
+    pub(crate) fn new(pool: &SqlitePool) -> Self {
+        Self { pool: pool.clone() }
+    }
+}
 
 #[async_trait]
 impl PipelineStage for OsContextStage {
@@ -92,7 +100,15 @@ impl PipelineStage for OsContextStage {
     }
 
     async fn execute(&self, ctx: &mut PipelineContext) -> AppResult<()> {
-        ctx.os_context = build_os_context();
+        // 从用户预设中读取时区配置
+        let tz: Option<String> = sqlx::query_scalar(
+            "SELECT value FROM user_preferences WHERE key = 'timezone'"
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .ok()
+        .flatten();
+        ctx.os_context = build_os_context(tz.as_deref());
         Ok(())
     }
 }
@@ -120,11 +136,17 @@ impl PipelineStage for SystemPromptStage {
     }
 
     async fn execute(&self, ctx: &mut PipelineContext) -> AppResult<()> {
+        let tool_max_rounds: Option<u32> = serde_json::from_str(&ctx.agent.extra_params)
+            .ok()
+            .and_then(|v: serde_json::Value| {
+                v.get("tool_max_rounds").and_then(|v| v.as_u64()).map(|v| v as u32)
+            });
         ctx.system_prompt = build_system_prompt(
             ctx.rendered_system_prompt.as_deref(),
             &ctx.agent.system_prompt,
             ctx.tools_enabled,
             &ctx.os_context,
+            tool_max_rounds,
         );
         Ok(())
     }

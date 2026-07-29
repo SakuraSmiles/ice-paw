@@ -74,9 +74,18 @@ pub struct AgentFileConfig {
     pub extra_params: Option<serde_json::Value>,
     #[serde(default)]
     pub embedding_model: Option<String>,
+    /// 工具调用最大轮数（None = 使用系统默认 10）
+    #[serde(default)]
+    pub tool_max_rounds: Option<u32>,
 }
 
 impl AgentRow {
+    /// 从 extra_params JSON 中读取工具调用最大轮数（None = 使用系统默认）
+    pub fn tool_max_rounds(&self) -> Option<u32> {
+        let params: serde_json::Value = serde_json::from_str(&self.extra_params).ok()?;
+        params.get("tool_max_rounds").and_then(|v| v.as_u64()).map(|v| v as u32)
+    }
+
     /// 若 workspace_path 存在，尝试读取 `<workspace_path>/agent.yaml` 并解析为文件配置。
     /// 文件不存在或解析失败静默返回 None（向后兼容）。
     pub fn load_file_config(&self) -> Option<AgentFileConfig> {
@@ -101,6 +110,11 @@ impl AgentFileConfig {
         if let Some(v) = &self.enabled_tools { agent.enabled_tools = Some(v.clone()); }
         if let Some(v) = &self.extra_params { agent.extra_params = v.clone(); }
         if let Some(v) = &self.embedding_model { agent.embedding_model = Some(v.clone()); }
+        if let Some(v) = self.tool_max_rounds {
+            if let Some(obj) = agent.extra_params.as_object_mut() {
+                obj.insert("tool_max_rounds".into(), serde_json::json!(v));
+            }
+        }
     }
 
     /// 把文件配置合并到 AgentRow 中（供 chat_cmd 内部使用）
@@ -120,6 +134,15 @@ impl AgentFileConfig {
             row.extra_params = serde_json::to_string(v).unwrap_or_default();
         }
         if let Some(v) = &self.embedding_model { row.embedding_model = Some(v.clone()); }
+        if let Some(v) = self.tool_max_rounds {
+            // 合并到 extra_params JSON 中
+            let mut params: serde_json::Value = serde_json::from_str(&row.extra_params)
+                .unwrap_or(serde_json::Value::Object(Default::default()));
+            if let Some(obj) = params.as_object_mut() {
+                obj.insert("tool_max_rounds".into(), serde_json::json!(v));
+                row.extra_params = serde_json::to_string(&params).unwrap_or_default();
+            }
+        }
     }
 }
 
@@ -564,6 +587,7 @@ pub struct TemplateRow {
 /// 用户偏好设置（前端 ↔ 后端传输结构）
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UserPreferences {
+    pub timezone: Option<String>,
     pub default_agent_id: Option<String>,
     pub default_template_id: Option<String>,
     pub on_startup: Option<String>,
