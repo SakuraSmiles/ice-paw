@@ -76,5 +76,6 @@ const rendered = computed(() => {
 </script>
 
 <template>
-  <div ref="rootRef" class="markdown-body" v-html="rendered" @click="onRootClick" />
+  <!-- eslint-disable-next-line vue/no-v-html -- markdown-it 输出已清理，需 v-html 渲染 -->
+  <div ref="rootRef" class="markdown-body" @click="onRootClick" v-html="rendered" />
 </template>
