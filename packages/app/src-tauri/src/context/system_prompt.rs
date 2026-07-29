@@ -19,6 +19,7 @@ pub(crate) fn build_system_prompt(
     agent_system_prompt: &str,
     tools_enabled: bool,
     os_context: &str,
+    tool_max_rounds: Option<u32>,
 ) -> Option<String> {
     let mut effective_system_prompt = rendered_system_prompt
         .filter(|s| !s.is_empty())
@@ -31,7 +32,17 @@ pub(crate) fn build_system_prompt(
 
     // P2-1: 工具启用时追加工具能力提示
     if tools_enabled {
-        let tool_hint = "你已启用工具调用能力。当用户要求读取文件、列出目录等操作时，请使用提供的工具（如 list_directory、read_file）来执行，不要回复\"无法访问文件\"。";
+        let rounds_hint = match tool_max_rounds {
+            Some(r) => format!(
+                "注意：每轮对话你共有 {} 轮工具调用机会。建议在同一轮内尽可能批量执行所需的工具调用（例如一次列出多个目录），以避免轮数耗尽。当前配置：最多 {} 轮。",
+                r, r
+            ),
+            None => "建议在同一轮内尽可能批量执行所需的工具调用（例如一次列出多个目录），以避免轮数耗尽。".to_string(),
+        };
+        let tool_hint = format!(
+            "你已启用工具调用能力。当用户要求读取文件、列出目录等操作时，请使用提供的工具（如 list_directory、read_file）来执行，不要回复\"无法访问文件\"。\n\n{}",
+            rounds_hint,
+        );
         effective_system_prompt = Some(match effective_system_prompt {
             Some(s) => format!("{}\n\n{}", s, tool_hint),
             None => tool_hint.to_string(),
@@ -59,7 +70,7 @@ mod tests {
 
     #[test]
     fn system_prompt_agent_only() {
-        let result = build_system_prompt(None, "你是一个助手", false, "");
+        let result = build_system_prompt(None, "你是一个助手", false, "", None);
         assert_eq!(result, Some("你是一个助手".into()));
     }
 
@@ -70,6 +81,7 @@ mod tests {
             "agent prompt",
             false,
             "os info",
+            None,
         );
         let s = result.unwrap();
         assert!(s.contains("模板 prompt"));
@@ -78,7 +90,7 @@ mod tests {
 
     #[test]
     fn system_prompt_tool_hint_appended() {
-        let result = build_system_prompt(None, "base", true, "");
+        let result = build_system_prompt(None, "base", true, "", None);
         let s = result.unwrap();
         assert!(s.contains("工具调用能力"));
         assert!(s.starts_with("base"));
@@ -86,13 +98,13 @@ mod tests {
 
     #[test]
     fn system_prompt_os_always_injected() {
-        let result = build_system_prompt(None, "", false, "OS: Linux");
+        let result = build_system_prompt(None, "", false, "OS: Linux", None);
         assert_eq!(result, Some("OS: Linux".into()));
     }
 
     #[test]
     fn system_prompt_none_when_all_empty() {
-        let result = build_system_prompt(None, "", false, "");
+        let result = build_system_prompt(None, "", false, "", None);
         assert!(result.is_none());
     }
 }

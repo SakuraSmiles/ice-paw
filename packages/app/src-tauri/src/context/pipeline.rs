@@ -218,7 +218,7 @@ impl PipelineRunner {
         let provider = summary_provider.unwrap_or_else(|| Box::new(NoopSummaryProvider));
         Self::new(vec![
             Box::new(TemplateStage::new(pool)),
-            Box::new(OsContextStage),
+            Box::new(OsContextStage::new(pool)),
             Box::new(SystemPromptStage),
             Box::new(HistoryStage),
             Box::new(MemoryStage::new(provider)),

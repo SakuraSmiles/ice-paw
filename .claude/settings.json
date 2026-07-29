@@ -2,7 +2,34 @@
   "permissions": {
     "allow": [
       "Bash(netstat -ano)",
-      "Bash(git commit -m 'fix: 新消息底部信息实时显示 + 日期分组样式优化 *)"
+      "Bash(git commit -m 'fix: 新消息底部信息实时显示 + 日期分组样式优化 *)",
+      "Bash(git -C d:/workspace/ice-paw log --oneline -10)",
+      "Bash(git -C d:/workspace/ice-paw status --short)",
+      "Bash(git -C d:/workspace/ice-paw diff --stat)",
+      "Bash(git -C d:/workspace/ice-paw log --oneline -20)",
+      "Bash(git -C d:/workspace/ice-paw diff -- .claude/settings.json packages/app/src/components/chat/ChatMessages.vue)",
+      "Bash(cd d:/workspace/ice-paw && echo \"=== 检查 harness/mcp/ 目录 ===\" && ls -la packages/app/src-tauri/src/harness/mcp/ 2>/dev/null || echo \"（目录不存在或为空）\" && echo \"=== 检查 tool_registry/ 是否还存在 ===\" && ls -la packages/app/src-tauri/src/harness/tool_registry/ 2>/dev/null | head -20 && echo \"=== 检查 loop_engine.rs 中是否还引用 ToolRegistry ===\" && grep -n \"ToolRegistry\" packages/app/src-tauri/src/harness/loop_engine.rs | head -20 && echo \"=== 检查 chat_cmd.rs 中是否还引用 ToolRegistry ===\" && grep -n \"ToolRegistry\\\\|tool_registry\" packages/app/src-tauri/src/harness/../commands/chat_cmd.rs 2>/dev/null || grep -n \"ToolRegistry\\\\|tool_registry\" packages/app/src-tauri/src/commands/chat_cmd.rs | head -20)",
+      "Read(//d/workspace/ice-paw/packages/app/src-tauri/src/commands/**)",
+      "Bash(cargo clippy *)",
+      "Bash(find /c/Users/dabai/AppData -name \"*.db\" -path \"*ice*paw*\" -o -name \"*.db\" -path \"*com.icepaw*\" 2>/dev/null | head -10 && echo \"---\" && find /c/Users/dabai/AppData -name \"*.sqlite\" -path \"*ice*paw*\" 2>/dev/null | head -10)",
+      "Read(//c/Users/dabai/AppData/**)",
+      "Bash(sqlite3 /c/Users/dabai/AppData/Roaming/com.icepaw.app/ice-paw.db \".read seed_demo.sql\")",
+      "Bash(sqlx --version)",
+      "Bash(node --experimental-sqlite -e ' *)",
+      "Bash(node --experimental-sqlite seed_demo.mjs \"/c/Users/dabai/AppData/Roaming/com.icepaw.app/ice-paw.db\")",
+      "Read(//c/Users/dabai/.claude/projects/d--workspace-ice-paw/**)",
+      "Read(//c/Users/dabai/.claude/projects/**)",
+      "Bash(ps -p 1424 -o cmd=)",
+      "Bash(ps -p 1426 -o cmd=)",
+      "Bash(npx --workspace=@ice-paw/app vue-tsc --noEmit)",
+      "Bash(pnpm tauri *)",
+      "Bash(kill -f 29724)",
+      "Bash(kill -f 40600)",
+      "Bash(taskkill /F /PID 40600)",
+      "Bash(taskkill //F //PID 40600)",
+      "Bash(tasklist //FI \"IMAGENAME eq ice-paw.exe\")",
+      "Bash(taskkill //F //IM ice-paw.exe)",
+      "Bash(taskkill //F //PID 11660)"
     ]
   }
 }

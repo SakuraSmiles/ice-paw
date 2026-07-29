@@ -35,11 +35,9 @@ use tokio::sync::{oneshot, Mutex};
 use crate::infra::protocol::{
     ChatToolResultPayload, ContentBlock, ToolAuthRequestPayload, ToolAuthResponse,
 };
-use crate::harness::tool_registry::{
-    authority::{
-        check_authorization_with_session, AuthorizationDecision, PathAuthSession, PathWhitelistConfig,
-    },
-    ToolRegistry,
+use crate::harness::mcp::{AuthorizationLevel, McpRegistry};
+use crate::harness::authority::{
+    check_authorization_with_session, AuthorizationDecision, PathAuthSession, PathWhitelistConfig,
 };
 
 /// oneshot sender 的全局注册表类型
@@ -155,7 +153,7 @@ impl ToolAuthRegistry {
 #[allow(clippy::too_many_arguments)]
 pub async fn execute_tool_round(
     app: &AppHandle,
-    registry: &ToolRegistry,
+    registry: &McpRegistry,
     auth_registry: &ToolAuthRegistry,
     session: &PathAuthSession,
     whitelist: &PathWhitelistConfig,
@@ -384,11 +382,10 @@ async fn wait_for_cancel(token: &crate::harness::chat_state::CancellationToken) 
 /// - `file_path` 从参数 JSON 中尝试 `path` / `file_path` / `dir` 字段
 ///   提取，找不到则用空字符串（`Always` 工具不需要路径）
 async fn inspect_tool_for_auth(
-    registry: &ToolRegistry,
+    registry: &McpRegistry,
     tool_name: &str,
     args: &str,
-) -> (crate::harness::tool_registry::AuthorizationLevel, String) {
-    use crate::harness::tool_registry::AuthorizationLevel;
+) -> (AuthorizationLevel, String) {
     let default_level = AuthorizationLevel::Always;
     let default_path = String::new();
 

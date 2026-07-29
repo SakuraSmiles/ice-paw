@@ -347,14 +347,14 @@ async fn history_stage_window_one_keeps_only_last() {
 async fn os_context_stage_populates_context() {
     let pool = fresh_pool().await;
     let mut ctx = make_ctx(
-        pool,
+        pool.clone(),
         make_agent(),
         None,
         vec![],
         vec![ContentBlock::text("hi")],
         false,
     );
-    OsContextStage.execute(&mut ctx).await.unwrap();
+    OsContextStage::new(&pool).execute(&mut ctx).await.unwrap();
     assert!(ctx.os_context.contains("操作系统"));
     assert!(ctx.os_context.contains("架构"));
 }

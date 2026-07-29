@@ -40,7 +40,7 @@ sqlx = { version = "0.8", default-features = false, features = [
     "macros",
     "migrate",
 ] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "process"] }
 
 # === 通用工具 ===
 uuid = { version = "1", features = ["v4", "serde"] }

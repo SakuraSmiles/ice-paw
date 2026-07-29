@@ -3,6 +3,7 @@
 import ChatHeader from "../components/chat/ChatHeader.vue";
 import ChatMessages from "../components/chat/ChatMessages.vue";
 import ChatInput from "../components/chat/ChatInput.vue";
+import ToolAuthDialog from "../components/chat/ToolAuthDialog.vue";
 </script>
 
 <template>
@@ -10,6 +11,7 @@ import ChatInput from "../components/chat/ChatInput.vue";
     <ChatHeader />
     <ChatMessages />
     <ChatInput />
+    <ToolAuthDialog />
   </div>
 </template>
 

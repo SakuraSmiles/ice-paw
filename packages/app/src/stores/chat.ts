@@ -2,13 +2,19 @@
 // 侧栏不再按 Agent 过滤，显示全部会话混合列表
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
-import { listen } from "@tauri-apps/api/event";
+import { listen, emit } from "@tauri-apps/api/event";
 import type { Conversation, Message } from "../types";
 import type {
   ChatStartPayload,
   ChatChunkPayload,
   ChatDonePayload,
   ChatErrorPayload,
+  ChatToolCallStartPayload,
+  ChatToolCallDeltaPayload,
+  ChatToolCallEndPayload,
+  ChatToolResultPayload,
+  ChatThinkingPayload,
+  ToolAuthRequestPayload,
 } from "../types";
 import { bridge } from "../api/bridge";
 import { useAgentStore } from "./agent";
@@ -39,6 +45,11 @@ export const useChatStore = defineStore("chat", () => {
   function selectConversation(id: string) {
     sending.value = false;
     streamingText.value = "";
+    streamingThinking.value = "";
+    thinkingStartTime.value = null;
+    thinkingDuration.value = null;
+    lastThinkingContent.value = null;
+    thinkingDuration.value = null;
     activeConvId.value = id;
     loadMessages(id);
   }
@@ -94,12 +105,35 @@ export const useChatStore = defineStore("chat", () => {
   const streamingText = ref("");
   const lastFinishReason = ref<string | null>(null);
   const currentModel = ref<string | null>(null);
+
+  // ===== 流式工具调用/思考状态 =====
+  interface ToolCallState {
+    id: string;
+    name: string;
+    arguments: string;
+    ended: boolean;
+    result?: { content: string; isError: boolean } | null;
+  }
+  const streamingToolCalls = ref<Map<string, ToolCallState>>(new Map());
+  const streamingThinking = ref("");
+  const thinkingStartTime = ref<number | null>(null);
+  const thinkingDuration = ref<string | null>(null);
+  /** 思考结束后保留内容，让用户仍可展开查看 */
+  const lastThinkingContent = ref<string | null>(null);
+  /** 按消息 ID 持久化思考耗时（切换会话不丢，刷新才丢） */
+  const thinkingDurations = ref<Map<string, string>>(new Map());
+  const pendingAuthRequest = ref<ToolAuthRequestPayload | null>(null);
   let sendTimeout: ReturnType<typeof setTimeout> | null = null;
 
   async function sendMessage(content: string, contentBlocks?: import("../types").ContentBlock[]) {
     if (!activeConvId.value || sending.value) return;
     sending.value = true;
     streamingText.value = "";
+    streamingThinking.value = "";
+    thinkingStartTime.value = null;
+    thinkingDuration.value = null;
+    lastThinkingContent.value = null;
+    lastThinkingContent.value = null;
     lastFinishReason.value = null;
 
     // 从当前 Agent 获取模型名
@@ -142,7 +176,7 @@ export const useChatStore = defineStore("chat", () => {
     }, 60000);
 
     try {
-      await bridge.chat.sendMessage(activeConvId.value, content, blocks.length > 0 ? blocks : undefined);
+      await bridge.chat.sendMessage(activeConvId.value, content, blocks.length > 0 ? blocks : undefined, true);
     } catch (e) {
       console.error("发送消息失败:", e);
       sending.value = false;
@@ -156,9 +190,20 @@ export const useChatStore = defineStore("chat", () => {
     // 乐观重置发送状态，不依赖后端事件响应
     sending.value = false;
     streamingText.value = "";
+    streamingThinking.value = "";
+    thinkingStartTime.value = null;
+    thinkingDuration.value = null;
+    lastThinkingContent.value = null;
     try {
       await bridge.chat.stopGeneration(activeConvId.value);
     } catch { /* 静默忽略 */ }
+  }
+
+  async function respondToAuth(allowed: boolean) {
+    const req = pendingAuthRequest.value;
+    if (!req) return;
+    await emit("chat:tool-auth-response", { request_id: req.request_id, allowed });
+    pendingAuthRequest.value = null;
   }
 
   // ===== 删除 / 置顶会话 =====
@@ -231,11 +276,104 @@ export const useChatStore = defineStore("chat", () => {
       }
     });
 
+    // ---- 工具调用事件 ----
+    listen<ChatToolCallStartPayload>("chat:tool-call-start", (e) => {
+      if (e.payload.conversation_id !== activeConvId.value) return;
+      const map = new Map(streamingToolCalls.value);
+      map.set(e.payload.id, {
+        id: e.payload.id,
+        name: e.payload.name,
+        arguments: "",
+        ended: false,
+      });
+      streamingToolCalls.value = map;
+    });
+
+    listen<ChatToolCallDeltaPayload>("chat:tool-call-delta", (e) => {
+      if (e.payload.conversation_id !== activeConvId.value) return;
+      const map = new Map(streamingToolCalls.value);
+      const call = map.get(e.payload.id);
+      if (call) {
+        call.arguments += e.payload.delta;
+        map.set(e.payload.id, { ...call });
+        streamingToolCalls.value = map;
+      }
+    });
+
+    listen<ChatToolCallEndPayload>("chat:tool-call-end", (e) => {
+      if (e.payload.conversation_id !== activeConvId.value) return;
+      const map = new Map(streamingToolCalls.value);
+      const call = map.get(e.payload.id);
+      if (call) {
+        call.ended = true;
+        map.set(e.payload.id, { ...call });
+        streamingToolCalls.value = map;
+      }
+    });
+
+    listen<ChatToolResultPayload>("chat:tool-result", (e) => {
+      if (e.payload.conversation_id !== activeConvId.value) return;
+      const map = new Map(streamingToolCalls.value);
+      const call = map.get(e.payload.tool_use_id);
+      if (call) {
+        call.result = { content: e.payload.content, isError: e.payload.is_error };
+        map.set(e.payload.tool_use_id, { ...call });
+        streamingToolCalls.value = map;
+      }
+    });
+
+    // ---- 思考过程 ----
+    listen<ChatThinkingPayload>("chat:thinking", (e) => {
+      if (e.payload.conversation_id !== activeConvId.value) return;
+      if (!streamingThinking.value) {
+        thinkingStartTime.value = Date.now();
+      }
+      streamingThinking.value += e.payload.content;
+    });
+
     listen<ChatDonePayload>("chat:done", (e) => {
       if (e.payload.conversation_id !== activeConvId.value) return;
       if (sendTimeout) { clearTimeout(sendTimeout); sendTimeout = null; }
+
+      // 记录思考耗时与内容
+      if (thinkingStartTime.value) {
+        const elapsed = Math.floor((Date.now() - thinkingStartTime.value) / 1000);
+        const dur = elapsed < 60 ? `${elapsed}s` : `${Math.floor(elapsed / 60)}m ${elapsed % 60}s`;
+        thinkingDuration.value = dur;
+        lastThinkingContent.value = streamingThinking.value || null;
+        const asstMsgId = e.payload.message_id;
+        if (asstMsgId) {
+          const map = new Map(thinkingDurations.value);
+          map.set(asstMsgId, dur);
+          thinkingDurations.value = map;
+        }
+      }
+
+      // 把流式工具调用数据持久化到最后一条消息的 content_blocks
+      if (streamingToolCalls.value.size > 0) {
+        const lastIdx = messages.value.length - 1;
+        if (lastIdx >= 0 && messages.value[lastIdx].role === "assistant") {
+          const blocks: any[] = [];
+          if (streamingText.value) {
+            blocks.push({ type: "text", text: streamingText.value });
+          }
+          for (const call of streamingToolCalls.value.values()) {
+            blocks.push({ type: "tool_use", id: call.id, name: call.name, input: call.arguments });
+            if (call.result) {
+              blocks.push({ type: "tool_result", tool_use_id: call.id, content: call.result.content, is_error: call.result.isError });
+            }
+          }
+          messages.value = messages.value.map((msg, i) =>
+            i === lastIdx ? { ...msg, content_blocks: JSON.stringify(blocks) } : msg,
+          );
+        }
+      }
+
       sending.value = false;
       streamingText.value = "";
+      streamingToolCalls.value = new Map();
+      streamingThinking.value = "";
+      thinkingStartTime.value = null;
       lastFinishReason.value = e.payload.finish_reason;
       // 更新最后一条 assistant 消息的 token_count
       if (e.payload.usage && messages.value.length > 0) {
@@ -263,6 +401,12 @@ export const useChatStore = defineStore("chat", () => {
         return msg;
       });
     });
+
+    // ---- 工具授权请求 ----
+    listen<ToolAuthRequestPayload>("chat:tool-auth-request", (e) => {
+      if (e.payload.conversation_id !== activeConvId.value) return;
+      pendingAuthRequest.value = e.payload;
+    });
   }
 
   // ===== 新建会话 =====
@@ -286,6 +430,10 @@ export const useChatStore = defineStore("chat", () => {
     messages.value = [];
     sending.value = false;
     streamingText.value = "";
+    streamingThinking.value = "";
+    thinkingStartTime.value = null;
+    thinkingDuration.value = null;
+    lastThinkingContent.value = null;
     draftText.value = "";
   }
 
@@ -294,8 +442,9 @@ export const useChatStore = defineStore("chat", () => {
     activeConvId, activeConversation,
     messages, msgLoading, hasMore, loadingMore,
     sending, streamingText, draftText, pendingImages, lastFinishReason, currentModel,
+    streamingToolCalls, streamingThinking, thinkingStartTime, thinkingDuration, lastThinkingContent, thinkingDurations, pendingAuthRequest,
     loadConversations, selectConversation, loadMoreMessages,
-    sendMessage, stopGeneration,
+    sendMessage, stopGeneration, respondToAuth,
     deleteConversation, pinConversation,
     initEvents, createConversation, reset,
   };
