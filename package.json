@@ -6,8 +6,7 @@
   "scripts": {
     "dev": "pnpm --filter @ice-paw/app dev",
 
-    "build": "pnpm -r --filter @ice-paw/ui build && pnpm --filter @ice-paw/app build",
-    "build:ui": "pnpm --filter @ice-paw/ui build",
+    "build": "pnpm --filter @ice-paw/app build",
     "build:app": "pnpm --filter @ice-paw/app build",
 
     "tauri": "pnpm --filter @ice-paw/app tauri",
