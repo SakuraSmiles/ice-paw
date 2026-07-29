@@ -4,6 +4,7 @@
 // 行为层配置（system_prompt, temperature 等）放在 workspace/agent.yaml 中
 import { ref, computed, onMounted, watch } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { Agent, NewAgent, AgentUpdate } from "../../types";
 import { bridge } from "../../api/bridge";
 import Combobox from "../common/Combobox.vue";
@@ -20,7 +21,7 @@ const emit = defineEmits<{
 
 const isEdit = computed(() => !!props.agent);
 
-// Provider 列表（定义在 form 之前，供初始化使用）
+// Provider 列表
 const providerLabels: Record<string, string> = {
   openai: "OpenAI",
   anthropic: "Anthropic",
@@ -95,6 +96,7 @@ const modelSuggestions: Record<string, string[]> = {
 const currentProviderKey = computed(() => providerKeyOf(form.value.provider));
 const currentSuggestions = computed(() => modelSuggestions[currentProviderKey.value] ?? []);
 
+/** 选择工作区目录 */
 async function pickWorkspace() {
   const selected = await open({
     directory: true,
@@ -106,6 +108,16 @@ async function pickWorkspace() {
     form.value.workspace_path = selected;
   }
 }
+
+/** 在文件管理器中打开工作区 */
+function openInExplorer() {
+  if (form.value.workspace_path) {
+    revealItemInDir(form.value.workspace_path);
+  }
+}
+
+/** 工作区是否存在打开的路径 */
+const hasWorkspacePath = computed(() => !!form.value.workspace_path?.trim());
 
 const error = ref("");
 
@@ -184,8 +196,9 @@ function confirmDelete() {
 <template>
   <div class="modal-overlay" @click.self="emit('close')">
     <div class="modal-container">
+      <!-- 头部 -->
       <div class="modal-header">
-        <h2 class="modal-title">{{ isEdit ? "编辑 Agent" : "新建 Agent" }}</h2>
+        <h2 class="modal-title">{{ isEdit ? "编辑智能体" : "新建智能体" }}</h2>
         <button class="modal-close" @click="emit('close')">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
@@ -193,77 +206,152 @@ function confirmDelete() {
         </button>
       </div>
 
+      <!-- 主体 -->
       <div class="modal-body">
-        <!-- 文件配置提示 -->
-        <div v-if="hasFileConfig" class="file-config-banner">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-            <polyline points="14 2 14 8 20 8" />
-          </svg>
-          <span>部分配置来自工作区 <code>agent.yaml</code></span>
-        </div>
-
-        <!-- 错误提示 -->
         <div v-if="error" class="form-error">{{ error }}</div>
 
-        <div class="form-grid">
-          <div class="form-group">
-            <label class="form-label">名称 <span class="label-req">*</span></label>
-            <input v-model="form.name" type="text" class="form-input" placeholder="例如：代码助手" />
+        <div class="form-table">
+          <!-- 名称 -->
+          <div class="form-row">
+            <label class="form-label">
+              名称 <span class="label-req">*</span>
+            </label>
+            <div class="form-control">
+              <input v-model="form.name" type="text" class="input" placeholder="例如：代码助手" />
+            </div>
           </div>
 
-          <div class="form-group">
-            <label class="form-label">ID <span class="label-req">*</span> <span class="label-opt">唯一，不可修改</span></label>
-            <input v-model="form.id" type="text" class="form-input" placeholder="例如：code-assistant" :disabled="isEdit" :class="{ 'input-disabled': isEdit }" />
+          <!-- ID -->
+          <div class="form-row">
+            <label class="form-label">
+              ID <span class="label-req">*</span>
+              <span class="label-hint">唯一，不可修改</span>
+            </label>
+            <div class="form-control">
+              <input
+                v-model="form.id"
+                type="text"
+                class="input"
+                placeholder="例如：code-assistant"
+                :disabled="isEdit"
+                :class="{ 'input-disabled': isEdit }"
+              />
+            </div>
           </div>
 
-          <div class="form-group">
+          <!-- Provider -->
+          <div class="form-row">
             <label class="form-label">Provider <span class="label-req">*</span></label>
-            <Combobox v-model="form.provider" :options="providerOptions" />
+            <div class="form-control">
+              <Combobox v-model="form.provider" :options="providerOptions" />
+            </div>
           </div>
 
-          <div class="form-group form-group-wide">
+          <!-- 模型 -->
+          <div class="form-row">
             <label class="form-label">模型 <span class="label-req">*</span></label>
-            <Combobox v-model="form.model" :options="currentSuggestions" placeholder="输入或选择模型名称" />
+            <div class="form-control">
+              <Combobox v-model="form.model" :options="currentSuggestions" placeholder="输入或选择模型名称" />
+            </div>
           </div>
 
-          <div class="form-group form-group-wide">
+          <!-- API Key -->
+          <div class="form-row">
             <label class="form-label">
               API Key
-              <span v-if="isEdit" :class="props.agent?.has_api_key ? 'key-status ok' : 'key-status warn'">
+              <span v-if="!isEdit" class="label-req">*</span>
+              <span v-if="isEdit" :class="props.agent?.has_api_key ? 'badge badge-ok ml-1' : 'badge badge-warn ml-1'">
                 {{ props.agent?.has_api_key ? "已配置" : "未配置" }}
               </span>
-              <span v-if="!isEdit" class="label-req">*</span>
-              <span v-if="isEdit && props.agent?.has_api_key" class="key-hint">（留空则不修改）</span>
             </label>
-            <input v-model="form.api_key" type="password" class="form-input" :placeholder="isEdit ? '留空保持现有密钥' : '输入 API Key'" />
-          </div>
-
-          <div class="form-group form-group-wide">
-            <label class="form-label">API URL <span class="label-opt">可选</span></label>
-            <input v-model="form.base_url" type="text" class="form-input" placeholder="留空使用 Provider 默认地址" />
-          </div>
-
-          <div class="form-group form-group-wide">
-            <label class="form-label">工作区</label>
-            <div class="path-picker-group">
-              <input v-model="form.workspace_path" type="text" class="form-input path-input" placeholder="选择或输入工作区路径" readonly @click="pickWorkspace" />
-              <button class="btn-browse" type="button" @click="pickWorkspace" title="选择目录">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-                </svg>
-              </button>
+            <div class="form-control">
+              <input
+                v-model="form.api_key"
+                type="password"
+                class="input"
+                :placeholder="isEdit ? '留空则保持现有密钥' : '输入 API Key'"
+              />
             </div>
-            <p class="form-hint">在此目录下创建 <code>agent.yaml</code> 可配置 system_prompt、temperature 等行为参数</p>
+          </div>
+
+          <!-- API URL -->
+          <div class="form-row">
+            <label class="form-label">
+              API URL
+              <span class="label-hint">可选</span>
+            </label>
+            <div class="form-control">
+              <input
+                v-model="form.base_url"
+                type="text"
+                class="input"
+                placeholder="留空使用 Provider 默认地址"
+              />
+            </div>
+          </div>
+
+          <!-- 工作区 -->
+          <div class="form-row">
+            <label class="form-label">工作区</label>
+            <div class="form-control">
+              <div class="workspace-group">
+                <input
+                  v-model="form.workspace_path"
+                  type="text"
+                  class="input"
+                  placeholder="选择工作区目录"
+                  readonly
+                  @click="pickWorkspace"
+                />
+                <button
+                  type="button"
+                  class="workspace-btn workspace-btn-dir"
+                  @click="pickWorkspace"
+                  title="选择目录"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                  </svg>
+                </button>
+                <button
+                  v-if="hasWorkspacePath"
+                  type="button"
+                  class="workspace-btn workspace-btn-open"
+                  @click="openInExplorer"
+                  title="在文件管理器中打开"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M18 15v2a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h2" />
+                    <polyline points="15 3 21 3 21 9" />
+                    <line x1="10" y1="14" x2="21" y2="3" />
+                  </svg>
+                </button>
+                <span v-if="hasFileConfig" class="workspace-badge">agent.yaml</span>
+              </div>
+              <p class="form-hint">
+                在此目录下创建 <code>agent.yaml</code> 可配置 system_prompt、temperature 等行为参数
+              </p>
+            </div>
           </div>
         </div>
       </div>
 
+      <!-- 底部 -->
       <div class="modal-footer">
-        <button v-if="isEdit" class="btn-danger" @click="confirmDelete">删除</button>
+        <div class="footer-left">
+          <button v-if="isEdit" class="btn btn-danger" @click="confirmDelete">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="3 6 5 6 21 6" />
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+            </svg>
+            删除
+          </button>
+        </div>
         <div class="footer-right">
-          <button class="btn-secondary" @click="emit('close')">取消</button>
-          <button class="btn-primary" :disabled="saving" @click="save">{{ saving ? '保存中...' : (isEdit ? '保存' : '创建') }}</button>
+          <button class="btn btn-secondary" @click="emit('close')">取消</button>
+          <button class="btn btn-primary" :disabled="saving" @click="save">
+            {{ saving ? "保存中..." : (isEdit ? "保存" : "创建") }}
+          </button>
         </div>
       </div>
     </div>
@@ -271,66 +359,108 @@ function confirmDelete() {
 </template>
 
 <style scoped>
+/* ===== 遮罩层 ===== */
 .modal-overlay {
-  position: fixed; inset: 0;
-  z-index: var(--ip-z-modal-overlay);
+  position: fixed; inset: 0; z-index: var(--ip-z-modal-overlay);
   background-color: rgba(0, 0, 0, 0.4);
   display: flex; align-items: center; justify-content: center;
   padding: 40px;
 }
+
+/* ===== 弹窗容器 ===== */
 .modal-container {
-  width: 100%; max-width: 540px; max-height: 85vh;
-  background-color: var(--ip-color-bg-secondary);
+  width: 100%; max-width: 560px; max-height: 85vh;
+  background-color: var(--ip-color-bg-elevated);
   border-radius: var(--ip-radius-xl);
   box-shadow: var(--ip-shadow-xl);
   display: flex; flex-direction: column; overflow: hidden;
 }
+
+/* ===== 头部 ===== */
 .modal-header {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 20px 24px 16px; flex-shrink: 0;
+  padding: 16px 24px; flex-shrink: 0;
 }
-.modal-title { font-size: var(--ip-text-h3-size); font-weight: var(--ip-font-weight-semibold); color: var(--ip-color-text-primary); margin: 0; }
+.modal-title {
+  font-size: var(--ip-text-h3-size); font-weight: var(--ip-font-weight-semibold);
+  color: var(--ip-color-text-primary); margin: 0;
+}
 .modal-close {
   display: flex; align-items: center; justify-content: center;
   width: 32px; height: 32px; border-radius: var(--ip-radius-md);
-  color: var(--ip-color-text-secondary);
+  color: var(--ip-color-text-secondary); cursor: pointer;
+  background: none; border: none;
   transition: all var(--ip-duration-fast) var(--ip-ease-out);
 }
 .modal-close:hover { background-color: var(--ip-color-bg-tertiary); color: var(--ip-color-text-primary); }
 
-.modal-body { flex: 1; overflow-y: auto; padding: 0 24px 8px; }
+/* ===== 主体 ===== */
+.modal-body { flex: 1; overflow-y: auto; padding: 0 24px 4px; }
 
-.file-config-banner {
-  display: flex; align-items: center; gap: 8px;
-  padding: 10px 14px; margin-bottom: 16px;
-  background-color: var(--ip-color-bg-tertiary);
-  border: 1px solid var(--ip-color-border-default);
-  border-radius: var(--ip-radius-md);
-  font-size: var(--ip-text-body-sm-size);
-  color: var(--ip-color-text-secondary);
-}
-.file-config-banner code {
-  font-family: var(--ip-font-mono);
-  background: var(--ip-color-bg-secondary);
-  padding: 0 6px;
-  border-radius: var(--ip-radius-sm);
-}
-
-.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-.form-group { display: flex; flex-direction: column; gap: 5px; }
-.form-group-wide { grid-column: 1 / -1; }
-.form-label { font-size: var(--ip-text-body-sm-size); font-weight: var(--ip-font-weight-medium); color: var(--ip-color-text-primary); }
-.label-req { color: var(--ip-danger-base); margin-left: 2px; font-weight: var(--ip-font-weight-regular); }
+/* 错误提示 */
 .form-error {
   padding: 10px 14px; margin-bottom: 16px;
   background-color: var(--ip-danger-bg); border: 1px solid var(--ip-danger-border);
   border-radius: var(--ip-radius-md);
   font-size: var(--ip-text-body-sm-size); color: var(--ip-danger-text);
 }
-.label-opt { font-weight: var(--ip-font-weight-regular); color: var(--ip-color-text-tertiary); font-size: var(--ip-text-caption-size); }
-.key-hint { font-weight: var(--ip-font-weight-regular); color: var(--ip-color-text-tertiary); font-size: var(--ip-text-caption-size); }
-.form-input {
-  height: 36px; padding: 0 12px;
+
+/* ===== 表单表格（标签左 控件右） ===== */
+.form-table {
+  display: flex; flex-direction: column;
+}
+
+.form-row {
+  display: flex;
+  align-items: flex-start;
+  padding: 12px 0;
+  gap: 12px;
+}
+
+.form-label {
+  width: 110px;
+  flex-shrink: 0;
+  padding-top: 6px; /* 与 32px 输入框文字对齐 */
+  font-size: var(--ip-text-body-sm-size);
+  font-weight: var(--ip-font-weight-medium);
+  color: var(--ip-color-text-primary);
+  line-height: 1.4;
+}
+.label-req { color: var(--ip-danger-base); }
+.label-hint {
+  font-weight: var(--ip-font-weight-regular);
+  color: var(--ip-color-text-tertiary);
+  font-size: var(--ip-text-caption-size);
+}
+
+.form-control {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ml-1 { margin-left: 4px; }
+
+/* API Key 状态徽标 */
+.badge {
+  display: inline-block;
+  padding: 0 6px;
+  font-size: 10px;
+  font-weight: var(--ip-font-weight-medium);
+  border-radius: var(--ip-radius-full);
+  vertical-align: middle;
+  line-height: 18px;
+}
+.badge-ok { background-color: var(--ip-success-bg); color: var(--ip-success-text); }
+.badge-warn { background-color: var(--ip-warning-bg); color: var(--ip-warning-text); }
+
+/* 输入框 */
+.input {
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
   font-size: var(--ip-text-body-sm-size);
   color: var(--ip-color-text-primary);
   background-color: var(--ip-color-bg-tertiary);
@@ -338,17 +468,22 @@ function confirmDelete() {
   border-radius: var(--ip-radius-md);
   outline: none;
   transition: all var(--ip-duration-fast) var(--ip-ease-out);
+  box-sizing: border-box;
 }
-.form-input:focus {
+.input:focus {
   border-color: var(--color-input-focus-border);
-  background-color: var(--ip-color-bg-secondary);
+  background-color: var(--color-input-bg);
   box-shadow: 0 0 0 3px rgba(46, 141, 100, 0.12);
 }
-.form-input::placeholder { color: var(--ip-color-text-placeholder); }
-.form-input.input-disabled { opacity: 0.6; cursor: not-allowed; }
+.input::placeholder { color: var(--ip-color-text-placeholder); }
+.input.input-disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* 提示文字 */
 .form-hint {
-  margin: 0; font-size: var(--ip-text-caption-size);
-  color: var(--ip-color-text-tertiary); line-height: 1.4;
+  margin: 0;
+  font-size: var(--ip-text-caption-size);
+  color: var(--ip-color-text-tertiary);
+  line-height: 1.4;
 }
 .form-hint code {
   font-family: var(--ip-font-mono);
@@ -357,59 +492,90 @@ function confirmDelete() {
   border-radius: var(--ip-radius-sm);
 }
 
-/* API Key 状态 */
-.key-status { font-weight: var(--ip-font-weight-regular); font-size: var(--ip-text-caption-size); padding: 1px 8px; border-radius: var(--ip-radius-full); margin-left: 6px; }
-.key-status.ok { background-color: var(--ip-success-bg); color: var(--ip-success-text); }
-.key-status.warn { background-color: var(--ip-warning-bg); color: var(--ip-warning-text); }
+/* Combobox 在弹窗表单中统一为 32px 高度，与输入框对齐 */
+:deep(.combobox-input-wrap) {
+  height: 32px;
+}
 
-/* 路径选择器 */
-.path-picker-group { display: flex; gap: 8px; }
-.path-input { flex: 1; cursor: pointer; }
-.btn-browse {
+/* ===== 工作区 ===== */
+.workspace-group {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.workspace-btn {
   display: flex; align-items: center; justify-content: center;
-  width: 36px; height: 36px;
+  width: 32px; height: 32px; flex-shrink: 0;
   background-color: var(--ip-color-bg-tertiary);
   border: 1px solid var(--ip-color-border-default);
   border-radius: var(--ip-radius-md);
   color: var(--ip-color-text-secondary);
-  cursor: pointer; flex-shrink: 0;
+  cursor: pointer;
   transition: all var(--ip-duration-fast) var(--ip-ease-out);
 }
-.btn-browse:hover { background-color: var(--ip-color-bg-secondary); border-color: var(--color-input-focus-border); color: var(--ip-primary-600); }
+.workspace-btn:hover {
+  background-color: var(--ip-color-bg-secondary);
+  color: var(--ip-primary-600);
+}
+.workspace-btn-dir:hover {
+  border-color: var(--color-input-focus-border);
+}
+.workspace-btn-open {
+  color: var(--ip-primary-600);
+  border-color: var(--ip-primary-300);
+  background-color: var(--ip-primary-50);
+}
+.workspace-btn-open:hover {
+  background-color: var(--ip-primary-100);
+  border-color: var(--ip-primary-400);
+}
 
+.workspace-badge {
+  display: inline-flex; align-items: center;
+  height: 22px; padding: 0 8px;
+  font-size: 10px; font-weight: var(--ip-font-weight-semibold);
+  color: var(--ip-primary-700);
+  background-color: var(--ip-primary-100);
+  border-radius: var(--ip-radius-full);
+  white-space: nowrap;
+  font-family: var(--ip-font-mono);
+}
+
+/* ===== 底部 ===== */
 .modal-footer {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 12px 24px 20px; flex-shrink: 0;
+  padding: 12px 24px 16px; flex-shrink: 0;
 }
-.footer-right { display: flex; gap: 8px; margin-left: auto; }
-.btn-primary {
+.footer-left { flex: 1; }
+.footer-right { display: flex; gap: 8px; }
+
+/* ===== 按钮 ===== */
+.btn {
   display: flex; align-items: center; justify-content: center; gap: 6px;
-  padding: 8px 16px; height: 36px;
+  height: 32px; padding: 0 14px;
   font-size: var(--ip-text-body-sm-size); font-weight: var(--ip-font-weight-medium);
-  color: white; background-color: var(--ip-primary-600); border: none;
   border-radius: var(--ip-radius-md); cursor: pointer;
-  transition: background-color var(--ip-duration-fast) var(--ip-ease-out);
+  white-space: nowrap;
+  transition: all var(--ip-duration-fast) var(--ip-ease-out);
+}
+
+.btn-primary {
+  color: white; background-color: var(--ip-primary-600); border: none;
 }
 .btn-primary:hover { background-color: var(--ip-primary-700); }
 .btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
+
 .btn-secondary {
-  display: flex; align-items: center; justify-content: center; gap: 6px;
-  padding: 8px 16px; height: 36px;
-  font-size: var(--ip-text-body-sm-size); font-weight: var(--ip-font-weight-medium);
   color: var(--ip-color-text-secondary); background-color: transparent;
   border: 1px solid var(--ip-color-border-default);
-  border-radius: var(--ip-radius-md); cursor: pointer;
-  transition: all var(--ip-duration-fast) var(--ip-ease-out);
 }
 .btn-secondary:hover { background-color: var(--ip-color-bg-tertiary); color: var(--ip-color-text-primary); }
+
 .btn-danger {
-  display: flex; align-items: center; justify-content: center; gap: 6px;
-  padding: 8px 16px; height: 36px;
-  font-size: var(--ip-text-body-sm-size); font-weight: var(--ip-font-weight-medium);
   color: var(--ip-danger-base); background-color: transparent;
   border: 1px solid var(--ip-danger-border);
-  border-radius: var(--ip-radius-md); cursor: pointer;
-  transition: all var(--ip-duration-fast) var(--ip-ease-out);
 }
 .btn-danger:hover { background-color: var(--ip-danger-bg); color: var(--ip-danger-active); }
 </style>

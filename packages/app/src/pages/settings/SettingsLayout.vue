@@ -172,6 +172,5 @@ function navigate(key: string) {
   min-width: 0;
   min-height: 0;
   align-self: stretch;
-  overflow: hidden;
 }
 </style>
