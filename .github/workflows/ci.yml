@@ -25,13 +25,12 @@ jobs:
           rustup update stable
           rustup component add clippy
 
-      - name: Cargo cache
+      - name: Cargo cache (registries only)
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            packages/app/src-tauri/target
           key: cargo-${{ runner.os }}-${{ hashFiles('packages/app/src-tauri/Cargo.lock') }}
           restore-keys: |
             cargo-${{ runner.os }}-
@@ -43,12 +42,13 @@ jobs:
 
       - name: Free disk space
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghcactions
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghcactions /usr/share/swift /usr/local/share/boost
           sudo apt-get clean
           df -h
 
-      - name: cargo check
-        run: cargo check
+      # 统一使用 ci profile 共享编译产物
+      - name: cargo check (ci)
+        run: cargo check --profile ci
 
       - name: cargo test
         run: "cargo test --profile ci --lib && cargo test --profile ci --test provider_test && cargo test --profile ci --test message_repo_test && cargo test --profile ci --test memory_e2e"
@@ -57,7 +57,7 @@ jobs:
         run: "cargo clippy --profile ci --lib -- -D warnings"
 
       - name: cargo clippy - tests
-        run: "cargo clippy --tests -- -D warnings"
+        run: "cargo clippy --profile ci --tests -- -D warnings"
 
   frontend:
     name: Frontend typecheck, lint, build
