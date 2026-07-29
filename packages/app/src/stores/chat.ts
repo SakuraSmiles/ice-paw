@@ -91,12 +91,14 @@ export const useChatStore = defineStore("chat", () => {
   // ===== 流式发送 =====
   const sending = ref(false);
   const streamingText = ref("");
+  const lastFinishReason = ref<string | null>(null);
   let sendTimeout: ReturnType<typeof setTimeout> | null = null;
 
   async function sendMessage(content: string, contentBlocks?: import("../types").ContentBlock[]) {
     if (!activeConvId.value || sending.value) return;
     sending.value = true;
     streamingText.value = "";
+    lastFinishReason.value = null;
 
     // 如果有待发送图片，合并到 content_blocks
     let blocks = contentBlocks ?? [];
@@ -226,7 +228,16 @@ export const useChatStore = defineStore("chat", () => {
       if (sendTimeout) { clearTimeout(sendTimeout); sendTimeout = null; }
       sending.value = false;
       streamingText.value = "";
-      // 不 reload 消息，避免闪烁
+      lastFinishReason.value = e.payload.finish_reason;
+      // 更新最后一条 assistant 消息的 token_count
+      if (e.payload.usage && messages.value.length > 0) {
+        const last = messages.value[messages.value.length - 1];
+        if (last.role === "assistant") {
+          messages.value = messages.value.map((msg, i) =>
+            i === messages.value.length - 1 ? { ...msg, token_count: e.payload.usage!.completion_tokens } : msg,
+          );
+        }
+      }
     });
 
     listen<ChatErrorPayload>("chat:error", (e) => {
@@ -274,7 +285,7 @@ export const useChatStore = defineStore("chat", () => {
     conversations, convLoading,
     activeConvId, activeConversation,
     messages, msgLoading, hasMore, loadingMore,
-    sending, streamingText, draftText, pendingImages,
+    sending, streamingText, draftText, pendingImages, lastFinishReason,
     loadConversations, selectConversation, loadMoreMessages,
     sendMessage, stopGeneration,
     deleteConversation, pinConversation,
