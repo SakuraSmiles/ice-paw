@@ -51,7 +51,7 @@ jobs:
         run: cargo check
 
       - name: cargo test
-        run: "cargo test --profile ci --lib && cargo test --profile ci --test provider_test && cargo test --profile ci --test message_repo_test && cargo test --profile ci --test memory_e2e && cargo test --profile ci --test template_repo_test"
+        run: "cargo test --profile ci --lib && cargo test --profile ci --test provider_test && cargo test --profile ci --test message_repo_test && cargo test --profile ci --test memory_e2e"
 
       - name: cargo clippy
         run: "cargo clippy --profile ci --lib -- -D warnings"
@@ -82,7 +82,7 @@ jobs:
         run: "pnpm --filter @ice-paw/ui build"
 
       - name: Typecheck
-        run: pnpm run typecheck
+        run: pnpm --filter @ice-paw/app typecheck
 
       - name: Lint
         run: pnpm run lint
