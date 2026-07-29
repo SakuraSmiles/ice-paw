@@ -160,14 +160,14 @@ const finishReasonLabels: Record<string, string> = {
               </div>
             </div>
           </div>
-          <div v-if="msg.content" class="message-footer">
+          <div v-if="msg.content || (msg.role === 'assistant' && chat.sending)" class="message-footer">
             <div class="footer-left">
               <span class="message-time">{{ formatTime(msg.created_at) }}</span>
               <span v-if="msg.model && msg.role === 'assistant'" class="badge-model">{{ msg.model }}</span>
               <span v-if="msg.token_count" class="badge-tokens">{{ msg.token_count }} tokens</span>
             </div>
             <div class="footer-actions">
-              <button class="copy-btn" title="复制" @click="copyContent(msg.content)">
+              <button v-if="msg.content" class="copy-btn" title="复制" @click="copyContent(msg.content)">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <rect x="9" y="9" width="13" height="13" rx="2" ry="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
               </svg>
@@ -209,10 +209,8 @@ const finishReasonLabels: Record<string, string> = {
 .load-more-end { color:var(--ip-color-text-disabled); }
 
 /* ===== 日期分组 ===== */
-.date-divider { text-align:center; font-size:var(--ip-text-caption-size); color:var(--ip-color-text-disabled); padding:16px 0 4px; position:relative; }
-.date-divider::before, .date-divider::after { content:''; position:absolute; top:50%; width:calc(50% - 60px); height:1px; background:var(--ip-color-border-default); }
-.date-divider::before { left:48px; }
-.date-divider::after { right:48px; }
+.date-divider { display:flex; align-items:center; gap:12px; padding:20px 48px 8px; font-size:var(--ip-text-caption-size); color:var(--ip-color-text-disabled); }
+.date-divider::before, .date-divider::after { content:''; flex:1; height:1px; background:var(--ip-color-border-default); }
 
 /* ===== finish_reason 提示 ===== */
 .finish-reason { text-align:center; padding:4px 48px 0; }
