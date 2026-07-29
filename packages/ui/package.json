@@ -1,15 +1,7 @@
 {
   "name": "@ice-paw/ui",
   "version": "0.1.0",
-  "description": "IcePaw 设计系统（Tokens + CSS）",
-  "type": "module",
-  "exports": {
-    "./styles": "./dist/style.css",
-    "./styles/tokens": "./dist/styles/tokens.css"
-  },
-  "files": ["dist"],
-  "sideEffects": ["**/*.css"],
-  "scripts": {
-    "build": "vite build"
-  }
+  "description": "IcePaw 设计系统（CSS Tokens）",
+  "files": ["src/styles"],
+  "sideEffects": ["**/*.css"]
 }
