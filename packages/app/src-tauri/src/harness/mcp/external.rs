@@ -69,8 +69,7 @@ impl ExternalMcpServer {
             // 设置工作目录为用户 home，避免 npx 在当前目录找 package.json 失败
             .current_dir(std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\".into()))
             .spawn()
-            .map_err(|e| AppError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            .map_err(|e| AppError::Io(std::io::Error::other(
                 format!("启动 MCP Server '{}' 失败: {} (command={})", name, e, command),
             )))?;
 

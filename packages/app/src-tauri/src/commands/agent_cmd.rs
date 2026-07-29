@@ -181,7 +181,7 @@ impl AgentCmd for SqlAgentCmd {
         crypto::store_api_key(&self.app, &id, &input.api_key, input.base_url.as_deref())?;
 
         // 工作区路径：用户没填时自动计算 {default}/agents/{id}
-        let workspace_path = if input.workspace_path.as_ref().map_or(false, |p| !p.is_empty()) {
+        let workspace_path = if input.workspace_path.as_ref().is_some_and(|p| !p.is_empty()) {
             input.workspace_path.clone()
         } else {
             match repo::preferences::get_all(&self.pool).await {
