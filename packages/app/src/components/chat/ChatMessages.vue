@@ -85,6 +85,30 @@ function parseImageBlocks(contentBlocks: string): { data: string; mediaType: str
   } catch { return []; }
 }
 
+// ===== 时间分组 =====
+function getDateLabel(dateStr: string): string | null {
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return null;
+
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+
+  const fmt = (dt: Date) => `${dt.getFullYear()}-${dt.getMonth()}-${dt.getDate()}`;
+  const dKey = fmt(d);
+  if (dKey === fmt(today)) return "今天";
+  if (dKey === fmt(yesterday)) return "昨天";
+
+  return `${d.getMonth() + 1}月${d.getDate()}日`;
+}
+
+function isNewDay(idx: number): boolean {
+  if (idx === 0) return true;
+  const prev = chat.messages[idx - 1].created_at;
+  const curr = chat.messages[idx].created_at;
+  return getDateLabel(prev) !== getDateLabel(curr);
+}
+
 function formatTime(createdAt: string): string {
   const d = new Date(createdAt);
   if (isNaN(d.getTime())) return "";
@@ -92,6 +116,15 @@ function formatTime(createdAt: string): string {
   const mm = String(d.getMinutes()).padStart(2, "0");
   return `${hh}:${mm}`;
 }
+
+// ===== finish_reason 展示 =====
+const finishReasonLabels: Record<string, string> = {
+  length: "已达长度上限",
+  abort: "已终止",
+  budget_exceeded: "预算超限",
+  stuck: "无进展自动终止",
+  tool_use: "工具调用结束",
+};
 </script>
 
 <template>
@@ -106,11 +139,12 @@ function formatTime(createdAt: string): string {
     <div v-else-if="!chat.activeConvId" class="state-hint">选择一个对话开始</div>
     <div v-else-if="chat.messages.length === 0" class="state-hint">开始一段新的对话</div>
     <TransitionGroup v-else name="msg" tag="div" class="messages-container">
-      <div
-        v-for="msg in chat.messages"
-        :key="msg.id"
-        :class="['message-row', msg.role]"
-      >
+      <template v-for="(msg, idx) in chat.messages" :key="msg.id">
+        <!-- 日期分组标签 -->
+        <div v-if="isNewDay(idx)" class="date-divider">{{ getDateLabel(msg.created_at) }}</div>
+        <div
+          :class="['message-row', msg.role]"
+        >
         <div :class="['message-content', { thinking: msg.role === 'assistant' && msg.content === '' && chat.sending }]">
           <div class="message-bubble-wrap">
             <div class="message-bubble">
@@ -125,16 +159,30 @@ function formatTime(createdAt: string): string {
                 </div>
               </div>
             </div>
-            <button v-if="msg.content" class="copy-btn" title="复制" @click="copyContent(msg.content)">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          </div>
+          <div v-if="msg.content" class="message-footer">
+            <div class="footer-left">
+              <span class="message-time">{{ formatTime(msg.created_at) }}</span>
+              <span v-if="msg.model && msg.role === 'assistant'" class="badge-model">{{ msg.model }}</span>
+              <span v-if="msg.token_count" class="badge-tokens">{{ msg.token_count }} tokens</span>
+            </div>
+            <div class="footer-actions">
+              <button class="copy-btn" title="复制" @click="copyContent(msg.content)">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <rect x="9" y="9" width="13" height="13" rx="2" ry="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
               </svg>
             </button>
+            </div>
           </div>
-          <div v-if="msg.content" class="message-time">{{ formatTime(msg.created_at) }}</div>
         </div>
       </div>
+    </template>
     </TransitionGroup>
+
+    <!-- finish_reason 提示 -->
+    <div v-if="chat.lastFinishReason && chat.lastFinishReason !== 'stop' && chat.messages.length > 0" class="finish-reason">
+      <span>{{ finishReasonLabels[chat.lastFinishReason] || chat.lastFinishReason }}</span>
+    </div>
 
     <div v-if="chat.sending && chat.messages.length > 0" class="cursor-bar">
       <div class="cursor-track">
@@ -160,6 +208,16 @@ function formatTime(createdAt: string): string {
 .load-more-hint { text-align:center; font-size:var(--ip-text-caption-size); color:var(--ip-color-text-tertiary); padding:8px 48px; }
 .load-more-end { color:var(--ip-color-text-disabled); }
 
+/* ===== 日期分组 ===== */
+.date-divider { text-align:center; font-size:var(--ip-text-caption-size); color:var(--ip-color-text-disabled); padding:16px 0 4px; position:relative; }
+.date-divider::before, .date-divider::after { content:''; position:absolute; top:50%; width:calc(50% - 60px); height:1px; background:var(--ip-color-border-default); }
+.date-divider::before { left:48px; }
+.date-divider::after { right:48px; }
+
+/* ===== finish_reason 提示 ===== */
+.finish-reason { text-align:center; padding:4px 48px 0; }
+.finish-reason span { display:inline-block; font-size:var(--ip-text-caption-size); color:var(--ip-color-text-tertiary); padding:2px 10px; border-radius:var(--ip-radius-full); background:var(--ip-color-bg-tertiary); }
+
 /* ===== TransitionGroup 动画 ===== */
 .msg-enter-active { animation:msg-in 0.35s cubic-bezier(0.16,1,0.3,1); }
 .msg-leave-active { display:none; }
@@ -184,13 +242,19 @@ function formatTime(createdAt: string): string {
 .user-images { display:flex; flex-wrap:wrap; gap:4px; margin-top:2px; }
 .user-image { max-width:200px; max-height:200px; border-radius:var(--ip-radius-lg); object-fit:cover; border:1px solid var(--ip-color-border-default); }
 
-/* ===== 复制按钮 ===== */
-.message-bubble-wrap { position:relative; display:flex; align-items:flex-start; gap:4px; }
-.copy-btn { position:absolute; top:4px; right:-32px; display:flex; align-items:center; justify-content:center; width:28px; height:28px; border-radius:var(--ip-radius-md); border:none; background:transparent; color:var(--ip-color-text-tertiary); cursor:pointer; opacity:0; transition:all var(--ip-duration-fast) var(--ip-ease-out); }
-.message-bubble-wrap:hover .copy-btn { opacity:1; }
+/* ===== 消息底部（时间 + 复制按钮） ===== */
+.message-bubble-wrap { display:flex; align-items:flex-start; }
+.message-footer { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:2px; padding:0 4px; }
+.footer-left { display:flex; align-items:center; gap:6px; }
+.footer-actions { display:flex; align-items:center; gap:6px; opacity:0; transition:opacity var(--ip-duration-fast) var(--ip-ease-out); }
+.message-content:hover .footer-actions { opacity:1; }
+.message-content:hover .message-footer { opacity:1; }
+.message-time { font-size:11px; color:var(--ip-color-text-disabled); }
+.copy-btn { display:flex; align-items:center; justify-content:center; width:24px; height:24px; border-radius:var(--ip-radius-md); border:none; background:transparent; color:var(--ip-color-text-tertiary); cursor:pointer; transition:all var(--ip-duration-fast) var(--ip-ease-out); }
 .copy-btn:hover { background-color:var(--ip-color-bg-tertiary); color:var(--ip-color-text-secondary); }
 
-.message-time { font-size:11px; color:var(--ip-color-text-disabled); padding:0 4px; }
+.badge-model { font-size:10px; color:var(--ip-color-text-tertiary); padding:1px 6px; border-radius:var(--ip-radius-sm); background:var(--ip-color-bg-tertiary); white-space:nowrap; }
+.badge-tokens { font-size:10px; color:var(--ip-color-text-tertiary); white-space:nowrap; font-variant-numeric:tabular-nums; }
 
 /* ===== 思考中动画 ===== */
 .thinking-indicator { display:flex; align-items:center; gap:4px; padding:4px 0; min-height:22px; }
