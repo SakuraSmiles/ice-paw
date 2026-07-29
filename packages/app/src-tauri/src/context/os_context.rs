@@ -12,10 +12,12 @@
 /// - 操作系统类型（Windows / macOS / Linux）
 /// - CPU 架构（如 x86_64 / arm64）
 /// - 用户主目录路径（尽力获取，失败则省略）
+/// - 时区信息（用户可设置，用于 LLM 理解本地时间上下文）
 ///
 /// 用于帮助 LLM 在工具调用（如 `list_directory`）时使用与当前 OS 兼容的路径，
 /// 避免在 Windows 上调用 Linux 风格的 `/home/user/Desktop` 等错误路径。
-pub(crate) fn build_os_context() -> String {
+/// 时区信息帮助 LLM 在涉及时间的问题中给出符合用户当地时间的回答。
+pub(crate) fn build_os_context(timezone: Option<&str>) -> String {
     let mut parts: Vec<String> = Vec::new();
 
     // OS 类型
@@ -40,6 +42,18 @@ pub(crate) fn build_os_context() -> String {
     if let Some(h) = &home {
         parts.push(format!("用户主目录: {}", h));
     }
+
+    // 用户时区（由用户偏好设置，辅助 LLM 理解本地时间上下文）
+    if let Some(tz) = timezone {
+        if !tz.is_empty() {
+            parts.push(format!("时区: {}", tz));
+        }
+    }
+
+    // 当前本地时间（基于用户时区，帮助 LLM 感知"现在"）
+    // 使用 chrono 获取 UTC 时间；前端/用户设置时区后由 OsContextStage 传入
+    let now = chrono::Utc::now();
+    parts.push(format!("当前时间: {}", now.format("%Y-%m-%d %H:%M:%S UTC")));
 
     // 组装为提示文本
     let env_info = parts.join("\n");
@@ -83,10 +97,24 @@ mod tests {
 
     #[test]
     fn build_os_context_contains_os() {
-        let ctx = build_os_context();
+        let ctx = build_os_context(None);
         assert!(ctx.contains("运行环境"));
         assert!(ctx.contains("操作系统"));
         assert!(ctx.contains("架构"));
+        assert!(ctx.contains("当前时间"));
+        assert!(ctx.contains("UTC"));
+    }
+
+    #[test]
+    fn build_os_context_includes_timezone() {
+        let ctx = build_os_context(Some("Asia/Shanghai"));
+        assert!(ctx.contains("时区: Asia/Shanghai"));
+    }
+
+    #[test]
+    fn build_os_context_empty_tz_omitted() {
+        let ctx = build_os_context(Some(""));
+        assert!(!ctx.contains("时区:"));
     }
 
     #[test]
