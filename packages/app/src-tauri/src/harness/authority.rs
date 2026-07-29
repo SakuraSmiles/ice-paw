@@ -133,6 +133,13 @@ impl PathAuthSession {
         let set = self.inner.lock().await;
         set.len()
     }
+
+    /// 是否为空
+    #[cfg(test)]
+    pub async fn is_empty(&self) -> bool {
+        let set = self.inner.lock().await;
+        set.is_empty()
+    }
 }
 
 // =========================================================================

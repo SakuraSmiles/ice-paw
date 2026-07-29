@@ -443,7 +443,7 @@ mod tests {
 
     #[test]
     fn proxy_auth_level_for_trust_level() {
-        let params = json!({"type": "object"});
+        let _params = json!({"type": "object"});
         let server = "placeholder";
         let _ = server;
         // Test the match logic directly
