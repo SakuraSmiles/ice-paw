@@ -65,8 +65,8 @@ onMounted(load);
 // IANA 时区列表（浏览器 API 获取）
 const timezoneList: string[] = (() => {
   try {
-    // Intl.supportedValuesOf 是 ES2021 API，部分 TS 配置可能不识别
-    return ((Intl) as any).supportedValuesOf("timeZone") || [];
+    // Intl.supportedValuesOf 是 ES2021 API
+    return ((Intl) as unknown as { supportedValuesOf(k: string): string[] }).supportedValuesOf("timeZone") || [];
   } catch {
     return [];
   }
@@ -318,7 +318,7 @@ const hasFilterResults = computed(() => {
               readonly
               @click="pickDirectory"
             />
-            <button type="button" class="input-btn" @click="pickDirectory" title="选择目录">
+            <button type="button" class="input-btn" title="选择目录" @click="pickDirectory">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
               </svg>
@@ -342,13 +342,13 @@ const hasFilterResults = computed(() => {
           </div>
         </div>
         <div class="setting-control">
-          <div class="tz-row" ref="tzWrapRef">
+          <div ref="tzWrapRef" class="tz-row">
             <button
               type="button"
               class="tz-detect-btn"
               :disabled="detecting"
-              @click="detectTimezone"
               title="自动检测时区"
+              @click="detectTimezone"
             >
               <svg
                 v-if="!detecting"
@@ -380,9 +380,9 @@ const hasFilterResults = computed(() => {
                 type="button"
                 class="tz-chevron"
                 :class="{ rotated: tzInputOpen }"
+                tabindex="-1"
                 @mousedown.prevent
                 @click="tzInputOpen ? closeDropdown() : openDropdown()"
-                tabindex="-1"
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <polyline points="6 9 12 15 18 9" />

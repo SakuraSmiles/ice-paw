@@ -50,7 +50,7 @@ async function pickImages() {
 
       let binary = "";
       for (let i = 0; i < uint8.length; i++) binary += String.fromCharCode(uint8[i]);
-      const base64 = btoa(binary);
+      const base64 = window.btoa(binary);
 
       chat.pendingImages.push({ data: base64, mediaType, name: filePath.split(/[/\\]/).pop() || "image" });
     } catch (e) {
@@ -112,18 +112,18 @@ function handleKeydown(e: KeyboardEvent) {
             @input="autoResize"
           />
           <div class="btn-group">
-            <button v-if="!chat.sending" class="btn-send" :class="{ active: input.trim() || chat.pendingImages.length > 0 }" :disabled="!input.trim() && chat.pendingImages.length === 0" @click="send" title="发送 (Enter)">
+            <button v-if="!chat.sending" class="btn-send" :class="{ active: input.trim() || chat.pendingImages.length > 0 }" :disabled="!input.trim() && chat.pendingImages.length === 0" title="发送 (Enter)" @click="send">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" />
               </svg>
             </button>
-            <button v-else class="btn-stop" @click="chat.stopGeneration()" title="停止生成">
+            <button v-else class="btn-stop" title="停止生成" @click="chat.stopGeneration()">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2" /></svg>
             </button>
           </div>
         </div>
         <div class="input-footer">
-          <button class="btn-img" :disabled="chat.sending" @click="pickImages" title="添加图片">
+          <button class="btn-img" :disabled="chat.sending" title="添加图片" @click="pickImages">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2" /><circle cx="8.5" cy="8.5" r="1.5" /><polyline points="21 15 16 10 5 21" /></svg>
           </button>
         </div>

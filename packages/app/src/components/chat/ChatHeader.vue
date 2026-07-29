@@ -91,8 +91,15 @@ function viewInfo() {
   <header class="chat-header">
     <div class="header-left">
       <div class="header-info">
-        <input v-if="editing" ref="editInput" v-model="editValue" class="header-edit-input"
-          @keydown="handleKeydown" @blur="saveEdit" @click.stop />
+        <input
+          v-if="editing"
+          ref="editInput"
+          v-model="editValue"
+          class="header-edit-input"
+          @keydown="handleKeydown"
+          @blur="saveEdit"
+          @click.stop
+        />
         <h1 v-else class="header-title" @dblclick="startEdit">
           <span class="header-title-text">{{ chat.activeConversation?.title || "新对话" }}</span>
         </h1>

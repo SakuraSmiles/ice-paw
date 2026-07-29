@@ -143,7 +143,7 @@ export const useChatStore = defineStore("chat", () => {
     currentModel.value = agent?.model ?? null;
 
     // 如果有待发送图片，合并到 content_blocks
-    let blocks = contentBlocks ?? [];
+    const blocks = contentBlocks ?? [];
     if (pendingImages.value.length > 0) {
       for (const img of pendingImages.value) {
         blocks.push({ type: "image", data: img.data, media_type: img.mediaType });
@@ -353,7 +353,7 @@ export const useChatStore = defineStore("chat", () => {
       if (streamingToolCalls.value.size > 0) {
         const lastIdx = messages.value.length - 1;
         if (lastIdx >= 0 && messages.value[lastIdx].role === "assistant") {
-          const blocks: any[] = [];
+          const blocks: { type: string; [key: string]: unknown }[] = [];
           if (streamingText.value) {
             blocks.push({ type: "text", text: streamingText.value });
           }
