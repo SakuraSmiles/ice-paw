@@ -713,8 +713,41 @@ async fn stream_loop_inner(
             });
         }
 
+        // cancel 检查（落盘前）：consume_stream 可能因 cancel 返回部分内容。
+        //  - 剔除 tool_use 后仍有内容（thinking/text）→ 只落盘这些，避免孤儿 tool_use（C1：
+        //    tool_use 已输出但 cancel 不补 tool_result，留下会让下轮历史触发 400）
+        //  - 剔除后无内容（空占位 / 仅未执行的 tool_use）→ 删除占位行（M3）
+        if ctx.cancel.is_cancelled() {
+            let cancel_blocks: Vec<ContentBlock> = round_blocks
+                .iter()
+                .filter(|b| !matches!(b, ContentBlock::ToolUse { .. }))
+                .cloned()
+                .collect();
+            if cancel_blocks.is_empty() && round_text.is_empty() {
+                if let Err(e) = repo::message::delete(&ctx.pool, &current_asst_msg_id).await {
+                    tracing::warn!(
+                        target: "ice_paw.chat",
+                        "删除 cancel 时的空占位失败: msg_id={}, err={}",
+                        current_asst_msg_id,
+                        e
+                    );
+                }
+            } else {
+                batch_writer.flush_now().await;
+                finalize_assistant_message(
+                    &ctx.pool,
+                    &current_asst_msg_id,
+                    &round_text,
+                    &cancel_blocks,
+                    round_completion_tokens,
+                )
+                .await;
+            }
+            return finalize_cancel(&ctx.app, &ctx.pool, &ctx.conv_id, &current_asst_msg_id);
+        }
+
         // 【阶段 C】即时持久化当前 assistant（权威快照：content + blocks + 本轮 token）。
-        // 先 flush_now 落盘 BatchWriter 的 streaming 文本，再写权威 blocks；本轮结束后
+        // 先 flush_now 落盘 BatchWriter 的 streaming 文本，再同步写权威 blocks；本轮结束后
         // set_msg_id 会切到新消息，避免后到的 flush 覆盖本轮 blocks。
         batch_writer.flush_now().await;
         finalize_assistant_message(
@@ -723,13 +756,8 @@ async fn stream_loop_inner(
             &round_text,
             &round_blocks,
             round_completion_tokens,
-        );
-
-        // cancel 检查：consume_stream 可能因 cancel 返回部分内容（上方已落盘），
-        // 此后不再执行工具或推进循环，直接以 abort 收尾（保留已生成的部分）。
-        if ctx.cancel.is_cancelled() {
-            return finalize_cancel(&ctx.app, &ctx.pool, &ctx.conv_id, &current_asst_msg_id);
-        }
+        )
+        .await;
 
         // W4.2: Token 预算终止检查（当前 assistant 已 finalize，只需收尾）
         if ctx.budget.max_total_tokens != usize::MAX

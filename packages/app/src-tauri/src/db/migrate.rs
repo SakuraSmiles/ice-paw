@@ -81,29 +81,42 @@ pub async fn fix_orphan_tool_results(pool: &SqlitePool, db_path: &Path) -> AppRe
             continue;
         }
 
-        // 1. 新建 user 消息存 tool_result（created_at 沿用原 assistant）
+        // 原子化：INSERT user(tool_result) + UPDATE assistant 去 tool_result 包进一个事务，
+        // 避免崩溃在两步之间 → 下次启动 LIKE 仍命中 assistant → 重复插 user 行。
         let user_id = Uuid::new_v4().to_string();
         let result_json = serde_json::to_string(&result_blocks).unwrap_or_else(|_| "[]".into());
-        sqlx::query(
-            "INSERT INTO messages
-                (id, conversation_id, role, content, content_blocks, token_count, error, model, created_at)
-             VALUES (?, ?, 'user', '', ?, NULL, NULL, NULL, ?)",
-        )
-        .bind(&user_id)
-        .bind(&conv_id)
-        .bind(&result_json)
-        .bind(&created_at)
-        .execute(pool)
-        .await?;
-
-        // 2. 原 assistant 去掉 tool_result
         let asst_json = serde_json::to_string(&asst_blocks).unwrap_or_else(|_| "[]".into());
-        sqlx::query("UPDATE messages SET content_blocks = ? WHERE id = ?")
-            .bind(&asst_json)
-            .bind(&msg_id)
-            .execute(pool)
+        let tx_result: Result<(), sqlx::Error> = async {
+            let mut tx = pool.begin().await?;
+            sqlx::query(
+                "INSERT INTO messages
+                    (id, conversation_id, role, content, content_blocks, token_count, error, model, created_at)
+                 VALUES (?, ?, 'user', '', ?, NULL, NULL, NULL, ?)",
+            )
+            .bind(&user_id)
+            .bind(&conv_id)
+            .bind(&result_json)
+            .bind(&created_at)
+            .execute(&mut *tx)
             .await?;
-
+            sqlx::query("UPDATE messages SET content_blocks = ? WHERE id = ?")
+                .bind(&asst_json)
+                .bind(&msg_id)
+                .execute(&mut *tx)
+                .await?;
+            tx.commit().await?;
+            Ok(())
+        }
+        .await;
+        if let Err(e) = tx_result {
+            warn!(
+                target: "ice_paw.migrate",
+                "迁移事务失败（已回滚，下次启动重试）: msg_id={}, err={}",
+                msg_id,
+                e
+            );
+            continue;
+        }
         fixed += 1;
     }
 
