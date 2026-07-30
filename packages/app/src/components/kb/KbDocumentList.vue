@@ -9,6 +9,8 @@ const props = defineProps<{
   scope: "global" | "agent";
   /** scope='agent' 时传 agent.id；global 不传 */
   ownerId?: string;
+  /** 扁平模式：文档去边框呈行式（适合内嵌进展开面板）；默认 false 走卡片样式 */
+  flat?: boolean;
 }>();
 
 const kb = ref<Kb | null>(null);
@@ -72,11 +74,6 @@ function docTitle(doc: KbDocument): string {
   return name.replace(/\.md$/i, "");
 }
 
-/** indexed_at 形如 '2026-07-30 14:23:21'，截取可读片段 */
-function indexedTime(iso: string): string {
-  return iso.replace("T", " ").slice(0, 16);
-}
-
 const directoryShort = computed(() => {
   const d = kb.value?.directory ?? "";
   // 路径过长时只保留末两段，title 显示完整
@@ -122,27 +119,23 @@ const directoryShort = computed(() => {
 
     <!-- 文档列表 -->
     <div v-else-if="documents.length" class="kb-docs">
-      <div v-for="doc in documents" :key="doc.id" class="kb-doc-card">
+      <div v-for="doc in documents" :key="doc.id" class="kb-doc-card" :class="{ 'doc-flat': flat }">
         <div class="doc-title-row">
           <span class="doc-title">{{ docTitle(doc) }}</span>
           <span v-for="t in parseTags(doc.tags)" :key="t" class="doc-tag">{{ t }}</span>
         </div>
-        <div class="doc-path">{{ doc.file_path }}</div>
         <div v-if="doc.summary" class="doc-summary">{{ doc.summary }}</div>
-        <div class="doc-indexed">索引于 {{ indexedTime(doc.indexed_at) }}</div>
+        <div class="doc-path">{{ doc.file_path }}</div>
       </div>
     </div>
 
     <!-- 空状态 -->
     <div v-else class="kb-empty">
-      <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
         <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" />
       </svg>
       <div class="kb-empty-title">知识库还是空的</div>
-      <div class="kb-empty-desc">
-        在对话里告诉 agent 资料内容，它会自动整理入库；<br />或直接把 .md 文件放进
-        <code>{{ directoryShort }}</code>
-      </div>
+      <div class="kb-empty-desc">在对话里告诉 agent，它会自动整理入库</div>
     </div>
   </div>
 </template>
@@ -229,6 +222,8 @@ const directoryShort = computed(() => {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  max-height: 320px;
+  overflow-y: auto;
 }
 .kb-doc-card {
   padding: 10px 12px;
@@ -239,6 +234,16 @@ const directoryShort = computed(() => {
 }
 .kb-doc-card:hover {
   border-color: var(--ip-primary-300);
+}
+/* 扁平模式（内嵌展开面板用）：去边框呈行式，hover 才浮起淡背景 */
+.kb-doc-card.doc-flat {
+  padding: 8px 6px;
+  background: none;
+  border: none;
+}
+.kb-doc-card.doc-flat:hover {
+  background-color: var(--ip-color-bg-tertiary);
+  border-color: transparent;
 }
 .doc-title-row {
   display: flex;
@@ -270,12 +275,12 @@ const directoryShort = computed(() => {
   white-space: nowrap;
 }
 .doc-summary {
-  margin-top: 4px;
+  margin-top: 3px;
   font-size: var(--ip-text-caption-size);
   color: var(--ip-color-text-secondary);
   line-height: 1.5;
   display: -webkit-box;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 1;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
@@ -285,31 +290,26 @@ const directoryShort = computed(() => {
   color: var(--ip-color-text-disabled);
 }
 
-/* ===== 空状态 ===== */
+/* ===== 空状态（克制：小图标 + 弱色提示） ===== */
 .kb-empty {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
-  padding: 20px 12px;
-  color: var(--ip-color-text-tertiary);
+  gap: 5px;
+  padding: 18px 12px;
   text-align: center;
 }
+.kb-empty svg {
+  color: var(--ip-color-text-disabled);
+}
 .kb-empty-title {
-  font-size: var(--ip-text-body-sm-size);
+  font-size: var(--ip-text-caption-size);
   font-weight: var(--ip-font-weight-medium);
-  color: var(--ip-color-text-secondary);
+  color: var(--ip-color-text-tertiary);
 }
 .kb-empty-desc {
   font-size: var(--ip-text-caption-size);
-  line-height: 1.6;
-}
-.kb-empty-desc code {
-  font-family: var(--ip-font-mono);
-  font-size: 10px;
-  padding: 1px 4px;
-  background-color: var(--ip-color-bg-tertiary);
-  border-radius: var(--ip-radius-sm);
-  word-break: break-all;
+  color: var(--ip-color-text-disabled);
+  line-height: 1.5;
 }
 </style>
