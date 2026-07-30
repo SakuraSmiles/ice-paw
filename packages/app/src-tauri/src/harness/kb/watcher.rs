@@ -41,6 +41,11 @@ const DEBOUNCE_WINDOW: Duration = Duration::from_secs(2);
 /// 无启用的 KB 时静默返回（不启动 watcher）。单个 KB watch 失败仅 warn，
 /// 不影响其它 KB 与整体启动。
 pub async fn start(pool: SqlitePool) -> AppResult<()> {
+    // 先确保约定 KB 行存在（global + 各 agent，directory 按约定推导 + 建目录）。
+    // 失败仅 warn，继续用现有 KB（不阻断 watcher 启动）。
+    if let Err(e) = super::ensure::ensure_default_kbs(&pool).await {
+        tracing::warn!(target: "ice_paw.kb", "ensure 约定 KB 失败（继续用现有 KB）: {}", e);
+    }
     let kbs = repo::kb::list_all(&pool).await?;
     let enabled: Vec<Kb> = kbs.into_iter().filter(|k| k.enabled).collect();
     if enabled.is_empty() {

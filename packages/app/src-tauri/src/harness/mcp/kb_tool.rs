@@ -9,6 +9,8 @@
 //! - v1 不查 project KB（字段预留）
 //! - scope 隔离：只查「当前 agent 的 KB + global」，**绝不**查其他 agent 的 KB
 
+use std::path::PathBuf;
+
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
@@ -132,6 +134,166 @@ struct SearchHitOut {
     file_path: String,
     title: String,
     summary: String,
+}
+
+// =========================================================================
+// save_to_kb —— 聊天入库（agent 写资料到 knowledge，watcher 自动索引）
+// =========================================================================
+
+/// `save_to_kb` 工具：把资料保存为 md 写入对应级别的 knowledge 目录。
+///
+/// agent 在对话中判断资料价值与归属级别，调用本工具写入对应 knowledge 目录；
+/// 文件监听（watcher）会自动索引，之后即可用 `search_kb` 检索。
+///
+/// - `scope='global'`：写入 `<default_workspace>/knowledge`（全员共享）
+/// - `scope='agent'`：写入当前 agent 的 `<workspace>/knowledge`（本 agent 专有）
+pub struct SaveToKbTool;
+
+#[derive(Deserialize)]
+struct SaveToKbArgs {
+    title: String,
+    content: String,
+    /// 'agent' | 'global'（v1 不支持 project）
+    scope: String,
+    #[serde(default)]
+    tags: Option<Vec<String>>,
+    /// 可选文件名（不含路径与后缀）；默认 `note-{timestamp}`，避免冲突。
+    #[serde(default)]
+    filename: Option<String>,
+}
+
+#[async_trait]
+impl McpClient for SaveToKbTool {
+    fn name(&self) -> &str {
+        "save_to_kb"
+    }
+
+    fn description(&self) -> &str {
+        "Save a piece of knowledge/material to the knowledge base as a markdown file, \
+         so it can be retrieved later via search_kb. Use this when the user shares \
+         information worth remembering (notes, decisions, how-tos, reference material) \
+         or explicitly asks to save/remember something. Pick scope='global' for \
+         widely-shared knowledge, 'agent' for this agent's dedicated notes."
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "title": { "type": "string", "description": "Document title (used in search & display)." },
+                "content": { "type": "string", "description": "Full markdown content to save." },
+                "scope": { "type": "string", "enum": ["agent", "global"], "description": "Which knowledge base: 'agent' (this agent's dedicated) or 'global' (shared)." },
+                "tags": { "type": "array", "items": { "type": "string" }, "description": "Optional tags for categorization." },
+                "filename": { "type": "string", "description": "Optional filename without path/extension. Defaults to note-{timestamp}." }
+            },
+            "required": ["title", "content", "scope"]
+        })
+    }
+
+    fn authorization_level(&self) -> AuthorizationLevel {
+        AuthorizationLevel::Always
+    }
+
+    async fn execute(&self, _args: &str) -> AppResult<String> {
+        Err(AppError::Internal(
+            "save_to_kb 必须通过 execute_with_context 调用（需要 agent_id 上下文）".into(),
+        ))
+    }
+
+    async fn execute_with_context(&self, args: &str, ctx: &ToolContext) -> AppResult<String> {
+        let parsed: SaveToKbArgs =
+            serde_json::from_str(args).map_err(|e| {
+                AppError::Validation(format!("save_to_kb 参数解析失败: {e}"))
+            })?;
+        validate_save_scope(&parsed.scope)?;
+
+        // 推导目标 knowledge 目录
+        let directory = resolve_kb_directory(&ctx.pool, &parsed.scope, &ctx.agent_id).await?;
+
+        // 文件名（默认 note-{timestamp}，保证不冲突）
+        let stem = parsed.filename.clone().unwrap_or_else(|| {
+            format!("note-{}", chrono::Utc::now().format("%Y%m%d-%H%M%S"))
+        });
+        let filename = format!("{stem}.md");
+        let file_path = directory.join(&filename);
+
+        // 组装 md：frontmatter（serde_yaml 序列化，避免手动转义 bug）+ 正文
+        let md = build_markdown(&parsed.title, &parsed.tags, &parsed.content);
+
+        // 建目录 + 写文件
+        std::fs::create_dir_all(&directory).map_err(AppError::Io)?;
+        std::fs::write(&file_path, md).map_err(AppError::Io)?;
+
+        let dir_str = directory.to_string_lossy().replace('\\', "/");
+        tracing::info!(target: "ice_paw.kb", "save_to_kb 写入: {}/{}", dir_str, filename);
+
+        Ok(serde_json::json!({
+            "scope": parsed.scope,
+            "directory": dir_str,
+            "file_path": filename,
+            "message": "已保存到知识库，文件监听将自动索引；稍后可用 search_kb 检索。"
+        })
+        .to_string())
+    }
+}
+
+/// save_to_kb 仅允许 agent / global（v1 不支持 project）。
+fn validate_save_scope(scope: &str) -> AppResult<()> {
+    match scope {
+        "agent" | "global" => Ok(()),
+        _ => Err(AppError::Validation(format!(
+            "scope 必须是 agent / global，得到 '{scope}'"
+        ))),
+    }
+}
+
+/// 推导某 scope 的 knowledge 目录：
+/// global = `<default_workspace>/knowledge`；agent = 当前 agent 的 `<workspace>/knowledge`。
+async fn resolve_kb_directory(
+    pool: &sqlx::SqlitePool,
+    scope: &str,
+    agent_id: &str,
+) -> AppResult<PathBuf> {
+    use crate::harness::kb::ensure::{agent_workspace_root, knowledge_dir};
+    let prefs = repo::preferences::get_all(pool).await?;
+    match scope {
+        "global" => prefs
+            .default_workspace_path
+            .as_deref()
+            .map(knowledge_dir)
+            .ok_or_else(|| AppError::Internal("未配置 default_workspace_path".into())),
+        "agent" => {
+            let agent = repo::agent::get_by_id(pool, agent_id).await?;
+            let root = agent_workspace_root(
+                agent.workspace_path.as_deref(),
+                prefs.default_workspace_path.as_deref(),
+                agent_id,
+            )
+            .ok_or_else(|| {
+                AppError::Internal(format!(
+                    "agent {agent_id} 无 workspace_path 且无 default_workspace_path"
+                ))
+            })?;
+            Ok(knowledge_dir(&root))
+        }
+        _ => Err(AppError::Validation(format!(
+            "scope 必须是 agent / global，得到 '{scope}'"
+        ))),
+    }
+}
+
+/// 组装 markdown：frontmatter（title + 可选 tags）+ 正文。
+/// frontmatter 用 serde_yaml 序列化，保证特殊字符（冒号/引号/井号）不破坏解析。
+fn build_markdown(title: &str, tags: &Option<Vec<String>>, content: &str) -> String {
+    #[derive(Serialize)]
+    struct FrontMatterOut<'a> {
+        title: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tags: &'a Option<Vec<String>>,
+    }
+    let fm = FrontMatterOut { title, tags };
+    let fm_yaml = serde_yaml::to_string(&fm).unwrap_or_default();
+    format!("---\n{fm_yaml}---\n\n{content}")
 }
 
 // =========================================================================
@@ -263,5 +425,38 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(v["count"], 0);
         assert!(v["results"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn save_to_kb_schema_and_metadata() {
+        let tool = SaveToKbTool;
+        assert_eq!(tool.name(), "save_to_kb");
+        assert_eq!(tool.authorization_level(), AuthorizationLevel::Always);
+        let p = tool.parameters();
+        assert_eq!(p["required"][0], "title");
+        assert_eq!(p["properties"]["scope"]["enum"][0], "agent");
+    }
+
+    #[test]
+    fn save_to_kb_rejects_invalid_scope() {
+        assert!(validate_save_scope("project").is_err());
+        assert!(validate_save_scope("agent").is_ok());
+        assert!(validate_save_scope("global").is_ok());
+    }
+
+    /// 闭环：build_markdown 产出的 md 能被 parse_markdown 正确解析回 title/tags。
+    /// 保证「写入的能被检索」这条 RAG 链路自洽（含冒号/井号等特殊字符）。
+    #[test]
+    fn save_to_kb_build_markdown_roundtrips_with_parser() {
+        use crate::harness::kb::parser::parse_markdown;
+        let md = build_markdown(
+            "标题: 含冒号 与 #井号",
+            &Some(vec!["rust".into(), "笔记".into()]),
+            "这是正文内容，应该被解析为首段。",
+        );
+        let parsed = parse_markdown(&md);
+        assert_eq!(parsed.title, "标题: 含冒号 与 #井号");
+        assert_eq!(parsed.tags, r#"["rust","笔记"]"#);
+        assert!(parsed.summary.contains("正文内容"));
     }
 }
