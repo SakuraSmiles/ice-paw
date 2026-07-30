@@ -5,6 +5,7 @@
 import { ref, computed } from "vue";
 import type { McpServer, NewMcpServer, McpServerUpdate, McpTrustLevel } from "../../types";
 import { bridge } from "../../api/bridge";
+import MoreMenu from "../common/MoreMenu.vue";
 
 const props = defineProps<{
   server: McpServer | null;
@@ -112,6 +113,11 @@ function confirmDelete() {
         <button class="btn btn-primary btn-sm" :disabled="saving" @click="save">
           {{ saving ? "保存中" : (isEdit ? "保存" : "创建") }}
         </button>
+        <MoreMenu
+          v-if="isEdit"
+          :items="[{ label: '删除', value: 'delete', confirmText: '确认删除？' }]"
+          @select="(v) => v === 'delete' && confirmDelete()"
+        />
       </div>
     </div>
 
@@ -182,12 +188,6 @@ function confirmDelete() {
         <p class="field-hint">{{ form.trust_level === "trusted" ? "免确认，更流畅" : "调用前确认，更安全" }}</p>
       </div>
     </div>
-
-    <!-- 删除（弱化文字，仅编辑态） -->
-    <button v-if="isEdit" class="delete-link" @click="confirmDelete">
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
-      删除此 Server
-    </button>
   </div>
 </template>
 
