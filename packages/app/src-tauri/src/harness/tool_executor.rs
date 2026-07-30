@@ -35,7 +35,7 @@ use tokio::sync::{oneshot, Mutex};
 use crate::infra::protocol::{
     ChatToolResultPayload, ContentBlock, ToolAuthRequestPayload, ToolAuthResponse,
 };
-use crate::harness::mcp::{AuthorizationLevel, McpRegistry};
+use crate::harness::mcp::{AuthorizationLevel, McpRegistry, ToolContext};
 use crate::harness::authority::{
     check_authorization_with_session, AuthorizationDecision, PathAuthSession, PathWhitelistConfig,
 };
@@ -146,7 +146,8 @@ impl ToolAuthRegistry {
 /// 与旧版的差异：
 /// - 新增参数 `auth_registry: &ToolAuthRegistry`、`session: &PathAuthSession`、
 ///   `whitelist: &PathWhitelistConfig`、`cancel: &CancellationToken`、
-///   `conv_id` / `asst_msg_id`（用于 emit auth request 时携带上下文）。
+///   `tool_ctx` / `asst_msg_id`（tool_ctx 提供 conv_id/agent_id/project_id/pool，
+///   供 emit auth request 携带对话上下文 + 透传给 `dispatch` → `execute_with_context`）。
 /// - 工具执行前先做授权判断；如果需要确认则 emit + 阻塞等待前端响应。
 ///
 /// 返回 `tool_result_blocks`（每个已完成工具调用对应一个 ToolResult，emit `chat:tool-result`）。
@@ -159,7 +160,7 @@ pub async fn execute_tool_round(
     session: &PathAuthSession,
     whitelist: &PathWhitelistConfig,
     completed_calls: &[(String, String, String)],
-    conv_id: &str,
+    tool_ctx: &ToolContext,
     asst_msg_id: &str,
     cancel: &crate::harness::chat_state::CancellationToken,
 ) -> crate::error::AppResult<Vec<ContentBlock>> {
@@ -181,7 +182,7 @@ pub async fn execute_tool_round(
 
         // 2. 根据决策执行
         let final_result: Result<String, String> = match decision {
-            AuthorizationDecision::Allow => match registry.dispatch(tc_name, tc_args).await {
+            AuthorizationDecision::Allow => match registry.dispatch(tc_name, tc_args, tool_ctx).await {
                 Ok(s) => Ok(s),
                 Err(e) => Err(e.to_string()),
             },
@@ -201,7 +202,7 @@ pub async fn execute_tool_round(
                     tool_name: tool_name.clone(),
                     file_path: file_path.clone(),
                     arguments: arguments.clone(),
-                    conversation_id: conv_id.to_string(),
+                    conversation_id: tool_ctx.conv_id.clone(),
                     message_id: asst_msg_id.to_string(),
                     reason: reason.clone(),
                 };
@@ -230,7 +231,7 @@ pub async fn execute_tool_round(
                                 tool_name,
                                 file_path,
                             );
-                            match registry.dispatch(tc_name, tc_args).await {
+                            match registry.dispatch(tc_name, tc_args, tool_ctx).await {
                                 Ok(s) => Ok(s),
                                 Err(e) => Err(e.to_string()),
                             }
@@ -277,7 +278,7 @@ pub async fn execute_tool_round(
                 let _ = app.emit(
                     "chat:tool-result",
                     ChatToolResultPayload {
-                        conversation_id: conv_id.to_string(),
+                        conversation_id: tool_ctx.conv_id.clone(),
                         message_id: asst_msg_id.to_string(),
                         tool_use_id: tc_id.clone(),
                         content: content.clone(),
@@ -294,7 +295,7 @@ pub async fn execute_tool_round(
                 let _ = app.emit(
                     "chat:tool-result",
                     ChatToolResultPayload {
-                        conversation_id: conv_id.to_string(),
+                        conversation_id: tool_ctx.conv_id.clone(),
                         message_id: asst_msg_id.to_string(),
                         tool_use_id: tc_id.clone(),
                         content: err_content.clone(),
