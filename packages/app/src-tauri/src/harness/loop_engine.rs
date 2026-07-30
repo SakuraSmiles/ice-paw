@@ -139,6 +139,10 @@ pub(crate) struct LoopContext {
     pub asst_msg_id: String,
     /// M1.3: 用户消息 ID（用于清理阶段回写 token_count）
     pub user_msg_id: String,
+    /// RAG: 当前 Agent ID（透传给 ToolContext，供 search_kb 查「agent 专业」KB）
+    pub agent_id: String,
+    /// RAG: 当前项目 ID（v1 暂不启用 project KB，字段预留；None = 默认项目）
+    pub project_id: Option<String>,
 
     // ---- 基础设施 ----
     pub app: AppHandle,
@@ -218,11 +222,15 @@ impl LoopContext {
         call_history: Vec<String>,
         model: Option<String>,
         asst_model: Option<String>,
+        agent_id: String,
+        project_id: Option<String>,
     ) -> Self {
         Self {
             conv_id,
             asst_msg_id,
             user_msg_id,
+            agent_id,
+            project_id,
             app,
             pool,
             provider,
@@ -836,6 +844,14 @@ async fn stream_loop_inner(
         );
 
         // 【阶段 E】执行工具，得到 tool_result blocks（execute_tool_round 已 emit chat:tool-result）
+        // RAG: 构造工具执行上下文（conv_id/agent_id/project_id/pool）透传给
+        // execute_tool_round → dispatch → execute_with_context（search_kb 据此查 KB）。
+        let tool_ctx = crate::harness::mcp::ToolContext {
+            conv_id: ctx.conv_id.clone(),
+            agent_id: ctx.agent_id.clone(),
+            project_id: ctx.project_id.clone(),
+            pool: ctx.pool.clone(),
+        };
         let tool_result_blocks: Vec<ContentBlock> = execute_tool_round(
             &ctx.app,
             &ctx.tool_registry,
@@ -843,7 +859,7 @@ async fn stream_loop_inner(
             &ctx.auth_session,
             &ctx.whitelist,
             &completed_calls,
-            &ctx.conv_id,
+            &tool_ctx,
             &current_asst_msg_id,
             &ctx.cancel,
         )
