@@ -23,35 +23,39 @@ use crate::infra::protocol::{ChatDonePayload, ContentBlock, TokenUsage};
 /// Token 数最小护值 —— 0 表示「未填写」语义不明，调为 1 保证 DB 永远有值
 const MIN_TOKEN_COUNT: i32 = 1;
 
-/// 即时持久化单条 assistant 消息（每轮结束时调用）
+/// 即时持久化单条 assistant 消息（每轮结束时调用，同步 await）
 ///
-/// 写 content + content_blocks + 本轮 token_count。多轮工具下每条 assistant
-/// 独立落盘，不再累积到最后一次性写。
-pub(crate) fn finalize_assistant_message(
+/// 用单条 UPDATE 原子写 content + content_blocks + 本轮 token_count。必须在
+/// chat:done 之前同步完成（loop_engine 阶段 C `.await`），避免紧邻追问读到
+/// 「content 已写、content_blocks 仍 "[]"」的半写态导致 tool_use 丢失 → 400。
+pub(crate) async fn finalize_assistant_message(
     pool: &SqlitePool,
     asst_msg_id: &str,
     text: &str,
     blocks: &[ContentBlock],
     completion_tokens: Option<u32>,
 ) {
-    let pool_clone = pool.clone();
-    let id = asst_msg_id.to_string();
-    let text_clone = text.to_string();
     let blocks_json = serde_json::to_string(blocks).unwrap_or_else(|_| "[]".to_string());
     let token_count = completion_tokens
         .map(|t| t.max(1) as i32)
         .unwrap_or(MIN_TOKEN_COUNT);
-    tokio::spawn(async move {
-        if let Err(e) = repo::message::update_content(&pool_clone, &id, &text_clone).await {
-            tracing::warn!(target: "ice_paw.cleanup", "回写助手消息内容失败: msg_id={}, err={}", id, e);
-        }
-        if let Err(e) = repo::message::update_content_blocks(&pool_clone, &id, &blocks_json).await {
-            tracing::warn!(target: "ice_paw.cleanup", "回写 content_blocks 失败: msg_id={}, err={}", id, e);
-        }
-        if let Err(e) = repo::message::update_token_count(&pool_clone, &id, token_count).await {
-            tracing::warn!(target: "ice_paw.cleanup", "回写 asst token_count 失败: msg_id={}, err={}", id, e);
-        }
-    });
+    if let Err(e) = sqlx::query(
+        "UPDATE messages SET content = ?, content_blocks = ?, token_count = ? WHERE id = ?",
+    )
+    .bind(text)
+    .bind(&blocks_json)
+    .bind(token_count)
+    .bind(asst_msg_id)
+    .execute(pool)
+    .await
+    {
+        tracing::warn!(
+            target: "ice_paw.cleanup",
+            "finalize_assistant_message 落盘失败: id={}, err={}",
+            asst_msg_id,
+            e
+        );
+    }
 }
 
 /// 整个发送周期成功结束：emit chat:done + 回填 user 消息 token_count + 注销
