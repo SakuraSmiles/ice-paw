@@ -628,22 +628,9 @@ async fn stream_loop_inner(
         }
 
         if !round_success {
-            let err_msg = format!(
-                "连接重试已耗尽（共 {} 次），已收到部分内容",
-                ctx.budget.max_attempts
-            );
-            if !round_text.is_empty() {
-                if let Err(eu) =
-                    repo::message::update_content(&ctx.pool, &current_asst_msg_id, &round_text).await
-                {
-                    tracing::warn!(
-                        target: "ice_paw.chat",
-                        "回写部分助手内容失败: msg_id={}, err={}",
-                        current_asst_msg_id,
-                        eu
-                    );
-                }
-            }
+            // round_success=false 意味着 consume_stream 始终失败，round_text 仍是初始空串
+            // （round_text 仅在 Ok 分支赋值，那里会置 round_success=true），故无部分内容可回写。
+            let err_msg = format!("连接重试已耗尽（共 {} 次）", ctx.budget.max_attempts);
             if let Err(eu) =
                 repo::message::update_error(&ctx.pool, &current_asst_msg_id, &err_msg).await
             {
@@ -681,7 +668,9 @@ async fn stream_loop_inner(
         // 【改】推「本轮」文本到 BatchWriter（原为跨轮 all_text）
         batch_writer.push_text(round_text.clone()).await;
 
-        // W4.2: Token 预算累计 — 每个 round 结束后累加 usage
+        // W4.2: Token 预算累计。注意：每轮 prompt_tokens 已含全部历史，跨轮累加会重复
+        // 计入早期轮次 → 预算检查偏保守（可能略早触发 budget_exceeded）。这是有意的安全
+        // 倾向；若需精确，可改为只累加 completion + 首轮 prompt。
         if let Some(ref usage) = collected_usage {
             cumulative_tokens += usage.prompt_tokens as usize + usage.completion_tokens as usize;
         }

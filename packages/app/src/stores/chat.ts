@@ -351,9 +351,7 @@ export const useChatStore = defineStore("chat", () => {
       streamingText.value += e.payload.delta;
       const idx = messages.value.length - 1;
       if (idx >= 0 && messages.value[idx].role === "assistant") {
-        messages.value = messages.value.map((msg, i) =>
-          i === idx ? { ...msg, content: streamingText.value } : msg,
-        );
+        messages.value[idx] = { ...messages.value[idx], content: streamingText.value };
       }
     });
 
