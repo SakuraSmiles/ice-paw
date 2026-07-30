@@ -12,12 +12,39 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use sqlx::SqlitePool;
 use tokio::sync::RwLock;
 
 use crate::error::{AppError, AppResult};
 use crate::infra::protocol::ToolDef;
 
 use super::types::AuthorizationLevel;
+
+// =========================================================================
+// ToolContext — 工具执行上下文（RAG: agent_id/project_id 透传）
+// =========================================================================
+
+/// 工具执行上下文。
+///
+/// 大多数内置工具（read_file / list_directory / 外部 MCP Server 代理）
+/// 不需要上下文 —— 它们只用 LLM 传入的 `args`。但某些工具（如 RAG 的
+/// `search_kb`）必须知道「当前是哪个 agent / 项目 / 对话」才能查询对应的
+/// 知识库。`ToolContext` 就是把这部分运行时信息透传给工具的载体。
+///
+/// 透传链路：`chat_cmd` 从 `ConversationRow` 取 agent_id/project_id →
+/// `LoopContext` 携带 → `execute_tool_round` 构造 `ToolContext` →
+/// `McpRegistry::dispatch(ctx)` → `McpClient::execute_with_context(ctx)`。
+#[derive(Debug, Clone)]
+pub struct ToolContext {
+    /// 当前对话 ID
+    pub conv_id: String,
+    /// 当前 Agent ID（决定查询哪级「agent 专业」知识库）
+    pub agent_id: String,
+    /// 当前项目 ID（v1 暂不启用 project KB，字段预留；None = 默认项目）
+    pub project_id: Option<String>,
+    /// 数据库连接池（search_kb 查 kb/kb_document 表用）
+    pub pool: SqlitePool,
+}
 
 // =========================================================================
 // McpClient Trait
@@ -48,6 +75,21 @@ pub trait McpClient: Send + Sync {
     /// - `args`：参数 JSON 字符串（由 LLM 产出）
     /// - 返回：结果 JSON 字符串（回传给 LLM）
     async fn execute(&self, args: &str) -> AppResult<String>;
+
+    /// 带上下文执行工具（默认实现 = 忽略 ctx，直接转调 `execute`）。
+    ///
+    /// **旧工具零改动**：read_file / list_directory / 外部 MCP Server 代理
+    /// 不需要运行时上下文，使用此默认实现即可。
+    ///
+    /// 需要上下文的工具（如 `search_kb`）override 此方法，从 `ctx` 取
+    /// agent_id/project_id/pool 决定查询范围。
+    async fn execute_with_context(
+        &self,
+        args: &str,
+        _ctx: &ToolContext,
+    ) -> AppResult<String> {
+        self.execute(args).await
+    }
 }
 
 // =========================================================================
@@ -188,8 +230,16 @@ impl McpRegistry {
         ordered
     }
 
-    /// 执行工具
-    pub async fn dispatch(&self, name: &str, args: &str) -> AppResult<String> {
+    /// 执行工具（带上下文）
+    ///
+    /// 查找工具后转调 `execute_with_context`。旧工具用默认实现（忽略 ctx），
+    /// `search_kb` 等 override `execute_with_context` 的工具会拿到完整 ctx。
+    pub async fn dispatch(
+        &self,
+        name: &str,
+        args: &str,
+        ctx: &ToolContext,
+    ) -> AppResult<String> {
         let client = self
             .get(name)
             .await
@@ -197,7 +247,7 @@ impl McpRegistry {
                 resource: "tool",
                 id: name.to_string(),
             })?;
-        client.execute(args).await
+        client.execute_with_context(args, ctx).await
     }
 
     /// 返回所有已注册的工具名列表
@@ -286,8 +336,32 @@ mod tests {
     #[tokio::test]
     async fn registry_dispatch_nonexistent() {
         let registry = McpRegistry::with_builtin();
-        let result = registry.dispatch("nonexistent", "{}").await;
+        let ctx = ToolContext {
+            conv_id: "c1".into(),
+            agent_id: "a1".into(),
+            project_id: None,
+            pool: sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap(),
+        };
+        let result = registry.dispatch("nonexistent", "{}", &ctx).await;
         assert!(result.is_err());
+    }
+
+    /// 验证 RAG 透传的核心保证：未 override `execute_with_context` 的旧工具
+    /// 走默认实现（= 转调 execute），`dispatch(ctx)` 仍能正常执行它们。
+    #[tokio::test]
+    async fn dispatch_with_context_runs_legacy_tool() {
+        let registry = McpRegistry::with_builtin();
+        let ctx = ToolContext {
+            conv_id: "c1".into(),
+            agent_id: "a1".into(),
+            project_id: None,
+            pool: sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap(),
+        };
+        // StubClient 未 override execute_with_context → 走默认实现 → 返回 "stub"
+        registry.register(make_stub("legacy", "legacy tool")).await;
+        let result = registry.dispatch("legacy", "{}", &ctx).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "stub");
     }
 
     #[tokio::test]

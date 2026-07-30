@@ -13,5 +13,5 @@ pub mod external;
 pub mod manager;
 
 pub use types::AuthorizationLevel;
-pub use client::{McpClient, McpRegistry};
+pub use client::{McpClient, McpRegistry, ToolContext};
 pub use manager::McpServerManager;

@@ -198,6 +198,7 @@ pub async fn send_message(
         agent_enabled_tools,
         current_user_query, tool_call_history,
         model_override, Some(effective_model), tool_max_rounds, shared_auth_registry, global_mcp,
+        conv.agent_id.clone(), conv.project_id.clone(),
     );
     Ok(())
 }
@@ -242,6 +243,8 @@ fn spawn_stream_loop(
     tool_max_rounds: Option<u32>,
     auth_registry: crate::harness::tool_executor::ToolAuthRegistry,
     global_registry: McpRegistry,
+    agent_id: String,
+    project_id: Option<String>,
 ) {
     tokio::spawn(async move {
         // 优先从全局 registry（含外部 MCP Server 工具）构建对话工具列表
@@ -302,6 +305,8 @@ fn spawn_stream_loop(
             call_history,
             model_override,
             asst_model,
+            agent_id,
+            project_id,
         );
         crate::harness::loop_engine::stream_loop(&mut ctx, &mut observable).await;
         // W2.4: emit final round-state after stream_loop completes
