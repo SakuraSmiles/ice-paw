@@ -26,6 +26,7 @@
 | Template | `template_cmd.rs` | 5 | Prompt 模板 CRUD |
 | Provider | `provider_cmd.rs` | 2（未注册） | 厂商/模型元信息 |
 | Tool | `tool_cmd.rs` | 1（未注册） | 工具定义列表 |
+| MCP | `mcp_cmd.rs` | 7 | MCP Server 配置 CRUD + 重启 + 工具列表 |
 
 ---
 
@@ -390,6 +391,59 @@
 
 ---
 
+## 模块十：MCP（MCP Server 配置管理）
+
+### list_mcp_servers
+
+- **参数**：无（从 `State<SqlitePool>` 注入）
+- **返回**：`AppResult<Vec<McpServerConfig>>`
+- **说明**：列出全部已配置的 MCP Server。McpServerConfig 含 id/name/description/command/args/env/enabled/trust_level/created_at/updated_at。
+- **前端使用状态**：✅ 已使用（`bridge.mcp.list()`）
+
+### create_mcp_server
+
+- **参数**：`input: NewMcpServer` — `{ id, name, description?, command, args?, env?, enabled?, trust_level? }`
+- **返回**：`AppResult<McpServerConfig>`
+- **说明**：新增 MCP Server 配置并启动 stdio 连接（trust_level: "trusted" | "untrusted"）。
+- **前端使用状态**：✅ 已使用（`bridge.mcp.create(input)`）
+
+### update_mcp_server
+
+- **参数**：`input: McpServerUpdate` — `{ id, name?, description?, command?, args?, env?, enabled?, trust_level? }`
+- **返回**：`AppResult<McpServerConfig>`
+- **说明**：部分更新配置；若 command/args 变更会重启连接。
+- **前端使用状态**：✅ 已使用（`bridge.mcp.update(input)`）
+
+### delete_mcp_server
+
+- **参数**：`id: String`
+- **返回**：`AppResult<()>`
+- **说明**：删除 MCP Server 配置并停止连接。
+- **前端使用状态**：✅ 已使用（`bridge.mcp.remove(id)`）
+
+### restart_mcp_server
+
+- **参数**：`id: String`
+- **返回**：`AppResult<()>`
+- **说明**：重启指定 MCP Server 的 stdio 连接（重新 spawn 子进程 + initialize 握手）。
+- **前端使用状态**：✅ 已使用（`bridge.mcp.restart(id)`）
+
+### list_active_mcp_servers
+
+- **参数**：无（从 `State<Arc<McpServerManager>>` 注入）
+- **返回**：`AppResult<Vec<(String, String)>>` — `(server_id, name)` 列表
+- **说明**：列出当前活跃（已连接）的 MCP Server。
+- **前端使用状态**：✅ 已使用（`bridge.mcp.listActive()`）
+
+### list_mcp_server_tools
+
+- **参数**：`id: String`
+- **返回**：`AppResult<Vec<McpToolDef>>` — 每项 `{ name, description, input_schema }`
+- **说明**：列出指定 MCP Server 提供的工具定义（来自 tools/list，manager 缓存 tools_cache）。
+- **前端使用状态**：✅ 已使用（`bridge.mcp.listTools(id)`）
+
+---
+
 ## 附录：错误类型（AppError）
 
 所有命令返回 `Result<T, AppError>`，AppError 枚举如下：
@@ -449,6 +503,13 @@
 | `bridge.projects.removeAgent(...)` | `remove_project_agent` |
 | `bridge.projects.listConversations(projectId)` | `list_conversations_by_project` |
 | `bridge.projects.moveConversation(convId, projectId)` | `move_conversation_to_project` |
+| `bridge.mcp.list()` | `list_mcp_servers` |
+| `bridge.mcp.create(input)` | `create_mcp_server` |
+| `bridge.mcp.update(input)` | `update_mcp_server` |
+| `bridge.mcp.remove(id)` | `delete_mcp_server` |
+| `bridge.mcp.restart(id)` | `restart_mcp_server` |
+| `bridge.mcp.listActive()` | `list_active_mcp_servers` |
+| `bridge.mcp.listTools(id)` | `list_mcp_server_tools` |
 
 ---
 
