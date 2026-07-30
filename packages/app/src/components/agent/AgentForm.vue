@@ -8,6 +8,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { Agent, NewAgent, AgentUpdate } from "../../types";
 import { bridge } from "../../api/bridge";
 import Combobox from "../common/Combobox.vue";
+import MoreMenu from "../common/MoreMenu.vue";
 
 const props = defineProps<{
   agent: Agent | null;
@@ -201,6 +202,11 @@ function confirmDelete() {
         <button class="btn btn-primary btn-sm" :disabled="saving" @click="save">
           {{ saving ? "保存中" : (isEdit ? "保存" : "创建") }}
         </button>
+        <MoreMenu
+          v-if="isEdit"
+          :items="[{ label: '删除', value: 'delete', confirmText: '确认删除？' }]"
+          @select="(v) => v === 'delete' && confirmDelete()"
+        />
       </div>
     </div>
 
@@ -277,12 +283,6 @@ function confirmDelete() {
         <p class="field-hint">在此目录下创建 <code>agent.yaml</code> 可配置 system_prompt、temperature 等</p>
       </div>
     </div>
-
-    <!-- 删除（危险操作，弱化文字按钮，仅编辑态） -->
-    <button v-if="isEdit" class="delete-link" @click="confirmDelete">
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
-      删除此智能体
-    </button>
   </div>
 </template>
 

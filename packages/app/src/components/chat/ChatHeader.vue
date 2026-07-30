@@ -196,10 +196,10 @@ function viewInfo() {
 .dropdown-divider { height:1px; background:var(--ip-color-border-default); margin:2px 8px; }
 
 .menu-confirm { display:flex; align-items:center; justify-content:space-between; padding:8px 12px; gap:8px; }
-.menu-confirm-text { font-size:var(--ip-text-body-sm-size); color:var(--ip-danger-base); white-space:nowrap; }
+.menu-confirm-text { font-size:var(--ip-text-body-sm-size); color:var(--ip-color-text-secondary); white-space:nowrap; }
 .menu-confirm-actions { display:flex; gap:4px; }
 .menu-confirm-yes, .menu-confirm-no { display:flex; align-items:center; justify-content:center; width:28px; height:28px; border:none; border-radius:var(--ip-radius-md); cursor:pointer; background:transparent; }
-.menu-confirm-yes:hover { background-color:var(--ip-danger-bg); color:var(--ip-danger-base); }
+.menu-confirm-yes:hover { background-color:var(--ip-color-bg-tertiary); color:var(--ip-color-text-primary); }
 .menu-confirm-no:hover { background-color:var(--ip-color-bg-tertiary); color:var(--ip-color-text-primary); }
 
 .info-overlay { position:fixed; inset:0; z-index:var(--ip-z-modal-overlay); background:rgba(0,0,0,0.3); display:flex; align-items:center; justify-content:center; }
