@@ -7,11 +7,11 @@ use std::sync::Arc;
 
 use tokio::sync::RwLock;
 
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 
 use super::client::McpRegistry;
 use super::external::{ExternalMcpServer, ExternalToolProxy};
-use super::types::McpServerConfig;
+use super::types::{McpServerConfig, McpToolDefinition};
 
 /// MCP Server 管理器
 ///
@@ -19,6 +19,8 @@ use super::types::McpServerConfig;
 pub struct McpServerManager {
     /// 活跃服务器：id → ExternalMcpServer
     servers: RwLock<HashMap<String, Arc<ExternalMcpServer>>>,
+    /// 工具缓存：id → 该 server 启动时注册的工具清单（供前端查看，避免重发 tools/list）
+    tools_cache: RwLock<HashMap<String, Vec<McpToolDefinition>>>,
 }
 
 impl McpServerManager {
@@ -26,6 +28,7 @@ impl McpServerManager {
     pub fn new() -> Self {
         Self {
             servers: RwLock::new(HashMap::new()),
+            tools_cache: RwLock::new(HashMap::new()),
         }
     }
 
@@ -71,6 +74,12 @@ impl McpServerManager {
             servers.insert(config.id.clone(), server);
         }
 
+        // 缓存工具清单（供前端查看）
+        {
+            let mut cache = self.tools_cache.write().await;
+            cache.insert(config.id.clone(), tools);
+        }
+
         Ok(())
     }
 
@@ -81,6 +90,12 @@ impl McpServerManager {
             let mut servers = self.servers.write().await;
             servers.remove(id)
         };
+
+        // 清掉工具缓存
+        {
+            let mut cache = self.tools_cache.write().await;
+            cache.remove(id);
+        }
 
         if let Some(server) = server {
             server.shutdown().await;
@@ -94,6 +109,11 @@ impl McpServerManager {
             let mut s = self.servers.write().await;
             s.drain().map(|(_, v)| v).collect()
         };
+
+        {
+            let mut cache = self.tools_cache.write().await;
+            cache.clear();
+        }
 
         for server in servers {
             server.shutdown().await;
@@ -113,6 +133,15 @@ impl McpServerManager {
         let servers = self.servers.read().await;
         servers.values().map(|s| (s.id.clone(), s.name.clone())).collect()
     }
+
+    /// 查询某个 server 启动时注册的工具清单（仅运行中的 server 有缓存）
+    pub async fn list_server_tools(&self, id: &str) -> AppResult<Vec<McpToolDefinition>> {
+        let cache = self.tools_cache.read().await;
+        cache
+            .get(id)
+            .cloned()
+            .ok_or_else(|| AppError::Internal(format!("MCP Server '{id}' 未运行")))
+    }
 }
 
 impl Default for McpServerManager {
@@ -129,5 +158,11 @@ mod tests {
     fn manager_new_is_empty() {
         let mgr = McpServerManager::new();
         assert_eq!(mgr.servers.try_read().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn list_server_tools_missing_returns_err() {
+        let mgr = McpServerManager::new();
+        assert!(mgr.list_server_tools("nope").await.is_err());
     }
 }

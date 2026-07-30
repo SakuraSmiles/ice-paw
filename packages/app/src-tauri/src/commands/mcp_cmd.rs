@@ -8,7 +8,7 @@ use tauri::State;
 
 use crate::db::repo;
 use crate::error::AppResult;
-use crate::harness::mcp::types::{McpServerConfig, NewMcpServer, UpdateMcpServer};
+use crate::harness::mcp::types::{McpServerConfig, McpToolDefinition, NewMcpServer, UpdateMcpServer};
 use crate::harness::mcp::McpRegistry;
 use crate::harness::mcp::McpServerManager;
 
@@ -101,4 +101,13 @@ pub async fn list_active_mcp_servers(
     manager: State<'_, Arc<McpServerManager>>,
 ) -> AppResult<Vec<(String, String)>> {
     Ok(manager.list_active_servers().await)
+}
+
+/// 列出某个 MCP Server 提供的工具清单（仅运行中的 server）
+#[tauri::command]
+pub async fn list_mcp_server_tools(
+    manager: State<'_, Arc<McpServerManager>>,
+    id: String,
+) -> AppResult<Vec<McpToolDefinition>> {
+    manager.list_server_tools(&id).await
 }

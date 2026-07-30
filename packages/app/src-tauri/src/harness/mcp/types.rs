@@ -113,7 +113,7 @@ pub struct McpListToolsResult {
 }
 
 /// MCP 工具定义（来自外部 Server 的 tools/list）
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpToolDefinition {
     pub name: String,
     #[serde(default)]

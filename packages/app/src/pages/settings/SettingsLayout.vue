@@ -10,6 +10,7 @@ const route = useRoute();
 const categories = [
   { key: "general", label: "通用", icon: "settings" },
   { key: "agents", label: "智能体", icon: "agent" },
+  { key: "mcp", label: "MCP 工具", icon: "mcp" },
 ];
 
 const activeCategory = computed(() => {
@@ -49,6 +50,10 @@ function navigate(key: string) {
             <svg v-else-if="cat.icon === 'agent'" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
               <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+            </svg>
+            <!-- MCP 工具图标 -->
+            <svg v-else-if="cat.icon === 'mcp'" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9 2v6" /><path d="M15 2v6" /><path d="M6 8h12v3a6 6 0 0 1-12 0V8z" /><path d="M12 17v5" />
             </svg>
           </span>
           <span class="nav-label">{{ cat.label }}</span>

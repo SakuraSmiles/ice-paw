@@ -213,3 +213,54 @@ export interface UserPreferences {
   timezone?: string;
   default_workspace_path?: string | null;
 }
+
+// ============================================================================
+// MCP Server
+// ============================================================================
+
+export type McpTrustLevel = "trusted" | "untrusted";
+
+/** MCP Server 配置（与后端 McpServerConfig 对齐） */
+export interface McpServer {
+  id: string;
+  name: string;
+  description: string;
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  enabled: boolean;
+  trust_level: McpTrustLevel;
+  created_at: string;
+  updated_at: string;
+}
+
+/** 创建 MCP Server 入参 */
+export interface NewMcpServer {
+  id: string;
+  name: string;
+  description?: string;
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+  enabled?: boolean;
+  trust_level?: McpTrustLevel;
+}
+
+/** 更新 MCP Server 入参 */
+export interface McpServerUpdate {
+  id: string;
+  name?: string;
+  description?: string;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  enabled?: boolean;
+  trust_level?: McpTrustLevel;
+}
+
+/** MCP Server 提供的工具定义（来自 tools/list） */
+export interface McpToolDef {
+  name: string;
+  description: string;
+  input_schema: unknown;
+}
