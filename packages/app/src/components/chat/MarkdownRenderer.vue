@@ -62,6 +62,9 @@ md.render = function (src: string): string {
   // markdown-it 生成 <li><p>content</p></li> 或 <li><p>content</p><ul>...</ul></li>
   // <p> 的 display:block 导致序号与内容在不同行
   html = html.replace(/<li>\s*<p>([\s\S]*?)<\/p>/g, '<li>$1');
+  // 表格包一层滚动 wrapper：避免给 <table> 设 display:block（会拆散 thead/tbody、
+  // 列宽错位）；改为 wrapper 承担 overflow-x，table 保持原生表格布局。
+  html = html.replace(/<table[^>]*>[\s\S]*?<\/table>/g, '<div class="markdown-table-wrap">$&</div>');
   return html;
 };
 
