@@ -20,8 +20,8 @@
 //! ============
 //!
 //! - 本批写器**只写一条**消息（`asst_msg_id`），始终以「当前累积全文」覆写
-//!   `messages.content` 与 `token_count`。读取侧拿到的总是最新累积状态，
-//!   多次覆写不会乱序。
+//!   `messages.content`（token_count 由 `finalize_assistant_message` 负责写入）。
+//!   读取侧拿到的总是最新累积状态，多次覆写不会乱序。
 //! - `BatchWriter` 内部的 `flush()` 调用是 `&mut self`，调用方串行调用，
 //!   同一时刻不会有并发 flush 竞争。
 //! - 后台定时任务用 `mpsc::Sender<BatchCommand>` 把命令送入同一个
@@ -30,10 +30,9 @@
 //! 与现有 `repo::message::update_content` 的关系
 //! ==============================================
 //!
-//! `BatchWriter::flush` 内部直接调用 `repo::message::update_content` 与
-//! `update_token_count`，与 cleanup 阶段用的是同一组 SQL。最终 cleanup
-//! 仍会再写一次「最终态」，覆盖 BatchWriter 期间的全部中间态 —— 这是
-//! 幂等且正确（最终态 = 完整累积文本 + 最终 token_count）。
+//! `BatchWriter::flush` 内部直接调用 `repo::message::update_content`，
+//! 只写流式文本中间态。token_count 与 content_blocks 由 `finalize_assistant_message`
+//! 在每轮结束时权威写入，覆盖 BatchWriter 的中间态 —— 幂等且正确。
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -67,8 +66,6 @@ const COMMAND_CHANNEL_CAPACITY: usize = 32;
 enum BatchCommand {
     /// 推入文本增量（仅累积，不立即 flush）
     PushText(String),
-    /// 推入 token 数（仅累积，不立即 flush）
-    SetTokens(i32),
     /// 切换写入目标消息（多轮工具：先 flush 旧消息，再切到新 assistant 占位）
     SetMessageId(String),
     /// 立即 flush（如：累积达阈值时由调用方触发）
@@ -87,7 +84,6 @@ enum BatchCommand {
 /// - `pending_text`：自上次 flush 以来累积的**全文**（注意：不是 delta，
 ///   而是当前应该写入的完整文本）。我们采用「全文覆写」策略，每次 flush
 ///   都把 messages.content 设成 latest 累积值。
-/// - `pending_tokens`：自上次 flush 以来累积的最新 token_count
 /// - `last_flush`：上次 flush 的瞬时时刻
 ///
 /// 并发模型：
@@ -114,8 +110,6 @@ struct Inner {
     msg_id: String,
     /// 自上次 flush 后累积的「最新全文」（注意：是完整文本，不是 delta）
     pending_text: String,
-    /// 自上次 flush 后累积的最新 token_count（None 表示尚未设置）
-    pending_tokens: Option<i32>,
     char_threshold: usize,
     time_threshold: Duration,
     last_flush: Instant,
@@ -158,7 +152,6 @@ impl BatchWriter {
             pool,
             msg_id,
             pending_text: String::new(),
-            pending_tokens: None,
             char_threshold,
             time_threshold,
             last_flush: Instant::now(),
@@ -190,17 +183,6 @@ impl BatchWriter {
             warn!(
                 target: "ice_paw.batch_writer",
                 "BatchWriter push_text 发送失败（writer 可能已关闭）: {}",
-                e
-            );
-        }
-    }
-
-    /// 推入 token_count（不立即 flush）
-    pub async fn set_tokens(&self, tokens: i32) {
-        if let Err(e) = self.tx.send(BatchCommand::SetTokens(tokens)).await {
-            warn!(
-                target: "ice_paw.batch_writer",
-                "BatchWriter set_tokens 发送失败: {}",
                 e
             );
         }
@@ -279,14 +261,10 @@ async fn run_writer_loop(
                             }
                         }
                     }
-                    Some(BatchCommand::SetTokens(tokens)) => {
-                        let mut guard = inner.lock().await;
-                        guard.pending_tokens = Some(tokens);
-                    }
                     Some(BatchCommand::SetMessageId(new_id)) => {
                         let mut guard = inner.lock().await;
                         // 先 flush 旧消息的 pending，避免脏写到新消息
-                        if !guard.pending_text.is_empty() || guard.pending_tokens.is_some() {
+                        if !guard.pending_text.is_empty() {
                             if let Err(e) = flush_locked(&mut guard).await {
                                 warn!(
                                     target: "ice_paw.batch_writer",
@@ -297,11 +275,10 @@ async fn run_writer_loop(
                         }
                         guard.msg_id = new_id;
                         guard.pending_text.clear();
-                        guard.pending_tokens = None;
                     }
                     Some(BatchCommand::FlushNow) => {
                         let mut guard = inner.lock().await;
-                        if !guard.pending_text.is_empty() || guard.pending_tokens.is_some() {
+                        if !guard.pending_text.is_empty() {
                             if let Err(e) = flush_locked(&mut guard).await {
                                 warn!(
                                     target: "ice_paw.batch_writer",
@@ -315,7 +292,7 @@ async fn run_writer_loop(
                     Some(BatchCommand::Shutdown) => {
                         let mut guard = inner.lock().await;
                         // 最终 flush：确保最后累积的内容入库
-                        if !guard.pending_text.is_empty() || guard.pending_tokens.is_some() {
+                        if !guard.pending_text.is_empty() {
                             if let Err(e) = flush_locked(&mut guard).await {
                                 warn!(
                                     target: "ice_paw.batch_writer",
@@ -336,7 +313,7 @@ async fn run_writer_loop(
                     None => {
                         // sender 全部 drop（writer 被回收）→ 退出循环
                         let mut guard = inner.lock().await;
-                        if !guard.pending_text.is_empty() || guard.pending_tokens.is_some() {
+                        if !guard.pending_text.is_empty() {
                             let _ = flush_locked(&mut guard).await;
                         }
                         return;
@@ -349,7 +326,7 @@ async fn run_writer_loop(
                 let elapsed = guard.last_flush.elapsed();
                 // 时间阈值触发：距上次 flush ≥ 阈值
                 if elapsed >= guard.time_threshold
-                    && (!guard.pending_text.is_empty() || guard.pending_tokens.is_some())
+                    && (!guard.pending_text.is_empty())
                 {
                     if let Err(e) = flush_locked(&mut guard).await {
                         warn!(
@@ -365,7 +342,7 @@ async fn run_writer_loop(
     }
 }
 
-/// 实际执行 flush：写 content + token_count，更新 last_flush
+/// 实际执行 flush：写 content（token_count 已由 finalize_assistant_message 负责），更新 last_flush
 ///
 /// 必须持有 `Inner` 的锁；调用方负责锁的获取。
 async fn flush_locked(inner: &mut Inner) -> AppResult<()> {
@@ -373,12 +350,7 @@ async fn flush_locked(inner: &mut Inner) -> AppResult<()> {
     if !inner.pending_text.is_empty() {
         repo::message::update_content(&inner.pool, &inner.msg_id, &inner.pending_text).await?;
     }
-    // token_count 写入
-    if let Some(tokens) = inner.pending_tokens {
-        repo::message::update_token_count(&inner.pool, &inner.msg_id, tokens).await?;
-    }
     inner.pending_text.clear();
-    inner.pending_tokens = None;
     inner.last_flush = Instant::now();
     Ok(())
 }
@@ -502,16 +474,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(row.0, "hello world", "字符阈值触发后 content 应被写入");
-
-        // set_tokens 也应被写入
-        writer.set_tokens(42).await;
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        let row: (Option<i32>,) = sqlx::query_as("SELECT token_count FROM messages WHERE id = ?")
-            .bind(msg_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(row.0, Some(42), "token_count 应在时间阈值内被 flush");
 
         // shutdown 应做 final flush
         writer.push_text("hello world appended".to_string()).await;
