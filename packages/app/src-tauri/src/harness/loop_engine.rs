@@ -28,15 +28,18 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tauri::{AppHandle, Emitter};
+use uuid::Uuid;
 
 use sqlx::SqlitePool;
 
-use crate::harness::cleanup::{cleanup, cleanup_after_success_with_blocks};
+use crate::harness::cleanup::{finalize_assistant_message, finalize_cancel, finalize_success};
 use crate::harness::error_mapping::{error_kind, friendly_error};
+use crate::db::models::NewMessage;
 use crate::db::repo;
 use crate::error::AppError;
 use crate::infra::protocol::{
-    ChatErrorPayload, ChatMessage, ChatRetryingPayload, ContentBlock, LlmProvider, TokenUsage,
+    ChatAssistantStartPayload, ChatErrorPayload, ChatMessage, ChatRetryingPayload, ContentBlock,
+    LlmProvider, TokenUsage,
 };
 use crate::harness::budget::LoopBudget;
 use crate::harness::chat_state::CancellationToken;
@@ -175,6 +178,11 @@ pub(crate) struct LoopContext {
     /// 透传给 `provider.stream_chat(model: ...)`，
     /// 仅影响本次请求，不改写 Agent 配置。
     pub model: Option<String>,
+
+    /// 助手消息持久化时写入 `messages.model` 的值（effective model =
+    /// override 或 Agent 默认）。loop_engine 创建后续轮次的 assistant 占位
+    /// 消息时复用此值，保证一次发送产生的所有 assistant 消息 model 一致。
+    pub asst_model: Option<String>,
 }
 
 impl LoopContext {
@@ -209,6 +217,7 @@ impl LoopContext {
         query: Option<String>,
         call_history: Vec<String>,
         model: Option<String>,
+        asst_model: Option<String>,
     ) -> Self {
         Self {
             conv_id,
@@ -231,6 +240,7 @@ impl LoopContext {
             query,
             call_history,
             model,
+            asst_model,
         }
     }
 }
@@ -350,8 +360,16 @@ async fn stream_loop_inner(
     observable: &mut RoundState,
     batch_writer: batch_writer::BatchWriter,
 ) {
-    let mut all_text = String::new();
-    let mut all_content_blocks: Vec<ContentBlock> = Vec::new();
+    // 【彻底重构】每轮独立持久化，删除跨轮累积器（原 all_text / all_content_blocks）。
+    //
+    // `current_asst_msg_id`：循环内所有 emit / DB 写入的「唯一 id 源」。
+    // 初始 = 首条 assistant（ctx.asst_msg_id，由 chat_cmd 创建），每轮工具结束后
+    // 更新为下一轮的 assistant 占位 id。所有错误 / cancel / 成功路径都必须用它，
+    // 绝不能用 ctx.asst_msg_id（那是首条，多轮工具下会标到错误的轮）。
+    let mut current_asst_msg_id = ctx.asst_msg_id.clone();
+    // `progress_text`：跨轮累积文本，仅供停滞检测使用，**不持久化**。
+    // （每轮真实文本由 finalize_assistant_message 即时落盘到对应 assistant 消息。）
+    let mut progress_text = String::new();
     let mut collected_usage: Option<TokenUsage> = None;
 
     // W4.2: Token 预算累计追踪
@@ -374,7 +392,7 @@ async fn stream_loop_inner(
     // === 工具执行循环 ===
     for tool_round in 0..ctx.budget.max_tool_rounds {
         if ctx.cancel.is_cancelled() {
-            return cleanup(&ctx.app, &ctx.pool, &ctx.conv_id);
+            return finalize_cancel(&ctx.app, &ctx.pool, &ctx.conv_id, &current_asst_msg_id);
         }
 
         let round_timer = RoundTimer::new(tool_round);
@@ -403,6 +421,8 @@ async fn stream_loop_inner(
         let mut round_finish_reason = "stop".to_string();
         let mut tool_calls_map: HashMap<String, CollectedToolCall> = HashMap::new();
         let mut round_success = false;
+        // 本轮 provider 返回的 completion_tokens（用于即时落盘该 assistant 的 token_count）
+        let mut round_completion_tokens: Option<u32> = None;
 
         // 第 2 轮起，在消息中注入剩余轮次信息（帮助 LLM 决定是否继续调工具）
         if tool_round > 0 {
@@ -424,7 +444,7 @@ async fn stream_loop_inner(
                 break;
             }
             if ctx.cancel.is_cancelled() {
-                return cleanup(&ctx.app, &ctx.pool, &ctx.conv_id);
+                return finalize_cancel(&ctx.app, &ctx.pool, &ctx.conv_id, &current_asst_msg_id);
             }
 
             let ws = retry_state.wait_secs();
@@ -442,7 +462,7 @@ async fn stream_loop_inner(
                     "chat:retrying",
                     ChatRetryingPayload {
                         conversation_id: ctx.conv_id.clone(),
-                        message_id: ctx.asst_msg_id.clone(),
+                        message_id: current_asst_msg_id.clone(),
                         attempt: retry_state.attempt_num() + 1,
                         max_attempts: ctx.budget.max_attempts,
                         reason: last_retry_reason.clone(),
@@ -457,7 +477,7 @@ async fn stream_loop_inner(
                 }
                 tokio::time::sleep(Duration::from_secs(ws)).await;
                 if ctx.cancel.is_cancelled() {
-                    return cleanup(&ctx.app, &ctx.pool, &ctx.conv_id);
+                    return finalize_cancel(&ctx.app, &ctx.pool, &ctx.conv_id, &current_asst_msg_id);
                 }
             }
 
@@ -485,7 +505,7 @@ async fn stream_loop_inner(
                         &ctx.cancel,
                         observable,
                         &ctx.conv_id,
-                        &ctx.asst_msg_id,
+                        &current_asst_msg_id,
                     )
                     .await
                     {
@@ -495,17 +515,17 @@ async fn stream_loop_inner(
                             round_finish_reason = sr.finish_reason;
                             tool_calls_map = sr.tool_calls;
                             if let Some(u) = sr.usage {
-                                // M1.3: 累计 token —— 首次出现的 prompt_tokens 作为 user 消息 token_count
+                                // M1.3: 累计 token —— 首次出现的 prompt_tokens 作为原始 user 消息 token_count
                                 first_prompt_tokens.get_or_insert(u.prompt_tokens);
                                 total_completion_tokens = total_completion_tokens
                                     .saturating_add(u.completion_tokens);
+                                round_completion_tokens = Some(u.completion_tokens);
                                 collected_usage = Some(u);
                             }
-                            // REQ-XC-004: 把 latest token_count 推入 BatchWriter
-                            // （取 total_completion_tokens 累计值；后台按时间阈值 flush）
-                            batch_writer
-                                .set_tokens(total_completion_tokens as i32)
-                                .await;
+                            // 【彻底重构】token_count 由本轮 finalize_assistant_message 即时写入
+                            // （每条 assistant 独立持有本轮 completion_tokens）。不再走
+                            // batch_writer.set_tokens：避免与 finalize 的 spawn 写竞态、
+                            // 也避免跨轮累加值（total_completion_tokens）脏写到新消息。
                             round_success = true;
                             break 'retry_loop;
                         }
@@ -529,7 +549,7 @@ async fn stream_loop_inner(
                                     "chat:error",
                                     ChatErrorPayload {
                                         conversation_id: ctx.conv_id.clone(),
-                                        message_id: ctx.asst_msg_id.clone(),
+                                        message_id: current_asst_msg_id.clone(),
                                         kind: error_kind(&e),
                                         message: friendly_error(&err_msg),
                                     },
@@ -543,7 +563,7 @@ async fn stream_loop_inner(
                                 }
                                 if let Err(eu) = repo::message::update_error(
                                     &ctx.pool,
-                                    &ctx.asst_msg_id,
+                                    &current_asst_msg_id,
                                     &err_msg,
                                 )
                                 .await
@@ -551,11 +571,11 @@ async fn stream_loop_inner(
                                     tracing::warn!(
                                         target: "ice_paw.chat",
                                         "回写 asst 错误信息失败: msg_id={}, err={}",
-                                        ctx.asst_msg_id,
+                                        current_asst_msg_id,
                                         eu
                                     );
                                 }
-                                return cleanup(&ctx.app, &ctx.pool, &ctx.conv_id);
+                                return finalize_cancel(&ctx.app, &ctx.pool, &ctx.conv_id, &current_asst_msg_id);
                             }
                         }
                     }
@@ -579,7 +599,7 @@ async fn stream_loop_inner(
                             "chat:error",
                             ChatErrorPayload {
                                 conversation_id: ctx.conv_id.clone(),
-                                message_id: ctx.asst_msg_id.clone(),
+                                message_id: current_asst_msg_id.clone(),
                                 kind: error_kind(&e),
                                 message: friendly_error(&err_msg),
                             },
@@ -592,16 +612,16 @@ async fn stream_loop_inner(
                             );
                         }
                         if let Err(eu) =
-                            repo::message::update_error(&ctx.pool, &ctx.asst_msg_id, &err_msg).await
+                            repo::message::update_error(&ctx.pool, &current_asst_msg_id, &err_msg).await
                         {
                             tracing::warn!(
                                 target: "ice_paw.chat",
                                 "回写 asst 错误信息失败: msg_id={}, err={}",
-                                ctx.asst_msg_id,
+                                current_asst_msg_id,
                                 eu
                             );
                         }
-                        return cleanup(&ctx.app, &ctx.pool, &ctx.conv_id);
+                        return finalize_cancel(&ctx.app, &ctx.pool, &ctx.conv_id, &current_asst_msg_id);
                     }
                 }
             }
@@ -614,23 +634,23 @@ async fn stream_loop_inner(
             );
             if !round_text.is_empty() {
                 if let Err(eu) =
-                    repo::message::update_content(&ctx.pool, &ctx.asst_msg_id, &round_text).await
+                    repo::message::update_content(&ctx.pool, &current_asst_msg_id, &round_text).await
                 {
                     tracing::warn!(
                         target: "ice_paw.chat",
                         "回写部分助手内容失败: msg_id={}, err={}",
-                        ctx.asst_msg_id,
+                        current_asst_msg_id,
                         eu
                     );
                 }
             }
             if let Err(eu) =
-                repo::message::update_error(&ctx.pool, &ctx.asst_msg_id, &err_msg).await
+                repo::message::update_error(&ctx.pool, &current_asst_msg_id, &err_msg).await
             {
                 tracing::warn!(
                     target: "ice_paw.chat",
                     "回写 asst 错误信息失败: msg_id={}, err={}",
-                    ctx.asst_msg_id,
+                    current_asst_msg_id,
                     eu
                 );
             }
@@ -638,7 +658,7 @@ async fn stream_loop_inner(
                 "chat:error",
                 ChatErrorPayload {
                     conversation_id: ctx.conv_id.clone(),
-                    message_id: ctx.asst_msg_id.clone(),
+                    message_id: current_asst_msg_id.clone(),
                     kind: "stream".into(),
                     message: friendly_error(&err_msg),
                 },
@@ -650,25 +670,68 @@ async fn stream_loop_inner(
                     em
                 );
             }
-            return cleanup(&ctx.app, &ctx.pool, &ctx.conv_id);
+            return finalize_cancel(&ctx.app, &ctx.pool, &ctx.conv_id, &current_asst_msg_id);
         }
 
         observable.elapsed_ms = round_timer.elapsed_ms();
         emit_intermediate_round_state(&ctx.app, &ctx.conv_id, observable);
-        all_text.push_str(&round_text);
+        // 【改】progress_text 跨轮累积，仅供停滞检测（不持久化）
+        progress_text.push_str(&round_text);
 
-        // REQ-XC-004: 推入最新全文到 BatchWriter（不立即 flush）
-        // 字符/时间阈值由后台任务检测，阈值达即 flush。
-        batch_writer.push_text(all_text.clone()).await;
+        // 【改】推「本轮」文本到 BatchWriter（原为跨轮 all_text）
+        batch_writer.push_text(round_text.clone()).await;
 
         // W4.2: Token 预算累计 — 每个 round 结束后累加 usage
         if let Some(ref usage) = collected_usage {
             cumulative_tokens += usage.prompt_tokens as usize + usage.completion_tokens as usize;
         }
 
-        // W4.2: Token 预算终止检查
-        // 在工具调用继续下一轮之前检查：如果累计 token 超过预算，
-        // 优雅终止循环并设置 finish_reason = "budget_exceeded"
+        // 提取本轮已完成的工具调用（id, name, arguments）
+        let completed_calls: Vec<(String, String, String)> = tool_calls_map
+            .into_values()
+            .filter(|tc| tc.ended)
+            .map(|tc| (tc.id, tc.name, tc.arguments))
+            .collect();
+
+        // 【阶段 B】组装本轮 assistant 的权威 blocks：[thinking?, text?, tool_use*]
+        // 多轮工具下每条 assistant 独立持有本轮 thinking + text + tool_use（不含 tool_result）。
+        let mut round_blocks: Vec<ContentBlock> = Vec::new();
+        if !round_think.is_empty() {
+            round_blocks.push(ContentBlock::Thinking {
+                thinking: round_think.clone(),
+                signature: None,
+            });
+        }
+        if !round_text.is_empty() {
+            round_blocks.push(ContentBlock::Text { text: round_text.clone() });
+        }
+        for (id, name, args) in &completed_calls {
+            round_blocks.push(ContentBlock::ToolUse {
+                id: id.clone(),
+                name: name.clone(),
+                input: args.clone(),
+            });
+        }
+
+        // 【阶段 C】即时持久化当前 assistant（权威快照：content + blocks + 本轮 token）。
+        // 先 flush_now 落盘 BatchWriter 的 streaming 文本，再写权威 blocks；本轮结束后
+        // set_msg_id 会切到新消息，避免后到的 flush 覆盖本轮 blocks。
+        batch_writer.flush_now().await;
+        finalize_assistant_message(
+            &ctx.pool,
+            &current_asst_msg_id,
+            &round_text,
+            &round_blocks,
+            round_completion_tokens,
+        );
+
+        // cancel 检查：consume_stream 可能因 cancel 返回部分内容（上方已落盘），
+        // 此后不再执行工具或推进循环，直接以 abort 收尾（保留已生成的部分）。
+        if ctx.cancel.is_cancelled() {
+            return finalize_cancel(&ctx.app, &ctx.pool, &ctx.conv_id, &current_asst_msg_id);
+        }
+
+        // W4.2: Token 预算终止检查（当前 assistant 已 finalize，只需收尾）
         if ctx.budget.max_total_tokens != usize::MAX
             && cumulative_tokens > ctx.budget.max_total_tokens
         {
@@ -678,38 +741,20 @@ async fn stream_loop_inner(
                 cumulative_tokens,
                 ctx.budget.max_total_tokens,
             );
-            let content_for_db = all_text.clone();
-            if !all_text.is_empty() {
-                all_content_blocks.push(ContentBlock::Text { text: all_text });
-            }
-            return cleanup_after_success_with_blocks(
+            return finalize_success(
                 &ctx.app,
                 &ctx.pool,
                 &ctx.conv_id,
-                &ctx.user_msg_id,
-                &ctx.asst_msg_id,
-                &content_for_db,
-                &all_content_blocks,
+                &current_asst_msg_id,
                 "budget_exceeded",
                 synthesize_usage(first_prompt_tokens, total_completion_tokens, collected_usage),
+                &ctx.user_msg_id,
+                first_prompt_tokens,
             );
         }
 
-        if !round_think.is_empty() {
-            all_content_blocks.push(ContentBlock::Thinking {
-                thinking: round_think,
-                signature: None,
-            });
-        }
-
-        let completed_calls: Vec<(String, String, String)> = tool_calls_map
-            .into_values()
-            .filter(|tc| tc.ended)
-            .map(|tc| (tc.id, tc.name, tc.arguments))
-            .collect();
-
         // === M2.1: 停滞检测（dev1 三级级联 L1 简化方案） ===
-        // 计算本轮进度指纹（all_text + 已完成工具调用 name:arguments），
+        // 计算本轮进度指纹（progress_text + 已完成工具调用 name:arguments），
         // 与上一轮对比，更新连续未进展计数器。
         // 触发条件：连续 `stuck_threshold` 轮 hash 完全相同
         //   （文本未增长 & 工具调用签名未变化）。
@@ -723,7 +768,7 @@ async fn stream_loop_inner(
             .map(|c| format!("{}:{}", c.1, c.2))
             .collect();
         completed_call_keys.sort_unstable();
-        let round_key = compute_round_key(&all_text, &completed_call_keys);
+        let round_key = compute_round_key(&progress_text, &completed_call_keys);
         let (new_stuck_counter, stuck_now) = should_terminate_stuck(
             round_key,
             last_round_hash,
@@ -740,38 +785,29 @@ async fn stream_loop_inner(
                 stuck_counter,
                 ctx.budget.stuck_threshold,
             );
-            let content_for_db = all_text.clone();
-            if !all_text.is_empty() {
-                all_content_blocks.push(ContentBlock::Text { text: all_text });
-            }
-            return cleanup_after_success_with_blocks(
+            return finalize_success(
                 &ctx.app,
                 &ctx.pool,
                 &ctx.conv_id,
-                &ctx.user_msg_id,
-                &ctx.asst_msg_id,
-                &content_for_db,
-                &all_content_blocks,
+                &current_asst_msg_id,
                 "stuck",
                 synthesize_usage(first_prompt_tokens, total_completion_tokens, collected_usage),
+                &ctx.user_msg_id,
+                first_prompt_tokens,
             );
         }
 
+        // 最终轮（本轮无工具调用）→ 当前 assistant 已 finalize，直接收尾
         if completed_calls.is_empty() {
-            let content_for_db = all_text.clone();
-            if !all_text.is_empty() {
-                all_content_blocks.push(ContentBlock::Text { text: all_text });
-            }
-            return cleanup_after_success_with_blocks(
+            return finalize_success(
                 &ctx.app,
                 &ctx.pool,
                 &ctx.conv_id,
-                &ctx.user_msg_id,
-                &ctx.asst_msg_id,
-                &content_for_db,
-                &all_content_blocks,
+                &current_asst_msg_id,
                 &round_finish_reason,
                 synthesize_usage(first_prompt_tokens, total_completion_tokens, collected_usage),
+                &ctx.user_msg_id,
+                first_prompt_tokens,
             );
         }
 
@@ -782,7 +818,8 @@ async fn stream_loop_inner(
             completed_calls.len(),
         );
 
-        let (tool_use_blocks, tool_result_blocks) = execute_tool_round(
+        // 【阶段 E】执行工具，得到 tool_result blocks（execute_tool_round 已 emit chat:tool-result）
+        let tool_result_blocks: Vec<ContentBlock> = execute_tool_round(
             &ctx.app,
             &ctx.tool_registry,
             &ctx.auth_registry,
@@ -790,56 +827,174 @@ async fn stream_loop_inner(
             &ctx.whitelist,
             &completed_calls,
             &ctx.conv_id,
-            &ctx.asst_msg_id,
+            &current_asst_msg_id,
             &ctx.cancel,
         )
         .await
         .unwrap_or_else(|e| {
             tracing::warn!(target: "ice_paw.chat", "工具执行失败: {}", e);
-            (Vec::new(), Vec::new())
+            Vec::new()
         });
 
-        all_content_blocks.extend(tool_use_blocks.clone());
-        all_content_blocks.extend(tool_result_blocks.clone());
+        // 【阶段 F】持久化 tool_result 为独立 user 消息（role=user，符合 Anthropic 协议：
+        // tool_result 必须在 user 消息里）。多个 tool_result 合并进同一条 user 消息。
+        let user_tool_msg_id = Uuid::new_v4().to_string();
+        if let Err(e) = repo::message::create(
+            &ctx.pool,
+            &user_tool_msg_id,
+            &NewMessage {
+                conversation_id: ctx.conv_id.clone(),
+                role: "user".into(),
+                content: String::new(),
+                token_count: None,
+                error: None,
+                model: None,
+            },
+        )
+        .await
+        {
+            let err_msg = format!("持久化工具结果消息失败: {}", e);
+            tracing::warn!(
+                target: "ice_paw.chat",
+                "{}: conv_id={}",
+                err_msg,
+                ctx.conv_id
+            );
+            let _ = repo::message::update_error(&ctx.pool, &current_asst_msg_id, &err_msg).await;
+            let _ = ctx.app.emit(
+                "chat:error",
+                ChatErrorPayload {
+                    conversation_id: ctx.conv_id.clone(),
+                    message_id: current_asst_msg_id.clone(),
+                    kind: "internal".into(),
+                    message: friendly_error(&err_msg),
+                },
+            );
+            return finalize_cancel(&ctx.app, &ctx.pool, &ctx.conv_id, &current_asst_msg_id);
+        }
+        let result_json =
+            serde_json::to_string(&tool_result_blocks).unwrap_or_else(|_| "[]".to_string());
+        if let Err(e) =
+            repo::message::update_content_blocks(&ctx.pool, &user_tool_msg_id, &result_json).await
+        {
+            tracing::warn!(
+                target: "ice_paw.chat",
+                "回写 tool_result content_blocks 失败: msg_id={}, err={}",
+                user_tool_msg_id,
+                e
+            );
+        }
 
+        // 【阶段 G】ctx.messages 追加本轮 assistant(tool_use) + user(tool_result)。
+        // 统一 role=user（两 provider 适配层均已支持 user 消息携带 tool_result）。
         let mut asst_blocks: Vec<ContentBlock> = Vec::new();
         if !round_text.is_empty() {
-            asst_blocks.push(ContentBlock::Text { text: round_text });
+            asst_blocks.push(ContentBlock::Text { text: round_text.clone() });
         }
-        asst_blocks.extend(tool_use_blocks);
+        for (id, name, args) in &completed_calls {
+            asst_blocks.push(ContentBlock::ToolUse {
+                id: id.clone(),
+                name: name.clone(),
+                input: args.clone(),
+            });
+        }
         ctx.messages.push(ChatMessage {
             role: "assistant".into(),
             content: asst_blocks,
         });
-
-        for block in &tool_result_blocks {
-            ctx.messages.push(ChatMessage {
-                role: "tool".into(),
-                content: vec![block.clone()],
-            });
-        }
+        ctx.messages.push(ChatMessage {
+            role: "user".into(),
+            content: tool_result_blocks,
+        });
 
         tracing::info!(
             target: "ice_paw.chat",
             "工具执行完成: round={}，准备下一轮 LLM 调用",
             tool_round,
         );
+
+        // 【阶段 H】若是最后一轮，当前 assistant（已 finalize）作为最终消息收尾；
+        // 否则创建下一轮 assistant 占位 + 切 BatchWriter + emit chat:assistant-start。
+        if tool_round + 1 >= ctx.budget.max_tool_rounds {
+            tracing::info!(
+                target: "ice_paw.chat",
+                "已达最大工具调用轮数（{}），终止对话",
+                ctx.budget.max_tool_rounds,
+            );
+            return finalize_success(
+                &ctx.app,
+                &ctx.pool,
+                &ctx.conv_id,
+                &current_asst_msg_id,
+                "tool_use",
+                synthesize_usage(first_prompt_tokens, total_completion_tokens, collected_usage),
+                &ctx.user_msg_id,
+                first_prompt_tokens,
+            );
+        }
+
+        let next_asst_id = Uuid::new_v4().to_string();
+        if let Err(e) = repo::message::create(
+            &ctx.pool,
+            &next_asst_id,
+            &NewMessage {
+                conversation_id: ctx.conv_id.clone(),
+                role: "assistant".into(),
+                content: String::new(),
+                token_count: None,
+                error: None,
+                model: ctx.asst_model.clone(),
+            },
+        )
+        .await
+        {
+            let err_msg = format!("创建下一轮 assistant 占位失败: {}", e);
+            tracing::warn!(target: "ice_paw.chat", "{}", err_msg);
+            let _ = repo::message::update_error(&ctx.pool, &current_asst_msg_id, &err_msg).await;
+            let _ = ctx.app.emit(
+                "chat:error",
+                ChatErrorPayload {
+                    conversation_id: ctx.conv_id.clone(),
+                    message_id: current_asst_msg_id.clone(),
+                    kind: "internal".into(),
+                    message: friendly_error(&err_msg),
+                },
+            );
+            return finalize_cancel(&ctx.app, &ctx.pool, &ctx.conv_id, &current_asst_msg_id);
+        }
+        // 切 BatchWriter 到新 assistant（内部先 flush 当前 pending 再切 id）
+        batch_writer.flush_now().await;
+        batch_writer.set_msg_id(next_asst_id.clone()).await;
+        // 通知前端：冻结上一条 assistant（写入其 tool_use/text/thinking）+ 插入 user(tool_result)
+        // + 重置 streaming 状态 + push 新 assistant 占位。
+        if let Err(e) = ctx.app.emit(
+            "chat:assistant-start",
+            ChatAssistantStartPayload {
+                conversation_id: ctx.conv_id.clone(),
+                message_id: next_asst_id.clone(),
+            },
+        ) {
+            tracing::warn!(
+                target: "ice_paw.chat",
+                "emit chat:assistant-start 失败: conv_id={}, err={}",
+                ctx.conv_id,
+                e
+            );
+        }
+        current_asst_msg_id = next_asst_id;
     }
 
-    let content_for_db = all_text.clone();
-    if !all_text.is_empty() {
-        all_content_blocks.push(ContentBlock::Text { text: all_text });
-    }
-    cleanup_after_success_with_blocks(
+    // 兜底：逻辑上不可达（最后一轮必在阶段 H 的 tool_use 分支 return），
+    // 保留以满足函数返回类型。current_asst_msg_id 此时为最后一条有内容的 assistant。
+    finalize_success(
         &ctx.app,
         &ctx.pool,
         &ctx.conv_id,
-        &ctx.user_msg_id,
-        &ctx.asst_msg_id,
-        &content_for_db,
-        &all_content_blocks,
+        &current_asst_msg_id,
         "tool_use",
         synthesize_usage(first_prompt_tokens, total_completion_tokens, collected_usage),
+        &ctx.user_msg_id,
+        first_prompt_tokens,
     );
 }
 
