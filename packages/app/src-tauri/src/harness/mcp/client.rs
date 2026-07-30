@@ -147,6 +147,7 @@ impl McpRegistry {
         let all_builtins: Vec<(&str, Arc<dyn McpClient>)> = vec![
             ("read_file", Arc::new(super::internal::ReadFileTool)),
             ("list_directory", Arc::new(super::internal::ListDirectoryTool)),
+            ("search_kb", Arc::new(super::kb_tool::SearchKbTool)),
         ];
         for name in names {
             if let Some((_, client)) = all_builtins.iter().find(|(n, _)| n == name) {
@@ -175,6 +176,7 @@ impl McpRegistry {
     pub fn register_builtin(&self) {
         self.register_sync(Arc::new(super::internal::ReadFileTool));
         self.register_sync(Arc::new(super::internal::ListDirectoryTool));
+        self.register_sync(Arc::new(super::kb_tool::SearchKbTool));
     }
 
     /// 按名称查询工具客户端
