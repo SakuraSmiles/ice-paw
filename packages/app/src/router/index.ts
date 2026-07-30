@@ -36,6 +36,12 @@ const routes: RouteRecordRaw[] = [
             component: () => import("../pages/settings/AgentSettings.vue"),
             meta: { title: "智能体" },
           },
+          {
+            path: "mcp",
+            name: "SettingsMcp",
+            component: () => import("../pages/settings/McpSettings.vue"),
+            meta: { title: "MCP 工具" },
+          },
         ],
       },
     ],

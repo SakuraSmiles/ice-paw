@@ -99,6 +99,7 @@ pub fn run() {
             commands::mcp_cmd::delete_mcp_server,
             commands::mcp_cmd::restart_mcp_server,
             commands::mcp_cmd::list_active_mcp_servers,
+            commands::mcp_cmd::list_mcp_server_tools,
         ])
         // 启动逻辑
         .setup(|app| {

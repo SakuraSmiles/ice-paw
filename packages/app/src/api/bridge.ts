@@ -5,7 +5,11 @@ import type {
   AgentUpdate,
   Conversation,
   Message,
+  McpServer,
+  McpServerUpdate,
+  McpToolDef,
   NewAgent,
+  NewMcpServer,
   UserPreferences,
 } from "../types";
 
@@ -104,5 +108,36 @@ const preferences = {
   },
 };
 
-export const bridge = { agents, conversations, messages, chat, preferences };
+const mcp = {
+  async list(): Promise<McpServer[]> {
+    try { return await invoke<McpServer[]>("list_mcp_servers"); }
+    catch (err) { throw wrapInvokeError("mcp.list", err); }
+  },
+  async create(input: NewMcpServer): Promise<McpServer> {
+    try { return await invoke<McpServer>("create_mcp_server", { input }); }
+    catch (err) { throw wrapInvokeError("mcp.create", err); }
+  },
+  async update(input: McpServerUpdate): Promise<McpServer> {
+    try { return await invoke<McpServer>("update_mcp_server", { input }); }
+    catch (err) { throw wrapInvokeError("mcp.update", err); }
+  },
+  async remove(id: string): Promise<void> {
+    try { await invoke<void>("delete_mcp_server", { id }); }
+    catch (err) { throw wrapInvokeError("mcp.remove", err); }
+  },
+  async restart(id: string): Promise<void> {
+    try { await invoke<void>("restart_mcp_server", { id }); }
+    catch (err) { throw wrapInvokeError("mcp.restart", err); }
+  },
+  async listActive(): Promise<[string, string][]> {
+    try { return await invoke<[string, string][]>("list_active_mcp_servers"); }
+    catch (err) { throw wrapInvokeError("mcp.listActive", err); }
+  },
+  async listTools(id: string): Promise<McpToolDef[]> {
+    try { return await invoke<McpToolDef[]>("list_mcp_server_tools", { id }); }
+    catch (err) { throw wrapInvokeError("mcp.listTools", err); }
+  },
+};
+
+export const bridge = { agents, conversations, messages, chat, preferences, mcp };
 export default bridge;
