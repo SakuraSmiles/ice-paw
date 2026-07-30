@@ -102,11 +102,24 @@ pub(crate) fn load_history_with_window(
         let blocks = parse_content_blocks(&msg.content_blocks);
         if blocks.is_empty() {
             messages.push(ChatMessage::from_text(role, msg.content.clone()));
+            continue;
+        }
+
+        // 规范化：assistant 消息不应包含 ToolResult（Anthropic 协议要求 ToolResult
+        // 位于 user 消息）。历史持久化时可能把同一轮的 tool_use + tool_result 合并
+        // 进了 assistant 消息，这里在加载层拆开，避免发给 LLM 时触发
+        // "tool result's tool id not found"（MiniMax 兼容端点 400）。
+        if role == "assistant" {
+            let (asst_blocks, result_blocks): (Vec<ContentBlock>, Vec<ContentBlock>) =
+                blocks.into_iter().partition(|b| !matches!(b, ContentBlock::ToolResult { .. }));
+            if !asst_blocks.is_empty() {
+                messages.push(ChatMessage { role: "assistant".into(), content: asst_blocks });
+            }
+            if !result_blocks.is_empty() {
+                messages.push(ChatMessage { role: "user".into(), content: result_blocks });
+            }
         } else {
-            messages.push(ChatMessage {
-                role,
-                content: blocks,
-            });
+            messages.push(ChatMessage { role, content: blocks });
         }
     }
     messages
