@@ -254,6 +254,26 @@ pub async fn update_token_count(
     Ok(())
 }
 
+/// 按 id 删除消息。
+///
+/// 用于 cancel 时清理无内容的空占位行（避免刷新后残留空气泡）。
+/// 注意：`tool_calls.message_id` 外键引用 `messages.id`——空占位无 tool_calls 记录，
+/// 删除安全；若未来对有 tool_calls 的消息调用，需先清理 tool_calls 或依赖外键级联。
+pub async fn delete(pool: &SqlitePool, id: &str) -> AppResult<()> {
+    let affected = sqlx::query("DELETE FROM messages WHERE id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?
+        .rows_affected();
+    if affected == 0 {
+        return Err(AppError::NotFound {
+            resource: "message",
+            id: id.to_string(),
+        });
+    }
+    Ok(())
+}
+
 /// M1.2: 列出会话内最近的工具调用名（从 `tool_calls` 审计表 JOIN `messages` 查询）
 ///
 /// # 用途
@@ -391,5 +411,30 @@ mod tests {
         let row = get_by_id(&pool, "msg-1").await.unwrap();
         // 0 作为合法值被存储（业务层会在调用前保护下限）
         assert_eq!(row.token_count, Some(0));
+    }
+
+    #[tokio::test]
+    async fn delete_removes_message_and_reports_unknown_id() {
+        let pool = fresh_pool().await;
+        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        seed_message(&pool, "msg-del", "conv-del").await;
+
+        // 已存在 → 删除成功
+        delete(&pool, "msg-del").await.unwrap();
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM messages WHERE id = ?")
+            .bind("msg-del")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count.0, 0, "删除后消息应不存在");
+
+        // 不存在 → NotFound
+        match delete(&pool, "msg-del").await {
+            Err(AppError::NotFound { resource, id }) => {
+                assert_eq!(resource, "message");
+                assert_eq!(id, "msg-del");
+            }
+            e => panic!("expected NotFound, got {e:?}"),
+        }
     }
 }

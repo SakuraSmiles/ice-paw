@@ -47,10 +47,10 @@ export const useChatStore = defineStore("chat", () => {
     sending.value = false;
     streamingText.value = "";
     streamingThinking.value = "";
+    streamingToolCalls.value = new Map();
     thinkingStartTime.value = null;
     thinkingDuration.value = null;
     lastThinkingContent.value = null;
-    thinkingDuration.value = null;
     activeConvId.value = id;
     loadMessages(id);
   }
@@ -126,14 +126,26 @@ export const useChatStore = defineStore("chat", () => {
   const pendingAuthRequest = ref<ToolAuthRequestPayload | null>(null);
   let sendTimeout: ReturnType<typeof setTimeout> | null = null;
 
+  /** 重置 60s 静默超时（滑动窗口）：任何活动事件调用一次即重新计时。
+   *  超时只重置 sending 状态（不清 streaming，交由后端 chat:done(abort) 走 freeze）。*/
+  function resetSendTimeout() {
+    if (sendTimeout) clearTimeout(sendTimeout);
+    sendTimeout = setTimeout(() => {
+      if (sending.value) {
+        console.warn("静默超时（60s 无活动），重置发送状态");
+        sending.value = false;
+      }
+    }, 60000);
+  }
+
   async function sendMessage(content: string, contentBlocks?: import("../types").ContentBlock[]) {
     if (!activeConvId.value || sending.value) return;
     sending.value = true;
     streamingText.value = "";
     streamingThinking.value = "";
+    streamingToolCalls.value = new Map();
     thinkingStartTime.value = null;
     thinkingDuration.value = null;
-    lastThinkingContent.value = null;
     lastThinkingContent.value = null;
     lastFinishReason.value = null;
 
@@ -167,14 +179,8 @@ export const useChatStore = defineStore("chat", () => {
     };
     messages.value = [...messages.value, userMsg];
 
-    // 前端超时保护：60 秒无响应自动重置
-    sendTimeout = setTimeout(() => {
-      if (sending.value) {
-        console.warn("发送超时（60s），自动重置发送状态");
-        sending.value = false;
-        streamingText.value = "";
-      }
-    }, 60000);
+    // 前端超时保护（滑动窗口）：60s 无任何活动事件才触发；活动事件 handler 会 reset
+    resetSendTimeout();
 
     try {
       await bridge.chat.sendMessage(activeConvId.value, content, blocks.length > 0 ? blocks : undefined, true);
@@ -319,6 +325,7 @@ export const useChatStore = defineStore("chat", () => {
     // + 重置 streaming 状态 + push 新占位。
     listen<ChatAssistantStartPayload>("chat:assistant-start", (e) => {
       if (e.payload.conversation_id !== activeConvId.value) return;
+      resetSendTimeout();
       freezeCurrentAssistant();
       streamingText.value = "";
       streamingThinking.value = "";
@@ -340,6 +347,7 @@ export const useChatStore = defineStore("chat", () => {
 
     listen<ChatChunkPayload>("chat:chunk", (e) => {
       if (e.payload.conversation_id !== activeConvId.value) return;
+      resetSendTimeout();
       streamingText.value += e.payload.delta;
       const idx = messages.value.length - 1;
       if (idx >= 0 && messages.value[idx].role === "assistant") {
@@ -352,6 +360,7 @@ export const useChatStore = defineStore("chat", () => {
     // ---- 工具调用事件 ----
     listen<ChatToolCallStartPayload>("chat:tool-call-start", (e) => {
       if (e.payload.conversation_id !== activeConvId.value) return;
+      resetSendTimeout();
       const map = new Map(streamingToolCalls.value);
       map.set(e.payload.id, {
         id: e.payload.id,
@@ -364,6 +373,7 @@ export const useChatStore = defineStore("chat", () => {
 
     listen<ChatToolCallDeltaPayload>("chat:tool-call-delta", (e) => {
       if (e.payload.conversation_id !== activeConvId.value) return;
+      resetSendTimeout();
       const map = new Map(streamingToolCalls.value);
       const call = map.get(e.payload.id);
       if (call) {
@@ -375,6 +385,7 @@ export const useChatStore = defineStore("chat", () => {
 
     listen<ChatToolCallEndPayload>("chat:tool-call-end", (e) => {
       if (e.payload.conversation_id !== activeConvId.value) return;
+      resetSendTimeout();
       const map = new Map(streamingToolCalls.value);
       const call = map.get(e.payload.id);
       if (call) {
@@ -386,6 +397,7 @@ export const useChatStore = defineStore("chat", () => {
 
     listen<ChatToolResultPayload>("chat:tool-result", (e) => {
       if (e.payload.conversation_id !== activeConvId.value) return;
+      resetSendTimeout();
       const map = new Map(streamingToolCalls.value);
       const call = map.get(e.payload.tool_use_id);
       if (call) {
@@ -398,6 +410,7 @@ export const useChatStore = defineStore("chat", () => {
     // ---- 思考过程 ----
     listen<ChatThinkingPayload>("chat:thinking", (e) => {
       if (e.payload.conversation_id !== activeConvId.value) return;
+      resetSendTimeout();
       if (!streamingThinking.value) {
         thinkingStartTime.value = Date.now();
       }
@@ -426,6 +439,15 @@ export const useChatStore = defineStore("chat", () => {
       // tool_result 分离为独立 user 消息）。替代旧的「打包全部 streamingToolCalls 进末条」
       // —— 那会把 tool_result 也塞进 assistant，违反 Anthropic 协议。
       freezeCurrentAssistant();
+
+      // M3：abort 时若目标 assistant 在 freeze 后仍为空（无内容无 blocks，后端已删 DB 行），
+      // 前端同步移除，避免残留空气泡。
+      if (e.payload.finish_reason === "abort") {
+        const doneId = e.payload.message_id;
+        messages.value = messages.value.filter(
+          (m) => !(m.id === doneId && m.role === "assistant" && !m.content && (!m.content_blocks || m.content_blocks === "[]")),
+        );
+      }
 
       sending.value = false;
       streamingText.value = "";
