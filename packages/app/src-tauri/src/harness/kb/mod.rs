@@ -7,6 +7,7 @@
 //! - `indexer`：扫描 KB 目录 → 增量 upsert `kb_document`（按 content_hash）
 //! - `watcher`：notify 监听目录变更 → 触发增量索引（启动集成见 lib.rs setup）
 
+pub mod ensure;
 pub mod indexer;
 pub mod parser;
 pub mod watcher;
