@@ -100,6 +100,12 @@ pub fn run() {
             commands::mcp_cmd::restart_mcp_server,
             commands::mcp_cmd::list_active_mcp_servers,
             commands::mcp_cmd::list_mcp_server_tools,
+            commands::kb_cmd::list_kb,
+            commands::kb_cmd::create_kb,
+            commands::kb_cmd::update_kb,
+            commands::kb_cmd::delete_kb,
+            commands::kb_cmd::reindex_kb,
+            commands::kb_cmd::list_kb_documents,
         ])
         // 启动逻辑
         .setup(|app| {
@@ -169,6 +175,15 @@ pub fn run() {
                 Ok(_) => tracing::info!(target: "ice_paw.mcp", "MCP Server 启动完成"),
                 Err(e) => tracing::warn!(target: "ice_paw.mcp", "MCP Server 启动异常: {}", e),
             }
+
+            // 6) RAG: 启动知识库 watcher（监听目录变更自动索引 + 首次全量扫描）。
+            //    后台运行，失败仅 warn，不阻止应用启动。
+            let pool_for_kb = pool.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = harness::kb::watcher::start(pool_for_kb).await {
+                    tracing::warn!(target: "ice_paw.kb", "知识库 watcher 启动失败: {}", e);
+                }
+            });
 
             let _ = pool;
             Ok(())

@@ -23,7 +23,7 @@ use crate::error::AppResult;
 use super::parser::{content_hash, parse_markdown};
 
 /// 单次索引的统计（日志 / 返回调用方观察）。
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 pub struct IndexStats {
     /// 新建或更新的文档数。
     pub indexed: usize,
