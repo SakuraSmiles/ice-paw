@@ -645,6 +645,34 @@ fn default_kb_enabled() -> bool {
     true
 }
 
+/// 创建知识库的入参（前端 invoke，不含 id —— 由命令层生成）。
+///
+/// `scope` 限定 `'agent' | 'project' | 'global'`；`owner_id` 对应 agent_id /
+/// project_id，global 时为 None。
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreateKbInput {
+    pub name: String,
+    /// 'agent' | 'project' | 'global'
+    pub scope: String,
+    #[serde(default)]
+    pub owner_id: Option<String>,
+    /// 监听的知识库目录绝对路径
+    pub directory: String,
+    #[serde(default = "default_kb_enabled")]
+    pub enabled: bool,
+}
+
+/// 更新知识库的入参（仅 name / enabled 可改；directory 改动需删后重建，
+/// 避免 watcher 监听目录与 DB 不一致）。
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateKb {
+    pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+}
+
 /// 数据库行版本：知识库文档（索引）。前端也可读（文档列表）
 #[derive(Debug, Clone, FromRow, Serialize)]
 pub struct KbDocumentRow {
