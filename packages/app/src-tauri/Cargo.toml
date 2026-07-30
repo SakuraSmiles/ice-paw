@@ -83,6 +83,8 @@ base64 = "0.22"
 
 # === 解析 agent.yaml 文件配置（Phase 3: 工作区行为配置）===
 serde_yaml = "0.9"
+notify = "8.2.0"
+notify-debouncer-full = "0.7.0"
 
 # === 集成测试 ===
 [dev-dependencies]
