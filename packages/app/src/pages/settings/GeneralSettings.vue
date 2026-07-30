@@ -4,6 +4,7 @@ import { ref, computed, onMounted, onUnmounted } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
 import { bridge } from "../../api/bridge";
 import type { UserPreferences } from "../../types";
+import KbDocumentList from "../../components/kb/KbDocumentList.vue";
 
 const prefs = ref<UserPreferences>({});
 const loading = ref(true);
@@ -420,6 +421,14 @@ const hasFilterResults = computed(() => {
         </div>
       </div>
 
+      <!-- ===== 知识库（全局，全宽区块） ===== -->
+      <div class="kb-section">
+        <div class="kb-section-label">
+          知识库
+          <span class="tip-icon" data-tip="全局共享知识库：所有 agent 都可检索；agent 对话中保存（scope=global）的资料也存到这里。"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg></span>
+        </div>
+        <KbDocumentList scope="global" />
+      </div>
     </div>
   </div>
 </template>
@@ -846,5 +855,21 @@ const hasFilterResults = computed(() => {
 @keyframes tz-drop-in {
   from { opacity: 0; transform: translateY(-4px) scale(0.96); }
   to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* ===== 知识库区块（全宽，独立于 setting-row 两列布局） ===== */
+.kb-section {
+  margin-top: 12px;
+  padding: 14px 0 4px;
+  border-top: 1px solid var(--ip-color-border-default);
+}
+.kb-section-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--ip-text-body-sm-size);
+  font-weight: var(--ip-font-weight-semibold);
+  color: var(--ip-color-text-primary);
+  margin-bottom: 12px;
 }
 </style>

@@ -270,3 +270,44 @@ export interface McpToolDef {
   description: string;
   input_schema: unknown;
 }
+
+// =========================================================================
+// 知识库（RAG v1，约定单库模型：global / agent 级别各一个，directory 系统推导）
+// =========================================================================
+
+/** 知识库（按级别约定存在） */
+export interface Kb {
+  id: string;
+  name: string;
+  /** 'agent' | 'project' | 'global' */
+  scope: string;
+  /** agent_id / project_id；global 时为 null */
+  owner_id: string | null;
+  /** 监听的知识库目录绝对路径（系统按约定推导，不让用户填） */
+  directory: string;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/** 知识库文档（索引项） */
+export interface KbDocument {
+  id: string;
+  kb_id: string;
+  /** 相对 kb.directory 的路径 */
+  file_path: string;
+  title: string;
+  summary: string;
+  /** JSON 数组字符串，如 '["rust","tauri"]' */
+  tags: string;
+  content_hash: string | null;
+  file_mtime: string | null;
+  indexed_at: string;
+}
+
+/** 重建索引的统计 */
+export interface IndexStats {
+  indexed: number;
+  skipped: number;
+  deleted: number;
+}
