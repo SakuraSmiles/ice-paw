@@ -275,12 +275,16 @@
 .markdown-body-table,
 .markdown-body table {
   width: 100%;
-  margin: var(--ip-spacing-3, 12px) 0;
   border-collapse: collapse;
   border-spacing: 0;
   font-size: var(--ip-text-body-sm-size, 13px);
+}
+
+/* 表格滚动容器：包在 wrapper 里支持水平滚动——避免给 table 设 display:block
+   （会拆散 thead/tbody、列宽错位）。margin 也移到 wrapper。 */
+.markdown-table-wrap {
   overflow-x: auto;
-  display: block;
+  margin: var(--ip-spacing-3, 12px) 0;
 }
 
 .markdown-body-thead,
