@@ -20,8 +20,9 @@ use crate::db::repo;
 use crate::harness::chat_state::ChatState;
 use crate::infra::protocol::{ChatDonePayload, ContentBlock, TokenUsage};
 
-/// Token 数最小护值 —— 0 表示「未填写」语义不明，调为 1 保证 DB 永远有值
-const MIN_TOKEN_COUNT: i32 = 1;
+/// Token 数未知时的占位值（provider 未返回 usage）。用 0：前端 badge 的
+/// `v-if="token_count"` 对 0 为 falsy，故未知时 badge 不显示，避免「1」看起来像真实值。
+const MIN_TOKEN_COUNT: i32 = 0;
 
 /// 即时持久化单条 assistant 消息（每轮结束时调用，同步 await）
 ///

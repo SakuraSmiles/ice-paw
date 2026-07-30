@@ -283,11 +283,10 @@ function groupText(g: MessageGroup): string {
   return g.items.map((it) => it.msg.content).filter(Boolean).join("\n\n");
 }
 
-/** assistant 组 footer 是否可见：组内有文本 / 流式中 / 任一 item 有 extras。*/
+/** assistant 组 footer 是否可见：组内有文本或附属内容（工具/思考）才显示；
+ *  纯流式空占位（只有三个点动画、无内容）不显示，避免时间戳/model 悬在空气泡下。*/
 function assistantGroupFooterVisible(g: MessageGroup): boolean {
-  const hasText = g.items.some((it) => it.msg.content);
-  const live = chat.sending && g.lastIdx === chat.messages.length - 1;
-  return hasText || live || g.items.some((it) => hasExtras(it.msg));
+  return g.items.some((it) => it.msg.content || hasExtras(it.msg));
 }
 
 /** assistant 组 token 求和（前向兼容：当前仅末轮有 token_count）。*/
