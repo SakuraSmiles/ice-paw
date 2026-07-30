@@ -4,6 +4,9 @@ import type {
   Agent,
   AgentUpdate,
   Conversation,
+  IndexStats,
+  Kb,
+  KbDocument,
   Message,
   McpServer,
   McpServerUpdate,
@@ -139,5 +142,20 @@ const mcp = {
   },
 };
 
-export const bridge = { agents, conversations, messages, chat, preferences, mcp };
+const kb = {
+  async list(): Promise<Kb[]> {
+    try { return await invoke<Kb[]>("list_kb"); }
+    catch (err) { throw wrapInvokeError("kb.list", err); }
+  },
+  async listDocuments(kbId: string): Promise<KbDocument[]> {
+    try { return await invoke<KbDocument[]>("list_kb_documents", { kbId }); }
+    catch (err) { throw wrapInvokeError("kb.listDocuments", err); }
+  },
+  async reindex(kbId: string): Promise<IndexStats> {
+    try { return await invoke<IndexStats>("reindex_kb", { id: kbId }); }
+    catch (err) { throw wrapInvokeError("kb.reindex", err); }
+  },
+};
+
+export const bridge = { agents, conversations, messages, chat, preferences, mcp, kb };
 export default bridge;

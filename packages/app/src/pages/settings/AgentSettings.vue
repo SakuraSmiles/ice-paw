@@ -2,6 +2,7 @@
 // AgentSettings.vue — 智能体设置
 import { ref, onMounted } from "vue";
 import AgentFormModal from "../../components/agent/AgentFormModal.vue";
+import KbDocumentList from "../../components/kb/KbDocumentList.vue";
 import type { Agent } from "../../types";
 import { bridge } from "../../api/bridge";
 
@@ -10,6 +11,12 @@ const loading = ref(true);
 
 const showForm = ref(false);
 const editingAgent = ref<Agent | null>(null);
+
+// 知识库展开状态（卡片内展开，仿 McpSettings tools-toggle）
+const expandedKbId = ref<string | null>(null);
+function toggleKb(agentId: string) {
+  expandedKbId.value = expandedKbId.value === agentId ? null : agentId;
+}
 
 async function loadAgents() {
   loading.value = true;
@@ -84,6 +91,16 @@ const providerLabels: Record<string, string> = {
         </div>
         <div v-if="agent.description" class="card-desc">{{ agent.description }}</div>
         <div v-if="agent.workspace_path" class="card-workspace">{{ agent.workspace_path }}</div>
+
+        <div class="kb-toggle" @click.stop="toggleKb(agent.id)">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" :class="{ rotated: expandedKbId === agent.id }">
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+          {{ expandedKbId === agent.id ? "收起知识库" : "查看知识库" }}
+        </div>
+        <div v-if="expandedKbId === agent.id" class="kb-panel" @click.stop>
+          <KbDocumentList scope="agent" :owner-id="agent.id" />
+        </div>
       </div>
 
       <div v-if="loading" class="loading-state">加载中...</div>
@@ -248,4 +265,27 @@ const providerLabels: Record<string, string> = {
 .empty-icon { width: 48px; height: 48px; margin-bottom: 8px; color: var(--ip-color-text-tertiary); }
 .empty-title { font-size: var(--ip-text-body-size); font-weight: var(--ip-font-weight-semibold); color: var(--ip-color-text-primary); margin: 0; }
 .empty-desc { font-size: var(--ip-text-body-sm-size); color: var(--ip-color-text-secondary); margin: 0 0 8px; }
+
+/* ===== 知识库展开（卡片内，仿 McpSettings tools-toggle） ===== */
+.kb-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 8px;
+  padding-left: 48px;
+  font-size: var(--ip-text-caption-size);
+  color: var(--ip-color-text-tertiary);
+  cursor: pointer;
+  user-select: none;
+}
+.kb-toggle:hover { color: var(--ip-primary-600); }
+.kb-toggle svg { transition: transform var(--ip-duration-fast) var(--ip-ease-out); }
+.kb-toggle svg.rotated { transform: rotate(180deg); }
+
+.kb-panel {
+  margin-top: 8px;
+  padding: 12px;
+  background-color: var(--ip-color-bg-tertiary);
+  border-radius: var(--ip-radius-md);
+}
 </style>
