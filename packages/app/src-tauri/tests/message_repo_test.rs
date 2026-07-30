@@ -344,6 +344,71 @@ async fn list_by_conversation_with_before_preserves_order_within_second() {
 }
 
 // ---------------------------------------------------------------------------
+// 多轮工具调用：user → assistant(tool_use) → user(tool_result) → assistant
+// 消息序列必须严格按插入顺序还原（tool_result 持久化重构的核心保证）
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn list_preserves_multi_round_tool_sequence() {
+    let pool = fresh_pool().await;
+    let conv_id = seed_agent_and_conv(&pool).await;
+
+    // 一次两轮工具调用的完整消息序列（tool_result 重构后的正确存储形态）：
+    //   user(输入)
+    //   assistant#1 [text + tool_use]
+    //   user [tool_result]            ← 独立的 tool_result 消息（本次重构新增）
+    //   assistant#2 [text + tool_use]
+    //   user [tool_result]
+    //   assistant#3 [最终文本]
+    let seq: &[(&str, &str)] = &[
+        ("m-user-input", "user"),
+        ("m-asst-1", "assistant"),
+        ("m-result-1", "user"),
+        ("m-asst-2", "assistant"),
+        ("m-result-2", "user"),
+        ("m-asst-3", "assistant"),
+    ];
+    for (id, role) in seq {
+        message::create(
+            &pool,
+            id,
+            &NewMessage {
+                conversation_id: conv_id.clone(),
+                role: (*role).into(),
+                content: format!("{id}-content"),
+                token_count: None,
+                error: None,
+                model: None,
+            },
+        )
+        .await
+        .unwrap();
+    }
+    // 全部压到同一秒（最坏情况：一次多轮发送内各消息落在同秒）
+    for (id, _) in seq {
+        force_created_at(&pool, id, "2026-07-30 10:00:00").await;
+    }
+
+    let rows = message::list_by_conversation(&pool, &conv_id, None, None)
+        .await
+        .unwrap();
+    let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
+    let expected: Vec<&str> = seq.iter().map(|(id, _)| *id).collect();
+    assert_eq!(
+        ids, expected,
+        "多轮工具的消息序列必须按插入顺序还原：\
+         user → assistant(tool_use) → user(tool_result) → assistant → …；\
+         若乱序，tool_result 持久化重构的核心保证被破坏。"
+    );
+
+    // rowid 单调递增（插入顺序的物理保证，是上述顺序的底层依据）
+    let rowids: Vec<i64> = rows.iter().map(|r| r.rowid).collect();
+    let mut sorted = rowids.clone();
+    sorted.sort();
+    assert_eq!(rowids, sorted, "rowid 应单调递增（按插入顺序）");
+}
+
+// ---------------------------------------------------------------------------
 // 公共函数存在性：避免命名漂移导致测试假阳性
 // ---------------------------------------------------------------------------
 
