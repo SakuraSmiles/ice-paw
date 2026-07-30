@@ -6,6 +6,7 @@ import { listen, emit } from "@tauri-apps/api/event";
 import type { Conversation, Message } from "../types";
 import type {
   ChatStartPayload,
+  ChatAssistantStartPayload,
   ChatChunkPayload,
   ChatDonePayload,
   ChatErrorPayload,
@@ -187,13 +188,11 @@ export const useChatStore = defineStore("chat", () => {
   async function stopGeneration() {
     if (!activeConvId.value) return;
     if (sendTimeout) { clearTimeout(sendTimeout); sendTimeout = null; }
-    // 乐观重置发送状态，不依赖后端事件响应
+    // 乐观停止「生成中」状态（隐藏光标）。**不清空 streaming 内容**——交由后端
+    // cancel → finalize_cancel emit 的 chat:done(abort) 走 freezeCurrentAssistant
+    // 统一把已生成的部分冻结到末条 assistant。若这里先清空，chat:done 的 freeze
+    // 会写入空内容，导致取消时输出到一半的气泡消失。
     sending.value = false;
-    streamingText.value = "";
-    streamingThinking.value = "";
-    thinkingStartTime.value = null;
-    thinkingDuration.value = null;
-    lastThinkingContent.value = null;
     try {
       await bridge.chat.stopGeneration(activeConvId.value);
     } catch { /* 静默忽略 */ }
@@ -245,6 +244,56 @@ export const useChatStore = defineStore("chat", () => {
   // ===== Tauri 事件监听 =====
   let inited = false;
 
+  /** 把当前 streaming 状态冻结到最后一条 assistant 消息：
+   *  - 末条 assistant 写入 content + content_blocks（thinking / text / tool_use，不含 result）
+   *  - tool_result 组装成独立 user 消息插入末条之后（符合 Anthropic 协议：
+   *    tool_result 必须在 user 消息里）
+   *  调用方负责在之后重置 streaming 状态。*/
+  function freezeCurrentAssistant() {
+    const lastIdx = messages.value.length - 1;
+    if (lastIdx < 0 || messages.value[lastIdx].role !== "assistant") return;
+
+    const blocks: { type: string; [key: string]: unknown }[] = [];
+    if (streamingThinking.value) {
+      blocks.push({ type: "thinking", thinking: streamingThinking.value });
+    }
+    if (streamingText.value) {
+      blocks.push({ type: "text", text: streamingText.value });
+    }
+    const resultBlocks: { type: string; [key: string]: unknown }[] = [];
+    for (const call of streamingToolCalls.value.values()) {
+      blocks.push({ type: "tool_use", id: call.id, name: call.name, input: call.arguments });
+      if (call.result) {
+        resultBlocks.push({
+          type: "tool_result",
+          tool_use_id: call.id,
+          content: call.result.content,
+          is_error: call.result.isError,
+        });
+      }
+    }
+
+    const frozenText = streamingText.value;
+    const frozenBlocks = JSON.stringify(blocks);
+    messages.value = messages.value.map((msg, i) =>
+      i === lastIdx ? { ...msg, content: frozenText, content_blocks: frozenBlocks } : msg,
+    );
+    if (resultBlocks.length > 0) {
+      messages.value.push({
+        id: "toolresult-" + Date.now(),
+        conversation_id: activeConvId.value ?? "",
+        role: "user",
+        content: "",
+        content_blocks: JSON.stringify(resultBlocks),
+        token_count: null,
+        error: null,
+        created_at: new Date().toISOString(),
+        rowid: 0,
+        model: null,
+      });
+    }
+  }
+
   function initEvents() {
     if (inited) return;
     inited = true;
@@ -253,6 +302,30 @@ export const useChatStore = defineStore("chat", () => {
       if (e.payload.conversation_id !== activeConvId.value) return;
       messages.value.push({
         id: e.payload.assistant_message_id,
+        conversation_id: e.payload.conversation_id,
+        role: "assistant",
+        content: "",
+        content_blocks: "[]",
+        token_count: null,
+        error: null,
+        created_at: new Date().toISOString(),
+        rowid: 0,
+        model: currentModel.value,
+      });
+    });
+
+    // 多轮工具调用：每轮工具执行完毕后，后端创建下一轮 assistant 占位并 emit。
+    // 前端据此冻结上一条 assistant（写入 tool_use/text/thinking）+ 插入 user(tool_result)
+    // + 重置 streaming 状态 + push 新占位。
+    listen<ChatAssistantStartPayload>("chat:assistant-start", (e) => {
+      if (e.payload.conversation_id !== activeConvId.value) return;
+      freezeCurrentAssistant();
+      streamingText.value = "";
+      streamingThinking.value = "";
+      thinkingStartTime.value = null;
+      streamingToolCalls.value = new Map();
+      messages.value.push({
+        id: e.payload.message_id,
         conversation_id: e.payload.conversation_id,
         role: "assistant",
         content: "",
@@ -349,25 +422,10 @@ export const useChatStore = defineStore("chat", () => {
         }
       }
 
-      // 把流式工具调用数据持久化到最后一条消息的 content_blocks
-      if (streamingToolCalls.value.size > 0) {
-        const lastIdx = messages.value.length - 1;
-        if (lastIdx >= 0 && messages.value[lastIdx].role === "assistant") {
-          const blocks: { type: string; [key: string]: unknown }[] = [];
-          if (streamingText.value) {
-            blocks.push({ type: "text", text: streamingText.value });
-          }
-          for (const call of streamingToolCalls.value.values()) {
-            blocks.push({ type: "tool_use", id: call.id, name: call.name, input: call.arguments });
-            if (call.result) {
-              blocks.push({ type: "tool_result", tool_use_id: call.id, content: call.result.content, is_error: call.result.isError });
-            }
-          }
-          messages.value = messages.value.map((msg, i) =>
-            i === lastIdx ? { ...msg, content_blocks: JSON.stringify(blocks) } : msg,
-          );
-        }
-      }
+      // 冻结最后一条 assistant（把本轮 streaming 文本/思考/工具调用写入其 content_blocks，
+      // tool_result 分离为独立 user 消息）。替代旧的「打包全部 streamingToolCalls 进末条」
+      // —— 那会把 tool_result 也塞进 assistant，违反 Anthropic 协议。
+      freezeCurrentAssistant();
 
       sending.value = false;
       streamingText.value = "";
@@ -375,14 +433,15 @@ export const useChatStore = defineStore("chat", () => {
       streamingThinking.value = "";
       thinkingStartTime.value = null;
       lastFinishReason.value = e.payload.finish_reason;
-      // 更新最后一条 assistant 消息的 token_count
-      if (e.payload.usage && messages.value.length > 0) {
-        const last = messages.value[messages.value.length - 1];
-        if (last.role === "assistant") {
-          messages.value = messages.value.map((msg, i) =>
-            i === messages.value.length - 1 ? { ...msg, token_count: e.payload.usage!.completion_tokens } : msg,
-          );
-        }
+      // 用 message_id 定位最终 assistant（freezeCurrentAssistant 可能已在末尾插入 user 消息，
+      // 不能再假设末条索引），更新其 token_count
+      if (e.payload.usage) {
+        const doneId = e.payload.message_id;
+        messages.value = messages.value.map((msg) =>
+          msg.id === doneId && msg.role === "assistant"
+            ? { ...msg, token_count: e.payload.usage!.completion_tokens }
+            : msg,
+        );
       }
     });
 
@@ -391,12 +450,19 @@ export const useChatStore = defineStore("chat", () => {
       if (sendTimeout) { clearTimeout(sendTimeout); sendTimeout = null; }
       sending.value = false;
       streamingText.value = "";
+      streamingThinking.value = "";
+      thinkingStartTime.value = null;
+      streamingToolCalls.value = new Map();
+      // 用 message_id 定位出错的 assistant（多轮工具下不能遍历改所有 assistant）
+      const errId = e.payload.message_id;
       messages.value = messages.value.map((msg) => {
-        if (msg.role === "assistant" && msg.content === "") {
-          return { ...msg, content: `错误: ${e.payload.message}`, error: e.payload.message };
-        }
-        if (msg.role === "assistant" && msg.content !== "" && !msg.error) {
-          return { ...msg, content: msg.content + `\n\n[生成中断: ${e.payload.message}]`, error: e.payload.message };
+        if (msg.id === errId && msg.role === "assistant") {
+          if (msg.content === "") {
+            return { ...msg, content: `错误: ${e.payload.message}`, error: e.payload.message };
+          }
+          if (!msg.error) {
+            return { ...msg, content: msg.content + `\n\n[生成中断: ${e.payload.message}]`, error: e.payload.message };
+          }
         }
         return msg;
       });

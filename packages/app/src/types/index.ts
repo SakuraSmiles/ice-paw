@@ -116,6 +116,12 @@ export interface ChatStartPayload {
   assistant_message_id: string;
 }
 
+/** 多轮工具调用中，每轮工具后创建下一轮 assistant 占位时 emit */
+export interface ChatAssistantStartPayload {
+  conversation_id: string;
+  message_id: string;
+}
+
 export interface ChatChunkPayload {
   conversation_id: string;
   message_id: string;

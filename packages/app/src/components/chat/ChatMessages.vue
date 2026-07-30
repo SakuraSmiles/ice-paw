@@ -4,6 +4,7 @@ import { watch, nextTick, ref, computed, onMounted, onUnmounted } from "vue";
 import { useChatStore } from "../../stores/chat";
 import { bridge } from "../../api/bridge";
 import MarkdownRenderer from "./MarkdownRenderer.vue";
+import type { Message, MessageRole } from "../../types";
 
 const chat = useChatStore();
 const listRef = ref<HTMLElement | null>(null);
@@ -188,11 +189,110 @@ function parseThinkingBlocks(contentBlocks: string): string[] {
   } catch { return []; }
 }
 
-/** 查询某个 tool_use_id 对应的 tool_result 是否有 isError */
-function getToolHasError(contentBlocks: string, toolUseId: string): boolean {
-  const results = parseToolResultBlocks(contentBlocks);
-  const found = results.find(r => r.toolUseId === toolUseId);
-  return found?.isError ?? false;
+/** 从 idx+1 起向后查相邻 user 消息里 tool_use_id 对应的 tool_result。
+ *  彻底重构后 tool_result 独立存于相邻 user 消息（不再与 tool_use 同条）。*/
+function findToolResult(
+  toolUseId: string,
+  msgIdx: number,
+): { content: string; isError: boolean } | null {
+  for (let i = msgIdx + 1; i < chat.messages.length; i++) {
+    const m = chat.messages[i];
+    if (m.role === "assistant") break; // tool_result 必紧跟其 tool_use 的 assistant
+    if (m.role === "user") {
+      const found = parseToolResultBlocks(m.content_blocks).find(
+        (r) => r.toolUseId === toolUseId,
+      );
+      if (found) return { content: found.content, isError: found.isError };
+    }
+  }
+  return null;
+}
+
+/** 查询某个 tool_use_id 对应的 tool_result 是否有 isError（跨消息配对）*/
+function getToolHasError(toolUseId: string, msgIdx: number): boolean {
+  return findToolResult(toolUseId, msgIdx)?.isError ?? false;
+}
+
+/** 判断 user 消息是否仅含 tool_result（无文本/图片）。
+ *  这种消息是工具调用结果，不单独成气泡，其内容并入上一条 assistant 的工具卡片。*/
+function isToolResultOnlyUser(msg: { role: string; content: string; content_blocks: string }): boolean {
+  if (msg.role !== "user" || msg.content) return false;
+  try {
+    const blocks = JSON.parse(msg.content_blocks);
+    if (!Array.isArray(blocks) || blocks.length === 0) return false;
+    return blocks.every((b: Record<string, unknown>) => b.type === "tool_result");
+  } catch {
+    return false;
+  }
+}
+
+// ===== 消息分组（连续同 agent 的 assistant 合并成一个气泡块）=====
+interface GroupedItem { msg: Message; idx: number }
+interface MessageGroup {
+  key: string;
+  role: MessageRole;
+  model: string | null;
+  items: GroupedItem[];
+  firstIdx: number;
+  lastIdx: number;
+}
+
+/** 把 chat.messages 按「连续 assistant + 同 model」分组。tool_result-only user 被跳过
+ *  且不切断 assistant 连续性（其内容并入上一条 assistant 的工具卡片）。数据层 messages 不变。*/
+const messageGroups = computed<MessageGroup[]>(() => {
+  const out: MessageGroup[] = [];
+  for (let i = 0; i < chat.messages.length; i++) {
+    const msg = chat.messages[i];
+    if (isToolResultOnlyUser(msg)) continue;
+    const prev = out[out.length - 1];
+    const mergeable =
+      msg.role === "assistant" &&
+      prev !== undefined &&
+      prev.role === "assistant" &&
+      prev.model === (msg.model ?? null);
+    if (mergeable) {
+      prev.items.push({ msg, idx: i });
+      prev.lastIdx = i;
+    } else {
+      out.push({
+        key: "grp-" + msg.id,
+        role: msg.role,
+        model: msg.model ?? null,
+        items: [{ msg, idx: i }],
+        firstIdx: i,
+        lastIdx: i,
+      });
+    }
+  }
+  return out;
+});
+
+/** 该 item 是否是当前正在流式的 assistant（活跃生成目标）。
+ *  依据：sending 期间 messages 末条恒为流式 assistant 占位。*/
+function isLiveAssistant(item: GroupedItem): boolean {
+  return chat.sending && item.msg.role === "assistant" && item.idx === chat.messages.length - 1;
+}
+
+/** 该 item 是否是全局最后一条 assistant（用于 chat:done 后驻留的「思考·已完成」块）。*/
+function isLastAssistant(item: GroupedItem): boolean {
+  return item.msg.role === "assistant" && item.idx === chat.messages.length - 1;
+}
+
+/** 组内所有非空文本（多轮 assistant 的 content 以空行连接，供组级复制）。*/
+function groupText(g: MessageGroup): string {
+  return g.items.map((it) => it.msg.content).filter(Boolean).join("\n\n");
+}
+
+/** assistant 组 footer 是否可见：组内有文本 / 流式中 / 任一 item 有 extras。*/
+function assistantGroupFooterVisible(g: MessageGroup): boolean {
+  const hasText = g.items.some((it) => it.msg.content);
+  const live = chat.sending && g.lastIdx === chat.messages.length - 1;
+  return hasText || live || g.items.some((it) => hasExtras(it.msg));
+}
+
+/** assistant 组 token 求和（前向兼容：当前仅末轮有 token_count）。*/
+function groupTokenSum(g: MessageGroup): number {
+  return g.items.reduce((s, it) => s + (it.msg.token_count ?? 0), 0);
 }
 
 // ===== 时间分组 =====
@@ -272,152 +372,166 @@ const finishReasonLabels: Record<string, string> = {
     <div v-else-if="!chat.activeConvId" class="state-hint">选择一个对话开始</div>
     <div v-else-if="chat.messages.length === 0" class="state-hint">开始一段新的对话</div>
     <TransitionGroup v-else name="msg" tag="div" class="messages-container">
-      <template v-for="(msg, idx) in chat.messages" :key="msg.id">
-        <!-- 日期分组标签 -->
-        <div v-if="isNewDay(idx)" class="date-divider">{{ getDateLabel(msg.created_at) }}</div>
-        <div
-          :class="['message-row', msg.role]"
-        >
-        <div :class="['message-content', msg.role, { 'has-extras': hasExtras(msg) }]">
-          <!-- ===== 用户消息 ===== -->
-          <template v-if="msg.role === 'user'">
-            <div class="message-bubble">
-              <span v-if="msg.content" class="user-text">{{ msg.content }}</span>
-              <div v-if="msg.content_blocks && msg.content_blocks !== '[]'" class="user-images">
-                <img v-for="(img, i) in parseImageBlocks(msg.content_blocks)" :key="i" :src="`data:${img.mediaType};base64,${img.data}`" class="user-image" loading="lazy" />
+      <template v-for="group in messageGroups" :key="group.key">
+        <!-- 日期分组标签（基于组首）-->
+        <div v-if="isNewDay(group.firstIdx)" class="date-divider">{{ getDateLabel(chat.messages[group.firstIdx].created_at) }}</div>
+        <div :class="['message-group', group.role]">
+          <!-- ===== 用户消息组（单条，透明壳）===== -->
+          <template v-if="group.role === 'user'">
+            <div class="message-content user">
+              <div class="message-bubble">
+                <span v-if="group.items[0].msg.content" class="user-text">{{ group.items[0].msg.content }}</span>
+                <div v-if="group.items[0].msg.content_blocks && group.items[0].msg.content_blocks !== '[]'" class="user-images">
+                  <img v-for="(img, i) in parseImageBlocks(group.items[0].msg.content_blocks)" :key="i" :src="`data:${img.mediaType};base64,${img.data}`" class="user-image" loading="lazy" />
+                </div>
+              </div>
+              <div v-if="group.items[0].msg.content" class="message-footer">
+                <div class="footer-left">
+                  <span class="message-time">{{ formatTime(group.items[0].msg.created_at) }}</span>
+                </div>
+                <div class="footer-actions">
+                  <button class="copy-btn" title="复制" @click="copyContent(group.items[0].msg.content)">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <rect x="9" y="9" width="13" height="13" rx="2" ry="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                    </svg>
+                  </button>
+                </div>
               </div>
             </div>
           </template>
 
-          <!-- ===== 助手消息 ===== -->
-          <template v-else-if="msg.role === 'assistant'">
-            <!-- 三个点动画：仅当没有任何返回时显示 -->
-            <div v-if="msg.content === '' && chat.sending && !chat.streamingThinking && toolCallList.length === 0" class="think-dots">
-              <span class="think-dot" /><span class="think-dot" /><span class="think-dot" />
-            </div>
+          <!-- ===== 助手消息组（气泡块：连续多轮合并）===== -->
+          <template v-else-if="group.role === 'assistant'">
+            <div v-for="item in group.items" :key="item.msg.id" class="message-item">
+              <!-- 三个点动画：仅当前流式 item 且无任何返回时显示 -->
+              <div v-if="isLiveAssistant(item) && item.msg.content === '' && !chat.streamingThinking && toolCallList.length === 0" class="think-dots">
+                <span class="think-dot" /><span class="think-dot" /><span class="think-dot" />
+              </div>
 
-            <template v-if="msg.content || !chat.sending || chat.streamingThinking || toolCallList.length > 0">
-              <!-- 思考过程（历史消息） -->
-              <div v-for="(think, ti) in parseThinkingBlocks(msg.content_blocks)" :key="'think-' + ti" class="think-block">
-                <div class="think-toggle" @click="toggleThinking(msg.id + '-h' + ti)">
-                  <span class="think-chevron">{{ expandedThinking.has(msg.id + '-h' + ti) ? '▾' : '▸' }}</span>
-                  <span class="think-label">{{ chat.thinkingDurations.has(msg.id) ? '思考 · ' + chat.thinkingDurations.get(msg.id) : '思考' }}</span>
-                </div>
-                <Transition name="think-fade">
-                  <div v-if="expandedThinking.has(msg.id + '-h' + ti)" class="think-body">
-                    <MarkdownRenderer :content="think" />
+              <template v-if="item.msg.content || !chat.sending || chat.streamingThinking || toolCallList.length > 0">
+                <!-- 思考过程（历史消息）；末条且 done 块显示时跳过避免重复 -->
+                <template v-for="(think, ti) in parseThinkingBlocks(item.msg.content_blocks)" :key="'think-' + item.msg.id + '-' + ti">
+                  <div v-if="!(isLastAssistant(item) && chat.thinkingDuration && chat.lastThinkingContent)" class="think-block">
+                    <div class="think-toggle" @click="toggleThinking(item.msg.id + '-h' + ti)">
+                      <span class="think-chevron">{{ expandedThinking.has(item.msg.id + '-h' + ti) ? '▾' : '▸' }}</span>
+                      <span class="think-label">{{ chat.thinkingDurations.has(item.msg.id) ? '思考 · ' + chat.thinkingDurations.get(item.msg.id) : '思考' }}</span>
+                    </div>
+                    <Transition name="think-fade">
+                      <div v-if="expandedThinking.has(item.msg.id + '-h' + ti)" class="think-body">
+                        <MarkdownRenderer :content="think" />
+                      </div>
+                    </Transition>
+                  </div>
+                </template>
+
+                <!-- 思考过程（流式 / 刚结束，带切换动画） -->
+                <Transition name="think-swap" mode="out-in">
+                  <div v-if="isLiveAssistant(item) && chat.streamingThinking" key="live" class="think-block">
+                    <div class="think-toggle" @click="toggleThinking('streaming')">
+                      <span class="think-chevron">{{ expandedThinking.has('streaming') ? '▾' : '▸' }}</span>
+                      <span class="think-label">思考</span>
+                      <span class="think-status">进行中… {{ thinkingElapsed }}</span>
+                    </div>
+                    <Transition name="think-fade">
+                      <div v-if="expandedThinking.has('streaming')" class="think-body">
+                        <MarkdownRenderer :content="chat.streamingThinking" />
+                      </div>
+                    </Transition>
+                  </div>
+                  <div v-else-if="isLastAssistant(item) && chat.thinkingDuration && chat.lastThinkingContent" key="done" class="think-block">
+                    <div class="think-toggle" @click="toggleThinking('done')">
+                      <span class="think-chevron">{{ expandedThinking.has('done') ? '▾' : '▸' }}</span>
+                      <span class="think-label">思考 · {{ chat.thinkingDuration }}</span>
+                    </div>
+                    <Transition name="think-fade">
+                      <div v-if="expandedThinking.has('done')" class="think-body">
+                        <MarkdownRenderer :content="chat.lastThinkingContent" />
+                      </div>
+                    </Transition>
                   </div>
                 </Transition>
-              </div>
 
-              <!-- 思考过程（流式 / 刚结束，带切换动画） -->
-              <Transition name="think-swap" mode="out-in">
-                <div v-if="idx === chat.messages.length - 1 && chat.streamingThinking" key="live" class="think-block">
-                  <div class="think-toggle" @click="toggleThinking('streaming')">
-                    <span class="think-chevron">{{ expandedThinking.has('streaming') ? '▾' : '▸' }}</span>
-                    <span class="think-label">思考</span>
-                    <span class="think-status">进行中… {{ thinkingElapsed }}</span>
-                  </div>
-                  <Transition name="think-fade">
-                    <div v-if="expandedThinking.has('streaming')" class="think-body">
-                      <MarkdownRenderer :content="chat.streamingThinking" />
-                    </div>
-                  </Transition>
+                <!-- 文字（按时间线顺序：thinking → 文本 → 工具，匹配 content_blocks）-->
+                <div v-if="item.msg.content" class="message-bubble">
+                  <MarkdownRenderer :content="item.msg.content" />
                 </div>
-                <div v-else-if="idx === chat.messages.length - 1 && chat.thinkingDuration && chat.lastThinkingContent" key="done" class="think-block">
-                  <div class="think-toggle" @click="toggleThinking('done')">
-                    <span class="think-chevron">{{ expandedThinking.has('done') ? '▾' : '▸' }}</span>
-                    <span class="think-label">思考 · {{ chat.thinkingDuration }}</span>
-                  </div>
-                  <Transition name="think-fade">
-                    <div v-if="expandedThinking.has('done')" class="think-body">
-                      <MarkdownRenderer :content="chat.lastThinkingContent" />
-                    </div>
-                  </Transition>
-                </div>
-              </Transition>
 
-              <!-- 工具调用（历史/刚结束，从 content_blocks 解析，非流式） -->
-              <div v-if="parseToolUseBlocks(msg.content_blocks).length > 0 && !(idx === chat.messages.length - 1 && toolCallList.length > 0)" class="tools-strip">
-                <div v-for="tu in parseToolUseBlocks(msg.content_blocks)" :key="tu.id">
-                  <div class="tool-toggle" @click="toggleToolCall(tu.id)">
-                    <span class="tool-chevron">{{ expandedToolCalls.has(tu.id) ? '▾' : '▸' }}</span>
-                    <span class="tool-name">{{ tu.name }}</span>
-                    <span class="tool-preview">{{ truncateJson(tu.input) }}</span>
-                    <span :class="['tool-dot', getToolHasError(msg.content_blocks, tu.id) ? 'tool-dot-err' : 'tool-dot-ok']"></span>
-                  </div>
-                  <Transition name="tool-slide">
-                    <div v-if="expandedToolCalls.has(tu.id)" class="tool-expand">
-                      <div class="tool-expand-group">
-                        <div class="tool-expand-hdr">参数</div>
-                        <pre class="tool-expand-code">{{ formatJson(tu.input) }}</pre>
+                <!-- 工具调用（历史/刚结束，从 content_blocks 解析，非流式） -->
+                <div v-if="parseToolUseBlocks(item.msg.content_blocks).length > 0 && !(isLiveAssistant(item) && toolCallList.length > 0)" class="tools-strip">
+                  <div v-for="tu in parseToolUseBlocks(item.msg.content_blocks)" :key="tu.id">
+                    <div class="tool-toggle" @click="toggleToolCall(tu.id)">
+                      <span class="tool-chevron">{{ expandedToolCalls.has(tu.id) ? '▾' : '▸' }}</span>
+                      <span class="tool-name">{{ tu.name }}</span>
+                      <span class="tool-preview">{{ truncateJson(tu.input) }}</span>
+                      <span :class="['tool-dot', getToolHasError(tu.id, item.idx) ? 'tool-dot-err' : 'tool-dot-ok']"></span>
+                    </div>
+                    <Transition name="tool-slide">
+                      <div v-if="expandedToolCalls.has(tu.id)" class="tool-expand">
+                        <div class="tool-expand-group">
+                          <div class="tool-expand-hdr">参数</div>
+                          <pre class="tool-expand-code">{{ formatJson(tu.input) }}</pre>
+                        </div>
+                        <template v-for="tr in [findToolResult(tu.id, item.idx)]" :key="'r-' + tu.id">
+                          <div v-if="tr" class="tool-expand-group">
+                            <div :class="['tool-expand-hdr', tr.isError ? 'hdr-err' : '']">{{ tr.isError ? '错误' : '结果' }}</div>
+                            <pre :class="['tool-expand-code', tr.isError ? 'code-err' : '']">{{ tr.content }}</pre>
+                          </div>
+                        </template>
                       </div>
-                      <div v-for="tr in parseToolResultBlocks(msg.content_blocks)" :key="'r-' + tr.toolUseId">
-                        <div v-if="tr.toolUseId === tu.id" class="tool-expand-group">
-                          <div :class="['tool-expand-hdr', tr.isError ? 'hdr-err' : '']">{{ tr.isError ? '错误' : '结果' }}</div>
-                          <pre :class="['tool-expand-code', tr.isError ? 'code-err' : '']">{{ tr.content }}</pre>
+                    </Transition>
+                  </div>
+                </div>
+
+                <!-- 工具调用（当前流式） -->
+                <div v-if="isLiveAssistant(item) && toolCallList.length > 0" class="tools-strip">
+                  <div v-for="call in toolCallList" :key="call.id">
+                    <div class="tool-toggle" @click="toggleToolCall(call.id)">
+                      <span class="tool-chevron">{{ expandedToolCalls.has(call.id) ? '▾' : '▸' }}</span>
+                      <span class="tool-name">{{ call.name }}</span>
+                      <span class="tool-preview">{{ truncateJson(call.arguments || '') }}</span>
+                      <span v-if="call.ended && call.result" :class="['tool-dot', call.result.isError ? 'tool-dot-err' : 'tool-dot-ok']"></span>
+                      <span v-else-if="call.ended" class="tool-dot tool-dot-wait"></span>
+                      <span v-else class="tool-dot tool-dot-busy"></span>
+                    </div>
+                    <Transition name="tool-slide">
+                      <div v-if="expandedToolCalls.has(call.id)" class="tool-expand">
+                        <div class="tool-expand-group">
+                          <div class="tool-expand-hdr">参数</div>
+                          <pre class="tool-expand-code">{{ formatJson(call.arguments) }}</pre>
+                        </div>
+                        <div v-if="call.result" class="tool-expand-group">
+                          <div :class="['tool-expand-hdr', call.result.isError ? 'hdr-err' : '']">{{ call.result.isError ? '错误' : '结果' }}</div>
+                          <pre :class="['tool-expand-code', call.result.isError ? 'code-err' : '']">{{ call.result.content }}</pre>
+                        </div>
+                        <div v-else class="tool-expand-group">
+                          <div class="tool-expand-hdr">结果</div>
+                          <div class="tool-expand-pending">{{ call.ended ? '等待执行结果…' : '正在接收参数…' }}</div>
                         </div>
                       </div>
-                    </div>
-                  </Transition>
-                </div>
-              </div>
-
-              <!-- 工具调用（当前流式） -->
-              <div v-if="idx === chat.messages.length - 1 && toolCallList.length > 0" class="tools-strip">
-                <div v-for="call in toolCallList" :key="call.id">
-                  <div class="tool-toggle" @click="toggleToolCall(call.id)">
-                    <span class="tool-chevron">{{ expandedToolCalls.has(call.id) ? '▾' : '▸' }}</span>
-                    <span class="tool-name">{{ call.name }}</span>
-                    <span class="tool-preview">{{ truncateJson(call.arguments || '') }}</span>
-                    <span v-if="call.ended && call.result" :class="['tool-dot', call.result.isError ? 'tool-dot-err' : 'tool-dot-ok']"></span>
-                    <span v-else-if="call.ended" class="tool-dot tool-dot-wait"></span>
-                    <span v-else class="tool-dot tool-dot-busy"></span>
+                    </Transition>
                   </div>
-                  <Transition name="tool-slide">
-                    <div v-if="expandedToolCalls.has(call.id)" class="tool-expand">
-                      <div class="tool-expand-group">
-                        <div class="tool-expand-hdr">参数</div>
-                        <pre class="tool-expand-code">{{ formatJson(call.arguments) }}</pre>
-                      </div>
-                      <div v-if="call.result" class="tool-expand-group">
-                        <div :class="['tool-expand-hdr', call.result.isError ? 'hdr-err' : '']">{{ call.result.isError ? '错误' : '结果' }}</div>
-                        <pre :class="['tool-expand-code', call.result.isError ? 'code-err' : '']">{{ call.result.content }}</pre>
-                      </div>
-                      <div v-else class="tool-expand-group">
-                        <div class="tool-expand-hdr">结果</div>
-                        <div class="tool-expand-pending">{{ call.ended ? '等待执行结果…' : '正在接收参数…' }}</div>
-                      </div>
-                    </div>
-                  </Transition>
                 </div>
-              </div>
+              </template>
+            </div>
 
-              <!-- 文字气泡（仅当有内容时才显示） -->
-              <div v-if="msg.content" class="message-bubble">
-                <MarkdownRenderer :content="msg.content" />
+            <!-- 组级 footer：时间(组首) / model(一次) / token(求和) / 复制(组内文本) -->
+            <div v-if="assistantGroupFooterVisible(group)" class="message-footer">
+              <div class="footer-left">
+                <span class="message-time">{{ formatTime(chat.messages[group.firstIdx].created_at) }}</span>
+                <span v-if="group.model" class="badge-model">{{ group.model }}</span>
+                <span v-if="groupTokenSum(group) > 0" class="badge-tokens">{{ groupTokenSum(group) }} tokens</span>
               </div>
-            </template>
+              <div class="footer-actions">
+                <button v-if="groupText(group)" class="copy-btn" title="复制" @click="copyContent(groupText(group))">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                  </svg>
+                </button>
+              </div>
+            </div>
           </template>
-
-          <!-- ===== 底部信息 ===== -->
-          <div v-if="msg.content || (msg.role === 'assistant' && (chat.sending || toolCallList.length > 0 || hasExtras(msg)))" class="message-footer">
-            <div class="footer-left">
-              <span class="message-time">{{ formatTime(msg.created_at) }}</span>
-              <span v-if="msg.model && msg.role === 'assistant'" class="badge-model">{{ msg.model }}</span>
-              <span v-if="msg.token_count" class="badge-tokens">{{ msg.token_count }} tokens</span>
-            </div>
-            <div class="footer-actions">
-              <button v-if="msg.content" class="copy-btn" title="复制" @click="copyContent(msg.content)">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="9" y="9" width="13" height="13" rx="2" ry="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-              </svg>
-            </button>
-            </div>
-          </div>
         </div>
-      </div>
-    </template>
+      </template>
     </TransitionGroup>
 
     <!-- finish_reason 提示 -->
@@ -463,19 +577,26 @@ const finishReasonLabels: Record<string, string> = {
 .msg-move { transition:transform 0.3s ease; }
 @keyframes msg-in { from { opacity:0; transform:translateY(12px) scale(0.97); } to { opacity:1; transform:translateY(0) scale(1); } }
 
-/* ===== 消息行 ===== */
-.message-row { display:flex; }
-.message-row.user { justify-content:flex-end; }
-.message-row.assistant { justify-content:flex-start; }
+/* ===== 消息组（连续同 agent 的 assistant 合并成一个气泡块）===== */
+.message-group { display:flex; flex-direction:column; gap:2px; min-width:0; }
+.message-group.assistant {
+  align-self:flex-start; max-width:85%;
+  background-color:var(--color-message-ai-bg); color:var(--color-message-ai-text);
+  border-radius:12px; border-bottom-left-radius:4px; padding:14px 16px;
+}
+.message-group.user { align-self:flex-end; max-width:70%; }
 .message-content { display:flex; flex-direction:column; gap:4px; min-width:0; }
-.message-row.assistant .message-content { max-width:85%; }
-.message-row.user .message-content { max-width:70%; align-items:flex-end; }
+.message-group.user .message-content { align-items:flex-end; }
+
+/* 组内多条 assistant item：item 内子项适度间距，轮次之间留白区分（呼吸感）*/
+.message-group.assistant .message-item { display:flex; flex-direction:column; gap:6px; }
+.message-group.assistant .message-item + .message-item { margin-top:16px; }
 
 /* ===== 用户消息气泡 ===== */
-.message-row.user .message-bubble { padding:10px 16px; border-radius:12px; font-size:var(--ip-text-body-size); line-height:1.6; white-space:pre-wrap; word-break:break-word; background-color:var(--color-message-user-bg); color:var(--color-message-user-text); border-bottom-right-radius:4px; }
+.message-group.user .message-bubble { padding:10px 16px; border-radius:12px; font-size:var(--ip-text-body-size); line-height:1.6; white-space:pre-wrap; word-break:break-word; background-color:var(--color-message-user-bg); color:var(--color-message-user-text); border-bottom-right-radius:4px; }
 
-/* ===== 助手消息气泡（纯文字） ===== */
-.message-row.assistant .message-bubble { padding:10px 16px; border-radius:12px; font-size:var(--ip-text-body-size); line-height:1.6; white-space:pre-wrap; word-break:break-word; background-color:var(--color-message-ai-bg); color:var(--color-message-ai-text); border-bottom-left-radius:4px; }
+/* ===== 助手消息文字（无自带背景，由组容器承载气泡块）===== */
+.message-group.assistant .message-bubble { padding:0; border-radius:0; font-size:var(--ip-text-body-size); line-height:1.6; white-space:pre-wrap; word-break:break-word; background:transparent; }
 
 /* ===== 用户消息内容（含图片） ===== */
 .user-content { display:flex; flex-direction:column; gap:4px; }
@@ -484,12 +605,11 @@ const finishReasonLabels: Record<string, string> = {
 .user-image { max-width:200px; max-height:200px; border-radius:var(--ip-radius-lg); object-fit:cover; border:1px solid var(--ip-color-border-default); }
 
 /* ===== 消息底部（时间 + 复制按钮） ===== */
-.message-bubble-wrap { display:flex; align-items:flex-start; }
 .message-footer { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:2px; padding:0 4px; }
 .footer-left { display:flex; align-items:center; gap:6px; }
 .footer-actions { display:flex; align-items:center; gap:6px; opacity:0; transition:opacity var(--ip-duration-fast) var(--ip-ease-out); }
-.message-content:hover .footer-actions { opacity:1; }
-.message-content:hover .message-footer { opacity:1; }
+.message-group:hover .footer-actions { opacity:1; }
+.message-group:hover .message-footer { opacity:1; }
 .message-time { font-size:11px; color:var(--ip-color-text-disabled); }
 .copy-btn { display:flex; align-items:center; justify-content:center; width:24px; height:24px; border-radius:var(--ip-radius-md); border:none; background:transparent; color:var(--ip-color-text-tertiary); cursor:pointer; transition:all var(--ip-duration-fast) var(--ip-ease-out); }
 .copy-btn:hover { background-color:var(--ip-color-bg-tertiary); color:var(--ip-color-text-secondary); }
@@ -555,7 +675,7 @@ const finishReasonLabels: Record<string, string> = {
 .tool-toggle { display:flex; align-items:center; gap:6px; padding:2px 6px; cursor:pointer; user-select:none; border-radius:var(--ip-radius-sm); transition:background var(--ip-duration-fast) var(--ip-ease-out); width:100%; }
 .tool-toggle:hover { background:var(--ip-color-bg-tertiary); }
 .tool-chevron { font-size:9px; color:var(--ip-color-text-disabled); line-height:1; width:10px; flex-shrink:0; }
-.tool-name { font-size:var(--ip-text-caption-size); font-weight:var(--ip-font-weight-medium); color:var(--ip-color-text-secondary); white-space:nowrap; }
+.tool-name { font-size:var(--ip-text-caption-size); font-weight:var(--ip-font-weight-medium); color:var(--ip-color-text-tertiary); white-space:nowrap; }
 .tool-preview { font-size:var(--ip-text-caption-size); color:var(--ip-color-text-disabled); margin-left:auto; margin-right:6px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:right; flex-shrink:1; }
 
 /* 状态圆点 */
