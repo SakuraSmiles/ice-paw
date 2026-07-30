@@ -378,6 +378,21 @@ pub struct ChatStartPayload {
     pub assistant_message_id: String,
 }
 
+/// `chat:assistant-start` 事件 payload
+///
+/// 多轮工具调用场景：每轮工具执行完毕、创建下一轮 assistant 占位消息时 emit。
+/// 前端据此「冻结上一条 assistant」（把本轮 streaming 文本/思考/工具调用写入其
+/// content_blocks，仅含 tool_use 不含 result）+「按 tool_use_id 组装 user(tool_result)
+/// 插入」+「重置 streaming 状态」+「push 新 assistant 占位」。
+///
+/// 与 `chat:start` 区别：`chat:start` 在整次发送开始时由 chat_cmd 发一次（首条
+/// assistant）；`chat:assistant-start` 在每轮工具后发（第 2 条及之后的 assistant）。
+#[derive(Clone, Serialize)]
+pub struct ChatAssistantStartPayload {
+    pub conversation_id: String,
+    pub message_id: String,
+}
+
 /// `chat:chunk` 事件 payload
 #[derive(Clone, Serialize)]
 pub struct ChatChunkPayload {

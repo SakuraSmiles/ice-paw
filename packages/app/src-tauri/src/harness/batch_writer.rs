@@ -69,6 +69,8 @@ enum BatchCommand {
     PushText(String),
     /// 推入 token 数（仅累积，不立即 flush）
     SetTokens(i32),
+    /// 切换写入目标消息（多轮工具：先 flush 旧消息，再切到新 assistant 占位）
+    SetMessageId(String),
     /// 立即 flush（如：累积达阈值时由调用方触发）
     FlushNow,
     /// 关闭 writer（drain 剩余 pending 后退出后台循环）
@@ -204,6 +206,20 @@ impl BatchWriter {
         }
     }
 
+    /// 切换写入目标消息：先 flush 旧消息的 pending，再切到新 msg_id（pending 清空）
+    ///
+    /// 多轮工具调用场景：每轮工具结束后 loop_engine 创建新的 assistant 占位消息，
+    /// 调本方法把 writer 对准新消息。调用前通常已 flush_now()。
+    pub async fn set_msg_id(&self, msg_id: String) {
+        if let Err(e) = self.tx.send(BatchCommand::SetMessageId(msg_id)).await {
+            warn!(
+                target: "ice_paw.batch_writer",
+                "BatchWriter set_msg_id 发送失败: {}",
+                e
+            );
+        }
+    }
+
     /// 主动触发一次 flush（不等阈值触发）
     pub async fn flush_now(&self) {
         if let Err(e) = self.tx.send(BatchCommand::FlushNow).await {
@@ -266,6 +282,22 @@ async fn run_writer_loop(
                     Some(BatchCommand::SetTokens(tokens)) => {
                         let mut guard = inner.lock().await;
                         guard.pending_tokens = Some(tokens);
+                    }
+                    Some(BatchCommand::SetMessageId(new_id)) => {
+                        let mut guard = inner.lock().await;
+                        // 先 flush 旧消息的 pending，避免脏写到新消息
+                        if !guard.pending_text.is_empty() || guard.pending_tokens.is_some() {
+                            if let Err(e) = flush_locked(&mut guard).await {
+                                warn!(
+                                    target: "ice_paw.batch_writer",
+                                    "切换 msg_id 前 flush 失败: old={}, err={}",
+                                    guard.msg_id, e
+                                );
+                            }
+                        }
+                        guard.msg_id = new_id;
+                        guard.pending_text.clear();
+                        guard.pending_tokens = None;
                     }
                     Some(BatchCommand::FlushNow) => {
                         let mut guard = inner.lock().await;

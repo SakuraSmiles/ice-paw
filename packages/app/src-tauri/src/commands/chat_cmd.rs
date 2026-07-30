@@ -171,7 +171,7 @@ pub async fn send_message(
         &NewMessage {
             conversation_id: conv_id.clone(), role: "assistant".into(),
             content: String::new(), token_count: None, error: None,
-            model: Some(effective_model),
+            model: Some(effective_model.clone()),
         },
     ).await?;
 
@@ -197,7 +197,7 @@ pub async fn send_message(
         cancel_token, conv_id, user_msg_id, asst_msg_id, tools_enabled,
         agent_enabled_tools,
         current_user_query, tool_call_history,
-        model_override, tool_max_rounds, shared_auth_registry, global_mcp,
+        model_override, Some(effective_model), tool_max_rounds, shared_auth_registry, global_mcp,
     );
     Ok(())
 }
@@ -238,6 +238,7 @@ fn spawn_stream_loop(
     agent_enabled_tools: Option<Vec<String>>,
     query: Option<String>, call_history: Vec<String>,
     model_override: Option<String>,
+    asst_model: Option<String>,
     tool_max_rounds: Option<u32>,
     auth_registry: crate::harness::tool_executor::ToolAuthRegistry,
     global_registry: McpRegistry,
@@ -300,6 +301,7 @@ fn spawn_stream_loop(
             query,
             call_history,
             model_override,
+            asst_model,
         );
         crate::harness::loop_engine::stream_loop(&mut ctx, &mut observable).await;
         // W2.4: emit final round-state after stream_loop completes

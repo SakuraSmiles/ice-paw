@@ -3,6 +3,7 @@
 //! - `init_pool`：启动时初始化连接池，跑迁移，注入到 `tauri::State`
 //! - 提供 `get_pool` 给非 setup 钩子处的代码借用
 
+pub mod migrate;
 pub mod models;
 pub mod repo;
 
@@ -62,6 +63,16 @@ pub async fn init_pool(app: &AppHandle) -> AppResult<SqlitePool> {
     // 路径相对 Cargo.toml（src-tauri）
     sqlx::migrate!("./src/db/migrations").run(&pool).await?;
     info!(target: "ice_paw.db", "数据库迁移完成");
+
+    // 5.5) tool_result 孤儿迁移：把历史坏数据（tool_result 混进 assistant 消息）
+    //      幂等地拆成独立 user 消息。失败不阻止启动（仅 warn）。
+    if let Err(e) = migrate::fix_orphan_tool_results(&pool, &db_path).await {
+        warn!(
+            target: "ice_paw.db",
+            "tool_result 孤儿迁移失败（不影响启动）: {}",
+            e
+        );
+    }
 
     // 6) 注入到 tauri 状态（app 持有 + 返回给 setup 钩子）
     app.manage(pool.clone());
