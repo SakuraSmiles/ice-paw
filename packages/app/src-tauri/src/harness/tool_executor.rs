@@ -149,7 +149,8 @@ impl ToolAuthRegistry {
 ///   `conv_id` / `asst_msg_id`（用于 emit auth request 时携带上下文）。
 /// - 工具执行前先做授权判断；如果需要确认则 emit + 阻塞等待前端响应。
 ///
-/// 返回值结构不变：`(tool_use_blocks, tool_result_blocks)`。
+/// 返回 `tool_result_blocks`（每个已完成工具调用对应一个 ToolResult，emit `chat:tool-result`）。
+/// tool_use blocks 由调用方（loop_engine）从 completed_calls 自行组装，消除重复来源。
 #[allow(clippy::too_many_arguments)]
 pub async fn execute_tool_round(
     app: &AppHandle,
@@ -161,8 +162,7 @@ pub async fn execute_tool_round(
     conv_id: &str,
     asst_msg_id: &str,
     cancel: &crate::harness::chat_state::CancellationToken,
-) -> crate::error::AppResult<(Vec<ContentBlock>, Vec<ContentBlock>)> {
-    let mut tool_use_blocks: Vec<ContentBlock> = Vec::new();
+) -> crate::error::AppResult<Vec<ContentBlock>> {
     let mut tool_result_blocks: Vec<ContentBlock> = Vec::new();
 
     for (tc_id, tc_name, tc_args) in completed_calls {
@@ -309,14 +309,9 @@ pub async fn execute_tool_round(
             }
         }
 
-        tool_use_blocks.push(ContentBlock::ToolUse {
-            id: tc_id.clone(),
-            name: tc_name.clone(),
-            input: tc_args.clone(),
-        });
     }
 
-    Ok((tool_use_blocks, tool_result_blocks))
+    Ok(tool_result_blocks)
 }
 
 /// 等待前端授权响应。
