@@ -581,6 +581,97 @@ pub struct TemplateRow {
 }
 
 // =========================================================================
+// Knowledge Base（知识库 RAG v1，agentic 检索）
+// =========================================================================
+
+/// 数据库行版本：知识库
+#[derive(Debug, Clone, FromRow)]
+pub struct KbRow {
+    pub id: String,
+    pub name: String,
+    /// 归属层级：'agent' | 'project' | 'global'
+    pub scope: String,
+    /// agent_id / project_id / NULL(global)
+    pub owner_id: Option<String>,
+    /// 监听的知识库目录绝对路径
+    pub directory: String,
+    pub enabled: i32,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// 前端可见的知识库
+#[derive(Debug, Clone, Serialize)]
+pub struct Kb {
+    pub id: String,
+    pub name: String,
+    pub scope: String,
+    pub owner_id: Option<String>,
+    pub directory: String,
+    pub enabled: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl From<KbRow> for Kb {
+    fn from(row: KbRow) -> Self {
+        Kb {
+            enabled: row.enabled != 0,
+            id: row.id,
+            name: row.name,
+            scope: row.scope,
+            owner_id: row.owner_id,
+            directory: row.directory,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NewKb {
+    pub id: String,
+    pub name: String,
+    /// 'agent' | 'project' | 'global'
+    pub scope: String,
+    #[serde(default)]
+    pub owner_id: Option<String>,
+    pub directory: String,
+    #[serde(default = "default_kb_enabled")]
+    pub enabled: bool,
+}
+
+fn default_kb_enabled() -> bool {
+    true
+}
+
+/// 数据库行版本：知识库文档（索引）。前端也可读（文档列表）
+#[derive(Debug, Clone, FromRow, Serialize)]
+pub struct KbDocumentRow {
+    pub id: String,
+    pub kb_id: String,
+    /// 相对 kb.directory 的路径
+    pub file_path: String,
+    pub title: String,
+    pub summary: String,
+    /// JSON 数组（frontmatter tags）
+    pub tags: String,
+    pub content_hash: Option<String>,
+    pub file_mtime: Option<String>,
+    pub indexed_at: String,
+}
+
+/// 检索命中项（search_kb 返回给 agent）
+#[derive(Debug, Clone, Serialize, FromRow)]
+pub struct KbSearchHit {
+    pub kb_id: String,
+    pub kb_name: String,
+    pub file_path: String,
+    pub title: String,
+    pub summary: String,
+}
+
+// =========================================================================
 // UserPreferences（全局配置）
 // =========================================================================
 
