@@ -6,7 +6,7 @@
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
-use crate::db::models::{Kb, KbDocumentRow, KbRow, KbSearchHit, NewKb};
+use crate::db::models::{Kb, KbDocumentRow, KbRow, KbSearchHit, NewKb, UpdateKb};
 use crate::error::{AppError, AppResult};
 
 const KB_COLS: &str = "id, name, scope, owner_id, directory, enabled, created_at, updated_at";
@@ -86,6 +86,23 @@ pub async fn delete(pool: &SqlitePool, id: &str) -> AppResult<()> {
         });
     }
     Ok(())
+}
+
+/// 更新 KB（仅 name / enabled；directory 不支持改 —— 改动需删后重建，
+/// 否则 watcher 监听目录与 DB 不一致）。
+pub async fn update(pool: &SqlitePool, input: &UpdateKb) -> AppResult<Kb> {
+    let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let existing = get_by_id(pool, &input.id).await?;
+    let name = input.name.as_ref().unwrap_or(&existing.name);
+    let enabled = input.enabled.unwrap_or(existing.enabled);
+    sqlx::query("UPDATE kb SET name = ?, enabled = ?, updated_at = ? WHERE id = ?")
+        .bind(name)
+        .bind(enabled as i32)
+        .bind(&now)
+        .bind(&input.id)
+        .execute(pool)
+        .await?;
+    get_by_id(pool, &input.id).await
 }
 
 // ============================ kb_document（文档索引） ============================
@@ -215,4 +232,102 @@ pub async fn search(
     q = q.bind(limit);
     let hits = q.fetch_all(pool).await?;
     Ok(hits)
+}
+
+// =========================================================================
+// 单元测试
+// =========================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use std::str::FromStr;
+
+    async fn fresh_pool() -> SqlitePool {
+        let opts = SqliteConnectOptions::from_str("sqlite::memory:")
+            .unwrap()
+            .create_if_missing(true)
+            .foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
+        pool
+    }
+
+    fn new_kb(id: &str, name: &str) -> NewKb {
+        NewKb {
+            id: id.into(),
+            name: name.into(),
+            scope: "global".into(),
+            owner_id: None,
+            directory: format!("/tmp/{id}"),
+            enabled: true,
+        }
+    }
+
+    #[tokio::test]
+    async fn update_changes_provided_fields() {
+        let pool = fresh_pool().await;
+        create(&pool, &new_kb("k1", "原名称")).await.unwrap();
+
+        let updated = update(
+            &pool,
+            &UpdateKb {
+                id: "k1".into(),
+                name: Some("新名称".into()),
+                enabled: Some(false),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(updated.name, "新名称");
+        assert!(!updated.enabled);
+        // scope / directory 不被 update 触及
+        assert_eq!(updated.scope, "global");
+        assert_eq!(updated.directory, "/tmp/k1");
+    }
+
+    #[tokio::test]
+    async fn update_preserves_unset_fields() {
+        let pool = fresh_pool().await;
+        create(&pool, &new_kb("k1", "原名")).await.unwrap();
+
+        // 只改 name，enabled 传 None → 应保留原值 true
+        let updated = update(
+            &pool,
+            &UpdateKb {
+                id: "k1".into(),
+                name: Some("改名".into()),
+                enabled: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(updated.name, "改名");
+        assert!(updated.enabled, "未提供的 enabled 应保留原值");
+    }
+
+    #[tokio::test]
+    async fn update_nonexistent_returns_not_found() {
+        let pool = fresh_pool().await;
+        let err = update(
+            &pool,
+            &UpdateKb {
+                id: "不存在".into(),
+                name: Some("x".into()),
+                enabled: None,
+            },
+        )
+        .await;
+        assert!(err.is_err());
+    }
 }
