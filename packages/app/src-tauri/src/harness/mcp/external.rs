@@ -140,13 +140,12 @@ impl ExternalMcpServer {
             .map_err(|_| AppError::Internal(format!("MCP Server '{}' 初始化超时（60s）", name)))?
             .map_err(|_| AppError::Internal(format!("MCP Server '{}' 初始化通道关闭", name)))?;
 
-        // 发送 initialized 通知
-        let notif = JsonRpcRequest {
-            jsonrpc: "2.0".into(),
-            id: Uuid::new_v4().to_string(),
-            method: "notifications/initialized".into(),
-            params: None,
-        };
+        // 发送 initialized 通知（JSON-RPC notification：无 id、无响应，符合 MCP 协议）。
+        // 之前误用 JsonRpcRequest 带 id，server 若回响应会触发「未知 request_id」警告。
+        let notif = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized",
+        });
         Self::write_line(&writer, &notif).await?;
 
         tracing::info!(
@@ -260,9 +259,9 @@ impl ExternalMcpServer {
             .map_err(|_| AppError::Internal("MCP Server 通道关闭".into()))
     }
 
-    async fn write_line(
+    async fn write_line<T: serde::Serialize>(
         writer: &Arc<Mutex<BufWriter<tokio::process::ChildStdin>>>,
-        req: &JsonRpcRequest,
+        req: &T,
     ) -> AppResult<()> {
         let json = serde_json::to_string(req)
             .map_err(|e| AppError::Internal(format!("JSON 序列化失败: {}", e)))?;
