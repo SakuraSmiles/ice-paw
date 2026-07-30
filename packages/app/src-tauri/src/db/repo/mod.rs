@@ -5,6 +5,7 @@
 
 pub mod agent;
 pub mod conversation;
+pub mod kb;
 pub mod mcp_server;
 pub mod memory_embedding;
 pub mod memory_store;
