@@ -38,6 +38,7 @@ const builtinTools: { name: string; desc: string }[] = [
   { name: "read_file", desc: "读取本地文件内容" },
   { name: "list_directory", desc: "列出目录内容" },
   { name: "search_kb", desc: "检索知识库（对话中 agent 自动调用）" },
+  { name: "read_kb_document", desc: "读取知识库文档全文（检索命中后读细节）" },
   { name: "save_to_kb", desc: "保存资料到知识库（对话中 agent 自动调用）" },
 ];
 

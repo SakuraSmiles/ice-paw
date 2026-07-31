@@ -149,6 +149,7 @@ impl McpRegistry {
             ("list_directory", Arc::new(super::internal::ListDirectoryTool)),
             ("search_kb", Arc::new(super::kb_tool::SearchKbTool)),
             ("save_to_kb", Arc::new(super::kb_tool::SaveToKbTool)),
+            ("read_kb_document", Arc::new(super::kb_tool::ReadKbDocumentTool)),
         ];
         for name in names {
             if let Some((_, client)) = all_builtins.iter().find(|(n, _)| n == name) {
@@ -179,6 +180,7 @@ impl McpRegistry {
         self.register_sync(Arc::new(super::internal::ListDirectoryTool));
         self.register_sync(Arc::new(super::kb_tool::SearchKbTool));
         self.register_sync(Arc::new(super::kb_tool::SaveToKbTool));
+        self.register_sync(Arc::new(super::kb_tool::ReadKbDocumentTool));
     }
 
     /// 按名称查询工具客户端
