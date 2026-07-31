@@ -100,11 +100,16 @@ function newChat() {
   }
 }
 
-function doCreateChat(agentId: string) {
+async function doCreateChat(agentId: string) {
   showPicker.value = false;
-  chat.createConversation(agentId);
-  if (isSettingsPage.value) {
-    router.push("/");
+  try {
+    await chat.createConversation(agentId);
+    if (isSettingsPage.value) {
+      router.push("/");
+    }
+  } catch (e) {
+    // 新建会话失败：picker 已关、不跳转，仅记录日志（避免 unhandled rejection + 错误地 router.push）
+    console.error("新建会话失败:", e);
   }
 }
 
