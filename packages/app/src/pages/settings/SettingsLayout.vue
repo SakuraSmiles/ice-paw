@@ -72,7 +72,11 @@ function navigate(key: string) {
 
       <!-- 右内容（融入背景） -->
       <div class="settings-content">
-        <router-view />
+        <router-view v-slot="{ Component }">
+          <Transition name="route-fade" mode="out-in">
+            <component :is="Component" />
+          </Transition>
+        </router-view>
       </div>
     </div>
   </div>
