@@ -297,6 +297,112 @@ fn build_markdown(title: &str, tags: &Option<Vec<String>>, content: &str) -> Str
 }
 
 // =========================================================================
+// read_kb_document —— 读知识库文档全文（RAG 检索后读细节，免授权）
+// =========================================================================
+
+/// `read_kb_document` 工具：读取知识库文档的完整内容。
+///
+/// `search_kb` 只返回 title + summary（索引摘要），agent 看完摘要判断需要细节时，
+/// 用本工具传 `file_path`（即 search_kb 返回的相对路径）读全文。工具内部知道 KB
+/// 目录、自动定位、**免路径授权**（KB 是系统管理的信任内容，不该走通用文件授权）。
+///
+/// 定位顺序：当前 agent 的 KB → global KB（与 search_kb 的检索范围一致）。
+pub struct ReadKbDocumentTool;
+
+#[derive(Deserialize)]
+struct ReadKbDocArgs {
+    /// search_kb 返回的相对路径（相对 kb.directory）
+    file_path: String,
+}
+
+#[async_trait]
+impl McpClient for ReadKbDocumentTool {
+    fn name(&self) -> &str {
+        "read_kb_document"
+    }
+
+    fn description(&self) -> &str {
+        "Read the full content of a knowledge base document. Pass the file_path returned \
+         by search_kb. Use this after search_kb to get the complete content of a matched \
+         document — search_kb only returns title + summary, this gives the full text."
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "file_path": {
+                    "type": "string",
+                    "description": "Relative file path returned by search_kb (e.g. 'basics/ownership.md')."
+                }
+            },
+            "required": ["file_path"]
+        })
+    }
+
+    fn authorization_level(&self) -> AuthorizationLevel {
+        AuthorizationLevel::Always
+    }
+
+    async fn execute(&self, _args: &str) -> AppResult<String> {
+        Err(AppError::Internal(
+            "read_kb_document 必须通过 execute_with_context 调用（需要 agent_id 上下文）".into(),
+        ))
+    }
+
+    async fn execute_with_context(&self, args: &str, ctx: &ToolContext) -> AppResult<String> {
+        let parsed: ReadKbDocArgs =
+            serde_json::from_str(args).map_err(|e| {
+                AppError::Validation(format!("read_kb_document 参数解析失败: {e}"))
+            })?;
+
+        // 定位范围与 search_kb 一致：agent 专有 → global
+        let agent_kbs = repo::kb::list_by_scope(&ctx.pool, "agent", Some(&ctx.agent_id)).await?;
+        let global_kbs = repo::kb::list_by_scope(&ctx.pool, "global", None).await?;
+        let scopes: Vec<_> = agent_kbs.into_iter().chain(global_kbs).collect();
+
+        // 在这些 KB 中找含该 file_path 的文档（agent 优先）
+        for kb in &scopes {
+            if let Some(doc) =
+                repo::kb::get_document_by_path(&ctx.pool, &kb.id, &parsed.file_path).await?
+            {
+                let abs = PathBuf::from(&kb.directory).join(&parsed.file_path);
+                let content = match std::fs::read_to_string(&abs) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::warn!(
+                            target: "ice_paw.kb",
+                            "读取 KB 文档失败: {}/{} err={}",
+                            kb.directory, parsed.file_path, e
+                        );
+                        return Err(AppError::Io(e));
+                    }
+                };
+                tracing::info!(
+                    target: "ice_paw.kb",
+                    "read_kb_document: {}/{} ({} 字符)",
+                    kb.directory, parsed.file_path, content.chars().count()
+                );
+                return Ok(serde_json::json!({
+                    "file_path": parsed.file_path,
+                    "title": doc.title,
+                    "content": content,
+                })
+                .to_string());
+            }
+        }
+
+        // 未命中（file_path 不在任何可用 KB 中）
+        Ok(serde_json::json!({
+            "file_path": parsed.file_path,
+            "found": false,
+            "message": "未在当前 agent 知识库或全局知识库中找到该文档，请确认 file_path 来自 search_kb 的返回。"
+        })
+        .to_string())
+    }
+}
+
+// =========================================================================
 // 单元测试
 // =========================================================================
 
@@ -458,5 +564,60 @@ mod tests {
         assert_eq!(parsed.title, "标题: 含冒号 与 #井号");
         assert_eq!(parsed.tags, r#"["rust","笔记"]"#);
         assert!(parsed.summary.contains("正文内容"));
+    }
+
+    /// read_kb_document：真实临时文件 → 返回全文（验证 RAG 全文读取闭环）
+    #[tokio::test]
+    async fn read_kb_document_returns_full_content() {
+        let pool = fresh_pool().await;
+        let dir = std::env::temp_dir().join("icepaw_test_read_kb_doc");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("note.md"), "# 测试标题\n\n这是完整正文。").unwrap();
+        repo::kb::create(
+            &pool,
+            &NewKb {
+                id: "kb-rd".into(),
+                name: "test".into(),
+                scope: "global".into(),
+                owner_id: None,
+                directory: dir.to_string_lossy().to_string(),
+                enabled: true,
+            },
+        )
+        .await
+        .unwrap();
+        repo::kb::upsert_document(&pool, "kb-rd", "note.md", "测试标题", "摘要", "[]", Some("h"), None)
+            .await
+            .unwrap();
+
+        let tool = ReadKbDocumentTool;
+        let ctx = ToolContext {
+            conv_id: "c".into(),
+            agent_id: "a".into(),
+            project_id: None,
+            pool: pool.clone(),
+        };
+        let result = tool.execute_with_context(r#"{"file_path":"note.md"}"#, &ctx).await.unwrap();
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(v["title"], "测试标题");
+        assert!(v["content"].as_str().unwrap().contains("完整正文"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// read_kb_document：file_path 不在任何 KB → 返回未命中提示（不报错）
+    #[tokio::test]
+    async fn read_kb_document_not_found_returns_hint() {
+        let pool = fresh_pool().await;
+        let tool = ReadKbDocumentTool;
+        let ctx = ToolContext {
+            conv_id: "c".into(),
+            agent_id: "a".into(),
+            project_id: None,
+            pool: pool.clone(),
+        };
+        let result = tool.execute_with_context(r#"{"file_path":"nope.md"}"#, &ctx).await.unwrap();
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(v["found"], false);
     }
 }
