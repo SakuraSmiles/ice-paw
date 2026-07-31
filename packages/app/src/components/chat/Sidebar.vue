@@ -179,8 +179,8 @@ function timeAgo(dateStr: string): string {
       </div>
     </div>
 
-    <!-- 会话列表 -->
-    <nav class="conv-list">
+    <!-- 会话列表（TransitionGroup：会话进出淡入、touchConversation 重排时平滑让位） -->
+    <TransitionGroup name="conv-list" tag="nav" class="conv-list">
       <!-- 新建对话（第一条，特殊样式） -->
       <button class="conv-item conv-item-new" @click="newChat">
         <div class="conv-item-title">
@@ -220,7 +220,7 @@ function timeAgo(dateStr: string): string {
           <span v-else class="conv-time">{{ timeAgo(conv.updated_at) }}</span>
         </div>
       </button>
-    </nav>
+    </TransitionGroup>
 
     <!-- 底部：设置等 -->
     <div class="sidebar-footer">
