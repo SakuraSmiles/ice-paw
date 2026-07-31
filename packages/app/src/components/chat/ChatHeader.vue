@@ -44,8 +44,13 @@ async function saveEdit() {
   editing.value = false;
   const newTitle = editValue.value.trim();
   if (newTitle && newTitle !== (conv.title || "")) {
-    await bridge.conversations.rename(conv.id, newTitle);
-    conv.title = newTitle;
+    try {
+      await bridge.conversations.rename(conv.id, newTitle);
+      conv.title = newTitle;
+    } catch (e) {
+      // 重命名失败：标题不改（保持旧值），仅记录日志，避免 unhandled rejection
+      console.error("重命名会话失败:", e);
+    }
   }
 }
 

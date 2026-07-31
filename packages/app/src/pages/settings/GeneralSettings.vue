@@ -9,6 +9,8 @@ const prefs = ref<UserPreferences>({});
 const loading = ref(true);
 const saving = ref(false);
 const saved = ref(false);
+/** 用户主动操作（保存工作空间 / 打开数据目录）失败的可见反馈 */
+const actionError = ref("");
 
 async function load() {
   loading.value = true;
@@ -41,6 +43,7 @@ async function pickDirectory() {
 async function saveWorkspacePath() {
   saved.value = false;
   saving.value = true;
+  actionError.value = "";
   try {
     await bridge.preferences.set(
       "default_workspace_path",
@@ -49,6 +52,7 @@ async function saveWorkspacePath() {
     saved.value = true;
     setTimeout(() => { saved.value = false; }, 2000);
   } catch (e) {
+    actionError.value = `保存失败：${e instanceof Error ? e.message : String(e)}`;
     console.error("保存失败:", e);
   } finally {
     saving.value = false;
@@ -71,9 +75,11 @@ async function loadDataDir() {
 }
 
 async function openDataDir() {
+  actionError.value = "";
   try {
     await bridge.logs.openDataDir();
   } catch (e) {
+    actionError.value = `打开数据目录失败：${e instanceof Error ? e.message : String(e)}`;
     console.error("打开数据目录失败:", e);
   }
 }
@@ -321,6 +327,9 @@ const hasFilterResults = computed(() => {
 
     <div v-if="loading" class="loading-state">加载中...</div>
     <div v-else class="settings-list">
+
+      <!-- 操作失败提示（保存工作空间 / 打开数据目录等用户主动操作） -->
+      <div v-if="actionError" class="action-error">{{ actionError }}</div>
 
       <!-- ===== 工作空间 ===== -->
       <div class="setting-row">
@@ -690,6 +699,16 @@ const hasFilterResults = computed(() => {
 .save-tip {
   font-size: var(--ip-text-caption-size);
   color: var(--ip-success-text);
+}
+
+/* 用户主动操作失败的可见提示 */
+.action-error {
+  font-size: var(--ip-text-caption-size);
+  color: var(--ip-danger-text);
+  padding: 6px 10px;
+  margin-bottom: 4px;
+  background-color: var(--ip-danger-bg);
+  border-radius: var(--ip-radius-md);
 }
 
 /* =========================================================================
