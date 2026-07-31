@@ -25,13 +25,16 @@
 //!   确保只有一份全局监听。
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::Value;
+use sqlx::SqlitePool;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{oneshot, Mutex};
 
+use crate::db::repo;
 use crate::infra::protocol::{
     ChatToolResultPayload, ContentBlock, ToolAuthRequestPayload, ToolAuthResponse,
 };
@@ -166,19 +169,30 @@ pub async fn execute_tool_round(
 ) -> crate::error::AppResult<Vec<ContentBlock>> {
     let mut tool_result_blocks: Vec<ContentBlock> = Vec::new();
 
+    // agent workspace 内的文件免授权（workspace 是 agent 的信任领地，
+    // agent 读写自己 workspace 内的文件不需弹窗确认）
+    let workspace = resolve_agent_workspace(&tool_ctx.pool, &tool_ctx.agent_id).await;
+
     for (tc_id, tc_name, tc_args) in completed_calls {
         // 1. 解析授权级别 + 路径
         let (level, file_path) = inspect_tool_for_auth(registry, tc_name, tc_args).await;
 
-        let decision = check_authorization_with_session(
-            level,
-            &file_path,
-            whitelist,
-            tc_name,
-            tc_args,
-            session,
-        )
-        .await;
+        let decision = if matches!(level, AuthorizationLevel::PathWhitelist)
+            && path_within_workspace(&file_path, &workspace)
+        {
+            // workspace 内 + PathWhitelist 级别（如 read_file）→ 免授权放行
+            AuthorizationDecision::Allow
+        } else {
+            check_authorization_with_session(
+                level,
+                &file_path,
+                whitelist,
+                tc_name,
+                tc_args,
+                session,
+            )
+            .await
+        };
 
         // 2. 根据决策执行
         let final_result: Result<String, String> = match decision {
@@ -394,6 +408,26 @@ async fn inspect_tool_for_auth(
     (level, path)
 }
 
+/// 解析 agent 的 workspace 根路径（canonicalize，用于 workspace 内免授权判断）。
+/// agent 无 workspace 或路径不存在 → None（回退到正常授权流程）。
+async fn resolve_agent_workspace(pool: &SqlitePool, agent_id: &str) -> Option<PathBuf> {
+    let agent = repo::agent::get_by_id(pool, agent_id).await.ok()?;
+    let ws = agent.workspace_path?;
+    Path::new(&ws).canonicalize().ok()
+}
+
+/// 判断 file_path 是否在 agent workspace 内（规范化后 starts_with）。
+/// 路径不存在时回退到直接 starts_with（read_file 读前判断，文件可能还没 canonicalize）。
+fn path_within_workspace(file_path: &str, workspace: &Option<PathBuf>) -> bool {
+    let Some(ws) = workspace else {
+        return false;
+    };
+    match Path::new(file_path).canonicalize() {
+        Ok(cfp) => cfp.starts_with(ws),
+        Err(_) => Path::new(file_path).starts_with(ws),
+    }
+}
+
 /// 从工具参数 JSON 提取路径字段（`path` / `file_path` / `dir`）
 fn extract_path_from_args(args: &str) -> Option<String> {
     let parsed: Value = serde_json::from_str(args).ok()?;
@@ -499,5 +533,25 @@ mod tests {
         let reg2 = reg1.clone();
         let _rx = reg1.register("shared".into()).await;
         assert_eq!(reg2.pending_count().await, 1);
+    }
+
+    // ===== workspace 内免授权：path_within_workspace =====
+
+    #[test]
+    fn path_within_workspace_matches_inside() {
+        let ws = Some(std::env::temp_dir());
+        let inside = std::env::temp_dir().join("some_file.txt");
+        assert!(path_within_workspace(inside.to_str().unwrap(), &ws));
+    }
+
+    #[test]
+    fn path_within_workspace_rejects_outside() {
+        let ws = Some(std::env::temp_dir());
+        assert!(!path_within_workspace("C:/Windows/System32/drivers/etc/hosts", &ws));
+    }
+
+    #[test]
+    fn path_within_workspace_none_workspace() {
+        assert!(!path_within_workspace("/any/path", &None));
     }
 }
