@@ -129,32 +129,6 @@ async function onDelete(s: McpServer) {
     </div>
 
     <div class="mcp-list">
-      <!-- 内置工具集（系统自带，只读，折叠展开） -->
-      <div class="mcp-card builtin-card" :class="{ expanded: builtinExpanded }" @click="builtinExpanded = !builtinExpanded">
-        <div class="card-top">
-          <span class="status-dot dot-running" />
-          <div class="card-body">
-            <div class="card-name-row">
-              <span class="card-name">内置工具</span>
-              <span class="builtin-badge">系统</span>
-            </div>
-          </div>
-          <span class="builtin-count">{{ builtinTools.length }} 个 · 始终可用</span>
-          <svg class="card-chevron" :class="{ rotated: builtinExpanded }" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6" /></svg>
-        </div>
-        <div v-if="builtinExpanded" class="expand-panel" @click.stop>
-          <div class="builtin-tools">
-            <div v-for="tool in builtinTools" :key="tool.name" class="builtin-tool">
-              <span class="builtin-tool-name">{{ tool.name }}</span>
-              <span class="builtin-tool-desc">{{ tool.desc }}</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- 分隔线 -->
-      <div class="list-divider"></div>
-
       <!-- 新建 MCP Server（列表第一条特殊卡片，虚线） -->
       <div class="mcp-card new-card" :class="{ expanded: isCreating }" @click="toggleNew">
         <div class="card-top">
@@ -180,6 +154,29 @@ async function onDelete(s: McpServer) {
 
       <!-- 分隔线 -->
       <div class="list-divider"></div>
+
+      <!-- 内置工具集（系统自带，只读，折叠展开） -->
+      <div class="mcp-card builtin-card" :class="{ expanded: builtinExpanded }" @click="builtinExpanded = !builtinExpanded">
+        <div class="card-top">
+          <span class="status-dot dot-running" />
+          <div class="card-body">
+            <div class="card-name-row">
+              <span class="card-name">内置工具</span>
+              <span class="builtin-badge">系统</span>
+            </div>
+          </div>
+          <span class="builtin-count">{{ builtinTools.length }} 个 · 始终可用</span>
+          <svg class="card-chevron" :class="{ rotated: builtinExpanded }" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6" /></svg>
+        </div>
+        <div v-if="builtinExpanded" class="expand-panel" @click.stop>
+          <div class="builtin-tools">
+            <div v-for="tool in builtinTools" :key="tool.name" class="builtin-tool">
+              <span class="builtin-tool-name">{{ tool.name }}</span>
+              <span class="builtin-tool-desc">{{ tool.desc }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
 
       <!-- server 列表 -->
       <div
