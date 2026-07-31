@@ -7,6 +7,8 @@
 //! A3-2 变更：窗口大小可由 Agent 的 `max_history_messages` 字段覆盖；
 //! 该字段为 `None` 时回退到本模块的 [`DEFAULT_HISTORY_WINDOW`]。
 
+use std::collections::HashSet;
+
 use crate::db::models::MessageRow;
 use crate::infra::protocol::{ChatMessage, ContentBlock};
 
@@ -122,7 +124,71 @@ pub(crate) fn load_history_with_window(
             messages.push(ChatMessage { role, content: blocks });
         }
     }
-    messages
+    sanitize_history(messages)
+}
+
+/// 净化历史消息，确保 Anthropic 协议合规（通用，适用于所有兼容端点）。
+///
+/// 防御历史数据的三类违规（多由旧版持久化遗留或窗口裁剪边界引入），
+/// 确保发给任意 Anthropic 兼容 LLM 的历史都协议合规——严格校验的端点
+/// （如 MiniMax）遇到违规会直接 400 "tool id not found"，宽松端点也会行为异常：
+/// 1. **重复 tool_use id** → 仅保留首个（旧版可能把同一 tool_use 写多份）
+/// 2. **孤儿 tool_result**（tool_use_id 不在窗口内）→ 丢弃（裁剪裁掉 tool_use 留 tool_result）
+/// 3. **连续同角色消息** → 合并 content（协议要求 user/assistant 交替）
+///
+/// 纯函数 + 无副作用，便于单元测试。
+fn sanitize_history(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
+    if messages.is_empty() {
+        return messages;
+    }
+
+    // 窗口内出现过的所有 tool_use id（孤儿 tool_result 判定基准）
+    let valid_ids: HashSet<String> = messages
+        .iter()
+        .flat_map(|m| m.content.iter().filter_map(|b| match b {
+            ContentBlock::ToolUse { id, .. } => Some(id.clone()),
+            _ => None,
+        }))
+        .collect();
+
+    // 过滤每条消息：tool_use 去重 + tool_result 去孤儿
+    let mut tool_use_seen: HashSet<String> = HashSet::new();
+    let mut tool_result_seen: HashSet<String> = HashSet::new();
+    let mut filtered: Vec<ChatMessage> = Vec::with_capacity(messages.len());
+    for msg in messages {
+        let role = msg.role;
+        let mut content: Vec<ContentBlock> = Vec::new();
+        for block in msg.content {
+            let keep = match &block {
+                ContentBlock::ToolUse { id, .. } => tool_use_seen.insert(id.clone()),
+                ContentBlock::ToolResult { tool_use_id, .. } => {
+                    valid_ids.contains(tool_use_id)
+                        && tool_result_seen.insert(tool_use_id.clone())
+                }
+                _ => true,
+            };
+            if keep {
+                content.push(block);
+            }
+        }
+        if !content.is_empty() {
+            filtered.push(ChatMessage { role, content });
+        }
+    }
+
+    // 合并连续同角色（协议要求交替；裁剪边界或旧数据可能产生连续 user）
+    let mut merged: Vec<ChatMessage> = Vec::with_capacity(filtered.len());
+    for msg in filtered {
+        if let Some(last) = merged.last_mut() {
+            if last.role == msg.role {
+                last.content.extend(msg.content);
+                continue;
+            }
+        }
+        merged.push(msg);
+    }
+
+    merged
 }
 
 /// 解析 `content_blocks` JSON 字符串为 `Vec<ContentBlock>`。
@@ -220,7 +286,7 @@ mod tests {
     #[test]
     fn load_history_with_window_keeps_last_n() {
         let rows: Vec<MessageRow> = (0..10)
-            .map(|i| make_row(i, "user", &format!("msg-{i}")))
+            .map(|i| make_row(i, if i % 2 == 0 { "user" } else { "assistant" }, &format!("msg-{i}")))
             .collect();
         let msgs = load_history_with_window(&rows, Some(3));
         assert_eq!(msgs.len(), 3);
@@ -233,7 +299,7 @@ mod tests {
     fn load_history_with_window_none_keeps_all() {
         // window=None 走向后兼容路径，不过滤
         let rows: Vec<MessageRow> = (0..5)
-            .map(|i| make_row(i, "user", &format!("msg-{i}")))
+            .map(|i| make_row(i, if i % 2 == 0 { "user" } else { "assistant" }, &format!("msg-{i}")))
             .collect();
         let msgs = load_history_with_window(&rows, None);
         assert_eq!(msgs.len(), 5);
@@ -243,7 +309,7 @@ mod tests {
     fn load_history_with_window_larger_than_input_keeps_all() {
         // window >= input 长度 → 全部保留
         let rows: Vec<MessageRow> = (0..3)
-            .map(|i| make_row(i, "user", &format!("msg-{i}")))
+            .map(|i| make_row(i, if i % 2 == 0 { "user" } else { "assistant" }, &format!("msg-{i}")))
             .collect();
         let msgs = load_history_with_window(&rows, Some(100));
         assert_eq!(msgs.len(), 3);
@@ -267,6 +333,72 @@ mod tests {
         assert_eq!(msgs[0].content_text(), "u2");
         assert_eq!(msgs[1].role, "assistant");
         assert_eq!(msgs[1].content_text(), "a2");
+    }
+
+    // ===== sanitize_history：协议净化（去重 / 孤儿 / 合并）=====
+
+    fn text_blk(t: &str) -> ContentBlock {
+        ContentBlock::Text { text: t.into() }
+    }
+    fn tu(id: &str) -> ContentBlock {
+        ContentBlock::ToolUse { id: id.into(), name: "x".into(), input: "{}".into() }
+    }
+    fn tr(id: &str) -> ContentBlock {
+        ContentBlock::ToolResult { tool_use_id: id.into(), content: "r".into(), is_error: Some(false) }
+    }
+    fn cm(role: &str, blocks: Vec<ContentBlock>) -> ChatMessage {
+        ChatMessage { role: role.into(), content: blocks }
+    }
+
+    #[test]
+    fn sanitize_dedupes_duplicate_tool_use() {
+        // 同一消息内 2 个相同 id 的 tool_use → 仅留 1 个
+        let out = sanitize_history(vec![
+            cm("user", vec![text_blk("q")]),
+            cm("assistant", vec![tu("A"), tu("A"), text_blk("...")]),
+            cm("user", vec![tr("A")]),
+        ]);
+        let n = out[1].content.iter().filter(|b| matches!(b, ContentBlock::ToolUse { .. })).count();
+        assert_eq!(n, 1, "重复 tool_use id 应去重到 1");
+    }
+
+    #[test]
+    fn sanitize_drops_orphan_tool_result() {
+        // tool_result 引用的 id 窗口内无 tool_use → 丢弃（裁剪边界场景）
+        let out = sanitize_history(vec![
+            cm("user", vec![text_blk("q")]),
+            cm("assistant", vec![text_blk("a")]),
+            cm("user", vec![tr("orphan"), text_blk("more")]),
+        ]);
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[2].content.len(), 1, "孤儿 tool_result 丢弃后只剩 text");
+        assert!(matches!(out[2].content[0], ContentBlock::Text { .. }));
+    }
+
+    #[test]
+    fn sanitize_merges_consecutive_same_role() {
+        let out = sanitize_history(vec![
+            cm("assistant", vec![text_blk("a")]),
+            cm("user", vec![text_blk("u1")]),
+            cm("user", vec![text_blk("u2")]),
+        ]);
+        let users: Vec<_> = out.iter().filter(|m| m.role == "user").collect();
+        assert_eq!(users.len(), 1, "连续 user 合并为 1 条");
+        assert_eq!(users[0].content.len(), 2, "合并后含 2 个 block");
+    }
+
+    #[test]
+    fn sanitize_keeps_valid_pair_intact() {
+        // 正常 tool_use + tool_result 配对 → 不应被误删
+        let out = sanitize_history(vec![
+            cm("user", vec![text_blk("q")]),
+            cm("assistant", vec![tu("A"), text_blk("...")]),
+            cm("user", vec![tr("A")]),
+            cm("assistant", vec![text_blk("done")]),
+        ]);
+        let has_use = out.iter().any(|m| m.content.iter().any(|b| matches!(b, ContentBlock::ToolUse { id, .. } if id == "A")));
+        let has_result = out.iter().any(|m| m.content.iter().any(|b| matches!(b, ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == "A")));
+        assert!(has_use && has_result, "正常配对的 tool_use/tool_result 应保留");
     }
 
     // ===== P2-2 G1：历史消息图片重注入 =====
