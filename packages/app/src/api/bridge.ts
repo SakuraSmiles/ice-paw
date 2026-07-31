@@ -13,6 +13,9 @@ import type {
   McpToolDef,
   NewAgent,
   NewMcpServer,
+  NewProject,
+  Project,
+  UpdateProject,
   UserPreferences,
 } from "../types";
 
@@ -56,8 +59,8 @@ const conversations = {
     try { return await invoke<Conversation[]>("list_all_conversations"); }
     catch (err) { throw wrapInvokeError("conversations.listAll", err); }
   },
-  async create(agentId: string, title?: string): Promise<Conversation> {
-    try { return await invoke<Conversation>("create_conversation", { input: { agent_id: agentId, title } }); }
+  async create(agentId: string, title?: string, projectId?: string | null): Promise<Conversation> {
+    try { return await invoke<Conversation>("create_conversation", { input: { agent_id: agentId, title, project_id: projectId ?? null } }); }
     catch (err) { throw wrapInvokeError("conversations.create", err); }
   },
   async rename(id: string, title: string): Promise<void> {
@@ -71,6 +74,51 @@ const conversations = {
   async delete(id: string): Promise<void> {
     try { await invoke<void>("delete_conversation", { id }); }
     catch (err) { throw wrapInvokeError("conversations.delete", err); }
+  },
+};
+
+const projects = {
+  async list(): Promise<Project[]> {
+    try { return await invoke<Project[]>("list_projects"); }
+    catch (err) { throw wrapInvokeError("projects.list", err); }
+  },
+  async create(input: NewProject): Promise<Project> {
+    try { return await invoke<Project>("create_project", { input }); }
+    catch (err) { throw wrapInvokeError("projects.create", err); }
+  },
+  async update(input: UpdateProject): Promise<Project> {
+    try { return await invoke<Project>("update_project", { input }); }
+    catch (err) { throw wrapInvokeError("projects.update", err); }
+  },
+  async delete(id: string): Promise<void> {
+    try { await invoke<void>("delete_project", { id }); }
+    catch (err) { throw wrapInvokeError("projects.delete", err); }
+  },
+  async reorder(ids: string[]): Promise<void> {
+    try { await invoke<void>("reorder_projects", { ids }); }
+    catch (err) { throw wrapInvokeError("projects.reorder", err); }
+  },
+  /** 全量替换成员；members 为 [agentId, role][]（对应后端 Vec<(String,String)>） */
+  async setAgents(projectId: string, members: [string, string][]): Promise<void> {
+    try { await invoke<void>("set_project_agents", { projectId, members }); }
+    catch (err) { throw wrapInvokeError("projects.setAgents", err); }
+  },
+  async addAgent(projectId: string, agentId: string, role?: string): Promise<void> {
+    try { await invoke<void>("add_project_agent", { projectId, agentId, role }); }
+    catch (err) { throw wrapInvokeError("projects.addAgent", err); }
+  },
+  async removeAgent(projectId: string, agentId: string): Promise<void> {
+    try { await invoke<void>("remove_project_agent", { projectId, agentId }); }
+    catch (err) { throw wrapInvokeError("projects.removeAgent", err); }
+  },
+  /** 列出项目内会话；projectId=null → 散落会话 */
+  async listConversations(projectId: string | null): Promise<Conversation[]> {
+    try { return await invoke<Conversation[]>("list_conversations_by_project", { projectId }); }
+    catch (err) { throw wrapInvokeError("projects.listConversations", err); }
+  },
+  async moveConversation(conversationId: string, projectId: string | null): Promise<void> {
+    try { await invoke<void>("move_conversation_to_project", { conversationId, projectId }); }
+    catch (err) { throw wrapInvokeError("projects.moveConversation", err); }
   },
 };
 
@@ -175,5 +223,5 @@ const logs = {
   },
 };
 
-export const bridge = { agents, conversations, messages, chat, preferences, mcp, kb, logs };
+export const bridge = { agents, conversations, projects, messages, chat, preferences, mcp, kb, logs };
 export default bridge;

@@ -1,13 +1,20 @@
 <script setup lang="ts">
 // AgentPicker.vue — 选择 Agent 弹窗
+import { computed } from "vue";
 import { useAgentStore } from "../../stores/agent";
 
+const props = defineProps<{ agentIds?: string[] }>();
 const emit = defineEmits<{
   select: [agentId: string];
   close: [];
 }>();
 
 const agent = useAgentStore();
+
+/** 传入 agentIds 时只展示这些 agent（如限项目成员） */
+const visibleAgents = computed(() =>
+  props.agentIds ? agent.list.filter((a) => props.agentIds!.includes(a.id)) : agent.list,
+);
 </script>
 
 <template>
@@ -23,7 +30,7 @@ const agent = useAgentStore();
       </div>
       <div class="picker-list">
         <button
-          v-for="a in agent.list"
+          v-for="a in visibleAgents"
           :key="a.id"
           class="picker-item"
           @click="emit('select', a.id)"
