@@ -73,8 +73,8 @@ const providerLabels: Record<string, string> = {
 
     <div class="agent-list">
       <!-- 新建智能体（列表第一条特殊卡片，虚线边框，仿侧边栏「新建对话」） -->
-      <div class="agent-card new-card" :class="{ expanded: isCreating }">
-        <div class="card-top" @click="toggleNew">
+      <div class="agent-card new-card" :class="{ expanded: isCreating }" @click="toggleNew">
+        <div class="card-top">
           <div class="card-avatar new-avatar">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
               <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
@@ -106,8 +106,9 @@ const providerLabels: Record<string, string> = {
         :key="agent.id"
         class="agent-card"
         :class="{ expanded: expandedEditId === agent.id }"
+        @click="toggleEdit(agent)"
       >
-        <div class="card-top" @click="toggleEdit(agent)">
+        <div class="card-top">
           <div class="card-avatar">{{ agent.name.charAt(0) }}</div>
           <div class="card-body">
             <div class="card-name-row">
@@ -167,6 +168,7 @@ const providerLabels: Record<string, string> = {
   background-color: var(--ip-color-bg-secondary);
   border: 1px solid var(--ip-color-border-default);
   border-radius: var(--ip-radius-lg);
+  cursor: pointer;
   transition: all var(--ip-duration-fast) var(--ip-ease-out);
 }
 .agent-card:hover {
