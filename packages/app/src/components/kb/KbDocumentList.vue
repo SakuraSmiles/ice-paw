@@ -260,7 +260,7 @@ const directoryShort = computed(() => {
   font-size: 10px;
   padding: 0 6px;
   line-height: 18px;
-  color: var(--ip-primary-700);
+  color: var(--ip-color-primary-tint-text);
   background-color: var(--ip-color-bg-secondary);
   border: 1px solid var(--ip-color-border-default);
   border-radius: var(--ip-radius-full);
