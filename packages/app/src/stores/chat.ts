@@ -44,14 +44,31 @@ export const useChatStore = defineStore("chat", () => {
   );
 
   function selectConversation(id: string) {
-    sending.value = false;
-    streamingText.value = "";
-    streamingThinking.value = "";
-    streamingToolCalls.value = new Map();
-    thinkingStartTime.value = null;
-    thinkingDuration.value = null;
-    lastThinkingContent.value = null;
+    const oldId = activeConvId.value;
+    // 离开「正在流式」的会话：把当前流式文本快照到 bgStreams，切回时可恢复
+    if (oldId && oldId !== id && sending.value) {
+      bgStreams.value = new Map(bgStreams.value).set(oldId, {
+        text: streamingText.value,
+        thinking: streamingThinking.value,
+      });
+    }
     activeConvId.value = id;
+    // 切入的会话若在后台流式（bgStreams 有），恢复其文本并在末条 assistant 继续渲染
+    const bg = bgStreams.value.get(id);
+    if (bg) {
+      sending.value = true;
+      streamingText.value = bg.text;
+      streamingThinking.value = bg.thinking;
+      bgStreams.value = new Map([...bgStreams.value].filter(([k]) => k !== id));
+    } else {
+      sending.value = false;
+      streamingText.value = "";
+      streamingThinking.value = "";
+      streamingToolCalls.value = new Map();
+      thinkingStartTime.value = null;
+      thinkingDuration.value = null;
+      lastThinkingContent.value = null;
+    }
     loadMessages(id);
   }
 
@@ -69,6 +86,14 @@ export const useChatStore = defineStore("chat", () => {
       messages.value = await bridge.messages.list(convId, { limit: 50 });
       // 如果返回不足 50 条，说明没有更多了
       hasMore.value = messages.value.length >= 50;
+      // 切回正在流式的会话时，把恢复的 streamingText 同步到末条 assistant，
+      // 否则 DB 占位为空、要等下一个 chunk 才显示
+      if (sending.value && streamingText.value && convId === activeConvId.value) {
+        const idx = messages.value.length - 1;
+        if (idx >= 0 && messages.value[idx].role === "assistant") {
+          messages.value[idx] = { ...messages.value[idx], content: streamingText.value };
+        }
+      }
     } catch (e) {
       console.error("加载消息列表失败:", e);
     } finally {
@@ -125,6 +150,12 @@ export const useChatStore = defineStore("chat", () => {
   const thinkingDurations = ref<Map<string, string>>(new Map());
   const pendingAuthRequest = ref<ToolAuthRequestPayload | null>(null);
   let sendTimeout: ReturnType<typeof setTimeout> | null = null;
+
+  /** 后台会话的流式文本快照：切走「正在流式」的会话时把已累积文本存这里，
+   *  切回时恢复。此前 streamingText 是全局单份 + chunk 处理器丢弃非激活会话的事件，
+   *  导致「流式中途切走再切回」时已渲染内容丢失、从一半继续渲染。
+   *  只追踪 text/thinking（工具调用/多轮结构后台不展示，最终态由后端 chat:done 落库）。*/
+  const bgStreams = ref<Map<string, { text: string; thinking: string }>>(new Map());
 
   /** 重置 60s 静默超时（滑动窗口）：任何活动事件调用一次即重新计时。
    *  超时只重置 sending 状态（不清 streaming，交由后端 chat:done(abort) 走 freeze）。*/
@@ -346,7 +377,16 @@ export const useChatStore = defineStore("chat", () => {
     });
 
     listen<ChatChunkPayload>("chat:chunk", (e) => {
-      if (e.payload.conversation_id !== activeConvId.value) return;
+      const cid = e.payload.conversation_id;
+      if (cid !== activeConvId.value) {
+        // 后台会话：累积文本到快照，切回时恢复（不触活跃 UI / messages）
+        const m = new Map(bgStreams.value);
+        const cur = m.get(cid) ?? { text: "", thinking: "" };
+        cur.text += e.payload.delta;
+        m.set(cid, cur);
+        bgStreams.value = m;
+        return;
+      }
       resetSendTimeout();
       streamingText.value += e.payload.delta;
       const idx = messages.value.length - 1;
@@ -407,7 +447,15 @@ export const useChatStore = defineStore("chat", () => {
 
     // ---- 思考过程 ----
     listen<ChatThinkingPayload>("chat:thinking", (e) => {
-      if (e.payload.conversation_id !== activeConvId.value) return;
+      const cid = e.payload.conversation_id;
+      if (cid !== activeConvId.value) {
+        const m = new Map(bgStreams.value);
+        const cur = m.get(cid) ?? { text: "", thinking: "" };
+        cur.thinking += e.payload.content;
+        m.set(cid, cur);
+        bgStreams.value = m;
+        return;
+      }
       resetSendTimeout();
       if (!streamingThinking.value) {
         thinkingStartTime.value = Date.now();
@@ -416,7 +464,14 @@ export const useChatStore = defineStore("chat", () => {
     });
 
     listen<ChatDonePayload>("chat:done", (e) => {
-      if (e.payload.conversation_id !== activeConvId.value) return;
+      const cid = e.payload.conversation_id;
+      if (cid !== activeConvId.value) {
+        // 后台会话完成：后端已把最终态落库，清掉快照即可（不触活跃 UI，无需前端 freeze）
+        const m = new Map(bgStreams.value);
+        m.delete(cid);
+        bgStreams.value = m;
+        return;
+      }
       if (sendTimeout) { clearTimeout(sendTimeout); sendTimeout = null; }
 
       // 记录思考耗时与内容
@@ -466,7 +521,14 @@ export const useChatStore = defineStore("chat", () => {
     });
 
     listen<ChatErrorPayload>("chat:error", (e) => {
-      if (e.payload.conversation_id !== activeConvId.value) return;
+      const cid = e.payload.conversation_id;
+      if (cid !== activeConvId.value) {
+        // 后台会话出错：清掉快照（用户切回时走 DB 加载，看到错误态）
+        const m = new Map(bgStreams.value);
+        m.delete(cid);
+        bgStreams.value = m;
+        return;
+      }
       if (sendTimeout) { clearTimeout(sendTimeout); sendTimeout = null; }
       sending.value = false;
       streamingText.value = "";
@@ -520,6 +582,7 @@ export const useChatStore = defineStore("chat", () => {
     thinkingStartTime.value = null;
     thinkingDuration.value = null;
     lastThinkingContent.value = null;
+    bgStreams.value = new Map();
     draftText.value = "";
   }
 
