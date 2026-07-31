@@ -215,7 +215,7 @@ function timeAgo(dateStr: string): string {
         <div class="conv-meta">
           <span class="conv-agent-tag">{{ agent.getById(conv.agent_id)?.name || "未知" }}</span>
           <span v-if="chat.streamingConvIds.has(conv.id)" class="stream-indicator" title="正在生成…">
-            <span class="stream-dot"></span>生成中
+            <span class="stream-bars"><span class="bar"></span><span class="bar"></span><span class="bar"></span></span>生成中
           </span>
           <span v-else class="conv-time">{{ timeAgo(conv.updated_at) }}</span>
         </div>
@@ -517,16 +517,26 @@ function timeAgo(dateStr: string): string {
   font-size: 11px;
   color: var(--ip-color-primary-tint-text);
 }
-.stream-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--ip-primary-500);
-  animation: stream-dot-pulse 1.2s ease-in-out infinite;
+/* 三条状「生成中」指示（依次缩放，equalizer/typing 效果） */
+.stream-bars {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 11px;
 }
-@keyframes stream-dot-pulse {
-  0%, 100% { opacity: 0.4; transform: scale(0.8); }
-  50%      { opacity: 1;   transform: scale(1.15); }
+.stream-bars .bar {
+  width: 2px;
+  height: 100%;
+  border-radius: 1px;
+  background: var(--ip-primary-500);
+  transform-origin: center;
+  animation: stream-bar-bounce 0.9s ease-in-out infinite;
+}
+.stream-bars .bar:nth-child(2) { animation-delay: 0.15s; }
+.stream-bars .bar:nth-child(3) { animation-delay: 0.3s; }
+@keyframes stream-bar-bounce {
+  0%, 100% { transform: scaleY(0.35); opacity: 0.55; }
+  50%      { transform: scaleY(1);    opacity: 1; }
 }
 
 /* 暗色模式下脉冲条稍亮以保证可见 */
