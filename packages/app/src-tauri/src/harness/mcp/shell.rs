@@ -1,0 +1,137 @@
+//! `run_command` 工具：执行 shell 命令（`Confirm` 授权——每次调用弹窗让用户确认）
+//!
+//! 在 agent workspace 内执行（`current_dir = ctx.workspace`）。走 `sh -c` / `cmd /C`，
+//! 以支持 PATH 解析、管道、`&&`、Windows 的 `.cmd/.bat` 等。
+//! 继承环境变量（命令需要 PATH 等；Confirm 级用户已逐条审批该命令）。
+//! 非零退出码不算错误——把 stdout/stderr 原样返回给 LLM，让它据 exit_code 判断。
+
+use std::time::Duration;
+
+use async_trait::async_trait;
+use serde::Deserialize;
+
+use crate::error::{AppError, AppResult};
+
+use super::client::{McpClient, ToolContext};
+use super::types::AuthorizationLevel;
+
+/// 输出截断上限（避免超长输出撑爆 LLM 上下文）
+const MAX_OUTPUT: usize = 20_000;
+
+pub struct RunCommandTool;
+
+#[derive(Deserialize)]
+struct RunCommandArgs {
+    /// 完整命令行（如 `npm test`、`git status`、`cargo build`）
+    command: String,
+    #[serde(default = "default_timeout")]
+    timeout_secs: u64,
+}
+
+fn default_timeout() -> u64 {
+    120
+}
+
+#[async_trait]
+impl McpClient for RunCommandTool {
+    fn name(&self) -> &str {
+        "run_command"
+    }
+
+    fn description(&self) -> &str {
+        "Execute a shell command line in the agent workspace and return combined \
+stdout+stderr plus exit code. Use for builds, tests, git, etc. Non-zero exit is not an error—\
+read exit_code and output to decide next steps."
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "Full command line to run (e.g. \"npm test\", \"git diff\")."
+                },
+                "timeout_secs": {
+                    "type": "integer",
+                    "default": 120,
+                    "description": "Max seconds before killing the command."
+                }
+            },
+            "required": ["command"]
+        })
+    }
+
+    fn authorization_level(&self) -> AuthorizationLevel {
+        AuthorizationLevel::Confirm
+    }
+
+    async fn execute(&self, _args: &str) -> AppResult<String> {
+        Err(AppError::Internal(
+            "run_command 必须通过 execute_with_context 调用（需要 workspace）".into(),
+        ))
+    }
+
+    async fn execute_with_context(&self, args: &str, ctx: &ToolContext) -> AppResult<String> {
+        let parsed: RunCommandArgs = serde_json::from_str(args)
+            .map_err(|e| AppError::Validation(format!("run_command 参数解析失败: {e}")))?;
+
+        // 走系统 shell：Unix 用 sh -c，Windows 用 cmd /C（支持 PATH/.cmd/管道）
+        let mut cmd = if cfg!(windows) {
+            let mut c = tokio::process::Command::new("cmd");
+            c.args(["/C", &parsed.command]);
+            c
+        } else {
+            let mut c = tokio::process::Command::new("sh");
+            c.args(["-c", &parsed.command]);
+            c
+        };
+        if let Some(ws) = &ctx.workspace {
+            cmd.current_dir(ws);
+        }
+        cmd.stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .stdin(std::process::Stdio::null());
+
+        let output = tokio::time::timeout(
+            Duration::from_secs(parsed.timeout_secs),
+            cmd.output(),
+        )
+        .await
+        .map_err(|_| {
+            AppError::Internal(format!(
+                "命令超时（{}s）: {}",
+                parsed.timeout_secs, parsed.command
+            ))
+        })?
+        .map_err(AppError::Io)?;
+
+        // 合并 stdout + stderr
+        let mut combined = String::new();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if !stdout.is_empty() {
+            combined.push_str(&stdout);
+        }
+        if !stderr.is_empty() {
+            if !combined.is_empty() {
+                combined.push_str("\n[stderr]\n");
+            }
+            combined.push_str(&stderr);
+        }
+
+        let truncated = combined.len() > MAX_OUTPUT;
+        if truncated {
+            combined.truncate(MAX_OUTPUT);
+            combined.push_str("\n...[输出已截断]");
+        }
+
+        Ok(serde_json::json!({
+            "command": parsed.command,
+            "exit_code": output.status.code(),
+            "output": combined,
+            "truncated": truncated,
+        })
+        .to_string())
+    }
+}

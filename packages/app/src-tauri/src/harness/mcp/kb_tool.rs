@@ -489,6 +489,7 @@ mod tests {
             conv_id: "c1".into(),
             agent_id: "agent-a".into(),
             project_id: None,
+            workspace: None,
             pool: pool.clone(),
         };
 
@@ -522,6 +523,7 @@ mod tests {
             conv_id: "c1".into(),
             agent_id: "lonely-agent".into(),
             project_id: None,
+            workspace: None,
             pool: pool.clone(),
         };
         let result = tool
@@ -595,6 +597,7 @@ mod tests {
             conv_id: "c".into(),
             agent_id: "a".into(),
             project_id: None,
+            workspace: None,
             pool: pool.clone(),
         };
         let result = tool.execute_with_context(r#"{"file_path":"note.md"}"#, &ctx).await.unwrap();
@@ -614,6 +617,7 @@ mod tests {
             conv_id: "c".into(),
             agent_id: "a".into(),
             project_id: None,
+            workspace: None,
             pool: pool.clone(),
         };
         let result = tool.execute_with_context(r#"{"file_path":"nope.md"}"#, &ctx).await.unwrap();
