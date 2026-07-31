@@ -586,12 +586,21 @@ export const useChatStore = defineStore("chat", () => {
     draftText.value = "";
   }
 
+  /** 当前正在生成的会话 ID 集合（激活的流式会话 + 后台流式会话 bgStreams）。
+   *  侧栏据此给会话卡片显示「生成中」状态 + 动画——现在每个会话独立监控，可精确到单卡。*/
+  const streamingConvIds = computed(() => {
+    const ids = new Set<string>(bgStreams.value.keys());
+    if (sending.value && activeConvId.value) ids.add(activeConvId.value);
+    return ids;
+  });
+
   return {
     conversations, convLoading,
     activeConvId, activeConversation,
     messages, msgLoading, hasMore, loadingMore,
     sending, streamingText, draftText, pendingImages, lastFinishReason, currentModel,
     streamingToolCalls, streamingThinking, thinkingStartTime, thinkingDuration, lastThinkingContent, thinkingDurations, pendingAuthRequest,
+    streamingConvIds,
     loadConversations, selectConversation, loadMoreMessages,
     sendMessage, stopGeneration, respondToAuth,
     deleteConversation, pinConversation,
