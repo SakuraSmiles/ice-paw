@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // Sidebar.vue — 左侧会话列表面板
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
@@ -113,10 +113,21 @@ async function doCreateChat(agentId: string) {
   }
 }
 
+// 相对时间每分钟自动刷新：nowTick 作为 timeAgo 的响应式依赖，变化时整列重渲染
+const nowTick = ref(Date.now());
+let nowTickInterval: ReturnType<typeof setInterval> | null = null;
+onMounted(() => {
+  nowTickInterval = setInterval(() => (nowTick.value = Date.now()), 60000);
+});
+onUnmounted(() => {
+  if (nowTickInterval) clearInterval(nowTickInterval);
+});
+
 // 取相对时间显示
 function timeAgo(dateStr: string): string {
   const d = new Date(dateStr);
-  const now = new Date();
+  // 用 nowTick.value 作「现在」基准：同时建立响应式依赖，nowTick 每分钟变化时整列重算
+  const now = new Date(nowTick.value);
   const diff = now.getTime() - d.getTime();
   const mins = Math.floor(diff / 60000);
   if (mins < 1) return "刚刚";

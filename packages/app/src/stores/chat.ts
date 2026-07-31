@@ -217,6 +217,9 @@ export const useChatStore = defineStore("chat", () => {
     };
     messages.value = [...messages.value, userMsg];
 
+    // 侧栏卡片：把该会话标记为「刚交互」（更新时间 + 置顶到列表上方）
+    if (activeConvId.value) touchConversation(activeConvId.value);
+
     // 前端超时保护（滑动窗口）：60s 无任何活动事件才触发；活动事件 handler 会 reset
     resetSendTimeout();
 
@@ -283,6 +286,19 @@ export const useChatStore = defineStore("chat", () => {
     } catch (e) {
       console.error("置顶操作失败:", e);
     }
+  }
+
+  /** 标记会话「刚交互」：把 updated_at 更新为当前时间并按时间重排（pinned 优先）。
+   *  后端 create_message 会 bump DB 的 updated_at，但前端 conversations 数组不会自动刷新，
+   *  故侧栏需主动 touch，否则卡片一直显示旧时间、也不置顶到列表上方。*/
+  function touchConversation(id: string) {
+    const now = new Date().toISOString();
+    conversations.value = conversations.value
+      .map((c) => (c.id === id ? { ...c, updated_at: now } : c))
+      .sort((a, b) => {
+        if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+        return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
+      });
   }
 
   // ===== Tauri 事件监听 =====
