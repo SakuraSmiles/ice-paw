@@ -31,6 +31,46 @@ use super::types::{
 // ExternalMcpServer — 管理一个 MCP 子进程
 // =========================================================================
 
+/// 构建子进程的安全环境：在 `env_clear()` 之后回注「进程执行所需、且不含机密」
+/// 的系统变量 + 用户显式声明的 env。
+///
+/// 设计动机：外部 MCP server 常是第三方 npx/pipx 包（可能被供应链投毒），若继承
+/// 父进程全部环境，会拿到 OPENAI_API_KEY / ANTHROPIC_API_KEY / 云凭证等机密。
+/// 但简单 `env_clear()` 会连 PATH 一起清掉，导致 `npx` 找不到 node 而启动失败。
+/// 因此采用**白名单**：只放行进程执行必需的非机密系统变量，机密一律不透传。
+fn build_safe_env(user_env: &serde_json::Value) -> Vec<(String, String)> {
+    // 进程执行所需、确认为非机密的系统变量（跨 Windows/Unix）。
+    // 注意：不放任何 *_KEY / *_TOKEN / *_SECRET / CREDENTIAL / PASSWORD 模式。
+    const SAFE_KEYS: &[&str] = &[
+        "PATH", "Path", "PATHEXT",             // 可执行文件查找（Windows PATH 大小写不固定）
+        "SYSTEMROOT", "ComSpec", "windir",      // Windows 系统根 / cmd 路径
+        "APPDATA", "LOCALAPPDATA", "PROGRAMFILES", "PROGRAMDATA",
+        "USERPROFILE", "USERNAME", "HOME", "USER", "SHELL",
+        "TEMP", "TMP", "TMPDIR",               // 临时目录
+        "LANG", "LC_ALL", "LC_CTYPE",          // 区域/编码（npx/node 需要正确 UTF-8）
+    ];
+    let mut out: Vec<(String, String)> = Vec::new();
+    for key in SAFE_KEYS {
+        if let Ok(val) = std::env::var(key) {
+            out.push((key.to_string(), val));
+        }
+    }
+    // 用户显式声明的 env 覆盖/追加（同 key 后写覆盖前面）
+    if let Some(obj) = user_env.as_object() {
+        for (k, v) in obj {
+            if let Some(s) = v.as_str() {
+                out.push((k.clone(), s.to_string()));
+            } else {
+                tracing::warn!(
+                    target: "ice_paw.mcp",
+                    "MCP env 变量 {k} 的值不是字符串，已忽略（仅支持字符串值）"
+                );
+            }
+        }
+    }
+    out
+}
+
 /// 管理一个外部 MCP Server 子进程（stdio JSON-RPC）。
 ///
 /// 所有 IO 操作通过 `Arc<Mutex<...>>` 共享，支持 `&self` 访问。
@@ -60,12 +100,20 @@ impl ExternalMcpServer {
         name: String,
         command: &str,
         args: &[String],
+        env: &serde_json::Value,
     ) -> AppResult<Self> {
         let mut child = Command::new(command)
             .args(args)
+            // 环境隔离：清空继承的环境（防 OPENAI_API_KEY 等机密泄漏给外部 server），
+            // 再仅注入「进程执行所需的安全系统变量」+ 用户显式声明的 env（见 build_safe_env）。
+            .env_clear()
+            .envs(build_safe_env(env))
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
+            // 兜底 kill：即便礼貌 shutdown 失败，ExternalMcpServer 析构也确保子进程退出，
+            // 避免握手失败/异常的 server 变孤儿（_child 字段 drop 时触发）。
+            .kill_on_drop(true)
             // 设置工作目录为用户 home，避免 npx 在当前目录找 package.json 失败
             .current_dir(std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\".into()))
             .spawn()
