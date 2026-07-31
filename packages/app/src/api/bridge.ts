@@ -157,5 +157,23 @@ const kb = {
   },
 };
 
-export const bridge = { agents, conversations, messages, chat, preferences, mcp, kb };
+const logs = {
+  /** tail 当前日志文件最近 lineCount 行（默认 500，上限 5000） */
+  async get(lineCount?: number): Promise<string[]> {
+    try { return await invoke<string[]>("get_logs", { lineCount }); }
+    catch (err) { throw wrapInvokeError("logs.get", err); }
+  },
+  /** 返回 app 数据目录路径 */
+  async getDataDir(): Promise<string> {
+    try { return await invoke<string>("get_data_dir"); }
+    catch (err) { throw wrapInvokeError("logs.getDataDir", err); }
+  },
+  /** 用文件管理器打开数据目录 */
+  async openDataDir(): Promise<void> {
+    try { await invoke<void>("open_data_dir"); }
+    catch (err) { throw wrapInvokeError("logs.openDataDir", err); }
+  },
+};
+
+export const bridge = { agents, conversations, messages, chat, preferences, mcp, kb, logs };
 export default bridge;

@@ -470,7 +470,7 @@ const finishReasonLabels: Record<string, string> = {
                           <div class="tool-expand-hdr">参数</div>
                           <pre class="tool-expand-code">{{ formatJson(tu.input) }}</pre>
                         </div>
-                        <template v-for="tr in [findToolResult(tu.id, item.idx)]" :key="'r-' + tu.id">
+                        <template v-for="tr in [findToolResult(tu.id, item.idx)]" :key="tr ? 'has-result' : 'no-result'">
                           <div v-if="tr" class="tool-expand-group">
                             <div :class="['tool-expand-hdr', tr.isError ? 'hdr-err' : '']">{{ tr.isError ? '错误' : '结果' }}</div>
                             <pre :class="['tool-expand-code', tr.isError ? 'code-err' : '']">{{ tr.content }}</pre>

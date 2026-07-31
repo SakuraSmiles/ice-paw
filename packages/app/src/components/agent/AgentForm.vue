@@ -408,7 +408,7 @@ function confirmDelete() {
 .ws-btn-open {
   color: var(--ip-primary-600);
   border-color: var(--ip-primary-300);
-  background-color: var(--ip-primary-50);
+  background-color: var(--ip-color-primary-soft-bg);
 }
 .ws-badge {
   display: inline-flex;
@@ -417,8 +417,8 @@ function confirmDelete() {
   padding: 0 8px;
   font-size: 10px;
   font-weight: var(--ip-font-weight-semibold);
-  color: var(--ip-primary-700);
-  background-color: var(--ip-primary-100);
+  color: var(--ip-color-primary-tint-text);
+  background-color: var(--ip-color-primary-tint-bg);
   border-radius: var(--ip-radius-full);
   white-space: nowrap;
   font-family: var(--ip-font-mono);

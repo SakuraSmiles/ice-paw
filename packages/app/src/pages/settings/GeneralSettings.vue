@@ -55,7 +55,31 @@ async function saveWorkspacePath() {
   }
 }
 
+// =========================================================================
+// 数据目录（数据库 / stronghold / 日志 所在目录）
+// =========================================================================
+const dataDir = ref("");
+
+async function loadDataDir() {
+  try {
+    const raw = await bridge.logs.getDataDir();
+    // 统一为 / 分隔符（后端 Windows 返回 \）
+    dataDir.value = raw.replace(/\\/g, "/");
+  } catch (e) {
+    console.error("加载数据目录失败:", e);
+  }
+}
+
+async function openDataDir() {
+  try {
+    await bridge.logs.openDataDir();
+  } catch (e) {
+    console.error("打开数据目录失败:", e);
+  }
+}
+
 onMounted(load);
+onMounted(loadDataDir);
 
 // =========================================================================
 // 时区选择器
@@ -420,6 +444,36 @@ const hasFilterResults = computed(() => {
         </div>
       </div>
 
+      <!-- ===== 数据目录 ===== -->
+      <div class="setting-row">
+        <div class="setting-label">
+          <div class="setting-label-text">
+            数据目录
+            <span class="tip-icon" data-tip="数据库、加密凭证、运行日志均存储在此目录">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+            </span>
+          </div>
+        </div>
+        <div class="setting-control">
+          <div class="input-group">
+            <input
+              :value="dataDir"
+              type="text"
+              class="form-input is-readonly"
+              placeholder="加载中..."
+              readonly
+              tabindex="-1"
+              aria-readonly="true"
+            />
+            <button type="button" class="input-btn" title="在文件管理器中打开" @click="openDataDir">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7l-2-3H5a2 2 0 0 0-2 2z" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+
     </div>
   </div>
 </template>
@@ -574,6 +628,17 @@ const hasFilterResults = computed(() => {
 }
 .form-input::placeholder {
   color: var(--ip-color-text-placeholder);
+}
+
+/* 只读展示态（如「数据目录」系统路径：不可编辑、不响应聚焦） */
+.form-input.is-readonly {
+  cursor: default;
+  color: var(--ip-color-text-secondary);
+}
+.form-input.is-readonly:focus {
+  border-color: var(--ip-color-border-default);
+  background-color: var(--ip-color-bg-tertiary);
+  box-shadow: none;
 }
 
 .input-btn {

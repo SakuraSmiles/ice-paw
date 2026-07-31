@@ -75,13 +75,11 @@ const providerLabels: Record<string, string> = {
       <!-- 新建智能体（列表第一条特殊卡片，虚线边框，仿侧边栏「新建对话」） -->
       <div class="agent-card new-card" :class="{ expanded: isCreating }" @click="toggleNew">
         <div class="card-top">
-          <div class="card-avatar new-avatar">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-              <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
-            </svg>
-          </div>
           <div class="card-body">
             <div class="card-name-row">
+              <svg class="new-plus" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
+              </svg>
               <span class="card-name new-name">新建智能体</span>
             </div>
             <div class="card-meta-row">
@@ -216,9 +214,10 @@ const providerLabels: Record<string, string> = {
   font-size: var(--ip-text-body-sm-size); font-weight: var(--ip-font-weight-semibold);
   flex-shrink: 0;
 }
-.new-avatar {
-  background: var(--ip-primary-50);
-  color: var(--ip-primary-600);
+/* 新建卡：内联 + 图标（仿侧栏「新建对话」，无填充图标盒） */
+.new-plus {
+  flex-shrink: 0;
+  color: var(--ip-color-primary-tint-text);
 }
 
 .card-body {
@@ -232,15 +231,15 @@ const providerLabels: Record<string, string> = {
   font-weight: var(--ip-font-weight-semibold);
   color: var(--ip-color-text-primary);
 }
-.new-name { color: var(--ip-primary-600); }
-.new-hint { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
+.new-name { color: var(--ip-color-primary-tint-text); }
+.new-hint { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); padding-left: 22px; }
 
 .card-file-badge {
   display: inline-flex; align-items: center;
   height: 18px; padding: 0 6px;
   font-size: 9px; font-weight: var(--ip-font-weight-semibold);
-  color: var(--ip-primary-700);
-  background-color: var(--ip-primary-100);
+  color: var(--ip-color-primary-tint-text);
+  background-color: var(--ip-color-primary-tint-bg);
   border-radius: var(--ip-radius-full);
   font-family: var(--ip-font-mono);
 }
