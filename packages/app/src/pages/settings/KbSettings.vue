@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // KbSettings.vue — 全局知识库（二级菜单页）
-// 与「智能体 / MCP 工具」同级。内容复用统一组件 KbDocumentList（global）。
+// 与「智能体 / 工具集」同级。内容复用统一组件 KbDocumentList（global）。
 import KbDocumentList from "../../components/kb/KbDocumentList.vue";
 </script>
 

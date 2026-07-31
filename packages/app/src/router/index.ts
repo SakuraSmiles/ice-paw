@@ -40,7 +40,7 @@ const routes: RouteRecordRaw[] = [
             path: "mcp",
             name: "SettingsMcp",
             component: () => import("../pages/settings/McpSettings.vue"),
-            meta: { title: "MCP 工具" },
+            meta: { title: "工具集" },
           },
           {
             path: "kb",
