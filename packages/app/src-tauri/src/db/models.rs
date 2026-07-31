@@ -718,4 +718,86 @@ pub struct UserPreferences {
     pub default_workspace_path: Option<String>,
 }
 
+// =========================================================================
+// Project（项目管理）— DB schema 已由 migration 13/14/21 建好
+// =========================================================================
+
+/// projects 表行结构
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct ProjectRow {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default = "default_project_icon")]
+    pub icon: String,
+    pub sort_order: i32,
+    #[serde(default)]
+    pub workspace_path: Option<String>,
+    #[serde(default)]
+    pub theme_color: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+fn default_project_icon() -> String {
+    "folder".into()
+}
+
+/// project_agents 关联表行结构
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct ProjectAgentRow {
+    pub project_id: String,
+    pub agent_id: String,
+    #[serde(default = "default_agent_role")]
+    pub role: String,
+    pub joined_at: DateTime<Utc>,
+}
+
+fn default_agent_role() -> String {
+    "member".into()
+}
+
+/// 对外传输：Project 基础字段 + 成员列表
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Project {
+    #[serde(flatten)]
+    pub row: ProjectRow,
+    #[serde(default)]
+    pub agents: Vec<ProjectAgentRow>,
+}
+
+/// 创建项目入参
+#[derive(Debug, Clone, Deserialize)]
+pub struct NewProject {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub icon: Option<String>,
+    #[serde(default)]
+    pub workspace_path: Option<String>,
+    #[serde(default)]
+    pub theme_color: Option<String>,
+    /// 初始成员 agent_id 列表（role 默认 member）
+    #[serde(default)]
+    pub agent_ids: Vec<String>,
+}
+
+/// 更新项目入参（partial update；None = 不改）
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateProject {
+    pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub icon: Option<String>,
+    #[serde(default)]
+    pub workspace_path: Option<String>,
+    #[serde(default)]
+    pub theme_color: Option<String>,
+}
+
 

@@ -102,6 +102,17 @@ pub fn run() {
             commands::log_cmd::get_logs,
             commands::log_cmd::get_data_dir,
             commands::log_cmd::open_data_dir,
+            // 项目管理
+            commands::project_cmd::list_projects,
+            commands::project_cmd::create_project,
+            commands::project_cmd::update_project,
+            commands::project_cmd::delete_project,
+            commands::project_cmd::reorder_projects,
+            commands::project_cmd::set_project_agents,
+            commands::project_cmd::add_project_agent,
+            commands::project_cmd::remove_project_agent,
+            commands::project_cmd::list_conversations_by_project,
+            commands::project_cmd::move_conversation_to_project,
         ])
         // 启动逻辑
         .setup(|app| {
