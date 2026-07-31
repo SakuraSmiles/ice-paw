@@ -3,7 +3,7 @@
 //! - `send_message`：入参校验 → 取 agent/api_key → 拼装上下文 → 写库占位 → spawn stream_loop
 //! - `stop_generation`：触发 ChatState 上的 CancellationToken
 //!
-//! 业务分布：protocol → infra::protocol | 上下文 → chat_context.rs | 调度 → harness::loop_engine
+//! 业务分布：protocol → infra::protocol | 上下文 → context::pipeline | 调度 → harness::loop_engine
 //!           错误 → harness::error_mapping | 收尾 → harness::cleanup
 
 use sqlx::SqlitePool;
@@ -83,7 +83,15 @@ pub async fn send_message(
     let agent_enabled_tools: Option<Vec<String>> = agent
         .enabled_tools
         .as_deref()
-        .map(|s| serde_json::from_str(s).unwrap_or_default());
+        .map(|s| {
+            serde_json::from_str(s).unwrap_or_else(|e| {
+                tracing::warn!(
+                    target: "ice_paw.chat",
+                    "解析 agent enabled_tools 失败（按空名单处理）: {e}"
+                );
+                Vec::new()
+            })
+        });
 
     let llm_provider = provider::create_provider(
         &agent.provider, &agent.model, base_url, agent.cache_prompt != 0,
@@ -109,6 +117,14 @@ pub async fn send_message(
     let cancel_token = chat_state.start(&conv_id).inspect_err(|_| {
         tracing::warn!(target: "ice_paw.chat", "send_message: 会话 {} 已有在途生成任务", conv_id);
     })?;
+
+    // RAII 守卫：到此 token 已注册，若下方任意 `?` 早返回（Pipeline/DB 写/emit/spawn 前失败），
+    // 守卫 drop 时自动 unregister，避免 conv_id 永久残留 ChatState → is_streaming 永不翻转 →
+    // 后续 send_message 全部命中「已有在途任务」、会话卡死需重启 App。
+    // spawn 成功后在函数末尾 disarm，把注销责任移交给 stream_loop 的 finalize_*。
+    // 用 clone 让守卫独立持有 conv_id，本体的 conv_id 仍可 move 进 spawn_stream_loop。
+    let conv_id_guard = conv_id.clone();
+    let cancel_guard = scopeguard::guard((), |_| chat_state.unregister(&conv_id_guard));
 
     // 显式走 PipelineRunner：构造 PipelineContext + 注册 6 个 Stage（M1.4：
     // Template → OsContext → SystemPrompt → History → Memory → Final；
@@ -204,7 +220,10 @@ pub async fn send_message(
         };
         // per-agent server（scope=per_agent，按 agent workspace 启动 + 注册工具）
         if let Some(workspace) = agent.workspace_path.as_deref() {
-            let mcp_configs = repo::mcp_server::list_all(pool.inner()).await.unwrap_or_default();
+            let mcp_configs = repo::mcp_server::list_all(pool.inner()).await.unwrap_or_else(|e| {
+                tracing::warn!(target: "ice_paw.chat", "加载 MCP server 配置失败（按空处理）: {e}");
+                Vec::new()
+            });
             for cfg in mcp_configs.iter().filter(|c| c.enabled && c.scope == "per_agent") {
                 match (**mcp_manager).ensure_per_agent(cfg, &conv.agent_id, workspace).await {
                     Ok((server, tools)) => {
@@ -250,6 +269,9 @@ pub async fn send_message(
         tool_registry,
         conv.agent_id.clone(), conv.project_id.clone(),
     );
+    // spawn 成功：注销责任已移交 stream_loop（其 finalize_success/finalize_cancel → cleanup →
+    // unregister），解除守卫，避免此处 Ok 返回时误注销导致 is_streaming 提前翻转。
+    scopeguard::ScopeGuard::into_inner(cancel_guard);
     Ok(())
 }
 

@@ -11,6 +11,7 @@ pub(crate) fn error_kind(e: &crate::error::AppError) -> String {
         crate::error::AppError::Llm(_) => "llm".into(),
         crate::error::AppError::Stream(_) => "stream".into(),
         crate::error::AppError::Cancelled => "cancelled".into(),
+        crate::error::AppError::AuthorizationRequired { .. } => "auth_required".into(),
         _ => "internal".into(),
     }
 }

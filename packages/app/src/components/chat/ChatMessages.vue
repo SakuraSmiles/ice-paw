@@ -123,7 +123,10 @@ onMounted(() => {
   listRef.value?.addEventListener("scroll", onScroll);
   scrollToBottom(false);
 });
-onUnmounted(() => { listRef.value?.removeEventListener("scroll", onScroll); });
+onUnmounted(() => {
+  listRef.value?.removeEventListener("scroll", onScroll);
+  if (thinkingTimer) { clearInterval(thinkingTimer); thinkingTimer = null; }
+});
 
 // 切换会话后等消息加载完成再平滑滚动到底部
 watch(() => chat.msgLoading, async (loading) => {

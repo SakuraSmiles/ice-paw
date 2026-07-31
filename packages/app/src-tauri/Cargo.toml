@@ -43,6 +43,8 @@ sqlx = { version = "0.8", default-features = false, features = [
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "process"] }
 
 # === 通用工具 ===
+# scopeguard：RAII 守卫，用于 send_message 注册 CancellationToken 后保证任意早返回都注销（防会话卡死）
+scopeguard = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "1"
