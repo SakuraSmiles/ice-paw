@@ -170,6 +170,15 @@ pub fn run() {
                                 cfg.name, e,
                             );
                         }
+                    } else if cfg.enabled && cfg.scope == "per_agent" {
+                        // per_agent server：探测工具清单（临时启动+关闭，供工具集页展示能力）
+                        if let Err(e) = mcp_manager.probe_tools(cfg).await {
+                            tracing::warn!(
+                                target: "ice_paw.mcp",
+                                "per-agent MCP Server '{}' 工具探测失败: {}",
+                                cfg.name, e,
+                            );
+                        }
                     }
                 }
                 Ok::<_, crate::error::AppError>(())
