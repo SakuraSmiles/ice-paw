@@ -39,7 +39,6 @@ const form = ref({
   args: props.server ? [...props.server.args] : [],
   envEntries: props.server ? envToEntries(props.server.env) : [],
   trust_level: (props.server?.trust_level ?? "untrusted") as McpTrustLevel,
-  scope: props.server?.scope ?? "global",
   enabled: props.server?.enabled ?? true,
 });
 
@@ -71,7 +70,7 @@ async function save() {
         env,
         enabled: form.value.enabled,
         trust_level: form.value.trust_level,
-        scope: form.value.scope,
+        scope: form.value.args.some((a: string) => a.includes("{workspace}")) ? "per_agent" : "global",
       };
       emit("saved", await bridge.mcp.update(input));
     } else {
@@ -84,7 +83,7 @@ async function save() {
         env,
         enabled: form.value.enabled,
         trust_level: form.value.trust_level,
-        scope: form.value.scope,
+        scope: form.value.args.some((a: string) => a.includes("{workspace}")) ? "per_agent" : "global",
       };
       emit("saved", await bridge.mcp.create(input));
     }
@@ -163,7 +162,7 @@ function confirmDelete() {
           </div>
           <button type="button" class="dyn-add" @click="addArg">+ 添加参数</button>
         </div>
-        <p v-if="form.scope === 'per_agent'" class="field-hint">路径参数用 <code>{workspace}</code> 占位符（启动时替换为 agent workspace）</p>
+        <p v-if="form.args.some((a: string) => a.includes('{workspace}'))" class="field-hint">参数含 <code>{workspace}</code>：按 Agent 隔离启动（替换为该 agent 的 workspace）</p>
       </div>
 
       <!-- 环境变量 -->
@@ -182,24 +181,14 @@ function confirmDelete() {
         </div>
       </div>
 
-      <!-- 信任级别 + 隔离范围（两列） -->
-      <div class="field-row">
-        <div class="field">
-          <label class="field-label">信任级别</label>
-          <div class="seg-group">
-            <button type="button" class="seg-btn" :class="{ active: form.trust_level === 'untrusted' }" @click="form.trust_level = 'untrusted'">每次确认</button>
-            <button type="button" class="seg-btn" :class="{ active: form.trust_level === 'trusted' }" @click="form.trust_level = 'trusted'">信任</button>
-          </div>
-          <p class="field-hint">{{ form.trust_level === "trusted" ? "免确认，更流畅" : "调用前确认，更安全" }}</p>
+      <!-- 信任级别 -->
+      <div class="field">
+        <label class="field-label">信任级别</label>
+        <div class="seg-group">
+          <button type="button" class="seg-btn" :class="{ active: form.trust_level === 'untrusted' }" @click="form.trust_level = 'untrusted'">每次确认</button>
+          <button type="button" class="seg-btn" :class="{ active: form.trust_level === 'trusted' }" @click="form.trust_level = 'trusted'">信任</button>
         </div>
-        <div class="field">
-          <label class="field-label">隔离范围</label>
-          <div class="seg-group">
-            <button type="button" class="seg-btn" :class="{ active: form.scope === 'global' }" @click="form.scope = 'global'">全局共享</button>
-            <button type="button" class="seg-btn" :class="{ active: form.scope === 'per_agent' }" @click="form.scope = 'per_agent'">按 Agent</button>
-          </div>
-          <p class="field-hint">{{ form.scope === "per_agent" ? "每个 Agent 独立实例" : "所有 Agent 共享" }}</p>
-        </div>
+        <p class="field-hint">{{ form.trust_level === "trusted" ? "免确认，更流畅" : "调用前确认，更安全" }}</p>
       </div>
     </div>
   </div>

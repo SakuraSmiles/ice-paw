@@ -45,13 +45,14 @@ const builtinTools: { name: string; desc: string }[] = [
 function isActive(id: string) { return activeIds.value.has(id); }
 
 /** 状态：running 运行中 / stopped 已停用 / error 启用但未运行 */
-function statusOf(s: McpServer): "running" | "stopped" | "error" {
+function statusOf(s: McpServer): "running" | "stopped" | "error" | "per_agent" {
+  if (s.scope === "per_agent") return "per_agent";
   if (isActive(s.id)) return "running";
   if (!s.enabled) return "stopped";
   return "error";
 }
 function statusLabel(s: McpServer): string {
-  return { running: "运行中", stopped: "已停用", error: "启动失败" }[statusOf(s)];
+  return { running: "运行中", stopped: "已停用", error: "启动失败", per_agent: "按 Agent" }[statusOf(s)];
 }
 
 function toggleEdit(s: McpServer) {
@@ -355,6 +356,7 @@ async function onDelete(s: McpServer) {
   background: var(--ip-danger-base);
   animation: dot-pulse 1.2s ease-in-out infinite;
 }
+.dot-per_agent { background: var(--ip-primary-500); }
 @keyframes dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
 .card-body {
@@ -377,6 +379,7 @@ async function onDelete(s: McpServer) {
 .tag-running { background: var(--ip-success-bg); color: var(--ip-success-text); }
 .tag-stopped { background: var(--ip-color-bg-tertiary); color: var(--ip-color-text-tertiary); }
 .tag-error { background: var(--ip-danger-bg); color: var(--ip-danger-text); }
+.tag-per_agent { background: var(--ip-primary-100); color: var(--ip-primary-700); }
 
 .card-desc {
   font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary);
