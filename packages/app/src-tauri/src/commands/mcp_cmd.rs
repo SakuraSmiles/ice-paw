@@ -32,7 +32,7 @@ pub async fn create_mcp_server(
     let saved = repo::mcp_server::create(pool.inner(), &input).await?;
 
     // 如果启用，启动该 MCP Server
-    if saved.enabled {
+    if saved.enabled && saved.scope == "global" {
         manager.start(&saved, &registry).await?;
     }
 
@@ -54,7 +54,7 @@ pub async fn update_mcp_server(
     let saved = repo::mcp_server::update(pool.inner(), &input).await?;
 
     // 如果启用，重新启动
-    if saved.enabled {
+    if saved.enabled && saved.scope == "global" {
         manager.start(&saved, &registry).await?;
     }
 
@@ -89,8 +89,10 @@ pub async fn restart_mcp_server(
     // 停止
     manager.stop(&id).await;
 
-    // 启动
-    manager.start(&config, &registry).await?;
+    // 启动（仅 global；per_agent 在 send_message 时按 agent 启动）
+    if config.scope == "global" {
+        manager.start(&config, &registry).await?;
+    }
 
     Ok(())
 }
