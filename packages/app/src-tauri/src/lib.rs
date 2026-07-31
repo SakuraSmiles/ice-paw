@@ -155,7 +155,9 @@ pub fn run() {
             match tauri::async_runtime::block_on(async {
                 let configs = db::repo::mcp_server::list_all(&pool).await?;
                 for cfg in &configs {
-                    if cfg.enabled {
+                    // per-agent 架构：仅全局启动 scope=global 的 server；
+                    // scope=per_agent 在 send_message 时按 agent 启动（args 替换 workspace）
+                    if cfg.enabled && cfg.scope == "global" {
                         tracing::info!(
                             target: "ice_paw.mcp",
                             "正在启动 MCP Server '{}' (command: {})",
