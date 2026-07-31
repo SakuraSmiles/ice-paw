@@ -18,6 +18,7 @@ pub mod shell;
 pub mod search;
 pub mod git;
 pub mod web;
+pub mod agent_config;
 
 pub use types::AuthorizationLevel;
 pub use client::{McpClient, McpRegistry, ToolContext};
