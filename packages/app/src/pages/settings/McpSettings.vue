@@ -134,13 +134,11 @@ async function onDelete(s: McpServer) {
       <!-- 新建 MCP Server（列表第一条特殊卡片，虚线） -->
       <div class="mcp-card new-card" :class="{ expanded: isCreating }" @click="toggleNew">
         <div class="card-top">
-          <div class="new-icon">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-              <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
-            </svg>
-          </div>
           <div class="card-body">
             <div class="card-name-row">
+              <svg class="new-plus" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
+              </svg>
               <span class="card-name new-name">新建 MCP Server</span>
             </div>
             <div class="new-hint">接入一个外部工具服务…</div>
@@ -286,12 +284,10 @@ async function onDelete(s: McpServer) {
   border-color: var(--ip-primary-400);
   background-color: var(--ip-color-bg-secondary);
 }
-.new-icon {
-  width: 36px; height: 36px; flex-shrink: 0;
-  display: flex; align-items: center; justify-content: center;
-  color: var(--ip-primary-600);
-  background: var(--ip-primary-50);
-  border-radius: var(--ip-radius-md);
+/* 新建卡：内联 + 图标（仿侧栏「新建对话」，无填充图标盒） */
+.new-plus {
+  flex-shrink: 0;
+  color: var(--ip-color-primary-tint-text);
 }
 
 /* 内置工具集 */
@@ -300,8 +296,8 @@ async function onDelete(s: McpServer) {
   font-weight: var(--ip-font-weight-medium);
   padding: 0 6px;
   line-height: 18px;
-  color: var(--ip-primary-700);
-  background: var(--ip-primary-100);
+  color: var(--ip-color-primary-tint-text);
+  background: var(--ip-color-primary-tint-bg);
   border-radius: var(--ip-radius-full);
 }
 .builtin-count {
@@ -369,8 +365,8 @@ async function onDelete(s: McpServer) {
   font-weight: var(--ip-font-weight-semibold);
   color: var(--ip-color-text-primary);
 }
-.new-name { color: var(--ip-primary-600); }
-.new-hint { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
+.new-name { color: var(--ip-color-primary-tint-text); }
+.new-hint { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); padding-left: 24px; }
 
 .status-tag {
   font-size: 10px; font-weight: var(--ip-font-weight-medium);
@@ -379,7 +375,7 @@ async function onDelete(s: McpServer) {
 .tag-running { background: var(--ip-success-bg); color: var(--ip-success-text); }
 .tag-stopped { background: var(--ip-color-bg-tertiary); color: var(--ip-color-text-tertiary); }
 .tag-error { background: var(--ip-danger-bg); color: var(--ip-danger-text); }
-.tag-per_agent { background: var(--ip-primary-100); color: var(--ip-primary-700); }
+.tag-per_agent { background: var(--ip-color-primary-tint-bg); color: var(--ip-color-primary-tint-text); }
 
 .card-desc {
   font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary);
@@ -447,7 +443,7 @@ async function onDelete(s: McpServer) {
   font-family: var(--ip-font-mono);
   padding: 2px 8px;
   line-height: 18px;
-  color: var(--ip-primary-700);
+  color: var(--ip-color-primary-tint-text);
   background-color: var(--ip-color-bg-tertiary);
   border-radius: var(--ip-radius-full);
 }

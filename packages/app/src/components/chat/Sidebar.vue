@@ -2,6 +2,7 @@
 // Sidebar.vue — 左侧会话列表面板
 import { ref, computed, onMounted } from "vue";
 import { useRouter } from "vue-router";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 const router = useRouter();
 const isSettingsPage = computed(() => router.currentRoute.value.path.startsWith("/settings"));
@@ -16,6 +17,10 @@ function applyTheme(dark: boolean) {
   isDark.value = dark;
   document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
   localStorage.setItem("icepaw-theme", dark ? "dark" : "light");
+  // 同步原生窗口主题：让 Windows 标题栏（含最小化/最大化/关闭按钮）跟随应用主题，
+  // 走 Tauri 的 ImmersiveDarkMode（setTheme），与上面 DOM 的 data-theme 保持一致。
+  // 非 Tauri 环境（纯 web 预览）会 reject，静默忽略。
+  getCurrentWindow().setTheme(dark ? "dark" : "light").catch(() => {});
 }
 
 function toggleTheme() {
@@ -379,7 +384,7 @@ function timeAgo(dateStr: string): string {
 
 .conv-item-new .conv-item-title {
   gap: 6px;
-  color: var(--ip-primary-600);
+  color: var(--ip-color-primary-tint-text);
 }
 
 .conv-item-new .conv-item-title svg {
@@ -388,7 +393,7 @@ function timeAgo(dateStr: string): string {
 }
 
 .conv-item-new .conv-name {
-  color: var(--ip-primary-600);
+  color: var(--ip-color-primary-tint-text);
   font-weight: var(--ip-font-weight-medium);
 }
 

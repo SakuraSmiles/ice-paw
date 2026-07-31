@@ -43,6 +43,14 @@
   --color-message-user-text: #FFFFFF;
   --color-message-ai-bg:     #F4F6F8;
   --color-message-ai-text:   #252C36;
+
+  /* 主色 tint 语义令牌：浅绿底/标签底/标签字。
+   * 用以替代直接引用 --ip-primary-50/100/700 —— 这些原始色阶在暗色模式下
+   * 不会反转（仍是浅色），会导致图标盒、徽章、按钮在暗色下刺眼。
+   * 这里集中给出暗色变体（深绿底 + 亮绿字），组件只需引用语义令牌。 */
+  --ip-color-primary-soft-bg:   var(--ip-primary-50);    /* 柔和绿底：图标盒 / 新建按钮 */
+  --ip-color-primary-tint-bg:   var(--ip-primary-100);   /* 浅绿底：徽章 / 标签 */
+  --ip-color-primary-tint-text: var(--ip-primary-700);   /* 浅绿底上的文字 */
 }
 
 /* ---- body 基础 ---- */
@@ -93,6 +101,11 @@ body {
   --color-message-user-text: #FFFFFF;
   --color-message-ai-bg:     #252C36;
   --color-message-ai-text:   #E6EAEF;
+
+  /* 暗色模式：主色 tint 反转 —— 深绿底 + 亮绿字（#9ED4B8 复用浅色阶 300） */
+  --ip-color-primary-soft-bg:   #102B20;
+  --ip-color-primary-tint-bg:   #173B2A;
+  --ip-color-primary-tint-text: #9ED4B8;
 }
 
 /* ---- 暗色模式切换动画（View Transitions API） ---- */

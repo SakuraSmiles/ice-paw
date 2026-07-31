@@ -358,9 +358,9 @@ function confirmDelete() {
   border-right: none;
 }
 .seg-btn.active {
-  color: var(--ip-primary-700);
+  color: var(--ip-color-primary-tint-text);
   font-weight: var(--ip-font-weight-medium);
-  background-color: var(--ip-primary-50);
+  background-color: var(--ip-color-primary-soft-bg);
 }
 
 /* 启用开关行 */
