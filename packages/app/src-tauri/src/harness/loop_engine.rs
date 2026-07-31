@@ -846,8 +846,21 @@ async fn stream_loop_inner(
         // 【阶段 E】执行工具，得到 tool_result blocks（execute_tool_round 已 emit chat:tool-result）
         // RAG: 构造工具执行上下文（conv_id/agent_id/project_id/pool）透传给
         // execute_tool_round → dispatch → execute_with_context（search_kb 据此查 KB）。
-        // workspace 解析一次放 ctx，供 run_command/git 作 current_dir、tool_executor 做路径白名单。
-        let agent_workspace = crate::harness::tool_executor::resolve_agent_workspace(
+        // workspace 解析：project 绑定了 workspace_path → 用项目源码根（文件/代码类工具
+        // read_file/write_file/run_command/git/search_files 据此切换 current_dir 与路径白名单）；
+        // 否则回退 agent workspace。知识库工具（save/search_kb）+ read_agent_config
+        // 仍走 agent_id/scope，不依赖此处 workspace，不受影响。
+        // 两个候选都需 await，先各自解析再 .or 合并（project 优先）。
+        let project_ws: Option<String> = match &ctx.project_id {
+            Some(pid) => repo::project::get_by_id(&ctx.pool, pid)
+                .await
+                .ok()
+                .and_then(|p| p.workspace_path)
+                .and_then(|ws| std::path::Path::new(&ws).canonicalize().ok())
+                .map(|p| p.to_string_lossy().to_string()),
+            None => None,
+        };
+        let agent_ws = crate::harness::tool_executor::resolve_agent_workspace(
             &ctx.pool, &ctx.agent_id,
         )
         .await
@@ -856,7 +869,7 @@ async fn stream_loop_inner(
             conv_id: ctx.conv_id.clone(),
             agent_id: ctx.agent_id.clone(),
             project_id: ctx.project_id.clone(),
-            workspace: agent_workspace,
+            workspace: project_ws.or(agent_ws),
             pool: ctx.pool.clone(),
         };
         let tool_result_blocks: Vec<ContentBlock> = execute_tool_round(
