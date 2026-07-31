@@ -210,7 +210,7 @@ async function onDelete(s: McpServer) {
           <div class="region">
             <div class="region-head">
               <span class="region-title">工具清单</span>
-              <button class="btn-link" @click="restart(s)">
+              <button v-if="s.scope !== 'per_agent'" class="btn-link" @click="restart(s)">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" />
                   <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
@@ -219,6 +219,7 @@ async function onDelete(s: McpServer) {
               </button>
             </div>
             <div v-if="toolsLoading[s.id]" class="region-hint">加载中…</div>
+            <div v-else-if="s.scope === 'per_agent'" class="region-hint">按 Agent 启动 — 工具在发消息时按 agent workspace 自动加载</div>
             <div v-else-if="!isActive(s.id)" class="region-hint">启动后可查看工具清单</div>
             <template v-else>
               <div class="region-meta">共 {{ (toolsMap[s.id] ?? []).length }} 个工具</div>
