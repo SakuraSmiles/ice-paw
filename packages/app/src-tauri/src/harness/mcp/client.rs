@@ -166,6 +166,15 @@ impl McpRegistry {
         clients.insert(name, client);
     }
 
+    /// 按工具名批量反注册（server 停止/删除/改配时调用，避免死工具残留 → 调用卡 30s 超时）。
+    /// 与 `register` 对称：register 用 `client.name()` 为 key，这里按名移除。
+    pub async fn unregister(&self, names: &[String]) {
+        let mut clients = self.clients.write().await;
+        for name in names {
+            clients.remove(name);
+        }
+    }
+
     /// 同步注册（用于初始化时，无竞争场景）
     pub fn register_sync(&self, client: Arc<dyn McpClient>) {
         if let Ok(mut clients) = self.clients.try_write() {
@@ -474,5 +483,30 @@ mod tests {
         assert_eq!(defs1.len(), defs2.len());
         assert!(defs1.iter().any(|d| d.name == "read_file"));
         assert!(defs2.iter().any(|d| d.name == "read_file"));
+    }
+
+    #[tokio::test]
+    async fn registry_unregister_removes_only_named() {
+        // stop/delete server 时按工具名反注册，必须只移除命中的、其余保留
+        let registry = McpRegistry::new();
+        registry.register(make_stub("tool_a", "")).await;
+        registry.register(make_stub("tool_b", "")).await;
+        assert_eq!(registry.list_tool_defs().await.len(), 2);
+        assert!(registry.get("tool_a").await.is_some());
+
+        // 反注册单个
+        registry.unregister(&["tool_a".to_string()]).await;
+        assert!(registry.get("tool_a").await.is_none(), "tool_a 应已反注册");
+        assert!(registry.get("tool_b").await.is_some(), "tool_b 应保留");
+        assert_eq!(registry.list_tool_defs().await.len(), 1);
+
+        // 反注册不存在的名 / 重复反注册 → 安全无副作用
+        registry.unregister(&["tool_a".to_string(), "nope".to_string()]).await;
+        assert_eq!(registry.list_tool_defs().await.len(), 1);
+
+        // 批量反注册
+        registry.register(make_stub("tool_c", "")).await;
+        registry.unregister(&["tool_b".to_string(), "tool_c".to_string()]).await;
+        assert_eq!(registry.list_tool_defs().await.len(), 0);
     }
 }

@@ -48,7 +48,7 @@ pub async fn update_mcp_server(
     input: UpdateMcpServer,
 ) -> AppResult<McpServerConfig> {
     // 先停止旧服务（如果正在运行）
-    manager.stop(&input.id).await;
+    manager.stop(&input.id, &registry).await;
 
     // 更新数据库
     let saved = repo::mcp_server::update(pool.inner(), &input).await?;
@@ -66,10 +66,11 @@ pub async fn update_mcp_server(
 pub async fn delete_mcp_server(
     pool: State<'_, SqlitePool>,
     manager: State<'_, Arc<McpServerManager>>,
+    registry: State<'_, Arc<McpRegistry>>,
     id: String,
 ) -> AppResult<()> {
-    // 停止服务（如果正在运行）
-    manager.stop(&id).await;
+    // 停止服务（反注册工具 + 关闭子进程）
+    manager.stop(&id, &registry).await;
 
     // 删除数据库记录
     repo::mcp_server::delete(pool.inner(), &id).await
@@ -87,7 +88,7 @@ pub async fn restart_mcp_server(
     let config = repo::mcp_server::get_by_id(pool.inner(), &id).await?;
 
     // 停止
-    manager.stop(&id).await;
+    manager.stop(&id, &registry).await;
 
     // 启动（仅 global；per_agent 在 send_message 时按 agent 启动）
     if config.scope == "global" {
