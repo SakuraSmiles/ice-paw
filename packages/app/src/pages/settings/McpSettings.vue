@@ -37,6 +37,13 @@ const builtinExpanded = ref(false);
 const builtinTools: { name: string; desc: string }[] = [
   { name: "read_file", desc: "读取本地文件内容" },
   { name: "list_directory", desc: "列出目录内容" },
+  { name: "write_file", desc: "写入文件（覆盖）" },
+  { name: "edit_file", desc: "精准字符串替换" },
+  { name: "delete_file", desc: "删除文件或空目录" },
+  { name: "search_files", desc: "正则内容搜索（grep）" },
+  { name: "run_command", desc: "执行 shell 命令（需授权）" },
+  { name: "git", desc: "git 只读操作（status/diff/log/show）" },
+  { name: "web_fetch", desc: "抓取 URL 正文" },
   { name: "search_kb", desc: "检索知识库（对话中 agent 自动调用）" },
   { name: "read_kb_document", desc: "读取知识库文档全文（检索命中后读细节）" },
   { name: "save_to_kb", desc: "保存资料到知识库（对话中 agent 自动调用）" },

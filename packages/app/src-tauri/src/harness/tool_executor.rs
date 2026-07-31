@@ -170,8 +170,9 @@ pub async fn execute_tool_round(
     let mut tool_result_blocks: Vec<ContentBlock> = Vec::new();
 
     // agent workspace 内的文件免授权（workspace 是 agent 的信任领地，
-    // agent 读写自己 workspace 内的文件不需弹窗确认）
-    let workspace = resolve_agent_workspace(&tool_ctx.pool, &tool_ctx.agent_id).await;
+    // agent 读写自己 workspace 内的文件不需弹窗确认）。workspace 由 loop_engine
+    // 解析后放进 tool_ctx，这里直接复用，避免重复查库。
+    let workspace = tool_ctx.workspace.as_ref().map(PathBuf::from);
 
     for (tc_id, tc_name, tc_args) in completed_calls {
         // 1. 解析授权级别 + 路径
@@ -410,7 +411,7 @@ async fn inspect_tool_for_auth(
 
 /// 解析 agent 的 workspace 根路径（canonicalize，用于 workspace 内免授权判断）。
 /// agent 无 workspace 或路径不存在 → None（回退到正常授权流程）。
-async fn resolve_agent_workspace(pool: &SqlitePool, agent_id: &str) -> Option<PathBuf> {
+pub(crate) async fn resolve_agent_workspace(pool: &SqlitePool, agent_id: &str) -> Option<PathBuf> {
     let agent = repo::agent::get_by_id(pool, agent_id).await.ok()?;
     let ws = agent.workspace_path?;
     Path::new(&ws).canonicalize().ok()

@@ -846,10 +846,17 @@ async fn stream_loop_inner(
         // 【阶段 E】执行工具，得到 tool_result blocks（execute_tool_round 已 emit chat:tool-result）
         // RAG: 构造工具执行上下文（conv_id/agent_id/project_id/pool）透传给
         // execute_tool_round → dispatch → execute_with_context（search_kb 据此查 KB）。
+        // workspace 解析一次放 ctx，供 run_command/git 作 current_dir、tool_executor 做路径白名单。
+        let agent_workspace = crate::harness::tool_executor::resolve_agent_workspace(
+            &ctx.pool, &ctx.agent_id,
+        )
+        .await
+        .map(|p| p.to_string_lossy().to_string());
         let tool_ctx = crate::harness::mcp::ToolContext {
             conv_id: ctx.conv_id.clone(),
             agent_id: ctx.agent_id.clone(),
             project_id: ctx.project_id.clone(),
+            workspace: agent_workspace,
             pool: ctx.pool.clone(),
         };
         let tool_result_blocks: Vec<ContentBlock> = execute_tool_round(
