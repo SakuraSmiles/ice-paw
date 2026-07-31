@@ -199,11 +199,22 @@ pub struct McpServerConfig {
     pub enabled: bool,
     #[serde(default)]
     pub trust_level: TrustLevel,
+    /// 隔离级别：'global' 全局共享 / 'per_agent' 按 agent 启动
+    /// （per_agent 的 server，args 中的 {workspace} 启动时替换为 agent workspace）
+    #[serde(default = "default_scope")]
+    pub scope: String,
     pub created_at: String,
     pub updated_at: String,
 }
 
 fn default_enabled() -> bool { true }
+
+/// scope 默认值：global（兼容旧 server，全局共享）
+fn default_scope() -> String { "global".into() }
+
+/// per-agent MCP server 的 args 占位符：启动时替换为 agent workspace_path。
+/// 用于 scope=per_agent 的 server（如 filesystem），实现 per-agent 文件访问隔离。
+pub const WORKSPACE_PLACEHOLDER: &str = "{workspace}";
 
 /// 创建 MCP Server 入参
 #[derive(Debug, Clone, Deserialize)]
@@ -221,6 +232,8 @@ pub struct NewMcpServer {
     pub enabled: bool,
     #[serde(default)]
     pub trust_level: TrustLevel,
+    #[serde(default = "default_scope")]
+    pub scope: String,
 }
 
 /// 更新 MCP Server 入参
@@ -235,6 +248,7 @@ pub struct UpdateMcpServer {
     pub enabled: Option<bool>,
     #[serde(default)]
     pub trust_level: Option<TrustLevel>,
+    pub scope: Option<String>,
 }
 
 // =========================================================================

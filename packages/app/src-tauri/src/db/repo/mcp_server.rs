@@ -7,7 +7,7 @@ use sqlx::SqlitePool;
 use crate::error::{AppError, AppResult};
 use crate::harness::mcp::types::{McpServerConfig, NewMcpServer, UpdateMcpServer, TrustLevel};
 
-const ALL_COLS: &str = "id, name, description, command, args, env, enabled, trust_level, created_at, updated_at";
+const ALL_COLS: &str = "id, name, description, command, args, env, enabled, trust_level, scope, created_at, updated_at";
 
 /// 列出全部 MCP Server 配置，按 created_at 降序
 pub async fn list_all(pool: &SqlitePool) -> AppResult<Vec<McpServerConfig>> {
@@ -43,8 +43,8 @@ pub async fn create(pool: &SqlitePool, input: &NewMcpServer) -> AppResult<McpSer
         .unwrap_or_else(|| "{}".to_string());
 
     sqlx::query(
-        "INSERT INTO mcp_servers (id, name, description, command, args, env, enabled, trust_level, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO mcp_servers (id, name, description, command, args, env, enabled, trust_level, scope, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&input.id)
     .bind(&input.name)
@@ -54,6 +54,7 @@ pub async fn create(pool: &SqlitePool, input: &NewMcpServer) -> AppResult<McpSer
     .bind(&env_str)
     .bind(input.enabled as i32)
     .bind(input.trust_level.as_str())
+    .bind(&input.scope)
     .bind(&now)
     .bind(&now)
     .execute(pool)
@@ -72,12 +73,13 @@ pub async fn update(pool: &SqlitePool, input: &UpdateMcpServer) -> AppResult<Mcp
     let env = input.env.as_ref().unwrap_or(&existing.env);
     let enabled = input.enabled.unwrap_or(existing.enabled);
     let trust_level = input.trust_level.unwrap_or(existing.trust_level);
+    let scope = input.scope.clone().unwrap_or_else(|| existing.scope.clone());
     let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let args_str = serde_json::to_string(args)?;
     let env_str = serde_json::to_string(env)?;
 
     sqlx::query(
-        "UPDATE mcp_servers SET name=?, description=?, command=?, args=?, env=?, enabled=?, trust_level=?, updated_at=? WHERE id=?",
+        "UPDATE mcp_servers SET name=?, description=?, command=?, args=?, env=?, enabled=?, trust_level=?, scope=?, updated_at=? WHERE id=?",
     )
     .bind(name)
     .bind(desc)
@@ -86,6 +88,7 @@ pub async fn update(pool: &SqlitePool, input: &UpdateMcpServer) -> AppResult<Mcp
     .bind(&env_str)
     .bind(enabled as i32)
     .bind(trust_level.as_str())
+    .bind(&scope)
     .bind(&now)
     .bind(&input.id)
     .execute(pool)
@@ -125,6 +128,7 @@ struct McpServerRow {
     env: String,
     enabled: i32,
     trust_level: String,
+    scope: String,
     created_at: String,
     updated_at: String,
 }
@@ -140,6 +144,7 @@ impl From<McpServerRow> for McpServerConfig {
             env: serde_json::from_str(&row.env).unwrap_or(serde_json::json!({})),
             enabled: row.enabled != 0,
             trust_level: row.trust_level.parse::<TrustLevel>().unwrap_or_default(),
+            scope: row.scope,
             created_at: row.created_at,
             updated_at: row.updated_at,
         }
