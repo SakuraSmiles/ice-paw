@@ -69,6 +69,8 @@ export const useChatStore = defineStore("chat", () => {
       thinkingDuration.value = null;
       lastThinkingContent.value = null;
     }
+    // finish_reason 是全局单份，切换会话时清空，避免上个会话的标签（如「已手动停止」）泄漏到新会话
+    lastFinishReason.value = null;
     loadMessages(id);
   }
 
@@ -156,6 +158,11 @@ export const useChatStore = defineStore("chat", () => {
    *  导致「流式中途切走再切回」时已渲染内容丢失、从一半继续渲染。
    *  只追踪 text/thinking（工具调用/多轮结构后台不展示，最终态由后端 chat:done 落库）。*/
   const bgStreams = ref<Map<string, { text: string; thinking: string }>>(new Map());
+
+  /** 刚收到 chat:error、等待配套 chat:done(abort) 的会话集合。后端在 chat:error 后会
+   *  再 emit 一次 chat:done(abort) 做收尾，前端据此跳过 freeze（不覆盖错误文案）+
+   *  不设 lastFinishReason（避免误显「已手动停止」）——错误应以 chat:error 的文案为准。*/
+  const recentErrorConvs = new Set<string>();
 
   /** 重置 60s 静默超时（滑动窗口）：任何活动事件调用一次即重新计时。
    *  超时只重置 sending 状态（不清 streaming，交由后端 chat:done(abort) 走 freeze）。*/
@@ -470,6 +477,19 @@ export const useChatStore = defineStore("chat", () => {
         const m = new Map(bgStreams.value);
         m.delete(cid);
         bgStreams.value = m;
+        recentErrorConvs.delete(cid);
+        return;
+      }
+      // 错误后的配套 chat:done(abort)：chat:error 已是终态（写了错误文案 + 重置），
+      // 这里只做最小收尾——不 freeze（会覆盖错误文案）、不设 lastFinishReason（会误显「已手动停止」）。
+      if (recentErrorConvs.has(cid)) {
+        recentErrorConvs.delete(cid);
+        if (sendTimeout) { clearTimeout(sendTimeout); sendTimeout = null; }
+        sending.value = false;
+        streamingText.value = "";
+        streamingToolCalls.value = new Map();
+        streamingThinking.value = "";
+        thinkingStartTime.value = null;
         return;
       }
       if (sendTimeout) { clearTimeout(sendTimeout); sendTimeout = null; }
@@ -522,6 +542,8 @@ export const useChatStore = defineStore("chat", () => {
 
     listen<ChatErrorPayload>("chat:error", (e) => {
       const cid = e.payload.conversation_id;
+      // 标记：后端会紧跟一次 chat:done(abort) 收尾，chat:done 据此跳过 freeze + lastFinishReason
+      recentErrorConvs.add(cid);
       if (cid !== activeConvId.value) {
         // 后台会话出错：清掉快照（用户切回时走 DB 加载，看到错误态）
         const m = new Map(bgStreams.value);
@@ -535,6 +557,7 @@ export const useChatStore = defineStore("chat", () => {
       streamingThinking.value = "";
       thinkingStartTime.value = null;
       streamingToolCalls.value = new Map();
+      lastFinishReason.value = null;
       // 用 message_id 定位出错的 assistant（多轮工具下不能遍历改所有 assistant）
       const errId = e.payload.message_id;
       messages.value = messages.value.map((msg) => {
