@@ -17,6 +17,18 @@ const routes: RouteRecordRaw[] = [
         component: () => import("../pages/ChatPage.vue"),
       },
       {
+        path: "projects",
+        name: "Projects",
+        component: () => import("../pages/ProjectList.vue"),
+        meta: { title: "项目" },
+      },
+      {
+        path: "projects/:id",
+        name: "ProjectDetail",
+        component: () => import("../pages/ProjectDetail.vue"),
+        meta: { title: "项目详情" },
+      },
+      {
         path: "settings",
         component: () => import("../pages/settings/SettingsLayout.vue"),
         children: [

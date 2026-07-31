@@ -88,6 +88,55 @@ export interface NewConversation {
 }
 
 // ============================================================================
+// Project（项目维度）
+// ============================================================================
+
+/** 项目成员（project_agents 关联表） */
+export interface ProjectAgent {
+  project_id: string;
+  agent_id: string;
+  role: string;
+  joined_at: string;
+}
+
+/**
+ * 项目。后端 `Project` 用 `#[serde(flatten)]` 把 ProjectRow 字段展开到顶层，
+ * 再附带 `agents`，故此处字段全部平铺。
+ */
+export interface Project {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  sort_order: number;
+  workspace_path?: string | null;
+  theme_color?: string | null;
+  created_at: string;
+  updated_at: string;
+  agents?: ProjectAgent[];
+}
+
+/** 创建项目入参（含初始成员 agent_ids，role 默认 member） */
+export interface NewProject {
+  name: string;
+  description?: string;
+  icon?: string;
+  workspace_path?: string;
+  theme_color?: string;
+  agent_ids?: string[];
+}
+
+/** 更新项目入参（partial update；undefined = 不改） */
+export interface UpdateProject {
+  id: string;
+  name?: string;
+  description?: string;
+  icon?: string;
+  workspace_path?: string | null;
+  theme_color?: string | null;
+}
+
+// ============================================================================
 // Message
 // ============================================================================
 

@@ -600,8 +600,8 @@ export const useChatStore = defineStore("chat", () => {
   }
 
   // ===== 新建会话 =====
-  async function createConversation(agentId: string) {
-    const conv = await bridge.conversations.create(agentId);
+  async function createConversation(agentId: string, projectId?: string | null) {
+    const conv = await bridge.conversations.create(agentId, undefined, projectId);
     // 未置顶的新会话插入到所有置顶会话之后、第一个未置顶之前
     const firstUnpinned = conversations.value.findIndex((c) => !c.pinned);
     if (firstUnpinned === -1) {

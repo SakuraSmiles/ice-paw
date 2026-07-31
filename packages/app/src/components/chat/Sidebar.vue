@@ -6,6 +6,15 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 
 const router = useRouter();
 const isSettingsPage = computed(() => router.currentRoute.value.path.startsWith("/settings"));
+const isProjectsPage = computed(() => router.currentRoute.value.path.startsWith("/projects"));
+
+// 会话列表 scope：项目详情页 → 仅该项目会话；其他页面 → 散落会话（project_id=null）。
+// list_all_conversations 已返回 project_id，纯客户端过滤，无需额外加载。
+const scopeProjectId = computed<string | null>(() => {
+  const r = router.currentRoute.value;
+  if (r.name === "ProjectDetail" && typeof r.params.id === "string") return r.params.id;
+  return null;
+});
 
 // =========================================================================
 // 暗色模式
@@ -70,13 +79,19 @@ const agent = useAgentStore();
 const showPicker = ref(false);
 const searchQuery = ref("");
 
+const scopedConversations = computed(() => {
+  const pid = scopeProjectId.value;
+  return pid === null
+    ? chat.conversations.filter((c) => !c.project_id)
+    : chat.conversations.filter((c) => c.project_id === pid);
+});
+
 const filteredConversations = computed(() => {
-  if (!searchQuery.value.trim()) return chat.conversations;
+  if (!searchQuery.value.trim()) return scopedConversations.value;
   const q = searchQuery.value.toLowerCase();
-  return chat.conversations.filter((c) => {
-    const conv = c;
-    const agentName = agent.getById(conv.agent_id)?.name?.toLowerCase() ?? "";
-    return conv.title?.toLowerCase().includes(q) || agentName.includes(q);
+  return scopedConversations.value.filter((c) => {
+    const agentName = agent.getById(c.agent_id)?.name?.toLowerCase() ?? "";
+    return c.title?.toLowerCase().includes(q) || agentName.includes(q);
   });
 });
 
@@ -86,7 +101,8 @@ onMounted(() => {
 });
 
 function selectConv(id: string) {
-  if (isSettingsPage.value) {
+  // 非首页（设置 / 项目页）点击会话 → 回首页展示聊天
+  if (router.currentRoute.value.name !== "Home") {
     router.push("/");
   }
   chat.selectConversation(id);
@@ -103,8 +119,9 @@ function newChat() {
 async function doCreateChat(agentId: string) {
   showPicker.value = false;
   try {
-    await chat.createConversation(agentId);
-    if (isSettingsPage.value) {
+    // 项目详情页新建 → 自动归入该项目；其他页面 → 散落会话
+    await chat.createConversation(agentId, scopeProjectId.value);
+    if (router.currentRoute.value.name !== "Home") {
       router.push("/");
     }
   } catch (e) {
@@ -198,7 +215,9 @@ function timeAgo(dateStr: string): string {
 
       <div v-if="chat.convLoading" class="conv-loading">加载中...</div>
       <div v-else-if="searchQuery && filteredConversations.length === 0" class="conv-empty">无匹配对话</div>
-      <div v-else-if="!searchQuery && chat.conversations.length === 0 && agent.loaded" class="conv-empty">暂无对话</div>
+      <div v-else-if="!searchQuery && scopedConversations.length === 0 && agent.loaded" class="conv-empty">
+        {{ scopeProjectId ? "项目内暂无对话" : "暂无对话" }}
+      </div>
 
       <button
         v-for="conv in filteredConversations"
@@ -222,8 +241,14 @@ function timeAgo(dateStr: string): string {
       </button>
     </TransitionGroup>
 
-    <!-- 底部：设置等 -->
+    <!-- 底部：项目 / 设置 -->
     <div class="sidebar-footer">
+      <button class="footer-btn" :class="{ active: isProjectsPage }" @click="router.push('/projects')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+        </svg>
+        <span>项目</span>
+      </button>
       <button class="footer-btn" :class="{ active: isSettingsPage }" @click="router.push('/settings/general')">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="3" />
