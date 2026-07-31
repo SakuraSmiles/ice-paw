@@ -42,6 +42,8 @@ pub struct ToolContext {
     pub agent_id: String,
     /// 当前项目 ID（v1 暂不启用 project KB，字段预留；None = 默认项目）
     pub project_id: Option<String>,
+    /// 当前 Agent 的 workspace 绝对路径（run_command / git 作 current_dir 用）；None = 未设
+    pub workspace: Option<String>,
     /// 数据库连接池（search_kb 查 kb/kb_document 表用）
     pub pool: SqlitePool,
 }
@@ -150,6 +152,13 @@ impl McpRegistry {
             ("search_kb", Arc::new(super::kb_tool::SearchKbTool)),
             ("save_to_kb", Arc::new(super::kb_tool::SaveToKbTool)),
             ("read_kb_document", Arc::new(super::kb_tool::ReadKbDocumentTool)),
+            ("write_file", Arc::new(super::file_tools::WriteFileTool)),
+            ("edit_file", Arc::new(super::file_tools::EditFileTool)),
+            ("delete_file", Arc::new(super::file_tools::DeleteFileTool)),
+            ("run_command", Arc::new(super::shell::RunCommandTool)),
+            ("search_files", Arc::new(super::search::SearchFilesTool)),
+            ("git", Arc::new(super::git::GitTool)),
+            ("web_fetch", Arc::new(super::web::WebFetchTool)),
         ];
         for name in names {
             if let Some((_, client)) = all_builtins.iter().find(|(n, _)| n == name) {
@@ -185,11 +194,20 @@ impl McpRegistry {
 
     /// 注册内置工具
     pub fn register_builtin(&self) {
+        // 只读 / 知识库
         self.register_sync(Arc::new(super::internal::ReadFileTool));
         self.register_sync(Arc::new(super::internal::ListDirectoryTool));
         self.register_sync(Arc::new(super::kb_tool::SearchKbTool));
         self.register_sync(Arc::new(super::kb_tool::SaveToKbTool));
         self.register_sync(Arc::new(super::kb_tool::ReadKbDocumentTool));
+        // agentic 工具集（文件读写编辑 / shell / grep / git / web）
+        self.register_sync(Arc::new(super::file_tools::WriteFileTool));
+        self.register_sync(Arc::new(super::file_tools::EditFileTool));
+        self.register_sync(Arc::new(super::file_tools::DeleteFileTool));
+        self.register_sync(Arc::new(super::shell::RunCommandTool));
+        self.register_sync(Arc::new(super::search::SearchFilesTool));
+        self.register_sync(Arc::new(super::git::GitTool));
+        self.register_sync(Arc::new(super::web::WebFetchTool));
     }
 
     /// 按名称查询工具客户端
@@ -355,6 +373,7 @@ mod tests {
             conv_id: "c1".into(),
             agent_id: "a1".into(),
             project_id: None,
+            workspace: None,
             pool: sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap(),
         };
         let result = registry.dispatch("nonexistent", "{}", &ctx).await;
@@ -370,6 +389,7 @@ mod tests {
             conv_id: "c1".into(),
             agent_id: "a1".into(),
             project_id: None,
+            workspace: None,
             pool: sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap(),
         };
         // StubClient 未 override execute_with_context → 走默认实现 → 返回 "stub"

@@ -12,6 +12,12 @@ pub mod internal;
 pub mod external;
 pub mod kb_tool;
 pub mod manager;
+// 内置 agentic 工具（文件读写编辑 / shell / grep / git / web）
+pub mod file_tools;
+pub mod shell;
+pub mod search;
+pub mod git;
+pub mod web;
 
 pub use types::AuthorizationLevel;
 pub use client::{McpClient, McpRegistry, ToolContext};
