@@ -58,8 +58,8 @@ function statusLabel(s: McpServer): string {
 function toggleEdit(s: McpServer) {
   isCreating.value = false;
   expandedEditId.value = expandedEditId.value === s.id ? null : s.id;
-  // 展开且运行中时加载工具清单（仅首次）
-  if (expandedEditId.value && !(s.id in toolsMap.value) && isActive(s.id)) {
+  // 展开时加载工具清单（global 运行中 或 per_agent probe 缓存均可查）
+  if (expandedEditId.value && !(s.id in toolsMap.value)) {
     loadTools(s.id);
   }
 }
@@ -219,8 +219,7 @@ async function onDelete(s: McpServer) {
               </button>
             </div>
             <div v-if="toolsLoading[s.id]" class="region-hint">加载中…</div>
-            <div v-else-if="s.scope === 'per_agent'" class="region-hint">按 Agent 启动 — 工具在发消息时按 agent workspace 自动加载</div>
-            <div v-else-if="!isActive(s.id)" class="region-hint">启动后可查看工具清单</div>
+            <div v-else-if="!isActive(s.id) && s.scope !== 'per_agent'" class="region-hint">启动后可查看工具清单</div>
             <template v-else>
               <div class="region-meta">共 {{ (toolsMap[s.id] ?? []).length }} 个工具</div>
               <div v-if="(toolsMap[s.id] ?? []).length" class="tool-chips">

@@ -234,6 +234,44 @@ impl McpServerManager {
         }
         tracing::info!(target: "ice_paw.mcp", "agent {} 的 per-agent server 已关闭", agent_id);
     }
+
+    /// 探测 per-agent server 的工具清单（临时启动 → list_tools → 关闭 → 缓存到 tools_cache）。
+    ///
+    /// per_agent server 不全局常驻，但工具清单对所有 agent 一样（args 只影响允许目录，
+    /// 不影响工具列表）。启动时探测一次缓存，让 McpSettings 能展示工具能力。
+    /// {workspace} 替换为 temp 目录（工具清单不依赖允许目录）。
+    pub async fn probe_tools(&self, config: &McpServerConfig) -> AppResult<Vec<McpToolDefinition>> {
+        // 已缓存则直接返回
+        {
+            let cache = self.tools_cache.read().await;
+            if let Some(tools) = cache.get(&config.id) {
+                return Ok(tools.clone());
+            }
+        }
+        let temp = std::env::temp_dir().to_string_lossy().to_string();
+        let args: Vec<String> = config
+            .args
+            .iter()
+            .map(|a| a.replace(WORKSPACE_PLACEHOLDER, &temp))
+            .collect();
+        let server = ExternalMcpServer::spawn(
+            config.id.clone(),
+            config.name.clone(),
+            &config.command,
+            &args,
+        )
+        .await?;
+        let tools = server.list_tools().await?;
+        server.shutdown().await;
+
+        self.tools_cache.write().await.insert(config.id.clone(), tools.clone());
+        tracing::info!(
+            target: "ice_paw.mcp",
+            "探测 per-agent MCP Server '{}' 工具清单: {} 个",
+            config.name, tools.len()
+        );
+        Ok(tools)
+    }
 }
 
 impl Default for McpServerManager {
