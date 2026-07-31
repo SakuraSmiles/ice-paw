@@ -256,11 +256,17 @@ impl AgentCmd for SqlAgentCmd {
     }
 
     async fn delete(&self, agent_id: &str) -> AppResult<()> {
-        // 先清 stronghold 中的 key（容错忽略）
-        let _ = crypto::delete_api_key(&self.app, agent_id);
-        // 级联清理 memory 数据（容错忽略，静默记录日志）
-        let _ = repo::memory_embedding::delete_embeddings_for_agent(&self.pool, agent_id).await;
-        let _ = repo::memory_store::delete_memories_for_agent(&self.pool, agent_id).await;
+        // 先清 stronghold 中的 key（容错：失败仅 warn，不阻断删除）
+        if let Err(e) = crypto::delete_api_key(&self.app, agent_id) {
+            tracing::warn!(target: "ice_paw.agent", "清理 agent {agent_id} API key 失败: {e}");
+        }
+        // 级联清理 memory 数据（容错：失败仅 warn）
+        if let Err(e) = repo::memory_embedding::delete_embeddings_for_agent(&self.pool, agent_id).await {
+            tracing::warn!(target: "ice_paw.agent", "清理 agent {agent_id} embeddings 失败: {e}");
+        }
+        if let Err(e) = repo::memory_store::delete_memories_for_agent(&self.pool, agent_id).await {
+            tracing::warn!(target: "ice_paw.agent", "清理 agent {agent_id} memories 失败: {e}");
+        }
         repo::agent::delete(&self.pool, agent_id).await
     }
 }
