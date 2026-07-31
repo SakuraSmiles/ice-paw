@@ -24,7 +24,7 @@ use crate::harness::loop_engine::LoopContext;
 use crate::harness::observable::RoundState;
 use crate::harness::provider;
 
-use crate::harness::mcp::McpRegistry;
+use crate::harness::mcp::{McpServerManager, McpRegistry};
 use crate::harness::authority::{PathAuthSession, PathWhitelistConfig};
 use crate::context::pipeline::{AssembledContext, PipelineContext, PipelineRunner};
 use crate::context::history::resolve_window;
@@ -34,6 +34,7 @@ use crate::context::history::resolve_window;
 /// REQ-XC-010: 依赖 `Arc<dyn AgentCmd>` trait object，而非具体
 /// `SqlAgentCmd` 类型。这样可以在测试中注入 `MockAgentCmd`。
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn send_message(
     app: AppHandle,
     pool: State<'_, SqlitePool>,
@@ -42,6 +43,7 @@ pub async fn send_message(
     input: SendMessageInput,
     auth_registry: State<'_, crate::harness::tool_executor::ToolAuthRegistry>,
     global_registry: State<'_, Arc<McpRegistry>>,
+    mcp_manager: State<'_, Arc<McpServerManager>>,
 ) -> AppResult<()> {
     // --- 1. 入参校验：content_blocks 优先，回退到 legacy content ---
     let final_blocks = {
@@ -188,16 +190,64 @@ pub async fn send_message(
     // 使用共享的工具授权注册表（与 lib.rs install_listener 实例一致）
     let shared_auth_registry = (*auth_registry).clone();
 
-    // 全局 MCP Registry（含外部工具），供对话继承
-    let global_mcp: McpRegistry = (**global_registry).clone();
+    // 组装对话 tool_registry：global server 工具 + per-agent server 工具
+    let tool_registry = if tools_enabled {
+        // global server（从 global_registry，筛 agent_enabled_tools）
+        let reg = match &agent_enabled_tools {
+            Some(names) if !names.is_empty() => {
+                let r = McpRegistry::new();
+                r.register_names_from(&global_registry, names).await;
+                r
+            }
+            Some(_) => McpRegistry::new(),
+            None => (**global_registry).clone(),
+        };
+        // per-agent server（scope=per_agent，按 agent workspace 启动 + 注册工具）
+        if let Some(workspace) = agent.workspace_path.as_deref() {
+            let mcp_configs = repo::mcp_server::list_all(pool.inner()).await.unwrap_or_default();
+            for cfg in mcp_configs.iter().filter(|c| c.enabled && c.scope == "per_agent") {
+                match (**mcp_manager).ensure_per_agent(cfg, &conv.agent_id, workspace).await {
+                    Ok((server, tools)) => {
+                        for tool_def in &tools {
+                            let allowed = match &agent_enabled_tools {
+                                Some(names) if !names.is_empty() => names.contains(&tool_def.name),
+                                Some(_) => false,
+                                None => true,
+                            };
+                            if allowed {
+                                let proxy = Arc::new(
+                                    crate::harness::mcp::external::ExternalToolProxy::new(
+                                        tool_def.name.clone(),
+                                        tool_def.description.clone(),
+                                        tool_def.input_schema.clone(),
+                                        server.clone(),
+                                        cfg.trust_level,
+                                    ),
+                                );
+                                reg.register(proxy).await;
+                            }
+                        }
+                    }
+                    Err(e) => tracing::warn!(
+                        target: "ice_paw.mcp",
+                        "per-agent MCP Server '{}' 启动失败: {}",
+                        cfg.name, e
+                    ),
+                }
+            }
+        }
+        reg
+    } else {
+        McpRegistry::new()
+    };
 
     spawn_stream_loop(
         app, pool.inner().clone(), llm_provider, api_key,
         assembled.messages, agent.temperature, agent.max_tokens,
         cancel_token, conv_id, user_msg_id, asst_msg_id, tools_enabled,
-        agent_enabled_tools,
         current_user_query, tool_call_history,
-        model_override, Some(effective_model), tool_max_rounds, shared_auth_registry, global_mcp,
+        model_override, Some(effective_model), tool_max_rounds, shared_auth_registry,
+        tool_registry,
         conv.agent_id.clone(), conv.project_id.clone(),
     );
     Ok(())
@@ -236,32 +286,17 @@ fn spawn_stream_loop(
     api_key: String, messages: Vec<ChatMessage>, temperature: f64, max_tokens: i32,
     cancel_token: CancellationToken, conv_id: String, user_msg_id: String,
     asst_msg_id: String, tools_enabled: bool,
-    agent_enabled_tools: Option<Vec<String>>,
     query: Option<String>, call_history: Vec<String>,
     model_override: Option<String>,
     asst_model: Option<String>,
     tool_max_rounds: Option<u32>,
     auth_registry: crate::harness::tool_executor::ToolAuthRegistry,
-    global_registry: McpRegistry,
+    tool_registry: McpRegistry,
     agent_id: String,
     project_id: Option<String>,
 ) {
     tokio::spawn(async move {
-        // 优先从全局 registry（含外部 MCP Server 工具）构建对话工具列表
-        let tool_registry = if tools_enabled {
-            match &agent_enabled_tools {
-                Some(names) if !names.is_empty() => {
-                    // Agent 指定了白名单：从全局 registry 中筛选
-                    let reg = McpRegistry::new();
-                    reg.register_names_from(&global_registry, names).await;
-                    reg
-                }
-                Some(_) => McpRegistry::new(), // 空 vec = 全部禁用
-                None => global_registry.clone(), // 无过滤 = 继承全局（含外部工具）
-            }
-        } else {
-            McpRegistry::new()
-        };
+        // tool_registry 由 send_message 组装（global server + per-agent server），直接使用
         // W2.4: maintain observable state across the stream loop
         let mut observable = RoundState::default();
         // W4.1: 传入 LoopBudget（优先使用 Agent 配置的 tool_max_rounds）
