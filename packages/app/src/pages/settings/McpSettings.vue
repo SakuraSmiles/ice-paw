@@ -130,8 +130,8 @@ async function onDelete(s: McpServer) {
 
     <div class="mcp-list">
       <!-- 内置工具集（系统自带，只读，折叠展开） -->
-      <div class="mcp-card builtin-card" :class="{ expanded: builtinExpanded }">
-        <div class="card-top" @click="builtinExpanded = !builtinExpanded">
+      <div class="mcp-card builtin-card" :class="{ expanded: builtinExpanded }" @click="builtinExpanded = !builtinExpanded">
+        <div class="card-top">
           <span class="status-dot dot-running" />
           <div class="card-body">
             <div class="card-name-row">
@@ -156,8 +156,8 @@ async function onDelete(s: McpServer) {
       <div class="list-divider"></div>
 
       <!-- 新建 MCP Server（列表第一条特殊卡片，虚线） -->
-      <div class="mcp-card new-card" :class="{ expanded: isCreating }">
-        <div class="card-top" @click="toggleNew">
+      <div class="mcp-card new-card" :class="{ expanded: isCreating }" @click="toggleNew">
+        <div class="card-top">
           <div class="new-icon">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
               <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
@@ -187,8 +187,9 @@ async function onDelete(s: McpServer) {
         :key="s.id"
         class="mcp-card"
         :class="{ expanded: expandedEditId === s.id }"
+        @click="toggleEdit(s)"
       >
-        <div class="card-top" @click="toggleEdit(s)">
+        <div class="card-top">
           <span class="status-dot" :class="'dot-' + statusOf(s)" />
           <div class="card-body">
             <div class="card-name-row">
@@ -260,6 +261,7 @@ async function onDelete(s: McpServer) {
   background-color: var(--ip-color-bg-secondary);
   border: 1px solid var(--ip-color-border-default);
   border-radius: var(--ip-radius-lg);
+  cursor: pointer;
   transition: all var(--ip-duration-fast) var(--ip-ease-out);
 }
 .mcp-card:hover {
