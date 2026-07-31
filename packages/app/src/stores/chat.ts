@@ -82,6 +82,9 @@ export const useChatStore = defineStore("chat", () => {
 
   async function loadMessages(convId: string) {
     msgLoading.value = true;
+    // 立即清空旧消息：loadMessages 是 async，await 期间 messages 仍持有上一会话内容，
+    // 会导致切换瞬间在新会话标题下闪烁旧消息。先清空再加载。
+    messages.value = [];
     hasMore.value = true;
     loadingMore.value = false;
     try {
