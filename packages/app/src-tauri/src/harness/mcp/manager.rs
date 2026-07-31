@@ -50,6 +50,7 @@ impl McpServerManager {
             config.name.clone(),
             &config.command,
             &config.args,
+            &config.env,
         ).await?;
 
         let server = Arc::new(server);
@@ -89,18 +90,26 @@ impl McpServerManager {
         Ok(())
     }
 
-    /// 停止一个 MCP Server（从 registry 移除工具 + 关闭子进程）
-    pub async fn stop(&self, id: &str) {
-        // 从列表移除
+    /// 停止一个 MCP Server（从 registry 反注册工具 + 关闭子进程）。
+    ///
+    /// 必须传入启动时同一个 `registry`：stop 会把该 server 注册的工具按名从 registry 移除，
+    /// 否则死工具残留会让 LLM 调用时卡满 30s 超时。
+    pub async fn stop(&self, id: &str, registry: &McpRegistry) {
+        // 从活跃列表移除
         let server = {
             let mut servers = self.servers.write().await;
             servers.remove(id)
         };
 
-        // 清掉工具缓存
+        // 反注册工具 + 清缓存：取出该 server 的工具名，从 registry 移除
         {
             let mut cache = self.tools_cache.write().await;
-            cache.remove(id);
+            if let Some(tools) = cache.remove(id) {
+                let names: Vec<String> = tools.into_iter().map(|t| t.name).collect();
+                if !names.is_empty() {
+                    registry.unregister(&names).await;
+                }
+            }
         }
 
         if let Some(server) = server {
@@ -194,6 +203,7 @@ impl McpServerManager {
                 config.name.clone(),
                 &config.command,
                 &args,
+                &config.env,
             )
             .await?,
         );
@@ -259,6 +269,7 @@ impl McpServerManager {
             config.name.clone(),
             &config.command,
             &args,
+            &config.env,
         )
         .await?;
         let tools = server.list_tools().await?;
