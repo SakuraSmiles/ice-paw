@@ -59,6 +59,7 @@ API endpoints, or web pages. Output is truncated if very long."
             .map_err(|e| AppError::Validation(format!("web_fetch 参数解析失败: {e}")))?;
 
         let client = reqwest::Client::builder()
+            .user_agent("ice-paw/0.1")
             .connect_timeout(Duration::from_secs(10))
             .read_timeout(Duration::from_secs(30))
             .timeout(Duration::from_secs(60))
