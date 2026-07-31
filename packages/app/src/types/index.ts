@@ -236,6 +236,7 @@ export interface McpServer {
   env: Record<string, string>;
   enabled: boolean;
   trust_level: McpTrustLevel;
+  scope: string;
   created_at: string;
   updated_at: string;
 }
@@ -250,6 +251,7 @@ export interface NewMcpServer {
   env?: Record<string, string>;
   enabled?: boolean;
   trust_level?: McpTrustLevel;
+  scope?: string;
 }
 
 /** 更新 MCP Server 入参 */
@@ -262,6 +264,7 @@ export interface McpServerUpdate {
   env?: Record<string, string>;
   enabled?: boolean;
   trust_level?: McpTrustLevel;
+  scope?: string;
 }
 
 /** MCP Server 提供的工具定义（来自 tools/list） */
