@@ -9,6 +9,10 @@ import type { Message, MessageRole } from "../../types";
 const chat = useChatStore();
 const listRef = ref<HTMLElement | null>(null);
 const showScrollBtn = ref(false);
+/** 是否「跟随底部」自动滚动。用户向上滚离底部时置 false（边生成边看不被打扰），
+ *  滚回底部或点「回到底部」时恢复 true。距底部 <= 阈值视为在跟随。*/
+const autoFollow = ref(true);
+const FOLLOW_THRESHOLD = 120;
 let suppressScrollCheck = false;
 let paginating = false;
 let scrollPosCache = { scrollHeight: 0, scrollTop: 0 };
@@ -91,6 +95,8 @@ function onScroll() {
 
   const distToBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
   showScrollBtn.value = distToBottom > 80;
+  // 用户向上滚离底部 → 停止跟随（边生成边看不被滚动条打扰）；滚回底部 → 恢复跟随
+  autoFollow.value = distToBottom <= FOLLOW_THRESHOLD;
 
   // 分页触发：距顶部 200px 且还有更多数据
   if (el.scrollTop < 200 && chat.hasMore && !chat.loadingMore && !chat.sending) {
@@ -113,6 +119,7 @@ function onScroll() {
 function scrollToBottom(smooth?: boolean) {
   if (listRef.value) {
     suppressScrollCheck = true;
+    autoFollow.value = true; // 手动滚到底部 = 恢复跟随
     showScrollBtn.value = false;
     listRef.value.scrollTo({ top: listRef.value.scrollHeight, behavior: smooth !== false ? "smooth" : "instant" });
     setTimeout(() => { suppressScrollCheck = false; }, smooth !== false ? 500 : 50);
@@ -136,11 +143,11 @@ watch(() => chat.msgLoading, async (loading) => {
   }
 });
 
-// 自动滚到底部（分页加载时不触发，避免与位置恢复冲突）
+// 自动滚到底部（分页加载时不触发；用户向上看内容时不抢滚动条）
 watch(
   [() => chat.messages.length, () => chat.streamingText],
   async () => {
-    if (paginating) return;
+    if (paginating || !autoFollow.value) return;
     await nextTick();
     const el = listRef.value;
     if (!el) return;
@@ -548,7 +555,7 @@ const finishReasonLabels: Record<string, string> = {
     </div>
 
     <Transition name="fade-up">
-      <button v-if="showScrollBtn && !chat.sending" class="scroll-bottom-btn" title="滚动到底部" @click="scrollToBottom()">
+      <button v-if="showScrollBtn" class="scroll-bottom-btn" title="回到底部并跟随最新" @click="scrollToBottom()">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <line x1="12" y1="5" x2="12" y2="19" /><polyline points="19 12 12 19 5 12" />
         </svg>
