@@ -192,7 +192,7 @@ function timeAgo(dateStr: string): string {
       <button
         v-for="conv in filteredConversations"
         :key="conv.id"
-        :class="['conv-item', { active: chat.activeConvId === conv.id }]"
+        :class="['conv-item', { active: chat.activeConvId === conv.id, streaming: chat.streamingConvIds.has(conv.id) }]"
         @click="selectConv(conv.id)"
       >
         <div class="conv-item-title">
@@ -203,7 +203,10 @@ function timeAgo(dateStr: string): string {
         </div>
         <div class="conv-meta">
           <span class="conv-agent-tag">{{ agent.getById(conv.agent_id)?.name || "未知" }}</span>
-          <span class="conv-time">{{ timeAgo(conv.updated_at) }}</span>
+          <span v-if="chat.streamingConvIds.has(conv.id)" class="stream-indicator" title="正在生成…">
+            <span class="stream-dot"></span>生成中
+          </span>
+          <span v-else class="conv-time">{{ timeAgo(conv.updated_at) }}</span>
         </div>
       </button>
     </nav>
@@ -471,6 +474,53 @@ function timeAgo(dateStr: string): string {
   color: var(--ip-color-text-disabled);
   margin-left: auto;
   flex-shrink: 0;
+}
+
+/* ===== 正在生成的会话：左侧脉冲条（卡片级动画） + 「生成中」指示 ===== */
+.conv-item.streaming {
+  position: relative;
+}
+.conv-item.streaming::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 3px;
+  height: 60%;
+  border-radius: 0 3px 3px 0;
+  background: var(--ip-primary-500);
+  transform: translateY(-50%);
+  animation: conv-stream-bar 1.4s ease-in-out infinite;
+}
+@keyframes conv-stream-bar {
+  0%, 100% { opacity: 0.35; transform: translateY(-50%) scaleY(0.6); }
+  50%      { opacity: 1;    transform: translateY(-50%) scaleY(1); }
+}
+
+.stream-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--ip-color-primary-tint-text);
+}
+.stream-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ip-primary-500);
+  animation: stream-dot-pulse 1.2s ease-in-out infinite;
+}
+@keyframes stream-dot-pulse {
+  0%, 100% { opacity: 0.4; transform: scale(0.8); }
+  50%      { opacity: 1;   transform: scale(1.15); }
+}
+
+/* 暗色模式下脉冲条稍亮以保证可见 */
+[data-theme='dark'] .conv-item.streaming::after {
+  background: var(--ip-primary-400);
 }
 
 /* 底部 */
