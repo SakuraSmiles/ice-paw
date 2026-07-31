@@ -7,7 +7,11 @@ import Sidebar from "../chat/Sidebar.vue";
   <div class="app-layout">
     <Sidebar />
     <main class="app-main">
-      <router-view />
+      <router-view v-slot="{ Component }">
+        <Transition name="route-fade" mode="out-in">
+          <component :is="Component" />
+        </Transition>
+      </router-view>
     </main>
   </div>
 </template>

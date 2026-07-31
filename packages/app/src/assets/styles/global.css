@@ -128,3 +128,30 @@ body {
     clip-path: circle(100% at var(--theme-reveal-x, 50%) var(--theme-reveal-y, 50%));
   }
 }
+
+/* ============================================================
+ * 全局过渡动画（克制·淡入为主，~150ms）
+ * ============================================================ */
+
+/* 路由切换（聊天 ↔ 设置、设置各子页） */
+.route-fade-enter-active,
+.route-fade-leave-active {
+  transition: opacity 150ms var(--ip-ease-out, ease);
+}
+.route-fade-enter-from,
+.route-fade-leave-to {
+  opacity: 0;
+}
+
+/* 侧栏会话列表项：进出淡入 + 重排 FLIP（touchConversation 把会话置顶时其他项平滑让位） */
+.conv-list-enter-active,
+.conv-list-leave-active {
+  transition: opacity 180ms var(--ip-ease-out, ease);
+}
+.conv-list-enter-from,
+.conv-list-leave-to {
+  opacity: 0;
+}
+.conv-list-move {
+  transition: transform 220ms var(--ip-ease-out, ease);
+}
