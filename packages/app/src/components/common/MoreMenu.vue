@@ -42,8 +42,10 @@ function onDocClick(e: MouseEvent) {
     confirming.value = null;
   }
 }
-onMounted(() => document.addEventListener("click", onDocClick));
-onUnmounted(() => document.removeEventListener("click", onDocClick));
+// 用 capture 阶段监听：MoreMenu 常处在带 @click.stop 的容器（如 expand-panel）内，
+// 冒泡阶段会被 stop 拦截导致收不到外部点击；capture 在 stop 之前触发，能正常收起。
+onMounted(() => document.addEventListener("click", onDocClick, true));
+onUnmounted(() => document.removeEventListener("click", onDocClick, true));
 </script>
 
 <template>
