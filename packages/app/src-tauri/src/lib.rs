@@ -15,7 +15,7 @@
 //! **W2.3 起**：`llm/` 目录已删除（provider / tool_registry / chat_state 全部迁入 `harness/`）。
 //!
 //! 启动顺序（setup）：
-//!   1. 初始化 tracing
+//!   1. 初始化 tracing（stdout + 磁盘日志）
 //!   2. 启动数据库连接池 + 跑迁移
 //!   3. 启动 stronghold（snapshot 落到 app_data_dir）
 //!   4. 注册全部 commands
@@ -27,11 +27,10 @@ pub mod db;
 pub mod error;
 pub mod harness;
 pub mod infra;
+pub mod logging;
 pub mod r#loop;
 
 use std::sync::Arc;
-
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use tauri::Manager;
 
@@ -40,12 +39,6 @@ use harness::mcp::McpRegistry;
 /// 应用入口
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // 初始化日志：RUST_LOG 缺省给 info
-    tracing_subscriber::registry()
-        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
-        .with(fmt::layer().with_target(true))
-        .init();
-
     tauri::Builder::default()
         // 仅保留 opener 业务插件
         .plugin(tauri_plugin_opener::init())
@@ -106,10 +99,22 @@ pub fn run() {
             commands::kb_cmd::delete_kb,
             commands::kb_cmd::reindex_kb,
             commands::kb_cmd::list_kb_documents,
+            commands::log_cmd::get_logs,
+            commands::log_cmd::get_data_dir,
+            commands::log_cmd::open_data_dir,
         ])
         // 启动逻辑
         .setup(|app| {
             let handle = app.handle().clone();
+
+            // 0) 初始化日志（stdout + 文件 daily 轮转，非阻塞写）+ panic hook。
+            //    WorkerGuard 托管到 app state，进程退出时随 state drop 自动 flush。
+            match logging::init(&handle) {
+                Ok(guard) => {
+                    handle.manage(guard);
+                }
+                Err(e) => eprintln!("[ice_paw] logging init failed: {e}"),
+            }
 
             // 1) stronghold（同步初始化）
             if let Err(e) = crypto::init(&handle) {

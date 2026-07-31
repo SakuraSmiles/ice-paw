@@ -48,6 +48,12 @@ const routes: RouteRecordRaw[] = [
             component: () => import("../pages/settings/KbSettings.vue"),
             meta: { title: "全局知识库" },
           },
+          {
+            path: "logs",
+            name: "SettingsLogs",
+            component: () => import("../pages/settings/LogSettings.vue"),
+            meta: { title: "运行日志" },
+          },
         ],
       },
     ],
