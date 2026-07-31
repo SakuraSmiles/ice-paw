@@ -12,6 +12,9 @@ const showScrollBtn = ref(false);
 /** 是否「跟随底部」自动滚动。用户向上滚离底部时置 false（边生成边看不被打扰），
  *  滚回底部或点「回到底部」时恢复 true。距底部 <= 阈值视为在跟随。*/
 const autoFollow = ref(true);
+/** 会话切换过渡：切走时置 true（淡出），新会话消息加载完成后置 false（淡入）。
+ *  用 opacity 过渡而非 :key 重挂载——重挂载会让 onMounted 绑的 scroll 监听器失效。*/
+const switching = ref(false);
 const FOLLOW_THRESHOLD = 120;
 let suppressScrollCheck = false;
 let paginating = false;
@@ -135,11 +138,13 @@ onUnmounted(() => {
   if (thinkingTimer) { clearInterval(thinkingTimer); thinkingTimer = null; }
 });
 
-// 切换会话后等消息加载完成再平滑滚动到底部
+// 切换会话：先淡出（switching=true）；消息加载完成后再淡入 + 滚到底部
+watch(() => chat.activeConvId, () => { switching.value = true; });
 watch(() => chat.msgLoading, async (loading) => {
   if (!loading && chat.messages.length > 0) {
     await nextTick();
     scrollToBottom(true);
+    switching.value = false; // 新会话内容就绪 → 淡入
   }
 });
 
@@ -370,8 +375,7 @@ const finishReasonLabels: Record<string, string> = {
 </script>
 
 <template>
-  <Transition name="route-fade" mode="out-in">
-  <div ref="listRef" :key="chat.activeConvId ?? 'none'" class="messages-area">
+  <div ref="listRef" class="messages-area" :class="{ switching }">
     <!-- 分页加载指示器 -->
     <div v-if="chat.loadingMore" class="load-more-hint">加载更早消息…</div>
     <div v-if="!chat.hasMore && chat.messages.length > 50" class="load-more-hint load-more-end">已显示全部消息</div>
@@ -563,11 +567,11 @@ const finishReasonLabels: Record<string, string> = {
       </button>
     </Transition>
   </div>
-  </Transition>
 </template>
 
 <style scoped>
-.messages-area { flex:1; overflow-y:auto; padding:24px 0; position:relative; }
+.messages-area { flex:1; overflow-y:auto; padding:24px 0; position:relative; transition: opacity 150ms var(--ip-ease-out, ease); }
+.messages-area.switching { opacity: 0; }
 .messages-container { display:flex; flex-direction:column; gap:16px; padding:0 48px; }
 
 /* ===== 分页指示 ===== */
