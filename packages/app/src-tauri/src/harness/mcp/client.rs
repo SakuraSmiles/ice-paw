@@ -159,6 +159,7 @@ impl McpRegistry {
             ("search_files", Arc::new(super::search::SearchFilesTool)),
             ("git", Arc::new(super::git::GitTool)),
             ("web_fetch", Arc::new(super::web::WebFetchTool)),
+            ("read_agent_config", Arc::new(super::agent_config::ReadAgentConfigTool)),
         ];
         for name in names {
             if let Some((_, client)) = all_builtins.iter().find(|(n, _)| n == name) {
@@ -208,6 +209,7 @@ impl McpRegistry {
         self.register_sync(Arc::new(super::search::SearchFilesTool));
         self.register_sync(Arc::new(super::git::GitTool));
         self.register_sync(Arc::new(super::web::WebFetchTool));
+        self.register_sync(Arc::new(super::agent_config::ReadAgentConfigTool));
     }
 
     /// 按名称查询工具客户端

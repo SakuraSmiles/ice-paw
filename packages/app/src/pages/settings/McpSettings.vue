@@ -44,6 +44,7 @@ const builtinTools: { name: string; desc: string }[] = [
   { name: "run_command", desc: "执行 shell 命令（需授权）" },
   { name: "git", desc: "git 只读操作（status/diff/log/show）" },
   { name: "web_fetch", desc: "抓取 URL 正文" },
+  { name: "read_agent_config", desc: "读取自己的 agent.yaml 配置" },
   { name: "search_kb", desc: "检索知识库（对话中 agent 自动调用）" },
   { name: "read_kb_document", desc: "读取知识库文档全文（检索命中后读细节）" },
   { name: "save_to_kb", desc: "保存资料到知识库（对话中 agent 自动调用）" },
