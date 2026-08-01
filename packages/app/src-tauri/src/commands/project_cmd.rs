@@ -101,3 +101,26 @@ pub async fn move_conversation_to_project(
 ) -> AppResult<()> {
     repo::conversation::move_to_project(pool.inner(), &conversation_id, project_id.as_deref()).await
 }
+
+/// 归档项目（软删除：从活跃列表收起，会话不动、不丢、不混入散落）
+#[tauri::command]
+pub async fn archive_project(pool: State<'_, SqlitePool>, id: String) -> AppResult<()> {
+    repo::project::set_archived(pool.inner(), &id, true).await
+}
+
+/// 恢复归档项目（原样回到活跃列表，会话可见）
+#[tauri::command]
+pub async fn unarchive_project(pool: State<'_, SqlitePool>, id: String) -> AppResult<()> {
+    repo::project::set_archived(pool.inner(), &id, false).await
+}
+
+/// 永久删除项目：delete_conversations=true 连同该项目会话一起删；
+/// false 则会话转为散落（conversations.project_id ON DELETE SET NULL）。
+#[tauri::command]
+pub async fn permanent_delete_project(
+    pool: State<'_, SqlitePool>,
+    id: String,
+    delete_conversations: bool,
+) -> AppResult<()> {
+    repo::project::permanent_delete(pool.inner(), &id, delete_conversations).await
+}

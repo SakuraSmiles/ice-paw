@@ -124,17 +124,22 @@ const filteredConversations = computed(() => {
 
 onMounted(async () => {
   agent.load();
-  project.load();
+  await project.load();
   await chat.loadConversations();
-  // 打开软件时恢复上次会话（C）：有会话且未选中 → 选最近活跃的一条，
-  // 并把项目空间同步到该会话所属项目，保证侧栏/切换器与当前会话一致。
-  // 切项目不在此列——切项目保持「欢迎态」（用户已认可的动线）。
+  // 打开软件时恢复上次会话：跳过归档/已删项目的会话（其 project 不在活跃列表），
+  // 选最近一条有效会话，并把项目空间同步到该会话所属项目。
   if (!chat.activeConvId && chat.conversations.length > 0) {
-    const latest = chat.conversations.reduce((a, b) =>
-      new Date(b.updated_at) > new Date(a.updated_at) ? b : a
+    const activeIds = new Set(project.activeProjects.map((p) => p.id));
+    const valid = chat.conversations.filter(
+      (c) => !c.project_id || activeIds.has(c.project_id),
     );
-    project.activeProjectId = latest.project_id ?? null;
-    chat.selectConversation(latest.id);
+    if (valid.length > 0) {
+      const latest = valid.reduce((a, b) =>
+        new Date(b.updated_at) > new Date(a.updated_at) ? b : a
+      );
+      project.activeProjectId = latest.project_id ?? null;
+      chat.selectConversation(latest.id);
+    }
   }
 });
 
@@ -306,10 +311,10 @@ function timeAgo(dateStr: string): string {
                 <polyline points="20 6 9 17 4 12" />
               </svg>
             </button>
-            <template v-if="project.list.length">
+            <template v-if="project.activeProjects.length">
               <div class="switcher-sep" />
               <button
-                v-for="p in project.list"
+                v-for="p in project.activeProjects"
                 :key="p.id"
                 class="switcher-item"
                 :class="{ active: scopeProjectId === p.id }"

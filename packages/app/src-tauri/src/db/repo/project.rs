@@ -7,14 +7,14 @@ use sqlx::SqlitePool;
 use crate::db::models::{NewProject, ProjectAgentRow, ProjectRow, UpdateProject};
 use crate::error::{AppError, AppResult};
 
-const PROJECT_COLS: &str = "id, name, description, icon, sort_order, workspace_path, theme_color, created_at, updated_at";
+const PROJECT_COLS: &str = "id, name, description, icon, sort_order, workspace_path, theme_color, archived, created_at, updated_at";
 
 // ===== projects CRUD =====
 
-/// 列出全部项目，按 sort_order asc
+/// 列出全部项目（含已归档，由前端按 archived 拆分活跃/已归档），活跃在前
 pub async fn list(pool: &SqlitePool) -> AppResult<Vec<ProjectRow>> {
     let rows = sqlx::query_as::<_, ProjectRow>(&format!(
-        "SELECT {PROJECT_COLS} FROM projects ORDER BY sort_order ASC, created_at ASC"
+        "SELECT {PROJECT_COLS} FROM projects ORDER BY archived ASC, sort_order ASC, created_at ASC"
     ))
     .fetch_all(pool)
     .await?;
@@ -94,6 +94,28 @@ pub async fn delete(pool: &SqlitePool, id: &str) -> AppResult<()> {
         .execute(pool)
         .await?;
     Ok(())
+}
+
+/// 归档 / 恢复项目（软删除开关）
+pub async fn set_archived(pool: &SqlitePool, id: &str, archived: bool) -> AppResult<()> {
+    sqlx::query("UPDATE projects SET archived = ?, updated_at = datetime('now') WHERE id = ?")
+        .bind(archived)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// 永久删除：delete_conversations=true 连同该项目会话一起删；
+/// false 则依赖 conversations.project_id ON DELETE SET NULL，会话转为散落。
+pub async fn permanent_delete(pool: &SqlitePool, id: &str, delete_conversations: bool) -> AppResult<()> {
+    if delete_conversations {
+        sqlx::query("DELETE FROM conversations WHERE project_id = ?")
+            .bind(id)
+            .execute(pool)
+            .await?;
+    }
+    delete(pool, id).await
 }
 
 /// 批量更新排序

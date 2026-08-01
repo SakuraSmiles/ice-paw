@@ -113,6 +113,9 @@ pub fn run() {
             commands::project_cmd::remove_project_agent,
             commands::project_cmd::list_conversations_by_project,
             commands::project_cmd::move_conversation_to_project,
+            commands::project_cmd::archive_project,
+            commands::project_cmd::unarchive_project,
+            commands::project_cmd::permanent_delete_project,
         ])
         // 启动逻辑
         .setup(|app| {

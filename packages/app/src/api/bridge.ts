@@ -120,6 +120,21 @@ const projects = {
     try { await invoke<void>("move_conversation_to_project", { conversationId, projectId }); }
     catch (err) { throw wrapInvokeError("projects.moveConversation", err); }
   },
+  /** 归档项目（软删除，可恢复） */
+  async archive(id: string): Promise<void> {
+    try { await invoke<void>("archive_project", { id }); }
+    catch (err) { throw wrapInvokeError("projects.archive", err); }
+  },
+  /** 恢复归档项目 */
+  async unarchive(id: string): Promise<void> {
+    try { await invoke<void>("unarchive_project", { id }); }
+    catch (err) { throw wrapInvokeError("projects.unarchive", err); }
+  },
+  /** 永久删除：deleteConversations=true 连同会话一起删；false 会话转散落 */
+  async permanentDelete(id: string, deleteConversations: boolean): Promise<void> {
+    try { await invoke<void>("permanent_delete_project", { id, deleteConversations }); }
+    catch (err) { throw wrapInvokeError("projects.permanentDelete", err); }
+  },
 };
 
 const messages = {

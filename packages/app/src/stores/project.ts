@@ -27,6 +27,10 @@ export const useProjectStore = defineStore("project", () => {
   const activeProject = computed(() =>
     activeProjectId.value ? getById(activeProjectId.value) : null,
   );
+  /** 活跃项目（未归档）—— 切换器 / 管理页活跃列表用 */
+  const activeProjects = computed(() => list.value.filter((p) => !p.archived));
+  /** 已归档项目 —— 管理页归档区用 */
+  const archivedProjects = computed(() => list.value.filter((p) => p.archived));
 
   async function create(input: NewProject): Promise<Project> {
     const created = await bridge.projects.create(input);
@@ -55,6 +59,24 @@ export const useProjectStore = defineStore("project", () => {
     await bridge.projects.moveConversation(conversationId, projectId);
   }
 
+  /** 归档项目（软删除）：从活跃列表收起，会话不动 */
+  async function archive(id: string): Promise<void> {
+    await bridge.projects.archive(id);
+    if (activeProjectId.value === id) activeProjectId.value = null;
+    await load(true);
+  }
+  /** 恢复归档项目 */
+  async function unarchive(id: string): Promise<void> {
+    await bridge.projects.unarchive(id);
+    await load(true);
+  }
+  /** 永久删除：deleteConversations=true 连同会话删；false 会话转散落 */
+  async function permanentDelete(id: string, deleteConversations: boolean): Promise<void> {
+    await bridge.projects.permanentDelete(id, deleteConversations);
+    if (activeProjectId.value === id) activeProjectId.value = null;
+    await load(true);
+  }
+
   return {
     list,
     loading,
@@ -63,10 +85,15 @@ export const useProjectStore = defineStore("project", () => {
     load,
     getById,
     activeProject,
+    activeProjects,
+    archivedProjects,
     create,
     update,
     remove,
     reorder,
     moveConversation,
+    archive,
+    unarchive,
+    permanentDelete,
   };
 });
