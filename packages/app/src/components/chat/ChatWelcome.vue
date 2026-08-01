@@ -1,44 +1,19 @@
 <script setup lang="ts">
 // ChatWelcome.vue — 无选中会话时的欢迎/空态
 // 取代原先「看着能用、其实不能用」的空输入框：给一个明确的「新建对话」入口，
-// 并按当前空间（项目 / 散落）做上下文化引导。
-import { ref, computed } from "vue";
-import { useRouter } from "vue-router";
+// 并按当前空间（项目 / 散落）做上下文化引导。新建逻辑与侧栏共用 useNewConversation。
+import { computed } from "vue";
 import { useChatStore } from "../../stores/chat";
-import { useAgentStore } from "../../stores/agent";
 import { useProjectStore } from "../../stores/project";
+import { useNewConversation } from "../../composables/useNewConversation";
 import AgentPicker from "./AgentPicker.vue";
 
 const chat = useChatStore();
-const agent = useAgentStore();
 const project = useProjectStore();
-const router = useRouter();
-
-const showPicker = ref(false);
+const { showPicker, pickerAgentIds, ctaKind, ctaLabel, startNew, onPickAgent } = useNewConversation();
 
 const inProject = computed(() => project.activeProjectId !== null);
 const projectName = computed(() => project.activeProject?.name ?? "");
-const memberAgentIds = computed(() =>
-  (project.activeProject?.agents ?? []).map((a) => a.agent_id),
-);
-const hasMembers = computed(() => memberAgentIds.value.length > 0);
-const hasAgents = computed(() => agent.list.length > 0);
-
-/** 选择器范围：项目内 → 仅成员；散落 → 全部 agent（项目无成员不会走到选择器） */
-const pickerAgentIds = computed(() => (inProject.value ? memberAgentIds.value : undefined));
-
-/** CTA 行为分三种：全局无 agent / 项目无成员 / 正常新建 */
-const ctaKind = computed<"no-agents" | "no-members" | "new-chat">(() => {
-  if (!hasAgents.value) return "no-agents";
-  if (inProject.value && !hasMembers.value) return "no-members";
-  return "new-chat";
-});
-const ctaLabel = computed(() => {
-  if (ctaKind.value === "no-agents") return "去创建智能体";
-  if (ctaKind.value === "no-members") return "去添加成员";
-  return "新建对话";
-});
-
 const titleText = computed(() =>
   inProject.value ? `在「${projectName.value}」中开始` : "开始一段新对话",
 );
@@ -47,26 +22,6 @@ const descText = computed(() => {
   if (inProject.value) return "选择一位项目成员开始对话";
   return "选择一位助手开始对话";
 });
-
-function startNew() {
-  if (ctaKind.value === "no-agents") { router.push("/settings/agents"); return; }
-  if (ctaKind.value === "no-members") { router.push("/projects"); return; }
-  // new-chat：单候选直接建，跳过选择；否则弹选择器（项目内已限定为成员）
-  const ids = pickerAgentIds.value;
-  const count = ids ? ids.length : agent.list.length;
-  if (count === 1) {
-    const id = ids ? ids[0] : agent.list[0].id;
-    chat.createConversation(id, project.activeProjectId);
-    return;
-  }
-  showPicker.value = true;
-}
-
-function onPickAgent(agentId: string) {
-  showPicker.value = false;
-  // createConversation 内部会 selectConversation → activeConvId 置位 → 本组件自动隐藏
-  chat.createConversation(agentId, project.activeProjectId);
-}
 </script>
 
 <template>
