@@ -3,6 +3,7 @@
 import { ref, computed, onMounted, onUnmounted } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
 import { bridge } from "../../api/bridge";
+import { setTimezone } from "../../utils/time";
 import type { UserPreferences } from "../../types";
 
 const prefs = ref<UserPreferences>({});
@@ -226,6 +227,7 @@ async function detectTimezone() {
     if (tz) {
       prefs.value.timezone = tz;
       await bridge.preferences.set("timezone", tz);
+      setTimezone(tz); // 同步全局时区状态
       tzSelectedLabel.value = currentTzDisplay.value;
     }
   } catch (e) {
@@ -240,6 +242,7 @@ async function saveTimezone() {
   saving.value = true;
   try {
     await bridge.preferences.set("timezone", prefs.value.timezone ?? "");
+    setTimezone(prefs.value.timezone ?? ""); // 同步全局时区状态，所有时间显示即时刷新
     saved.value = true;
     setTimeout(() => { saved.value = false; }, 2000);
   } catch (e) {
