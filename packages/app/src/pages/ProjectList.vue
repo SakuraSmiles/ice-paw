@@ -1,16 +1,16 @@
 <script setup lang="ts">
-// ProjectList.vue — 项目列表 + 内联新建项目表单
+// ProjectList.vue — 项目管理：列表 + 内联新建 + 内联编辑（点卡片展开配置）
 import { ref, reactive, onMounted } from "vue";
-import { useRouter } from "vue-router";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useProjectStore } from "../stores/project";
 import { useAgentStore } from "../stores/agent";
+import { bridge } from "../api/bridge";
 import type { NewProject, Project } from "../types";
 
-const router = useRouter();
 const project = useProjectStore();
 const agent = useAgentStore();
 
+// ===== 新建项目 =====
 const isCreating = ref(false);
 const saving = ref(false);
 const error = ref("");
@@ -37,6 +37,7 @@ function resetForm() {
 }
 
 function toggleNew() {
+  cancelEdit();
   resetForm();
   isCreating.value = !isCreating.value;
 }
@@ -58,15 +59,6 @@ function toggleMember(id: string) {
   form.memberIds = new Set(form.memberIds);
 }
 
-function memberNames(p: Project): string {
-  const ids = p.agents?.map((a) => a.agent_id) ?? [];
-  const names = ids
-    .map((id) => agent.getById(id)?.name)
-    .filter(Boolean) as string[];
-  if (names.length === 0) return "未分配成员";
-  return names.join("、");
-}
-
 async function createProject() {
   if (saving.value) return;
   if (!form.name.trim()) {
@@ -82,11 +74,9 @@ async function createProject() {
       workspace_path: form.workspace_path.trim() || undefined,
       agent_ids: [...form.memberIds],
     };
-    const created = await project.create(input);
+    await project.create(input);
     isCreating.value = false;
     resetForm();
-    // 创建后直接进入项目详情
-    router.push(`/projects/${created.id}`);
   } catch (e) {
     error.value = e instanceof Error ? e.message : "创建项目失败";
   } finally {
@@ -94,13 +84,105 @@ async function createProject() {
   }
 }
 
+// ===== 内联编辑（点卡片展开） =====
+const expandedId = ref<string | null>(null);
+const editName = ref("");
+const editDesc = ref("");
+const editWorkspace = ref("");
+const editError = ref("");
+const savingEdit = ref(false);
+
+function toggleEdit(p: Project) {
+  if (expandedId.value === p.id) {
+    expandedId.value = null;
+    return;
+  }
+  isCreating.value = false;
+  expandedId.value = p.id;
+  editName.value = p.name;
+  editDesc.value = p.description || "";
+  editWorkspace.value = p.workspace_path || "";
+  editError.value = "";
+}
+
+function cancelEdit() {
+  expandedId.value = null;
+  editError.value = "";
+}
+
+async function pickEditWorkspace() {
+  const selected = await open({
+    directory: true,
+    multiple: false,
+    title: "选择项目源码目录",
+    defaultPath: editWorkspace.value || undefined,
+  });
+  if (selected) editWorkspace.value = selected;
+}
+
+async function saveEdit(p: Project) {
+  if (savingEdit.value) return;
+  if (!editName.value.trim()) {
+    editError.value = "项目名称不能为空";
+    return;
+  }
+  savingEdit.value = true;
+  editError.value = "";
+  try {
+    await project.update({
+      id: p.id,
+      name: editName.value.trim(),
+      description: editDesc.value.trim(),
+      workspace_path: editWorkspace.value.trim() || null,
+    });
+    expandedId.value = null;
+  } catch (e) {
+    editError.value = e instanceof Error ? e.message : "保存失败";
+  } finally {
+    savingEdit.value = false;
+  }
+}
+
+function memberIdsOf(p: Project): string[] {
+  return (p.agents ?? []).map((a) => a.agent_id);
+}
+function candidateAgents(p: Project) {
+  const ids = new Set(memberIdsOf(p));
+  return agent.list.filter((a) => !ids.has(a.id));
+}
+async function addMember(p: Project, agentId: string) {
+  try {
+    await bridge.projects.addAgent(p.id, agentId, "member");
+    await project.load(true);
+  } catch (e) {
+    console.error("添加成员失败:", e);
+  }
+}
+async function removeMember(p: Project, agentId: string) {
+  try {
+    await bridge.projects.removeAgent(p.id, agentId);
+    await project.load(true);
+  } catch (e) {
+    console.error("移除成员失败:", e);
+  }
+}
+
 async function deleteProject(p: Project) {
   if (!window.confirm(`确认删除项目「${p.name}」？\n项目内会话会变为散落会话（不会被删除）。`)) return;
+  if (expandedId.value === p.id) expandedId.value = null;
   try {
     await project.remove(p.id);
   } catch (e) {
     console.error("删除项目失败:", e);
   }
+}
+
+function memberNames(p: Project): string {
+  const names = memberIdsOf(p)
+    .map((id) => agent.getById(id)?.name)
+    .filter(Boolean) as string[];
+  if (names.length === 0) return "未分配成员";
+  return names.join("、");
 }
 
 onMounted(() => {
@@ -169,7 +251,7 @@ onMounted(() => {
 
           <div class="field">
             <label class="field-label">成员 <span class="hint">可选，后续可增删</span></label>
-            <div v-if="agent.list.length === 0" class="members-empty">暂无可用智能体，可稍后在项目详情里添加</div>
+            <div v-if="agent.list.length === 0" class="members-empty">暂无可用智能体，可创建后在项目卡片里添加</div>
             <div v-else class="member-chips">
               <button
                 v-for="a in agent.list"
@@ -197,12 +279,13 @@ onMounted(() => {
 
       <div class="list-divider"></div>
 
-      <!-- 项目卡片 -->
+      <!-- 项目卡片（点击内联展开编辑） -->
       <div
         v-for="p in project.list"
         :key="p.id"
         class="proj-card"
-        @click="router.push(`/projects/${p.id}`)"
+        :class="{ expanded: expandedId === p.id }"
+        @click="toggleEdit(p)"
       >
         <div class="card-top">
           <div class="card-avatar">{{ p.name.charAt(0) }}</div>
@@ -219,7 +302,7 @@ onMounted(() => {
               <span class="card-members">{{ memberNames(p) }}</span>
             </div>
           </div>
-          <svg class="card-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <svg class="card-chevron" :class="{ rotated: expandedId === p.id }" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="9 18 15 12 9 6" />
           </svg>
           <button class="card-delete" title="删除项目" @click.stop="deleteProject(p)">
@@ -227,6 +310,64 @@ onMounted(() => {
               <polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
             </svg>
           </button>
+        </div>
+
+        <!-- 展开态：内联编辑配置（不跳页、不切换对话空间） -->
+        <div v-if="expandedId === p.id" class="expand-panel" @click.stop>
+          <div class="field">
+            <label class="field-label">名称 <span class="req">*</span></label>
+            <input v-model="editName" type="text" class="input" placeholder="项目名称" />
+          </div>
+
+          <div class="field">
+            <label class="field-label">描述</label>
+            <input v-model="editDesc" type="text" class="input" placeholder="一句话说明项目用途（可选）" />
+          </div>
+
+          <div class="field">
+            <label class="field-label">源码目录</label>
+            <div class="workspace-group">
+              <input v-model="editWorkspace" type="text" class="input workspace-input" placeholder="选择项目源码根目录（可选）" readonly @click="pickEditWorkspace" />
+              <button type="button" class="ws-btn" title="选择目录" @click="pickEditWorkspace">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                </svg>
+              </button>
+            </div>
+            <p class="field-hint">绑定后，项目内会话的文件/代码工具切换到此目录；留空则回退 agent 工作区</p>
+          </div>
+
+          <div class="field">
+            <label class="field-label">成员</label>
+            <div v-if="memberIdsOf(p).length === 0 && candidateAgents(p).length === 0" class="members-empty">暂无可用智能体</div>
+            <div v-else class="member-chips">
+              <button
+                v-for="m in memberIdsOf(p)"
+                :key="'m-' + m"
+                type="button"
+                class="member-chip selected"
+                :title="`移除 ${agent.getById(m)?.name ?? ''}`"
+                @click="removeMember(p, m)"
+              >× {{ agent.getById(m)?.name ?? '未知' }}</button>
+              <button
+                v-for="a in candidateAgents(p)"
+                :key="'a-' + a.id"
+                type="button"
+                class="member-chip"
+                :title="`添加 ${a.name}`"
+                @click="addMember(p, a.id)"
+              >+ {{ a.name }}</button>
+            </div>
+          </div>
+
+          <div v-if="editError" class="form-error">{{ editError }}</div>
+
+          <div class="form-actions">
+            <button class="btn-link" @click="cancelEdit">取消</button>
+            <button class="btn btn-primary btn-sm" :disabled="savingEdit" @click="saveEdit(p)">
+              {{ savingEdit ? "保存中" : "保存" }}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -316,6 +457,7 @@ onMounted(() => {
   flex-shrink: 0; color: var(--ip-color-text-disabled);
   transition: transform var(--ip-duration-fast) var(--ip-ease-out);
 }
+.card-chevron.rotated { transform: rotate(90deg); color: var(--ip-primary-600); }
 
 .card-delete {
   position: absolute; top: 10px; right: 12px;
