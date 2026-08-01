@@ -2,7 +2,7 @@
 // ChatMessages.vue — 聊天消息列表（含分页加载）
 import { watch, nextTick, ref, computed, onMounted, onUnmounted } from "vue";
 import { useChatStore } from "../../stores/chat";
-import { bridge } from "../../api/bridge";
+import { formatTime, formatDateLabel } from "../../utils/time";
 import MarkdownRenderer from "./MarkdownRenderer.vue";
 import type { Message, MessageRole } from "../../types";
 
@@ -42,15 +42,6 @@ const thinkingElapsed = computed(() => {
   const m = Math.floor(elapsed / 60);
   const s = elapsed % 60;
   return `${m}m ${s}s`;
-});
-
-const userTimezone = ref("");
-
-onMounted(async () => {
-  try {
-    const prefs = await bridge.preferences.get();
-    userTimezone.value = prefs.timezone || "";
-  } catch { /* 静默忽略 */ }
 });
 
 const toolCallList = computed(() => {
@@ -304,59 +295,12 @@ function groupTokenSum(g: MessageGroup): number {
   return g.items.reduce((s, it) => s + (it.msg.token_count ?? 0), 0);
 }
 
-// ===== 时间分组 =====
-function getDateLabel(dateStr: string): string | null {
-  const d = new Date(dateStr);
-  if (isNaN(d.getTime())) return null;
-
-  const tz = userTimezone.value || undefined;
-  const fmtDate = (dt: Date) => {
-    if (tz) {
-      try {
-        const parts = new Intl.DateTimeFormat("zh-CN", { timeZone: tz, year: "numeric", month: "numeric", day: "numeric" }).formatToParts(dt);
-        const y = parts.find(p => p.type === "year")?.value || "";
-        const m = parts.find(p => p.type === "month")?.value || "";
-        const day = parts.find(p => p.type === "day")?.value || "";
-        return `${y}-${m}-${day}`;
-      } catch { /* 忽略无效时区 */ }
-    }
-    return `${dt.getFullYear()}-${dt.getMonth()}-${dt.getDate()}`;
-  };
-
-  const today = new Date();
-  const yesterday = new Date(today);
-  yesterday.setDate(yesterday.getDate() - 1);
-
-  const dKey = fmtDate(d);
-  if (dKey === fmtDate(today)) return "今天";
-  if (dKey === fmtDate(yesterday)) return "昨天";
-
-  return `${d.getMonth() + 1}月${d.getDate()}日`;
-}
-
+// ===== 时间分组（绝对时间格式化统一走 utils/time） =====
 function isNewDay(idx: number): boolean {
   if (idx === 0) return true;
   const prev = chat.messages[idx - 1].created_at;
   const curr = chat.messages[idx].created_at;
-  return getDateLabel(prev) !== getDateLabel(curr);
-}
-
-function formatTime(createdAt: string): string {
-  const d = new Date(createdAt);
-  if (isNaN(d.getTime())) return "";
-  if (userTimezone.value) {
-    try {
-      return new Intl.DateTimeFormat("zh-CN", {
-        timeZone: userTimezone.value,
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: false
-      }).format(d);
-    } catch { /* 忽略无效时区 */ }
-  }
-  const hh = String(d.getHours()).padStart(2, "0");
-  const mm = String(d.getMinutes()).padStart(2, "0");
-  return `${hh}:${mm}`;
+  return formatDateLabel(prev) !== formatDateLabel(curr);
 }
 
 // ===== finish_reason 展示 =====
@@ -383,7 +327,7 @@ const finishReasonLabels: Record<string, string> = {
     <TransitionGroup v-else name="msg" tag="div" class="messages-container">
       <template v-for="group in messageGroups" :key="group.key">
         <!-- 日期分组标签（基于组首）-->
-        <div v-if="isNewDay(group.firstIdx)" class="date-divider">{{ getDateLabel(chat.messages[group.firstIdx].created_at) }}</div>
+        <div v-if="isNewDay(group.firstIdx)" class="date-divider">{{ formatDateLabel(chat.messages[group.firstIdx].created_at) }}</div>
         <div :class="['message-group', group.role]">
           <!-- ===== 用户消息组（单条，透明壳）===== -->
           <template v-if="group.role === 'user'">
