@@ -111,6 +111,7 @@ export interface Project {
   sort_order: number;
   workspace_path?: string | null;
   theme_color?: string | null;
+  archived: boolean;
   created_at: string;
   updated_at: string;
   agents?: ProjectAgent[];

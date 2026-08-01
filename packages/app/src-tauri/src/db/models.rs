@@ -736,6 +736,9 @@ pub struct ProjectRow {
     pub workspace_path: Option<String>,
     #[serde(default)]
     pub theme_color: Option<String>,
+    /// 是否已归档（软删除）：0 = 活跃，1 = 已归档
+    #[serde(default)]
+    pub archived: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
