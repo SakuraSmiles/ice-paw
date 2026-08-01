@@ -4,6 +4,7 @@ import { ref, computed, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useProjectStore } from "../../stores/project";
+import { formatDate } from "../../utils/time";
 
 const router = useRouter();
 const project = useProjectStore();
@@ -20,8 +21,18 @@ const isScopedToProject = computed(() => project.activeProjectId !== null);
 function selectProject(id: string | null) {
   switcherOpen.value = false;
   project.activeProjectId = id;
-  // 切项目空间：清掉当前激活会话（右侧回到欢迎态，不携带上个空间的会话）+ 回首页对话
-  chat.clearActiveConversation();
+  // 与「打开软件」一致：切到该空间最近一条会话；无会话则留在欢迎态。再回首页对话。
+  const scoped = chat.conversations.filter((c) =>
+    id === null ? !c.project_id : c.project_id === id
+  );
+  if (scoped.length > 0) {
+    const latest = scoped.reduce((a, b) =>
+      new Date(b.updated_at) > new Date(a.updated_at) ? b : a
+    );
+    chat.selectConversation(latest.id);
+  } else {
+    chat.clearActiveConversation();
+  }
   router.push("/");
 }
 
@@ -109,10 +120,20 @@ const filteredConversations = computed(() => {
   });
 });
 
-onMounted(() => {
+onMounted(async () => {
   agent.load();
   project.load();
-  chat.loadConversations();
+  await chat.loadConversations();
+  // 打开软件时恢复上次会话（C）：有会话且未选中 → 选最近活跃的一条，
+  // 并把项目空间同步到该会话所属项目，保证侧栏/切换器与当前会话一致。
+  // 切项目不在此列——切项目保持「欢迎态」（用户已认可的动线）。
+  if (!chat.activeConvId && chat.conversations.length > 0) {
+    const latest = chat.conversations.reduce((a, b) =>
+      new Date(b.updated_at) > new Date(a.updated_at) ? b : a
+    );
+    project.activeProjectId = latest.project_id ?? null;
+    chat.selectConversation(latest.id);
+  }
 });
 
 function selectConv(id: string) {
@@ -168,7 +189,7 @@ function timeAgo(dateStr: string): string {
   if (hours < 24) return `${hours}小时前`;
   const days = Math.floor(hours / 24);
   if (days < 30) return `${days}天前`;
-  return dateStr.slice(0, 10);
+  return formatDate(dateStr);
 }
 </script>
 

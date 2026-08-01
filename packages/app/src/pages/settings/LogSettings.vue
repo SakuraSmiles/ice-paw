@@ -3,6 +3,7 @@
 // 读取磁盘日志文件末尾若干行，按级别高亮展示；支持手动刷新 / 自动刷新。
 import { ref, computed, onMounted, onUnmounted, nextTick } from "vue";
 import { bridge } from "../../api/bridge";
+import { formatTime } from "../../utils/time";
 import Switch from "../../components/common/Switch.vue";
 
 const AUTO_INTERVAL_MS = 5000;
@@ -30,13 +31,13 @@ interface LogEntry {
 const LOG_RE =
   /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?)\s+(TRACE|DEBUG|INFO|WARN|ERROR)\s+(.+?):\s?(.*)$/;
 
-/** RFC3339(UTC) → 本地 HH:MM:SS；解析失败回退原始字符串 */
+/** RFC3339(UTC) → 配置时区下 HH:MM:SS；解析失败回退原始字符串 */
 function toLocalTime(fullTime: string): string {
   // JS Date 仅毫秒精度，截断微秒位避免 Invalid Date
   const norm = fullTime.replace(/\.\d+/, (m) => m.slice(0, 4));
   const d = new Date(norm);
   if (Number.isNaN(d.getTime())) return fullTime;
-  return d.toLocaleTimeString("zh-CN", { hour12: false });
+  return formatTime(norm, true);
 }
 
 function parseLine(line: string): LogEntry {
