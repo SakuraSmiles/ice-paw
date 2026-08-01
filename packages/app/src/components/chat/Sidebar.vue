@@ -20,7 +20,9 @@ const isScopedToProject = computed(() => project.activeProjectId !== null);
 function selectProject(id: string | null) {
   switcherOpen.value = false;
   project.activeProjectId = id;
-  router.push(id ? `/projects/${id}` : "/");
+  // 切项目空间：清掉当前激活会话（右侧回到欢迎态，不携带上个空间的会话）+ 回首页对话
+  chat.clearActiveConversation();
+  router.push("/");
 }
 
 function gotoManage() {

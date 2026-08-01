@@ -628,6 +628,22 @@ export const useChatStore = defineStore("chat", () => {
     draftText.value = "";
   }
 
+  /** 清除当前选中会话（切项目空间时调用）：保留 conversations 列表与草稿，
+   *  只重置激活会话相关状态，让右侧回到「欢迎/新建会话」态，不携带上个空间的会话。*/
+  function clearActiveConversation() {
+    if (sendTimeout) { clearTimeout(sendTimeout); sendTimeout = null; }
+    activeConvId.value = null;
+    messages.value = [];
+    sending.value = false;
+    streamingText.value = "";
+    streamingThinking.value = "";
+    thinkingStartTime.value = null;
+    streamingToolCalls.value = new Map();
+    lastFinishReason.value = null;
+    bgStreams.value = new Map();
+  }
+
+
   /** 当前正在生成的会话 ID 集合（激活的流式会话 + 后台流式会话 bgStreams）。
    *  侧栏据此给会话卡片显示「生成中」状态 + 动画——现在每个会话独立监控，可精确到单卡。*/
   const streamingConvIds = computed(() => {
@@ -646,6 +662,6 @@ export const useChatStore = defineStore("chat", () => {
     loadConversations, selectConversation, loadMoreMessages,
     sendMessage, stopGeneration, respondToAuth,
     deleteConversation, pinConversation,
-    initEvents, createConversation, reset,
+    initEvents, createConversation, clearActiveConversation, reset,
   };
 });
