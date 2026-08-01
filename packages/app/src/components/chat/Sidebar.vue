@@ -5,6 +5,7 @@ import { useRouter } from "vue-router";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useProjectStore } from "../../stores/project";
 import { formatDate } from "../../utils/time";
+import { useNewConversation } from "../../composables/useNewConversation";
 
 const router = useRouter();
 const project = useProjectStore();
@@ -101,7 +102,8 @@ import AgentPicker from "./AgentPicker.vue";
 
 const chat = useChatStore();
 const agent = useAgentStore();
-const showPicker = ref(false);
+// 新建会话逻辑（与欢迎页共用 useNewConversation，保证项目内限成员一致）
+const { showPicker, pickerAgentIds, startNew, onPickAgent } = useNewConversation();
 const searchQuery = ref("");
 
 const scopedConversations = computed(() => {
@@ -145,25 +147,8 @@ function selectConv(id: string) {
 }
 
 function newChat() {
-  if (agent.list.length === 1) {
-    doCreateChat(agent.list[0].id);
-  } else {
-    showPicker.value = true;
-  }
-}
-
-async function doCreateChat(agentId: string) {
-  showPicker.value = false;
-  try {
-    // 项目详情页新建 → 自动归入该项目；其他页面 → 散落会话
-    await chat.createConversation(agentId, scopeProjectId.value);
-    if (router.currentRoute.value.name !== "Home") {
-      router.push("/");
-    }
-  } catch (e) {
-    // 新建会话失败：picker 已关、不跳转，仅记录日志（避免 unhandled rejection + 错误地 router.push）
-    console.error("新建会话失败:", e);
-  }
+  // 委托给 useNewConversation.startNew（项目内限成员、无成员引导、散落全量）
+  startNew();
 }
 
 // 相对时间每分钟自动刷新：nowTick 作为 timeAgo 的响应式依赖，变化时整列重渲染
@@ -343,7 +328,7 @@ function timeAgo(dateStr: string): string {
     </div>
 
     <!-- Agent 选择器弹窗 -->
-    <AgentPicker v-if="showPicker" @select="doCreateChat" @close="showPicker = false" />
+    <AgentPicker v-if="showPicker" :agent-ids="pickerAgentIds" @select="onPickAgent" @close="showPicker = false" />
   </aside>
 </template>
 
