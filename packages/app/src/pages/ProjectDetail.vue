@@ -34,6 +34,8 @@ const candidateAgents = computed(() =>
 );
 
 async function ensureLoaded() {
+  // 进入项目详情 = 切换到该项目空间（侧栏切换器/会话 scope 据此同步）
+  projectStore.activeProjectId = projectId.value;
   await projectStore.load();
   agent.load();
   chat.loadConversations();
