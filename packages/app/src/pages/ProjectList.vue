@@ -4,11 +4,13 @@ import { ref, reactive, onMounted } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useProjectStore } from "../stores/project";
 import { useAgentStore } from "../stores/agent";
+import { useChatStore } from "../stores/chat";
 import { bridge } from "../api/bridge";
 import type { NewProject, Project } from "../types";
 
 const project = useProjectStore();
 const agent = useAgentStore();
+const chat = useChatStore();
 
 // ===== 新建项目 =====
 const isCreating = ref(false);
@@ -167,13 +169,54 @@ async function removeMember(p: Project, agentId: string) {
   }
 }
 
-async function deleteProject(p: Project) {
-  if (!window.confirm(`确认删除项目「${p.name}」？\n项目内会话会变为散落会话（不会被删除）。`)) return;
+// ===== 归档 / 恢复 / 永久删除 =====
+const showArchived = ref(false);
+const permTarget = ref<Project | null>(null);
+const permMode = ref<"loose" | "delete">("loose");
+const permDeleting = ref(false);
+
+function convCountOf(p: Project | null): number {
+  if (!p) return 0;
+  return chat.conversations.filter((c) => c.project_id === p.id).length;
+}
+
+async function archiveProject(p: Project) {
+  if (!window.confirm(`归档项目「${p.name}」？\n项目及其会话会从列表收起，可随时在「已归档」恢复。`)) return;
   if (expandedId.value === p.id) expandedId.value = null;
   try {
-    await project.remove(p.id);
+    await project.archive(p.id);
+    await chat.loadConversations();
   } catch (e) {
-    console.error("删除项目失败:", e);
+    console.error("归档项目失败:", e);
+  }
+}
+
+async function unarchiveProject(p: Project) {
+  try {
+    await project.unarchive(p.id);
+    await chat.loadConversations();
+  } catch (e) {
+    console.error("恢复项目失败:", e);
+  }
+}
+
+function openPermDelete(p: Project) {
+  permTarget.value = p;
+  permMode.value = "loose";
+}
+
+async function confirmPermDelete() {
+  const p = permTarget.value;
+  if (!p || permDeleting.value) return;
+  permDeleting.value = true;
+  try {
+    await project.permanentDelete(p.id, permMode.value === "delete");
+    permTarget.value = null;
+    await chat.loadConversations(); // 会话去向变更（转散落/已删），刷新缓存
+  } catch (e) {
+    console.error("永久删除项目失败:", e);
+  } finally {
+    permDeleting.value = false;
   }
 }
 
@@ -281,7 +324,7 @@ onMounted(() => {
 
       <!-- 项目卡片（点击内联展开编辑） -->
       <div
-        v-for="p in project.list"
+        v-for="p in project.activeProjects"
         :key="p.id"
         class="proj-card"
         :class="{ expanded: expandedId === p.id }"
@@ -305,9 +348,9 @@ onMounted(() => {
           <svg class="card-chevron" :class="{ rotated: expandedId === p.id }" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="9 18 15 12 9 6" />
           </svg>
-          <button class="card-delete" title="删除项目" @click.stop="deleteProject(p)">
+          <button class="card-action" title="归档项目" @click.stop="archiveProject(p)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+              <polyline points="21 8 21 21 3 21 3 8" /><rect x="1" y="3" width="22" height="5" /><line x1="10" y1="12" x2="14" y2="12" />
             </svg>
           </button>
         </div>
@@ -372,8 +415,46 @@ onMounted(() => {
       </div>
 
       <div v-if="project.loading && !project.list.length" class="loading-state">加载中...</div>
-      <div v-else-if="project.list.length === 0" class="empty-hint">还没有项目，点上方「新建项目」创建</div>
+      <div v-else-if="project.activeProjects.length === 0" class="empty-hint">
+        {{ project.archivedProjects.length ? '活跃项目为空（已归档见下方）' : '还没有项目，点上方「新建项目」创建' }}
+      </div>
+
+      <!-- 已归档项目（默认折叠） -->
+      <div v-if="project.archivedProjects.length > 0" class="archive-section">
+        <button class="archive-header" @click="showArchived = !showArchived">
+          <svg class="archive-chev" :class="{ rotated: showArchived }" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6" /></svg>
+          <span class="archive-title">已归档</span>
+          <span class="archive-count">{{ project.archivedProjects.length }}</span>
+        </button>
+        <div v-if="showArchived" class="archive-list">
+          <div v-for="p in project.archivedProjects" :key="p.id" class="archive-row">
+            <span class="archive-name">{{ p.name }}</span>
+            <div class="archive-actions">
+              <button class="archive-btn" @click="unarchiveProject(p)">恢复</button>
+              <button class="archive-btn danger" @click="openPermDelete(p)">永久删除</button>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
+
+    <!-- 永久删除确认弹窗 -->
+    <Transition name="overlay">
+      <div v-if="permTarget" class="perm-overlay" @click.self="permTarget = null">
+        <div class="perm-panel" @click.stop>
+          <h3 class="perm-title">永久删除「{{ permTarget.name }}」？</h3>
+          <p class="perm-desc">此操作不可恢复。该项目内有 {{ convCountOf(permTarget) }} 个会话：</p>
+          <div class="perm-options">
+            <label class="perm-option"><input v-model="permMode" type="radio" value="loose" /> 转为散落会话（保留记录）</label>
+            <label class="perm-option"><input v-model="permMode" type="radio" value="delete" /> 连同这些会话一起删除</label>
+          </div>
+          <div class="perm-actions">
+            <button class="btn-link" @click="permTarget = null">取消</button>
+            <button class="btn btn-danger btn-sm" :disabled="permDeleting" @click="confirmPermDelete">{{ permDeleting ? "删除中" : "确认永久删除" }}</button>
+          </div>
+        </div>
+      </div>
+    </Transition>
   </div>
 </template>
 
@@ -459,15 +540,15 @@ onMounted(() => {
 }
 .card-chevron.rotated { transform: rotate(90deg); color: var(--ip-primary-600); }
 
-.card-delete {
+.card-action {
   position: absolute; top: 10px; right: 12px;
   display: flex; align-items: center; justify-content: center;
   width: 26px; height: 26px; border-radius: var(--ip-radius-md);
   color: var(--ip-color-text-disabled); background: none; border: none; cursor: pointer;
   opacity: 0; transition: all var(--ip-duration-fast) var(--ip-ease-out);
 }
-.proj-card:hover .card-delete { opacity: 1; }
-.card-delete:hover { background: var(--ip-color-bg-tertiary); color: var(--ip-danger-text); }
+.proj-card:hover .card-action { opacity: 1; }
+.card-action:hover { background: var(--ip-color-bg-tertiary); color: var(--ip-primary-600); }
 
 /* ===== 展开面板（新建表单） ===== */
 .expand-panel {
@@ -550,4 +631,83 @@ onMounted(() => {
 /* ===== 状态 ===== */
 .loading-state { padding: 20px; text-align: center; color: var(--ip-color-text-tertiary); font-size: var(--ip-text-body-sm-size); }
 .empty-hint { padding: 16px 12px; text-align: center; font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
+
+/* ===== 已归档区 ===== */
+.archive-section { margin-top: 8px; display: flex; flex-direction: column; gap: 2px; }
+.archive-header {
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 8px;
+  color: var(--ip-color-text-tertiary);
+  background: none; border: none; cursor: pointer; font-family: inherit;
+  font-size: var(--ip-text-caption-size); font-weight: var(--ip-font-weight-semibold);
+  border-radius: var(--ip-radius-md);
+  transition: color var(--ip-duration-fast) var(--ip-ease-out);
+}
+.archive-header:hover { color: var(--ip-color-text-secondary); }
+.archive-chev { transition: transform var(--ip-duration-fast) var(--ip-ease-out); }
+.archive-chev.rotated { transform: rotate(90deg); }
+.archive-count {
+  font-size: 10px; line-height: 16px; padding: 0 5px;
+  color: var(--ip-color-text-tertiary); background: var(--ip-color-bg-tertiary);
+  border-radius: var(--ip-radius-full);
+}
+.archive-list { display: flex; flex-direction: column; gap: 2px; padding-left: 4px; }
+.archive-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px;
+  background-color: var(--ip-color-bg-tertiary);
+  border-radius: var(--ip-radius-md);
+}
+.archive-name {
+  flex: 1; min-width: 0;
+  font-size: var(--ip-text-body-sm-size); color: var(--ip-color-text-secondary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.archive-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.archive-btn {
+  height: 24px; padding: 0 10px;
+  font-size: var(--ip-text-caption-size); font-family: inherit;
+  color: var(--ip-color-text-secondary);
+  background: none; border: 1px solid var(--ip-color-border-default);
+  border-radius: var(--ip-radius-md); cursor: pointer;
+  transition: all var(--ip-duration-fast) var(--ip-ease-out);
+}
+.archive-btn:hover { color: var(--ip-color-text-primary); border-color: var(--ip-primary-400); }
+.archive-btn.danger:hover { color: var(--ip-danger-text); border-color: var(--ip-danger-border); }
+
+/* ===== 永久删除弹窗 ===== */
+.perm-overlay {
+  position: fixed; inset: 0; z-index: var(--ip-z-modal-overlay);
+  background: rgba(0,0,0,0.3);
+  display: flex; align-items: center; justify-content: center;
+}
+.perm-panel {
+  width: 380px; max-width: calc(100vw - 32px);
+  background: var(--ip-color-bg-elevated);
+  border: 1px solid var(--ip-color-border-default);
+  border-radius: var(--ip-radius-xl);
+  box-shadow: var(--ip-shadow-xl);
+  padding: 20px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.perm-title { margin: 0; font-size: var(--ip-text-h3-size); font-weight: var(--ip-font-weight-semibold); color: var(--ip-color-text-primary); }
+.perm-desc { margin: 0; font-size: var(--ip-text-body-sm-size); color: var(--ip-color-text-secondary); }
+.perm-options { display: flex; flex-direction: column; gap: 8px; }
+.perm-option {
+  display: flex; align-items: center; gap: 8px;
+  font-size: var(--ip-text-body-sm-size); color: var(--ip-color-text-primary);
+  cursor: pointer;
+}
+.perm-option input { accent-color: var(--ip-primary-500); }
+.perm-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+
+.btn-danger { background-color: var(--ip-danger-base); color: white; }
+.btn-danger:hover:not(:disabled) { opacity: 0.9; }
+.btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* 弹窗过渡 */
+.overlay-enter-active, .overlay-leave-active { transition: opacity var(--ip-duration-base) var(--ip-ease-out); }
+.overlay-enter-active .perm-panel, .overlay-leave-active .perm-panel { transition: transform var(--ip-duration-base) var(--ip-ease-out), opacity var(--ip-duration-base) var(--ip-ease-out); }
+.overlay-enter-from, .overlay-leave-to { opacity: 0; }
+.overlay-enter-from .perm-panel, .overlay-leave-to .perm-panel { opacity: 0; transform: scale(0.96) translateY(6px); }
 </style>
