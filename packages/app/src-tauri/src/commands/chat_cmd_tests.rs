@@ -8,19 +8,6 @@ mod tests {
     use crate::commands::agent_cmd::{AgentCmd, MockAgentCmd};
     use crate::db::models::AgentRow;
     use crate::harness::chat_state::{CancellationToken, ChatState};
-    use crate::infra::protocol::SendMessageInput;
-
-    /// 构造一个最小 SendMessageInput
-    fn text_input(conv_id: &str, content: &str) -> SendMessageInput {
-        SendMessageInput {
-            conversation_id: conv_id.to_string(),
-            content: Some(content.to_string()),
-            content_blocks: None,
-            tools_enabled: true,
-            model: None,
-        }
-    }
-
     // =========================================================================
     // stop_generation 测试
     // =========================================================================
@@ -125,7 +112,6 @@ mod tests {
 
     #[test]
     fn validate_empty_blocks_falls_back_to_content() {
-        use crate::infra::protocol::ContentBlock;
         // 空 content_blocks 被过滤 → 回退到 content
         let result = validate_send_input(
             Some("fallback".into()),
