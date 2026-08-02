@@ -1,9 +1,41 @@
 //! L2 Loop Engine — 主循环调度（W3.3 + W4.1 + W6.2）
 //!
-//! 职责：编排工具执行循环（tool_round loop）+ 重试循环（retry loop），
+//! ## 架构
+//!
+//! ```text
+//! stream_loop() wrapper
+//!   ├─ BatchWriter::spawn()
+//!   ├─ stream_loop_inner()
+//!   │   ├─ 'tool_round: 工具执行循环（最多 max_tool_rounds 轮）
+//!   │   │   ├─ cancel 检查
+//!   │   │   ├─ list_tool_defs_with_query()   // 动态工具评分
+//!   │   │   ├─ 'retry_loop: 重试循环（最多 MAX_ATTEMPTS 次）
+//!   │   │   │   ├─ provider.stream_chat()
+//!   │   │   │   ├─ stream_consumer::consume_stream()
+//!   │   │   │   ├─ 重试分类: classify_retry_reason()
+//!   │   │   │   └─ 失败 → 指数退避 → continue 'retry_loop
+//!   │   │   ├─ 停滞检测: compute_round_key() + should_terminate_stuck()
+//!   │   │   ├─ 工具执行: execute_tool_round()
+//!   │   │   ├─ 工具结果持久化 + 下轮 assistant 占位
+//!   │   │   └─ Token 预算检查 → break 'tool_round
+//!   │   └─ finalize_success / finalize_error / finalize_cancel
+//!   ├─ BatchWriter::shutdown()
+//!   └─ auth_session.clear()
+//! ```
+//!
+//! ## 职责
+//!
+//! 编排工具执行循环（tool_round loop）+ 重试循环（retry loop），
 //! 调用 `stream_consumer::consume_stream` 消费 LLM 流，
 //! 调用 `tool_executor::execute_tool_round` 执行工具，
 //! 统一 emit Tauri 事件。
+//!
+//! ## 子模块
+//!
+//! - `r#loop::stuck_detect` — 停滞检测（compute_round_key + should_terminate_stuck）
+//! - `r#loop::token_usage` — 多轮 usage 合成（synthesize_usage）
+//!
+//! ## 拆分历史
 //!
 //! 拆分来源：`commands/chat_loop.rs` 的 `stream_loop` 函数
 //! - 流式消费 → `stream_consumer::consume_stream`（emit chat:chunk/thinking/tool-call-*）
