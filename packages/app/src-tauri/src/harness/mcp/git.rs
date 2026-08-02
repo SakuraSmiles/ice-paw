@@ -108,3 +108,49 @@ For write operations (commit/add/push), use run_command instead."
         .to_string())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::SqlitePool;
+
+    async fn test_ctx() -> ToolContext {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        ToolContext {
+            conv_id: "test".into(),
+            agent_id: "test-agent".into(),
+            project_id: None,
+            workspace: None,
+            pool,
+        }
+    }
+
+    #[tokio::test]
+    async fn reject_write_operation() {
+        let tool = GitTool;
+        let ctx = test_ctx().await;
+        let result = tool
+            .execute_with_context(r#"{"operation":"commit"}"#, &ctx)
+            .await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("只读"));
+    }
+
+    #[tokio::test]
+    async fn reject_unknown_operation() {
+        let tool = GitTool;
+        let ctx = test_ctx().await;
+        let result = tool
+            .execute_with_context(r#"{"operation":"push"}"#, &ctx)
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn invalid_json_args_returns_validation_error() {
+        let tool = GitTool;
+        let ctx = test_ctx().await;
+        let result = tool.execute_with_context("not json", &ctx).await;
+        assert!(result.is_err());
+    }
+}

@@ -168,7 +168,10 @@ impl LlmProvider for AnthropicAdapter {
         // 5. 检查 HTTP 状态码；非成功 → 解析 Anthropic 风格错误体
         if !response.status().is_success() {
             let status = response.status();
-            let text = response.text().await.unwrap_or_default();
+            let text = response.text().await.unwrap_or_else(|e| {
+                tracing::warn!(target: "ice_paw.provider", "读取 Anthropic error body 失败: {e}");
+                String::new()
+            });
             // 尝试解析为 `{ type: "error", error: { type, message } }`
             let detail = serde_json::from_str::<ApiErrorBody>(&text)
                 .map(|b| format!("{}: {}", b.error.kind, b.error.message))

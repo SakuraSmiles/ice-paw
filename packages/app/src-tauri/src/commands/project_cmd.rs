@@ -13,13 +13,14 @@ use crate::db::models::{Conversation, NewProject, Project, ProjectRow, UpdatePro
 use crate::db::repo;
 use crate::error::AppResult;
 
-/// 列出全部项目（含 agent 成员）
+/// 列出全部项目（含 agent 成员），两次查询代替逐项目 N+1。
 #[tauri::command]
 pub async fn list_projects(pool: State<'_, SqlitePool>) -> AppResult<Vec<Project>> {
     let rows = repo::project::list(pool.inner()).await?;
+    let agents_map = repo::project::list_all_agents_grouped(pool.inner()).await?;
     let mut result = Vec::with_capacity(rows.len());
     for row in rows {
-        let agents = repo::project::list_agents(pool.inner(), &row.id).await?;
+        let agents = agents_map.get(&row.id).cloned().unwrap_or_default();
         result.push(Project { row, agents });
     }
     Ok(result)

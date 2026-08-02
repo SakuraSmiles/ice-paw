@@ -95,3 +95,32 @@ API endpoints, or web pages. Output is truncated if very long."
         .to_string())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn reject_missing_url() {
+        let tool = WebFetchTool;
+        let result = tool.execute(r#"{}"#).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("参数解析失败") || err.contains("Validation"));
+    }
+
+    #[tokio::test]
+    async fn reject_invalid_json() {
+        let tool = WebFetchTool;
+        let result = tool.execute("not json").await;
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_parameters_schema_has_url() {
+        let tool = WebFetchTool;
+        let params = tool.parameters();
+        let required = params["required"].as_array().unwrap();
+        assert!(required.iter().any(|v| v.as_str() == Some("url")));
+    }
+}

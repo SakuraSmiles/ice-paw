@@ -558,9 +558,6 @@ pub struct NewToolCall {
     pub arguments: String,
 }
 
-#[allow(dead_code)]
-pub type UtcDateTime = DateTime<Utc>;
-
 // =========================================================================
 // TemplateRow（仅 pipeline context 使用）
 // =========================================================================
@@ -787,7 +784,19 @@ pub struct NewProject {
     pub agent_ids: Vec<String>,
 }
 
-/// 更新项目入参（partial update；None = 不改）
+/// 自定义反序列化：把 JSON `null` 映射为 `Some(None)`（=清空），字段缺失由
+/// `#[serde(default)]` 兜底为 `None`（=不改）。这样双层 Option 就能正确表达三种状态。
+fn deserialize_double_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    let inner = Option::<T>::deserialize(deserializer)?;
+    Ok(Some(inner))
+}
+
+/// 更新项目入参（partial update）：普通字段 `None` = 不改；双层 Option 字段
+/// `None`=不改 / `Some(None)`=清空为 null / `Some(Some(v))`=设定。
 #[derive(Debug, Clone, Deserialize)]
 pub struct UpdateProject {
     pub id: String,
@@ -797,10 +806,12 @@ pub struct UpdateProject {
     pub description: Option<String>,
     #[serde(default)]
     pub icon: Option<String>,
-    #[serde(default)]
-    pub workspace_path: Option<String>,
-    #[serde(default)]
-    pub theme_color: Option<String>,
+    /// None=不改 / Some(None)=清空 / Some(Some(v))=设定
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub workspace_path: Option<Option<String>>,
+    /// None=不改 / Some(None)=清空 / Some(Some(v))=设定
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub theme_color: Option<Option<String>>,
 }
 
 
