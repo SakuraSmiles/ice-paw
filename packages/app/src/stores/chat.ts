@@ -1,5 +1,16 @@
 // 聊天状态管理（会话列表 + 当前会话 + 消息 + 流式事件）
 // 侧栏不再按 Agent 过滤，显示全部会话混合列表
+//
+// ## 逻辑分区（667 行，按职责分 7 区）
+// A. 会话列表 + 加载         (~30 行, loadConversations)
+// B. 当前会话切换 + bgStreams(~50 行, selectConversation/activeConversation)
+// C. 消息分页加载           (~50 行, loadMessages/loadMoreMessages/hasMore)
+// D. UI 草稿状态            (~10 行, draftText/pendingImages)
+// E. 流式生成状态机         (~120 行, sendMessage/stopGeneration/streamingText/thinking/bgStreams/timeout)
+// F. 会话 CRUD              (~50 行, create/delete/pin/touch)
+// G. 事件监听注册           (~310 行, initEvents + freezeCurrentAssistant + 9 个 listen 回调)
+//
+// 未来迭代建议：G 区可提取为 useChatEvents composable（需仔细处理 reactive 耦合）
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { listen, emit } from "@tauri-apps/api/event";
