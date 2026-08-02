@@ -2,7 +2,7 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/)，版本号遵循 [SemVer](https://semver.org/)。
 
-## [Unreleased] — 当前开发版
+## [0.1.0-beta.1] — 2026-08-02
 
 ### Added
 
