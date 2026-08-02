@@ -22,8 +22,9 @@ pub const DEFAULT_HISTORY_WINDOW: usize = 20;
 /// 历史消息窗口配置
 ///
 /// 控制从数据库加载多少条历史消息注入到 LLM 上下文。
+/// 仅测试中使用；生产代码已被 `resolve_window` + `agent.max_history_messages` 取代。
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
+#[cfg(test)]
 pub struct HistoryWindowConfig {
     /// 最近的 N 条消息（默认 `DEFAULT_HISTORY_WINDOW`）
     pub recent_n: usize,
@@ -31,6 +32,7 @@ pub struct HistoryWindowConfig {
     pub include_summary: bool,
 }
 
+#[cfg(test)]
 impl Default for HistoryWindowConfig {
     fn default() -> Self {
         Self {
