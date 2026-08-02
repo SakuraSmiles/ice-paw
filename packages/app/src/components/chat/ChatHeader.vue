@@ -1,3 +1,14 @@
+<!--
+  ChatHeader — 聊天顶部栏：会话标题编辑 + Agent 信息 + 更多菜单
+
+  行为：
+  - 双击标题进入编辑模式（Enter 保存 / Escape 取消）
+  - 更多菜单：置顶/取消置顶、查看信息、删除对话
+  - 显示当前 Agent 名称 + 模型
+
+  Props: 无（通过 chat/agent store 读取）
+  Emits: 无
+-->
 <script setup lang="ts">
 import { ref, computed, nextTick, onMounted, onUnmounted } from "vue";
 import { useChatStore }from "../../stores/chat";

@@ -69,6 +69,56 @@ pnpm tauri dev
 | `pnpm lint:fix`     | ESLint 自动修复                                                       |
 | `pnpm format`       | Prettier 格式化                                                       |
 | `pnpm format:check` | Prettier 检查（不写）                                                 |
+| `pnpm test`         | 运行前端 Vitest 测试                                                  |
+| `pnpm test:watch`   | Vitest watch 模式                                                     |
+
+### Rust 测试与检查
+
+```bash
+# 注意：需要显式传 SODIUM_LIB_DIR（libsodium 预编译库路径）
+cd packages/app/src-tauri
+SODIUM_LIB_DIR="D:/path/to/sodium-prebuilt/libsodium/x64/Release/v143/static" \
+SODIUM_STATIC=true cargo test --lib
+
+# 或 cd 到 src-tauri 目录，Cargo 自动读取 .cargo/config.toml
+cd packages/app/src-tauri
+cargo test --lib
+
+# Clippy
+cargo clippy
+```
+
+> 关于 SODIUM_LIB_DIR 的详细说明见 [cargo check 环境](memory/cargo-check-env.md)。
+
+## 项目结构
+
+```
+ice-paw/
+├── packages/
+│   ├── app/                          # 主应用
+│   │   ├── src/                      # Vue 前端
+│   │   │   ├── api/bridge.ts         # Tauri IPC 统一入口
+│   │   │   ├── components/           # Vue 组件（chat/common/agent/mcp/kb/layout）
+│   │   │   ├── composables/          # 可复用逻辑
+│   │   │   ├── pages/                # 路由页面
+│   │   │   ├── stores/               # Pinia 状态管理
+│   │   │   ├── types/index.ts        # TypeScript 类型定义
+│   │   │   └── utils/time.ts         # 时间工具
+│   │   └── src-tauri/                # Rust 后端
+│   │       └── src/
+│   │           ├── commands/          # Tauri Command 入口
+│   │           ├── context/           # LLM 上下文装配 Pipeline
+│   │           ├── db/                # 数据库（models/repo/migrations）
+│   │           ├── harness/           # 核心运行时（provider/loop/mcp/kb）
+│   │           └── infra/             # 基础设施（protocol/cancel）
+│   └── ui/                           # 共享 UI 样式
+├── docs/
+│   └── architecture.md               # 系统架构文档
+├── memory/                            # 项目记忆与计划
+└── pnpm-workspace.yaml
+```
+
+> 详细架构见 [docs/architecture.md](docs/architecture.md)
 
 ## 数据存放位置
 

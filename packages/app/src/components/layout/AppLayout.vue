@@ -1,5 +1,5 @@
+<!-- AppLayout — 应用主布局：左侧 Sidebar + 右侧 router-view -->
 <script setup lang="ts">
-// AppLayout.vue — 应用主布局：侧栏始终保留，右侧按路由切换
 import Sidebar from "../chat/Sidebar.vue";
 </script>
 

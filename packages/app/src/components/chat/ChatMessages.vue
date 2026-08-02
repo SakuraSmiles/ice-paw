@@ -1,5 +1,16 @@
+<!--
+  ChatMessages — 聊天消息列表（含分页加载、thinking/tool_call 展开、Markdown 渲染）
+
+  行为：
+  - 向下滚动到底部时触发分页加载 (loadMoreMessages)
+  - thinking 块默认折叠，可展开查看推理过程
+  - tool_call 卡片显示工具名+参数，点击展开查看结果
+  - 流式消息自动跟随滚动（用户手动上滚后暂停跟随）
+
+  Props: 无（直接从 chat store 读取）
+  Emits: 无
+-->
 <script setup lang="ts">
-// ChatMessages.vue — 聊天消息列表（含分页加载）
 import { watch, nextTick, ref, computed, onMounted, onUnmounted } from "vue";
 import { useChatStore } from "../../stores/chat";
 import { formatTime, formatDateLabel } from "../../utils/time";
