@@ -56,8 +56,6 @@ use crate::infra::protocol::{ChatMessage, ChatSummaryInjectedPayload, ContentBlo
 /// 不需要修改现有 Stage 的签名。
 #[allow(clippy::struct_excessive_bools)]
 // A3-3 / A3-4 等未来 Stage 会消费 `pool` / `cache_prompt`；现阶段
-// 保留为 pub 但通过测试侧访问，故允许 dead_code 提示。
-#[allow(dead_code)]
 pub struct PipelineContext {
     // ---- 输入（由调用者填充，运行期只读） ----
     /// 数据库连接池（供需要读 DB 的 Stage 使用，如 TemplateStage）
@@ -245,23 +243,13 @@ impl PipelineRunner {
     }
 
     /// 已注册的 Stage 数量（测试 / 调试用）
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.stages.len()
     }
-
-    /// 是否为空 Stage 列表
-    #[allow(dead_code)]
-    pub fn is_empty(&self) -> bool {
-        self.stages.is_empty()
-    }
 }
 
-// =========================================================================
-// AssembledContext + assemble_context（向后兼容入口）
-// =========================================================================
-
-/// `assemble_context` 的返回结构
+/// `PipelineRunner` 产出的上下文组装结果
 ///
 /// - `messages`：可直接喂给 `provider.stream_chat(messages, ...)` 的完整上下文
 ///   （含 system / 历史 / 当前 user）
@@ -270,53 +258,4 @@ impl PipelineRunner {
 pub(crate) struct AssembledContext {
     pub messages: Vec<ChatMessage>,
     pub user_blocks: Vec<ContentBlock>,
-}
-
-/// 组装 LLM 调用上下文（向后兼容入口，内部走 `PipelineRunner`）
-///
-/// # Pipeline 流程
-///
-/// 1. **模板查询 + 渲染**（[`TemplateStage`]，副作用：只读 SELECT）
-/// 2. **OS 上下文构建**（[`OsContextStage`]）
-/// 3. **system prompt 构造**（[`SystemPromptStage`]，四级优先）
-/// 4. **历史消息转换**（[`HistoryStage`]）
-/// 5. **滚动摘要**（[`MemoryStage`]，M1.5 真实逻辑；M1.4 占位）
-/// 6. **最终拼装**（[`FinalAssembleStage`]，含图片重排 + content blocks 组装）
-///
-/// # M1.4 变更
-/// - 移除 `tool_registry` 参数：Pipeline 不再做工具裁剪
-/// - `current_user_query` / `tool_call_history` 仍保留在 PipelineContext
-///   中，供 `MemoryStage` / 未来 Stage 消费；当前 loop_engine 也通过
-///   `PipelineContext` 的副本间接获取这两字段（实际是 chat_cmd 直接传入）
-#[allow(clippy::too_many_arguments, dead_code)]
-pub(crate) async fn assemble_context(
-    pool: &SqlitePool,
-    agent: &AgentRow,
-    template_input: Option<&TemplateInput>,
-    history: &[MessageRow],
-    final_blocks: Vec<ContentBlock>,
-    tools_enabled: bool,
-    current_user_query: Option<String>,
-    tool_call_history: Vec<String>,
-) -> AppResult<AssembledContext> {
-    let mut ctx = PipelineContext::new(
-        pool.clone(),
-        agent.clone(),
-        template_input.cloned(),
-        history.to_vec(),
-        final_blocks,
-        tools_enabled,
-        current_user_query,
-        tool_call_history,
-        crate::context::token::ContextBudget::default(),
-        String::new(),                   // conversation_id (assemble_context 不需要)
-        CancellationToken::new(),        // cancel_token
-    );
-    PipelineRunner::default_pipeline(pool, None)
-        .run(&mut ctx)
-        .await?;
-    Ok(AssembledContext {
-        messages: ctx.messages,
-        user_blocks: ctx.user_blocks,
-    })
 }

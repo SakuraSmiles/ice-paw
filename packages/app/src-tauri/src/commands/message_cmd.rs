@@ -116,11 +116,3 @@ pub async fn create_message(
     Ok(Message::from(row))
 }
 
-/// 统计某会话的消息总数（P2 可选接口，初版不挂 Tauri handler，前端暂未调用）。
-#[allow(dead_code)]
-pub async fn count_messages(
-    state: State<'_, SqlitePool>,
-    conversation_id: String,
-) -> AppResult<i64> {
-    repo::message::count_by_conversation(state.inner(), &conversation_id).await
-}

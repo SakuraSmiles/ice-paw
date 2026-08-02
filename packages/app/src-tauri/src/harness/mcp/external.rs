@@ -159,7 +159,8 @@ impl ExternalMcpServer {
             jsonrpc: "2.0".into(),
             id: "init-1".to_string(),
             method: "initialize".into(),
-            params: Some(serde_json::to_value(init_params).unwrap()),
+            params: Some(serde_json::to_value(init_params)
+                .expect("McpInitializeParams 序列化不应失败")),
         };
 
         // 注册 oneshot
@@ -246,7 +247,8 @@ impl ExternalMcpServer {
             jsonrpc: "2.0".into(),
             id: req_id.clone(),
             method: "tools/call".into(),
-            params: Some(serde_json::to_value(params).unwrap()),
+            params: Some(serde_json::to_value(params)
+                .expect("McpCallToolParams 序列化不应失败")),
         };
 
         let resp = self.send_request(&req, &req_id).await?;

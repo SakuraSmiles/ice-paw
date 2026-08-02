@@ -62,3 +62,26 @@ system prompt, tool limits, etc. Takes no arguments."
         .to_string())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn execute_without_context_returns_error() {
+        let tool = ReadAgentConfigTool;
+        let result = tool.execute("{}").await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("execute_with_context"));
+    }
+
+    #[test]
+    fn has_correct_name_and_auth_level() {
+        let tool = ReadAgentConfigTool;
+        assert_eq!(tool.name(), "read_agent_config");
+        assert!(matches!(
+            tool.authorization_level(),
+            AuthorizationLevel::Always
+        ));
+    }
+}

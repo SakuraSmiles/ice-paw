@@ -465,7 +465,7 @@ async fn pipeline_runner_executes_stages_in_order() {
         }),
     ]);
     assert_eq!(runner.len(), 3);
-    assert!(!runner.is_empty());
+    assert!(runner.len() > 0);
 
     let mut ctx = make_ctx(pool, make_agent(), None, vec![], vec![], false);
     runner.run(&mut ctx).await.unwrap();

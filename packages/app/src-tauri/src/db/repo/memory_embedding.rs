@@ -124,7 +124,6 @@ pub async fn insert_embedding(
 /// 删除某 agent 的全部 embedding 记录（清空记忆）
 ///
 /// @returns 实际删除的行数（用于日志 / 调试）
-#[allow(dead_code)]
 pub async fn delete_embeddings_for_agent(
     pool: &SqlitePool,
     agent_id: &str,
@@ -138,7 +137,7 @@ pub async fn delete_embeddings_for_agent(
 }
 
 /// 统计某 agent 的 embedding 记录数
-#[allow(dead_code)]
+#[cfg(test)]
 pub async fn count_embeddings_for_agent(
     pool: &SqlitePool,
     agent_id: &str,

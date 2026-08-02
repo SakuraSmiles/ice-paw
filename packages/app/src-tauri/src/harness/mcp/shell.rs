@@ -135,3 +135,77 @@ read exit_code and output to decide next steps."
         .to_string())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::SqlitePool;
+
+    async fn test_ctx() -> ToolContext {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        ToolContext {
+            conv_id: "test".into(),
+            agent_id: "test-agent".into(),
+            project_id: None,
+            workspace: None,
+            pool,
+        }
+    }
+
+    #[tokio::test]
+    async fn parse_valid_args() {
+        let tool = RunCommandTool;
+        let ctx = test_ctx().await;
+        let result = tool
+            .execute_with_context(
+                r#"{"command":"echo hello","timeout_secs":5}"#,
+                &ctx,
+            )
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(v["command"], "echo hello");
+        assert_eq!(v["exit_code"], 0);
+        assert!(v["output"].as_str().unwrap().contains("hello"));
+    }
+
+    #[tokio::test]
+    async fn non_zero_exit_code() {
+        let tool = RunCommandTool;
+        let ctx = test_ctx().await;
+        let result = tool
+            .execute_with_context(
+                // 跨平台：用 exit 1 确保非零退出码
+                if cfg!(windows) {
+                    r#"{"command":"cmd /c exit 1","timeout_secs":5}"#
+                } else {
+                    r#"{"command":"sh -c 'exit 1'","timeout_secs":5}"#
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(v["exit_code"], 1);
+    }
+
+    #[tokio::test]
+    async fn invalid_json_args_returns_validation_error() {
+        let tool = RunCommandTool;
+        let ctx = test_ctx().await;
+        let result = tool.execute_with_context("not json", &ctx).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("参数解析失败") || err.contains("Validation"));
+    }
+
+    #[tokio::test]
+    async fn missing_command_field_returns_error() {
+        let tool = RunCommandTool;
+        let ctx = test_ctx().await;
+        let result = tool
+            .execute_with_context(r#"{"timeout_secs":5}"#, &ctx)
+            .await;
+        assert!(result.is_err());
+    }
+}

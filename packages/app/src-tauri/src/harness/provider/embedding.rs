@@ -70,7 +70,6 @@ use crate::error::{AppError, AppResult};
 /// - HTTP / 网络错误 → `AppError::Llm`
 /// - API Key 无效 → `AppError::ProviderNotConfigured`
 /// - 当前 provider 不支持 embedding（如 anthropic）→ `AppError::Validation`
-#[allow(dead_code)]
 #[async_trait]
 pub trait EmbeddingBackend: Send + Sync {
     /// 把 `texts` 批量转成 embedding 向量
@@ -326,7 +325,10 @@ impl EmbeddingBackend for OpenAiEmbeddingBackend {
         let status = response.status();
         if !status.is_success() {
             let code = status.as_u16();
-            let text = response.text().await.unwrap_or_default();
+            let text = response.text().await.unwrap_or_else(|e| {
+                tracing::warn!(target: "ice_paw.provider", "读取 embedding error body 失败: {e}");
+                String::new()
+            });
             // 401/403 → ProviderNotConfigured（API Key 无效）
             if code == 401 || code == 403 {
                 return Err(AppError::ProviderNotConfigured(self.model.clone()));

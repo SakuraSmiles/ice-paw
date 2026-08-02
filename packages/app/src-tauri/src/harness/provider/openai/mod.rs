@@ -206,7 +206,10 @@ impl LlmProvider for OpenAiAdapter {
         // 检查 HTTP 状态码
         if !response.status().is_success() {
             let status = response.status();
-            let text = response.text().await.unwrap_or_default();
+            let text = response.text().await.unwrap_or_else(|e| {
+                tracing::warn!(target: "ice_paw.provider", "读取 OpenAI error body 失败: {e}");
+                String::new()
+            });
             return Err(AppError::Llm(format!(
                 "LLM 返回 HTTP {}: {}",
                 status,
