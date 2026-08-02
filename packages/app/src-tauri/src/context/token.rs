@@ -10,7 +10,6 @@
 use crate::infra::protocol::ChatMessage;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // 将在 M1.2 后半集成时使用
 pub struct ContextBudget {
     /// 模型最大输入 token 数
     pub max_input_tokens: usize,
@@ -34,7 +33,6 @@ impl Default for ContextBudget {
 }
 
 /// Token 估算：英文 1 token ≈ 4 chars，CJK 1 token/char
-#[allow(dead_code)] // 将在 M1.2 后半集成时使用
 pub fn estimate_tokens(text: &str) -> usize {
     let mut cjk = 0usize;
     let mut other = 0usize;

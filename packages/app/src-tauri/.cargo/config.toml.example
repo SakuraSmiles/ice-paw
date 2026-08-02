@@ -1,0 +1,13 @@
+# 复制为 config.toml 并填写你的本地 sodium 预编译库路径
+# Copy to config.toml and fill in your local sodium prebuilt path.
+#
+# 预编译 libsodium 放在 sodium-prebuilt/（gitignored）。
+# 若只需要 cargo check（不链接），从项目根显式传 SODIUM_LIB_DIR 环境变量即可：
+#   SODIUM_LIB_DIR="D:/path/to/sodium-prebuilt/.../static" SODIUM_STATIC=true cargo check
+
+[target.x86_64-unknown-linux-gnu]
+linker = "gcc"
+
+[env]
+SODIUM_LIB_DIR = "D:/your/path/to/sodium-prebuilt/libsodium/x64/Release/v143/static"
+SODIUM_STATIC = "true"

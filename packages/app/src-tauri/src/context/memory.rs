@@ -52,7 +52,6 @@ use crate::infra::protocol::{ChatMessage, ChatSummaryInjectedPayload};
 /// - 调用方（`MemoryStage`）传入 `&CancellationToken`，provider 在每次
 ///   LLM chunk / 内部循环 yield 时检查 `cancel.is_cancelled()`
 /// - 已取消时 provider 应立刻返回 `AppError::Cancelled`
-#[allow(dead_code)]
 #[async_trait]
 pub trait SummaryProvider: Send + Sync {
     /// 把 `messages` 压缩成短文本摘要
@@ -115,11 +114,11 @@ pub trait MemoryBackend: Send + Sync {
 }
 
 /// 内存后端占位实现
-#[allow(dead_code)]
+#[cfg(test)]
 #[derive(Debug, Default, Clone, Copy)]
 pub struct InMemoryBackend;
 
-#[allow(dead_code)]
+#[cfg(test)]
 #[async_trait]
 impl MemoryBackend for InMemoryBackend {}
 
@@ -146,11 +145,6 @@ impl MemoryStage {
         Self { summary_provider }
     }
 
-    /// 获取内部 SummaryProvider 的引用（测试 / 调试用）
-    #[allow(dead_code)]
-    pub(crate) fn provider(&self) -> &dyn SummaryProvider {
-        &*self.summary_provider
-    }
 }
 
 #[async_trait]

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // Combobox.vue — 可选可输的下拉组件
 // 设计：输入框 + 过滤下拉列表，支持自由输入
-import { ref, computed } from "vue";
+import { ref, computed, watch, onUnmounted } from "vue";
 
 const props = withDefaults(defineProps<{
   modelValue: string;
@@ -20,9 +20,16 @@ const emit = defineEmits<{
 const input = ref<HTMLInputElement | null>(null);
 const open = ref(false);
 const filter = ref("");
+let blurTimer: ReturnType<typeof setTimeout> | null = null;
 
 // 当前输入框展示的值（受控）
 const displayValue = ref(props.modelValue);
+// 跟踪外部 modelValue 变化（父组件可能绕过 Combobox 修改值）
+// 同步显示值并重置过滤器，避免下拉菜单基于过时 filter 显示错误选项集
+watch(() => props.modelValue, (v) => {
+  displayValue.value = v;
+  filter.value = "";
+});
 
 // 过滤后的选项
 const filteredOptions = computed(() => {
@@ -40,13 +47,15 @@ function onInput(e: Event) {
 }
 
 function onFocus() {
+  // 清除上一次失焦的延迟关闭定时器，避免重新聚焦后被过时定时器关闭下拉
+  if (blurTimer) { clearTimeout(blurTimer); blurTimer = null; }
   filter.value = "";
   open.value = true;
 }
 
 function onBlur() {
   // 延迟关闭，让点击 option 的事件先触发
-  setTimeout(() => { open.value = false; }, 150);
+  blurTimer = setTimeout(() => { open.value = false; }, 150);
 }
 
 function selectOption(opt: string) {
@@ -77,6 +86,11 @@ function handleKeydown(e: KeyboardEvent) {
     e.preventDefault();
   }
 }
+
+// 组件卸载时清除待处理的延迟关闭定时器
+onUnmounted(() => {
+  if (blurTimer) { clearTimeout(blurTimer); blurTimer = null; }
+});
 </script>
 
 <template>

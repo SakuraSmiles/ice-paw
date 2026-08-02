@@ -69,7 +69,7 @@ pub fn resolve_window(agent_max: Option<i32>) -> usize {
 ///   的正确层级。
 /// - 当调用方传 `None`（典型场景：未走 PipelineRunner 的内部调用）
 ///   时保持向后兼容，不过滤。
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn load_history(history: &[MessageRow]) -> Vec<ChatMessage> {
     load_history_with_window(history, None)
 }

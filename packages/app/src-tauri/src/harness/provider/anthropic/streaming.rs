@@ -395,10 +395,10 @@ mod tests {
     /// message_start → content_block_start → ping → 3 个 delta → content_block_stop
     /// → message_delta → message_stop
     ///
-    /// 用一个 mpsc 通道模拟"tx"，手写一份简化版的解析逻辑来验证解析正确性。
-    #[test]
-    fn sse_parse_full_flow_synthetic() {
-        // 构造原始 SSE 字节流
+    /// 调用真实 `parse_sse_stream`（而非手写简化版解析器），验证完整 SSE → ChatDelta
+    /// 的端到端转换正确性，避免"虚假绿灯"。
+    #[tokio::test]
+    async fn sse_parse_full_flow_synthetic() {
         let raw = "\
 event: message_start\n\
 data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_01\"}}\n\
@@ -428,105 +428,32 @@ event: message_stop\n\
 data: {\"type\":\"message_stop\"}\n\
 \n";
 
-        // 用一个 mpsc 通道模拟"tx"，手写一份简化版的解析逻辑来验证解析正确性
+        let bytes = Bytes::from(raw);
+        let stream = futures::stream::iter(vec![Ok::<Bytes, reqwest::Error>(bytes)]);
+
         let (tx, mut rx) = mpsc::channel::<AppResult<ChatDelta>>(64);
         let cancel = CancellationToken::new();
 
-        let mut buffer = String::new();
-        buffer.push_str(raw);
-
-        let mut last_stop_reason: Option<String> = None;
-        let mut events_processed: Vec<String> = Vec::new();
-
-        while let Some(pos) = buffer.find("\n\n") {
-            let event_block = buffer[..pos].to_string();
-            buffer = buffer[pos + 2..].to_string();
-
-            let mut event_type = String::new();
-            let mut data_buf = String::new();
-            for line in event_block.split('\n') {
-                let line = line.trim_end_matches('\r');
-                if let Some(v) = line.strip_prefix("event: ") {
-                    event_type = v.to_string();
-                } else if let Some(v) = line.strip_prefix("data: ") {
-                    if !data_buf.is_empty() {
-                        data_buf.push('\n');
-                    }
-                    data_buf.push_str(v);
-                }
-            }
-            if data_buf.is_empty() {
-                continue;
-            }
-            events_processed.push(event_type.clone());
-
-            match event_type.as_str() {
-                "content_block_delta" => {
-                    #[derive(Deserialize)]
-                    struct D {
-                        delta: D2,
-                    }
-                    #[derive(Deserialize)]
-                    struct D2 {
-                        text: Option<String>,
-                    }
-                    if let Ok(p) = serde_json::from_str::<D>(&data_buf) {
-                        if let Some(t) = p.delta.text {
-                            if !t.is_empty() {
-                                let _ = tx.try_send(Ok(ChatDelta::Delta { content: t }));
-                            }
-                        }
-                    }
-                }
-                "message_delta" => {
-                    #[derive(Deserialize)]
-                    struct D {
-                        delta: D2,
-                    }
-                    #[derive(Deserialize)]
-                    struct D2 {
-                        stop_reason: Option<String>,
-                    }
-                    if let Ok(p) = serde_json::from_str::<D>(&data_buf) {
-                        if let Some(sr) = p.delta.stop_reason {
-                            last_stop_reason = Some(sr);
-                        }
-                    }
-                }
-                "message_stop" => {
-                    let fr = last_stop_reason.take().or_else(|| Some("stop".into()));
-                    let _ = tx.try_send(Ok(ChatDelta::Done { finish_reason: fr }));
-                    break;
-                }
-                _ => {}
-            }
-        }
-
-        // 关闭 tx 让 rx 循环可以退出（同步 try_send 已经把所有内容塞进去）
-        drop(tx);
+        // 调用真实 parse_sse_stream（内部 spawn，通过 mpsc 产出结果）
+        parse_sse_stream(stream, tx, cancel.clone());
 
         // 收集结果
         let mut deltas: Vec<String> = Vec::new();
         let mut done: Option<Option<String>> = None;
-        // 同步通道已经在循环里发完，直接 drain
-        while let Ok(item) = rx.try_recv() {
+        while let Some(item) = rx.recv().await {
             match item {
                 Ok(ChatDelta::Delta { content }) => deltas.push(content),
                 Ok(ChatDelta::Done { finish_reason }) => {
                     done = Some(finish_reason);
                     break;
                 }
-                Ok(_) => { /* 其他变体在测试中忽略 */ }
+                Ok(_) => { /* text_delta 以外的 delta 类型忽略 */ }
                 Err(_) => panic!("不应出现错误"),
             }
         }
 
         assert_eq!(deltas, vec!["你", "好", "！"]);
         assert_eq!(done, Some(Some("end_turn".into())));
-        assert!(events_processed.contains(&"message_start".to_string()));
-        assert!(events_processed.contains(&"ping".to_string()));
         assert!(!cancel.is_cancelled());
-
-        let _ = cancel; // 抑制未使用警告
     }
 }

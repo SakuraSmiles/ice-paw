@@ -21,7 +21,7 @@ const isScopedToProject = computed(() => project.activeProjectId !== null);
 
 function selectProject(id: string | null) {
   switcherOpen.value = false;
-  project.activeProjectId = id;
+  project.setActiveProject(id);
   // 与「打开软件」一致：切到该空间最近一条会话；无会话则留在欢迎态。再回首页对话。
   const scoped = chat.conversations.filter((c) =>
     id === null ? !c.project_id : c.project_id === id
@@ -137,7 +137,7 @@ onMounted(async () => {
       const latest = valid.reduce((a, b) =>
         new Date(b.updated_at) > new Date(a.updated_at) ? b : a
       );
-      project.activeProjectId = latest.project_id ?? null;
+      project.setActiveProject(latest.project_id ?? null);
       chat.selectConversation(latest.id);
     }
   }
