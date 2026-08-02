@@ -1,5 +1,19 @@
+<!--
+  GeneralSettings — 通用设置页（937 行）
+
+  逻辑分区（共享 prefs ref）：
+  A. 加载/保存/重置      (~50 行)
+  B. 主题 + 字体         (~60 行)
+  C. 语言                (~30 行)
+  D. 时区                (~200 行, 含 Intl 时区列表+搜索)
+  E. 快捷键              (~100 行, 含录制模式)
+  F. 自动滚动+时间戳     (~30 行)
+  G. 工作区路径          (~80 行, 含 dialog 选择)
+  H. 数据目录            (~40 行)
+
+  未来迭代建议：D/E/G 区可提取为独立子组件（需处理 prefs ref 共享）。
+-->
 <script setup lang="ts">
-// GeneralSettings.vue — 通用设置
 import { ref, computed, onMounted, onUnmounted } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
 import { bridge } from "../../api/bridge";
