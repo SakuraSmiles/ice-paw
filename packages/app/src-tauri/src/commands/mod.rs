@@ -6,6 +6,8 @@
 
 pub mod agent_cmd;
 pub mod chat_cmd;
+#[cfg(test)]
+mod chat_cmd_tests;
 pub mod conversation_cmd;
 pub mod kb_cmd;
 pub mod log_cmd;
