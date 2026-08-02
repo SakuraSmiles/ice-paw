@@ -15,6 +15,7 @@ pub mod chat_state;
 pub mod cleanup;
 pub mod error_mapping;
 pub mod kb;
+pub mod r#loop;
 pub mod loop_engine;
 pub mod mcp;
 pub mod observable;
