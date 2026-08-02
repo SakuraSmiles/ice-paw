@@ -28,7 +28,6 @@ pub mod error;
 pub mod harness;
 pub mod infra;
 pub mod logging;
-pub mod r#loop;
 
 use std::sync::Arc;
 

@@ -26,8 +26,14 @@ dist-ssr
 # Rust / Tauri
 target/
 
-# Machine-specific Cargo config（含本地绝对路径，如 SODIUM_LIB_DIR）
+# Machine-specific config（含本地绝对路径）
 .cargo/config.toml
+.claude/settings.json
+start-dev.cmd
+
+# Demo seed scripts（含本地路径，仅供个人开发使用）
+seed_demo.mjs
+seed_demo.sql
 
 # Native binaries (libsodium)
 sodium-prebuilt/
