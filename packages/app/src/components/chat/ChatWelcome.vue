@@ -1,7 +1,15 @@
+<!--
+  ChatWelcome — 无活跃会话时的欢迎/空态界面
+
+  行为：
+  - 委托 useNewConversation() 处理「新建对话」入口
+  - 按当前空间（项目/散落）做上下文化引导
+  - 取代早期误导性的空输入框
+
+  Props: 无
+  Emits: 无
+-->
 <script setup lang="ts">
-// ChatWelcome.vue — 无选中会话时的欢迎/空态
-// 取代原先「看着能用、其实不能用」的空输入框：给一个明确的「新建对话」入口，
-// 并按当前空间（项目 / 散落）做上下文化引导。新建逻辑与侧栏共用 useNewConversation。
 import { computed } from "vue";
 import { useChatStore } from "../../stores/chat";
 import { useProjectStore } from "../../stores/project";

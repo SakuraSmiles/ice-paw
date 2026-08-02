@@ -1,5 +1,5 @@
+<!-- AgentPicker — 选择 Agent 弹窗：项目成员优先、关闭条件 -->
 <script setup lang="ts">
-// AgentPicker.vue — 选择 Agent 弹窗
 import { computed } from "vue";
 import { useAgentStore } from "../../stores/agent";
 

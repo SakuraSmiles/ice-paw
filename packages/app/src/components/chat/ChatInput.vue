@@ -1,5 +1,16 @@
+<!--
+  ChatInput — 聊天输入框 + 图片粘贴上传 + 发送/停止按钮
+
+  行为：
+  - Enter 发送，Shift+Enter 换行
+  - Ctrl+V 粘贴图片自动转为 base64 ContentBlock
+  - 流式生成中按钮切换为「停止」+ 动画指示器
+  - draftText 自动保存（切换会话不丢未发送内容）
+
+  Props: 无（通过 chat store 读写）
+  Emits: 无
+-->
 <script setup lang="ts">
-// ChatInput.vue — 聊天输入框 + 图片上传 + 停止按钮
 import { computed, watch, nextTick, ref } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";

@@ -1,6 +1,10 @@
+<!--
+  MarkdownRenderer — Markdown → HTML 渲染（markdown-it + highlight.js）
+
+  Props: content: string（原始 Markdown 文本）
+  Emits: 无
+-->
 <script setup lang="ts">
-// MarkdownRenderer.vue — Markdown 渲染组件
-//
 // 支持流式渲染：每次 content 变化时增量重解析。
 // markdown-it 单次解析在微秒级，流式场景下完全可以承受全量重渲染。
 // highlight.js 只对完整代码块着色，避免流式中途闪烁。
