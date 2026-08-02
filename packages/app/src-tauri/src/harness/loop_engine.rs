@@ -253,36 +253,8 @@ impl LoopContext {
     }
 }
 
-/// M1.3: 合成最终 usage
-///
-/// `cleanup_after_success_with_blocks` 需要一个 `Option<TokenUsage>`。
-/// 在多轮工具调用场景下，每轮都有自己的 prompt/completion token，
-/// 我们用以下策略合成最终 usage：
-///
-/// - `first_prompt_tokens`：首次出现的 prompt_tokens（整个 prompt 包含所有历史）
-/// - `total_completion_tokens`：所有轮的 completion_tokens 之和
-///
-/// 如果整个流期间 provider 未返回任何 usage，则保留 `None` 让
-/// `cleanup` 函数走 estimate_tokens 兑底路径。
-fn synthesize_usage(
-    first_prompt_tokens: Option<u32>,
-    total_completion_tokens: u32,
-    last_collected: Option<TokenUsage>,
-) -> Option<TokenUsage> {
-    match (first_prompt_tokens, last_collected) {
-        (Some(p), Some(last)) => Some(TokenUsage {
-            prompt_tokens: p,
-            completion_tokens: total_completion_tokens,
-            cached_tokens: last.cached_tokens,
-        }),
-        (Some(p), None) => Some(TokenUsage {
-            prompt_tokens: p,
-            completion_tokens: total_completion_tokens,
-            cached_tokens: 0,
-        }),
-        (None, _) => None,
-    }
-}
+// synthesize_usage 已迁移到 crate::harness::r#loop::token_usage
+use crate::harness::r#loop::token_usage::synthesize_usage;
 
 /// 流式生成内部协程 — 支持指数退避重试 + 工具执行循环
 ///
@@ -320,43 +292,8 @@ pub(crate) async fn stream_loop(ctx: &mut LoopContext, observable: &mut RoundSta
 ///   - 64-bit hasher 碰撞概率 ~1/2^64，足够鲁棒
 ///   - `DefaultHasher` 是 std 自带、无依赖
 ///
-/// 工具签名（而非实例 ID）参与计算是为了让"相同文本但不同工具参数"不计入停滞
-/// （dev1 L1 三级级联 + and-condition 要求）。
-/// 注意：调用方必须在传入前对 Vec 排序，以消除上游 HashMap 迭代顺序不确定性。
-fn compute_round_key(all_text: &str, completed_call_ids: &[String]) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut h = DefaultHasher::new();
-    all_text.hash(&mut h);
-    for id in completed_call_ids {
-        id.hash(&mut h);
-    }
-    h.finish()
-}
-
-/// M2.1: 纯函数形式的停滞判定（便于单元测试）
-///
-/// 输入：本轮进度指纹 + 上一轮指纹 + 当前连续未进展计数 + 阈值
-/// 输出：`(new_counter, should_terminate)` —— 调用方负责把 new_counter 写回
-///
-/// 规则：
-/// - 本轮 hash 与上一轮相同 → `new_counter = stuck_counter + 1`，否则归零
-/// - 当 `new_counter >= threshold` → 触发终止
-pub(crate) fn should_terminate_stuck(
-    round_key: u64,
-    last_round_hash: Option<u64>,
-    stuck_counter: u32,
-    threshold: u32,
-) -> (u32, bool) {
-    let no_progress = Some(round_key) == last_round_hash;
-    let new_counter = if no_progress {
-        stuck_counter.saturating_add(1)
-    } else {
-        0
-    };
-    let should_terminate = new_counter >= threshold;
-    (new_counter, should_terminate)
-}
+// compute_round_key + should_terminate_stuck 已迁移到 crate::harness::r#loop::stuck_detect
+pub(crate) use crate::harness::r#loop::stuck_detect::{compute_round_key, should_terminate_stuck};
 
 /// 流式循环主体（A2-3 后被 `stream_loop` wrapper 包裹）
 ///
