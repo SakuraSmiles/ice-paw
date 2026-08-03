@@ -68,6 +68,11 @@ pub(crate) fn build_os_context(timezone: Option<&str>, agent_workspace: Option<&
     ctx.push_str("如需访问工作目录外的文件，直接使用绝对路径即可，系统会询问用户确认。");
     ctx.push_str("同一会话中对同一路径批准一次后即可持续访问。");
 
+    // 编码指导
+    ctx.push_str("\n\n创建文件请使用 write_file 而非 shell 命令（如 echo）。");
+    ctx.push_str("write_file 写入 UTF-8 编码，确保中文等字符正确存储。");
+    ctx.push_str("read_file 和 run_command 的输出会自动检测编码（UTF-8 → GBK 回退）。");
+
     ctx
 }
 

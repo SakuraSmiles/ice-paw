@@ -106,18 +106,18 @@ read exit_code and output to decide next steps."
         })?
         .map_err(AppError::Io)?;
 
-        // 合并 stdout + stderr
+        // 统一解码 stdout/stderr（UTF-8 → GBK → lossy）
+        let stdout = crate::infra::decode::decode_bytes(&output.stdout);
+        let stderr = crate::infra::decode::decode_bytes(&output.stderr);
         let mut combined = String::new();
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        if !stdout.is_empty() {
-            combined.push_str(&stdout);
+        if !stdout.text.is_empty() {
+            combined.push_str(&stdout.text);
         }
-        if !stderr.is_empty() {
+        if !stderr.text.is_empty() {
             if !combined.is_empty() {
                 combined.push_str("\n[stderr]\n");
             }
-            combined.push_str(&stderr);
+            combined.push_str(&stderr.text);
         }
 
         let truncated = combined.len() > MAX_OUTPUT;
@@ -130,6 +130,7 @@ read exit_code and output to decide next steps."
             "command": parsed.command,
             "exit_code": output.status.code(),
             "output": combined,
+            "encoding": if stdout.encoding == stderr.encoding { stdout.encoding } else { "mixed" },
             "truncated": truncated,
         })
         .to_string())

@@ -15,4 +15,5 @@
 //! 详见 Sprint 计划 W1.2 / W5.6 / M1.4。
 
 pub mod cancel;
+pub mod decode;
 pub mod protocol;

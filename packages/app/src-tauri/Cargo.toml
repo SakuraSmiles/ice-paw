@@ -46,6 +46,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"
 # scopeguard：RAII 守卫，用于 send_message 注册 CancellationToken 后保证任意早返回都注销（防会话卡死）
 scopeguard = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
+# 文件编码检测：读文件和 shell 输出自动识别 GBK 等非 UTF-8 编码
+encoding_rs = "0.8"
 # search_files 工具：正则内容搜索
 regex = "1"
 chrono = { version = "0.4", features = ["serde"] }
