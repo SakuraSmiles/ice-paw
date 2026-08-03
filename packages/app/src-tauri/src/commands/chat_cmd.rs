@@ -208,8 +208,9 @@ pub async fn send_message(
     })?;
 
     // --- 6. spawn 流式协程 ---
-    // 从 Agent extra_params 读取工具调用最大轮数（如未配置则 None，走默认 10）
+    // 从 Agent extra_params 读取工具调用最大轮数 + Token 预算
     let tool_max_rounds = agent.tool_max_rounds();
+    let agent_max_tokens = agent.max_total_tokens();
     // 使用共享的工具授权注册表（与 lib.rs install_listener 实例一致）
     let shared_auth_registry = (*auth_registry).clone();
 
@@ -273,7 +274,7 @@ pub async fn send_message(
         assembled.messages, agent.temperature, agent.max_tokens,
         cancel_token, conv_id, user_msg_id, asst_msg_id, tools_enabled,
         current_user_query, tool_call_history,
-        model_override, Some(effective_model), tool_max_rounds, shared_auth_registry,
+        model_override, Some(effective_model), tool_max_rounds, agent_max_tokens, shared_auth_registry,
         tool_registry,
         conv.agent_id.clone(), conv.project_id.clone(),
     );
@@ -320,6 +321,7 @@ fn spawn_stream_loop(
     model_override: Option<String>,
     asst_model: Option<String>,
     tool_max_rounds: Option<u32>,
+    agent_max_tokens: Option<usize>,
     auth_registry: crate::harness::tool_executor::ToolAuthRegistry,
     tool_registry: McpRegistry,
     agent_id: String,
@@ -329,10 +331,11 @@ fn spawn_stream_loop(
         // tool_registry 由 send_message 组装（global server + per-agent server），直接使用
         // W2.4: maintain observable state across the stream loop
         let mut observable = RoundState::default();
-        // W4.1: 传入 LoopBudget（优先使用 Agent 配置的 tool_max_rounds）
-        let budget = match tool_max_rounds {
-            Some(r) => LoopBudget { max_tool_rounds: r, ..LoopBudget::default() },
-            None => LoopBudget::default(),
+        // W4.1: 传入 LoopBudget（优先使用 Agent 配置）
+        let budget = LoopBudget {
+            max_tool_rounds: tool_max_rounds.unwrap_or(LoopBudget::default().max_tool_rounds),
+            max_total_tokens: agent_max_tokens.unwrap_or(LoopBudget::default().max_total_tokens),
+            ..LoopBudget::default()
         };
         let emit_app = app.clone();
 

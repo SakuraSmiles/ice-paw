@@ -74,9 +74,12 @@ pub struct AgentFileConfig {
     pub extra_params: Option<serde_json::Value>,
     #[serde(default)]
     pub embedding_model: Option<String>,
-    /// 工具调用最大轮数（None = 使用系统默认 10）
+    /// 工具调用最大轮数（None = 使用系统默认 50）
     #[serde(default)]
     pub tool_max_rounds: Option<u32>,
+    /// Token 预算上限（None = 使用系统默认 500_000）
+    #[serde(default)]
+    pub max_total_tokens: Option<usize>,
 }
 
 impl AgentRow {
@@ -84,6 +87,12 @@ impl AgentRow {
     pub fn tool_max_rounds(&self) -> Option<u32> {
         let params: serde_json::Value = serde_json::from_str(&self.extra_params).ok()?;
         params.get("tool_max_rounds").and_then(|v| v.as_u64()).map(|v| v as u32)
+    }
+
+    /// 从 extra_params JSON 中读取 Token 预算上限（None = 使用系统默认）
+    pub fn max_total_tokens(&self) -> Option<usize> {
+        let params: serde_json::Value = serde_json::from_str(&self.extra_params).ok()?;
+        params.get("max_total_tokens").and_then(|v| v.as_u64()).map(|v| v as usize)
     }
 
     /// 若 workspace_path 存在，尝试读取 `<workspace_path>/agent.yaml` 并解析为文件配置。
@@ -115,6 +124,11 @@ impl AgentFileConfig {
                 obj.insert("tool_max_rounds".into(), serde_json::json!(v));
             }
         }
+        if let Some(v) = self.max_total_tokens {
+            if let Some(obj) = agent.extra_params.as_object_mut() {
+                obj.insert("max_total_tokens".into(), serde_json::json!(v));
+            }
+        }
     }
 
     /// 把文件配置合并到 AgentRow 中（供 chat_cmd 内部使用）
@@ -135,11 +149,18 @@ impl AgentFileConfig {
         }
         if let Some(v) = &self.embedding_model { row.embedding_model = Some(v.clone()); }
         if let Some(v) = self.tool_max_rounds {
-            // 合并到 extra_params JSON 中
             let mut params: serde_json::Value = serde_json::from_str(&row.extra_params)
                 .unwrap_or(serde_json::Value::Object(Default::default()));
             if let Some(obj) = params.as_object_mut() {
                 obj.insert("tool_max_rounds".into(), serde_json::json!(v));
+                row.extra_params = serde_json::to_string(&params).unwrap_or_default();
+            }
+        }
+        if let Some(v) = self.max_total_tokens {
+            let mut params: serde_json::Value = serde_json::from_str(&row.extra_params)
+                .unwrap_or(serde_json::Value::Object(Default::default()));
+            if let Some(obj) = params.as_object_mut() {
+                obj.insert("max_total_tokens".into(), serde_json::json!(v));
                 row.extra_params = serde_json::to_string(&params).unwrap_or_default();
             }
         }
