@@ -107,7 +107,7 @@ fn default_base_url(provider: &str) -> String {
         "deepseek" => "https://api.deepseek.com".to_string(),
         "anthropic" => "https://api.anthropic.com".to_string(),
         "minimax" => "https://api.minimaxi.com/anthropic".to_string(),
-        "minimax-cn" => "https://api.minimaxi.cn/anthropic".to_string(),
+        "minimax-cn" => "https://api.minimaxi.com/anthropic".to_string(),
         // 兜底：返回空串让上层报错（调用方应在 agent 配置里写 base_url）
         _ => String::new(),
     }
@@ -167,7 +167,7 @@ mod tests {
         );
         assert_eq!(
             default_base_url("minimax-cn"),
-            "https://api.minimaxi.cn/anthropic"
+            "https://api.minimaxi.com/anthropic"
         );
         // 回归：原有三个不变
         assert_eq!(default_base_url("openai"), "https://api.openai.com");
