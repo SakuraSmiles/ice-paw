@@ -38,6 +38,18 @@ function effectiveTz(): string | undefined {
   return timezone.value || undefined;
 }
 
+/** 将 DB 存储的 UTC 字符串（如 "2026-08-03 02:21:35"）解析为 UTC Date。
+ *  DB 时间不含时区标识，JavaScript 会误当本地时间解析，差 8 小时。
+ *  已有时区后缀的 ISO 字符串直接解析，不做转换。 */
+function parseDbTime(iso: string): Date {
+  // 已是完整 ISO 格式（含 T 或 Z），直接解析
+  if (iso.includes("T") || iso.endsWith("Z")) {
+    return new Date(iso);
+  }
+  // DB 格式 "2026-08-03 02:21:35" → "2026-08-03T02:21:35Z"
+  return new Date(iso + "Z");
+}
+
 /** tz 下的「年-月-日」键，用于今天/昨天比较与跨日分组。 */
 function dateKey(d: Date): string {
   const tz = effectiveTz();
@@ -53,7 +65,7 @@ function dateKey(d: Date): string {
 
 /** HH:MM（seconds=true 时为 HH:MM:SS）—— 消息时间、日志时间。 */
 export function formatTime(iso: string, seconds = false): string {
-  const d = new Date(iso);
+  const d = parseDbTime(iso);
   if (isNaN(d.getTime())) return "";
   const pad = (n: number) => String(n).padStart(2, "0");
   const tz = effectiveTz();
@@ -72,7 +84,7 @@ export function formatTime(iso: string, seconds = false): string {
 
 /** 日期分隔线标签：今天 / 昨天 / M月D日 —— 全部在同一时区下计算。 */
 export function formatDateLabel(iso: string): string | null {
-  const d = new Date(iso);
+  const d = parseDbTime(iso);
   if (isNaN(d.getTime())) return null;
   const now = new Date();
   const yesterday = new Date(now);
@@ -95,7 +107,7 @@ export function formatDateLabel(iso: string): string | null {
 
 /** 紧凑日期 YYYY-M-D（同一时区）—— 侧栏 >30 天的会话回退用，不再截 UTC 字符串。 */
 export function formatDate(iso: string): string {
-  const d = new Date(iso);
+  const d = parseDbTime(iso);
   if (isNaN(d.getTime())) return "";
   return dateKey(d);
 }
