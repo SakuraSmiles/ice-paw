@@ -55,11 +55,13 @@ impl McpServerManager {
 
         let server = Arc::new(server);
 
-        // 获取工具列表并注册
+        // 获取工具列表并注册（加 server name 前缀防同名覆盖）
+        let prefix = format!("{}.", config.name);
         let tools = server.list_tools().await?;
         for tool_def in &tools {
+            let namespaced = format!("{}{}", prefix, tool_def.name);
             let proxy = Arc::new(ExternalToolProxy::new(
-                tool_def.name.clone(),
+                namespaced,
                 tool_def.description.clone(),
                 tool_def.input_schema.clone(),
                 server.clone(),
@@ -70,9 +72,10 @@ impl McpServerManager {
 
         tracing::info!(
             target: "ice_paw.mcp",
-            "MCP Server '{}' 已启动，注册 {} 个工具",
+            "MCP Server '{}' 已启动，注册 {} 个工具（前缀: {}）",
             config.name,
             tools.len(),
+            prefix,
         );
 
         // 保存到活跃服务器列表

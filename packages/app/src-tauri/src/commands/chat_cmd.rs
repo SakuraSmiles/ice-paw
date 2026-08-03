@@ -234,9 +234,10 @@ pub async fn send_message(
                                 None => true,
                             };
                             if allowed {
+                                let namespaced = format!("{}.{}", cfg.name, tool_def.name);
                                 let proxy = Arc::new(
                                     crate::harness::mcp::external::ExternalToolProxy::new(
-                                        tool_def.name.clone(),
+                                        namespaced,
                                         tool_def.description.clone(),
                                         tool_def.input_schema.clone(),
                                         server.clone(),
