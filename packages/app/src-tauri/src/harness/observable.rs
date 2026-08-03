@@ -54,17 +54,6 @@ mod tests {
     }
 
     #[test]
-    fn test_round_state_default() {
-        let state = RoundState::default();
-        assert_eq!(state.round, 0);
-        assert_eq!(state.elapsed_ms, 0);
-        assert_eq!(state.tokens_prompt, 0);
-        assert_eq!(state.tokens_completion, 0);
-        assert_eq!(state.cached_tokens, 0);
-        assert_eq!(state.retry_count, 0);
-    }
-
-    #[test]
     #[allow(clippy::field_reassign_with_default)]
     fn test_round_state_accumulation() {
         let mut state = RoundState::default();

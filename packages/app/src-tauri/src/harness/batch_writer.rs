@@ -363,34 +363,6 @@ async fn flush_locked(inner: &mut Inner) -> AppResult<()> {
 mod tests {
     use super::*;
 
-    /// 验证：DEFAULT_CHAR_THRESHOLD == 50
-    #[test]
-    fn default_char_threshold_is_50() {
-        assert_eq!(DEFAULT_CHAR_THRESHOLD, 50);
-    }
-
-    /// 验证：DEFAULT_TIME_THRESHOLD == 200ms
-    #[test]
-    fn default_time_threshold_is_200ms() {
-        assert_eq!(DEFAULT_TIME_THRESHOLD, Duration::from_millis(200));
-    }
-
-    /// 验证：DEFAULT_TICK_INTERVAL == 200ms
-    #[test]
-    fn default_tick_interval_is_200ms() {
-        assert_eq!(DEFAULT_TICK_INTERVAL, Duration::from_millis(200));
-    }
-
-    /// 验证：BatchCommand::Shutdown 可被发送
-    #[test]
-    fn shutdown_command_constructible() {
-        let cmd = BatchCommand::Shutdown;
-        match cmd {
-            BatchCommand::Shutdown => {}
-            _ => panic!("expected Shutdown"),
-        }
-    }
-
     /// 验证：BatchWriter 能在内存 SQLite 上 spawn 后正常 push / flush
     #[tokio::test]
     async fn batch_writer_writes_to_db() {

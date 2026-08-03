@@ -70,30 +70,6 @@ impl Default for LoopBudget {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_loop_budget_default() {
-        let budget = LoopBudget::default();
-        assert_eq!(budget.max_tool_rounds, 10);
-        assert_eq!(budget.max_attempts, 4);
-        // M2.1: 默认值从 3 改为 5（dev1 评审）
-        assert_eq!(budget.stuck_threshold, 5);
-        assert_eq!(budget.max_total_tokens, 128_000);
-    }
-
-    #[test]
-    fn test_loop_budget_custom() {
-        let budget = LoopBudget {
-            max_tool_rounds: 10,
-            max_attempts: 2,
-            stuck_threshold: 5,
-            max_total_tokens: 100_000,
-        };
-        assert_eq!(budget.max_tool_rounds, 10);
-        assert_eq!(budget.max_attempts, 2);
-        assert_eq!(budget.stuck_threshold, 5);
-        assert_eq!(budget.max_total_tokens, 100_000);
-    }
-
     /// 兼容旧硬编码常量：保证 LoopBudget::default() 与原常量一致
     /// （防止未来误改默认值导致行为变化时无人察觉）
     #[test]
