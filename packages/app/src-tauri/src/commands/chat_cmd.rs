@@ -45,6 +45,8 @@ pub async fn send_message(
     global_registry: State<'_, Arc<McpRegistry>>,
     mcp_manager: State<'_, Arc<McpServerManager>>,
 ) -> AppResult<()> {
+    tracing::info!(target: "ice_paw.chat", "send_message 被调用: conv={} model={:?} tools={}",
+        input.conversation_id, input.model, input.tools_enabled);
     // --- 1. 入参校验：content_blocks 优先，回退到 legacy content ---
     let final_blocks = {
         let blocks = input.content_blocks.clone().filter(|v| !v.is_empty());
@@ -72,8 +74,6 @@ pub async fn send_message(
 
     // --- 2. 取会话 + agent + api_key → 创建 provider ---
     let conv = repo::conversation::get_by_id(pool.inner(), &conv_id).await?;
-    // REQ-XC-010: 通过 AgentCmd trait 获取 agent 元数据 + 凭据
-    // 默认实现走 SqlAgentCmd → repo + crypto；Mock 实现可注入预置数据。
     let agent_with_creds = agent_cmd.get_with_credentials(&conv.agent_id).await?;
     let agent = agent_with_creds.agent;
     let api_key = agent_with_creds.api_key;
