@@ -5,6 +5,7 @@ import AgentForm from "../../components/agent/AgentForm.vue";
 import KbDocumentList from "../../components/kb/KbDocumentList.vue";
 import type { Agent } from "../../types";
 import { bridge } from "../../api/bridge";
+import { useAgentStore } from "../../stores/agent";
 
 const agents = ref<Agent[]>([]);
 const loading = ref(true);
@@ -41,6 +42,8 @@ function onSaved(_agent: Agent) {
   isCreating.value = false;
   expandedEditId.value = null;
   loadAgents();
+  // 同步刷新 Pinia agent store——侧栏/项目选择器等依赖 store 的组件能看到新 agent
+  useAgentStore().load(true);
 }
 
 function onCancel() {
@@ -54,6 +57,7 @@ async function onDelete(agent: Agent) {
     isCreating.value = false;
     expandedEditId.value = null;
     await loadAgents();
+    useAgentStore().load(true);
   } catch (e) {
     console.error("删除 Agent 失败:", e);
   }
