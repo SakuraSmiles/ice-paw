@@ -165,6 +165,8 @@ export const useChatStore = defineStore("chat", () => {
   /** 按消息 ID 持久化思考耗时（切换会话不丢，刷新才丢） */
   const thinkingDurations = ref<Map<string, string>>(new Map());
   const pendingAuthRequest = ref<ToolAuthRequestPayload | null>(null);
+  /** 最近一次发送错误的可见提示（chat:error 携带的用户可读消息） */
+  const lastError = ref<string | null>(null);
   let sendTimeout: ReturnType<typeof setTimeout> | null = null;
 
   /** 后台会话的流式文本快照：切走「正在流式」的会话时把已累积文本存这里，
@@ -193,6 +195,7 @@ export const useChatStore = defineStore("chat", () => {
   async function sendMessage(content: string, contentBlocks?: import("../types").ContentBlock[]) {
     if (!activeConvId.value || sending.value) return;
     sending.value = true;
+    lastError.value = null;
     streamingText.value = "";
     streamingThinking.value = "";
     streamingToolCalls.value = new Map();
@@ -588,6 +591,7 @@ export const useChatStore = defineStore("chat", () => {
       thinkingStartTime.value = null;
       streamingToolCalls.value = new Map();
       lastFinishReason.value = null;
+      lastError.value = e.payload.message || "未知错误";
       // 用 message_id 定位出错的 assistant（多轮工具下不能遍历改所有 assistant）
       const errId = e.payload.message_id;
       messages.value = messages.value.map((msg) => {
@@ -668,7 +672,7 @@ export const useChatStore = defineStore("chat", () => {
     activeConvId, activeConversation,
     messages, msgLoading, hasMore, loadingMore,
     sending, streamingText, draftText, pendingImages, lastFinishReason, currentModel,
-    streamingToolCalls, streamingThinking, thinkingStartTime, thinkingDuration, lastThinkingContent, thinkingDurations, pendingAuthRequest,
+    streamingToolCalls, streamingThinking, thinkingStartTime, thinkingDuration, lastThinkingContent, thinkingDurations, pendingAuthRequest, lastError,
     streamingConvIds,
     loadConversations, selectConversation, loadMoreMessages,
     sendMessage, stopGeneration, respondToAuth,
