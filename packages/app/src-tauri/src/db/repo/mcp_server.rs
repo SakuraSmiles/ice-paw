@@ -162,6 +162,28 @@ fn default_mcp_servers() -> Vec<NewMcpServer> {
             trust_level: TrustLevel::Trusted,
             scope: "per_agent".into(),
         },
+        NewMcpServer {
+            id: "builtin-playwright".into(),
+            name: "浏览器自动化".into(),
+            description: "浏览器操作——截图、填表单、爬取动态页面、自动化测试".into(),
+            command: "npx".into(),
+            args: vec!["-y".into(), "@playwright/mcp".into()],
+            env: Some(serde_json::json!({})),
+            enabled: true,
+            trust_level: TrustLevel::Trusted,
+            scope: "per_agent".into(),
+        },
+        NewMcpServer {
+            id: "builtin-maifady".into(),
+            name: "工程专家团队".into(),
+            description: "30 个工程专家：代码审查、SQL 优化、安全审计、Docker/K8s/React 等".into(),
+            command: "npx".into(),
+            args: vec!["-y".into(), "maifady-mcp".into()],
+            env: Some(serde_json::json!({})),
+            enabled: true,
+            trust_level: TrustLevel::Trusted,
+            scope: "per_agent".into(),
+        },
     ]
 }
 
