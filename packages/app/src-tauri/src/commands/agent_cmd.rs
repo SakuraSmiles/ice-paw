@@ -143,8 +143,10 @@ fn write_default_agent_yaml(
          system_prompt: |\n  {}\n\n\
          temperature: {}\n\
          max_tokens: {}\n\
-         # 工具调用最大轮数（默认 50，安全兜底；正常靠停滞检测和模型自判终止）\n\
-         tool_max_rounds: 50\n",
+         # 工具调用最大轮数（默认 50）\n\
+         tool_max_rounds: 50\n\
+         # Token 预算上限（默认 500k，超过则终止；多轮工具可调大）\n\
+         max_total_tokens: 500000\n",
         default_sp, temperature, max_tokens,
     );
 

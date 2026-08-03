@@ -1029,11 +1029,11 @@ mod tests {
     use super::*;
     use crate::infra::protocol::TokenUsage;
 
-    /// 验证：默认预算（128_000）不会意外触发终止
+    /// 验证：默认预算（500_000）不会意外触发终止
     #[test]
     fn test_budget_not_exceeded_with_default() {
         let budget = LoopBudget::default();
-        assert_eq!(budget.max_total_tokens, 128_000);
+        assert_eq!(budget.max_total_tokens, 500_000);
         // 模拟一个 round 使用了 5000 tokens → 远低于 128_000
         let cumulative_tokens: usize = 5_000;
         let exceeded = budget.max_total_tokens != usize::MAX && cumulative_tokens > budget.max_total_tokens;
