@@ -108,7 +108,10 @@ impl PipelineStage for OsContextStage {
         .await
         .ok()
         .flatten();
-        ctx.os_context = build_os_context(tz.as_deref());
+        ctx.os_context = build_os_context(
+            tz.as_deref(),
+            ctx.agent.workspace_path.as_deref(),
+        );
         Ok(())
     }
 }
