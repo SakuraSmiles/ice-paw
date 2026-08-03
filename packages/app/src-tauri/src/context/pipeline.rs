@@ -80,6 +80,8 @@ pub struct PipelineContext {
     pub conversation_id: String,
     /// M1.5: 取消令牌（MemoryStage 摘要 LLM 调用时需要）
     pub cancel_token: CancellationToken,
+    /// 项目工作目录（None = 散落会话或项目无 workspace）
+    pub project_workspace: Option<String>,
 
     // ---- Stage 1: Template 渲染输出 ----
     pub rendered_system_prompt: Option<String>,
@@ -141,6 +143,7 @@ impl PipelineContext {
             context_budget,
             conversation_id,
             cancel_token,
+            project_workspace: None,
             rendered_system_prompt: None,
             rendered_user_prefix: String::new(),
             os_context: String::new(),

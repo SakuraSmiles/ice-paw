@@ -111,6 +111,7 @@ impl PipelineStage for OsContextStage {
         ctx.os_context = build_os_context(
             tz.as_deref(),
             ctx.agent.workspace_path.as_deref(),
+            ctx.project_workspace.as_deref(),
         );
         Ok(())
     }

@@ -12,7 +12,7 @@
 /// - 操作系统类型 / CPU 架构 / 用户主目录 / 时区 / 当前时间
 /// - Agent 配置目录（KB 和 agent.yaml 所在路径）
 /// - 工作目录外的文件访问说明
-pub(crate) fn build_os_context(timezone: Option<&str>, agent_workspace: Option<&str>) -> String {
+pub(crate) fn build_os_context(timezone: Option<&str>, agent_workspace: Option<&str>, project_workspace: Option<&str>) -> String {
     let mut parts: Vec<String> = Vec::new();
 
     // OS 类型
@@ -49,6 +49,10 @@ pub(crate) fn build_os_context(timezone: Option<&str>, agent_workspace: Option<&
     let now = chrono::Utc::now();
     parts.push(format!("当前时间: {}", now.format("%Y-%m-%d %H:%M:%S UTC")));
 
+    // 项目工作目录（文件工具默认操作路径，优先于 Agent 目录）
+    if let Some(ws) = project_workspace {
+        parts.push(format!("当前工作目录: {}", ws));
+    }
     // Agent 配置目录（KB 和 agent.yaml 所在）
     if let Some(ws) = agent_workspace {
         parts.push(format!("Agent 配置目录: {}", ws));
@@ -108,7 +112,7 @@ mod tests {
 
     #[test]
     fn build_os_context_contains_os() {
-        let ctx = build_os_context(None, None);
+        let ctx = build_os_context(None, None, None);
         assert!(ctx.contains("运行环境"));
         assert!(ctx.contains("操作系统"));
         assert!(ctx.contains("架构"));
@@ -118,13 +122,13 @@ mod tests {
 
     #[test]
     fn build_os_context_includes_timezone() {
-        let ctx = build_os_context(Some("Asia/Shanghai"), None);
+        let ctx = build_os_context(Some("Asia/Shanghai"), None, None);
         assert!(ctx.contains("时区: Asia/Shanghai"));
     }
 
     #[test]
     fn build_os_context_empty_tz_omitted() {
-        let ctx = build_os_context(Some(""), None);
+        let ctx = build_os_context(Some(""), None, None);
         assert!(!ctx.contains("时区:"));
     }
 
