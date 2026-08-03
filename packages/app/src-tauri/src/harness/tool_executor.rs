@@ -344,7 +344,7 @@ async fn wait_for_auth_response(
     request_id: &str,
     auth_registry: &ToolAuthRegistry,
 ) -> Option<bool> {
-    const TIMEOUT: Duration = Duration::from_secs(30 * 60); // 30 分钟
+    const TIMEOUT: Duration = Duration::from_secs(120); // 2 分钟——用户不在时快速超时释放会话
 
     tokio::select! {
         biased;
@@ -354,12 +354,12 @@ async fn wait_for_auth_response(
             let _ = auth_registry.take(request_id).await;
             None
         }
-        // 30 分钟超时（防止前端崩溃导致永久挂起）
+        // 超时自动拒绝（防止前端崩溃/用户离开导致会话永久锁死）
         _ = tokio::time::sleep(TIMEOUT) => {
             tracing::warn!(
                 target: "ice_paw.tool_auth",
-                "授权请求超时（{} 分钟）: request_id={}",
-                TIMEOUT.as_secs() / 60,
+                "授权请求超时（{} 秒）: request_id={}",
+                TIMEOUT.as_secs(),
                 request_id,
             );
             let _ = auth_registry.take(request_id).await;
