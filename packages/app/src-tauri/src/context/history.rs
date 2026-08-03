@@ -190,7 +190,30 @@ fn sanitize_history(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
         merged.push(msg);
     }
 
-    merged
+    // 确保每个 tool_result 紧跟在它的 tool_use 之后（MiniMax 严格校验此顺序）
+    let mut final_msgs: Vec<ChatMessage> = Vec::with_capacity(merged.len());
+    for msg in merged {
+        if msg.role == "user" && msg.content.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. })) {
+            let need_clean = match final_msgs.last() {
+                Some(ChatMessage { role, content }) if role == "assistant" => {
+                    let tool_ids: HashSet<&str> = content.iter()
+                        .filter_map(|b| match b { ContentBlock::ToolUse { id, .. } => Some(id.as_str()), _ => None })
+                        .collect();
+                    !msg.content.iter().all(|b| match b {
+                        ContentBlock::ToolResult { tool_use_id, .. } => tool_ids.contains(tool_use_id.as_str()),
+                        _ => true,
+                    })
+                }
+                _ => true,
+            };
+            if !need_clean {
+                final_msgs.push(msg);
+            }
+        } else {
+            final_msgs.push(msg);
+        }
+    }
+    final_msgs
 }
 
 /// 解析 `content_blocks` JSON 字符串为 `Vec<ContentBlock>`。
