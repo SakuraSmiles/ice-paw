@@ -203,6 +203,21 @@ impl AgentCmd for SqlAgentCmd {
         new_agent.workspace_path = workspace_path;
 
         let row: AgentRow = repo::agent::create(&self.pool, &new_agent, &id, &id).await?;
+
+        // 为新 Agent 确保 KB 行存在（无需重启）
+        let default_ws = repo::preferences::get_all(&self.pool)
+            .await
+            .ok()
+            .and_then(|p| p.default_workspace_path);
+        crate::harness::kb::ensure::ensure_agent_kb(
+            &self.pool,
+            &row.id,
+            &row.name,
+            row.workspace_path.as_deref(),
+            default_ws.as_deref(),
+        )
+        .await;
+
         Ok(Agent::from_row_with_file_config(row))
     }
 

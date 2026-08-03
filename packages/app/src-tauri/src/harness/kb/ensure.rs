@@ -69,6 +69,24 @@ pub fn agent_workspace_root(
     })
 }
 
+/// 为单个 Agent 确保 KB 行存在（创建 Agent 时调用，无需重启）。
+pub(crate) async fn ensure_agent_kb(
+    pool: &SqlitePool,
+    agent_id: &str,
+    agent_name: &str,
+    agent_workspace: Option<&str>,
+    default_workspace: Option<&str>,
+) {
+    let Some(root) = agent_workspace_root(agent_workspace, default_workspace, agent_id) else {
+        return;
+    };
+    let dir = knowledge_dir(&root);
+    let name = format!("{} 的知识库", agent_name);
+    if let Err(e) = ensure_kb_row(pool, "agent", Some(agent_id), &name, &dir).await {
+        tracing::warn!(target: "ice_paw.kb", "创建 Agent KB 失败: {e}");
+    }
+}
+
 /// 确保 (scope, owner_id) 对应的 KB 行存在；不存在则建目录 + 建行。
 /// 已存在则跳过。
 async fn ensure_kb_row(
