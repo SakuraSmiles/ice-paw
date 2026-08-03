@@ -147,6 +147,13 @@ pub async fn send_message(
         cancel_token.clone(),
     );
 
+    // 项目 workspace 注入 Pipeline（供 OsContextStage 告知 Agent 当前工作目录）
+    if let Some(ref pid) = conv.project_id {
+        if let Ok(proj) = repo::project::get_by_id(pool.inner(), pid).await {
+            pipeline_ctx.project_workspace = proj.workspace_path;
+        }
+    }
+
     // M1.5: 构造 LlmSummaryProvider 注入 Pipeline
     use crate::harness::summary_provider::LlmSummaryProvider;
     use crate::context::memory::SummaryProvider;
