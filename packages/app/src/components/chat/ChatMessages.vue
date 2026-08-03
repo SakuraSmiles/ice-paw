@@ -326,6 +326,11 @@ const finishReasonLabels: Record<string, string> = {
 
 <template>
   <div ref="listRef" class="messages-area">
+    <!-- 错误提示 -->
+    <div v-if="chat.lastError" class="chat-error-banner">
+      <span class="chat-error-icon">!</span>
+      <span class="chat-error-text">{{ chat.lastError }}</span>
+    </div>
     <!-- 分页加载指示器 -->
     <div v-if="chat.loadingMore" class="load-more-hint">加载更早消息…</div>
     <div v-if="!chat.hasMore && chat.messages.length > 50" class="load-more-hint load-more-end">已显示全部消息</div>
@@ -674,4 +679,7 @@ const finishReasonLabels: Record<string, string> = {
 .tool-detail-code { font-size:var(--ip-text-caption-size); font-family:var(--ip-font-mono, monospace); white-space:pre-wrap; word-break:break-word; color:var(--ip-color-text-secondary); background:var(--ip-color-bg-tertiary); padding:6px 8px; border-radius:var(--ip-radius-sm); max-height:180px; overflow-y:auto; margin:0; line-height:1.5; }
 .tool-detail-code.code-err { color:var(--ip-danger-base); }
 .tool-detail-pending { font-size:var(--ip-text-caption-size); color:var(--ip-color-text-disabled); font-style:italic; }
+.chat-error-banner { display:flex; align-items:flex-start; gap:8px; margin:8px 16px; padding:10px 14px; background:#fef2f2; border:1px solid #fecaca; border-radius:var(--ip-radius-md); font-size:var(--ip-text-body-sm-size); }
+.chat-error-icon { display:flex; align-items:center; justify-content:center; width:20px; height:20px; border-radius:50%; background:#ef4444; color:#fff; font-size:12px; font-weight:700; flex-shrink:0; }
+.chat-error-text { color:#991b1b; line-height:1.5; word-break:break-word; }
 </style>
