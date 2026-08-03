@@ -20,9 +20,9 @@
 // ============================================================================
 
 /// 工具调用循环的最大轮数
-/// Phase 1: 从 5 调整为 10，给模型更多空间进行多步工具推理。
+/// Phase 1: 5→10；Phase 4: 10→15（单轮可批量多工具，15轮充足）
 /// `stuck_threshold=5` 会独立检测连续无进展的轮次并提前终止，双重安全。
-pub const MAX_TOOL_ROUNDS: u32 = 10;
+pub const MAX_TOOL_ROUNDS: u32 = 15;
 
 /// 每轮内的最大尝试次数（含首次，即最多 3 次重试；原 `MAX_ATTEMPTS = 4`）
 pub const MAX_ATTEMPTS: u32 = 4;
@@ -75,7 +75,7 @@ mod tests {
     #[test]
     fn test_loop_budget_default_matches_legacy_consts() {
         let budget = LoopBudget::default();
-        assert_eq!(budget.max_tool_rounds, MAX_TOOL_ROUNDS);
+        assert_eq!(budget.max_tool_rounds, 15);
         assert_eq!(budget.max_attempts, MAX_ATTEMPTS);
     }
 }

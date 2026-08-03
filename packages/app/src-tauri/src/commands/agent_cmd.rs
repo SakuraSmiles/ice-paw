@@ -142,7 +142,9 @@ fn write_default_agent_yaml(
          \n\
          system_prompt: |\n  {}\n\n\
          temperature: {}\n\
-         max_tokens: {}\n",
+         max_tokens: {}\n\
+         # 工具调用最大轮数（默认 15，超过则强制结束）\n\
+         tool_max_rounds: 15\n",
         default_sp, temperature, max_tokens,
     );
 
