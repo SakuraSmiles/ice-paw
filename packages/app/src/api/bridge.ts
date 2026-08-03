@@ -203,6 +203,11 @@ const mcp = {
     try { return await invoke<McpToolDef[]>("list_mcp_server_tools", { id }); }
     catch (err) { throw wrapInvokeError("mcp.listTools", err); }
   },
+  /** 检测 Node.js 是否可用（npx 启动 MCP Server 需要） */
+  async checkNodejs(): Promise<boolean> {
+    try { return await invoke<boolean>("check_nodejs"); }
+    catch { return false; }
+  },
 };
 
 const kb = {
