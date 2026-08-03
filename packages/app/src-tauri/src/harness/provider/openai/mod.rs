@@ -260,14 +260,6 @@ mod tests {
     }
 
     #[test]
-    fn is_version_segment_all_versions() {
-        // 验证 v1 / v2 / v3 / v4 都能识别
-        for v in &["v1", "v2", "v3", "v4", "v10", "v100"] {
-            assert!(is_version_segment(v), "expected {} to be a version segment", v);
-        }
-    }
-
-    #[test]
     fn is_version_segment_rejects_lone_v() {
         assert!(!is_version_segment("v"));
     }

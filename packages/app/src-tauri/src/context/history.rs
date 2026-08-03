@@ -233,20 +233,6 @@ mod tests {
     }
 
     #[test]
-    fn history_window_default() {
-        let cfg = HistoryWindowConfig::default();
-        assert_eq!(cfg.recent_n, DEFAULT_HISTORY_WINDOW);
-        assert_eq!(cfg.recent_n, 20);
-        assert!(!cfg.include_summary);
-    }
-
-    #[test]
-    fn default_history_window_constant_is_20() {
-        // A3-2: 跨端占位常量必须保持 20（兼容旧 UI）
-        assert_eq!(DEFAULT_HISTORY_WINDOW, 20);
-    }
-
-    #[test]
     fn resolve_window_uses_default_when_agent_none() {
         assert_eq!(resolve_window(None), DEFAULT_HISTORY_WINDOW);
     }

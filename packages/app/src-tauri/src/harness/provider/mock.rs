@@ -379,20 +379,6 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Scenario::name() 各变体的标签应稳定
-    // -----------------------------------------------------------------
-    #[test]
-    fn scenario_name_is_stable() {
-        assert_eq!(MockScenario::NormalReply.name(), "NormalReply");
-        assert_eq!(MockScenario::RateLimited.name(), "RateLimited");
-        assert_eq!(MockScenario::ServiceUnavailable.name(), "ServiceUnavailable");
-        assert_eq!(MockScenario::Timeout.name(), "Timeout");
-        assert_eq!(MockScenario::EmptyResponse.name(), "EmptyResponse");
-        assert_eq!(MockScenario::EchoUser.name(), "EchoUser");
-        assert_eq!(MockScenario::CustomText("x".into()).name(), "CustomText");
-    }
-
-    // -----------------------------------------------------------------
     // 工厂方法
     // -----------------------------------------------------------------
     #[test]

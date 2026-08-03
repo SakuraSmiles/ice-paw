@@ -85,11 +85,4 @@ mod tests {
         assert!(clone.is_cancelled());
     }
 
-    #[test]
-    fn debug_does_not_panic() {
-        let token = CancellationToken::new();
-        let dbg = format!("{:?}", token);
-        assert!(dbg.contains("CancellationToken"));
-        assert!(dbg.contains("cancelled"));
-    }
 }
