@@ -113,6 +113,58 @@ pub struct SqlAgentCmd {
     pool: SqlitePool,
 }
 
+/// 在 Agent workspace 目录写入默认 agent.yaml。
+///
+/// - 仅在文件不存在时写入（不覆盖用户手动编辑的内容）
+/// - 写入失败仅 warn，不阻断 Agent 创建
+fn write_default_agent_yaml(
+    workspace_dir: &str,
+    agent_name: &str,
+    temperature: f64,
+    max_tokens: i32,
+) {
+    let yaml_path = std::path::Path::new(workspace_dir).join("agent.yaml");
+
+    // 文件已存在则跳过（用户可能已通过其他方式创建）
+    if yaml_path.exists() {
+        tracing::info!(
+            target: "ice_paw.agent",
+            "agent.yaml 已存在，跳过自动生成: {}",
+            yaml_path.display()
+        );
+        return;
+    }
+
+    let default_sp = agent_name.to_string() + " 是一个 AI 助手。";
+    let content = format!(
+        "# agent.yaml — Agent 行为和角色配置\n\
+         # 修改后即时生效，无需重启\n\
+         \n\
+         system_prompt: |\n  {}\n\n\
+         temperature: {}\n\
+         max_tokens: {}\n",
+        default_sp, temperature, max_tokens,
+    );
+
+    match std::fs::write(&yaml_path, &content) {
+        Ok(()) => {
+            tracing::info!(
+                target: "ice_paw.agent",
+                "已生成默认 agent.yaml: {}",
+                yaml_path.display()
+            );
+        }
+        Err(e) => {
+            tracing::warn!(
+                target: "ice_paw.agent",
+                "写入 agent.yaml 失败（Agent 仍可用，忽略）: {} — {}",
+                yaml_path.display(),
+                e
+            );
+        }
+    }
+}
+
 impl SqlAgentCmd {
     pub fn new(app: AppHandle, pool: SqlitePool) -> Self {
         Self { app, pool }
@@ -217,6 +269,11 @@ impl AgentCmd for SqlAgentCmd {
             default_ws.as_deref(),
         )
         .await;
+
+        // 7. 自动生成 agent.yaml（仅在首次创建、文件不存在时写入）
+        if let Some(ws) = row.workspace_path.as_deref() {
+            write_default_agent_yaml(ws, &row.name, row.temperature, row.max_tokens);
+        }
 
         Ok(Agent::from_row_with_file_config(row))
     }
