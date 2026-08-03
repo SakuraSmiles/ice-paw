@@ -114,7 +114,25 @@ pub async fn delete(pool: &SqlitePool, id: &str) -> AppResult<()> {
     Ok(())
 }
 
-/// 首次启动时种子：如果 mcp_servers 表为空，插入默认配置。
+/// 默认 MCP Server 配置列表——首次启动时自动安装。
+/// 要求：命令用 npx（跨机器通用），不需要 API Key 即可运行。
+fn default_mcp_servers() -> Vec<NewMcpServer> {
+    vec![
+        NewMcpServer {
+            id: "builtin-filesystem".into(),
+            name: "文件系统工具集".into(),
+            description: "文件读写、目录浏览、搜索替换（npx @anthropic-ai/mcp-server-filesystem）".into(),
+            command: "npx".into(),
+            args: vec!["-y".into(), "@anthropic-ai/mcp-server-filesystem".into(), "{workspace}".into()],
+            env: Some(serde_json::json!({})),
+            enabled: true,
+            trust_level: TrustLevel::Trusted,
+            scope: "per_agent".into(),
+        },
+    ]
+}
+
+/// 首次启动时种子：如果 mcp_servers 表为空，插入所有默认配置。
 /// 幂等——已有配置时不做任何修改。
 pub async fn seed_defaults(pool: &SqlitePool) -> AppResult<()> {
     let existing = list_all(pool).await?;
@@ -122,17 +140,9 @@ pub async fn seed_defaults(pool: &SqlitePool) -> AppResult<()> {
         return Ok(());
     }
     tracing::info!(target: "ice_paw.mcp", "插入默认 MCP Server 配置");
-    create(pool, &NewMcpServer {
-        id: "builtin-filesystem".into(),
-        name: "文件系统工具集".into(),
-        description: "提供文件读写和目录浏览能力（npx @anthropic-ai/mcp-server-filesystem）".into(),
-        command: "npx".into(),
-        args: vec!["-y".into(), "@anthropic-ai/mcp-server-filesystem".into(), "{workspace}".into()],
-        env: Some(serde_json::json!({})),
-        enabled: true,
-        trust_level: TrustLevel::Trusted,
-        scope: "per_agent".into(),
-    }).await?;
+    for cfg in &default_mcp_servers() {
+        create(pool, cfg).await?;
+    }
     Ok(())
 }
 
