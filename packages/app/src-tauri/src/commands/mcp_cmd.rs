@@ -114,3 +114,15 @@ pub async fn list_mcp_server_tools(
 ) -> AppResult<Vec<McpToolDefinition>> {
     manager.list_server_tools(&id).await
 }
+
+/// 检测 Node.js 是否可用（MCP Server 用 npx 启动需要）
+#[tauri::command]
+pub fn check_nodejs() -> bool {
+    std::process::Command::new("node")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
