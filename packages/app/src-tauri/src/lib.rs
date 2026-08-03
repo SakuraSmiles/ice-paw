@@ -166,11 +166,15 @@ pub fn run() {
                 ));
             handle.manage(sql_agent_cmd);
 
-            // 5) Phase 2: 启动已启用的外部 MCP Server
+            // 5) Phase 2: 种子默认 MCP Server + 启动已启用的外部 MCP Server
             let mcp_registry: Arc<McpRegistry> = handle.state::<Arc<McpRegistry>>().inner().clone();
             let mcp_manager: Arc<harness::mcp::McpServerManager> =
                 handle.state::<Arc<harness::mcp::McpServerManager>>().inner().clone();
             match tauri::async_runtime::block_on(async {
+                // 首次启动插入默认 MCP Server 配置（幂等）
+                if let Err(e) = db::repo::mcp_server::seed_defaults(&pool).await {
+                    tracing::warn!(target: "ice_paw.mcp", "种子默认 MCP Server 失败: {e}");
+                }
                 let configs = db::repo::mcp_server::list_all(&pool).await?;
                 for cfg in &configs {
                     // per-agent 架构：仅全局启动 scope=global 的 server；
