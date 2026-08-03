@@ -45,7 +45,8 @@ pub struct LoopBudget {
     pub max_attempts: u32,
     /// 卡住检测阈值（M2.1 启用，默认 5；dev1 评审建议降低误判概率）
     pub stuck_threshold: u32,
-    /// 整次对话累计 token 预算（W4.2 启用，默认 128_000）
+    /// 整次对话累计 token 预算（W4.2 启用，默认 500_000）
+    /// 多轮工具调用时 prompt 会累积，128k 不够用。
     pub max_total_tokens: usize,
 }
 
@@ -54,10 +55,8 @@ impl Default for LoopBudget {
         Self {
             max_tool_rounds: MAX_TOOL_ROUNDS,
             max_attempts: MAX_ATTEMPTS,
-            // M2.1: 默认阈值从 3 改为 5（dev1 评审建议）
-            // 理由：阈值太小会误判正常多步推理为停滞；5 轮无进展已可确信是 LLM 卡住
             stuck_threshold: 5,
-            max_total_tokens: 128_000,
+            max_total_tokens: 500_000,
         }
     }
 }
