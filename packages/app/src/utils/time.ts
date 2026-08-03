@@ -41,7 +41,7 @@ function effectiveTz(): string | undefined {
 /** 将 DB 存储的 UTC 字符串（如 "2026-08-03 02:21:35"）解析为 UTC Date。
  *  DB 时间不含时区标识，JavaScript 会误当本地时间解析，差 8 小时。
  *  已有时区后缀的 ISO 字符串直接解析，不做转换。 */
-function parseDbTime(iso: string): Date {
+export function parseDbTime(iso: string): Date {
   // 已是完整 ISO 格式（含 T 或 Z），直接解析
   if (iso.includes("T") || iso.endsWith("Z")) {
     return new Date(iso);
