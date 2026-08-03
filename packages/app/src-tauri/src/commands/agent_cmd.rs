@@ -191,7 +191,7 @@ impl AgentCmd for SqlAgentCmd {
         if let Some(file_cfg) = agent.load_file_config() {
             file_cfg.apply_to_row(&mut agent);
         }
-        let (api_key, vault_base_url) = crypto::fetch_api_key(&self.app, &agent.id)?;
+        let (api_key, vault_base_url) = crypto::fetch_api_key(&self.app, &agent.api_key_ref)?;
         // base_url：agent 配置优先（如果有），否则回退到 vault 里存的 base_url
         let base_url = agent
             .base_url
