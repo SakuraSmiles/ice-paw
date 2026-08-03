@@ -99,21 +99,25 @@ impl McpClient for ReadFileTool {
             )));
         }
 
-        let content = tokio::fs::read_to_string(&canonical)
+        let bytes = tokio::fs::read(&canonical)
             .await
             .map_err(AppError::Io)?;
+
+        let decoded = crate::infra::decode::decode_bytes(&bytes);
 
         #[derive(Serialize)]
         struct ReadFileResult {
             path: String,
             size: u64,
+            encoding: String,
             content: String,
         }
 
         let result = ReadFileResult {
             path: parsed.path,
             size: metadata.len(),
-            content,
+            encoding: decoded.encoding.to_string(),
+            content: decoded.text,
         };
 
         Ok(serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string()))
