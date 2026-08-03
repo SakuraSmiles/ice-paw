@@ -169,11 +169,11 @@ impl McpRegistry {
         registry
     }
 
-    /// 注册一个工具客户端（内置工具优先，同名外部工具不覆盖）
+    /// 注册一个工具客户端
     pub async fn register(&self, client: Arc<dyn McpClient>) {
         let name = client.name().to_string();
         let mut clients = self.clients.write().await;
-        clients.entry(name).or_insert(client);
+        clients.insert(name, client);
     }
 
     /// 按工具名批量反注册（server 停止/删除/改配时调用，避免死工具残留 → 调用卡 30s 超时）。
@@ -185,11 +185,11 @@ impl McpRegistry {
         }
     }
 
-    /// 同步注册（用于初始化时，无竞争场景；同名不覆盖，优先保留已注册工具）
+    /// 同步注册（用于初始化时，无竞争场景）
     pub fn register_sync(&self, client: Arc<dyn McpClient>) {
         if let Ok(mut clients) = self.clients.try_write() {
             let name = client.name().to_string();
-            clients.entry(name).or_insert(client);
+            clients.insert(name, client);
         }
     }
 
