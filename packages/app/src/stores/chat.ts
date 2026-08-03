@@ -185,7 +185,8 @@ export const useChatStore = defineStore("chat", () => {
   function resetSendTimeout() {
     if (sendTimeout) clearTimeout(sendTimeout);
     sendTimeout = setTimeout(() => {
-      if (sending.value) {
+      // 等待工具授权时不计入静默超时（后端也在等，未真正卡死）
+      if (sending.value && !pendingAuthRequest.value) {
         console.warn("静默超时（60s 无活动），重置发送状态");
         sending.value = false;
       }
