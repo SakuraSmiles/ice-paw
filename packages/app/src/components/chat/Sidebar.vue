@@ -4,7 +4,7 @@ import { ref, computed, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useProjectStore } from "../../stores/project";
-import { formatDate } from "../../utils/time";
+import { formatDate, parseDbTime } from "../../utils/time";
 import { useNewConversation } from "../../composables/useNewConversation";
 
 const router = useRouter();
@@ -168,7 +168,7 @@ onUnmounted(() => {
 
 // 取相对时间显示
 function timeAgo(dateStr: string): string {
-  const d = new Date(dateStr);
+  const d = parseDbTime(dateStr);
   // 用 nowTick.value 作「现在」基准：同时建立响应式依赖，nowTick 每分钟变化时整列重算
   const now = new Date(nowTick.value);
   const diff = now.getTime() - d.getTime();
