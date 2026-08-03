@@ -9,6 +9,25 @@ import { bridge } from "../../api/bridge";
 const servers = ref<McpServer[]>([]);
 const activeIds = ref<Set<string>>(new Set());
 const loading = ref(true);
+const nodeAvailable = ref(true);
+
+async function reload() {
+  loading.value = true;
+  try {
+    const [list, active, hasNode] = await Promise.all([
+      bridge.mcp.list(),
+      bridge.mcp.listActive(),
+      bridge.mcp.checkNodejs(),
+    ]);
+    servers.value = list;
+    activeIds.value = new Set(active.map(([id]) => id));
+    nodeAvailable.value = hasNode;
+  } catch (e) {
+    console.error("加载 MCP Server 列表失败:", e);
+  } finally {
+    loading.value = false;
+  }
+}
 
 const expandedEditId = ref<string | null>(null);
 const isCreating = ref(false);
@@ -16,19 +35,6 @@ const isCreating = ref(false);
 // 工具清单缓存
 const toolsMap = ref<Record<string, McpToolDef[]>>({});
 const toolsLoading = ref<Record<string, boolean>>({});
-
-async function reload() {
-  loading.value = true;
-  try {
-    const [list, active] = await Promise.all([bridge.mcp.list(), bridge.mcp.listActive()]);
-    servers.value = list;
-    activeIds.value = new Set(active.map(([id]) => id));
-  } catch (e) {
-    console.error("加载 MCP Server 列表失败:", e);
-  } finally {
-    loading.value = false;
-  }
-}
 
 onMounted(reload);
 
@@ -136,6 +142,12 @@ async function onDelete(s: McpServer) {
   <div class="settings-content-inner">
     <div class="content-header">
       <h2 class="content-title">工具集</h2>
+    </div>
+
+    <!-- Node.js 检测提示 -->
+    <div v-if="!nodeAvailable && !loading" class="node-warning">
+      <span class="node-warn-icon">!</span>
+      <span>未检测到 Node.js，外部 MCP 工具需要它来运行。<a href="https://nodejs.org" target="_blank">点此安装 Node.js</a>（LTS 版本），安装后重启应用即可。</span>
     </div>
 
     <div class="mcp-list">
@@ -479,4 +491,7 @@ async function onDelete(s: McpServer) {
 /* ===== 状态 ===== */
 .loading-state { padding: 20px; text-align: center; color: var(--ip-color-text-tertiary); font-size: var(--ip-text-body-sm-size); }
 .empty-hint { padding: 16px 12px; text-align: center; font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
+.node-warning { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 12px; padding: 10px 14px; background: #fffbeb; border: 1px solid #fde68a; border-radius: var(--ip-radius-md); font-size: var(--ip-text-body-sm-size); color: #92400e; }
+.node-warning a { color: #d97706; font-weight: var(--ip-font-weight-medium); }
+.node-warn-icon { display: flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; background: #f59e0b; color: #fff; font-size: 12px; font-weight: 700; flex-shrink: 0; }
 </style>
