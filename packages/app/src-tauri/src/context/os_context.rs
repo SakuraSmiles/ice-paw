@@ -9,15 +9,10 @@
 /// 构建运行环境上下文字符串，注入 system prompt
 ///
 /// 包含：
-/// - 操作系统类型（Windows / macOS / Linux）
-/// - CPU 架构（如 x86_64 / arm64）
-/// - 用户主目录路径（尽力获取，失败则省略）
-/// - 时区信息（用户可设置，用于 LLM 理解本地时间上下文）
-///
-/// 用于帮助 LLM 在工具调用（如 `list_directory`）时使用与当前 OS 兼容的路径，
-/// 避免在 Windows 上调用 Linux 风格的 `/home/user/Desktop` 等错误路径。
-/// 时区信息帮助 LLM 在涉及时间的问题中给出符合用户当地时间的回答。
-pub(crate) fn build_os_context(timezone: Option<&str>) -> String {
+/// - 操作系统类型 / CPU 架构 / 用户主目录 / 时区 / 当前时间
+/// - Agent 配置目录（KB 和 agent.yaml 所在路径）
+/// - 工作目录外的文件访问说明
+pub(crate) fn build_os_context(timezone: Option<&str>, agent_workspace: Option<&str>) -> String {
     let mut parts: Vec<String> = Vec::new();
 
     // OS 类型
@@ -51,18 +46,29 @@ pub(crate) fn build_os_context(timezone: Option<&str>) -> String {
     }
 
     // 当前本地时间（基于用户时区，帮助 LLM 感知"现在"）
-    // 使用 chrono 获取 UTC 时间；前端/用户设置时区后由 OsContextStage 传入
     let now = chrono::Utc::now();
     parts.push(format!("当前时间: {}", now.format("%Y-%m-%d %H:%M:%S UTC")));
 
+    // Agent 配置目录（KB 和 agent.yaml 所在）
+    if let Some(ws) = agent_workspace {
+        parts.push(format!("Agent 配置目录: {}", ws));
+    }
+
     // 组装为提示文本
     let env_info = parts.join("\n");
-    format!(
+    let mut ctx = format!(
         "## 运行环境\n{}\n\n\
          注意：文件路径必须使用与当前操作系统兼容的格式。\
          调用工具时请使用绝对路径。",
         env_info
-    )
+    );
+
+    // 告知 Agent 可以操作工作目录外的文件
+    ctx.push_str("\n\n文件工具（read_file/write_file/edit_file）默认在工作目录下操作。");
+    ctx.push_str("如需访问工作目录外的文件，直接使用绝对路径即可，系统会询问用户确认。");
+    ctx.push_str("同一会话中对同一路径批准一次后即可持续访问。");
+
+    ctx
 }
 
 /// 尽力获取用户主目录
@@ -97,7 +103,7 @@ mod tests {
 
     #[test]
     fn build_os_context_contains_os() {
-        let ctx = build_os_context(None);
+        let ctx = build_os_context(None, None);
         assert!(ctx.contains("运行环境"));
         assert!(ctx.contains("操作系统"));
         assert!(ctx.contains("架构"));
@@ -107,13 +113,13 @@ mod tests {
 
     #[test]
     fn build_os_context_includes_timezone() {
-        let ctx = build_os_context(Some("Asia/Shanghai"));
+        let ctx = build_os_context(Some("Asia/Shanghai"), None);
         assert!(ctx.contains("时区: Asia/Shanghai"));
     }
 
     #[test]
     fn build_os_context_empty_tz_omitted() {
-        let ctx = build_os_context(Some(""));
+        let ctx = build_os_context(Some(""), None);
         assert!(!ctx.contains("时区:"));
     }
 
