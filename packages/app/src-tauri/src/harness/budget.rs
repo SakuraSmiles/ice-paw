@@ -19,10 +19,10 @@
 // 与 `commands/chat_loop.rs` 中原硬编码常量对齐的 pub const（短期兼容）
 // ============================================================================
 
-/// 工具调用循环的最大轮数
-/// Phase 1: 5→10；Phase 4: 10→15（单轮可批量多工具，15轮充足）
-/// `stuck_threshold=5` 会独立检测连续无进展的轮次并提前终止，双重安全。
-pub const MAX_TOOL_ROUNDS: u32 = 15;
+/// 工具调用循环的最大轮数（安全网：模型应自行决定何时停止）
+/// 正常终止靠停滞检测（连续 stuck_threshold 轮无进展）；这个值只是极端兜底。
+/// 可在 agent.yaml 中设置 tool_max_rounds 覆盖。
+pub const MAX_TOOL_ROUNDS: u32 = 50;
 
 /// 每轮内的最大尝试次数（含首次，即最多 3 次重试；原 `MAX_ATTEMPTS = 4`）
 pub const MAX_ATTEMPTS: u32 = 4;
@@ -75,7 +75,7 @@ mod tests {
     #[test]
     fn test_loop_budget_default_matches_legacy_consts() {
         let budget = LoopBudget::default();
-        assert_eq!(budget.max_tool_rounds, 15);
+        assert_eq!(budget.max_tool_rounds, 50);
         assert_eq!(budget.max_attempts, MAX_ATTEMPTS);
     }
 }
