@@ -17,18 +17,6 @@ describe("chatStore", () => {
   });
 
   describe("initEvents", () => {
-    it("registers all 9 event listeners", async () => {
-      mockListen.mockResolvedValue(() => {}); // unlisten noop
-      const store = useChatStore();
-
-      // initEvents 在首次调用 sendMessage/selectConversation 时自动触发
-      // 直接调用内部 initEvents 不可行（不是导出的），通过 loadConversations 间接测试
-      await store.loadConversations();
-
-      // 验证 listen 被调用（事件监听在 store 初始化时注册）
-      // 注意：initEvents 是 lazy init，首次调用相关方法时触发
-    });
-
     it("event listeners are initialized only once", async () => {
       mockListen.mockResolvedValue(() => {});
       const store = useChatStore();
