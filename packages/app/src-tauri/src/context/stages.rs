@@ -140,17 +140,11 @@ impl PipelineStage for SystemPromptStage {
     }
 
     async fn execute(&self, ctx: &mut PipelineContext) -> AppResult<()> {
-        let tool_max_rounds: Option<u32> = serde_json::from_str(&ctx.agent.extra_params)
-            .ok()
-            .and_then(|v: serde_json::Value| {
-                v.get("tool_max_rounds").and_then(|v| v.as_u64()).map(|v| v as u32)
-            });
         ctx.system_prompt = build_system_prompt(
             ctx.rendered_system_prompt.as_deref(),
             &ctx.agent.system_prompt,
             ctx.tools_enabled,
             &ctx.os_context,
-            tool_max_rounds,
         );
         Ok(())
     }
