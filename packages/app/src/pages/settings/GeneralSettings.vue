@@ -100,6 +100,31 @@ async function openDataDir() {
 }
 
 onMounted(load);
+
+async function saveEmbedding() {
+  saving.value = true;
+  try {
+    await Promise.all([
+      bridge.preferences.set("embedding_provider", prefs.value.embedding_provider ?? ""),
+      bridge.preferences.set("embedding_model", prefs.value.embedding_model ?? ""),
+      bridge.preferences.set("embedding_api_key", prefs.value.embedding_api_key ?? ""),
+      bridge.preferences.set("embedding_base_url", prefs.value.embedding_base_url ?? ""),
+    ]);
+    saved.value = true;
+    setTimeout(() => { saved.value = false; }, 2000);
+  } catch (e) {
+    console.error("保存 embedding 配置失败:", e);
+  } finally {
+    saving.value = false;
+  }
+}
+
+const embeddingProviders = [
+  { value: "", label: "未启用（仅关键词检索）" },
+  { value: "glm", label: "智谱 GLM" },
+  { value: "openai", label: "OpenAI" },
+  { value: "deepseek", label: "DeepSeek" },
+];
 onMounted(loadDataDir);
 
 // =========================================================================
@@ -496,6 +521,48 @@ const hasFilterResults = computed(() => {
                 <path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7l-2-3H5a2 2 0 0 0-2 2z" />
               </svg>
             </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== 知识库语义检索（Embedding） ===== -->
+      <div class="setting-row">
+        <div class="setting-label">
+          <div class="setting-label-text">
+            知识库语义检索
+            <span class="tip-icon" data-tip="启用后知识库支持语义匹配（向量检索），比关键词更精准。独立于聊天 Agent，可以用不同 Provider。">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+            </span>
+          </div>
+        </div>
+        <div class="setting-control">
+          <select
+            v-model="prefs.embedding_provider"
+            class="form-input"
+            @change="saveEmbedding"
+          >
+            <option v-for="p in embeddingProviders" :key="p.value" :value="p.value">{{ p.label }}</option>
+          </select>
+          <div v-if="prefs.embedding_provider" class="embedding-fields">
+            <input
+              v-model="prefs.embedding_model"
+              class="form-input embedding-input"
+              placeholder="模型名，如 embedding-3"
+              @blur="saveEmbedding"
+            />
+            <input
+              v-model="prefs.embedding_api_key"
+              type="password"
+              class="form-input embedding-input"
+              placeholder="API Key"
+              @blur="saveEmbedding"
+            />
+            <input
+              v-model="prefs.embedding_base_url"
+              class="form-input embedding-input"
+              placeholder="自定义 API URL（可选，留空用默认）"
+              @blur="saveEmbedding"
+            />
           </div>
         </div>
       </div>
@@ -947,5 +1014,16 @@ const hasFilterResults = computed(() => {
 @keyframes tz-drop-in {
   from { opacity: 0; transform: translateY(-4px) scale(0.96); }
   to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* ===== Embedding 配置区 ===== */
+.embedding-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+.embedding-input {
+  font-size: var(--ip-text-body-sm-size);
 }
 </style>
