@@ -113,6 +113,34 @@ impl PipelineStage for OsContextStage {
             ctx.agent.workspace_path.as_deref(),
             ctx.project_workspace.as_deref(),
         );
+
+        // 读取项目级上下文文件（project.md / conventions.md）
+        if let Some(ref ws) = ctx.project_workspace {
+            let ws_path = std::path::Path::new(ws);
+
+            // project.md — 项目说明（技术栈、架构、业务背景）
+            let project_md = ws_path.join("project.md");
+            if let Ok(content) = tokio::fs::read_to_string(&project_md).await {
+                if !content.trim().is_empty() {
+                    ctx.os_context.push_str(&format!(
+                        "\n\n## 项目说明\n{}",
+                        content.trim()
+                    ));
+                }
+            }
+
+            // conventions.md — 编码规范（命名、格式、最佳实践）
+            let conv_md = ws_path.join("conventions.md");
+            if let Ok(content) = tokio::fs::read_to_string(&conv_md).await {
+                if !content.trim().is_empty() {
+                    ctx.os_context.push_str(&format!(
+                        "\n\n## 编码规范\n{}",
+                        content.trim()
+                    ));
+                }
+            }
+        }
+
         Ok(())
     }
 }
