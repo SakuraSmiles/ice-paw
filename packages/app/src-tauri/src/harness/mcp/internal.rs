@@ -18,14 +18,26 @@ use super::types::AuthorizationLevel;
 // read_file
 // =========================================================================
 
-/// `read_file` 工具：读取本地文件内容
+/// `read_file` 工具：读取本地文件内容（大文件自动分页）
 pub struct ReadFileTool;
+
+/// 大文件阈值（超过则自动分页，按行返回）
+const LARGE_FILE_THRESHOLD: usize = 30_000;
+
+/// 自动分页时的默认行数
+const DEFAULT_PAGE_LINES: usize = 200;
 
 #[derive(Deserialize)]
 struct ReadFileArgs {
     path: String,
     #[serde(default = "default_max_read_bytes")]
     max_bytes: usize,
+    /// 从第几行开始读取（0-based），用于分页读取大文件
+    #[serde(default)]
+    offset: usize,
+    /// 最多读取多少行（None = 自动决定）
+    #[serde(default)]
+    limit: Option<usize>,
 }
 
 fn default_max_read_bytes() -> usize {
@@ -39,7 +51,9 @@ impl McpClient for ReadFileTool {
     }
 
     fn description(&self) -> &str {
-        "Read the contents of a local file. Returns the file content as text."
+        "Read the contents of a local file. Large files (>30KB) are automatically \
+         paginated by lines — use the offset parameter to read subsequent pages. \
+         The response includes total_lines, has_more, and next_offset for pagination."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -50,10 +64,14 @@ impl McpClient for ReadFileTool {
                     "type": "string",
                     "description": "Absolute or relative path to the file to read."
                 },
-                "max_bytes": {
+                "offset": {
                     "type": "integer",
-                    "description": "Maximum bytes to read (default: 1048576 = 1MB).",
-                    "default": 1048576
+                    "description": "Line number to start reading from (0-based). Use for paginating large files.",
+                    "default": 0
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of lines to read. If omitted, auto-determined by file size.",
                 }
             },
             "required": ["path"]
@@ -91,10 +109,11 @@ impl McpClient for ReadFileTool {
             ))
         })?;
 
-        if metadata.len() as usize > parsed.max_bytes {
+        let file_size = metadata.len() as usize;
+        if file_size > parsed.max_bytes {
             return Err(AppError::Validation(format!(
                 "文件过大: {} bytes > {} bytes 上限",
-                metadata.len(),
+                file_size,
                 parsed.max_bytes
             )));
         }
@@ -104,20 +123,68 @@ impl McpClient for ReadFileTool {
             .map_err(AppError::Io)?;
 
         let decoded = crate::infra::decode::decode_bytes(&bytes);
+        let content = decoded.text;
+
+        // 按行分页：大文件或显式指定 offset/limit 时分页返回
+        let all_lines: Vec<&str> = content.lines().collect();
+        let total_lines = all_lines.len();
+
+        // 决定是否分页
+        let need_pagination = file_size > LARGE_FILE_THRESHOLD
+            || parsed.offset > 0
+            || parsed.limit.is_some();
+
+        if !need_pagination {
+            // 小文件 + 无分页参数 → 直接返回全部
+            #[derive(Serialize)]
+            struct ReadFileResult {
+                path: String,
+                size: usize,
+                encoding: String,
+                total_lines: usize,
+                content: String,
+            }
+            let result = ReadFileResult {
+                path: parsed.path,
+                size: file_size,
+                encoding: decoded.encoding.to_string(),
+                total_lines,
+                content,
+            };
+            return Ok(serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string()));
+        }
+
+        // 分页逻辑
+        let page_limit = parsed.limit.unwrap_or(DEFAULT_PAGE_LINES);
+        let start = parsed.offset.min(total_lines);
+        let end = (start + page_limit).min(total_lines);
+        let page_lines = &all_lines[start..end];
+        let page_content = page_lines.join("\n");
+        let has_more = end < total_lines;
 
         #[derive(Serialize)]
-        struct ReadFileResult {
+        struct ReadFilePageResult {
             path: String,
-            size: u64,
+            size: usize,
             encoding: String,
+            total_lines: usize,
+            offset: usize,
+            lines_returned: usize,
+            has_more: bool,
+            next_offset: Option<usize>,
             content: String,
         }
 
-        let result = ReadFileResult {
+        let result = ReadFilePageResult {
             path: parsed.path,
-            size: metadata.len(),
+            size: file_size,
             encoding: decoded.encoding.to_string(),
-            content: decoded.text,
+            total_lines,
+            offset: start,
+            lines_returned: page_lines.len(),
+            has_more,
+            next_offset: if has_more { Some(end) } else { None },
+            content: page_content,
         };
 
         Ok(serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string()))
