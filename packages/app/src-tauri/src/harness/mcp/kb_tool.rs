@@ -106,8 +106,7 @@ impl McpClient for SearchKbTool {
         // 3. 关键词检索（repo 已做 title 权重排序 + limit）
         let hits = repo::kb::search(&ctx.pool, &parsed.query, &kb_ids, parsed.limit).await?;
 
-        // 4. 组装返回 JSON
-        let results: Vec<SearchHitOut> = hits
+        let mut results: Vec<SearchHitOut> = hits
             .into_iter()
             .map(|h| SearchHitOut {
                 kb_name: h.kb_name,
@@ -116,6 +115,28 @@ impl McpClient for SearchKbTool {
                 summary: h.summary,
             })
             .collect();
+
+        // 3.5 语义检索（如果 agent 配置了 embedding_model）
+        if let Some(semantic) = try_semantic_search(
+            &ctx.pool,
+            &ctx.agent_id,
+            ctx.api_key.as_deref(),
+            &parsed.query,
+            &kb_ids,
+            parsed.limit as usize,
+        )
+        .await
+        {
+            // 合并去重（按 file_path 去重，关键词结果优先）
+            let existing_paths: std::collections::HashSet<String> =
+                results.iter().map(|r| r.file_path.clone()).collect();
+            for s in semantic {
+                if !existing_paths.contains(&s.file_path) {
+                    results.push(s);
+                }
+            }
+            results.truncate(parsed.limit as usize);
+        }
 
         let count = results.len();
         Ok(serde_json::json!({
@@ -134,6 +155,133 @@ struct SearchHitOut {
     file_path: String,
     title: String,
     summary: String,
+}
+
+/// 尝试语义检索（向量）。返回 None = 不支持/失败，调用方回退纯关键词。
+async fn try_semantic_search(
+    pool: &sqlx::SqlitePool,
+    agent_id: &str,
+    api_key: Option<&str>,
+    query: &str,
+    kb_ids: &[String],
+    limit: usize,
+) -> Option<Vec<SearchHitOut>> {
+    use crate::harness::provider::embedding::{top_k_recall, EmbeddingBackend, OpenAiEmbeddingBackend};
+    use crate::db::repo::kb::{
+        bytes_to_embedding, embedding_to_bytes, load_chunks_for_vector_search,
+        update_chunk_embedding,
+    };
+
+    // 1. 查 agent 的 embedding 配置
+    use sqlx::Row;
+    let row = sqlx::query("SELECT embedding_model, provider, base_url FROM agents WHERE id = ?")
+        .bind(agent_id)
+        .fetch_optional(pool)
+        .await
+        .ok()??;
+
+    let embedding_model: Option<String> = row.get("embedding_model");
+    let provider: String = row.get("provider");
+    let base_url: Option<String> = row.get("base_url");
+    let model = embedding_model?;
+
+    // Anthropic 系不支持 embedding
+    if matches!(provider.as_str(), "anthropic" | "minimax" | "minimax-cn") {
+        return None;
+    }
+
+    let key = api_key?;
+
+    // 2. 确定 base_url
+    let url = match base_url.filter(|s| !s.is_empty()) {
+        Some(u) => u,
+        None => match provider.as_str() {
+            "openai" => "https://api.openai.com".into(),
+            "glm" => "https://open.bigmodel.cn/api/paas/v4".into(),
+            "deepseek" => "https://api.deepseek.com".into(),
+            _ => return None,
+        },
+    };
+
+    let backend = OpenAiEmbeddingBackend::new(model, url);
+
+    // 3. 加载所有 chunk
+    let chunks = load_chunks_for_vector_search(pool, kb_ids).await.ok()?;
+
+    // 4. 对没有 embedding 的 chunk 批量生成
+    let missing: Vec<&_> = chunks.iter().filter(|c| c.embedding.is_none()).collect();
+    if !missing.is_empty() {
+        let texts: Vec<&str> = missing.iter().map(|c| c.content.as_str()).collect();
+        match backend.embed(texts, key).await {
+            Ok(embeddings) => {
+                for (chunk, emb) in missing.iter().zip(embeddings.iter()) {
+                    let bytes = embedding_to_bytes(emb);
+                    let _ = update_chunk_embedding(pool, &chunk.id, &bytes).await;
+                }
+                tracing::info!(
+                    target: "ice_paw.kb",
+                    "为 {} 个 chunk 生成了 embedding", missing.len()
+                );
+            }
+            Err(e) => {
+                tracing::warn!(target: "ice_paw.kb", "embedding 生成失败，回退关键词检索: {e}");
+                return None;
+            }
+        }
+    }
+
+    // 5. 重新加载（有 embedding 了）
+    let chunks = load_chunks_for_vector_search(pool, kb_ids).await.ok()?;
+
+    // 6. query 转向量
+    let query_emb = backend.embed(vec![query], key).await.ok()?;
+    if query_emb.is_empty() {
+        return None;
+    }
+    let query_vec = &query_emb[0];
+
+    // 7. 构建候选列表（用 chunk id 做关联键）
+    let candidates: Vec<(String, Vec<f32>)> = chunks
+        .iter()
+        .filter_map(|c| {
+            c.embedding
+                .as_ref()
+                .map(|bytes| (c.id.clone(), bytes_to_embedding(bytes)))
+        })
+        .collect();
+
+    if candidates.is_empty() {
+        return None;
+    }
+
+    // 8. top-K 语义检索
+    let top_ids = top_k_recall(query_vec, &candidates);
+
+    // 9. 映射回 SearchHitOut
+    let mut results = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for id in &top_ids {
+        if results.len() >= limit {
+            break;
+        }
+        if let Some(chunk) = chunks.iter().find(|c| &c.id == id) {
+            if seen.insert(chunk.file_path.clone()) {
+                let summary: String = chunk.content.chars().take(200).collect();
+                results.push(SearchHitOut {
+                    kb_name: "语义检索".into(),
+                    file_path: chunk.file_path.clone(),
+                    title: chunk.title.clone(),
+                    summary,
+                });
+            }
+        }
+    }
+
+    if results.is_empty() {
+        None
+    } else {
+        Some(results)
+    }
 }
 
 // =========================================================================
@@ -491,6 +639,7 @@ mod tests {
             project_id: None,
             workspace: None,
             pool: pool.clone(),
+            api_key: None,
         };
 
         let result = tool
@@ -525,6 +674,7 @@ mod tests {
             project_id: None,
             workspace: None,
             pool: pool.clone(),
+            api_key: None,
         };
         let result = tool
             .execute_with_context(r#"{"query":"anything"}"#, &ctx)
@@ -599,6 +749,7 @@ mod tests {
             project_id: None,
             workspace: None,
             pool: pool.clone(),
+            api_key: None,
         };
         let result = tool.execute_with_context(r#"{"file_path":"note.md"}"#, &ctx).await.unwrap();
         let v: serde_json::Value = serde_json::from_str(&result).unwrap();
@@ -619,6 +770,7 @@ mod tests {
             project_id: None,
             workspace: None,
             pool: pool.clone(),
+            api_key: None,
         };
         let result = tool.execute_with_context(r#"{"file_path":"nope.md"}"#, &ctx).await.unwrap();
         let v: serde_json::Value = serde_json::from_str(&result).unwrap();
