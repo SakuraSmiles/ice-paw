@@ -116,7 +116,8 @@ impl ExternalMcpServer {
             (command.to_string(), args.to_vec())
         };
 
-        let mut child = Command::new(&actual_command)
+        let mut cmd_builder = Command::new(&actual_command);
+        cmd_builder
             .args(&actual_args)
             // 环境隔离：清空继承的环境（防 OPENAI_API_KEY 等机密泄漏给外部 server），
             // 再仅注入「进程执行所需的安全系统变量」+ 用户显式声明的 env（见 build_safe_env）。
@@ -129,8 +130,17 @@ impl ExternalMcpServer {
             // 避免握手失败/异常的 server 变孤儿（_child 字段 drop 时触发）。
             .kill_on_drop(true)
             // 设置工作目录为用户 home，避免 npx 在当前目录找 package.json 失败
-            .current_dir(std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\".into()))
-            .spawn()
+            .current_dir(std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\".into()));
+
+        // Windows: 隐藏 cmd 窗口（cmd /C 会弹出控制台窗口，CREATE_NO_WINDOW 隐藏它）
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            cmd_builder.creation_flags(CREATE_NO_WINDOW);
+        }
+
+        let mut child = cmd_builder.spawn()
             .map_err(|e| AppError::Io(std::io::Error::other(
                 format!("启动 MCP Server '{}' 失败: {} (command={})", name, e, command),
             )))?;

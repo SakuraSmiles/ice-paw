@@ -31,7 +31,7 @@ pub mod logging;
 
 use std::sync::Arc;
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 use harness::mcp::McpRegistry;
 
@@ -178,9 +178,8 @@ pub fn run() {
                 }
                 let configs = db::repo::mcp_server::list_all(&pool).await?;
                 for cfg in &configs {
-                    // per-agent 架构：仅全局启动 scope=global 的 server；
-                    // scope=per_agent 在 send_message 时按 agent 启动（args 替换 workspace）
                     if cfg.enabled && cfg.scope == "global" {
+                        // global server：启动并注册工具
                         tracing::info!(
                             target: "ice_paw.mcp",
                             "正在启动 MCP Server '{}' (command: {})",
@@ -194,19 +193,65 @@ pub fn run() {
                             );
                         }
                     } else if cfg.enabled && cfg.scope == "per_agent" {
-                        // per_agent server：探测工具清单（临时启动+关闭，供工具集页展示能力）
-                        if let Err(e) = mcp_manager.probe_tools(cfg).await {
-                            tracing::warn!(
+                        // per_agent server：后台异步探测工具清单（不阻塞启动）
+                        let cfg_clone = cfg.clone();
+                        let manager_clone = mcp_manager.clone();
+                        let app_clone = handle.clone();
+                        tokio::spawn(async move {
+                            tracing::info!(
                                 target: "ice_paw.mcp",
-                                "per-agent MCP Server '{}' 工具探测失败: {}",
-                                cfg.name, e,
+                                "后台探测 MCP Server '{}' ...",
+                                cfg_clone.name,
                             );
-                        }
+                            // 探测超时 20s（npx 首次下载包可能慢，但不能无限等）
+                            let probe_result = tokio::time::timeout(
+                                std::time::Duration::from_secs(20),
+                                manager_clone.probe_tools(&cfg_clone),
+                            ).await;
+                            match probe_result {
+                                Ok(Ok(tools)) => {
+                                    let _ = app_clone.emit("mcp:probe-done", serde_json::json!({
+                                        "id": cfg_clone.id,
+                                        "name": cfg_clone.name,
+                                        "tool_count": tools.len(),
+                                    }));
+                                    tracing::info!(
+                                        target: "ice_paw.mcp",
+                                        "探测完成: '{}' → {} 个工具",
+                                        cfg_clone.name, tools.len(),
+                                    );
+                                }
+                                Ok(Err(e)) => {
+                                    let _ = app_clone.emit("mcp:probe-error", serde_json::json!({
+                                        "id": cfg_clone.id,
+                                        "name": cfg_clone.name,
+                                        "error": e.to_string(),
+                                    }));
+                                    tracing::warn!(
+                                        target: "ice_paw.mcp",
+                                        "探测失败: '{}' — {}",
+                                        cfg_clone.name, e,
+                                    );
+                                }
+                                Err(_) => {
+                                    let _ = app_clone.emit("mcp:probe-error", serde_json::json!({
+                                        "id": cfg_clone.id,
+                                        "name": cfg_clone.name,
+                                        "error": "探测超时（20s）",
+                                    }));
+                                    tracing::warn!(
+                                        target: "ice_paw.mcp",
+                                        "探测超时: '{}'",
+                                        cfg_clone.name,
+                                    );
+                                }
+                            }
+                        });
                     }
                 }
                 Ok::<_, crate::error::AppError>(())
             }) {
-                Ok(_) => tracing::info!(target: "ice_paw.mcp", "MCP Server 启动完成"),
+                Ok(_) => tracing::info!(target: "ice_paw.mcp", "MCP Server 启动完成（per-agent 探测在后台进行）"),
                 Err(e) => tracing::warn!(target: "ice_paw.mcp", "MCP Server 启动异常: {}", e),
             }
 
