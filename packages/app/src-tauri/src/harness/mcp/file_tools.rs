@@ -2,8 +2,11 @@
 //!
 //! 让 agent 具备改代码能力。三者均 `PathWhitelist` 授权（agent workspace 内自动放行，
 //! 路径在 workspace 外才弹窗确认）。统一用 `path` 字段名，便于 tool_executor 提取做白名单。
+//!
+//! **自动备份**：write_file / edit_file / delete_file 在修改/删除已存在文件前，
+//! 自动将原文件拷贝到同目录的 `.icepaw-backup/` 下（带时间戳），每个文件最多保留 10 份。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -13,6 +16,9 @@ use crate::error::{AppError, AppResult};
 use super::client::McpClient;
 use super::types::AuthorizationLevel;
 
+/// 每个文件最多保留的备份数
+const MAX_BACKUPS: usize = 10;
+
 /// 拒绝操作 Linux 虚拟文件系统等敏感路径（按原始串前缀判断，对新文件也生效）
 fn reject_sensitive(path: &Path) -> AppResult<()> {
     let s = path.to_string_lossy();
@@ -21,6 +27,70 @@ fn reject_sensitive(path: &Path) -> AppResult<()> {
             "出于安全原因，不允许操作敏感路径: {s}"
         )));
     }
+    Ok(())
+}
+
+/// 修改/删除文件前自动备份（如果文件已存在）。
+///
+/// 备份到 `<parent>/.icepaw-backup/<timestamp>_<filename>`，
+/// 每个文件最多保留 MAX_BACKUPS 份旧备份。
+/// 返回备份路径（None = 文件不存在，无需备份）。
+fn backup_if_exists(path: &Path) -> AppResult<Option<String>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let parent = path.parent().unwrap_or(Path::new("."));
+    let backup_dir = parent.join(".icepaw-backup");
+    std::fs::create_dir_all(&backup_dir)
+        .map_err(|e| AppError::Io(std::io::Error::other(format!("创建备份目录失败: {e}"))))?;
+
+    let filename = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "unknown".into());
+
+    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S_%3f");
+    let backup_name = format!("{timestamp}_{filename}");
+    let backup_path = backup_dir.join(&backup_name);
+
+    std::fs::copy(path, &backup_path)
+        .map_err(|e| AppError::Io(std::io::Error::other(format!("备份文件失败: {e}"))))?;
+
+    // 清理旧备份（只保留最近 MAX_BACKUPS 个）
+    cleanup_old_backups(&backup_dir, &filename)?;
+
+    Ok(Some(backup_path.to_string_lossy().to_string()))
+}
+
+/// 清理同一文件的旧备份，只保留最近 MAX_BACKUPS 个。
+fn cleanup_old_backups(backup_dir: &Path, original_filename: &str) -> AppResult<()> {
+    let suffix = format!("_{original_filename}");
+    let mut backups: Vec<(PathBuf, std::time::SystemTime)> = Vec::new();
+
+    if let Ok(entries) = std::fs::read_dir(backup_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.ends_with(&suffix) {
+                if let Ok(meta) = entry.metadata() {
+                    if let Ok(modified) = meta.modified() {
+                        backups.push((entry.path(), modified));
+                    }
+                }
+            }
+        }
+    }
+
+    if backups.len() <= MAX_BACKUPS {
+        return Ok(());
+    }
+
+    // 按修改时间降序，保留最新的 MAX_BACKUPS 个
+    backups.sort_by(|a, b| b.1.cmp(&a.1));
+    for (path, _) in &backups[MAX_BACKUPS..] {
+        let _ = std::fs::remove_file(path);
+    }
+
     Ok(())
 }
 
@@ -89,6 +159,9 @@ Use create_dirs=true to create parent directories."
             }
         }
 
+        // 修改前自动备份
+        let backup = backup_if_exists(path)?;
+
         tokio::fs::write(path, &parsed.content)
             .await
             .map_err(AppError::Io)?;
@@ -96,6 +169,7 @@ Use create_dirs=true to create parent directories."
         Ok(serde_json::json!({
             "path": parsed.path,
             "bytes_written": parsed.content.len(),
+            "backup": backup,
         })
         .to_string())
     }
@@ -156,6 +230,9 @@ whitespace) and be unique unless replace_all=true. Fails if old_string is not fo
             .await
             .map_err(AppError::Io)?;
 
+        // 修改前自动备份
+        let backup = backup_if_exists(path)?;
+
         let count = content.matches(&parsed.old_string).count();
         if count == 0 {
             return Err(AppError::Validation(format!(
@@ -182,6 +259,7 @@ whitespace) and be unique unless replace_all=true. Fails if old_string is not fo
         Ok(serde_json::json!({
             "path": parsed.path,
             "replacements": if parsed.replace_all { count } else { 1 },
+            "backup": backup,
         })
         .to_string())
     }
@@ -231,15 +309,26 @@ impl McpClient for DeleteFileTool {
         let path = Path::new(&parsed.path);
         reject_sensitive(path)?;
 
+        // 删除前自动备份（仅文件，目录不备份）
+        let backup = if !path.is_dir() {
+            backup_if_exists(path)?
+        } else {
+            None
+        };
+
         let meta = tokio::fs::metadata(path).await.map_err(AppError::Io)?;
         if meta.is_dir() {
-            // 仅删空目录：remove_dir 对非空目录会报错（安全）
             tokio::fs::remove_dir(path).await.map_err(AppError::Io)?;
         } else {
             tokio::fs::remove_file(path).await.map_err(AppError::Io)?;
         }
 
-        Ok(serde_json::json!({ "path": parsed.path, "deleted": true }).to_string())
+        Ok(serde_json::json!({
+            "path": parsed.path,
+            "deleted": true,
+            "backup": backup,
+        })
+        .to_string())
     }
 }
 
