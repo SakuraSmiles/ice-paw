@@ -840,6 +840,7 @@ async fn stream_loop_inner(
             project_id: ctx.project_id.clone(),
             workspace: project_ws.or(agent_ws),
             pool: ctx.pool.clone(),
+            api_key: Some(ctx.api_key.clone()),
         };
         let tool_result_blocks: Vec<ContentBlock> = execute_tool_round(
             &ctx.app,

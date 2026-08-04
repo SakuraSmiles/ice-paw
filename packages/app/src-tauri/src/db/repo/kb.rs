@@ -314,6 +314,72 @@ pub async fn search_chunks(
     q.fetch_all(pool).await.map_err(Into::into)
 }
 
+// ============================ embedding 向量（RAG v2） ============================
+
+/// embedding 向量 → little-endian bytes（存 BLOB）
+pub fn embedding_to_bytes(vec: &[f32]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(vec.len() * 4);
+    for f in vec {
+        bytes.extend_from_slice(&f.to_le_bytes());
+    }
+    bytes
+}
+
+/// little-endian bytes → embedding 向量
+pub fn bytes_to_embedding(bytes: &[u8]) -> Vec<f32> {
+    bytes
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect()
+}
+
+/// 加载指定 KB 范围内所有 chunk（含 embedding 向量），供向量检索用。
+/// 返回 (chunk_id, doc_id, title, file_path, content, embedding_bytes)
+#[derive(sqlx::FromRow)]
+pub struct ChunkWithEmbedding {
+    pub id: String,
+    pub doc_id: String,
+    pub title: String,
+    pub file_path: String,
+    pub content: String,
+    pub embedding: Option<Vec<u8>>,
+}
+
+pub async fn load_chunks_for_vector_search(
+    pool: &SqlitePool,
+    kb_ids: &[String],
+) -> AppResult<Vec<ChunkWithEmbedding>> {
+    if kb_ids.is_empty() {
+        return Ok(vec![]);
+    }
+    let placeholders = kb_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!(
+        "SELECT c.id, c.doc_id, d.title, d.file_path, c.content, c.embedding
+         FROM kb_document_chunk c
+         JOIN kb_document d ON c.doc_id = d.id
+         WHERE d.kb_id IN ({placeholders})"
+    );
+    let mut q = sqlx::query_as::<_, ChunkWithEmbedding>(&sql);
+    for id in kb_ids {
+        q = q.bind(id);
+    }
+    q.fetch_all(pool).await.map_err(Into::into)
+}
+
+/// 更新 chunk 的 embedding 向量
+pub async fn update_chunk_embedding(
+    pool: &SqlitePool,
+    chunk_id: &str,
+    embedding: &[u8],
+) -> AppResult<()> {
+    sqlx::query("UPDATE kb_document_chunk SET embedding = ? WHERE id = ?")
+        .bind(embedding)
+        .bind(chunk_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
