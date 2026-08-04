@@ -734,6 +734,11 @@ pub struct UserPreferences {
     pub font_size: Option<i32>,
     /// Phase 3: 默认工作区根路径
     pub default_workspace_path: Option<String>,
+    /// Embedding 全局配置（独立于聊天 Agent）
+    pub embedding_provider: Option<String>,
+    pub embedding_model: Option<String>,
+    pub embedding_api_key: Option<String>,
+    pub embedding_base_url: Option<String>,
 }
 
 // =========================================================================

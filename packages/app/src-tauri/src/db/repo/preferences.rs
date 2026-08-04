@@ -22,6 +22,10 @@ const KNOWN_KEYS: &[&str] = &[
     "font_size",
     "default_workspace_path",
     "timezone",
+    "embedding_provider",
+    "embedding_model",
+    "embedding_api_key",
+    "embedding_base_url",
 ];
 
 /// 系统默认工作空间根路径（安装即用，自动创建）
