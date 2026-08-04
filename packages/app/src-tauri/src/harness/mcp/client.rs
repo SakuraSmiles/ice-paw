@@ -162,6 +162,7 @@ impl McpRegistry {
             ("git", Arc::new(super::git::GitTool)),
             ("web_fetch", Arc::new(super::web::WebFetchTool)),
             ("read_agent_config", Arc::new(super::agent_config::ReadAgentConfigTool)),
+            ("delegate_to_agent", Arc::new(super::delegate::DelegateTool)),
         ];
         for name in names {
             if let Some((_, client)) = all_builtins.iter().find(|(n, _)| n == name) {
