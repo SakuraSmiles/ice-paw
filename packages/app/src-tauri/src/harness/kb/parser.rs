@@ -174,6 +174,84 @@ fn truncate(s: &str, max: usize) -> String {
 }
 
 // =========================================================================
+// chunk 切分（RAG v2）
+// =========================================================================
+
+/// 目标 chunk 大小（字符数）
+const CHUNK_TARGET_SIZE: usize = 500;
+/// 单个 chunk 最大字符数（超过则强制切分）
+const CHUNK_MAX_SIZE: usize = 800;
+
+/// 把文档正文切分为 chunk 列表。
+///
+/// 策略：
+/// 1. 按双换行分段
+/// 2. 累积段落到 ~500 字符时输出一个 chunk
+/// 3. 单段超过 800 字符则按行进一步切分
+/// 4. 最后一个小段落（<100 字符）合并到前一个 chunk
+pub fn split_into_chunks(content: &str) -> Vec<String> {
+    let paragraphs: Vec<&str> = content.split("\n\n").collect();
+    let mut chunks: Vec<String> = Vec::new();
+    let mut current = String::new();
+
+    for para in paragraphs {
+        let para = para.trim();
+        if para.is_empty() {
+            continue;
+        }
+
+        // 单段过长 → 按行切分后逐行累积
+        if para.chars().count() > CHUNK_MAX_SIZE {
+            // 先把当前累积的输出
+            if !current.is_empty() {
+                chunks.push(std::mem::take(&mut current));
+            }
+            // 按行切分超长段落
+            for line in para.lines() {
+                if current.chars().count() + line.chars().count() + 1 > CHUNK_TARGET_SIZE && !current.is_empty() {
+                    chunks.push(std::mem::take(&mut current));
+                }
+                if !current.is_empty() {
+                    current.push('\n');
+                }
+                current.push_str(line);
+            }
+            continue;
+        }
+
+        // 正常段落：累积到目标大小
+        if !current.is_empty() && current.chars().count() + para.chars().count() > CHUNK_TARGET_SIZE {
+            chunks.push(std::mem::take(&mut current));
+        }
+        if !current.is_empty() {
+            current.push_str("\n\n");
+        }
+        current.push_str(para);
+    }
+
+    // 剩余部分
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+
+    // 合并最后的小碎片
+    if chunks.len() >= 2 {
+        let last = chunks.last().unwrap();
+        if last.chars().count() < 100 {
+            let small = chunks.pop().unwrap();
+            if let Some(prev) = chunks.last_mut() {
+                prev.push_str("\n\n");
+                prev.push_str(&small);
+            } else {
+                chunks.push(small);
+            }
+        }
+    }
+
+    chunks
+}
+
+// =========================================================================
 // 单元测试
 // =========================================================================
 

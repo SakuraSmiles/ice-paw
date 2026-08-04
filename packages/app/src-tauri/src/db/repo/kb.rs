@@ -145,7 +145,7 @@ pub async fn upsert_document(
     tags: &str,
     content_hash: Option<&str>,
     file_mtime: Option<&str>,
-) -> AppResult<()> {
+) -> AppResult<String> {
     let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
     if let Some(existing) = get_document_by_path(pool, kb_id, file_path).await? {
         sqlx::query(
@@ -160,6 +160,7 @@ pub async fn upsert_document(
         .bind(&existing.id)
         .execute(pool)
         .await?;
+        Ok(existing.id)
     } else {
         let id = Uuid::new_v4().to_string();
         sqlx::query(
@@ -177,8 +178,8 @@ pub async fn upsert_document(
         .bind(&now)
         .execute(pool)
         .await?;
+        Ok(id)
     }
-    Ok(())
 }
 
 /// 删除某 KB 下指定文档（源文件被删时）
@@ -234,9 +235,84 @@ pub async fn search(
     Ok(hits)
 }
 
-// =========================================================================
-// 单元测试
-// =========================================================================
+// ============================ chunk 管理（RAG v2） ============================
+
+/// 替换文档的所有 chunk（先删后插）。embedding 暂留 NULL，后续 embedding 阶段填充。
+pub async fn upsert_chunks(
+    pool: &SqlitePool,
+    doc_id: &str,
+    chunks: &[String],
+) -> AppResult<()> {
+    // 先删除旧 chunk
+    sqlx::query("DELETE FROM kb_document_chunk WHERE doc_id = ?")
+        .bind(doc_id)
+        .execute(pool)
+        .await?;
+
+    // 插入新 chunk
+    for (idx, content) in chunks.iter().enumerate() {
+        let id = Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO kb_document_chunk (id, doc_id, chunk_idx, content) VALUES (?, ?, ?, ?)",
+        )
+        .bind(&id)
+        .bind(doc_id)
+        .bind(idx as i64)
+        .bind(content)
+        .execute(pool)
+        .await?;
+    }
+    Ok(())
+}
+
+/// 删除文档的所有 chunk（文档被删除时调用）
+pub async fn delete_chunks_by_doc(pool: &SqlitePool, doc_id: &str) -> AppResult<()> {
+    sqlx::query("DELETE FROM kb_document_chunk WHERE doc_id = ?")
+        .bind(doc_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// chunk 级关键词搜索（比文档级更精确，返回命中的 chunk 内容 + 来源文档信息）
+#[derive(sqlx::FromRow)]
+pub struct ChunkSearchHit {
+    pub doc_id: String,
+    pub kb_name: String,
+    pub file_path: String,
+    pub title: String,
+    pub chunk_idx: i64,
+    pub content: String,
+}
+
+pub async fn search_chunks(
+    pool: &SqlitePool,
+    query: &str,
+    kb_ids: &[String],
+    limit: i64,
+) -> AppResult<Vec<ChunkSearchHit>> {
+    if kb_ids.is_empty() {
+        return Ok(vec![]);
+    }
+    let placeholders = kb_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let pattern = format!("%{query}%");
+    let sql = format!(
+        "SELECT c.doc_id, k.name AS kb_name, d.file_path, d.title, c.chunk_idx, c.content
+         FROM kb_document_chunk c
+         JOIN kb_document d ON c.doc_id = d.id
+         JOIN kb k ON d.kb_id = k.id
+         WHERE d.kb_id IN ({placeholders})
+           AND c.content LIKE ?
+         ORDER BY (d.title LIKE ?) DESC, c.chunk_idx ASC
+         LIMIT ?"
+    );
+    let mut q = sqlx::query_as::<_, ChunkSearchHit>(&sql);
+    for id in kb_ids {
+        q = q.bind(id);
+    }
+    q = q.bind(&pattern).bind(&pattern).bind(limit);
+    q.fetch_all(pool).await.map_err(Into::into)
+}
 
 #[cfg(test)]
 mod tests {
