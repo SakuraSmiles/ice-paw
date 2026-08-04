@@ -147,10 +147,21 @@ pub async fn send_message(
         cancel_token.clone(),
     );
 
-    // 项目 workspace 注入 Pipeline（供 OsContextStage 告知 Agent 当前工作目录）
+    // 项目 workspace + 上下文目录注入 Pipeline
     if let Some(ref pid) = conv.project_id {
         if let Ok(proj) = repo::project::get_by_id(pool.inner(), pid).await {
             pipeline_ctx.project_workspace = proj.workspace_path;
+        }
+        // 项目上下文目录：{default_ws}/projects/{project_id}/
+        if let Ok(prefs) = repo::preferences::get_all(pool.inner()).await {
+            if let Some(ref ws) = prefs.default_workspace_path {
+                let dir = format!(
+                    "{}/projects/{}",
+                    ws.trim_end_matches(['/', '\\']),
+                    pid
+                );
+                pipeline_ctx.project_context_dir = Some(dir);
+            }
         }
     }
 
