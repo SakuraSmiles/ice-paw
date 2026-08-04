@@ -14,10 +14,11 @@
   未来迭代建议：D/E/G 区可提取为独立子组件（需处理 prefs ref 共享）。
 -->
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from "vue";
+import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
 import { bridge } from "../../api/bridge";
 import { setTimezone } from "../../utils/time";
+import Combobox from "../../components/common/Combobox.vue";
 import type { UserPreferences } from "../../types";
 
 const prefs = ref<UserPreferences>({});
@@ -101,6 +102,41 @@ async function openDataDir() {
 
 onMounted(load);
 
+// ---- Embedding 配置 ----
+const embeddingProviders = ["智谱 GLM", "OpenAI", "DeepSeek"];
+const embeddingModelMap: Record<string, { provider: string; models: string[]; keyUrl: string }> = {
+  "智谱 GLM": { provider: "glm", models: ["embedding-3"], keyUrl: "https://open.bigmodel.cn/usercenter/proj-mgmt/apikeys" },
+  "OpenAI": { provider: "openai", models: ["text-embedding-3-small", "text-embedding-3-large"], keyUrl: "https://platform.openai.com/api-keys" },
+  "DeepSeek": { provider: "deepseek", models: [], keyUrl: "https://platform.deepseek.com/api_keys" },
+};
+/** Combobox 展示用的 provider 名（智谱 GLM / OpenAI / DeepSeek），反向映射回内部 provider key */
+const embeddingProviderDisplay = computed(() => {
+  const p = prefs.value.embedding_provider || "";
+  return Object.entries(embeddingModelMap).find(([, v]) => v.provider === p)?.[0] ?? "";
+});
+const embeddingModelSuggestions = computed(() => {
+  return embeddingModelMap[embeddingProviderDisplay.value]?.models ?? [];
+});
+const embeddingKeyUrl = computed(() => embeddingModelMap[embeddingProviderDisplay.value]?.keyUrl ?? "");
+
+watch(() => prefs.value.embedding_provider, (newProvider) => {
+  // Provider 变化时自动推荐默认模型
+  const display = Object.entries(embeddingModelMap).find(([, v]) => v.provider === newProvider)?.[0] ?? "";
+  const models = embeddingModelMap[display]?.models ?? [];
+  if (models.length > 0 && !prefs.value.embedding_model) {
+    prefs.value.embedding_model = models[0];
+    saveEmbedding();
+  }
+});
+
+function onEmbeddingProviderChange(displayName: string) {
+  const mapping = embeddingModelMap[displayName];
+  prefs.value.embedding_provider = mapping?.provider ?? "";
+  // 切换 Provider 时重置模型为推荐值
+  prefs.value.embedding_model = mapping?.models[0] ?? "";
+  saveEmbedding();
+}
+
 async function saveEmbedding() {
   saving.value = true;
   try {
@@ -108,7 +144,6 @@ async function saveEmbedding() {
       bridge.preferences.set("embedding_provider", prefs.value.embedding_provider ?? ""),
       bridge.preferences.set("embedding_model", prefs.value.embedding_model ?? ""),
       bridge.preferences.set("embedding_api_key", prefs.value.embedding_api_key ?? ""),
-      bridge.preferences.set("embedding_base_url", prefs.value.embedding_base_url ?? ""),
     ]);
     saved.value = true;
     setTimeout(() => { saved.value = false; }, 2000);
@@ -119,12 +154,6 @@ async function saveEmbedding() {
   }
 }
 
-const embeddingProviders = [
-  { value: "", label: "未启用（仅关键词检索）" },
-  { value: "glm", label: "智谱 GLM" },
-  { value: "openai", label: "OpenAI" },
-  { value: "deepseek", label: "DeepSeek" },
-];
 onMounted(loadDataDir);
 
 // =========================================================================
@@ -525,47 +554,57 @@ const hasFilterResults = computed(() => {
         </div>
       </div>
 
-      <!-- ===== 知识库语义检索（Embedding） ===== -->
+      <!-- ===== 知识库语义检索 ===== -->
       <div class="setting-row">
         <div class="setting-label">
           <div class="setting-label-text">
-            知识库语义检索
-            <span class="tip-icon" data-tip="启用后知识库支持语义匹配（向量检索），比关键词更精准。独立于聊天 Agent，可以用不同 Provider。">
+            语义检索
+            <span class="tip-icon" data-tip="配置后知识库支持语义匹配（向量检索），比关键词更精准。独立于聊天 Agent。">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
             </span>
           </div>
         </div>
         <div class="setting-control">
-          <select
-            v-model="prefs.embedding_provider"
-            class="form-input"
-            @change="saveEmbedding"
-          >
-            <option v-for="p in embeddingProviders" :key="p.value" :value="p.value">{{ p.label }}</option>
-          </select>
-          <div v-if="prefs.embedding_provider" class="embedding-fields">
-            <input
-              v-model="prefs.embedding_model"
-              class="form-input embedding-input"
-              placeholder="模型名，如 embedding-3"
-              @blur="saveEmbedding"
-            />
-            <input
-              v-model="prefs.embedding_api_key"
-              type="password"
-              class="form-input embedding-input"
-              placeholder="API Key"
-              @blur="saveEmbedding"
-            />
-            <input
-              v-model="prefs.embedding_base_url"
-              class="form-input embedding-input"
-              placeholder="自定义 API URL（可选，留空用默认）"
-              @blur="saveEmbedding"
+          <div class="input-group">
+            <Combobox
+              :model-value="embeddingProviderDisplay"
+              :options="embeddingProviders"
+              placeholder="未启用"
+              @update:model-value="onEmbeddingProviderChange"
             />
           </div>
         </div>
       </div>
+      <template v-if="prefs.embedding_provider">
+        <div class="setting-row">
+          <div class="setting-label">
+            <div class="setting-label-text">检索模型</div>
+          </div>
+          <div class="setting-control">
+            <div class="input-group">
+              <Combobox
+                v-if="embeddingModelSuggestions.length > 0"
+                :model-value="prefs.embedding_model || ''"
+                :options="embeddingModelSuggestions"
+                placeholder="选择或输入模型名"
+                @update:model-value="(v: string) => { prefs.embedding_model = v; saveEmbedding(); }"
+              />
+              <input v-else v-model="prefs.embedding_model" class="form-input" placeholder="输入模型名" @blur="saveEmbedding" />
+            </div>
+          </div>
+        </div>
+        <div class="setting-row">
+          <div class="setting-label">
+            <div class="setting-label-text">检索 API Key</div>
+          </div>
+          <div class="setting-control">
+            <div class="input-group">
+              <input v-model="prefs.embedding_api_key" type="password" class="form-input" placeholder="粘贴 API Key" @blur="saveEmbedding" />
+            </div>
+            <a v-if="embeddingKeyUrl" :href="embeddingKeyUrl" target="_blank" class="embed-key-link">申请 Key →</a>
+          </div>
+        </div>
+      </template>
 
     </div>
   </div>
@@ -611,6 +650,19 @@ const hasFilterResults = computed(() => {
   display: flex;
   flex-direction: column;
 }
+
+/* Embedding: Combobox 高度统一到 32px（和 form-input 一致） */
+:deep(.combobox-input-wrap) {
+  height: 32px;
+}
+.embed-key-link {
+  font-size: var(--ip-text-caption-size);
+  color: var(--ip-primary-600);
+  text-decoration: none;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.embed-key-link:hover { text-decoration: underline; }
 
 /* ===== 设置行 ===== */
 .setting-row {
@@ -1016,14 +1068,4 @@ const hasFilterResults = computed(() => {
   to   { opacity: 1; transform: translateY(0) scale(1); }
 }
 
-/* ===== Embedding 配置区 ===== */
-.embedding-fields {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 8px;
-}
-.embedding-input {
-  font-size: var(--ip-text-body-sm-size);
-}
 </style>
