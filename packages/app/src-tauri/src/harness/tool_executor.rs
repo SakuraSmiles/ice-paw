@@ -175,6 +175,7 @@ pub async fn execute_tool_round(
     let workspace = tool_ctx.workspace.as_ref().map(PathBuf::from);
 
     for (tc_id, tc_name, tc_args) in completed_calls {
+        let tool_start = std::time::Instant::now();
         // 1. 解析授权级别 + 路径
         let (level, file_path) = inspect_tool_for_auth(registry, tc_name, tc_args).await;
 
@@ -288,6 +289,7 @@ pub async fn execute_tool_round(
         };
 
         // 3. emit tool-result + 收集 blocks
+        let duration_ms = tool_start.elapsed().as_millis() as u64;
         match final_result {
             Ok(content) => {
                 let _ = app.emit(
@@ -298,6 +300,7 @@ pub async fn execute_tool_round(
                         tool_use_id: tc_id.clone(),
                         content: content.clone(),
                         is_error: false,
+                        duration_ms,
                     },
                 );
                 tool_result_blocks.push(ContentBlock::ToolResult {
@@ -315,6 +318,7 @@ pub async fn execute_tool_round(
                         tool_use_id: tc_id.clone(),
                         content: err_content.clone(),
                         is_error: true,
+                        duration_ms,
                     },
                 );
                 tool_result_blocks.push(ContentBlock::ToolResult {
