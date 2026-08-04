@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // McpSettings.vue — MCP Server 设置（卡片展开内联编辑 + 顶部虚线新建卡片）
 import { ref, onMounted } from "vue";
+import { listen } from "@tauri-apps/api/event";
 import McpForm from "../../components/mcp/McpForm.vue";
 import Switch from "../../components/common/Switch.vue";
 import type { McpServer, McpToolDef } from "../../types";
@@ -10,6 +11,8 @@ const servers = ref<McpServer[]>([]);
 const activeIds = ref<Set<string>>(new Set());
 const loading = ref(true);
 const nodeAvailable = ref(true);
+/** MCP Server 探测状态：id → { status, toolCount?, error? } */
+const probeStatus = ref<Record<string, { status: "probing" | "done" | "error"; toolCount?: number; error?: string }>>({});
 
 async function reload() {
   loading.value = true;
@@ -36,7 +39,23 @@ const isCreating = ref(false);
 const toolsMap = ref<Record<string, McpToolDef[]>>({});
 const toolsLoading = ref<Record<string, boolean>>({});
 
-onMounted(reload);
+onMounted(async () => {
+  await reload();
+  // 初始化 per_agent server 的探测状态
+  for (const s of servers.value) {
+    if (s.scope === "per_agent" && s.enabled) {
+      probeStatus.value[s.id] = { status: "probing" };
+    }
+  }
+  // 监听探测完成事件
+  listen<{ id: string; name: string; tool_count: number }>("mcp:probe-done", (e) => {
+    probeStatus.value[e.payload.id] = { status: "done", toolCount: e.payload.tool_count };
+    reload(); // 刷新工具数
+  });
+  listen<{ id: string; name: string; error: string }>("mcp:probe-error", (e) => {
+    probeStatus.value[e.payload.id] = { status: "error", error: e.payload.error };
+  });
+});
 
 // 内置工具集（系统自带，只读展示；工具名以 register_builtin 为准）
 const builtinExpanded = ref(false);
@@ -212,6 +231,9 @@ async function onDelete(s: McpServer) {
             <div class="card-name-row">
               <span class="card-name">{{ s.name }}</span>
               <span class="status-tag" :class="'tag-' + statusOf(s)">{{ statusLabel(s) }}</span>
+              <span v-if="probeStatus[s.id]?.status === 'probing'" class="probe-tag probe-probing">探测中…</span>
+              <span v-else-if="probeStatus[s.id]?.status === 'done'" class="probe-tag probe-done">{{ probeStatus[s.id]?.toolCount }} 工具</span>
+              <span v-else-if="probeStatus[s.id]?.status === 'error'" class="probe-tag probe-error" :title="probeStatus[s.id]?.error">探测失败</span>
             </div>
           </div>
           <Switch :model-value="s.enabled" @update:model-value="(v: boolean) => toggleEnabled(s, v)" @click.stop />
@@ -396,6 +418,12 @@ async function onDelete(s: McpServer) {
 .tag-stopped { background: var(--ip-color-bg-tertiary); color: var(--ip-color-text-tertiary); }
 .tag-error { background: var(--ip-danger-bg); color: var(--ip-danger-text); }
 .tag-per_agent { background: var(--ip-color-primary-tint-bg); color: var(--ip-color-primary-tint-text); }
+
+.probe-tag { font-size: 10px; padding: 0 6px; line-height: 18px; border-radius: var(--ip-radius-full); flex-shrink: 0; font-weight: var(--ip-font-weight-medium); }
+.probe-probing { background: var(--ip-color-bg-tertiary); color: var(--ip-color-text-tertiary); animation: probe-pulse 1.5s ease-in-out infinite; }
+.probe-done { background: var(--ip-success-bg); color: var(--ip-success-text); }
+.probe-error { background: var(--ip-danger-bg); color: var(--ip-danger-text); cursor: help; }
+@keyframes probe-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
 
 .card-desc {
   font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary);
