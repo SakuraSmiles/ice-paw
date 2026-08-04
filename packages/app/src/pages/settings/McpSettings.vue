@@ -1,7 +1,6 @@
 <script setup lang="ts">
 // McpSettings.vue — MCP Server 设置（卡片展开内联编辑 + 顶部虚线新建卡片）
 import { ref, onMounted } from "vue";
-import { listen } from "@tauri-apps/api/event";
 import McpForm from "../../components/mcp/McpForm.vue";
 import Switch from "../../components/common/Switch.vue";
 import type { McpServer, McpToolDef } from "../../types";
@@ -41,20 +40,11 @@ const toolsLoading = ref<Record<string, boolean>>({});
 
 onMounted(async () => {
   await reload();
-  // 初始化 per_agent server 的探测状态
-  for (const s of servers.value) {
-    if (s.scope === "per_agent" && s.enabled) {
-      probeStatus.value[s.id] = { status: "probing" };
-    }
-  }
-  // 监听探测完成事件
-  listen<{ id: string; name: string; tool_count: number }>("mcp:probe-done", (e) => {
-    probeStatus.value[e.payload.id] = { status: "done", toolCount: e.payload.tool_count };
-    reload(); // 刷新工具数
-  });
-  listen<{ id: string; name: string; error: string }>("mcp:probe-error", (e) => {
-    probeStatus.value[e.payload.id] = { status: "error", error: e.payload.error };
-  });
+  // 主动并发 probe 所有 per_agent server（不依赖后端被动 emit）
+  const tasks = servers.value
+    .filter((s) => s.scope === "per_agent" && s.enabled)
+    .map((s) => retryProbe(s));
+  await Promise.allSettled(tasks);
 });
 
 /** 手动重试 MCP Server 工具探测 */
@@ -63,7 +53,7 @@ async function retryProbe(s: McpServer) {
   try {
     const tools = await bridge.mcp.probe(s.id);
     probeStatus.value[s.id] = { status: "done", toolCount: tools.length };
-    await reload();
+    toolsMap.value[s.id] = tools; // 直接更新 toolsMap，不调 reload（避免并发竞争）
   } catch (e) {
     probeStatus.value[s.id] = { status: "error", error: e instanceof Error ? e.message : String(e) };
   }
