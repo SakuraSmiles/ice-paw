@@ -102,8 +102,22 @@ impl ExternalMcpServer {
         args: &[String],
         env: &serde_json::Value,
     ) -> AppResult<Self> {
-        let mut child = Command::new(command)
-            .args(args)
+        // Windows 上 npx/node 等是 .cmd 文件，CreateProcess 搜索 PATH 不找 .cmd，
+        // 需要通过 cmd /C 执行。判断条件：非绝对路径 + 非 .exe 后缀。
+        let (actual_command, actual_args): (String, Vec<String>) = if cfg!(windows)
+            && !command.to_lowercase().ends_with(".exe")
+            && !command.contains('/')
+            && !command.contains('\\')
+        {
+            let mut cmd_args = vec!["/C".to_string(), command.to_string()];
+            cmd_args.extend(args.iter().cloned());
+            ("cmd".to_string(), cmd_args)
+        } else {
+            (command.to_string(), args.to_vec())
+        };
+
+        let mut child = Command::new(&actual_command)
+            .args(&actual_args)
             // 环境隔离：清空继承的环境（防 OPENAI_API_KEY 等机密泄漏给外部 server），
             // 再仅注入「进程执行所需的安全系统变量」+ 用户显式声明的 env（见 build_safe_env）。
             .env_clear()
