@@ -82,6 +82,8 @@ pub struct PipelineContext {
     pub cancel_token: CancellationToken,
     /// 项目工作目录（None = 散落会话或项目无 workspace）
     pub project_workspace: Option<String>,
+    /// 项目上下文目录（IcePaw 管理的 {workspace}/projects/{id}/，存 project.md）
+    pub project_context_dir: Option<String>,
 
     // ---- Stage 1: Template 渲染输出 ----
     pub rendered_system_prompt: Option<String>,
@@ -144,6 +146,7 @@ impl PipelineContext {
             conversation_id,
             cancel_token,
             project_workspace: None,
+            project_context_dir: None,
             rendered_system_prompt: None,
             rendered_user_prefix: String::new(),
             os_context: String::new(),

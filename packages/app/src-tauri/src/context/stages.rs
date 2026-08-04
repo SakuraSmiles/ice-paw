@@ -114,12 +114,13 @@ impl PipelineStage for OsContextStage {
             ctx.project_workspace.as_deref(),
         );
 
-        // 读取项目级上下文文件（project.md / conventions.md）
-        if let Some(ref ws) = ctx.project_workspace {
-            let ws_path = std::path::Path::new(ws);
+        // 读取项目级上下文（从 IcePaw 管理的 {workspace}/projects/{id}/ 目录，
+        // 不从项目源码目录读——避免泄露、误删、污染用户项目）
+        if let Some(ref ctx_dir) = ctx.project_context_dir {
+            let dir_path = std::path::Path::new(ctx_dir);
 
             // project.md — 项目说明（技术栈、架构、业务背景）
-            let project_md = ws_path.join("project.md");
+            let project_md = dir_path.join("project.md");
             if let Ok(content) = tokio::fs::read_to_string(&project_md).await {
                 if !content.trim().is_empty() {
                     ctx.os_context.push_str(&format!(
@@ -130,7 +131,7 @@ impl PipelineStage for OsContextStage {
             }
 
             // conventions.md — 编码规范（命名、格式、最佳实践）
-            let conv_md = ws_path.join("conventions.md");
+            let conv_md = dir_path.join("conventions.md");
             if let Ok(content) = tokio::fs::read_to_string(&conv_md).await {
                 if !content.trim().is_empty() {
                     ctx.os_context.push_str(&format!(

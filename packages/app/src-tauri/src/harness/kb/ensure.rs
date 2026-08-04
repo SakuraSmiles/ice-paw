@@ -47,7 +47,48 @@ pub async fn ensure_default_kbs(pool: &SqlitePool) -> AppResult<()> {
         let name = format!("{} 的知识库", agent.name);
         ensure_kb_row(pool, "agent", Some(&agent.id), &name, &dir).await?;
     }
+
+    // 项目上下文目录（project.md / conventions.md 存放处）
+    ensure_project_context_dirs(pool, default_ws.as_deref()).await;
+
     Ok(())
+}
+
+/// 为每个项目创建上下文目录 {workspace}/projects/{id}/，
+/// 并生成默认 project.md。由 IcePaw 管理，不污染用户项目源码目录。
+pub async fn ensure_project_context_dirs(pool: &SqlitePool, default_workspace: Option<&str>) {
+    let Some(root) = default_workspace else {
+        return;
+    };
+    let projects = match repo::project::list(pool).await {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+    for project in &projects {
+        let dir = PathBuf::from(root).join("projects").join(&project.id);
+        if dir.exists() {
+            continue;
+        }
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            tracing::warn!(target: "ice_paw.kb", "创建项目上下文目录失败: {e}");
+            continue;
+        }
+        // 生成默认 project.md
+        let project_md = dir.join("project.md");
+        let content = format!(
+            "# {}\n\n\
+             在此填写项目说明（技术栈、架构、业务背景等）。\n\
+             此文件由 IcePaw 管理，位于 IcePaw 工作空间，不会进入项目源码目录。\n\
+             修改后即时生效，无需重启。\n",
+            project.name
+        );
+        let _ = std::fs::write(&project_md, content);
+        tracing::info!(
+            target: "ice_paw.kb",
+            "已创建项目上下文目录: {}",
+            dir.display()
+        );
+    }
 }
 
 /// workspace 根 → knowledge 目录（约定）。
