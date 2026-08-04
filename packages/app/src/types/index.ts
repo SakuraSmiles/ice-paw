@@ -268,6 +268,10 @@ export interface UserPreferences {
   keyboard_shortcuts?: Record<string, string> | null;
   timezone?: string;
   default_workspace_path?: string | null;
+  embedding_provider?: string;
+  embedding_model?: string;
+  embedding_api_key?: string;
+  embedding_base_url?: string;
 }
 
 // ============================================================================
