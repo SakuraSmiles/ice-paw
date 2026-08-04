@@ -194,60 +194,7 @@ pub fn run() {
                             );
                         }
                     } else if cfg.enabled && cfg.scope == "per_agent" {
-                        // per_agent server：后台异步探测工具清单（不阻塞启动）
-                        let cfg_clone = cfg.clone();
-                        let manager_clone = mcp_manager.clone();
-                        let app_clone = handle.clone();
-                        tokio::spawn(async move {
-                            tracing::info!(
-                                target: "ice_paw.mcp",
-                                "后台探测 MCP Server '{}' ...",
-                                cfg_clone.name,
-                            );
-                            // 探测超时 20s（npx 首次下载包可能慢，但不能无限等）
-                            let probe_result = tokio::time::timeout(
-                                std::time::Duration::from_secs(20),
-                                manager_clone.probe_tools(&cfg_clone),
-                            ).await;
-                            match probe_result {
-                                Ok(Ok(tools)) => {
-                                    let _ = app_clone.emit("mcp:probe-done", serde_json::json!({
-                                        "id": cfg_clone.id,
-                                        "name": cfg_clone.name,
-                                        "tool_count": tools.len(),
-                                    }));
-                                    tracing::info!(
-                                        target: "ice_paw.mcp",
-                                        "探测完成: '{}' → {} 个工具",
-                                        cfg_clone.name, tools.len(),
-                                    );
-                                }
-                                Ok(Err(e)) => {
-                                    let _ = app_clone.emit("mcp:probe-error", serde_json::json!({
-                                        "id": cfg_clone.id,
-                                        "name": cfg_clone.name,
-                                        "error": e.to_string(),
-                                    }));
-                                    tracing::warn!(
-                                        target: "ice_paw.mcp",
-                                        "探测失败: '{}' — {}",
-                                        cfg_clone.name, e,
-                                    );
-                                }
-                                Err(_) => {
-                                    let _ = app_clone.emit("mcp:probe-error", serde_json::json!({
-                                        "id": cfg_clone.id,
-                                        "name": cfg_clone.name,
-                                        "error": "探测超时（20s）",
-                                    }));
-                                    tracing::warn!(
-                                        target: "ice_paw.mcp",
-                                        "探测超时: '{}'",
-                                        cfg_clone.name,
-                                    );
-                                }
-                            }
-                        });
+                        // per_agent server：启动时跳过，工具探测由前端进入设置页后主动触发
                     }
                 }
                 Ok::<_, crate::error::AppError>(())
