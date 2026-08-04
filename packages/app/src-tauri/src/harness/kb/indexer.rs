@@ -20,7 +20,7 @@ use crate::db::models::KbDocumentRow;
 use crate::db::repo;
 use crate::error::AppResult;
 
-use super::parser::{content_hash, parse_markdown};
+use super::parser::{content_hash, parse_markdown, split_into_chunks};
 
 /// 单次索引的统计（日志 / 返回调用方观察）。
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
@@ -104,7 +104,7 @@ pub async fn index_directory(
             parsed.title
         };
 
-        repo::kb::upsert_document(
+        let doc_id = repo::kb::upsert_document(
             pool,
             kb_id,
             rel_path,
@@ -115,6 +115,14 @@ pub async fn index_directory(
             mtime.as_deref(),
         )
         .await?;
+
+        // RAG v2: 切分 chunk 并存储（embedding 后续填充）
+        let full_text = String::from_utf8_lossy(&content);
+        let chunks = split_into_chunks(&full_text);
+        if let Err(e) = repo::kb::upsert_chunks(pool, &doc_id, &chunks).await {
+            tracing::warn!(target: "ice_paw.kb", "chunk 存储失败 doc={} err={}", doc_id, e);
+        }
+
         stats.indexed += 1;
     }
 
