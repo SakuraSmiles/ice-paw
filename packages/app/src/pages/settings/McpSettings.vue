@@ -57,6 +57,18 @@ onMounted(async () => {
   });
 });
 
+/** 手动重试 MCP Server 工具探测 */
+async function retryProbe(s: McpServer) {
+  probeStatus.value[s.id] = { status: "probing" };
+  try {
+    const tools = await bridge.mcp.probe(s.id);
+    probeStatus.value[s.id] = { status: "done", toolCount: tools.length };
+    await reload();
+  } catch (e) {
+    probeStatus.value[s.id] = { status: "error", error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 // 内置工具集（系统自带，只读展示；工具名以 register_builtin 为准）
 const builtinExpanded = ref(false);
 const builtinTools: { name: string; desc: string }[] = [
@@ -231,9 +243,9 @@ async function onDelete(s: McpServer) {
             <div class="card-name-row">
               <span class="card-name">{{ s.name }}</span>
               <span class="status-tag" :class="'tag-' + statusOf(s)">{{ statusLabel(s) }}</span>
-              <span v-if="probeStatus[s.id]?.status === 'probing'" class="probe-tag probe-probing">探测中…</span>
+              <span v-if="probeStatus[s.id]?.status === 'probing'" class="probe-tag probe-probing">初始化中…</span>
               <span v-else-if="probeStatus[s.id]?.status === 'done'" class="probe-tag probe-done">{{ probeStatus[s.id]?.toolCount }} 工具</span>
-              <span v-else-if="probeStatus[s.id]?.status === 'error'" class="probe-tag probe-error" :title="probeStatus[s.id]?.error">探测失败</span>
+              <span v-else-if="probeStatus[s.id]?.status === 'error'" class="probe-tag probe-error" :title="probeStatus[s.id]?.error">未就绪</span>
             </div>
           </div>
           <Switch :model-value="s.enabled" @update:model-value="(v: boolean) => toggleEnabled(s, v)" @click.stop />
@@ -248,6 +260,14 @@ async function onDelete(s: McpServer) {
 
           <!-- 工具清单（caption 区段，无嵌套框） -->
           <div class="region">
+            <!-- probe 状态详情 + 重试 -->
+            <div v-if="probeStatus[s.id]?.status === 'error'" class="probe-error-bar">
+              <span class="probe-error-msg">{{ probeStatus[s.id]?.error || '初始化失败' }}</span>
+              <button class="btn-link probe-retry-btn" @click="retryProbe(s)">重试</button>
+            </div>
+            <div v-else-if="probeStatus[s.id]?.status === 'probing'" class="region-hint">
+              正在初始化工具包（首次使用需下载，请稍候）…
+            </div>
             <div class="region-head">
               <span class="region-title">工具清单</span>
               <button v-if="s.scope !== 'per_agent'" class="btn-link" @click="restart(s)">
@@ -424,6 +444,16 @@ async function onDelete(s: McpServer) {
 .probe-done { background: var(--ip-success-bg); color: var(--ip-success-text); }
 .probe-error { background: var(--ip-danger-bg); color: var(--ip-danger-text); cursor: help; }
 @keyframes probe-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+.probe-error-bar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px; margin-bottom: 8px;
+  background: var(--ip-danger-bg); border-radius: var(--ip-radius-sm);
+}
+.probe-error-msg {
+  font-size: var(--ip-text-caption-size); color: var(--ip-danger-text);
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.probe-retry-btn { flex-shrink: 0; }
 
 .card-desc {
   font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary);

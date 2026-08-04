@@ -115,6 +115,17 @@ pub async fn list_mcp_server_tools(
     manager.list_server_tools(&id).await
 }
 
+/// 手动触发 MCP Server 工具探测（per_agent server 初始化失败后重试）
+#[tauri::command]
+pub async fn probe_mcp_server(
+    pool: State<'_, SqlitePool>,
+    manager: State<'_, Arc<McpServerManager>>,
+    id: String,
+) -> AppResult<Vec<McpToolDefinition>> {
+    let config = repo::mcp_server::get_by_id(pool.inner(), &id).await?;
+    manager.probe_tools(&config).await
+}
+
 /// 检测 Node.js 是否可用（MCP Server 用 npx 启动需要）
 #[tauri::command]
 pub fn check_nodejs() -> bool {

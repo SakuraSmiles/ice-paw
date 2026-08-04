@@ -208,6 +208,11 @@ const mcp = {
     try { return await invoke<boolean>("check_nodejs"); }
     catch { return false; }
   },
+  /** 手动探测 MCP Server 工具清单（重试用） */
+  async probe(id: string): Promise<McpToolDef[]> {
+    try { return await invoke<McpToolDef[]>("probe_mcp_server", { id }); }
+    catch (err) { throw wrapInvokeError("mcp.probe", err); }
+  },
 };
 
 const kb = {
