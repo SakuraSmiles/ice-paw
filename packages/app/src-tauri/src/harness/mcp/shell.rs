@@ -150,6 +150,7 @@ mod tests {
             project_id: None,
             workspace: None,
             pool,
+            api_key: None,
         }
     }
 

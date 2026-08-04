@@ -289,7 +289,7 @@ impl EmbeddingBackend for OpenAiEmbeddingBackend {
             return Ok(Vec::new());
         }
         if api_key.trim().is_empty() {
-            return Err(AppError::ProviderNotConfigured(self.model.clone()));
+            return Err(AppError::Llm(format!("API Key 无效或未配置 (model={})", self.model)));
         }
 
         let url = embedding_url_for(&self.base_url);
@@ -330,17 +330,14 @@ impl EmbeddingBackend for OpenAiEmbeddingBackend {
             });
             // 401/403 → ProviderNotConfigured（API Key 无效）
             if code == 401 || code == 403 {
-                return Err(AppError::ProviderNotConfigured(self.model.clone()));
+                return Err(AppError::Llm(format!("API Key 无效或未配置 (model={})", self.model)));
             }
-            // 429 → LlmRateLimited（保留重试语义）
+            // 429 → Llm（限流，保留重试语义由上层处理）
             if code == 429 {
-                return Err(AppError::LlmRateLimited {
-                    message: format!(
-                        "Embedding API 返回 429: {}",
-                        text.chars().take(500).collect::<String>()
-                    ),
-                    retry_after_secs: None,
-                });
+                return Err(AppError::Llm(format!(
+                    "Embedding API 返回 429: {}",
+                    text.chars().take(500).collect::<String>()
+                )));
             }
             return Err(AppError::Llm(format!(
                 "Embedding API 返回 HTTP {}: {}",
@@ -382,53 +379,6 @@ impl EmbeddingBackend for OpenAiEmbeddingBackend {
 
     fn base_url(&self) -> &str {
         &self.base_url
-    }
-}
-
-// =========================================================================
-// `TextEmbedder` 适配（为 context 层 `InMemoryBackend` 提供桥接）
-// =========================================================================
-//
-// `TextEmbedder` trait 定义在 `context::memory`（依赖倒置原则）。
-// `OpenAiEmbeddingBackend` 同时实现 `EmbeddingBackend` 和 `TextEmbedder`
-// 两个 trait：前者用于 harness 内部使用，后者让 context 层能够
-// 通过 trait object 注入。
-//
-// 这样 context 层不需直接导入 harness 类型，保持单向依赖。
-
-/// `OpenAiEmbeddingBackend` 作为 `TextEmbedder` 的适配实现
-///
-/// 转换逻辑：
-/// - `embed()` 直接转发
-/// - `dim()` 返回 `DEFAULT_EMBEDDING_DIM`（text-embedding-3-small 默认 1536 维）
-#[async_trait]
-impl crate::context::memory::TextEmbedder for OpenAiEmbeddingBackend {
-    async fn embed(
-        &self,
-        texts: Vec<&str>,
-        api_key: &str,
-    ) -> AppResult<Vec<Vec<f32>>> {
-        <Self as EmbeddingBackend>::embed(self, texts, api_key).await
-    }
-
-    fn dim(&self) -> usize {
-        DEFAULT_EMBEDDING_DIM
-    }
-}
-
-/// `NoopEmbeddingBackend` 也实现 `TextEmbedder`（供测试使用）
-#[async_trait]
-impl crate::context::memory::TextEmbedder for NoopEmbeddingBackend {
-    async fn embed(
-        &self,
-        texts: Vec<&str>,
-        api_key: &str,
-    ) -> AppResult<Vec<Vec<f32>>> {
-        <Self as EmbeddingBackend>::embed(self, texts, api_key).await
-    }
-
-    fn dim(&self) -> usize {
-        DEFAULT_EMBEDDING_DIM
     }
 }
 

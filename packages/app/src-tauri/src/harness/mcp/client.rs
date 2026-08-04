@@ -46,6 +46,8 @@ pub struct ToolContext {
     pub workspace: Option<String>,
     /// 数据库连接池（search_kb 查 kb/kb_document 表用）
     pub pool: SqlitePool,
+    /// 当前 Agent 的 API Key（search_kb 调 embedding API 用；None = 不支持语义检索）
+    pub api_key: Option<String>,
 }
 
 // =========================================================================
@@ -377,6 +379,7 @@ mod tests {
             project_id: None,
             workspace: None,
             pool: sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap(),
+            api_key: None,
         };
         let result = registry.dispatch("nonexistent", "{}", &ctx).await;
         assert!(result.is_err());
@@ -393,6 +396,7 @@ mod tests {
             project_id: None,
             workspace: None,
             pool: sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap(),
+            api_key: None,
         };
         // StubClient 未 override execute_with_context → 走默认实现 → 返回 "stub"
         registry.register(make_stub("legacy", "legacy tool")).await;
