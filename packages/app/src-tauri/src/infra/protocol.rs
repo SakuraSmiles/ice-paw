@@ -480,6 +480,8 @@ pub struct ChatToolResultPayload {
     pub tool_use_id: String,
     pub content: String,
     pub is_error: bool,
+    /// 工具执行耗时（毫秒），含授权等待
+    pub duration_ms: u64,
 }
 
 /// `chat:thinking` 事件 payload

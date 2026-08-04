@@ -154,7 +154,7 @@ export const useChatStore = defineStore("chat", () => {
     name: string;
     arguments: string;
     ended: boolean;
-    result?: { content: string; isError: boolean } | null;
+    result?: { content: string; isError: boolean; durationMs: number } | null;
   }
   const streamingToolCalls = ref<Map<string, ToolCallState>>(new Map());
   const streamingThinking = ref("");
@@ -480,7 +480,7 @@ export const useChatStore = defineStore("chat", () => {
       const map = new Map(streamingToolCalls.value);
       const call = map.get(e.payload.tool_use_id);
       if (call) {
-        call.result = { content: e.payload.content, isError: e.payload.is_error };
+        call.result = { content: e.payload.content, isError: e.payload.is_error, durationMs: e.payload.duration_ms };
         map.set(e.payload.tool_use_id, { ...call });
         streamingToolCalls.value = map;
       }
