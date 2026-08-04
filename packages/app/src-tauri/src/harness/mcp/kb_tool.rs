@@ -116,11 +116,9 @@ impl McpClient for SearchKbTool {
             })
             .collect();
 
-        // 3.5 语义检索（如果 agent 配置了 embedding_model）
+        // 3.5 语义检索（全局 embedding 配置，独立于聊天 Agent）
         if let Some(semantic) = try_semantic_search(
             &ctx.pool,
-            &ctx.agent_id,
-            ctx.api_key.as_deref(),
             &parsed.query,
             &kb_ids,
             parsed.limit as usize,
@@ -158,10 +156,9 @@ struct SearchHitOut {
 }
 
 /// 尝试语义检索（向量）。返回 None = 不支持/失败，调用方回退纯关键词。
+/// 从全局 preferences 读 embedding 配置，独立于聊天 Agent。
 async fn try_semantic_search(
     pool: &sqlx::SqlitePool,
-    agent_id: &str,
-    api_key: Option<&str>,
     query: &str,
     kb_ids: &[String],
     limit: usize,
@@ -172,25 +169,22 @@ async fn try_semantic_search(
         update_chunk_embedding,
     };
 
-    // 1. 查 agent 的 embedding 配置
-    use sqlx::Row;
-    let row = sqlx::query("SELECT embedding_model, provider, base_url FROM agents WHERE id = ?")
-        .bind(agent_id)
-        .fetch_optional(pool)
-        .await
-        .ok()??;
+    // 1. 从全局 preferences 读 embedding 配置
+    let model: String = sqlx::query_scalar::<_, String>(
+        "SELECT value FROM user_preferences WHERE key = 'embedding_model'"
+    ).fetch_optional(pool).await.ok()??;
 
-    let embedding_model: Option<String> = row.get("embedding_model");
-    let provider: String = row.get("provider");
-    let base_url: Option<String> = row.get("base_url");
-    let model = embedding_model?;
+    let provider: String = sqlx::query_scalar::<_, String>(
+        "SELECT value FROM user_preferences WHERE key = 'embedding_provider'"
+    ).fetch_optional(pool).await.ok()??;
 
-    // Anthropic 系不支持 embedding
-    if matches!(provider.as_str(), "anthropic" | "minimax" | "minimax-cn") {
-        return None;
-    }
+    let api_key: String = sqlx::query_scalar::<_, String>(
+        "SELECT value FROM user_preferences WHERE key = 'embedding_api_key'"
+    ).fetch_optional(pool).await.ok()??;
 
-    let key = api_key?;
+    let base_url: Option<String> = sqlx::query_scalar::<_, String>(
+        "SELECT value FROM user_preferences WHERE key = 'embedding_base_url'"
+    ).fetch_optional(pool).await.ok().flatten();
 
     // 2. 确定 base_url
     let url = match base_url.filter(|s| !s.is_empty()) {
@@ -212,7 +206,7 @@ async fn try_semantic_search(
     let missing: Vec<&_> = chunks.iter().filter(|c| c.embedding.is_none()).collect();
     if !missing.is_empty() {
         let texts: Vec<&str> = missing.iter().map(|c| c.content.as_str()).collect();
-        match backend.embed(texts, key).await {
+        match backend.embed(texts, &api_key).await {
             Ok(embeddings) => {
                 for (chunk, emb) in missing.iter().zip(embeddings.iter()) {
                     let bytes = embedding_to_bytes(emb);
@@ -234,7 +228,7 @@ async fn try_semantic_search(
     let chunks = load_chunks_for_vector_search(pool, kb_ids).await.ok()?;
 
     // 6. query 转向量
-    let query_emb = backend.embed(vec![query], key).await.ok()?;
+    let query_emb = backend.embed(vec![query], &api_key).await.ok()?;
     if query_emb.is_empty() {
         return None;
     }
