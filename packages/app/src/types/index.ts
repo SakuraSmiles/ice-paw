@@ -228,6 +228,7 @@ export interface ChatToolCallEndPayload {
 }
 export interface ChatToolResultPayload {
   conversation_id: string; message_id: string; tool_use_id: string; content: string; is_error: boolean;
+  duration_ms: number;
 }
 export interface ChatThinkingPayload {
   conversation_id: string; message_id: string; content: string;

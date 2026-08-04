@@ -80,6 +80,11 @@ function truncateJson(str: string, maxLen = 80): string {
   return str.substring(0, maxLen) + '…';
 }
 
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
 /** 判断一个 assistant 消息是否有非 text 的附属内容（tool/thinking） */
 function hasExtras(msg: { content_blocks?: string }): boolean {
   if (!msg.content_blocks || msg.content_blocks === '[]') return false;
@@ -457,6 +462,7 @@ const finishReasonLabels: Record<string, string> = {
                     <div class="tool-toggle" @click="toggleToolCall(call.id)">
                       <span class="tool-chevron">{{ expandedToolCalls.has(call.id) ? '▾' : '▸' }}</span>
                       <span class="tool-name">{{ call.name }}</span>
+                      <span v-if="call.result?.durationMs" class="tool-duration">{{ formatDuration(call.result.durationMs) }}</span>
                       <span class="tool-preview">{{ truncateJson(call.arguments || '') }}</span>
                       <span v-if="call.ended && call.result" :class="['tool-dot', call.result.isError ? 'tool-dot-err' : 'tool-dot-ok']"></span>
                       <span v-else-if="call.ended" class="tool-dot tool-dot-wait"></span>
@@ -645,6 +651,7 @@ const finishReasonLabels: Record<string, string> = {
 .tool-toggle:hover { background:var(--ip-color-bg-tertiary); }
 .tool-chevron { font-size:9px; color:var(--ip-color-text-disabled); line-height:1; width:10px; flex-shrink:0; }
 .tool-name { font-size:var(--ip-text-caption-size); font-weight:var(--ip-font-weight-medium); color:var(--ip-color-text-tertiary); white-space:nowrap; }
+.tool-duration { font-size:10px; color:var(--ip-color-text-disabled); font-family:var(--ip-font-mono, monospace); white-space:nowrap; flex-shrink:0; }
 .tool-preview { font-size:var(--ip-text-caption-size); color:var(--ip-color-text-disabled); margin-left:auto; margin-right:6px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:right; flex-shrink:1; }
 
 /* 状态圆点 */
