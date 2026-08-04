@@ -187,15 +187,18 @@ fn default_mcp_servers() -> Vec<NewMcpServer> {
     ]
 }
 
-/// 首次启动时种子：如果 mcp_servers 表为空，插入所有默认配置。
-/// 幂等——已有配置时不做任何修改。
+/// 启动时种子：逐个检查默认 MCP Server，不存在就补上。
+/// 已有的配置不覆盖（用户可能改过名称/参数）。
 pub async fn seed_defaults(pool: &SqlitePool) -> AppResult<()> {
     let existing = list_all(pool).await?;
-    if !existing.is_empty() {
-        return Ok(());
-    }
-    tracing::info!(target: "ice_paw.mcp", "插入默认 MCP Server 配置");
+    let existing_ids: std::collections::HashSet<&str> =
+        existing.iter().map(|e| e.id.as_str()).collect();
+
     for cfg in &default_mcp_servers() {
+        if existing_ids.contains(cfg.id.as_str()) {
+            continue;
+        }
+        tracing::info!(target: "ice_paw.mcp", "补种默认 MCP Server: {}", cfg.name);
         create(pool, cfg).await?;
     }
     Ok(())
