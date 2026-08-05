@@ -66,7 +66,7 @@ use sqlx::SqlitePool;
 
 use crate::harness::cleanup::{finalize_assistant_message, finalize_cancel, finalize_success};
 use crate::harness::error_mapping::{error_kind, friendly_error};
-use crate::db::models::NewMessage;
+use crate::db::models::{HookConfig, HookPoint, NewMessage};
 use crate::db::repo;
 use crate::error::AppError;
 use crate::infra::protocol::{
@@ -75,6 +75,7 @@ use crate::infra::protocol::{
 };
 use crate::harness::budget::LoopBudget;
 use crate::harness::chat_state::CancellationToken;
+use crate::harness::hooks::{has_actions, run_hooks};
 use crate::harness::observable::{RoundState, RoundTimer};
 use crate::harness::retry::{RetryContext, RetryState};
 use crate::harness::mcp::McpRegistry;
@@ -82,7 +83,7 @@ use crate::harness::authority::{PathAuthSession, PathWhitelistConfig};
 
 use super::batch_writer;
 use super::stream_consumer::{consume_stream, CollectedToolCall};
-use super::tool_executor::{execute_tool_round, ToolAuthRegistry};
+use super::tool_executor::{build_tool_ctx, execute_tool_round, ToolAuthRegistry};
 
 // W2.6: 将 AppError 分类为 retry reason 字符串
 fn classify_retry_reason(e: &AppError) -> String {
@@ -219,6 +220,12 @@ pub(crate) struct LoopContext {
     /// override 或 Agent 默认）。loop_engine 创建后续轮次的 assistant 占位
     /// 消息时复用此值，保证一次发送产生的所有 assistant 消息 model 一致。
     pub asst_model: Option<String>,
+
+    // ---- 对话钩子（agent.yaml `hooks`；BeforeLlm/AfterTool/ConversationEnd 用）----
+    /// 钩子配置。ConversationStart 已在 chat_cmd 执行（需注入 system_prompt），
+    /// 这里承载 BeforeLlm（每轮注入临时 system 消息）/ AfterTool（经 execute_tool_round）
+    /// / ConversationEnd（stream_loop 收尾）三个点。
+    pub hooks: HookConfig,
 }
 
 impl LoopContext {
@@ -256,6 +263,7 @@ impl LoopContext {
         asst_model: Option<String>,
         agent_id: String,
         project_id: Option<String>,
+        hooks: HookConfig,
     ) -> Self {
         Self {
             conv_id,
@@ -281,6 +289,7 @@ impl LoopContext {
             call_history,
             model,
             asst_model,
+            hooks,
         }
     }
 }
@@ -311,6 +320,26 @@ pub(crate) async fn stream_loop(ctx: &mut LoopContext, observable: &mut RoundSta
     let _ = handle.await;
     // A2-3: 不论正常结束 / 取消 / 错误，都清空会话级授权表
     ctx.auth_session.clear().await;
+
+    // === 钩子：ConversationEnd（对话结束，所有退出路径——成功/取消/错误——都触发一次）===
+    // 放在 stream_loop_inner 返回后（其内部 finalize_* 已 emit chat:done + 注销 token），
+    // 保证整次对话恰好触发一次。Log/CallTool 用；失败仅 warn 不影响已完成的收尾。
+    if has_actions(&ctx.hooks, HookPoint::ConversationEnd) {
+        let hook_ctx = build_tool_ctx(
+            &ctx.pool,
+            ctx.conv_id.clone(),
+            ctx.agent_id.clone(),
+            ctx.project_id.clone(),
+            Some(ctx.api_key.clone()),
+        )
+        .await;
+        if let Err(e) = run_hooks(HookPoint::ConversationEnd, &ctx.hooks, &hook_ctx, &ctx.tool_registry).await {
+            tracing::warn!(
+                target: "ice_paw.hooks",
+                "ConversationEnd 钩子执行失败（忽略）: {}", e
+            );
+        }
+    }
 }
 
 /// M2.1: 计算本轮的"进度指纹"hash
@@ -412,6 +441,28 @@ async fn stream_loop_inner(
             });
         }
 
+        // === 钩子：BeforeLlm（每轮 stream_chat 前注入临时 system 消息；核心——每轮强制规范）===
+        // 注入的是「临时」消息：只加进本轮发给 provider 的消息，不写回 ctx.messages
+        //（故不入 DB 历史、不跨轮累积），每轮重新注入。provider 适配层会把所有 system
+        // 消息抽离合并到顶层 system_prompt，故追加在末尾即可生效。
+        // 每轮（tool_round）只执行一次，不随网络重试重复触发。
+        let round_injected: Option<String> = if has_actions(&ctx.hooks, HookPoint::BeforeLlm) {
+            let hook_ctx = build_tool_ctx(
+                &ctx.pool,
+                ctx.conv_id.clone(),
+                ctx.agent_id.clone(),
+                ctx.project_id.clone(),
+                Some(ctx.api_key.clone()),
+            )
+            .await;
+            run_hooks(HookPoint::BeforeLlm, &ctx.hooks, &hook_ctx, &ctx.tool_registry)
+                .await
+                .ok()
+                .and_then(|o| o.injected_prompt)
+        } else {
+            None
+        };
+
         // === RetryState 驱动的重试循环 ===
         let mut retry_state = RetryState::new();
         let mut last_retry_reason = String::new();
@@ -461,11 +512,17 @@ async fn stream_loop_inner(
             let retry_ctx = RetryContext::with_round_text(ctx.messages.clone(), round_text.clone());
             let retry_messages = retry_state.prepare_messages(&retry_ctx);
 
+            // 追加 BeforeLlm 钩子注入的临时 system 消息（若有）；不写回 ctx.messages。
+            let mut send_messages = retry_messages;
+            if let Some(inj) = &round_injected {
+                send_messages.push(ChatMessage::from_text("system", inj.clone()));
+            }
+
             let stream_result = ctx
                 .provider
                 .stream_chat(
                     &ctx.api_key,
-                    retry_messages,
+                    send_messages,
                     tools.clone(),
                     ctx.temperature,
                     ctx.max_tokens,
@@ -819,29 +876,15 @@ async fn stream_loop_inner(
         // read_file/write_file/run_command/git/search_files 据此切换 current_dir 与路径白名单）；
         // 否则回退 agent workspace。知识库工具（save/search_kb）+ read_agent_config
         // 仍走 agent_id/scope，不依赖此处 workspace，不受影响。
-        // 两个候选都需 await，先各自解析再 .or 合并（project 优先）。
-        let project_ws: Option<String> = match &ctx.project_id {
-            Some(pid) => repo::project::get_by_id(&ctx.pool, pid)
-                .await
-                .ok()
-                .and_then(|p| p.workspace_path)
-                .and_then(|ws| std::path::Path::new(&ws).canonicalize().ok())
-                .map(|p| p.to_string_lossy().to_string()),
-            None => None,
-        };
-        let agent_ws = crate::harness::tool_executor::resolve_agent_workspace(
-            &ctx.pool, &ctx.agent_id,
+        // 解析逻辑已抽到 tool_executor::build_tool_ctx（与各钩子接入点复用，project 优先）。
+        let tool_ctx = build_tool_ctx(
+            &ctx.pool,
+            ctx.conv_id.clone(),
+            ctx.agent_id.clone(),
+            ctx.project_id.clone(),
+            Some(ctx.api_key.clone()),
         )
-        .await
-        .map(|p| p.to_string_lossy().to_string());
-        let tool_ctx = crate::harness::mcp::ToolContext {
-            conv_id: ctx.conv_id.clone(),
-            agent_id: ctx.agent_id.clone(),
-            project_id: ctx.project_id.clone(),
-            workspace: project_ws.or(agent_ws),
-            pool: ctx.pool.clone(),
-            api_key: Some(ctx.api_key.clone()),
-        };
+        .await;
         let tool_result_blocks: Vec<ContentBlock> = execute_tool_round(
             &ctx.app,
             &ctx.tool_registry,
@@ -852,6 +895,7 @@ async fn stream_loop_inner(
             &tool_ctx,
             &current_asst_msg_id,
             &ctx.cancel,
+            &ctx.hooks,
         )
         .await
         .unwrap_or_else(|e| {

@@ -42,7 +42,7 @@ use uuid::Uuid;
 use sqlx::SqlitePool;
 
 use crate::crypto;
-use crate::db::models::{Agent, AgentRow, AgentUpdate, NewAgent, RotateAgentKey};
+use crate::db::models::{Agent, AgentRow, AgentUpdate, HookConfig, NewAgent, RotateAgentKey};
 use crate::db::repo;
 use crate::error::{AppError, AppResult};
 
@@ -63,6 +63,9 @@ pub struct AgentWithCredentials {
     pub api_key: String,
     /// base_url（vault 优先；agent 配置 fallback）
     pub base_url: Option<String>,
+    /// 对话钩子配置（来自 agent.yaml `hooks` 字段；hooks 不进 DB，纯文件）。
+    /// chat_cmd 据此在各生命周期点执行 inject_prompt/call_tool/log。
+    pub hooks: HookConfig,
 }
 
 // ============================================================================
@@ -191,10 +194,16 @@ impl AgentCmd for SqlAgentCmd {
 
     async fn get_with_credentials(&self, agent_id: &str) -> AppResult<AgentWithCredentials> {
         let mut agent = repo::agent::get_by_id(&self.pool, agent_id).await?;
-        // 尝试从 workspace_path 加载 agent.yaml 配置，合并到 AgentRow（覆盖 chat_cmd 用的字段）
-        if let Some(file_cfg) = agent.load_file_config() {
-            file_cfg.apply_to_row(&mut agent);
-        }
+        // 尝试从 workspace_path 加载 agent.yaml 配置，合并到 AgentRow（覆盖 chat_cmd 用的字段）。
+        // 同时提取 hooks（hooks 不进 DB，纯文件，不参与 apply_to_row 的字段覆盖）。
+        let hooks: HookConfig = match agent.load_file_config() {
+            Some(file_cfg) => {
+                let h = file_cfg.hooks.clone().unwrap_or_default();
+                file_cfg.apply_to_row(&mut agent);
+                h
+            }
+            None => HookConfig::default(),
+        };
         let (api_key, vault_base_url) = crypto::fetch_api_key(&self.app, &agent.api_key_ref)?;
         // base_url：agent 配置优先（如果有），否则回退到 vault 里存的 base_url
         let base_url = agent
@@ -207,6 +216,7 @@ impl AgentCmd for SqlAgentCmd {
             agent,
             api_key,
             base_url,
+            hooks,
         })
     }
 
@@ -442,6 +452,7 @@ impl AgentCmd for MockAgentCmd {
             agent,
             api_key,
             base_url,
+            hooks: HookConfig::default(),
         })
     }
 

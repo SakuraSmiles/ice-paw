@@ -34,6 +34,7 @@ use sqlx::SqlitePool;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{oneshot, Mutex};
 
+use crate::db::models::{HookConfig, HookPoint};
 use crate::db::repo;
 use crate::infra::protocol::{
     ChatToolResultPayload, ContentBlock, ToolAuthRequestPayload, ToolAuthResponse,
@@ -42,6 +43,7 @@ use crate::harness::mcp::{AuthorizationLevel, McpRegistry, ToolContext};
 use crate::harness::authority::{
     check_authorization_with_session, AuthorizationDecision, PathAuthSession, PathWhitelistConfig,
 };
+use crate::harness::hooks::{has_actions, run_hooks};
 
 /// oneshot sender 的全局注册表类型
 type AuthSenderMap = Arc<Mutex<HashMap<String, oneshot::Sender<ToolAuthResponse>>>>;
@@ -166,6 +168,7 @@ pub async fn execute_tool_round(
     tool_ctx: &ToolContext,
     asst_msg_id: &str,
     cancel: &crate::harness::chat_state::CancellationToken,
+    hooks: &HookConfig,
 ) -> crate::error::AppResult<Vec<ContentBlock>> {
     let mut tool_result_blocks: Vec<ContentBlock> = Vec::new();
 
@@ -329,6 +332,17 @@ pub async fn execute_tool_round(
             }
         }
 
+        // === Hook: AfterTool（每次工具执行后；Log/CallTool，失败仅 warn 不中断）===
+        if has_actions(hooks, HookPoint::AfterTool) {
+            if let Err(e) = run_hooks(HookPoint::AfterTool, hooks, tool_ctx, registry).await {
+                tracing::warn!(
+                    target: "ice_paw.hooks",
+                    "AfterTool 钩子执行失败（忽略）: tool={} err={}",
+                    tc_name,
+                    e
+                );
+            }
+        }
     }
 
     Ok(tool_result_blocks)
@@ -419,6 +433,42 @@ pub(crate) async fn resolve_agent_workspace(pool: &SqlitePool, agent_id: &str) -
     let agent = repo::agent::get_by_id(pool, agent_id).await.ok()?;
     let ws = agent.workspace_path?;
     Path::new(&ws).canonicalize().ok()
+}
+
+/// 构造工具执行上下文（解析 workspace：project 优先，回退 agent workspace）。
+///
+/// 供钩子接入点（BeforeLlm / ConversationStart / ConversationEnd）与 loop_engine
+/// 主流程复用，统一 workspace 解析逻辑。execute_tool_round 主流程的 tool_ctx
+/// 原先在 loop_engine 内联构造，现已改为调用本函数。
+pub(crate) async fn build_tool_ctx(
+    pool: &SqlitePool,
+    conv_id: String,
+    agent_id: String,
+    project_id: Option<String>,
+    api_key: Option<String>,
+) -> ToolContext {
+    // workspace 解析：project 绑定了 workspace_path → 用项目源码根；
+    // 否则回退 agent workspace。
+    let project_ws: Option<String> = match &project_id {
+        Some(pid) => repo::project::get_by_id(pool, pid)
+            .await
+            .ok()
+            .and_then(|p| p.workspace_path)
+            .and_then(|ws| Path::new(&ws).canonicalize().ok())
+            .map(|p| p.to_string_lossy().to_string()),
+        None => None,
+    };
+    let agent_ws = resolve_agent_workspace(pool, &agent_id)
+        .await
+        .map(|p| p.to_string_lossy().to_string());
+    ToolContext {
+        conv_id,
+        agent_id,
+        project_id,
+        workspace: project_ws.or(agent_ws),
+        pool: pool.clone(),
+        api_key,
+    }
 }
 
 /// 判断 file_path 是否在 agent workspace 内（规范化后 starts_with）。

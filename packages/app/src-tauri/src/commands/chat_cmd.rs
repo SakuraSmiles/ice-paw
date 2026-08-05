@@ -11,7 +11,7 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
 
-use crate::db::models::NewMessage;
+use crate::db::models::{HookConfig, HookPoint, NewMessage};
 use crate::db::repo;
 use crate::error::{AppError, AppResult};
 use crate::infra::protocol::{
@@ -19,6 +19,8 @@ use crate::infra::protocol::{
 };
 use crate::commands::agent_cmd::AgentCmd;
 use crate::harness::budget::LoopBudget;
+use crate::harness::hooks::{has_actions, run_hooks};
+use crate::harness::tool_executor::build_tool_ctx;
 use crate::harness::chat_state::{CancellationToken, ChatState};
 use crate::harness::loop_engine::LoopContext;
 use crate::harness::observable::RoundState;
@@ -78,6 +80,8 @@ pub async fn send_message(
     let agent = agent_with_creds.agent;
     let api_key = agent_with_creds.api_key;
     let base_url = agent_with_creds.base_url.as_deref();
+    // 钩子配置（来自 agent.yaml `hooks`；纯文件，不进 DB）
+    let hooks = agent_with_creds.hooks;
 
     // Task 4: 从 Agent 配置读取工具白名单（NULL = 全部启用）
     let agent_enabled_tools: Option<Vec<String>> = agent
@@ -180,7 +184,7 @@ pub async fn send_message(
         let _ = app.emit("chat:summary-injected", event);
     }
 
-    let assembled = AssembledContext {
+    let mut assembled = AssembledContext {
         messages: pipeline_ctx.messages,
         user_blocks: pipeline_ctx.user_blocks,
     };
@@ -258,6 +262,32 @@ pub async fn send_message(
         McpRegistry::new()
     };
 
+    // --- 6.5 钩子：ConversationStart（对话开始，inject_prompt 追加到 system_prompt）---
+    // 在 tool_registry 组装完成后、spawn 前执行：此时 system 消息已由 Pipeline 拼装进
+    // assembled.messages。注入结果随 messages 进入流式循环，对本轮所有工具子轮持续生效
+    //（system 消息本就每轮重建，非 DB 行；此处注入不写库，每次 send_message 重新注入）。
+    if has_actions(&hooks, HookPoint::ConversationStart) {
+        let hook_ctx = build_tool_ctx(
+            pool.inner(),
+            conv_id.clone(),
+            conv.agent_id.clone(),
+            conv.project_id.clone(),
+            Some(api_key.clone()),
+        )
+        .await;
+        match run_hooks(HookPoint::ConversationStart, &hooks, &hook_ctx, &tool_registry).await {
+            Ok(outcome) => {
+                if let Some(inj) = outcome.injected_prompt {
+                    inject_into_system(&mut assembled.messages, &inj);
+                }
+            }
+            Err(e) => tracing::warn!(
+                target: "ice_paw.hooks",
+                "ConversationStart 钩子执行失败（忽略）: {}", e
+            ),
+        }
+    }
+
     spawn_stream_loop(
         app, pool.inner().clone(), llm_provider, api_key,
         assembled.messages, agent.temperature, agent.max_tokens,
@@ -266,6 +296,7 @@ pub async fn send_message(
         model_override, Some(effective_model), tool_max_rounds, agent_max_tokens, shared_auth_registry,
         tool_registry,
         conv.agent_id.clone(), conv.project_id.clone(),
+        hooks,
     );
     // spawn 成功：注销责任已移交 stream_loop（其 finalize_success/finalize_cancel → cleanup →
     // unregister），解除守卫，避免此处 Ok 返回时误注销导致 is_streaming 提前翻转。
@@ -284,6 +315,19 @@ pub async fn stop_generation(
             "stop_generation: 会话 {} 无在途生成任务", conversation_id);
     }
     Ok(())
+}
+
+/// 把钩子注入的 prompt 追加到 system 消息（ConversationStart 用）。
+///
+/// - 若已存在 system 消息：追加一个 Text 块（provider 适配层会把同一条消息内的
+///   多个 Text 块拼接，等价于追加到 system_prompt）。
+/// - 若无 system 消息：新建一条置于首位。
+fn inject_into_system(messages: &mut Vec<ChatMessage>, injected: &str) {
+    if let Some(sys_msg) = messages.iter_mut().find(|m| m.role == "system") {
+        sys_msg.content.push(ContentBlock::text(injected.to_string()));
+    } else {
+        messages.insert(0, ChatMessage::from_text("system", injected.to_string()));
+    }
 }
 
 /// spawn LLM 流式协程，把编排结果交给 `harness::loop_engine::stream_loop`。
@@ -315,6 +359,7 @@ fn spawn_stream_loop(
     tool_registry: McpRegistry,
     agent_id: String,
     project_id: Option<String>,
+    hooks: HookConfig,
 ) {
     tokio::spawn(async move {
         // tool_registry 由 send_message 组装（global server + per-agent server），直接使用
@@ -364,6 +409,7 @@ fn spawn_stream_loop(
             asst_model,
             agent_id,
             project_id,
+            hooks,
         );
         crate::harness::loop_engine::stream_loop(&mut ctx, &mut observable).await;
         // W2.4: emit final round-state after stream_loop completes
@@ -380,4 +426,36 @@ fn spawn_stream_loop(
             },
         );
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inject_into_system_appends_block_to_existing_system() {
+        let mut messages = vec![
+            ChatMessage::from_text("system", "You are X."),
+            ChatMessage::from_text("user", "hi"),
+        ];
+        inject_into_system(&mut messages, "ALWAYS use JSON.");
+        // 仍是同一条 system 消息（追加块，非新增消息）
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].role, "system");
+        assert_eq!(messages[0].content.len(), 2);
+        let joined = messages[0].content_text();
+        assert!(joined.contains("You are X."));
+        assert!(joined.contains("ALWAYS use JSON."));
+    }
+
+    #[test]
+    fn inject_into_system_creates_system_when_absent() {
+        let mut messages = vec![ChatMessage::from_text("user", "hi")];
+        inject_into_system(&mut messages, "system rule");
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].role, "system");
+        assert_eq!(messages[0].content_text(), "system rule");
+        // 原 user 消息被推到第二位
+        assert_eq!(messages[1].role, "user");
+    }
 }
