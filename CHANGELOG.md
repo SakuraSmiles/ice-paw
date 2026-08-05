@@ -2,6 +2,16 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/)，版本号遵循 [SemVer](https://semver.org/)。
 
+## [0.2.0-beta.1] — Unreleased (main, 2026-08-05)
+
+### Added
+- **Agent 代配置（提案模式）Phase 1**：`propose_config_change` 工具，LLM 从对话中提出创建/修改 agent 提案，用户审批后生效。Guardrail 校验层（🔴 红线永久拒绝）。前端审批卡片（字段全展开 + API Key 安全输入）。
+- **对话钩子系统**：4 个生命周期接入点（ConversationStart/BeforeLlm/AfterTool/ConversationEnd）+ 3 个内置动作（InjectPrompt/CallTool/Log），配置在 agent.yaml。
+- **产品帮助知识库**：6 篇中文帮助文档种子到全局 KB，agent 可通过 search_kb 自服务检索。
+- **RAG v2 语义检索修复**：修配置读取 bug + 召回阈值 + RRF 混合检索 + 切换模型自动重建向量 + 可观测性 UI。
+- **MCP 架构重设计**：统一 Server Pool 状态机，启动不阻塞，前端简化。
+- 项目归档/移动会话/双层 Option workspace_path/N+1 修复/activeProjectId 校验
+
 ## [0.1.0-beta.1] — 2026-08-02
 
 ### Added
