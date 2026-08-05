@@ -363,6 +363,6 @@ mod tests {
     #[test]
     fn manager_new_is_empty() {
         let mgr = McpServerManager::new();
-        assert!(mgr.entries.try_read().unwrap().len() == 0);
+        assert!(mgr.entries.try_read().unwrap().is_empty());
     }
 }

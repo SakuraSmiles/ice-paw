@@ -169,34 +169,13 @@ async fn try_semantic_search(
         update_chunk_embedding,
     };
 
-    // 1. 从全局 preferences 读 embedding 配置
-    let model: String = sqlx::query_scalar::<_, String>(
-        "SELECT value FROM user_preferences WHERE key = 'embedding_model'"
-    ).fetch_optional(pool).await.ok()??;
-
-    let provider: String = sqlx::query_scalar::<_, String>(
-        "SELECT value FROM user_preferences WHERE key = 'embedding_provider'"
-    ).fetch_optional(pool).await.ok()??;
-
-    let api_key: String = sqlx::query_scalar::<_, String>(
-        "SELECT value FROM user_preferences WHERE key = 'embedding_api_key'"
-    ).fetch_optional(pool).await.ok()??;
-
-    let base_url: Option<String> = sqlx::query_scalar::<_, String>(
-        "SELECT value FROM user_preferences WHERE key = 'embedding_base_url'"
-    ).fetch_optional(pool).await.ok().flatten();
-
-    // 2. 确定 base_url
-    let url = match base_url.filter(|s| !s.is_empty()) {
-        Some(u) => u,
-        None => match provider.as_str() {
-            "openai" => "https://api.openai.com".into(),
-            "glm" => "https://open.bigmodel.cn/api/paas/v4".into(),
-            "deepseek" => "https://api.deepseek.com".into(),
-            _ => return None,
-        },
-    };
-
+    // 从全局 preferences 读 embedding 配置。**必须走 get_all**：前端
+    // bridge.preferences.set 用 JSON.stringify 存储，DB 里 embedding_provider
+    // 的实际值是 "\"glm\""（带引号）。若用裸 query_scalar 读到带引号串，
+    // match "glm" 会失败 → 静默 return None → 语义检索永不生效（v2 长期
+    // "看着实现却从没跑通"的根因）。
+    let prefs = repo::preferences::get_all(pool).await.ok()?;
+    let (model, url, api_key) = resolve_embedding_config(&prefs)?;
     let backend = OpenAiEmbeddingBackend::new(model, url);
 
     // 3. 加载所有 chunk
@@ -276,6 +255,35 @@ async fn try_semantic_search(
     } else {
         Some(results)
     }
+}
+
+/// 从 [`crate::db::models::UserPreferences`] 解析 embedding 后端配置
+/// `(model, base_url, api_key)`。
+///
+/// `base_url` 缺省时按 `provider` 推导（openai / glm / deepseek）。`model`、
+/// `api_key` 任一缺失或 provider 未知 → `None`（调用方回退关键词检索）。
+///
+/// 抽成纯函数，便于单测「前端 JSON 存储能否被正确解析为 backend 配置」。
+fn resolve_embedding_config(
+    prefs: &crate::db::models::UserPreferences,
+) -> Option<(String, String, String)> {
+    let model = prefs.embedding_model.clone()?;
+    let provider = prefs.embedding_provider.as_deref()?;
+    let api_key = prefs.embedding_api_key.clone()?;
+    let url = match prefs
+        .embedding_base_url
+        .as_deref()
+        .filter(|s| !s.is_empty())
+    {
+        Some(u) => u.to_string(),
+        None => match provider {
+            "openai" => "https://api.openai.com".into(),
+            "glm" => "https://open.bigmodel.cn/api/paas/v4".into(),
+            "deepseek" => "https://api.deepseek.com".into(),
+            _ => return None,
+        },
+    };
+    Some((model, url, api_key))
 }
 
 // =========================================================================
@@ -769,5 +777,29 @@ mod tests {
         let result = tool.execute_with_context(r#"{"file_path":"nope.md"}"#, &ctx).await.unwrap();
         let v: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(v["found"], false);
+    }
+
+    /// 回归：前端 bridge.preferences.set 用 JSON.stringify 存储，DB 实际值带引号。
+    /// 必须走 get_all 反序列化才能拿到干净的 "glm"；裸 query_scalar 读到 "\"glm\""
+    /// 会让 try_semantic_search 静默回退关键词（v2 失效根因，2026-08-05 修复）。
+    #[tokio::test]
+    async fn embedding_config_reads_json_stringified_storage() {
+        let pool = fresh_pool().await;
+        // 模拟前端存储（bridge.preferences.set → JSON.stringify → DB 带引号）
+        repo::preferences::set(&pool, "embedding_provider", "\"glm\"").await.unwrap();
+        repo::preferences::set(&pool, "embedding_model", "\"embedding-3\"").await.unwrap();
+        repo::preferences::set(&pool, "embedding_api_key", "\"sk-test-xxx\"").await.unwrap();
+
+        // get_all 必须去 JSON 引号
+        let prefs = repo::preferences::get_all(&pool).await.unwrap();
+        assert_eq!(prefs.embedding_provider.as_deref(), Some("glm"));
+        assert_eq!(prefs.embedding_model.as_deref(), Some("embedding-3"));
+        assert_eq!(prefs.embedding_api_key.as_deref(), Some("sk-test-xxx"));
+
+        // 且 resolve_embedding_config 能解析出 glm 端点
+        let (model, url, key) = resolve_embedding_config(&prefs).expect("glm 配置应被解析");
+        assert_eq!(model, "embedding-3");
+        assert_eq!(url, "https://open.bigmodel.cn/api/paas/v4");
+        assert_eq!(key, "sk-test-xxx");
     }
 }

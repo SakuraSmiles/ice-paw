@@ -1,4 +1,4 @@
-//! 历史消息加载 + HistoryWindowConfig
+//! 历史消息加载
 //!
 //! 从 `commands/chat_context.rs` 迁入（W5.3）。
 //!
@@ -18,29 +18,6 @@ use crate::infra::protocol::{ChatMessage, ContentBlock};
 /// 集中定义以便全栈统一：后端 [`load_history`] + Pipeline + 前端 placeholder
 /// 都引用此值（W6.4 Sprint #6.4 沿用历史行为，避免破坏既有 UI 体验）。
 pub const DEFAULT_HISTORY_WINDOW: usize = 20;
-
-/// 历史消息窗口配置
-///
-/// 控制从数据库加载多少条历史消息注入到 LLM 上下文。
-/// 仅测试中使用；生产代码已被 `resolve_window` + `agent.max_history_messages` 取代。
-#[derive(Debug, Clone)]
-#[cfg(test)]
-pub struct HistoryWindowConfig {
-    /// 最近的 N 条消息（默认 `DEFAULT_HISTORY_WINDOW`）
-    pub recent_n: usize,
-    /// 是否包含摘要（未来 P3 扩展，默认 false）
-    pub include_summary: bool,
-}
-
-#[cfg(test)]
-impl Default for HistoryWindowConfig {
-    fn default() -> Self {
-        Self {
-            recent_n: DEFAULT_HISTORY_WINDOW,
-            include_summary: false,
-        }
-    }
-}
 
 /// 从 Agent 配置解析得到有效窗口大小
 ///
