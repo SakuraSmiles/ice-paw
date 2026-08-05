@@ -31,6 +31,9 @@ pub async fn ensure_default_kbs(pool: &SqlitePool) -> AppResult<()> {
     if let Some(root) = default_ws.as_deref() {
         let dir = knowledge_dir(root);
         ensure_kb_row(pool, "global", None, "全局知识库", &dir).await?;
+        // 内置产品帮助文档：种子到全局 KB 的 help/ 子目录，随全局 KB 一起被索引，
+        // 所有 agent 都能 search_kb 检索到（自服务帮助）。
+        ensure_help_docs(root);
     }
 
     // 各 agent KB
@@ -94,6 +97,59 @@ pub async fn ensure_project_context_dirs(pool: &SqlitePool, default_workspace: O
 /// workspace 根 → knowledge 目录（约定）。
 pub fn knowledge_dir(workspace_root: &str) -> PathBuf {
     PathBuf::from(workspace_root).join(KNOWLEDGE_DIR_NAME)
+}
+
+/// 内置产品帮助文档（.md）种子到全局 KB 的 `help/` 子目录。
+///
+/// - 内容用 `include_str!` 编译期内嵌，随 app 分发，无运行时外部文件依赖。
+/// - 落在全局 KB 目录（`<ws>/knowledge/`）下的 `help/`，由 watcher 随全局 KB
+///   一起索引 → 所有 agent 都能 `search_kb` 检索到（自服务帮助）。
+/// - 文件已存在则跳过（不覆盖用户改动）；删掉文件下次启动自动补回（=重置入口）。
+/// - 必须在全局 KB 目录已建好后调用（[`ensure_default_kbs`] 内、`ensure_kb_row`
+///   之后）。失败仅 warn，不阻断启动。
+fn ensure_help_docs(default_workspace: &str) {
+    let dir = knowledge_dir(default_workspace).join("help");
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        tracing::warn!(
+            target: "ice_paw.kb",
+            "创建帮助文档目录失败 {}: {}",
+            dir.display(),
+            e
+        );
+        return;
+    }
+    // (文件名, 编译期内嵌的内容)
+    let docs: &[(&str, &str)] = &[
+        ("getting-started.md", include_str!("../../../resources/help/getting-started.md")),
+        ("configure-embedding.md", include_str!("../../../resources/help/configure-embedding.md")),
+        ("configure-tools.md", include_str!("../../../resources/help/configure-tools.md")),
+        ("agent-yaml.md", include_str!("../../../resources/help/agent-yaml.md")),
+        ("project-workspace.md", include_str!("../../../resources/help/project-workspace.md")),
+        ("faq.md", include_str!("../../../resources/help/faq.md")),
+    ];
+    let mut written = 0;
+    for (name, content) in docs {
+        let path = dir.join(name);
+        if path.exists() {
+            continue;
+        }
+        if let Err(e) = std::fs::write(&path, content) {
+            tracing::warn!(
+                target: "ice_paw.kb",
+                "写入帮助文档失败 {}: {}",
+                path.display(),
+                e
+            );
+        } else {
+            written += 1;
+        }
+    }
+    tracing::info!(
+        target: "ice_paw.kb",
+        "帮助文档目录 {}（本次新写入 {} 篇）",
+        dir.display(),
+        written
+    );
 }
 
 /// 推导 agent 的 workspace 根：优先用 agent 自己的 workspace_path，
@@ -174,4 +230,76 @@ async fn ensure_kb_row(
         directory.display()
     );
     Ok(())
+}
+
+// ==========================================================================
+// 单元测试 — ensure_help_docs
+// ==========================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    /// 进程内唯一临时「workspace」目录。
+    fn unique_temp_ws() -> PathBuf {
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir()
+            .join(format!("ice-paw-help-test-{}-{}", std::process::id(), n));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    const EXPECTED_DOCS: &[&str] = &[
+        "getting-started.md",
+        "configure-embedding.md",
+        "configure-tools.md",
+        "agent-yaml.md",
+        "project-workspace.md",
+        "faq.md",
+    ];
+
+    #[test]
+    fn ensure_help_docs_writes_all_docs_with_frontmatter() {
+        let ws = unique_temp_ws();
+        ensure_help_docs(ws.to_str().unwrap());
+        let help_dir = ws.join("knowledge").join("help");
+        for name in EXPECTED_DOCS {
+            let f = help_dir.join(name);
+            assert!(f.exists(), "应写入 {}", name);
+            let content = std::fs::read_to_string(&f).unwrap();
+            assert!(content.starts_with("---\n"), "{} 应有 frontmatter", name);
+            assert!(content.contains("title:"), "{} 应含 title 字段", name);
+        }
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn ensure_help_docs_idempotent_does_not_overwrite_user_edits() {
+        let ws = unique_temp_ws();
+        ensure_help_docs(ws.to_str().unwrap());
+        let target = ws.join("knowledge").join("help").join("faq.md");
+        // 模拟用户改动
+        std::fs::write(&target, "USER EDIT\n").unwrap();
+        // 再次运行
+        ensure_help_docs(ws.to_str().unwrap());
+        let content = std::fs::read_to_string(&target).unwrap();
+        assert_eq!(content, "USER EDIT\n", "已存在的文件不应被覆盖");
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn ensure_help_docs_recreates_deleted_file() {
+        let ws = unique_temp_ws();
+        ensure_help_docs(ws.to_str().unwrap());
+        let target = ws.join("knowledge").join("help").join("faq.md");
+        std::fs::remove_file(&target).unwrap();
+        assert!(!target.exists());
+        // 重新运行 → 删掉的文件补回（重置入口）
+        ensure_help_docs(ws.to_str().unwrap());
+        assert!(target.exists(), "删掉的文件下次运行应补回");
+        let _ = std::fs::remove_dir_all(&ws);
+    }
 }
