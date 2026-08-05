@@ -103,12 +103,18 @@ pub const DEFAULT_EMBEDDING_MODEL: &str = "text-embedding-3-small";
 /// 时按 query 维度动态比对。
 pub const DEFAULT_EMBEDDING_DIM: usize = 1536;
 
-/// 余弦相似度阈值（REQ-CHAT-047 明确要求）
+/// 召回兜底阈值（「相对 top-K + 低阈值兜底」策略）
 ///
-/// 低于此阈值的记录不进 top-5。
-pub const RECALL_SIMILARITY_THRESHOLD: f32 = 0.7;
+/// 不同 embedding 模型的 cosine 绝对刻度差异巨大：OpenAI text-embedding-3 相关
+/// 内容常 0.7+，而智谱 embedding-3 相关内容仅 0.3 出头（实测 query vs 相关 chunk
+/// 约 0.31–0.37）。故召回不能用单一高阈值，否则换模型即失效（v2 长期"搜不到"
+/// 的根因之一）。
+///
+/// 现策略：先按 cosine 降序取 [`RECALL_TOP_K`]，再滤掉低于此兜底值的——此值
+/// 刻意设得很低，仅防"全库无关/负相关"时仍返回结果；真正的筛选靠相对排名。
+pub const MIN_RECALL_SIMILARITY: f32 = 0.15;
 
-/// 返回 top-K 数量（REQ-CHAT-047 明确要求）
+/// 返回 top-K 数量
 pub const RECALL_TOP_K: usize = 5;
 
 // =========================================================================
@@ -388,18 +394,21 @@ impl EmbeddingBackend for OpenAiEmbeddingBackend {
 
 /// 语义检索：在 `candidates` 中找与 `query` 最相似的 top-K 条
 ///
-/// ## 步骤
+/// ## 策略（相对 top-K + 低阈值兜底）
 ///
-/// 1. 计算 `query` 与每条候选的 cosine 相似度
-/// 2. 过滤掉相似度 < [`RECALL_SIMILARITY_THRESHOLD`] 的
-/// 3. 按相似度降序排序
-/// 4. 取前 [`RECALL_TOP_K`] 条，返回其 content
+/// 1. 计算 `query` 与每条候选的 cosine 相似度（维度不匹配的跳过）
+/// 2. 按相似度降序排序
+/// 3. 取前 [`RECALL_TOP_K`] 条
+/// 4. 滤掉相似度 < [`MIN_RECALL_SIMILARITY`] 的（兜底，防全库无关仍返回）
+///
+/// 不用固定高阈值：不同 embedding 模型的 cosine 绝对刻度差异大（见
+/// [`MIN_RECALL_SIMILARITY`] 注释），靠相对排名筛选更稳。
 ///
 /// ## 边界情况
 ///
-/// - `candidates` 为空 → 返回 `Vec::new()`
-/// - `query` 维度与所有候选维度都不匹配 → 返回 `Vec::new()`（无相关结果）
-/// - 全部候选相似度都低于阈值 → 返回 `Vec::new()`
+/// - `candidates` 为空 / `query` 为空 → 返回 `Vec::new()`
+/// - 所有候选维度都不匹配 → 返回 `Vec::new()`
+/// - 所有候选相似度都低于兜底阈值 → 返回 `Vec::new()`
 pub fn top_k_recall(
     query: &[f32],
     candidates: &[(String, Vec<f32>)],
@@ -422,11 +431,7 @@ pub fn top_k_recall(
                 return None;
             }
             let sim = crate::db::repo::memory_embedding::cosine_similarity(query, emb);
-            if sim >= RECALL_SIMILARITY_THRESHOLD {
-                Some((sim, content.as_str()))
-            } else {
-                None
-            }
+            Some((sim, content.as_str())) // 不过滤，统一排序后再取舍
         })
         .collect();
 
@@ -439,6 +444,7 @@ pub fn top_k_recall(
     scored
         .into_iter()
         .take(RECALL_TOP_K)
+        .filter(|(sim, _)| *sim >= MIN_RECALL_SIMILARITY) // 低阈值兜底
         .map(|(_, c)| c.to_string())
         .collect()
 }
@@ -531,14 +537,13 @@ mod tests {
     }
 
     #[test]
-    fn top_k_filters_below_threshold() {
-        // query = [1.0, 0.0]
-        // candidates:
-        //   c1 cosine=1.0  → ✓
-        //   c2 cosine=0.99 → ✓
-        //   c3 cosine≈0.71 → ✓ (边缘，但 ≥ 0.7)
-        //   c4 cosine≈0.41 → ✗ (< 0.7)
-        //   c5 cosine=0.0  → ✗
+    fn top_k_filters_below_floor() {
+        // query = [1.0, 0.0]；兜底阈值 MIN_RECALL_SIMILARITY = 0.15
+        //   c1 cosine=1.0   → ✓
+        //   c2 cosine=0.99  → ✓
+        //   c3 cosine≈0.71  → ✓
+        //   c4 cosine≈0.41  → ✓ (≥ 0.15；旧 0.7 阈值会把它误杀)
+        //   c5 cosine=0.0   → ✗ (< 0.15 兜底)
         let query = vec![1.0, 0.0];
         let candidates = vec![
             ("c1".into(), vec![1.0, 0.0]),
@@ -548,20 +553,19 @@ mod tests {
             ("c5".into(), vec![0.0, 1.0]),
         ];
         let result = top_k_recall(&query, &candidates);
-        assert_eq!(result.len(), 3, "c1/c2/c3 应命中，c4/c5 不命中: {result:?}");
+        assert_eq!(result.len(), 4, "c1/c2/c3/c4 命中，仅 c5 低于兜底: {result:?}");
         assert!(result.contains(&"c1".to_string()));
-        assert!(result.contains(&"c2".to_string()));
-        assert!(result.contains(&"c3".to_string()));
+        assert!(result.contains(&"c4".to_string()));
+        assert!(!result.contains(&"c5".to_string()));
     }
 
     #[test]
     fn top_k_limits_to_top_5() {
-        // 10 条候选：c0..c9 相似度 1.0, 0.95, 0.9, 0.85, 0.8, 0.75, 0.7, 0.65, 0.6, 0.55
-        // 阈值 0.7 → c0..c6 命中（7 条），top-K=5 → 只返前 5
+        // 10 条候选：c0..c9 相似度 1.0→0.55，全部 ≥ 0.15 兜底；top-K=5 → 只返前 5
         let query = vec![1.0, 0.0, 0.0];
         let candidates: Vec<(String, Vec<f32>)> = (0..10)
             .map(|i| {
-                // 相似度从 1.0 递减到 0.55（保证前 7 条 ≥ 0.7）
+                // 相似度从 1.0 递减到 0.55
                 let sim_target = 1.0 - (i as f32) * 0.05;
                 // 构造 (sim, sqrt(1-sim²)) 这样的向量（保证相似度 = sim_target）
                 let other = (1.0 - sim_target * sim_target).max(0.0).sqrt();
@@ -583,31 +587,25 @@ mod tests {
         let candidates = vec![
             ("dim3".into(), vec![1.0, 0.0, 0.0]),       // ✓ cosine=1.0
             ("dim2".into(), vec![1.0, 0.0]),            // ✗ 维度不匹配
-            ("dim3_other".into(), vec![0.0, 1.0, 0.0]), // ✓ cosine=0.0 (但会被过滤)
+            ("dim3_other".into(), vec![0.0, 1.0, 0.0]), // cosine=0.0 (< 0.15 兜底，被滤)
         ];
         let result = top_k_recall(&query, &candidates);
         assert_eq!(result, vec!["dim3".to_string()]);
     }
 
     #[test]
-    fn top_k_returns_empty_when_all_below_threshold() {
+    fn top_k_returns_empty_when_all_below_floor() {
+        // 全部候选 cosine < MIN_RECALL_SIMILARITY(0.15) → 兜底全部滤掉 → 空
+        // 注意 cosine 只看方向不看模长：[0.1,0] 与 [1,0] 同向 → cosine=1（不是 0.1）。
+        // 要低 cosine，候选向量必须与 query 接近正交 / 反向。
         let query = vec![1.0, 0.0];
         let candidates = vec![
-            ("low1".into(), vec![0.5, 0.5]),  // cosine ≈ 0.71 → 边缘，可能不在测试期望中
-            ("low2".into(), vec![0.3, 0.7]),  // cosine ≈ 0.42 → ✗
-            ("low3".into(), vec![0.0, 1.0]),  // cosine = 0.0 → ✗
+            ("neg".into(), vec![-1.0, 0.0]),        // cosine = -1.0（反向）
+            ("near_orth".into(), vec![0.1, 0.995]), // cosine ≈ 0.10 < 0.15（近正交）
+            ("orth".into(), vec![0.0, 1.0]),        // cosine = 0.0（正交）
         ];
         let result = top_k_recall(&query, &candidates);
-        // 严格阈值 0.7，0.71 应该 >= 0.7 → 1 条命中
-        // 我们用 0.5,0.5 验证精确阈值场景：cosine = 0.5/(sqrt(0.5)*sqrt(0.5)) = 1.0
-        // 哦不，重新算：cosine([1,0], [0.5,0.5]) = (0.5+0)/(1*sqrt(0.5)) = 0.5/0.707 ≈ 0.707
-        // 0.707 > 0.7 → 应命中
-        assert!(
-            result.iter().any(|c| c == "low1"),
-            "低相似度但 >= 0.7 的应命中: {result:?}"
-        );
-        assert!(!result.contains(&"low2".to_string()));
-        assert!(!result.contains(&"low3".to_string()));
+        assert!(result.is_empty(), "全低于兜底阈值应返回空: {result:?}");
     }
 
     #[test]
