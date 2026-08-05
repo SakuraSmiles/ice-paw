@@ -37,8 +37,6 @@ pub struct AgentRow {
     pub enabled_tools: Option<String>,
     /// 是否支持图片输入（0 = 不支持, 1 = 支持）
     pub supports_vision: i32,
-    /// M2-1: Embedding 模型名称（用于语义检索 recall）
-    pub embedding_model: Option<String>,
     /// M2-1: Agent 描述
     pub description: String,
     /// M2-1: Agent 头像（URL 或 base64）
@@ -72,8 +70,6 @@ pub struct AgentFileConfig {
     pub enabled_tools: Option<Vec<String>>,
     #[serde(default)]
     pub extra_params: Option<serde_json::Value>,
-    #[serde(default)]
-    pub embedding_model: Option<String>,
     /// 工具调用最大轮数（None = 使用系统默认 50）
     #[serde(default)]
     pub tool_max_rounds: Option<u32>,
@@ -118,7 +114,6 @@ impl AgentFileConfig {
         if let Some(v) = self.tool_trim_threshold { agent.tool_trim_threshold = Some(v); }
         if let Some(v) = &self.enabled_tools { agent.enabled_tools = Some(v.clone()); }
         if let Some(v) = &self.extra_params { agent.extra_params = v.clone(); }
-        if let Some(v) = &self.embedding_model { agent.embedding_model = Some(v.clone()); }
         if let Some(v) = self.tool_max_rounds {
             if let Some(obj) = agent.extra_params.as_object_mut() {
                 obj.insert("tool_max_rounds".into(), serde_json::json!(v));
@@ -147,7 +142,6 @@ impl AgentFileConfig {
         if let Some(v) = &self.extra_params {
             row.extra_params = serde_json::to_string(v).unwrap_or_default();
         }
-        if let Some(v) = &self.embedding_model { row.embedding_model = Some(v.clone()); }
         if let Some(v) = self.tool_max_rounds {
             let mut params: serde_json::Value = serde_json::from_str(&row.extra_params)
                 .unwrap_or(serde_json::Value::Object(Default::default()));
@@ -196,9 +190,6 @@ pub struct Agent {
     /// 是否支持图片输入
     #[serde(default)]
     pub supports_vision: bool,
-    /// M2-1: Embedding 模型名称
-    #[serde(default)]
-    pub embedding_model: Option<String>,
     /// M2-1: Agent 描述
     #[serde(default)]
     pub description: String,
@@ -268,7 +259,6 @@ impl From<AgentRow> for Agent {
             created_at: row.created_at,
             updated_at: row.updated_at,
             has_api_key,
-            embedding_model: row.embedding_model,
             description: row.description,
             avatar: row.avatar,
         }
