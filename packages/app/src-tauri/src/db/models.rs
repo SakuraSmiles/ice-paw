@@ -47,6 +47,40 @@ pub struct AgentRow {
     pub updated_at: String,
 }
 
+// =========================================================================
+// 对话钩子（hooks）— 生命周期回调，内置动作（inject_prompt / call_tool / log）
+// 由 agent.yaml 配置，见 AgentFileConfig.hooks
+// =========================================================================
+
+/// 钩子触发时机（对话生命周期点）
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum HookPoint {
+    /// 对话开始（send_message 入口，上下文拼装后）
+    ConversationStart,
+    /// 每轮 LLM 请求前（stream_chat 前）
+    BeforeLlm,
+    /// 每次工具执行后（dispatch 后）
+    AfterTool,
+    /// 对话结束（finalize）
+    ConversationEnd,
+}
+
+/// 钩子动作（内置，选 + 配参数；非脚本，安全可控）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum HookAction {
+    /// 注入 prompt 片段（追加到 system/上下文）
+    InjectPrompt { content: String },
+    /// 自动调用某工具（args 为 JSON 字符串）
+    CallTool { tool: String, args: String },
+    /// 记日志（tracing，target=ice_paw.hooks）
+    Log { message: String },
+}
+
+/// 钩子配置：HookPoint → 动作列表
+pub type HookConfig = HashMap<HookPoint, Vec<HookAction>>;
+
 /// agent.yaml 文件配置（行为层，覆盖 DB 中的对应字段）
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AgentFileConfig {
@@ -76,6 +110,9 @@ pub struct AgentFileConfig {
     /// Token 预算上限（None = 使用系统默认 500_000）
     #[serde(default)]
     pub max_total_tokens: Option<usize>,
+    /// 对话钩子（生命周期回调，由 agent.yaml 配置；见 [`HookConfig`]）
+    #[serde(default)]
+    pub hooks: Option<HookConfig>,
 }
 
 impl AgentRow {
