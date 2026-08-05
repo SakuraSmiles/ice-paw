@@ -18,7 +18,10 @@ use sqlx::SqlitePool;
 
 use crate::db::models::KbDocumentRow;
 use crate::db::repo;
+use crate::db::repo::kb::ChunkWithEmbedding;
 use crate::error::AppResult;
+use crate::harness::kb::embedding::{ensure_chunks_embedded, resolve_embedding_config};
+use crate::harness::provider::embedding::OpenAiEmbeddingBackend;
 
 use super::parser::{content_hash, parse_markdown, split_into_chunks};
 
@@ -58,6 +61,14 @@ pub async fn index_directory(
         .collect();
 
     let mut seen: HashSet<String> = HashSet::new();
+
+    // embedding 预生成配置：循环外读一次 preferences + 构造一次 backend。
+    // 未配置 → None（跳过预生成，search_kb 时懒生成兜底）。
+    let backend_and_key = repo::preferences::get_all(pool)
+        .await
+        .ok()
+        .and_then(|p| resolve_embedding_config(&p))
+        .map(|(m, u, k)| (OpenAiEmbeddingBackend::new(m, u), k));
 
     for (rel_path, abs_path) in &disk_files {
         seen.insert(rel_path.clone());
@@ -116,11 +127,39 @@ pub async fn index_directory(
         )
         .await?;
 
-        // RAG v2: 切分 chunk 并存储（embedding 后续填充）
+        // RAG v2: 切分 chunk + 增量存储（保留内容未变 chunk 的 embedding）
         let full_text = String::from_utf8_lossy(&content);
         let chunks = split_into_chunks(&full_text);
-        if let Err(e) = repo::kb::upsert_chunks(pool, &doc_id, &chunks).await {
-            tracing::warn!(target: "ice_paw.kb", "chunk 存储失败 doc={} err={}", doc_id, e);
+        match repo::kb::upsert_chunks_incremental(pool, &doc_id, &chunks).await {
+            Ok(need) => {
+                // 入库同步预生成 embedding（未配置则跳过；失败 warn，search 时懒生成兜底）
+                if let Some((backend, key)) = &backend_and_key {
+                    if !need.is_empty() {
+                        let mut to_embed: Vec<ChunkWithEmbedding> = need
+                            .iter()
+                            .map(|(id, content)| ChunkWithEmbedding {
+                                id: id.clone(),
+                                doc_id: doc_id.clone(),
+                                title: title.clone(),
+                                file_path: rel_path.to_string(),
+                                content: content.clone(),
+                                embedding: None,
+                            })
+                            .collect();
+                        match ensure_chunks_embedded(pool, &mut to_embed, backend, key).await {
+                            Ok(n) => tracing::info!(
+                                target: "ice_paw.kb",
+                                "为 {n} 个 chunk 预生成了 embedding doc={}", doc_id
+                            ),
+                            Err(e) => tracing::warn!(
+                                target: "ice_paw.kb",
+                                "预生成 embedding 失败 doc={} err={}（搜索时将懒生成兜底）", doc_id, e
+                            ),
+                        }
+                    }
+                }
+            }
+            Err(e) => tracing::warn!(target: "ice_paw.kb", "chunk 存储失败 doc={} err={}", doc_id, e),
         }
 
         stats.indexed += 1;
