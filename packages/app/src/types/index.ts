@@ -398,3 +398,9 @@ export interface KbStats {
   total_chunks: number;
   embedded_chunks: number;
 }
+
+/** 全量重建 embedding 的统计 */
+export interface RebuildStats {
+  kbs: number;
+  chunks: number;
+}

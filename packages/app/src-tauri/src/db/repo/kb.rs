@@ -423,6 +423,15 @@ pub async fn kb_chunk_stats(pool: &SqlitePool, kb_id: &str) -> AppResult<(i64, i
     Ok(row)
 }
 
+/// 清空**所有** KB 的 chunk embedding 向量（切换 embedding 模型时用：旧维度向量必须清，
+/// 否则维度不匹配会被 top_k_recall 永久过滤）。返回受影响行数。
+pub async fn clear_all_kb_embeddings(pool: &SqlitePool) -> AppResult<u64> {
+    let result = sqlx::query("UPDATE kb_document_chunk SET embedding = NULL")
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -593,5 +602,30 @@ mod tests {
         let (total, embedded) = kb_chunk_stats(&pool, "k1").await.unwrap();
         assert_eq!(total, 3, "3 个 chunk");
         assert_eq!(embedded, 2, "前 2 个有向量");
+    }
+
+    /// clear_all_kb_embeddings：清空所有 chunk 的 embedding
+    #[tokio::test]
+    async fn clear_all_kb_embeddings_nulls_all() {
+        let pool = fresh_pool().await;
+        create(&pool, &new_kb("k1", "t")).await.unwrap();
+        let doc_id = upsert_document(&pool, "k1", "a.md", "T", "s", "[]", Some("h"), None)
+            .await
+            .unwrap();
+        let need =
+            upsert_chunks_incremental(&pool, &doc_id, &["x".into(), "y".into()]).await.unwrap();
+        update_chunk_embedding(&pool, &need[0].0, &embedding_to_bytes(&[0.1]))
+            .await
+            .unwrap();
+        update_chunk_embedding(&pool, &need[1].0, &embedding_to_bytes(&[0.2]))
+            .await
+            .unwrap();
+        let (_, embedded) = kb_chunk_stats(&pool, "k1").await.unwrap();
+        assert_eq!(embedded, 2, "前置：2 个有向量");
+
+        let n = clear_all_kb_embeddings(&pool).await.unwrap();
+        assert_eq!(n, 2, "清空 2 个 chunk 的向量");
+        let (_, embedded2) = kb_chunk_stats(&pool, "k1").await.unwrap();
+        assert_eq!(embedded2, 0, "清空后 embedded=0");
     }
 }
