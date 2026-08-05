@@ -130,17 +130,6 @@ fn default_mcp_servers() -> Vec<NewMcpServer> {
             scope: "per_agent".into(),
         },
         NewMcpServer {
-            id: "builtin-sqlite".into(),
-            name: "SQLite 查询".into(),
-            description: "查询本地 SQLite 数据库".into(),
-            command: "npx".into(),
-            args: vec!["-y".into(), "@modelcontextprotocol/server-sqlite".into(), "--db-path".into(), "{workspace}/data.db".into()],
-            env: Some(serde_json::json!({})),
-            enabled: true,
-            trust_level: TrustLevel::Trusted,
-            scope: "per_agent".into(),
-        },
-        NewMcpServer {
             id: "builtin-thinking".into(),
             name: "深度推理".into(),
             description: "多步推理引擎，复杂问题分拆逐步思考".into(),
