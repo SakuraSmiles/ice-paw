@@ -31,7 +31,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 use sqlx::SqlitePool;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{oneshot, Mutex};
 
 use crate::db::models::{HookConfig, HookPoint};
@@ -171,6 +171,14 @@ pub async fn execute_tool_round(
     hooks: &HookConfig,
 ) -> crate::error::AppResult<Vec<ContentBlock>> {
     let mut tool_result_blocks: Vec<ContentBlock> = Vec::new();
+
+    // 扩展 tool_ctx：注入 app_handle + proposal_registry（propose_config_change 等工具需要）
+    let mut enriched_ctx = tool_ctx.clone();
+    enriched_ctx.app_handle = Some(app.clone());
+    enriched_ctx.proposal_registry = app
+        .try_state::<crate::harness::proposal_registry::ProposalRegistry>()
+        .map(|s: tauri::State<'_, crate::harness::proposal_registry::ProposalRegistry>| s.inner().clone());
+    let tool_ctx = &enriched_ctx;
 
     // agent workspace 内的文件免授权（workspace 是 agent 的信任领地，
     // agent 读写自己 workspace 内的文件不需弹窗确认）。workspace 由 loop_engine
@@ -468,6 +476,8 @@ pub(crate) async fn build_tool_ctx(
         workspace: project_ws.or(agent_ws),
         pool: pool.clone(),
         api_key,
+        app_handle: None,
+        proposal_registry: None,
     }
 }
 

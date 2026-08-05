@@ -541,6 +541,112 @@ pub struct ToolAuthResponse {
     pub allowed: bool,
 }
 
+// === 配置提案事件 ===
+
+/// 敏感度分级（贯穿所有阶段的调节阀）
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SensitivityTier {
+    /// 🟢 非敏感：改 agent 名/温度/system_prompt、enable MCP、设 workspace、改时区
+    #[serde(rename = "low")]
+    Low,
+    /// 🟡 敏感：API Key、新建带工具的 agent、创建 MCP server、改 embedding 配置
+    #[serde(rename = "medium")]
+    Medium,
+    /// 🔴 红线：删除、跨 agent 改动、提权、读回密钥明文（提案路径根本不受理）
+    #[serde(rename = "redline")]
+    Redline,
+}
+
+/// 提案动作（Phase 1 仅 agent 域 create/update）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum ProposalAction {
+    /// 创建 agent（🟢 无工具 / 🟡 带 enabled_tools）
+    CreateAgent {
+        id: String,
+        name: String,
+        provider: String,
+        model: String,
+        /// 🔴 绝对不能填真实 key，只能是 "__SLOT__" 占位
+        api_key: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        base_url: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        system_prompt: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        temperature: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        max_tokens: Option<i32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        enabled_tools: Option<Vec<String>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        workspace_path: Option<String>,
+    },
+    /// 更新 agent（只能更新当前 agent 自己）
+    UpdateAgent {
+        agent_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provider: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        system_prompt: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        base_url: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        temperature: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        max_tokens: Option<i32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        enabled_tools: Option<Vec<String>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        workspace_path: Option<String>,
+    },
+}
+
+/// `chat:config-proposal` 事件 payload（Rust → Frontend）
+#[derive(Clone, Serialize)]
+pub struct ConfigProposalPayload {
+    pub request_id: String,
+    pub conversation_id: String,
+    pub message_id: String,
+    pub tool_use_id: String,
+    pub sensitivity: SensitivityTier,
+    pub action: ProposalAction,
+    /// 人类可读的提案摘要（agent 生成，前端展示用）
+    pub summary: String,
+}
+
+/// `chat:config-proposal-response` 事件 payload（Frontend → Rust）
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ConfigProposalResponse {
+    pub request_id: String,
+    #[serde(rename = "decision")]
+    pub decision: ProposalDecision,
+}
+
+/// 用户对提案的决定
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProposalDecision {
+    /// 用户批准，前端已通过现有可信命令执行
+    Approved,
+    /// 用户修改后批准
+    Modified {
+        /// 被修改的字段名 → 新值（JSON string）
+        #[serde(default)]
+        changes: std::collections::HashMap<String, String>,
+    },
+    /// 用户拒绝
+    Rejected {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
+}
+
 // =========================================================================
 // 单元测试
 // =========================================================================
@@ -880,5 +986,94 @@ mod tests {
         let json2 = serde_json::to_string(&r2).unwrap();
         let back2: ToolAuthResponse = serde_json::from_str(&json2).unwrap();
         assert!(!back2.allowed);
+    }
+
+    // --- ConfigProposal payload serde ---
+
+    #[test]
+    fn sensitivity_tier_serde() {
+        assert_eq!(
+            serde_json::to_string(&SensitivityTier::Low).unwrap(),
+            r#""low""#
+        );
+        assert_eq!(
+            serde_json::to_string(&SensitivityTier::Medium).unwrap(),
+            r#""medium""#
+        );
+        let tier: SensitivityTier = serde_json::from_str(r#""medium""#).unwrap();
+        assert_eq!(tier, SensitivityTier::Medium);
+    }
+
+    #[test]
+    fn proposal_action_create_agent_serde() {
+        let action = ProposalAction::CreateAgent {
+            id: "test-id".into(),
+            name: "Test Agent".into(),
+            provider: "anthropic".into(),
+            model: "claude-sonnet-5".into(),
+            api_key: "__SLOT__".into(),
+            base_url: None,
+            system_prompt: Some("You are helpful.".into()),
+            temperature: Some(0.7),
+            max_tokens: None,
+            enabled_tools: None,
+            workspace_path: None,
+        };
+        let json = serde_json::to_string(&action).unwrap();
+        assert!(json.contains(r#""action":"create_agent""#));
+        assert!(json.contains(r#""api_key":"__SLOT__""#));
+        // 反序列化
+        let back: ProposalAction = serde_json::from_str(&json).unwrap();
+        match back {
+            ProposalAction::CreateAgent { id, name, .. } => {
+                assert_eq!(id, "test-id");
+                assert_eq!(name, "Test Agent");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn proposal_action_update_agent_serde() {
+        let action = ProposalAction::UpdateAgent {
+            agent_id: "a1".into(),
+            name: Some("Renamed".into()),
+            provider: None,
+            model: None,
+            system_prompt: None,
+            base_url: None,
+            temperature: Some(0.3),
+            max_tokens: None,
+            enabled_tools: None,
+            workspace_path: None,
+        };
+        let json = serde_json::to_string(&action).unwrap();
+        assert!(json.contains(r#""action":"update_agent""#));
+        let back: ProposalAction = serde_json::from_str(&json).unwrap();
+        match back {
+            ProposalAction::UpdateAgent { agent_id, .. } => {
+                assert_eq!(agent_id, "a1");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn config_proposal_response_serde() {
+        let r = ConfigProposalResponse {
+            request_id: "req-1".into(),
+            decision: ProposalDecision::Approved,
+        };
+        let json = serde_json::to_string(&r).unwrap();
+        assert!(json.contains(r#""decision":"approved""#));
+
+        let r2 = ConfigProposalResponse {
+            request_id: "req-2".into(),
+            decision: ProposalDecision::Rejected {
+                reason: Some("不需要".into()),
+            },
+        };
+        let json2 = serde_json::to_string(&r2).unwrap();
+        assert!(json2.contains(r#""reason":"不需要""#));
     }
 }

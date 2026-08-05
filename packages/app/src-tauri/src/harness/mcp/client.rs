@@ -13,9 +13,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use sqlx::SqlitePool;
+use tauri::AppHandle;
 use tokio::sync::RwLock;
 
 use crate::error::{AppError, AppResult};
+use crate::harness::proposal_registry::ProposalRegistry;
 use crate::infra::protocol::ToolDef;
 
 use super::types::AuthorizationLevel;
@@ -48,6 +50,10 @@ pub struct ToolContext {
     pub pool: SqlitePool,
     /// 当前 Agent 的 API Key（search_kb 调 embedding API 用；None = 不支持语义检索）
     pub api_key: Option<String>,
+    /// AppHandle（propose_config_change 等需要 emit 事件的工具用；None = 不可用）
+    pub app_handle: Option<AppHandle>,
+    /// 提案注册表（propose_config_change 等配置工具用；None = 不可用）
+    pub proposal_registry: Option<ProposalRegistry>,
 }
 
 // =========================================================================
@@ -162,6 +168,7 @@ impl McpRegistry {
             ("git", Arc::new(super::git::GitTool)),
             ("web_fetch", Arc::new(super::web::WebFetchTool)),
             ("read_agent_config", Arc::new(super::agent_config::ReadAgentConfigTool)),
+            ("propose_config_change", Arc::new(super::proposal_tool::ProposeConfigChangeTool)),
             ("delegate_to_agent", Arc::new(super::delegate::DelegateTool)),
         ];
         for name in names {
@@ -213,6 +220,8 @@ impl McpRegistry {
         self.register_sync(Arc::new(super::git::GitTool));
         self.register_sync(Arc::new(super::web::WebFetchTool));
         self.register_sync(Arc::new(super::agent_config::ReadAgentConfigTool));
+        self.register_sync(Arc::new(super::proposal_tool::ProposeConfigChangeTool));
+        // 注：delegate_to_agent 不在 register_builtin 中，仅在 with_filter 动态注册
     }
 
     /// 按名称查询工具客户端
@@ -381,6 +390,8 @@ mod tests {
             workspace: None,
             pool: sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap(),
             api_key: None,
+            app_handle: None,
+            proposal_registry: None,
         };
         let result = registry.dispatch("nonexistent", "{}", &ctx).await;
         assert!(result.is_err());
@@ -398,6 +409,8 @@ mod tests {
             workspace: None,
             pool: sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap(),
             api_key: None,
+            app_handle: None,
+            proposal_registry: None,
         };
         // StubClient 未 override execute_with_context → 走默认实现 → 返回 "stub"
         registry.register(make_stub("legacy", "legacy tool")).await;
