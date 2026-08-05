@@ -212,6 +212,69 @@ fn default_enabled() -> bool { true }
 /// scope 默认值：global（兼容旧 server，全局共享）
 fn default_scope() -> String { "global".into() }
 
+// =========================================================================
+// Server 运行时状态（统一 global/per_agent 的启动/运行/失败状态机）
+// =========================================================================
+
+/// Server 运行时状态快照（用于前端展示，不含进程句柄）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerSnapshot {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: serde_json::Value,
+    pub enabled: bool,
+    pub trust_level: TrustLevel,
+    pub scope: String,
+    /// 运行时状态
+    pub status: ServerStatusKind,
+    /// running 时的工具数
+    pub tool_count: Option<usize>,
+    /// running 时的工具列表
+    pub tools: Option<Vec<McpToolDefinition>>,
+    /// failed 时的错误信息
+    pub error: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl From<McpServerConfig> for ServerSnapshot {
+    fn from(cfg: McpServerConfig) -> Self {
+        ServerSnapshot {
+            id: cfg.id,
+            name: cfg.name,
+            description: cfg.description,
+            command: cfg.command,
+            args: cfg.args,
+            env: cfg.env,
+            enabled: cfg.enabled,
+            trust_level: cfg.trust_level,
+            scope: cfg.scope,
+            status: ServerStatusKind::Disabled,
+            tool_count: None,
+            tools: None,
+            error: None,
+            created_at: cfg.created_at,
+            updated_at: cfg.updated_at,
+        }
+    }
+}
+
+/// 前端可见的状态枚举
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ServerStatusKind {
+    Disabled,
+    Starting,
+    Running,
+    Failed,
+}
+
+
 /// per-agent MCP server 的 args 占位符：启动时替换为 agent workspace_path。
 /// 用于 scope=per_agent 的 server（如 filesystem），实现 per-agent 文件访问隔离。
 pub const WORKSPACE_PLACEHOLDER: &str = "{workspace}";

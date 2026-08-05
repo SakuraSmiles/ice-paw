@@ -296,6 +296,29 @@ export interface McpServer {
   updated_at: string;
 }
 
+/** MCP Server 运行时状态快照（后端 ServerSnapshot 对齐） */
+export interface McpServerSnapshot {
+  id: string;
+  name: string;
+  description: string;
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  enabled: boolean;
+  trust_level: McpTrustLevel;
+  scope: string;
+  /** 运行时状态 */
+  status: "disabled" | "starting" | "running" | "failed";
+  /** running 时的工具数 */
+  tool_count: number | null;
+  /** running 时的工具列表 */
+  tools: McpToolDef[] | null;
+  /** failed 时的错误信息 */
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 /** 创建 MCP Server 入参 */
 export interface NewMcpServer {
   id: string;

@@ -142,6 +142,8 @@ impl LlmProvider for AnthropicAdapter {
 
         // 3. 拼 URL + body
         let url = format!("{}/v1/messages", self.base_url.trim_end_matches('/'));
+        let tools_count = anthropic_tools.as_ref().map(|t| t.len()).unwrap_or(0);
+        let msgs_len = msgs_json.len();
         let body = ChatRequest {
             model: effective_model,
             max_tokens,
@@ -153,6 +155,14 @@ impl LlmProvider for AnthropicAdapter {
         };
 
         // 4. 发请求
+        tracing::info!(
+            target: "ice_paw.llm",
+            "发起 LLM 请求: url={} model={} stream=true tools={} messages={}",
+            url,
+            effective_model,
+            tools_count,
+            msgs_len,
+        );
         let response = self
             .client
             .post(&url)
@@ -164,6 +174,13 @@ impl LlmProvider for AnthropicAdapter {
             .send()
             .await
             .map_err(|e| AppError::Llm(format!("HTTP 请求失败: {e}")))?;
+
+        tracing::info!(
+            target: "ice_paw.llm",
+            "LLM 响应: status={} content_type={:?}",
+            response.status(),
+            response.headers().get("content-type"),
+        );
 
         // 5. 检查 HTTP 状态码；非成功 → 解析 Anthropic 风格错误体
         if !response.status().is_success() {
