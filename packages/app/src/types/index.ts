@@ -249,6 +249,60 @@ export interface ToolAuthResponse {
 }
 
 // ============================================================================
+// 配置提案事件
+// ============================================================================
+
+export type SensitivityTier = "low" | "medium" | "redline";
+
+export interface ProposalActionCreateAgent {
+  action: "create_agent";
+  id: string;
+  name: string;
+  provider: string;
+  model: string;
+  api_key: string;  // 总是 "__SLOT__"
+  base_url?: string | null;
+  system_prompt?: string | null;
+  temperature?: number | null;
+  max_tokens?: number | null;
+  enabled_tools?: string[] | null;
+  workspace_path?: string | null;
+}
+
+export interface ProposalActionUpdateAgent {
+  action: "update_agent";
+  agent_id: string;
+  name?: string | null;
+  provider?: string | null;
+  model?: string | null;
+  system_prompt?: string | null;
+  base_url?: string | null;
+  temperature?: number | null;
+  max_tokens?: number | null;
+  enabled_tools?: string[] | null;
+  workspace_path?: string | null;
+}
+
+export type ProposalAction = ProposalActionCreateAgent | ProposalActionUpdateAgent;
+
+export interface ConfigProposalPayload {
+  request_id: string;
+  conversation_id: string;
+  message_id: string;
+  tool_use_id: string;
+  sensitivity: SensitivityTier;
+  action: ProposalAction;
+  summary: string;
+}
+
+export interface ConfigProposalResponse {
+  request_id: string;
+  decision: "approved" | "modified" | "rejected";
+  changes?: Record<string, string>;
+  reason?: string;
+}
+
+// ============================================================================
 // UserPreferences
 // ============================================================================
 
