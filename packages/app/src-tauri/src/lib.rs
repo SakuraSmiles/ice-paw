@@ -98,6 +98,7 @@ pub fn run() {
             commands::kb_cmd::delete_kb,
             commands::kb_cmd::reindex_kb,
             commands::kb_cmd::list_kb_documents,
+            commands::kb_cmd::get_kb_stats,
             commands::log_cmd::get_logs,
             commands::log_cmd::get_data_dir,
             commands::log_cmd::open_data_dir,

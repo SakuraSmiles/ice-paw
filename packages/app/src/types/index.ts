@@ -392,3 +392,10 @@ export interface IndexStats {
   skipped: number;
   deleted: number;
 }
+
+/** 某 KB 的统计（文档数 + chunk 向量进度） */
+export interface KbStats {
+  total_documents: number;
+  total_chunks: number;
+  embedded_chunks: number;
+}

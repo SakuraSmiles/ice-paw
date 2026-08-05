@@ -5,6 +5,7 @@ import type {
   AgentUpdate,
   Conversation,
   IndexStats,
+  KbStats,
   Kb,
   KbDocument,
   Message,
@@ -222,6 +223,10 @@ const kb = {
   async reindex(kbId: string): Promise<IndexStats> {
     try { return await invoke<IndexStats>("reindex_kb", { id: kbId }); }
     catch (err) { throw wrapInvokeError("kb.reindex", err); }
+  },
+  async getStats(kbId: string): Promise<KbStats> {
+    try { return await invoke<KbStats>("get_kb_stats", { kbId }); }
+    catch (err) { throw wrapInvokeError("kb.getStats", err); }
   },
 };
 
