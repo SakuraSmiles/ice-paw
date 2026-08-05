@@ -225,9 +225,9 @@ pub async fn send_message(
     // 使用共享的工具授权注册表（与 lib.rs install_listener 实例一致）
     let shared_auth_registry = (*auth_registry).clone();
 
-    // 组装对话 tool_registry：global server 工具 + per-agent server 工具
+    // 组装对话 tool_registry：直接从 global registry 快照（boot 时已启动全部 server）。
+    // per_agent server 的 workspace 后台异步绑定，不阻塞消息发送。
     let tool_registry = if tools_enabled {
-        // global server（从 global_registry，筛 agent_enabled_tools）
         let reg = match &agent_enabled_tools {
             Some(names) if !names.is_empty() => {
                 let r = McpRegistry::new();
@@ -237,43 +237,21 @@ pub async fn send_message(
             Some(_) => McpRegistry::new(),
             None => (**global_registry).clone(),
         };
-        // per-agent server（scope=per_agent，按 agent workspace 启动 + 注册工具）
+
+        // 后台异步绑定 per_agent server workspace（不阻塞消息发送）
         if let Some(workspace) = agent.workspace_path.as_deref() {
             let mcp_configs = repo::mcp_server::list_all(pool.inner()).await.unwrap_or_else(|e| {
-                tracing::warn!(target: "ice_paw.chat", "加载 MCP server 配置失败（按空处理）: {e}");
+                tracing::warn!(target: "ice_paw.chat", "加载 MCP server 配置失败: {e}");
                 Vec::new()
             });
-            for cfg in mcp_configs.iter().filter(|c| c.enabled && c.scope == "per_agent") {
-                match (**mcp_manager).ensure_per_agent(cfg, &conv.agent_id, workspace).await {
-                    Ok((server, tools)) => {
-                        for tool_def in &tools {
-                            let allowed = match &agent_enabled_tools {
-                                Some(names) if !names.is_empty() => names.contains(&tool_def.name),
-                                Some(_) => false,
-                                None => true,
-                            };
-                            if allowed {
-                                let namespaced = format!("{}.{}", cfg.name, tool_def.name);
-                                let proxy = Arc::new(
-                                    crate::harness::mcp::external::ExternalToolProxy::new(
-                                        namespaced,
-                                        tool_def.description.clone(),
-                                        tool_def.input_schema.clone(),
-                                        server.clone(),
-                                        cfg.trust_level,
-                                    ),
-                                );
-                                reg.register(proxy).await;
-                            }
-                        }
-                    }
-                    Err(e) => tracing::warn!(
-                        target: "ice_paw.mcp",
-                        "per-agent MCP Server '{}' 启动失败: {}",
-                        cfg.name, e
-                    ),
+            let mgr = Arc::clone(&mcp_manager);
+            let reg = Arc::clone(&global_registry);
+            let ws = workspace.to_string();
+            tokio::spawn(async move {
+                for cfg in mcp_configs.iter().filter(|c| c.enabled && c.scope == "per_agent") {
+                    mgr.rebind_workspace_if_needed(&cfg.id, &ws, &reg).await;
                 }
-            }
+            });
         }
         reg
     } else {

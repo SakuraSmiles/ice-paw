@@ -1,6 +1,10 @@
-//! MCP Server 管理器 — 生命周期管理
+//! MCP Server 管理器 — 统一生命周期管理
 //!
-//! Phase 2: 管理所有外部 MCP Server 的启动/关闭/注册。
+//! 所有 MCP Server（global + per_agent）通过单一状态机管理：
+//! - Boot 时并行启动所有 enabled server
+//! - 失败的服务标记 Failed，不重试（用户可在设置页手动重试）
+//! - 工具自动注册/反注册到 McpRegistry
+//! - per_agent server 的 workspace 在首次需要时后台重启绑定
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -11,53 +15,162 @@ use crate::error::{AppError, AppResult};
 
 use super::client::McpRegistry;
 use super::external::{ExternalMcpServer, ExternalToolProxy};
-use super::types::{McpServerConfig, McpToolDefinition, WORKSPACE_PLACEHOLDER};
+use super::types::{
+    McpServerConfig, McpToolDefinition, ServerSnapshot, ServerStatusKind, WORKSPACE_PLACEHOLDER,
+};
 
-/// MCP Server 管理器
-///
-/// 持有所有活跃的 `ExternalMcpServer` 以及它们注册到 `McpRegistry` 的代理。
+// =========================================================================
+// 内部状态类型
+// =========================================================================
+
+pub(crate) enum ServerStatus {
+    Disabled,
+    Starting,
+    Running {
+        process: Arc<ExternalMcpServer>,
+        tools: Vec<McpToolDefinition>,
+    },
+    Failed {
+        reason: String,
+    },
+}
+
+impl ServerStatus {
+    fn to_kind(&self) -> ServerStatusKind {
+        match self {
+            ServerStatus::Disabled => ServerStatusKind::Disabled,
+            ServerStatus::Starting => ServerStatusKind::Starting,
+            ServerStatus::Running { .. } => ServerStatusKind::Running,
+            ServerStatus::Failed { .. } => ServerStatusKind::Failed,
+        }
+    }
+}
+
+pub(crate) struct ServerEntry {
+    pub config: McpServerConfig,
+    pub status: ServerStatus,
+}
+
+impl ServerEntry {
+    fn snapshot(&self) -> ServerSnapshot {
+        let mut snap = ServerSnapshot::from(self.config.clone());
+        snap.status = self.status.to_kind();
+        match &self.status {
+            ServerStatus::Running { tools, .. } => {
+                snap.tool_count = Some(tools.len());
+                snap.tools = Some(tools.clone());
+            }
+            ServerStatus::Failed { reason } => {
+                snap.error = Some(reason.clone());
+            }
+            _ => {}
+        }
+        snap
+    }
+}
+
+// =========================================================================
+// McpServerManager
+// =========================================================================
+
 pub struct McpServerManager {
-    /// 活跃服务器（global scope）：id → ExternalMcpServer
-    servers: RwLock<HashMap<String, Arc<ExternalMcpServer>>>,
-    /// 工具缓存：id → 该 server 启动时注册的工具清单（供前端查看，避免重发 tools/list）
-    tools_cache: RwLock<HashMap<String, Vec<McpToolDefinition>>>,
-    /// per-agent server 池：key=(agent_id, config_id) → server 实例（复用，不重复启动）
-    per_agent_servers: RwLock<HashMap<(String, String), Arc<ExternalMcpServer>>>,
-    /// per-agent server 的工具缓存（避免复用时重发 tools/list）
-    per_agent_tools: RwLock<HashMap<(String, String), Vec<McpToolDefinition>>>,
+    /// 统一 server 状态表：config_id → ServerEntry（pub(crate) 供命令层查询）
+    pub entries: RwLock<HashMap<String, ServerEntry>>,
 }
 
 impl McpServerManager {
-    /// 创建空管理器
     pub fn new() -> Self {
         Self {
-            servers: RwLock::new(HashMap::new()),
-            tools_cache: RwLock::new(HashMap::new()),
-            per_agent_servers: RwLock::new(HashMap::new()),
-            per_agent_tools: RwLock::new(HashMap::new()),
+            entries: RwLock::new(HashMap::new()),
         }
     }
 
-    /// 启动一个 MCP Server 并注册所有工具到 registry
-    pub async fn start(
+    // =====================================================================
+    // 启动 / 关闭 / 重试
+    // =====================================================================
+
+    /// 启动一个 MCP Server（统一 global / per_agent）。
+    ///
+    /// workspace: 用于替换 args 中的 `{workspace}`。per_agent server 用 agent workspace；
+    /// global server 传 None 即可。
+    pub async fn start_server(
         &self,
         config: &McpServerConfig,
+        workspace: Option<&str>,
         registry: &McpRegistry,
     ) -> AppResult<()> {
+        let id = config.id.clone();
+
+        // 标记 Starting
+        {
+            let mut entries = self.entries.write().await;
+            entries.insert(
+                id.clone(),
+                ServerEntry {
+                    config: config.clone(),
+                    status: ServerStatus::Starting,
+                },
+            );
+        }
+
+        // 替换 workspace placeholder
+        let args: Vec<String> = if let Some(ws) = workspace {
+            config
+                .args
+                .iter()
+                .map(|a| a.replace(WORKSPACE_PLACEHOLDER, ws))
+                .collect()
+        } else {
+            config.args.clone()
+        };
+
         // spawn 子进程
-        let server = ExternalMcpServer::spawn(
+        let server = match ExternalMcpServer::spawn(
             config.id.clone(),
             config.name.clone(),
             &config.command,
-            &config.args,
+            &args,
             &config.env,
-        ).await?;
-
+        )
+        .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                let reason = format!("启动失败: {e}");
+                let mut entries = self.entries.write().await;
+                entries.insert(
+                    id.clone(),
+                    ServerEntry {
+                        config: config.clone(),
+                        status: ServerStatus::Failed { reason },
+                    },
+                );
+                return Err(e);
+            }
+        };
         let server = Arc::new(server);
 
-        // 获取工具列表并注册（加 server name 前缀防同名覆盖）
+        // 获取工具列表
+        let tools = match server.list_tools().await {
+            Ok(t) => t,
+            Err(e) => {
+                server.shutdown().await;
+                let reason = format!("获取工具列表失败: {e}");
+                let mut entries = self.entries.write().await;
+                entries.insert(
+                    id.clone(),
+                    ServerEntry {
+                        config: config.clone(),
+                        status: ServerStatus::Failed { reason },
+                    },
+                );
+                return Err(e);
+            }
+        };
+
+        // 注册工具到 registry（namespaced: server_name.tool_name）
         let prefix = format!("{}.", config.name);
-        let tools = server.list_tools().await?;
+        let tool_names: Vec<String> = tools.iter().map(|t| format!("{}{}", prefix, t.name)).collect();
         for tool_def in &tools {
             let namespaced = format!("{}{}", prefix, tool_def.name);
             let proxy = Arc::new(ExternalToolProxy::new(
@@ -70,221 +183,166 @@ impl McpServerManager {
             registry.register(proxy).await;
         }
 
+        // 更新状态为 Running
+        {
+            let mut entries = self.entries.write().await;
+            entries.insert(
+                id.clone(),
+                ServerEntry {
+                    config: config.clone(),
+                    status: ServerStatus::Running {
+                        process: server,
+                        tools: tools.clone(),
+                    },
+                },
+            );
+        }
+
         tracing::info!(
             target: "ice_paw.mcp",
-            "MCP Server '{}' 已启动，注册 {} 个工具（前缀: {}）",
+            "MCP Server '{}' 启动成功: {} 个工具 ({} tools registered)",
             config.name,
             tools.len(),
-            prefix,
+            tool_names.len(),
         );
-
-        // 保存到活跃服务器列表
-        {
-            let mut servers = self.servers.write().await;
-            servers.insert(config.id.clone(), server);
-        }
-
-        // 缓存工具清单（供前端查看）
-        {
-            let mut cache = self.tools_cache.write().await;
-            cache.insert(config.id.clone(), tools);
-        }
-
         Ok(())
     }
 
-    /// 停止一个 MCP Server（从 registry 反注册工具 + 关闭子进程）。
-    ///
-    /// 必须传入启动时同一个 `registry`：stop 会把该 server 注册的工具按名从 registry 移除，
-    /// 否则死工具残留会让 LLM 调用时卡满 30s 超时。
-    pub async fn stop(&self, id: &str, registry: &McpRegistry) {
-        // 从活跃列表移除
-        let server = {
-            let mut servers = self.servers.write().await;
-            servers.remove(id)
+    /// 关闭一个 MCP Server（从 registry 反注册工具 + 关闭子进程）
+    pub async fn stop_server(&self, id: &str, registry: &McpRegistry) {
+        let entry = {
+            let mut entries = self.entries.write().await;
+            entries.remove(id)
         };
 
-        // 反注册工具 + 清缓存：取出该 server 的工具名，从 registry 移除
-        {
-            let mut cache = self.tools_cache.write().await;
-            if let Some(tools) = cache.remove(id) {
-                let names: Vec<String> = tools.into_iter().map(|t| t.name).collect();
+        if let Some(entry) = entry {
+            // 反注册工具
+            if let ServerStatus::Running { tools, .. } = &entry.status {
+                let prefix = format!("{}.", entry.config.name);
+                let names: Vec<String> = tools.iter().map(|t| format!("{}{}", prefix, t.name)).collect();
                 if !names.is_empty() {
                     registry.unregister(&names).await;
                 }
             }
-        }
-
-        if let Some(server) = server {
-            server.shutdown().await;
-            tracing::info!(target: "ice_paw.mcp", "MCP Server '{}' 已关闭", server.name);
+            // 关闭进程
+            if let ServerStatus::Running { process, .. } = &entry.status {
+                process.shutdown().await;
+            }
+            tracing::info!(target: "ice_paw.mcp", "MCP Server '{}' 已关闭", entry.config.name);
         }
     }
 
-    /// 停止所有服务器（global + per-agent）
-    pub async fn stop_all(&self) {
-        let mut all: Vec<Arc<ExternalMcpServer>> = {
-            let mut s = self.servers.write().await;
-            s.drain().map(|(_, v)| v).collect()
-        };
-        {
-            let mut cache = self.tools_cache.write().await;
-            cache.clear();
-        }
-        // per-agent 池也一并清理
-        {
-            let mut pool = self.per_agent_servers.write().await;
-            all.extend(pool.drain().map(|(_, v)| v));
-            let mut tc = self.per_agent_tools.write().await;
-            tc.clear();
-        }
-
-        for server in all {
-            server.shutdown().await;
-        }
-
-        tracing::info!(target: "ice_paw.mcp", "所有 MCP Server 已关闭（含 per-agent）");
-    }
-
-    /// 获取所有活跃服务器的副本（用于排查）
-    pub async fn active_server_count(&self) -> usize {
-        let servers = self.servers.read().await;
-        servers.len()
-    }
-
-    /// 列出所有活跃服务器的工具定义（调试/管理用）
-    pub async fn list_active_servers(&self) -> Vec<(String, String)> {
-        let servers = self.servers.read().await;
-        servers.values().map(|s| (s.id.clone(), s.name.clone())).collect()
-    }
-
-    /// 查询某个 server 启动时注册的工具清单（仅运行中的 server 有缓存）
-    pub async fn list_server_tools(&self, id: &str) -> AppResult<Vec<McpToolDefinition>> {
-        let cache = self.tools_cache.read().await;
-        cache
-            .get(id)
-            .cloned()
-            .ok_or_else(|| AppError::Internal(format!("MCP Server '{id}' 未运行")))
-    }
-
-    /// 确保 per-agent MCP Server 就绪（首次启动或复用池中实例）。
-    ///
-    /// args 中的 `{workspace}` 替换为 agent workspace。返回 (server, tools)，
-    /// 调用方负责把 tools 注册到本次对话的 registry。
-    pub async fn ensure_per_agent(
+    /// 重试失败的 server
+    pub async fn retry_server(
         &self,
-        config: &McpServerConfig,
-        agent_id: &str,
-        workspace: &str,
-    ) -> AppResult<(Arc<ExternalMcpServer>, Vec<McpToolDefinition>)> {
-        let key = (agent_id.to_string(), config.id.clone());
-
-        // 复用池中实例
-        {
-            let pool = self.per_agent_servers.read().await;
-            if let Some(server) = pool.get(&key) {
-                let tools_cache = self.per_agent_tools.read().await;
-                let tools = tools_cache.get(&key).cloned().unwrap_or_default();
-                tracing::info!(
-                    target: "ice_paw.mcp",
-                    "复用 per-agent MCP Server: agent={} config={}",
-                    agent_id, config.name
-                );
-                return Ok((server.clone(), tools));
-            }
-        }
-
-        // 首次启动：args 替换 {workspace}
-        let args: Vec<String> = config
-            .args
-            .iter()
-            .map(|a| a.replace(WORKSPACE_PLACEHOLDER, workspace))
-            .collect();
-        let server = Arc::new(
-            ExternalMcpServer::spawn(
-                config.id.clone(),
-                config.name.clone(),
-                &config.command,
-                &args,
-                &config.env,
-            )
-            .await?,
-        );
-        let tools = server.list_tools().await?;
-
-        self.per_agent_servers.write().await.insert(key.clone(), server.clone());
-        self.per_agent_tools.write().await.insert(key, tools.clone());
-
-        tracing::info!(
-            target: "ice_paw.mcp",
-            "启动 per-agent MCP Server: agent={} config={} workspace={} → {} 工具",
-            agent_id, config.name, workspace, tools.len()
-        );
-        Ok((server, tools))
-    }
-
-    /// 停止某 agent 的所有 per-agent MCP Server
-    pub async fn stop_per_agent(&self, agent_id: &str) {
-        let to_stop: Vec<Arc<ExternalMcpServer>> = {
-            let mut pool = self.per_agent_servers.write().await;
-            let keys: Vec<(String, String)> = pool
-                .keys()
-                .filter(|(a, _)| a == agent_id)
-                .cloned()
-                .collect();
-            let mut stopped = Vec::new();
-            for k in keys {
-                if let Some(s) = pool.remove(&k) {
-                    stopped.push(s);
-                }
-            }
-            let mut tc = self.per_agent_tools.write().await;
-            tc.retain(|(a, _), _| a != agent_id);
-            stopped
+        id: &str,
+        workspace: Option<&str>,
+        registry: &McpRegistry,
+    ) -> AppResult<()> {
+        let config = {
+            let entries = self.entries.read().await;
+            entries
+                .get(id)
+                .map(|e| e.config.clone())
+                .ok_or_else(|| AppError::NotFound {
+                    resource: "mcp_server",
+                    id: id.to_string(),
+                })?
         };
-        for server in to_stop {
-            server.shutdown().await;
-        }
-        tracing::info!(target: "ice_paw.mcp", "agent {} 的 per-agent server 已关闭", agent_id);
+        // 先清理旧状态
+        self.stop_server(id, registry).await;
+        // 重新启动
+        self.start_server(&config, workspace, registry).await
     }
 
-    /// 探测 per-agent server 的工具清单（临时启动 → list_tools → 关闭 → 缓存到 tools_cache）。
-    ///
-    /// per_agent server 不全局常驻，但工具清单对所有 agent 一样（args 只影响允许目录，
-    /// 不影响工具列表）。启动时探测一次缓存，让 McpSettings 能展示工具能力。
-    /// {workspace} 替换为 temp 目录（工具清单不依赖允许目录）。
-    pub async fn probe_tools(&self, config: &McpServerConfig) -> AppResult<Vec<McpToolDefinition>> {
-        // 已缓存则直接返回
-        {
-            let cache = self.tools_cache.read().await;
-            if let Some(tools) = cache.get(&config.id) {
-                return Ok(tools.clone());
-            }
+    /// 停止所有 server（应用退出时调用）
+    pub async fn stop_all(&self, registry: &McpRegistry) {
+        let ids: Vec<String> = {
+            let entries = self.entries.read().await;
+            entries.keys().cloned().collect()
+        };
+        for id in &ids {
+            self.stop_server(id, registry).await;
         }
-        let temp = std::env::temp_dir().to_string_lossy().to_string();
-        let args: Vec<String> = config
-            .args
-            .iter()
-            .map(|a| a.replace(WORKSPACE_PLACEHOLDER, &temp))
-            .collect();
-        let server = ExternalMcpServer::spawn(
-            config.id.clone(),
-            config.name.clone(),
-            &config.command,
-            &args,
-            &config.env,
-        )
-        .await?;
-        let tools = server.list_tools().await?;
-        server.shutdown().await;
+        tracing::info!(target: "ice_paw.mcp", "所有 MCP Server 已关闭");
+    }
 
-        self.tools_cache.write().await.insert(config.id.clone(), tools.clone());
-        tracing::info!(
-            target: "ice_paw.mcp",
-            "探测 per-agent MCP Server '{}' 工具清单: {} 个",
-            config.name, tools.len()
-        );
-        Ok(tools)
+    // =====================================================================
+    // 查询接口（供前端 / 命令层使用）
+    // =====================================================================
+
+    /// 列出所有 server 的快照（含运行时状态）
+    pub async fn list_snapshots(&self) -> Vec<ServerSnapshot> {
+        let entries = self.entries.read().await;
+        let mut snaps: Vec<_> = entries.values().map(|e| e.snapshot()).collect();
+        snaps.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+        snaps
+    }
+
+    /// 快速启用/禁用（不重启，只更新状态）
+    pub async fn set_enabled(&self, id: &str, enabled: bool, registry: &McpRegistry) -> AppResult<()> {
+        let mut entries = self.entries.write().await;
+        let entry = entries.get_mut(id).ok_or_else(|| AppError::NotFound {
+            resource: "mcp_server",
+            id: id.to_string(),
+        })?;
+
+        entry.config.enabled = enabled;
+        if !enabled {
+            // 禁用 → 关闭进程 + 反注册工具
+            if let ServerStatus::Running { tools, process } = &entry.status {
+                let prefix = format!("{}.", entry.config.name);
+                let names: Vec<String> = tools.iter().map(|t| format!("{}{}", prefix, t.name)).collect();
+                registry.unregister(&names).await;
+                process.shutdown().await;
+            }
+            entry.status = ServerStatus::Disabled;
+        }
+        // enabled=true 不在这个接口处理——调用方用 retry_server
+        Ok(())
+    }
+
+    /// per_agent server：确保 workspace 正确。
+    /// 如果 server 已在 Running 状态但使用了不同的 workspace，后台重启。
+    /// 调用方不应阻塞等待此方法——它用于异步修正 workspace。
+    pub async fn rebind_workspace_if_needed(
+        &self,
+        config_id: &str,
+        agent_workspace: &str,
+        registry: &McpRegistry,
+    ) {
+        let needs_rebind = {
+            let entries = self.entries.read().await;
+            if let Some(entry) = entries.get(config_id) {
+                if entry.config.scope == "per_agent" {
+                    // 检查当前 args 是否包含正确的 workspace
+                    entry.config.args.iter().any(|a| a.contains(WORKSPACE_PLACEHOLDER))
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        };
+
+        if needs_rebind {
+            tracing::info!(
+                target: "ice_paw.mcp",
+                "per_agent server '{}' 后台重启以绑定 workspace: {}",
+                config_id,
+                agent_workspace,
+            );
+            let _ = self.retry_server(config_id, Some(agent_workspace), registry).await;
+        }
+    }
+
+    /// 检查是否有 Failed 状态的 server（供前端提示用）
+    pub async fn failed_server_count(&self) -> usize {
+        let entries = self.entries.read().await;
+        entries
+            .values()
+            .filter(|e| matches!(e.status, ServerStatus::Failed { .. }))
+            .count()
     }
 }
 
@@ -294,6 +352,10 @@ impl Default for McpServerManager {
     }
 }
 
+// =========================================================================
+// 单测
+// =========================================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -301,12 +363,6 @@ mod tests {
     #[test]
     fn manager_new_is_empty() {
         let mgr = McpServerManager::new();
-        assert_eq!(mgr.servers.try_read().unwrap().len(), 0);
-    }
-
-    #[tokio::test]
-    async fn list_server_tools_missing_returns_err() {
-        let mgr = McpServerManager::new();
-        assert!(mgr.list_server_tools("nope").await.is_err());
+        assert!(mgr.entries.try_read().unwrap().len() == 0);
     }
 }

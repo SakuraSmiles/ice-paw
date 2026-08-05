@@ -398,6 +398,8 @@ export const useChatStore = defineStore("chat", () => {
     listen<ChatAssistantStartPayload>("chat:assistant-start", (e) => {
       if (e.payload.conversation_id !== activeConvId.value) return;
       resetSendTimeout();
+      // 确保 sending 为 true：多轮工具执行间隙可能触发静默超时把它置 false
+      sending.value = true;
       freezeCurrentAssistant();
       streamingText.value = "";
       streamingThinking.value = "";

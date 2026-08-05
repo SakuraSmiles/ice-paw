@@ -74,7 +74,9 @@ function navigate(key: string) {
       <div class="settings-content">
         <router-view v-slot="{ Component }">
           <Transition name="route-fade" mode="out-in">
-            <component :is="Component" />
+            <keep-alive>
+              <component :is="Component" />
+            </keep-alive>
           </Transition>
         </router-view>
       </div>

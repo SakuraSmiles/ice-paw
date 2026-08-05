@@ -9,6 +9,7 @@ import type {
   KbDocument,
   Message,
   McpServer,
+  McpServerSnapshot,
   McpServerUpdate,
   McpToolDef,
   NewAgent,
@@ -175,8 +176,9 @@ const preferences = {
 };
 
 const mcp = {
-  async list(): Promise<McpServer[]> {
-    try { return await invoke<McpServer[]>("list_mcp_servers"); }
+  /** 列出所有 MCP Server 及其运行时状态 */
+  async list(): Promise<McpServerSnapshot[]> {
+    try { return await invoke<McpServerSnapshot[]>("list_mcp_servers"); }
     catch (err) { throw wrapInvokeError("mcp.list", err); }
   },
   async create(input: NewMcpServer): Promise<McpServer> {
@@ -191,27 +193,20 @@ const mcp = {
     try { await invoke<void>("delete_mcp_server", { id }); }
     catch (err) { throw wrapInvokeError("mcp.remove", err); }
   },
-  async restart(id: string): Promise<void> {
-    try { await invoke<void>("restart_mcp_server", { id }); }
-    catch (err) { throw wrapInvokeError("mcp.restart", err); }
+  /** 快速启用/禁用 */
+  async setEnabled(id: string, enabled: boolean): Promise<void> {
+    try { await invoke<void>("set_mcp_enabled", { id, enabled }); }
+    catch (err) { throw wrapInvokeError("mcp.setEnabled", err); }
   },
-  async listActive(): Promise<[string, string][]> {
-    try { return await invoke<[string, string][]>("list_active_mcp_servers"); }
-    catch (err) { throw wrapInvokeError("mcp.listActive", err); }
+  /** 重试失败的 server */
+  async retry(id: string): Promise<McpToolDef[]> {
+    try { return await invoke<McpToolDef[]>("retry_mcp_server", { id }); }
+    catch (err) { throw wrapInvokeError("mcp.retry", err); }
   },
-  async listTools(id: string): Promise<McpToolDef[]> {
-    try { return await invoke<McpToolDef[]>("list_mcp_server_tools", { id }); }
-    catch (err) { throw wrapInvokeError("mcp.listTools", err); }
-  },
-  /** 检测 Node.js 是否可用（npx 启动 MCP Server 需要） */
+  /** 检测 Node.js 是否可用 */
   async checkNodejs(): Promise<boolean> {
     try { return await invoke<boolean>("check_nodejs"); }
     catch { return false; }
-  },
-  /** 手动探测 MCP Server 工具清单（重试用） */
-  async probe(id: string): Promise<McpToolDef[]> {
-    try { return await invoke<McpToolDef[]>("probe_mcp_server", { id }); }
-    catch (err) { throw wrapInvokeError("mcp.probe", err); }
   },
 };
 

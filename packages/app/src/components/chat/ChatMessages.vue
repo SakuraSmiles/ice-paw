@@ -11,7 +11,7 @@
   Emits: 无
 -->
 <script setup lang="ts">
-import { watch, nextTick, ref, computed, onMounted, onUnmounted } from "vue";
+import { watch, nextTick, ref, computed, onMounted, onUnmounted, onActivated } from "vue";
 import { useChatStore } from "../../stores/chat";
 import { formatTime, formatDateLabel } from "../../utils/time";
 import MarkdownRenderer from "./MarkdownRenderer.vue";
@@ -136,6 +136,10 @@ function scrollToBottom(smooth?: boolean) {
 onMounted(() => {
   listRef.value?.addEventListener("scroll", onScroll);
   scrollToBottom(false);
+});
+onActivated(() => {
+  // KeepAlive: 切回时恢复滚动位置。如果在生成中或刚切回来，滚到底部
+  nextTick(() => scrollToBottom(false));
 });
 onUnmounted(() => {
   listRef.value?.removeEventListener("scroll", onScroll);
