@@ -75,7 +75,7 @@ impl ServerEntry {
 
 pub struct McpServerManager {
     /// 统一 server 状态表：config_id → ServerEntry（pub(crate) 供命令层查询）
-    pub entries: RwLock<HashMap<String, ServerEntry>>,
+    pub(crate) entries: RwLock<HashMap<String, ServerEntry>>,
 }
 
 impl McpServerManager {

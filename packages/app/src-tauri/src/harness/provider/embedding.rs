@@ -37,7 +37,7 @@
 //! - 用户的 agent 配置中有 `embedding_model` 字段（可选，默认 `text-embedding-3-small`）
 //! - agent.provider 决定走 OpenAI 兼容还是 Anthropic；当前实现只支持前者
 //!   （Anthropic provider 调 embedding 时会返回 `AppError::Validation`，
-//!    因为 Anthropic 没有官方 embedding API）
+//!   因为 Anthropic 没有官方 embedding API）
 
 use std::time::Duration;
 

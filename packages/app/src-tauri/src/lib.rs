@@ -31,7 +31,7 @@ pub mod logging;
 
 use std::sync::Arc;
 
-use tauri::{Emitter, Manager};
+use tauri::Manager;
 
 use harness::mcp::McpRegistry;
 

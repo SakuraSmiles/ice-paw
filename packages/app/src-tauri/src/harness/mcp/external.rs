@@ -135,7 +135,6 @@ impl ExternalMcpServer {
         // Windows: 隐藏 cmd 窗口（cmd /C 会弹出控制台窗口，CREATE_NO_WINDOW 隐藏它）
         #[cfg(windows)]
         {
-            use std::os::windows::process::CommandExt;
             const CREATE_NO_WINDOW: u32 = 0x08000000;
             cmd_builder.creation_flags(CREATE_NO_WINDOW);
         }

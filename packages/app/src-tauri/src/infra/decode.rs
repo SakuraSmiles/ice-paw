@@ -25,7 +25,7 @@ pub(crate) fn decode_bytes(bytes: &[u8]) -> DecodedText {
             return DecodedText { text: cow.into_owned(), encoding: "gbk" };
         }
         // GBK 也有错误 → 用 lossy GBK
-        return DecodedText { text: cow.into_owned(), encoding: "gbk-lossy" };
+        DecodedText { text: cow.into_owned(), encoding: "gbk-lossy" }
     }
 
     // 3. 兜底：UTF-8 lossy
