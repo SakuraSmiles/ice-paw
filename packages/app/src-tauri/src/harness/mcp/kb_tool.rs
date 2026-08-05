@@ -103,10 +103,9 @@ impl McpClient for SearchKbTool {
             .to_string());
         }
 
-        // 3. 关键词检索（repo 已做 title 权重排序 + limit）
-        let hits = repo::kb::search(&ctx.pool, &parsed.query, &kb_ids, parsed.limit).await?;
-
-        let mut results: Vec<SearchHitOut> = hits
+        // 3. 关键词检索（repo 已做 title 权重排序 + limit）→ SearchHitOut
+        let kw_hits: Vec<SearchHitOut> = repo::kb::search(&ctx.pool, &parsed.query, &kb_ids, parsed.limit)
+            .await?
             .into_iter()
             .map(|h| SearchHitOut {
                 kb_name: h.kb_name,
@@ -116,25 +115,18 @@ impl McpClient for SearchKbTool {
             })
             .collect();
 
-        // 3.5 语义检索（全局 embedding 配置，独立于聊天 Agent）
-        if let Some(semantic) = try_semantic_search(
+        // 4. 语义检索（全局 embedding 配置，独立于聊天 Agent；未启用/失败 → 空）
+        let sem_hits = try_semantic_search(
             &ctx.pool,
             &parsed.query,
             &kb_ids,
             parsed.limit as usize,
         )
         .await
-        {
-            // 合并去重（按 file_path 去重，关键词结果优先）
-            let existing_paths: std::collections::HashSet<String> =
-                results.iter().map(|r| r.file_path.clone()).collect();
-            for s in semantic {
-                if !existing_paths.contains(&s.file_path) {
-                    results.push(s);
-                }
-            }
-            results.truncate(parsed.limit as usize);
-        }
+        .unwrap_or_default();
+
+        // 5. RRF 融合两路排名（关键词 + 语义），按融合分数排序
+        let results = rrf_fuse(kw_hits, sem_hits, parsed.limit as usize);
 
         let count = results.len();
         Ok(serde_json::json!({
@@ -147,12 +139,40 @@ impl McpClient for SearchKbTool {
 }
 
 /// 返回给 LLM 的单条命中（精简字段，全文让 agent 用 read_file 取）。
-#[derive(Serialize)]
+#[derive(Serialize, Clone, Debug)]
 struct SearchHitOut {
     kb_name: String,
     file_path: String,
     title: String,
     summary: String,
+}
+
+/// RRF（Reciprocal Rank Fusion）融合关键词与语义两路检索结果。
+///
+/// 每路按排名得分 `1/(RRF_K + rank + 1)`，按 file_path 聚合（同文档两路命中
+/// score 叠加），按总分降序取前 `limit`。关键词路先入（保留其 kb_name/summary），
+/// 语义路仅累加分数。RRF_K=60 为经典值。
+fn rrf_fuse(kw: Vec<SearchHitOut>, sem: Vec<SearchHitOut>, limit: usize) -> Vec<SearchHitOut> {
+    const RRF_K: usize = 60;
+    use std::collections::HashMap;
+    let mut scored: HashMap<String, (f64, SearchHitOut)> = HashMap::new();
+    for (rank, hit) in kw.into_iter().enumerate() {
+        let s = 1.0 / (RRF_K + rank + 1) as f64;
+        scored
+            .entry(hit.file_path.clone())
+            .and_modify(|(sc, _)| *sc += s)
+            .or_insert((s, hit));
+    }
+    for (rank, hit) in sem.into_iter().enumerate() {
+        let s = 1.0 / (RRF_K + rank + 1) as f64;
+        scored
+            .entry(hit.file_path.clone())
+            .and_modify(|(sc, _)| *sc += s)
+            .or_insert((s, hit));
+    }
+    let mut all: Vec<(f64, SearchHitOut)> = scored.into_values().collect();
+    all.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    all.into_iter().take(limit).map(|(_, h)| h).collect()
 }
 
 /// 尝试语义检索（向量）。返回 None = 不支持/失败，调用方回退纯关键词。
@@ -224,12 +244,11 @@ async fn try_semantic_search(
         }
         if let Some(chunk) = chunks.iter().find(|c| &c.id == id) {
             if seen.insert(chunk.file_path.clone()) {
-                let summary: String = chunk.content.chars().take(200).collect();
                 results.push(SearchHitOut {
                     kb_name: "语义检索".into(),
                     file_path: chunk.file_path.clone(),
                     title: chunk.title.clone(),
-                    summary,
+                    summary: chunk.summary.clone(),
                 });
             }
         }
@@ -757,6 +776,32 @@ mod tests {
         assert_eq!(model, "embedding-3");
         assert_eq!(url, "https://open.bigmodel.cn/api/paas/v4");
         assert_eq!(key, "sk-test-xxx");
+    }
+
+    /// RRF：两路都命中的文档 score 叠加，应排第一
+    #[test]
+    fn rrf_fuse_ranks_two_route_hits_higher() {
+        let mk = |p: &str| SearchHitOut { kb_name: "k".into(), file_path: p.into(), title: p.into(), summary: "s".into() };
+        let kw = vec![mk("a.md"), mk("b.md")];
+        let sem = vec![mk("b.md"), mk("c.md")];
+        let out = rrf_fuse(kw, sem, 5);
+        assert_eq!(out.len(), 3, "三个不同文档: {out:?}");
+        assert_eq!(out[0].file_path, "b.md", "两路命中的 b.md 应排第一");
+    }
+
+    #[test]
+    fn rrf_fuse_empty_semantic_keeps_keyword_order() {
+        let mk = |p: &str| SearchHitOut { kb_name: "k".into(), file_path: p.into(), title: p.into(), summary: "s".into() };
+        let out = rrf_fuse(vec![mk("a.md"), mk("b.md")], vec![], 5);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].file_path, "a.md", "语义为空 → 关键词原序");
+    }
+
+    #[test]
+    fn rrf_fuse_respects_limit() {
+        let mk = |p: &str| SearchHitOut { kb_name: "k".into(), file_path: p.into(), title: p.into(), summary: "s".into() };
+        let out = rrf_fuse(vec![mk("a.md"), mk("b.md")], vec![], 1);
+        assert_eq!(out.len(), 1, "limit 截断");
     }
 
     /// 端到端（需真实智谱 key）：验证修复后 search_kb 完整语义链路能跑通——
