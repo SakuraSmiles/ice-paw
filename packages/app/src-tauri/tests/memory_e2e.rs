@@ -100,7 +100,6 @@ async fn make_ctx(
         avatar: None,
         workspace_path: None,
         description: String::new(),
-        embedding_model: None,
         supports_vision: 0,
         created_at: "2026-01-01T00:00:00Z".into(),
         updated_at: "2026-01-01T00:00:00Z".into(),

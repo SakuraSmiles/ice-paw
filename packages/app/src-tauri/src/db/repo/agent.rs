@@ -15,7 +15,7 @@ pub async fn list(pool: &SqlitePool) -> AppResult<Vec<AgentRow>> {
         "SELECT id, name, provider, model, system_prompt, api_key_ref, base_url,
                 temperature, max_tokens, extra_params, sort_order, cache_prompt,
                 max_history_messages, tool_trim_threshold, enabled_tools,
-                supports_vision, embedding_model, description, avatar,
+                supports_vision, description, avatar,
                 workspace_path, created_at, updated_at
            FROM agents
           ORDER BY sort_order ASC, created_at ASC",
@@ -31,7 +31,7 @@ pub async fn get_by_id(pool: &SqlitePool, id: &str) -> AppResult<AgentRow> {
         "SELECT id, name, provider, model, system_prompt, api_key_ref, base_url,
                 temperature, max_tokens, extra_params, sort_order, cache_prompt,
                 max_history_messages, tool_trim_threshold, enabled_tools,
-                supports_vision, embedding_model, description, avatar,
+                supports_vision, description, avatar,
                 workspace_path, created_at, updated_at
            FROM agents WHERE id = ?",
     )
