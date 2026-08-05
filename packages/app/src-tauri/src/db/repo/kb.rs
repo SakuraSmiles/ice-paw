@@ -405,6 +405,23 @@ pub async fn update_chunk_embedding(
     Ok(())
 }
 
+/// 统计某 KB 的 chunk 总数与已有 embedding 的数量（前端展示向量索引进度）。
+///
+/// 返回 `(total_chunks, embedded_chunks)`。`COUNT(c.embedding)` 忽略 NULL，
+/// 正好对应"已生成向量"。
+pub async fn kb_chunk_stats(pool: &SqlitePool, kb_id: &str) -> AppResult<(i64, i64)> {
+    let row: (i64, i64) = sqlx::query_as(
+        "SELECT COUNT(*), COUNT(c.embedding)
+         FROM kb_document_chunk c
+         JOIN kb_document d ON c.doc_id = d.id
+         WHERE d.kb_id = ?",
+    )
+    .bind(kb_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(row)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -550,5 +567,30 @@ mod tests {
             3,
             "alpha2 新内容 + beta/gamma 仍无向量 → 全需生成: {need3:?}"
         );
+    }
+
+    /// kb_chunk_stats：统计 KB 的 chunk 总数 + 已有 embedding 数
+    #[tokio::test]
+    async fn kb_chunk_stats_counts_total_and_embedded() {
+        let pool = fresh_pool().await;
+        create(&pool, &new_kb("k1", "t")).await.unwrap();
+        let doc_id = upsert_document(&pool, "k1", "a.md", "T", "s", "[]", Some("h"), None)
+            .await
+            .unwrap();
+        let need =
+            upsert_chunks_incremental(&pool, &doc_id, &["x".into(), "y".into(), "z".into()])
+                .await
+                .unwrap();
+        // 给前 2 个填 embedding，第 3 个留空
+        update_chunk_embedding(&pool, &need[0].0, &embedding_to_bytes(&[0.1]))
+            .await
+            .unwrap();
+        update_chunk_embedding(&pool, &need[1].0, &embedding_to_bytes(&[0.2]))
+            .await
+            .unwrap();
+
+        let (total, embedded) = kb_chunk_stats(&pool, "k1").await.unwrap();
+        assert_eq!(total, 3, "3 个 chunk");
+        assert_eq!(embedded, 2, "前 2 个有向量");
     }
 }
