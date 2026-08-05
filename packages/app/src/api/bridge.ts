@@ -6,6 +6,7 @@ import type {
   Conversation,
   IndexStats,
   KbStats,
+  RebuildStats,
   Kb,
   KbDocument,
   Message,
@@ -227,6 +228,14 @@ const kb = {
   async getStats(kbId: string): Promise<KbStats> {
     try { return await invoke<KbStats>("get_kb_stats", { kbId }); }
     catch (err) { throw wrapInvokeError("kb.getStats", err); }
+  },
+  async testEmbeddingConfig(provider: string, model: string, apiKey: string, baseUrl?: string): Promise<void> {
+    try { await invoke<void>("test_embedding_config", { provider, model, apiKey, baseUrl: baseUrl ?? null }); }
+    catch (err) { throw wrapInvokeError("kb.testEmbeddingConfig", err); }
+  },
+  async rebuildAllEmbeddings(): Promise<RebuildStats> {
+    try { return await invoke<RebuildStats>("rebuild_all_embeddings"); }
+    catch (err) { throw wrapInvokeError("kb.rebuildAllEmbeddings", err); }
   },
 };
 
