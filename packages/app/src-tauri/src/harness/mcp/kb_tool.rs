@@ -156,64 +156,41 @@ struct SearchHitOut {
 }
 
 /// 尝试语义检索（向量）。返回 None = 不支持/失败，调用方回退纯关键词。
-/// 从全局 preferences 读 embedding 配置，独立于聊天 Agent。
+///
+/// embedding 预生成在 indexer 入库时已做（见 [`crate::harness::kb::indexer`]），
+/// 这里只对预生成漏掉/失败的 chunk 懒生成兜底。配置解析 + 批量生成收敛在
+/// [`crate::harness::kb::embedding`] 模块复用。
 async fn try_semantic_search(
     pool: &sqlx::SqlitePool,
     query: &str,
     kb_ids: &[String],
     limit: usize,
 ) -> Option<Vec<SearchHitOut>> {
+    use crate::harness::kb::embedding::{ensure_chunks_embedded, resolve_embedding_config};
     use crate::harness::provider::embedding::{top_k_recall, EmbeddingBackend, OpenAiEmbeddingBackend};
-    use crate::db::repo::kb::{
-        bytes_to_embedding, embedding_to_bytes, load_chunks_for_vector_search,
-        update_chunk_embedding,
-    };
+    use crate::db::repo::kb::{bytes_to_embedding, load_chunks_for_vector_search};
 
-    // 从全局 preferences 读 embedding 配置。**必须走 get_all**：前端
-    // bridge.preferences.set 用 JSON.stringify 存储，DB 里 embedding_provider
-    // 的实际值是 "\"glm\""（带引号）。若用裸 query_scalar 读到带引号串，
-    // match "glm" 会失败 → 静默 return None → 语义检索永不生效（v2 长期
-    // "看着实现却从没跑通"的根因）。
+    // 1. 配置（必须走 get_all 反序列化，见 harness::kb::embedding 模块文档 / v2 阻断①）
     let prefs = repo::preferences::get_all(pool).await.ok()?;
     let (model, url, api_key) = resolve_embedding_config(&prefs)?;
     let backend = OpenAiEmbeddingBackend::new(model, url);
 
-    // 3. 加载所有 chunk
-    let chunks = load_chunks_for_vector_search(pool, kb_ids).await.ok()?;
+    // 2. 一次加载所有 chunk（ensure 回填内存，省掉原先的第二次 load）
+    let mut chunks = load_chunks_for_vector_search(pool, kb_ids).await.ok()?;
 
-    // 4. 对没有 embedding 的 chunk 批量生成
-    let missing: Vec<&_> = chunks.iter().filter(|c| c.embedding.is_none()).collect();
-    if !missing.is_empty() {
-        let texts: Vec<&str> = missing.iter().map(|c| c.content.as_str()).collect();
-        match backend.embed(texts, &api_key).await {
-            Ok(embeddings) => {
-                for (chunk, emb) in missing.iter().zip(embeddings.iter()) {
-                    let bytes = embedding_to_bytes(emb);
-                    let _ = update_chunk_embedding(pool, &chunk.id, &bytes).await;
-                }
-                tracing::info!(
-                    target: "ice_paw.kb",
-                    "为 {} 个 chunk 生成了 embedding", missing.len()
-                );
-            }
-            Err(e) => {
-                tracing::warn!(target: "ice_paw.kb", "embedding 生成失败，回退关键词检索: {e}");
-                return None;
-            }
-        }
+    // 3. 兜底：对缺向量的 chunk 懒生成 + 回填（预生成失败/漏掉的）
+    if let Err(e) = ensure_chunks_embedded(pool, &mut chunks, &backend, &api_key).await {
+        tracing::warn!(target: "ice_paw.kb", "懒生成 embedding 失败，仅用已有向量检索: {e}");
     }
 
-    // 5. 重新加载（有 embedding 了）
-    let chunks = load_chunks_for_vector_search(pool, kb_ids).await.ok()?;
-
-    // 6. query 转向量
+    // 4. query 转向量
     let query_emb = backend.embed(vec![query], &api_key).await.ok()?;
     if query_emb.is_empty() {
         return None;
     }
     let query_vec = &query_emb[0];
 
-    // 7. 构建候选列表（用 chunk id 做关联键）
+    // 5. 构建候选（有 embedding 的）
     let candidates: Vec<(String, Vec<f32>)> = chunks
         .iter()
         .filter_map(|c| {
@@ -222,15 +199,14 @@ async fn try_semantic_search(
                 .map(|bytes| (c.id.clone(), bytes_to_embedding(bytes)))
         })
         .collect();
-
     if candidates.is_empty() {
         return None;
     }
 
-    // 8. top-K 语义检索
+    // 6. top-K 语义检索
     let top_ids = top_k_recall(query_vec, &candidates);
 
-    // 9. 映射回 SearchHitOut
+    // 7. 映射回 SearchHitOut（按 file_path 去重）
     let mut results = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for id in &top_ids {
@@ -255,35 +231,6 @@ async fn try_semantic_search(
     } else {
         Some(results)
     }
-}
-
-/// 从 [`crate::db::models::UserPreferences`] 解析 embedding 后端配置
-/// `(model, base_url, api_key)`。
-///
-/// `base_url` 缺省时按 `provider` 推导（openai / glm / deepseek）。`model`、
-/// `api_key` 任一缺失或 provider 未知 → `None`（调用方回退关键词检索）。
-///
-/// 抽成纯函数，便于单测「前端 JSON 存储能否被正确解析为 backend 配置」。
-fn resolve_embedding_config(
-    prefs: &crate::db::models::UserPreferences,
-) -> Option<(String, String, String)> {
-    let model = prefs.embedding_model.clone()?;
-    let provider = prefs.embedding_provider.as_deref()?;
-    let api_key = prefs.embedding_api_key.clone()?;
-    let url = match prefs
-        .embedding_base_url
-        .as_deref()
-        .filter(|s| !s.is_empty())
-    {
-        Some(u) => u.to_string(),
-        None => match provider {
-            "openai" => "https://api.openai.com".into(),
-            "glm" => "https://open.bigmodel.cn/api/paas/v4".into(),
-            "deepseek" => "https://api.deepseek.com".into(),
-            _ => return None,
-        },
-    };
-    Some((model, url, api_key))
 }
 
 // =========================================================================
@@ -797,7 +744,7 @@ mod tests {
         assert_eq!(prefs.embedding_api_key.as_deref(), Some("sk-test-xxx"));
 
         // 且 resolve_embedding_config 能解析出 glm 端点
-        let (model, url, key) = resolve_embedding_config(&prefs).expect("glm 配置应被解析");
+        let (model, url, key) = crate::harness::kb::embedding::resolve_embedding_config(&prefs).expect("glm 配置应被解析");
         assert_eq!(model, "embedding-3");
         assert_eq!(url, "https://open.bigmodel.cn/api/paas/v4");
         assert_eq!(key, "sk-test-xxx");
@@ -815,7 +762,7 @@ mod tests {
     #[tokio::test]
     async fn e2e_search_kb_semantic_with_real_glm_api() {
         use crate::db::repo::kb::{
-            load_chunks_for_vector_search, upsert_chunks, upsert_document,
+            load_chunks_for_vector_search, upsert_chunks_incremental, upsert_document,
         };
 
         let key = std::env::var("ICEPAW_EMBEDDING_API_KEY")
@@ -835,7 +782,7 @@ mod tests {
         )
         .await
         .unwrap();
-        upsert_chunks(&pool, &doc_id, &[
+        upsert_chunks_incremental(&pool, &doc_id, &[
             "Rust 的异步运行时 tokio 提供了高效的并发能力。".into(),
             "axum 是基于 tower 的轻量 web 框架，支持路由与中间件。".into(),
             "序列化通常用 serde，性能与生态都很好。".into(),
