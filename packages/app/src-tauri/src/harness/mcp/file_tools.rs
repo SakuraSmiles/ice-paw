@@ -86,7 +86,7 @@ fn cleanup_old_backups(backup_dir: &Path, original_filename: &str) -> AppResult<
     }
 
     // 按修改时间降序，保留最新的 MAX_BACKUPS 个
-    backups.sort_by(|a, b| b.1.cmp(&a.1));
+    backups.sort_by_key(|b| std::cmp::Reverse(b.1));
     for (path, _) in &backups[MAX_BACKUPS..] {
         let _ = std::fs::remove_file(path);
     }
