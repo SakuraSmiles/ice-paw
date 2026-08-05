@@ -89,10 +89,8 @@ pub fn run() {
             commands::mcp_cmd::create_mcp_server,
             commands::mcp_cmd::update_mcp_server,
             commands::mcp_cmd::delete_mcp_server,
-            commands::mcp_cmd::restart_mcp_server,
-            commands::mcp_cmd::list_active_mcp_servers,
-            commands::mcp_cmd::list_mcp_server_tools,
-            commands::mcp_cmd::probe_mcp_server,
+            commands::mcp_cmd::retry_mcp_server,
+            commands::mcp_cmd::set_mcp_enabled,
             commands::mcp_cmd::check_nodejs,
             commands::kb_cmd::list_kb,
             commands::kb_cmd::create_kb,
@@ -172,36 +170,47 @@ pub fn run() {
             let mcp_registry: Arc<McpRegistry> = handle.state::<Arc<McpRegistry>>().inner().clone();
             let mcp_manager: Arc<harness::mcp::McpServerManager> =
                 handle.state::<Arc<harness::mcp::McpServerManager>>().inner().clone();
-            match tauri::async_runtime::block_on(async {
-                // 首次启动插入默认 MCP Server 配置（幂等）
-                if let Err(e) = db::repo::mcp_server::seed_defaults(&pool).await {
+            // 后台启动 MCP Server（不阻塞应用启动）
+            let boot_registry = mcp_registry.clone();
+            let boot_manager = mcp_manager.clone();
+            let boot_pool = pool.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = db::repo::mcp_server::seed_defaults(&boot_pool).await {
                     tracing::warn!(target: "ice_paw.mcp", "种子默认 MCP Server 失败: {e}");
                 }
-                let configs = db::repo::mcp_server::list_all(&pool).await?;
-                for cfg in &configs {
-                    if cfg.enabled && cfg.scope == "global" {
-                        // global server：启动并注册工具
+                let configs = match db::repo::mcp_server::list_all(&boot_pool).await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::warn!(target: "ice_paw.mcp", "加载 MCP Server 配置失败: {e}");
+                        return;
+                    }
+                };
+
+                let boot_ws = std::env::temp_dir().to_string_lossy().to_string();
+                let futures: Vec<_> = configs.iter().filter(|c| c.enabled).map(|cfg| {
+                    let cfg = cfg.clone();
+                    let registry = boot_registry.clone();
+                    let manager = boot_manager.clone();
+                    let ws = boot_ws.clone();
+                    async move {
+                        let workspace = if cfg.scope == "per_agent" { Some(ws.as_str()) } else { None };
                         tracing::info!(
                             target: "ice_paw.mcp",
-                            "正在启动 MCP Server '{}' (command: {})",
-                            cfg.name, cfg.command,
+                            "启动 MCP Server '{}' (scope={})",
+                            cfg.name, cfg.scope,
                         );
-                        if let Err(e) = mcp_manager.start(cfg, &mcp_registry).await {
-                            tracing::error!(
+                        if let Err(e) = manager.start_server(&cfg, workspace, &registry).await {
+                            tracing::warn!(
                                 target: "ice_paw.mcp",
                                 "MCP Server '{}' 启动失败: {}",
                                 cfg.name, e,
                             );
                         }
-                    } else if cfg.enabled && cfg.scope == "per_agent" {
-                        // per_agent server：启动时跳过，工具探测由前端进入设置页后主动触发
                     }
-                }
-                Ok::<_, crate::error::AppError>(())
-            }) {
-                Ok(_) => tracing::info!(target: "ice_paw.mcp", "MCP Server 启动完成（per-agent 探测在后台进行）"),
-                Err(e) => tracing::warn!(target: "ice_paw.mcp", "MCP Server 启动异常: {}", e),
-            }
+                }).collect();
+                futures::future::join_all(futures).await;
+                tracing::info!(target: "ice_paw.mcp", "所有 MCP Server 启动完成");
+            });
 
             // 6) RAG: 启动知识库 watcher（监听目录变更自动索引 + 首次全量扫描）。
             //    后台运行，失败仅 warn，不阻止应用启动。
