@@ -123,6 +123,8 @@ mod tests {
             workspace: None,
             pool,
             api_key: None,
+            app_handle: None,
+            proposal_registry: None,
         }
     }
 
