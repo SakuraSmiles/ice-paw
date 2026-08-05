@@ -46,6 +46,10 @@ impl McpClient for SearchKbTool {
          Covers the current agent's dedicated knowledge base plus the global one. \
          Use this proactively when the user asks about their own notes, documents, \
          or domain-specific materials, or when such knowledge may be needed to answer. \
+         The global knowledge base also ships built-in product usage guides and \
+         configuration help (how to configure agent / API key, embedding & knowledge \
+         base, MCP tools, agent.yaml, FAQ) — call this when the user asks 'how do I' \
+         or '怎么配' questions about using the app itself. \
          Returns matching documents with title, summary, and file_path — then call \
          read_file on file_path to read the full content."
     }
