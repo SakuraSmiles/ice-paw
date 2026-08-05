@@ -34,7 +34,8 @@
 //!
 //! - OpenAI 兼容厂商（openai / glm / deepseek）→ `POST {base_url}/v1/embeddings`
 //! - Anthropic 厂商当前**不支持** embedding（Anthropic 没有 embedding API）
-//! - 用户的 agent 配置中有 `embedding_model` 字段（可选，默认 `text-embedding-3-small`）
+//! - embedding 配置由全局 user_preferences 决定（provider/model/api_key/base_url，
+//!   见 `harness::kb::embedding::resolve_embedding_config`）
 //! - agent.provider 决定走 OpenAI 兼容还是 Anthropic；当前实现只支持前者
 //!   （Anthropic provider 调 embedding 时会返回 `AppError::Validation`，
 //!   因为 Anthropic 没有官方 embedding API）
@@ -93,7 +94,7 @@ pub trait EmbeddingBackend: Send + Sync {
 /// 默认 embedding 模型：OpenAI text-embedding-3-small（1536 维）
 ///
 /// 当前唯一默认：所有 OpenAI 兼容厂商默认都走这个模型（GLM / DeepSeek 也兼容）。
-/// 用户可通过 agent.embedding_model 字段覆盖。
+/// 实际模型名由全局 user_preferences.embedding_model 决定（见 resolve_embedding_config）。
 pub const DEFAULT_EMBEDDING_MODEL: &str = "text-embedding-3-small";
 
 /// 默认 embedding 维度（用于「维度不匹配」时跳过该记录）

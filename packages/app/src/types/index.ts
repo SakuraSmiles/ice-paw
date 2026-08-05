@@ -19,7 +19,6 @@ export interface Agent {
   max_history_messages?: number | null;
   enabled_tools?: string[] | null;
   supports_vision?: boolean;
-  embedding_model?: string | null;
   description?: string;
   avatar?: string | null;
   workspace_path?: string | null;

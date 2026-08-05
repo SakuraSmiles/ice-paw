@@ -475,7 +475,6 @@ impl AgentCmd for MockAgentCmd {
                 serde_json::to_string(v).unwrap_or_else(|_| "[]".to_string())
             }),
             supports_vision: if input.supports_vision { 1 } else { 0 },
-            embedding_model: None,
             description: String::new(),
             avatar: None,
             workspace_path: input.workspace_path.clone(),
@@ -588,7 +587,6 @@ mod tests {
             tool_trim_threshold: None,
             enabled_tools: None,
             supports_vision: 0,
-            embedding_model: None,
             description: String::new(),
             avatar: None,
             workspace_path: None,

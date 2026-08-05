@@ -54,7 +54,6 @@ pub(super) fn make_agent() -> AgentRow {
         tool_trim_threshold: None,
         enabled_tools: None,
         supports_vision: 0,
-        embedding_model: None,
         description: String::new(),
         avatar: None,
         workspace_path: None,
