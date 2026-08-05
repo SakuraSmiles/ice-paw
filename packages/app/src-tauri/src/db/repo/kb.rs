@@ -237,32 +237,57 @@ pub async fn search(
 
 // ============================ chunk 管理（RAG v2） ============================
 
-/// 替换文档的所有 chunk（先删后插）。embedding 暂留 NULL，后续 embedding 阶段填充。
-pub async fn upsert_chunks(
+/// 替换文档的所有 chunk，**增量保留内容未变 chunk 的 embedding**。
+///
+/// 避免重建索引/文件变更时把向量全清白烧 API（v2 阻断②修复后的性能债）。策略：
+/// 先读现有 (content → embedding) 建保留映射，DELETE + INSERT 时内容命中的复用旧
+/// embedding，未命中的插 NULL。返回需要生成 embedding 的 `(chunk_id, content)` 列表，
+/// 供 indexer 预生成（`ensure_chunks_embedded`）。
+pub async fn upsert_chunks_incremental(
     pool: &SqlitePool,
     doc_id: &str,
     chunks: &[String],
-) -> AppResult<()> {
-    // 先删除旧 chunk
+) -> AppResult<Vec<(String, String)>> {
+    use std::collections::HashMap;
+
+    // 1. 读现有 chunk 的 (content → embedding)，按内容匹配保留向量（一次查询，避免 N+1）
+    let existing: Vec<(String, Option<Vec<u8>>)> = sqlx::query_as(
+        "SELECT content, embedding FROM kb_document_chunk WHERE doc_id = ?",
+    )
+    .bind(doc_id)
+    .fetch_all(pool)
+    .await?;
+    let mut kept: HashMap<String, Option<Vec<u8>>> = HashMap::new();
+    for (content, emb) in existing {
+        kept.entry(content).or_insert(emb);
+    }
+
+    // 2. DELETE + INSERT（命中的复用旧 embedding，未命中的插 NULL）
     sqlx::query("DELETE FROM kb_document_chunk WHERE doc_id = ?")
         .bind(doc_id)
         .execute(pool)
         .await?;
 
-    // 插入新 chunk
+    let mut need_embed: Vec<(String, String)> = Vec::new();
     for (idx, content) in chunks.iter().enumerate() {
         let id = Uuid::new_v4().to_string();
+        let emb = kept.get(content).and_then(|e| e.clone());
         sqlx::query(
-            "INSERT INTO kb_document_chunk (id, doc_id, chunk_idx, content) VALUES (?, ?, ?, ?)",
+            "INSERT INTO kb_document_chunk (id, doc_id, chunk_idx, content, embedding)
+             VALUES (?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(doc_id)
         .bind(idx as i64)
         .bind(content)
+        .bind(emb.as_ref())
         .execute(pool)
         .await?;
+        if emb.is_none() {
+            need_embed.push((id, content.clone()));
+        }
     }
-    Ok(())
+    Ok(need_embed)
 }
 
 /// 删除文档的所有 chunk（文档被删除时调用）
@@ -471,5 +496,59 @@ mod tests {
         )
         .await;
         assert!(err.is_err());
+    }
+
+    /// 增量保留：内容未变的 chunk 保留 embedding，仅返回需要生成向量的。
+    #[tokio::test]
+    async fn upsert_chunks_incremental_preserves_unchanged_embeddings() {
+        let pool = fresh_pool().await;
+        create(&pool, &new_kb("k1", "t")).await.unwrap();
+        let doc_id = upsert_document(&pool, "k1", "a.md", "T", "s", "[]", Some("h"), None)
+            .await
+            .unwrap();
+
+        // 首次入库：3 chunk，无现有 → 全 NULL，返回 3 个 need_embed
+        let need = upsert_chunks_incremental(
+            &pool,
+            &doc_id,
+            &["alpha".into(), "beta".into(), "gamma".into()],
+        )
+        .await
+        .unwrap();
+        assert_eq!(need.len(), 3, "首次入库全部需生成: {need:?}");
+
+        // 给 "alpha" 填上 embedding（模拟已预生成）
+        let alpha_id = need.iter().find(|(_, c)| c == "alpha").unwrap().0.clone();
+        update_chunk_embedding(&pool, &alpha_id, &embedding_to_bytes(&[0.1, 0.2]))
+            .await
+            .unwrap();
+
+        // 再次 upsert 同内容：alpha 向量保留（不在 need），beta/gamma 仍 NULL
+        let need2 = upsert_chunks_incremental(
+            &pool,
+            &doc_id,
+            &["alpha".into(), "beta".into(), "gamma".into()],
+        )
+        .await
+        .unwrap();
+        assert_eq!(need2.len(), 2, "alpha 保留向量，仅 beta/gamma 需生成: {need2:?}");
+        assert!(
+            need2.iter().all(|(_, c)| c != "alpha"),
+            "alpha 不应在 need_embed 里"
+        );
+
+        // 内容变化：alpha → alpha2（新内容 NULL），beta/gamma 仍无向量 → 全需生成
+        let need3 = upsert_chunks_incremental(
+            &pool,
+            &doc_id,
+            &["alpha2".into(), "beta".into(), "gamma".into()],
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            need3.len(),
+            3,
+            "alpha2 新内容 + beta/gamma 仍无向量 → 全需生成: {need3:?}"
+        );
     }
 }
