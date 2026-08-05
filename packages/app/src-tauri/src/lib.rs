@@ -157,8 +157,12 @@ pub fn run() {
             // 3) A2-3: 安装工具授权响应全局监听器（前端 chat:tool-auth-response）
             let auth_registry = harness::tool_executor::ToolAuthRegistry::new();
             auth_registry.install_listener(&handle);
-            // 把注册表 manage 起来，方便后续扩展（当前主要给 setup 用）
             handle.manage(auth_registry);
+
+            // 3b) 安装配置提案响应全局监听器（前端 chat:config-proposal-response）
+            let proposal_registry = harness::proposal_registry::ProposalRegistry::new();
+            proposal_registry.install_listener(&handle);
+            handle.manage(proposal_registry);
 
             // 4) REQ-XC-010: 注入 AgentCmd trait object (生产实现 SqlAgentCmd)
             // 覆盖 builder 阶段注入的 None 占位。

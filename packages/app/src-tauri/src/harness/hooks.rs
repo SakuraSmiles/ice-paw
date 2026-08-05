@@ -95,6 +95,8 @@ mod tests {
             workspace: None,
             pool: sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap(),
             api_key: None,
+            app_handle: None,
+            proposal_registry: None,
         }
     }
 
