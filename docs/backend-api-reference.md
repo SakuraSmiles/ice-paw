@@ -8,7 +8,7 @@
 - **已注册命令总数**：34 个
 - **未注册但已定义**：3 个（`list_providers` / `list_models` / `list_tool_defs`）
 - **仅后端内部使用**：1 个（`count_messages`，`#[allow(dead_code)]`）
-- **后端向前端 emit 的事件**：12 个
+- **后端向前端 emit 的事件**：14 个（含 `chat:config-proposal` / `chat:config-proposal-response`）
 
 ### 命令注册位置
 所有已注册命令在 `lib.rs` 的 `tauri::generate_handler![...]` 中集中管理。
@@ -102,6 +102,8 @@
 | `chat:summary-injected` | `ChatSummaryInjectedPayload { conversation_id, summary_tokens, original_count, kept_count }` | 摘要注入完成 |
 | `chat:tool-auth-request` | `ToolAuthRequestPayload` | 工具执行需授权（Rust → 前端） |
 | （前端 emit）`chat:tool-auth-response` | `ToolAuthResponse { request_id, allowed }` | 工具授权响应（前端 → Rust） |
+| `chat:config-proposal` | `ConfigProposalPayload { request_id, conversation_id, message_id, tool_use_id, sensitivity, action, summary }` | 配置提案请求（Rust → 前端） |
+| （前端 emit）`chat:config-proposal-response` | `ConfigProposalResponse { request_id, decision }` | 配置提案响应（前端 → Rust） |
 
 ### stop_generation
 

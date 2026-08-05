@@ -14,7 +14,7 @@
 │  Tauri #[command] — 薄编排层，不含业务逻辑    │
 ├─────────────────────────────────────────────┤
 │  Harness Layer (harness/*.rs)               │
-│  LLM Provider / Loop Engine / MCP / KB      │
+│  Provider / Loop / MCP / KB / Hooks / Proposal│
 ├─────────────────────────────────────────────┤
 │  Context Pipeline (context/*.rs)            │
 │  Template → OS → SystemPrompt → History     │
@@ -94,6 +94,35 @@ stream_loop_inner
 ### 项目归档而非删除
 
 `projects.archived` 列实现软删除。归档项目从活跃列表收起，会话不动不丢。永久删除才真销毁（可选会话转散落或连同删除）。
+
+### Agent 代配置（提案模式）
+
+Agent **永远不直接写配置**。配置变更流程：
+
+```
+Agent 调 propose_config_change(change_spec)
+  → proposal_guard::validate_proposal() 校验
+    ├─ 🔴 红线（删除/跨agent/api_key非占位符）→ 直接拒绝
+    ├─ 🟡 敏感（带工具/enabled_tools变更）→ 审批卡片需确认
+    └─ 🟢 非敏感（名称/温度/system_prompt）→ 一键批准
+  → emit("chat:config-proposal") → 前端渲染审批卡片
+  → 用户操作 → 前端调 create_agent/update_agent 命令（现有可信路径）
+  → emit("chat:config-proposal-response") → 返回结果给 Agent
+```
+
+API Key 永远走引用槽位：Agent 只填 `__SLOT__`，真实 key 由用户在卡片安全输入框填写 → 直接入 Stronghold。
+
+### 对话钩子系统
+
+agent.yaml 中配置生命周期回调，在对话不同阶段自动触发：
+
+- `conversation_start` — 对话开始时注入 prompt / 记日志
+- `before_llm` — 每轮 LLM 请求前注入临时 system 消息（不持久化）
+- `after_tool` — 每次工具执行后触发
+- `conversation_end` — 对话结束（所有退出路径）
+
+内置动作：`inject_prompt`（注入 prompt）、`call_tool`（调用工具）、`log`（写日志）。
+钩子失败仅 warn，不中断对话。
 
 ## 测试策略
 

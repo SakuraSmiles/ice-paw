@@ -3,8 +3,7 @@
 > 桌面 AI 聊天客户端，数据本地存储，API Key 加密保管。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Rust tests](https://img.shields.io/badge/Rust%20tests-420%20passed-success)](https://github.com/your-org/ice-paw)
-[![Frontend tests](https://img.shields.io/badge/Frontend%20tests-31%20passed-success)](https://github.com/your-org/ice-paw)
+[![Version](https://img.shields.io/badge/version-0.2.0--beta.1-blue)](https://github.com/your-org/ice-paw)
 
 ## 简介
 
@@ -18,11 +17,13 @@ IcePaw 是一个桌面 AI 聊天工具，支持同时配置多个 Agent，每个
 
 ## 功能
 
+- **Agent 代配置**：在对话中直接让 Agent 帮你创建或修改 Agent —— 提案卡片审批，无需去设置页
 - **多 Agent 管理**：每个 Agent 独立配置 Provider、模型、System Prompt、温度参数、工具权限
+- **对话钩子**：在 agent.yaml 中配置生命周期回调，自动注入 prompt / 调用工具 / 记录日志
 - **会话管理**：置顶、重命名、删除、搜索，按项目空间归类
 - **工具调用**：Agent 可以执行 Shell 命令、读写文件、Git 操作、正则搜索代码、抓取网页
 - **MCP 扩展**：支持接入外部 MCP Server（stdio），可按 Agent 或全局维度配置
-- **知识库**：将本地文档目录绑定为知识库，Agent 可通过语义搜索检索内容
+- **知识库**：本地文档自动索引，Agent 可通过语义搜索检索内容；内置产品帮助文档
 - **项目空间**：按项目归类 Agent 和会话，支持归档与恢复
 - **本地优先**：所有数据存本地，无需注册账号，无需联网
 
@@ -30,7 +31,7 @@ IcePaw 是一个桌面 AI 聊天工具，支持同时配置多个 Agent，每个
 
 从 [Releases](https://github.com/your-org/ice-paw/releases) 页面下载对应平台的安装包。
 
-首次打开后，到设置 → Agents → 新建 Agent，填入 Provider 和 API Key 即可开始对话。
+首次打开后，在设置中创建你的第一个 Agent（选 Provider、填 API Key、选模型），然后在对话中对它说「帮我创建一个写代码的 agent」——Agent 会提交提案卡片，你填 Key 点批准即可。
 
 ## 文档
 
