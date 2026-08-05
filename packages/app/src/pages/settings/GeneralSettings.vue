@@ -198,8 +198,9 @@ async function confirmSwitch() {
     pendingSwitch.value = null;
     switchInfo.value = `已切换并重建 ${stats.chunks} 个向量（${stats.kbs} 个知识库）`;
     setTimeout(() => { switchInfo.value = null; }, 4000);
-  } catch (e: any) {
-    switchError.value = `切换失败：${e?.message ?? String(e)}（未切换，原配置保留）`;
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    switchError.value = `切换失败：${msg}（未切换，原配置保留）`;
   } finally {
     rebuilding.value = false;
   }
@@ -690,8 +691,8 @@ const hasFilterResults = computed(() => {
             <div v-if="switchError" class="embed-switch-error">{{ switchError }}</div>
             <div v-if="switchInfo" class="embed-switch-info">{{ switchInfo }}</div>
             <div class="embed-switch-actions">
-              <button class="btn" @click="cancelSwitch" :disabled="rebuilding">取消</button>
-              <button class="btn btn-primary" @click="confirmSwitch" :disabled="rebuilding">
+              <button class="btn" :disabled="rebuilding" @click="cancelSwitch">取消</button>
+              <button class="btn btn-primary" :disabled="rebuilding" @click="confirmSwitch">
                 {{ rebuilding ? "重建中…" : "确认切换并重建" }}
               </button>
             </div>
