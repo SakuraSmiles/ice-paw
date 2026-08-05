@@ -366,6 +366,7 @@ pub struct ChunkWithEmbedding {
     pub doc_id: String,
     pub title: String,
     pub file_path: String,
+    pub summary: String,
     pub content: String,
     pub embedding: Option<Vec<u8>>,
 }
@@ -379,7 +380,7 @@ pub async fn load_chunks_for_vector_search(
     }
     let placeholders = kb_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
     let sql = format!(
-        "SELECT c.id, c.doc_id, d.title, d.file_path, c.content, c.embedding
+        "SELECT c.id, c.doc_id, d.title, d.file_path, d.summary, c.content, c.embedding
          FROM kb_document_chunk c
          JOIN kb_document d ON c.doc_id = d.id
          WHERE d.kb_id IN ({placeholders})"

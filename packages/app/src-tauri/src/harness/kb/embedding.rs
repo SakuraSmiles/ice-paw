@@ -108,6 +108,7 @@ mod tests {
             doc_id: "d".into(),
             title: "".into(),
             file_path: "".into(),
+            summary: "".into(),
             content: content.into(),
             embedding: emb,
         }

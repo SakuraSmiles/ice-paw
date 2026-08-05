@@ -142,6 +142,7 @@ pub async fn index_directory(
                                 doc_id: doc_id.clone(),
                                 title: title.clone(),
                                 file_path: rel_path.to_string(),
+                                summary: parsed.summary.clone(),
                                 content: content.clone(),
                                 embedding: None,
                             })
