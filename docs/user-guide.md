@@ -34,6 +34,44 @@ temperature: 0.3
 
 修改文件后即时生效，无需重启。Agent 设置页上会显示绿色标签提示已读取 `agent.yaml`。
 
+### 对话钩子（hooks）
+
+在 `agent.yaml` 中可以配置生命周期回调，在对话的不同阶段自动触发操作：
+
+```yaml
+hooks:
+  conversation_start:
+    - action: inject_prompt
+      content: "本次对话全程使用中文回复。"
+  before_llm:
+    - action: inject_prompt
+      content: "请先列出你的分析步骤，再给出结论。"
+    - action: log
+      message: "新的一轮 LLM 调用开始。"
+  after_tool:
+    - action: log
+      message: "工具执行完毕。"
+  conversation_end:
+    - action: call_tool
+      tool: save_to_kb
+      args: '{"title":"对话摘要","content":"...","scope":"agent"}'
+```
+
+支持的触发点：`conversation_start` / `before_llm` / `after_tool` / `conversation_end`。
+支持的动作：`inject_prompt`（注入 prompt）、`call_tool`（调用工具）、`log`（写日志）。
+钩子失败不会中断对话，仅记录警告日志。
+
+### 从对话中创建 Agent
+
+除了在设置页手动创建，也可以**在对话中直接让 Agent 帮你创建 Agent**。对 Agent 说「帮我建一个写代码的助手」——Agent 会调用 `propose_config_change` 工具生成提案，对话中会出现审批卡片：
+
+1. 卡片展开显示所有配置字段（名称、Provider、模型、System Prompt 等）
+2. API Key 为安全输入框，需手动填写（Agent 无法获取真实密钥）
+3. 点「批准」即可完成创建，新 Agent 立刻在侧栏和设置中可见
+4. 也可以点「编辑」修改字段后再批准，或点「拒绝」放弃
+
+Agent 只能创建和修改 Agent，无法删除或修改其他 Agent 的配置。API Key 永远不会经过 Agent——Agent 只能填占位符 `__SLOT__`，你在卡片上亲手填的真实 key 直接存入 Stronghold。
+
 ### 编辑与删除
 
 点击 Agent 卡片展开编辑面板，可以修改 Provider、模型、API Key、`base_url` 等配置。删除 Agent 时，已有的对话记录不会丢失。
@@ -89,6 +127,7 @@ Agent 可以调用两类工具：内置工具和外部 MCP Server 接入的工�
 | `web_fetch` | 抓取网页内容并转为 Markdown |
 | `search_kb` / `read_kb_document` | 搜索和读取知识库文档 |
 | `read_agent_config` | 读取 Agent 自身的 agent.yaml 配置 |
+| `propose_config_change` | 提案创建或修改 Agent，用户审批后生效 |
 
 ### 权限分级
 
