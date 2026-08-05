@@ -802,4 +802,75 @@ mod tests {
         assert_eq!(url, "https://open.bigmodel.cn/api/paas/v4");
         assert_eq!(key, "sk-test-xxx");
     }
+
+    /// 端到端（需真实智谱 key）：验证修复后 search_kb 完整语义链路能跑通——
+    /// 配置读取（JSON 存储）→ embed API → 懒生成 embedding → 持久化 → cosine 检索。
+    ///
+    /// 用法（bash）：
+    ///   export ICEPAW_EMBEDDING_API_KEY=你的智谱key
+    ///   SODIUM_LIB_DIR=... SODIUM_STATIC=true \
+    ///     cargo test --manifest-path packages/app/src-tauri/Cargo.toml --lib -- \
+    ///     --ignored e2e_search_kb_semantic_with_real_glm_api
+    #[ignore]
+    #[tokio::test]
+    async fn e2e_search_kb_semantic_with_real_glm_api() {
+        use crate::db::repo::kb::{
+            load_chunks_for_vector_search, upsert_chunks, upsert_document,
+        };
+
+        let key = std::env::var("ICEPAW_EMBEDDING_API_KEY")
+            .expect("需设置 ICEPAW_EMBEDDING_API_KEY（智谱 key）后用 --ignored 跑");
+        let pool = fresh_pool().await;
+
+        // 模拟前端 JSON.stringify 存储（与真实 app 完全一致）
+        repo::preferences::set(&pool, "embedding_provider", "\"glm\"").await.unwrap();
+        repo::preferences::set(&pool, "embedding_model", "\"embedding-3\"").await.unwrap();
+        repo::preferences::set(&pool, "embedding_api_key", &format!("\"{key}\"")).await.unwrap();
+
+        // seed global KB + 文档 + 3 个 chunk（embedding=NULL）
+        seed_kb(&pool, "kb-g", "global", None).await;
+        let doc_id = upsert_document(
+            &pool, "kb-g", "rust-web.md", "Rust Web 开发",
+            "用 axum 搭建 HTTP 服务的入门笔记", "[]", Some("h"), None,
+        )
+        .await
+        .unwrap();
+        upsert_chunks(&pool, &doc_id, &[
+            "Rust 的异步运行时 tokio 提供了高效的并发能力。".into(),
+            "axum 是基于 tower 的轻量 web 框架，支持路由与中间件。".into(),
+            "序列化通常用 serde，性能与生态都很好。".into(),
+        ])
+        .await
+        .unwrap();
+
+        // 调用前：chunk embedding 应全为 NULL（刚入库）
+        let before = load_chunks_for_vector_search(&pool, &["kb-g".to_string()]).await.unwrap();
+        assert!(before.iter().all(|c| c.embedding.is_none()), "入库后 embedding 应为 NULL");
+
+        // 触发 search_kb：语义检索路径会懒生成 embedding
+        let tool = SearchKbTool;
+        let ctx = ToolContext {
+            conv_id: "c1".into(),
+            agent_id: "any".into(),
+            project_id: None,
+            workspace: None,
+            pool: pool.clone(),
+            api_key: None,
+        };
+        let result = tool
+            .execute_with_context(r#"{"query":"如何搭建网络服务","limit":3}"#, &ctx)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        eprintln!("search_kb 返回: {v}");
+
+        // 关键断言：语义路径执行后，embedding 应被填充。
+        // 修复前 try_semantic_search 读配置失败 → return None → 不生成 → 这里会是 0。
+        let after = load_chunks_for_vector_search(&pool, &["kb-g".to_string()]).await.unwrap();
+        let filled = after.iter().filter(|c| c.embedding.is_some()).count();
+        assert_eq!(
+            filled, 3,
+            "3 个 chunk 的 embedding 都应被懒生成填充；实际 {filled}（若为 0 说明配置仍读不出或 API 不通）"
+        );
+    }
 }
