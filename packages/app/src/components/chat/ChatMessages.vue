@@ -15,6 +15,7 @@ import { watch, nextTick, ref, computed, onMounted, onUnmounted, onActivated } f
 import { useChatStore } from "../../stores/chat";
 import { formatTime, formatDateLabel } from "../../utils/time";
 import MarkdownRenderer from "./MarkdownRenderer.vue";
+import ConfigProposalCard from "./ConfigProposalCard.vue";
 import type { Message, MessageRole } from "../../types";
 
 const chat = useChatStore();
@@ -518,6 +519,11 @@ const finishReasonLabels: Record<string, string> = {
       <span>{{ finishReasonLabels[chat.lastFinishReason] || chat.lastFinishReason }}</span>
     </div>
 
+    <!-- 配置提案卡片（内联在消息流末尾） -->
+    <div v-if="chat.pendingProposal" class="proposal-wrapper">
+      <ConfigProposalCard :proposal="chat.pendingProposal" />
+    </div>
+
     <div v-if="chat.sending && chat.messages.length > 0" class="cursor-bar">
       <div class="cursor-track">
         <div class="cursor-glow" /><span class="cursor-label">正在生成…</span>
@@ -690,6 +696,7 @@ const finishReasonLabels: Record<string, string> = {
 .tool-detail-code { font-size:var(--ip-text-caption-size); font-family:var(--ip-font-mono, monospace); white-space:pre-wrap; word-break:break-word; color:var(--ip-color-text-secondary); background:var(--ip-color-bg-tertiary); padding:6px 8px; border-radius:var(--ip-radius-sm); max-height:180px; overflow-y:auto; margin:0; line-height:1.5; }
 .tool-detail-code.code-err { color:var(--ip-danger-base); }
 .tool-detail-pending { font-size:var(--ip-text-caption-size); color:var(--ip-color-text-disabled); font-style:italic; }
+.proposal-wrapper { padding: 0 48px; }
 .chat-error-banner { display:flex; align-items:flex-start; gap:8px; margin:8px 16px; padding:10px 14px; background:#fef2f2; border:1px solid #fecaca; border-radius:var(--ip-radius-md); font-size:var(--ip-text-body-sm-size); }
 .chat-error-icon { display:flex; align-items:center; justify-content:center; width:20px; height:20px; border-radius:50%; background:#ef4444; color:#fff; font-size:12px; font-weight:700; flex-shrink:0; }
 .chat-error-text { color:#991b1b; line-height:1.5; word-break:break-word; }

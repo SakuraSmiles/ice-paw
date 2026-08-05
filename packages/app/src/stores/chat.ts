@@ -27,6 +27,8 @@ import type {
   ChatToolResultPayload,
   ChatThinkingPayload,
   ToolAuthRequestPayload,
+  type ConfigProposalPayload,
+  type ConfigProposalResponse,
 } from "../types";
 import { bridge } from "../api/bridge";
 import { useAgentStore } from "./agent";
@@ -64,6 +66,8 @@ export const useChatStore = defineStore("chat", () => {
       });
     }
     activeConvId.value = id;
+    // 切会话时清除旧会话的待处理提案（提案属于原会话，不带到新会话）
+    pendingProposal.value = null;
     // 切入的会话若在后台流式（bgStreams 有），恢复其文本并在末条 assistant 继续渲染
     const bg = bgStreams.value.get(id);
     if (bg) {
@@ -165,6 +169,8 @@ export const useChatStore = defineStore("chat", () => {
   /** 按消息 ID 持久化思考耗时（切换会话不丢，刷新才丢） */
   const thinkingDurations = ref<Map<string, string>>(new Map());
   const pendingAuthRequest = ref<ToolAuthRequestPayload | null>(null);
+  /** pendingProposal: 待处理的配置提案（chat:config-proposal 事件设置） */
+  const pendingProposal = ref<ConfigProposalPayload | null>(null);
   /** 最近一次发送错误的可见提示（chat:error 携带的用户可读消息） */
   const lastError = ref<string | null>(null);
   let sendTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -268,6 +274,12 @@ export const useChatStore = defineStore("chat", () => {
     if (!req) return;
     await emit("chat:tool-auth-response", { request_id: req.request_id, allowed });
     pendingAuthRequest.value = null;
+  }
+
+  /** 发送配置提案响应回 Rust */
+  async function respondToProposal(response: ConfigProposalResponse) {
+    await emit("chat:config-proposal-response", response);
+    pendingProposal.value = null;
   }
 
   // ===== 删除 / 置顶会话 =====
@@ -615,6 +627,12 @@ export const useChatStore = defineStore("chat", () => {
       if (e.payload.conversation_id !== activeConvId.value) return;
       pendingAuthRequest.value = e.payload;
     });
+
+    // ---- 配置提案请求 ----
+    listen<ConfigProposalPayload>("chat:config-proposal", (e) => {
+      if (e.payload.conversation_id !== activeConvId.value) return;
+      pendingProposal.value = e.payload;
+    });
   }
 
   // ===== 新建会话 =====
@@ -675,10 +693,10 @@ export const useChatStore = defineStore("chat", () => {
     activeConvId, activeConversation,
     messages, msgLoading, hasMore, loadingMore,
     sending, streamingText, draftText, pendingImages, lastFinishReason, currentModel,
-    streamingToolCalls, streamingThinking, thinkingStartTime, thinkingDuration, lastThinkingContent, thinkingDurations, pendingAuthRequest, lastError,
+    streamingToolCalls, streamingThinking, thinkingStartTime, thinkingDuration, lastThinkingContent, thinkingDurations, pendingAuthRequest, pendingProposal, lastError,
     streamingConvIds,
     loadConversations, selectConversation, loadMoreMessages,
-    sendMessage, stopGeneration, respondToAuth,
+    sendMessage, stopGeneration, respondToAuth, respondToProposal,
     deleteConversation, pinConversation,
     initEvents, createConversation, clearActiveConversation, reset,
   };
