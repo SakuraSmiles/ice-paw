@@ -144,7 +144,7 @@ const directoryShort = computed(() => {
     </div>
 
     <!-- 文档列表 -->
-    <div v-else-if="documents.length" class="kb-docs">
+    <div v-else-if="documents.length" class="kb-docs" :class="{ 'kb-docs-capped': flat }">
       <div v-for="doc in documents" :key="doc.id" class="kb-doc-card" :class="{ 'doc-flat': flat }">
         <div class="doc-title-row">
           <span class="doc-title">{{ docTitle(doc) }}</span>
@@ -265,6 +265,10 @@ const directoryShort = computed(() => {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+/* 封顶仅用于 flat 模式（内嵌 agent 展开面板，空间有限，内部滚动）。
+   全局知识库页（非 flat）不封顶，交给外层 .kb-page-content 滚动，避免双重滚动 + 留白。 */
+.kb-docs-capped {
   max-height: 320px;
   overflow-y: auto;
 }
