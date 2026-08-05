@@ -3,7 +3,7 @@
 // 传入 scope（+ agent 的 ownerId），组件自行解析对应 KB 并展示其文档。
 import { ref, computed, onMounted } from "vue";
 import { bridge } from "../../api/bridge";
-import type { Kb, KbDocument, IndexStats } from "../../types";
+import type { Kb, KbDocument, IndexStats, KbStats, UserPreferences } from "../../types";
 
 const props = defineProps<{
   scope: "global" | "agent";
@@ -15,9 +15,17 @@ const props = defineProps<{
 
 const kb = ref<Kb | null>(null);
 const documents = ref<KbDocument[]>([]);
+const chunkStats = ref<KbStats | null>(null);
+const embeddingPrefs = ref<UserPreferences | null>(null);
 const loading = ref(true);
 const reindexing = ref(false);
 const reindexResult = ref<string | null>(null);
+
+/** 语义检索是否已启用（provider+model+key 三字段齐全，与后端 resolve_embedding_config 判定一致） */
+const embeddingEnabled = computed(() => {
+  const p = embeddingPrefs.value;
+  return !!(p && p.embedding_provider && p.embedding_model && p.embedding_api_key);
+});
 
 const matched = (k: Kb) =>
   props.scope === "global" ? k.owner_id === null : k.owner_id === props.ownerId;
@@ -25,11 +33,16 @@ const matched = (k: Kb) =>
 async function load() {
   loading.value = true;
   try {
-    const all = await bridge.kb.list();
+    const [all, prefs] = await Promise.all([bridge.kb.list(), bridge.preferences.get()]);
+    embeddingPrefs.value = prefs;
     kb.value = all.find((k) => k.scope === props.scope && matched(k)) ?? null;
-    documents.value = kb.value
-      ? await bridge.kb.listDocuments(kb.value.id)
-      : [];
+    if (kb.value) {
+      documents.value = await bridge.kb.listDocuments(kb.value.id);
+      chunkStats.value = await bridge.kb.getStats(kb.value.id);
+    } else {
+      documents.value = [];
+      chunkStats.value = null;
+    }
   } catch (e) {
     console.error("加载知识库失败:", e);
   } finally {
@@ -47,6 +60,7 @@ async function reindex() {
     const stats: IndexStats = await bridge.kb.reindex(kb.value.id);
     reindexResult.value = `已索引 ${stats.indexed} · 跳过 ${stats.skipped} · 删除 ${stats.deleted}`;
     documents.value = await bridge.kb.listDocuments(kb.value.id);
+    chunkStats.value = await bridge.kb.getStats(kb.value.id);
     setTimeout(() => { reindexResult.value = null; }, 3000);
   } catch (e) {
     console.error("重建索引失败:", e);
@@ -93,6 +107,18 @@ const directoryShort = computed(() => {
         <span class="kb-dir">{{ directoryShort }}</span>
         <span class="kb-sep">·</span>
         <span>{{ documents.length }} 篇</span>
+        <template v-if="embeddingEnabled">
+          <span class="kb-sep">·</span>
+          <span class="kb-embed-on" :title="`语义检索已启用：${embeddingPrefs?.embedding_model ?? ''}`">语义检索 ✓</span>
+        </template>
+        <template v-else>
+          <span class="kb-sep">·</span>
+          <router-link to="/settings/general" class="kb-embed-off">语义检索 ✗ 未配置</router-link>
+        </template>
+        <template v-if="chunkStats && chunkStats.total_chunks > 0">
+          <span class="kb-sep">·</span>
+          <span class="kb-vec">向量 {{ chunkStats.embedded_chunks }}/{{ chunkStats.total_chunks }}</span>
+        </template>
       </div>
       <button
         class="kb-reindex-btn"
@@ -171,6 +197,23 @@ const directoryShort = computed(() => {
 .kb-sep {
   opacity: 0.5;
   margin: 0 2px;
+}
+.kb-embed-on {
+  color: var(--ip-success-text);
+  white-space: nowrap;
+}
+.kb-embed-off {
+  color: var(--ip-color-text-tertiary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  white-space: nowrap;
+}
+.kb-embed-off:hover {
+  color: var(--ip-color-text-secondary);
+}
+.kb-vec {
+  color: var(--ip-color-text-tertiary);
+  white-space: nowrap;
 }
 .kb-reindex-btn {
   display: flex;

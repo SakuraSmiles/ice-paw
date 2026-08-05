@@ -172,7 +172,16 @@ async fn try_semantic_search(
 
     // 1. 配置（必须走 get_all 反序列化，见 harness::kb::embedding 模块文档 / v2 阻断①）
     let prefs = repo::preferences::get_all(pool).await.ok()?;
-    let (model, url, api_key) = resolve_embedding_config(&prefs)?;
+    let (model, url, api_key) = match resolve_embedding_config(&prefs) {
+        Some(cfg) => cfg,
+        None => {
+            tracing::debug!(
+                target: "ice_paw.kb",
+                "语义检索未启用（embedding provider/model/key 未齐全），回退关键词检索"
+            );
+            return None;
+        }
+    };
     let backend = OpenAiEmbeddingBackend::new(model, url);
 
     // 2. 一次加载所有 chunk（ensure 回填内存，省掉原先的第二次 load）

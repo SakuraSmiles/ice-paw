@@ -66,6 +66,26 @@ pub async fn list_kb_documents(
     repo::kb::list_documents(pool.inner(), &kb_id).await
 }
 
+/// 某 KB 的统计（文档数 + chunk 向量进度），供前端展示可观测性
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct KbStats {
+    pub total_documents: usize,
+    pub total_chunks: usize,
+    pub embedded_chunks: usize,
+}
+
+/// 某 KB 的统计：文档数、chunk 总数、已生成向量的 chunk 数
+#[tauri::command]
+pub async fn get_kb_stats(pool: State<'_, SqlitePool>, kb_id: String) -> AppResult<KbStats> {
+    let docs = repo::kb::list_documents(pool.inner(), &kb_id).await?;
+    let (total_chunks, embedded_chunks) = repo::kb::kb_chunk_stats(pool.inner(), &kb_id).await?;
+    Ok(KbStats {
+        total_documents: docs.len(),
+        total_chunks: total_chunks as usize,
+        embedded_chunks: embedded_chunks as usize,
+    })
+}
+
 /// 校验 scope 合法性
 fn validate_scope(scope: &str) -> AppResult<()> {
     if SCOPES.contains(&scope) {
