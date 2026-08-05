@@ -37,6 +37,7 @@ async function load() {
       raw.default_workspace_path = raw.default_workspace_path.replace(/\\/g, "/");
     }
     prefs.value = raw;
+    oldEmbedding.value = { provider: raw.embedding_provider ?? "", model: raw.embedding_model ?? "" };
   } catch (e) {
     console.error("加载设置失败:", e);
   } finally {
@@ -129,12 +130,84 @@ watch(() => prefs.value.embedding_provider, (newProvider) => {
   }
 });
 
+/** 上次成功保存的 embedding 配置（检测"切换"：provider/model 变化才需重建） */
+const oldEmbedding = ref({ provider: "", model: "" });
+const pendingSwitch = ref<{ provider: string; model: string } | null>(null);
+const rebuilding = ref(false);
+const switchError = ref<string | null>(null);
+const switchInfo = ref<string | null>(null);
+
+/** 旧配置是否正在用（provider+model+key 齐全） */
+function isEmbeddingActive(): boolean {
+  const o = oldEmbedding.value;
+  return !!(o.provider && o.model && prefs.value.embedding_api_key);
+}
+
+/** provider 内部 key → 显示名（智谱 GLM/OpenAI/...），供 overlay 展示 */
+function providerDisplayName(providerKey: string): string {
+  return Object.entries(embeddingModelMap).find(([, v]) => v.provider === providerKey)?.[0] ?? providerKey;
+}
+
 function onEmbeddingProviderChange(displayName: string) {
   const mapping = embeddingModelMap[displayName];
-  prefs.value.embedding_provider = mapping?.provider ?? "";
-  // 切换 Provider 时重置模型为推荐值
-  prefs.value.embedding_model = mapping?.models[0] ?? "";
-  saveEmbedding();
+  const newProvider = mapping?.provider ?? "";
+  const newModel = mapping?.models[0] ?? "";
+  // 旧配置在用 + provider 变 → 二次确认（防维度不匹配静默失效）
+  if (isEmbeddingActive() && newProvider !== oldEmbedding.value.provider) {
+    pendingSwitch.value = { provider: newProvider, model: newModel };
+    switchError.value = null;
+  } else {
+    prefs.value.embedding_provider = newProvider;
+    prefs.value.embedding_model = newModel;
+    saveEmbedding();
+    oldEmbedding.value = { provider: newProvider, model: newModel };
+  }
+}
+
+function onEmbeddingModelChange(newModel: string) {
+  if (isEmbeddingActive() && newModel !== oldEmbedding.value.model) {
+    pendingSwitch.value = { provider: prefs.value.embedding_provider ?? "", model: newModel };
+    switchError.value = null;
+  } else {
+    prefs.value.embedding_model = newModel;
+    saveEmbedding();
+    oldEmbedding.value = { provider: prefs.value.embedding_provider ?? "", model: newModel };
+  }
+}
+
+/** 确认切换：健康检查新配置（先于清旧）→ 存 → 全量重建 */
+async function confirmSwitch() {
+  if (!pendingSwitch.value) return;
+  const { provider, model } = pendingSwitch.value;
+  rebuilding.value = true;
+  switchError.value = null;
+  try {
+    // 1. 健康检查新配置（先于清旧，防切到无效 + 旧向量已清的双重失效）
+    await bridge.kb.testEmbeddingConfig(
+      provider, model,
+      prefs.value.embedding_api_key ?? "",
+      prefs.value.embedding_base_url ?? undefined,
+    );
+    // 2. 存新配置
+    prefs.value.embedding_provider = provider;
+    prefs.value.embedding_model = model;
+    await saveEmbedding();
+    // 3. 全量重建（清旧维度向量 + 重新生成）
+    const stats = await bridge.kb.rebuildAllEmbeddings();
+    oldEmbedding.value = { provider, model };
+    pendingSwitch.value = null;
+    switchInfo.value = `已切换并重建 ${stats.chunks} 个向量（${stats.kbs} 个知识库）`;
+    setTimeout(() => { switchInfo.value = null; }, 4000);
+  } catch (e: any) {
+    switchError.value = `切换失败：${e?.message ?? String(e)}（未切换，原配置保留）`;
+  } finally {
+    rebuilding.value = false;
+  }
+}
+
+function cancelSwitch() {
+  pendingSwitch.value = null;
+  switchError.value = null;
 }
 
 async function saveEmbedding() {
@@ -587,7 +660,7 @@ const hasFilterResults = computed(() => {
                 :model-value="prefs.embedding_model || ''"
                 :options="embeddingModelSuggestions"
                 placeholder="选择或输入模型名"
-                @update:model-value="(v: string) => { prefs.embedding_model = v; saveEmbedding(); }"
+                @update:model-value="onEmbeddingModelChange"
               />
               <input v-else v-model="prefs.embedding_model" class="form-input" placeholder="输入模型名" @blur="saveEmbedding" />
             </div>
@@ -605,6 +678,26 @@ const hasFilterResults = computed(() => {
           </div>
         </div>
       </template>
+
+      <!-- 切换 embedding 模型确认 overlay -->
+      <Transition name="overlay">
+        <div v-if="pendingSwitch" class="embed-switch-overlay" @click.self="cancelSwitch">
+          <div class="embed-switch-panel" @click.stop>
+            <h3>切换语义检索模型？</h3>
+            <p class="embed-switch-row">当前：<b>{{ providerDisplayName(oldEmbedding.provider) }} / {{ oldEmbedding.model }}</b></p>
+            <p class="embed-switch-row">切换到：<b>{{ providerDisplayName(pendingSwitch.provider) }} / {{ pendingSwitch.model }}</b></p>
+            <p class="embed-switch-warn">切换后知识库向量将失效并自动重建（可能需几十秒）。</p>
+            <div v-if="switchError" class="embed-switch-error">{{ switchError }}</div>
+            <div v-if="switchInfo" class="embed-switch-info">{{ switchInfo }}</div>
+            <div class="embed-switch-actions">
+              <button class="btn" @click="cancelSwitch" :disabled="rebuilding">取消</button>
+              <button class="btn btn-primary" @click="confirmSwitch" :disabled="rebuilding">
+                {{ rebuilding ? "重建中…" : "确认切换并重建" }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </Transition>
 
     </div>
   </div>
@@ -663,6 +756,88 @@ const hasFilterResults = computed(() => {
   flex-shrink: 0;
 }
 .embed-key-link:hover { text-decoration: underline; }
+
+/* ===== 切换 embedding 模型确认 overlay ===== */
+.embed-switch-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+.embed-switch-panel {
+  width: 380px;
+  max-width: 90vw;
+  padding: 20px 22px;
+  background: var(--ip-color-bg-primary);
+  border: 1px solid var(--ip-color-border-default);
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.embed-switch-panel h3 {
+  margin: 0 0 4px;
+  font-size: var(--ip-text-body-size);
+  font-weight: var(--ip-font-weight-semibold);
+  color: var(--ip-color-text-primary);
+}
+.embed-switch-row {
+  margin: 0;
+  font-size: var(--ip-text-body-sm-size);
+  color: var(--ip-color-text-secondary);
+}
+.embed-switch-warn {
+  margin: 0;
+  font-size: var(--ip-text-caption-size);
+  color: var(--ip-color-text-tertiary);
+  line-height: 1.5;
+}
+.embed-switch-error {
+  font-size: var(--ip-text-caption-size);
+  color: #e5484d;
+  line-height: 1.5;
+}
+.embed-switch-info {
+  font-size: var(--ip-text-caption-size);
+  color: var(--ip-success-text);
+}
+.embed-switch-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+}
+.embed-switch-actions button {
+  height: 30px;
+  padding: 0 14px;
+  font-size: var(--ip-text-body-sm-size);
+  font-weight: var(--ip-font-weight-medium);
+  border-radius: var(--ip-radius-md);
+  border: 1px solid var(--ip-color-border-default);
+  background: var(--ip-color-bg-tertiary);
+  color: var(--ip-color-text-secondary);
+  cursor: pointer;
+  transition: all var(--ip-duration-fast) var(--ip-ease-out);
+}
+.embed-switch-actions button.btn-primary {
+  background: var(--ip-primary-600);
+  border-color: var(--ip-primary-600);
+  color: #fff;
+}
+.embed-switch-actions button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.overlay-enter-active, .overlay-leave-active {
+  transition: opacity var(--ip-duration-fast) var(--ip-ease-out);
+}
+.overlay-enter-from, .overlay-leave-to {
+  opacity: 0;
+}
 
 /* ===== 设置行 ===== */
 .setting-row {
