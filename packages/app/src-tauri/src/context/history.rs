@@ -414,12 +414,13 @@ mod tests {
             cm("user", vec![text_blk("again")]),
             cm("assistant", vec![text_blk("resp")]),
         ]);
-        // 空占位被丢弃，两个 user 合并
-        assert_eq!(out.len(), 3, "空 assistant 丢弃后应为 user(merged)+assistant+...");
+        // 空占位被丢弃 + 两个连续 user 合并 → [user(merged), assistant(resp)]，共 2 条
+        assert_eq!(out.len(), 2, "空 assistant 丢弃 + 两 user 合并后应为 2 条");
         assert_eq!(out[0].role, "user");
-        // 合并后的 user 应含两段文本
+        // 合并后的 user 应含两段文本（q + again）
         assert_eq!(out[0].content.len(), 2);
-        assert_eq!(out[2].content_text(), "resp");
+        assert_eq!(out[1].role, "assistant");
+        assert_eq!(out[1].content_text(), "resp");
     }
 
     #[test]
