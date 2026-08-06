@@ -13,7 +13,7 @@
 // 未来迭代建议：G 区可提取为 useChatEvents composable（需仔细处理 reactive 耦合）
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
-import { listen, emit } from "@tauri-apps/api/event";
+import { listen } from "@tauri-apps/api/event";
 import type { Conversation, Message } from "../types";
 import type {
   ChatStartPayload,
@@ -31,6 +31,7 @@ import type {
   ConfigProposalResponse,
 } from "../types";
 import { bridge } from "../api/bridge";
+import { friendlyError } from "../utils/errors";
 import { useAgentStore } from "./agent";
 
 export const useChatStore = defineStore("chat", () => {
@@ -59,15 +60,15 @@ export const useChatStore = defineStore("chat", () => {
   function selectConversation(id: string) {
     const oldId = activeConvId.value;
     // 离开「正在流式」的会话：把当前流式文本快照到 bgStreams，切回时可恢复
-    if (oldId && oldId !== id && sending.value) {
+    if (oldId && sending.value) {
       bgStreams.value = new Map(bgStreams.value).set(oldId, {
         text: streamingText.value,
         thinking: streamingThinking.value,
       });
     }
     activeConvId.value = id;
-    // 切会话时清除旧会话的待处理提案（提案属于原会话，不带到新会话）
-    pendingProposal.value = null;
+    // 提案/授权请求已按 convId 隔离存储（pendingProposals / pendingAuthRequests），
+    // 切换会话无需清空——切回原会话时 computed 自动恢复对应条目。
     // 切入的会话若在后台流式（bgStreams 有），恢复其文本并在末条 assistant 继续渲染
     const bg = bgStreams.value.get(id);
     if (bg) {
@@ -84,7 +85,6 @@ export const useChatStore = defineStore("chat", () => {
       thinkingDuration.value = null;
       lastThinkingContent.value = null;
     }
-    // finish_reason 是全局单份，切换会话时清空，避免上个会话的标签（如「已手动停止」）泄漏到新会话
     lastFinishReason.value = null;
     loadMessages(id);
   }
@@ -168,9 +168,28 @@ export const useChatStore = defineStore("chat", () => {
   const lastThinkingContent = ref<string | null>(null);
   /** 按消息 ID 持久化思考耗时（切换会话不丢，刷新才丢） */
   const thinkingDurations = ref<Map<string, string>>(new Map());
-  const pendingAuthRequest = ref<ToolAuthRequestPayload | null>(null);
-  /** pendingProposal: 待处理的配置提案（chat:config-proposal 事件设置） */
-  const pendingProposal = ref<ConfigProposalPayload | null>(null);
+  /** pendingAuthRequests: 按 convId 索引的待处理工具授权请求。
+   *  仿 bgStreams 模式：事件 handler 始终按 convId 存（不丢后台会话）。
+   *  computed pendingAuthRequest 暴露「激活会话优先 + 全局兜底」条目
+   *  （ToolAuthDialog 是全局 overlay，后台会话的授权也必须能弹出，否则卡死），
+   *  保持组件对外 API 不变。*/
+  const pendingAuthRequests = ref<Map<string, ToolAuthRequestPayload>>(new Map());
+  const pendingAuthRequest = computed<ToolAuthRequestPayload | null>(() => {
+    const aid = activeConvId.value;
+    if (aid) {
+      const cur = pendingAuthRequests.value.get(aid);
+      if (cur) return cur;
+    }
+    // 激活会话没有但别处还有 → 全局 blocking 语义，仍需弹出（用户必须处理）
+    const entries = [...pendingAuthRequests.value.values()];
+    return entries.length > 0 ? entries[0] : null;
+  });
+  /** pendingProposals: 按 convId 索引的待处理配置提案。
+   *  computed pendingProposal 暴露激活会话的条目（内联卡片随激活会话渲染）。*/
+  const pendingProposals = ref<Map<string, ConfigProposalPayload>>(new Map());
+  const pendingProposal = computed(() =>
+    activeConvId.value ? pendingProposals.value.get(activeConvId.value) ?? null : null,
+  );
   /** 最近一次发送错误的可见提示（chat:error 携带的用户可读消息） */
   const lastError = ref<string | null>(null);
   let sendTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -191,7 +210,6 @@ export const useChatStore = defineStore("chat", () => {
   function resetSendTimeout() {
     if (sendTimeout) clearTimeout(sendTimeout);
     sendTimeout = setTimeout(() => {
-      // 等待工具授权时不计入静默超时（后端也在等，未真正卡死）
       if (sending.value && !pendingAuthRequest.value) {
         console.warn("静默超时（60s 无活动），重置发送状态");
         sending.value = false;
@@ -272,36 +290,95 @@ export const useChatStore = defineStore("chat", () => {
   async function respondToAuth(allowed: boolean) {
     const req = pendingAuthRequest.value;
     if (!req) return;
-    await emit("chat:tool-auth-response", { request_id: req.request_id, allowed });
-    pendingAuthRequest.value = null;
+    // invoke 直达后端（原 emit 通道因 Tauri v2 事件作用域不匹配而失效）
+    await bridge.chat.respondAuth({ request_id: req.request_id, allowed });
+    // 按 request_id 在 Map 里定位删除（computed 可能返回非激活会话的条目）
+    const m = new Map(pendingAuthRequests.value);
+    for (const [cid, r] of m) {
+      if (r.request_id === req.request_id) { m.delete(cid); break; }
+    }
+    pendingAuthRequests.value = m;
   }
 
   /** 发送配置提案响应回 Rust */
   async function respondToProposal(response: ConfigProposalResponse) {
-    await emit("chat:config-proposal-response", response);
-    pendingProposal.value = null;
-  }
-
-  // ===== 删除 / 置顶会话 =====
-  async function deleteConversation(id: string) {
-    try {
-      await bridge.conversations.delete(id);
-      const wasActive = activeConvId.value === id;
-      conversations.value = conversations.value.filter((c) => c.id !== id);
-      if (wasActive) {
-        if (conversations.value.length > 0) {
-          // 直接跳转到列表第一个，不触发 loadMessages（已退出该会话）
-          activeConvId.value = conversations.value[0].id;
-          loadMessages(activeConvId.value);
-        } else {
-          activeConvId.value = null;
-          messages.value = [];
-        }
-      }
-    } catch (e) {
-      console.error("删除会话失败:", e);
+    // invoke 直达后端（原 emit 通道因 Tauri v2 事件作用域不匹配而失效）
+    await bridge.chat.respondProposal({
+      request_id: response.request_id,
+      decision: response.decision,
+      reason: response.reason ?? null,
+      changes: response.changes,
+    });
+    // 按激活会话 + request_id 双重校验后删除（避免删掉同 conv 已被新提案覆盖的旧条目）
+    const aid = activeConvId.value;
+    if (!aid) return;
+    const cur = pendingProposals.value.get(aid);
+    if (cur && cur.request_id === response.request_id) {
+      const m = new Map(pendingProposals.value);
+      m.delete(aid);
+      pendingProposals.value = m;
     }
   }
+
+  // ===== 删除 / 置顶会话（含撤销机制） =====
+  const pendingDelete = ref<Map<string, { conv: Conversation; timer: ReturnType<typeof setTimeout> }>>(new Map());
+
+  async function deleteConversation(id: string) {
+    // 先清理该 id 的旧 pending（如果存在）
+    const existing = pendingDelete.value.get(id);
+    if (existing) { clearTimeout(existing.timer); pendingDelete.value.delete(id); }
+
+    const conv = conversations.value.find((c) => c.id === id);
+    const wasActive = activeConvId.value === id;
+
+    // 乐观移除 UI
+    conversations.value = conversations.value.filter((c) => c.id !== id);
+    if (wasActive) {
+      if (conversations.value.length > 0) {
+        activeConvId.value = conversations.value[0].id;
+        loadMessages(activeConvId.value);
+      } else {
+        activeConvId.value = null;
+        messages.value = [];
+      }
+    }
+
+    // 延迟 5 秒真正删除后端数据，期间可撤销
+    const timer = setTimeout(async () => {
+      try {
+        await bridge.conversations.delete(id);
+      } catch (e) {
+        console.error("删除会话失败:", e);
+      } finally {
+        pendingDelete.value.delete(id);
+      }
+    }, 5000);
+
+    if (conv) {
+      pendingDelete.value.set(id, { conv, timer });
+    }
+  }
+
+  /** 撤销删除：恢复会话到列表并取消后端删除 */
+  function undoDeleteConversation(id: string) {
+    const entry = pendingDelete.value.get(id);
+    if (!entry) return false;
+    clearTimeout(entry.timer);
+    pendingDelete.value.delete(id);
+    // 恢复会话到列表并按更新日期重排序
+    conversations.value = [...conversations.value, entry.conv].sort(
+      (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
+    );
+    // 如果之前是活跃会话，恢复
+    if (!activeConvId.value) {
+      activeConvId.value = entry.conv.id;
+      loadMessages(entry.conv.id);
+    }
+    return true;
+  }
+
+  /** 当前是否有待撤销的删除 */
+  const hasPendingDelete = computed(() => pendingDelete.value.size > 0);
 
   async function pinConversation(id: string, pinned: boolean) {
     try {
@@ -623,13 +700,14 @@ export const useChatStore = defineStore("chat", () => {
       thinkingStartTime.value = null;
       streamingToolCalls.value = new Map();
       lastFinishReason.value = null;
-      lastError.value = e.payload.message || "未知错误";
+      lastError.value = friendlyError(e.payload.message);
       // 用 message_id 定位出错的 assistant（多轮工具下不能遍历改所有 assistant）
       const errId = e.payload.message_id;
       messages.value = messages.value.map((msg) => {
         if (msg.id === errId && msg.role === "assistant") {
+          const friendly = friendlyError(e.payload.message);
           if (msg.content === "") {
-            return { ...msg, content: `错误: ${e.payload.message}`, error: e.payload.message };
+            return { ...msg, content: `错误: ${friendly}`, error: friendly };
           }
           if (!msg.error) {
             return { ...msg, content: msg.content + `\n\n[生成中断: ${e.payload.message}]`, error: e.payload.message };
@@ -639,17 +717,43 @@ export const useChatStore = defineStore("chat", () => {
       });
     });
 
-    // ---- 工具授权请求 ----
+    // ---- 工具授权请求 ----（始终按 convId 存，不丢后台会话；cancel 时按 request_id 清）
     await subscribe<ToolAuthRequestPayload>("chat:tool-auth-request", (e) => {
-      if (e.payload.conversation_id !== activeConvId.value) return;
-      pendingAuthRequest.value = e.payload;
+      const m = new Map(pendingAuthRequests.value);
+      m.set(e.payload.conversation_id, e.payload);
+      pendingAuthRequests.value = m;
     });
+    await subscribe<{ request_id: string; conversation_id: string; reason: string }>(
+      "chat:tool-auth-request-cancel",
+      (e) => {
+        const m = new Map(pendingAuthRequests.value);
+        for (const [cid, r] of m) {
+          if (r.request_id === e.payload.request_id) { m.delete(cid); break; }
+        }
+        pendingAuthRequests.value = m;
+      },
+    );
 
-    // ---- 配置提案请求 ----
+    // ---- 配置提案请求 ----（始终按 convId 存，不丢后台会话；cancel 时按 request_id 清）
     await subscribe<ConfigProposalPayload>("chat:config-proposal", (e) => {
-      if (e.payload.conversation_id !== activeConvId.value) return;
-      pendingProposal.value = e.payload;
+      const m = new Map(pendingProposals.value);
+      m.set(e.payload.conversation_id, e.payload);
+      pendingProposals.value = m;
     });
+    await subscribe<{ request_id: string; conversation_id: string; reason: string }>(
+      "chat:config-proposal-cancel",
+      (e) => {
+        const m = new Map(pendingProposals.value);
+        const cur = m.get(e.payload.conversation_id);
+        // request_id 守卫：仅当当前条目仍是这个已失效请求时才删，
+        // 避免误删同 conv 后到的、更新的活提案（同会话工具串行执行，但 cancel
+        // 与新 proposal 事件到达顺序无保证）
+        if (cur && cur.request_id === e.payload.request_id) {
+          m.delete(e.payload.conversation_id);
+          pendingProposals.value = m;
+        }
+      },
+    );
   }
 
   // ===== 新建会话 =====
@@ -678,6 +782,8 @@ export const useChatStore = defineStore("chat", () => {
     thinkingDuration.value = null;
     lastThinkingContent.value = null;
     bgStreams.value = new Map();
+    pendingProposals.value = new Map();
+    pendingAuthRequests.value = new Map();
     draftText.value = "";
   }
 
@@ -694,6 +800,8 @@ export const useChatStore = defineStore("chat", () => {
     streamingToolCalls.value = new Map();
     lastFinishReason.value = null;
     bgStreams.value = new Map();
+    pendingProposals.value = new Map();
+    pendingAuthRequests.value = new Map();
   }
 
 
@@ -714,7 +822,7 @@ export const useChatStore = defineStore("chat", () => {
     streamingConvIds,
     loadConversations, selectConversation, loadMoreMessages,
     sendMessage, stopGeneration, respondToAuth, respondToProposal,
-    deleteConversation, pinConversation,
+    deleteConversation, undoDeleteConversation, hasPendingDelete, pinConversation,
     initEvents, createConversation, clearActiveConversation, reset,
   };
 });

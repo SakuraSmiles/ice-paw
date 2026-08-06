@@ -5,22 +5,16 @@
 //! 内容分类：
 //!
 //! 1. **LLM 数据结构**：`ContentBlock` / `ChatMessage` / `ChatDelta` /
-//!    `ToolDef` / `TokenUsage` / `LlmProvider` trait
-//! 2. **图片支持**：`SUPPORTED_IMAGE_MEDIA_TYPES` / `is_supported_image_media_type()` /
-//!    `MAX_IMAGE_SIZE` / `MAX_IMAGE_COUNT` / `validate_images()`
-//! 3. **前端入参**：`SendMessageInput` / `TemplateInput`
+//!    `ToolDef` / `TokenUsage`（`LlmProvider` trait 已迁至 harness/provider）
+//! 2. **前端入参**：`SendMessageInput` / `TemplateInput`
 //!    - `TemplateInput` 当前未在前端发送链路消费（详见 PipelineContext 预留字段）
-//! 4. **事件 Payload**：`ChatStartPayload` / `ChatChunkPayload` / `ChatDonePayload` /
+//! 3. **事件 Payload**：`ChatStartPayload` / `ChatChunkPayload` / `ChatDonePayload` /
 //!    `ChatErrorPayload` / `ChatRetryingPayload` / 工具调用 + 思考 payload
+//!
+//! 图片校验常量与函数已迁至 `infra::image_validation`，此处保留 re-export
+//! 以维持现有导入路径兼容。
 
-use std::pin::Pin;
-
-use async_trait::async_trait;
-use base64::Engine as _;
-use futures::Stream;
 use serde::{Deserialize, Serialize};
-
-use crate::error::{AppError, AppResult};
 
 // =========================================================================
 // LLM 数据结构
@@ -113,22 +107,11 @@ impl ContentBlock {
     }
 }
 
-/// P2-2: 支持的图片 MIME 类型白名单
-///
-/// 与前端 `ImagePicker.vue` 的 `accept` 属性保持一致。
-/// Anthropic 支持 `image/jpeg | image/png | image/gif | image/webp`；
-/// OpenAI Vision 支持同等集合（部分模型额外支持 `image/png` 高分辨率）。
-pub const SUPPORTED_IMAGE_MEDIA_TYPES: &[&str] = &[
-    "image/png",
-    "image/jpeg",
-    "image/gif",
-    "image/webp",
-];
-
-/// P2-2: 校验 media_type 是否在白名单内
-pub fn is_supported_image_media_type(mt: &str) -> bool {
-    SUPPORTED_IMAGE_MEDIA_TYPES.contains(&mt)
-}
+// Re-export: 图片校验（从 image_validation 迁出，保留兼容路径）
+pub use super::image_validation::{
+    is_supported_image_media_type, validate_images,
+    MAX_IMAGE_COUNT, MAX_IMAGE_SIZE, SUPPORTED_IMAGE_MEDIA_TYPES,
+};
 
 /// 聊天消息（发给 LLM 的上下文中的单条）
 ///
@@ -204,122 +187,8 @@ pub struct ToolDef {
     pub parameters: serde_json::Value,
 }
 
-// =========================================================================
-// Provider Trait
-// =========================================================================
-
-/// LLM 提供方接口
-///
-/// 实现方需提供 `stream_chat`，返回一个异步 Stream 逐块产出 `ChatDelta`。
-/// 调用方在消费 Stream 时应定期检查 `cancel.is_cancelled()` 以支持用户停止。
-#[async_trait]
-pub trait LlmProvider: Send + Sync {
-    /// 流式聊天
-    ///
-    /// - `api_key`：调用时传入，不在 Adapter 中持久化
-    /// - `messages`：完整上下文（含 system / 历史 / 当前用户消息）
-    /// - `tools`：可选的工具定义列表（None = 不启用工具调用）
-    /// - `temperature` / `max_tokens`：模型参数
-    /// - `model`：会话级 model 覆盖（Phase 1 P0-3）。
-    ///   - `Some(name)` → 使用 `name` 作为本次请求的模型
-    ///   - `None` → 回退到 Adapter 构造时绑定的默认模型（`self.model`）
-    ///   - 注意：Provider 仅在**本次请求**使用 `model`，不会改写
-    ///     Adapter 自身的 `self.model`，下次 `None` 调用仍走默认
-    /// - `cancel`：取消令牌
-    #[allow(clippy::too_many_arguments)]
-    async fn stream_chat(
-        &self,
-        api_key: &str,
-        messages: Vec<ChatMessage>,
-        tools: Option<Vec<ToolDef>>,
-        temperature: f64,
-        max_tokens: i32,
-        model: Option<&str>,
-        cancel: crate::harness::chat_state::CancellationToken,
-    ) -> AppResult<Pin<Box<dyn Stream<Item = AppResult<ChatDelta>> + Send>>>;
-
-    /// 返回当前 Provider 实际使用的模型名（用于消息级记录）
-    fn model_name(&self) -> &str;
-}
-
-// =========================================================================
-// 图片校验常量
-// =========================================================================
-
-/// P2-2: 单张图片的最大字节数（base64 解码后的原始字节大小）
-///
-/// 5MB 限制与 OpenAI / Anthropic 官方建议接近：
-/// - OpenAI Vision: 单图 base64 ≤ ~20MB，但实践中 5MB 内体验最佳
-/// - Anthropic: 单图 ≤ 5MB（推荐），超过会被服务端拒绝
-///
-/// 用 `base64` 解码后的字节数校验（不是 base64 字符串长度），
-/// 避免「字符串看起来不大但解码后超限」的错误。
-pub(crate) const MAX_IMAGE_SIZE: usize = 5 * 1024 * 1024; // 5 MiB
-
-/// P2-2: 单条消息最多图片张数
-///
-/// OpenAI 文档建议 ≤ 20 张/请求；Anthropic 限制更严格（实测 ≤ 100），
-/// 这里统一用 20 保持一致。
-pub(crate) const MAX_IMAGE_COUNT: usize = 20;
-
-// =========================================================================
-// 图片校验
-// =========================================================================
-
-/// P2-2: 校验 content_blocks 中的图片（含尺寸 / 张数 / 类型 / base64 合法性）
-///
-/// 在 `send_message` 入口处调用，**先于**任何 DB 写入或 LLM 调用。
-///
-/// 错误信息直接返回给前端用于 toast 提示（使用 `AppError::Validation`
-/// → 前端 kind=`"validation"`，可识别为业务级错误）。
-pub(crate) fn validate_images(blocks: &[ContentBlock]) -> AppResult<()> {
-    let mut image_count = 0usize;
-
-    for (idx, block) in blocks.iter().enumerate() {
-        if let ContentBlock::Image { data, media_type } = block {
-            image_count += 1;
-
-            // 1. media_type 白名单
-            if !is_supported_image_media_type(media_type) {
-                return Err(AppError::Validation(format!(
-                    "第 {} 张图片格式不支持：{}（允许：png / jpeg / gif / webp）",
-                    idx + 1,
-                    media_type
-                )));
-            }
-
-            // 2. base64 解码 + 尺寸校验
-            let decoded = base64::engine::general_purpose::STANDARD
-                .decode(data)
-                .map_err(|e| {
-                    AppError::Validation(format!(
-                        "第 {} 张图片 base64 解码失败：{}",
-                        idx + 1,
-                        e
-                    ))
-                })?;
-            if decoded.len() > MAX_IMAGE_SIZE {
-                let mb = decoded.len() as f64 / 1024.0 / 1024.0;
-                return Err(AppError::Validation(format!(
-                    "第 {} 张图片过大：{:.2} MB（最大 {} MB）",
-                    idx + 1,
-                    mb,
-                    MAX_IMAGE_SIZE / 1024 / 1024
-                )));
-            }
-        }
-    }
-
-    // 3. 张数上限
-    if image_count > MAX_IMAGE_COUNT {
-        return Err(AppError::Validation(format!(
-            "单条消息最多 {} 张图片，当前 {} 张",
-            MAX_IMAGE_COUNT, image_count
-        )));
-    }
-
-    Ok(())
-}
+// Re-export: LlmProvider trait（从 infra/protocol 迁至 harness/provider，保留兼容路径）
+pub use crate::harness::provider::LlmProvider;
 
 // =========================================================================
 // 入参结构
@@ -539,6 +408,9 @@ pub struct ToolAuthRequestPayload {
 pub struct ToolAuthResponse {
     pub request_id: String,
     pub allowed: bool,
+    /// U7: 用户勾选"本次会话不再询问"时为 true
+    #[serde(default)]
+    pub dont_ask_again: bool,
 }
 
 // === 配置提案事件 ===
@@ -645,6 +517,21 @@ pub enum ProposalDecision {
         #[serde(skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
     },
+}
+
+/// 提案/授权请求失效（超时/通道关闭）时 Rust→Frontend 通知。
+///
+/// 前端按 `request_id` 清除对应的待处理卡片/弹窗，避免用户对已失效请求
+/// 操作（例如对已超时的提案点「批准」会真的创建 agent，但对话流已当它
+/// 取消 → 状态分裂、留下孤儿 agent）。
+///
+/// 用于 `chat:config-proposal-cancel` 与 `chat:tool-auth-request-cancel` 两个事件。
+#[derive(Clone, Serialize)]
+pub struct PendingRequestCancelPayload {
+    pub request_id: String,
+    pub conversation_id: String,
+    /// "timeout" | "cancelled" | "abort"
+    pub reason: String,
 }
 
 // =========================================================================

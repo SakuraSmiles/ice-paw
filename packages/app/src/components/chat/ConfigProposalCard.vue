@@ -145,10 +145,11 @@ async function approve() {
       });
     }
 
-    // 刷新 agent store 缓存（新建/修改后全局 agent 列表需更新）
+    // 刷新 agent store 缓存
     useAgentStore().load(true);
 
-    // 成功后发送批准响应
+    // 通知 Rust 端继续对话
+    applying.value = false;
     const response: ConfigProposalResponse = {
       request_id: props.proposal.request_id,
       decision: editing.value ? "modified" : "approved",
@@ -159,7 +160,6 @@ async function approve() {
     await chat.respondToProposal(response);
   } catch (e) {
     errorMsg.value = `应用失败: ${e instanceof Error ? e.message : String(e)}`;
-  } finally {
     applying.value = false;
   }
 }
@@ -270,6 +270,11 @@ async function reject() {
 .sensitivity-medium .proposal-badge {
   background: var(--ip-warning-soft-bg, #fffbeb);
   color: var(--ip-warning-tint-text, #92400e);
+}
+
+.sensitivity-redline .proposal-badge {
+  background: var(--ip-danger-soft-bg, #fef2f2);
+  color: var(--ip-danger-tint-text, #991b1b);
 }
 
 .proposal-title {

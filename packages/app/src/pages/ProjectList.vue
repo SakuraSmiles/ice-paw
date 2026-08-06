@@ -174,14 +174,21 @@ const showArchived = ref(false);
 const permTarget = ref<Project | null>(null);
 const permMode = ref<"loose" | "delete">("loose");
 const permDeleting = ref(false);
+const confirmArchiveTarget = ref<Project | null>(null);
 
 function convCountOf(p: Project | null): number {
   if (!p) return 0;
   return chat.conversations.filter((c) => c.project_id === p.id).length;
 }
 
-async function archiveProject(p: Project) {
-  if (!window.confirm(`归档项目「${p.name}」？\n项目及其会话会从列表收起，可随时在「已归档」恢复。`)) return;
+function archiveProject(p: Project) {
+  confirmArchiveTarget.value = p;
+}
+
+async function confirmArchive() {
+  const p = confirmArchiveTarget.value;
+  if (!p) return;
+  confirmArchiveTarget.value = null;
   if (expandedId.value === p.id) expandedId.value = null;
   try {
     await project.archive(p.id);
@@ -189,6 +196,10 @@ async function archiveProject(p: Project) {
   } catch (e) {
     console.error("归档项目失败:", e);
   }
+}
+
+function cancelArchive() {
+  confirmArchiveTarget.value = null;
 }
 
 async function unarchiveProject(p: Project) {
@@ -437,6 +448,20 @@ onMounted(() => {
         </div>
       </div>
     </div>
+
+    <!-- 归档确认弹窗（替代 window.confirm，统一视觉风格） -->
+    <Transition name="overlay">
+      <div v-if="confirmArchiveTarget" class="perm-overlay" @click.self="cancelArchive">
+        <div class="perm-panel" @click.stop>
+          <h3 class="perm-title">归档「{{ confirmArchiveTarget.name }}」？</h3>
+          <p class="perm-desc">项目及其会话会从列表收起，可随时在「已归档」恢复。</p>
+          <div class="perm-actions">
+            <button class="btn-link" @click="cancelArchive">取消</button>
+            <button class="btn btn-sm" style="background: var(--ip-primary-500); color: white;" @click="confirmArchive">确认归档</button>
+          </div>
+        </div>
+      </div>
+    </Transition>
 
     <!-- 永久删除确认弹窗 -->
     <Transition name="overlay">

@@ -7,6 +7,7 @@
 //!           错误 → harness::error_mapping | 收尾 → harness::cleanup
 
 use sqlx::SqlitePool;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
@@ -15,14 +16,15 @@ use crate::db::models::{HookConfig, HookPoint, NewMessage};
 use crate::db::repo;
 use crate::error::{AppError, AppResult};
 use crate::infra::protocol::{
-    ChatMessage, ChatRoundStatePayload, ChatStartPayload, ContentBlock, LlmProvider, SendMessageInput, validate_images,
+    ChatMessage, ChatRoundStatePayload, ChatStartPayload, ConfigProposalResponse, ContentBlock, LlmProvider,
+    ProposalDecision, SendMessageInput, ToolAuthResponse, validate_images,
 };
 use crate::commands::agent_cmd::AgentCmd;
 use crate::harness::budget::LoopBudget;
 use crate::harness::hooks::{has_actions, run_hooks};
 use crate::harness::tool_executor::build_tool_ctx;
 use crate::harness::chat_state::{CancellationToken, ChatState};
-use crate::harness::loop_engine::LoopContext;
+use crate::harness::loop_engine::{LoopConfig, LoopContext};
 use crate::harness::observable::RoundState;
 use crate::harness::provider;
 
@@ -239,7 +241,7 @@ pub async fn send_message(
                 r
             }
             Some(_) => McpRegistry::new(),
-            None => (**global_registry).clone(),
+            None => McpRegistry::from_map(global_registry.snapshot().await),
         };
 
         // 后台异步绑定 per_agent server workspace（不阻塞消息发送）
@@ -315,6 +317,82 @@ pub async fn stop_generation(
             "stop_generation: 会话 {} 无在途生成任务", conversation_id);
     }
     Ok(())
+}
+
+// ============================================================================
+// 前端 → 后端 响应通道（invoke 命令）
+//
+// 设计说明（重要）：
+// 原先审批/授权响应用 chat:config-proposal-response / chat:tool-auth-response
+// 事件（前端 emit → 后端 app.listen）。但 Tauri v2 中前端 emit 是 webview 作用域、
+// 后端 listen 是全局监听器——作用域不匹配导致事件被静默丢弃，双通道从未工作，
+// 表现为「点批准后 agent 仍等满 120s 超时」。
+// 改为 invoke 命令（Tauri 推荐的前端→后端请求-响应 IPC），可靠送达。
+// ============================================================================
+
+/// 前端审批结果 → 唤醒后端 propose_config_change 的 oneshot 等待者。
+///
+/// 扁平入参（与前端 `ConfigProposalResponse` 类型一致：decision 为字符串），
+/// 命令内转 [`ProposalDecision`] enum 再交由 registry。
+#[tauri::command]
+pub async fn respond_config_proposal(
+    proposal_registry: State<'_, crate::harness::proposal_registry::ProposalRegistry>,
+    input: ConfigProposalResponseInput,
+) -> AppResult<()> {
+    let decision = match input.decision.as_str() {
+        "approved" => ProposalDecision::Approved,
+        "modified" => ProposalDecision::Modified {
+            changes: input.changes.unwrap_or_default(),
+        },
+        "rejected" => ProposalDecision::Rejected { reason: input.reason },
+        other => {
+            return Err(AppError::Validation(format!(
+                "未知提案 decision: '{other}'（需 approved/modified/rejected）"
+            )))
+        }
+    };
+    let handled = proposal_registry
+        .respond(ConfigProposalResponse {
+            request_id: input.request_id,
+            decision,
+        })
+        .await;
+    if !handled {
+        tracing::warn!(
+            target: "ice_paw.mgmt",
+            "提案 respond：未找到匹配的 request_id（可能已超时/取消）"
+        );
+    }
+    Ok(())
+}
+
+/// 前端工具授权结果 → 唤醒后端 wait_for_auth_response 的 oneshot 等待者。
+#[tauri::command]
+pub async fn respond_tool_auth(
+    auth_registry: State<'_, crate::harness::tool_executor::ToolAuthRegistry>,
+    input: ToolAuthResponse,
+) -> AppResult<()> {
+    let handled = auth_registry.respond(input).await;
+    if !handled {
+        tracing::warn!(
+            target: "ice_paw.tool_auth",
+            "授权 respond：未找到匹配的 request_id（可能已超时/取消）"
+        );
+    }
+    Ok(())
+}
+
+/// 前端审批响应的扁平入参（decision 为字符串，匹配前端类型）。
+/// 命令内转为 [`ProposalDecision`] enum 再交由 registry。
+#[derive(serde::Deserialize)]
+pub struct ConfigProposalResponseInput {
+    pub request_id: String,
+    /// `"approved"` | `"modified"` | `"rejected"`
+    pub decision: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub changes: Option<HashMap<String, String>>,
 }
 
 /// 把钩子注入的 prompt 追加到 system 消息（ConversationStart 用）。
@@ -394,36 +472,33 @@ fn spawn_stream_loop(
         // A2-3: 路径白名单配置（当前为空 → 全部走 Confirm 流程）
         let whitelist = PathWhitelistConfig::default();
 
-        // W6.2 + A2-3 + M1.2 + P0-3: 把 19 个输入字段封装到 LoopContext，
-        // 消除 stream_loop 的 too_many_arguments 告警。
-        // M1.2: query + call_history 用于 list_tool_defs_with_query 打分
-        // P0-3: model_override 透传到 provider.stream_chat() 实现会话级切换
-        let mut ctx = LoopContext::new(
-            conv_id.clone(),
+        // A6: LoopConfig(不可变配置) + LoopContext(配置 + 可变消息缓冲)
+        let config = LoopConfig {
+            conv_id: conv_id.clone(),
             asst_msg_id,
             user_msg_id,
+            agent_id,
+            project_id,
             app,
             pool,
             provider,
             api_key,
             temperature,
             max_tokens,
-            messages,
             tool_registry,
             tools_enabled,
-            cancel_token,
-            budget,
             auth_registry,
             auth_session,
             whitelist,
+            cancel: cancel_token,
+            budget,
             query,
             call_history,
-            model_override,
+            model: model_override,
             asst_model,
-            agent_id,
-            project_id,
             hooks,
-        );
+        };
+        let mut ctx = LoopContext::new(config, messages);
         crate::harness::loop_engine::stream_loop(&mut ctx, &mut observable).await;
         // W2.4: emit final round-state after stream_loop completes
         let _ = emit_app.emit(

@@ -1,13 +1,15 @@
 <script setup lang="ts">
 // AgentSettings.vue — 智能体设置（卡片展开内联编辑 + 顶部特殊新建卡片）
-import { ref, onMounted } from "vue";
+import { ref, computed, onMounted } from "vue";
 import AgentForm from "../../components/agent/AgentForm.vue";
 import KbDocumentList from "../../components/kb/KbDocumentList.vue";
 import type { Agent } from "../../types";
 import { bridge } from "../../api/bridge";
 import { useAgentStore } from "../../stores/agent";
 
-const agents = ref<Agent[]>([]);
+const store = useAgentStore();
+// 单一数据源：直接从 Pinia store 派生，避免本地 ref 与 store 不一致
+const agents = computed<Agent[]>(() => store.list);
 const loading = ref(true);
 
 // 展开编辑的 agent id（null = 全部收起）；isCreating = 新建卡片展开态
@@ -17,7 +19,7 @@ const isCreating = ref(false);
 async function loadAgents() {
   loading.value = true;
   try {
-    agents.value = await bridge.agents.list();
+    await store.load(true);
   } catch (e) {
     console.error("加载 Agent 列表失败:", e);
   } finally {
@@ -41,9 +43,7 @@ function toggleNew() {
 function onSaved(_agent: Agent) {
   isCreating.value = false;
   expandedEditId.value = null;
-  loadAgents();
-  // 同步刷新 Pinia agent store——侧栏/项目选择器等依赖 store 的组件能看到新 agent
-  useAgentStore().load(true);
+  loadAgents(); // loadAgents 内部调用 store.load(true)，同步侧栏/项目选择器
 }
 
 function onCancel() {
@@ -57,7 +57,6 @@ async function onDelete(agent: Agent) {
     isCreating.value = false;
     expandedEditId.value = null;
     await loadAgents();
-    useAgentStore().load(true);
   } catch (e) {
     console.error("删除 Agent 失败:", e);
   }

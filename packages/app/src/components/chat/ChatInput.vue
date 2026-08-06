@@ -59,9 +59,13 @@ async function pickImages() {
       if (!allowedTypes.includes(mediaType)) continue;
       if (uint8.length > maxFileSize) continue;
 
-      let binary = "";
-      for (let i = 0; i < uint8.length; i++) binary += String.fromCharCode(uint8[i]);
-      const base64 = window.btoa(binary);
+      // 分块转换避免主线程长阻塞（CHUNK=4096，从 O(n²) 次字符串拼接降为 ~n/4096 次）
+      const CHUNK = 4096;
+      const chunks: string[] = [];
+      for (let i = 0; i < uint8.length; i += CHUNK) {
+        chunks.push(String.fromCharCode(...uint8.subarray(i, i + CHUNK)));
+      }
+      const base64 = window.btoa(chunks.join(""));
 
       chat.pendingImages.push({ data: base64, mediaType, name: filePath.split(/[/\\]/).pop() || "image" });
     } catch (e) {
@@ -93,6 +97,10 @@ function handleKeydown(e: KeyboardEvent) {
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
     send();
+  }
+  // U6: 防止 Backspace 在只读/禁用状态下触发浏览器后退
+  if (e.key === "Backspace" && (e.target as HTMLTextAreaElement)?.disabled) {
+    e.preventDefault();
   }
 }
 </script>
@@ -165,7 +173,7 @@ function handleKeydown(e: KeyboardEvent) {
 .btn-img:hover { background-color:var(--ip-color-bg-tertiary); color:var(--ip-primary-600); }
 .btn-img:disabled { opacity:0.35; cursor:not-allowed; }
 
-.chat-textarea { flex:1; border:none; outline:none; background:transparent; resize:none; font-size:var(--ip-text-body-size); line-height:1.5; color:var(--ip-color-text-primary); max-height:200px; min-height:22px; padding:4px 0 0; }
+.chat-textarea { flex:1; border:none; outline:none; background:transparent; resize:none; font-size:var(--ip-text-body-size); line-height:1.5; color:var(--ip-color-text-primary); max-height:200px; min-height:22px; padding:4px 0 0; overflow-y:auto; }
 .chat-textarea::placeholder { color:var(--ip-color-text-placeholder); }
 .chat-textarea:disabled { opacity:0.35; cursor:not-allowed; }
 

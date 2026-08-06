@@ -10,7 +10,7 @@
   Emits: 无
 -->
 <script setup lang="ts">
-import { ref, computed, nextTick, onMounted, onUnmounted } from "vue";
+import { ref, computed, watch, nextTick, onUnmounted } from "vue";
 import { useChatStore }from "../../stores/chat";
 import { useAgentStore } from "../../stores/agent";
 import { bridge } from "../../api/bridge";
@@ -32,7 +32,14 @@ function onDocClick(e: MouseEvent) {
   }
 }
 
-onMounted(() => document.addEventListener("click", onDocClick));
+// U18: 只在菜单打开时注册 document click 监听，避免全局常驻
+watch(menuOpen, (open) => {
+  if (open) {
+    document.addEventListener("click", onDocClick);
+  } else {
+    document.removeEventListener("click", onDocClick);
+  }
+});
 onUnmounted(() => document.removeEventListener("click", onDocClick));
 
 const activeAgent = computed(() => {
@@ -54,7 +61,12 @@ async function saveEdit() {
   if (!conv) return;
   editing.value = false;
   const newTitle = editValue.value.trim();
-  if (newTitle && newTitle !== (conv.title || "")) {
+  // U13: 拒绝空标题或纯空白标题，恢复旧值
+  if (!newTitle) {
+    editValue.value = conv.title || "";
+    return;
+  }
+  if (newTitle !== (conv.title || "")) {
     try {
       await bridge.conversations.rename(conv.id, newTitle);
       conv.title = newTitle;
@@ -76,12 +88,24 @@ function startDelete() { confirming.value = true; }
 
 function cancelDelete() { confirming.value = false; }
 
+const deletedId = ref<string | null>(null);
+
 async function confirmDelete() {
   const conv = chat.activeConversation;
   if (!conv) return;
   confirming.value = false;
   menuOpen.value = false;
   await chat.deleteConversation(conv.id);
+  // 显示撤销 toast（5 秒后自动消失）
+  deletedId.value = conv.id;
+  setTimeout(() => { deletedId.value = null; }, 5000);
+}
+
+function undoDelete() {
+  if (deletedId.value) {
+    chat.undoDeleteConversation(deletedId.value);
+    deletedId.value = null;
+  }
 }
 
 function toggleMenu() { menuOpen.value = !menuOpen.value; if (!menuOpen.value) confirming.value = false; }
@@ -147,7 +171,7 @@ function viewInfo() {
           </button>
           <div class="dropdown-divider"></div>
           <div v-if="confirming" class="menu-confirm">
-            <span class="menu-confirm-text">确认删除？</span>
+            <span class="menu-confirm-text">确认删除「{{ chat.activeConversation?.title || "新对话" }}」？</span>
             <div class="menu-confirm-actions">
               <button class="menu-confirm-yes" @click="confirmDelete">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
@@ -165,6 +189,14 @@ function viewInfo() {
       </div>
     </div>
   </header>
+
+  <!-- 删除撤销 toast -->
+  <Transition name="overlay">
+    <div v-if="deletedId" class="undo-toast">
+      <span class="undo-toast-text">对话已删除</span>
+      <button class="undo-toast-btn" @click="undoDelete">撤销</button>
+    </div>
+  </Transition>
 
   <Transition name="overlay">
     <div v-if="showInfo" class="info-overlay" @click.self="showInfo = false">
@@ -228,6 +260,24 @@ function viewInfo() {
 .info-row { display:flex; justify-content:space-between; align-items:center; }
 .info-label { font-size:var(--ip-text-body-sm-size); color:var(--ip-color-text-tertiary); }
 .info-value { font-size:var(--ip-text-body-sm-size); color:var(--ip-color-text-primary); font-weight:var(--ip-font-weight-medium); }
+
+/* 删除撤销 toast */
+.undo-toast {
+  display: flex; align-items: center; gap: 12px;
+  padding: 8px 16px; margin: 0 24px;
+  background: var(--ip-color-bg-elevated, #1e293b);
+  border: 1px solid var(--ip-color-border-default);
+  border-radius: var(--ip-radius-md);
+  box-shadow: var(--ip-shadow-md);
+  position: absolute; top: 72px; right: 24px; z-index: 10;
+}
+.undo-toast-text { font-size: var(--ip-text-body-sm-size); color: var(--ip-color-text-secondary); }
+.undo-toast-btn {
+  font-size: var(--ip-text-body-sm-size); font-weight: var(--ip-font-weight-semibold);
+  color: var(--ip-primary-500); background: none; border: none; cursor: pointer; padding: 2px 4px;
+  border-radius: var(--ip-radius-sm);
+}
+.undo-toast-btn:hover { background: var(--ip-primary-soft-bg); }
 
 /* ===== 下拉菜单动画 ===== */
 .dropdown-enter-active { animation:drop-in 0.15s ease-out; }
