@@ -84,6 +84,10 @@ pub(crate) fn finalize_success(
             tracing::warn!(target: "ice_paw.cleanup", "回写 user token_count 失败: msg_id={}, err={}", user_id, e);
         }
     });
+    // ★ 先 unregister 再 emit chat:done：消除竞态窗口——
+    // 前端收到 chat:done 后可能立即发送下一条消息，若此时 token 尚未注销，
+    // chat_state.start() 会命中"会话已有在途生成任务"。
+    cleanup(app, pool, conv_id);
     if let Err(e) = app.emit(
         "chat:done",
         ChatDonePayload {
@@ -95,13 +99,14 @@ pub(crate) fn finalize_success(
     ) {
         tracing::warn!(target: "ice_paw.cleanup", "emit chat:done 失败: conv_id={}, err={}", conv_id, e);
     }
-    cleanup(app, pool, conv_id);
 }
 
 /// 中途取消：emit chat:done(abort) + 注销
 ///
 /// 当前 assistant 消息已由 BatchWriter flush 部分内容；本函数只负责收尾信号。
 pub(crate) fn finalize_cancel(app: &AppHandle, pool: &SqlitePool, conv_id: &str, asst_msg_id: &str) {
+    // ★ 先 unregister 再 emit chat:done（同 finalize_success 的排序修复）
+    cleanup(app, pool, conv_id);
     if let Err(e) = app.emit(
         "chat:done",
         ChatDonePayload {
@@ -113,7 +118,6 @@ pub(crate) fn finalize_cancel(app: &AppHandle, pool: &SqlitePool, conv_id: &str,
     ) {
         tracing::warn!(target: "ice_paw.cleanup", "emit chat:done(abort) 失败: conv_id={}, err={}", conv_id, e);
     }
-    cleanup(app, pool, conv_id);
 }
 
 /// 注销 CancellationToken（所有退出路径的公共收尾）
