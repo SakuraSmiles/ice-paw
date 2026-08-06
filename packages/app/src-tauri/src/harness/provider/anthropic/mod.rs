@@ -185,6 +185,49 @@ impl LlmProvider for AnthropicAdapter {
         // 5. 检查 HTTP 状态码；非成功 → 解析 Anthropic 风格错误体
         if !response.status().is_success() {
             let status = response.status();
+            // 诊断：dump 实际发送的消息结构（role + block 概要 + tool id + 空内容标记），
+            // 用于定位 400（如 MiniMax "tool call result does not follow tool call"）。
+            let structure: Vec<String> = msgs_json
+                .iter()
+                .map(|m| {
+                    let role = m.get("role").and_then(|v| v.as_str()).unwrap_or("?");
+                    match m.get("content") {
+                        Some(serde_json::Value::String(s)) => {
+                            format!("{role}: str[{}]", if s.trim().is_empty() { "EMPTY" } else { "ok" })
+                        }
+                        Some(serde_json::Value::Array(arr)) => {
+                            let parts: Vec<String> = arr
+                                .iter()
+                                .filter_map(|b| match b.get("type").and_then(|v| v.as_str()) {
+                                    Some("tool_use") => Some(format!(
+                                        "use({})",
+                                        b.get("id").and_then(|v| v.as_str()).unwrap_or("?")
+                                    )),
+                                    Some("tool_result") => Some(format!(
+                                        "res({})",
+                                        b.get("tool_use_id").and_then(|v| v.as_str()).unwrap_or("?")
+                                    )),
+                                    Some("text") => Some(format!(
+                                        "text[{}]",
+                                        b.get("text").and_then(|v| v.as_str()).map(str::len).unwrap_or(0)
+                                    )),
+                                    Some(other) => Some(other.to_string()),
+                                    None => None,
+                                })
+                                .collect();
+                            format!("{role}: [{}]", parts.join(","))
+                        }
+                        _ => format!("{role}: ?"),
+                    }
+                })
+                .collect();
+            tracing::warn!(
+                target: "ice_paw.provider",
+                "请求被 {} 拒绝（{} 条消息）：\n{}",
+                status,
+                msgs_json.len(),
+                structure.join("\n")
+            );
             let text = response.text().await.unwrap_or_else(|e| {
                 tracing::warn!(target: "ice_paw.provider", "读取 Anthropic error body 失败: {e}");
                 String::new()

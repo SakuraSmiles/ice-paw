@@ -108,12 +108,16 @@ pub(crate) fn load_history_with_window(
 
 /// 净化历史消息，确保 Anthropic 协议合规（通用，适用于所有兼容端点）。
 ///
-/// 防御历史数据的三类违规（多由旧版持久化遗留或窗口裁剪边界引入），
-/// 确保发给任意 Anthropic 兼容 LLM 的历史都协议合规——严格校验的端点
-/// （如 MiniMax）遇到违规会直接 400 "tool id not found"，宽松端点也会行为异常：
+/// 防御历史数据的五类违规（多由旧版持久化遗留、工具超时/出错或窗口裁剪边界引入），
+/// 确保发给任意 Anthropic 兼容 LLM 的历史都协议合规——严格校验的端点（如 MiniMax）
+/// 遇到违规会直接 400（"tool call result does not follow tool call" / "tool id not found"），
+/// 宽松端点也会行为异常：
 /// 1. **重复 tool_use id** → 仅保留首个（旧版可能把同一 tool_use 写多份）
 /// 2. **孤儿 tool_result**（tool_use_id 不在窗口内）→ 丢弃（裁剪裁掉 tool_use 留 tool_result）
-/// 3. **连续同角色消息** → 合并 content（协议要求 user/assistant 交替）
+/// 3. **孤儿 tool_use**（窗口内无配对 tool_result）→ 丢弃（工具超时/出错未补结果；
+///    严格的 MiniMax 端点对「有 tool_call 无 tool_result」会 400）
+/// 4. **空白消息**（空 assistant 占位 / 错误遗留，序列化为 `content:""` 破坏协议）→ 丢弃
+/// 5. **连续同角色消息** → 合并 content（协议要求 user/assistant 交替）
 ///
 /// 纯函数 + 无副作用，便于单元测试。
 fn sanitize_history(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
@@ -121,6 +125,14 @@ fn sanitize_history(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
         return messages;
     }
 
+    // 窗口内存在配对 tool_result 的 tool_use id 集合（孤儿 tool_use 判定基准）
+    let ids_with_result: HashSet<String> = messages
+        .iter()
+        .flat_map(|m| m.content.iter().filter_map(|b| match b {
+            ContentBlock::ToolResult { tool_use_id, .. } => Some(tool_use_id.clone()),
+            _ => None,
+        }))
+        .collect();
     // 窗口内出现过的所有 tool_use id（孤儿 tool_result 判定基准）
     let valid_ids: HashSet<String> = messages
         .iter()
@@ -130,7 +142,8 @@ fn sanitize_history(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
         }))
         .collect();
 
-    // 过滤每条消息：tool_use 去重 + tool_result 去孤儿
+    // 过滤每条消息：tool_use 去重 + 去孤儿；tool_result 去孤儿 + 去重；text 去空白。
+    // 过滤后 content 为空的消息（如仅含孤儿 tool_use 的 assistant、或纯空白的占位）整体丢弃。
     let mut tool_use_seen: HashSet<String> = HashSet::new();
     let mut tool_result_seen: HashSet<String> = HashSet::new();
     let mut filtered: Vec<ChatMessage> = Vec::with_capacity(messages.len());
@@ -139,11 +152,17 @@ fn sanitize_history(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
         let mut content: Vec<ContentBlock> = Vec::new();
         for block in msg.content {
             let keep = match &block {
-                ContentBlock::ToolUse { id, .. } => tool_use_seen.insert(id.clone()),
+                // 必须有配对 tool_result，且未重复出现
+                ContentBlock::ToolUse { id, .. } => {
+                    ids_with_result.contains(id) && tool_use_seen.insert(id.clone())
+                }
+                // tool_use_id 必须在窗口内，且未重复出现
                 ContentBlock::ToolResult { tool_use_id, .. } => {
                     valid_ids.contains(tool_use_id)
                         && tool_result_seen.insert(tool_use_id.clone())
                 }
+                // 丢弃空白文本（空 assistant 占位会序列化成 content:""，破坏协议）
+                ContentBlock::Text { text } => !text.trim().is_empty(),
                 _ => true,
             };
             if keep {
@@ -155,7 +174,9 @@ fn sanitize_history(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
         }
     }
 
-    // 合并连续同角色（协议要求交替；裁剪边界或旧数据可能产生连续 user）
+    // 合并连续同角色（协议要求交替；裁剪边界或丢弃空消息后可能产生连续 user/assistant）。
+    // 合并后，任何存活的 tool_result 其 tool_use 必然位于紧邻的前一条 assistant（因 tool_use
+    // 与 tool_result 本就是相邻的两轮，丢空白/孤儿不会在二者之间插入异类消息）。
     let mut merged: Vec<ChatMessage> = Vec::with_capacity(filtered.len());
     for msg in filtered {
         if let Some(last) = merged.last_mut() {
@@ -167,30 +188,7 @@ fn sanitize_history(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
         merged.push(msg);
     }
 
-    // 确保每个 tool_result 紧跟在它的 tool_use 之后（MiniMax 严格校验此顺序）
-    let mut final_msgs: Vec<ChatMessage> = Vec::with_capacity(merged.len());
-    for msg in merged {
-        if msg.role == "user" && msg.content.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. })) {
-            let need_clean = match final_msgs.last() {
-                Some(ChatMessage { role, content }) if role == "assistant" => {
-                    let tool_ids: HashSet<&str> = content.iter()
-                        .filter_map(|b| match b { ContentBlock::ToolUse { id, .. } => Some(id.as_str()), _ => None })
-                        .collect();
-                    !msg.content.iter().all(|b| match b {
-                        ContentBlock::ToolResult { tool_use_id, .. } => tool_ids.contains(tool_use_id.as_str()),
-                        _ => true,
-                    })
-                }
-                _ => true,
-            };
-            if !need_clean {
-                final_msgs.push(msg);
-            }
-        } else {
-            final_msgs.push(msg);
-        }
-    }
-    final_msgs
+    merged
 }
 
 /// 解析 `content_blocks` JSON 字符串为 `Vec<ContentBlock>`。
@@ -387,6 +385,54 @@ mod tests {
         let has_use = out.iter().any(|m| m.content.iter().any(|b| matches!(b, ContentBlock::ToolUse { id, .. } if id == "A")));
         let has_result = out.iter().any(|m| m.content.iter().any(|b| matches!(b, ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == "A")));
         assert!(has_use && has_result, "正常配对的 tool_use/tool_result 应保留");
+    }
+
+    #[test]
+    fn sanitize_drops_orphan_tool_use() {
+        // tool_use 在窗口内但无配对 tool_result（工具超时/出错未补结果）→ 丢弃该 tool_use。
+        // 若 assistant 仅含这个孤儿 tool_use，整条消息丢弃，避免发给 MiniMax 触发 2013。
+        let out = sanitize_history(vec![
+            cm("user", vec![text_blk("q")]),
+            cm("assistant", vec![tu("orphan")]),
+            cm("user", vec![text_blk("next")]),
+            cm("assistant", vec![text_blk("ok")]),
+        ]);
+        let has_orphan = out
+            .iter()
+            .any(|m| m.content.iter().any(|b| matches!(b, ContentBlock::ToolUse { id, .. } if id == "orphan")));
+        assert!(!has_orphan, "孤儿 tool_use（无配对 result）应被丢弃");
+        // 其余正常消息保留
+        assert!(out.iter().any(|m| m.content_text() == "ok"));
+    }
+
+    #[test]
+    fn sanitize_drops_empty_assistant_placeholder() {
+        // 空 assistant 占位（错误遗留，content 为空白）→ 丢弃；不破坏其余消息的交替。
+        let out = sanitize_history(vec![
+            cm("user", vec![text_blk("q")]),
+            cm("assistant", vec![text_blk("")]), // 空占位
+            cm("user", vec![text_blk("again")]),
+            cm("assistant", vec![text_blk("resp")]),
+        ]);
+        // 空占位被丢弃，两个 user 合并
+        assert_eq!(out.len(), 3, "空 assistant 丢弃后应为 user(merged)+assistant+...");
+        assert_eq!(out[0].role, "user");
+        // 合并后的 user 应含两段文本
+        assert_eq!(out[0].content.len(), 2);
+        assert_eq!(out[2].content_text(), "resp");
+    }
+
+    #[test]
+    fn sanitize_orphan_use_with_text_keeps_text() {
+        // assistant 同时含文本和孤儿 tool_use → 丢弃 tool_use，保留文本（不误删整条）
+        let out = sanitize_history(vec![
+            cm("user", vec![text_blk("q")]),
+            cm("assistant", vec![text_blk("partial"), tu("orphan")]),
+            cm("user", vec![text_blk("next")]),
+        ]);
+        let asst = out.iter().find(|m| m.role == "assistant").expect("assistant 应保留");
+        assert_eq!(asst.content.len(), 1, "仅剩文本块");
+        assert!(matches!(asst.content[0], ContentBlock::Text { .. }));
     }
 
     // ===== P2-2 G1：历史消息图片重注入 =====
