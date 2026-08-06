@@ -267,14 +267,14 @@ mod tests {
     fn url_strips_trailing_slash() {
         // 验证 URL 拼接：trim_end_matches('/') 后再追加 /v1/messages
         let adapter = AnthropicAdapter::new("m".into(), "https://x.com/anthropic/".into(), false);
-        let url = format!("{}/v1/messages", adapter.base_url.trim_end_matches('/'));
+        let url = format!("{}/v1/messages", adapter.unwrap().base_url.trim_end_matches('/'));
         assert_eq!(url, "https://x.com/anthropic/v1/messages");
     }
 
     #[test]
     fn url_no_trailing_slash() {
         let adapter = AnthropicAdapter::new("m".into(), "https://x.com/anthropic".into(), false);
-        let url = format!("{}/v1/messages", adapter.base_url.trim_end_matches('/'));
+        let url = format!("{}/v1/messages", adapter.unwrap().base_url.trim_end_matches('/'));
         assert_eq!(url, "https://x.com/anthropic/v1/messages");
     }
 }

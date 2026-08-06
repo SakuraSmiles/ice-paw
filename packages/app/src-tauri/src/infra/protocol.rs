@@ -541,6 +541,8 @@ pub struct PendingRequestCancelPayload {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::AppError;
+    use base64::Engine as _;
 
     /// 构造 N 字节原始数据 → base64 字符串
     fn make_b64_bytes(n: usize) -> String {
@@ -857,9 +859,13 @@ mod tests {
         let r = ToolAuthResponse {
             request_id: "req-2".into(),
             allowed: true,
+            dont_ask_again: false,
         };
         let json = serde_json::to_string(&r).unwrap();
-        assert_eq!(json, r#"{"request_id":"req-2","allowed":true}"#);
+        assert_eq!(
+            json,
+            r#"{"request_id":"req-2","allowed":true,"dont_ask_again":false}"#
+        );
 
         let back: ToolAuthResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(back.request_id, "req-2");
@@ -869,6 +875,7 @@ mod tests {
         let r2 = ToolAuthResponse {
             request_id: "req-3".into(),
             allowed: false,
+            dont_ask_again: false,
         };
         let json2 = serde_json::to_string(&r2).unwrap();
         let back2: ToolAuthResponse = serde_json::from_str(&json2).unwrap();

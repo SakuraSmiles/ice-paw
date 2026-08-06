@@ -15,7 +15,7 @@ pub use crate::harness::oneshot_registry::ProposalRegistry;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::infra::protocol::ProposalDecision;
+    use crate::infra::protocol::{ConfigProposalResponse, ProposalDecision};
 
     #[tokio::test]
     async fn register_and_respond() {
