@@ -206,7 +206,7 @@ async fn try_semantic_search(
             return None;
         }
     };
-    let backend = OpenAiEmbeddingBackend::new(model, url);
+    let backend = OpenAiEmbeddingBackend::new(model, url).ok()?;
 
     // 2. 一次加载所有 chunk（ensure 回填内存，省掉原先的第二次 load）
     let mut chunks = load_chunks_for_vector_search(pool, kb_ids).await.ok()?;
