@@ -120,6 +120,7 @@ pub struct SqlAgentCmd {
 ///
 /// - 仅在文件不存在时写入（不覆盖用户手动编辑的内容）
 /// - 写入失败仅 warn，不阻断 Agent 创建
+#[allow(clippy::too_many_arguments)]
 fn write_default_agent_yaml(
     workspace_dir: &str,
     agent_name: &str,
