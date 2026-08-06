@@ -32,7 +32,7 @@ pub struct ProposeConfigChangeTool;
 
 /// 平铺的参数结构 —— 所有字段可选（deserialize 层），必填校验在 guardrail 做。
 /// `action` 是简单字符串：`"create_agent"` 或 `"update_agent"`。
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct ProposeConfigArgs {
     /// "create_agent" | "update_agent"
     action: String,

@@ -52,7 +52,7 @@ async fn openai_normal_stream_collects_expected_content() {
         .mount(&server)
         .await;
 
-    let adapter = OpenAiAdapter::new("test-model".into(), server.uri());
+    let adapter = OpenAiAdapter::new("test-model".into(), server.uri()).expect("构建 OpenAI adapter");
     let cancel = CancellationToken::new();
 
     let stream = adapter
@@ -92,7 +92,7 @@ async fn openai_http_401_returns_llm_error() {
         .mount(&server)
         .await;
 
-    let adapter = OpenAiAdapter::new("test-model".into(), server.uri());
+    let adapter = OpenAiAdapter::new("test-model".into(), server.uri()).expect("构建 OpenAI adapter");
     let cancel = CancellationToken::new();
 
     let result = adapter
@@ -124,7 +124,7 @@ async fn openai_truncated_stream_yields_partial_content() {
         .mount(&server)
         .await;
 
-    let adapter = OpenAiAdapter::new("test-model".into(), server.uri());
+    let adapter = OpenAiAdapter::new("test-model".into(), server.uri()).expect("构建 OpenAI adapter");
     let cancel = CancellationToken::new();
 
     let stream = adapter
@@ -183,7 +183,7 @@ async fn openai_tool_calls_produces_tool_call_events() {
         .mount(&server)
         .await;
 
-    let adapter = OpenAiAdapter::new("test-model".into(), server.uri());
+    let adapter = OpenAiAdapter::new("test-model".into(), server.uri()).expect("构建 OpenAI adapter");
     let cancel = CancellationToken::new();
 
     let stream = adapter
@@ -237,7 +237,7 @@ async fn openai_tool_calls_delta_not_in_text() {
         .mount(&server)
         .await;
 
-    let adapter = OpenAiAdapter::new("test-model".into(), server.uri());
+    let adapter = OpenAiAdapter::new("test-model".into(), server.uri()).expect("构建 OpenAI adapter");
     let cancel = CancellationToken::new();
 
     let stream = adapter
@@ -361,7 +361,7 @@ async fn anthropic_normal_text_stream_collects_expected() {
         .mount(&server)
         .await;
 
-    let adapter = AnthropicAdapter::new("test-model".into(), server.uri(), false);
+    let adapter = AnthropicAdapter::new("test-model".into(), server.uri(), false).expect("构建 Anthropic adapter");
     let cancel = CancellationToken::new();
 
     let stream = adapter
@@ -406,7 +406,7 @@ async fn anthropic_mixed_tool_use_only_collects_text() {
         .mount(&server)
         .await;
 
-    let adapter = AnthropicAdapter::new("test-model".into(), server.uri(), false);
+    let adapter = AnthropicAdapter::new("test-model".into(), server.uri(), false).expect("构建 Anthropic adapter");
     let cancel = CancellationToken::new();
 
     let stream = adapter
@@ -443,7 +443,7 @@ async fn anthropic_error_event_returns_llm_error() {
         .mount(&server)
         .await;
 
-    let adapter = AnthropicAdapter::new("test-model".into(), server.uri(), false);
+    let adapter = AnthropicAdapter::new("test-model".into(), server.uri(), false).expect("构建 Anthropic adapter");
     let cancel = CancellationToken::new();
 
     let stream = adapter
@@ -498,7 +498,7 @@ async fn anthropic_tool_use_produces_tool_call_events() {
         .mount(&server)
         .await;
 
-    let adapter = AnthropicAdapter::new("test-model".into(), server.uri(), false);
+    let adapter = AnthropicAdapter::new("test-model".into(), server.uri(), false).expect("构建 Anthropic adapter");
     let cancel = CancellationToken::new();
 
     let stream = adapter
@@ -552,7 +552,7 @@ async fn anthropic_tool_use_delta_not_in_text() {
         .mount(&server)
         .await;
 
-    let adapter = AnthropicAdapter::new("test-model".into(), server.uri(), false);
+    let adapter = AnthropicAdapter::new("test-model".into(), server.uri(), false).expect("构建 Anthropic adapter");
     let cancel = CancellationToken::new();
 
     let stream = adapter
@@ -616,7 +616,7 @@ async fn anthropic_usage_event_from_stream() {
         .mount(&server)
         .await;
 
-    let adapter = AnthropicAdapter::new("test-model".into(), server.uri(), false);
+    let adapter = AnthropicAdapter::new("test-model".into(), server.uri(), false).expect("构建 Anthropic adapter");
     let cancel = CancellationToken::new();
 
     let stream = adapter

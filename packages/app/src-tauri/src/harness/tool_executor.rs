@@ -496,6 +496,7 @@ mod tests {
             reg2.respond(ToolAuthResponse {
                 request_id: req_id.clone(),
                 allowed: true,
+                dont_ask_again: false,
             })
             .await;
         });
@@ -513,6 +514,7 @@ mod tests {
             .respond(ToolAuthResponse {
                 request_id: "nope".into(),
                 allowed: false,
+                dont_ask_again: false,
             })
             .await;
         assert!(!handled);

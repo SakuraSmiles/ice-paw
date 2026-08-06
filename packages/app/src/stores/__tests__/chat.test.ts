@@ -10,8 +10,10 @@ const mockListen = vi.mocked(listen);
 /** 捕获 listen() 注册的 handler，以便测试中手动触发事件 */
 function captureHandlers() {
   const handlers = new Map<string, (event: { payload: unknown }) => void>();
-  mockListen.mockImplementation(async (event: string, handler: any) => {
-    handlers.set(event, handler);
+  // handler 推断为 Tauri 真实类型 EventCallback<unknown>；测试侧按 {payload} 简化调用，
+  // 故存入 map 时窄化为 map 值类型（无 any，满足 no-explicit-any）。
+  mockListen.mockImplementation(async (event, handler) => {
+    handlers.set(event, handler as (event: { payload: unknown }) => void);
     return () => { handlers.delete(event); };
   });
   return handlers;
