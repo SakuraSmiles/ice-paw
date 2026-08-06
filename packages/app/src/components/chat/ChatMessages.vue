@@ -11,7 +11,7 @@
   Emits: 无
 -->
 <script setup lang="ts">
-import { watch, nextTick, ref, computed, onMounted, onUnmounted, onActivated } from "vue";
+import { watch, nextTick, ref, computed, onMounted, onUnmounted, onActivated, onDeactivated } from "vue";
 import { useChatStore } from "../../stores/chat";
 import { formatTime, formatDateLabel } from "../../utils/time";
 import MarkdownRenderer from "./MarkdownRenderer.vue";
@@ -139,8 +139,17 @@ onMounted(() => {
   scrollToBottom(false);
 });
 onActivated(() => {
-  // KeepAlive: 切回时恢复滚动位置。如果在生成中或刚切回来，滚到底部
+  // KeepAlive: 切回时恢复滚动位置。如果在生成中或刚切回来，滚到底部。
+  // 若停用期间 thinking 仍在进行，重启计时器以还原实时耗时显示。
+  if (chat.streamingThinking && !thinkingTimer) {
+    thinkingNow.value = Date.now();
+    thinkingTimer = setInterval(() => { thinkingNow.value = Date.now(); }, 200);
+  }
   nextTick(() => scrollToBottom(false));
+});
+onDeactivated(() => {
+  // KeepAlive: 切走时停止计时器，避免不可见区间浪费 CPU
+  if (thinkingTimer) { clearInterval(thinkingTimer); thinkingTimer = null; }
 });
 onUnmounted(() => {
   listRef.value?.removeEventListener("scroll", onScroll);
