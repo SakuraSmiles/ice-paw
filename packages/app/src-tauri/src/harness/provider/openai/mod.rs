@@ -52,19 +52,19 @@ impl OpenAiAdapter {
     ///
     /// - `model`：模型名称
     /// - `base_url`：API 根地址，如 `https://api.openai.com`
-    pub fn new(model: String, base_url: String) -> Self {
+    pub fn new(model: String, base_url: String) -> AppResult<Self> {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .read_timeout(Duration::from_secs(120))
             .timeout(Duration::from_secs(300))
             .build()
-            .expect("reqwest client build");
+            .map_err(|e| AppError::Internal(format!("构建 HTTP 客户端失败: {e}")))?;
 
-        Self {
+        Ok(Self {
             model,
             base_url,
             client,
-        }
+        })
     }
 }
 

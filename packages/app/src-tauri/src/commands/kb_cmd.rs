@@ -105,7 +105,7 @@ pub async fn test_embedding_config(
             _ => return Err(AppError::Validation(format!("未知 embedding provider: {provider}"))),
         },
     };
-    let backend = OpenAiEmbeddingBackend::new(model, url);
+    let backend = OpenAiEmbeddingBackend::new(model, url)?;
     backend.embed(vec!["health check"], &api_key).await?;
     Ok(())
 }

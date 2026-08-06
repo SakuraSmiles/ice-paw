@@ -103,18 +103,6 @@ function cancelEdit() {
   editFields.value = {};
 }
 
-function getEditedAction() {
-  const a = JSON.parse(JSON.stringify(action.value)) as Record<string, unknown>;
-  for (const [key, val] of Object.entries(editFields.value)) {
-    if (key === "temperature" || key === "max_tokens") {
-      (a as Record<string, unknown>)[key] = Number(val);
-    } else {
-      (a as Record<string, unknown>)[key] = val;
-    }
-  }
-  return a;
-}
-
 async function approve() {
   errorMsg.value = null;
   applying.value = true;

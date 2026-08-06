@@ -68,7 +68,9 @@ pub async fn index_directory(
         .await
         .ok()
         .and_then(|p| resolve_embedding_config(&p))
-        .map(|(m, u, k)| (OpenAiEmbeddingBackend::new(m, u), k));
+        .and_then(|(m, u, k)| {
+            OpenAiEmbeddingBackend::new(m, u).ok().map(|be| (be, k))
+        });
 
     for (rel_path, abs_path) in &disk_files {
         seen.insert(rel_path.clone());
