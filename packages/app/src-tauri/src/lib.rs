@@ -83,6 +83,8 @@ pub fn run() {
             commands::message_cmd::create_message,
             commands::chat_cmd::send_message,
             commands::chat_cmd::stop_generation,
+            commands::chat_cmd::respond_config_proposal,
+            commands::chat_cmd::respond_tool_auth,
             commands::preferences_cmd::get_preferences,
             commands::preferences_cmd::set_preference,
             commands::mcp_cmd::list_mcp_servers,
@@ -156,12 +158,22 @@ pub fn run() {
 
             // 3) A2-3: 安装工具授权响应全局监听器（前端 chat:tool-auth-response）
             let auth_registry = harness::tool_executor::ToolAuthRegistry::new();
-            auth_registry.install_listener(&handle);
+            auth_registry.install_listener(
+                &handle,
+                "chat:tool-auth-response".to_string(),
+                "[tool_auth] 收到未知 request_id 的授权响应（可能已超时）".to_string(),
+                "[tool_auth] 授权响应解析失败".to_string(),
+            );
             handle.manage(auth_registry);
 
             // 3b) 安装配置提案响应全局监听器（前端 chat:config-proposal-response）
             let proposal_registry = harness::proposal_registry::ProposalRegistry::new();
-            proposal_registry.install_listener(&handle);
+            proposal_registry.install_listener(
+                &handle,
+                "chat:config-proposal-response".to_string(),
+                "[mgmt] 收到未知 request_id 的提案响应（可能已超时）".to_string(),
+                "[mgmt] 提案响应解析失败".to_string(),
+            );
             handle.manage(proposal_registry);
 
             // 4) REQ-XC-010: 注入 AgentCmd trait object (生产实现 SqlAgentCmd)

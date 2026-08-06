@@ -72,14 +72,7 @@ function toggleThinking(msgId: string) {
   expandedThinking.value = set;
 }
 
-function formatJson(str: string): string {
-  try { return JSON.stringify(JSON.parse(str), null, 2); } catch { return str; }
-}
-
-function truncateJson(str: string, maxLen = 80): string {
-  if (str.length <= maxLen) return str;
-  return str.substring(0, maxLen) + '…';
-}
+import { formatJson, truncateJson } from "../../utils/format";
 
 function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
@@ -176,8 +169,14 @@ watch(
   },
 );
 
-function copyContent(content: string) {
+const copiedId = ref<string | null>(null);
+
+function copyContent(content: string, id?: string) {
   navigator.clipboard.writeText(content);
+  if (id) {
+    copiedId.value = id;
+    setTimeout(() => { copiedId.value = null; }, 2000);
+  }
 }
 
 function parseImageBlocks(contentBlocks: string): { data: string; mediaType: string }[] {
@@ -354,8 +353,12 @@ const finishReasonLabels: Record<string, string> = {
     <div v-if="chat.loadingMore" class="load-more-hint">加载更早消息…</div>
     <div v-if="!chat.hasMore && chat.messages.length > 50" class="load-more-hint load-more-end">已显示全部消息</div>
 
-    <div v-if="chat.msgLoading && chat.messages.length === 0" class="state-hint">
-      <span class="state-dot" />加载中...
+    <div v-if="chat.msgLoading && chat.messages.length === 0" class="msg-skeleton">
+      <div v-for="n in 5" :key="n" class="msg-skeleton-block">
+        <div class="msg-skeleton-line msg-skel-title" />
+        <div class="msg-skeleton-line msg-skel-body" />
+        <div class="msg-skeleton-line msg-skel-body msg-skel-short" />
+      </div>
     </div>
     <div v-else-if="!chat.activeConvId" class="state-hint">选择一个对话开始</div>
     <div v-else-if="chat.messages.length === 0" class="state-hint">开始一段新的对话</div>
@@ -378,10 +381,11 @@ const finishReasonLabels: Record<string, string> = {
                   <span class="message-time">{{ formatTime(group.items[0].msg.created_at) }}</span>
                 </div>
                 <div class="footer-actions">
-                  <button class="copy-btn" title="复制" @click="copyContent(group.items[0].msg.content)">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <button class="copy-btn" :title="copiedId === group.items[0].msg.id ? '已复制' : '复制'" @click="copyContent(group.items[0].msg.content, group.items[0].msg.id)">
+                    <svg v-if="copiedId !== group.items[0].msg.id" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                       <rect x="9" y="9" width="13" height="13" rx="2" ry="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
                     </svg>
+                    <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--ip-success-base, #16a34a)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
                   </button>
                 </div>
               </div>
@@ -511,10 +515,11 @@ const finishReasonLabels: Record<string, string> = {
                 <span v-if="groupTokenSum(group) > 0" class="badge-tokens">{{ groupTokenSum(group) }} tokens</span>
               </div>
               <div class="footer-actions">
-                <button v-if="groupText(group)" class="copy-btn" title="复制" @click="copyContent(groupText(group))">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <button v-if="groupText(group)" class="copy-btn" :title="copiedId === 'grp-' + group.firstIdx ? '已复制' : '复制'" @click="copyContent(groupText(group), 'grp-' + group.firstIdx)">
+                  <svg v-if="copiedId !== 'grp-' + group.firstIdx" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <rect x="9" y="9" width="13" height="13" rx="2" ry="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
                   </svg>
+                  <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--ip-success-base, #16a34a)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
                 </button>
               </div>
             </div>
@@ -523,14 +528,14 @@ const finishReasonLabels: Record<string, string> = {
       </template>
     </TransitionGroup>
 
+    <!-- 配置提案审批卡片（内联） -->
+    <div v-if="chat.pendingProposal" class="proposal-wrapper">
+      <ConfigProposalCard :proposal="chat.pendingProposal" />
+    </div>
+
     <!-- finish_reason 提示 -->
     <div v-if="chat.lastFinishReason && chat.lastFinishReason !== 'stop' && chat.lastFinishReason !== 'end_turn' && chat.messages.length > 0" class="finish-reason">
       <span>{{ finishReasonLabels[chat.lastFinishReason] || chat.lastFinishReason }}</span>
-    </div>
-
-    <!-- 配置提案卡片（内联在消息流末尾） -->
-    <div v-if="chat.pendingProposal" class="proposal-wrapper">
-      <ConfigProposalCard :proposal="chat.pendingProposal" />
     </div>
 
     <div v-if="chat.sending && chat.messages.length > 0" class="cursor-bar">
@@ -628,6 +633,24 @@ const finishReasonLabels: Record<string, string> = {
 /* ===== 状态 ===== */
 .state-hint { height:100%; display:flex; align-items:center; justify-content:center; gap:8px; color:var(--ip-color-text-tertiary); font-size:var(--ip-text-body-sm-size); }
 .state-dot { width:6px; height:6px; border-radius:50%; background-color:var(--ip-primary-500); animation:cursor-pulse 1.2s ease-in-out infinite; }
+
+/* 骨架屏：消息列表加载中 */
+.msg-skeleton { display:flex; flex-direction:column; gap:24px; padding:24px; }
+.msg-skeleton-block { display:flex; flex-direction:column; gap:8px; }
+.msg-skeleton-line {
+  height:14px; border-radius:var(--ip-radius-sm);
+  background:linear-gradient(90deg, var(--ip-color-bg-tertiary) 25%, var(--ip-color-bg-secondary) 50%, var(--ip-color-bg-tertiary) 75%);
+  background-size:200% 100%;
+  animation:skeleton-shimmer 1.5s infinite;
+}
+.msg-skel-title { width:30%; }
+.msg-skel-body { width:80%; }
+.msg-skel-short { width:55%; }
+
+@keyframes skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
 
 /* ===== 滚动到底按钮 ===== */
 .scroll-bottom-btn { position:fixed; top:80px; right:48px; z-index:50; width:32px; height:32px; border-radius:var(--ip-radius-lg); border:1px solid var(--ip-color-border-default); background-color:var(--ip-color-bg-elevated); color:var(--ip-color-text-secondary); box-shadow:var(--ip-shadow-sm); cursor:pointer; display:flex; align-items:center; justify-content:center; transition:all var(--ip-duration-fast) var(--ip-ease-out); backdrop-filter:blur(8px); }

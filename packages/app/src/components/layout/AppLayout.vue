@@ -34,11 +34,9 @@ onMounted(() => {
     <Sidebar />
     <main class="app-main">
       <router-view v-slot="{ Component }">
-        <Transition name="route-fade" mode="out-in">
-          <keep-alive>
-            <component :is="Component" />
-          </keep-alive>
-        </Transition>
+        <keep-alive>
+          <component :is="Component" />
+        </keep-alive>
       </router-view>
     </main>
   </div>

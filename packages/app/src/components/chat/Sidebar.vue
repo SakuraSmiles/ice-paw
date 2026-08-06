@@ -187,7 +187,7 @@ function timeAgo(dateStr: string): string {
   <aside class="sidebar">
     <!-- 顶部：标题 + 暗色模式切换 -->
     <div class="sidebar-header">
-      <div class="sidebar-brand" role="button" tabindex="0" @click="router.push('/')" @keydown.enter="router.push('/')">
+      <div class="sidebar-brand" role="button" tabindex="0" @click="router.push('/')" @keydown.enter="router.push('/')" @keydown.space.prevent="router.push('/')">
         <span class="brand-icon">✦</span>
         <span class="brand-name">IcePaw</span>
       </div>
@@ -239,7 +239,13 @@ function timeAgo(dateStr: string): string {
       <!-- 分隔线 -->
       <div class="conv-divider"></div>
 
-      <div v-if="chat.convLoading" class="conv-loading">加载中...</div>
+      <div v-if="chat.convLoading" class="conv-skeleton">
+        <div class="conv-skeleton-line" />
+        <div class="conv-skeleton-line" />
+        <div class="conv-skeleton-line" />
+        <div class="conv-skeleton-line" />
+        <div class="conv-skeleton-line" />
+      </div>
       <div v-else-if="searchQuery && filteredConversations.length === 0" class="conv-empty">无匹配对话</div>
       <div v-else-if="!searchQuery && scopedConversations.length === 0 && agent.loaded" class="conv-empty">
         {{ scopeProjectId ? "项目内暂无对话" : "暂无对话" }}
@@ -454,6 +460,22 @@ function timeAgo(dateStr: string): string {
   text-align: center;
   font-size: var(--ip-text-body-sm-size);
   color: var(--ip-color-text-tertiary);
+}
+
+/* 骨架屏：侧栏会话列表加载中 */
+.conv-skeleton { display: flex; flex-direction: column; gap: 8px; padding: 8px 12px; }
+.conv-skeleton-line {
+  height: 16px; border-radius: var(--ip-radius-sm);
+  background: linear-gradient(90deg, var(--ip-color-bg-tertiary) 25%, var(--ip-color-bg-secondary) 50%, var(--ip-color-bg-tertiary) 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s infinite;
+}
+.conv-skeleton-line:first-child { width: 70%; }
+.conv-skeleton-line:last-child { width: 45%; }
+
+@keyframes skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
 }
 
 .conv-item {

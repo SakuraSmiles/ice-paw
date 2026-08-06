@@ -5,9 +5,7 @@ import { useChatStore } from "../../stores/chat";
 
 const chat = useChatStore();
 
-function formatJson(str: string): string {
-  try { return JSON.stringify(JSON.parse(str), null, 2); } catch { return str; }
-}
+import { formatJson } from "../../utils/format";
 
 function allow() {
   chat.respondToAuth(true);

@@ -22,7 +22,7 @@ use tauri::Emitter;
 use crate::error::{AppError, AppResult};
 use crate::harness::proposal_guard;
 use crate::infra::protocol::{
-    ConfigProposalPayload, ProposalAction, ProposalDecision,
+    ConfigProposalPayload, PendingRequestCancelPayload, ProposalAction, ProposalDecision,
 };
 
 use super::client::{McpClient, ToolContext};
@@ -277,10 +277,32 @@ impl McpClient for ProposeConfigChangeTool {
             return Err(AppError::Internal(format!("无法发送配置提案事件: {e}")));
         }
 
-        // 7. 等待前端响应（120s 超时）
+        // 7. 等待前端响应（120s 超时，对话取消时立即中止——不再傻等满 120s）
         const TIMEOUT: Duration = Duration::from_secs(120);
 
-        let response = tokio::time::timeout(TIMEOUT, rx).await;
+        let response = match ctx.cancel.as_ref() {
+            Some(cancel) => tokio::select! {
+                biased;
+                _ = crate::harness::tool_executor::wait_for_cancel(cancel) => {
+                    // 对话被取消（用户点了「停止生成」）：立即释放 oneshot 并返回，
+                    // emit abort cancel 让前端隐藏卡片，避免提案卡到超时。
+                    let _ = proposal_registry.take(&request_id).await;
+                    emit_proposal_cancel(app_handle, &request_id, &ctx.conv_id, "abort");
+                    tracing::info!(
+                        target: "ice_paw.mgmt",
+                        request_id = %request_id,
+                        "提案因对话取消而中止"
+                    );
+                    return Ok(serde_json::json!({
+                        "status": "cancelled",
+                        "message": "对话已取消，提案随之失效。"
+                    })
+                    .to_string());
+                }
+                r = tokio::time::timeout(TIMEOUT, rx) => r,
+            },
+            None => tokio::time::timeout(TIMEOUT, rx).await,
+        };
 
         match response {
             Ok(Ok(resp)) => {
@@ -316,6 +338,7 @@ impl McpClient for ProposeConfigChangeTool {
                 }
             }
             Ok(Err(_)) => {
+                emit_proposal_cancel(app_handle, &request_id, &ctx.conv_id, "cancelled");
                 tracing::warn!(
                     target: "ice_paw.mgmt",
                     request_id = %request_id,
@@ -329,6 +352,7 @@ impl McpClient for ProposeConfigChangeTool {
             }
             Err(_elapsed) => {
                 let _ = proposal_registry.take(&request_id).await;
+                emit_proposal_cancel(app_handle, &request_id, &ctx.conv_id, "timeout");
                 tracing::warn!(
                     target: "ice_paw.mgmt",
                     request_id = %request_id,
@@ -341,6 +365,29 @@ impl McpClient for ProposeConfigChangeTool {
                 .to_string())
             }
         }
+    }
+}
+
+/// 通知前端清除对应提案卡片（提案失效时调用）。
+///
+/// 提案超时/通道关闭后，loop_engine 会带着 timeout/cancelled 结果继续，
+/// 但前端 pendingProposals 里仍可能残留该条目（尤其用户切走后再切回）。
+/// emit 此事件让前端按 request_id 清除，避免用户对已失效提案点「批准」
+/// 真的创建 agent（对话流已当提案取消 → 状态分裂、孤儿 agent）。
+/// emit 失败仅 warn，不阻断工具返回。
+fn emit_proposal_cancel(app: &tauri::AppHandle, request_id: &str, conv_id: &str, reason: &str) {
+    if let Err(e) = app.emit(
+        "chat:config-proposal-cancel",
+        PendingRequestCancelPayload {
+            request_id: request_id.into(),
+            conversation_id: conv_id.into(),
+            reason: reason.into(),
+        },
+    ) {
+        tracing::warn!(
+            target: "ice_paw.mgmt",
+            "emit chat:config-proposal-cancel 失败: {e}"
+        );
     }
 }
 

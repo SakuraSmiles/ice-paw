@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // McpSettings.vue — MCP Server 设置（状态机驱动，单一数据源）
-import { ref, onMounted, onActivated } from "vue";
+import { ref, onMounted, onActivated, onDeactivated, onBeforeUnmount } from "vue";
 import McpForm from "../../components/mcp/McpForm.vue";
 import Switch from "../../components/common/Switch.vue";
 import type { McpServer, McpServerSnapshot } from "../../types";
@@ -37,6 +37,12 @@ onActivated(() => {
   if (hasLoaded && Date.now() - lastLoadTime.value > 30_000) {
     reload().then(() => startPollIfNeeded());
   }
+});
+onDeactivated(() => {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+});
+onBeforeUnmount(() => {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
 });
 
 function startPollIfNeeded() {
