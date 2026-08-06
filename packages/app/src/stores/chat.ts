@@ -27,8 +27,8 @@ import type {
   ChatToolResultPayload,
   ChatThinkingPayload,
   ToolAuthRequestPayload,
-  type ConfigProposalPayload,
-  type ConfigProposalResponse,
+  ConfigProposalPayload,
+  ConfigProposalResponse,
 } from "../types";
 import { bridge } from "../api/bridge";
 import { useAgentStore } from "./agent";
@@ -333,6 +333,16 @@ export const useChatStore = defineStore("chat", () => {
 
   // ===== Tauri 事件监听 =====
   let inited = false;
+  const unlisteners: Array<() => void> = [];
+
+  /** 拆解所有已注册的 Tauri 事件监听器，重置注册状态。
+   *  供 reset() / clearActiveConversation() 调用。*/
+  function destroyEvents() {
+    for (const u of unlisteners) u();
+    unlisteners.length = 0;
+    inited = false;
+    if (sendTimeout) { clearTimeout(sendTimeout); sendTimeout = null; }
+  }
 
   /** 把当前 streaming 状态冻结到最后一条 assistant 消息：
    *  - 末条 assistant 写入 content + content_blocks（thinking / text / tool_use，不含 result）
@@ -384,11 +394,18 @@ export const useChatStore = defineStore("chat", () => {
     }
   }
 
-  function initEvents() {
-    if (inited) return;
+  /** 订阅 Tauri 事件并自动管理取消函数 */
+  async function subscribe<T>(event: string, handler: (event: { payload: T }) => void) {
+    const u = await listen<T>(event, handler);
+    unlisteners.push(u);
+  }
+
+  async function initEvents() {
+    // 先拆解旧监听器，确保幂等安全（替代简单的 inited 阻隔）
+    if (inited) destroyEvents();
     inited = true;
 
-    listen<ChatStartPayload>("chat:start", (e) => {
+    await subscribe<ChatStartPayload>("chat:start", (e) => {
       if (e.payload.conversation_id !== activeConvId.value) return;
       messages.value.push({
         id: e.payload.assistant_message_id,
@@ -407,7 +424,7 @@ export const useChatStore = defineStore("chat", () => {
     // 多轮工具调用：每轮工具执行完毕后，后端创建下一轮 assistant 占位并 emit。
     // 前端据此冻结上一条 assistant（写入 tool_use/text/thinking）+ 插入 user(tool_result)
     // + 重置 streaming 状态 + push 新占位。
-    listen<ChatAssistantStartPayload>("chat:assistant-start", (e) => {
+    await subscribe<ChatAssistantStartPayload>("chat:assistant-start", (e) => {
       if (e.payload.conversation_id !== activeConvId.value) return;
       resetSendTimeout();
       // 确保 sending 为 true：多轮工具执行间隙可能触发静默超时把它置 false
@@ -431,7 +448,7 @@ export const useChatStore = defineStore("chat", () => {
       });
     });
 
-    listen<ChatChunkPayload>("chat:chunk", (e) => {
+    await subscribe<ChatChunkPayload>("chat:chunk", (e) => {
       const cid = e.payload.conversation_id;
       if (cid !== activeConvId.value) {
         // 后台会话：累积文本到快照，切回时恢复（不触活跃 UI / messages）
@@ -451,7 +468,7 @@ export const useChatStore = defineStore("chat", () => {
     });
 
     // ---- 工具调用事件 ----
-    listen<ChatToolCallStartPayload>("chat:tool-call-start", (e) => {
+    await subscribe<ChatToolCallStartPayload>("chat:tool-call-start", (e) => {
       if (e.payload.conversation_id !== activeConvId.value) return;
       resetSendTimeout();
       const map = new Map(streamingToolCalls.value);
@@ -464,7 +481,7 @@ export const useChatStore = defineStore("chat", () => {
       streamingToolCalls.value = map;
     });
 
-    listen<ChatToolCallDeltaPayload>("chat:tool-call-delta", (e) => {
+    await subscribe<ChatToolCallDeltaPayload>("chat:tool-call-delta", (e) => {
       if (e.payload.conversation_id !== activeConvId.value) return;
       resetSendTimeout();
       const map = new Map(streamingToolCalls.value);
@@ -476,7 +493,7 @@ export const useChatStore = defineStore("chat", () => {
       }
     });
 
-    listen<ChatToolCallEndPayload>("chat:tool-call-end", (e) => {
+    await subscribe<ChatToolCallEndPayload>("chat:tool-call-end", (e) => {
       if (e.payload.conversation_id !== activeConvId.value) return;
       resetSendTimeout();
       const map = new Map(streamingToolCalls.value);
@@ -488,7 +505,7 @@ export const useChatStore = defineStore("chat", () => {
       }
     });
 
-    listen<ChatToolResultPayload>("chat:tool-result", (e) => {
+    await subscribe<ChatToolResultPayload>("chat:tool-result", (e) => {
       if (e.payload.conversation_id !== activeConvId.value) return;
       resetSendTimeout();
       const map = new Map(streamingToolCalls.value);
@@ -501,7 +518,7 @@ export const useChatStore = defineStore("chat", () => {
     });
 
     // ---- 思考过程 ----
-    listen<ChatThinkingPayload>("chat:thinking", (e) => {
+    await subscribe<ChatThinkingPayload>("chat:thinking", (e) => {
       const cid = e.payload.conversation_id;
       if (cid !== activeConvId.value) {
         const m = new Map(bgStreams.value);
@@ -518,7 +535,7 @@ export const useChatStore = defineStore("chat", () => {
       streamingThinking.value += e.payload.content;
     });
 
-    listen<ChatDonePayload>("chat:done", (e) => {
+    await subscribe<ChatDonePayload>("chat:done", (e) => {
       const cid = e.payload.conversation_id;
       if (cid !== activeConvId.value) {
         // 后台会话完成：后端已把最终态落库，清掉快照即可（不触活跃 UI，无需前端 freeze）
@@ -588,7 +605,7 @@ export const useChatStore = defineStore("chat", () => {
       }
     });
 
-    listen<ChatErrorPayload>("chat:error", (e) => {
+    await subscribe<ChatErrorPayload>("chat:error", (e) => {
       const cid = e.payload.conversation_id;
       // 标记：后端会紧跟一次 chat:done(abort) 收尾，chat:done 据此跳过 freeze + lastFinishReason
       recentErrorConvs.add(cid);
@@ -623,13 +640,13 @@ export const useChatStore = defineStore("chat", () => {
     });
 
     // ---- 工具授权请求 ----
-    listen<ToolAuthRequestPayload>("chat:tool-auth-request", (e) => {
+    await subscribe<ToolAuthRequestPayload>("chat:tool-auth-request", (e) => {
       if (e.payload.conversation_id !== activeConvId.value) return;
       pendingAuthRequest.value = e.payload;
     });
 
     // ---- 配置提案请求 ----
-    listen<ConfigProposalPayload>("chat:config-proposal", (e) => {
+    await subscribe<ConfigProposalPayload>("chat:config-proposal", (e) => {
       if (e.payload.conversation_id !== activeConvId.value) return;
       pendingProposal.value = e.payload;
     });
@@ -650,7 +667,7 @@ export const useChatStore = defineStore("chat", () => {
   }
 
   function reset() {
-    if (sendTimeout) { clearTimeout(sendTimeout); sendTimeout = null; }
+    destroyEvents();
     conversations.value = [];
     activeConvId.value = null;
     messages.value = [];

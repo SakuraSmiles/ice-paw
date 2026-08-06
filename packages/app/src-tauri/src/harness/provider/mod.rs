@@ -79,11 +79,11 @@ pub fn create_provider(
     match provider {
         // OpenAI Chat Completions 兼容厂商
         "openai" | "glm" | "deepseek" => Ok(Arc::new(
-            OpenAiAdapter::new(model.to_string(), url),
+            OpenAiAdapter::new(model.to_string(), url)?,
         )),
         // Anthropic Messages API 兼容厂商（Anthropic 官方 + MiniMax）
         "anthropic" | "minimax" | "minimax-cn" => Ok(Arc::new(
-            AnthropicAdapter::new(model.to_string(), url, cache_prompt),
+            AnthropicAdapter::new(model.to_string(), url, cache_prompt)?,
         )),
         // 兜底：未识别 provider 走 OpenAI 兼容（向后兼容）
         _ => {
@@ -95,7 +95,7 @@ pub fn create_provider(
             Ok(Arc::new(OpenAiAdapter::new(
                 model.to_string(),
                 url,
-            )))
+            )?))
         }
     }
 }

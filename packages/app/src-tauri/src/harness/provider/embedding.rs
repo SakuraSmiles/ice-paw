@@ -241,17 +241,17 @@ impl OpenAiEmbeddingBackend {
     ///
     /// - `model`    embedding 模型名（默认 `text-embedding-3-small`）
     /// - `base_url` API 根地址（如 `https://api.openai.com`）
-    pub fn new(model: String, base_url: String) -> Self {
+    pub fn new(model: String, base_url: String) -> AppResult<Self> {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(60))
             .build()
-            .expect("reqwest client build");
-        Self {
+            .map_err(|e| AppError::Internal(format!("构建 embedding HTTP 客户端失败: {e}")))?;
+        Ok(Self {
             model,
             base_url,
             client,
-        }
+        })
     }
 
     /// 返回 backend 当前使用的模型名
