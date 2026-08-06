@@ -8,7 +8,7 @@
 
 use sqlx::SqlitePool;
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 
 use crate::db::models::{HookConfig, HookPoint, NewMessage};
@@ -362,6 +362,19 @@ fn spawn_stream_loop(
     hooks: HookConfig,
 ) {
     tokio::spawn(async move {
+        // ★ RAII Drop 守卫：无论此任务如何退出（正常完成 / panic / runtime 关闭时被 drop），
+        // 都保证注销 ChatState 中的 cancel_token。这消除了 scopeguard disarm（L303）后
+        // 唯一清理路径失效的风险——之前若 stream_loop panic 或 runtime 关闭时 future 被
+        // drop 而未执行到 finalize_* → cleanup → unregister，token 永久残留导致会话卡死。
+        let _cleanup_guard = scopeguard::guard((), {
+            let app = app.clone();
+            let conv_id = conv_id.clone();
+            move |_| {
+                let chat_state = app.state::<ChatState>();
+                chat_state.unregister(&conv_id);
+            }
+        });
+
         // tool_registry 由 send_message 组装（global server + per-agent server），直接使用
         // W2.4: maintain observable state across the stream loop
         let mut observable = RoundState::default();
