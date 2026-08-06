@@ -61,13 +61,27 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_stronghold::stronghold::Stronghold;
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::error::{AppError, AppResult};
 
 /// 内部状态：包装 plugin 的 `Stronghold`，对它做并发安全包装
 pub struct CryptoState {
     pub inner: Arc<Mutex<Stronghold>>,
+}
+
+impl CryptoState {
+    /// 获取 Stronghold 锁，从 Mutex 毒化状态自动恢复。
+    ///
+    /// 当持有锁的线程 panic 时，`std::sync::Mutex` 被标记为 "poisoned"。
+    /// 我们选择恢复数据而非 panic 传播，因为：
+    /// - Stronghold 内部是自包含的 HashMap，毒化不会导致数据损坏
+    /// - 单次 panic 不应让整个应用的密钥存储不可用
+    ///
+    /// 与 `ChatState::lock()` 同模式。
+    fn lock_sh(&self) -> MutexGuard<'_, Stronghold> {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner())
+    }
 }
 
 /// 储存的 value 形状
@@ -116,9 +130,9 @@ pub(crate) fn derive_stronghold_key(passphrase: &[u8]) -> [u8; STRONGHOLD_KEY_LE
     key
 }
 
-/// 取出 CryptoState 内部的 Arc 克隆（避免对 AppHandle 的长借用）
-fn inner_arc(app: &AppHandle) -> Arc<Mutex<Stronghold>> {
-    app.state::<CryptoState>().inner.clone()
+/// 取出 CryptoState 引用，避免对 Arc 的额外 clone + 简化调用方
+fn crypto(app: &AppHandle) -> tauri::State<'_, CryptoState> {
+    app.state::<CryptoState>()
 }
 
 /// 初始化 stronghold：放 `app.manage(CryptoState)`
@@ -160,7 +174,7 @@ pub fn init(app: &AppHandle) -> AppResult<()> {
     let sh_arc = Arc::new(Mutex::new(sh));
 
     {
-        let guard: MutexGuard<'_, Stronghold> = sh_arc.lock().expect("init: mutex poisoned");
+        let guard: MutexGuard<'_, Stronghold> = sh_arc.lock().unwrap_or_else(|e| e.into_inner());
 
         // ★ P0 修复点：用 `load_client` 而不是 `get_client`。
         //   `load_client` 走 `self.snapshot → self.clients` 的恢复路径，
@@ -210,6 +224,9 @@ pub fn init(app: &AppHandle) -> AppResult<()> {
 }
 
 /// 储存 (api_key, base_url) 到 vault
+///
+/// 若 `insert` 成功但后续 `save` 失败，会做 best-effort 回滚（删除刚插入的 key），
+/// 避免幽灵密钥残留：调用方收到错误、认为操作失败，但密钥实际已写入快照。
 pub fn store_api_key(
     app: &AppHandle,
     agent_id: &str,
@@ -220,8 +237,8 @@ pub fn store_api_key(
         return Err(AppError::Validation("agent_id 不能为空".into()));
     }
 
-    let sh_arc = inner_arc(app);
-    let sh = sh_arc.lock().expect("store: mutex poisoned");
+    let state = crypto(app);
+    let sh = state.lock_sh();
 
     let record = ApiKeyRecord {
         api_key: api_key.to_string(),
@@ -230,14 +247,24 @@ pub fn store_api_key(
     };
     let bytes = serde_json::to_vec(&record)?;
 
-    let client = sh
-        .get_client(CLIENT_NAME)
-        .map_err(|e| AppError::Stronghold(format!("get_client: {e}")))?;
-    let store = client.store();
-    store
-        .insert(agent_id.as_bytes().to_vec(), bytes, None)
-        .map_err(|e| AppError::Stronghold(format!("store.insert: {e}")))?;
-    sh.save()?;
+    // 在显式作用域内做 insert，让 store 引用在 save 前释放
+    let insert_result = {
+        let client = sh
+            .get_client(CLIENT_NAME)
+            .map_err(|e| AppError::Stronghold(format!("get_client: {e}")))?;
+        let store = client.store();
+        store.insert(agent_id.as_bytes().to_vec(), bytes, None)
+    };
+    insert_result.map_err(|e| AppError::Stronghold(format!("store.insert: {e}")))?;
+
+    // 持久化；失败则 best-effort 回滚已插入的 key
+    if let Err(e) = sh.save() {
+        // 重新获取 store 做回滚（之前的 store 引用已随作用域释放）
+        if let Ok(client) = sh.get_client(CLIENT_NAME) {
+            let _ = client.store().delete(agent_id.as_bytes());
+        }
+        return Err(AppError::Stronghold(format!("store save: {e}")));
+    }
     Ok(())
     // sh (guard) dropped here at function exit
 }
@@ -247,8 +274,8 @@ pub fn fetch_api_key(
     app: &AppHandle,
     agent_id: &str,
 ) -> AppResult<(String, Option<String>)> {
-    let sh_arc = inner_arc(app);
-    let sh = sh_arc.lock().expect("fetch: mutex poisoned");
+    let state = crypto(app);
+    let sh = state.lock_sh();
 
     let client = sh
         .get_client(CLIENT_NAME)
@@ -266,28 +293,31 @@ pub fn fetch_api_key(
     Ok((record.api_key, record.base_url))
 }
 
-/// 删除该 agent 对应的密钥（找不到不报错）
+/// 删除该 agent 对应的密钥。
+///
+/// - 若密钥存在：删除并持久化
+/// - 若密钥不存在（`store.delete` 返回 `Ok(None)`）：无操作，返回成功
+/// - 存储层错误：向上传播（不再静默丢弃）
 pub fn delete_api_key(app: &AppHandle, agent_id: &str) -> AppResult<()> {
-    let sh_arc = inner_arc(app);
-    let sh = sh_arc.lock().expect("delete: mutex poisoned");
+    let state = crypto(app);
+    let sh = state.lock_sh();
     let client = sh
         .get_client(CLIENT_NAME)
         .map_err(|e| AppError::Stronghold(format!("get_client: {e}")))?;
     let store = client.store();
-    match store.delete(agent_id.as_bytes()) {
-        Ok(_) => {}
-        Err(e) => {
-            warn!(target: "ice_paw.crypto", "delete 返回错误（容错忽略）: {e}");
-        }
+    // `store.delete` 对"key 不存在"返回 Ok(None)（不是 Err），
+    // 因此 Err 一定是真实存储错误，必须向上传播。
+    if let Err(e) = store.delete(agent_id.as_bytes()) {
+        return Err(AppError::Stronghold(format!("store.delete: {e}")));
     }
-    let _ = sh.save();
+    sh.save().map_err(|e| AppError::Stronghold(format!("delete save: {e}")))?;
     Ok(())
 }
 
 /// 列出所有已存 agent_id
 pub fn list_agent_ids(app: &AppHandle) -> AppResult<Vec<String>> {
-    let sh_arc = inner_arc(app);
-    let sh = sh_arc.lock().expect("list: mutex poisoned");
+    let state = crypto(app);
+    let sh = state.lock_sh();
     let client = sh
         .get_client(CLIENT_NAME)
         .map_err(|e| AppError::Stronghold(format!("get_client: {e}")))?;
@@ -303,8 +333,8 @@ pub fn list_agent_ids(app: &AppHandle) -> AppResult<Vec<String>> {
 
 /// 检查某个 agent 是否已存 api_key
 pub fn has_api_key(app: &AppHandle, agent_id: &str) -> AppResult<bool> {
-    let sh_arc = inner_arc(app);
-    let sh = sh_arc.lock().expect("has: mutex poisoned");
+    let state = crypto(app);
+    let sh = state.lock_sh();
     let client = sh
         .get_client(CLIENT_NAME)
         .map_err(|e| AppError::Stronghold(format!("get_client: {e}")))?;
