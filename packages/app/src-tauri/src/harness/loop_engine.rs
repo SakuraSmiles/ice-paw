@@ -166,15 +166,18 @@ fn emit_intermediate_round_state(
 /// `RoundState`（observable）刻意未收入此结构体，因为它是循环过程中
 /// 累积写入的**输出**遥测状态，而不是配置输入。
 #[allow(clippy::too_many_arguments)]
-pub(crate) struct LoopContext {
+/// 对话循环的不可变配置（从 LoopContext 拆分，消除 24 参数构造器）。
+///
+/// 创建后不被循环修改。通过 `LoopContext` 的 `Deref` 透明访问。
+pub(crate) struct LoopConfig {
     // ---- 标识与会话 ----
     pub conv_id: String,
     pub asst_msg_id: String,
     /// M1.3: 用户消息 ID（用于清理阶段回写 token_count）
     pub user_msg_id: String,
-    /// RAG: 当前 Agent ID（透传给 ToolContext，供 search_kb 查「agent 专业」KB）
+    /// RAG: 当前 Agent ID（透传给 ToolContext）
     pub agent_id: String,
-    /// RAG: 当前项目 ID（v1 暂不启用 project KB，字段预留；None = 默认项目）
+    /// RAG: 当前项目 ID
     pub project_id: Option<String>,
 
     // ---- 基础设施 ----
@@ -187,110 +190,48 @@ pub(crate) struct LoopContext {
     pub temperature: f64,
     pub max_tokens: i32,
 
-    // ---- 对话消息缓冲（循环中会 push 新消息） ----
-    pub messages: Vec<ChatMessage>,
-
     // ---- 工具 ----
     pub tool_registry: McpRegistry,
     pub tools_enabled: bool,
-    /// A2-3: 工具授权响应全局注册表（前端响应 → Rust oneshot 解锁）
     pub auth_registry: ToolAuthRegistry,
-    /// A2-3: 本次会话已授权路径表（同一会话内用户允许过的路径不再弹窗）
     pub auth_session: PathAuthSession,
-    /// A2-3: 路径白名单配置
     pub whitelist: PathWhitelistConfig,
 
     // ---- 循环控制 ----
     pub cancel: CancellationToken,
     pub budget: LoopBudget,
 
-    // ---- M1.2: 工具裁剪所需上下文 ----
-    /// M1.2: 当前用户消息纯文本（用于工具相关性打分）
+    // ---- M1.2: 工具裁剪 ----
     pub query: Option<String>,
-    /// M1.2: 最近调用过的工具名列表（顺序不限；用于打分历史权重）
     pub call_history: Vec<String>,
 
     // ---- P0-3: 会话级 model override ----
-    /// P0-3: 覆盖 Agent 默认 model（None = 使用 Agent 默认）。
-    /// 透传给 `provider.stream_chat(model: ...)`，
-    /// 仅影响本次请求，不改写 Agent 配置。
     pub model: Option<String>,
-
-    /// 助手消息持久化时写入 `messages.model` 的值（effective model =
-    /// override 或 Agent 默认）。loop_engine 创建后续轮次的 assistant 占位
-    /// 消息时复用此值，保证一次发送产生的所有 assistant 消息 model 一致。
     pub asst_model: Option<String>,
 
-    // ---- 对话钩子（agent.yaml `hooks`；BeforeLlm/AfterTool/ConversationEnd 用）----
-    /// 钩子配置。ConversationStart 已在 chat_cmd 执行（需注入 system_prompt），
-    /// 这里承载 BeforeLlm（每轮注入临时 system 消息）/ AfterTool（经 execute_tool_round）
-    /// / ConversationEnd（stream_loop 收尾）三个点。
+    // ---- 对话钩子 ----
     pub hooks: HookConfig,
 }
 
+/// 对话循环上下文：不可变配置 + 可变消息缓冲。
+///
+/// 通过 `Deref<Target = LoopConfig>` 透明访问配置字段（`ctx.pool`、
+/// `ctx.app` 等），`messages` 直接可变访问。构造时传入 `LoopConfig`。
+pub(crate) struct LoopContext {
+    pub config: LoopConfig,
+    pub messages: Vec<ChatMessage>,
+}
+
+impl std::ops::Deref for LoopContext {
+    type Target = LoopConfig;
+    fn deref(&self) -> &LoopConfig {
+        &self.config
+    }
+}
+
 impl LoopContext {
-    /// 构造 `LoopContext`。这是 W6.2 引入的唯一构造入口。
-    ///
-    /// 参数数量看似很多，但这就是该结构体的全部职责 —— 把原本散落在
-    /// `stream_loop` 形参列表里的 13 个字段集中起来。允许
-    /// `clippy::too_many_arguments` 因为这就是本结构体的存在意义。
-    ///
-    /// M1.2: 新增 `user_msg_id` / `query` / `call_history` 三个字段。
-    /// `user_msg_id` 是 M1.3 清理阶段回写 token_count 的关键。
-    /// `query` + `call_history` 用于 `list_tool_defs_with_query` 打分。
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new(
-        conv_id: String,
-        asst_msg_id: String,
-        user_msg_id: String,
-        app: AppHandle,
-        pool: SqlitePool,
-        provider: Arc<dyn LlmProvider>,
-        api_key: String,
-        temperature: f64,
-        max_tokens: i32,
-        messages: Vec<ChatMessage>,
-        tool_registry: McpRegistry,
-        tools_enabled: bool,
-        cancel: CancellationToken,
-        budget: LoopBudget,
-        auth_registry: ToolAuthRegistry,
-        auth_session: PathAuthSession,
-        whitelist: PathWhitelistConfig,
-        query: Option<String>,
-        call_history: Vec<String>,
-        model: Option<String>,
-        asst_model: Option<String>,
-        agent_id: String,
-        project_id: Option<String>,
-        hooks: HookConfig,
-    ) -> Self {
-        Self {
-            conv_id,
-            asst_msg_id,
-            user_msg_id,
-            agent_id,
-            project_id,
-            app,
-            pool,
-            provider,
-            api_key,
-            temperature,
-            max_tokens,
-            messages,
-            tool_registry,
-            tools_enabled,
-            auth_registry,
-            auth_session,
-            whitelist,
-            cancel,
-            budget,
-            query,
-            call_history,
-            model,
-            asst_model,
-            hooks,
-        }
+    pub(crate) fn new(config: LoopConfig, messages: Vec<ChatMessage>) -> Self {
+        Self { config, messages }
     }
 }
 
@@ -885,7 +826,7 @@ async fn stream_loop_inner(
             Some(ctx.api_key.clone()),
         )
         .await;
-        let tool_result_blocks: Vec<ContentBlock> = execute_tool_round(
+        let tool_result_blocks: Vec<ContentBlock> = match execute_tool_round(
             &ctx.app,
             &ctx.tool_registry,
             &ctx.auth_registry,
@@ -898,10 +839,27 @@ async fn stream_loop_inner(
             &ctx.hooks,
         )
         .await
-        .unwrap_or_else(|e| {
-            tracing::warn!(target: "ice_paw.chat", "工具执行失败: {}", e);
-            Vec::new()
-        });
+        {
+            Ok(blocks) => blocks,
+            Err(e) => {
+                // 工具执行编排整体失败 → 无法构造有效的 tool_result，
+                // 注入空 user 消息会破坏 Anthropic 协议（tool_use 无对应
+                // tool_result），导致后续轮次 400。视为致命错误中断循环。
+                let err_msg = format!("工具执行失败: {}", e);
+                tracing::error!(target: "ice_paw.chat", "{}", err_msg);
+                let _ = repo::message::update_error(&ctx.pool, &current_asst_msg_id, &err_msg).await;
+                let _ = ctx.app.emit(
+                    "chat:error",
+                    ChatErrorPayload {
+                        conversation_id: ctx.conv_id.clone(),
+                        message_id: current_asst_msg_id.clone(),
+                        kind: "internal".into(),
+                        message: friendly_error(&err_msg),
+                    },
+                );
+                return finalize_cancel(&ctx.app, &ctx.pool, &ctx.conv_id, &current_asst_msg_id);
+            }
+        };
 
         // 【阶段 F】持久化 tool_result 为独立 user 消息（role=user，符合 Anthropic 协议：
         // tool_result 必须在 user 消息里）。多个 tool_result 合并进同一条 user 消息。

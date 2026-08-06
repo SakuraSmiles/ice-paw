@@ -18,6 +18,7 @@ use tokio::sync::RwLock;
 
 use crate::error::{AppError, AppResult};
 use crate::harness::proposal_registry::ProposalRegistry;
+use crate::infra::cancel::CancellationToken;
 use crate::infra::protocol::ToolDef;
 
 use super::types::AuthorizationLevel;
@@ -54,6 +55,9 @@ pub struct ToolContext {
     pub app_handle: Option<AppHandle>,
     /// 提案注册表（propose_config_change 等配置工具用；None = 不可用）
     pub proposal_registry: Option<ProposalRegistry>,
+    /// 对话取消令牌（propose_config_change 等需在「停止生成」时提前返回的工具用；
+    /// 由 execute_tool_round 的 enriched_ctx 注入；None = 无取消监听，回退纯超时）
+    pub cancel: Option<CancellationToken>,
 }
 
 // =========================================================================
@@ -117,6 +121,11 @@ pub struct McpRegistry {
 }
 
 impl Clone for McpRegistry {
+    /// 同步快照克隆（使用 `try_read`）。
+    ///
+    /// **注意**：若当前有写锁占用（register/unregister），
+    /// 会返回空注册表并打 warn 日志。热路径（如 `send_message`）
+    /// 应优先使用 `snapshot().await` 获取可靠快照。
     fn clone(&self) -> Self {
         let snapshot: HashMap<String, Arc<dyn McpClient>> = match self.clients.try_read() {
             Ok(guard) => (*guard).clone(),
@@ -136,6 +145,22 @@ impl Clone for McpRegistry {
 }
 
 impl McpRegistry {
+    /// 异步获取可靠的工具快照（阻塞读，不受写锁竞争影响）。
+    ///
+    /// 热路径（如 `send_message`）应使用此方法替代 `clone()`，
+    /// 确保 LLM 看到完整的工具列表。
+    pub async fn snapshot(&self) -> HashMap<String, Arc<dyn McpClient>> {
+        let guard = self.clients.read().await;
+        (*guard).clone()
+    }
+
+    /// 从快照 HashMap 构造注册表（供 snapshot() 调用方使用）
+    pub fn from_map(map: HashMap<String, Arc<dyn McpClient>>) -> Self {
+        McpRegistry {
+            clients: RwLock::new(map),
+        }
+    }
+
     /// 创建空的注册表
     pub fn new() -> Self {
         McpRegistry {
@@ -392,6 +417,7 @@ mod tests {
             api_key: None,
             app_handle: None,
             proposal_registry: None,
+            cancel: None,
         };
         let result = registry.dispatch("nonexistent", "{}", &ctx).await;
         assert!(result.is_err());
@@ -411,6 +437,7 @@ mod tests {
             api_key: None,
             app_handle: None,
             proposal_registry: None,
+            cancel: None,
         };
         // StubClient 未 override execute_with_context → 走默认实现 → 返回 "stub"
         registry.register(make_stub("legacy", "legacy tool")).await;

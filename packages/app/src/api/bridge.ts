@@ -164,6 +164,25 @@ const chat = {
     try { await invoke<void>("stop_generation", { conversationId }); }
     catch (err) { throw wrapInvokeError("chat.stopGeneration", err); }
   },
+  /** 配置提案审批响应（invoke：原 emit 通道因 Tauri v2 事件作用域不匹配而失效） */
+  async respondProposal(input: {
+    request_id: string;
+    decision: "approved" | "modified" | "rejected";
+    reason?: string | null;
+    changes?: Record<string, string>;
+  }): Promise<void> {
+    try { await invoke<void>("respond_config_proposal", { input }); }
+    catch (err) { throw wrapInvokeError("chat.respondProposal", err); }
+  },
+  /** 工具授权响应（invoke：同上，双通道一起修复） */
+  async respondAuth(input: {
+    request_id: string;
+    allowed: boolean;
+    dont_ask_again?: boolean;
+  }): Promise<void> {
+    try { await invoke<void>("respond_tool_auth", { input }); }
+    catch (err) { throw wrapInvokeError("chat.respondAuth", err); }
+  },
 };
 
 const preferences = {

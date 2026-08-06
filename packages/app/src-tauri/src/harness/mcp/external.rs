@@ -155,16 +155,30 @@ impl ExternalMcpServer {
         let pending: Arc<Mutex<HashMap<String, oneshot::Sender<JsonRpcResponse>>>> =
             Arc::new(Mutex::new(HashMap::new()));
 
-        // 捕获 stderr 日志
+        // 创建取消信号（stdout 和 stderr 读取任务共享）
+        let stop = Arc::new(Notify::new());
+
+        // 捕获 stderr 日志（带取消机制，与 stdout 共享同一个 stop Notify）
         let name_for_err = name.clone();
+        let stop_for_stderr = stop.clone();
         if let Some(stderr) = child.stderr.take() {
             tokio::spawn(async move {
                 let mut reader = BufReader::new(stderr);
                 let mut line = String::new();
-                while let Ok(n) = reader.read_line(&mut line).await {
-                    if n == 0 { break; }
-                    tracing::warn!(target: "ice_paw.mcp", "[stderr] {}: {}", name_for_err, line.trim_end());
-                    line.clear();
+                loop {
+                    tokio::select! {
+                        _ = stop_for_stderr.notified() => break,
+                        result = reader.read_line(&mut line) => {
+                            match result {
+                                Ok(0) => break,
+                                Ok(_) => {
+                                    tracing::warn!(target: "ice_paw.mcp", "[stderr] {}: {}", name_for_err, line.trim_end());
+                                    line.clear();
+                                }
+                                Err(_) => break,
+                            }
+                        }
+                    }
                 }
             });
         }
@@ -196,8 +210,7 @@ impl ExternalMcpServer {
         // 写入 init 请求
         Self::write_line(&writer, &init_req).await?;
 
-        // 启动后台读取任务
-        let stop = Arc::new(Notify::new());
+        // 启动后台 stdout 读取任务（复用已创建的 stop）
         let pending_clone = pending.clone();
         let stop_clone = stop.clone();
         tokio::spawn(Self::read_loop(

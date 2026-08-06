@@ -36,7 +36,10 @@ pub(crate) async fn finalize_assistant_message(
     blocks: &[ContentBlock],
     completion_tokens: Option<u32>,
 ) {
-    let blocks_json = serde_json::to_string(blocks).unwrap_or_else(|_| "[]".to_string());
+    let blocks_json = serde_json::to_string(blocks).unwrap_or_else(|e| {
+        tracing::error!(target: "ice_paw.cleanup", "ContentBlock 序列化失败 (msg_id={}): {}", asst_msg_id, e);
+        "[]".to_string()
+    });
     let token_count = completion_tokens
         .map(|t| t.max(1) as i32)
         .unwrap_or(MIN_TOKEN_COUNT);

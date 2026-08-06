@@ -213,6 +213,10 @@ impl McpClient for ListDirectoryTool {
         "List the contents of a local directory. Returns a list of files and subdirectories."
     }
 
+    fn authorization_level(&self) -> AuthorizationLevel {
+        AuthorizationLevel::PathWhitelist
+    }
+
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",
@@ -377,6 +381,6 @@ mod tests {
     #[test]
     fn list_directory_auth_level() {
         let tool = ListDirectoryTool;
-        assert_eq!(tool.authorization_level(), AuthorizationLevel::Always);
+        assert_eq!(tool.authorization_level(), AuthorizationLevel::PathWhitelist);
     }
 }

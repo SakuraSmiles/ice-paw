@@ -1,110 +1,15 @@
 //! Config Proposal Registry — 提案 oneshot 通道注册表
 //!
-//! 与 `ToolAuthRegistry` 完全同构，独立的 oneshot 通道管理。
-//! 提案工具 emit `chat:config-proposal` 事件后，
-//! 用 `request_id` 匹配 oneshot 等待前端响应。
+//! 基于泛型 `OneshotRegistry<T>` 实现，与 `ToolAuthRegistry` 共享同一套
+//! 注册/响应/监听逻辑，仅响应类型和事件名不同。
 //!
 //! 生命周期：在 `lib.rs::setup` 阶段调用 `install_listener()`
 //! 注册 Tauri 事件监听。
 
-use std::collections::HashMap;
-use std::sync::Arc;
-
-use tauri::AppHandle;
-use tokio::sync::{oneshot, Mutex};
-
-use crate::infra::protocol::ConfigProposalResponse;
-
-type ProposalSenderMap = Arc<Mutex<HashMap<String, oneshot::Sender<ConfigProposalResponse>>>>;
-
-#[derive(Clone, Default)]
-pub struct ProposalRegistry {
-    inner: ProposalSenderMap,
-}
-
-impl std::fmt::Debug for ProposalRegistry {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ProposalRegistry").finish_non_exhaustive()
-    }
-}
-
-impl ProposalRegistry {
-    pub fn new() -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(HashMap::new())),
-        }
-    }
-
-    /// 注册一个新的等待者，返回 receiver
-    pub async fn register(
-        &self,
-        request_id: String,
-    ) -> oneshot::Receiver<ConfigProposalResponse> {
-        let (tx, rx) = oneshot::channel();
-        let mut map = self.inner.lock().await;
-        map.insert(request_id, tx);
-        rx
-    }
-
-    /// 取出并删除一个等待者（用于取消/超时时清理）
-    pub async fn take(&self, request_id: &str) -> Option<oneshot::Sender<ConfigProposalResponse>> {
-        let mut map = self.inner.lock().await;
-        map.remove(request_id)
-    }
-
-    /// 用响应唤醒一个等待者
-    pub async fn respond(&self, response: ConfigProposalResponse) -> bool {
-        let mut map = self.inner.lock().await;
-        if let Some(tx) = map.remove(&response.request_id) {
-            let _ = tx.send(response);
-            true
-        } else {
-            false
-        }
-    }
-
-    /// 安装前端 `chat:config-proposal-response` 事件监听器
-    ///
-    /// 在 `lib.rs::run()` setup 阶段调用一次。
-    /// 克隆 `self`（内部是 `Arc`，克隆即共享）。
-    pub fn install_listener(&self, app: &AppHandle) {
-        let registry = self.clone();
-        let app_handle = app.clone();
-        tauri::async_runtime::spawn(async move {
-            use tauri::Listener;
-            let _ = app_handle.listen("chat:config-proposal-response", move |event| {
-                let registry = registry.clone();
-                let payload_str = event.payload().to_string();
-                let response: Result<ConfigProposalResponse, _> =
-                    serde_json::from_str(&payload_str);
-                tauri::async_runtime::spawn(async move {
-                    match response {
-                        Ok(r) => {
-                            let handled = registry.respond(r).await;
-                            if !handled {
-                                tracing::warn!(
-                                    target: "ice_paw.mgmt",
-                                    "收到未知 request_id 的提案响应（可能已超时）",
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                target: "ice_paw.mgmt",
-                                "提案响应解析失败: {} (payload={})",
-                                e,
-                                payload_str,
-                            );
-                        }
-                    }
-                });
-            });
-        });
-    }
-}
+pub use crate::harness::oneshot_registry::ProposalRegistry;
 
 // =========================================================================
-// 单元测试
+// 单元测试（已由 oneshot_registry 泛型测试覆盖；此处保留集成测试）
 // =========================================================================
 
 #[cfg(test)]

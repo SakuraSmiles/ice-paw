@@ -24,127 +24,26 @@
 //!   或在 `lib.rs::run()` 注册。这里选择后者（独立模块 `auth_responder`），
 //!   确保只有一份全局监听。
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::Value;
 use sqlx::SqlitePool;
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::oneshot;
 
 use crate::db::models::{HookConfig, HookPoint};
 use crate::db::repo;
 use crate::infra::protocol::{
-    ChatToolResultPayload, ContentBlock, ToolAuthRequestPayload, ToolAuthResponse,
+    ChatToolResultPayload, ContentBlock, PendingRequestCancelPayload, ToolAuthRequestPayload,
+    ToolAuthResponse,
 };
 use crate::harness::mcp::{AuthorizationLevel, McpRegistry, ToolContext};
 use crate::harness::authority::{
     check_authorization_with_session, AuthorizationDecision, PathAuthSession, PathWhitelistConfig,
 };
 use crate::harness::hooks::{has_actions, run_hooks};
-
-/// oneshot sender 的全局注册表类型
-type AuthSenderMap = Arc<Mutex<HashMap<String, oneshot::Sender<ToolAuthResponse>>>>;
-
-/// A2-3: 工具授权响应的全局注册表
-///
-/// 维护 `request_id → oneshot::Sender`，供前端响应事件按 request_id 解锁
-/// 对应等待者。同时也持有应用侧的默认白名单配置（如果上层不显式传入）。
-///
-/// 生命周期：在 `lib.rs::run()` setup 阶段调用 `install_listener()`
-/// 注册 Tauri 事件监听。
-#[derive(Clone, Default)]
-pub struct ToolAuthRegistry {
-    inner: AuthSenderMap,
-}
-
-impl ToolAuthRegistry {
-    /// 新建空注册表
-    pub fn new() -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(HashMap::new())),
-        }
-    }
-
-    /// 注册一个新的等待者，返回 receiver
-    pub async fn register(
-        &self,
-        request_id: String,
-    ) -> oneshot::Receiver<ToolAuthResponse> {
-        let (tx, rx) = oneshot::channel();
-        let mut map = self.inner.lock().await;
-        map.insert(request_id, tx);
-        rx
-    }
-
-    /// 取出并删除一个等待者（用于取消时清理）
-    pub async fn take(&self, request_id: &str) -> Option<oneshot::Sender<ToolAuthResponse>> {
-        let mut map = self.inner.lock().await;
-        map.remove(request_id)
-    }
-
-    /// 用响应唤醒一个等待者
-    pub async fn respond(&self, response: ToolAuthResponse) -> bool {
-        let mut map = self.inner.lock().await;
-        if let Some(tx) = map.remove(&response.request_id) {
-            // send 失败说明 receiver 已被 drop（例如上层取消）→ 忽略
-            let _ = tx.send(response);
-            true
-        } else {
-            false
-        }
-    }
-
-    /// 当前等待者数量（仅供调试）
-    #[cfg(test)]
-    pub async fn pending_count(&self) -> usize {
-        let map = self.inner.lock().await;
-        map.len()
-    }
-
-    /// A2-3: 安装前端 `chat:tool-auth-response` 事件监听器
-    ///
-    /// 在 `lib.rs::run()` setup 阶段调用一次，监听前端响应事件，
-    /// 通过 `self.respond()` 唤醒对应 request_id 的 oneshot。
-    ///
-    /// 注意：克隆 `self`（注册表内部是 `Arc`，克隆即共享）。
-    pub fn install_listener(&self, app: &AppHandle) {
-        let registry = self.clone();
-        let app_handle = app.clone();
-        tauri::async_runtime::spawn(async move {
-            use tauri::Listener;
-            let _ = app_handle.listen("chat:tool-auth-response", move |event| {
-                let registry = registry.clone();
-                // payload 必须在 spawn 前 clone 为 String，因为 event 是 &Event
-                let payload_str = event.payload().to_string();
-                let response: Result<ToolAuthResponse, _> = serde_json::from_str(&payload_str);
-                tauri::async_runtime::spawn(async move {
-                    match response {
-                        Ok(r) => {
-                            let handled = registry.respond(r).await;
-                            if !handled {
-                                tracing::warn!(
-                                    target: "ice_paw.tool_auth",
-                                    "收到未知 request_id 的授权响应（可能已超时）",
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                target: "ice_paw.tool_auth",
-                                "授权响应解析失败: {} (payload={})",
-                                e,
-                                payload_str,
-                            );
-                        }
-                    }
-                });
-            });
-        });
-    }
-}
+pub use crate::harness::oneshot_registry::ToolAuthRegistry;
 
 /// 工具执行编排（A2-3 升级版）
 ///
@@ -175,6 +74,7 @@ pub async fn execute_tool_round(
     // 扩展 tool_ctx：注入 app_handle + proposal_registry（propose_config_change 等工具需要）
     let mut enriched_ctx = tool_ctx.clone();
     enriched_ctx.app_handle = Some(app.clone());
+    enriched_ctx.cancel = Some(cancel.clone());
     enriched_ctx.proposal_registry = app
         .try_state::<crate::harness::proposal_registry::ProposalRegistry>()
         .map(|s: tauri::State<'_, crate::harness::proposal_registry::ProposalRegistry>| s.inner().clone());
@@ -246,8 +146,15 @@ pub async fn execute_tool_round(
                         request_id,
                     );
                     // 2c. 等待响应（带取消支持 + 30 分钟超时防止永久挂起）
-                    let outcome = wait_for_auth_response(rx, cancel, &request_id, auth_registry)
-                        .await;
+                    let outcome = wait_for_auth_response(
+                        rx,
+                        cancel,
+                        &request_id,
+                        auth_registry,
+                        app,
+                        &tool_ctx.conv_id,
+                    )
+                    .await;
                     match outcome {
                         Some(true) => {
                             // 用户允许：标记会话级授权，然后执行
@@ -364,20 +271,26 @@ pub async fn execute_tool_round(
 /// - `None`        被取消 / 超时
 ///
 /// `cancel` 触发取消时，oneshot receiver 被丢弃，sender 端 send 失败被忽略。
+///
+/// 失效分支（取消/超时/通道关闭）会 emit `chat:tool-auth-request-cancel`，
+/// 让前端按 `request_id` 清除对应授权弹窗，避免残留导致用户对已失效请求操作。
 async fn wait_for_auth_response(
     rx: oneshot::Receiver<ToolAuthResponse>,
     cancel: &crate::harness::chat_state::CancellationToken,
     request_id: &str,
     auth_registry: &ToolAuthRegistry,
+    app: &AppHandle,
+    conv_id: &str,
 ) -> Option<bool> {
     const TIMEOUT: Duration = Duration::from_secs(120); // 2 分钟——用户不在时快速超时释放会话
 
     tokio::select! {
         biased;
-        // 用户主动取消
+        // 用户主动取消（对话被停止）
         _ = wait_for_cancel(cancel) => {
             // 清理 sender，避免后续响应泄露
             let _ = auth_registry.take(request_id).await;
+            emit_auth_cancel(app, request_id, conv_id, "abort");
             None
         }
         // 超时自动拒绝（防止前端崩溃/用户离开导致会话永久锁死）
@@ -389,20 +302,43 @@ async fn wait_for_auth_response(
                 request_id,
             );
             let _ = auth_registry.take(request_id).await;
+            emit_auth_cancel(app, request_id, conv_id, "timeout");
             None
         }
         // 收到前端响应
         msg = rx => {
             match msg {
                 Ok(resp) => Some(resp.allowed),
-                Err(_) => None, // sender 被 drop → 视为取消
+                Err(_) => {
+                    // sender 被 drop → 视为取消
+                    emit_auth_cancel(app, request_id, conv_id, "cancelled");
+                    None
+                }
             }
         }
     }
 }
 
+/// 通知前端清除对应授权弹窗（授权请求失效时调用）。
+/// 与 `proposal_tool::emit_proposal_cancel` 对称。emit 失败仅 warn。
+fn emit_auth_cancel(app: &AppHandle, request_id: &str, conv_id: &str, reason: &str) {
+    if let Err(e) = app.emit(
+        "chat:tool-auth-request-cancel",
+        PendingRequestCancelPayload {
+            request_id: request_id.into(),
+            conversation_id: conv_id.into(),
+            reason: reason.into(),
+        },
+    ) {
+        tracing::warn!(
+            target: "ice_paw.tool_auth",
+            "emit chat:tool-auth-request-cancel 失败: {e}"
+        );
+    }
+}
+
 /// 等待 CancellationToken 触发（包装成 future）
-async fn wait_for_cancel(token: &crate::harness::chat_state::CancellationToken) {
+pub(crate) async fn wait_for_cancel(token: &crate::harness::chat_state::CancellationToken) {
     // 简单的轮询（100ms 粒度）。CancellationToken 当前未提供异步 wait，
     // 这里用低开销循环等价实现。后续如果改成 watch channel 可以直接 select。
     loop {
@@ -478,6 +414,7 @@ pub(crate) async fn build_tool_ctx(
         api_key,
         app_handle: None,
         proposal_registry: None,
+        cancel: None,
     }
 }
 

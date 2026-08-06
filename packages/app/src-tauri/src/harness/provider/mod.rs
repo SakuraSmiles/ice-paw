@@ -22,96 +22,129 @@ pub use anthropic::AnthropicAdapter;
 pub use mock::{MockProvider, MockScenario};
 pub use openai::OpenAiAdapter;
 
+use std::pin::Pin;
 use std::sync::Arc;
 
+use async_trait::async_trait;
+
 use crate::error::AppResult;
-use crate::infra::protocol::LlmProvider;
+use crate::harness::chat_state::CancellationToken;
+use crate::infra::protocol::{ChatDelta, ChatMessage, ToolDef};
+
+/// LLM 提供方接口（从 `infra::protocol` 迁入，归属 provider 模块）
+///
+/// 实现方需提供 `stream_chat`，返回一个异步 Stream 逐块产出 `ChatDelta`。
+/// 调用方在消费 Stream 时应定期检查 `cancel.is_cancelled()` 以支持用户停止。
+#[async_trait]
+pub trait LlmProvider: Send + Sync {
+    /// 流式聊天
+    #[allow(clippy::too_many_arguments)]
+    async fn stream_chat(
+        &self,
+        api_key: &str,
+        messages: Vec<ChatMessage>,
+        tools: Option<Vec<ToolDef>>,
+        temperature: f64,
+        max_tokens: i32,
+        model: Option<&str>,
+        cancel: CancellationToken,
+    ) -> AppResult<Pin<Box<dyn futures::Stream<Item = AppResult<ChatDelta>> + Send>>>;
+
+    /// 返回当前 Provider 实际使用的模型名（用于消息级记录）
+    fn model_name(&self) -> &str;
+}
 
 // =========================================================================
 // 工厂函数（从 llm/mod.rs 迁入）
 // =========================================================================
 
-/// 按 provider 名称创建对应的 LLM Adapter
+/// Provider 描述符：名称 → 协议类型 + 默认 URL
+struct ProviderDesc {
+    name: &'static str,
+    protocol: ProviderProtocol,
+    default_url: &'static str,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ProviderProtocol {
+    OpenAI,
+    Anthropic,
+}
+
+/// 数据驱动的 provider 注册表（单一真相源，消除 create_provider 与
+/// default_base_url 两份 match 语句的同步风险）。
+const PROVIDERS: &[ProviderDesc] = &[
+    ProviderDesc { name: "openai",    protocol: ProviderProtocol::OpenAI,    default_url: "https://api.openai.com" },
+    ProviderDesc { name: "glm",       protocol: ProviderProtocol::OpenAI,    default_url: "https://open.bigmodel.cn/api/paas/v4" },
+    ProviderDesc { name: "deepseek",  protocol: ProviderProtocol::OpenAI,    default_url: "https://api.deepseek.com" },
+    ProviderDesc { name: "anthropic", protocol: ProviderProtocol::Anthropic, default_url: "https://api.anthropic.com" },
+    ProviderDesc { name: "minimax",   protocol: ProviderProtocol::Anthropic, default_url: "https://api.minimaxi.com/anthropic" },
+    ProviderDesc { name: "minimax-cn",protocol: ProviderProtocol::Anthropic, default_url: "https://api.minimaxi.com/anthropic" },
+];
+
+fn find_provider(name: &str) -> Option<&'static ProviderDesc> {
+    PROVIDERS.iter().find(|p| p.name == name)
+}
+
+/// 按 provider 名称创建对应的 LLM Adapter。
 ///
-/// 支持两类协议：
-/// - OpenAI Chat Completions 兼容：openai / glm / deepseek
-/// - Anthropic Messages API 兼容：anthropic / minimax / minimax-cn
+/// 数据驱动：从 `PROVIDERS` 注册表查找协议类型 + 默认 URL，
+/// 消除 create_provider / default_base_url 两份 match 同步风险。
 ///
 /// 未识别的 provider 兜底走 OpenAI 兼容（向后兼容），并打 warn 日志。
-///
-/// - `provider`：agent.provider 字段
-/// - `model`：agent.model 字段
-/// - `base_url`：优先取 agent.base_url，为空则用 provider 对应默认值
-/// - `cache_prompt`：P2-3 是否启用 prompt caching（仅 Anthropic 协议生效）
 pub fn create_provider(
     provider: &str,
     model: &str,
     base_url: Option<&str>,
     cache_prompt: bool,
 ) -> AppResult<Arc<dyn LlmProvider>> {
+    let desc = find_provider(provider);
     let url = match base_url {
         Some(u) if !u.is_empty() => u.to_string(),
-        _ => default_base_url(provider),
+        _ => desc.map(|d| d.default_url).unwrap_or("").to_string(),
     };
 
-    // 调试用：对已知协议打印最终 chat URL（含智能拼接）。
-    // 排查 base_url 路径问题时一眼看出拼接是否正确。
-    let chat_url_preview: Option<String> = match provider {
-        "openai" | "glm" | "deepseek" => Some(openai::build_chat_url(&url)),
-        "anthropic" | "minimax" | "minimax-cn" => {
-            Some(format!("{}/v1/messages", url.trim_end_matches('/')))
-        }
-        _ => None,
-    };
+    let protocol = desc.map(|d| d.protocol);
 
     tracing::info!(
         target: "ice_paw.llm",
-        "创建 Provider: {} | model={} | base_url={}{}",
+        "创建 Provider: {} | model={} | base_url={} | protocol={}",
         provider,
         model,
         url,
-        chat_url_preview
-            .as_deref()
-            .map(|u| format!(" | chat_url={}", u))
-            .unwrap_or_default(),
+        match protocol {
+            Some(ProviderProtocol::OpenAI) => "openai",
+            Some(ProviderProtocol::Anthropic) => "anthropic",
+            None => "unknown(fallback=openai)",
+        },
     );
 
-    match provider {
-        // OpenAI Chat Completions 兼容厂商
-        "openai" | "glm" | "deepseek" => Ok(Arc::new(
+    match protocol {
+        Some(ProviderProtocol::OpenAI) => Ok(Arc::new(
             OpenAiAdapter::new(model.to_string(), url)?,
         )),
-        // Anthropic Messages API 兼容厂商（Anthropic 官方 + MiniMax）
-        "anthropic" | "minimax" | "minimax-cn" => Ok(Arc::new(
+        Some(ProviderProtocol::Anthropic) => Ok(Arc::new(
             AnthropicAdapter::new(model.to_string(), url, cache_prompt)?,
         )),
-        // 兜底：未识别 provider 走 OpenAI 兼容（向后兼容）
-        _ => {
+        None => {
             tracing::warn!(
                 target: "ice_paw.llm",
                 "未知 provider '{}'，兜底走 OpenAI 兼容",
                 provider
             );
-            Ok(Arc::new(OpenAiAdapter::new(
-                model.to_string(),
-                url,
-            )?))
+            Ok(Arc::new(OpenAiAdapter::new(model.to_string(), url)?))
         }
     }
 }
 
-/// 各 provider 的默认 base_url
+/// 各 provider 的默认 base_url（委托给 PROVIDERS 注册表）。
+/// 仅测试使用；生产代码内联读取 `PROVIDERS`。
+#[allow(dead_code)]
 fn default_base_url(provider: &str) -> String {
-    match provider {
-        "openai" => "https://api.openai.com".to_string(),
-        "glm" => "https://open.bigmodel.cn/api/paas/v4".to_string(),
-        "deepseek" => "https://api.deepseek.com".to_string(),
-        "anthropic" => "https://api.anthropic.com".to_string(),
-        "minimax" => "https://api.minimaxi.com/anthropic".to_string(),
-        "minimax-cn" => "https://api.minimaxi.com/anthropic".to_string(),
-        // 兜底：返回空串让上层报错（调用方应在 agent 配置里写 base_url）
-        _ => String::new(),
-    }
+    find_provider(provider)
+        .map(|d| d.default_url)
+        .unwrap_or("")
+        .to_string()
 }
 
 #[cfg(test)]

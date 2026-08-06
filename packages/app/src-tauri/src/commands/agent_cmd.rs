@@ -123,12 +123,17 @@ pub struct SqlAgentCmd {
 fn write_default_agent_yaml(
     workspace_dir: &str,
     agent_name: &str,
+    provider: &str,
+    model: &str,
+    system_prompt: Option<&str>,
     temperature: f64,
     max_tokens: i32,
+    enabled_tools: Option<&[String]>,
+    base_url: Option<&str>,
 ) {
     let yaml_path = std::path::Path::new(workspace_dir).join("agent.yaml");
 
-    // 文件已存在则跳过（用户可能已通过其他方式创建）
+    // 文件已存在则跳过
     if yaml_path.exists() {
         tracing::info!(
             target: "ice_paw.agent",
@@ -138,20 +143,42 @@ fn write_default_agent_yaml(
         return;
     }
 
-    let default_sp = agent_name.to_string() + " 是一个 AI 助手。";
-    let content = format!(
+    let default_sp = format!("{} 是一个 AI 助手。", agent_name);
+    let sp = system_prompt
+        .filter(|s| !s.is_empty())
+        .unwrap_or(&default_sp);
+    // YAML multiline: 每行缩进 2 空格
+    let sp_indented = sp.lines().map(|l| format!("  {}", l)).collect::<Vec<_>>().join("\n");
+
+    let mut content = format!(
         "# agent.yaml — Agent 行为和角色配置\n\
          # 修改后即时生效，无需重启\n\
          \n\
-         system_prompt: |\n  {}\n\n\
+         provider: {}\n\
+         model: {}\n\
+         system_prompt: |\n{}\n\
          temperature: {}\n\
          max_tokens: {}\n\
          # 工具调用最大轮数（默认 50）\n\
          tool_max_rounds: 50\n\
-         # Token 预算上限（默认 500k，超过则终止；多轮工具可调大）\n\
+         # Token 预算上限（默认 500k）\n\
          max_total_tokens: 500000\n",
-        default_sp, temperature, max_tokens,
+        provider, model, sp_indented, temperature, max_tokens,
     );
+
+    if let Some(tools) = enabled_tools {
+        if !tools.is_empty() {
+            content.push_str("\nenabled_tools:\n");
+            for t in tools {
+                content.push_str(&format!("  - {}\n", t));
+            }
+        }
+    }
+    if let Some(url) = base_url {
+        if !url.is_empty() {
+            content.push_str(&format!("\nbase_url: {}\n", url));
+        }
+    }
 
     match std::fs::write(&yaml_path, &content) {
         Ok(()) => {
@@ -284,9 +311,21 @@ impl AgentCmd for SqlAgentCmd {
         )
         .await;
 
-        // 7. 自动生成 agent.yaml（仅在首次创建、文件不存在时写入）
+        // 7. 自动生成 agent.yaml（含完整配置：provider/model/tools/system_prompt/base_url）
         if let Some(ws) = row.workspace_path.as_deref() {
-            write_default_agent_yaml(ws, &row.name, row.temperature, row.max_tokens);
+            write_default_agent_yaml(
+                ws,
+                &row.name,
+                &row.provider,
+                &row.model,
+                Some(&row.system_prompt),
+                row.temperature,
+                row.max_tokens,
+                row.enabled_tools.as_deref().and_then(|s| {
+                    serde_json::from_str::<Vec<String>>(s).ok()
+                }).as_deref(),
+                row.base_url.as_deref(),
+            );
         }
 
         Ok(Agent::from_row_with_file_config(row))
@@ -500,15 +539,32 @@ impl AgentCmd for MockAgentCmd {
 
     async fn update(&self, input: AgentUpdate) -> AppResult<Agent> {
         self.log(format!("update({})", input.id));
-        // mock 简化：仅更新 name 字段，其它保持不变
         let mut g = self.inner.lock().unwrap();
         let entry = g.agents.get_mut(&input.id).ok_or_else(|| AppError::NotFound {
             resource: "agent",
             id: input.id.clone(),
         })?;
-        if let Some(name) = input.name.clone() {
-            entry.0.name = name;
+        // 逐字段应用更新，None 表示不修改
+        if let Some(v) = input.name { entry.0.name = v; }
+        if let Some(v) = input.provider { entry.0.provider = v; }
+        if let Some(v) = input.model { entry.0.model = v; }
+        if let Some(v) = input.system_prompt { entry.0.system_prompt = v; }
+        if let Some(v) = input.base_url { entry.2 = v; }
+        if let Some(v) = input.temperature { entry.0.temperature = v; }
+        if let Some(v) = input.max_tokens { entry.0.max_tokens = v; }
+        if let Some(v) = input.extra_params {
+            entry.0.extra_params = serde_json::to_string(&v).unwrap_or_default();
         }
+        if let Some(v) = input.sort_order { entry.0.sort_order = v; }
+        if let Some(v) = input.cache_prompt { entry.0.cache_prompt = v as i32; }
+        if let Some(v) = input.max_history_messages { entry.0.max_history_messages = v; }
+        if let Some(v) = input.tool_trim_threshold { entry.0.tool_trim_threshold = v; }
+        if let Some(v) = input.enabled_tools {
+            entry.0.enabled_tools = v.map(|tools| serde_json::to_string(&tools).unwrap_or_default());
+        }
+        if let Some(v) = input.supports_vision { entry.0.supports_vision = v as i32; }
+        if let Some(v) = input.workspace_path { entry.0.workspace_path = v; }
+        entry.0.updated_at = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
         Ok(Agent::from(entry.0.clone()))
     }
 
