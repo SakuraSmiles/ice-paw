@@ -26,6 +26,7 @@ const MAX_RESULT_LEN: usize = 4_000;
 /// - `arguments` 与 `result` 超长会被截断并标注。
 ///
 /// `id` 由调用方生成（UUID v4）。
+#[allow(clippy::too_many_arguments)]
 pub async fn create(
     pool: &SqlitePool,
     id: &str,
