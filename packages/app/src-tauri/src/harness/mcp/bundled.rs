@@ -10,7 +10,6 @@
 //!   node/node.exe                                            ← 内置 Node win-x64
 //!   node_modules/@modelcontextprotocol/server-sequential-thinking/dist/index.js
 //!   node_modules/@modelcontextprotocol/server-memory/dist/index.js
-//!   node_modules/@modelcontextprotocol/server-filesystem/dist/index.js
 //!   node_modules/zod/...                                     ← 关键传递依赖
 //! ```
 //!
@@ -43,7 +42,7 @@ pub struct BundledSpec {
     pub env_template: &'static [(&'static str, &'static str)],
 }
 
-/// 3 个内置 bundled server 的查表。未命中返回 None（调用方报错）。
+/// 2 个内置 bundled server 的查表。未命中返回 None（调用方报错）。
 pub fn spec_for(server_id: &str) -> Option<&'static BundledSpec> {
     static SPECS: &[(&str, BundledSpec)] = &[
         ("builtin-thinking", BundledSpec {
@@ -57,12 +56,6 @@ pub fn spec_for(server_id: &str) -> Option<&'static BundledSpec> {
             // 清缓存即丢）。指向 app_data_dir 下可写文件，跨会话保留知识图谱。
             entry_script: "dist/index.js",
             env_template: &[("MEMORY_FILE_PATH", MEMORY_FILE_PLACEHOLDER)],
-        }),
-        ("builtin-filesystem", BundledSpec {
-            package_dir: "@modelcontextprotocol/server-filesystem",
-            // 允许访问的目录由 args（{workspace}）传入，无固定 env
-            entry_script: "dist/index.js",
-            env_template: &[],
         }),
     ];
     SPECS.iter().find(|(id, _)| *id == server_id).map(|(_, s)| s)
@@ -114,7 +107,7 @@ pub fn verify(app: &AppHandle) -> AppResult<()> {
             node.display()
         )));
     }
-    for id in ["builtin-thinking", "builtin-memory", "builtin-filesystem"] {
+    for id in ["builtin-thinking", "builtin-memory"] {
         let spec = spec_for(id).expect("bundled server id 拼写错误");
         let entry = entry_script(app, spec)?;
         if !entry.exists() {
@@ -166,7 +159,6 @@ mod tests {
     fn spec_for_known_ids() {
         assert!(spec_for("builtin-thinking").is_some());
         assert!(spec_for("builtin-memory").is_some());
-        assert!(spec_for("builtin-filesystem").is_some());
     }
 
     #[test]
@@ -185,15 +177,13 @@ mod tests {
     }
 
     #[test]
-    fn filesystem_and_thinking_have_no_env_template() {
-        for id in ["builtin-filesystem", "builtin-thinking"] {
-            assert!(spec_for(id).unwrap().env_template.is_empty());
-        }
+    fn thinking_has_no_env_template() {
+        assert!(spec_for("builtin-thinking").unwrap().env_template.is_empty());
     }
 
     #[test]
     fn all_entries_use_dist_index_js() {
-        for id in ["builtin-thinking", "builtin-memory", "builtin-filesystem"] {
+        for id in ["builtin-thinking", "builtin-memory"] {
             assert_eq!(spec_for(id).unwrap().entry_script, "dist/index.js");
         }
     }

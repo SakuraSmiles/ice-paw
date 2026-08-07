@@ -288,6 +288,394 @@ impl McpClient for ListDirectoryTool {
 }
 
 // =========================================================================
+// directory_tree
+// =========================================================================
+
+/// `directory_tree` 工具：递归输出目录树（JSON）
+pub struct DirectoryTreeTool;
+
+/// 递归最大深度（防止超深目录爆栈/爆输出）
+const MAX_TREE_DEPTH: usize = 8;
+/// 节点数硬上限（达到即截断，结果里 truncated=true）
+const MAX_TREE_NODES: usize = 2000;
+
+#[derive(Deserialize)]
+struct DirectoryTreeArgs {
+    path: String,
+}
+
+#[derive(Serialize)]
+struct TreeNode {
+    name: String,
+    #[serde(rename = "type")]
+    node_type: &'static str,
+    size: Option<u64>,
+    children: Option<Vec<TreeNode>>,
+}
+
+/// 应跳过的噪音目录（隐藏目录 + 常见构建/依赖目录），与 search.rs 的 is_skip_dir 同义
+fn is_noise_dir(name: &str) -> bool {
+    name.starts_with('.')
+        || matches!(
+            name,
+            "node_modules" | "target" | "dist" | "build" | "__pycache__" | "venv" | ".venv"
+        )
+}
+
+/// 递归构建目录树。达到深度/节点上限时截断（不再下钻或返回 None）。
+fn build_tree(path: &Path, depth: usize, node_count: &mut usize) -> Option<TreeNode> {
+    if *node_count >= MAX_TREE_NODES {
+        return None;
+    }
+    *node_count += 1;
+
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_string();
+    let meta = match std::fs::metadata(path) {
+        Ok(m) => m,
+        Err(_) => return None,
+    };
+
+    if meta.is_dir() {
+        let mut children = Vec::new();
+        // 未达深度上限才下钻
+        if depth < MAX_TREE_DEPTH {
+            if let Ok(entries) = std::fs::read_dir(path) {
+                let mut sub: Vec<_> = entries.flatten().collect();
+                sub.sort_by_key(|e| e.file_name());
+                for entry in sub {
+                    if *node_count >= MAX_TREE_NODES {
+                        break;
+                    }
+                    let child_path = entry.path();
+                    if let Some(fname) = child_path.file_name().and_then(|n| n.to_str()) {
+                        if is_noise_dir(fname) {
+                            continue;
+                        }
+                    }
+                    if let Some(child) = build_tree(&child_path, depth + 1, node_count) {
+                        children.push(child);
+                    }
+                }
+            }
+        }
+        Some(TreeNode {
+            name,
+            node_type: "directory",
+            size: None,
+            children: Some(children),
+        })
+    } else {
+        Some(TreeNode {
+            name,
+            node_type: "file",
+            size: Some(meta.len()),
+            children: None,
+        })
+    }
+}
+
+#[async_trait]
+impl McpClient for DirectoryTreeTool {
+    fn name(&self) -> &str {
+        "directory_tree"
+    }
+
+    fn description(&self) -> &str {
+        "Recursively list a directory as a JSON tree of files and subdirectories. \
+Skips .git/node_modules/target/dist and hidden dirs. Caps depth (8) and node count \
+(2000) to avoid huge outputs — check `truncated` in the result."
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Absolute or relative path to the directory to traverse."
+                }
+            },
+            "required": ["path"]
+        })
+    }
+
+    fn authorization_level(&self) -> AuthorizationLevel {
+        AuthorizationLevel::PathWhitelist
+    }
+
+    async fn execute(&self, args: &str) -> AppResult<String> {
+        let parsed: DirectoryTreeArgs = serde_json::from_str(args)
+            .map_err(|e| AppError::Validation(format!("directory_tree 参数解析失败: {e}")))?;
+
+        let path = Path::new(&parsed.path);
+        if !path.exists() {
+            return Err(AppError::Validation(format!(
+                "路径不存在: {}",
+                parsed.path
+            )));
+        }
+
+        let mut node_count = 0usize;
+        let tree = build_tree(path, 0, &mut node_count)
+            .ok_or_else(|| AppError::Validation("directory_tree: 节点数超上限".into()))?;
+
+        Ok(serde_json::json!({
+            "path": parsed.path,
+            "nodes": node_count,
+            "truncated": node_count >= MAX_TREE_NODES,
+            "tree": tree,
+        })
+        .to_string())
+    }
+}
+
+// =========================================================================
+// get_file_info
+// =========================================================================
+
+/// `get_file_info` 工具：返回文件/目录的元信息
+pub struct GetFileInfoTool;
+
+#[derive(Deserialize)]
+struct GetFileInfoArgs {
+    path: String,
+}
+
+#[derive(Serialize)]
+struct FileInfo {
+    path: String,
+    size: u64,
+    is_dir: bool,
+    is_file: bool,
+    is_symlink: bool,
+    readonly: bool,
+    modified: Option<String>,
+    created: Option<String>,
+    accessed: Option<String>,
+}
+
+/// SystemTime → RFC3339（UTC）字符串
+fn system_time_to_rfc(st: std::io::Result<std::time::SystemTime>) -> Option<String> {
+    st.ok()
+        .map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339())
+}
+
+#[async_trait]
+impl McpClient for GetFileInfoTool {
+    fn name(&self) -> &str {
+        "get_file_info"
+    }
+
+    fn description(&self) -> &str {
+        "Return metadata for a file or directory: size, type (file/dir/symlink), \
+readonly flag, and modified/created/accessed timestamps (RFC3339, UTC)."
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Absolute or relative path to inspect."
+                }
+            },
+            "required": ["path"]
+        })
+    }
+
+    fn authorization_level(&self) -> AuthorizationLevel {
+        AuthorizationLevel::PathWhitelist
+    }
+
+    async fn execute(&self, args: &str) -> AppResult<String> {
+        let parsed: GetFileInfoArgs = serde_json::from_str(args)
+            .map_err(|e| AppError::Validation(format!("get_file_info 参数解析失败: {e}")))?;
+
+        let path = Path::new(&parsed.path);
+        // symlink_metadata：不跟随符号链接，能识别链接本身
+        let meta = tokio::fs::symlink_metadata(path)
+            .await
+            .map_err(AppError::Io)?;
+
+        let is_symlink = meta.file_type().is_symlink();
+        // 符号链接的 dir/file 判定需跟随目标
+        let (is_dir, is_file) = if is_symlink {
+            match tokio::fs::metadata(path).await {
+                Ok(m) => (m.is_dir(), m.is_file()),
+                Err(_) => (false, false),
+            }
+        } else {
+            (meta.is_dir(), meta.is_file())
+        };
+
+        let info = FileInfo {
+            path: parsed.path,
+            size: meta.len(),
+            is_dir,
+            is_file,
+            is_symlink,
+            readonly: meta.permissions().readonly(),
+            modified: system_time_to_rfc(meta.modified()),
+            created: system_time_to_rfc(meta.created()),
+            accessed: system_time_to_rfc(meta.accessed()),
+        };
+
+        Ok(serde_json::to_string(&info).unwrap_or_else(|_| "{}".to_string()))
+    }
+}
+
+// =========================================================================
+// read_multiple_files
+// =========================================================================
+
+/// `read_multiple_files` 工具：一次性读取多个文件
+///
+/// 单文件上限 1MB（更大的请单独 `read_file` 分页）。单文件失败不影响其余，逐项返回
+/// ok/error。**授权**：因参数是路径数组、无法逐条自动放行，每次调用都会弹窗确认。
+pub struct ReadMultipleFilesTool;
+
+const MAX_MULTIPLE_FILES: usize = 20;
+const MULTIPLE_FILE_MAX_BYTES: usize = 1024 * 1024;
+
+#[derive(Deserialize)]
+struct ReadMultipleFilesArgs {
+    paths: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct MultipleReadItem {
+    path: String,
+    ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bytes: Option<usize>,
+}
+
+/// 读取单个文件（用于 read_multiple_files）。失败返回结构化 error，不抛异常。
+async fn read_one_for_multiple(path_str: &str) -> MultipleReadItem {
+    let path = Path::new(path_str);
+    let canonical = match path.canonicalize() {
+        Ok(c) => c,
+        Err(e) => {
+            return MultipleReadItem {
+                path: path_str.into(),
+                ok: false,
+                error: Some(format!("路径无效或不存在: {e}")),
+                content: None,
+                bytes: None,
+            };
+        }
+    };
+    let s = canonical.to_string_lossy();
+    if s.starts_with("/proc/") || s.starts_with("/sys/") || s.starts_with("/dev/") {
+        return MultipleReadItem {
+            path: path_str.into(),
+            ok: false,
+            error: Some("安全限制：不允许读取系统虚拟文件系统".into()),
+            content: None,
+            bytes: None,
+        };
+    }
+    match tokio::fs::read(&canonical).await {
+        Ok(bytes) => {
+            if bytes.len() > MULTIPLE_FILE_MAX_BYTES {
+                return MultipleReadItem {
+                    path: path_str.into(),
+                    ok: false,
+                    error: Some(format!(
+                        "文件过大（{} bytes > {} 上限），请用 read_file 分页读取",
+                        bytes.len(),
+                        MULTIPLE_FILE_MAX_BYTES
+                    )),
+                    content: None,
+                    bytes: Some(bytes.len()),
+                };
+            }
+            let decoded = crate::infra::decode::decode_bytes(&bytes);
+            MultipleReadItem {
+                path: path_str.into(),
+                ok: true,
+                error: None,
+                content: Some(decoded.text),
+                bytes: Some(bytes.len()),
+            }
+        }
+        Err(e) => MultipleReadItem {
+            path: path_str.into(),
+            ok: false,
+            error: Some(format!("读取失败: {e}")),
+            content: None,
+            bytes: None,
+        },
+    }
+}
+
+#[async_trait]
+impl McpClient for ReadMultipleFilesTool {
+    fn name(&self) -> &str {
+        "read_multiple_files"
+    }
+
+    fn description(&self) -> &str {
+        "Read up to 20 files in one call. Files >1MB are skipped (use read_file to \
+paginate). Individual failures don't abort the batch — each result carries its own \
+ok/error. Note: always prompts for confirmation since multiple paths can't be auto-whitelisted."
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "paths": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "List of file paths to read (max 20)."
+                }
+            },
+            "required": ["paths"]
+        })
+    }
+
+    fn authorization_level(&self) -> AuthorizationLevel {
+        AuthorizationLevel::PathWhitelist
+    }
+
+    async fn execute(&self, args: &str) -> AppResult<String> {
+        let parsed: ReadMultipleFilesArgs = serde_json::from_str(args)
+            .map_err(|e| AppError::Validation(format!("read_multiple_files 参数解析失败: {e}")))?;
+
+        if parsed.paths.is_empty() {
+            return Err(AppError::Validation(
+                "read_multiple_files: paths 不能为空".into(),
+            ));
+        }
+
+        let requested = parsed.paths.len();
+        let take = requested.min(MAX_MULTIPLE_FILES);
+        let mut results = Vec::with_capacity(take);
+        for path_str in parsed.paths.iter().take(take) {
+            results.push(read_one_for_multiple(path_str).await);
+        }
+
+        Ok(serde_json::json!({
+            "requested": requested,
+            "returned": results.len(),
+            "truncated": requested > MAX_MULTIPLE_FILES,
+            "results": results,
+        })
+        .to_string())
+    }
+}
+
+// =========================================================================
 // 单测
 // =========================================================================
 
@@ -382,5 +770,33 @@ mod tests {
     fn list_directory_auth_level() {
         let tool = ListDirectoryTool;
         assert_eq!(tool.authorization_level(), AuthorizationLevel::PathWhitelist);
+    }
+
+    #[test]
+    fn is_noise_dir_skips_common() {
+        // directory_tree 的过滤逻辑：隐藏目录 + 常见构建/依赖目录
+        assert!(is_noise_dir(".git"));
+        assert!(is_noise_dir("node_modules"));
+        assert!(is_noise_dir("target"));
+        assert!(is_noise_dir("dist"));
+        assert!(is_noise_dir(".venv"));
+        assert!(!is_noise_dir("src"));
+        assert!(!is_noise_dir("main.rs"));
+    }
+
+    #[test]
+    fn new_file_tools_auth_levels() {
+        assert_eq!(
+            DirectoryTreeTool.authorization_level(),
+            AuthorizationLevel::PathWhitelist
+        );
+        assert_eq!(
+            GetFileInfoTool.authorization_level(),
+            AuthorizationLevel::PathWhitelist
+        );
+        assert_eq!(
+            ReadMultipleFilesTool.authorization_level(),
+            AuthorizationLevel::PathWhitelist
+        );
     }
 }

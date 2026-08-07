@@ -469,10 +469,14 @@ fn path_within_workspace(file_path: &str, workspace: &Option<PathBuf>) -> bool {
     }
 }
 
-/// 从工具参数 JSON 提取路径字段（`path` / `file_path` / `dir`）
+/// 从工具参数 JSON 提取路径字段（`path` / `file_path` / `dir` / `source` / `destination`）
+///
+/// `source`/`destination` 供 `move_file`：tool_executor 只提取单个路径做白名单校验，
+/// 故 move_file 以 source 为代表路径（destination 由工具内 `reject_sensitive` 兜底）。
+/// 多路径工具（如 `read_multiple_files` 的 paths 数组）无法提取，会回退到弹窗确认。
 fn extract_path_from_args(args: &str) -> Option<String> {
     let parsed: Value = serde_json::from_str(args).ok()?;
-    for key in ["path", "file_path", "dir"] {
+    for key in ["path", "file_path", "dir", "source", "destination"] {
         if let Some(s) = parsed.get(key).and_then(|v| v.as_str()) {
             return Some(s.to_string());
         }
@@ -509,6 +513,16 @@ mod tests {
         assert_eq!(
             extract_path_from_args(r#"{"dir":"/var"}"#),
             Some("/var".into())
+        );
+    }
+
+    #[test]
+    fn extract_path_from_args_with_source() {
+        // move_file 用 source/destination；source 排在 destination 前，故提取 source
+        // 作为代表路径用于白名单授权
+        assert_eq!(
+            extract_path_from_args(r#"{"source":"/a/b.txt","destination":"/c/b.txt"}"#),
+            Some("/a/b.txt".into())
         );
     }
 

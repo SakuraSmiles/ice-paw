@@ -119,27 +119,18 @@ pub async fn delete(pool: &SqlitePool, id: &str) -> AppResult<()> {
 
 /// 默认 MCP Server 配置列表——首次启动时自动安装。
 ///
-/// 前 3 个（filesystem / thinking / memory）用 **bundled 运行时**：IcePaw 内置 node.exe
+/// 前 2 个（thinking / memory）用 **bundled 运行时**：IcePaw 内置 node.exe
 /// + 预打包 node_modules，零网络依赖、零系统 node 依赖。DB 里 command 存占位 "node"、
 /// args 存「用户可配参数」（不含包名/入口），包名与 entry script 由 start_server
 /// 解析时注入（见 harness::mcp::bundled）。
 ///
-/// 后 2 个（playwright / maifady）仍走 **system 运行时**（npx），依赖系统 node。
+/// playwright 仍走 **system 运行时**（npx），依赖系统 node。
+///
+/// 注：文件操作（read / write / edit / delete / move_file / create_directory /
+/// directory_tree / get_file_info / read_multiple_files / search_files）已由 native
+/// 内置工具提供（见 harness::mcp::internal / file_tools / search），无需独立 MCP Server。
 fn default_mcp_servers() -> Vec<NewMcpServer> {
     vec![
-        NewMcpServer {
-            id: "builtin-filesystem".into(),
-            name: "文件系统工具集".into(),
-            description: "文件读写、目录浏览、搜索替换".into(),
-            command: "node".into(),
-            // 入口 script 由 start_server 注入；这里只保留用户可配参数（允许访问的目录）
-            args: vec!["{workspace}".into()],
-            env: Some(serde_json::json!({})),
-            enabled: true,
-            trust_level: TrustLevel::Trusted,
-            scope: "per_agent".into(),
-            runtime_kind: RuntimeKind::Bundled,
-        },
         NewMcpServer {
             id: "builtin-thinking".into(),
             name: "深度推理".into(),
@@ -170,18 +161,6 @@ fn default_mcp_servers() -> Vec<NewMcpServer> {
             description: "浏览器操作——截图、填表单、爬取动态页面、自动化测试".into(),
             command: "npx".into(),
             args: vec!["-y".into(), "@playwright/mcp".into()],
-            env: Some(serde_json::json!({})),
-            enabled: true,
-            trust_level: TrustLevel::Trusted,
-            scope: "per_agent".into(),
-            runtime_kind: RuntimeKind::System,
-        },
-        NewMcpServer {
-            id: "builtin-maifady".into(),
-            name: "工程专家团队".into(),
-            description: "30 个工程专家：代码审查、SQL 优化、安全审计、Docker/K8s/React 等".into(),
-            command: "npx".into(),
-            args: vec!["-y".into(), "maifady-mcp".into()],
             env: Some(serde_json::json!({})),
             enabled: true,
             trust_level: TrustLevel::Trusted,
