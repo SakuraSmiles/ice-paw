@@ -2,6 +2,7 @@
 //!
 //! 统一接口：基于 McpServerManager 状态机。
 
+use serde::Serialize;
 use sqlx::SqlitePool;
 use std::sync::Arc;
 use tauri::State;
@@ -190,4 +191,34 @@ pub fn check_nodejs() -> bool {
             .map(|s| s.success())
             .unwrap_or(false)
     })
+}
+
+/// 内置工具信息（给前端「内置工具」清单展示用）
+#[derive(Serialize)]
+pub struct BuiltinToolInfo {
+    pub name: String,
+    pub description: String,
+}
+
+/// 列出所有内置工具（read_file / write_file / directory_tree …）。
+///
+/// **单一事实来源**：直接复用 `McpRegistry::register_builtin()`，前端「内置工具」
+/// 清单与计数均取自此处，**不再在前端手抄一份**——避免新增工具时前后端漂移
+/// （历史上就因此漏过 directory_tree 等 5 个工具，设置页一直少显示）。
+///
+/// 注：用 `with_builtin()` 构造一个只含内置工具的临时 registry 再列出，
+/// 天然排除了已注册进 global registry 的外部 MCP Server 工具。
+#[tauri::command]
+pub async fn list_builtin_tools() -> AppResult<Vec<BuiltinToolInfo>> {
+    let registry = McpRegistry::with_builtin();
+    let mut defs = registry.list_tool_defs().await;
+    // HashMap 遍历无序 → 按工具名排序，保证前端展示稳定
+    defs.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(defs
+        .into_iter()
+        .map(|d| BuiltinToolInfo {
+            name: d.name,
+            description: d.description,
+        })
+        .collect())
 }

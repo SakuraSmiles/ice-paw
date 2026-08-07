@@ -93,6 +93,7 @@ pub fn run() {
             commands::mcp_cmd::retry_mcp_server,
             commands::mcp_cmd::set_mcp_enabled,
             commands::mcp_cmd::check_nodejs,
+            commands::mcp_cmd::list_builtin_tools,
             commands::kb_cmd::list_kb,
             commands::kb_cmd::create_kb,
             commands::kb_cmd::update_kb,

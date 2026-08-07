@@ -229,6 +229,11 @@ const mcp = {
     try { return await invoke<boolean>("check_nodejs"); }
     catch { return false; }
   },
+  /** 列出内置工具清单（后端 register_builtin 单一来源，前端不再手抄） */
+  async listBuiltinTools(): Promise<{ name: string; description: string }[]> {
+    try { return await invoke<{ name: string; description: string }[]>("list_builtin_tools"); }
+    catch (err) { throw wrapInvokeError("mcp.listBuiltinTools", err); }
+  },
 };
 
 const kb = {

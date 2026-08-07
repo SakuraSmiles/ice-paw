@@ -14,7 +14,15 @@ const lastLoadTime = ref(0);
 async function reload() {
   loading.value = true;
   try {
-    servers.value = await bridge.mcp.list();
+    const [serverList, builtins] = await Promise.all([
+      bridge.mcp.list(),
+      bridge.mcp.listBuiltinTools(),
+    ]);
+    servers.value = serverList;
+    builtinTools.value = builtins.map(t => ({
+      name: t.name,
+      desc: builtinDescZh[t.name] ?? t.description,
+    }));
     lastLoadTime.value = Date.now();
   } catch (e) {
     console.error("加载 MCP Server 列表失败:", e);
@@ -107,23 +115,34 @@ async function onDelete(s: McpServer) {
   catch (e) { console.error("删除 MCP Server 失败:", e); }
 }
 
-// 内置工具集
+// 内置工具集——动态从后端拉取（register_builtin 为单一事实来源，前端不再手抄）
 const builtinExpanded = ref(false);
-const builtinTools: { name: string; desc: string }[] = [
-  { name: "read_file", desc: "读取本地文件内容" },
-  { name: "list_directory", desc: "列出目录内容" },
-  { name: "write_file", desc: "写入文件（覆盖）" },
-  { name: "edit_file", desc: "精准字符串替换" },
-  { name: "delete_file", desc: "删除文件或空目录" },
-  { name: "search_files", desc: "正则内容搜索（grep）" },
-  { name: "run_command", desc: "执行 shell 命令（需授权）" },
-  { name: "git", desc: "git 只读操作（status/diff/log/show）" },
-  { name: "web_fetch", desc: "抓取 URL 正文" },
-  { name: "read_agent_config", desc: "读取自己的 agent.yaml 配置" },
-  { name: "search_kb", desc: "检索知识库（对话中 agent 自动调用）" },
-  { name: "read_kb_document", desc: "读取知识库文档全文" },
-  { name: "save_to_kb", desc: "保存资料到知识库（对话中 agent 自动调用）" },
-];
+const builtinTools = ref<{ name: string; desc: string }[]>([]);
+
+// 中文友好描述（本地化文案层）：仅用于卡片展示优化，缺失时回退后端原始描述。
+// 工具清单与计数始终来自后端，这里只决定某工具显示中文短描述还是后端原文；
+// 新增工具忘了补这里，工具照样显示（只是描述用后端原文），不会出现数量错 / 漏工具。
+const builtinDescZh: Record<string, string> = {
+  read_file: "读取本地文件内容",
+  list_directory: "列出目录内容",
+  directory_tree: "递归目录树（跳噪音目录）",
+  get_file_info: "文件元信息（大小/类型/时间）",
+  read_multiple_files: "批量读多个文件（≤20）",
+  write_file: "写入文件（覆盖）",
+  edit_file: "精准字符串替换",
+  delete_file: "删除文件或空目录",
+  move_file: "移动 / 重命名（跨盘自动复制）",
+  create_directory: "建目录含父目录（幂等）",
+  search_files: "正则内容搜索（grep）",
+  run_command: "执行 shell 命令（需授权）",
+  git: "git 只读操作（status/diff/log/show）",
+  web_fetch: "抓取 URL 正文",
+  read_agent_config: "读取自己的 agent.yaml 配置",
+  search_kb: "检索知识库（agent 自动调用）",
+  read_kb_document: "读取知识库文档全文",
+  save_to_kb: "保存资料到知识库（agent 自动调用）",
+  propose_config_change: "提出 agent 配置提案（agent 自动调用）",
+};
 </script>
 
 <template>
