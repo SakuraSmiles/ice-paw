@@ -8,7 +8,8 @@
 //! 4. [`crate::context::stages::HistoryStage`]       — 历史消息行 → `ChatMessage` 转换
 //! 5. [`crate::context::stages::ToolFailureFoldStage`] — 折叠连续重复的失败工具调用
 //! 6. [`crate::context::memory::MemoryStage`]        — M1.5 滚动摘要（独立在 memory.rs）
-//! 7. [`crate::context::stages::FinalAssembleStage`] — 最终拼装
+//! 7. [`crate::context::stages::TokenWindowStage`]   — 按 max_input_tokens 裁剪历史（Phase 1）
+//! 8. [`crate::context::stages::FinalAssembleStage`] — 最终拼装
 //!
 //! **M1.4**：移除 `ToolTrimStage` — Pipeline 阶段裁剪工具意义不大，因为
 //! 工具裁剪需要每轮动态评估（不同 round 的 query 信号不同），且
@@ -34,7 +35,7 @@ use tracing::debug;
 use crate::context::memory::{MemoryStage, NoopSummaryProvider, SummaryProvider};
 use crate::context::stages::{
     FinalAssembleStage, HistoryStage, OsContextStage, SystemPromptStage, TemplateStage,
-    ToolFailureFoldStage,
+    TokenWindowStage, ToolFailureFoldStage,
 };
 use crate::context::token::ContextBudget;
 use crate::db::models::{AgentRow, MessageRow};
@@ -198,7 +199,7 @@ impl PipelineRunner {
         Self { stages }
     }
 
-    /// 默认 Pipeline：Template → OsContext → SystemPrompt → History → ToolFailureFold → Memory → Final
+    /// 默认 Pipeline：Template → OsContext → SystemPrompt → History → ToolFailureFold → Memory → TokenWindow → Final
     ///
     /// 等价于原 `assemble_context` 的 5 步行为 + M1.4 MemoryStage。
     ///
@@ -229,6 +230,7 @@ impl PipelineRunner {
             Box::new(HistoryStage),
             Box::new(ToolFailureFoldStage),
             Box::new(MemoryStage::new(provider)),
+            Box::new(TokenWindowStage),
             Box::new(FinalAssembleStage),
         ])
     }

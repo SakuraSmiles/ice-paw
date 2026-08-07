@@ -12,7 +12,8 @@
 //! 4. [`HistoryStage`]       — 历史消息行 → `ChatMessage` 转换
 //! 5. [`ToolFailureFoldStage`] — 折叠连续重复的失败工具调用（非破坏，仅影响 LLM 视图）
 //! 6. [`MemoryStage`]        — M1.5 滚动摘要（独立放在 [`crate::context::memory`] 中）
-//! 7. [`FinalAssembleStage`] — 最终拼装（图片重排、user_blocks 拼装、messages 列表组装）
+//! 7. [`TokenWindowStage`]   — 按 max_input_tokens 硬上限裁剪历史（Phase 1 token 窗口）
+//! 8. [`FinalAssembleStage`] — 最终拼装（图片重排、user_blocks 拼装、messages 列表组装）
 //!
 //! `MemoryStage` 不在本模块 —— 它属于 L1 Memory 层（`memory.rs`），按
 //! M2.2 拆分规则独立维护。
@@ -20,11 +21,14 @@
 use async_trait::async_trait;
 use sqlx::SqlitePool;
 
-use crate::context::history::{fold_repeated_tool_failures, load_history_with_window, resolve_window};
+use crate::context::history::{
+    fold_repeated_tool_failures, load_history_with_window, resolve_window, sanitize_history,
+};
 use crate::context::os_context::build_os_context;
 use crate::context::pipeline::{PipelineContext, PipelineStage};
 use crate::context::system_prompt::build_system_prompt;
 use crate::context::template::render_template;
+use crate::context::token::{estimate_block_tokens, estimate_tokens, trim_history_to_budget};
 use crate::db::repo;
 use crate::error::AppResult;
 use crate::infra::protocol::{ChatMessage, ContentBlock};
@@ -242,6 +246,76 @@ impl PipelineStage for ToolFailureFoldStage {
     async fn execute(&self, ctx: &mut PipelineContext) -> AppResult<()> {
         let folded = fold_repeated_tool_failures(std::mem::take(&mut ctx.history_messages));
         ctx.history_messages = folded;
+        Ok(())
+    }
+}
+
+// =========================================================================
+// Stage 4.7: TokenWindowStage — 按 max_input_tokens 硬上限裁剪历史
+// =========================================================================
+
+/// Phase 1: token 窗口守门人（消费 Phase 0 接好的 `max_input_tokens`）。
+///
+/// 在 [`crate::context::memory::MemoryStage`]（软摘要压缩）之后、
+/// [`FinalAssembleStage`] 之前执行：估算 system + summary + 当前 user + 历史 的总 token，
+/// 若超过 `context_budget.max_input_tokens` 的 [`TOKEN_WINDOW_TARGET_PCT`]%（保守余量），
+/// 从历史最旧端裁剪到预算内，再 [`sanitize_history`] 修复切断处的孤儿 tool 块。
+///
+/// system / summary / 当前 user 不裁（必须保留）；只动 `ctx.history_messages`。
+/// 这是最后的安全网：大窗口模型（如 MiniMax-M3 1M）几乎不触发，小窗口模型才生效。
+pub(crate) struct TokenWindowStage;
+
+/// Token 窗口目标比例：估算总 token 超过 `max_input` 的此百分比即裁剪历史。
+///
+/// 取 **80%**（留 20% 余量）而非更激进的比例，原因：
+/// - **工具定义不计入估算**：本 Stage 只估 system/summary/user/历史，工具 JSON schema
+///   （native 文件工具 + MCP）完全没数，工具密集 agent 可达数 K token；
+/// - **估算器偏保守**：`estimate_tokens`（CJK 1/字、其余 ÷4）对 JSON / 代码 / 标点密集
+///   内容会**低估**，而那正是 tool_input 高发场景——越该裁剪时低估越严重；
+/// - **风险不对称**：超限 = API 硬报错整轮失败；多裁 = 损失部分旧历史（可接受）；
+/// - 本 Stage 极少触发（仅长对话接近上限），保守代价极小。
+///
+/// 若手测出现 context-length 报错，调低此值；若发现大量历史被过早裁掉，可调高。
+const TOKEN_WINDOW_TARGET_PCT: usize = 80;
+
+#[async_trait]
+impl PipelineStage for TokenWindowStage {
+    fn name(&self) -> &'static str {
+        "token_window"
+    }
+
+    async fn execute(&self, ctx: &mut PipelineContext) -> AppResult<()> {
+        let max_input = ctx.context_budget.max_input_tokens;
+        if max_input == 0 || ctx.history_messages.is_empty() {
+            return Ok(());
+        }
+        // 目标 ≤ max_input 的 TOKEN_WINDOW_TARGET_PCT%（余量给工具定义 / 估算误差 / 端点差异）
+        let target = max_input * TOKEN_WINDOW_TARGET_PCT / 100;
+
+        // 不可裁剪部分（必须保留）：system prompt + 摘要 + 当前用户消息
+        let sys_tokens = ctx.system_prompt.as_deref().map(estimate_tokens).unwrap_or(0);
+        let summary_tokens = ctx.summary.as_deref().map(estimate_tokens).unwrap_or(0);
+        let user_tokens: usize = ctx.final_blocks.iter().map(estimate_block_tokens).sum();
+        let fixed = sys_tokens + summary_tokens + user_tokens;
+
+        // 分配给历史的预算 = 目标 - 不可裁剪部分
+        let history_budget = target.saturating_sub(fixed);
+        let before_n = ctx.history_messages.len();
+
+        let kept = trim_history_to_budget(&ctx.history_messages, history_budget);
+        if kept.len() < before_n {
+            let dropped = before_n - kept.len();
+            // 裁剪可能在 tool_use/tool_result 边界切断 → sanitize 清理孤儿
+            ctx.history_messages = sanitize_history(kept.to_vec());
+            tracing::info!(
+                target: "ice_paw.context",
+                before_n,
+                after_n = ctx.history_messages.len(),
+                max_input,
+                target,
+                "TokenWindowStage: 超 max_input 裁剪历史 {dropped} 条",
+            );
+        }
         Ok(())
     }
 }

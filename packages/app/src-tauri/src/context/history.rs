@@ -120,7 +120,7 @@ pub(crate) fn load_history_with_window(
 /// 5. **连续同角色消息** → 合并 content（协议要求 user/assistant 交替）
 ///
 /// 纯函数 + 无副作用，便于单元测试。
-fn sanitize_history(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
+pub(crate) fn sanitize_history(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
     if messages.is_empty() {
         return messages;
     }
