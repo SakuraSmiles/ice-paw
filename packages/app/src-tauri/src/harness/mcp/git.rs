@@ -82,6 +82,8 @@ For write operations (commit/add/push), use run_command instead."
         cmd.stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .stdin(Stdio::null());
+        // Windows: 隐藏 git 子进程弹出的控制台窗口（GUI 应用 spawn 子进程会闪窗）
+        crate::infra::process::suppress_console_window(&mut cmd);
 
         let output = cmd
             .output()
