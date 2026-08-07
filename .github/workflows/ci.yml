@@ -52,11 +52,13 @@ jobs:
           sudo apt-get clean
           df -h
 
-      # tauri-build 在编译期校验 tauri.conf.json 的 bundle.resources 文件存在。
-      # node.exe + node_modules 由 prepare:mcp 下载（gitignore 不入库），真实打包
-      # 走 beforeBuildCommand 自动准备。CI 只验编译不产出安装包，创建占位文件让
-      # build script 通过即可——内容无关紧要。
-      - name: Stub bundled MCP runtime (compile-only placeholder)
+      # tauri-build 在编译期校验 tauri.conf.json 声明的 bundle 资源存在：
+      # bundle.resources（node.exe + node_modules）由 prepare:mcp 下载
+      # （gitignore 不入库），真实打包走 beforeBuildCommand 自动准备。
+      # CI 只验编译、不产出安装包，创建占位文件让 build script 通过即可。
+      # （webviewInstallMode = offlineInstaller 无 path 字段，Tauri 打包时自动下载，
+      #  编译期不校验其文件存在，故 CI 无需为 WebView2 建占位。）
+      - name: Stub bundled runtime artifacts (compile-only placeholders)
         run: |
           mkdir -p resources/mcp-runtime/node
           touch resources/mcp-runtime/node/node.exe
