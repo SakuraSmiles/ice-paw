@@ -9,14 +9,17 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use tauri::AppHandle;
 use tokio::sync::RwLock;
 
 use crate::error::{AppError, AppResult};
 
+use super::bundled;
 use super::client::McpRegistry;
 use super::external::{ExternalMcpServer, ExternalToolProxy};
 use super::types::{
-    McpServerConfig, McpToolDefinition, ServerSnapshot, ServerStatusKind, WORKSPACE_PLACEHOLDER,
+    McpServerConfig, McpToolDefinition, RuntimeKind, ServerSnapshot, ServerStatusKind,
+    WORKSPACE_PLACEHOLDER,
 };
 
 // =========================================================================
@@ -76,12 +79,25 @@ impl ServerEntry {
 pub struct McpServerManager {
     /// 统一 server 状态表：config_id → ServerEntry（pub(crate) 供命令层查询）
     pub(crate) entries: RwLock<HashMap<String, ServerEntry>>,
+    /// AppHandle：bundled 运行时解析 resource_dir 需要（system 运行时不用）。
+    /// 由 lib.rs setup 阶段 `new_with_handle` 注入。
+    app_handle: Option<AppHandle>,
 }
 
 impl McpServerManager {
     pub fn new() -> Self {
         Self {
             entries: RwLock::new(HashMap::new()),
+            app_handle: None,
+        }
+    }
+
+    /// 注入 AppHandle，使 bundled 运行时 server 能解析 resource_dir。
+    /// lib.rs setup 阶段调用（builder 链上的 `new()` 此时还没 handle）。
+    pub fn new_with_handle(app: AppHandle) -> Self {
+        Self {
+            entries: RwLock::new(HashMap::new()),
+            app_handle: Some(app),
         }
     }
 
@@ -124,13 +140,23 @@ impl McpServerManager {
             config.args.clone()
         };
 
+        // bundled 运行时：command → 内置 node.exe 绝对路径，entry script prepend 到 args，
+        // env 合并 bundled 模板。system 运行时保持 DB 里的 command/args/env 不变。
+        // （command 为 node.exe 绝对路径时，spawn 的 Windows cmd /C 分支被跳过，直执行）
+        let (command, args, env_value): (String, Vec<String>, serde_json::Value) =
+            if config.runtime_kind == RuntimeKind::Bundled {
+                self.resolve_bundled(config, args)?
+            } else {
+                (config.command.clone(), args, config.env.clone())
+            };
+
         // spawn 子进程
         let server = match ExternalMcpServer::spawn(
             config.id.clone(),
             config.name.clone(),
-            &config.command,
+            &command,
             &args,
-            &config.env,
+            &env_value,
         )
         .await
         {
@@ -207,6 +233,46 @@ impl McpServerManager {
             tool_names.len(),
         );
         Ok(())
+    }
+
+    /// bundled 运行时解析：把 DB 里的占位 command="node" + 「用户参数」args 解析成
+    /// 可直接 spawn 的 (node.exe 绝对路径, [entry_script, ...args], 合并后的 env)。
+    ///
+    /// - node.exe 路径来自 resource_dir（安装包自带）。
+    /// - entry script = node_modules/<package_dir>/<entry_script>，prepend 到 args 前。
+    /// - env = bundled 模板（如 memory 的 MEMORY_FILE_PATH，已替换占位符）→ 用户 env 覆盖。
+    fn resolve_bundled(
+        &self,
+        config: &McpServerConfig,
+        mut args: Vec<String>,
+    ) -> AppResult<(String, Vec<String>, serde_json::Value)> {
+        let app = self.app_handle.as_ref().ok_or_else(|| {
+            AppError::Internal("bundled MCP server 无法启动：McpServerManager 未注入 AppHandle".into())
+        })?;
+        let spec = bundled::spec_for(&config.id).ok_or_else(|| {
+            AppError::Internal(format!("未注册的 bundled server id: {}", config.id))
+        })?;
+        let node = bundled::node_exe(app)?;
+        let entry = bundled::entry_script(app, spec)?;
+
+        // entry script prepend 到 args（{workspace} 已在上一步替换完成）
+        let mut full_args = Vec::with_capacity(args.len() + 1);
+        full_args.push(entry.to_string_lossy().replace('\\', "/"));
+        full_args.append(&mut args);
+
+        // 合并 env：bundled 模板（渲染 {memory_data_file}）→ 用户 env 覆盖（同 key 后者胜）
+        let mut env_map = bundled::render_env_template(spec, app)?;
+        if let Some(obj) = config.env.as_object() {
+            for (k, v) in obj {
+                env_map.insert(k.clone(), v.clone());
+            }
+        }
+
+        Ok((
+            node.to_string_lossy().to_string(),
+            full_args,
+            serde_json::Value::Object(env_map),
+        ))
     }
 
     /// 关闭一个 MCP Server（从 registry 反注册工具 + 关闭子进程）

@@ -5,9 +5,9 @@
 use sqlx::SqlitePool;
 
 use crate::error::{AppError, AppResult};
-use crate::harness::mcp::types::{McpServerConfig, NewMcpServer, UpdateMcpServer, TrustLevel};
+use crate::harness::mcp::types::{McpServerConfig, NewMcpServer, RuntimeKind, UpdateMcpServer, TrustLevel};
 
-const ALL_COLS: &str = "id, name, description, command, args, env, enabled, trust_level, scope, created_at, updated_at";
+const ALL_COLS: &str = "id, name, description, command, args, env, enabled, trust_level, scope, runtime_kind, created_at, updated_at";
 
 /// 列出全部 MCP Server 配置，按 created_at 降序
 pub async fn list_all(pool: &SqlitePool) -> AppResult<Vec<McpServerConfig>> {
@@ -43,8 +43,8 @@ pub async fn create(pool: &SqlitePool, input: &NewMcpServer) -> AppResult<McpSer
         .unwrap_or_else(|| "{}".to_string());
 
     sqlx::query(
-        "INSERT INTO mcp_servers (id, name, description, command, args, env, enabled, trust_level, scope, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO mcp_servers (id, name, description, command, args, env, enabled, trust_level, scope, runtime_kind, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&input.id)
     .bind(&input.name)
@@ -55,6 +55,7 @@ pub async fn create(pool: &SqlitePool, input: &NewMcpServer) -> AppResult<McpSer
     .bind(input.enabled as i32)
     .bind(input.trust_level.as_str())
     .bind(&input.scope)
+    .bind(input.runtime_kind.as_str())
     .bind(&now)
     .bind(&now)
     .execute(pool)
@@ -74,12 +75,13 @@ pub async fn update(pool: &SqlitePool, input: &UpdateMcpServer) -> AppResult<Mcp
     let enabled = input.enabled.unwrap_or(existing.enabled);
     let trust_level = input.trust_level.unwrap_or(existing.trust_level);
     let scope = input.scope.clone().unwrap_or_else(|| existing.scope.clone());
+    let runtime_kind = input.runtime_kind.unwrap_or(existing.runtime_kind);
     let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let args_str = serde_json::to_string(args)?;
     let env_str = serde_json::to_string(env)?;
 
     sqlx::query(
-        "UPDATE mcp_servers SET name=?, description=?, command=?, args=?, env=?, enabled=?, trust_level=?, scope=?, updated_at=? WHERE id=?",
+        "UPDATE mcp_servers SET name=?, description=?, command=?, args=?, env=?, enabled=?, trust_level=?, scope=?, runtime_kind=?, updated_at=? WHERE id=?",
     )
     .bind(name)
     .bind(desc)
@@ -89,6 +91,7 @@ pub async fn update(pool: &SqlitePool, input: &UpdateMcpServer) -> AppResult<Mcp
     .bind(enabled as i32)
     .bind(trust_level.as_str())
     .bind(&scope)
+    .bind(runtime_kind.as_str())
     .bind(&now)
     .bind(&input.id)
     .execute(pool)
@@ -115,41 +118,51 @@ pub async fn delete(pool: &SqlitePool, id: &str) -> AppResult<()> {
 }
 
 /// 默认 MCP Server 配置列表——首次启动时自动安装。
-/// 要求：命令用 npx（跨机器通用），不需要 API Key 即可运行。
+///
+/// 前 3 个（filesystem / thinking / memory）用 **bundled 运行时**：IcePaw 内置 node.exe
+/// + 预打包 node_modules，零网络依赖、零系统 node 依赖。DB 里 command 存占位 "node"、
+/// args 存「用户可配参数」（不含包名/入口），包名与 entry script 由 start_server
+/// 解析时注入（见 harness::mcp::bundled）。
+///
+/// 后 2 个（playwright / maifady）仍走 **system 运行时**（npx），依赖系统 node。
 fn default_mcp_servers() -> Vec<NewMcpServer> {
     vec![
         NewMcpServer {
             id: "builtin-filesystem".into(),
             name: "文件系统工具集".into(),
             description: "文件读写、目录浏览、搜索替换".into(),
-            command: "npx".into(),
-            args: vec!["-y".into(), "@anthropic-ai/mcp-server-filesystem".into(), "{workspace}".into()],
+            command: "node".into(),
+            // 入口 script 由 start_server 注入；这里只保留用户可配参数（允许访问的目录）
+            args: vec!["{workspace}".into()],
             env: Some(serde_json::json!({})),
             enabled: true,
             trust_level: TrustLevel::Trusted,
             scope: "per_agent".into(),
+            runtime_kind: RuntimeKind::Bundled,
         },
         NewMcpServer {
             id: "builtin-thinking".into(),
             name: "深度推理".into(),
             description: "多步推理引擎，复杂问题分拆逐步思考".into(),
-            command: "npx".into(),
-            args: vec!["-y".into(), "@modelcontextprotocol/server-sequential-thinking".into()],
+            command: "node".into(),
+            args: vec![],
             env: Some(serde_json::json!({})),
             enabled: true,
             trust_level: TrustLevel::Trusted,
             scope: "per_agent".into(),
+            runtime_kind: RuntimeKind::Bundled,
         },
         NewMcpServer {
             id: "builtin-memory".into(),
             name: "知识图谱记忆".into(),
             description: "持久化知识图谱，跨会话记忆实体和关系".into(),
-            command: "npx".into(),
-            args: vec!["-y".into(), "@modelcontextprotocol/server-memory".into()],
+            command: "node".into(),
+            args: vec![],
             env: Some(serde_json::json!({})),
             enabled: true,
             trust_level: TrustLevel::Trusted,
             scope: "per_agent".into(),
+            runtime_kind: RuntimeKind::Bundled,
         },
         NewMcpServer {
             id: "builtin-playwright".into(),
@@ -161,6 +174,7 @@ fn default_mcp_servers() -> Vec<NewMcpServer> {
             enabled: true,
             trust_level: TrustLevel::Trusted,
             scope: "per_agent".into(),
+            runtime_kind: RuntimeKind::System,
         },
         NewMcpServer {
             id: "builtin-maifady".into(),
@@ -172,6 +186,7 @@ fn default_mcp_servers() -> Vec<NewMcpServer> {
             enabled: true,
             trust_level: TrustLevel::Trusted,
             scope: "per_agent".into(),
+            runtime_kind: RuntimeKind::System,
         },
     ]
 }
@@ -208,6 +223,7 @@ struct McpServerRow {
     enabled: i32,
     trust_level: String,
     scope: String,
+    runtime_kind: String,
     created_at: String,
     updated_at: String,
 }
@@ -224,6 +240,7 @@ impl From<McpServerRow> for McpServerConfig {
             enabled: row.enabled != 0,
             trust_level: row.trust_level.parse::<TrustLevel>().unwrap_or_default(),
             scope: row.scope,
+            runtime_kind: row.runtime_kind.parse::<RuntimeKind>().unwrap_or_default(),
             created_at: row.created_at,
             updated_at: row.updated_at,
         }

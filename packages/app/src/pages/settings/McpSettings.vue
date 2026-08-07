@@ -134,7 +134,7 @@ const builtinTools: { name: string; desc: string }[] = [
 
     <div v-if="!nodeAvailable && !loading" class="node-warning">
       <span class="node-warn-icon">!</span>
-      <span>未检测到 Node.js，外部 MCP 工具需要它来运行。<a href="https://nodejs.org" target="_blank">点此安装 Node.js</a>（LTS 版本），安装后重启应用即可。</span>
+      <span>未检测到系统 Node.js。深度推理 / 知识图谱记忆 / 文件系统工具集已内置运行时，不受影响；浏览器自动化、工程专家团队等用户自加的 npx 类型 MCP Server 仍需 <a href="https://nodejs.org" target="_blank">安装 Node.js</a>（LTS）后重启生效。</span>
     </div>
 
     <div class="mcp-list">

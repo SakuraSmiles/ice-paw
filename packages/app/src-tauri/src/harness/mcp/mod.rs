@@ -10,6 +10,7 @@ pub mod types;
 pub mod client;
 pub mod internal;
 pub mod external;
+pub mod bundled;
 pub mod kb_tool;
 pub mod manager;
 // 内置 agentic 工具（文件读写编辑 / shell / grep / git / web）

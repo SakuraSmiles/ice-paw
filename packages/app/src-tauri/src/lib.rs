@@ -47,9 +47,8 @@ pub fn run() {
         .manage(harness::chat_state::ChatState::new())
         // REQ-XC-010: AgentCmd trait 抽象注入
         .manage::<Option<std::sync::Arc<dyn commands::agent_cmd::AgentCmd>>>(None)
-        // Phase 2: 全局 MCP 工具注册表 + 外部 Server 管理器
+        // Phase 2: 全局 MCP 工具注册表（外部 Server 管理器改在 setup 内注入，见下）。
         .manage(Arc::new(McpRegistry::with_builtin()))
-        .manage(Arc::new(harness::mcp::McpServerManager::new()))
         // 注：原 `tauri_plugin_stronghold::Builder::new(...).build()` 注册已移除。
         //
         // 理由（参见 dev2 评审方案 §3.2）：
@@ -186,6 +185,8 @@ pub fn run() {
             handle.manage(sql_agent_cmd);
 
             // 5) Phase 2: 种子默认 MCP Server + 启动已启用的外部 MCP Server
+            // 注入 McpServerManager（携带 AppHandle —— bundled 运行时解析 resource_dir 需要）。
+            handle.manage(Arc::new(harness::mcp::McpServerManager::new_with_handle(handle.clone())));
             let mcp_registry: Arc<McpRegistry> = handle.state::<Arc<McpRegistry>>().inner().clone();
             let mcp_manager: Arc<harness::mcp::McpServerManager> =
                 handle.state::<Arc<harness::mcp::McpServerManager>>().inner().clone();
