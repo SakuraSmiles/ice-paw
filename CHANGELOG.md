@@ -2,6 +2,17 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/)，版本号遵循 [SemVer](https://semver.org/)。
 
+## [0.2.3] — 2026-08-07
+
+> 0.2.x 线的 beta 阶段第 3 个迭代。
+
+### Added
+- **工具调用审计**：`tool_calls` 表接入 `tool_executor`，每次工具调用记录 tool_name/arguments/result/is_error/耗时/起止，可回溯 agent 行为与排查慢命令。
+
+### Fixed
+- **命令行窗口闪现**：Windows 上 agent 调用 `run_command`/`git` 等工具时控制台窗口一闪而过（统一 `CREATE_NO_WINDOW`）。
+- **工具打分历史权重失效**：`tool_calls` 空壳表导致 `scoring` 的「最近调用加权」维度从未生效，随审计接入自动恢复。
+
 ## [0.2.2] — 2026-08-06
 
 > 0.2.x 线的 beta 阶段第 2 个迭代（对应原计划的 beta.2）。自 [0.2.0-beta.1] 起，改用 patch 位编码迭代号，版本号统一为纯数字（MSI 兼容）。
