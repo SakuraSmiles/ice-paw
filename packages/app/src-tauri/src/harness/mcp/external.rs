@@ -432,7 +432,12 @@ impl Drop for ExternalMcpServer {
 // =========================================================================
 
 pub struct ExternalToolProxy {
+    /// 工具对外的命名空间名（`server_name.tool_name`）——既作 registry key，
+    /// 也作 LLM 可见/调用的名字（多 server 同名工具靠前缀消歧）。
     name: String,
+    /// server 端原始工具名（tools/list 返回的 `name`）——tools/call 发回给 server。
+    /// 关键：server 只认原始名，带 `server_name.` 前缀调用会报 "not found"。
+    server_tool_name: String,
     description: String,
     parameters: serde_json::Value,
     server: Arc<ExternalMcpServer>,
@@ -442,12 +447,13 @@ pub struct ExternalToolProxy {
 impl ExternalToolProxy {
     pub(crate) fn new(
         name: String,
+        server_tool_name: String,
         description: String,
         parameters: serde_json::Value,
         server: Arc<ExternalMcpServer>,
         trust_level: TrustLevel,
     ) -> Self {
-        Self { name, description, parameters, server, trust_level }
+        Self { name, server_tool_name, description, parameters, server, trust_level }
     }
 }
 
@@ -469,7 +475,9 @@ impl McpClient for ExternalToolProxy {
             .map_err(|e| AppError::Validation(format!(
                 "工具 '{}' 参数解析失败: {}", self.name, e
             )))?;
-        self.server.call_tool(&self.name, &args_value).await
+        // 发给 server 的是原始工具名（不带 server_name. 前缀）；
+        // self.name（带前缀）仅用于 registry 查找与 LLM 展示。
+        self.server.call_tool(&self.server_tool_name, &args_value).await
     }
 }
 

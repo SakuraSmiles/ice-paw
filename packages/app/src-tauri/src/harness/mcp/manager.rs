@@ -175,6 +175,7 @@ impl McpServerManager {
             let namespaced = format!("{}{}", prefix, tool_def.name);
             let proxy = Arc::new(ExternalToolProxy::new(
                 namespaced,
+                tool_def.name.clone(),
                 tool_def.description.clone(),
                 tool_def.input_schema.clone(),
                 server.clone(),
