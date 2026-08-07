@@ -345,6 +345,8 @@ export interface McpServer {
   enabled: boolean;
   trust_level: McpTrustLevel;
   scope: string;
+  /** 运行时类型：system 走系统 PATH（npx），bundled 用内置 node + 预打包包 */
+  runtime_kind: "system" | "bundled";
   created_at: string;
   updated_at: string;
 }
@@ -360,6 +362,8 @@ export interface McpServerSnapshot {
   enabled: boolean;
   trust_level: McpTrustLevel;
   scope: string;
+  /** 运行时类型：system 走系统 PATH（npx），bundled 用内置 node + 预打包包 */
+  runtime_kind: "system" | "bundled";
   /** 运行时状态 */
   status: "disabled" | "starting" | "running" | "failed";
   /** running 时的工具数 */

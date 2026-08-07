@@ -167,6 +167,7 @@ pub async fn set_mcp_enabled(
             enabled: Some(enabled),
             trust_level: None,
             scope: None,
+            runtime_kind: None,
         },
     )
     .await;

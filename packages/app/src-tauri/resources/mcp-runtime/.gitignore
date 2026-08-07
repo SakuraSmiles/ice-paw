@@ -1,0 +1,6 @@
+# 内置 MCP 运行时——以下由 scripts/prepare-mcp-runtime.ps1 生成，不入库：
+#   node/node.exe          ← 下载的 Node win-x64 portable
+#   node_modules/          ← npm install 装的 3 个 server 包 + 传递依赖（含 zod）
+node/
+node_modules/
+package-lock.json
