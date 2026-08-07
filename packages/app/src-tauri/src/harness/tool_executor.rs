@@ -31,6 +31,7 @@ use serde_json::Value;
 use sqlx::SqlitePool;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::oneshot;
+use uuid::Uuid;
 
 use crate::db::models::{HookConfig, HookPoint};
 use crate::db::repo;
@@ -87,6 +88,7 @@ pub async fn execute_tool_round(
 
     for (tc_id, tc_name, tc_args) in completed_calls {
         let tool_start = std::time::Instant::now();
+        let started_at = now_sql();
         // 1. 解析授权级别 + 路径
         let (level, file_path) = inspect_tool_for_auth(registry, tc_name, tc_args).await;
 
@@ -208,6 +210,37 @@ pub async fn execute_tool_round(
 
         // 3. emit tool-result + 收集 blocks
         let duration_ms = tool_start.elapsed().as_millis() as u64;
+        let finished_at = now_sql();
+
+        // 审计：写入 tool_calls 表（失败仅 warn，不影响主流程）。
+        // 副作用——表一旦有数据，list_recent_tool_names 不再返回空 →
+        // 工具打分的「历史权重」维度从此真正生效（见 scoring.rs）。
+        let (audit_is_error, audit_result) = match &final_result {
+            Ok(c) => (false, c.as_str()),
+            Err(e) => (true, e.as_str()),
+        };
+        if let Err(e) = repo::tool_call::create(
+            &tool_ctx.pool,
+            &Uuid::new_v4().to_string(),
+            asst_msg_id,
+            tc_name,
+            tc_args,
+            Some(audit_result),
+            audit_is_error,
+            duration_ms,
+            &started_at,
+            &finished_at,
+        )
+        .await
+        {
+            tracing::warn!(
+                target: "ice_paw.tool_audit",
+                "写入 tool_calls 审计失败（忽略）: tool={} err={}",
+                tc_name,
+                e
+            );
+        }
+
         match final_result {
             Ok(content) => {
                 let _ = app.emit(
@@ -347,6 +380,12 @@ pub(crate) async fn wait_for_cancel(token: &crate::harness::chat_state::Cancella
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+}
+
+/// UTC 墙钟，格式与 SQLite `datetime('now')` 一致（`YYYY-MM-DD HH:MM:SS`）。
+/// 供 tool_calls 审计记录起止时间，便于 SQL 直接做时间差/排序。
+fn now_sql() -> String {
+    chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
 /// 从工具实例提取 `AuthorizationLevel` + 待访问路径。
