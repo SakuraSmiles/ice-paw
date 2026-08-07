@@ -31,7 +31,14 @@ use crate::harness::provider;
 use crate::harness::mcp::{McpServerManager, McpRegistry};
 use crate::harness::authority::{PathAuthSession, PathWhitelistConfig};
 use crate::context::pipeline::{AssembledContext, PipelineContext, PipelineRunner};
-use crate::context::history::resolve_window;
+
+/// MemoryStage 折叠素材的 DB 加载上限（条数）。
+///
+/// Phase 2：解耦「DB 加载」与「发送上限」。加载充足历史给滚动摘要留折叠素材，
+/// 而发送时由 MemoryStage（摘要压缩）+ TokenWindowStage（硬裁剪）分两级控制。
+/// 部分加载（会话条数 > 此值）由 `covered_until_rowid` 按值定位安全兜底
+/// （计数在部分加载下会静默丢消息，rowid 不会）。
+const MEMORY_LOAD_LIMIT: i64 = 500;
 
 /// 发送消息 — 触发 LLM 流式生成。
 ///
@@ -105,16 +112,15 @@ pub async fn send_message(
 
     // --- 3. 拼装上下文（A3-1：trait-based Pipeline） ---
     //
-    // A3-2：根据 Agent 配置的 `max_history_messages` 决定 DB 加载上限。
-    // 该值可能为 None（→ 系统默认）或 Some(N)；上限仍受
-    // `repo::message::MAX_LIMIT` 兜底。Pipeline 内部还会再用一次
-    // `resolve_window` 二次裁剪（保证窗口语义集中）。
+    // Phase 2：DB 加载固定 `MEMORY_LOAD_LIMIT`（500）条历史，不再耦合
+    // `max_history_messages`。`max_history_messages` 现在是 MemoryStage 的
+    // keep_n 地板（verbatim 保留窗），不再决定「加载/发送上限」。发送侧由
+    // MemoryStage（摘要压缩）+ TokenWindowStage（token 硬裁剪）两级控制。
     //
     // M1.2: 同时查询「最近 10 次」tool 消息以填充 `tool_call_history`，
     // M1.4 后供 loop_engine 在每轮调用 list_tool_defs_with_query 打分时使用。
-    let db_load_limit = resolve_window(agent.max_history_messages) as i64;
     let history =
-        repo::message::list_by_conversation(pool.inner(), &conv_id, Some(db_load_limit), None).await?;
+        repo::message::list_by_conversation(pool.inner(), &conv_id, Some(MEMORY_LOAD_LIMIT), None).await?;
     // M1.2: 加载最近 10 条工具消息，提取 tool_use 块中的工具名
     let tool_call_history =
         repo::message::list_recent_tool_names(pool.inner(), &conv_id, 10).await?;
@@ -150,8 +156,8 @@ pub async fn send_message(
         tool_call_history.clone(),
         // Phase 0: 用 agent 的 context_window 构造上下文预算。
         // 解析优先级：agent 显式覆盖 → (provider, model) 已知模型默认 → 128K 兜底。
-        // max_input_tokens 目前无消费者（vestigial），Phase 1 的 token 窗口 stage 才用；
-        // 此处先让真实窗口值到位。
+        // max_input_tokens 现被 Phase 1（TokenWindowStage 硬裁）+ Phase 2
+        // （MemoryStage 折叠触发/目标比例 fold_trigger_tokens / fold_target_tokens）消费。
         {
             let max_input = agent
                 .context_window
@@ -197,7 +203,10 @@ pub async fn send_message(
         .run(&mut pipeline_ctx)
         .await?;
 
-    // M1.5: emit chat:summary-injected if MemoryStage triggered
+    // M1.5: emit chat:summary-injected if MemoryStage triggered.
+    // 注：前端目前**未** listen 此事件（types/index.ts 有 payload 类型，但无 listen 调用）。
+    // emit 保留（3 行、无害、面向未来）；折叠每数轮一次，逐次 toast 噪声大，
+    // 摘要注入的前端可见性（toast / 上下文检视器）留待未来 UX 决策。
     if let Some(event) = pipeline_ctx.summary_event {
         let _ = app.emit("chat:summary-injected", event);
     }
