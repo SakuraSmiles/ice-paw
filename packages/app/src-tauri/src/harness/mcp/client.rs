@@ -182,12 +182,17 @@ impl McpRegistry {
         let all_builtins: Vec<(&str, Arc<dyn McpClient>)> = vec![
             ("read_file", Arc::new(super::internal::ReadFileTool)),
             ("list_directory", Arc::new(super::internal::ListDirectoryTool)),
+            ("directory_tree", Arc::new(super::internal::DirectoryTreeTool)),
+            ("get_file_info", Arc::new(super::internal::GetFileInfoTool)),
+            ("read_multiple_files", Arc::new(super::internal::ReadMultipleFilesTool)),
             ("search_kb", Arc::new(super::kb_tool::SearchKbTool)),
             ("save_to_kb", Arc::new(super::kb_tool::SaveToKbTool)),
             ("read_kb_document", Arc::new(super::kb_tool::ReadKbDocumentTool)),
             ("write_file", Arc::new(super::file_tools::WriteFileTool)),
             ("edit_file", Arc::new(super::file_tools::EditFileTool)),
             ("delete_file", Arc::new(super::file_tools::DeleteFileTool)),
+            ("move_file", Arc::new(super::file_tools::MoveFileTool)),
+            ("create_directory", Arc::new(super::file_tools::CreateDirectoryTool)),
             ("run_command", Arc::new(super::shell::RunCommandTool)),
             ("search_files", Arc::new(super::search::SearchFilesTool)),
             ("git", Arc::new(super::git::GitTool)),
@@ -233,6 +238,9 @@ impl McpRegistry {
         // 只读 / 知识库
         self.register_sync(Arc::new(super::internal::ReadFileTool));
         self.register_sync(Arc::new(super::internal::ListDirectoryTool));
+        self.register_sync(Arc::new(super::internal::DirectoryTreeTool));
+        self.register_sync(Arc::new(super::internal::GetFileInfoTool));
+        self.register_sync(Arc::new(super::internal::ReadMultipleFilesTool));
         self.register_sync(Arc::new(super::kb_tool::SearchKbTool));
         self.register_sync(Arc::new(super::kb_tool::SaveToKbTool));
         self.register_sync(Arc::new(super::kb_tool::ReadKbDocumentTool));
@@ -240,6 +248,8 @@ impl McpRegistry {
         self.register_sync(Arc::new(super::file_tools::WriteFileTool));
         self.register_sync(Arc::new(super::file_tools::EditFileTool));
         self.register_sync(Arc::new(super::file_tools::DeleteFileTool));
+        self.register_sync(Arc::new(super::file_tools::MoveFileTool));
+        self.register_sync(Arc::new(super::file_tools::CreateDirectoryTool));
         self.register_sync(Arc::new(super::shell::RunCommandTool));
         self.register_sync(Arc::new(super::search::SearchFilesTool));
         self.register_sync(Arc::new(super::git::GitTool));
