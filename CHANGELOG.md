@@ -2,6 +2,18 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/)，版本号遵循 [SemVer](https://semver.org/)。
 
+## [0.2.4] — 2026-08-07
+
+> 0.2.x 线的 beta 阶段第 4 个迭代。
+
+### Added
+- **内置 MCP 运行时**：3 个轻量内置 server（sequential-thinking / memory / filesystem）从 npx 运行时拉取改为安装包自带 Windows-x64 Node + 预打包 `node_modules`，运行时零网络、零系统 node 依赖。修复生产 0.2.3 上「深度推理」因 npx 缓存缺传递依赖 `zod` 启动失败。Playwright/maifady 维持 npx。
+
+### Fixed
+- **外部 MCP 工具调用分发**：`ExternalToolProxy` 原把带 `server_name.` 前缀的工具名（如 `深度推理.sequentialthinking`）原样发给 server，server 只认原始名 → JSON-RPC -32602 "Tool ... not found"。proxy 拆成 `name`（带前缀，LLM 侧）+ `server_tool_name`（原始，发 server）两字段。潜伏 bug，影响所有外部 MCP 工具调用（非 bundled 专属）。
+- **错误横幅跨会话串味**：`lastError` 原为全局 ref，A 会话出错后切到 B 会话顶部仍显示 A 的错误。改为按 conversation_id 隔离（Map + computed）。
+- **filesystem server 包名 404**：`@anthropic-ai/mcp-server-filesystem` 已下架，随 bundled 运行时迁到 `@modelcontextprotocol/server-filesystem`。
+
 ## [0.2.3] — 2026-08-07
 
 > 0.2.x 线的 beta 阶段第 3 个迭代。
