@@ -190,8 +190,13 @@ export const useChatStore = defineStore("chat", () => {
   const pendingProposal = computed(() =>
     activeConvId.value ? pendingProposals.value.get(activeConvId.value) ?? null : null,
   );
-  /** 最近一次发送错误的可见提示（chat:error 携带的用户可读消息） */
-  const lastError = ref<string | null>(null);
+  /** 每会话最近一次发送错误的可见提示（chat:error 携带的用户可读消息）。
+   *  按 conversation_id 隔离——A 会话的错误横幅不会串到 B 会话顶部。
+   *  （chat:error 仅在错误属于当前激活会话时才写入；切会话时 computed 自然取目标会话条目）*/
+  const lastErrors = ref<Map<string, string>>(new Map());
+  const lastError = computed(() =>
+    activeConvId.value ? lastErrors.value.get(activeConvId.value) ?? null : null,
+  );
   let sendTimeout: ReturnType<typeof setTimeout> | null = null;
 
   /** 后台会话的流式文本快照：切走「正在流式」的会话时把已累积文本存这里，
@@ -220,7 +225,12 @@ export const useChatStore = defineStore("chat", () => {
   async function sendMessage(content: string, contentBlocks?: import("../types").ContentBlock[]) {
     if (!activeConvId.value || sending.value) return;
     sending.value = true;
-    lastError.value = null;
+    // 清掉当前会话的错误横幅（per-conv 隔离：只清本会话，不影响其它会话）
+    if (activeConvId.value) {
+      const m = new Map(lastErrors.value);
+      m.delete(activeConvId.value);
+      lastErrors.value = m;
+    }
     streamingText.value = "";
     streamingThinking.value = "";
     streamingToolCalls.value = new Map();
@@ -700,7 +710,12 @@ export const useChatStore = defineStore("chat", () => {
       thinkingStartTime.value = null;
       streamingToolCalls.value = new Map();
       lastFinishReason.value = null;
-      lastError.value = friendlyError(e.payload.message);
+      // 错误横幅按会话隔离：只写到出错会话（此处 cid === activeConvId，已过上方 early-return）
+      {
+        const m = new Map(lastErrors.value);
+        m.set(cid, friendlyError(e.payload.message));
+        lastErrors.value = m;
+      }
       // 用 message_id 定位出错的 assistant（多轮工具下不能遍历改所有 assistant）
       const errId = e.payload.message_id;
       messages.value = messages.value.map((msg) => {
