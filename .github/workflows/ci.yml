@@ -52,6 +52,17 @@ jobs:
           sudo apt-get clean
           df -h
 
+      # tauri-build 在编译期校验 tauri.conf.json 的 bundle.resources 文件存在。
+      # node.exe + node_modules 由 prepare:mcp 下载（gitignore 不入库），真实打包
+      # 走 beforeBuildCommand 自动准备。CI 只验编译不产出安装包，创建占位文件让
+      # build script 通过即可——内容无关紧要。
+      - name: Stub bundled MCP runtime (compile-only placeholder)
+        run: |
+          mkdir -p resources/mcp-runtime/node
+          touch resources/mcp-runtime/node/node.exe
+          mkdir -p resources/mcp-runtime/node_modules/_ci
+          touch resources/mcp-runtime/node_modules/_ci/marker.json
+
       # 统一使用 ci profile 共享编译产物
       - name: cargo check (ci)
         run: cargo check --profile ci
