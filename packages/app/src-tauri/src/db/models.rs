@@ -28,7 +28,10 @@ pub struct AgentRow {
     pub sort_order: i32,
     /// P2-3: 是否启用 Anthropic prompt caching（OpenAI 自动缓存无需此字段）
     pub cache_prompt: i32,
-    /// A3-2: 历史消息窗口上限（NULL = 使用系统默认）。
+    /// Phase 2: MemoryStage 的 **keep_n 地板**（verbatim 保留窗，NULL = 系统默认 20）。
+    /// 最后 keep_n 条消息永远原样发送、永不被摘要压缩。语义自 Phase 2 起从
+    /// 「加载/发送上限」重定义为此（加载改用固定 `MEMORY_LOAD_LIMIT`，
+    /// 发送上限由 token 窗口 + 摘要两级控制）。
     pub max_history_messages: Option<i32>,
     /// M1.2 A2-4: 工具裁剪阈值（NULL = 使用系统默认 5）。
     pub tool_trim_threshold: Option<i32>,

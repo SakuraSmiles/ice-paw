@@ -117,12 +117,21 @@ pub use super::image_validation::{
 ///
 /// P2-1 升级：`content` 改为 `Vec<ContentBlock>`。
 /// 对旧消息（纯文本）使用 `ChatMessage::from_text` 构造。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// `source_rowid`（Phase 2）：pipeline 内部追踪字段，记录本条 ChatMessage
+/// 源自哪条 `MessageRow.rowid`。`#[serde(skip)]` 保证它**永不**进入 LLM
+/// payload 或任何序化路径——仅 `load_history_with_window` 填充、`MemoryStage`
+/// 按「值」定位摘要覆盖切断点（identity-by-value，扛得住 ToolFailureFold
+/// 的合并/重排）。合成消息（当前用户、注入摘要等）为 `None`。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ChatMessage {
     /// 角色："system" | "user" | "assistant" | "tool"
     pub role: String,
     /// 消息内容块数组
     pub content: Vec<ContentBlock>,
+    /// pipeline 内部追踪：源 MessageRow.rowid（见类型 doc）；`#[serde(skip)]` 不外泄。
+    #[serde(skip)]
+    pub source_rowid: Option<i64>,
 }
 
 impl ChatMessage {
@@ -131,6 +140,7 @@ impl ChatMessage {
         ChatMessage {
             role: role.into(),
             content: vec![ContentBlock::text(content)],
+            source_rowid: None,
         }
     }
 

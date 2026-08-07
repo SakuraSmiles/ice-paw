@@ -379,6 +379,7 @@ async fn stream_loop_inner(
                     "（第 {}/{} 轮工具调用完毕。如果还有未完成的操作请继续，如果已经完成请直接输出最终回答。）",
                     tool_round, ctx.budget.max_tool_rounds
                 ))],
+                source_rowid: None,
             });
         }
 
@@ -926,10 +927,12 @@ async fn stream_loop_inner(
         ctx.messages.push(ChatMessage {
             role: "assistant".into(),
             content: asst_blocks,
+            source_rowid: None,
         });
         ctx.messages.push(ChatMessage {
             role: "user".into(),
             content: tool_result_blocks,
+            source_rowid: None,
         });
 
         tracing::info!(

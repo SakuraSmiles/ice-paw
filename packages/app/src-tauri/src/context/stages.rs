@@ -22,7 +22,7 @@ use async_trait::async_trait;
 use sqlx::SqlitePool;
 
 use crate::context::history::{
-    fold_repeated_tool_failures, load_history_with_window, resolve_window, sanitize_history,
+    fold_repeated_tool_failures, load_history_with_window, sanitize_history,
 };
 use crate::context::os_context::build_os_context;
 use crate::context::pipeline::{PipelineContext, PipelineStage};
@@ -188,25 +188,17 @@ impl PipelineStage for SystemPromptStage {
 // Stage 4: HistoryStage — 历史消息行 → ChatMessage 转换
 // =========================================================================
 
-/// Stage 4：历史消息行 → `ChatMessage` 转换。
+/// Stage 4：历史消息行 → `ChatMessage` 转换（全量，不在本阶段裁剪）。
 ///
-/// 输入：
-/// - `ctx.history`（`Vec<MessageRow>`，按时间正序）
-/// - `ctx.agent.max_history_messages`（`Option<i32>`，A3-2 字段）
+/// 输入：`ctx.history`（`Vec<MessageRow>`，按时间正序；DB 侧已由
+/// `MEMORY_LOAD_LIMIT` 限量加载，见 `chat_cmd.rs`）
 ///
-/// 输出：`ctx.history_messages`（`Vec<ChatMessage>`，纯文本）
+/// 输出：`ctx.history_messages`（`Vec<ChatMessage>`，含每条的 `source_rowid`；
+/// 摘要行已被 [`load_history_with_window`] 过滤——双注入修复）
 ///
-/// A3-2 行为变更：
-/// - 根据 `agent.max_history_messages` 解析出有效窗口
-///   （`None` / 非正值 → 系统默认 [`crate::context::history::DEFAULT_HISTORY_WINDOW`]）
-/// - 仅保留**最近** N 条消息注入 LLM 上下文
-/// - 跳过 `tool` 角色（与原 `load_history` 行为一致）
-///
-/// 为什么在 Stage 而非 DB 加载侧裁剪：
-/// - 后续 A3-4 摘要阶段需要读完整历史 → 调用方在 chat_cmd.rs
-///   一次性加载充足数据即可，避免双重查询
-/// - 窗口配置集中在 Stage 内，未来 P3 「按 token 预算动态截断」
-///   可以在同一位置扩展
+/// Phase 2 变更：不再在此 count-window。`max_history_messages` 语义重定义为
+/// MemoryStage 的 **keep_n 地板**（verbatim 保留窗），不再决定「加载/发送上限」。
+/// 裁剪职责：摘要压缩由 [`MemoryStage`]，token 硬上限由 [`TokenWindowStage`]。
 pub(crate) struct HistoryStage;
 
 #[async_trait]
@@ -216,8 +208,7 @@ impl PipelineStage for HistoryStage {
     }
 
     async fn execute(&self, ctx: &mut PipelineContext) -> AppResult<()> {
-        let window = resolve_window(ctx.agent.max_history_messages);
-        ctx.history_messages = load_history_with_window(&ctx.history, Some(window));
+        ctx.history_messages = load_history_with_window(&ctx.history, None);
         Ok(())
     }
 }
@@ -390,6 +381,7 @@ impl PipelineStage for FinalAssembleStage {
         messages.push(ChatMessage {
             role: "user".into(),
             content: user_blocks,
+            source_rowid: None,
         });
 
         ctx.messages = messages;

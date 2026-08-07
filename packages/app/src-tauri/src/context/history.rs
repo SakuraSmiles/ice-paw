@@ -10,6 +10,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::db::models::MessageRow;
+use crate::db::repo::summary::SUMMARY_PREFIX;
 use crate::infra::protocol::{ChatMessage, ContentBlock};
 
 /// 系统默认历史窗口大小（最近 N 条消息）
@@ -74,15 +75,24 @@ pub(crate) fn load_history_with_window(
     let mut messages = Vec::with_capacity(slice.len());
     for msg in slice {
         let role = match msg.role.as_str() {
+            // 双注入修复（Phase 2）：摘要行（role=system + SUMMARY_PREFIX 前缀）不进
+            // history——它由 MemoryStage 经 ctx.summary 唯一注入。这里跳过避免重复。
+            "system" if msg.content.starts_with(SUMMARY_PREFIX) => continue,
             "user" | "assistant" | "system" => msg.role.clone(),
             _ => continue,
         };
+        // Phase 2：记录源 rowid，供 MemoryStage 按值定位摘要覆盖切断点。
+        let source_rowid = Some(msg.rowid);
 
         // P2-2 G1: 优先从 content_blocks 还原多模态消息。
         // 空数组 / 无效 JSON / 解析失败 → 回退到纯文本（兼容旧消息）。
         let blocks = parse_content_blocks(&msg.content_blocks);
         if blocks.is_empty() {
-            messages.push(ChatMessage::from_text(role, msg.content.clone()));
+            messages.push(ChatMessage {
+                role,
+                content: vec![ContentBlock::text(msg.content.clone())],
+                source_rowid,
+            });
             continue;
         }
 
@@ -90,17 +100,18 @@ pub(crate) fn load_history_with_window(
         // 位于 user 消息）。历史持久化时可能把同一轮的 tool_use + tool_result 合并
         // 进了 assistant 消息，这里在加载层拆开，避免发给 LLM 时触发
         // "tool result's tool id not found"（MiniMax 兼容端点 400）。
+        // 拆分出的两条子消息共享同一 source_rowid（源自同一 MessageRow）。
         if role == "assistant" {
             let (asst_blocks, result_blocks): (Vec<ContentBlock>, Vec<ContentBlock>) =
                 blocks.into_iter().partition(|b| !matches!(b, ContentBlock::ToolResult { .. }));
             if !asst_blocks.is_empty() {
-                messages.push(ChatMessage { role: "assistant".into(), content: asst_blocks });
+                messages.push(ChatMessage { role: "assistant".into(), content: asst_blocks, source_rowid });
             }
             if !result_blocks.is_empty() {
-                messages.push(ChatMessage { role: "user".into(), content: result_blocks });
+                messages.push(ChatMessage { role: "user".into(), content: result_blocks, source_rowid });
             }
         } else {
-            messages.push(ChatMessage { role, content: blocks });
+            messages.push(ChatMessage { role, content: blocks, source_rowid });
         }
     }
     sanitize_history(messages)
@@ -149,6 +160,8 @@ pub(crate) fn sanitize_history(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
     let mut filtered: Vec<ChatMessage> = Vec::with_capacity(messages.len());
     for msg in messages {
         let role = msg.role;
+        // Phase 2：sanitize 重建消息时保留 source_rowid（合并连续同角色时保留首条的）。
+        let source_rowid = msg.source_rowid;
         let mut content: Vec<ContentBlock> = Vec::new();
         for block in msg.content {
             let keep = match &block {
@@ -170,7 +183,7 @@ pub(crate) fn sanitize_history(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
             }
         }
         if !content.is_empty() {
-            filtered.push(ChatMessage { role, content });
+            filtered.push(ChatMessage { role, content, source_rowid });
         }
     }
 
@@ -371,7 +384,7 @@ pub(crate) fn fold_repeated_tool_failures(messages: Vec<ChatMessage>) -> Vec<Cha
             }
         }
         if !new_blocks.is_empty() {
-            rewritten.push(ChatMessage { role, content: new_blocks });
+            rewritten.push(ChatMessage { role, content: new_blocks, ..Default::default() });
         }
     }
 
@@ -548,6 +561,34 @@ mod tests {
         assert_eq!(msgs[1].content_text(), "a2");
     }
 
+    #[test]
+    fn load_history_filters_summary_rows() {
+        // 双注入修复（Phase 2）：摘要行（role=system + SUMMARY_PREFIX 前缀）必须被
+        // 过滤出 history_messages——否则 FinalAssembleStage 又经 ctx.summary 再注入一次，
+        // LLM 会收到两份摘要。注意普通 system 行（无前缀）不受影响。
+        let summary_content = format!("{SUMMARY_PREFIX}\n这是滚动摘要正文");
+        let rows = vec![
+            make_row(1, "user", "u1"),
+            make_row(2, "system", &summary_content), // 摘要行 → 过滤
+            make_row(3, "assistant", "a1"),
+            make_row(4, "system", "普通系统提示"), // 普通 system → 不过滤（保留）
+            make_row(5, "user", "u2"),
+        ];
+        let msgs = load_history_with_window(&rows, None);
+        // 摘要行被剔除；其余 4 条保留
+        assert_eq!(msgs.len(), 4, "摘要行应被过滤: {:?}", msgs);
+        assert!(
+            !msgs
+                .iter()
+                .any(|m| m.content_text().contains(SUMMARY_PREFIX)),
+            "history 不应含摘要行"
+        );
+        assert!(
+            msgs.iter().any(|m| m.content_text() == "普通系统提示"),
+            "普通 system 行应保留"
+        );
+    }
+
     // ===== sanitize_history：协议净化（去重 / 孤儿 / 合并）=====
 
     fn text_blk(t: &str) -> ContentBlock {
@@ -560,7 +601,7 @@ mod tests {
         ContentBlock::ToolResult { tool_use_id: id.into(), content: "r".into(), is_error: Some(false) }
     }
     fn cm(role: &str, blocks: Vec<ContentBlock>) -> ChatMessage {
-        ChatMessage { role: role.into(), content: blocks }
+        ChatMessage { role: role.into(), content: blocks, ..Default::default() }
     }
 
     #[test]

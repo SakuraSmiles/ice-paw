@@ -1,39 +1,46 @@
-//! MemoryStage + SummaryProvider + DB 端到端集成测试
+//! MemoryStage + SummaryProvider + DB 端到端集成测试（Phase 2 滚动折叠）
 //!
 //! 覆盖三个核心场景：
-//! 1. `test_memory_stage_triggers_summary_when_over_threshold`
-//!    —— token 超阈值 → 触发 LLM 摘要 → 写 DB → 设 ctx.summary + summary_event
-//! 2. `test_memory_stage_skips_when_under_threshold`
-//!    —— token 未超阈值 → noop
-//! 3. `test_memory_stage_reuses_existing_summary`
-//!    —— DB 已有最近摘要 → 复用 + 截断 history，不再调 provider
+//! 1. `test_memory_stage_folds_and_persists_when_over_trigger`
+//!    —— verbatim 后缀超触发线 → 折叠 → 写 DB（covered_until_rowid 非空）
+//!      → 设 ctx.summary + summary_event，provider 调一次
+//! 2. `test_memory_stage_skips_when_under_trigger`
+//!    —— verbatim 未超触发线 → noop
+//! 3. `test_memory_stage_incremental_fold_advances_coverage`
+//!    —— DB 已有摘要且 covered 落在加载切片内 → 增量折叠（非复用），
+//!      provider 拿到前序摘要、covered 前进、UPDATE-in-place 保持单例
 //!
-//! 运行：`cargo test --test memory_e2e`
+//! 运行：`cargo test --test memory_e2e`（注：binary 可能因 sodium DLL 无法启动，
+//! `cargo check --tests` 至少保编译）
 
 use std::str::FromStr;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use ice_paw_lib::context::{ContextBudget, MemoryStage, NoopSummaryProvider, PipelineContext, PipelineStage, SummaryProvider};
+use ice_paw_lib::context::{
+    ContextBudget, MemoryStage, NoopSummaryProvider, PipelineContext, PipelineStage, SummaryProvider,
+};
 use ice_paw_lib::db::models::AgentRow;
-use ice_paw_lib::db::repo::summary::{get_latest_summary, insert_summary_message};
+use ice_paw_lib::db::repo::summary::{
+    get_latest_summary_state, insert_summary_message, SUMMARY_PREFIX,
+};
 use ice_paw_lib::error::AppResult;
 use ice_paw_lib::infra::cancel::CancellationToken;
 use ice_paw_lib::infra::protocol::{ChatMessage, ContentBlock};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
 // =========================================================================
-// make_ctx helper —— 复制并适配 src/context/memory.rs::make_test_ctx
+// make_ctx helper
 // =========================================================================
 
 /// 构造 in-memory SQLite + 跑迁移 + 种子 agent/conversation，返回 PipelineContext。
 ///
 /// 与 `src/context/memory.rs::tests::make_test_ctx` 行为对齐，
-/// 但额外支持自定义 `history_messages` / `summary_threshold_tokens`。
+/// 但额外支持自定义 `history_messages` / `max_input_tokens` / `max_history_messages`。
 async fn make_ctx(
     history_messages: Vec<ChatMessage>,
-    summary_threshold: Option<usize>,
+    max_input_tokens: usize,
+    max_history_messages: Option<i32>,
 ) -> PipelineContext {
     let opts = SqliteConnectOptions::from_str("sqlite::memory:")
         .expect("valid sqlite url")
@@ -50,7 +57,6 @@ async fn make_ctx(
         .await
         .expect("migrations");
 
-    // seed agent
     sqlx::query(
         "INSERT INTO agents
             (id, name, provider, model, system_prompt, api_key_ref,
@@ -72,7 +78,6 @@ async fn make_ctx(
     .await
     .expect("seed agent");
 
-    // seed conversation
     sqlx::query("INSERT INTO conversations (id, agent_id, title) VALUES (?, ?, ?)")
         .bind("conv-e")
         .bind("a-e")
@@ -94,7 +99,7 @@ async fn make_ctx(
         extra_params: "{}".into(),
         sort_order: 0,
         cache_prompt: 0,
-        max_history_messages: None,
+        max_history_messages,
         tool_trim_threshold: None,
         context_window: None,
         enabled_tools: None,
@@ -115,57 +120,47 @@ async fn make_ctx(
         false,
         None,
         vec![],
-        ContextBudget::default(),
+        ContextBudget {
+            max_input_tokens,
+            ..ContextBudget::default()
+        },
         "conv-e".into(),
         CancellationToken::new(),
     );
-
-    if let Some(threshold) = summary_threshold {
-        ctx.context_budget.summary_threshold_tokens = threshold;
-    }
 
     ctx.history_messages = history_messages;
     ctx
 }
 
 // =========================================================================
-// 测试用 SummaryProvider 实现
+// 测试用 SummaryProvider 实现（记录入参 + 返回固定回复）
 // =========================================================================
 
-/// 测试 1 用：返回固定摘要，原子计数调用次数。
-struct CountingSummaryProvider {
-    summary: String,
-    counter: Arc<AtomicUsize>,
+#[derive(Clone)]
+struct RecordingProvider {
+    reply: String,
+    calls: Arc<Mutex<Vec<Vec<ChatMessage>>>>,
 }
 
-#[async_trait]
-impl SummaryProvider for CountingSummaryProvider {
-    async fn summarize(
-        &self,
-        _messages: &[ChatMessage],
-        _max_tokens: usize,
-        _cancel: &CancellationToken,
-    ) -> AppResult<String> {
-        self.counter.fetch_add(1, Ordering::SeqCst);
-        Ok(self.summary.clone())
+impl RecordingProvider {
+    fn new(reply: &str) -> Self {
+        Self {
+            reply: reply.to_string(),
+            calls: Arc::new(Mutex::new(Vec::new())),
+        }
     }
 }
 
-/// 测试 3 用：永远返回空串，但记录调用次数 —— 用于验证"复用路径不应调用 provider"。
-struct CountingNoopProvider {
-    counter: Arc<AtomicUsize>,
-}
-
 #[async_trait]
-impl SummaryProvider for CountingNoopProvider {
+impl SummaryProvider for RecordingProvider {
     async fn summarize(
         &self,
-        _messages: &[ChatMessage],
+        messages: &[ChatMessage],
         _max_tokens: usize,
         _cancel: &CancellationToken,
     ) -> AppResult<String> {
-        self.counter.fetch_add(1, Ordering::SeqCst);
-        Ok(String::new())
+        self.calls.lock().unwrap().push(messages.to_vec());
+        Ok(self.reply.clone())
     }
 }
 
@@ -173,45 +168,47 @@ impl SummaryProvider for CountingNoopProvider {
 // helpers
 // =========================================================================
 
-/// 构造 n 条长 user/assistant 交替消息，每条 content 重复 `char_repeat` 次。
-/// 3000 ASCII chars ≈ 750 tokens（估算规则 1 token / 4 chars）。
+fn big_msg(role: &str, text: &str, rowid: i64) -> ChatMessage {
+    ChatMessage {
+        role: role.into(),
+        content: vec![ContentBlock::text(text)],
+        source_rowid: Some(rowid),
+    }
+}
+
+/// n 条长 user/assistant 交替消息，每条 content 重复 `char_repeat` 次，带 source_rowid。
+/// 3000 ASCII chars ≈ 750 tokens + 4 overhead = 754 tokens。
 fn make_long_messages(n: usize, char_repeat: usize) -> Vec<ChatMessage> {
     (0..n)
         .map(|i| {
             let role = if i % 2 == 0 { "user" } else { "assistant" };
-            ChatMessage::from_text(role, "a".repeat(char_repeat))
+            big_msg(role, &"a".repeat(char_repeat), i as i64)
         })
         .collect()
 }
 
-/// 构造 n 条短 user/assistant 交替消息，每条约 2 tokens。
+/// n 条短消息，带 source_rowid
 fn make_short_messages(n: usize) -> Vec<ChatMessage> {
     (0..n)
         .map(|i| {
             let role = if i % 2 == 0 { "user" } else { "assistant" };
-            ChatMessage::from_text(role, format!("msg-{i}"))
+            big_msg(role, &format!("msg-{i}"), i as i64)
         })
         .collect()
 }
 
 // =========================================================================
-// 测试 1：token 超阈值 → 触发摘要
+// 测试 1：verbatim 超触发线 → 折叠 + 落库
 // =========================================================================
 
 #[tokio::test]
-async fn test_memory_stage_triggers_summary_when_over_threshold() {
-    // 40 条 × 3000 ASCII chars ≈ 30_000 tokens，远超 threshold=100
+async fn test_memory_stage_folds_and_persists_when_over_trigger() {
+    // 40 条 × ~754 tokens ≈ 30160；max_input=10000 → trigger=5500（超）target=4000
     let history = make_long_messages(40, 3000);
+    let mut ctx = make_ctx(history, 10_000, None).await;
 
-    let mut ctx = make_ctx(history, Some(100)).await;
-
-    let counter = Arc::new(AtomicUsize::new(0));
-    let provider = CountingSummaryProvider {
-        summary: "测试摘要内容".to_string(),
-        counter: counter.clone(),
-    };
-    let stage = MemoryStage::new(Box::new(provider));
-
+    let provider = RecordingProvider::new("测试摘要内容");
+    let stage = MemoryStage::new(Box::new(provider.clone()));
     stage.execute(&mut ctx).await.expect("MemoryStage execute");
 
     // 1. ctx.summary 被设置
@@ -221,115 +218,118 @@ async fn test_memory_stage_triggers_summary_when_over_threshold() {
         "summary 应被填充为 provider 返回值"
     );
 
-    // 2. history 被截断（40 → < 40）
+    // 2. history 被截断（折掉前缀）
     assert!(
         ctx.history_messages.len() < 40,
         "history 应被截断：kept={}",
         ctx.history_messages.len()
     );
 
-    // 3. DB 中应能查到摘要
-    let stored = get_latest_summary(&ctx.pool, &ctx.conversation_id)
+    // 3. DB 中查到摘要，且 covered_until_rowid 非空（Phase 2 新列生效）
+    let state = get_latest_summary_state(&ctx.pool, &ctx.conversation_id)
         .await
-        .expect("get_latest_summary");
-    assert_eq!(
-        stored.as_deref(),
-        Some("测试摘要内容"),
-        "DB 中应存有新摘要"
+        .expect("get_latest_summary_state")
+        .expect("应有摘要行");
+    assert_eq!(state.text, "测试摘要内容");
+    assert!(
+        state.covered_until_rowid.is_some(),
+        "covered_until_rowid 应已落库: {:?}",
+        state.covered_until_rowid
     );
 
     // 4. summary_event 被设置
     assert!(
         ctx.summary_event.is_some(),
-        "新摘要触发时 summary_event 应被设置"
+        "折叠触发时 summary_event 应被设置"
     );
 
     // 5. provider 恰好被调一次
-    assert_eq!(
-        counter.load(Ordering::SeqCst),
-        1,
-        "provider 应被调用恰好一次"
+    let calls = provider.calls.lock().unwrap();
+    assert_eq!(calls.len(), 1, "provider 应被调用恰好一次");
+    assert!(
+        !calls[0][0].content_text().contains("[Prior summary]"),
+        "首次折叠入参不应含前序摘要"
     );
 }
 
 // =========================================================================
-// 测试 2：token 未超阈值 → 跳过
+// 测试 2：verbatim 未超触发线 → 跳过
 // =========================================================================
 
 #[tokio::test]
-async fn test_memory_stage_skips_when_under_threshold() {
-    // 5 条短消息（每条约 2 tokens），远低于默认阈值 35_000
+async fn test_memory_stage_skips_when_under_trigger() {
+    // 5 条短消息；max_input=100000 → trigger=55000，verbatim 远未达
     let history = make_short_messages(5);
-
-    let mut ctx = make_ctx(history, None).await;
+    let mut ctx = make_ctx(history, 100_000, None).await;
 
     let stage = MemoryStage::new(Box::new(NoopSummaryProvider));
     stage.execute(&mut ctx).await.expect("MemoryStage execute");
 
-    assert!(
-        ctx.summary.is_none(),
-        "未超阈值时 summary 应保持 None"
-    );
+    assert!(ctx.summary.is_none(), "未超触发线时 summary 应保持 None");
     assert_eq!(
         ctx.history_messages.len(),
         5,
-        "未超阈值时 history 不应被截断"
+        "未超触发线时 history 不应被截断"
     );
     assert!(
         ctx.summary_event.is_none(),
-        "未超阈值时 summary_event 应保持 None"
+        "未超触发线时 summary_event 应保持 None"
     );
 }
 
 // =========================================================================
-// 测试 3：复用 DB 中已有摘要
+// 测试 3：增量折叠（既有摘要 + covered 在切片内）
 // =========================================================================
 
 #[tokio::test]
-async fn test_memory_stage_reuses_existing_summary() {
-    // 40 条长消息 + threshold=100 强制进入"摘要"分支
+async fn test_memory_stage_incremental_fold_advances_coverage() {
+    // 40 条长消息 rowid 0..39；预置摘要 covered=10（落在切片内）
     let history = make_long_messages(40, 3000);
+    let mut ctx = make_ctx(history, 10_000, None).await;
 
-    let mut ctx = make_ctx(history, Some(100)).await;
-
-    // 预先插入一条摘要到 DB（模拟「之前会话已生成过摘要」）
     insert_summary_message(&ctx.pool, &ctx.conversation_id, "旧摘要", 10)
         .await
         .expect("pre-insert summary");
 
-    // 用 CountingNoopProvider 验证 provider 是否被调用
-    let counter = Arc::new(AtomicUsize::new(0));
-    let provider = CountingNoopProvider {
-        counter: counter.clone(),
-    };
-    let stage = MemoryStage::new(Box::new(provider));
-
+    let provider = RecordingProvider::new("新摘要");
+    let stage = MemoryStage::new(Box::new(provider.clone()));
     stage.execute(&mut ctx).await.expect("MemoryStage execute");
 
-    // 1. ctx.summary 应复用旧摘要
-    assert_eq!(
-        ctx.summary.as_deref(),
-        Some("旧摘要"),
-        "应复用 DB 中的旧摘要"
-    );
+    // 1. ctx.summary 为新摘要（增量折叠，非复用旧摘要）
+    assert_eq!(ctx.summary.as_deref(), Some("新摘要"));
 
-    // 2. history 也应被截断（P1-1 修复：复用路径也截断 history，打破 token 死循环）
+    // 2. provider 被调一次，且首条入参含前序摘要
+    let calls = provider.calls.lock().unwrap();
+    assert_eq!(calls.len(), 1, "增量折叠应调用 provider 一次");
     assert!(
-        ctx.history_messages.len() < 40,
-        "复用摘要时 history 也应被截断：kept={}",
-        ctx.history_messages.len()
+        calls[0][0].content_text().contains("[Prior summary]"),
+        "应把旧摘要作为前序喂入: {}",
+        calls[0][0].content_text()
     );
+    assert!(calls[0][0].content_text().contains("旧摘要"));
+    drop(calls);
 
-    // 3. provider 不应被调用
-    assert_eq!(
-        counter.load(Ordering::SeqCst),
-        0,
-        "复用摘要时 provider 不应被调用"
-    );
+    // 3. DB：摘要行单例（UPDATE-in-place），covered 前进（> 10）
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM messages WHERE role='system' AND instr(content, ?) = 1",
+    )
+    .bind(SUMMARY_PREFIX)
+    .fetch_one(&ctx.pool)
+    .await
+    .unwrap();
+    assert_eq!(count, 1, "UPDATE-in-place 应保持摘要行单例");
 
-    // 4. summary_event 不应被设置（复用不发 toast）
+    let state = get_latest_summary_state(&ctx.pool, &ctx.conversation_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(state.text, "新摘要");
     assert!(
-        ctx.summary_event.is_none(),
-        "复用摘要时 summary_event 应保持 None"
+        state.covered_until_rowid.unwrap() > 10,
+        "covered 应前进超过 10: {:?}",
+        state.covered_until_rowid
     );
+
+    // 4. summary_event 被设置（折叠发生）
+    assert!(ctx.summary_event.is_some());
 }

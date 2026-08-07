@@ -1,0 +1,21 @@
+-- =========================================================================
+-- IcePaw 数据库迁移 V38：滚动增量摘要覆盖指针（Phase 2）
+-- 来源：dev2 Phase 2 滚动摘要重设计
+-- 说明：
+--   每个会话至多一份当前摘要（role="system"，content 以
+--   "[Previous conversation summary]" 开头）。该摘要覆盖会话的一个前缀
+--   [0..covered]，covered 的终点由本列记录——即「被摘要覆盖的最后一条
+--   user/assistant 消息的物理 rowid」。
+--
+--   为什么用 rowid 而非计数（covered_count）：
+--   - rowid 是 SQLite 物理行号，稳定、单调、不复用，按值即可在加载切片里
+--     定位切断点，无「全局计数 vs 本地索引」歧义；
+--   - 部分加载（会话超过 MEMORY_LOAD_LIMIT）下，covered_count 会静默丢消息
+--     （本地索引 ≠ 全局计数），rowid 方案则安全降级（覆盖点不在加载窗 →
+--     整段加载视为 verbatim）。
+--
+--   仅摘要行设置本列；其余行 NULL。list_by_conversation 的 SELECT 不列此列
+--   也不影响（sqlx 不要求全列），仅 summary repo 专用查询读取。
+-- =========================================================================
+
+ALTER TABLE messages ADD COLUMN covered_until_rowid INTEGER;
