@@ -2,7 +2,7 @@
 
 ## 项目概述
 IcePaw — 本地优先的 LLM 对话工作站。Tauri v2 (Rust) + Vue 3 (TypeScript) 桌面应用。
-当前版本：`0.2.3`，分支 `main`。
+当前版本：`0.2.4`，分支 `main`。
 
 ## 构建命令
 
