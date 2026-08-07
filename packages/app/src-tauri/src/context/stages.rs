@@ -10,8 +10,9 @@
 //! 2. [`OsContextStage`]     — OS 运行环境上下文注入
 //! 3. [`SystemPromptStage`]  — 四级优先 system_prompt 构造
 //! 4. [`HistoryStage`]       — 历史消息行 → `ChatMessage` 转换
-//! 5. [`MemoryStage`]        — M1.5 滚动摘要（独立放在 [`crate::context::memory`] 中）
-//! 6. [`FinalAssembleStage`] — 最终拼装（图片重排、user_blocks 拼装、messages 列表组装）
+//! 5. [`ToolFailureFoldStage`] — 折叠连续重复的失败工具调用（非破坏，仅影响 LLM 视图）
+//! 6. [`MemoryStage`]        — M1.5 滚动摘要（独立放在 [`crate::context::memory`] 中）
+//! 7. [`FinalAssembleStage`] — 最终拼装（图片重排、user_blocks 拼装、messages 列表组装）
 //!
 //! `MemoryStage` 不在本模块 —— 它属于 L1 Memory 层（`memory.rs`），按
 //! M2.2 拆分规则独立维护。
@@ -19,7 +20,7 @@
 use async_trait::async_trait;
 use sqlx::SqlitePool;
 
-use crate::context::history::{load_history_with_window, resolve_window};
+use crate::context::history::{fold_repeated_tool_failures, load_history_with_window, resolve_window};
 use crate::context::os_context::build_os_context;
 use crate::context::pipeline::{PipelineContext, PipelineStage};
 use crate::context::system_prompt::build_system_prompt;
@@ -213,6 +214,34 @@ impl PipelineStage for HistoryStage {
     async fn execute(&self, ctx: &mut PipelineContext) -> AppResult<()> {
         let window = resolve_window(ctx.agent.max_history_messages);
         ctx.history_messages = load_history_with_window(&ctx.history, Some(window));
+        Ok(())
+    }
+}
+
+// =========================================================================
+// Stage 4.5: ToolFailureFoldStage — 折叠连续重复的失败工具调用
+// =========================================================================
+
+/// Stage 4.5：折叠连续重复的失败工具调用。
+///
+/// 在 [`HistoryStage`]（已 sanitize）之后、[`crate::context::memory::MemoryStage`]
+/// 之前执行：把"连续 N 次同工具同参数的失败调用"压成 1 条摘要，避免卡死循环的
+/// 失败记录占满历史窗口、诱发模型反复道歉。
+///
+/// - **只读 / 非破坏**：仅变换 `ctx.history_messages`（发给 LLM 的视图），
+///   不触碰 DB 与聊天 UI。
+/// - 详见 [`fold_repeated_tool_failures`]。
+pub(crate) struct ToolFailureFoldStage;
+
+#[async_trait]
+impl PipelineStage for ToolFailureFoldStage {
+    fn name(&self) -> &'static str {
+        "tool_failure_fold"
+    }
+
+    async fn execute(&self, ctx: &mut PipelineContext) -> AppResult<()> {
+        let folded = fold_repeated_tool_failures(std::mem::take(&mut ctx.history_messages));
+        ctx.history_messages = folded;
         Ok(())
     }
 }

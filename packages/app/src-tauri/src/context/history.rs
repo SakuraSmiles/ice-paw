@@ -7,7 +7,7 @@
 //! A3-2 变更：窗口大小可由 Agent 的 `max_history_messages` 字段覆盖；
 //! 该字段为 `None` 时回退到本模块的 [`DEFAULT_HISTORY_WINDOW`]。
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::db::models::MessageRow;
 use crate::infra::protocol::{ChatMessage, ContentBlock};
@@ -188,6 +188,233 @@ fn sanitize_history(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
         merged.push(msg);
     }
 
+    merged
+}
+
+// =========================================================================
+// 失败工具调用折叠（v1，纯函数）
+// =========================================================================
+
+/// 连续相同失败调用的最小折叠阈值（含）。
+///
+/// 一个"连续重复失败" run 的长度 ≥ 此值时才折叠成 1 条摘要。
+/// 设为 2：单次失败永远保留完整诊断，出现重复（卡死循环征兆）才压缩。
+const TOOL_FAILURE_FOLD_THRESHOLD: usize = 2;
+
+/// 折叠摘要里 args / 最近错误字段的最大字符数（超出截断加省略号）。
+const FOLD_SUMMARY_FIELD_MAX: usize = 300;
+
+/// 工具调用入参的"可比较键"。
+///
+/// - JSON 入参按**值**比较（对象 key 顺序无关，依赖 `serde_json::Value` 的
+///   `PartialEq` 顺序无关特性）；模型用不同 key 顺序产出相同参数也能判等。
+/// - 非 JSON（解析失败）回退到 trim 后的原串比较。
+#[derive(Clone, Debug, PartialEq)]
+enum InputKey {
+    Json(serde_json::Value),
+    Raw(String),
+}
+
+impl InputKey {
+    fn new(input: &str) -> Self {
+        match serde_json::from_str::<serde_json::Value>(input) {
+            Ok(v) => InputKey::Json(v),
+            Err(_) => InputKey::Raw(input.trim().to_string()),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct CallMeta {
+    name: String,
+    key: InputKey,
+    /// 原始入参串（摘要展示用，避免显示规范化后的形式）。
+    raw_input: String,
+}
+
+/// 把"连续 N 次（≥ [`TOOL_FAILURE_FOLD_THRESHOLD`]）同工具同参数的**失败**调用"
+/// 压缩成 1 条摘要，避免卡死循环的失败记录占满历史窗口、诱发模型反复道歉。
+///
+/// # 性质
+/// - **只读 / 非破坏 / 幂等**：仅变换入参消息列表，不触碰 DB 或 UI。
+/// - **协议安全**：保留 run 第一对 `tool_use`+`tool_result`（仅替换 result 文本，
+///   `is_error` 保持 `true`），删除 run 其余成员的 use 与 result block，再做
+///   drop-empty + 合并同角色——折叠后每个存活 `tool_use` 仍有配对 `tool_result`，
+///   角色仍交替。
+/// - 应在 `sanitize_history` **之后**调用（依赖其"每个 tool_use 恰有一个配对
+///   tool_result"不变量）。
+///
+/// # "连续重复失败"的判定
+/// 按工具调用在消息流中的出现顺序，一个 run 满足：每个都是 `is_error == true`、
+/// 相同 `name`、相同入参（[`InputKey`] 比较）。中间穿插的 assistant 文本/思考
+/// 不打断 run——只看工具调用的相邻性。
+///
+/// # 不折叠的情况
+/// 单次失败、不同工具/不同参数的失败、成功调用，以及它们之间的组合均原样保留。
+pub(crate) fn fold_repeated_tool_failures(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
+    if messages.len() < 2 {
+        return messages;
+    }
+
+    // 1. 扫描收集每个 tool_use_id 的元信息、配对 result 是否失败及其内容，
+    //    以及 tool_use 的出现顺序（用于判定"连续"）。依赖 sanitize 不变量。
+    let mut use_meta: HashMap<String, CallMeta> = HashMap::new();
+    let mut result_is_error: HashMap<String, bool> = HashMap::new();
+    let mut result_content: HashMap<String, String> = HashMap::new();
+    let mut ordered_ids: Vec<String> = Vec::new();
+
+    for msg in &messages {
+        for block in &msg.content {
+            match block {
+                ContentBlock::ToolUse { id, name, input } => {
+                    if !use_meta.contains_key(id) {
+                        use_meta.insert(
+                            id.clone(),
+                            CallMeta {
+                                name: name.clone(),
+                                key: InputKey::new(input),
+                                raw_input: input.clone(),
+                            },
+                        );
+                        ordered_ids.push(id.clone());
+                    }
+                }
+                ContentBlock::ToolResult { tool_use_id, content, is_error } => {
+                    result_is_error
+                        .entry(tool_use_id.clone())
+                        .or_insert(is_error.unwrap_or(false));
+                    result_content
+                        .entry(tool_use_id.clone())
+                        .or_insert_with(|| content.clone());
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // 2. 在有序 id 上划分"连续相同签名的失败" run，标记保留首对 / 删除其余。
+    let mut drop_ids: HashSet<String> = HashSet::new(); // run 中待删成员的 tool_use_id
+    let mut replace_result: HashMap<String, String> = HashMap::new(); // 保留首对的 id → 摘要文本
+
+    let mut i = 0;
+    while i < ordered_ids.len() {
+        let cur = match use_meta.get(&ordered_ids[i]) {
+            Some(m) => m,
+            None => {
+                i += 1;
+                continue;
+            }
+        };
+        let cur_err = result_is_error.get(&ordered_ids[i]).copied().unwrap_or(false);
+        if !cur_err {
+            i += 1;
+            continue;
+        }
+        // 向后扩展同签名同失败的连续 run → 区间 [i, j)
+        let mut j = i + 1;
+        while j < ordered_ids.len() {
+            let is_err = result_is_error.get(&ordered_ids[j]).copied().unwrap_or(false);
+            let m = match use_meta.get(&ordered_ids[j]) {
+                Some(m) => m,
+                None => break,
+            };
+            if is_err && m.name == cur.name && m.key == cur.key {
+                j += 1;
+            } else {
+                break;
+            }
+        }
+        let run_len = j - i;
+        if run_len >= TOOL_FAILURE_FOLD_THRESHOLD {
+            // run 最后一个成员的错误即"最近一次错误"
+            let last_id = &ordered_ids[j - 1];
+            let last_err = result_content.get(last_id).cloned().unwrap_or_default();
+            let summary = make_fold_summary(run_len, &cur.name, &cur.raw_input, &last_err);
+            replace_result.insert(ordered_ids[i].clone(), summary);
+            for k in (i + 1)..j {
+                drop_ids.insert(ordered_ids[k].clone());
+            }
+        }
+        i = j;
+    }
+
+    if drop_ids.is_empty() && replace_result.is_empty() {
+        return messages; // 无可折叠，原样返回（省一次重建）
+    }
+
+    // 3. 按 id 重写消息：删 drop 成员的 use/result，替换保留首对的 result 文本。
+    let mut rewritten: Vec<ChatMessage> = Vec::with_capacity(messages.len());
+    for msg in messages {
+        let role = msg.role;
+        let mut new_blocks: Vec<ContentBlock> = Vec::with_capacity(msg.content.len());
+        for block in msg.content {
+            match &block {
+                ContentBlock::ToolUse { id, .. } => {
+                    if !drop_ids.contains(id) {
+                        new_blocks.push(block);
+                    }
+                }
+                ContentBlock::ToolResult { tool_use_id, is_error, .. } => {
+                    if let Some(new_text) = replace_result.get(tool_use_id) {
+                        // 保留首对：替换 content，保持原 is_error（仍为 true）
+                        new_blocks.push(ContentBlock::ToolResult {
+                            tool_use_id: tool_use_id.clone(),
+                            content: new_text.clone(),
+                            is_error: *is_error,
+                        });
+                    } else if !drop_ids.contains(tool_use_id) {
+                        new_blocks.push(block);
+                    }
+                    // 其余：属于被删成员的 result → 丢弃
+                }
+                _ => new_blocks.push(block),
+            }
+        }
+        if !new_blocks.is_empty() {
+            rewritten.push(ChatMessage { role, content: new_blocks });
+        }
+    }
+
+    // 4. 防御性清理：drop 空消息（步骤 3 已无，双保险）+ 合并连续同角色。
+    drop_empty_and_merge(rewritten)
+}
+
+/// 生成折叠后的摘要 result 文本。
+fn make_fold_summary(n: usize, name: &str, input: &str, last_err: &str) -> String {
+    format!(
+        "[已折叠] 此前连续 {n} 次调用工具 `{name}` 均失败（参数：{args}）。最近一次错误：{err}",
+        n = n,
+        name = name,
+        args = truncate_chars(input, FOLD_SUMMARY_FIELD_MAX),
+        err = truncate_chars(last_err, FOLD_SUMMARY_FIELD_MAX),
+    )
+}
+
+/// 按 Unicode char 数截断，超出加省略号。
+fn truncate_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let mut t: String = s.chars().take(max).collect();
+    t.push('…');
+    t
+}
+
+/// 折叠后防御性清理：丢弃空消息 + 合并连续同角色消息（协议要求 user/assistant 交替）。
+fn drop_empty_and_merge(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
+    let mut merged: Vec<ChatMessage> = Vec::with_capacity(messages.len());
+    for msg in messages {
+        if msg.content.is_empty() {
+            continue;
+        }
+        if let Some(last) = merged.last_mut() {
+            if last.role == msg.role {
+                last.content.extend(msg.content);
+                continue;
+            }
+        }
+        merged.push(msg);
+    }
     merged
 }
 
@@ -494,5 +721,266 @@ mod tests {
         // 回退后仅一个 Text 块
         assert_eq!(msgs[0].content.len(), 1);
         assert!(!msgs[0].content[0].is_image());
+    }
+
+    // ===== fold_repeated_tool_failures：失败工具调用折叠 =====
+
+    fn tu_full(id: &str, name: &str, input: &str) -> ContentBlock {
+        ContentBlock::ToolUse { id: id.into(), name: name.into(), input: input.into() }
+    }
+    fn tr_err(id: &str, content: &str) -> ContentBlock {
+        ContentBlock::ToolResult {
+            tool_use_id: id.into(),
+            content: content.into(),
+            is_error: Some(true),
+        }
+    }
+    fn tr_ok(id: &str, content: &str) -> ContentBlock {
+        ContentBlock::ToolResult {
+            tool_use_id: id.into(),
+            content: content.into(),
+            is_error: Some(false),
+        }
+    }
+
+    fn count_tool_uses(msgs: &[ChatMessage]) -> usize {
+        msgs.iter()
+            .flat_map(|m| m.content.iter())
+            .filter(|b| matches!(b, ContentBlock::ToolUse { .. }))
+            .count()
+    }
+    fn count_tool_results(msgs: &[ChatMessage]) -> usize {
+        msgs.iter()
+            .flat_map(|m| m.content.iter())
+            .filter(|b| matches!(b, ContentBlock::ToolResult { .. }))
+            .count()
+    }
+    fn result_text_for<'a>(msgs: &'a [ChatMessage], tool_use_id: &str) -> Option<&'a str> {
+        for m in msgs {
+            for b in &m.content {
+                if let ContentBlock::ToolResult { tool_use_id: id, content, .. } = b {
+                    if id == tool_use_id {
+                        return Some(content);
+                    }
+                }
+            }
+        }
+        None
+    }
+    fn result_is_error_for(msgs: &[ChatMessage], tool_use_id: &str) -> Option<bool> {
+        for m in msgs {
+            for b in &m.content {
+                if let ContentBlock::ToolResult { tool_use_id: id, is_error, .. } = b {
+                    if id == tool_use_id {
+                        return *is_error;
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn fold_no_tool_calls_unchanged() {
+        let msgs = vec![cm("user", vec![text_blk("hi")]), cm("assistant", vec![text_blk("yo")])];
+        let out = fold_repeated_tool_failures(msgs);
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn fold_single_failure_not_folded() {
+        // 单次失败：run=1 < 阈值 2，原样保留
+        let msgs = vec![
+            cm("user", vec![text_blk("do x")]),
+            cm("assistant", vec![tu_full("A", "run_command", "{}")]),
+            cm("user", vec![tr_err("A", "boom")]),
+            cm("assistant", vec![text_blk("sorry")]),
+        ];
+        let out = fold_repeated_tool_failures(msgs);
+        assert_eq!(count_tool_uses(&out), 1);
+        assert_eq!(count_tool_results(&out), 1);
+        assert_eq!(result_text_for(&out, "A"), Some("boom")); // 未替换
+    }
+
+    #[test]
+    fn fold_two_identical_failures_collapsed() {
+        let msgs = vec![
+            cm("user", vec![text_blk("do x")]),
+            cm("assistant", vec![tu_full("A1", "run_command", "{}")]),
+            cm("user", vec![tr_err("A1", "timeout")]),
+            cm("assistant", vec![tu_full("A2", "run_command", "{}")]),
+            cm("user", vec![tr_err("A2", "timeout")]),
+            cm("assistant", vec![text_blk("done")]),
+        ];
+        let out = fold_repeated_tool_failures(msgs);
+        assert_eq!(count_tool_uses(&out), 1, "两连失败应折叠为 1 个 tool_use");
+        assert_eq!(count_tool_results(&out), 1);
+        // 保留首个 A1，其 result 被替换为摘要
+        let txt = result_text_for(&out, "A1").expect("A1 应保留");
+        assert!(txt.contains("已折叠"), "应含折叠标记: {txt}");
+        assert!(txt.contains("2 次"), "应说明折叠次数: {txt}");
+        assert!(txt.contains("timeout"), "应含最近一次错误: {txt}");
+        // is_error 仍为 true
+        assert_eq!(result_is_error_for(&out, "A1"), Some(true));
+    }
+
+    #[test]
+    fn fold_three_identical_failures_count() {
+        let msgs = vec![
+            cm("user", vec![text_blk("do x")]),
+            cm("assistant", vec![tu_full("A1", "run_command", "{\"a\":1}")]),
+            cm("user", vec![tr_err("A1", "e")]),
+            cm("assistant", vec![tu_full("A2", "run_command", "{\"a\":1}")]),
+            cm("user", vec![tr_err("A2", "e")]),
+            cm("assistant", vec![tu_full("A3", "run_command", "{\"a\":1}")]),
+            cm("user", vec![tr_err("A3", "e")]),
+            cm("assistant", vec![text_blk("ok")]),
+        ];
+        let out = fold_repeated_tool_failures(msgs);
+        assert_eq!(count_tool_uses(&out), 1);
+        let txt = result_text_for(&out, "A1").unwrap();
+        assert!(txt.contains("3 次"), "应说明 3 次: {txt}");
+    }
+
+    #[test]
+    fn fold_different_inputs_not_folded() {
+        // 同工具不同参数的失败 → 不同签名，不折叠
+        let msgs = vec![
+            cm("user", vec![text_blk("do")]),
+            cm("assistant", vec![tu_full("A", "run_command", "{\"a\":1}")]),
+            cm("user", vec![tr_err("A", "e1")]),
+            cm("assistant", vec![tu_full("B", "run_command", "{\"a\":2}")]),
+            cm("user", vec![tr_err("B", "e2")]),
+        ];
+        let out = fold_repeated_tool_failures(msgs);
+        assert_eq!(count_tool_uses(&out), 2, "不同参数不应折叠");
+    }
+
+    #[test]
+    fn fold_json_key_order_insensitive() {
+        // 同值不同 key 顺序 → 视为相同签名
+        let msgs = vec![
+            cm("user", vec![text_blk("do")]),
+            cm("assistant", vec![tu_full("A", "run_command", "{\"a\":1,\"b\":2}")]),
+            cm("user", vec![tr_err("A", "e")]),
+            cm("assistant", vec![tu_full("B", "run_command", "{\"b\":2,\"a\":1}")]),
+            cm("user", vec![tr_err("B", "e")]),
+        ];
+        let out = fold_repeated_tool_failures(msgs);
+        assert_eq!(count_tool_uses(&out), 1, "key 顺序不同但值相同应折叠");
+    }
+
+    #[test]
+    fn fold_success_breaks_run() {
+        // 失败、成功交替：成功调用打断失败 run，且成功调用不折叠
+        let msgs = vec![
+            cm("user", vec![text_blk("do")]),
+            cm("assistant", vec![tu_full("A1", "run_command", "{}")]),
+            cm("user", vec![tr_err("A1", "e")]),
+            cm("assistant", vec![tu_full("A2", "run_command", "{}")]),
+            cm("user", vec![tr_ok("A2", "ok")]),
+        ];
+        let out = fold_repeated_tool_failures(msgs);
+        assert_eq!(count_tool_uses(&out), 2, "成功调用打断 run，两调用均保留");
+    }
+
+    #[test]
+    fn fold_failures_then_success_collapses_only_failures() {
+        // 连续 2 失败后成功：折叠前 2 失败为 1，成功调用保留
+        let msgs = vec![
+            cm("user", vec![text_blk("do")]),
+            cm("assistant", vec![tu_full("A1", "run_command", "{}")]),
+            cm("user", vec![tr_err("A1", "e1")]),
+            cm("assistant", vec![tu_full("A2", "run_command", "{}")]),
+            cm("user", vec![tr_err("A2", "e2")]),
+            cm("assistant", vec![tu_full("A3", "run_command", "{}")]),
+            cm("user", vec![tr_ok("A3", "finally")]),
+            cm("assistant", vec![text_blk("done")]),
+        ];
+        let out = fold_repeated_tool_failures(msgs);
+        // 折叠后：1 个失败摘要 + 1 个成功 = 2 个 tool_use
+        assert_eq!(count_tool_uses(&out), 2);
+        let folded = result_text_for(&out, "A1").unwrap();
+        assert!(folded.contains("已折叠") && folded.contains("2 次"));
+        assert_eq!(result_text_for(&out, "A3"), Some("finally"));
+    }
+
+    #[test]
+    fn fold_preserves_text_blocks() {
+        let msgs = vec![
+            cm("user", vec![text_blk("do")]),
+            cm("assistant", vec![tu_full("A1", "run_command", "{}"), text_blk("thinking...")]),
+            cm("user", vec![tr_err("A1", "e")]),
+            cm("assistant", vec![tu_full("A2", "run_command", "{}"), text_blk("retry...")]),
+            cm("user", vec![tr_err("A2", "e")]),
+        ];
+        let out = fold_repeated_tool_failures(msgs);
+        // 文本 block 应保留（折叠只动 tool block）
+        let joined: String = out
+            .iter()
+            .flat_map(|m| m.content.iter())
+            .filter_map(|b| if let ContentBlock::Text { text } = b { Some(text.clone()) } else { None })
+            .collect();
+        assert!(joined.contains("thinking..."));
+        assert!(joined.contains("retry..."));
+    }
+
+    #[test]
+    fn fold_differing_errors_shows_last() {
+        // run 里各次错误不同 → 摘要显示"最近一次"（最后一个成员的错误）
+        let msgs = vec![
+            cm("user", vec![text_blk("do")]),
+            cm("assistant", vec![tu_full("A1", "run_command", "{}")]),
+            cm("user", vec![tr_err("A1", "first-error")]),
+            cm("assistant", vec![tu_full("A2", "run_command", "{}")]),
+            cm("user", vec![tr_err("A2", "second-error")]),
+            cm("assistant", vec![tu_full("A3", "run_command", "{}")]),
+            cm("user", vec![tr_err("A3", "third-error")]),
+        ];
+        let out = fold_repeated_tool_failures(msgs);
+        let txt = result_text_for(&out, "A1").unwrap();
+        assert!(txt.contains("third-error"), "应展示最近一次错误: {txt}");
+        assert!(!txt.contains("first-error"), "不应含最早错误: {txt}");
+    }
+
+    #[test]
+    fn fold_idempotent() {
+        let msgs = vec![
+            cm("user", vec![text_blk("do")]),
+            cm("assistant", vec![tu_full("A1", "run_command", "{}")]),
+            cm("user", vec![tr_err("A1", "e")]),
+            cm("assistant", vec![tu_full("A2", "run_command", "{}")]),
+            cm("user", vec![tr_err("A2", "e")]),
+        ];
+        let once = fold_repeated_tool_failures(msgs.clone());
+        let twice = fold_repeated_tool_failures(once.clone());
+        assert_eq!(once.len(), twice.len());
+        assert_eq!(count_tool_uses(&once), count_tool_uses(&twice));
+    }
+
+    #[test]
+    fn fold_protocol_alternation_preserved() {
+        // 折叠后角色必须严格交替（Anthropic 契约），且 tool_use 与 tool_result 配对
+        let msgs = vec![
+            cm("user", vec![text_blk("do")]),
+            cm("assistant", vec![tu_full("A1", "run_command", "{}")]),
+            cm("user", vec![tr_err("A1", "e")]),
+            cm("assistant", vec![tu_full("A2", "run_command", "{}")]),
+            cm("user", vec![tr_err("A2", "e")]),
+            cm("assistant", vec![tu_full("A3", "run_command", "{}")]),
+            cm("user", vec![tr_err("A3", "e")]),
+            cm("assistant", vec![text_blk("end")]),
+        ];
+        let out = fold_repeated_tool_failures(msgs);
+        assert!(!out.is_empty());
+        for w in out.windows(2) {
+            assert_ne!(
+                w[0].role, w[1].role,
+                "折叠后出现连续同角色: {} {}",
+                w[0].role, w[1].role
+            );
+        }
+        // 存活的 tool_use 必须都有配对 tool_result（无孤儿）
+        assert_eq!(count_tool_uses(&out), count_tool_results(&out));
     }
 }
