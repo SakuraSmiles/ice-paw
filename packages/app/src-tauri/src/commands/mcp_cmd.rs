@@ -179,11 +179,13 @@ pub fn check_nodejs() -> bool {
     use std::sync::OnceLock;
     static AVAILABLE: OnceLock<bool> = OnceLock::new();
     *AVAILABLE.get_or_init(|| {
-        std::process::Command::new("node")
-            .arg("--version")
+        let mut cmd = std::process::Command::new("node");
+        cmd.arg("--version")
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
+            .stderr(std::process::Stdio::null());
+        // Windows: 隐藏 node 检测弹出的控制台窗口
+        crate::infra::process::suppress_console_window(&mut cmd);
+        cmd.status()
             .map(|s| s.success())
             .unwrap_or(false)
     })

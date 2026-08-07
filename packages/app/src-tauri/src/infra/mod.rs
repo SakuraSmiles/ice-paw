@@ -3,4 +3,5 @@
 pub mod cancel;
 pub mod decode;
 pub mod image_validation;
+pub mod process;
 pub mod protocol;

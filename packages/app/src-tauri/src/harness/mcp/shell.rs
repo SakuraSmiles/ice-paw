@@ -92,6 +92,8 @@ read exit_code and output to decide next steps."
         cmd.stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .stdin(std::process::Stdio::null());
+        // Windows: 隐藏 cmd /C 弹出的控制台窗口（GUI 应用 spawn 子进程会闪窗）
+        crate::infra::process::suppress_console_window(&mut cmd);
 
         let output = tokio::time::timeout(
             Duration::from_secs(parsed.timeout_secs),
