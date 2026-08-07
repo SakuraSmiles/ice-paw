@@ -2,6 +2,11 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/)，版本号遵循 [SemVer](https://semver.org/)。
 
+## [0.2.7] — 2026-08-07
+
+### Changed
+- **内置 WebView2 离线安装器**：Windows 安装包改用 `offlineInstaller` 模式（`bundle.windows.webviewInstallMode`），把微软 WebView2 Runtime 离线安装器嵌入 MSI/NSIS。纯净 Windows（无 WebView2、无网络）双击即装，彻底告别「缺少 WebView2 Runtime」报错。代价：安装包体积 MSI 41M→241M、NSIS 26M→229M（+约 200MB，微软该安装器实际体积，比 Tauri 源码注释里的 127MB 旧值大）。安装器由 Tauri 打包时自动从微软 CDN 下载并嵌入（编译期不校验文件存在，故 CI 无需为其建占位）；`offlineInstaller` 在 Tauri v2 schema 中**不接受 `path` 字段**（仅 `silent`），与部分教程说法相反。
+
 ## [0.2.6] — 2026-08-07
 
 ### Fixed

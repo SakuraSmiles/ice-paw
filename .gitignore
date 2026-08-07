@@ -39,6 +39,9 @@ seed_demo.sql
 sodium-prebuilt/
 sodium-dist/
 
+# Bundled runtimes (prepared by scripts/prepare-*.ps1, large binaries, NOT checked in)
+packages/app/src-tauri/resources/mcp-runtime/node/
+
 # Test artifacts
 test-results/
 *.tsbuildinfo
