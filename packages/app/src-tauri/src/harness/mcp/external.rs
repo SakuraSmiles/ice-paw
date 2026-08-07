@@ -132,12 +132,8 @@ impl ExternalMcpServer {
             // 设置工作目录为用户 home，避免 npx 在当前目录找 package.json 失败
             .current_dir(std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\".into()));
 
-        // Windows: 隐藏 cmd 窗口（cmd /C 会弹出控制台窗口，CREATE_NO_WINDOW 隐藏它）
-        #[cfg(windows)]
-        {
-            const CREATE_NO_WINDOW: u32 = 0x08000000;
-            cmd_builder.creation_flags(CREATE_NO_WINDOW);
-        }
+        // Windows: 隐藏 cmd /C 弹出的控制台窗口（见 infra::process）
+        crate::infra::process::suppress_console_window(&mut cmd_builder);
 
         let mut child = cmd_builder.spawn()
             .map_err(|e| AppError::Io(std::io::Error::other(
