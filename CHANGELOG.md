@@ -2,6 +2,12 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/)，版本号遵循 [SemVer](https://semver.org/)。
 
+## [0.2.6] — 2026-08-07
+
+### Fixed
+- **内置工具清单动态化**：设置页「内置工具」原为前端硬编码数组，与后端 `register_builtin` 漂移——0.2.5 新增 5 个 native 文件工具时漏改前端，导致设置页一直少显示（工具实际可用，仅展示漏，非数据库问题）。改为后端新增 `list_builtin_tools` 命令（复用 `register_builtin` 单一事实来源）+ 前端动态拉取，计数与清单永远反映真实，新增工具零漂移；中文描述降级为本地化文案层，缺失回退后端原文。
+- **CI 修复**：0.2.4 bundled runtime 起 CI 一直红——`tauri-build` 在编译期校验 `bundle.resources`（node.exe / node_modules）存在，但这些由 `prepare:mcp` 下载、gitignore 不入库，CI 从未 prepare，build script 在 cargo check 阶段就炸。CI 改为创建占位 resources 让校验通过（CI 只验编译、不产出安装包，真实打包仍走 `beforeBuildCommand` 的 `prepare:mcp`）。顺带修 4 处潜伏 clippy 违规（此前 CI 在 check 就死，从未暴露）。
+
 ## [0.2.5] — 2026-08-07
 
 ### Changed

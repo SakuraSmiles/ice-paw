@@ -1,6 +1,6 @@
 [package]
 name = "ice-paw"
-version = "0.2.5"
+version = "0.2.6"
 description = "IcePaw - 本地优先的 LLM 对话工作站"
 authors = ["dabai"]
 edition = "2021"
