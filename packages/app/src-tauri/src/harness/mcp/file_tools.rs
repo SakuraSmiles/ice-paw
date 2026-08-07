@@ -332,8 +332,184 @@ impl McpClient for DeleteFileTool {
     }
 }
 
+// =========================================================================
+// move_file（移动 / 重命名，源文件带备份）
+// =========================================================================
+
+/// `move_file` 工具：移动或重命名文件/目录（对标 filesystem server 的 move_file）
+///
+/// 同卷用 rename（原子）；跨卷 rename 失败时回退 copy + remove。源文件若存在，移动前
+/// 自动备份（复用 [`backup_if_exists`]）。
+///
+/// **授权**：tool_executor 经 `source` 字段提取路径做白名单校验（见
+/// `extract_path_from_args`），source 在 workspace 内则免授权；destination 由本工具的
+/// `reject_sensitive` 兜底拦截敏感路径。
+pub struct MoveFileTool;
+
+#[derive(Deserialize)]
+struct MoveFileArgs {
+    source: String,
+    destination: String,
+}
+
+/// 递归复制目录/文件（跨卷 move 回退用）。async 递归用 Box::pin 规避尺寸无限增长。
+async fn copy_recursive(src: &Path, dst: &Path) -> AppResult<()> {
+    let meta = tokio::fs::metadata(src).await.map_err(AppError::Io)?;
+    if meta.is_dir() {
+        tokio::fs::create_dir_all(dst).await.map_err(AppError::Io)?;
+        let mut reader = tokio::fs::read_dir(src).await.map_err(AppError::Io)?;
+        while let Some(entry) = reader.next_entry().await.map_err(AppError::Io)? {
+            let child_src = entry.path();
+            let child_dst = dst.join(entry.file_name());
+            Box::pin(copy_recursive(&child_src, &child_dst)).await?;
+        }
+    } else {
+        tokio::fs::copy(src, dst).await.map_err(AppError::Io)?;
+    }
+    Ok(())
+}
+
+#[async_trait]
+impl McpClient for MoveFileTool {
+    fn name(&self) -> &str {
+        "move_file"
+    }
+
+    fn description(&self) -> &str {
+        "Move or rename a file or directory. Same-volume moves are atomic; cross-volume \
+falls back to copy+delete. The source file is backed up before moving."
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "source": { "type": "string", "description": "Path to the file or directory to move." },
+                "destination": { "type": "string", "description": "Target path." }
+            },
+            "required": ["source", "destination"]
+        })
+    }
+
+    fn authorization_level(&self) -> AuthorizationLevel {
+        AuthorizationLevel::PathWhitelist
+    }
+
+    async fn execute(&self, args: &str) -> AppResult<String> {
+        let parsed: MoveFileArgs = serde_json::from_str(args)
+            .map_err(|e| AppError::Validation(format!("move_file 参数解析失败: {e}")))?;
+
+        let src = Path::new(&parsed.source);
+        let dst = Path::new(&parsed.destination);
+        reject_sensitive(src)?;
+        reject_sensitive(dst)?;
+
+        if !src.exists() {
+            return Err(AppError::Validation(format!(
+                "move_file: 源路径不存在: {}",
+                parsed.source
+            )));
+        }
+
+        // 源文件备份（目录不备份，与 delete_file 一致）
+        let backup = if !src.is_dir() {
+            backup_if_exists(src)?
+        } else {
+            None
+        };
+
+        // 目标父目录缺失则自动建（对标 server-filesystem move_file 的友好行为）
+        if let Some(parent) = dst.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(AppError::Io)?;
+        }
+
+        // 同卷 rename 原子；跨卷失败（Linux EXDEV=18 / Win ERROR_NOT_SAME_DEVICE=17）回退 copy+remove。
+        // 注：Windows 的 rename 带 MOVEFILE_COPY_ALLOWED，跨卷通常已自动复制成功，回退主要服务 Linux。
+        match tokio::fs::rename(src, dst).await {
+            Ok(()) => {}
+            Err(e) if matches!(e.raw_os_error(), Some(18) | Some(17)) => {
+                copy_recursive(src, dst).await?;
+                if src.is_dir() {
+                    tokio::fs::remove_dir_all(src).await.map_err(AppError::Io)?;
+                } else {
+                    tokio::fs::remove_file(src).await.map_err(AppError::Io)?;
+                }
+            }
+            Err(e) => return Err(AppError::Io(e)),
+        }
+
+        Ok(serde_json::json!({
+            "source": parsed.source,
+            "destination": parsed.destination,
+            "backup": backup,
+        })
+        .to_string())
+    }
+}
+
+// =========================================================================
+// create_directory
+// =========================================================================
+
+/// `create_directory` 工具：创建目录（含父目录，幂等——已存在不报错）
+pub struct CreateDirectoryTool;
+
+#[derive(Deserialize)]
+struct CreateDirectoryArgs {
+    path: String,
+}
+
+#[async_trait]
+impl McpClient for CreateDirectoryTool {
+    fn name(&self) -> &str {
+        "create_directory"
+    }
+
+    fn description(&self) -> &str {
+        "Create a directory, including any missing parent directories. Idempotent: \
+succeeds if the directory already exists."
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "Path of the directory to create." }
+            },
+            "required": ["path"]
+        })
+    }
+
+    fn authorization_level(&self) -> AuthorizationLevel {
+        AuthorizationLevel::PathWhitelist
+    }
+
+    async fn execute(&self, args: &str) -> AppResult<String> {
+        let parsed: CreateDirectoryArgs = serde_json::from_str(args)
+            .map_err(|e| AppError::Validation(format!("create_directory 参数解析失败: {e}")))?;
+
+        let path = Path::new(&parsed.path);
+        reject_sensitive(path)?;
+
+        // create_dir_all 幂等：目录已存在时返回 Ok
+        tokio::fs::create_dir_all(path)
+            .await
+            .map_err(AppError::Io)?;
+
+        Ok(serde_json::json!({
+            "path": parsed.path,
+            "created": true,
+        })
+        .to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     // edit_file 的核心替换逻辑是纯字符串操作，这里通过 replacen 语义验证
     #[test]
     fn replacen_first_only() {
@@ -341,5 +517,17 @@ mod tests {
         assert_eq!(s.replacen("a", "X", 1), "X b a b");
         assert_eq!(s.replace("a", "X"), "X b X b");
         assert_eq!(s.matches('a').count(), 2);
+    }
+
+    #[test]
+    fn move_and_create_dir_auth_levels() {
+        assert_eq!(
+            MoveFileTool.authorization_level(),
+            AuthorizationLevel::PathWhitelist
+        );
+        assert_eq!(
+            CreateDirectoryTool.authorization_level(),
+            AuthorizationLevel::PathWhitelist
+        );
     }
 }

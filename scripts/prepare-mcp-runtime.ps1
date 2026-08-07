@@ -117,8 +117,7 @@ Write-Host ""
 Write-Host "[prepare-mcp] Self-check:" -ForegroundColor Cyan
 & $NodeExe --version
 foreach ($pkg in "@modelcontextprotocol/server-sequential-thinking",
-                 "@modelcontextprotocol/server-memory",
-                 "@modelcontextprotocol/server-filesystem") {
+                 "@modelcontextprotocol/server-memory") {
     $entry = Join-Path $ModulesDir "$pkg/dist/index.js"
     if (Test-Path $entry) {
         Write-Host "  [OK]   $pkg/dist/index.js" -ForegroundColor Green
