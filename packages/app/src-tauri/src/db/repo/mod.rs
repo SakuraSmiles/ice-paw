@@ -14,3 +14,4 @@ pub mod preferences;
 pub mod project;
 pub mod summary;
 pub mod template;
+pub mod tool_call;
