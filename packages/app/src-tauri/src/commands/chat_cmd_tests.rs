@@ -141,6 +141,7 @@ mod tests {
             cache_prompt: 0,
             max_history_messages: None,
             tool_trim_threshold: None,
+            context_window: None,
             enabled_tools: None,
             supports_vision: 0,
             description: String::new(),

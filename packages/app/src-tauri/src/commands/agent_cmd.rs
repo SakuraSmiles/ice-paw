@@ -348,6 +348,7 @@ impl AgentCmd for SqlAgentCmd {
             input.cache_prompt,
             input.max_history_messages,
             input.tool_trim_threshold,
+            input.context_window,
             input.enabled_tools,
             input.supports_vision,
             input.workspace_path.as_ref().map(|opt| opt.as_deref()),
@@ -522,6 +523,7 @@ impl AgentCmd for MockAgentCmd {
             cache_prompt: if input.cache_prompt { 1 } else { 0 },
             max_history_messages: input.max_history_messages,
             tool_trim_threshold: input.tool_trim_threshold,
+            context_window: input.context_window,
             enabled_tools: input.enabled_tools.as_ref().map(|v| {
                 serde_json::to_string(v).unwrap_or_else(|_| "[]".to_string())
             }),
@@ -560,6 +562,7 @@ impl AgentCmd for MockAgentCmd {
         if let Some(v) = input.cache_prompt { entry.0.cache_prompt = v as i32; }
         if let Some(v) = input.max_history_messages { entry.0.max_history_messages = v; }
         if let Some(v) = input.tool_trim_threshold { entry.0.tool_trim_threshold = v; }
+        if let Some(v) = input.context_window { entry.0.context_window = v; }
         if let Some(v) = input.enabled_tools {
             entry.0.enabled_tools = v.map(|tools| serde_json::to_string(&tools).unwrap_or_default());
         }
@@ -653,6 +656,7 @@ mod tests {
             cache_prompt: 0,
             max_history_messages: None,
             tool_trim_threshold: None,
+            context_window: None,
             enabled_tools: None,
             supports_vision: 0,
             description: String::new(),
@@ -729,6 +733,7 @@ mod tests {
             cache_prompt: true,
             max_history_messages: None,
             tool_trim_threshold: None,
+            context_window: None,
             enabled_tools: None,
             supports_vision: false,
             workspace_path: None,
@@ -758,6 +763,7 @@ mod tests {
             cache_prompt: None,
             max_history_messages: None,
             tool_trim_threshold: None,
+            context_window: None,
             enabled_tools: None,
             supports_vision: None,
             workspace_path: None,

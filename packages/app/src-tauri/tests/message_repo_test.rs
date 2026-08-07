@@ -67,6 +67,8 @@ async fn seed_agent_and_conv(pool: &SqlitePool) -> String {
             max_history_messages: None,
             // 06 migration: tool_trim_threshold 显式置 None（系统默认）。
             tool_trim_threshold: None,
+            // Phase 0: context_window 显式置 None（运行时查默认表）。
+            context_window: None,
             // Task 4 / Task 3a: 新增字段，测试 fixture 显式置默认值。
             enabled_tools: None,
             supports_vision: false,

@@ -96,6 +96,7 @@ async fn make_ctx(
         cache_prompt: 0,
         max_history_messages: None,
         tool_trim_threshold: None,
+        context_window: None,
         enabled_tools: None,
         avatar: None,
         workspace_path: None,

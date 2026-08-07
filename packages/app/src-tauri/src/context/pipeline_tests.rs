@@ -52,6 +52,7 @@ pub(super) fn make_agent() -> AgentRow {
         cache_prompt: 0,
         max_history_messages: None, // A3-2: None → 使用系统默认
         tool_trim_threshold: None,
+        context_window: None,
         enabled_tools: None,
         supports_vision: 0,
         description: String::new(),

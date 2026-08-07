@@ -2,12 +2,14 @@
 //!
 //! 关键 API：
 //! - `estimate_tokens(text)`     —— 文本 token 估算（CJK 1/字，英文 1/4 字节）
+//! - `estimate_block_tokens(b)`  —— 单个 ContentBlock 的 token（覆盖工具/图片/思考块）
+//! - `estimate_message_tokens(m)`—— 单条 ChatMessage 的 token（block 之和 + 结构开销）
 //! - `estimate_messages_tokens(messages)` —— 一组 ChatMessage 的总 token
 //! - `ContextBudget`             —— 上下文预算配置（threshold 等）
 //! - `compute_split_idx(messages, budget)` —— M1.5 摘要分割点
 //!   （dev1 §4.2 双保险：保留最近 10 轮 + 尾部 token ≤ threshold×80%）
 
-use crate::infra::protocol::ChatMessage;
+use crate::infra::protocol::{ChatMessage, ContentBlock};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ContextBudget {
@@ -55,17 +57,54 @@ pub fn estimate_tokens(text: &str) -> usize {
     other.div_ceil(4) + cjk
 }
 
-/// M1.5: 估算一组 `ChatMessage` 的总 token 数
+// ---- block / message 级估算（覆盖全部 ContentBlock 类型）----
+//
+// 历史 token 估算必须覆盖工具块：一次失败的 tool_result 可能是数百 KB 文本，
+// 若只数 Text 块（旧 `content_text()` 路径）会把 tool_result 记成 0 token，
+// 导致 MemoryStage 误判「还没到摘要阈值」、窗口被静默撑爆。
+
+/// 工具块 / 结果块除正文外的 JSON 框架开销（type / id / name / tool_use_id 等）。
+/// token 估算无需精确，给个保守上界避免低估。
+const TOOL_BLOCK_OVERHEAD: usize = 8;
+/// 每条消息的角色 / content 数组结构固定开销。
+const MESSAGE_OVERHEAD: usize = 4;
+/// 图片 token 估算下限（对齐 Anthropic 图片最小计费约 85 token）。
+const IMAGE_TOKEN_FLOOR: usize = 85;
+/// 图片 token 估算封顶（避免巨幅 base64 失真）。
+const IMAGE_TOKEN_CAP: usize = 4_000;
+
+/// 估算单个 [`ContentBlock`] 的 token 数（block 级，覆盖全部变体）。
 ///
-/// 仅取每条消息的 `content_text()`（拼接后的纯文本），不展开
-/// 图片 / 工具块 —— 摘要阶段不关心原始多模态内容。
+/// - `Text`     → 文本 token
+/// - `ToolUse`  → input(JSON 字符串) + 结构开销
+/// - `ToolResult` → content + 结构开销
+/// - `Thinking` → thinking 文本
+/// - `Image`    → 按 base64 解码字节数粗估（无像素尺寸可读，仅代理；历史里图片罕见）
+pub fn estimate_block_tokens(block: &ContentBlock) -> usize {
+    match block {
+        ContentBlock::Text { text } => estimate_tokens(text),
+        ContentBlock::ToolUse { input, .. } => estimate_tokens(input) + TOOL_BLOCK_OVERHEAD,
+        ContentBlock::ToolResult { content, .. } => estimate_tokens(content) + TOOL_BLOCK_OVERHEAD,
+        ContentBlock::Thinking { thinking, .. } => estimate_tokens(thinking),
+        ContentBlock::Image { data, .. } => {
+            // base64 解码字节数 ≈ len * 3/4；按每 200 字节约 1 token 粗估。
+            // Anthropic 实际按像素 (w*h)/750 计，此处无尺寸可读，仅为量级代理。
+            let decoded = (data.len() * 3) / 4;
+            (decoded / 200).max(IMAGE_TOKEN_FLOOR).min(IMAGE_TOKEN_CAP)
+        }
+    }
+}
+
+/// 估算单条 [`ChatMessage`] 的 token 数 = 各 block 之和 + 消息结构开销。
+pub fn estimate_message_tokens(m: &ChatMessage) -> usize {
+    m.content.iter().map(estimate_block_tokens).sum::<usize>() + MESSAGE_OVERHEAD
+}
+
+/// 估算一组 `ChatMessage` 的总 token 数（block 级，覆盖工具 / 图片 / 思考块）。
 ///
 /// `messages` 为空时返回 0。空数组属于「正常」输入，不需要返回错误。
 pub fn estimate_messages_tokens(messages: &[ChatMessage]) -> usize {
-    messages
-        .iter()
-        .map(|m| estimate_tokens(&m.content_text()))
-        .sum()
+    messages.iter().map(estimate_message_tokens).sum()
 }
 
 /// M1.5: 摘要分割点（双保险算法，源自 dev1 m1-review.md §4.2）
@@ -105,7 +144,7 @@ pub fn compute_split_idx(messages: &[ChatMessage], budget: &ContextBudget) -> us
 
     // 从尾部向前累计，直到满足「两个条件都达成」
     for m in messages.iter().rev() {
-        tail_tokens += estimate_tokens(&m.content_text());
+        tail_tokens += estimate_message_tokens(m);
         keep_count += 1;
         if tail_tokens >= max_tail_tokens && keep_count >= MIN_KEEP_MSGS {
             break;
@@ -160,16 +199,112 @@ mod tests {
 
     #[test]
     fn estimate_messages_tokens_sums_each_message() {
-        // "hi" = 1 token; "hello world" = 3 tokens; total = 4
+        // "hi" = 1 token; "hello world" = 3 tokens; 每条 +MESSAGE_OVERHEAD(4)
+        // → (1+4) + (3+4) = 12
         let v = msgs(&["hi", "hello world"]);
-        assert_eq!(estimate_messages_tokens(&v), 4);
+        assert_eq!(estimate_messages_tokens(&v), 12);
     }
 
     #[test]
     fn estimate_messages_tokens_handles_cjk() {
-        // 2 CJK chars + 4 ASCII chars = 2 + 1 = 3 tokens
+        // "你好" = 2 CJK = 2; "test" = 4 ascii → div_ceil(4,4)=1; 各 +4 overhead
+        // → (2+4) + (1+4) = 11
         let v = msgs(&["你好", "test"]);
-        assert_eq!(estimate_messages_tokens(&v), 3);
+        assert_eq!(estimate_messages_tokens(&v), 11);
+    }
+
+    // ---- block 级估算（覆盖工具 / 图片 / 思考块）----
+
+    #[test]
+    fn estimate_block_tokens_text() {
+        // "test" = 4 ascii → 1 token
+        assert_eq!(
+            estimate_block_tokens(&ContentBlock::text("test")),
+            1
+        );
+    }
+
+    #[test]
+    fn estimate_block_tokens_tool_use_counts_input_plus_overhead() {
+        // input "{\"a\":1}" = 7 ascii → div_ceil(7,4)=2; +TOOL_BLOCK_OVERHEAD(8) = 10
+        let b = ContentBlock::ToolUse {
+            id: "call_1".into(),
+            name: "run_command".into(),
+            input: "{\"a\":1}".into(),
+        };
+        assert_eq!(estimate_block_tokens(&b), 2 + TOOL_BLOCK_OVERHEAD);
+    }
+
+    #[test]
+    fn estimate_block_tokens_tool_result_counts_content_plus_overhead() {
+        // 100 个 'a' → div_ceil(100,4)=25; +overhead(8) = 33
+        let b = ContentBlock::ToolResult {
+            tool_use_id: "call_1".into(),
+            content: "a".repeat(100),
+            is_error: Some(true),
+        };
+        assert_eq!(
+            estimate_block_tokens(&b),
+            (100usize).div_ceil(4) + TOOL_BLOCK_OVERHEAD
+        );
+    }
+
+    #[test]
+    fn estimate_block_tokens_thinking() {
+        // thinking 文本应被计入（4 ascii → 1 token）
+        let b = ContentBlock::Thinking {
+            thinking: "test".into(),
+            signature: None,
+        };
+        assert_eq!(estimate_block_tokens(&b), 1);
+    }
+
+    #[test]
+    fn estimate_block_tokens_image_floor_and_nonzero() {
+        // 空数据 → 解码 0 字节 → 0/200=0，但下限 IMAGE_TOKEN_FLOOR 兜底
+        let small = ContentBlock::image("", "image/png");
+        assert_eq!(estimate_block_tokens(&small), IMAGE_TOKEN_FLOOR);
+        assert!(IMAGE_TOKEN_FLOOR > 0);
+
+        // 巨幅 base64（模拟 5MB 解码量）应被封顶
+        let huge = ContentBlock::image("x".repeat(8_000_000), "image/png");
+        assert_eq!(estimate_block_tokens(&huge), IMAGE_TOKEN_CAP);
+    }
+
+    #[test]
+    fn estimate_message_tokens_counts_tool_blocks_not_just_text() {
+        // 关键回归：一条带 tool_result 的消息，旧 content_text() 路径会记 0；
+        // block 级估算必须 > 0。content 400 ascii → 100 token + overhead 8 + msg overhead 4
+        let m = ChatMessage {
+            role: "user".into(),
+            content: vec![ContentBlock::ToolResult {
+                tool_use_id: "call_1".into(),
+                content: "a".repeat(400),
+                is_error: Some(true),
+            }],
+        };
+        let est = estimate_message_tokens(&m);
+        assert!(est > 0, "tool_result 必须被计入，实际 {est}");
+        // 400/4=100 + TOOL_BLOCK_OVERHEAD(8) + MESSAGE_OVERHEAD(4) = 112
+        assert_eq!(est, 100 + TOOL_BLOCK_OVERHEAD + MESSAGE_OVERHEAD);
+    }
+
+    #[test]
+    fn estimate_messages_tokens_sums_tool_heavy_history() {
+        // 旧路径：tool_result 全记 0 → 总计仅 Text 消息；
+        // 新路径：工具块必须贡献 token，使总计数显著大于纯文本。
+        let tool_msg = ChatMessage {
+            role: "user".into(),
+            content: vec![ContentBlock::ToolResult {
+                tool_use_id: "c1".into(),
+                content: "x".repeat(4000), // 1000 token
+                is_error: None,
+            }],
+        };
+        let text_msg = ChatMessage::from_text("assistant", "ok"); // 1 token + 4
+        let total = estimate_messages_tokens(&[tool_msg, text_msg]);
+        // tool_msg ≈ 1000+8+4=1012; text_msg = 1+4=5 → 1017
+        assert!(total > 1000, "工具密集历史应被如实计为大体积，实际 {total}");
     }
 
     // ---- M1.5: compute_split_idx ----
