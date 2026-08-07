@@ -8,6 +8,7 @@
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "prepare:mcp": "powershell -ExecutionPolicy Bypass -File ../../scripts/prepare-mcp-runtime.ps1",
     "typecheck": "vue-tsc --noEmit",
     "lint": "eslint src --ext .ts,.vue",
     "test": "vitest run",

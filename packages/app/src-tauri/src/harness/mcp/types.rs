@@ -180,6 +180,41 @@ impl std::str::FromStr for TrustLevel {
 }
 
 // =========================================================================
+// RuntimeKind — Server 运行时类型
+// =========================================================================
+
+/// MCP Server 运行时类型：控制 command 如何被解析执行。
+///
+/// - `System`：command 走系统 PATH（npx / node / pipx 等，依赖系统 node）
+/// - `Bundled`：用 IcePaw 内置 node.exe + 打包好的 node_modules（零网络依赖、零系统 node 依赖）
+///
+/// bundled 模式下，DB 里 command 存占位 "node"、args 存「用户可配参数」
+/// （不含包名/入口），`start_server` 解析时把 command 换成内置 node.exe 绝对路径、
+/// 并把对应包的 entry script prepend 到 args 前面。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeKind {
+    /// 走系统 PATH（npx/node/pipx 等）
+    #[default]
+    System,
+    /// IcePaw 内置 node.exe + 打包 node_modules
+    Bundled,
+}
+
+impl RuntimeKind {
+    pub fn as_str(&self) -> &'static str {
+        match self { RuntimeKind::System => "system", RuntimeKind::Bundled => "bundled" }
+    }
+}
+
+impl std::str::FromStr for RuntimeKind {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s { "bundled" => Ok(RuntimeKind::Bundled), _ => Ok(RuntimeKind::System) }
+    }
+}
+
+// =========================================================================
 // Server 配置（DB 行 / 传输用）
 // =========================================================================
 
@@ -203,6 +238,9 @@ pub struct McpServerConfig {
     /// （per_agent 的 server，args 中的 {workspace} 启动时替换为 agent workspace）
     #[serde(default = "default_scope")]
     pub scope: String,
+    /// 运行时类型：system（走系统 PATH）或 bundled（内置 node + 预打包包）
+    #[serde(default)]
+    pub runtime_kind: RuntimeKind,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -230,6 +268,8 @@ pub struct ServerSnapshot {
     pub enabled: bool,
     pub trust_level: TrustLevel,
     pub scope: String,
+    #[serde(default)]
+    pub runtime_kind: RuntimeKind,
     /// 运行时状态
     pub status: ServerStatusKind,
     /// running 时的工具数
@@ -254,6 +294,7 @@ impl From<McpServerConfig> for ServerSnapshot {
             enabled: cfg.enabled,
             trust_level: cfg.trust_level,
             scope: cfg.scope,
+            runtime_kind: cfg.runtime_kind,
             status: ServerStatusKind::Disabled,
             tool_count: None,
             tools: None,
@@ -297,6 +338,9 @@ pub struct NewMcpServer {
     pub trust_level: TrustLevel,
     #[serde(default = "default_scope")]
     pub scope: String,
+    /// 运行时类型（用户自建 server 默认 system；builtin bundled 由 seed_defaults 指定）
+    #[serde(default)]
+    pub runtime_kind: RuntimeKind,
 }
 
 /// 更新 MCP Server 入参
@@ -312,6 +356,8 @@ pub struct UpdateMcpServer {
     #[serde(default)]
     pub trust_level: Option<TrustLevel>,
     pub scope: Option<String>,
+    #[serde(default)]
+    pub runtime_kind: Option<RuntimeKind>,
 }
 
 // =========================================================================
@@ -377,5 +423,16 @@ mod tests {
         assert_eq!("unknown".parse::<TrustLevel>().unwrap(), TrustLevel::Untrusted);
         assert_eq!(TrustLevel::Trusted.as_str(), "trusted");
         assert_eq!(TrustLevel::Untrusted.as_str(), "untrusted");
+    }
+
+    #[test]
+    fn runtime_kind_default_and_roundtrip() {
+        assert_eq!(RuntimeKind::default(), RuntimeKind::System);
+        assert_eq!("bundled".parse::<RuntimeKind>().unwrap(), RuntimeKind::Bundled);
+        assert_eq!("system".parse::<RuntimeKind>().unwrap(), RuntimeKind::System);
+        // 未知值回退到 System（容错，避免坏数据阻断启动）
+        assert_eq!("unknown".parse::<RuntimeKind>().unwrap(), RuntimeKind::System);
+        assert_eq!(RuntimeKind::Bundled.as_str(), "bundled");
+        assert_eq!(RuntimeKind::System.as_str(), "system");
     }
 }
