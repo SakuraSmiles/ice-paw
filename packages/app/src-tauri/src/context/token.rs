@@ -107,6 +107,32 @@ pub fn estimate_messages_tokens(messages: &[ChatMessage]) -> usize {
     messages.iter().map(estimate_message_tokens).sum()
 }
 
+/// 按 token 硬上限裁剪历史：从尾部保留尽量多的消息，使保留部分 token 总和 ≤ `max_tokens`。
+///
+/// 返回保留的尾部切片 `&history[keep_from..]`。若最近一条消息本身就超 `max_tokens`，
+/// 仍至少保留它（无法再裁）。**不保证协议合规**——可能在 `tool_use` / `tool_result`
+/// 边界切断，调用方应随后 [`crate::context::history::sanitize_history`] 清理孤儿。
+///
+/// 该函数是纯函数：只读切片、不算 DB、不发请求。
+pub fn trim_history_to_budget(history: &[ChatMessage], max_tokens: usize) -> &[ChatMessage] {
+    if history.is_empty() {
+        return history;
+    }
+    let mut acc: usize = 0;
+    let mut keep_from = history.len(); // 初始：空保留
+    for (i, m) in history.iter().enumerate().rev() {
+        let t = estimate_message_tokens(m);
+        // 加入此条会超预算，且其后已有保留条目 → 停在此条之前
+        if i + 1 < history.len() && acc + t > max_tokens {
+            keep_from = i + 1;
+            break;
+        }
+        acc += t;
+        keep_from = i;
+    }
+    &history[keep_from..]
+}
+
 /// M1.5: 摘要分割点（双保险算法，源自 dev1 m1-review.md §4.2）
 ///
 /// 给定一段历史消息，返回「该从哪里开始向前摘要」的索引。
@@ -305,6 +331,51 @@ mod tests {
         let total = estimate_messages_tokens(&[tool_msg, text_msg]);
         // tool_msg ≈ 1000+8+4=1012; text_msg = 1+4=5 → 1017
         assert!(total > 1000, "工具密集历史应被如实计为大体积，实际 {total}");
+    }
+
+    // ---- trim_history_to_budget（Phase 1 token 窗口）----
+
+    #[test]
+    fn trim_history_empty_returns_empty() {
+        assert!(trim_history_to_budget(&[], 1000).is_empty());
+    }
+
+    #[test]
+    fn trim_history_all_fits_returns_all() {
+        // 3 条小消息，预算充足 → 全保留，顺序不变
+        let v = msgs(&["a", "b", "c"]);
+        let kept = trim_history_to_budget(&v, 10_000);
+        assert_eq!(kept.len(), 3);
+        assert_eq!(kept[0].content_text(), "a");
+        assert_eq!(kept[2].content_text(), "c");
+    }
+
+    #[test]
+    fn trim_history_drops_oldest_to_fit_budget() {
+        // 每条 "aaaa"(4 ascii → 1 token) + MESSAGE_OVERHEAD(4) = 5 token；5 条 = 25
+        // 预算 11 → 最多保留 ceil 不足 3 条（3 条=15>11, 2 条=10≤11）→ 保留最后 2 条
+        let v = msgs(&["aaaa", "bbbb", "cccc", "dddd", "eeee"]);
+        let kept = trim_history_to_budget(&v, 11);
+        assert_eq!(kept.len(), 2, "应仅保留尾部 2 条");
+        assert_eq!(kept[0].content_text(), "dddd");
+        assert_eq!(kept[1].content_text(), "eeee");
+    }
+
+    #[test]
+    fn trim_history_keeps_at_least_latest_when_single_exceeds() {
+        // 单条超预算 → 仍保留它（不能再裁）
+        let big = ChatMessage::from_text("user", "x".repeat(10_000));
+        let kept = trim_history_to_budget(std::slice::from_ref(&big), 5);
+        assert_eq!(kept.len(), 1);
+    }
+
+    #[test]
+    fn trim_history_zero_budget_keeps_latest_only() {
+        // 预算 0 → 无法容纳，但至少保留最近一条（防御性最小保留）
+        let v = msgs(&["a", "b", "c"]);
+        let kept = trim_history_to_budget(&v, 0);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].content_text(), "c");
     }
 
     // ---- M1.5: compute_split_idx ----

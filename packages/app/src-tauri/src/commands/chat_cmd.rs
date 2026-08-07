@@ -132,10 +132,10 @@ pub async fn send_message(
     let conv_id_guard = conv_id.clone();
     let cancel_guard = scopeguard::guard((), |_| chat_state.unregister(&conv_id_guard));
 
-    // 显式走 PipelineRunner：构造 PipelineContext + 注册 6 个 Stage（M1.4：
-    // Template → OsContext → SystemPrompt → History → Memory → Final；
-    // M1.4 起不再含 ToolTrimStage，工具裁剪下沉到 loop_engine）。
-    // 后续 A3-3 在此处追加新 Stage 即可，无需改动业务编排层。
+    // 显式走 PipelineRunner：构造 PipelineContext + 注册 8 个 Stage：
+    // Template → OsContext → SystemPrompt → History → ToolFailureFold → Memory
+    // → TokenWindow → Final（M1.4 起不再含 ToolTrimStage，工具裁剪下沉到 loop_engine）。
+    // 后续新增 Stage 在 default_pipeline 注册即可，无需改动业务编排层。
     //
     // M1.5: PipelineContext 现在携带 conversation_id + cancel_token，
     //       MemoryStage 需要二者才能调 summary_provider 并响应取消。
