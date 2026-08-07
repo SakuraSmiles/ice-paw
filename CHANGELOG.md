@@ -2,6 +2,19 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/)，版本号遵循 [SemVer](https://semver.org/)。
 
+## [0.2.5] — 2026-08-07
+
+### Changed
+- **移除「工程专家团队」内置工具集**：价值低、依赖系统 node + npx 联网拉取，不再随产品内置。已安装用户的旧记录由 migration 36 自动清除。
+- **「文件系统工具集」整合为 native 内置工具**：原 bundled MCP Server（`@modelcontextprotocol/server-filesystem`）的 6 个核心工具与内置 native 工具完全重复且内置更优（自动备份 / 唯一性校验 / 大文件分页 / 噪音目录过滤），予以移除；其独有的 5 个能力补成 native 内置工具，零 node 进程开销、授权模型统一为 `PathWhitelist`：
+  - 新增 `directory_tree`——递归目录树（跳过 .git/node_modules 等，限深度 8 / 节点 2000）。
+  - 新增 `move_file`——移动 / 重命名（跨卷回退 copy+delete，源文件自动备份）。
+  - 新增 `create_directory`——建目录含父目录（幂等）。
+  - 新增 `get_file_info`——文件元信息（大小 / 类型 / 只读 / 修改·创建·访问时间）。
+  - 新增 `read_multiple_files`——批量读 ≤20 文件（单文件 >1MB 跳过；多路径无法自动放行故每次确认）。
+  - `extract_path_from_args` 扩展支持 `source`/`destination`，使 `move_file` 可经 source 走白名单授权。
+- 内置 MCP 运行时不再打包 `@modelcontextprotocol/server-filesystem`（thinking / memory 仍需保留 node runtime）。
+
 ## [0.2.4] — 2026-08-07
 
 > 0.2.x 线的 beta 阶段第 4 个迭代。
