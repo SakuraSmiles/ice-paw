@@ -119,8 +119,8 @@ pub async fn delete(pool: &SqlitePool, id: &str) -> AppResult<()> {
 
 /// 默认 MCP Server 配置列表——首次启动时自动安装。
 ///
-/// 前 2 个（thinking / memory）用 **bundled 运行时**：IcePaw 内置 node.exe
-/// + 预打包 node_modules，零网络依赖、零系统 node 依赖。DB 里 command 存占位 "node"、
+/// 前 2 个（thinking / memory）用 **bundled 运行时**：IcePaw 内置 node.exe 与预打包
+/// node_modules，零网络依赖、零系统 node 依赖。DB 里 command 存占位 "node"、
 /// args 存「用户可配参数」（不含包名/入口），包名与 entry script 由 start_server
 /// 解析时注入（见 harness::mcp::bundled）。
 ///
