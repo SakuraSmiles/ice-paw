@@ -148,7 +148,23 @@ pub async fn send_message(
         tools_enabled,
         current_user_query.clone(),
         tool_call_history.clone(),
-        crate::context::token::ContextBudget::default(),
+        // Phase 0: 用 agent 的 context_window 构造上下文预算。
+        // 解析优先级：agent 显式覆盖 → (provider, model) 已知模型默认 → 128K 兜底。
+        // max_input_tokens 目前无消费者（vestigial），Phase 1 的 token 窗口 stage 才用；
+        // 此处先让真实窗口值到位。
+        {
+            let max_input = agent
+                .context_window
+                .map(|v| v as usize)
+                .or_else(|| {
+                    crate::harness::provider::default_context_window(&agent.provider, &agent.model)
+                })
+                .unwrap_or(128_000);
+            crate::context::token::ContextBudget {
+                max_input_tokens: max_input,
+                ..crate::context::token::ContextBudget::default()
+            }
+        },
         conv_id.clone(),
         cancel_token.clone(),
     );

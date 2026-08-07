@@ -32,6 +32,9 @@ pub struct AgentRow {
     pub max_history_messages: Option<i32>,
     /// M1.2 A2-4: 工具裁剪阈值（NULL = 使用系统默认 5）。
     pub tool_trim_threshold: Option<i32>,
+    /// Phase 0: 模型上下文窗口（token 数，NULL = 运行时按 provider+model 查
+    /// 已知默认表，查不到回退 128K）。显式设置可覆盖默认（自定义/本地模型）。
+    pub context_window: Option<i32>,
     /// Task 4: 工具白名单（NULL = 全部启用）。
     /// JSON 数组格式：`["read_file", "list_directory"]`
     pub enabled_tools: Option<String>,
@@ -100,6 +103,9 @@ pub struct AgentFileConfig {
     pub max_history_messages: Option<i32>,
     #[serde(default)]
     pub tool_trim_threshold: Option<i32>,
+    /// Phase 0: 模型上下文窗口（None = 运行时按 provider+model 查默认表）
+    #[serde(default)]
+    pub context_window: Option<i32>,
     #[serde(default)]
     pub enabled_tools: Option<Vec<String>>,
     #[serde(default)]
@@ -149,6 +155,7 @@ impl AgentFileConfig {
         if let Some(v) = self.supports_vision { agent.supports_vision = v; }
         if let Some(v) = self.max_history_messages { agent.max_history_messages = Some(v); }
         if let Some(v) = self.tool_trim_threshold { agent.tool_trim_threshold = Some(v); }
+        if let Some(v) = self.context_window { agent.context_window = Some(v); }
         if let Some(v) = &self.enabled_tools { agent.enabled_tools = Some(v.clone()); }
         if let Some(v) = &self.extra_params { agent.extra_params = v.clone(); }
         if let Some(v) = self.tool_max_rounds {
@@ -173,6 +180,7 @@ impl AgentFileConfig {
         if let Some(v) = self.supports_vision { row.supports_vision = if v { 1 } else { 0 }; }
         if let Some(v) = self.max_history_messages { row.max_history_messages = Some(v); }
         if let Some(v) = self.tool_trim_threshold { row.tool_trim_threshold = Some(v); }
+        if let Some(v) = self.context_window { row.context_window = Some(v); }
         if let Some(v) = &self.enabled_tools {
             row.enabled_tools = Some(serde_json::to_string(v).unwrap_or_default());
         }
@@ -221,6 +229,9 @@ pub struct Agent {
     /// M1.2 A2-4: 工具裁剪阈值（None 表示使用系统默认值 5）。
     #[serde(default)]
     pub tool_trim_threshold: Option<i32>,
+    /// Phase 0: 模型上下文窗口（None = 运行时按 provider+model 查已知默认表）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<i32>,
     /// Task 4: 工具白名单（None = 全部启用，Some(空 vec) = 全部禁用）。
     #[serde(default)]
     pub enabled_tools: Option<Vec<String>>,
@@ -289,6 +300,7 @@ impl From<AgentRow> for Agent {
             cache_prompt: row.cache_prompt != 0,
             max_history_messages: row.max_history_messages,
             tool_trim_threshold: row.tool_trim_threshold,
+            context_window: row.context_window,
             enabled_tools: row.enabled_tools
                 .as_deref()
                 .map(|s| serde_json::from_str::<Vec<String>>(s).unwrap_or_default()),
@@ -333,6 +345,9 @@ pub struct NewAgent {
     /// M1.2 A2-4: 工具裁剪阈值（None = 使用系统默认 5）。
     #[serde(default)]
     pub tool_trim_threshold: Option<i32>,
+    /// Phase 0: 模型上下文窗口（None = 运行时按 provider+model 查已知默认表）。
+    #[serde(default)]
+    pub context_window: Option<i32>,
     /// Task 4: 工具白名单（None = 全部启用，Some(vec) = 仅启用列出的工具）。
     #[serde(default)]
     pub enabled_tools: Option<Vec<String>>,
@@ -375,6 +390,12 @@ pub struct AgentUpdate {
     /// M1.2 A2-4: 工具裁剪阈值。
     /// 双层 Option：外层 Some 表示调用方传了该字段，内层 None 表示清空（恢复为系统默认）。
     pub tool_trim_threshold: Option<Option<i32>>,
+    /// Phase 0: 模型上下文窗口。双层 Option：
+    /// - None = 不更新
+    /// - Some(None) = 清空（恢复为运行时查默认表）
+    /// - Some(Some(n)) = 显式设为 n
+    #[serde(default)]
+    pub context_window: Option<Option<i32>>,
     /// Task 4: 工具白名单。双层 Option：外层 Some = 调用方传了，内层 None = 清空（全部启用）。
     #[serde(default)]
     pub enabled_tools: Option<Option<Vec<String>>>,

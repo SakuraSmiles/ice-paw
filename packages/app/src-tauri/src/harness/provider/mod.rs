@@ -17,9 +17,11 @@
 pub mod anthropic;
 pub mod embedding;
 pub mod mock;
+pub mod model_info;
 pub mod openai;
 pub use anthropic::AnthropicAdapter;
 pub use mock::{MockProvider, MockScenario};
+pub use model_info::default_context_window;
 pub use openai::OpenAiAdapter;
 
 use std::pin::Pin;
