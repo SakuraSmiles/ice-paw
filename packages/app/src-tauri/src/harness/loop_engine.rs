@@ -64,12 +64,14 @@ use uuid::Uuid;
 
 use sqlx::SqlitePool;
 
-use crate::harness::cleanup::{finalize_assistant_message, finalize_cancel, finalize_success};
-use crate::harness::error_mapping::{error_kind, friendly_error};
+use crate::harness::cleanup::{
+    fail_round_and_cancel, finalize_assistant_message, finalize_cancel, finalize_success,
+};
+use crate::harness::error_mapping::error_kind;
 use crate::db::models::{HookConfig, HookPoint, NewMessage};
 use crate::db::repo;
 use crate::infra::protocol::{
-    ChatAssistantStartPayload, ChatErrorPayload, ChatMessage, ChatRetryingPayload, ContentBlock,
+    ChatAssistantStartPayload, ChatMessage, ChatRetryingPayload, ContentBlock,
     LlmProvider, TokenUsage,
 };
 use crate::harness::budget::LoopBudget;
@@ -461,37 +463,15 @@ async fn stream_loop_inner(
                                 continue;
                             } else {
                                 let err_msg = e.to_string();
-                                if let Err(em) = ctx.app.emit(
-                                    "chat:error",
-                                    ChatErrorPayload {
-                                        conversation_id: ctx.conv_id.clone(),
-                                        message_id: current_asst_msg_id.clone(),
-                                        kind: error_kind(&e),
-                                        message: friendly_error(&err_msg),
-                                    },
-                                ) {
-                                    tracing::warn!(
-                                        target: "ice_paw.chat",
-                                        "emit chat:error 失败: conv_id={}, err={}",
-                                        ctx.conv_id,
-                                        em
-                                    );
-                                }
-                                if let Err(eu) = repo::message::update_error(
+                                return fail_round_and_cancel(
+                                    &ctx.app,
                                     &ctx.pool,
+                                    &ctx.conv_id,
                                     &current_asst_msg_id,
+                                    &error_kind(&e),
                                     &err_msg,
                                 )
-                                .await
-                                {
-                                    tracing::warn!(
-                                        target: "ice_paw.chat",
-                                        "回写 asst 错误信息失败: msg_id={}, err={}",
-                                        current_asst_msg_id,
-                                        eu
-                                    );
-                                }
-                                return finalize_cancel(&ctx.app, &ctx.pool, &ctx.conv_id, &current_asst_msg_id);
+                                .await;
                             }
                         }
                     }
@@ -511,33 +491,15 @@ async fn stream_loop_inner(
                             .next_retry(ctx.budget.max_attempts, 1u64 << retry_state.attempt_num());
                     } else {
                         let err_msg = e.to_string();
-                        if let Err(em) = ctx.app.emit(
-                            "chat:error",
-                            ChatErrorPayload {
-                                conversation_id: ctx.conv_id.clone(),
-                                message_id: current_asst_msg_id.clone(),
-                                kind: error_kind(&e),
-                                message: friendly_error(&err_msg),
-                            },
-                        ) {
-                            tracing::warn!(
-                                target: "ice_paw.chat",
-                                "emit chat:error 失败: conv_id={}, err={}",
-                                ctx.conv_id,
-                                em
-                            );
-                        }
-                        if let Err(eu) =
-                            repo::message::update_error(&ctx.pool, &current_asst_msg_id, &err_msg).await
-                        {
-                            tracing::warn!(
-                                target: "ice_paw.chat",
-                                "回写 asst 错误信息失败: msg_id={}, err={}",
-                                current_asst_msg_id,
-                                eu
-                            );
-                        }
-                        return finalize_cancel(&ctx.app, &ctx.pool, &ctx.conv_id, &current_asst_msg_id);
+                        return fail_round_and_cancel(
+                            &ctx.app,
+                            &ctx.pool,
+                            &ctx.conv_id,
+                            &current_asst_msg_id,
+                            &error_kind(&e),
+                            &err_msg,
+                        )
+                        .await;
                     }
                 }
             }
@@ -547,33 +509,15 @@ async fn stream_loop_inner(
             // round_success=false 意味着 consume_stream 始终失败，round_text 仍是初始空串
             // （round_text 仅在 Ok 分支赋值，那里会置 round_success=true），故无部分内容可回写。
             let err_msg = format!("连接重试已耗尽（共 {} 次）", ctx.budget.max_attempts);
-            if let Err(eu) =
-                repo::message::update_error(&ctx.pool, &current_asst_msg_id, &err_msg).await
-            {
-                tracing::warn!(
-                    target: "ice_paw.chat",
-                    "回写 asst 错误信息失败: msg_id={}, err={}",
-                    current_asst_msg_id,
-                    eu
-                );
-            }
-            if let Err(em) = ctx.app.emit(
-                "chat:error",
-                ChatErrorPayload {
-                    conversation_id: ctx.conv_id.clone(),
-                    message_id: current_asst_msg_id.clone(),
-                    kind: "stream".into(),
-                    message: friendly_error(&err_msg),
-                },
-            ) {
-                tracing::warn!(
-                    target: "ice_paw.chat",
-                    "emit chat:error 失败: conv_id={}, err={}",
-                    ctx.conv_id,
-                    em
-                );
-            }
-            return finalize_cancel(&ctx.app, &ctx.pool, &ctx.conv_id, &current_asst_msg_id);
+            return fail_round_and_cancel(
+                &ctx.app,
+                &ctx.pool,
+                &ctx.conv_id,
+                &current_asst_msg_id,
+                "stream",
+                &err_msg,
+            )
+            .await;
         }
 
         observable.elapsed_ms = round_timer.elapsed_ms();
@@ -788,17 +732,15 @@ async fn stream_loop_inner(
                 // tool_result），导致后续轮次 400。视为致命错误中断循环。
                 let err_msg = format!("工具执行失败: {}", e);
                 tracing::error!(target: "ice_paw.chat", "{}", err_msg);
-                let _ = repo::message::update_error(&ctx.pool, &current_asst_msg_id, &err_msg).await;
-                let _ = ctx.app.emit(
-                    "chat:error",
-                    ChatErrorPayload {
-                        conversation_id: ctx.conv_id.clone(),
-                        message_id: current_asst_msg_id.clone(),
-                        kind: "internal".into(),
-                        message: friendly_error(&err_msg),
-                    },
-                );
-                return finalize_cancel(&ctx.app, &ctx.pool, &ctx.conv_id, &current_asst_msg_id);
+                return fail_round_and_cancel(
+                    &ctx.app,
+                    &ctx.pool,
+                    &ctx.conv_id,
+                    &current_asst_msg_id,
+                    "internal",
+                    &err_msg,
+                )
+                .await;
             }
         };
 
@@ -826,17 +768,15 @@ async fn stream_loop_inner(
                 err_msg,
                 ctx.conv_id
             );
-            let _ = repo::message::update_error(&ctx.pool, &current_asst_msg_id, &err_msg).await;
-            let _ = ctx.app.emit(
-                "chat:error",
-                ChatErrorPayload {
-                    conversation_id: ctx.conv_id.clone(),
-                    message_id: current_asst_msg_id.clone(),
-                    kind: "internal".into(),
-                    message: friendly_error(&err_msg),
-                },
-            );
-            return finalize_cancel(&ctx.app, &ctx.pool, &ctx.conv_id, &current_asst_msg_id);
+            return fail_round_and_cancel(
+                &ctx.app,
+                &ctx.pool,
+                &ctx.conv_id,
+                &current_asst_msg_id,
+                "internal",
+                &err_msg,
+            )
+            .await;
         }
         let result_json =
             serde_json::to_string(&tool_result_blocks).unwrap_or_else(|_| "[]".to_string());
@@ -921,17 +861,15 @@ async fn stream_loop_inner(
         {
             let err_msg = format!("创建下一轮 assistant 占位失败: {}", e);
             tracing::warn!(target: "ice_paw.chat", "{}", err_msg);
-            let _ = repo::message::update_error(&ctx.pool, &current_asst_msg_id, &err_msg).await;
-            let _ = ctx.app.emit(
-                "chat:error",
-                ChatErrorPayload {
-                    conversation_id: ctx.conv_id.clone(),
-                    message_id: current_asst_msg_id.clone(),
-                    kind: "internal".into(),
-                    message: friendly_error(&err_msg),
-                },
-            );
-            return finalize_cancel(&ctx.app, &ctx.pool, &ctx.conv_id, &current_asst_msg_id);
+            return fail_round_and_cancel(
+                &ctx.app,
+                &ctx.pool,
+                &ctx.conv_id,
+                &current_asst_msg_id,
+                "internal",
+                &err_msg,
+            )
+            .await;
         }
         // 切 BatchWriter 到新 assistant（内部先 flush 当前 pending 再切 id）
         batch_writer.flush_now().await;
