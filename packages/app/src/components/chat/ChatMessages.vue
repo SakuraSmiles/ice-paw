@@ -11,50 +11,27 @@
   Emits: 无
 -->
 <script setup lang="ts">
-import { watch, nextTick, ref, computed, onMounted, onUnmounted, onActivated, onDeactivated } from "vue";
+import { watch, nextTick, ref, computed, onActivated } from "vue";
 import { useChatStore } from "../../stores/chat";
 import { formatTime, formatDateLabel } from "../../utils/time";
 import MarkdownRenderer from "./MarkdownRenderer.vue";
 import ConfigProposalCard from "./ConfigProposalCard.vue";
+import { useThinkingTimer } from "../../composables/useThinkingTimer";
+import { useScrollFollow } from "../../composables/useScrollFollow";
 import type { Message, MessageRole } from "../../types";
 
 const chat = useChatStore();
 const listRef = ref<HTMLElement | null>(null);
-const showScrollBtn = ref(false);
-/** 是否「跟随底部」自动滚动。用户向上滚离底部时置 false（边生成边看不被打扰），
- *  滚回底部或点「回到底部」时恢复 true。距底部 <= 阈值视为在跟随。*/
-const autoFollow = ref(true);
-const FOLLOW_THRESHOLD = 120;
-let suppressScrollCheck = false;
-let paginating = false;
-let scrollPosCache = { scrollHeight: 0, scrollTop: 0 };
+
+// 滚动跟随 + 分页（逻辑抽到 composable：自动贴底 / 上滚暂停 / 顶部触发分页）
+const { showScrollBtn, autoFollow, paginating, scrollToBottom } = useScrollFollow(listRef);
 
 // 工具调用卡片展开状态
 const expandedToolCalls = ref<Set<string>>(new Set());
 // 思考过程展开状态（按消息 ID）
 const expandedThinking = ref<Set<string>>(new Set());
-// 思考计时
-const thinkingNow = ref(Date.now());
-let thinkingTimer: ReturnType<typeof setInterval> | null = null;
-
-watch(() => chat.streamingThinking, (val) => {
-  if (val && !thinkingTimer) {
-    thinkingTimer = setInterval(() => { thinkingNow.value = Date.now(); }, 200);
-  } else if (!val && thinkingTimer) {
-    clearInterval(thinkingTimer);
-    thinkingTimer = null;
-  }
-});
-
-const thinkingElapsed = computed(() => {
-  const start = chat.thinkingStartTime;
-  if (!start) return '';
-  const elapsed = Math.floor((thinkingNow.value - start) / 1000);
-  if (elapsed < 60) return `${elapsed}s`;
-  const m = Math.floor(elapsed / 60);
-  const s = elapsed % 60;
-  return `${m}m ${s}s`;
-});
+// 思考耗时实时计时（逻辑抽到 composable：streamingThinking 期间每 200ms tick + KeepAlive 协同）
+const { thinkingElapsed } = useThinkingTimer();
 
 const toolCallList = computed(() => {
   return Array.from(chat.streamingToolCalls.values());
@@ -88,65 +65,10 @@ function hasExtras(msg: { content_blocks?: string }): boolean {
   } catch { return false; }
 }
 
-// 检测滚动位置：非底部显示按钮，靠近顶部触发分页
-function onScroll() {
-  if (suppressScrollCheck || paginating) return;
-  const el = listRef.value;
-  if (!el) return;
-
-  const distToBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-  showScrollBtn.value = distToBottom > 80;
-  // 用户向上滚离底部 → 停止跟随（边生成边看不被滚动条打扰）；滚回底部 → 恢复跟随
-  autoFollow.value = distToBottom <= FOLLOW_THRESHOLD;
-
-  // 分页触发：距顶部 200px 且还有更多数据
-  if (el.scrollTop < 200 && chat.hasMore && !chat.loadingMore && !chat.sending) {
-    paginating = true;
-    scrollPosCache.scrollHeight = el.scrollHeight;
-    scrollPosCache.scrollTop = el.scrollTop;
-    chat.loadMoreMessages().then(() => {
-      nextTick(() => {
-        const newEl = listRef.value;
-        if (newEl) {
-          const added = newEl.scrollHeight - scrollPosCache.scrollHeight;
-          newEl.scrollTop = scrollPosCache.scrollTop + added;
-        }
-        paginating = false;
-      });
-    });
-  }
-}
-
-function scrollToBottom(smooth?: boolean) {
-  if (listRef.value) {
-    suppressScrollCheck = true;
-    autoFollow.value = true; // 手动滚到底部 = 恢复跟随
-    showScrollBtn.value = false;
-    listRef.value.scrollTo({ top: listRef.value.scrollHeight, behavior: smooth !== false ? "smooth" : "instant" });
-    setTimeout(() => { suppressScrollCheck = false; }, smooth !== false ? 500 : 50);
-  }
-}
-
-onMounted(() => {
-  listRef.value?.addEventListener("scroll", onScroll);
-  scrollToBottom(false);
-});
 onActivated(() => {
-  // KeepAlive: 切回时恢复滚动位置。如果在生成中或刚切回来，滚到底部。
-  // 若停用期间 thinking 仍在进行，重启计时器以还原实时耗时显示。
-  if (chat.streamingThinking && !thinkingTimer) {
-    thinkingNow.value = Date.now();
-    thinkingTimer = setInterval(() => { thinkingNow.value = Date.now(); }, 200);
-  }
+  // KeepAlive: 切回时滚到底部（滚动监听挂载/卸载已由 useScrollFollow 自管；
+  // thinking 计时器启停已由 useThinkingTimer 自管）
   nextTick(() => scrollToBottom(false));
-});
-onDeactivated(() => {
-  // KeepAlive: 切走时停止计时器，避免不可见区间浪费 CPU
-  if (thinkingTimer) { clearInterval(thinkingTimer); thinkingTimer = null; }
-});
-onUnmounted(() => {
-  listRef.value?.removeEventListener("scroll", onScroll);
-  if (thinkingTimer) { clearInterval(thinkingTimer); thinkingTimer = null; }
 });
 
 // 切换会话后等消息加载完成再平滑滚动到底部
@@ -161,7 +83,7 @@ watch(() => chat.msgLoading, async (loading) => {
 watch(
   [() => chat.messages.length, () => chat.streamingText],
   async () => {
-    if (paginating || !autoFollow.value) return;
+    if (paginating.value || !autoFollow.value) return;
     await nextTick();
     const el = listRef.value;
     if (!el) return;
