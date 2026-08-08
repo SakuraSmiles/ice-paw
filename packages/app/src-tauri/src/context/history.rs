@@ -86,7 +86,20 @@ pub(crate) fn load_history_with_window(
 
         // P2-2 G1: 优先从 content_blocks 还原多模态消息。
         // 空数组 / 无效 JSON / 解析失败 → 回退到纯文本（兼容旧消息）。
-        let blocks = parse_content_blocks(&msg.content_blocks);
+        // 安全网：把历史 ToolUse 的 name 合规化为 `^[a-zA-Z0-9_-]+$`——旧版持久化了
+        // `{中文server名}.{工具名}`（违反 OpenAI/Anthropic function-name 正则，deepseek
+        // 等会 400）。仅作用于发给 LLM 的请求 copy；UI 消息加载走独立路径，不受影响。
+        let blocks: Vec<ContentBlock> = parse_content_blocks(&msg.content_blocks)
+            .into_iter()
+            .map(|b| match b {
+                ContentBlock::ToolUse { id, name, input } => ContentBlock::ToolUse {
+                    id,
+                    name: sanitize_tool_name(&name),
+                    input,
+                },
+                other => other,
+            })
+            .collect();
         if blocks.is_empty() {
             messages.push(ChatMessage {
                 role,
@@ -115,6 +128,21 @@ pub(crate) fn load_history_with_window(
         }
     }
     sanitize_history(messages)
+}
+
+/// 把工具名规整为 OpenAI/Anthropic function-name 合规形式 `^[a-zA-Z0-9_-]+$`。
+///
+/// 历史 ToolUse 的 name 可能是旧版持久化的 `{中文server名}.{工具名}`
+/// （中文 + 点号均违规 → deepseek 等 OpenAI 兼容端点 400）。这里就地剥离
+/// 非合规字符；它是**只读上下文**（不参与 dispatch，sanitize_history 按
+/// `tool_use_id` 配对），故改名不影响结构。已是合规名（含新版 `t{idx}_...`）原样返回。
+fn sanitize_tool_name(name: &str) -> String {
+    let mut s = String::with_capacity(name.len());
+    s.extend(name.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-'));
+    if s.is_empty() {
+        s.push_str("tool");
+    }
+    s
 }
 
 /// 净化历史消息，确保 Anthropic 协议合规（通用，适用于所有兼容端点）。
@@ -486,6 +514,29 @@ mod tests {
         // 0 / 负数视为未配置 → 回退默认
         assert_eq!(resolve_window(Some(0)), DEFAULT_HISTORY_WINDOW);
         assert_eq!(resolve_window(Some(-5)), DEFAULT_HISTORY_WINDOW);
+    }
+
+    #[test]
+    fn sanitize_tool_name_strips_non_compliant() {
+        // 旧版「中文server名.工具名」→ 剥离中文与点号
+        assert_eq!(sanitize_tool_name("浏览器自动化.browser_click"), "browser_click");
+        assert_eq!(sanitize_tool_name("深度推理.sequentialthinking"), "sequentialthinking");
+    }
+
+    #[test]
+    fn sanitize_tool_name_keeps_compliant_unchanged() {
+        // 新版合规名（含 t{idx}_ 前缀）原样返回
+        assert_eq!(sanitize_tool_name("t0_browser_click"), "t0_browser_click");
+        assert_eq!(sanitize_tool_name("read_file"), "read_file");
+        assert_eq!(sanitize_tool_name("tool-with-dash"), "tool-with-dash");
+    }
+
+    #[test]
+    fn sanitize_tool_name_falls_back_when_empty() {
+        // 纯中文 / 全违规字符 → 兜底 "tool"
+        assert_eq!(sanitize_tool_name("浏览器自动化"), "tool");
+        assert_eq!(sanitize_tool_name("。。"), "tool");
+        assert_eq!(sanitize_tool_name(""), "tool");
     }
 
     #[test]

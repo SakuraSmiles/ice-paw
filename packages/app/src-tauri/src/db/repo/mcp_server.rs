@@ -7,7 +7,7 @@ use sqlx::SqlitePool;
 use crate::error::{AppError, AppResult};
 use crate::harness::mcp::types::{McpServerConfig, NewMcpServer, RuntimeKind, UpdateMcpServer, TrustLevel};
 
-const ALL_COLS: &str = "id, name, description, command, args, env, enabled, trust_level, scope, runtime_kind, created_at, updated_at";
+const ALL_COLS: &str = "id, name, description, command, args, env, enabled, trust_level, scope, runtime_kind, tool_index, created_at, updated_at";
 
 /// 列出全部 MCP Server 配置，按 created_at 降序
 pub async fn list_all(pool: &SqlitePool) -> AppResult<Vec<McpServerConfig>> {
@@ -43,8 +43,8 @@ pub async fn create(pool: &SqlitePool, input: &NewMcpServer) -> AppResult<McpSer
         .unwrap_or_else(|| "{}".to_string());
 
     sqlx::query(
-        "INSERT INTO mcp_servers (id, name, description, command, args, env, enabled, trust_level, scope, runtime_kind, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO mcp_servers (id, name, description, command, args, env, enabled, trust_level, scope, runtime_kind, tool_index, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(tool_index), -1) + 1 FROM mcp_servers), ?, ?)",
     )
     .bind(&input.id)
     .bind(&input.name)
@@ -203,6 +203,7 @@ struct McpServerRow {
     trust_level: String,
     scope: String,
     runtime_kind: String,
+    tool_index: i64,
     created_at: String,
     updated_at: String,
 }
@@ -220,6 +221,7 @@ impl From<McpServerRow> for McpServerConfig {
             trust_level: row.trust_level.parse::<TrustLevel>().unwrap_or_default(),
             scope: row.scope,
             runtime_kind: row.runtime_kind.parse::<RuntimeKind>().unwrap_or_default(),
+            tool_index: row.tool_index,
             created_at: row.created_at,
             updated_at: row.updated_at,
         }

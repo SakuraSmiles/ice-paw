@@ -142,12 +142,45 @@ pub(crate) struct SseToolCallFn {
 // 消息格式转换
 // =========================================================================
 
-/// 把内部 ChatMessage 转换为 OpenAI API 格式
+/// 把内部 ChatMessage 转换为 OpenAI API 格式消息（可能 1→N）。
 ///
-/// - 纯文本消息（所有 content 块均为 Text）→ content 序列化为 string
-/// - 含 ToolUse/ToolResult → content 序列化为数组
-/// - tool role 消息 → 带 tool_call_id
-pub(crate) fn chat_message_to_openai(msg: &ChatMessage) -> AppResult<OpenAiMessage> {
+/// - **含 ToolResult 块** → 展开为「每 `tool_call_id` 一条 `role="tool"` 消息」。
+///   OpenAI 协议硬性要求：assistant 的每个 tool_call 必须紧跟一条带 `tool_call_id`
+///   的 `role="tool"` 回执，缺任一或多打平成 user 文本都会 400
+///   （`insufficient tool messages following tool_calls`）。内部模型按 Anthropic
+///   约定把多个 ToolResult 打包进一条 `role=user` 消息（见 loop_engine 阶段 G），
+///   这里必须拆开。此前的实现把 ToolResult 当 user 文本拼接 → deepseek/minimax 400。
+/// - 其余（纯文本 / assistant(tool_calls) / 图片 / system）→ 单条消息（1:1）。
+pub(crate) fn chat_message_to_openai(msg: &ChatMessage) -> AppResult<Vec<OpenAiMessage>> {
+    // 工具结果：每个 ToolResult 展开为一条独立的 role="tool" 消息
+    let tool_results: Vec<(&String, &String)> = msg
+        .content
+        .iter()
+        .filter_map(|b| match b {
+            ContentBlock::ToolResult { tool_use_id, content, .. } => Some((tool_use_id, content)),
+            _ => None,
+        })
+        .collect();
+    if !tool_results.is_empty() {
+        return Ok(tool_results
+            .into_iter()
+            .map(|(tuid, content)| OpenAiMessage {
+                role: "tool".to_string(),
+                content: serde_json::Value::String(content.clone()),
+                tool_calls: None,
+                tool_call_id: Some(tuid.clone()),
+            })
+            .collect());
+    }
+
+    // 非工具结果：1:1
+    Ok(vec![single_openai_message(msg)?])
+}
+
+/// 非工具结果消息的 1:1 转换（纯文本 / assistant(tool_calls) / 图片 / system）。
+///
+/// ToolResult 已由 [`chat_message_to_openai`] 预先展开，故此处不再处理 ToolResult。
+fn single_openai_message(msg: &ChatMessage) -> AppResult<OpenAiMessage> {
     // 判断是否为纯文本（所有块都是 Text）
     let all_text = msg.content.iter().all(|b| matches!(b, ContentBlock::Text { .. }));
 
@@ -161,34 +194,9 @@ pub(crate) fn chat_message_to_openai(msg: &ChatMessage) -> AppResult<OpenAiMessa
         });
     }
 
-    // 含工具调用/结果的消息
+    // 含工具调用/复杂块的消息
     match msg.role.as_str() {
         "user" => {
-            // user 消息可能含 ToolResult 块（stream_loop 以 user 角色回传工具结果）
-            // 提取 ToolResult 的 content 作为文本，避免丢失工具结果
-            let has_tool_result = msg
-                .content
-                .iter()
-                .any(|b| matches!(b, ContentBlock::ToolResult { .. }));
-            if has_tool_result {
-                let mut text_parts: Vec<String> = Vec::new();
-                for block in &msg.content {
-                    match block {
-                        ContentBlock::Text { text } => text_parts.push(text.clone()),
-                        ContentBlock::ToolResult { content, .. } => {
-                            text_parts.push(content.clone());
-                        }
-                        _ => {}
-                    }
-                }
-                return Ok(OpenAiMessage {
-                    role: msg.role.clone(),
-                    content: serde_json::Value::String(text_parts.join("\n")),
-                    tool_calls: None,
-                    tool_call_id: None,
-                });
-            }
-            // user 含图片/非 ToolResult 的复杂块 → 走通用数组路径
             // P2-2: OpenAI 要求图片块必须放在文本块之前（官方文档明确规定）
             // 因此采用「先收集 image_url、再收集 text」的两段式拼装
             let has_image = msg.content.iter().any(|b| b.is_image());
@@ -241,7 +249,7 @@ pub(crate) fn chat_message_to_openai(msg: &ChatMessage) -> AppResult<OpenAiMessa
             })
         }
         "assistant" => {
-            // assistant 消息：content 为文本数组 + tool_calls 数组
+            // assistant 消息：content 为文本 + tool_calls 数组
             let mut text_parts: Vec<String> = Vec::new();
             let mut tool_calls: Vec<serde_json::Value> = Vec::new();
 
@@ -273,23 +281,6 @@ pub(crate) fn chat_message_to_openai(msg: &ChatMessage) -> AppResult<OpenAiMessa
                 content,
                 tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
                 tool_call_id: None,
-            })
-        }
-        "tool" => {
-            // tool 结果消息：content 为结果文本，带 tool_call_id
-            let mut result_text = String::new();
-            let mut tool_use_id = String::new();
-            for block in &msg.content {
-                if let ContentBlock::ToolResult { tool_use_id: tuid, content, .. } = block {
-                    result_text.push_str(content);
-                    tool_use_id = tuid.clone();
-                }
-            }
-            Ok(OpenAiMessage {
-                role: "tool".to_string(),
-                content: serde_json::Value::String(result_text),
-                tool_calls: None,
-                tool_call_id: Some(tool_use_id),
             })
         }
         _ => {
@@ -396,5 +387,55 @@ mod tests {
             }
             _ => panic!("应为 Image 块"),
         }
+    }
+
+    /// 含多个 ToolResult 的消息（loop_engine 阶段 G 打包成 role=user）必须展开为
+    /// 每 tool_call_id 一条 role="tool" 消息——否则 OpenAI 兼容端点 400
+    /// （`insufficient tool messages following tool_calls`）。
+    #[test]
+    fn openai_tool_results_expand_to_n_role_tool_messages() {
+        use crate::infra::protocol::ChatMessage;
+        let msg = ChatMessage {
+            role: "user".into(),
+            content: vec![
+                ContentBlock::ToolResult {
+                    tool_use_id: "call_A".into(),
+                    content: "结果甲".into(),
+                    is_error: None,
+                },
+                ContentBlock::ToolResult {
+                    tool_use_id: "call_B".into(),
+                    content: "结果乙".into(),
+                    is_error: Some(true),
+                },
+            ],
+            source_rowid: None,
+        };
+        let out = chat_message_to_openai(&msg).unwrap();
+        assert_eq!(out.len(), 2, "两条 ToolResult → 两条 role=tool 消息");
+        assert_eq!(out[0].role, "tool");
+        assert_eq!(out[0].tool_call_id.as_deref(), Some("call_A"));
+        assert_eq!(out[0].content.as_str().unwrap(), "结果甲");
+        assert!(out[0].tool_calls.is_none());
+        assert_eq!(out[1].role, "tool");
+        assert_eq!(out[1].tool_call_id.as_deref(), Some("call_B"));
+        assert_eq!(out[1].content.as_str().unwrap(), "结果乙");
+    }
+
+    /// 纯文本消息仍为单条（1:1），role/content 保留，无 tool_calls/tool_call_id。
+    #[test]
+    fn openai_plain_text_is_single_message() {
+        use crate::infra::protocol::ChatMessage;
+        let msg = ChatMessage {
+            role: "user".into(),
+            content: vec![ContentBlock::text("你好")],
+            source_rowid: None,
+        };
+        let out = chat_message_to_openai(&msg).unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].role, "user");
+        assert_eq!(out[0].content.as_str().unwrap(), "你好");
+        assert!(out[0].tool_calls.is_none());
+        assert!(out[0].tool_call_id.is_none());
     }
 }

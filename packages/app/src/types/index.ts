@@ -350,6 +350,8 @@ export interface McpServer {
   scope: string;
   /** 运行时类型：system 走系统 PATH（npx），bundled 用内置 node + 预打包包 */
   runtime_kind: "system" | "bundled";
+  /** OpenAI 合规命名空间索引：工具名 = `t{tool_index}_{tool}`；后端自动分配、不可变 */
+  tool_index?: number;
   created_at: string;
   updated_at: string;
 }
@@ -367,6 +369,8 @@ export interface McpServerSnapshot {
   scope: string;
   /** 运行时类型：system 走系统 PATH（npx），bundled 用内置 node + 预打包包 */
   runtime_kind: "system" | "bundled";
+  /** OpenAI 合规命名空间索引（见 McpServer.tool_index） */
+  tool_index?: number;
   /** 运行时状态 */
   status: "disabled" | "starting" | "running" | "failed";
   /** running 时的工具数 */

@@ -146,11 +146,13 @@ impl LlmProvider for OpenAiAdapter {
         // 拼装请求 URL（智能识别 base_url 是否已含版本路径）
         let url = build_chat_url(&self.base_url);
 
-        // 把 ChatMessage 转换为 OpenAI 格式
-        let openai_msgs: Vec<OpenAiMessage> = messages
-            .iter()
-            .map(types::chat_message_to_openai)
-            .collect::<AppResult<_>>()?;
+        // 把 ChatMessage 转换为 OpenAI 格式。
+        // chat_message_to_openai 可能 1→N（含 ToolResult 的消息展开为多条
+        // role="tool" 回执，见其文档），这里 flatten 成扁平消息序列。
+        let mut openai_msgs: Vec<OpenAiMessage> = Vec::with_capacity(messages.len());
+        for msg in &messages {
+            openai_msgs.extend(types::chat_message_to_openai(msg)?);
+        }
 
         // 转换工具定义
         let openai_tools = tools.map(|t| {

@@ -241,6 +241,11 @@ pub struct McpServerConfig {
     /// 运行时类型：system（走系统 PATH）或 bundled（内置 node + 预打包包）
     #[serde(default)]
     pub runtime_kind: RuntimeKind,
+    /// OpenAI 合规的稳定命名空间索引：工具名 = `t{tool_index}_{raw_tool_name}`。
+    /// 整数前缀永不违反 `^[a-zA-Z0-9_-]+$`（避免中文 server 名 + 点号触发 400）。
+    /// create() 用 (MAX+1) 原子分配；不可变。
+    #[serde(default)]
+    pub tool_index: i64,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -270,6 +275,8 @@ pub struct ServerSnapshot {
     pub scope: String,
     #[serde(default)]
     pub runtime_kind: RuntimeKind,
+    /// 命名空间索引（见 McpServerConfig.tool_index）
+    pub tool_index: i64,
     /// 运行时状态
     pub status: ServerStatusKind,
     /// running 时的工具数
@@ -295,6 +302,7 @@ impl From<McpServerConfig> for ServerSnapshot {
             trust_level: cfg.trust_level,
             scope: cfg.scope,
             runtime_kind: cfg.runtime_kind,
+            tool_index: cfg.tool_index,
             status: ServerStatusKind::Disabled,
             tool_count: None,
             tools: None,
