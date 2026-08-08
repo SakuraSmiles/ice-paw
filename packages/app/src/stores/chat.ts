@@ -1,37 +1,22 @@
-// 聊天状态管理（会话列表 + 当前会话 + 消息 + 流式事件）
+// 聊天状态管理（会话列表 + 当前会话 + 消息 + 流式生成状态机）
 // 侧栏不再按 Agent 过滤，显示全部会话混合列表
 //
-// ## 逻辑分区（667 行，按职责分 7 区）
-// A. 会话列表 + 加载         (~30 行, loadConversations)
-// B. 当前会话切换 + bgStreams(~50 行, selectConversation/activeConversation)
-// C. 消息分页加载           (~50 行, loadMessages/loadMoreMessages/hasMore)
-// D. UI 草稿状态            (~10 行, draftText/pendingImages)
-// E. 流式生成状态机         (~120 行, sendMessage/stopGeneration/streamingText/thinking/bgStreams/timeout)
-// F. 会话 CRUD              (~50 行, create/delete/pin/touch)
-// G. 事件监听注册           (~310 行, initEvents + freezeCurrentAssistant + 9 个 listen 回调)
-//
-// 未来迭代建议：G 区可提取为 useChatEvents composable（需仔细处理 reactive 耦合）
+// ## 职责边界
+// 本 store 只管「状态 + 动作」：会话 CRUD、消息分页、流式生成状态机
+// （sending/streamingText/thinking/bgStreams/timeout）+ freezeCurrentAssistant 等。
+// Tauri 事件监听（chat:* → 状态变更）已抽到 composables/useChatEvents.ts，
+// 由 App.vue 在挂载时注册、卸载时拆卸；本 store 暴露事件层所需的状态 Map
+// （bgStreams/pendingAuthRequests/pendingProposals/lastErrors）与动作
+// （resetSendTimeout/clearSendTimeout/freezeCurrentAssistant）供其调用。
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
-import { listen } from "@tauri-apps/api/event";
 import type { Conversation, Message } from "../types";
 import type {
-  ChatStartPayload,
-  ChatAssistantStartPayload,
-  ChatChunkPayload,
-  ChatDonePayload,
-  ChatErrorPayload,
-  ChatToolCallStartPayload,
-  ChatToolCallDeltaPayload,
-  ChatToolCallEndPayload,
-  ChatToolResultPayload,
-  ChatThinkingPayload,
   ToolAuthRequestPayload,
   ConfigProposalPayload,
   ConfigProposalResponse,
 } from "../types";
 import { bridge } from "../api/bridge";
-import { friendlyError } from "../utils/errors";
 import { useAgentStore } from "./agent";
 
 export const useChatStore = defineStore("chat", () => {
@@ -205,11 +190,6 @@ export const useChatStore = defineStore("chat", () => {
    *  只追踪 text/thinking（工具调用/多轮结构后台不展示，最终态由后端 chat:done 落库）。*/
   const bgStreams = ref<Map<string, { text: string; thinking: string }>>(new Map());
 
-  /** 刚收到 chat:error、等待配套 chat:done(abort) 的会话集合。后端在 chat:error 后会
-   *  再 emit 一次 chat:done(abort) 做收尾，前端据此跳过 freeze（不覆盖错误文案）+
-   *  不设 lastFinishReason（避免误显「已手动停止」）——错误应以 chat:error 的文案为准。*/
-  const recentErrorConvs = new Set<string>();
-
   /** 重置 60s 静默超时（滑动窗口）：任何活动事件调用一次即重新计时。
    *  超时只重置 sending 状态（不清 streaming，交由后端 chat:done(abort) 走 freeze）。*/
   function resetSendTimeout() {
@@ -220,6 +200,12 @@ export const useChatStore = defineStore("chat", () => {
         sending.value = false;
       }
     }, 60000);
+  }
+
+  /** 清除静默超时定时器（完成 / 出错 / 停止 / 切会话时调用）。
+   *  供 useChatEvents 与本 store 动作共用（sendTimeout 由本 store 独家持有）。*/
+  function clearSendTimeout() {
+    if (sendTimeout) { clearTimeout(sendTimeout); sendTimeout = null; }
   }
 
   async function sendMessage(content: string, contentBlocks?: import("../types").ContentBlock[]) {
@@ -286,7 +272,7 @@ export const useChatStore = defineStore("chat", () => {
 
   async function stopGeneration() {
     if (!activeConvId.value) return;
-    if (sendTimeout) { clearTimeout(sendTimeout); sendTimeout = null; }
+    clearSendTimeout();
     // 乐观停止「生成中」状态（隐藏光标）。**不清空 streaming 内容**——交由后端
     // cancel → finalize_cancel emit 的 chat:done(abort) 走 freezeCurrentAssistant
     // 统一把已生成的部分冻结到末条 assistant。若这里先清空，chat:done 的 freeze
@@ -418,19 +404,6 @@ export const useChatStore = defineStore("chat", () => {
       });
   }
 
-  // ===== Tauri 事件监听 =====
-  let inited = false;
-  const unlisteners: Array<() => void> = [];
-
-  /** 拆解所有已注册的 Tauri 事件监听器，重置注册状态。
-   *  供 reset() / clearActiveConversation() 调用。*/
-  function destroyEvents() {
-    for (const u of unlisteners) u();
-    unlisteners.length = 0;
-    inited = false;
-    if (sendTimeout) { clearTimeout(sendTimeout); sendTimeout = null; }
-  }
-
   /** 把当前 streaming 状态冻结到最后一条 assistant 消息：
    *  - 末条 assistant 写入 content + content_blocks（thinking / text / tool_use，不含 result）
    *  - tool_result 组装成独立 user 消息插入末条之后（符合 Anthropic 协议：
@@ -481,296 +454,6 @@ export const useChatStore = defineStore("chat", () => {
     }
   }
 
-  /** 订阅 Tauri 事件并自动管理取消函数 */
-  async function subscribe<T>(event: string, handler: (event: { payload: T }) => void) {
-    const u = await listen<T>(event, handler);
-    unlisteners.push(u);
-  }
-
-  async function initEvents() {
-    // 先拆解旧监听器，确保幂等安全（替代简单的 inited 阻隔）
-    if (inited) destroyEvents();
-    inited = true;
-
-    await subscribe<ChatStartPayload>("chat:start", (e) => {
-      if (e.payload.conversation_id !== activeConvId.value) return;
-      messages.value.push({
-        id: e.payload.assistant_message_id,
-        conversation_id: e.payload.conversation_id,
-        role: "assistant",
-        content: "",
-        content_blocks: "[]",
-        token_count: null,
-        error: null,
-        created_at: new Date().toISOString(),
-        rowid: 0,
-        model: currentModel.value,
-      });
-    });
-
-    // 多轮工具调用：每轮工具执行完毕后，后端创建下一轮 assistant 占位并 emit。
-    // 前端据此冻结上一条 assistant（写入 tool_use/text/thinking）+ 插入 user(tool_result)
-    // + 重置 streaming 状态 + push 新占位。
-    await subscribe<ChatAssistantStartPayload>("chat:assistant-start", (e) => {
-      if (e.payload.conversation_id !== activeConvId.value) return;
-      resetSendTimeout();
-      // 确保 sending 为 true：多轮工具执行间隙可能触发静默超时把它置 false
-      sending.value = true;
-      freezeCurrentAssistant();
-      streamingText.value = "";
-      streamingThinking.value = "";
-      thinkingStartTime.value = null;
-      streamingToolCalls.value = new Map();
-      messages.value.push({
-        id: e.payload.message_id,
-        conversation_id: e.payload.conversation_id,
-        role: "assistant",
-        content: "",
-        content_blocks: "[]",
-        token_count: null,
-        error: null,
-        created_at: new Date().toISOString(),
-        rowid: 0,
-        model: currentModel.value,
-      });
-    });
-
-    await subscribe<ChatChunkPayload>("chat:chunk", (e) => {
-      const cid = e.payload.conversation_id;
-      if (cid !== activeConvId.value) {
-        // 后台会话：累积文本到快照，切回时恢复（不触活跃 UI / messages）
-        const m = new Map(bgStreams.value);
-        const cur = m.get(cid) ?? { text: "", thinking: "" };
-        cur.text += e.payload.delta;
-        m.set(cid, cur);
-        bgStreams.value = m;
-        return;
-      }
-      resetSendTimeout();
-      streamingText.value += e.payload.delta;
-      const idx = messages.value.length - 1;
-      if (idx >= 0 && messages.value[idx].role === "assistant") {
-        messages.value[idx] = { ...messages.value[idx], content: streamingText.value };
-      }
-    });
-
-    // ---- 工具调用事件 ----
-    await subscribe<ChatToolCallStartPayload>("chat:tool-call-start", (e) => {
-      if (e.payload.conversation_id !== activeConvId.value) return;
-      resetSendTimeout();
-      const map = new Map(streamingToolCalls.value);
-      map.set(e.payload.id, {
-        id: e.payload.id,
-        name: e.payload.name,
-        arguments: "",
-        ended: false,
-      });
-      streamingToolCalls.value = map;
-    });
-
-    await subscribe<ChatToolCallDeltaPayload>("chat:tool-call-delta", (e) => {
-      if (e.payload.conversation_id !== activeConvId.value) return;
-      resetSendTimeout();
-      const map = new Map(streamingToolCalls.value);
-      const call = map.get(e.payload.id);
-      if (call) {
-        call.arguments += e.payload.delta;
-        map.set(e.payload.id, { ...call });
-        streamingToolCalls.value = map;
-      }
-    });
-
-    await subscribe<ChatToolCallEndPayload>("chat:tool-call-end", (e) => {
-      if (e.payload.conversation_id !== activeConvId.value) return;
-      resetSendTimeout();
-      const map = new Map(streamingToolCalls.value);
-      const call = map.get(e.payload.id);
-      if (call) {
-        call.ended = true;
-        map.set(e.payload.id, { ...call });
-        streamingToolCalls.value = map;
-      }
-    });
-
-    await subscribe<ChatToolResultPayload>("chat:tool-result", (e) => {
-      if (e.payload.conversation_id !== activeConvId.value) return;
-      resetSendTimeout();
-      const map = new Map(streamingToolCalls.value);
-      const call = map.get(e.payload.tool_use_id);
-      if (call) {
-        call.result = { content: e.payload.content, isError: e.payload.is_error, durationMs: e.payload.duration_ms };
-        map.set(e.payload.tool_use_id, { ...call });
-        streamingToolCalls.value = map;
-      }
-    });
-
-    // ---- 思考过程 ----
-    await subscribe<ChatThinkingPayload>("chat:thinking", (e) => {
-      const cid = e.payload.conversation_id;
-      if (cid !== activeConvId.value) {
-        const m = new Map(bgStreams.value);
-        const cur = m.get(cid) ?? { text: "", thinking: "" };
-        cur.thinking += e.payload.content;
-        m.set(cid, cur);
-        bgStreams.value = m;
-        return;
-      }
-      resetSendTimeout();
-      if (!streamingThinking.value) {
-        thinkingStartTime.value = Date.now();
-      }
-      streamingThinking.value += e.payload.content;
-    });
-
-    await subscribe<ChatDonePayload>("chat:done", (e) => {
-      const cid = e.payload.conversation_id;
-      if (cid !== activeConvId.value) {
-        // 后台会话完成：后端已把最终态落库，清掉快照即可（不触活跃 UI，无需前端 freeze）
-        const m = new Map(bgStreams.value);
-        m.delete(cid);
-        bgStreams.value = m;
-        recentErrorConvs.delete(cid);
-        return;
-      }
-      // 错误后的配套 chat:done(abort)：chat:error 已是终态（写了错误文案 + 重置），
-      // 这里只做最小收尾——不 freeze（会覆盖错误文案）、不设 lastFinishReason（会误显「已手动停止」）。
-      if (recentErrorConvs.has(cid)) {
-        recentErrorConvs.delete(cid);
-        if (sendTimeout) { clearTimeout(sendTimeout); sendTimeout = null; }
-        sending.value = false;
-        streamingText.value = "";
-        streamingToolCalls.value = new Map();
-        streamingThinking.value = "";
-        thinkingStartTime.value = null;
-        return;
-      }
-      if (sendTimeout) { clearTimeout(sendTimeout); sendTimeout = null; }
-
-      // 记录思考耗时与内容
-      if (thinkingStartTime.value) {
-        const elapsed = Math.floor((Date.now() - thinkingStartTime.value) / 1000);
-        const dur = elapsed < 60 ? `${elapsed}s` : `${Math.floor(elapsed / 60)}m ${elapsed % 60}s`;
-        thinkingDuration.value = dur;
-        lastThinkingContent.value = streamingThinking.value || null;
-        const asstMsgId = e.payload.message_id;
-        if (asstMsgId) {
-          const map = new Map(thinkingDurations.value);
-          map.set(asstMsgId, dur);
-          thinkingDurations.value = map;
-        }
-      }
-
-      // 冻结最后一条 assistant（把本轮 streaming 文本/思考/工具调用写入其 content_blocks，
-      // tool_result 分离为独立 user 消息）。替代旧的「打包全部 streamingToolCalls 进末条」
-      // —— 那会把 tool_result 也塞进 assistant，违反 Anthropic 协议。
-      freezeCurrentAssistant();
-
-      // M3：abort 时若目标 assistant 在 freeze 后仍为空（无内容无 blocks，后端已删 DB 行），
-      // 前端同步移除，避免残留空气泡。
-      if (e.payload.finish_reason === "abort") {
-        const doneId = e.payload.message_id;
-        messages.value = messages.value.filter(
-          (m) => !(m.id === doneId && m.role === "assistant" && !m.content && (!m.content_blocks || m.content_blocks === "[]")),
-        );
-      }
-
-      sending.value = false;
-      streamingText.value = "";
-      streamingToolCalls.value = new Map();
-      streamingThinking.value = "";
-      thinkingStartTime.value = null;
-      lastFinishReason.value = e.payload.finish_reason;
-      // 用 message_id 定位最终 assistant（freezeCurrentAssistant 可能已在末尾插入 user 消息，
-      // 不能再假设末条索引），更新其 token_count
-      if (e.payload.usage) {
-        const doneId = e.payload.message_id;
-        messages.value = messages.value.map((msg) =>
-          msg.id === doneId && msg.role === "assistant"
-            ? { ...msg, token_count: e.payload.usage!.completion_tokens }
-            : msg,
-        );
-      }
-    });
-
-    await subscribe<ChatErrorPayload>("chat:error", (e) => {
-      const cid = e.payload.conversation_id;
-      // 标记：后端会紧跟一次 chat:done(abort) 收尾，chat:done 据此跳过 freeze + lastFinishReason
-      recentErrorConvs.add(cid);
-      if (cid !== activeConvId.value) {
-        // 后台会话出错：清掉快照（用户切回时走 DB 加载，看到错误态）
-        const m = new Map(bgStreams.value);
-        m.delete(cid);
-        bgStreams.value = m;
-        return;
-      }
-      if (sendTimeout) { clearTimeout(sendTimeout); sendTimeout = null; }
-      sending.value = false;
-      streamingText.value = "";
-      streamingThinking.value = "";
-      thinkingStartTime.value = null;
-      streamingToolCalls.value = new Map();
-      lastFinishReason.value = null;
-      // 错误横幅按会话隔离：只写到出错会话（此处 cid === activeConvId，已过上方 early-return）
-      {
-        const m = new Map(lastErrors.value);
-        m.set(cid, friendlyError(e.payload.message));
-        lastErrors.value = m;
-      }
-      // 用 message_id 定位出错的 assistant（多轮工具下不能遍历改所有 assistant）
-      const errId = e.payload.message_id;
-      messages.value = messages.value.map((msg) => {
-        if (msg.id === errId && msg.role === "assistant") {
-          const friendly = friendlyError(e.payload.message);
-          if (msg.content === "") {
-            return { ...msg, content: `错误: ${friendly}`, error: friendly };
-          }
-          if (!msg.error) {
-            return { ...msg, content: msg.content + `\n\n[生成中断: ${e.payload.message}]`, error: e.payload.message };
-          }
-        }
-        return msg;
-      });
-    });
-
-    // ---- 工具授权请求 ----（始终按 convId 存，不丢后台会话；cancel 时按 request_id 清）
-    await subscribe<ToolAuthRequestPayload>("chat:tool-auth-request", (e) => {
-      const m = new Map(pendingAuthRequests.value);
-      m.set(e.payload.conversation_id, e.payload);
-      pendingAuthRequests.value = m;
-    });
-    await subscribe<{ request_id: string; conversation_id: string; reason: string }>(
-      "chat:tool-auth-request-cancel",
-      (e) => {
-        const m = new Map(pendingAuthRequests.value);
-        for (const [cid, r] of m) {
-          if (r.request_id === e.payload.request_id) { m.delete(cid); break; }
-        }
-        pendingAuthRequests.value = m;
-      },
-    );
-
-    // ---- 配置提案请求 ----（始终按 convId 存，不丢后台会话；cancel 时按 request_id 清）
-    await subscribe<ConfigProposalPayload>("chat:config-proposal", (e) => {
-      const m = new Map(pendingProposals.value);
-      m.set(e.payload.conversation_id, e.payload);
-      pendingProposals.value = m;
-    });
-    await subscribe<{ request_id: string; conversation_id: string; reason: string }>(
-      "chat:config-proposal-cancel",
-      (e) => {
-        const m = new Map(pendingProposals.value);
-        const cur = m.get(e.payload.conversation_id);
-        // request_id 守卫：仅当当前条目仍是这个已失效请求时才删，
-        // 避免误删同 conv 后到的、更新的活提案（同会话工具串行执行，但 cancel
-        // 与新 proposal 事件到达顺序无保证）
-        if (cur && cur.request_id === e.payload.request_id) {
-          m.delete(e.payload.conversation_id);
-          pendingProposals.value = m;
-        }
-      },
-    );
-  }
-
   // ===== 新建会话 =====
   async function createConversation(agentId: string, projectId?: string | null) {
     const conv = await bridge.conversations.create(agentId, undefined, projectId);
@@ -786,7 +469,8 @@ export const useChatStore = defineStore("chat", () => {
   }
 
   function reset() {
-    destroyEvents();
+    // 事件监听器由 useChatEvents 管理（App.vue 卸载时拆卸）；这里只清状态 + 超时
+    clearSendTimeout();
     conversations.value = [];
     activeConvId.value = null;
     messages.value = [];
@@ -805,7 +489,7 @@ export const useChatStore = defineStore("chat", () => {
   /** 清除当前选中会话（切项目空间时调用）：保留 conversations 列表与草稿，
    *  只重置激活会话相关状态，让右侧回到「欢迎/新建会话」态，不携带上个空间的会话。*/
   function clearActiveConversation() {
-    if (sendTimeout) { clearTimeout(sendTimeout); sendTimeout = null; }
+    clearSendTimeout();
     activeConvId.value = null;
     messages.value = [];
     sending.value = false;
@@ -833,11 +517,16 @@ export const useChatStore = defineStore("chat", () => {
     activeConvId, activeConversation,
     messages, msgLoading, hasMore, loadingMore,
     sending, streamingText, draftText, pendingImages, lastFinishReason, currentModel,
-    streamingToolCalls, streamingThinking, thinkingStartTime, thinkingDuration, lastThinkingContent, thinkingDurations, pendingAuthRequest, pendingProposal, lastError,
+    streamingToolCalls, streamingThinking, thinkingStartTime, thinkingDuration, lastThinkingContent, thinkingDurations,
+    // 事件层（useChatEvents）直接读写的内部 Map——暴露供其 mutate；对外读取走下方 computed
+    bgStreams, pendingAuthRequests, pendingProposals, lastErrors,
+    pendingAuthRequest, pendingProposal, lastError,
     streamingConvIds,
     loadConversations, selectConversation, loadMoreMessages,
     sendMessage, stopGeneration, respondToAuth, respondToProposal,
     deleteConversation, undoDeleteConversation, hasPendingDelete, pinConversation,
-    initEvents, createConversation, clearActiveConversation, reset,
+    // 事件层调用的状态动作（freezeCurrentAssistant 把流式态冻结进末条 assistant）
+    resetSendTimeout, clearSendTimeout, freezeCurrentAssistant,
+    createConversation, clearActiveConversation, reset,
   };
 });

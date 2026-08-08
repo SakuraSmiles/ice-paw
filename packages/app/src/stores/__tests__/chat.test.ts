@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { useChatStore } from "../chat";
+import { useChatEvents } from "../../composables/useChatEvents";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
@@ -42,17 +43,18 @@ describe("chatStore", () => {
     vi.useRealTimers();
   });
 
-  describe("initEvents", () => {
-    it("registers all event listeners and is idempotent", async () => {
+  describe("useChatEvents", () => {
+    it("registers all event listeners; cleanup enables re-register without leak", async () => {
       mockListen.mockResolvedValue(() => {});
-      const store = useChatStore();
+      useChatStore();
 
-      await store.initEvents();
+      const cleanup = await useChatEvents();
       const callCount = mockListen.mock.calls.length;
       expect(callCount).toBeGreaterThan(0);
 
-      // 第二次调用先 destroyEvents 再重新 subscribe，不会泄漏
-      await store.initEvents();
+      // 拆卸后重新注册：listen 调用次数翻倍，不泄漏
+      cleanup();
+      await useChatEvents();
       expect(mockListen.mock.calls.length).toBe(callCount * 2);
     });
   });
@@ -135,8 +137,8 @@ describe("chatStore", () => {
       const store = useChatStore();
       store.conversations = [fakeConv("c1")];
       store.activeConvId = "c1";
-      // 显式调用 initEvents：App.vue 负责在生产环境初始化，测试中手动触发
-      await store.initEvents();
+      // 显式注册事件监听：App.vue 负责在生产环境初始化，测试中手动触发
+      await useChatEvents();
       return { store, handlers };
     }
 
