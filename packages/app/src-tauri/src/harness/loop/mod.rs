@@ -2,6 +2,7 @@
 //!
 //! 从 `harness::loop_engine` 按职责拆分的子模块：
 //!
+//! - `context`：循环输入封装 — `LoopConfig`（不可变配置）+ `LoopContext`（配置 + 可变消息）
 //! - `stuck_detect`：停滞检测
 //!   - `compute_round_key()` — 计算本轮进度指纹 hash
 //!   - `should_terminate_stuck()` — 判断是否连续 N 轮无进展
@@ -14,6 +15,7 @@
 //!
 //! 这些函数无业务副作用（`events` 仅 emit Tauri 事件），便于独立单元测试。
 
+pub(crate) mod context;
 pub(crate) mod events;
 pub(crate) mod reason;
 pub(crate) mod stuck_detect;

@@ -56,35 +56,27 @@
 //!   （重试是网络层行为，不构成"停滞"语义）。
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Duration;
 
-use tauri::{AppHandle, Emitter};
+use tauri::Emitter;
 use uuid::Uuid;
-
-use sqlx::SqlitePool;
 
 use crate::harness::cleanup::{
     fail_round_and_cancel, finalize_assistant_message, finalize_cancel, finalize_success,
 };
 use crate::harness::error_mapping::error_kind;
-use crate::db::models::{HookConfig, HookPoint, NewMessage};
+use crate::db::models::{HookPoint, NewMessage};
 use crate::db::repo;
 use crate::infra::protocol::{
-    ChatAssistantStartPayload, ChatMessage, ChatRetryingPayload, ContentBlock,
-    LlmProvider, TokenUsage,
+    ChatAssistantStartPayload, ChatMessage, ChatRetryingPayload, ContentBlock, TokenUsage,
 };
-use crate::harness::budget::LoopBudget;
-use crate::harness::chat_state::CancellationToken;
 use crate::harness::hooks::{has_actions, run_hooks};
 use crate::harness::observable::{RoundState, RoundTimer};
 use crate::harness::retry::{RetryContext, RetryState};
-use crate::harness::mcp::McpRegistry;
-use crate::harness::authority::{PathAuthSession, PathWhitelistConfig};
 
 use super::batch_writer;
 use super::stream_consumer::{consume_stream, CollectedToolCall};
-use super::tool_executor::{build_tool_ctx, execute_tool_round, ToolAuthRegistry};
+use super::tool_executor::{build_tool_ctx, execute_tool_round};
 
 // classify_retry_reason 已迁移到 crate::harness::r#loop::reason
 use crate::harness::r#loop::reason::classify_retry_reason;
@@ -93,89 +85,10 @@ use crate::harness::r#loop::reason::classify_retry_reason;
 use crate::harness::r#loop::events::emit_intermediate_round_state;
 
 // ==========================================================================
-// W6.2: LoopContext — 流式循环的输入配置封装
+// W6.2: LoopConfig / LoopContext 已迁移到 crate::harness::r#loop::context
+// 此处 re-export 保持调用方（chat_cmd.rs）的 import 路径不变。
 // ==========================================================================
-
-/// `stream_loop` 的输入配置封装。
-///
-/// 13 个原本独立的参数（app / pool / provider / api_key / messages /
-/// temperature / max_tokens / cancel / conv_id / asst_msg_id /
-/// tool_registry / tools_enabled / budget）整合到一个结构体中：
-/// - 消除 `clippy::too_many_arguments`
-/// - 让 `stream_loop` 的 signature 保持 `fn(&mut LoopContext, &mut RoundState)`
-/// - 为后续扩展（如加上 tools 缓存、agent 配置、continue-from 等）提供容器
-///
-/// `RoundState`（observable）刻意未收入此结构体，因为它是循环过程中
-/// 累积写入的**输出**遥测状态，而不是配置输入。
-#[allow(clippy::too_many_arguments)]
-/// 对话循环的不可变配置（从 LoopContext 拆分，消除 24 参数构造器）。
-///
-/// 创建后不被循环修改。通过 `LoopContext` 的 `Deref` 透明访问。
-pub(crate) struct LoopConfig {
-    // ---- 标识与会话 ----
-    pub conv_id: String,
-    pub asst_msg_id: String,
-    /// M1.3: 用户消息 ID（用于清理阶段回写 token_count）
-    pub user_msg_id: String,
-    /// RAG: 当前 Agent ID（透传给 ToolContext）
-    pub agent_id: String,
-    /// RAG: 当前项目 ID
-    pub project_id: Option<String>,
-
-    // ---- 基础设施 ----
-    pub app: AppHandle,
-    pub pool: SqlitePool,
-
-    // ---- LLM Provider ----
-    pub provider: Arc<dyn LlmProvider>,
-    pub api_key: String,
-    pub temperature: f64,
-    pub max_tokens: i32,
-
-    // ---- 工具 ----
-    pub tool_registry: McpRegistry,
-    pub tools_enabled: bool,
-    pub auth_registry: ToolAuthRegistry,
-    pub auth_session: PathAuthSession,
-    pub whitelist: PathWhitelistConfig,
-
-    // ---- 循环控制 ----
-    pub cancel: CancellationToken,
-    pub budget: LoopBudget,
-
-    // ---- M1.2: 工具裁剪 ----
-    pub query: Option<String>,
-    pub call_history: Vec<String>,
-
-    // ---- P0-3: 会话级 model override ----
-    pub model: Option<String>,
-    pub asst_model: Option<String>,
-
-    // ---- 对话钩子 ----
-    pub hooks: HookConfig,
-}
-
-/// 对话循环上下文：不可变配置 + 可变消息缓冲。
-///
-/// 通过 `Deref<Target = LoopConfig>` 透明访问配置字段（`ctx.pool`、
-/// `ctx.app` 等），`messages` 直接可变访问。构造时传入 `LoopConfig`。
-pub(crate) struct LoopContext {
-    pub config: LoopConfig,
-    pub messages: Vec<ChatMessage>,
-}
-
-impl std::ops::Deref for LoopContext {
-    type Target = LoopConfig;
-    fn deref(&self) -> &LoopConfig {
-        &self.config
-    }
-}
-
-impl LoopContext {
-    pub(crate) fn new(config: LoopConfig, messages: Vec<ChatMessage>) -> Self {
-        Self { config, messages }
-    }
-}
+pub(crate) use crate::harness::r#loop::context::{LoopConfig, LoopContext};
 
 // synthesize_usage 已迁移到 crate::harness::r#loop::token_usage
 use crate::harness::r#loop::token_usage::synthesize_usage;
