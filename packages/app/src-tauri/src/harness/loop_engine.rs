@@ -9,11 +9,11 @@
 //!   │   ├─ 'tool_round: 工具执行循环（最多 max_tool_rounds 轮）
 //!   │   │   ├─ cancel 检查
 //!   │   │   ├─ list_tool_defs_with_query()   // 动态工具评分
-//!   │   │   ├─ 'retry_loop: 重试循环（最多 MAX_ATTEMPTS 次）
+//!   │   │   ├─ stream_with_retry()   // 单轮流式+退避重试（抽到 r#loop::retry_round）
 //!   │   │   │   ├─ provider.stream_chat()
 //!   │   │   │   ├─ stream_consumer::consume_stream()
 //!   │   │   │   ├─ 重试分类: classify_retry_reason()
-//!   │   │   │   └─ 失败 → 指数退避 → continue 'retry_loop
+//!   │   │   │   └─ RoundStreamResult::{Ok, RetryExhausted, Aborted}
 //!   │   │   ├─ 停滞检测: compute_round_key() + should_terminate_stuck()
 //!   │   │   ├─ 工具执行: execute_tool_round()
 //!   │   │   ├─ 工具结果持久化 + 下轮 assistant 占位
@@ -30,10 +30,14 @@
 //! 调用 `tool_executor::execute_tool_round` 执行工具，
 //! 统一 emit Tauri 事件。
 //!
-//! ## 子模块
+//! ## 子模块（`harness::r#loop`）
 //!
-//! - `r#loop::stuck_detect` — 停滞检测（compute_round_key + should_terminate_stuck）
-//! - `r#loop::token_usage` — 多轮 usage 合成（synthesize_usage）
+//! - `context` — 输入封装 `LoopConfig` + `LoopContext`
+//! - `retry_round` — 单轮流式+退避重试 `stream_with_retry`（`RoundStreamResult`）
+//! - `stuck_detect` — 停滞检测（compute_round_key + should_terminate_stuck）
+//! - `token_usage` — 多轮 usage 合成（synthesize_usage）
+//! - `reason` — retry reason 分类（classify_retry_reason）
+//! - `events` — 中间 round-state 事件（emit_intermediate_round_state）
 //!
 //! ## 拆分历史
 //!
@@ -52,11 +56,10 @@
 //! M2.1: 停滞检测（B1-4）—— dev1 三级级联 L1 简化方案：
 //!   用 64-bit hash 跟踪本轮累计文本 + 已完成工具调用 ID，
 //!   连续 `stuck_threshold` 轮无变化时 emit `finish_reason="stuck"` 终止对话。
-//!   检测点在外层 `for tool_round` 循环底部，不在 inner `'retry_loop` 中
+//!   检测点在外层 `for tool_round` 循环底部，不在 `stream_with_retry` 内
 //!   （重试是网络层行为，不构成"停滞"语义）。
 
 use std::collections::HashMap;
-use std::time::Duration;
 
 use tauri::Emitter;
 use uuid::Uuid;
@@ -64,22 +67,18 @@ use uuid::Uuid;
 use crate::harness::cleanup::{
     fail_round_and_cancel, finalize_assistant_message, finalize_cancel, finalize_success,
 };
-use crate::harness::error_mapping::error_kind;
 use crate::db::models::{HookPoint, NewMessage};
 use crate::db::repo;
-use crate::infra::protocol::{
-    ChatAssistantStartPayload, ChatMessage, ChatRetryingPayload, ContentBlock, TokenUsage,
-};
+use crate::infra::protocol::{ChatAssistantStartPayload, ChatMessage, ContentBlock, TokenUsage};
 use crate::harness::hooks::{has_actions, run_hooks};
 use crate::harness::observable::{RoundState, RoundTimer};
-use crate::harness::retry::{RetryContext, RetryState};
 
 use super::batch_writer;
-use super::stream_consumer::{consume_stream, CollectedToolCall};
+use super::stream_consumer::CollectedToolCall;
 use super::tool_executor::{build_tool_ctx, execute_tool_round};
 
-// classify_retry_reason 已迁移到 crate::harness::r#loop::reason
-use crate::harness::r#loop::reason::classify_retry_reason;
+// stream_with_retry（含 classify_retry_reason）已迁移到 crate::harness::r#loop::retry_round
+use crate::harness::r#loop::retry_round::{stream_with_retry, RoundStreamResult};
 
 // emit_intermediate_round_state 已迁移到 crate::harness::r#loop::events
 use crate::harness::r#loop::events::emit_intermediate_round_state;
@@ -218,11 +217,12 @@ async fn stream_loop_inner(
             None
         };
 
-        let mut round_text = String::new();
-        let mut round_think = String::new();
-        let mut round_finish_reason = "stop".to_string();
-        let mut tool_calls_map: HashMap<String, CollectedToolCall> = HashMap::new();
-        let mut round_success = false;
+        // round_* 在下方 stream_with_retry 的 Ok 分支赋值（其余分支均 return），
+        // 故无需初始化——编译器可证明到达后续使用前必然已赋值。
+        let round_text: String;
+        let round_think: String;
+        let round_finish_reason: String;
+        let tool_calls_map: HashMap<String, CollectedToolCall>;
         // 本轮 provider 返回的 completion_tokens（用于即时落盘该 assistant 的 token_count）
         let mut round_completion_tokens: Option<u32> = None;
 
@@ -260,177 +260,52 @@ async fn stream_loop_inner(
             None
         };
 
-        // === RetryState 驱动的重试循环 ===
-        let mut retry_state = RetryState::new();
-        let mut last_retry_reason = String::new();
-
-        'retry_loop: loop {
-            if !retry_state.can_retry() {
-                break;
-            }
-            if ctx.cancel.is_cancelled() {
-                return finalize_cancel(&ctx.app, &ctx.pool, &ctx.conv_id, &current_asst_msg_id);
-            }
-
-            let ws = retry_state.wait_secs();
-            if ws > 0 {
-                tracing::info!(
-                    target: "ice_paw.chat",
-                    "重试 LLM 请求: tool_round={} attempt={}/{}，等待 {}s",
-                    tool_round,
-                    retry_state.attempt_num() + 1,
-                    ctx.budget.max_attempts,
-                    ws,
-                );
-                observable.retry_count += 1;
-                if let Err(e) = ctx.app.emit(
-                    "chat:retrying",
-                    ChatRetryingPayload {
-                        conversation_id: ctx.conv_id.clone(),
-                        message_id: current_asst_msg_id.clone(),
-                        attempt: retry_state.attempt_num() + 1,
-                        max_attempts: ctx.budget.max_attempts,
-                        reason: last_retry_reason.clone(),
-                    },
-                ) {
-                    tracing::warn!(
-                        target: "ice_paw.chat",
-                        "emit chat:retrying 失败: conv_id={}, err={}",
-                        ctx.conv_id,
-                        e
-                    );
+        // === RetryState 驱动的重试循环（已抽到 stream_with_retry）===
+        match stream_with_retry(
+            ctx,
+            observable,
+            tool_round,
+            tools,
+            round_injected,
+            &current_asst_msg_id,
+        )
+        .await
+        {
+            RoundStreamResult::Ok(sr) => {
+                round_text = sr.text;
+                round_think = sr.think;
+                round_finish_reason = sr.finish_reason;
+                tool_calls_map = sr.tool_calls;
+                if let Some(u) = sr.usage {
+                    // M1.3: 累计 token —— 首次出现的 prompt_tokens 作为原始 user 消息 token_count
+                    first_prompt_tokens.get_or_insert(u.prompt_tokens);
+                    total_completion_tokens =
+                        total_completion_tokens.saturating_add(u.completion_tokens);
+                    round_completion_tokens = Some(u.completion_tokens);
+                    collected_usage = Some(u);
                 }
-                tokio::time::sleep(Duration::from_secs(ws)).await;
-                if ctx.cancel.is_cancelled() {
-                    return finalize_cancel(&ctx.app, &ctx.pool, &ctx.conv_id, &current_asst_msg_id);
-                }
+                // 【彻底重构】token_count 由本轮 finalize_assistant_message 即时写入
+                //（每条 assistant 独立持有本轮 completion_tokens）。不再走
+                // batch_writer.set_tokens：避免与 finalize 的 spawn 写竞态、
+                // 也避免跨轮累加值（total_completion_tokens）脏写到新消息。
             }
-
-            let retry_ctx = RetryContext::with_round_text(ctx.messages.clone(), round_text.clone());
-            let retry_messages = retry_state.prepare_messages(&retry_ctx);
-
-            // 追加 BeforeLlm 钩子注入的临时 system 消息（若有）；不写回 ctx.messages。
-            let mut send_messages = retry_messages;
-            if let Some(inj) = &round_injected {
-                send_messages.push(ChatMessage::from_text("system", inj.clone()));
-            }
-
-            let stream_result = ctx
-                .provider
-                .stream_chat(
-                    &ctx.api_key,
-                    send_messages,
-                    tools.clone(),
-                    ctx.temperature,
-                    ctx.max_tokens,
-                    ctx.model.as_deref(),
-                    ctx.cancel.clone(),
+            RoundStreamResult::RetryExhausted => {
+                // consume_stream 始终失败，round_text 仍是初始空串，故无部分内容可回写。
+                let err_msg = format!("连接重试已耗尽（共 {} 次）", ctx.budget.max_attempts);
+                return fail_round_and_cancel(
+                    &ctx.app,
+                    &ctx.pool,
+                    &ctx.conv_id,
+                    &current_asst_msg_id,
+                    "stream",
+                    &err_msg,
                 )
                 .await;
-
-            match stream_result {
-                Ok(mut stream) => {
-                    match consume_stream(
-                        &mut stream,
-                        &ctx.app,
-                        &ctx.cancel,
-                        observable,
-                        &ctx.conv_id,
-                        &current_asst_msg_id,
-                    )
-                    .await
-                    {
-                        Ok(sr) => {
-                            round_text = sr.text;
-                            round_think = sr.think;
-                            round_finish_reason = sr.finish_reason;
-                            tool_calls_map = sr.tool_calls;
-                            if let Some(u) = sr.usage {
-                                // M1.3: 累计 token —— 首次出现的 prompt_tokens 作为原始 user 消息 token_count
-                                first_prompt_tokens.get_or_insert(u.prompt_tokens);
-                                total_completion_tokens = total_completion_tokens
-                                    .saturating_add(u.completion_tokens);
-                                round_completion_tokens = Some(u.completion_tokens);
-                                collected_usage = Some(u);
-                            }
-                            // 【彻底重构】token_count 由本轮 finalize_assistant_message 即时写入
-                            // （每条 assistant 独立持有本轮 completion_tokens）。不再走
-                            // batch_writer.set_tokens：避免与 finalize 的 spawn 写竞态、
-                            // 也避免跨轮累加值（total_completion_tokens）脏写到新消息。
-                            round_success = true;
-                            break 'retry_loop;
-                        }
-                        Err(e) => {
-                            if e.is_retryable() {
-                                last_retry_reason = classify_retry_reason(&e);
-                                tracing::warn!(
-                                    target: "ice_paw.chat",
-                                    "流中可重试错误 (round={} attempt={}/{}): {}",
-                                    tool_round,
-                                    retry_state.attempt_num() + 1,
-                                    ctx.budget.max_attempts,
-                                    e
-                                );
-                                retry_state = retry_state
-                                    .next_retry(ctx.budget.max_attempts, 1u64 << retry_state.attempt_num());
-                                continue;
-                            } else {
-                                let err_msg = e.to_string();
-                                return fail_round_and_cancel(
-                                    &ctx.app,
-                                    &ctx.pool,
-                                    &ctx.conv_id,
-                                    &current_asst_msg_id,
-                                    &error_kind(&e),
-                                    &err_msg,
-                                )
-                                .await;
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    if e.is_retryable() {
-                        last_retry_reason = classify_retry_reason(&e);
-                        tracing::warn!(
-                            target: "ice_paw.chat",
-                            "请求失败可重试 (round={} attempt={}/{}): {}",
-                            tool_round,
-                            retry_state.attempt_num() + 1,
-                            ctx.budget.max_attempts,
-                            e
-                        );
-                        retry_state = retry_state
-                            .next_retry(ctx.budget.max_attempts, 1u64 << retry_state.attempt_num());
-                    } else {
-                        let err_msg = e.to_string();
-                        return fail_round_and_cancel(
-                            &ctx.app,
-                            &ctx.pool,
-                            &ctx.conv_id,
-                            &current_asst_msg_id,
-                            &error_kind(&e),
-                            &err_msg,
-                        )
-                        .await;
-                    }
-                }
             }
-        }
-
-        if !round_success {
-            // round_success=false 意味着 consume_stream 始终失败，round_text 仍是初始空串
-            // （round_text 仅在 Ok 分支赋值，那里会置 round_success=true），故无部分内容可回写。
-            let err_msg = format!("连接重试已耗尽（共 {} 次）", ctx.budget.max_attempts);
-            return fail_round_and_cancel(
-                &ctx.app,
-                &ctx.pool,
-                &ctx.conv_id,
-                &current_asst_msg_id,
-                "stream",
-                &err_msg,
-            )
-            .await;
+            RoundStreamResult::Aborted => {
+                // cancel 或不可重试错误（错误 emit 已由 stream_with_retry 内部完成）。
+                return finalize_cancel(&ctx.app, &ctx.pool, &ctx.conv_id, &current_asst_msg_id);
+            }
         }
 
         observable.elapsed_ms = round_timer.elapsed_ms();
