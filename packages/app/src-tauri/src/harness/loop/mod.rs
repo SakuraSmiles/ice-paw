@@ -10,6 +10,8 @@
 //!   - `synthesize_usage()` — 合并多轮工具调用的 prompt/completion token
 //! - `reason`：retry reason 分类
 //!   - `classify_retry_reason()` — 将 AppError 映射为 retry reason 字符串
+//! - `retry_round`：单轮流式 + 退避重试
+//!   - `stream_with_retry()` — 带重试地拉取一轮 LLM 流，结果归类为 `RoundStreamResult`
 //! - `events`：loop 事件发射
 //!   - `emit_intermediate_round_state()` — 发射中间 round-state 事件
 //!
@@ -18,5 +20,6 @@
 pub(crate) mod context;
 pub(crate) mod events;
 pub(crate) mod reason;
+pub(crate) mod retry_round;
 pub(crate) mod stuck_detect;
 pub(crate) mod token_usage;
