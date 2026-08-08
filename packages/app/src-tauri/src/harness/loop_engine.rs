@@ -912,7 +912,10 @@ async fn stream_loop_inner(
         }
 
         // 【阶段 G】ctx.messages 追加本轮 assistant(tool_use) + user(tool_result)。
-        // 统一 role=user（两 provider 适配层均已支持 user 消息携带 tool_result）。
+        // 统一 role=user：Anthropic 适配层直接支持 user 消息携带 tool_result；
+        // OpenAI 适配层在 chat_message_to_openai 里把含 ToolResult 的消息展开为
+        // 多条 role="tool"（每 tool_call_id 一条），满足其「tool_calls 后必须紧跟
+        // tool 回执」的协议要求。
         let mut asst_blocks: Vec<ContentBlock> = Vec::new();
         if !round_text.is_empty() {
             asst_blocks.push(ContentBlock::Text { text: round_text.clone() });

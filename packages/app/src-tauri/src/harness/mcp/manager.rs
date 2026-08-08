@@ -54,6 +54,25 @@ pub(crate) struct ServerEntry {
     pub status: ServerStatus,
 }
 
+/// 构造 OpenAI 兼容（`^[a-zA-Z0-9_-]+$`）的工具命名空间名：
+/// `t{tool_index}_{raw_tool_name}`。
+///
+/// 整数前缀 `t{idx}_` 必然合规、跨重启稳定（`tool_index` 持久化于 DB），
+/// 替代旧的 `{中文显示名}.{工具名}`——后者同时违反正则的中文字符与点号，
+/// 在 deepseek / minimax 等 OpenAI 兼容端点触发 HTTP 400。
+///
+/// `retain` 兜底外部 server 原始工具名理论上可能含的点号 / 非 ASCII；
+/// 注意：**调用方仍须把原始 `raw` 透传给 `ExternalToolProxy::server_tool_name`**
+/// （server 只认原始名），合规名仅作 registry key / LLM 可见名。
+fn namespaced_tool_name(tool_index: i64, raw: &str) -> String {
+    let mut s = format!("t{}_{}", tool_index, raw);
+    s.retain(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    if s.is_empty() {
+        s.push_str("tool");
+    }
+    s
+}
+
 impl ServerEntry {
     fn snapshot(&self) -> ServerSnapshot {
         let mut snap = ServerSnapshot::from(self.config.clone());
@@ -194,11 +213,13 @@ impl McpServerManager {
             }
         };
 
-        // 注册工具到 registry（namespaced: server_name.tool_name）
-        let prefix = format!("{}.", config.name);
-        let tool_names: Vec<String> = tools.iter().map(|t| format!("{}{}", prefix, t.name)).collect();
+        // 注册工具到 registry（namespaced: t{tool_index}_tool_name —— OpenAI 合规）
+        let tool_names: Vec<String> = tools
+            .iter()
+            .map(|t| namespaced_tool_name(config.tool_index, &t.name))
+            .collect();
         for tool_def in &tools {
-            let namespaced = format!("{}{}", prefix, tool_def.name);
+            let namespaced = namespaced_tool_name(config.tool_index, &tool_def.name);
             let proxy = Arc::new(ExternalToolProxy::new(
                 namespaced,
                 tool_def.name.clone(),
@@ -285,8 +306,10 @@ impl McpServerManager {
         if let Some(entry) = entry {
             // 反注册工具
             if let ServerStatus::Running { tools, .. } = &entry.status {
-                let prefix = format!("{}.", entry.config.name);
-                let names: Vec<String> = tools.iter().map(|t| format!("{}{}", prefix, t.name)).collect();
+                let names: Vec<String> = tools
+                    .iter()
+                    .map(|t| namespaced_tool_name(entry.config.tool_index, &t.name))
+                    .collect();
                 if !names.is_empty() {
                     registry.unregister(&names).await;
                 }
@@ -358,8 +381,10 @@ impl McpServerManager {
         if !enabled {
             // 禁用 → 关闭进程 + 反注册工具
             if let ServerStatus::Running { tools, process } = &entry.status {
-                let prefix = format!("{}.", entry.config.name);
-                let names: Vec<String> = tools.iter().map(|t| format!("{}{}", prefix, t.name)).collect();
+                let names: Vec<String> = tools
+                    .iter()
+                    .map(|t| namespaced_tool_name(entry.config.tool_index, &t.name))
+                    .collect();
                 registry.unregister(&names).await;
                 process.shutdown().await;
             }
