@@ -19,13 +19,36 @@ use super::types::AuthorizationLevel;
 /// 每个文件最多保留的备份数
 const MAX_BACKUPS: usize = 10;
 
-/// 拒绝操作 Linux 虚拟文件系统等敏感路径（按原始串前缀判断，对新文件也生效）
+/// 是否指向 IcePaw agent 配置文件（布局 `<workspaces>/agents/<id>/agent.yaml`）。
+///
+/// 用 [`Path::components`] 匹配路径段，跨平台（Windows `\` / Unix `/` 均正确），
+/// 避免字符串 `contains` 的分隔符与大小写陷阱。文件名按 ASCII 大小写不敏感。
+fn is_agent_config(path: &Path) -> bool {
+    let is_yaml = path
+        .file_name()
+        .map(|n| n.eq_ignore_ascii_case("agent.yaml"))
+        .unwrap_or(false);
+    is_yaml && path.components().any(|c| c.as_os_str() == "agents")
+}
+
+/// 拒绝操作敏感路径（按原始串前缀判断，对新文件也生效）：
+/// - Linux 虚拟文件系统 `/proc` `/sys` `/dev`
+/// - IcePaw agent 配置文件 `agent.yaml`（改 agent 配置必须走 `propose_config_change`）
+///
+/// 后者是安全要害：agent 若能用 write_file/edit_file 直接改 agent.yaml，就会绕过
+/// 配置提案审批系统与 guardrail 红线。所有写工具（write/edit/delete/move/create_dir）
+/// 均经此函数兜底。
 fn reject_sensitive(path: &Path) -> AppResult<()> {
     let s = path.to_string_lossy();
     if s.starts_with("/proc/") || s.starts_with("/sys/") || s.starts_with("/dev/") {
         return Err(AppError::Validation(format!(
             "出于安全原因，不允许操作敏感路径: {s}"
         )));
+    }
+    if is_agent_config(path) {
+        return Err(AppError::Validation(
+            "出于安全原因，不允许直接修改 agent 配置文件 (agent.yaml)，请使用 propose_config_change 工具发起配置提案。".into(),
+        ));
     }
     Ok(())
 }
@@ -529,5 +552,63 @@ mod tests {
             CreateDirectoryTool.authorization_level(),
             AuthorizationLevel::PathWhitelist
         );
+    }
+
+    // ---- P0-B：agent.yaml 配置保护 ----
+
+    #[test]
+    fn is_agent_config_detects_agent_yaml() {
+        // 标准布局：<workspaces>/agents/<id>/agent.yaml
+        assert!(is_agent_config(std::path::Path::new(
+            "/home/u/ws/agents/dev-2/agent.yaml"
+        )));
+        assert!(is_agent_config(std::path::Path::new(
+            "C:\\Users\\dabai\\icepaw-workspaces\\agents\\dev-2\\agent.yaml"
+        )));
+        assert!(is_agent_config(std::path::Path::new(
+            "/x/agents/test-buddy/agent.yaml"
+        )));
+        // 文件名 ASCII 大小写不敏感
+        assert!(is_agent_config(std::path::Path::new("/x/agents/dev-2/AGENT.YAML")));
+        assert!(is_agent_config(std::path::Path::new("/x/agents/dev-2/Agent.Yaml")));
+    }
+
+    #[test]
+    fn is_agent_config_rejects_non_agent_files() {
+        // 普通业务文件
+        assert!(!is_agent_config(std::path::Path::new("/proj/src/foo.rs")));
+        // 文件名是 agent.yaml 但无 agents 路径段 → 不算（避免误伤用户项目）
+        assert!(!is_agent_config(std::path::Path::new("/proj/agent.yaml")));
+        // agents 段但文件名非 agent.yaml
+        assert!(!is_agent_config(std::path::Path::new(
+            "/x/agents/dev-2/config.yaml"
+        )));
+    }
+
+    #[test]
+    fn reject_sensitive_blocks_agent_yaml() {
+        let res = reject_sensitive(std::path::Path::new(
+            "/home/u/ws/agents/dev-2/agent.yaml",
+        ));
+        assert!(res.is_err());
+        let msg = res.unwrap_err().to_string();
+        assert!(
+            msg.contains("propose_config_change"),
+            "错误应引导使用 propose_config_change，实际: {msg}"
+        );
+    }
+
+    #[test]
+    fn reject_sensitive_keeps_proc_guard() {
+        // 回归：Linux 虚拟文件系统仍被拒
+        assert!(reject_sensitive(std::path::Path::new("/proc/self/status")).is_err());
+        assert!(reject_sensitive(std::path::Path::new("/sys/kernel/x")).is_err());
+        assert!(reject_sensitive(std::path::Path::new("/dev/null")).is_err());
+    }
+
+    #[test]
+    fn reject_sensitive_allows_normal_files() {
+        assert!(reject_sensitive(std::path::Path::new("/proj/src/main.rs")).is_ok());
+        assert!(reject_sensitive(std::path::Path::new("C:\\proj\\src\\main.rs")).is_ok());
     }
 }
