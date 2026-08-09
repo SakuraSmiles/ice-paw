@@ -23,6 +23,14 @@ use crate::infra::protocol::ToolDef;
 
 use super::types::AuthorizationLevel;
 
+/// 必须始终注入的平台元工具（不受 agent `enabled_tools` 白名单限制）。
+///
+/// 这些是 agent 安全/自省的基础设施：`propose_config_change` 是变更 agent 配置的
+/// **唯一合法通道**（绕过它直接改文件会被 `reject_sensitive` 拦截），`read_agent_config`
+/// 是读取自身配置的正规通道。若被白名单过滤掉，agent 会退而用文件工具直接改 agent.yaml，
+/// 击穿配置提案审批系统。详见 `McpRegistry::register_meta_tools`。
+const PLATFORM_META_TOOLS: &[&str] = &["propose_config_change", "read_agent_config"];
+
 // =========================================================================
 // ToolContext — 工具执行上下文（RAG: agent_id/project_id 透传）
 // =========================================================================
@@ -346,6 +354,18 @@ impl McpRegistry {
             }
         }
     }
+
+    /// 从 source 强制注入所有平台元工具（[`PLATFORM_META_TOOLS`]），忽略 agent 白名单。
+    ///
+    /// 在白名单分支（`register_names_from`）之后调用，确保即使 agent 的 `enabled_tools`
+    /// 未列出元工具，它们仍可用——否则 agent 会退而用文件工具直接改 agent.yaml 绕过审批。
+    pub async fn register_meta_tools(&self, source: &McpRegistry) {
+        for &name in PLATFORM_META_TOOLS {
+            if let Some(client) = source.get(name).await {
+                self.register(client).await;
+            }
+        }
+    }
 }
 
 impl Default for McpRegistry {
@@ -413,6 +433,33 @@ mod tests {
         let registry = McpRegistry::with_builtin();
         let client = registry.get("nonexistent").await;
         assert!(client.is_none());
+    }
+
+    /// P0-A：白名单模式下，平台元工具必须被强制注入（即使白名单未列出）。
+    #[tokio::test]
+    async fn register_meta_tools_forces_injection_ignoring_whitelist() {
+        // 模拟 chat_cmd 白名单分支：只注册业务工具，再强制注入元工具
+        let source = McpRegistry::with_builtin();
+        let reg = McpRegistry::new();
+        reg.register_names_from(&source, &["read_file".to_string()])
+            .await;
+        reg.register_meta_tools(&source).await;
+
+        let names = reg.tool_names().await;
+        // 白名单业务工具在
+        assert!(names.iter().any(|n| n == "read_file"));
+        // 元工具被强制注入（即使白名单没列）
+        assert!(names.iter().any(|n| n == "propose_config_change"));
+        assert!(names.iter().any(|n| n == "read_agent_config"));
+    }
+
+    /// source 不含元工具时 register_meta_tools 静默跳过，不 panic。
+    #[tokio::test]
+    async fn register_meta_tools_skips_missing_in_source() {
+        let source = McpRegistry::new();
+        let reg = McpRegistry::new();
+        reg.register_meta_tools(&source).await;
+        assert!(reg.tool_names().await.is_empty());
     }
 
     #[tokio::test]

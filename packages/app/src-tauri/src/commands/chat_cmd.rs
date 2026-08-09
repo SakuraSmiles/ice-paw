@@ -263,6 +263,10 @@ pub async fn send_message(
             Some(names) if !names.is_empty() => {
                 let r = McpRegistry::new();
                 r.register_names_from(&global_registry, names).await;
+                // 平台元工具强制注入：白名单只应控制业务工具（文件/shell/…），
+                // 元工具（配置变更安全通道、读自身配置）是基础设施，必须始终可用，
+                // 否则 agent 会退而用文件工具直接改 agent.yaml 绕过审批。
+                r.register_meta_tools(&global_registry).await;
                 r
             }
             Some(_) => McpRegistry::new(),
