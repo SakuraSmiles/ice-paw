@@ -5,6 +5,7 @@ import McpForm from "../../components/mcp/McpForm.vue";
 import Switch from "../../components/common/Switch.vue";
 import type { McpServer, McpServerSnapshot } from "../../types";
 import { bridge } from "../../api/bridge";
+import { GLM_MCP_TEMPLATES, type GlmMcpTemplate } from "../../data/glmMcpTemplates";
 
 const servers = ref<McpServerSnapshot[]>([]);
 const loading = ref(true);
@@ -115,6 +116,50 @@ async function onDelete(s: McpServer) {
   catch (e) { console.error("删除 MCP Server 失败:", e); }
 }
 
+// ---- GLM 模板：从 GLM Coding Plan 的 MCP 服务一键添加（仅前端组装，复用 bridge.mcp.create）----
+const showGlm = ref(false);
+const selectedGlmKey = ref<string | null>(null);
+const glmApiKey = ref("");
+const addingGlm = ref(false);
+const glmError = ref("");
+
+function selectGlm(key: string) {
+  selectedGlmKey.value = key;
+  glmApiKey.value = "";
+  glmError.value = "";
+}
+
+async function confirmAddGlm(t: GlmMcpTemplate) {
+  if (addingGlm.value || !glmApiKey.value.trim()) return;
+  addingGlm.value = true;
+  glmError.value = "";
+  try {
+    const input = t.build(glmApiKey.value.trim());
+    // 用模板 key 作稳定 id：据此识别「已配置」并复用运行状态；重复添加由后端 id 唯一约束拦截
+    await bridge.mcp.create({ id: t.key, ...input });
+    selectedGlmKey.value = null;
+    glmApiKey.value = "";
+    // 不折叠卡片：让用户看到该行从「添加」变为运行状态，明确反馈成功与否
+    await reload();
+  } catch (e) {
+    glmError.value = e instanceof Error ? e.message : "添加失败";
+    console.error("添加 GLM 模板失败:", e);
+  } finally {
+    addingGlm.value = false;
+  }
+}
+
+/** 模板是否已配置（id === t.key）：已配置返回状态文案，否则空串（兼作 v-if 真值判断） */
+function glmTag(t: GlmMcpTemplate): string {
+  const s = servers.value.find(x => x.id === t.key);
+  return s ? statusLabel(s) : "";
+}
+/** 已配置模板的状态 class（运行中 / 初始化中 / 未就绪 / 已停用） */
+function glmStatusCls(t: GlmMcpTemplate): string {
+  const s = servers.value.find(x => x.id === t.key);
+  return s ? statusClass(s) : "";
+}
+
 // 内置工具集——动态从后端拉取（register_builtin 为单一事实来源，前端不再手抄）
 const builtinExpanded = ref(false);
 const builtinTools = ref<{ name: string; desc: string }[]>([]);
@@ -175,6 +220,60 @@ const builtinDescZh: Record<string, string> = {
         </div>
         <div v-if="isCreating" class="expand-panel" @click.stop>
           <McpForm :server="null" @saved="onSaved" @cancel="onCancel" @delete="onDelete" />
+        </div>
+      </div>
+
+      <!-- GLM 模板：与「新建」同款虚线入口卡，区别仅在图标与标题 -->
+      <div class="mcp-card glm-card" :class="{ expanded: showGlm }" @click="showGlm = !showGlm">
+        <div class="card-top">
+          <div class="card-body">
+            <div class="card-name-row">
+              <svg class="tpl-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="12 2 2 7 12 12 22 7 12 2" />
+                <polyline points="2 17 12 22 22 17" />
+                <polyline points="2 12 12 17 22 12" />
+              </svg>
+              <span class="card-name new-name">从 GLM 模板添加</span>
+            </div>
+            <div class="new-hint">联网搜索 · 网页读取 · 开源仓库 · 视觉理解</div>
+          </div>
+          <svg class="card-chevron" :class="{ rotated: showGlm }" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6" /></svg>
+        </div>
+        <div v-if="showGlm" class="expand-panel" @click.stop>
+          <div v-if="glmError" class="glm-error">{{ glmError }}</div>
+          <div class="glm-templates">
+            <div v-for="t in GLM_MCP_TEMPLATES" :key="t.key" class="glm-template">
+              <!-- 正在输入 Key -->
+              <div v-if="selectedGlmKey === t.key" class="glm-key-row">
+                <input v-model="glmApiKey" type="password" class="input glm-key-input input-mono" :placeholder="t.local ? 'Z_AI_API_KEY' : 'GLM API Key'" />
+                <button class="btn btn-sm btn-primary" :disabled="addingGlm || !glmApiKey.trim()" @click="confirmAddGlm(t)">{{ addingGlm ? "添加中" : "确认" }}</button>
+                <button class="btn-link" @click="selectedGlmKey = null">取消</button>
+              </div>
+              <!-- 已配置：显示运行状态（与下方 server 卡同款状态点 / 标签），不再显示「添加」 -->
+              <template v-else-if="glmTag(t)">
+                <div class="glm-template-main">
+                  <span class="glm-template-name">{{ t.name }}</span>
+                  <span class="status-dot" :class="'dot-' + glmStatusCls(t)" />
+                  <span class="status-tag" :class="'tag-' + glmStatusCls(t)">{{ glmTag(t) }}</span>
+                </div>
+                <div class="glm-template-sub">
+                  <span class="glm-template-kind">{{ t.badge }}</span>
+                  <span class="glm-template-desc">{{ t.description }}</span>
+                </div>
+              </template>
+              <!-- 未配置 -->
+              <template v-else>
+                <div class="glm-template-main">
+                  <span class="glm-template-name">{{ t.name }}</span>
+                  <button class="btn-link" @click="selectGlm(t.key)">添加</button>
+                </div>
+                <div class="glm-template-sub">
+                  <span class="glm-template-kind">{{ t.badge }}</span>
+                  <span class="glm-template-desc">{{ t.description }}</span>
+                </div>
+              </template>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -357,4 +456,37 @@ const builtinDescZh: Record<string, string> = {
 .node-warning { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 12px; padding: 10px 14px; background: #fffbeb; border: 1px solid #fde68a; border-radius: var(--ip-radius-md); font-size: var(--ip-text-body-sm-size); color: #92400e; }
 .node-warning a { color: #d97706; font-weight: var(--ip-font-weight-medium); }
 .node-warn-icon { display: flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; background: #f59e0b; color: #fff; font-size: 12px; font-weight: 700; flex-shrink: 0; }
+
+/* ---- GLM 模板卡片：折叠态对齐 new-card（虚线入口），展开内复用 builtin-tools 列表风 ---- */
+.glm-card { border: 1px dashed var(--ip-color-border-default); background-color: transparent; }
+.glm-card:hover { border-color: var(--ip-primary-400); background-color: var(--ip-color-bg-tertiary); }
+.glm-card.expanded { border-style: solid; border-color: var(--ip-primary-400); background-color: var(--ip-color-bg-secondary); }
+.tpl-icon { flex-shrink: 0; color: var(--ip-color-primary-tint-text); }
+
+.glm-error { padding: 6px 10px; margin-bottom: 10px; font-size: var(--ip-text-caption-size); color: var(--ip-danger-text); background-color: var(--ip-danger-bg); border: 1px solid var(--ip-danger-border); border-radius: var(--ip-radius-md); }
+
+/* 模板列表：每个模板「名称 + 操作」主行 + 「类型 · 描述」次行，无边框无分隔线，靠 gap 分隔 */
+.glm-templates { display: flex; flex-direction: column; gap: 12px; }
+.glm-template { display: flex; flex-direction: column; gap: 2px; }
+.glm-template-main { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.glm-template-main .btn-link { margin-left: auto; flex-shrink: 0; }
+/* 已配置行的状态点 / 标签：清掉 server 卡的 margin-top，并推到右侧与「添加」按钮对齐 */
+.glm-template-main .status-dot { margin-top: 0; margin-left: auto; }
+.glm-template-name { font-size: var(--ip-text-body-sm-size); font-weight: var(--ip-font-weight-medium); color: var(--ip-color-text-primary); }
+.glm-template-sub { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.glm-template-kind { flex-shrink: 0; font-size: var(--ip-text-caption-size); color: var(--ip-color-text-secondary); }
+.glm-template-desc { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
+.glm-key-row { display: flex; align-items: center; gap: 6px; }
+.glm-key-input { flex: 1; min-width: 0; height: 28px; }
+
+/* GLM 卡用到的输入 / 按钮（McpForm 的 scoped 样式不外泄，这里补一份） */
+.input { width: 100%; height: 30px; padding: 0 10px; font-size: var(--ip-text-body-sm-size); color: var(--ip-color-text-primary); background-color: var(--ip-color-bg-tertiary); border: 1px solid var(--ip-color-border-default); border-radius: var(--ip-radius-md); outline: none; box-sizing: border-box; transition: all var(--ip-duration-fast) var(--ip-ease-out); }
+.input:focus { border-color: var(--color-input-focus-border); background-color: var(--color-input-bg); box-shadow: 0 0 0 3px rgba(46, 141, 100, 0.12); }
+.input::placeholder { color: var(--ip-color-text-placeholder); }
+.input-mono { font-family: var(--ip-font-mono); }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 0 14px; font-size: var(--ip-text-body-sm-size); font-weight: var(--ip-font-weight-medium); border-radius: var(--ip-radius-md); cursor: pointer; white-space: nowrap; transition: all var(--ip-duration-fast) var(--ip-ease-out); }
+.btn-sm { height: 28px; }
+.btn-primary { color: white; background-color: var(--ip-primary-600); border: none; }
+.btn-primary:hover { background-color: var(--ip-primary-700); }
+.btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
 </style>

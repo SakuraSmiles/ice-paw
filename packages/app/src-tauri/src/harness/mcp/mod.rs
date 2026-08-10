@@ -10,6 +10,7 @@ pub mod types;
 pub mod client;
 pub mod internal;
 pub mod external;
+pub mod transport;
 pub mod bundled;
 pub mod kb_tool;
 pub mod manager;

@@ -17,9 +17,10 @@ use crate::error::{AppError, AppResult};
 use super::bundled;
 use super::client::McpRegistry;
 use super::external::{ExternalMcpServer, ExternalToolProxy};
+use super::transport::{HttpMcpTransport, McpTransport};
 use super::types::{
     McpServerConfig, McpToolDefinition, RuntimeKind, ServerSnapshot, ServerStatusKind,
-    WORKSPACE_PLACEHOLDER,
+    TransportKind, WORKSPACE_PLACEHOLDER,
 };
 
 // =========================================================================
@@ -30,7 +31,7 @@ pub(crate) enum ServerStatus {
     Disabled,
     Starting,
     Running {
-        process: Arc<ExternalMcpServer>,
+        process: Arc<dyn McpTransport>,
         tools: Vec<McpToolDefinition>,
     },
     Failed {
@@ -148,67 +149,76 @@ impl McpServerManager {
             );
         }
 
-        // 替换 workspace placeholder
-        let args: Vec<String> = if let Some(ws) = workspace {
-            config
-                .args
-                .iter()
-                .map(|a| a.replace(WORKSPACE_PLACEHOLDER, ws))
-                .collect()
-        } else {
-            config.args.clone()
-        };
-
-        // bundled 运行时：command → 内置 node.exe 绝对路径，entry script prepend 到 args，
-        // env 合并 bundled 模板。system 运行时保持 DB 里的 command/args/env 不变。
-        // （command 为 node.exe 绝对路径时，spawn 的 Windows cmd /C 分支被跳过，直执行）
-        let (command, args, env_value): (String, Vec<String>, serde_json::Value) =
-            if config.runtime_kind == RuntimeKind::Bundled {
-                self.resolve_bundled(config, args)?
-            } else {
-                (config.command.clone(), args, config.env.clone())
-            };
-
-        // spawn 子进程
-        let server = match ExternalMcpServer::spawn(
-            config.id.clone(),
-            config.name.clone(),
-            &command,
-            &args,
-            &env_value,
-        )
-        .await
-        {
-            Ok(s) => s,
-            Err(e) => {
-                let reason = format!("启动失败: {e}");
-                let mut entries = self.entries.write().await;
-                entries.insert(
-                    id.clone(),
-                    ServerEntry {
-                        config: config.clone(),
-                        status: ServerStatus::Failed { reason },
-                    },
-                );
-                return Err(e);
+        // 按 transport 分流得到传输实例（stdio 子进程 / http 远程），失败统一标 Failed。
+        // 后续 list_tools / 注册 proxy / 标 Running 完全统一，不感知具体传输类型。
+        let server: Arc<dyn McpTransport> = match config.transport {
+            TransportKind::Stdio => {
+                // 替换 args 中的 {workspace} 占位符（per_agent server 用 agent workspace）
+                let args: Vec<String> = if let Some(ws) = workspace {
+                    config
+                        .args
+                        .iter()
+                        .map(|a| a.replace(WORKSPACE_PLACEHOLDER, ws))
+                        .collect()
+                } else {
+                    config.args.clone()
+                };
+                // bundled 运行时：command → 内置 node.exe 绝对路径，entry script prepend；
+                // system 运行时保持 DB 里的 command/args/env 不变。
+                // （command 为 node.exe 绝对路径时，spawn 的 Windows cmd /C 分支被跳过，直执行）
+                let (command, args, env_value): (String, Vec<String>, serde_json::Value) =
+                    if config.runtime_kind == RuntimeKind::Bundled {
+                        self.resolve_bundled(config, args)?
+                    } else {
+                        (config.command.clone(), args, config.env.clone())
+                    };
+                match ExternalMcpServer::spawn(
+                    config.id.clone(),
+                    config.name.clone(),
+                    &command,
+                    &args,
+                    &env_value,
+                )
+                .await
+                {
+                    Ok(s) => Arc::new(s),
+                    Err(e) => {
+                        self.mark_failed(&id, config, format!("启动失败: {e}")).await;
+                        return Err(e);
+                    }
+                }
+            }
+            TransportKind::Http => {
+                // http/sse 无 args/workspace/子进程概念，直接连远程端点
+                let Some(url) = config.url.as_deref() else {
+                    let reason = "HTTP 传输缺少 url".to_string();
+                    self.mark_failed(&id, config, reason.clone()).await;
+                    return Err(AppError::Internal(reason));
+                };
+                match HttpMcpTransport::new(config.name.clone(), url.to_string(), &config.headers)
+                    .await
+                {
+                    Ok(t) => Arc::new(t),
+                    Err(e) => {
+                        self.mark_failed(&id, config, format!("连接失败: {e}")).await;
+                        return Err(e);
+                    }
+                }
+            }
+            TransportKind::Sse => {
+                // SSE 传输见阶段 2；GLM 的 3 个 Remote 服务均支持 streamable HTTP，暂引导用户用 http。
+                let reason = "SSE 传输暂未实现，请改用 http 传输".to_string();
+                self.mark_failed(&id, config, reason.clone()).await;
+                return Err(AppError::Internal(reason));
             }
         };
-        let server = Arc::new(server);
 
         // 获取工具列表
         let tools = match server.list_tools().await {
             Ok(t) => t,
             Err(e) => {
                 server.shutdown().await;
-                let reason = format!("获取工具列表失败: {e}");
-                let mut entries = self.entries.write().await;
-                entries.insert(
-                    id.clone(),
-                    ServerEntry {
-                        config: config.clone(),
-                        status: ServerStatus::Failed { reason },
-                    },
-                );
+                self.mark_failed(&id, config, format!("获取工具列表失败: {e}")).await;
                 return Err(e);
             }
         };
@@ -220,10 +230,26 @@ impl McpServerManager {
             .collect();
         for tool_def in &tools {
             let namespaced = namespaced_tool_name(config.tool_index, &tool_def.name);
+            // 给外部工具描述前置【server 名】，作用与取舍：
+            //  1) 多 server 同类工具时帮 LLM 区分来源（如「【GLM 联网搜索】」vs 内置 web_fetch）；
+            //  2) 让 score_tools 的中文 query 能与中文 server 名子串匹配（按 CJK bigram 分词，
+            //     纯英文描述无法被中文 query 命中）；
+            //  3) 取舍：纯中文 query 下，带 CJK 前缀的远程工具会系统性排在英文描述的内置工具
+            //     前；因所有工具始终全量可见（仅顺序变化），LLM 仍可选内置工具，故可接受。
+            // 仅外部工具（经 ExternalToolProxy）加前缀；内置工具（client.rs with_filter）不加。
+            let server_name = config.name.trim();
+            let description = if server_name.is_empty() {
+                // server 名为空时不加无意义的「】」空前缀
+                tool_def.description.clone()
+            } else {
+                // 括号后补空格，使紧邻的英文描述词能被 score_tools 整词匹配（+4）；
+                // 否则 split_whitespace 会把首词切成「联网搜索】Search」拿不到整词分。
+                format!("【{}】 {}", server_name, tool_def.description)
+            };
             let proxy = Arc::new(ExternalToolProxy::new(
                 namespaced,
                 tool_def.name.clone(),
-                tool_def.description.clone(),
+                description,
                 tool_def.input_schema.clone(),
                 server.clone(),
                 config.trust_level,
@@ -254,6 +280,18 @@ impl McpServerManager {
             tool_names.len(),
         );
         Ok(())
+    }
+
+    /// 统一失败收尾：把某 server 标记为 Failed（去重 start_server 各分支的错误收尾块）。
+    async fn mark_failed(&self, id: &str, config: &McpServerConfig, reason: String) {
+        let mut entries = self.entries.write().await;
+        entries.insert(
+            id.to_string(),
+            ServerEntry {
+                config: config.clone(),
+                status: ServerStatus::Failed { reason },
+            },
+        );
     }
 
     /// bundled 运行时解析：把 DB 里的占位 command="node" + 「用户参数」args 解析成

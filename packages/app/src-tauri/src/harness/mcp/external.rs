@@ -21,6 +21,7 @@ use crate::error::{AppError, AppResult};
 use crate::infra::protocol::ToolDef;
 
 use super::client::McpClient;
+use super::transport::{extract_text_from_call_result, McpTransport};
 use super::types::{
     AuthorizationLevel, JsonRpcRequest, JsonRpcResponse,
     McpCallToolParams, McpCallToolResult, McpInitializeParams,
@@ -299,12 +300,7 @@ impl ExternalMcpServer {
         let call_result: McpCallToolResult = serde_json::from_value(result_value)
             .map_err(|e| AppError::Internal(format!("解析 MCP 工具结果失败: {}", e)))?;
 
-        let text = call_result.content.iter()
-            .filter_map(|item| item.text.as_deref())
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        Ok(text)
+        Ok(extract_text_from_call_result(&call_result))
     }
 
     /// 优雅关闭
@@ -427,6 +423,22 @@ impl Drop for ExternalMcpServer {
     }
 }
 
+/// stdio 传输同样实现 `McpTransport`，与远程传输（http/sse）平级，
+/// 让 manager / ExternalToolProxy 通过 `Arc<dyn McpTransport>` 统一持有。
+/// 方法委托给同名 inherent 方法（Rust 中 inherent 方法优先于 trait 方法，无歧义）。
+#[async_trait]
+impl McpTransport for ExternalMcpServer {
+    async fn list_tools(&self) -> AppResult<Vec<McpToolDefinition>> {
+        self.list_tools().await
+    }
+    async fn call_tool(&self, name: &str, args: &Value) -> AppResult<String> {
+        self.call_tool(name, args).await
+    }
+    async fn shutdown(&self) {
+        self.shutdown().await
+    }
+}
+
 // =========================================================================
 // ExternalToolProxy — 单个工具的 McpClient 实现
 // =========================================================================
@@ -440,7 +452,7 @@ pub struct ExternalToolProxy {
     server_tool_name: String,
     description: String,
     parameters: serde_json::Value,
-    server: Arc<ExternalMcpServer>,
+    server: Arc<dyn McpTransport>,
     trust_level: TrustLevel,
 }
 
@@ -450,7 +462,7 @@ impl ExternalToolProxy {
         server_tool_name: String,
         description: String,
         parameters: serde_json::Value,
-        server: Arc<ExternalMcpServer>,
+        server: Arc<dyn McpTransport>,
         trust_level: TrustLevel,
     ) -> Self {
         Self { name, server_tool_name, description, parameters, server, trust_level }

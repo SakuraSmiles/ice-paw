@@ -59,6 +59,9 @@ pub struct JsonRpcResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcError {
     pub code: i32,
+    // message 规范上必填，但部分 server（如 GLM 的 -32603）只回 code 不回 message，
+    // 设 default 以免反序列化失败、掩盖真正的 error code。
+    #[serde(default)]
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<serde_json::Value>,
@@ -69,7 +72,12 @@ pub struct JsonRpcError {
 // =========================================================================
 
 /// MCP 初始化请求参数
+///
+/// 序列化为 MCP 规范的 camelCase（`protocolVersion` / `clientInfo`）。
+/// 早期遗漏 rename 导致发成 snake_case，宽松的官方 SDK 能容忍，但严格的服务端
+/// （如 GLM）会以 -32603 Internal error 拒绝 initialize。
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct McpInitializeParams {
     pub protocol_version: String,
     pub capabilities: McpClientCapabilities,
@@ -215,6 +223,52 @@ impl std::str::FromStr for RuntimeKind {
 }
 
 // =========================================================================
+// TransportKind — Server 传输类型
+// =========================================================================
+
+/// MCP Server 传输类型：控制 server 如何被连接。
+///
+/// - `Stdio`：本地子进程（stdio JSON-RPC），command 走系统 PATH 或 bundled node
+/// - `Http`：远程 streamable HTTP（POST JSON-RPC，响应可能是单 JSON 或 SSE 流）
+/// - `Sse`：远程 SSE（GET 长连接 + POST，旧式传输）
+///
+/// 传输类型是**顶层路由**：决定 `start_server` 走 spawn 子进程还是 HTTP 连接。
+/// `runtime_kind` 仅在 `transport == Stdio` 时有意义。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransportKind {
+    /// 本地子进程（stdio）
+    #[default]
+    Stdio,
+    /// 远程 streamable HTTP
+    Http,
+    /// 远程 SSE
+    Sse,
+}
+
+impl TransportKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TransportKind::Stdio => "stdio",
+            TransportKind::Http => "http",
+            TransportKind::Sse => "sse",
+        }
+    }
+}
+
+impl std::str::FromStr for TransportKind {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // 未知值 / 空 / 旧数据 → Stdio（容错，避免坏数据阻断启动，与 RuntimeKind 一致）
+        match s {
+            "http" => Ok(TransportKind::Http),
+            "sse" => Ok(TransportKind::Sse),
+            _ => Ok(TransportKind::Stdio),
+        }
+    }
+}
+
+// =========================================================================
 // Server 配置（DB 行 / 传输用）
 // =========================================================================
 
@@ -238,9 +292,21 @@ pub struct McpServerConfig {
     /// （per_agent 的 server，args 中的 {workspace} 启动时替换为 agent workspace）
     #[serde(default = "default_scope")]
     pub scope: String,
-    /// 运行时类型：system（走系统 PATH）或 bundled（内置 node + 预打包包）
+    /// 运行时类型：system（走系统 PATH）或 bundled（内置 node + 预打包包）。
+    /// 仅在 `transport == Stdio` 时有意义。
     #[serde(default)]
     pub runtime_kind: RuntimeKind,
+    /// 传输类型：stdio（本地子进程）/ http（远程 streamable HTTP）/ sse（远程 SSE）。
+    /// 顶层路由：决定 start_server 走 spawn 子进程还是 HTTP 连接。
+    #[serde(default)]
+    pub transport: TransportKind,
+    /// 远程 server 的 URL（transport=http/sse 时必填；stdio 时为 None）
+    #[serde(default)]
+    pub url: Option<String>,
+    /// 远程 server 的自定义 HTTP 头（如 `{"Authorization": "Bearer xxx"}`）。
+    /// 与 env 同等明文存储；stdio 时为空对象。
+    #[serde(default = "default_headers")]
+    pub headers: serde_json::Value,
     /// OpenAI 合规的稳定命名空间索引：工具名 = `t{tool_index}_{raw_tool_name}`。
     /// 整数前缀永不违反 `^[a-zA-Z0-9_-]+$`（避免中文 server 名 + 点号触发 400）。
     /// create() 用 (MAX+1) 原子分配；不可变。
@@ -251,6 +317,9 @@ pub struct McpServerConfig {
 }
 
 fn default_enabled() -> bool { true }
+
+/// headers 默认值：空 JSON 对象（兼容旧 server / stdio server 无 headers）
+fn default_headers() -> serde_json::Value { serde_json::json!({}) }
 
 /// scope 默认值：global（兼容旧 server，全局共享）
 fn default_scope() -> String { "global".into() }
@@ -275,6 +344,13 @@ pub struct ServerSnapshot {
     pub scope: String,
     #[serde(default)]
     pub runtime_kind: RuntimeKind,
+    /// 传输类型（见 McpServerConfig.transport）
+    #[serde(default)]
+    pub transport: TransportKind,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default = "default_headers")]
+    pub headers: serde_json::Value,
     /// 命名空间索引（见 McpServerConfig.tool_index）
     pub tool_index: i64,
     /// 运行时状态
@@ -302,6 +378,9 @@ impl From<McpServerConfig> for ServerSnapshot {
             trust_level: cfg.trust_level,
             scope: cfg.scope,
             runtime_kind: cfg.runtime_kind,
+            transport: cfg.transport,
+            url: cfg.url,
+            headers: cfg.headers,
             tool_index: cfg.tool_index,
             status: ServerStatusKind::Disabled,
             tool_count: None,
@@ -346,9 +425,17 @@ pub struct NewMcpServer {
     pub trust_level: TrustLevel,
     #[serde(default = "default_scope")]
     pub scope: String,
-    /// 运行时类型（用户自建 server 默认 system；builtin bundled 由 seed_defaults 指定）
+    /// 运行时类型（用户自建 server 默认 system；builtin bundled 由 seed_defaults 指定）。
+    /// 仅 transport==stdio 时有意义。
     #[serde(default)]
     pub runtime_kind: RuntimeKind,
+    /// 传输类型（默认 stdio）
+    #[serde(default)]
+    pub transport: TransportKind,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default = "default_headers")]
+    pub headers: serde_json::Value,
 }
 
 /// 更新 MCP Server 入参
@@ -366,6 +453,9 @@ pub struct UpdateMcpServer {
     pub scope: Option<String>,
     #[serde(default)]
     pub runtime_kind: Option<RuntimeKind>,
+    pub transport: Option<TransportKind>,
+    pub url: Option<String>,
+    pub headers: Option<serde_json::Value>,
 }
 
 // =========================================================================

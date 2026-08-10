@@ -3,7 +3,7 @@
 // 从原 McpFormModal 提取，去掉弹窗外壳；caption 分区 + 两列布局，极简风格。
 // 字段：name, id, description, command, args[], env{}, trust_level, enabled
 import { ref, computed } from "vue";
-import type { McpServer, NewMcpServer, McpServerUpdate, McpTrustLevel } from "../../types";
+import type { McpServer, NewMcpServer, McpServerUpdate, McpTrustLevel, McpTransport } from "../../types";
 import { bridge } from "../../api/bridge";
 import MoreMenu from "../common/MoreMenu.vue";
 
@@ -31,13 +31,34 @@ const entriesToEnv = (entries: { key: string; value: string }[]): Record<string,
   return env;
 };
 
+// headers Record ↔ 键值对数组（与 envEntries 同构：http/sse 远程传输的请求头，如 Authorization）
+const headersToEntries = (headers: Record<string, string> | undefined | null) =>
+  Object.entries(headers ?? {}).map(([key, value]) => ({ key, value }));
+const entriesToHeaders = (entries: { key: string; value: string }[]): Record<string, string> => {
+  const headers: Record<string, string> = {};
+  for (const e of entries) {
+    const k = e.key.trim();
+    if (k) headers[k] = e.value;
+  }
+  return headers;
+};
+
+// transport 为顶层路由：stdio 走 command/args/env；http/sse 走 url + headers。
+const isRemote = computed(() => form.value.transport !== "stdio");
+
 const form = ref({
   id: props.server?.id ?? "",
   name: props.server?.name ?? "",
   description: props.server?.description ?? "",
+  transport: (props.server?.transport ?? "stdio") as McpTransport,
+  // stdio 字段
   command: props.server?.command ?? "",
   args: props.server ? [...props.server.args] : [],
   envEntries: props.server ? envToEntries(props.server.env) : [],
+  // http/sse 字段
+  url: props.server?.url ?? "",
+  headerEntries: props.server ? headersToEntries(props.server.headers) : [],
+  // 通用
   trust_level: (props.server?.trust_level ?? "untrusted") as McpTrustLevel,
   enabled: props.server?.enabled ?? true,
 });
@@ -48,7 +69,11 @@ const error = ref("");
 function validate(): boolean {
   if (!isEdit.value && !form.value.id.trim()) { error.value = "ID 不能为空"; return false; }
   if (!form.value.name.trim()) { error.value = "名称不能为空"; return false; }
-  if (!form.value.command.trim()) { error.value = "启动命令不能为空"; return false; }
+  if (isRemote.value) {
+    if (!form.value.url.trim()) { error.value = "远程端点 URL 不能为空"; return false; }
+  } else {
+    if (!form.value.command.trim()) { error.value = "启动命令不能为空"; return false; }
+  }
   error.value = "";
   return true;
 }
@@ -60,6 +85,11 @@ async function save() {
   error.value = "";
   try {
     const env = entriesToEnv(form.value.envEntries);
+    const headers = entriesToHeaders(form.value.headerEntries);
+    // 远程传输无 workspace 概念，scope 恒 global
+    const scope = isRemote.value
+      ? "global"
+      : form.value.args.some((a: string) => a.includes("{workspace}")) ? "per_agent" : "global";
     if (isEdit.value && props.server) {
       const input: McpServerUpdate = {
         id: props.server.id,
@@ -70,7 +100,10 @@ async function save() {
         env,
         enabled: form.value.enabled,
         trust_level: form.value.trust_level,
-        scope: form.value.args.some((a: string) => a.includes("{workspace}")) ? "per_agent" : "global",
+        scope,
+        transport: form.value.transport,
+        url: isRemote.value ? form.value.url : null,
+        headers,
       };
       emit("saved", await bridge.mcp.update(input));
     } else {
@@ -83,7 +116,10 @@ async function save() {
         env,
         enabled: form.value.enabled,
         trust_level: form.value.trust_level,
-        scope: form.value.args.some((a: string) => a.includes("{workspace}")) ? "per_agent" : "global",
+        scope,
+        transport: form.value.transport,
+        url: isRemote.value ? form.value.url : null,
+        headers,
       };
       emit("saved", await bridge.mcp.create(input));
     }
@@ -99,6 +135,8 @@ function addArg() { form.value.args.push(""); }
 function removeArg(i: number) { form.value.args.splice(i, 1); }
 function addEnv() { form.value.envEntries.push({ key: "", value: "" }); }
 function removeEnv(i: number) { form.value.envEntries.splice(i, 1); }
+function addHeader() { form.value.headerEntries.push({ key: "", value: "" }); }
+function removeHeader(i: number) { form.value.headerEntries.splice(i, 1); }
 
 function confirmDelete() {
   if (props.server) emit("delete", props.server);
@@ -144,14 +182,51 @@ function confirmDelete() {
         <input v-model="form.description" type="text" class="input" placeholder="说明这个 Server 的用途" />
       </div>
 
-      <!-- 启动命令 -->
+      <!-- 传输类型：顶层路由，决定显示 stdio（命令/参数/环境变量）还是远程（URL/请求头） -->
       <div class="field">
+        <label class="field-label">传输类型</label>
+        <div class="seg-group">
+          <button type="button" class="seg-btn" :class="{ active: form.transport === 'stdio' }" @click="form.transport = 'stdio'">本地进程</button>
+          <button type="button" class="seg-btn" :class="{ active: form.transport === 'http' }" @click="form.transport = 'http'">HTTP</button>
+          <button type="button" class="seg-btn" :class="{ active: form.transport === 'sse' }" @click="form.transport = 'sse'">SSE</button>
+        </div>
+        <p class="field-hint">
+          {{ isRemote
+            ? "远程 MCP Server（streamable HTTP / SSE）。填端点 URL 与请求头"
+            : "本地子进程（npx / node / uvx）。填启动命令、参数、环境变量" }}
+        </p>
+      </div>
+
+      <!-- 远程端点 URL（http/sse） -->
+      <div v-if="isRemote" class="field">
+        <label class="field-label">端点 URL <span class="req">*</span></label>
+        <input v-model="form.url" type="text" class="input input-mono" placeholder="https://open.bigmodel.cn/api/mcp/web_search_prime/mcp" />
+      </div>
+
+      <!-- 请求头（http/sse，如 Authorization） -->
+      <div v-if="isRemote" class="field">
+        <label class="field-label">请求头</label>
+        <div class="dyn-list">
+          <div v-for="(h, i) in form.headerEntries" :key="'h' + i" class="dyn-row">
+            <input v-model="h.key" type="text" class="input input-mono dyn-key" placeholder="Authorization" />
+            <span class="dyn-eq">:</span>
+            <input v-model="h.value" type="text" class="input input-mono" placeholder="Bearer sk-..." />
+            <button type="button" class="dyn-remove" @click="removeHeader(i)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+            </button>
+          </div>
+          <button type="button" class="dyn-add" @click="addHeader">+ 添加请求头</button>
+        </div>
+      </div>
+
+      <!-- 启动命令（stdio） -->
+      <div v-if="!isRemote" class="field">
         <label class="field-label">启动命令 <span class="req">*</span></label>
         <input v-model="form.command" type="text" class="input input-mono" placeholder="如 npx / node / uvx" />
       </div>
 
-      <!-- 参数 -->
-      <div class="field">
+      <!-- 参数（stdio） -->
+      <div v-if="!isRemote" class="field">
         <label class="field-label">参数 <span class="hint">每行一个</span></label>
         <div class="dyn-list">
           <div v-for="(_, i) in form.args" :key="'a' + i" class="dyn-row">
@@ -165,8 +240,8 @@ function confirmDelete() {
         <p v-if="form.args.some((a: string) => a.includes('{workspace}'))" class="field-hint">参数含 <code>{workspace}</code>：按 Agent 隔离启动（替换为该 agent 的 workspace）</p>
       </div>
 
-      <!-- 环境变量 -->
-      <div class="field">
+      <!-- 环境变量（stdio） -->
+      <div v-if="!isRemote" class="field">
         <label class="field-label">环境变量</label>
         <div class="dyn-list">
           <div v-for="(e, i) in form.envEntries" :key="'e' + i" class="dyn-row">
