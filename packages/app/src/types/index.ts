@@ -337,6 +337,9 @@ export interface UserPreferences {
 
 export type McpTrustLevel = "trusted" | "untrusted";
 
+/** MCP 传输类型：stdio（本地子进程）/ http（streamable HTTP）/ sse（Server-Sent Events） */
+export type McpTransport = "stdio" | "http" | "sse";
+
 /** MCP Server 配置（与后端 McpServerConfig 对齐） */
 export interface McpServer {
   id: string;
@@ -350,6 +353,12 @@ export interface McpServer {
   scope: string;
   /** 运行时类型：system 走系统 PATH（npx），bundled 用内置 node + 预打包包 */
   runtime_kind: "system" | "bundled";
+  /** 传输类型：stdio / http / sse（默认 stdio）；顶层路由，runtime_kind 仅 stdio 时生效 */
+  transport: McpTransport;
+  /** http/sse 远程端点 URL（stdio 时为 null） */
+  url: string | null;
+  /** http/sse 自定义请求头（如 Authorization），stdio 时为空对象 */
+  headers: Record<string, string>;
   /** OpenAI 合规命名空间索引：工具名 = `t{tool_index}_{tool}`；后端自动分配、不可变 */
   tool_index?: number;
   created_at: string;
@@ -369,6 +378,12 @@ export interface McpServerSnapshot {
   scope: string;
   /** 运行时类型：system 走系统 PATH（npx），bundled 用内置 node + 预打包包 */
   runtime_kind: "system" | "bundled";
+  /** 传输类型：stdio / http / sse */
+  transport: McpTransport;
+  /** http/sse 远程端点 URL（stdio 时为 null） */
+  url: string | null;
+  /** http/sse 自定义请求头 */
+  headers: Record<string, string>;
   /** OpenAI 合规命名空间索引（见 McpServer.tool_index） */
   tool_index?: number;
   /** 运行时状态 */
@@ -394,6 +409,12 @@ export interface NewMcpServer {
   enabled?: boolean;
   trust_level?: McpTrustLevel;
   scope?: string;
+  /** 传输类型，默认 stdio */
+  transport?: McpTransport;
+  /** http/sse 远程端点 URL */
+  url?: string | null;
+  /** http/sse 自定义请求头 */
+  headers?: Record<string, string>;
 }
 
 /** 更新 MCP Server 入参 */
@@ -407,6 +428,9 @@ export interface McpServerUpdate {
   enabled?: boolean;
   trust_level?: McpTrustLevel;
   scope?: string;
+  transport?: McpTransport;
+  url?: string | null;
+  headers?: Record<string, string>;
 }
 
 /** MCP Server 提供的工具定义（来自 tools/list） */

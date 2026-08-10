@@ -5,9 +5,9 @@
 use sqlx::SqlitePool;
 
 use crate::error::{AppError, AppResult};
-use crate::harness::mcp::types::{McpServerConfig, NewMcpServer, RuntimeKind, UpdateMcpServer, TrustLevel};
+use crate::harness::mcp::types::{McpServerConfig, NewMcpServer, RuntimeKind, TransportKind, TrustLevel, UpdateMcpServer};
 
-const ALL_COLS: &str = "id, name, description, command, args, env, enabled, trust_level, scope, runtime_kind, tool_index, created_at, updated_at";
+const ALL_COLS: &str = "id, name, description, command, args, env, enabled, trust_level, scope, runtime_kind, transport, url, headers, tool_index, created_at, updated_at";
 
 /// 列出全部 MCP Server 配置，按 created_at 降序
 pub async fn list_all(pool: &SqlitePool) -> AppResult<Vec<McpServerConfig>> {
@@ -41,10 +41,11 @@ pub async fn create(pool: &SqlitePool, input: &NewMcpServer) -> AppResult<McpSer
     let env_str = input.env.as_ref()
         .map(|v| serde_json::to_string(v).unwrap_or_default())
         .unwrap_or_else(|| "{}".to_string());
+    let headers_str = serde_json::to_string(&input.headers).unwrap_or_else(|_| "{}".to_string());
 
     sqlx::query(
-        "INSERT INTO mcp_servers (id, name, description, command, args, env, enabled, trust_level, scope, runtime_kind, tool_index, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(tool_index), -1) + 1 FROM mcp_servers), ?, ?)",
+        "INSERT INTO mcp_servers (id, name, description, command, args, env, enabled, trust_level, scope, runtime_kind, transport, url, headers, tool_index, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(tool_index), -1) + 1 FROM mcp_servers), ?, ?)",
     )
     .bind(&input.id)
     .bind(&input.name)
@@ -56,6 +57,9 @@ pub async fn create(pool: &SqlitePool, input: &NewMcpServer) -> AppResult<McpSer
     .bind(input.trust_level.as_str())
     .bind(&input.scope)
     .bind(input.runtime_kind.as_str())
+    .bind(input.transport.as_str())
+    .bind(input.url.as_deref())
+    .bind(&headers_str)
     .bind(&now)
     .bind(&now)
     .execute(pool)
@@ -76,12 +80,17 @@ pub async fn update(pool: &SqlitePool, input: &UpdateMcpServer) -> AppResult<Mcp
     let trust_level = input.trust_level.unwrap_or(existing.trust_level);
     let scope = input.scope.clone().unwrap_or_else(|| existing.scope.clone());
     let runtime_kind = input.runtime_kind.unwrap_or(existing.runtime_kind);
+    let transport = input.transport.unwrap_or(existing.transport);
+    // url 是 Option<String>（input.url None → 保留 existing.url），用 .or 而非 unwrap_or_else
+    let url = input.url.clone().or(existing.url.clone());
+    let headers = input.headers.clone().unwrap_or_else(|| existing.headers.clone());
     let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let args_str = serde_json::to_string(args)?;
     let env_str = serde_json::to_string(env)?;
+    let headers_str = serde_json::to_string(&headers)?;
 
     sqlx::query(
-        "UPDATE mcp_servers SET name=?, description=?, command=?, args=?, env=?, enabled=?, trust_level=?, scope=?, runtime_kind=?, updated_at=? WHERE id=?",
+        "UPDATE mcp_servers SET name=?, description=?, command=?, args=?, env=?, enabled=?, trust_level=?, scope=?, runtime_kind=?, transport=?, url=?, headers=?, updated_at=? WHERE id=?",
     )
     .bind(name)
     .bind(desc)
@@ -92,6 +101,9 @@ pub async fn update(pool: &SqlitePool, input: &UpdateMcpServer) -> AppResult<Mcp
     .bind(trust_level.as_str())
     .bind(&scope)
     .bind(runtime_kind.as_str())
+    .bind(transport.as_str())
+    .bind(url.as_deref())
+    .bind(&headers_str)
     .bind(&now)
     .bind(&input.id)
     .execute(pool)
@@ -142,6 +154,9 @@ fn default_mcp_servers() -> Vec<NewMcpServer> {
             trust_level: TrustLevel::Trusted,
             scope: "per_agent".into(),
             runtime_kind: RuntimeKind::Bundled,
+            transport: TransportKind::Stdio,
+            url: None,
+            headers: serde_json::json!({}),
         },
         NewMcpServer {
             id: "builtin-memory".into(),
@@ -154,6 +169,9 @@ fn default_mcp_servers() -> Vec<NewMcpServer> {
             trust_level: TrustLevel::Trusted,
             scope: "per_agent".into(),
             runtime_kind: RuntimeKind::Bundled,
+            transport: TransportKind::Stdio,
+            url: None,
+            headers: serde_json::json!({}),
         },
         NewMcpServer {
             id: "builtin-playwright".into(),
@@ -166,6 +184,9 @@ fn default_mcp_servers() -> Vec<NewMcpServer> {
             trust_level: TrustLevel::Trusted,
             scope: "per_agent".into(),
             runtime_kind: RuntimeKind::System,
+            transport: TransportKind::Stdio,
+            url: None,
+            headers: serde_json::json!({}),
         },
     ]
 }
@@ -203,6 +224,9 @@ struct McpServerRow {
     trust_level: String,
     scope: String,
     runtime_kind: String,
+    transport: String,
+    url: Option<String>,
+    headers: Option<String>,
     tool_index: i64,
     created_at: String,
     updated_at: String,
@@ -221,6 +245,12 @@ impl From<McpServerRow> for McpServerConfig {
             trust_level: row.trust_level.parse::<TrustLevel>().unwrap_or_default(),
             scope: row.scope,
             runtime_kind: row.runtime_kind.parse::<RuntimeKind>().unwrap_or_default(),
+            transport: row.transport.parse::<TransportKind>().unwrap_or_default(),
+            url: row.url,
+            headers: row.headers
+                .as_deref()
+                .and_then(|s| serde_json::from_str(s).ok())
+                .unwrap_or(serde_json::json!({})),
             tool_index: row.tool_index,
             created_at: row.created_at,
             updated_at: row.updated_at,
