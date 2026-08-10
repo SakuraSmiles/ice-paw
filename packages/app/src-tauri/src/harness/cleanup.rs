@@ -63,6 +63,105 @@ pub(crate) async fn finalize_assistant_message(
     }
 }
 
+// ============================================================================
+// 终止路径对称清场守卫（cancel / budget / stuck / 错误路径共用）
+// ============================================================================
+
+/// 终止路径的落盘决策（纯逻辑，可单测，不依赖 DB/async）。
+///
+/// 判定与 sanitize_history 的「assistant 必须含 Text 或 ToolUse」对齐：过滤 ToolUse
+/// 后若无 Text 块，则该 assistant 对 OpenAI 协议非法（content=null 且无 tool_calls）。
+#[derive(Debug, PartialEq, Eq)]
+enum TerminationDecision {
+    /// 过滤 ToolUse 后仍有 Text → 落盘过滤后版本（保留 thinking + text）
+    PersistFiltered,
+    /// 过滤后无 Text，但调用方提供 fallback → 落盘 [Text(fallback)]
+    PersistFallback,
+    /// 过滤后无 Text 且无 fallback → 删除占位行
+    Delete,
+}
+
+/// 根据本轮 blocks 决定终止路径如何落盘 assistant。
+///
+/// 用 `has_text`（而非 `!filtered.is_empty()`）判定——thinking-only 轮（filtered
+/// = [Thinking] 非空但无 Text）会被判为「无有效内容」走 Delete/PersistFallback，
+/// 不会落盘对 OpenAI 非法的 thinking-only assistant。
+fn classify_termination_blocks(
+    round_blocks: &[ContentBlock],
+    has_fallback: bool,
+) -> TerminationDecision {
+    let has_text = round_blocks
+        .iter()
+        .any(|b| matches!(b, ContentBlock::Text { .. }));
+    if has_text {
+        TerminationDecision::PersistFiltered
+    } else if has_fallback {
+        TerminationDecision::PersistFallback
+    } else {
+        TerminationDecision::Delete
+    }
+}
+
+/// 终止路径对称清场守卫：在 cancel / budget / stuck / 错误路径上剔除 ToolUse 后落盘
+/// assistant，杜绝「有 tool_use 无 tool_result」孤儿（→ thinking-only → OpenAI 400）。
+///
+/// 复用原 cancel 路径已验证的「filter ToolUse + 删占位/落盘」模式，判定更严格：
+/// 用 [`classify_termination_blocks`]（has_text），与 sanitize_history 对齐。
+///
+/// - `fallback_text = Some`（budget/stuck）：无 Text 时写 [Text(fallback)]，保证 msg_id
+///   恒有效（finalize_success 的 final_asst_msg_id 需指向真实存在的消息）；有 Text 时
+///   忽略 fallback，保留模型真实文本。
+/// - `fallback_text = None`（cancel / 错误）：无 Text 时删占位行。
+///
+/// 返回 `true` = 占位已删（msg_id 失效）；`false` = 已落盘（msg_id 有效）。
+pub(crate) async fn finalize_assistant_without_tool_use(
+    pool: &SqlitePool,
+    batch_writer: &crate::harness::batch_writer::BatchWriter,
+    asst_msg_id: &str,
+    round_text: &str,
+    round_blocks: &[ContentBlock],
+    completion_tokens: Option<u32>,
+    fallback_text: Option<&str>,
+) -> bool {
+    match classify_termination_blocks(round_blocks, fallback_text.is_some()) {
+        TerminationDecision::PersistFiltered => {
+            let filtered: Vec<ContentBlock> = round_blocks
+                .iter()
+                .filter(|b| !matches!(b, ContentBlock::ToolUse { .. }))
+                .cloned()
+                .collect();
+            batch_writer.flush_now().await;
+            finalize_assistant_message(pool, asst_msg_id, round_text, &filtered, completion_tokens)
+                .await;
+            false
+        }
+        TerminationDecision::PersistFallback => {
+            let fb = fallback_text.expect("PersistFallback 仅在 has_fallback 时返回");
+            batch_writer.flush_now().await;
+            finalize_assistant_message(
+                pool,
+                asst_msg_id,
+                fb,
+                std::slice::from_ref(&ContentBlock::Text { text: fb.to_string() }),
+                completion_tokens,
+            )
+            .await;
+            false
+        }
+        TerminationDecision::Delete => {
+            if let Err(e) = repo::message::delete(pool, asst_msg_id).await {
+                tracing::warn!(
+                    target: "ice_paw.cleanup",
+                    "终止清场删除空占位失败: id={}, err={}",
+                    asst_msg_id,
+                    e
+                );
+            }
+            true
+        }
+    }
+}
+
 /// 整个发送周期成功结束：emit chat:done + 回填 user 消息 token_count + 注销
 ///
 /// 各 assistant 消息的 content/blocks/token 已由 `finalize_assistant_message`
@@ -186,4 +285,124 @@ pub(crate) async fn fail_round_and_cancel(
 pub(crate) fn cleanup(app: &AppHandle, _pool: &SqlitePool, conv_id: &str) {
     let chat_state = app.state::<ChatState>();
     chat_state.unregister(conv_id);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn text(t: &str) -> ContentBlock {
+        ContentBlock::Text { text: t.into() }
+    }
+    fn thinking(t: &str) -> ContentBlock {
+        ContentBlock::Thinking { thinking: t.into(), signature: None }
+    }
+    fn tool_use() -> ContentBlock {
+        ContentBlock::ToolUse { id: "tu_1".into(), name: "search".into(), input: "{}".into() }
+    }
+
+    // --- 有 Text：恒 PersistFiltered（fallback 不抢占真实文本）---
+    #[test]
+    fn classify_text_only() {
+        assert_eq!(
+            classify_termination_blocks(&[text("hi")], false),
+            TerminationDecision::PersistFiltered
+        );
+    }
+
+    #[test]
+    fn classify_text_plus_tool_use_no_fallback() {
+        // 有 tool_use 但也有 text → 剔除 tool_use 后保留 text（杜绝孤儿）
+        assert_eq!(
+            classify_termination_blocks(&[text("hi"), tool_use()], false),
+            TerminationDecision::PersistFiltered
+        );
+    }
+
+    #[test]
+    fn classify_text_plus_tool_use_with_fallback() {
+        // 有 text 时 fallback 被忽略，仍保留真实文本
+        assert_eq!(
+            classify_termination_blocks(&[text("hi"), tool_use()], true),
+            TerminationDecision::PersistFiltered
+        );
+    }
+
+    #[test]
+    fn classify_thinking_plus_text() {
+        assert_eq!(
+            classify_termination_blocks(&[thinking("..."), text("hi")], false),
+            TerminationDecision::PersistFiltered
+        );
+    }
+
+    // --- 无 Text：视 fallback 决定 PersistFallback / Delete ---
+    #[test]
+    fn classify_pure_tool_use_no_fallback() {
+        // 纯 tool_use（无文本）→ 删占位（cancel / 错误语义）
+        assert_eq!(
+            classify_termination_blocks(&[tool_use()], false),
+            TerminationDecision::Delete
+        );
+    }
+
+    #[test]
+    fn classify_pure_tool_use_with_fallback() {
+        // 纯 tool_use + fallback → 写 fallback 文本（budget/stuck 语义）
+        assert_eq!(
+            classify_termination_blocks(&[tool_use()], true),
+            TerminationDecision::PersistFallback
+        );
+    }
+
+    // ★ thinking-only 是关键边界：原 cancel 用 is_empty() 判定会放过它（=[Thinking] 非空），
+    // 落盘 thinking-only → OpenAI 400。守卫用 has_text 判定，归入 Delete/PersistFallback。
+    #[test]
+    fn classify_thinking_only_no_fallback() {
+        assert_eq!(
+            classify_termination_blocks(&[thinking("...")], false),
+            TerminationDecision::Delete
+        );
+    }
+
+    #[test]
+    fn classify_thinking_only_with_fallback() {
+        assert_eq!(
+            classify_termination_blocks(&[thinking("...")], true),
+            TerminationDecision::PersistFallback
+        );
+    }
+
+    #[test]
+    fn classify_thinking_plus_tool_use_no_fallback() {
+        // reasoning 模型常见输出 [Thinking, ToolUse]，过滤 ToolUse 后仅剩 Thinking（无 Text）
+        assert_eq!(
+            classify_termination_blocks(&[thinking("..."), tool_use()], false),
+            TerminationDecision::Delete
+        );
+    }
+
+    #[test]
+    fn classify_thinking_plus_tool_use_with_fallback() {
+        assert_eq!(
+            classify_termination_blocks(&[thinking("..."), tool_use()], true),
+            TerminationDecision::PersistFallback
+        );
+    }
+
+    #[test]
+    fn classify_empty_blocks_no_fallback() {
+        assert_eq!(
+            classify_termination_blocks(&[], false),
+            TerminationDecision::Delete
+        );
+    }
+
+    #[test]
+    fn classify_empty_blocks_with_fallback() {
+        assert_eq!(
+            classify_termination_blocks(&[], true),
+            TerminationDecision::PersistFallback
+        );
+    }
 }

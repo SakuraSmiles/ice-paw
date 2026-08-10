@@ -162,8 +162,8 @@ fn write_default_agent_yaml(
          max_tokens: {}\n\
          # 工具调用最大轮数（默认 50）\n\
          tool_max_rounds: 50\n\
-         # Token 预算上限（默认 500k）\n\
-         max_total_tokens: 500000\n",
+         # Token 预算上限（默认按上下文窗口自适应 3×；可不设，或显式覆盖）\n\
+         # max_total_tokens: 3000000\n",
         provider, model, sp_indented, temperature, max_tokens,
     );
 

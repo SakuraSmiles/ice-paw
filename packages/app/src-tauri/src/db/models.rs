@@ -120,7 +120,7 @@ pub struct AgentFileConfig {
     /// 工具调用最大轮数（None = 使用系统默认 50）
     #[serde(default)]
     pub tool_max_rounds: Option<u32>,
-    /// Token 预算上限（None = 使用系统默认 500_000）
+    /// Token 预算上限（None = 按上下文窗口自适应 3×，由 chat_cmd 兜底）
     #[serde(default)]
     pub max_total_tokens: Option<usize>,
     /// 对话钩子（生命周期回调，由 agent.yaml 配置；见 [`HookConfig`]）

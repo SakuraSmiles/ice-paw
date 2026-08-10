@@ -7,13 +7,13 @@
 //!   - 单元测试中独立构造边界值
 //!
 //! W4.1: `stream_loop` 签名参数化已完成。
-//! W4.2: `max_total_tokens` Token 预算终止已启用（默认 128_000）。
+//! W4.2: `max_total_tokens` Token 预算终止已启用（默认按上下文窗口自适应 3×）。
 //!
 //! 字段语义：
 //!   - `max_tool_rounds`：工具调用最大轮数（防止无限循环）
 //!   - `max_attempts`：每轮内最大重试次数（含首次尝试）
 //!   - `stuck_threshold`：卡住检测阈值（M2.1 启用，默认 5；降低误判）
-//!   - `max_total_tokens`：Token 预算上限（W4.2 启用，默认 128_000）
+//!   - `max_total_tokens`：Token 预算上限（默认 3× 上下文窗口，chat_cmd model-aware 兜底；agent.yaml 可覆盖）
 
 // ============================================================================
 // 与 `commands/chat_loop.rs` 中原硬编码常量对齐的 pub const（短期兼容）
@@ -34,7 +34,7 @@ pub const MAX_ATTEMPTS: u32 = 4;
 /// Loop 三道熔断配置：
 /// 1. `max_tool_rounds`：工具调用最大轮数
 /// 2. `max_attempts`：每轮内最大重试次数
-/// 3. `max_total_tokens`：整次对话累计 token 预算（W4.2 启用，默认 128_000）
+/// 3. `max_total_tokens`：整次对话累计 token 预算（W4.2 启用，默认 3× 上下文窗口）
 ///
 /// `stuck_threshold` 用于 M2.1 卡住检测（已启用，默认 5）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,8 +45,11 @@ pub struct LoopBudget {
     pub max_attempts: u32,
     /// 卡住检测阈值（M2.1 启用，默认 5；dev1 评审建议降低误判概率）
     pub stuck_threshold: u32,
-    /// 整次对话累计 token 预算（W4.2 启用，默认 500_000）
-    /// 多轮工具调用时 prompt 会累积，128k 不够用。
+    /// 整次对话累计 token 预算（默认 3× 上下文窗口，由 chat_cmd model-aware 兜底；
+    /// 此处 `1_000_000` 仅作 `LoopBudget::default()` 的库级兜底，send_message 路径不走它）。
+    /// Σ(prompt_i+completion_i) = provider 真实毛成本（历史每轮重发、被重新计费）；
+    /// loop_engine 基于【本轮】usage 累加（避免间歇缺失时旧值重复累加致虚高）。
+    /// agent.yaml 的 max_total_tokens 可显式覆盖；撞预算由守卫对称清场，不再卡死。
     pub max_total_tokens: usize,
 }
 
@@ -56,7 +59,7 @@ impl Default for LoopBudget {
             max_tool_rounds: MAX_TOOL_ROUNDS,
             max_attempts: MAX_ATTEMPTS,
             stuck_threshold: 5,
-            max_total_tokens: 500_000,
+            max_total_tokens: 1_000_000,
         }
     }
 }
@@ -79,12 +82,12 @@ mod tests {
         assert_eq!(budget.max_attempts, MAX_ATTEMPTS);
     }
 
-    /// 验证：默认预算（500_000）不会意外触发终止
+    /// 验证：默认预算（1_000_000）不会意外触发终止
     #[test]
     fn test_budget_not_exceeded_with_default() {
         let budget = LoopBudget::default();
-        assert_eq!(budget.max_total_tokens, 500_000);
-        // 模拟一个 round 使用了 5000 tokens → 远低于 128_000
+        assert_eq!(budget.max_total_tokens, 1_000_000);
+        // 模拟一个 round 使用了 5000 tokens → 远低于 1_000_000
         let cumulative_tokens: usize = 5_000;
         let exceeded = budget.max_total_tokens != usize::MAX && cumulative_tokens > budget.max_total_tokens;
         assert!(!exceeded, "默认预算不应在 5000 tokens 时触发终止");

@@ -143,10 +143,35 @@ pub async fn consume_stream(
                 );
             }
             Ok(ChatDelta::Usage { usage: u }) => {
-                round_state.tokens_prompt = u.prompt_tokens;
-                round_state.tokens_completion = u.completion_tokens;
-                round_state.cached_tokens = u.cached_tokens;
-                last_usage = Some(u);
+                // 字段级合并而非覆盖：Anthropic 分两个事件发 usage——message_start 带
+                // input_tokens（prompt）、message_delta 带 output_tokens（completion）且不含
+                // input_tokens。直接 last-wins 覆盖会把 prompt 冲成 0（→ user 消息 token_count
+                // 恒 0、预算漏算 prompt）。取各字段非零值合并；OpenAI / 单次 usage 路径无影响。
+                last_usage = Some(match last_usage {
+                    Some(prev) => TokenUsage {
+                        prompt_tokens: if u.prompt_tokens > 0 {
+                            u.prompt_tokens
+                        } else {
+                            prev.prompt_tokens
+                        },
+                        completion_tokens: if u.completion_tokens > 0 {
+                            u.completion_tokens
+                        } else {
+                            prev.completion_tokens
+                        },
+                        cached_tokens: if u.cached_tokens > 0 {
+                            u.cached_tokens
+                        } else {
+                            prev.cached_tokens
+                        },
+                    },
+                    None => u,
+                });
+                if let Some(ref merged) = last_usage {
+                    round_state.tokens_prompt = merged.prompt_tokens;
+                    round_state.tokens_completion = merged.completion_tokens;
+                    round_state.cached_tokens = merged.cached_tokens;
+                }
             }
             Ok(ChatDelta::Done { finish_reason: fr }) => {
                 if let Some(fr) = fr {
