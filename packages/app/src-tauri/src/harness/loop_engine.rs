@@ -200,15 +200,15 @@ async fn stream_loop_inner(
         observable.round = tool_round + 1;
 
         let tools: Option<Vec<crate::infra::protocol::ToolDef>> = if ctx.tools_enabled {
-            // M1.2: 使用 query + call_history 做相关性打分与软裁剪
-            // 阈值取默认 ContextBudget.tool_trim_threshold = Some(5)
-            // 调用上下文循环中可能多次调用；这里每次都重新打分，确保准确反映当前 query
+            // 工具数超过阈值时按相关性排序（相关工具靠前），始终全量发送、不降级不裁剪。
+            // 每轮重新打分是因为 call_history 每轮增长（query 本身不变），历史加权会改变排序。
+            // 阈值用 scoring 模块的专用常量，不再误用 ContextBudget 的 token 预算默认值
+            // （后者属不同维度，误用导致 per-agent 配置成为 dead config）。
             Some(
                 ctx.tool_registry
                     .list_tool_defs_with_query(
                         ctx.query.as_deref().unwrap_or(""),
-                        crate::context::token::ContextBudget::default().tool_trim_threshold,
-                        crate::context::token::ContextBudget::default().trim_top_k,
+                        Some(crate::harness::scoring::DEFAULT_TOOL_SORT_THRESHOLD),
                         &ctx.call_history,
                     )
                     .await,

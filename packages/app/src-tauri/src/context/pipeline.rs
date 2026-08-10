@@ -77,7 +77,8 @@ pub struct PipelineContext {
     pub current_user_query: Option<String>,
     /// M1.2: 最近调用过的工具名称列表（顺序不限；推荐最近 10 条）。
     pub tool_call_history: Vec<String>,
-    /// M1.2: 上下文预算（包含 tool_trim_threshold / trim_top_k 等）。
+    /// 上下文预算（token 上限 + fold 摘要派生）。工具排序阈值已移至
+    /// [`crate::harness::scoring::DEFAULT_TOOL_SORT_THRESHOLD`]，不再由预算承载。
     pub context_budget: ContextBudget,
     /// M1.5: 会话 ID（MemoryStage 写入摘要时需要）
     pub conversation_id: String,

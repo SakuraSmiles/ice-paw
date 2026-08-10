@@ -33,7 +33,8 @@ pub struct AgentRow {
     /// 「加载/发送上限」重定义为此（加载改用固定 `MEMORY_LOAD_LIMIT`，
     /// 发送上限由 token 窗口 + 摘要两级控制）。
     pub max_history_messages: Option<i32>,
-    /// M1.2 A2-4: 工具裁剪阈值（NULL = 使用系统默认 5）。
+    /// 已废弃（存而不读）：工具改为全量发送 + 相关性排序，阈值固定为
+    /// scoring::DEFAULT_TOOL_SORT_THRESHOLD。保留字段仅为兼容旧 DB。
     pub tool_trim_threshold: Option<i32>,
     /// Phase 0: 模型上下文窗口（token 数，NULL = 运行时按 provider+model 查
     /// 已知默认表，查不到回退 128K）。显式设置可覆盖默认（自定义/本地模型）。
@@ -104,6 +105,9 @@ pub struct AgentFileConfig {
     pub supports_vision: Option<bool>,
     #[serde(default)]
     pub max_history_messages: Option<i32>,
+    /// 已废弃（存而不读）：工具列表改为全量发送 + 相关性排序，排序阈值固定为
+    /// [`crate::harness::scoring::DEFAULT_TOOL_SORT_THRESHOLD`]。保留字段仅为兼容旧
+    /// agent.yaml / DB 列；前端 agent 工具配置 UI 落地前不再接入运行时。
     #[serde(default)]
     pub tool_trim_threshold: Option<i32>,
     /// Phase 0: 模型上下文窗口（None = 运行时按 provider+model 查默认表）
@@ -229,7 +233,8 @@ pub struct Agent {
     /// A3-2: 历史消息窗口上限（None 表示使用系统默认值）。
     #[serde(default)]
     pub max_history_messages: Option<i32>,
-    /// M1.2 A2-4: 工具裁剪阈值（None 表示使用系统默认值 5）。
+    /// 已废弃（存而不读）：工具改为全量发送 + 相关性排序，阈值固定为
+    /// scoring::DEFAULT_TOOL_SORT_THRESHOLD。保留字段仅为兼容旧 agent.yaml。
     #[serde(default)]
     pub tool_trim_threshold: Option<i32>,
     /// Phase 0: 模型上下文窗口（None = 运行时按 provider+model 查已知默认表）。
@@ -345,7 +350,8 @@ pub struct NewAgent {
     /// 旧调用方无需关心（`#[serde(default)]` 兜底为 None）。
     #[serde(default)]
     pub max_history_messages: Option<i32>,
-    /// M1.2 A2-4: 工具裁剪阈值（None = 使用系统默认 5）。
+    /// 已废弃（存而不读）：工具改为全量发送 + 相关性排序，阈值固定为
+    /// scoring::DEFAULT_TOOL_SORT_THRESHOLD。保留字段仅为兼容旧 agent.yaml。
     #[serde(default)]
     pub tool_trim_threshold: Option<i32>,
     /// Phase 0: 模型上下文窗口（None = 运行时按 provider+model 查已知默认表）。
@@ -390,8 +396,9 @@ pub struct AgentUpdate {
     /// A3-2: 历史消息窗口上限。
     /// 双层 Option：外层 Some 表示调用方传了该字段，内层 None 表示清空（恢复为系统默认）。
     pub max_history_messages: Option<Option<i32>>,
-    /// M1.2 A2-4: 工具裁剪阈值。
-    /// 双层 Option：外层 Some 表示调用方传了该字段，内层 None 表示清空（恢复为系统默认）。
+    /// 已废弃（存而不读）：工具改为全量发送 + 相关性排序，阈值固定为
+    /// scoring::DEFAULT_TOOL_SORT_THRESHOLD。保留字段仅为兼容旧 agent.yaml。
+    /// 双层 Option：外层 Some 表示调用方传了该字段，内层 None 表示清空。
     pub tool_trim_threshold: Option<Option<i32>>,
     /// Phase 0: 模型上下文窗口。双层 Option：
     /// - None = 不更新

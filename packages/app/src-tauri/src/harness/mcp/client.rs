@@ -286,23 +286,27 @@ impl McpRegistry {
             .collect()
     }
 
-    /// 列出工具定义，并按 query 相关性打分 + 软裁剪
+    /// 列出工具定义；工具数超过 `sort_threshold` 时按 query 相关性排序，否则保持注册原序。
     ///
-    /// 行为与旧 `ToolRegistry::list_tool_defs_with_query` 完全一致。
+    /// **所有工具始终全量返回**——排序只影响顺序（相关工具靠前），不裁剪、不降级、
+    /// 不追加 `[deprioritized]` 标记。旧实现会给靠后工具打降级标记，导致 agent 误判
+    /// 新增/远程工具不可用（如 GLM 系列）；全量无标记设计专为修正该行为。
+    ///
+    /// `sort_threshold`：工具数 > 此值才打分排序；`None` 永不排序（原序全发）。
+    /// 推荐传 [`crate::harness::scoring::DEFAULT_TOOL_SORT_THRESHOLD`]。
     pub async fn list_tool_defs_with_query(
         &self,
         query: &str,
-        trim_threshold: Option<usize>,
-        trim_top_k: usize,
+        sort_threshold: Option<usize>,
         call_history: &[String],
     ) -> Vec<ToolDef> {
         let defs = self.list_tool_defs().await;
 
-        let need_trim = match trim_threshold {
+        let need_sort = match sort_threshold {
             Some(th) => defs.len() > th,
             None => false,
         };
-        if !need_trim {
+        if !need_sort {
             return defs;
         }
 
@@ -315,9 +319,7 @@ impl McpRegistry {
             sb.cmp(&sa).then(a.cmp(&b))
         });
 
-        let mut ordered: Vec<ToolDef> = order.into_iter().map(|i| defs[i].clone()).collect();
-        crate::harness::scoring::apply_trim_markers(&mut ordered, trim_top_k);
-        ordered
+        order.into_iter().map(|i| defs[i].clone()).collect()
     }
 
     /// 执行工具（带上下文）
@@ -357,8 +359,9 @@ impl McpRegistry {
 
     /// 从 source 强制注入所有平台元工具（[`PLATFORM_META_TOOLS`]），忽略 agent 白名单。
     ///
-    /// 在白名单分支（`register_names_from`）之后调用，确保即使 agent 的 `enabled_tools`
-    /// 未列出元工具，它们仍可用——否则 agent 会退而用文件工具直接改 agent.yaml 绕过审批。
+    /// 当前组装默认全开（`from_map(snapshot)` 已含元工具），此方法暂未在组装路径调用；
+    /// 保留供将来 agent 工具白名单 UI 启用时恢复——届时白名单分支需调它补元工具，否则
+    /// agent 会退而用文件工具直接改 agent.yaml 绕过审批。
     pub async fn register_meta_tools(&self, source: &McpRegistry) {
         for &name in PLATFORM_META_TOOLS {
             if let Some(client) = source.get(name).await {
@@ -513,7 +516,7 @@ mod tests {
     }
 
     // =====================================================================
-    // list_tool_defs_with_query 单测（与旧 ToolRegistry 测试等价）
+    // list_tool_defs_with_query 单测——纯排序语义（全量发送，不裁剪不标记）
     // =====================================================================
 
     async fn make_registry_with_n_tools(n: usize) -> McpRegistry {
@@ -529,73 +532,72 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn trim_threshold_above_does_nothing() {
+    async fn sort_threshold_above_no_reorder() {
+        // 工具数(2) ≤ 阈值(5) → 不排序。验「未触发排序 → 与 baseline 一致」；
+        // baseline 取自 list_tool_defs()（HashMap 序，非插入序），故此处断言的是
+        // 「无 reorder」而非字面注册顺序。
         let registry = make_registry_with_n_tools(2).await;
-        let out = registry
-            .list_tool_defs_with_query("", Some(5), 1, &[])
-            .await;
+        let baseline = registry.list_tool_defs().await;
+        let out = registry.list_tool_defs_with_query("", Some(5), &[]).await;
+        let names: Vec<_> = out.iter().map(|d| d.name.clone()).collect();
+        let base_names: Vec<_> = baseline.iter().map(|d| d.name.clone()).collect();
         assert_eq!(out.len(), 2);
-        assert!(out.iter().all(|d| !d.description.ends_with(" [deprioritized]")));
+        assert_eq!(names, base_names, "未达排序阈值应与 baseline 一致（无 reorder）");
     }
 
     #[tokio::test]
-    async fn trim_threshold_triggers_soft_trim() {
+    async fn sort_threshold_keeps_all_tools() {
+        // 工具数(4) > 阈值(2) → 触发排序；核心保证是「不丢工具」（全量返回）。
+        // reorder 的正确性由 sort_ranks_query_match_first 覆盖（这里 query="" 全 0 分，
+        // 稳定排序保持原序，观察不到 reorder）。
+        let registry = make_registry_with_n_tools(4).await;
+        let out = registry.list_tool_defs_with_query("", Some(2), &[]).await;
+        assert_eq!(out.len(), 4, "排序不得丢工具");
+    }
+
+    #[tokio::test]
+    async fn sort_never_adds_deprioritized_marker() {
+        // 关键回归：无论是否排序，description 都不得被追加降级标记
+        let registry = make_registry_with_n_tools(5).await;
+        let out = registry.list_tool_defs_with_query("", Some(2), &[]).await;
+        assert!(
+            out.iter().all(|d| !d.description.contains("deprioritized")),
+            "新设计永不标记工具，实际: {:?}",
+            out.iter().map(|d| &d.description).collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn sort_ranks_query_match_first() {
+        // query 命中某工具描述 → 该工具应排到最前（且仍全量、无标记）
         let registry = make_registry_with_n_tools(4).await;
         let out = registry
-            .list_tool_defs_with_query("", Some(2), 1, &[])
+            .list_tool_defs_with_query("tool 3", Some(2), &[])
             .await;
         assert_eq!(out.len(), 4);
-        let unmarked = out.iter().filter(|d| !d.description.ends_with(" [deprioritized]")).count();
-        assert_eq!(unmarked, 1);
-        let marked = out.iter().filter(|d| d.description.ends_with(" [deprioritized]")).count();
-        assert_eq!(marked, 3);
+        assert_eq!(out[0].name, "tool_3", "query 命中的工具应排首位");
     }
 
     #[tokio::test]
-    async fn trim_preserves_top_k_count() {
-        let registry = make_registry_with_n_tools(5).await;
-        let out = registry
-            .list_tool_defs_with_query("", Some(2), 3, &[])
-            .await;
-        let unmarked = out.iter().filter(|d| !d.description.ends_with(" [deprioritized]")).count();
-        assert_eq!(unmarked, 3);
-        let marked = out.iter().filter(|d| d.description.ends_with(" [deprioritized]")).count();
-        assert_eq!(marked, 2);
-    }
-
-    #[tokio::test]
-    async fn trim_with_empty_history_falls_back_to_score() {
-        let registry = make_registry_with_n_tools(4).await;
-        let out = registry
-            .list_tool_defs_with_query("tool 3", Some(2), 1, &[])
-            .await;
-        assert_eq!(out[0].name, "tool_3");
-        assert!(!out[0].description.ends_with(" [deprioritized]"));
-        for d in &out[1..] {
-            assert!(d.description.ends_with(" [deprioritized]"));
-        }
-    }
-
-    #[tokio::test]
-    async fn trim_under_cfg_equals_trivially() {
+    async fn sort_none_threshold_no_reorder() {
+        // None → 永不排序。验「与 baseline 一致（无 reorder）」；baseline 为 HashMap 序。
         let registry = make_registry_with_n_tools(3).await;
-        let out = registry
-            .list_tool_defs_with_query("anything", None, 1, &[])
-            .await;
         let baseline = registry.list_tool_defs().await;
+        let out = registry
+            .list_tool_defs_with_query("anything", None, &[])
+            .await;
+        let names: Vec<_> = out.iter().map(|d| d.name.clone()).collect();
+        let base_names: Vec<_> = baseline.iter().map(|d| d.name.clone()).collect();
         assert_eq!(out.len(), baseline.len());
-        assert!(out.iter().all(|d| !d.description.ends_with(" [deprioritized]")));
+        assert_eq!(names, base_names, "None 阈值应与 baseline 一致（无 reorder）");
     }
 
     #[tokio::test]
-    async fn trim_threshold_zero_triggers_always() {
+    async fn sort_threshold_zero_always_sorts_but_keeps_all() {
+        // Some(0) → 工具数总 > 0 → 总触发排序，但仍全量
         let registry = make_registry_with_n_tools(2).await;
-        let out = registry
-            .list_tool_defs_with_query("", Some(0), 1, &[])
-            .await;
-        assert_eq!(out.len(), 2);
-        let unmarked = out.iter().filter(|d| !d.description.ends_with(" [deprioritized]")).count();
-        assert_eq!(unmarked, 1);
+        let out = registry.list_tool_defs_with_query("", Some(0), &[]).await;
+        assert_eq!(out.len(), 2, "即便总触发排序也不得丢工具");
     }
 
     #[tokio::test]
