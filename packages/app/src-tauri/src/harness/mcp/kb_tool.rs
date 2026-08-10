@@ -881,8 +881,8 @@ mod tests {
             .execute_with_context(r#"{"query":"如何搭建网络服务","limit":3}"#, &ctx)
             .await
             .unwrap();
-        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
-        eprintln!("search_kb 返回: {v}");
+        // 验证 search_kb 返回值为合法 JSON
+        let _: serde_json::Value = serde_json::from_str(&result).unwrap();
 
         // 关键断言：语义路径执行后，embedding 应被填充。
         // 修复前 try_semantic_search 读配置失败 → return None → 不生成 → 这里会是 0。

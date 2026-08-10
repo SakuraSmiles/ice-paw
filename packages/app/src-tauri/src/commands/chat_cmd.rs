@@ -239,6 +239,20 @@ pub async fn send_message(
     // 从 Agent extra_params 读取工具调用最大轮数 + Token 预算
     let tool_max_rounds = agent.tool_max_rounds();
     let agent_max_tokens = agent.max_total_tokens();
+    // model-aware 预算兜底：agent 未显式设 max_total_tokens 时，按上下文窗口自适应
+    //（默认 3× 窗口）。累计成本语义下 Σ(prompt_i+completion_i) = provider 真实毛成本，
+    // prompt 随历史单调增长；3× 窗口让正常长会话不被误杀，失控循环仍兜得住。
+    // 窗口解析与 Phase 0 上下文预算同源（agent 显式 → 模型表 → 128K 兜底）。
+    let budget_max_tokens = agent_max_tokens.unwrap_or_else(|| {
+        let window = agent
+            .context_window
+            .map(|v| v as usize)
+            .or_else(|| {
+                crate::harness::provider::default_context_window(&agent.provider, &agent.model)
+            })
+            .unwrap_or(128_000);
+        window.saturating_mul(3)
+    });
     // 使用共享的工具授权注册表（与 lib.rs install_listener 实例一致）
     let shared_auth_registry = (*auth_registry).clone();
 
@@ -302,7 +316,7 @@ pub async fn send_message(
         assembled.messages, agent.temperature, agent.max_tokens,
         cancel_token, conv_id, user_msg_id, asst_msg_id, tools_enabled,
         current_user_query, tool_call_history,
-        model_override, Some(effective_model), tool_max_rounds, agent_max_tokens, shared_auth_registry,
+        model_override, Some(effective_model), tool_max_rounds, budget_max_tokens, shared_auth_registry,
         tool_registry,
         conv.agent_id.clone(), conv.project_id.clone(),
         hooks,
@@ -439,7 +453,7 @@ fn spawn_stream_loop(
     model_override: Option<String>,
     asst_model: Option<String>,
     tool_max_rounds: Option<u32>,
-    agent_max_tokens: Option<usize>,
+    budget_max_tokens: usize,
     auth_registry: crate::harness::tool_executor::ToolAuthRegistry,
     tool_registry: McpRegistry,
     agent_id: String,
@@ -466,7 +480,7 @@ fn spawn_stream_loop(
         // W4.1: 传入 LoopBudget（优先使用 Agent 配置）
         let budget = LoopBudget {
             max_tool_rounds: tool_max_rounds.unwrap_or(LoopBudget::default().max_tool_rounds),
-            max_total_tokens: agent_max_tokens.unwrap_or(LoopBudget::default().max_total_tokens),
+            max_total_tokens: budget_max_tokens,
             ..LoopBudget::default()
         };
         let emit_app = app.clone();

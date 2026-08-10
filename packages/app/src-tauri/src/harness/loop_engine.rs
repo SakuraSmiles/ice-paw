@@ -65,7 +65,8 @@ use tauri::Emitter;
 use uuid::Uuid;
 
 use crate::harness::cleanup::{
-    fail_round_and_cancel, finalize_assistant_message, finalize_cancel, finalize_success,
+    fail_round_and_cancel, finalize_assistant_message, finalize_assistant_without_tool_use,
+    finalize_cancel, finalize_success,
 };
 use crate::db::models::{HookPoint, NewMessage};
 use crate::db::repo;
@@ -282,6 +283,14 @@ async fn stream_loop_inner(
                     total_completion_tokens =
                         total_completion_tokens.saturating_add(u.completion_tokens);
                     round_completion_tokens = Some(u.completion_tokens);
+                    // W4.2: Token 预算累计 —— 必须基于【本轮】usage 累加。prompt+completion 均为
+                    // provider 该轮真实计费的毛成本（历史每轮被重发、被重新计费，故 Σ 跨轮 prompt
+                    // 不是虚高而是真实开销）。关键：只能用本轮 `u`，不可复用跨轮 collected_usage
+                    //——后者在 provider 间歇不回 usage 时保留上一轮旧值，会被每轮重复累加导致虚高。
+                    //（须在下方 `collected_usage = Some(u)` move 之前读取 u 的字段。）
+                    cumulative_tokens = cumulative_tokens
+                        .saturating_add(u.prompt_tokens as usize)
+                        .saturating_add(u.completion_tokens as usize);
                     collected_usage = Some(u);
                 }
                 // 【彻底重构】token_count 由本轮 finalize_assistant_message 即时写入
@@ -316,12 +325,7 @@ async fn stream_loop_inner(
         // 【改】推「本轮」文本到 BatchWriter（原为跨轮 all_text）
         batch_writer.push_text(round_text.clone()).await;
 
-        // W4.2: Token 预算累计。注意：每轮 prompt_tokens 已含全部历史，跨轮累加会重复
-        // 计入早期轮次 → 预算检查偏保守（可能略早触发 budget_exceeded）。这是有意的安全
-        // 倾向；若需精确，可改为只累加 completion + 首轮 prompt。
-        if let Some(ref usage) = collected_usage {
-            cumulative_tokens += usage.prompt_tokens as usize + usage.completion_tokens as usize;
-        }
+        // W4.2: Token 预算累计已在上方 Ok 分支内完成（基于本轮 usage），此处不再累加。
 
         // 提取本轮已完成的工具调用（id, name, arguments）
         let completed_calls: Vec<(String, String, String)> = tool_calls_map
@@ -350,53 +354,29 @@ async fn stream_loop_inner(
             });
         }
 
-        // cancel 检查（落盘前）：consume_stream 可能因 cancel 返回部分内容。
-        //  - 剔除 tool_use 后仍有内容（thinking/text）→ 只落盘这些，避免孤儿 tool_use（C1：
-        //    tool_use 已输出但 cancel 不补 tool_result，留下会让下轮历史触发 400）
-        //  - 剔除后无内容（空占位 / 仅未执行的 tool_use）→ 删除占位行（M3）
+        // 【阶段 C0】终止检查关口（落盘前）—— cancel / budget / stuck 三者都在 tool_use
+        // 落盘（阶段 C 的 finalize_assistant_message）之前判定。命中终止时由守卫
+        // finalize_assistant_without_tool_use 剔除 ToolUse 后落盘（或删占位），杜绝「有
+        // tool_use 无 tool_result」孤儿（→ thinking-only → OpenAI 400 会话卡死）。
+        // 守卫判定用 has_text（与 sanitize_history 对齐），比原 cancel 的 is_empty() 更严格。
+
+        // cancel：fallback=None（无文本则删占位；有 text/thinking 则保留剔除 tool_use 后版本）
         if ctx.cancel.is_cancelled() {
-            let cancel_blocks: Vec<ContentBlock> = round_blocks
-                .iter()
-                .filter(|b| !matches!(b, ContentBlock::ToolUse { .. }))
-                .cloned()
-                .collect();
-            if cancel_blocks.is_empty() && round_text.is_empty() {
-                if let Err(e) = repo::message::delete(&ctx.pool, &current_asst_msg_id).await {
-                    tracing::warn!(
-                        target: "ice_paw.chat",
-                        "删除 cancel 时的空占位失败: msg_id={}, err={}",
-                        current_asst_msg_id,
-                        e
-                    );
-                }
-            } else {
-                batch_writer.flush_now().await;
-                finalize_assistant_message(
-                    &ctx.pool,
-                    &current_asst_msg_id,
-                    &round_text,
-                    &cancel_blocks,
-                    round_completion_tokens,
-                )
-                .await;
-            }
+            let _ = finalize_assistant_without_tool_use(
+                &ctx.pool,
+                &batch_writer,
+                &current_asst_msg_id,
+                &round_text,
+                &round_blocks,
+                round_completion_tokens,
+                None,
+            )
+            .await;
             return finalize_cancel(&ctx.app, &ctx.pool, &ctx.conv_id, &current_asst_msg_id);
         }
 
-        // 【阶段 C】即时持久化当前 assistant（权威快照：content + blocks + 本轮 token）。
-        // 先 flush_now 落盘 BatchWriter 的 streaming 文本，再同步写权威 blocks；本轮结束后
-        // set_msg_id 会切到新消息，避免后到的 flush 覆盖本轮 blocks。
-        batch_writer.flush_now().await;
-        finalize_assistant_message(
-            &ctx.pool,
-            &current_asst_msg_id,
-            &round_text,
-            &round_blocks,
-            round_completion_tokens,
-        )
-        .await;
-
-        // W4.2: Token 预算终止检查（当前 assistant 已 finalize，只需收尾）
+        // W4.2: Token 预算终止检查（落盘前）。fallback=Some 保证纯 tool_use / thinking-only
+        // 轮也写入终止说明，msg_id 恒有效（finalize_success 需 final_asst_msg_id 指向真实消息）。
         if ctx.budget.max_total_tokens != usize::MAX
             && cumulative_tokens > ctx.budget.max_total_tokens
         {
@@ -406,6 +386,16 @@ async fn stream_loop_inner(
                 cumulative_tokens,
                 ctx.budget.max_total_tokens,
             );
+            finalize_assistant_without_tool_use(
+                &ctx.pool,
+                &batch_writer,
+                &current_asst_msg_id,
+                &round_text,
+                &round_blocks,
+                round_completion_tokens,
+                Some("（本次累计 token 达到上限，已停止。发送新消息即可继续。）"),
+            )
+            .await;
             return finalize_success(
                 &ctx.app,
                 &ctx.pool,
@@ -418,7 +408,7 @@ async fn stream_loop_inner(
             );
         }
 
-        // === M2.1: 停滞检测（dev1 三级级联 L1 简化方案） ===
+        // === M2.1: 停滞检测（落盘前）===
         // 计算本轮进度指纹（progress_text + 已完成工具调用 name:arguments），
         // 与上一轮对比，更新连续未进展计数器。
         // 触发条件：连续 `stuck_threshold` 轮 hash 完全相同
@@ -450,6 +440,16 @@ async fn stream_loop_inner(
                 stuck_counter,
                 ctx.budget.stuck_threshold,
             );
+            finalize_assistant_without_tool_use(
+                &ctx.pool,
+                &batch_writer,
+                &current_asst_msg_id,
+                &round_text,
+                &round_blocks,
+                round_completion_tokens,
+                Some("（检测到工具调用循环停滞，已停止。发送新消息即可继续。）"),
+            )
+            .await;
             return finalize_success(
                 &ctx.app,
                 &ctx.pool,
@@ -462,7 +462,23 @@ async fn stream_loop_inner(
             );
         }
 
-        // 最终轮（本轮无工具调用）→ 当前 assistant 已 finalize，直接收尾
+        // 【阶段 C】即时持久化当前 assistant（权威快照：content + blocks + 本轮 token）。
+        // 到达此处 = 未命中任何终止条件（本轮有 tool_use 且即将执行工具）→ 此时落盘
+        // tool_use 安全（紧随其后的阶段 E 会配对 tool_result）。
+        // 先 flush_now 落盘 BatchWriter 的 streaming 文本，再同步写权威 blocks；本轮结束后
+        // set_msg_id 会切到新消息，避免后到的 flush 覆盖本轮 blocks。
+        batch_writer.flush_now().await;
+        finalize_assistant_message(
+            &ctx.pool,
+            &current_asst_msg_id,
+            &round_text,
+            &round_blocks,
+            round_completion_tokens,
+        )
+        .await;
+
+        // 最终轮（本轮无工具调用）→ 当前 assistant 已 finalize，直接收尾。
+        // round_blocks 此时无 ToolUse，落盘安全。
         if completed_calls.is_empty() {
             return finalize_success(
                 &ctx.app,
@@ -515,11 +531,22 @@ async fn stream_loop_inner(
         {
             Ok(blocks) => blocks,
             Err(e) => {
-                // 工具执行编排整体失败 → 无法构造有效的 tool_result，
-                // 注入空 user 消息会破坏 Anthropic 协议（tool_use 无对应
-                // tool_result），导致后续轮次 400。视为致命错误中断循环。
+                // 工具执行编排整体失败 → 无法构造有效的 tool_result，已落盘的 tool_use
+                // （阶段 C）会成孤儿。对称清场：剔除 tool_use 后 re-finalize（UPDATE 同行
+                // 幂等覆盖），再 fail。若 round 无 text → 守卫删占位，update_error 会
+                // NotFound（warn），但 chat:error / chat:done 事件照常 emit。
                 let err_msg = format!("工具执行失败: {}", e);
                 tracing::error!(target: "ice_paw.chat", "{}", err_msg);
+                let _ = finalize_assistant_without_tool_use(
+                    &ctx.pool,
+                    &batch_writer,
+                    &current_asst_msg_id,
+                    &round_text,
+                    &round_blocks,
+                    round_completion_tokens,
+                    None,
+                )
+                .await;
                 return fail_round_and_cancel(
                     &ctx.app,
                     &ctx.pool,
@@ -571,12 +598,39 @@ async fn stream_loop_inner(
         if let Err(e) =
             repo::message::update_content_blocks(&ctx.pool, &user_tool_msg_id, &result_json).await
         {
-            tracing::warn!(
-                target: "ice_paw.chat",
-                "回写 tool_result content_blocks 失败: msg_id={}, err={}",
-                user_tool_msg_id,
-                e
-            );
+            // tool_result 写盘失败 → 已落盘的 tool_use（阶段 C）会成孤儿（user 占位
+            // content_blocks='[]'，下次加载回退 content="" 被 sanitize 丢弃 → tool_use 无
+            // 配对）。对称清场：剔除 assistant 的 tool_use + 删空 user 占位 + fail。
+            // 当场暴露 SQLite I/O 故障，优于延迟到下次会话 400 爆炸。
+            let err_msg = format!("持久化工具结果失败: {}", e);
+            tracing::error!(target: "ice_paw.chat", "{}: msg_id={}", err_msg, user_tool_msg_id);
+            let _ = finalize_assistant_without_tool_use(
+                &ctx.pool,
+                &batch_writer,
+                &current_asst_msg_id,
+                &round_text,
+                &round_blocks,
+                round_completion_tokens,
+                None,
+            )
+            .await;
+            if let Err(de) = repo::message::delete(&ctx.pool, &user_tool_msg_id).await {
+                tracing::warn!(
+                    target: "ice_paw.chat",
+                    "删除空 user 占位失败: msg_id={}, err={}",
+                    user_tool_msg_id,
+                    de
+                );
+            }
+            return fail_round_and_cancel(
+                &ctx.app,
+                &ctx.pool,
+                &ctx.conv_id,
+                &current_asst_msg_id,
+                "internal",
+                &err_msg,
+            )
+            .await;
         }
 
         // 【阶段 G】ctx.messages 追加本轮 assistant(tool_use) + user(tool_result)。

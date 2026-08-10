@@ -52,6 +52,7 @@ _preview-*.html
 
 # Backup files
 *.bak
+.icepaw-backup/
 
 # Environment
 .env

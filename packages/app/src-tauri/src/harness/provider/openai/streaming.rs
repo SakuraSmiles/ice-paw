@@ -47,6 +47,9 @@ pub(crate) fn parse_sse_stream<S, E>(
         // 追踪每个工具调用的状态：index → (id, name, arguments_buffer, started)
         let mut tool_call_states: HashMap<usize, (String, String, String, bool)> =
             HashMap::new();
+        // OpenAI 的 usage chunk 排在 finish_reason 之后，finish_reason 分支只记下原因、
+        // 不立即发 Done；真正的 Done 由 [DONE] 分支或流自然结束兜底带此原因发出。
+        let mut pending_finish_reason: Option<String> = None;
 
         while let Some(chunk_result) = byte_stream.next().await {
             // 取消检查
@@ -111,9 +114,12 @@ pub(crate) fn parse_sse_stream<S, E>(
                 // 未完成的 ToolCallEnd 已由 finish_reason 分支负责发送（若流以 [DONE]
                 // 直接收尾而未带 finish_reason，则视为自然结束，发送兜底 Done 即可）。
                 if data == "[DONE]" {
+                    // 流正式结束：带上之前 finish_reason chunk 记下的原因（若有）
                     let _ = tx
                         .send(Ok(ChatDelta::Done {
-                            finish_reason: Some("stop".into()),
+                            finish_reason: pending_finish_reason
+                                .take()
+                                .or_else(|| Some("stop".into())),
                         }))
                         .await;
                     return;
@@ -121,11 +127,15 @@ pub(crate) fn parse_sse_stream<S, E>(
 
                 // 解析 JSON
                 match serde_json::from_str::<SseChunk>(data) {
-                    Ok(parsed) => {
-                        // P2-3: 处理 streaming usage（choices 为空但 usage 存在）
-                        if parsed.choices.is_empty() {
-                            if let Some(usage) = parsed.usage {
-                                let _ = tx.send(Ok(ChatDelta::Usage {
+                    Ok(mut parsed) => {
+                        // P2-3: 处理 streaming usage。OpenAI/deepseek 开 include_usage 后，
+                        // usage 出现在流末尾的独立 chunk（choices 为空），排在 finish_reason
+                        // 之后；少数兼容端点把 usage 与 finish_reason 放同一 chunk。统一用
+                        // take() 在处理 choices 前提取，两种情况都覆盖（否则 usage 丢失 →
+                        // token_count=0、max_total_tokens 预算熔断对 OpenAI 路径失效）。
+                        if let Some(usage) = parsed.usage.take() {
+                            let _ = tx
+                                .send(Ok(ChatDelta::Usage {
                                     usage: TokenUsage {
                                         prompt_tokens: usage.prompt_tokens.unwrap_or(0),
                                         completion_tokens: usage.completion_tokens.unwrap_or(0),
@@ -133,8 +143,11 @@ pub(crate) fn parse_sse_stream<S, E>(
                                             .and_then(|d| d.cached_tokens)
                                             .unwrap_or(0),
                                     },
-                                })).await;
-                            }
+                                }))
+                                .await;
+                        }
+                        // choices 为空（纯 usage chunk 或心跳）→ 无内容增量
+                        if parsed.choices.is_empty() {
                             continue;
                         }
 
@@ -151,12 +164,13 @@ pub(crate) fn parse_sse_stream<S, E>(
                                             .await;
                                     }
                                 }
-                                let _ = tx
-                                    .send(Ok(ChatDelta::Done {
-                                        finish_reason: Some(fr),
-                                    }))
-                                    .await;
-                                return;
+                                // 工具调用已全部 End，清空避免流自然结束兜底时重复发送。
+                                tool_call_states.clear();
+                                // 记下 finish_reason，但不立即发 Done / return：OpenAI 的
+                                // usage chunk 紧随 finish_reason，提前 return 会让 usage 永远
+                                // 读不到。Done 改由 [DONE] 分支或流结束兜底带此原因发出。
+                                pending_finish_reason = Some(fr);
+                                continue;
                             }
 
                             // 正常内容增量
@@ -209,7 +223,7 @@ pub(crate) fn parse_sse_stream<S, E>(
         }
 
         // 字节流自然结束（未收到 [DONE]）— 优雅收尾
-        // 发送未完成的 ToolCallEnd
+        // 发送未完成的 ToolCallEnd（finish_reason 分支已 clear，通常为空）
         for (id, _, _, started) in tool_call_states.values() {
             if *started {
                 let _ = tx
@@ -219,7 +233,7 @@ pub(crate) fn parse_sse_stream<S, E>(
         }
         let _ = tx
             .send(Ok(ChatDelta::Done {
-                finish_reason: Some("stop".into()),
+                finish_reason: pending_finish_reason.or_else(|| Some("stop".into())),
             }))
             .await;
     });
@@ -281,7 +295,7 @@ async fn process_tool_call_deltas(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::infra::protocol::ChatDelta;
+    use crate::infra::protocol::{ChatDelta, TokenUsage};
     use bytes::Bytes;
     use futures::stream;
     use tokio::sync::mpsc;
@@ -328,6 +342,84 @@ mod tests {
             done_reason,
             Some(Some("stop".to_string())),
             "Done 应携带 finish_reason=stop"
+        );
+    }
+
+    /// 回归：usage chunk 在 finish_reason 之后的独立 chunk（OpenAI/deepseek 开
+    /// include_usage 的真实顺序）。修复前 finish_reason 分支提前 return，usage chunk
+    /// 永远读不到 → token_count=0、max_total_tokens 预算熔断对 OpenAI 路径失效。
+    #[tokio::test]
+    async fn sse_parse_usage_chunk_after_finish_reason() {
+        // 真实顺序：内容 → finish_reason chunk → usage chunk（choices 空）→ [DONE]
+        let raw = b"data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\
+                   data: {\"choices\":[{\"finish_reason\":\"stop\",\"delta\":{}}]}\n\
+                   data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":4}}\n\
+                   data: [DONE]\n";
+
+        let chunks: Vec<Result<Bytes, std::io::Error>> =
+            vec![Ok(Bytes::copy_from_slice(raw))];
+        let byte_stream = stream::iter(chunks);
+        let (tx, mut rx) = mpsc::channel::<AppResult<ChatDelta>>(64);
+        let cancel = CancellationToken::new();
+        parse_sse_stream(byte_stream, tx, cancel);
+
+        let mut deltas: Vec<String> = Vec::new();
+        let mut got_usage: Option<TokenUsage> = None;
+        let mut done_reason: Option<Option<String>> = None;
+        while let Some(item) = rx.recv().await {
+            match item {
+                Ok(ChatDelta::Delta { content }) => deltas.push(content),
+                Ok(ChatDelta::Usage { usage }) => got_usage = Some(usage),
+                Ok(ChatDelta::Done { finish_reason }) => done_reason = Some(finish_reason),
+                Ok(other) => panic!("不应出现的 ChatDelta 变体: {other:?}"),
+                Err(e) => panic!("不应出现错误: {e:?}"),
+            }
+        }
+
+        assert_eq!(deltas, vec!["hi".to_string()]);
+        let usage = got_usage.expect("必须收到 usage（修复前此处为 None）");
+        assert_eq!(usage.prompt_tokens, 10);
+        assert_eq!(usage.completion_tokens, 4);
+        assert_eq!(
+            done_reason,
+            Some(Some("stop".to_string())),
+            "Done 仍应携带 finish_reason"
+        );
+    }
+
+    /// 回归：少数兼容端点把 usage 与 finish_reason 放在同一 chunk（choices 非空）。
+    /// take() 在处理 choices 前提取，此情况也覆盖。
+    #[tokio::test]
+    async fn sse_parse_usage_in_finish_reason_chunk() {
+        let raw = b"data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\
+                   data: {\"choices\":[{\"finish_reason\":\"length\",\"delta\":{}}],\"usage\":{\"prompt_tokens\":20,\"completion_tokens\":8}}\n\
+                   data: [DONE]\n";
+
+        let chunks: Vec<Result<Bytes, std::io::Error>> =
+            vec![Ok(Bytes::copy_from_slice(raw))];
+        let byte_stream = stream::iter(chunks);
+        let (tx, mut rx) = mpsc::channel::<AppResult<ChatDelta>>(64);
+        let cancel = CancellationToken::new();
+        parse_sse_stream(byte_stream, tx, cancel);
+
+        let mut got_usage: Option<TokenUsage> = None;
+        let mut done_reason: Option<Option<String>> = None;
+        while let Some(item) = rx.recv().await {
+            match item {
+                Ok(ChatDelta::Delta { .. }) => {} // 忽略内容增量
+                Ok(ChatDelta::Usage { usage }) => got_usage = Some(usage),
+                Ok(ChatDelta::Done { finish_reason }) => done_reason = Some(finish_reason),
+                Ok(other) => panic!("不应出现的 ChatDelta 变体: {other:?}"),
+                Err(e) => panic!("不应出现错误: {e:?}"),
+            }
+        }
+
+        let usage = got_usage.expect("同 chunk 的 usage 也必须提取");
+        assert_eq!(usage.completion_tokens, 8);
+        assert_eq!(
+            done_reason,
+            Some(Some("length".to_string())),
+            "Done 应携带 finish_reason=length"
         );
     }
 

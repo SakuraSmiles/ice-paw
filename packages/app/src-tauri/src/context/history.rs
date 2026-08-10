@@ -210,7 +210,16 @@ pub(crate) fn sanitize_history(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
                 content.push(block);
             }
         }
-        if !content.is_empty() {
+        // assistant 消息必须含 Text 或 ToolUse——OpenAI 协议要求 assistant 的 content
+        // 或 tool_calls 至少其一非空。孤儿 tool_use 被上文剔除后，assistant 可能仅剩
+        // Thinking 块（thinking 在 OpenAI 序列化层被丢弃 → content=null 且无 tool_calls），
+        // 这种消息发给 deepseek 等严格端点会 400「content or tool_calls must be set」，
+        // 且一旦写入历史，每轮都带上 → 会话永久卡死。这里整体丢弃；丢弃后产生的连续
+        // 同角色由下一步合并处理，不会破坏 user/assistant 交替。
+        let has_text = content.iter().any(|b| matches!(b, ContentBlock::Text { .. }));
+        let has_tool_use = content.iter().any(|b| matches!(b, ContentBlock::ToolUse { .. }));
+        let drop_msg = role == "assistant" && !has_text && !has_tool_use;
+        if !content.is_empty() && !drop_msg {
             filtered.push(ChatMessage { role, content, source_rowid });
         }
     }
@@ -753,6 +762,69 @@ mod tests {
         let asst = out.iter().find(|m| m.role == "assistant").expect("assistant 应保留");
         assert_eq!(asst.content.len(), 1, "仅剩文本块");
         assert!(matches!(asst.content[0], ContentBlock::Text { .. }));
+    }
+
+    #[test]
+    fn sanitize_drops_thinking_only_assistant() {
+        // 孤儿 tool_use 被剔除后，assistant 仅剩 thinking → 无法序列化为合法 OpenAI
+        // assistant（content=null 且无 tool_calls，deepseek 等严格端点 400）。必须整体丢弃。
+        // 真实场景：reasoning 模型产出 [thinking + tool_use]，但 tool_use 的 result 丢失
+        // （工具中断/出错未补结果），下一条是纯文本 user → tool_use 成孤儿被剔除。
+        let out = sanitize_history(vec![
+            cm("user", vec![text_blk("q")]),
+            cm("assistant", vec![
+                ContentBlock::Thinking { thinking: "let me try...".into(), signature: None },
+                tu("orphan"),
+            ]),
+            cm("user", vec![text_blk("情况如何了？")]),
+            cm("assistant", vec![text_blk("ok")]),
+        ]);
+        // thinking-only assistant 被丢弃；两个 user 合并 → [user(merged), assistant(ok)]
+        assert_eq!(out.len(), 2, "thinking-only assistant 应被丢弃");
+        assert_eq!(out[0].role, "user");
+        assert_eq!(out[0].content.len(), 2, "两个 user 文本块应合并");
+        assert_eq!(out[1].role, "assistant");
+        assert_eq!(out[1].content_text(), "ok");
+        // 不应残留任何 thinking-only assistant
+        assert!(
+            !out.iter().any(|m| m.role == "assistant"
+                && !m.content.is_empty()
+                && m.content.iter().all(|b| matches!(b, ContentBlock::Thinking { .. }))),
+            "不应残留 thinking-only assistant"
+        );
+    }
+
+    #[test]
+    fn sanitize_keeps_assistant_with_thinking_and_text() {
+        // assistant 同时含 thinking 和 text → 有合法 content，不应被丢弃（thinking 保留，
+        // 由序列化层决定是否发送；此处只确保不被 sanitize 误删）。
+        let out = sanitize_history(vec![
+            cm("user", vec![text_blk("q")]),
+            cm("assistant", vec![
+                ContentBlock::Thinking { thinking: "h".into(), signature: None },
+                text_blk("answer"),
+            ]),
+            cm("user", vec![text_blk("thx")]),
+        ]);
+        let a = out.iter().find(|m| m.role == "assistant").expect("assistant 应保留");
+        assert_eq!(a.content.len(), 2, "thinking + text 都应保留");
+        assert!(a.content.iter().any(|b| matches!(b, ContentBlock::Text { .. })));
+    }
+
+    #[test]
+    fn sanitize_keeps_assistant_with_thinking_and_tool_use() {
+        // assistant 含 thinking + 有效 tool_use（有配对 result）→ 有合法 tool_calls，保留。
+        let out = sanitize_history(vec![
+            cm("user", vec![text_blk("q")]),
+            cm("assistant", vec![
+                ContentBlock::Thinking { thinking: "h".into(), signature: None },
+                tu("A"),
+            ]),
+            cm("user", vec![tr("A")]),
+            cm("assistant", vec![text_blk("done")]),
+        ]);
+        let a = out.iter().find(|m| m.role == "assistant" && m.content.iter().any(|b| matches!(b, ContentBlock::ToolUse { .. }))).expect("含 tool_use 的 assistant 应保留");
+        assert!(a.content.iter().any(|b| matches!(b, ContentBlock::Thinking { .. })), "thinking 应保留");
     }
 
     // ===== P2-2 G1：历史消息图片重注入 =====
