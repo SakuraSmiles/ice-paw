@@ -13,10 +13,6 @@ use crate::infra::protocol::{ChatMessage, ContentBlock};
 pub struct ContextBudget {
     /// 模型最大输入 token 数（Phase 0：由 agent.context_window / 已知模型默认 / 128K 兜底解析）
     pub max_input_tokens: usize,
-    /// 当消息数超过此值时触发工具调用结果裁剪；None 表示不裁剪
-    pub tool_trim_threshold: Option<usize>,
-    /// 裁剪时保留最近多少条消息
-    pub trim_top_k: usize,
 }
 
 impl ContextBudget {
@@ -34,9 +30,11 @@ impl ContextBudget {
 impl Default for ContextBudget {
     fn default() -> Self {
         Self {
+            // ContextBudget 仅承载 token 预算（max_input + fold 摘要派生）。
+            // 工具列表的排序阈值已移至 scoring::DEFAULT_TOOL_SORT_THRESHOLD——它与 token
+            // 预算属不同维度，混在同一 struct 既造成语义混淆，也让 loop_engine 误把本
+            // default 当工具排序阈值（dead config：per-agent 配置从未流入）。回归单一职责。
             max_input_tokens: 128_000,
-            tool_trim_threshold: Some(5),
-            trim_top_k: 5,
         }
     }
 }

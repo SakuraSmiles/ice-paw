@@ -92,20 +92,6 @@ pub async fn send_message(
     // 钩子配置（来自 agent.yaml `hooks`；纯文件，不进 DB）
     let hooks = agent_with_creds.hooks;
 
-    // Task 4: 从 Agent 配置读取工具白名单（NULL = 全部启用）
-    let agent_enabled_tools: Option<Vec<String>> = agent
-        .enabled_tools
-        .as_deref()
-        .map(|s| {
-            serde_json::from_str(s).unwrap_or_else(|e| {
-                tracing::warn!(
-                    target: "ice_paw.chat",
-                    "解析 agent enabled_tools 失败（按空名单处理）: {e}"
-                );
-                Vec::new()
-            })
-        });
-
     let llm_provider = provider::create_provider(
         &agent.provider, &agent.model, base_url, agent.cache_prompt != 0,
     )?;
@@ -259,19 +245,11 @@ pub async fn send_message(
     // 组装对话 tool_registry：直接从 global registry 快照（boot 时已启动全部 server）。
     // per_agent server 的 workspace 后台异步绑定，不阻塞消息发送。
     let tool_registry = if tools_enabled {
-        let reg = match &agent_enabled_tools {
-            Some(names) if !names.is_empty() => {
-                let r = McpRegistry::new();
-                r.register_names_from(&global_registry, names).await;
-                // 平台元工具强制注入：白名单只应控制业务工具（文件/shell/…），
-                // 元工具（配置变更安全通道、读自身配置）是基础设施，必须始终可用，
-                // 否则 agent 会退而用文件工具直接改 agent.yaml 绕过审批。
-                r.register_meta_tools(&global_registry).await;
-                r
-            }
-            Some(_) => McpRegistry::new(),
-            None => McpRegistry::from_map(global_registry.snapshot().await),
-        };
+        // 默认全开：所有已注册工具（内置 + 全局/per_agent MCP server，含平台元工具）
+        // 对每个 agent 可用。enabled_tools 白名单是排他快照——一旦设定 agent 即被锁死，
+        // 后续新增的 MCP server（如 GLM）不会自动可用。前端 agent 工具配置 UI 尚未实现，
+        // 故统一全开；待 UI 落地后再启用精细化白名单（届时恢复 register_names_from 分支）。
+        let reg = McpRegistry::from_map(global_registry.snapshot().await);
 
         // 后台异步绑定 per_agent server workspace（不阻塞消息发送）
         if let Some(workspace) = agent.workspace_path.as_deref() {
