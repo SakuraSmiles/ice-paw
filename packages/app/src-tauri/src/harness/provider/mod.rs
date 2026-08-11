@@ -21,7 +21,7 @@ pub mod model_info;
 pub mod openai;
 pub use anthropic::AnthropicAdapter;
 pub use mock::{MockProvider, MockScenario};
-pub use model_info::default_context_window;
+pub use model_info::{default_context_window, default_max_output_tokens};
 pub use openai::OpenAiAdapter;
 
 use std::pin::Pin;

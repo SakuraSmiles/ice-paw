@@ -191,8 +191,20 @@ async fn stream_loop_inner(
     let mut stuck_counter: u32 = 0;
     let mut last_round_hash: Option<u64> = None;
 
+    // === 自动续写状态（模式 C 治本：finish_reason=length/max_tokens 不再当终态）===
+    // `continue_full_text`：续写激活后持有「本消息累积全文」，供下轮拼接 + 全文覆写落盘
+    //（push_text 是覆写语义，后端必须自行累积，否则第 N+1 轮覆盖第 N 轮）。空串=未激活。
+    let mut continue_full_text = String::new();
+    let mut continue_rounds: u32 = 0;
+    const MAX_CONTINUE_ROUNDS: u32 = 8;
+    // `prev_round_had_tools`：守卫 line 231 的「工具调用完毕」注入——续写轮（前一轮纯文本）
+    // 不该触发该提示。正常工具流下恒 true（与改造前逐字等价）。
+    let mut prev_round_had_tools = false;
+
     // === 工具执行循环 ===
-    for tool_round in 0..ctx.budget.max_tool_rounds {
+    // 标签 'tool_round 供自动续写（finish_reason=length/max_tokens）跳回循环顶，
+    // 复用同一 assistant 消息无缝拼接长输出（模式 C 治本）。
+    'tool_round: for tool_round in 0..ctx.budget.max_tool_rounds {
         if ctx.cancel.is_cancelled() {
             return finalize_cancel(&ctx.app, &ctx.pool, &ctx.conv_id, &current_asst_msg_id);
         }
@@ -227,8 +239,10 @@ async fn stream_loop_inner(
         // 本轮 provider 返回的 completion_tokens（用于即时落盘该 assistant 的 token_count）
         let mut round_completion_tokens: Option<u32> = None;
 
-        // 第 2 轮起，在消息中注入剩余轮次信息（帮助 LLM 决定是否继续调工具）
-        if tool_round > 0 {
+        // 第 2 轮起，在消息中注入剩余轮次信息（帮助 LLM 决定是否继续调工具）。
+        // 仅当上一轮真的有工具调用时注入——续写链（前一轮纯文本截断）下不注入，
+        // 避免给模型「工具调用完毕」的误导提示。
+        if tool_round > 0 && prev_round_had_tools {
             ctx.messages.push(ChatMessage {
                 role: "user".into(),
                 content: vec![ContentBlock::text(format!(
@@ -322,8 +336,19 @@ async fn stream_loop_inner(
         // 【改】progress_text 跨轮累积，仅供停滞检测（不持久化）
         progress_text.push_str(&round_text);
 
-        // 【改】推「本轮」文本到 BatchWriter（原为跨轮 all_text）
-        batch_writer.push_text(round_text.clone()).await;
+        // 自动续写：续写激活（continue_full_text 非空）时，本消息应落盘的全文 =
+        // 历史 continue_full_text + 本轮 round_text；否则即 round_text。
+        // msg_text 用于所有持久化点（push_text / round_blocks / finalize / 终止守卫），
+        // 保证续写中任意退出路径（cancel/budget/stuck/正常收尾）都不丢前缀。
+        // continue_full_text 仅在下方「续写决策点」更新；progress_text / ctx.messages 仍用 round_text。
+        let msg_text = if continue_full_text.is_empty() {
+            round_text.clone()
+        } else {
+            format!("{continue_full_text}{round_text}")
+        };
+
+        // 【改】推「本消息全文」到 BatchWriter（续写时含前缀；push_text 是覆写语义）
+        batch_writer.push_text(msg_text.clone()).await;
 
         // W4.2: Token 预算累计已在上方 Ok 分支内完成（基于本轮 usage），此处不再累加。
 
@@ -333,6 +358,8 @@ async fn stream_loop_inner(
             .filter(|tc| tc.ended)
             .map(|tc| (tc.id, tc.name, tc.arguments))
             .collect();
+        // 守卫下一轮 line-231 注入：本轮是否有工具调用（续写链恒空 → 不注入误导提示）
+        prev_round_had_tools = !completed_calls.is_empty();
 
         // 【阶段 B】组装本轮 assistant 的权威 blocks：[thinking?, text?, tool_use*]
         // 多轮工具下每条 assistant 独立持有本轮 thinking + text + tool_use（不含 tool_result）。
@@ -343,8 +370,8 @@ async fn stream_loop_inner(
                 signature: None,
             });
         }
-        if !round_text.is_empty() {
-            round_blocks.push(ContentBlock::Text { text: round_text.clone() });
+        if !msg_text.is_empty() {
+            round_blocks.push(ContentBlock::Text { text: msg_text.clone() });
         }
         for (id, name, args) in &completed_calls {
             round_blocks.push(ContentBlock::ToolUse {
@@ -366,7 +393,7 @@ async fn stream_loop_inner(
                 &ctx.pool,
                 &batch_writer,
                 &current_asst_msg_id,
-                &round_text,
+                &msg_text,
                 &round_blocks,
                 round_completion_tokens,
                 None,
@@ -390,7 +417,7 @@ async fn stream_loop_inner(
                 &ctx.pool,
                 &batch_writer,
                 &current_asst_msg_id,
-                &round_text,
+                &msg_text,
                 &round_blocks,
                 round_completion_tokens,
                 Some("（本次累计 token 达到上限，已停止。发送新消息即可继续。）"),
@@ -444,7 +471,7 @@ async fn stream_loop_inner(
                 &ctx.pool,
                 &batch_writer,
                 &current_asst_msg_id,
-                &round_text,
+                &msg_text,
                 &round_blocks,
                 round_completion_tokens,
                 Some("（检测到工具调用循环停滞，已停止。发送新消息即可继续。）"),
@@ -471,15 +498,48 @@ async fn stream_loop_inner(
         finalize_assistant_message(
             &ctx.pool,
             &current_asst_msg_id,
-            &round_text,
+            &msg_text,
             &round_blocks,
             round_completion_tokens,
         )
         .await;
 
-        // 最终轮（本轮无工具调用）→ 当前 assistant 已 finalize，直接收尾。
+        // 最终轮（本轮无工具调用）→ 当前 assistant 已 finalize。
         // round_blocks 此时无 ToolUse，落盘安全。
         if completed_calls.is_empty() {
+            // === 自动续写决策点（模式 C 治本）===
+            // finish_reason=length(OpenAI)/max_tokens(Anthropic) 表示单轮输出被截断（可恢复态，
+            // 非终态）。在续写次数预算内，跳回循环顶复用同一 assistant 消息续接输出：
+            // 不发 chat:done、不建新占位、不 set_msg_id → 前端 streamingText 自然续接，单气泡。
+            let truncated =
+                matches!(round_finish_reason.as_str(), "length" | "max_tokens");
+            if truncated && continue_rounds < MAX_CONTINUE_ROUNDS {
+                continue_rounds += 1;
+                // 累积器 = 当前完整全文，供下一轮 msg_text 拼接 + 全文覆写落盘
+                continue_full_text = msg_text.clone();
+                // 模型上下文：推【本轮文本】（非全文，避免 O(K²) 膨胀）+ 续写指令
+                ctx.messages.push(ChatMessage {
+                    role: "assistant".into(),
+                    content: vec![ContentBlock::text(round_text.clone())],
+                    source_rowid: None,
+                });
+                ctx.messages.push(ChatMessage {
+                    role: "user".into(),
+                    content: vec![ContentBlock::text(
+                        "（上一段因长度限制被中断。请直接从中断处继续输出剩余内容，不要重复已输出部分。）",
+                    )],
+                    source_rowid: None,
+                });
+                tracing::info!(
+                    target: "ice_paw.chat",
+                    "输出截断（finish_reason={}），自动续写第 {} 次",
+                    round_finish_reason,
+                    continue_rounds,
+                );
+                continue 'tool_round;
+            }
+            // 终态：自然结束（stop）或续写次数用尽仍截断（length/max_tokens → 前端显示「已达长度上限」）。
+            // 上方阶段 C 的 finalize_assistant_message 已用 msg_text 落盘完整全文。
             return finalize_success(
                 &ctx.app,
                 &ctx.pool,
@@ -541,7 +601,7 @@ async fn stream_loop_inner(
                     &ctx.pool,
                     &batch_writer,
                     &current_asst_msg_id,
-                    &round_text,
+                    &msg_text,
                     &round_blocks,
                     round_completion_tokens,
                     None,
@@ -608,7 +668,7 @@ async fn stream_loop_inner(
                 &ctx.pool,
                 &batch_writer,
                 &current_asst_msg_id,
-                &round_text,
+                &msg_text,
                 &round_blocks,
                 round_completion_tokens,
                 None,

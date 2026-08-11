@@ -167,6 +167,11 @@ pub fn agent_workspace_root(
 }
 
 /// 为单个 Agent 确保 KB 行存在（创建 Agent 时调用，无需重启）。
+///
+/// 注意：KB **行**确实无需重启即可创建，但「文件监听」是 App 启动时一次性注册的，
+/// 运行期新建的 agent 目录不会被 watcher 监听。因此这里额外做一次初始索引，让目录
+/// 里已有的文件（迁移/手动放入/之前 save_to_kb 写入的）立即进 `kb_document` 表、
+/// UI 列表与 search_kb 可见。后续若用户继续用 save_to_kb 写入，工具内部也会内联索引。
 pub(crate) async fn ensure_agent_kb(
     pool: &SqlitePool,
     agent_id: &str,
@@ -181,6 +186,28 @@ pub(crate) async fn ensure_agent_kb(
     let name = format!("{} 的知识库", agent_name);
     if let Err(e) = ensure_kb_row(pool, "agent", Some(agent_id), &name, &dir).await {
         tracing::warn!(target: "ice_paw.kb", "创建 Agent KB 失败: {e}");
+        return;
+    }
+
+    // 触发一次初始索引（后台，不阻塞 agent 创建流程）。
+    if let Some(kb) = repo::kb::list_by_scope(pool, "agent", Some(agent_id))
+        .await
+        .ok()
+        .and_then(|v| v.into_iter().next())
+    {
+        let pool = pool.clone();
+        let kb_id = kb.id.clone();
+        let dir = dir.clone();
+        tokio::spawn(async move {
+            match super::indexer::index_directory(&pool, &kb_id, &dir).await {
+                Ok(stats) => tracing::info!(
+                    target: "ice_paw.kb",
+                    "新建 agent KB 初始索引完成 kb={} indexed={} skipped={}",
+                    kb_id, stats.indexed, stats.skipped
+                ),
+                Err(e) => tracing::warn!(target: "ice_paw.kb", "新建 agent KB 初始索引失败 kb={}: {e}", kb_id),
+            }
+        });
     }
 }
 
