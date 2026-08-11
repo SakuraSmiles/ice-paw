@@ -1,7 +1,8 @@
 //! KB 目录索引 —— 扫描 → 解析 → 增量 upsert `kb_document`（RAG v1 摄入管道第 2 环）
 //!
 //! 增量策略（两层预筛，省 IO）：
-//! 1. 递归扫描 KB `directory` 下所有 `.md` 文件，`file_path` 以相对路径存储
+//! 1. 递归扫描 KB `directory` 下所有可索引文件（`.md` / `.docx` / `.xlsx` / `.xls`
+//!    / `.xlsb` / `.ods` / `.pdf`），`file_path` 以相对路径存储
 //! 2. **mtime 预筛**：与已索引记录的 `file_mtime` 相同 → 跳过（不读内容、不解析）
 //! 3. mtime 变化 → 读内容算 `content_hash` → 与已索引 hash 相同 → 跳过（touch 场景）
 //! 4. hash 变化 → 解析 + `upsert_document`
@@ -23,7 +24,7 @@ use crate::error::AppResult;
 use crate::harness::kb::embedding::{ensure_chunks_embedded, resolve_embedding_config};
 use crate::harness::provider::embedding::OpenAiEmbeddingBackend;
 
-use super::parser::{content_hash, parse_markdown, split_into_chunks};
+use super::parser::{content_hash, first_paragraph, parse_markdown, split_into_chunks, ParsedDoc};
 
 /// 单次索引的统计（日志 / 返回调用方观察）。
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
@@ -50,8 +51,8 @@ pub async fn index_directory(
 ) -> AppResult<IndexStats> {
     let mut stats = IndexStats::default();
 
-    // 1. 扫描磁盘：相对路径 → 绝对路径
-    let disk_files = scan_markdown_files(directory);
+    // 1. 扫描磁盘：相对路径 → 绝对路径（.md / office / pdf）
+    let disk_files = scan_indexable_files(directory);
 
     // 2. 已索引记录：file_path → KbDocumentRow
     let existing: HashMap<String, KbDocumentRow> = repo::kb::list_documents(pool, kb_id)
@@ -109,8 +110,35 @@ pub async fn index_directory(
             }
         }
 
-        // 4. 解析 + upsert
-        let parsed = parse_markdown(&String::from_utf8_lossy(&content));
+        // 4. 解析：office/pdf 走 doc::try_extract，markdown/文本走 parse_markdown。
+        //    full_text 复用给 chunk 切分；office 解析失败 → warn + 跳过（不退回乱码）。
+        let ext = abs_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
+        let (full_text, parsed) = match crate::harness::doc::try_extract(&content, ext) {
+            Ok(Some(d)) => {
+                let p = ParsedDoc {
+                    title: d.title.unwrap_or_default(),
+                    summary: first_paragraph(&d.text),
+                    tags: "[]".into(),
+                };
+                (d.text, p)
+            }
+            Ok(None) => {
+                let s = String::from_utf8_lossy(&content).into_owned();
+                let p = parse_markdown(&s);
+                (s, p)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    target: "ice_paw.kb",
+                    "索引跳过：office 文档解析失败 kb={} path={} err={}",
+                    kb_id, rel_path, e
+                );
+                continue;
+            }
+        };
         let title = if parsed.title.is_empty() {
             title_from_filename(rel_path)
         } else {
@@ -129,8 +157,7 @@ pub async fn index_directory(
         )
         .await?;
 
-        // RAG v2: 切分 chunk + 增量存储（保留内容未变 chunk 的 embedding）
-        let full_text = String::from_utf8_lossy(&content);
+        // RAG v2: 切分 chunk + 增量存储（office 的 full_text 已在解析阶段确定）
         let chunks = split_into_chunks(&full_text);
         match repo::kb::upsert_chunks_incremental(pool, &doc_id, &chunks).await {
             Ok(need) => {
@@ -195,14 +222,24 @@ pub async fn index_directory(
 // 内部辅助
 // =========================================================================
 
-/// 递归扫描 `directory` 下所有 `.md` 文件，返回 `(相对路径, 绝对路径)` 列表。
+/// 递归扫描 `directory` 下所有**可索引**文件（`.md` / `.docx` / `.xlsx` / `.xls` /
+/// `.xlsb` / `.ods` / `.pdf`），返回 `(相对路径, 绝对路径)` 列表。
 ///
 /// 相对路径统一用正斜杠（跨平台一致，便于 DB 存储与检索展示）。
 /// 跳过隐藏目录（如 `.git` / `.icepaw`）。
-fn scan_markdown_files(directory: &Path) -> Vec<(String, PathBuf)> {
+fn scan_indexable_files(directory: &Path) -> Vec<(String, PathBuf)> {
     let mut out = Vec::new();
     walk_dir(directory, directory, &mut out);
     out
+}
+
+/// 判断扩展名（不含点）是否可索引。与 [`doc::try_extract`] 支持的格式一致。
+fn is_indexable_ext(ext: &str) -> bool {
+    let e = ext.to_ascii_lowercase();
+    matches!(
+        e.as_str(),
+        "md" | "docx" | "xlsx" | "xls" | "xlsb" | "ods" | "pdf"
+    )
 }
 
 fn walk_dir(root: &Path, dir: &Path, out: &mut Vec<(String, PathBuf)>) {
@@ -226,12 +263,12 @@ fn walk_dir(root: &Path, dir: &Path, out: &mut Vec<(String, PathBuf)>) {
             }
             walk_dir(root, &path, out);
         } else if ft.is_file() {
-            let is_md = path
+            let is_indexable = path
                 .extension()
                 .and_then(|e| e.to_str())
-                .map(|e| e.eq_ignore_ascii_case("md"))
+                .map(is_indexable_ext)
                 .unwrap_or(false);
-            if is_md {
+            if is_indexable {
                 if let Ok(rel) = path.strip_prefix(root) {
                     let rel_str = rel.to_string_lossy().replace('\\', "/");
                     out.push((rel_str, path));
@@ -248,13 +285,16 @@ fn file_mtime(path: &Path) -> Option<String> {
     Some(secs.to_string())
 }
 
-/// 无 frontmatter/H1 时，用文件名（去 `.md`）作为 title 兜底。
+/// 无显式标题时，用文件名（去掉可索引扩展名）作为 title 兜底。
+///
+/// 兼容所有可索引格式（.md / .docx / .xlsx / .pdf …）——取 `file_stem` 去掉最后一段扩展名。
 fn title_from_filename(rel_path: &str) -> String {
     let stem = rel_path.rsplit(['/', '\\']).next().unwrap_or(rel_path);
-    stem.strip_suffix(".md")
-        .or_else(|| stem.strip_suffix(".MD"))
-        .unwrap_or(stem)
-        .to_string()
+    Path::new(stem)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| stem.to_string())
 }
 
 // =========================================================================
@@ -283,6 +323,28 @@ mod tests {
     #[test]
     fn title_from_filename_nested_path() {
         assert_eq!(title_from_filename("docs/sub/note.md"), "note");
+    }
+
+    #[test]
+    fn title_from_filename_strips_office_ext() {
+        assert_eq!(title_from_filename("财务/报表.xlsx"), "报表");
+        assert_eq!(title_from_filename("report.docx"), "report");
+        assert_eq!(title_from_filename("manual.pdf"), "manual");
+    }
+
+    #[test]
+    fn is_indexable_ext_matches_supported_formats() {
+        // 可索引
+        for ext in ["md", "docx", "xlsx", "xls", "xlsb", "ods", "pdf"] {
+            assert!(is_indexable_ext(ext), "{ext} 应可索引");
+        }
+        // 大小写不敏感
+        assert!(is_indexable_ext("DOCX"));
+        assert!(is_indexable_ext("XLSX"));
+        // 非可索引
+        for ext in ["txt", "json", "html", "doc", "ppt", ""] {
+            assert!(!is_indexable_ext(ext), "{ext} 不应可索引");
+        }
     }
 
     #[test]

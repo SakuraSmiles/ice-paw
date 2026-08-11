@@ -117,7 +117,9 @@ fn first_h1(body: &str) -> Option<&str> {
 /// 取正文首个连续段落（跳过空行 / 标题 / 分隔符 / 图片 / 代码块起始）。
 ///
 /// 段内多行用空格拼接成单行，便于关键词匹配与摘要展示。
-fn first_paragraph(body: &str) -> String {
+///
+/// 被 [`parse_markdown`] 与 KB 索引（office 文档摘要）共用。
+pub(crate) fn first_paragraph(body: &str) -> String {
     let mut para: Vec<&str> = Vec::new();
     let mut in_para = false;
     for line in body.lines() {
