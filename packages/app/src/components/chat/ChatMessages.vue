@@ -16,6 +16,8 @@ import { useChatStore } from "../../stores/chat";
 import { formatTime, formatDateLabel } from "../../utils/time";
 import MarkdownRenderer from "./MarkdownRenderer.vue";
 import ConfigProposalCard from "./ConfigProposalCard.vue";
+import ImagePreview from "./ImagePreview.vue";
+import AttachmentDetail from "./AttachmentDetail.vue";
 import { useThinkingTimer } from "../../composables/useThinkingTimer";
 import { useScrollFollow } from "../../composables/useScrollFollow";
 import type { Message, MessageRole } from "../../types";
@@ -32,6 +34,13 @@ const expandedToolCalls = ref<Set<string>>(new Set());
 const expandedThinking = ref<Set<string>>(new Set());
 // 思考耗时实时计时（逻辑抽到 composable：streamingThinking 期间每 200ms tick + KeepAlive 协同）
 const { thinkingElapsed } = useThinkingTimer();
+
+// 图片预览 / 文档详情 弹窗状态（同时只开一个，Teleport 到 body）
+const previewImages = ref<{ data: string; mediaType: string }[] | null>(null);
+const previewIndex = ref(0);
+const detailAttachments = ref<{ name: string; kind: string; size: number }[] | null>(null);
+const detailIndex = ref(0);
+const detailTexts = ref<Record<string, string>>({});
 
 const toolCallList = computed(() => {
   return Array.from(chat.streamingToolCalls.values());
@@ -109,6 +118,97 @@ function parseImageBlocks(contentBlocks: string): { data: string; mediaType: str
       typeof b === 'object' && b !== null && (b as Record<string, unknown>).type === 'image'
     ).map((b) => ({ data: b.data, mediaType: b.media_type }));
   } catch { return []; }
+}
+
+/** 解析 attachment 块（附件元信息卡片：文件名 / 类型 / 字节数） */
+function parseAttachmentBlocks(contentBlocks: string): { name: string; kind: string; size: number }[] {
+  try {
+    const blocks: unknown[] = JSON.parse(contentBlocks);
+    if (!Array.isArray(blocks)) return [];
+    return blocks.filter((b): b is { name: string; kind: string; size: number; type: string } =>
+      typeof b === 'object' && b !== null && (b as Record<string, unknown>).type === 'attachment'
+    ).map((b) => ({ name: b.name, kind: b.kind, size: b.size }));
+  } catch { return []; }
+}
+
+/** 字节数 → 人类可读（如 "1.2 MB"） */
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** 扩展名 → 展示标签（卡片上的类型名） */
+const KIND_LABELS: Record<string, string> = {
+  docx: 'Word', xlsx: 'Excel', xls: 'Excel', pdf: 'PDF',
+};
+function kindLabel(kind: string): string {
+  return KIND_LABELS[kind.toLowerCase()] ?? kind.toUpperCase();
+}
+
+/** 用户消息是否含图片或附件块（纯附件无文本时仍需显示气泡） */
+function hasUserMedia(msg: { content_blocks?: string }): boolean {
+  if (!msg.content_blocks || msg.content_blocks === '[]') return false;
+  return parseImageBlocks(msg.content_blocks).length > 0
+    || parseAttachmentBlocks(msg.content_blocks).length > 0;
+}
+
+/** 剥离旧版遗留的 `[附件 xxx]` 文本标记（新版用 Attachment 块，不再生成；此为清理旧历史） */
+function cleanUserContent(text: string | null | undefined): string {
+  if (!text) return '';
+  return text.replace(/\[附件[^\]]*\]/g, '').trim();
+}
+
+/**
+ * 从 content_blocks 的 Text 块里提取后端 materialize 注入的附件原文。
+ * 后端格式：<uploaded_file name="xxx" type="yyy">\n[系统提示…]\n{正文}\n</uploaded_file>
+ * 返回 { 文件名 → 正文（已剥离系统提示行）}，供附件详情弹窗展示。
+ */
+function parseExtractedTexts(contentBlocks: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!contentBlocks || contentBlocks === '[]') return out;
+  try {
+    const blocks: unknown[] = JSON.parse(contentBlocks);
+    if (!Array.isArray(blocks)) return out;
+    const re = /<uploaded_file\s+name="([^"]+)"[^>]*>([\s\S]*?)<\/uploaded_file>/g;
+    for (const b of blocks) {
+      if (typeof b !== 'object' || b === null) continue;
+      const bl = b as Record<string, unknown>;
+      if (bl.type !== 'text' || typeof bl.text !== 'string') continue;
+      let m: RegExpExecArray | null;
+      re.lastIndex = 0;
+      while ((m = re.exec(bl.text)) !== null) {
+        const body = m[2].replace(/^\[系统提示[：:][^\]]*\]\s*/m, '').trim();
+        out[m[1]] = body;
+      }
+    }
+  } catch { /* ignore */ }
+  return out;
+}
+
+/** 多图堆叠：第 i 张的 transform（第 0 张最上层完整，其余向右下错位+微旋转露边） */
+function imgStackStyle(i: number): Record<string, string> {
+  const offset = i * 8;
+  const rot = i === 0 ? 0 : (i % 2 === 1 ? 5 : -5);
+  return { transform: `translate(${offset}px, ${offset / 2}px) rotate(${rot}deg)`, zIndex: String(10 - i) };
+}
+
+/**
+ * 多文档堆叠：用负 margin-top 让后一张向上叠（容器高度自动），
+ * 配合 zIndex 让第 0 张完整置顶、其余向下露一条边（≈14px）。
+ */
+function docStackStyle(i: number): Record<string, string> {
+  return { marginTop: i === 0 ? '0px' : '-30px', zIndex: String(10 - i) };
+}
+
+function openImagePreview(images: { data: string; mediaType: string }[], idx: number) {
+  previewImages.value = images;
+  previewIndex.value = idx;
+}
+function openAttachmentDetail(attachments: { name: string; kind: string; size: number }[], idx: number, contentBlocks: string) {
+  detailAttachments.value = attachments;
+  detailIndex.value = idx;
+  detailTexts.value = parseExtractedTexts(contentBlocks);
 }
 
 function parseToolUseBlocks(contentBlocks: string): { id: string; name: string; input: string }[] {
@@ -295,13 +395,75 @@ const finishReasonLabels: Record<string, string> = {
           <!-- ===== 用户消息组（单条，透明壳）===== -->
           <template v-if="group.role === 'user'">
             <div class="message-content user">
-              <div class="message-bubble">
-                <span v-if="group.items[0].msg.content" class="user-text">{{ group.items[0].msg.content }}</span>
-                <div v-if="group.items[0].msg.content_blocks && group.items[0].msg.content_blocks !== '[]'" class="user-images">
-                  <img v-for="(img, i) in parseImageBlocks(group.items[0].msg.content_blocks)" :key="i" :src="`data:${img.mediaType};base64,${img.data}`" class="user-image" loading="lazy" />
+              <div v-if="cleanUserContent(group.items[0].msg.content) || hasUserMedia(group.items[0].msg)" class="message-bubble">
+                <span v-if="cleanUserContent(group.items[0].msg.content)" class="user-text">{{ cleanUserContent(group.items[0].msg.content) }}</span>
+
+                <!-- 文档附件：单个直显 / ≥2 重叠堆叠；点击看提取原文 -->
+                <template v-if="parseAttachmentBlocks(group.items[0].msg.content_blocks).length === 1">
+                  <div
+                    v-for="(att, i) in parseAttachmentBlocks(group.items[0].msg.content_blocks)"
+                    :key="'att-' + i"
+                    class="user-attachment-card clickable"
+                    :title="`查看 ${att.name} 提取内容`"
+                    @click="openAttachmentDetail(parseAttachmentBlocks(group.items[0].msg.content_blocks), i, group.items[0].msg.content_blocks)"
+                  >
+                    <span class="att-icon" :data-kind="att.kind">{{ kindLabel(att.kind)[0] }}</span>
+                    <span class="att-info">
+                      <span class="att-name">{{ att.name }}</span>
+                      <span class="att-meta">{{ kindLabel(att.kind) }} · {{ formatFileSize(att.size) }}</span>
+                    </span>
+                  </div>
+                </template>
+                <div
+                  v-else-if="parseAttachmentBlocks(group.items[0].msg.content_blocks).length > 1"
+                  class="doc-stack"
+                  :title="`共 ${parseAttachmentBlocks(group.items[0].msg.content_blocks).length} 个附件，点击查看`"
+                  @click="openAttachmentDetail(parseAttachmentBlocks(group.items[0].msg.content_blocks), 0, group.items[0].msg.content_blocks)"
+                >
+                  <div
+                    v-for="(att, i) in parseAttachmentBlocks(group.items[0].msg.content_blocks).slice(0, 3)"
+                    :key="'att-' + i"
+                    class="user-attachment-card"
+                    :style="docStackStyle(i)"
+                  >
+                    <span class="att-icon" :data-kind="att.kind">{{ kindLabel(att.kind)[0] }}</span>
+                    <span class="att-info">
+                      <span class="att-name">{{ att.name }}</span>
+                      <span class="att-meta">{{ kindLabel(att.kind) }} · {{ formatFileSize(att.size) }}</span>
+                    </span>
+                  </div>
+                  <span v-if="parseAttachmentBlocks(group.items[0].msg.content_blocks).length > 3" class="stack-badge">+{{ parseAttachmentBlocks(group.items[0].msg.content_blocks).length - 3 }}</span>
+                </div>
+
+                <!-- 图片：单图直显 / ≥2 重叠堆叠；点击全屏预览 -->
+                <template v-if="parseImageBlocks(group.items[0].msg.content_blocks).length === 1">
+                  <img
+                    v-for="(img, i) in parseImageBlocks(group.items[0].msg.content_blocks)"
+                    :key="'img-' + i"
+                    :src="`data:${img.mediaType};base64,${img.data}`"
+                    class="user-image clickable"
+                    loading="lazy"
+                    @click="openImagePreview(parseImageBlocks(group.items[0].msg.content_blocks), i)"
+                  />
+                </template>
+                <div
+                  v-else-if="parseImageBlocks(group.items[0].msg.content_blocks).length > 1"
+                  class="image-stack"
+                  :title="`共 ${parseImageBlocks(group.items[0].msg.content_blocks).length} 张图片，点击预览`"
+                  @click="openImagePreview(parseImageBlocks(group.items[0].msg.content_blocks), 0)"
+                >
+                  <img
+                    v-for="(img, i) in parseImageBlocks(group.items[0].msg.content_blocks).slice(0, 3)"
+                    :key="'img-' + i"
+                    :src="`data:${img.mediaType};base64,${img.data}`"
+                    class="user-image stacked"
+                    :style="imgStackStyle(i)"
+                    loading="lazy"
+                  />
+                  <span v-if="parseImageBlocks(group.items[0].msg.content_blocks).length > 3" class="stack-badge">+{{ parseImageBlocks(group.items[0].msg.content_blocks).length - 3 }}</span>
                 </div>
               </div>
-              <div v-if="group.items[0].msg.content" class="message-footer">
+              <div v-if="cleanUserContent(group.items[0].msg.content) || hasUserMedia(group.items[0].msg)" class="message-footer">
                 <div class="footer-left">
                   <span class="message-time">{{ formatTime(group.items[0].msg.created_at) }}</span>
                 </div>
@@ -476,6 +638,22 @@ const finishReasonLabels: Record<string, string> = {
         </svg>
       </button>
     </Transition>
+
+    <!-- 全屏图片预览（多图可翻页） -->
+    <ImagePreview
+      v-if="previewImages"
+      :images="previewImages"
+      :start-index="previewIndex"
+      @close="previewImages = null"
+    />
+    <!-- 文档附件详情（手风琴 + 提取原文） -->
+    <AttachmentDetail
+      v-if="detailAttachments"
+      :attachments="detailAttachments"
+      :start-index="detailIndex"
+      :extracted-texts="detailTexts"
+      @close="detailAttachments = null"
+    />
   </div>
 </template>
 
@@ -527,6 +705,64 @@ const finishReasonLabels: Record<string, string> = {
 .user-text { display:block; white-space:pre-wrap; }
 .user-images { display:flex; flex-wrap:wrap; gap:4px; margin-top:2px; }
 .user-image { max-width:200px; max-height:200px; border-radius:var(--ip-radius-lg); object-fit:cover; border:1px solid var(--ip-color-border-default); }
+
+/* 用户附件卡片（office/pdf）—— 不透明白实体卡片：深绿气泡上的清晰层次，
+   堆叠时不透明避免半透明叠加发灰/透字（半透明玻璃在重叠场景不可扩展） */
+.user-attachments { display:flex; flex-direction:column; gap:4px; margin-top:6px; }
+.user-attachment-card {
+  display:flex; align-items:center; gap:8px;
+  padding:6px 10px; border-radius:8px;
+  background:#ffffff;
+  border:1px solid rgba(0,0,0,0.08);
+  box-shadow:0 1px 2px rgba(0,0,0,0.06);
+  max-width:260px;
+  color:#1f2937;
+}
+.att-icon {
+  flex:none; width:26px; height:26px; border-radius:6px;
+  display:flex; align-items:center; justify-content:center;
+  font-size:11px; font-weight:700; color:#fff; letter-spacing:-0.5px;
+}
+.att-icon[data-kind="pdf"] { background:rgba(220,38,38,0.9); }
+.att-icon[data-kind="docx"] { background:rgba(37,99,235,0.9); }
+.att-icon[data-kind="xlsx"], .att-icon[data-kind="xls"] { background:rgba(22,163,74,0.9); }
+.att-info { display:flex; flex-direction:column; min-width:0; line-height:1.35; }
+.att-name { font-size:13px; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.att-meta { font-size:11px; color:#6b7280; }
+
+/* 单个卡片/图片可点（hover 提示） */
+.user-attachment-card.clickable { cursor:pointer; transition:background var(--ip-duration-fast) var(--ip-ease-out); }
+.user-attachment-card.clickable:hover { background:#f3f4f6; }
+.user-image.clickable { cursor:zoom-in; transition:transform var(--ip-duration-fast) var(--ip-ease-out); }
+.user-image.clickable:hover { transform:scale(1.02); }
+
+/* 多文档重叠堆叠：子卡片 position:relative 才能让 zIndex 生效；负 margin 由内联 style 给；
+   堆叠态加重投影，让"一摞卡片"的层次可见 */
+.doc-stack { position:relative; margin-top:6px; max-width:260px; cursor:pointer; }
+.doc-stack .user-attachment-card { position:relative; box-shadow:0 3px 10px rgba(0,0,0,0.18); }
+.doc-stack .user-attachment-card:hover { background:#fafafa; }
+
+/* 多图重叠堆叠：固定方形容器，子图绝对定位错位 */
+.image-stack {
+  position:relative; width:170px; height:170px; margin-top:4px; cursor:zoom-in;
+}
+.image-stack .user-image.stacked {
+  position:absolute; top:0; left:0; width:150px; height:150px;
+  max-width:none; max-height:none;
+  box-shadow:0 2px 8px rgba(0,0,0,0.25);
+  transition:transform var(--ip-duration-fast) var(--ip-ease-out);
+}
+.image-stack:hover .user-image.stacked { /* 悬停时整体微展开，强化"可点"反馈 */ }
+
+/* 堆叠溢出角标（图/文档通用） */
+.stack-badge {
+  position:absolute; right:-6px; bottom:-6px; z-index:20;
+  min-width:22px; height:22px; padding:0 6px;
+  border-radius:999px;
+  background:rgba(0,0,0,0.6); color:#fff;
+  font-size:11px; font-weight:600; line-height:22px; text-align:center;
+  border:1.5px solid rgba(255,255,255,0.85);
+}
 
 /* ===== 消息底部（时间 + 复制按钮） ===== */
 .message-footer { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:2px; padding:0 4px; }

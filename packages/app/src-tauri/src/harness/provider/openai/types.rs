@@ -233,12 +233,14 @@ fn single_openai_message(msg: &ChatMessage) -> AppResult<OpenAiMessage> {
             let arr: Vec<serde_json::Value> = msg
                 .content
                 .iter()
-                .map(|b| match b {
-                    ContentBlock::Text { text } => serde_json::json!({
+                .filter_map(|b| match b {
+                    ContentBlock::Text { text } => Some(serde_json::json!({
                         "type": "text",
                         "text": text
-                    }),
-                    _ => serde_json::json!({"type": "text", "text": ""}),
+                    })),
+                    // 附件元信息块：纯 UI，不发给 LLM（与 anthropic 适配层同模式）
+                    ContentBlock::Attachment { .. } => None,
+                    _ => Some(serde_json::json!({"type": "text", "text": ""})),
                 })
                 .collect();
             Ok(OpenAiMessage {
@@ -266,7 +268,7 @@ fn single_openai_message(msg: &ChatMessage) -> AppResult<OpenAiMessage> {
                             }
                         }));
                     }
-                    _ => {} // ToolResult/Thinking 在 assistant 不应出现
+                    _ => {} // ToolResult/Thinking/Attachment 在 assistant 不应出现
                 }
             }
 
@@ -288,12 +290,14 @@ fn single_openai_message(msg: &ChatMessage) -> AppResult<OpenAiMessage> {
             let arr: Vec<serde_json::Value> = msg
                 .content
                 .iter()
-                .map(|b| match b {
-                    ContentBlock::Text { text } => serde_json::json!({
+                .filter_map(|b| match b {
+                    ContentBlock::Text { text } => Some(serde_json::json!({
                         "type": "text",
                         "text": text
-                    }),
-                    _ => serde_json::json!({"type": "text", "text": ""}),
+                    })),
+                    // 附件元信息块：纯 UI，不发给 LLM（与 anthropic 适配层同模式）
+                    ContentBlock::Attachment { .. } => None,
+                    _ => Some(serde_json::json!({"type": "text", "text": ""})),
                 })
                 .collect();
             Ok(OpenAiMessage {

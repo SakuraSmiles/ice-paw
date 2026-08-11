@@ -167,6 +167,7 @@ fn chat_message_to_anthropic_content(msg: &ChatMessage) -> serde_json::Value {
                 "is_error": is_error.unwrap_or(false)
             })),
             ContentBlock::Thinking { .. } => None, // 不回传给 Anthropic
+            ContentBlock::Attachment { .. } => None, // 附件元信息块：纯 UI，不发给 LLM
         })
         .collect();
 

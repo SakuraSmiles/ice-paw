@@ -45,6 +45,18 @@ export async function useChatEvents(): Promise<() => void> {
 
   await subscribe<ChatStartPayload>("chat:start", (e) => {
     if (e.payload.conversation_id !== chat.activeConvId) return;
+    // 含附件时：用后端 materialize 后的 content_blocks（含提取正文 Text 块）patch 乐观
+    // 用户消息——前端发送时只放了 Attachment 占位卡片、拿不到提取正文，不 patch 的话
+    // 附件详情弹窗会全程显示「无提取文本」（要等切换会话重载才恢复）。
+    const ucb = e.payload.user_content_blocks;
+    if (ucb) {
+      for (let i = chat.messages.length - 1; i >= 0; i--) {
+        if (chat.messages[i].role === "user") {
+          chat.messages[i] = { ...chat.messages[i], content_blocks: ucb };
+          break;
+        }
+      }
+    }
     chat.messages.push({
       id: e.payload.assistant_message_id,
       conversation_id: e.payload.conversation_id,

@@ -234,6 +234,9 @@ fn render_message_for_summary(m: &ChatMessage) -> String {
             }
             ContentBlock::Thinking { .. } => {} // 内部推理，不进摘要
             ContentBlock::Image { .. } => parts.push("[图片已省略]".to_string()),
+            // 附件元信息块：纯 UI，跳过——紧随其后的 Text(extracted) 块以
+            // "[附件 name（kind）]" 开头，已携带附件名+正文进摘要，无需重复。
+            ContentBlock::Attachment { .. } => {}
         }
     }
     parts.join(" ")

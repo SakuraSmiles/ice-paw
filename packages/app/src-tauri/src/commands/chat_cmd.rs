@@ -41,14 +41,19 @@ use crate::context::pipeline::{AssembledContext, PipelineContext, PipelineRunner
 /// （计数在部分加载下会静默丢消息，rowid 不会）。
 const MEMORY_LOAD_LIMIT: i64 = 500;
 
-/// 把 office/pdf 附件物化为 Text 块并追加到 `blocks` 末尾。
+/// 把 office/pdf 附件物化为「Attachment 卡片 + Text 提取正文」并追加到 `blocks` 末尾。
 ///
 /// 每个附件：base64 解码 → [`crate::harness::doc::try_extract`]（按文件名扩展名分发）
-/// → 生成 `"[附件 {name}（{kind}）]\n{提取文本}"` 的 Text 块。提取失败返回 [`Err`]，
-/// 整条 `send_message` 拒绝（让用户知道哪个附件读不了），绝不静默吞。
+/// → 追加两块：
+/// 1. [`ContentBlock::Attachment`] —— 纯 UI 元信息（name/kind/size），让用户气泡与
+///    历史记录渲染出"上传了 xxx.docx"卡片；provider 适配层显式跳过，**不发给 LLM**。
+/// 2. [`ContentBlock::Text`] —— `"[附件 {name}（{kind}）]\n{提取文本}"`，发给 LLM 阅读。
+///    用户气泡只渲染 `msg.content` + 图片 + Attachment 卡片，不渲染 content_blocks 的
+///    Text，故这坨提取正文对用户不可见（仅 LLM 读）。
 ///
-/// 顺序：附件 Text 块追加在现有 blocks 之后（用户文本在前），与图片块"文本在后"
-/// 的既有约定协调，便于 LLM 先看到用户意图再读附件内容。
+/// **后端为附件元信息唯一来源**：先剥离入参里前端可能传入的 Attachment 块（乐观显示
+/// 用），再从 `files` 重建，避免重复/脏数据。提取失败返回 [`Err`]，整条 `send_message`
+/// 拒绝（让用户知道哪个附件读不了），绝不静默吞。
 fn materialize_file_blocks(
     mut blocks: Vec<ContentBlock>,
     files: &[AttachedFile],
@@ -56,7 +61,16 @@ fn materialize_file_blocks(
     use base64::Engine as _;
     use std::path::Path;
 
+    // 后端为唯一真源：丢弃前端乐观传入的 Attachment 块，下面从 files 重建
+    blocks.retain(|b| !matches!(b, ContentBlock::Attachment { .. }));
+
     for f in files {
+        tracing::info!(
+            target: "ice_paw.attach",
+            name = %f.name,
+            b64_len = f.data.len(),
+            "收到附件，开始处理"
+        );
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(&f.data)
             .map_err(|e| {
@@ -65,15 +79,35 @@ fn materialize_file_blocks(
         let ext = Path::new(&f.name)
             .extension()
             .and_then(|e| e.to_str())
-            .unwrap_or("");
-        let doc = crate::harness::doc::try_extract(&bytes, ext)?.ok_or_else(|| {
+            .map(str::to_ascii_lowercase)
+            .unwrap_or_default();
+        let started = std::time::Instant::now();
+        let doc = crate::harness::doc::try_extract(&bytes, &ext)?.ok_or_else(|| {
             AppError::Validation(format!(
                 "附件 {} 的格式 .{} 不支持（允许：docx / xlsx / xls / pdf）",
                 f.name, ext
             ))
         })?;
+        tracing::info!(
+            target: "ice_paw.attach",
+            name = %f.name,
+            decoded_bytes = bytes.len(),
+            ext = %ext,
+            kind = %doc.kind.label(),
+            text_len = doc.text.len(),
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "附件提取完成"
+        );
+        // 1. UI 卡片（不进 LLM）
+        blocks.push(ContentBlock::attachment(&f.name, &ext, bytes.len()));
+        // 2. 提取正文（进 LLM；用户气泡不渲染）
+        //    用 <uploaded_file> 标签 + 明确措辞，让 LLM 正确识别为「系统自动提取的
+        //    附件原文」而非用户手打——否则 agent 会误判"读不到附件"（内容其实已送达）。
         blocks.push(ContentBlock::text(format!(
-            "[附件 {}（{}）]\n{}",
+            "<uploaded_file name=\"{}\" type=\"{}\">\n\
+             [系统提示：以下是系统自动从用户上传的附件提取的原文，非用户手打。请基于此内容回应用户。]\n\
+             {}\n\
+             </uploaded_file>",
             f.name,
             doc.kind.label(),
             doc.text
@@ -110,6 +144,8 @@ pub async fn send_message(
         match (blocks, legacy) {
             (Some(b), _) => b,
             (None, Some(t)) => vec![ContentBlock::text(t)],
+            // 纯附件无文本：允许（materialize 会填充 Attachment + 提取正文）
+            (None, None) if input.files.as_ref().map(|v| !v.is_empty()).unwrap_or(false) => Vec::new(),
             (None, None) => return Err(AppError::Validation(
                 "content 或 content_blocks 至少提供一个".into(),
             )),
@@ -284,10 +320,14 @@ pub async fn send_message(
     ).await?;
 
     // --- 5. emit chat:start（cancel_token 已在 3.5 注册） ---
+    // 含附件时把后端 materialize 后的 content_blocks 带给前端，patch 乐观用户消息
+    // （否则前端拿不到提取正文，附件详情弹窗全显示「无提取文本」）。
+    let has_files = input.files.as_ref().map(|v| !v.is_empty()).unwrap_or(false);
     app.emit("chat:start", ChatStartPayload {
         conversation_id: conv_id.clone(),
         user_message_id: user_msg_id.clone(),
         assistant_message_id: asst_msg_id.clone(),
+        user_content_blocks: if has_files { Some(blocks_json.clone()) } else { None },
     })?;
 
     // --- 6. spawn 流式协程 ---

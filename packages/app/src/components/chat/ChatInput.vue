@@ -3,8 +3,8 @@
 
   行为：
   - Enter 发送，Shift+Enter 换行
-  - 图片：按钮选择 / 拖拽 / 粘贴 → base64 ContentBlock（image）
-  - 文档（docx/xlsx/xls/pdf）：按钮选择 / 拖拽 / 粘贴 → 后端 materialize 为 Text 块
+  - 附件（图片 / docx / xlsx / xls / pdf）：**一个按钮**选择 / 拖拽 / 粘贴，按扩展名分流
+    → 图片走 base64 ContentBlock（image）；文档走后端 materialize 为 Text 块
     （office 是输入模态，LLM 读不了 OOXML 二进制；提取在后端 doc::try_extract）
   - 流式生成中按钮切换为「停止」+ 动画指示器
   - draftText 自动保存（切换会话不丢未发送内容）
@@ -56,30 +56,74 @@ function baseName(path: string): string {
   return path.split(/[/\\]/).pop() || path;
 }
 
-// ===== 图片选择 =====
+// ===== 附件类型常量（图片 + 文档统一管理）=====
+// 图片：base64 ContentBlock（image），前端直传；文档：后端 materialize 为 Text（doc::try_extract）。
+const imageExts = ["png", "jpg", "jpeg", "gif", "webp"];
+const docExts = ["docx", "xlsx", "xls", "pdf"]; // 与后端 infra::file_validation 对齐
 const allowedTypes = ["image/png", "image/jpeg", "image/gif", "image/webp"];
 const maxImageSize = 5 * 1024 * 1024; // 5MB
 const maxImageCount = 20;
+const maxFileSize = 20 * 1024 * 1024; // 20MB
+const maxFileCount = 10;
 
-async function pickImages() {
+/** 图片扩展名 → MIME（与 allowedTypes 对齐）*/
+function extToMediaType(ext: string): string {
+  switch (ext) {
+    case "png": return "image/png";
+    case "jpg": case "jpeg": return "image/jpeg";
+    case "gif": return "image/gif";
+    case "webp": return "image/webp";
+    default: return "image/png";
+  }
+}
+
+/** 推入一个已读字节流：图片 → pendingImages，文档 → pendingFiles。返回是否入队成功。*/
+function pushAttachment(name: string, bytes: Uint8Array): boolean {
+  const ext = extOf(name);
+  if (imageExts.includes(ext)) {
+    const mediaType = extToMediaType(ext);
+    if (!allowedTypes.includes(mediaType)) return false;
+    if (bytes.length > maxImageSize) return false;
+    if (chat.pendingImages.length >= maxImageCount) return false;
+    chat.pendingImages.push({ data: uint8ToBase64(bytes), mediaType, name });
+    return true;
+  }
+  if (docExts.includes(ext)) {
+    if (bytes.length > maxFileSize) return false;
+    if (chat.pendingFiles.length >= maxFileCount) return false;
+    chat.pendingFiles.push({ name, data: uint8ToBase64(bytes), size: bytes.length });
+    return true;
+  }
+  return false; // 非图片/文档扩展名
+}
+
+/** 统一附件选择对话框（按钮触发）：图片 + 文档一个入口，按扩展名分流。*/
+async function pickAttachments() {
   const files = await open({
     multiple: true,
-    filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "gif", "webp"] }],
+    // 默认即"全部"（图片 + office 全范围），不细分图片/文档
+    filters: [{ name: "全部", extensions: [...imageExts, ...docExts] }],
   });
   if (!files) return;
   const paths = Array.isArray(files) ? files : [files];
-
   for (const filePath of paths) {
-    if (chat.pendingImages.length >= maxImageCount) break;
     try {
       const uint8 = await readFile(filePath);
-      const ext = extOf(filePath);
-      const mediaType = ext === "png" ? "image/png" : ext === "jpg" || ext === "jpeg" ? "image/jpeg" : ext === "gif" ? "image/gif" : ext === "webp" ? "image/webp" : "image/png";
-      if (!allowedTypes.includes(mediaType)) continue;
-      if (uint8.length > maxImageSize) continue;
-      chat.pendingImages.push({ data: uint8ToBase64(uint8), mediaType, name: baseName(filePath) });
+      pushAttachment(baseName(filePath), uint8);
     } catch (e) {
-      console.error("读取图片失败:", e);
+      console.error("读取附件失败:", e);
+    }
+  }
+}
+
+/** 从浏览器 File 列表（拖拽/粘贴）批量加入附件，按扩展名分流图片/文档。*/
+async function addAttachmentsFromFileList(fileList: File[]): Promise<void> {
+  for (const file of fileList) {
+    try {
+      const buf = new Uint8Array(await file.arrayBuffer());
+      pushAttachment(file.name, buf);
+    } catch (e) {
+      console.error("读取附件失败:", e);
     }
   }
 }
@@ -87,55 +131,6 @@ async function pickImages() {
 function removeImage(index: number) {
   chat.pendingImages.splice(index, 1);
 }
-
-// ===== office/pdf 文件附件 =====
-// 后端在 send_message 入口 materialize 为 Text 块（doc::try_extract），前端只收集 base64 + 文件名。
-// 扩展名白名单/上限与后端 infra::file_validation 对齐（docx/xlsx/xls/pdf，单文件 20MB，最多 10 个）。
-const allowedFileExts = ["docx", "xlsx", "xls", "pdf"];
-const maxFileSize = 20 * 1024 * 1024; // 20MB
-const maxFileCount = 10;
-
-/** 推入一个文件（校验扩展名/大小/数量），返回是否成功 */
-function pushFile(name: string, bytes: Uint8Array): boolean {
-  if (!allowedFileExts.includes(extOf(name))) return false;
-  if (bytes.length > maxFileSize) return false;
-  if (chat.pendingFiles.length >= maxFileCount) return false;
-  chat.pendingFiles.push({ name, data: uint8ToBase64(bytes), size: bytes.length });
-  return true;
-}
-
-/** 文件选择对话框（按钮触发） */
-async function pickFiles() {
-  const files = await open({
-    multiple: true,
-    filters: [{ name: "文档", extensions: allowedFileExts }],
-  });
-  if (!files) return;
-  const paths = Array.isArray(files) ? files : [files];
-  for (const filePath of paths) {
-    if (chat.pendingFiles.length >= maxFileCount) break;
-    try {
-      const uint8 = await readFile(filePath);
-      pushFile(baseName(filePath), uint8);
-    } catch (e) {
-      console.error("读取文件失败:", e);
-    }
-  }
-}
-
-/** 从浏览器 File 列表（拖拽/粘贴）批量加入附件 */
-async function addFilesFromFileList(fileList: File[]): Promise<void> {
-  for (const file of fileList) {
-    if (chat.pendingFiles.length >= maxFileCount) break;
-    try {
-      const buf = new Uint8Array(await file.arrayBuffer());
-      pushFile(file.name, buf);
-    } catch (e) {
-      console.error("读取文件失败:", e);
-    }
-  }
-}
-
 function removeFile(index: number) {
   chat.pendingFiles.splice(index, 1);
 }
@@ -163,13 +158,13 @@ async function onDrop(e: DragEvent) {
   if (!files?.length) return;
   e.preventDefault();
   dragOver.value = false;
-  await addFilesFromFileList(Array.from(files));
+  await addAttachmentsFromFileList(Array.from(files));
 }
 async function onPaste(e: ClipboardEvent) {
   const files = e.clipboardData?.files;
   if (!files?.length) return; // 纯文本粘贴放行默认行为
   e.preventDefault();
-  await addFilesFromFileList(Array.from(files));
+  await addAttachmentsFromFileList(Array.from(files));
 }
 
 // ===== 发送 =====
@@ -249,11 +244,8 @@ function handleKeydown(e: KeyboardEvent) {
           </div>
         </div>
         <div class="input-footer">
-          <button class="btn-img" :disabled="chat.sending" title="添加图片" @click="pickImages">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2" /><circle cx="8.5" cy="8.5" r="1.5" /><polyline points="21 15 16 10 5 21" /></svg>
-          </button>
-          <button class="btn-img" :disabled="chat.sending" title="添加文档（docx / xlsx / xls / pdf）" @click="pickFiles">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="9" y1="13" x2="15" y2="13" /><line x1="9" y1="17" x2="15" y2="17" /></svg>
+          <button class="btn-img" :disabled="chat.sending" title="添加附件（图片 / docx / xlsx / xls / pdf）" @click="pickAttachments">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" /></svg>
           </button>
         </div>
       </div>
