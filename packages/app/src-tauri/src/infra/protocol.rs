@@ -243,6 +243,23 @@ pub struct SendMessageInput {
     /// P0-3: 会话级 model 覆盖（None = 使用 Agent 默认 model）
     #[serde(default)]
     pub model: Option<String>,
+    /// Phase 3: office/pdf 文件附件（docx/xlsx/xls/pdf）。
+    ///
+    /// **设计**：文件是**输入模态**而非 content block——LLM 读不了 base64 二进制，
+    /// 后端在 [`send_message`] 入口把它们提取成 Text 块追加到 content（见
+    /// `materialize_file_blocks`），因此不进 `ContentBlock` 枚举、base64 不落盘。
+    #[serde(default)]
+    pub files: Option<Vec<AttachedFile>>,
+}
+
+/// 聊天文件附件（office/pdf）。
+///
+/// - `name`：文件名（含扩展名），决定解析格式（docx/xlsx/xls/pdf）。
+/// - `data`：base64 编码的文件字节（**不含** `data:...;base64,` 前缀，与 Image 约定一致）。
+#[derive(Debug, Deserialize, Clone)]
+pub struct AttachedFile {
+    pub name: String,
+    pub data: String,
 }
 
 // =========================================================================

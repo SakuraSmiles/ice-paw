@@ -15,9 +15,10 @@ use uuid::Uuid;
 use crate::db::models::{HookConfig, HookPoint, NewMessage};
 use crate::db::repo;
 use crate::error::{AppError, AppResult};
+use crate::infra::file_validation::validate_files;
 use crate::infra::protocol::{
-    ChatMessage, ChatRoundStatePayload, ChatStartPayload, ConfigProposalResponse, ContentBlock, LlmProvider,
-    ProposalDecision, SendMessageInput, ToolAuthResponse, validate_images,
+    AttachedFile, ChatMessage, ChatRoundStatePayload, ChatStartPayload, ConfigProposalResponse, ContentBlock,
+    LlmProvider, ProposalDecision, SendMessageInput, ToolAuthResponse, validate_images,
 };
 use crate::commands::agent_cmd::AgentCmd;
 use crate::harness::budget::LoopBudget;
@@ -39,6 +40,47 @@ use crate::context::pipeline::{AssembledContext, PipelineContext, PipelineRunner
 /// 部分加载（会话条数 > 此值）由 `covered_until_rowid` 按值定位安全兜底
 /// （计数在部分加载下会静默丢消息，rowid 不会）。
 const MEMORY_LOAD_LIMIT: i64 = 500;
+
+/// 把 office/pdf 附件物化为 Text 块并追加到 `blocks` 末尾。
+///
+/// 每个附件：base64 解码 → [`crate::harness::doc::try_extract`]（按文件名扩展名分发）
+/// → 生成 `"[附件 {name}（{kind}）]\n{提取文本}"` 的 Text 块。提取失败返回 [`Err`]，
+/// 整条 `send_message` 拒绝（让用户知道哪个附件读不了），绝不静默吞。
+///
+/// 顺序：附件 Text 块追加在现有 blocks 之后（用户文本在前），与图片块"文本在后"
+/// 的既有约定协调，便于 LLM 先看到用户意图再读附件内容。
+fn materialize_file_blocks(
+    mut blocks: Vec<ContentBlock>,
+    files: &[AttachedFile],
+) -> AppResult<Vec<ContentBlock>> {
+    use base64::Engine as _;
+    use std::path::Path;
+
+    for f in files {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&f.data)
+            .map_err(|e| {
+                AppError::Validation(format!("附件 {} base64 解码失败: {e}", f.name))
+            })?;
+        let ext = Path::new(&f.name)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
+        let doc = crate::harness::doc::try_extract(&bytes, ext)?.ok_or_else(|| {
+            AppError::Validation(format!(
+                "附件 {} 的格式 .{} 不支持（允许：docx / xlsx / xls / pdf）",
+                f.name, ext
+            ))
+        })?;
+        blocks.push(ContentBlock::text(format!(
+            "[附件 {}（{}）]\n{}",
+            f.name,
+            doc.kind.label(),
+            doc.text
+        )));
+    }
+    Ok(blocks)
+}
 
 /// 发送消息 — 触发 LLM 流式生成。
 ///
@@ -79,9 +121,22 @@ pub async fn send_message(
     let tools_enabled = input.tools_enabled;
     // P0-3: 会话级 model override（None = 使用 Agent 默认 model）
     let model_override = input.model.clone();
+    // 用户原始文本 query（仅 Text 块，**不含**附件提取文本）——用于标题/钩子/检索，
+    // 避免整份文档灌进 query 噪声。附件内容在下方 materialize 后进 final_blocks 给 LLM。
     let content_text = ContentBlock::join_text(&final_blocks);
     // M1.2: 提取当前用户消息的纯文本 query（仅 Text 块拼接；与 LLM 拼装时使用的 content_text 一致）
     let current_user_query = Some(content_text.clone());
+
+    // Phase 3: office/pdf 附件 → 后端提取为 Text 块追加到 final_blocks 末尾（内容跟在用户文本后）。
+    // 文件是输入模态（LLM 读不了 base64 二进制），故在此物化为 Text：不进 ContentBlock 枚举、
+    // base64 不落盘 DB、provider 适配层零改动。提取失败 → 整条消息拒绝（提示该附件无法读取）。
+    let final_blocks = match input.files.as_ref().filter(|v| !v.is_empty()) {
+        Some(files) => {
+            validate_files(files)?;
+            materialize_file_blocks(final_blocks, files)?
+        }
+        None => final_blocks,
+    };
 
     // --- 2. 取会话 + agent + api_key → 创建 provider ---
     let conv = repo::conversation::get_by_id(pool.inner(), &conv_id).await?;

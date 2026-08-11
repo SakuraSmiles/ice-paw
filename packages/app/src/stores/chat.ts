@@ -131,6 +131,11 @@ export const useChatStore = defineStore("chat", () => {
   // ===== 图片附件列表 =====
   const pendingImages = ref<{ data: string; mediaType: string; name: string }[]>([]);
 
+  // ===== office/pdf 文件附件列表 =====
+  // 与图片不同：文件在后端 send_message 入口 materialize 为 Text 块（doc::try_extract），
+  // 不进 ContentBlock（LLM 读不了 OOXML 二进制）。前端只持有 base64 + 文件名 + 字节数（用于展示）。
+  const pendingFiles = ref<{ name: string; data: string; size: number }[]>([]);
+
   // ===== 流式发送 =====
   const sending = ref(false);
   const streamingText = ref("");
@@ -240,6 +245,17 @@ export const useChatStore = defineStore("chat", () => {
       pendingImages.value = [];
     }
 
+    // office/pdf 附件：后端 materialize 为 Text 块（提取真实文本），前端无提取能力，
+    // 故乐观气泡只标注文件名占位（提取后的完整文本由后端写库，重载后展示）。
+    let files: import("../types").AttachedFile[] | undefined;
+    if (pendingFiles.value.length > 0) {
+      files = pendingFiles.value.map((f) => ({ name: f.name, data: f.data }));
+      for (const f of pendingFiles.value) {
+        blocks.push({ type: "text", text: `[附件 ${f.name}]` });
+      }
+      pendingFiles.value = [];
+    }
+
     const blocksJson = blocks.length > 0 ? JSON.stringify(blocks) : "[]";
     const userMsg: Message = {
       id: "user-" + Date.now(),
@@ -262,7 +278,7 @@ export const useChatStore = defineStore("chat", () => {
     resetSendTimeout();
 
     try {
-      await bridge.chat.sendMessage(activeConvId.value, content, blocks.length > 0 ? blocks : undefined, true);
+      await bridge.chat.sendMessage(activeConvId.value, content, blocks.length > 0 ? blocks : undefined, true, files);
     } catch (e) {
       console.error("发送消息失败:", e);
       sending.value = false;
@@ -516,7 +532,7 @@ export const useChatStore = defineStore("chat", () => {
     conversations, convLoading,
     activeConvId, activeConversation,
     messages, msgLoading, hasMore, loadingMore,
-    sending, streamingText, draftText, pendingImages, lastFinishReason, currentModel,
+    sending, streamingText, draftText, pendingImages, pendingFiles, lastFinishReason, currentModel,
     streamingToolCalls, streamingThinking, thinkingStartTime, thinkingDuration, lastThinkingContent, thinkingDurations,
     // 事件层（useChatEvents）直接读写的内部 Map——暴露供其 mutate；对外读取走下方 computed
     bgStreams, pendingAuthRequests, pendingProposals, lastErrors,

@@ -148,7 +148,7 @@ const messages = {
 };
 
 const chat = {
-  async sendMessage(conversationId: string, content: string, contentBlocks?: import("../types").ContentBlock[], toolsEnabled?: boolean): Promise<void> {
+  async sendMessage(conversationId: string, content: string, contentBlocks?: import("../types").ContentBlock[], toolsEnabled?: boolean, files?: import("../types").AttachedFile[]): Promise<void> {
     try {
       await invoke<void>("send_message", {
         input: {
@@ -156,6 +156,9 @@ const chat = {
           content: content || undefined,
           content_blocks: contentBlocks?.length ? contentBlocks : undefined,
           tools_enabled: toolsEnabled ?? true,
+          // office/pdf 附件：后端在 send_message 入口 materialize 为 Text 块（doc::try_extract），
+          // **不**进 content_blocks（文件是输入模态，非 ContentBlock）。
+          files: files?.length ? files : undefined,
         },
       });
     } catch (err) { throw wrapInvokeError("chat.sendMessage", err); }
