@@ -2,7 +2,7 @@
 
 ## 项目概述
 IcePaw — 本地优先的 LLM 对话工作站。Tauri v2 (Rust) + Vue 3 (TypeScript) 桌面应用。
-当前版本：`0.2.7`。
+当前版本：`0.2.9`。
 
 ## 构建命令
 
@@ -20,8 +20,8 @@ cargo check --manifest-path packages/app/src-tauri/Cargo.toml
 
 ### 前端
 ```bash
-pnpm tauri:dev     # 开发模式（端口 1420，被占时先 taskkill //F //PID <pid>）
-pnpm tauri:build   # 打包
+pnpm run tauri:dev     # 开发模式（须在仓库根目录运行；端口 1420，被占时先 taskkill //F //PID <pid>）
+pnpm run tauri:build   # 打包（须在仓库根目录运行；packages/app/ 下无此 script 会报 Missing script）
 pnpm test          # vitest（本地可跑，前端重构主安全网）
 pnpm typecheck && pnpm lint && pnpm build   # 不覆盖视觉/CSS 回归
 ```
@@ -85,11 +85,12 @@ agent 调用 `propose_config_change` 工具提出创建/修改 agent 提案 → 
 - migration 39 `tool_index` 列 + `t{idx}_` 命名 + 历史 sanitize（修工具名违反 `^[a-zA-Z0-9_-]+$`）
 - OpenAI 适配层 `chat_message_to_openai` 1→N 展开 tool_result 为多条 role=tool（OpenAI-only，Anthropic 零改）
 
-### 大文件拆分（分支 refactor/split-bigfiles-composable，已 push origin）
+### 大文件拆分（已 ff-merge 到 main 17b1ffc，分支已删）
 - loop_engine 1343→697 + 抽 `loop/` 子模块；chat.ts 843→532（抽 useChatEvents）；Sidebar/ChatMessages 抽 composables
 
-## 当前状态（2026-08-09）
-- 活跃分支：`refactor/split-bigfiles-composable`（HEAD `132cf19`，已 push origin）
-- origin/main：`a02a7b0`（含 deepseek 400 修复，2026-08-09 push）；本地 main 与 origin/main 同步
-- 测试 binary 无法运行（sodium DLL），`cargo check`/`--tests` 可验证编译；前端 vitest 本地可跑
-- 仍待办：proposal Phase 2（MCP 域）、上下文预算/钩子端到端手测、可测试性三连（sodium DLL 是门控钥匙）
+## 当前状态（2026-08-11）
+- 版本 **0.2.9**（已打包 NSIS 229M + MSI 241M + push origin/main），待生产手测
+- 分支：仅 `main @ f43b866`（本地与 origin/main 同步；refactor/split-bigfiles-composable + frontend-rewrite + immersive-mode 三分支 local/remote 已删）
+- 近期递进：17b1ffc（大文件拆分+孤儿 tool_use 根治+OpenAI usage 修复）→ ec08e17（治本②③KB watcher 运行时注册+自动续写+输出侧模型表+MD 表格修复）→ 22cafb6（下拉框错位+CI Linux E0308+删 max_tokens 表单字段）→ 0.2.9 打包
+- 测试 binary 无法运行（sodium DLL，STATUS_ENTRYPOINT_NOT_FOUND），`cargo check`/`--tests` 验证编译；真测试靠 CI Linux；前端 vitest 本地可跑
+- 仍待办：生产手测 ②③（KB watcher 运行时注册 + 自动续写）、proposal Phase 2（MCP 域）、可测试性（sodium DLL 是门控钥匙）
