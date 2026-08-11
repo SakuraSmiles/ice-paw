@@ -15,6 +15,7 @@ import MarkdownIt from "markdown-it";
 import hljs from "highlight.js";
 // 只导入常用语言，缩小体积
 import "highlight.js/lib/common";
+import { preprocessMarkdown } from "../../utils/markdown";
 
 const rootRef = ref<HTMLElement | null>(null);
 
@@ -56,22 +57,11 @@ const md = new MarkdownIt({
   highlight: highlightCode,
 });
 
-// 容错预处理：模型常在「列表项 / 引用 / 普通段落」之后不加空行直接接 GFM 表格，
-// markdown-it 的 lazy-continuation 会把表格头行吞进上一段（再叠加 typographer 把
-// 分隔行里的 --- 转成破折号 —），最终渲染成「竖线 + 破折号」的乱码文本而非表格。
-// 此处在解析前给「紧跟在非表格行之后的表格」补一个空行，让 table 规则正确触发。
-// （独立成段、前后已有空行的表格不受影响。）覆盖最常见的内容质量问题。
-function preprocessTables(src: string): string {
-  // $1 = 普通文本行末字符 + 换行；$2 = 表头行 + 分隔行（GFM 表格最小骨架）
-  return src.replace(/([^\n|]\n)(\|[^\n]*\|\s*\n\|[\s:|-]+\|)/g, "$1\n$2");
-}
-
-// 列表项内 <p> 标签清理（保持序号与内容同行）
-// markdown-it 会在 <li> 内包裹 <p>，导致 display:block 换行
-// 在渲染后把 <li> 直属的 <p> 展开为纯文本，保留内部 HTML
+// 容错预处理见 utils/markdown.ts：愈合不合规的分隔行（模型吐空 pipe / 列数不足 /
+// em-dash / 单元格漏 -）+ 给表前补空行，避免 GFM 表格整表退化成普通段落。
 const origRender = md.render.bind(md);
 md.render = function (src: string): string {
-  let html = origRender(preprocessTables(src));
+  let html = origRender(preprocessMarkdown(src));
   // 移除 <li> 内直属 <p> 标签（无论后面是否有嵌套标签）
   // markdown-it 生成 <li><p>content</p></li> 或 <li><p>content</p><ul>...</ul></li>
   // <p> 的 display:block 导致序号与内容在不同行
