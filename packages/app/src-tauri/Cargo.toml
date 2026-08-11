@@ -94,6 +94,14 @@ base64 = "0.22"
 serde_yaml = "0.9"
 notify = "8.2.0"
 notify-debouncer-full = "0.7.0"
+# office/pdf 文档解析（read_file / KB 索引 / 聊天附件 共享 spine，见 harness/doc/）
+# calamine 读 xlsx/xls/xlsb/ods；docx-rs 当前 docx 提取走 zip+XML 直读（见 docx.rs），
+#   crate 保留作 Phase 4 写入 + 未来结构化读取；pdf-extract 提取 PDF 文本。
+calamine = "0.36.1"
+docx-rs = "0.4.22"
+pdf-extract = "0.12.0"
+# zip 与 docx-rs/calamine 传递依赖同版本（lockfile 8.6.0），显式声明以在 docx.rs 直读 word/document.xml。
+zip = "8.6"
 
 # === 集成测试 ===
 [dev-dependencies]

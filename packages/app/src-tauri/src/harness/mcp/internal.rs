@@ -14,6 +14,26 @@ use crate::error::{AppError, AppResult};
 use super::client::McpClient;
 use super::types::AuthorizationLevel;
 
+/// 把已读入的字节解码为文本。
+///
+/// office/pdf（docx / xlsx / xls / xlsb / ods / pdf）走 [`crate::harness::doc::try_extract`]
+/// 提取出文本/markdown；其余扩展名走原 [`crate::infra::decode::decode_bytes`]
+/// （UTF-8 / GBK / lossy）文本解码。返回 `(content, encoding_label)`，office 路径
+/// label 为 `extracted-{kind}`（如 `extracted-docx`）。
+///
+/// **设计**：office 解析失败显式返回 [`Err`]，**绝不静默退回 lossy 文本**——避免把
+/// OOXML 二进制当 GBK 解出乱码、冒充"成功"读到内容（这正是 office 支持要根治的 bug）。
+/// 单文件读（read_file）直接 `?` 上抛让 agent 看见；批量读（read_multiple_files）
+/// 由调用方把 `Err` 转成单条 item 的 error 字段，不中断整批。
+fn decode_bytes_or_extract(bytes: &[u8], ext: &str) -> AppResult<(String, String)> {
+    if let Some(doc) = crate::harness::doc::try_extract(bytes, ext)? {
+        Ok((doc.text, format!("extracted-{}", doc.kind.label())))
+    } else {
+        let decoded = crate::infra::decode::decode_bytes(bytes);
+        Ok((decoded.text, decoded.encoding.to_string()))
+    }
+}
+
 // =========================================================================
 // read_file
 // =========================================================================
@@ -51,9 +71,12 @@ impl McpClient for ReadFileTool {
     }
 
     fn description(&self) -> &str {
-        "Read the contents of a local file. Large files (>30KB) are automatically \
-         paginated by lines — use the offset parameter to read subsequent pages. \
-         The response includes total_lines, has_more, and next_offset for pagination."
+        "Read the contents of a local file. Supports plain text, code, and binary \
+         office/PDF documents: .docx, .xlsx, .xls, .xlsb, .ods are extracted to \
+         readable text/markdown (spreadsheets render as tables), .pdf is extracted \
+         to text. Large files (>30KB) are automatically paginated by lines — use \
+         the offset parameter to read subsequent pages. The response includes \
+         total_lines, has_more, and next_offset for pagination."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -122,8 +145,13 @@ impl McpClient for ReadFileTool {
             .await
             .map_err(AppError::Io)?;
 
-        let decoded = crate::infra::decode::decode_bytes(&bytes);
-        let content = decoded.text;
+        // office/pdf 走文档提取（docx/xlsx/xls/xlsb/ods/pdf），其余走文本解码。
+        // office 解析失败显式 Err（不退回乱码）。
+        let ext = canonical
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
+        let (content, encoding_label) = decode_bytes_or_extract(&bytes, ext)?;
 
         // 按行分页：大文件或显式指定 offset/limit 时分页返回
         let all_lines: Vec<&str> = content.lines().collect();
@@ -147,7 +175,7 @@ impl McpClient for ReadFileTool {
             let result = ReadFileResult {
                 path: parsed.path,
                 size: file_size,
-                encoding: decoded.encoding.to_string(),
+                encoding: encoding_label.clone(),
                 total_lines,
                 content,
             };
@@ -178,7 +206,7 @@ impl McpClient for ReadFileTool {
         let result = ReadFilePageResult {
             path: parsed.path,
             size: file_size,
-            encoding: decoded.encoding.to_string(),
+            encoding: encoding_label.clone(),
             total_lines,
             offset: start,
             lines_returned: page_lines.len(),
@@ -599,13 +627,26 @@ async fn read_one_for_multiple(path_str: &str) -> MultipleReadItem {
                     bytes: Some(bytes.len()),
                 };
             }
-            let decoded = crate::infra::decode::decode_bytes(&bytes);
-            MultipleReadItem {
-                path: path_str.into(),
-                ok: true,
-                error: None,
-                content: Some(decoded.text),
-                bytes: Some(bytes.len()),
+            // office/pdf 走文档提取，其余走文本解码；office 解析失败 → 该项 error，不中断批量
+            let ext = canonical
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("");
+            match decode_bytes_or_extract(&bytes, ext) {
+                Ok((text, _enc)) => MultipleReadItem {
+                    path: path_str.into(),
+                    ok: true,
+                    error: None,
+                    content: Some(text),
+                    bytes: Some(bytes.len()),
+                },
+                Err(e) => MultipleReadItem {
+                    path: path_str.into(),
+                    ok: false,
+                    error: Some(format!("文档解析失败: {e}")),
+                    content: None,
+                    bytes: Some(bytes.len()),
+                },
             }
         }
         Err(e) => MultipleReadItem {
@@ -625,9 +666,11 @@ impl McpClient for ReadMultipleFilesTool {
     }
 
     fn description(&self) -> &str {
-        "Read up to 20 files in one call. Files >1MB are skipped (use read_file to \
-paginate). Individual failures don't abort the batch — each result carries its own \
-ok/error. Note: always prompts for confirmation since multiple paths can't be auto-whitelisted."
+        "Read up to 20 files in one call. Supports plain text/code and office/PDF \
+(.docx/.xlsx/.xls/.xlsb/.ods/.pdf are extracted to text). Files >1MB are skipped \
+(use read_file to paginate). Individual failures don't abort the batch — each \
+result carries its own ok/error. Note: always prompts for confirmation since \
+multiple paths can't be auto-whitelisted."
     }
 
     fn parameters(&self) -> serde_json::Value {
