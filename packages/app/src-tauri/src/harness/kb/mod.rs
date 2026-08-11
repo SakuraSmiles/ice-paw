@@ -5,10 +5,11 @@
 //!
 //! - `parser`：单文件 md → 结构化字段（title/summary/tags）+ content_hash
 //! - `indexer`：扫描 KB 目录 → 增量 upsert `kb_document`（按 content_hash）
-//! - `watcher`：notify 监听目录变更 → 触发增量索引（启动集成见 lib.rs setup）
+//! - `watcher_manager`：notify 监听目录变更 → 触发增量索引。**运行时可增删**
+//!   （`KbWatcherManager`），agent_cmd 在 create/update/delete 时对账（启动集成见 lib.rs setup）
 
 pub mod embedding;
 pub mod ensure;
 pub mod indexer;
 pub mod parser;
-pub mod watcher;
+pub mod watcher_manager;

@@ -36,7 +36,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
 
 use sqlx::SqlitePool;
@@ -45,6 +45,7 @@ use crate::crypto;
 use crate::db::models::{Agent, AgentRow, AgentUpdate, HookConfig, NewAgent, RotateAgentKey};
 use crate::db::repo;
 use crate::error::{AppError, AppResult};
+use crate::harness::kb::{ensure, watcher_manager::KbWatcherManager};
 
 // ============================================================================
 // 类型：带凭据的 Agent 数据（chat_cmd 拼装 LLM 调用所需的全部信息）
@@ -204,6 +205,25 @@ impl SqlAgentCmd {
     pub fn new(app: AppHandle, pool: SqlitePool) -> Self {
         Self { app, pool }
     }
+
+    /// 取出全局 KB watcher 管理器（lib.rs boot 后存在；早期 / 测试可能缺失 → None）。
+    ///
+    /// agent 增删改时用它对账目录监听（模式 A 治本：运行期新建 agent 的 KB 目录
+    /// 不再需要重启即可被监听）。缺失时调用方静默跳过，回退「重启后补」语义。
+    fn watcher(&self) -> Option<Arc<KbWatcherManager>> {
+        self.app
+            .try_state::<Arc<KbWatcherManager>>()
+            .map(|s| s.inner().clone())
+    }
+
+    /// 解析某 agent 的 KB 行（scope=agent, owner=agent_id），用于 watcher 增删改时
+    /// 取 kb_id + 当前 directory。无则 None（agent 无约定 KB）。
+    async fn agent_kb(&self, agent_id: &str) -> Option<crate::db::models::Kb> {
+        repo::kb::list_by_scope(&self.pool, "agent", Some(agent_id))
+            .await
+            .ok()
+            .and_then(|v| v.into_iter().next())
+    }
 }
 
 #[async_trait]
@@ -303,7 +323,7 @@ impl AgentCmd for SqlAgentCmd {
             .await
             .ok()
             .and_then(|p| p.default_workspace_path);
-        crate::harness::kb::ensure::ensure_agent_kb(
+        ensure::ensure_agent_kb(
             &self.pool,
             &row.id,
             &row.name,
@@ -311,6 +331,13 @@ impl AgentCmd for SqlAgentCmd {
             default_ws.as_deref(),
         )
         .await;
+
+        // 注册 watcher：运行期监听新建 agent 的 KB 目录（无需重启）。
+        // ensure_agent_kb 已建好 KB 行 + 触发初始索引，此处查 KB 行拿 kb_id/directory
+        // 登记到 watcher，后续手动往目录拖文件也能被增量索引。
+        if let (Some(wm), Some(kb)) = (self.watcher(), self.agent_kb(&row.id).await) {
+            wm.add_watch(kb.id, kb.directory);
+        }
 
         // 7. 自动生成 agent.yaml（含完整配置：provider/model/tools/system_prompt/base_url）
         if let Some(ws) = row.workspace_path.as_deref() {
@@ -333,6 +360,11 @@ impl AgentCmd for SqlAgentCmd {
     }
 
     async fn update(&self, input: AgentUpdate) -> AppResult<Agent> {
+        // 记录旧 workspace_path，用于检测变更后通知 watcher 重新绑定。
+        let old_workspace = repo::agent::get_by_id(&self.pool, &input.id)
+            .await
+            .ok()
+            .and_then(|r| r.workspace_path);
         let row = repo::agent::update(
             &self.pool,
             &input.id,
@@ -363,6 +395,26 @@ impl AgentCmd for SqlAgentCmd {
             }
         }
 
+        // workspace 变更 → watcher 重新绑定到新 knowledge 目录（best-effort）。
+        // 注：KB 行的 directory 字段不可变（repo::kb::update 仅 name/enabled），
+        // 此处仅让 watcher 跟到新目录以保证增量索引；KB 行 directory 停留旧值是既有局限。
+        if old_workspace != row.workspace_path {
+            if let (Some(wm), Some(kb)) = (self.watcher(), self.agent_kb(&input.id).await) {
+                let default_ws = repo::preferences::get_all(&self.pool)
+                    .await
+                    .ok()
+                    .and_then(|p| p.default_workspace_path);
+                if let Some(root) =
+                    ensure::agent_workspace_root(row.workspace_path.as_deref(), default_ws.as_deref(), &row.id)
+                {
+                    let new_dir = ensure::knowledge_dir(&root)
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    wm.rebind_watch(&kb.id, Some(&kb.directory), &new_dir);
+                }
+            }
+        }
+
         Ok(Agent::from_row_with_file_config(row))
     }
 
@@ -383,6 +435,10 @@ impl AgentCmd for SqlAgentCmd {
     }
 
     async fn delete(&self, agent_id: &str) -> AppResult<()> {
+        // 取消 watcher 监听（删 KB 数据前查 KB 行拿 directory；级联删除后查不到）。
+        if let (Some(wm), Some(kb)) = (self.watcher(), self.agent_kb(agent_id).await) {
+            wm.remove_watch(&kb.directory);
+        }
         // 先清 stronghold 中的 key（容错：失败仅 warn，不阻断删除）
         if let Err(e) = crypto::delete_api_key(&self.app, agent_id) {
             tracing::warn!(target: "ice_paw.agent", "清理 agent {agent_id} API key 失败: {e}");

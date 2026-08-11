@@ -233,13 +233,38 @@ pub fn run() {
                 tracing::info!(target: "ice_paw.mcp", "所有 MCP Server 启动完成");
             });
 
-            // 6) RAG: 启动知识库 watcher（监听目录变更自动索引 + 首次全量扫描）。
+            // 6) RAG: 启动知识库 watcher 管理器（运行时可增删监听 + 首次全量索引）。
+            //    KbWatcherManager 注入 Tauri State，供 agent_cmd 在 create/update/delete
+            //    时对账（运行期新建 agent 的 KB 目录不再需要重启即可被监听）。
             //    后台运行，失败仅 warn，不阻止应用启动。
             let pool_for_kb = pool.clone();
+            let handle_for_kb = handle.clone();
             tauri::async_runtime::spawn(async move {
-                if let Err(e) = harness::kb::watcher::start(pool_for_kb).await {
-                    tracing::warn!(target: "ice_paw.kb", "知识库 watcher 启动失败: {}", e);
+                let wm = match harness::kb::watcher_manager::KbWatcherManager::new(pool_for_kb.clone())
+                {
+                    Ok(w) => Arc::new(w),
+                    Err(e) => {
+                        tracing::warn!(target: "ice_paw.kb", "KbWatcherManager 创建失败: {e}");
+                        return;
+                    }
+                };
+                handle_for_kb.manage(wm.clone());
+
+                // 先确保约定 KB 行存在（global + 各 agent），失败仅 warn 继续用现有 KB。
+                if let Err(e) = harness::kb::ensure::ensure_default_kbs(&pool_for_kb).await {
+                    tracing::warn!(target: "ice_paw.kb", "ensure 约定 KB 失败（继续用现有 KB）: {e}");
                 }
+                let kbs = match db::repo::kb::list_all(&pool_for_kb).await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::warn!(target: "ice_paw.kb", "加载 KB 列表失败: {e}");
+                        return;
+                    }
+                };
+                for kb in kbs.into_iter().filter(|k| k.enabled) {
+                    wm.add_watch(kb.id, kb.directory);
+                }
+                tracing::info!(target: "ice_paw.kb", "KB watcher 管理器启动完成");
             });
 
             let _ = pool;

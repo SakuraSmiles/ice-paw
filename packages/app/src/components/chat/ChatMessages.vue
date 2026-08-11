@@ -257,6 +257,9 @@ function isNewDay(idx: number): boolean {
 // ===== finish_reason 展示 =====
 const finishReasonLabels: Record<string, string> = {
   length: "已达长度上限，回答被截断",
+  // Anthropic 系（Claude / MiniMax）的 stop_reason 原样透传为 "max_tokens"，
+  // 与 OpenAI 系的 "length" 同义，统一映射成同一句中文。
+  max_tokens: "已达长度上限，回答被截断",
   abort: "已手动停止",
   budget_exceeded: "Token 预算超限，回答被截断",
   stuck: "连续多轮无进展，已自动终止",

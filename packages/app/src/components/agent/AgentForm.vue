@@ -49,6 +49,9 @@ const form = ref({
   api_key: "",
   base_url: props.agent?.base_url ?? "",
   workspace_path: props.agent?.workspace_path ?? "",
+  // 单轮输出 token 上限。旧默认 4096 会截断长回答；16384 覆盖绝大多数场景，
+  // 长任务（如长文档对比）可手动调高。未显式配置的旧 agent 由后端 migration 抬升。
+  max_tokens: props.agent?.max_tokens ?? 16384,
 });
 
 onMounted(async () => {
@@ -80,6 +83,10 @@ watch(() => form.value.provider, () => {
 });
 
 const saving = ref(false);
+
+// max_tokens 输入兜底：v-model.number 在输入框被清空时会得到空串（parseFloat 失败），
+// 直接发给后端会让 i32 反序列化失败。此处统一兜底为默认值。
+const effectiveMaxTokens = computed(() => Number(form.value.max_tokens) || 16384);
 
 const hasFileConfig = computed(
   () => isEdit.value && !!props.agent?.workspace_path && !!props.agent?.config_from_file,
@@ -149,6 +156,7 @@ async function save() {
         model: form.value.model,
         base_url: form.value.base_url || undefined,
         workspace_path: form.value.workspace_path || null,
+        max_tokens: effectiveMaxTokens.value,
       };
       const updated = await bridge.agents.update(update);
 
@@ -172,6 +180,7 @@ async function save() {
         api_key: form.value.api_key,
         base_url: form.value.base_url || undefined,
         workspace_path: form.value.workspace_path || undefined,
+        max_tokens: effectiveMaxTokens.value,
       };
       const created = await bridge.agents.create(input);
       emit("saved", created);
@@ -253,6 +262,13 @@ function confirmDelete() {
           <label class="field-label">API URL <span class="hint">可选</span></label>
           <input v-model="form.base_url" type="text" class="input" placeholder="留空用默认" />
         </div>
+      </div>
+
+      <!-- 最大输出 Tokens（单轮回答长度上限） -->
+      <div class="field">
+        <label class="field-label">最大输出 Tokens <span class="hint">长任务可调高</span></label>
+        <input v-model.number="form.max_tokens" type="number" class="input" min="256" step="1024" placeholder="16384" />
+        <p class="field-hint">单轮回答的 token 上限。值过小会截断长回答（如长文档对比），按需调高（如 32768）。</p>
       </div>
 
       <!-- 工作区 -->

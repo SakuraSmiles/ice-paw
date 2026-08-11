@@ -256,6 +256,15 @@ pub async fn send_message(
     // 使用共享的工具授权注册表（与 lib.rs install_listener 实例一致）
     let shared_auth_registry = (*auth_registry).clone();
 
+    // 单轮输出上限：模式 E 治本——agent.max_tokens 与模型策展表取 max（只抬不降）。
+    // 把过低的默认/历史值（4096/16384）抬到模型真实输出能力，减少 finish_reason=length
+    // 触发的自动续写次数（续写在 loop_engine 内处理）。yaml 显式调高者被尊重；
+    // 未知模型回退 16384（DB 默认）。
+    let effective_max_tokens = agent.max_tokens.max(
+        crate::harness::provider::default_max_output_tokens(&agent.provider, &agent.model)
+            .unwrap_or(16_384) as i32,
+    );
+
     // 组装对话 tool_registry：直接从 global registry 快照（boot 时已启动全部 server）。
     // per_agent server 的 workspace 后台异步绑定，不阻塞消息发送。
     let tool_registry = if tools_enabled {
@@ -313,7 +322,7 @@ pub async fn send_message(
 
     spawn_stream_loop(
         app, pool.inner().clone(), llm_provider, api_key,
-        assembled.messages, agent.temperature, agent.max_tokens,
+        assembled.messages, agent.temperature, effective_max_tokens,
         cancel_token, conv_id, user_msg_id, asst_msg_id, tools_enabled,
         current_user_query, tool_call_history,
         model_override, Some(effective_model), tool_max_rounds, budget_max_tokens, shared_auth_registry,

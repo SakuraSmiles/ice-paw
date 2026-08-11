@@ -37,6 +37,37 @@ pub fn default_context_window(_provider: &str, model: &str) -> Option<usize> {
     None
 }
 
+/// 按 `(provider, model)` 返回已知模型的**单轮最大输出** token 数（策展表）。
+///
+/// 与 [`default_context_window`]（输入侧）对称的输出侧表（模式 E）。用于 `chat_cmd`
+/// 发送前解析 `effective_max_tokens = agent.max_tokens.max(model_default)`，**只抬不降**
+/// —— 把过低的默认/历史值（如 4096/16384）抬到模型真实能力，减少自动续写次数。
+///
+/// 匹配规则同 `default_context_window`：model 名大小写不敏感、子串包含。
+///
+/// 数值取保守值（32K）：覆盖绝大多数长报告/长对比，且 prompt+max_tokens 之和不会
+/// 撞到 provider 的 window 约束（各模型 window 远大于 32K 输出）。真实上限更高的模型
+///（如 deepseek-v4 384K、glm-5-turbo 128K）用户可在 agent.yaml 显式调高，`.max()` 会尊重。
+pub fn default_max_output_tokens(_provider: &str, model: &str) -> Option<usize> {
+    let m = model.to_lowercase();
+
+    // 主流大模型统一给 32K（保守、覆盖长输出、不撞 window）
+    if m.contains("minimax-m3")
+        || m.contains("deepseek-v4")
+        || m.contains("glm-5-turbo")
+        || m.contains("glm5-turbo")
+        || ((m.contains("glm-5.1") || m.contains("glm-5.2")) && m.contains("[1m]"))
+        || m.contains("claude")
+        || m.contains("gpt-4")
+        || m.contains("gpt-4o")
+        || m.contains("o3-mini")
+    {
+        return Some(32_768);
+    }
+
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -68,5 +99,43 @@ mod tests {
     fn unknown_model_returns_none() {
         assert_eq!(default_context_window("openai", "gpt-4o"), None);
         assert_eq!(default_context_window("", "some-custom-model"), None);
+    }
+
+    // --- 输出侧表（default_max_output_tokens）---
+
+    #[test]
+    fn output_known_models_get_32k() {
+        assert_eq!(
+            default_max_output_tokens("minimax", "MiniMax-M3"),
+            Some(32_768)
+        );
+        assert_eq!(
+            default_max_output_tokens("deepseek", "deepseek-v4-pro"),
+            Some(32_768)
+        );
+        assert_eq!(
+            default_max_output_tokens("glm", "glm-5-turbo"),
+            Some(32_768)
+        );
+        assert_eq!(
+            default_max_output_tokens("anthropic", "claude-sonnet-4-20250514"),
+            Some(32_768)
+        );
+        assert_eq!(default_max_output_tokens("openai", "gpt-4o"), Some(32_768));
+    }
+
+    #[test]
+    fn output_glm_52_needs_1m_suffix_like_input_table() {
+        assert_eq!(
+            default_max_output_tokens("glm", "glm-5.2[1m]"),
+            Some(32_768)
+        );
+        // 不带后缀的 glm-5.2 → None（与输入表保持一致：后缀才解锁）
+        assert_eq!(default_max_output_tokens("glm", "glm-5.2"), None);
+    }
+
+    #[test]
+    fn output_unknown_model_returns_none() {
+        assert_eq!(default_max_output_tokens("", "some-custom-model"), None);
     }
 }

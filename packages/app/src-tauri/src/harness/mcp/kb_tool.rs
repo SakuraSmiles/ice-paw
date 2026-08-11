@@ -356,11 +356,33 @@ impl McpClient for SaveToKbTool {
         let dir_str = directory.to_string_lossy().replace('\\', "/");
         tracing::info!(target: "ice_paw.kb", "save_to_kb 写入: {}/{}", dir_str, filename);
 
+        // 立即内联索引：不依赖 watcher 是否已注册。运行期新建 agent 的 KB 目录
+        // 不会被「启动时一次性注册」的 watcher 监听（见 ensure_agent_kb），仅靠
+        // watcher 的话这些文件永远进不了 kb_document 表、UI 列表为空。这里写盘后
+        // 直接 index_directory，保证工具返回时即可被 search_kb 检索。
+        let owner = if parsed.scope == "agent" { Some(ctx.agent_id.as_str()) } else { None };
+        let kbs = repo::kb::list_by_scope(&ctx.pool, &parsed.scope, owner).await?;
+        let mut indexed_msg = "已索引，立即可用 search_kb 检索。";
+        if let Some(kb) = kbs.first() {
+            match crate::harness::kb::indexer::index_directory(&ctx.pool, &kb.id, &directory).await {
+                Ok(stats) => tracing::info!(
+                    target: "ice_paw.kb",
+                    "save_to_kb 内联索引完成 kb={} indexed={} skipped={}",
+                    kb.id, stats.indexed, stats.skipped
+                ),
+                Err(e) => {
+                    // 文件已落盘；索引失败时回退到「重启后 watcher 补索引」语义，不阻断保存。
+                    tracing::warn!(target: "ice_paw.kb", "save_to_kb 内联索引失败（文件已落盘）: {e}");
+                    indexed_msg = "已保存；索引稍后由文件监听补齐，可用 search_kb 检索。";
+                }
+            }
+        }
+
         Ok(serde_json::json!({
             "scope": parsed.scope,
             "directory": dir_str,
             "file_path": filename,
-            "message": "已保存到知识库，文件监听将自动索引；稍后可用 search_kb 检索。"
+            "message": indexed_msg,
         })
         .to_string())
     }
