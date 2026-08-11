@@ -219,6 +219,18 @@ export type ContentBlock =
   | { type: "tool_result"; tool_use_id: string; content: string; is_error?: boolean }
   | { type: "thinking"; thinking: string; signature?: string };
 
+/**
+ * 聊天文件附件（office/pdf）。后端在 send_message 入口 materialize 为 Text 块，
+ * **不**进 ContentBlock（文件是输入模态，LLM 读不了 base64 二进制）。
+ * 与后端 `AttachedFile` 对齐。
+ */
+export interface AttachedFile {
+  /** 文件名（含扩展名），决定后端解析格式 */
+  name: string;
+  /** base64 编码字节（不含 data URL 前缀） */
+  data: string;
+}
+
 export interface ChatToolCallStartPayload {
   conversation_id: string; message_id: string; id: string; name: string;
 }
