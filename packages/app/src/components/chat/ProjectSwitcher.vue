@@ -89,8 +89,29 @@ function onManage() {
 
 <style scoped>
 /* ===== 项目空间切换器：复用 footer-btn 的 ghost 语系（透明底，hover/active 才有底色） ===== */
+/* ProjectSwitcher 是多根组件（button + overlay + Transition/nav），Vue scoped CSS
+   不会把父级 Sidebar 的 scope-id 传到多根子组件的元素上，故 Sidebar 的 scoped
+   `.footer-btn` 命不中此 button。这里显式声明完整 footer 按钮样式，自给自足——
+   否则缺 display:flex 会让长名称把箭头 caret 挤换行（name 的 flex:1 也失效）。 */
 .proj-switcher {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   width: 100%;
+  padding: 8px 12px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: var(--ip-text-body-sm-size);
+  color: var(--ip-color-text-secondary);
+  border-radius: var(--ip-radius-md);
+  line-height: 1;
+  transition: background-color var(--ip-duration-fast) var(--ip-ease-out);
+}
+.proj-switcher:hover {
+  background-color: var(--color-sidebar-item-hover);
+  color: var(--ip-color-text-primary);
 }
 /* 展开态 = 选中底色（与会话选中项同款），表明控件处于打开 */
 .proj-switcher.switcher-open {

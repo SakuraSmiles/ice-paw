@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use notify::RecursiveMode;
-use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, FileIdMap};
+use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, RecommendedCache};
 use sqlx::SqlitePool;
 
 use crate::error::{AppError, AppResult};
@@ -31,8 +31,12 @@ use super::indexer::index_directory;
 /// 文件事件的 debounce 窗口：编辑器单次保存常产生多次写事件，合并为一个索引批次。
 const DEBOUNCE_WINDOW: Duration = Duration::from_secs(2);
 
-/// notify 底层 watcher + FileIdMap 文件缓存（new_debouncer 的返回类型）。
-type KbDebouncer = Debouncer<notify::RecommendedWatcher, FileIdMap>;
+/// notify 底层 watcher + cache（new_debouncer 的返回类型）。
+///
+/// 用库导出的 `RecommendedCache`（平台条件别名：Linux=NoCache，Win/Mac=FileIdMap），
+/// 与 `new_debouncer` 返回类型严格对齐。**切勿硬编码 `FileIdMap`**——否则 Linux CI
+/// 撞 E0308（本地 Windows 测不到该分支，因 Win 上 RecommendedCache 恰好=FileIdMap）。
+type KbDebouncer = Debouncer<notify::RecommendedWatcher, RecommendedCache>;
 
 /// KB watcher 管理器：运行时可增删的目录监听 + 增量索引。
 ///
