@@ -12,6 +12,7 @@
 //!
 //! [`try_extract`]: try_extract
 
+use crate::context::token::estimate_tokens;
 use crate::error::AppResult;
 
 mod docx;
@@ -51,6 +52,19 @@ impl DocKind {
     }
 }
 
+/// 一个提取「块」——聊天附件分页的翻页单位。
+///
+/// - PDF：一页一块（按 pdf-extract 的 form feed `\u{c}` 边界切），label `第N页`
+/// - 电子表格：一个 sheet 一块，label `Sheet:{name}`
+/// - docx：按 token 预算切段（段落边界），label `第N段`
+#[derive(Debug, Clone)]
+pub struct TextChunk {
+    /// 该块的正文
+    pub text: String,
+    /// 人类可读的块标签（注入 LLM 的分隔头 / read_attachment_page 返回里展示）
+    pub label: String,
+}
+
 /// 内部分发用：扩展名 → 解析格式。
 enum DocFormat {
     Docx,
@@ -85,6 +99,30 @@ pub fn try_extract(bytes: &[u8], ext: &str) -> AppResult<Option<ExtractedDoc>> {
         DocFormat::Pdf => pdf::extract(bytes)?,
     };
     Ok(Some(doc))
+}
+
+/// 按扩展名分发「分块提取」——聊天附件大文件分页路径专用。
+///
+/// 返回 `(DocKind, chunks)`；`chunks.len()` 即总页数（`read_attachment_page` 的
+/// `total_pages`）。非 office/pdf 扩展名返回 [`Ok`]`(None)`（调用方不分页）。
+///
+/// 与 [`try_extract`] 的关系：`try_extract` 给整篇（KB 索引 / read_file 复用，
+/// KB 行为零改）；`try_extract_chunks` 给分块（仅聊天附件大文件）。两者独立，
+/// 不共享中间结果——附件路径要么分页要么不分页，不会同时走两条。
+pub fn try_extract_chunks(bytes: &[u8], ext: &str) -> AppResult<Option<(DocKind, Vec<TextChunk>)>> {
+    let fmt = match classify(&ext.to_ascii_lowercase()) {
+        Some(f) => f,
+        None => return Ok(None),
+    };
+    let (kind, chunks) = match fmt {
+        DocFormat::Pdf => (DocKind::Pdf, pdf::extract_chunks(bytes)?),
+        DocFormat::Spreadsheet => spreadsheet::extract_chunks(bytes)?,
+        DocFormat::Docx => {
+            let doc = docx::extract(bytes)?;
+            (DocKind::Docx, split_text_into_chunks(&doc.text, "段"))
+        }
+    };
+    Ok(Some((kind, chunks)))
 }
 
 // =========================================================================
@@ -125,6 +163,64 @@ pub(super) fn normalize(text: &mut String) {
         }
     }
     *text = collapsed.trim().to_string();
+}
+
+/// docx 分块的目标 token 预算（每块约 ≤2000 token，足够 LLM 一屏精读又不浪费翻页）。
+const DOCX_CHUNK_TARGET_TOKENS: usize = 2000;
+
+/// 把整篇文本按 token 预算切成多块（docx 分块用）。
+///
+/// 在 `\n\n`（段落）边界贪心装箱：累加段落 [`estimate_tokens`]，超
+/// [`DOCX_CHUNK_TARGET_TOKENS`] 即封块。单段本身超预算（normalize 后罕见）→
+/// 独立成一块（不硬切字符，宁大勿碎）。空文本兜底返回 1 个空块。
+///
+/// `unit` 进 label：`第N{unit}`（docx 传 `"段"`）。
+pub(super) fn split_text_into_chunks(text: &str, unit: &str) -> Vec<TextChunk> {
+    let target = DOCX_CHUNK_TARGET_TOKENS;
+    let mut chunks: Vec<TextChunk> = Vec::new();
+    let mut buf = String::new();
+    let mut buf_tokens: usize = 0;
+    let mut idx = 0usize;
+
+    let flush = |chunks: &mut Vec<TextChunk>, buf: &mut String, idx: &mut usize| {
+        if buf.is_empty() {
+            return;
+        }
+        *idx += 1;
+        let t = std::mem::take(buf);
+        chunks.push(TextChunk {
+            text: t.trim().to_string(),
+            label: format!("第{}{}", idx, unit),
+        });
+    };
+
+    for para in text.split("\n\n") {
+        let para = para.trim();
+        if para.is_empty() {
+            continue;
+        }
+        let pt = estimate_tokens(para);
+        // 缓冲非空且加入本段会超预算 → 先封块（单段本身超预算则独立成块，不再硬切）
+        if !buf.is_empty() && buf_tokens + pt > target {
+            flush(&mut chunks, &mut buf, &mut idx);
+            buf_tokens = 0;
+        }
+        if !buf.is_empty() {
+            buf.push_str("\n\n");
+        }
+        buf.push_str(para);
+        buf_tokens += pt;
+    }
+    flush(&mut chunks, &mut buf, &mut idx);
+
+    if chunks.is_empty() {
+        // 空文本兜底：一个空块，保证 total_pages ≥ 1
+        chunks.push(TextChunk {
+            text: String::new(),
+            label: format!("第1{}", unit),
+        });
+    }
+    chunks
 }
 
 // =========================================================================
@@ -178,5 +274,28 @@ mod tests {
         let mut s = "a\r\nb\r\r\r\nc".to_string();
         normalize(&mut s);
         assert_eq!(s, "a\nb\n\nc");
+    }
+
+    #[test]
+    fn split_text_into_chunks_packs_by_token_budget() {
+        // 短文本 → 单块（label 第1段）
+        let chunks = split_text_into_chunks("短文本", "段");
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].label, "第1段");
+        assert_eq!(chunks[0].text, "短文本");
+
+        // 多段：每段单独不超预算，但累加超 → 至少 2 块
+        // CJK 1 token/字，target=2000；造 3 段各 1500 字 → 前两段各成块、第三段成块
+        let para: String = "字".repeat(1500);
+        let text = format!("{}\n\n{}\n\n{}", para, para, para);
+        let chunks = split_text_into_chunks(&text, "段");
+        assert_eq!(chunks.len(), 3, "3×1500字 段应切成 3 块");
+        assert_eq!(chunks[0].label, "第1段");
+        assert_eq!(chunks[2].label, "第3段");
+
+        // 空文本 → 兜底 1 空块（total_pages ≥ 1）
+        let chunks = split_text_into_chunks("", "段");
+        assert_eq!(chunks.len(), 1);
+        assert!(chunks[0].text.is_empty());
     }
 }

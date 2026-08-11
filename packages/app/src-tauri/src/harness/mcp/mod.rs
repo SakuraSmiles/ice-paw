@@ -13,6 +13,7 @@ pub mod external;
 pub mod transport;
 pub mod bundled;
 pub mod kb_tool;
+pub mod read_attachment_tool;
 pub mod manager;
 // 内置 agentic 工具（文件读写编辑 / shell / grep / git / web）
 pub mod file_tools;
