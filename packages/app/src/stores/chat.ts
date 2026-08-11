@@ -245,13 +245,16 @@ export const useChatStore = defineStore("chat", () => {
       pendingImages.value = [];
     }
 
-    // office/pdf 附件：后端 materialize 为 Text 块（提取真实文本），前端无提取能力，
-    // 故乐观气泡只标注文件名占位（提取后的完整文本由后端写库，重载后展示）。
+    // office/pdf 附件：后端 materialize 为 attachment（UI 卡片，不进 LLM）+ text（提取正文，进 LLM）。
+    // 前端无提取能力，乐观气泡只放 attachment 元信息卡片（name/kind/size）占位；
+    // 后端为唯一真源——会剥离这些乐观块并从 files 重建，故不污染 query/标题（join_text 跳过 attachment）。
     let files: import("../types").AttachedFile[] | undefined;
     if (pendingFiles.value.length > 0) {
       files = pendingFiles.value.map((f) => ({ name: f.name, data: f.data }));
       for (const f of pendingFiles.value) {
-        blocks.push({ type: "text", text: `[附件 ${f.name}]` });
+        const dot = f.name.lastIndexOf(".");
+        const kind = dot >= 0 ? f.name.slice(dot + 1).toLowerCase() : "";
+        blocks.push({ type: "attachment", name: f.name, kind, size: f.size });
       }
       pendingFiles.value = [];
     }

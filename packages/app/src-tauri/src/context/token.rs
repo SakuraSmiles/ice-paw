@@ -97,6 +97,8 @@ pub fn estimate_block_tokens(block: &ContentBlock) -> usize {
             let decoded = (data.len() * 3) / 4;
             (decoded / 200).max(IMAGE_TOKEN_FLOOR).min(IMAGE_TOKEN_CAP)
         }
+        // 附件元信息块：纯 UI，不发给 LLM → 不占 token 预算
+        ContentBlock::Attachment { .. } => 0,
     }
 }
 

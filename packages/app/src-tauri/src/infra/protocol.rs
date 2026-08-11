@@ -66,6 +66,27 @@ pub enum ContentBlock {
         #[serde(skip_serializing_if = "Option::is_none")]
         signature: Option<String>,
     },
+    /// 附件元信息块（Phase 3 办公文档附件）
+    ///
+    /// **纯 UI 展示用**：只记录用户上传了什么附件（文件名 / 类型 / 字节数），
+    /// 让用户气泡与历史记录能渲染出"上传了 xxx.docx"的卡片。
+    /// **绝不发给 LLM**——provider 适配层（anthropic/openai）会显式跳过它
+    /// （与 Thinking 同模式：filter_map 返回 None）。LLM 实际读到的是后端
+    /// `materialize_file_blocks` 解析出的 Text 块（提取后的正文）。
+    ///
+    /// `kind`：小写扩展名（`docx`/`xlsx`/`xls`/`pdf`），前端按它选图标/标签。
+    /// `size`：解码后字节数（用于显示 "1.2 MB"）。
+    ///
+    /// 序列化格式（与前端 `types/index.ts` 对齐）：
+    /// ```json
+    /// { "type": "attachment", "name": "report.docx", "kind": "docx", "size": 12345 }
+    /// ```
+    /// 注意：`join_text` 只匹配 Text → Attachment 不污染 content_text / query / 标题。
+    Attachment {
+        name: String,
+        kind: String,
+        size: usize,
+    },
 }
 
 impl ContentBlock {
@@ -79,6 +100,15 @@ impl ContentBlock {
         ContentBlock::Image {
             data: data.into(),
             media_type: media_type.into(),
+        }
+    }
+
+    /// Phase 3: 构造附件元信息 block（name=文件名，kind=小写扩展名，size=字节数）
+    pub fn attachment(name: impl Into<String>, kind: impl Into<String>, size: usize) -> Self {
+        ContentBlock::Attachment {
+            name: name.into(),
+            kind: kind.into(),
+            size,
         }
     }
 
@@ -272,6 +302,11 @@ pub struct ChatStartPayload {
     pub conversation_id: String,
     pub user_message_id: String,
     pub assistant_message_id: String,
+    /// 后端 materialize 后的用户消息 content_blocks（含附件提取出的 Text 块）。
+    /// 仅当本次发送含 office/pdf 附件时为 Some——前端乐观用户消息只放了 Attachment
+    /// 占位卡片、拿不到提取正文，据此就地 patch，让附件详情弹窗能展示提取原文。
+    /// None（纯文本/图片消息）时前端不动用户消息。
+    pub user_content_blocks: Option<String>,
 }
 
 /// `chat:assistant-start` 事件 payload

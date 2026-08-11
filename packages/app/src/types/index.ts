@@ -166,6 +166,8 @@ export interface ChatStartPayload {
   conversation_id: string;
   user_message_id: string;
   assistant_message_id: string;
+  /** 含附件时：后端 materialize 后的 content_blocks（含提取正文），用于 patch 乐观用户消息 */
+  user_content_blocks?: string | null;
 }
 
 /** 多轮工具调用中，每轮工具后创建下一轮 assistant 占位时 emit */
@@ -217,11 +219,12 @@ export type ContentBlock =
   | { type: "image"; data: string; media_type: string }
   | { type: "tool_use"; id: string; name: string; input: string }
   | { type: "tool_result"; tool_use_id: string; content: string; is_error?: boolean }
-  | { type: "thinking"; thinking: string; signature?: string };
+  | { type: "thinking"; thinking: string; signature?: string }
+  | { type: "attachment"; name: string; kind: string; size: number };
 
 /**
- * 聊天文件附件（office/pdf）。后端在 send_message 入口 materialize 为 Text 块，
- * **不**进 ContentBlock（文件是输入模态，LLM 读不了 base64 二进制）。
+ * 聊天文件附件（office/pdf）。后端在 send_message 入口 materialize：
+ * 每个附件产出 `attachment`（UI 卡片元信息，不发给 LLM）+ `text`（提取正文，发 LLM）。
  * 与后端 `AttachedFile` 对齐。
  */
 export interface AttachedFile {
