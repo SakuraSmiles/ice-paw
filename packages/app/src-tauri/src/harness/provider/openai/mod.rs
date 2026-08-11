@@ -227,8 +227,8 @@ impl LlmProvider for OpenAiAdapter {
         // 获取字节流
         let byte_stream = response.bytes_stream();
 
-        // 启动解析协程（委托给 streaming 模块）
-        streaming::parse_sse_stream(byte_stream, tx, cancel);
+        // 启动解析协程（委托给 streaming 模块）。传入模型名供 MiniMax-M3 sentinel 截断器判定。
+        streaming::parse_sse_stream(byte_stream, tx, cancel, effective_model.to_string());
 
         // 返回 ReceiverStream 包装
         Ok(Box::pin(ReceiverStream::new(rx)))
