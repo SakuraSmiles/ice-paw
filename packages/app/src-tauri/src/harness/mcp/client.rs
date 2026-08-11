@@ -252,6 +252,8 @@ impl McpRegistry {
         self.register_sync(Arc::new(super::kb_tool::SearchKbTool));
         self.register_sync(Arc::new(super::kb_tool::SaveToKbTool));
         self.register_sync(Arc::new(super::kb_tool::ReadKbDocumentTool));
+        // 聊天附件分页按页读取（Phase A：大附件按块存表，首页内联，余页按需取）
+        self.register_sync(Arc::new(super::read_attachment_tool::ReadAttachmentPageTool));
         // agentic 工具集（文件读写编辑 / shell / grep / git / web）
         self.register_sync(Arc::new(super::file_tools::WriteFileTool));
         self.register_sync(Arc::new(super::file_tools::EditFileTool));

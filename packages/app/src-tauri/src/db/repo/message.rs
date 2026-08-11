@@ -274,6 +274,19 @@ pub async fn delete(pool: &SqlitePool, id: &str) -> AppResult<()> {
     Ok(())
 }
 
+/// 取单条消息所属的 `conversation_id`。
+///
+/// 用于 `read_attachment_page` 工具的越权守卫：消息不存在返回 `None`，
+/// 存在则返回其会话 ID，由调用方比对当前会话（`ctx.conv_id`）。
+pub async fn conversation_id(pool: &SqlitePool, message_id: &str) -> AppResult<Option<String>> {
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT conversation_id FROM messages WHERE id = ?")
+            .bind(message_id)
+            .fetch_optional(pool)
+            .await?;
+    Ok(row.map(|(c,)| c))
+}
+
 /// M1.2: 列出会话内最近的工具调用名（从 `tool_calls` 审计表 JOIN `messages` 查询）
 ///
 /// # 用途

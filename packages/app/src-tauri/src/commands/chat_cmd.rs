@@ -41,28 +41,73 @@ use crate::context::pipeline::{AssembledContext, PipelineContext, PipelineRunner
 /// （计数在部分加载下会静默丢消息，rowid 不会）。
 const MEMORY_LOAD_LIMIT: i64 = 500;
 
+/// 小文件阈值：提取正文总 token ≤ 此值则**全量内联**（零行为变化，不分页）。
+/// 超过则按块分页，只内联首页 + `read_attachment_page` 工具按页取。
+const INLINE_BUDGET_TOKENS: usize = 4_000;
+
+/// 内联首页正文的硬字符上限（~4000 token 的混合 CJK/ASCII 上限）。
+/// 累加切块逻辑按 token 预算停，但单个超大块（如巨表 sheet）仍可能超——此 cap 兜底截断。
+const INLINE_CHAR_CAP: usize = 16_000;
+
 /// 把 office/pdf 附件物化为「Attachment 卡片 + Text 提取正文」并追加到 `blocks` 末尾。
 ///
-/// 每个附件：base64 解码 → [`crate::harness::doc::try_extract`]（按文件名扩展名分发）
-/// → 追加两块：
+/// 每个附件：base64 解码 → [`crate::harness::doc::try_extract_chunks`]（按文件名扩展名
+/// 分发，返回分块）→ 追加：
 /// 1. [`ContentBlock::Attachment`] —— 纯 UI 元信息（name/kind/size），让用户气泡与
 ///    历史记录渲染出"上传了 xxx.docx"卡片；provider 适配层显式跳过，**不发给 LLM**。
-/// 2. [`ContentBlock::Text`] —— `"[附件 {name}（{kind}）]\n{提取文本}"`，发给 LLM 阅读。
+/// 2. [`ContentBlock::Text`] —— `<uploaded_file>` 包裹的提取正文，发给 LLM 阅读。
 ///    用户气泡只渲染 `msg.content` + 图片 + Attachment 卡片，不渲染 content_blocks 的
 ///    Text，故这坨提取正文对用户不可见（仅 LLM 读）。
 ///
+/// **分页（Phase A 治本 PDF >1M 读不到）**：单个附件提取总 token > [`INLINE_BUDGET_TOKENS`]
+/// 时不再整篇灌进一个 Text block（会撑爆 LLM 窗口 / 被裁 / 被拒）。改为：
+/// - 各块文本写入 `message_attachments` 表（`message_id` 外键 CASCADE，跟消息生命周期），
+///   `idx` **跨文件全局连续递增**（表不区分文件，靠注入头里的页码范围告知 LLM）。
+/// - 只把该附件前若干块（≤预算）内联进 Text block，并附 `read_attachment_page` 工具提示。
+/// 小附件（≤预算）仍全量内联，**零行为变化**。
+///
 /// **后端为附件元信息唯一来源**：先剥离入参里前端可能传入的 Attachment 块（乐观显示
-/// 用），再从 `files` 重建，避免重复/脏数据。提取失败返回 [`Err`]，整条 `send_message`
-/// 拒绝（让用户知道哪个附件读不了），绝不静默吞。
+/// 用），再从 `files` 重建。提取失败返回 [`Err`]，整条 `send_message` 拒绝（让用户知道
+/// 哪个附件读不了），绝不静默吞。
+///
+/// **纯函数（无 IO / 无 DB）**：只做 base64 解码 + 提取 + 拼装 blocks，并把大文件的分页
+/// 块数据收集到返回值的 `db_inputs`。**调用方负责在 Pipeline 成功后**把消息行与块行一起
+/// 写库——这样 Pipeline / conv / agent 任一前置失败都不落任何 DB 行，**无孤儿用户消息**
+/// （分页块外键父 = 用户消息，必须消息行先存在；故二者都在 Pipeline 后写入）。
+///
+/// `message_id`：用户消息 ID（预生成的 UUID 字符串，仅用于注入提示里的工具参数；
+/// 真正的 DB 写入由调用方在消息落库时用同一 id）。
 fn materialize_file_blocks(
+    message_id: &str,
     mut blocks: Vec<ContentBlock>,
     files: &[AttachedFile],
-) -> AppResult<Vec<ContentBlock>> {
+) -> AppResult<(Vec<ContentBlock>, Vec<crate::db::repo::message_attachment::AttachmentChunkInput>)> {
     use base64::Engine as _;
     use std::path::Path;
 
+    use crate::context::token::estimate_tokens;
+    use crate::db::repo::message_attachment::AttachmentChunkInput;
+
     // 后端为唯一真源：丢弃前端乐观传入的 Attachment 块，下面从 files 重建
     blocks.retain(|b| !matches!(b, ContentBlock::Attachment { .. }));
+
+    // 单个附件的提取结果（两遍处理：先全部提取定全局页码，再拼 blocks）。
+    struct ExtractedFile {
+        name: String,
+        ext: String,
+        bytes_len: usize,
+        kind_label: &'static str,
+        chunks: Vec<crate::harness::doc::TextChunk>,
+        total_tokens: usize,
+        /// 大文件在全局页序列里的 1-based 区间；小文件为 None。
+        page_range: Option<(usize, usize)>,
+    }
+
+    // —— Pass 1：解码 + 提取 + 收集 db_inputs + 给大文件分配全局页码区间 ——
+    // 全局 idx 跨文件连续递增（message_attachments 不区分文件，靠注入提示告知 LLM 各文件范围）。
+    let mut extracted: Vec<ExtractedFile> = Vec::new();
+    let mut db_inputs: Vec<AttachmentChunkInput> = Vec::new();
+    let mut global_idx: i64 = 0;
 
     for f in files {
         tracing::info!(
@@ -73,47 +118,140 @@ fn materialize_file_blocks(
         );
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(&f.data)
-            .map_err(|e| {
-                AppError::Validation(format!("附件 {} base64 解码失败: {e}", f.name))
-            })?;
+            .map_err(|e| AppError::Validation(format!("附件 {} base64 解码失败: {e}", f.name)))?;
         let ext = Path::new(&f.name)
             .extension()
             .and_then(|e| e.to_str())
             .map(str::to_ascii_lowercase)
             .unwrap_or_default();
         let started = std::time::Instant::now();
-        let doc = crate::harness::doc::try_extract(&bytes, &ext)?.ok_or_else(|| {
-            AppError::Validation(format!(
-                "附件 {} 的格式 .{} 不支持（允许：docx / xlsx / xls / pdf）",
-                f.name, ext
-            ))
-        })?;
+        let (kind, chunks) =
+            crate::harness::doc::try_extract_chunks(&bytes, &ext)?.ok_or_else(|| {
+                AppError::Validation(format!(
+                    "附件 {} 的格式 .{} 不支持（允许：docx / xlsx / xls / pdf）",
+                    f.name, ext
+                ))
+            })?;
+        let kind_label = kind.label();
+        let total_tokens: usize = chunks.iter().map(|c| estimate_tokens(&c.text)).sum();
         tracing::info!(
             target: "ice_paw.attach",
             name = %f.name,
             decoded_bytes = bytes.len(),
             ext = %ext,
-            kind = %doc.kind.label(),
-            text_len = doc.text.len(),
+            kind = %kind_label,
+            chunks = chunks.len(),
+            total_tokens,
+            paginated = total_tokens > INLINE_BUDGET_TOKENS,
             elapsed_ms = started.elapsed().as_millis() as u64,
             "附件提取完成"
         );
-        // 1. UI 卡片（不进 LLM）
-        blocks.push(ContentBlock::attachment(&f.name, &ext, bytes.len()));
-        // 2. 提取正文（进 LLM；用户气泡不渲染）
-        //    用 <uploaded_file> 标签 + 明确措辞，让 LLM 正确识别为「系统自动提取的
-        //    附件原文」而非用户手打——否则 agent 会误判"读不到附件"（内容其实已送达）。
+
+        // 大文件：登记分页块（全局 idx 连续）+ 记录该文件的页码区间。
+        // 小文件：不分页（page_range = None，Pass 2 全量内联）。
+        let page_range = if total_tokens > INLINE_BUDGET_TOKENS {
+            let start = (global_idx + 1) as usize;
+            for c in &chunks {
+                db_inputs.push(AttachmentChunkInput {
+                    idx: global_idx,
+                    name: f.name.clone(),
+                    kind: kind_label.to_string(),
+                    label: c.label.clone(),
+                    text: c.text.clone(),
+                    token_est: estimate_tokens(&c.text) as i64,
+                });
+                global_idx += 1;
+            }
+            let end = global_idx as usize;
+            Some((start, end))
+        } else {
+            None
+        };
+
+        extracted.push(ExtractedFile {
+            name: f.name.clone(),
+            ext,
+            bytes_len: bytes.len(),
+            kind_label,
+            chunks,
+            total_tokens,
+            page_range,
+        });
+    }
+
+    // 全部文件处理完后的全局总页数（每个大文件提示里都用这个**最终**值，避免"截至本文件"
+    // 的累计值在多文件场景下误导 LLM——此前 file A 的提示会把 total 写成它自己的页数）。
+    let final_total_pages = global_idx as usize;
+
+    // —— Pass 2：构建 blocks（UI 卡片 + 内联正文 / 大文件首页）——
+    for e in &extracted {
+        // 1. UI 卡片（不进 LLM；无论大小都 push 一张）
+        blocks.push(ContentBlock::attachment(&e.name, &e.ext, e.bytes_len));
+
+        if e.total_tokens <= INLINE_BUDGET_TOKENS {
+            // 小文件：全量内联（零行为变化）。多块拼接（docx 段 / xlsx sheet）。
+            let body = e
+                .chunks
+                .iter()
+                .map(|c| c.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            blocks.push(ContentBlock::text(format!(
+                "<uploaded_file name=\"{}\" type=\"{}\">\n\
+                 [系统提示：以下是系统自动从用户上传的附件提取的原文，非用户手打。请基于此内容回答用户。]\n\
+                 {}\n\
+                 </uploaded_file>",
+                e.name, e.kind_label, body
+            )));
+            continue;
+        }
+
+        // —— 大文件：首页内联 + 工具提示 ——
+        let (start_page, end_page) = e.page_range.expect("大文件必有 page_range");
+        let file_pages = end_page - start_page + 1;
+
+        // 内联首页：从前若干块累加到 INLINE_BUDGET_TOKENS（至少内联第一块，
+        // 即便它本身超预算——再由 INLINE_CHAR_CAP 字符硬截兜底）。
+        let mut body = String::new();
+        let mut acc = 0usize;
+        for c in &e.chunks {
+            let t = estimate_tokens(&c.text);
+            if !body.is_empty() && acc + t > INLINE_BUDGET_TOKENS {
+                break;
+            }
+            if !body.is_empty() {
+                body.push_str("\n\n");
+            }
+            body.push_str(&format!("--- {} ---\n{}", c.label, c.text));
+            acc += t;
+        }
+        if body.len() > INLINE_CHAR_CAP {
+            // ⚠️ String::truncate(new_len) 在 new_len 非 char 边界时 **panic**（不是回退！）。
+            // INLINE_CHAR_CAP 是字节偏移，CJK/混合文本在 16000 字节处极易落在多字节字符中间。
+            // 先回退到 ≤ cap 的最近 char 边界再 truncate。
+            let mut cut = INLINE_CHAR_CAP;
+            while cut > 0 && !body.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            body.truncate(cut);
+            body.push_str("\n\n[...内容过长已截断，完整内容请用 read_attachment_page 工具按页读取]");
+        }
+
         blocks.push(ContentBlock::text(format!(
-            "<uploaded_file name=\"{}\" type=\"{}\">\n\
-             [系统提示：以下是系统自动从用户上传的附件提取的原文，非用户手打。请基于此内容回应用户。]\n\
+            "<uploaded_file name=\"{}\" type=\"{}\" total_pages=\"{}\">\n\
+             [系统提示：以下是系统自动从用户上传的附件提取的原文，非用户手打。本附件已分页存储：\
+             共 {} 页，对应全局页 {}~{}（本消息全部附件合计 {} 页）。此处仅展示前若干页。\
+             如需后续内容，调用 read_attachment_page(message_id=\"{}\", page=<n>)\
+             （1-based，全局 1~{}）读取指定页。]\n\
              {}\n\
              </uploaded_file>",
-            f.name,
-            doc.kind.label(),
-            doc.text
+            e.name, e.kind_label, final_total_pages, file_pages, start_page, end_page,
+            final_total_pages, message_id, final_total_pages, body
         )));
     }
-    Ok(blocks)
+
+    // 大文件块数据随返回值交调用方，**在 Pipeline 成功后**与消息行一起写库（见 send_message）。
+    Ok((blocks, db_inputs))
 }
 
 /// 发送消息 — 触发 LLM 流式生成。
@@ -163,18 +301,8 @@ pub async fn send_message(
     // M1.2: 提取当前用户消息的纯文本 query（仅 Text 块拼接；与 LLM 拼装时使用的 content_text 一致）
     let current_user_query = Some(content_text.clone());
 
-    // Phase 3: office/pdf 附件 → 后端提取为 Text 块追加到 final_blocks 末尾（内容跟在用户文本后）。
-    // 文件是输入模态（LLM 读不了 base64 二进制），故在此物化为 Text：不进 ContentBlock 枚举、
-    // base64 不落盘 DB、provider 适配层零改动。提取失败 → 整条消息拒绝（提示该附件无法读取）。
-    let final_blocks = match input.files.as_ref().filter(|v| !v.is_empty()) {
-        Some(files) => {
-            validate_files(files)?;
-            materialize_file_blocks(final_blocks, files)?
-        }
-        None => final_blocks,
-    };
-
     // --- 2. 取会话 + agent + api_key → 创建 provider ---
+    // （先于写消息：conv/agent/provider 任一失败都应**不落任何 DB 行**，避免孤儿用户消息。）
     let conv = repo::conversation::get_by_id(pool.inner(), &conv_id).await?;
     let agent_with_creds = agent_cmd.get_with_credentials(&conv.agent_id).await?;
     let agent = agent_with_creds.agent;
@@ -186,6 +314,26 @@ pub async fn send_message(
     let llm_provider = provider::create_provider(
         &agent.provider, &agent.model, base_url, agent.cache_prompt != 0,
     )?;
+
+    // Phase 3 + Phase A：office/pdf 附件 → 后端提取为 Text 块追加到 final_blocks 末尾。
+    // 文件是输入模态（LLM 读不了 base64 二进制），物化为 Text：不进 ContentBlock 枚举、
+    // base64 不落盘 DB、provider 适配层零改动。提取失败 → 整条消息拒绝（fail-fast，先于 Pipeline）。
+    //
+    // materialize 是**纯函数**（只解码+提取+拼 blocks+收集分页块数据），**不写 DB**。
+    // 用户消息行与分页块行都推迟到 Pipeline 成功后一起写——这样 conv/agent/provider/
+    // Pipeline/materialize 任一失败都不落任何 DB 行，**无孤儿用户消息**（分页块外键父
+    // = 用户消息，二者同批写入，消息行先于块行）。
+    //
+    // user_msg_id 预生成（仅 UUID 字符串，无 IO）：materialize 需把它嵌进大文件首页的
+    // read_attachment_page 工具提示里；真正落库时复用同一 id。
+    let user_msg_id = Uuid::new_v4().to_string();
+    let (final_blocks, attach_db_inputs) = match input.files.as_ref().filter(|v| !v.is_empty()) {
+        Some(files) => {
+            validate_files(files)?;
+            materialize_file_blocks(&user_msg_id, final_blocks, files)?
+        }
+        None => (final_blocks, Vec::new()),
+    };
 
     // --- 3. 拼装上下文（A3-1：trait-based Pipeline） ---
     //
@@ -293,8 +441,9 @@ pub async fn send_message(
         user_blocks: pipeline_ctx.user_blocks,
     };
 
-    // --- 4. 写用户消息 + assistant 占位 ---
-    let user_msg_id = Uuid::new_v4().to_string();
+    // --- 4. Pipeline 成功 → 落库（用户消息 + 分页块 + assistant 占位） ---
+    // 全部 DB 写入推迟到此刻：前置任一失败（conv/agent/provider/materialize/Pipeline）
+    // 都不落任何行，无孤儿。用户消息 content = content_text（仅手打文本，不含附件提取正文）。
     repo::message::create(
         pool.inner(), &user_msg_id,
         &NewMessage {
@@ -303,8 +452,14 @@ pub async fn send_message(
             model: None,
         },
     ).await?;
+    // 回填 content_blocks（含 materialize 产出的 Attachment 卡片 + 提取正文 Text 块）。
     let blocks_json = serde_json::to_string(&assembled.user_blocks).unwrap_or_else(|_| "[]".into());
     repo::message::update_content_blocks(pool.inner(), &user_msg_id, &blocks_json).await?;
+    // 大附件分页块：消息行已存在（FK 父满足）。幂等：先清旧再批量插。
+    if !attach_db_inputs.is_empty() {
+        repo::message_attachment::delete_by_message(pool.inner(), &user_msg_id).await?;
+        repo::message_attachment::insert_batch(pool.inner(), &user_msg_id, &attach_db_inputs).await?;
+    }
 
     let asst_msg_id = Uuid::new_v4().to_string();
     // P0-3: 助手消息的 model 字段使用 override（若有），否则回退 Agent 默认 model。

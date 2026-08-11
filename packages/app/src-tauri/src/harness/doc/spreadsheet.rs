@@ -16,33 +16,19 @@ use calamine::{Data, Reader, Sheets};
 
 use crate::error::{AppError, AppResult};
 
-use super::{first_nonempty_line, DocKind, ExtractedDoc};
+use super::{first_nonempty_line, DocKind, ExtractedDoc, TextChunk};
 
 /// 单个 sheet 渲染的数据行上限（不含表头）。
 const MAX_RENDER_ROWS: usize = 5000;
 
-/// 从表格字节流提取文本。
+/// 从表格字节流提取文本（整篇，KB / read_file 路径用）。
+///
+/// 内部委托 [`render_sheets`]，把各 sheet 的 markdown 表用 `\n\n` 拼成一篇。
 pub(super) fn extract(bytes: &[u8]) -> AppResult<ExtractedDoc> {
-    let cursor = Cursor::new(bytes.to_vec());
-    let mut workbook: Sheets<_> = calamine::open_workbook_auto_from_rs(cursor)
-        .map_err(|e| AppError::Internal(format!("表格解析失败: {e}")))?;
-
-    // sheet_names 取 owned Vec<String>，之后 worksheet_range 借 &mut self，无冲突。
-    let sheet_names = workbook.sheet_names();
+    let (sheet_names, sheets) = render_sheets(bytes)?;
     let mut out = String::new();
     let mut first_sheet: Option<String> = None;
-
-    for (idx, name) in sheet_names.iter().enumerate() {
-        let range = match workbook.worksheet_range(name) {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::warn!(
-                    target: "ice_paw.doc",
-                    "sheet 读取失败，跳过 sheet={} err={}", name, e
-                );
-                continue;
-            }
-        };
+    for (idx, (name, body)) in sheets.iter().enumerate() {
         if first_sheet.is_none() {
             first_sheet = Some(name.clone());
         }
@@ -52,7 +38,7 @@ pub(super) fn extract(bytes: &[u8]) -> AppResult<ExtractedDoc> {
         out.push_str("## ");
         out.push_str(name);
         out.push('\n');
-        render_range(&range, &mut out);
+        out.push_str(body);
     }
 
     let title = first_sheet.or_else(|| first_nonempty_line(&out));
@@ -63,6 +49,49 @@ pub(super) fn extract(bytes: &[u8]) -> AppResult<ExtractedDoc> {
         },
         title,
     })
+}
+
+/// 按 sheet 分块提取（聊天附件分页路径用）：每个 sheet 一块。
+///
+/// 块文本 = `## {name}\n{body}`（与整篇路径的单 sheet 片段一致），label `Sheet:{name}`。
+pub(super) fn extract_chunks(bytes: &[u8]) -> AppResult<(DocKind, Vec<TextChunk>)> {
+    let (sheet_names, sheets) = render_sheets(bytes)?;
+    let chunks = sheets
+        .into_iter()
+        .map(|(name, body)| TextChunk {
+            text: format!("## {}\n{}", name, body),
+            label: format!("Sheet:{}", name),
+        })
+        .collect();
+    Ok((DocKind::Spreadsheet { sheets: sheet_names }, chunks))
+}
+
+/// 渲染每个 sheet 为 `(name, body)`，body 为该 sheet 的 GFM markdown 表（不含 `## name` 头）。
+///
+/// [`extract`] 与 [`extract_chunks`] 的共享脊柱——只解析一次工作簿，两条路径各自拼装。
+/// sheet 读取失败记 warn 跳过（不中断）。
+fn render_sheets(bytes: &[u8]) -> AppResult<(Vec<String>, Vec<(String, String)>)> {
+    let cursor = Cursor::new(bytes.to_vec());
+    let mut workbook: Sheets<_> = calamine::open_workbook_auto_from_rs(cursor)
+        .map_err(|e| AppError::Internal(format!("表格解析失败: {e}")))?;
+    let sheet_names = workbook.sheet_names();
+    let mut sheets = Vec::with_capacity(sheet_names.len());
+    for name in &sheet_names {
+        let range = match workbook.worksheet_range(name) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(
+                    target: "ice_paw.doc",
+                    "sheet 读取失败，跳过 sheet={} err={}", name, e
+                );
+                continue;
+            }
+        };
+        let mut body = String::new();
+        render_range(&range, &mut body);
+        sheets.push((name.clone(), body));
+    }
+    Ok((sheet_names, sheets))
 }
 
 /// 把一个 calamine `Range` 渲染成 GFM 表追加到 `out`。
