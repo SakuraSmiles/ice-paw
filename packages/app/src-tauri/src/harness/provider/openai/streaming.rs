@@ -28,6 +28,110 @@ use crate::infra::protocol::{ChatDelta, TokenUsage};
 
 use super::types::{SseChunk, SseToolCallDelta};
 
+// =========================================================================
+// MiniMax-M3 工具调用协议 sentinel 截断过滤器
+// =========================================================================
+//
+// 背景（vLLM issue #51073）：MiniMax-M3 用一套原生工具调用协议——namespace sentinel
+// `]<]minimax[>[`（tokenizer 真实 added token）+ XML 标签（<tool_call>/<invoke>/<filename>/
+// <command>/<content>…）。当模型工具调用解析失败（如漏掉首个参数开标签），整套 markup
+// 原样泄漏进 `choices[0].delta.content`，且 `finish_reason="stop"`（非 length/max_tokens，
+// 故不触发自动续写）。表现为正文末尾出现 `SD]<]minimax[>[</command>]<]minimax[>[</invoke>…`
+// 这类乱码。
+//
+// 策略（治本）：在 transport 层流式截断——一旦发现首个 sentinel，标记 leaked 并永久丢弃
+// 后续 content。理由：
+//  - 截断而非 strip 标签：tag 名会变（<filename>/<command>/<content>…），枚举必漏变体；
+//    且 strip 会把参数值（如文件名 offerta.docx）漏进正文。
+//  - sentinel 恒定（`]<]minimax[>[`），是可靠的泄漏边界；sentinel 之后必为工具 markup，
+//    绝非用户文本，故截断无损。
+//  - 流式而非末端清理：避免生成过程中乱码闪现。
+//
+// 跨 chunk 安全：sentinel 可能被 chunk 边界切成两半，故每次暂扣末尾 sentinel.len()-1 字节，
+// 与下个 chunk 拼接后再判定。仅在模型名含 "minimax" 时启用，其他 OpenAI 兼容模型零影响。
+
+/// MiniMax-M3 工具调用协议的 namespace sentinel（tokenizer 真实 added token）。
+const MINIMAX_SENTINEL: &str = "]<]minimax[>[";
+
+/// 是否需要对该模型启用 sentinel 截断（仅 MiniMax-M3 系列已知泄漏）。
+pub(super) fn needs_sentinel_scrub(model: &str) -> bool {
+    model.to_ascii_lowercase().contains("minimax")
+}
+
+/// 把字节索引向下对齐到 UTF-8 字符边界（stable 替代 nightly `str::floor_char_boundary`）。
+/// 用于 holdback 切片时避免落在多字节字符中间（会 panic）。
+fn floor_char_boundary(s: &str, idx: usize) -> usize {
+    if idx >= s.len() {
+        return s.len();
+    }
+    let mut i = idx;
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
+/// 流式 sentinel 截断过滤器（见模块注释）。
+struct SentinelScrubber {
+    enabled: bool,
+    pending: String, // 跨 chunk 未决的尾部（可能是 sentinel 前缀）
+    leaked: bool,    // 命中 sentinel 后，丢弃所有后续
+}
+
+impl SentinelScrubber {
+    fn new(enabled: bool) -> Self {
+        Self {
+            enabled,
+            pending: String::new(),
+            leaked: false,
+        }
+    }
+
+    fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// 喂入一个 content chunk，返回可安全下发的文本。命中 sentinel 后返回空串并永久
+    /// 丢弃后续。仅在 `is_enabled()` 时调用。
+    fn feed(&mut self, chunk: &str) -> String {
+        debug_assert!(self.enabled, "SentinelScrubber::feed 仅在 enabled 时调用");
+        if self.leaked {
+            return String::new();
+        }
+        if chunk.is_empty() {
+            return String::new();
+        }
+        let mut combined = std::mem::take(&mut self.pending);
+        combined.push_str(chunk);
+        if let Some(pos) = combined.find(MINIMAX_SENTINEL) {
+            // sentinel 首字节是 ASCII `]`（0x5D），必为 UTF-8 字符边界，[..pos] 安全。
+            self.leaked = true;
+            self.pending.clear();
+            combined[..pos].to_string()
+        } else {
+            // 末尾 hold_back 字节可能是 sentinel 前缀，暂扣；其余下发。
+            let hold_back = MINIMAX_SENTINEL.len() - 1;
+            if combined.len() <= hold_back {
+                self.pending = combined;
+                String::new()
+            } else {
+                let target = combined.len() - hold_back;
+                let split = floor_char_boundary(&combined, target);
+                self.pending = combined[split..].to_string();
+                combined[..split].to_string()
+            }
+        }
+    }
+
+    /// 流结束：冲刷未决尾部（EOS 的部分前缀就是普通文本，下发）。leaked 时返回空。
+    fn flush(&mut self) -> String {
+        if self.leaked {
+            return String::new();
+        }
+        std::mem::take(&mut self.pending)
+    }
+}
+
 /// SSE 流解析入口（在独立 tokio 任务中跑完整段 HTTP body 的事件分发）
 ///
 /// 与 Anthropic 保持一致：容量 256，长输出时避免 SSE 解析协程因通道满而阻塞。
@@ -36,6 +140,7 @@ pub(crate) fn parse_sse_stream<S, E>(
     byte_stream: S,
     tx: mpsc::Sender<AppResult<ChatDelta>>,
     cancel: CancellationToken,
+    model: String,
 ) where
     S: Stream<Item = Result<Bytes, E>> + Send + Unpin + 'static,
     E: std::fmt::Display + Send + 'static,
@@ -50,6 +155,9 @@ pub(crate) fn parse_sse_stream<S, E>(
         // OpenAI 的 usage chunk 排在 finish_reason 之后，finish_reason 分支只记下原因、
         // 不立即发 Done；真正的 Done 由 [DONE] 分支或流自然结束兜底带此原因发出。
         let mut pending_finish_reason: Option<String> = None;
+        // MiniMax-M3 sentinel 截断器（仅模型名含 "minimax" 时启用；其他模型 is_enabled()=false，
+        // content 走零开销透传分支）。见上方 SentinelScrubber 注释。
+        let mut scrubber = SentinelScrubber::new(needs_sentinel_scrub(&model));
 
         while let Some(chunk_result) = byte_stream.next().await {
             // 取消检查
@@ -114,7 +222,11 @@ pub(crate) fn parse_sse_stream<S, E>(
                 // 未完成的 ToolCallEnd 已由 finish_reason 分支负责发送（若流以 [DONE]
                 // 直接收尾而未带 finish_reason，则视为自然结束，发送兜底 Done 即可）。
                 if data == "[DONE]" {
-                    // 流正式结束：带上之前 finish_reason chunk 记下的原因（若有）
+                    // 流正式结束：先冲刷 sentinel 截断器的未决尾部（holdback，正常内容），再发 Done。
+                    let tail = scrubber.flush();
+                    if !tail.is_empty() {
+                        let _ = tx.send(Ok(ChatDelta::Delta { content: tail })).await;
+                    }
                     let _ = tx
                         .send(Ok(ChatDelta::Done {
                             finish_reason: pending_finish_reason
@@ -175,7 +287,16 @@ pub(crate) fn parse_sse_stream<S, E>(
 
                             // 正常内容增量
                             if let Some(content) = choice.delta.content {
-                                if !content.is_empty() {
+                                // MiniMax-M3 sentinel 截断（仅 minimax 启用，其他模型零开销透传）：
+                                // 命中首个 ]<]minimax[>[ 后永久截断后续（工具调用 markup 泄漏，非用户文本）。
+                                if scrubber.is_enabled() {
+                                    let emit = scrubber.feed(&content);
+                                    if !emit.is_empty() {
+                                        let _ = tx
+                                            .send(Ok(ChatDelta::Delta { content: emit }))
+                                            .await;
+                                    }
+                                } else if !content.is_empty() {
                                     let _ = tx
                                         .send(Ok(ChatDelta::Delta { content }))
                                         .await;
@@ -230,6 +351,11 @@ pub(crate) fn parse_sse_stream<S, E>(
                     .send(Ok(ChatDelta::ToolCallEnd { id: id.clone() }))
                     .await;
             }
+        }
+        // 冲刷 sentinel 截断器的未决尾部（与 [DONE] 分支对称）
+        let tail = scrubber.flush();
+        if !tail.is_empty() {
+            let _ = tx.send(Ok(ChatDelta::Delta { content: tail })).await;
         }
         let _ = tx
             .send(Ok(ChatDelta::Done {
@@ -321,7 +447,7 @@ mod tests {
         let (tx, mut rx) = mpsc::channel::<AppResult<ChatDelta>>(64);
         let cancel = CancellationToken::new();
 
-        parse_sse_stream(byte_stream, tx, cancel);
+        parse_sse_stream(byte_stream, tx, cancel, "gpt-4o".to_string());
 
         // 任务在发完 Done 后 return → tx drop → rx.recv() 返回 None
         let mut deltas: Vec<String> = Vec::new();
@@ -361,7 +487,7 @@ mod tests {
         let byte_stream = stream::iter(chunks);
         let (tx, mut rx) = mpsc::channel::<AppResult<ChatDelta>>(64);
         let cancel = CancellationToken::new();
-        parse_sse_stream(byte_stream, tx, cancel);
+        parse_sse_stream(byte_stream, tx, cancel, "gpt-4o".to_string());
 
         let mut deltas: Vec<String> = Vec::new();
         let mut got_usage: Option<TokenUsage> = None;
@@ -400,7 +526,7 @@ mod tests {
         let byte_stream = stream::iter(chunks);
         let (tx, mut rx) = mpsc::channel::<AppResult<ChatDelta>>(64);
         let cancel = CancellationToken::new();
-        parse_sse_stream(byte_stream, tx, cancel);
+        parse_sse_stream(byte_stream, tx, cancel, "gpt-4o".to_string());
 
         let mut got_usage: Option<TokenUsage> = None;
         let mut done_reason: Option<Option<String>> = None;
@@ -461,7 +587,7 @@ mod tests {
         let (tx, mut rx) = mpsc::channel::<AppResult<ChatDelta>>(64);
         let cancel = CancellationToken::new();
 
-        parse_sse_stream(byte_stream, tx, cancel);
+        parse_sse_stream(byte_stream, tx, cancel, "gpt-4o".to_string());
 
         // 收集所有 delta，任务结束后 rx 返回 None
         let mut events: Vec<ChatDelta> = Vec::new();
@@ -548,7 +674,7 @@ mod tests {
         let (tx, mut rx) = mpsc::channel::<AppResult<ChatDelta>>(64);
         let cancel = CancellationToken::new();
 
-        parse_sse_stream(byte_stream, tx, cancel);
+        parse_sse_stream(byte_stream, tx, cancel, "gpt-4o".to_string());
 
         let mut thinking: Vec<String> = Vec::new();
         let mut deltas: Vec<String> = Vec::new();
@@ -580,5 +706,164 @@ mod tests {
             Some(Some("stop".to_string())),
             "Done 应携带 finish_reason=stop"
         );
+    }
+
+    // ====================================================================
+    // SentinelScrubber（MiniMax-M3 sentinel 截断）单元测试
+    // ====================================================================
+
+    #[test]
+    fn needs_sentinel_scrub_detection() {
+        assert!(needs_sentinel_scrub("MiniMax-M3"));
+        assert!(needs_sentinel_scrub("minimax-m1"));
+        assert!(needs_sentinel_scrub("Something-MiniMax-Chat"));
+        assert!(!needs_sentinel_scrub("gpt-4o"));
+        assert!(!needs_sentinel_scrub("GLM-5.2"));
+        assert!(!needs_sentinel_scrub("deepseek-v4"));
+        assert!(!needs_sentinel_scrub(""));
+    }
+
+    #[test]
+    fn scrub_disabled_not_enabled() {
+        let s = SentinelScrubber::new(false);
+        assert!(!s.is_enabled());
+    }
+
+    #[test]
+    fn scrub_passthrough_no_sentinel() {
+        let mut s = SentinelScrubber::new(true);
+        // 长 content 无 sentinel：feed 因 holdback 暂扣末尾，flush 补齐 → 无损
+        let src = "这是一段不含 sentinel 的正常中文输出内容，长度足够超过 holdback。";
+        let mut out = String::new();
+        out.push_str(&s.feed(src));
+        out.push_str(&s.flush());
+        assert_eq!(out, src);
+    }
+
+    #[test]
+    fn scrub_truncate_at_first_sentinel_single_chunk() {
+        let mut s = SentinelScrubber::new(true);
+        // sentinel 在中段：前缀 "读 SD" 保留，sentinel 及之后全截断（用户实测 case）
+        let emit = s.feed("读 SD]<]minimax[>[</command>]<]minimax[>[</invoke>");
+        assert_eq!(emit, "读 SD");
+        // 已 leaked，后续 feed 与 flush 全丢
+        assert_eq!(s.feed("更多文本"), "");
+        assert_eq!(s.flush(), "");
+    }
+
+    #[test]
+    fn scrub_sentinel_split_across_chunks() {
+        let mut s = SentinelScrubber::new(true);
+        // 把 sentinel 切在 "minim" / "ax[>[" 之间 → 验证 holdback 跨 chunk 重组
+        let mut out = String::new();
+        out.push_str(&s.feed("读 SD]<]minim"));
+        out.push_str(&s.feed("ax[>[</command>]<]minimax[>[</invoke>"));
+        out.push_str(&s.flush());
+        assert_eq!(out, "读 SD");
+    }
+
+    #[test]
+    fn scrub_leaked_drops_subsequent() {
+        let mut s = SentinelScrubber::new(true);
+        assert_eq!(s.feed("ok]<]minimax[>[junk"), "ok");
+        assert_eq!(s.feed("still junk"), "");
+        assert_eq!(s.feed("more"), "");
+        assert_eq!(s.flush(), "");
+    }
+
+    #[test]
+    fn scrub_sentinel_at_start_yields_empty() {
+        let mut s = SentinelScrubber::new(true);
+        // 整条消息就是一个失败的工具调用（sentinel 在最前）→ 截断为空
+        let emit = s.feed("]<]minimax[>[<tool_call>\n]<]minimax[>[<invoke name=\"x\">");
+        assert_eq!(emit, "");
+        assert_eq!(s.flush(), "");
+    }
+
+    /// 逐字符喂入（CJK 多字节 + 极小 chunk）——验证 floor_char_boundary 不 panic、
+    /// 且无 sentinel 时无损重组。
+    #[test]
+    fn scrub_feed_single_chars_no_sentinel() {
+        let mut s = SentinelScrubber::new(true);
+        let src = "读SD列表内容";
+        let mut out = String::new();
+        for ch in src.chars() {
+            out.push_str(&s.feed(&ch.to_string()));
+        }
+        out.push_str(&s.flush());
+        assert_eq!(out, src);
+    }
+
+    /// 逐字符喂入含 sentinel 的串——验证极小 chunk 下仍能正确截断在 sentinel 边界。
+    #[test]
+    fn scrub_feed_single_chars_with_sentinel() {
+        let mut s = SentinelScrubber::new(true);
+        let mut out = String::new();
+        for ch in "读SD]<]minimax[>[</command>".chars() {
+            out.push_str(&s.feed(&ch.to_string()));
+        }
+        out.push_str(&s.flush());
+        assert_eq!(out, "读SD");
+    }
+
+    /// 端到端：MiniMax-M3 模型 + content 含 sentinel → 经 parse_sse_stream 截断，
+    /// 前端只收到 sentinel 之前的干净文本，finish_reason 不变。
+    #[tokio::test]
+    async fn sse_parse_minimax_sentinel_truncated() {
+        let content = "读 SD]<]minimax[>[</command>]<]minimax[>[</invoke>";
+        let raw = format!(
+            "data: {{\"choices\":[{{\"delta\":{{\"content\":{}}}}}]}}\n\
+             data: [DONE]\n",
+            serde_json::to_string(content).unwrap()
+        );
+        let chunks: Vec<Result<Bytes, std::io::Error>> =
+            vec![Ok(Bytes::copy_from_slice(raw.as_bytes()))];
+        let byte_stream = stream::iter(chunks);
+        let (tx, mut rx) = mpsc::channel::<AppResult<ChatDelta>>(64);
+        let cancel = CancellationToken::new();
+        parse_sse_stream(byte_stream, tx, cancel, "MiniMax-M3".to_string());
+
+        let mut deltas: Vec<String> = Vec::new();
+        let mut done_reason: Option<Option<String>> = None;
+        while let Some(item) = rx.recv().await {
+            match item {
+                Ok(ChatDelta::Delta { content }) => deltas.push(content),
+                Ok(ChatDelta::Done { finish_reason }) => done_reason = Some(finish_reason),
+                Ok(other) => panic!("不应出现的 ChatDelta 变体: {other:?}"),
+                Err(e) => panic!("不应出现错误: {e:?}"),
+            }
+        }
+        assert_eq!(deltas.concat(), "读 SD", "sentinel 之后的 markup 应被截断");
+        assert_eq!(
+            done_reason,
+            Some(Some("stop".to_string())),
+            "截断不改 finish_reason"
+        );
+    }
+
+    /// 端到端：非 minimax 模型 + 同样的乱码 content → scrubber 不启用，原样透传
+    /// （回归保护：gate 不能误伤其他 provider）。
+    #[tokio::test]
+    async fn sse_parse_non_minimax_no_scrub_passthrough() {
+        let content = "读 SD]<]minimax[>[</command>";
+        let raw = format!(
+            "data: {{\"choices\":[{{\"delta\":{{\"content\":{}}}}}]}}\n\
+             data: [DONE]\n",
+            serde_json::to_string(content).unwrap()
+        );
+        let chunks: Vec<Result<Bytes, std::io::Error>> =
+            vec![Ok(Bytes::copy_from_slice(raw.as_bytes()))];
+        let byte_stream = stream::iter(chunks);
+        let (tx, mut rx) = mpsc::channel::<AppResult<ChatDelta>>(64);
+        let cancel = CancellationToken::new();
+        parse_sse_stream(byte_stream, tx, cancel, "gpt-4o".to_string());
+
+        let mut deltas: Vec<String> = Vec::new();
+        while let Some(item) = rx.recv().await {
+            if let Ok(ChatDelta::Delta { content }) = item {
+                deltas.push(content);
+            }
+        }
+        assert_eq!(deltas.concat(), content, "非 minimax 模型应原样透传，不截断");
     }
 }
