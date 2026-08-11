@@ -369,11 +369,12 @@ pub struct NewAgent {
 }
 
 fn default_temperature() -> f64 { 0.7 }
-/// 新建 agent 的输出 token 上限默认值。
+/// 新建 agent 的输出 token 上限默认值（页面不暴露此字段，进阶配置走 agent.yaml）。
 ///
 /// 旧值为 4096，会截断稍长的回答（如两份数千字文档的对比，输出常达 6–12K token），
-/// 被 provider 以 finish_reason=length / max_tokens 在半句处截断。提到 16384 覆盖
-/// 绝大多数长回答；更长的任务用户可在 agent 表单的「最大输出 Tokens」手动调高。
+/// 被 provider 以 finish_reason=length / max_tokens 在半句处截断。16384 覆盖绝大多数
+/// 长回答；运行时由 chat_cmd 的 effective_max_tokens（模型策展表 .max，只抬不降）再
+/// 抬到模型能力值（已知模型 32K）。需突破上限的进阶用户在 agent.yaml 配置 max_tokens。
 /// 历史 agent 的 4096 由 migration 41 一并抬升。
 fn default_max_tokens() -> i32 { 16384 }
 fn default_cache_prompt() -> bool { true }
