@@ -81,12 +81,17 @@ fn materialize_file_blocks(
     message_id: &str,
     mut blocks: Vec<ContentBlock>,
     files: &[AttachedFile],
-) -> AppResult<(Vec<ContentBlock>, Vec<crate::db::repo::message_attachment::AttachmentChunkInput>)> {
+) -> AppResult<(
+    Vec<ContentBlock>,
+    Vec<crate::db::repo::message_attachment::AttachmentChunkInput>,
+    Vec<crate::db::repo::message_attachment_file::AttachmentFileInput>,
+)> {
     use base64::Engine as _;
     use std::path::Path;
 
     use crate::context::token::estimate_tokens;
     use crate::db::repo::message_attachment::AttachmentChunkInput;
+    use crate::db::repo::message_attachment_file::AttachmentFileInput;
 
     // 后端为唯一真源：丢弃前端乐观传入的 Attachment 块，下面从 files 重建
     blocks.retain(|b| !matches!(b, ContentBlock::Attachment { .. }));
@@ -107,9 +112,11 @@ fn materialize_file_blocks(
     // 全局 idx 跨文件连续递增（message_attachments 不区分文件，靠注入提示告知 LLM 各文件范围）。
     let mut extracted: Vec<ExtractedFile> = Vec::new();
     let mut db_inputs: Vec<AttachmentChunkInput> = Vec::new();
+    // Phase B：视觉候选（文本提取为空）的原始字节，供 view_attachment_image 渲染。
+    let mut file_db_inputs: Vec<AttachmentFileInput> = Vec::new();
     let mut global_idx: i64 = 0;
 
-    for f in files {
+    for (file_idx, f) in files.iter().enumerate() {
         tracing::info!(
             target: "ice_paw.attach",
             name = %f.name,
@@ -134,10 +141,11 @@ fn materialize_file_blocks(
             })?;
         let kind_label = kind.label();
         let total_tokens: usize = chunks.iter().map(|c| estimate_tokens(&c.text)).sum();
+        let bytes_len = bytes.len();
         tracing::info!(
             target: "ice_paw.attach",
             name = %f.name,
-            decoded_bytes = bytes.len(),
+            decoded_bytes = bytes_len,
             ext = %ext,
             kind = %kind_label,
             chunks = chunks.len(),
@@ -168,10 +176,22 @@ fn materialize_file_blocks(
             None
         };
 
+        // Phase B：文本提取为空（扫描件/纯图片/加密 PDF）→ 留存原始字节，供视觉工具
+        // view_attachment_image 按需渲染页面。文本提取成功的附件不留存（agent 已有文本，
+        // 省一个 10MB+ BLOB）。bytes 在此 move；bytes_len 已在上面捕获给 ExtractedFile。
+        if total_tokens == 0 {
+            file_db_inputs.push(AttachmentFileInput {
+                idx: file_idx as i64,
+                name: f.name.clone(),
+                ext: ext.clone(),
+                bytes,
+            });
+        }
+
         extracted.push(ExtractedFile {
             name: f.name.clone(),
             ext,
-            bytes_len: bytes.len(),
+            bytes_len,
             kind_label,
             chunks,
             total_tokens,
@@ -277,8 +297,9 @@ fn materialize_file_blocks(
         )));
     }
 
-    // 大文件块数据随返回值交调用方，**在 Pipeline 成功后**与消息行一起写库（见 send_message）。
-    Ok((blocks, db_inputs))
+    // 大文件块数据 + 视觉候选文件字节随返回值交调用方，**在 Pipeline 成功后**与消息行
+    // 一起写库（见 send_message）。
+    Ok((blocks, db_inputs, file_db_inputs))
 }
 
 /// 发送消息 — 触发 LLM 流式生成。
@@ -354,13 +375,14 @@ pub async fn send_message(
     // user_msg_id 预生成（仅 UUID 字符串，无 IO）：materialize 需把它嵌进大文件首页的
     // read_attachment_page 工具提示里；真正落库时复用同一 id。
     let user_msg_id = Uuid::new_v4().to_string();
-    let (final_blocks, attach_db_inputs) = match input.files.as_ref().filter(|v| !v.is_empty()) {
-        Some(files) => {
-            validate_files(files)?;
-            materialize_file_blocks(&user_msg_id, final_blocks, files)?
-        }
-        None => (final_blocks, Vec::new()),
-    };
+    let (final_blocks, attach_db_inputs, attach_file_inputs) =
+        match input.files.as_ref().filter(|v| !v.is_empty()) {
+            Some(files) => {
+                validate_files(files)?;
+                materialize_file_blocks(&user_msg_id, final_blocks, files)?
+            }
+            None => (final_blocks, Vec::new(), Vec::new()),
+        };
 
     // --- 3. 拼装上下文（A3-1：trait-based Pipeline） ---
     //
@@ -486,6 +508,12 @@ pub async fn send_message(
     if !attach_db_inputs.is_empty() {
         repo::message_attachment::delete_by_message(pool.inner(), &user_msg_id).await?;
         repo::message_attachment::insert_batch(pool.inner(), &user_msg_id, &attach_db_inputs).await?;
+    }
+    // Phase B 视觉候选文件字节（扫描件等，文本提取为空）：同批写入，CASCADE 跟消息生命周期。
+    if !attach_file_inputs.is_empty() {
+        repo::message_attachment_file::delete_by_message(pool.inner(), &user_msg_id).await?;
+        repo::message_attachment_file::insert_batch(pool.inner(), &user_msg_id, &attach_file_inputs)
+            .await?;
     }
 
     let asst_msg_id = Uuid::new_v4().to_string();
