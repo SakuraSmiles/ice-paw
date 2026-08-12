@@ -167,6 +167,37 @@ pub async fn adapt_blocks_for_vision(
     }
 }
 
+/// 把历史消息里的 `Image` 块**剥成一个诚实 marker**（非视觉 agent 历史路径专用）。
+///
+/// 与 [`adapt_blocks_for_vision`] 的区别：历史图片每轮重新 OCR 成本高（N 图 × M 轮 = N×M
+/// 次视觉调用）且代读文本不落库（下轮还得重来），故历史路径**不 OCR、只剥离**——每条消息
+/// 不论含几张图，只插**一条** marker（"曾含 N 张图、当前模型无视觉、已省略"），避免重复
+/// 提示噪声。当前轮的图走 [`adapt_blocks_for_vision`] 完整代读（用户此刻就想让 agent 看到）。
+///
+/// 无图消息原样返回（零开销，绝大多数历史消息走这条）。
+pub fn strip_image_blocks_to_marker(blocks: &[ContentBlock]) -> Vec<ContentBlock> {
+    let image_count = blocks.iter().filter(|b| b.is_image()).count();
+    if image_count == 0 {
+        return blocks.to_vec();
+    }
+    let mut out: Vec<ContentBlock> = Vec::with_capacity(blocks.len());
+    let mut marker_inserted = false;
+    for b in blocks {
+        if b.is_image() {
+            if !marker_inserted {
+                out.push(ContentBlock::text(format!(
+                    "[此历史消息曾含 {image_count} 张图片；当前模型无视觉能力，已省略图片内容。\
+                     如需识别，请在「设置-视觉读取」配置视觉模型或换用视觉 agent。]"
+                )));
+                marker_inserted = true;
+            }
+        } else {
+            out.push(b.clone());
+        }
+    }
+    out
+}
+
 /// 用候选凭据逐个试 [`vision::VisionCredential::describe`]；首个成功返回文本，全失败 / 无候选 /
 /// base64 解码失败返回 `None`。网络/凭据错误不向上抛（调用方计入 dropped 走诚实剥离）。
 async fn ocr_image(
@@ -328,5 +359,46 @@ mod tests {
         let out = adapt_blocks_for_vision(&blocks, false, &[]).await;
         assert_eq!(out.dropped, 1);
         assert!(out.blocks.last().unwrap().as_text().unwrap().contains("1 张图片"));
+    }
+
+    // ---- strip_image_blocks_to_marker（历史路径，静默剥离）----
+
+    #[test]
+    fn strip_no_images_returns_unchanged() {
+        let blocks = vec![ContentBlock::text("纯文本历史"), ContentBlock::text("第二条")];
+        let out = strip_image_blocks_to_marker(&blocks);
+        assert_eq!(out.len(), 2);
+        assert!(out.iter().all(|b| !b.is_image()));
+    }
+
+    #[test]
+    fn strip_replaces_multiple_images_with_single_marker() {
+        let blocks = vec![
+            ContentBlock::text("看图"),
+            img("AA", "image/png"),
+            img("BB", "image/jpeg"),
+            img("CC", "image/gif"),
+        ];
+        let out = strip_image_blocks_to_marker(&blocks);
+        // 3 张图 → 1 条 marker（不重复噪声），文本块保留
+        assert_eq!(out.len(), 2, "3 图应塌成 1 marker + 原文本块");
+        assert!(out.iter().all(|b| !b.is_image()));
+        let marker = out.iter().find_map(|b| b.as_text()).unwrap();
+        assert!(marker.contains("3 张图片"), "marker 应含图数，实际: {marker}");
+    }
+
+    #[test]
+    fn strip_marker_inserted_at_first_image_position() {
+        let blocks = vec![
+            ContentBlock::text("前言"),
+            img("AA", "image/png"),
+            ContentBlock::text("后语"),
+        ];
+        let out = strip_image_blocks_to_marker(&blocks);
+        // 顺序：前言、marker、后语（marker 在首个图位）
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].as_text(), Some("前言"));
+        assert_eq!(out[2].as_text(), Some("后语"));
+        assert!(out[1].as_text().unwrap().contains("1 张图片"));
     }
 }

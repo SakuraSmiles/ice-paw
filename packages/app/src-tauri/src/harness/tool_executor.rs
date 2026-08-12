@@ -261,22 +261,93 @@ pub async fn execute_tool_round(
                     content: out.text,
                     is_error: Some(false),
                 });
-                // Phase B：视觉工具（view_attachment_image）回传 PNG → 编码 base64 Image 块，
-                // 与 ToolResult 同消息注入（同一 user 消息内）。Anthropic/GLM 的 tool_result
-                // 原生支持 image block、自动读图；OpenAI 协议的 role="tool" 只接受 string，
-                // 适配层把 Image 拆为紧邻的 role="user"(image_url) 消息传给视觉模型。
+                // 门②（事2）：工具回传 PNG → 按 agent「有效视觉能力」统一适配。
+                // 有效视觉 → 编码 base64 Image 块注入（模型直读；Anthropic/GLM tool_result 原生
+                //   支持 image block，OpenAI 适配层把 Image 拆为紧邻 role="user" image_url）。
+                // 非视觉 → 走多级凭据代读成文本，追加到本 ToolResult 的 content（绝不向非视觉
+                //   模型塞 Image → 400 / "看不到"）。当前仅 view_attachment_image 回传 PNG 且自身
+                //   已按 effective_vision 路由，本守卫是其外层的防御纵深（防未来未路由的工具）。
                 if let Some(png) = out.image_png {
-                    let data = base64::engine::general_purpose::STANDARD.encode(&png);
-                    tool_result_blocks.push(ContentBlock::Image {
-                        data,
-                        media_type: "image/png".to_string(),
-                    });
-                    tracing::info!(
-                        target: "ice_paw.tool_image",
-                        tool = %tc_name,
-                        bytes = png.len(),
-                        "工具回传图片，已注入 Image 块给视觉模型"
-                    );
+                    let agent_opt = repo::agent::get_by_id(&tool_ctx.pool, &tool_ctx.agent_id)
+                        .await
+                        .map_err(|e| {
+                            tracing::warn!(
+                                target: "ice_paw.tool_image",
+                                err = %e,
+                                "取 agent 失败，按非视觉处理（代读/剥离）"
+                            );
+                            e
+                        })
+                        .ok();
+                    let eff_vision = agent_opt
+                        .as_ref()
+                        .map(|a| {
+                            crate::harness::provider::effective_supports_vision(
+                                a.supports_vision,
+                                &a.provider,
+                                &a.model,
+                            )
+                        })
+                        .unwrap_or(false);
+
+                    if eff_vision {
+                        let data = base64::engine::general_purpose::STANDARD.encode(&png);
+                        tool_result_blocks.push(ContentBlock::Image {
+                            data,
+                            media_type: "image/png".to_string(),
+                        });
+                        tracing::info!(
+                            target: "ice_paw.tool_image",
+                            tool = %tc_name,
+                            bytes = png.len(),
+                            "工具回传图片，已注入 Image 块给视觉 agent"
+                        );
+                    } else {
+                        // 非视觉：复用统一适配（OCR 成功→Text；失败/无凭据→诚实提示）。
+                        let candidates = match &agent_opt {
+                            Some(a) => crate::harness::modal::gather_vision_candidates(
+                                &tool_ctx.pool,
+                                a,
+                                tool_ctx.api_key.as_deref(),
+                            )
+                            .await,
+                            None => Vec::new(),
+                        };
+                        let data = base64::engine::general_purpose::STANDARD.encode(&png);
+                        let tmp = vec![ContentBlock::image(data, "image/png")];
+                        let outcome = crate::harness::modal::adapt_blocks_for_vision(
+                            &tmp,
+                            false,
+                            &candidates,
+                        )
+                        .await;
+                        // 适配产出的文本（代读文本或诚实提示）追加到本 ToolResult content。
+                        let extra: String = outcome
+                            .blocks
+                            .iter()
+                            .filter_map(|b| b.as_text().map(|s| s.to_string()))
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        if !extra.is_empty() {
+                            if let Some(ContentBlock::ToolResult { content, .. }) =
+                                tool_result_blocks.last_mut()
+                            {
+                                content.push_str("\n\n[工具回传图片，当前模型无视觉能力，");
+                                content.push_str(if outcome.ocr_replaced > 0 {
+                                    "经视觉凭据代读为文本]\n"
+                                } else {
+                                    "且无可用视觉凭据代读]\n"
+                                });
+                                content.push_str(&extra);
+                            }
+                        }
+                        tracing::info!(
+                            target: "ice_paw.tool_image",
+                            tool = %tc_name,
+                            ocr_replaced = outcome.ocr_replaced,
+                            "工具回传图片，非视觉 agent 已代读/剥离（不再塞 Image 块）"
+                        );
+                    }
                 }
             }
             Err(err_content) => {
