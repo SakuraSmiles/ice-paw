@@ -17,7 +17,11 @@ use crate::error::AppResult;
 
 mod docx;
 mod pdf;
+mod pdf_render;
 mod spreadsheet;
+
+// Phase B 视觉路径：PDF 页面 → PNG（扫描件/图片型 PDF 读图用）。
+pub use pdf_render::{page_count, render_page_to_png};
 
 /// 从一个文档中提取出的结果。
 #[derive(Debug, Clone)]
