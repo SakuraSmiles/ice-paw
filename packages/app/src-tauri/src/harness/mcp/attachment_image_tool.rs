@@ -169,19 +169,25 @@ impl McpClient for ViewAttachmentImageTool {
         );
 
         // === Phase B 路由（fallback 语义，见 db/models.rs AgentRow 注释）===
-        // 取当前 agent 是否自带视觉；取失败按「无视觉」处理（更安全：不向可能无视觉的模型塞 Image）。
-        let supports_vision = match repo::agent::get_by_id(&ctx.pool, &ctx.agent_id).await {
-            Ok(a) => a.supports_vision != 0,
+        // 取当前 agent：supports_vision 决定走 Arch A 还是 Arch B；provider 给 Arch B 借凭据用。
+        // 取失败按「无视觉 + 无 agent 凭据」处理（更安全：不向可能无视觉的模型塞 Image；
+        // Arch B 多级 fallback 仍可走 vision config / MCP 兜底）。
+        let agent_opt = match repo::agent::get_by_id(&ctx.pool, &ctx.agent_id).await {
+            Ok(a) => Some(a),
             Err(e) => {
                 tracing::warn!(
                     target: "ice_paw.attach",
                     err = %e,
                     agent_id = %ctx.agent_id,
-                    "取 agent 失败，按非视觉 agent 处理（走 vision config fallback）"
+                    "取 agent 失败，按非视觉 agent 处理"
                 );
-                false
+                None
             }
         };
+        let supports_vision = agent_opt
+            .as_ref()
+            .map(|a| a.supports_vision != 0)
+            .unwrap_or(false);
 
         if supports_vision {
             // Arch A：原图作 Image 块回传——agent 视觉直接读图（高保真，零额外 LLM 调用）。
@@ -196,53 +202,105 @@ impl McpClient for ViewAttachmentImageTool {
             return Ok(ToolOutput::with_image(summary.to_string(), png));
         }
 
-        // agent 无视觉 → 走全局 vision 配置把图读成文本回灌。
+        // === Arch B：agent 无视觉 → 多级 fallback 收集视觉凭据，逐个试 describe_image ===
+        // 顺序（显式优先 + 零配置兜底）：
+        //   ① 显式 vision config（用户在「设置-视觉读取」配的——精确 model/url）
+        //   ② 当前 agent 自己的凭据（GLM→glm-4v / OpenAI→gpt-4o，用 agent 的 key）
+        //   ③ 已配的 GLM 视觉 MCP 的 env（Z_AI_API_KEY→glm-4v）
+        // 每条失败（401/网络/超时）不阻塞，继续下一条；全失败如实告知（不中断整轮工具）。
         let prefs = repo::preferences::get_all(&ctx.pool).await?;
-        match vision::resolve_vision_config(&prefs) {
-            Some((model, base_url, api_key)) => {
-                let provider = prefs.vision_provider.as_deref().unwrap_or("");
-                tracing::info!(
-                    target: "ice_paw.attach",
-                    provider, model, page = parsed.page,
-                    "agent 无视觉，走全局 vision 配置读图"
-                );
-                let recognized = vision::describe_image(provider, &model, &base_url, &api_key, &png)
-                    .await
-                    .map_err(|e| {
-                        tracing::warn!(target: "ice_paw.attach", err = %e, "vision 读图失败");
-                        // 不让整轮工具直接报错中断——把失败写进 tool_result 文本，让 LLM 知悉并如实转告。
-                        AppError::Internal(format!(
-                            "页面已渲染为图，但调全局 vision 配置（{provider}/{model}）读图失败：{e}。\
-                             请如实告诉用户该页暂未能识别。"
-                        ))
-                    })?;
-                let summary = serde_json::json!({
-                    "message_id": parsed.message_id,
-                    "page": parsed.page,
-                    "total_pages": total_pages,
-                    "name": row.name,
-                    "reader": format!("vision:{provider}/{model}"),
-                    "note": "Current agent lacks vision; the page image was read by the global \
-                             vision model and its recognized text is in 'recognized_text' below. \
-                             Use that text to answer. Call again with page+1 to continue.",
-                    "recognized_text": recognized,
-                });
-                Ok(ToolOutput::text(summary.to_string()))
-            }
-            None => {
-                // 既无 agent 视觉、又无全局 vision 配置：如实告知，不伪造。
-                let summary = serde_json::json!({
-                    "message_id": parsed.message_id,
-                    "page": parsed.page,
-                    "total_pages": total_pages,
-                    "name": row.name,
-                    "note": "Rendered the page to an image, but neither the current agent nor a \
-                             global vision config can read it. Tell the user: this scanned/image \
-                             PDF cannot be read until vision is configured (Settings) or a \
-                             vision-capable agent is used; they can also paste the relevant text."
-                });
-                Ok(ToolOutput::text(summary.to_string()))
+        let mut candidates: Vec<vision::VisionCredential> = Vec::new();
+
+        if let Some(c) = vision::from_prefs(&prefs) {
+            candidates.push(c);
+        }
+        if let Some(a) = &agent_opt {
+            if let Some(key) = ctx.api_key.as_deref().filter(|s| !s.is_empty()) {
+                if let Some(c) = vision::from_agent(&a.provider, key) {
+                    candidates.push(c);
+                }
             }
         }
+        if let Ok(servers) = repo::mcp_server::list_all(&ctx.pool).await {
+            for s in servers.iter().filter(|s| s.enabled) {
+                if let Some(c) = vision::from_mcp_env(&s.env) {
+                    candidates.push(c);
+                    break; // 同质 GLM key，取第一个即够
+                }
+            }
+        }
+
+        if candidates.is_empty() {
+            // 既无 agent 视觉、又无任何视觉凭据：如实告知，不伪造。
+            let summary = serde_json::json!({
+                "message_id": parsed.message_id,
+                "page": parsed.page,
+                "total_pages": total_pages,
+                "name": row.name,
+                "note": "Rendered the page to an image, but neither the current agent nor any \
+                         vision credential (vision config / the agent's own GLM-or-OpenAI key / \
+                         GLM vision MCP) is available to read it. Tell the user: this \
+                         scanned/image PDF needs vision — configure it in Settings, use a \
+                         vision-capable agent, or paste the relevant text."
+            });
+            return Ok(ToolOutput::text(summary.to_string()));
+        }
+
+        // 逐候选试；首个成功即用，全失败把最后一错写进 tool_result 文本（不中断）。
+        let mut last_err: Option<String> = None;
+        let mut tried: Vec<String> = Vec::new();
+        for cred in &candidates {
+            tracing::info!(
+                target: "ice_paw.attach",
+                source = %cred.source, provider = %cred.provider, model = %cred.model,
+                page = parsed.page, "尝试视觉凭据读图"
+            );
+            tried.push(cred.source.clone());
+            match cred.describe(&png).await {
+                Ok(recognized) => {
+                    tracing::info!(
+                        target: "ice_paw.attach",
+                        source = %cred.source, chars = recognized.len(),
+                        "视觉读图成功"
+                    );
+                    let summary = serde_json::json!({
+                        "message_id": parsed.message_id,
+                        "page": parsed.page,
+                        "total_pages": total_pages,
+                        "name": row.name,
+                        "reader": &cred.source,
+                        "note": "Current agent lacks vision; the page image was read by the \
+                                 borrowed vision credential above ('reader') and its recognized \
+                                 text is in 'recognized_text'. Use that text to answer. Call \
+                                 again with page+1 to continue.",
+                        "recognized_text": recognized,
+                    });
+                    return Ok(ToolOutput::text(summary.to_string()));
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        target: "ice_paw.attach",
+                        source = %cred.source, err = %e, "视觉凭据读图失败，尝试下一级"
+                    );
+                    last_err = Some(format!("{}: {e}", cred.source));
+                }
+            }
+        }
+
+        // 全部候选失败：诚实告知（页面已渲染，但凭据都调不通）。
+        let summary = serde_json::json!({
+            "message_id": parsed.message_id,
+            "page": parsed.page,
+            "total_pages": total_pages,
+            "name": row.name,
+            "note": format!(
+                "Rendered the page to an image, but all available vision credentials failed to \
+                 read it (tried: {}). Last error: {}. Tell the user honestly: the page rendered \
+                 but could not be recognized.",
+                tried.join(", "),
+                last_err.as_deref().unwrap_or("unknown")
+            ),
+        });
+        Ok(ToolOutput::text(summary.to_string()))
     }
 }
