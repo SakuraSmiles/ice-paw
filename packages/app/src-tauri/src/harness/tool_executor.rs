@@ -262,8 +262,9 @@ pub async fn execute_tool_round(
                     is_error: Some(false),
                 });
                 // Phase B：视觉工具（view_attachment_image）回传 PNG → 编码 base64 Image 块，
-                // 与 ToolResult 同消息注入（同一 user 消息内）。Anthropic/GLM 自动识别并读图；
-                // OpenAI tool-result 路径会静默丢弃 Image 块（已知限制，非崩溃，文档化）。
+                // 与 ToolResult 同消息注入（同一 user 消息内）。Anthropic/GLM 的 tool_result
+                // 原生支持 image block、自动读图；OpenAI 协议的 role="tool" 只接受 string，
+                // 适配层把 Image 拆为紧邻的 role="user"(image_url) 消息传给视觉模型。
                 if let Some(png) = out.image_png {
                     let data = base64::engine::general_purpose::STANDARD.encode(&png);
                     tool_result_blocks.push(ContentBlock::Image {

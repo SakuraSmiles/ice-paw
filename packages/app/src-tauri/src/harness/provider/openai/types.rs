@@ -162,7 +162,7 @@ pub(crate) fn chat_message_to_openai(msg: &ChatMessage) -> AppResult<Vec<OpenAiM
         })
         .collect();
     if !tool_results.is_empty() {
-        return Ok(tool_results
+        let mut msgs: Vec<OpenAiMessage> = tool_results
             .into_iter()
             .map(|(tuid, content)| OpenAiMessage {
                 role: "tool".to_string(),
@@ -170,7 +170,35 @@ pub(crate) fn chat_message_to_openai(msg: &ChatMessage) -> AppResult<Vec<OpenAiM
                 tool_calls: None,
                 tool_call_id: Some(tuid.clone()),
             })
-            .collect());
+            .collect();
+        // Phase B：同消息若含 Image 块（view_attachment_image 回传的渲染图），追加一条
+        // role="user" 带 image_url。OpenAI 的 role="tool" 只接受 string、无法携带图片，
+        // 若不拆出，Image 会被静默丢弃（Anthropic 协议无此限制——tool_result content 数组
+        // 原生支持 image block）。序列：assistant(tool_calls) → tool ×N → user(image)，
+        // 视觉模型（gpt-4o 等）可从后续 user 消息读图。
+        let has_image = msg.content.iter().any(|b| b.is_image());
+        if has_image {
+            let arr: Vec<serde_json::Value> = msg
+                .content
+                .iter()
+                .filter_map(|b| match b {
+                    ContentBlock::Image { data, media_type } => Some(serde_json::json!({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": format!("data:{};base64,{}", media_type, data)
+                        }
+                    })),
+                    _ => None,
+                })
+                .collect();
+            msgs.push(OpenAiMessage {
+                role: "user".to_string(),
+                content: serde_json::Value::Array(arr),
+                tool_calls: None,
+                tool_call_id: None,
+            });
+        }
+        return Ok(msgs);
     }
 
     // 非工具结果：1:1
@@ -424,6 +452,60 @@ mod tests {
         assert_eq!(out[1].role, "tool");
         assert_eq!(out[1].tool_call_id.as_deref(), Some("call_B"));
         assert_eq!(out[1].content.as_str().unwrap(), "结果乙");
+    }
+
+    /// Phase B：ToolResult + Image 同消息（view_attachment_image 回传）必须拆为
+    /// [role=tool(文本), role=user(image_url)]——OpenAI 的 role="tool" 只接受 string，
+    /// 不拆出则 Image 被静默丢弃。视觉 agent 从后续 user 消息读图。
+    #[test]
+    fn openai_tool_result_with_image_splits_into_tool_and_user() {
+        use crate::infra::protocol::ChatMessage;
+        let msg = ChatMessage {
+            role: "user".into(),
+            content: vec![
+                ContentBlock::ToolResult {
+                    tool_use_id: "call_1".into(),
+                    content: r#"{"page":1,"note":"image attached"}"#.into(),
+                    is_error: Some(false),
+                },
+                ContentBlock::image("iVBORw0KGgo", "image/png"),
+            ],
+            source_rowid: None,
+        };
+        let out = chat_message_to_openai(&msg).unwrap();
+        assert_eq!(out.len(), 2, "ToolResult + Image → [tool, user(image)]");
+        // 第一条：ToolResult 文本
+        assert_eq!(out[0].role, "tool");
+        assert_eq!(out[0].tool_call_id.as_deref(), Some("call_1"));
+        assert!(out[0].content.as_str().unwrap().contains("page"));
+        // 第二条：追加的 user 消息带 image_url
+        assert_eq!(out[1].role, "user");
+        assert!(out[1].tool_call_id.is_none());
+        let arr = out[1].content.as_array().expect("user content 应为数组");
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["type"], "image_url");
+        assert_eq!(
+            arr[0]["image_url"]["url"],
+            "data:image/png;base64,iVBORw0KGgo"
+        );
+    }
+
+    /// 纯 ToolResult（无 Image）不应追加多余 user 消息——回归保护。
+    #[test]
+    fn openai_tool_result_without_image_no_extra_user() {
+        use crate::infra::protocol::ChatMessage;
+        let msg = ChatMessage {
+            role: "user".into(),
+            content: vec![ContentBlock::ToolResult {
+                tool_use_id: "call_1".into(),
+                content: "纯文本结果".into(),
+                is_error: Some(false),
+            }],
+            source_rowid: None,
+        };
+        let out = chat_message_to_openai(&msg).unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].role, "tool");
     }
 
     /// 纯文本消息仍为单条（1:1），role/content 保留，无 tool_calls/tool_call_id。
