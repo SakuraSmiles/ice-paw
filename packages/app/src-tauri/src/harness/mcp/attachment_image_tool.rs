@@ -256,7 +256,7 @@ impl McpClient for ViewAttachmentImageTool {
                 page = parsed.page, "尝试视觉凭据读图"
             );
             tried.push(cred.source.clone());
-            match cred.describe(&png).await {
+            match cred.describe(&png, "image/png").await {
                 Ok(recognized) => {
                     tracing::info!(
                         target: "ice_paw.attach",

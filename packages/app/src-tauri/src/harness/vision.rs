@@ -69,20 +69,23 @@ pub fn is_vision_configured(prefs: &UserPreferences) -> bool {
 /// MiniMax 特殊处理（[`is_minimax`]）：① `max_tokens` 已弃用，改发 `max_completion_tokens`；
 /// ② M3 默认 adaptive thinking，响应 content 前缀 `<think>...</think>`，用 [`strip_reasoning`] 剥掉。
 ///
-/// 失败（HTTP/解析）归一为 `AppError::Internal`，调用方把错误文本写进 tool_result 让 LLM 知悉。
+/// `media_type` 决定 `data:` URL 的 MIME 标签（如 `image/png` / `image/jpeg`）；图片字节随原样
+/// base64 编码、不转码，故 `media_type` 必须与 `bytes` 真实格式一致（OpenAI/GLM 视觉端点按
+/// MIME 解码）。失败（HTTP/解析）归一为 `AppError::Internal`，调用方把错误文本写进 tool_result。
 pub async fn describe_image(
     provider: &str,
     model: &str,
     base_url: &str,
     api_key: &str,
-    png: &[u8],
+    media_type: &str,
+    bytes: &[u8],
 ) -> AppResult<String> {
     use base64::Engine as _;
 
     let endpoint = build_chat_endpoint(base_url);
     let data_url = format!(
-        "data:image/png;base64,{}",
-        base64::engine::general_purpose::STANDARD.encode(png)
+        "data:{media_type};base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
     );
     let mut body = serde_json::json!({
         "model": model,
@@ -197,8 +200,11 @@ pub struct VisionCredential {
 
 impl VisionCredential {
     /// 用本凭据识别一张图片，返回模型读出的文本（包 [`describe_image`]）。
-    pub async fn describe(&self, png: &[u8]) -> AppResult<String> {
-        describe_image(&self.provider, &self.model, &self.base_url, &self.api_key, png).await
+    ///
+    /// `media_type` 必须与 `bytes` 真实格式一致（如 pdfium 渲染恒为 `image/png`；
+    /// 用户上传图可能是 `image/jpeg` / `image/gif` / `image/webp`）。
+    pub async fn describe(&self, bytes: &[u8], media_type: &str) -> AppResult<String> {
+        describe_image(&self.provider, &self.model, &self.base_url, &self.api_key, media_type, bytes).await
     }
 }
 

@@ -20,6 +20,7 @@ pub mod kb;
 pub mod r#loop;
 pub mod loop_engine;
 pub mod mcp;
+pub mod modal;
 pub mod observable;
 pub mod oneshot_registry;
 pub mod proposal_guard;
