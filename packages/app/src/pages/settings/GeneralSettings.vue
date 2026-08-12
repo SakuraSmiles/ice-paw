@@ -232,10 +232,12 @@ async function saveEmbedding() {
 // 与 embedding 对称但更简：vision 是无状态的（每次 view_attachment_image 现取现用），
 // 切换 provider/model 不需重建任何东西，故无 embedding 那套切换确认 overlay。
 // 仅列真正提供视觉模型的 provider（DeepSeek 标准 API 无视觉模型，故不列）。
-const visionProviders = ["智谱 GLM", "OpenAI"];
+// MiniMax 仅 M3 支持图片输入（M2.x 不支持多模态），故只列 M3。
+const visionProviders = ["智谱 GLM", "OpenAI", "MiniMax"];
 const visionModelMap: Record<string, { provider: string; models: string[]; keyUrl: string }> = {
   "智谱 GLM": { provider: "glm", models: ["glm-4v-plus", "glm-4.5v", "glm-4v"], keyUrl: "https://open.bigmodel.cn/usercenter/proj-mgmt/apikeys" },
   "OpenAI": { provider: "openai", models: ["gpt-4o", "gpt-4o-mini"], keyUrl: "https://platform.openai.com/api-keys" },
+  "MiniMax": { provider: "minimax", models: ["MiniMax-M3"], keyUrl: "https://platform.minimaxi.com/" },
 };
 const visionProviderDisplay = computed(() => {
   const p = prefs.value.vision_provider || "";
@@ -748,7 +750,7 @@ const hasFilterResults = computed(() => {
         <div class="setting-label">
           <div class="setting-label-text">
             视觉读取
-            <span class="tip-icon" data-tip="扫描件/图片型 PDF 文本提取为空时，由视觉模型把页面读成文字。&#10;· Agent 自带视觉（supports_vision）→ 优先用它自己的模型读图，无需此配置。&#10;· Agent 无视觉时，按顺序自动兜底：① 此处配置（精确控制模型/Key）→ ② Agent 自己的 GLM/OpenAI 凭据（glm-4v / gpt-4o）→ ③ 已配的「GLM 视觉理解」MCP 凭据。&#10;即此处留空通常也能用——只要 Agent 是 GLM/OpenAI 系、或已配 GLM 视觉 MCP，扫描件即可自动代读。仅在想精确指定模型/Key 时才需填。">
+            <span class="tip-icon" data-tip="扫描件/图片型 PDF 文本提取为空时，由视觉模型把页面读成文字。&#10;· Agent 自带视觉（supports_vision）→ 优先用它自己的模型读图，无需此配置。&#10;· Agent 无视觉时，按顺序自动兜底：① 此处配置（精确控制模型/Key）→ ② Agent 自己的 GLM/OpenAI/MiniMax 凭据（glm-4v / gpt-4o / MiniMax-M3）→ ③ 已配的「GLM 视觉理解」MCP 凭据。&#10;即此处留空通常也能用——只要 Agent 是 GLM/OpenAI/MiniMax 系、或已配 GLM 视觉 MCP，扫描件即可自动代读。仅在想精确指定模型/Key 时才需填。">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
             </span>
           </div>
