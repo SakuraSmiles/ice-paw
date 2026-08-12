@@ -324,6 +324,32 @@ fn materialize_file_blocks(
     Ok((blocks, db_inputs, file_db_inputs))
 }
 
+/// 构造"视觉模态元信息"提示块（事1，2026-08-12）。
+///
+/// agent 通过 Image 块（视觉通道）已直接看到图片，但工具列表里的视觉 MCP
+/// （`analyze_image` 等）常让它误以为"图片要走工具才算数"，于是声称"没拿到图"并
+/// 误导用户重新上传。本函数在 blocks 含图片时返回一个 Text 提示块，显式告知 agent
+/// 已直接收到 N 张图、无需再调图片分析工具（仅在 OCR / 图像对比 / UI 转代码等深度
+/// 处理时才调相应工具）。无图返回 None。纯函数，便于单测。
+///
+/// 仅图片触发：文档已被 `materialize_file_blocks` 转成 `<uploaded_file>` 文本块，
+/// agent 直接读到提取的正文，无此认知问题。提示块与 `<uploaded_file>` 同模式落库
+/// （进用户消息 content_blocks，历史回看亦可知当时附图数）。
+pub(crate) fn build_modality_hint(blocks: &[ContentBlock]) -> Option<ContentBlock> {
+    let image_count = blocks
+        .iter()
+        .filter(|b| matches!(b, ContentBlock::Image { .. }))
+        .count();
+    if image_count == 0 {
+        return None;
+    }
+    Some(ContentBlock::text(format!(
+        "[系统提示：你已通过视觉通道直接收到本次消息附带的 {image_count} 张图片，\
+         无需调用任何图片分析工具即可看到其完整内容；仅在需要 OCR / 图像对比 / UI 转代码\
+         等深度处理时才调用相应工具。]"
+    )))
+}
+
 /// 发送消息 — 触发 LLM 流式生成。
 ///
 /// REQ-XC-010: 依赖 `Arc<dyn AgentCmd>` trait object，而非具体
@@ -397,7 +423,7 @@ pub async fn send_message(
     // user_msg_id 预生成（仅 UUID 字符串，无 IO）：materialize 需把它嵌进大文件首页的
     // read_attachment_page 工具提示里；真正落库时复用同一 id。
     let user_msg_id = Uuid::new_v4().to_string();
-    let (final_blocks, attach_db_inputs, attach_file_inputs) =
+    let (mut final_blocks, attach_db_inputs, attach_file_inputs) =
         match input.files.as_ref().filter(|v| !v.is_empty()) {
             Some(files) => {
                 validate_files(files)?;
@@ -405,6 +431,12 @@ pub async fn send_message(
             }
             None => (final_blocks, Vec::new(), Vec::new()),
         };
+
+    // 事1：视觉模态元信息注入——纠正 agent「已看到图却说没看到」的认知偏差（见
+    // build_modality_hint 文档）。有图时在 blocks 头部插入提示块。
+    if let Some(hint) = build_modality_hint(&final_blocks) {
+        final_blocks.insert(0, hint);
+    }
 
     // --- 3. 拼装上下文（A3-1：trait-based Pipeline） ---
     //
