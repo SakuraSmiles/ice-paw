@@ -61,7 +61,12 @@ pub async fn init_pool(app: &AppHandle) -> AppResult<SqlitePool> {
 
     // 5) 跑迁移（V1__init.sql 等）
     // 路径相对 Cargo.toml（src-tauri）
-    sqlx::migrate!("./src/db/migrations").run(&pool).await?;
+    // 先自愈 _sqlx_migrations checksum 漂移：历史包曾把未提交的 migration 改动打进包，
+    // 用户 db 记录的 checksum 与 commit 正版不一致会让 migrate!().run() 校验失败
+    // → panic=abort 闪退。自愈在 run() 前同步 checksum（schema 不变，仅修字节漂移）。
+    let migrator = sqlx::migrate!("./src/db/migrations");
+    migrate::heal_checksum_drift(&pool, &migrator).await;
+    migrator.run(&pool).await?;
     info!(target: "ice_paw.db", "数据库迁移完成");
 
     // 5.5) tool_result 孤儿迁移：把历史坏数据（tool_result 混进 assistant 消息）

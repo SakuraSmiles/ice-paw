@@ -1,0 +1,5 @@
+# sqlx migration checksum 对换行符敏感：SHA-384 of include_str! 编译时读入的磁盘字节。
+# Windows core.autocrlf=true 会把工作区 LF 转 CRLF，导致 checksum 漂移 →
+# 应用启动报 "migration N was previously applied but has been modified"。
+# 锁定 LF：编译期嵌入、运行期校验、DB 记录三者换行符一致，跨平台稳定。
+packages/app/src-tauri/src/db/migrations/*.sql text eol=lf

@@ -17,6 +17,7 @@
 
 use std::path::Path;
 
+use sqlx::migrate::Migrator;
 use sqlx::SqlitePool;
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -126,6 +127,70 @@ pub async fn fix_orphan_tool_results(pool: &SqlitePool, db_path: &Path) -> AppRe
         fixed
     );
     Ok(())
+}
+
+/// 启动时自愈 `_sqlx_migrations` 表的 checksum 漂移。
+///
+/// **背景**：历史安装包曾把 dev 工作区的未提交 migration 改动打进包（如某 migration
+/// 的注释/空白调整），用户机器 db 记录了那个改动版的 checksum；新版包改回 git commit
+/// 正版（checksum 不同）→ `sqlx::migrate!().run()` 校验失败报
+/// "migration N was previously applied but has been modified" → `panic=abort` 闪退
+/// （生产 release profile panic=abort，setup hook Err 直接退出无回溯）。
+///
+/// 本函数在 `migrate!().run()` **之前**跑：对 db 里每个已 apply 的 migration，若其
+/// checksum 与编译进二进制的正版不一致，同步为正版。schema 实际一致（同一
+/// ALTER/CREATE 语句，仅文本字节差），**不重新执行 SQL**，安全。首次安装（无
+/// `_sqlx_migrations` 表）直接跳过——交给 `migrate!().run()` 全新建。
+///
+/// **风险**：若未来真有人改了已发布 migration 的 schema 语义（违反不可变原则），本
+/// 函数会掩盖该不一致。故仍须坚守「已发布 migration 文件不可变，要改 schema 加新
+/// migration」纪律。本函数只治「文本字节漂移」（无害），不掩盖 schema 语义变化。
+pub async fn heal_checksum_drift(pool: &SqlitePool, migrator: &Migrator) {
+    // 首次安装：_sqlx_migrations 尚不存在（migrate!().run() 会建），无需自愈
+    let table_exists: Option<(i64,)> = sqlx::query_as(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='_sqlx_migrations'",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+    let exists = table_exists.map(|(c,)| c > 0).unwrap_or(false);
+    if !exists {
+        return;
+    }
+
+    let mut healed = 0u32;
+    for m in migrator.migrations.iter() {
+        let row: Option<(Vec<u8>,)> =
+            sqlx::query_as("SELECT checksum FROM _sqlx_migrations WHERE version = ?")
+                .bind(m.version)
+                .fetch_optional(pool)
+                .await
+                .ok()
+                .flatten();
+        let Some((db_ck,)) = row else { continue };
+        if db_ck.as_slice() == m.checksum.as_ref() {
+            continue;
+        }
+        warn!(
+            target: "ice_paw.migrate",
+            "migration {} checksum 漂移（历史包污染），自愈同步为 commit 正版",
+            m.version
+        );
+        let _ = sqlx::query("UPDATE _sqlx_migrations SET checksum = ? WHERE version = ?")
+            .bind(m.checksum.as_ref())
+            .bind(m.version)
+            .execute(pool)
+            .await;
+        healed += 1;
+    }
+    if healed > 0 {
+        info!(
+            target: "ice_paw.migrate",
+            "checksum 自愈完成：同步 {} 个 migration（schema 不变，仅修字节漂移）",
+            healed
+        );
+    }
 }
 
 // =========================================================================
@@ -261,5 +326,45 @@ mod tests {
         let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM messages WHERE role='user'")
             .fetch_one(&pool).await.unwrap();
         assert_eq!(count.0, 0, "无孤儿时不应创建任何 user 消息");
+    }
+
+    #[tokio::test]
+    async fn heal_checksum_drift_repairs_modified_migration() {
+        let pool = fresh_pool().await;
+        let migrator = sqlx::migrate!("./src/db/migrations");
+        // 模拟历史包污染：篡改 migration 24 的 checksum（与 commit 正版不同）
+        sqlx::query("UPDATE _sqlx_migrations SET checksum = X'00' WHERE version = 24")
+            .execute(&pool).await.unwrap();
+        // 自愈后应恢复为 commit 正版（否则 migrate!().run() 二次校验会 panic）
+        heal_checksum_drift(&pool, &migrator).await;
+        let row: (Vec<u8>,) =
+            sqlx::query_as("SELECT checksum FROM _sqlx_migrations WHERE version = 24")
+                .fetch_one(&pool).await.unwrap();
+        let m24 = migrator
+            .migrations
+            .iter()
+            .find(|m| m.version == 24)
+            .expect("migration 24 应存在");
+        assert_eq!(
+            row.0.as_slice(),
+            m24.checksum.as_ref(),
+            "自愈后 migration 24 checksum 应恢复为 commit 正版"
+        );
+    }
+
+    #[tokio::test]
+    async fn heal_checksum_drift_noop_on_fresh_db() {
+        // fresh_pool 已对全新 db 跑过 migrate，_sqlx_migrations 全是正版 checksum，
+        // 自愈应 no-op（checksum 不变即可）
+        let pool = fresh_pool().await;
+        let migrator = sqlx::migrate!("./src/db/migrations");
+        let before: (Vec<u8>,) =
+            sqlx::query_as("SELECT checksum FROM _sqlx_migrations WHERE version = 24")
+                .fetch_one(&pool).await.unwrap();
+        heal_checksum_drift(&pool, &migrator).await;
+        let after: (Vec<u8>,) =
+            sqlx::query_as("SELECT checksum FROM _sqlx_migrations WHERE version = 24")
+                .fetch_one(&pool).await.unwrap();
+        assert_eq!(before.0, after.0, "干净 db 自愈不应改动 checksum");
     }
 }
