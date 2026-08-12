@@ -11,6 +11,7 @@ pub mod memory_embedding;
 pub mod memory_store;
 pub mod message;
 pub mod message_attachment;
+pub mod message_attachment_file;
 pub mod preferences;
 pub mod project;
 pub mod summary;
