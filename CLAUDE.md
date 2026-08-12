@@ -2,7 +2,7 @@
 
 ## 项目概述
 IcePaw — 本地优先的 LLM 对话工作站。Tauri v2 (Rust) + Vue 3 (TypeScript) 桌面应用。
-当前版本：`0.2.9`。
+当前版本：`0.3.1`。
 
 ## 构建命令
 
@@ -88,9 +88,16 @@ agent 调用 `propose_config_change` 工具提出创建/修改 agent 提案 → 
 ### 大文件拆分（已 ff-merge 到 main 17b1ffc，分支已删）
 - loop_engine 1343→697 + 抽 `loop/` 子模块；chat.ts 843→532（抽 useChatEvents）；Sidebar/ChatMessages 抽 composables
 
-## 当前状态（2026-08-11）
-- 版本 **0.2.9**（已打包 NSIS 229M + MSI 241M + push origin/main），待生产手测
-- 分支：仅 `main @ f43b866`（本地与 origin/main 同步；refactor/split-bigfiles-composable + frontend-rewrite + immersive-mode 三分支 local/remote 已删）
-- 近期递进：17b1ffc（大文件拆分+孤儿 tool_use 根治+OpenAI usage 修复）→ ec08e17（治本②③KB watcher 运行时注册+自动续写+输出侧模型表+MD 表格修复）→ 22cafb6（下拉框错位+CI Linux E0308+删 max_tokens 表单字段）→ 0.2.9 打包
+### 视觉能力统一适配（事2 / 方案 C，bfcd2ce + 2ce76cb + f054e38 + c10d02e，未手测）
+4 个 Image 块注入入口统一走"按有效视觉能力适配"，杜绝向非视觉模型塞 Image（→400/"看不到"）：
+- **能力探测**：`provider/model_info.rs::effective_supports_vision(agent.supports_vision, provider, model)`——OR 关系（agent 显式 =1 权威；=0 按模型表自动探测，如 MiniMax-M3）。零 schema 改动。
+- **统一适配**：`harness/modal.rs`——`gather_vision_candidates`（DB 收集凭据：显式 vision 配置→agent 自带视觉模型→GLM 视觉 MCP env）/ `adapt_blocks_for_vision`（有效视觉原样过；非视觉逐图代读成 Text、失败剥离+诚实提示）/ `strip_image_blocks_to_marker`（历史静默剥离）。
+- **4 入口接线**：① 用户上传+③ 历史 → `context/stages.rs::ModalCapabilityStage`（Pipeline，TokenWindow 后 Final 前）；② 工具返图 → `tool_executor` 注入 Image 前查 effective_vision（时序独立于 Stage——工具循环后续轮次的图进不了 Stage，必须在此守卫）；④ `view_attachment_image` 判断改 effective_supports_vision + 凭据收集复用 gather。
+- **⚠️ 不变式**：任何新增的 Image 块注入点都必须经 `effective_supports_vision` / `adapt_blocks_for_vision`，不得对非视觉模型直塞 Image。
+
+## 当前状态（2026-08-12）
+- 版本 **0.3.1**（已打包 NSIS 231M + MSI 244M；0.3.0 生产闪退热修）。main 本地领先 origin/main 多个 commits（push 待指示）
+- 分支：仅 `main`（refactor/split-bigfiles-composable + frontend-rewrite + immersive-mode 三分支 local/remote 已删）
+- 近期递进：17b1ffc（大文件拆分+孤儿 tool_use 根治）→ ec08e17（治本②③KB watcher+自动续写）→ 0.2.9 打包 → 69d2163（Phase B 视觉读取 14 commits，0.3.0）→ 1e5868c（migration checksum 自愈，热修 0.3.0 闪退）→ 409324e（0.3.1）→ **bfcd2ce/2ce76cb/f054e38/c10d02e（视觉能力统一适配：事1 认知修复 + 事2 方案 C，4 图片入口全接通 modal.rs + ModalCapabilityStage，未手测）**
 - 测试 binary 无法运行（sodium DLL，STATUS_ENTRYPOINT_NOT_FOUND），`cargo check`/`--tests` 验证编译；真测试靠 CI Linux；前端 vitest 本地可跑
-- 仍待办：生产手测 ②③（KB watcher 运行时注册 + 自动续写）、proposal Phase 2（MCP 域）、可测试性（sodium DLL 是门控钥匙）
+- 仍待办：视觉能力统一适配真机手测（非视觉 agent 代读 / M3 自动视觉 / 视觉 agent 不变）、KB watcher + 自动续写生产手测、proposal Phase 2（MCP 域）、可测试性（sodium DLL 是门控钥匙）
