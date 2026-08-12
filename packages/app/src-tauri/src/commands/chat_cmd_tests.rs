@@ -224,4 +224,60 @@ mod tests {
             "无图不应注入提示块"
         );
     }
+
+    // =========================================================================
+    // materialize_file_blocks 软失败测试（0 字节 / 损坏附件不阻塞整条消息）
+    // =========================================================================
+
+    /// 0 字节 PDF：base64 解码为空 → try_extract_chunks Err → 软失败为诚实提示，
+    /// 返回 Ok（不阻塞），原始字节不留存（渲染必失败），无分页块。
+    #[test]
+    fn materialize_soft_fails_on_empty_pdf() {
+        use crate::commands::chat_cmd::materialize_file_blocks;
+        use crate::infra::protocol::AttachedFile;
+
+        let files = vec![AttachedFile {
+            name: "empty.pdf".into(),
+            data: String::new(), // 0 字节（空 base64 → 解码为空 Vec）
+        }];
+        let (blocks, db_chunks, db_files) =
+            materialize_file_blocks("msg-empty", vec![], &files)
+                .expect("0 字节附件应软失败为诚实提示，而非 Err 阻塞整条消息");
+
+        // 0 字节 / extract_failed → 不留存原始字节（渲染同样失败，白占 BLOB）
+        assert!(db_files.is_empty(), "0 字节附件不应留存原始字节");
+        assert!(db_chunks.is_empty(), "0 字节附件无分页块");
+
+        // 应注入 extracted="failed" 的诚实提示，并说明 0 字节
+        let texts: Vec<&str> = blocks.iter().filter_map(|b| b.as_text()).collect();
+        assert!(
+            texts.iter().any(|t| t.contains("extracted=\"failed\"")),
+            "应注入 extracted=failed 提示，实际: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t.contains("0 字节")),
+            "提示应说明 0 字节，实际: {texts:?}"
+        );
+    }
+
+    /// 0 字节 docx（非法 ZIP 容器）同样软失败，验证非 PDF 格式也覆盖。
+    #[test]
+    fn materialize_soft_fails_on_empty_docx() {
+        use crate::commands::chat_cmd::materialize_file_blocks;
+        use crate::infra::protocol::AttachedFile;
+
+        let files = vec![AttachedFile {
+            name: "blank.docx".into(),
+            data: String::new(),
+        }];
+        let (blocks, _db_chunks, db_files) =
+            materialize_file_blocks("msg-blank", vec![], &files)
+                .expect("0 字节 docx 应软失败而非 Err");
+        assert!(db_files.is_empty(), "0 字节 docx 不留存原始字节");
+        let texts: Vec<&str> = blocks.iter().filter_map(|b| b.as_text()).collect();
+        assert!(
+            texts.iter().any(|t| t.contains("extracted=\"failed\"")),
+            "docx 空文件也应注入失败提示，实际: {texts:?}"
+        );
+    }
 }

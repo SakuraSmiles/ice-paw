@@ -139,7 +139,7 @@ impl ContentBlock {
 
 // Re-export: 图片校验（从 image_validation 迁出，保留兼容路径）
 pub use super::image_validation::{
-    is_supported_image_media_type, validate_images,
+    is_supported_image_media_type, strip_empty_image_blocks, validate_images,
     MAX_IMAGE_COUNT, MAX_IMAGE_SIZE, SUPPORTED_IMAGE_MEDIA_TYPES,
 };
 
@@ -726,6 +726,68 @@ mod tests {
             let blocks = vec![ContentBlock::image(make_b64_bytes(100), mt)];
             assert!(validate_images(&blocks).is_ok(), "{} 应被允许", mt);
         }
+    }
+
+    // --- strip_empty_image_blocks（0 字节图片软剥离）---
+
+    #[test]
+    fn strip_keeps_nonempty_image() {
+        // 非空图片（1KB）→ 原样保留，无提示注入
+        let blocks = vec![
+            ContentBlock::text("看图"),
+            ContentBlock::image(make_b64_bytes(1024), "image/png"),
+        ];
+        let out = strip_empty_image_blocks(blocks);
+        assert_eq!(out.len(), 2, "非空图片应保留，无额外提示");
+        assert!(out[1].is_image());
+    }
+
+    #[test]
+    fn strip_removes_empty_image_and_injects_hint() {
+        // 0 字节图片（data 为空）→ 剥离 + 注入诚实提示
+        let blocks = vec![
+            ContentBlock::image(String::new(), "image/png"),
+            ContentBlock::text("正文"),
+        ];
+        let out = strip_empty_image_blocks(blocks);
+        // 期望：空图被移除，正文保留，末尾追加 1 条提示
+        assert_eq!(out.len(), 2, "空图剥离后应为 正文 + 提示");
+        assert_eq!(out[0].as_text(), Some("正文"));
+        let hint = out[1].as_text().expect("末尾应追加提示");
+        assert!(hint.contains("0 字节"), "提示应说明 0 字节，实际: {hint}");
+        assert!(out.iter().all(|b| !b.is_image()), "不应残留任何图片块");
+    }
+
+    #[test]
+    fn strip_keeps_valid_when_mixed_with_empty() {
+        // 一空一有效：空图剥离、有效图保留、提示点名「第 1 张」
+        let blocks = vec![
+            ContentBlock::image(String::new(), "image/png"),           // 第 1 张：空
+            ContentBlock::image(make_b64_bytes(512), "image/jpeg"),     // 第 2 张：有效
+        ];
+        let out = strip_empty_image_blocks(blocks);
+        let images: Vec<_> = out.iter().filter(|b| b.is_image()).collect();
+        assert_eq!(images.len(), 1, "仅保留 1 张有效图");
+        let hint = out.iter().find_map(|b| b.as_text()).expect("应有提示");
+        assert!(hint.contains("第 1 张"), "应点名第 1 张为空，实际: {hint}");
+    }
+
+    #[test]
+    fn strip_no_image_unchanged() {
+        // 纯文本 / 无图 → 原样返回、无提示
+        let blocks = vec![ContentBlock::text("只有文字")];
+        let out = strip_empty_image_blocks(blocks);
+        assert_eq!(out.len(), 1);
+        assert!(out[0].as_text().is_some());
+    }
+
+    #[test]
+    fn strip_invalid_base64_treated_as_empty() {
+        // 非法 base64（解码失败）→ 视作坏块剥离（发送必失败）
+        let blocks = vec![ContentBlock::image("not_base64!@#$%", "image/png")];
+        let out = strip_empty_image_blocks(blocks);
+        assert!(out.iter().all(|b| !b.is_image()), "非法 base64 图片应被剥离");
+        assert!(out.iter().any(|b| b.as_text().is_some()), "应注入提示");
     }
 
     // --- SendMessageInput 序列化（确认前端 JSON 格式） ---
