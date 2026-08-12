@@ -68,6 +68,55 @@ pub fn default_max_output_tokens(_provider: &str, model: &str) -> Option<usize> 
     None
 }
 
+/// 已知模型的模态能力（策展表）。
+///
+/// 用于 [`effective_supports_vision`]：当 agent 未显式声明 `supports_vision`（DB 值 =0，
+/// 多为默认值/未配置）时，按模型自动探测，免去用户手填每个模型的能力位。未知模型
+/// 保守返回 `vision = false`（绝不误报"支持"，否则图会被原样硬发给非视觉模型 → 400）。
+///
+/// 仅收录**确定支持视觉**的模型族（子串匹配，同 [`default_context_window`] 规则）；
+/// 不确定的不收录 → 保守 false，由 agent 显式 `supports_vision = 1` 兜底。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ModelCapabilities {
+    /// 是否支持图片输入（vision / multimodal）。
+    pub vision: bool,
+    // 未来扩展：audio / video。当前项目无音频模态，YAGNI 暂不收。
+}
+
+/// 按 `(provider, model)` 返回已知模型的模态能力。匹配规则同
+/// [`default_context_window`]：model 名大小写不敏感、子串包含。`provider` 当前未参与
+/// 判定（model 名已是强信号），保留参数以便未来按厂商细分。
+pub fn model_capabilities(_provider: &str, model: &str) -> ModelCapabilities {
+    let m = model.to_lowercase();
+    let vision = m.contains("gpt-4o")        // gpt-4o / gpt-4o-mini（OpenAI 视觉主力）
+        || m.contains("gpt-4-vision")
+        || m.contains("gpt-4-turbo")         // gpt-4 vision 变体
+        // Claude 3.0+ / 4.x 全系视觉（claude-2 太老，项目不用，不收录）
+        || m.contains("claude-3") || m.contains("claude-4")
+        || m.contains("claude-sonnet") || m.contains("claude-opus") || m.contains("claude-haiku")
+        || m.contains("gemini")              // Gemini 1.0+ 全系视觉
+        || m.contains("glm-4v") || m.contains("glm-4.6v") || m.contains("glm4v")  // 智谱视觉系列
+        || m.contains("qwen-vl") || m.contains("qwen2-vl") || m.contains("qwenvl") // 通义视觉
+        || m.contains("minimax-m3")          // MiniMax M3 支持视觉（M2.x 不支持，不匹配 m3）
+        || m.contains("deepseek-vl");        // DeepSeek 视觉系列（v4 chat 不含 -vl → 保守 false）
+    ModelCapabilities { vision }
+}
+
+/// 解析 agent 的"有效视觉能力"（OR 关系，**零 schema 改动**）。
+///
+/// `agent.supports_vision != 0`（用户显式开启）**或**模型表自动探测支持 → 任一为真即支持：
+/// - 显式 `supports_vision = 1` → 永远生效（权威 override）；
+/// - `supports_vision = 0`（默认/未配置）但模型实际支持（如 MiniMax-M3）→ 自动探测生效，
+///   顺手修配置遗漏；
+/// - 显式 = 0 且模型也不支持 → 不支持。
+///
+/// **无"显式关闭"语义**：0 既可能是"未配置"也可能是"我明确不要视觉"，OR 关系把两者都当
+/// "未配置"。若将来需要"我知道这模型支持但想关掉"，再加 `vision_mode` 三态列；当前 OR
+/// 覆盖 99% 场景且零 migration、零行为回退。
+pub fn effective_supports_vision(agent_supports_vision: i32, provider: &str, model: &str) -> bool {
+    agent_supports_vision != 0 || model_capabilities(provider, model).vision
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,5 +186,47 @@ mod tests {
     #[test]
     fn output_unknown_model_returns_none() {
         assert_eq!(default_max_output_tokens("", "some-custom-model"), None);
+    }
+
+    // --- 模态能力表（model_capabilities / effective_supports_vision）---
+
+    #[test]
+    fn vision_known_models_supported() {
+        assert!(model_capabilities("openai", "gpt-4o").vision);
+        assert!(model_capabilities("openai", "GPT-4o-mini").vision);
+        assert!(model_capabilities("anthropic", "claude-sonnet-4-20250514").vision);
+        assert!(model_capabilities("anthropic", "claude-3-5-sonnet").vision);
+        assert!(model_capabilities("minimax", "MiniMax-M3").vision);
+        assert!(model_capabilities("glm", "glm-4v").vision);
+        assert!(model_capabilities("", "gemini-1.5-pro").vision);
+        assert!(model_capabilities("qwen", "qwen2-vl-72b").vision);
+    }
+
+    #[test]
+    fn vision_text_only_models_false() {
+        // MiniMax-M2 不支持视觉（只有 M3 支持，M2 不匹配 minimax-m3）
+        assert!(!model_capabilities("minimax", "MiniMax-M2").vision);
+        // deepseek-v4 chat 不含 -vl → 保守 false（避免误报导致图硬发给非视觉模型）
+        assert!(!model_capabilities("deepseek", "deepseek-v4-pro").vision);
+        // glm-5.2（coding）不含 4v → 保守 false
+        assert!(!model_capabilities("glm", "glm-5.2").vision);
+        // 未知模型保守 false
+        assert!(!model_capabilities("", "some-custom-llm").vision);
+    }
+
+    #[test]
+    fn effective_vision_agent_override_is_authoritative() {
+        // agent 显式 supports_vision=1 → 永远 true，即便模型表不认
+        assert!(effective_supports_vision(1, "", "unknown-text-model"));
+    }
+
+    #[test]
+    fn effective_vision_auto_detects_when_agent_unspecified() {
+        // agent supports_vision=0（未配置）但 MiniMax-M3 模型表支持 → 自动 true
+        assert!(effective_supports_vision(0, "minimax", "MiniMax-M3"));
+        // agent =0 且模型也不支持 → false
+        assert!(!effective_supports_vision(0, "deepseek", "deepseek-v4-pro"));
+        // agent =0 且未知模型 → false
+        assert!(!effective_supports_vision(0, "", "some-custom-llm"));
     }
 }
