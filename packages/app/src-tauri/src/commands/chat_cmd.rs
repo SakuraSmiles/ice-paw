@@ -188,6 +188,33 @@ fn materialize_file_blocks(
         // 1. UI 卡片（不进 LLM；无论大小都 push 一张）
         blocks.push(ContentBlock::attachment(&e.name, &e.ext, e.bytes_len));
 
+        // —— 空提取守卫（治标止血，2026-08-12）——
+        // 文本层抽不到内容：扫描件 / 纯图片 PDF、只含内嵌图片的 docx、极稀疏 xlsx、加密 PDF。
+        // 此时绝不能伪造"以下是提取的原文"空壳——那会让 LLM 误以为文件在磁盘上、
+        // 继而用文件工具全盘翻找（实测一次会话 agent 白跑了十几个 run_command/list_directory）。
+        // 改发如实提示：明说提取为空 + 该文件不在磁盘/工作目录 + 指示 LLM 直接如实转告用户。
+        // 治本（让扫描件真正可读）见 Phase B：页面渲染成图 → 视觉模型。
+        if e.total_tokens == 0 {
+            tracing::warn!(
+                target: "ice_paw.attach",
+                name = %e.name,
+                kind = %e.kind_label,
+                bytes = e.bytes_len,
+                "附件文本提取为空（疑似扫描件/纯图片/加密 PDF），发送如实提示而非空壳"
+            );
+            blocks.push(ContentBlock::text(format!(
+                "<uploaded_file name=\"{}\" type=\"{}\" extracted=\"empty\">\n\
+                 [系统提示：已尝试从用户上传的附件自动提取文本，但提取结果为空。这通常意味着该文件是\
+                 扫描件、纯图片文档或加密 PDF，当前版本无法读取其文本内容。文件本身已成功接收（{} 字节），\
+                 但它不会出现在磁盘或当前工作目录中——请勿尝试用文件工具（run_command/list_directory/read_file 等）\
+                 去查找它。请直接如实告诉用户：该附件当前无法被读取，建议等待后续图片识别支持，\
+                 或由用户手动复制相关段落贴入对话。]\n\
+                 </uploaded_file>",
+                e.name, e.kind_label, e.bytes_len
+            )));
+            continue;
+        }
+
         if e.total_tokens <= INLINE_BUDGET_TOKENS {
             // 小文件：全量内联（零行为变化）。多块拼接（docx 段 / xlsx sheet）。
             let body = e
