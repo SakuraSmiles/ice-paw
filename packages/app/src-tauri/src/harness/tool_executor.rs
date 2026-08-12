@@ -335,7 +335,11 @@ pub async fn execute_tool_round(
                                 content.push_str("\n\n[工具回传图片，当前模型无视觉能力，");
                                 content.push_str(if outcome.ocr_replaced > 0 {
                                     "经视觉凭据代读为文本]\n"
+                                } else if outcome.drop_reason.is_some() {
+                                    // 有凭据但调用失败（敏感拒/限流/key 错/网络）——具体原因在下方诚实提示
+                                    "视觉凭据代读失败]\n"
                                 } else {
+                                    // 无凭据或 base64 损坏（未发起有效调用）
                                     "且无可用视觉凭据代读]\n"
                                 });
                                 content.push_str(&extra);
