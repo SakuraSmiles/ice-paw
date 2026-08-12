@@ -184,9 +184,18 @@ impl McpClient for ViewAttachmentImageTool {
                 None
             }
         };
+        // 门④（事2）：判断统一改用「有效视觉能力」（agent 显式 supports_vision=1 **或** 模型表
+        // 自动探测），与其余 3 个图片入口一致。修配置遗漏（如 MiniMax-M3 支持视觉但 supports_vision
+        // 未填），避免误走 Arch B 代读、白费一次 vision 调用。
         let supports_vision = agent_opt
             .as_ref()
-            .map(|a| a.supports_vision != 0)
+            .map(|a| {
+                crate::harness::provider::effective_supports_vision(
+                    a.supports_vision,
+                    &a.provider,
+                    &a.model,
+                )
+            })
             .unwrap_or(false);
 
         if supports_vision {
@@ -202,33 +211,19 @@ impl McpClient for ViewAttachmentImageTool {
             return Ok(ToolOutput::with_image(summary.to_string(), png));
         }
 
-        // === Arch B：agent 无视觉 → 多级 fallback 收集视觉凭据，逐个试 describe_image ===
-        // 顺序（显式优先 + 零配置兜底）：
-        //   ① 显式 vision config（用户在「设置-视觉读取」配的——精确 model/url）
-        //   ② 当前 agent 自己的凭据（GLM→glm-4v / OpenAI→gpt-4o，用 agent 的 key）
-        //   ③ 已配的 GLM 视觉 MCP 的 env（Z_AI_API_KEY→glm-4v）
-        // 每条失败（401/网络/超时）不阻塞，继续下一条；全失败如实告知（不中断整轮工具）。
-        let prefs = repo::preferences::get_all(&ctx.pool).await?;
-        let mut candidates: Vec<vision::VisionCredential> = Vec::new();
-
-        if let Some(c) = vision::from_prefs(&prefs) {
-            candidates.push(c);
-        }
-        if let Some(a) = &agent_opt {
-            if let Some(key) = ctx.api_key.as_deref().filter(|s| !s.is_empty()) {
-                if let Some(c) = vision::from_agent(&a.provider, key) {
-                    candidates.push(c);
-                }
-            }
-        }
-        if let Ok(servers) = repo::mcp_server::list_all(&ctx.pool).await {
-            for s in servers.iter().filter(|s| s.enabled) {
-                if let Some(c) = vision::from_mcp_env(&s.env) {
-                    candidates.push(c);
-                    break; // 同质 GLM key，取第一个即够
-                }
-            }
-        }
+        // === Arch B：agent 无视觉 → 统一收集视觉凭据（modal::gather_vision_candidates）===
+        // 4 个图片入口共用同一份凭据收集（事2 / 方案 C），顺序即优先级：显式 vision 配置
+        //（用户在「设置-视觉读取」配的）→ agent 自带视觉模型（GLM→glm-4v / OpenAI→gpt-4o）→
+        // GLM 视觉 MCP env（Z_AI_API_KEY）。每条失败不阻塞，全失败如实告知（不中断整轮工具）。
+        let candidates: Vec<vision::VisionCredential> = match &agent_opt {
+            Some(a) => crate::harness::modal::gather_vision_candidates(
+                &ctx.pool,
+                a,
+                ctx.api_key.as_deref(),
+            )
+            .await,
+            None => Vec::new(),
+        };
 
         if candidates.is_empty() {
             // 既无 agent 视觉、又无任何视觉凭据：如实告知，不伪造。

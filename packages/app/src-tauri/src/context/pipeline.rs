@@ -9,7 +9,8 @@
 //! 5. [`crate::context::stages::ToolFailureFoldStage`] — 折叠连续重复的失败工具调用
 //! 6. [`crate::context::memory::MemoryStage`]        — M1.5 滚动摘要（独立在 memory.rs）
 //! 7. [`crate::context::stages::TokenWindowStage`]   — 按 max_input_tokens 裁剪历史（Phase 1）
-//! 8. [`crate::context::stages::FinalAssembleStage`] — 最终拼装
+//! 8. [`crate::context::stages::ModalCapabilityStage`] — 模态能力适配（事2：非视觉 agent 代读/剥离图片）
+//! 9. [`crate::context::stages::FinalAssembleStage`] — 最终拼装
 //!
 //! **M1.4**：移除 `ToolTrimStage` — Pipeline 阶段裁剪工具意义不大，因为
 //! 工具裁剪需要每轮动态评估（不同 round 的 query 信号不同），且
@@ -34,8 +35,8 @@ use tracing::debug;
 
 use crate::context::memory::{MemoryStage, NoopSummaryProvider, SummaryProvider};
 use crate::context::stages::{
-    FinalAssembleStage, HistoryStage, OsContextStage, SystemPromptStage, TemplateStage,
-    TokenWindowStage, ToolFailureFoldStage,
+    FinalAssembleStage, HistoryStage, ModalCapabilityStage, OsContextStage, SystemPromptStage,
+    TemplateStage, TokenWindowStage, ToolFailureFoldStage,
 };
 use crate::context::token::ContextBudget;
 use crate::db::models::{AgentRow, MessageRow};
@@ -88,6 +89,9 @@ pub struct PipelineContext {
     pub project_workspace: Option<String>,
     /// 项目上下文目录（IcePaw 管理的 {workspace}/projects/{id}/，存 project.md）
     pub project_context_dir: Option<String>,
+    /// 已解析的 agent 明文 API key（DB 只存引用槽位，由 `chat_cmd` 解析后注入）。
+    /// 供 [`ModalCapabilityStage`] 收集视觉凭据（`vision::from_agent` 借 agent key 做零配置兜底）。
+    pub api_key: Option<String>,
 
     // ---- Stage 1: Template 渲染输出 ----
     pub rendered_system_prompt: Option<String>,
@@ -151,6 +155,7 @@ impl PipelineContext {
             cancel_token,
             project_workspace: None,
             project_context_dir: None,
+            api_key: None,
             rendered_system_prompt: None,
             rendered_user_prefix: String::new(),
             os_context: String::new(),
@@ -232,6 +237,7 @@ impl PipelineRunner {
             Box::new(ToolFailureFoldStage),
             Box::new(MemoryStage::new(provider)),
             Box::new(TokenWindowStage),
+            Box::new(ModalCapabilityStage),
             Box::new(FinalAssembleStage),
         ])
     }

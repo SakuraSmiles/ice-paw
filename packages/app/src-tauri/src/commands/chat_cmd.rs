@@ -432,10 +432,18 @@ pub async fn send_message(
             None => (final_blocks, Vec::new(), Vec::new()),
         };
 
-    // 事1：视觉模态元信息注入——纠正 agent「已看到图却说没看到」的认知偏差（见
-    // build_modality_hint 文档）。有图时在 blocks 头部插入提示块。
-    if let Some(hint) = build_modality_hint(&final_blocks) {
-        final_blocks.insert(0, hint);
+    // 事1 + 事2：视觉模态元信息注入。仅当 agent「有效支持视觉」时插入"你已直接收到 N 张图、
+    // 无需调图片工具"的元提示——纠正视觉 agent「看到了却说没看到」的认知偏差。
+    // 非视觉 agent 不插此提示（其图片由 ModalCapabilityStage 走代读/诚实剥离，提示由该 Stage 负责）。
+    let eff_vision = crate::harness::provider::effective_supports_vision(
+        agent.supports_vision,
+        &agent.provider,
+        &agent.model,
+    );
+    if eff_vision {
+        if let Some(hint) = build_modality_hint(&final_blocks) {
+            final_blocks.insert(0, hint);
+        }
     }
 
     // --- 3. 拼装上下文（A3-1：trait-based Pipeline） ---
@@ -520,6 +528,10 @@ pub async fn send_message(
             }
         }
     }
+
+    // 事2：注入已解析的 agent API key，供 ModalCapabilityStage 收集视觉凭据
+    // （vision::from_agent 借 agent key 做零配置兜底）。空 key 也允许（agent 可能用 base_url 免 key）。
+    pipeline_ctx.api_key = Some(api_key.clone());
 
     // M1.5: 构造 LlmSummaryProvider 注入 Pipeline
     use crate::harness::summary_provider::LlmSummaryProvider;

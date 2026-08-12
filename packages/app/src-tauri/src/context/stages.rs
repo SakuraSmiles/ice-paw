@@ -13,7 +13,8 @@
 //! 5. [`ToolFailureFoldStage`] — 折叠连续重复的失败工具调用（非破坏，仅影响 LLM 视图）
 //! 6. [`MemoryStage`]        — M1.5 滚动摘要（独立放在 [`crate::context::memory`] 中）
 //! 7. [`TokenWindowStage`]   — 按 max_input_tokens 硬上限裁剪历史（Phase 1 token 窗口）
-//! 8. [`FinalAssembleStage`] — 最终拼装（图片重排、user_blocks 拼装、messages 列表组装）
+//! 8. [`ModalCapabilityStage`] — 模态能力适配（事2：非视觉 agent 代读/剥离图片块）
+//! 9. [`FinalAssembleStage`] — 最终拼装（图片重排、user_blocks 拼装、messages 列表组装）
 //!
 //! `MemoryStage` 不在本模块 —— 它属于 L1 Memory 层（`memory.rs`），按
 //! M2.2 拆分规则独立维护。
@@ -305,6 +306,86 @@ impl PipelineStage for TokenWindowStage {
                 max_input,
                 target,
                 "TokenWindowStage: 超 max_input 裁剪历史 {dropped} 条",
+            );
+        }
+        Ok(())
+    }
+}
+
+// =========================================================================
+// Stage 4.8: ModalCapabilityStage — 模态能力适配（事2 / 方案 C）
+// =========================================================================
+
+/// Stage 4.8：按 agent「有效视觉能力」适配图片块，位置在 TokenWindow 之后、FinalAssemble 之前。
+///
+/// 4 个图片入口中本 Stage 覆盖 2 个：
+/// - **门① 当前用户消息**（`ctx.final_blocks`）：非视觉 agent → 收集视觉凭据逐图代读（OCR）成
+///   `Text`，代读不了的剥离 + 诚实提示；视觉 agent → 原样过（事1 元提示已在 `chat_cmd` 注入）。
+/// - **门③ 历史**（`ctx.history_messages`）：非视觉 agent → 每条消息的 `Image` 剥成一条 marker
+///   （不重复 OCR，避免 N×M 次 视觉调用 + 重复提示噪声）；视觉 agent → 原样过。
+///
+/// 另两个入口由别处接同一套适配函数：门② 工具返图（`tool_executor`）、门④ `view_attachment_image`
+/// 工具（其判断改 `effective_supports_vision`）。
+///
+/// 代读网络错误被 [`crate::harness::modal::adapt_blocks_for_vision`] 内部吸收，**绝不向上抛**
+/// （视觉适配失败不中断主对话）；凭据收集的 DB 查询失败仅降级到能拿到的凭据。
+pub(crate) struct ModalCapabilityStage;
+
+#[async_trait]
+impl PipelineStage for ModalCapabilityStage {
+    fn name(&self) -> &'static str {
+        "modal_capability"
+    }
+
+    async fn execute(&self, ctx: &mut PipelineContext) -> AppResult<()> {
+        let eff_vision = crate::harness::provider::effective_supports_vision(
+            ctx.agent.supports_vision,
+            &ctx.agent.provider,
+            &ctx.agent.model,
+        );
+        // 视觉模型：final_blocks 原样（含事1 元提示 + 图片），历史图片也保留 → 直送模型。
+        if eff_vision {
+            return Ok(());
+        }
+
+        // 非视觉：收集凭据（显式 vision 配置 → agent 自带视觉模型 → GLM 视觉 MCP env）。
+        let candidates = crate::harness::modal::gather_vision_candidates(
+            &ctx.pool,
+            &ctx.agent,
+            ctx.api_key.as_deref(),
+        )
+        .await;
+
+        // 门① 当前用户消息：完整适配（OCR 成功→Text；失败/无凭据→剥离+诚实提示）。
+        let outcome =
+            crate::harness::modal::adapt_blocks_for_vision(&ctx.final_blocks, false, &candidates)
+                .await;
+        if outcome.changed() {
+            tracing::info!(
+                target: "ice_paw.modal",
+                ocr_replaced = outcome.ocr_replaced,
+                dropped = outcome.dropped,
+                agent_model = %ctx.agent.model,
+                "非视觉 agent 当前消息图片已适配（代读/剥离）"
+            );
+            ctx.final_blocks = outcome.blocks;
+        }
+
+        // 门③ 历史：每条消息的图片剥成 marker（避免每轮重复 OCR；诚实告知曾含图）。
+        let mut history_touched = 0u32;
+        for msg in &mut ctx.history_messages {
+            if msg.content.iter().any(|b| b.is_image()) {
+                let original = std::mem::take(&mut msg.content);
+                msg.content = crate::harness::modal::strip_image_blocks_to_marker(&original);
+                history_touched += 1;
+            }
+        }
+        if history_touched > 0 {
+            tracing::info!(
+                target: "ice_paw.modal",
+                messages = history_touched,
+                agent_model = %ctx.agent.model,
+                "非视觉 agent 历史消息图片已剥为 marker"
             );
         }
         Ok(())
