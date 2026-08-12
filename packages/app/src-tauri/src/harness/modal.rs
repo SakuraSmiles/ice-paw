@@ -30,6 +30,7 @@ use sqlx::SqlitePool;
 
 use crate::db::repo;
 use crate::db::models::AgentRow;
+use crate::harness::error_mapping::{classify_llm_error, LlmErrorKind};
 use crate::harness::vision::{self, VisionCredential};
 use crate::infra::protocol::ContentBlock;
 
@@ -42,6 +43,13 @@ pub struct AdaptOutcome {
     pub ocr_replaced: usize,
     /// 因无凭据 / 全部凭据失败而被剥离的图片数（诚实提示用）。
     pub dropped: usize,
+    /// 最后一张被剥离图片的失败原因分类（驱动诚实提示文案分支，缺口③）。
+    ///
+    /// - `None`：未发起有效调用（无候选凭据 / base64 解码失败）→ 提示引导用户**配置**
+    ///   视觉读取。
+    /// - `Some(kind)`：已有候选凭据但全部 `describe` 调用失败 → 提示按 kind 给**具体原因**
+    ///   （敏感拒 / 限流 / 密钥错 / 网络），避免笼统的「无凭据」误导用户去查配置。
+    pub drop_reason: Option<LlmErrorKind>,
 }
 
 impl AdaptOutcome {
@@ -129,42 +137,83 @@ pub async fn adapt_blocks_for_vision(
             blocks: blocks.to_vec(),
             ocr_replaced: 0,
             dropped: 0,
+            drop_reason: None,
         };
     }
 
     let mut out: Vec<ContentBlock> = Vec::with_capacity(blocks.len() + 1);
     let mut ocr_replaced = 0usize;
     let mut dropped = 0usize;
+    // 记录最后一张被剥离图的失败原因，驱动诚实提示文案分支（缺口③）。
+    // Some 优先：只要任一图是「有凭据但调用失败」(Some)，就不用「无凭据」(None) 文案。
+    let mut last_drop_reason: Option<LlmErrorKind> = None;
 
     for b in blocks {
         if let ContentBlock::Image { data, media_type } = b {
             match ocr_image(data, media_type, candidates).await {
-                Some(text) => {
+                Ok(text) => {
                     ocr_replaced += 1;
                     out.push(ContentBlock::text(format!(
                         "[图片经视觉凭据代读为文本]\n{text}"
                     )));
                 }
-                None => dropped += 1,
+                Err(reason) => {
+                    dropped += 1;
+                    // reason.or(last_drop_reason)：当前 Some 则覆盖；当前 None 保留历史。
+                    last_drop_reason = reason.or(last_drop_reason);
+                }
             }
         } else {
             out.push(b.clone());
         }
     }
 
-    if dropped > 0 {
-        out.push(ContentBlock::text(format!(
-            "[系统提示：本次消息含 {dropped} 张图片，但当前模型不支持视觉，且无可用视觉凭据\
-             （视觉配置 / agent 自带视觉模型 / GLM 视觉 MCP）代为读取。如需识别图片内容，\
-             请在「设置-视觉读取」配置视觉模型，或换用支持视觉的 agent。]"
-        )));
+    // 诚实提示按失败原因分支，避免笼统「无凭据」误导（缺口③）。
+    if let Some(hint) = dropped_hint(dropped, last_drop_reason) {
+        out.push(ContentBlock::text(hint));
     }
 
     AdaptOutcome {
         blocks: out,
         ocr_replaced,
         dropped,
+        drop_reason: last_drop_reason,
     }
+}
+
+/// 生成「图片被剥离」的诚实提示文本；`dropped = 0` 时返回 `None`（不注入多余提示）。
+///
+/// **按失败原因分支**（[`LlmErrorKind`]），避免笼统的「无可用凭据」文案误导用户——
+/// 用户明明配了视觉凭据，却被提示「无凭据」会困惑地去查配置（其实配置没问题，是调用被拒）。
+/// - `drop_reason = None`：未发起有效调用（无候选凭据 / base64 损坏）→ 提示引导用户**配置**
+///   视觉读取或换视觉 agent。
+/// - `drop_reason = Some(kind)`：已有凭据但全部 `describe` 调用失败 → 按 kind 给**具体原因**
+///   （敏感拒 / 限流 / 密钥错 / 网络），让用户知道问题在调用结果而非「没配置」。
+///
+/// 抽成纯函数便于单测各原因分支文案（adapt 集成路径需 mock describe，单测覆盖成本高）。
+pub(crate) fn dropped_hint(dropped: usize, drop_reason: Option<LlmErrorKind>) -> Option<String> {
+    if dropped == 0 {
+        return None;
+    }
+    let hint = match drop_reason {
+        None => format!(
+            "[系统提示：本次消息含 {dropped} 张图片，但当前模型不支持视觉，且未配置可用的视觉\
+             读取凭据（视觉配置 / agent 自带视觉模型 / GLM 视觉 MCP）。如需识别图片内容，\
+             请在「设置-视觉读取」配置视觉模型，或换用支持视觉的 agent。]"
+        ),
+        Some(LlmErrorKind::Unknown) => format!(
+            "[系统提示：本次消息含 {dropped} 张图片，当前模型不支持视觉，已尝试用可用视觉凭据\
+             代读但未能识别。如需识别，请换用支持视觉的 agent，或在「设置-视觉读取」\
+             检查视觉模型配置。]"
+        ),
+        // 已知分类（敏感/限流/鉴权/超长/网络）：friendly_text 非空，给出真实原因。
+        Some(kind) => format!(
+            "[系统提示：本次消息含 {dropped} 张图片，当前模型不支持视觉，已尝试用可用视觉\
+             凭据代读，但{}。]",
+            kind.friendly_text()
+        ),
+    };
+    Some(hint)
 }
 
 /// 把历史消息里的 `Image` 块**剥成一个诚实 marker**（非视觉 agent 历史路径专用）。
@@ -198,17 +247,24 @@ pub fn strip_image_blocks_to_marker(blocks: &[ContentBlock]) -> Vec<ContentBlock
     out
 }
 
-/// 用候选凭据逐个试 [`vision::VisionCredential::describe`]；首个成功返回文本，全失败 / 无候选 /
-/// base64 解码失败返回 `None`。网络/凭据错误不向上抛（调用方计入 dropped 走诚实剥离）。
+/// 用候选凭据逐个试 [`vision::VisionCredential::describe`]；首个成功返回其文本。
+///
+/// 返回 `Result<String, Option<LlmErrorKind>>`：
+/// - `Ok(text)` —— 代读成功。
+/// - `Err(None)` —— 未发起有效调用（候选为空 / base64 解码失败）。
+/// - `Err(Some(kind))` —— 已有候选但全部 `describe` 调用失败，`kind` 为**最后一个**候选的
+///   错误分类（驱动诚实提示文案分支）。
+///
+/// 网络/凭据错误不向上抛——调用方计入 `dropped` 走诚实剥离，绝不中断主对话。
 async fn ocr_image(
     data_base64: &str,
     media_type: &str,
     candidates: &[VisionCredential],
-) -> Option<String> {
+) -> Result<String, Option<LlmErrorKind>> {
     use base64::Engine as _;
 
     if candidates.is_empty() {
-        return None;
+        return Err(None);
     }
 
     let bytes = base64::engine::general_purpose::STANDARD
@@ -218,11 +274,10 @@ async fn ocr_image(
                 target: "ice_paw.modal",
                 err = %e, "Image 块 base64 解码失败，跳过代读"
             );
-            e
-        })
-        .ok()?;
+            None // 解码失败 = 非调用失败
+        })?;
 
-    let mut last_err: Option<String> = None;
+    let mut last_kind: Option<LlmErrorKind> = None;
     for cred in candidates {
         match cred.describe(&bytes, media_type).await {
             Ok(text) => {
@@ -232,16 +287,21 @@ async fn ocr_image(
                     chars = text.len(),
                     "视觉凭据代读图片成功"
                 );
-                return Some(text);
+                return Ok(text);
             }
             Err(e) => {
+                // 分类错误（敏感/限流/鉴权/网络...）驱动上层诚实提示文案——比旧实现的
+                // 笼统「无凭据」准确（缺口③）。
+                let msg = e.to_string();
+                let kind = classify_llm_error(&msg);
                 tracing::warn!(
                     target: "ice_paw.modal",
                     source = %cred.source,
-                    err = %e,
+                    err = %msg,
+                    kind = ?kind,
                     "视觉凭据代读失败，尝试下一级"
                 );
-                last_err = Some(format!("{}: {e}", cred.source));
+                last_kind = Some(kind);
             }
         }
     }
@@ -249,10 +309,10 @@ async fn ocr_image(
     tracing::warn!(
         target: "ice_paw.modal",
         tried = ?candidates.iter().map(|c| c.source.as_str()).collect::<Vec<_>>(),
-        last_err = ?last_err,
+        last_kind = ?last_kind,
         "所有视觉凭据代读均失败"
     );
-    None
+    Err(last_kind)
 }
 
 #[cfg(test)]
@@ -359,6 +419,61 @@ mod tests {
         let out = adapt_blocks_for_vision(&blocks, false, &[]).await;
         assert_eq!(out.dropped, 1);
         assert!(out.blocks.last().unwrap().as_text().unwrap().contains("1 张图片"));
+    }
+
+    // ---- dropped_hint：按失败原因分支（缺口③，纯函数单测）----
+
+    #[test]
+    fn dropped_hint_none_when_zero_dropped() {
+        assert_eq!(dropped_hint(0, None), None);
+        assert_eq!(dropped_hint(0, Some(LlmErrorKind::Sensitive)), None);
+    }
+
+    #[test]
+    fn dropped_hint_no_credentials_guides_config() {
+        // 无候选/解码失败 → 引导用户配置（旧实现唯一的文案，现在只是分支之一）
+        let h = dropped_hint(2, None).expect("有提示");
+        assert!(h.contains("2 张图片"));
+        assert!(
+            h.contains("未配置") && h.contains("视觉读取"),
+            "无凭据应引导配置: {h}"
+        );
+    }
+
+    #[test]
+    fn dropped_hint_sensitive_gives_real_reason() {
+        // 有凭据但敏感拒 → 说真实原因，而非笼统「无凭据」（缺口③核心）
+        let h = dropped_hint(1, Some(LlmErrorKind::Sensitive)).expect("有提示");
+        assert!(h.contains("1 张图片"));
+        assert!(h.contains("安全审核"), "敏感拒应说原因: {h}");
+        assert!(!h.contains("未配置"), "有凭据失败不应误导查配置: {h}");
+    }
+
+    #[test]
+    fn dropped_hint_rate_limited_gives_reason() {
+        let h = dropped_hint(1, Some(LlmErrorKind::RateLimited)).expect("有提示");
+        assert!(h.contains("频繁"));
+        assert!(!h.contains("未配置"));
+    }
+
+    #[test]
+    fn dropped_hint_auth_gives_reason() {
+        let h = dropped_hint(1, Some(LlmErrorKind::Auth)).expect("有提示");
+        assert!(h.contains("密钥"));
+    }
+
+    #[test]
+    fn dropped_hint_network_gives_reason() {
+        let h = dropped_hint(1, Some(LlmErrorKind::Network)).expect("有提示");
+        assert!(h.contains("网络") || h.contains("服务"));
+    }
+
+    #[test]
+    fn dropped_hint_unknown_no_specific_reason() {
+        // 有凭据但失败原因未识别 → 不伪造细节，诚实说「未能识别」
+        let h = dropped_hint(1, Some(LlmErrorKind::Unknown)).expect("有提示");
+        assert!(h.contains("未能识别"));
+        assert!(!h.contains("未配置"), "Unknown 不应说「未配置」（其实有凭据）: {h}");
     }
 
     // ---- strip_image_blocks_to_marker（历史路径，静默剥离）----

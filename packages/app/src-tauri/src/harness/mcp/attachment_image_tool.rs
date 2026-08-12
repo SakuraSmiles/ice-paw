@@ -282,7 +282,10 @@ impl McpClient for ViewAttachmentImageTool {
             }
         }
 
-        // 全部候选失败：诚实告知（页面已渲染，但凭据都调不通）。
+        // 全部候选失败：诚实告知。错误经 friendly_error 友好化（缺口④：避免把原始英文
+        // HTTP 错误体直接塞给 agent → 用户看到一堆英文堆栈）。
+        let raw_err = last_err.as_deref().unwrap_or("unknown");
+        let friendly = crate::harness::error_mapping::friendly_error(raw_err);
         let summary = serde_json::json!({
             "message_id": parsed.message_id,
             "page": parsed.page,
@@ -290,10 +293,10 @@ impl McpClient for ViewAttachmentImageTool {
             "name": row.name,
             "note": format!(
                 "Rendered the page to an image, but all available vision credentials failed to \
-                 read it (tried: {}). Last error: {}. Tell the user honestly: the page rendered \
-                 but could not be recognized.",
+                 read it (tried: {}). Last error: {}. Tell the user honestly what went wrong \
+                 (in the user's language); the page rendered but could not be recognized.",
                 tried.join(", "),
-                last_err.as_deref().unwrap_or("unknown")
+                friendly
             ),
         });
         Ok(ToolOutput::text(summary.to_string()))
