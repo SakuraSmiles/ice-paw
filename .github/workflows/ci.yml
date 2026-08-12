@@ -64,6 +64,10 @@ jobs:
           touch resources/mcp-runtime/node/node.exe
           mkdir -p resources/mcp-runtime/node_modules/_ci
           touch resources/mcp-runtime/node_modules/_ci/marker.json
+          # pdfium.dll 同理：tauri-build 编译期校验 bundle.resources 声明的路径存在，
+          # CI 只验编译不真实打包，建占位文件通过校验即可（真实 dll 由 prepare:pdfium 准备）
+          mkdir -p resources/pdfium
+          touch resources/pdfium/pdfium.dll
 
       # 统一使用 ci profile 共享编译产物
       - name: cargo check (ci)

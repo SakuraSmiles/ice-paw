@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "pnpm prepare:mcp && pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm prepare:mcp && pnpm build",
+    "beforeBuildCommand": "pnpm prepare:mcp && pnpm prepare:pdfium && pnpm build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -36,7 +36,8 @@
     ],
     "resources": [
       "resources/mcp-runtime/node/node.exe",
-      "resources/mcp-runtime/node_modules/**/*"
+      "resources/mcp-runtime/node_modules/**/*",
+      "resources/pdfium/pdfium.dll"
     ],
     "windows": {
       "webviewInstallMode": {

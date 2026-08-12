@@ -6,8 +6,11 @@
 //!
 //! ## pdfium 二进制
 //! pdfium-render 是纯 Rust wrapper，**编译期不需要** pdfium 二进制，运行时动态加载。
-//! 默认 feature `pdfium_6721` 必须搭配 bblanchon `chromium/6721` 版二进制（已下载到
-//! `sodium-prebuilt/pdfium/bin/pdfium.dll`）。DLL 搜索顺序见 [`load_bindings`]。
+//! 默认 feature `pdfium_6721` 必须搭配 bblanchon `chromium/6721` 版二进制。
+//! - **打包**：`scripts/prepare-pdfium.ps1` 把 dll 放进 `src-tauri/resources/pdfium/`，
+//!   `tauri.conf.json` 的 `bundle.resources` 把它打进安装包（exe 同级 `resources/pdfium/`）。
+//! - **开发**：dll 在 `sodium-prebuilt/pdfium/bin/`（gitignore，本地下载）。
+//! DLL 搜索顺序见 [`load_bindings`]。
 //!
 //! ## 线程模型（关键）
 //! pdfium 非线程并发安全，且 `Pdfium` 是 `!Send`——不能跨线程共享，也不能进全局 Mutex。
@@ -163,9 +166,10 @@ fn reply(job: Job, res: Result<Vec<u8>, String>) -> Result<(), ()> {
 ///
 /// 顺序：
 /// 1. `ICEPAW_PDFIUM_DIR` 环境变量指向的目录（显式覆盖，打包/测试用）。
-/// 2. 可执行文件同目录（打包后 DLL 随 exe 放）。
-/// 3. 开发回退：`sodium-prebuilt/pdfium/bin`（仓库内，本机 dev 用）。
-/// 4. 系统库（PATH 里的 pdfium）。
+/// 2. 可执行文件同目录。
+/// 3. exe 同级 `resources/pdfium/`（Tauri 打包后 bundle.resources 的物理位置）。
+/// 4. 开发回退：`sodium-prebuilt/pdfium/bin`（仓库内，本机 dev 用）。
+/// 5. 系统库（PATH 里的 pdfium）。
 ///
 /// **诚实化**：每个候选的失败都记录 pdfium-render 返回的真实错误（路径不存在 / LoadLibrary
 /// 失败 / 符号缺失 / 依赖缺失），而非笼统归为"找不到"。最常见的真实根因是 pdfium-render
@@ -184,6 +188,11 @@ fn load_bindings() -> AppResult<Pdfium> {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             candidates.push(("exe 目录", dir.to_path_buf()));
+            // 2.5 打包后 Tauri resources 目录：bundle.resources 文件物理位于 exe 同级的
+            //     resources/ 下（与 bundled.rs 的 RUNTIME_REL="resources/mcp-runtime" 同模式）。
+            //     pdfium.dll 经 resources/pdfium/ 打包；dev 不命中（exe 在 target/debug 无
+            //     resources/，靠下面的 dev 回退）。
+            candidates.push(("exe/resources/pdfium", dir.join("resources").join("pdfium")));
         }
     }
 
