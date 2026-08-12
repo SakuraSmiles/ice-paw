@@ -19,7 +19,8 @@ const VISION_OCR_PROMPT: &str = "\
 若有公式/图注，照原样转写。只输出识别到的正文内容，不要添加任何解释、前言或总结。";
 
 /// 已配置的 vision provider 标签（与 embedding 一致）。
-pub const SUPPORTED_PROVIDERS: &[&str] = &["openai", "glm", "deepseek"];
+/// minimax 仅 MiniMax-M3 支持图片输入（M2.x 不支持），但 M3 是当前主力多模态模型，故纳入。
+pub const SUPPORTED_PROVIDERS: &[&str] = &["openai", "glm", "deepseek", "minimax"];
 
 /// 从 [`UserPreferences`] 解析 vision 配置 `(model, base_url, api_key)`。
 ///
@@ -43,6 +44,9 @@ pub fn resolve_vision_config(
             "openai" => "https://api.openai.com".into(),
             "glm" => "https://open.bigmodel.cn/api/paas/v4".into(),
             "deepseek" => "https://api.deepseek.com".into(),
+            // MiniMax 聊天走 Anthropic 协议（/anthropic），但视觉走 OpenAI 兼容端点（/v1），
+            // 因为 describe_image 用 image_url 格式（OpenAI 协议）。同一 API key 两端点通用。
+            "minimax" | "minimax-cn" => "https://api.minimaxi.com/v1".into(),
             _ => return None,
         },
     };
@@ -60,8 +64,10 @@ pub fn is_vision_configured(prefs: &UserPreferences) -> bool {
 /// 的 PNG 发给**全局 vision 配置**指定的模型，让它把图读成文本回灌进 `tool_result`——
 /// 这样非视觉 agent 也能"看到"扫描件内容（[`crate::db::models`] AgentRow 注释的 fallback 语义）。
 ///
-/// `provider ∈ {openai, glm, deepseek}`，三者均走 **OpenAI Chat Completions + image_url** 格式，
+/// `provider ∈ {openai, glm, deepseek, minimax}`，均走 **OpenAI Chat Completions + image_url** 格式，
 /// 故同一实现兼容全部。endpoint 由 [`build_chat_endpoint`] 规整。
+/// MiniMax 特殊处理（[`is_minimax`]）：① `max_tokens` 已弃用，改发 `max_completion_tokens`；
+/// ② M3 默认 adaptive thinking，响应 content 前缀 `<think>...</think>`，用 [`strip_reasoning`] 剥掉。
 ///
 /// 失败（HTTP/解析）归一为 `AppError::Internal`，调用方把错误文本写进 tool_result 让 LLM 知悉。
 pub async fn describe_image(
@@ -78,9 +84,8 @@ pub async fn describe_image(
         "data:image/png;base64,{}",
         base64::engine::general_purpose::STANDARD.encode(png)
     );
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "model": model,
-        "max_tokens": 2048,
         "messages": [{
             "role": "user",
             "content": [
@@ -89,6 +94,13 @@ pub async fn describe_image(
             ]
         }]
     });
+    // 输出长度上限：MiniMax 已弃用 max_tokens（官方改用 max_completion_tokens）；
+    // 其它 OpenAI 兼容 provider 仍用 max_tokens。两者语义等价，统一 2048（OCR 够用）。
+    if is_minimax(provider) {
+        body["max_completion_tokens"] = serde_json::json!(2048);
+    } else {
+        body["max_tokens"] = serde_json::json!(2048);
+    }
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(90))
@@ -124,7 +136,26 @@ pub async fn describe_image(
                 "vision 响应缺少 choices[0].message.content ({provider}): {snippet}"
             ))
         })?;
-    Ok(content.to_string())
+    // MiniMax-M3 等 reasoning 模型默认 adaptive thinking，content 前缀 <think>...</think>；
+    // OCR 只要纯识别文本，剥掉前缀推理块（对非 reasoning 模型为 no-op）。
+    Ok(strip_reasoning(content).trim().to_string())
+}
+
+/// 是否为 MiniMax provider（minimax / minimax-cn 两标签同源，均走 MiniMax OpenAI 兼容端点）。
+fn is_minimax(provider: &str) -> bool {
+    matches!(provider, "minimax" | "minimax-cn")
+}
+
+/// 剥掉 reasoning 模型（MiniMax-M3 等）在 content 前缀的 `<think>...</think>` 推理块。
+///
+/// M3 默认 adaptive thinking，响应 `choices[0].message.content` 形如
+/// `<think>…推理…</think>\n实际答案`。OCR 场景只要识别文本，取首个 `</think>` 之后的部分；
+/// 无 `</think>` 则原样返回（GLM-4v / gpt-4o 等非 reasoning 模型不受影响，no-op）。
+fn strip_reasoning(content: &str) -> &str {
+    match content.find("</think>") {
+        Some(idx) => content[idx + "</think>".len()..].trim_start(),
+        None => content,
+    }
 }
 
 /// 把 vision `base_url` 规整为 `{base}/chat/completions`（OpenAI 兼容）。
@@ -172,11 +203,14 @@ impl VisionCredential {
 }
 
 /// provider 的默认视觉模型（fallback 用；用户可在 vision config 显式覆盖成更强模型）。
-/// 只列能走 OpenAI 兼容 image_url 的通用视觉模型；deepseek/minimax/anthropic 不在此列。
+/// 只列能走 OpenAI 兼容 image_url 的通用视觉模型；deepseek/anthropic 不在此列
+///（deepseek 标准 API 无视觉模型；anthropic 走另一套 image block 格式，不兼容 image_url）。
+/// MiniMax 仅 M3 支持图片输入（M2.x 不支持多模态）。
 fn default_vision_model(provider: &str) -> Option<&'static str> {
     match provider {
         "glm" => Some("glm-4v"),
         "openai" => Some("gpt-4o"),
+        "minimax" | "minimax-cn" => Some("MiniMax-M3"),
         _ => None,
     }
 }
@@ -187,6 +221,7 @@ fn default_provider_base_url(provider: &str) -> Option<String> {
         "openai" => Some("https://api.openai.com".into()),
         "glm" => Some("https://open.bigmodel.cn/api/paas/v4".into()),
         "deepseek" => Some("https://api.deepseek.com".into()),
+        "minimax" | "minimax-cn" => Some("https://api.minimaxi.com/v1".into()),
         _ => None,
     }
 }
@@ -205,8 +240,8 @@ pub fn from_prefs(prefs: &UserPreferences) -> Option<VisionCredential> {
     })
 }
 
-/// ② 当前 agent 自己的凭据——零配置兜底：GLM→glm-4v / OpenAI→gpt-4o，用 agent 的 key。
-/// 其它 provider（deepseek/minimax/...）无通用视觉模型，返回 None。
+/// ② 当前 agent 自己的凭据——零配置兜底：GLM→glm-4v / OpenAI→gpt-4o / MiniMax→MiniMax-M3，
+/// 用 agent 的 key。其它 provider（deepseek/anthropic/...）无通用视觉模型，返回 None。
 pub fn from_agent(provider: &str, api_key: &str) -> Option<VisionCredential> {
     let model = default_vision_model(provider)?.to_string();
     let base_url = default_provider_base_url(provider)?;
@@ -329,10 +364,25 @@ mod tests {
     }
 
     #[test]
+    fn from_agent_minimax_borrows_m3() {
+        // minimax / minimax-cn 两标签都应映射到 MiniMax-M3（M3 是 MiniMax 唯一支持图片的模型）
+        let m = from_agent("minimax", "mk").expect("minimax 有视觉 (M3)");
+        assert_eq!(m.provider, "minimax");
+        assert_eq!(m.model, "MiniMax-M3");
+        assert_eq!(m.base_url, "https://api.minimaxi.com/v1");
+        assert_eq!(m.api_key, "mk");
+        assert!(m.source.contains("agent"));
+
+        let cn = from_agent("minimax-cn", "ck").expect("minimax-cn 同源 M3");
+        assert_eq!(cn.model, "MiniMax-M3");
+        assert_eq!(cn.base_url, "https://api.minimaxi.com/v1");
+    }
+
+    #[test]
     fn from_agent_non_vision_provider_is_none() {
-        // deepseek/minimax/anthropic 无通用视觉模型 → 不能借 agent key
+        // deepseek/anthropic 无通用视觉模型 → 不能借 agent key
+        //（minimax 已支持，见 from_agent_minimax_borrows_m3）
         assert!(from_agent("deepseek", "k").is_none());
-        assert!(from_agent("minimax", "k").is_none());
         assert!(from_agent("anthropic", "k").is_none());
         assert!(from_agent("unknown", "k").is_none());
     }
@@ -374,5 +424,40 @@ mod tests {
         let from_a = from_agent("openai", "ak").unwrap();
         assert_eq!(from_p.model, "gpt-4o-mini"); // 显式
         assert_eq!(from_a.model, "gpt-4o"); // 默认
+    }
+
+    // ---- MiniMax 适配（M3 reasoning + 弃用字段 + 默认 URL）----
+
+    #[test]
+    fn resolve_vision_config_minimax_default_url() {
+        // 显式 vision config 选 minimax、不填 base_url → 默认 OpenAI 兼容端点 /v1
+        let p = prefs("minimax", "MiniMax-M3", "mk", None);
+        let (m, url, k) = resolve_vision_config(&p).expect("minimax 可解析");
+        assert_eq!(m, "MiniMax-M3");
+        assert_eq!(url, "https://api.minimaxi.com/v1");
+        assert_eq!(k, "mk");
+    }
+
+    #[test]
+    fn is_minimax_matches_both_labels() {
+        assert!(is_minimax("minimax"));
+        assert!(is_minimax("minimax-cn"));
+        assert!(!is_minimax("glm"));
+        assert!(!is_minimax("openai"));
+        assert!(!is_minimax("deepseek"));
+    }
+
+    #[test]
+    fn strip_reasoning_removes_minimax_think_block() {
+        // MiniMax-M3 官方响应实测：content 前缀 <think>...</think>
+        let raw = "<think>\nThe user wants OCR.\n</think>\n这是识别出的正文。";
+        assert_eq!(strip_reasoning(raw), "这是识别出的正文。");
+    }
+
+    #[test]
+    fn strip_reasoning_noop_without_think_block() {
+        // GLM-4v / gpt-4o 等非 reasoning 模型无 <think>，原样返回
+        assert_eq!(strip_reasoning("纯文本"), "纯文本");
+        assert_eq!(strip_reasoning(""), "");
     }
 }
