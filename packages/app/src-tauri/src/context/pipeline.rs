@@ -271,9 +271,11 @@ impl PipelineRunner {
 ///
 /// - `messages`：可直接喂给 `provider.stream_chat(messages, ...)` 的完整上下文
 ///   （含 system / 历史 / 当前 user）
-/// - `user_blocks`：含图片重排后的当前用户消息 blocks，供 DB 回写
+///
+/// 注：当前用户消息的**持久化**（content_blocks 回写）不在此处——send_message 用适配前
+/// 的 `persist_blocks` 落库，与发给 LLM 的 messages（含视觉适配）隔离，避免非视觉 agent
+/// 历史回看丢图。
 #[derive(Debug)]
 pub(crate) struct AssembledContext {
     pub messages: Vec<ChatMessage>,
-    pub user_blocks: Vec<ContentBlock>,
 }
