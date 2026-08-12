@@ -228,6 +228,49 @@ async function saveEmbedding() {
   }
 }
 
+// ---- Vision 配置（Phase B：扫描件/图片型 PDF 视觉读取）----
+// 与 embedding 对称但更简：vision 是无状态的（每次 view_attachment_image 现取现用），
+// 切换 provider/model 不需重建任何东西，故无 embedding 那套切换确认 overlay。
+// 仅列真正提供视觉模型的 provider（DeepSeek 标准 API 无视觉模型，故不列）。
+const visionProviders = ["智谱 GLM", "OpenAI"];
+const visionModelMap: Record<string, { provider: string; models: string[]; keyUrl: string }> = {
+  "智谱 GLM": { provider: "glm", models: ["glm-4v-plus", "glm-4.5v", "glm-4v"], keyUrl: "https://open.bigmodel.cn/usercenter/proj-mgmt/apikeys" },
+  "OpenAI": { provider: "openai", models: ["gpt-4o", "gpt-4o-mini"], keyUrl: "https://platform.openai.com/api-keys" },
+};
+const visionProviderDisplay = computed(() => {
+  const p = prefs.value.vision_provider || "";
+  return Object.entries(visionModelMap).find(([, v]) => v.provider === p)?.[0] ?? "";
+});
+const visionModelSuggestions = computed(() => visionModelMap[visionProviderDisplay.value]?.models ?? []);
+const visionKeyUrl = computed(() => visionModelMap[visionProviderDisplay.value]?.keyUrl ?? "");
+
+function onVisionProviderChange(displayName: string) {
+  const mapping = visionModelMap[displayName];
+  prefs.value.vision_provider = mapping?.provider ?? "";
+  prefs.value.vision_model = mapping?.models[0] ?? "";
+  saveVision();
+}
+function onVisionModelChange(newModel: string) {
+  prefs.value.vision_model = newModel;
+  saveVision();
+}
+async function saveVision() {
+  saving.value = true;
+  try {
+    await Promise.all([
+      bridge.preferences.set("vision_provider", prefs.value.vision_provider ?? ""),
+      bridge.preferences.set("vision_model", prefs.value.vision_model ?? ""),
+      bridge.preferences.set("vision_api_key", prefs.value.vision_api_key ?? ""),
+    ]);
+    saved.value = true;
+    setTimeout(() => { saved.value = false; }, 2000);
+  } catch (e) {
+    console.error("保存 vision 配置失败:", e);
+  } finally {
+    saving.value = false;
+  }
+}
+
 onMounted(loadDataDir);
 
 // =========================================================================
@@ -699,6 +742,58 @@ const hasFilterResults = computed(() => {
           </div>
         </div>
       </Transition>
+
+      <!-- ===== 视觉读取（Phase B：扫描件/图片型 PDF）===== -->
+      <div class="setting-row">
+        <div class="setting-label">
+          <div class="setting-label-text">
+            视觉读取
+            <span class="tip-icon" data-tip="扫描件/图片型 PDF 文本提取为空时，由视觉模型把页面读成文字。当前聊天 Agent 不支持视觉时自动启用此配置；Agent 自带视觉时优先用 Agent 自己的模型。独立于聊天 Agent。">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+            </span>
+          </div>
+        </div>
+        <div class="setting-control">
+          <div class="input-group">
+            <Combobox
+              :model-value="visionProviderDisplay"
+              :options="visionProviders"
+              placeholder="未启用"
+              @update:model-value="onVisionProviderChange"
+            />
+          </div>
+        </div>
+      </div>
+      <template v-if="prefs.vision_provider">
+        <div class="setting-row">
+          <div class="setting-label">
+            <div class="setting-label-text">视觉模型</div>
+          </div>
+          <div class="setting-control">
+            <div class="input-group">
+              <Combobox
+                v-if="visionModelSuggestions.length > 0"
+                :model-value="prefs.vision_model || ''"
+                :options="visionModelSuggestions"
+                placeholder="选择或输入模型名"
+                @update:model-value="onVisionModelChange"
+              />
+              <input v-else v-model="prefs.vision_model" class="form-input" placeholder="输入模型名" @blur="saveVision" />
+            </div>
+          </div>
+        </div>
+        <div class="setting-row">
+          <div class="setting-label">
+            <div class="setting-label-text">视觉 API Key</div>
+          </div>
+          <div class="setting-control">
+            <div class="input-group">
+              <input v-model="prefs.vision_api_key" type="password" class="form-input" placeholder="粘贴 API Key" @blur="saveVision" />
+            </div>
+            <a v-if="visionKeyUrl" :href="visionKeyUrl" target="_blank" class="embed-key-link">申请 Key →</a>
+          </div>
+        </div>
+      </template>
 
     </div>
   </div>

@@ -344,6 +344,12 @@ export interface UserPreferences {
   embedding_model?: string;
   embedding_api_key?: string;
   embedding_base_url?: string;
+  /** Phase B 视觉读取：扫描件/图片型 PDF 文本提取为空时，由视觉模型把页面读成文字。
+   *  当前聊天 Agent 不支持视觉（supports_vision=0）时自动启用此配置（仿 embedding）。 */
+  vision_provider?: string;
+  vision_model?: string;
+  vision_api_key?: string;
+  vision_base_url?: string;
 }
 
 // ============================================================================
