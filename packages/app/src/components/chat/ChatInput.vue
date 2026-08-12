@@ -63,7 +63,9 @@ const docExts = ["docx", "xlsx", "xls", "pdf"]; // 与后端 infra::file_validat
 const allowedTypes = ["image/png", "image/jpeg", "image/gif", "image/webp"];
 const maxImageSize = 5 * 1024 * 1024; // 5MB
 const maxImageCount = 20;
-const maxFileSize = 20 * 1024 * 1024; // 20MB
+// 100MB：后端 materialize 对大文档分页（首页内联 + read_attachment_page），LLM 窗口非瓶颈；
+// 此上限是前端 base64 编码内存折中（100MB≈133MB 字符串）。须与后端 file_validation MAX_FILE_SIZE 同步。
+const maxFileSize = 100 * 1024 * 1024; // 100MB
 const maxFileCount = 10;
 
 /** 图片扩展名 → MIME（与 allowedTypes 对齐）*/

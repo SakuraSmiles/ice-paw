@@ -16,9 +16,11 @@ pub const SUPPORTED_FILE_EXTS: &[&str] = &["docx", "xlsx", "xls", "pdf"];
 
 /// 单个附件最大字节数（base64 解码后的原始字节大小）。
 ///
-/// office 文档（含 ZIP 容器 + 媒体）通常比纯文本大，提到 20MB；
-/// 超大文件应让 agent 用 `read_file` 分页读取，而非整份灌进对话。
-pub const MAX_FILE_SIZE: usize = 20 * 1024 * 1024; // 20 MiB
+/// office/pdf 附件经 `materialize_file_blocks` 分页处理（首页内联 + `read_attachment_page`
+/// 工具翻页），LLM 窗口不是瓶颈，理论上可读远大于此的文档。此上限是前端 base64 编码内存
+/// 的折中（100MB 文件 ≈133MB base64 字符串占内存），并非分页能力的极限。图片另受
+/// `MAX_IMAGE_SIZE`（5MB，LLM 端硬约束）限制，与此无关。
+pub const MAX_FILE_SIZE: usize = 100 * 1024 * 1024; // 100 MiB
 
 /// 单条消息最多附件数。
 pub const MAX_FILE_COUNT: usize = 10;
