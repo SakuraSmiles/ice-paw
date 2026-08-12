@@ -166,56 +166,75 @@ fn reply(job: Job, res: Result<Vec<u8>, String>) -> Result<(), ()> {
 /// 2. 可执行文件同目录（打包后 DLL 随 exe 放）。
 /// 3. 开发回退：`sodium-prebuilt/pdfium/bin`（仓库内，本机 dev 用）。
 /// 4. 系统库（PATH 里的 pdfium）。
+///
+/// **诚实化**：每个候选的失败都记录 pdfium-render 返回的真实错误（路径不存在 / LoadLibrary
+/// 失败 / 符号缺失 / 依赖缺失），而非笼统归为"找不到"。最常见的真实根因是 pdfium-render
+/// 的 feature（API 版本）与 dll 的 chromium 版本不匹配——`DynamicPdfiumBindings::new` 会因
+/// 找不到导出符号而失败，错误信息里带符号名。
 fn load_bindings() -> AppResult<Pdfium> {
-    let mut tried: Vec<String> = Vec::new();
+    // (来源说明, 目录)。用 PathBuf 拼接，避免字符串 concat 产生混合分隔符/未规范化的 `..`。
+    let mut candidates: Vec<(&'static str, std::path::PathBuf)> = Vec::new();
 
     // 1. 环境变量
     if let Ok(dir) = std::env::var("ICEPAW_PDFIUM_DIR") {
-        tried.push(format!("env ICEPAW_PDFIUM_DIR={dir}"));
-        if let Ok(b) =
-            Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path(&dir))
-        {
-            tracing::info!(target: "ice_paw.pdfium", dir = %dir, "已加载 pdfium（env）");
-            return Ok(Pdfium::new(b));
-        }
+        candidates.push(("env ICEPAW_PDFIUM_DIR", std::path::PathBuf::from(dir)));
     }
 
     // 2. 可执行文件同目录
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            tried.push(format!("exe 目录 {}", dir.display()));
-            if let Ok(b) = Pdfium::bind_to_library(
-                Pdfium::pdfium_platform_library_name_at_path(dir),
-            ) {
-                tracing::info!(target: "ice_paw.pdfium", dir = %dir.display(), "已加载 pdfium（exe 目录）");
+            candidates.push(("exe 目录", dir.to_path_buf()));
+        }
+    }
+
+    // 3. 开发回退：仓库内预下载位置（CARGO_MANIFEST_DIR 编译期烤进；运行期 canonicalize
+    //    解析 `..` 与分隔符，目录不存在则退回原始路径，bind 失败时仍给出可读信息）。
+    let dev_raw = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("..")
+        .join("sodium-prebuilt")
+        .join("pdfium")
+        .join("bin");
+    let dev_dir = dev_raw.canonicalize().unwrap_or(dev_raw);
+    candidates.push(("dev 回退", dev_dir));
+
+    // 逐候选尝试，失败时记录真实错误。
+    let mut tried: Vec<String> = Vec::new();
+    for (label, dir) in &candidates {
+        let lib_path = Pdfium::pdfium_platform_library_name_at_path(dir);
+        match Pdfium::bind_to_library(&lib_path) {
+            Ok(b) => {
+                tracing::info!(target: "ice_paw.pdfium", candidate = label, dir = %dir.display(), "已加载 pdfium");
                 return Ok(Pdfium::new(b));
+            }
+            Err(e) => {
+                let msg = format!("{label} ({}) → {e}", dir.display());
+                tracing::warn!(target: "ice_paw.pdfium", candidate = label, dir = %dir.display(), error = %e, "pdfium 候选加载失败");
+                tried.push(msg);
             }
         }
     }
 
-    // 3. 开发回退：仓库内预下载位置（CARGO_MANIFEST_DIR 在编译期烤进）
-    let dev_dir = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../../sodium-prebuilt/pdfium/bin"
-    );
-    tried.push(format!("dev 回退 {dev_dir}"));
-    if let Ok(b) =
-        Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path(dev_dir))
-    {
-        tracing::info!(target: "ice_paw.pdfium", dir = dev_dir, "已加载 pdfium（dev 回退）");
-        return Ok(Pdfium::new(b));
-    }
-
-    // 4. 系统库
-    tried.push("系统库 (PATH)".into());
-    if let Ok(b) = Pdfium::bind_to_system_library() {
-        tracing::info!(target: "ice_paw.pdfium", "已加载 pdfium（系统库）");
-        return Ok(Pdfium::new(b));
+    // 4. 系统库（PATH）
+    match Pdfium::bind_to_system_library() {
+        Ok(b) => {
+            tracing::info!(target: "ice_paw.pdfium", "已加载 pdfium（系统库）");
+            return Ok(Pdfium::new(b));
+        }
+        Err(e) => {
+            tracing::warn!(target: "ice_paw.pdfium", error = %e, "pdfium 系统库加载失败");
+            tried.push(format!("系统库 (PATH) → {e}"));
+        }
     }
 
     Err(AppError::Internal(format!(
-        "找不到 pdfium 二进制（搜索过：{}）。请把 pdfium.dll 放到可执行文件同目录，\
-         或设 ICEPAW_PDFIUM_DIR 指向其目录。开发环境见 sodium-prebuilt/pdfium/bin/。",
-        tried.join(" → ")
+        "pdfium 加载失败（已逐个尝试，均失败）：\n  - {}\n常见原因：① 目录下无 pdfium.dll；\
+         ② dll 架构不符（本进程为 {}）；③ pdfium-render feature 与 dll 的 chromium 版本不匹配\
+         （本项目固定 chromium/6721，见 Cargo.toml），符号缺失；④ dll 依赖缺失（如 VC++ 运行时）。\n\
+         修复：把 chromium/6721 版 pdfium.dll 放到可执行文件同目录，或设环境变量 \
+         ICEPAW_PDFIUM_DIR 指向其目录。开发环境见 sodium-prebuilt/pdfium/bin/。",
+        tried.join("\n  - "),
+        std::env::consts::ARCH,
     )))
 }
