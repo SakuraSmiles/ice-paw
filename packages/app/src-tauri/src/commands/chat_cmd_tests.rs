@@ -196,4 +196,32 @@ mod tests {
         clone.cancel();
         assert!(token.is_cancelled());
     }
+
+    // =========================================================================
+    // build_modality_hint 测试（事1：视觉模态元信息注入）
+    // =========================================================================
+
+    #[test]
+    fn modality_hint_counts_images() {
+        use crate::infra::protocol::ContentBlock;
+        let blocks = vec![
+            ContentBlock::Image { data: "x".into(), media_type: "image/png".into() },
+            ContentBlock::text("hi"),
+            ContentBlock::Image { data: "y".into(), media_type: "image/jpeg".into() },
+        ];
+        let hint = crate::commands::chat_cmd::build_modality_hint(&blocks).expect("有图应返回提示块");
+        let s = ContentBlock::join_text(std::slice::from_ref(&hint));
+        assert!(s.contains("2 张图片"), "应含图片数 2，实际: {s}");
+        assert!(s.contains("无需调用"), "应告知无需调图片工具，实际: {s}");
+    }
+
+    #[test]
+    fn modality_hint_none_without_image() {
+        use crate::infra::protocol::ContentBlock;
+        let blocks = vec![ContentBlock::text("纯文本消息")];
+        assert!(
+            crate::commands::chat_cmd::build_modality_hint(&blocks).is_none(),
+            "无图不应注入提示块"
+        );
+    }
 }
