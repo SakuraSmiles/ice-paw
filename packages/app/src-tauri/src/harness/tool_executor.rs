@@ -40,6 +40,8 @@ use crate::infra::protocol::{
     ToolAuthResponse,
 };
 use crate::harness::mcp::{AuthorizationLevel, McpRegistry, ToolContext};
+use crate::harness::mcp::client::ToolOutput;
+use base64::Engine as _;
 use crate::harness::authority::{
     check_authorization_with_session, AuthorizationDecision, PathAuthSession, PathWhitelistConfig,
 };
@@ -110,9 +112,9 @@ pub async fn execute_tool_round(
         };
 
         // 2. 根据决策执行
-        let final_result: Result<String, String> = match decision {
+        let final_result: Result<ToolOutput, String> = match decision {
             AuthorizationDecision::Allow => match registry.dispatch(tc_name, tc_args, tool_ctx).await {
-                Ok(s) => Ok(s),
+                Ok(out) => Ok(out),
                 Err(e) => Err(e.to_string()),
             },
             AuthorizationDecision::Confirm {
@@ -168,7 +170,7 @@ pub async fn execute_tool_round(
                                 file_path,
                             );
                             match registry.dispatch(tc_name, tc_args, tool_ctx).await {
-                                Ok(s) => Ok(s),
+                                Ok(out) => Ok(out),
                                 Err(e) => Err(e.to_string()),
                             }
                         }
@@ -216,7 +218,7 @@ pub async fn execute_tool_round(
         // 副作用——表一旦有数据，list_recent_tool_names 不再返回空 →
         // 工具打分的「历史权重」维度从此真正生效（见 scoring.rs）。
         let (audit_is_error, audit_result) = match &final_result {
-            Ok(c) => (false, c.as_str()),
+            Ok(out) => (false, out.text.as_str()),
             Err(e) => (true, e.as_str()),
         };
         if let Err(e) = repo::tool_call::create(
@@ -242,23 +244,39 @@ pub async fn execute_tool_round(
         }
 
         match final_result {
-            Ok(content) => {
+            Ok(out) => {
                 let _ = app.emit(
                     "chat:tool-result",
                     ChatToolResultPayload {
                         conversation_id: tool_ctx.conv_id.clone(),
                         message_id: asst_msg_id.to_string(),
                         tool_use_id: tc_id.clone(),
-                        content: content.clone(),
+                        content: out.text.clone(),
                         is_error: false,
                         duration_ms,
                     },
                 );
                 tool_result_blocks.push(ContentBlock::ToolResult {
                     tool_use_id: tc_id.clone(),
-                    content,
+                    content: out.text,
                     is_error: Some(false),
                 });
+                // Phase B：视觉工具（view_attachment_image）回传 PNG → 编码 base64 Image 块，
+                // 与 ToolResult 同消息注入（同一 user 消息内）。Anthropic/GLM 自动识别并读图；
+                // OpenAI tool-result 路径会静默丢弃 Image 块（已知限制，非崩溃，文档化）。
+                if let Some(png) = out.image_png {
+                    let data = base64::engine::general_purpose::STANDARD.encode(&png);
+                    tool_result_blocks.push(ContentBlock::Image {
+                        data,
+                        media_type: "image/png".to_string(),
+                    });
+                    tracing::info!(
+                        target: "ice_paw.tool_image",
+                        tool = %tc_name,
+                        bytes = png.len(),
+                        "工具回传图片，已注入 Image 块给视觉模型"
+                    );
+                }
             }
             Err(err_content) => {
                 let _ = app.emit(
