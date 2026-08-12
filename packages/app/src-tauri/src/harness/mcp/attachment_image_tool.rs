@@ -24,6 +24,7 @@ use serde::Deserialize;
 use crate::db::repo;
 use crate::error::{AppError, AppResult};
 use crate::harness::doc::{page_count, render_page_to_png};
+use crate::harness::vision;
 
 use super::client::{McpClient, ToolContext, ToolOutput};
 use super::types::AuthorizationLevel;
@@ -167,14 +168,81 @@ impl McpClient for ViewAttachmentImageTool {
             "view_attachment_image 渲染成功"
         );
 
-        let summary = serde_json::json!({
-            "message_id": parsed.message_id,
-            "page": parsed.page,
-            "total_pages": total_pages,
-            "name": row.name,
-            "note": "Rendered page image attached alongside. Use your vision to read it. \
-                     Call again with page+1 to continue if you need more pages."
-        });
-        Ok(ToolOutput::with_image(summary.to_string(), png))
+        // === Phase B 路由（fallback 语义，见 db/models.rs AgentRow 注释）===
+        // 取当前 agent 是否自带视觉；取失败按「无视觉」处理（更安全：不向可能无视觉的模型塞 Image）。
+        let supports_vision = match repo::agent::get_by_id(&ctx.pool, &ctx.agent_id).await {
+            Ok(a) => a.supports_vision != 0,
+            Err(e) => {
+                tracing::warn!(
+                    target: "ice_paw.attach",
+                    err = %e,
+                    agent_id = %ctx.agent_id,
+                    "取 agent 失败，按非视觉 agent 处理（走 vision config fallback）"
+                );
+                false
+            }
+        };
+
+        if supports_vision {
+            // Arch A：原图作 Image 块回传——agent 视觉直接读图（高保真，零额外 LLM 调用）。
+            let summary = serde_json::json!({
+                "message_id": parsed.message_id,
+                "page": parsed.page,
+                "total_pages": total_pages,
+                "name": row.name,
+                "note": "Rendered page image attached alongside. Use your vision to read it. \
+                         Call again with page+1 to continue if you need more pages."
+            });
+            return Ok(ToolOutput::with_image(summary.to_string(), png));
+        }
+
+        // agent 无视觉 → 走全局 vision 配置把图读成文本回灌。
+        let prefs = repo::preferences::get_all(&ctx.pool).await?;
+        match vision::resolve_vision_config(&prefs) {
+            Some((model, base_url, api_key)) => {
+                let provider = prefs.vision_provider.as_deref().unwrap_or("");
+                tracing::info!(
+                    target: "ice_paw.attach",
+                    provider, model, page = parsed.page,
+                    "agent 无视觉，走全局 vision 配置读图"
+                );
+                let recognized = vision::describe_image(provider, &model, &base_url, &api_key, &png)
+                    .await
+                    .map_err(|e| {
+                        tracing::warn!(target: "ice_paw.attach", err = %e, "vision 读图失败");
+                        // 不让整轮工具直接报错中断——把失败写进 tool_result 文本，让 LLM 知悉并如实转告。
+                        AppError::Internal(format!(
+                            "页面已渲染为图，但调全局 vision 配置（{provider}/{model}）读图失败：{e}。\
+                             请如实告诉用户该页暂未能识别。"
+                        ))
+                    })?;
+                let summary = serde_json::json!({
+                    "message_id": parsed.message_id,
+                    "page": parsed.page,
+                    "total_pages": total_pages,
+                    "name": row.name,
+                    "reader": format!("vision:{provider}/{model}"),
+                    "note": "Current agent lacks vision; the page image was read by the global \
+                             vision model and its recognized text is in 'recognized_text' below. \
+                             Use that text to answer. Call again with page+1 to continue.",
+                    "recognized_text": recognized,
+                });
+                Ok(ToolOutput::text(summary.to_string()))
+            }
+            None => {
+                // 既无 agent 视觉、又无全局 vision 配置：如实告知，不伪造。
+                let summary = serde_json::json!({
+                    "message_id": parsed.message_id,
+                    "page": parsed.page,
+                    "total_pages": total_pages,
+                    "name": row.name,
+                    "note": "Rendered the page to an image, but neither the current agent nor a \
+                             global vision config can read it. Tell the user: this scanned/image \
+                             PDF cannot be read until vision is configured (Settings) or a \
+                             vision-capable agent is used; they can also paste the relevant text."
+                });
+                Ok(ToolOutput::text(summary.to_string()))
+            }
+        }
     }
 }

@@ -230,8 +230,9 @@ fn materialize_file_blocks(
                      文件已成功接收（{bytes} 字节），但**它不在磁盘或当前工作目录中**，请勿尝试用文件工具\
                      （run_command / list_directory / read_file 等）去翻找它。\n\
                      **该 PDF 的原始字节已留存：调用 view_attachment_image(message_id=\"{mid}\", page=1)** \
-                     即可把指定页渲染成图片，由你的视觉能力直接读图（页号 1-based；返回的 JSON 摘要里含 \
-                     total_pages，按需 page+1 继续翻页）。读取后再据实回答用户。\n\
+                     即可把指定页渲染成图片并读出其内容（若当前模型不支持视觉，系统会自动用全局视觉\
+                     配置把该页代读成文本返回；页号 1-based，返回的 JSON 摘要里含 total_pages，\
+                     按需 page+1 继续翻页）。读取后再据实回答用户。\n\
                      若调用失败（例如加密 PDF 无法渲染），请如实告诉用户该附件当前无法读取，\
                      建议其手动复制相关段落贴入对话。",
                     bytes = e.bytes_len,
