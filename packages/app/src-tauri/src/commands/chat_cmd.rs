@@ -208,29 +208,50 @@ fn materialize_file_blocks(
         // 1. UI 卡片（不进 LLM；无论大小都 push 一张）
         blocks.push(ContentBlock::attachment(&e.name, &e.ext, e.bytes_len));
 
-        // —— 空提取守卫（治标止血，2026-08-12）——
+        // —— 空提取守卫（Phase B 落地：扫描件/图片型 PDF 现可视觉读取）——
         // 文本层抽不到内容：扫描件 / 纯图片 PDF、只含内嵌图片的 docx、极稀疏 xlsx、加密 PDF。
-        // 此时绝不能伪造"以下是提取的原文"空壳——那会让 LLM 误以为文件在磁盘上、
-        // 继而用文件工具全盘翻找（实测一次会话 agent 白跑了十几个 run_command/list_directory）。
-        // 改发如实提示：明说提取为空 + 该文件不在磁盘/工作目录 + 指示 LLM 直接如实转告用户。
-        // 治本（让扫描件真正可读）见 Phase B：页面渲染成图 → 视觉模型。
+        // 绝不能伪造"以下是提取的原文"空壳——那会让 LLM 误以为文件在磁盘上、继而用文件工具全盘翻找
+        // （实测一次会话 agent 白跑了十几个 run_command/list_directory）。
+        // 改发如实提示：明说提取为空 + 该文件不在磁盘/工作目录 + 指示可走的路径：
+        //   - PDF：原始字节已留存 → 指引调用 view_attachment_image 渲染成图、视觉读图（Phase B）
+        //   - 非 PDF：当前无视觉回退 → 如实转告用户、建议手动复制段落
         if e.total_tokens == 0 {
             tracing::warn!(
                 target: "ice_paw.attach",
                 name = %e.name,
                 kind = %e.kind_label,
+                ext = %e.ext,
                 bytes = e.bytes_len,
-                "附件文本提取为空（疑似扫描件/纯图片/加密 PDF），发送如实提示而非空壳"
+                "附件文本提取为空（疑似扫描件/纯图片/加密 PDF）"
             );
+            let hint = if e.ext == "pdf" {
+                format!(
+                    "已尝试自动提取该附件的文本，但结果为空——通常是扫描件、纯图片型或加密 PDF。\
+                     文件已成功接收（{bytes} 字节），但**它不在磁盘或当前工作目录中**，请勿尝试用文件工具\
+                     （run_command / list_directory / read_file 等）去翻找它。\n\
+                     **该 PDF 的原始字节已留存：调用 view_attachment_image(message_id=\"{mid}\", page=1)** \
+                     即可把指定页渲染成图片，由你的视觉能力直接读图（页号 1-based；返回的 JSON 摘要里含 \
+                     total_pages，按需 page+1 继续翻页）。读取后再据实回答用户。\n\
+                     若调用失败（例如加密 PDF 无法渲染），请如实告诉用户该附件当前无法读取，\
+                     建议其手动复制相关段落贴入对话。",
+                    bytes = e.bytes_len,
+                    mid = message_id
+                )
+            } else {
+                format!(
+                    "已尝试自动提取该附件的文本，但结果为空。文件已成功接收（{bytes} 字节），\
+                     但**它不在磁盘或当前工作目录中**，请勿尝试用文件工具去翻找它。\
+                     当前版本对该格式（.{ext}）的空提取暂无视觉回退路径——请如实告诉用户该附件暂时无法读取，\
+                     建议其手动复制相关段落贴入对话。",
+                    bytes = e.bytes_len,
+                    ext = e.ext
+                )
+            };
             blocks.push(ContentBlock::text(format!(
                 "<uploaded_file name=\"{}\" type=\"{}\" extracted=\"empty\">\n\
-                 [系统提示：已尝试从用户上传的附件自动提取文本，但提取结果为空。这通常意味着该文件是\
-                 扫描件、纯图片文档或加密 PDF，当前版本无法读取其文本内容。文件本身已成功接收（{} 字节），\
-                 但它不会出现在磁盘或当前工作目录中——请勿尝试用文件工具（run_command/list_directory/read_file 等）\
-                 去查找它。请直接如实告诉用户：该附件当前无法被读取，建议等待后续图片识别支持，\
-                 或由用户手动复制相关段落贴入对话。]\n\
+                 [系统提示：{hint}]\n\
                  </uploaded_file>",
-                e.name, e.kind_label, e.bytes_len
+                e.name, e.kind_label
             )));
             continue;
         }

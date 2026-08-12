@@ -112,6 +112,53 @@ pub trait McpClient: Send + Sync {
     ) -> AppResult<String> {
         self.execute(args).await
     }
+
+    /// 执行并可能产出图片（Phase B 视觉工具入口）。
+    ///
+    /// **默认实现 = 包 [`execute_with_context`] 为纯文本** [`ToolOutput`]——所有旧工具零改动。
+    /// 仅视觉工具（`view_attachment_image`）override 此方法，在 [`ToolOutput::image_png`]
+    /// 里返回渲染出的 PNG 字节。[`McpRegistry::dispatch`] 统一调此方法，故 `tool_executor`
+    /// 拿到的永远是 `ToolOutput`，可按需附 `Image` 块。
+    async fn execute_with_output(
+        &self,
+        args: &str,
+        ctx: &ToolContext,
+    ) -> AppResult<ToolOutput> {
+        let text = self.execute_with_context(args, ctx).await?;
+        Ok(ToolOutput::text(text))
+    }
+}
+
+/// 工具执行结果（Phase B 视觉路径扩展）。
+///
+/// 绝大多数工具只回传文本——用 [`ToolOutput::text`] 即可（吃 trait 默认实现，零改动）。
+/// **视觉工具**（`view_attachment_image`）需要把渲染出的图片一并发给模型：填 `image_png`
+/// （原始 PNG 字节，**非 base64**），`tool_executor` 会把它编码成 base64 `Image` 块、
+/// 与 `ToolResult` 同消息注入（Anthropic / GLM 自动识别）。
+#[derive(Debug, Clone, Default)]
+pub struct ToolOutput {
+    /// 回传给 LLM 的文本结果（JSON 或纯文本，即原 `execute` 的返回值）。
+    pub text: String,
+    /// 可选 PNG 图片（原始字节）。`None` = 纯文本工具（绝大多数）。
+    pub image_png: Option<Vec<u8>>,
+}
+
+impl ToolOutput {
+    /// 纯文本结果（绝大多数工具的返回）。
+    pub fn text<T: Into<String>>(t: T) -> Self {
+        Self {
+            text: t.into(),
+            image_png: None,
+        }
+    }
+
+    /// 带图片的结果（视觉工具）。文本通常是一段说明 / JSON 摘要。
+    pub fn with_image<T: Into<String>>(text: T, png: Vec<u8>) -> Self {
+        Self {
+            text: text.into(),
+            image_png: Some(png),
+        }
+    }
 }
 
 // =========================================================================
@@ -196,6 +243,8 @@ impl McpRegistry {
             ("search_kb", Arc::new(super::kb_tool::SearchKbTool)),
             ("save_to_kb", Arc::new(super::kb_tool::SaveToKbTool)),
             ("read_kb_document", Arc::new(super::kb_tool::ReadKbDocumentTool)),
+            ("read_attachment_page", Arc::new(super::read_attachment_tool::ReadAttachmentPageTool)),
+            ("view_attachment_image", Arc::new(super::attachment_image_tool::ViewAttachmentImageTool)),
             ("write_file", Arc::new(super::file_tools::WriteFileTool)),
             ("edit_file", Arc::new(super::file_tools::EditFileTool)),
             ("delete_file", Arc::new(super::file_tools::DeleteFileTool)),
@@ -254,6 +303,8 @@ impl McpRegistry {
         self.register_sync(Arc::new(super::kb_tool::ReadKbDocumentTool));
         // 聊天附件分页按页读取（Phase A：大附件按块存表，首页内联，余页按需取）
         self.register_sync(Arc::new(super::read_attachment_tool::ReadAttachmentPageTool));
+        // 聊天附件视觉读取（Phase B：扫描件/图片型 PDF 文本提取为空时，渲染成图喂视觉模型）
+        self.register_sync(Arc::new(super::attachment_image_tool::ViewAttachmentImageTool));
         // agentic 工具集（文件读写编辑 / shell / grep / git / web）
         self.register_sync(Arc::new(super::file_tools::WriteFileTool));
         self.register_sync(Arc::new(super::file_tools::EditFileTool));
@@ -326,14 +377,15 @@ impl McpRegistry {
 
     /// 执行工具（带上下文）
     ///
-    /// 查找工具后转调 `execute_with_context`。旧工具用默认实现（忽略 ctx），
-    /// `search_kb` 等 override `execute_with_context` 的工具会拿到完整 ctx。
+    /// 查找工具后转调 `execute_with_output`。旧工具用默认实现（包 `execute_with_context`
+    /// 为纯文本 [`ToolOutput`]）；`view_attachment_image` 等视觉工具 override `execute_with_output`
+    /// 回传 PNG。`search_kb` 等 override `execute_with_context` 的工具同样经默认包装拿到完整 ctx。
     pub async fn dispatch(
         &self,
         name: &str,
         args: &str,
         ctx: &ToolContext,
-    ) -> AppResult<String> {
+    ) -> AppResult<ToolOutput> {
         let client = self
             .get(name)
             .await
@@ -341,7 +393,7 @@ impl McpRegistry {
                 resource: "tool",
                 id: name.to_string(),
             })?;
-        client.execute_with_context(args, ctx).await
+        client.execute_with_output(args, ctx).await
     }
 
     /// 返回所有已注册的工具名列表
@@ -501,11 +553,13 @@ mod tests {
             proposal_registry: None,
             cancel: None,
         };
-        // StubClient 未 override execute_with_context → 走默认实现 → 返回 "stub"
+        // StubClient 未 override execute_with_context → 走默认实现（包成 ToolOutput::text）→ 返回 "stub"
         registry.register(make_stub("legacy", "legacy tool")).await;
         let result = registry.dispatch("legacy", "{}", &ctx).await;
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "stub");
+        let out = result.unwrap();
+        assert_eq!(out.text, "stub");
+        assert!(out.image_png.is_none(), "纯文本工具（默认实现）不应回传图片");
     }
 
     #[tokio::test]
