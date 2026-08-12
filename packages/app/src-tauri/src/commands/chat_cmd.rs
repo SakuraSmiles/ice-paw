@@ -483,6 +483,14 @@ pub async fn send_message(
     // 事1 + 事2：视觉模态元信息注入。仅当 agent「有效支持视觉」时插入"你已直接收到 N 张图、
     // 无需调图片工具"的元提示——纠正视觉 agent「看到了却说没看到」的认知偏差。
     // 非视觉 agent 不插此提示（其图片由 ModalCapabilityStage 走代读/诚实剥离，提示由该 Stage 负责）。
+    // 持久化用的原始 blocks：用户真实发送内容（含原图 + 附件卡片/正文）。
+    // ⚠️ 视觉适配（ModalCapabilityStage 对非视觉 agent 把 Image 代读/剥离）只改发给 LLM 的
+    // 视图（pipeline_ctx.final_blocks → user_blocks），**绝不能污染落库的用户消息**——否则
+    // 非视觉 agent 的历史回看会丢图（用户气泡从 content_blocks 取 Image 块渲染；bug 表现：
+    // 发送时看得到图、agent 回答后从 DB 刷新就消失）。故在此（materialize 后、build_modality_hint
+    // 元提示前）clone 一份原始 blocks 专供落库，与发给 LLM 的适配视图彻底解耦。
+    let persist_blocks: Vec<ContentBlock> = final_blocks.clone();
+
     let eff_vision = crate::harness::provider::effective_supports_vision(
         agent.supports_vision,
         &agent.provider,
@@ -601,7 +609,6 @@ pub async fn send_message(
 
     let mut assembled = AssembledContext {
         messages: pipeline_ctx.messages,
-        user_blocks: pipeline_ctx.user_blocks,
     };
 
     // --- 4. Pipeline 成功 → 落库（用户消息 + 分页块 + assistant 占位） ---
@@ -616,7 +623,9 @@ pub async fn send_message(
         },
     ).await?;
     // 回填 content_blocks（含 materialize 产出的 Attachment 卡片 + 提取正文 Text 块）。
-    let blocks_json = serde_json::to_string(&assembled.user_blocks).unwrap_or_else(|_| "[]".into());
+    // 回填 content_blocks：用适配前的原始 persist_blocks（含原图 + 附件卡片/正文），非 LLM 视图。
+    // 视觉适配只改发给 LLM 的 messages，不改用户落库内容——历史回看须保留用户真实发送的图片。
+    let blocks_json = serde_json::to_string(&persist_blocks).unwrap_or_else(|_| "[]".into());
     repo::message::update_content_blocks(pool.inner(), &user_msg_id, &blocks_json).await?;
     // 大附件分页块：消息行已存在（FK 父满足）。幂等：先清旧再批量插。
     if !attach_db_inputs.is_empty() {
