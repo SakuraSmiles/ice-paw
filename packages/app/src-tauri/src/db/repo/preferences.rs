@@ -26,6 +26,10 @@ const KNOWN_KEYS: &[&str] = &[
     "embedding_model",
     "embedding_api_key",
     "embedding_base_url",
+    "vision_provider",
+    "vision_model",
+    "vision_api_key",
+    "vision_base_url",
 ];
 
 /// 系统默认工作空间根路径（安装即用，自动创建）

@@ -804,6 +804,12 @@ pub struct UserPreferences {
     pub embedding_model: Option<String>,
     pub embedding_api_key: Option<String>,
     pub embedding_base_url: Option<String>,
+    /// Vision 全局配置（Phase B）：当前 Agent 不支持视觉（supports_vision=0）时，
+    /// 附件图片识别 fallback 到此配置。仿 embedding。Agent 自带 supports_vision=1 时优先用 Agent 自己的模型。
+    pub vision_provider: Option<String>,
+    pub vision_model: Option<String>,
+    pub vision_api_key: Option<String>,
+    pub vision_base_url: Option<String>,
 }
 
 // =========================================================================

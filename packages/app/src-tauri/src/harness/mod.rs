@@ -30,3 +30,4 @@ pub mod scoring;
 pub mod stream_consumer;
 pub mod summary_provider;
 pub mod tool_executor;
+pub mod vision;
