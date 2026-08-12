@@ -748,7 +748,7 @@ const hasFilterResults = computed(() => {
         <div class="setting-label">
           <div class="setting-label-text">
             视觉读取
-            <span class="tip-icon" data-tip="扫描件/图片型 PDF 文本提取为空时，由视觉模型把页面读成文字。当前聊天 Agent 不支持视觉时自动启用此配置；Agent 自带视觉时优先用 Agent 自己的模型。独立于聊天 Agent。">
+            <span class="tip-icon" data-tip="扫描件/图片型 PDF 文本提取为空时，由视觉模型把页面读成文字。&#10;· Agent 自带视觉（supports_vision）→ 优先用它自己的模型读图，无需此配置。&#10;· Agent 无视觉时，按顺序自动兜底：① 此处配置（精确控制模型/Key）→ ② Agent 自己的 GLM/OpenAI 凭据（glm-4v / gpt-4o）→ ③ 已配的「GLM 视觉理解」MCP 凭据。&#10;即此处留空通常也能用——只要 Agent 是 GLM/OpenAI 系、或已配 GLM 视觉 MCP，扫描件即可自动代读。仅在想精确指定模型/Key 时才需填。">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
             </span>
           </div>
@@ -758,7 +758,7 @@ const hasFilterResults = computed(() => {
             <Combobox
               :model-value="visionProviderDisplay"
               :options="visionProviders"
-              placeholder="未启用"
+              placeholder="留空则自动兜底"
               @update:model-value="onVisionProviderChange"
             />
           </div>
