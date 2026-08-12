@@ -103,10 +103,13 @@ pdf-extract = "0.12.0"
 # zip 与 docx-rs/calamine 传递依赖同版本（lockfile 8.6.0），显式声明以在 docx.rs 直读 word/document.xml。
 zip = "8.6"
 # Phase B：扫描件/图片型 PDF 视觉读取。pdfium-render 是 pdfium（Chrome PDF 引擎）的安全
-# Rust wrapper，运行时动态加载 pdfium.dll（编译期不需要二进制）。默认 feature pdfium_6721
-# 必须搭配 bblanchon chromium/6721 版二进制（已下载到 sodium-prebuilt/pdfium/bin/）。
-# image 仅开 png feature：把渲染出的位图编码成 PNG 喂视觉模型。
-pdfium-render = "0.8.27"
+# Rust wrapper，运行时动态加载 pdfium.dll（编译期不需要二进制）。
+# ⚠️ feature 必须显式 pin pdfium_6721：crate 默认 pdfium_latest 会随版本漂移（0.8.37 时
+#    已指向 chromium/7543），而 sodium-prebuilt/pdfium/bin/pdfium.dll 是 bblanchon chromium/6721
+#    版——默认 feature 会绑定 7543 的函数签名，运行时 dll 缺符号 → bind_to_library 失败。
+#    故 default-features=false + 显式 pdfium_6721 与已下载二进制对齐；thread_safe/image
+#    是默认 features 里被关掉、本 crate 实际需要的两项（as_image()/PNG 编码）。
+pdfium-render = { version = "0.8.27", default-features = false, features = ["pdfium_6721", "thread_safe", "image"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 
 # === 集成测试 ===
