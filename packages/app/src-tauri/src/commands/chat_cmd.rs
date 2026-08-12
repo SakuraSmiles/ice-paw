@@ -18,7 +18,7 @@ use crate::error::{AppError, AppResult};
 use crate::infra::file_validation::validate_files;
 use crate::infra::protocol::{
     AttachedFile, ChatMessage, ChatRoundStatePayload, ChatStartPayload, ConfigProposalResponse, ContentBlock,
-    LlmProvider, ProposalDecision, SendMessageInput, ToolAuthResponse, validate_images,
+    LlmProvider, ProposalDecision, SendMessageInput, ToolAuthResponse, strip_empty_image_blocks, validate_images,
 };
 use crate::commands::agent_cmd::AgentCmd;
 use crate::harness::budget::LoopBudget;
@@ -77,7 +77,7 @@ const INLINE_CHAR_CAP: usize = 16_000;
 ///
 /// `message_id`：用户消息 ID（预生成的 UUID 字符串，仅用于注入提示里的工具参数；
 /// 真正的 DB 写入由调用方在消息落库时用同一 id）。
-fn materialize_file_blocks(
+pub(crate) fn materialize_file_blocks(
     message_id: &str,
     mut blocks: Vec<ContentBlock>,
     files: &[AttachedFile],
@@ -106,6 +106,8 @@ fn materialize_file_blocks(
         total_tokens: usize,
         /// 大文件在全局页序列里的 1-based 区间；小文件为 None。
         page_range: Option<(usize, usize)>,
+        /// 提取失败原因（空文件 / 损坏容器）。Some → 软失败，Pass 2 注入诚实提示，不阻塞整条消息。
+        extract_failed: Option<String>,
     }
 
     // —— Pass 1：解码 + 提取 + 收集 db_inputs + 给大文件分配全局页码区间 ——
@@ -132,16 +134,37 @@ fn materialize_file_blocks(
             .map(str::to_ascii_lowercase)
             .unwrap_or_default();
         let started = std::time::Instant::now();
-        let (kind, chunks) =
-            crate::harness::doc::try_extract_chunks(&bytes, &ext)?.ok_or_else(|| {
-                AppError::Validation(format!(
-                    "附件 {} 的格式 .{} 不支持（允许：docx / xlsx / xls / pdf）",
-                    f.name, ext
-                ))
-            })?;
-        let kind_label = kind.label();
-        let total_tokens: usize = chunks.iter().map(|c| estimate_tokens(&c.text)).sum();
         let bytes_len = bytes.len();
+        // 提取（软失败：空文件 / 损坏容器不阻塞整条消息，降级为诚实提示）。
+        // try_extract_chunks：Ok(Some)=成功；Ok(None)=扩展名未识别（validate_files 已白名单
+        // 拦截，理论不可达，兜底当损坏）；Err=文件空 / 损坏（非法 ZIP / PDF 头）。
+        // 改造前这里直接 `?` 上抛 → 单个坏附件让整条 send_message 失败（用户痛点）。
+        let (kind_label, chunks, extract_failed): (
+            &'static str,
+            Vec<crate::harness::doc::TextChunk>,
+            Option<String>,
+        ) = match crate::harness::doc::try_extract_chunks(&bytes, &ext) {
+            Ok(Some((kind, chunks))) => (kind.label(), chunks, None),
+            Ok(None) => (
+                "unknown",
+                Vec::new(),
+                Some(format!("格式 .{ext} 未被提取器识别")),
+            ),
+            Err(e) => {
+                tracing::warn!(
+                    target: "ice_paw.attach",
+                    name = %f.name, ext = %ext, bytes = bytes_len, err = %e,
+                    "附件提取失败（空文件/损坏），软失败为诚实提示（不阻塞整条消息）"
+                );
+                let reason = if bytes_len == 0 {
+                    "文件为空（0 字节）".to_string()
+                } else {
+                    format!("文件可能损坏或格式不合规（{bytes_len} 字节）：{e}")
+                };
+                ("unknown", Vec::new(), Some(reason))
+            }
+        };
+        let total_tokens: usize = chunks.iter().map(|c| estimate_tokens(&c.text)).sum();
         tracing::info!(
             target: "ice_paw.attach",
             name = %f.name,
@@ -151,6 +174,7 @@ fn materialize_file_blocks(
             chunks = chunks.len(),
             total_tokens,
             paginated = total_tokens > INLINE_BUDGET_TOKENS,
+            failed = extract_failed.is_some(),
             elapsed_ms = started.elapsed().as_millis() as u64,
             "附件提取完成"
         );
@@ -179,7 +203,9 @@ fn materialize_file_blocks(
         // Phase B：文本提取为空（扫描件/纯图片/加密 PDF）→ 留存原始字节，供视觉工具
         // view_attachment_image 按需渲染页面。文本提取成功的附件不留存（agent 已有文本，
         // 省一个 10MB+ BLOB）。bytes 在此 move；bytes_len 已在上面捕获给 ExtractedFile。
-        if total_tokens == 0 {
+        // ⚠️ extract_failed 时 total_tokens 必为 0（chunks 空），但这类文件是 0 字节 / 损坏
+        // 容器（非法 ZIP/PDF 头），渲染必失败、白占 BLOB → 排除（extract_failed.is_none()）。
+        if total_tokens == 0 && extract_failed.is_none() {
             file_db_inputs.push(AttachmentFileInput {
                 idx: file_idx as i64,
                 name: f.name.clone(),
@@ -196,6 +222,7 @@ fn materialize_file_blocks(
             chunks,
             total_tokens,
             page_range,
+            extract_failed,
         });
     }
 
@@ -207,6 +234,24 @@ fn materialize_file_blocks(
     for e in &extracted {
         // 1. UI 卡片（不进 LLM；无论大小都 push 一张）
         blocks.push(ContentBlock::attachment(&e.name, &e.ext, e.bytes_len));
+
+        // —— 提取失败（空文件 / 损坏容器）诚实提示 ——
+        // 与下面的「空提取（扫描件）」分支区别：这里是文件本身有问题（0 字节 / 非法 ZIP·PDF 头），
+        // 原始字节**未留存**（渲染也必失败），故绝不指引 view_attachment_image；如实告知 + 建议重传。
+        if let Some(reason) = &e.extract_failed {
+            blocks.push(ContentBlock::text(format!(
+                "<uploaded_file name=\"{}\" type=\"{}\" extracted=\"failed\">\n\
+                 [系统提示：附件 {name} 无法读取——{reason}。文件已成功接收，但无法解析出任何内容，\
+                 原始字节未留存（渲染同样会失败，故无需调 view_attachment_image）。\
+                 请如实告诉用户：该附件当前无法读取，建议检查文件是否损坏或为空后重新上传。]\n\
+                 </uploaded_file>",
+                e.name,
+                e.kind_label,
+                name = e.name,
+                reason = reason,
+            )));
+            continue;
+        }
 
         // —— 空提取守卫（Phase B 落地：扫描件/图片型 PDF 现可视觉读取）——
         // 文本层抽不到内容：扫描件 / 纯图片 PDF、只含内嵌图片的 docx、极稀疏 xlsx、加密 PDF。
@@ -386,6 +431,9 @@ pub async fn send_message(
         }
     };
     validate_images(&final_blocks)?;
+    // 0 字节图片能通过 validate_images（尺寸 0 ≤ 上限），但发给 LLM 会被 400 拒绝。
+    // 软剥离：空图片块移除 + 注入诚实提示，绝不阻塞整条消息（与文档附件软失败同策略）。
+    let final_blocks = strip_empty_image_blocks(final_blocks);
 
     let conv_id = input.conversation_id.clone();
     let tools_enabled = input.tools_enabled;

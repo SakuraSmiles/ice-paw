@@ -77,24 +77,43 @@ function extToMediaType(ext: string): string {
   }
 }
 
-/** 推入一个已读字节流：图片 → pendingImages，文档 → pendingFiles。返回是否入队成功。*/
-function pushAttachment(name: string, bytes: Uint8Array): boolean {
+/** 附件被拒原因（pushAttachment 返回；true = 入队成功）。*/
+type AttachReject = "empty" | "tooLarge" | "unsupported" | "tooMany";
+type PushResult = true | AttachReject;
+
+/** 拒绝原因 → 人读文案（聚合展示用）。*/
+const REJECT_LABEL: Record<AttachReject, string> = {
+  empty: "为空（0 字节）",
+  tooLarge: "超过大小上限",
+  unsupported: "格式不支持",
+  tooMany: "超过数量上限",
+};
+
+/**
+ * 推入一个已读字节流：图片 → pendingImages，文档 → pendingFiles。
+ * 返回 `true` 表示入队成功，否则返回拒绝原因（0 字节 / 超大 / 格式不支持 / 超数量上限）。
+ *
+ * **0 字节拦截**（用户痛点）：0 字节文档会让后端提取失败进而拖死整条消息、0 字节图片
+ * 会被 LLM 以 400 拒绝。在前端入口直接拦截，坏附件根本不进待发列表；后端另有软失败兜底。
+ */
+function pushAttachment(name: string, bytes: Uint8Array): PushResult {
+  if (bytes.length === 0) return "empty";
   const ext = extOf(name);
   if (imageExts.includes(ext)) {
     const mediaType = extToMediaType(ext);
-    if (!allowedTypes.includes(mediaType)) return false;
-    if (bytes.length > maxImageSize) return false;
-    if (chat.pendingImages.length >= maxImageCount) return false;
+    if (!allowedTypes.includes(mediaType)) return "unsupported";
+    if (bytes.length > maxImageSize) return "tooLarge";
+    if (chat.pendingImages.length >= maxImageCount) return "tooMany";
     chat.pendingImages.push({ data: uint8ToBase64(bytes), mediaType, name });
     return true;
   }
   if (docExts.includes(ext)) {
-    if (bytes.length > maxFileSize) return false;
-    if (chat.pendingFiles.length >= maxFileCount) return false;
+    if (bytes.length > maxFileSize) return "tooLarge";
+    if (chat.pendingFiles.length >= maxFileCount) return "tooMany";
     chat.pendingFiles.push({ name, data: uint8ToBase64(bytes), size: bytes.length });
     return true;
   }
-  return false; // 非图片/文档扩展名
+  return "unsupported"; // 非图片/文档扩展名
 }
 
 /** 统一附件选择对话框（按钮触发）：图片 + 文档一个入口，按扩展名分流。*/
@@ -106,26 +125,35 @@ async function pickAttachments() {
   });
   if (!files) return;
   const paths = Array.isArray(files) ? files : [files];
+  const fails: { name: string; reason: string }[] = [];
   for (const filePath of paths) {
+    const name = baseName(filePath);
     try {
       const uint8 = await readFile(filePath);
-      pushAttachment(baseName(filePath), uint8);
+      const r = pushAttachment(name, uint8);
+      if (r !== true) fails.push({ name, reason: REJECT_LABEL[r] });
     } catch (e) {
       console.error("读取附件失败:", e);
+      fails.push({ name, reason: "读取失败" });
     }
   }
+  reportAttachFails(fails);
 }
 
 /** 从浏览器 File 列表（拖拽/粘贴）批量加入附件，按扩展名分流图片/文档。*/
 async function addAttachmentsFromFileList(fileList: File[]): Promise<void> {
+  const fails: { name: string; reason: string }[] = [];
   for (const file of fileList) {
     try {
       const buf = new Uint8Array(await file.arrayBuffer());
-      pushAttachment(file.name, buf);
+      const r = pushAttachment(file.name, buf);
+      if (r !== true) fails.push({ name: file.name, reason: REJECT_LABEL[r] });
     } catch (e) {
       console.error("读取附件失败:", e);
+      fails.push({ name: file.name, reason: "读取失败" });
     }
   }
+  reportAttachFails(fails);
 }
 
 function removeImage(index: number) {
@@ -140,6 +168,22 @@ function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+// ===== 附件拒绝反馈（无全局 toast；内联警告条）=====
+// pushAttachment 的失败（0 字节 / 超大 / 格式不支持 / 超数量上限 / 读取失败）聚合一条警告，
+// 6 秒后自动清除。逐个弹 toast 噪声大；一条汇总更克制。
+const attachWarn = ref("");
+let attachWarnTimer: ReturnType<typeof setTimeout> | null = null;
+function reportAttachFails(fails: { name: string; reason: string }[]) {
+  if (!fails.length) return;
+  const lines = fails.map((f) => `• ${f.name}：${f.reason}`).join("\n");
+  attachWarn.value = `以下附件未添加：\n${lines}`;
+  if (attachWarnTimer) clearTimeout(attachWarnTimer);
+  attachWarnTimer = setTimeout(() => {
+    attachWarn.value = "";
+    attachWarnTimer = null;
+  }, 6000);
 }
 
 // 拖拽高亮状态
@@ -249,6 +293,7 @@ function handleKeydown(e: KeyboardEvent) {
           </button>
         </div>
       </div>
+      <p v-if="attachWarn" class="attach-warn">{{ attachWarn }}</p>
       <p class="input-hint">{{ chat.sending ? "正在生成…" : "Enter 发送 · Shift+Enter 换行" }}</p>
     </div>
   </div>
@@ -298,4 +343,5 @@ function handleKeydown(e: KeyboardEvent) {
 .btn-stop:hover { opacity:0.9; }
 @keyframes stop-enter { from { opacity:0; transform:scale(0.85); } to { opacity:1; transform:scale(1); } }
 .input-hint { font-size:11px; color:var(--ip-color-text-disabled); text-align:center; }
+.attach-warn { font-size:12px; line-height:1.5; white-space:pre-line; color:var(--ip-danger-base); text-align:center; margin:0; }
 </style>
