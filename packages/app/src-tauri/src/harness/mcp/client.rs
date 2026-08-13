@@ -396,6 +396,44 @@ impl McpRegistry {
         client.execute_with_output(args, ctx).await
     }
 
+    /// 与 [`dispatch`](Self::dispatch) 同，但用 `catch_unwind` 兜住工具执行期间的
+    /// panic，转成 [`AppError::Internal`] 返回——不让单个工具的 panic 拖垮整个进程。
+    ///
+    /// 前提：release profile 必须是 `panic = "unwind"`（见 `Cargo.toml`），否则
+    /// `catch_unwind` 捕获不到 panic（进程直接 abort）。`dispatch` 参数均为 `&` /
+    /// `&self`，catch 后直接转 `Err` 不复用可能污染的状态，`AssertUnwindSafe` 安全。
+    pub async fn dispatch_catch_panic(
+        &self,
+        name: &str,
+        args: &str,
+        ctx: &ToolContext,
+    ) -> AppResult<ToolOutput> {
+        use std::panic::AssertUnwindSafe;
+        use futures::future::FutureExt;
+
+        match AssertUnwindSafe(self.dispatch(name, args, ctx))
+            .catch_unwind()
+            .await
+        {
+            Ok(r) => r,
+            Err(panic) => {
+                let msg = panic
+                    .downcast_ref::<String>()
+                    .map(|s| s.clone())
+                    .or_else(|| panic.downcast_ref::<&'static str>().map(|s| s.to_string()))
+                    .unwrap_or_else(|| "<未知 panic>".to_string());
+                tracing::error!(
+                    target: "ice_paw.tool_panic",
+                    tool = name,
+                    "工具执行 panic 被兜底（对话可继续）: {msg}"
+                );
+                Err(AppError::Internal(format!(
+                    "工具 `{name}` 执行时发生内部错误（已兜底，对话可继续）"
+                )))
+            }
+        }
+    }
+
     /// 返回所有已注册的工具名列表
     pub async fn tool_names(&self) -> Vec<String> {
         let clients = self.clients.read().await;

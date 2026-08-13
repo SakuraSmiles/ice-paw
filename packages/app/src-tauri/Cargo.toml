@@ -129,7 +129,9 @@ lto = "thin"
 codegen-units = 1
 
 [profile.release]
-panic = "abort"
+# unwind：让 dispatch_catch_panic 能兜住工具执行期的 panic（abort 模式下
+# catch_unwind 捕获不到，进程直接退出 = 闪退）。代价仅二进制略增（栈展开元数据）。
+panic = "unwind"
 codegen-units = 1
 lto = true
 opt-level = "s"
