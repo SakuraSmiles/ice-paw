@@ -2525,7 +2525,6 @@ dependencies = [
  "chacha20poly1305",
  "chrono",
  "docx-rs",
- "encoding_rs",
  "futures",
  "image",
  "iota_stronghold",
@@ -2554,6 +2553,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "uuid",
+ "windows-sys 0.59.0",
  "wiremock",
  "zip",
 ]
