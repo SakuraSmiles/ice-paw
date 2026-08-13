@@ -498,7 +498,9 @@ mod tests {
         // 3 张图 → 1 条 marker（不重复噪声），文本块保留
         assert_eq!(out.len(), 2, "3 图应塌成 1 marker + 原文本块");
         assert!(out.iter().all(|b| !b.is_image()));
-        let marker = out.iter().find_map(|b| b.as_text()).unwrap();
+        // out = [原文本块 "看图", marker]（marker 在第一张图位置插入，后续图被吞）。
+        // 直接取 out[1]，避免 find_map 命中第一个文本块 "看图"。
+        let marker = out[1].as_text().unwrap();
         assert!(marker.contains("3 张图片"), "marker 应含图数，实际: {marker}");
     }
 
