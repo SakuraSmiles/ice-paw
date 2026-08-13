@@ -1,10 +1,12 @@
-//! `view_attachment_image` 工具 —— 扫描件 / 图片型附件的视觉读取（Phase B）。
+//! `view_attachment_image` 工具 —— PDF 附件的视觉读取（扫描件 / 图片型 / 图纸图表型）。
 //!
 //! [`crate::harness::mcp::read_attachment_tool`] 读的是**提取后的文本**；但当附件是
-//! 扫描件 / 纯图片 PDF（文本提取为空，`total_tokens == 0`），文本路径无能为力。此时
-//! [`crate::commands::chat_cmd::materialize_file_blocks`] 会把原始字节存进
-//! `message_attachment_files` 表（B.1），本工具取字节 → pdfium 渲染指定页 → PNG →
-//! [`ToolOutput::image_png`] → `tool_executor` 注入 `Image` 块给视觉模型读图。
+//! 扫描件 / 纯图片 PDF（文本提取为空）或**混合型 PDF**（图纸 / 图表 / 扫描带 OCR——有零星
+//! 文字但实质内容是图形）时，文字路径无法回答布局 / 图形 / 尺寸类问题。此时
+//! [`crate::commands::chat_cmd::materialize_file_blocks`] 会把**所有非损坏 PDF** 的原始字节
+//! 存进 `message_attachment_files` 表（层①治本，2026-08-13；旧门槛 `total_tokens == 0` 已废），
+//! 本工具取字节 → pdfium 渲染指定页 → PNG → [`ToolOutput::image_png`] → `tool_executor`
+//! 注入 `Image` 块给视觉模型读图（无视觉能力的 agent 走全局视觉配置代读成文本）。
 //!
 //! - **越权守卫**：与 `read_attachment_page` 同——`message_id` 必须属于当前会话
 //!   （附件字节按消息存，不带会话维度；不校验则可读任意会话附件）。
@@ -61,12 +63,15 @@ impl McpClient for ViewAttachmentImageTool {
     }
 
     fn description(&self) -> &str {
-        "Render a page of an attached SCANNED or image-only PDF as an image and pass it to your \
-         vision capability, so you can actually SEE the page when text extraction returned nothing. \
-         Use this ONLY when an attachment's inline note says it could not be read (empty extraction, \
-         likely a scan/image-only PDF) AND the file is a PDF. page is 1-based. Returns a short JSON \
-         summary (page/total_pages/name) plus the rendered page image attached alongside. Call \
-         repeatedly with the next page to page through the document."
+        "Render a page of an attached PDF as an image and pass it to your vision capability, so \
+         you can actually SEE the page. Use this when the attachment's extracted text is EMPTY (a \
+         scan/image-only PDF — the inline note will say so) OR when the extracted text is INCOMPLETE \
+         for the user's question (e.g. it is a drawing, floor plan, diagram, chart, or scanned doc \
+         whose layout/graphics/dimensions are NOT in the text layer — the inline note will offer \
+         this tool with the message_id). The file must be a PDF. page is 1-based. Returns a short \
+         JSON summary (page/total_pages/name) plus the rendered page image attached alongside (or, \
+         if you lack vision, the page read into text by the system's vision config). Call repeatedly \
+         with page+1 to page through the document."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -75,7 +80,7 @@ impl McpClient for ViewAttachmentImageTool {
             "properties": {
                 "message_id": {
                     "type": "string",
-                    "description": "The message_id from the attachment's inline 'could not be read' note."
+                    "description": "The message_id from the attachment's inline note (the 'could not be read' note for an empty extraction, or the vision hint appended to a PDF whose text may be incomplete)."
                 },
                 "page": {
                     "type": "integer",
