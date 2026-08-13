@@ -14,8 +14,10 @@ SODIUM_STATIC=true \
 cargo check --manifest-path packages/app/src-tauri/Cargo.toml
 
 # cargo check --tests 验证测试编译
-# ⚠️ cargo test 的 binary 无法启动（sodium DLL 运行时 STATUS_ENTRYPOINT_NOT_FOUND，已知问题）
-#    编译 + 单测逻辑可验证，但 binary 无法执行；真测试靠 CI Linux
+# cargo test --lib 本地可跑（comctl32 v6 manifest 已由 build.rs 注入 test harness）
+#   ⚠️ 曾长期误记为「sodium DLL STATUS_ENTRYPOINT_NOT_FOUND」，真根因是 lib #[test]
+#   harness 缺 Common-Controls v6 manifest（TaskDialogIndirect 静态导入），与 sodium 无关。
+#   现状：660 passed / 12 failed（12 个是预存 DB/逻辑债，非 loader 问题）
 ```
 
 ### 前端
@@ -99,5 +101,5 @@ agent 调用 `propose_config_change` 工具提出创建/修改 agent 提案 → 
 - 版本 **0.3.1**（已打包 NSIS 231M + MSI 244M；0.3.0 生产闪退热修）。main 本地领先 origin/main 多个 commits（push 待指示）
 - 分支：仅 `main`（refactor/split-bigfiles-composable + frontend-rewrite + immersive-mode 三分支 local/remote 已删）
 - 近期递进：17b1ffc（大文件拆分+孤儿 tool_use 根治）→ ec08e17（治本②③KB watcher+自动续写）→ 0.2.9 打包 → 69d2163（Phase B 视觉读取 14 commits，0.3.0）→ 1e5868c（migration checksum 自愈，热修 0.3.0 闪退）→ 409324e（0.3.1）→ **bfcd2ce/2ce76cb/f054e38/c10d02e（视觉能力统一适配：事1 认知修复 + 事2 方案 C，4 图片入口全接通 modal.rs + ModalCapabilityStage，未手测）**→ **bccf6d0（0字节附件软失败：materialize try_extract_chunks 不再 ? 上抛 + strip_empty_image_blocks + 前端 pushAttachment 拒 0字节，未手测）**
-- 测试 binary 无法运行（sodium DLL，STATUS_ENTRYPOINT_NOT_FOUND），`cargo check`/`--tests` 验证编译；真测试靠 CI Linux；前端 vitest 本地可跑
-- 仍待办：视觉能力统一适配真机手测（非视觉 agent 代读 / M3 自动视觉 / 视觉 agent 不变）、**0字节附件软失败手测（空 pdf/docx/图片应诚实提示而非发送失败）**、KB watcher + 自动续写生产手测、proposal Phase 2（MCP 域）、可测试性（sodium DLL 是门控钥匙）
+- `cargo test --lib` 本地可跑（build.rs 注入 comctl32 v6 manifest 到 lib `#[test]` harness；曾误记 sodium DLL，真根因见 test-harness-comctl32-manifest 记忆）；660 passed / 12 failed（12 个是预存 DB FK/context/doc-modal 逻辑债，binary 以前起不来从没暴露过，独立待修）
+- 仍待办：视觉能力统一适配真机手测（非视觉 agent 代读 / M3 自动视觉 / 视觉 agent 不变）、**0字节附件软失败手测（空 pdf/docx/图片应诚实提示而非发送失败）**、KB watcher + 自动续写生产手测、proposal Phase 2（MCP 域）、**12 个预存失败测试修复（DB FK seed 顺序 / context history_stage / doc-modal 断言）**
