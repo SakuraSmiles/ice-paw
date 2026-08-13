@@ -280,4 +280,43 @@ mod tests {
             "docx 空文件也应注入失败提示，实际: {texts:?}"
         );
     }
+
+    // =====================================================================
+    // PDF 视觉字节留存 + 提示（层①②治本，2026-08-13：混合型 PDF 不再丢字节）
+    // 真实触发面：用户传一份图纸 PDF（282KB 只提取到 359 字标签），旧门槛 total_tokens==0
+    // 判其"提取成功"而丢字节 → agent 永久丧失视觉、转去翻文件系统。治本后所有非损坏 PDF
+    // 都留字节 + 注入提示，agent 可按需调 view_attachment_image 渲染整页读图。
+    // =====================================================================
+
+    #[test]
+    fn pdf_vision_bytes_stored_for_every_non_failed_pdf() {
+        use crate::commands::chat_cmd::should_store_pdf_vision_bytes as gate;
+        use crate::infra::file_validation::MAX_FILE_SIZE;
+
+        // 混合型 PDF（图纸，有零星文字）：治本核心——旧门槛会漏，现在必留
+        assert!(gate("pdf", 282_000, false), "混合型 PDF 应留字节（治本核心）");
+        // 纯文字 PDF：也留（由 agent 自行决定是否用视觉，不替它预测）
+        assert!(gate("pdf", 1_000, false));
+        // 达上传上限的 PDF 仍留（不设更小二级门槛，避免大扫描件回退到 bug）
+        assert!(gate("pdf", MAX_FILE_SIZE, false), "达上传上限仍留字节");
+        // 超上传上限：理论上送不到（validate_files 已拦），防御性 false
+        assert!(!gate("pdf", MAX_FILE_SIZE + 1, false));
+        // 损坏 / 0 字节：渲染必失败，不留（白占 BLOB）
+        assert!(!gate("pdf", 100, true), "extract_failed 不留字节");
+        // Office 文档：当前无渲染路径，不留
+        assert!(!gate("docx", 5_000, false), "docx 无渲染路径，不留");
+        assert!(!gate("xlsx", 5_000, false));
+    }
+
+    #[test]
+    fn pdf_vision_hint_guides_agent_to_render() {
+        use crate::commands::chat_cmd::pdf_vision_hint;
+        let h = pdf_vision_hint("msg-abc");
+        // 指引工具 + 带 message_id（工具必填参数）+ page 示例
+        assert!(h.contains("view_attachment_image"), "应指引工具: {h}");
+        assert!(h.contains(r#"message_id="msg-abc""#), "应带 message_id: {h}");
+        assert!(h.contains("page=1"), "应给 page 示例: {h}");
+        // 覆盖混合型场景关键词（让 agent 识别"文字不完整"）
+        assert!(h.contains("图纸"), "应覆盖图纸类混合型场景: {h}");
+    }
 }

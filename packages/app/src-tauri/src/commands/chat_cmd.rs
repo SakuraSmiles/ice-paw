@@ -109,6 +109,9 @@ pub(crate) fn materialize_file_blocks(
         page_range: Option<(usize, usize)>,
         /// 提取失败原因（空文件 / 损坏容器）。Some → 软失败，Pass 2 注入诚实提示，不阻塞整条消息。
         extract_failed: Option<String>,
+        /// 该 PDF 的原始字节是否已留存供 view_attachment_image 按需渲染（层①治本）。
+        /// Pass 2 在分支③④据此决定是否拼接 [`pdf_vision_hint`]。
+        vision_available: bool,
     }
 
     // —— Pass 1：解码 + 提取 + 收集 db_inputs + 给大文件分配全局页码区间 ——
@@ -201,12 +204,16 @@ pub(crate) fn materialize_file_blocks(
             None
         };
 
-        // Phase B：文本提取为空（扫描件/纯图片/加密 PDF）→ 留存原始字节，供视觉工具
-        // view_attachment_image 按需渲染页面。文本提取成功的附件不留存（agent 已有文本，
-        // 省一个 10MB+ BLOB）。bytes 在此 move；bytes_len 已在上面捕获给 ExtractedFile。
-        // ⚠️ extract_failed 时 total_tokens 必为 0（chunks 空），但这类文件是 0 字节 / 损坏
-        // 容器（非法 ZIP/PDF 头），渲染必失败、白占 BLOB → 排除（extract_failed.is_none()）。
-        if total_tokens == 0 && extract_failed.is_none() {
+        // 层①（治本，2026-08-13）：留存 PDF 原始字节供 view_attachment_image 按需渲染。
+        // 旧门槛 `total_tokens == 0` 是一刀切悬崖——混合型 PDF（图纸 / 图表 / 扫描带 OCR）
+        // 有零星可提取文字但实质内容是图形，被判"提取成功"而丢字节 → 永久丧失视觉
+        // （实测一份 282KB 户型图只提取到 359 字标签，墙体/布局全丢，agent 转去翻文件系统）。
+        // 改为：所有非损坏、未超上传上限的 PDF 都留存字节，由能读到上下文的 agent 自行判断
+        // 是否调 view_attachment_image（层②在注入提示里告知）。非 PDF（Office）无渲染路径，不存。
+        // ⚠️ extract_failed（0 字节 / 损坏容器）渲染必失败、白占 BLOB → 排除。
+        let vision_available =
+            should_store_pdf_vision_bytes(&ext, bytes_len, extract_failed.is_some());
+        if vision_available {
             file_db_inputs.push(AttachmentFileInput {
                 idx: file_idx as i64,
                 name: f.name.clone(),
@@ -224,6 +231,7 @@ pub(crate) fn materialize_file_blocks(
             total_tokens,
             page_range,
             extract_failed,
+            vision_available,
         });
     }
 
@@ -311,12 +319,17 @@ pub(crate) fn materialize_file_blocks(
                 .map(|c| c.text.as_str())
                 .collect::<Vec<_>>()
                 .join("\n\n");
+            let vision_hint = if e.vision_available {
+                pdf_vision_hint(message_id)
+            } else {
+                String::new()
+            };
             blocks.push(ContentBlock::text(format!(
                 "<uploaded_file name=\"{}\" type=\"{}\">\n\
                  [系统提示：以下是系统自动从用户上传的附件提取的原文，非用户手打。请基于此内容回答用户。]\n\
-                 {}\n\
+                 {}{}\n\
                  </uploaded_file>",
-                e.name, e.kind_label, body
+                e.name, e.kind_label, body, vision_hint
             )));
             continue;
         }
@@ -349,22 +362,54 @@ pub(crate) fn materialize_file_blocks(
             );
         }
 
+        let vision_hint = if e.vision_available {
+            pdf_vision_hint(message_id)
+        } else {
+            String::new()
+        };
         blocks.push(ContentBlock::text(format!(
             "<uploaded_file name=\"{}\" type=\"{}\" total_pages=\"{}\">\n\
              [系统提示：以下是系统自动从用户上传的附件提取的原文，非用户手打。本附件已分页存储：\
              共 {} 页，对应全局页 {}~{}（本消息全部附件合计 {} 页）。此处仅展示前若干页。\
              如需后续内容，调用 read_attachment_page(message_id=\"{}\", page=<n>)\
              （1-based，全局 1~{}）读取指定页。]\n\
-             {}\n\
+             {}{}\n\
              </uploaded_file>",
             e.name, e.kind_label, final_total_pages, file_pages, start_page, end_page,
-            final_total_pages, message_id, final_total_pages, body
+            final_total_pages, message_id, final_total_pages, body, vision_hint
         )));
     }
 
     // 大文件块数据 + 视觉候选文件字节随返回值交调用方，**在 Pipeline 成功后**与消息行
     // 一起写库（见 send_message）。
     Ok((blocks, db_inputs, file_db_inputs))
+}
+
+/// 层①：是否为 `view_attachment_image` 留存 PDF 原始字节。纯函数，便于单测。
+///
+/// 旧门槛 `total_tokens == 0` 让混合型 PDF（图纸/图表等"有零星文字但实质是图形"）丢字节、
+/// 永久丧失视觉。改为所有非损坏、未超 [`crate::infra::file_validation::MAX_FILE_SIZE`]（上传
+/// 校验已拦，此处复用为上限）的 PDF 都留存，由 agent 按层②提示自行决定是否调视觉工具。
+/// Office 文档无渲染路径，不存（省 BLOB）。`ext` 须为小写（调用方 [`materialize_file_blocks`]
+/// 已用 `to_ascii_lowercase` 归一）。
+pub(crate) fn should_store_pdf_vision_bytes(ext: &str, bytes_len: usize, extract_failed: bool) -> bool {
+    ext == "pdf"
+        && !extract_failed
+        && bytes_len <= crate::infra::file_validation::MAX_FILE_SIZE
+}
+
+/// 层②：非空提取 PDF 的视觉读取提示。拼进 `<uploaded_file>` 内联正文末尾，告知 agent 在
+/// 提取文字不完整（图纸/图表/扫描件/含图形信息）时可调 `view_attachment_image` 渲染整页读图。
+/// 仅当字节已留存（[`should_store_pdf_vision_bytes`] 为真）时由 [`materialize_file_blocks`] 拼接。
+pub(crate) fn pdf_vision_hint(message_id: &str) -> String {
+    format!(
+        "\n[补充：本附件为 PDF，原始字节已留存。若上面提取的文字对回答用户问题不完整\
+         （例如这是图纸 / 图表 / 扫描件 / 含图形信息的文档，文字层无法表达布局、图形、\
+         尺寸等视觉内容），可调用 view_attachment_image(message_id=\"{mid}\", page=1) \
+         把该页渲染成图、用视觉读取（page 为 1-based；返回的 JSON 摘要含 total_pages，\
+         按需 page+1 翻页；当前模型无视觉能力时，系统会用全局视觉配置把该页代读成文本返回）。]",
+        mid = message_id
+    )
 }
 
 /// 构造"视觉模态元信息"提示块（事1，2026-08-12）。
