@@ -159,8 +159,13 @@ pub async fn adapt_blocks_for_vision(
                 }
                 Err(reason) => {
                     dropped += 1;
-                    // reason.or(last_drop_reason)：当前 Some 则覆盖；当前 None 保留历史。
-                    last_drop_reason = reason.or(last_drop_reason);
+                    // 多图聚合：当前 Some（有凭据但调用失败）按 prefer() 与历史合并——
+                    // Sensitive（输入判定）优先于凭据级瞬态错误，否则保留首个；
+                    // 当前 None（无候选）不覆盖已有 Some。与 ocr_image 单图内逻辑同源。
+                    last_drop_reason = match reason {
+                        Some(k) => LlmErrorKind::prefer(last_drop_reason, k),
+                        None => last_drop_reason,
+                    };
                 }
             }
         } else {
@@ -252,8 +257,9 @@ pub fn strip_image_blocks_to_marker(blocks: &[ContentBlock]) -> Vec<ContentBlock
 /// 返回 `Result<String, Option<LlmErrorKind>>`：
 /// - `Ok(text)` —— 代读成功。
 /// - `Err(None)` —— 未发起有效调用（候选为空 / base64 解码失败）。
-/// - `Err(Some(kind))` —— 已有候选但全部 `describe` 调用失败，`kind` 为**最后一个**候选的
-///   错误分类（驱动诚实提示文案分支）。
+/// - `Err(Some(kind))` —— 已有候选但全部 `describe` 调用失败，`kind` 为按
+///   [`LlmErrorKind::prefer`] 选出的**最具行动价值**的错误分类（`Sensitive` 输入判定
+///   优先于凭据级瞬态错误；否则取首个），驱动诚实提示文案分支。
 ///
 /// 网络/凭据错误不向上抛——调用方计入 `dropped` 走诚实剥离，绝不中断主对话。
 async fn ocr_image(
@@ -301,7 +307,10 @@ async fn ocr_image(
                     kind = ?kind,
                     "视觉凭据代读失败，尝试下一级"
                 );
-                last_kind = Some(kind);
+                // prefer：Sensitive（输入判定：图本身违规）优先于凭据级瞬态错误，
+                // 否则取首个。旧实现 `= Some(kind)` 只留最后一个 → 把首选凭据正确给出
+                // 的 Sensitive 丢成末位凭据的限流/余额，掩盖真正原因。
+                last_kind = LlmErrorKind::prefer(last_kind, kind);
             }
         }
     }
