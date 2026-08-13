@@ -562,12 +562,22 @@ mod tests {
         assert!(is_agent_config(std::path::Path::new(
             "/home/u/ws/agents/dev-2/agent.yaml"
         )));
+        // Windows 盘符路径用正斜杠：Path 在 Windows/Unix 上都能正确解析。若硬编码
+        // 反斜杠 "C:\\..."，Linux 上 '\' 非分隔符、整串变成单段文件名 → CI Linux 误报。
         assert!(is_agent_config(std::path::Path::new(
-            "C:\\Users\\dabai\\icepaw-workspaces\\agents\\dev-2\\agent.yaml"
+            "C:/Users/dabai/icepaw-workspaces/agents/dev-2/agent.yaml"
         )));
         assert!(is_agent_config(std::path::Path::new(
             "/x/agents/test-buddy/agent.yaml"
         )));
+        // 真正的 Windows 反斜杠风格仅在 Windows 宿主上被 Path 正确解析——按平台门控
+        // 保留该覆盖；生产中 Linux 永不收到反斜杠路径，不在 Linux CI 上跑。
+        #[cfg(windows)]
+        {
+            assert!(is_agent_config(std::path::Path::new(
+                "C:\\Users\\dabai\\icepaw-workspaces\\agents\\dev-2\\agent.yaml"
+            )));
+        }
         // 文件名 ASCII 大小写不敏感
         assert!(is_agent_config(std::path::Path::new("/x/agents/dev-2/AGENT.YAML")));
         assert!(is_agent_config(std::path::Path::new("/x/agents/dev-2/Agent.Yaml")));
