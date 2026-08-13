@@ -269,15 +269,16 @@ mod tests {
     fn normalize_collapses_blank_runs_and_trims() {
         let mut s = "\n\n\n标题\n\n\n\n\n正文\n".to_string();
         normalize(&mut s);
-        assert_eq!(s, "标题\n\n\n正文");
+        // 标题前 3 个 \n→2，正文前 5 个 \n→2，首尾 trim
+        assert_eq!(s, "标题\n\n正文");
         // 单/双换行保留，3+→2
         let mut s = "a\nb".to_string();
         normalize(&mut s);
         assert_eq!(s, "a\nb");
-        // CR 被跳过
+        // CR 被跳过：\r\r\r\n 只含 1 个 \n → b/c 间单换行
         let mut s = "a\r\nb\r\r\r\nc".to_string();
         normalize(&mut s);
-        assert_eq!(s, "a\nb\n\nc");
+        assert_eq!(s, "a\nb\nc");
     }
 
     #[test]

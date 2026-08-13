@@ -231,111 +231,33 @@ fn make_history_n(n: usize) -> Vec<MessageRow> {
 }
 
 #[tokio::test]
-async fn history_stage_uses_agent_window_when_set() {
-    // Agent 配置 N=3，仅保留最近 3 条；超出部分被裁剪
-    let pool = fresh_pool().await;
-    let history = make_history_n(5);
-    let mut ctx = make_ctx(
-        pool,
-        make_agent_with_window(Some(3)),
-        None,
-        history,
-        vec![],
-        false,
-    );
-
-    HistoryStage.execute(&mut ctx).await.unwrap();
-    assert_eq!(ctx.history_messages.len(), 3);
-    assert_eq!(ctx.history_messages[0].content_text(), "msg-2");
-    assert_eq!(ctx.history_messages[1].content_text(), "msg-3");
-    assert_eq!(ctx.history_messages[2].content_text(), "msg-4");
-}
-
-#[tokio::test]
-async fn history_stage_falls_back_to_default_when_agent_window_none() {
-    // Agent 配置 None → 系统默认 DEFAULT_HISTORY_WINDOW（20）
-    // 输入 25 条 → 期望保留最后 20 条
-    let pool = fresh_pool().await;
-    let history = make_history_n(25);
-    let mut ctx = make_ctx(
-        pool,
-        make_agent_with_window(None),
-        None,
-        history,
-        vec![],
-        false,
-    );
-
-    HistoryStage.execute(&mut ctx).await.unwrap();
-    // 25 - 20 = 5 条被裁掉，剩 20 条 msg-5..msg-24
-    assert_eq!(ctx.history_messages.len(), 20);
-    assert_eq!(ctx.history_messages[0].content_text(), "msg-5");
-    assert_eq!(ctx.history_messages[19].content_text(), "msg-24");
-}
-
-#[tokio::test]
-async fn history_stage_falls_back_to_default_when_agent_window_invalid() {
-    // 非法值（0/负数）→ 系统默认
-    let pool = fresh_pool().await;
-    let history = make_history_n(25);
-
-    for bad_window in [Some(0), Some(-1)] {
+async fn history_stage_passes_all_through_regardless_of_window() {
+    // Phase 2 契约：HistoryStage 不再按 max_history_messages 做 count-window 裁剪——
+    // 该语义已移到 MemoryStage 的 keep_n 地板（见 memory.rs 的 memory_stage_keep_n_* 测试），
+    // token 硬上限由 TokenWindowStage 负责。故本阶段对任意 window 设置都**全量透传**。
+    //
+    // 守契约：None / 正常 / 非法 / 极小 / 超大 window 都不应让 HistoryStage 丢消息。
+    // 若有人误把 count-window 塞回本阶段，这里会先红。
+    for window in [None, Some(3), Some(0), Some(-1), Some(1), Some(100)] {
+        let pool = fresh_pool().await;
+        let history = make_history_n(5);
         let mut ctx = make_ctx(
-            pool.clone(),
-            make_agent_with_window(bad_window),
+            pool,
+            make_agent_with_window(window),
             None,
-            history.clone(),
+            history,
             vec![],
             false,
         );
         HistoryStage.execute(&mut ctx).await.unwrap();
         assert_eq!(
             ctx.history_messages.len(),
-            20,
-            "非法窗口 {bad_window:?} 应回退默认 20"
+            5,
+            "HistoryStage 应全量透传，window={window:?} 时不应裁剪"
         );
+        assert_eq!(ctx.history_messages[0].content_text(), "msg-0");
+        assert_eq!(ctx.history_messages[4].content_text(), "msg-4");
     }
-}
-
-#[tokio::test]
-async fn history_stage_window_larger_than_input_keeps_all() {
-    // window > history.len() → 全部保留（不补齐）
-    let pool = fresh_pool().await;
-    let history = make_history_n(3);
-    let mut ctx = make_ctx(
-        pool,
-        make_agent_with_window(Some(100)),
-        None,
-        history,
-        vec![],
-        false,
-    );
-
-    HistoryStage.execute(&mut ctx).await.unwrap();
-    assert_eq!(ctx.history_messages.len(), 3);
-}
-
-#[tokio::test]
-async fn history_stage_window_one_keeps_only_last() {
-    // 极端场景：window=1 → 仅保留最新一条
-    let pool = fresh_pool().await;
-    let history = vec![
-        make_msg_row("user", "old"),
-        make_msg_row("assistant", "middle"),
-        make_msg_row("user", "newest"),
-    ];
-    let mut ctx = make_ctx(
-        pool,
-        make_agent_with_window(Some(1)),
-        None,
-        history,
-        vec![],
-        false,
-    );
-
-    HistoryStage.execute(&mut ctx).await.unwrap();
-    assert_eq!(ctx.history_messages.len(), 1);
-    assert_eq!(ctx.history_messages[0].content_text(), "newest");
 }
 
 // =========================================================================

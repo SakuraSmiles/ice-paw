@@ -124,7 +124,20 @@ mod tests {
     }
 
     /// 建一条 messages 行作为外键父（FK CASCADE 测试需要真实父行）。
+    /// 连同其外键祖先（agents → conversations）一起 seed，否则 messages 插入违反
+    /// FK 787。conv1/a1 是常量主键、用 OR IGNORE 幂等（多次调用安全）。
     async fn seed_message(pool: &SqlitePool, id: &str) {
+        sqlx::query(
+            "INSERT OR IGNORE INTO agents (id,name,provider,model,api_key_ref)
+             VALUES ('a1','test-agent','anthropic','claude-test','k')",
+        )
+        .execute(pool)
+        .await
+        .expect("seed agent");
+        sqlx::query("INSERT OR IGNORE INTO conversations (id,agent_id) VALUES ('conv1','a1')")
+            .execute(pool)
+            .await
+            .expect("seed conversation");
         sqlx::query(
             "INSERT INTO messages (id, conversation_id, role, content, content_blocks, created_at)
              VALUES (?, 'conv1', 'user', '', '[]', '2026-01-01 00:00:00')",

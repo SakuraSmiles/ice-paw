@@ -161,7 +161,12 @@ fn render_range(range: &calamine::Range<Data>, out: &mut String) {
 fn cell_to_str(d: &Data) -> String {
     match d {
         Data::Empty => String::new(),
-        Data::String(s) => s.replace('|', "\\|").replace(['\n', '\r'], " "),
+        Data::String(s) => s
+            .replace('|', "\\|")
+            // \r\n 是一个逻辑换行 → 先整体折成一个空格，再单独处理裸 \n / \r，
+            // 否则 replace(['\n','\r']," ") 会把 \r\n 拆成两个空格（双空格污染表格）。
+            .replace("\r\n", " ")
+            .replace(['\n', '\r'], " "),
         Data::Int(i) => i.to_string(),
         Data::Float(f) => format_float(*f),
         Data::Bool(b) => b.to_string(),
