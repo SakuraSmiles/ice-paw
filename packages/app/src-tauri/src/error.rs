@@ -176,8 +176,12 @@ impl AppError {
 pub enum LlmErrorKind {
     /// 内容审核拒绝（图片/文本违规、敏感内容）。确定性错误，重试无意义。
     Sensitive,
-    /// 限流（HTTP 429）。瞬时错误，重试可恢复。
+    /// 限流（HTTP 429 too many requests）。瞬时错误，重试可恢复。
     RateLimited,
+    /// 余额 / 配额不足（GLM code:1113「余额不足或无可用资源包,请充值」、OpenAI
+    /// `insufficient_quota` 等）。确定性错误（需充值 / 换包），区别于瞬时限流——
+    /// GLM 把这类账户问题**也以 HTTP 429 返回**，[`classify_llm_error`] 须先于 429 命中。
+    InsufficientBalance,
     /// 鉴权失败（401，密钥无效/过期）。重试无意义。
     Auth,
     /// 权限不足（403）。重试无意义。
@@ -198,6 +202,7 @@ impl LlmErrorKind {
         match self {
             Self::Sensitive => "图片内容未通过安全审核，请更换图片后重试",
             Self::RateLimited => "请求过于频繁，请稍后再试",
+            Self::InsufficientBalance => "API 余额或配额不足，请充值或更换套餐后重试",
             Self::Auth => "API 密钥无效或已过期，请在设置中检查",
             Self::Forbidden => "API 权限不足，请检查配置",
             Self::ContextTooLong => "消息过长，请缩短内容或清除部分历史消息",
@@ -211,7 +216,34 @@ impl LlmErrorKind {
     pub fn is_retryable(self) -> bool {
         match self {
             Self::RateLimited | Self::Network | Self::Unknown => true,
-            Self::Sensitive | Self::Auth | Self::Forbidden | Self::ContextTooLong => false,
+            Self::Sensitive
+            | Self::Auth
+            | Self::Forbidden
+            | Self::ContextTooLong
+            | Self::InsufficientBalance => false,
+        }
+    }
+
+    /// 多个视觉凭据全失败时，选**最具行动价值**的错误上报（[`crate::harness::modal`]
+    /// 代读循环 + [`crate::harness::mcp::attachment_image_tool`] Arch B fallback 共用）。
+    ///
+    /// **规则**：`Sensitive` 是关于**输入**（图片本身违规）的判定，确定性高于任何
+    /// **凭据级**错误（限流 / 余额 / 鉴权 / 网络）——只要任一凭据给出 Sensitive，
+    /// 它就是这张图读不出的真正原因，应优先上报（让用户「换图」而非误以为「稍后重试」）。
+    /// 其余情况保留**首个**（首选凭据最相关），不被后续瞬态错误覆盖。
+    ///
+    /// 触发面：实测一张敏感图，首选凭据（MiniMax）正确返回 Sensitive、次选（GLM）因
+    /// 余额不足返回 429；旧实现 `last_kind = Some(kind)` 只留最后一个 → 把 Sensitive
+    /// 丢成 RateLimited「请求过于频繁」，掩盖真正原因。
+    pub fn prefer(prev: Option<LlmErrorKind>, new: LlmErrorKind) -> Option<LlmErrorKind> {
+        match (prev, new) {
+            (None, n) => Some(n),
+            // Sensitive（输入判定）优先：已有或新来都保留 Sensitive
+            (Some(LlmErrorKind::Sensitive), _) | (_, LlmErrorKind::Sensitive) => {
+                Some(LlmErrorKind::Sensitive)
+            }
+            // 其余保留首个（首选凭据最相关）
+            (Some(p), _) => Some(p),
         }
     }
 }
@@ -242,6 +274,19 @@ pub fn classify_llm_error(msg: &str) -> LlmErrorKind {
         || s.contains("敏感")
     {
         return LlmErrorKind::Sensitive;
+    }
+    // 余额 / 配额不足。**须先于 429**——GLM 把 code:1113「余额不足或无可用资源包,请充值」
+    // 也以 HTTP 429 返回，但它是确定性账户问题（需充值 / 换包），非瞬时限流；先命中此处
+    // 才不会被下面的 429 → RateLimited 误判成「请求过于频繁」（误导用户等待重试）。
+    if s.contains("余额不足")
+        || s.contains("无可用资源包")
+        || s.contains("充值")
+        || s.contains("insufficient balance")
+        || s.contains("insufficient_quota")
+        || s.contains("insufficient quota")
+        || s.contains("out of quota")
+    {
+        return LlmErrorKind::InsufficientBalance;
     }
     // 限流（429）
     if s.contains("429")
@@ -430,6 +475,10 @@ mod tests {
         assert!(LlmErrorKind::RateLimited.is_retryable());
         assert!(LlmErrorKind::Network.is_retryable());
         assert!(LlmErrorKind::Unknown.is_retryable());
+        assert!(
+            !LlmErrorKind::InsufficientBalance.is_retryable(),
+            "余额不足不可重试（需充值，瞬态重试无意义）"
+        );
     }
 
     #[test]
@@ -441,9 +490,79 @@ mod tests {
             LlmErrorKind::Forbidden,
             LlmErrorKind::ContextTooLong,
             LlmErrorKind::Network,
+            LlmErrorKind::InsufficientBalance,
         ] {
             assert!(!kind.friendly_text().is_empty(), "{kind:?} 应有友好文案");
         }
         assert!(LlmErrorKind::Unknown.friendly_text().is_empty());
+    }
+
+    // ---- 余额 / 配额不足：须先于 429 命中（GLM 把余额不足也以 429 返回）----
+
+    #[test]
+    fn classify_insufficient_balance_beats_429() {
+        // 实测 GLM 措辞：HTTP 429 + code:1113 + 余额不足
+        assert_eq!(
+            classify_llm_error("HTTP 429 Too Many Requests: {\"error\":{\"code\":\"1113\",\
+                                \"message\":\"余额不足或无可用资源包,请充值。\"}}"),
+            LlmErrorKind::InsufficientBalance
+        );
+        // OpenAI 措辞
+        assert_eq!(
+            classify_llm_error("HTTP 429: insufficient_quota"),
+            LlmErrorKind::InsufficientBalance
+        );
+        assert_eq!(
+            classify_llm_error("You exceeded your current quota, out of quota"),
+            LlmErrorKind::InsufficientBalance
+        );
+        // 友好文案是充值提示，不是「请求过于频繁」
+        assert!(
+            LlmErrorKind::InsufficientBalance.friendly_text().contains("余额"),
+            "余额不足应有充值文案"
+        );
+    }
+
+    #[test]
+    fn classify_pure_rate_limit_still_rate_limited() {
+        // 纯限流（无余额关键词）仍归 RateLimited，不被余额分支吞掉
+        assert_eq!(
+            classify_llm_error("HTTP 429: rate_limit_exceeded, retry after 30s"),
+            LlmErrorKind::RateLimited
+        );
+        assert_eq!(
+            classify_llm_error("HTTP 429 Too Many Requests"),
+            LlmErrorKind::RateLimited
+        );
+    }
+
+    // ---- prefer()：Sensitive（输入判定）优先于凭据级瞬态错误 ----
+
+    #[test]
+    fn prefer_sensitive_wins_over_transient() {
+        // 实测场景：MiniMax 先返回 Sensitive，GLM 后返回余额不足 → 应保留 Sensitive
+        let mut best = None;
+        best = LlmErrorKind::prefer(best, LlmErrorKind::Sensitive);
+        best = LlmErrorKind::prefer(best, LlmErrorKind::InsufficientBalance);
+        assert_eq!(best, Some(LlmErrorKind::Sensitive));
+        // 反序：瞬态先、Sensitive 后 → 也应升为 Sensitive
+        let mut best = None;
+        best = LlmErrorKind::prefer(best, LlmErrorKind::Network);
+        best = LlmErrorKind::prefer(best, LlmErrorKind::Sensitive);
+        assert_eq!(best, Some(LlmErrorKind::Sensitive));
+    }
+
+    #[test]
+    fn prefer_keeps_first_among_transient() {
+        // 无 Sensitive 时保留首个（首选凭据最相关），不被后续瞬态错误覆盖
+        let mut best = None;
+        best = LlmErrorKind::prefer(best, LlmErrorKind::Network);
+        best = LlmErrorKind::prefer(best, LlmErrorKind::RateLimited);
+        assert_eq!(best, Some(LlmErrorKind::Network));
+    }
+
+    #[test]
+    fn prefer_none_passthrough() {
+        assert_eq!(LlmErrorKind::prefer(None, LlmErrorKind::Auth), Some(LlmErrorKind::Auth));
     }
 }

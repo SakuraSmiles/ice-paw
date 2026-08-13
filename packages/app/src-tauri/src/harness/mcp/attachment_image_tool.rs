@@ -24,7 +24,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 
 use crate::db::repo;
-use crate::error::{AppError, AppResult};
+use crate::error::{classify_llm_error, AppError, AppResult, LlmErrorKind};
 use crate::harness::doc::{page_count, render_page_to_png};
 use crate::harness::vision;
 
@@ -246,9 +246,10 @@ impl McpClient for ViewAttachmentImageTool {
             return Ok(ToolOutput::text(summary.to_string()));
         }
 
-        // 逐候选试；首个成功即用，全失败把最后一错写进 tool_result 文本（不中断）。
-        let mut last_err: Option<String> = None;
+        // 逐候选试；首个成功即用，全失败按 prefer() 选最具行动价值的错误写进 tool_result（不中断）。
         let mut tried: Vec<String> = Vec::new();
+        let mut best_kind: Option<LlmErrorKind> = None;
+        let mut best_err: Option<String> = None;
         for cred in &candidates {
             tracing::info!(
                 target: "ice_paw.attach",
@@ -278,19 +279,32 @@ impl McpClient for ViewAttachmentImageTool {
                     return Ok(ToolOutput::text(summary.to_string()));
                 }
                 Err(e) => {
+                    let msg = format!("{}: {e}", cred.source);
+                    let kind = classify_llm_error(&msg);
                     tracing::warn!(
                         target: "ice_paw.attach",
-                        source = %cred.source, err = %e, "视觉凭据读图失败，尝试下一级"
+                        source = %cred.source, err = %msg, kind = ?kind,
+                        "视觉凭据读图失败，尝试下一级"
                     );
-                    last_err = Some(format!("{}: {e}", cred.source));
+                    // prefer：Sensitive（输入判定：图本身违规）优先于凭据级瞬态错误，否则
+                    // 保留首个。旧实现 `last_err = Some(msg)` 只留最后一个原始错误串 → 把
+                    // 首选凭据正确的 Sensitive 丢成末位的限流/余额，agent 据此给用户错的
+                    // 「稍后重试」建议。与 modal::ocr_image / adapt_blocks 同源治本。
+                    let next = LlmErrorKind::prefer(best_kind, kind);
+                    if next != best_kind {
+                        best_kind = next;
+                        best_err = Some(msg);
+                    }
                 }
             }
         }
 
-        // 全部候选失败：诚实告知。错误经 friendly_error 友好化（缺口④：避免把原始英文
-        // HTTP 错误体直接塞给 agent → 用户看到一堆英文堆栈）。
-        let raw_err = last_err.as_deref().unwrap_or("unknown");
-        let friendly = crate::harness::error_mapping::friendly_error(raw_err);
+        // 全部候选失败：诚实告知。用 best_kind 的友好文案（缺口④：避免原始英文 HTTP
+        // 错误体塞给 agent → 用户看到一堆英文堆栈）；Unknown/None 回落原始诊断串。
+        let friendly = match best_kind {
+            Some(k) if !k.friendly_text().is_empty() => k.friendly_text().to_owned(),
+            _ => best_err.as_deref().unwrap_or("unknown").to_owned(),
+        };
         let summary = serde_json::json!({
             "message_id": parsed.message_id,
             "page": parsed.page,
