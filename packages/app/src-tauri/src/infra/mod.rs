@@ -6,3 +6,4 @@ pub mod file_validation;
 pub mod image_validation;
 pub mod process;
 pub mod protocol;
+pub mod strings;

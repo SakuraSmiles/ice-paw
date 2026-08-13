@@ -52,7 +52,7 @@ pub async fn run_hooks(
             HookAction::InjectPrompt { content } => {
                 injected.push(content.clone());
             }
-            HookAction::CallTool { tool, args } => match registry.dispatch(tool, args, tool_ctx).await {
+            HookAction::CallTool { tool, args } => match registry.dispatch_catch_panic(tool, args, tool_ctx).await {
                 Ok(_) => tracing::info!(
                     target: "ice_paw.hooks",
                     "钩子 CallTool 成功: point={:?} tool={}", point, tool

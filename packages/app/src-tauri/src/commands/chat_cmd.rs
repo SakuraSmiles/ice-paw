@@ -340,15 +340,12 @@ pub(crate) fn materialize_file_blocks(
             acc += t;
         }
         if body.len() > INLINE_CHAR_CAP {
-            // ⚠️ String::truncate(new_len) 在 new_len 非 char 边界时 **panic**（不是回退！）。
-            // INLINE_CHAR_CAP 是字节偏移，CJK/混合文本在 16000 字节处极易落在多字节字符中间。
-            // 先回退到 ≤ cap 的最近 char 边界再 truncate。
-            let mut cut = INLINE_CHAR_CAP;
-            while cut > 0 && !body.is_char_boundary(cut) {
-                cut -= 1;
-            }
-            body.truncate(cut);
-            body.push_str("\n\n[...内容过长已截断，完整内容请用 read_attachment_page 工具按页读取]");
+            // 字节截断走统一的安全函数（回退到 char 边界，永不 panic）。
+            body = crate::infra::strings::truncate_to_byte_boundary(
+                &body,
+                INLINE_CHAR_CAP,
+                Some("\n\n[...内容过长已截断，完整内容请用 read_attachment_page 工具按页读取]"),
+            );
         }
 
         blocks.push(ContentBlock::text(format!(

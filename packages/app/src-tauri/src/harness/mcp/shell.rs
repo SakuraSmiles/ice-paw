@@ -124,8 +124,13 @@ read exit_code and output to decide next steps."
 
         let truncated = combined.len() > MAX_OUTPUT;
         if truncated {
-            combined.truncate(MAX_OUTPUT);
-            combined.push_str("\n...[输出已截断]");
+            // String::truncate 按字节截断，落在新中文等多字节字符中间会 panic；
+            // 走统一的安全截断（回退到 char 边界）。
+            combined = crate::infra::strings::truncate_to_byte_boundary(
+                &combined,
+                MAX_OUTPUT,
+                Some("\n...[输出已截断]"),
+            );
         }
 
         Ok(serde_json::json!({

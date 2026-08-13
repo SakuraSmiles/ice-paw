@@ -98,8 +98,13 @@ For write operations (commit/add/push), use run_command instead."
             out.push_str(&stderr);
         }
         if out.len() > MAX_OUTPUT {
-            out.truncate(MAX_OUTPUT);
-            out.push_str("\n...[输出已截断]");
+            // String::truncate 按字节截断，落在新中文等多字节字符中间会 panic；
+            // 走统一的安全截断（回退到 char 边界）。
+            out = crate::infra::strings::truncate_to_byte_boundary(
+                &out,
+                MAX_OUTPUT,
+                Some("\n...[输出已截断]"),
+            );
         }
 
         Ok(serde_json::json!({

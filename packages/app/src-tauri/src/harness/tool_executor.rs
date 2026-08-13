@@ -60,6 +60,20 @@ pub use crate::harness::oneshot_registry::ToolAuthRegistry;
 /// 返回 `tool_result_blocks`（每个已完成工具调用对应一个 ToolResult，emit `chat:tool-result`）。
 /// tool_use blocks 由调用方（loop_engine）从 completed_calls 自行组装，消除重复来源。
 #[allow(clippy::too_many_arguments)]
+/// 调用工具并把 `AppResult<ToolOutput>` 统一转成 `Result<ToolOutput, String>`
+///（execute_tool_round 内部「允许执行」与「用户授权后执行」两路的共用入口，含 panic 兜底）。
+async fn invoke_tool(
+    registry: &McpRegistry,
+    name: &str,
+    args: &str,
+    ctx: &ToolContext,
+) -> Result<ToolOutput, String> {
+    match registry.dispatch_catch_panic(name, args, ctx).await {
+        Ok(out) => Ok(out),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 pub async fn execute_tool_round(
     app: &AppHandle,
     registry: &McpRegistry,
@@ -113,10 +127,7 @@ pub async fn execute_tool_round(
 
         // 2. 根据决策执行
         let final_result: Result<ToolOutput, String> = match decision {
-            AuthorizationDecision::Allow => match registry.dispatch(tc_name, tc_args, tool_ctx).await {
-                Ok(out) => Ok(out),
-                Err(e) => Err(e.to_string()),
-            },
+            AuthorizationDecision::Allow => invoke_tool(registry, tc_name, tc_args, tool_ctx).await,
             AuthorizationDecision::Confirm {
                 request_id,
                 tool_name,
@@ -169,10 +180,7 @@ pub async fn execute_tool_round(
                                 tool_name,
                                 file_path,
                             );
-                            match registry.dispatch(tc_name, tc_args, tool_ctx).await {
-                                Ok(out) => Ok(out),
-                                Err(e) => Err(e.to_string()),
-                            }
+                            invoke_tool(registry, tc_name, tc_args, tool_ctx).await
                         }
                         Some(false) => {
                             // 用户拒绝：写工具结果为拒绝错误
