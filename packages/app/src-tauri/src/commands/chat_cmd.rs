@@ -64,6 +64,7 @@ const INLINE_CHAR_CAP: usize = 16_000;
 /// - 各块文本写入 `message_attachments` 表（`message_id` 外键 CASCADE，跟消息生命周期），
 ///   `idx` **跨文件全局连续递增**（表不区分文件，靠注入头里的页码范围告知 LLM）。
 /// - 只把该附件前若干块（≤预算）内联进 Text block，并附 `read_attachment_page` 工具提示。
+///
 /// 小附件（≤预算）仍全量内联，**零行为变化**。
 ///
 /// **后端为附件元信息唯一来源**：先剥离入参里前端可能传入的 Attachment 块（乐观显示
@@ -557,7 +558,6 @@ pub async fn send_message(
                 .unwrap_or(128_000);
             crate::context::token::ContextBudget {
                 max_input_tokens: max_input,
-                ..crate::context::token::ContextBudget::default()
             }
         },
         conv_id.clone(),

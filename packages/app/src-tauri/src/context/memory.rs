@@ -365,7 +365,7 @@ mod tests {
 
     /// 交替 user / assistant 角色名
     fn alt(i: usize) -> &'static str {
-        if i % 2 == 0 {
+        if i.is_multiple_of(2) {
             "user"
         } else {
             "assistant"
@@ -541,7 +541,6 @@ mod tests {
             vec![],
             ContextBudget {
                 max_input_tokens,
-                ..Default::default()
             },
             "conv-t".into(),
             CancellationToken::new(),
@@ -579,13 +578,15 @@ mod tests {
         assert!(ctx.summary_event.is_some());
 
         // provider 调用一次，入参 10 条（无前序摘要）
-        let calls = provider.calls.lock().unwrap();
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].len(), 10);
-        assert!(
-            !calls[0][0].content_text().contains("[Prior summary]"),
-            "首次折叠入参不应含前序摘要"
-        );
+        {
+            let calls = provider.calls.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].len(), 10);
+            assert!(
+                !calls[0][0].content_text().contains("[Prior summary]"),
+                "首次折叠入参不应含前序摘要"
+            );
+        } // guard 在下方 DB await 前 drop，避免 await_holding_lock
 
         // DB：摘要行单例，covered_until_rowid=9（折进摘要的最后一条）
         let state = get_latest_summary_state(&ctx.pool, "conv-t")
@@ -612,11 +613,13 @@ mod tests {
 
         assert_eq!(ctx.summary.as_deref(), Some("summary-2"));
 
-        let calls = provider.calls.lock().unwrap();
-        assert_eq!(calls.len(), 1);
-        // 首条应是前序摘要，正文包含旧 summary-1
-        assert!(calls[0][0].content_text().contains("[Prior summary]"));
-        assert!(calls[0][0].content_text().contains("summary-1"));
+        {
+            let calls = provider.calls.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            // 首条应是前序摘要，正文包含旧 summary-1
+            assert!(calls[0][0].content_text().contains("[Prior summary]"));
+            assert!(calls[0][0].content_text().contains("summary-1"));
+        } // guard 在下方 DB await 前 drop，避免 await_holding_lock
 
         // UPDATE-in-place：摘要行仍单例，正文更新为 summary-2，covered 前进 > 9
         let count: i64 = sqlx::query_scalar(
