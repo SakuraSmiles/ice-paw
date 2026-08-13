@@ -70,6 +70,9 @@ For write operations (commit/add/push), use run_command instead."
         }
 
         let mut cmd = tokio::process::Command::new("git");
+        // core.quotepath=false：禁用 git 对非 ASCII 路径的八进制转义
+        //（默认会把中文文件名输出成 "\344\270\255"；关掉后直接吐原始 UTF-8）
+        cmd.arg("-c").arg("core.quotepath=false");
         cmd.arg(&parsed.operation);
         if let Some(extra) = &parsed.args {
             for a in extra.split_whitespace() {
@@ -90,12 +93,12 @@ For write operations (commit/add/push), use run_command instead."
             .await
             .map_err(|e| AppError::Internal(format!("执行 git 失败（git 是否安装？）: {e}")))?;
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let mut out = stdout.to_string();
-        if !stderr.is_empty() {
+        let stdout = crate::infra::decode::decode_bytes(&output.stdout);
+        let stderr = crate::infra::decode::decode_bytes(&output.stderr);
+        let mut out = stdout.text;
+        if !stderr.text.is_empty() {
             out.push_str("\n[stderr]\n");
-            out.push_str(&stderr);
+            out.push_str(&stderr.text);
         }
         if out.len() > MAX_OUTPUT {
             // String::truncate 按字节截断，落在新中文等多字节字符中间会 panic；
