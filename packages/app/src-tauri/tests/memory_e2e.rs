@@ -3,12 +3,12 @@
 //! 覆盖三个核心场景：
 //! 1. `test_memory_stage_folds_and_persists_when_over_trigger`
 //!    —— verbatim 后缀超触发线 → 折叠 → 写 DB（covered_until_rowid 非空）
-//!      → 设 ctx.summary + summary_event，provider 调一次
+//!    → 设 ctx.summary + summary_event，provider 调一次
 //! 2. `test_memory_stage_skips_when_under_trigger`
 //!    —— verbatim 未超触发线 → noop
 //! 3. `test_memory_stage_incremental_fold_advances_coverage`
 //!    —— DB 已有摘要且 covered 落在加载切片内 → 增量折叠（非复用），
-//!      provider 拿到前序摘要、covered 前进、UPDATE-in-place 保持单例
+//!    provider 拿到前序摘要、covered 前进、UPDATE-in-place 保持单例
 //!
 //! 运行：`cargo test --test memory_e2e`（注：binary 可能因 sodium DLL 无法启动，
 //! `cargo check --tests` 至少保编译）
@@ -122,7 +122,6 @@ async fn make_ctx(
         vec![],
         ContextBudget {
             max_input_tokens,
-            ..ContextBudget::default()
         },
         "conv-e".into(),
         CancellationToken::new(),
@@ -299,15 +298,16 @@ async fn test_memory_stage_incremental_fold_advances_coverage() {
     assert_eq!(ctx.summary.as_deref(), Some("新摘要"));
 
     // 2. provider 被调一次，且首条入参含前序摘要
-    let calls = provider.calls.lock().unwrap();
-    assert_eq!(calls.len(), 1, "增量折叠应调用 provider 一次");
-    assert!(
-        calls[0][0].content_text().contains("[Prior summary]"),
-        "应把旧摘要作为前序喂入: {}",
-        calls[0][0].content_text()
-    );
-    assert!(calls[0][0].content_text().contains("旧摘要"));
-    drop(calls);
+    {
+        let calls = provider.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1, "增量折叠应调用 provider 一次");
+        assert!(
+            calls[0][0].content_text().contains("[Prior summary]"),
+            "应把旧摘要作为前序喂入: {}",
+            calls[0][0].content_text()
+        );
+        assert!(calls[0][0].content_text().contains("旧摘要"));
+    } // guard 在下方 DB await 前 drop，避免 await_holding_lock
 
     // 3. DB：摘要行单例（UPDATE-in-place），covered 前进（> 10）
     let count: i64 = sqlx::query_scalar(

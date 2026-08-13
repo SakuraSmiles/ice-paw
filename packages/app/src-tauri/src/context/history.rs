@@ -381,8 +381,8 @@ pub(crate) fn fold_repeated_tool_failures(messages: Vec<ChatMessage>) -> Vec<Cha
             let last_err = result_content.get(last_id).cloned().unwrap_or_default();
             let summary = make_fold_summary(run_len, &cur.name, &cur.raw_input, &last_err);
             replace_result.insert(ordered_ids[i].clone(), summary);
-            for k in (i + 1)..j {
-                drop_ids.insert(ordered_ids[k].clone());
+            for id in &ordered_ids[(i + 1)..j] {
+                drop_ids.insert(id.clone());
             }
         }
         i = j;

@@ -74,6 +74,10 @@ async fn invoke_tool(
     }
 }
 
+// 10 个参数均为单次工具轮次的独立输入（7/10 来自 loop context，3 个本轮局部），
+// 且仅 1 个调用点（loop_engine::stream_loop_inner）。彻底收敛需把 loop context 整体
+// 传入，属跨层耦合的架构决策，不在 clippy 清理范围；此处显式 allow + 注明。
+#[allow(clippy::too_many_arguments)]
 pub async fn execute_tool_round(
     app: &AppHandle,
     registry: &McpRegistry,

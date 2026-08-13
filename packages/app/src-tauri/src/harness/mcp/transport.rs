@@ -383,7 +383,7 @@ fn parse_sse(bytes: &[u8]) -> Result<JsonRpcResponse, String> {
     let mut last_err = String::from("SSE 流中无 data 事件");
     // 第一轮：只看 message / 无类型事件
     for (evt, data) in &events {
-        let is_msg = evt.as_deref().map_or(true, |e| e == "message");
+        let is_msg = evt.as_deref().is_none_or(|e| e == "message");
         if is_msg {
             match serde_json::from_str::<JsonRpcResponse>(data) {
                 Ok(r) => return Ok(r),

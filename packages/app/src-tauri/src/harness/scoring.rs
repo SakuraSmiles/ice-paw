@@ -348,7 +348,9 @@ mod tests {
     #[test]
     fn default_sort_threshold_sensible() {
         // 阈值应 > 0 且 < 典型工具数（~20 内置 + 远程），否则排序永不触发或总触发
-        assert!(DEFAULT_TOOL_SORT_THRESHOLD > 0);
-        assert!(DEFAULT_TOOL_SORT_THRESHOLD < 30);
+        const {
+            assert!(DEFAULT_TOOL_SORT_THRESHOLD > 0);
+            assert!(DEFAULT_TOOL_SORT_THRESHOLD < 30);
+        }
     }
 }

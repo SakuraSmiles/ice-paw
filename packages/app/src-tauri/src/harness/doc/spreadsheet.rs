@@ -66,11 +66,14 @@ pub(super) fn extract_chunks(bytes: &[u8]) -> AppResult<(DocKind, Vec<TextChunk>
     Ok((DocKind::Spreadsheet { sheets: sheet_names }, chunks))
 }
 
+/// (sheet 名列表, 每个 sheet 的 (name, GFM body))。抽别名收敛 type_complexity。
+type RenderedSheets = (Vec<String>, Vec<(String, String)>);
+
 /// 渲染每个 sheet 为 `(name, body)`，body 为该 sheet 的 GFM markdown 表（不含 `## name` 头）。
 ///
 /// [`extract`] 与 [`extract_chunks`] 的共享脊柱——只解析一次工作簿，两条路径各自拼装。
 /// sheet 读取失败记 warn 跳过（不中断）。
-fn render_sheets(bytes: &[u8]) -> AppResult<(Vec<String>, Vec<(String, String)>)> {
+fn render_sheets(bytes: &[u8]) -> AppResult<RenderedSheets> {
     let cursor = Cursor::new(bytes.to_vec());
     let mut workbook: Sheets<_> = calamine::open_workbook_auto_from_rs(cursor)
         .map_err(|e| AppError::Internal(format!("表格解析失败: {e}")))?;
@@ -127,9 +130,8 @@ fn render_range(range: &calamine::Range<Data>, out: &mut String) {
     out.push('\n');
 
     // 数据行
-    let mut count = 0usize;
     let mut truncated = false;
-    for row in rows {
+    for (count, row) in rows.enumerate() {
         if count >= MAX_RENDER_ROWS {
             truncated = true;
             break;
@@ -144,7 +146,6 @@ fn render_range(range: &calamine::Range<Data>, out: &mut String) {
             out.push_str("  |");
         }
         out.push('\n');
-        count += 1;
     }
     if truncated {
         out.push_str(&format!(
@@ -204,7 +205,7 @@ mod tests {
     fn format_float_strips_integral_zero() {
         assert_eq!(format_float(3.0), "3");
         assert_eq!(format_float(-5.0), "-5");
-        assert_eq!(format_float(3.14), "3.14");
+        assert_eq!(format_float(2.5), "2.5");
         assert_eq!(format_float(0.0), "0");
         assert_eq!(format_float(f64::NAN), "NaN");
         assert_eq!(format_float(f64::INFINITY), "inf");

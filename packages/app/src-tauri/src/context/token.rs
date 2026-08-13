@@ -95,7 +95,7 @@ pub fn estimate_block_tokens(block: &ContentBlock) -> usize {
             // base64 解码字节数 ≈ len * 3/4；按每 200 字节约 1 token 粗估。
             // Anthropic 实际按像素 (w*h)/750 计，此处无尺寸可读，仅为量级代理。
             let decoded = (data.len() * 3) / 4;
-            (decoded / 200).max(IMAGE_TOKEN_FLOOR).min(IMAGE_TOKEN_CAP)
+            (decoded / 200).clamp(IMAGE_TOKEN_FLOOR, IMAGE_TOKEN_CAP)
         }
         // 附件元信息块：纯 UI，不发给 LLM → 不占 token 预算
         ContentBlock::Attachment { .. } => 0,
@@ -248,7 +248,9 @@ mod tests {
         // 空数据 → 解码 0 字节 → 0/200=0，但下限 IMAGE_TOKEN_FLOOR 兜底
         let small = ContentBlock::image("", "image/png");
         assert_eq!(estimate_block_tokens(&small), IMAGE_TOKEN_FLOOR);
-        assert!(IMAGE_TOKEN_FLOOR > 0);
+        const {
+            assert!(IMAGE_TOKEN_FLOOR > 0);
+        }
 
         // 巨幅 base64（模拟 5MB 解码量）应被封顶
         let huge = ContentBlock::image("x".repeat(8_000_000), "image/png");
@@ -344,7 +346,6 @@ mod tests {
     fn fold_budgets_proportional_to_max_input() {
         let b = ContextBudget {
             max_input_tokens: 10_000,
-            ..Default::default()
         };
         assert_eq!(b.fold_trigger_tokens(), 5_500); // 55%
         assert_eq!(b.fold_target_tokens(), 4_000); // 40%

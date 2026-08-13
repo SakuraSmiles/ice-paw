@@ -10,6 +10,7 @@
 //! - **打包**：`scripts/prepare-pdfium.ps1` 把 dll 放进 `src-tauri/resources/pdfium/`，
 //!   `tauri.conf.json` 的 `bundle.resources` 把它打进安装包（exe 同级 `resources/pdfium/`）。
 //! - **开发**：dll 在 `sodium-prebuilt/pdfium/bin/`（gitignore，本地下载）。
+//!
 //! DLL 搜索顺序见 [`load_bindings`]。
 //!
 //! ## 线程模型（关键）

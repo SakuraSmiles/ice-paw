@@ -419,7 +419,7 @@ impl McpRegistry {
             Err(panic) => {
                 let msg = panic
                     .downcast_ref::<String>()
-                    .map(|s| s.clone())
+                    .cloned()
                     .or_else(|| panic.downcast_ref::<&'static str>().map(|s| s.to_string()))
                     .unwrap_or_else(|| "<未知 panic>".to_string());
                 tracing::error!(
