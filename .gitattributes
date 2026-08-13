@@ -3,3 +3,22 @@
 # 应用启动报 "migration N was previously applied but has been modified"。
 # 锁定 LF：编译期嵌入、运行期校验、DB 记录三者换行符一致，跨平台稳定。
 packages/app/src-tauri/src/db/migrations/*.sql text eol=lf
+
+# 源码统一 LF：Windows core.autocrlf=true 会让工作区 .rs/.ts 等变 CRLF，
+# 与 LF 编辑的文件混存 → git diff 反复报「LF will be replaced by CRLF」噪声，
+# 且协作/CI（Linux）与本地（Windows）换行符不一致。显式锁 LF 消除噪声、跨平台一致。
+# 仓库已按 LF 存储（autocrlf 历来在 commit 时归一），故无需 renormalize；
+# 未触碰文件下次 checkout 自动转 LF。
+*.rs   text eol=lf
+*.ts   text eol=lf
+*.tsx  text eol=lf
+*.js   text eol=lf
+*.vue  text eol=lf
+*.json text eol=lf
+*.css  text eol=lf
+*.scss text eol=lf
+*.md   text eol=lf
+*.html text eol=lf
+*.toml text eol=lf
+*.yaml text eol=lf
+*.yml  text eol=lf
