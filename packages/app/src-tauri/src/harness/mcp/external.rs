@@ -130,8 +130,21 @@ impl ExternalMcpServer {
             // 兜底 kill：即便礼貌 shutdown 失败，ExternalMcpServer 析构也确保子进程退出，
             // 避免握手失败/异常的 server 变孤儿（_child 字段 drop 时触发）。
             .kill_on_drop(true)
-            // 设置工作目录为用户 home，避免 npx 在当前目录找 package.json 失败
-            .current_dir(std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\".into()));
+            // 设置工作目录为用户 home，避免 npx 在当前目录找 package.json 失败。
+            // 跨平台：Unix 取 HOME、Windows 取 USERPROFILE；都缺失则回平台根目录。
+            // 旧实现只认 USERPROFILE + 兜底 "C:\\"——Linux/Mac 上 USERPROFILE 未设会
+            // chdir 到字面 "C:\"（反斜杠非分隔符，单段文件名）→ spawn 外部 MCP server 失败。
+            .current_dir(
+                std::env::var("HOME")
+                    .or_else(|_| std::env::var("USERPROFILE"))
+                    .unwrap_or_else(|_| {
+                        if cfg!(target_os = "windows") {
+                            "C:\\".into()
+                        } else {
+                            "/".into()
+                        }
+                    }),
+            );
 
         // Windows: 隐藏 cmd /C 弹出的控制台窗口（见 infra::process）
         crate::infra::process::suppress_console_window(&mut cmd_builder);
