@@ -17,7 +17,7 @@ cargo check --manifest-path packages/app/src-tauri/Cargo.toml
 # cargo test --lib 本地可跑（comctl32 v6 manifest 已由 build.rs 注入 test harness）
 #   ⚠️ 曾长期误记为「sodium DLL STATUS_ENTRYPOINT_NOT_FOUND」，真根因是 lib #[test]
 #   harness 缺 Common-Controls v6 manifest（TaskDialogIndirect 静态导入），与 sodium 无关。
-#   现状：660 passed / 12 failed（12 个是预存 DB/逻辑债，非 loader 问题）
+#   现状：684 passed / 0 failed（+ 集成测试：session_event_log_e2e 3、memory_e2e 3 等）
 ```
 
 ### 前端
@@ -97,9 +97,18 @@ agent 调用 `propose_config_change` 工具提出创建/修改 agent 提案 → 
 - **4 入口接线**：① 用户上传+③ 历史 → `context/stages.rs::ModalCapabilityStage`（Pipeline，TokenWindow 后 Final 前）；② 工具返图 → `tool_executor` 注入 Image 前查 effective_vision（时序独立于 Stage——工具循环后续轮次的图进不了 Stage，必须在此守卫）；④ `view_attachment_image` 判断改 effective_supports_vision + 凭据收集复用 gather。
 - **⚠️ 不变式**：任何新增的 Image 块注入点都必须经 `effective_supports_vision` / `adapt_blocks_for_vision`，不得对非视觉模型直塞 Image。
 
-## 当前状态（2026-08-12）
-- 版本 **0.3.1**（已打包 NSIS 231M + MSI 244M；0.3.0 生产闪退热修）。main 本地领先 origin/main 多个 commits（push 待指示）
-- 分支：仅 `main`（refactor/split-bigfiles-composable + frontend-rewrite + immersive-mode 三分支 local/remote 已删）
-- 近期递进：17b1ffc（大文件拆分+孤儿 tool_use 根治）→ ec08e17（治本②③KB watcher+自动续写）→ 0.2.9 打包 → 69d2163（Phase B 视觉读取 14 commits，0.3.0）→ 1e5868c（migration checksum 自愈，热修 0.3.0 闪退）→ 409324e（0.3.1）→ **bfcd2ce/2ce76cb/f054e38/c10d02e（视觉能力统一适配：事1 认知修复 + 事2 方案 C，4 图片入口全接通 modal.rs + ModalCapabilityStage，未手测）**→ **bccf6d0（0字节附件软失败：materialize try_extract_chunks 不再 ? 上抛 + strip_empty_image_blocks + 前端 pushAttachment 拒 0字节，未手测）**
-- `cargo test --lib` 本地可跑（build.rs 注入 comctl32 v6 manifest 到 lib `#[test]` harness；曾误记 sodium DLL，真根因见 test-harness-comctl32-manifest 记忆）；660 passed / 12 failed（12 个是预存 DB FK/context/doc-modal 逻辑债，binary 以前起不来从没暴露过，独立待修）
-- 仍待办：视觉能力统一适配真机手测（非视觉 agent 代读 / M3 自动视觉 / 视觉 agent 不变）、**0字节附件软失败手测（空 pdf/docx/图片应诚实提示而非发送失败）**、KB watcher + 自动续写生产手测、proposal Phase 2（MCP 域）、**12 个预存失败测试修复（DB FK seed 顺序 / context history_stage / doc-modal 断言）**
+### 会话事件日志（session-event-log Phase 0，已 commit 6813429..9f81692 未 push 未手测）
+单一 append-only 事件日志基石（锁定愿景：统一 session / 多 agent 图协作 / 轨迹可还原）。
+- **表**：migration 44 `session_events`（seq INSERT 子查询原子 + UNIQUE 兜底；message_id 故意无 FK——事件须活得比被删占位行久）
+- **词表 13 kind** + typed emitters：`harness/event_log.rs`（EventCtx + warn-only 影子定位）
+- **接线全退出路径**：chat_cmd/memory/loop_engine/cleanup(PersistOutcome)/retry_round/tool_executor/stages；**硬规则：事件 inline `.await` 禁 spawn，turn_ended 必须先于 cleanup() unregister 落库**
+- **supersede**：自动续写同 message_id 多条 assistant_message，回放 last-wins
+- **导出**：`export_session_trajectory` 命令 → JSONL（docs/backend-api-reference.md）
+- Phase 1 = derive-on-read 对账（差异即 bug 清单）→ Phase 2 = 切唯一真相源
+
+## 当前状态（2026-08-14）
+- 版本 **0.3.3**（已打包 NSIS 232M + MSI 245M，未发版）。**main @ 9f81692，本地领先 origin/main 8 commits（session-event-log Phase 0，push 待指示）**
+- 分支：仅 `main`
+- 近期递进：0.3.0 视觉读取（Phase B 14 commits）→ 1e5868c（migration checksum 自愈热修）→ 0.3.1 → 视觉能力统一适配（bfcd2ce..c10d02e）→ 0字节附件软失败（bccf6d0）→ 0.3.2 → 0.3.3（落库丢图修复 + 文档上限100MB + 错误处理统一分类器）→ **session-event-log Phase 0（6813429..9f81692，8 commits：表/emitters/接线A-D/e2e/导出，未手测）**
+- `cargo test --lib` 684 passed / 0 failed（+ session_event_log_e2e 3 / memory_e2e 3 集成测试）；clippy --tests -D warnings 0 警告；pnpm test 51/51
+- 仍待办：**session-event-log Phase 0 手验（smoke 清单 #6：带工具消息 → export_session_trajectory → 核对序列 + modal_adapted OCR 文本）**、0.3.3 生产手测（落库丢图回归/敏感图提示/100MB 文档）、视觉适配真机手测、KB watcher + 自动续写生产手测、proposal Phase 2（MCP 域）、session-event-log Phase 1（derive 对账）
