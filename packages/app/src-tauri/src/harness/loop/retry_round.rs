@@ -16,6 +16,7 @@ use tauri::Emitter;
 
 use crate::harness::cleanup::emit_round_error;
 use crate::harness::error_mapping::error_kind;
+use crate::harness::event_log::EventCtx;
 use crate::harness::observable::RoundState;
 use crate::harness::retry::{RetryContext, RetryState};
 use crate::harness::stream_consumer::{consume_stream, StreamResult};
@@ -52,6 +53,8 @@ pub(crate) async fn stream_with_retry(
     let round_text = String::new();
     let mut retry_state = RetryState::new();
     let mut last_retry_reason = String::new();
+    // session-events（Phase 0）：message_error 事件上下文（conv/turn/agent）。
+    let ev = EventCtx::new(&ctx.conv_id, &ctx.user_msg_id, &ctx.agent_id);
 
     loop {
         if !retry_state.can_retry() {
@@ -153,7 +156,7 @@ pub(crate) async fn stream_with_retry(
                             emit_round_error(
                                 &ctx.app,
                                 &ctx.pool,
-                                &ctx.conv_id,
+                                &ev,
                                 current_asst_msg_id,
                                 &error_kind(&e),
                                 &err_msg,
@@ -182,7 +185,7 @@ pub(crate) async fn stream_with_retry(
                     emit_round_error(
                         &ctx.app,
                         &ctx.pool,
-                        &ctx.conv_id,
+                        &ev,
                         current_asst_msg_id,
                         &error_kind(&e),
                         &err_msg,

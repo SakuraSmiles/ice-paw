@@ -66,10 +66,11 @@ use uuid::Uuid;
 
 use crate::harness::cleanup::{
     fail_round_and_cancel, finalize_assistant_message, finalize_assistant_without_tool_use,
-    finalize_cancel, finalize_success,
+    finalize_cancel, finalize_success, PersistOutcome,
 };
 use crate::db::models::{HookPoint, NewMessage};
 use crate::db::repo;
+use crate::harness::event_log::{self, AssistantMessagePayload, EventCtx};
 use crate::infra::protocol::{ChatAssistantStartPayload, ChatMessage, ContentBlock, TokenUsage};
 use crate::harness::hooks::{has_actions, run_hooks};
 use crate::harness::observable::{RoundState, RoundTimer};
@@ -152,6 +153,64 @@ pub(crate) async fn stream_loop(ctx: &mut LoopContext, observable: &mut RoundSta
 // compute_round_key + should_terminate_stuck 已迁移到 crate::harness::r#loop::stuck_detect
 pub(crate) use crate::harness::r#loop::stuck_detect::{compute_round_key, should_terminate_stuck};
 
+/// 终止守卫 + 事件镜像：[`finalize_assistant_without_tool_use`] 落盘成功 → 发
+/// `assistant_message`（镜像 PersistOutcome 里的实际写入值，含 round/continuation
+/// 等 loop 语境——这就是事件发在 loop_engine 侧而非 cleanup 侧的原因）；删占位 →
+/// 发 `message_discarded`。
+///
+/// 返回值透传 PersistOutcome（调用方若需区分处理仍可用）。
+// 11 个参数均为该守卫点独立输入且仅 5 个调用点（全在本文件）；事件化收纳进
+// EventCtx 后已是最小参数面，进一步收敛需把 round 语境打包成 struct，收益不足。
+#[allow(clippy::too_many_arguments)]
+async fn finalize_guard_logged(
+    pool: &sqlx::SqlitePool,
+    batch_writer: &batch_writer::BatchWriter,
+    ev: &EventCtx,
+    asst_msg_id: &str,
+    msg_text: &str,
+    round_blocks: &[ContentBlock],
+    completion_tokens: Option<u32>,
+    fallback_text: Option<&str>,
+    round: u32,
+    model: Option<&str>,
+    continuation: bool,
+) -> PersistOutcome {
+    let outcome = finalize_assistant_without_tool_use(
+        pool,
+        batch_writer,
+        asst_msg_id,
+        msg_text,
+        round_blocks,
+        completion_tokens,
+        fallback_text,
+    )
+    .await;
+    match &outcome {
+        PersistOutcome::Persisted { content, blocks } => {
+            event_log::log_assistant_message(
+                pool,
+                ev,
+                asst_msg_id,
+                &AssistantMessagePayload {
+                    v: 1,
+                    model: model.map(str::to_string),
+                    content: content.clone(),
+                    blocks: blocks.clone(),
+                    token_count: completion_tokens.map(|t| t.max(1) as i64),
+                    round,
+                    continuation,
+                },
+            )
+            .await;
+        }
+        PersistOutcome::Deleted => {
+            event_log::log_message_discarded(pool, ev, asst_msg_id, "termination_guard_no_text")
+                .await;
+        }
+    }
+    outcome
+}
+
 /// 流式循环主体（A2-3 后被 `stream_loop` wrapper 包裹）
 ///
 /// REQ-XC-004: `batch_writer` 由外层 `stream_loop` 创建并传入；
@@ -162,6 +221,10 @@ async fn stream_loop_inner(
     observable: &mut RoundState,
     batch_writer: batch_writer::BatchWriter,
 ) {
+    // session-events（Phase 0）：本 turn 的事件上下文（conv/turn/agent 三元组），
+    // 全函数复用。事件全部 inline await（保序硬规则，见 event_log 模块注释）。
+    let ev = EventCtx::new(&ctx.conv_id, &ctx.user_msg_id, &ctx.agent_id);
+
     // 【彻底重构】每轮独立持久化，删除跨轮累积器（原 all_text / all_content_blocks）。
     //
     // `current_asst_msg_id`：循环内所有 emit / DB 写入的「唯一 id 源」。
@@ -206,7 +269,8 @@ async fn stream_loop_inner(
     // 复用同一 assistant 消息无缝拼接长输出（模式 C 治本）。
     'tool_round: for tool_round in 0..ctx.budget.max_tool_rounds {
         if ctx.cancel.is_cancelled() {
-            return finalize_cancel(&ctx.app, &ctx.pool, &ctx.conv_id, &current_asst_msg_id);
+            return finalize_cancel(&ctx.app, &ctx.pool, &ev, &current_asst_msg_id, tool_round)
+                .await;
         }
 
         let round_timer = RoundTimer::new(tool_round);
@@ -318,16 +382,18 @@ async fn stream_loop_inner(
                 return fail_round_and_cancel(
                     &ctx.app,
                     &ctx.pool,
-                    &ctx.conv_id,
+                    &ev,
                     &current_asst_msg_id,
                     "stream",
                     &err_msg,
+                    tool_round,
                 )
                 .await;
             }
             RoundStreamResult::Aborted => {
                 // cancel 或不可重试错误（错误 emit 已由 stream_with_retry 内部完成）。
-                return finalize_cancel(&ctx.app, &ctx.pool, &ctx.conv_id, &current_asst_msg_id);
+                return finalize_cancel(&ctx.app, &ctx.pool, &ev, &current_asst_msg_id, tool_round)
+                    .await;
             }
         }
 
@@ -389,17 +455,22 @@ async fn stream_loop_inner(
 
         // cancel：fallback=None（无文本则删占位；有 text/thinking 则保留剔除 tool_use 后版本）
         if ctx.cancel.is_cancelled() {
-            let _ = finalize_assistant_without_tool_use(
+            let _ = finalize_guard_logged(
                 &ctx.pool,
                 &batch_writer,
+                &ev,
                 &current_asst_msg_id,
                 &msg_text,
                 &round_blocks,
                 round_completion_tokens,
                 None,
+                tool_round,
+                ctx.asst_model.as_deref(),
+                !continue_full_text.is_empty(),
             )
             .await;
-            return finalize_cancel(&ctx.app, &ctx.pool, &ctx.conv_id, &current_asst_msg_id);
+            return finalize_cancel(&ctx.app, &ctx.pool, &ev, &current_asst_msg_id, tool_round + 1)
+                .await;
         }
 
         // W4.2: Token 预算终止检查（落盘前）。fallback=Some 保证纯 tool_use / thinking-only
@@ -413,26 +484,31 @@ async fn stream_loop_inner(
                 cumulative_tokens,
                 ctx.budget.max_total_tokens,
             );
-            finalize_assistant_without_tool_use(
+            finalize_guard_logged(
                 &ctx.pool,
                 &batch_writer,
+                &ev,
                 &current_asst_msg_id,
                 &msg_text,
                 &round_blocks,
                 round_completion_tokens,
                 Some("（本次累计 token 达到上限，已停止。发送新消息即可继续。）"),
+                tool_round,
+                ctx.asst_model.as_deref(),
+                !continue_full_text.is_empty(),
             )
             .await;
             return finalize_success(
                 &ctx.app,
                 &ctx.pool,
-                &ctx.conv_id,
+                &ev,
                 &current_asst_msg_id,
                 "budget_exceeded",
                 synthesize_usage(first_prompt_tokens, total_completion_tokens, collected_usage),
-                &ctx.user_msg_id,
                 first_prompt_tokens,
-            );
+                tool_round + 1,
+            )
+            .await;
         }
 
         // === M2.1: 停滞检测（落盘前）===
@@ -467,26 +543,31 @@ async fn stream_loop_inner(
                 stuck_counter,
                 ctx.budget.stuck_threshold,
             );
-            finalize_assistant_without_tool_use(
+            finalize_guard_logged(
                 &ctx.pool,
                 &batch_writer,
+                &ev,
                 &current_asst_msg_id,
                 &msg_text,
                 &round_blocks,
                 round_completion_tokens,
                 Some("（检测到工具调用循环停滞，已停止。发送新消息即可继续。）"),
+                tool_round,
+                ctx.asst_model.as_deref(),
+                !continue_full_text.is_empty(),
             )
             .await;
             return finalize_success(
                 &ctx.app,
                 &ctx.pool,
-                &ctx.conv_id,
+                &ev,
                 &current_asst_msg_id,
                 "stuck",
                 synthesize_usage(first_prompt_tokens, total_completion_tokens, collected_usage),
-                &ctx.user_msg_id,
                 first_prompt_tokens,
-            );
+                tool_round + 1,
+            )
+            .await;
         }
 
         // 【阶段 C】即时持久化当前 assistant（权威快照：content + blocks + 本轮 token）。
@@ -501,6 +582,23 @@ async fn stream_loop_inner(
             &msg_text,
             &round_blocks,
             round_completion_tokens,
+        )
+        .await;
+        // 权威快照事件（与上面落库的 content/blocks 同值；supersede：续写链同
+        // message_id 多条，回放 last-wins）。
+        event_log::log_assistant_message(
+            &ctx.pool,
+            &ev,
+            &current_asst_msg_id,
+            &AssistantMessagePayload {
+                v: 1,
+                model: ctx.asst_model.clone(),
+                content: msg_text.clone(),
+                blocks: round_blocks.clone(),
+                token_count: round_completion_tokens.map(|t| t.max(1) as i64),
+                round: tool_round,
+                continuation: !continue_full_text.is_empty(),
+            },
         )
         .await;
 
@@ -543,13 +641,14 @@ async fn stream_loop_inner(
             return finalize_success(
                 &ctx.app,
                 &ctx.pool,
-                &ctx.conv_id,
+                &ev,
                 &current_asst_msg_id,
                 &round_finish_reason,
                 synthesize_usage(first_prompt_tokens, total_completion_tokens, collected_usage),
-                &ctx.user_msg_id,
                 first_prompt_tokens,
-            );
+                tool_round + 1,
+            )
+            .await;
         }
 
         tracing::info!(
@@ -584,6 +683,7 @@ async fn stream_loop_inner(
             &completed_calls,
             &tool_ctx,
             &current_asst_msg_id,
+            &ev,
             &ctx.cancel,
             &ctx.hooks,
         )
@@ -597,23 +697,28 @@ async fn stream_loop_inner(
                 // NotFound（warn），但 chat:error / chat:done 事件照常 emit。
                 let err_msg = format!("工具执行失败: {}", e);
                 tracing::error!(target: "ice_paw.chat", "{}", err_msg);
-                let _ = finalize_assistant_without_tool_use(
+                let _ = finalize_guard_logged(
                     &ctx.pool,
                     &batch_writer,
+                    &ev,
                     &current_asst_msg_id,
                     &msg_text,
                     &round_blocks,
                     round_completion_tokens,
                     None,
+                    tool_round,
+                    ctx.asst_model.as_deref(),
+                    !continue_full_text.is_empty(),
                 )
                 .await;
                 return fail_round_and_cancel(
                     &ctx.app,
                     &ctx.pool,
-                    &ctx.conv_id,
+                    &ev,
                     &current_asst_msg_id,
                     "internal",
                     &err_msg,
+                    tool_round + 1,
                 )
                 .await;
             }
@@ -646,10 +751,11 @@ async fn stream_loop_inner(
             return fail_round_and_cancel(
                 &ctx.app,
                 &ctx.pool,
-                &ctx.conv_id,
+                &ev,
                 &current_asst_msg_id,
                 "internal",
                 &err_msg,
+                tool_round + 1,
             )
             .await;
         }
@@ -664,14 +770,18 @@ async fn stream_loop_inner(
             // 当场暴露 SQLite I/O 故障，优于延迟到下次会话 400 爆炸。
             let err_msg = format!("持久化工具结果失败: {}", e);
             tracing::error!(target: "ice_paw.chat", "{}: msg_id={}", err_msg, user_tool_msg_id);
-            let _ = finalize_assistant_without_tool_use(
+            let _ = finalize_guard_logged(
                 &ctx.pool,
                 &batch_writer,
+                &ev,
                 &current_asst_msg_id,
                 &msg_text,
                 &round_blocks,
                 round_completion_tokens,
                 None,
+                tool_round,
+                ctx.asst_model.as_deref(),
+                !continue_full_text.is_empty(),
             )
             .await;
             if let Err(de) = repo::message::delete(&ctx.pool, &user_tool_msg_id).await {
@@ -685,13 +795,23 @@ async fn stream_loop_inner(
             return fail_round_and_cancel(
                 &ctx.app,
                 &ctx.pool,
-                &ctx.conv_id,
+                &ev,
                 &current_asst_msg_id,
                 "internal",
                 &err_msg,
+                tool_round + 1,
             )
             .await;
         }
+        // tool_result 消息镜像事件（与上面落库的 content_blocks 同值；borrow 不 move，
+        // 阶段 G 还要用 tool_result_blocks 推进 ctx.messages）。
+        event_log::log_tool_result_message(
+            &ctx.pool,
+            &ev,
+            &user_tool_msg_id,
+            &tool_result_blocks,
+        )
+        .await;
 
         // 【阶段 G】ctx.messages 追加本轮 assistant(tool_use) + user(tool_result)。
         // 统一 role=user：Anthropic 适配层直接支持 user 消息携带 tool_result；
@@ -737,13 +857,14 @@ async fn stream_loop_inner(
             return finalize_success(
                 &ctx.app,
                 &ctx.pool,
-                &ctx.conv_id,
+                &ev,
                 &current_asst_msg_id,
                 "tool_use",
                 synthesize_usage(first_prompt_tokens, total_completion_tokens, collected_usage),
-                &ctx.user_msg_id,
                 first_prompt_tokens,
-            );
+                tool_round + 1,
+            )
+            .await;
         }
 
         let next_asst_id = Uuid::new_v4().to_string();
@@ -766,10 +887,11 @@ async fn stream_loop_inner(
             return fail_round_and_cancel(
                 &ctx.app,
                 &ctx.pool,
-                &ctx.conv_id,
+                &ev,
                 &current_asst_msg_id,
                 "internal",
                 &err_msg,
+                tool_round + 1,
             )
             .await;
         }
@@ -800,12 +922,13 @@ async fn stream_loop_inner(
     finalize_success(
         &ctx.app,
         &ctx.pool,
-        &ctx.conv_id,
+        &ev,
         &current_asst_msg_id,
         "tool_use",
         synthesize_usage(first_prompt_tokens, total_completion_tokens, collected_usage),
-        &ctx.user_msg_id,
         first_prompt_tokens,
-    );
+        ctx.budget.max_tool_rounds,
+    )
+    .await;
 }
 

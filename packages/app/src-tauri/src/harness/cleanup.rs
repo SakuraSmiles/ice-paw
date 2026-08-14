@@ -19,6 +19,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::db::repo;
 use crate::harness::chat_state::ChatState;
 use crate::harness::error_mapping::friendly_error;
+use crate::harness::event_log::{self, EventCtx};
 use crate::infra::protocol::{ChatDonePayload, ChatErrorPayload, ContentBlock, TokenUsage};
 
 /// Token 数未知时的占位值（provider 未返回 usage）。用 0：前端 badge 的
@@ -102,6 +103,18 @@ fn classify_termination_blocks(
     }
 }
 
+/// [`finalize_assistant_without_tool_use`] 的落盘结果——事件日志据此发
+/// `assistant_message`（Persisted，镜像实际写入值）或 `message_discarded`（Deleted）。
+pub(crate) enum PersistOutcome {
+    /// 已落盘：content + blocks 为实际写入 DB 的值（供事件镜像，勿再推导）。
+    Persisted {
+        content: String,
+        blocks: Vec<ContentBlock>,
+    },
+    /// 占位行已删（msg_id 失效）。
+    Deleted,
+}
+
 /// 终止路径对称清场守卫：在 cancel / budget / stuck / 错误路径上剔除 ToolUse 后落盘
 /// assistant，杜绝「有 tool_use 无 tool_result」孤儿（→ thinking-only → OpenAI 400）。
 ///
@@ -112,8 +125,6 @@ fn classify_termination_blocks(
 ///   恒有效（finalize_success 的 final_asst_msg_id 需指向真实存在的消息）；有 Text 时
 ///   忽略 fallback，保留模型真实文本。
 /// - `fallback_text = None`（cancel / 错误）：无 Text 时删占位行。
-///
-/// 返回 `true` = 占位已删（msg_id 失效）；`false` = 已落盘（msg_id 有效）。
 pub(crate) async fn finalize_assistant_without_tool_use(
     pool: &SqlitePool,
     batch_writer: &crate::harness::batch_writer::BatchWriter,
@@ -122,7 +133,7 @@ pub(crate) async fn finalize_assistant_without_tool_use(
     round_blocks: &[ContentBlock],
     completion_tokens: Option<u32>,
     fallback_text: Option<&str>,
-) -> bool {
+) -> PersistOutcome {
     match classify_termination_blocks(round_blocks, fallback_text.is_some()) {
         TerminationDecision::PersistFiltered => {
             let filtered: Vec<ContentBlock> = round_blocks
@@ -133,20 +144,20 @@ pub(crate) async fn finalize_assistant_without_tool_use(
             batch_writer.flush_now().await;
             finalize_assistant_message(pool, asst_msg_id, round_text, &filtered, completion_tokens)
                 .await;
-            false
+            PersistOutcome::Persisted {
+                content: round_text.to_string(),
+                blocks: filtered,
+            }
         }
         TerminationDecision::PersistFallback => {
             let fb = fallback_text.expect("PersistFallback 仅在 has_fallback 时返回");
+            let blocks = vec![ContentBlock::Text { text: fb.to_string() }];
             batch_writer.flush_now().await;
-            finalize_assistant_message(
-                pool,
-                asst_msg_id,
-                fb,
-                std::slice::from_ref(&ContentBlock::Text { text: fb.to_string() }),
-                completion_tokens,
-            )
-            .await;
-            false
+            finalize_assistant_message(pool, asst_msg_id, fb, &blocks, completion_tokens).await;
+            PersistOutcome::Persisted {
+                content: fb.to_string(),
+                blocks,
+            }
         }
         TerminationDecision::Delete => {
             if let Err(e) = repo::message::delete(pool, asst_msg_id).await {
@@ -157,31 +168,56 @@ pub(crate) async fn finalize_assistant_without_tool_use(
                     e
                 );
             }
-            true
+            PersistOutcome::Deleted
         }
     }
 }
 
-/// 整个发送周期成功结束：emit chat:done + 回填 user 消息 token_count + 注销
+/// 整个发送周期成功结束：turn_ended 事件 + emit chat:done + 回填 user 消息
+/// token_count + 注销
 ///
 /// 各 assistant 消息的 content/blocks/token 已由 `finalize_assistant_message`
 /// 即时落盘。`final_asst_msg_id` 为最终那条 assistant（chat:done 的 message_id）。
+///
+/// session-events（Phase 0）：`turn_ended` 事件必须在 cleanup() unregister
+/// **之前** inline await 落库——前端收到 chat:done 后可能立即发下一条消息，
+/// unregister 之后新 turn 的事件才能开始写，先落 turn_ended 保证跨 turn 的
+/// seq 序确定（硬规则见 `event_log` 模块注释）。
+///
+/// `ev` 提供 conv_id / user_msg_id（token 回填目标）/ agent_id（actor）。
+/// `rounds` = 本 turn 完成的 LLM 轮数（含截断续写轮）。
+// 8 参数均为该收尾点的独立事实（app/pool + 事件上下文 + 终态四元组），无自然
+// 打包边界；强行收敛会造出只用一次的伪 struct。
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn finalize_success(
+pub(crate) async fn finalize_success(
     app: &AppHandle,
     pool: &SqlitePool,
-    conv_id: &str,
+    ev: &EventCtx,
     final_asst_msg_id: &str,
     finish_reason: &str,
     usage: Option<TokenUsage>,
-    user_msg_id: &str,
     first_prompt_tokens: Option<u32>,
+    rounds: u32,
 ) {
-    let pool_clone = pool.clone();
-    let user_id = user_msg_id.to_string();
     let user_tokens = first_prompt_tokens
         .map(|p| p.max(1) as i32)
         .unwrap_or(MIN_TOKEN_COUNT);
+    // ★ turn_ended 先于 cleanup() unregister 落库（保序硬规则）。
+    event_log::log_turn_ended(
+        pool,
+        ev,
+        Some(final_asst_msg_id),
+        &event_log::TurnEndedPayload {
+            v: 1,
+            termination: finish_reason.to_string(),
+            rounds,
+            usage: usage.clone(),
+            user_token_count: Some(user_tokens),
+        },
+    )
+    .await;
+    let pool_clone = pool.clone();
+    let user_id = ev.turn_id.clone();
     tokio::spawn(async move {
         if let Err(e) = repo::message::update_token_count(&pool_clone, &user_id, user_tokens).await {
             tracing::warn!(target: "ice_paw.cleanup", "回写 user token_count 失败: msg_id={}, err={}", user_id, e);
@@ -190,40 +226,61 @@ pub(crate) fn finalize_success(
     // ★ 先 unregister 再 emit chat:done：消除竞态窗口——
     // 前端收到 chat:done 后可能立即发送下一条消息，若此时 token 尚未注销，
     // chat_state.start() 会命中"会话已有在途生成任务"。
-    cleanup(app, pool, conv_id);
+    cleanup(app, pool, &ev.conv_id);
     if let Err(e) = app.emit(
         "chat:done",
         ChatDonePayload {
-            conversation_id: conv_id.to_string(),
+            conversation_id: ev.conv_id.clone(),
             message_id: final_asst_msg_id.to_string(),
             finish_reason: finish_reason.to_string(),
             usage,
         },
     ) {
-        tracing::warn!(target: "ice_paw.cleanup", "emit chat:done 失败: conv_id={}, err={}", conv_id, e);
+        tracing::warn!(target: "ice_paw.cleanup", "emit chat:done 失败: conv_id={}, err={}", ev.conv_id, e);
     }
 }
 
-/// 中途取消：emit chat:done(abort) + 注销
+/// 中途取消：turn_ended(abort) 事件 + emit chat:done(abort) + 注销
 ///
 /// 当前 assistant 消息已由 BatchWriter flush 部分内容；本函数只负责收尾信号。
-pub(crate) fn finalize_cancel(app: &AppHandle, pool: &SqlitePool, conv_id: &str, asst_msg_id: &str) {
+pub(crate) async fn finalize_cancel(
+    app: &AppHandle,
+    pool: &SqlitePool,
+    ev: &EventCtx,
+    asst_msg_id: &str,
+    rounds: u32,
+) {
+    // ★ turn_ended 先于 cleanup() unregister 落库（保序硬规则），同 finalize_success。
+    event_log::log_turn_ended(
+        pool,
+        ev,
+        Some(asst_msg_id),
+        &event_log::TurnEndedPayload {
+            v: 1,
+            termination: "abort".to_string(),
+            rounds,
+            usage: None,
+            user_token_count: None,
+        },
+    )
+    .await;
     // ★ 先 unregister 再 emit chat:done（同 finalize_success 的排序修复）
-    cleanup(app, pool, conv_id);
+    cleanup(app, pool, &ev.conv_id);
     if let Err(e) = app.emit(
         "chat:done",
         ChatDonePayload {
-            conversation_id: conv_id.to_string(),
+            conversation_id: ev.conv_id.clone(),
             message_id: asst_msg_id.to_string(),
             finish_reason: "abort".to_string(),
             usage: None,
         },
     ) {
-        tracing::warn!(target: "ice_paw.cleanup", "emit chat:done(abort) 失败: conv_id={}, err={}", conv_id, e);
+        tracing::warn!(target: "ice_paw.cleanup", "emit chat:done(abort) 失败: conv_id={}, err={}", ev.conv_id, e);
     }
 }
 
-/// 本轮失败的错误收尾（不含 finalize）：回写错误信息 + emit `chat:error`。
+/// 本轮失败的错误收尾（不含 finalize）：回写错误信息 + `message_error` 事件 +
+/// emit `chat:error`。
 ///
 /// 供 `stream_with_retry` 的不可重试错误路径使用——那里不能自行 `finalize_cancel`
 /// （中止语义由调用方统一处理），故与 [`fail_round_and_cancel`] 拆成两层。
@@ -231,10 +288,13 @@ pub(crate) fn finalize_cancel(app: &AppHandle, pool: &SqlitePool, conv_id: &str,
 /// 顺序：先 `update_error` 再 emit。原 loop_engine 内各错误块的 emit/update 顺序
 /// 不一致（重试循环内 emit 在前、其余 update 在前），但二者互无数据依赖，
 /// 统一为 update→emit 不影响可观测行为。
+///
+/// session-events（Phase 0）：`message_error` 事件镜像 messages.error 回写
+/// （kind + 原始错误串，非 friendly 文案）。
 pub(crate) async fn emit_round_error(
     app: &AppHandle,
     pool: &SqlitePool,
-    conv_id: &str,
+    ev: &EventCtx,
     msg_id: &str,
     kind: &str,
     err_msg: &str,
@@ -247,10 +307,11 @@ pub(crate) async fn emit_round_error(
             eu
         );
     }
+    event_log::log_message_error(pool, ev, msg_id, kind, err_msg).await;
     if let Err(em) = app.emit(
         "chat:error",
         ChatErrorPayload {
-            conversation_id: conv_id.to_string(),
+            conversation_id: ev.conv_id.clone(),
             message_id: msg_id.to_string(),
             kind: kind.to_string(),
             message: friendly_error(err_msg),
@@ -259,7 +320,7 @@ pub(crate) async fn emit_round_error(
         tracing::warn!(
             target: "ice_paw.chat",
             "emit chat:error 失败: conv_id={}, err={}",
-            conv_id,
+            ev.conv_id,
             em
         );
     }
@@ -272,13 +333,14 @@ pub(crate) async fn emit_round_error(
 pub(crate) async fn fail_round_and_cancel(
     app: &AppHandle,
     pool: &SqlitePool,
-    conv_id: &str,
+    ev: &EventCtx,
     msg_id: &str,
     kind: &str,
     err_msg: &str,
+    rounds: u32,
 ) {
-    emit_round_error(app, pool, conv_id, msg_id, kind, err_msg).await;
-    finalize_cancel(app, pool, conv_id, msg_id);
+    emit_round_error(app, pool, ev, msg_id, kind, err_msg).await;
+    finalize_cancel(app, pool, ev, msg_id, rounds).await;
 }
 
 /// 注销 CancellationToken（所有退出路径的公共收尾）

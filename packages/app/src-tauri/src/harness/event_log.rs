@@ -20,7 +20,6 @@ use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
 use crate::db::repo::{self, session_event};
-use crate::error::AppResult;
 use crate::infra::protocol::{ContentBlock, TokenUsage};
 
 /// 一个 turn 的事件上下文——同一 `send_message` 周期构造一次，全程复用。
@@ -326,6 +325,9 @@ pub(crate) async fn log_assistant_message(
 }
 
 /// 工具执行审计（arguments/result 与 tool_calls 表同一截断策略）。
+// 10 参数逐一镜像 tool_calls 审计行字段（emitter 内做截断，避免调用方各截一遍）；
+// 收敛成 struct 会与 ToolExecutionPayload 本体重复。
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn log_tool_execution(
     pool: &SqlitePool,
     ctx: &EventCtx,
