@@ -85,6 +85,9 @@ pub struct PipelineContext {
     pub conversation_id: String,
     /// M1.5: 取消令牌（MemoryStage 摘要 LLM 调用时需要）
     pub cancel_token: CancellationToken,
+    /// session-events（Phase 0）：当前 turn 标识（= user_msg_id），MemoryStage 的
+    /// summary_* 事件归属用。测试等散落构造不设置则为 None（不发事件）。
+    pub turn_id: Option<String>,
     /// 项目工作目录（None = 散落会话或项目无 workspace）
     pub project_workspace: Option<String>,
     /// 项目上下文目录（IcePaw 管理的 {workspace}/projects/{id}/，存 project.md）
@@ -153,6 +156,7 @@ impl PipelineContext {
             context_budget,
             conversation_id,
             cancel_token,
+            turn_id: None,
             project_workspace: None,
             project_context_dir: None,
             api_key: None,

@@ -22,6 +22,7 @@ use crate::infra::protocol::{
 };
 use crate::commands::agent_cmd::AgentCmd;
 use crate::harness::budget::LoopBudget;
+use crate::harness::event_log::{self, EventCtx};
 use crate::harness::hooks::{has_actions, run_hooks};
 use crate::harness::tool_executor::build_tool_ctx;
 use crate::harness::chat_state::{CancellationToken, ChatState};
@@ -573,6 +574,19 @@ pub async fn send_message(
     let conv_id_guard = conv_id.clone();
     let cancel_guard = scopeguard::guard((), |_| chat_state.unregister(&conv_id_guard));
 
+    // Phase 0: 用 agent 的 context_window 构造上下文预算（hoist 出来：同一值
+    // 也写入 turn_context 事件——解析优先级：agent 显式覆盖 → (provider, model)
+    // 已知模型默认 → 128K 兜底）。max_input_tokens 现被 Phase 1（TokenWindowStage
+    // 硬裁）+ Phase 2（MemoryStage 折叠触发/目标比例 fold_trigger_tokens /
+    // fold_target_tokens）消费。
+    let context_window = agent
+        .context_window
+        .map(|v| v as usize)
+        .or_else(|| {
+            crate::harness::provider::default_context_window(&agent.provider, &agent.model)
+        })
+        .unwrap_or(128_000);
+
     // 显式走 PipelineRunner：构造 PipelineContext + 注册 8 个 Stage：
     // Template → OsContext → SystemPrompt → History → ToolFailureFold → Memory
     // → TokenWindow → Final（M1.4 起不再含 ToolTrimStage，工具裁剪下沉到 loop_engine）。
@@ -589,25 +603,14 @@ pub async fn send_message(
         tools_enabled,
         current_user_query.clone(),
         tool_call_history.clone(),
-        // Phase 0: 用 agent 的 context_window 构造上下文预算。
-        // 解析优先级：agent 显式覆盖 → (provider, model) 已知模型默认 → 128K 兜底。
-        // max_input_tokens 现被 Phase 1（TokenWindowStage 硬裁）+ Phase 2
-        // （MemoryStage 折叠触发/目标比例 fold_trigger_tokens / fold_target_tokens）消费。
-        {
-            let max_input = agent
-                .context_window
-                .map(|v| v as usize)
-                .or_else(|| {
-                    crate::harness::provider::default_context_window(&agent.provider, &agent.model)
-                })
-                .unwrap_or(128_000);
-            crate::context::token::ContextBudget {
-                max_input_tokens: max_input,
-            }
+        crate::context::token::ContextBudget {
+            max_input_tokens: context_window,
         },
         conv_id.clone(),
         cancel_token.clone(),
     );
+    // session-events（Phase 0）：turn 归属键，MemoryStage 的 summary_* 事件用
+    pipeline_ctx.turn_id = Some(user_msg_id.clone());
 
     // 项目 workspace + 上下文目录注入 Pipeline
     if let Some(ref pid) = conv.project_id {
@@ -656,6 +659,8 @@ pub async fn send_message(
     // --- 4. Pipeline 成功 → 落库（用户消息 + 分页块 + assistant 占位） ---
     // 全部 DB 写入推迟到此刻：前置任一失败（conv/agent/provider/materialize/Pipeline）
     // 都不落任何行，无孤儿。用户消息 content = content_text（仅手打文本，不含附件提取正文）。
+    // content_text 随 create 被 move，先快照供 user_message 事件用。
+    let user_content_snapshot = content_text.clone();
     repo::message::create(
         pool.inner(), &user_msg_id,
         &NewMessage {
@@ -679,6 +684,64 @@ pub async fn send_message(
         repo::message_attachment_file::delete_by_message(pool.inner(), &user_msg_id).await?;
         repo::message_attachment_file::insert_batch(pool.inner(), &user_msg_id, &attach_file_inputs)
             .await?;
+    }
+
+    // --- 4.5 session_events 影子写入（Phase 0）：turn 用户侧事实 ---
+    // 与现有持久化同点 inline 写入；warn-only 不阻断（影子定位，缺口靠 Phase 1 对账）。
+    // blocks 用适配前的 persist_blocks（用户真实发送内容，同 messages.content_blocks）。
+    let ev = EventCtx::new(&conv_id, &user_msg_id, &agent.id);
+    event_log::log_user_message(
+        pool.inner(),
+        &ev,
+        &user_msg_id,
+        &event_log::UserMessagePayload {
+            v: 1,
+            content: user_content_snapshot,
+            blocks: persist_blocks,
+        },
+    )
+    .await;
+    // 附件留存事实——仅元信息（正文在 messages/分页表，字节在 files 表；防三重冗余）。
+    if !attach_db_inputs.is_empty() {
+        event_log::log_attachment_stored(
+            pool.inner(),
+            &ev,
+            &user_msg_id,
+            &event_log::AttachmentStoredPayload::Pages {
+                v: 1,
+                items: attach_db_inputs
+                    .iter()
+                    .map(|c| event_log::AttachmentPageItem {
+                        idx: c.idx,
+                        name: c.name.clone(),
+                        kind: c.kind.clone(),
+                        label: c.label.clone(),
+                        token_est: c.token_est,
+                    })
+                    .collect(),
+            },
+        )
+        .await;
+    }
+    if !attach_file_inputs.is_empty() {
+        event_log::log_attachment_stored(
+            pool.inner(),
+            &ev,
+            &user_msg_id,
+            &event_log::AttachmentStoredPayload::Bytes {
+                v: 1,
+                items: attach_file_inputs
+                    .iter()
+                    .map(|f| event_log::AttachmentBytesItem {
+                        idx: f.idx,
+                        name: f.name.clone(),
+                        ext: f.ext.clone(),
+                        bytes_len: f.bytes.len(),
+                    })
+                    .collect(),
+            },
+        )
+        .await;
     }
 
     let asst_msg_id = Uuid::new_v4().to_string();
@@ -763,6 +826,39 @@ pub async fn send_message(
     } else {
         McpRegistry::new()
     };
+
+    // --- 6.6 session_events（Phase 0）：turn_context 快照 ---
+    // 「模型用什么模型/看到什么工具/什么预算」此前完全不落库——Phase 1 解释
+    // 行为差异的锚点。此刻全部字段已在作用域（effective_max_tokens/tool_max_rounds/
+    // budget_max_tokens/tool_registry 均已算出），事件序上晚于 user_message
+    // （先落用户事实、后落 turn 配置），忠实反映执行序。warn-only。
+    {
+        let tool_names: Vec<String> = tool_registry
+            .list_tool_defs()
+            .await
+            .iter()
+            .take(50)
+            .map(|d| d.name.clone())
+            .collect();
+        event_log::log_turn_context(
+            pool.inner(),
+            &ev,
+            &event_log::TurnContextPayload {
+                v: 1,
+                provider: agent.provider.clone(),
+                effective_model: effective_model.clone(),
+                model_override: model_override.clone(),
+                tools_enabled,
+                tool_names,
+                temperature: Some(agent.temperature),
+                max_tokens: Some(effective_max_tokens as i64),
+                tool_max_rounds,
+                budget_max_tokens: Some(budget_max_tokens as u64),
+                context_window: Some(context_window as i64),
+            },
+        )
+        .await;
+    }
 
     // --- 6.5 钩子：ConversationStart（对话开始，inject_prompt 追加到 system_prompt）---
     // 在 tool_registry 组装完成后、spawn 前执行：此时 system 消息已由 Pipeline 拼装进
