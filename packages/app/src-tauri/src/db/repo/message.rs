@@ -105,6 +105,29 @@ pub async fn count_by_conversation(
     Ok(row.0)
 }
 
+/// 按 rowid 正序全量读取会话消息（session-events 对账专用，Phase 1）。
+///
+/// 与 [`list_by_conversation`] 的差异：
+/// - **排序只用 rowid**（物理插入序）——对账要比对「事件 seq 序 vs 行写入序」，
+///   `created_at` 是秒级时间戳，时钟回拨（NTP step）会让复合序与 rowid 反转。
+/// - **无 limit 钳制**——`list_by_conversation` 的 `MAX_LIMIT=1000` 会静默截断
+///   长会话，对账必须全量（截断 = 假差异源）。
+pub async fn list_all_by_rowid(
+    pool: &SqlitePool,
+    conversation_id: &str,
+) -> AppResult<Vec<MessageRow>> {
+    let rows = sqlx::query_as::<_, MessageRow>(
+        "SELECT id, conversation_id, role, content, content_blocks, token_count, error, created_at, rowid, summary_id, model
+           FROM messages
+          WHERE conversation_id = ?
+          ORDER BY rowid ASC",
+    )
+    .bind(conversation_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 /// 写入新消息
 pub async fn create(
     pool: &SqlitePool,
