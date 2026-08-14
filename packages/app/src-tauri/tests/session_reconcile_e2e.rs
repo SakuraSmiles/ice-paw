@@ -306,3 +306,34 @@ async fn tamper_delete_row_fires_missing_in_legacy() {
     assert_eq!(categories(&report), vec!["MISSING_IN_LEGACY"], "{:#?}", report.diffs);
     assert_eq!(report.diffs[0].message_id.as_deref(), Some("msg-a2"));
 }
+
+// =========================================================================
+// 真机对账手验入口（非 CI；Phase 2 长期对账监控的雏形）
+//
+// 对真实 dev/生产库跑完整对账，打印报告（--nocapture）。
+// reconcile 只执行 SELECT，不写库；app 运行中也可安全执行。
+//
+//     ICEPAW_RECONCILE_DB="C:\Users\<u>\AppData\Roaming\com.icepaw.app\ice-paw.db" \
+//     ICEPAW_RECONCILE_CONV=<conversation-id> \
+//     cargo test --test session_reconcile_e2e reconcile_real_db -- --ignored --nocapture
+// =========================================================================
+
+#[tokio::test]
+#[ignore = "需真实库路径 + 会话 id，显式触发"]
+async fn reconcile_real_db() {
+    let db_path = std::env::var("ICEPAW_RECONCILE_DB").expect("设 ICEPAW_RECONCILE_DB=<db 路径>");
+    let conv_id = std::env::var("ICEPAW_RECONCILE_CONV").expect("设 ICEPAW_RECONCILE_CONV=<会话 id>");
+
+    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{db_path}"))
+        .expect("valid sqlite url")
+        .read_only(true);
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(opts)
+        .await
+        .expect("connect real db（app 运行中占用 WAL 时可退出 app 后重试）");
+
+    let report = reconcile_session(&pool, &conv_id).await.expect("reconcile");
+    // pretty-print 全量报告：diffs 非空 = bug 嫌疑清单；skipped 逐条核对 reason
+    println!("{}", serde_json::to_string_pretty(&report).expect("serialize report"));
+}
