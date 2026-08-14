@@ -109,12 +109,13 @@ zip = "8.6"
 #    是默认 features 里被关掉、本 crate 实际需要的两项（as_image()/PNG 编码）。
 pdfium-render = { version = "0.8.27", default-features = false, features = ["pdfium_6721", "thread_safe", "image"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
+tauri-plugin-window-state = "2.4.1"
 
 # === Windows 专用：系统 ANSI 代码页解码（MultiByteToWideChar + CP_ACP）===
 # 仅 Windows target 引入，decode.rs 用它按「系统当前 ANSI 代码页」解码子进程
 # 输出，自动适配任意语言版本的 Windows（中文=GBK、英文=1252、日文=Shift-JIS…）。
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Globalization"] }
+windows-sys = { version = "0.59", features = ["Win32_Globalization", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging"] }
 
 # === 集成测试 ===
 [dev-dependencies]
