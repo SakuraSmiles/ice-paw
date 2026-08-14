@@ -22,6 +22,7 @@ use ice_paw_lib::harness::event_log::{
     UserMessagePayload,
 };
 use ice_paw_lib::harness::reconcile::{reconcile_session, ReconcileReport};
+use ice_paw_lib::harness::read_route::{ReadRoute, ReadRouteRegistry};
 use ice_paw_lib::infra::protocol::ContentBlock;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::SqlitePool;
@@ -170,6 +171,7 @@ async fn script_consistent_turn(pool: &SqlitePool) {
             content: "我来看一下".into(),
             blocks: a1_blocks.clone(),
             token_count: Some(12),
+            duration_ms: None,
             round: 0,
             continuation: false,
         },
@@ -203,6 +205,7 @@ async fn script_consistent_turn(pool: &SqlitePool) {
             content: "README 说这是本地优先的 LLM 工作站。".into(),
             blocks: a2_blocks.clone(),
             token_count: Some(20),
+            duration_ms: None,
             round: 1,
             continuation: false,
         },
@@ -305,6 +308,49 @@ async fn tamper_delete_row_fires_missing_in_legacy() {
     let report = reconcile_session(&pool, "conv-e").await.expect("reconcile");
     assert_eq!(categories(&report), vec!["MISSING_IN_LEGACY"], "{:#?}", report.diffs);
     assert_eq!(report.diffs[0].message_id.as_deref(), Some("msg-a2"));
+}
+
+// =========================================================================
+// 读路径路由（session-event-log Phase 2A）：reconcile-green ⇒ Derive；混合纪元 ⇒ Legacy
+//
+// 路由细节（指纹缓存 / force_legacy / 篡改回退）由 harness::read_route 的 in-crate
+// 集成测试覆盖；这里验证两条 e2e 关键不变式——丰富脚本（含 Image+tool_use）零 diff
+// 应路由 Derive；事件纪元前的旧行存在时（派生看不到它们）应路由 Legacy。
+// =========================================================================
+
+/// reconcile 零 diff 的丰富脚本（图 + 工具调用 + 附件）应路由到 Derive。
+#[tokio::test]
+async fn read_route_derive_for_reconcile_green_rich_script() {
+    let pool = seeded_pool().await;
+    script_consistent_turn(&pool).await;
+
+    let reg = ReadRouteRegistry::new();
+    let d = reg.resolve(&pool, "conv-e", false).await.expect("resolve");
+    assert_eq!(
+        d.route, ReadRoute::Derive,
+        "reconcile 零 diff 的丰富脚本应路由 derive: {:#?}", d
+    );
+    assert_eq!(d.reason, "green");
+    assert_eq!(d.diffs, 0);
+}
+
+/// 事件纪元前还有旧行（混合纪元）→ 派生看不到旧行 → 必须路由 Legacy。
+#[tokio::test]
+async fn read_route_legacy_for_mixed_epoch() {
+    let pool = seeded_pool().await;
+    // 纪元前的旧行（无事件，模拟 Phase 0 升级前已存在的历史）
+    write_row(&pool, "legacy-1", "user", "旧消息", &[ContentBlock::text("旧消息")]).await;
+    write_row(&pool, "legacy-2", "assistant", "旧回复", &[ContentBlock::text("旧回复")]).await;
+    // 之后是事件纪元的完整 turn
+    script_consistent_turn(&pool).await;
+
+    let reg = ReadRouteRegistry::new();
+    let d = reg.resolve(&pool, "conv-e", false).await.expect("resolve");
+    assert_eq!(
+        d.route, ReadRoute::Legacy,
+        "混合纪元（旧行+新事件）应路由 legacy（派生看不到旧行）: {:#?}", d
+    );
+    assert_eq!(d.reason, "mixed_epoch");
 }
 
 // =========================================================================

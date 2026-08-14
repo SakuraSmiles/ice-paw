@@ -460,6 +460,7 @@ mod tests {
             content: String::new(),
             blocks: vec![ContentBlock::ToolUse { id: "tu_1".into(), name: "read_file".into(), input: "{}".into() }],
             token_count: None,
+            duration_ms: None,
             round: 0,
             continuation: false,
         })
@@ -480,6 +481,7 @@ mod tests {
             content: "读到了".into(),
             blocks: vec![text_block("读到了")],
             token_count: None,
+            duration_ms: None,
             round: 1,
             continuation: false,
         })
@@ -637,6 +639,7 @@ mod tests {
             content: String::new(),
             blocks: vec![],
             token_count: None,
+            duration_ms: None,
             round: 0,
             continuation: false,
         })
@@ -689,6 +692,7 @@ mod tests {
             content: "前半段".into(),
             blocks: vec![text_block("前半段")],
             token_count: None,
+            duration_ms: None,
             round: 0,
             continuation: true,
         })
@@ -699,6 +703,7 @@ mod tests {
             content: "前半段后半段".into(),
             blocks: vec![text_block("前半段后半段")],
             token_count: None,
+            duration_ms: None,
             round: 1,
             continuation: true,
         })
@@ -743,6 +748,7 @@ mod tests {
                 content: txt.into(),
                 blocks: vec![text_block(txt)],
                 token_count: None,
+                duration_ms: None,
                 round: 0,
                 continuation: false,
             })
