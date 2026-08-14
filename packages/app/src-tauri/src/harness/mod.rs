@@ -13,6 +13,7 @@ pub mod batch_writer;
 pub mod budget;
 pub mod chat_state;
 pub mod cleanup;
+pub mod derive;
 pub mod doc;
 pub mod error_mapping;
 pub mod event_log;
