@@ -41,7 +41,7 @@ use crate::context::token::{
     estimate_message_tokens, estimate_messages_tokens, estimate_tokens,
 };
 use crate::db::repo::summary::{
-    get_latest_summary_state, insert_summary_message, update_summary_message,
+    get_latest_summary_state, insert_summary_message, update_summary_message, SUMMARY_PREFIX,
 };
 use crate::error::AppResult;
 use crate::infra::cancel::CancellationToken;
@@ -283,20 +283,56 @@ impl PipelineStage for MemoryStage {
         };
 
         // 落库：有旧摘要 → UPDATE-in-place（保持单例、UI 气泡位置稳定）；无 → INSERT。
+        // 落库成功后影子记录 summary_created/updated 事件（Phase 0）。
+        let mut summary_persisted: Option<(bool, String)> = None; // (created, summary row id)
         match &state {
             Some(s) => {
                 if let Err(e) =
                     update_summary_message(&ctx.pool, &s.row_id, &s_new, new_covered_rowid).await
                 {
                     warn!(target: "ice_paw.context", "MemoryStage: 更新摘要失败: {e}，仍注入上下文");
+                } else {
+                    summary_persisted = Some((false, s.row_id.clone()));
                 }
             }
             None => {
-                if let Err(e) =
-                    insert_summary_message(&ctx.pool, &ctx.conversation_id, &s_new, new_covered_rowid)
-                        .await
+                match insert_summary_message(
+                    &ctx.pool,
+                    &ctx.conversation_id,
+                    &s_new,
+                    new_covered_rowid,
+                )
+                .await
                 {
-                    warn!(target: "ice_paw.context", "MemoryStage: 存入摘要失败: {e}，仍注入上下文");
+                    Ok(row_id) => summary_persisted = Some((true, row_id)),
+                    Err(e) => {
+                        warn!(target: "ice_paw.context", "MemoryStage: 存入摘要失败: {e}，仍注入上下文");
+                    }
+                }
+            }
+        }
+
+        // session-events（Phase 0）：摘要折叠事实。折叠由 turn 的上下文装配触发，
+        // 事件序先于同 turn 的 user_message（忠实执行序）。content 存行内容
+        // （SUMMARY_PREFIX + 正文），与 legacy 行逐字节对齐便于 Phase 1 对账。
+        // turn_id 未设置（测试等散落构造 PipelineContext）→ 跳过事件。
+        if let Some((created, summary_row_id)) = summary_persisted {
+            if let Some(turn_id) = ctx.turn_id.clone() {
+                let ev = crate::harness::event_log::EventCtx::new(
+                    &ctx.conversation_id,
+                    &turn_id,
+                    &ctx.agent.id,
+                );
+                let payload = crate::harness::event_log::SummaryPayload {
+                    v: 1,
+                    summary_message_id: summary_row_id,
+                    content: format!("{SUMMARY_PREFIX}\n{s_new}"),
+                    covered_until_rowid: new_covered_rowid,
+                };
+                if created {
+                    crate::harness::event_log::log_summary_created(&ctx.pool, &ev, &payload).await;
+                } else {
+                    crate::harness::event_log::log_summary_updated(&ctx.pool, &ev, &payload).await;
                 }
             }
         }
