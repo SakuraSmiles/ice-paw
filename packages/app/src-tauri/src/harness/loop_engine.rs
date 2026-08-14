@@ -232,6 +232,10 @@ async fn stream_loop_inner(
     // 更新为下一轮的 assistant 占位 id。所有错误 / cancel / 成功路径都必须用它，
     // 绝不能用 ctx.asst_msg_id（那是首条，多轮工具下会标到错误的轮）。
     let mut current_asst_msg_id = ctx.asst_msg_id.clone();
+    // `current_asst_finalized`：当前 assistant 占位是否已在本轮内 finalize（落库+事件）。
+    // loop 顶 cancel 检测到未 finalize 的占位时补发 message_discarded——否则该行
+    // 「存在但零事件」，对账会记为差异（session-event-log Phase 1 步骤 0 接线补漏）。
+    let mut current_asst_finalized = false;
     // `progress_text`：跨轮累积文本，仅供停滞检测使用，**不持久化**。
     // （每轮真实文本由 finalize_assistant_message 即时落盘到对应 assistant 消息。）
     let mut progress_text = String::new();
@@ -269,6 +273,19 @@ async fn stream_loop_inner(
     // 复用同一 assistant 消息无缝拼接长输出（模式 C 治本）。
     'tool_round: for tool_round in 0..ctx.budget.max_tool_rounds {
         if ctx.cancel.is_cancelled() {
+            // 残留占位补事件：此处占位行必然是「新鲜空行」（chat_cmd 首占位，或上一轮
+            // 阶段 H 建的下一轮占位，本轮尚未流式输出）。续写轮复用同 id 且阶段 C 已发过
+            // assistant_message，finalized 标记避免对同一行重复 discard。行本身不删
+            //（与 guard 的 Delete 语义不同——这里不介入 legacy 持久化行为）。
+            if !current_asst_finalized {
+                event_log::log_message_discarded(
+                    &ctx.pool,
+                    &ev,
+                    &current_asst_msg_id,
+                    "cancel_top_placeholder",
+                )
+                .await;
+            }
             return finalize_cancel(&ctx.app, &ctx.pool, &ev, &current_asst_msg_id, tool_round)
                 .await;
         }
@@ -615,6 +632,8 @@ async fn stream_loop_inner(
             },
         )
         .await;
+        // 阶段 C 已对当前占位落库+发事件 → loop 顶 cancel 不再补 discard（见标记定义处）
+        current_asst_finalized = true;
 
         // 最终轮（本轮无工具调用）→ 当前 assistant 已 finalize。
         // round_blocks 此时无 ToolUse，落盘安全。
@@ -929,6 +948,8 @@ async fn stream_loop_inner(
             );
         }
         current_asst_msg_id = next_asst_id;
+        // 新占位未 finalize——loop 顶若命中 cancel 需补 message_discarded
+        current_asst_finalized = false;
     }
 
     // 兜底：逻辑上不可达（最后一轮必在阶段 H 的 tool_use 分支 return），
