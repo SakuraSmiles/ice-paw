@@ -18,6 +18,7 @@ import type {
   NewMcpServer,
   NewProject,
   Project,
+  SessionEvent,
   UpdateProject,
   UserPreferences,
 } from "../types";
@@ -284,5 +285,20 @@ const logs = {
   },
 };
 
-export const bridge = { agents, conversations, projects, messages, chat, preferences, mcp, kb, logs };
+const trajectory = {
+  /** 读取会话完整事件流（seq 正序，payload 已 parse）；供「轨迹回放」视图消费 */
+  async listEvents(conversationId: string, limit?: number, beforeSeq?: number): Promise<SessionEvent[]> {
+    try {
+      return await invoke<SessionEvent[]>("list_session_events", { conversationId, limit: limit ?? null, beforeSeq: beforeSeq ?? null });
+    } catch (err) { throw wrapInvokeError("trajectory.listEvents", err); }
+  },
+  /** 导出会话轨迹为 JSONL 到下载目录；返回写入的文件绝对路径 */
+  async exportJsonl(conversationId: string): Promise<string> {
+    try {
+      return await invoke<string>("export_session_trajectory", { conversationId });
+    } catch (err) { throw wrapInvokeError("trajectory.exportJsonl", err); }
+  },
+};
+
+export const bridge = { agents, conversations, projects, messages, chat, preferences, mcp, kb, logs, trajectory };
 export default bridge;

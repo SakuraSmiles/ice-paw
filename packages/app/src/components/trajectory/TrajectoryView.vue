@@ -1,0 +1,373 @@
+<!--
+  TrajectoryView — 轨迹回放主视图（会话「轨迹」标签页内容）
+
+  dsh inspection-ledger 架构（Chrome DevTools 风）：
+    [Toolbar 40px] 搜索 / 展开收起合一 / 辅助事件开关 / 导出 JSONL
+    [Timeline 72px] canvas 瀑布图（点击联动表格行）
+    [Table 虚拟行] 紧凑事件表 + [Inspector] 按需展现的局部检查器（选中行才渲染）
+
+  数据：useTrajectory 尾部优先分页（最新 1000 条，「加载更早」向前翻）；
+  行模型 buildRows 纯函数派生（折叠/搜索/辅助开关是视图状态）。
+-->
+<script setup lang="ts">
+import { computed, nextTick, ref, watch, onMounted } from "vue";
+import { buildRows, useTrajectory, type TrajectoryRow } from "../../composables/useTrajectory";
+import { bridge } from "../../api/bridge";
+import TrajectoryToolbar from "./TrajectoryToolbar.vue";
+import TrajectoryTimeline from "./TrajectoryTimeline.vue";
+import TrajectoryTable from "./TrajectoryTable.vue";
+import TrajectoryInspector from "./TrajectoryInspector.vue";
+
+const props = defineProps<{ conversationId: string }>();
+const { events, loading, loadingEarlier, error, legacy, hasMore, load, loadEarlier } = useTrajectory();
+
+// ---- 视图状态（行模型的派生输入） ----
+const query = ref("");
+const showAux = ref(false);
+/** 时间轴投影：序号等宽（默认）/ 真实耗时 + 空闲压缩（dsh Duration 开关，同款持久化约定） */
+const DURATION_KEY = "icepaw-traj-duration";
+const durationMode = ref(localStorage.getItem(DURATION_KEY) === "1");
+watch(durationMode, (v) => localStorage.setItem(DURATION_KEY, v ? "1" : "0"));
+/** 折叠的 turn 集合（替换式更新保响应） */
+const collapsedTurns = ref<Set<string>>(new Set());
+const selectedRow = ref<TrajectoryRow | null>(null);
+
+const searching = computed(() => query.value.trim() !== "");
+const rows = computed(() =>
+  buildRows(events.value, { collapsedTurns: collapsedTurns.value, showAux: showAux.value, query: query.value }),
+);
+/** 搜索态下是否至少命中一行（全未命中时表格上方浮提示） */
+const anyMatch = computed(() => rows.value.some((r) => r.type === "event" && r.match));
+
+const turnKeys = computed(() => {
+  const keys = new Set<string>();
+  for (const ev of events.value) keys.add(ev.turn_id ?? "__orphan__");
+  return keys;
+});
+
+function toggleTurn(turnKey: string) {
+  const next = new Set(collapsedTurns.value);
+  if (next.has(turnKey)) next.delete(turnKey);
+  else next.add(turnKey);
+  collapsedTurns.value = next;
+}
+
+function expandAll() {
+  collapsedTurns.value = new Set();
+}
+
+function collapseAll() {
+  collapsedTurns.value = new Set(turnKeys.value);
+}
+
+/** 展开/收起合一：有任一折叠 → 展开全部；全展开 → 收起全部 */
+const anyCollapsed = computed(() => collapsedTurns.value.size > 0);
+function toggleTurns() {
+  if (anyCollapsed.value) expandAll();
+  else collapseAll();
+}
+
+// ---- 选中（再点同一行 = 取消选中收起检查器） ----
+function selectRow(row: TrajectoryRow) {
+  selectedRow.value = selectedRow.value === row ? null : row;
+}
+
+// ---- 检查器宽度：拖拽调整 + localStorage 记住（icepaw-* 同 useTheme 约定） ----
+const INSP_DEFAULT = 420;
+const INSP_MIN = 300;
+const INSP_MAX = 720;
+const WIDTH_KEY = "icepaw-traj-insp-width";
+
+const inspWidth = ref(INSP_DEFAULT);
+const savedInspW = Number.parseInt(localStorage.getItem(WIDTH_KEY) ?? "", 10);
+if (Number.isFinite(savedInspW)) inspWidth.value = Math.min(INSP_MAX, Math.max(INSP_MIN, savedInspW));
+
+function onResizeStart(e: MouseEvent) {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  const startX = e.clientX;
+  const startW = inspWidth.value;
+  document.body.style.cursor = "col-resize";
+  document.body.style.userSelect = "none";
+  const onMove = (mv: MouseEvent) => {
+    inspWidth.value = Math.min(INSP_MAX, Math.max(INSP_MIN, startW + (startX - mv.clientX)));
+  };
+  const onUp = () => {
+    window.removeEventListener("mousemove", onMove);
+    window.removeEventListener("mouseup", onUp);
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+    localStorage.setItem(WIDTH_KEY, String(inspWidth.value));
+  };
+  window.addEventListener("mousemove", onMove);
+  window.addEventListener("mouseup", onUp);
+}
+
+function resetInspWidth() {
+  inspWidth.value = INSP_DEFAULT;
+  localStorage.removeItem(WIDTH_KEY);
+}
+
+// ---- 表格 ↔ 时间轴联动 ----
+const tableRef = ref<InstanceType<typeof TrajectoryTable> | null>(null);
+const toolbarRef = ref<InstanceType<typeof TrajectoryToolbar> | null>(null);
+const selectedSeq = computed(() => (selectedRow.value?.type === "event" ? selectedRow.value.seq : null));
+/** 选中的是 turn 头时，表格侧高亮该折叠条（轮次级检查器打开中） */
+const selectedTurnKey = computed(() => (selectedRow.value?.type === "turn-header" ? selectedRow.value.turnKey : null));
+
+function pickFromTimeline(seq: number) {
+  const row = rows.value.find((r) => r.seq === seq);
+  if (row) selectedRow.value = row;
+  tableRef.value?.scrollToSeq(seq);
+}
+
+// ---- 键盘导航（DevTools 习惯）：↑/↓ 移动选中（含轮次头，可开轮次检查器）·
+//      Enter = 打开详情（turn 头选中时）· 空格 = 折叠所选行所在轮 · Esc 关检查器 ·
+//      / 聚焦搜索 · 搜索框 Enter/Shift+Enter 命中行间循环跳转 ----
+/** ↑/↓ 在全部行（turn 头 + 事件）上移动选中——轮次头也可被选中开检查器 */
+function moveSelection(dir: 1 | -1) {
+  if (!rows.value.length) return;
+  const curIdx = rows.value.findIndex((r) => r === selectedRow.value);
+  const idx = curIdx < 0 ? (dir === 1 ? 0 : rows.value.length - 1) : Math.min(rows.value.length - 1, Math.max(0, curIdx + dir));
+  selectedRow.value = rows.value[idx];
+  void nextTick(() => {
+    const r = rows.value[idx];
+    if (r.type === "event") tableRef.value?.scrollToSeq(r.seq);
+    else tableRef.value?.scrollToTurn(r.turnKey);
+  });
+}
+
+function onKeydown(e: KeyboardEvent) {
+  const t = e.target as HTMLElement | null;
+  const editing = !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+  if (e.key === "Escape") {
+    if (!editing) selectedRow.value = null;
+    return;
+  }
+  if (editing || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    moveSelection(e.key === "ArrowDown" ? 1 : -1);
+  } else if (e.key === "/") {
+    e.preventDefault();
+    toolbarRef.value?.focusSearch();
+  } else if (e.key === "Enter" && selectedRow.value) {
+    e.preventDefault();
+    // turn 头选中时 Enter = 打开详情（内容即检查器）；事件行已选中，无额外动作
+  } else if (e.key === " " && selectedRow.value) {
+    e.preventDefault();
+    toggleTurn(selectedRow.value.turnKey);
+  }
+}
+
+// ---- 搜索跳转：Enter/Shift+Enter 在命中行间循环（以选中行为锚，无选中从头开始） ----
+function searchJump(dir: 1 | -1) {
+  const hits = rows.value.filter((r): r is Extract<TrajectoryRow, { type: "event" }> => r.type === "event" && r.match);
+  if (!hits.length) return;
+  const curSeq = selectedSeq.value;
+  const cur = curSeq == null ? -1 : hits.findIndex((r) => r.seq === curSeq);
+  let idx: number;
+  if (cur < 0) idx = dir === 1 ? 0 : hits.length - 1;
+  else if (cur + dir >= hits.length) idx = 0; // 循环
+  else if (cur + dir < 0) idx = hits.length - 1;
+  else idx = cur + dir;
+  selectedRow.value = hits[idx];
+  void nextTick(() => tableRef.value?.scrollToSeq(hits[idx].seq));
+}
+
+// ---- 导出 JSONL ----
+const exporting = ref(false);
+const exportMsg = ref<string | null>(null);
+let exportTimer: ReturnType<typeof setTimeout> | null = null;
+
+async function exportJsonl() {
+  exporting.value = true;
+  exportMsg.value = null;
+  try {
+    const path = await bridge.trajectory.exportJsonl(props.conversationId);
+    exportMsg.value = `已导出：${path}`;
+  } catch (e) {
+    exportMsg.value = `导出失败：${e instanceof Error ? e.message : String(e)}`;
+  } finally {
+    exporting.value = false;
+    if (exportTimer) clearTimeout(exportTimer);
+    exportTimer = setTimeout(() => { exportMsg.value = null; }, 6000);
+  }
+}
+
+// ---- 加载（v-show 保持挂载，靠 watch conversationId 驱动刷新） ----
+function resetViewState() {
+  query.value = "";
+  showAux.value = false;
+  collapsedTurns.value = new Set();
+  selectedRow.value = null;
+}
+
+/** 首次载入滚到底部：尾部优先分页下，底部 = 会话最新状态 */
+async function loadAndScroll(id: string) {
+  await load(id);
+  await nextTick();
+  tableRef.value?.scrollToBottom();
+}
+
+/** 「加载更早」前置行：先打锚，rows 更新后表格按高度差补偿 scrollTop（视口不跳） */
+function loadEarlierStable() {
+  tableRef.value?.beginPrepend();
+  void loadEarlier();
+}
+
+onMounted(() => void loadAndScroll(props.conversationId));
+watch(() => props.conversationId, (id) => {
+  resetViewState();
+  void loadAndScroll(id);
+});
+</script>
+
+<template>
+  <div class="trajectory-view" tabindex="-1" @keydown="onKeydown">
+    <TrajectoryToolbar
+      ref="toolbarRef"
+      v-model:query="query"
+      v-model:show-aux="showAux"
+      v-model:duration-mode="durationMode"
+      :any-collapsed="anyCollapsed"
+      :exporting="exporting"
+      @toggle-turns="toggleTurns"
+      @search-jump="searchJump"
+      @export="exportJsonl"
+    />
+    <TrajectoryTimeline
+      :events="events"
+      :selected-seq="selectedSeq"
+      :mode="durationMode ? 'duration' : 'sequence'"
+      :has-earlier="hasMore"
+      :loading-earlier="loadingEarlier"
+      @pick="pickFromTimeline"
+      @load-earlier="loadEarlierStable"
+    />
+
+    <div class="traj-main">
+      <div class="traj-table-wrap">
+        <div v-if="loading" class="traj-empty">加载中…</div>
+        <div v-else-if="error" class="traj-empty traj-error">加载失败：{{ error }}</div>
+        <div v-else-if="legacy" class="traj-empty">此会话无事件日志（早于事件纪元），无法回放轨迹。</div>
+        <div v-else-if="rows.length === 0" class="traj-empty">暂无事件。</div>
+        <template v-else>
+          <Transition name="overlay">
+            <div v-if="searching && !anyMatch" class="traj-nohit">无命中事件</div>
+          </Transition>
+          <TrajectoryTable
+            ref="tableRef"
+            :rows="rows"
+            :selected-seq="selectedSeq"
+            :selected-turn-key="selectedTurnKey"
+            :searching="searching"
+            :has-more="hasMore"
+            :loading-earlier="loadingEarlier"
+            @select-row="selectRow"
+            @toggle-turn="toggleTurn"
+            @load-earlier="loadEarlierStable"
+          />
+        </template>
+      </div>
+      <!-- 检查器按需展现：选中行才渲染（无空态占位），✕/Esc/再点同一行 = 取消选中即收起 -->
+      <template v-if="selectedRow">
+        <div
+          class="traj-resizer"
+          title="拖拽调整宽度 · 双击重置"
+          @mousedown="onResizeStart"
+          @dblclick="resetInspWidth"
+        />
+        <TrajectoryInspector :row="selectedRow" :style="{ width: `${inspWidth}px` }" @close="selectedRow = null" />
+      </template>
+    </div>
+
+    <Transition name="overlay">
+      <div v-if="exportMsg" class="traj-toast">{{ exportMsg }}</div>
+    </Transition>
+  </div>
+</template>
+
+<style scoped>
+.trajectory-view {
+  position: relative;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--ip-color-bg-secondary);
+}
+
+.traj-main { flex: 1; display: flex; min-height: 0; }
+.traj-table-wrap { flex: 1; display: flex; position: relative; min-width: 0; min-height: 0; }
+.trajectory-view:focus { outline: none; }
+
+.traj-nohit {
+  position: absolute;
+  top: 44px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 6;
+  padding: 4px 16px;
+  font-size: var(--ip-text-caption-size);
+  color: var(--ip-color-text-secondary);
+  background: var(--ip-color-bg-elevated);
+  border: 1px solid var(--ip-color-border-default);
+  border-radius: var(--ip-radius-full);
+  box-shadow: var(--ip-shadow-sm);
+  pointer-events: none;
+}
+
+/* 检查器宽度拖拽手柄：中部短双实线抓手（⋮⋮），常驻可见，悬停/拖拽亮主题色 */
+.traj-resizer {
+  flex-shrink: 0;
+  width: 9px;
+  z-index: 5;
+  position: relative;
+  cursor: col-resize;
+}
+.traj-resizer::before,
+.traj-resizer::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 1.5px;
+  height: 16px;
+  border-radius: 1px;
+  background: var(--ip-color-border-default);
+  transition: background var(--ip-duration-fast) var(--ip-ease-out), height var(--ip-duration-fast) var(--ip-ease-out);
+}
+.traj-resizer::before { left: 2px; }
+.traj-resizer::after { right: 2px; }
+.traj-resizer:hover::before,
+.traj-resizer:hover::after,
+.traj-resizer:active::before,
+.traj-resizer:active::after {
+  background: var(--ip-primary-400);
+  height: 24px;
+}
+
+.traj-empty { flex: 1; display: flex; align-items: center; justify-content: center; font-size: var(--ip-text-body-sm-size); color: var(--ip-color-text-tertiary); }
+.traj-empty.traj-error { color: var(--ip-danger-base); }
+
+.traj-toast {
+  position: absolute;
+  top: 40px;
+  right: 16px;
+  z-index: 10;
+  padding: 8px 14px;
+  background: var(--ip-color-bg-elevated);
+  border: 1px solid var(--ip-color-border-default);
+  border-radius: var(--ip-radius-md);
+  box-shadow: var(--ip-shadow-md);
+  font-size: var(--ip-text-body-sm-size);
+  color: var(--ip-color-text-secondary);
+  max-width: 60vw;
+  word-break: break-all;
+}
+
+.overlay-enter-active { animation: traj-fade 0.2s ease-out; }
+.overlay-leave-active { animation: traj-fade 0.15s ease-in reverse; }
+@keyframes traj-fade { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+</style>
