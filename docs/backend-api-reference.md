@@ -176,6 +176,14 @@
 - **说明**：导出会话事件轨迹（session-event-log Phase 0 的最小只读出口）。每行一个事件对象（`session_events` 行，`payload` 内嵌为 JSON 对象），按 seq 正序 = 权威回放序。文件 `trajectory-{conversation_id}-{UTC时间戳}.jsonl` 写入下载目录（home 均缺失时回退 app 数据目录 `exports/`）。会话不存在返回 NotFound。
 - **前端使用状态**：⬜ 暂未接 UI（Phase 0 手验/调试出口，`invoke('export_session_trajectory', { conversationId })` 直调）
 
+### reconcile_session
+
+- **参数**：
+  - `conversation_id: String`
+- **返回**：`AppResult<ReconcileReport>` — `{ conversation_id, events_total, turns_total, turns_compared, legacy_rows_total, legacy_rows_compared, derived_messages_compared, diffs: [{category, turn_id?, message_id?, detail}], skipped: [{reason, count}] }`
+- **说明**：对账一个会话：`session_events` 回放（derive）vs `messages` 表行提取（legacy），只读无副作用（session-event-log Phase 1）。`diffs` 非空 = 未分类差异（bug 嫌疑待查）；`skipped` 为已文档化容忍（`pre_phase0_no_events` / `legacy_epoch_rows` / `incomplete_turn` / `error_row` / `discarded_row` / `empty_placeholder` / `summary_row` / `non_conversational_role` 等）。diff 类别：`MISSING_IN_DERIVED` / `MISSING_IN_LEGACY` / `CONTENT_MISMATCH` / `ORDER_MISMATCH` / `DERIVE_ISSUE`。会话不存在返回 NotFound。
+- **前端使用状态**：⬜ 暂未接 UI（Phase 1 手验/调试出口，`invoke('reconcile_session', { conversationId })` 直调）
+
 ---
 
 ## 模块四：Message（消息管理）
