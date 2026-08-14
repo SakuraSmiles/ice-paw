@@ -476,7 +476,10 @@ fn drop_empty_and_merge(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
 ///
 /// **注意**：assistant 消息的 `ToolUse` / `ToolResult` 块也需要通过此路径还原，
 /// 否则多轮工具调用对话的历史上下文会丢失工具调用记录。
-fn parse_content_blocks(json: &str) -> Vec<ContentBlock> {
+///
+/// pub(crate)：session-events 对账器（harness/reconcile.rs）用同一解析器
+/// 提取 legacy 行原始形态，保证两侧 blocks 解析语义一致。
+pub(crate) fn parse_content_blocks(json: &str) -> Vec<ContentBlock> {
     if json.is_empty() || json == "[]" {
         return Vec::new();
     }
