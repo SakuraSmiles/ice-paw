@@ -108,8 +108,8 @@ agent 调用 `propose_config_change` 工具提出创建/修改 agent 提案 → 
 - Phase 2 = derive 转唯一读路径 + 长期对账监控（`reconcile_real_db` ignored 测试为雏形）→ legacy 拼装退役
 
 ## 当前状态（2026-08-14）
-- 版本 **0.3.3**（已打包 NSIS 232M + MSI 245M，未发版）。**main @ 0baa06c，本地领先 origin/main 6 commits（session-event-log Phase 1 对账，push 待指示）**
+- 版本 **0.3.4 已打包**（NSIS 233M + MSI 247M = 0.3.3 + session-event-log Phase 0+1 影子日志，未发版）。**main @ b7a1ad1 已推平 origin/main（0 领先）**
 - 分支：仅 `main`
-- 近期递进：0.3.0 视觉读取 → 0.3.1 → 视觉能力统一适配 → 0.3.2 → 0.3.3 → **session-event-log Phase 0（6813429..b89a51a 已手验已 push）→ Phase 1 derive-on-read 对账（889e9a8..0baa06c，6 commits：cancel 补漏/derive/reconcile/命令/e2e/真机零 diff，未 push）**
+- 近期递进：0.3.3 → **session-event-log Phase 0（6813429..b89a51a 已手验已 push）→ Phase 1 derive-on-read 对账（889e9a8..0baa06c：cancel 补漏/derive/reconcile/命令/e2e/真机零 diff）→ 0.3.4 打包**
 - `cargo test --lib` 702 passed / 0 failed（+ 集成测试：session_reconcile_e2e 4、session_event_log_e2e 3、memory_e2e 3、message_repo 5、provider 11）；clippy --tests -D warnings 0 警告；pnpm test 51/51
-- 仍待办：0.3.3 生产手测（落库丢图回归/敏感图提示/100MB 文档）、视觉适配真机手测、KB watcher + 自动续写生产手测、proposal Phase 2（MCP 域）、session-event-log Phase 2（切唯一真相源，前置闸门 = 对账长期全绿）
+- 仍待办：**0.3.4 发版手测**（0.3.3 三重点：落库丢图回归/敏感图提示/100MB 文档 + 视觉适配/KB watcher/自动续写回归 + 事件日志影子写入抽查）、视觉适配真机手测、KB watcher + 自动续写生产手测、proposal Phase 2（MCP 域）、session-event-log Phase 2（切唯一真相源，前置闸门 = 对账长期全绿）
