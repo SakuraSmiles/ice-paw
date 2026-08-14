@@ -97,7 +97,7 @@ agent 调用 `propose_config_change` 工具提出创建/修改 agent 提案 → 
 - **4 入口接线**：① 用户上传+③ 历史 → `context/stages.rs::ModalCapabilityStage`（Pipeline，TokenWindow 后 Final 前）；② 工具返图 → `tool_executor` 注入 Image 前查 effective_vision（时序独立于 Stage——工具循环后续轮次的图进不了 Stage，必须在此守卫）；④ `view_attachment_image` 判断改 effective_supports_vision + 凭据收集复用 gather。
 - **⚠️ 不变式**：任何新增的 Image 块注入点都必须经 `effective_supports_vision` / `adapt_blocks_for_vision`，不得对非视觉模型直塞 Image。
 
-### 会话事件日志（session-event-log Phase 0 已手验 push；Phase 1 derive-on-read 对账已完成真机零 diff）
+### 会话事件日志（session-event-log Phase 0+1 已 push 真机零 diff；Phase 2A 读路径切换已落地）
 单一 append-only 事件日志基石（锁定愿景：统一 session / 多 agent 图协作 / 轨迹可还原）。
 - **表**：migration 44 `session_events`（seq INSERT 子查询原子 + UNIQUE 兜底；message_id 故意无 FK——事件须活得比被删占位行久）
 - **词表 13 kind** + typed emitters：`harness/event_log.rs`（EventCtx + warn-only 影子定位）
@@ -105,11 +105,12 @@ agent 调用 `propose_config_change` 工具提出创建/修改 agent 提案 → 
 - **supersede**：自动续写同 message_id 多条 assistant_message，回放 last-wins
 - **导出**：`export_session_trajectory` 命令 → JSONL（docs/backend-api-reference.md）
 - **Phase 1 对账（889e9a8..0baa06c，6 commits）**：`harness/derive.rs` 纯回放（supersede last-wins / 空回退对称 / 坏 payload 记 issue 不吞）+ `harness/reconcile.rs`（A 侧 legacy 行提取走 `list_all_by_rowid` rowid 全量序 + 同一 `parse_content_blocks`；B 侧事件回放；turn 锚点走查分组）。diff 五类 MISSING_IN_DERIVED/MISSING_IN_LEGACY/CONTENT_MISMATCH/ORDER_MISMATCH/DERIVE_ISSUE = bug 清单；skipped 全部已文档化容忍（pre_phase0/epoch/incomplete_turn/error_row/discarded_row/empty_placeholder）。`reconcile_session` 命令只读出口。**真机验证：9a2a1968（20 事件 9 行）diffs=[] 且 skipped=[]；eae6d983（36 行零事件）全落 pre_phase0_no_events**。⚠️ 不变式：turn_id == user_msg_id；对账平面 = 行级原始形态（不跑 sanitize/投影）
-- Phase 2 = derive 转唯一读路径 + 长期对账监控（`reconcile_real_db` ignored 测试为雏形）→ legacy 拼装退役
+- **Phase 2A 读路径切换（已落地，未 commit）**：事件日志从影子升格为**干净会话的主读路径**。`harness/read_route.rs` 按会话路由：有事件 + 对账零 diff + 纯事件纪元 → **Derive**（`load_history_from_events` 派生 `Vec<MessageRow>`，锚回真 rowid，走与 legacy 完全相同的下游 Pipeline）；其余（零事件旧会话 / 有 diff / 混合纪元 / 偏好强制）→ **Legacy**。chat_cmd:558 接线。**零风险**：派生输出与 legacy 同构同函数，reconcile 已证逐字节相等；legacy 永不删，diff 会话自动回退；摘要 `source_rowid` 取真 rowid 保连续性。**指纹缓存** `(max_seq, max_rowid)` 追踪新数据（每轮刷新）；原地篡改不被察觉但活跃会话下轮即刷新、休眠会话不被读——`reconcile_session` 命令始终新鲜。**回滚开关**：偏好 `session_read_path=legacy` 一键全 legacy。诊断 `get_read_route_status` 命令。**不变式**：派生 MessageRow 必须能过 `load_history_with_window` 产出与 legacy 完全相同的视图（含 source_rowid）。
+- Phase 2B/远期：legacy 拼装退役（需先有足够长的真机持续绿观察 + 给旧会话补事件 backfill）；summary `covered_until_rowid`→seq；Image base64 双份存储治理
 
 ## 当前状态（2026-08-14）
-- 版本 **0.3.4 已打包**（NSIS 233M + MSI 247M = 0.3.3 + session-event-log Phase 0+1 影子日志，未发版）。**main @ b7a1ad1 已推平 origin/main（0 领先）**
+- 版本 **0.3.4 已打包**（NSIS 233M + MSI 247M = 0.3.3 + session-event-log Phase 0+1 影子日志，未发版）。main 已推平 origin。**session-event-log Phase 2A 读路径切换已落地（未 commit/未打包）**——事件日志转新会话主读路径，零行为变化 + 可观测/可回滚
 - 分支：仅 `main`
-- 近期递进：0.3.3 → **session-event-log Phase 0（6813429..b89a51a 已手验已 push）→ Phase 1 derive-on-read 对账（889e9a8..0baa06c：cancel 补漏/derive/reconcile/命令/e2e/真机零 diff）→ 0.3.4 打包**
-- `cargo test --lib` 702 passed / 0 failed（+ 集成测试：session_reconcile_e2e 4、session_event_log_e2e 3、memory_e2e 3、message_repo 5、provider 11）；clippy --tests -D warnings 0 警告；pnpm test 51/51
-- 仍待办：**0.3.4 发版手测**（0.3.3 三重点：落库丢图回归/敏感图提示/100MB 文档 + 视觉适配/KB watcher/自动续写回归 + 事件日志影子写入抽查）、视觉适配真机手测、KB watcher + 自动续写生产手测、proposal Phase 2（MCP 域）、session-event-log Phase 2（切唯一真相源，前置闸门 = 对账长期全绿）
+- 近期递进：0.3.3 → **session-event-log Phase 0（已 push）→ Phase 1 derive-on-read 对账（真机零 diff，已 push）→ 0.3.4 打包 → Phase 2A 读路径切换（read_route 路由 + 派生加载 + 诊断命令，未 commit）**
+- `cargo test --lib` 712 passed / 0 failed（+ 集成测试：session_reconcile_e2e 6、session_event_log_e2e 3、memory_e2e 3、message_repo 5、provider 11）；clippy --tests -D warnings 0 警告；pnpm test 51/51
+- 仍待办：**Phase 2A 真机手测**（dev 下正常对话行为应零变化；设置-日志见 `[read_route] ... → derive (green)`；DevTools `get_read_route_status` 查路由）、0.3.4 发版手测（0.3.3 三重点 + 事件日志影子抽查）、视觉适配/KB watcher/自动续写生产手测、proposal Phase 2（MCP 域）、Phase 2B legacy 退役（前置 = 真机持续绿观察）

@@ -15,6 +15,10 @@ import { useChatStore }from "../../stores/chat";
 import { useAgentStore } from "../../stores/agent";
 import { bridge } from "../../api/bridge";
 
+// hasTabbar：标题下方有标签条（会话态）→ 去掉底边线，与标签条视觉连成一体
+//（ChatPage 传入；欢迎态无标签条，保留分割线区分标题与欢迎内容）
+defineProps<{ hasTabbar?: boolean }>();
+
 const chat = useChatStore();
 const agent = useAgentStore();
 
@@ -128,7 +132,7 @@ function viewInfo() {
 </script>
 
 <template>
-  <header class="chat-header">
+  <header class="chat-header" :class="{ 'has-tabbar': hasTabbar }">
     <div class="header-left">
       <div class="header-info">
         <input
@@ -222,6 +226,8 @@ function viewInfo() {
 
 <style scoped>
 .chat-header { display:flex; align-items:center; justify-content:space-between; padding:14px 24px; min-height:68px; border-bottom:1px solid var(--color-chat-header-border); background-color:var(--color-chat-header-bg); backdrop-filter:blur(8px); flex-shrink:0; position:relative; z-index:1; }
+/* 标签条在场（会话态）：去底边线，标题与标签条视觉一体（同底色无分割） */
+.chat-header.has-tabbar { border-bottom:none; }
 .header-left { display:flex; align-items:center; }
 .header-info { display:flex; flex-direction:column; gap:2px; }
 .header-title { font-size:var(--ip-text-body-size); font-weight:var(--ip-font-weight-semibold); color:var(--ip-color-text-primary); margin:0; line-height:1.4; cursor:default; }
