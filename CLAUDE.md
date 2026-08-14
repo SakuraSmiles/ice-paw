@@ -97,18 +97,19 @@ agent 调用 `propose_config_change` 工具提出创建/修改 agent 提案 → 
 - **4 入口接线**：① 用户上传+③ 历史 → `context/stages.rs::ModalCapabilityStage`（Pipeline，TokenWindow 后 Final 前）；② 工具返图 → `tool_executor` 注入 Image 前查 effective_vision（时序独立于 Stage——工具循环后续轮次的图进不了 Stage，必须在此守卫）；④ `view_attachment_image` 判断改 effective_supports_vision + 凭据收集复用 gather。
 - **⚠️ 不变式**：任何新增的 Image 块注入点都必须经 `effective_supports_vision` / `adapt_blocks_for_vision`，不得对非视觉模型直塞 Image。
 
-### 会话事件日志（session-event-log Phase 0，已 commit 6813429..9f81692 未 push 未手测）
+### 会话事件日志（session-event-log Phase 0 已手验 push；Phase 1 derive-on-read 对账已完成真机零 diff）
 单一 append-only 事件日志基石（锁定愿景：统一 session / 多 agent 图协作 / 轨迹可还原）。
 - **表**：migration 44 `session_events`（seq INSERT 子查询原子 + UNIQUE 兜底；message_id 故意无 FK——事件须活得比被删占位行久）
 - **词表 13 kind** + typed emitters：`harness/event_log.rs`（EventCtx + warn-only 影子定位）
 - **接线全退出路径**：chat_cmd/memory/loop_engine/cleanup(PersistOutcome)/retry_round/tool_executor/stages；**硬规则：事件 inline `.await` 禁 spawn，turn_ended 必须先于 cleanup() unregister 落库**
 - **supersede**：自动续写同 message_id 多条 assistant_message，回放 last-wins
 - **导出**：`export_session_trajectory` 命令 → JSONL（docs/backend-api-reference.md）
-- Phase 1 = derive-on-read 对账（差异即 bug 清单）→ Phase 2 = 切唯一真相源
+- **Phase 1 对账（889e9a8..0baa06c，6 commits）**：`harness/derive.rs` 纯回放（supersede last-wins / 空回退对称 / 坏 payload 记 issue 不吞）+ `harness/reconcile.rs`（A 侧 legacy 行提取走 `list_all_by_rowid` rowid 全量序 + 同一 `parse_content_blocks`；B 侧事件回放；turn 锚点走查分组）。diff 五类 MISSING_IN_DERIVED/MISSING_IN_LEGACY/CONTENT_MISMATCH/ORDER_MISMATCH/DERIVE_ISSUE = bug 清单；skipped 全部已文档化容忍（pre_phase0/epoch/incomplete_turn/error_row/discarded_row/empty_placeholder）。`reconcile_session` 命令只读出口。**真机验证：9a2a1968（20 事件 9 行）diffs=[] 且 skipped=[]；eae6d983（36 行零事件）全落 pre_phase0_no_events**。⚠️ 不变式：turn_id == user_msg_id；对账平面 = 行级原始形态（不跑 sanitize/投影）
+- Phase 2 = derive 转唯一读路径 + 长期对账监控（`reconcile_real_db` ignored 测试为雏形）→ legacy 拼装退役
 
 ## 当前状态（2026-08-14）
-- 版本 **0.3.3**（已打包 NSIS 232M + MSI 245M，未发版）。**main @ 9f81692，本地领先 origin/main 8 commits（session-event-log Phase 0，push 待指示）**
+- 版本 **0.3.3**（已打包 NSIS 232M + MSI 245M，未发版）。**main @ 0baa06c，本地领先 origin/main 6 commits（session-event-log Phase 1 对账，push 待指示）**
 - 分支：仅 `main`
-- 近期递进：0.3.0 视觉读取（Phase B 14 commits）→ 1e5868c（migration checksum 自愈热修）→ 0.3.1 → 视觉能力统一适配（bfcd2ce..c10d02e）→ 0字节附件软失败（bccf6d0）→ 0.3.2 → 0.3.3（落库丢图修复 + 文档上限100MB + 错误处理统一分类器）→ **session-event-log Phase 0（6813429..9f81692，8 commits：表/emitters/接线A-D/e2e/导出，未手测）**
-- `cargo test --lib` 684 passed / 0 failed（+ session_event_log_e2e 3 / memory_e2e 3 集成测试）；clippy --tests -D warnings 0 警告；pnpm test 51/51
-- 仍待办：0.3.3 生产手测（落库丢图回归/敏感图提示/100MB 文档）、视觉适配真机手测、KB watcher + 自动续写生产手测、proposal Phase 2（MCP 域）、session-event-log Phase 1（derive 对账）。~~Phase 0 手验~~ ✅ 2026-08-14 dev 真机通过（3 turn 20 事件全对 + 导出实调成功）
+- 近期递进：0.3.0 视觉读取 → 0.3.1 → 视觉能力统一适配 → 0.3.2 → 0.3.3 → **session-event-log Phase 0（6813429..b89a51a 已手验已 push）→ Phase 1 derive-on-read 对账（889e9a8..0baa06c，6 commits：cancel 补漏/derive/reconcile/命令/e2e/真机零 diff，未 push）**
+- `cargo test --lib` 702 passed / 0 failed（+ 集成测试：session_reconcile_e2e 4、session_event_log_e2e 3、memory_e2e 3、message_repo 5、provider 11）；clippy --tests -D warnings 0 警告；pnpm test 51/51
+- 仍待办：0.3.3 生产手测（落库丢图回归/敏感图提示/100MB 文档）、视觉适配真机手测、KB watcher + 自动续写生产手测、proposal Phase 2（MCP 域）、session-event-log Phase 2（切唯一真相源，前置闸门 = 对账长期全绿）
