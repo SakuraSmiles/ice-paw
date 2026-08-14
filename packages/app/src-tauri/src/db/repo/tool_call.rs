@@ -13,10 +13,10 @@ use crate::error::AppResult;
 
 /// arguments 列存储上限（字符数）。超长截断，避免大参数（如 write_file 的 content）
 /// 撑大审计表；完整参数仍在 messages 的 tool_use 块中。
-const MAX_ARGUMENTS_LEN: usize = 4_000;
+pub(crate) const MAX_ARGUMENTS_LEN: usize = 4_000;
 /// result 列存储上限（字符数）。超长截断；完整输出仍在 messages 的 tool_result 块中
 /// （shell 等工具已先截到 20000，审计再截到 4000 够看关键结果与成败）。
-const MAX_RESULT_LEN: usize = 4_000;
+pub(crate) const MAX_RESULT_LEN: usize = 4_000;
 
 /// 写入一条工具调用审计记录。
 ///
@@ -59,7 +59,8 @@ pub async fn create(
 }
 
 /// 按字符数安全截断（不切断 UTF-8），超长则追加标注。
-fn truncate(s: &str, max_chars: usize) -> String {
+/// `session_event` 的 tool_execution 事件共用本策略（事件镜像审计行内容）。
+pub(crate) fn truncate(s: &str, max_chars: usize) -> String {
     if s.chars().count() <= max_chars {
         return s.to_string();
     }

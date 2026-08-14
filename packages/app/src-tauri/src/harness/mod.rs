@@ -15,6 +15,7 @@ pub mod chat_state;
 pub mod cleanup;
 pub mod doc;
 pub mod error_mapping;
+pub mod event_log;
 pub mod hooks;
 pub mod kb;
 pub mod r#loop;
