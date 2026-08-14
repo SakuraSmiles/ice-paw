@@ -163,3 +163,22 @@ fn exports_dir(app: &tauri::AppHandle) -> AppResult<std::path::PathBuf> {
     })?;
     Ok(dir)
 }
+
+/// 对账一个会话：session_events 回放（derive）vs messages 表提取（legacy），
+/// 差异即 bug 清单（session-event-log Phase 1）。
+///
+/// 只读、无副作用——既不改事件也不改行。返回 [`ReconcileReport`]：
+/// `diffs` 为未分类差异（非空 = 有 bug 嫌疑待查），`skipped` 为已文档化的
+/// 已知容忍（epoch 前 legacy 行 / 不完整 turn / 错误行等，各有 reason）。
+///
+/// 手验路径：DevTools
+/// `await window.__TAURI_INTERNALS__.invoke('reconcile_session', { conversationId: '…' })`。
+#[tauri::command]
+pub async fn reconcile_session(
+    pool: State<'_, SqlitePool>,
+    conversation_id: String,
+) -> AppResult<crate::harness::reconcile::ReconcileReport> {
+    // 会话存在性校验：不存在 → NotFound，而非空报告造成「零差异」误导
+    repo::conversation::get_by_id(pool.inner(), &conversation_id).await?;
+    crate::harness::reconcile::reconcile_session(pool.inner(), &conversation_id).await
+}
