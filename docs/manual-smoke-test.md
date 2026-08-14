@@ -38,8 +38,13 @@
 
 ## 6. 会话轨迹导出（调试出口）
 - **防的 bug**：事件日志（session_events 影子写入）漏记了模型可见的事实。
-- **怎么测**：发一条**带工具调用**的消息（如「读一下某个文件」）；等回答完，在 DevTools 控制台跑
-  `await window.__TAURI__.core.invoke('export_session_trajectory', { conversationId: '...' })`（或临时加个按钮调 bridge），拿到 JSONL 路径后打开。
+- **怎么测**：发一条**带工具调用**的消息（如「读一下某个文件」）；等回答完，右键 →「检查」打开 DevTools，在控制台跑（`__TAURI_INTERNALS__` 始终注入，无需 withGlobalTauri）：
+  ```js
+  const inv = window.__TAURI_INTERNALS__.invoke;
+  const convs = await inv('list_all_conversations');   // convs[0] = 最近活跃会话
+  console.log(await inv('export_session_trajectory', { conversationId: convs[0].id }));
+  ```
+  拿到 JSONL 路径后打开。
 - ✅ 通过：文件里能看到完整序列：`turn_context → user_message → assistant_message → tool_execution → tool_result_message → assistant_message → turn_ended`，seq 连续无空洞；`turn_ended` 里有终止原因和轮数。
 - ❌ 失败：序列缺环（如只有 user_message 没有 turn_ended）/ seq 断号 / 文件没生成。
 - 附带：给非视觉 agent 发一张图再导出一次，应看到 `modal_adapted` 事件且含代读文字。
