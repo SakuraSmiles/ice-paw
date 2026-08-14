@@ -234,6 +234,103 @@ export interface AttachedFile {
   data: string;
 }
 
+// ============================================================================
+// session-events / 会话轨迹回放（与后端 harness::event_log 对齐）
+// list_session_events 命令返回；event 按 kind 判别，payload 类型随之窄化。
+// 详见 docs/backend-api-reference.md 与 harness/event_log.rs
+// ============================================================================
+
+/** 单条会话事件（list_session_events 返回元素；payload 已在服务端 parse） */
+export interface SessionEventBase {
+  id: number;
+  session_id: string;
+  seq: number; // seq 正序 = 权威回放序
+  actor: string; // "user" 或 "agent:<agent_id>"
+  turn_id: string | null;
+  message_id: string | null;
+  created_at: string;
+}
+export type SessionEvent =
+  | (SessionEventBase & { kind: "turn_context"; payload: TurnContextPayload })
+  | (SessionEventBase & { kind: "user_message"; payload: UserMessagePayload })
+  | (SessionEventBase & { kind: "assistant_message"; payload: AssistantMessagePayload })
+  | (SessionEventBase & { kind: "tool_execution"; payload: ToolExecutionPayload })
+  | (SessionEventBase & { kind: "tool_result_message"; payload: ToolResultMessagePayload })
+  | (SessionEventBase & { kind: "attachment_stored"; payload: AttachmentStoredPayload })
+  | (SessionEventBase & { kind: "summary_created"; payload: SummaryPayload })
+  | (SessionEventBase & { kind: "summary_updated"; payload: SummaryPayload })
+  | (SessionEventBase & { kind: "message_error"; payload: MessageErrorPayload })
+  | (SessionEventBase & { kind: "message_discarded"; payload: MessageDiscardedPayload })
+  | (SessionEventBase & { kind: "turn_ended"; payload: TurnEndedPayload })
+  | (SessionEventBase & { kind: "modal_adapted"; payload: ModalAdaptedPayload })
+  | (SessionEventBase & { kind: "hook_injected"; payload: HookInjectedPayload });
+
+export interface TurnContextPayload {
+  v?: number;
+  provider: string;
+  effective_model: string;
+  model_override?: string | null;
+  tools_enabled: boolean;
+  tool_names: string[];
+  temperature?: number | null;
+  max_tokens?: number | null;
+  tool_max_rounds?: number | null;
+  budget_max_tokens?: number | null;
+  context_window?: number | null;
+}
+export interface UserMessagePayload { v?: number; content: string; blocks: ContentBlock[]; }
+export interface AssistantMessagePayload {
+  v?: number;
+  model?: string | null;
+  content: string;
+  blocks: ContentBlock[];
+  token_count?: number | null;
+  duration_ms?: number | null; // 本轮生成耗时（毫秒；事件纪元早期无此字段）
+  round: number; // 0 起
+  continuation: boolean; // 自动续写
+}
+export interface ToolExecutionPayload {
+  v?: number;
+  tool_call_id: string;
+  tool_use_id?: string | null;
+  tool_name: string;
+  arguments: string; // JSON 字符串
+  result?: string | null;
+  is_error: boolean;
+  duration_ms: number;
+}
+export interface ToolResultMessagePayload { v?: number; blocks: ContentBlock[]; }
+export interface AttachmentPageItem { idx: number; name: string; kind: string; label: string; token_est: number; }
+export interface AttachmentBytesItem { idx: number; name: string; ext: string; bytes_len: number; }
+/** 后端 tag="kind" 判别枚举（rename snake_case） */
+export type AttachmentStoredPayload =
+  | { kind: "pages"; v?: number; items: AttachmentPageItem[] }
+  | { kind: "bytes"; v?: number; items: AttachmentBytesItem[] };
+export interface SummaryPayload {
+  v?: number;
+  summary_message_id: string;
+  content: string;
+  covered_until_rowid: number;
+}
+export interface MessageErrorPayload { v?: number; kind: string; error: string; }
+export interface MessageDiscardedPayload { v?: number; reason: string; }
+export interface TokenUsage { prompt_tokens: number; completion_tokens: number; cached_tokens: number; }
+export interface TurnEndedPayload {
+  v?: number;
+  termination: string; // stop|length|max_tokens|tool_use|budget_exceeded|stuck|abort|error
+  rounds: number;
+  usage?: TokenUsage | null;
+  user_token_count?: number | null;
+}
+export interface ModalAdaptedItem { index: number; outcome: string; ocr_text?: string | null; }
+export interface ModalAdaptedPayload {
+  v?: number;
+  stage: string; // user_image|tool_image|history
+  mode: string; // vision_passthrough|ocr_substitute|strip_to_marker
+  items: ModalAdaptedItem[];
+}
+export interface HookInjectedPayload { v?: number; point: string; prompt: string; } // point: conversation_start|before_llm
+
 export interface ChatToolCallStartPayload {
   conversation_id: string; message_id: string; id: string; name: string;
 }

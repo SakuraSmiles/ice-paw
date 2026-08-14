@@ -67,6 +67,33 @@ pub async fn list_by_session(
     Ok(rows)
 }
 
+/// 尾部优先分页读取（Trajectory 回放的大会话数据层）。
+///
+/// 取 seq 严格小于 `before_seq`（`None` = 从最新开始）的最大 `limit` 条，
+/// 返回前反转为 seq 正序——与 [`list_by_session`] 输出同构，可直接拼接分组。
+/// 「加载更早」= 用当前已加载的最小 seq 作为下一页 `before_seq`。
+pub async fn list_tail(
+    pool: &SqlitePool,
+    session_id: &str,
+    before_seq: Option<i64>,
+    limit: i64,
+) -> AppResult<Vec<SessionEventRow>> {
+    let mut rows = sqlx::query_as::<_, SessionEventRow>(
+        "SELECT id, session_id, seq, kind, actor, turn_id, message_id, payload, created_at
+           FROM session_events
+          WHERE session_id = ? AND seq < COALESCE(?, 9223372036854775807)
+          ORDER BY seq DESC
+          LIMIT ?",
+    )
+    .bind(session_id)
+    .bind(before_seq)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    rows.reverse();
+    Ok(rows)
+}
+
 /// 取一个会话的当前最大 seq（无事件时为 0）。
 pub async fn max_seq(pool: &SqlitePool, session_id: &str) -> AppResult<i64> {
     let (max,): (i64,) = sqlx::query_as(
@@ -225,6 +252,46 @@ mod tests {
         let seqs: std::collections::HashSet<i64> = rows.iter().map(|r| r.seq).collect();
         assert_eq!(seqs.len(), 20, "seq 无重复");
         assert_eq!(max_seq(&pool, "conv-1").await.unwrap(), 20, "seq 连续覆盖 1..=20");
+    }
+
+    #[tokio::test]
+    async fn list_tail_pages_from_newest_backward() {
+        let pool = fresh_pool().await;
+        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        seed_agent(&pool).await;
+        seed_conversation(&pool, "conv-1").await;
+
+        for i in 0..10 {
+            append(&pool, "conv-1", "user_message", "user", Some("t"), Some(&format!("m{i}")), "{}")
+                .await
+                .unwrap();
+        }
+
+        // 首页：从最新往回取 4 条，返回须已反转为正序
+        let p1 = list_tail(&pool, "conv-1", None, 4).await.unwrap();
+        assert_eq!(seqs(&p1), vec![7, 8, 9, 10], "首页取最尾 4 条且正序");
+
+        // 「加载更早」：before = 当前最小 seq (7)，取上一页
+        let p2 = list_tail(&pool, "conv-1", Some(7), 4).await.unwrap();
+        assert_eq!(seqs(&p2), vec![3, 4, 5, 6], "第二页边界严格小于 before_seq");
+
+        // 头部剩余不足一页：只返回剩下的
+        let p3 = list_tail(&pool, "conv-1", Some(3), 4).await.unwrap();
+        assert_eq!(seqs(&p3), vec![1, 2], "不足一页返回剩余全部");
+
+        // 再往前取空 → 调用方据此判定 hasMore=false
+        let p4 = list_tail(&pool, "conv-1", Some(1), 4).await.unwrap();
+        assert!(p4.is_empty(), "取穿后返回空");
+
+        // 跨会话隔离
+        seed_conversation(&pool, "conv-2").await;
+        append(&pool, "conv-2", "user_message", "user", None, None, "{}").await.unwrap();
+        let cross = list_tail(&pool, "conv-2", None, 4).await.unwrap();
+        assert_eq!(seqs(&cross), vec![1], "分页不串会话");
+    }
+
+    fn seqs(rows: &[SessionEventRow]) -> Vec<i64> {
+        rows.iter().map(|r| r.seq).collect()
     }
 
     #[tokio::test]
