@@ -24,7 +24,10 @@ use serde::{Deserialize, Serialize};
 ///
 /// 采用 `#[serde(tag = "type")]` 实现多态 JSON 序列化，
 /// 与 OpenAI / Anthropic 的 content block 格式自然对齐。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// `PartialEq`：session-events 对账（harness/reconcile.rs）需要逐块比较
+/// legacy 行与事件回放两侧；全字段为 String/usize/Option<bool>，值语义安全。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentBlock {
     /// 文本块
