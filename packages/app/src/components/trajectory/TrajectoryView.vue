@@ -10,16 +10,18 @@
   行模型 buildRows 纯函数派生（折叠/搜索/辅助开关是视图状态）。
 -->
 <script setup lang="ts">
-import { computed, nextTick, ref, watch, onMounted } from "vue";
+import { computed, nextTick, ref, watch, onMounted, onBeforeUnmount } from "vue";
 import { buildRows, useTrajectory, type TrajectoryRow } from "../../composables/useTrajectory";
 import { bridge } from "../../api/bridge";
+import { useChatStore } from "../../stores/chat";
 import TrajectoryToolbar from "./TrajectoryToolbar.vue";
 import TrajectoryTimeline from "./TrajectoryTimeline.vue";
 import TrajectoryTable from "./TrajectoryTable.vue";
 import TrajectoryInspector from "./TrajectoryInspector.vue";
 
 const props = defineProps<{ conversationId: string }>();
-const { events, loading, loadingEarlier, error, legacy, hasMore, load, loadEarlier } = useTrajectory();
+const chat = useChatStore();
+const { events, loading, loadingEarlier, error, legacy, hasMore, load, loadEarlier, refreshLatest } = useTrajectory();
 
 // ---- 视图状态（行模型的派生输入） ----
 const query = ref("");
@@ -221,6 +223,54 @@ watch(() => props.conversationId, (id) => {
   resetViewState();
   void loadAndScroll(id);
 });
+
+// ---- live 追加（v1 轮询）：chat.sending 期间 1.5s 拉增量 ----
+// 跟随纪律：新事件到达时仅在贴底状态才自动滚下——用户正翻阅历史时不打扰。
+// ChatPage 已把「轨迹页发送 → 自动切回对话页」，所以本视图轮询多发生在后台；
+// 用户停在对话页时事件照常累积，切回轨迹页即见最新（无需本页可见）。
+const POLL_MS = 1500;
+let pollTimer: ReturnType<typeof setTimeout> | null = null;
+let polling = false;
+
+const timelineRef = ref<InstanceType<typeof TrajectoryTimeline> | null>(null);
+
+async function pollOnce() {
+  const n = await refreshLatest();
+  if (n > 0) {
+    timelineRef.value?.preserveViewport();
+    if (tableRef.value?.isNearBottom()) {
+      await nextTick();
+      tableRef.value?.smoothScrollToBottom();
+    }
+  }
+}
+
+async function startPolling() {
+  if (polling) return;
+  polling = true;
+  try {
+    await pollOnce();
+  } finally {
+    polling = false;
+  }
+  pollTimer = setTimeout(startPolling, POLL_MS);
+}
+
+function stopPolling() {
+  if (pollTimer) clearTimeout(pollTimer);
+  pollTimer = null;
+}
+
+/** sending 结束后再补一轮（终态事件 turn_ended 与最后一条 assistant 落库时序贴近） */
+watch(() => chat.sending, (sending) => {
+  if (sending) {
+    startPolling();
+  } else {
+    stopPolling();
+    void pollOnce();
+  }
+});
+onBeforeUnmount(stopPolling);
 </script>
 
 <template>
@@ -237,6 +287,7 @@ watch(() => props.conversationId, (id) => {
       @export="exportJsonl"
     />
     <TrajectoryTimeline
+      ref="timelineRef"
       :events="events"
       :selected-seq="selectedSeq"
       :mode="durationMode ? 'duration' : 'sequence'"

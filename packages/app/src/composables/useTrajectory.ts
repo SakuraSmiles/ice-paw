@@ -388,6 +388,29 @@ export function useTrajectory() {
     }
   }
 
+  /**
+   * live 追加：拉取 seq > 已载最大 seq 的增量并原地拼接。
+   * 返回新事件数（0 = 已追平）。调用方按需滚底（跟随纪律：仅在底部时跟随）。
+   * append-only 保证新事件恒在尾部——supersede 的 assistant_message 会以新 seq
+   * 重复出现，由 buildRows 的 lastIndexOf 归并，无需在此去重。
+   */
+  async function refreshLatest(): Promise<number> {
+    const id = currentId;
+    if (!id || loading.value) return 0;
+    const maxSeq = events.value.length ? events.value[events.value.length - 1].seq : 0;
+    try {
+      const inc = await bridge.trajectory.listEvents(id, TRAJECTORY_PAGE_SIZE, undefined, maxSeq);
+      if (currentId !== id) return 0; // 切换会话竞态守卫
+      if (inc.length) {
+        events.value = [...events.value, ...inc];
+        legacy.value = false;
+      }
+      return inc.length;
+    } catch {
+      return 0; // 轮询失败静默：下一轮再试（与影子日志同款宽容）
+    }
+  }
+
   /** 「加载更早」：以当前已载最小 seq 为游标向前翻一页 */
   async function loadEarlier() {
     if (!currentId || minSeq == null || loadingEarlier.value || !hasMore.value) return;
@@ -406,5 +429,5 @@ export function useTrajectory() {
     }
   }
 
-  return { events, loading, loadingEarlier, error, legacy, hasMore, load, loadEarlier };
+  return { events, loading, loadingEarlier, error, legacy, hasMore, load, loadEarlier, refreshLatest };
 }

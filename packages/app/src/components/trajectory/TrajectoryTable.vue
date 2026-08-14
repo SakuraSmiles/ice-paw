@@ -106,6 +106,18 @@ function scrollToBottom() {
   if (scroller.value) scroller.value.scrollTop = layout.value.total;
 }
 
+/** 是否贴近底部（live 追加的跟随判据：在底才自动滚下，翻阅历史时不打扰） */
+function isNearBottom(threshold = 40): boolean {
+  if (!scroller.value) return true;
+  const el = scroller.value;
+  return el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+}
+
+/** 平滑滚到底（live 追加跟随用；首载仍用 scrollToBottom 瞬跳） */
+function smoothScrollToBottom() {
+  if (scroller.value) scroller.value.scrollTo({ top: layout.value.total, behavior: "smooth" });
+}
+
 // 「加载更早」前置行后保持视口稳定：prepend 前打标记，rows 变化后按高度差补偿 scrollTop
 let pinPrepend = false;
 function beginPrepend() {
@@ -128,7 +140,7 @@ watch(
     if (dh > 0) scroller.value.scrollTop += dh;
   },
 );
-defineExpose({ scrollToSeq, scrollToTurn, scrollToBottom, beginPrepend });
+defineExpose({ scrollToSeq, scrollToTurn, scrollToBottom, smoothScrollToBottom, isNearBottom, beginPrepend });
 
 // 终止原因文案：镜像 ChatMessages finishReasonLabels + stop/error 补全（TODO 统一到 utils）
 const TERM_LABELS: Record<string, string> = {
