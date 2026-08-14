@@ -338,6 +338,20 @@ async fn stream_loop_inner(
         } else {
             None
         };
+        // session-events：钩子注入是模型可见事实（「Model-visible means logged」），
+        // 每轮一条（BeforeLlm 本就每轮注入一次，事件密度与之对齐）。
+        if let Some(inj) = &round_injected {
+            event_log::log_hook_injected(
+                &ctx.pool,
+                &ev,
+                &event_log::HookInjectedPayload {
+                    v: 1,
+                    point: "before_llm".into(),
+                    prompt: inj.clone(),
+                },
+            )
+            .await;
+        }
 
         // === RetryState 驱动的重试循环（已抽到 stream_with_retry）===
         match stream_with_retry(

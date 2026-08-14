@@ -368,14 +368,50 @@ impl PipelineStage for ModalCapabilityStage {
                 agent_model = %ctx.agent.model,
                 "非视觉 agent 当前消息图片已适配（代读/剥离）"
             );
+            // session-events：投影期模型可见内容变更入日志（「Model-visible means
+            // logged」——OCR 代读文本是模型真实消费的内容）。turn_id 缺省（散落
+            // 测试构造）时跳过，与 memory.rs summary 事件同一约定。
+            if let Some(turn_id) = ctx.turn_id.clone() {
+                let ev = crate::harness::event_log::EventCtx::new(
+                    &ctx.conversation_id,
+                    &turn_id,
+                    &ctx.agent.id,
+                );
+                crate::harness::event_log::log_modal_adapted(
+                    &ctx.pool,
+                    &ev,
+                    &crate::harness::event_log::ModalAdaptedPayload {
+                        v: 1,
+                        stage: "user_image".into(),
+                        mode: if outcome.ocr_replaced > 0 {
+                            "ocr_substitute".into()
+                        } else {
+                            "strip_with_hint".into()
+                        },
+                        items: outcome.items.clone(),
+                    },
+                )
+                .await;
+            }
             ctx.final_blocks = outcome.blocks;
         }
 
         // 门③ 历史：每条消息的图片剥成 marker（避免每轮重复 OCR；诚实告知曾含图）。
         let mut history_touched = 0u32;
+        // 事件明细：index 取历史图片的全局序号（跨消息单调；单消息内下标会撞号歧义）。
+        let mut history_items: Vec<crate::harness::event_log::ModalAdaptedItem> = Vec::new();
         for msg in &mut ctx.history_messages {
             if msg.content.iter().any(|b| b.is_image()) {
                 let original = std::mem::take(&mut msg.content);
+                for b in original.iter() {
+                    if b.is_image() {
+                        history_items.push(crate::harness::event_log::ModalAdaptedItem {
+                            index: history_items.len(),
+                            outcome: "dropped".into(),
+                            ocr_text: None,
+                        });
+                    }
+                }
                 msg.content = crate::harness::modal::strip_image_blocks_to_marker(&original);
                 history_touched += 1;
             }
@@ -387,6 +423,24 @@ impl PipelineStage for ModalCapabilityStage {
                 agent_model = %ctx.agent.model,
                 "非视觉 agent 历史消息图片已剥为 marker"
             );
+            if let Some(turn_id) = ctx.turn_id.clone() {
+                let ev = crate::harness::event_log::EventCtx::new(
+                    &ctx.conversation_id,
+                    &turn_id,
+                    &ctx.agent.id,
+                );
+                crate::harness::event_log::log_modal_adapted(
+                    &ctx.pool,
+                    &ev,
+                    &crate::harness::event_log::ModalAdaptedPayload {
+                        v: 1,
+                        stage: "history".into(),
+                        mode: "strip_to_marker".into(),
+                        items: history_items,
+                    },
+                )
+                .await;
+            }
         }
         Ok(())
     }

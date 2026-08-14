@@ -43,6 +43,9 @@ pub struct AdaptOutcome {
     pub ocr_replaced: usize,
     /// 因无凭据 / 全部凭据失败而被剥离的图片数（诚实提示用）。
     pub dropped: usize,
+    /// 逐图明细（session-events `modal_adapted` 用）：原始 blocks 下标 → 处置 +
+    /// 代读全文。「Model-visible means logged」——代读文本是模型真实消费的内容。
+    pub items: Vec<crate::harness::event_log::ModalAdaptedItem>,
     /// 最后一张被剥离图片的失败原因分类（驱动诚实提示文案分支，缺口③）。
     ///
     /// - `None`：未发起有效调用（无候选凭据 / base64 解码失败）→ 提示引导用户**配置**
@@ -137,6 +140,7 @@ pub async fn adapt_blocks_for_vision(
             blocks: blocks.to_vec(),
             ocr_replaced: 0,
             dropped: 0,
+            items: Vec::new(),
             drop_reason: None,
         };
     }
@@ -144,11 +148,13 @@ pub async fn adapt_blocks_for_vision(
     let mut out: Vec<ContentBlock> = Vec::with_capacity(blocks.len() + 1);
     let mut ocr_replaced = 0usize;
     let mut dropped = 0usize;
+    // 逐图明细（modal_adapted 事件用，见 AdaptOutcome::items）。
+    let mut items: Vec<crate::harness::event_log::ModalAdaptedItem> = Vec::new();
     // 记录最后一张被剥离图的失败原因，驱动诚实提示文案分支（缺口③）。
     // Some 优先：只要任一图是「有凭据但调用失败」(Some)，就不用「无凭据」(None) 文案。
     let mut last_drop_reason: Option<LlmErrorKind> = None;
 
-    for b in blocks {
+    for (index, b) in blocks.iter().enumerate() {
         if let ContentBlock::Image { data, media_type } = b {
             match ocr_image(data, media_type, candidates).await {
                 Ok(text) => {
@@ -156,9 +162,19 @@ pub async fn adapt_blocks_for_vision(
                     out.push(ContentBlock::text(format!(
                         "[图片经视觉凭据代读为文本]\n{text}"
                     )));
+                    items.push(crate::harness::event_log::ModalAdaptedItem {
+                        index,
+                        outcome: "substituted".into(),
+                        ocr_text: Some(text),
+                    });
                 }
                 Err(reason) => {
                     dropped += 1;
+                    items.push(crate::harness::event_log::ModalAdaptedItem {
+                        index,
+                        outcome: "dropped".into(),
+                        ocr_text: None,
+                    });
                     // 多图聚合：当前 Some（有凭据但调用失败）按 prefer() 与历史合并——
                     // Sensitive（输入判定）优先于凭据级瞬态错误，否则保留首个；
                     // 当前 None（无候选）不覆盖已有 Some。与 ocr_image 单图内逻辑同源。
@@ -182,6 +198,7 @@ pub async fn adapt_blocks_for_vision(
         blocks: out,
         ocr_replaced,
         dropped,
+        items,
         drop_reason: last_drop_reason,
     }
 }

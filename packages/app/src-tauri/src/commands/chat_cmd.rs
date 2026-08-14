@@ -876,6 +876,18 @@ pub async fn send_message(
         match run_hooks(HookPoint::ConversationStart, &hooks, &hook_ctx, &tool_registry).await {
             Ok(outcome) => {
                 if let Some(inj) = outcome.injected_prompt {
+                    // session-events：钩子注入是模型可见事实（「Model-visible means
+                    // logged」，此前零持久化）。
+                    event_log::log_hook_injected(
+                        pool.inner(),
+                        &ev,
+                        &event_log::HookInjectedPayload {
+                            v: 1,
+                            point: "conversation_start".into(),
+                            prompt: inj.clone(),
+                        },
+                    )
+                    .await;
                     inject_into_system(&mut assembled.messages, &inj);
                 }
             }
