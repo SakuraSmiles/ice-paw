@@ -28,6 +28,7 @@ pub mod error;
 pub mod harness;
 pub mod infra;
 pub mod logging;
+pub mod platform;
 
 use std::sync::Arc;
 
@@ -43,12 +44,17 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        // 窗口状态记忆（尺寸/位置/最大化跨启动保持）：restore 发生在插件加载阶段，
+        // 早于 setup —— setup 里的「首启动态默认尺寸」只在无保存状态时生效。
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         // 聊天全局状态（CancellationToken 注册表）
         .manage(harness::chat_state::ChatState::new())
         // REQ-XC-010: AgentCmd trait 抽象注入
         .manage::<Option<std::sync::Arc<dyn commands::agent_cmd::AgentCmd>>>(None)
         // Phase 2: 全局 MCP 工具注册表（外部 Server 管理器改在 setup 内注入，见下）。
         .manage(Arc::new(McpRegistry::with_builtin()))
+        // session-events Phase 2A：读路径路由缓存（事件日志转新会话主读路径）。
+        .manage(harness::read_route::ReadRouteRegistry::new())
         // 注：原 `tauri_plugin_stronghold::Builder::new(...).build()` 注册已移除。
         //
         // 理由（参见 dev2 评审方案 §3.2）：
@@ -79,7 +85,9 @@ pub fn run() {
             commands::conversation_cmd::delete_conversation,
             commands::conversation_cmd::update_conversation_tools_override,
             commands::conversation_cmd::export_session_trajectory,
+            commands::conversation_cmd::list_session_events,
             commands::conversation_cmd::reconcile_session,
+            commands::conversation_cmd::get_read_route_status,
             commands::message_cmd::list_messages,
             commands::message_cmd::create_message,
             commands::chat_cmd::send_message,
@@ -134,6 +142,35 @@ pub fn run() {
                     handle.manage(guard);
                 }
                 Err(e) => eprintln!("[ice_paw] logging init failed: {e}"),
+            }
+
+            // 0b) 首启动态默认窗口尺寸：固定 1200×800 在 1440p 上只占工作区
+            //     47%（显小），在 1080p 上又已占 63%。按窗口所在屏工作区比例计算并
+            //     夹紧：宽 66%∈[1200,1680]，高 72%∈[760,1000]，再各自不超工作区-40
+            //     （小屏收敛防溢出）。仅首启生效：以 window-state 插件状态文件不存在
+            //     为「首启」判据（restore 发生在插件加载阶段，早于本 setup——存在状态
+            //     时窗口已被恢复为用户尺寸，此处不再介入；之后跨启动完全尊重用户选择）。
+            let has_window_state = handle
+                .path()
+                .app_config_dir()
+                .map(|d| d.join(tauri_plugin_window_state::DEFAULT_FILENAME).exists())
+                .unwrap_or(false);
+            if !has_window_state {
+                if let Some(win) = app.get_webview_window("main") {
+                    let hwnd = win.hwnd().ok().map(|h| h.0).unwrap_or(std::ptr::null_mut());
+                    if let Some(work) = platform::primary_monitor_work_area(hwnd) {
+                        // 工作区是物理像素；窗口 API 用逻辑尺寸，按窗口缩放换算。
+                        let scale = win.scale_factor().unwrap_or(1.0);
+                        let work_w = (work.right - work.left) as f64 / scale;
+                        let work_h = (work.bottom - work.top) as f64 / scale;
+                        let w = (work_w * 0.66).clamp(1200.0, 1680.0).min((work_w - 40.0).max(900.0));
+                        let h = (work_h * 0.72).clamp(760.0, 1000.0).min((work_h - 40.0).max(600.0));
+                        let _ = win.set_size(tauri::LogicalSize::new(w, h));
+                        let cx = (work.left as f64 / scale + (work_w - w) / 2.0).max(0.0);
+                        let cy = (work.top as f64 / scale + (work_h - h) / 2.0).max(0.0);
+                        let _ = win.set_position(tauri::LogicalPosition::new(cx, cy));
+                    }
+                }
             }
 
             // 1) stronghold（同步初始化）
