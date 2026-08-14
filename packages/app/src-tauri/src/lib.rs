@@ -78,6 +78,7 @@ pub fn run() {
             commands::conversation_cmd::pin_conversation,
             commands::conversation_cmd::delete_conversation,
             commands::conversation_cmd::update_conversation_tools_override,
+            commands::conversation_cmd::export_session_trajectory,
             commands::message_cmd::list_messages,
             commands::message_cmd::create_message,
             commands::chat_cmd::send_message,

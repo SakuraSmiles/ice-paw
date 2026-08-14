@@ -168,6 +168,14 @@
 - **说明**：更新对话级工具覆盖配置。None = 清除覆盖，恢复继承 Agent 配置；Some(map) = 写入 per-tool 勾选状态。
 - **前端使用状态**：✅ 已使用（`bridge.conversations.updateToolsOverride(conversationId, toolsOverride)`）
 
+### export_session_trajectory
+
+- **参数**：
+  - `conversation_id: String`
+- **返回**：`AppResult<String>`（写入的 JSONL 文件绝对路径）
+- **说明**：导出会话事件轨迹（session-event-log Phase 0 的最小只读出口）。每行一个事件对象（`session_events` 行，`payload` 内嵌为 JSON 对象），按 seq 正序 = 权威回放序。文件 `trajectory-{conversation_id}-{UTC时间戳}.jsonl` 写入下载目录（home 均缺失时回退 app 数据目录 `exports/`）。会话不存在返回 NotFound。
+- **前端使用状态**：⬜ 暂未接 UI（Phase 0 手验/调试出口，`invoke('export_session_trajectory', { conversationId })` 直调）
+
 ---
 
 ## 模块四：Message（消息管理）
