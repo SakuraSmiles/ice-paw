@@ -27,7 +27,7 @@ use crate::infra::protocol::{ContentBlock, TokenUsage};
 /// `turn_id` 即 user_msg_id（每 turn 现生成 UUID v4，1:1 于 turn；重发 =
 /// 新 turn）。`agent_id` 用于 actor 标注（本期会话恒为该 agent，多 agent
 /// 通道落地时复用同一结构）。
-pub(crate) struct EventCtx {
+pub struct EventCtx {
     pub conv_id: String,
     pub turn_id: String,
     pub agent_id: String,
@@ -35,7 +35,7 @@ pub(crate) struct EventCtx {
 
 impl EventCtx {
     /// 从 LoopConfig 字段构造（conv_id / user_msg_id / agent_id）。
-    pub(crate) fn new(conv_id: &str, turn_id: &str, agent_id: &str) -> Self {
+    pub fn new(conv_id: &str, turn_id: &str, agent_id: &str) -> Self {
         Self {
             conv_id: conv_id.to_string(),
             turn_id: turn_id.to_string(),
@@ -44,13 +44,13 @@ impl EventCtx {
     }
 
     /// actor 列取值：`agent:<uuid>`。
-    pub(crate) fn agent_actor(&self) -> String {
+    pub fn agent_actor(&self) -> String {
         format!("agent:{}", self.agent_id)
     }
 }
 
 /// actor 列取值：`user`。
-pub(crate) fn actor_user() -> &'static str {
+pub fn actor_user() -> &'static str {
     "user"
 }
 
@@ -58,7 +58,7 @@ pub(crate) fn actor_user() -> &'static str {
 // 事件类型常量（kind 词表）
 // =========================================================================
 
-pub(crate) mod kind {
+pub mod kind {
     pub const TURN_CONTEXT: &str = "turn_context";
     pub const USER_MESSAGE: &str = "user_message";
     pub const ASSISTANT_MESSAGE: &str = "assistant_message";
@@ -85,7 +85,7 @@ fn version_one() -> u8 {
 /// turn 开始时的模型/工具/预算快照——「模型看到什么工具、用什么模型」
 /// 此前完全不落库，Phase 1 解释行为差异的锚点。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct TurnContextPayload {
+pub struct TurnContextPayload {
     #[serde(default = "version_one")]
     pub v: u8,
     pub provider: String,
@@ -110,7 +110,7 @@ pub(crate) struct TurnContextPayload {
 /// 用户消息（落库原文 + 原始 blocks，含 Attachment 元信息块与图片——
 /// 适配前版本；视觉代读结果是 `modal_adapted` 事件的事）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct UserMessagePayload {
+pub struct UserMessagePayload {
     #[serde(default = "version_one")]
     pub v: u8,
     pub content: String,
@@ -122,7 +122,7 @@ pub(crate) struct UserMessagePayload {
 /// **supersede 语义**：自动续写场景同一 message_id 会有多条本事件
 /// （全文覆写），回放 last-wins。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct AssistantMessagePayload {
+pub struct AssistantMessagePayload {
     #[serde(default = "version_one")]
     pub v: u8,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -139,7 +139,7 @@ pub(crate) struct AssistantMessagePayload {
 
 /// 工具执行审计事实——镜像 `tool_calls` 表行（同一截断策略）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct ToolExecutionPayload {
+pub struct ToolExecutionPayload {
     #[serde(default = "version_one")]
     pub v: u8,
     pub tool_call_id: String,
@@ -155,7 +155,7 @@ pub(crate) struct ToolExecutionPayload {
 
 /// 工具结果消息镜像（role='user' 含 ToolResult 块的行，derive 直接用）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct ToolResultMessagePayload {
+pub struct ToolResultMessagePayload {
     #[serde(default = "version_one")]
     pub v: u8,
     pub blocks: Vec<ContentBlock>,
@@ -165,7 +165,7 @@ pub(crate) struct ToolResultMessagePayload {
 /// user_message.blocks，未内联页经工具读取时出现在 tool_result）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub(crate) enum AttachmentStoredPayload {
+pub enum AttachmentStoredPayload {
     /// message_attachments 分页文本块
     Pages {
         #[serde(default = "version_one")]
@@ -181,7 +181,7 @@ pub(crate) enum AttachmentStoredPayload {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct AttachmentPageItem {
+pub struct AttachmentPageItem {
     pub idx: i64,
     pub name: String,
     pub kind: String,
@@ -190,7 +190,7 @@ pub(crate) struct AttachmentPageItem {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct AttachmentBytesItem {
+pub struct AttachmentBytesItem {
     pub idx: i64,
     pub name: String,
     pub ext: String,
@@ -200,7 +200,7 @@ pub(crate) struct AttachmentBytesItem {
 /// 滚动摘要创建/更新（Phase 2 债：covered_until_rowid 是 messages 物理
 /// rowid，切事件主源后需改为 covered_until_seq）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct SummaryPayload {
+pub struct SummaryPayload {
     #[serde(default = "version_one")]
     pub v: u8,
     pub summary_message_id: String,
@@ -209,7 +209,7 @@ pub(crate) struct SummaryPayload {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct MessageErrorPayload {
+pub struct MessageErrorPayload {
     #[serde(default = "version_one")]
     pub v: u8,
     /// 错误分类（AppErrorKind 名），便于按类检索
@@ -218,7 +218,7 @@ pub(crate) struct MessageErrorPayload {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct MessageDiscardedPayload {
+pub struct MessageDiscardedPayload {
     #[serde(default = "version_one")]
     pub v: u8,
     pub reason: String,
@@ -226,7 +226,7 @@ pub(crate) struct MessageDiscardedPayload {
 
 /// turn 终态——终止原因此前完全不落库，本事件是新增价值点。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct TurnEndedPayload {
+pub struct TurnEndedPayload {
     #[serde(default = "version_one")]
     pub v: u8,
     /// stop | length | max_tokens | tool_use | budget_exceeded | stuck | abort | error
@@ -241,7 +241,7 @@ pub(crate) struct TurnEndedPayload {
 /// 视觉模态适配（投影期，模型实际看到的内容变更）——「Model-visible
 /// means logged」：OCR 代读文本替代了图片，是模型真实消费的内容，入日志。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct ModalAdaptedPayload {
+pub struct ModalAdaptedPayload {
     #[serde(default = "version_one")]
     pub v: u8,
     /// user_image | tool_image | history
@@ -252,7 +252,7 @@ pub(crate) struct ModalAdaptedPayload {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct ModalAdaptedItem {
+pub struct ModalAdaptedItem {
     /// 图片在 blocks 中的下标
     pub index: usize,
     /// kept | dropped | substituted
@@ -263,7 +263,7 @@ pub(crate) struct ModalAdaptedItem {
 
 /// 钩子注入（模型可见但此前零持久化的事实）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct HookInjectedPayload {
+pub struct HookInjectedPayload {
     #[serde(default = "version_one")]
     pub v: u8,
     /// conversation_start | before_llm
@@ -300,12 +300,12 @@ async fn append_event(
 }
 
 /// turn 快照（actor=agent：上下文由 agent 侧组装）。
-pub(crate) async fn log_turn_context(pool: &SqlitePool, ctx: &EventCtx, payload: &TurnContextPayload) {
+pub async fn log_turn_context(pool: &SqlitePool, ctx: &EventCtx, payload: &TurnContextPayload) {
     append_event(pool, ctx, kind::TURN_CONTEXT, &ctx.agent_actor(), None, payload).await;
 }
 
 /// 用户消息落库原文（actor=user）。
-pub(crate) async fn log_user_message(
+pub async fn log_user_message(
     pool: &SqlitePool,
     ctx: &EventCtx,
     message_id: &str,
@@ -315,7 +315,7 @@ pub(crate) async fn log_user_message(
 }
 
 /// assistant 权威快照（actor=agent；supersede：同 message_id 多条 last-wins）。
-pub(crate) async fn log_assistant_message(
+pub async fn log_assistant_message(
     pool: &SqlitePool,
     ctx: &EventCtx,
     message_id: &str,
@@ -328,7 +328,7 @@ pub(crate) async fn log_assistant_message(
 // 10 参数逐一镜像 tool_calls 审计行字段（emitter 内做截断，避免调用方各截一遍）；
 // 收敛成 struct 会与 ToolExecutionPayload 本体重复。
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn log_tool_execution(
+pub async fn log_tool_execution(
     pool: &SqlitePool,
     ctx: &EventCtx,
     message_id: &str,
@@ -355,7 +355,7 @@ pub(crate) async fn log_tool_execution(
 }
 
 /// 工具结果消息镜像。
-pub(crate) async fn log_tool_result_message(
+pub async fn log_tool_result_message(
     pool: &SqlitePool,
     ctx: &EventCtx,
     message_id: &str,
@@ -369,7 +369,7 @@ pub(crate) async fn log_tool_result_message(
 }
 
 /// 附件留存（仅元信息）。
-pub(crate) async fn log_attachment_stored(
+pub async fn log_attachment_stored(
     pool: &SqlitePool,
     ctx: &EventCtx,
     message_id: &str,
@@ -379,17 +379,17 @@ pub(crate) async fn log_attachment_stored(
 }
 
 /// 摘要创建（折叠由 turn 的上下文装配触发，事件序先于同 turn 的 user_message）。
-pub(crate) async fn log_summary_created(pool: &SqlitePool, ctx: &EventCtx, payload: &SummaryPayload) {
+pub async fn log_summary_created(pool: &SqlitePool, ctx: &EventCtx, payload: &SummaryPayload) {
     append_event(pool, ctx, kind::SUMMARY_CREATED, &ctx.agent_actor(), None, payload).await;
 }
 
 /// 摘要更新。
-pub(crate) async fn log_summary_updated(pool: &SqlitePool, ctx: &EventCtx, payload: &SummaryPayload) {
+pub async fn log_summary_updated(pool: &SqlitePool, ctx: &EventCtx, payload: &SummaryPayload) {
     append_event(pool, ctx, kind::SUMMARY_UPDATED, &ctx.agent_actor(), None, payload).await;
 }
 
 /// 消息错误（对应 messages.error 回写）。
-pub(crate) async fn log_message_error(
+pub async fn log_message_error(
     pool: &SqlitePool,
     ctx: &EventCtx,
     message_id: &str,
@@ -405,7 +405,7 @@ pub(crate) async fn log_message_error(
 }
 
 /// 消息废弃（终止守卫删占位行）。
-pub(crate) async fn log_message_discarded(
+pub async fn log_message_discarded(
     pool: &SqlitePool,
     ctx: &EventCtx,
     message_id: &str,
@@ -419,7 +419,7 @@ pub(crate) async fn log_message_discarded(
 }
 
 /// turn 终态。**必须在 cleanup() unregister 之前 inline await**。
-pub(crate) async fn log_turn_ended(
+pub async fn log_turn_ended(
     pool: &SqlitePool,
     ctx: &EventCtx,
     final_message_id: Option<&str>,
@@ -429,12 +429,12 @@ pub(crate) async fn log_turn_ended(
 }
 
 /// 视觉模态适配（投影期模型可见内容变更）。
-pub(crate) async fn log_modal_adapted(pool: &SqlitePool, ctx: &EventCtx, payload: &ModalAdaptedPayload) {
+pub async fn log_modal_adapted(pool: &SqlitePool, ctx: &EventCtx, payload: &ModalAdaptedPayload) {
     append_event(pool, ctx, kind::MODAL_ADAPTED, &ctx.agent_actor(), None, payload).await;
 }
 
 /// 钩子注入。
-pub(crate) async fn log_hook_injected(pool: &SqlitePool, ctx: &EventCtx, payload: &HookInjectedPayload) {
+pub async fn log_hook_injected(pool: &SqlitePool, ctx: &EventCtx, payload: &HookInjectedPayload) {
     append_event(pool, ctx, kind::HOOK_INJECTED, &ctx.agent_actor(), None, payload).await;
 }
 
