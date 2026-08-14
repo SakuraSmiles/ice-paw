@@ -74,11 +74,12 @@ async fn invoke_tool(
     }
 }
 
-// 10 个参数均为单次工具轮次的独立输入（7/10 来自 loop context，3 个本轮局部），
+// 11 个参数均为单次工具轮次的独立输入（8/11 来自 loop context，3 个本轮局部），
 // 且仅 1 个调用点（loop_engine::stream_loop_inner）。彻底收敛需把 loop context 整体
 // 传入，属跨层耦合的架构决策，不在 clippy 清理范围；此处显式 allow + 注明。
+// `ev` 为 session-events 的 turn 上下文（tool_execution 事件归属用，Phase 0）。
 #[allow(clippy::too_many_arguments)]
-pub async fn execute_tool_round(
+pub(crate) async fn execute_tool_round(
     app: &AppHandle,
     registry: &McpRegistry,
     auth_registry: &ToolAuthRegistry,
@@ -87,6 +88,7 @@ pub async fn execute_tool_round(
     completed_calls: &[(String, String, String)],
     tool_ctx: &ToolContext,
     asst_msg_id: &str,
+    ev: &crate::harness::event_log::EventCtx,
     cancel: &crate::harness::chat_state::CancellationToken,
     hooks: &HookConfig,
 ) -> crate::error::AppResult<Vec<ContentBlock>> {
@@ -233,9 +235,10 @@ pub async fn execute_tool_round(
             Ok(out) => (false, out.text.as_str()),
             Err(e) => (true, e.as_str()),
         };
+        let tool_call_id = Uuid::new_v4().to_string();
         if let Err(e) = repo::tool_call::create(
             &tool_ctx.pool,
-            &Uuid::new_v4().to_string(),
+            &tool_call_id,
             asst_msg_id,
             tc_name,
             tc_args,
@@ -254,6 +257,21 @@ pub async fn execute_tool_round(
                 e
             );
         }
+        // session-events（Phase 0）：tool_execution 事件镜像同一审计事实
+        //（同 id / 同截断策略），warn-only inline await，不阻断工具循环。
+        crate::harness::event_log::log_tool_execution(
+            &tool_ctx.pool,
+            ev,
+            asst_msg_id,
+            &tool_call_id,
+            Some(tc_id),
+            tc_name,
+            tc_args,
+            Some(audit_result),
+            audit_is_error,
+            duration_ms,
+        )
+        .await;
 
         match final_result {
             Ok(out) => {
