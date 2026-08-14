@@ -351,6 +351,24 @@ pub(crate) async fn execute_tool_round(
                             &candidates,
                         )
                         .await;
+                        // session-events：工具返图的投影期适配入日志（stage=tool_image，
+                        // OCR 全文随 items 落库）。视觉直通分支不记——注入的 Image 块
+                        // 已由 tool_result_message 事件镜像。
+                        crate::harness::event_log::log_modal_adapted(
+                            &tool_ctx.pool,
+                            ev,
+                            &crate::harness::event_log::ModalAdaptedPayload {
+                                v: 1,
+                                stage: "tool_image".into(),
+                                mode: if outcome.ocr_replaced > 0 {
+                                    "ocr_substitute".into()
+                                } else {
+                                    "strip_with_hint".into()
+                                },
+                                items: outcome.items.clone(),
+                            },
+                        )
+                        .await;
                         // 适配产出的文本（代读文本或诚实提示）追加到本 ToolResult content。
                         let extra: String = outcome
                             .blocks
