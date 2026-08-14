@@ -111,4 +111,4 @@ agent 调用 `propose_config_change` 工具提出创建/修改 agent 提案 → 
 - 分支：仅 `main`
 - 近期递进：0.3.0 视觉读取（Phase B 14 commits）→ 1e5868c（migration checksum 自愈热修）→ 0.3.1 → 视觉能力统一适配（bfcd2ce..c10d02e）→ 0字节附件软失败（bccf6d0）→ 0.3.2 → 0.3.3（落库丢图修复 + 文档上限100MB + 错误处理统一分类器）→ **session-event-log Phase 0（6813429..9f81692，8 commits：表/emitters/接线A-D/e2e/导出，未手测）**
 - `cargo test --lib` 684 passed / 0 failed（+ session_event_log_e2e 3 / memory_e2e 3 集成测试）；clippy --tests -D warnings 0 警告；pnpm test 51/51
-- 仍待办：**session-event-log Phase 0 手验（smoke 清单 #6：带工具消息 → export_session_trajectory → 核对序列 + modal_adapted OCR 文本）**、0.3.3 生产手测（落库丢图回归/敏感图提示/100MB 文档）、视觉适配真机手测、KB watcher + 自动续写生产手测、proposal Phase 2（MCP 域）、session-event-log Phase 1（derive 对账）
+- 仍待办：0.3.3 生产手测（落库丢图回归/敏感图提示/100MB 文档）、视觉适配真机手测、KB watcher + 自动续写生产手测、proposal Phase 2（MCP 域）、session-event-log Phase 1（derive 对账）。~~Phase 0 手验~~ ✅ 2026-08-14 dev 真机通过（3 turn 20 事件全对 + 导出实调成功）
