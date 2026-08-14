@@ -94,6 +94,30 @@ pub async fn list_tail(
     Ok(rows)
 }
 
+/// 正向增量读取（轨迹 live 追加）：取 seq 严格大于 `after_seq` 的最早 `limit` 条
+/// （seq 正序）。`after_seq = 0`/`None` = 从头取。轮询方以已载最大 seq 作游标，
+/// 返回空 = 已追平。append-only 保证增量只会出现在尾部，无需考虑中间插入。
+pub async fn list_after(
+    pool: &SqlitePool,
+    session_id: &str,
+    after_seq: Option<i64>,
+    limit: i64,
+) -> AppResult<Vec<SessionEventRow>> {
+    let rows = sqlx::query_as::<_, SessionEventRow>(
+        "SELECT id, session_id, seq, kind, actor, turn_id, message_id, payload, created_at
+           FROM session_events
+          WHERE session_id = ? AND seq > COALESCE(?, 0)
+          ORDER BY seq ASC
+          LIMIT ?",
+    )
+    .bind(session_id)
+    .bind(after_seq)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 /// 取一个会话的当前最大 seq（无事件时为 0）。
 pub async fn max_seq(pool: &SqlitePool, session_id: &str) -> AppResult<i64> {
     let (max,): (i64,) = sqlx::query_as(
@@ -292,6 +316,36 @@ mod tests {
 
     fn seqs(rows: &[SessionEventRow]) -> Vec<i64> {
         rows.iter().map(|r| r.seq).collect()
+    }
+
+    #[tokio::test]
+    async fn list_after_returns_forward_increment() {
+        let pool = fresh_pool().await;
+        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        seed_agent(&pool).await;
+        seed_conversation(&pool, "conv-1").await;
+
+        for i in 0..10 {
+            append(&pool, "conv-1", "user_message", "user", Some("t"), Some(&format!("m{i}")), "{}")
+                .await
+                .unwrap();
+        }
+
+        // from head
+        let head = list_after(&pool, "conv-1", None, 3).await.unwrap();
+        assert_eq!(seqs(&head), vec![1, 2, 3], "None = 从头取正序");
+
+        // 游标 3 → 拿 4..6
+        let inc = list_after(&pool, "conv-1", Some(3), 3).await.unwrap();
+        assert_eq!(seqs(&inc), vec![4, 5, 6], "严格大于 after_seq");
+
+        // 追平后返回空
+        let done = list_after(&pool, "conv-1", Some(10), 3).await.unwrap();
+        assert!(done.is_empty(), "追平返回空");
+
+        // 跨会话隔离
+        let cross = list_after(&pool, "conv-none", None, 3).await.unwrap();
+        assert!(cross.is_empty(), "不串会话");
     }
 
     #[tokio::test]

@@ -286,10 +286,11 @@ const logs = {
 };
 
 const trajectory = {
-  /** 读取会话完整事件流（seq 正序，payload 已 parse）；供「轨迹回放」视图消费 */
-  async listEvents(conversationId: string, limit?: number, beforeSeq?: number): Promise<SessionEvent[]> {
+  /** 读取会话事件流（seq 正序，payload 已 parse）；供「轨迹回放」视图消费。
+   *  三形态：无参=全量 / limit+beforeSeq=尾部优先向前翻页 / limit+afterSeq=正向增量（live 追加轮询） */
+  async listEvents(conversationId: string, limit?: number, beforeSeq?: number, afterSeq?: number): Promise<SessionEvent[]> {
     try {
-      return await invoke<SessionEvent[]>("list_session_events", { conversationId, limit: limit ?? null, beforeSeq: beforeSeq ?? null });
+      return await invoke<SessionEvent[]>("list_session_events", { conversationId, limit: limit ?? null, beforeSeq: beforeSeq ?? null, afterSeq: afterSeq ?? null });
     } catch (err) { throw wrapInvokeError("trajectory.listEvents", err); }
   },
   /** 导出会话轨迹为 JSONL 到下载目录；返回写入的文件绝对路径 */

@@ -458,6 +458,25 @@ watch([() => props.events, () => props.mode], () => {
   buildSpans();
   scheduleRedraw();
 });
+
+/** live 追加后由父级调用：增量扩展了数据域，恢复用户原缩放/平移视域。
+ *  保存比例（视口宽/域宽）与归一化位置，在新域上重建等比例视口——
+ *  用户若已缩放到某段细节，新事件到达不打断其观察。 */
+function preserveViewport() {
+  const oldDomain = t1 - t0;
+  if (oldDomain <= 0) return;
+  const ratio = oldDomain / Math.max(1e-6, d1 - d0);
+  const anchorNorm = (t0 - d0) / Math.max(1e-6, d1 - d0);
+  const newDomain = (d1 - d0) * ratio;
+  t0 = d0 + anchorNorm * (d1 - d0);
+  t1 = t0 + newDomain;
+  if (t1 > d1) {
+    t1 = d1;
+    t0 = Math.max(d0, t1 - newDomain);
+  }
+  scheduleRedraw();
+}
+defineExpose({ preserveViewport });
 watch(() => props.selectedSeq, scheduleRedraw);
 watch([() => props.hasEarlier, () => props.loadingEarlier], scheduleRedraw);
 

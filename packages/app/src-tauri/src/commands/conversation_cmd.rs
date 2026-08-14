@@ -154,7 +154,9 @@ pub async fn export_session_trajectory(
 /// parse 为 JSON 对象（非法 JSON 降级为字符串值，与导出一致）。供前端「轨迹回放」
 /// 视图消费，免逐行 `JSON.parse`。
 ///
-/// `limit` 为 `None` 时全量；`Some(n)` 时尾部优先（最新 n 条，`before_seq` 作游标向前翻页）。
+/// `limit` 为 `None` 时全量；`Some(n)` 时尾部优先（最新 n 条，`before_seq` 作游标向前
+/// 翻页）；`limit=Some(n)` + `after_seq` 时正向增量（seq 严格大于游标的最早 n 条——轨迹
+/// live 追加轮询用，返回空 = 已追平）。
 ///
 /// 手验路径：DevTools
 /// `await window.__TAURI_INTERNALS__.invoke('list_session_events', { conversationId: '…' })`
@@ -164,15 +166,20 @@ pub async fn list_session_events(
     conversation_id: String,
     limit: Option<i64>,
     before_seq: Option<i64>,
+    after_seq: Option<i64>,
 ) -> AppResult<Vec<SessionEvent>> {
     // 会话存在性校验：不存在 → NotFound，与 export 一致（不返回空数组造成「无事件」误导）
     repo::conversation::get_by_id(pool.inner(), &conversation_id).await?;
-    // 尾部优先分页：limit=Some → 取最新 n 条（before_seq 游标向前翻页）；None → 全量正序
-    let rows = match limit {
-        None => repo::session_event::list_by_session(pool.inner(), &conversation_id, None).await?,
-        Some(n) => {
+    // limit=Some + after_seq → 正向增量（轨迹 live 追加轮询）；limit=Some → 尾部优先
+    // 分页（before_seq 游标向前翻页）；None → 全量正序
+    let rows = if let Some(n) = limit {
+        if after_seq.is_some() {
+            repo::session_event::list_after(pool.inner(), &conversation_id, after_seq, n).await?
+        } else {
             repo::session_event::list_tail(pool.inner(), &conversation_id, before_seq, n).await?
         }
+    } else {
+        repo::session_event::list_by_session(pool.inner(), &conversation_id, None).await?
     };
     Ok(rows.into_iter().map(SessionEvent::from).collect())
 }
