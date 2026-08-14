@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use tauri::State;
+use tauri::{Manager, State};
 use uuid::Uuid;
 
 use sqlx::SqlitePool;
@@ -147,15 +147,13 @@ pub async fn export_session_trajectory(
     Ok(path_str)
 }
 
-/// 解析导出目标目录：下载目录（home 优先 Unix 惯例，Windows 兜底），全缺失时
-/// 回退 app 数据目录 `exports/`（与「数据目录」入口一致，用户可达）。
+/// 解析导出目标目录：系统「下载」已知目录（Windows 走 SHGetKnownFolderPath，
+/// 尊重 OneDrive 重定向——拼 `%USERPROFILE%\Downloads` 会在重定向机器上踩空建错目录），
+/// 解析失败时回退 app 数据目录 `exports/`（与「数据目录」入口一致，用户可达）。
 fn exports_dir(app: &tauri::AppHandle) -> AppResult<std::path::PathBuf> {
-    let home = std::env::var("HOME")
-        .ok()
-        .or_else(|| std::env::var("USERPROFILE").ok());
-    let dir = match home {
-        Some(h) => std::path::PathBuf::from(h).join("Downloads"),
-        None => crate::logging::data_dir(app)?.join("exports"),
+    let dir = match app.path().download_dir() {
+        Ok(d) => d,
+        Err(_) => crate::logging::data_dir(app)?.join("exports"),
     };
     std::fs::create_dir_all(&dir).map_err(|e| {
         crate::error::AppError::Internal(format!(
