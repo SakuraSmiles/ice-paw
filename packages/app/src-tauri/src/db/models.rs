@@ -666,6 +666,43 @@ pub struct SessionEventRow {
     pub created_at: String,
 }
 
+/// 传输对象：会话事件（`payload` 已 parse）。
+///
+/// [`SessionEventRow`] 的序列化友好版本——`payload` 由 JSON 字符串解析为
+/// [`serde_json::Value`]（与 `export_session_trajectory` 的 parse 兜底一致：非法
+/// JSON 降级为字符串值）。供 `list_session_events` 命令返回前端「轨迹回放」视图
+/// 直接消费，免逐行 `JSON.parse`。
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionEvent {
+    pub id: i64,
+    pub session_id: String,
+    pub seq: i64,
+    pub kind: String,
+    pub actor: String,
+    pub turn_id: Option<String>,
+    pub message_id: Option<String>,
+    pub payload: serde_json::Value,
+    pub created_at: String,
+}
+
+impl From<SessionEventRow> for SessionEvent {
+    fn from(r: SessionEventRow) -> Self {
+        let payload: serde_json::Value =
+            serde_json::from_str(&r.payload).unwrap_or(serde_json::Value::String(r.payload.clone()));
+        Self {
+            id: r.id,
+            session_id: r.session_id,
+            seq: r.seq,
+            kind: r.kind,
+            actor: r.actor,
+            turn_id: r.turn_id,
+            message_id: r.message_id,
+            payload,
+            created_at: r.created_at,
+        }
+    }
+}
+
 // =========================================================================
 // TemplateRow（仅 pipeline context 使用）
 // =========================================================================

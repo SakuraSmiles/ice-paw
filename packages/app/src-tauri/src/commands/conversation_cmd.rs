@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use sqlx::SqlitePool;
 
-use crate::db::models::{Conversation, NewConversation};
+use crate::db::models::{Conversation, NewConversation, SessionEvent};
 use crate::db::repo;
 use crate::error::AppResult;
 
@@ -147,6 +147,36 @@ pub async fn export_session_trajectory(
     Ok(path_str)
 }
 
+/// 读取一个会话的完整事件流（session-events）作为结构化列表。
+///
+/// 与 [`export_session_trajectory`] 同源（都走 `repo::session_event::list_by_session`，
+/// seq 正序），但**不写文件**——直接返回 `Vec<SessionEvent>`，`payload` 已在服务端
+/// parse 为 JSON 对象（非法 JSON 降级为字符串值，与导出一致）。供前端「轨迹回放」
+/// 视图消费，免逐行 `JSON.parse`。
+///
+/// `limit` 为 `None` 时全量；`Some(n)` 时尾部优先（最新 n 条，`before_seq` 作游标向前翻页）。
+///
+/// 手验路径：DevTools
+/// `await window.__TAURI_INTERNALS__.invoke('list_session_events', { conversationId: '…' })`
+#[tauri::command]
+pub async fn list_session_events(
+    pool: State<'_, SqlitePool>,
+    conversation_id: String,
+    limit: Option<i64>,
+    before_seq: Option<i64>,
+) -> AppResult<Vec<SessionEvent>> {
+    // 会话存在性校验：不存在 → NotFound，与 export 一致（不返回空数组造成「无事件」误导）
+    repo::conversation::get_by_id(pool.inner(), &conversation_id).await?;
+    // 尾部优先分页：limit=Some → 取最新 n 条（before_seq 游标向前翻页）；None → 全量正序
+    let rows = match limit {
+        None => repo::session_event::list_by_session(pool.inner(), &conversation_id, None).await?,
+        Some(n) => {
+            repo::session_event::list_tail(pool.inner(), &conversation_id, before_seq, n).await?
+        }
+    };
+    Ok(rows.into_iter().map(SessionEvent::from).collect())
+}
+
 /// 解析导出目标目录：系统「下载」已知目录（Windows 走 SHGetKnownFolderPath，
 /// 尊重 OneDrive 重定向——拼 `%USERPROFILE%\Downloads` 会在重定向机器上踩空建错目录），
 /// 解析失败时回退 app 数据目录 `exports/`（与「数据目录」入口一致，用户可达）。
@@ -181,4 +211,36 @@ pub async fn reconcile_session(
     // 会话存在性校验：不存在 → NotFound，而非空报告造成「零差异」误导
     repo::conversation::get_by_id(pool.inner(), &conversation_id).await?;
     crate::harness::reconcile::reconcile_session(pool.inner(), &conversation_id).await
+}
+
+/// 读路径路由诊断（session-events Phase 2A）。
+///
+/// 返回路由器缓存的所有会话条目（各自走 derive / legacy 及原因）；可选传
+/// `conversation_id` 当场解析该会话的决策（覆盖缓存，用于探测尚未聊过的会话）。
+///
+/// 手验路径：DevTools
+/// ```js
+/// await window.__TAURI_INTERNALS__.invoke('get_read_route_status', { conversationId: '…' })
+/// // 或不传 conversationId 看全局快照
+/// ```
+#[tauri::command]
+pub async fn get_read_route_status(
+    pool: State<'_, SqlitePool>,
+    route_registry: State<'_, crate::harness::read_route::ReadRouteRegistry>,
+    conversation_id: Option<String>,
+) -> AppResult<crate::harness::read_route::ReadRouteStatus> {
+    let resolved = if let Some(cid) = &conversation_id {
+        repo::conversation::get_by_id(pool.inner(), cid).await?;
+        Some(
+            route_registry
+                .resolve(pool.inner(), cid, false)
+                .await?,
+        )
+    } else {
+        None
+    };
+    Ok(crate::harness::read_route::ReadRouteStatus {
+        entries: route_registry.snapshot(),
+        resolved,
+    })
 }

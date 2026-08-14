@@ -6,6 +6,8 @@
 //! - 同秒内多条消息的次序：用 `rowid` 做兜底排序，避免 UUID 随机化导致
 //!   「用户/助手 同一对内顺序反转」的 bug（见 `list_by_conversation`）
 
+use std::collections::HashMap;
+
 use sqlx::SqlitePool;
 
 use crate::db::models::{MessageRow, NewMessage};
@@ -13,6 +15,14 @@ use crate::error::{AppError, AppResult};
 
 const DEFAULT_LIMIT: i64 = 100;
 const MAX_LIMIT: i64 = 1000;
+
+/// 历史加载的固定条数上限（send_message + session-events 派生读路径共用）。
+///
+/// Phase 2 起 DB 加载固定为此值，不再耦合 `max_history_messages`（后者重定义为
+/// MemoryStage 的 keep_n 地板）。**单一来源**：chat_cmd 与 read_route 都引用它，
+/// 保证「legacy 行加载 N 条」与「派生 tail-limit N 条」严格一致——否则两侧
+/// 窗口不同会破坏「同库同消息」的读路径切换不变式。
+pub const HISTORY_LOAD_LIMIT: i64 = 500;
 
 /// 列出会话内的消息（复合游标分页）
 ///
@@ -126,6 +136,43 @@ pub async fn list_all_by_rowid(
     .fetch_all(pool)
     .await?;
     Ok(rows)
+}
+
+/// 当前会话的最大 rowid（无消息时返回 0）。
+///
+/// **轻量指纹探测**（session-events Phase 2A 读路径路由用）：单聚合查询、不取行体，
+/// 与 [`crate::db::repo::session_event::max_seq`] 组成会话「数据指纹」——指纹未变即
+/// 缓存的路由决策仍有效，免去每轮都跑全量对账。
+pub async fn max_rowid(pool: &SqlitePool, conversation_id: &str) -> AppResult<i64> {
+    let (max,): (i64,) = sqlx::query_as(
+        "SELECT COALESCE(MAX(rowid), 0) FROM messages WHERE conversation_id = ?",
+    )
+    .bind(conversation_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(max)
+}
+
+/// id → rowid 映射（session-events Phase 2A 派生读路径用）。
+///
+/// 派生消息（来自事件回放）只有 message_id，无物理行号；而 MemoryStage 的滚动摘要
+/// 靠 `source_rowid` 按值定位覆盖切断点（`covered_until_rowid`）。本映射把派生消息
+/// **锚回真实物理 rowid**，使摘要连续性在读路径切换（legacy → derive）后依然成立——
+/// 切换前用真 rowid 记的 `covered_until_rowid`，切换后在派生消息里照样查得到同值。
+///
+/// 路由判为 Derive 的会话（对账零 diff）里每个 evented message_id 必有对应行，
+/// 映射完备；缺项只可能出现在有 diff 的会话（已被路由到 Legacy，不会走到派生路径）。
+pub async fn id_rowid_map(
+    pool: &SqlitePool,
+    conversation_id: &str,
+) -> AppResult<HashMap<String, i64>> {
+    let rows: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT id, rowid FROM messages WHERE conversation_id = ?",
+    )
+    .bind(conversation_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().collect())
 }
 
 /// 写入新消息

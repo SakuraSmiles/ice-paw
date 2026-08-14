@@ -174,7 +174,17 @@
   - `conversation_id: String`
 - **返回**：`AppResult<String>`（写入的 JSONL 文件绝对路径）
 - **说明**：导出会话事件轨迹（session-event-log Phase 0 的最小只读出口）。每行一个事件对象（`session_events` 行，`payload` 内嵌为 JSON 对象），按 seq 正序 = 权威回放序。文件 `trajectory-{conversation_id}-{UTC时间戳}.jsonl` 写入下载目录（home 均缺失时回退 app 数据目录 `exports/`）。会话不存在返回 NotFound。
-- **前端使用状态**：⬜ 暂未接 UI（Phase 0 手验/调试出口，`invoke('export_session_trajectory', { conversationId })` 直调）
+- **前端使用状态**：⬜ 暂未接 UI（Phase 0 手验/调试出口，`invoke('export_session_trajectory', { conversationId })` 直调；轨迹视图「导出 JSONL」按钮亦调此命令）
+
+### list_session_events
+
+- **参数**：
+  - `conversation_id: String`
+  - `limit: Option<i64>`（可选；`None` 全量）
+  - `before_seq: Option<i64>`（可选；仅 `limit` 存在时生效——尾部优先分页游标）
+- **返回**：`AppResult<Vec<SessionEvent>>` — 每元素 `{ id, session_id, seq, kind, actor, turn_id?, message_id?, payload, created_at }`；`payload` 为已 parse 的 JSON 对象（非法 JSON 降级为字符串值，与导出一致）。按 seq 正序 = 权威回放序。
+- **说明**：直接返回结构化列表供前端「轨迹回放」视图消费。读取模式：`limit=None` 全量正序（与 `export_session_trajectory` 同源视图）；`limit=Some(n)` 尾部优先——取最新 n 条（`before_seq=None`）或 seq 严格小于 `before_seq` 的最大 n 条（「加载更早」，repo `list_tail` DESC 取后反转），大会话不必一次全量拉取。会话不存在返回 NotFound。13 kind 与 payload 定义见 `harness/event_log.rs`。
+- **前端使用状态**：✅ 已使用（`bridge.trajectory.listEvents(conversationId, limit?, beforeSeq?)`）
 
 ### reconcile_session
 
@@ -183,6 +193,14 @@
 - **返回**：`AppResult<ReconcileReport>` — `{ conversation_id, events_total, turns_total, turns_compared, legacy_rows_total, legacy_rows_compared, derived_messages_compared, diffs: [{category, turn_id?, message_id?, detail}], skipped: [{reason, count}] }`
 - **说明**：对账一个会话：`session_events` 回放（derive）vs `messages` 表行提取（legacy），只读无副作用（session-event-log Phase 1）。`diffs` 非空 = 未分类差异（bug 嫌疑待查）；`skipped` 为已文档化容忍（`pre_phase0_no_events` / `legacy_epoch_rows` / `incomplete_turn` / `error_row` / `discarded_row` / `empty_placeholder` / `summary_row` / `non_conversational_role` 等）。diff 类别：`MISSING_IN_DERIVED` / `MISSING_IN_LEGACY` / `CONTENT_MISMATCH` / `ORDER_MISMATCH` / `DERIVE_ISSUE`。会话不存在返回 NotFound。
 - **前端使用状态**：⬜ 暂未接 UI（Phase 1 手验/调试出口，`invoke('reconcile_session', { conversationId })` 直调）
+
+### get_read_route_status
+
+- **参数**：
+  - `conversation_id?: Option<String>`（可选；传则当场解析该会话路由并覆盖缓存）
+- **返回**：`AppResult<ReadRouteStatus>` — `{ entries: [{ conversation_id, route: "derive"|"legacy", reason, events_total, diffs }], resolved?: { route, reason, events_total, diffs } }`
+- **说明**：读路径路由诊断（session-event-log Phase 2A）。`entries` = 路由器缓存的所有会话条目（send_message 触发过的会话各走 derive/legacy 及原因）；`resolved` = 若传 conversation_id 则为其当场解析决策。路由判据：偏好 `session_read_path=legacy` 强制 legacy；零事件 → legacy(`no_events`)；对账有 diff → legacy(`reconcile_diffs:N`)；事件纪元前有旧行 → legacy(`mixed_epoch`)；否则 derive(`green`)。会话不存在返回 NotFound（仅当传了 conversation_id 时校验）。
+- **前端使用状态**：⬜ 暂未接 UI（Phase 2A 诊断出口，DevTools `invoke('get_read_route_status', { conversationId })` 或不传参看全局快照）
 
 ---
 

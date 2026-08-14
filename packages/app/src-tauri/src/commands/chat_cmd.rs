@@ -40,7 +40,10 @@ use crate::context::pipeline::{AssembledContext, PipelineContext, PipelineRunner
 /// 而发送时由 MemoryStage（摘要压缩）+ TokenWindowStage（硬裁剪）分两级控制。
 /// 部分加载（会话条数 > 此值）由 `covered_until_rowid` 按值定位安全兜底
 /// （计数在部分加载下会静默丢消息，rowid 不会）。
-const MEMORY_LOAD_LIMIT: i64 = 500;
+///
+/// 单一来源：[`crate::db::repo::message::HISTORY_LOAD_LIMIT`]，与 session-events
+/// 派生读路径共用，保证两侧窗口严格一致。
+const MEMORY_LOAD_LIMIT: i64 = repo::message::HISTORY_LOAD_LIMIT;
 
 /// 小文件阈值：提取正文总 token ≤ 此值则**全量内联**（零行为变化，不分页）。
 /// 超过则按块分页，只内联首页 + `read_attachment_page` 工具按页取。
@@ -454,6 +457,7 @@ pub async fn send_message(
     auth_registry: State<'_, crate::harness::tool_executor::ToolAuthRegistry>,
     global_registry: State<'_, Arc<McpRegistry>>,
     mcp_manager: State<'_, Arc<McpServerManager>>,
+    route_registry: State<'_, crate::harness::read_route::ReadRouteRegistry>,
 ) -> AppResult<()> {
     tracing::info!(target: "ice_paw.chat", "send_message 被调用: conv={} model={:?} tools={}",
         input.conversation_id, input.model, input.tools_enabled);
@@ -553,10 +557,34 @@ pub async fn send_message(
     // keep_n 地板（verbatim 保留窗），不再决定「加载/发送上限」。发送侧由
     // MemoryStage（摘要压缩）+ TokenWindowStage（token 硬裁剪）两级控制。
     //
+    // session-events Phase 2A：按会话路由读路径。干净会话（有事件 + 对账零 diff +
+    // 纯事件纪元）→ 从事件派生历史（`load_history_from_events`），与 legacy loader
+    // 同构输入、同函数下游；其余 → legacy。偏好 `session_read_path=legacy` 一键强制
+    // 全部回 legacy（回滚开关）。路由决策带指纹缓存，命中时仅 2 个标量查询。
+    //
     // M1.2: 同时查询「最近 10 次」tool 消息以填充 `tool_call_history`，
     // M1.4 后供 loop_engine 在每轮调用 list_tool_defs_with_query 打分时使用。
-    let history =
-        repo::message::list_by_conversation(pool.inner(), &conv_id, Some(MEMORY_LOAD_LIMIT), None).await?;
+    let force_legacy: bool = sqlx::query_scalar(
+        "SELECT value FROM user_preferences WHERE key = 'session_read_path'",
+    )
+    .fetch_optional(pool.inner())
+    .await
+    .ok()
+    .flatten()
+    .map(|v: String| v.trim().eq_ignore_ascii_case("legacy"))
+    .unwrap_or(false);
+    let route = route_registry
+        .resolve(pool.inner(), &conv_id, force_legacy)
+        .await?;
+    let history = match route.route {
+        crate::harness::read_route::ReadRoute::Derive => {
+            crate::harness::read_route::load_history_from_events(pool.inner(), &conv_id).await?
+        }
+        crate::harness::read_route::ReadRoute::Legacy => {
+            repo::message::list_by_conversation(pool.inner(), &conv_id, Some(MEMORY_LOAD_LIMIT), None)
+                .await?
+        }
+    };
     // M1.2: 加载最近 10 条工具消息，提取 tool_use 块中的工具名
     let tool_call_history =
         repo::message::list_recent_tool_names(pool.inner(), &conv_id, 10).await?;

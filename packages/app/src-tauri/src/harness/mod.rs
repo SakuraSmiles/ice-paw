@@ -28,6 +28,7 @@ pub mod oneshot_registry;
 pub mod proposal_guard;
 pub mod proposal_registry;
 pub mod provider;
+pub mod read_route;
 pub mod reconcile;
 pub mod retry;
 pub mod scoring;

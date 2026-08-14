@@ -131,6 +131,10 @@ pub struct AssistantMessagePayload {
     pub blocks: Vec<ContentBlock>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token_count: Option<i64>,
+    /// 本轮生成耗时（stream 开始 → finalize，毫秒；补齐后轨迹耗时投影有模型道
+    /// 真实条宽，且不受 created_at 秒精度限制）。旧事件无此字段 → None。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
     /// 工具轮序（0 起）
     pub round: u32,
     /// 自动续写（finish_reason=length/max_tokens 触发的同气泡续写）
@@ -531,6 +535,7 @@ mod tests {
             content: content.into(),
             blocks: vec![ContentBlock::Text { text: content.into() }],
             token_count: Some(42),
+            duration_ms: Some(3_500),
             round,
             continuation,
         };
@@ -545,6 +550,11 @@ mod tests {
         assert_eq!(last.content, "前半段后半段");
         assert!(last.continuation);
         assert_eq!(last.round, 1);
+        assert_eq!(last.duration_ms, Some(3_500));
+        // 旧事件（无 duration_ms 字段）反序列化 → None，前端隐式耗时兜底的输入
+        let legacy: AssistantMessagePayload =
+            serde_json::from_str(r#"{"v":1,"content":"旧","blocks":[],"round":0,"continuation":false}"#).unwrap();
+        assert_eq!(legacy.duration_ms, None);
     }
 
     #[tokio::test]

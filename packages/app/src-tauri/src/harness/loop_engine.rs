@@ -174,6 +174,7 @@ async fn finalize_guard_logged(
     round: u32,
     model: Option<&str>,
     continuation: bool,
+    duration_ms: u64,
 ) -> PersistOutcome {
     let outcome = finalize_assistant_without_tool_use(
         pool,
@@ -197,6 +198,7 @@ async fn finalize_guard_logged(
                     content: content.clone(),
                     blocks: blocks.clone(),
                     token_count: completion_tokens.map(|t| t.max(1) as i64),
+                    duration_ms: Some(duration_ms),
                     round,
                     continuation,
                 },
@@ -428,7 +430,10 @@ async fn stream_loop_inner(
             }
         }
 
-        observable.elapsed_ms = round_timer.elapsed_ms();
+        // 本轮生成窗口（stream 开始 → 返回）：assistant_message 事件的 duration_ms 用它，
+        // 不用轮末重取——751/825 守卫点在工具执行后，重取会把工具耗时算进「生成耗时」。
+        let round_gen_ms = round_timer.elapsed_ms();
+        observable.elapsed_ms = round_gen_ms;
         emit_intermediate_round_state(&ctx.app, &ctx.conv_id, observable);
         // 【改】progress_text 跨轮累积，仅供停滞检测（不持久化）
         progress_text.push_str(&round_text);
@@ -498,6 +503,7 @@ async fn stream_loop_inner(
                 tool_round,
                 ctx.asst_model.as_deref(),
                 !continue_full_text.is_empty(),
+                round_gen_ms,
             )
             .await;
             return finalize_cancel(&ctx.app, &ctx.pool, &ev, &current_asst_msg_id, tool_round + 1)
@@ -527,6 +533,7 @@ async fn stream_loop_inner(
                 tool_round,
                 ctx.asst_model.as_deref(),
                 !continue_full_text.is_empty(),
+                round_gen_ms,
             )
             .await;
             return finalize_success(
@@ -586,6 +593,7 @@ async fn stream_loop_inner(
                 tool_round,
                 ctx.asst_model.as_deref(),
                 !continue_full_text.is_empty(),
+                round_gen_ms,
             )
             .await;
             return finalize_success(
@@ -627,6 +635,7 @@ async fn stream_loop_inner(
                 content: msg_text.clone(),
                 blocks: round_blocks.clone(),
                 token_count: round_completion_tokens.map(|t| t.max(1) as i64),
+                duration_ms: Some(round_gen_ms),
                 round: tool_round,
                 continuation: !continue_full_text.is_empty(),
             },
@@ -742,6 +751,7 @@ async fn stream_loop_inner(
                     tool_round,
                     ctx.asst_model.as_deref(),
                     !continue_full_text.is_empty(),
+                    round_gen_ms,
                 )
                 .await;
                 return fail_round_and_cancel(
@@ -815,6 +825,7 @@ async fn stream_loop_inner(
                 tool_round,
                 ctx.asst_model.as_deref(),
                 !continue_full_text.is_empty(),
+                round_gen_ms,
             )
             .await;
             if let Err(de) = repo::message::delete(&ctx.pool, &user_tool_msg_id).await {
