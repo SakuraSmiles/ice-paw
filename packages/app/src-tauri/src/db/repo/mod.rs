@@ -14,6 +14,7 @@ pub mod message_attachment;
 pub mod message_attachment_file;
 pub mod preferences;
 pub mod project;
+pub mod session_event;
 pub mod summary;
 pub mod template;
 pub mod tool_call;

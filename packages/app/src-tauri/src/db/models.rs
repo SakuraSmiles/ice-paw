@@ -645,6 +645,28 @@ pub struct NewToolCall {
 }
 
 // =========================================================================
+// Session Event（session-event-log Phase 0：append-only 事件日志）
+// =========================================================================
+
+/// 数据库行版本：会话事件
+///
+/// 表见 `migrations/44_session_events.sql`。append-only 不变式：永不
+/// UPDATE/DELETE（唯一删除路径是会话 CASCADE）。`payload` 是 JSON 字符串，
+/// 按 `kind` 反序列化为 `harness::event_log` 里的强类型 struct。
+#[derive(Debug, Clone, FromRow)]
+pub struct SessionEventRow {
+    pub id: i64,
+    pub session_id: String,
+    pub seq: i64,
+    pub kind: String,
+    pub actor: String,
+    pub turn_id: Option<String>,
+    pub message_id: Option<String>,
+    pub payload: String,
+    pub created_at: String,
+}
+
+// =========================================================================
 // TemplateRow（仅 pipeline context 使用）
 // =========================================================================
 
