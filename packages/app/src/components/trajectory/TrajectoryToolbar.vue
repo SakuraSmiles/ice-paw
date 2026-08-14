@@ -18,6 +18,8 @@ defineProps<{
   durationMode: boolean;
   /** 有任一轮处于折叠态（驱动展开/收起按钮的形态与文案） */
   anyCollapsed: boolean;
+  /** 会话级汇总（已载窗口内）：轮数 / 事件数 / 工具调用数 */
+  stats: { turns: number; events: number; tools: number };
   exporting: boolean;
 }>();
 
@@ -85,6 +87,10 @@ defineExpose({ focusSearch });
     </label>
 
     <div class="tbar-spacer" />
+
+    <span class="tbar-stats" title="已载窗口内：轮次 · 事件 · 工具调用">
+      {{ stats.turns }} 轮 · {{ stats.events }} 事件 · {{ stats.tools }} 工具
+    </span>
 
     <button class="tbar-export" :disabled="exporting" @click="emit('export')">
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>{{ exporting ? "导出中…" : "导出 JSONL" }}
@@ -191,6 +197,16 @@ defineExpose({ focusSearch });
 }
 
 .tbar-spacer { flex: 1; }
+
+/* 会话级汇总：只读文本簇（非控件），mono 数字右对齐呼应指标列 */
+.tbar-stats {
+  font-family: var(--ip-font-mono, monospace);
+  font-size: var(--ip-text-caption-size);
+  color: var(--ip-color-text-tertiary);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  padding-right: 2px;
+}
 
 .tbar-export {
   height: 26px;

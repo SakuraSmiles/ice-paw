@@ -23,8 +23,10 @@ const props = defineProps<{
   selectedSeq: number | null;
   /** 选中的 turn 头 turnKey（轮次级检查器；行高亮） */
   selectedTurnKey: string | null;
-  /** 搜索词非空时未命中行降透明度 */
+  /** 搜索词非空时未命中行降透明度；命中行内高亮片段 */
   searching: boolean;
+  /** 搜索词（searching 时行内高亮用；空串不切分） */
+  searchQuery: string;
   hasMore: boolean;
   loadingEarlier: boolean;
 }>();
@@ -172,6 +174,24 @@ function fmtDuration(ms: number | null): string {
 function fmtTokens(n: number): string {
   return n >= 10000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 }
+
+/** 搜索命中片段切分：把 summary 按 query（大小写不敏感）切成 [普通, 命中, …] 段 */
+function splitHighlight(text: string): { text: string; hit: boolean }[] {
+  const q = props.searching ? props.searchQuery.trim().toLowerCase() : "";
+  if (!q) return [{ text, hit: false }];
+  const out: { text: string; hit: boolean }[] = [];
+  const lower = text.toLowerCase();
+  let i = 0;
+  for (;;) {
+    const at = lower.indexOf(q, i);
+    if (at < 0) break;
+    if (at > i) out.push({ text: text.slice(i, at), hit: false });
+    out.push({ text: text.slice(at, at + q.length), hit: true });
+    i = at + q.length;
+  }
+  if (i < text.length) out.push({ text: text.slice(i), hit: false });
+  return out;
+}
 </script>
 
 <template>
@@ -194,6 +214,7 @@ function fmtTokens(n: number): string {
         :class="[`trow-${item.row.type}`, {
           selected: item.row.type === 'event' && item.row.seq === selectedSeq,
           'turn-selected': item.row.type === 'turn-header' && item.row.turnKey === selectedTurnKey,
+          'turn-errored': item.row.type === 'turn-header' && item.row.errorCount > 0,
           dim: searching && item.row.type === 'event' && !item.row.match,
         }]"
         :style="{ top: `${item.top}px` }"
@@ -235,7 +256,12 @@ function fmtTokens(n: number): string {
         <!-- 事件行 -->
         <template v-else>
           <span class="ev-badge" :class="[`ev-${item.row.kind}`, { 'ev-err': item.row.isError }]" :title="item.row.event.kind">{{ item.row.label }}</span>
-          <span class="ev-text" :class="{ 'ev-err-text': item.row.isError, 'ev-think-text': item.row.thinkingDerived }" :title="item.row.summary">{{ item.row.summary }}</span>
+          <span class="ev-text" :class="{ 'ev-err-text': item.row.isError, 'ev-think-text': item.row.thinkingDerived }" :title="item.row.summary">
+            <template v-for="(seg, si) in splitHighlight(item.row.summary)" :key="si">
+              <mark v-if="seg.hit" class="ev-hit">{{ seg.text }}</mark>
+              <template v-else>{{ seg.text }}</template>
+            </template>
+          </span>
           <span v-if="item.row.tokens != null" class="ev-tokens" title="token 计数">{{ fmtTokens(item.row.tokens) }} tok</span>
           <span v-if="item.row.durationMs != null" class="ev-dur" :title="item.row.kind === 'assistant' ? '生成耗时' : '执行耗时'">{{ fmtDuration(item.row.durationMs) }}</span>
         </template>
@@ -336,6 +362,10 @@ function fmtTokens(n: number): string {
 .trow-turn-header:active { background: var(--ip-color-bg-secondary); }
 /* 轮次头选中（检查器展示中）：底色与事件行选中态同语言 */
 .trow-turn-header.turn-selected { background: var(--ip-color-selection-bg); }
+/* 含错误轮次：淡红底扫读锚点（比 ⚠ 计数徽章更醒目）；hover 仍可辨 */
+.trow-turn-header.turn-errored { background: var(--ip-danger-bg); }
+.trow-turn-header.turn-errored:hover { background: var(--ip-danger-bg); filter: brightness(0.97); }
+.trow-turn-header.turn-errored.turn-selected { background: var(--ip-color-selection-bg); }
 .th-chevron { font-size: 9px; color: var(--ip-color-text-tertiary); width: 10px; flex-shrink: 0; }
 .th-no { font-weight: var(--ip-font-weight-semibold); color: var(--ip-color-text-primary); white-space: nowrap; }
 .th-date, .th-time {
@@ -452,6 +482,13 @@ function fmtTokens(n: number): string {
   min-width: 0;
 }
 .ev-err-text { color: var(--ip-danger-base); }
+/* 搜索命中片段：轻底高亮（mark 语义标签，默认黄底样式全覆写为主题语言） */
+.ev-hit {
+  background: var(--ip-color-primary-soft-bg, var(--ip-primary-50));
+  color: var(--ip-primary-700, var(--ip-primary-600));
+  border-radius: 2px;
+  padding: 0 1px;
+}
 /* 思考代摘要：斜体弱化——内心活动而非发言（全量思考在检查器） */
 .ev-think-text { color: var(--ip-color-text-tertiary); font-style: italic; }
 .ev-tokens, .ev-dur {

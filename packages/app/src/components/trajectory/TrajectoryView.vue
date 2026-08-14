@@ -35,6 +35,22 @@ const collapsedTurns = ref<Set<string>>(new Set());
 const selectedRow = ref<TrajectoryRow | null>(null);
 
 const searching = computed(() => query.value.trim() !== "");
+
+/** 会话级汇总（工具栏 chip）：已载窗口内的轮数/事件/工具计数 */
+const stats = computed(() => {
+  let turns = 0;
+  let tools = 0;
+  let lastTk: string | null = null;
+  for (const ev of events.value) {
+    const tk = ev.turn_id ?? "__orphan__";
+    if (tk !== lastTk) {
+      turns += 1;
+      lastTk = tk;
+    }
+    if (ev.kind === "tool_execution") tools += 1;
+  }
+  return { turns, events: events.value.length, tools };
+});
 const rows = computed(() =>
   buildRows(events.value, { collapsedTurns: collapsedTurns.value, showAux: showAux.value, query: query.value }),
 );
@@ -281,6 +297,7 @@ onBeforeUnmount(stopPolling);
       v-model:show-aux="showAux"
       v-model:duration-mode="durationMode"
       :any-collapsed="anyCollapsed"
+      :stats="stats"
       :exporting="exporting"
       @toggle-turns="toggleTurns"
       @search-jump="searchJump"
@@ -313,6 +330,7 @@ onBeforeUnmount(stopPolling);
             :selected-seq="selectedSeq"
             :selected-turn-key="selectedTurnKey"
             :searching="searching"
+            :search-query="query"
             :has-more="hasMore"
             :loading-earlier="loadingEarlier"
             @select-row="selectRow"
