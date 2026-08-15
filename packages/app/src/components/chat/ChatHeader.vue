@@ -153,16 +153,6 @@ function viewInfo() {
 <template>
   <header class="chat-header" :class="{ 'has-tabbar': hasTabbar }">
     <div class="header-left">
-      <!-- MA-1 任务详情 v1：委派子会话的回路（返回父会话，落「对话」tab） -->
-      <button
-        v-if="delegation?.parentId"
-        class="back-btn"
-        :title="`返回父会话：${delegation.parentTitle}`"
-        @click="goBackToParent"
-      >
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12" /><polyline points="12 19 5 12 12 5" /></svg>
-        <span class="back-label">{{ delegation.parentTitle }}</span>
-      </button>
       <div class="header-info">
         <input
           v-if="editing"
@@ -174,6 +164,20 @@ function viewInfo() {
           @click.stop
         />
         <h1 v-else class="header-title" @dblclick="startEdit">
+          <!-- MA-1：委派子会话的回路——面包屑式上文（父会话 › 本任务）。
+               父会话即返回入口（点击回父会话），比独立返回按钮更贴合
+               「这是从哪来的」的导航语义，也不与标题抢视觉 -->
+          <button
+            v-if="delegation?.parentId"
+            class="crumb-parent"
+            :title="`返回父会话：${delegation.parentTitle}`"
+            @click.stop="goBackToParent"
+            @dblclick.stop
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6" /></svg>
+            <span class="crumb-label">{{ delegation.parentTitle }}</span>
+          </button>
+          <span v-if="delegation?.parentId" class="crumb-sep">/</span>
           <span class="header-title-text">{{ chat.activeConversation?.title || "新对话" }}</span>
           <!-- MA-1 任务详情 v1：徽章升级为「委派任务」+ 状态点（进行中脉冲/已结束中性；
                done/failed 精确终态是 MA-2 台账，不伪造） -->
@@ -269,16 +273,20 @@ function viewInfo() {
 .chat-header.has-tabbar { border-bottom:none; }
 .header-left { display:flex; align-items:center; gap:10px; min-width:0; }
 .header-info { display:flex; flex-direction:column; gap:2px; min-width:0; }
-/* 返回父会话：委派子会话的唯一回路（子会话不在侧栏列表，无法点侧栏回去） */
-.back-btn {
-  display:flex; align-items:center; gap:4px; flex-shrink:0;
-  max-width:220px; padding:4px 10px; border:none; cursor:pointer;
-  border-radius:var(--ip-radius-md); background:transparent;
-  color:var(--ip-color-text-secondary); font-size:var(--ip-text-caption-size);
-  transition:all var(--ip-duration-fast) var(--ip-ease-out);
+/* 面包屑上文（父会话 › 本任务）：父会话即返回入口（子会话不在侧栏列表）。
+   视觉降一档（caption/tertiary），hover 提亮为 primary 强调可点；不抢标题主体 */
+.crumb-parent {
+  display:inline-flex; align-items:center; gap:2px; flex-shrink:0;
+  max-width:220px; padding:2px 4px 2px 0; border:none; cursor:pointer;
+  background:transparent; border-radius:var(--ip-radius-sm);
+  color:var(--ip-color-text-tertiary); font-size:var(--ip-text-caption-size);
+  font-weight:var(--ip-font-weight-regular); vertical-align:1px;
+  transition:color var(--ip-duration-fast) var(--ip-ease-out);
 }
-.back-btn:hover { background-color:var(--ip-color-bg-tertiary); color:var(--ip-color-text-primary); }
-.back-label { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.crumb-parent:hover { color:var(--ip-primary-600); }
+.crumb-parent svg { flex-shrink:0; }
+.crumb-label { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.crumb-sep { margin:0 6px 0 2px; font-size:var(--ip-text-caption-size); color:var(--ip-color-text-disabled); vertical-align:1px; }
 /* 任务状态点：与 DelegationCard/任务胶囊同语义（进行中脉冲=warning，结束=中性） */
 .hdr-dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; display:inline-block; margin-right:2px; background:var(--ip-color-text-tertiary); }
 .hdr-dot.running { background:var(--ip-warning-base, #d97706); animation:hdr-pulse 1.2s ease-in-out infinite; }

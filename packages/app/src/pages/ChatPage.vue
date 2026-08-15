@@ -92,8 +92,14 @@ watch(() => chat.activeConvId, () => {
 }
 
 /* 标签条与 ChatHeader 视觉一体：同底色（明暗各自跟随 --color-chat-header-bg），
-   无顶部分割线（header 侧配套去掉底边线，见 ChatHeader 的 has-tabbar 修饰） */
+   无顶部分割线（header 侧配套去掉底边线，见 ChatHeader 的 has-tabbar 修饰）。
+   ⚠️ position+z-index 必须保留：tabbar 是非定位元素时，其内任务胶囊 popover
+   的 z-index 只在 tabbar 子树内生效；而下方 .chat-render 的双 pane 是
+   position:absolute 定位元素，绘制在所有非定位元素之上 → popover 被内容区
+   整层盖住。z-index:20 需高于内容区内部最高层（轨迹页 10 / 撤销 toast 10）。 */
 .chat-tabbar {
+  position: relative;
+  z-index: 20;
   display: flex;
   align-items: center;
   gap: 10px;

@@ -511,7 +511,10 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
 </script>
 
 <template>
-  <div ref="listRef" class="messages-area">
+  <!-- wrap：相对定位包裹层——承载「跳到最新」右侧轨道按钮（独立于滚动容器，
+       绝对定位子元素若挂在滚动容器内会随内容滚动，位置漂移） -->
+  <div class="messages-wrap">
+    <div ref="listRef" class="messages-area">
     <!-- 错误提示 -->
     <div v-if="chat.lastError" class="chat-error-banner">
       <span class="chat-error-icon">!</span>
@@ -845,14 +848,6 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
       </div>
     </div>
 
-    <Transition name="fade-up">
-      <button v-if="showScrollBtn" class="scroll-bottom-btn" title="回到底部并跟随最新" @click="scrollToBottom()">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <line x1="12" y1="5" x2="12" y2="19" /><polyline points="19 12 12 19 5 12" />
-        </svg>
-      </button>
-    </Transition>
-
     <!-- 全屏图片预览（多图可翻页） -->
     <ImagePreview
       v-if="previewImages"
@@ -868,23 +863,38 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
       :extracted-texts="detailTexts"
       @close="detailAttachments = null"
     />
+    </div>
+
+    <!-- 「跳到最新」：右侧轨道常驻位（垂直居中、非悬浮）——内容列已从右侧
+         预留轨道宽度，按钮永不遮内容；样式/组件化后续单独优化，此处先落位 -->
+    <Transition name="fade-up">
+      <button v-if="showScrollBtn" class="scroll-bottom-btn" title="回到底部并跟随最新" @click="scrollToBottom()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="12" y1="5" x2="12" y2="19" /><polyline points="19 12 12 19 5 12" />
+        </svg>
+      </button>
+    </Transition>
   </div>
 </template>
 
 <style scoped>
+/* 包裹层：flex 主轴占满 + 相对定位（轨道按钮的锚）。
+   --msg-col-right：内容列右侧内边距（= 基础 48px + 「跳到最新」轨道预留 32px），
+   气泡/日期线/提示行右侧统一用它对齐；调轨道宽度只改这一个值。 */
+.messages-wrap { flex:1; min-height:0; display:flex; position:relative; --msg-col-right:80px; }
 .messages-area { flex:1; overflow-y:auto; padding:24px 0; position:relative; }
-.messages-container { display:flex; flex-direction:column; gap:16px; padding:0 48px; }
+.messages-container { display:flex; flex-direction:column; gap:16px; padding:0 var(--msg-col-right) 0 48px; }
 
 /* ===== 分页指示 ===== */
-.load-more-hint { text-align:center; font-size:var(--ip-text-caption-size); color:var(--ip-color-text-tertiary); padding:8px 48px; }
+.load-more-hint { text-align:center; font-size:var(--ip-text-caption-size); color:var(--ip-color-text-tertiary); padding:8px var(--msg-col-right) 8px 48px; }
 .load-more-end { color:var(--ip-color-text-disabled); }
 
 /* ===== 日期分组 ===== */
-.date-divider { display:flex; align-items:center; gap:12px; padding:20px 48px 8px; font-size:var(--ip-text-caption-size); color:var(--ip-color-text-disabled); }
+.date-divider { display:flex; align-items:center; gap:12px; padding:20px var(--msg-col-right) 8px 48px; font-size:var(--ip-text-caption-size); color:var(--ip-color-text-disabled); }
 .date-divider::before, .date-divider::after { content:''; flex:1; height:1px; background:var(--ip-color-border-default); }
 
 /* ===== finish_reason 提示（B3：中性提示 + 可续跑类「继续」按钮）===== */
-.finish-reason { display:flex; align-items:center; justify-content:center; gap:8px; padding:4px 48px 0; }
+.finish-reason { display:flex; align-items:center; justify-content:center; gap:8px; padding:4px var(--msg-col-right) 0 48px; }
 .finish-reason span { display:inline-block; font-size:var(--ip-text-caption-size); color:var(--ip-color-text-tertiary); padding:2px 10px; border-radius:var(--ip-radius-full); background:var(--ip-color-bg-tertiary); }
 .continue-btn { font-size:var(--ip-text-caption-size); color:var(--ip-color-text-secondary); padding:2px 12px; border-radius:var(--ip-radius-full); border:1px solid var(--ip-color-border-default); background:var(--ip-color-bg-secondary); cursor:pointer; transition:all var(--ip-duration-fast) var(--ip-ease-out); }
 .continue-btn:hover { color:var(--ip-color-text-primary); border-color:var(--ip-color-border-strong); }
@@ -1038,7 +1048,10 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
 }
 
 /* ===== 滚动到底按钮 ===== */
-.scroll-bottom-btn { position:fixed; top:80px; right:48px; z-index:50; width:32px; height:32px; border-radius:var(--ip-radius-lg); border:1px solid var(--ip-color-border-default); background-color:var(--ip-color-bg-elevated); color:var(--ip-color-text-secondary); box-shadow:var(--ip-shadow-sm); cursor:pointer; display:flex; align-items:center; justify-content:center; transition:all var(--ip-duration-fast) var(--ip-ease-out); backdrop-filter:blur(8px); }
+/* 「跳到最新」右侧轨道位：垂直居中（top 用 calc 而非 transform 居中——
+   fade-up 进出场动画要占用 transform，二者会互相覆盖）。轨道已从内容列
+   预留（--msg-col-right），按钮不悬浮不遮内容。 */
+.scroll-bottom-btn { position:absolute; top:calc(50% - 18px); right:24px; z-index:5; width:36px; height:36px; border-radius:var(--ip-radius-lg); border:1px solid var(--ip-color-border-default); background-color:var(--ip-color-bg-elevated); color:var(--ip-color-text-secondary); box-shadow:var(--ip-shadow-sm); cursor:pointer; display:flex; align-items:center; justify-content:center; transition:all var(--ip-duration-fast) var(--ip-ease-out); }
 .scroll-bottom-btn:hover { background-color:var(--ip-color-bg-secondary); color:var(--ip-color-text-primary); border-color:var(--ip-color-border-strong); box-shadow:var(--ip-shadow-md); }
 
 .fade-up-enter-active { animation:fade-up-in 0.2s ease-out; }
