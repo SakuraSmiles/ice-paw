@@ -20,6 +20,8 @@ import type {
   NewProject,
   PlanSnapshot,
   Project,
+  ProviderConnectionResult,
+  ProviderInfo,
   SessionEvent,
   TurnAnchor,
   UpdateProject,
@@ -58,6 +60,30 @@ const agents = {
   async delete(id: string): Promise<void> {
     try { await invoke<void>("delete_agent", { id }); }
     catch (err) { throw wrapInvokeError("agents.delete", err); }
+  },
+};
+
+const providers = {
+  /** Provider 目录（后端注册表快照；失败时调用方降级为空表 + 手输） */
+  async list(): Promise<ProviderInfo[]> {
+    try { return await invoke<ProviderInfo[]>("list_providers"); }
+    catch (err) { throw wrapInvokeError("providers.list", err); }
+  },
+  /** 测试连通性并拉取模型列表（一次 GET /models，「测试连接」「拉取」两按钮共用） */
+  async testConnection(
+    providerName: string,
+    baseUrl?: string,
+    apiKey?: string,
+    agentId?: string,
+  ): Promise<ProviderConnectionResult> {
+    try {
+      return await invoke<ProviderConnectionResult>("test_provider_connection", {
+        providerName,
+        baseUrl: baseUrl || null,
+        apiKey: apiKey || null,
+        agentId: agentId || null,
+      });
+    } catch (err) { throw wrapInvokeError("providers.testConnection", err); }
   },
 };
 
@@ -324,5 +350,5 @@ const trajectory = {
   },
 };
 
-export const bridge = { agents, conversations, projects, messages, chat, preferences, mcp, kb, logs, trajectory };
+export const bridge = { agents, providers, conversations, projects, messages, chat, preferences, mcp, kb, logs, trajectory };
 export default bridge;

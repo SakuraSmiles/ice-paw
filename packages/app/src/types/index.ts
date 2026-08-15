@@ -69,6 +69,40 @@ export interface AgentUpdate {
 }
 
 // ============================================================================
+// Provider（模型提供方目录——后端 PROVIDERS 注册表经 list_providers 下发，
+// 前端唯一数据源，勿在组件内再硬编码 provider 列表）
+// ============================================================================
+
+/** 协议族：决定鉴权 header 与端点拼接规则 */
+export type ProviderProtocolKind = "openai" | "anthropic";
+
+export interface ProviderInfo {
+  /** 注册名（存库值，如 "glm-coding"） */
+  name: string;
+  protocol: ProviderProtocolKind;
+  /** 默认地址；custom 为空串（必须显式填 base_url） */
+  default_url: string;
+  /** 展示名（下拉主行） */
+  label: string;
+  /** 补充说明（下拉副行） */
+  note: string | null;
+  /** 是否必须配 API Key（ollama/custom 为 false） */
+  requires_key: boolean;
+  /** 是否必须显式填写 API URL（仅 custom） */
+  requires_base_url: boolean;
+  /** 静态模型目录（起点参考；「拉取」拿实时列表，手输永远保留） */
+  models: string[];
+}
+
+/** test_provider_connection 结果：探测失败不是命令失败（ok=false + error 行内展示） */
+export interface ProviderConnectionResult {
+  ok: boolean;
+  model_count: number;
+  models: string[];
+  error: string | null;
+}
+
+// ============================================================================
 // Conversation
 // ============================================================================
 
