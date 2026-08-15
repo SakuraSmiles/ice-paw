@@ -18,6 +18,8 @@
 
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
+use std::sync::OnceLock;
+use tokio::sync::broadcast;
 
 use crate::db::repo::{self, session_event};
 use crate::infra::protocol::{ContentBlock, TokenUsage};
@@ -52,6 +54,27 @@ impl EventCtx {
 /// actor 列取值：`user`。
 pub fn actor_user() -> &'static str {
     "user"
+}
+
+// =========================================================================
+// 事件通知总线（轨迹 live v2：append 即通知，前端事件驱动拉增量）
+// =========================================================================
+
+/// 「事件已落库」通知（轻 payload：只带定位所需字段，前端按会话过滤后
+/// 用已载 max_seq 作游标 `list_after` 拉增量——不内嵌事件本体，避免双写）。
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionEventAppended {
+    pub conversation_id: String,
+    pub kind: String,
+}
+
+/// 进程内广播通道。append_event 是全部 13 kind 的唯一汇聚点，在这里 send
+/// 一条通知即可覆盖所有事件源（含未来新增 kind），无需逐调用方接线。
+/// 无订阅者时 send 返回 Err——直接忽略（dev 测试 / 订阅任务未起时安静跳过）。
+static EVENT_BUS: OnceLock<broadcast::Sender<SessionEventAppended>> = OnceLock::new();
+
+pub fn event_bus() -> &'static broadcast::Sender<SessionEventAppended> {
+    EVENT_BUS.get_or_init(|| broadcast::channel(256).0)
 }
 
 // =========================================================================
@@ -295,11 +318,18 @@ async fn append_event(
             return;
         }
     };
-    if let Err(e) =
-        session_event::append(pool, &ctx.conv_id, kind, actor, Some(&ctx.turn_id), message_id, &json)
-            .await
-    {
-        tracing::warn!(target: "ice_paw.event_log", "事件写入失败 kind={kind} conv={} err={e}", ctx.conv_id);
+    match session_event::append(pool, &ctx.conv_id, kind, actor, Some(&ctx.turn_id), message_id, &json).await {
+        Ok(_) => {
+            // 落库成功 → 广播通知（同步非阻塞；订阅方 lib.rs 转 Tauri event 推前端）。
+            // 不违反「inline await 禁 spawn」：send 是同步操作，无任务逃逸。
+            let _ = event_bus().send(SessionEventAppended {
+                conversation_id: ctx.conv_id.clone(),
+                kind: kind.to_string(),
+            });
+        }
+        Err(e) => {
+            tracing::warn!(target: "ice_paw.event_log", "事件写入失败 kind={kind} conv={} err={e}", ctx.conv_id);
+        }
     }
 }
 

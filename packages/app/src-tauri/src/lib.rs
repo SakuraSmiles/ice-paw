@@ -216,6 +216,21 @@ pub fn run() {
             );
             handle.manage(proposal_registry);
 
+            // 3c) 会话事件通知总线（轨迹 live v2）：订阅 event_log 的 append 广播，
+            //     转 Tauri event 推给前端——前端按 conversation_id 过滤后用已载
+            //     max_seq 游标拉增量（list_after），替代纯轮询的固定延迟。
+            //     事件在 append 落库成功后才广播，通知到达时行必可查，无竞态。
+            {
+                use tauri::Emitter;
+                let mut rx = harness::event_log::event_bus().subscribe();
+                let emit_handle = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    while let Ok(note) = rx.recv().await {
+                        let _ = emit_handle.emit("session:event-appended", note);
+                    }
+                });
+            }
+
             // 4) REQ-XC-010: 注入 AgentCmd trait object (生产实现 SqlAgentCmd)
             // 覆盖 builder 阶段注入的 None 占位。
             let sql_agent_cmd: std::sync::Arc<dyn commands::agent_cmd::AgentCmd> =
