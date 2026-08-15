@@ -414,6 +414,63 @@ async fn list_preserves_multi_round_tool_sequence() {
 }
 
 // ---------------------------------------------------------------------------
+// 轮次导航条锚点：tool_result 占位行不是轮次（轮次维度修复回归）
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn list_turn_anchors_excludes_tool_result_placeholder_rows() {
+    let pool = fresh_pool().await;
+    let conv_id = seed_agent_and_conv(&pool).await;
+
+    // 一次 3 轮、每轮各带 1 次工具调用的会话（生产真实形态）：
+    //   user(输入) → asst(tool_use) → user[tool_result]  ← 占位行，同为 role='user'
+    //   ×3 轮
+    // user 行共 6 条，但真实轮次只有 3——导航条曾把占位行也数成轮，
+    // 真机 10 轮会话数出 49 轮。
+    for i in 1..=3 {
+        let (u, a, r) = (
+            format!("turn-{i}-user"),
+            format!("turn-{i}-asst"),
+            format!("turn-{i}-result"),
+        );
+        for (id, role) in [(&u, "user"), (&a, "assistant"), (&r, "user")] {
+            message::create(
+                &pool,
+                id,
+                &NewMessage {
+                    conversation_id: conv_id.clone(),
+                    role: role.into(),
+                    content: if id == &u { format!("第{i}个问题") } else { String::new() },
+                    token_count: None,
+                    error: None,
+                    model: None,
+                },
+            )
+            .await
+            .unwrap();
+        }
+        // 工具轮占位行：content='' + content_blocks 全 tool_result（与生产同构）
+        message::update_content_blocks(
+            &pool,
+            &r,
+            r#"[{"type":"tool_result","tool_use_id":"call_0","content":"ok"}]"#,
+        )
+        .await
+        .unwrap();
+    }
+
+    let anchors = message::list_turn_anchors(&pool, &conv_id).await.unwrap();
+    let ids: Vec<&str> = anchors.iter().map(|a| a.message_id.as_str()).collect();
+    assert_eq!(
+        ids,
+        vec!["turn-1-user", "turn-2-user", "turn-3-user"],
+        "tool_result 占位行（同为 role='user'）必须被排除，轮次才与\
+         轨迹页 count_turns_before（distinct turn_id）同基准"
+    );
+    assert_eq!(anchors[0].preview, "第1个问题");
+}
+
+// ---------------------------------------------------------------------------
 // 公共函数存在性：避免命名漂移导致测试假阳性
 // ---------------------------------------------------------------------------
 
