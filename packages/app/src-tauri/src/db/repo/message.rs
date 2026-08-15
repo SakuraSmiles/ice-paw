@@ -98,11 +98,16 @@ pub async fn list_by_conversation(
     Ok(rows)
 }
 
-/// 轮次锚点（聊天「轮次导航条」UX #5）：一轮 = 一条用户消息。
+/// 轮次锚点（聊天「轮次导航条」UX #5）：一轮 = 一条**真实**用户消息。
+///
+/// 工具轮的 tool_result 占位行同为 `role='user'`（content='' +
+/// content_blocks 全 tool_result），必须排除——否则轮次被工具轮数膨胀
+/// （真机：10 轮会话曾数出 49）。排除后与轨迹页 `count_turns_before`
+/// （distinct turn_id，不变式 turn_id == user_msg_id）同基准。
 ///
 /// 只取 `id / 预览 / 时间` 三个轻量字段——**不加载 content_blocks 大字段**，
 /// 预览在 SQL 侧 `substr` 截断（字符级），3000 轮也只有小行级成本。
-/// 轮号 = 前端按下标 +1（与轨迹页「第 N 轮」同基准：user_message 计数）。
+/// 轮号 = 前端按下标 +1。
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct TurnAnchor {
     pub message_id: String,
@@ -116,9 +121,11 @@ pub async fn list_turn_anchors(
     conversation_id: &str,
 ) -> AppResult<Vec<TurnAnchor>> {
     let rows: Vec<(String, Option<String>, String)> = sqlx::query_as(
+        // COALESCE：content_blocks 为 NULL 的旧 user 行是真实轮次，必须保留
         "SELECT id, substr(content, 1, 120), created_at \
            FROM messages \
           WHERE conversation_id = ? AND role = 'user' \
+            AND COALESCE(content_blocks, '') NOT LIKE '%\"type\":\"tool_result\"%' \
           ORDER BY created_at ASC, rowid ASC",
     )
     .bind(conversation_id)

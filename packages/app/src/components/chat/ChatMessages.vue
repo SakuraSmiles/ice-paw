@@ -23,7 +23,7 @@ import AttachmentDetail from "./AttachmentDetail.vue";
 import TurnRail from "./TurnRail.vue";
 import { useThinkingTimer } from "../../composables/useThinkingTimer";
 import { useScrollFollow } from "../../composables/useScrollFollow";
-import { useTurnRail, buildTurnBuckets, RAIL_CAPACITY } from "../../composables/useTurnRail";
+import { useTurnRail } from "../../composables/useTurnRail";
 import type { Message, MessageRole, PlanItem } from "../../types";
 
 const chat = useChatStore();
@@ -34,12 +34,12 @@ const listRef = ref<HTMLElement | null>(null);
 const { showScrollBtn, autoFollow, paginating, scrollToBottom, restoreForConversation } = useScrollFollow(listRef);
 
 // =========================================================================
-// 轮次导航条（UX #5）：锚点目录（后端轻量行）+ 视位侦测 + 跨页跳转。
+// 轮次导航条（UX #5 v2）：锚点（后端轻量行，已排除 tool_result 占位）+
+// 视位侦测 + 跨页跳转；定容窗口（当前轮居中）状态在 TurnRail 组件内。
 // 定位是「目录」不是 minimap——未加载页的内容高度不可知，按轮次索引对
-// 任意规模（几千轮）都成立；超 RAIL_CAPACITY 轮自动聚合。
+// 任意规模（几千轮）都成立。
 // =========================================================================
 const { anchors, loadAnchors } = useTurnRail();
-const buckets = computed(() => buildTurnBuckets(anchors.value, RAIL_CAPACITY));
 
 // ---- 视位侦测：视口顶所在轮（throttle 用 rAF 合帧；查询走缓存 tops） ----
 const activeTurn = ref<number | null>(null);
@@ -962,10 +962,11 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
     />
     </div>
 
-    <!-- 轮次导航条（UX #5）：一轮一线目录 + 视位高亮 + 底部「跳到最新」；
+    <!-- 轮次导航条（UX #5 v2）：定容滑动窗口（当前轮居中）+ 视位高亮 +
+         位置徽标 + 边缘省略号/滚轮调窗 + 底部「跳到最新」；
          ≥2 轮才出现，短会话由下方兜底按钮接住跳最新 -->
     <TurnRail
-      :buckets="buckets"
+      :anchors="anchors"
       :active-turn="activeTurn"
       :show-latest="showScrollBtn"
       @jump="jumpToTurn"
@@ -974,7 +975,7 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
 
     <!-- 「跳到最新」兜底：无导航条（<2 轮）时保留原右侧轨道按钮 -->
     <Transition name="fade-up">
-      <button v-if="showScrollBtn && buckets.length < 2" class="scroll-bottom-btn" title="回到底部并跟随最新" @click="scrollToBottom()">
+      <button v-if="showScrollBtn && anchors.length < 2" class="scroll-bottom-btn" title="回到底部并跟随最新" @click="scrollToBottom()">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <line x1="12" y1="5" x2="12" y2="19" /><polyline points="19 12 12 19 5 12" />
         </svg>

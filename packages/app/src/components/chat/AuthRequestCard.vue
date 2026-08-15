@@ -126,7 +126,10 @@ function deny() {
 <style scoped>
 .auth-card {
   position: relative;
-  margin: 0 24px 8px;
+  /* 宽度对齐输入框列（ChatInput .input-container max-width:800px + 居中）：
+     审批卡悬在输入框正上方，横贯整个内容区（2K 宽屏尤甚）视觉割裂且压迫 */
+  margin: 0 auto 8px;
+  width: min(calc(100% - 48px), 800px);
   background: var(--ip-color-bg-elevated);
   border: 1px solid var(--ip-color-border-default);
   border-radius: var(--ip-radius-lg);
