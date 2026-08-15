@@ -2,6 +2,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
 import Sidebar from "../chat/Sidebar.vue";
+import AuthNoticeStack from "../chat/AuthNoticeStack.vue";
 
 const ready = ref(false);
 onMounted(() => {
@@ -40,6 +41,9 @@ onMounted(() => {
       </router-view>
     </main>
   </div>
+
+  <!-- 后台会话授权通知栈（#10 后台分支）：全局挂载，任何页面都可见可跳转 -->
+  <AuthNoticeStack />
 </template>
 
 <style scoped>

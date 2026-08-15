@@ -305,15 +305,16 @@ export async function useChatEvents(): Promise<() => void> {
   // ---- 工具授权请求 ----（始终按 convId 存，不丢后台会话；cancel 时按 request_id 清）
   await subscribe<ToolAuthRequestPayload>("chat:tool-auth-request", (e) => {
     const m = new Map(chat.pendingAuthRequests);
-    m.set(e.payload.conversation_id, e.payload);
+    // receivedAt 驱动 120s 倒计时渲染（与后端 TIMEOUT 同步到期自动消失）
+    m.set(e.payload.conversation_id, { payload: e.payload, receivedAt: Date.now() });
     chat.pendingAuthRequests = m;
   });
   await subscribe<{ request_id: string; conversation_id: string; reason: string }>(
     "chat:tool-auth-request-cancel",
     (e) => {
       const m = new Map(chat.pendingAuthRequests);
-      for (const [cid, r] of m) {
-        if (r.request_id === e.payload.request_id) { m.delete(cid); break; }
+      for (const [cid, entry] of m) {
+        if (entry.payload.request_id === e.payload.request_id) { m.delete(cid); break; }
       }
       chat.pendingAuthRequests = m;
     },

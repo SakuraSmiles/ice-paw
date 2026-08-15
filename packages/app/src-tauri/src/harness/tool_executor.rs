@@ -7,8 +7,8 @@
 //! 4. 收集 tool_use + tool_result 的 ContentBlock，emit `chat:tool-result`
 //!
 //! **A2-3 变更**：
-//! - `execute_tool_round` 现在接收 `PathAuthSession`（会话级已授权路径表）
-//!   和 `whitelist_config`（白名单配置）。
+//! - `execute_tool_round` 现在接收 `PathAuthSession`（会话级分层授权记忆，#11：
+//!   精确路径/目录/工具三档 grant）和 `whitelist_config`（白名单配置）。
 //! - 当工具授权等级为 `PathWhitelist` 或 `Confirm` 且不在白名单 / 会话已授权
 //!   集合内时，emit `chat:tool-auth-request` 事件，前端弹窗后通过
 //!   `chat:tool-auth-response` 事件回传结果，Rust 侧用 oneshot 通道匹配
@@ -36,8 +36,8 @@ use uuid::Uuid;
 use crate::db::models::{HookConfig, HookPoint};
 use crate::db::repo;
 use crate::infra::protocol::{
-    ChatToolResultPayload, ContentBlock, PendingRequestCancelPayload, ToolAuthRequestPayload,
-    ToolAuthResponse,
+    AuthScope, ChatToolResultPayload, ContentBlock, PendingRequestCancelPayload,
+    ToolAuthRequestPayload, ToolAuthResponse,
 };
 use crate::harness::mcp::{AuthorizationLevel, McpRegistry, ToolContext};
 use crate::harness::mcp::client::ToolOutput;
@@ -113,8 +113,8 @@ pub(crate) async fn execute_tool_round(
     for (tc_id, tc_name, tc_args) in completed_calls {
         let tool_start = std::time::Instant::now();
         let started_at = now_sql();
-        // 1. 解析授权级别 + 路径
-        let (level, file_path) = inspect_tool_for_auth(registry, tc_name, tc_args).await;
+        // 1. 解析授权级别 + 路径（+ 路径字段名——「允许此目录」档判定 dir 本身 vs 父目录用）
+        let (level, file_path, path_key) = inspect_tool_for_auth(registry, tc_name, tc_args).await;
 
         let decision = if matches!(level, AuthorizationLevel::PathWhitelist)
             && path_within_workspace(&file_path, &workspace)
@@ -179,18 +179,32 @@ pub(crate) async fn execute_tool_round(
                     )
                     .await;
                     match outcome {
-                        Some(true) => {
-                            // 用户允许：标记会话级授权，然后执行
-                            session.mark_authorized(&file_path).await;
+                        Some(resp) if resp.allowed => {
+                            // 用户允许：按所选范围入会话级分层授权（#11），然后执行
+                            match resp.scope {
+                                AuthScope::Once => {
+                                    session.mark_authorized(&file_path).await;
+                                }
+                                AuthScope::ThisTool => {
+                                    session.mark_tool_authorized(&tool_name).await;
+                                }
+                                AuthScope::ThisDir => match dir_grant_target(&path_key, &file_path)
+                                {
+                                    Some(dir) => session.mark_dir_authorized(&dir).await,
+                                    // 无路径（Confirm 级工具）→ 退化为工具档（协议注释已声明）
+                                    None => session.mark_tool_authorized(&tool_name).await,
+                                },
+                            }
                             tracing::info!(
                                 target: "ice_paw.tool_auth",
-                                "用户允许工具调用: tool={} path={}",
+                                "用户允许工具调用: tool={} path={} scope={:?}",
                                 tool_name,
                                 file_path,
+                                resp.scope,
                             );
                             invoke_tool(registry, tc_name, tc_args, tool_ctx).await
                         }
-                        Some(false) => {
+                        Some(_) => {
                             // 用户拒绝：写工具结果为拒绝错误
                             tracing::info!(
                                 target: "ice_paw.tool_auth",
@@ -443,8 +457,7 @@ pub(crate) async fn execute_tool_round(
 /// 等待前端授权响应。
 ///
 /// 返回值：
-/// - `Some(true)`  用户允许
-/// - `Some(false)` 用户拒绝
+/// - `Some(resp)`  用户已决定（`resp.allowed` + `resp.scope` 供按档入账）
 /// - `None`        被取消 / 超时
 ///
 /// `cancel` 触发取消时，oneshot receiver 被丢弃，sender 端 send 失败被忽略。
@@ -458,7 +471,7 @@ async fn wait_for_auth_response(
     auth_registry: &ToolAuthRegistry,
     app: &AppHandle,
     conv_id: &str,
-) -> Option<bool> {
+) -> Option<ToolAuthResponse> {
     const TIMEOUT: Duration = Duration::from_secs(120); // 2 分钟——用户不在时快速超时释放会话
 
     tokio::select! {
@@ -485,7 +498,7 @@ async fn wait_for_auth_response(
         // 收到前端响应
         msg = rx => {
             match msg {
-                Ok(resp) => Some(resp.allowed),
+                Ok(resp) => Some(resp),
                 Err(_) => {
                     // sender 被 drop → 视为取消
                     emit_auth_cancel(app, request_id, conv_id, "cancelled");
@@ -532,26 +545,28 @@ fn now_sql() -> String {
     chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
-/// 从工具实例提取 `AuthorizationLevel` + 待访问路径。
+/// 从工具实例提取 `AuthorizationLevel` + 待访问路径 + 路径字段名。
 ///
 /// - `level` 直接调 `tool.authorization_level()`
-/// - `file_path` 从参数 JSON 中尝试 `path` / `file_path` / `dir` 字段
-///   提取，找不到则用空字符串（`Always` 工具不需要路径）
+/// - `file_path` 从参数 JSON 中提取（见 [`extract_path_from_args`]），
+///   找不到则用空字符串（`Always` 工具不需要路径）
+/// - `path_key` 命中的字段名（"path"/"dir"/…），「允许此目录」档判定
+///   目录参数本身 vs 文件参数的父目录用
 async fn inspect_tool_for_auth(
     registry: &McpRegistry,
     tool_name: &str,
     args: &str,
-) -> (AuthorizationLevel, String) {
+) -> (AuthorizationLevel, String, String) {
     let default_level = AuthorizationLevel::Always;
-    let default_path = String::new();
 
     let Some(tool) = registry.get(tool_name).await else {
-        return (default_level, default_path);
+        return (default_level, String::new(), String::new());
     };
 
     let level = tool.authorization_level();
-    let path = extract_path_from_args(args).unwrap_or(default_path);
-    (level, path)
+    let (path_key, path) =
+        extract_path_from_args(args).unwrap_or_else(|| (String::new(), String::new()));
+    (level, path, path_key)
 }
 
 /// 解析 agent 的 workspace 根路径（canonicalize，用于 workspace 内免授权判断）。
@@ -623,19 +638,40 @@ fn path_within_workspace(file_path: &str, workspace: &Option<PathBuf>) -> bool {
     crate::infra::path_norm::path_within(&target, ws)
 }
 
-/// 从工具参数 JSON 提取路径字段（`path` / `file_path` / `dir` / `source` / `destination`）
+/// 从工具参数 JSON 提取路径字段（`path` / `file_path` / `dir` / `source` / `destination`），
+/// 返回 `(字段名, 路径)`。
 ///
 /// `source`/`destination` 供 `move_file`：tool_executor 只提取单个路径做白名单校验，
 /// 故 move_file 以 source 为代表路径（destination 由工具内 `reject_sensitive` 兜底）。
 /// 多路径工具（如 `read_multiple_files` 的 paths 数组）无法提取，会回退到弹窗确认。
-fn extract_path_from_args(args: &str) -> Option<String> {
+fn extract_path_from_args(args: &str) -> Option<(String, String)> {
     let parsed: Value = serde_json::from_str(args).ok()?;
     for key in ["path", "file_path", "dir", "source", "destination"] {
         if let Some(s) = parsed.get(key).and_then(|v| v.as_str()) {
-            return Some(s.to_string());
+            return Some((key.to_string(), s.to_string()));
         }
     }
     None
+}
+
+/// 「允许此目录」档的入账目标（#11）。
+///
+/// - 参数字段是 `dir` → 路径本身就是目录，原样入账（list_directory 等）
+/// - 其它字段（path/file_path/source/destination）→ 入账父目录
+///   （对 `C:\ws\a.txt` 批「此目录」意图是「a.txt 所在的 ws」，而非精确到文件）
+/// - 无路径（Confirm 级工具）→ `None`，调用方退化为工具档
+fn dir_grant_target(path_key: &str, file_path: &str) -> Option<String> {
+    if file_path.is_empty() {
+        return None;
+    }
+    if path_key == "dir" {
+        return Some(file_path.to_string());
+    }
+    Path::new(file_path)
+        .parent()
+        .map(|p| p.to_string_lossy().into_owned())
+        .filter(|p| !p.is_empty())
+        .or_else(|| Some(file_path.to_string()))
 }
 
 // ==========================================================================
@@ -650,7 +686,7 @@ mod tests {
     fn extract_path_from_args_with_path() {
         assert_eq!(
             extract_path_from_args(r#"{"path":"/etc/passwd"}"#),
-            Some("/etc/passwd".into())
+            Some(("path".into(), "/etc/passwd".into()))
         );
     }
 
@@ -658,7 +694,7 @@ mod tests {
     fn extract_path_from_args_with_file_path() {
         assert_eq!(
             extract_path_from_args(r#"{"file_path":"/home/x.txt"}"#),
-            Some("/home/x.txt".into())
+            Some(("file_path".into(), "/home/x.txt".into()))
         );
     }
 
@@ -666,7 +702,7 @@ mod tests {
     fn extract_path_from_args_with_dir() {
         assert_eq!(
             extract_path_from_args(r#"{"dir":"/var"}"#),
-            Some("/var".into())
+            Some(("dir".into(), "/var".into()))
         );
     }
 
@@ -676,7 +712,7 @@ mod tests {
         // 作为代表路径用于白名单授权
         assert_eq!(
             extract_path_from_args(r#"{"source":"/a/b.txt","destination":"/c/b.txt"}"#),
-            Some("/a/b.txt".into())
+            Some(("source".into(), "/a/b.txt".into()))
         );
     }
 
@@ -688,6 +724,46 @@ mod tests {
     #[test]
     fn extract_path_from_args_invalid_json() {
         assert_eq!(extract_path_from_args("not json"), None);
+    }
+
+    // ===== #11「允许此目录」档入账目标推导 =====
+
+    #[test]
+    fn dir_grant_target_dir_arg_is_itself() {
+        // dir 参数：路径就是目录，原样入账（不升到父级——那会连带兄弟目录）
+        assert_eq!(
+            dir_grant_target("dir", "/ws/project"),
+            Some("/ws/project".into())
+        );
+    }
+
+    #[test]
+    fn dir_grant_target_file_arg_takes_parent() {
+        assert_eq!(
+            dir_grant_target("path", "/ws/project/a.txt"),
+            Some("/ws/project".into())
+        );
+        assert_eq!(
+            dir_grant_target("file_path", "/ws/project/sub/b.txt"),
+            Some("/ws/project/sub".into())
+        );
+    }
+
+    #[test]
+    fn dir_grant_target_empty_path_falls_to_tool_grant() {
+        // 无路径（Confirm 级工具）→ None → 调用方退化为工具档
+        assert_eq!(dir_grant_target("", ""), None);
+        assert_eq!(dir_grant_target("path", ""), None);
+    }
+
+    #[test]
+    fn dir_grant_target_root_level_file_falls_to_itself() {
+        // 无父可取的极端形态（词法 parent 为空）→ 文件本身入账，
+        // 由 auth_cache_key 归一兜底
+        assert_eq!(
+            dir_grant_target("path", "bare.txt"),
+            Some("bare.txt".into())
+        );
     }
 
     #[tokio::test]
@@ -703,13 +779,14 @@ mod tests {
             reg2.respond(ToolAuthResponse {
                 request_id: req_id.clone(),
                 allowed: true,
-                dont_ask_again: false,
+                scope: AuthScope::ThisDir,
             })
             .await;
         });
 
         let resp = rx.await.unwrap();
         assert!(resp.allowed);
+        assert_eq!(resp.scope, AuthScope::ThisDir);
         // 响应后 sender 已被取出
         assert_eq!(reg.pending_count().await, 0);
     }
@@ -721,7 +798,7 @@ mod tests {
             .respond(ToolAuthResponse {
                 request_id: "nope".into(),
                 allowed: false,
-                dont_ask_again: false,
+                scope: AuthScope::Once,
             })
             .await;
         assert!(!handled);

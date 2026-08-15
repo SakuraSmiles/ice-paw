@@ -13,12 +13,17 @@ import { ref, computed } from "vue";
 import { parseDbTime } from "../utils/time";
 import type { Conversation, Message } from "../types";
 import type {
-  ToolAuthRequestPayload,
+  AuthScope,
+  PendingAuthEntry,
   ConfigProposalPayload,
   ConfigProposalResponse,
 } from "../types";
 import { bridge } from "../api/bridge";
 import { useAgentStore } from "./agent";
+
+/** 授权等待上限，与后端 tool_executor::wait_for_auth_response 的 TIMEOUT 对齐
+ *  （120s 到点后端自动取消并发 tool-auth-request-cancel 清条目）*/
+export const TOOL_AUTH_TIMEOUT_MS = 120_000;
 
 export const useChatStore = defineStore("chat", () => {
   // ===== 会话列表（全部会话，不限 agent） =====
@@ -159,22 +164,21 @@ export const useChatStore = defineStore("chat", () => {
   const lastThinkingContent = ref<string | null>(null);
   /** 按消息 ID 持久化思考耗时（切换会话不丢，刷新才丢） */
   const thinkingDurations = ref<Map<string, string>>(new Map());
-  /** pendingAuthRequests: 按 convId 索引的待处理工具授权请求。
-   *  仿 bgStreams 模式：事件 handler 始终按 convId 存（不丢后台会话）。
-   *  computed pendingAuthRequest 暴露「激活会话优先 + 全局兜底」条目
-   *  （ToolAuthDialog 是全局 overlay，后台会话的授权也必须能弹出，否则卡死），
-   *  保持组件对外 API 不变。*/
-  const pendingAuthRequests = ref<Map<string, ToolAuthRequestPayload>>(new Map());
-  const pendingAuthRequest = computed<ToolAuthRequestPayload | null>(() => {
-    const aid = activeConvId.value;
-    if (aid) {
-      const cur = pendingAuthRequests.value.get(aid);
-      if (cur) return cur;
-    }
-    // 激活会话没有但别处还有 → 全局 blocking 语义，仍需弹出（用户必须处理）
-    const entries = [...pendingAuthRequests.value.values()];
-    return entries.length > 0 ? entries[0] : null;
-  });
+  /** pendingAuthRequests: 按 convId 索引的待处理工具授权请求（#10 路由模型）。
+   *  事件 handler 始终按 convId 存（同会话工具串行执行 → 每会话至多一条在等），
+   *  值含 receivedAt 供 120s 倒计时渲染。渲染按用户注意力分流：
+   *  - activeConvAuthRequest → 激活会话：输入框上方内联卡（AuthRequestCard）
+   *  - backgroundAuthRequests → 其它会话：全局右下通知栈（AuthNoticeStack，
+   *    带会话身份可跳转）——取代旧 ToolAuthDialog 的「全局单 modal」混淆源。*/
+  const pendingAuthRequests = ref<Map<string, PendingAuthEntry>>(new Map());
+  /** 激活会话的待处理授权（内联卡渲染；无全局兜底——后台会话走通知栈）*/
+  const activeConvAuthRequest = computed<PendingAuthEntry | null>(() =>
+    activeConvId.value ? pendingAuthRequests.value.get(activeConvId.value) ?? null : null,
+  );
+  /** 非激活会话的待处理授权（右下通知栈渲染），[convId, entry] 对*/
+  const backgroundAuthRequests = computed<Array<[string, PendingAuthEntry]>>(() =>
+    [...pendingAuthRequests.value.entries()].filter(([cid]) => cid !== activeConvId.value),
+  );
   /** pendingProposals: 按 convId 索引的待处理配置提案。
    *  computed pendingProposal 暴露激活会话的条目（内联卡片随激活会话渲染）。*/
   const pendingProposals = ref<Map<string, ConfigProposalPayload>>(new Map());
@@ -201,7 +205,7 @@ export const useChatStore = defineStore("chat", () => {
   function resetSendTimeout() {
     if (sendTimeout) clearTimeout(sendTimeout);
     sendTimeout = setTimeout(() => {
-      if (sending.value && !pendingAuthRequest.value) {
+      if (sending.value && pendingAuthRequests.value.size === 0) {
         console.warn("静默超时（60s 无活动），重置发送状态");
         sending.value = false;
       }
@@ -303,17 +307,17 @@ export const useChatStore = defineStore("chat", () => {
     } catch { /* 静默忽略 */ }
   }
 
-  async function respondToAuth(allowed: boolean) {
-    const req = pendingAuthRequest.value;
-    if (!req) return;
-    // invoke 直达后端（原 emit 通道因 Tauri v2 事件作用域不匹配而失效）
-    await bridge.chat.respondAuth({ request_id: req.request_id, allowed });
-    // 按 request_id 在 Map 里定位删除（computed 可能返回非激活会话的条目）
+  /** 发送授权响应（#11 带 scope 范围档）。按 request_id 定位——通知栈里的
+   *  条目不属于激活会话，不能再走「当前条目」语义。先删后 invoke：乐观移除
+   *  防重复点击双发响应。*/
+  async function respondToAuth(requestId: string, allowed: boolean, scope: AuthScope = "once") {
     const m = new Map(pendingAuthRequests.value);
-    for (const [cid, r] of m) {
-      if (r.request_id === req.request_id) { m.delete(cid); break; }
+    for (const [cid, entry] of m) {
+      if (entry.payload.request_id === requestId) { m.delete(cid); break; }
     }
     pendingAuthRequests.value = m;
+    // invoke 直达后端（原 emit 通道因 Tauri v2 事件作用域不匹配而失效）
+    await bridge.chat.respondAuth({ request_id: requestId, allowed, scope });
   }
 
   /** 发送配置提案响应回 Rust */
@@ -559,7 +563,7 @@ export const useChatStore = defineStore("chat", () => {
     streamingToolCalls, streamingThinking, thinkingStartTime, thinkingDuration, lastThinkingContent, thinkingDurations,
     // 事件层（useChatEvents）直接读写的内部 Map——暴露供其 mutate；对外读取走下方 computed
     bgStreams, pendingAuthRequests, pendingProposals, lastErrors,
-    pendingAuthRequest, pendingProposal, lastError,
+    activeConvAuthRequest, backgroundAuthRequests, pendingProposal, lastError,
     streamingConvIds,
     loadConversations, selectConversation, loadMoreMessages,
     sendMessage, stopGeneration, respondToAuth, respondToProposal,

@@ -91,60 +91,109 @@ impl AuthorizationDecision {
 }
 
 // =========================================================================
-// PathAuthSession — 会话级已授权路径表
+// PathAuthSession — 会话级分层授权记忆
 // =========================================================================
 
-/// 会话级已授权路径表
+/// 会话级分层授权记忆（#11）
 ///
-/// 跟踪「本次 LLM 流式循环中已被用户 `Allow` 的路径」，
-/// 同一会话内再次访问相同路径不再弹窗。
-/// 会话结束 / 流式取消时由上层调 `clear()` 清空。
+/// 跟踪「本次 LLM 流式循环中已被用户 `Allow`」的授权，三档 grant：
+/// 精确路径 / 目录（含子目录）/ 工具，判定序 **tool > dir > path**。
+/// 会话结束 / 流式取消时由上层调 `clear()` 清空——**永不跨会话持久**，
+/// 跨会话的持久授权属于 agent 配置域（配置提案系统），审批通道不得升级。
 #[derive(Debug, Clone, Default)]
 pub struct PathAuthSession {
-    inner: Arc<Mutex<HashSet<String>>>,
+    inner: Arc<Mutex<AuthGrants>>,
+}
+
+/// 三档授权集合（均存归一化形式）
+#[derive(Debug, Clone, Default)]
+struct AuthGrants {
+    /// 精确路径（auth_cache_key 归一）
+    paths: HashSet<String>,
+    /// 目录（含子目录，path_within 组件级判定；auth_cache_key 归一）
+    dirs: Vec<String>,
+    /// 工具名（原样，工具名区分大小写）
+    tools: HashSet<String>,
 }
 
 impl PathAuthSession {
     /// 新建空会话
     pub fn new() -> Self {
         Self {
-            inner: Arc::new(Mutex::new(HashSet::new())),
+            inner: Arc::new(Mutex::new(AuthGrants::default())),
         }
     }
 
-    /// 当前路径是否已被本会话授权（按归一缓存键比较——同一路径不同写法
-    /// （大小写/`./..`/verbatim 前缀）不重复弹窗）
-    pub async fn is_authorized(&self, path: &str) -> bool {
-        let key = path_norm::auth_cache_key(path);
-        let set = self.inner.lock().await;
-        set.contains(&key)
+    /// 本次工具调用是否已被会话授权覆盖（判定序 tool > dir > path）
+    pub async fn is_authorized(&self, path: &str, tool_name: &str) -> bool {
+        let grants = self.inner.lock().await;
+        if grants.tools.contains(tool_name) {
+            return true;
+        }
+        // 目录档：无路径（Confirm 级工具）时只有工具档能覆盖
+        if !path.is_empty() {
+            let target = Path::new(path);
+            if grants
+                .dirs
+                .iter()
+                .any(|dir| path_norm::path_within(target, Path::new(dir)))
+            {
+                return true;
+            }
+            if grants.paths.contains(&path_norm::auth_cache_key(path)) {
+                return true;
+            }
+        }
+        false
     }
 
-    /// 把路径加入已授权集合（归一后存储）
+    /// 精确路径入账（「允许本次」档——同一路径再次访问不再弹）
     pub async fn mark_authorized(&self, path: &str) {
         let key = path_norm::auth_cache_key(path);
-        let mut set = self.inner.lock().await;
-        set.insert(key);
+        let mut grants = self.inner.lock().await;
+        grants.paths.insert(key);
+    }
+
+    /// 目录档入账（「允许此目录」——含子目录，会话内免问）
+    pub async fn mark_dir_authorized(&self, dir: &str) {
+        let key = path_norm::auth_cache_key(dir);
+        let mut grants = self.inner.lock().await;
+        if !grants.dirs.contains(&key) {
+            grants.dirs.push(key);
+        }
+    }
+
+    /// 工具档是否已覆盖（Confirm 级工具的扩围判定——**只看工具档**：
+    /// 用户授权的目录/路径属文件域 grant，拿来静默放行 Confirm 级工具
+    /// 属范围升级，用户没批过这个）
+    pub async fn is_tool_authorized(&self, tool_name: &str) -> bool {
+        self.inner.lock().await.tools.contains(tool_name)
+    }
+
+    /// 工具档入账（「允许此工具」——会话内该工具所有调用免问；
+    /// Confirm 级工具唯一可用的扩围档）
+    pub async fn mark_tool_authorized(&self, tool: &str) {
+        let mut grants = self.inner.lock().await;
+        grants.tools.insert(tool.to_string());
     }
 
     /// 清空会话授权（流式结束 / 取消时调用）
     pub async fn clear(&self) {
-        let mut set = self.inner.lock().await;
-        set.clear();
+        let mut grants = self.inner.lock().await;
+        *grants = AuthGrants::default();
     }
 
-    /// 已授权条目数（仅供测试 / 调试）
+    /// 已授权条目总数（仅供测试 / 调试）
     #[cfg(test)]
     pub async fn len(&self) -> usize {
-        let set = self.inner.lock().await;
-        set.len()
+        let grants = self.inner.lock().await;
+        grants.paths.len() + grants.dirs.len() + grants.tools.len()
     }
 
     /// 是否为空
     #[cfg(test)]
     pub async fn is_empty(&self) -> bool {
-        let set = self.inner.lock().await;
-        set.is_empty()
+        self.len().await == 0
     }
 }
 
@@ -152,14 +201,16 @@ impl PathAuthSession {
 // check_authorization_with_session — 升级版授权判断
 // =========================================================================
 
-/// 检查工具授权，结合会话级已授权路径表。
+/// 检查工具授权，结合会话级分层授权记忆（#11）。
 ///
 /// 决策逻辑：
 /// - `Always` → `Allow`
-/// - `Confirm` → 总是 `Confirm`
+/// - `Confirm` → 会话工具档已覆盖 → `Allow`；否则 `Confirm`
+///   （「允许此工具」是 Confirm 级工具唯一可用的扩围档——路径/目录档
+///   对其不生效，避免「授权过目录就静默放行高危工具」的范围升级）
 /// - `PathWhitelist`:
 ///   - 路径在白名单 → `Allow`
-///   - 路径在会话已授权集合中 → `Allow`
+///   - 会话三档任一覆盖（判定序 tool > dir > path）→ `Allow`
 ///   - 都不满足 → `Confirm`
 pub async fn check_authorization_with_session(
     level: AuthorizationLevel,
@@ -171,15 +222,21 @@ pub async fn check_authorization_with_session(
 ) -> AuthorizationDecision {
     match level {
         AuthorizationLevel::Always => AuthorizationDecision::Allow,
-        AuthorizationLevel::Confirm => AuthorizationDecision::Confirm {
-            request_id: Uuid::new_v4().to_string(),
-            tool_name: tool_name.to_string(),
-            file_path: path.to_string(),
-            arguments: tool_args.to_string(),
-            reason: "此工具需要用户确认授权".to_string(),
-        },
+        AuthorizationLevel::Confirm => {
+            if session.is_tool_authorized(tool_name).await {
+                AuthorizationDecision::Allow
+            } else {
+                AuthorizationDecision::Confirm {
+                    request_id: Uuid::new_v4().to_string(),
+                    tool_name: tool_name.to_string(),
+                    file_path: path.to_string(),
+                    arguments: tool_args.to_string(),
+                    reason: "此工具需要用户确认授权".to_string(),
+                }
+            }
+        }
         AuthorizationLevel::PathWhitelist => {
-            if is_path_allowed(path, config) || session.is_authorized(path).await {
+            if is_path_allowed(path, config) || session.is_authorized(path, tool_name).await {
                 AuthorizationDecision::Allow
             } else {
                 AuthorizationDecision::Confirm {
@@ -471,11 +528,14 @@ mod tests {
     async fn session_clear_removes_authorizations() {
         let session = PathAuthSession::new();
         session.mark_authorized("/a").await;
-        session.mark_authorized("/b").await;
-        assert_eq!(session.len().await, 2);
+        session.mark_dir_authorized("/d").await;
+        session.mark_tool_authorized("t").await;
+        assert_eq!(session.len().await, 3);
         session.clear().await;
         assert_eq!(session.len().await, 0);
-        assert!(!session.is_authorized("/a").await);
+        assert!(!session.is_authorized("/a", "read_file").await);
+        assert!(!session.is_authorized("/d/x", "read_file").await);
+        assert!(!session.is_authorized("/any", "t").await);
     }
 
     #[tokio::test]
@@ -483,9 +543,9 @@ mod tests {
         // 归一缓存键：同一路径不同写法（./ 段、尾斜杠）不再重复弹窗
         let session = PathAuthSession::new();
         session.mark_authorized("/ws/./sub/../file.txt").await;
-        assert!(session.is_authorized("/ws/file.txt").await);
-        assert!(session.is_authorized("/ws/file.txt/").await);
-        assert!(!session.is_authorized("/ws/other.txt").await);
+        assert!(session.is_authorized("/ws/file.txt", "read_file").await);
+        assert!(session.is_authorized("/ws/file.txt/", "read_file").await);
+        assert!(!session.is_authorized("/ws/other.txt", "read_file").await);
     }
 
     #[tokio::test]
@@ -493,7 +553,107 @@ mod tests {
         let session1 = PathAuthSession::new();
         let session2 = session1.clone();
         session1.mark_authorized("/shared").await;
-        assert!(session2.is_authorized("/shared").await);
+        assert!(session2.is_authorized("/shared", "read_file").await);
+    }
+
+    // ----- #11 分层授权记忆：三档 grant + 判定序 -----
+
+    #[tokio::test]
+    async fn dir_grant_covers_subpaths_not_siblings() {
+        let session = PathAuthSession::new();
+        session.mark_dir_authorized("/ws/project").await;
+        assert!(session.is_authorized("/ws/project", "write_file").await);
+        assert!(session.is_authorized("/ws/project/sub/deep/a.txt", "write_file").await);
+        // 归一化成员判定：./ 与尾斜杠写法同样覆盖
+        assert!(session.is_authorized("/ws/project/./x/../b.txt", "write_file").await);
+        // 兄弟目录与上级不覆盖
+        assert!(!session.is_authorized("/ws/project-other/a.txt", "write_file").await);
+        assert!(!session.is_authorized("/ws/a.txt", "write_file").await);
+        // 目录档不覆盖其它工具的无路径调用
+        assert!(!session.is_authorized("", "run_command").await);
+    }
+
+    #[tokio::test]
+    async fn tool_grant_covers_any_path_this_tool_only() {
+        let session = PathAuthSession::new();
+        session.mark_tool_authorized("read_file").await;
+        assert!(session.is_authorized("/etc/passwd", "read_file").await);
+        assert!(session.is_authorized("", "read_file").await);
+        // 其它工具不沾光
+        assert!(!session.is_authorized("/etc/passwd", "write_file").await);
+    }
+
+    #[tokio::test]
+    async fn confirm_level_tool_grant_skips_prompt() {
+        // Confirm 级工具：会话工具档已覆盖 → 直接 Allow
+        let cfg = whitelist(&["/workspace/"]);
+        let session = PathAuthSession::new();
+        session.mark_tool_authorized("run_command").await;
+        let d = check_authorization_with_session(
+            AuthorizationLevel::Confirm,
+            "",
+            &cfg,
+            "run_command",
+            r#"{"cmd":"ls"}"#,
+            &session,
+        )
+        .await;
+        assert!(d.is_allowed());
+    }
+
+    #[tokio::test]
+    async fn confirm_level_ignores_path_and_dir_grants() {
+        // 范围升级防线：文件域 grant（path/dir）不得静默放行 Confirm 级工具
+        let cfg = whitelist(&["/workspace/"]);
+        let session = PathAuthSession::new();
+        session.mark_authorized("/workspace/run.sh").await;
+        session.mark_dir_authorized("/workspace").await;
+        let d = check_authorization_with_session(
+            AuthorizationLevel::Confirm,
+            "/workspace/run.sh",
+            &cfg,
+            "run_command",
+            r#"{"path":"/workspace/run.sh"}"#,
+            &session,
+        )
+        .await;
+        assert!(d.needs_confirm());
+    }
+
+    #[tokio::test]
+    async fn pathwhitelist_tool_grant_allows_outside_whitelist() {
+        // 工具档优先级最高：白名单外路径也免问（用户显式批过此工具）
+        let cfg = whitelist(&["/workspace/"]);
+        let session = PathAuthSession::new();
+        session.mark_tool_authorized("read_file").await;
+        let d = check_authorization_with_session(
+            AuthorizationLevel::PathWhitelist,
+            "/etc/passwd",
+            &cfg,
+            "read_file",
+            r#"{"path":"/etc/passwd"}"#,
+            &session,
+        )
+        .await;
+        assert!(d.is_allowed());
+    }
+
+    #[tokio::test]
+    async fn pathwhitelist_dir_grant_allows_inside() {
+        // 目录档：会话内授权目录下（含子目录）免问——连续审批的核心减负
+        let cfg = whitelist(&["/workspace/"]);
+        let session = PathAuthSession::new();
+        session.mark_dir_authorized("/ws/proj").await;
+        let d = check_authorization_with_session(
+            AuthorizationLevel::PathWhitelist,
+            "/ws/proj/src/main.rs",
+            &cfg,
+            "write_file",
+            r#"{"path":"/ws/proj/src/main.rs"}"#,
+            &session,
+        )
+        .await;
+        assert!(d.is_allowed());
     }
 
     #[tokio::test]

@@ -2,6 +2,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   Agent,
+  AuthScope,
   AgentUpdate,
   Conversation,
   IndexStats,
@@ -179,11 +180,11 @@ const chat = {
     try { await invoke<void>("respond_config_proposal", { input }); }
     catch (err) { throw wrapInvokeError("chat.respondProposal", err); }
   },
-  /** 工具授权响应（invoke：同上，双通道一起修复） */
+  /** 工具授权响应（invoke：同上，双通道一起修复）。scope=#11 授权范围档 */
   async respondAuth(input: {
     request_id: string;
     allowed: boolean;
-    dont_ask_again?: boolean;
+    scope?: AuthScope;
   }): Promise<void> {
     try { await invoke<void>("respond_tool_auth", { input }); }
     catch (err) { throw wrapInvokeError("chat.respondAuth", err); }

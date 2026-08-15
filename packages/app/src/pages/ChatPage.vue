@@ -13,7 +13,7 @@ import ChatHeader from "../components/chat/ChatHeader.vue";
 import ChatMessages from "../components/chat/ChatMessages.vue";
 import ChatInput from "../components/chat/ChatInput.vue";
 import ChatWelcome from "../components/chat/ChatWelcome.vue";
-import ToolAuthDialog from "../components/chat/ToolAuthDialog.vue";
+import AuthRequestCard from "../components/chat/AuthRequestCard.vue";
 import TaskPanel from "../components/chat/TaskPanel.vue";
 import TrajectoryView from "../components/trajectory/TrajectoryView.vue";
 import { useChatStore } from "../stores/chat";
@@ -76,10 +76,13 @@ watch(() => chat.activeConvId, () => {
         />
       </div>
 
+      <!-- 工具授权内联卡（#10 激活会话分支）：输入框上方向上弹出；
+           后台会话的授权走 AppLayout 挂载的 AuthNoticeStack -->
+      <AuthRequestCard />
+
       <!-- 输入框：会话级能力，两个 render 共用，常驻底部 -->
       <ChatInput />
     </template>
-    <ToolAuthDialog />
   </div>
 </template>
 

@@ -482,6 +482,21 @@ pub struct ToolAuthRequestPayload {
     pub reason: String,
 }
 
+/// 授权范围（#11 分层授权记忆）：用户在审批卡上选择的「允许」生效档位。
+/// 默认 `Once`（仅本次）；`ThisDir`/`ThisTool` 记入会话级授权记忆，
+/// 本会话内同范围不再询问（流结束即清，不跨会话持久）。
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthScope {
+    /// 仅本次（等价旧行为：精确路径入会话记忆）
+    #[default]
+    Once,
+    /// 此目录（含子目录）会话内免问；无路径工具退化为工具档
+    ThisDir,
+    /// 此工具会话内免问（Confirm 级工具唯一可用的扩围档）
+    ThisTool,
+}
+
 /// `chat:tool-auth-response` 事件 payload (Frontend → Rust)
 ///
 /// 前端弹窗后通过此事件把用户选择告诉 Rust 侧。
@@ -491,9 +506,9 @@ pub struct ToolAuthRequestPayload {
 pub struct ToolAuthResponse {
     pub request_id: String,
     pub allowed: bool,
-    /// U7: 用户勾选"本次会话不再询问"时为 true
+    /// 允许的生效范围（拒绝时忽略）；`#[serde(default)]` 兼容旧前端
     #[serde(default)]
-    pub dont_ask_again: bool,
+    pub scope: AuthScope,
 }
 
 // === 配置提案事件 ===
@@ -1004,23 +1019,29 @@ mod tests {
         let r = ToolAuthResponse {
             request_id: "req-2".into(),
             allowed: true,
-            dont_ask_again: false,
+            scope: super::AuthScope::ThisDir,
         };
         let json = serde_json::to_string(&r).unwrap();
         assert_eq!(
             json,
-            r#"{"request_id":"req-2","allowed":true,"dont_ask_again":false}"#
+            r#"{"request_id":"req-2","allowed":true,"scope":"this_dir"}"#
         );
 
         let back: ToolAuthResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(back.request_id, "req-2");
         assert!(back.allowed);
+        assert_eq!(back.scope, super::AuthScope::ThisDir);
+
+        // 旧前端缺 scope 字段 → serde default = Once（向后兼容）
+        let legacy: ToolAuthResponse =
+            serde_json::from_str(r#"{"request_id":"req-x","allowed":true}"#).unwrap();
+        assert_eq!(legacy.scope, super::AuthScope::Once);
 
         // false 路径
         let r2 = ToolAuthResponse {
             request_id: "req-3".into(),
             allowed: false,
-            dont_ask_again: false,
+            scope: super::AuthScope::Once,
         };
         let json2 = serde_json::to_string(&r2).unwrap();
         let back2: ToolAuthResponse = serde_json::from_str(&json2).unwrap();

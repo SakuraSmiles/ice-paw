@@ -389,8 +389,16 @@ export interface ToolAuthRequestPayload {
   request_id: string; tool_use_id: string; tool_name: string; file_path: string;
   arguments: string; conversation_id: string; message_id: string; reason: string;
 }
+/** #11 分层授权范围：once=仅本次（默认）/ this_dir=此目录含子目录（会话内）/
+ *  this_tool=此工具（会话内，Confirm 级工具唯一扩围档）。与后端 AuthScope 对齐。*/
+export type AuthScope = "once" | "this_dir" | "this_tool";
 export interface ToolAuthResponse {
-  request_id: string; allowed: boolean;
+  request_id: string; allowed: boolean; scope?: AuthScope;
+}
+/** store 侧待处理授权条目：payload + 前端收到时刻（120s 倒计时显示用）*/
+export interface PendingAuthEntry {
+  payload: ToolAuthRequestPayload;
+  receivedAt: number;
 }
 
 // ============================================================================
