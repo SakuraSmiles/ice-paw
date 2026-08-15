@@ -95,6 +95,7 @@ pub mod kind {
     pub const TURN_ENDED: &str = "turn_ended";
     pub const MODAL_ADAPTED: &str = "modal_adapted";
     pub const HOOK_INJECTED: &str = "hook_injected";
+    pub const PLAN_UPDATED: &str = "plan_updated";
 }
 
 // =========================================================================
@@ -298,6 +299,28 @@ pub struct HookInjectedPayload {
     pub prompt: String,
 }
 
+/// 计划快照（`update_plan` 工具整体覆写；回放 last-wins 取最后一条 = 当前计划）。
+///
+/// 计划是**意图文档**（会话内容），不是任务（执行单元=委派会话）：正交抽象，
+/// 靠 [`PlanItem::task_conversation_id`] 引用边关联——条目勾选是 agent 的判断，
+/// 不从任务终态自动映射（任务 done ≠ 条目达标，agent 可能判「不行，重派」）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanUpdatedPayload {
+    #[serde(default = "version_one")]
+    pub v: u8,
+    pub items: Vec<PlanItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanItem {
+    pub text: String,
+    /// pending | in_progress | done
+    pub status: String,
+    /// 条目挂的委派子会话 id（跳转用；None = agent 自己做/未挂接）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_conversation_id: Option<String>,
+}
+
 // =========================================================================
 // Emitters（全部 warn-only；inline await，禁止 spawn）
 // =========================================================================
@@ -470,6 +493,12 @@ pub async fn log_modal_adapted(pool: &SqlitePool, ctx: &EventCtx, payload: &Moda
 /// 钩子注入。
 pub async fn log_hook_injected(pool: &SqlitePool, ctx: &EventCtx, payload: &HookInjectedPayload) {
     append_event(pool, ctx, kind::HOOK_INJECTED, &ctx.agent_actor(), None, payload).await;
+}
+
+/// 计划快照（`update_plan` 工具调用点 emit；message_id=None——工具调用的
+/// assistant 关联由同 turn 的 tool_execution 事件承载，这里只需 turn 归组）。
+pub async fn log_plan_updated(pool: &SqlitePool, ctx: &EventCtx, payload: &PlanUpdatedPayload) {
+    append_event(pool, ctx, kind::PLAN_UPDATED, &ctx.agent_actor(), None, payload).await;
 }
 
 // =========================================================================
@@ -675,6 +704,50 @@ mod tests {
         assert_eq!(back.termination, "budget_exceeded");
         assert_eq!(back.usage.unwrap().completion_tokens, 2_000);
         assert_eq!(back.user_token_count, Some(120));
+    }
+
+    #[tokio::test]
+    async fn plan_updated_round_trip() {
+        let pool = fresh_pool().await;
+        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        seed(&pool).await;
+
+        // 全量覆写语义：两次调用两条事件，回放 last-wins（最后一条 = 当前计划）
+        log_plan_updated(
+            &pool,
+            &ctx(),
+            &PlanUpdatedPayload {
+                v: 1,
+                items: vec![
+                    PlanItem { text: "调研渲染方案".into(), status: "done".into(), task_conversation_id: None },
+                    PlanItem { text: "设计评审".into(), status: "in_progress".into(), task_conversation_id: Some("conv-child-1".into()) },
+                ],
+            },
+        )
+        .await;
+        log_plan_updated(
+            &pool,
+            &ctx(),
+            &PlanUpdatedPayload {
+                v: 1,
+                items: vec![
+                    PlanItem { text: "设计评审".into(), status: "done".into(), task_conversation_id: Some("conv-child-1".into()) },
+                    PlanItem { text: "终稿交付".into(), status: "pending".into(), task_conversation_id: None },
+                ],
+            },
+        )
+        .await;
+
+        let rows = session_event::list_by_session(&pool, "conv-1", None).await.unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|r| {
+            r.kind == "plan_updated" && r.actor == "agent:agent-1" && r.message_id.is_none()
+        }));
+        let last: PlanUpdatedPayload = serde_json::from_str(&rows[1].payload).unwrap();
+        assert_eq!(last.items.len(), 2);
+        assert_eq!(last.items[0].status, "done");
+        assert_eq!(last.items[0].task_conversation_id.as_deref(), Some("conv-child-1"));
+        assert_eq!(last.items[1].task_conversation_id, None);
     }
 
     #[tokio::test]

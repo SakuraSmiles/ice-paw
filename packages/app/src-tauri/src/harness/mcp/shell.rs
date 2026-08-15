@@ -160,6 +160,7 @@ mod tests {
             api_key: None,
             app_handle: None,
             proposal_registry: None,
+            turn_id: None,
             cancel: None,
         }
     }

@@ -197,6 +197,44 @@ pub async fn trajectory_turn_offset(
     repo::session_event::count_turns_before(pool.inner(), &conversation_id, before_seq).await
 }
 
+/// 会话当前计划快照（任务胶囊「计划段」+ 计划卡取数用，C4/C5）。
+///
+/// 计划是全量覆写快照（`update_plan` 工具）→ **当前计划 = 最后一条
+/// `plan_updated` 事件**。返回 None = 无计划（从未建立 / 最后一条为空清单 =
+/// 已清空），UI 隐藏计划段。payload 损坏降级 None + warn（不吞错误类型）。
+#[derive(serde::Serialize, Clone)]
+pub struct SessionPlanSnapshot {
+    pub items: Vec<crate::harness::event_log::PlanItem>,
+    pub updated_at: String,
+}
+
+#[tauri::command]
+pub async fn get_session_plan(
+    pool: State<'_, SqlitePool>,
+    conversation_id: String,
+) -> AppResult<Option<SessionPlanSnapshot>> {
+    repo::conversation::get_by_id(pool.inner(), &conversation_id).await?;
+    let row: Option<(String, String)> = sqlx::query_as(
+        "SELECT payload, created_at FROM session_events \
+         WHERE session_id = ? AND kind = 'plan_updated' \
+         ORDER BY seq DESC LIMIT 1",
+    )
+    .bind(&conversation_id)
+    .fetch_optional(pool.inner())
+    .await?;
+    let Some((payload_json, updated_at)) = row else {
+        return Ok(None);
+    };
+    match serde_json::from_str::<crate::harness::event_log::PlanUpdatedPayload>(&payload_json) {
+        Ok(p) if !p.items.is_empty() => Ok(Some(SessionPlanSnapshot { items: p.items, updated_at })),
+        Ok(_) => Ok(None), // 空清单 = agent 主动清空计划
+        Err(e) => {
+            tracing::warn!(target: "ice_paw.plan", "plan_updated payload 损坏（降级无计划）: conv={conversation_id} err={e}");
+            Ok(None)
+        }
+    }
+}
+
 /// 解析导出目标目录：系统「下载」已知目录（Windows 走 SHGetKnownFolderPath，
 /// 尊重 OneDrive 重定向——拼 `%USERPROFILE%\Downloads` 会在重定向机器上踩空建错目录），
 /// 解析失败时回退 app 数据目录 `exports/`（与「数据目录」入口一致，用户可达）。

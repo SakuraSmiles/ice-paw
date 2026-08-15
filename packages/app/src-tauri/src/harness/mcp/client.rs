@@ -63,6 +63,10 @@ pub struct ToolContext {
     pub app_handle: Option<AppHandle>,
     /// 提案注册表（propose_config_change 等配置工具用；None = 不可用）
     pub proposal_registry: Option<ProposalRegistry>,
+    /// 当前 turn id（= user_msg_id，session-events 归组键）。由 execute_tool_round
+    /// 富化注入（update_plan 等需在工具执行点落事件的工具用）；None = 工具轮外
+    ///（hooks 等非 turn 语境），此类工具应报错而非落 NULL turn 错分组。
+    pub turn_id: Option<String>,
     /// 对话取消令牌（propose_config_change 等需在「停止生成」时提前返回的工具用；
     /// 由 execute_tool_round 的 enriched_ctx 注入；None = 无取消监听，回退纯超时）
     pub cancel: Option<CancellationToken>,
@@ -281,6 +285,8 @@ impl McpRegistry {
         self.register_sync(Arc::new(super::web::WebFetchTool));
         self.register_sync(Arc::new(super::agent_config::ReadAgentConfigTool));
         self.register_sync(Arc::new(super::proposal_tool::ProposeConfigChangeTool));
+        // 计划维护（全局注册：委派子会话的专家也能维护自己的计划，事件落子会话日志）
+        self.register_sync(Arc::new(super::plan_tool::UpdatePlanTool));
         // 注：delegate_to_agent 不在 register_builtin（全局注册表）中——由
         // session_runner 组装期按会话 kind 注册（仅 'chat'，委派深度=1 护栏）。
     }
@@ -534,6 +540,7 @@ mod tests {
             api_key: None,
             app_handle: None,
             proposal_registry: None,
+            turn_id: None,
             cancel: None,
         };
         let result = registry.dispatch("nonexistent", "{}", &ctx).await;
@@ -554,6 +561,7 @@ mod tests {
             api_key: None,
             app_handle: None,
             proposal_registry: None,
+            turn_id: None,
             cancel: None,
         };
         // StubClient 未 override execute_with_context → 走默认实现（包成 ToolOutput::text）→ 返回 "stub"

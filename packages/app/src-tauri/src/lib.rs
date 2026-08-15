@@ -87,6 +87,7 @@ pub fn run() {
             commands::conversation_cmd::export_session_trajectory,
             commands::conversation_cmd::list_session_events,
             commands::conversation_cmd::trajectory_turn_offset,
+            commands::conversation_cmd::get_session_plan,
             commands::conversation_cmd::reconcile_session,
             commands::conversation_cmd::get_read_route_status,
             commands::message_cmd::list_messages,

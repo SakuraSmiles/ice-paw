@@ -95,9 +95,11 @@ pub(crate) async fn execute_tool_round(
     let mut tool_result_blocks: Vec<ContentBlock> = Vec::new();
 
     // 扩展 tool_ctx：注入 app_handle + proposal_registry（propose_config_change 等工具需要）
+    // + turn_id（update_plan 等在工具执行点落 session-event 的工具需要——事件归组）
     let mut enriched_ctx = tool_ctx.clone();
     enriched_ctx.app_handle = Some(app.clone());
     enriched_ctx.cancel = Some(cancel.clone());
+    enriched_ctx.turn_id = Some(ev.turn_id.clone());
     enriched_ctx.proposal_registry = app
         .try_state::<crate::harness::proposal_registry::ProposalRegistry>()
         .map(|s: tauri::State<'_, crate::harness::proposal_registry::ProposalRegistry>| s.inner().clone());
@@ -595,6 +597,9 @@ pub(crate) async fn build_tool_ctx(
         api_key,
         app_handle: None,
         proposal_registry: None,
+        // turn 归组键由 execute_tool_round 富化注入（工具轮内有 ev 上下文）；
+        // 构造点（hooks 等 turn 语境之外）恒 None
+        turn_id: None,
         cancel: None,
     }
 }

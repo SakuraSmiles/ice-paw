@@ -144,10 +144,11 @@ pub fn derive_history(events: &[SessionEventRow]) -> DeriveResult {
                 }
             }
             // 错误行（空内容双方不可见）/ 已删占位 → 不进回放。
-            // 其余 kind 均非消息行事实。
+            // 其余 kind 均非消息行事实。plan_updated（计划快照）同为非消息行——
+            // 不容忍会记 DeriveIssue → reconcile 出 DERIVE_ISSUE → read_route 永久回退 Legacy。
             "message_error" | "message_discarded" | "turn_context" | "turn_ended"
             | "modal_adapted" | "hook_injected" | "attachment_stored" | "summary_created"
-            | "summary_updated" | "tool_execution" => {}
+            | "summary_updated" | "tool_execution" | "plan_updated" => {}
             other => result.issues.push(DeriveIssue {
                 seq,
                 kind: other.to_string(),
@@ -350,5 +351,23 @@ mod tests {
         let out = derive_history(&events);
         assert!(out.messages.is_empty());
         assert!(out.issues.is_empty());
+    }
+
+    /// plan_updated（计划快照）是非消息行事实：须静默跳过。不忍耐会记 DeriveIssue
+    /// → reconcile 判 DERIVE_ISSUE → 用过计划的会话永久回退 Legacy 读路径。
+    #[test]
+    fn derive_plan_updated_ignored() {
+        let events = vec![
+            row(1, "user_message", Some("m-u1"), r#"{"v":1,"content":"q","blocks":[]}"#.into()),
+            row(
+                2,
+                "plan_updated",
+                None,
+                r#"{"v":1,"items":[{"text":"评审","status":"in_progress","task_conversation_id":"c1"}]}"#.into(),
+            ),
+        ];
+        let out = derive_history(&events);
+        assert_eq!(out.messages.len(), 1, "只有 user 行");
+        assert!(out.issues.is_empty(), "issues: {:?}", out.issues);
     }
 }

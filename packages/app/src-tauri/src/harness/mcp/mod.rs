@@ -25,6 +25,7 @@ pub mod web;
 pub mod agent_config;
 pub mod delegate;
 pub mod proposal_tool;
+pub mod plan_tool;
 
 pub use types::AuthorizationLevel;
 pub use client::{McpClient, McpRegistry, ToolContext};
