@@ -14,7 +14,7 @@
   4 泳道 + 左侧 56px 标签列（学 dsh：靠标签分区，泳道间不画分隔线；空泳道标签淡化恒显，
   道位稳定；泳道名用英文短名，与 canvas 内英文刻度同语言；顶部 6px 留白，标签列与
   canvas 泳道共用 TOP_PAD/LANE_H 保持逐像素对齐）：
-    0 User（蓝）  user_message / turn_context / attachment_stored —— 输入侧
+    0 User（蓝）  user_message / attachment_stored —— 输入侧（turn_context 折进表格轮次头，不上图）
     1 Model（灰） assistant_message / summary_* / modal_adapted / message_error / message_discarded
     2 Tools（琥珀）tool_execution（tool_result_message 是 DB 结果行镜像，不上图）
     3 Hooks（绿） hook_injected —— 外挂逻辑干预对话流的审计面
@@ -54,6 +54,8 @@ const LANE_LABELS = ["User", "Model", "Tools", "Hooks"] as const;
 interface Span {
   seq: number;
   lane: number;
+  /** 序号模式 run 合并用：kind 语义键（lane 内再按 kind 细分，模型道混 summary/error 不混并） */
+  kindKey: string;
   start: number; // 域单位：sequence=槽位；duration=压缩后 ms
   end: number;
   isError: boolean;
@@ -145,7 +147,7 @@ function fmtRel(ms: number): string {
 /**
  * 事件流 → 域内 span + turn 边界。
  * 轮次编号镜像 buildRows：按 turn-key 切换递增、孤儿桶（turn_id=null）占号但不画边界。
- * turn_ended / tool_result_message 不生成 span（前者是边界层，后者是 DB 镜像）。
+ * turn_context / turn_ended / tool_result_message 不生成 span（零耗时元数据 / 边界层 / DB 镜像）。
  */
 function buildSpans() {
   spans = [];
@@ -175,7 +177,10 @@ function buildSpans() {
       pendingTurn = ev.turn_id != null ? turnIndex : null;
       prevT = null; // 跨 turn：不给新 turn 的首事件挂上一轮的尾巴
     }
-    if (ev.kind === "turn_ended" || ev.kind === "tool_result_message") continue;
+    // turn_context / turn_ended / tool_result_message 不上图：配置快照是零耗时
+    // 元数据（折进表格轮次头），画出来只会让「块数 ≠ 表格可见行数」（用户道每轮
+    // 恒 2 块 = turn_context + user_message，但表里只有 1 行）；后两者同理（边界层/镜像）。
+    if (ev.kind === "turn_ended" || ev.kind === "turn_context" || ev.kind === "tool_result_message") continue;
 
     const lane = laneOf(ev.kind);
     const t = Date.parse(ev.created_at);
@@ -198,8 +203,8 @@ function buildSpans() {
 
     const timeText = Number.isFinite(t) ? fmtClock(t) : "--:--:--";
     const span: Span = seqMode
-      ? { seq: ev.seq, lane, start: slot, end: slot + 1, isError, label, timeText, durMs: dur }
-      : { seq: ev.seq, lane, start: t - effDur, end: t, isError, label, timeText, durMs: dur };
+      ? { seq: ev.seq, lane, kindKey: ev.kind, start: slot, end: slot + 1, isError, label, timeText, durMs: dur }
+      : { seq: ev.seq, lane, kindKey: ev.kind, start: t - effDur, end: t, isError, label, timeText, durMs: dur };
     if (!Number.isFinite(span.start)) continue; // duration 模式下时间不可解析 → 不上图
     spans.push(span);
     laneActive.value[lane] = true;
@@ -312,12 +317,13 @@ function draw() {
   ctx.globalAlpha = 1;
 
   // ---- 事件条 ----
-  for (const s of spans) {
+  /** 单条/run 绘制：run 非空时用 run 首末扩展 x 区间与选中判断 */
+  const drawSpan = (s: Span, endAt: number, run: Span[] | null) => {
     const y = TOP_PAD + s.lane * LANE_H + 2;
     const h = LANE_H - 5;
     let x0 = x(s.start);
-    let w = Math.max(2, x(s.end) - x0);
-    if (x0 + w < 0 || x0 > width) continue; // 视口裁剪
+    let w = Math.max(2, x(endAt) - x0);
+    if (x0 + w < 0 || x0 > width) return; // 视口裁剪
     // 相邻条间细缝（dsh 的 8%·≤1px gap），密堆时仍可分辨
     if (w > 6) {
       const g = Math.min(w * 0.08, 1);
@@ -325,7 +331,10 @@ function draw() {
       w -= 2 * g;
     }
     ctx.fillStyle = s.isError ? colors.danger : colors[`lane${s.lane}`];
-    if (s.seq === props.selectedSeq) {
+    const selected = run
+      ? run.some((r) => r.seq === props.selectedSeq)
+      : s.seq === props.selectedSeq;
+    if (selected) {
       ctx.globalAlpha = 1;
       ctx.fillRect(x0 - 1, y - 1.5, w + 2, h + 3); // 选中高亮环（加宽描边感）
       ctx.globalAlpha = 0.85;
@@ -333,6 +342,28 @@ function draw() {
       ctx.globalAlpha = 0.8;
     }
     ctx.fillRect(x0, y, w, h);
+  };
+
+  if (props.mode === "sequence") {
+    // run 合并：连续同 (lane, kind) 画成一条矩形（seq 序 = slot 序，天然相邻）。
+    // 密集时段（如连续工具调用/多轮 assistant）不再梳齿化；命中 run 的 tooltip
+    // 显示数量与总耗时，click 定位 run 末条（最接近「这组刚结束」）。
+    let i = 0;
+    while (i < spans.length) {
+      const first = spans[i];
+      let j = i;
+      while (
+        j + 1 < spans.length &&
+        spans[j + 1].lane === first.lane &&
+        spans[j + 1].kindKey === first.kindKey &&
+        spans[j + 1].isError === first.isError
+      ) j++;
+      const run = spans.slice(i, j + 1);
+      drawSpan(run[0], run[run.length - 1].end, run.length > 1 ? run : null);
+      i = j + 1;
+    }
+  } else {
+    for (const s of spans) drawSpan(s, s.end, null);
   }
   ctx.globalAlpha = 1;
 
@@ -377,14 +408,60 @@ function scheduleRedraw() {
 
 // ---- 交互 ----
 
-function spanAt(mx: number, my: number): Span | null {
+/** run 合并索引（sequence 模式 hover/click 用）：run 首位 span + 末位 seq + 数量 */
+interface RunHit {
+  first: Span;
+  endAt: number;
+  count: number;
+  totalMs: number | null;
+}
+let runHits: RunHit[] = [];
+
+function rebuildRunHits() {
+  runHits = [];
+  if (props.mode !== "sequence") return;
+  let i = 0;
+  while (i < spans.length) {
+    const first = spans[i];
+    let j = i;
+    while (
+      j + 1 < spans.length &&
+      spans[j + 1].lane === first.lane &&
+      spans[j + 1].kindKey === first.kindKey &&
+      spans[j + 1].isError === first.isError
+    ) j++;
+    const run = spans.slice(i, j + 1);
+    const totalMs = run.every((r) => r.durMs != null)
+      ? run.reduce((n, r) => n + (r.durMs ?? 0), 0)
+      : null;
+    runHits.push({ first, endAt: run[run.length - 1].end, count: run.length, totalMs });
+    i = j + 1;
+  }
+}
+
+function spanAt(mx: number, my: number): RunHit | null {
   const domain = Math.max(1e-6, t1 - t0);
-  for (const s of spans) {
-    const y = TOP_PAD + s.lane * LANE_H;
+  // sequence 模式优先 run 命中（与绘制一致）；duration 模式按单 span
+  const candidates: { start: number; end: number; lane: number; hit: RunHit | null }[] =
+    props.mode === "sequence"
+      ? runHits.map((r) => ({ start: r.first.start, end: r.endAt, lane: r.first.lane, hit: r }))
+      : spans.map((s) => ({ start: s.start, end: s.end, lane: s.lane, hit: null }));
+  let fallback: Span | null = null;
+  for (const c of candidates) {
+    const y = TOP_PAD + c.lane * LANE_H;
     if (my < y - 1 || my > y + LANE_H + 1) continue;
-    const x0 = ((s.start - t0) / domain) * width;
-    const x1 = Math.max(x0 + 2, ((s.end - t0) / domain) * width);
-    if (mx >= x0 - 2 && mx <= x1 + 2) return s;
+    const x0 = ((c.start - t0) / domain) * width;
+    const x1 = Math.max(x0 + 2, ((c.end - t0) / domain) * width);
+    if (mx >= x0 - 2 && mx <= x1 + 2) {
+      if (c.hit) return c.hit;
+      // duration 模式：反查命中的单 span
+      const s = spans.find((sp) => sp.start === c.start && sp.lane === c.lane);
+      if (s) fallback = s;
+    }
+  }
+  if (fallback) {
+    // duration 模式包装成单元素 RunHit
+    return { first: fallback, endAt: fallback.end, count: 1, totalMs: fallback.durMs };
   }
   return null;
 }
@@ -392,26 +469,28 @@ function spanAt(mx: number, my: number): Span | null {
 function onMove(e: MouseEvent) {
   onDragMove(e); // 拖拽平移（dragX >= 0 时生效）
   const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-  const s = spanAt(e.clientX - rect.left, e.clientY - rect.top);
-  tooltip.value = s
+  const r = spanAt(e.clientX - rect.left, e.clientY - rect.top);
+  tooltip.value = r
     ? {
         x: e.clientX - rect.left,
         y: e.clientY - rect.top,
         text:
-          `#${s.seq} ${s.label}${s.isError ? " · 错误" : ""} · ${s.timeText}` +
-          (s.durMs != null && s.durMs > 0
-            ? ` · ${(s.durMs / 1000).toFixed(1)}s`
-            : s.durMs === 0
-              ? " · 瞬时"
-              : " · 耗时未记录"),
+          `#${r.first.seq}${r.count > 1 ? `~#${r.first.seq + r.count - 1}` : ""} ${r.first.label}${r.first.isError ? " · 错误" : ""}` +
+          (r.count > 1 ? ` ×${r.count}` : "") +
+          ` · ${r.first.timeText}` +
+          (r.totalMs != null
+            ? r.totalMs > 0
+              ? ` · ${(r.totalMs / 1000).toFixed(1)}s`
+              : " · 瞬时"
+            : " · 耗时未记录"),
       }
     : null;
 }
 
 function onClick(e: MouseEvent) {
   const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-  const s = spanAt(e.clientX - rect.left, e.clientY - rect.top);
-  if (s) emit("pick", s.seq);
+  const r = spanAt(e.clientX - rect.left, e.clientY - rect.top);
+  if (r) emit("pick", r.first.seq + r.count - 1); // run 末条（最接近「这组刚结束」）
 }
 
 function onWheel(e: WheelEvent) {
@@ -456,6 +535,7 @@ function onDragEnd() {
 
 watch([() => props.events, () => props.mode], () => {
   buildSpans();
+  rebuildRunHits();
   scheduleRedraw();
 });
 
@@ -482,6 +562,7 @@ watch([() => props.hasEarlier, () => props.loadingEarlier], scheduleRedraw);
 
 onMounted(() => {
   buildSpans();
+  rebuildRunHits();
   if (track.value && typeof ResizeObserver !== "undefined") {
     ro = new ResizeObserver(scheduleRedraw);
     ro.observe(track.value);

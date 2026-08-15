@@ -11,7 +11,8 @@
 -->
 <script setup lang="ts">
 import { computed, nextTick, ref, watch, onMounted, onBeforeUnmount } from "vue";
-import { buildRows, useTrajectory, type TrajectoryRow } from "../../composables/useTrajectory";
+import { buildRows, useTrajectory, type TrajectoryRow, type EventRow } from "../../composables/useTrajectory";
+import type { SessionEvent } from "../../types";
 import { bridge } from "../../api/bridge";
 import { useChatStore } from "../../stores/chat";
 import TrajectoryToolbar from "./TrajectoryToolbar.vue";
@@ -36,6 +37,66 @@ const selectedRow = ref<TrajectoryRow | null>(null);
 
 const searching = computed(() => query.value.trim() !== "");
 
+// ---- 生成中 ephemeral 行：复用 chat store 流式状态（与对话页同源，零后端改动） ----
+// 排序恒在落库行之后（seq=-1）；assistant 终态落库 + sending=false 后自然消失。
+// 折叠态不显示（turn 头看不到子行）；搜索态不显示（match 语义混乱）。
+const streamingRows = computed<TrajectoryRow[]>(() => {
+  if (!chat.sending || chat.activeConvId !== props.conversationId) return [];
+  if (query.value.trim() !== "") return []; // 搜索态 match 语义混乱，不显示
+  const out: TrajectoryRow[] = [];
+  const tk = "__streaming__";
+  const now = new Date().toISOString();
+  const mk = (kind: EventRow["kind"], label: string, summary: string, key: string): EventRow => ({
+    type: "event",
+    key,
+    turnKey: tk,
+    seq: -1,
+    createdAt: now,
+    t: null,
+    kind,
+    label,
+    summary,
+    isError: false,
+    thinkingDerived: false,
+    durationMs: null,
+    tokens: null,
+    match: true,
+    streaming: true,
+    // 占位事件（渲染/检查器均不读 ephemeral 行 payload；点击也被守卫拦截）
+    event: {
+      id: -1,
+      session_id: "",
+      seq: -1,
+      kind: "assistant_message",
+      actor: "agent",
+      turn_id: null,
+      message_id: null,
+      payload: {},
+      created_at: now,
+    } as SessionEvent,
+  });
+  const think = chat.streamingThinking;
+  if (think) {
+    const line = think.split("\n", 1)[0].trim().slice(0, 120);
+    out.push(mk("assistant", "THINKING", line || "思考中…", "st-thinking"));
+  }
+  const text = chat.streamingText;
+  if (text) {
+    const line = text.split("\n", 1)[0].trim().slice(0, 120);
+    out.push(mk("assistant", "STREAM", line || "生成中…", "st-text"));
+  }
+  for (const call of chat.streamingToolCalls.values()) {
+    out.push(mk("tool", "TOOL", `${call.name} ${call.ended ? "· 等待结果" : "· 组装参数"}…`, `st-tool-${call.id}`));
+  }
+  return out;
+});
+
+const rows = computed(() =>
+  streamingRows.value.length
+    ? [...buildRows(events.value, { collapsedTurns: collapsedTurns.value, showAux: showAux.value, query: query.value }), ...streamingRows.value]
+    : buildRows(events.value, { collapsedTurns: collapsedTurns.value, showAux: showAux.value, query: query.value }),
+);
+
 /** 会话级汇总（工具栏 chip）：已载窗口内的轮数/事件/工具计数 */
 const stats = computed(() => {
   let turns = 0;
@@ -51,10 +112,7 @@ const stats = computed(() => {
   }
   return { turns, events: events.value.length, tools };
 });
-const rows = computed(() =>
-  buildRows(events.value, { collapsedTurns: collapsedTurns.value, showAux: showAux.value, query: query.value }),
-);
-/** 搜索态下是否至少命中一行（全未命中时表格上方浮提示） */
+/** 搜索态下是否至少命中一行（全未命中时表格上方浮提示；ephemeral 行 match 恒 true 不算未命中） */
 const anyMatch = computed(() => rows.value.some((r) => r.type === "event" && r.match));
 
 const turnKeys = computed(() => {
@@ -254,7 +312,7 @@ async function pollOnce() {
   const n = await refreshLatest();
   if (n > 0) {
     timelineRef.value?.preserveViewport();
-    if (tableRef.value?.isNearBottom()) {
+    if (tableRef.value?.isPinned()) {
       await nextTick();
       tableRef.value?.smoothScrollToBottom();
     }
@@ -277,9 +335,11 @@ function stopPolling() {
   pollTimer = null;
 }
 
-/** sending 结束后再补一轮（终态事件 turn_ended 与最后一条 assistant 落库时序贴近） */
+/** sending 结束后再补一轮（终态事件 turn_ended 与最后一条 assistant 落库时序贴近）。
+ *  sending 起始 = 用户刚发消息 → 强制贴底进入跟随态（意图明确）。 */
 watch(() => chat.sending, (sending) => {
   if (sending) {
+    tableRef.value?.scrollToBottom();
     startPolling();
   } else {
     stopPolling();

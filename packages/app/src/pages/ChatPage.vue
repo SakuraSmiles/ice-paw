@@ -4,7 +4,7 @@
 // 会话内标签页：标题下方常驻 [对话 | 轨迹]。发送消息是**会话级能力**，
 // 输入框沉到标签页之下常驻——tab 只切换内容区的渲染形态（多 render 愿景）：
 // - 对话/轨迹都是同一 session 的 render，任一 tab 都能发送；
-// - 轨迹页发送 → 自动切回「对话」看流式回复（轨迹的 live 追加是后续项）；
+// - 轨迹页发送 → 停留轨迹页：live 追加 + 生成中 ephemeral 行直接看进度；
 // - v-show 双 pane：chat DOM 常驻 → 流式/滚动状态不因切 tab 中断；
 // - 切换会话 → tab 重置回「对话」；无激活会话（欢迎态）→ 标签条隐藏。
 import { ref, watch } from "vue";
@@ -24,11 +24,6 @@ const activeTab = ref<ChatTab>("chat");
 // 切会话 → 回到「对话」标签（轨迹视图自身会按新 conversationId 重载）
 watch(() => chat.activeConvId, () => {
   activeTab.value = "chat";
-});
-
-// 轨迹页发起发送 → 切回「对话」渲染观看流式回复
-watch(() => chat.sending, (now) => {
-  if (now && activeTab.value === "trajectory") activeTab.value = "chat";
 });
 </script>
 

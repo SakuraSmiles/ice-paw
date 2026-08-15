@@ -96,6 +96,9 @@ export interface EventRow {
   match: boolean;
   /** 原始事件（检查器直接读 payload，不再二次聚合） */
   event: SessionEvent;
+  /** 生成中 ephemeral 行标记（流式临时观感行，不落库；落库行无此字段）。
+   *  行渲染据此显示脉冲点；seq 恒 -1 不参与时间轴/选中联动 */
+  streaming?: boolean;
 }
 
 /** 折叠态 = 只渲染 turn 头（头自带 统计/终止/用量，无需额外摘要行） */
