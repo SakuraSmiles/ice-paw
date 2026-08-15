@@ -10,6 +10,8 @@
 // - 搜索：展开态顶部过滤框，条目匹配 label/value；组头命中保留整组
 // - 组尾插槽 `group-extra`（参数 group）：组内常驻自定义内容（如自定义
 //   组的模型名输入框）
+// - 组头插槽 `group-icon`（参数 group）：组名前的品牌图标位
+// - 控件插槽 `control-icon`：关闭态控件前缀（如当前选中条目的品牌图标）
 import { ref, computed, onMounted, onUnmounted, nextTick } from "vue";
 import type { ComboboxGroup, ComboboxItem } from "./Combobox.vue";
 
@@ -104,6 +106,7 @@ function onSearchKeydown(e: KeyboardEvent) {
   <div ref="root" class="gs" :class="{ 'gs-open': open, 'gs-disabled': disabled }">
     <!-- 关闭态：selector 控件（无光标输入） -->
     <button type="button" class="gs-control" :disabled="disabled" @click="toggle">
+      <slot name="control-icon" />
       <span class="gs-value" :class="{ 'gs-placeholder': !selectedLabel }">
         {{ selectedLabel || placeholder }}
       </span>
@@ -127,6 +130,7 @@ function onSearchKeydown(e: KeyboardEvent) {
       <div class="gs-list">
         <template v-for="{ g, matched } in filteredGroups" :key="g.label">
           <div class="gs-group-label">
+            <slot name="group-icon" :group="g" />
             <span class="gs-group-name">{{ g.label }}</span>
             <span v-if="g.note" class="gs-group-note">{{ g.note }}</span>
           </div>
@@ -250,6 +254,15 @@ function onSearchKeydown(e: KeyboardEvent) {
   align-items: baseline;
   gap: 6px;
   padding: 8px 10px 3px;
+}
+/* 品牌图标（slot 内容属父作用域，须 :deep）；svg 无基线，垂直居中更稳 */
+.gs-group-label :deep(.provider-icon) {
+  align-self: center;
+}
+/* 关闭态控件前缀图标：比正文稍收敛的次级色 */
+.gs-control :deep(.provider-icon) {
+  color: var(--ip-color-text-secondary);
+  margin-right: -3px;
 }
 .gs-group-name {
   font-size: 11px;
