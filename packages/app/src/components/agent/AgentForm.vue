@@ -2,11 +2,16 @@
 // AgentForm.vue — Agent 表单（内联组件，供卡片展开编辑 / 新建复用）
 // 从原 AgentFormModal 提取表单主体与逻辑，去掉弹窗外壳；布局改为垂直（适配卡片宽度）。
 // 字段：name, id, provider, model, api_key, base_url, workspace_path
+//
+// Provider 侧全部目录驱动（后端 PROVIDERS 注册表经 list_providers 下发）：
+// 下拉/默认地址/必填规则/静态模型目录都不在本组件硬编码；「测试连接」与
+// 「拉取模型」共用 test_provider_connection 一次往返。
 import { ref, computed, onMounted, watch } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import type { Agent, NewAgent, AgentUpdate } from "../../types";
+import type { Agent, NewAgent, AgentUpdate, ProviderConnectionResult, ProviderInfo } from "../../types";
 import { bridge } from "../../api/bridge";
+import { loadProviders } from "../../composables/useProviders";
 import Combobox from "../common/Combobox.vue";
 import MoreMenu from "../common/MoreMenu.vue";
 
@@ -22,29 +27,16 @@ const emit = defineEmits<{
 
 const isEdit = computed(() => !!props.agent);
 
-// Provider 列表
-const providerLabels: Record<string, string> = {
-  openai: "OpenAI",
-  anthropic: "Anthropic",
-  deepseek: "DeepSeek",
-  glm: "GLM",
-  minimax: "MiniMax",
-  "minimax-cn": "MiniMax (中国站)",
-};
-const providerOptions = Object.values(providerLabels);
-const providerKeyOf = (label: string): string => {
-  return Object.entries(providerLabels).find(([, v]) => v === label)?.[0] ?? label;
-};
+// ---- Provider 目录（单一真相源；失败降级空表 → 纯手输） ----
+const providerList = ref<ProviderInfo[]>([]);
 
 const defaultWorkspace = ref("");
 
-const initProviderLabel = props.agent?.provider
-  ? (providerLabels[props.agent.provider] ?? props.agent.provider)
-  : "OpenAI";
+// form.provider 存注册名（key）——旧实现存中文 label 再反查，label 一重复即错乱
 const form = ref({
   id: props.agent?.id ?? "",
   name: props.agent?.name ?? "",
-  provider: initProviderLabel,
+  provider: props.agent?.provider ?? "openai",
   model: props.agent?.model ?? "",
   api_key: "",
   base_url: props.agent?.base_url ?? "",
@@ -52,6 +44,7 @@ const form = ref({
 });
 
 onMounted(async () => {
+  providerList.value = await loadProviders();
   try {
     const prefs = await bridge.preferences.get();
     defaultWorkspace.value = (prefs.default_workspace_path ?? "").replace(/\\/g, "/");
@@ -70,12 +63,36 @@ watch(() => form.value.id, (newId) => {
   }
 });
 
-// Provider 变化时自动切换推荐模型
-watch(() => form.value.provider, () => {
-  const key = providerKeyOf(form.value.provider);
-  const suggestions = modelSuggestions[key];
-  if (suggestions && suggestions.length > 0) {
-    form.value.model = suggestions[0];
+// ---- 当前 provider 的目录元数据（目录未加载时按「最保守」降级：要 key、有默认地址空） ----
+const currentProvider = computed(
+  () => providerList.value.find((p) => p.name === form.value.provider) ?? null,
+);
+const requiresKey = computed(() => currentProvider.value?.requires_key ?? true);
+const requiresBaseUrl = computed(() => currentProvider.value?.requires_base_url ?? false);
+const defaultUrl = computed(() => currentProvider.value?.default_url ?? "");
+
+const providerItems = computed(() =>
+  providerList.value.map((p) => ({ label: p.label, value: p.name, note: p.note ?? undefined })),
+);
+
+// ---- 模型选项 = 静态目录 + 在线拉取（去重；手输永远保留——Combobox 自由输入） ----
+const fetchedModels = ref<string[]>([]);
+const modelOptions = computed(() => {
+  const catalog = currentProvider.value?.models ?? [];
+  return [...new Set([...catalog, ...fetchedModels.value])];
+});
+
+// Provider 变化：清拉取结果/测试态；模型跟随切换仅当「新建 / 模型为空 /
+// 旧值来自目录」（手输的模型名不被切 provider 意外清掉）
+watch(() => form.value.provider, (_newName, oldName) => {
+  const prev = providerList.value.find((p) => p.name === oldName);
+  const wasCatalogPick =
+    !!prev && [...prev.models, ...fetchedModels.value].includes(form.value.model);
+  fetchedModels.value = [];
+  connResult.value = null;
+  const first = currentProvider.value?.models[0];
+  if (first && (!props.agent || !form.value.model || wasCatalogPick)) {
+    form.value.model = first;
   }
 });
 
@@ -85,17 +102,51 @@ const hasFileConfig = computed(
   () => isEdit.value && !!props.agent?.workspace_path && !!props.agent?.config_from_file,
 );
 
-const modelSuggestions: Record<string, string[]> = {
-  openai: ["gpt-4o", "gpt-4o-mini", "o3-mini", "gpt-4.1", "gpt-4.1-mini"],
-  anthropic: ["claude-sonnet-4-20250514", "claude-haiku-3-5-20241022", "claude-opus-4-20250514"],
-  deepseek: ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-chat", "deepseek-reasoner"],
-  glm: ["glm-5-turbo", "glm-5.2", "glm-5.1", "glm-4", "glm-4-flash"],
-  minimax: ["MiniMax-M3", "MiniMax-M2.5", "MiniMax-M2.5-highspeed"],
-  "minimax-cn": ["MiniMax-M3", "MiniMax-M2.5", "MiniMax-M2.5-highspeed"],
-};
+// ---- 测试连接 / 拉取模型（同一往返；失败是结果不是异常，行内红字展示） ----
+const testing = ref(false);
+const connResult = ref<ProviderConnectionResult | null>(null);
 
-const currentProviderKey = computed(() => providerKeyOf(form.value.provider));
-const currentSuggestions = computed(() => modelSuggestions[currentProviderKey.value] ?? []);
+async function runTest() {
+  if (testing.value) return;
+  testing.value = true;
+  connResult.value = null;
+  try {
+    // 编辑态带 agent_id：表单没填 key 时后端用存量 key 探测（密文不回显）
+    const res = await bridge.providers.testConnection(
+      form.value.provider,
+      form.value.base_url || undefined,
+      form.value.api_key || undefined,
+      isEdit.value ? props.agent?.id : undefined,
+    );
+    connResult.value = res;
+    if (res.ok && res.models.length > 0) {
+      fetchedModels.value = [...new Set([...fetchedModels.value, ...res.models])];
+    }
+  } catch (e) {
+    // 命令本身失败（如未注册 provider / custom 缺地址被 Validation 拦）——同样行内展示
+    connResult.value = {
+      ok: false,
+      model_count: 0,
+      models: [],
+      error: e instanceof Error ? e.message : String(e),
+    };
+  } finally {
+    testing.value = false;
+  }
+}
+
+/** 一键填入注册表默认地址（默认值可见可恢复，治「手填抄错地址」） */
+function restoreDefaultUrl() {
+  form.value.base_url = defaultUrl.value;
+}
+
+const urlPlaceholder = computed(() =>
+  requiresBaseUrl.value
+    ? "必填，例如 http://localhost:8000/v1"
+    : defaultUrl.value
+      ? `默认 ${defaultUrl.value}，留空即用`
+      : "留空用默认",
+);
 
 async function pickWorkspace() {
   const selected = await open({
@@ -123,11 +174,15 @@ function validate(): boolean {
   if (!form.value.id.trim()) { error.value = "ID 不能为空"; return false; }
   if (!form.value.name.trim()) { error.value = "名称不能为空"; return false; }
   if (!form.value.model.trim()) { error.value = "模型不能为空"; return false; }
-  if (isEdit.value && form.value.api_key && form.value.api_key.trim().length < 8) {
+  // Key 必填/格式校验只对「需要 key 的 provider」生效（ollama/custom 本地免鉴权）
+  if (requiresKey.value && !isEdit.value && !form.value.api_key.trim()) {
+    error.value = "API Key 不能为空"; return false;
+  }
+  if (requiresKey.value && isEdit.value && form.value.api_key && form.value.api_key.trim().length < 8) {
     error.value = "API Key 格式不正确"; return false;
   }
-  if (!isEdit.value && !form.value.api_key.trim()) {
-    error.value = "API Key 不能为空"; return false;
+  if (requiresBaseUrl.value && !form.value.base_url.trim()) {
+    error.value = "自定义 Provider 必须填写 API URL"; return false;
   }
   error.value = "";
   return true;
@@ -145,7 +200,7 @@ async function save() {
       const update: AgentUpdate = {
         id: currentAgent.id,
         name: form.value.name,
-        provider: currentProviderKey.value,
+        provider: form.value.provider,
         model: form.value.model,
         base_url: form.value.base_url || undefined,
         workspace_path: form.value.workspace_path || null,
@@ -167,7 +222,7 @@ async function save() {
       const input: NewAgent = {
         id: form.value.id,
         name: form.value.name,
-        provider: currentProviderKey.value,
+        provider: form.value.provider,
         model: form.value.model,
         api_key: form.value.api_key,
         base_url: form.value.base_url || undefined,
@@ -229,11 +284,25 @@ function confirmDelete() {
       <div class="field-row">
         <div class="field">
           <label class="field-label">Provider <span class="req">*</span></label>
-          <Combobox v-model="form.provider" :options="providerOptions" />
+          <Combobox v-model="form.provider" :items="providerItems" placeholder="选择或输入 Provider" />
         </div>
         <div class="field">
           <label class="field-label">模型 <span class="req">*</span></label>
-          <Combobox v-model="form.model" :options="currentSuggestions" placeholder="输入或选择模型" />
+          <div class="model-group">
+            <Combobox v-model="form.model" :options="modelOptions" placeholder="输入或选择模型" />
+            <button
+              type="button"
+              class="ws-btn"
+              :class="{ 'ws-btn-fetching': testing }"
+              :disabled="testing"
+              title="从服务拉取模型列表（需服务已启动）"
+              @click="runTest"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 12a9 9 0 1 1-2.64-6.36" /><polyline points="21 3 21 9 15 9" />
+              </svg>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -242,16 +311,41 @@ function confirmDelete() {
         <div class="field">
           <label class="field-label">
             API Key
-            <span v-if="!isEdit" class="req">*</span>
-            <span v-if="isEdit" :class="props.agent?.has_api_key ? 'badge badge-ok' : 'badge badge-warn'">
+            <span v-if="requiresKey && !isEdit" class="req">*</span>
+            <span v-if="isEdit && requiresKey" :class="props.agent?.has_api_key ? 'badge badge-ok' : 'badge badge-warn'">
               {{ props.agent?.has_api_key ? "已配置" : "未配置" }}
             </span>
           </label>
-          <input v-model="form.api_key" type="password" class="input" :placeholder="isEdit ? '留空保持现有' : '输入 API Key'" />
+          <input
+            v-model="form.api_key"
+            type="password"
+            class="input"
+            :placeholder="requiresKey ? (isEdit ? '留空保持现有' : '输入 API Key') : '本地服务无需 API Key'"
+          />
         </div>
         <div class="field">
-          <label class="field-label">API URL <span class="hint">可选</span></label>
-          <input v-model="form.base_url" type="text" class="input" placeholder="留空用默认" />
+          <label class="field-label">
+            API URL
+            <span v-if="requiresBaseUrl" class="req">*</span>
+            <span v-else class="hint">可选</span>
+          </label>
+          <input v-model="form.base_url" type="text" class="input" :placeholder="urlPlaceholder" />
+          <!-- 连接测试行：按钮 + 默认地址可见可一键恢复 + 行内结果 -->
+          <div class="conn-row">
+            <button type="button" class="conn-btn" :disabled="testing" @click="runTest">
+              {{ testing ? "测试中…" : "测试连接" }}
+            </button>
+            <button
+              v-if="defaultUrl"
+              type="button"
+              class="conn-btn conn-btn-ghost"
+              :title="`填入默认地址 ${defaultUrl}`"
+              @click="restoreDefaultUrl"
+            >填入默认地址</button>
+            <span v-if="connResult" :class="connResult.ok ? 'conn-ok' : 'conn-err'" :title="connResult.error ?? undefined">
+              {{ connResult.ok ? `连接成功，发现 ${connResult.model_count} 个模型` : connResult.error }}
+            </span>
+          </div>
         </div>
       </div>
 
@@ -374,6 +468,68 @@ function confirmDelete() {
 
 :deep(.combobox-input-wrap) {
   height: 30px;
+}
+
+/* 模型 Combobox + 拉取按钮（与工作区 input+btn 同语系） */
+.model-group {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.model-group .combobox {
+  flex: 1;
+  min-width: 0;
+}
+/* 拉取中旋转反馈 */
+.ws-btn-fetching svg {
+  animation: ws-spin 0.9s linear infinite;
+}
+@keyframes ws-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* 连接测试行：小号文字按钮 + 行内结果（绿/红），失败原因可 hover 看全 */
+.conn-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 18px;
+  flex-wrap: wrap;
+}
+.conn-btn {
+  height: 20px;
+  padding: 0 8px;
+  font-size: 10px;
+  color: var(--ip-primary-600);
+  background-color: var(--ip-color-primary-soft-bg);
+  border: none;
+  border-radius: var(--ip-radius-full);
+  cursor: pointer;
+  transition: all var(--ip-duration-fast) var(--ip-ease-out);
+}
+.conn-btn:hover { background-color: var(--ip-primary-100); }
+.conn-btn:disabled { opacity: 0.6; cursor: wait; }
+.conn-btn-ghost {
+  color: var(--ip-color-text-tertiary);
+  background-color: var(--ip-color-bg-tertiary);
+}
+.conn-btn-ghost:hover { color: var(--ip-color-text-secondary); background-color: var(--ip-color-bg-secondary); }
+.conn-ok {
+  font-size: 10px;
+  color: var(--ip-success-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.conn-err {
+  font-size: 10px;
+  color: var(--ip-danger-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
 }
 
 /* 工作区 */
