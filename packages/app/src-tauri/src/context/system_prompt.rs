@@ -30,11 +30,13 @@ pub(crate) fn build_system_prompt(
         .map(|s| s.to_string());
 
     // P2-1: 工具启用时追加工具能力提示
+    // MA-1：delegate_to_agent 的指引**不在**这里——委派能力按会话 kind 差异化
+    // （session_runner 仅对 kind='chat' 注册该工具并注入可调度清单，见
+    // PipelineContext::delegation_hint），base 工具提示保持 kind 无关。
     if tools_enabled {
         let rounds_hint = "建议在同一轮内尽可能批量执行所需的工具调用（例如一次列出多个目录）。任务完成后直接输出最终回答即可，无需手动终止。".to_string();
         let tool_hint = format!(
-            "你已启用工具调用能力。当用户要求读取文件、列出目录等操作时，请使用提供的工具（如 list_directory、read_file）来执行，不要回复\"无法访问文件\"。\n\
-             如果遇到需要其他专业领域知识的问题，可以使用 delegate_to_agent 工具委托给其他 Agent 获取专家意见。\n\n{}",
+            "你已启用工具调用能力。当用户要求读取文件、列出目录等操作时，请使用提供的工具（如 list_directory、read_file）来执行，不要回复\"无法访问文件\"。\n\n{}",
             rounds_hint,
         );
         effective_system_prompt = Some(match effective_system_prompt {

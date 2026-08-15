@@ -236,7 +236,7 @@ impl McpServerManager {
             //     纯英文描述无法被中文 query 命中）；
             //  3) 取舍：纯中文 query 下，带 CJK 前缀的远程工具会系统性排在英文描述的内置工具
             //     前；因所有工具始终全量可见（仅顺序变化），LLM 仍可选内置工具，故可接受。
-            // 仅外部工具（经 ExternalToolProxy）加前缀；内置工具（client.rs with_filter）不加。
+            // 仅外部工具（经 ExternalToolProxy）加前缀；内置工具（client.rs register_builtin）不加。
             let server_name = config.name.trim();
             let description = if server_name.is_empty() {
                 // server 名为空时不加无意义的「】」空前缀

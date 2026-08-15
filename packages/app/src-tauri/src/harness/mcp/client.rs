@@ -230,42 +230,6 @@ impl McpRegistry {
         registry
     }
 
-    /// 仅注册指定名称的内置工具。
-    /// 未识别的工具名静默跳过（容错）。
-    pub fn with_filter(names: &[String]) -> Self {
-        let registry = Self::new();
-        let all_builtins: Vec<(&str, Arc<dyn McpClient>)> = vec![
-            ("read_file", Arc::new(super::internal::ReadFileTool)),
-            ("list_directory", Arc::new(super::internal::ListDirectoryTool)),
-            ("directory_tree", Arc::new(super::internal::DirectoryTreeTool)),
-            ("get_file_info", Arc::new(super::internal::GetFileInfoTool)),
-            ("read_multiple_files", Arc::new(super::internal::ReadMultipleFilesTool)),
-            ("search_kb", Arc::new(super::kb_tool::SearchKbTool)),
-            ("save_to_kb", Arc::new(super::kb_tool::SaveToKbTool)),
-            ("read_kb_document", Arc::new(super::kb_tool::ReadKbDocumentTool)),
-            ("read_attachment_page", Arc::new(super::read_attachment_tool::ReadAttachmentPageTool)),
-            ("view_attachment_image", Arc::new(super::attachment_image_tool::ViewAttachmentImageTool)),
-            ("write_file", Arc::new(super::file_tools::WriteFileTool)),
-            ("edit_file", Arc::new(super::file_tools::EditFileTool)),
-            ("delete_file", Arc::new(super::file_tools::DeleteFileTool)),
-            ("move_file", Arc::new(super::file_tools::MoveFileTool)),
-            ("create_directory", Arc::new(super::file_tools::CreateDirectoryTool)),
-            ("run_command", Arc::new(super::shell::RunCommandTool)),
-            ("search_files", Arc::new(super::search::SearchFilesTool)),
-            ("git", Arc::new(super::git::GitTool)),
-            ("web_fetch", Arc::new(super::web::WebFetchTool)),
-            ("read_agent_config", Arc::new(super::agent_config::ReadAgentConfigTool)),
-            ("propose_config_change", Arc::new(super::proposal_tool::ProposeConfigChangeTool)),
-            ("delegate_to_agent", Arc::new(super::delegate::DelegateTool)),
-        ];
-        for name in names {
-            if let Some((_, client)) = all_builtins.iter().find(|(n, _)| n == name) {
-                registry.register_sync(client.clone());
-            }
-        }
-        registry
-    }
-
     /// 注册一个工具客户端
     pub async fn register(&self, client: Arc<dyn McpClient>) {
         let name = client.name().to_string();
@@ -317,7 +281,8 @@ impl McpRegistry {
         self.register_sync(Arc::new(super::web::WebFetchTool));
         self.register_sync(Arc::new(super::agent_config::ReadAgentConfigTool));
         self.register_sync(Arc::new(super::proposal_tool::ProposeConfigChangeTool));
-        // 注：delegate_to_agent 不在 register_builtin 中，仅在 with_filter 动态注册
+        // 注：delegate_to_agent 不在 register_builtin（全局注册表）中——由
+        // session_runner 组装期按会话 kind 注册（仅 'chat'，委派深度=1 护栏）。
     }
 
     /// 按名称查询工具客户端
