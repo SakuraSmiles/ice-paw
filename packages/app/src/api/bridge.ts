@@ -21,6 +21,7 @@ import type {
   PlanSnapshot,
   Project,
   SessionEvent,
+  TurnAnchor,
   UpdateProject,
   UserPreferences,
 } from "../types";
@@ -313,6 +314,13 @@ const trajectory = {
     try {
       return await invoke<PlanSnapshot | null>("get_session_plan", { conversationId });
     } catch (err) { throw wrapInvokeError("trajectory.currentPlan", err); }
+  },
+  /** 轮次锚点列表（UX #5 轮次导航条）：一轮 = 一条用户消息，轻量
+   *  {message_id, preview, created_at}；轮号 = 下标 +1 */
+  async turnAnchors(conversationId: string): Promise<TurnAnchor[]> {
+    try {
+      return await invoke<TurnAnchor[]>("list_turn_anchors", { conversationId });
+    } catch (err) { throw wrapInvokeError("trajectory.turnAnchors", err); }
   },
 };
 

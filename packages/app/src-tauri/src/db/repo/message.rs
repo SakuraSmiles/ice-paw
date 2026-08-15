@@ -98,6 +98,43 @@ pub async fn list_by_conversation(
     Ok(rows)
 }
 
+/// 轮次锚点（聊天「轮次导航条」UX #5）：一轮 = 一条用户消息。
+///
+/// 只取 `id / 预览 / 时间` 三个轻量字段——**不加载 content_blocks 大字段**，
+/// 预览在 SQL 侧 `substr` 截断（字符级），3000 轮也只有小行级成本。
+/// 轮号 = 前端按下标 +1（与轨迹页「第 N 轮」同基准：user_message 计数）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TurnAnchor {
+    pub message_id: String,
+    /// 用户消息正文预览（SQL substr 120 字符，前端再按显示宽收）
+    pub preview: String,
+    pub created_at: String,
+}
+
+pub async fn list_turn_anchors(
+    pool: &SqlitePool,
+    conversation_id: &str,
+) -> AppResult<Vec<TurnAnchor>> {
+    let rows: Vec<(String, Option<String>, String)> = sqlx::query_as(
+        "SELECT id, substr(content, 1, 120), created_at \
+           FROM messages \
+          WHERE conversation_id = ? AND role = 'user' \
+          ORDER BY created_at ASC, rowid ASC",
+    )
+    .bind(conversation_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(message_id, preview, created_at)| TurnAnchor {
+            message_id,
+            // 纯图/纯附件消息 content 可能为空 → 空串，前端以「(无文本)」占位
+            preview: preview.unwrap_or_default(),
+            created_at,
+        })
+        .collect())
+}
+
 /// 统计会话内的消息总数
 ///
 /// 返回 `i64` 以与 SQL `COUNT(*)` 对齐，且与 SQLite 的上限毫无关系。

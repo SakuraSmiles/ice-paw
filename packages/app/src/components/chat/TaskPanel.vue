@@ -61,6 +61,10 @@ const anyRunning = computed(() => tasks.value.some((t) => t.running));
 // ---- 计划段（C5）：get_session_plan 快照；null = 无计划/已清空 → 段隐藏 ----
 const plan = ref<PlanSnapshot | null>(null);
 const planDone = computed(() => plan.value?.items.filter((i) => i.status === "done").length ?? 0);
+const planPct = computed(() => {
+  const total = plan.value?.items.length ?? 0;
+  return total > 0 ? Math.round((planDone.value / total) * 100) : 0;
+});
 
 async function loadPlan() {
   const cid = chat.activeConvId;
@@ -81,6 +85,25 @@ const pillCount = computed(() => {
 // ---- popover 开合（点击外部关闭；切会话收起——数据源已变） ----
 const open = ref(false);
 const panelRef = ref<HTMLElement | null>(null);
+
+// ---- 自动展开（UX #3）：新委派任务启动时展开一次（用户拍板时机） ----
+// 同一任务只触发一次（seen 记账）；切会话的首个快照只记账不弹——
+// 否则每次切进「有运行中任务」的会话都会弹，打扰。
+const seenTaskIds = new Set<string>();
+let seenConvId: string | null = null;
+watch(tasks, (list) => {
+  const cid = chat.activeConvId;
+  const freshConv = cid !== seenConvId;
+  if (freshConv) {
+    seenTaskIds.clear();
+    seenConvId = cid;
+  }
+  const fresh = list.filter((t) => !seenTaskIds.has(t.id));
+  fresh.forEach((t) => seenTaskIds.add(t.id));
+  if (!freshConv && fresh.some((t) => t.running) && !open.value) {
+    open.value = true;
+  }
+}, { immediate: true });
 
 function onDocClick(e: MouseEvent) {
   if (open.value && panelRef.value && !panelRef.value.contains(e.target as Node)) {
@@ -153,7 +176,13 @@ function openTask(id: string) {
         <!-- 计划段：意图文档全量快照（勾选恒为 agent 判断，非任务终态派生） -->
         <template v-if="plan">
           <div class="task-divider" />
-          <div class="task-popover-title">计划 {{ planDone }}/{{ plan.items.length }}</div>
+          <div class="task-popover-title plan-title">
+            <span>计划 {{ planDone }}/{{ plan.items.length }}</span>
+            <!-- 细进度条：一眼读完成度，不与条目状态标记抢语义 -->
+            <span class="plan-progress" :title="`完成 ${planDone}/${plan.items.length}`">
+              <span class="plan-progress-fill" :style="{ width: `${planPct}%` }" />
+            </span>
+          </div>
           <div
             v-for="(it, i) in plan.items"
             :key="i"
@@ -205,6 +234,10 @@ function openTask(id: string) {
   font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary);
   padding: 4px 10px 6px;
 }
+/* 计划标题行：文案 + 细进度条同行（完成度一眼可读） */
+.plan-title { display: flex; align-items: center; gap: 8px; }
+.plan-progress { flex: 1; height: 3px; border-radius: 2px; background: var(--ip-color-bg-tertiary); overflow: hidden; }
+.plan-progress-fill { display: block; height: 100%; border-radius: 2px; background: var(--ip-primary-500); transition: width var(--ip-duration-fast) var(--ip-ease-out); }
 .task-divider { border-top: 1px solid var(--ip-color-border-default); margin: 4px 2px; }
 .task-row {
   display: flex; align-items: center; gap: 8px; width: 100%;

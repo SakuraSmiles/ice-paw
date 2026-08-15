@@ -20,8 +20,10 @@ import DelegationCard from "./DelegationCard.vue";
 import PlanCard from "./PlanCard.vue";
 import ImagePreview from "./ImagePreview.vue";
 import AttachmentDetail from "./AttachmentDetail.vue";
+import TurnRail from "./TurnRail.vue";
 import { useThinkingTimer } from "../../composables/useThinkingTimer";
 import { useScrollFollow } from "../../composables/useScrollFollow";
+import { useTurnRail, buildTurnBuckets, RAIL_CAPACITY } from "../../composables/useTurnRail";
 import type { Message, MessageRole, PlanItem } from "../../types";
 
 const chat = useChatStore();
@@ -30,6 +32,92 @@ const listRef = ref<HTMLElement | null>(null);
 // 滚动跟随 + 分页 + 阅读位置记忆（逻辑抽到 composable：自动贴底 / 上滚暂停 /
 // 顶部触发分页 / 每会话滚动锚点——切走再回来按意图贴底或原位恢复）
 const { showScrollBtn, autoFollow, paginating, scrollToBottom, restoreForConversation } = useScrollFollow(listRef);
+
+// =========================================================================
+// 轮次导航条（UX #5）：锚点目录（后端轻量行）+ 视位侦测 + 跨页跳转。
+// 定位是「目录」不是 minimap——未加载页的内容高度不可知，按轮次索引对
+// 任意规模（几千轮）都成立；超 RAIL_CAPACITY 轮自动聚合。
+// =========================================================================
+const { anchors, loadAnchors } = useTurnRail();
+const buckets = computed(() => buildTurnBuckets(anchors.value, RAIL_CAPACITY));
+
+// ---- 视位侦测：视口顶所在轮（throttle 用 rAF 合帧；查询走缓存 tops） ----
+const activeTurn = ref<number | null>(null);
+const turnOfMsg = computed(() => {
+  const m = new Map<string, number>();
+  anchors.value.forEach((a, i) => m.set(a.message_id, i + 1));
+  return m;
+});
+let topsCache: { top: number; turn: number | null }[] = [];
+
+// 锚点刷新：会话切换 + 尾消息变化（= 新一轮开始；向前翻页不动尾，不误触）
+watch(() => chat.activeConvId, (cid) => {
+  activeTurn.value = null;
+  void loadAnchors(cid);
+}, { immediate: true });
+watch(() => chat.messages[chat.messages.length - 1]?.id, () => {
+  if (chat.activeConvId) void loadAnchors(chat.activeConvId);
+});
+
+function rebuildTops() {
+  const root = listRef.value;
+  if (!root) { topsCache = []; return; }
+  const map = turnOfMsg.value;
+  topsCache = Array.from(root.querySelectorAll<HTMLElement>("[data-mid]")).map((el) => ({
+    top: el.offsetTop,
+    turn: map.get(el.dataset.mid ?? "") ?? null,
+  }));
+  onRailScroll();
+}
+watch([() => chat.messages.length, anchors], () => { void nextTick(rebuildTops); });
+
+let railRafPending = false;
+function onRailScroll() {
+  if (railRafPending) return;
+  railRafPending = true;
+  requestAnimationFrame(() => {
+    railRafPending = false;
+    const root = listRef.value;
+    if (!root || topsCache.length === 0) { activeTurn.value = null; return; }
+    const threshold = root.scrollTop + 80;
+    // 最后一个 top ≤ 阈值的条目 = 视口顶可见组；向前找最近的 user 锚即当前轮
+    for (let i = topsCache.length - 1; i >= 0; i--) {
+      if (topsCache[i].top <= threshold) {
+        for (let j = i; j >= 0; j--) {
+          if (topsCache[j].turn !== null) { activeTurn.value = topsCache[j].turn; return; }
+        }
+        break;
+      }
+    }
+    activeTurn.value = null;
+  });
+}
+
+// 滚动监听挂 listRef（useScrollFollow 自挂自管，这里独立一份互不干扰）
+watch(listRef, (el, _, onCleanup) => {
+  if (!el) return;
+  el.addEventListener("scroll", onRailScroll, { passive: true });
+  onCleanup(() => el.removeEventListener("scroll", onRailScroll));
+});
+
+// ---- 跳转：窗口内直接滚；窗口外逐页补到锚点（上限防失控） ----
+async function jumpToTurn(messageId: string) {
+  const root = listRef.value;
+  if (!root) return;
+  let el = root.querySelector<HTMLElement>(`[data-mid="${messageId}"]`);
+  let guard = 0;
+  while (!el && chat.hasMore && guard++ < 60) {
+    const before = chat.messages.length;
+    await chat.loadMoreMessages();
+    if (chat.messages.length === before) break; // 无进展防死循环
+    await nextTick();
+    el = root.querySelector<HTMLElement>(`[data-mid="${messageId}"]`);
+  }
+  if (!el) return;
+  autoFollow.value = false; // 跳历史位 = 非跟随态（与 restoreForConversation 同语义）
+  root.scrollTo({ top: Math.max(0, el.offsetTop - 12), behavior: "smooth" });
+  void nextTick(rebuildTops);
+}
 
 // 工具调用卡片展开状态
 const expandedToolCalls = ref<Set<string>>(new Set());
@@ -874,10 +962,19 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
     />
     </div>
 
-    <!-- 「跳到最新」：右侧轨道常驻位（垂直居中、非悬浮）——内容列已从右侧
-         预留轨道宽度，按钮永不遮内容；样式/组件化后续单独优化，此处先落位 -->
+    <!-- 轮次导航条（UX #5）：一轮一线目录 + 视位高亮 + 底部「跳到最新」；
+         ≥2 轮才出现，短会话由下方兜底按钮接住跳最新 -->
+    <TurnRail
+      :buckets="buckets"
+      :active-turn="activeTurn"
+      :show-latest="showScrollBtn"
+      @jump="jumpToTurn"
+      @latest="scrollToBottom()"
+    />
+
+    <!-- 「跳到最新」兜底：无导航条（<2 轮）时保留原右侧轨道按钮 -->
     <Transition name="fade-up">
-      <button v-if="showScrollBtn" class="scroll-bottom-btn" title="回到底部并跟随最新" @click="scrollToBottom()">
+      <button v-if="showScrollBtn && buckets.length < 2" class="scroll-bottom-btn" title="回到底部并跟随最新" @click="scrollToBottom()">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <line x1="12" y1="5" x2="12" y2="19" /><polyline points="19 12 12 19 5 12" />
         </svg>

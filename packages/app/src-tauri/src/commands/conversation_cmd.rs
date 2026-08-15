@@ -197,6 +197,18 @@ pub async fn trajectory_turn_offset(
     repo::session_event::count_turns_before(pool.inner(), &conversation_id, before_seq).await
 }
 
+/// 会话轮次锚点列表（聊天「轮次导航条」UX #5）：一轮 = 一条用户消息，
+/// 返回轻量 `{message_id, preview, created_at}`（repo 侧不加载大字段、SQL 截预览）。
+/// 轮号由前端按下标 +1。供导航条目录渲染与跳转（配合消息分页补页到位）。
+#[tauri::command]
+pub async fn list_turn_anchors(
+    pool: State<'_, SqlitePool>,
+    conversation_id: String,
+) -> AppResult<Vec<crate::db::repo::message::TurnAnchor>> {
+    repo::conversation::get_by_id(pool.inner(), &conversation_id).await?;
+    repo::message::list_turn_anchors(pool.inner(), &conversation_id).await
+}
+
 /// 会话当前计划快照（任务胶囊「计划段」+ 计划卡取数用，C4/C5）。
 ///
 /// 计划是全量覆写快照（`update_plan` 工具）→ **当前计划 = 最后一条
