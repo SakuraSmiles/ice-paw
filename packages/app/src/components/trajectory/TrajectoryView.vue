@@ -11,6 +11,7 @@
 -->
 <script setup lang="ts">
 import { computed, nextTick, ref, watch, onMounted, onBeforeUnmount } from "vue";
+import { listen } from "@tauri-apps/api/event";
 import { buildRows, useTrajectory, type TrajectoryRow, type EventRow } from "../../composables/useTrajectory";
 import type { SessionEvent } from "../../types";
 import { bridge } from "../../api/bridge";
@@ -298,13 +299,15 @@ watch(() => props.conversationId, (id) => {
   void loadAndScroll(id);
 });
 
-// ---- live 追加（v1 轮询）：chat.sending 期间 1.5s 拉增量 ----
-// 跟随纪律：新事件到达时仅在贴底状态才自动滚下——用户正翻阅历史时不打扰。
-// ChatPage 已把「轨迹页发送 → 自动切回对话页」，所以本视图轮询多发生在后台；
-// 用户停在对话页时事件照常累积，切回轨迹页即见最新（无需本页可见）。
-const POLL_MS = 1500;
+// ---- live 追加（v2 事件驱动 + 兜底轮询）----
+// 后端 append_event 落库成功即广播 → lib.rs 转 Tauri event「session:event-appended」
+// 推前端；本视图按 conversation_id 过滤后拉增量（list_after，已载 max_seq 作游标）。
+// 通知在落库之后发出，到达时行必可查，无竞态；增量拉取幂等（重复通知拉 0 条）。
+// POLL_MS 是兜底而非主路径（webview 忙时 event 交付延迟 / emit 失败等极端情形）。
+const POLL_MS = 5000;
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
 let polling = false;
+let unlistenAppended: (() => void) | null = null;
 
 const timelineRef = ref<InstanceType<typeof TrajectoryTimeline> | null>(null);
 
@@ -346,7 +349,19 @@ watch(() => chat.sending, (sending) => {
     void pollOnce();
   }
 });
-onBeforeUnmount(stopPolling);
+
+// 事件通知监听（挂载期常开）：本会话有新事件落库 → 即时拉增量。sending 期之外
+// 也监听——为将来多 agent 后台事件铺路（现在等价覆盖：事件只在 sending 期产生）。
+onMounted(() => {
+  void listen<{ conversation_id: string; kind: string }>("session:event-appended", (e) => {
+    if (e.payload.conversation_id === props.conversationId) void pollOnce();
+  }).then((u) => { unlistenAppended = u; });
+});
+onBeforeUnmount(() => {
+  stopPolling();
+  unlistenAppended?.();
+  unlistenAppended = null;
+});
 </script>
 
 <template>
