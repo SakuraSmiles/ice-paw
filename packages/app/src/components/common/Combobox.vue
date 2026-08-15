@@ -1,14 +1,29 @@
 <script setup lang="ts">
 // Combobox.vue — 可选可输的下拉组件
 // 设计：输入框 + 过滤下拉列表，支持自由输入
+//
+// 两种数据形态（互斥，items 优先）：
+// - options: string[]           纯字符串（原路径，显示=值=选中值）
+// - items: {label,value,note}[] 带元数据：下拉显示 label（+note 副行）、
+//   选中 emit value、输入框显示 value 对应 label（无匹配显 value 原文，
+//   手输模型名等自由文本保留）。provider 目录下拉用。
 import { ref, computed, watch, onUnmounted } from "vue";
+
+export interface ComboboxItem {
+  label: string;
+  value: string;
+  note?: string;
+}
 
 const props = withDefaults(defineProps<{
   modelValue: string;
-  options: string[];
+  options?: string[];
+  items?: ComboboxItem[];
   placeholder?: string;
   disabled?: boolean;
 }>(), {
+  options: () => [],
+  items: undefined,
   placeholder: "",
   disabled: false,
 });
@@ -22,27 +37,49 @@ const open = ref(false);
 const filter = ref("");
 let blurTimer: ReturnType<typeof setTimeout> | null = null;
 
-// 当前输入框展示的值（受控）
-const displayValue = ref(props.modelValue);
+// items 形态下 value → label 回查（手输/无匹配回退 value 原文）
+const labelOf = (value: string): string =>
+  props.items?.find((it) => it.value === value)?.label ?? value;
+
+// 当前输入框展示的值（受控）：items 形态显示 label，其余显示原值
+const displayValue = ref(labelOf(props.modelValue));
 // 跟踪外部 modelValue 变化（父组件可能绕过 Combobox 修改值）
 // 同步显示值并重置过滤器，避免下拉菜单基于过时 filter 显示错误选项集
 watch(() => props.modelValue, (v) => {
-  displayValue.value = v;
+  displayValue.value = labelOf(v);
   filter.value = "";
 });
 
-// 过滤后的选项
-const filteredOptions = computed(() => {
+// 高亮基准用 modelValue（items 形态 displayValue 是 label，比对会恒 false）
+const isActive = (key: string) => key === props.modelValue;
+
+// 过滤：items 形态匹配 label+value；options 形态匹配字符串本身
+const filteredItems = computed<ComboboxItem[]>(() => {
+  if (!props.items) return [];
+  if (!filter.value) return props.items;
+  const q = filter.value.toLowerCase();
+  return props.items.filter(
+    (it) => it.label.toLowerCase().includes(q) || it.value.toLowerCase().includes(q),
+  );
+});
+const filteredOptions = computed<string[]>(() => {
+  if (props.items) return [];
   if (!filter.value) return props.options;
   const q = filter.value.toLowerCase();
   return props.options.filter((o) => o.toLowerCase().includes(q));
 });
+const hasResults = computed(() =>
+  props.items ? filteredItems.value.length > 0 : filteredOptions.value.length > 0,
+);
 
 function onInput(e: Event) {
   const val = (e.target as HTMLInputElement).value;
   displayValue.value = val;
   filter.value = val;
-  emit("update:modelValue", val);
+  // items 形态：手输的是「显示文本」。与某 label 精确一致 → 对应 value；
+  // 否则按原文透传（自由输入语义，父组件存原值）
+  const matched = props.items?.find((it) => it.label === val);
+  emit("update:modelValue", matched ? matched.value : val);
   if (!open.value) open.value = true;
 }
 
@@ -66,6 +103,14 @@ function selectOption(opt: string) {
   input.value?.focus();
 }
 
+function selectItem(item: ComboboxItem) {
+  displayValue.value = item.label;
+  filter.value = "";
+  emit("update:modelValue", item.value);
+  open.value = false;
+  input.value?.focus();
+}
+
 function toggle() {
   if (props.disabled) return;
   if (open.value) {
@@ -81,8 +126,9 @@ function handleKeydown(e: KeyboardEvent) {
   if (e.key === "Escape") {
     open.value = false;
   }
-  if (e.key === "Enter" && open.value && filteredOptions.value.length > 0) {
-    selectOption(filteredOptions.value[0]);
+  if (e.key === "Enter" && open.value && hasResults.value) {
+    if (props.items) selectItem(filteredItems.value[0]);
+    else selectOption(filteredOptions.value[0]);
     e.preventDefault();
   }
 }
@@ -122,19 +168,35 @@ onUnmounted(() => {
         </svg>
       </button>
     </div>
-    <div v-if="open && filteredOptions.length > 0" class="combobox-dropdown">
+
+    <!-- items 形态：label 主行 + note 副行，emit value -->
+    <div v-if="open && props.items && filteredItems.length > 0" class="combobox-dropdown">
+      <button
+        v-for="it in filteredItems"
+        :key="it.value"
+        type="button"
+        :class="['combobox-option', 'combobox-option-rich', { active: isActive(it.value) }]"
+        @mousedown.prevent
+        @click="selectItem(it)"
+      >
+        <span class="combobox-option-label">{{ it.label }}</span>
+        <span v-if="it.note" class="combobox-option-note">{{ it.note }}</span>
+      </button>
+    </div>
+    <!-- options 形态（原路径） -->
+    <div v-else-if="open && !props.items && filteredOptions.length > 0" class="combobox-dropdown">
       <button
         v-for="opt in filteredOptions"
         :key="opt"
         type="button"
-        :class="['combobox-option', { active: opt === displayValue }]"
+        :class="['combobox-option', { active: isActive(opt) }]"
         @mousedown.prevent
         @click="selectOption(opt)"
       >
         {{ opt }}
       </button>
     </div>
-    <div v-else-if="open && displayValue && filteredOptions.length === 0" class="combobox-dropdown">
+    <div v-else-if="open && displayValue && !hasResults" class="combobox-dropdown">
       <div class="combobox-empty">无匹配选项</div>
     </div>
   </div>
@@ -245,6 +307,25 @@ onUnmounted(() => {
 .combobox-option.active {
   background-color: var(--ip-primary-500);
   color: var(--ip-color-text-on-primary);
+}
+
+/* items 形态：label 主行 + note 副行两行布局 */
+.combobox-option-rich {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 10px;
+}
+
+.combobox-option-note {
+  font-size: 11px;
+  color: var(--ip-color-text-tertiary);
+  line-height: 1.4;
+}
+
+.combobox-option.active .combobox-option-note {
+  color: var(--ip-color-text-on-primary);
+  opacity: 0.85;
 }
 
 .combobox-empty {
