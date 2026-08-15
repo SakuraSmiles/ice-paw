@@ -22,24 +22,35 @@ pub fn list_providers() -> AppResult<Vec<ProviderInfo>> {
 
 /// 连通性测试结果。**探测失败不是命令失败**：`ok:false + error` 结构化返回，
 /// 前端行内展示具体原因（HTTP 状态/网络错误），不弹通用错误框。
+/// `matched_url`：实际走通的端点地址（多端点回退探测时可能是备选端点）——
+/// 前端据此回填 API URL，把「这次测通了」固化成「以后都走它」。
 #[derive(Debug, serde::Serialize)]
 pub struct ProviderConnectionResult {
     pub ok: bool,
     pub model_count: usize,
     pub models: Vec<String>,
     pub error: Option<String>,
+    pub matched_url: Option<String>,
 }
 
 impl ProviderConnectionResult {
     fn failed(error: String) -> Self {
-        Self { ok: false, model_count: 0, models: Vec::new(), error: Some(error) }
+        Self {
+            ok: false,
+            model_count: 0,
+            models: Vec::new(),
+            error: Some(error),
+            matched_url: None,
+        }
     }
 }
 
 /// 探测目标解析结果（纯函数产物，见 `resolve_probe_target`）
 #[derive(Debug, PartialEq, Eq)]
 pub enum ProbeTarget {
-    Ready { base_url: String, api_key: String },
+    /// `explicit_base_url`：表单入参或 agent 存量里的显式地址（None = 未显式
+    /// 指定，探测时按注册表 [默认, ...备选] 顺序回退）
+    Ready { explicit_base_url: Option<String>, api_key: String },
     /// 需鉴权的 provider 但没有任何可用 key——不发注定 401 的请求，
     /// 直接给「先选内置目录 / 填 Key 再拉」的引导（模型浏览与拉取分离）
     MissingKey,
@@ -47,7 +58,8 @@ pub enum ProbeTarget {
 
 /// 解析探测目标（纯函数，可单测）。规则：
 ///
-/// - base_url：表单入参 > agent 存量 > 注册表默认；custom 等必填项为空 → Validation
+/// - base_url：表单入参 > agent 存量（作为「显式指定」透传，探测只测它）；
+///   都没有 → 用注册表候选序列（默认 + 备选）。custom 等必填项为空 → Validation
 /// - key：表单入参 > agent 存量（**仅当存量 agent 的 provider 与被测 provider
 ///   同名**——各家 key 互不通用的居多，GLM 标准/Coding 尤甚，拿旧 key 打新
 ///   端点只会报一个误导性的 401）> 空
@@ -58,17 +70,17 @@ pub fn resolve_probe_target(
     api_key_input: Option<&str>,
     stored: Option<&AgentWithCredentials>,
 ) -> AppResult<ProbeTarget> {
-    // base_url 解析：入参 > agent 存量 > 注册表默认（custom 默认为空 = 必须显式填）
-    let base_url = base_url_input
+    // 显式地址：入参 > agent 存量（两者都是用户/系统明确选定的，探测只测它）
+    let explicit_base_url = base_url_input
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .or_else(|| {
             stored
                 .and_then(|c| c.base_url.clone())
                 .filter(|s| !s.trim().is_empty())
-        })
-        .unwrap_or_else(|| info.default_url.clone());
-    if base_url.is_empty() {
+        });
+    // 未显式指定时必须有注册表默认（custom 无默认 = 必须显式填）
+    if explicit_base_url.is_none() && info.default_url.is_empty() {
         return Err(AppError::Validation(
             "自定义 Provider 必须填写 API URL（如 http://localhost:8000/v1）".into(),
         ));
@@ -85,7 +97,38 @@ pub fn resolve_probe_target(
     if info.requires_key && api_key.is_empty() {
         return Ok(ProbeTarget::MissingKey);
     }
-    Ok(ProbeTarget::Ready { base_url, api_key })
+    Ok(ProbeTarget::Ready { explicit_base_url, api_key })
+}
+
+/// 探测候选端点序列（纯函数，可单测）：显式地址只测它自己；未显式时
+/// [注册表默认, ...备选] 按序回退（智谱：标准端点 → Coding 端点自动匹配）。
+pub fn probe_candidates(
+    info: &ProviderInfo,
+    explicit_base_url: Option<&str>,
+) -> Vec<(String, String)> {
+    match explicit_base_url {
+        Some(u) => vec![("指定地址".to_string(), u.to_string())],
+        None => std::iter::once(("标准端点".to_string(), info.default_url.clone()))
+            .chain(
+                info.alt_urls
+                    .iter()
+                    .map(|(l, u)| (l.to_string(), u.to_string())),
+            )
+            .collect(),
+    }
+}
+
+/// 全部候选失败时的聚合文案：多端点时逐个标注失败原因，单端点保持原样
+pub fn aggregate_probe_error(candidates: &[(String, String)], errors: &[String]) -> String {
+    if candidates.len() <= 1 {
+        return errors.join("");
+    }
+    let labeled: Vec<String> = candidates
+        .iter()
+        .zip(errors.iter())
+        .map(|((label, _), e)| format!("{}：{}", label, e))
+        .collect();
+    format!("全部端点未通过——{}", labeled.join("；"))
 }
 
 /// 测试 provider 连通性并拉取模型列表。
@@ -118,8 +161,8 @@ pub async fn test_provider_connection(
         api_key.as_deref(),
         stored.as_ref(),
     )?;
-    let (base_url, api_key) = match target {
-        ProbeTarget::Ready { base_url, api_key } => (base_url, api_key),
+    let (explicit_base_url, api_key) = match target {
+        ProbeTarget::Ready { explicit_base_url, api_key } => (explicit_base_url, api_key),
         ProbeTarget::MissingKey => {
             tracing::info!(
                 target: "ice_paw.llm",
@@ -132,27 +175,37 @@ pub async fn test_provider_connection(
         }
     };
 
+    let candidates = probe_candidates(&info, explicit_base_url.as_deref());
     tracing::info!(
         target: "ice_paw.llm",
-        "探测 Provider: {} | base_url={} | has_key={} | protocol={:?}",
+        "探测 Provider: {} | 候选端点={} | has_key={} | protocol={:?}",
         provider_name,
-        base_url,
+        candidates.iter().map(|(_, u)| u.as_str()).collect::<Vec<_>>().join(" → "),
         !api_key.is_empty(),
         info.protocol,
     );
 
-    match probe::probe_models(info.protocol, &base_url, &api_key).await {
-        Ok(models) => {
-            let count = models.len();
-            Ok(ProviderConnectionResult {
-                ok: true,
-                model_count: count,
-                models,
-                error: None,
-            })
+    // 按序回退：任一端点走通即返回（matched_url 让前端把走通的固化下来）；
+    // 全部失败 → 聚合各端点原因（多端点逐个标注）
+    let mut errors: Vec<String> = Vec::new();
+    for (_, url) in &candidates {
+        match probe::probe_models(info.protocol, url, &api_key).await {
+            Ok(models) => {
+                return Ok(ProviderConnectionResult {
+                    ok: true,
+                    model_count: models.len(),
+                    models,
+                    error: None,
+                    matched_url: Some(url.clone()),
+                });
+            }
+            Err(e) => errors.push(e.to_string()),
         }
-        Err(e) => Ok(ProviderConnectionResult::failed(e.to_string())),
     }
+    Ok(ProviderConnectionResult::failed(aggregate_probe_error(
+        &candidates,
+        &errors,
+    )))
 }
 
 #[cfg(test)]
@@ -167,6 +220,8 @@ mod tests {
             .unwrap_or_else(|| panic!("注册表缺少 {}", name))
     }
 
+    /// 生产 `get_with_credentials` 返回的形态：外层 base_url = agent 行优先、
+    /// vault 回退后的解析值（`resolve_probe_target` 读外层字段），fixture 同构
     fn stored_creds(provider: &str, api_key: &str, base_url: Option<&str>) -> AgentWithCredentials {
         AgentWithCredentials {
             agent: crate::db::models::AgentRow {
@@ -194,7 +249,7 @@ mod tests {
                 updated_at: String::new(),
             },
             api_key: api_key.into(),
-            base_url: None,
+            base_url: base_url.map(|s| s.into()),
             hooks: Default::default(),
         }
     }
@@ -215,7 +270,7 @@ mod tests {
         assert_eq!(
             resolve_probe_target(&i, Some(" https://x/v1 "), Some(" sk-abc "), None).unwrap(),
             ProbeTarget::Ready {
-                base_url: "https://x/v1".into(),
+                explicit_base_url: Some("https://x/v1".into()),
                 api_key: "sk-abc".into()
             }
         );
@@ -228,7 +283,7 @@ mod tests {
         let same = stored_creds("glm", "glm-key", None);
         assert_eq!(
             resolve_probe_target(&glm, None, None, Some(&same)).unwrap(),
-            ProbeTarget::Ready { base_url: info("glm").default_url.clone(), api_key: "glm-key".into() }
+            ProbeTarget::Ready { explicit_base_url: None, api_key: "glm-key".into() }
         );
         // 跨 provider：glm 的存量 key 不拿去打 deepseek（各家 key 多不通用）
         let cross = stored_creds("glm", "glm-key", None);
@@ -239,15 +294,26 @@ mod tests {
     }
 
     #[test]
+    fn stored_base_url_counts_as_explicit() {
+        // 存量 base_url 是已固化的选择：只测它自己，不做多端点回退
+        let glm = info("glm");
+        let stored = stored_creds("glm", "k", Some("https://open.bigmodel.cn/api/coding/paas/v4"));
+        assert_eq!(
+            resolve_probe_target(&glm, None, None, Some(&stored)).unwrap(),
+            ProbeTarget::Ready {
+                explicit_base_url: Some("https://open.bigmodel.cn/api/coding/paas/v4".into()),
+                api_key: "k".into()
+            }
+        );
+    }
+
+    #[test]
     fn keyless_provider_probes_with_empty_key() {
         // ollama：无 key 照常探测（本地服务忽略空 Bearer）
         let i = info("ollama");
         assert_eq!(
             resolve_probe_target(&i, None, None, None).unwrap(),
-            ProbeTarget::Ready {
-                base_url: i.default_url.clone(),
-                api_key: String::new()
-            }
+            ProbeTarget::Ready { explicit_base_url: None, api_key: String::new() }
         );
     }
 
@@ -256,5 +322,44 @@ mod tests {
         let i = info("custom");
         let err = resolve_probe_target(&i, None, None, None).unwrap_err();
         assert!(err.to_string().contains("必须填写 API URL"));
+    }
+
+    #[test]
+    fn probe_candidates_explicit_is_single() {
+        // 显式地址（表单/存量）：只测它自己
+        let glm = info("glm");
+        let c = probe_candidates(&glm, Some("https://my-proxy/v1"));
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0], ("指定地址".to_string(), "https://my-proxy/v1".to_string()));
+    }
+
+    #[test]
+    fn probe_candidates_glm_falls_back_to_coding() {
+        // 未显式指定：智谱按 标准 → Coding 顺序回退（key 不通用，自动匹配）
+        let glm = info("glm");
+        let c = probe_candidates(&glm, None);
+        assert_eq!(c.len(), 2);
+        assert_eq!(c[0].1, "https://open.bigmodel.cn/api/paas/v4");
+        assert_eq!(c[1], ("Coding 端点".to_string(), "https://open.bigmodel.cn/api/coding/paas/v4".to_string()));
+        // 无备选的 provider：单候选
+        assert_eq!(probe_candidates(&info("deepseek"), None).len(), 1);
+    }
+
+    #[test]
+    fn aggregate_error_labels_each_endpoint() {
+        // 多端点全败：逐个标注 + 总前缀；单端点：原样透传
+        let candidates = vec![
+            ("标准端点".to_string(), "https://a".to_string()),
+            ("Coding 端点".to_string(), "https://b".to_string()),
+        ];
+        let msg = aggregate_probe_error(&candidates, &["HTTP 401: 认证失败".into(), "HTTP 404".into()]);
+        assert!(msg.contains("全部端点未通过"));
+        assert!(msg.contains("标准端点：HTTP 401: 认证失败"));
+        assert!(msg.contains("Coding 端点：HTTP 404"));
+        let single = vec![("指定地址".to_string(), "https://a".to_string())];
+        assert_eq!(
+            aggregate_probe_error(&single, &["boom".into()]),
+            "boom"
+        );
     }
 }

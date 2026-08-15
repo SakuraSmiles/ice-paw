@@ -82,6 +82,8 @@ export interface ProviderInfo {
   protocol: ProviderProtocolKind;
   /** 默认地址；custom 为空串（必须显式填 base_url） */
   default_url: string;
+  /** 备选探测端点 [标签, 地址]——未显式填地址时按 [默认, ...备选] 顺序回退探测 */
+  alt_urls: [string, string][];
   /** 展示名（下拉主行） */
   label: string;
   /** 补充说明（下拉副行） */
@@ -90,6 +92,8 @@ export interface ProviderInfo {
   requires_key: boolean;
   /** 是否必须显式填写 API URL（仅 custom） */
   requires_base_url: boolean;
+  /** 隐藏条目：不进前端下拉（旧入口/已下线），存量 agent 编辑仍可解析 */
+  hidden: boolean;
   /** 静态模型目录（起点参考；「拉取」拿实时列表，手输永远保留） */
   models: string[];
 }
@@ -100,6 +104,8 @@ export interface ProviderConnectionResult {
   model_count: number;
   models: string[];
   error: string | null;
+  /** 实际走通的端点地址（多端点回退时可能是备选端点）——回填 API URL 固化下来 */
+  matched_url: string | null;
 }
 
 // ============================================================================
