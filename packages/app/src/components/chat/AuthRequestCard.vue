@@ -75,55 +75,49 @@ function deny() {
         <div class="auth-progress-fill" :class="{ urgent }" :style="{ width: progressPct + '%' }" />
       </div>
 
-      <div class="auth-header">
-        <svg class="auth-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-        <span class="auth-title">工具授权请求</span>
-        <span class="auth-countdown" :class="{ urgent, expired }">
-          {{ expired ? "已超时" : remainingLabel }}
-        </span>
-      </div>
+      <div class="auth-main">
+        <!-- L1 工具 + 倒计时（锁图标替代「工具授权请求」标题——上下文已在输入框上方） -->
+        <div class="auth-line1">
+          <svg class="auth-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          <span class="auth-tool-name">{{ req.tool_name }}</span>
+          <span class="auth-countdown" :class="{ urgent, expired }">
+            {{ expired ? "已超时" : remainingLabel }}
+          </span>
+        </div>
 
-      <div class="auth-body">
-        <div class="auth-row">
-          <span class="auth-label">工具</span>
-          <span class="auth-value auth-tool-name">{{ req.tool_name }}</span>
+        <!-- L2 路径 + 原因（单行省略，完整内容走 title 提示）+ 参数折叠 -->
+        <div class="auth-line2">
+          <span v-if="hasPath" class="auth-path" :title="req.file_path">{{ req.file_path }}</span>
+          <span v-if="hasPath && req.reason" class="auth-dot">·</span>
+          <span v-if="req.reason" class="auth-reason" :title="req.reason">{{ req.reason }}</span>
+          <details class="auth-args">
+            <summary>参数</summary>
+            <pre class="auth-json">{{ formatJson(req.arguments) }}</pre>
+          </details>
         </div>
-        <div v-if="hasPath" class="auth-row">
-          <span class="auth-label">路径</span>
-          <span class="auth-value auth-path">{{ req.file_path }}</span>
-        </div>
-        <div class="auth-row">
-          <span class="auth-label">原因</span>
-          <span class="auth-value auth-reason">{{ req.reason }}</span>
-        </div>
-        <details class="auth-args">
-          <summary>参数</summary>
-          <pre class="auth-json">{{ formatJson(req.arguments) }}</pre>
-        </details>
-      </div>
 
-      <div class="auth-scope" role="radiogroup" aria-label="允许范围">
-        <div class="auth-scope-label">允许范围</div>
-        <div class="auth-scope-options">
-          <button
-            v-for="opt in scopeOptions"
-            :key="opt.value"
-            type="button"
-            class="auth-scope-opt"
-            :class="{ active: scope === opt.value }"
-            role="radio"
-            :aria-checked="scope === opt.value"
-            :disabled="expired"
-            @click="scope = opt.value"
-          >
-            {{ opt.label }}
-          </button>
+        <!-- L3 范围档（选择作用于「允许」）+ 拒绝/允许，一行收束 -->
+        <div class="auth-line3">
+          <div class="auth-scope-options" role="radiogroup" aria-label="允许范围">
+            <button
+              v-for="opt in scopeOptions"
+              :key="opt.value"
+              type="button"
+              class="auth-scope-opt"
+              :class="{ active: scope === opt.value }"
+              role="radio"
+              :aria-checked="scope === opt.value"
+              :disabled="expired"
+              @click="scope = opt.value"
+            >
+              {{ opt.label }}
+            </button>
+          </div>
+          <div class="auth-actions">
+            <button class="auth-btn auth-btn-deny" :disabled="expired" @click="deny">拒绝</button>
+            <button class="auth-btn auth-btn-allow" :disabled="expired" @click="allow">允许</button>
+          </div>
         </div>
-      </div>
-
-      <div class="auth-footer">
-        <button class="auth-btn auth-btn-deny" :disabled="expired" @click="deny">拒绝</button>
-        <button class="auth-btn auth-btn-allow" :disabled="expired" @click="allow">允许</button>
       </div>
     </div>
   </Transition>
@@ -137,13 +131,14 @@ function deny() {
   border: 1px solid var(--ip-color-border-default);
   border-radius: var(--ip-radius-lg);
   box-shadow: var(--ip-shadow-lg);
-  overflow: hidden;
   flex-shrink: 0;
 }
 
 .auth-progress {
   height: 3px;
   background: var(--ip-color-bg-tertiary);
+  /* 卡片不裁切（参数浮层要探出主体），顶角圆角由进度条自己收 */
+  border-radius: var(--ip-radius-lg) var(--ip-radius-lg) 0 0;
 }
 .auth-progress-fill {
   height: 100%;
@@ -152,20 +147,34 @@ function deny() {
 }
 .auth-progress-fill.urgent { background: var(--ip-danger-base); }
 
-.auth-header {
+/* 紧凑三行布局（手测反馈：原竖排五行太高，输入框上方压迫感强） */
+.auth-main {
+  padding: 8px 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* L1：锁图标 + 工具名（主信息）+ 倒计时（右缘） */
+.auth-line1 {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 12px 16px 8px;
+  gap: 6px;
+  min-width: 0;
 }
 .auth-icon { color: var(--ip-primary-600); flex-shrink: 0; }
-.auth-title {
+.auth-tool-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   font-size: var(--ip-text-body-sm-size);
   font-weight: var(--ip-font-weight-semibold);
-  color: var(--ip-color-text-primary);
-  flex: 1;
+  color: var(--ip-primary-600);
 }
 .auth-countdown {
+  flex-shrink: 0;
   font-size: var(--ip-text-caption-size);
   font-family: var(--ip-font-mono, monospace);
   color: var(--ip-color-text-tertiary);
@@ -174,31 +183,62 @@ function deny() {
 .auth-countdown.urgent { color: var(--ip-danger-base); }
 .auth-countdown.expired { color: var(--ip-danger-base); opacity: 0.7; }
 
-.auth-body {
-  padding: 0 16px 8px;
+/* L2：路径 + 原因一行（超长省略，title 承载全文）+ 参数折叠（默认收起） */
+.auth-line2 {
   display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: 6px;
-}
-.auth-row { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
-.auth-label { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); white-space: nowrap; }
-.auth-value { font-size: var(--ip-text-body-sm-size); color: var(--ip-color-text-primary); text-align: right; word-break: break-all; min-width: 0; }
-.auth-tool-name { font-weight: var(--ip-font-weight-semibold); color: var(--ip-primary-600); }
-.auth-path {
-  font-family: var(--ip-font-mono, monospace);
+  min-width: 0;
   font-size: var(--ip-text-caption-size);
+}
+.auth-path {
+  min-width: 0;
+  max-width: 45%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-family: var(--ip-font-mono, monospace);
+  color: var(--ip-color-text-secondary);
   background: var(--ip-color-bg-tertiary);
-  padding: 2px 6px;
+  padding: 1px 6px;
   border-radius: var(--ip-radius-sm);
 }
-.auth-reason { color: var(--ip-color-text-secondary); font-size: var(--ip-text-caption-size); }
-
+.auth-dot { color: var(--ip-color-text-disabled); flex-shrink: 0; }
+.auth-reason {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--ip-color-text-secondary);
+}
+.auth-args {
+  flex-shrink: 0;
+  margin-left: auto;
+}
+.auth-args[open] {
+  /* 展开时脱离行流，浮在下层（不撑高卡片主体） */
+  position: absolute;
+  right: 12px;
+  top: 34px;
+  z-index: 2;
+  background: var(--ip-color-bg-elevated);
+  border: 1px solid var(--ip-color-border-default);
+  border-radius: var(--ip-radius-md);
+  box-shadow: var(--ip-shadow-md);
+  padding: 4px 8px 8px;
+  max-width: 70%;
+}
 .auth-args summary {
   font-size: var(--ip-text-caption-size);
   color: var(--ip-color-text-tertiary);
   cursor: pointer;
   user-select: none;
+  white-space: nowrap;
+  list-style: none;
 }
+.auth-args summary::before { content: "▸ "; }
+.auth-args[open] summary::before { content: "▾ "; }
 .auth-args summary:hover { color: var(--ip-color-text-secondary); }
 .auth-json {
   font-size: var(--ip-text-caption-size);
@@ -207,27 +247,32 @@ function deny() {
   word-break: break-word;
   color: var(--ip-color-text-secondary);
   background: var(--ip-color-bg-tertiary);
-  padding: 8px;
+  padding: 6px 8px;
   border-radius: var(--ip-radius-sm);
-  max-height: 140px;
+  max-height: 160px;
   overflow-y: auto;
   margin: 4px 0 0;
   line-height: 1.4;
 }
 
-.auth-scope { padding: 4px 16px 8px; }
-.auth-scope-label {
-  font-size: var(--ip-text-caption-size);
-  color: var(--ip-color-text-tertiary);
-  margin-bottom: 6px;
+/* L3：范围档（作用于允许）+ 拒绝/允许 */
+.auth-line3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 .auth-scope-options {
   display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
 .auth-scope-opt {
-  padding: 4px 12px;
+  flex-shrink: 0;
+  padding: 2px 10px;
   border-radius: var(--ip-radius-full, 999px);
   border: 1px solid var(--ip-color-border-default);
   background: var(--ip-color-bg-secondary);
@@ -244,17 +289,11 @@ function deny() {
 }
 .auth-scope-opt:disabled { opacity: 0.5; cursor: not-allowed; }
 
-.auth-footer {
-  display: flex;
-  gap: 8px;
-  padding: 8px 16px 12px;
-  border-top: 1px solid var(--ip-color-border-default);
-}
+.auth-actions { display: flex; gap: 6px; flex-shrink: 0; }
 .auth-btn {
-  flex: 1;
-  padding: 7px 16px;
+  padding: 4px 14px;
   border-radius: var(--ip-radius-md);
-  font-size: var(--ip-text-body-sm-size);
+  font-size: var(--ip-text-caption-size);
   font-weight: var(--ip-font-weight-medium);
   cursor: pointer;
   border: none;

@@ -33,7 +33,14 @@ export const useChatStore = defineStore("chat", () => {
   async function loadConversations() {
     convLoading.value = true;
     try {
-      conversations.value = await bridge.conversations.listAll();
+      const fresh = await bridge.conversations.listAll();
+      // 撤销窗口（5s）内的行不回灌：乐观删除后延迟才真删后端，期间任何后台
+      // 刷新（如 delegation-started）都会把「已删」会话带回列表——用户所见
+      // 即「删除按钮不生效」。撤销走 undoDeleteConversation 独立恢复。
+      const hidden = new Set(pendingDelete.value.keys());
+      conversations.value = hidden.size > 0
+        ? fresh.filter((c) => !hidden.has(c.id))
+        : fresh;
     } catch (e) {
       console.error("加载会话列表失败:", e);
     } finally {
