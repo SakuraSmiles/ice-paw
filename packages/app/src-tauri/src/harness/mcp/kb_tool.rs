@@ -645,6 +645,7 @@ mod tests {
             api_key: None,
             app_handle: None,
             proposal_registry: None,
+            turn_id: None,
             cancel: None,
         };
 
@@ -683,6 +684,7 @@ mod tests {
             api_key: None,
             app_handle: None,
             proposal_registry: None,
+            turn_id: None,
             cancel: None,
         };
         let result = tool
@@ -761,6 +763,7 @@ mod tests {
             api_key: None,
             app_handle: None,
             proposal_registry: None,
+            turn_id: None,
             cancel: None,
         };
         let result = tool.execute_with_context(r#"{"file_path":"note.md"}"#, &ctx).await.unwrap();
@@ -785,6 +788,7 @@ mod tests {
             api_key: None,
             app_handle: None,
             proposal_registry: None,
+            turn_id: None,
             cancel: None,
         };
         let result = tool.execute_with_context(r#"{"file_path":"nope.md"}"#, &ctx).await.unwrap();
@@ -897,6 +901,7 @@ mod tests {
             api_key: None,
             app_handle: None,
             proposal_registry: None,
+            turn_id: None,
             cancel: None,
         };
         let result = tool
