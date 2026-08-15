@@ -102,6 +102,8 @@ export default [
       "target/**",
       "**/target/**",
       "packages/ui/dev/dist/**",
+      // 品牌/logo 设计工作区（不入库的草稿区，含本地脚本）
+      "brand/**",
       "**/*.min.js",
       "**/*.bundle.js",
     ],
