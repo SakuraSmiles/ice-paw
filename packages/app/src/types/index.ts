@@ -361,6 +361,10 @@ export interface PlanUpdatedPayload { v?: number; items: PlanItem[]; }
 /** get_session_plan 命令返回（当前计划快照 + 落库时间） */
 export interface PlanSnapshot { items: PlanItem[]; updated_at: string; }
 
+/** list_turn_anchors 命令返回（UX #5 轮次导航条）：一轮 = 一条用户消息，
+ *  轮号 = 下标 +1（与轨迹页「第 N 轮」同基准） */
+export interface TurnAnchor { message_id: string; preview: string; created_at: string; }
+
 export interface ChatToolCallStartPayload {
   conversation_id: string; message_id: string; id: string; name: string;
 }
