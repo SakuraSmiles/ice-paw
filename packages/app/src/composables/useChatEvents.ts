@@ -87,10 +87,7 @@ export async function useChatEvents(): Promise<() => void> {
     // 确保 sending 为 true：多轮工具执行间隙可能触发静默超时把它置 false
     chat.sending = true;
     chat.freezeCurrentAssistant();
-    chat.streamingText = "";
-    chat.streamingThinking = "";
-    chat.thinkingStartTime = null;
-    chat.streamingToolCalls = new Map();
+    chat.resetRoundStreaming();
     chat.messages.push({
       id: e.payload.message_id,
       conversation_id: e.payload.conversation_id,
@@ -208,10 +205,7 @@ export async function useChatEvents(): Promise<() => void> {
       recentErrorConvs.delete(cid);
       chat.clearSendTimeout();
       chat.sending = false;
-      chat.streamingText = "";
-      chat.streamingToolCalls = new Map();
-      chat.streamingThinking = "";
-      chat.thinkingStartTime = null;
+      chat.resetRoundStreaming();
       return;
     }
     chat.clearSendTimeout();
@@ -245,10 +239,7 @@ export async function useChatEvents(): Promise<() => void> {
     }
 
     chat.sending = false;
-    chat.streamingText = "";
-    chat.streamingToolCalls = new Map();
-    chat.streamingThinking = "";
-    chat.thinkingStartTime = null;
+    chat.resetRoundStreaming();
     chat.lastFinishReason = e.payload.finish_reason;
     // 用 message_id 定位最终 assistant（freezeCurrentAssistant 可能已在末尾插入 user 消息，
     // 不能再假设末条索引），更新其 token_count
@@ -275,10 +266,7 @@ export async function useChatEvents(): Promise<() => void> {
     }
     chat.clearSendTimeout();
     chat.sending = false;
-    chat.streamingText = "";
-    chat.streamingThinking = "";
-    chat.thinkingStartTime = null;
-    chat.streamingToolCalls = new Map();
+    chat.resetRoundStreaming();
     chat.lastFinishReason = null;
     // 错误横幅按会话隔离：只写到出错会话（此处 cid === activeConvId，已过上方 early-return）
     {

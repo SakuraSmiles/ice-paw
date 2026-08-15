@@ -988,8 +988,18 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
 /* 包裹层：flex 主轴占满 + 相对定位（轨道按钮的锚）。
    --msg-col-right：内容列右侧内边距（= 基础 48px + 「跳到最新」轨道预留 32px），
    气泡/日期线/提示行右侧统一用它对齐；调轨道宽度只改这一个值。 */
-.messages-wrap { flex:1; min-height:0; display:flex; position:relative; --msg-col-right:80px; }
-.messages-area { flex:1; overflow-y:auto; padding:24px 0; position:relative; }
+.messages-wrap {
+  flex:1; min-height:0; display:flex; position:relative;
+  --msg-col-right:80px;
+  /* 右侧带水平居中（手测反馈：right:10px 贴窗口边）：气泡列右缘与窗口右缘
+     （有滚动条时=滚动条）之间的预留带内，TurnRail 两侧均匀留白。
+     6px = global.css ::-webkit-scrollbar 宽；轨道视觉宽 22px（tick 道）。
+     右距 = 6 + (80 - 22)/2 = 35px，带中心 = 46px 恒定。 */
+  --msg-rail-right: calc(6px + (var(--msg-col-right) - 22px) / 2);
+}
+/* scrollbar-gutter:stable 恒定预留滚动条位——带内悬浮件（导航条/兜底按钮）
+   不随滚动条出现/消失漂移，内容列也不再横向抖 6px */
+.messages-area { flex:1; overflow-y:auto; scrollbar-gutter:stable; padding:24px 0; position:relative; }
 .messages-container { display:flex; flex-direction:column; gap:16px; padding:0 var(--msg-col-right) 0 48px; }
 
 /* ===== 分页指示 ===== */
@@ -1156,9 +1166,9 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
 
 /* ===== 滚动到底按钮 ===== */
 /* 「跳到最新」右侧轨道位：垂直居中（top 用 calc 而非 transform 居中——
-   fade-up 进出场动画要占用 transform，二者会互相覆盖）。轨道已从内容列
-   预留（--msg-col-right），按钮不悬浮不遮内容。 */
-.scroll-bottom-btn { position:absolute; top:calc(50% - 18px); right:24px; z-index:5; width:36px; height:36px; border-radius:var(--ip-radius-lg); border:1px solid var(--ip-color-border-default); background-color:var(--ip-color-bg-elevated); color:var(--ip-color-text-secondary); box-shadow:var(--ip-shadow-sm); cursor:pointer; display:flex; align-items:center; justify-content:center; transition:all var(--ip-duration-fast) var(--ip-ease-out); }
+   fade-up 进出场动画要占用 transform，二者会互相覆盖）。与 TurnRail 同带
+   中心对齐（带中心 46px，按钮 36px 宽 → 右距 = 6 + (80-36)/2 = 28px）。 */
+.scroll-bottom-btn { position:absolute; top:calc(50% - 18px); right:calc(6px + (var(--msg-col-right) - 36px) / 2); z-index:5; width:36px; height:36px; border-radius:var(--ip-radius-lg); border:1px solid var(--ip-color-border-default); background-color:var(--ip-color-bg-elevated); color:var(--ip-color-text-secondary); box-shadow:var(--ip-shadow-sm); cursor:pointer; display:flex; align-items:center; justify-content:center; transition:all var(--ip-duration-fast) var(--ip-ease-out); }
 .scroll-bottom-btn:hover { background-color:var(--ip-color-bg-secondary); color:var(--ip-color-text-primary); border-color:var(--ip-color-border-strong); box-shadow:var(--ip-shadow-md); }
 
 .fade-up-enter-active { animation:fade-up-in 0.2s ease-out; }
