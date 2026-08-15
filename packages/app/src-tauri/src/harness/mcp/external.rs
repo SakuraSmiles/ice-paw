@@ -32,6 +32,12 @@ use super::types::{
 // ExternalMcpServer — 管理一个 MCP 子进程
 // =========================================================================
 
+/// stdio 请求超时。tools/list 等快操作用 30s；tools/call 单独放宽到 120s——
+/// 实测 GLM 视觉 MCP（glm-4.6v）对 base64 图 + 长 prompt 的分析延迟在 5~67s
+/// 波动（2026-08-14 日志坐实 6 次调用 3 次超 30s），30s 会把慢但成功的调用掐死。
+const REQUEST_TIMEOUT_QUICK: u64 = 30;
+const REQUEST_TIMEOUT_CALL: u64 = 120;
+
 /// 构建子进程的安全环境：在 `env_clear()` 之后回注「进程执行所需、且不含机密」
 /// 的系统变量 + 用户显式声明的 env。
 ///
@@ -268,7 +274,7 @@ impl ExternalMcpServer {
             params: None,
         };
 
-        let resp = self.send_request(&req, &req_id).await?;
+        let resp = self.send_request(&req, &req_id, REQUEST_TIMEOUT_QUICK).await?;
 
         let result = resp.result.ok_or_else(|| {
             let err_msg = resp.error.map(|e| e.message).unwrap_or_default();
@@ -297,7 +303,7 @@ impl ExternalMcpServer {
                 .expect("McpCallToolParams 序列化不应失败")),
         };
 
-        let resp = self.send_request(&req, &req_id).await?;
+        let resp = self.send_request(&req, &req_id, REQUEST_TIMEOUT_CALL).await?;
 
         if let Some(err) = resp.error {
             return Err(AppError::Internal(format!(
@@ -332,7 +338,12 @@ impl ExternalMcpServer {
     // 内部方法
     // ======================================================================
 
-    async fn send_request(&self, req: &JsonRpcRequest, req_id: &str) -> AppResult<JsonRpcResponse> {
+    async fn send_request(
+        &self,
+        req: &JsonRpcRequest,
+        req_id: &str,
+        timeout_secs: u64,
+    ) -> AppResult<JsonRpcResponse> {
         let (tx, rx) = oneshot::channel();
         {
             let mut p = self.pending.lock().await;
@@ -341,11 +352,11 @@ impl ExternalMcpServer {
 
         Self::write_line(&self.writer, req).await?;
 
-        tokio::time::timeout(Duration::from_secs(30), rx)
+        tokio::time::timeout(Duration::from_secs(timeout_secs), rx)
             .await
             .map_err(|_| AppError::Internal(format!(
-                "MCP Server '{}' 请求超时（30s）: {}",
-                self.name, req.method
+                "MCP Server '{}' 请求超时（{}s）: {}",
+                self.name, timeout_secs, req.method
             )))?
             .map_err(|_| AppError::Internal("MCP Server 通道关闭".into()))
     }
