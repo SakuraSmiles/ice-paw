@@ -681,6 +681,14 @@ const finishReasonLabels: Record<string, string> = {
 
 /* ===== 消息组（连续同 agent 的 assistant 合并成一个气泡块）===== */
 .message-group { display:flex; flex-direction:column; gap:2px; min-width:0; }
+/* H1 渲染虚拟化（千轮会话防卡）：屏外消息组跳过 layout/paint——content-visibility
+   是浏览器原生机制，DOM 与组件状态全保留（工具/思考展开态、图片、TransitionGroup
+   动画），滚动跟随/分页逻辑零改动；contain-intrinsic-size 的 auto 前缀让浏览器
+   记忆组实测高度（无记忆时按 300px 估算），滚动条稳定。WebView2（Chromium 85+）支持。
+   取舍：治「渲染成本」（滚动卡顿主因）；DOM 常驻的内存未治——分页 50 条/页
+   翻页累积是用户主动行为，实测仍有内存压力再考虑卸载式窗口化（有展开态丢失/
+   高度跳动代价，此处不做）。 */
+.message-group { content-visibility:auto; contain-intrinsic-size:auto 300px; }
 .message-group.assistant {
   align-self:flex-start; max-width:85%;
   background-color:var(--color-message-ai-bg); color:var(--color-message-ai-text);
