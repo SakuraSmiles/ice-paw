@@ -133,6 +133,11 @@ function tickTime(iso: string): string {
 .turn-rail {
   position: absolute;
   right: var(--msg-rail-right, 35px);
+  /* 定宽 = 轨道几何（22px tick 道）：容器宽不随内容变化（尤其 N/M 徽标
+     跨位 9→10→100 时多位数字），否则右缘钉死 + 居中会把轨道整体左右推；
+     徽标 nowrap 超宽对称溢出居中。22px 同时是 ChatMessages
+     --msg-rail-right 带中心计算（(80-22)/2）的宽度依据。 */
+  width: 22px;
   top: 50%;
   transform: translateY(-50%);
   max-height: 80%;
@@ -143,11 +148,13 @@ function tickTime(iso: string): string {
   z-index: 3;
 }
 
-/* 位置徽标：N/M，等宽数字防跳动；未知轮次时当前位灰显 */
+/* 位置徽标：N/M，等宽数字防跳动；未知轮次时当前位灰显。
+   nowrap：容器已定宽 22px，徽标超宽靠对称溢出居中（不换行不收缩） */
 .turn-pos {
   display: flex;
   align-items: baseline;
   gap: 2px;
+  white-space: nowrap;
   font-family: var(--ip-font-mono, monospace);
   font-size: 10px;
   line-height: 1;
