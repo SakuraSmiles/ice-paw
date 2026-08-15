@@ -3,8 +3,9 @@
 //
 // 取代该工具调用的通用工具行渲染：目标 agent / 状态 / 跳转子会话轨迹。
 // 形态不锁设计（评审拍板：实现期用户看着效果边看边调），本轮只保骨架：
-// - 进行中：任务摘要 + 呼吸点（child_conversation_id 要等完成才回传，无法跳转）
-// - 完成/失败：专家名 + 轮数 + finish_reason 徽章 + 「查看轨迹」入口
+// - 进行中：任务摘要 + 呼吸点；chat:delegation-started 推送后子会话创建即
+//   可达（运行中也可跳——childConvId 由 ChatMessages 取数层从 store 补齐）
+// - 完成/失败：专家名 + 轮数 + finish_reason 徽章 + 「打开任务」入口
 // 展开看原始参数/结果走原工具行（本卡片不重复承载，减少双份维护）。
 const props = defineProps<{
   /** 目标 agent 显示名（参数里的 agent_id 原样兜底） */
@@ -64,10 +65,10 @@ const FINISH_LABEL: Record<string, string> = {
       <button
         v-if="childConvId"
         class="dlg-open"
-        title="打开子会话并查看轨迹"
+        title="打开任务详情（子会话，默认轨迹视图）"
         @click.stop="openChild"
       >
-        查看轨迹
+        打开任务
       </button>
     </div>
   </div>
