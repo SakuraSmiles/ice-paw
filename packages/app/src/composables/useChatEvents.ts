@@ -27,6 +27,7 @@ import type {
   ChatThinkingPayload,
   ToolAuthRequestPayload,
   ConfigProposalPayload,
+  DelegationStartedPayload,
 } from "../types";
 
 export async function useChatEvents(): Promise<() => void> {
@@ -71,8 +72,14 @@ export async function useChatEvents(): Promise<() => void> {
     });
   });
 
-  // 多轮工具调用：每轮工具执行完毕后，后端创建下一轮 assistant 占位并 emit。
-  // 前端据此冻结上一条 assistant（写入 tool_use/text/thinking）+ 插入 user(tool_result)
+  // MA-1 UX：委派子会话创建成功即通知——刷新会话列表让子会话行立刻可见
+  //（任务胶囊有数据、运行中委派卡片可跳）。child_conversation_id 此刻起即可达，
+  // 不必等完成时的 tool_result 回传。
+  await subscribe<DelegationStartedPayload>("chat:delegation-started", () => {
+    void chat.loadConversations();
+  });
+
+  // 多轮工具调用：每轮工具执行完毕后，后端创建下一轮 assistant 占位并 emit。  // 前端据此冻结上一条 assistant（写入 tool_use/text/thinking）+ 插入 user(tool_result)
   // + 重置 streaming 状态 + push 新占位。
   await subscribe<ChatAssistantStartPayload>("chat:assistant-start", (e) => {
     if (e.payload.conversation_id !== chat.activeConvId) return;
