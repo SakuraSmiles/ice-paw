@@ -1,7 +1,13 @@
 // buildRows 行模型单测（轨迹表格数据内核）
-import { describe, expect, it } from "vitest";
-import { buildRows, type EventRow, type TurnHeaderRow } from "../useTrajectory";
+import { describe, expect, it, vi, beforeEach } from "vitest";
+import { buildRows, useTrajectory, type EventRow, type TurnHeaderRow } from "../useTrajectory";
 import type { SessionEvent } from "../../types";
+import { bridge } from "../../api/bridge";
+
+// composable 用例：bridge 走 Tauri invoke，测试环境用 vi.mock 替身
+vi.mock("../../api/bridge", () => ({
+  bridge: { trajectory: { listEvents: vi.fn(), turnOffset: vi.fn(), exportJsonl: vi.fn() } },
+}));
 
 let seq = 0;
 /** 事件构造器：seq 自增，payload 由 kind 决定默认形态 */
@@ -217,5 +223,42 @@ describe("buildRows 行模型", () => {
   it("未结束 turn：头 ended=null（进行中/崩溃）", () => {
     const events = [ev("user_message", { content: "q", blocks: [] })];
     expect(evRows(events).headers()[0].ended).toBeNull();
+  });
+});
+
+describe("useTrajectory composable（live 追加）", () => {
+  beforeEach(() => {
+    seq = 0; // ev() 构造器的文件级计数器归零（前述 describe 已消耗）
+    vi.mocked(bridge.trajectory.listEvents).mockReset();
+  });
+
+  it("并发 refreshLatest 不重复拼接（push 通知与兜底轮询竞态回归）", async () => {
+    const { events, load, refreshLatest } = useTrajectory();
+    // 首次载入两页内的小会话（不满页 → hasMore=false，不触发 turnOffset 查询）
+    const e1 = ev("user_message", { content: "q", blocks: [] });
+    const e2 = ev("assistant_message", { content: "a", blocks: [], round: 0, continuation: false }, { messageId: "m1" });
+    vi.mocked(bridge.trajectory.listEvents).mockResolvedValueOnce([e1, e2]);
+    await load("c1");
+    expect(events.value.map((e) => e.seq)).toEqual([1, 2]);
+
+    // 竞态模拟：两次增量拉取都在对方拼接前发起，拿到同批 [e3]
+    const e3 = ev("tool_execution", { tool_call_id: "c", tool_name: "t", arguments: "{}", is_error: false, duration_ms: 1 }, { messageId: "m1" });
+    vi.mocked(bridge.trajectory.listEvents).mockImplementation(async () => [e3]);
+    const [a, b] = await Promise.all([refreshLatest(), refreshLatest()]);
+
+    // 恰一次计入新事件；数组里 e3 只出现一次（修复前会被拼接两次 → 重复行）
+    expect(a + b).toBe(1);
+    expect(events.value.filter((e) => e.seq === e3.seq)).toHaveLength(1);
+    expect(events.value.map((e) => e.seq)).toEqual([1, 2, 3]);
+  });
+
+  it("追平后增量为空：返回 0 且不动数组", async () => {
+    const { events, load, refreshLatest } = useTrajectory();
+    const e1 = ev("user_message", { content: "q", blocks: [] });
+    vi.mocked(bridge.trajectory.listEvents).mockResolvedValueOnce([e1]);
+    await load("c1");
+    vi.mocked(bridge.trajectory.listEvents).mockResolvedValue([]);
+    await expect(refreshLatest()).resolves.toBe(0);
+    expect(events.value.map((e) => e.seq)).toEqual([1]);
   });
 });

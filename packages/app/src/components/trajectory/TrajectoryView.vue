@@ -21,7 +21,11 @@ import TrajectoryTimeline from "./TrajectoryTimeline.vue";
 import TrajectoryTable from "./TrajectoryTable.vue";
 import TrajectoryInspector from "./TrajectoryInspector.vue";
 
-const props = defineProps<{ conversationId: string }>();
+const props = defineProps<{
+  conversationId: string;
+  /** 所在 tab 是否激活（ChatPage 传入）：切到轨迹 tab = 想看最新状态 → 贴底 */
+  active?: boolean;
+}>();
 const chat = useChatStore();
 const { events, loading, loadingEarlier, error, legacy, hasMore, turnOffset, load, loadEarlier, refreshLatest } = useTrajectory();
 
@@ -297,6 +301,14 @@ onMounted(() => void loadAndScroll(props.conversationId));
 watch(() => props.conversationId, (id) => {
   resetViewState();
   void loadAndScroll(id);
+});
+
+// tab 激活即贴底：进轨迹 tab = 想看最新状态（live 台账的心智）。数据由常开的
+// push 监听保持新鲜，这里只管滚到底。无 immediate——首次进入由 onMounted
+// loadAndScroll 负责（visibility 叠放下隐藏期布局有效，挂载滚底本就生效）。
+watch(() => props.active, (v) => {
+  if (!v) return;
+  void nextTick(() => tableRef.value?.scrollToBottom());
 });
 
 // ---- live 追加（v2 事件驱动 + 兜底轮询）----
