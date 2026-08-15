@@ -34,6 +34,12 @@ use super::types::{
 /// 远程 streamable HTTP 用新版本。两者各自管自己的版本常量，互不影响。
 const HTTP_PROTOCOL_VERSION: &str = "2025-06-18";
 
+/// 请求超时（秒）。握手/tools/list 用 30s；tools/call 单独放宽到 120s——
+/// GLM `zread`（仓库级分析）等重工具实测可远超 30s，client 级 30s 总闸会掐死
+/// 慢但成功的调用（与 stdio 侧 `REQUEST_TIMEOUT_CALL` 同一教训，见 external.rs）。
+const HTTP_TIMEOUT_QUICK_SECS: u64 = 30;
+const HTTP_TIMEOUT_CALL_SECS: u64 = 120;
+
 // =========================================================================
 // McpTransport trait
 // =========================================================================
@@ -96,7 +102,8 @@ impl HttpMcpTransport {
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
         let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
+            // 总闸兜底（快请求的默认值）；tools/call 在 post_jsonrpc 按请求覆盖为 120s
+            .timeout(Duration::from_secs(HTTP_TIMEOUT_QUICK_SECS))
             .build()
             .map_err(|e| AppError::Internal(format!("构建 HTTP client 失败: {e}")))?;
 
@@ -119,7 +126,9 @@ impl HttpMcpTransport {
         };
         let init_value = serde_json::to_value(&init_params)
             .expect("McpInitializeParams 序列化不应失败");
-        let resp = transport.post_jsonrpc("initialize", Some(init_value)).await?;
+        let resp = transport
+            .post_jsonrpc("initialize", Some(init_value), HTTP_TIMEOUT_QUICK_SECS)
+            .await?;
         if resp.result.is_none() {
             // 部分 server（如 GLM）的 error 对象只回 code 不回 message，
             // 这里兜底带上 code，避免出现空的「握手失败: 」。
@@ -147,10 +156,12 @@ impl HttpMcpTransport {
     }
 
     /// 发一次 JSON-RPC POST 并解析响应。响应头里的 Mcp-Session-Id 会被缓存。
+    /// `timeout_secs` 覆盖 client 级总闸（tools/call 放宽，见常量注释）。
     async fn post_jsonrpc(
         &self,
         method: &str,
         params: Option<Value>,
+        timeout_secs: u64,
     ) -> AppResult<JsonRpcResponse> {
         let req = JsonRpcRequest {
             jsonrpc: "2.0".into(),
@@ -159,7 +170,11 @@ impl HttpMcpTransport {
             params,
         };
 
-        let mut builder = self.client.post(&self.url).headers(self.headers.clone());
+        let mut builder = self
+            .client
+            .post(&self.url)
+            .headers(self.headers.clone())
+            .timeout(Duration::from_secs(timeout_secs));
         // 带上 session id（若有，initialize 时尚为 None）
         let sid = self.session_id.lock().await.clone();
         if let Some(sid) = sid {
@@ -227,7 +242,9 @@ impl HttpMcpTransport {
 #[async_trait]
 impl McpTransport for HttpMcpTransport {
     async fn list_tools(&self) -> AppResult<Vec<McpToolDefinition>> {
-        let resp = self.post_jsonrpc("tools/list", None).await?;
+        let resp = self
+            .post_jsonrpc("tools/list", None, HTTP_TIMEOUT_QUICK_SECS)
+            .await?;
         let result = resp.result.ok_or_else(|| {
             let msg = resp.error.map(|e| e.message).unwrap_or_default();
             AppError::Internal(format!("MCP HTTP '{}' tools/list 失败: {}", self.name, msg))
@@ -244,7 +261,9 @@ impl McpTransport for HttpMcpTransport {
         };
         let params_value = serde_json::to_value(&params)
             .expect("McpCallToolParams 序列化不应失败");
-        let resp = self.post_jsonrpc("tools/call", Some(params_value)).await?;
+        let resp = self
+            .post_jsonrpc("tools/call", Some(params_value), HTTP_TIMEOUT_CALL_SECS)
+            .await?;
 
         if let Some(err) = resp.error {
             return Err(AppError::Internal(format!(
