@@ -11,7 +11,7 @@
 // - 目录来自后端 PROVIDERS 注册表（list_providers 单一真相源），hidden 条目
 //   （Ollama/custom/旧入口）不进下拉，仅编辑态存量兜底合成一组显示
 // Key/URL 字段的规则（requires_key / requires_base_url）由推导出的 provider
-// 驱动，与后端校验一致；「测试连接」与「拉取模型」共用一次往返。
+// 驱动，与后端校验一致；「测试连接」一次往返两用——验证配置 + 拉取模型并入下拉。
 import { ref, computed, onMounted, watch } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -362,39 +362,25 @@ function confirmDelete() {
       <!-- 模型（可选可输分组选择器：选预设即隐式确定厂商；手输目录外名字落自定义） -->
       <div class="field">
         <label class="field-label">模型 <span class="req">*</span></label>
-        <div class="model-group">
-          <GroupedSelect
-            :model-value="modelValue"
-            :groups="modelGroups"
-            allow-custom
-            :unmatched-label="form.model"
-            placeholder="选择或输入模型名"
-            @select="onModelSelect"
-          >
-            <!-- 关闭态控件前缀：当前归属厂商的图标 -->
-            <template #control-icon>
-              <ProviderIcon v-if="form.model" :name="form.provider" />
-            </template>
-            <!-- 组头：厂商品牌图标（未知 provider 渲染为空，不破版式） -->
-            <template #group-icon="{ group }">
-              <ProviderIcon :name="group.id ?? ''" :size="13" />
-            </template>
-          </GroupedSelect>
-          <button
-            type="button"
-            class="ws-btn"
-            :class="{ 'ws-btn-fetching': testing }"
-            :disabled="testing"
-            title="拉取完整模型列表（在线服务需先填 API Key；本机/自建端点填好 URL 即可拉取）"
-            @click="runTest"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M21 12a9 9 0 1 1-2.64-6.36" /><polyline points="21 3 21 9 15 9" />
-            </svg>
-          </button>
-        </div>
+        <GroupedSelect
+          :model-value="modelValue"
+          :groups="modelGroups"
+          allow-custom
+          :unmatched-label="form.model"
+          placeholder="选择或输入模型名"
+          @select="onModelSelect"
+        >
+          <!-- 关闭态控件前缀：当前归属厂商的图标 -->
+          <template #control-icon>
+            <ProviderIcon v-if="form.model" :name="form.provider" />
+          </template>
+          <!-- 组头：厂商品牌图标（未知 provider 渲染为空，不破版式） -->
+          <template #group-icon="{ group }">
+            <ProviderIcon :name="group.id ?? ''" :size="13" />
+          </template>
+        </GroupedSelect>
         <p class="field-hint">
-          当前服务：{{ currentProvider?.label ?? form.provider }}{{ requiresKey ? "" : "（免 API Key）" }}
+          当前服务：{{ currentProvider?.label ?? form.provider }}{{ requiresKey ? "" : "（免 API Key）" }} · 「测试连接」会拉取该端点的最新模型并入列表
         </p>
       </div>
 
@@ -433,7 +419,13 @@ function confirmDelete() {
           />
           <!-- 连接测试行：按钮 + 行内结果 -->
           <div class="conn-row">
-            <button type="button" class="conn-btn" :disabled="testing" @click="runTest">
+            <button
+              type="button"
+              class="conn-btn"
+              :disabled="testing"
+              title="验证配置并拉取模型列表（在线服务需先填 API Key；本机/自建端点填好 URL 即可）"
+              @click="runTest"
+            >
               {{ testing ? "测试中…" : "测试连接" }}
             </button>
             <span v-if="connResult" :class="connResult.ok ? 'conn-ok' : 'conn-err'" :title="connResult.error ?? undefined">
@@ -566,26 +558,8 @@ function confirmDelete() {
   background-color: var(--ip-color-bg-secondary);
 }
 
-/* 模型 GroupedSelect + 拉取按钮（与工作区 input+btn 同语系） */
-.model-group {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-}
-.model-group .gs {
-  flex: 1;
-  min-width: 0;
-}
-/* 拉取中旋转反馈 */
-.ws-btn-fetching svg {
-  animation: ws-spin 0.9s linear infinite;
-}
-@keyframes ws-spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-
-/* 连接测试行：小号文字按钮 + 行内结果（绿/红），失败原因可 hover 看全 */
+/* 连接测试行：小号文字按钮 + 行内结果（绿/红），失败原因可 hover 看全；
+   同时是模型列表的唯一拉取入口（一次往返两用） */
 .conn-row {
   display: flex;
   align-items: center;
