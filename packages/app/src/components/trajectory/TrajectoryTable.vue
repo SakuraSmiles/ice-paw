@@ -83,10 +83,28 @@ const visibleRows = computed(() => {
 });
 
 function onScroll() {
-  if (scroller.value) {
-    scrollTop.value = scroller.value.scrollTop;
-    viewportH.value = scroller.value.clientHeight;
+  if (!scroller.value) return;
+  // 吸附状态机（对话页 useScrollFollow 同款纪律）：
+  // 用户上滚（或被内容增长推离底部）→ 解除跟随；手动/内容增长回到贴底 → 重新吸附。
+  // 仅在「用户主动滚动」时更新 pinned —— 程序性 scrollTo 用 programmatic 守卫跳过。
+  const el = scroller.value;
+  if (!programmatic) {
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < FOLLOW_THRESHOLD;
+    pinned.value = nearBottom;
   }
+  scrollTop.value = el.scrollTop;
+  viewportH.value = el.clientHeight;
+}
+/** 底部吸附阈值：内容增长把视口推离底部 ≤2 行内仍视为贴底（36px 行高） */
+const FOLLOW_THRESHOLD = 80;
+const pinned = ref(true);
+let programmatic = false;
+function scrollToBottom() {
+  if (!scroller.value) return;
+  programmatic = true;
+  scroller.value.scrollTop = layout.value.total;
+  pinned.value = true;
+  requestAnimationFrame(() => { programmatic = false; });
 }
 
 /** 时间轴/外部联动：滚到指定 seq 所在行 */
@@ -103,13 +121,8 @@ function scrollToTurn(turnKey: string) {
   scroller.value.scrollTop = Math.max(0, layout.value.offsets[idx] - scroller.value.clientHeight / 3);
 }
 
-/** 首次加载滚到底部（尾部优先分页 → 最新一页的末端 = 会话当前状态） */
-function scrollToBottom() {
-  if (scroller.value) scroller.value.scrollTop = layout.value.total;
-}
-
-/** 是否贴近底部（live 追加的跟随判据：在底才自动滚下，翻阅历史时不打扰） */
-function isNearBottom(threshold = 40): boolean {
+/** 是否贴近底部（外部跟随判据：pinned 状态机主导，此函数供首载等场景查询） */
+function isNearBottom(threshold = FOLLOW_THRESHOLD): boolean {
   if (!scroller.value) return true;
   const el = scroller.value;
   return el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
@@ -117,7 +130,16 @@ function isNearBottom(threshold = 40): boolean {
 
 /** 平滑滚到底（live 追加跟随用；首载仍用 scrollToBottom 瞬跳） */
 function smoothScrollToBottom() {
-  if (scroller.value) scroller.value.scrollTo({ top: layout.value.total, behavior: "smooth" });
+  if (!scroller.value) return;
+  programmatic = true;
+  pinned.value = true;
+  scroller.value.scrollTo({ top: layout.value.total, behavior: "smooth" });
+  requestAnimationFrame(() => { programmatic = false; });
+}
+
+/** 底部吸附中（sending 起新内容自动跟随；用户上滚解除） */
+function isPinned(): boolean {
+  return pinned.value;
 }
 
 // 「加载更早」前置行后保持视口稳定：prepend 前打标记，rows 变化后按高度差补偿 scrollTop
@@ -142,7 +164,7 @@ watch(
     if (dh > 0) scroller.value.scrollTop += dh;
   },
 );
-defineExpose({ scrollToSeq, scrollToTurn, scrollToBottom, smoothScrollToBottom, isNearBottom, beginPrepend });
+defineExpose({ scrollToSeq, scrollToTurn, scrollToBottom, smoothScrollToBottom, isNearBottom, isPinned, beginPrepend });
 
 // 终止原因文案：镜像 ChatMessages finishReasonLabels + stop/error 补全（TODO 统一到 utils）
 const TERM_LABELS: Record<string, string> = {
@@ -216,10 +238,11 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
           'turn-selected': item.row.type === 'turn-header' && item.row.turnKey === selectedTurnKey,
           'turn-errored': item.row.type === 'turn-header' && item.row.errorCount > 0,
           dim: searching && item.row.type === 'event' && !item.row.match,
+          streaming: item.row.type === 'event' && item.row.streaming,
         }]"
         :style="{ top: `${item.top}px` }"
         :title="item.row.type === 'turn-header' ? (item.row.collapsed ? '展开此轮' : '折叠此轮') : item.row.summary"
-        @click="item.row.type === 'event' ? emit('select-row', item.row) : emit('toggle-turn', item.row.turnKey)"
+        @click="item.row.type === 'event' && !item.row.streaming ? emit('select-row', item.row) : item.row.type === 'turn-header' ? emit('toggle-turn', item.row.turnKey) : undefined"
       >
         <!-- turn 分割头：左（折叠箭头 + 轮次 + 日期·时间 + 终止）｜右（⚠ · 统计 · 耗时 · 用量） -->
         <template v-if="item.row.type === 'turn-header'">
@@ -255,7 +278,9 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
 
         <!-- 事件行 -->
         <template v-else>
-          <span class="ev-badge" :class="[`ev-${item.row.kind}`, { 'ev-err': item.row.isError }]" :title="item.row.event.kind">{{ item.row.label }}</span>
+          <span class="ev-badge" :class="[`ev-${item.row.kind}`, { 'ev-err': item.row.isError }]" :title="item.row.event.kind">
+            <span v-if="item.row.streaming" class="ev-pulse" />{{ item.row.label }}
+          </span>
           <span class="ev-text" :class="{ 'ev-err-text': item.row.isError, 'ev-think-text': item.row.thinkingDerived }" :title="item.row.summary">
             <template v-for="(seg, si) in splitHighlight(item.row.summary)" :key="si">
               <mark v-if="seg.hit" class="ev-hit">{{ seg.text }}</mark>
@@ -448,6 +473,23 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
 .trow-event:hover { background: var(--ip-color-bg-tertiary); }
 .trow-event.selected { background: var(--ip-color-selection-bg); }
 .trow-event.dim { opacity: 0.28; }
+/* 生成中 ephemeral 行：弱化底色 + 呼吸感（临时态，终态落库后被真实行取代） */
+.trow-event.streaming { font-style: italic; color: var(--ip-color-text-secondary); }
+.trow-event.streaming .ev-text { color: var(--ip-color-text-tertiary); }
+/* 脉冲点（badge 内前置）：主题色呼吸动画 */
+.ev-pulse {
+  width: 5px;
+  height: 5px;
+  margin-right: 4px;
+  border-radius: var(--ip-radius-full);
+  background: var(--ip-primary-500);
+  animation: ev-pulse 1.2s ease-in-out infinite;
+  flex-shrink: 0;
+}
+@keyframes ev-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.8); }
+}
 
 .ev-badge {
   flex-shrink: 0;
