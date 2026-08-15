@@ -1,6 +1,6 @@
-// AgentForm.providers.test.ts — 分组模型下拉（Provider+模型合并）行为锁：
-// 目录分组来自 bridge.providers.list、点条目推导 provider+model、组头=厂商入口
-// （其后手输归该厂商）、手输目录外=custom、手输目录内自动归属、
+// AgentForm.providers.test.ts — 分组模型选择器（Provider+模型合并）行为锁：
+// 目录分组来自 bridge.providers.list、点条目推导 provider+model、Ollama 组内
+// 拉取条目（免 Key 拉到再选）、自定义组内输入框（目录外模型名唯一入口）、
 // 测试连接成功绿字+拉取模型并入所属组、失败红字、编辑态存量模型兜底条目。
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mount, flushPromises, type VueWrapper } from "@vue/test-utils";
@@ -76,15 +76,14 @@ async function mountForm(agent: Agent | null = null) {
 function textInputs(w: VueWrapper) {
   return w.findAll("input.input").filter((i) => !i.element.classList.contains("workspace-input"));
 }
-const modelInput = (w: VueWrapper) => w.find(".model-group .combobox input");
 
 async function openDropdown(w: VueWrapper) {
-  await modelInput(w).trigger("focus");
+  await w.find(".gs-control").trigger("click");
 }
 
-/** 点分组下拉里的条目/组头（按文本找，等价真实用户点选） */
-async function clickOption(w: VueWrapper, selector: string, text: string) {
-  const el = w.findAll(selector).find((o) => o.text().includes(text));
+/** 点分组里的条目（按文本找，等价真实用户点选） */
+async function clickOption(w: VueWrapper, text: string) {
+  const el = w.findAll(".gs-option").find((o) => o.text().includes(text));
   expect(el, `下拉应含「${text}」`).toBeTruthy();
   await el!.trigger("click");
   await flushPromises();
@@ -112,23 +111,22 @@ afterEach(() => {
   while (wrappers.length) wrappers.pop()?.unmount();
 });
 
-describe("AgentForm 分组模型下拉", () => {
-  it("下拉分组来自 bridge.providers.list：组头=厂商，组内=静态目录", async () => {
+describe("AgentForm 分组模型选择器", () => {
+  it("下拉分组来自 bridge.providers.list：组=厂商纯标签，组内=静态目录", async () => {
     const w = await mountForm();
     await openDropdown(w);
     expect(providersListMock).toHaveBeenCalled();
-    const heads = w.findAll(".combobox-group-head");
-    expect(heads).toHaveLength(PROVIDERS.length);
-    const headText = heads.map((h) => h.text()).join("|");
-    expect(headText).toContain("Ollama 本地");
-    expect(headText).toContain("无需 API Key");
-    expect(w.findAll(".combobox-group-item")).toHaveLength(4); // openai 2 + glm 2
+    const labels = w.findAll(".gs-group-label");
+    expect(labels).toHaveLength(PROVIDERS.length);
+    expect(labels.map((l) => l.text()).join("|")).toContain("Ollama 本地");
+    // openai 2 + glm 2 + ollama 拉取条目 1（custom 空组）
+    expect(w.findAll(".gs-option")).toHaveLength(5);
   });
 
   it("点模型条目：provider+model 同时推导，保存走正确归属", async () => {
     const w = await mountForm();
     await openDropdown(w);
-    await clickOption(w, ".combobox-group-item", "glm-5-turbo");
+    await clickOption(w, "glm-5-turbo");
     await fillBasics(w, "GLM 助手", "glm-helper");
     await textInputs(w)[2].setValue("sk-glm-key");
     await save(w);
@@ -136,13 +134,20 @@ describe("AgentForm 分组模型下拉", () => {
     const input = createMock.mock.calls[0][0] as Record<string, unknown>;
     expect(input.provider).toBe("glm");
     expect(input.model).toBe("glm-5-turbo");
+    // 关闭态回显选中模型名（selector 语义）
+    expect(w.find(".gs-value").text()).toBe("glm-5-turbo");
   });
 
-  it("点组头（Ollama）→ 手输模型归该厂商，空 API Key 可保存", async () => {
+  it("Ollama：组内拉取条目触发探测（免 Key）→ 拉到的模型入组可选中，空 Key 可保存", async () => {
+    testConnectionMock.mockResolvedValue({ ok: true, model_count: 1, models: ["qwen3:8b"], error: null });
     const w = await mountForm();
     await openDropdown(w);
-    await clickOption(w, ".combobox-group-head", "Ollama 本地");
-    await modelInput(w).setValue("qwen3:8b"); // 组头上下文内手输 → 归 ollama 非 custom
+    await clickOption(w, "拉取已安装模型");
+    expect(testConnectionMock).toHaveBeenCalledWith("ollama", undefined, undefined, undefined);
+    await flushPromises();
+    // 拉取成功后模型并入 ollama 组 → 选中
+    await openDropdown(w);
+    await clickOption(w, "qwen3:8b");
     await fillBasics(w, "本地助手", "local-helper");
     await save(w);
     expect(w.find(".form-error").exists()).toBe(false);
@@ -152,27 +157,20 @@ describe("AgentForm 分组模型下拉", () => {
     expect(input.model).toBe("qwen3:8b");
   });
 
-  it("手输目录外模型名 = 自定义，缺 API URL 保存被拦；补 URL 后可保存", async () => {
+  it("自定义组输入框：回车添加目录外模型名 → 归 custom，缺 API URL 被拦", async () => {
     const w = await mountForm();
     await openDropdown(w);
-    await modelInput(w).setValue("Qwen3-32B"); // 不在任何目录 → custom
+    const inline = w.find(".gs-inline-input");
+    expect(inline.exists()).toBe(true);
+    await inline.setValue("Qwen3-32B");
+    await inline.trigger("keydown.enter");
+    await flushPromises();
+    expect(w.find(".gs-value").text()).toBe("Qwen3-32B");
     await fillBasics(w, "自建端点", "my-vllm");
     await save(w);
     expect(w.find(".form-error").text()).toContain("自定义 Provider 必须填写 API URL");
     expect(createMock).not.toHaveBeenCalled();
-    expect(w.find(".field-hint").text()).toContain("自定义"); // 归属小字实时反映
-  });
-
-  it("手输目录内模型名（精确）自动归属对应厂商", async () => {
-    const w = await mountForm();
-    await openDropdown(w);
-    await modelInput(w).setValue("glm-4-flash");
-    await fillBasics(w, "GLM 助手", "glm-2");
-    await textInputs(w)[2].setValue("sk-glm-key");
-    await save(w);
-    const input = createMock.mock.calls[0][0] as Record<string, unknown>;
-    expect(input.provider).toBe("glm");
-    expect(input.model).toBe("glm-4-flash");
+    expect(w.find(".field-hint").text()).toContain("自定义");
   });
 
   it("测试连接成功：绿字文案 + 拉取模型并入当前厂商组", async () => {
@@ -185,7 +183,7 @@ describe("AgentForm 分组模型下拉", () => {
     expect(ok.exists()).toBe(true);
     expect(ok.text()).toContain("连接成功，发现 1 个模型");
     await openDropdown(w);
-    const opts = w.findAll(".combobox-group-item").map((o) => o.text());
+    const opts = w.findAll(".gs-option").map((o) => o.text());
     expect(opts).toContain("gpt-5");
     expect(opts).toContain("gpt-4o"); // 静态目录仍在
   });
@@ -203,12 +201,12 @@ describe("AgentForm 分组模型下拉", () => {
   it("编辑态：存量模型显示为所属组兜底条目；探测带 agent_id 用存量 Key", async () => {
     testConnectionMock.mockResolvedValue({ ok: true, model_count: 0, models: [], error: null });
     const w = await mountForm(editAgent({ provider: "glm", model: "glm-x-private" })); // 目录外
-    expect((modelInput(w).element as HTMLInputElement).value).toBe("glm-x-private");
+    expect(w.find(".gs-value").text()).toBe("glm-x-private");
     await w.find(".conn-btn").trigger("click");
     await flushPromises();
     expect(testConnectionMock).toHaveBeenCalledWith("glm", undefined, undefined, "ag-1");
     await openDropdown(w);
-    const owner = w.findAll(".combobox-group-item").find((o) => o.text().includes("glm-x-private"));
+    const owner = w.findAll(".gs-option").find((o) => o.text().includes("glm-x-private"));
     expect(owner).toBeTruthy(); // 兜底条目插在智谱组，不是自定义组
   });
 });
