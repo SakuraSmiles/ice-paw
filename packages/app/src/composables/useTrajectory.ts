@@ -111,9 +111,20 @@ export interface BuildRowsOptions {
   showAux: boolean;
   /** 搜索词（大小写不敏感子串；命中 summary 或 payload 序列化文本） */
   query: string;
+  /** 窗口前（seq 更早一侧）的全局轮次数（M3：尾部优先分页下首屏轮号不从 1 起） */
+  turnOffset: number;
 }
 
 const NULL_TURN = "__orphan__";
+
+/**
+ * 搜索文本缓存（M2）：key = 事件对象引用。append-only 保证同一对象的 payload
+ * 不可变；增量拼接/翻页时旧对象引用复用，切会话后旧数组整体替换 → WeakMap 自动
+ * 回收。若无此缓存，每次 buildRows（折叠/开关/搜索词变化）都全量 JSON.stringify
+ * 所有 payload——千轮会话（万级事件 × 含 thinking 全文的 payload）是可见卡顿源。
+ * 非搜索态完全跳过构造（原实现即使 query="" 也 stringify）。
+ */
+const searchTextCache = new WeakMap<SessionEvent, string>();
 
 /** 本地日期标签 MM-DD（解析失败返回 ""，不参与跨天比较） */
 function localDate(iso: string): string {
@@ -268,7 +279,8 @@ export function buildRows(events: SessionEvent[], opts: BuildRowsOptions): Traje
   const rows: TrajectoryRow[] = [];
   let currentTurnKey: string | null = null;
   let currentHeader: TurnHeaderRow | null = null;
-  let turnIndex = -1;
+  // M3：窗口前还有更早分页时，窗口内首桶不是全局第 0 轮——从偏移起算
+  let turnIndex = opts.turnOffset - 1;
   let prevDate = ""; // 跨天检测：仅日期变化时在头上标 MM-DD
   // 折叠时暂存本 turn 的事件行（搜索需要 matchCount，先攒后放）
   let pendingRows: EventRow[] = [];
@@ -322,7 +334,16 @@ export function buildRows(events: SessionEvent[], opts: BuildRowsOptions): Traje
       continue; // supersede：已被续写覆盖
     }
 
-    const searchText = `${s.summary}\n${JSON.stringify(ev.payload)}`.toLowerCase();
+    // M2：仅搜索态构造 searchText（WeakMap 缓存，见 searchTextCache 注释）
+    let match = true;
+    if (q !== "") {
+      let st = searchTextCache.get(ev);
+      if (st === undefined) {
+        st = `${s.summary}\n${JSON.stringify(ev.payload)}`.toLowerCase();
+        searchTextCache.set(ev, st);
+      }
+      match = st.includes(q);
+    }
     pendingRows.push({
       type: "event",
       key: `${tk}-${ev.kind}-${ev.seq}`,
@@ -337,7 +358,7 @@ export function buildRows(events: SessionEvent[], opts: BuildRowsOptions): Traje
       thinkingDerived: s.thinkingDerived,
       durationMs: s.durationMs,
       tokens: s.tokens,
-      match: q === "" ? true : searchText.includes(q),
+      match,
       event: ev,
     });
   }
@@ -365,9 +386,24 @@ export function useTrajectory() {
   /** 事件纪元前的旧会话（零事件，Phase 2A legacy 路由）→ UI 空态提示，非 bug */
   const legacy = ref(false);
   const hasMore = ref(false);
+  /** 窗口前（更早分页一侧）的全局轮次数（M3：轮号全局偏移；0 = 窗口从头开始） */
+  const turnOffset = ref(0);
 
   let currentId: string | null = null;
   let minSeq: number | null = null;
+
+  /** 窗口还有更早内容时查一次全局轮偏移（含孤儿桶一组；与前端连续段切桶在
+   *  罕见的交错孤儿场景可差 1，可接受——见 repo::count_turns_before 注释）。 */
+  async function refreshTurnOffset() {
+    const id = currentId;
+    if (!id || minSeq == null) return;
+    try {
+      const n = await bridge.trajectory.turnOffset(id, minSeq);
+      if (currentId === id) turnOffset.value = n;
+    } catch {
+      /* 偏移查询失败降级为窗口相对编号（0），不阻断主流程 */
+    }
+  }
 
   async function load(conversationId: string) {
     currentId = conversationId;
@@ -380,6 +416,8 @@ export function useTrajectory() {
       events.value = page;
       hasMore.value = page.length === TRAJECTORY_PAGE_SIZE;
       minSeq = page.length ? page[0].seq : null;
+      turnOffset.value = 0;
+      if (hasMore.value) void refreshTurnOffset();
     } catch (e) {
       if (currentId !== conversationId) return;
       error.value = e instanceof Error ? e.message : String(e);
@@ -425,6 +463,7 @@ export function useTrajectory() {
         events.value = [...page, ...events.value];
       }
       hasMore.value = page.length === TRAJECTORY_PAGE_SIZE;
+      if (hasMore.value) void refreshTurnOffset(); // M3：窗口起点前移，重查全局偏移
     } catch (e) {
       error.value = e instanceof Error ? e.message : String(e);
     } finally {
@@ -432,5 +471,5 @@ export function useTrajectory() {
     }
   }
 
-  return { events, loading, loadingEarlier, error, legacy, hasMore, load, loadEarlier, refreshLatest };
+  return { events, loading, loadingEarlier, error, legacy, hasMore, turnOffset, load, loadEarlier, refreshLatest };
 }
