@@ -36,8 +36,8 @@ fn probe_client() -> AppResult<reqwest::Client> {
 ///   空 key 时 header 照发（服务端忽略空 Bearer / 空 x-api-key 即通过，
 ///   需鉴权的服务返回 401 → 如实报错）
 ///
-/// 非 2xx → `Llm("HTTP {status}: {body 前 500 字}")`，让用户看到服务端的
-/// 真实错误信息（如 key 无效 / 端点不存在）。
+/// 非 2xx → 按状态码翻译成可行动的中文原因（认证/端点/限流/服务端），
+/// 服务端原始信息附后（截断），用户不用对着 `HTTP 401: {json}` 猜。
 pub async fn probe_models(
     protocol: ProviderProtocol,
     base_url: &str,
@@ -62,8 +62,7 @@ pub async fn probe_models(
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
-        let snippet: String = body.chars().take(500).collect();
-        return Err(AppError::Llm(format!("HTTP {}: {}", status.as_u16(), snippet)));
+        return Err(AppError::Llm(describe_http_error(status, &body)));
     }
 
     let payload: Value = response
@@ -72,6 +71,24 @@ pub async fn probe_models(
         .map_err(|e| AppError::Llm(format!("响应不是有效 JSON: {e}")))?;
 
     Ok(parse_model_ids(&payload))
+}
+
+/// 非 2xx 状态码 → 可行动的中文原因。探测是给用户看的：401 要说清
+/// 「Key 的问题」而非甩英文 JSON，404 要指向地址，让用户知道下一步改哪。
+fn describe_http_error(status: reqwest::StatusCode, body: &str) -> String {
+    let reason = match status.as_u16() {
+        401 | 403 => "认证失败：API Key 未填写、无效、过期，或与该端点不匹配（如 GLM 标准与 Coding 端点的 Key 不通用）",
+        404 => "端点不存在：服务地址可能不对，或该服务不提供模型列表接口",
+        429 => "请求过于频繁（限流）：稍后再试",
+        500..=599 => "服务端错误：该服务暂时不可用，稍后再试",
+        _ => "请求被服务端拒绝",
+    };
+    let snippet: String = body.chars().take(200).collect();
+    if snippet.trim().is_empty() {
+        format!("HTTP {}: {}", status.as_u16(), reason)
+    } else {
+        format!("HTTP {}: {}｜服务端响应: {}", status.as_u16(), reason, snippet)
+    }
 }
 
 /// 从 OpenAI/Anthropic 同构的 models 响应 `{"data":[{"id":"..."}]}` 提取模型 id。
@@ -138,5 +155,27 @@ mod tests {
         );
         let v = serde_json::json!({ "data": [{ "name": "no-id-field" }, { "id": "ok" }] });
         assert_eq!(parse_model_ids(&v), vec!["ok".to_string()]);
+    }
+
+    #[test]
+    fn describe_error_translates_status_to_actionable_hint() {
+        let e401 = describe_http_error(reqwest::StatusCode::UNAUTHORIZED, "{\"error\":{}}");
+        assert!(e401.contains("认证失败"));
+        assert!(e401.contains("不通用"));
+        assert!(e401.contains("HTTP 401"));
+
+        let e404 = describe_http_error(reqwest::StatusCode::NOT_FOUND, "");
+        assert!(e404.contains("端点不存在"));
+        // 空 body 不带尾巴分隔符
+        assert!(!e404.contains("｜"));
+
+        let e429 = describe_http_error(reqwest::StatusCode::TOO_MANY_REQUESTS, "");
+        assert!(e429.contains("限流"));
+        let e500 = describe_http_error(reqwest::StatusCode::BAD_GATEWAY, "");
+        assert!(e500.contains("服务端错误"));
+        // body 截断到 200 字符（chars 边界，中文安全）
+        let long = "错".repeat(300);
+        let e = describe_http_error(reqwest::StatusCode::UNAUTHORIZED, &long);
+        assert!(e.chars().count() < 500);
     }
 }
