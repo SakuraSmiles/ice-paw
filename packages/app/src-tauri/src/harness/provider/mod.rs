@@ -60,18 +60,33 @@ pub trait LlmProvider: Send + Sync {
 }
 
 // =========================================================================
-// 工厂函数（从 llm/mod.rs 迁入）
+// 工厂函数（从 llm/mod.rs 迁入）+ Provider 目录（单一真相源）
 // =========================================================================
 
-/// Provider 描述符：名称 → 协议类型 + 默认 URL
+/// Provider 描述符：名称 → 协议类型 + 默认 URL + 目录元数据
+///
+/// `label`/`note`/`requires_key`/`requires_base_url`/`models` 是给前端
+/// Provider 目录用的（`list_providers` 命令下发），与工厂共用同一张表，
+/// 前后端零硬编码漂移。
 struct ProviderDesc {
     name: &'static str,
     protocol: ProviderProtocol,
     default_url: &'static str,
+    /// 展示名（下拉框主行）
+    label: &'static str,
+    /// 补充说明（下拉框副行，如「Coding Plan 订阅专用」）
+    note: Option<&'static str>,
+    /// 该 provider 是否需要 API Key（ollama/custom 本地服务无需）
+    requires_key: bool,
+    /// 是否必须显式填写 base_url（custom 无默认地址，必填）
+    requires_base_url: bool,
+    /// 静态模型目录（起点参考；在线「拉取」按钮拿实时列表，手输永远保留）
+    models: &'static [&'static str],
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ProviderProtocol {
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProviderProtocol {
     OpenAI,
     Anthropic,
 }
@@ -79,12 +94,56 @@ enum ProviderProtocol {
 /// 数据驱动的 provider 注册表（单一真相源，消除 create_provider 与
 /// default_base_url 两份 match 语句的同步风险）。
 const PROVIDERS: &[ProviderDesc] = &[
-    ProviderDesc { name: "openai",    protocol: ProviderProtocol::OpenAI,    default_url: "https://api.openai.com" },
-    ProviderDesc { name: "glm",       protocol: ProviderProtocol::OpenAI,    default_url: "https://open.bigmodel.cn/api/paas/v4" },
-    ProviderDesc { name: "deepseek",  protocol: ProviderProtocol::OpenAI,    default_url: "https://api.deepseek.com" },
-    ProviderDesc { name: "anthropic", protocol: ProviderProtocol::Anthropic, default_url: "https://api.anthropic.com" },
-    ProviderDesc { name: "minimax",   protocol: ProviderProtocol::Anthropic, default_url: "https://api.minimaxi.com/anthropic" },
-    ProviderDesc { name: "minimax-cn",protocol: ProviderProtocol::Anthropic, default_url: "https://api.minimaxi.com/anthropic" },
+    ProviderDesc {
+        name: "openai", protocol: ProviderProtocol::OpenAI, default_url: "https://api.openai.com",
+        label: "OpenAI", note: None, requires_key: true, requires_base_url: false,
+        models: &["gpt-4o", "gpt-4o-mini", "o3-mini", "gpt-4.1", "gpt-4.1-mini"],
+    },
+    ProviderDesc {
+        name: "glm", protocol: ProviderProtocol::OpenAI, default_url: "https://open.bigmodel.cn/api/paas/v4",
+        label: "智谱 GLM", note: None, requires_key: true, requires_base_url: false,
+        models: &["glm-5-turbo", "glm-5.2", "glm-5.1", "glm-4", "glm-4-flash"],
+    },
+    ProviderDesc {
+        name: "glm-coding", protocol: ProviderProtocol::OpenAI, default_url: "https://open.bigmodel.cn/api/coding/paas/v4",
+        label: "智谱 GLM Coding",
+        note: Some("Coding Plan 订阅专用端点，API Key 与标准端点不通用"),
+        requires_key: true, requires_base_url: false,
+        models: &["glm-5.2", "glm-5.1", "glm-5-turbo"],
+    },
+    ProviderDesc {
+        name: "deepseek", protocol: ProviderProtocol::OpenAI, default_url: "https://api.deepseek.com",
+        label: "DeepSeek", note: None, requires_key: true, requires_base_url: false,
+        models: &["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-chat", "deepseek-reasoner"],
+    },
+    ProviderDesc {
+        name: "anthropic", protocol: ProviderProtocol::Anthropic, default_url: "https://api.anthropic.com",
+        label: "Anthropic", note: None, requires_key: true, requires_base_url: false,
+        models: &["claude-sonnet-4-20250514", "claude-haiku-3-5-20241022", "claude-opus-4-20250514"],
+    },
+    ProviderDesc {
+        name: "minimax", protocol: ProviderProtocol::Anthropic, default_url: "https://api.minimax.io/anthropic",
+        label: "MiniMax（国际站）", note: Some("海外手机号/邮箱注册的账号"), requires_key: true, requires_base_url: false,
+        models: &["MiniMax-M3", "MiniMax-M2.5", "MiniMax-M2.5-highspeed"],
+    },
+    ProviderDesc {
+        name: "minimax-cn", protocol: ProviderProtocol::Anthropic, default_url: "https://api.minimaxi.com/anthropic",
+        label: "MiniMax（国内站）", note: Some("国内手机号注册的账号"), requires_key: true, requires_base_url: false,
+        models: &["MiniMax-M3", "MiniMax-M2.5", "MiniMax-M2.5-highspeed"],
+    },
+    ProviderDesc {
+        name: "ollama", protocol: ProviderProtocol::OpenAI, default_url: "http://localhost:11434/v1",
+        label: "Ollama 本地", note: Some("本地推理，无需 API Key；点「拉取」获取已安装的模型"),
+        requires_key: false, requires_base_url: false,
+        models: &[],
+    },
+    ProviderDesc {
+        name: "custom", protocol: ProviderProtocol::OpenAI, default_url: "",
+        label: "自定义（OpenAI 兼容）",
+        note: Some("接入 vLLM / LM Studio / one-api 等，须填写 API URL；服务需要鉴权则填 Key"),
+        requires_key: false, requires_base_url: true,
+        models: &[],
+    },
 ];
 
 fn find_provider(name: &str) -> Option<&'static ProviderDesc> {
@@ -152,6 +211,62 @@ fn default_base_url(provider: &str) -> String {
         .to_string()
 }
 
+// =========================================================================
+// Provider 目录下发（list_providers 命令的数据源）
+// =========================================================================
+
+/// 前端 Provider 目录条目（`list_providers` 命令的返回类型）。
+/// 字段与 `ProviderDesc` 一一对应，serde 走 snake_case 透传（与 events 惯例一致）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ProviderInfo {
+    pub name: String,
+    pub protocol: ProviderProtocol,
+    pub default_url: String,
+    pub label: String,
+    pub note: Option<String>,
+    pub requires_key: bool,
+    pub requires_base_url: bool,
+    pub models: Vec<String>,
+}
+
+/// 全量 Provider 目录（`list_providers` 命令直接返回）。
+pub fn list_provider_infos() -> Vec<ProviderInfo> {
+    PROVIDERS
+        .iter()
+        .map(|d| ProviderInfo {
+            name: d.name.to_string(),
+            protocol: d.protocol,
+            default_url: d.default_url.to_string(),
+            label: d.label.to_string(),
+            note: d.note.map(|s| s.to_string()),
+            requires_key: d.requires_key,
+            requires_base_url: d.requires_base_url,
+            models: d.models.iter().map(|s| s.to_string()).collect(),
+        })
+        .collect()
+}
+
+/// 该 provider 是否必须配 API Key。未知 provider 保守返回 true
+/// （按需要 key 的多数路径处理，宁可多要求也不静默发空 key）。
+pub fn provider_requires_key(name: &str) -> bool {
+    find_provider(name).map(|d| d.requires_key).unwrap_or(true)
+}
+
+/// 该 provider 是否必须显式填写 base_url（当前仅 custom）。
+pub fn provider_requires_base_url(name: &str) -> bool {
+    find_provider(name)
+        .map(|d| d.requires_base_url)
+        .unwrap_or(false)
+}
+
+/// 该 provider 的默认 base_url（未知返回空串——custom 的默认本就是空）。
+pub fn provider_default_url(name: &str) -> String {
+    find_provider(name)
+        .map(|d| d.default_url)
+        .unwrap_or("")
+        .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,10 +277,13 @@ mod tests {
         for p in [
             "openai",
             "glm",
+            "glm-coding",
             "deepseek",
             "anthropic",
             "minimax",
             "minimax-cn",
+            "ollama",
+            "custom",
         ] {
             let r = create_provider(p, "model-x", Some("https://x.com"), true);
             assert!(
@@ -196,27 +314,90 @@ mod tests {
         assert!(r.is_ok());
     }
 
-    /// 默认 URL 表必须准确：三个新增 Anthropic 协议供应商
+    /// 默认 URL 表必须准确：MiniMax 双站地址必须不同（国际站 .io / 国内站 .com，
+    /// 曾经双双写成国内站——国际站用户的「默认地址不对」根源）
     #[test]
     fn default_base_urls() {
         assert_eq!(default_base_url("anthropic"), "https://api.anthropic.com");
         assert_eq!(
             default_base_url("minimax"),
-            "https://api.minimaxi.com/anthropic"
+            "https://api.minimax.io/anthropic"
         );
         assert_eq!(
             default_base_url("minimax-cn"),
             "https://api.minimaxi.com/anthropic"
         );
-        // 回归：原有三个不变
-        assert_eq!(default_base_url("openai"), "https://api.openai.com");
+        // GLM 双端点：标准 paas 与 Coding Plan 订阅端点必须可区分（key 不通用）
         assert_eq!(
             default_base_url("glm"),
             "https://open.bigmodel.cn/api/paas/v4"
         );
+        assert_eq!(
+            default_base_url("glm-coding"),
+            "https://open.bigmodel.cn/api/coding/paas/v4"
+        );
+        // 回归：原有三个不变
+        assert_eq!(default_base_url("openai"), "https://api.openai.com");
         assert_eq!(default_base_url("deepseek"), "https://api.deepseek.com");
+        // ollama 默认指向本地服务；custom 无默认地址
+        assert_eq!(default_base_url("ollama"), "http://localhost:11434/v1");
+        assert_eq!(default_base_url("custom"), "");
         // 兑底返回空串
         assert_eq!(default_base_url(""), "");
         assert_eq!(default_base_url("totally-unknown"), "");
+    }
+
+    /// 目录质量：label 全部唯一且非空（前端下拉显示名，重复即无法反查）
+    #[test]
+    fn provider_labels_unique_and_nonempty() {
+        let infos = list_provider_infos();
+        let mut labels: Vec<&str> = infos.iter().map(|i| i.label.as_str()).collect();
+        assert!(labels.iter().all(|l| !l.trim().is_empty()));
+        labels.sort();
+        let n = labels.len();
+        labels.dedup();
+        assert_eq!(labels.len(), n, "label 不应有重复");
+    }
+
+    /// requires_key 标志：ollama/custom 免 key，其余全要；未知名保守返回 true
+    #[test]
+    fn provider_requires_key_flags() {
+        assert!(!provider_requires_key("ollama"));
+        assert!(!provider_requires_key("custom"));
+        for p in ["openai", "glm", "glm-coding", "deepseek", "anthropic", "minimax", "minimax-cn"] {
+            assert!(provider_requires_key(p), "{p} 应要求 key");
+        }
+        assert!(provider_requires_key("totally-unknown"));
+    }
+
+    /// requires_base_url：仅 custom（无默认地址，必须显式填）
+    #[test]
+    fn provider_requires_base_url_flags() {
+        let infos = list_provider_infos();
+        let required: Vec<&str> = infos
+            .iter()
+            .filter(|i| i.requires_base_url)
+            .map(|i| i.name.as_str())
+            .collect();
+        assert_eq!(required, vec!["custom"]);
+    }
+
+    /// 目录下发与注册表逐字段一致（names 对齐 + 元数据透传）
+    #[test]
+    fn list_provider_infos_matches_registry() {
+        let infos = list_provider_infos();
+        assert_eq!(infos.len(), PROVIDERS.len());
+        for (info, desc) in infos.iter().zip(PROVIDERS.iter()) {
+            assert_eq!(info.name, desc.name);
+            assert_eq!(info.protocol, desc.protocol);
+            assert_eq!(info.default_url, desc.default_url);
+            assert_eq!(info.label, desc.label);
+            assert_eq!(info.note.as_deref(), desc.note);
+            assert_eq!(info.requires_key, desc.requires_key);
+            assert_eq!(
+                info.models,
+                desc.models.iter().map(|s| s.to_string()).collect::<Vec<_>>()
+            );
+        }
     }
 }
