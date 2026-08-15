@@ -355,16 +355,20 @@ function isNewDay(idx: number): boolean {
 }
 
 // ===== finish_reason 展示 =====
+// B3：可续跑类终止（预算/轮数/停滞/长度）不再用「截断」错误框架——中性提示 +
+// 一键继续按钮（后端 B1 自动续期额度用尽 / agent 显式硬上限 / stuck 真停时的兜底）。
 const finishReasonLabels: Record<string, string> = {
   length: "已达长度上限，回答被截断",
   // Anthropic 系（Claude / MiniMax）的 stop_reason 原样透传为 "max_tokens"，
   // 与 OpenAI 系的 "length" 同义，统一映射成同一句中文。
   max_tokens: "已达长度上限，回答被截断",
   abort: "已手动停止",
-  budget_exceeded: "Token 预算超限，回答被截断",
+  budget_exceeded: "本次 token 预算已达上限",
   stuck: "连续多轮无进展，已自动终止",
-  tool_use: "已达最大工具调用轮数，回答可能不完整",
+  tool_use: "已达工具调用轮数上限",
 };
+// 「发送消息即可续跑」的终止类：提示行内附「继续」按钮（abort=用户主动停，不列）
+const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "length", "max_tokens"]);
 </script>
 
 <template>
@@ -620,9 +624,15 @@ const finishReasonLabels: Record<string, string> = {
       <ConfigProposalCard :proposal="chat.pendingProposal" />
     </div>
 
-    <!-- finish_reason 提示 -->
+    <!-- finish_reason 提示（B3：可续跑类附「继续」按钮，一键发「继续」续跑任务） -->
     <div v-if="chat.lastFinishReason && chat.lastFinishReason !== 'stop' && chat.lastFinishReason !== 'end_turn' && chat.messages.length > 0" class="finish-reason">
       <span>{{ finishReasonLabels[chat.lastFinishReason] || chat.lastFinishReason }}</span>
+      <button
+        v-if="RESUMABLE_REASONS.has(chat.lastFinishReason) && !chat.sending"
+        class="continue-btn"
+        title="任务状态完好，发送「继续」即可接着跑"
+        @click="chat.sendMessage('继续')"
+      >继续</button>
     </div>
 
     <div v-if="chat.sending && chat.messages.length > 0" class="cursor-bar">
@@ -669,9 +679,11 @@ const finishReasonLabels: Record<string, string> = {
 .date-divider { display:flex; align-items:center; gap:12px; padding:20px 48px 8px; font-size:var(--ip-text-caption-size); color:var(--ip-color-text-disabled); }
 .date-divider::before, .date-divider::after { content:''; flex:1; height:1px; background:var(--ip-color-border-default); }
 
-/* ===== finish_reason 提示 ===== */
-.finish-reason { text-align:center; padding:4px 48px 0; }
+/* ===== finish_reason 提示（B3：中性提示 + 可续跑类「继续」按钮）===== */
+.finish-reason { display:flex; align-items:center; justify-content:center; gap:8px; padding:4px 48px 0; }
 .finish-reason span { display:inline-block; font-size:var(--ip-text-caption-size); color:var(--ip-color-text-tertiary); padding:2px 10px; border-radius:var(--ip-radius-full); background:var(--ip-color-bg-tertiary); }
+.continue-btn { font-size:var(--ip-text-caption-size); color:var(--ip-color-text-secondary); padding:2px 12px; border-radius:var(--ip-radius-full); border:1px solid var(--ip-color-border-default); background:var(--ip-color-bg-secondary); cursor:pointer; transition:all var(--ip-duration-fast) var(--ip-ease-out); }
+.continue-btn:hover { color:var(--ip-color-text-primary); border-color:var(--ip-color-border-strong); }
 
 /* ===== TransitionGroup 动画 ===== */
 .msg-enter-active { animation:msg-in 0.35s cubic-bezier(0.16,1,0.3,1); }
