@@ -88,6 +88,9 @@ async fn seed_agent_and_conv(pool: &SqlitePool) -> String {
             agent_id: agent_id.to_string(),
             title: Some("test".into()),
             project_id: None,
+            kind: None,
+            initiator_agent_id: None,
+            parent_conversation_id: None,
         },
     )
     .await

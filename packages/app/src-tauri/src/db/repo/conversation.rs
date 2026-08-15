@@ -7,13 +7,15 @@ use sqlx::SqlitePool;
 use crate::db::models::{ConversationRow, NewConversation};
 use crate::error::{AppError, AppResult};
 
+/// 全列清单（MA-1 起含 kind/initiator/parent 四列；`query_as<ConversationRow>`
+/// 要求 SELECT 覆盖全部字段，统一收口防止逐站点漂移）
+const CONV_COLS: &str = "id, agent_id, title, pinned, created_at, updated_at, tools_override, project_id, kind, initiator_type, initiator_agent_id, parent_conversation_id";
+
 /// 列出全部会话（不限 agent），按 `pinned DESC, updated_at DESC`
 pub async fn list_all(pool: &SqlitePool) -> AppResult<Vec<ConversationRow>> {
-    let rows = sqlx::query_as::<_, ConversationRow>(
-        "SELECT id, agent_id, title, pinned, created_at, updated_at, tools_override, project_id
-           FROM conversations
-          ORDER BY pinned DESC, updated_at DESC",
-    )
+    let rows = sqlx::query_as::<_, ConversationRow>(&format!(
+        "SELECT {CONV_COLS} FROM conversations ORDER BY pinned DESC, updated_at DESC"
+    ))
     .fetch_all(pool)
     .await?;
     Ok(rows)
@@ -24,12 +26,9 @@ pub async fn list_by_agent(
     pool: &SqlitePool,
     agent_id: &str,
 ) -> AppResult<Vec<ConversationRow>> {
-    let rows = sqlx::query_as::<_, ConversationRow>(
-        "SELECT id, agent_id, title, pinned, created_at, updated_at, tools_override, project_id
-           FROM conversations
-          WHERE agent_id = ?
-          ORDER BY pinned DESC, updated_at DESC",
-    )
+    let rows = sqlx::query_as::<_, ConversationRow>(&format!(
+        "SELECT {CONV_COLS} FROM conversations WHERE agent_id = ? ORDER BY pinned DESC, updated_at DESC"
+    ))
     .bind(agent_id)
     .fetch_all(pool)
     .await?;
@@ -38,10 +37,9 @@ pub async fn list_by_agent(
 
 /// 取一条
 pub async fn get_by_id(pool: &SqlitePool, id: &str) -> AppResult<ConversationRow> {
-    let row = sqlx::query_as::<_, ConversationRow>(
-        "SELECT id, agent_id, title, pinned, created_at, updated_at, tools_override, project_id
-           FROM conversations WHERE id = ?",
-    )
+    let row = sqlx::query_as::<_, ConversationRow>(&format!(
+        "SELECT {CONV_COLS} FROM conversations WHERE id = ?"
+    ))
     .bind(id)
     .fetch_optional(pool)
     .await?
@@ -52,20 +50,34 @@ pub async fn get_by_id(pool: &SqlitePool, id: &str) -> AppResult<ConversationRow
     Ok(row)
 }
 
-/// 创建会话，title 可空
+/// 创建会话，title 可空。
+///
+/// MA-1: kind/initiator/parent 由 NewConversation 携带（默认 chat / 用户发起 / 无父）；
+/// initiator_type 从 initiator_agent_id 推导（Some → 'agent'），避免调用方双写字段。
 pub async fn create(
     pool: &SqlitePool,
     id: &str,
     new_conv: &NewConversation,
 ) -> AppResult<ConversationRow> {
     let title = new_conv.title.as_deref().unwrap_or("");
+    let kind = new_conv.kind.as_deref().unwrap_or("chat");
+    let initiator_type = if new_conv.initiator_agent_id.is_some() {
+        Some("agent")
+    } else {
+        None
+    };
     sqlx::query(
-        "INSERT INTO conversations (id, agent_id, title, project_id) VALUES (?, ?, ?, ?)",
+        "INSERT INTO conversations (id, agent_id, title, project_id, kind, initiator_type, initiator_agent_id, parent_conversation_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(id)
     .bind(&new_conv.agent_id)
     .bind(title)
     .bind(&new_conv.project_id)
+    .bind(kind)
+    .bind(initiator_type)
+    .bind(&new_conv.initiator_agent_id)
+    .bind(&new_conv.parent_conversation_id)
     .execute(pool)
     .await?;
 
@@ -163,20 +175,18 @@ pub async fn list_by_project(
     project_id: Option<&str>,
 ) -> AppResult<Vec<ConversationRow>> {
     let rows = if let Some(pid) = project_id {
-        sqlx::query_as::<_, ConversationRow>(
-            "SELECT id, agent_id, title, pinned, created_at, updated_at, tools_override, project_id
-               FROM conversations WHERE project_id = ?
-               ORDER BY pinned DESC, updated_at DESC",
-        )
+        sqlx::query_as::<_, ConversationRow>(&format!(
+            "SELECT {CONV_COLS} FROM conversations WHERE project_id = ?
+             ORDER BY pinned DESC, updated_at DESC"
+        ))
         .bind(pid)
         .fetch_all(pool)
         .await?
     } else {
-        sqlx::query_as::<_, ConversationRow>(
-            "SELECT id, agent_id, title, pinned, created_at, updated_at, tools_override, project_id
-               FROM conversations WHERE project_id IS NULL
-               ORDER BY pinned DESC, updated_at DESC",
-        )
+        sqlx::query_as::<_, ConversationRow>(&format!(
+            "SELECT {CONV_COLS} FROM conversations WHERE project_id IS NULL
+             ORDER BY pinned DESC, updated_at DESC"
+        ))
         .fetch_all(pool)
         .await?
     };
