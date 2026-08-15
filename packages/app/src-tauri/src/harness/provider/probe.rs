@@ -90,7 +90,7 @@ pub fn parse_model_ids(payload: &Value) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default();
-    ids.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    ids.sort_by_key(|a| a.to_lowercase());
     ids.dedup();
     ids
 }

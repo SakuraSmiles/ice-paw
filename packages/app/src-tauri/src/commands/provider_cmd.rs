@@ -10,9 +10,7 @@
 use tauri::State;
 
 use crate::error::{AppError, AppResult};
-use crate::harness::provider::{
-    list_provider_infos, probe, ProviderInfo, ProviderProtocol,
-};
+use crate::harness::provider::{list_provider_infos, probe, ProviderInfo};
 
 use super::agent_cmd::AgentCmd;
 

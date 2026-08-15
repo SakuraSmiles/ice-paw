@@ -46,6 +46,37 @@ use crate::db::models::{Agent, AgentRow, AgentUpdate, HookConfig, NewAgent, Rota
 use crate::db::repo;
 use crate::error::{AppError, AppResult};
 use crate::harness::kb::{ensure, watcher_manager::KbWatcherManager};
+use crate::harness::provider::provider_requires_key;
+
+// ============================================================================
+// 入参校验
+// ============================================================================
+
+/// `NewAgent` 入参校验（`SqlAgentCmd::create` / `MockAgentCmd::create` 共用）。
+///
+/// api_key 是否必填按 provider 目录判定（`provider_requires_key`）：
+/// ollama / custom 等本地或免鉴权服务允许空 key——**空串仍会经
+/// `crypto::store_api_key` 存一条空记录**（Stronghold 无记录时
+/// `fetch_api_key` 返回 NotFound，聊天链路 `get_with_credentials` 会报错，
+/// 所以必须占位）；OpenAI adapter 发空 Bearer，本地服务忽略。
+fn validate_new_agent(input: &NewAgent) -> AppResult<()> {
+    if input.id.trim().is_empty() {
+        return Err(AppError::Validation("ID 不能为空".into()));
+    }
+    if input.name.trim().is_empty() {
+        return Err(AppError::Validation("name 不能为空".into()));
+    }
+    if input.provider.trim().is_empty() {
+        return Err(AppError::Validation("provider 不能为空".into()));
+    }
+    if input.model.trim().is_empty() {
+        return Err(AppError::Validation("model 不能为空".into()));
+    }
+    if provider_requires_key(input.provider.trim()) && input.api_key.trim().is_empty() {
+        return Err(AppError::Validation("api_key 不能为空".into()));
+    }
+    Ok(())
+}
 
 // ============================================================================
 // 类型：带凭据的 Agent 数据（chat_cmd 拼装 LLM 调用所需的全部信息）
@@ -269,23 +300,9 @@ impl AgentCmd for SqlAgentCmd {
     }
 
     async fn create(&self, input: NewAgent) -> AppResult<Agent> {
-        // 入参基础校验
+        // 入参基础校验（含 per-provider 的 api_key 必填判定）
+        validate_new_agent(&input)?;
         let id = input.id.trim().to_string();
-        if id.is_empty() {
-            return Err(AppError::Validation("ID 不能为空".into()));
-        }
-        if input.name.trim().is_empty() {
-            return Err(AppError::Validation("name 不能为空".into()));
-        }
-        if input.provider.trim().is_empty() {
-            return Err(AppError::Validation("provider 不能为空".into()));
-        }
-        if input.model.trim().is_empty() {
-            return Err(AppError::Validation("model 不能为空".into()));
-        }
-        if input.api_key.trim().is_empty() {
-            return Err(AppError::Validation("api_key 不能为空".into()));
-        }
 
         // 校验 ID 唯一性
         if repo::agent::get_by_id(&self.pool, &id).await.is_ok() {
@@ -419,7 +436,10 @@ impl AgentCmd for SqlAgentCmd {
     }
 
     async fn rotate_key(&self, input: RotateAgentKey) -> AppResult<Agent> {
-        if input.api_key.trim().is_empty() {
+        // key 是否必填按该 agent 的 provider 判定（ollama/custom 等免鉴权
+        // 服务允许空 key——空串仍走 store，清掉旧值）
+        let row = repo::agent::get_by_id(&self.pool, &input.agent_id).await?;
+        if provider_requires_key(&row.provider) && input.api_key.trim().is_empty() {
             return Err(AppError::Validation("api_key 不能为空".into()));
         }
         crypto::store_api_key(&self.app, &input.agent_id, &input.api_key, input.base_url.as_deref())?;
@@ -430,8 +450,8 @@ impl AgentCmd for SqlAgentCmd {
             input.base_url.as_deref(),
         )
         .await?;
-        let row = repo::agent::get_by_id(&self.pool, &input.agent_id).await?;
-        Ok(Agent::from(row))
+        let fresh = repo::agent::get_by_id(&self.pool, &input.agent_id).await?;
+        Ok(Agent::from(fresh))
     }
 
     async fn delete(&self, agent_id: &str) -> AppResult<()> {
@@ -721,6 +741,72 @@ mod tests {
             created_at: "2024-01-01 00:00:00".to_string(),
             updated_at: "2024-01-01 00:00:00".to_string(),
         }
+    }
+
+    /// 构造合法 NewAgent 基线（各用例只改关心的字段）
+    fn new_agent(provider: &str, api_key: &str) -> NewAgent {
+        NewAgent {
+            id: "test-agent".into(),
+            name: "测试".into(),
+            provider: provider.into(),
+            model: "m".into(),
+            system_prompt: String::new(),
+            api_key: api_key.into(),
+            base_url: None,
+            temperature: 0.7,
+            max_tokens: 16384,
+            extra_params: None,
+            sort_order: 0,
+            cache_prompt: true,
+            max_history_messages: None,
+            tool_trim_threshold: None,
+            context_window: None,
+            enabled_tools: None,
+            supports_vision: false,
+            workspace_path: None,
+        }
+    }
+
+    #[test]
+    fn validate_allows_empty_key_for_ollama_and_custom() {
+        // 免鉴权 provider：空 key 合法（空串仍会存 Stronghold 占位记录）
+        assert!(validate_new_agent(&new_agent("ollama", "")).is_ok());
+        assert!(validate_new_agent(&new_agent("custom", "")).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_empty_key_for_keyed_providers() {
+        for p in ["openai", "glm", "glm-coding", "deepseek", "anthropic", "minimax", "minimax-cn"] {
+            let err = validate_new_agent(&new_agent(p, "  ")).unwrap_err();
+            assert!(matches!(err, AppError::Validation(_)), "{p} 空 key 应被拒");
+        }
+        // 未知 provider 保守按需要 key 处理
+        assert!(validate_new_agent(&new_agent("totally-unknown", "")).is_err());
+    }
+
+    #[test]
+    fn validate_accepts_keyed_provider_with_key() {
+        assert!(validate_new_agent(&new_agent("anthropic", "sk-xxx")).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_missing_id_and_name() {
+        let mut a = new_agent("ollama", "");
+        a.id = "  ".into();
+        assert!(matches!(validate_new_agent(&a), Err(AppError::Validation(_))));
+        let mut b = new_agent("ollama", "");
+        b.name = String::new();
+        assert!(matches!(validate_new_agent(&b), Err(AppError::Validation(_))));
+    }
+
+    #[test]
+    fn validate_rejects_empty_provider_and_model() {
+        let mut a = new_agent("ollama", "");
+        a.provider = " ".into();
+        assert!(matches!(validate_new_agent(&a), Err(AppError::Validation(_))));
+        let mut b = new_agent("ollama", "");
+        b.model = "".into();
+        assert!(matches!(validate_new_agent(&b), Err(AppError::Validation(_))));
     }
 
     #[tokio::test]
