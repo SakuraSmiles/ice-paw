@@ -14,6 +14,9 @@
 //!   - `max_attempts`：每轮内最大重试次数（含首次尝试）
 //!   - `stuck_threshold`：卡住检测阈值（M2.1 启用，默认 5；降低误判）
 //!   - `max_total_tokens`：Token 预算上限（默认 3× 上下文窗口，chat_cmd model-aware 兜底；agent.yaml 可覆盖）
+//!   - `max_budget_renewals` / `max_round_renewals`：B1 自动续期额度——触顶时若额度
+//!     未尽则 +初始上限续跑（合法长任务不误杀），额度用尽才真停。失控循环不靠它
+//!     兜底（stuck_detect 独立熔断），额度有界保证总开销封顶 = 初始 × (1+额度)。
 
 // ============================================================================
 // 与 `commands/chat_loop.rs` 中原硬编码常量对齐的 pub const（短期兼容）
@@ -26,6 +29,12 @@ pub const MAX_TOOL_ROUNDS: u32 = 50;
 
 /// 每轮内的最大尝试次数（含首次，即最多 3 次重试；原 `MAX_ATTEMPTS = 4`）
 pub const MAX_ATTEMPTS: u32 = 4;
+
+/// B1 自动续期默认额度：预算/轮数触顶时可自动续期的次数（每次 +初始上限），
+/// 总开销封顶 = 初始上限 × (1 + 此值)。默认路径（model-aware 兜底）用此值；
+/// agent.yaml 显式 max_total_tokens / tool_max_rounds → chat_cmd 置 0
+///（用户拍板的显式硬上限不被静默突破）。
+pub const DEFAULT_AUTO_RENEWALS: u32 = 2;
 
 // ============================================================================
 // LoopBudget — 三道熔断配置（W3.1 B1-1 + B1-2）
@@ -51,6 +60,10 @@ pub struct LoopBudget {
     /// loop_engine 基于【本轮】usage 累加（避免间歇缺失时旧值重复累加致虚高）。
     /// agent.yaml 的 max_total_tokens 可显式覆盖；撞预算由守卫对称清场，不再卡死。
     pub max_total_tokens: usize,
+    /// B1：`max_total_tokens` 触顶时可自动续期的次数（每次 +初始上限）。0 = 硬上限即停。
+    pub max_budget_renewals: u32,
+    /// B1：`max_tool_rounds` 触顶时可自动续期的次数（语义同上）。0 = 硬上限即停。
+    pub max_round_renewals: u32,
 }
 
 impl Default for LoopBudget {
@@ -60,6 +73,8 @@ impl Default for LoopBudget {
             max_attempts: MAX_ATTEMPTS,
             stuck_threshold: 5,
             max_total_tokens: 1_000_000,
+            max_budget_renewals: DEFAULT_AUTO_RENEWALS,
+            max_round_renewals: DEFAULT_AUTO_RENEWALS,
         }
     }
 }
@@ -101,6 +116,7 @@ mod tests {
             max_attempts: 4,
             stuck_threshold: 3,
             max_total_tokens: 1_000,
+            ..LoopBudget::default()
         };
         // 模拟 round 1 用了 800 tokens，round 2 累计到 1600 → 超过 1000
         let mut cumulative_tokens: usize = 800;
@@ -120,6 +136,7 @@ mod tests {
             max_attempts: 4,
             stuck_threshold: 3,
             max_total_tokens: usize::MAX,
+            ..LoopBudget::default()
         };
         // 模拟极端大的累计值
         let cumulative_tokens: usize = usize::MAX - 1;
@@ -144,5 +161,59 @@ mod tests {
         cumulative += u1.prompt_tokens as usize + u1.completion_tokens as usize;
         cumulative += u2.prompt_tokens as usize + u2.completion_tokens as usize;
         assert_eq!(cumulative, 430, "累计应为 100+50+200+80=430");
+    }
+
+    /// B1: 预算续期总量有界——每次触顶 +初始上限，N 次续期后 = 初始 × (N+1)
+    #[test]
+    fn test_budget_renewal_ceiling_is_bounded() {
+        let budget = LoopBudget {
+            max_total_tokens: 1_000,
+            max_budget_renewals: 2,
+            ..LoopBudget::default()
+        };
+        // 复现 loop_engine 的续期语义：触顶 → +初始上限，共 max_budget_renewals 次
+        let mut effective = budget.max_total_tokens;
+        let mut renewals: u32 = 0;
+        while renewals < budget.max_budget_renewals {
+            effective = effective.saturating_add(budget.max_total_tokens);
+            renewals += 1;
+        }
+        assert_eq!(effective, 3_000, "2 次续期后总上限应为初始 × 3");
+        assert_eq!(renewals, budget.max_budget_renewals, "续期次数不可超出额度");
+        // 额度用尽后再触顶 → 无第四次续期，走 budget_exceeded 终止
+        assert!(effective < 3_001);
+    }
+
+    /// B1: 额度 0 = 显式硬上限（agent.yaml 显式 max_total_tokens 的语义），触顶即停
+    #[test]
+    fn test_budget_renewal_zero_means_hard_cap() {
+        let budget = LoopBudget {
+            max_total_tokens: 1_000,
+            max_budget_renewals: 0,
+            ..LoopBudget::default()
+        };
+        let mut effective = budget.max_total_tokens;
+        let mut renewals: u32 = 0;
+        while renewals < budget.max_budget_renewals {
+            effective = effective.saturating_add(budget.max_total_tokens);
+            renewals += 1;
+        }
+        // 零额度下循环体一次都不进：上限不变、仍为初始值
+        assert_eq!(effective, 1_000, "零额度不应抬升上限");
+        assert_eq!(renewals, 0);
+    }
+
+    /// B1: 轮数续期默认额度与预算一致（2 次 → 总轮数 = 初始 × 3），可独立置 0
+    #[test]
+    fn test_round_renewal_defaults_align_with_budget() {
+        let budget = LoopBudget::default();
+        assert_eq!(budget.max_budget_renewals, DEFAULT_AUTO_RENEWALS);
+        assert_eq!(budget.max_round_renewals, DEFAULT_AUTO_RENEWALS);
+        // 轮数上限同步封顶：初始 50 × (1+2) = 150 轮
+        let mut effective = budget.max_tool_rounds;
+        for _ in 0..budget.max_round_renewals {
+            effective = effective.saturating_add(budget.max_tool_rounds);
+        }
+        assert_eq!(effective, 150);
     }
 }

@@ -58,6 +58,10 @@
 //!   连续 `stuck_threshold` 轮无变化时 emit `finish_reason="stuck"` 终止对话。
 //!   检测点在外层 `for tool_round` 循环底部，不在 `stream_with_retry` 内
 //!   （重试是网络层行为，不构成"停滞"语义）。
+//!
+//! B1 自动续期：预算（max_total_tokens）与轮数（max_tool_rounds）触顶不再立即
+//!   终止——续期额度未尽时 +初始上限继续跑（合法长任务不误杀），额度用尽才真停。
+//!   失控循环由 stuck_detect 独立熔断；额度有界保证总开销封顶 = 初始 × (1+额度)。
 
 use std::collections::HashMap;
 
@@ -270,10 +274,25 @@ async fn stream_loop_inner(
     // 不该触发该提示。正常工具流下恒 true（与改造前逐字等价）。
     let mut prev_round_had_tools = false;
 
+    // === B1 自动续期状态（预算/轮数触顶 + 仍有额度 → 抬升上限续跑）===
+    // 语义：撞上限不再是立即终态——先看续期额度，有则 +初始上限继续（合法长任务不
+    // 误杀），额度用尽才真停。失控保护不靠这里：stuck_detect（连续 stuck_threshold
+    // 轮无进展）独立触发终止；额度有界保证「看似有进展的失控循环」总开销仍封顶
+    // = 初始上限 × (1+额度)。agent.yaml 显式 max_total_tokens / tool_max_rounds →
+    // chat_cmd 置额度 0（显式硬上限不被静默突破）。
+    let initial_max_tokens = ctx.budget.max_total_tokens;
+    let mut effective_max_tokens = ctx.budget.max_total_tokens;
+    let mut budget_renewals: u32 = 0;
+    let initial_max_rounds = ctx.budget.max_tool_rounds;
+    let mut effective_max_rounds = ctx.budget.max_tool_rounds;
+    let mut round_renewals: u32 = 0;
+
     // === 工具执行循环 ===
     // 标签 'tool_round 供自动续写（finish_reason=length/max_tokens）跳回循环顶，
     // 复用同一 assistant 消息无缝拼接长输出（模式 C 治本）。
-    'tool_round: for tool_round in 0..ctx.budget.max_tool_rounds {
+    // B1: 无限 range + 顶部硬闸——轮数上限由 effective_max_rounds 动态决定
+    //（阶段 H 续期后抬升，max_tool_rounds=0 等边界由闸兜住），不再绑死在 range 上。
+    'tool_round: for tool_round in 0u32.. {
         if ctx.cancel.is_cancelled() {
             // 残留占位补事件：此处占位行必然是「新鲜空行」（chat_cmd 首占位，或上一轮
             // 阶段 H 建的下一轮占位，本轮尚未流式输出）。续写轮复用同 id 且阶段 C 已发过
@@ -290,6 +309,23 @@ async fn stream_loop_inner(
             }
             return finalize_cancel(&ctx.app, &ctx.pool, &ev, &current_asst_msg_id, tool_round)
                 .await;
+        }
+
+        // 【B1 轮数上限硬闸】无限 range 的等价界：正常流必在阶段 H 判定（终止或
+        // 续期抬升 effective_max_rounds 后放行），任何路径跳过阶段 H 时由此兜底。
+        // 此时上一轮 assistant 已 finalize + tool_result 已落盘，直接收尾安全。
+        if tool_round >= effective_max_rounds {
+            return finalize_success(
+                &ctx.app,
+                &ctx.pool,
+                &ev,
+                &current_asst_msg_id,
+                "tool_use",
+                synthesize_usage(first_prompt_tokens, total_completion_tokens, collected_usage),
+                first_prompt_tokens,
+                tool_round,
+            )
+            .await;
         }
 
         let round_timer = RoundTimer::new(tool_round);
@@ -324,13 +360,14 @@ async fn stream_loop_inner(
 
         // 第 2 轮起，在消息中注入剩余轮次信息（帮助 LLM 决定是否继续调工具）。
         // 仅当上一轮真的有工具调用时注入——续写链（前一轮纯文本截断）下不注入，
-        // 避免给模型「工具调用完毕」的误导提示。
+        // 避免给模型「工具调用完毕」的误导提示。分母用 effective_max_rounds
+        //（B1 续期抬升后提示中的总轮数保持真实）。
         if tool_round > 0 && prev_round_had_tools {
             ctx.messages.push(ChatMessage {
                 role: "user".into(),
                 content: vec![ContentBlock::text(format!(
                     "（第 {}/{} 轮工具调用完毕。如果还有未完成的操作请继续，如果已经完成请直接输出最终回答。）",
-                    tool_round, ctx.budget.max_tool_rounds
+                    tool_round, effective_max_rounds
                 ))],
                 source_rowid: None,
             });
@@ -510,43 +547,62 @@ async fn stream_loop_inner(
                 .await;
         }
 
-        // W4.2: Token 预算终止检查（落盘前）。fallback=Some 保证纯 tool_use / thinking-only
-        // 轮也写入终止说明，msg_id 恒有效（finalize_success 需 final_asst_msg_id 指向真实消息）。
-        if ctx.budget.max_total_tokens != usize::MAX
-            && cumulative_tokens > ctx.budget.max_total_tokens
-        {
-            tracing::warn!(
-                target: "ice_paw.chat",
-                "Token 预算已超限: cumulative={} > budget={}",
-                cumulative_tokens,
-                ctx.budget.max_total_tokens,
-            );
-            finalize_guard_logged(
-                &ctx.pool,
-                &batch_writer,
-                &ev,
-                &current_asst_msg_id,
-                &msg_text,
-                &round_blocks,
-                round_completion_tokens,
-                Some("（本次累计 token 达到上限，已停止。发送新消息即可继续。）"),
-                tool_round,
-                ctx.asst_model.as_deref(),
-                !continue_full_text.is_empty(),
-                round_gen_ms,
-            )
-            .await;
-            return finalize_success(
-                &ctx.app,
-                &ctx.pool,
-                &ev,
-                &current_asst_msg_id,
-                "budget_exceeded",
-                synthesize_usage(first_prompt_tokens, total_completion_tokens, collected_usage),
-                first_prompt_tokens,
-                tool_round + 1,
-            )
-            .await;
+        // W4.2: Token 预算终止检查（落盘前）。B1：触顶先尝试自动续期（+初始上限，
+        // 失控由 stuck_detect 独立兜底，额度有界保证总开销封顶），额度用尽才终止。
+        // fallback=Some 保证纯 tool_use / thinking-only 轮也写入终止说明，
+        // msg_id 恒有效（finalize_success 需 final_asst_msg_id 指向真实消息）。
+        if effective_max_tokens != usize::MAX && cumulative_tokens > effective_max_tokens {
+            if budget_renewals < ctx.budget.max_budget_renewals {
+                budget_renewals += 1;
+                let prev_cap = effective_max_tokens;
+                effective_max_tokens = effective_max_tokens.saturating_add(initial_max_tokens);
+                tracing::info!(
+                    target: "ice_paw.chat",
+                    "Token 预算自动续期: cumulative={} 触顶 {}，续期 {}/{} → 新上限 {}",
+                    cumulative_tokens,
+                    prev_cap,
+                    budget_renewals,
+                    ctx.budget.max_budget_renewals,
+                    effective_max_tokens,
+                );
+            } else {
+                tracing::warn!(
+                    target: "ice_paw.chat",
+                    "Token 预算已超限（续期额度用尽）: cumulative={} > budget={}",
+                    cumulative_tokens,
+                    effective_max_tokens,
+                );
+                finalize_guard_logged(
+                    &ctx.pool,
+                    &batch_writer,
+                    &ev,
+                    &current_asst_msg_id,
+                    &msg_text,
+                    &round_blocks,
+                    round_completion_tokens,
+                    Some("（本次累计 token 达到上限，已停止。发送新消息即可继续。）"),
+                    tool_round,
+                    ctx.asst_model.as_deref(),
+                    !continue_full_text.is_empty(),
+                    round_gen_ms,
+                )
+                .await;
+                return finalize_success(
+                    &ctx.app,
+                    &ctx.pool,
+                    &ev,
+                    &current_asst_msg_id,
+                    "budget_exceeded",
+                    synthesize_usage(
+                        first_prompt_tokens,
+                        total_completion_tokens,
+                        collected_usage,
+                    ),
+                    first_prompt_tokens,
+                    tool_round + 1,
+                )
+                .await;
+            }
         }
 
         // === M2.1: 停滞检测（落盘前）===
@@ -892,23 +948,42 @@ async fn stream_loop_inner(
 
         // 【阶段 H】若是最后一轮，当前 assistant（已 finalize）作为最终消息收尾；
         // 否则创建下一轮 assistant 占位 + 切 BatchWriter + emit chat:assistant-start。
-        if tool_round + 1 >= ctx.budget.max_tool_rounds {
-            tracing::info!(
-                target: "ice_paw.chat",
-                "已达最大工具调用轮数（{}），终止对话",
-                ctx.budget.max_tool_rounds,
-            );
-            return finalize_success(
-                &ctx.app,
-                &ctx.pool,
-                &ev,
-                &current_asst_msg_id,
-                "tool_use",
-                synthesize_usage(first_prompt_tokens, total_completion_tokens, collected_usage),
-                first_prompt_tokens,
-                tool_round + 1,
-            )
-            .await;
+        // B1：轮数触顶先尝试自动续期（+初始轮数，判据同预算续期——失控由 stuck_detect
+        // 独立兜底，额度有界保证总轮数封顶 = 初始 × (1+额度)），额度用尽才真停。
+        if tool_round + 1 >= effective_max_rounds {
+            if round_renewals < ctx.budget.max_round_renewals {
+                round_renewals += 1;
+                effective_max_rounds = effective_max_rounds.saturating_add(initial_max_rounds);
+                tracing::info!(
+                    target: "ice_paw.chat",
+                    "工具轮数自动续期: 已达 {} 轮，续期 {}/{} → 新上限 {} 轮",
+                    tool_round + 1,
+                    round_renewals,
+                    ctx.budget.max_round_renewals,
+                    effective_max_rounds,
+                );
+            } else {
+                tracing::info!(
+                    target: "ice_paw.chat",
+                    "已达最大工具调用轮数（{}），终止对话",
+                    effective_max_rounds,
+                );
+                return finalize_success(
+                    &ctx.app,
+                    &ctx.pool,
+                    &ev,
+                    &current_asst_msg_id,
+                    "tool_use",
+                    synthesize_usage(
+                        first_prompt_tokens,
+                        total_completion_tokens,
+                        collected_usage,
+                    ),
+                    first_prompt_tokens,
+                    tool_round + 1,
+                )
+                .await;
+            }
         }
 
         let next_asst_id = Uuid::new_v4().to_string();
@@ -963,8 +1038,9 @@ async fn stream_loop_inner(
         current_asst_finalized = false;
     }
 
-    // 兜底：逻辑上不可达（最后一轮必在阶段 H 的 tool_use 分支 return），
-    // 保留以满足函数返回类型。current_asst_msg_id 此时为最后一条有内容的 assistant。
+    // 兜底：逻辑上不可达（`0u32..` 无限 range 下，正常流必在阶段 H 终止分支或
+    // 顶部硬闸 return），保留以满足函数返回类型。current_asst_msg_id 此时为最后
+    // 一条有内容的 assistant。
     finalize_success(
         &ctx.app,
         &ctx.pool,
@@ -973,7 +1049,7 @@ async fn stream_loop_inner(
         "tool_use",
         synthesize_usage(first_prompt_tokens, total_completion_tokens, collected_usage),
         first_prompt_tokens,
-        ctx.budget.max_tool_rounds,
+        effective_max_rounds,
     )
     .await;
 }
