@@ -87,6 +87,20 @@ impl AnthropicAdapter {
     }
 }
 
+/// 拼接 Anthropic 兼容 Models 列表端点（「测试连接 / 拉取模型」用）。
+///
+/// Anthropic 协议 URL 结构固定 `{base}/v1/...`（同 [`stream_chat`] 的
+/// `/v1/messages`，无 OpenAI 那套「base 是否已含 vN」的歧义）。
+/// `?limit=1000`：官方默认分页 20 条，一次拉全（模型目录场景足够）。
+///
+/// # 示例
+/// - `https://api.anthropic.com` → `https://api.anthropic.com/v1/models?limit=1000`
+/// - `https://api.minimax.io/anthropic` → `.../anthropic/v1/models?limit=1000`
+/// - 末尾多余 `/` 自动 trim
+pub fn build_models_url(base: &str) -> String {
+    format!("{}/v1/models?limit=1000", base.trim_end_matches('/'))
+}
+
 #[async_trait]
 impl LlmProvider for AnthropicAdapter {
     async fn stream_chat(
@@ -276,5 +290,22 @@ mod tests {
         let adapter = AnthropicAdapter::new("m".into(), "https://x.com/anthropic".into(), false);
         let url = format!("{}/v1/messages", adapter.unwrap().base_url.trim_end_matches('/'));
         assert_eq!(url, "https://x.com/anthropic/v1/messages");
+    }
+
+    #[test]
+    fn models_url_official() {
+        assert_eq!(
+            build_models_url("https://api.anthropic.com"),
+            "https://api.anthropic.com/v1/models?limit=1000"
+        );
+    }
+
+    #[test]
+    fn models_url_minimax_trims_trailing_slash() {
+        // MiniMax 兼容端点 + 末尾多余斜杠
+        assert_eq!(
+            build_models_url("https://api.minimax.io/anthropic/"),
+            "https://api.minimax.io/anthropic/v1/models?limit=1000"
+        );
     }
 }
