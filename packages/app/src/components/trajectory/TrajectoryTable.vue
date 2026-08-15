@@ -510,6 +510,8 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
 .ev-error { color: var(--ip-danger-text); background: var(--ip-danger-bg); }
 .ev-discarded { color: var(--ip-color-text-disabled); background: var(--ip-color-bg-tertiary); }
 .ev-summary { color: var(--ip-color-text-secondary); background: var(--ip-color-bg-tertiary); }
+/* PLAN（计划快照）：成功色系——勾选清单的直觉语义 */
+.ev-plan { color: var(--ip-success-text); background: var(--ip-success-bg); }
 .ev-err { color: var(--ip-danger-text) !important; background: var(--ip-danger-bg) !important; }
 
 /* 摘要文本列（勿名 ev-summary：那是 SUMMARY kind 徽章类）。

@@ -17,6 +17,7 @@ import type {
   NewAgent,
   NewMcpServer,
   NewProject,
+  PlanSnapshot,
   Project,
   SessionEvent,
   UpdateProject,
@@ -304,6 +305,13 @@ const trajectory = {
     try {
       return await invoke<number>("trajectory_turn_offset", { conversationId, beforeSeq });
     } catch (err) { throw wrapInvokeError("trajectory.turnOffset", err); }
+  },
+  /** 会话当前计划快照（最后一条 plan_updated；null = 无计划/已清空）。
+   *  任务胶囊「计划段」+ PlanCard 取数用；live 更新靠 session:event-appended 过滤 kind */
+  async currentPlan(conversationId: string): Promise<PlanSnapshot | null> {
+    try {
+      return await invoke<PlanSnapshot | null>("get_session_plan", { conversationId });
+    } catch (err) { throw wrapInvokeError("trajectory.currentPlan", err); }
   },
 };
 

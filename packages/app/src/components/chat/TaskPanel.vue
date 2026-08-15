@@ -1,18 +1,23 @@
 <script setup lang="ts">
-// TaskPanel.vue — 会话级任务胶囊 + popover（MA-1 UX，C3）
+// TaskPanel.vue — 会话级任务胶囊 + popover（MA-1 UX，C3 + C5 计划段）
 //
 // 本会话派生任务（kind='delegation' 且 parent=本会话）的唯一索引入口：
 // 消息流里的委派卡片是「就地锚点」（读到哪看到哪），这里是全量索引——
 // 不用翻消息流找那个还在跑的任务。点击行 → 任务详情（子会话，直落轨迹 tab）。
 //
-// 取数全前端派生（conversations + streamingConvIds），零后端。
+// 取数：任务全前端派生（conversations + streamingConvIds）；计划走
+// get_session_plan（最后一条 plan_updated 全量快照），切会话/开面板/
+// session:event-appended(kind=plan_updated) 三处刷新。
 // 排序律（已拍板）：状态优先（进行中置顶）+ 时间倒序；不分页——本会话任务
 // 天然有限（深度=1、串行），超 MAX_ROWS 截断并提示进项目页看全量。
 // 状态两态：进行中（脉冲）/已结束（中性点）——done/failed 精确终态是 MA-2
-// 台账（turn_ended 派生状态机）的事，此处不伪造。
-import { computed, ref, watch, onBeforeUnmount } from "vue";
+// 台账（turn_ended 派生状态机）的事，此处不伪造。计划勾选同理恒为 agent 判断。
+import { computed, ref, watch, onMounted, onBeforeUnmount } from "vue";
+import { listen } from "@tauri-apps/api/event";
 import { useChatStore } from "../../stores/chat";
 import { formatTime } from "../../utils/time";
+import { bridge } from "../../api/bridge";
+import type { PlanSnapshot } from "../../types";
 
 const chat = useChatStore();
 
@@ -41,6 +46,26 @@ const MAX_ROWS = 8;
 const visibleTasks = computed(() => tasks.value.slice(0, MAX_ROWS));
 const anyRunning = computed(() => tasks.value.some((t) => t.running));
 
+// ---- 计划段（C5）：get_session_plan 快照；null = 无计划/已清空 → 段隐藏 ----
+const plan = ref<PlanSnapshot | null>(null);
+const planDone = computed(() => plan.value?.items.filter((i) => i.status === "done").length ?? 0);
+
+async function loadPlan() {
+  const cid = chat.activeConvId;
+  if (!cid) { plan.value = null; return; }
+  try {
+    plan.value = await bridge.trajectory.currentPlan(cid);
+  } catch { plan.value = null; } // 拉取失败静默（下次触发点重试）
+}
+
+/** 胶囊可见性：有任务或有计划（计划是意图文档，先于任何委派存在） */
+const panelVisible = computed(() => tasks.value.length > 0 || plan.value !== null);
+/** 胶囊文案：有任务显任务计数；只有计划时显计划进度 */
+const pillCount = computed(() => {
+  if (tasks.value.length > 0) return String(tasks.value.length);
+  return plan.value ? `${planDone.value}/${plan.value.items.length}` : "";
+});
+
 // ---- popover 开合（点击外部关闭；切会话收起——数据源已变） ----
 const open = ref(false);
 const panelRef = ref<HTMLElement | null>(null);
@@ -55,7 +80,29 @@ watch(open, (v) => {
   else document.removeEventListener("click", onDocClick);
 });
 onBeforeUnmount(() => document.removeEventListener("click", onDocClick));
-watch(() => chat.activeConvId, () => { open.value = false; });
+
+// 切会话：收起 + 计划随数据源切换重载（任务 computed 自更新）
+watch(() => chat.activeConvId, () => {
+  open.value = false;
+  void loadPlan();
+}, { immediate: true });
+// 开面板时重拉（关闭期间可能有过更新——事件只在面板所在会话活跃时被消费）
+watch(open, (v) => { if (v) void loadPlan(); });
+
+// live：本会话有新 plan_updated 即刷新（附录：通知在落库后发出，到达时必可查）
+let unlistenAppended: (() => void) | null = null;
+onMounted(async () => {
+  unlistenAppended = await listen<{ conversation_id: string; kind: string }>(
+    "session:event-appended",
+    (e) => {
+      if (e.payload.kind === "plan_updated"
+        && e.payload.conversation_id === chat.activeConvId) {
+        void loadPlan();
+      }
+    },
+  );
+});
+onBeforeUnmount(() => { unlistenAppended?.(); unlistenAppended = null; });
 
 function openTask(id: string) {
   open.value = false;
@@ -64,17 +111,17 @@ function openTask(id: string) {
 </script>
 
 <template>
-  <!-- 无任务时零占用（胶囊是索引不是状态栏；计划段（C5）存在时也会点亮胶囊） -->
-  <div v-if="tasks.length > 0" ref="panelRef" class="task-panel">
+  <!-- 无任务且无计划时零占用（胶囊是索引不是状态栏） -->
+  <div v-if="panelVisible" ref="panelRef" class="task-panel">
     <button
       class="task-pill"
       :class="{ open }"
-      :title="anyRunning ? '本会话的任务（有进行中）' : '本会话的任务'"
+      :title="anyRunning ? '本会话的任务与计划（有进行中）' : '本会话的任务与计划'"
       @click.stop="open = !open"
     >
       <span class="task-pill-dot" :class="{ running: anyRunning }" />
-      <span>任务</span>
-      <span class="task-pill-count">{{ tasks.length }}</span>
+      <span>{{ tasks.length > 0 ? '任务' : '计划' }}</span>
+      <span v-if="pillCount" class="task-pill-count">{{ pillCount }}</span>
     </button>
 
     <Transition name="dropdown">
@@ -88,6 +135,24 @@ function openTask(id: string) {
         <div v-if="tasks.length > MAX_ROWS" class="task-more">
           还有 {{ tasks.length - MAX_ROWS }} 个，全部任务请在项目页查看
         </div>
+        <div v-if="tasks.length === 0" class="task-more">暂无委派任务</div>
+
+        <!-- 计划段：意图文档全量快照（勾选恒为 agent 判断，非任务终态派生） -->
+        <template v-if="plan">
+          <div class="task-divider" />
+          <div class="task-popover-title">计划 {{ planDone }}/{{ plan.items.length }}</div>
+          <div
+            v-for="(it, i) in plan.items"
+            :key="i"
+            :class="['task-plan-row', it.task_conversation_id ? 'task-plan-link' : '']"
+            :title="it.task_conversation_id ? '此步骤挂有委派任务，点击打开' : it.text"
+            @click="it.task_conversation_id && openTask(it.task_conversation_id)"
+          >
+            <span :class="['plan-mark', `plan-mark-${it.status}`]" />
+            <span class="task-row-title">{{ it.text }}</span>
+            <span v-if="it.task_conversation_id" class="plan-jump" title="打开对应任务">↗</span>
+          </div>
+        </template>
       </div>
     </Transition>
   </div>
@@ -127,6 +192,7 @@ function openTask(id: string) {
   font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary);
   padding: 4px 10px 6px;
 }
+.task-divider { border-top: 1px solid var(--ip-color-border-default); margin: 4px 2px; }
 .task-row {
   display: flex; align-items: center; gap: 8px; width: 100%;
   padding: 7px 10px; border: none; border-radius: var(--ip-radius-md);
@@ -142,6 +208,19 @@ function openTask(id: string) {
 }
 .task-row-time { flex-shrink: 0; font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
 .task-more { padding: 6px 10px 4px; font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
+
+/* 计划条目行（与 PlanCard 同款状态标记，非按钮——仅挂任务的条目可点） */
+.task-plan-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px; border-radius: var(--ip-radius-md);
+}
+.task-plan-link { cursor: pointer; }
+.task-plan-link:hover { background: var(--ip-color-bg-tertiary); }
+.plan-mark { width: 8px; height: 8px; flex-shrink: 0; border-radius: 50%; border: 1.5px solid var(--ip-color-text-tertiary); }
+.plan-mark-in_progress { border-color: var(--ip-warning-base, #d97706); background: var(--ip-warning-base, #d97706); animation: task-pulse 1.2s ease-in-out infinite; }
+.plan-mark-done { border-color: var(--ip-success-base, #16a34a); background: var(--ip-success-base, #16a34a); }
+.task-plan-row .plan-mark-done + .task-row-title { text-decoration: line-through; color: var(--ip-color-text-tertiary); }
+.plan-jump { flex-shrink: 0; font-size: var(--ip-text-caption-size); color: var(--ip-primary-500); }
 
 .dropdown-enter-active { animation: task-drop 0.15s ease-out; }
 .dropdown-leave-active { animation: task-drop 0.1s ease-in reverse; }
