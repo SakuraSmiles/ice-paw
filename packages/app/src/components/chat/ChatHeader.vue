@@ -52,6 +52,25 @@ const activeAgent = computed(() => {
   return agent.getById(conv.agent_id);
 });
 
+// ===== MA-1 任务详情 v1：委派子会话的回路与状态 =====
+// 子会话不在侧栏，用户从委派卡片/任务胶囊进来——头部必须给「我是谁的任务、
+// 从哪来、回哪去」。深度=1 护栏保证父会话必为 kind='chat'（在侧栏列表内）。
+// 状态只有 进行中（streamingConvIds）/已结束 两态——done/failed 精确终态是
+// MA-2 台账（turn_ended 派生状态机）的事，此处不伪造。
+const delegation = computed(() => {
+  const conv = chat.activeConversation;
+  if (!conv || conv.kind !== "delegation") return null;
+  const parentId = conv.parent_conversation_id ?? null;
+  const parentTitle = parentId
+    ? (chat.conversations.find((c) => c.id === parentId)?.title ?? "父会话")
+    : null;
+  return { parentId, parentTitle, running: chat.streamingConvIds.has(conv.id) };
+});
+
+function goBackToParent() {
+  if (delegation.value?.parentId) chat.selectConversation(delegation.value.parentId);
+}
+
 function startEdit() {
   const conv = chat.activeConversation;
   if (!conv) return;
@@ -134,6 +153,16 @@ function viewInfo() {
 <template>
   <header class="chat-header" :class="{ 'has-tabbar': hasTabbar }">
     <div class="header-left">
+      <!-- MA-1 任务详情 v1：委派子会话的回路（返回父会话，落「对话」tab） -->
+      <button
+        v-if="delegation?.parentId"
+        class="back-btn"
+        :title="`返回父会话：${delegation.parentTitle}`"
+        @click="goBackToParent"
+      >
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12" /><polyline points="12 19 5 12 12 5" /></svg>
+        <span class="back-label">{{ delegation.parentTitle }}</span>
+      </button>
       <div class="header-info">
         <input
           v-if="editing"
@@ -146,12 +175,16 @@ function viewInfo() {
         />
         <h1 v-else class="header-title" @dblclick="startEdit">
           <span class="header-title-text">{{ chat.activeConversation?.title || "新对话" }}</span>
-          <!-- MA-1：委派子会话徽章——它不在侧栏列表里，须让用户知道来处与可达入口 -->
+          <!-- MA-1 任务详情 v1：徽章升级为「委派任务」+ 状态点（进行中脉冲/已结束中性；
+               done/failed 精确终态是 MA-2 台账，不伪造） -->
           <span
-            v-if="chat.activeConversation?.kind === 'delegation'"
+            v-if="delegation"
             class="header-kind-badge"
-            title="agent 委派的子会话（不在侧栏显示；由父会话委派卡片 / 项目任务列表进入）"
-          >委派会话</span>
+            :title="delegation.running ? 'agent 委派的任务 · 执行中' : 'agent 委派的任务 · 已结束'"
+          >
+            <span class="hdr-dot" :class="{ running: delegation.running }" />
+            委派任务
+          </span>
         </h1>
         <div class="header-meta">
           <span v-if="activeAgent" class="header-agent">{{ activeAgent.name }}</span>
@@ -234,8 +267,22 @@ function viewInfo() {
 .chat-header { display:flex; align-items:center; justify-content:space-between; padding:14px 24px; min-height:68px; border-bottom:1px solid var(--color-chat-header-border); background-color:var(--color-chat-header-bg); backdrop-filter:blur(8px); flex-shrink:0; position:relative; z-index:1; }
 /* 标签条在场（会话态）：去底边线，标题与标签条视觉一体（同底色无分割） */
 .chat-header.has-tabbar { border-bottom:none; }
-.header-left { display:flex; align-items:center; }
-.header-info { display:flex; flex-direction:column; gap:2px; }
+.header-left { display:flex; align-items:center; gap:10px; min-width:0; }
+.header-info { display:flex; flex-direction:column; gap:2px; min-width:0; }
+/* 返回父会话：委派子会话的唯一回路（子会话不在侧栏列表，无法点侧栏回去） */
+.back-btn {
+  display:flex; align-items:center; gap:4px; flex-shrink:0;
+  max-width:220px; padding:4px 10px; border:none; cursor:pointer;
+  border-radius:var(--ip-radius-md); background:transparent;
+  color:var(--ip-color-text-secondary); font-size:var(--ip-text-caption-size);
+  transition:all var(--ip-duration-fast) var(--ip-ease-out);
+}
+.back-btn:hover { background-color:var(--ip-color-bg-tertiary); color:var(--ip-color-text-primary); }
+.back-label { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+/* 任务状态点：与 DelegationCard/任务胶囊同语义（进行中脉冲=warning，结束=中性） */
+.hdr-dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; display:inline-block; margin-right:2px; background:var(--ip-color-text-tertiary); }
+.hdr-dot.running { background:var(--ip-warning-base, #d97706); animation:hdr-pulse 1.2s ease-in-out infinite; }
+@keyframes hdr-pulse { 0%, 100% { opacity:1; } 50% { opacity:0.35; } }
 .header-title { font-size:var(--ip-text-body-size); font-weight:var(--ip-font-weight-semibold); color:var(--ip-color-text-primary); margin:0; line-height:1.4; cursor:default; }
 .header-kind-badge { margin-left:8px; font-size:var(--ip-text-caption-size); font-weight:var(--ip-font-weight-medium); color:var(--ip-primary-600); background:var(--ip-primary-soft-bg, rgba(46,141,100,0.08)); border:1px solid var(--ip-primary-soft-border, rgba(46,141,100,0.25)); border-radius:var(--ip-radius-full, 999px); padding:1px 8px; vertical-align:1px; }
 .header-title-text { padding-bottom:1px; border-bottom:1px solid transparent; transition:border-color var(--ip-duration-fast) var(--ip-ease-out); }

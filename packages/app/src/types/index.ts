@@ -84,6 +84,8 @@ export interface Conversation {
   /** 会话类型（MA-1，后端 migration 45；旧数据后端已兜底 'chat'）：
    *  'chat'=用户↔agent · 'delegation'=agent 委派子会话（侧栏隐藏，经委派卡片/项目任务列表进入） */
   kind?: string;
+  /** 委派子会话的父会话 id（kind='delegation' 时必有；后端深度=1 护栏保证父为 chat 会话） */
+  parent_conversation_id?: string | null;
 }
 
 export interface NewConversation {
@@ -179,6 +181,15 @@ export interface ChatAssistantStartPayload {
   message_id: string;
 }
 
+/** 委派子会话创建成功即 emit（运行中卡片/任务胶囊可达；前端据此刷新会话列表） */
+export interface DelegationStartedPayload {
+  /** 父会话 id */
+  conversation_id: string;
+  child_conversation_id: string;
+  agent_name: string;
+  title: string;
+}
+
 export interface ChatChunkPayload {
   conversation_id: string;
   message_id: string;
@@ -266,7 +277,8 @@ export type SessionEvent =
   | (SessionEventBase & { kind: "message_discarded"; payload: MessageDiscardedPayload })
   | (SessionEventBase & { kind: "turn_ended"; payload: TurnEndedPayload })
   | (SessionEventBase & { kind: "modal_adapted"; payload: ModalAdaptedPayload })
-  | (SessionEventBase & { kind: "hook_injected"; payload: HookInjectedPayload });
+  | (SessionEventBase & { kind: "hook_injected"; payload: HookInjectedPayload })
+  | (SessionEventBase & { kind: "plan_updated"; payload: PlanUpdatedPayload });
 
 export interface TurnContextPayload {
   v?: number;
@@ -333,6 +345,21 @@ export interface ModalAdaptedPayload {
   items: ModalAdaptedItem[];
 }
 export interface HookInjectedPayload { v?: number; point: string; prompt: string; } // point: conversation_start|before_llm
+
+/** 计划条目（plan_updated 事件与 get_session_plan 快照共用形状）。
+ *  计划=意图文档（会话内容），与任务（委派会话，执行单元）正交——
+ *  task_conversation_id 是「声明→执行」的引用边，勾选恒为 agent 判断。 */
+export interface PlanItem {
+  text: string;
+  status: string; // pending | in_progress | done
+  task_conversation_id?: string | null;
+}
+
+/** plan_updated 事件 payload（全量快照，回放 last-wins 取最后一条 = 当前计划） */
+export interface PlanUpdatedPayload { v?: number; items: PlanItem[]; }
+
+/** get_session_plan 命令返回（当前计划快照 + 落库时间） */
+export interface PlanSnapshot { items: PlanItem[]; updated_at: string; }
 
 export interface ChatToolCallStartPayload {
   conversation_id: string; message_id: string; id: string; name: string;
