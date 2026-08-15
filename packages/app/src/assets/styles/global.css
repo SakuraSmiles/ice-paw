@@ -23,7 +23,7 @@
   --ip-focus-ring-danger-light: rgba(184, 61, 61, 0.20);
 
   /* ---- 布局层 token ---- */
-  --sidebar-width: 320px;
+  /* 侧栏宽度不再用固定 token（UX #2 可调宽 + 记忆，见 useResizablePanel） */
 
   /* ---- 自定义语义色 ---- */
   --color-sidebar-bg:        #FAFBFC;
