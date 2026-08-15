@@ -17,6 +17,7 @@ import type {
   MessageDiscardedPayload,
   MessageErrorPayload,
   ModalAdaptedPayload,
+  PlanUpdatedPayload,
   SummaryPayload,
   ToolExecutionPayload,
   UserMessagePayload,
@@ -44,6 +45,7 @@ const errP = computed(() => (ev.value?.event.kind === "message_error" ? (ev.valu
 const discP = computed(() => (ev.value?.event.kind === "message_discarded" ? (ev.value.event.payload as MessageDiscardedPayload) : null));
 const modalP = computed(() => (ev.value?.event.kind === "modal_adapted" ? (ev.value.event.payload as ModalAdaptedPayload) : null));
 const hookP = computed(() => (ev.value?.event.kind === "hook_injected" ? (ev.value.event.payload as HookInjectedPayload) : null));
+const planP = computed(() => (ev.value?.event.kind === "plan_updated" ? (ev.value.event.payload as PlanUpdatedPayload) : null));
 const attachP = computed(() =>
   ev.value?.event.kind === "attachment_stored"
     ? (ev.value.event.payload as { kind?: string; items?: { idx: number; name: string; kind: string; label?: string; token_est?: number }[] })
@@ -167,6 +169,9 @@ const tabs = computed<InspTab[]>(() => {
       break;
     case "message_discarded":
       mid.push({ id: "detail", label: "原因" });
+      break;
+    case "plan_updated":
+      mid.push({ id: "plan", label: "计划清单", badge: String(planP.value?.items.length ?? 0) });
       break;
     case "modal_adapted":
       mid.push({ id: "detail", label: "明细" });
@@ -312,6 +317,14 @@ async function copyPayload() {
           <div class="ikv ikv-top"><span>摘要预览</span><b class="iprev">{{ previewOf(sumP.content) }}</b></div>
         </section>
 
+        <section v-else-if="planP" class="isec">
+          <h4 class="isec-title">概览</h4>
+          <div class="ikv"><span>条目</span><b>{{ planP.items.length }} 步（{{ planP.items.filter((i) => i.status === "done").length }} 已完成）</b></div>
+          <div v-if="planP.items.some((i) => i.task_conversation_id)" class="ikv">
+            <span>挂接任务</span><b>{{ planP.items.filter((i) => i.task_conversation_id).length }} 步（清单页 ↗ 可见）</b>
+          </div>
+        </section>
+
         <section v-else-if="errP" class="isec">
           <h4 class="isec-title">概览</h4>
           <div class="ikv"><span>错误类别</span><b>{{ errP.kind }}</b></div>
@@ -404,6 +417,18 @@ async function copyPayload() {
         </div>
       </template>
 
+      <!-- ============ 计划清单（全量快照，行 = 当时整个计划） ============ -->
+      <template v-else-if="activeTab === 'plan'">
+        <div class="isec">
+          <div v-if="!planP?.items.length" class="insp-muted">（空清单——agent 清空了计划）</div>
+          <div v-for="(it, i) in planP?.items ?? []" :key="i" class="iplan-row">
+            <span class="iplan-mark" :data-status="it.status" />
+            <span class="iplan-text">{{ it.text }}</span>
+            <span v-if="it.task_conversation_id" class="iplan-task" :title="`任务会话 ${it.task_conversation_id}`">↗ 任务</span>
+          </div>
+        </div>
+      </template>
+
       <!-- ============ 明细（错误全文/原因/视觉适配/钩子/附件） ============ -->
       <template v-else-if="activeTab === 'detail'">
         <div v-if="errP" class="isec">
@@ -489,6 +514,20 @@ async function copyPayload() {
 .ev-user { color: var(--ip-info-text); background: var(--ip-info-bg); }
 .ev-tool { color: var(--ip-warning-text); background: var(--ip-warning-bg); }
 .ev-error { color: var(--ip-danger-text); background: var(--ip-danger-bg); }
+.ev-plan { color: var(--ip-success-text); background: var(--ip-success-bg); }
+
+/* 计划清单行：与 PlanCard/TaskPanel 同款状态标记（局部 scoped，不复用跨组件样式） */
+.iplan-row { display: flex; align-items: flex-start; gap: 8px; padding: 6px 0; }
+.iplan-mark {
+  width: 8px; height: 8px; margin-top: 5px; flex-shrink: 0;
+  border-radius: var(--ip-radius-full);
+  border: 1.5px solid var(--ip-color-text-tertiary);
+}
+.iplan-mark[data-status="in_progress"] { border-color: var(--ip-warning-base, #d97706); background: var(--ip-warning-base, #d97706); }
+.iplan-mark[data-status="done"] { border-color: var(--ip-success-base, #16a34a); background: var(--ip-success-base, #16a34a); }
+.iplan-row .iplan-mark[data-status="done"] + .iplan-text { text-decoration: line-through; color: var(--ip-color-text-tertiary); }
+.iplan-text { flex: 1; font-size: var(--ip-text-body-sm-size); color: var(--ip-color-text-body); }
+.iplan-task { flex-shrink: 0; font-size: 11px; color: var(--ip-primary-600); }
 .insp-meta {
   font-size: 11px;
   font-family: var(--ip-font-mono, monospace);

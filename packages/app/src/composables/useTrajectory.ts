@@ -29,20 +29,22 @@ import type {
   TurnContextPayload,
   TurnEndedPayload,
   UserMessagePayload,
+  PlanUpdatedPayload,
 } from "../types";
 
 // =========================================================================
 // 行模型
 // =========================================================================
 
-/** 行 kind：13 种日志 kind 的 UI 投影（徽章文案 + 颜色语义） */
-export type RowKind = "user" | "assistant" | "tool" | "summary" | "error" | "discarded" | "aux";
+/** 行 kind：14 种日志 kind 的 UI 投影（徽章文案 + 颜色语义） */
+export type RowKind = "user" | "assistant" | "tool" | "summary" | "plan" | "error" | "discarded" | "aux";
 
 export const ROW_KIND_LABELS: Record<RowKind, string> = {
   user: "USER",
   assistant: "ASSISTANT",
   tool: "TOOL",
   summary: "SUMMARY",
+  plan: "PLAN",
   error: "ERROR",
   discarded: "DISCARD",
   aux: "AUX",
@@ -201,6 +203,16 @@ function summarizeEvent(ev: SessionEvent): { kind: RowKind; summary: string; isE
     case "summary_updated": {
       const p = ev.payload as SummaryPayload;
       return { kind: "summary", summary: firstLine(p.content), isError: false, durationMs: null, tokens: null, thinkingDerived: false };
+    }
+    case "plan_updated": {
+      const p = ev.payload as PlanUpdatedPayload;
+      const done = p.items.filter((it) => it.status === "done").length;
+      const first = firstLine(p.items[0]?.text ?? "");
+      // 全量快照语义：每行即当时整个计划；首条目带上下文，进度给扫读锚点
+      const summary = p.items.length === 0
+        ? "已清空计划"
+        : `${done}/${p.items.length}${first ? ` · ${first}` : ""}`;
+      return { kind: "plan", summary, isError: false, durationMs: null, tokens: null, thinkingDerived: false };
     }
     case "message_error": {
       const p = ev.payload as MessageErrorPayload;
