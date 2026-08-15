@@ -6,6 +6,7 @@ import { useProjectStore } from "../stores/project";
 import { useAgentStore } from "../stores/agent";
 import { useChatStore } from "../stores/chat";
 import { bridge } from "../api/bridge";
+import { formatTime } from "../utils/time";
 import type { NewProject, Project } from "../types";
 
 const project = useProjectStore();
@@ -239,9 +240,35 @@ function memberNames(p: Project): string {
   return names.join("、");
 }
 
+// ===== MA-1：委派任务极简列表（入口保障——侧栏隐藏 delegation 会话后须有可达路径；
+// MA-2 从事件日志派生完整台账/状态机，本轮只保「看得见 + 进得去」）=====
+const expandedTasksId = ref<string | null>(null);
+
+function toggleTasks(p: Project) {
+  expandedTasksId.value = expandedTasksId.value === p.id ? null : p.id;
+}
+
+function delegationConvsOf(pid: string) {
+  return chat.conversations
+    .filter((c) => c.project_id === pid && c.kind === "delegation")
+    .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+}
+
+/** 任务状态点：bgStreams/激活流式=进行中（脉冲）；其余=已结束。
+ *  done/failed 之分需要 turn_ended 派生（MA-2 台账），v1 不伪造。 */
+function taskRunning(convId: string): boolean {
+  return chat.streamingConvIds.has(convId);
+}
+
+function openDelegation(convId: string) {
+  chat.openConversationAtTrajectory(convId);
+}
+
 onMounted(() => {
   project.load();
   agent.load();
+  // 委派任务列表依赖会话缓存（侧栏常驻加载，此处兜底直入本页的场景）
+  void chat.loadConversations();
 });
 </script>
 
@@ -364,6 +391,30 @@ onMounted(() => {
               <polyline points="21 8 21 21 3 21 3 8" /><rect x="1" y="3" width="22" height="5" /><line x1="10" y1="12" x2="14" y2="12" />
             </svg>
           </button>
+        </div>
+
+        <!-- MA-1：委派任务（项目维度入口——delegation 后台子会话不在侧栏，此处保「看得见 + 进得去」） -->
+        <div v-if="delegationConvsOf(p.id).length > 0" class="tasks-block" @click.stop>
+          <button class="tasks-toggle" @click="toggleTasks(p)">
+            <svg class="tasks-chev" :class="{ rotated: expandedTasksId === p.id }" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6" /></svg>
+            <span>委派任务</span>
+            <span class="tasks-count">{{ delegationConvsOf(p.id).length }}</span>
+            <span v-if="delegationConvsOf(p.id).some((c) => taskRunning(c.id))" class="tasks-live">进行中</span>
+          </button>
+          <div v-if="expandedTasksId === p.id" class="tasks-list">
+            <button
+              v-for="c in delegationConvsOf(p.id)"
+              :key="c.id"
+              class="task-item"
+              :title="taskRunning(c.id) ? '进行中，点击查看轨迹' : '已结束，点击查看轨迹'"
+              @click="openDelegation(c.id)"
+            >
+              <span class="task-dot" :class="{ running: taskRunning(c.id) }"></span>
+              <span class="task-title">{{ c.title || "委派任务" }}</span>
+              <span class="task-agent">{{ agent.getById(c.agent_id)?.name || "" }}</span>
+              <span class="task-time">{{ formatTime(c.updated_at) }}</span>
+            </button>
+          </div>
         </div>
 
         <!-- 展开态：内联编辑配置（不跳页、不切换对话空间） -->
@@ -735,4 +786,52 @@ onMounted(() => {
 .overlay-enter-active .perm-panel, .overlay-leave-active .perm-panel { transition: transform var(--ip-duration-base) var(--ip-ease-out), opacity var(--ip-duration-base) var(--ip-ease-out); }
 .overlay-enter-from, .overlay-leave-to { opacity: 0; }
 .overlay-enter-from .perm-panel, .overlay-leave-to .perm-panel { opacity: 0; transform: scale(0.96) translateY(6px); }
+
+/* ===== MA-1：委派任务（项目卡内极简列表，v1）===== */
+.tasks-block {
+  margin-top: 10px; padding-top: 8px;
+  border-top: 1px dashed var(--ip-color-border-default);
+}
+.tasks-toggle {
+  display: flex; align-items: center; gap: 6px;
+  background: none; border: none; padding: 0; cursor: pointer;
+  font-family: inherit; font-size: var(--ip-text-caption-size);
+  color: var(--ip-color-text-tertiary);
+  transition: color var(--ip-duration-fast) var(--ip-ease-out);
+}
+.tasks-toggle:hover { color: var(--ip-color-text-secondary); }
+.tasks-chev { transition: transform var(--ip-duration-fast) var(--ip-ease-out); }
+.tasks-chev.rotated { transform: rotate(90deg); }
+.tasks-count {
+  font-size: 10px; line-height: 16px; padding: 0 5px;
+  color: var(--ip-color-text-tertiary); background: var(--ip-color-bg-tertiary);
+  border-radius: var(--ip-radius-full);
+}
+/* 「进行中」徽章走 tint 令牌（soft 系），不直接用 primary 底色 */
+.tasks-live {
+  font-size: 10px; line-height: 16px; padding: 0 6px;
+  color: var(--ip-color-primary-tint-text); background: var(--ip-color-primary-tint-bg);
+  border-radius: var(--ip-radius-full);
+}
+.tasks-list { margin-top: 6px; display: flex; flex-direction: column; gap: 2px; }
+.task-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px; border: none; border-radius: var(--ip-radius-md);
+  background-color: var(--ip-color-bg-tertiary); cursor: pointer;
+  font-family: inherit; text-align: left;
+  transition: background-color var(--ip-duration-fast) var(--ip-ease-out);
+}
+.task-item:hover { background-color: var(--ip-primary-soft-bg, var(--ip-color-bg-secondary)); }
+/* 状态点诚实原则：只区分「进行中」（脉冲）与「已结束」（中性）；
+   done/failed 之分需 turn_ended 派生（MA-2 台账），v1 不伪造。 */
+.task-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; background: var(--ip-color-text-disabled); }
+.task-dot.running { background: var(--ip-primary-500); animation: task-dot-pulse 1.2s ease-in-out infinite; }
+@keyframes task-dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+.task-title {
+  flex: 1; min-width: 0;
+  font-size: var(--ip-text-caption-size); color: var(--ip-color-text-secondary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.task-agent { flex-shrink: 0; font-size: 11px; color: var(--ip-primary-600); font-weight: var(--ip-font-weight-medium); }
+.task-time { flex-shrink: 0; font-size: 11px; color: var(--ip-color-text-disabled); font-variant-numeric: tabular-nums; }
 </style>

@@ -16,6 +16,7 @@ import { useChatStore } from "../../stores/chat";
 import { formatTime, formatDateLabel } from "../../utils/time";
 import MarkdownRenderer from "./MarkdownRenderer.vue";
 import ConfigProposalCard from "./ConfigProposalCard.vue";
+import DelegationCard from "./DelegationCard.vue";
 import ImagePreview from "./ImagePreview.vue";
 import AttachmentDetail from "./AttachmentDetail.vue";
 import { useThinkingTimer } from "../../composables/useThinkingTimer";
@@ -263,6 +264,87 @@ function findToolResult(
 /** 查询某个 tool_use_id 对应的 tool_result 是否有 isError（跨消息配对）*/
 function getToolHasError(toolUseId: string, msgIdx: number): boolean {
   return findToolResult(toolUseId, msgIdx)?.isError ?? false;
+}
+
+// ===== MA-1：delegate_to_agent 委派卡片（DelegationCard 的取数层）=====
+/** 解析委派工具参数（agent_id/task）。流式期间参数逐字到达，解析失败返回 null。 */
+function parseDelegateInput(input: string): { agentId: string; task: string } | null {
+  try {
+    const o = JSON.parse(input) as { agent_id?: unknown; task?: unknown };
+    if (o && typeof o.agent_id === "string") {
+      return { agentId: o.agent_id, task: typeof o.task === "string" ? o.task : "" };
+    }
+  } catch { /* 参数未接收完/非 JSON */ }
+  return null;
+}
+
+/** 解析委派 tool_result（child_conversation_id/agent_name/finish_reason/rounds）。
+ *  Err 路径的 content 是错误文案非 JSON → null（状态走 isError）。 */
+function parseDelegateResult(content: string): {
+  childConvId: string | null; agentName: string | null;
+  finishReason: string | null; rounds: number | null;
+} | null {
+  try {
+    const o = JSON.parse(content) as Record<string, unknown>;
+    if (o && (typeof o.child_conversation_id === "string" || typeof o.agent_name === "string")) {
+      return {
+        childConvId: typeof o.child_conversation_id === "string" ? o.child_conversation_id : null,
+        agentName: typeof o.agent_name === "string" ? o.agent_name : null,
+        finishReason: typeof o.finish_reason === "string" ? o.finish_reason : null,
+        rounds: typeof o.rounds === "number" ? o.rounds : null,
+      };
+    }
+  } catch { /* 非委派 JSON */ }
+  return null;
+}
+
+/** 历史 tool_use 的委派卡片取数：跨消息配对 tool_result，无结果=进行中。 */
+function delegateCardFor(
+  tu: { id: string; name: string; input: string },
+  msgIdx: number,
+): {
+  agentName: string; task: string; status: "running" | "done" | "error";
+  childConvId: string | null; finishReason: string | null; rounds: number | null; hasError: boolean;
+} | null {
+  if (tu.name !== "delegate_to_agent") return null;
+  const input = parseDelegateInput(tu.input);
+  const tr = findToolResult(tu.id, msgIdx);
+  const dr = tr && !tr.isError ? parseDelegateResult(tr.content) : null;
+  return {
+    agentName: dr?.agentName ?? input?.agentId ?? "…",
+    task: input?.task ?? "",
+    status: !tr ? "running" : tr.isError ? "error" : "done",
+    childConvId: dr?.childConvId ?? null,
+    finishReason: dr?.finishReason ?? null,
+    rounds: dr?.rounds ?? null,
+    hasError: tr?.isError ?? false,
+  };
+}
+
+/** 流式中的委派卡片取数：call.arguments 逐字到达，call.result 到达即完成。 */
+function delegateStreamCard(call: {
+  name: string; arguments: string; ended: boolean;
+  result?: { content: string; isError: boolean } | null;
+}): {
+  agentName: string; task: string; status: "running" | "done" | "error";
+  childConvId: string | null; finishReason: string | null; rounds: number | null;
+} | null {
+  if (call.name !== "delegate_to_agent") return null;
+  const input = parseDelegateInput(call.arguments || "{}");
+  const dr = call.result && !call.result.isError ? parseDelegateResult(call.result.content) : null;
+  return {
+    agentName: dr?.agentName ?? input?.agentId ?? "…",
+    task: input?.task ?? (call.ended ? "" : "正在接收参数…"),
+    status: !call.result ? "running" : call.result.isError ? "error" : "done",
+    childConvId: dr?.childConvId ?? null,
+    finishReason: dr?.finishReason ?? null,
+    rounds: dr?.rounds ?? null,
+  };
+}
+
+/** 委派卡片「查看轨迹」：打开子会话并直落轨迹 tab（store 附带刷新会话列表）。 */
+function openChildConv(childId: string) {
+  chat.openConversationAtTrajectory(childId);
 }
 
 /** 判断 user 消息是否仅含 tool_result（无文本/图片）。
@@ -542,57 +624,110 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
                 <!-- 工具调用（历史/刚结束，从 content_blocks 解析，非流式） -->
                 <div v-if="parseToolUseBlocks(item.msg.content_blocks).length > 0 && !(isLiveAssistant(item) && toolCallList.length > 0)" class="tools-strip">
                   <div v-for="tu in parseToolUseBlocks(item.msg.content_blocks)" :key="tu.id">
-                    <div class="tool-toggle" @click="toggleToolCall(tu.id)">
-                      <span class="tool-chevron">{{ expandedToolCalls.has(tu.id) ? '▾' : '▸' }}</span>
-                      <span class="tool-name">{{ tu.name }}</span>
-                      <span class="tool-preview">{{ truncateJson(tu.input) }}</span>
-                      <span :class="['tool-dot', getToolHasError(tu.id, item.idx) ? 'tool-dot-err' : 'tool-dot-ok']"></span>
-                    </div>
-                    <Transition name="tool-slide">
-                      <div v-if="expandedToolCalls.has(tu.id)" class="tool-expand">
-                        <div class="tool-expand-group">
-                          <div class="tool-expand-hdr">参数</div>
-                          <pre class="tool-expand-code">{{ formatJson(tu.input) }}</pre>
-                        </div>
-                        <template v-for="tr in [findToolResult(tu.id, item.idx)]" :key="tr ? 'has-result' : 'no-result'">
-                          <div v-if="tr" class="tool-expand-group">
-                            <div :class="['tool-expand-hdr', tr.isError ? 'hdr-err' : '']">{{ tr.isError ? '错误' : '结果' }}</div>
-                            <pre :class="['tool-expand-code', tr.isError ? 'code-err' : '']">{{ tr.content }}</pre>
+                    <!-- MA-1：delegate_to_agent 渲染为委派卡片（失败时补通用行承载原始错误） -->
+                    <template v-for="d in [delegateCardFor(tu, item.idx)]" :key="d ? 'dlg-card' : 'dlg-none'">
+                      <template v-if="d">
+                        <DelegationCard
+                          :agent-name="d.agentName"
+                          :task="d.task"
+                          :status="d.status"
+                          :child-conv-id="d.childConvId"
+                          :finish-reason="d.finishReason"
+                          :rounds="d.rounds"
+                          @open-child="openChildConv"
+                        />
+                        <template v-if="d.hasError">
+                          <div class="tool-toggle" @click="toggleToolCall(tu.id)">
+                            <span class="tool-chevron">{{ expandedToolCalls.has(tu.id) ? '▾' : '▸' }}</span>
+                            <span class="tool-name">{{ tu.name }}</span>
+                            <span class="tool-preview">调用失败</span>
+                            <span class="tool-dot tool-dot-err"></span>
                           </div>
+                          <Transition name="tool-slide">
+                            <div v-if="expandedToolCalls.has(tu.id)" class="tool-expand">
+                              <div class="tool-expand-group">
+                                <div class="tool-expand-hdr">参数</div>
+                                <pre class="tool-expand-code">{{ formatJson(tu.input) }}</pre>
+                              </div>
+                              <template v-for="tr in [findToolResult(tu.id, item.idx)]" :key="tr ? 'has-result' : 'no-result'">
+                                <div v-if="tr" class="tool-expand-group">
+                                  <div class="tool-expand-hdr hdr-err">错误</div>
+                                  <pre class="tool-expand-code code-err">{{ tr.content }}</pre>
+                                </div>
+                              </template>
+                            </div>
+                          </Transition>
                         </template>
-                      </div>
-                    </Transition>
+                      </template>
+                      <template v-else>
+                        <div class="tool-toggle" @click="toggleToolCall(tu.id)">
+                          <span class="tool-chevron">{{ expandedToolCalls.has(tu.id) ? '▾' : '▸' }}</span>
+                          <span class="tool-name">{{ tu.name }}</span>
+                          <span class="tool-preview">{{ truncateJson(tu.input) }}</span>
+                          <span :class="['tool-dot', getToolHasError(tu.id, item.idx) ? 'tool-dot-err' : 'tool-dot-ok']"></span>
+                        </div>
+                        <Transition name="tool-slide">
+                          <div v-if="expandedToolCalls.has(tu.id)" class="tool-expand">
+                            <div class="tool-expand-group">
+                              <div class="tool-expand-hdr">参数</div>
+                              <pre class="tool-expand-code">{{ formatJson(tu.input) }}</pre>
+                            </div>
+                            <template v-for="tr in [findToolResult(tu.id, item.idx)]" :key="tr ? 'has-result' : 'no-result'">
+                              <div v-if="tr" class="tool-expand-group">
+                                <div :class="['tool-expand-hdr', tr.isError ? 'hdr-err' : '']">{{ tr.isError ? '错误' : '结果' }}</div>
+                                <pre :class="['tool-expand-code', tr.isError ? 'code-err' : '']">{{ tr.content }}</pre>
+                              </div>
+                            </template>
+                          </div>
+                        </Transition>
+                      </template>
+                    </template>
                   </div>
                 </div>
 
                 <!-- 工具调用（当前流式） -->
                 <div v-if="isLiveAssistant(item) && toolCallList.length > 0" class="tools-strip">
                   <div v-for="call in toolCallList" :key="call.id">
-                    <div class="tool-toggle" @click="toggleToolCall(call.id)">
-                      <span class="tool-chevron">{{ expandedToolCalls.has(call.id) ? '▾' : '▸' }}</span>
-                      <span class="tool-name">{{ call.name }}</span>
-                      <span v-if="call.result?.durationMs" class="tool-duration">{{ formatDuration(call.result.durationMs) }}</span>
-                      <span class="tool-preview">{{ truncateJson(call.arguments || '') }}</span>
-                      <span v-if="call.ended && call.result" :class="['tool-dot', call.result.isError ? 'tool-dot-err' : 'tool-dot-ok']"></span>
-                      <span v-else-if="call.ended" class="tool-dot tool-dot-wait"></span>
-                      <span v-else class="tool-dot tool-dot-busy"></span>
-                    </div>
-                    <Transition name="tool-slide">
-                      <div v-if="expandedToolCalls.has(call.id)" class="tool-expand">
-                        <div class="tool-expand-group">
-                          <div class="tool-expand-hdr">参数</div>
-                          <pre class="tool-expand-code">{{ formatJson(call.arguments) }}</pre>
+                    <!-- MA-1：流式中的委派卡片（参数逐字到达/结果即完成） -->
+                    <template v-for="d in [delegateStreamCard(call)]" :key="d ? 'dlg-live' : 'dlg-none'">
+                      <DelegationCard
+                        v-if="d"
+                        :agent-name="d.agentName"
+                        :task="d.task"
+                        :status="d.status"
+                        :child-conv-id="d.childConvId"
+                        :finish-reason="d.finishReason"
+                        :rounds="d.rounds"
+                        @open-child="openChildConv"
+                      />
+                      <template v-else>
+                        <div class="tool-toggle" @click="toggleToolCall(call.id)">
+                          <span class="tool-chevron">{{ expandedToolCalls.has(call.id) ? '▾' : '▸' }}</span>
+                          <span class="tool-name">{{ call.name }}</span>
+                          <span v-if="call.result?.durationMs" class="tool-duration">{{ formatDuration(call.result.durationMs) }}</span>
+                          <span class="tool-preview">{{ truncateJson(call.arguments || '') }}</span>
+                          <span v-if="call.ended && call.result" :class="['tool-dot', call.result.isError ? 'tool-dot-err' : 'tool-dot-ok']"></span>
+                          <span v-else-if="call.ended" class="tool-dot tool-dot-wait"></span>
+                          <span v-else class="tool-dot tool-dot-busy"></span>
                         </div>
-                        <div v-if="call.result" class="tool-expand-group">
-                          <div :class="['tool-expand-hdr', call.result.isError ? 'hdr-err' : '']">{{ call.result.isError ? '错误' : '结果' }}</div>
-                          <pre :class="['tool-expand-code', call.result.isError ? 'code-err' : '']">{{ call.result.content }}</pre>
-                        </div>
-                        <div v-else class="tool-expand-group">
-                          <div class="tool-expand-hdr">结果</div>
-                          <div class="tool-expand-pending">{{ call.ended ? '等待执行结果…' : '正在接收参数…' }}</div>
-                        </div>
-                      </div>
-                    </Transition>
+                        <Transition name="tool-slide">
+                          <div v-if="expandedToolCalls.has(call.id)" class="tool-expand">
+                            <div class="tool-expand-group">
+                              <div class="tool-expand-hdr">参数</div>
+                              <pre class="tool-expand-code">{{ formatJson(call.arguments) }}</pre>
+                            </div>
+                            <div v-if="call.result" class="tool-expand-group">
+                              <div :class="['tool-expand-hdr', call.result.isError ? 'hdr-err' : '']">{{ call.result.isError ? '错误' : '结果' }}</div>
+                              <pre :class="['tool-expand-code', call.result.isError ? 'code-err' : '']">{{ call.result.content }}</pre>
+                            </div>
+                            <div v-else class="tool-expand-group">
+                              <div class="tool-expand-hdr">结果</div>
+                              <div class="tool-expand-pending">{{ call.ended ? '等待执行结果…' : '正在接收参数…' }}</div>
+                            </div>
+                          </div>
+                        </Transition>
+                      </template>
+                    </template>
                   </div>
                 </div>
               </template>

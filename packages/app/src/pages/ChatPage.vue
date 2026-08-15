@@ -21,9 +21,16 @@ const chat = useChatStore();
 type ChatTab = "chat" | "trajectory";
 const activeTab = ref<ChatTab>("chat");
 
-// 切会话 → 回到「对话」标签（轨迹视图自身会按新 conversationId 重载）
+// 切会话 → 回到「对话」标签（轨迹视图自身会按新 conversationId 重载）。
+// 例外：openConversationAtTrajectory 置了标志（委派卡片/项目任务列表入口）→
+// 直落轨迹 tab，消费后清标志。
 watch(() => chat.activeConvId, () => {
-  activeTab.value = "chat";
+  if (chat.openTrajectoryNext) {
+    chat.openTrajectoryNext = false;
+    activeTab.value = "trajectory";
+  } else {
+    activeTab.value = "chat";
+  }
 });
 </script>
 
