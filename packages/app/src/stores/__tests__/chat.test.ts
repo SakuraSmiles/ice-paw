@@ -128,6 +128,28 @@ describe("chatStore", () => {
       const store = useChatStore();
       expect(store.undoDeleteConversation("nope")).toBe(false);
     });
+
+    it("loadConversations during undo window does not resurrect pending-delete conv", async () => {
+      // 复活竞态（手测「删除不生效」根因之一）：乐观删除后 5s 才真删后端，
+      // 窗口内任何后台刷新（如 delegation-started）把「已删」行带回列表
+      mockInvoke.mockResolvedValue(undefined);
+      const store = useChatStore();
+      store.conversations = [fakeConv("c1"), fakeConv("c2")];
+      store.activeConvId = "c1";
+
+      await store.deleteConversation("c1");
+      expect(store.conversations).toHaveLength(1);
+
+      // 后端还没真删——listAll 仍返回 c1；刷新不得回灌
+      mockInvoke.mockResolvedValueOnce([fakeConv("c1"), fakeConv("c2")]);
+      await store.loadConversations();
+      expect(store.conversations.map((c) => c.id)).toEqual(["c2"]);
+
+      // 撤销仍可恢复（独立于刷新路径）
+      const restored = store.undoDeleteConversation("c1");
+      expect(restored).toBe(true);
+      expect(store.conversations.map((c) => c.id)).toContain("c1");
+    });
   });
 
   describe("streaming state machine", () => {

@@ -211,13 +211,13 @@ async function togglePin() {
 
       <div ref="deleteZoneRef" class="delete-zone">
         <Transition name="confirmbar">
-          <div v-if="confirming" class="confirm-bar">
+          <div v-if="confirming" class="confirm-bar" @click.stop>
             <span class="confirm-text">删除此对话？</span>
             <button class="confirm-btn" @click="cancelDelete">取消</button>
             <button class="confirm-btn confirm-btn-danger" @click="confirmDelete">删除</button>
           </div>
         </Transition>
-        <button v-if="!confirming" class="header-btn" title="删除对话" @click="startDelete">
+        <button v-if="!confirming" class="header-btn" title="删除对话" @click.stop="startDelete">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
         </button>
       </div>

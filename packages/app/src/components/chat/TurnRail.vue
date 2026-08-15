@@ -11,12 +11,19 @@
   Emits: jump(messageId) / latest()
 -->
 <script setup lang="ts">
-import { ref } from "vue";
+import { ref, computed } from "vue";
 import type { TurnBucket } from "../../composables/useTurnRail";
 import { formatDateLabel, formatTime } from "../../utils/time";
 
-defineProps<{ buckets: TurnBucket[]; activeTurn: number | null; showLatest: boolean }>();
+const props = defineProps<{ buckets: TurnBucket[]; activeTurn: number | null; showLatest: boolean }>();
 const emit = defineEmits<{ jump: [messageId: string]; latest: [] }>();
+
+// 轨道高度 = 内容驱动（每 tick 目标 20px + 底部「跳最新」钮），被 max-height:72%
+// 封顶。两种形态自动切换：少轮 → 紧凑小轨；多轮 → 封顶后 tick 由 flex 均分压缩
+//（min-height:0 保证永不溢出轨道区——固定 9px tick 在多轮时会挤出容器外）。
+const railStyle = computed(() => ({
+  height: `${props.buckets.length * 20 + 34}px`,
+}));
 
 // ---- tooltip：跟随 hovered tick 定位（轨道左侧展开，盖在内容列上） ----
 const hover = ref<{ top: number; bucket: TurnBucket } | null>(null);
@@ -40,7 +47,7 @@ function bucketTime(iso: string): string {
 </script>
 
 <template>
-  <nav v-if="buckets.length >= 2" class="turn-rail" aria-label="轮次导航">
+  <nav v-if="buckets.length >= 2" class="turn-rail" :style="railStyle" aria-label="轮次导航">
     <div class="turn-rail-track" @mouseleave="onTickLeave">
       <button
         v-for="b in buckets"
@@ -72,7 +79,8 @@ function bucketTime(iso: string): string {
 </template>
 
 <style scoped>
-/* 轨道：右侧预留带内，垂直居中、贴内容列右缘。高度不抢满——目录条不是滚动条 */
+/* 轨道：右侧预留带内，垂直居中、贴内容列右缘。高度由内容驱动（内联 style）、
+   max-height 封顶——目录条不是滚动条，也不与「跳最新」钮抢位 */
 .turn-rail {
   position: absolute;
   right: 10px;
@@ -85,21 +93,21 @@ function bucketTime(iso: string): string {
   gap: 8px;
   z-index: 3;
 }
-/* tick 轨：flex 均布（justify-between 让首尾贴边，中间等距） */
+/* tick 轨：占满轨道余高；tick 均分拉伸（flex-basis 0），多轮时逐个压扁
+   而非溢出，少轮时天然展开——任何轮数都是一条完整目录 */
 .turn-rail-track {
   position: relative;
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
   align-items: center;
   width: 22px;
 }
 .turn-tick {
-  flex: 0 0 auto;
+  flex: 1 1 0;
+  min-height: 0;
   width: 22px;
-  height: 9px;
   padding: 0;
   border: none;
   background: transparent;

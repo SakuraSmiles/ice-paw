@@ -87,21 +87,30 @@ const open = ref(false);
 const panelRef = ref<HTMLElement | null>(null);
 
 // ---- 自动展开（UX #3）：新委派任务启动时展开一次（用户拍板时机） ----
-// 同一任务只触发一次（seen 记账）；切会话的首个快照只记账不弹——
-// 否则每次切进「有运行中任务」的会话都会弹，打扰。
+// 触发条件是「任务进入 running」而非「任务出现」：delegation-started 刷新列表时
+// 子会话还没流出首个 chunk（running=false），若只看新增任务，seen 记账会在
+// running 到来前把任务吞掉——popover 永不自动展开（手测 #4 根因）。
+// autoOpenedIds 独立记账：切会话时把「已 running」的种子进去（切入时已在跑的
+// 不算「新启动」，不弹）；每任务只自动展开一次，用户手动关后不追弹。
 const seenTaskIds = new Set<string>();
+const autoOpenedIds = new Set<string>();
 let seenConvId: string | null = null;
 watch(tasks, (list) => {
   const cid = chat.activeConvId;
   const freshConv = cid !== seenConvId;
   if (freshConv) {
     seenTaskIds.clear();
+    autoOpenedIds.clear();
     seenConvId = cid;
+    // 切入快照：已在跑的任务视为「已展开过」，否则首个新事件就会追弹
+    list.forEach((t) => { if (t.running) autoOpenedIds.add(t.id); });
   }
-  const fresh = list.filter((t) => !seenTaskIds.has(t.id));
-  fresh.forEach((t) => seenTaskIds.add(t.id));
-  if (!freshConv && fresh.some((t) => t.running) && !open.value) {
-    open.value = true;
+  list.forEach((t) => seenTaskIds.add(t.id));
+  if (freshConv) return; // 切会话首快照只记账不弹（防每次切入都弹，打扰）
+  const candidate = list.find((t) => t.running && !autoOpenedIds.has(t.id));
+  if (candidate) {
+    autoOpenedIds.add(candidate.id);
+    if (!open.value) open.value = true;
   }
 }, { immediate: true });
 
