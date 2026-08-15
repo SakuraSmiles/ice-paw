@@ -341,7 +341,7 @@ pub struct DelegationStartedPayload {
     pub child_conversation_id: String,
     /// 专家 agent 显示名
     pub agent_name: String,
-    /// 子会话标题（"委派: {task 截断}"）
+    /// 子会话标题（task 截断文本，UX #4 已去「委派: 」前缀）
     pub title: String,
 }
 

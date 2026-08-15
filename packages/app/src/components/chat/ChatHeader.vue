@@ -1,9 +1,10 @@
 <!--
-  ChatHeader — 聊天顶部栏：会话标题编辑 + Agent 信息 + 更多菜单
+  ChatHeader — 聊天顶部栏：会话标题编辑 + Agent 信息 + 外置操作（UX #9）
 
   行为：
   - 双击标题进入编辑模式（Enter 保存 / Escape 取消）
-  - 更多菜单：置顶/取消置顶、查看信息、删除对话
+  - 外置横排操作（取代旧「更多」下拉菜单）：星标置顶（左）+ 删除（右）
+  - 删除确认 = 从删除按钮向左横向扩展的确认条（非弹窗，Esc/点击外部收起）
   - 显示当前 Agent 名称 + 模型
 
   Props: 无（通过 chat/agent store 读取）
@@ -26,25 +27,33 @@ const editing = ref(false);
 const editValue = ref("");
 const editInput = ref<HTMLInputElement | null>(null);
 
+// ===== 删除确认条（UX #9：右锚定向左扩展，取代旧菜单内嵌确认）=====
 const confirming = ref(false);
-const menuOpen = ref(false);
-const menuRef = ref<HTMLElement | null>(null);
+const deleteZoneRef = ref<HTMLElement | null>(null);
 
 function onDocClick(e: MouseEvent) {
-  if (menuOpen.value && menuRef.value && !menuRef.value.contains(e.target as Node)) {
-    closeMenu();
+  if (confirming.value && deleteZoneRef.value && !deleteZoneRef.value.contains(e.target as Node)) {
+    confirming.value = false;
   }
 }
+function onDocKeydown(e: KeyboardEvent) {
+  if (e.key === "Escape") confirming.value = false;
+}
 
-// U18: 只在菜单打开时注册 document click 监听，避免全局常驻
-watch(menuOpen, (open) => {
+// U18: 只在确认条展开时注册监听，避免全局常驻
+watch(confirming, (open) => {
   if (open) {
     document.addEventListener("click", onDocClick);
+    document.addEventListener("keydown", onDocKeydown);
   } else {
     document.removeEventListener("click", onDocClick);
+    document.removeEventListener("keydown", onDocKeydown);
   }
 });
-onUnmounted(() => document.removeEventListener("click", onDocClick));
+onUnmounted(() => {
+  document.removeEventListener("click", onDocClick);
+  document.removeEventListener("keydown", onDocKeydown);
+});
 
 const activeAgent = computed(() => {
   const conv = chat.activeConversation;
@@ -117,7 +126,6 @@ async function confirmDelete() {
   const conv = chat.activeConversation;
   if (!conv) return;
   confirming.value = false;
-  menuOpen.value = false;
   await chat.deleteConversation(conv.id);
   // 显示撤销 toast（5 秒后自动消失）
   deletedId.value = conv.id;
@@ -131,22 +139,10 @@ function undoDelete() {
   }
 }
 
-function toggleMenu() { menuOpen.value = !menuOpen.value; if (!menuOpen.value) confirming.value = false; }
-
-function closeMenu() { menuOpen.value = false; confirming.value = false; }
-
 async function togglePin() {
   const conv = chat.activeConversation;
   if (!conv) return;
   await chat.pinConversation(conv.id, !conv.pinned);
-  menuOpen.value = false;
-}
-
-const showInfo = ref(false);
-
-function viewInfo() {
-  menuOpen.value = false;
-  showInfo.value = true;
 }
 </script>
 
@@ -198,41 +194,32 @@ function viewInfo() {
         </div>
       </div>
     </div>
-    <div class="header-right">
-      <div v-if="chat.activeConversation" ref="menuRef" class="menu-wrapper">
-        <button class="header-btn" title="更多" @click.stop="toggleMenu">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /><circle cx="5" cy="12" r="1" /></svg>
-        </button>
-        <Transition name="dropdown">
-          <div v-if="menuOpen" class="dropdown-menu" @click.stop>
-          <button class="dropdown-item" @click="togglePin">
-            <!-- 已置顶：填充实心图标 → 取消置顶 -->
-            <svg v-if="chat.activeConversation?.pinned" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2z" /></svg>
-            <!-- 未置顶：描边空心图标 → 置顶 -->
-            <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2z" /></svg>
-            <span>{{ chat.activeConversation?.pinned ? "取消置顶" : "置顶" }}</span>
-          </button>
-          <button class="dropdown-item" @click="viewInfo">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10" /><line x1="12" y1="16" x2="12" y2="12" /><line x1="12" y1="8" x2="12.01" y2="8" /></svg>
-            <span>查看信息</span>
-          </button>
-          <div class="dropdown-divider"></div>
-          <div v-if="confirming" class="menu-confirm">
-            <span class="menu-confirm-text">确认删除「{{ chat.activeConversation?.title || "新对话" }}」？</span>
-            <div class="menu-confirm-actions">
-              <button class="menu-confirm-yes" @click="confirmDelete">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
-              </button>
-              <button class="menu-confirm-no" @click="cancelDelete">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
-              </button>
-            </div>
+    <!-- 外置操作（UX #9）：星标（左）+ 删除（右，占原「更多」位置）。
+         删除确认 = 右锚定、向左横向扩展的确认条（覆盖星标，布局零位移） -->
+    <div v-if="chat.activeConversation" class="header-right">
+      <button
+        class="header-btn pin-btn"
+        :class="{ 'pin-hidden': confirming, pinned: chat.activeConversation?.pinned }"
+        :title="chat.activeConversation?.pinned ? '取消置顶' : '置顶'"
+        @click="togglePin"
+      >
+        <!-- 已置顶：填充实心图标 → 取消置顶 -->
+        <svg v-if="chat.activeConversation?.pinned" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2z" /></svg>
+        <!-- 未置顶：描边空心图标 → 置顶 -->
+        <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2z" /></svg>
+      </button>
+
+      <div ref="deleteZoneRef" class="delete-zone">
+        <Transition name="confirmbar">
+          <div v-if="confirming" class="confirm-bar">
+            <span class="confirm-text">删除此对话？</span>
+            <button class="confirm-btn" @click="cancelDelete">取消</button>
+            <button class="confirm-btn confirm-btn-danger" @click="confirmDelete">删除</button>
           </div>
-          <button v-else class="dropdown-item dropdown-danger" @click="startDelete">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
-            <span>删除对话</span>
-          </button>
-        </div></Transition>
+        </Transition>
+        <button v-if="!confirming" class="header-btn" title="删除对话" @click="startDelete">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
+        </button>
       </div>
     </div>
   </header>
@@ -242,27 +229,6 @@ function viewInfo() {
     <div v-if="deletedId" class="undo-toast">
       <span class="undo-toast-text">对话已删除</span>
       <button class="undo-toast-btn" @click="undoDelete">撤销</button>
-    </div>
-  </Transition>
-
-  <Transition name="overlay">
-    <div v-if="showInfo" class="info-overlay" @click.self="showInfo = false">
-      <div class="info-panel">
-        <div class="info-header">
-          <h3 class="info-title">对话信息</h3>
-          <button class="info-close" @click="showInfo = false">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
-          </button>
-        </div>
-        <div class="info-body">
-          <div class="info-row"><span class="info-label">标题</span><span class="info-value">{{ chat.activeConversation?.title || "未命名" }}</span></div>
-          <div class="info-row"><span class="info-label">助手</span><span class="info-value">{{ activeAgent?.name || "未知" }}</span></div>
-          <div class="info-row"><span class="info-label">模型</span><span class="info-value">{{ activeAgent?.model || "未知" }}</span></div>
-          <div class="info-row"><span class="info-label">置顶</span><span class="info-value">{{ chat.activeConversation?.pinned ? "是" : "否" }}</span></div>
-          <div class="info-row"><span class="info-label">消息数</span><span class="info-value">{{ chat.messages.length }}</span></div>
-          <div class="info-row"><span class="info-label">创建时间</span><span class="info-value">{{ chat.activeConversation?.created_at || "未知" }}</span></div>
-        </div>
-      </div>
     </div>
   </Transition>
 </template>
@@ -301,33 +267,46 @@ function viewInfo() {
 .header-sep { font-size:var(--ip-text-caption-size); color:var(--ip-color-text-tertiary); line-height:1.4; }
 .header-model { font-size:var(--ip-text-caption-size); color:var(--ip-color-text-tertiary); line-height:1.4; }
 .header-hint { font-size:var(--ip-text-caption-size); color:var(--ip-color-text-disabled); line-height:1.4; }
-.header-right { display:flex; align-items:center; gap:4px; }
+.header-right { display:flex; align-items:center; gap:4px; position:relative; }
 .header-btn { display:flex; align-items:center; justify-content:center; width:32px; height:32px; border-radius:var(--ip-radius-md); color:var(--ip-color-text-secondary); border:none; cursor:pointer; background:transparent; transition:all var(--ip-duration-fast) var(--ip-ease-out); }
 .header-btn:hover { background-color:var(--ip-color-bg-tertiary); color:var(--ip-color-text-primary); }
 
-.menu-wrapper { position:relative; }
-.dropdown-menu { position:absolute; top:calc(100% + 4px); right:0; z-index:100; min-width:180px; background:var(--ip-color-bg-elevated); border:1px solid var(--ip-color-border-default); border-radius:var(--ip-radius-lg); box-shadow:var(--ip-shadow-lg); padding:4px; display:flex; flex-direction:column; gap:2px; }
-.dropdown-item { display:flex; align-items:center; gap:8px; width:100%; padding:8px 12px; border:none; border-radius:var(--ip-radius-md); background:transparent; cursor:pointer; font-size:var(--ip-text-body-sm-size); color:var(--ip-color-text-secondary); transition:all var(--ip-duration-fast) var(--ip-ease-out); }
-.dropdown-item:hover { background:var(--ip-color-bg-tertiary); color:var(--ip-color-text-primary); }
-.dropdown-divider { height:1px; background:var(--ip-color-border-default); margin:2px 8px; }
+/* ===== 外置星标（UX #9）：确认条展开时淡出让位（布局不动，条覆盖其上） ===== */
+.pin-btn { transition:opacity var(--ip-duration-fast) var(--ip-ease-out), background-color var(--ip-duration-fast) var(--ip-ease-out), color var(--ip-duration-fast) var(--ip-ease-out); }
+.pin-btn.pin-hidden { opacity:0; pointer-events:none; }
+.pin-btn svg { color:var(--ip-color-text-tertiary); }
+.pin-btn:hover svg { color:var(--ip-color-text-primary); }
+/* 已置顶：实心星常显主色（状态可见，不只是 hover 态） */
+.pin-btn.pinned svg { color:var(--ip-primary-500); }
 
-.menu-confirm { display:flex; align-items:center; justify-content:space-between; padding:8px 12px; gap:8px; }
-.menu-confirm-text { font-size:var(--ip-text-body-sm-size); color:var(--ip-color-text-secondary); white-space:nowrap; }
-.menu-confirm-actions { display:flex; gap:4px; }
-.menu-confirm-yes, .menu-confirm-no { display:flex; align-items:center; justify-content:center; width:28px; height:28px; border:none; border-radius:var(--ip-radius-md); cursor:pointer; background:transparent; }
-.menu-confirm-yes:hover { background-color:var(--ip-color-bg-tertiary); color:var(--ip-color-text-primary); }
-.menu-confirm-no:hover { background-color:var(--ip-color-bg-tertiary); color:var(--ip-color-text-primary); }
+/* ===== 删除确认条（UX #9）：右锚定、向左横向扩展 ===== */
+.delete-zone { position:relative; display:flex; align-items:center; }
+.confirm-bar {
+  position:absolute; right:0; top:50%; transform:translateY(-50%);
+  display:flex; align-items:center; gap:8px;
+  max-width:260px; overflow:hidden; white-space:nowrap;
+  padding:4px 6px 4px 14px;
+  background:var(--ip-danger-bg, rgba(220,38,38,0.08));
+  border:1px solid var(--ip-danger-border, rgba(220,38,38,0.3));
+  border-radius:var(--ip-radius-md);
+  z-index:2;
+}
+.confirm-text { font-size:var(--ip-text-body-sm-size); color:var(--ip-color-text-secondary); }
+.confirm-btn {
+  flex-shrink:0; padding:4px 12px; border:none; border-radius:var(--ip-radius-sm);
+  font-size:var(--ip-text-caption-size); font-weight:var(--ip-font-weight-medium);
+  cursor:pointer; background:transparent; color:var(--ip-color-text-secondary);
+  transition:all var(--ip-duration-fast) var(--ip-ease-out);
+}
+.confirm-btn:hover { background:var(--ip-color-bg-tertiary); color:var(--ip-color-text-primary); }
+.confirm-btn-danger { background:var(--ip-danger-base, #dc2626); color:#fff; }
+.confirm-btn-danger:hover { background:var(--ip-danger-base, #dc2626); color:#fff; opacity:0.88; }
 
-.info-overlay { position:fixed; inset:0; z-index:var(--ip-z-modal-overlay); background:rgba(0,0,0,0.3); display:flex; align-items:center; justify-content:center; }
-.info-panel { width:340px; background:var(--ip-color-bg-elevated); border:1px solid var(--ip-color-border-default); border-radius:var(--ip-radius-xl); box-shadow:var(--ip-shadow-xl); overflow:hidden; }
-.info-header { display:flex; align-items:center; justify-content:space-between; padding:16px 20px 12px; }
-.info-title { font-size:var(--ip-text-h3-size); font-weight:var(--ip-font-weight-semibold); color:var(--ip-color-text-primary); margin:0; }
-.info-close { display:flex; align-items:center; justify-content:center; width:28px; height:28px; border-radius:var(--ip-radius-md); cursor:pointer; color:var(--ip-color-text-secondary); background:none; border:none; }
-.info-close:hover { background:var(--ip-color-bg-tertiary); color:var(--ip-color-text-primary); }
-.info-body { padding:0 20px 20px; display:flex; flex-direction:column; gap:10px; }
-.info-row { display:flex; justify-content:space-between; align-items:center; }
-.info-label { font-size:var(--ip-text-body-sm-size); color:var(--ip-color-text-tertiary); }
-.info-value { font-size:var(--ip-text-body-sm-size); color:var(--ip-color-text-primary); font-weight:var(--ip-font-weight-medium); }
+/* 宽度扩展动画：max-width 0→260 渐进放开（内容自然宽度小于上限，
+   视觉上平滑长到内容宽即停），叠加淡入与微量左移 */
+.confirmbar-enter-active { transition:max-width 0.22s var(--ip-ease-out), opacity 0.18s var(--ip-ease-out); }
+.confirmbar-leave-active { transition:max-width 0.15s ease-in, opacity 0.12s ease-in; }
+.confirmbar-enter-from, .confirmbar-leave-to { max-width:32px; opacity:0; }
 
 /* 删除撤销 toast */
 .undo-toast {
@@ -347,25 +326,11 @@ function viewInfo() {
 }
 .undo-toast-btn:hover { background: var(--ip-primary-soft-bg); }
 
-/* ===== 下拉菜单动画 ===== */
-.dropdown-enter-active { animation:drop-in 0.15s ease-out; }
-.dropdown-leave-active { animation:drop-in 0.1s ease-in reverse; }
-@keyframes drop-in {
-  from { opacity:0; transform:translateY(-4px) scale(0.96); }
-  to { opacity:1; transform:translateY(0) scale(1); }
-}
-
-/* ===== 信息弹窗动画 ===== */
+/* ===== 撤销 toast 淡入淡出 ===== */
 .overlay-enter-active { animation:overlay-in 0.2s ease-out; }
 .overlay-leave-active { animation:overlay-in 0.15s ease-in reverse; }
 @keyframes overlay-in {
   from { opacity:0; }
   to { opacity:1; }
-}
-.overlay-enter-active .info-panel { animation:panel-in 0.2s ease-out; }
-.overlay-leave-active .info-panel { animation:panel-in 0.15s ease-in reverse; }
-@keyframes panel-in {
-  from { opacity:0; transform:scale(0.95) translateY(8px); }
-  to { opacity:1; transform:scale(1) translateY(0); }
 }
 </style>

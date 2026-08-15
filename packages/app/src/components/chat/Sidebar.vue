@@ -39,6 +39,18 @@ function gotoManage() {
   router.push("/projects");
 }
 
+/** 快速新建（UX #1）：纯名字创建即切到新空间（欢迎态开聊）；完整字段留给项目页 */
+async function quickCreateProject(name: string) {
+  try {
+    const p = await project.create({ name });
+    project.setActiveProject(p.id);
+    chat.clearActiveConversation();
+    router.push("/");
+  } catch (err) {
+    console.warn("[sidebar] 快速新建项目失败", err);
+  }
+}
+
 // =========================================================================
 // 暗色模式（逻辑抽到 composable：本地持久化 + 系统偏好 + View Transitions + Tauri 窗口同步）
 // =========================================================================
@@ -243,6 +255,7 @@ function timeAgo(dateStr: string): string {
         :scope-project-id="scopeProjectId"
         :projects="project.activeProjects"
         @select="selectProject"
+        @create="quickCreateProject"
         @manage="gotoManage"
       />
 
