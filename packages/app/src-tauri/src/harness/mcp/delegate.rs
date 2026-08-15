@@ -72,6 +72,27 @@ pub(crate) struct DispatchableAgent {
     pub name: String,
 }
 
+/// 输入侧校验（纯函数，可测）。task 是专家看到的**全部**输入（无任何上下文
+/// 兜底），空任务无意义且必然被专家自由发挥填补——手测坐实：空 task 被
+/// 解读成「读仓库 README」。与 update_plan 的 text 非空校验同一纪律。
+fn validate_args(parsed: &DelegateArgs) -> AppResult<()> {
+    if parsed.task.trim().is_empty() {
+        return Err(AppError::Validation(
+            "task 为空——委派任务必须自包含（这是专家看到的全部输入），请把要做的事写具体".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// 终止原因是否为「正常完成」。stop（OpenAI 系）与 end_turn（Anthropic 系
+/// 原样透传）同义（前端 finishReasonLabels 同样将两者视为正常）——只认
+/// 单值会把所有 Anthropic 系子会话的正常完成误标「未正常完成」（手测坐实）。
+/// 其余（length/max_tokens/budget_exceeded/stuck/abort/tool_use…）response
+/// 可能为空或不完整，须附 note 提醒委派方。
+fn is_normal_completion(reason: &str) -> bool {
+    matches!(reason, "stop" | "end_turn")
+}
+
 /// 解析可调度集合（§4.3.1 回退规则）。
 ///
 /// - conv 所属项目**配了成员**（project_agents 非空）→ 该项目成员集合；
@@ -194,6 +215,7 @@ impl McpClient for DelegateTool {
         let parsed: DelegateArgs = serde_json::from_str(args).map_err(|e| {
             AppError::Validation(format!("delegate_to_agent 参数解析失败: {e}"))
         })?;
+        validate_args(&parsed)?;
 
         // run_agent_turn 的环境依赖全部经 Tauri managed state 取（工具轮已注入 app_handle）
         let app = ctx.app_handle.clone().ok_or_else(|| {
@@ -383,7 +405,7 @@ impl McpClient for DelegateTool {
                 "completion": u.completion_tokens,
             });
         }
-        if summary.finish_reason != "stop" {
+        if !is_normal_completion(&summary.finish_reason) {
             result["note"] = serde_json::Value::String(format!(
                 "子会话未正常完成（finish_reason={}），response 可能为空或不完整",
                 summary.finish_reason
@@ -437,5 +459,36 @@ mod tests {
         assert!(hint.contains("翻译（agent_id: a1）"), "清单须同时含 name 与 id: {hint}");
         assert!(hint.contains("delegate_to_agent"));
         assert!(hint.contains("自包含"), "须提示 task 自包含");
+    }
+
+    #[test]
+    fn validate_args_rejects_empty_task() {
+        for task in ["", "   ", "\n\t"] {
+            let args = DelegateArgs { agent_id: "a1".into(), task: task.into() };
+            assert!(
+                validate_args(&args).is_err(),
+                "空/纯空白 task（{task:?}）必须输入侧拒绝——专家看不到任何上下文，空任务只会被自由发挥填补"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_args_accepts_normal_task() {
+        let args = DelegateArgs { agent_id: "a1".into(), task: "  翻译 README 首页  ".into() };
+        assert!(validate_args(&args).is_ok());
+    }
+
+    #[test]
+    fn normal_completion_covers_both_provider_families() {
+        // OpenAI 系正常 = stop；Anthropic 系原样透传 = end_turn——两者同义
+        assert!(is_normal_completion("stop"));
+        assert!(is_normal_completion("end_turn"), "手测坐实的误标根因：end_turn 是正常完成");
+    }
+
+    #[test]
+    fn normal_completion_rejects_abnormal_reasons() {
+        for r in ["length", "max_tokens", "budget_exceeded", "stuck", "abort", "tool_use", ""] {
+            assert!(!is_normal_completion(r), "{r} 须附「可能不完整」note");
+        }
     }
 }
