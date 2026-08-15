@@ -35,9 +35,13 @@ onMounted(() => {
     <Sidebar />
     <main class="app-main">
       <router-view v-slot="{ Component }">
-        <keep-alive>
-          <component :is="Component" />
-        </keep-alive>
+        <!-- 页级过渡（UX #7）：淡入+微升 4px，out-in 顺序切换（无叠影）；
+             KeepAlive 缓存与滚动位置不受影响 -->
+        <Transition name="route-fade" mode="out-in">
+          <keep-alive>
+            <component :is="Component" />
+          </keep-alive>
+        </Transition>
       </router-view>
     </main>
   </div>
