@@ -22,7 +22,7 @@ import TrajectoryInspector from "./TrajectoryInspector.vue";
 
 const props = defineProps<{ conversationId: string }>();
 const chat = useChatStore();
-const { events, loading, loadingEarlier, error, legacy, hasMore, load, loadEarlier, refreshLatest } = useTrajectory();
+const { events, loading, loadingEarlier, error, legacy, hasMore, turnOffset, load, loadEarlier, refreshLatest } = useTrajectory();
 
 // ---- 视图状态（行模型的派生输入） ----
 const query = ref("");
@@ -93,11 +93,11 @@ const streamingRows = computed<TrajectoryRow[]>(() => {
 
 const rows = computed(() =>
   streamingRows.value.length
-    ? [...buildRows(events.value, { collapsedTurns: collapsedTurns.value, showAux: showAux.value, query: query.value }), ...streamingRows.value]
-    : buildRows(events.value, { collapsedTurns: collapsedTurns.value, showAux: showAux.value, query: query.value }),
+    ? [...buildRows(events.value, { collapsedTurns: collapsedTurns.value, showAux: showAux.value, query: query.value, turnOffset: turnOffset.value }), ...streamingRows.value]
+    : buildRows(events.value, { collapsedTurns: collapsedTurns.value, showAux: showAux.value, query: query.value, turnOffset: turnOffset.value }),
 );
 
-/** 会话级汇总（工具栏 chip）：已载窗口内的轮数/事件/工具计数 */
+/** 会话级汇总（工具栏 chip）：轮数含窗口前偏移（全局值）；事件/工具为已载窗口内计数 */
 const stats = computed(() => {
   let turns = 0;
   let tools = 0;
@@ -110,7 +110,7 @@ const stats = computed(() => {
     }
     if (ev.kind === "tool_execution") tools += 1;
   }
-  return { turns, events: events.value.length, tools };
+  return { turns: turns + turnOffset.value, events: events.value.length, tools };
 });
 /** 搜索态下是否至少命中一行（全未命中时表格上方浮提示；ephemeral 行 match 恒 true 不算未命中） */
 const anyMatch = computed(() => rows.value.some((r) => r.type === "event" && r.match));
@@ -368,6 +368,7 @@ onBeforeUnmount(stopPolling);
       :events="events"
       :selected-seq="selectedSeq"
       :mode="durationMode ? 'duration' : 'sequence'"
+      :turn-offset="turnOffset"
       :has-earlier="hasMore"
       :loading-earlier="loadingEarlier"
       @pick="pickFromTimeline"

@@ -299,6 +299,12 @@ const trajectory = {
       return await invoke<string>("export_session_trajectory", { conversationId });
     } catch (err) { throw wrapInvokeError("trajectory.exportJsonl", err); }
   },
+  /** 窗口前（seq < beforeSeq 一侧）的全局轮次数——尾部优先分页的轮号偏移（M3） */
+  async turnOffset(conversationId: string, beforeSeq: number): Promise<number> {
+    try {
+      return await invoke<number>("trajectory_turn_offset", { conversationId, beforeSeq });
+    } catch (err) { throw wrapInvokeError("trajectory.turnOffset", err); }
+  },
 };
 
 export const bridge = { agents, conversations, projects, messages, chat, preferences, mcp, kb, logs, trajectory };

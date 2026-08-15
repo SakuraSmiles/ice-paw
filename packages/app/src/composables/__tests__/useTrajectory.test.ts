@@ -28,7 +28,7 @@ function ended(termination = "stop") {
 }
 
 function evRows(events: SessionEvent[], opts?: Partial<Parameters<typeof buildRows>[1]>) {
-  const rows = buildRows(events, { collapsedTurns: new Set(), showAux: false, query: "", ...opts });
+  const rows = buildRows(events, { collapsedTurns: new Set(), showAux: false, query: "", turnOffset: 0, ...opts });
   return {
     rows,
     events: () => rows.filter((r): r is EventRow => r.type === "event"),
@@ -115,7 +115,7 @@ describe("buildRows 行模型", () => {
       ev("assistant_message", { content: "a", blocks: [], round: 0, continuation: false }, { messageId: "m1" }),
       ev("tool_execution", { tool_call_id: "c", tool_name: "t", arguments: "{}", is_error: false, duration_ms: 1 }, { messageId: "m1" }),
     ];
-    const rows = buildRows(events, { collapsedTurns: new Set(["t1"]), showAux: false, query: "" });
+    const rows = buildRows(events, { collapsedTurns: new Set(["t1"]), showAux: false, query: "", turnOffset: 0 });
     expect(rows.map((r) => r.type)).toEqual(["turn-header"]);
     const h = rows[0];
     expect(h.type === "turn-header" && h.roundCount === 1 && h.toolCount === 1).toBe(true);
@@ -131,7 +131,7 @@ describe("buildRows 行模型", () => {
       ev("tool_execution", { tool_call_id: "c", tool_name: "zzz", arguments: "{\"hidden\":\"needle\"}", is_error: false, duration_ms: 1 }, { turnId: "t2", messageId: "m2" }),
     ];
     // 两 turn 都折叠 → 搜索应无视折叠（事件行照常出现）
-    const rows = buildRows(events, { collapsedTurns: new Set(["t1", "t2"]), showAux: false, query: "needle" });
+    const rows = buildRows(events, { collapsedTurns: new Set(["t1", "t2"]), showAux: false, query: "needle", turnOffset: 0 });
     const evRowsAll = rows.filter((r): r is EventRow => r.type === "event");
     expect(evRowsAll.length).toBeGreaterThan(0);
     const hit = evRowsAll.find((r) => r.summary.includes("zzz"));
@@ -173,6 +173,31 @@ describe("buildRows 行模型", () => {
     const hs = evRows(events).headers();
     expect(hs.map((h) => h.turnIndex)).toEqual([0, 1, 2]);
     expect(hs.map((h) => h.dateLabel)).toEqual(["08-14", null, null]); // 同日只在首个 turn 标日期
+  });
+
+  it("M3：turnOffset 让窗口内轮号从全局偏移起算（尾部优先分页）", () => {
+    const events = [
+      ev("user_message", { content: "q2", blocks: [] }, { turnId: "t2" }),
+      ev("user_message", { content: "q3", blocks: [] }, { turnId: "t3" }),
+    ];
+    const hs = evRows(events, { turnOffset: 7 }).headers();
+    expect(hs.map((h) => h.turnIndex)).toEqual([7, 8]); // 窗口前有 7 轮 → 首桶是第 8 轮
+    // 偏移 0 = 窗口从头开始，行为与原实现一致
+    expect(evRows(events).headers().map((h) => h.turnIndex)).toEqual([0, 1]);
+  });
+
+  it("M2：搜索文本跨 buildRows 调用命中一致（WeakMap 缓存不改变 match 语义）", () => {
+    const events = [
+      ev("user_message", { content: "第一问", blocks: [] }),
+      ev("tool_execution", { tool_call_id: "c", tool_name: "t", arguments: "{\"deep\":\"cached-needle\"}", is_error: false, duration_ms: 1 }, { messageId: "m1" }),
+    ];
+    // 同一批事件对象多次调用（模拟折叠/开关切换重算）：payload 深处命中结果稳定
+    for (let i = 0; i < 3; i++) {
+      const rows = buildRows(events, { collapsedTurns: new Set(), showAux: false, query: "cached-needle", turnOffset: 0 });
+      const evs = rows.filter((r): r is EventRow => r.type === "event");
+      expect(evs.find((r) => r.summary === "第一问")?.match).toBe(false);
+      expect(evs.find((r) => r.kind === "tool")?.match).toBe(true);
+    }
   });
 
   it("错误/丢弃/摘要各成行，错误行带 isError", () => {

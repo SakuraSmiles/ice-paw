@@ -184,6 +184,20 @@ pub async fn list_session_events(
     Ok(rows.into_iter().map(SessionEvent::from).collect())
 }
 
+/// 窗口前（`seq < before_seq` 一侧）的全局轮次数——轨迹「尾部优先分页」的轮号
+/// 全局偏移（M3）：窗口内首个 turn 桶的真实轮号 = 偏移 + 1，翻页/首屏截断时
+/// 轮次编号不再相对错位。前端在首载有更多分页时与每次「加载更早」后调用。
+#[tauri::command]
+pub async fn trajectory_turn_offset(
+    pool: State<'_, SqlitePool>,
+    conversation_id: String,
+    before_seq: i64,
+) -> AppResult<i64> {
+    repo::conversation::get_by_id(pool.inner(), &conversation_id).await?;
+    Ok(repo::session_event::count_turns_before(pool.inner(), &conversation_id, before_seq).await?)
+}
+}
+
 /// 解析导出目标目录：系统「下载」已知目录（Windows 走 SHGetKnownFolderPath，
 /// 尊重 OneDrive 重定向——拼 `%USERPROFILE%\Downloads` 会在重定向机器上踩空建错目录），
 /// 解析失败时回退 app 数据目录 `exports/`（与「数据目录」入口一致，用户可达）。

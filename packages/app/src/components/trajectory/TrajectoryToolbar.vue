@@ -88,7 +88,7 @@ defineExpose({ focusSearch });
 
     <div class="tbar-spacer" />
 
-    <span class="tbar-stats" title="已载窗口内：轮次 · 事件 · 工具调用">
+    <span class="tbar-stats" title="轮次为全局累计（含未载分页）；事件/工具为已载窗口内计数">
       {{ stats.turns }} 轮 · {{ stats.events }} 事件 · {{ stats.tools }} 工具
     </span>
 

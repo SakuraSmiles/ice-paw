@@ -129,6 +129,28 @@ pub async fn max_seq(pool: &SqlitePool, session_id: &str) -> AppResult<i64> {
     Ok(max)
 }
 
+/// 窗口前（`seq < before_seq` 一侧）的全局轮次数——轨迹尾部优先分页的轮号偏移（M3）。
+///
+/// 按 `COUNT(DISTINCT turn_id)` 计（`turn_id IS NULL` 的孤儿事件经 COALESCE 算作
+/// 一组，与前端 `__orphan__` 桶对应）。已知边缘误差：前端按「连续同 turn_key 段」
+/// 切桶，孤儿事件若被真实轮分隔成多段，前端算多桶而 DISTINCT 只算一组——纪元前
+/// 事件实际连续排列，此场景极罕见，偏差 ≤ 孤儿段数，可接受。
+pub async fn count_turns_before(
+    pool: &SqlitePool,
+    session_id: &str,
+    before_seq: i64,
+) -> AppResult<i64> {
+    let (n,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(DISTINCT COALESCE(turn_id, '')) FROM session_events
+          WHERE session_id = ? AND seq < ?",
+    )
+    .bind(session_id)
+    .bind(before_seq)
+    .fetch_one(pool)
+    .await?;
+    Ok(n)
+}
+
 // =========================================================================
 // 单元测试
 // =========================================================================
@@ -248,6 +270,39 @@ mod tests {
             b.iter().map(|r| r.seq).collect::<Vec<_>>(),
             vec![1, 2],
             "conv-b 各自独立连续"
+        );
+    }
+
+    #[tokio::test]
+    async fn count_turns_before_counts_distinct_orphan_grouped() {
+        let pool = fresh_pool().await;
+        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        seed_agent(&pool).await;
+        seed_conversation(&pool, "conv-1").await;
+
+        // 2 个孤儿事件（turn_id=NULL，算一组）+ turn-1 ×2 + turn-2 ×1 + turn-3 ×1
+        for (turn, msg) in [
+            (None, None),
+            (None, None),
+            (Some("turn-1"), Some("m1")),
+            (Some("turn-1"), Some("m2")),
+            (Some("turn-2"), Some("m3")),
+            (Some("turn-3"), Some("m4")),
+        ] {
+            append(&pool, "conv-1", "assistant_message", "agent", turn, msg, "{}")
+                .await
+                .unwrap();
+        }
+        // seq 1..6；窗口起点取各处：偏移 = 窗口前 distinct 轮组数
+        assert_eq!(count_turns_before(&pool, "conv-1", 1).await.unwrap(), 0);
+        assert_eq!(count_turns_before(&pool, "conv-1", 3).await.unwrap(), 1, "孤儿组算 1");
+        assert_eq!(count_turns_before(&pool, "conv-1", 5).await.unwrap(), 2, "含 turn-1");
+        assert_eq!(count_turns_before(&pool, "conv-1", 6).await.unwrap(), 3, "含 turn-1/2");
+        assert_eq!(count_turns_before(&pool, "conv-1", 99).await.unwrap(), 4, "全量");
+        // 其他会话不受影响（无事件不报错）
+        assert_eq!(
+            count_turns_before(&pool, "conv-none", 99).await.unwrap(),
+            0
         );
     }
 

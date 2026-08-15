@@ -34,6 +34,8 @@ const props = defineProps<{
   selectedSeq: number | null;
   /** 投影模式：sequence = 序号等宽（默认）；duration = 真实耗时 + 空闲压缩 */
   mode: "sequence" | "duration";
+  /** 窗口前（更早分页一侧）的全局轮次数（M3：底轴「第 N 轮」与表格同源偏移） */
+  turnOffset: number;
   /** 尾部优先分页下还有更早的事件（左缘显示「…」加载入口） */
   hasEarlier: boolean;
   loadingEarlier: boolean;
@@ -157,7 +159,8 @@ function buildSpans() {
   const seqMode = props.mode === "sequence";
   let slot = 0;
   let curTk: string | null = null;
-  let turnIndex = -1;
+  // M3：窗口首桶的全局轮号从偏移起算（0 偏移时 -1+1=0，行为与原实现一致）
+  let turnIndex = props.turnOffset - 1;
   /** 本 turn 尚未打边界点（遇到首个可上图事件时落点）；null = 孤儿桶/已打点 */
   let pendingTurn: number | null = null;
   /**
@@ -316,34 +319,42 @@ function draw() {
   }
   ctx.globalAlpha = 1;
 
-  // ---- 事件条 ----
-  /** 单条/run 绘制：run 非空时用 run 首末扩展 x 区间与选中判断 */
-  const drawSpan = (s: Span, endAt: number, run: Span[] | null) => {
-    const y = TOP_PAD + s.lane * LANE_H + 2;
-    const h = LANE_H - 5;
-    let x0 = x(s.start);
-    let w = Math.max(2, x(endAt) - x0);
-    if (x0 + w < 0 || x0 > width) return; // 视口裁剪
-    // 相邻条间细缝（dsh 的 8%·≤1px gap），密堆时仍可分辨
-    if (w > 6) {
-      const g = Math.min(w * 0.08, 1);
-      x0 += g;
-      w -= 2 * g;
-    }
-    ctx.fillStyle = s.isError ? colors.danger : colors[`lane${s.lane}`];
-    const selected = run
-      ? run.some((r) => r.seq === props.selectedSeq)
-      : s.seq === props.selectedSeq;
-    if (selected) {
-      ctx.globalAlpha = 1;
-      ctx.fillRect(x0 - 1, y - 1.5, w + 2, h + 3); // 选中高亮环（加宽描边感）
-      ctx.globalAlpha = 0.85;
+  /** 底部刻度轴（事件条两路径——稀疏/列聚合——末尾统一走；先于事件条定义避免 TDZ） */
+  const finishAxis = () => {
+    ctx.fillStyle = colors.tertiary;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "bottom";
+    ctx.font = `9px ${colors.mono}`;
+    if (props.mode === "sequence") {
+      // 轮次号刻度：在 turn 边界处标「第 N 轮」，过密时只画刻度不画字
+      let lastTextEnd = -Infinity;
+      const axisY = TOP_PAD + LANES_H;
+      for (const b of boundaries) {
+        const xx = x(b.span.start);
+        if (xx <= 0 || xx > width) continue;
+        ctx.fillRect(Math.round(xx) + 0.5, axisY, 1, 3);
+        if (xx > lastTextEnd + 8 && xx < width - 36) {
+          ctx.fillText(`第 ${b.turnIndex + 1} 轮`, xx + 3, HOST_H - 3);
+          lastTextEnd = xx + 3 + (b.turnIndex >= 9 ? 42 : 36);
+        }
+      }
     } else {
-      ctx.globalAlpha = 0.8;
+      // 相对时间刻度（以数据域起点为 0，平移稳定；墙钟在 tooltip）
+      const ticks = 6;
+      const axisY = TOP_PAD + LANES_H;
+      for (let i = 0; i <= ticks; i++) {
+        const tt = t0 + (domain * i) / ticks;
+        const xx = x(tt);
+        ctx.fillRect(Math.round(xx) + 0.5, axisY, 1, 3);
+        if (i < ticks) ctx.fillText(`+${fmtRel(Math.max(0, tt - d0))}`, xx + 3, HOST_H - 3);
+      }
     }
-    ctx.fillRect(x0, y, w, h);
   };
 
+  // ---- 事件条 ----
+  // 待绘条目（统一两种模式的产出形态）：start/end 为域单位，selected 含 run 语义。
+  interface DrawItem { start: number; end: number; lane: number; isError: boolean; hasSelected: boolean; }
+  const items: DrawItem[] = [];
   if (props.mode === "sequence") {
     // run 合并：连续同 (lane, kind) 画成一条矩形（seq 序 = slot 序，天然相邻）。
     // 密集时段（如连续工具调用/多轮 assistant）不再梳齿化；命中 run 的 tooltip
@@ -359,43 +370,87 @@ function draw() {
         spans[j + 1].isError === first.isError
       ) j++;
       const run = spans.slice(i, j + 1);
-      drawSpan(run[0], run[run.length - 1].end, run.length > 1 ? run : null);
+      items.push({
+        start: first.start,
+        end: run[run.length - 1].end,
+        lane: first.lane,
+        isError: first.isError,
+        hasSelected: run.some((r) => r.seq === props.selectedSeq),
+      });
       i = j + 1;
     }
   } else {
-    for (const s of spans) drawSpan(s, s.end, null);
+    for (const s of spans) {
+      items.push({ start: s.start, end: s.end, lane: s.lane, isError: s.isError, hasSelected: s.seq === props.selectedSeq });
+    }
   }
-  ctx.globalAlpha = 1;
 
-  // ---- 底部刻度轴 ----
-  ctx.fillStyle = colors.tertiary;
-  ctx.textAlign = "left";
-  ctx.textBaseline = "bottom";
-  ctx.font = `9px ${colors.mono}`;
-  if (props.mode === "sequence") {
-    // 轮次号刻度：在 turn 边界处标「第 N 轮」，过密时只画刻度不画字
-    let lastTextEnd = -Infinity;
-    const axisY = TOP_PAD + LANES_H;
-    for (const b of boundaries) {
-      const xx = x(b.span.start);
-      if (xx <= 0 || xx > width) continue;
-      ctx.fillRect(Math.round(xx) + 0.5, axisY, 1, 3);
-      if (xx > lastTextEnd + 8 && xx < width - 36) {
-        ctx.fillText(`第 ${b.turnIndex + 1} 轮`, xx + 3, HOST_H - 3);
-        lastTextEnd = xx + 3 + (b.turnIndex >= 9 ? 42 : 36);
+  // 密度自适应（M1）：平均每像素 >2 条时条宽必然亚像素，min-width 强制 + gap 逻辑
+  // 会把数千个 ≥2px 矩形叠成糊块——切换像素列聚合（每列每道至多 1 个矩形，
+  // 连续同值段合并后绘制调用数 ≤ width×lanes），zoom-out 千轮依然锐利。
+  if (items.length > width * 2) {
+    // bit0=覆盖 bit1=错误 bit2=选中
+    const cov = [0, 1, 2, 3].map(() => new Uint8Array(width));
+    for (const it of items) {
+      const c0 = Math.max(0, Math.floor(x(it.start)));
+      const c1 = Math.min(width - 1, Math.ceil(x(it.end)));
+      for (let c = c0; c <= c1; c++) {
+        cov[it.lane][c] |= 1 | (it.isError ? 2 : 0) | (it.hasSelected ? 4 : 0);
       }
     }
-  } else {
-    // 相对时间刻度（以数据域起点为 0，平移稳定；墙钟在 tooltip）
-    const ticks = 6;
-    const axisY = TOP_PAD + LANES_H;
-    for (let i = 0; i <= ticks; i++) {
-      const tt = t0 + (domain * i) / ticks;
-      const xx = x(tt);
-      ctx.fillRect(Math.round(xx) + 0.5, axisY, 1, 3);
-      if (i < ticks) ctx.fillText(`+${fmtRel(Math.max(0, tt - d0))}`, xx + 3, HOST_H - 3);
+    for (let lane = 0; lane < LANES_N; lane++) {
+      const arr = cov[lane];
+      const y = TOP_PAD + lane * LANE_H + 2;
+      const h = LANE_H - 5;
+      let c = 0;
+      while (c < width) {
+        if (!(arr[c] & 1)) { c++; continue; }
+        const err = !!(arr[c] & 2);
+        const sel = !!(arr[c] & 4);
+        let e = c;
+        while (e + 1 < width && (arr[e + 1] & 1) && !!(arr[e + 1] & 2) === err && !!(arr[e + 1] & 4) === sel) e++;
+        ctx.fillStyle = err ? colors.danger : colors[`lane${lane}`];
+        if (sel) {
+          ctx.globalAlpha = 1;
+          ctx.fillRect(c - 1, y - 1.5, e - c + 3, h + 3); // 选中高亮环（加宽描边感）
+          ctx.globalAlpha = 0.85;
+        } else {
+          ctx.globalAlpha = 0.8;
+        }
+        ctx.fillRect(c, y, e - c + 1, h);
+        c = e + 1;
+      }
     }
+    ctx.globalAlpha = 1;
+    return finishAxis();
   }
+
+  /** 稀疏路径：单条/run 绘制 */
+  const drawItem = (it: DrawItem) => {
+    const y = TOP_PAD + it.lane * LANE_H + 2;
+    const h = LANE_H - 5;
+    let x0 = x(it.start);
+    let w = Math.max(2, x(it.end) - x0);
+    if (x0 + w < 0 || x0 > width) return; // 视口裁剪
+    // 相邻条间细缝（dsh 的 8%·≤1px gap），密堆时仍可分辨
+    if (w > 6) {
+      const g = Math.min(w * 0.08, 1);
+      x0 += g;
+      w -= 2 * g;
+    }
+    ctx.fillStyle = it.isError ? colors.danger : colors[`lane${it.lane}`];
+    if (it.hasSelected) {
+      ctx.globalAlpha = 1;
+      ctx.fillRect(x0 - 1, y - 1.5, w + 2, h + 3); // 选中高亮环（加宽描边感）
+      ctx.globalAlpha = 0.85;
+    } else {
+      ctx.globalAlpha = 0.8;
+    }
+    ctx.fillRect(x0, y, w, h);
+  };
+  for (const it of items) drawItem(it);
+  ctx.globalAlpha = 1;
+  finishAxis();
 }
 
 function scheduleRedraw() {
