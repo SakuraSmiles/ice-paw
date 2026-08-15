@@ -36,7 +36,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use serde::Deserialize;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use uuid::Uuid;
 
 use crate::commands::agent_cmd::AgentCmd;
@@ -47,7 +47,7 @@ use crate::harness::chat_state::ChatState;
 use crate::harness::provider;
 use crate::harness::read_route::ReadRouteRegistry;
 use crate::harness::session_runner::{self, AgentTurnInput, TurnEnv};
-use crate::infra::protocol::ContentBlock;
+use crate::infra::protocol::{ContentBlock, DelegationStartedPayload};
 
 use super::client::{McpClient, ToolContext};
 use super::manager::McpServerManager;
@@ -254,7 +254,7 @@ impl McpClient for DelegateTool {
             &child_conv_id,
             &NewConversation {
                 agent_id: creds.agent.id.clone(),
-                title: Some(title),
+                title: Some(title.clone()),
                 project_id: parent.project_id.clone(),
                 kind: Some("delegation".into()),
                 initiator_agent_id: Some(ctx.agent_id.clone()),
@@ -272,6 +272,18 @@ impl McpClient for DelegateTool {
         chat_state.register(&child_conv_id, child_cancel.clone());
         let guard_conv_id = child_conv_id.clone();
         let cancel_guard = scopeguard::guard((), |_| chat_state.unregister(&guard_conv_id));
+
+        // 子会话已入库且必可跳转 → 即刻通知前端（运行中委派卡片/任务胶囊可达；
+        // 前端刷新会话列表拿到子会话行）。emit 失败不影响委派本身。
+        let _ = app.emit(
+            "chat:delegation-started",
+            DelegationStartedPayload {
+                conversation_id: ctx.conv_id.clone(),
+                child_conversation_id: child_conv_id.clone(),
+                agent_name: target.name.clone(),
+                title: title.clone(),
+            },
+        );
 
         tracing::info!(
             target: "ice_paw.delegate",

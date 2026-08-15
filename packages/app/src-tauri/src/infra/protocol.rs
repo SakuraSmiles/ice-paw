@@ -327,6 +327,24 @@ pub struct ChatAssistantStartPayload {
     pub message_id: String,
 }
 
+/// `chat:delegation-started` 事件 payload（MA-1 UX：运行中即可达）
+///
+/// 委派子会话**创建成功即发**（run_agent_turn spawn 前，inline）——此前
+/// child_conversation_id 只在完成时的 tool_result 里回传，运行中的委派卡片/
+/// 任务入口全都跳不进去。前端据此刷新会话列表（子会话行即刻可见，任务胶囊/
+/// 运行中卡片即可跳转）。v1 串行执行保证同父同时至多一个运行中委派。
+#[derive(Clone, Serialize)]
+pub struct DelegationStartedPayload {
+    /// 父会话 id（事件路由用）
+    pub conversation_id: String,
+    /// 新建的委派子会话 id
+    pub child_conversation_id: String,
+    /// 专家 agent 显示名
+    pub agent_name: String,
+    /// 子会话标题（"委派: {task 截断}"）
+    pub title: String,
+}
+
 /// `chat:chunk` 事件 payload
 #[derive(Clone, Serialize)]
 pub struct ChatChunkPayload {

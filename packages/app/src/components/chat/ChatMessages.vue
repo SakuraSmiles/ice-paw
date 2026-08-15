@@ -298,6 +298,19 @@ function parseDelegateResult(content: string): {
   return null;
 }
 
+/** 本会话当前运行中的委派子会话 id（运行中卡片跳转用）。
+ *  child_conversation_id 在完成时的 tool_result 才回传，但后端在子会话创建成功
+ *  即 emit chat:delegation-started（store 刷新列表）→ 运行中也能跳。
+ *  v1 串行执行（execute_tool_round 顺序跑工具）保证同父同时至多一个运行中委派。 */
+const runningDelegationChildId = computed(() => {
+  const pid = chat.activeConvId;
+  if (!pid) return null;
+  const running = chat.conversations.find(
+    (c) => c.kind === "delegation" && c.parent_conversation_id === pid && chat.streamingConvIds.has(c.id),
+  );
+  return running?.id ?? null;
+});
+
 /** 历史 tool_use 的委派卡片取数：跨消息配对 tool_result，无结果=进行中。 */
 function delegateCardFor(
   tu: { id: string; name: string; input: string },
@@ -310,11 +323,12 @@ function delegateCardFor(
   const input = parseDelegateInput(tu.input);
   const tr = findToolResult(tu.id, msgIdx);
   const dr = tr && !tr.isError ? parseDelegateResult(tr.content) : null;
+  const status = !tr ? "running" : tr.isError ? "error" : "done";
   return {
     agentName: dr?.agentName ?? input?.agentId ?? "…",
     task: input?.task ?? "",
-    status: !tr ? "running" : tr.isError ? "error" : "done",
-    childConvId: dr?.childConvId ?? null,
+    status,
+    childConvId: dr?.childConvId ?? (status === "running" ? runningDelegationChildId.value : null),
     finishReason: dr?.finishReason ?? null,
     rounds: dr?.rounds ?? null,
     hasError: tr?.isError ?? false,
@@ -332,17 +346,18 @@ function delegateStreamCard(call: {
   if (call.name !== "delegate_to_agent") return null;
   const input = parseDelegateInput(call.arguments || "{}");
   const dr = call.result && !call.result.isError ? parseDelegateResult(call.result.content) : null;
+  const status = !call.result ? "running" : call.result.isError ? "error" : "done";
   return {
     agentName: dr?.agentName ?? input?.agentId ?? "…",
     task: input?.task ?? (call.ended ? "" : "正在接收参数…"),
-    status: !call.result ? "running" : call.result.isError ? "error" : "done",
-    childConvId: dr?.childConvId ?? null,
+    status,
+    childConvId: dr?.childConvId ?? (status === "running" ? runningDelegationChildId.value : null),
     finishReason: dr?.finishReason ?? null,
     rounds: dr?.rounds ?? null,
   };
 }
 
-/** 委派卡片「查看轨迹」：打开子会话并直落轨迹 tab（store 附带刷新会话列表）。 */
+/** 委派卡片「打开任务」：打开子会话并直落轨迹 tab（store 附带刷新会话列表）。 */
 function openChildConv(childId: string) {
   chat.openConversationAtTrajectory(childId);
 }
