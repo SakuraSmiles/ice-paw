@@ -17,6 +17,7 @@ import type { Agent, NewAgent, AgentUpdate, ProviderConnectionResult, ProviderIn
 import { bridge } from "../../api/bridge";
 import { loadProviders } from "../../composables/useProviders";
 import GroupedSelect from "../common/GroupedSelect.vue";
+import ProviderIcon from "../common/ProviderIcon.vue";
 import type { ComboboxGroup, ComboboxItem } from "../common/Combobox.vue";
 import MoreMenu from "../common/MoreMenu.vue";
 
@@ -337,6 +338,14 @@ function confirmDelete() {
             placeholder="选择模型（按厂商分组）"
             @select="onModelSelect"
           >
+            <!-- 关闭态控件前缀：当前归属厂商的图标 -->
+            <template #control-icon>
+              <ProviderIcon v-if="form.model" :name="form.provider" />
+            </template>
+            <!-- 组头：厂商品牌图标（未知 provider 渲染为空，不破版式） -->
+            <template #group-icon="{ group }">
+              <ProviderIcon :name="group.id ?? ''" :size="13" />
+            </template>
             <template #group-extra="{ group }">
               <!-- 自定义组：模型名输入框（目录外名字唯一入口，回车添加并选中） -->
               <div v-if="group.id === 'custom'" class="gs-inline-add">

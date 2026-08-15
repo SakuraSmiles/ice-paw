@@ -112,13 +112,15 @@ afterEach(() => {
 });
 
 describe("AgentForm 分组模型选择器", () => {
-  it("下拉分组来自 bridge.providers.list：组=厂商纯标签，组内=静态目录", async () => {
+  it("下拉分组来自 bridge.providers.list：组=厂商纯标签+品牌图标，组内=静态目录", async () => {
     const w = await mountForm();
     await openDropdown(w);
     expect(providersListMock).toHaveBeenCalled();
     const labels = w.findAll(".gs-group-label");
     expect(labels).toHaveLength(PROVIDERS.length);
     expect(labels.map((l) => l.text()).join("|")).toContain("Ollama 本地");
+    // 每组头一个品牌图标（custom 也有拼图 glyph）
+    expect(w.findAll(".gs-group-label svg.provider-icon")).toHaveLength(PROVIDERS.length);
     // openai 2 + glm 2 + ollama 拉取条目 1（custom 空组）
     expect(w.findAll(".gs-option")).toHaveLength(5);
   });
@@ -134,8 +136,9 @@ describe("AgentForm 分组模型选择器", () => {
     const input = createMock.mock.calls[0][0] as Record<string, unknown>;
     expect(input.provider).toBe("glm");
     expect(input.model).toBe("glm-5-turbo");
-    // 关闭态回显选中模型名（selector 语义）
+    // 关闭态回显选中模型名（selector 语义）+ 当前归属厂商图标
     expect(w.find(".gs-value").text()).toBe("glm-5-turbo");
+    expect(w.find(".gs-control svg.provider-icon").exists()).toBe(true);
   });
 
   it("Ollama：组内拉取条目触发探测（免 Key）→ 拉到的模型入组可选中，空 Key 可保存", async () => {

@@ -109,4 +109,19 @@ describe("GroupedSelect 分组选择器", () => {
     expect(w.findAll(".slot-mark").length).toBeGreaterThanOrEqual(3); // 每组尾都渲染
     w.unmount();
   });
+
+  it("group-icon 插槽在组头渲染、control-icon 在关闭态控件渲染", async () => {
+    const w = mount(GroupedSelect, {
+      props: { modelValue: "", groups: GROUPS },
+      slots: {
+        "group-icon": '<svg class="icon-mark" />',
+        "control-icon": '<span class="ctrl-mark" />',
+      },
+      attachTo: document.body,
+    });
+    expect(w.find(".gs-control .ctrl-mark").exists()).toBe(true); // 关闭态即可见
+    await openDropdown(w);
+    expect(w.findAll(".gs-group-label .icon-mark")).toHaveLength(3); // 每组头一个
+    w.unmount();
+  });
 });
