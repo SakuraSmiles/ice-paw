@@ -4,10 +4,10 @@
 // 字段：name, id, model（含隐式 provider）, api_key, base_url, workspace_path
 //
 // 模型选择 = 一个分组下拉（Provider+模型合并，用户心智「我要用哪个模型」一步到位）：
-// - 组头 = 厂商入口（可点选：provider 定、模型留待拉取/手输，如 Ollama）
-// - 组内条目 = 模型，点选同时推导 provider+model（同名模型跨厂商靠分组消歧）
-// - 手输目录外模型名 = 自定义（custom，必填 API URL）；组头选中后的手输归该厂商
-// - 静态目录来自后端 PROVIDERS 注册表（list_providers 单一真相源）+ 在线拉取并入所属组
+// - 组头 = 厂商纯标签（不可点），组内条目 = 模型，点选同时推导 provider+model
+// - 目录来自后端 PROVIDERS 注册表（list_providers 单一真相源），hidden 条目
+//   （自定义/旧入口）不进下拉，仅编辑态存量兜底合成一组显示
+// - 在线拉取并入所属组；多端点厂商（智谱标准/Coding）探测自动匹配并回填走通地址
 // Key/URL 字段的规则（requires_key / requires_base_url / 默认地址）由推导出的
 // provider 驱动，与后端校验一致；「测试连接」与「拉取模型」共用一次往返。
 import { ref, computed, onMounted, watch } from "vue";
@@ -77,11 +77,13 @@ const requiresKey = computed(() => currentProvider.value?.requires_key ?? true);
 const requiresBaseUrl = computed(() => currentProvider.value?.requires_base_url ?? false);
 const defaultUrl = computed(() => currentProvider.value?.default_url ?? "");
 
-// ---- 分组模型目录：组=厂商（optgroup 纯标签），条目 value=`provider::model` ----
-const CUSTOM = "custom";
+// ---- 分组模型目录：组=厂商（optgroup 纯标签，hidden 条目不进下拉），条目 value=`provider::model` ----
 
 /** 在线拉取结果（挂在拉取时的 provider 上，切走不清——列表还在原组里） */
 const fetched = ref<{ provider: string; models: string[] } | null>(null);
+
+/** matched_url 自动回填的地址（切厂商时清掉，避免旧端点跟到新厂商） */
+const autoFilledUrl = ref<string | null>(null);
 
 const modelEntry = (provider: string, model: string, note?: string): ComboboxItem => ({
   label: model,
@@ -91,24 +93,36 @@ const modelEntry = (provider: string, model: string, note?: string): ComboboxIte
 });
 
 const modelGroups = computed<ComboboxGroup[]>(() => {
-  const groups: ComboboxGroup[] = providerList.value.map((p) => {
-    const models = [...p.models];
-    if (fetched.value?.provider === p.name) {
-      models.push(...fetched.value.models.filter((m) => !models.includes(m)));
-    }
-    const items = models.map((m) => modelEntry(p.name, m));
-    // Ollama 免 Key 零门槛：组内常驻拉取条目（拉到真实列表后再选）
-    if (p.name === "ollama" && !p.models.length) {
-      items.push({ label: "↻ 拉取已安装模型", value: "ollama::__fetch__", data: { provider: "ollama", isFetch: true } });
-    }
-    return { id: p.name, label: p.label, note: p.note ?? undefined, items };
-  });
-  // 兜底：当前 (provider, model) 不在目录/拉取结果（编辑态存量、自定义手填）→
-  // 插进所属组让显示与高亮有解；找不到组（目录未加载/未收录 provider）落自定义组
+  const groups: ComboboxGroup[] = providerList.value
+    .filter((p) => !p.hidden)
+    .map((p) => {
+      const models = [...p.models];
+      if (fetched.value?.provider === p.name) {
+        models.push(...fetched.value.models.filter((m) => !models.includes(m)));
+      }
+      const items = models.map((m) => modelEntry(p.name, m));
+      // Ollama 免 Key 零门槛：组内常驻拉取条目（拉到真实列表后再选）
+      if (p.name === "ollama" && !p.models.length) {
+        items.push({ label: "↻ 拉取已安装模型", value: "ollama::__fetch__", data: { provider: "ollama", isFetch: true } });
+      }
+      return { id: p.name, label: p.label, note: p.note ?? undefined, items };
+    });
+  // 兜底：当前 (provider, model) 不在目录（编辑态存量目录外模型）→ 插进所属组；
+  // 归属组是 hidden 条目（自定义/旧入口，不进下拉）时单独合成一组，显示与高亮有解
   const m = form.value.model;
   if (m && !groups.some((g) => g.items.some((it) => it.value === `${form.value.provider}::${m}`))) {
-    const owner = groups.find((g) => g.id === form.value.provider) ?? groups.find((g) => g.id === CUSTOM);
-    owner?.items.push(modelEntry(owner.id ?? CUSTOM, m, "当前配置"));
+    const owner = groups.find((g) => g.id === form.value.provider);
+    if (owner) {
+      owner.items.push(modelEntry(owner.id ?? form.value.provider, m, "当前配置"));
+    } else {
+      const cp = currentProvider.value;
+      groups.push({
+        id: form.value.provider,
+        label: cp?.label ?? form.value.provider,
+        note: cp?.note ?? undefined,
+        items: [modelEntry(form.value.provider, m, "当前配置")],
+      });
+    }
   }
   return groups;
 });
@@ -119,17 +133,6 @@ const modelValue = computed(() => {
   return modelGroups.value.some((g) => g.items.some((it) => it.value === key)) ? key : "";
 });
 
-/** 自定义组内输入框：回车 = 添加为当前模型（目录外名字唯一入口） */
-const customDraft = ref("");
-function addCustomModel() {
-  const text = customDraft.value.trim();
-  if (!text) return;
-  form.value.provider = CUSTOM;
-  form.value.model = text;
-  customDraft.value = "";
-  connResult.value = null;
-}
-
 // ---- 选择处理：点条目（select 事件）推导 provider+model；拉取条目就地触发探测 ----
 function onModelSelect(item: ComboboxItem) {
   const data = item.data as { provider?: string; model?: string; isFetch?: boolean } | undefined;
@@ -139,7 +142,17 @@ function onModelSelect(item: ComboboxItem) {
     void runTest();
     return;
   }
-  form.value.provider = data?.provider ?? CUSTOM;
+  const next = data?.provider ?? form.value.provider;
+  if (next !== form.value.provider) {
+    // 切厂商：旧厂商的自动回填/注册表地址不跟过来（用户手输的代理地址不动）
+    const old = currentProvider.value;
+    const known = old ? [old.default_url, ...old.alt_urls.map((a) => a[1])] : [];
+    if (form.value.base_url && (form.value.base_url === autoFilledUrl.value || known.includes(form.value.base_url))) {
+      form.value.base_url = "";
+    }
+    autoFilledUrl.value = null;
+  }
+  form.value.provider = next;
   form.value.model = data?.model ?? item.label;
 }
 
@@ -166,17 +179,25 @@ async function runTest() {
       isEdit.value ? props.agent?.id : undefined,
     );
     connResult.value = res;
-    if (res.ok && res.models.length > 0) {
-      // 拉取结果挂在当前 provider 组（与静态目录去重合并）
-      fetched.value = { provider: form.value.provider, models: res.models };
+    if (res.ok) {
+      // 走通地址回填固化（多端点回退时 matched 可能是备选端点，如智谱 Coding）
+      if (res.matched_url && res.matched_url !== form.value.base_url) {
+        form.value.base_url = res.matched_url;
+        autoFilledUrl.value = res.matched_url;
+      }
+      if (res.models.length > 0) {
+        // 拉取结果挂在当前 provider 组（与静态目录去重合并）
+        fetched.value = { provider: form.value.provider, models: res.models };
+      }
     }
   } catch (e) {
-    // 命令本身失败（如未注册 provider / custom 缺地址被 Validation 拦）——同样行内展示
+    // 命令本身失败（如未注册 provider / 缺地址被 Validation 拦）——同样行内展示
     connResult.value = {
       ok: false,
       model_count: 0,
       models: [],
       error: e instanceof Error ? e.message : String(e),
+      matched_url: null,
     };
   } finally {
     testing.value = false;
@@ -345,18 +366,6 @@ function confirmDelete() {
             <!-- 组头：厂商品牌图标（未知 provider 渲染为空，不破版式） -->
             <template #group-icon="{ group }">
               <ProviderIcon :name="group.id ?? ''" :size="13" />
-            </template>
-            <template #group-extra="{ group }">
-              <!-- 自定义组：模型名输入框（目录外名字唯一入口，回车添加并选中） -->
-              <div v-if="group.id === 'custom'" class="gs-inline-add">
-                <input
-                  v-model="customDraft"
-                  type="text"
-                  class="gs-inline-input"
-                  placeholder="输入模型名，回车添加"
-                  @keydown.enter.prevent="addCustomModel"
-                />
-              </div>
             </template>
           </GroupedSelect>
           <button
@@ -546,29 +555,6 @@ function confirmDelete() {
 .model-group .gs {
   flex: 1;
   min-width: 0;
-}
-/* 自定义组内联输入（目录外模型名入口） */
-.gs-inline-add {
-  padding: 2px 4px 6px 20px;
-}
-.gs-inline-input {
-  width: 100%;
-  height: 26px;
-  padding: 0 8px;
-  font-size: var(--ip-text-body-sm-size);
-  color: var(--ip-color-text-primary);
-  background-color: var(--ip-color-bg-tertiary);
-  border: 1px dashed var(--ip-color-border-default);
-  border-radius: var(--ip-radius-sm);
-  outline: none;
-  box-sizing: border-box;
-}
-.gs-inline-input:focus {
-  border-color: var(--color-input-focus-border);
-  border-style: solid;
-}
-.gs-inline-input::placeholder {
-  color: var(--ip-color-text-placeholder);
 }
 /* 拉取中旋转反馈 */
 .ws-btn-fetching svg {

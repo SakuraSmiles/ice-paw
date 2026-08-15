@@ -73,14 +73,21 @@ struct ProviderDesc {
     name: &'static str,
     protocol: ProviderProtocol,
     default_url: &'static str,
+    /// 备选探测端点（标签, 地址）：未显式填地址时按 [默认, ...备选] 顺序探测，
+    /// 走通的地址回传前端存进 agent——智谱标准/Coding 双端点 key 不通用，
+    /// 让「测试连接」自动匹配，下拉里只保留一个厂商选项
+    alt_urls: &'static [(&'static str, &'static str)],
     /// 展示名（下拉框主行）
     label: &'static str,
-    /// 补充说明（下拉框副行，如「Coding Plan 订阅专用」）
+    /// 补充说明（下拉框副行，如「本地推理，无需 API Key」）
     note: Option<&'static str>,
-    /// 该 provider 是否需要 API Key（ollama/custom 本地服务无需）
+    /// 该 provider 是否需要 API Key（ollama 本地服务无需）
     requires_key: bool,
     /// 是否必须显式填写 base_url（custom 无默认地址，必填）
     requires_base_url: bool,
+    /// 隐藏条目：不进前端下拉（UI 已收敛/下线），但注册表仍可解析——
+    /// 存量 agent 的创建/探测/徽标显示照常，零破坏
+    hidden: bool,
     /// 静态模型目录（起点参考；在线「拉取」按钮拿实时列表，手输永远保留）
     models: &'static [&'static str],
 }
@@ -94,55 +101,67 @@ pub enum ProviderProtocol {
 
 /// 数据驱动的 provider 注册表（单一真相源，消除 create_provider 与
 /// default_base_url 两份 match 语句的同步风险）。
+///
+/// 端点地址均已按官方文档核对（2026-08）：DeepSeek `api.deepseek.com` 是 API
+/// 域（官网是 www.deepseek.com）；智谱双端点见 `glm` 的 alt_urls；MiniMax
+/// 统一国内站（用户拍板：不区分国内/国际）。
 const PROVIDERS: &[ProviderDesc] = &[
     ProviderDesc {
         name: "openai", protocol: ProviderProtocol::OpenAI, default_url: "https://api.openai.com",
-        label: "OpenAI", note: None, requires_key: true, requires_base_url: false,
+        alt_urls: &[], label: "OpenAI", note: None, requires_key: true, requires_base_url: false,
+        hidden: false,
         models: &["gpt-4o", "gpt-4o-mini", "o3-mini", "gpt-4.1", "gpt-4.1-mini"],
     },
     ProviderDesc {
         name: "glm", protocol: ProviderProtocol::OpenAI, default_url: "https://open.bigmodel.cn/api/paas/v4",
-        label: "智谱 GLM", note: None, requires_key: true, requires_base_url: false,
+        alt_urls: &[("Coding 端点", "https://open.bigmodel.cn/api/coding/paas/v4")],
+        label: "智谱", note: Some("GLM 系列；标准/Coding 端点自动匹配"),
+        requires_key: true, requires_base_url: false, hidden: false,
         models: &["glm-5-turbo", "glm-5.2", "glm-5.1", "glm-4", "glm-4-flash"],
     },
     ProviderDesc {
         name: "glm-coding", protocol: ProviderProtocol::OpenAI, default_url: "https://open.bigmodel.cn/api/coding/paas/v4",
-        label: "智谱 GLM Coding",
-        note: Some("Coding Plan 订阅专用端点，API Key 与标准端点不通用"),
-        requires_key: true, requires_base_url: false,
+        alt_urls: &[], label: "智谱 GLM Coding",
+        note: Some("旧入口：新配置请选「智谱」，测试连接会自动匹配端点"),
+        requires_key: true, requires_base_url: false, hidden: true,
         models: &["glm-5.2", "glm-5.1", "glm-5-turbo"],
     },
     ProviderDesc {
         name: "deepseek", protocol: ProviderProtocol::OpenAI, default_url: "https://api.deepseek.com",
-        label: "DeepSeek", note: None, requires_key: true, requires_base_url: false,
+        alt_urls: &[], label: "DeepSeek", note: None, requires_key: true, requires_base_url: false,
+        hidden: false,
         models: &["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-chat", "deepseek-reasoner"],
     },
     ProviderDesc {
         name: "anthropic", protocol: ProviderProtocol::Anthropic, default_url: "https://api.anthropic.com",
-        label: "Anthropic", note: None, requires_key: true, requires_base_url: false,
+        alt_urls: &[], label: "Anthropic", note: None, requires_key: true, requires_base_url: false,
+        hidden: false,
         models: &["claude-sonnet-4-20250514", "claude-haiku-3-5-20241022", "claude-opus-4-20250514"],
     },
     ProviderDesc {
-        name: "minimax", protocol: ProviderProtocol::Anthropic, default_url: "https://api.minimax.io/anthropic",
-        label: "MiniMax（国际站）", note: Some("海外手机号/邮箱注册的账号"), requires_key: true, requires_base_url: false,
+        name: "minimax", protocol: ProviderProtocol::Anthropic, default_url: "https://api.minimaxi.com/anthropic",
+        alt_urls: &[], label: "MiniMax", note: Some("国内站"), requires_key: true, requires_base_url: false,
+        hidden: false,
         models: &["MiniMax-M3", "MiniMax-M2.5", "MiniMax-M2.5-highspeed"],
     },
     ProviderDesc {
         name: "minimax-cn", protocol: ProviderProtocol::Anthropic, default_url: "https://api.minimaxi.com/anthropic",
-        label: "MiniMax（国内站）", note: Some("国内手机号注册的账号"), requires_key: true, requires_base_url: false,
+        alt_urls: &[], label: "MiniMax（国内站·旧）",
+        note: Some("旧入口：与 MiniMax 同端点"),
+        requires_key: true, requires_base_url: false, hidden: true,
         models: &["MiniMax-M3", "MiniMax-M2.5", "MiniMax-M2.5-highspeed"],
     },
     ProviderDesc {
         name: "ollama", protocol: ProviderProtocol::OpenAI, default_url: "http://localhost:11434/v1",
-        label: "Ollama 本地", note: Some("本地推理，无需 API Key；点「拉取」获取已安装的模型"),
-        requires_key: false, requires_base_url: false,
+        alt_urls: &[], label: "Ollama 本地", note: Some("本地推理，无需 API Key；点「拉取」获取已安装的模型"),
+        requires_key: false, requires_base_url: false, hidden: false,
         models: &[],
     },
     ProviderDesc {
         name: "custom", protocol: ProviderProtocol::OpenAI, default_url: "",
-        label: "自定义（OpenAI 兼容）",
-        note: Some("接入 vLLM / LM Studio / one-api 等，须填写 API URL；服务需要鉴权则填 Key"),
-        requires_key: false, requires_base_url: true,
+        alt_urls: &[], label: "自定义（OpenAI 兼容）",
+        note: Some("已下线：存量配置仍可用，须填写 API URL"),
+        requires_key: false, requires_base_url: true, hidden: true,
         models: &[],
     },
 ];
@@ -218,19 +237,23 @@ fn default_base_url(provider: &str) -> String {
 
 /// 前端 Provider 目录条目（`list_providers` 命令的返回类型）。
 /// 字段与 `ProviderDesc` 一一对应，serde 走 snake_case 透传（与 events 惯例一致）。
+/// `hidden` 条目也会下发（AgentSettings 徽标/编辑态解析要用），前端下拉自行过滤。
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ProviderInfo {
     pub name: String,
     pub protocol: ProviderProtocol,
     pub default_url: String,
+    /// 备选探测端点 [标签, 地址]（serde 元组序列化为数组）
+    pub alt_urls: Vec<(String, String)>,
     pub label: String,
     pub note: Option<String>,
     pub requires_key: bool,
     pub requires_base_url: bool,
+    pub hidden: bool,
     pub models: Vec<String>,
 }
 
-/// 全量 Provider 目录（`list_providers` 命令直接返回）。
+/// 全量 Provider 目录（`list_providers` 命令直接返回；含 hidden 条目）。
 pub fn list_provider_infos() -> Vec<ProviderInfo> {
     PROVIDERS
         .iter()
@@ -238,10 +261,16 @@ pub fn list_provider_infos() -> Vec<ProviderInfo> {
             name: d.name.to_string(),
             protocol: d.protocol,
             default_url: d.default_url.to_string(),
+            alt_urls: d
+                .alt_urls
+                .iter()
+                .map(|(l, u)| (l.to_string(), u.to_string()))
+                .collect(),
             label: d.label.to_string(),
             note: d.note.map(|s| s.to_string()),
             requires_key: d.requires_key,
             requires_base_url: d.requires_base_url,
+            hidden: d.hidden,
             models: d.models.iter().map(|s| s.to_string()).collect(),
         })
         .collect()
@@ -315,14 +344,14 @@ mod tests {
         assert!(r.is_ok());
     }
 
-    /// 默认 URL 表必须准确：MiniMax 双站地址必须不同（国际站 .io / 国内站 .com，
-    /// 曾经双双写成国内站——国际站用户的「默认地址不对」根源）
+    /// 默认 URL 表必须准确（端点已按官方文档核对，2026-08）：
+    /// MiniMax 统一国内站（api.minimaxi.com，多一个 i——国际站 .io 已下线）
     #[test]
     fn default_base_urls() {
         assert_eq!(default_base_url("anthropic"), "https://api.anthropic.com");
         assert_eq!(
             default_base_url("minimax"),
-            "https://api.minimax.io/anthropic"
+            "https://api.minimaxi.com/anthropic"
         );
         assert_eq!(
             default_base_url("minimax-cn"),
@@ -337,7 +366,7 @@ mod tests {
             default_base_url("glm-coding"),
             "https://open.bigmodel.cn/api/coding/paas/v4"
         );
-        // 回归：原有三个不变
+        // 回归：原有三个不变（api.deepseek.com 是 API 域，官网是 www.）
         assert_eq!(default_base_url("openai"), "https://api.openai.com");
         assert_eq!(default_base_url("deepseek"), "https://api.deepseek.com");
         // ollama 默认指向本地服务；custom 无默认地址
@@ -346,6 +375,47 @@ mod tests {
         // 兑底返回空串
         assert_eq!(default_base_url(""), "");
         assert_eq!(default_base_url("totally-unknown"), "");
+    }
+
+    /// 可见目录（前端下拉数据源）：hidden 条目（旧入口/已下线）不进下拉，
+    /// 但仍在注册表内可解析（存量 agent 零破坏）
+    #[test]
+    fn visible_catalog_excludes_hidden() {
+        let infos = list_provider_infos();
+        let visible: Vec<&str> = infos
+            .iter()
+            .filter(|i| !i.hidden)
+            .map(|i| i.name.as_str())
+            .collect();
+        assert_eq!(
+            visible,
+            vec!["openai", "glm", "deepseek", "anthropic", "minimax", "ollama"]
+        );
+        // hidden 条目仍可解析（工厂/目录元数据照常）
+        for legacy in ["glm-coding", "minimax-cn", "custom"] {
+            assert!(find_provider(legacy).is_some(), "{} 应保留在注册表", legacy);
+            assert!(find_provider(legacy).unwrap().hidden);
+        }
+    }
+
+    /// 智谱双端点：可见条目 glm 携带 Coding 备选端点（探测回退用）；
+    /// 其余 provider 无备选（单端点直测）
+    #[test]
+    fn glm_carries_coding_alt_url() {
+        let infos = list_provider_infos();
+        let glm = infos.iter().find(|i| i.name == "glm").unwrap();
+        assert_eq!(
+            glm.alt_urls,
+            vec![(
+                "Coding 端点".to_string(),
+                "https://open.bigmodel.cn/api/coding/paas/v4".to_string()
+            )]
+        );
+        for i in &infos {
+            if i.name != "glm" {
+                assert!(i.alt_urls.is_empty(), "{} 不应有备选端点", i.name);
+            }
+        }
     }
 
     /// 目录质量：label 全部唯一且非空（前端下拉显示名，重复即无法反查）
@@ -392,9 +462,18 @@ mod tests {
             assert_eq!(info.name, desc.name);
             assert_eq!(info.protocol, desc.protocol);
             assert_eq!(info.default_url, desc.default_url);
+            assert_eq!(
+                info.alt_urls,
+                desc.alt_urls
+                    .iter()
+                    .map(|(l, u)| (l.to_string(), u.to_string()))
+                    .collect::<Vec<_>>()
+            );
             assert_eq!(info.label, desc.label);
             assert_eq!(info.note.as_deref(), desc.note);
             assert_eq!(info.requires_key, desc.requires_key);
+            assert_eq!(info.requires_base_url, desc.requires_base_url);
+            assert_eq!(info.hidden, desc.hidden);
             assert_eq!(
                 info.models,
                 desc.models.iter().map(|s| s.to_string()).collect::<Vec<_>>()
