@@ -604,16 +604,23 @@ pub(crate) async fn build_tool_ctx(
     }
 }
 
-/// 判断 file_path 是否在 agent workspace 内（规范化后 starts_with）。
-/// 路径不存在时回退到直接 starts_with（read_file 读前判断，文件可能还没 canonicalize）。
+/// 判断 file_path 是否在 agent workspace 内。
+///
+/// 授权免弹窗的单一判定，经 `infra::path_norm::path_within`（词法归一 +
+/// 组件级比较 + Windows 大小写/`..`/verbatim 前缀安全）：
+/// - 存在路径先 canonicalize（解析符号链接，防链接逃逸出 workspace）
+/// - 不存在（新建文件/未建目录）回退词法归一——旧实现此处拿原始串与
+///   canonicalize 的 `\\?\` verbatim 形直接 starts_with，Windows 恒 false，
+///   workspace 内所有不存在路径 100% 误弹审批（0.3.5 生产反馈）
 fn path_within_workspace(file_path: &str, workspace: &Option<PathBuf>) -> bool {
     let Some(ws) = workspace else {
         return false;
     };
-    match Path::new(file_path).canonicalize() {
-        Ok(cfp) => cfp.starts_with(ws),
-        Err(_) => Path::new(file_path).starts_with(ws),
-    }
+    let target = match Path::new(file_path).canonicalize() {
+        Ok(cfp) => cfp,
+        Err(_) => crate::infra::path_norm::lexical_normalize(Path::new(file_path)),
+    };
+    crate::infra::path_norm::path_within(&target, ws)
 }
 
 /// 从工具参数 JSON 提取路径字段（`path` / `file_path` / `dir` / `source` / `destination`）
@@ -757,5 +764,32 @@ mod tests {
     #[test]
     fn path_within_workspace_none_workspace() {
         assert!(!path_within_workspace("/any/path", &None));
+    }
+
+    #[test]
+    fn path_within_workspace_nonexistent_inside() {
+        // 0.3.5 生产 bug 回归：workspace 走 canonicalize（Windows 得 \\?\ 形），
+        // 目标是 workspace 内尚不存在的路径（新建文件/未建目录）——
+        // 旧实现恒 false → 误弹审批
+        let ws_path = std::env::temp_dir()
+            .canonicalize()
+            .expect("temp dir 应存在");
+        let ws = Some(ws_path.clone());
+        let inside_new = ws_path.join("no_such_dir_p1r12").join("new_file.txt");
+        assert!(path_within_workspace(inside_new.to_str().unwrap(), &ws));
+    }
+
+    #[test]
+    fn path_within_workspace_dotdot_traversal_rejected() {
+        // 安全回归：字符串前缀曾被 `..` 穿越骗过（/tmp/../../x starts_with /tmp）
+        let ws_path = std::env::temp_dir()
+            .canonicalize()
+            .expect("temp dir 应存在");
+        let ws = Some(ws_path.clone());
+        let escape = ws_path
+            .join("..")
+            .join("..")
+            .join("no_such_top_p1r12");
+        assert!(!path_within_workspace(escape.to_str().unwrap(), &ws));
     }
 }

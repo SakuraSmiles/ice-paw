@@ -8,6 +8,7 @@
 //! - `AuthorizationDecision` 表达「直接放行 / 需要用户确认 / 拒绝」三态
 
 use std::collections::HashSet;
+use std::path::Path;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -15,6 +16,7 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::harness::mcp::AuthorizationLevel;
+use crate::infra::path_norm;
 
 // =========================================================================
 // PathWhitelistConfig — 路径白名单配置
@@ -23,7 +25,7 @@ use crate::harness::mcp::AuthorizationLevel;
 /// 路径白名单配置
 #[derive(Debug, Clone, Default)]
 pub struct PathWhitelistConfig {
-    /// 允许的路径前缀列表（例如 `["~/workspace/", "/tmp/"]`）
+    /// 允许的路径列表（目录或文件，例如 `["~/workspace/", "/tmp/"]`）
     pub allowed_paths: Vec<String>,
 }
 
@@ -31,16 +33,17 @@ pub struct PathWhitelistConfig {
 ///
 /// 规则：
 /// - 白名单为空 → 全部拒绝（安全默认）
-/// - 前缀匹配：路径以任一 `allowed_paths` 元素开头即放行
-/// - 后续可扩展为 glob 匹配
+/// - 成员判定经 `path_norm::path_within`（词法归一 + 组件级前缀 + `..` 穿越
+///   消解 + Windows 大小写）——不再手搓字符串 starts_with
 pub fn is_path_allowed(path: &str, config: &PathWhitelistConfig) -> bool {
     if config.allowed_paths.is_empty() {
         return false;
     }
+    let target = Path::new(path);
     config
         .allowed_paths
         .iter()
-        .any(|allowed| path.starts_with(allowed))
+        .any(|allowed| path_norm::path_within(target, Path::new(allowed)))
 }
 
 // =========================================================================
@@ -109,16 +112,19 @@ impl PathAuthSession {
         }
     }
 
-    /// 当前路径是否已被本会话授权
+    /// 当前路径是否已被本会话授权（按归一缓存键比较——同一路径不同写法
+    /// （大小写/`./..`/verbatim 前缀）不重复弹窗）
     pub async fn is_authorized(&self, path: &str) -> bool {
+        let key = path_norm::auth_cache_key(path);
         let set = self.inner.lock().await;
-        set.contains(path)
+        set.contains(&key)
     }
 
-    /// 把路径加入已授权集合
+    /// 把路径加入已授权集合（归一后存储）
     pub async fn mark_authorized(&self, path: &str) {
+        let key = path_norm::auth_cache_key(path);
         let mut set = self.inner.lock().await;
-        set.insert(path.to_string());
+        set.insert(key);
     }
 
     /// 清空会话授权（流式结束 / 取消时调用）
@@ -267,8 +273,25 @@ mod tests {
     fn whitelist_exact_match() {
         let cfg = whitelist(&["/tmp/test.txt"]);
         assert!(is_path_allowed("/tmp/test.txt", &cfg));
-        assert!(is_path_allowed("/tmp/test.txt.bak", &cfg));
+        // 语义收紧（组件级成员判定）：.bak 是另一个文件，不再被字符串
+        // 前缀连带放行——白名单项精确到文件就只覆盖该文件
+        assert!(!is_path_allowed("/tmp/test.txt.bak", &cfg));
         assert!(!is_path_allowed("/tmp/test2.txt", &cfg));
+    }
+
+    #[test]
+    fn whitelist_dotdot_traversal_rejected() {
+        // 安全：`..` 词法消解后再判归属，字符串前缀骗不过白名单
+        let cfg = whitelist(&["/workspace/"]);
+        assert!(!is_path_allowed("/workspace/../../etc/passwd", &cfg));
+        assert!(is_path_allowed("/workspace/sub/../file.txt", &cfg));
+    }
+
+    #[test]
+    fn whitelist_curdir_and_trailing_slash() {
+        let cfg = whitelist(&["/workspace/"]);
+        assert!(is_path_allowed("/workspace/./sub/file.txt", &cfg));
+        assert!(is_path_allowed("/workspace", &cfg)); // 根本身也在内
     }
 
     #[test]
@@ -453,6 +476,16 @@ mod tests {
         session.clear().await;
         assert_eq!(session.len().await, 0);
         assert!(!session.is_authorized("/a").await);
+    }
+
+    #[tokio::test]
+    async fn session_authorization_normalized() {
+        // 归一缓存键：同一路径不同写法（./ 段、尾斜杠）不再重复弹窗
+        let session = PathAuthSession::new();
+        session.mark_authorized("/ws/./sub/../file.txt").await;
+        assert!(session.is_authorized("/ws/file.txt").await);
+        assert!(session.is_authorized("/ws/file.txt/").await);
+        assert!(!session.is_authorized("/ws/other.txt").await);
     }
 
     #[tokio::test]
