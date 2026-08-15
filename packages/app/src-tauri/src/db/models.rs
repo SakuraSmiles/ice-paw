@@ -452,6 +452,14 @@ pub struct ConversationRow {
     pub tools_override: Option<String>,
     /// Phase 2: 所属项目 ID（NULL = 默认项目）
     pub project_id: Option<String>,
+    /// MA-1: 会话类型 'chat' | 'delegation' | 'channel'（migration 45，存量行默认 'chat'）
+    pub kind: String,
+    /// MA-1: 发起者 'user' | 'agent'（NULL ≡ 'user'，旧数据语义）
+    pub initiator_type: Option<String>,
+    /// MA-1: delegation 子会话的发起 agent（无 FK——agent 可删，会话须活得比 agent 久）
+    pub initiator_agent_id: Option<String>,
+    /// MA-1: 委派图边——发起委派的父会话（ON DELETE SET NULL，父删边不删子）
+    pub parent_conversation_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -468,6 +476,20 @@ pub struct Conversation {
     /// Phase 2: 所属项目 ID（None = 默认项目）
     #[serde(default)]
     pub project_id: Option<String>,
+    /// MA-1: 会话类型 'chat' | 'delegation' | 'channel'（serde default 兼容旧缓存负载）
+    #[serde(default = "default_conversation_kind")]
+    pub kind: String,
+    /// MA-1: 发起者（'user' | 'agent'；None ≡ 'user'）
+    #[serde(default)]
+    pub initiator_agent_id: Option<String>,
+    /// MA-1: 委派父会话（None = 非委派会话）
+    #[serde(default)]
+    pub parent_conversation_id: Option<String>,
+}
+
+/// `kind` 的 serde 默认值（旧负载无此字段时视为普通聊天会话）
+fn default_conversation_kind() -> String {
+    "chat".to_string()
 }
 
 impl From<ConversationRow> for Conversation {
@@ -483,6 +505,13 @@ impl From<ConversationRow> for Conversation {
                 .as_deref()
                 .map(|s| serde_json::from_str::<HashMap<String, bool>>(s).unwrap_or_default()),
             project_id: row.project_id,
+            kind: if row.kind.is_empty() {
+                default_conversation_kind()
+            } else {
+                row.kind
+            },
+            initiator_agent_id: row.initiator_agent_id,
+            parent_conversation_id: row.parent_conversation_id,
         }
     }
 }
@@ -495,6 +524,15 @@ pub struct NewConversation {
     /// Phase 2: 所属项目 ID（None = 默认项目）
     #[serde(default)]
     pub project_id: Option<String>,
+    /// MA-1: 会话类型（None = 'chat'；'delegation' = agent 委派子会话）
+    #[serde(default)]
+    pub kind: Option<String>,
+    /// MA-1: 发起委派的 agent（None = 用户发起；Some 即 initiator_type='agent'）
+    #[serde(default)]
+    pub initiator_agent_id: Option<String>,
+    /// MA-1: 委派父会话 ID（None = 非委派会话）
+    #[serde(default)]
+    pub parent_conversation_id: Option<String>,
 }
 
 // =========================================================================
