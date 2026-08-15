@@ -63,10 +63,20 @@ export function useScrollFollow(listRef: Ref<HTMLElement | null>) {
   const showScrollBtn = ref(false);
   /** 是否「跟随底部」自动滚动。用户向上滚离底部时置 false，滚回底部或点「回到底部」恢复 true。*/
   const autoFollow = ref(true);
-  /** 分页加载进行中（期间不触发自动跟随 / 不重复分页 / 不覆盖锚点） */
+  /** 分页加载进行中（期间不触发自动跟随 / 不重复分页 / 不采样锚点） */
   const paginating = ref(false);
   let suppressScrollCheck = false;
   const scrollPosCache = { scrollHeight: 0, scrollTop: 0 };
+
+  /** 按当前真实几何刷新按钮/跟随态。scroll 事件到不了的地方（内容塌陷/增高
+   *  不触发 scroll、suppress 窗口内）状态会冻结在旧值——每次主动定位后调用。 */
+  function refreshFollowState() {
+    const el = listRef.value;
+    if (!el) return;
+    const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+    showScrollBtn.value = dist > 80;
+    autoFollow.value = dist <= FOLLOW_THRESHOLD;
+  }
 
   // ---- 锚点捕获：滚动停稳后 150ms 采样（快滑中间态无价值） ----
   let captureTimer: ReturnType<typeof setTimeout> | undefined;
@@ -74,7 +84,9 @@ export function useScrollFollow(listRef: Ref<HTMLElement | null>) {
   function captureAnchor() {
     const el = listRef.value;
     const cid = chat.activeConvId;
-    if (!el || !cid) return;
+    // 过渡期不采样（真机首修竞态）：切会话瞬间 messages 清空 → 列表塌陷的
+    // scroll 事件/迟到的采样会把跨会话脏位置写进新会话锚点 → 回来恢复到错位
+    if (!el || !cid || chat.msgLoading || paginating.value || chat.messages.length === 0) return;
     const group = findTopGroupEl(el);
     if (!group) return;
     anchors.set(cid, {
@@ -91,7 +103,7 @@ export function useScrollFollow(listRef: Ref<HTMLElement | null>) {
 
   // 检测滚动位置：非底部显示按钮，靠近顶部触发分页
   function onScroll() {
-    if (suppressScrollCheck || paginating.value) return;
+    if (suppressScrollCheck || paginating.value || chat.msgLoading) return;
     const el = listRef.value;
     if (!el) return;
 
@@ -115,9 +127,19 @@ export function useScrollFollow(listRef: Ref<HTMLElement | null>) {
             newEl.scrollTop = scrollPosCache.scrollTop + added;
           }
           paginating.value = false;
+          refreshFollowState();
         });
       });
     }
+  }
+
+  /** 定位到真实底部（content-visibility 屏外是估算高度，首帧后真实高度才
+   *  稳定 → 单次 scrollTo 会差一截）。仅在仍处跟随态时校正，勿抢用户滚动。 */
+  function snapToRealBottom() {
+    const el = listRef.value;
+    if (!el || !autoFollow.value) return;
+    el.scrollTop = el.scrollHeight;
+    refreshFollowState();
   }
 
   function scrollToBottom(smooth?: boolean) {
@@ -135,12 +157,18 @@ export function useScrollFollow(listRef: Ref<HTMLElement | null>) {
       // smooth 动画期间内容可能增高（图片/流式），一次 scrollHeight 快照会停在
       // 离底差一截处（「跳到最新不准确」的根因）——动画结束后按真高度校正一次
       setTimeout(() => {
-        const e = listRef.value;
-        if (e) e.scrollTop = e.scrollHeight;
+        snapToRealBottom();
         suppressScrollCheck = false;
+        refreshFollowState();
       }, 500);
     } else {
-      setTimeout(() => { suppressScrollCheck = false; }, 50);
+      setTimeout(() => {
+        snapToRealBottom();
+        suppressScrollCheck = false;
+        refreshFollowState();
+        // 首帧渲染后 content-visibility 真实高度才稳定，再校一档
+        setTimeout(snapToRealBottom, 300);
+      }, 50);
     }
   }
 
@@ -149,17 +177,23 @@ export function useScrollFollow(listRef: Ref<HTMLElement | null>) {
     const a = anchors.get(cid);
     const el = listRef.value;
     if (!a || a.atBottom || !el) return false;
-    const node = el.querySelector<HTMLElement>(`[data-mid="${CSS.escape(a.messageId)}"]`);
+    const sel = `[data-mid="${CSS.escape(a.messageId)}"]`;
+    const node = el.querySelector<HTMLElement>(sel);
     if (!node) return false;
     suppressScrollCheck = true;
     autoFollow.value = false; // 恢复到历史位 = 非跟随态（「跳到最新」按钮应显示）
     el.scrollTop = node.offsetTop - a.offset;
     await nextTick();
-    // content-visibility 首屏外高度是估算值：锚点进视口后按真实 offsetTop 再校一次
-    const rerendered = el.querySelector<HTMLElement>(`[data-mid="${CSS.escape(a.messageId)}"]`);
-    if (rerendered) el.scrollTop = rerendered.offsetTop - a.offset;
-    showScrollBtn.value = el.scrollHeight - el.scrollTop - el.clientHeight > 80;
-    setTimeout(() => { suppressScrollCheck = false; }, 100);
+    // content-visibility 首屏外高度是估算值：锚点进视口后按真实 offsetTop 再校
+    setTimeout(() => {
+      const e2 = listRef.value;
+      if (e2 && chat.activeConvId === cid) {
+        const n2 = e2.querySelector<HTMLElement>(sel);
+        if (n2) e2.scrollTop = n2.offsetTop - a.offset;
+        refreshFollowState();
+      }
+      suppressScrollCheck = false;
+    }, 150);
     return true;
   }
 
@@ -172,6 +206,8 @@ export function useScrollFollow(listRef: Ref<HTMLElement | null>) {
     cid: string,
     paginate: { loadMore: () => Promise<void>; hasMore: () => boolean },
   ): Promise<void> {
+    // 恢复途中又切了会话 → 立即放弃（真机首修竞态：旧循环会往新会话里翻页）
+    if (chat.activeConvId !== cid) return;
     const anchor = anchors.get(cid);
     const plan = planScrollRestore(anchor, new Set(chat.messages.map((m) => m.id)));
     if (plan === "bottom") {
@@ -185,10 +221,15 @@ export function useScrollFollow(listRef: Ref<HTMLElement | null>) {
     // paginate：锚点在窗口外（用户翻过历史），翻页直到锚点入窗或加载尽
     paginating.value = true;
     try {
-      while (paginate.hasMore() && !chat.messages.some((m) => m.id === anchor!.messageId)) {
+      while (
+        chat.activeConvId === cid
+        && paginate.hasMore()
+        && !chat.messages.some((m) => m.id === anchor!.messageId)
+      ) {
         await paginate.loadMore();
         await nextTick();
       }
+      if (chat.activeConvId !== cid) return;
       // 消息被删/加载尽仍未命中 → 兜底贴底（宁贴底不悬空）
       if (!(await positionAtAnchor(cid))) scrollToBottom(false);
     } finally {
