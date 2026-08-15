@@ -503,6 +503,7 @@ export const useChatStore = defineStore("chat", () => {
     pendingProposals.value = new Map();
     pendingAuthRequests.value = new Map();
     draftText.value = "";
+    openTrajectoryNext.value = false;
   }
 
   /** 清除当前选中会话（切项目空间时调用）：保留 conversations 列表与草稿，
@@ -520,6 +521,7 @@ export const useChatStore = defineStore("chat", () => {
     bgStreams.value = new Map();
     pendingProposals.value = new Map();
     pendingAuthRequests.value = new Map();
+    openTrajectoryNext.value = false;
   }
 
 
@@ -530,6 +532,21 @@ export const useChatStore = defineStore("chat", () => {
     if (sending.value && activeConvId.value) ids.add(activeConvId.value);
     return ids;
   });
+
+  // ===== MA-1：delegation 子会话的编程式入口 =====
+  // 委派子会话（kind='delegation'）不进侧栏列表，唯一入口是父会话委派卡片 /
+  // 项目页任务列表的点击。二者都需要「打开该会话并直接落到轨迹 tab」，
+  // 而 ChatPage 的 tab 是组件内部状态——用一次性标志传递意图。
+  const openTrajectoryNext = ref(false);
+
+  /** 打开（可能在列表外的）会话并直接落到轨迹 tab。附带刷新会话列表：
+   *  委派子会话是后台新建的，当前 conversations 缓存里还没有它——不刷新的话
+   *  activeConversation 查不到、头部标题/agent 名会空。 */
+  function openConversationAtTrajectory(id: string) {
+    openTrajectoryNext.value = true;
+    selectConversation(id);
+    void loadConversations();
+  }
 
   return {
     conversations, convLoading,
@@ -547,5 +564,6 @@ export const useChatStore = defineStore("chat", () => {
     // 事件层调用的状态动作（freezeCurrentAssistant 把流式态冻结进末条 assistant）
     resetSendTimeout, clearSendTimeout, freezeCurrentAssistant,
     createConversation, clearActiveConversation, reset,
+    openTrajectoryNext, openConversationAtTrajectory,
   };
 });

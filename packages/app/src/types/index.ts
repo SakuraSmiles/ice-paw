@@ -81,6 +81,9 @@ export interface Conversation {
   updated_at: string;
   toolsOverride?: Record<string, boolean> | null;
   project_id?: string | null;
+  /** 会话类型（MA-1，后端 migration 45；旧数据后端已兜底 'chat'）：
+   *  'chat'=用户↔agent · 'delegation'=agent 委派子会话（侧栏隐藏，经委派卡片/项目任务列表进入） */
+  kind?: string;
 }
 
 export interface NewConversation {

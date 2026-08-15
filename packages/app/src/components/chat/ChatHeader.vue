@@ -146,6 +146,12 @@ function viewInfo() {
         />
         <h1 v-else class="header-title" @dblclick="startEdit">
           <span class="header-title-text">{{ chat.activeConversation?.title || "新对话" }}</span>
+          <!-- MA-1：委派子会话徽章——它不在侧栏列表里，须让用户知道来处与可达入口 -->
+          <span
+            v-if="chat.activeConversation?.kind === 'delegation'"
+            class="header-kind-badge"
+            title="agent 委派的子会话（不在侧栏显示；由父会话委派卡片 / 项目任务列表进入）"
+          >委派会话</span>
         </h1>
         <div class="header-meta">
           <span v-if="activeAgent" class="header-agent">{{ activeAgent.name }}</span>
@@ -231,6 +237,7 @@ function viewInfo() {
 .header-left { display:flex; align-items:center; }
 .header-info { display:flex; flex-direction:column; gap:2px; }
 .header-title { font-size:var(--ip-text-body-size); font-weight:var(--ip-font-weight-semibold); color:var(--ip-color-text-primary); margin:0; line-height:1.4; cursor:default; }
+.header-kind-badge { margin-left:8px; font-size:var(--ip-text-caption-size); font-weight:var(--ip-font-weight-medium); color:var(--ip-primary-600); background:var(--ip-primary-soft-bg, rgba(46,141,100,0.08)); border:1px solid var(--ip-primary-soft-border, rgba(46,141,100,0.25)); border-radius:var(--ip-radius-full, 999px); padding:1px 8px; vertical-align:1px; }
 .header-title-text { padding-bottom:1px; border-bottom:1px solid transparent; transition:border-color var(--ip-duration-fast) var(--ip-ease-out); }
 .header-title:hover .header-title-text { border-bottom-color:var(--ip-color-text-tertiary); }
 .header-edit-input { font-size:var(--ip-text-body-size); font-weight:var(--ip-font-weight-semibold); color:var(--ip-color-text-primary); background:var(--color-input-bg); border:1px solid var(--color-input-focus-border); border-radius:var(--ip-radius-md); padding:2px 8px; outline:none; width:100%; min-width:200px; font-family:inherit; box-shadow:0 0 0 3px rgba(46,141,100,0.12); }

@@ -21,7 +21,7 @@ const currentProjectName = computed(() => project.activeProject?.name ?? "散落
 function selectProject(id: string | null) {
   project.setActiveProject(id);
   // 与「打开软件」一致：切到该空间最近一条会话；无会话则留在欢迎态。再回首页对话。
-  const scoped = chat.conversations.filter((c) =>
+  const scoped = visibleConversations.value.filter((c) =>
     id === null ? !c.project_id : c.project_id === id
   );
   if (scoped.length > 0) {
@@ -58,11 +58,17 @@ const agent = useAgentStore();
 const { showPicker, pickerAgentIds, startNew, onPickAgent } = useNewConversation();
 const searchQuery = ref("");
 
+// MA-1：侧栏只显示用户会话——delegation 后台子会话不污染主列表（可见入口是
+// 父会话委派卡片 / 项目页任务列表）。它们仍留在 store.conversations 里：
+// 编程式 selectConversation(childId) 打开时 activeConversation 查得到。
+const isUserChat = (c: { kind?: string }) => !c.kind || c.kind === "chat";
+const visibleConversations = computed(() => chat.conversations.filter(isUserChat));
+
 const scopedConversations = computed(() => {
   const pid = scopeProjectId.value;
   return pid === null
-    ? chat.conversations.filter((c) => !c.project_id)
-    : chat.conversations.filter((c) => c.project_id === pid);
+    ? visibleConversations.value.filter((c) => !c.project_id)
+    : visibleConversations.value.filter((c) => c.project_id === pid);
 });
 
 const filteredConversations = computed(() => {
@@ -79,10 +85,11 @@ onMounted(async () => {
   await project.load();
   await chat.loadConversations();
   // 打开软件时恢复上次会话：跳过归档/已删项目的会话（其 project 不在活跃列表），
-  // 选最近一条有效会话，并把项目空间同步到该会话所属项目。
+  // 选最近一条有效会话，并把项目空间同步到该会话所属项目。delegation 后台会话
+  // 不作为恢复目标（用户上次主动停留的位置不该是后台子会话）。
   if (!chat.activeConvId && chat.conversations.length > 0) {
     const activeIds = new Set(project.activeProjects.map((p) => p.id));
-    const valid = chat.conversations.filter(
+    const valid = visibleConversations.value.filter(
       (c) => !c.project_id || activeIds.has(c.project_id),
     );
     if (valid.length > 0) {
