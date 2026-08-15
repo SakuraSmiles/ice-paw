@@ -50,7 +50,7 @@ pub(crate) mod types;
 pub(crate) use types::{AnthropicTool, ApiErrorBody, ChatRequest};
 
 /// 当前稳定的 Anthropic API 版本
-const ANTHROPIC_VERSION: &str = "2023-06-01";
+pub(crate) const ANTHROPIC_VERSION: &str = "2023-06-01";
 
 /// Anthropic Messages API Adapter
 pub struct AnthropicAdapter {
