@@ -266,10 +266,10 @@ impl McpClient for DelegateTool {
         })?;
 
         // --- 3. 建子会话（kind='delegation'，继承项目，挂父边） ---
-        let title = format!(
-            "委派: {}",
-            crate::infra::strings::truncate_to_byte_boundary(parsed.task.trim(), 60, Some("…"))
-        );
+        // 标题 = 裸 task 文本（UX #4：「委派: 」前缀与正文冗余——上下文里
+        // kind/父边/agent 已各自可见，标题只负责可读的任务摘要）。旧数据的
+        // 前缀由前端展示侧归一剥离，不做 migration。
+        let title = crate::infra::strings::truncate_to_byte_boundary(parsed.task.trim(), 60, Some("…"));
         let child_conv_id = Uuid::new_v4().to_string();
         let child_conv = repo::conversation::create(
             &ctx.pool,

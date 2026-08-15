@@ -15,15 +15,24 @@
 import { computed, ref, watch, onMounted, onBeforeUnmount } from "vue";
 import { listen } from "@tauri-apps/api/event";
 import { useChatStore } from "../../stores/chat";
+import { useAgentStore } from "../../stores/agent";
 import { formatTime, parseDbTime } from "../../utils/time";
 import { bridge } from "../../api/bridge";
 import type { PlanSnapshot } from "../../types";
 
 const chat = useChatStore();
+const agentStore = useAgentStore();
+
+/** 旧数据「委派: 」前缀展示侧归一剥离（UX #4：新生成标题已无前缀，零 migration）*/
+function delegationTitle(raw: string): string {
+  return raw.replace(/^委派:\s*/, "") || "委派任务";
+}
 
 interface TaskRow {
   id: string;
   title: string;
+  /** 被委派的专家 agent 名（行内标识；agent 已删则空，隐藏不占位）*/
+  agentName: string | null;
   running: boolean;
   updatedAt: number;
 }
@@ -35,7 +44,8 @@ const tasks = computed<TaskRow[]>(() => {
     .filter((c) => c.kind === "delegation" && c.parent_conversation_id === pid)
     .map((c) => ({
       id: c.id,
-      title: c.title || "委派任务",
+      title: delegationTitle(c.title || "委派任务"),
+      agentName: c.agent_id ? agentStore.getById(c.agent_id)?.name ?? null : null,
       running: chat.streamingConvIds.has(c.id),
       // DB 时间串是 UTC（"YYYY-MM-DD HH:MM:SS" 无时区标记），必须走 parseDbTime
       // （补 Z）——裸 new Date() 会当本地时间解析，UTC+8 下全部慢 8 小时
@@ -132,6 +142,7 @@ function openTask(id: string) {
         <button v-for="t in visibleTasks" :key="t.id" class="task-row" @click="openTask(t.id)">
           <span class="task-dot" :class="{ running: t.running }" />
           <span class="task-row-title" :title="t.title">{{ t.title }}</span>
+          <span v-if="t.agentName" class="task-row-agent">{{ t.agentName }}</span>
           <span class="task-row-time">{{ formatTime(new Date(t.updatedAt).toISOString()) }}</span>
         </button>
         <div v-if="tasks.length > MAX_ROWS" class="task-more">
@@ -209,6 +220,13 @@ function openTask(id: string) {
   font-size: var(--ip-text-body-sm-size); color: var(--ip-color-text-primary);
 }
 .task-row-time { flex-shrink: 0; font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
+/* 被委派的专家名（UX #4）：小徽标式弱化呈现，不与任务文本抢主信息 */
+.task-row-agent {
+  flex-shrink: 0; max-width: 96px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary);
+  padding: 1px 8px; border-radius: var(--ip-radius-full, 999px);
+  background: var(--ip-color-bg-tertiary);
+}
 .task-more { padding: 6px 10px 4px; font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
 
 /* 计划条目行（与 PlanCard 同款状态标记，非按钮——仅挂任务的条目可点） */
