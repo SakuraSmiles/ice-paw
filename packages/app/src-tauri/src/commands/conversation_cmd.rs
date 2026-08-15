@@ -194,8 +194,7 @@ pub async fn trajectory_turn_offset(
     before_seq: i64,
 ) -> AppResult<i64> {
     repo::conversation::get_by_id(pool.inner(), &conversation_id).await?;
-    Ok(repo::session_event::count_turns_before(pool.inner(), &conversation_id, before_seq).await?)
-}
+    repo::session_event::count_turns_before(pool.inner(), &conversation_id, before_seq).await
 }
 
 /// 解析导出目标目录：系统「下载」已知目录（Windows 走 SHGetKnownFolderPath，
