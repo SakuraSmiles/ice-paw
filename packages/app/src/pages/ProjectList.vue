@@ -6,7 +6,7 @@ import { useProjectStore } from "../stores/project";
 import { useAgentStore } from "../stores/agent";
 import { useChatStore } from "../stores/chat";
 import { bridge } from "../api/bridge";
-import { formatTime } from "../utils/time";
+import { formatTime, parseDbTime } from "../utils/time";
 import type { NewProject, Project } from "../types";
 
 const project = useProjectStore();
@@ -251,7 +251,7 @@ function toggleTasks(p: Project) {
 function delegationConvsOf(pid: string) {
   return chat.conversations
     .filter((c) => c.project_id === pid && c.kind === "delegation")
-    .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+    .sort((a, b) => parseDbTime(b.updated_at).getTime() - parseDbTime(a.updated_at).getTime());
 }
 
 /** 任务状态点：bgStreams/激活流式=进行中（脉冲）；其余=已结束。

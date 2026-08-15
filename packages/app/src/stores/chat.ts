@@ -10,6 +10,7 @@
 // （resetSendTimeout/clearSendTimeout/freezeCurrentAssistant）供其调用。
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
+import { parseDbTime } from "../utils/time";
 import type { Conversation, Message } from "../types";
 import type {
   ToolAuthRequestPayload,
@@ -382,7 +383,7 @@ export const useChatStore = defineStore("chat", () => {
     pendingDelete.value.delete(id);
     // 恢复会话到列表并按更新日期重排序
     conversations.value = [...conversations.value, entry.conv].sort(
-      (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
+      (a, b) => parseDbTime(b.updated_at).getTime() - parseDbTime(a.updated_at).getTime(),
     );
     // 如果之前是活跃会话，恢复
     if (!activeConvId.value) {
@@ -403,7 +404,9 @@ export const useChatStore = defineStore("chat", () => {
         .map((c) => (c.id === id ? { ...c, pinned } : c))
         .sort((a, b) => {
           if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
-          return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
+          // DB 时间串（UTC 无标记）与 touchConversation 写入的完整 ISO 混存，
+          // 必须统一 parseDbTime——裸 new Date 对前者按本地解析，两种格式混比差 8h
+          return parseDbTime(b.updated_at).getTime() - parseDbTime(a.updated_at).getTime();
         });
     } catch (e) {
       console.error("置顶操作失败:", e);

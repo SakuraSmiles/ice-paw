@@ -26,7 +26,7 @@ function selectProject(id: string | null) {
   );
   if (scoped.length > 0) {
     const latest = scoped.reduce((a, b) =>
-      new Date(b.updated_at) > new Date(a.updated_at) ? b : a
+      parseDbTime(b.updated_at) > parseDbTime(a.updated_at) ? b : a
     );
     chat.selectConversation(latest.id);
   } else {
@@ -94,7 +94,7 @@ onMounted(async () => {
     );
     if (valid.length > 0) {
       const latest = valid.reduce((a, b) =>
-        new Date(b.updated_at) > new Date(a.updated_at) ? b : a
+        parseDbTime(b.updated_at) > parseDbTime(a.updated_at) ? b : a
       );
       project.setActiveProject(latest.project_id ?? null);
       chat.selectConversation(latest.id);
@@ -198,7 +198,10 @@ function timeAgo(dateStr: string): string {
       <!-- 分隔线 -->
       <div class="conv-divider"></div>
 
-      <div v-if="chat.convLoading" class="conv-skeleton">
+      <!-- 骨架屏只在「无可显示内容」时出现（首次加载语义）。若不加空判断，
+           委派等触发的后台列表刷新会让骨架屏叠在仍可见的列表上方闪现 +
+           布局下压再弹回（v-for 不在 v-if 互斥链内）——即"委派时侧栏异常动画" -->
+      <div v-if="chat.convLoading && filteredConversations.length === 0" class="conv-skeleton">
         <div class="conv-skeleton-line" />
         <div class="conv-skeleton-line" />
         <div class="conv-skeleton-line" />

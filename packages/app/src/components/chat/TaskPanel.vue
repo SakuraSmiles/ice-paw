@@ -15,7 +15,7 @@
 import { computed, ref, watch, onMounted, onBeforeUnmount } from "vue";
 import { listen } from "@tauri-apps/api/event";
 import { useChatStore } from "../../stores/chat";
-import { formatTime } from "../../utils/time";
+import { formatTime, parseDbTime } from "../../utils/time";
 import { bridge } from "../../api/bridge";
 import type { PlanSnapshot } from "../../types";
 
@@ -37,7 +37,9 @@ const tasks = computed<TaskRow[]>(() => {
       id: c.id,
       title: c.title || "委派任务",
       running: chat.streamingConvIds.has(c.id),
-      updatedAt: new Date(c.updated_at).getTime() || 0,
+      // DB 时间串是 UTC（"YYYY-MM-DD HH:MM:SS" 无时区标记），必须走 parseDbTime
+      // （补 Z）——裸 new Date() 会当本地时间解析，UTC+8 下全部慢 8 小时
+      updatedAt: parseDbTime(c.updated_at).getTime() || 0,
     }))
     .sort((a, b) => (a.running === b.running ? b.updatedAt - a.updatedAt : a.running ? -1 : 1));
 });
