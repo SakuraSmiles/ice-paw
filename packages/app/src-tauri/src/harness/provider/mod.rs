@@ -19,6 +19,7 @@ pub mod embedding;
 pub mod mock;
 pub mod model_info;
 pub mod openai;
+pub mod probe;
 pub use anthropic::AnthropicAdapter;
 pub use mock::{MockProvider, MockScenario};
 pub use model_info::{
