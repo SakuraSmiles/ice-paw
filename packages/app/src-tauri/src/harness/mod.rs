@@ -32,6 +32,7 @@ pub mod read_route;
 pub mod reconcile;
 pub mod retry;
 pub mod scoring;
+pub mod session_runner;
 pub mod stream_consumer;
 pub mod summary_provider;
 pub mod tool_executor;
