@@ -15,3 +15,4 @@ pub mod mcp_cmd;
 pub mod message_cmd;
 pub mod preferences_cmd;
 pub mod project_cmd;
+pub mod provider_cmd;
