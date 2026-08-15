@@ -323,6 +323,35 @@ describe("chatStore", () => {
       doneH({ payload: { conversation_id: "c2", message_id: "x", finish_reason: "stop", usage: null } });
       expect(store.sending).toBe(true); // 活跃会话仍在发送中
     });
+
+    it("跨会话泄漏回归：切入后台流式会话时清空上一会话的工具调用（父会话委派卡不进子会话）", async () => {
+      // 真实时序复刻（手测「子会话气泡底部挂着父会话的委派卡片」根因）：
+      // 父会话流式发出 delegate_to_agent → 委派执行中子会话后台流式 →
+      // 用户点「打开任务」切入子会话。修复前 bg 恢复分支不清 streamingToolCalls，
+      // 父会话的委派调用渲染进子会话 live 气泡底部（DelegationCard 泄漏）。
+      const { store, handlers } = await setupStream();
+      // 父会话 c1 激活且正在流式：主 agent 发出 delegate_to_agent 调用
+      store.sending = true;
+      const tcs = handlers.get("chat:tool-call-start")!;
+      tcs({ payload: { conversation_id: "c1", id: "tc-delg", name: "delegate_to_agent" } });
+      const tcd = handlers.get("chat:tool-call-delta")!;
+      tcd({ payload: { conversation_id: "c1", id: "tc-delg", delta: `{"task":"写文案"}` } });
+      expect(store.streamingToolCalls.size).toBe(1);
+
+      // 子会话 c2 在后台流式（委派执行中，chunk 走 bgStreams 快照）
+      const chunkH = handlers.get("chat:chunk")!;
+      chunkH({ payload: { conversation_id: "c2", delta: "子会话输出" } });
+
+      // 用户切入子会话
+      store.selectConversation("c2");
+
+      expect(store.activeConvId).toBe("c2");
+      expect(store.sending).toBe(true); // 子会话在流式，续渲染
+      expect(store.streamingToolCalls.size).toBe(0); // ← 修复点：父会话调用不泄漏
+      expect(store.streamingText).toBe("子会话输出"); // 后台快照恢复
+      expect(store.streamingThinking).toBe("");
+      expect(store.bgStreams.get("c1")).toBeDefined(); // 父会话文本被快照，切回可恢复
+    });
   });
 
   describe("sendMessage", () => {

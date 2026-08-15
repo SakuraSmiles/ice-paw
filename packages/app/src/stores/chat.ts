@@ -55,6 +55,18 @@ export const useChatStore = defineStore("chat", () => {
     conversations.value.find((c) => c.id === activeConvId.value) ?? null,
   );
 
+  /** 流式态复位（轮末/会话切换共用的单一切入点）。
+   *  防逐字段漂移：曾因切换的 bg 恢复分支漏清 streamingToolCalls，把上一会话的
+   *  工具调用（父会话的 delegate_to_agent）泄漏进新会话的 live 气泡底部渲染。
+   *  注意：thinkingDuration / lastThinkingContent 不在此清——轮末要保留供展开查看，
+   *  由会话切换处显式清。*/
+  function resetRoundStreaming() {
+    streamingText.value = "";
+    streamingThinking.value = "";
+    streamingToolCalls.value = new Map();
+    thinkingStartTime.value = null;
+  }
+
   function selectConversation(id: string) {
     const oldId = activeConvId.value;
     // 离开「正在流式」的会话：把当前流式文本快照到 bgStreams，切回时可恢复
@@ -65,6 +77,11 @@ export const useChatStore = defineStore("chat", () => {
       });
     }
     activeConvId.value = id;
+    // 流式态无条件先整体复位（跨会话隔离）：后台快照只追踪 text/thinking，
+    // 工具调用/多轮结构不入快照——不复位就会把上一会话的流式状态带进新会话视图。
+    resetRoundStreaming();
+    thinkingDuration.value = null;
+    lastThinkingContent.value = null;
     // 提案/授权请求已按 convId 隔离存储（pendingProposals / pendingAuthRequests），
     // 切换会话无需清空——切回原会话时 computed 自动恢复对应条目。
     // 切入的会话若在后台流式（bgStreams 有），恢复其文本并在末条 assistant 继续渲染
@@ -76,12 +93,6 @@ export const useChatStore = defineStore("chat", () => {
       bgStreams.value = new Map([...bgStreams.value].filter(([k]) => k !== id));
     } else {
       sending.value = false;
-      streamingText.value = "";
-      streamingThinking.value = "";
-      streamingToolCalls.value = new Map();
-      thinkingStartTime.value = null;
-      thinkingDuration.value = null;
-      lastThinkingContent.value = null;
     }
     lastFinishReason.value = null;
     loadMessages(id);
@@ -576,7 +587,7 @@ export const useChatStore = defineStore("chat", () => {
     sendMessage, stopGeneration, respondToAuth, respondToProposal,
     deleteConversation, undoDeleteConversation, hasPendingDelete, pinConversation,
     // 事件层调用的状态动作（freezeCurrentAssistant 把流式态冻结进末条 assistant）
-    resetSendTimeout, clearSendTimeout, freezeCurrentAssistant,
+    resetSendTimeout, clearSendTimeout, freezeCurrentAssistant, resetRoundStreaming,
     createConversation, clearActiveConversation, reset,
     openTrajectoryNext, openConversationAtTrajectory,
   };

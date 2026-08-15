@@ -126,12 +126,13 @@ function tickTime(iso: string): string {
 </template>
 
 <style scoped>
-/* 轨道：右侧预留带内，垂直居中、贴内容列右缘。v2 窗口化后高度天然有界
-   （≤13 tick × 20px + 徽标/省略号/跳最新），不再需要内容驱动定高；
+/* 轨道：右侧预留带内水平居中（--msg-rail-right 由 ChatMessages.messages-wrap
+   提供：气泡列右缘与窗口右缘/滚动条之间两侧均匀留白），垂直居中。
+   v2 窗口化后高度天然有界（≤13 tick × 20px + 徽标/省略号/跳最新），
    矮视口下 max-height 兜底裁切（轨道不滚动——滚轮是窗口微调手势） */
 .turn-rail {
   position: absolute;
-  right: 10px;
+  right: var(--msg-rail-right, 35px);
   top: 50%;
   transform: translateY(-50%);
   max-height: 80%;
