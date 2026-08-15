@@ -104,7 +104,9 @@ pub enum ProviderProtocol {
 ///
 /// 端点地址均已按官方文档核对（2026-08）：DeepSeek `api.deepseek.com` 是 API
 /// 域（官网是 www.deepseek.com）；智谱双端点见 `glm` 的 alt_urls；MiniMax
-/// 统一国内站（用户拍板：不区分国内/国际）。
+/// 统一国内站（用户拍板：不区分国内/国际）；Ollama 不进下拉（本地服务地址
+/// 因人而异，模型名也装不出来——手输模型名 + 填本机 URL 即覆盖，存量
+/// `provider="ollama"` 的 agent 仍可解析）。
 const PROVIDERS: &[ProviderDesc] = &[
     ProviderDesc {
         name: "openai", protocol: ProviderProtocol::OpenAI, default_url: "https://api.openai.com",
@@ -153,14 +155,15 @@ const PROVIDERS: &[ProviderDesc] = &[
     },
     ProviderDesc {
         name: "ollama", protocol: ProviderProtocol::OpenAI, default_url: "http://localhost:11434/v1",
-        alt_urls: &[], label: "Ollama 本地", note: Some("本地推理，无需 API Key；点「拉取」获取已安装的模型"),
-        requires_key: false, requires_base_url: false, hidden: false,
+        alt_urls: &[], label: "Ollama 本地",
+        note: Some("已下线：新配置请在模型框手输模型名 + API URL 填本机地址（默认 http://localhost:11434/v1），无需 Key"),
+        requires_key: false, requires_base_url: false, hidden: true,
         models: &[],
     },
     ProviderDesc {
         name: "custom", protocol: ProviderProtocol::OpenAI, default_url: "",
         alt_urls: &[], label: "自定义（OpenAI 兼容）",
-        note: Some("已下线：存量配置仍可用，须填写 API URL"),
+        note: Some("模型框手输目录外名字即落此处；必填 API URL（Ollama 等本机服务如 http://localhost:11434/v1），无需鉴权可留空 Key"),
         requires_key: false, requires_base_url: true, hidden: true,
         models: &[],
     },
@@ -387,12 +390,9 @@ mod tests {
             .filter(|i| !i.hidden)
             .map(|i| i.name.as_str())
             .collect();
-        assert_eq!(
-            visible,
-            vec!["openai", "glm", "deepseek", "anthropic", "minimax", "ollama"]
-        );
+        assert_eq!(visible, vec!["openai", "glm", "deepseek", "anthropic", "minimax"]);
         // hidden 条目仍可解析（工厂/目录元数据照常）
-        for legacy in ["glm-coding", "minimax-cn", "custom"] {
+        for legacy in ["glm-coding", "minimax-cn", "ollama", "custom"] {
             assert!(find_provider(legacy).is_some(), "{} 应保留在注册表", legacy);
             assert!(find_provider(legacy).unwrap().hidden);
         }

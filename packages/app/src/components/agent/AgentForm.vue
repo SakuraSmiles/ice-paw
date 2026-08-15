@@ -3,13 +3,15 @@
 // 从原 AgentFormModal 提取表单主体与逻辑，去掉弹窗外壳；布局改为垂直（适配卡片宽度）。
 // 字段：name, id, model（含隐式 provider）, api_key, base_url, workspace_path
 //
-// 模型选择 = 一个分组下拉（Provider+模型合并，用户心智「我要用哪个模型」一步到位）：
-// - 组头 = 厂商纯标签（不可点），组内条目 = 模型，点选同时推导 provider+model
+// 模型选择 = 可选可输分组下拉（Provider+模型合并，用户心智「我要用哪个模型」）：
+// - 选预设条目 = 厂商+模型同时确定，URL 锁定注册表地址（只读，防抄错；测试
+//   连接走通的端点由系统回填固化，如智谱标准/Coding 自动匹配）
+// - 手输目录外名字（无精确命中）→「使用自定义模型」落 custom：URL 必填可编辑
+//   （Ollama/vLLM 等本机或自建 OpenAI 兼容端点从这里进，可免 Key）
 // - 目录来自后端 PROVIDERS 注册表（list_providers 单一真相源），hidden 条目
-//   （自定义/旧入口）不进下拉，仅编辑态存量兜底合成一组显示
-// - 在线拉取并入所属组；多端点厂商（智谱标准/Coding）探测自动匹配并回填走通地址
-// Key/URL 字段的规则（requires_key / requires_base_url / 默认地址）由推导出的
-// provider 驱动，与后端校验一致；「测试连接」与「拉取模型」共用一次往返。
+//   （Ollama/custom/旧入口）不进下拉，仅编辑态存量兜底合成一组显示
+// Key/URL 字段的规则（requires_key / requires_base_url）由推导出的 provider
+// 驱动，与后端校验一致；「测试连接」与「拉取模型」共用一次往返。
 import { ref, computed, onMounted, watch } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -51,6 +53,10 @@ const form = ref({
 
 onMounted(async () => {
   providerList.value = await loadProviders();
+  // URL 初值：编辑态存量原样；预设厂商为空时显示注册表默认（字段只读但值=实际生效地址）
+  if (!form.value.base_url && !isCustomModel.value && currentProvider.value) {
+    form.value.base_url = currentProvider.value.default_url;
+  }
   try {
     const prefs = await bridge.preferences.get();
     defaultWorkspace.value = (prefs.default_workspace_path ?? "").replace(/\\/g, "/");
@@ -82,15 +88,15 @@ const defaultUrl = computed(() => currentProvider.value?.default_url ?? "");
 /** 在线拉取结果（挂在拉取时的 provider 上，切走不清——列表还在原组里） */
 const fetched = ref<{ provider: string; models: string[] } | null>(null);
 
-/** matched_url 自动回填的地址（切厂商时清掉，避免旧端点跟到新厂商） */
-const autoFilledUrl = ref<string | null>(null);
-
 const modelEntry = (provider: string, model: string, note?: string): ComboboxItem => ({
   label: model,
   value: `${provider}::${model}`,
   note,
   data: { provider, model },
 });
+
+/** 手输模型（provider=custom）——URL 必填且可编辑的唯一路径 */
+const isCustomModel = computed(() => form.value.provider === "custom");
 
 const modelGroups = computed<ComboboxGroup[]>(() => {
   const groups: ComboboxGroup[] = providerList.value
@@ -100,21 +106,26 @@ const modelGroups = computed<ComboboxGroup[]>(() => {
       if (fetched.value?.provider === p.name) {
         models.push(...fetched.value.models.filter((m) => !models.includes(m)));
       }
-      const items = models.map((m) => modelEntry(p.name, m));
-      // Ollama 免 Key 零门槛：组内常驻拉取条目（拉到真实列表后再选）
-      if (p.name === "ollama" && !p.models.length) {
-        items.push({ label: "↻ 拉取已安装模型", value: "ollama::__fetch__", data: { provider: "ollama", isFetch: true } });
-      }
-      return { id: p.name, label: p.label, note: p.note ?? undefined, items };
+      return { id: p.name, label: p.label, note: p.note ?? undefined, items: models.map((m) => modelEntry(p.name, m)) };
     });
+  // 自定义端点拉取结果合成一组（custom 无静态目录；Ollama/vLLM 手输 URL 后可拉取再点选）
+  if (fetched.value?.provider === "custom" && fetched.value.models.length) {
+    groups.push({
+      id: "custom",
+      label: "自定义端点",
+      note: "上次拉取",
+      items: fetched.value.models.map((m) => modelEntry("custom", m)),
+    });
+  }
   // 兜底：当前 (provider, model) 不在目录（编辑态存量目录外模型）→ 插进所属组；
-  // 归属组是 hidden 条目（自定义/旧入口，不进下拉）时单独合成一组，显示与高亮有解
+  // 归属是 hidden 条目（旧入口如 Ollama/glm-coding）单独合成一组显示与高亮；
+  // custom 不合成——手输模型名由 unmatchedLabel 直接回显
   const m = form.value.model;
   if (m && !groups.some((g) => g.items.some((it) => it.value === `${form.value.provider}::${m}`))) {
     const owner = groups.find((g) => g.id === form.value.provider);
     if (owner) {
       owner.items.push(modelEntry(owner.id ?? form.value.provider, m, "当前配置"));
-    } else {
+    } else if (!isCustomModel.value) {
       const cp = currentProvider.value;
       groups.push({
         id: form.value.provider,
@@ -127,30 +138,27 @@ const modelGroups = computed<ComboboxGroup[]>(() => {
   return groups;
 });
 
-/** GroupedSelect 受控值：条目存在传 key（显示 label、高亮）；否则传空（显示 placeholder） */
+/** GroupedSelect 受控值：条目存在传 key（显示 label、高亮）；否则传空（unmatchedLabel 回显手输名） */
 const modelValue = computed(() => {
   const key = `${form.value.provider}::${form.value.model}`;
   return modelGroups.value.some((g) => g.items.some((it) => it.value === key)) ? key : "";
 });
 
-// ---- 选择处理：点条目（select 事件）推导 provider+model；拉取条目就地触发探测 ----
+// ---- 选择处理：点目录条目 = 预设（URL 锁定注册表地址）；点「使用自定义模型」= custom（URL 必填可编辑） ----
 function onModelSelect(item: ComboboxItem) {
-  const data = item.data as { provider?: string; model?: string; isFetch?: boolean } | undefined;
+  const data = item.data as { provider?: string; model?: string; custom?: boolean } | undefined;
   connResult.value = null;
-  if (data?.isFetch) {
-    form.value.provider = data.provider ?? form.value.provider;
-    void runTest();
+  if (data?.custom) {
+    form.value.provider = "custom";
+    form.value.model = data.model ?? item.label;
+    form.value.base_url = ""; // 自定义路径：端点交给用户填（必填）
     return;
   }
   const next = data?.provider ?? form.value.provider;
   if (next !== form.value.provider) {
-    // 切厂商：旧厂商的自动回填/注册表地址不跟过来（用户手输的代理地址不动）
-    const old = currentProvider.value;
-    const known = old ? [old.default_url, ...old.alt_urls.map((a) => a[1])] : [];
-    if (form.value.base_url && (form.value.base_url === autoFilledUrl.value || known.includes(form.value.base_url))) {
-      form.value.base_url = "";
-    }
-    autoFilledUrl.value = null;
+    // 切厂商才重置 URL：预设厂商换注册表地址（只读显示实际生效端点）；
+    // 同厂商换模型不动（可能是存量固化地址/用户填的自定义端点——拉取列表点选场景）
+    form.value.base_url = providerList.value.find((p) => p.name === next)?.default_url ?? "";
   }
   form.value.provider = next;
   form.value.model = data?.model ?? item.label;
@@ -171,19 +179,25 @@ async function runTest() {
   testing.value = true;
   connResult.value = null;
   try {
+    // 探测地址传参：custom 必须传显式（后端 requires_base_url 校验）；预设厂商
+    // 值==注册表默认时传 undefined——后端走 [默认, ...备选] 回退序列（智谱
+    // 标准/Coding 自动匹配），不把「显示的默认值」误当显式锁定
+    const explicitUrl = isCustomModel.value
+      ? form.value.base_url || undefined
+      : form.value.base_url !== defaultUrl.value ? form.value.base_url : undefined;
     // 编辑态带 agent_id：表单没填 key 时后端用存量 key 探测（密文不回显）
     const res = await bridge.providers.testConnection(
       form.value.provider,
-      form.value.base_url || undefined,
+      explicitUrl,
       form.value.api_key || undefined,
       isEdit.value ? props.agent?.id : undefined,
     );
     connResult.value = res;
     if (res.ok) {
-      // 走通地址回填固化（多端点回退时 matched 可能是备选端点，如智谱 Coding）
+      // 走通地址回填固化（多端点回退时 matched 可能是备选端点，如智谱 Coding；
+      // 只读字段系统赋值不受限——「这次测通了」固化成「以后都走它」）
       if (res.matched_url && res.matched_url !== form.value.base_url) {
         form.value.base_url = res.matched_url;
-        autoFilledUrl.value = res.matched_url;
       }
       if (res.models.length > 0) {
         // 拉取结果挂在当前 provider 组（与静态目录去重合并）
@@ -191,7 +205,7 @@ async function runTest() {
       }
     }
   } catch (e) {
-    // 命令本身失败（如未注册 provider / 缺地址被 Validation 拦）——同样行内展示
+    // 命令本身失败（如未注册 provider / custom 缺地址被 Validation 拦）——同样行内展示
     connResult.value = {
       ok: false,
       model_count: 0,
@@ -204,17 +218,13 @@ async function runTest() {
   }
 }
 
-/** 一键填入注册表默认地址（默认值可见可恢复，治「手填抄错地址」） */
-function restoreDefaultUrl() {
-  form.value.base_url = defaultUrl.value;
-}
+/** URL 可编辑性：可见预设厂商锁定（注册表地址，防抄错）；custom/hidden 旧入口（如存量 Ollama 改端口）可编辑 */
+const urlEditable = computed(() => !currentProvider.value || currentProvider.value.hidden);
 
 const urlPlaceholder = computed(() =>
   requiresBaseUrl.value
-    ? "必填，例如 http://localhost:8000/v1"
-    : defaultUrl.value
-      ? `默认 ${defaultUrl.value}，留空即用`
-      : "留空用默认",
+    ? "必填，如 http://localhost:11434/v1（Ollama）"
+    : "留空用默认",
 );
 
 async function pickWorkspace() {
@@ -251,7 +261,7 @@ function validate(): boolean {
     error.value = "API Key 格式不正确"; return false;
   }
   if (requiresBaseUrl.value && !form.value.base_url.trim()) {
-    error.value = "自定义 Provider 必须填写 API URL"; return false;
+    error.value = "手动输入的模型须填写 API URL（Ollama 等本机服务如 http://localhost:11434/v1）"; return false;
   }
   error.value = "";
   return true;
@@ -349,14 +359,16 @@ function confirmDelete() {
         </div>
       </div>
 
-      <!-- 模型（Provider 与模型合并为分组选择器：选模型即隐式确定厂商） -->
+      <!-- 模型（可选可输分组选择器：选预设即隐式确定厂商；手输目录外名字落自定义） -->
       <div class="field">
         <label class="field-label">模型 <span class="req">*</span></label>
         <div class="model-group">
           <GroupedSelect
             :model-value="modelValue"
             :groups="modelGroups"
-            placeholder="选择模型（按厂商分组）"
+            allow-custom
+            :unmatched-label="form.model"
+            placeholder="选择或输入模型名"
             @select="onModelSelect"
           >
             <!-- 关闭态控件前缀：当前归属厂商的图标 -->
@@ -373,7 +385,7 @@ function confirmDelete() {
             class="ws-btn"
             :class="{ 'ws-btn-fetching': testing }"
             :disabled="testing"
-            title="在线拉取完整模型列表（公开 API 需先填 API Key；下拉内置目录无需 Key 随时可选）"
+            title="拉取完整模型列表（在线服务需先填 API Key；本机/自建端点填好 URL 即可拉取）"
             @click="runTest"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -407,21 +419,23 @@ function confirmDelete() {
           <label class="field-label">
             API URL
             <span v-if="requiresBaseUrl" class="req">*</span>
+            <span v-else-if="!urlEditable" class="hint">预设厂商地址（测试连接自动匹配端点）</span>
             <span v-else class="hint">可选</span>
           </label>
-          <input v-model="form.base_url" type="text" class="input" :placeholder="urlPlaceholder" />
-          <!-- 连接测试行：按钮 + 默认地址可见可一键恢复 + 行内结果 -->
+          <input
+            v-model="form.base_url"
+            type="text"
+            class="input"
+            :class="{ 'input-locked': !urlEditable }"
+            :readonly="!urlEditable"
+            :placeholder="urlPlaceholder"
+            :title="urlEditable ? undefined : '预设厂商地址由系统管理（测试连接会自动匹配端点）；如需自定义端点，请在上方模型框手动输入模型名'"
+          />
+          <!-- 连接测试行：按钮 + 行内结果 -->
           <div class="conn-row">
             <button type="button" class="conn-btn" :disabled="testing" @click="runTest">
               {{ testing ? "测试中…" : "测试连接" }}
             </button>
-            <button
-              v-if="defaultUrl"
-              type="button"
-              class="conn-btn conn-btn-ghost"
-              :title="`填入默认地址 ${defaultUrl}`"
-              @click="restoreDefaultUrl"
-            >填入默认地址</button>
             <span v-if="connResult" :class="connResult.ok ? 'conn-ok' : 'conn-err'" :title="connResult.error ?? undefined">
               {{ connResult.ok ? `连接成功，发现 ${connResult.model_count} 个模型` : connResult.error }}
             </span>
@@ -545,6 +559,12 @@ function confirmDelete() {
 }
 .input::placeholder { color: var(--ip-color-text-placeholder); }
 .input-disabled { opacity: 0.6; cursor: not-allowed; }
+/* 预设厂商 URL 锁定态：仍显示实际生效地址（含测试连接固化的端点），但不可编辑 */
+.input-locked {
+  cursor: default;
+  color: var(--ip-color-text-secondary);
+  background-color: var(--ip-color-bg-secondary);
+}
 
 /* 模型 GroupedSelect + 拉取按钮（与工作区 input+btn 同语系） */
 .model-group {
@@ -586,11 +606,6 @@ function confirmDelete() {
 }
 .conn-btn:hover { background-color: var(--ip-primary-100); }
 .conn-btn:disabled { opacity: 0.6; cursor: wait; }
-.conn-btn-ghost {
-  color: var(--ip-color-text-tertiary);
-  background-color: var(--ip-color-bg-tertiary);
-}
-.conn-btn-ghost:hover { color: var(--ip-color-text-secondary); background-color: var(--ip-color-bg-secondary); }
 .conn-ok {
   font-size: 10px;
   color: var(--ip-success-text);
