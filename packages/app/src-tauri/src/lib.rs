@@ -119,6 +119,8 @@ pub fn run() {
             commands::log_cmd::get_logs,
             commands::log_cmd::get_data_dir,
             commands::log_cmd::open_data_dir,
+            commands::provider_cmd::list_providers,
+            commands::provider_cmd::test_provider_connection,
             // 项目管理
             commands::project_cmd::list_projects,
             commands::project_cmd::create_project,
