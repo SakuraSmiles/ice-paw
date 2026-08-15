@@ -122,6 +122,29 @@ fn is_version_segment(seg: &str) -> bool {
     seg[1..].chars().all(|c| c.is_ascii_digit())
 }
 
+/// 智能拼接 OpenAI 兼容 Models 列表端点（「测试连接 / 拉取模型」用）。
+///
+/// 版本段识别规则与 [`build_chat_url`] 完全一致（复用 `is_version_segment`），
+/// 保证探测端点与实际聊天端点落在同一 API 版本下：
+/// - 末段 `vN` → `{base}/models`（如 GLM `.../paas/v4/models`）
+/// - 否则 → `{base}/v1/models`（如 `https://api.openai.com/v1/models`）
+///
+/// # 示例
+/// - `https://api.openai.com` → `https://api.openai.com/v1/models`
+/// - `https://api.openai.com/v1` → `https://api.openai.com/v1/models`
+/// - `http://localhost:11434/v1`（Ollama）→ `http://localhost:11434/v1/models`
+/// - `https://open.bigmodel.cn/api/coding/paas/v4` → `.../paas/v4/models`
+/// - `https://api.deepseek.com` → `https://api.deepseek.com/v1/models`
+pub fn build_models_url(base: &str) -> String {
+    let trimmed = base.trim_end_matches('/');
+    let last_segment = trimmed.rsplit('/').next().unwrap_or("");
+    if is_version_segment(last_segment) {
+        format!("{}/models", trimmed)
+    } else {
+        format!("{}/v1/models", trimmed)
+    }
+}
+
 // =========================================================================
 // Trait 实现
 // =========================================================================
@@ -346,6 +369,80 @@ mod tests {
     fn url_deepseek_default() {
         let url = build_chat_url("https://api.deepseek.com");
         assert_eq!(url, "https://api.deepseek.com/v1/chat/completions");
+    }
+
+    // ---------------------------------------------------------------
+    // build_models_url 用例（与 build_chat_url 同一套版本段规则）
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn models_url_openai_default() {
+        assert_eq!(
+            build_models_url("https://api.openai.com"),
+            "https://api.openai.com/v1/models"
+        );
+    }
+
+    #[test]
+    fn models_url_openai_trailing_slash_and_v1() {
+        assert_eq!(
+            build_models_url("https://api.openai.com/"),
+            "https://api.openai.com/v1/models"
+        );
+        assert_eq!(
+            build_models_url("https://api.openai.com/v1"),
+            "https://api.openai.com/v1/models"
+        );
+    }
+
+    #[test]
+    fn models_url_ollama_v1() {
+        // Ollama 本地：默认地址已含 /v1，不重复追加
+        assert_eq!(
+            build_models_url("http://localhost:11434/v1"),
+            "http://localhost:11434/v1/models"
+        );
+    }
+
+    #[test]
+    fn models_url_glm_v4() {
+        assert_eq!(
+            build_models_url("https://open.bigmodel.cn/api/paas/v4"),
+            "https://open.bigmodel.cn/api/paas/v4/models"
+        );
+    }
+
+    #[test]
+    fn models_url_glm_coding_v4() {
+        assert_eq!(
+            build_models_url("https://open.bigmodel.cn/api/coding/paas/v4"),
+            "https://open.bigmodel.cn/api/coding/paas/v4/models"
+        );
+    }
+
+    #[test]
+    fn models_url_deepseek() {
+        assert_eq!(
+            build_models_url("https://api.deepseek.com"),
+            "https://api.deepseek.com/v1/models"
+        );
+        assert_eq!(
+            build_models_url("https://api.deepseek.com/v1"),
+            "https://api.deepseek.com/v1/models"
+        );
+    }
+
+    #[test]
+    fn models_url_non_version_segment_appends_v1() {
+        // 非 v+纯数字段 → 视为无版本路径，补 /v1
+        assert_eq!(
+            build_models_url("https://x.com/version1"),
+            "https://x.com/version1/v1/models"
+        );
+        assert_eq!(
+            build_models_url("http://localhost:8000"),
+            "http://localhost:8000/v1/models"
+        );
     }
 
     #[test]
