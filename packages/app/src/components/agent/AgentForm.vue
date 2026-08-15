@@ -295,7 +295,7 @@ function confirmDelete() {
               class="ws-btn"
               :class="{ 'ws-btn-fetching': testing }"
               :disabled="testing"
-              title="从服务拉取模型列表（需服务已启动）"
+              title="在线拉取完整模型列表（公开 API 需先填 API Key；下拉内置目录无需 Key 随时可选）"
               @click="runTest"
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
