@@ -95,6 +95,10 @@ pub struct PipelineContext {
     /// 已解析的 agent 明文 API key（DB 只存引用槽位，由 `chat_cmd` 解析后注入）。
     /// 供 [`ModalCapabilityStage`] 收集视觉凭据（`vision::from_agent` 借 agent key 做零配置兜底）。
     pub api_key: Option<String>,
+    /// MA-1：可调度 agent 清单注入段（`session_runner` 仅对 kind='chat' 会话填充；
+    /// delegation 子会话没有 delegate 工具，注入只会误导）。由
+    /// [`SystemPromptStage`](crate::context::stages::SystemPromptStage) 追加到 system prompt。
+    pub delegation_hint: Option<String>,
 
     // ---- Stage 1: Template 渲染输出 ----
     pub rendered_system_prompt: Option<String>,
@@ -160,6 +164,7 @@ impl PipelineContext {
             project_workspace: None,
             project_context_dir: None,
             api_key: None,
+            delegation_hint: None,
             rendered_system_prompt: None,
             rendered_user_prefix: String::new(),
             os_context: String::new(),

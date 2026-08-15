@@ -48,8 +48,7 @@ use crate::context::pipeline::{AssembledContext, PipelineContext, PipelineRunner
 /// 一次完整 agent 回合的终态摘要（完成信号负载）。
 ///
 /// 数据源：`turn_ended` 事件 + 最终 assistant 消息正文（见模块注释）。
-/// 字段消费方是 delegate v2（下一 commit 接入）：本 commit 仅建立信号通道。
-#[allow(dead_code)]
+/// 消费方是 delegate v2 的 tool_result 回传（`mcp::delegate`）。
 #[derive(Debug, Clone)]
 pub(crate) struct TurnSummary {
     /// 终止原因（复用 finish_reason 词表：stop / tool_use / budget_exceeded / abort / ...）
@@ -219,6 +218,30 @@ pub(crate) async fn run_agent_turn(
     // 空 key 也允许（agent 可能用 base_url 免 key）。
     pipeline_ctx.api_key = Some(api_key.clone());
 
+    // MA-1：可调度清单注入——主 agent 感知「能调度谁」（项目成员优先，否则全部
+    // agent，见 delegate::resolve_dispatchable）。仅用户会话：delegation 子会话没有
+    // delegate 工具（下方组装期按 kind 注册），注入清单只会误导。解析失败降级为
+    // 跳过注入（不阻塞发送；工具调用时还有集合校验兜底）。
+    if tools_enabled && conv.kind == "chat" {
+        match crate::harness::mcp::delegate::resolve_dispatchable(
+            pool,
+            conv.project_id.as_deref(),
+            &conv.agent_id,
+        )
+        .await
+        {
+            Ok(list) if !list.is_empty() => {
+                pipeline_ctx.delegation_hint =
+                    Some(crate::harness::mcp::delegate::build_dispatch_hint(&list));
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!(
+                target: "ice_paw.delegate",
+                "解析可调度集合失败（跳过清单注入）: {e}"
+            ),
+        }
+    }
+
     // M1.5: 构造 LlmSummaryProvider 注入 Pipeline
     use crate::harness::summary_provider::LlmSummaryProvider;
     use crate::context::memory::SummaryProvider;
@@ -373,6 +396,15 @@ pub(crate) async fn run_agent_turn(
     // 对每个 agent 可用。per_agent server 的 workspace 后台异步绑定，不阻塞。
     let tool_registry = if tools_enabled {
         let reg = McpRegistry::from_map(env.global_registry.snapshot().await);
+
+        // MA-1：delegate 工具按会话类型注册——只有用户会话（kind='chat'）可发起
+        // 委派。全局注册表不含此工具（register_builtin 不注入），组装期按 kind
+        // 决定：delegation 子会话拿不到它 → 委派深度=1 的结构性护栏（接收方不能
+        // 二次委派，「A委派B、B委派回A」的乒乓球在结构上不可能）。
+        if conv.kind == "chat" {
+            reg.register(Arc::new(crate::harness::mcp::delegate::DelegateTool))
+                .await;
+        }
 
         // 后台异步绑定 per_agent server workspace（不阻塞消息发送）
         if let Some(workspace) = agent.workspace_path.as_deref() {

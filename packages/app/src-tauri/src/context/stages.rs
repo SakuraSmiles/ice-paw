@@ -181,6 +181,14 @@ impl PipelineStage for SystemPromptStage {
             ctx.tools_enabled,
             &ctx.os_context,
         );
+        // MA-1：可调度 agent 清单注入（仅 kind='chat' 会话由 runner 填充；顺位在
+        // 工具提示之后、os_context 之前的语义由调用方文本保证——此处只做追加）。
+        if let Some(hint) = ctx.delegation_hint.take() {
+            ctx.system_prompt = Some(match ctx.system_prompt.take() {
+                Some(s) => format!("{s}\n\n{hint}"),
+                None => hint,
+            });
+        }
         Ok(())
     }
 }
