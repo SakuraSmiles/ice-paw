@@ -14,6 +14,7 @@ import ChatMessages from "../components/chat/ChatMessages.vue";
 import ChatInput from "../components/chat/ChatInput.vue";
 import ChatWelcome from "../components/chat/ChatWelcome.vue";
 import ToolAuthDialog from "../components/chat/ToolAuthDialog.vue";
+import TaskPanel from "../components/chat/TaskPanel.vue";
 import TrajectoryView from "../components/trajectory/TrajectoryView.vue";
 import { useChatStore } from "../stores/chat";
 
@@ -55,6 +56,8 @@ watch(() => chat.activeConvId, () => {
         >
           <span>轨迹</span>
         </button>
+        <!-- 会话级任务索引（本会话派生的委派任务；无任务时零占用） -->
+        <TaskPanel />
       </nav>
 
       <!-- 内容区：tab 只切渲染形态，双 pane 常驻叠放（visibility 隐藏保布局保滚动，
