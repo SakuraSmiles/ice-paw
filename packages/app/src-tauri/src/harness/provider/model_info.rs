@@ -13,7 +13,8 @@
 /// （model 名已是强信号），保留参数以便未来按厂商细分。
 ///
 /// **GLM-5.x 注意**：1M 窗口需在 model 名带 `[1m]` 后缀才会启用（智谱约束）；
-/// 不带后缀的 `glm-5.2` 不给默认，由调用方回退保守值。
+/// 不带后缀的裸名按厂商文档基准 200K（此前不给默认、由调用方回退 128K——
+/// 偏小且与 glm-5-turbo 不一致）。
 pub fn default_context_window(_provider: &str, model: &str) -> Option<usize> {
     let m = model.to_lowercase();
 
@@ -29,9 +30,9 @@ pub fn default_context_window(_provider: &str, model: &str) -> Option<usize> {
     if m.contains("glm-5-turbo") || m.contains("glm5-turbo") {
         return Some(200_000);
     }
-    // GLM-5.1 / 5.2 带 [1m] 后缀 → 1M（需显式后缀解锁）
-    if (m.contains("glm-5.1") || m.contains("glm-5.2")) && m.contains("[1m]") {
-        return Some(1_048_576);
+    // GLM-5.1 / 5.2：带 [1m] 后缀 → 1M（显式解锁）；裸名 → 200K 基准
+    if m.contains("glm-5.1") || m.contains("glm-5.2") {
+        return if m.contains("[1m]") { Some(1_048_576) } else { Some(200_000) };
     }
 
     None
@@ -56,7 +57,8 @@ pub fn default_max_output_tokens(_provider: &str, model: &str) -> Option<usize> 
         || m.contains("deepseek-v4")
         || m.contains("glm-5-turbo")
         || m.contains("glm5-turbo")
-        || ((m.contains("glm-5.1") || m.contains("glm-5.2")) && m.contains("[1m]"))
+        || m.contains("glm-5.1")
+        || m.contains("glm-5.2")
         || m.contains("claude")
         || m.contains("gpt-4")
         || m.contains("gpt-4o")
@@ -139,9 +141,11 @@ mod tests {
     }
 
     #[test]
-    fn glm_52_needs_1m_suffix() {
+    fn glm_52_bare_200k_and_1m_suffix_unlocks() {
         assert_eq!(default_context_window("glm", "glm-5.2[1m]"), Some(1_048_576));
-        assert_eq!(default_context_window("glm", "glm-5.2"), None);
+        // 裸名不再回退：厂商文档基准 200K
+        assert_eq!(default_context_window("glm", "glm-5.2"), Some(200_000));
+        assert_eq!(default_context_window("glm", "glm-5.1"), Some(200_000));
     }
 
     #[test]
@@ -174,13 +178,14 @@ mod tests {
     }
 
     #[test]
-    fn output_glm_52_needs_1m_suffix_like_input_table() {
+    fn output_glm_52_bare_and_suffixed_both_32k() {
         assert_eq!(
             default_max_output_tokens("glm", "glm-5.2[1m]"),
             Some(32_768)
         );
-        // 不带后缀的 glm-5.2 → None（与输入表保持一致：后缀才解锁）
-        assert_eq!(default_max_output_tokens("glm", "glm-5.2"), None);
+        // 裸名不再因缺后缀被排除（输出上限与窗口后缀无关）
+        assert_eq!(default_max_output_tokens("glm", "glm-5.2"), Some(32_768));
+        assert_eq!(default_max_output_tokens("glm", "glm-5.1"), Some(32_768));
     }
 
     #[test]
