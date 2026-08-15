@@ -27,8 +27,9 @@ import type { Message, MessageRole, PlanItem } from "../../types";
 const chat = useChatStore();
 const listRef = ref<HTMLElement | null>(null);
 
-// 滚动跟随 + 分页（逻辑抽到 composable：自动贴底 / 上滚暂停 / 顶部触发分页）
-const { showScrollBtn, autoFollow, paginating, scrollToBottom } = useScrollFollow(listRef);
+// 滚动跟随 + 分页 + 阅读位置记忆（逻辑抽到 composable：自动贴底 / 上滚暂停 /
+// 顶部触发分页 / 每会话滚动锚点——切走再回来按意图贴底或原位恢复）
+const { showScrollBtn, autoFollow, paginating, scrollToBottom, restoreForConversation } = useScrollFollow(listRef);
 
 // 工具调用卡片展开状态
 const expandedToolCalls = ref<Set<string>>(new Set());
@@ -77,16 +78,23 @@ function hasExtras(msg: { content_blocks?: string }): boolean {
 }
 
 onActivated(() => {
-  // KeepAlive: 切回时滚到底部（滚动监听挂载/卸载已由 useScrollFollow 自管；
-  // thinking 计时器启停已由 useThinkingTimer 自管）
-  nextTick(() => scrollToBottom(false));
+  // KeepAlive 返回（设置页↔聊天）：DOM 与滚动位置原样保留，**不强制贴底**——
+  // 旧实现无条件 scrollToBottom 是「回来后阅读位置丢失」的根源之一。仅跟随态
+  // 补一次精确贴底（后台流式期间 messages.length watcher 已持续贴底）。
+  // 滚动监听挂载/卸载由 useScrollFollow 自管；thinking 计时器由 useThinkingTimer 自管。
+  nextTick(() => { if (autoFollow.value) scrollToBottom(false); });
 });
 
-// 切换会话后等消息加载完成再平滑滚动到底部
+// 切换会话等消息加载完成后，按该会话的滚动锚点恢复：离开时在底部 → 贴底；
+// 在读历史 → 锚点消息原视口位（锚点在分页窗口外先翻页加载再定位）。
+// 覆盖侧栏/任务胶囊/委派卡/面包屑全部进入路径。
 watch(() => chat.msgLoading, async (loading) => {
-  if (!loading && chat.messages.length > 0) {
+  if (!loading && chat.messages.length > 0 && chat.activeConvId) {
     await nextTick();
-    scrollToBottom(true);
+    await restoreForConversation(chat.activeConvId, {
+      loadMore: () => chat.loadMoreMessages(),
+      hasMore: () => chat.hasMore,
+    });
   }
 });
 
@@ -537,7 +545,8 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
       <template v-for="group in messageGroups" :key="group.key">
         <!-- 日期分组标签（基于组首）-->
         <div v-if="isNewDay(group.firstIdx)" class="date-divider">{{ formatDateLabel(chat.messages[group.firstIdx].created_at) }}</div>
-        <div :class="['message-group', group.role]">
+        <!-- data-mid=组首消息 id：useScrollFollow 锚点捕获/恢复的 DOM 定位符 -->
+        <div :class="['message-group', group.role]" :data-mid="group.items[0].msg.id">
           <!-- ===== 用户消息组（单条，透明壳）===== -->
           <template v-if="group.role === 'user'">
             <div class="message-content user">
