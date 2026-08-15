@@ -130,28 +130,55 @@ body {
 }
 
 /* ============================================================
- * 全局过渡动画（克制·淡入为主，~150ms）
+ * 全局过渡动画（克制·「淡入+微升」统一语系，~150ms）
+ * 单一来源：AppLayout 主路由 / SettingsLayout 子页 / Sidebar 会话列表
+ * 三处 Transition( Group ) 都引用这里的类名——组件内不再各自复写。
  * ============================================================ */
 
-/* 路由切换（聊天 ↔ 设置、设置各子页） */
-.route-fade-enter-active,
-.route-fade-leave-active {
-  transition: opacity 150ms var(--ip-ease-out, ease);
+/* 路由切换（聊天 ↔ 设置 ↔ 项目页 + 设置各子页；out-in 顺序无叠影） */
+.route-fade-enter-active {
+  transition: opacity 140ms var(--ip-ease-out, ease), transform 140ms var(--ip-ease-out, ease);
 }
-.route-fade-enter-from,
+.route-fade-leave-active {
+  transition: opacity 100ms ease-in;
+}
+.route-fade-enter-from {
+  opacity: 0;
+  transform: translateY(4px);
+}
 .route-fade-leave-to {
   opacity: 0;
 }
 
-/* 侧栏会话列表项：进出淡入 + 重排 FLIP（touchConversation 把会话置顶时其他项平滑让位） */
-.conv-list-enter-active,
-.conv-list-leave-active {
-  transition: opacity 180ms var(--ip-ease-out, ease);
+/* 侧栏会话列表项：进出淡入上浮 + 离场绝对定位防跳 + 重排 FLIP
+   （touchConversation 置顶/置顶重排时其他项平滑让位；锚 .conv-list
+   的 position:relative 在 Sidebar scoped 样式中） */
+.conv-list-enter-active {
+  transition: opacity 250ms var(--ip-ease-out, ease), transform 250ms var(--ip-ease-out, ease);
 }
-.conv-list-enter-from,
+.conv-list-enter-from {
+  opacity: 0;
+  transform: translateY(8px);
+}
+.conv-list-leave-active {
+  position: absolute;
+  width: 100%;
+  transition: opacity 180ms ease-in;
+}
 .conv-list-leave-to {
   opacity: 0;
 }
 .conv-list-move {
-  transition: transform 220ms var(--ip-ease-out, ease);
+  transition: transform 300ms var(--ip-ease-out, ease);
+}
+
+/* 系统「减弱动态效果」：全部动效归零（无障碍标配；优先于上面全部规则） */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

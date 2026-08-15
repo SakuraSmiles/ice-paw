@@ -208,7 +208,7 @@ function timeAgo(dateStr: string): string {
     <!-- 会话列表（TransitionGroup：会话进出淡入、touchConversation 重排时平滑让位） -->
     <TransitionGroup name="conv-list" tag="nav" class="conv-list">
       <!-- 新建对话（第一条，特殊样式） -->
-      <button class="conv-item conv-item-new" @click="newChat">
+      <button key="conv-new" class="conv-item conv-item-new" @click="newChat">
         <div class="conv-item-title">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <line x1="12" y1="5" x2="12" y2="19" />
@@ -220,20 +220,20 @@ function timeAgo(dateStr: string): string {
       </button>
 
       <!-- 分隔线 -->
-      <div class="conv-divider"></div>
+      <div key="conv-divider" class="conv-divider"></div>
 
       <!-- 骨架屏只在「无可显示内容」时出现（首次加载语义）。若不加空判断，
            委派等触发的后台列表刷新会让骨架屏叠在仍可见的列表上方闪现 +
            布局下压再弹回（v-for 不在 v-if 互斥链内）——即"委派时侧栏异常动画" -->
-      <div v-if="chat.convLoading && filteredConversations.length === 0" class="conv-skeleton">
+      <div v-if="chat.convLoading && filteredConversations.length === 0" key="conv-skeleton" class="conv-skeleton">
         <div class="conv-skeleton-line" />
         <div class="conv-skeleton-line" />
         <div class="conv-skeleton-line" />
         <div class="conv-skeleton-line" />
         <div class="conv-skeleton-line" />
       </div>
-      <div v-else-if="searchQuery && filteredConversations.length === 0" class="conv-empty">无匹配对话</div>
-      <div v-else-if="!searchQuery && scopedConversations.length === 0 && agent.loaded" class="conv-empty">
+      <div v-else-if="searchQuery && filteredConversations.length === 0" key="conv-empty-search" class="conv-empty">无匹配对话</div>
+      <div v-else-if="!searchQuery && scopedConversations.length === 0 && agent.loaded" key="conv-empty-scope" class="conv-empty">
         {{ scopeProjectId ? "项目内暂无对话" : "暂无对话" }}
       </div>
 
@@ -394,6 +394,7 @@ function timeAgo(dateStr: string): string {
 
 /* 会话列表 */
 .conv-list {
+  position: relative; /* leave-active 绝对定位的锚（离场项脱离流防跳动） */
   flex: 1;
   overflow-y: auto;
   padding: 0 8px;
