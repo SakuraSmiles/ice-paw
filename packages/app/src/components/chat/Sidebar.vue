@@ -6,6 +6,8 @@ import { useProjectStore } from "../../stores/project";
 import { formatDate, parseDbTime } from "../../utils/time";
 import { useNewConversation } from "../../composables/useNewConversation";
 import { useTheme } from "../../composables/useTheme";
+import { useResizablePanel } from "../../composables/useResizablePanel";
+import PanelResizeHandle from "../common/PanelResizeHandle.vue";
 import ProjectSwitcher from "./ProjectSwitcher.vue";
 
 const router = useRouter();
@@ -55,6 +57,16 @@ async function quickCreateProject(name: string) {
 // 暗色模式（逻辑抽到 composable：本地持久化 + 系统偏好 + View Transitions + Tauri 窗口同步）
 // =========================================================================
 const { isDark, toggleTheme } = useTheme();
+
+// =========================================================================
+// 可调宽度（UX #2）：右缘隐形热区把手拖拽 + localStorage 记忆 + 双击重置。
+// 状态/手势全在 useResizablePanel，这里只接线和边界值。
+// =========================================================================
+const {
+  width: sidebarWidth,
+  startDrag: startSidebarDrag,
+  reset: resetSidebarWidth,
+} = useResizablePanel({ key: "sidebar", default: 320, min: 240, max: 480, dir: 1 });
 
 // =========================================================================
 // 会话列表
@@ -155,7 +167,7 @@ function timeAgo(dateStr: string): string {
 </script>
 
 <template>
-  <aside class="sidebar">
+  <aside class="sidebar" :style="{ width: `${sidebarWidth}px`, minWidth: `${sidebarWidth}px` }">
     <!-- 顶部：标题 + 暗色模式切换 -->
     <div class="sidebar-header">
       <div class="sidebar-brand" role="button" tabindex="0" @click="router.push('/')" @keydown.enter="router.push('/')" @keydown.space.prevent="router.push('/')">
@@ -270,6 +282,9 @@ function timeAgo(dateStr: string): string {
 
     </div>
 
+    <!-- 右缘调宽把手（隐形热区，hover 显形；双击重置 320px） -->
+    <PanelResizeHandle @dragstart="startSidebarDrag" @reset="resetSidebarWidth" />
+
     <!-- Agent 选择器弹窗 -->
     <AgentPicker v-if="showPicker" :agent-ids="pickerAgentIds" @select="onPickAgent" @close="showPicker = false" />
   </aside>
@@ -277,8 +292,8 @@ function timeAgo(dateStr: string): string {
 
 <style scoped>
 .sidebar {
-  width: var(--sidebar-width);
-  min-width: var(--sidebar-width);
+  /* 宽度改由 useResizablePanel 响应式绑定（内联 style）——把手 overlay 定位挂靠 */
+  position: relative;
   height: 100vh;
   display: flex;
   flex-direction: column;

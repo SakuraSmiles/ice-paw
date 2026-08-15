@@ -13,6 +13,7 @@
 import { computed, nextTick, ref, watch, onMounted, onBeforeUnmount } from "vue";
 import { listen } from "@tauri-apps/api/event";
 import { buildRows, useTrajectory, type TrajectoryRow, type EventRow } from "../../composables/useTrajectory";
+import { useResizablePanel } from "../../composables/useResizablePanel";
 import type { SessionEvent } from "../../types";
 import { bridge } from "../../api/bridge";
 import { useChatStore } from "../../stores/chat";
@@ -20,6 +21,7 @@ import TrajectoryToolbar from "./TrajectoryToolbar.vue";
 import TrajectoryTimeline from "./TrajectoryTimeline.vue";
 import TrajectoryTable from "./TrajectoryTable.vue";
 import TrajectoryInspector from "./TrajectoryInspector.vue";
+import PanelResizeHandle from "../common/PanelResizeHandle.vue";
 
 const props = defineProps<{
   conversationId: string;
@@ -153,41 +155,15 @@ function selectRow(row: TrajectoryRow) {
   selectedRow.value = selectedRow.value === row ? null : row;
 }
 
-// ---- 检查器宽度：拖拽调整 + localStorage 记住（icepaw-* 同 useTheme 约定） ----
-const INSP_DEFAULT = 420;
-const INSP_MIN = 300;
-const INSP_MAX = 720;
-const WIDTH_KEY = "icepaw-traj-insp-width";
-
-const inspWidth = ref(INSP_DEFAULT);
-const savedInspW = Number.parseInt(localStorage.getItem(WIDTH_KEY) ?? "", 10);
-if (Number.isFinite(savedInspW)) inspWidth.value = Math.min(INSP_MAX, Math.max(INSP_MIN, savedInspW));
-
-function onResizeStart(e: MouseEvent) {
-  if (e.button !== 0) return;
-  e.preventDefault();
-  const startX = e.clientX;
-  const startW = inspWidth.value;
-  document.body.style.cursor = "col-resize";
-  document.body.style.userSelect = "none";
-  const onMove = (mv: MouseEvent) => {
-    inspWidth.value = Math.min(INSP_MAX, Math.max(INSP_MIN, startW + (startX - mv.clientX)));
-  };
-  const onUp = () => {
-    window.removeEventListener("mousemove", onMove);
-    window.removeEventListener("mouseup", onUp);
-    document.body.style.cursor = "";
-    document.body.style.userSelect = "";
-    localStorage.setItem(WIDTH_KEY, String(inspWidth.value));
-  };
-  window.addEventListener("mousemove", onMove);
-  window.addEventListener("mouseup", onUp);
-}
-
-function resetInspWidth() {
-  inspWidth.value = INSP_DEFAULT;
-  localStorage.removeItem(WIDTH_KEY);
-}
+// ---- 检查器宽度：useResizablePanel 共享机制（UX #2 规范化，原手搓版迁移） ----
+// 注意：换了存储 key（icepaw-traj-insp-width → icepaw-panel-traj-inspector），
+// 老用户存过的宽度弃用一次（回默认 420），不值得为一次性迁移写兼容读。
+const {
+  width: inspWidth,
+  dragging: inspDragging,
+  startDrag: onInspResizeStart,
+  reset: resetInspWidth,
+} = useResizablePanel({ key: "traj-inspector", default: 420, min: 300, max: 720, dir: -1 });
 
 // ---- 表格 ↔ 时间轴联动 ----
 const tableRef = ref<InstanceType<typeof TrajectoryTable> | null>(null);
@@ -429,11 +405,11 @@ onBeforeUnmount(() => {
       </div>
       <!-- 检查器按需展现：选中行才渲染（无空态占位），✕/Esc/再点同一行 = 取消选中即收起 -->
       <template v-if="selectedRow">
-        <div
-          class="traj-resizer"
-          title="拖拽调整宽度 · 双击重置"
-          @mousedown="onResizeStart"
-          @dblclick="resetInspWidth"
+        <PanelResizeHandle
+          flow="inline"
+          :class="{ 'insp-resizing': inspDragging }"
+          @dragstart="onInspResizeStart"
+          @reset="resetInspWidth"
         />
         <TrajectoryInspector :row="selectedRow" :style="{ width: `${inspWidth}px` }" @close="selectedRow = null" />
       </template>
@@ -475,34 +451,11 @@ onBeforeUnmount(() => {
   pointer-events: none;
 }
 
-/* 检查器宽度拖拽手柄：中部短双实线抓手（⋮⋮），常驻可见，悬停/拖拽亮主题色 */
-.traj-resizer {
-  flex-shrink: 0;
-  width: 9px;
-  z-index: 5;
-  position: relative;
-  cursor: col-resize;
-}
-.traj-resizer::before,
-.traj-resizer::after {
-  content: "";
-  position: absolute;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 1.5px;
-  height: 16px;
-  border-radius: 1px;
-  background: var(--ip-color-border-default);
-  transition: background var(--ip-duration-fast) var(--ip-ease-out), height var(--ip-duration-fast) var(--ip-ease-out);
-}
-.traj-resizer::before { left: 2px; }
-.traj-resizer::after { right: 2px; }
-.traj-resizer:hover::before,
-.traj-resizer:hover::after,
-.traj-resizer:active::before,
-.traj-resizer:active::after {
-  background: var(--ip-primary-400);
-  height: 24px;
+/* 检查器把手拖拽中：热区亮线持续显形（指针快速甩出把手时 :hover 会掉，
+   用 dragging 态兜住——类落在 PanelResizeHandle 根元素上，父 scoped 可直选） */
+.insp-resizing::after {
+  opacity: 0.65;
+  transform: translateX(-50%) scaleY(1);
 }
 
 .traj-empty { flex: 1; display: flex; align-items: center; justify-content: center; font-size: var(--ip-text-body-sm-size); color: var(--ip-color-text-tertiary); }
