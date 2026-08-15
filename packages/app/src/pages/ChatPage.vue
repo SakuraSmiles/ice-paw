@@ -5,7 +5,8 @@
 // 输入框沉到标签页之下常驻——tab 只切换内容区的渲染形态（多 render 愿景）：
 // - 对话/轨迹都是同一 session 的 render，任一 tab 都能发送；
 // - 轨迹页发送 → 停留轨迹页：live 追加 + 生成中 ephemeral 行直接看进度；
-// - v-show 双 pane：chat DOM 常驻 → 流式/滚动状态不因切 tab 中断；
+// - 双 pane visibility 叠放：chat DOM 常驻 → 流式/滚动状态不因切 tab 中断
+//   （display:none 会销毁布局破坏此承诺，见 .pane-hidden 注释）；
 // - 切换会话 → tab 重置回「对话」；无激活会话（欢迎态）→ 标签条隐藏。
 import { ref, watch } from "vue";
 import ChatHeader from "../components/chat/ChatHeader.vue";
@@ -56,15 +57,19 @@ watch(() => chat.activeConvId, () => {
         </button>
       </nav>
 
-      <!-- 内容区：tab 只切渲染形态，v-show 双 pane 保活 -->
+      <!-- 内容区：tab 只切渲染形态，双 pane 常驻叠放（visibility 隐藏保布局保滚动，
+           见 .pane-hidden 注释——display:none 会销毁布局：滚动归零 + 隐藏期
+           scrollHeight=0 使流式跟随/挂载滚底全部失效） -->
       <div class="chat-render">
-        <div v-show="activeTab === 'chat'" class="chat-pane">
+        <div class="chat-pane" :class="{ 'pane-hidden': activeTab !== 'chat' }" :aria-hidden="activeTab !== 'chat'">
           <ChatMessages />
         </div>
         <TrajectoryView
-          v-show="activeTab === 'trajectory'"
           class="traj-pane"
+          :class="{ 'pane-hidden': activeTab !== 'trajectory' }"
+          :aria-hidden="activeTab !== 'trajectory'"
           :conversation-id="chat.activeConvId!"
+          :active="activeTab === 'trajectory'"
         />
       </div>
 
@@ -116,17 +121,31 @@ watch(() => chat.activeConvId, () => {
   flex: 1;
   min-height: 0;
   display: flex;
+  position: relative;
 }
 
+/* 双 pane 绝对定位叠放：切 tab 只切 visibility，两 pane 布局常驻。 */
 .chat-pane {
-  flex: 1;
-  min-width: 0;
+  position: absolute;
+  inset: 0;
   display: flex;
   flex-direction: column;
+  min-width: 0;
 }
 
 .traj-pane {
-  flex: 1;
+  position: absolute;
+  inset: 0;
   min-width: 0;
+}
+
+/* 隐藏 pane 用 visibility 而非 v-show（display:none）：
+   - display:none 销毁布局 → 滚动位置归零（切回 tab 从顶部开始），
+     且隐藏期 scrollHeight=0 → 流式自动跟随 / 挂载期滚底全是 no-op；
+   - visibility:hidden 保布局保滚动 → 「chat DOM 常驻，流式/滚动状态不因
+     切 tab 中断」的设计承诺真正成立；不可聚焦不可交互 */
+.pane-hidden {
+  visibility: hidden;
+  pointer-events: none;
 }
 </style>

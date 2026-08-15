@@ -443,10 +443,19 @@ export function useTrajectory() {
       const inc = await bridge.trajectory.listEvents(id, TRAJECTORY_PAGE_SIZE, undefined, maxSeq);
       if (currentId !== id) return 0; // 切换会话竞态守卫
       if (inc.length) {
-        events.value = [...events.value, ...inc];
-        legacy.value = false;
+        // 并发防御：push 通知（session:event-appended）与兜底轮询/发送起始轮询
+        // 可能并发进入本函数，两边都从同一 maxSeq 起拉 → 同批增量被拼接两次
+        // （重复行 + 重复 v-for key，全量 load 后才消失）。拼接时以**当前**
+        // 尾部 seq 再过滤一次——后落者自动清零，竞态窗口就地关闭。
+        const tail = events.value.length ? events.value[events.value.length - 1].seq : 0;
+        const fresh = inc.filter((e) => e.seq > tail);
+        if (fresh.length) {
+          events.value = [...events.value, ...fresh];
+          legacy.value = false;
+        }
+        return fresh.length;
       }
-      return inc.length;
+      return 0;
     } catch {
       return 0; // 轮询失败静默：下一轮再试（与影子日志同款宽容）
     }
