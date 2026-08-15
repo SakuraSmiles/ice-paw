@@ -3,8 +3,9 @@
 import { ref, computed, onMounted } from "vue";
 import AgentForm from "../../components/agent/AgentForm.vue";
 import KbDocumentList from "../../components/kb/KbDocumentList.vue";
-import type { Agent } from "../../types";
+import type { Agent, ProviderInfo } from "../../types";
 import { bridge } from "../../api/bridge";
+import { loadProviders, providerLabelOf } from "../../composables/useProviders";
 import { useAgentStore } from "../../stores/agent";
 
 const store = useAgentStore();
@@ -28,6 +29,7 @@ async function loadAgents() {
 }
 
 onMounted(loadAgents);
+onMounted(async () => { providerList.value = await loadProviders(); });
 
 function toggleEdit(agent: Agent) {
   isCreating.value = false; // 编辑时收起新建
@@ -62,10 +64,9 @@ async function onDelete(agent: Agent) {
   }
 }
 
-const providerLabels: Record<string, string> = {
-  openai: "OpenAI", anthropic: "Anthropic", deepseek: "DeepSeek",
-  glm: "GLM", minimax: "MiniMax", "minimax-cn": "MiniMax(CN)",
-};
+// Provider 显示名走目录（单一真相源；未收录名回退原文）。与 AgentForm 共享缓存。
+const providerList = ref<ProviderInfo[]>([]);
+const providerLabel = (name: string) => providerLabelOf(providerList.value, name);
 </script>
 
 <template>
@@ -117,7 +118,7 @@ const providerLabels: Record<string, string> = {
               <span v-if="agent.config_from_file" class="card-file-badge">agent.yaml</span>
             </div>
             <div class="card-meta-row">
-              <span class="provider-badge" :class="'provider-' + agent.provider">{{ providerLabels[agent.provider] || agent.provider }}</span>
+              <span class="provider-badge" :class="'provider-' + agent.provider">{{ providerLabel(agent.provider) }}</span>
               <span class="card-model">{{ agent.model }}</span>
               <span v-if="!agent.has_api_key" class="card-tag card-tag-warn">未配置 Key</span>
             </div>
