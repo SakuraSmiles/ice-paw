@@ -1,6 +1,6 @@
 //! `read_attachment_page` 工具 —— 聊天附件分页按页读取（Phase A）。
 //!
-//! 配合 [`crate::commands::chat_cmd::materialize_file_blocks`] 的大附件分页：当附件提取
+//! 配合 [`crate::harness::attachments::materialize_file_blocks`] 的大附件分页：当附件提取
 //! 正文总 token 超阈值时，只把首页注入 LLM，其余各块存 `message_attachments` 表，由本工具
 //! 按 `(message_id, page)` 按需读取。治本大 PDF（>1M）整篇灌进单个 Text block 撑爆窗口。
 //!

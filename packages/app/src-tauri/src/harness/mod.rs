@@ -8,6 +8,7 @@
 //! - REQ-XC-004：新增 batch_writer（流式写入批处理器）
 //! - Phase 1: tool_registry → mcp + authority + scoring
 
+pub mod attachments;
 pub mod authority;
 pub mod batch_writer;
 pub mod budget;

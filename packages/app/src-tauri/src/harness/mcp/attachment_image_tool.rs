@@ -3,7 +3,7 @@
 //! [`crate::harness::mcp::read_attachment_tool`] 读的是**提取后的文本**；但当附件是
 //! 扫描件 / 纯图片 PDF（文本提取为空）或**混合型 PDF**（图纸 / 图表 / 扫描带 OCR——有零星
 //! 文字但实质内容是图形）时，文字路径无法回答布局 / 图形 / 尺寸类问题。此时
-//! [`crate::commands::chat_cmd::materialize_file_blocks`] 会把**所有非损坏 PDF** 的原始字节
+//! [`crate::harness::attachments::materialize_file_blocks`] 会把**所有非损坏 PDF** 的原始字节
 //! 存进 `message_attachment_files` 表（层①治本，2026-08-13；旧门槛 `total_tokens == 0` 已废），
 //! 本工具取字节 → pdfium 渲染指定页 → PNG → [`ToolOutput::image_png`] → `tool_executor`
 //! 注入 `Image` 块给视觉模型读图（无视觉能力的 agent 走全局视觉配置代读成文本）。
