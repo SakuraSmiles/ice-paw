@@ -165,7 +165,9 @@ async fn list_by_conversation_preserves_insert_order_within_same_second() {
     .unwrap();
 
     // 模拟流式结束后回写内容（created_at 不变）
-    message::update_content(&pool, asst1, "你好世界").await.unwrap();
+    message::update_content(&pool, asst1, "你好世界")
+        .await
+        .unwrap();
 
     message::create(
         &pool,
@@ -195,7 +197,9 @@ async fn list_by_conversation_preserves_insert_order_within_same_second() {
     )
     .await
     .unwrap();
-    message::update_content(&pool, asst2, "晴，25°C").await.unwrap();
+    message::update_content(&pool, asst2, "晴，25°C")
+        .await
+        .unwrap();
 
     // 把同对的 user+assistant 压到同一秒，模拟 SQLite 默认精度的最坏情况
     let same_second_t0 = "2026-07-13 17:11:23";
@@ -272,7 +276,10 @@ async fn list_by_conversation_handles_many_pairs_all_same_second() {
     let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
     let expected_refs: Vec<&str> = expected_ids.iter().map(String::as_str).collect();
 
-    assert_eq!(ids, expected_refs, "10 对 user/assistant 全部同秒时，每对内 user 必须先于 assistant");
+    assert_eq!(
+        ids, expected_refs,
+        "10 对 user/assistant 全部同秒时，每对内 user 必须先于 assistant"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -440,7 +447,11 @@ async fn list_turn_anchors_excludes_tool_result_placeholder_rows() {
                 &NewMessage {
                     conversation_id: conv_id.clone(),
                     role: role.into(),
-                    content: if id == &u { format!("第{i}个问题") } else { String::new() },
+                    content: if id == &u {
+                        format!("第{i}个问题")
+                    } else {
+                        String::new()
+                    },
                     token_count: None,
                     error: None,
                     model: None,
@@ -468,6 +479,83 @@ async fn list_turn_anchors_excludes_tool_result_placeholder_rows() {
          轨迹页 count_turns_before（distinct turn_id）同基准"
     );
     assert_eq!(anchors[0].preview, "第1个问题");
+}
+
+/// 空占位行（loop_engine 阶段 F 先 create 占位、进程死亡残留的
+/// content='' + blocks 空/'[]' 行）不是轮次；纯图消息（content='' 但
+/// blocks 非空）是真实轮次，不得误伤。
+/// 真机背景：34 真实轮曾数出 36，导航条与实际位置错位。
+#[tokio::test]
+async fn list_turn_anchors_excludes_empty_placeholder_keeps_image_only() {
+    let pool = fresh_pool().await;
+    let conv_id = seed_agent_and_conv(&pool).await;
+
+    // 真实轮 1（有文本）
+    message::create(
+        &pool,
+        "real-1",
+        &NewMessage {
+            conversation_id: conv_id.clone(),
+            role: "user".into(),
+            content: "正常问题".into(),
+            token_count: None,
+            error: None,
+            model: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    // 空占位行 A：content='' + content_blocks 默认（'[]'）——崩溃残留形态
+    message::create(
+        &pool,
+        "ghost-empty",
+        &NewMessage {
+            conversation_id: conv_id.clone(),
+            role: "user".into(),
+            content: String::new(),
+            token_count: None,
+            error: None,
+            model: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    // 真实轮 2：纯图消息（content='' 但 blocks 含 image）——必须保留
+    message::create(
+        &pool,
+        "real-image",
+        &NewMessage {
+            conversation_id: conv_id.clone(),
+            role: "user".into(),
+            content: String::new(),
+            token_count: None,
+            error: None,
+            model: None,
+        },
+    )
+    .await
+    .unwrap();
+    message::update_content_blocks(
+        &pool,
+        "real-image",
+        r#"[{"type":"image","data":"iVBOR","media_type":"image/png"}]"#,
+    )
+    .await
+    .unwrap();
+
+    // 注：content_blocks NOT NULL（现 schema），「NULL + 有文本」的旧形态无法
+    // 在测试库构造——SQL 侧 COALESCE 仅是对历史库文件的防御，此处不覆盖。
+
+    let anchors = message::list_turn_anchors(&pool, &conv_id).await.unwrap();
+    let ids: Vec<&str> = anchors.iter().map(|a| a.message_id.as_str()).collect();
+    assert_eq!(
+        ids,
+        vec!["real-1", "real-image"],
+        "空占位行（ghost-empty）必须排除；纯图消息是真实轮次不得误伤"
+    );
+    assert_eq!(anchors[1].preview, "", "纯图消息 content 空 → 空串预览");
 }
 
 // ---------------------------------------------------------------------------

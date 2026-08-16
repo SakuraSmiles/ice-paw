@@ -26,6 +26,24 @@ pub(crate) struct ChatRequest<'a> {
     pub temperature: f64,
     pub max_tokens: i32,
     pub stream_options: StreamOptions,
+    /// 智谱思考开关（`{"thinking":{"type":"disabled"}}`）——provider 专属
+    /// 字段，**仅**对 GLM 端点注入（见 `openai::summary_thinking_disabled`）；
+    /// 其他 OpenAI 兼容服务可能拒收未知字段（400），一律 None 不发送。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<ThinkingSwitch>,
+}
+
+/// `thinking` 字段值：`{"type":"disabled"}` 关闭深度思考
+#[derive(Serialize)]
+pub(crate) struct ThinkingSwitch {
+    #[serde(rename = "type")]
+    pub kind: &'static str,
+}
+
+impl ThinkingSwitch {
+    pub fn disabled() -> Self {
+        Self { kind: "disabled" }
+    }
 }
 
 /// `stream_options.include_usage = true` 让 API 返回 token 用量
@@ -157,7 +175,11 @@ pub(crate) fn chat_message_to_openai(msg: &ChatMessage) -> AppResult<Vec<OpenAiM
         .content
         .iter()
         .filter_map(|b| match b {
-            ContentBlock::ToolResult { tool_use_id, content, .. } => Some((tool_use_id, content)),
+            ContentBlock::ToolResult {
+                tool_use_id,
+                content,
+                ..
+            } => Some((tool_use_id, content)),
             _ => None,
         })
         .collect();
@@ -210,7 +232,10 @@ pub(crate) fn chat_message_to_openai(msg: &ChatMessage) -> AppResult<Vec<OpenAiM
 /// ToolResult 已由 [`chat_message_to_openai`] 预先展开，故此处不再处理 ToolResult。
 fn single_openai_message(msg: &ChatMessage) -> AppResult<OpenAiMessage> {
     // 判断是否为纯文本（所有块都是 Text）
-    let all_text = msg.content.iter().all(|b| matches!(b, ContentBlock::Text { .. }));
+    let all_text = msg
+        .content
+        .iter()
+        .all(|b| matches!(b, ContentBlock::Text { .. }));
 
     if all_text {
         let text = msg.content_text();
@@ -309,7 +334,11 @@ fn single_openai_message(msg: &ChatMessage) -> AppResult<OpenAiMessage> {
             Ok(OpenAiMessage {
                 role: msg.role.clone(),
                 content,
-                tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
+                tool_calls: if tool_calls.is_empty() {
+                    None
+                } else {
+                    Some(tool_calls)
+                },
                 tool_call_id: None,
             })
         }
@@ -346,6 +375,41 @@ fn single_openai_message(msg: &ChatMessage) -> AppResult<OpenAiMessage> {
 mod tests {
     use super::*;
 
+    fn minimal_request(thinking: Option<ThinkingSwitch>) -> ChatRequest<'static> {
+        ChatRequest {
+            model: "glm-5.2",
+            messages: vec![OpenAiMessage {
+                role: "user".to_string(),
+                content: serde_json::json!("摘要一下"),
+                tool_calls: None,
+                tool_call_id: None,
+            }],
+            tools: None,
+            tool_choice: None,
+            stream: true,
+            temperature: 0.0,
+            max_tokens: 512,
+            stream_options: StreamOptions {
+                include_usage: true,
+            },
+            thinking,
+        }
+    }
+
+    /// thinking 字段 None 不发送（未知服务零污染），Some 注入智谱关闭开关
+    #[test]
+    fn chat_request_thinking_switch_serialization() {
+        let none = serde_json::to_value(minimal_request(None)).unwrap();
+        assert!(
+            none.get("thinking").is_none(),
+            "None 时不得发送 thinking 字段"
+        );
+
+        let disabled =
+            serde_json::to_value(minimal_request(Some(ThinkingSwitch::disabled()))).unwrap();
+        assert_eq!(disabled["thinking"]["type"], "disabled");
+    }
+
     /// user 含图片时，序列化出的 content 应是数组，
     /// 且 image_url block 在 text block 之前（OpenAI 要求）。
     #[test]
@@ -378,7 +442,10 @@ mod tests {
         }
         // 验证顺序
         assert_eq!(arr[0]["type"], "image_url");
-        assert_eq!(arr[0]["image_url"]["url"], "data:image/png;base64,iVBORw0KGgo");
+        assert_eq!(
+            arr[0]["image_url"]["url"],
+            "data:image/png;base64,iVBORw0KGgo"
+        );
         assert_eq!(arr[1]["type"], "image_url");
         assert_eq!(arr[1]["image_url"]["url"], "data:image/jpeg;base64,AAAA");
         assert_eq!(arr[2]["type"], "text");

@@ -43,8 +43,22 @@ pub struct OpenAiAdapter {
     model: String,
     /// API base URL（不含 `/v1/...` 后缀）
     base_url: String,
+    /// 注册表 provider 名（如 "glm" / "glm-coding" / "openai"）
+    ///
+    /// 摘要调用的思考开关注入按此判定（[`summary_thinking_disabled`]）——
+    /// vendor 专属请求体字段只能对已知端点注入，未知 provider 一律不注。
+    provider: String,
     /// HTTP 客户端（复用连接池）
     client: reqwest::Client,
+}
+
+/// 是否支持在摘要调用中关闭深度思考（智谱 `thinking.type` 字段）。
+///
+/// 仅认注册表 GLM 名（glm / glm-coding）——智谱官方定义该字段，注入零风险；
+/// 其他 OpenAI 兼容服务（openai/deepseek/custom/vLLM…）未定义，盲目注入
+/// 可能被严格服务端 400 拒收。
+fn summary_thinking_disabled(provider: &str) -> bool {
+    matches!(provider, "glm" | "glm-coding")
 }
 
 impl OpenAiAdapter {
@@ -52,7 +66,8 @@ impl OpenAiAdapter {
     ///
     /// - `model`：模型名称
     /// - `base_url`：API 根地址，如 `https://api.openai.com`
-    pub fn new(model: String, base_url: String) -> AppResult<Self> {
+    /// - `provider`：注册表 provider 名（思考开关等 vendor 行为判定用）
+    pub fn new(model: String, base_url: String, provider: impl Into<String>) -> AppResult<Self> {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .read_timeout(Duration::from_secs(120))
@@ -63,6 +78,7 @@ impl OpenAiAdapter {
         Ok(Self {
             model,
             base_url,
+            provider: provider.into(),
             client,
         })
     }
@@ -161,6 +177,69 @@ impl LlmProvider for OpenAiAdapter {
         model: Option<&str>,
         cancel: CancellationToken,
     ) -> AppResult<Pin<Box<dyn Stream<Item = AppResult<ChatDelta>> + Send>>> {
+        self.stream_chat_inner(
+            api_key,
+            messages,
+            tools,
+            temperature,
+            max_tokens,
+            model,
+            cancel,
+            None, // 聊天主路径：思考开关字段一律不发送
+        )
+        .await
+    }
+
+    /// 摘要专用通道：对 GLM 端点注入 `thinking:{"type":"disabled"}`——
+    /// 否则 thinking 模型把摘要的小 max_tokens 全烧在思考通道，content 恒空。
+    async fn stream_summary(
+        &self,
+        api_key: &str,
+        messages: Vec<ChatMessage>,
+        temperature: f64,
+        max_tokens: i32,
+        cancel: CancellationToken,
+    ) -> AppResult<Pin<Box<dyn Stream<Item = AppResult<ChatDelta>> + Send>>> {
+        let thinking =
+            summary_thinking_disabled(&self.provider).then(types::ThinkingSwitch::disabled);
+        if thinking.is_some() {
+            tracing::info!(
+                target: "ice_paw.llm",
+                "摘要调用注入 thinking:type=disabled（provider={}，思考通道不占摘要额度）",
+                self.provider
+            );
+        }
+        self.stream_chat_inner(
+            api_key,
+            messages,
+            None,
+            temperature,
+            max_tokens,
+            None,
+            cancel,
+            thinking,
+        )
+        .await
+    }
+
+    fn model_name(&self) -> &str {
+        &self.model
+    }
+}
+
+impl OpenAiAdapter {
+    #[allow(clippy::too_many_arguments)]
+    async fn stream_chat_inner(
+        &self,
+        api_key: &str,
+        messages: Vec<ChatMessage>,
+        tools: Option<Vec<ToolDef>>,
+        temperature: f64,
+        max_tokens: i32,
+        model: Option<&str>,
+        cancel: CancellationToken,
+        thinking: Option<types::ThinkingSwitch>,
+    ) -> AppResult<Pin<Box<dyn Stream<Item = AppResult<ChatDelta>> + Send>>> {
         // P0-3: 会话级 model override —— 优先使用调用方传入的 model，
         // 否则回退到 Adapter 构造时绑定的默认 model（self.model）。
         // 注意：不会改写 self.model，下次 None 调用仍走默认。
@@ -191,7 +270,11 @@ impl LlmProvider for OpenAiAdapter {
                 .collect::<Vec<_>>()
         });
 
-        let tool_choice = if openai_tools.is_some() { Some("auto") } else { None };
+        let tool_choice = if openai_tools.is_some() {
+            Some("auto")
+        } else {
+            None
+        };
 
         let body = ChatRequest {
             model: effective_model,
@@ -201,7 +284,10 @@ impl LlmProvider for OpenAiAdapter {
             stream: true,
             temperature,
             max_tokens,
-            stream_options: StreamOptions { include_usage: true },
+            stream_options: StreamOptions {
+                include_usage: true,
+            },
+            thinking,
         };
 
         // 调试日志：确认工具是否注入
@@ -256,10 +342,6 @@ impl LlmProvider for OpenAiAdapter {
         // 返回 ReceiverStream 包装
         Ok(Box::pin(ReceiverStream::new(rx)))
     }
-
-    fn model_name(&self) -> &str {
-        &self.model
-    }
 }
 
 // =========================================================================
@@ -273,6 +355,19 @@ mod tests {
     // ---------------------------------------------------------------
     // is_version_segment 边界用例
     // ---------------------------------------------------------------
+
+    #[test]
+    fn summary_thinking_disabled_only_for_glm_registry_names() {
+        // 摘要思考开关只对智谱官方定义该字段的端点注入；其他服务盲目注入
+        // 可能被严格服务端 400 拒收
+        assert!(summary_thinking_disabled("glm"));
+        assert!(summary_thinking_disabled("glm-coding"));
+        assert!(!summary_thinking_disabled("openai"));
+        assert!(!summary_thinking_disabled("deepseek"));
+        assert!(!summary_thinking_disabled("custom"));
+        assert!(!summary_thinking_disabled("ollama"));
+        assert!(!summary_thinking_disabled(""));
+    }
 
     #[test]
     fn is_version_segment_basic_v1() {
@@ -467,10 +562,7 @@ mod tests {
     fn url_version_word_not_treated_as_version() {
         // "version1" 不算 v+数字，所以仍然追加 /v1
         let url = build_chat_url("https://some-proxy.com/version1");
-        assert_eq!(
-            url,
-            "https://some-proxy.com/version1/v1/chat/completions"
-        );
+        assert_eq!(url, "https://some-proxy.com/version1/v1/chat/completions");
     }
 
     #[test]
@@ -490,10 +582,7 @@ mod tests {
     #[test]
     fn url_with_path_but_no_version() {
         let url = build_chat_url("https://example.com/api/openai");
-        assert_eq!(
-            url,
-            "https://example.com/api/openai/v1/chat/completions"
-        );
+        assert_eq!(url, "https://example.com/api/openai/v1/chat/completions");
     }
 
     // ---------------------------------------------------------------

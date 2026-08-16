@@ -23,8 +23,8 @@ pub mod probe;
 pub use anthropic::AnthropicAdapter;
 pub use mock::{MockProvider, MockScenario};
 pub use model_info::{
-    default_context_window, default_max_output_tokens, effective_supports_vision, model_capabilities,
-    ModelCapabilities,
+    default_context_window, default_max_output_tokens, effective_supports_vision,
+    model_capabilities, ModelCapabilities,
 };
 pub use openai::OpenAiAdapter;
 
@@ -55,6 +55,35 @@ pub trait LlmProvider: Send + Sync {
         model: Option<&str>,
         cancel: CancellationToken,
     ) -> AppResult<Pin<Box<dyn futures::Stream<Item = AppResult<ChatDelta>> + Send>>>;
+
+    /// 摘要专用通道（滚动摘要等内部小额度调用）。
+    ///
+    /// 根因（2026-08-15 生产诊断）：glm-5.2 等 thinking 模型会把小额度
+    /// `max_tokens`（摘要仅 512）全部烧在思考通道（`reasoning_content`），
+    /// `content` 恒为空 → 滚动摘要从未成功 → 全量历史每轮重发 → 预算熔断。
+    /// 默认实现与 `stream_chat` 完全等价；OpenAI Adapter 覆写之，对支持
+    /// 思考开关的 provider（GLM）显式注入 `thinking: {"type":"disabled"}`。
+    /// 聊天主路径不走此方法，行为零变化。
+    #[allow(clippy::too_many_arguments)]
+    async fn stream_summary(
+        &self,
+        api_key: &str,
+        messages: Vec<ChatMessage>,
+        temperature: f64,
+        max_tokens: i32,
+        cancel: CancellationToken,
+    ) -> AppResult<Pin<Box<dyn futures::Stream<Item = AppResult<ChatDelta>> + Send>>> {
+        self.stream_chat(
+            api_key,
+            messages,
+            None, // 摘要不启用工具
+            temperature,
+            max_tokens,
+            None, // 摘要固定走 Adapter 默认 model
+            cancel,
+        )
+        .await
+    }
 
     /// 返回当前 Provider 实际使用的模型名（用于消息级记录）
     fn model_name(&self) -> &str;
@@ -207,19 +236,27 @@ pub fn create_provider(
     );
 
     match protocol {
-        Some(ProviderProtocol::OpenAI) => Ok(Arc::new(
-            OpenAiAdapter::new(model.to_string(), url)?,
-        )),
-        Some(ProviderProtocol::Anthropic) => Ok(Arc::new(
-            AnthropicAdapter::new(model.to_string(), url, cache_prompt)?,
-        )),
+        Some(ProviderProtocol::OpenAI) => Ok(Arc::new(OpenAiAdapter::new(
+            model.to_string(),
+            url,
+            provider,
+        )?)),
+        Some(ProviderProtocol::Anthropic) => Ok(Arc::new(AnthropicAdapter::new(
+            model.to_string(),
+            url,
+            cache_prompt,
+        )?)),
         None => {
             tracing::warn!(
                 target: "ice_paw.llm",
                 "未知 provider '{}'，兜底走 OpenAI 兼容",
                 provider
             );
-            Ok(Arc::new(OpenAiAdapter::new(model.to_string(), url)?))
+            Ok(Arc::new(OpenAiAdapter::new(
+                model.to_string(),
+                url,
+                provider,
+            )?))
         }
     }
 }
@@ -390,7 +427,10 @@ mod tests {
             .filter(|i| !i.hidden)
             .map(|i| i.name.as_str())
             .collect();
-        assert_eq!(visible, vec!["openai", "glm", "deepseek", "anthropic", "minimax"]);
+        assert_eq!(
+            visible,
+            vec!["openai", "glm", "deepseek", "anthropic", "minimax"]
+        );
         // hidden 条目仍可解析（工厂/目录元数据照常）
         for legacy in ["glm-coding", "minimax-cn", "ollama", "custom"] {
             assert!(find_provider(legacy).is_some(), "{} 应保留在注册表", legacy);
@@ -435,7 +475,15 @@ mod tests {
     fn provider_requires_key_flags() {
         assert!(!provider_requires_key("ollama"));
         assert!(!provider_requires_key("custom"));
-        for p in ["openai", "glm", "glm-coding", "deepseek", "anthropic", "minimax", "minimax-cn"] {
+        for p in [
+            "openai",
+            "glm",
+            "glm-coding",
+            "deepseek",
+            "anthropic",
+            "minimax",
+            "minimax-cn",
+        ] {
             assert!(provider_requires_key(p), "{p} 应要求 key");
         }
         assert!(provider_requires_key("totally-unknown"));
@@ -476,7 +524,10 @@ mod tests {
             assert_eq!(info.hidden, desc.hidden);
             assert_eq!(
                 info.models,
-                desc.models.iter().map(|s| s.to_string()).collect::<Vec<_>>()
+                desc.models
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect::<Vec<_>>()
             );
         }
     }

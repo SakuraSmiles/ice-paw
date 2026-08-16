@@ -1,11 +1,14 @@
 //! M1.5: `LlmSummaryProvider` — 基于 LLM 的滚动摘要实现
 //!
 //! 职责：
-//! - 持有一个 `LlmProvider` + API Key，调用 `stream_chat` 走标准的
-//!   Anthropic / OpenAI 流式协议
+//! - 持有一个 `LlmProvider` + API Key，调用 `stream_summary`（摘要专用通道，
+//!   GLM 端点注入思考开关）走标准的 Anthropic / OpenAI 流式协议
 //! - prompt 模板：system 描述摘要员职责（最多 3 句，保留目标/事实/工具/错误），
 //!   user 是被摘要的消息列表（`[role]: content` 格式）
 //! - 流消费：把所有 `ChatDelta::Delta { content }` 拼成一个完整字符串返回
+//! - **熔断器**：连续空结果 / 调用失败（thinking 模型烧光额度等 provider 级
+//!   故障）按模型熔断——停止每轮徒劳重试（6~11s 延迟 + 一次全量输入计费），
+//!   冷却期满半开探测（见下方 `SummaryBreakerState`）
 //!
 //! 设计要点（dev1 评审）：
 //! - **依赖倒置**：实现 `context::memory::SummaryProvider` trait（context 层
@@ -17,11 +20,13 @@
 //! - **max_tokens = 512 硬上限**：摘要最多 3 句话，远低于 512 tokens 实际限制
 //! - **不启用 tools**：摘要阶段不调用工具
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use futures::StreamExt;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use crate::context::memory::SummaryProvider;
 use crate::error::AppResult;
@@ -54,6 +59,95 @@ const SUMMARY_MAX_TOKENS: i32 = 512;
 const SUMMARY_FIELD_MAX_INPUT: usize = 500;
 /// 摘要 prompt 中**工具结果 content**的截断字符数（结果通常比入参更长）
 const SUMMARY_FIELD_MAX_RESULT: usize = 1000;
+
+// =========================================================================
+// 摘要熔断器（进程级，按模型分组）
+// =========================================================================
+
+/// 连续空结果多少次后熔断
+const SUMMARY_BREAKER_TRIP_AFTER: u32 = 3;
+/// 熔断冷却时长（期满后半开：放行一次探测，再空则立即重开）
+const SUMMARY_BREAKER_COOLDOWN_MS: u64 = 10 * 60 * 1000;
+
+/// 单模型熔断状态（纯数据；判定/记录逻辑在下方纯函数，便于单测时间旅行）
+#[derive(Default)]
+struct SummaryBreakerState {
+    consecutive_empty: u32,
+    open_until_ms: u64,
+}
+
+/// 进程级注册表。`LlmSummaryProvider` 每次 send 都重新构造（持的是
+/// `Arc<dyn LlmProvider>`），状态必须外置；按 `model_name()` 分组——
+/// 故障是模型级的（thinking 模型烧光额度），不能让别的模型连坐。
+static SUMMARY_BREAKERS: OnceLock<Mutex<HashMap<String, SummaryBreakerState>>> = OnceLock::new();
+
+fn summary_breakers() -> &'static Mutex<HashMap<String, SummaryBreakerState>> {
+    SUMMARY_BREAKERS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// 是否处于熔断开启期（应跳过 LLM 调用）
+fn breaker_should_skip(st: &SummaryBreakerState, now_ms: u64) -> bool {
+    st.open_until_ms > now_ms
+}
+
+/// 记录一次空结果。返回是否**新触发**熔断（供调用方升级日志，只报一次）。
+fn breaker_record_empty(st: &mut SummaryBreakerState, now_ms: u64) -> bool {
+    st.consecutive_empty = st.consecutive_empty.saturating_add(1);
+    if st.consecutive_empty >= SUMMARY_BREAKER_TRIP_AFTER {
+        let newly_tripped = st.open_until_ms <= now_ms; // 之前未开/冷却已过 → 新一轮熔断
+        st.open_until_ms = now_ms.saturating_add(SUMMARY_BREAKER_COOLDOWN_MS);
+        newly_tripped
+    } else {
+        false
+    }
+}
+
+/// 记录一次成功（清零计数 + 解除熔断）
+fn breaker_record_success(st: &mut SummaryBreakerState) {
+    st.consecutive_empty = 0;
+    st.open_until_ms = 0;
+}
+
+/// 记一次摘要失败（空文本**或调用 Err**）并按需升级告警。
+///
+/// 两类同属 provider 级故障（thinking 烧光额度→空、端点拒收→Err），都应计数；
+/// 触顶只打一次 error（可见性：此前 34 次失败只有 warn 刷屏）。
+fn breaker_note_failure(model_key: &str) {
+    let newly_tripped = {
+        let mut breakers = summary_breakers()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        breaker_record_empty(breakers.entry(model_key.to_string()).or_default(), now_ms())
+    };
+    if newly_tripped {
+        error!(
+            target: "ice_paw.summary",
+            "摘要熔断：模型 {} 连续 {} 次摘要调用失败或返回空文本，{} 分钟内跳过摘要调用。\
+             最常见根因：thinking 模型（如 glm-5.2）把 max_tokens={} 全部消耗在思考通道，\
+             content 恒为空——滚动摘要失效会导致历史无法折叠、每轮全量重发直到预算熔断。\
+             请检查该模型的思考开关是否已禁用（stream_summary 通道）或更换摘要模型。",
+            model_key,
+            SUMMARY_BREAKER_TRIP_AFTER,
+            SUMMARY_BREAKER_COOLDOWN_MS / 60_000,
+            SUMMARY_MAX_TOKENS
+        );
+    }
+}
+
+/// 记一次摘要成功（清零计数 + 解除熔断）
+fn breaker_note_success(model_key: &str) {
+    let mut breakers = summary_breakers()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    breaker_record_success(breakers.entry(model_key.to_string()).or_default());
+}
 
 /// `LlmSummaryProvider` — 通过 LLM 流式调用实现滚动摘要
 ///
@@ -89,6 +183,25 @@ impl SummaryProvider for LlmSummaryProvider {
             return Ok(String::new());
         }
 
+        // 熔断检查：连续空结果的模型直接跳过本次调用（省一次 6~11s 延迟 +
+        // 一次全量输入计费）。返回空串 → MemoryStage 走既有「跳过落库」路径。
+        let model_key = self.provider.model_name().to_string();
+        {
+            let mut breakers = summary_breakers()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let st = breakers.entry(model_key.clone()).or_default();
+            if breaker_should_skip(st, now_ms()) {
+                drop(breakers); // 先释放锁再打日志（await-free 但保持短临界区纪律）
+                info!(
+                    target: "ice_paw.summary",
+                    "摘要熔断中（{} 连续空结果 ≥{} 次），冷却期内跳过摘要调用",
+                    model_key, SUMMARY_BREAKER_TRIP_AFTER
+                );
+                return Ok(String::new());
+            }
+        }
+
         // 调用方（MemoryStage）传入目标 token 上限；clamp 到 [200, 硬上限]，
         // 既尊重调用方意图（折叠批次大小不同），又守住摘要长度纪律。
         let cap = max_tokens.clamp(200, SUMMARY_MAX_TOKENS as usize) as i32;
@@ -103,22 +216,35 @@ impl SummaryProvider for LlmSummaryProvider {
         // 构造 user prompt：把消息列表按 block 渲染（含工具调用 / 结果，带截断）
         let user_prompt = build_summary_user_prompt(messages);
 
-        // 调 LLM 流式 API
-        let stream = self
+        // 调 LLM 流式 API——走 stream_summary 专用通道（GLM 注入思考开关，
+        // 防 thinking 模型把小额度全烧在思考通道上导致 content 恒空）。
+        // 建连失败（HTTP 4xx/5xx/网络）与空结果同为 provider 级故障：计入熔断
+        // 后原样上抛——MemoryStage 对 Err 降级（跳过折叠不阻塞对话）。
+        let stream = match self
             .provider
-            .stream_chat(
+            .stream_summary(
                 &self.api_key,
                 vec![
                     ChatMessage::from_text("system", SUMMARY_SYSTEM_PROMPT.to_string()),
                     ChatMessage::from_text("user", user_prompt),
                 ],
-                None, // 摘要不启用工具
-                0.0,  // temperature = 0：摘要应稳定可复现
+                0.0, // temperature = 0：摘要应稳定可复现
                 cap,
-                None, // 摘要固定走 Agent 默认 model（不受会话级 override 影响）
                 cancel.clone(),
             )
-            .await?;
+            .await
+        {
+            Ok(stream) => stream,
+            Err(e) => {
+                warn!(
+                    target: "ice_paw.summary",
+                    "摘要调用失败（{}）：{}",
+                    model_key, e
+                );
+                breaker_note_failure(&model_key);
+                return Err(e);
+            }
+        };
 
         // 消费 stream 拼接完整文本
         let mut full = String::new();
@@ -161,6 +287,17 @@ impl SummaryProvider for LlmSummaryProvider {
             messages.len(),
             full.len()
         );
+
+        // 熔断记账：取消不计（用户主动停止非 provider 故障）；空结果累计，
+        // 触顶升级 error 一次性告警（可见性：此前 34 次失败只有 warn 刷屏）。
+        if cancel.is_cancelled() {
+            return Ok(full);
+        }
+        if full.trim().is_empty() {
+            breaker_note_failure(&model_key);
+        } else {
+            breaker_note_success(&model_key);
+        }
 
         Ok(full)
     }
@@ -215,9 +352,7 @@ fn render_message_for_summary(m: &ChatMessage) -> String {
                 parts.push(s);
             }
             ContentBlock::ToolResult {
-                content,
-                is_error,
-                ..
+                content, is_error, ..
             } => {
                 let tag = if is_error.unwrap_or(false) {
                     "失败"
@@ -261,6 +396,198 @@ fn truncate_str(s: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::pin::Pin;
+
+    // ---------------------------------------------------------------
+    // 熔断器：纯状态机时间旅行
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn breaker_state_machine_time_travel() {
+        let mut st = SummaryBreakerState::default();
+        assert!(!breaker_record_empty(&mut st, 1_000), "第 1 次空不触发");
+        assert!(!breaker_record_empty(&mut st, 1_001), "第 2 次空不触发");
+        assert!(!breaker_should_skip(&st, 1_002), "触顶前不熔断");
+        assert!(breaker_record_empty(&mut st, 1_002), "第 3 次空 → 新触发");
+        assert!(breaker_should_skip(&st, 1_003), "熔断开启期跳过");
+        let expiry = 1_002 + SUMMARY_BREAKER_COOLDOWN_MS;
+        assert!(!breaker_should_skip(&st, expiry), "冷却期满放行（半开）");
+        // 半开探测再空 → 立即重开且再报一次新触发
+        assert!(breaker_record_empty(&mut st, expiry + 1));
+        assert!(breaker_should_skip(&st, expiry + 2));
+        // 成功清零：解除熔断 + 计数归零
+        breaker_record_success(&mut st);
+        assert!(!breaker_should_skip(&st, expiry + 3));
+        assert!(
+            !breaker_record_empty(&mut st, expiry + 4),
+            "清零后重新从 1 计"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // 熔断器：summarize 集成（计数 Provider 驱动真实路径）
+    // ---------------------------------------------------------------
+
+    /// 计数 + 可配置产出的测试 Provider（emit=None 空流 / Some=先产一条 Delta；
+    /// fail=true 时 stream_chat 直接 Err，模拟端点拒收 / 网络故障）
+    struct CountingProvider {
+        model: String,
+        calls: std::sync::atomic::AtomicUsize,
+        emit: std::sync::Mutex<Option<String>>,
+        fail: std::sync::atomic::AtomicBool,
+    }
+
+    impl CountingProvider {
+        fn new(model: &str, emit: Option<String>) -> Self {
+            Self {
+                model: model.to_string(),
+                calls: std::sync::atomic::AtomicUsize::new(0),
+                emit: std::sync::Mutex::new(emit),
+                fail: std::sync::atomic::AtomicBool::new(false),
+            }
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.load(std::sync::atomic::Ordering::SeqCst)
+        }
+
+        fn set_emit(&self, emit: Option<String>) {
+            *self.emit.lock().unwrap() = emit;
+        }
+
+        fn set_fail(&self, fail: bool) {
+            self.fail.store(fail, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    #[async_trait]
+    impl LlmProvider for CountingProvider {
+        async fn stream_chat(
+            &self,
+            _api_key: &str,
+            _messages: Vec<ChatMessage>,
+            _tools: Option<Vec<crate::infra::protocol::ToolDef>>,
+            _temperature: f64,
+            _max_tokens: i32,
+            _model: Option<&str>,
+            _cancel: CancellationToken,
+        ) -> AppResult<Pin<Box<dyn futures::Stream<Item = AppResult<ChatDelta>> + Send>>> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(crate::error::AppError::Llm("HTTP 400 模拟拒收".into()));
+            }
+            let (tx, rx) = tokio::sync::mpsc::channel::<AppResult<ChatDelta>>(4);
+            if let Some(text) = self.emit.lock().unwrap().clone() {
+                let _ = tx.try_send(Ok(ChatDelta::Delta { content: text }));
+            }
+            drop(tx); // 关闭 → 流立即结束
+            Ok(Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx)))
+        }
+
+        fn model_name(&self) -> &str {
+            &self.model
+        }
+    }
+
+    fn sample_messages() -> Vec<ChatMessage> {
+        vec![
+            ChatMessage::from_text("user", "你好"),
+            ChatMessage::from_text("assistant", "你好！"),
+        ]
+    }
+
+    #[tokio::test]
+    async fn breaker_trips_after_consecutive_empties_and_skips_call() {
+        let provider = Arc::new(CountingProvider::new("bk-trip-test", None));
+        let sp = LlmSummaryProvider::new(provider.clone(), "key".into());
+        let cancel = CancellationToken::new();
+        let msgs = sample_messages();
+
+        for _ in 0..SUMMARY_BREAKER_TRIP_AFTER {
+            let out = sp.summarize(&msgs, 300, &cancel).await.unwrap();
+            assert!(out.is_empty());
+        }
+        assert_eq!(provider.calls(), SUMMARY_BREAKER_TRIP_AFTER as usize);
+
+        // 第 4 次：熔断开启 → 不再调用 provider，直接返回空串
+        let out = sp.summarize(&msgs, 300, &cancel).await.unwrap();
+        assert!(out.is_empty());
+        assert_eq!(
+            provider.calls(),
+            SUMMARY_BREAKER_TRIP_AFTER as usize,
+            "熔断后应跳过 LLM 调用"
+        );
+    }
+
+    #[tokio::test]
+    async fn breaker_cancel_not_counted() {
+        // 取消是用户行为非 provider 故障：预取消的 token 连续多轮不得熔断
+        let provider = Arc::new(CountingProvider::new("bk-cancel-test", None));
+        let sp = LlmSummaryProvider::new(provider.clone(), "key".into());
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let msgs = sample_messages();
+
+        for _ in 0..(SUMMARY_BREAKER_TRIP_AFTER + 1) {
+            sp.summarize(&msgs, 300, &cancel).await.unwrap();
+        }
+        assert_eq!(
+            provider.calls(),
+            (SUMMARY_BREAKER_TRIP_AFTER + 1) as usize,
+            "取消不计入熔断，每次都应真正调用"
+        );
+    }
+
+    /// 调用 Err（端点拒收/网络）与空结果同为 provider 级故障：连续 3 次 Err
+    /// 也熔断——第 4 次（即使 provider 已恢复）直接跳过，返回空串。
+    #[tokio::test]
+    async fn breaker_counts_call_errors() {
+        let provider = Arc::new(CountingProvider::new(
+            "bk-err-test",
+            Some("恢复后的产出".into()),
+        ));
+        provider.set_fail(true);
+        let sp = LlmSummaryProvider::new(provider.clone(), "key".into());
+        let cancel = CancellationToken::new();
+        let msgs = sample_messages();
+
+        for _ in 0..SUMMARY_BREAKER_TRIP_AFTER {
+            assert!(sp.summarize(&msgs, 300, &cancel).await.is_err());
+        }
+        assert_eq!(provider.calls(), SUMMARY_BREAKER_TRIP_AFTER as usize);
+
+        // provider 恢复，但熔断开启期 → 不再调用，直接空串
+        provider.set_fail(false);
+        let out = sp.summarize(&msgs, 300, &cancel).await.unwrap();
+        assert!(out.is_empty());
+        assert_eq!(
+            provider.calls(),
+            SUMMARY_BREAKER_TRIP_AFTER as usize,
+            "调用 Err 连续触顶后应熔断跳过"
+        );
+    }
+
+    #[tokio::test]
+    async fn breaker_success_resets_counter() {
+        let provider = Arc::new(CountingProvider::new("bk-reset-test", None));
+        let sp = LlmSummaryProvider::new(provider.clone(), "key".into());
+        let cancel = CancellationToken::new();
+        let msgs = sample_messages();
+
+        // 空×2（计 2）→ 成功 1 次（清零）→ 空×2（重新计 2，未触顶）
+        sp.summarize(&msgs, 300, &cancel).await.unwrap();
+        sp.summarize(&msgs, 300, &cancel).await.unwrap();
+        provider.set_emit(Some("有内容的摘要".into()));
+        let out = sp.summarize(&msgs, 300, &cancel).await.unwrap();
+        assert_eq!(out, "有内容的摘要");
+        provider.set_emit(None);
+        sp.summarize(&msgs, 300, &cancel).await.unwrap();
+        sp.summarize(&msgs, 300, &cancel).await.unwrap();
+
+        // 未熔断：第 6 次仍真正调用（若成功未清零，第 5 次就触顶跳过了）
+        sp.summarize(&msgs, 300, &cancel).await.unwrap();
+        assert_eq!(provider.calls(), 6, "成功清零后计数从 1 重计，6 次全真调");
+    }
 
     #[test]
     fn build_summary_user_prompt_includes_role_and_content() {
@@ -269,7 +596,10 @@ mod tests {
             ChatMessage::from_text("assistant", "你好！有什么可以帮你的？"),
         ];
         let prompt = build_summary_user_prompt(&msgs);
-        assert!(prompt.contains("[user]: 你好"), "应包含 user 消息: {prompt}");
+        assert!(
+            prompt.contains("[user]: 你好"),
+            "应包含 user 消息: {prompt}"
+        );
         assert!(
             prompt.contains("[assistant]: 你好！"),
             "应包含 assistant 消息: {prompt}"
@@ -315,7 +645,10 @@ mod tests {
             source_rowid: None,
         }];
         let prompt = build_summary_user_prompt(&msgs);
-        assert!(prompt.contains("[调用工具 read_file"), "工具调用应被渲染: {prompt}");
+        assert!(
+            prompt.contains("[调用工具 read_file"),
+            "工具调用应被渲染: {prompt}"
+        );
         assert!(prompt.contains("…"), "超长入参应被截断加省略号: {prompt}");
         // 截断后 prompt 不应含完整 2000 字符原文
         assert!(!prompt.contains(&huge_input), "超长入参不应原样进 prompt");
@@ -361,9 +694,6 @@ mod tests {
             source_rowid: None,
         }];
         let prompt2 = build_summary_user_prompt(&img_msgs);
-        assert!(
-            prompt2.contains("[图片已省略]"),
-            "图片应占位: {prompt2}"
-        );
+        assert!(prompt2.contains("[图片已省略]"), "图片应占位: {prompt2}");
     }
 }
