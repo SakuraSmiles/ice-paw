@@ -2,7 +2,7 @@
 
 ## 项目概述
 IcePaw — 本地优先的 LLM 对话工作站。Tauri v2 (Rust) + Vue 3 (TypeScript) 桌面应用。
-当前版本：`0.3.1`。
+当前版本：`0.3.5`。
 
 ## 构建命令
 
@@ -109,8 +109,8 @@ agent 调用 `propose_config_change` 工具提出创建/修改 agent 提案 → 
 - Phase 2B/远期：legacy 拼装退役（需先有足够长的真机持续绿观察 + 给旧会话补事件 backfill）；summary `covered_until_rowid`→seq；Image base64 双份存储治理
 
 ## 当前状态（2026-08-14）
-- 版本 **0.3.4 已打包**（NSIS 233M + MSI 247M = 0.3.3 + session-event-log Phase 0+1 影子日志，未发版）。main 已推平 origin。**session-event-log Phase 2A 读路径切换已落地（未 commit/未打包）**——事件日志转新会话主读路径，零行为变化 + 可观测/可回滚
+- 版本 **0.3.5 已发布**（基于 0.3.4 打包版本 + session-event-log Phase 2A 读路径切换，已 commit）。main 已推平 origin。**Phase 2A 已落地**——事件日志转新会话主读路径，零行为变化 + 可观测/可回滚
 - 分支：仅 `main`
-- 近期递进：0.3.3 → **session-event-log Phase 0（已 push）→ Phase 1 derive-on-read 对账（真机零 diff，已 push）→ 0.3.4 打包 → Phase 2A 读路径切换（read_route 路由 + 派生加载 + 诊断命令，未 commit）**
+- 近期递进：0.3.3 → **session-event-log Phase 0（已 push）→ Phase 1 derive-on-read 对账（真机零 diff，已 push）→ 0.3.4 打包 → Phase 2A 读路径切换（read_route 路由 + 派生加载 + 诊断命令，已 commit）→ 0.3.5 发版**
 - `cargo test --lib` 712 passed / 0 failed（+ 集成测试：session_reconcile_e2e 6、session_event_log_e2e 3、memory_e2e 3、message_repo 5、provider 11）；clippy --tests -D warnings 0 警告；pnpm test 51/51
-- 仍待办：**Phase 2A 真机手测**（dev 下正常对话行为应零变化；设置-日志见 `[read_route] ... → derive (green)`；DevTools `get_read_route_status` 查路由）、0.3.4 发版手测（0.3.3 三重点 + 事件日志影子抽查）、视觉适配/KB watcher/自动续写生产手测、proposal Phase 2（MCP 域）、Phase 2B legacy 退役（前置 = 真机持续绿观察）
+- 仍待办：0.3.5 发版手测（0.3.3 三重点 + 事件日志影子抽查）、**Phase 2A 真机手测**（dev 下正常对话行为应零变化；设置-日志见 `[read_route] ... → derive (green)`；DevTools `get_read_route_status` 查路由）、视觉适配/KB watcher/自动续写生产手测、proposal Phase 2（MCP 域）、Phase 2B legacy 退役（前置 = 真机持续绿观察）

@@ -8,7 +8,7 @@
 | 前端框架 | Vue 3（`<script setup>` SFC） |
 | 前端语言 | TypeScript 5.6 |
 | 状态管理 | Pinia 3 |
-| 路由 | vue-router 5 |
+| 路由 | vue-router 4 |
 | 构建工具 | Vite 6 |
 | 后端语言 | Rust 2021 edition |
 | 数据库 | SQLite + sqlx（异步、连接池、WAL 模式） |
@@ -89,7 +89,7 @@ ice-paw/
 ### 前端
 
 ```bash
-pnpm test          # 31 tests（utils/stores/api）
+pnpm test          # 51 tests（utils/stores/api）
 pnpm test:watch    # watch 模式
 ```
 
@@ -100,7 +100,7 @@ cd packages/app/src-tauri
 
 # 需显式传 SODIUM_LIB_DIR（或 cd 到 src-tauri 让 Cargo 自动读取 .cargo/config.toml）
 SODIUM_LIB_DIR="path/to/sodium-prebuilt/libsodium/x64/Release/v143/static" \
-SODIUM_STATIC=true cargo test --lib   # 420 tests
+SODIUM_STATIC=true cargo test --lib   # 712 tests
 
 cargo clippy                           # Lint
 ```
@@ -136,11 +136,11 @@ Stronghold key 派生：passphrase → blake2b256 → 32 字节 key。
 ## 路线图
 
 - [x] M1-M5：基础架构 + 多 Agent + 工具系统 + 项目空间
-- [x] 测试体系（420 Rust + 31 前端）
+- [x] 测试体系（712 Rust + 51 前端）
 - [ ] OS keyring 接入替代固定 passphrase
 - [ ] 会话搜索 / 导出
 - [ ] 前端 E2E 测试（Playwright + Tauri driver）
 
 ## 许可
 
-TBD
+MIT License，详见 [LICENSE](LICENSE)。

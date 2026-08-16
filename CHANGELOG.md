@@ -2,6 +2,35 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/)，版本号遵循 [SemVer](https://semver.org/)。
 
+## [Unreleased]
+
+> 从 0.2.7 到当前 0.3.5 的主要功能调整（合并概括，未逐小版本拆分）。
+
+### Added
+- **会话事件日志与轨迹视图**：基于 migration 44 `session_events` 表的 append-only 事件日志基石，统一 session / 多 agent 图协作 / 轨迹可还原。词表 13 kind + typed emitters，事件 inline `.await` 禁 spawn，turn_ended 必须先于 cleanup() unregister 落库；supersede 机制让同一 `message_id` 的多次 assistant_message 自动续写，回放 last-wins；导出命令 `export_session_trajectory` → JSONL。
+- **会话事件对账与派生回放（Phase 1）**：`harness/derive.rs` 纯回放（supersede last-wins / 空回退对称 / 坏 payload 记 issue 不吞）+ `harness/reconcile.rs` A 侧 legacy / B 侧事件回放 / turn 锚点走查分组，对账平面 = 行级原始形态。`reconcile_session` 命令只读出口。
+- **事件日志读路径切换（Phase 2A）**：`harness/read_route.rs` 按会话路由——有事件 + 对账零 diff + 纯事件纪元 → Derive（`load_history_from_events` 派生 `Vec<MessageRow>`，锚回真 rowid），其余 → Legacy；零风险（派生输出与 legacy 同构同函数）；指纹缓存 `(max_seq, max_rowid)` 追踪新数据；偏好 `session_read_path=legacy` 一键回滚；诊断命令 `get_read_route_status`。
+- **文件系统工具集 native 化**：bundled filesystem server（`@modelcontextprotocol/server-filesystem`）下线，6 个核心工具与内置 native 重复，删除；其独有 5 项补成 native 内置工具，授权统一为 `PathWhitelist`：`directory_tree`（递归目录树，跳过 .git/node_modules，限深度 8/节点 2000）、`move_file`（移动/重命名，跨卷回退 copy+delete，源文件自动备份）、`create_directory`（建目录含父目录，幂等）、`get_file_info`（文件元信息）、`read_multiple_files`（批量读 ≤20 文件，单文件 >1MB 跳过）。
+- **配置提案 Guardrail（Phase 1）**：`propose_config_change` 工具 + `proposal_guard.rs` + `proposal_registry.rs`，agent 全程无写权限。Guardrail 三档分级：🔴 红线（删除/跨 agent/api_key 非占位符）→ 拒绝；🟡 敏感（带工具 / enabled_tools 变更）→ Medium；🟢 非敏感（名称/温度/system_prompt）→ Low。API Key 走引用槽位 `__SLOT__`，用户在审批卡片亲手填。写保护加固：`reject_sensitive()` 拦硬写 agent.yaml + `register_meta_tools()` 强制注入合法通道。
+- **视觉能力统一适配**：4 个 Image 块注入入口统一走"按有效视觉能力适配"，杜绝向非视觉模型塞 Image。`provider/model_info.rs::effective_supports_vision`（OR 关系：agent 显式 =1 权威，=0 按模型表自动探测）；`harness/modal.rs` 统一 `gather_vision_candidates` / `adapt_blocks_for_vision` / `strip_image_blocks_to_marker`；4 入口接线（用户上传 / 工具返图 / 历史 / `view_attachment_image`）。
+- **上下文预算与滚动增量摘要**：真实 token 估算（覆盖 tool_use/tool_result/thinking/image 块）+ per-agent `context_window`；`TokenWindowStage`（max_input_tokens 的 80% 硬裁历史）；Phase 2 滚动增量摘要（`covered_until_rowid` 追踪 + fold 55%·40%）。
+- **多 Agent 委派与 Loop 拆分**：loop_engine 1343→697，抽 `loop/` 子模块（context/events/reason/retry_round/stuck_detect/token_usage）；chat.ts 843→532（抽 useChatEvents）；Sidebar / ChatMessages 抽 composables。
+- **工具名合规化与 OpenAI 适配**：migration 39 `tool_index` 列 + `t{idx}_` 命名 + 历史 sanitize（修工具名违反 `^[a-zA-Z0-9_-]+$`）；OpenAI 适配层 `chat_message_to_openai` 1→N 展开 tool_result 为多条 `role=tool`（OpenAI-only，Anthropic 零改）。
+- **内置 WebView2 离线安装器**：Windows 安装包改用 `offlineInstaller` 模式，把 WebView2 Runtime 离线安装器嵌入 MSI/NSIS，纯净 Windows 双击即装。
+
+### Changed
+- **内置工具清单动态化**：设置页「内置工具」由后端 `list_builtin_tools` 命令 + `register_builtin` 单一事实来源驱动，前端动态拉取；中文描述降级为本地化文案层，缺失回退后端原文。
+- **内置 MCP 运行时**：3 个轻量内置 server（sequential-thinking / memory / filesystem）从 npx 运行时拉取改为安装包自带 Windows-x64 Node + 预打包 `node_modules`，运行时零网络、零系统 node 依赖；filesystem 已随 native 化下线，bundled runtime 仅保留 thinking / memory。
+
+### Fixed
+- **外部 MCP 工具调用分发**：`ExternalToolProxy` 把带 `server_name.` 前缀的工具名原样发给 server 导致 -32602，拆成 `name`（带前缀，LLM 侧）+ `server_tool_name`（原始，发 server）两字段。
+- **CI 修复**：bundled runtime 起 CI 红——`tauri-build` 在编译期校验 `bundle.resources`，CI 改为创建占位 resources 让校验通过；顺带修 4 处潜伏 clippy 违规。
+- **错误横幅跨会话串味**：A 会话出错后切到 B 会话顶部仍显示 A 的错误 → 按 `conversation_id` 隔离（Map + computed）。
+- **filesystem server 包名 404**：`@anthropic-ai/mcp-server-filesystem` 已下架 → `@modelcontextprotocol/server-filesystem`。
+- **命令行窗口闪现**：Windows 上 `run_command`/`git` 等工具控制台一闪而过 → 统一 `CREATE_NO_WINDOW`。
+- **工具打分历史权重失效**：`tool_calls` 空壳表导致 scoring 维度从未生效 → 随审计接入自动恢复。
+- 切会话不丢卡片、取消通道、emit→invoke 修正、thinkingTimer KeepAlive 生命周期修复、工具授权弹窗背景点击不再误触拒绝、P0 稳定性修复（crypto Mutex 毒化 / spawn token 残留 / reqwest `expect` 崩溃 / 前端事件监听器泄漏 / TS 预存错误）。
+
 ## [0.2.7] — 2026-08-07
 
 ### Changed

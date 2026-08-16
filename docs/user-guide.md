@@ -121,6 +121,11 @@ Agent 可以调用两类工具：内置工具和外部 MCP Server 接入的工�
 |------|------|
 | `read_file` / `write_file` / `edit_file` | 文件读写和精确替换 |
 | `list_directory` | 列出目录内容 |
+| `directory_tree` | 递归目录树（跳过 .git/node_modules 等，限深度 8 / 节点 2000） |
+| `move_file` | 移动 / 重命名文件（跨卷回退 copy+delete，源文件自动备份） |
+| `create_directory` | 建目录含父目录（幂等） |
+| `get_file_info` | 文件元信息（大小 / 类型 / 只读 / 修改·创建·访问时间） |
+| `read_multiple_files` | 批量读取 ≤20 个文件（单文件 >1MB 跳过） |
 | `search_files` | 正则搜索文件内容（基于 ripgrep） |
 | `run_command` | 执行 Shell 命令（每次调用弹窗确认） |
 | `git` | 只读 Git 操作：status / diff / log / show |
@@ -128,6 +133,8 @@ Agent 可以调用两类工具：内置工具和外部 MCP Server 接入的工�
 | `search_kb` / `read_kb_document` | 搜索和读取知识库文档 |
 | `read_agent_config` | 读取 Agent 自身的 agent.yaml 配置 |
 | `propose_config_change` | 提案创建或修改 Agent，用户审批后生效 |
+
+> 以上 `directory_tree` / `move_file` / `create_directory` / `get_file_info` / `read_multiple_files` 为 0.2.5+ native 内置工具，授权统一为 `PathWhitelist`。
 
 ### 权限分级
 

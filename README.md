@@ -3,7 +3,7 @@
 > 桌面 AI 聊天客户端，数据本地存储，API Key 加密保管。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-0.2.0--beta.1-blue)](https://github.com/your-org/ice-paw)
+[![Version](https://img.shields.io/badge/version-0.3.5-blue)](https://github.com/SakuraSmiles/ice-paw)
 
 ## 简介
 
@@ -13,7 +13,7 @@ IcePaw 是一个桌面 AI 聊天工具，支持同时配置多个 Agent，每个
 
 ## 截图
 
-<!-- TODO: 截图占位 -->
+<!-- 截图待补充 -->
 
 ## 功能
 
@@ -29,7 +29,7 @@ IcePaw 是一个桌面 AI 聊天工具，支持同时配置多个 Agent，每个
 
 ## 安装
 
-从 [Releases](https://github.com/your-org/ice-paw/releases) 页面下载对应平台的安装包。
+从 [Releases](https://github.com/SakuraSmiles/ice-paw/releases) 页面下载对应平台的安装包。
 
 首次打开后，在设置中创建你的第一个 Agent（选 Provider、填 API Key、选模型），然后在对话中对它说「帮我创建一个写代码的 agent」——Agent 会提交提案卡片，你填 Key 点批准即可。
 
@@ -48,7 +48,7 @@ OpenAI、Anthropic、智谱 GLM、DeepSeek、MiniMax，以及任何兼容 OpenAI
 将 `ice-paw.db` 和 `stronghold.hold` 复制到新设备的应用数据目录即可。各平台路径见[使用指南](docs/user-guide.md)。
 
 **遇到问题怎么反馈？**  
-[提交 Issue](https://github.com/your-org/ice-paw/issues)。
+[提交 Issue](https://github.com/SakuraSmiles/ice-paw/issues)。
 
 ---
 
