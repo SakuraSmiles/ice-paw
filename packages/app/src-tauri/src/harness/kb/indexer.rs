@@ -69,9 +69,7 @@ pub async fn index_directory(
         .await
         .ok()
         .and_then(|p| resolve_embedding_config(&p))
-        .and_then(|(m, u, k)| {
-            OpenAiEmbeddingBackend::new(m, u).ok().map(|be| (be, k))
-        });
+        .and_then(|(m, u, k)| OpenAiEmbeddingBackend::new(m, u).ok().map(|be| (be, k)));
 
     for (rel_path, abs_path) in &disk_files {
         seen.insert(rel_path.clone());
@@ -112,10 +110,7 @@ pub async fn index_directory(
 
         // 4. 解析：office/pdf 走 doc::try_extract，markdown/文本走 parse_markdown。
         //    full_text 复用给 chunk 切分；office 解析失败 → warn + 跳过（不退回乱码）。
-        let ext = abs_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("");
+        let ext = abs_path.extension().and_then(|e| e.to_str()).unwrap_or("");
         let (full_text, parsed) = match crate::harness::doc::try_extract(&content, ext) {
             Ok(Some(d)) => {
                 let p = ParsedDoc {
@@ -189,7 +184,9 @@ pub async fn index_directory(
                     }
                 }
             }
-            Err(e) => tracing::warn!(target: "ice_paw.kb", "chunk 存储失败 doc={} err={}", doc_id, e),
+            Err(e) => {
+                tracing::warn!(target: "ice_paw.kb", "chunk 存储失败 doc={} err={}", doc_id, e)
+            }
         }
 
         stats.indexed += 1;

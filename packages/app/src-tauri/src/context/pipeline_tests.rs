@@ -11,9 +11,7 @@ use sqlx::SqlitePool;
 use std::str::FromStr;
 
 use crate::context::pipeline::{PipelineContext, PipelineRunner, PipelineStage};
-use crate::context::stages::{
-    FinalAssembleStage, HistoryStage, OsContextStage, SystemPromptStage,
-};
+use crate::context::stages::{FinalAssembleStage, HistoryStage, OsContextStage, SystemPromptStage};
 use crate::db::models::{AgentRow, MessageRow};
 use crate::error::AppResult;
 use crate::infra::cancel::CancellationToken;
@@ -185,14 +183,7 @@ async fn history_stage_converts_rows_and_skips_tool_role() {
         make_msg_row("tool", "should-skip"),
         make_msg_row("system", "sys-msg"),
     ];
-    let mut ctx = make_ctx(
-        pool,
-        make_agent(),
-        None,
-        history,
-        vec![],
-        false,
-    );
+    let mut ctx = make_ctx(pool, make_agent(), None, history, vec![], false);
 
     HistoryStage.execute(&mut ctx).await.unwrap();
     assert_eq!(ctx.history_messages.len(), 3, "tool role 应被跳过");
@@ -366,7 +357,8 @@ async fn pipeline_runner_executes_stages_in_order() {
             self.name
         }
         async fn execute(&self, ctx: &mut PipelineContext) -> AppResult<()> {
-            ctx.messages.push(ChatMessage::from_text("system", self.marker));
+            ctx.messages
+                .push(ChatMessage::from_text("system", self.marker));
             Ok(())
         }
     }
@@ -443,12 +435,8 @@ async fn pipeline_runner_short_circuits_on_error() {
     let mut ctx = make_ctx(pool, make_agent(), None, vec![], vec![], false);
     let result = runner.run(&mut ctx).await;
     assert!(result.is_err(), "FailStage 后应返回错误");
-    assert!(
-        !*flag.lock().unwrap(),
-        "FailStage 之后的 Stage 不应被执行"
-    );
+    assert!(!*flag.lock().unwrap(), "FailStage 之后的 Stage 不应被执行");
 }
-
 
 // ---- M1.4: MemoryStage 集成 ----
 

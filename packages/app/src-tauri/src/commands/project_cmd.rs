@@ -28,14 +28,20 @@ pub async fn list_projects(pool: State<'_, SqlitePool>) -> AppResult<Vec<Project
 
 /// 创建项目（含初始成员）
 #[tauri::command]
-pub async fn create_project(pool: State<'_, SqlitePool>, input: NewProject) -> AppResult<ProjectRow> {
+pub async fn create_project(
+    pool: State<'_, SqlitePool>,
+    input: NewProject,
+) -> AppResult<ProjectRow> {
     let id = Uuid::new_v4().to_string();
     repo::project::create(pool.inner(), &input, &id).await
 }
 
 /// 更新项目（partial update）
 #[tauri::command]
-pub async fn update_project(pool: State<'_, SqlitePool>, input: UpdateProject) -> AppResult<ProjectRow> {
+pub async fn update_project(
+    pool: State<'_, SqlitePool>,
+    input: UpdateProject,
+) -> AppResult<ProjectRow> {
     repo::project::update(pool.inner(), &input).await
 }
 

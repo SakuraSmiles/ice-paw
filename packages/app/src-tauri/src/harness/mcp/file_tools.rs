@@ -178,7 +178,9 @@ Use create_dirs=true to create parent directories."
 
         if parsed.create_dirs {
             if let Some(parent) = path.parent() {
-                tokio::fs::create_dir_all(parent).await.map_err(AppError::Io)?;
+                tokio::fs::create_dir_all(parent)
+                    .await
+                    .map_err(AppError::Io)?;
             }
         }
 
@@ -579,8 +581,12 @@ mod tests {
             )));
         }
         // 文件名 ASCII 大小写不敏感
-        assert!(is_agent_config(std::path::Path::new("/x/agents/dev-2/AGENT.YAML")));
-        assert!(is_agent_config(std::path::Path::new("/x/agents/dev-2/Agent.Yaml")));
+        assert!(is_agent_config(std::path::Path::new(
+            "/x/agents/dev-2/AGENT.YAML"
+        )));
+        assert!(is_agent_config(std::path::Path::new(
+            "/x/agents/dev-2/Agent.Yaml"
+        )));
     }
 
     #[test]
@@ -597,9 +603,7 @@ mod tests {
 
     #[test]
     fn reject_sensitive_blocks_agent_yaml() {
-        let res = reject_sensitive(std::path::Path::new(
-            "/home/u/ws/agents/dev-2/agent.yaml",
-        ));
+        let res = reject_sensitive(std::path::Path::new("/home/u/ws/agents/dev-2/agent.yaml"));
         assert!(res.is_err());
         let msg = res.unwrap_err().to_string();
         assert!(

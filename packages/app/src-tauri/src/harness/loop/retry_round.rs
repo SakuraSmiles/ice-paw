@@ -148,8 +148,10 @@ pub(crate) async fn stream_with_retry(
                                 ctx.budget.max_attempts,
                                 e
                             );
-                            retry_state = retry_state
-                                .next_retry(ctx.budget.max_attempts, 1u64 << retry_state.attempt_num());
+                            retry_state = retry_state.next_retry(
+                                ctx.budget.max_attempts,
+                                1u64 << retry_state.attempt_num(),
+                            );
                             continue;
                         } else {
                             let err_msg = e.to_string();

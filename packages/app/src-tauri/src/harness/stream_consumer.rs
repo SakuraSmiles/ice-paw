@@ -15,12 +15,12 @@ use futures::Stream;
 use tauri::{AppHandle, Emitter};
 
 use crate::error::AppError;
-use crate::infra::protocol::{
-    ChatChunkPayload, ChatThinkingPayload, ChatToolCallDeltaPayload,
-    ChatToolCallEndPayload, ChatToolCallStartPayload, ChatDelta, TokenUsage,
-};
 use crate::harness::chat_state::CancellationToken;
 use crate::harness::observable::RoundState;
+use crate::infra::protocol::{
+    ChatChunkPayload, ChatDelta, ChatThinkingPayload, ChatToolCallDeltaPayload,
+    ChatToolCallEndPayload, ChatToolCallStartPayload, TokenUsage,
+};
 
 /// 单轮流式消费结果
 #[derive(Debug, Clone)]
@@ -104,7 +104,10 @@ pub async fn consume_stream(
                     },
                 );
             }
-            Ok(ChatDelta::ToolCallDelta { id, delta: tool_delta }) => {
+            Ok(ChatDelta::ToolCallDelta {
+                id,
+                delta: tool_delta,
+            }) => {
                 if let Some(tc) = tool_calls.get_mut(&id) {
                     tc.arguments.push_str(&tool_delta);
                 }
@@ -131,7 +134,9 @@ pub async fn consume_stream(
                     },
                 );
             }
-            Ok(ChatDelta::Thinking { content: think_content }) => {
+            Ok(ChatDelta::Thinking {
+                content: think_content,
+            }) => {
                 think.push_str(&think_content);
                 let _ = app.emit(
                     "chat:thinking",

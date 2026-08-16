@@ -73,9 +73,7 @@ pub enum AuthorizationDecision {
         reason: String,
     },
     /// 永久拒绝（保留：未来扩展）
-    Deny {
-        reason: String,
-    },
+    Deny { reason: String },
 }
 
 impl AuthorizationDecision {
@@ -362,22 +360,31 @@ mod tests {
     #[test]
     fn check_authorization_always_passes() {
         let cfg = PathWhitelistConfig::default();
-        assert!(check_authorization(AuthorizationLevel::Always, "/etc/passwd", &cfg, "test").is_ok());
+        assert!(
+            check_authorization(AuthorizationLevel::Always, "/etc/passwd", &cfg, "test").is_ok()
+        );
     }
 
     #[test]
     fn check_authorization_whitelist_allowed() {
         let cfg = whitelist(&["/home/"]);
         assert!(check_authorization(
-            AuthorizationLevel::PathWhitelist, "/home/doc.txt", &cfg, "read_file"
-        ).is_ok());
+            AuthorizationLevel::PathWhitelist,
+            "/home/doc.txt",
+            &cfg,
+            "read_file"
+        )
+        .is_ok());
     }
 
     #[test]
     fn check_authorization_whitelist_denied() {
         let cfg = whitelist(&["/home/"]);
         let result = check_authorization(
-            AuthorizationLevel::PathWhitelist, "/etc/passwd", &cfg, "read_file"
+            AuthorizationLevel::PathWhitelist,
+            "/etc/passwd",
+            &cfg,
+            "read_file",
         );
         assert!(result.is_err());
     }
@@ -386,7 +393,10 @@ mod tests {
     fn check_authorization_confirm_rejected() {
         let cfg = whitelist(&["/home/"]);
         let result = check_authorization(
-            AuthorizationLevel::Confirm, "/home/doc.txt", &cfg, "some_tool"
+            AuthorizationLevel::Confirm,
+            "/home/doc.txt",
+            &cfg,
+            "some_tool",
         );
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
@@ -563,11 +573,23 @@ mod tests {
         let session = PathAuthSession::new();
         session.mark_dir_authorized("/ws/project").await;
         assert!(session.is_authorized("/ws/project", "write_file").await);
-        assert!(session.is_authorized("/ws/project/sub/deep/a.txt", "write_file").await);
+        assert!(
+            session
+                .is_authorized("/ws/project/sub/deep/a.txt", "write_file")
+                .await
+        );
         // 归一化成员判定：./ 与尾斜杠写法同样覆盖
-        assert!(session.is_authorized("/ws/project/./x/../b.txt", "write_file").await);
+        assert!(
+            session
+                .is_authorized("/ws/project/./x/../b.txt", "write_file")
+                .await
+        );
         // 兄弟目录与上级不覆盖
-        assert!(!session.is_authorized("/ws/project-other/a.txt", "write_file").await);
+        assert!(
+            !session
+                .is_authorized("/ws/project-other/a.txt", "write_file")
+                .await
+        );
         assert!(!session.is_authorized("/ws/a.txt", "write_file").await);
         // 目录档不覆盖其它工具的无路径调用
         assert!(!session.is_authorized("", "run_command").await);

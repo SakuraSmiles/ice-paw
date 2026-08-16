@@ -71,10 +71,20 @@ pub struct RouteDecision {
 
 impl RouteDecision {
     fn legacy(reason: impl Into<String>, events_total: usize, diffs: usize) -> Self {
-        Self { route: ReadRoute::Legacy, reason: reason.into(), events_total, diffs }
+        Self {
+            route: ReadRoute::Legacy,
+            reason: reason.into(),
+            events_total,
+            diffs,
+        }
     }
     fn derive(events_total: usize) -> Self {
-        Self { route: ReadRoute::Derive, reason: "green".into(), events_total, diffs: 0 }
+        Self {
+            route: ReadRoute::Derive,
+            reason: "green".into(),
+            events_total,
+            diffs: 0,
+        }
     }
 }
 
@@ -133,7 +143,11 @@ impl ReadRouteRegistry {
         if let Ok(mut cache) = self.cache.write() {
             cache.insert(
                 conv_id.to_string(),
-                CacheEntry { max_seq, max_rowid, decision },
+                CacheEntry {
+                    max_seq,
+                    max_rowid,
+                    decision,
+                },
             );
         }
     }
@@ -213,7 +227,11 @@ impl ReadRouteRegistry {
 fn classify(report: &ReconcileReport) -> RouteDecision {
     let diffs = report.diffs.len();
     if diffs > 0 {
-        return RouteDecision::legacy(format!("reconcile_diffs:{diffs}"), report.events_total, diffs);
+        return RouteDecision::legacy(
+            format!("reconcile_diffs:{diffs}"),
+            report.events_total,
+            diffs,
+        );
     }
     // 混合纪元：事件纪元前还有 legacy 行（派生看不到它们，视图会丢历史）→ 必须留 legacy。
     let epoch_rows = report
@@ -263,7 +281,9 @@ pub async fn load_history_from_events(
     let mut created_map: HashMap<String, String> = HashMap::new();
     for ev in &events {
         if let Some(mid) = &ev.message_id {
-            created_map.entry(mid.clone()).or_insert_with(|| ev.created_at.clone());
+            created_map
+                .entry(mid.clone())
+                .or_insert_with(|| ev.created_at.clone());
         }
     }
 
@@ -329,9 +349,20 @@ mod tests {
             legacy_rows_total: 0,
             legacy_rows_compared: 0,
             derived_messages_compared: 0,
-            diffs: vec![ReconcileDiff { category: "MISSING_IN_DERIVED", turn_id: None, message_id: None, detail: "x".into() }; diffs],
+            diffs: vec![
+                ReconcileDiff {
+                    category: "MISSING_IN_DERIVED",
+                    turn_id: None,
+                    message_id: None,
+                    detail: "x".into()
+                };
+                diffs
+            ],
             skipped: if epoch > 0 {
-                vec![ReconcileSkip { reason: "legacy_epoch_rows", count: epoch }]
+                vec![ReconcileSkip {
+                    reason: "legacy_epoch_rows",
+                    count: epoch,
+                }]
             } else {
                 Vec::new()
             },
@@ -459,7 +490,10 @@ mod tests {
 
     async fn seeded_pool() -> SqlitePool {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         sqlx::query(
             "INSERT INTO agents (id, name, provider, model, system_prompt, api_key_ref,
                  temperature, max_tokens, extra_params, sort_order, cache_prompt)
@@ -475,7 +509,13 @@ mod tests {
         pool
     }
 
-    async fn write_row(pool: &SqlitePool, id: &str, role: &str, content: &str, blocks: &[ContentBlock]) {
+    async fn write_row(
+        pool: &SqlitePool,
+        id: &str,
+        role: &str,
+        content: &str,
+        blocks: &[ContentBlock],
+    ) {
         crate::db::repo::message::create(
             pool,
             id,
@@ -501,38 +541,105 @@ mod tests {
         let ev = EventCtx::new("c1", "turn-1", "a1");
         let u = vec![ContentBlock::text("读一下 README")];
         write_row(pool, "turn-1", "user", "读一下 README", &u).await;
-        log_user_message(pool, &ev, "turn-1", &UserMessagePayload {
-            v: 1, content: "读一下 README".into(), blocks: u,
-        }).await;
-        log_turn_context(pool, &ev, &TurnContextPayload {
-            v: 1, provider: "anthropic".into(), effective_model: "glm-5.2".into(),
-            model_override: None, tools_enabled: true, tool_names: vec!["read_file".into()],
-            temperature: Some(0.7), max_tokens: Some(16384), tool_max_rounds: Some(12),
-            budget_max_tokens: None, context_window: None,
-        }).await;
+        log_user_message(
+            pool,
+            &ev,
+            "turn-1",
+            &UserMessagePayload {
+                v: 1,
+                content: "读一下 README".into(),
+                blocks: u,
+            },
+        )
+        .await;
+        log_turn_context(
+            pool,
+            &ev,
+            &TurnContextPayload {
+                v: 1,
+                provider: "anthropic".into(),
+                effective_model: "glm-5.2".into(),
+                model_override: None,
+                tools_enabled: true,
+                tool_names: vec!["read_file".into()],
+                temperature: Some(0.7),
+                max_tokens: Some(16384),
+                tool_max_rounds: Some(12),
+                budget_max_tokens: None,
+                context_window: None,
+            },
+        )
+        .await;
         let a1 = vec![
             ContentBlock::text("我来看看"),
-            ContentBlock::ToolUse { id: "tu1".into(), name: "read_file".into(), input: "{\"path\":\"README.md\"}".into() },
+            ContentBlock::ToolUse {
+                id: "tu1".into(),
+                name: "read_file".into(),
+                input: "{\"path\":\"README.md\"}".into(),
+            },
         ];
         write_row(pool, "m-a1", "assistant", "我来看看", &a1).await;
-        log_assistant_message(pool, &ev, "m-a1", &AssistantMessagePayload {
-            v: 1, model: Some("glm-5.2".into()), content: "我来看看".into(),
-            blocks: a1, token_count: Some(12), duration_ms: Some(2_100), round: 0, continuation: false,
-        }).await;
+        log_assistant_message(
+            pool,
+            &ev,
+            "m-a1",
+            &AssistantMessagePayload {
+                v: 1,
+                model: Some("glm-5.2".into()),
+                content: "我来看看".into(),
+                blocks: a1,
+                token_count: Some(12),
+                duration_ms: Some(2_100),
+                round: 0,
+                continuation: false,
+            },
+        )
+        .await;
         let tr = vec![ContentBlock::ToolResult {
-            tool_use_id: "tu1".into(), content: "# IcePaw".into(), is_error: Some(false),
+            tool_use_id: "tu1".into(),
+            content: "# IcePaw".into(),
+            is_error: Some(false),
         }];
         write_row(pool, "m-tr", "user", "", &tr).await;
         crate::harness::event_log::log_tool_result_message(pool, &ev, "m-tr", &tr).await;
         let a2 = vec![ContentBlock::text("README 说这是本地优先工作站。")];
-        write_row(pool, "m-a2", "assistant", "README 说这是本地优先工作站。", &a2).await;
-        log_assistant_message(pool, &ev, "m-a2", &AssistantMessagePayload {
-            v: 1, model: Some("glm-5.2".into()), content: "README 说这是本地优先工作站。".into(),
-            blocks: a2, token_count: Some(20), duration_ms: Some(1_800), round: 1, continuation: false,
-        }).await;
-        log_turn_ended(pool, &ev, Some("m-a2"), &TurnEndedPayload {
-            v: 1, termination: "stop".into(), rounds: 2, usage: None, user_token_count: Some(3000),
-        }).await;
+        write_row(
+            pool,
+            "m-a2",
+            "assistant",
+            "README 说这是本地优先工作站。",
+            &a2,
+        )
+        .await;
+        log_assistant_message(
+            pool,
+            &ev,
+            "m-a2",
+            &AssistantMessagePayload {
+                v: 1,
+                model: Some("glm-5.2".into()),
+                content: "README 说这是本地优先工作站。".into(),
+                blocks: a2,
+                token_count: Some(20),
+                duration_ms: Some(1_800),
+                round: 1,
+                continuation: false,
+            },
+        )
+        .await;
+        log_turn_ended(
+            pool,
+            &ev,
+            Some("m-a2"),
+            &TurnEndedPayload {
+                v: 1,
+                termination: "stop".into(),
+                rounds: 2,
+                usage: None,
+                user_token_count: Some(3000),
+            },
+        )
+        .await;
     }
 
     /// **核心不变式**：派生 MessageRows 经 legacy loader 的视图 == legacy 行经同一 loader 的视图。
@@ -542,7 +649,9 @@ mod tests {
         let pool = seeded_pool().await;
         script(&pool).await;
 
-        let legacy_rows = crate::db::repo::message::list_all_by_rowid(&pool, "c1").await.unwrap();
+        let legacy_rows = crate::db::repo::message::list_all_by_rowid(&pool, "c1")
+            .await
+            .unwrap();
         let derived_rows = load_history_from_events(&pool, "c1").await.unwrap();
 
         let legacy_view = load_history_with_window(&legacy_rows, None);
@@ -557,9 +666,16 @@ mod tests {
         );
         for (i, (l, d)) in legacy_view.iter().zip(derived_view.iter()).enumerate() {
             assert_eq!(l.role, d.role, "msg#{i} role 不一致");
-            assert_eq!(l.content, d.content, "msg#{i} blocks 不一致\nlegacy={:?}\nderived={:?}", l.content, d.content);
+            assert_eq!(
+                l.content, d.content,
+                "msg#{i} blocks 不一致\nlegacy={:?}\nderived={:?}",
+                l.content, d.content
+            );
             // source_rowid 必须一致——MemoryStage 摘要连续性依赖它（切换前后按值命中）
-            assert_eq!(l.source_rowid, d.source_rowid, "msg#{i} source_rowid 不一致");
+            assert_eq!(
+                l.source_rowid, d.source_rowid,
+                "msg#{i} source_rowid 不一致"
+            );
         }
     }
 
@@ -585,10 +701,20 @@ mod tests {
         assert_eq!(d1b.reason, "green");
 
         // 制造分叉：插一条无对应事件的行（写路径漏发事件的形态）→ max_rowid 涨 → 重解析
-        write_row(&pool, "rogue-msg", "assistant", "幽灵回复", &[ContentBlock::text("幽灵回复")])
-            .await;
+        write_row(
+            &pool,
+            "rogue-msg",
+            "assistant",
+            "幽灵回复",
+            &[ContentBlock::text("幽灵回复")],
+        )
+        .await;
         let d2 = reg.resolve(&pool, "c1", false).await.unwrap();
-        assert_eq!(d2.route, ReadRoute::Legacy, "有行无事件（写路径漏）应回退 legacy");
+        assert_eq!(
+            d2.route,
+            ReadRoute::Legacy,
+            "有行无事件（写路径漏）应回退 legacy"
+        );
         assert!(
             d2.reason.starts_with("reconcile_diffs"),
             "原因应反映 diff: {}",
@@ -603,7 +729,14 @@ mod tests {
         let reg = ReadRouteRegistry::new();
         // 只有行、零事件
         write_row(&pool, "m-u", "user", "hi", &[ContentBlock::text("hi")]).await;
-        write_row(&pool, "m-a", "assistant", "hello", &[ContentBlock::text("hello")]).await;
+        write_row(
+            &pool,
+            "m-a",
+            "assistant",
+            "hello",
+            &[ContentBlock::text("hello")],
+        )
+        .await;
 
         let d = reg.resolve(&pool, "c1", false).await.unwrap();
         assert_eq!(d.route, ReadRoute::Legacy);

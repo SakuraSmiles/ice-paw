@@ -63,7 +63,12 @@ pub(super) fn extract_chunks(bytes: &[u8]) -> AppResult<(DocKind, Vec<TextChunk>
             label: format!("Sheet:{}", name),
         })
         .collect();
-    Ok((DocKind::Spreadsheet { sheets: sheet_names }, chunks))
+    Ok((
+        DocKind::Spreadsheet {
+            sheets: sheet_names,
+        },
+        chunks,
+    ))
 }
 
 /// (sheet 名列表, 每个 sheet 的 (name, GFM body))。抽别名收敛 type_complexity。
@@ -252,10 +257,10 @@ mod tests {
     fn build_range(rows: Vec<Vec<Data>>) -> calamine::Range<Data> {
         let height = rows.len() as u32;
         let width = rows.iter().map(|r| r.len()).max().unwrap_or(0) as u32;
-        let mut range = calamine::Range::<Data>::new((0, 0), (
-            height.saturating_sub(1),
-            width.saturating_sub(1),
-        ));
+        let mut range = calamine::Range::<Data>::new(
+            (0, 0),
+            (height.saturating_sub(1), width.saturating_sub(1)),
+        );
         for (r, row) in rows.iter().enumerate() {
             for (c, cell) in row.iter().enumerate() {
                 range.set_value((r as u32, c as u32), cell.clone());

@@ -57,11 +57,7 @@ impl KbWatcherManager {
         let (tx, rx) = std::sync::mpsc::channel::<DebounceEventResult>();
         let debouncer = match new_debouncer(DEBOUNCE_WINDOW, None, tx) {
             Ok(d) => d,
-            Err(e) => {
-                return Err(AppError::Internal(format!(
-                    "创建 KB watcher 失败: {e}"
-                )))
-            }
+            Err(e) => return Err(AppError::Internal(format!("创建 KB watcher 失败: {e}"))),
         };
         let dir_map = Arc::new(std::sync::Mutex::new(HashMap::new()));
         let debouncer = Arc::new(std::sync::Mutex::new(debouncer));

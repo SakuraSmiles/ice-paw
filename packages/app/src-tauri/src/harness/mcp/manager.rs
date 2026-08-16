@@ -183,7 +183,8 @@ impl McpServerManager {
                 {
                     Ok(s) => Arc::new(s),
                     Err(e) => {
-                        self.mark_failed(&id, config, format!("启动失败: {e}")).await;
+                        self.mark_failed(&id, config, format!("启动失败: {e}"))
+                            .await;
                         return Err(e);
                     }
                 }
@@ -200,7 +201,8 @@ impl McpServerManager {
                 {
                     Ok(t) => Arc::new(t),
                     Err(e) => {
-                        self.mark_failed(&id, config, format!("连接失败: {e}")).await;
+                        self.mark_failed(&id, config, format!("连接失败: {e}"))
+                            .await;
                         return Err(e);
                     }
                 }
@@ -218,7 +220,8 @@ impl McpServerManager {
             Ok(t) => t,
             Err(e) => {
                 server.shutdown().await;
-                self.mark_failed(&id, config, format!("获取工具列表失败: {e}")).await;
+                self.mark_failed(&id, config, format!("获取工具列表失败: {e}"))
+                    .await;
                 return Err(e);
             }
         };
@@ -306,7 +309,9 @@ impl McpServerManager {
         mut args: Vec<String>,
     ) -> AppResult<(String, Vec<String>, serde_json::Value)> {
         let app = self.app_handle.as_ref().ok_or_else(|| {
-            AppError::Internal("bundled MCP server 无法启动：McpServerManager 未注入 AppHandle".into())
+            AppError::Internal(
+                "bundled MCP server 无法启动：McpServerManager 未注入 AppHandle".into(),
+            )
         })?;
         let spec = bundled::spec_for(&config.id).ok_or_else(|| {
             AppError::Internal(format!("未注册的 bundled server id: {}", config.id))
@@ -408,7 +413,12 @@ impl McpServerManager {
     }
 
     /// 快速启用/禁用（不重启，只更新状态）
-    pub async fn set_enabled(&self, id: &str, enabled: bool, registry: &McpRegistry) -> AppResult<()> {
+    pub async fn set_enabled(
+        &self,
+        id: &str,
+        enabled: bool,
+        registry: &McpRegistry,
+    ) -> AppResult<()> {
         let mut entries = self.entries.write().await;
         let entry = entries.get_mut(id).ok_or_else(|| AppError::NotFound {
             resource: "mcp_server",
@@ -446,7 +456,11 @@ impl McpServerManager {
             if let Some(entry) = entries.get(config_id) {
                 if entry.config.scope == "per_agent" {
                     // 检查当前 args 是否包含正确的 workspace
-                    entry.config.args.iter().any(|a| a.contains(WORKSPACE_PLACEHOLDER))
+                    entry
+                        .config
+                        .args
+                        .iter()
+                        .any(|a| a.contains(WORKSPACE_PLACEHOLDER))
                 } else {
                     false
                 }
@@ -462,7 +476,9 @@ impl McpServerManager {
                 config_id,
                 agent_workspace,
             );
-            let _ = self.retry_server(config_id, Some(agent_workspace), registry).await;
+            let _ = self
+                .retry_server(config_id, Some(agent_workspace), registry)
+                .await;
         }
     }
 

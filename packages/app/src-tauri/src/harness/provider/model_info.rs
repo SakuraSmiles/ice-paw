@@ -32,7 +32,11 @@ pub fn default_context_window(_provider: &str, model: &str) -> Option<usize> {
     }
     // GLM-5.1 / 5.2：带 [1m] 后缀 → 1M（显式解锁）；裸名 → 200K 基准
     if m.contains("glm-5.1") || m.contains("glm-5.2") {
-        return if m.contains("[1m]") { Some(1_048_576) } else { Some(200_000) };
+        return if m.contains("[1m]") {
+            Some(1_048_576)
+        } else {
+            Some(200_000)
+        };
     }
 
     None
@@ -100,7 +104,7 @@ pub fn model_capabilities(_provider: &str, model: &str) -> ModelCapabilities {
         || m.contains("glm-4v") || m.contains("glm-4.6v") || m.contains("glm4v")  // 智谱视觉系列
         || m.contains("qwen-vl") || m.contains("qwen2-vl") || m.contains("qwenvl") // 通义视觉
         || m.contains("minimax-m3")          // MiniMax M3 支持视觉（M2.x 不支持，不匹配 m3）
-        || m.contains("deepseek-vl");        // DeepSeek 视觉系列（v4 chat 不含 -vl → 保守 false）
+        || m.contains("deepseek-vl"); // DeepSeek 视觉系列（v4 chat 不含 -vl → 保守 false）
     ModelCapabilities { vision }
 }
 
@@ -125,14 +129,26 @@ mod tests {
 
     #[test]
     fn minimax_m3_is_1m_regardless_of_provider_suffix() {
-        assert_eq!(default_context_window("minimax", "MiniMax-M3"), Some(1_048_576));
-        assert_eq!(default_context_window("minimax-cn", "minimax-m3"), Some(1_048_576));
+        assert_eq!(
+            default_context_window("minimax", "MiniMax-M3"),
+            Some(1_048_576)
+        );
+        assert_eq!(
+            default_context_window("minimax-cn", "minimax-m3"),
+            Some(1_048_576)
+        );
     }
 
     #[test]
     fn deepseek_v4_pro_and_flash_share_1m() {
-        assert_eq!(default_context_window("deepseek", "deepseek-v4-pro"), Some(1_000_000));
-        assert_eq!(default_context_window("deepseek", "deepseek-v4-flash"), Some(1_000_000));
+        assert_eq!(
+            default_context_window("deepseek", "deepseek-v4-pro"),
+            Some(1_000_000)
+        );
+        assert_eq!(
+            default_context_window("deepseek", "deepseek-v4-flash"),
+            Some(1_000_000)
+        );
     }
 
     #[test]
@@ -142,7 +158,10 @@ mod tests {
 
     #[test]
     fn glm_52_bare_200k_and_1m_suffix_unlocks() {
-        assert_eq!(default_context_window("glm", "glm-5.2[1m]"), Some(1_048_576));
+        assert_eq!(
+            default_context_window("glm", "glm-5.2[1m]"),
+            Some(1_048_576)
+        );
         // 裸名不再回退：厂商文档基准 200K
         assert_eq!(default_context_window("glm", "glm-5.2"), Some(200_000));
         assert_eq!(default_context_window("glm", "glm-5.1"), Some(200_000));

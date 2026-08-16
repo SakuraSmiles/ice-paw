@@ -35,10 +35,12 @@ pub async fn list_mcp_servers(
         if !missing.is_empty() {
             let mut entries = manager.entries.write().await;
             for cfg in missing {
-                entries.entry(cfg.id.clone()).or_insert_with(|| ServerEntry {
-                    config: cfg,
-                    status: ServerStatus::Disabled,
-                });
+                entries
+                    .entry(cfg.id.clone())
+                    .or_insert_with(|| ServerEntry {
+                        config: cfg,
+                        status: ServerStatus::Disabled,
+                    });
             }
         }
     }
@@ -129,9 +131,7 @@ pub async fn retry_mcp_server(
     id: String,
 ) -> AppResult<Vec<McpToolDefinition>> {
     let ws = std::env::temp_dir().to_string_lossy().to_string();
-    manager
-        .retry_server(&id, Some(&ws), &registry)
-        .await?;
+    manager.retry_server(&id, Some(&ws), &registry).await?;
 
     // 返回工具列表
     let entries = manager.entries.read().await;
@@ -190,9 +190,7 @@ pub fn check_nodejs() -> bool {
             .stderr(std::process::Stdio::null());
         // Windows: 隐藏 node 检测弹出的控制台窗口
         crate::infra::process::suppress_console_window(&mut cmd);
-        cmd.status()
-            .map(|s| s.success())
-            .unwrap_or(false)
+        cmd.status().map(|s| s.success()).unwrap_or(false)
     })
 }
 

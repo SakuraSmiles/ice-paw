@@ -87,7 +87,12 @@ fn describe_http_error(status: reqwest::StatusCode, body: &str) -> String {
     if snippet.trim().is_empty() {
         format!("HTTP {}: {}", status.as_u16(), reason)
     } else {
-        format!("HTTP {}: {}｜服务端响应: {}", status.as_u16(), reason, snippet)
+        format!(
+            "HTTP {}: {}｜服务端响应: {}",
+            status.as_u16(),
+            reason,
+            snippet
+        )
     }
 }
 
@@ -129,7 +134,11 @@ mod tests {
         ]});
         assert_eq!(
             parse_model_ids(&v),
-            vec!["DeepSeek-V4".to_string(), "llama3".to_string(), "qwen3:32b".to_string()]
+            vec![
+                "DeepSeek-V4".to_string(),
+                "llama3".to_string(),
+                "qwen3:32b".to_string()
+            ]
         );
     }
 
@@ -142,13 +151,19 @@ mod tests {
     #[test]
     fn parse_dedups_repeated_ids() {
         let v = ids_json(&["m1", "m1", "m2"]);
-        assert_eq!(parse_model_ids(&v), vec!["m1".to_string(), "m2".to_string()]);
+        assert_eq!(
+            parse_model_ids(&v),
+            vec!["m1".to_string(), "m2".to_string()]
+        );
     }
 
     #[test]
     fn parse_malformed_payloads_return_empty_not_error() {
         // 缺 data / data 非数组 / 元素缺 id：宽容降级为部分/空列表
-        assert_eq!(parse_model_ids(&serde_json::json!({})), Vec::<String>::new());
+        assert_eq!(
+            parse_model_ids(&serde_json::json!({})),
+            Vec::<String>::new()
+        );
         assert_eq!(
             parse_model_ids(&serde_json::json!({ "data": "oops" })),
             Vec::<String>::new()

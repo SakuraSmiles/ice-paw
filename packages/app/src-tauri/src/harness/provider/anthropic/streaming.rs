@@ -28,8 +28,11 @@ use crate::infra::protocol::{ChatDelta, TokenUsage};
 /// SSE 流解析入口（在独立 tokio 任务中跑完整段 HTTP body 的事件分发）
 ///
 /// 与 OpenAI 保持一致：容量 256，长输出时避免 SSE 解析协程因通道满而阻塞。
-pub(crate) fn parse_sse_stream<S>(byte_stream: S, tx: mpsc::Sender<AppResult<ChatDelta>>, cancel: CancellationToken)
-where
+pub(crate) fn parse_sse_stream<S>(
+    byte_stream: S,
+    tx: mpsc::Sender<AppResult<ChatDelta>>,
+    cancel: CancellationToken,
+) where
     S: futures::Stream<Item = Result<Bytes, reqwest::Error>> + Send + Unpin + 'static,
 {
     tokio::spawn(async move {
@@ -39,8 +42,7 @@ where
         let mut last_stop_reason: Option<String> = None;
         // 追踪 content block：index → (block_type, id?, name?)
         // 用于在 content_block_start 时记录，content_block_delta 时查询
-        let mut block_info: HashMap<i64, (String, Option<String>, Option<String>)> =
-            HashMap::new();
+        let mut block_info: HashMap<i64, (String, Option<String>, Option<String>)> = HashMap::new();
 
         while let Some(chunk_result) = byte_stream.next().await {
             // 取消检查（每 chunk 一次）
@@ -57,9 +59,7 @@ where
                 Ok(c) => c,
                 Err(e) => {
                     let _ = tx
-                        .send(Err(AppError::Stream(format!(
-                            "HTTP 流读取失败: {e}"
-                        ))))
+                        .send(Err(AppError::Stream(format!("HTTP 流读取失败: {e}"))))
                         .await;
                     return;
                 }
@@ -72,15 +72,14 @@ where
             while let Some(pos) = buf.windows(2).position(|w| w == b"\n\n") {
                 // 提取事件块字节并解码（完整块，不会截断 UTF-8）
                 let event_bytes: Vec<u8> = buf[..pos].to_vec();
-                let event_block = String::from_utf8(event_bytes)
-                    .unwrap_or_else(|e| {
-                        tracing::warn!(
-                            target: "ice_paw.llm",
-                            "Anthropic SSE 事件块 UTF-8 解码失败（容错）: {}",
-                            e,
-                        );
-                        String::from_utf8_lossy(&e.into_bytes()).to_string()
-                    });
+                let event_block = String::from_utf8(event_bytes).unwrap_or_else(|e| {
+                    tracing::warn!(
+                        target: "ice_paw.llm",
+                        "Anthropic SSE 事件块 UTF-8 解码失败（容错）: {}",
+                        e,
+                    );
+                    String::from_utf8_lossy(&e.into_bytes()).to_string()
+                });
                 // 从缓冲区移除已处理的事件块（含 \n\n）
                 buf = buf[pos + 2..].to_vec();
 
@@ -114,7 +113,9 @@ where
                                         usage: TokenUsage {
                                             prompt_tokens: usage.input_tokens.unwrap_or(0),
                                             completion_tokens: usage.output_tokens.unwrap_or(0),
-                                            cached_tokens: usage.cache_read_input_tokens.unwrap_or(0),
+                                            cached_tokens: usage
+                                                .cache_read_input_tokens
+                                                .unwrap_or(0),
                                         },
                                     }))
                                     .await;
@@ -148,68 +149,72 @@ where
                             }
                         }
                     }
-                    "content_block_delta" => match serde_json::from_str::<DeltaPayload>(&data_buf)
-                    {
-                        Ok(p) => {
-                            let delta_kind = p.delta.kind.as_deref().unwrap_or("");
-                            let block_type = block_info
-                                .get(&p.index)
-                                .map(|(t, _, _)| t.as_str())
-                                .unwrap_or("");
+                    "content_block_delta" => {
+                        match serde_json::from_str::<DeltaPayload>(&data_buf) {
+                            Ok(p) => {
+                                let delta_kind = p.delta.kind.as_deref().unwrap_or("");
+                                let block_type = block_info
+                                    .get(&p.index)
+                                    .map(|(t, _, _)| t.as_str())
+                                    .unwrap_or("");
 
-                            match delta_kind {
-                                "text_delta" => {
-                                    if let Some(text) = p.delta.text {
-                                        if !text.is_empty() {
-                                            let _ = tx
-                                                .send(Ok(ChatDelta::Delta { content: text }))
-                                                .await;
+                                match delta_kind {
+                                    "text_delta" => {
+                                        if let Some(text) = p.delta.text {
+                                            if !text.is_empty() {
+                                                let _ = tx
+                                                    .send(Ok(ChatDelta::Delta { content: text }))
+                                                    .await;
+                                            }
                                         }
                                     }
-                                }
-                                "input_json_delta" => {
-                                    // 工具调用参数增量
-                                    if let Some(pj) = p.delta.partial_json {
-                                        if !pj.is_empty() {
-                                            if let Some((_, Some(id), _)) = block_info.get(&p.index)
-                                            {
+                                    "input_json_delta" => {
+                                        // 工具调用参数增量
+                                        if let Some(pj) = p.delta.partial_json {
+                                            if !pj.is_empty() {
+                                                if let Some((_, Some(id), _)) =
+                                                    block_info.get(&p.index)
+                                                {
+                                                    let _ = tx
+                                                        .send(Ok(ChatDelta::ToolCallDelta {
+                                                            id: id.clone(),
+                                                            delta: pj,
+                                                        }))
+                                                        .await;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    "thinking_delta" => {
+                                        if let Some(thinking) = p.delta.thinking {
+                                            if !thinking.is_empty() {
                                                 let _ = tx
-                                                    .send(Ok(ChatDelta::ToolCallDelta {
-                                                        id: id.clone(),
-                                                        delta: pj,
+                                                    .send(Ok(ChatDelta::Thinking {
+                                                        content: thinking,
                                                     }))
                                                     .await;
                                             }
                                         }
                                     }
-                                }
-                                "thinking_delta" => {
-                                    if let Some(thinking) = p.delta.thinking {
-                                        if !thinking.is_empty() {
-                                            let _ = tx
-                                                .send(Ok(ChatDelta::Thinking { content: thinking }))
-                                                .await;
-                                        }
+                                    _ => {
+                                        tracing::debug!(
+                                            target: "ice_paw.llm",
+                                            "跳过未知 delta 类型: {:?} (block_type={})",
+                                            p.delta.kind,
+                                            block_type
+                                        );
                                     }
                                 }
-                                _ => {
-                                    tracing::debug!(
-                                        target: "ice_paw.llm",
-                                        "跳过未知 delta 类型: {:?} (block_type={})",
-                                        p.delta.kind,
-                                        block_type
-                                    );
-                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    target: "ice_paw.llm",
+                                    "content_block_delta 解析失败（跳过）: {e} | data={}",
+                                    &data_buf[..data_buf.len().min(200)]
+                                );
                             }
                         }
-                        Err(e) => {
-                            tracing::warn!(
-                                target: "ice_paw.llm",
-                                "content_block_delta 解析失败（跳过）: {e} | data={}",
-                                &data_buf[..data_buf.len().min(200)]
-                            );
-                        }
-                    },
+                    }
                     "content_block_stop" => {
                         // 检查是否是 tool_use block 结束
                         if let Ok(p) = serde_json::from_str::<BlockStopPayload>(&data_buf) {
@@ -235,7 +240,9 @@ where
                                         usage: TokenUsage {
                                             prompt_tokens: usage.input_tokens.unwrap_or(0),
                                             completion_tokens: usage.output_tokens.unwrap_or(0),
-                                            cached_tokens: usage.cache_read_input_tokens.unwrap_or(0),
+                                            cached_tokens: usage
+                                                .cache_read_input_tokens
+                                                .unwrap_or(0),
                                         },
                                     }))
                                     .await;
@@ -244,9 +251,7 @@ where
                     }
                     "message_stop" => {
                         let fr = last_stop_reason.take().or_else(|| Some("stop".into()));
-                        let _ = tx
-                            .send(Ok(ChatDelta::Done { finish_reason: fr }))
-                            .await;
+                        let _ = tx.send(Ok(ChatDelta::Done { finish_reason: fr })).await;
                         return;
                     }
                     "error" => {
@@ -254,9 +259,7 @@ where
                             .map(|e| e.error.message)
                             .unwrap_or_else(|_| data_buf.clone());
                         let _ = tx
-                            .send(Err(AppError::Llm(format!(
-                                "Anthropic 流中错误: {msg}"
-                            ))))
+                            .send(Err(AppError::Llm(format!("Anthropic 流中错误: {msg}"))))
                             .await;
                         return;
                     }

@@ -178,7 +178,8 @@ mod tests {
 
         // 前 5 轮：不触发
         for round in 1..=5 {
-            let (new_counter, terminate) = should_terminate_stuck(key, last_hash, counter, threshold);
+            let (new_counter, terminate) =
+                should_terminate_stuck(key, last_hash, counter, threshold);
             counter = new_counter;
             last_hash = Some(key);
             // 第 1 轮 counter=0，后续轮累加
@@ -208,8 +209,7 @@ mod tests {
         // 1) 前 3 轮：相同文本 + 相同工具签名 → counter 累加
         // 第 1 轮 None → 0；第 2,3 轮相同 → counter 累加到 2
         // P0-1 fix: 使用 name:arguments 格式（与生产代码一致）
-        let key_a =
-            compute_round_key("hello", &["read_file:{\"path\":\"/a\"}".to_string()]);
+        let key_a = compute_round_key("hello", &["read_file:{\"path\":\"/a\"}".to_string()]);
         let mut counter: u32 = 0;
         let mut last_hash: Option<u64> = None;
         for _ in 0..3 {
@@ -217,11 +217,13 @@ mod tests {
             counter = c;
             last_hash = Some(key_a);
         }
-        assert_eq!(counter, 2, "3 轮相同 hash 后 counter 应为 2（首轮 0 + 累加 2）");
+        assert_eq!(
+            counter, 2,
+            "3 轮相同 hash 后 counter 应为 2（首轮 0 + 累加 2）"
+        );
 
         // 2) 第 4 轮：相同文本但换工具参数 → counter 应归零
-        let key_b =
-            compute_round_key("hello", &["read_file:{\"path\":\"/b\"}".to_string()]);
+        let key_b = compute_round_key("hello", &["read_file:{\"path\":\"/b\"}".to_string()]);
         assert_ne!(key_a, key_b, "不同工具签名应产出不同 hash");
         let (new_counter, terminate) = should_terminate_stuck(key_b, last_hash, counter, threshold);
         assert_eq!(new_counter, 0, "工具变化时 counter 应归零");
@@ -238,8 +240,7 @@ mod tests {
 
         // 1) 前 3 轮：相同文本 → counter 累加到 2
         // P0-1 fix: 使用 name:arguments 格式（与生产代码一致）
-        let key_a =
-            compute_round_key("part1", &["read_file:{\"path\":\"/a\"}".to_string()]);
+        let key_a = compute_round_key("part1", &["read_file:{\"path\":\"/a\"}".to_string()]);
         let mut counter: u32 = 0;
         let mut last_hash: Option<u64> = None;
         for _ in 0..3 {
@@ -250,8 +251,7 @@ mod tests {
         assert_eq!(counter, 2);
 
         // 2) 第 4 轮：文本增长 → counter 应归零
-        let key_b =
-            compute_round_key("part1 part2", &["read_file:{\"path\":\"/a\"}".to_string()]);
+        let key_b = compute_round_key("part1 part2", &["read_file:{\"path\":\"/a\"}".to_string()]);
         assert_ne!(key_a, key_b, "文本变化应产出不同 hash");
         let (new_counter, terminate) = should_terminate_stuck(key_b, last_hash, counter, threshold);
         assert_eq!(new_counter, 0, "文本变化时 counter 应归零");
@@ -263,8 +263,7 @@ mod tests {
         assert!(!terminate, "首轮不应触发");
 
         // 4) 不同文本 + 相同工具签名：hash 必然不同
-        let key_c =
-            compute_round_key("different", &["read_file:{\"path\":\"/a\"}".to_string()]);
+        let key_c = compute_round_key("different", &["read_file:{\"path\":\"/a\"}".to_string()]);
         assert_ne!(key_a, key_c);
         let (reset_counter, terminate) = should_terminate_stuck(key_c, Some(key_a), 5, 3);
         assert_eq!(reset_counter, 0, "文本变化重置 counter");

@@ -130,10 +130,8 @@ pub(crate) fn first_paragraph(body: &str) -> String {
             }
             continue;
         }
-        let is_prose = !(t.starts_with('#')
-            || t == "---"
-            || t.starts_with("![")
-            || t.starts_with("```"));
+        let is_prose =
+            !(t.starts_with('#') || t == "---" || t.starts_with("![") || t.starts_with("```"));
         if !is_prose {
             if in_para {
                 break;
@@ -210,7 +208,9 @@ pub fn split_into_chunks(content: &str) -> Vec<String> {
             }
             // 按行切分超长段落
             for line in para.lines() {
-                if current.chars().count() + line.chars().count() + 1 > CHUNK_TARGET_SIZE && !current.is_empty() {
+                if current.chars().count() + line.chars().count() + 1 > CHUNK_TARGET_SIZE
+                    && !current.is_empty()
+                {
                     chunks.push(std::mem::take(&mut current));
                 }
                 if !current.is_empty() {
@@ -222,7 +222,8 @@ pub fn split_into_chunks(content: &str) -> Vec<String> {
         }
 
         // 正常段落：累积到目标大小
-        if !current.is_empty() && current.chars().count() + para.chars().count() > CHUNK_TARGET_SIZE {
+        if !current.is_empty() && current.chars().count() + para.chars().count() > CHUNK_TARGET_SIZE
+        {
             chunks.push(std::mem::take(&mut current));
         }
         if !current.is_empty() {

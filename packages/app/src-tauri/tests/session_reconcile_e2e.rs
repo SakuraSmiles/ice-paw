@@ -21,8 +21,8 @@ use ice_paw_lib::harness::event_log::{
     AttachmentPageItem, AttachmentStoredPayload, EventCtx, TurnContextPayload, TurnEndedPayload,
     UserMessagePayload,
 };
-use ice_paw_lib::harness::reconcile::{reconcile_session, ReconcileReport};
 use ice_paw_lib::harness::read_route::{ReadRoute, ReadRouteRegistry};
+use ice_paw_lib::harness::reconcile::{reconcile_session, ReconcileReport};
 use ice_paw_lib::infra::protocol::ContentBlock;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::SqlitePool;
@@ -58,15 +58,23 @@ async fn seeded_pool() -> SqlitePool {
     .execute(&pool)
     .await
     .expect("seed agent");
-    sqlx::query("INSERT INTO conversations (id, agent_id, title) VALUES ('conv-e', 'agent-1', 'e2e')")
-        .execute(&pool)
-        .await
-        .expect("seed conversation");
+    sqlx::query(
+        "INSERT INTO conversations (id, agent_id, title) VALUES ('conv-e', 'agent-1', 'e2e')",
+    )
+    .execute(&pool)
+    .await
+    .expect("seed conversation");
     pool
 }
 
 /// 生产写路径：先 create 占位行，流式结束后回写 content + blocks。
-async fn write_row(pool: &SqlitePool, id: &str, role: &str, content: &str, blocks: &[ContentBlock]) {
+async fn write_row(
+    pool: &SqlitePool,
+    id: &str,
+    role: &str,
+    content: &str,
+    blocks: &[ContentBlock],
+) {
     repo::message::create(
         pool,
         id,
@@ -104,7 +112,14 @@ async fn script_consistent_turn(pool: &SqlitePool) {
         },
     ];
     // 行：chat_cmd 先 create（content=pre-materialize 文本）再回写 blocks
-    write_row(pool, "turn-1", "user", "看这张图，再读一下 README", &user_blocks).await;
+    write_row(
+        pool,
+        "turn-1",
+        "user",
+        "看这张图，再读一下 README",
+        &user_blocks,
+    )
+    .await;
     log_user_message(
         pool,
         &ev,
@@ -178,8 +193,16 @@ async fn script_consistent_turn(pool: &SqlitePool) {
     )
     .await;
     log_tool_execution(
-        pool, &ev, "msg-a1", "tc-1", Some("tu_1"), "read_file",
-        "{\"path\":\"README.md\"}", Some("# IcePaw\n本地优先..."), false, 34,
+        pool,
+        &ev,
+        "msg-a1",
+        "tc-1",
+        Some("tu_1"),
+        "read_file",
+        "{\"path\":\"README.md\"}",
+        Some("# IcePaw\n本地优先..."),
+        false,
+        34,
     )
     .await;
 
@@ -194,7 +217,14 @@ async fn script_consistent_turn(pool: &SqlitePool) {
 
     // round 1：终答
     let a2_blocks = vec![ContentBlock::text("README 说这是本地优先的 LLM 工作站。")];
-    write_row(pool, "msg-a2", "assistant", "README 说这是本地优先的 LLM 工作站。", &a2_blocks).await;
+    write_row(
+        pool,
+        "msg-a2",
+        "assistant",
+        "README 说这是本地优先的 LLM 工作站。",
+        &a2_blocks,
+    )
+    .await;
     log_assistant_message(
         pool,
         &ev,
@@ -267,13 +297,20 @@ async fn consistent_script_reconciles_with_zero_diffs() {
 async fn tamper_delete_event_fires_missing_in_derived() {
     let pool = seeded_pool().await;
     script_consistent_turn(&pool).await;
-    sqlx::query("DELETE FROM session_events WHERE kind='assistant_message' AND message_id='msg-a2'")
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "DELETE FROM session_events WHERE kind='assistant_message' AND message_id='msg-a2'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
 
     let report = reconcile_session(&pool, "conv-e").await.expect("reconcile");
-    assert_eq!(categories(&report), vec!["MISSING_IN_DERIVED"], "{:#?}", report.diffs);
+    assert_eq!(
+        categories(&report),
+        vec!["MISSING_IN_DERIVED"],
+        "{:#?}",
+        report.diffs
+    );
     assert_eq!(report.diffs[0].message_id.as_deref(), Some("msg-a2"));
 }
 
@@ -291,8 +328,17 @@ async fn tamper_row_blocks_fires_content_mismatch() {
     .unwrap();
 
     let report = reconcile_session(&pool, "conv-e").await.expect("reconcile");
-    assert_eq!(categories(&report), vec!["CONTENT_MISMATCH"], "{:#?}", report.diffs);
-    assert!(report.diffs[0].detail.contains("blocks"), "{}", report.diffs[0].detail);
+    assert_eq!(
+        categories(&report),
+        vec!["CONTENT_MISMATCH"],
+        "{:#?}",
+        report.diffs
+    );
+    assert!(
+        report.diffs[0].detail.contains("blocks"),
+        "{}",
+        report.diffs[0].detail
+    );
 }
 
 /// 篡改③：删行（事件保留）→ MISSING_IN_LEGACY
@@ -306,7 +352,12 @@ async fn tamper_delete_row_fires_missing_in_legacy() {
         .unwrap();
 
     let report = reconcile_session(&pool, "conv-e").await.expect("reconcile");
-    assert_eq!(categories(&report), vec!["MISSING_IN_LEGACY"], "{:#?}", report.diffs);
+    assert_eq!(
+        categories(&report),
+        vec!["MISSING_IN_LEGACY"],
+        "{:#?}",
+        report.diffs
+    );
     assert_eq!(report.diffs[0].message_id.as_deref(), Some("msg-a2"));
 }
 
@@ -327,8 +378,10 @@ async fn read_route_derive_for_reconcile_green_rich_script() {
     let reg = ReadRouteRegistry::new();
     let d = reg.resolve(&pool, "conv-e", false).await.expect("resolve");
     assert_eq!(
-        d.route, ReadRoute::Derive,
-        "reconcile 零 diff 的丰富脚本应路由 derive: {:#?}", d
+        d.route,
+        ReadRoute::Derive,
+        "reconcile 零 diff 的丰富脚本应路由 derive: {:#?}",
+        d
     );
     assert_eq!(d.reason, "green");
     assert_eq!(d.diffs, 0);
@@ -339,16 +392,32 @@ async fn read_route_derive_for_reconcile_green_rich_script() {
 async fn read_route_legacy_for_mixed_epoch() {
     let pool = seeded_pool().await;
     // 纪元前的旧行（无事件，模拟 Phase 0 升级前已存在的历史）
-    write_row(&pool, "legacy-1", "user", "旧消息", &[ContentBlock::text("旧消息")]).await;
-    write_row(&pool, "legacy-2", "assistant", "旧回复", &[ContentBlock::text("旧回复")]).await;
+    write_row(
+        &pool,
+        "legacy-1",
+        "user",
+        "旧消息",
+        &[ContentBlock::text("旧消息")],
+    )
+    .await;
+    write_row(
+        &pool,
+        "legacy-2",
+        "assistant",
+        "旧回复",
+        &[ContentBlock::text("旧回复")],
+    )
+    .await;
     // 之后是事件纪元的完整 turn
     script_consistent_turn(&pool).await;
 
     let reg = ReadRouteRegistry::new();
     let d = reg.resolve(&pool, "conv-e", false).await.expect("resolve");
     assert_eq!(
-        d.route, ReadRoute::Legacy,
-        "混合纪元（旧行+新事件）应路由 legacy（派生看不到旧行）: {:#?}", d
+        d.route,
+        ReadRoute::Legacy,
+        "混合纪元（旧行+新事件）应路由 legacy（派生看不到旧行）: {:#?}",
+        d
     );
     assert_eq!(d.reason, "mixed_epoch");
 }
@@ -368,7 +437,8 @@ async fn read_route_legacy_for_mixed_epoch() {
 #[ignore = "需真实库路径 + 会话 id，显式触发"]
 async fn reconcile_real_db() {
     let db_path = std::env::var("ICEPAW_RECONCILE_DB").expect("设 ICEPAW_RECONCILE_DB=<db 路径>");
-    let conv_id = std::env::var("ICEPAW_RECONCILE_CONV").expect("设 ICEPAW_RECONCILE_CONV=<会话 id>");
+    let conv_id =
+        std::env::var("ICEPAW_RECONCILE_CONV").expect("设 ICEPAW_RECONCILE_CONV=<会话 id>");
 
     let opts = SqliteConnectOptions::from_str(&format!("sqlite://{db_path}"))
         .expect("valid sqlite url")
@@ -381,5 +451,8 @@ async fn reconcile_real_db() {
 
     let report = reconcile_session(&pool, &conv_id).await.expect("reconcile");
     // pretty-print 全量报告：diffs 非空 = bug 嫌疑清单；skipped 逐条核对 reason
-    println!("{}", serde_json::to_string_pretty(&report).expect("serialize report"));
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&report).expect("serialize report")
+    );
 }

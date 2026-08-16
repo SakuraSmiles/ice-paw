@@ -140,9 +140,8 @@ impl McpClient for UpdatePlanTool {
     }
 
     async fn execute_with_context(&self, args: &str, ctx: &ToolContext) -> AppResult<String> {
-        let parsed: UpdatePlanArgs = serde_json::from_str(args).map_err(|e| {
-            AppError::Validation(format!("update_plan 参数解析失败: {e}"))
-        })?;
+        let parsed: UpdatePlanArgs = serde_json::from_str(args)
+            .map_err(|e| AppError::Validation(format!("update_plan 参数解析失败: {e}")))?;
         let items = validate(&parsed)?;
 
         // turn_id 缺失则事件落 NULL turn → 轨迹错归「纪元前桶」。工具轮富化注入
@@ -157,7 +156,10 @@ impl McpClient for UpdatePlanTool {
         event_log::log_plan_updated(
             &ctx.pool,
             &ev,
-            &PlanUpdatedPayload { v: 1, items: items.clone() },
+            &PlanUpdatedPayload {
+                v: 1,
+                items: items.clone(),
+            },
         )
         .await;
 
@@ -184,7 +186,9 @@ mod tests {
 
     #[test]
     fn validate_accepts_normal_snapshot() {
-        let a = args(r#"[{"text":"调研","status":"done"},{"text":"评审","status":"in_progress","task_conversation_id":"c1"}]"#);
+        let a = args(
+            r#"[{"text":"调研","status":"done"},{"text":"评审","status":"in_progress","task_conversation_id":"c1"}]"#,
+        );
         let items = validate(&a).unwrap();
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].status, "done");
@@ -194,7 +198,10 @@ mod tests {
     #[test]
     fn validate_allows_empty_steps_to_clear_plan() {
         let a = args("[]");
-        assert!(validate(&a).unwrap().is_empty(), "空快照 = 清空计划（合法）");
+        assert!(
+            validate(&a).unwrap().is_empty(),
+            "空快照 = 清空计划（合法）"
+        );
     }
 
     #[test]
@@ -202,13 +209,19 @@ mod tests {
         let a = args(r#"[{"text":"x","status":"finished"}]"#);
         let err = validate(&a).unwrap_err().to_string();
         assert!(err.contains("steps[0].status"), "错误须指明哪条: {err}");
-        assert!(err.contains("pending/in_progress/done"), "错误须给正确形状: {err}");
+        assert!(
+            err.contains("pending/in_progress/done"),
+            "错误须给正确形状: {err}"
+        );
     }
 
     #[test]
     fn validate_rejects_empty_and_overlong_text() {
         let a = args(r#"[{"text":"  ","status":"done"}]"#);
-        assert!(validate(&a).unwrap_err().to_string().contains("steps[0].text"));
+        assert!(validate(&a)
+            .unwrap_err()
+            .to_string()
+            .contains("steps[0].text"));
 
         let long = "x".repeat(MAX_TEXT_CHARS + 1);
         let a = args(&format!(r#"[{{"text":"{long}","status":"done"}}]"#));
@@ -250,6 +263,9 @@ mod tests {
             .execute_with_context(r#"{"steps":[{"text":"x","status":"pending"}]}"#, &ctx)
             .await
             .unwrap_err();
-        assert!(err.to_string().contains("turn_id"), "缺 turn_id 须诚实报错: {err}");
+        assert!(
+            err.to_string().contains("turn_id"),
+            "缺 turn_id 须诚实报错: {err}"
+        );
     }
 }

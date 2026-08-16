@@ -69,9 +69,7 @@ pub fn validate_proposal(
             }
 
             // --- 敏感度分级 ---
-            let has_tools = enabled_tools
-                .as_ref()
-                .is_some_and(|t| !t.is_empty());
+            let has_tools = enabled_tools.as_ref().is_some_and(|t| !t.is_empty());
 
             if has_tools {
                 warnings.push("新建的 agent 启用了工具调用，请确认工具列表符合预期。".into());
@@ -130,7 +128,10 @@ mod tests {
         }
     }
 
-    fn make_update_agent(agent_id: &str, enabled_tools: Option<Option<Vec<String>>>) -> ProposalAction {
+    fn make_update_agent(
+        agent_id: &str,
+        enabled_tools: Option<Option<Vec<String>>>,
+    ) -> ProposalAction {
         ProposalAction::UpdateAgent {
             agent_id: agent_id.into(),
             name: None,

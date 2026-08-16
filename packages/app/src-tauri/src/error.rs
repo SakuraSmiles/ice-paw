@@ -430,30 +430,66 @@ mod tests {
 
     #[test]
     fn classify_rate_auth_forbidden() {
-        assert_eq!(classify_llm_error("HTTP 429: rate_limit_exceeded"), LlmErrorKind::RateLimited);
-        assert_eq!(classify_llm_error("Too Many Requests: rate limit reached"), LlmErrorKind::RateLimited);
-        assert_eq!(classify_llm_error("HTTP 401: invalid api key"), LlmErrorKind::Auth);
-        assert_eq!(classify_llm_error("HTTP 403: forbidden"), LlmErrorKind::Forbidden);
-        assert_eq!(classify_llm_error("permission_denied: no access"), LlmErrorKind::Forbidden);
+        assert_eq!(
+            classify_llm_error("HTTP 429: rate_limit_exceeded"),
+            LlmErrorKind::RateLimited
+        );
+        assert_eq!(
+            classify_llm_error("Too Many Requests: rate limit reached"),
+            LlmErrorKind::RateLimited
+        );
+        assert_eq!(
+            classify_llm_error("HTTP 401: invalid api key"),
+            LlmErrorKind::Auth
+        );
+        assert_eq!(
+            classify_llm_error("HTTP 403: forbidden"),
+            LlmErrorKind::Forbidden
+        );
+        assert_eq!(
+            classify_llm_error("permission_denied: no access"),
+            LlmErrorKind::Forbidden
+        );
     }
 
     #[test]
     fn classify_context_too_long() {
-        assert_eq!(classify_llm_error("context_length_exceeded: max 8192 tokens"), LlmErrorKind::ContextTooLong);
-        assert_eq!(classify_llm_error("Too many tokens in prompt"), LlmErrorKind::ContextTooLong);
+        assert_eq!(
+            classify_llm_error("context_length_exceeded: max 8192 tokens"),
+            LlmErrorKind::ContextTooLong
+        );
+        assert_eq!(
+            classify_llm_error("Too many tokens in prompt"),
+            LlmErrorKind::ContextTooLong
+        );
     }
 
     #[test]
     fn classify_network_variants() {
-        assert_eq!(classify_llm_error("HTTP 502: bad gateway"), LlmErrorKind::Network);
-        assert_eq!(classify_llm_error("HTTP 503: service unavailable"), LlmErrorKind::Network);
-        assert_eq!(classify_llm_error("vision 请求失败 (glm): connection timeout"), LlmErrorKind::Network);
-        assert_eq!(classify_llm_error("vision 响应读取失败: timeout"), LlmErrorKind::Network);
+        assert_eq!(
+            classify_llm_error("HTTP 502: bad gateway"),
+            LlmErrorKind::Network
+        );
+        assert_eq!(
+            classify_llm_error("HTTP 503: service unavailable"),
+            LlmErrorKind::Network
+        );
+        assert_eq!(
+            classify_llm_error("vision 请求失败 (glm): connection timeout"),
+            LlmErrorKind::Network
+        );
+        assert_eq!(
+            classify_llm_error("vision 响应读取失败: timeout"),
+            LlmErrorKind::Network
+        );
     }
 
     #[test]
     fn classify_unknown_passthrough() {
-        assert_eq!(classify_llm_error("一些无法识别的内部错误 xyz123"), LlmErrorKind::Unknown);
+        assert_eq!(
+            classify_llm_error("一些无法识别的内部错误 xyz123"),
+            LlmErrorKind::Unknown
+        );
         assert_eq!(classify_llm_error(""), LlmErrorKind::Unknown);
     }
 
@@ -503,8 +539,10 @@ mod tests {
     fn classify_insufficient_balance_beats_429() {
         // 实测 GLM 措辞：HTTP 429 + code:1113 + 余额不足
         assert_eq!(
-            classify_llm_error("HTTP 429 Too Many Requests: {\"error\":{\"code\":\"1113\",\
-                                \"message\":\"余额不足或无可用资源包,请充值。\"}}"),
+            classify_llm_error(
+                "HTTP 429 Too Many Requests: {\"error\":{\"code\":\"1113\",\
+                                \"message\":\"余额不足或无可用资源包,请充值。\"}}"
+            ),
             LlmErrorKind::InsufficientBalance
         );
         // OpenAI 措辞
@@ -518,7 +556,9 @@ mod tests {
         );
         // 友好文案是充值提示，不是「请求过于频繁」
         assert!(
-            LlmErrorKind::InsufficientBalance.friendly_text().contains("余额"),
+            LlmErrorKind::InsufficientBalance
+                .friendly_text()
+                .contains("余额"),
             "余额不足应有充值文案"
         );
     }
@@ -563,6 +603,9 @@ mod tests {
 
     #[test]
     fn prefer_none_passthrough() {
-        assert_eq!(LlmErrorKind::prefer(None, LlmErrorKind::Auth), Some(LlmErrorKind::Auth));
+        assert_eq!(
+            LlmErrorKind::prefer(None, LlmErrorKind::Auth),
+            Some(LlmErrorKind::Auth)
+        );
     }
 }

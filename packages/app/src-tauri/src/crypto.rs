@@ -206,9 +206,9 @@ pub fn init(app: &AppHandle) -> AppResult<()> {
                         target: "ice_paw.crypto",
                         "Stronghold client 不存在，首次创建并落盘"
                     );
-                    guard.create_client(CLIENT_NAME).map_err(|e| {
-                        AppError::Stronghold(format!("create_client: {e}"))
-                    })?;
+                    guard
+                        .create_client(CLIENT_NAME)
+                        .map_err(|e| AppError::Stronghold(format!("create_client: {e}")))?;
                     guard
                         .save()
                         .map_err(|e| AppError::Stronghold(format!("init save: {e}")))?;
@@ -270,10 +270,7 @@ pub fn store_api_key(
 }
 
 /// 取回 (api_key, base_url)
-pub fn fetch_api_key(
-    app: &AppHandle,
-    agent_id: &str,
-) -> AppResult<(String, Option<String>)> {
+pub fn fetch_api_key(app: &AppHandle, agent_id: &str) -> AppResult<(String, Option<String>)> {
     let state = crypto(app);
     let sh = state.lock_sh();
 
@@ -310,7 +307,8 @@ pub fn delete_api_key(app: &AppHandle, agent_id: &str) -> AppResult<()> {
     if let Err(e) = store.delete(agent_id.as_bytes()) {
         return Err(AppError::Stronghold(format!("store.delete: {e}")));
     }
-    sh.save().map_err(|e| AppError::Stronghold(format!("delete save: {e}")))?;
+    sh.save()
+        .map_err(|e| AppError::Stronghold(format!("delete save: {e}")))?;
     Ok(())
 }
 
@@ -468,11 +466,9 @@ pub fn decrypt_blob(blob: &[u8]) -> AppResult<Vec<u8>> {
     let (nonce_bytes, ciphertext_with_tag) = blob.split_at(MEMORY_NONCE_LEN);
     let nonce = XNonce::from_slice(nonce_bytes);
 
-    cipher
-        .decrypt(nonce, ciphertext_with_tag)
-        .map_err(|e| {
-            AppError::Validation(format!(
-                "memory_store 解密认证失败（密文被篡改 / nonce 不匹配 / 非本 key 加密）: {e}"
-            ))
-        })
+    cipher.decrypt(nonce, ciphertext_with_tag).map_err(|e| {
+        AppError::Validation(format!(
+            "memory_store 解密认证失败（密文被篡改 / nonce 不匹配 / 非本 key 加密）: {e}"
+        ))
+    })
 }

@@ -74,9 +74,8 @@ impl McpClient for ReadAttachmentPageTool {
     }
 
     async fn execute_with_context(&self, args: &str, ctx: &ToolContext) -> AppResult<String> {
-        let parsed: ReadAttachmentPageArgs = serde_json::from_str(args).map_err(|e| {
-            AppError::Validation(format!("read_attachment_page 参数解析失败: {e}"))
-        })?;
+        let parsed: ReadAttachmentPageArgs = serde_json::from_str(args)
+            .map_err(|e| AppError::Validation(format!("read_attachment_page 参数解析失败: {e}")))?;
 
         if parsed.page < 1 {
             return Err(AppError::Validation(format!(
@@ -96,7 +95,8 @@ impl McpClient for ReadAttachmentPageTool {
             ));
         }
 
-        let total = repo::message_attachment::count_by_message(&ctx.pool, &parsed.message_id).await?;
+        let total =
+            repo::message_attachment::count_by_message(&ctx.pool, &parsed.message_id).await?;
         if total == 0 {
             return Err(AppError::Validation(
                 "该消息无分页附件（可能附件较小未分页，或已随消息删除）".into(),

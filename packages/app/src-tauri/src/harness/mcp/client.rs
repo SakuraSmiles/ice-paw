@@ -109,11 +109,7 @@ pub trait McpClient: Send + Sync {
     ///
     /// 需要上下文的工具（如 `search_kb`）override 此方法，从 `ctx` 取
     /// agent_id/project_id/pool 决定查询范围。
-    async fn execute_with_context(
-        &self,
-        args: &str,
-        _ctx: &ToolContext,
-    ) -> AppResult<String> {
+    async fn execute_with_context(&self, args: &str, _ctx: &ToolContext) -> AppResult<String> {
         self.execute(args).await
     }
 
@@ -123,11 +119,7 @@ pub trait McpClient: Send + Sync {
     /// 仅视觉工具（`view_attachment_image`）override 此方法，在 [`ToolOutput::image_png`]
     /// 里返回渲染出的 PNG 字节。[`McpRegistry::dispatch`] 统一调此方法，故 `tool_executor`
     /// 拿到的永远是 `ToolOutput`，可按需附 `Image` 块。
-    async fn execute_with_output(
-        &self,
-        args: &str,
-        ctx: &ToolContext,
-    ) -> AppResult<ToolOutput> {
+    async fn execute_with_output(&self, args: &str, ctx: &ToolContext) -> AppResult<ToolOutput> {
         let text = self.execute_with_context(args, ctx).await?;
         Ok(ToolOutput::text(text))
     }
@@ -270,9 +262,13 @@ impl McpRegistry {
         self.register_sync(Arc::new(super::kb_tool::SaveToKbTool));
         self.register_sync(Arc::new(super::kb_tool::ReadKbDocumentTool));
         // 聊天附件分页按页读取（Phase A：大附件按块存表，首页内联，余页按需取）
-        self.register_sync(Arc::new(super::read_attachment_tool::ReadAttachmentPageTool));
+        self.register_sync(Arc::new(
+            super::read_attachment_tool::ReadAttachmentPageTool,
+        ));
         // 聊天附件视觉读取（Phase B：扫描件/图片型 PDF 文本提取为空时，渲染成图喂视觉模型）
-        self.register_sync(Arc::new(super::attachment_image_tool::ViewAttachmentImageTool));
+        self.register_sync(Arc::new(
+            super::attachment_image_tool::ViewAttachmentImageTool,
+        ));
         // agentic 工具集（文件读写编辑 / shell / grep / git / web）
         self.register_sync(Arc::new(super::file_tools::WriteFileTool));
         self.register_sync(Arc::new(super::file_tools::EditFileTool));
@@ -357,13 +353,10 @@ impl McpRegistry {
         args: &str,
         ctx: &ToolContext,
     ) -> AppResult<ToolOutput> {
-        let client = self
-            .get(name)
-            .await
-            .ok_or_else(|| AppError::NotFound {
-                resource: "tool",
-                id: name.to_string(),
-            })?;
+        let client = self.get(name).await.ok_or_else(|| AppError::NotFound {
+            resource: "tool",
+            id: name.to_string(),
+        })?;
         client.execute_with_output(args, ctx).await
     }
 
@@ -379,8 +372,8 @@ impl McpRegistry {
         args: &str,
         ctx: &ToolContext,
     ) -> AppResult<ToolOutput> {
-        use std::panic::AssertUnwindSafe;
         use futures::future::FutureExt;
+        use std::panic::AssertUnwindSafe;
 
         match AssertUnwindSafe(self.dispatch(name, args, ctx))
             .catch_unwind()
@@ -570,13 +563,18 @@ mod tests {
         assert!(result.is_ok());
         let out = result.unwrap();
         assert_eq!(out.text, "stub");
-        assert!(out.image_png.is_none(), "纯文本工具（默认实现）不应回传图片");
+        assert!(
+            out.image_png.is_none(),
+            "纯文本工具（默认实现）不应回传图片"
+        );
     }
 
     #[tokio::test]
     async fn registry_register_custom() {
         let registry = McpRegistry::new();
-        registry.register(make_stub("my_tool", "My custom tool")).await;
+        registry
+            .register(make_stub("my_tool", "My custom tool"))
+            .await;
         let defs = registry.list_tool_defs().await;
         assert_eq!(defs.len(), 1);
         assert_eq!(defs[0].name, "my_tool");
@@ -590,7 +588,10 @@ mod tests {
         let registry = McpRegistry::new();
         for i in 0..n {
             registry
-                .register(make_stub(&format!("tool_{i}"), &format!("desc for tool {i}")))
+                .register(make_stub(
+                    &format!("tool_{i}"),
+                    &format!("desc for tool {i}"),
+                ))
                 .await;
         }
         let actual = registry.list_tool_defs().await;
@@ -609,7 +610,10 @@ mod tests {
         let names: Vec<_> = out.iter().map(|d| d.name.clone()).collect();
         let base_names: Vec<_> = baseline.iter().map(|d| d.name.clone()).collect();
         assert_eq!(out.len(), 2);
-        assert_eq!(names, base_names, "未达排序阈值应与 baseline 一致（无 reorder）");
+        assert_eq!(
+            names, base_names,
+            "未达排序阈值应与 baseline 一致（无 reorder）"
+        );
     }
 
     #[tokio::test]
@@ -656,7 +660,10 @@ mod tests {
         let names: Vec<_> = out.iter().map(|d| d.name.clone()).collect();
         let base_names: Vec<_> = baseline.iter().map(|d| d.name.clone()).collect();
         assert_eq!(out.len(), baseline.len());
-        assert_eq!(names, base_names, "None 阈值应与 baseline 一致（无 reorder）");
+        assert_eq!(
+            names, base_names,
+            "None 阈值应与 baseline 一致（无 reorder）"
+        );
     }
 
     #[tokio::test]
@@ -694,12 +701,16 @@ mod tests {
         assert_eq!(registry.list_tool_defs().await.len(), 1);
 
         // 反注册不存在的名 / 重复反注册 → 安全无副作用
-        registry.unregister(&["tool_a".to_string(), "nope".to_string()]).await;
+        registry
+            .unregister(&["tool_a".to_string(), "nope".to_string()])
+            .await;
         assert_eq!(registry.list_tool_defs().await.len(), 1);
 
         // 批量反注册
         registry.register(make_stub("tool_c", "")).await;
-        registry.unregister(&["tool_b".to_string(), "tool_c".to_string()]).await;
+        registry
+            .unregister(&["tool_b".to_string(), "tool_c".to_string()])
+            .await;
         assert_eq!(registry.list_tool_defs().await.len(), 0);
     }
 }

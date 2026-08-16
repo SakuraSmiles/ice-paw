@@ -18,7 +18,8 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use ice_paw_lib::context::{
-    ContextBudget, MemoryStage, NoopSummaryProvider, PipelineContext, PipelineStage, SummaryProvider,
+    ContextBudget, MemoryStage, NoopSummaryProvider, PipelineContext, PipelineStage,
+    SummaryProvider,
 };
 use ice_paw_lib::db::models::AgentRow;
 use ice_paw_lib::db::repo::summary::{
@@ -120,9 +121,7 @@ async fn make_ctx(
         false,
         None,
         vec![],
-        ContextBudget {
-            max_input_tokens,
-        },
+        ContextBudget { max_input_tokens },
         "conv-e".into(),
         CancellationToken::new(),
     );

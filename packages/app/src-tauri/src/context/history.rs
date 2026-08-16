@@ -115,16 +115,29 @@ pub(crate) fn load_history_with_window(
         // "tool result's tool id not found"（MiniMax 兼容端点 400）。
         // 拆分出的两条子消息共享同一 source_rowid（源自同一 MessageRow）。
         if role == "assistant" {
-            let (asst_blocks, result_blocks): (Vec<ContentBlock>, Vec<ContentBlock>) =
-                blocks.into_iter().partition(|b| !matches!(b, ContentBlock::ToolResult { .. }));
+            let (asst_blocks, result_blocks): (Vec<ContentBlock>, Vec<ContentBlock>) = blocks
+                .into_iter()
+                .partition(|b| !matches!(b, ContentBlock::ToolResult { .. }));
             if !asst_blocks.is_empty() {
-                messages.push(ChatMessage { role: "assistant".into(), content: asst_blocks, source_rowid });
+                messages.push(ChatMessage {
+                    role: "assistant".into(),
+                    content: asst_blocks,
+                    source_rowid,
+                });
             }
             if !result_blocks.is_empty() {
-                messages.push(ChatMessage { role: "user".into(), content: result_blocks, source_rowid });
+                messages.push(ChatMessage {
+                    role: "user".into(),
+                    content: result_blocks,
+                    source_rowid,
+                });
             }
         } else {
-            messages.push(ChatMessage { role, content: blocks, source_rowid });
+            messages.push(ChatMessage {
+                role,
+                content: blocks,
+                source_rowid,
+            });
         }
     }
     sanitize_history(messages)
@@ -138,7 +151,10 @@ pub(crate) fn load_history_with_window(
 /// `tool_use_id` 配对），故改名不影响结构。已是合规名（含新版 `t{idx}_...`）原样返回。
 fn sanitize_tool_name(name: &str) -> String {
     let mut s = String::with_capacity(name.len());
-    s.extend(name.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-'));
+    s.extend(
+        name.chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-'),
+    );
     if s.is_empty() {
         s.push_str("tool");
     }
@@ -167,18 +183,22 @@ pub(crate) fn sanitize_history(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
     // 窗口内存在配对 tool_result 的 tool_use id 集合（孤儿 tool_use 判定基准）
     let ids_with_result: HashSet<String> = messages
         .iter()
-        .flat_map(|m| m.content.iter().filter_map(|b| match b {
-            ContentBlock::ToolResult { tool_use_id, .. } => Some(tool_use_id.clone()),
-            _ => None,
-        }))
+        .flat_map(|m| {
+            m.content.iter().filter_map(|b| match b {
+                ContentBlock::ToolResult { tool_use_id, .. } => Some(tool_use_id.clone()),
+                _ => None,
+            })
+        })
         .collect();
     // 窗口内出现过的所有 tool_use id（孤儿 tool_result 判定基准）
     let valid_ids: HashSet<String> = messages
         .iter()
-        .flat_map(|m| m.content.iter().filter_map(|b| match b {
-            ContentBlock::ToolUse { id, .. } => Some(id.clone()),
-            _ => None,
-        }))
+        .flat_map(|m| {
+            m.content.iter().filter_map(|b| match b {
+                ContentBlock::ToolUse { id, .. } => Some(id.clone()),
+                _ => None,
+            })
+        })
         .collect();
 
     // 过滤每条消息：tool_use 去重 + 去孤儿；tool_result 去孤儿 + 去重；text 去空白。
@@ -199,8 +219,7 @@ pub(crate) fn sanitize_history(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
                 }
                 // tool_use_id 必须在窗口内，且未重复出现
                 ContentBlock::ToolResult { tool_use_id, .. } => {
-                    valid_ids.contains(tool_use_id)
-                        && tool_result_seen.insert(tool_use_id.clone())
+                    valid_ids.contains(tool_use_id) && tool_result_seen.insert(tool_use_id.clone())
                 }
                 // 丢弃空白文本（空 assistant 占位会序列化成 content:""，破坏协议）
                 ContentBlock::Text { text } => !text.trim().is_empty(),
@@ -216,11 +235,19 @@ pub(crate) fn sanitize_history(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
         // 这种消息发给 deepseek 等严格端点会 400「content or tool_calls must be set」，
         // 且一旦写入历史，每轮都带上 → 会话永久卡死。这里整体丢弃；丢弃后产生的连续
         // 同角色由下一步合并处理，不会破坏 user/assistant 交替。
-        let has_text = content.iter().any(|b| matches!(b, ContentBlock::Text { .. }));
-        let has_tool_use = content.iter().any(|b| matches!(b, ContentBlock::ToolUse { .. }));
+        let has_text = content
+            .iter()
+            .any(|b| matches!(b, ContentBlock::Text { .. }));
+        let has_tool_use = content
+            .iter()
+            .any(|b| matches!(b, ContentBlock::ToolUse { .. }));
         let drop_msg = role == "assistant" && !has_text && !has_tool_use;
         if !content.is_empty() && !drop_msg {
-            filtered.push(ChatMessage { role, content, source_rowid });
+            filtered.push(ChatMessage {
+                role,
+                content,
+                source_rowid,
+            });
         }
     }
 
@@ -329,7 +356,11 @@ pub(crate) fn fold_repeated_tool_failures(messages: Vec<ChatMessage>) -> Vec<Cha
                         ordered_ids.push(id.clone());
                     }
                 }
-                ContentBlock::ToolResult { tool_use_id, content, is_error } => {
+                ContentBlock::ToolResult {
+                    tool_use_id,
+                    content,
+                    is_error,
+                } => {
                     result_is_error
                         .entry(tool_use_id.clone())
                         .or_insert(is_error.unwrap_or(false));
@@ -355,7 +386,10 @@ pub(crate) fn fold_repeated_tool_failures(messages: Vec<ChatMessage>) -> Vec<Cha
                 continue;
             }
         };
-        let cur_err = result_is_error.get(&ordered_ids[i]).copied().unwrap_or(false);
+        let cur_err = result_is_error
+            .get(&ordered_ids[i])
+            .copied()
+            .unwrap_or(false);
         if !cur_err {
             i += 1;
             continue;
@@ -363,7 +397,10 @@ pub(crate) fn fold_repeated_tool_failures(messages: Vec<ChatMessage>) -> Vec<Cha
         // 向后扩展同签名同失败的连续 run → 区间 [i, j)
         let mut j = i + 1;
         while j < ordered_ids.len() {
-            let is_err = result_is_error.get(&ordered_ids[j]).copied().unwrap_or(false);
+            let is_err = result_is_error
+                .get(&ordered_ids[j])
+                .copied()
+                .unwrap_or(false);
             let m = match use_meta.get(&ordered_ids[j]) {
                 Some(m) => m,
                 None => break,
@@ -404,7 +441,11 @@ pub(crate) fn fold_repeated_tool_failures(messages: Vec<ChatMessage>) -> Vec<Cha
                         new_blocks.push(block);
                     }
                 }
-                ContentBlock::ToolResult { tool_use_id, is_error, .. } => {
+                ContentBlock::ToolResult {
+                    tool_use_id,
+                    is_error,
+                    ..
+                } => {
                     if let Some(new_text) = replace_result.get(tool_use_id) {
                         // 保留首对：替换 content，保持原 is_error（仍为 true）
                         new_blocks.push(ContentBlock::ToolResult {
@@ -421,7 +462,11 @@ pub(crate) fn fold_repeated_tool_failures(messages: Vec<ChatMessage>) -> Vec<Cha
             }
         }
         if !new_blocks.is_empty() {
-            rewritten.push(ChatMessage { role, content: new_blocks, ..Default::default() });
+            rewritten.push(ChatMessage {
+                role,
+                content: new_blocks,
+                ..Default::default()
+            });
         }
     }
 
@@ -531,8 +576,14 @@ mod tests {
     #[test]
     fn sanitize_tool_name_strips_non_compliant() {
         // 旧版「中文server名.工具名」→ 剥离中文与点号
-        assert_eq!(sanitize_tool_name("浏览器自动化.browser_click"), "browser_click");
-        assert_eq!(sanitize_tool_name("深度推理.sequentialthinking"), "sequentialthinking");
+        assert_eq!(
+            sanitize_tool_name("浏览器自动化.browser_click"),
+            "browser_click"
+        );
+        assert_eq!(
+            sanitize_tool_name("深度推理.sequentialthinking"),
+            "sequentialthinking"
+        );
     }
 
     #[test]
@@ -575,7 +626,13 @@ mod tests {
     #[test]
     fn load_history_with_window_keeps_last_n() {
         let rows: Vec<MessageRow> = (0..10)
-            .map(|i| make_row(i, if i % 2 == 0 { "user" } else { "assistant" }, &format!("msg-{i}")))
+            .map(|i| {
+                make_row(
+                    i,
+                    if i % 2 == 0 { "user" } else { "assistant" },
+                    &format!("msg-{i}"),
+                )
+            })
             .collect();
         let msgs = load_history_with_window(&rows, Some(3));
         assert_eq!(msgs.len(), 3);
@@ -588,7 +645,13 @@ mod tests {
     fn load_history_with_window_none_keeps_all() {
         // window=None 走向后兼容路径，不过滤
         let rows: Vec<MessageRow> = (0..5)
-            .map(|i| make_row(i, if i % 2 == 0 { "user" } else { "assistant" }, &format!("msg-{i}")))
+            .map(|i| {
+                make_row(
+                    i,
+                    if i % 2 == 0 { "user" } else { "assistant" },
+                    &format!("msg-{i}"),
+                )
+            })
             .collect();
         let msgs = load_history_with_window(&rows, None);
         assert_eq!(msgs.len(), 5);
@@ -598,7 +661,13 @@ mod tests {
     fn load_history_with_window_larger_than_input_keeps_all() {
         // window >= input 长度 → 全部保留
         let rows: Vec<MessageRow> = (0..3)
-            .map(|i| make_row(i, if i % 2 == 0 { "user" } else { "assistant" }, &format!("msg-{i}")))
+            .map(|i| {
+                make_row(
+                    i,
+                    if i % 2 == 0 { "user" } else { "assistant" },
+                    &format!("msg-{i}"),
+                )
+            })
             .collect();
         let msgs = load_history_with_window(&rows, Some(100));
         assert_eq!(msgs.len(), 3);
@@ -658,13 +727,25 @@ mod tests {
         ContentBlock::Text { text: t.into() }
     }
     fn tu(id: &str) -> ContentBlock {
-        ContentBlock::ToolUse { id: id.into(), name: "x".into(), input: "{}".into() }
+        ContentBlock::ToolUse {
+            id: id.into(),
+            name: "x".into(),
+            input: "{}".into(),
+        }
     }
     fn tr(id: &str) -> ContentBlock {
-        ContentBlock::ToolResult { tool_use_id: id.into(), content: "r".into(), is_error: Some(false) }
+        ContentBlock::ToolResult {
+            tool_use_id: id.into(),
+            content: "r".into(),
+            is_error: Some(false),
+        }
     }
     fn cm(role: &str, blocks: Vec<ContentBlock>) -> ChatMessage {
-        ChatMessage { role: role.into(), content: blocks, ..Default::default() }
+        ChatMessage {
+            role: role.into(),
+            content: blocks,
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -675,7 +756,11 @@ mod tests {
             cm("assistant", vec![tu("A"), tu("A"), text_blk("...")]),
             cm("user", vec![tr("A")]),
         ]);
-        let n = out[1].content.iter().filter(|b| matches!(b, ContentBlock::ToolUse { .. })).count();
+        let n = out[1]
+            .content
+            .iter()
+            .filter(|b| matches!(b, ContentBlock::ToolUse { .. }))
+            .count();
         assert_eq!(n, 1, "重复 tool_use id 应去重到 1");
     }
 
@@ -713,9 +798,20 @@ mod tests {
             cm("user", vec![tr("A")]),
             cm("assistant", vec![text_blk("done")]),
         ]);
-        let has_use = out.iter().any(|m| m.content.iter().any(|b| matches!(b, ContentBlock::ToolUse { id, .. } if id == "A")));
-        let has_result = out.iter().any(|m| m.content.iter().any(|b| matches!(b, ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == "A")));
-        assert!(has_use && has_result, "正常配对的 tool_use/tool_result 应保留");
+        let has_use = out.iter().any(|m| {
+            m.content
+                .iter()
+                .any(|b| matches!(b, ContentBlock::ToolUse { id, .. } if id == "A"))
+        });
+        let has_result = out.iter().any(|m| {
+            m.content.iter().any(
+                |b| matches!(b, ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == "A"),
+            )
+        });
+        assert!(
+            has_use && has_result,
+            "正常配对的 tool_use/tool_result 应保留"
+        );
     }
 
     #[test]
@@ -728,9 +824,11 @@ mod tests {
             cm("user", vec![text_blk("next")]),
             cm("assistant", vec![text_blk("ok")]),
         ]);
-        let has_orphan = out
-            .iter()
-            .any(|m| m.content.iter().any(|b| matches!(b, ContentBlock::ToolUse { id, .. } if id == "orphan")));
+        let has_orphan = out.iter().any(|m| {
+            m.content
+                .iter()
+                .any(|b| matches!(b, ContentBlock::ToolUse { id, .. } if id == "orphan"))
+        });
         assert!(!has_orphan, "孤儿 tool_use（无配对 result）应被丢弃");
         // 其余正常消息保留
         assert!(out.iter().any(|m| m.content_text() == "ok"));
@@ -762,7 +860,10 @@ mod tests {
             cm("assistant", vec![text_blk("partial"), tu("orphan")]),
             cm("user", vec![text_blk("next")]),
         ]);
-        let asst = out.iter().find(|m| m.role == "assistant").expect("assistant 应保留");
+        let asst = out
+            .iter()
+            .find(|m| m.role == "assistant")
+            .expect("assistant 应保留");
         assert_eq!(asst.content.len(), 1, "仅剩文本块");
         assert!(matches!(asst.content[0], ContentBlock::Text { .. }));
     }
@@ -775,10 +876,16 @@ mod tests {
         // （工具中断/出错未补结果），下一条是纯文本 user → tool_use 成孤儿被剔除。
         let out = sanitize_history(vec![
             cm("user", vec![text_blk("q")]),
-            cm("assistant", vec![
-                ContentBlock::Thinking { thinking: "let me try...".into(), signature: None },
-                tu("orphan"),
-            ]),
+            cm(
+                "assistant",
+                vec![
+                    ContentBlock::Thinking {
+                        thinking: "let me try...".into(),
+                        signature: None,
+                    },
+                    tu("orphan"),
+                ],
+            ),
             cm("user", vec![text_blk("情况如何了？")]),
             cm("assistant", vec![text_blk("ok")]),
         ]);
@@ -792,7 +899,9 @@ mod tests {
         assert!(
             !out.iter().any(|m| m.role == "assistant"
                 && !m.content.is_empty()
-                && m.content.iter().all(|b| matches!(b, ContentBlock::Thinking { .. }))),
+                && m.content
+                    .iter()
+                    .all(|b| matches!(b, ContentBlock::Thinking { .. }))),
             "不应残留 thinking-only assistant"
         );
     }
@@ -803,15 +912,27 @@ mod tests {
         // 由序列化层决定是否发送；此处只确保不被 sanitize 误删）。
         let out = sanitize_history(vec![
             cm("user", vec![text_blk("q")]),
-            cm("assistant", vec![
-                ContentBlock::Thinking { thinking: "h".into(), signature: None },
-                text_blk("answer"),
-            ]),
+            cm(
+                "assistant",
+                vec![
+                    ContentBlock::Thinking {
+                        thinking: "h".into(),
+                        signature: None,
+                    },
+                    text_blk("answer"),
+                ],
+            ),
             cm("user", vec![text_blk("thx")]),
         ]);
-        let a = out.iter().find(|m| m.role == "assistant").expect("assistant 应保留");
+        let a = out
+            .iter()
+            .find(|m| m.role == "assistant")
+            .expect("assistant 应保留");
         assert_eq!(a.content.len(), 2, "thinking + text 都应保留");
-        assert!(a.content.iter().any(|b| matches!(b, ContentBlock::Text { .. })));
+        assert!(a
+            .content
+            .iter()
+            .any(|b| matches!(b, ContentBlock::Text { .. })));
     }
 
     #[test]
@@ -819,15 +940,34 @@ mod tests {
         // assistant 含 thinking + 有效 tool_use（有配对 result）→ 有合法 tool_calls，保留。
         let out = sanitize_history(vec![
             cm("user", vec![text_blk("q")]),
-            cm("assistant", vec![
-                ContentBlock::Thinking { thinking: "h".into(), signature: None },
-                tu("A"),
-            ]),
+            cm(
+                "assistant",
+                vec![
+                    ContentBlock::Thinking {
+                        thinking: "h".into(),
+                        signature: None,
+                    },
+                    tu("A"),
+                ],
+            ),
             cm("user", vec![tr("A")]),
             cm("assistant", vec![text_blk("done")]),
         ]);
-        let a = out.iter().find(|m| m.role == "assistant" && m.content.iter().any(|b| matches!(b, ContentBlock::ToolUse { .. }))).expect("含 tool_use 的 assistant 应保留");
-        assert!(a.content.iter().any(|b| matches!(b, ContentBlock::Thinking { .. })), "thinking 应保留");
+        let a = out
+            .iter()
+            .find(|m| {
+                m.role == "assistant"
+                    && m.content
+                        .iter()
+                        .any(|b| matches!(b, ContentBlock::ToolUse { .. }))
+            })
+            .expect("含 tool_use 的 assistant 应保留");
+        assert!(
+            a.content
+                .iter()
+                .any(|b| matches!(b, ContentBlock::Thinking { .. })),
+            "thinking 应保留"
+        );
     }
 
     // ===== P2-2 G1：历史消息图片重注入 =====
@@ -893,7 +1033,11 @@ mod tests {
     // ===== fold_repeated_tool_failures：失败工具调用折叠 =====
 
     fn tu_full(id: &str, name: &str, input: &str) -> ContentBlock {
-        ContentBlock::ToolUse { id: id.into(), name: name.into(), input: input.into() }
+        ContentBlock::ToolUse {
+            id: id.into(),
+            name: name.into(),
+            input: input.into(),
+        }
     }
     fn tr_err(id: &str, content: &str) -> ContentBlock {
         ContentBlock::ToolResult {
@@ -925,7 +1069,12 @@ mod tests {
     fn result_text_for<'a>(msgs: &'a [ChatMessage], tool_use_id: &str) -> Option<&'a str> {
         for m in msgs {
             for b in &m.content {
-                if let ContentBlock::ToolResult { tool_use_id: id, content, .. } = b {
+                if let ContentBlock::ToolResult {
+                    tool_use_id: id,
+                    content,
+                    ..
+                } = b
+                {
                     if id == tool_use_id {
                         return Some(content);
                     }
@@ -937,7 +1086,12 @@ mod tests {
     fn result_is_error_for(msgs: &[ChatMessage], tool_use_id: &str) -> Option<bool> {
         for m in msgs {
             for b in &m.content {
-                if let ContentBlock::ToolResult { tool_use_id: id, is_error, .. } = b {
+                if let ContentBlock::ToolResult {
+                    tool_use_id: id,
+                    is_error,
+                    ..
+                } = b
+                {
                     if id == tool_use_id {
                         return *is_error;
                     }
@@ -949,7 +1103,10 @@ mod tests {
 
     #[test]
     fn fold_no_tool_calls_unchanged() {
-        let msgs = vec![cm("user", vec![text_blk("hi")]), cm("assistant", vec![text_blk("yo")])];
+        let msgs = vec![
+            cm("user", vec![text_blk("hi")]),
+            cm("assistant", vec![text_blk("yo")]),
+        ];
         let out = fold_repeated_tool_failures(msgs);
         assert_eq!(out.len(), 2);
     }
@@ -1028,9 +1185,15 @@ mod tests {
         // 同值不同 key 顺序 → 视为相同签名
         let msgs = vec![
             cm("user", vec![text_blk("do")]),
-            cm("assistant", vec![tu_full("A", "run_command", "{\"a\":1,\"b\":2}")]),
+            cm(
+                "assistant",
+                vec![tu_full("A", "run_command", "{\"a\":1,\"b\":2}")],
+            ),
             cm("user", vec![tr_err("A", "e")]),
-            cm("assistant", vec![tu_full("B", "run_command", "{\"b\":2,\"a\":1}")]),
+            cm(
+                "assistant",
+                vec![tu_full("B", "run_command", "{\"b\":2,\"a\":1}")],
+            ),
             cm("user", vec![tr_err("B", "e")]),
         ];
         let out = fold_repeated_tool_failures(msgs);
@@ -1076,9 +1239,15 @@ mod tests {
     fn fold_preserves_text_blocks() {
         let msgs = vec![
             cm("user", vec![text_blk("do")]),
-            cm("assistant", vec![tu_full("A1", "run_command", "{}"), text_blk("thinking...")]),
+            cm(
+                "assistant",
+                vec![tu_full("A1", "run_command", "{}"), text_blk("thinking...")],
+            ),
             cm("user", vec![tr_err("A1", "e")]),
-            cm("assistant", vec![tu_full("A2", "run_command", "{}"), text_blk("retry...")]),
+            cm(
+                "assistant",
+                vec![tu_full("A2", "run_command", "{}"), text_blk("retry...")],
+            ),
             cm("user", vec![tr_err("A2", "e")]),
         ];
         let out = fold_repeated_tool_failures(msgs);
@@ -1086,7 +1255,13 @@ mod tests {
         let joined: String = out
             .iter()
             .flat_map(|m| m.content.iter())
-            .filter_map(|b| if let ContentBlock::Text { text } = b { Some(text.clone()) } else { None })
+            .filter_map(|b| {
+                if let ContentBlock::Text { text } = b {
+                    Some(text.clone())
+                } else {
+                    None
+                }
+            })
             .collect();
         assert!(joined.contains("thinking..."));
         assert!(joined.contains("retry..."));

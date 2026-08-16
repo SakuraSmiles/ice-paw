@@ -3,8 +3,8 @@
 //! - `get_preferences`  读取全部偏好
 //! - `set_preference`   更新单个偏好（key-value）
 
-use tauri::State;
 use sqlx::SqlitePool;
+use tauri::State;
 
 use crate::db::models::UserPreferences;
 use crate::db::repo;

@@ -46,8 +46,7 @@ impl CancellationToken {
 
     /// 是否已被取消（自身或任一父链祖先被取消即真）
     pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::SeqCst)
-            || self.parents.iter().any(|p| p.is_cancelled())
+        self.cancelled.load(Ordering::SeqCst) || self.parents.iter().any(|p| p.is_cancelled())
     }
 
     /// 触发取消（幂等，多次调用无副作用；只取消自身，不向上传染）
@@ -119,7 +118,10 @@ mod tests {
         let parent = CancellationToken::new();
         let child = parent.child_token();
         parent.cancel();
-        assert!(child.is_cancelled(), "父取消必须级联到子（停止生成一键停整棵委派树）");
+        assert!(
+            child.is_cancelled(),
+            "父取消必须级联到子（停止生成一键停整棵委派树）"
+        );
     }
 
     #[test]
@@ -149,5 +151,4 @@ mod tests {
         parent.cancel();
         assert!(child.is_cancelled());
     }
-
 }

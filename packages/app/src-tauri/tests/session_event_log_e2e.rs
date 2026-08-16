@@ -15,8 +15,8 @@
 
 use std::str::FromStr;
 
-use ice_paw_lib::db::repo::session_event::list_by_session;
 use ice_paw_lib::db::models::SessionEventRow;
+use ice_paw_lib::db::repo::session_event::list_by_session;
 use ice_paw_lib::harness::event_log::{
     log_assistant_message, log_attachment_stored, log_message_discarded, log_message_error,
     log_tool_execution, log_tool_result_message, log_turn_context, log_turn_ended,
@@ -59,15 +59,19 @@ async fn seeded_pool() -> SqlitePool {
     .execute(&pool)
     .await
     .expect("seed agent");
-    sqlx::query("INSERT INTO conversations (id, agent_id, title) VALUES ('conv-e', 'agent-1', 'e2e')")
-        .execute(&pool)
-        .await
-        .expect("seed conversation");
+    sqlx::query(
+        "INSERT INTO conversations (id, agent_id, title) VALUES ('conv-e', 'agent-1', 'e2e')",
+    )
+    .execute(&pool)
+    .await
+    .expect("seed conversation");
     pool
 }
 
 async fn rows(pool: &SqlitePool) -> Vec<SessionEventRow> {
-    list_by_session(pool, "conv-e", None).await.expect("list events")
+    list_by_session(pool, "conv-e", None)
+        .await
+        .expect("list events")
 }
 
 fn kinds(rs: &[SessionEventRow]) -> Vec<&str> {
@@ -158,8 +162,16 @@ async fn full_tool_turn_sequence_is_replayable() {
     )
     .await;
     log_tool_execution(
-        &pool, &ev, "msg-a1", "tc-1", Some("tu_1"), "read_file",
-        "{\"path\":\"README.md\"}", Some("# IcePaw\n本地优先..."), false, 34,
+        &pool,
+        &ev,
+        "msg-a1",
+        "tc-1",
+        Some("tu_1"),
+        "read_file",
+        "{\"path\":\"README.md\"}",
+        Some("# IcePaw\n本地优先..."),
+        false,
+        34,
     )
     .await;
     log_tool_result_message(
@@ -238,16 +250,21 @@ async fn full_tool_turn_sequence_is_replayable() {
     assert_eq!(rs[2].actor, "user", "attachment_stored actor=user");
     for (i, r) in rs.iter().enumerate() {
         if i != 1 && i != 2 {
-            assert_eq!(r.actor, "agent:agent-1", "事件 {i} actor 应为 agent:agent-1");
+            assert_eq!(
+                r.actor, "agent:agent-1",
+                "事件 {i} actor 应为 agent:agent-1"
+            );
         }
     }
 
     // 工具链配对：tool_use(id) ↔ tool_execution(tool_use_id) ↔ tool_result(tool_use_id)
     let asst1: AssistantMessagePayload = payload(&rs[3]);
-    let has_use = asst1.blocks.iter().any(|b| matches!(
-        b,
-        ContentBlock::ToolUse { id, .. } if id == "tu_1"
-    ));
+    let has_use = asst1.blocks.iter().any(|b| {
+        matches!(
+            b,
+            ContentBlock::ToolUse { id, .. } if id == "tu_1"
+        )
+    });
     assert!(has_use, "assistant_message 应含 ToolUse id=tu_1");
     let exec: ToolExecutionPayload = payload(&rs[4]);
     assert_eq!(exec.tool_use_id.as_deref(), Some("tu_1"));
@@ -411,11 +428,15 @@ async fn supersede_last_wins_and_seq_continues_across_turns() {
     let seqs: Vec<i64> = rs.iter().map(|r| r.seq).collect();
     assert_eq!(seqs, (1..=9).collect::<Vec<_>>(), "跨 turn seq 应续接连续");
     assert!(
-        rs[..5].iter().all(|r| r.turn_id.as_deref() == Some("turn-1")),
+        rs[..5]
+            .iter()
+            .all(|r| r.turn_id.as_deref() == Some("turn-1")),
         "前 5 条属 turn-1"
     );
     assert!(
-        rs[5..].iter().all(|r| r.turn_id.as_deref() == Some("turn-2")),
+        rs[5..]
+            .iter()
+            .all(|r| r.turn_id.as_deref() == Some("turn-2")),
         "后 4 条属 turn-2"
     );
     // turn 边界干净：turn-1 末条是 turn_ended，turn-2 首条是 turn_context
@@ -544,8 +565,14 @@ async fn abort_and_discard_paths_form_complete_sequence() {
     assert_eq!(
         kinds(&rs),
         vec![
-            "turn_context", "user_message", "message_discarded", "turn_ended",
-            "turn_context", "user_message", "message_error", "turn_ended",
+            "turn_context",
+            "user_message",
+            "message_discarded",
+            "turn_ended",
+            "turn_context",
+            "user_message",
+            "message_error",
+            "turn_ended",
         ],
         "非成功路径也应成完整序列"
     );

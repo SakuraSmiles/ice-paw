@@ -181,7 +181,11 @@ fn write_default_agent_yaml(
         .filter(|s| !s.is_empty())
         .unwrap_or(&default_sp);
     // YAML multiline: 每行缩进 2 空格
-    let sp_indented = sp.lines().map(|l| format!("  {}", l)).collect::<Vec<_>>().join("\n");
+    let sp_indented = sp
+        .lines()
+        .map(|l| format!("  {}", l))
+        .collect::<Vec<_>>()
+        .join("\n");
 
     let mut content = format!(
         "# agent.yaml — Agent 行为和角色配置\n\
@@ -261,7 +265,10 @@ impl SqlAgentCmd {
 impl AgentCmd for SqlAgentCmd {
     async fn list(&self) -> AppResult<Vec<Agent>> {
         let rows = repo::agent::list(&self.pool).await?;
-        Ok(rows.into_iter().map(Agent::from_row_with_file_config).collect())
+        Ok(rows
+            .into_iter()
+            .map(Agent::from_row_with_file_config)
+            .collect())
     }
 
     async fn get(&self, agent_id: &str) -> AppResult<AgentRow> {
@@ -316,7 +323,8 @@ impl AgentCmd for SqlAgentCmd {
             input.workspace_path.clone()
         } else {
             match repo::preferences::get_all(&self.pool).await {
-                Ok(prefs) => prefs.default_workspace_path
+                Ok(prefs) => prefs
+                    .default_workspace_path
                     .map(|root| format!("{}/agents/{}", root.trim_end_matches(['/', '\\']), id)),
                 Err(_) => None,
             }
@@ -366,9 +374,10 @@ impl AgentCmd for SqlAgentCmd {
                 Some(&row.system_prompt),
                 row.temperature,
                 row.max_tokens,
-                row.enabled_tools.as_deref().and_then(|s| {
-                    serde_json::from_str::<Vec<String>>(s).ok()
-                }).as_deref(),
+                row.enabled_tools
+                    .as_deref()
+                    .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
+                    .as_deref(),
                 row.base_url.as_deref(),
             );
         }
@@ -421,9 +430,11 @@ impl AgentCmd for SqlAgentCmd {
                     .await
                     .ok()
                     .and_then(|p| p.default_workspace_path);
-                if let Some(root) =
-                    ensure::agent_workspace_root(row.workspace_path.as_deref(), default_ws.as_deref(), &row.id)
-                {
+                if let Some(root) = ensure::agent_workspace_root(
+                    row.workspace_path.as_deref(),
+                    default_ws.as_deref(),
+                    &row.id,
+                ) {
                     let new_dir = ensure::knowledge_dir(&root)
                         .to_string_lossy()
                         .replace('\\', "/");
@@ -442,7 +453,12 @@ impl AgentCmd for SqlAgentCmd {
         if provider_requires_key(&row.provider) && input.api_key.trim().is_empty() {
             return Err(AppError::Validation("api_key 不能为空".into()));
         }
-        crypto::store_api_key(&self.app, &input.agent_id, &input.api_key, input.base_url.as_deref())?;
+        crypto::store_api_key(
+            &self.app,
+            &input.agent_id,
+            &input.api_key,
+            input.base_url.as_deref(),
+        )?;
         repo::agent::rotate_key_ref(
             &self.pool,
             &input.agent_id,
@@ -464,7 +480,9 @@ impl AgentCmd for SqlAgentCmd {
             tracing::warn!(target: "ice_paw.agent", "清理 agent {agent_id} API key 失败: {e}");
         }
         // 级联清理 memory 数据（容错：失败仅 warn）
-        if let Err(e) = repo::memory_embedding::delete_embeddings_for_agent(&self.pool, agent_id).await {
+        if let Err(e) =
+            repo::memory_embedding::delete_embeddings_for_agent(&self.pool, agent_id).await
+        {
             tracing::warn!(target: "ice_paw.agent", "清理 agent {agent_id} embeddings 失败: {e}");
         }
         if let Err(e) = repo::memory_store::delete_memories_for_agent(&self.pool, agent_id).await {
@@ -557,14 +575,14 @@ impl AgentCmd for MockAgentCmd {
     async fn get_with_credentials(&self, agent_id: &str) -> AppResult<AgentWithCredentials> {
         self.log(format!("get_with_credentials({})", agent_id));
         let g = self.inner.lock().unwrap();
-        let (agent, api_key, base_url) =
-            g.agents
-                .get(agent_id)
-                .ok_or_else(|| AppError::NotFound {
-                    resource: "agent",
-                    id: agent_id.to_string(),
-                })?
-                .clone();
+        let (agent, api_key, base_url) = g
+            .agents
+            .get(agent_id)
+            .ok_or_else(|| AppError::NotFound {
+                resource: "agent",
+                id: agent_id.to_string(),
+            })?
+            .clone();
         Ok(AgentWithCredentials {
             agent,
             api_key,
@@ -600,9 +618,10 @@ impl AgentCmd for MockAgentCmd {
             max_history_messages: input.max_history_messages,
             tool_trim_threshold: input.tool_trim_threshold,
             context_window: input.context_window,
-            enabled_tools: input.enabled_tools.as_ref().map(|v| {
-                serde_json::to_string(v).unwrap_or_else(|_| "[]".to_string())
-            }),
+            enabled_tools: input
+                .enabled_tools
+                .as_ref()
+                .map(|v| serde_json::to_string(v).unwrap_or_else(|_| "[]".to_string())),
             supports_vision: if input.supports_vision { 1 } else { 0 },
             description: String::new(),
             avatar: None,
@@ -611,39 +630,73 @@ impl AgentCmd for MockAgentCmd {
             updated_at: "2024-01-01 00:00:00".to_string(),
         };
         let mut g = self.inner.lock().unwrap();
-        g.agents
-            .insert(id.clone(), (row.clone(), input.api_key.clone(), input.base_url.clone()));
+        g.agents.insert(
+            id.clone(),
+            (row.clone(), input.api_key.clone(), input.base_url.clone()),
+        );
         Ok(Agent::from(row))
     }
 
     async fn update(&self, input: AgentUpdate) -> AppResult<Agent> {
         self.log(format!("update({})", input.id));
         let mut g = self.inner.lock().unwrap();
-        let entry = g.agents.get_mut(&input.id).ok_or_else(|| AppError::NotFound {
-            resource: "agent",
-            id: input.id.clone(),
-        })?;
+        let entry = g
+            .agents
+            .get_mut(&input.id)
+            .ok_or_else(|| AppError::NotFound {
+                resource: "agent",
+                id: input.id.clone(),
+            })?;
         // 逐字段应用更新，None 表示不修改
-        if let Some(v) = input.name { entry.0.name = v; }
-        if let Some(v) = input.provider { entry.0.provider = v; }
-        if let Some(v) = input.model { entry.0.model = v; }
-        if let Some(v) = input.system_prompt { entry.0.system_prompt = v; }
-        if let Some(v) = input.base_url { entry.2 = v; }
-        if let Some(v) = input.temperature { entry.0.temperature = v; }
-        if let Some(v) = input.max_tokens { entry.0.max_tokens = v; }
+        if let Some(v) = input.name {
+            entry.0.name = v;
+        }
+        if let Some(v) = input.provider {
+            entry.0.provider = v;
+        }
+        if let Some(v) = input.model {
+            entry.0.model = v;
+        }
+        if let Some(v) = input.system_prompt {
+            entry.0.system_prompt = v;
+        }
+        if let Some(v) = input.base_url {
+            entry.2 = v;
+        }
+        if let Some(v) = input.temperature {
+            entry.0.temperature = v;
+        }
+        if let Some(v) = input.max_tokens {
+            entry.0.max_tokens = v;
+        }
         if let Some(v) = input.extra_params {
             entry.0.extra_params = serde_json::to_string(&v).unwrap_or_default();
         }
-        if let Some(v) = input.sort_order { entry.0.sort_order = v; }
-        if let Some(v) = input.cache_prompt { entry.0.cache_prompt = v as i32; }
-        if let Some(v) = input.max_history_messages { entry.0.max_history_messages = v; }
-        if let Some(v) = input.tool_trim_threshold { entry.0.tool_trim_threshold = v; }
-        if let Some(v) = input.context_window { entry.0.context_window = v; }
-        if let Some(v) = input.enabled_tools {
-            entry.0.enabled_tools = v.map(|tools| serde_json::to_string(&tools).unwrap_or_default());
+        if let Some(v) = input.sort_order {
+            entry.0.sort_order = v;
         }
-        if let Some(v) = input.supports_vision { entry.0.supports_vision = v as i32; }
-        if let Some(v) = input.workspace_path { entry.0.workspace_path = v; }
+        if let Some(v) = input.cache_prompt {
+            entry.0.cache_prompt = v as i32;
+        }
+        if let Some(v) = input.max_history_messages {
+            entry.0.max_history_messages = v;
+        }
+        if let Some(v) = input.tool_trim_threshold {
+            entry.0.tool_trim_threshold = v;
+        }
+        if let Some(v) = input.context_window {
+            entry.0.context_window = v;
+        }
+        if let Some(v) = input.enabled_tools {
+            entry.0.enabled_tools =
+                v.map(|tools| serde_json::to_string(&tools).unwrap_or_default());
+        }
+        if let Some(v) = input.supports_vision {
+            entry.0.supports_vision = v as i32;
+        }
+        if let Some(v) = input.workspace_path {
+            entry.0.workspace_path = v;
+        }
         entry.0.updated_at = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
         Ok(Agent::from(entry.0.clone()))
     }
@@ -651,10 +704,13 @@ impl AgentCmd for MockAgentCmd {
     async fn rotate_key(&self, input: RotateAgentKey) -> AppResult<Agent> {
         self.log(format!("rotate_key({})", input.agent_id));
         let mut g = self.inner.lock().unwrap();
-        let entry = g.agents.get_mut(&input.agent_id).ok_or_else(|| AppError::NotFound {
-            resource: "agent",
-            id: input.agent_id.clone(),
-        })?;
+        let entry = g
+            .agents
+            .get_mut(&input.agent_id)
+            .ok_or_else(|| AppError::NotFound {
+                resource: "agent",
+                id: input.agent_id.clone(),
+            })?;
         entry.1 = input.api_key.clone();
         if let Some(bu) = input.base_url.clone() {
             entry.2 = Some(bu);
@@ -688,7 +744,10 @@ pub async fn create_agent(cmd: State<'_, Arc<dyn AgentCmd>>, input: NewAgent) ->
 
 /// 部分更新 agent
 #[tauri::command]
-pub async fn update_agent(cmd: State<'_, Arc<dyn AgentCmd>>, input: AgentUpdate) -> AppResult<Agent> {
+pub async fn update_agent(
+    cmd: State<'_, Arc<dyn AgentCmd>>,
+    input: AgentUpdate,
+) -> AppResult<Agent> {
     cmd.inner().update(input).await
 }
 
@@ -776,7 +835,15 @@ mod tests {
 
     #[test]
     fn validate_rejects_empty_key_for_keyed_providers() {
-        for p in ["openai", "glm", "glm-coding", "deepseek", "anthropic", "minimax", "minimax-cn"] {
+        for p in [
+            "openai",
+            "glm",
+            "glm-coding",
+            "deepseek",
+            "anthropic",
+            "minimax",
+            "minimax-cn",
+        ] {
             let err = validate_new_agent(&new_agent(p, "  ")).unwrap_err();
             assert!(matches!(err, AppError::Validation(_)), "{p} 空 key 应被拒");
         }
@@ -793,27 +860,43 @@ mod tests {
     fn validate_rejects_missing_id_and_name() {
         let mut a = new_agent("ollama", "");
         a.id = "  ".into();
-        assert!(matches!(validate_new_agent(&a), Err(AppError::Validation(_))));
+        assert!(matches!(
+            validate_new_agent(&a),
+            Err(AppError::Validation(_))
+        ));
         let mut b = new_agent("ollama", "");
         b.name = String::new();
-        assert!(matches!(validate_new_agent(&b), Err(AppError::Validation(_))));
+        assert!(matches!(
+            validate_new_agent(&b),
+            Err(AppError::Validation(_))
+        ));
     }
 
     #[test]
     fn validate_rejects_empty_provider_and_model() {
         let mut a = new_agent("ollama", "");
         a.provider = " ".into();
-        assert!(matches!(validate_new_agent(&a), Err(AppError::Validation(_))));
+        assert!(matches!(
+            validate_new_agent(&a),
+            Err(AppError::Validation(_))
+        ));
         let mut b = new_agent("ollama", "");
         b.model = "".into();
-        assert!(matches!(validate_new_agent(&b), Err(AppError::Validation(_))));
+        assert!(matches!(
+            validate_new_agent(&b),
+            Err(AppError::Validation(_))
+        ));
     }
 
     #[tokio::test]
     async fn mock_list_returns_seeded_agents() {
         let mock = MockAgentCmd::new();
         mock.seed(sample_agent_row("a1", "Agent 1"), "k1".into(), None);
-        mock.seed(sample_agent_row("a2", "Agent 2"), "k2".into(), Some("https://api.example.com".into()));
+        mock.seed(
+            sample_agent_row("a2", "Agent 2"),
+            "k2".into(),
+            Some("https://api.example.com".into()),
+        );
 
         let list = mock.list().await.unwrap();
         assert_eq!(list.len(), 2);

@@ -106,20 +106,21 @@ impl McpClient for ReadFileTool {
     }
 
     async fn execute(&self, args: &str) -> AppResult<String> {
-        let parsed: ReadFileArgs =
-            serde_json::from_str(args).map_err(|e| AppError::Validation(format!(
-                "read_file 参数解析失败: {e}"
-            )))?;
+        let parsed: ReadFileArgs = serde_json::from_str(args)
+            .map_err(|e| AppError::Validation(format!("read_file 参数解析失败: {e}")))?;
 
         let path = Path::new(&parsed.path);
 
         // 安全检查：拒绝读取特殊文件
-        let canonical = path.canonicalize().map_err(|e| {
-            AppError::Validation(format!("文件路径无效: {e}"))
-        })?;
+        let canonical = path
+            .canonicalize()
+            .map_err(|e| AppError::Validation(format!("文件路径无效: {e}")))?;
 
         let path_str = canonical.to_string_lossy();
-        if path_str.starts_with("/proc/") || path_str.starts_with("/sys/") || path_str.starts_with("/dev/") {
+        if path_str.starts_with("/proc/")
+            || path_str.starts_with("/sys/")
+            || path_str.starts_with("/dev/")
+        {
             return Err(AppError::Validation(
                 "出于安全原因，不允许读取系统虚拟文件系统".into(),
             ));
@@ -136,21 +137,15 @@ impl McpClient for ReadFileTool {
         if file_size > parsed.max_bytes {
             return Err(AppError::Validation(format!(
                 "文件过大: {} bytes > {} bytes 上限",
-                file_size,
-                parsed.max_bytes
+                file_size, parsed.max_bytes
             )));
         }
 
-        let bytes = tokio::fs::read(&canonical)
-            .await
-            .map_err(AppError::Io)?;
+        let bytes = tokio::fs::read(&canonical).await.map_err(AppError::Io)?;
 
         // office/pdf 走文档提取（docx/xlsx/xls/xlsb/ods/pdf），其余走文本解码。
         // office 解析失败显式 Err（不退回乱码）。
-        let ext = canonical
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("");
+        let ext = canonical.extension().and_then(|e| e.to_str()).unwrap_or("");
         let (content, encoding_label) = decode_bytes_or_extract(&bytes, ext)?;
 
         // 按行分页：大文件或显式指定 offset/limit 时分页返回
@@ -158,9 +153,8 @@ impl McpClient for ReadFileTool {
         let total_lines = all_lines.len();
 
         // 决定是否分页
-        let need_pagination = file_size > LARGE_FILE_THRESHOLD
-            || parsed.offset > 0
-            || parsed.limit.is_some();
+        let need_pagination =
+            file_size > LARGE_FILE_THRESHOLD || parsed.offset > 0 || parsed.limit.is_some();
 
         if !need_pagination {
             // 小文件 + 无分页参数 → 直接返回全部
@@ -259,18 +253,13 @@ impl McpClient for ListDirectoryTool {
     }
 
     async fn execute(&self, args: &str) -> AppResult<String> {
-        let parsed: ListDirectoryArgs =
-            serde_json::from_str(args).map_err(|e| AppError::Validation(format!(
-                "list_directory 参数解析失败: {e}"
-            )))?;
+        let parsed: ListDirectoryArgs = serde_json::from_str(args)
+            .map_err(|e| AppError::Validation(format!("list_directory 参数解析失败: {e}")))?;
 
         let path = Path::new(&parsed.path);
 
         if !path.exists() {
-            return Err(AppError::Validation(format!(
-                "目录不存在: {}",
-                parsed.path
-            )));
+            return Err(AppError::Validation(format!("目录不存在: {}", parsed.path)));
         }
 
         if !path.is_dir() {
@@ -282,9 +271,7 @@ impl McpClient for ListDirectoryTool {
 
         let mut entries = Vec::new();
 
-        let mut reader = tokio::fs::read_dir(path).await.map_err(|e| {
-            AppError::Io(e)
-        })?;
+        let mut reader = tokio::fs::read_dir(path).await.map_err(AppError::Io)?;
 
         #[derive(Serialize)]
         struct DirEntry {
@@ -441,10 +428,7 @@ Skips .git/node_modules/target/dist and hidden dirs. Caps depth (8) and node cou
 
         let path = Path::new(&parsed.path);
         if !path.exists() {
-            return Err(AppError::Validation(format!(
-                "路径不存在: {}",
-                parsed.path
-            )));
+            return Err(AppError::Validation(format!("路径不存在: {}", parsed.path)));
         }
 
         let mut node_count = 0usize;
@@ -628,10 +612,7 @@ async fn read_one_for_multiple(path_str: &str) -> MultipleReadItem {
                 };
             }
             // office/pdf 走文档提取，其余走文本解码；office 解析失败 → 该项 error，不中断批量
-            let ext = canonical
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("");
+            let ext = canonical.extension().and_then(|e| e.to_str()).unwrap_or("");
             match decode_bytes_or_extract(&bytes, ext) {
                 Ok((text, _enc)) => MultipleReadItem {
                     path: path_str.into(),
@@ -806,13 +787,19 @@ mod tests {
     #[test]
     fn read_file_auth_level() {
         let tool = ReadFileTool;
-        assert_eq!(tool.authorization_level(), AuthorizationLevel::PathWhitelist);
+        assert_eq!(
+            tool.authorization_level(),
+            AuthorizationLevel::PathWhitelist
+        );
     }
 
     #[test]
     fn list_directory_auth_level() {
         let tool = ListDirectoryTool;
-        assert_eq!(tool.authorization_level(), AuthorizationLevel::PathWhitelist);
+        assert_eq!(
+            tool.authorization_level(),
+            AuthorizationLevel::PathWhitelist
+        );
     }
 
     #[test]

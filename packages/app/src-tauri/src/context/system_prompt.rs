@@ -72,12 +72,7 @@ mod tests {
 
     #[test]
     fn system_prompt_template_overrides_agent() {
-        let result = build_system_prompt(
-            Some("模板 prompt"),
-            "agent prompt",
-            false,
-            "os info",
-        );
+        let result = build_system_prompt(Some("模板 prompt"), "agent prompt", false, "os info");
         let s = result.unwrap();
         assert!(s.contains("模板 prompt"));
         assert!(s.contains("os info"));

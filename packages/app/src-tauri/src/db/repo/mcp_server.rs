@@ -5,15 +5,18 @@
 use sqlx::SqlitePool;
 
 use crate::error::{AppError, AppResult};
-use crate::harness::mcp::types::{McpServerConfig, NewMcpServer, RuntimeKind, TransportKind, TrustLevel, UpdateMcpServer};
+use crate::harness::mcp::types::{
+    McpServerConfig, NewMcpServer, RuntimeKind, TransportKind, TrustLevel, UpdateMcpServer,
+};
 
 const ALL_COLS: &str = "id, name, description, command, args, env, enabled, trust_level, scope, runtime_kind, transport, url, headers, tool_index, created_at, updated_at";
 
 /// 列出全部 MCP Server 配置，按 created_at 降序
 pub async fn list_all(pool: &SqlitePool) -> AppResult<Vec<McpServerConfig>> {
-    let rows = sqlx::query_as::<_, McpServerRow>(
-        &format!("SELECT {} FROM mcp_servers ORDER BY created_at DESC", ALL_COLS),
-    )
+    let rows = sqlx::query_as::<_, McpServerRow>(&format!(
+        "SELECT {} FROM mcp_servers ORDER BY created_at DESC",
+        ALL_COLS
+    ))
     .fetch_all(pool)
     .await?;
     Ok(rows.into_iter().map(|r| r.into()).collect())
@@ -21,9 +24,10 @@ pub async fn list_all(pool: &SqlitePool) -> AppResult<Vec<McpServerConfig>> {
 
 /// 按 id 取一条
 pub async fn get_by_id(pool: &SqlitePool, id: &str) -> AppResult<McpServerConfig> {
-    let row = sqlx::query_as::<_, McpServerRow>(
-        &format!("SELECT {} FROM mcp_servers WHERE id = ?", ALL_COLS),
-    )
+    let row = sqlx::query_as::<_, McpServerRow>(&format!(
+        "SELECT {} FROM mcp_servers WHERE id = ?",
+        ALL_COLS
+    ))
     .bind(id)
     .fetch_optional(pool)
     .await?
@@ -38,7 +42,9 @@ pub async fn get_by_id(pool: &SqlitePool, id: &str) -> AppResult<McpServerConfig
 pub async fn create(pool: &SqlitePool, input: &NewMcpServer) -> AppResult<McpServerConfig> {
     let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let args_str = serde_json::to_string(&input.args)?;
-    let env_str = input.env.as_ref()
+    let env_str = input
+        .env
+        .as_ref()
         .map(|v| serde_json::to_string(v).unwrap_or_default())
         .unwrap_or_else(|| "{}".to_string());
     let headers_str = serde_json::to_string(&input.headers).unwrap_or_else(|_| "{}".to_string());
@@ -72,18 +78,27 @@ pub async fn create(pool: &SqlitePool, input: &NewMcpServer) -> AppResult<McpSer
 pub async fn update(pool: &SqlitePool, input: &UpdateMcpServer) -> AppResult<McpServerConfig> {
     let existing = get_by_id(pool, &input.id).await?;
     let name = input.name.as_deref().unwrap_or(&existing.name);
-    let desc = input.description.as_deref().unwrap_or(&existing.description);
+    let desc = input
+        .description
+        .as_deref()
+        .unwrap_or(&existing.description);
     let cmd = input.command.as_deref().unwrap_or(&existing.command);
     let args = input.args.as_ref().unwrap_or(&existing.args);
     let env = input.env.as_ref().unwrap_or(&existing.env);
     let enabled = input.enabled.unwrap_or(existing.enabled);
     let trust_level = input.trust_level.unwrap_or(existing.trust_level);
-    let scope = input.scope.clone().unwrap_or_else(|| existing.scope.clone());
+    let scope = input
+        .scope
+        .clone()
+        .unwrap_or_else(|| existing.scope.clone());
     let runtime_kind = input.runtime_kind.unwrap_or(existing.runtime_kind);
     let transport = input.transport.unwrap_or(existing.transport);
     // url 是 Option<String>（input.url None → 保留 existing.url），用 .or 而非 unwrap_or_else
     let url = input.url.clone().or(existing.url.clone());
-    let headers = input.headers.clone().unwrap_or_else(|| existing.headers.clone());
+    let headers = input
+        .headers
+        .clone()
+        .unwrap_or_else(|| existing.headers.clone());
     let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let args_str = serde_json::to_string(args)?;
     let env_str = serde_json::to_string(env)?;
@@ -247,7 +262,8 @@ impl From<McpServerRow> for McpServerConfig {
             runtime_kind: row.runtime_kind.parse::<RuntimeKind>().unwrap_or_default(),
             transport: row.transport.parse::<TransportKind>().unwrap_or_default(),
             url: row.url,
-            headers: row.headers
+            headers: row
+                .headers
                 .as_deref()
                 .and_then(|s| serde_json::from_str(s).ok())
                 .unwrap_or(serde_json::json!({})),

@@ -3,20 +3,16 @@
 //! 包含支持格式白名单、尺寸/张数上限、base64 合法性校验。
 //! 在 `send_message` 入口处调用，先于任何 DB 写入或 LLM 调用。
 
-use base64::Engine as _;
 use crate::error::{AppError, AppResult};
 use crate::infra::protocol::ContentBlock;
+use base64::Engine as _;
 
 /// 支持的图片 MIME 类型白名单。
 /// 与前端 `ImagePicker.vue` 的 `accept` 属性保持一致。
 /// Anthropic 支持 `image/jpeg | image/png | image/gif | image/webp`；
 /// OpenAI Vision 支持同等集合。
-pub const SUPPORTED_IMAGE_MEDIA_TYPES: &[&str] = &[
-    "image/png",
-    "image/jpeg",
-    "image/gif",
-    "image/webp",
-];
+pub const SUPPORTED_IMAGE_MEDIA_TYPES: &[&str] =
+    &["image/png", "image/jpeg", "image/gif", "image/webp"];
 
 /// 校验 media_type 是否在白名单内
 pub fn is_supported_image_media_type(mt: &str) -> bool {
@@ -62,11 +58,7 @@ pub fn validate_images(blocks: &[ContentBlock]) -> AppResult<()> {
             let decoded = base64::engine::general_purpose::STANDARD
                 .decode(data)
                 .map_err(|e| {
-                    AppError::Validation(format!(
-                        "第 {} 张图片 base64 解码失败：{}",
-                        idx + 1,
-                        e
-                    ))
+                    AppError::Validation(format!("第 {} 张图片 base64 解码失败：{}", idx + 1, e))
                 })?;
             if decoded.len() > MAX_IMAGE_SIZE {
                 let mb = decoded.len() as f64 / 1024.0 / 1024.0;
@@ -131,7 +123,10 @@ pub fn strip_empty_image_blocks(blocks: Vec<ContentBlock>) -> Vec<ContentBlock> 
     }
 
     let hint = if dropped.len() == 1 {
-        format!("第 {} 张图片为空（0 字节），已自动跳过、未发送给模型。", dropped[0])
+        format!(
+            "第 {} 张图片为空（0 字节），已自动跳过、未发送给模型。",
+            dropped[0]
+        )
     } else {
         let list = dropped
             .iter()

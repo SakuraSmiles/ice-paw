@@ -15,9 +15,7 @@ use crate::error::AppResult;
 
 /// 列出全部会话（不限 agent），按 pinned desc, updated_at desc
 #[tauri::command]
-pub async fn list_all_conversations(
-    state: State<'_, SqlitePool>,
-) -> AppResult<Vec<Conversation>> {
+pub async fn list_all_conversations(state: State<'_, SqlitePool>) -> AppResult<Vec<Conversation>> {
     let rows = repo::conversation::list_all(state.inner()).await?;
     Ok(rows.into_iter().map(Conversation::from).collect())
 }
@@ -65,10 +63,7 @@ pub async fn pin_conversation(
 
 /// 删除会话（级联清理 messages）
 #[tauri::command]
-pub async fn delete_conversation(
-    state: State<'_, SqlitePool>,
-    id: String,
-) -> AppResult<()> {
+pub async fn delete_conversation(state: State<'_, SqlitePool>, id: String) -> AppResult<()> {
     repo::conversation::delete(state.inner(), &id).await
 }
 
@@ -109,8 +104,7 @@ pub async fn export_session_trajectory(
 ) -> AppResult<String> {
     // 会话存在性校验：不存在 → NotFound，而非导出空文件造成「无事件」误导
     repo::conversation::get_by_id(pool.inner(), &conversation_id).await?;
-    let rows =
-        repo::session_event::list_by_session(pool.inner(), &conversation_id, None).await?;
+    let rows = repo::session_event::list_by_session(pool.inner(), &conversation_id, None).await?;
 
     let dir = exports_dir(&app)?;
     let ts = chrono::Utc::now().format("%Y%m%d-%H%M%S");
@@ -119,8 +113,8 @@ pub async fn export_session_trajectory(
     // payload（TEXT 列）内嵌为 JSON 对象；万一存了非法 JSON 则原样降级为字符串
     let mut buf = String::new();
     for r in &rows {
-        let payload_value: serde_json::Value =
-            serde_json::from_str(&r.payload).unwrap_or(serde_json::Value::String(r.payload.clone()));
+        let payload_value: serde_json::Value = serde_json::from_str(&r.payload)
+            .unwrap_or(serde_json::Value::String(r.payload.clone()));
         let line = serde_json::json!({
             "id": r.id,
             "session_id": r.session_id,
@@ -238,7 +232,10 @@ pub async fn get_session_plan(
         return Ok(None);
     };
     match serde_json::from_str::<crate::harness::event_log::PlanUpdatedPayload>(&payload_json) {
-        Ok(p) if !p.items.is_empty() => Ok(Some(SessionPlanSnapshot { items: p.items, updated_at })),
+        Ok(p) if !p.items.is_empty() => Ok(Some(SessionPlanSnapshot {
+            items: p.items,
+            updated_at,
+        })),
         Ok(_) => Ok(None), // 空清单 = agent 主动清空计划
         Err(e) => {
             tracing::warn!(target: "ice_paw.plan", "plan_updated payload 损坏（降级无计划）: conv={conversation_id} err={e}");
@@ -256,10 +253,7 @@ fn exports_dir(app: &tauri::AppHandle) -> AppResult<std::path::PathBuf> {
         Err(_) => crate::logging::data_dir(app)?.join("exports"),
     };
     std::fs::create_dir_all(&dir).map_err(|e| {
-        crate::error::AppError::Internal(format!(
-            "创建导出目录失败: dir={} err={e}",
-            dir.display()
-        ))
+        crate::error::AppError::Internal(format!("创建导出目录失败: dir={} err={e}", dir.display()))
     })?;
     Ok(dir)
 }
@@ -301,11 +295,7 @@ pub async fn get_read_route_status(
 ) -> AppResult<crate::harness::read_route::ReadRouteStatus> {
     let resolved = if let Some(cid) = &conversation_id {
         repo::conversation::get_by_id(pool.inner(), cid).await?;
-        Some(
-            route_registry
-                .resolve(pool.inner(), cid, false)
-                .await?,
-        )
+        Some(route_registry.resolve(pool.inner(), cid, false).await?)
     } else {
         None
     };

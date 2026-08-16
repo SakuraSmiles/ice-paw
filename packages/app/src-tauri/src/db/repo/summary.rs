@@ -56,12 +56,10 @@ pub async fn insert_summary_message(
     .await?;
 
     // 更新会话的 updated_at
-    sqlx::query(
-        "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?",
-    )
-    .bind(conversation_id)
-    .execute(pool)
-    .await?;
+    sqlx::query("UPDATE conversations SET updated_at = datetime('now') WHERE id = ?")
+        .bind(conversation_id)
+        .execute(pool)
+        .await?;
 
     Ok(id)
 }
@@ -249,26 +247,23 @@ mod tests {
     #[tokio::test]
     async fn insert_summary_message_writes_row() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed(&pool, "conv-s1").await;
 
-        let id = insert_summary_message(
-            &pool,
-            "conv-s1",
-            "用户想修改 foo 函数，已完成",
-            50,
-        )
-        .await
-        .unwrap();
+        let id = insert_summary_message(&pool, "conv-s1", "用户想修改 foo 函数，已完成", 50)
+            .await
+            .unwrap();
 
         // 验证消息已写入 DB
-        let row: Option<(String, String, String)> = sqlx::query_as(
-            "SELECT id, role, content FROM messages WHERE id = ?",
-        )
-        .bind(&id)
-        .fetch_optional(&pool)
-        .await
-        .unwrap();
+        let row: Option<(String, String, String)> =
+            sqlx::query_as("SELECT id, role, content FROM messages WHERE id = ?")
+                .bind(&id)
+                .fetch_optional(&pool)
+                .await
+                .unwrap();
 
         let (msg_id, role, content) = row.unwrap();
         assert_eq!(msg_id, id);
@@ -280,7 +275,10 @@ mod tests {
     #[tokio::test]
     async fn get_latest_summary_returns_most_recent() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed(&pool, "conv-s2").await;
 
         // 插入两条摘要（第一条先，第二条后）
@@ -298,7 +296,10 @@ mod tests {
     #[tokio::test]
     async fn get_latest_summary_returns_none_when_empty() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed(&pool, "conv-s3").await;
 
         let summary = get_latest_summary(&pool, "conv-s3").await.unwrap();
@@ -309,7 +310,10 @@ mod tests {
     async fn get_latest_summary_state_returns_three_fields() {
         // Phase 2：返回 (row_id, text 去前缀, covered_until_rowid)
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed(&pool, "conv-s4").await;
 
         let id = insert_summary_message(&pool, "conv-s4", "状态摘要正文", 42)
@@ -329,7 +333,10 @@ mod tests {
     async fn update_summary_message_updates_in_place() {
         // UPDATE-in-place：保持同一行 id，更新正文 + covered_until_rowid
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed(&pool, "conv-s5").await;
 
         let id = insert_summary_message(&pool, "conv-s5", "第一版", 10)

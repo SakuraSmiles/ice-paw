@@ -101,9 +101,7 @@ pub async fn list_tail(
 /// 生成）。返回 `(session_id, turn_id, actor, rounds)`；rounds 取该 turn 已落
 /// 的 assistant_message 事件数（每条对应一个 finalize 点，续写 supersede 场景
 /// 为近似值——终态 payload 的 rounds 仅作展示，不参与任何判定）。
-pub async fn find_open_turns(
-    pool: &SqlitePool,
-) -> AppResult<Vec<(String, String, String, i64)>> {
+pub async fn find_open_turns(pool: &SqlitePool) -> AppResult<Vec<(String, String, String, i64)>> {
     let rows = sqlx::query_as::<_, (String, String, String, i64)>(
         "SELECT e.session_id, e.turn_id, e.actor,
                 (SELECT COUNT(*) FROM session_events a
@@ -148,12 +146,11 @@ pub async fn list_after(
 
 /// 取一个会话的当前最大 seq（无事件时为 0）。
 pub async fn max_seq(pool: &SqlitePool, session_id: &str) -> AppResult<i64> {
-    let (max,): (i64,) = sqlx::query_as(
-        "SELECT COALESCE(MAX(seq), 0) FROM session_events WHERE session_id = ?",
-    )
-    .bind(session_id)
-    .fetch_one(pool)
-    .await?;
+    let (max,): (i64,) =
+        sqlx::query_as("SELECT COALESCE(MAX(seq), 0) FROM session_events WHERE session_id = ?")
+            .bind(session_id)
+            .fetch_one(pool)
+            .await?;
     Ok(max)
 }
 
@@ -240,7 +237,10 @@ mod tests {
     #[tokio::test]
     async fn append_assigns_monotonic_seq_and_ids() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed_agent(&pool).await;
         seed_conversation(&pool, "conv-1").await;
 
@@ -275,7 +275,10 @@ mod tests {
     #[tokio::test]
     async fn seq_is_independent_across_sessions() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed_agent(&pool).await;
         seed_conversation(&pool, "conv-a").await;
         seed_conversation(&pool, "conv-b").await;
@@ -304,7 +307,10 @@ mod tests {
     #[tokio::test]
     async fn count_turns_before_counts_distinct_orphan_grouped() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed_agent(&pool).await;
         seed_conversation(&pool, "conv-1").await;
 
@@ -317,27 +323,51 @@ mod tests {
             (Some("turn-2"), Some("m3")),
             (Some("turn-3"), Some("m4")),
         ] {
-            append(&pool, "conv-1", "assistant_message", "agent", turn, msg, "{}")
-                .await
-                .unwrap();
+            append(
+                &pool,
+                "conv-1",
+                "assistant_message",
+                "agent",
+                turn,
+                msg,
+                "{}",
+            )
+            .await
+            .unwrap();
         }
         // seq 1..6；窗口起点取各处：偏移 = 窗口前 distinct 轮组数
         assert_eq!(count_turns_before(&pool, "conv-1", 1).await.unwrap(), 0);
-        assert_eq!(count_turns_before(&pool, "conv-1", 3).await.unwrap(), 1, "孤儿组算 1");
-        assert_eq!(count_turns_before(&pool, "conv-1", 5).await.unwrap(), 2, "含 turn-1");
-        assert_eq!(count_turns_before(&pool, "conv-1", 6).await.unwrap(), 3, "含 turn-1/2");
-        assert_eq!(count_turns_before(&pool, "conv-1", 99).await.unwrap(), 4, "全量");
-        // 其他会话不受影响（无事件不报错）
         assert_eq!(
-            count_turns_before(&pool, "conv-none", 99).await.unwrap(),
-            0
+            count_turns_before(&pool, "conv-1", 3).await.unwrap(),
+            1,
+            "孤儿组算 1"
         );
+        assert_eq!(
+            count_turns_before(&pool, "conv-1", 5).await.unwrap(),
+            2,
+            "含 turn-1"
+        );
+        assert_eq!(
+            count_turns_before(&pool, "conv-1", 6).await.unwrap(),
+            3,
+            "含 turn-1/2"
+        );
+        assert_eq!(
+            count_turns_before(&pool, "conv-1", 99).await.unwrap(),
+            4,
+            "全量"
+        );
+        // 其他会话不受影响（无事件不报错）
+        assert_eq!(count_turns_before(&pool, "conv-none", 99).await.unwrap(), 0);
     }
 
     #[tokio::test]
     async fn concurrent_appends_stay_unique_and_contiguous() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed_agent(&pool).await;
         seed_conversation(&pool, "conv-1").await;
 
@@ -345,9 +375,17 @@ mod tests {
         for i in 0..20 {
             let pool = pool.clone();
             handles.push(tokio::spawn(async move {
-                append(&pool, "conv-1", "assistant_message", "agent:agent-1", Some("t"), Some(&format!("m{i}")), "{}")
-                    .await
-                    .expect("concurrent append should succeed");
+                append(
+                    &pool,
+                    "conv-1",
+                    "assistant_message",
+                    "agent:agent-1",
+                    Some("t"),
+                    Some(&format!("m{i}")),
+                    "{}",
+                )
+                .await
+                .expect("concurrent append should succeed");
             }));
         }
         for h in handles {
@@ -358,20 +396,35 @@ mod tests {
         assert_eq!(rows.len(), 20, "20 条全部落库");
         let seqs: std::collections::HashSet<i64> = rows.iter().map(|r| r.seq).collect();
         assert_eq!(seqs.len(), 20, "seq 无重复");
-        assert_eq!(max_seq(&pool, "conv-1").await.unwrap(), 20, "seq 连续覆盖 1..=20");
+        assert_eq!(
+            max_seq(&pool, "conv-1").await.unwrap(),
+            20,
+            "seq 连续覆盖 1..=20"
+        );
     }
 
     #[tokio::test]
     async fn list_tail_pages_from_newest_backward() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed_agent(&pool).await;
         seed_conversation(&pool, "conv-1").await;
 
         for i in 0..10 {
-            append(&pool, "conv-1", "user_message", "user", Some("t"), Some(&format!("m{i}")), "{}")
-                .await
-                .unwrap();
+            append(
+                &pool,
+                "conv-1",
+                "user_message",
+                "user",
+                Some("t"),
+                Some(&format!("m{i}")),
+                "{}",
+            )
+            .await
+            .unwrap();
         }
 
         // 首页：从最新往回取 4 条，返回须已反转为正序
@@ -392,7 +445,9 @@ mod tests {
 
         // 跨会话隔离
         seed_conversation(&pool, "conv-2").await;
-        append(&pool, "conv-2", "user_message", "user", None, None, "{}").await.unwrap();
+        append(&pool, "conv-2", "user_message", "user", None, None, "{}")
+            .await
+            .unwrap();
         let cross = list_tail(&pool, "conv-2", None, 4).await.unwrap();
         assert_eq!(seqs(&cross), vec![1], "分页不串会话");
     }
@@ -404,14 +459,25 @@ mod tests {
     #[tokio::test]
     async fn list_after_returns_forward_increment() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed_agent(&pool).await;
         seed_conversation(&pool, "conv-1").await;
 
         for i in 0..10 {
-            append(&pool, "conv-1", "user_message", "user", Some("t"), Some(&format!("m{i}")), "{}")
-                .await
-                .unwrap();
+            append(
+                &pool,
+                "conv-1",
+                "user_message",
+                "user",
+                Some("t"),
+                Some(&format!("m{i}")),
+                "{}",
+            )
+            .await
+            .unwrap();
         }
 
         // from head
@@ -434,7 +500,10 @@ mod tests {
     #[tokio::test]
     async fn duplicate_seq_rejected_by_unique_index() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed_agent(&pool).await;
         seed_conversation(&pool, "conv-1").await;
 

@@ -28,8 +28,8 @@
 
 use sqlx::SqlitePool;
 
-use crate::db::repo;
 use crate::db::models::AgentRow;
+use crate::db::repo;
 use crate::harness::error_mapping::{classify_llm_error, LlmErrorKind};
 use crate::harness::vision::{self, VisionCredential};
 use crate::infra::protocol::ContentBlock;
@@ -391,7 +391,10 @@ mod tests {
         assert_eq!(out.blocks[0].as_text(), Some("看这张图"));
         // 末尾诚实提示含图片数 2 + 引导用户配置
         let hint = out.blocks.last().unwrap().as_text().unwrap();
-        assert!(hint.contains("2 张图片"), "提示应含被剥离图片数，实际: {hint}");
+        assert!(
+            hint.contains("2 张图片"),
+            "提示应含被剥离图片数，实际: {hint}"
+        );
         assert!(hint.contains("视觉读取") || hint.contains("视觉模型"));
     }
 
@@ -401,7 +404,10 @@ mod tests {
         let out = adapt_blocks_for_vision(&blocks, false, &[]).await;
         assert_eq!(out.dropped, 1);
         let hint = out.blocks.last().unwrap().as_text().unwrap();
-        assert!(hint.contains("1 张图片"), "单图剥离提示计数应为 1，实际: {hint}");
+        assert!(
+            hint.contains("1 张图片"),
+            "单图剥离提示计数应为 1，实际: {hint}"
+        );
     }
 
     // ---- 混合块：非图片块原样保留 ----
@@ -419,7 +425,13 @@ mod tests {
         assert_eq!(out.blocks[1].as_text(), Some("第二段"));
         assert_eq!(out.dropped, 1);
         // 最后一块是诚实提示
-        assert!(out.blocks.last().unwrap().as_text().unwrap().contains("1 张图片"));
+        assert!(out
+            .blocks
+            .last()
+            .unwrap()
+            .as_text()
+            .unwrap()
+            .contains("1 张图片"));
     }
 
     // ---- 纯文本无图：非视觉也不注入多余提示 ----
@@ -444,7 +456,13 @@ mod tests {
         // 这里用空候选先验 dropped 计数路径。
         let out = adapt_blocks_for_vision(&blocks, false, &[]).await;
         assert_eq!(out.dropped, 1);
-        assert!(out.blocks.last().unwrap().as_text().unwrap().contains("1 张图片"));
+        assert!(out
+            .blocks
+            .last()
+            .unwrap()
+            .as_text()
+            .unwrap()
+            .contains("1 张图片"));
     }
 
     // ---- dropped_hint：按失败原因分支（缺口③，纯函数单测）----
@@ -499,14 +517,20 @@ mod tests {
         // 有凭据但失败原因未识别 → 不伪造细节，诚实说「未能识别」
         let h = dropped_hint(1, Some(LlmErrorKind::Unknown)).expect("有提示");
         assert!(h.contains("未能识别"));
-        assert!(!h.contains("未配置"), "Unknown 不应说「未配置」（其实有凭据）: {h}");
+        assert!(
+            !h.contains("未配置"),
+            "Unknown 不应说「未配置」（其实有凭据）: {h}"
+        );
     }
 
     // ---- strip_image_blocks_to_marker（历史路径，静默剥离）----
 
     #[test]
     fn strip_no_images_returns_unchanged() {
-        let blocks = vec![ContentBlock::text("纯文本历史"), ContentBlock::text("第二条")];
+        let blocks = vec![
+            ContentBlock::text("纯文本历史"),
+            ContentBlock::text("第二条"),
+        ];
         let out = strip_image_blocks_to_marker(&blocks);
         assert_eq!(out.len(), 2);
         assert!(out.iter().all(|b| !b.is_image()));
@@ -527,7 +551,10 @@ mod tests {
         // out = [原文本块 "看图", marker]（marker 在第一张图位置插入，后续图被吞）。
         // 直接取 out[1]，避免 find_map 命中第一个文本块 "看图"。
         let marker = out[1].as_text().unwrap();
-        assert!(marker.contains("3 张图片"), "marker 应含图数，实际: {marker}");
+        assert!(
+            marker.contains("3 张图片"),
+            "marker 应含图数，实际: {marker}"
+        );
     }
 
     #[test]

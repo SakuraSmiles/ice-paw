@@ -209,11 +209,7 @@ mod tests {
 
     #[test]
     fn split_user_assistant_preserves_order() {
-        let input = vec![
-            msg("user", "Q1"),
-            msg("assistant", "A1"),
-            msg("user", "Q2"),
-        ];
+        let input = vec![msg("user", "Q1"), msg("assistant", "A1"), msg("user", "Q2")];
         let (sys, msgs) = split_system_prompt(&input);
         assert!(sys.is_none());
         assert_eq!(msgs.len(), 3);

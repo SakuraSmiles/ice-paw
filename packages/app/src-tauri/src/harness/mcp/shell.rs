@@ -95,18 +95,15 @@ read exit_code and output to decide next steps."
         // Windows: 隐藏 cmd /C 弹出的控制台窗口（GUI 应用 spawn 子进程会闪窗）
         crate::infra::process::suppress_console_window(&mut cmd);
 
-        let output = tokio::time::timeout(
-            Duration::from_secs(parsed.timeout_secs),
-            cmd.output(),
-        )
-        .await
-        .map_err(|_| {
-            AppError::Internal(format!(
-                "命令超时（{}s）: {}",
-                parsed.timeout_secs, parsed.command
-            ))
-        })?
-        .map_err(AppError::Io)?;
+        let output = tokio::time::timeout(Duration::from_secs(parsed.timeout_secs), cmd.output())
+            .await
+            .map_err(|_| {
+                AppError::Internal(format!(
+                    "命令超时（{}s）: {}",
+                    parsed.timeout_secs, parsed.command
+                ))
+            })?
+            .map_err(AppError::Io)?;
 
         // 统一解码 stdout/stderr（UTF-8 → GBK → lossy）
         let stdout = crate::infra::decode::decode_bytes(&output.stdout);
@@ -170,10 +167,7 @@ mod tests {
         let tool = RunCommandTool;
         let ctx = test_ctx().await;
         let result = tool
-            .execute_with_context(
-                r#"{"command":"echo hello","timeout_secs":5}"#,
-                &ctx,
-            )
+            .execute_with_context(r#"{"command":"echo hello","timeout_secs":5}"#, &ctx)
             .await
             .unwrap();
         let v: serde_json::Value = serde_json::from_str(&result).unwrap();

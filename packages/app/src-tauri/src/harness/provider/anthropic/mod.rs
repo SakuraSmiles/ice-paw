@@ -122,9 +122,8 @@ impl LlmProvider for AnthropicAdapter {
         let (system_prompt, msgs) = types::split_system_prompt(&messages);
 
         // P2-3: 构造 system 为 JSON（cache_prompt 启用时使用数组格式）
-        let mut system_json: Option<Vec<serde_json::Value>> = system_prompt.map(|s| {
-            vec![serde_json::json!({ "type": "text", "text": s })]
-        });
+        let mut system_json: Option<Vec<serde_json::Value>> =
+            system_prompt.map(|s| vec![serde_json::json!({ "type": "text", "text": s })]);
 
         // P2-3: 将 AnthropicMessage 转为 JSON Value（用于注入 cache_control）
         let mut msgs_json: Vec<serde_json::Value> = msgs
@@ -207,7 +206,10 @@ impl LlmProvider for AnthropicAdapter {
                     let role = m.get("role").and_then(|v| v.as_str()).unwrap_or("?");
                     match m.get("content") {
                         Some(serde_json::Value::String(s)) => {
-                            format!("{role}: str[{}]", if s.trim().is_empty() { "EMPTY" } else { "ok" })
+                            format!(
+                                "{role}: str[{}]",
+                                if s.trim().is_empty() { "EMPTY" } else { "ok" }
+                            )
                         }
                         Some(serde_json::Value::Array(arr)) => {
                             let parts: Vec<String> = arr
@@ -219,11 +221,16 @@ impl LlmProvider for AnthropicAdapter {
                                     )),
                                     Some("tool_result") => Some(format!(
                                         "res({})",
-                                        b.get("tool_use_id").and_then(|v| v.as_str()).unwrap_or("?")
+                                        b.get("tool_use_id")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("?")
                                     )),
                                     Some("text") => Some(format!(
                                         "text[{}]",
-                                        b.get("text").and_then(|v| v.as_str()).map(str::len).unwrap_or(0)
+                                        b.get("text")
+                                            .and_then(|v| v.as_str())
+                                            .map(str::len)
+                                            .unwrap_or(0)
                                     )),
                                     Some(other) => Some(other.to_string()),
                                     None => None,
@@ -281,14 +288,20 @@ mod tests {
     fn url_strips_trailing_slash() {
         // 验证 URL 拼接：trim_end_matches('/') 后再追加 /v1/messages
         let adapter = AnthropicAdapter::new("m".into(), "https://x.com/anthropic/".into(), false);
-        let url = format!("{}/v1/messages", adapter.unwrap().base_url.trim_end_matches('/'));
+        let url = format!(
+            "{}/v1/messages",
+            adapter.unwrap().base_url.trim_end_matches('/')
+        );
         assert_eq!(url, "https://x.com/anthropic/v1/messages");
     }
 
     #[test]
     fn url_no_trailing_slash() {
         let adapter = AnthropicAdapter::new("m".into(), "https://x.com/anthropic".into(), false);
-        let url = format!("{}/v1/messages", adapter.unwrap().base_url.trim_end_matches('/'));
+        let url = format!(
+            "{}/v1/messages",
+            adapter.unwrap().base_url.trim_end_matches('/')
+        );
         assert_eq!(url, "https://x.com/anthropic/v1/messages");
     }
 

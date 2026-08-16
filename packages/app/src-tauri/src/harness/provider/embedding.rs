@@ -74,11 +74,7 @@ use crate::error::{AppError, AppResult};
 #[async_trait]
 pub trait EmbeddingBackend: Send + Sync {
     /// 把 `texts` 批量转成 embedding 向量
-    async fn embed(
-        &self,
-        texts: Vec<&str>,
-        api_key: &str,
-    ) -> AppResult<Vec<Vec<f32>>>;
+    async fn embed(&self, texts: Vec<&str>, api_key: &str) -> AppResult<Vec<Vec<f32>>>;
 
     /// 返回 backend 当前使用的 embedding 模型名（调试 / 审计用）
     fn model_name(&self) -> &str;
@@ -166,11 +162,7 @@ pub struct NoopEmbeddingBackend;
 
 #[async_trait]
 impl EmbeddingBackend for NoopEmbeddingBackend {
-    async fn embed(
-        &self,
-        texts: Vec<&str>,
-        _api_key: &str,
-    ) -> AppResult<Vec<Vec<f32>>> {
+    async fn embed(&self, texts: Vec<&str>, _api_key: &str) -> AppResult<Vec<Vec<f32>>> {
         debug!(
             target: "ice_paw.embedding",
             "NoopEmbeddingBackend: 返回 {} 条全 0 向量",
@@ -286,17 +278,16 @@ struct EmbeddingData {
 
 #[async_trait]
 impl EmbeddingBackend for OpenAiEmbeddingBackend {
-    async fn embed(
-        &self,
-        texts: Vec<&str>,
-        api_key: &str,
-    ) -> AppResult<Vec<Vec<f32>>> {
+    async fn embed(&self, texts: Vec<&str>, api_key: &str) -> AppResult<Vec<Vec<f32>>> {
         if texts.is_empty() {
             // 空输入 → 返回空结果（不报错）
             return Ok(Vec::new());
         }
         if api_key.trim().is_empty() {
-            return Err(AppError::Llm(format!("API Key 无效或未配置 (model={})", self.model)));
+            return Err(AppError::Llm(format!(
+                "API Key 无效或未配置 (model={})",
+                self.model
+            )));
         }
 
         let url = embedding_url_for(&self.base_url);
@@ -321,12 +312,7 @@ impl EmbeddingBackend for OpenAiEmbeddingBackend {
             .json(&body)
             .send()
             .await
-            .map_err(|e| {
-                AppError::Llm(format!(
-                    "Embedding HTTP 请求失败 ({}): {}",
-                    url, e
-                ))
-            })?;
+            .map_err(|e| AppError::Llm(format!("Embedding HTTP 请求失败 ({}): {}", url, e)))?;
 
         let status = response.status();
         if !status.is_success() {
@@ -337,7 +323,10 @@ impl EmbeddingBackend for OpenAiEmbeddingBackend {
             });
             // 401/403 → ProviderNotConfigured（API Key 无效）
             if code == 401 || code == 403 {
-                return Err(AppError::Llm(format!("API Key 无效或未配置 (model={})", self.model)));
+                return Err(AppError::Llm(format!(
+                    "API Key 无效或未配置 (model={})",
+                    self.model
+                )));
             }
             // 429 → Llm（限流，保留重试语义由上层处理）
             if code == 429 {
@@ -410,10 +399,7 @@ impl EmbeddingBackend for OpenAiEmbeddingBackend {
 /// - `candidates` 为空 / `query` 为空 → 返回 `Vec::new()`
 /// - 所有候选维度都不匹配 → 返回 `Vec::new()`
 /// - 所有候选相似度都低于兜底阈值 → 返回 `Vec::new()`
-pub fn top_k_recall(
-    query: &[f32],
-    candidates: &[(String, Vec<f32>)],
-) -> Vec<String> {
+pub fn top_k_recall(query: &[f32], candidates: &[(String, Vec<f32>)]) -> Vec<String> {
     if query.is_empty() || candidates.is_empty() {
         return Vec::new();
     }
@@ -437,10 +423,7 @@ pub fn top_k_recall(
         .collect();
 
     // 按相似度降序排列（NaN 兜底为 Equal）
-    scored.sort_by(|a, b| {
-        b.0.partial_cmp(&a.0)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
 
     scored
         .into_iter()
@@ -475,10 +458,7 @@ mod tests {
     #[test]
     fn embedding_url_glm_v4() {
         let url = embedding_url_for("https://open.bigmodel.cn/api/paas/v4");
-        assert_eq!(
-            url,
-            "https://open.bigmodel.cn/api/paas/v4/embeddings"
-        );
+        assert_eq!(url, "https://open.bigmodel.cn/api/paas/v4/embeddings");
     }
 
     #[test]
@@ -554,7 +534,11 @@ mod tests {
             ("c5".into(), vec![0.0, 1.0]),
         ];
         let result = top_k_recall(&query, &candidates);
-        assert_eq!(result.len(), 4, "c1/c2/c3/c4 命中，仅 c5 低于兜底: {result:?}");
+        assert_eq!(
+            result.len(),
+            4,
+            "c1/c2/c3/c4 命中，仅 c5 低于兜底: {result:?}"
+        );
         assert!(result.contains(&"c1".to_string()));
         assert!(result.contains(&"c4".to_string()));
         assert!(!result.contains(&"c5".to_string()));
@@ -576,7 +560,12 @@ mod tests {
             .collect();
 
         let result = top_k_recall(&query, &candidates);
-        assert_eq!(result.len(), RECALL_TOP_K, "应限制为 ≤5，实际 {}: {result:?}", result.len());
+        assert_eq!(
+            result.len(),
+            RECALL_TOP_K,
+            "应限制为 ≤5，实际 {}: {result:?}",
+            result.len()
+        );
         // top-5 应按相似度排序：c0, c1, c2, c3, c4
         assert_eq!(result, vec!["c0", "c1", "c2", "c3", "c4"]);
     }

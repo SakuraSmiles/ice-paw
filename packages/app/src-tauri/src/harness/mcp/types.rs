@@ -18,8 +18,7 @@ use serde::{Deserialize, Serialize};
 /// - `Always`：无需授权，直接执行（如 `list_directory`）
 /// - `PathWhitelist`：路径白名单校验（如 `read_file`）
 /// - `Confirm`：需用户确认（未来扩展）
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AuthorizationLevel {
     /// 无需授权
     #[default]
@@ -176,14 +175,20 @@ pub enum TrustLevel {
 
 impl TrustLevel {
     pub fn as_str(&self) -> &'static str {
-        match self { TrustLevel::Trusted => "trusted", TrustLevel::Untrusted => "untrusted" }
+        match self {
+            TrustLevel::Trusted => "trusted",
+            TrustLevel::Untrusted => "untrusted",
+        }
     }
 }
 
 impl std::str::FromStr for TrustLevel {
     type Err = ();
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s { "trusted" => Ok(TrustLevel::Trusted), _ => Ok(TrustLevel::Untrusted) }
+        match s {
+            "trusted" => Ok(TrustLevel::Trusted),
+            _ => Ok(TrustLevel::Untrusted),
+        }
     }
 }
 
@@ -211,14 +216,20 @@ pub enum RuntimeKind {
 
 impl RuntimeKind {
     pub fn as_str(&self) -> &'static str {
-        match self { RuntimeKind::System => "system", RuntimeKind::Bundled => "bundled" }
+        match self {
+            RuntimeKind::System => "system",
+            RuntimeKind::Bundled => "bundled",
+        }
     }
 }
 
 impl std::str::FromStr for RuntimeKind {
     type Err = ();
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s { "bundled" => Ok(RuntimeKind::Bundled), _ => Ok(RuntimeKind::System) }
+        match s {
+            "bundled" => Ok(RuntimeKind::Bundled),
+            _ => Ok(RuntimeKind::System),
+        }
     }
 }
 
@@ -316,13 +327,19 @@ pub struct McpServerConfig {
     pub updated_at: String,
 }
 
-fn default_enabled() -> bool { true }
+fn default_enabled() -> bool {
+    true
+}
 
 /// headers 默认值：空 JSON 对象（兼容旧 server / stdio server 无 headers）
-fn default_headers() -> serde_json::Value { serde_json::json!({}) }
+fn default_headers() -> serde_json::Value {
+    serde_json::json!({})
+}
 
 /// scope 默认值：global（兼容旧 server，全局共享）
-fn default_scope() -> String { "global".into() }
+fn default_scope() -> String {
+    "global".into()
+}
 
 // =========================================================================
 // Server 运行时状态（统一 global/per_agent 的启动/运行/失败状态机）
@@ -402,7 +419,6 @@ pub enum ServerStatusKind {
     Failed,
 }
 
-
 /// per-agent MCP server 的 args 占位符：启动时替换为 agent workspace_path。
 /// 用于 scope=per_agent 的 server（如 filesystem），实现 per-agent 文件访问隔离。
 pub const WORKSPACE_PLACEHOLDER: &str = "{workspace}";
@@ -475,7 +491,10 @@ mod tests {
     #[test]
     fn auth_level_debug() {
         assert_eq!(format!("{:?}", AuthorizationLevel::Always), "Always");
-        assert_eq!(format!("{:?}", AuthorizationLevel::PathWhitelist), "PathWhitelist");
+        assert_eq!(
+            format!("{:?}", AuthorizationLevel::PathWhitelist),
+            "PathWhitelist"
+        );
         assert_eq!(format!("{:?}", AuthorizationLevel::Confirm), "Confirm");
     }
 
@@ -494,7 +513,8 @@ mod tests {
 
     #[test]
     fn mcp_tool_definition_deser() {
-        let json = r#"{"name":"read_file","description":"Read a file","inputSchema":{"type":"object"}}"#;
+        let json =
+            r#"{"name":"read_file","description":"Read a file","inputSchema":{"type":"object"}}"#;
         let def: McpToolDefinition = serde_json::from_str(json).unwrap();
         assert_eq!(def.name, "read_file");
         assert_eq!(def.input_schema["type"], "object");
@@ -516,9 +536,18 @@ mod tests {
 
     #[test]
     fn trust_level_roundtrip() {
-        assert_eq!("trusted".parse::<TrustLevel>().unwrap(), TrustLevel::Trusted);
-        assert_eq!("untrusted".parse::<TrustLevel>().unwrap(), TrustLevel::Untrusted);
-        assert_eq!("unknown".parse::<TrustLevel>().unwrap(), TrustLevel::Untrusted);
+        assert_eq!(
+            "trusted".parse::<TrustLevel>().unwrap(),
+            TrustLevel::Trusted
+        );
+        assert_eq!(
+            "untrusted".parse::<TrustLevel>().unwrap(),
+            TrustLevel::Untrusted
+        );
+        assert_eq!(
+            "unknown".parse::<TrustLevel>().unwrap(),
+            TrustLevel::Untrusted
+        );
         assert_eq!(TrustLevel::Trusted.as_str(), "trusted");
         assert_eq!(TrustLevel::Untrusted.as_str(), "untrusted");
     }
@@ -526,10 +555,19 @@ mod tests {
     #[test]
     fn runtime_kind_default_and_roundtrip() {
         assert_eq!(RuntimeKind::default(), RuntimeKind::System);
-        assert_eq!("bundled".parse::<RuntimeKind>().unwrap(), RuntimeKind::Bundled);
-        assert_eq!("system".parse::<RuntimeKind>().unwrap(), RuntimeKind::System);
+        assert_eq!(
+            "bundled".parse::<RuntimeKind>().unwrap(),
+            RuntimeKind::Bundled
+        );
+        assert_eq!(
+            "system".parse::<RuntimeKind>().unwrap(),
+            RuntimeKind::System
+        );
         // 未知值回退到 System（容错，避免坏数据阻断启动）
-        assert_eq!("unknown".parse::<RuntimeKind>().unwrap(), RuntimeKind::System);
+        assert_eq!(
+            "unknown".parse::<RuntimeKind>().unwrap(),
+            RuntimeKind::System
+        );
         assert_eq!(RuntimeKind::Bundled.as_str(), "bundled");
         assert_eq!(RuntimeKind::System.as_str(), "system");
     }

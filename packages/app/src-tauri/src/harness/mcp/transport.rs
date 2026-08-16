@@ -23,9 +23,8 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 
 use super::types::{
-    JsonRpcRequest, JsonRpcResponse, McpCallToolParams, McpCallToolResult,
-    McpClientCapabilities, McpClientInfo, McpInitializeParams, McpListToolsResult,
-    McpToolDefinition,
+    JsonRpcRequest, JsonRpcResponse, McpCallToolParams, McpCallToolResult, McpClientCapabilities,
+    McpClientInfo, McpInitializeParams, McpListToolsResult, McpToolDefinition,
 };
 
 /// streamable HTTP 传输的 MCP 协议版本。
@@ -98,7 +97,10 @@ impl HttpMcpTransport {
     pub async fn new(name: String, url: String, headers_value: &Value) -> AppResult<Self> {
         let mut headers = build_header_map(headers_value);
         // streamable HTTP：声明可接受单 JSON 或 SSE 流两种响应
-        headers.insert(ACCEPT, HeaderValue::from_static("application/json, text/event-stream"));
+        headers.insert(
+            ACCEPT,
+            HeaderValue::from_static("application/json, text/event-stream"),
+        );
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
         let client = reqwest::Client::builder()
@@ -124,29 +126,36 @@ impl HttpMcpTransport {
                 version: "0.2.7".into(),
             },
         };
-        let init_value = serde_json::to_value(&init_params)
-            .expect("McpInitializeParams 序列化不应失败");
+        let init_value =
+            serde_json::to_value(&init_params).expect("McpInitializeParams 序列化不应失败");
         let resp = transport
             .post_jsonrpc("initialize", Some(init_value), HTTP_TIMEOUT_QUICK_SECS)
             .await?;
         if resp.result.is_none() {
             // 部分 server（如 GLM）的 error 对象只回 code 不回 message，
             // 这里兜底带上 code，避免出现空的「握手失败: 」。
-            let msg = resp.error.as_ref().map(|e| {
-                if e.message.is_empty() {
-                    format!("error code {}", e.code)
-                } else {
-                    e.message.clone()
-                }
-            }).unwrap_or_else(|| "空响应".into());
+            let msg = resp
+                .error
+                .as_ref()
+                .map(|e| {
+                    if e.message.is_empty() {
+                        format!("error code {}", e.code)
+                    } else {
+                        e.message.clone()
+                    }
+                })
+                .unwrap_or_else(|| "空响应".into());
             return Err(AppError::Internal(format!(
-                "MCP HTTP '{}' 握手失败: {}", transport.name, msg
+                "MCP HTTP '{}' 握手失败: {}",
+                transport.name, msg
             )));
         }
 
         // MCP 规范：initialize 后必须发 notifications/initialized 通知，合规的远程 server
         // （如 GLM）才会放行后续 tools/list。Claude Code 官方客户端会发，故能连上。
-        transport.post_notification("notifications/initialized").await;
+        transport
+            .post_notification("notifications/initialized")
+            .await;
 
         tracing::info!(
             target: "ice_paw.mcp",
@@ -181,24 +190,25 @@ impl HttpMcpTransport {
             builder = builder.header("mcp-session-id", sid);
         }
 
-        let resp = builder
-            .json(&req)
-            .send()
-            .await
-            .map_err(|e| AppError::Internal(format!(
-                "MCP HTTP '{}' 请求失败 ({method}): {e}", self.name
-            )))?;
+        let resp = builder.json(&req).send().await.map_err(|e| {
+            AppError::Internal(format!("MCP HTTP '{}' 请求失败 ({method}): {e}", self.name))
+        })?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let txt = resp.text().await.unwrap_or_default();
             return Err(AppError::Internal(format!(
-                "MCP HTTP '{}' {} 返回 {}: {}", self.name, method, status, txt
+                "MCP HTTP '{}' {} 返回 {}: {}",
+                self.name, method, status, txt
             )));
         }
 
         // 缓存响应头里的会话 ID（initialize 首次带来，后续请求带上）
-        if let Some(sid) = resp.headers().get("mcp-session-id").and_then(|v| v.to_str().ok()) {
+        if let Some(sid) = resp
+            .headers()
+            .get("mcp-session-id")
+            .and_then(|v| v.to_str().ok())
+        {
             *self.session_id.lock().await = Some(sid.to_string());
         }
 
@@ -259,20 +269,23 @@ impl McpTransport for HttpMcpTransport {
             name: tool_name.to_string(),
             arguments: Some(args.clone()),
         };
-        let params_value = serde_json::to_value(&params)
-            .expect("McpCallToolParams 序列化不应失败");
+        let params_value = serde_json::to_value(&params).expect("McpCallToolParams 序列化不应失败");
         let resp = self
             .post_jsonrpc("tools/call", Some(params_value), HTTP_TIMEOUT_CALL_SECS)
             .await?;
 
         if let Some(err) = resp.error {
             return Err(AppError::Internal(format!(
-                "MCP HTTP '{}' 工具 '{}' 调用失败: {}", self.name, tool_name, err.message
+                "MCP HTTP '{}' 工具 '{}' 调用失败: {}",
+                self.name, tool_name, err.message
             )));
         }
-        let result_value = resp.result.ok_or_else(|| AppError::Internal(format!(
-            "MCP HTTP '{}' 工具 '{}' 返回空结果", self.name, tool_name
-        )))?;
+        let result_value = resp.result.ok_or_else(|| {
+            AppError::Internal(format!(
+                "MCP HTTP '{}' 工具 '{}' 返回空结果",
+                self.name, tool_name
+            ))
+        })?;
         let call_result: McpCallToolResult = serde_json::from_value(result_value)
             .map_err(|e| AppError::Internal(format!("解析 MCP 工具结果失败: {e}")))?;
         Ok(extract_text_from_call_result(&call_result))
@@ -299,7 +312,10 @@ fn build_header_map(headers_value: &Value) -> HeaderMap {
                 tracing::warn!(target: "ice_paw.mcp", "MCP header '{k}' 的值不是字符串，已忽略");
                 continue;
             };
-            match (HeaderName::from_bytes(k.as_bytes()), HeaderValue::from_str(s)) {
+            match (
+                HeaderName::from_bytes(k.as_bytes()),
+                HeaderValue::from_str(s),
+            ) {
                 (Ok(name), Ok(val)) => {
                     map.insert(name, val);
                 }
@@ -336,7 +352,10 @@ async fn parse_response(
 
     // 两种分支都要用 body，先整块读出（失败时也用来打 raw 排错）。
     let bytes = resp.bytes().await.map_err(|e| {
-        AppError::Internal(format!("MCP HTTP '{}' {} 读响应 body 失败: {e}", name, method))
+        AppError::Internal(format!(
+            "MCP HTTP '{}' {} 读响应 body 失败: {e}",
+            name, method
+        ))
     })?;
 
     let result: Result<JsonRpcResponse, String> = if is_sse {
@@ -354,7 +373,9 @@ async fn parse_response(
         );
         AppError::Internal(format!(
             "MCP HTTP '{}' {} 解析{}响应失败: {e}",
-            name, method, if is_sse { "SSE" } else { "JSON" }
+            name,
+            method,
+            if is_sse { "SSE" } else { "JSON" }
         ))
     })
 }
@@ -434,10 +455,25 @@ mod tests {
     fn extract_text_joins_content_items() {
         let result = McpCallToolResult {
             content: vec![
-                McpContentItem { kind: "text".into(), text: Some("hello".into()), data: None, mime_type: None },
+                McpContentItem {
+                    kind: "text".into(),
+                    text: Some("hello".into()),
+                    data: None,
+                    mime_type: None,
+                },
                 // image 项无 text，应被跳过
-                McpContentItem { kind: "image".into(), text: None, data: Some("base64...".into()), mime_type: Some("image/png".into()) },
-                McpContentItem { kind: "text".into(), text: Some("world".into()), data: None, mime_type: None },
+                McpContentItem {
+                    kind: "image".into(),
+                    text: None,
+                    data: Some("base64...".into()),
+                    mime_type: Some("image/png".into()),
+                },
+                McpContentItem {
+                    kind: "text".into(),
+                    text: Some("world".into()),
+                    data: None,
+                    mime_type: None,
+                },
             ],
             is_error: false,
         };
@@ -447,9 +483,12 @@ mod tests {
     #[test]
     fn extract_text_empty_when_no_text() {
         let result = McpCallToolResult {
-            content: vec![
-                McpContentItem { kind: "image".into(), text: None, data: Some("x".into()), mime_type: None },
-            ],
+            content: vec![McpContentItem {
+                kind: "image".into(),
+                text: None,
+                data: Some("x".into()),
+                mime_type: None,
+            }],
             is_error: false,
         };
         assert_eq!(extract_text_from_call_result(&result), "");

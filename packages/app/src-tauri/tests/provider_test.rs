@@ -36,7 +36,8 @@ fn openai_normal_sse_response() -> String {
 /// 注意：需要尾部换行让 SSE 解析器消费到该行。
 fn openai_truncated_sse_response() -> String {
     r#"data: {"choices":[{"delta":{"content":"partial"},"finish_reason":null}]}
-"#.to_string()
+"#
+    .to_string()
 }
 
 #[tokio::test]
@@ -52,7 +53,8 @@ async fn openai_normal_stream_collects_expected_content() {
         .mount(&server)
         .await;
 
-    let adapter = OpenAiAdapter::new("test-model".into(), server.uri()).expect("构建 OpenAI adapter");
+    let adapter = OpenAiAdapter::new("test-model".into(), server.uri(), "openai")
+        .expect("构建 OpenAI adapter");
     let cancel = CancellationToken::new();
 
     let stream = adapter
@@ -71,7 +73,7 @@ async fn openai_normal_stream_collects_expected_content() {
                 got_done = true;
                 break;
             }
-            Ok(_) => {},
+            Ok(_) => {}
             Err(e) => panic!("unexpected error: {e}"),
         }
     }
@@ -92,7 +94,8 @@ async fn openai_http_401_returns_llm_error() {
         .mount(&server)
         .await;
 
-    let adapter = OpenAiAdapter::new("test-model".into(), server.uri()).expect("构建 OpenAI adapter");
+    let adapter = OpenAiAdapter::new("test-model".into(), server.uri(), "openai")
+        .expect("构建 OpenAI adapter");
     let cancel = CancellationToken::new();
 
     let result = adapter
@@ -124,7 +127,8 @@ async fn openai_truncated_stream_yields_partial_content() {
         .mount(&server)
         .await;
 
-    let adapter = OpenAiAdapter::new("test-model".into(), server.uri()).expect("构建 OpenAI adapter");
+    let adapter = OpenAiAdapter::new("test-model".into(), server.uri(), "openai")
+        .expect("构建 OpenAI adapter");
     let cancel = CancellationToken::new();
 
     let stream = adapter
@@ -139,7 +143,7 @@ async fn openai_truncated_stream_yields_partial_content() {
         match item {
             Ok(ChatDelta::Delta { content }) => content_parts.push(content),
             Ok(ChatDelta::Done { .. }) => break,
-            Ok(_) => {},
+            Ok(_) => {}
             Err(_) => break,
         }
     }
@@ -183,7 +187,8 @@ async fn openai_tool_calls_produces_tool_call_events() {
         .mount(&server)
         .await;
 
-    let adapter = OpenAiAdapter::new("test-model".into(), server.uri()).expect("构建 OpenAI adapter");
+    let adapter = OpenAiAdapter::new("test-model".into(), server.uri(), "openai")
+        .expect("构建 OpenAI adapter");
     let cancel = CancellationToken::new();
 
     let stream = adapter
@@ -209,9 +214,9 @@ async fn openai_tool_calls_produces_tool_call_events() {
             }
             Ok(ChatDelta::ToolCallDelta { .. }) => delta_count += 1,
             Ok(ChatDelta::ToolCallEnd { .. }) => end_count += 1,
-            Ok(ChatDelta::Thinking { .. }) => {},
+            Ok(ChatDelta::Thinking { .. }) => {}
             Ok(ChatDelta::Done { .. }) => break,
-            Ok(ChatDelta::Usage { .. }) => {},
+            Ok(ChatDelta::Usage { .. }) => {}
             Err(e) => panic!("unexpected error: {e}"),
         }
     }
@@ -237,7 +242,8 @@ async fn openai_tool_calls_delta_not_in_text() {
         .mount(&server)
         .await;
 
-    let adapter = OpenAiAdapter::new("test-model".into(), server.uri()).expect("构建 OpenAI adapter");
+    let adapter = OpenAiAdapter::new("test-model".into(), server.uri(), "openai")
+        .expect("构建 OpenAI adapter");
     let cancel = CancellationToken::new();
 
     let stream = adapter
@@ -252,7 +258,7 @@ async fn openai_tool_calls_delta_not_in_text() {
         match item {
             Ok(ChatDelta::Delta { content }) => content_parts.push(content),
             Ok(ChatDelta::Done { .. }) => break,
-            Ok(_) => {},
+            Ok(_) => {}
             Err(_) => break,
         }
     }
@@ -292,7 +298,8 @@ data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}
 event: message_stop
 data: {"type":"message_stop"}
 
-"#.to_string()
+"#
+    .to_string()
 }
 
 /// 构造含 tool_use 混合流的 Anthropic SSE。
@@ -345,7 +352,8 @@ data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text
 event: error
 data: {"type":"error","error":{"type":"api_error","message":"模型过载，请稍后重试"}}
 
-"#.to_string()
+"#
+    .to_string()
 }
 
 #[tokio::test]
@@ -361,7 +369,8 @@ async fn anthropic_normal_text_stream_collects_expected() {
         .mount(&server)
         .await;
 
-    let adapter = AnthropicAdapter::new("test-model".into(), server.uri(), false).expect("构建 Anthropic adapter");
+    let adapter = AnthropicAdapter::new("test-model".into(), server.uri(), false)
+        .expect("构建 Anthropic adapter");
     let cancel = CancellationToken::new();
 
     let stream = adapter
@@ -381,7 +390,7 @@ async fn anthropic_normal_text_stream_collects_expected() {
                 assert_eq!(finish_reason, Some("end_turn".into()));
                 break;
             }
-            Ok(_) => {},
+            Ok(_) => {}
             Err(e) => panic!("unexpected error: {e}"),
         }
     }
@@ -406,7 +415,8 @@ async fn anthropic_mixed_tool_use_only_collects_text() {
         .mount(&server)
         .await;
 
-    let adapter = AnthropicAdapter::new("test-model".into(), server.uri(), false).expect("构建 Anthropic adapter");
+    let adapter = AnthropicAdapter::new("test-model".into(), server.uri(), false)
+        .expect("构建 Anthropic adapter");
     let cancel = CancellationToken::new();
 
     let stream = adapter
@@ -421,7 +431,7 @@ async fn anthropic_mixed_tool_use_only_collects_text() {
         match item {
             Ok(ChatDelta::Delta { content }) => content_parts.push(content),
             Ok(ChatDelta::Done { .. }) => break,
-            Ok(_) => {},
+            Ok(_) => {}
             Err(_) => break,
         }
     }
@@ -443,7 +453,8 @@ async fn anthropic_error_event_returns_llm_error() {
         .mount(&server)
         .await;
 
-    let adapter = AnthropicAdapter::new("test-model".into(), server.uri(), false).expect("构建 Anthropic adapter");
+    let adapter = AnthropicAdapter::new("test-model".into(), server.uri(), false)
+        .expect("构建 Anthropic adapter");
     let cancel = CancellationToken::new();
 
     let stream = adapter
@@ -459,7 +470,7 @@ async fn anthropic_error_event_returns_llm_error() {
         match item {
             Ok(ChatDelta::Delta { content }) => content_parts.push(content),
             Ok(ChatDelta::Done { .. }) => break,
-            Ok(_) => {},
+            Ok(_) => {}
             Err(e) => {
                 got_error = true;
                 match e {
@@ -478,7 +489,10 @@ async fn anthropic_error_event_returns_llm_error() {
 
     // 应收到 "开始" 文本后遇到 error
     assert_eq!(content_parts, vec!["开始".to_string()]);
-    assert!(got_error, "should receive Llm error from stream error event");
+    assert!(
+        got_error,
+        "should receive Llm error from stream error event"
+    );
 }
 
 // =========================================================================
@@ -498,7 +512,8 @@ async fn anthropic_tool_use_produces_tool_call_events() {
         .mount(&server)
         .await;
 
-    let adapter = AnthropicAdapter::new("test-model".into(), server.uri(), false).expect("构建 Anthropic adapter");
+    let adapter = AnthropicAdapter::new("test-model".into(), server.uri(), false)
+        .expect("构建 Anthropic adapter");
     let cancel = CancellationToken::new();
 
     let stream = adapter
@@ -524,9 +539,9 @@ async fn anthropic_tool_use_produces_tool_call_events() {
             }
             Ok(ChatDelta::ToolCallDelta { .. }) => delta_count += 1,
             Ok(ChatDelta::ToolCallEnd { .. }) => end_count += 1,
-            Ok(ChatDelta::Thinking { .. }) => {},
+            Ok(ChatDelta::Thinking { .. }) => {}
             Ok(ChatDelta::Done { .. }) => break,
-            Ok(ChatDelta::Usage { .. }) => {},
+            Ok(ChatDelta::Usage { .. }) => {}
             Err(_) => break,
         }
     }
@@ -552,7 +567,8 @@ async fn anthropic_tool_use_delta_not_in_text() {
         .mount(&server)
         .await;
 
-    let adapter = AnthropicAdapter::new("test-model".into(), server.uri(), false).expect("构建 Anthropic adapter");
+    let adapter = AnthropicAdapter::new("test-model".into(), server.uri(), false)
+        .expect("构建 Anthropic adapter");
     let cancel = CancellationToken::new();
 
     let stream = adapter
@@ -567,7 +583,7 @@ async fn anthropic_tool_use_delta_not_in_text() {
         match item {
             Ok(ChatDelta::Delta { content }) => content_parts.push(content),
             Ok(ChatDelta::Done { .. }) => break,
-            Ok(_) => {},
+            Ok(_) => {}
             Err(_) => break,
         }
     }
@@ -616,7 +632,8 @@ async fn anthropic_usage_event_from_stream() {
         .mount(&server)
         .await;
 
-    let adapter = AnthropicAdapter::new("test-model".into(), server.uri(), false).expect("构建 Anthropic adapter");
+    let adapter = AnthropicAdapter::new("test-model".into(), server.uri(), false)
+        .expect("构建 Anthropic adapter");
     let cancel = CancellationToken::new();
 
     let stream = adapter
@@ -642,7 +659,11 @@ async fn anthropic_usage_event_from_stream() {
 
     assert!(got_done, "应收到 Done 事件");
     // 应收到 2 个 Usage 事件：message_start + message_delta
-    assert_eq!(usage_events.len(), 2, "应收到 2 个 Usage 事件（message_start + message_delta）");
+    assert_eq!(
+        usage_events.len(),
+        2,
+        "应收到 2 个 Usage 事件（message_start + message_delta）"
+    );
 
     // 第 1 个 Usage 来自 message_start：prompt_tokens=100, cached_tokens=30
     assert_eq!(

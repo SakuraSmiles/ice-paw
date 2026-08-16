@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::process::Command;
-use tokio::sync::{Mutex, Notify, oneshot};
+use tokio::sync::{oneshot, Mutex, Notify};
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
@@ -23,9 +23,8 @@ use crate::infra::protocol::ToolDef;
 use super::client::McpClient;
 use super::transport::{extract_text_from_call_result, McpTransport};
 use super::types::{
-    AuthorizationLevel, JsonRpcRequest, JsonRpcResponse,
-    McpCallToolParams, McpCallToolResult, McpInitializeParams,
-    McpListToolsResult, McpToolDefinition, TrustLevel,
+    AuthorizationLevel, JsonRpcRequest, JsonRpcResponse, McpCallToolParams, McpCallToolResult,
+    McpInitializeParams, McpListToolsResult, McpToolDefinition, TrustLevel,
 };
 
 // =========================================================================
@@ -49,12 +48,27 @@ fn build_safe_env(user_env: &serde_json::Value) -> Vec<(String, String)> {
     // 进程执行所需、确认为非机密的系统变量（跨 Windows/Unix）。
     // 注意：不放任何 *_KEY / *_TOKEN / *_SECRET / CREDENTIAL / PASSWORD 模式。
     const SAFE_KEYS: &[&str] = &[
-        "PATH", "Path", "PATHEXT",             // 可执行文件查找（Windows PATH 大小写不固定）
-        "SYSTEMROOT", "ComSpec", "windir",      // Windows 系统根 / cmd 路径
-        "APPDATA", "LOCALAPPDATA", "PROGRAMFILES", "PROGRAMDATA",
-        "USERPROFILE", "USERNAME", "HOME", "USER", "SHELL",
-        "TEMP", "TMP", "TMPDIR",               // 临时目录
-        "LANG", "LC_ALL", "LC_CTYPE",          // 区域/编码（npx/node 需要正确 UTF-8）
+        "PATH",
+        "Path",
+        "PATHEXT", // 可执行文件查找（Windows PATH 大小写不固定）
+        "SYSTEMROOT",
+        "ComSpec",
+        "windir", // Windows 系统根 / cmd 路径
+        "APPDATA",
+        "LOCALAPPDATA",
+        "PROGRAMFILES",
+        "PROGRAMDATA",
+        "USERPROFILE",
+        "USERNAME",
+        "HOME",
+        "USER",
+        "SHELL",
+        "TEMP",
+        "TMP",
+        "TMPDIR", // 临时目录
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE", // 区域/编码（npx/node 需要正确 UTF-8）
     ];
     let mut out: Vec<(String, String)> = Vec::new();
     for key in SAFE_KEYS {
@@ -155,17 +169,21 @@ impl ExternalMcpServer {
         // Windows: 隐藏 cmd /C 弹出的控制台窗口（见 infra::process）
         crate::infra::process::suppress_console_window(&mut cmd_builder);
 
-        let mut child = cmd_builder.spawn()
-            .map_err(|e| AppError::Io(std::io::Error::other(
-                format!("启动 MCP Server '{}' 失败: {} (command={})", name, e, command),
-            )))?;
+        let mut child = cmd_builder.spawn().map_err(|e| {
+            AppError::Io(std::io::Error::other(format!(
+                "启动 MCP Server '{}' 失败: {} (command={})",
+                name, e, command
+            )))
+        })?;
 
-        let stdin = child.stdin.take().ok_or_else(|| AppError::Internal(
-            "无法获取 MCP Server 的 stdin".into()
-        ))?;
-        let stdout = child.stdout.take().ok_or_else(|| AppError::Internal(
-            "无法获取 MCP Server 的 stdout".into()
-        ))?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| AppError::Internal("无法获取 MCP Server 的 stdin".into()))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| AppError::Internal("无法获取 MCP Server 的 stdout".into()))?;
 
         let writer = Arc::new(Mutex::new(BufWriter::new(stdin)));
         let pending: Arc<Mutex<HashMap<String, oneshot::Sender<JsonRpcResponse>>>> =
@@ -212,8 +230,9 @@ impl ExternalMcpServer {
             jsonrpc: "2.0".into(),
             id: "init-1".to_string(),
             method: "initialize".into(),
-            params: Some(serde_json::to_value(init_params)
-                .expect("McpInitializeParams 序列化不应失败")),
+            params: Some(
+                serde_json::to_value(init_params).expect("McpInitializeParams 序列化不应失败"),
+            ),
         };
 
         // 注册 oneshot
@@ -274,11 +293,16 @@ impl ExternalMcpServer {
             params: None,
         };
 
-        let resp = self.send_request(&req, &req_id, REQUEST_TIMEOUT_QUICK).await?;
+        let resp = self
+            .send_request(&req, &req_id, REQUEST_TIMEOUT_QUICK)
+            .await?;
 
         let result = resp.result.ok_or_else(|| {
             let err_msg = resp.error.map(|e| e.message).unwrap_or_default();
-            AppError::Internal(format!("MCP Server '{}' tools/list 失败: {}", self.name, err_msg))
+            AppError::Internal(format!(
+                "MCP Server '{}' tools/list 失败: {}",
+                self.name, err_msg
+            ))
         })?;
 
         let list: McpListToolsResult = serde_json::from_value(result)
@@ -299,11 +323,12 @@ impl ExternalMcpServer {
             jsonrpc: "2.0".into(),
             id: req_id.clone(),
             method: "tools/call".into(),
-            params: Some(serde_json::to_value(params)
-                .expect("McpCallToolParams 序列化不应失败")),
+            params: Some(serde_json::to_value(params).expect("McpCallToolParams 序列化不应失败")),
         };
 
-        let resp = self.send_request(&req, &req_id, REQUEST_TIMEOUT_CALL).await?;
+        let resp = self
+            .send_request(&req, &req_id, REQUEST_TIMEOUT_CALL)
+            .await?;
 
         if let Some(err) = resp.error {
             return Err(AppError::Internal(format!(
@@ -312,9 +337,12 @@ impl ExternalMcpServer {
             )));
         }
 
-        let result_value = resp.result.ok_or_else(|| AppError::Internal(format!(
-            "MCP Server '{}' 工具 '{}' 返回空结果", self.name, tool_name
-        )))?;
+        let result_value = resp.result.ok_or_else(|| {
+            AppError::Internal(format!(
+                "MCP Server '{}' 工具 '{}' 返回空结果",
+                self.name, tool_name
+            ))
+        })?;
 
         let call_result: McpCallToolResult = serde_json::from_value(result_value)
             .map_err(|e| AppError::Internal(format!("解析 MCP 工具结果失败: {}", e)))?;
@@ -354,10 +382,12 @@ impl ExternalMcpServer {
 
         tokio::time::timeout(Duration::from_secs(timeout_secs), rx)
             .await
-            .map_err(|_| AppError::Internal(format!(
-                "MCP Server '{}' 请求超时（{}s）: {}",
-                self.name, timeout_secs, req.method
-            )))?
+            .map_err(|_| {
+                AppError::Internal(format!(
+                    "MCP Server '{}' 请求超时（{}s）: {}",
+                    self.name, timeout_secs, req.method
+                ))
+            })?
             .map_err(|_| AppError::Internal("MCP Server 通道关闭".into()))
     }
 
@@ -368,21 +398,24 @@ impl ExternalMcpServer {
         let json = serde_json::to_string(req)
             .map_err(|e| AppError::Internal(format!("JSON 序列化失败: {}", e)))?;
         let mut w = writer.lock().await;
-        w.write_all(json.as_bytes()).await
-            .map_err(|e| AppError::Io(std::io::Error::new(
+        w.write_all(json.as_bytes()).await.map_err(|e| {
+            AppError::Io(std::io::Error::new(
                 std::io::ErrorKind::BrokenPipe,
                 format!("写入 MCP Server stdin 失败: {}", e),
-            )))?;
-        w.write_all(b"\n").await
-            .map_err(|e| AppError::Io(std::io::Error::new(
+            ))
+        })?;
+        w.write_all(b"\n").await.map_err(|e| {
+            AppError::Io(std::io::Error::new(
                 std::io::ErrorKind::BrokenPipe,
                 format!("写入 MCP Server stdin 换行失败: {}", e),
-            )))?;
-        w.flush().await
-            .map_err(|e| AppError::Io(std::io::Error::new(
+            ))
+        })?;
+        w.flush().await.map_err(|e| {
+            AppError::Io(std::io::Error::new(
                 std::io::ErrorKind::BrokenPipe,
                 format!("刷新 MCP Server stdin 失败: {}", e),
-            )))?;
+            ))
+        })?;
         Ok(())
     }
 
@@ -489,15 +522,28 @@ impl ExternalToolProxy {
         server: Arc<dyn McpTransport>,
         trust_level: TrustLevel,
     ) -> Self {
-        Self { name, server_tool_name, description, parameters, server, trust_level }
+        Self {
+            name,
+            server_tool_name,
+            description,
+            parameters,
+            server,
+            trust_level,
+        }
     }
 }
 
 #[async_trait]
 impl McpClient for ExternalToolProxy {
-    fn name(&self) -> &str { &self.name }
-    fn description(&self) -> &str { &self.description }
-    fn parameters(&self) -> serde_json::Value { self.parameters.clone() }
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn description(&self) -> &str {
+        &self.description
+    }
+    fn parameters(&self) -> serde_json::Value {
+        self.parameters.clone()
+    }
 
     fn authorization_level(&self) -> AuthorizationLevel {
         match self.trust_level {
@@ -507,13 +553,14 @@ impl McpClient for ExternalToolProxy {
     }
 
     async fn execute(&self, args: &str) -> AppResult<String> {
-        let args_value: serde_json::Value = serde_json::from_str(args)
-            .map_err(|e| AppError::Validation(format!(
-                "工具 '{}' 参数解析失败: {}", self.name, e
-            )))?;
+        let args_value: serde_json::Value = serde_json::from_str(args).map_err(|e| {
+            AppError::Validation(format!("工具 '{}' 参数解析失败: {}", self.name, e))
+        })?;
         // 发给 server 的是原始工具名（不带 `t{idx}_` 前缀）；
         // self.name（带前缀）仅用于 registry 查找与 LLM 展示。
-        self.server.call_tool(&self.server_tool_name, &args_value).await
+        self.server
+            .call_tool(&self.server_tool_name, &args_value)
+            .await
     }
 }
 
@@ -573,11 +620,17 @@ mod tests {
         let _ = server;
         // Test the match logic directly
         assert_eq!(
-            match TrustLevel::Trusted { TrustLevel::Trusted => AuthorizationLevel::Always, _ => AuthorizationLevel::Confirm },
+            match TrustLevel::Trusted {
+                TrustLevel::Trusted => AuthorizationLevel::Always,
+                _ => AuthorizationLevel::Confirm,
+            },
             AuthorizationLevel::Always
         );
         assert_eq!(
-            match TrustLevel::Untrusted { TrustLevel::Trusted => AuthorizationLevel::Always, _ => AuthorizationLevel::Confirm },
+            match TrustLevel::Untrusted {
+                TrustLevel::Trusted => AuthorizationLevel::Always,
+                _ => AuthorizationLevel::Confirm,
+            },
             AuthorizationLevel::Confirm
         );
     }

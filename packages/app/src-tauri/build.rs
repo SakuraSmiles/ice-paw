@@ -40,9 +40,7 @@ fn embed_manifest() {
     };
     let manifest_path = out_dir.join("ice-paw-common-controls-v6.manifest");
     if let Err(e) = std::fs::write(&manifest_path, COMMON_CONTROLS_V6_MANIFEST) {
-        println!(
-            "cargo:warning=写入 manifest 失败，Windows 下 binary 可能 0xC0000139: {e}"
-        );
+        println!("cargo:warning=写入 manifest 失败，Windows 下 binary 可能 0xC0000139: {e}");
         return;
     }
     // 全局 rustc-link-arg：唯一能覆盖 lib `#[test]` harness 的 link-arg 形式。

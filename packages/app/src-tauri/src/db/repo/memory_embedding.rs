@@ -50,12 +50,10 @@ pub fn encode_embedding(embedding: &[f32]) -> Vec<u8> {
 /// - 空 BLOB → 返回空 `Vec<f32>`
 pub fn decode_embedding(bytes: &[u8]) -> AppResult<Vec<f32>> {
     if !bytes.len().is_multiple_of(4) {
-        return Err(AppError::Validation(
-            format!(
-                "embedding BLOB 长度 {} 不是 4 的倍数（损坏数据）",
-                bytes.len()
-            ),
-        ));
+        return Err(AppError::Validation(format!(
+            "embedding BLOB 长度 {} 不是 4 的倍数（损坏数据）",
+            bytes.len()
+        )));
     }
     let mut out = Vec::with_capacity(bytes.len() / 4);
     for chunk in bytes.chunks_exact(4) {
@@ -124,10 +122,7 @@ pub async fn insert_embedding(
 /// 删除某 agent 的全部 embedding 记录（清空记忆）
 ///
 /// @returns 实际删除的行数（用于日志 / 调试）
-pub async fn delete_embeddings_for_agent(
-    pool: &SqlitePool,
-    agent_id: &str,
-) -> AppResult<u64> {
+pub async fn delete_embeddings_for_agent(pool: &SqlitePool, agent_id: &str) -> AppResult<u64> {
     let affected = sqlx::query("DELETE FROM memory_embeddings WHERE agent_id = ?")
         .bind(agent_id)
         .execute(pool)
@@ -138,16 +133,12 @@ pub async fn delete_embeddings_for_agent(
 
 /// 统计某 agent 的 embedding 记录数
 #[cfg(test)]
-pub async fn count_embeddings_for_agent(
-    pool: &SqlitePool,
-    agent_id: &str,
-) -> AppResult<i64> {
-    let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM memory_embeddings WHERE agent_id = ?",
-    )
-    .bind(agent_id)
-    .fetch_one(pool)
-    .await?;
+pub async fn count_embeddings_for_agent(pool: &SqlitePool, agent_id: &str) -> AppResult<i64> {
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM memory_embeddings WHERE agent_id = ?")
+            .bind(agent_id)
+            .fetch_one(pool)
+            .await?;
     Ok(count)
 }
 
@@ -263,10 +254,7 @@ mod tests {
         let a = vec![1.0, 0.0, 0.0];
         let b = vec![0.0, 1.0, 0.0];
         let sim = cosine_similarity(&a, &b);
-        assert!(
-            sim.abs() < 1e-6,
-            "正交向量 cosine 应为 0.0，实际 {sim}"
-        );
+        assert!(sim.abs() < 1e-6, "正交向量 cosine 应为 0.0，实际 {sim}");
     }
 
     #[test]
@@ -297,10 +285,7 @@ mod tests {
         let a = vec![1.0, 2.0, 3.0];
         let b = vec![1.0, 2.0];
         let sim = cosine_similarity(&a, &b);
-        assert_eq!(
-            sim, 0.0,
-            "维度不匹配应返回 0.0 而不是错误，实际 {sim}"
-        );
+        assert_eq!(sim, 0.0, "维度不匹配应返回 0.0 而不是错误，实际 {sim}");
     }
 
     #[test]
@@ -326,10 +311,7 @@ mod tests {
         let a = vec![1.0, -2.0, 3.0];
         let b = vec![-1.0, 2.0, -3.0];
         let sim = cosine_similarity(&a, &b);
-        assert!(
-            (sim + 1.0).abs() < 1e-6,
-            "a = -b 应为 -1.0，实际 {sim}"
-        );
+        assert!((sim + 1.0).abs() < 1e-6, "a = -b 应为 -1.0，实际 {sim}");
     }
 
     #[test]
@@ -378,7 +360,10 @@ mod tests {
     #[tokio::test]
     async fn insert_and_load_embeddings() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
 
         let emb1 = vec![1.0, 0.0, 0.0];
         let emb2 = vec![0.0, 1.0, 0.0];
@@ -402,7 +387,10 @@ mod tests {
     #[tokio::test]
     async fn load_filters_by_agent_id() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
 
         let emb = vec![1.0, 0.0];
         insert_embedding(&pool, "m1", "agent-a", "doc-a", &emb)
@@ -426,12 +414,21 @@ mod tests {
     #[tokio::test]
     async fn delete_embeddings_for_agent_clears_all() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
 
         let emb = vec![1.0, 0.0];
-        insert_embedding(&pool, "m1", "agent-a", "d1", &emb).await.unwrap();
-        insert_embedding(&pool, "m2", "agent-a", "d2", &emb).await.unwrap();
-        insert_embedding(&pool, "m3", "agent-b", "d3", &emb).await.unwrap();
+        insert_embedding(&pool, "m1", "agent-a", "d1", &emb)
+            .await
+            .unwrap();
+        insert_embedding(&pool, "m2", "agent-a", "d2", &emb)
+            .await
+            .unwrap();
+        insert_embedding(&pool, "m3", "agent-b", "d3", &emb)
+            .await
+            .unwrap();
 
         let affected = delete_embeddings_for_agent(&pool, "agent-a").await.unwrap();
         assert_eq!(affected, 2);
@@ -446,7 +443,10 @@ mod tests {
     #[tokio::test]
     async fn count_embeddings_for_agent_returns_correct_count() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
 
         assert_eq!(
             count_embeddings_for_agent(&pool, "agent-x").await.unwrap(),
@@ -454,8 +454,12 @@ mod tests {
         );
 
         let emb = vec![1.0, 0.0];
-        insert_embedding(&pool, "m1", "agent-x", "d1", &emb).await.unwrap();
-        insert_embedding(&pool, "m2", "agent-x", "d2", &emb).await.unwrap();
+        insert_embedding(&pool, "m1", "agent-x", "d1", &emb)
+            .await
+            .unwrap();
+        insert_embedding(&pool, "m2", "agent-x", "d2", &emb)
+            .await
+            .unwrap();
 
         assert_eq!(
             count_embeddings_for_agent(&pool, "agent-x").await.unwrap(),
@@ -468,7 +472,10 @@ mod tests {
     #[tokio::test]
     async fn cosine_top5_threshold_filter() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
 
         // query: [1.0, 0.0, 0.0]
         // docs:
@@ -487,15 +494,9 @@ mod tests {
             ("d6", vec![1.0, 0.0, 0.0]),
         ];
         for (i, (id, v)) in docs.iter().enumerate() {
-            insert_embedding(
-                &pool,
-                id,
-                "agent-q",
-                &format!("doc-{i}"),
-                v,
-            )
-            .await
-            .unwrap();
+            insert_embedding(&pool, id, "agent-q", &format!("doc-{i}"), v)
+                .await
+                .unwrap();
         }
 
         let query = vec![1.0, 0.0, 0.0];

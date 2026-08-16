@@ -48,8 +48,7 @@ fn is_cjk_ideograph(ch: char) -> bool {
 /// 判断字符是否为 token 分隔符：空白、CJK 标点（。、等）、全角符号（，！全角拉丁）。
 /// 这些字符切断 token 边界（先 flush 两个 buf 再丢弃），不进入任何 buf。
 fn is_separator(ch: char) -> bool {
-    ch.is_whitespace()
-        || matches!(ch, '\u{3000}'..='\u{303F}' | '\u{FF00}'..='\u{FFEF}')
+    ch.is_whitespace() || matches!(ch, '\u{3000}'..='\u{303F}' | '\u{FF00}'..='\u{FFEF}')
 }
 
 /// 把文本切成小写 token 供打分匹配：
@@ -118,11 +117,7 @@ fn tokenize(text: &str) -> Vec<String> {
 /// - query 与 tool.name 精确（不区分大小写）匹配 +3
 /// - query 的每个 token 在 description 中子串匹配 +2、整词匹配 +4（整词仅对空白分词的英文有效）
 /// - 调用历史权重：最近出现过的工具每次 +5，上限 20 分
-pub fn score_tools(
-    query: &str,
-    defs: &[ToolDef],
-    call_history: &[String],
-) -> ScoreMap {
+pub fn score_tools(query: &str, defs: &[ToolDef], call_history: &[String]) -> ScoreMap {
     let mut scores: ScoreMap = HashMap::new();
 
     let query_lower = query.to_lowercase();
@@ -163,7 +158,9 @@ pub fn score_tools(
             continue;
         }
         let b = history_bonus.entry(tool_name.clone()).or_insert(0);
-        *b = b.saturating_add(SCORE_HISTORY_PER_OCCURRENCE).min(SCORE_HISTORY_CAP);
+        *b = b
+            .saturating_add(SCORE_HISTORY_PER_OCCURRENCE)
+            .min(SCORE_HISTORY_CAP);
     }
     for (name, bonus) in history_bonus {
         if let Some(score) = scores.get_mut(&name) {
@@ -300,10 +297,7 @@ mod tests {
         let scores = score_tools("联网搜索", &defs, &[]);
         let web = scores.get("t3_webSearchPrime").copied().unwrap_or(0);
         let file = scores.get("read_file").copied().unwrap_or(0);
-        assert!(
-            web > 0,
-            "中文 query 应命中带中文前缀的远程工具，实际 {web}"
-        );
+        assert!(web > 0, "中文 query 应命中带中文前缀的远程工具，实际 {web}");
         assert_eq!(file, 0, "英文描述工具不应被中文 query 命中");
         assert!(web > file);
     }

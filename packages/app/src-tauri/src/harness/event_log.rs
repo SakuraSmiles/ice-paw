@@ -343,7 +343,17 @@ async fn append_event(
             return;
         }
     };
-    match session_event::append(pool, &ctx.conv_id, kind, actor, Some(&ctx.turn_id), message_id, &json).await {
+    match session_event::append(
+        pool,
+        &ctx.conv_id,
+        kind,
+        actor,
+        Some(&ctx.turn_id),
+        message_id,
+        &json,
+    )
+    .await
+    {
         Ok(_) => {
             // 落库成功 → 广播通知（同步非阻塞；订阅方 lib.rs 转 Tauri event 推前端）。
             // 不违反「inline await 禁 spawn」：send 是同步操作，无任务逃逸。
@@ -360,7 +370,15 @@ async fn append_event(
 
 /// turn 快照（actor=agent：上下文由 agent 侧组装）。
 pub async fn log_turn_context(pool: &SqlitePool, ctx: &EventCtx, payload: &TurnContextPayload) {
-    append_event(pool, ctx, kind::TURN_CONTEXT, &ctx.agent_actor(), None, payload).await;
+    append_event(
+        pool,
+        ctx,
+        kind::TURN_CONTEXT,
+        &ctx.agent_actor(),
+        None,
+        payload,
+    )
+    .await;
 }
 
 /// 用户消息落库原文（actor=user）。
@@ -370,7 +388,15 @@ pub async fn log_user_message(
     message_id: &str,
     payload: &UserMessagePayload,
 ) {
-    append_event(pool, ctx, kind::USER_MESSAGE, actor_user(), Some(message_id), payload).await;
+    append_event(
+        pool,
+        ctx,
+        kind::USER_MESSAGE,
+        actor_user(),
+        Some(message_id),
+        payload,
+    )
+    .await;
 }
 
 /// assistant 权威快照（actor=agent；supersede：同 message_id 多条 last-wins）。
@@ -380,7 +406,15 @@ pub async fn log_assistant_message(
     message_id: &str,
     payload: &AssistantMessagePayload,
 ) {
-    append_event(pool, ctx, kind::ASSISTANT_MESSAGE, &ctx.agent_actor(), Some(message_id), payload).await;
+    append_event(
+        pool,
+        ctx,
+        kind::ASSISTANT_MESSAGE,
+        &ctx.agent_actor(),
+        Some(message_id),
+        payload,
+    )
+    .await;
 }
 
 /// 工具执行审计（arguments/result 与 tool_calls 表同一截断策略）。
@@ -405,12 +439,19 @@ pub async fn log_tool_execution(
         tool_use_id: tool_use_id.map(str::to_string),
         tool_name: tool_name.to_string(),
         arguments: repo::tool_call::truncate(arguments, repo::tool_call::MAX_ARGUMENTS_LEN),
-        result: result
-            .map(|r| repo::tool_call::truncate(r, repo::tool_call::MAX_RESULT_LEN)),
+        result: result.map(|r| repo::tool_call::truncate(r, repo::tool_call::MAX_RESULT_LEN)),
         is_error,
         duration_ms,
     };
-    append_event(pool, ctx, kind::TOOL_EXECUTION, &ctx.agent_actor(), Some(message_id), &payload).await;
+    append_event(
+        pool,
+        ctx,
+        kind::TOOL_EXECUTION,
+        &ctx.agent_actor(),
+        Some(message_id),
+        &payload,
+    )
+    .await;
 }
 
 /// 工具结果消息镜像。
@@ -424,7 +465,15 @@ pub async fn log_tool_result_message(
         v: 1,
         blocks: blocks.to_vec(),
     };
-    append_event(pool, ctx, kind::TOOL_RESULT_MESSAGE, &ctx.agent_actor(), Some(message_id), &payload).await;
+    append_event(
+        pool,
+        ctx,
+        kind::TOOL_RESULT_MESSAGE,
+        &ctx.agent_actor(),
+        Some(message_id),
+        &payload,
+    )
+    .await;
 }
 
 /// 附件留存（仅元信息）。
@@ -434,17 +483,41 @@ pub async fn log_attachment_stored(
     message_id: &str,
     payload: &AttachmentStoredPayload,
 ) {
-    append_event(pool, ctx, kind::ATTACHMENT_STORED, actor_user(), Some(message_id), payload).await;
+    append_event(
+        pool,
+        ctx,
+        kind::ATTACHMENT_STORED,
+        actor_user(),
+        Some(message_id),
+        payload,
+    )
+    .await;
 }
 
 /// 摘要创建（折叠由 turn 的上下文装配触发，事件序先于同 turn 的 user_message）。
 pub async fn log_summary_created(pool: &SqlitePool, ctx: &EventCtx, payload: &SummaryPayload) {
-    append_event(pool, ctx, kind::SUMMARY_CREATED, &ctx.agent_actor(), None, payload).await;
+    append_event(
+        pool,
+        ctx,
+        kind::SUMMARY_CREATED,
+        &ctx.agent_actor(),
+        None,
+        payload,
+    )
+    .await;
 }
 
 /// 摘要更新。
 pub async fn log_summary_updated(pool: &SqlitePool, ctx: &EventCtx, payload: &SummaryPayload) {
-    append_event(pool, ctx, kind::SUMMARY_UPDATED, &ctx.agent_actor(), None, payload).await;
+    append_event(
+        pool,
+        ctx,
+        kind::SUMMARY_UPDATED,
+        &ctx.agent_actor(),
+        None,
+        payload,
+    )
+    .await;
 }
 
 /// 消息错误（对应 messages.error 回写）。
@@ -460,7 +533,15 @@ pub async fn log_message_error(
         kind: error_kind.to_string(),
         error: error.to_string(),
     };
-    append_event(pool, ctx, kind::MESSAGE_ERROR, &ctx.agent_actor(), Some(message_id), &payload).await;
+    append_event(
+        pool,
+        ctx,
+        kind::MESSAGE_ERROR,
+        &ctx.agent_actor(),
+        Some(message_id),
+        &payload,
+    )
+    .await;
 }
 
 /// 消息废弃（终止守卫删占位行）。
@@ -474,7 +555,15 @@ pub async fn log_message_discarded(
         v: 1,
         reason: reason.to_string(),
     };
-    append_event(pool, ctx, kind::MESSAGE_DISCARDED, &ctx.agent_actor(), Some(message_id), &payload).await;
+    append_event(
+        pool,
+        ctx,
+        kind::MESSAGE_DISCARDED,
+        &ctx.agent_actor(),
+        Some(message_id),
+        &payload,
+    )
+    .await;
 }
 
 /// turn 终态。**必须在 cleanup() unregister 之前 inline await**。
@@ -484,7 +573,15 @@ pub async fn log_turn_ended(
     final_message_id: Option<&str>,
     payload: &TurnEndedPayload,
 ) {
-    append_event(pool, ctx, kind::TURN_ENDED, &ctx.agent_actor(), final_message_id, payload).await;
+    append_event(
+        pool,
+        ctx,
+        kind::TURN_ENDED,
+        &ctx.agent_actor(),
+        final_message_id,
+        payload,
+    )
+    .await;
 }
 
 /// 崩溃自愈扫尾（boot-time，幂等）：为全部未闭合 turn 补记 truthful 终态。
@@ -528,18 +625,42 @@ pub async fn sweep_interrupted_turns(pool: &SqlitePool) -> usize {
 
 /// 视觉模态适配（投影期模型可见内容变更）。
 pub async fn log_modal_adapted(pool: &SqlitePool, ctx: &EventCtx, payload: &ModalAdaptedPayload) {
-    append_event(pool, ctx, kind::MODAL_ADAPTED, &ctx.agent_actor(), None, payload).await;
+    append_event(
+        pool,
+        ctx,
+        kind::MODAL_ADAPTED,
+        &ctx.agent_actor(),
+        None,
+        payload,
+    )
+    .await;
 }
 
 /// 钩子注入。
 pub async fn log_hook_injected(pool: &SqlitePool, ctx: &EventCtx, payload: &HookInjectedPayload) {
-    append_event(pool, ctx, kind::HOOK_INJECTED, &ctx.agent_actor(), None, payload).await;
+    append_event(
+        pool,
+        ctx,
+        kind::HOOK_INJECTED,
+        &ctx.agent_actor(),
+        None,
+        payload,
+    )
+    .await;
 }
 
 /// 计划快照（`update_plan` 工具调用点 emit；message_id=None——工具调用的
 /// assistant 关联由同 turn 的 tool_execution 事件承载，这里只需 turn 归组）。
 pub async fn log_plan_updated(pool: &SqlitePool, ctx: &EventCtx, payload: &PlanUpdatedPayload) {
-    append_event(pool, ctx, kind::PLAN_UPDATED, &ctx.agent_actor(), None, payload).await;
+    append_event(
+        pool,
+        ctx,
+        kind::PLAN_UPDATED,
+        &ctx.agent_actor(),
+        None,
+        payload,
+    )
+    .await;
 }
 
 // =========================================================================
@@ -573,10 +694,12 @@ mod tests {
         .execute(pool)
         .await
         .expect("seed agent");
-        sqlx::query("INSERT INTO conversations (id, agent_id, title) VALUES ('conv-1', 'agent-1', 't')")
-            .execute(pool)
-            .await
-            .expect("seed conversation");
+        sqlx::query(
+            "INSERT INTO conversations (id, agent_id, title) VALUES ('conv-1', 'agent-1', 't')",
+        )
+        .execute(pool)
+        .await
+        .expect("seed conversation");
     }
 
     fn ctx() -> EventCtx {
@@ -585,7 +708,9 @@ mod tests {
 
     /// 读回该会话唯一一条事件的 payload 并反序列化。
     async fn sole_event_payload<T: serde::de::DeserializeOwned>(pool: &SqlitePool) -> T {
-        let rows = session_event::list_by_session(pool, "conv-1", None).await.unwrap();
+        let rows = session_event::list_by_session(pool, "conv-1", None)
+            .await
+            .unwrap();
         assert_eq!(rows.len(), 1, "应恰好写入 1 条事件");
         serde_json::from_str(&rows[0].payload).expect("payload 反序列化")
     }
@@ -593,14 +718,19 @@ mod tests {
     #[tokio::test]
     async fn user_message_round_trip() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed(&pool).await;
 
         let payload = UserMessagePayload {
             v: 1,
             content: "看这张图".into(),
             blocks: vec![
-                ContentBlock::Text { text: "看这张图".into() },
+                ContentBlock::Text {
+                    text: "看这张图".into(),
+                },
                 ContentBlock::Attachment {
                     name: "plan.pdf".into(),
                     kind: "application/pdf".into(),
@@ -610,8 +740,10 @@ mod tests {
         };
         log_user_message(&pool, &ctx(), "msg-u1", &payload).await;
 
-        let row: SessionEventRow =
-            session_event::list_by_session(&pool, "conv-1", None).await.unwrap().remove(0);
+        let row: SessionEventRow = session_event::list_by_session(&pool, "conv-1", None)
+            .await
+            .unwrap()
+            .remove(0);
         assert_eq!(row.kind, "user_message");
         assert_eq!(row.actor, "user");
         assert_eq!(row.turn_id.as_deref(), Some("turn-1"));
@@ -626,14 +758,19 @@ mod tests {
     #[tokio::test]
     async fn assistant_message_round_trip_and_supersede() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed(&pool).await;
 
         let mk = |content: &str, round: u32, continuation: bool| AssistantMessagePayload {
             v: 1,
             model: Some("glm-5.2".into()),
             content: content.into(),
-            blocks: vec![ContentBlock::Text { text: content.into() }],
+            blocks: vec![ContentBlock::Text {
+                text: content.into(),
+            }],
             token_count: Some(42),
             duration_ms: Some(3_500),
             round,
@@ -643,24 +780,33 @@ mod tests {
         log_assistant_message(&pool, &ctx(), "msg-a1", &mk("前半段", 0, false)).await;
         log_assistant_message(&pool, &ctx(), "msg-a1", &mk("前半段后半段", 1, true)).await;
 
-        let rows = session_event::list_by_session(&pool, "conv-1", None).await.unwrap();
+        let rows = session_event::list_by_session(&pool, "conv-1", None)
+            .await
+            .unwrap();
         assert_eq!(rows.len(), 2);
-        assert!(rows.iter().all(|r| r.kind == "assistant_message" && r.actor == "agent:agent-1"));
+        assert!(rows
+            .iter()
+            .all(|r| r.kind == "assistant_message" && r.actor == "agent:agent-1"));
         let last: AssistantMessagePayload = serde_json::from_str(&rows[1].payload).unwrap();
         assert_eq!(last.content, "前半段后半段");
         assert!(last.continuation);
         assert_eq!(last.round, 1);
         assert_eq!(last.duration_ms, Some(3_500));
         // 旧事件（无 duration_ms 字段）反序列化 → None，前端隐式耗时兜底的输入
-        let legacy: AssistantMessagePayload =
-            serde_json::from_str(r#"{"v":1,"content":"旧","blocks":[],"round":0,"continuation":false}"#).unwrap();
+        let legacy: AssistantMessagePayload = serde_json::from_str(
+            r#"{"v":1,"content":"旧","blocks":[],"round":0,"continuation":false}"#,
+        )
+        .unwrap();
         assert_eq!(legacy.duration_ms, None);
     }
 
     #[tokio::test]
     async fn tool_execution_truncates_like_audit_row() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed(&pool).await;
 
         let long = "x".repeat(9_000);
@@ -679,7 +825,10 @@ mod tests {
         .await;
 
         let back: ToolExecutionPayload = sole_event_payload(&pool).await;
-        assert_eq!(back.arguments.chars().count(), 4_000 + "…[已截断]".chars().count());
+        assert_eq!(
+            back.arguments.chars().count(),
+            4_000 + "…[已截断]".chars().count()
+        );
         assert!(back.result.as_deref().unwrap().ends_with("…[已截断]"));
         assert!(back.is_error);
         assert_eq!(back.duration_ms, 1_234);
@@ -689,37 +838,74 @@ mod tests {
     #[tokio::test]
     async fn sweep_interrupted_turns_closes_open_and_idempotent() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
-        seed(&pool).await;
-        sqlx::query("INSERT INTO conversations (id, agent_id, title) VALUES ('conv-2', 'agent-1', 't')")
-            .execute(&pool)
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
             .await
-            .expect("seed conversation 2");
+            .unwrap();
+        seed(&pool).await;
+        sqlx::query(
+            "INSERT INTO conversations (id, agent_id, title) VALUES ('conv-2', 'agent-1', 't')",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed conversation 2");
 
         // conv-1：崩溃残留——turn_context + assistant_message 已落，无 turn_ended
         // （payload 对扫尾不敏感，只看 kind/turn_id）
-        session_event::append(&pool, "conv-1", kind::TURN_CONTEXT, "agent:agent-1", Some("turn-open"), None, "{}")
-            .await
-            .unwrap();
-        session_event::append(&pool, "conv-1", kind::ASSISTANT_MESSAGE, "agent:agent-1", Some("turn-open"), Some("msg-a1"), "{}")
-            .await
-            .unwrap();
+        session_event::append(
+            &pool,
+            "conv-1",
+            kind::TURN_CONTEXT,
+            "agent:agent-1",
+            Some("turn-open"),
+            None,
+            "{}",
+        )
+        .await
+        .unwrap();
+        session_event::append(
+            &pool,
+            "conv-1",
+            kind::ASSISTANT_MESSAGE,
+            "agent:agent-1",
+            Some("turn-open"),
+            Some("msg-a1"),
+            "{}",
+        )
+        .await
+        .unwrap();
         // conv-2：正常闭合 turn（扫尾不得触碰）
         let closed_ctx = EventCtx::new("conv-2", "turn-closed", "agent-1");
-        session_event::append(&pool, "conv-2", kind::TURN_CONTEXT, "agent:agent-1", Some("turn-closed"), None, "{}")
-            .await
-            .unwrap();
+        session_event::append(
+            &pool,
+            "conv-2",
+            kind::TURN_CONTEXT,
+            "agent:agent-1",
+            Some("turn-closed"),
+            None,
+            "{}",
+        )
+        .await
+        .unwrap();
         log_turn_ended(
             &pool,
             &closed_ctx,
             Some("msg-a2"),
-            &TurnEndedPayload { v: 1, termination: "stop".into(), rounds: 1, usage: None, user_token_count: None },
+            &TurnEndedPayload {
+                v: 1,
+                termination: "stop".into(),
+                rounds: 1,
+                usage: None,
+                user_token_count: None,
+            },
         )
         .await;
 
         // 扫尾：只补 conv-1 的未闭合 turn
         assert_eq!(sweep_interrupted_turns(&pool).await, 1);
-        let rows = session_event::list_by_session(&pool, "conv-1", None).await.unwrap();
+        let rows = session_event::list_by_session(&pool, "conv-1", None)
+            .await
+            .unwrap();
         assert_eq!(rows.len(), 3, "补记后 conv-1 应有 3 条事件");
         let last = &rows[2];
         assert_eq!(last.kind, kind::TURN_ENDED);
@@ -732,17 +918,32 @@ mod tests {
         assert!(p.usage.is_none());
 
         // conv-2 不受干扰（仍 2 条，无新增）
-        assert_eq!(session_event::list_by_session(&pool, "conv-2", None).await.unwrap().len(), 2);
+        assert_eq!(
+            session_event::list_by_session(&pool, "conv-2", None)
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
 
         // 幂等：再扫零补记、零写入
         assert_eq!(sweep_interrupted_turns(&pool).await, 0);
-        assert_eq!(session_event::list_by_session(&pool, "conv-1", None).await.unwrap().len(), 3);
+        assert_eq!(
+            session_event::list_by_session(&pool, "conv-1", None)
+                .await
+                .unwrap()
+                .len(),
+            3
+        );
     }
 
     #[tokio::test]
     async fn turn_context_and_turn_ended_round_trip() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed(&pool).await;
 
         log_turn_context(
@@ -770,10 +971,12 @@ mod tests {
         assert_eq!(back.v, 1);
 
         // 换 turn 重新 seed 事件表不可行（append-only），直接在新会话验证 turn_ended
-        sqlx::query("INSERT INTO conversations (id, agent_id, title) VALUES ('conv-2', 'agent-1', 't')")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO conversations (id, agent_id, title) VALUES ('conv-2', 'agent-1', 't')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         let ctx2 = EventCtx::new("conv-2", "turn-2", "agent-1");
         log_turn_ended(
             &pool,
@@ -793,7 +996,9 @@ mod tests {
         )
         .await;
 
-        let rows = session_event::list_by_session(&pool, "conv-2", None).await.unwrap();
+        let rows = session_event::list_by_session(&pool, "conv-2", None)
+            .await
+            .unwrap();
         let back: TurnEndedPayload = serde_json::from_str(&rows[0].payload).unwrap();
         assert_eq!(back.termination, "budget_exceeded");
         assert_eq!(back.usage.unwrap().completion_tokens, 2_000);
@@ -803,7 +1008,10 @@ mod tests {
     #[tokio::test]
     async fn plan_updated_round_trip() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed(&pool).await;
 
         // 全量覆写语义：两次调用两条事件，回放 last-wins（最后一条 = 当前计划）
@@ -813,8 +1021,16 @@ mod tests {
             &PlanUpdatedPayload {
                 v: 1,
                 items: vec![
-                    PlanItem { text: "调研渲染方案".into(), status: "done".into(), task_conversation_id: None },
-                    PlanItem { text: "设计评审".into(), status: "in_progress".into(), task_conversation_id: Some("conv-child-1".into()) },
+                    PlanItem {
+                        text: "调研渲染方案".into(),
+                        status: "done".into(),
+                        task_conversation_id: None,
+                    },
+                    PlanItem {
+                        text: "设计评审".into(),
+                        status: "in_progress".into(),
+                        task_conversation_id: Some("conv-child-1".into()),
+                    },
                 ],
             },
         )
@@ -825,14 +1041,24 @@ mod tests {
             &PlanUpdatedPayload {
                 v: 1,
                 items: vec![
-                    PlanItem { text: "设计评审".into(), status: "done".into(), task_conversation_id: Some("conv-child-1".into()) },
-                    PlanItem { text: "终稿交付".into(), status: "pending".into(), task_conversation_id: None },
+                    PlanItem {
+                        text: "设计评审".into(),
+                        status: "done".into(),
+                        task_conversation_id: Some("conv-child-1".into()),
+                    },
+                    PlanItem {
+                        text: "终稿交付".into(),
+                        status: "pending".into(),
+                        task_conversation_id: None,
+                    },
                 ],
             },
         )
         .await;
 
-        let rows = session_event::list_by_session(&pool, "conv-1", None).await.unwrap();
+        let rows = session_event::list_by_session(&pool, "conv-1", None)
+            .await
+            .unwrap();
         assert_eq!(rows.len(), 2);
         assert!(rows.iter().all(|r| {
             r.kind == "plan_updated" && r.actor == "agent:agent-1" && r.message_id.is_none()
@@ -840,14 +1066,20 @@ mod tests {
         let last: PlanUpdatedPayload = serde_json::from_str(&rows[1].payload).unwrap();
         assert_eq!(last.items.len(), 2);
         assert_eq!(last.items[0].status, "done");
-        assert_eq!(last.items[0].task_conversation_id.as_deref(), Some("conv-child-1"));
+        assert_eq!(
+            last.items[0].task_conversation_id.as_deref(),
+            Some("conv-child-1")
+        );
         assert_eq!(last.items[1].task_conversation_id, None);
     }
 
     #[tokio::test]
     async fn attachment_modal_hook_summary_round_trip() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed(&pool).await;
 
         log_attachment_stored(
@@ -876,7 +1108,10 @@ mod tests {
         }
 
         // modal_adapted（含 OCR 全文）
-        sqlx::query("DELETE FROM session_events").execute(&pool).await.unwrap();
+        sqlx::query("DELETE FROM session_events")
+            .execute(&pool)
+            .await
+            .unwrap();
         log_modal_adapted(
             &pool,
             &ctx(),
@@ -893,10 +1128,16 @@ mod tests {
         )
         .await;
         let back: ModalAdaptedPayload = sole_event_payload(&pool).await;
-        assert_eq!(back.items[0].ocr_text.as_deref(), Some("一张户型图：三室两厅"));
+        assert_eq!(
+            back.items[0].ocr_text.as_deref(),
+            Some("一张户型图：三室两厅")
+        );
 
         // hook_injected
-        sqlx::query("DELETE FROM session_events").execute(&pool).await.unwrap();
+        sqlx::query("DELETE FROM session_events")
+            .execute(&pool)
+            .await
+            .unwrap();
         log_hook_injected(
             &pool,
             &ctx(),
@@ -911,7 +1152,10 @@ mod tests {
         assert_eq!(back.point, "before_llm");
 
         // summary
-        sqlx::query("DELETE FROM session_events").execute(&pool).await.unwrap();
+        sqlx::query("DELETE FROM session_events")
+            .execute(&pool)
+            .await
+            .unwrap();
         log_summary_updated(
             &pool,
             &ctx(),

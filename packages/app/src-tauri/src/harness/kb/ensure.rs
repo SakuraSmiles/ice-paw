@@ -120,11 +120,26 @@ fn ensure_help_docs(default_workspace: &str) {
     }
     // (文件名, 编译期内嵌的内容)
     let docs: &[(&str, &str)] = &[
-        ("getting-started.md", include_str!("../../../resources/help/getting-started.md")),
-        ("configure-embedding.md", include_str!("../../../resources/help/configure-embedding.md")),
-        ("configure-tools.md", include_str!("../../../resources/help/configure-tools.md")),
-        ("agent-yaml.md", include_str!("../../../resources/help/agent-yaml.md")),
-        ("project-workspace.md", include_str!("../../../resources/help/project-workspace.md")),
+        (
+            "getting-started.md",
+            include_str!("../../../resources/help/getting-started.md"),
+        ),
+        (
+            "configure-embedding.md",
+            include_str!("../../../resources/help/configure-embedding.md"),
+        ),
+        (
+            "configure-tools.md",
+            include_str!("../../../resources/help/configure-tools.md"),
+        ),
+        (
+            "agent-yaml.md",
+            include_str!("../../../resources/help/agent-yaml.md"),
+        ),
+        (
+            "project-workspace.md",
+            include_str!("../../../resources/help/project-workspace.md"),
+        ),
         ("faq.md", include_str!("../../../resources/help/faq.md")),
     ];
     let mut written = 0;
@@ -160,9 +175,8 @@ pub fn agent_workspace_root(
     agent_id: &str,
 ) -> Option<String> {
     agent_workspace.map(String::from).or_else(|| {
-        default_workspace.map(|d| {
-            format!("{}/agents/{}", d.trim_end_matches(['/', '\\']), agent_id)
-        })
+        default_workspace
+            .map(|d| format!("{}/agents/{}", d.trim_end_matches(['/', '\\']), agent_id))
     })
 }
 
@@ -205,7 +219,9 @@ pub(crate) async fn ensure_agent_kb(
                     "新建 agent KB 初始索引完成 kb={} indexed={} skipped={}",
                     kb_id, stats.indexed, stats.skipped
                 ),
-                Err(e) => tracing::warn!(target: "ice_paw.kb", "新建 agent KB 初始索引失败 kb={}: {e}", kb_id),
+                Err(e) => {
+                    tracing::warn!(target: "ice_paw.kb", "新建 agent KB 初始索引失败 kb={}: {e}", kb_id)
+                }
             }
         });
     }
@@ -273,8 +289,8 @@ mod tests {
     /// 进程内唯一临时「workspace」目录。
     fn unique_temp_ws() -> PathBuf {
         let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir()
-            .join(format!("ice-paw-help-test-{}-{}", std::process::id(), n));
+        let dir =
+            std::env::temp_dir().join(format!("ice-paw-help-test-{}-{}", std::process::id(), n));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }

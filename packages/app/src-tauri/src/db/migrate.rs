@@ -45,7 +45,9 @@ pub async fn fix_orphan_tool_results(pool: &SqlitePool, db_path: &Path) -> AppRe
     }
 
     // 备份：先 checkpoint WAL（确保 -wal 内容落盘），再复制 db 文件
-    let _ = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)").execute(pool).await;
+    let _ = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+        .execute(pool)
+        .await;
     let backup = db_path
         .parent()
         .unwrap_or_else(|| Path::new("."))
@@ -213,7 +215,10 @@ mod tests {
             .connect_with(opts)
             .await
             .unwrap();
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         pool
     }
 
@@ -226,8 +231,12 @@ mod tests {
         .bind("").bind("").bind(0.7).bind(1024).bind("{}").bind(0).bind(0)
         .execute(pool).await.unwrap();
         sqlx::query("INSERT INTO conversations (id, agent_id, title) VALUES (?, ?, ?)")
-            .bind("c1").bind("a1").bind("t")
-            .execute(pool).await.unwrap();
+            .bind("c1")
+            .bind("a1")
+            .bind("t")
+            .execute(pool)
+            .await
+            .unwrap();
     }
 
     /// 插入一条 assistant 消息，content_blocks 由调用方指定
@@ -236,8 +245,11 @@ mod tests {
             "INSERT INTO messages (id, conversation_id, role, content, content_blocks, model)
              VALUES (?, 'c1', 'assistant', '', ?, 'claude')",
         )
-        .bind(id).bind(blocks_json)
-        .execute(pool).await.unwrap();
+        .bind(id)
+        .bind(blocks_json)
+        .execute(pool)
+        .await
+        .unwrap();
     }
 
     async fn fetch_blocks(pool: &SqlitePool, id: &str) -> Vec<ContentBlock> {
@@ -295,10 +307,12 @@ mod tests {
         .await;
 
         fix_orphan_tool_results(&pool, std::path::Path::new("/tmp/nonexistent.db"))
-            .await.unwrap();
+            .await
+            .unwrap();
         // 第二次：应 no-op（assistant 已无 tool_result）
         fix_orphan_tool_results(&pool, std::path::Path::new("/tmp/nonexistent.db"))
-            .await.unwrap();
+            .await
+            .unwrap();
 
         // user 消息仍然只有 1 条（没重复创建）
         let count: (i64,) = sqlx::query_as(
@@ -321,10 +335,13 @@ mod tests {
         .await;
 
         fix_orphan_tool_results(&pool, std::path::Path::new("/tmp/nonexistent.db"))
-            .await.unwrap();
+            .await
+            .unwrap();
 
         let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM messages WHERE role='user'")
-            .fetch_one(&pool).await.unwrap();
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(count.0, 0, "无孤儿时不应创建任何 user 消息");
     }
 
@@ -334,12 +351,16 @@ mod tests {
         let migrator = sqlx::migrate!("./src/db/migrations");
         // 模拟历史包污染：篡改 migration 24 的 checksum（与 commit 正版不同）
         sqlx::query("UPDATE _sqlx_migrations SET checksum = X'00' WHERE version = 24")
-            .execute(&pool).await.unwrap();
+            .execute(&pool)
+            .await
+            .unwrap();
         // 自愈后应恢复为 commit 正版（否则 migrate!().run() 二次校验会 panic）
         heal_checksum_drift(&pool, &migrator).await;
         let row: (Vec<u8>,) =
             sqlx::query_as("SELECT checksum FROM _sqlx_migrations WHERE version = 24")
-                .fetch_one(&pool).await.unwrap();
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         let m24 = migrator
             .migrations
             .iter()
@@ -360,11 +381,15 @@ mod tests {
         let migrator = sqlx::migrate!("./src/db/migrations");
         let before: (Vec<u8>,) =
             sqlx::query_as("SELECT checksum FROM _sqlx_migrations WHERE version = 24")
-                .fetch_one(&pool).await.unwrap();
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         heal_checksum_drift(&pool, &migrator).await;
         let after: (Vec<u8>,) =
             sqlx::query_as("SELECT checksum FROM _sqlx_migrations WHERE version = 24")
-                .fetch_one(&pool).await.unwrap();
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(before.0, after.0, "干净 db 自愈不应改动 checksum");
     }
 }

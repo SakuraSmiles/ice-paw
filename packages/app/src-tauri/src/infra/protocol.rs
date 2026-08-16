@@ -42,10 +42,7 @@ pub enum ContentBlock {
     /// ```json
     /// { "type": "image", "data": "iVBORw0KG...", "media_type": "image/png" }
     /// ```
-    Image {
-        data: String,
-        media_type: String,
-    },
+    Image { data: String, media_type: String },
     /// 工具调用（LLM 产出）
     ToolUse {
         id: String,
@@ -142,8 +139,8 @@ impl ContentBlock {
 
 // Re-export: 图片校验（从 image_validation 迁出，保留兼容路径）
 pub use super::image_validation::{
-    is_supported_image_media_type, strip_empty_image_blocks, validate_images,
-    MAX_IMAGE_COUNT, MAX_IMAGE_SIZE, SUPPORTED_IMAGE_MEDIA_TYPES,
+    is_supported_image_media_type, strip_empty_image_blocks, validate_images, MAX_IMAGE_COUNT,
+    MAX_IMAGE_SIZE, SUPPORTED_IMAGE_MEDIA_TYPES,
 };
 
 /// 聊天消息（发给 LLM 的上下文中的单条）
@@ -698,7 +695,11 @@ mod tests {
         let err = validate_images(&blocks).unwrap_err();
         match err {
             AppError::Validation(msg) => {
-                assert!(msg.contains("不支持"), "错误信息应提示不支持，实际: {}", msg);
+                assert!(
+                    msg.contains("不支持"),
+                    "错误信息应提示不支持，实际: {}",
+                    msg
+                );
             }
             _ => panic!("应为 Validation 错误"),
         }
@@ -798,8 +799,8 @@ mod tests {
     fn strip_keeps_valid_when_mixed_with_empty() {
         // 一空一有效：空图剥离、有效图保留、提示点名「第 1 张」
         let blocks = vec![
-            ContentBlock::image(String::new(), "image/png"),           // 第 1 张：空
-            ContentBlock::image(make_b64_bytes(512), "image/jpeg"),     // 第 2 张：有效
+            ContentBlock::image(String::new(), "image/png"), // 第 1 张：空
+            ContentBlock::image(make_b64_bytes(512), "image/jpeg"), // 第 2 张：有效
         ];
         let out = strip_empty_image_blocks(blocks);
         let images: Vec<_> = out.iter().filter(|b| b.is_image()).collect();
@@ -822,7 +823,10 @@ mod tests {
         // 非法 base64（解码失败）→ 视作坏块剥离（发送必失败）
         let blocks = vec![ContentBlock::image("not_base64!@#$%", "image/png")];
         let out = strip_empty_image_blocks(blocks);
-        assert!(out.iter().all(|b| !b.is_image()), "非法 base64 图片应被剥离");
+        assert!(
+            out.iter().all(|b| !b.is_image()),
+            "非法 base64 图片应被剥离"
+        );
         assert!(out.iter().any(|b| b.as_text().is_some()), "应注入提示");
     }
 
@@ -937,18 +941,10 @@ mod tests {
     #[test]
     fn supported_media_types_whitelist() {
         for mt in ["image/png", "image/jpeg", "image/gif", "image/webp"] {
-            assert!(
-                is_supported_image_media_type(mt),
-                "{} 应在白名单内",
-                mt
-            );
+            assert!(is_supported_image_media_type(mt), "{} 应在白名单内", mt);
         }
         for mt in ["image/bmp", "image/svg+xml", "application/pdf", "", "png"] {
-            assert!(
-                !is_supported_image_media_type(mt),
-                "{} 不应在白名单内",
-                mt
-            );
+            assert!(!is_supported_image_media_type(mt), "{} 不应在白名单内", mt);
         }
     }
 

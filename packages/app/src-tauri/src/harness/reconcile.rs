@@ -184,10 +184,8 @@ pub async fn reconcile_session(
             .cloned()
             .unwrap_or_default();
 
-        let legacy_map: HashMap<&str, &LegacyRow> = legacy_rows
-            .iter()
-            .map(|e| (e.row.id.as_str(), e))
-            .collect();
+        let legacy_map: HashMap<&str, &LegacyRow> =
+            legacy_rows.iter().map(|e| (e.row.id.as_str(), e)).collect();
         let derived_map: HashMap<&str, &DerivedMessage> = derived_msgs
             .iter()
             .map(|m| (m.message_id.as_str(), *m))
@@ -232,7 +230,8 @@ pub async fn reconcile_session(
                         message_id: Some((*id).to_string()),
                         detail: format!(
                             "role={} content_len={} 事件存在但行缺失",
-                            d.role, d.content.len()
+                            d.role,
+                            d.content.len()
                         ),
                     });
                 }
@@ -258,10 +257,7 @@ pub async fn reconcile_session(
                 category: "ORDER_MISMATCH",
                 turn_id: Some(turn.clone()),
                 message_id: None,
-                detail: format!(
-                    "rowid 序 {:?} ≠ 事件首现序 {:?}",
-                    legacy_order, derived_ids
-                ),
+                detail: format!("rowid 序 {:?} ≠ 事件首现序 {:?}", legacy_order, derived_ids),
             });
         }
     }
@@ -271,7 +267,12 @@ pub async fn reconcile_session(
     let unmapped = derived
         .messages
         .iter()
-        .filter(|m| m.turn_id.as_deref().map(|t| !mapped.contains(t)).unwrap_or(true))
+        .filter(|m| {
+            m.turn_id
+                .as_deref()
+                .map(|t| !mapped.contains(t))
+                .unwrap_or(true)
+        })
         .count();
     if unmapped > 0 {
         skip.add("derived_unmapped_turn", unmapped);
@@ -418,7 +419,14 @@ mod tests {
             .unwrap();
     }
 
-    async fn insert_row(pool: &SqlitePool, conv: &str, id: &str, role: &str, content: &str, blocks_json: &str) {
+    async fn insert_row(
+        pool: &SqlitePool,
+        conv: &str,
+        id: &str,
+        role: &str,
+        content: &str,
+        blocks_json: &str,
+    ) {
         sqlx::query(
             "INSERT INTO messages (id, conversation_id, role, content, content_blocks) VALUES (?, ?, ?, ?, ?)",
         )
@@ -445,54 +453,99 @@ mod tests {
             format!("{turn}-r1"),
             format!("{turn}-a2"),
         );
-        insert_row(pool, conv, turn, "user", "读文件", r#"[{"type":"text","text":"读文件"}]"#).await;
-        event_log::log_user_message(pool, &ev, turn, &UserMessagePayload {
-            v: 1,
-            content: "读文件".into(),
-            blocks: vec![text_block("读文件")],
-        })
+        insert_row(
+            pool,
+            conv,
+            turn,
+            "user",
+            "读文件",
+            r#"[{"type":"text","text":"读文件"}]"#,
+        )
+        .await;
+        event_log::log_user_message(
+            pool,
+            &ev,
+            turn,
+            &UserMessagePayload {
+                v: 1,
+                content: "读文件".into(),
+                blocks: vec![text_block("读文件")],
+            },
+        )
         .await;
         let a1_blocks = r#"[{"type":"tool_use","id":"tu_1","name":"read_file","input":"{}"}]"#;
         insert_row(pool, conv, &a1, "assistant", "", a1_blocks).await;
-        event_log::log_assistant_message(pool, &ev, &a1, &AssistantMessagePayload {
-            v: 1,
-            model: None,
-            content: String::new(),
-            blocks: vec![ContentBlock::ToolUse { id: "tu_1".into(), name: "read_file".into(), input: "{}".into() }],
-            token_count: None,
-            duration_ms: None,
-            round: 0,
-            continuation: false,
-        })
+        event_log::log_assistant_message(
+            pool,
+            &ev,
+            &a1,
+            &AssistantMessagePayload {
+                v: 1,
+                model: None,
+                content: String::new(),
+                blocks: vec![ContentBlock::ToolUse {
+                    id: "tu_1".into(),
+                    name: "read_file".into(),
+                    input: "{}".into(),
+                }],
+                token_count: None,
+                duration_ms: None,
+                round: 0,
+                continuation: false,
+            },
+        )
         .await;
-        let r1_blocks = r#"[{"type":"tool_result","tool_use_id":"tu_1","content":"内容","is_error":false}]"#;
+        let r1_blocks =
+            r#"[{"type":"tool_result","tool_use_id":"tu_1","content":"内容","is_error":false}]"#;
         insert_row(pool, conv, &r1, "user", "", r1_blocks).await;
         event_log::log_tool_result_message(
             pool,
             &ev,
             &r1,
-            &[ContentBlock::ToolResult { tool_use_id: "tu_1".into(), content: "内容".into(), is_error: Some(false) }],
+            &[ContentBlock::ToolResult {
+                tool_use_id: "tu_1".into(),
+                content: "内容".into(),
+                is_error: Some(false),
+            }],
         )
         .await;
-        insert_row(pool, conv, &a2, "assistant", "读到了", r#"[{"type":"text","text":"读到了"}]"#).await;
-        event_log::log_assistant_message(pool, &ev, &a2, &AssistantMessagePayload {
-            v: 1,
-            model: None,
-            content: "读到了".into(),
-            blocks: vec![text_block("读到了")],
-            token_count: None,
-            duration_ms: None,
-            round: 1,
-            continuation: false,
-        })
+        insert_row(
+            pool,
+            conv,
+            &a2,
+            "assistant",
+            "读到了",
+            r#"[{"type":"text","text":"读到了"}]"#,
+        )
         .await;
-        event_log::log_turn_ended(pool, &ev, Some(&a2), &TurnEndedPayload {
-            v: 1,
-            termination: "stop".into(),
-            rounds: 3,
-            usage: None,
-            user_token_count: None,
-        })
+        event_log::log_assistant_message(
+            pool,
+            &ev,
+            &a2,
+            &AssistantMessagePayload {
+                v: 1,
+                model: None,
+                content: "读到了".into(),
+                blocks: vec![text_block("读到了")],
+                token_count: None,
+                duration_ms: None,
+                round: 1,
+                continuation: false,
+            },
+        )
+        .await;
+        event_log::log_turn_ended(
+            pool,
+            &ev,
+            Some(&a2),
+            &TurnEndedPayload {
+                v: 1,
+                termination: "stop".into(),
+                rounds: 3,
+                usage: None,
+                user_token_count: None,
+            },
+        )
         .await;
     }
 
@@ -506,7 +559,10 @@ mod tests {
     #[tokio::test]
     async fn consistent_turn_reports_zero_diffs() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed(&pool, "conv").await;
         script_consistent_turn(&pool, "conv", "t1").await;
 
@@ -520,14 +576,19 @@ mod tests {
     #[tokio::test]
     async fn deleted_event_fires_missing_in_derived() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed(&pool, "conv").await;
         script_consistent_turn(&pool, "conv", "t1").await;
         // 篡改：抹掉终答 assistant_message 事件（行保留）
-        sqlx::query("DELETE FROM session_events WHERE kind='assistant_message' AND message_id='t1-a2'")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "DELETE FROM session_events WHERE kind='assistant_message' AND message_id='t1-a2'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
 
         let report = reconcile_session(&pool, "conv").await.unwrap();
         assert_eq!(categories(&report), vec!["MISSING_IN_DERIVED"]);
@@ -537,7 +598,10 @@ mod tests {
     #[tokio::test]
     async fn tampered_row_blocks_fire_content_mismatch() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed(&pool, "conv").await;
         script_consistent_turn(&pool, "conv", "t1").await;
         // 篡改：行 blocks 与事件不一致
@@ -548,13 +612,20 @@ mod tests {
 
         let report = reconcile_session(&pool, "conv").await.unwrap();
         assert_eq!(categories(&report), vec!["CONTENT_MISMATCH"]);
-        assert!(report.diffs[0].detail.contains("blocks"), "detail: {}", report.diffs[0].detail);
+        assert!(
+            report.diffs[0].detail.contains("blocks"),
+            "detail: {}",
+            report.diffs[0].detail
+        );
     }
 
     #[tokio::test]
     async fn deleted_row_fires_missing_in_legacy() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed(&pool, "conv").await;
         script_consistent_turn(&pool, "conv", "t1").await;
         // 篡改：删行（事件保留）
@@ -571,7 +642,10 @@ mod tests {
     #[tokio::test]
     async fn incomplete_turn_is_skipped_not_diffed() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed(&pool, "conv").await;
         // turn 有事件但无 turn_ended（崩溃场景），行与事件本就不一致也 single skip
         script_consistent_turn(&pool, "conv", "t1").await;
@@ -591,11 +665,30 @@ mod tests {
     #[tokio::test]
     async fn pre_epoch_rows_are_skipped() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed(&pool, "conv").await;
         // 事件纪元之前的行（旧数据）
-        insert_row(&pool, "conv", "old-u", "user", "旧问题", r#"[{"type":"text","text":"旧问题"}]"#).await;
-        insert_row(&pool, "conv", "old-a", "assistant", "旧回答", r#"[{"type":"text","text":"旧回答"}]"#).await;
+        insert_row(
+            &pool,
+            "conv",
+            "old-u",
+            "user",
+            "旧问题",
+            r#"[{"type":"text","text":"旧问题"}]"#,
+        )
+        .await;
+        insert_row(
+            &pool,
+            "conv",
+            "old-a",
+            "assistant",
+            "旧回答",
+            r#"[{"type":"text","text":"旧回答"}]"#,
+        )
+        .await;
         script_consistent_turn(&pool, "conv", "t1").await;
 
         let report = reconcile_session(&pool, "conv").await.unwrap();
@@ -606,7 +699,10 @@ mod tests {
     #[tokio::test]
     async fn no_events_conversation_reports_pre_phase0() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed(&pool, "conv").await;
         insert_row(&pool, "conv", "old-u", "user", "旧问题", "[]").await;
 
@@ -618,7 +714,10 @@ mod tests {
     #[tokio::test]
     async fn error_and_discarded_rows_are_known_gaps() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed(&pool, "conv").await;
         script_consistent_turn(&pool, "conv", "t1").await;
 
@@ -633,16 +732,21 @@ mod tests {
 
         // discarded 容忍（规则 4）：事件有（含 assistant_message）但行不存在
         //（终止守卫已删占位）→ MISSING_IN_LEGACY 豁免为 discarded_row
-        event_log::log_assistant_message(&pool, &ev, "t1-gone", &AssistantMessagePayload {
-            v: 1,
-            model: None,
-            content: String::new(),
-            blocks: vec![],
-            token_count: None,
-            duration_ms: None,
-            round: 0,
-            continuation: false,
-        })
+        event_log::log_assistant_message(
+            &pool,
+            &ev,
+            "t1-gone",
+            &AssistantMessagePayload {
+                v: 1,
+                model: None,
+                content: String::new(),
+                blocks: vec![],
+                token_count: None,
+                duration_ms: None,
+                round: 0,
+                continuation: false,
+            },
+        )
         .await;
         event_log::log_message_discarded(&pool, &ev, "t1-gone", "termination_guard_no_text").await;
 
@@ -654,17 +758,31 @@ mod tests {
         let reasons = skip_reasons(&report);
         assert!(reasons.contains(&"error_row"), "reasons: {reasons:?}");
         assert!(reasons.contains(&"discarded_row"), "reasons: {reasons:?}");
-        assert!(reasons.contains(&"empty_placeholder"), "reasons: {reasons:?}");
+        assert!(
+            reasons.contains(&"empty_placeholder"),
+            "reasons: {reasons:?}"
+        );
     }
 
     #[tokio::test]
     async fn empty_placeholder_with_content_diff_still_fires() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed(&pool, "conv").await;
         script_consistent_turn(&pool, "conv", "t1").await;
         // 空 assistant 行且**有内容占位**（blocks 非空）→ 不能被启发式吞掉
-        insert_row(&pool, "conv", "t1-phantom", "assistant", "", r#"[{"type":"text","text":"幽灵文本"}]"#).await;
+        insert_row(
+            &pool,
+            "conv",
+            "t1-phantom",
+            "assistant",
+            "",
+            r#"[{"type":"text","text":"幽灵文本"}]"#,
+        )
+        .await;
 
         let report = reconcile_session(&pool, "conv").await.unwrap();
         assert_eq!(categories(&report), vec!["MISSING_IN_DERIVED"]);
@@ -674,47 +792,86 @@ mod tests {
     #[tokio::test]
     async fn superseded_row_matches_last_event_content() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed(&pool, "conv").await;
         // 自动续写：同一 assistant 行被两轮 finalize 全文覆写，事件两条（last-wins）
         let ev = EventCtx::new("conv", "t1", "agent-1");
-        insert_row(&pool, "conv", "t1", "user", "写长文", r#"[{"type":"text","text":"写长文"}]"#).await;
-        event_log::log_user_message(&pool, &ev, "t1", &UserMessagePayload {
-            v: 1,
-            content: "写长文".into(),
-            blocks: vec![text_block("写长文")],
-        })
+        insert_row(
+            &pool,
+            "conv",
+            "t1",
+            "user",
+            "写长文",
+            r#"[{"type":"text","text":"写长文"}]"#,
+        )
         .await;
-        insert_row(&pool, "conv", "t1-a", "assistant", "前半段后半段", r#"[{"type":"text","text":"前半段后半段"}]"#).await;
-        event_log::log_assistant_message(&pool, &ev, "t1-a", &AssistantMessagePayload {
-            v: 1,
-            model: None,
-            content: "前半段".into(),
-            blocks: vec![text_block("前半段")],
-            token_count: None,
-            duration_ms: None,
-            round: 0,
-            continuation: true,
-        })
+        event_log::log_user_message(
+            &pool,
+            &ev,
+            "t1",
+            &UserMessagePayload {
+                v: 1,
+                content: "写长文".into(),
+                blocks: vec![text_block("写长文")],
+            },
+        )
         .await;
-        event_log::log_assistant_message(&pool, &ev, "t1-a", &AssistantMessagePayload {
-            v: 1,
-            model: None,
-            content: "前半段后半段".into(),
-            blocks: vec![text_block("前半段后半段")],
-            token_count: None,
-            duration_ms: None,
-            round: 1,
-            continuation: true,
-        })
+        insert_row(
+            &pool,
+            "conv",
+            "t1-a",
+            "assistant",
+            "前半段后半段",
+            r#"[{"type":"text","text":"前半段后半段"}]"#,
+        )
         .await;
-        event_log::log_turn_ended(&pool, &ev, Some("t1-a"), &TurnEndedPayload {
-            v: 1,
-            termination: "stop".into(),
-            rounds: 2,
-            usage: None,
-            user_token_count: None,
-        })
+        event_log::log_assistant_message(
+            &pool,
+            &ev,
+            "t1-a",
+            &AssistantMessagePayload {
+                v: 1,
+                model: None,
+                content: "前半段".into(),
+                blocks: vec![text_block("前半段")],
+                token_count: None,
+                duration_ms: None,
+                round: 0,
+                continuation: true,
+            },
+        )
+        .await;
+        event_log::log_assistant_message(
+            &pool,
+            &ev,
+            "t1-a",
+            &AssistantMessagePayload {
+                v: 1,
+                model: None,
+                content: "前半段后半段".into(),
+                blocks: vec![text_block("前半段后半段")],
+                token_count: None,
+                duration_ms: None,
+                round: 1,
+                continuation: true,
+            },
+        )
+        .await;
+        event_log::log_turn_ended(
+            &pool,
+            &ev,
+            Some("t1-a"),
+            &TurnEndedPayload {
+                v: 1,
+                termination: "stop".into(),
+                rounds: 2,
+                usage: None,
+                user_token_count: None,
+            },
+        )
         .await;
 
         let report = reconcile_session(&pool, "conv").await.unwrap();
@@ -726,56 +883,114 @@ mod tests {
     #[tokio::test]
     async fn row_order_versus_event_order_mismatch_fires() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed(&pool, "conv").await;
         // 同 turn 内两条 assistant 行的 rowid 序与事件首现序反转（内容各配对正确，
         // 排除 CONTENT_MISMATCH 干扰）
         let ev = EventCtx::new("conv", "t1", "agent-1");
-        insert_row(&pool, "conv", "t1", "user", "问", r#"[{"type":"text","text":"问"}]"#).await;
-        event_log::log_user_message(&pool, &ev, "t1", &UserMessagePayload {
-            v: 1,
-            content: "问".into(),
-            blocks: vec![text_block("问")],
-        })
+        insert_row(
+            &pool,
+            "conv",
+            "t1",
+            "user",
+            "问",
+            r#"[{"type":"text","text":"问"}]"#,
+        )
+        .await;
+        event_log::log_user_message(
+            &pool,
+            &ev,
+            "t1",
+            &UserMessagePayload {
+                v: 1,
+                content: "问".into(),
+                blocks: vec![text_block("问")],
+            },
+        )
         .await;
         // rowid 序：a2 在前；事件序：a1 在前
-        insert_row(&pool, "conv", "t1-a2", "assistant", "答二", r#"[{"type":"text","text":"答二"}]"#).await;
-        insert_row(&pool, "conv", "t1-a1", "assistant", "答一", r#"[{"type":"text","text":"答一"}]"#).await;
+        insert_row(
+            &pool,
+            "conv",
+            "t1-a2",
+            "assistant",
+            "答二",
+            r#"[{"type":"text","text":"答二"}]"#,
+        )
+        .await;
+        insert_row(
+            &pool,
+            "conv",
+            "t1-a1",
+            "assistant",
+            "答一",
+            r#"[{"type":"text","text":"答一"}]"#,
+        )
+        .await;
         for (mid, txt) in [("t1-a1", "答一"), ("t1-a2", "答二")] {
-            event_log::log_assistant_message(&pool, &ev, mid, &AssistantMessagePayload {
-                v: 1,
-                model: None,
-                content: txt.into(),
-                blocks: vec![text_block(txt)],
-                token_count: None,
-                duration_ms: None,
-                round: 0,
-                continuation: false,
-            })
+            event_log::log_assistant_message(
+                &pool,
+                &ev,
+                mid,
+                &AssistantMessagePayload {
+                    v: 1,
+                    model: None,
+                    content: txt.into(),
+                    blocks: vec![text_block(txt)],
+                    token_count: None,
+                    duration_ms: None,
+                    round: 0,
+                    continuation: false,
+                },
+            )
             .await;
         }
-        event_log::log_turn_ended(&pool, &ev, Some("t1-a2"), &TurnEndedPayload {
-            v: 1,
-            termination: "stop".into(),
-            rounds: 2,
-            usage: None,
-            user_token_count: None,
-        })
+        event_log::log_turn_ended(
+            &pool,
+            &ev,
+            Some("t1-a2"),
+            &TurnEndedPayload {
+                v: 1,
+                termination: "stop".into(),
+                rounds: 2,
+                usage: None,
+                user_token_count: None,
+            },
+        )
         .await;
 
         let report = reconcile_session(&pool, "conv").await.unwrap();
-        assert_eq!(categories(&report), vec!["ORDER_MISMATCH"], "diffs: {:#?}", report.diffs);
+        assert_eq!(
+            categories(&report),
+            vec!["ORDER_MISMATCH"],
+            "diffs: {:#?}",
+            report.diffs
+        );
     }
 
     #[tokio::test]
     async fn summary_and_tool_rows_are_skipped() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed(&pool, "conv").await;
         script_consistent_turn(&pool, "conv", "t1").await;
         // 摘要行（loader 双注入修复语义：不进 history）
         let prefix = crate::db::repo::summary::SUMMARY_PREFIX;
-        insert_row(&pool, "conv", "sum-1", "system", &format!("{prefix}\n摘要正文"), "[]").await;
+        insert_row(
+            &pool,
+            "conv",
+            "sum-1",
+            "system",
+            &format!("{prefix}\n摘要正文"),
+            "[]",
+        )
+        .await;
         // tool 角色行（loader 跳过）
         insert_row(&pool, "conv", "tool-1", "tool", "原始工具输出", "[]").await;
 
@@ -783,6 +998,9 @@ mod tests {
         assert!(report.diffs.is_empty(), "diffs: {:#?}", report.diffs);
         let reasons = skip_reasons(&report);
         assert!(reasons.contains(&"summary_row"), "reasons: {reasons:?}");
-        assert!(reasons.contains(&"non_conversational_role"), "reasons: {reasons:?}");
+        assert!(
+            reasons.contains(&"non_conversational_role"),
+            "reasons: {reasons:?}"
+        );
     }
 }

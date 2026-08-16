@@ -182,7 +182,7 @@ mod tests {
     fn roundtrip_real_docx() {
         // 用 docx-rs 写入器生成真实 docx 包 → 喂给本模块的 extract，
         // 验证 zip 直读 + <w:t> 扫描对真实 OOXML 包工作（这是本模块风险最高的代码）。
-        use docx_rs::{Docx, Document, Paragraph, Run};
+        use docx_rs::{Document, Docx, Paragraph, Run};
         let document = Document::new()
             .add_paragraph(Paragraph::new().add_run(Run::new().add_text("你好世界")))
             .add_paragraph(Paragraph::new().add_run(Run::new().add_text("第二段落")));
@@ -228,7 +228,8 @@ mod tests {
 
     #[test]
     fn entities_decoded() {
-        let xml = "<w:p><w:r><w:t>a &amp; b &lt; c &gt; d &quot;e&quot; &apos;f&apos;</w:t></w:r></w:p>";
+        let xml =
+            "<w:p><w:r><w:t>a &amp; b &lt; c &gt; d &quot;e&quot; &apos;f&apos;</w:t></w:r></w:p>";
         assert_eq!(run(xml), "a & b < c > d \"e\" 'f'");
     }
 

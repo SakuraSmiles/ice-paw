@@ -68,16 +68,16 @@ use std::collections::HashMap;
 use tauri::Emitter;
 use uuid::Uuid;
 
+use crate::db::models::{HookPoint, NewMessage};
+use crate::db::repo;
 use crate::harness::cleanup::{
     fail_round_and_cancel, finalize_assistant_message, finalize_assistant_without_tool_use,
     finalize_cancel, finalize_success, PersistOutcome,
 };
-use crate::db::models::{HookPoint, NewMessage};
-use crate::db::repo;
 use crate::harness::event_log::{self, AssistantMessagePayload, EventCtx};
-use crate::infra::protocol::{ChatAssistantStartPayload, ChatMessage, ContentBlock, TokenUsage};
 use crate::harness::hooks::{has_actions, run_hooks};
 use crate::harness::observable::{RoundState, RoundTimer};
+use crate::infra::protocol::{ChatAssistantStartPayload, ChatMessage, ContentBlock, TokenUsage};
 
 use super::batch_writer;
 use super::stream_consumer::CollectedToolCall;
@@ -134,7 +134,14 @@ pub(crate) async fn stream_loop(ctx: &mut LoopContext, observable: &mut RoundSta
             Some(ctx.api_key.clone()),
         )
         .await;
-        if let Err(e) = run_hooks(HookPoint::ConversationEnd, &ctx.hooks, &hook_ctx, &ctx.tool_registry).await {
+        if let Err(e) = run_hooks(
+            HookPoint::ConversationEnd,
+            &ctx.hooks,
+            &hook_ctx,
+            &ctx.tool_registry,
+        )
+        .await
+        {
             tracing::warn!(
                 target: "ice_paw.hooks",
                 "ConversationEnd 钩子执行失败（忽略）: {}", e
@@ -321,7 +328,11 @@ async fn stream_loop_inner(
                 &ev,
                 &current_asst_msg_id,
                 "tool_use",
-                synthesize_usage(first_prompt_tokens, total_completion_tokens, collected_usage),
+                synthesize_usage(
+                    first_prompt_tokens,
+                    total_completion_tokens,
+                    collected_usage,
+                ),
                 first_prompt_tokens,
                 tool_round,
             )
@@ -387,10 +398,15 @@ async fn stream_loop_inner(
                 Some(ctx.api_key.clone()),
             )
             .await;
-            run_hooks(HookPoint::BeforeLlm, &ctx.hooks, &hook_ctx, &ctx.tool_registry)
-                .await
-                .ok()
-                .and_then(|o| o.injected_prompt)
+            run_hooks(
+                HookPoint::BeforeLlm,
+                &ctx.hooks,
+                &hook_ctx,
+                &ctx.tool_registry,
+            )
+            .await
+            .ok()
+            .and_then(|o| o.injected_prompt)
         } else {
             None
         };
@@ -510,7 +526,9 @@ async fn stream_loop_inner(
             });
         }
         if !msg_text.is_empty() {
-            round_blocks.push(ContentBlock::Text { text: msg_text.clone() });
+            round_blocks.push(ContentBlock::Text {
+                text: msg_text.clone(),
+            });
         }
         for (id, name, args) in &completed_calls {
             round_blocks.push(ContentBlock::ToolUse {
@@ -543,8 +561,14 @@ async fn stream_loop_inner(
                 round_gen_ms,
             )
             .await;
-            return finalize_cancel(&ctx.app, &ctx.pool, &ev, &current_asst_msg_id, tool_round + 1)
-                .await;
+            return finalize_cancel(
+                &ctx.app,
+                &ctx.pool,
+                &ev,
+                &current_asst_msg_id,
+                tool_round + 1,
+            )
+            .await;
         }
 
         // W4.2: Token 预算终止检查（落盘前）。B1：触顶先尝试自动续期（+初始上限，
@@ -658,7 +682,11 @@ async fn stream_loop_inner(
                 &ev,
                 &current_asst_msg_id,
                 "stuck",
-                synthesize_usage(first_prompt_tokens, total_completion_tokens, collected_usage),
+                synthesize_usage(
+                    first_prompt_tokens,
+                    total_completion_tokens,
+                    collected_usage,
+                ),
                 first_prompt_tokens,
                 tool_round + 1,
             )
@@ -707,8 +735,7 @@ async fn stream_loop_inner(
             // finish_reason=length(OpenAI)/max_tokens(Anthropic) 表示单轮输出被截断（可恢复态，
             // 非终态）。在续写次数预算内，跳回循环顶复用同一 assistant 消息续接输出：
             // 不发 chat:done、不建新占位、不 set_msg_id → 前端 streamingText 自然续接，单气泡。
-            let truncated =
-                matches!(round_finish_reason.as_str(), "length" | "max_tokens");
+            let truncated = matches!(round_finish_reason.as_str(), "length" | "max_tokens");
             if truncated && continue_rounds < MAX_CONTINUE_ROUNDS {
                 continue_rounds += 1;
                 // 累积器 = 当前完整全文，供下一轮 msg_text 拼接 + 全文覆写落盘
@@ -742,7 +769,11 @@ async fn stream_loop_inner(
                 &ev,
                 &current_asst_msg_id,
                 &round_finish_reason,
-                synthesize_usage(first_prompt_tokens, total_completion_tokens, collected_usage),
+                synthesize_usage(
+                    first_prompt_tokens,
+                    total_completion_tokens,
+                    collected_usage,
+                ),
                 first_prompt_tokens,
                 tool_round + 1,
             )
@@ -905,13 +936,8 @@ async fn stream_loop_inner(
         }
         // tool_result 消息镜像事件（与上面落库的 content_blocks 同值；borrow 不 move，
         // 阶段 G 还要用 tool_result_blocks 推进 ctx.messages）。
-        event_log::log_tool_result_message(
-            &ctx.pool,
-            &ev,
-            &user_tool_msg_id,
-            &tool_result_blocks,
-        )
-        .await;
+        event_log::log_tool_result_message(&ctx.pool, &ev, &user_tool_msg_id, &tool_result_blocks)
+            .await;
 
         // 【阶段 G】ctx.messages 追加本轮 assistant(tool_use) + user(tool_result)。
         // 统一 role=user：Anthropic 适配层直接支持 user 消息携带 tool_result；
@@ -920,7 +946,9 @@ async fn stream_loop_inner(
         // tool 回执」的协议要求。
         let mut asst_blocks: Vec<ContentBlock> = Vec::new();
         if !round_text.is_empty() {
-            asst_blocks.push(ContentBlock::Text { text: round_text.clone() });
+            asst_blocks.push(ContentBlock::Text {
+                text: round_text.clone(),
+            });
         }
         for (id, name, args) in &completed_calls {
             asst_blocks.push(ContentBlock::ToolUse {
@@ -1047,10 +1075,13 @@ async fn stream_loop_inner(
         &ev,
         &current_asst_msg_id,
         "tool_use",
-        synthesize_usage(first_prompt_tokens, total_completion_tokens, collected_usage),
+        synthesize_usage(
+            first_prompt_tokens,
+            total_completion_tokens,
+            collected_usage,
+        ),
         first_prompt_tokens,
         effective_max_rounds,
     )
     .await;
 }
-

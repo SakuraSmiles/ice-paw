@@ -59,7 +59,11 @@ pub async fn create(
     let extra_str = serde_json::to_string(&extra)?;
     // P2-3: bool → i32 (0/1) for SQLite storage
     let cache_prompt_i = if new_agent.cache_prompt { 1i32 } else { 0i32 };
-    let supports_vision_i = if new_agent.supports_vision { 1i32 } else { 0i32 };
+    let supports_vision_i = if new_agent.supports_vision {
+        1i32
+    } else {
+        0i32
+    };
 
     sqlx::query(
         "INSERT INTO agents
@@ -83,7 +87,12 @@ pub async fn create(
     .bind(cache_prompt_i)
     .bind(new_agent.max_history_messages)
     .bind(new_agent.tool_trim_threshold)
-    .bind(new_agent.enabled_tools.as_ref().map(|v| serde_json::to_string(v).unwrap_or_default()))
+    .bind(
+        new_agent
+            .enabled_tools
+            .as_ref()
+            .map(|v| serde_json::to_string(v).unwrap_or_default()),
+    )
     .bind(supports_vision_i)
     .bind(new_agent.workspace_path.as_deref())
     .bind(new_agent.context_window)
@@ -118,23 +127,49 @@ pub async fn update(
     // 先读出来再合并，避免拼接动态 SQL
     let mut current = get_by_id(pool, id).await?;
 
-    if let Some(v) = name { current.name = v.to_string(); }
-    if let Some(v) = provider { current.provider = v.to_string(); }
-    if let Some(v) = model { current.model = v.to_string(); }
-    if let Some(v) = system_prompt { current.system_prompt = v.to_string(); }
-    if let Some(v) = base_url { current.base_url = v.map(String::from); }
-    if let Some(v) = temperature { current.temperature = v; }
-    if let Some(v) = max_tokens { current.max_tokens = v; }
-    if let Some(v) = sort_order { current.sort_order = v; }
-    if let Some(v) = extra_params { current.extra_params = serde_json::to_string(v)?; }
+    if let Some(v) = name {
+        current.name = v.to_string();
+    }
+    if let Some(v) = provider {
+        current.provider = v.to_string();
+    }
+    if let Some(v) = model {
+        current.model = v.to_string();
+    }
+    if let Some(v) = system_prompt {
+        current.system_prompt = v.to_string();
+    }
+    if let Some(v) = base_url {
+        current.base_url = v.map(String::from);
+    }
+    if let Some(v) = temperature {
+        current.temperature = v;
+    }
+    if let Some(v) = max_tokens {
+        current.max_tokens = v;
+    }
+    if let Some(v) = sort_order {
+        current.sort_order = v;
+    }
+    if let Some(v) = extra_params {
+        current.extra_params = serde_json::to_string(v)?;
+    }
     // P2-3: bool → i32 (0/1)
-    if let Some(v) = cache_prompt { current.cache_prompt = if v { 1 } else { 0 }; }
+    if let Some(v) = cache_prompt {
+        current.cache_prompt = if v { 1 } else { 0 };
+    }
     // A3-2: 双层 Option 语义（None=不改 / Some(None)=清空 / Some(Some(N))=设定）
-    if let Some(v) = max_history_messages { current.max_history_messages = v; }
+    if let Some(v) = max_history_messages {
+        current.max_history_messages = v;
+    }
     // M1.2 A2-4: 双层 Option 语义（同 max_history_messages）
-    if let Some(v) = tool_trim_threshold { current.tool_trim_threshold = v; }
+    if let Some(v) = tool_trim_threshold {
+        current.tool_trim_threshold = v;
+    }
     // Phase 0: 双层 Option 语义（None=不改 / Some(None)=清空 / Some(Some(n))=设定）
-    if let Some(v) = context_window { current.context_window = v; }
+    if let Some(v) = context_window {
+        current.context_window = v;
+    }
     // Task 4: 双层 Option 语义（None=不改 / Some(None)=清空即全部启用 / Some(Some(vec))=设定白名单）
     if let Some(v) = enabled_tools {
         current.enabled_tools = v.map(|names| serde_json::to_string(&names).unwrap_or_default());
@@ -185,15 +220,13 @@ pub async fn rotate_key_ref(
     api_key_ref: &str,
     base_url: Option<&str>,
 ) -> AppResult<()> {
-    let affected = sqlx::query(
-        "UPDATE agents SET api_key_ref = ?, base_url = ? WHERE id = ?",
-    )
-    .bind(api_key_ref)
-    .bind(base_url)
-    .bind(id)
-    .execute(pool)
-    .await?
-    .rows_affected();
+    let affected = sqlx::query("UPDATE agents SET api_key_ref = ?, base_url = ? WHERE id = ?")
+        .bind(api_key_ref)
+        .bind(base_url)
+        .bind(id)
+        .execute(pool)
+        .await?
+        .rows_affected();
 
     if affected == 0 {
         return Err(AppError::NotFound {

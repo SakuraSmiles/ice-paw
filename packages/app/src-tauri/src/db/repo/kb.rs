@@ -123,9 +123,7 @@ pub async fn get_document_by_path(
     kb_id: &str,
     file_path: &str,
 ) -> AppResult<Option<KbDocumentRow>> {
-    let sql = format!(
-        "SELECT {DOC_COLS} FROM kb_document WHERE kb_id = ? AND file_path = ?"
-    );
+    let sql = format!("SELECT {DOC_COLS} FROM kb_document WHERE kb_id = ? AND file_path = ?");
     let row = sqlx::query_as::<_, KbDocumentRow>(&sql)
         .bind(kb_id)
         .bind(file_path)
@@ -228,7 +226,11 @@ pub async fn search(
     for id in kb_ids {
         q = q.bind(id);
     }
-    q = q.bind(&pattern).bind(&pattern).bind(&pattern).bind(&pattern);
+    q = q
+        .bind(&pattern)
+        .bind(&pattern)
+        .bind(&pattern)
+        .bind(&pattern);
     q = q.bind(&pattern); // title 命中优先
     q = q.bind(limit);
     let hits = q.fetch_all(pool).await?;
@@ -251,12 +253,11 @@ pub async fn upsert_chunks_incremental(
     use std::collections::HashMap;
 
     // 1. 读现有 chunk 的 (content → embedding)，按内容匹配保留向量（一次查询，避免 N+1）
-    let existing: Vec<(String, Option<Vec<u8>>)> = sqlx::query_as(
-        "SELECT content, embedding FROM kb_document_chunk WHERE doc_id = ?",
-    )
-    .bind(doc_id)
-    .fetch_all(pool)
-    .await?;
+    let existing: Vec<(String, Option<Vec<u8>>)> =
+        sqlx::query_as("SELECT content, embedding FROM kb_document_chunk WHERE doc_id = ?")
+            .bind(doc_id)
+            .fetch_all(pool)
+            .await?;
     let mut kept: HashMap<String, Option<Vec<u8>>> = HashMap::new();
     for (content, emb) in existing {
         kept.entry(content).or_insert(emb);
@@ -558,7 +559,11 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(need2.len(), 2, "alpha 保留向量，仅 beta/gamma 需生成: {need2:?}");
+        assert_eq!(
+            need2.len(),
+            2,
+            "alpha 保留向量，仅 beta/gamma 需生成: {need2:?}"
+        );
         assert!(
             need2.iter().all(|(_, c)| c != "alpha"),
             "alpha 不应在 need_embed 里"
@@ -587,10 +592,9 @@ mod tests {
         let doc_id = upsert_document(&pool, "k1", "a.md", "T", "s", "[]", Some("h"), None)
             .await
             .unwrap();
-        let need =
-            upsert_chunks_incremental(&pool, &doc_id, &["x".into(), "y".into(), "z".into()])
-                .await
-                .unwrap();
+        let need = upsert_chunks_incremental(&pool, &doc_id, &["x".into(), "y".into(), "z".into()])
+            .await
+            .unwrap();
         // 给前 2 个填 embedding，第 3 个留空
         update_chunk_embedding(&pool, &need[0].0, &embedding_to_bytes(&[0.1]))
             .await
@@ -612,8 +616,9 @@ mod tests {
         let doc_id = upsert_document(&pool, "k1", "a.md", "T", "s", "[]", Some("h"), None)
             .await
             .unwrap();
-        let need =
-            upsert_chunks_incremental(&pool, &doc_id, &["x".into(), "y".into()]).await.unwrap();
+        let need = upsert_chunks_incremental(&pool, &doc_id, &["x".into(), "y".into()])
+            .await
+            .unwrap();
         update_chunk_embedding(&pool, &need[0].0, &embedding_to_bytes(&[0.1]))
             .await
             .unwrap();
