@@ -187,7 +187,6 @@ fn write_default_agent_yaml(
         base_url,
     );
 
-
     match std::fs::write(&yaml_path, &content) {
         Ok(()) => {
             tracing::info!(
@@ -435,7 +434,6 @@ impl AgentCmd for SqlAgentCmd {
             input.sort_order,
             input.cache_prompt,
             input.max_history_messages,
-            input.tool_trim_threshold,
             input.context_window,
             input.enabled_tools,
             input.supports_vision,
@@ -646,7 +644,6 @@ impl AgentCmd for MockAgentCmd {
             sort_order: input.sort_order,
             cache_prompt: if input.cache_prompt { 1 } else { 0 },
             max_history_messages: input.max_history_messages,
-            tool_trim_threshold: input.tool_trim_threshold,
             context_window: input.context_window,
             enabled_tools: input
                 .enabled_tools
@@ -710,9 +707,6 @@ impl AgentCmd for MockAgentCmd {
         }
         if let Some(v) = input.max_history_messages {
             entry.0.max_history_messages = v;
-        }
-        if let Some(v) = input.tool_trim_threshold {
-            entry.0.tool_trim_threshold = v;
         }
         if let Some(v) = input.context_window {
             entry.0.context_window = v;
@@ -820,7 +814,6 @@ mod tests {
             sort_order: 0,
             cache_prompt: 0,
             max_history_messages: None,
-            tool_trim_threshold: None,
             context_window: None,
             enabled_tools: None,
             supports_vision: 0,
@@ -848,7 +841,6 @@ mod tests {
             sort_order: 0,
             cache_prompt: true,
             max_history_messages: None,
-            tool_trim_threshold: None,
             context_window: None,
             enabled_tools: None,
             supports_vision: false,
@@ -987,7 +979,6 @@ mod tests {
             sort_order: 0,
             cache_prompt: true,
             max_history_messages: None,
-            tool_trim_threshold: None,
             context_window: None,
             enabled_tools: None,
             supports_vision: false,
@@ -1017,7 +1008,6 @@ mod tests {
             sort_order: None,
             cache_prompt: None,
             max_history_messages: None,
-            tool_trim_threshold: None,
             context_window: None,
             enabled_tools: None,
             supports_vision: None,

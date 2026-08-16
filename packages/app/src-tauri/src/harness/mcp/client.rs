@@ -23,11 +23,11 @@ use crate::infra::protocol::ToolDef;
 
 use super::types::AuthorizationLevel;
 
-/// 必须始终注入的平台元工具（不受 agent `enabled_tools` 白名单限制）。
+/// 必须始终注入的平台元工具（不受任何工具裁剪/白名单策略限制）。
 ///
 /// 这些是 agent 安全/自省的基础设施：`propose_config_change` 是变更 agent 配置的
 /// **唯一合法通道**（绕过它直接改文件会被 `reject_sensitive` 拦截），`read_agent_config`
-/// 是读取自身配置的正规通道。若被白名单过滤掉，agent 会退而用文件工具直接改 agent.yaml，
+/// 是读取自身配置的正规通道。若被裁剪掉，agent 会退而用文件工具直接改 agent.yaml，
 /// 击穿配置提案审批系统。详见 `McpRegistry::register_meta_tools`。
 const PLATFORM_META_TOOLS: &[&str] = &["propose_config_change", "read_agent_config"];
 

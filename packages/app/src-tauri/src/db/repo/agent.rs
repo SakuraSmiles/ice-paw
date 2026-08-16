@@ -14,7 +14,7 @@ pub async fn list(pool: &SqlitePool) -> AppResult<Vec<AgentRow>> {
     let rows = sqlx::query_as::<_, AgentRow>(
         "SELECT id, name, provider, model, system_prompt, api_key_ref, base_url,
                 temperature, max_tokens, extra_params, sort_order, cache_prompt,
-                max_history_messages, tool_trim_threshold, enabled_tools, context_window,
+                max_history_messages, enabled_tools, context_window,
                 supports_vision, description, avatar,
                 workspace_path, created_at, updated_at
            FROM agents
@@ -30,7 +30,7 @@ pub async fn get_by_id(pool: &SqlitePool, id: &str) -> AppResult<AgentRow> {
     let row = sqlx::query_as::<_, AgentRow>(
         "SELECT id, name, provider, model, system_prompt, api_key_ref, base_url,
                 temperature, max_tokens, extra_params, sort_order, cache_prompt,
-                max_history_messages, tool_trim_threshold, enabled_tools, context_window,
+                max_history_messages, enabled_tools, context_window,
                 supports_vision, description, avatar,
                 workspace_path, created_at, updated_at
            FROM agents WHERE id = ?",
@@ -69,9 +69,9 @@ pub async fn create(
         "INSERT INTO agents
            (id, name, provider, model, system_prompt, api_key_ref, base_url,
             temperature, max_tokens, extra_params, sort_order, cache_prompt,
-            max_history_messages, tool_trim_threshold, enabled_tools, supports_vision,
+            max_history_messages, enabled_tools, supports_vision,
             workspace_path, context_window)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(id)
     .bind(&new_agent.name)
@@ -86,7 +86,6 @@ pub async fn create(
     .bind(new_agent.sort_order)
     .bind(cache_prompt_i)
     .bind(new_agent.max_history_messages)
-    .bind(new_agent.tool_trim_threshold)
     .bind(
         new_agent
             .enabled_tools
@@ -118,7 +117,6 @@ pub async fn update(
     sort_order: Option<i32>,
     cache_prompt: Option<bool>,
     max_history_messages: Option<Option<i32>>,
-    tool_trim_threshold: Option<Option<i32>>,
     context_window: Option<Option<i32>>,
     enabled_tools: Option<Option<Vec<String>>>,
     supports_vision: Option<bool>,
@@ -162,10 +160,6 @@ pub async fn update(
     if let Some(v) = max_history_messages {
         current.max_history_messages = v;
     }
-    // M1.2 A2-4: 双层 Option 语义（同 max_history_messages）
-    if let Some(v) = tool_trim_threshold {
-        current.tool_trim_threshold = v;
-    }
     // Phase 0: 双层 Option 语义（None=不改 / Some(None)=清空 / Some(Some(n))=设定）
     if let Some(v) = context_window {
         current.context_window = v;
@@ -186,7 +180,7 @@ pub async fn update(
         "UPDATE agents
             SET name = ?, provider = ?, model = ?, system_prompt = ?,
                 base_url = ?, temperature = ?, max_tokens = ?, extra_params = ?, sort_order = ?,
-                cache_prompt = ?, max_history_messages = ?, tool_trim_threshold = ?,
+                cache_prompt = ?, max_history_messages = ?,
                 enabled_tools = ?, supports_vision = ?, workspace_path = ?, context_window = ?
           WHERE id = ?",
     )
@@ -201,7 +195,6 @@ pub async fn update(
     .bind(current.sort_order)
     .bind(current.cache_prompt)
     .bind(current.max_history_messages)
-    .bind(current.tool_trim_threshold)
     .bind(&current.enabled_tools)
     .bind(current.supports_vision)
     .bind(&current.workspace_path)

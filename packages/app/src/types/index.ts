@@ -42,7 +42,6 @@ export interface NewAgent {
   extra_params?: string;
   cache_prompt?: boolean;
   max_history_messages?: number | null;
-  tool_trim_threshold?: number | null;
   context_window?: number | null;
   enabled_tools?: string[] | null;
   supports_vision?: boolean;
@@ -61,7 +60,6 @@ export interface AgentUpdate {
   extra_params?: string;
   cache_prompt?: boolean;
   max_history_messages?: number | null;
-  tool_trim_threshold?: number | null;
   context_window?: number | null;
   enabled_tools?: string[] | null;
   supports_vision?: boolean;

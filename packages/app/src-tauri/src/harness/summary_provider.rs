@@ -674,11 +674,7 @@ mod tests {
         assert_eq!(st.adaptive_cap, SUMMARY_CAP_START * 4);
         assert_eq!(st.adaptive_cap, SUMMARY_CAP_MAX, "START×4 恰好等于 MAX");
         breaker_record_empty(&mut st, 1_002);
-        assert_eq!(
-            st.adaptive_cap,
-            SUMMARY_CAP_MAX,
-            "封顶后不再翻倍（有界）"
-        );
+        assert_eq!(st.adaptive_cap, SUMMARY_CAP_MAX, "封顶后不再翻倍（有界）");
         breaker_record_success(&mut st);
         assert_eq!(st.adaptive_cap, SUMMARY_CAP_START, "成功回落起点");
     }

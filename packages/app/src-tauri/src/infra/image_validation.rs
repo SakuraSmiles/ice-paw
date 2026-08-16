@@ -145,3 +145,216 @@ pub fn strip_empty_image_blocks(blocks: Vec<ContentBlock>) -> Vec<ContentBlock> 
     );
     out
 }
+
+// =========================================================================
+// 单元测试（从 protocol.rs 迁入——测的就是本模块的函数）
+// =========================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::infra::protocol::ContentBlock;
+
+    /// 构造 N 字节原始数据 → base64 字符串
+    fn make_b64_bytes(n: usize) -> String {
+        base64::engine::general_purpose::STANDARD.encode(vec![0u8; n])
+    }
+
+    // --- validate_images ---
+
+    #[test]
+    fn validate_images_empty_blocks_ok() {
+        // 无图片 → 直接通过
+        assert!(validate_images(&[]).is_ok());
+        let blocks = vec![ContentBlock::text("纯文本")];
+        assert!(validate_images(&blocks).is_ok());
+    }
+
+    #[test]
+    fn validate_images_small_image_ok() {
+        let blocks = vec![ContentBlock::image(make_b64_bytes(1024), "image/png")];
+        assert!(validate_images(&blocks).is_ok());
+    }
+
+    #[test]
+    fn validate_images_too_large_rejected() {
+        // 6 MiB > 5 MiB 上限
+        let big = make_b64_bytes(6 * 1024 * 1024);
+        let blocks = vec![ContentBlock::image(big, "image/png")];
+        let err = validate_images(&blocks).unwrap_err();
+        match err {
+            AppError::Validation(msg) => {
+                assert!(msg.contains("过大"), "错误信息应提示过大，实际: {}", msg);
+            }
+            _ => panic!("应为 Validation 错误"),
+        }
+    }
+
+    #[test]
+    fn validate_images_exactly_5mb_ok() {
+        // 5 MiB 边界值应放行
+        let exact = make_b64_bytes(MAX_IMAGE_SIZE);
+        let blocks = vec![ContentBlock::image(exact, "image/png")];
+        assert!(validate_images(&blocks).is_ok());
+    }
+
+    #[test]
+    fn validate_images_5mb_plus_one_rejected() {
+        let over = make_b64_bytes(MAX_IMAGE_SIZE + 1);
+        let blocks = vec![ContentBlock::image(over, "image/png")];
+        assert!(validate_images(&blocks).is_err());
+    }
+
+    #[test]
+    fn validate_images_unsupported_media_type_rejected() {
+        let blocks = vec![ContentBlock::image(make_b64_bytes(100), "image/bmp")];
+        let err = validate_images(&blocks).unwrap_err();
+        match err {
+            AppError::Validation(msg) => {
+                assert!(
+                    msg.contains("不支持"),
+                    "错误信息应提示不支持，实际: {}",
+                    msg
+                );
+            }
+            _ => panic!("应为 Validation 错误"),
+        }
+    }
+
+    #[test]
+    fn validate_images_invalid_base64_rejected() {
+        let blocks = vec![ContentBlock::image("not_base64!@#$%", "image/png")];
+        let err = validate_images(&blocks).unwrap_err();
+        match err {
+            AppError::Validation(msg) => {
+                assert!(
+                    msg.contains("base64"),
+                    "错误信息应提到 base64，实际: {}",
+                    msg
+                );
+            }
+            _ => panic!("应为 Validation 错误"),
+        }
+    }
+
+    #[test]
+    fn validate_images_count_limit() {
+        // 21 张 1KB 图片 → 超过 MAX_IMAGE_COUNT=20
+        let blocks: Vec<ContentBlock> = (0..21)
+            .map(|_| ContentBlock::image(make_b64_bytes(1024), "image/png"))
+            .collect();
+        let err = validate_images(&blocks).unwrap_err();
+        match err {
+            AppError::Validation(msg) => {
+                assert!(msg.contains("最多"), "错误信息应提到最多，实际: {}", msg);
+            }
+            _ => panic!("应为 Validation 错误"),
+        }
+    }
+
+    #[test]
+    fn validate_images_exactly_max_count_ok() {
+        // 恰好 20 张 → 应放行
+        let blocks: Vec<ContentBlock> = (0..MAX_IMAGE_COUNT)
+            .map(|_| ContentBlock::image(make_b64_bytes(1024), "image/png"))
+            .collect();
+
+        assert!(validate_images(&blocks).is_ok());
+    }
+
+    #[test]
+    fn validate_images_mixed_text_and_images_ok() {
+        // 文本 + 多张图片混合
+        let mut blocks = vec![ContentBlock::text("看这些图")];
+        for _ in 0..3 {
+            blocks.push(ContentBlock::image(make_b64_bytes(1024), "image/png"));
+        }
+        blocks.push(ContentBlock::text("请描述"));
+        assert!(validate_images(&blocks).is_ok());
+    }
+
+    #[test]
+    fn validate_images_supports_all_four_types() {
+        for mt in ["image/png", "image/jpeg", "image/gif", "image/webp"] {
+            let blocks = vec![ContentBlock::image(make_b64_bytes(100), mt)];
+            assert!(validate_images(&blocks).is_ok(), "{} 应被允许", mt);
+        }
+    }
+
+    // --- strip_empty_image_blocks（0 字节图片软剥离）---
+
+    #[test]
+    fn strip_keeps_nonempty_image() {
+        // 非空图片（1KB）→ 原样保留，无提示注入
+        let blocks = vec![
+            ContentBlock::text("看图"),
+            ContentBlock::image(make_b64_bytes(1024), "image/png"),
+        ];
+        let out = strip_empty_image_blocks(blocks);
+        assert_eq!(out.len(), 2, "非空图片应保留，无额外提示");
+        assert!(out[1].is_image());
+    }
+
+    #[test]
+    fn strip_removes_empty_image_and_injects_hint() {
+        // 0 字节图片（data 为空）→ 剥离 + 注入诚实提示
+        let blocks = vec![
+            ContentBlock::image(String::new(), "image/png"),
+            ContentBlock::text("正文"),
+        ];
+        let out = strip_empty_image_blocks(blocks);
+        // 期望：空图被移除，正文保留，末尾追加 1 条提示
+        assert_eq!(out.len(), 2, "空图剥离后应为 正文 + 提示");
+        assert_eq!(out[0].as_text(), Some("正文"));
+        let hint = out[1].as_text().expect("末尾应追加提示");
+        assert!(hint.contains("0 字节"), "提示应说明 0 字节，实际: {hint}");
+        assert!(out.iter().all(|b| !b.is_image()), "不应残留任何图片块");
+    }
+
+    #[test]
+    fn strip_keeps_valid_when_mixed_with_empty() {
+        // 一空一有效：空图剥离、有效图保留、提示点名「第 1 张」
+        let blocks = vec![
+            ContentBlock::image(String::new(), "image/png"), // 第 1 张：空
+            ContentBlock::image(make_b64_bytes(512), "image/jpeg"), // 第 2 张：有效
+        ];
+        let out = strip_empty_image_blocks(blocks);
+        let images: Vec<_> = out.iter().filter(|b| b.is_image()).collect();
+        assert_eq!(images.len(), 1, "仅保留 1 张有效图");
+        let hint = out.iter().find_map(|b| b.as_text()).expect("应有提示");
+        assert!(hint.contains("第 1 张"), "应点名第 1 张为空，实际: {hint}");
+    }
+
+    #[test]
+    fn strip_no_image_unchanged() {
+        // 纯文本 / 无图 → 原样返回、无提示
+        let blocks = vec![ContentBlock::text("只有文字")];
+        let out = strip_empty_image_blocks(blocks);
+        assert_eq!(out.len(), 1);
+        assert!(out[0].as_text().is_some());
+    }
+
+    #[test]
+    fn strip_invalid_base64_treated_as_empty() {
+        // 非法 base64（解码失败）→ 视作坏块剥离（发送必失败）
+        let blocks = vec![ContentBlock::image("not_base64!@#$%", "image/png")];
+        let out = strip_empty_image_blocks(blocks);
+        assert!(
+            out.iter().all(|b| !b.is_image()),
+            "非法 base64 图片应被剥离"
+        );
+        assert!(out.iter().any(|b| b.as_text().is_some()), "应注入提示");
+    }
+
+    // --- 白名单 ---
+
+    #[test]
+    fn supported_media_types_whitelist() {
+        for mt in ["image/png", "image/jpeg", "image/gif", "image/webp"] {
+            assert!(is_supported_image_media_type(mt), "{} 应在白名单内", mt);
+        }
+        for mt in ["image/bmp", "image/svg+xml", "application/pdf", "", "png"] {
+            assert!(!is_supported_image_media_type(mt), "{} 不应在白名单内", mt);
+        }
+    }
+}
