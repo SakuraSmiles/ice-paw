@@ -21,10 +21,12 @@ import PlanCard from "./PlanCard.vue";
 import ImagePreview from "./ImagePreview.vue";
 import AttachmentDetail from "./AttachmentDetail.vue";
 import TurnRail from "./TurnRail.vue";
+import BudgetPill from "./BudgetPill.vue";
 import { useThinkingTimer } from "../../composables/useThinkingTimer";
 import { useScrollFollow } from "../../composables/useScrollFollow";
 import { useTurnRail } from "../../composables/useTurnRail";
 import { useActiveTurn } from "../../composables/useActiveTurn";
+import { formatTokenCount } from "../../utils/format";
 import type { Message, MessageRole, PlanItem } from "../../types";
 
 const chat = useChatStore();
@@ -561,6 +563,16 @@ const finishReasonLabels: Record<string, string> = {
   stuck: "连续多轮无进展，已自动终止",
   tool_use: "已达工具调用轮数上限",
 };
+
+/** finish_reason 文案：budget_exceeded 在有预算数据时附具体数字
+ *  （已用 X / 上限 Y），让用户知道为什么这么快烧完、还剩多少跑道。 */
+function finishReasonLabel(reason: string): string {
+  if (reason === "budget_exceeded" && chat.budget) {
+    const b = chat.budget;
+    return `本次 token 预算已达上限（已用 ${formatTokenCount(b.cumulative_tokens)} / 上限 ${formatTokenCount(b.effective_cap)}）`;
+  }
+  return finishReasonLabels[reason] || reason;
+}
 // 「发送消息即可续跑」的终止类：提示行内附「继续」按钮（abort=用户主动停，不列）
 const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "length", "max_tokens"]);
 </script>
@@ -889,7 +901,8 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
 
     <!-- finish_reason 提示（B3：可续跑类附「继续」按钮，一键发「继续」续跑任务） -->
     <div v-if="chat.lastFinishReason && chat.lastFinishReason !== 'stop' && chat.lastFinishReason !== 'end_turn' && chat.messages.length > 0" class="finish-reason">
-      <span>{{ finishReasonLabels[chat.lastFinishReason] || chat.lastFinishReason }}</span>
+      <span>{{ finishReasonLabel(chat.lastFinishReason) }}</span>
+      <BudgetPill v-if="chat.budget" :budget="chat.budget" />
       <button
         v-if="RESUMABLE_REASONS.has(chat.lastFinishReason) && !chat.sending"
         class="continue-btn"
@@ -902,6 +915,7 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
       <div class="cursor-track">
         <div class="cursor-glow" /><span class="cursor-label">正在生成…</span>
       </div>
+      <BudgetPill v-if="chat.budget" :budget="chat.budget" />
     </div>
 
     <!-- 全屏图片预览（多图可翻页） -->
@@ -920,6 +934,13 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
       @close="detailAttachments = null"
     />
     </div>
+
+    <!-- 预算续期 toast（非阻塞，5s 自动消失；仿 ChatHeader undo-toast 定位模式） -->
+    <Transition name="budget-toast">
+      <div v-if="chat.renewalNotice" class="budget-renewal-toast">
+        <span class="budget-renewal-text">{{ chat.renewalNotice }}</span>
+      </div>
+    </Transition>
 
     <!-- 轮次导航条（UX #5 v2）：定容滑动窗口（当前轮居中）+ 视位高亮 +
          位置徽标 + 边缘省略号/滚轮调窗 + 底部「跳到最新」；
@@ -974,6 +995,25 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
 .finish-reason span { display:inline-block; font-size:var(--ip-text-caption-size); color:var(--ip-color-text-tertiary); padding:2px 10px; border-radius:var(--ip-radius-full); background:var(--ip-color-bg-tertiary); }
 .continue-btn { font-size:var(--ip-text-caption-size); color:var(--ip-color-text-secondary); padding:2px 12px; border-radius:var(--ip-radius-full); border:1px solid var(--ip-color-border-default); background:var(--ip-color-bg-secondary); cursor:pointer; transition:all var(--ip-duration-fast) var(--ip-ease-out); }
 .continue-btn:hover { color:var(--ip-color-text-primary); border-color:var(--ip-color-border-strong); }
+
+/* ===== 预算续期 toast（非阻塞；messages-wrap 相对定位承载）===== */
+.budget-renewal-toast {
+  position:absolute; top:12px; left:50%; transform:translateX(-50%);
+  z-index:var(--ip-z-notification, 1500);
+  display:flex; align-items:center;
+  padding:6px 16px; border-radius:var(--ip-radius-md);
+  background:var(--ip-color-bg-elevated, var(--ip-color-bg-secondary));
+  border:1px solid var(--ip-color-primary-soft-bg);
+  box-shadow:var(--ip-shadow-md);
+  pointer-events:none;
+}
+.budget-renewal-text { font-size:var(--ip-text-caption-size); color:var(--ip-color-primary-tint-text); white-space:nowrap; }
+.budget-toast-enter-active { animation:budget-toast-in 0.25s var(--ip-ease-out); }
+.budget-toast-leave-active { animation:budget-toast-in 0.2s ease-in reverse; }
+@keyframes budget-toast-in {
+  from { opacity:0; transform:translate(-50%, -8px); }
+  to   { opacity:1; transform:translate(-50%, 0); }
+}
 
 /* ===== TransitionGroup 动画 ===== */
 .msg-enter-active { animation:msg-in 0.35s cubic-bezier(0.16,1,0.3,1); }

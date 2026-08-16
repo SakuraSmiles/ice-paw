@@ -28,6 +28,7 @@ import type {
   ToolAuthRequestPayload,
   ConfigProposalPayload,
   DelegationStartedPayload,
+  ChatBudgetPayload,
 } from "../types";
 
 export async function useChatEvents(): Promise<() => void> {
@@ -77,6 +78,13 @@ export async function useChatEvents(): Promise<() => void> {
   // 不必等完成时的 tool_result 回传。
   await subscribe<DelegationStartedPayload>("chat:delegation-started", () => {
     void chat.loadConversations();
+  });
+
+  // 会话级 token 预算：每轮 usage 累计后 / 触顶续期 / 终止前各发一次。
+  // 按激活会话过滤——后台会话的预算事件不触 HUD 与续期 toast。
+  await subscribe<ChatBudgetPayload>("chat:budget", (e) => {
+    if (e.payload.conversation_id !== chat.activeConvId) return;
+    chat.updateBudget(e.payload);
   });
 
   // 多轮工具调用：每轮工具执行完毕后，后端创建下一轮 assistant 占位并 emit。  // 前端据此冻结上一条 assistant（写入 tool_use/text/thinking）+ 插入 user(tool_result)

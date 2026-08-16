@@ -176,6 +176,53 @@ fn write_default_agent_yaml(
         return;
     }
 
+    let content = build_default_agent_yaml_content(
+        agent_name,
+        provider,
+        model,
+        system_prompt,
+        temperature,
+        max_tokens,
+        enabled_tools,
+        base_url,
+    );
+
+
+    match std::fs::write(&yaml_path, &content) {
+        Ok(()) => {
+            tracing::info!(
+                target: "ice_paw.agent",
+                "已生成默认 agent.yaml: {}",
+                yaml_path.display()
+            );
+        }
+        Err(e) => {
+            tracing::warn!(
+                target: "ice_paw.agent",
+                "写入 agent.yaml 失败（Agent 仍可用，忽略）: {} — {}",
+                yaml_path.display(),
+                e
+            );
+        }
+    }
+}
+
+/// 构造默认 agent.yaml 内容（纯函数，为单测让路）。
+///
+/// 模板纪律：`tool_max_rounds` / `max_total_tokens` 一律**注释掉**——显式值
+/// 是 B1 语义下的硬上限（触顶即停、不自动续期），写进模板会让所有新 agent
+/// 默认失去自动续期额度；留空 = 软默认 + 自动续期（长任务不误杀）。
+#[allow(clippy::too_many_arguments)]
+fn build_default_agent_yaml_content(
+    agent_name: &str,
+    provider: &str,
+    model: &str,
+    system_prompt: Option<&str>,
+    temperature: f64,
+    max_tokens: i32,
+    enabled_tools: Option<&[String]>,
+    base_url: Option<&str>,
+) -> String {
     let default_sp = format!("{} 是一个 AI 助手。", agent_name);
     let sp = system_prompt
         .filter(|s| !s.is_empty())
@@ -196,9 +243,9 @@ fn write_default_agent_yaml(
          system_prompt: |\n{}\n\
          temperature: {}\n\
          max_tokens: {}\n\
-         # 工具调用最大轮数（默认 50）\n\
-         tool_max_rounds: 50\n\
-         # Token 预算上限（默认按上下文窗口自适应 3×；可不设，或显式覆盖）\n\
+         # 工具调用最大轮数（默认 50 + 自动续期 2 次；显式设置 = 硬上限，触顶即停不自动续期）\n\
+         # tool_max_rounds: 50\n\
+         # Token 预算上限（默认按上下文窗口自适应 3× + 自动续期 2 次；显式设置 = 硬上限，长对话会频繁中断）\n\
          # max_total_tokens: 3000000\n",
         provider, model, sp_indented, temperature, max_tokens,
     );
@@ -216,24 +263,7 @@ fn write_default_agent_yaml(
             content.push_str(&format!("\nbase_url: {}\n", url));
         }
     }
-
-    match std::fs::write(&yaml_path, &content) {
-        Ok(()) => {
-            tracing::info!(
-                target: "ice_paw.agent",
-                "已生成默认 agent.yaml: {}",
-                yaml_path.display()
-            );
-        }
-        Err(e) => {
-            tracing::warn!(
-                target: "ice_paw.agent",
-                "写入 agent.yaml 失败（Agent 仍可用，忽略）: {} — {}",
-                yaml_path.display(),
-                e
-            );
-        }
-    }
+    content
 }
 
 impl SqlAgentCmd {
@@ -1055,5 +1085,44 @@ mod tests {
         let mock: Arc<dyn AgentCmd> = Arc::new(MockAgentCmd::new());
         let n = exercise(mock).await.unwrap();
         assert_eq!(n, 0);
+    }
+
+    /// 模板去雷回归：默认 agent.yaml 不得含活跃的 tool_max_rounds /
+    /// max_total_tokens 行——显式值是 B1 硬上限语义（触顶即停、不自动续期），
+    /// 写进模板会让所有新 agent 默认失去自动续期额度。
+    #[test]
+    fn default_yaml_template_comments_out_hard_caps() {
+        let content = build_default_agent_yaml_content(
+            "测试",
+            "glm",
+            "glm-5.2",
+            None,
+            0.7,
+            4096,
+            Some(&["read_file".to_string()]),
+            None,
+        );
+        assert!(
+            content.contains("# tool_max_rounds: 50"),
+            "tool_max_rounds 应为注释行: {content}"
+        );
+        assert!(
+            content.contains("# max_total_tokens: 3000000"),
+            "max_total_tokens 应为注释行: {content}"
+        );
+        // 不得存在行首活跃（未注释）的两行
+        for line in content.lines() {
+            let trimmed = line.trim_start();
+            assert!(
+                !(trimmed.starts_with("tool_max_rounds:")
+                    || trimmed.starts_with("max_total_tokens:")),
+                "不得有活跃硬上限行: {line}"
+            );
+        }
+        // 常规字段照常生成
+        assert!(content.contains("provider: glm"));
+        assert!(content.contains("model: glm-5.2"));
+        assert!(content.contains("max_tokens: 4096"));
+        assert!(content.contains("- read_file"));
     }
 }

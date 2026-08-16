@@ -11,12 +11,14 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { parseDbTime } from "../utils/time";
+import { formatTokenCount } from "../utils/format";
 import type { Conversation, Message } from "../types";
 import type {
   AuthScope,
   PendingAuthEntry,
   ConfigProposalPayload,
   ConfigProposalResponse,
+  ChatBudgetPayload,
 } from "../types";
 import { bridge } from "../api/bridge";
 import { useAgentStore } from "./agent";
@@ -95,6 +97,7 @@ export const useChatStore = defineStore("chat", () => {
       sending.value = false;
     }
     lastFinishReason.value = null;
+    clearBudget();
     loadMessages(id);
   }
 
@@ -165,6 +168,34 @@ export const useChatStore = defineStore("chat", () => {
   const streamingText = ref("");
   const lastFinishReason = ref<string | null>(null);
   const currentModel = ref<string | null>(null);
+
+  // ===== 会话级 token 预算（chat:budget 事件驱动；HUD / 续期 toast） =====
+  // 与 lastFinishReason 同为「激活会话的回合级单值」：一次 send 的累计状态，
+  // 新回合（sendMessage）/切会话时重置。事件层（useChatEvents）按 convId 过滤
+  // 后调用 updateBudget——后台会话的预算事件不触本会话 HUD。
+  const budget = ref<ChatBudgetPayload | null>(null);
+  const renewalNotice = ref<string | null>(null);
+  let renewalTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function updateBudget(p: ChatBudgetPayload) {
+    budget.value = p;
+    if (p.renewed) {
+      renewalNotice.value =
+        `预算已自动续期 ${p.renewal_index}/${p.max_renewals}：` +
+        `上限抬升至 ${formatTokenCount(p.effective_cap)} tokens，任务继续`;
+      if (renewalTimer) clearTimeout(renewalTimer);
+      renewalTimer = setTimeout(() => {
+        renewalNotice.value = null;
+        renewalTimer = null;
+      }, 5000);
+    }
+  }
+
+  function clearBudget() {
+    budget.value = null;
+    renewalNotice.value = null;
+    if (renewalTimer) { clearTimeout(renewalTimer); renewalTimer = null; }
+  }
 
   // ===== 流式工具调用/思考状态 =====
   interface ToolCallState {
@@ -252,6 +283,7 @@ export const useChatStore = defineStore("chat", () => {
     thinkingDuration.value = null;
     lastThinkingContent.value = null;
     lastFinishReason.value = null;
+    clearBudget(); // 新回合新预算（后端 LoopBudget 是 per-send 的）
 
     // 从当前 Agent 获取模型名
     const agentStore = useAgentStore();
@@ -543,6 +575,7 @@ export const useChatStore = defineStore("chat", () => {
     thinkingStartTime.value = null;
     streamingToolCalls.value = new Map();
     lastFinishReason.value = null;
+    clearBudget();
     bgStreams.value = new Map();
     pendingProposals.value = new Map();
     pendingAuthRequests.value = new Map();
@@ -578,6 +611,7 @@ export const useChatStore = defineStore("chat", () => {
     activeConvId, activeConversation,
     messages, msgLoading, hasMore, loadingMore,
     sending, streamingText, draftText, pendingImages, pendingFiles, lastFinishReason, currentModel,
+    budget, renewalNotice, updateBudget,
     streamingToolCalls, streamingThinking, thinkingStartTime, thinkingDuration, lastThinkingContent, thinkingDurations,
     // 事件层（useChatEvents）直接读写的内部 Map——暴露供其 mutate；对外读取走下方 computed
     bgStreams, pendingAuthRequests, pendingProposals, lastErrors,

@@ -5,6 +5,7 @@
 //! - 所有命令返回 `Result<T, AppError>`，经 `AppError → InvokeError` 自动透传
 
 pub mod agent_cmd;
+pub mod agent_yaml;
 pub mod chat_cmd;
 #[cfg(test)]
 mod chat_cmd_tests;
