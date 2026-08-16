@@ -59,8 +59,12 @@ pub async fn list_by_conversation(
     before: Option<(String, i64)>,
 ) -> AppResult<Vec<MessageRow>> {
     let mut lim = limit.unwrap_or(DEFAULT_LIMIT);
-    if lim <= 0 { lim = DEFAULT_LIMIT; }
-    if lim > MAX_LIMIT { lim = MAX_LIMIT; }
+    if lim <= 0 {
+        lim = DEFAULT_LIMIT;
+    }
+    if lim > MAX_LIMIT {
+        lim = MAX_LIMIT;
+    }
 
     let rows = if let Some((before_ts, before_rowid)) = before {
         sqlx::query_as::<_, MessageRow>(
@@ -100,10 +104,16 @@ pub async fn list_by_conversation(
 
 /// 轮次锚点（聊天「轮次导航条」UX #5）：一轮 = 一条**真实**用户消息。
 ///
-/// 工具轮的 tool_result 占位行同为 `role='user'`（content='' +
-/// content_blocks 全 tool_result），必须排除——否则轮次被工具轮数膨胀
-/// （真机：10 轮会话曾数出 49）。排除后与轨迹页 `count_turns_before`
-/// （distinct turn_id，不变式 turn_id == user_msg_id）同基准。
+/// 两类占位行必须排除（否则轮次被膨胀/幽灵化）：
+/// 1. 工具轮的 tool_result 占位行（content='' + content_blocks 全
+///    tool_result）——真机：10 轮会话曾数出 49；
+/// 2. **空占位行**（content='' 且 content_blocks 空/'[]'）——loop_engine
+///    阶段 F 先 create 占位再 update_content_blocks，进程死亡/崩溃残留的
+///    空行会被误当锚点（真机：34 真实轮曾数出 36，导航条与实际位置错位）。
+///    注意纯图/纯附件消息 content 为空但 blocks 非空，是真锚点，不得误伤。
+///
+/// 排除后与轨迹页 `count_turns_before`（distinct turn_id，不变式
+/// turn_id == user_msg_id）同基准。
 ///
 /// 只取 `id / 预览 / 时间` 三个轻量字段——**不加载 content_blocks 大字段**，
 /// 预览在 SQL 侧 `substr` 截断（字符级），3000 轮也只有小行级成本。
@@ -126,6 +136,8 @@ pub async fn list_turn_anchors(
            FROM messages \
           WHERE conversation_id = ? AND role = 'user' \
             AND COALESCE(content_blocks, '') NOT LIKE '%\"type\":\"tool_result\"%' \
+            AND NOT (TRIM(COALESCE(content, '')) = '' \
+                     AND COALESCE(content_blocks, '') IN ('', '[]')) \
           ORDER BY created_at ASC, rowid ASC",
     )
     .bind(conversation_id)
@@ -146,16 +158,11 @@ pub async fn list_turn_anchors(
 ///
 /// 返回 `i64` 以与 SQL `COUNT(*)` 对齐，且与 SQLite 的上限毫无关系。
 /// 用于前端「还有 N 条历史消息」之类的展示（P2 可选，本期不调用）。
-pub async fn count_by_conversation(
-    pool: &SqlitePool,
-    conversation_id: &str,
-) -> AppResult<i64> {
-    let row: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM messages WHERE conversation_id = ?",
-    )
-    .bind(conversation_id)
-    .fetch_one(pool)
-    .await?;
+pub async fn count_by_conversation(pool: &SqlitePool, conversation_id: &str) -> AppResult<i64> {
+    let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM messages WHERE conversation_id = ?")
+        .bind(conversation_id)
+        .fetch_one(pool)
+        .await?;
     Ok(row.0)
 }
 
@@ -188,12 +195,11 @@ pub async fn list_all_by_rowid(
 /// 与 [`crate::db::repo::session_event::max_seq`] 组成会话「数据指纹」——指纹未变即
 /// 缓存的路由决策仍有效，免去每轮都跑全量对账。
 pub async fn max_rowid(pool: &SqlitePool, conversation_id: &str) -> AppResult<i64> {
-    let (max,): (i64,) = sqlx::query_as(
-        "SELECT COALESCE(MAX(rowid), 0) FROM messages WHERE conversation_id = ?",
-    )
-    .bind(conversation_id)
-    .fetch_one(pool)
-    .await?;
+    let (max,): (i64,) =
+        sqlx::query_as("SELECT COALESCE(MAX(rowid), 0) FROM messages WHERE conversation_id = ?")
+            .bind(conversation_id)
+            .fetch_one(pool)
+            .await?;
     Ok(max)
 }
 
@@ -210,23 +216,21 @@ pub async fn id_rowid_map(
     pool: &SqlitePool,
     conversation_id: &str,
 ) -> AppResult<HashMap<String, i64>> {
-    let rows: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT id, rowid FROM messages WHERE conversation_id = ?",
-    )
-    .bind(conversation_id)
-    .fetch_all(pool)
-    .await?;
+    let rows: Vec<(String, i64)> =
+        sqlx::query_as("SELECT id, rowid FROM messages WHERE conversation_id = ?")
+            .bind(conversation_id)
+            .fetch_all(pool)
+            .await?;
     Ok(rows.into_iter().collect())
 }
 
 /// 写入新消息
-pub async fn create(
-    pool: &SqlitePool,
-    id: &str,
-    new_msg: &NewMessage,
-) -> AppResult<MessageRow> {
+pub async fn create(pool: &SqlitePool, id: &str, new_msg: &NewMessage) -> AppResult<MessageRow> {
     // 基本校验
-    if !matches!(new_msg.role.as_str(), "system" | "user" | "assistant" | "tool") {
+    if !matches!(
+        new_msg.role.as_str(),
+        "system" | "user" | "assistant" | "tool"
+    ) {
         return Err(AppError::Validation(format!(
             "非法 role: {}, 必须是 system/user/assistant/tool",
             new_msg.role
@@ -242,7 +246,7 @@ pub async fn create(
     .bind(&new_msg.conversation_id)
     .bind(&new_msg.role)
     .bind(&new_msg.content)
-    .bind("[]")  // content_blocks 默认空数组
+    .bind("[]") // content_blocks 默认空数组
     .bind(new_msg.token_count)
     .bind(new_msg.error.as_deref())
     .bind(new_msg.model.as_deref())
@@ -250,12 +254,10 @@ pub async fn create(
     .await?;
 
     // 更新父会话的 updated_at 触发器虽然有，但 INSERT 不触发；这里手动 update 一下
-    sqlx::query(
-        "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?",
-    )
-    .bind(&new_msg.conversation_id)
-    .execute(pool)
-    .await?;
+    sqlx::query("UPDATE conversations SET updated_at = datetime('now') WHERE id = ?")
+        .bind(&new_msg.conversation_id)
+        .execute(pool)
+        .await?;
 
     get_by_id(pool, id).await
 }
@@ -275,11 +277,7 @@ async fn get_by_id(pool: &SqlitePool, id: &str) -> AppResult<MessageRow> {
 }
 
 /// 更新消息内容（流式生成结束后回写完整文本）
-pub async fn update_content(
-    pool: &SqlitePool,
-    id: &str,
-    content: &str,
-) -> AppResult<()> {
+pub async fn update_content(pool: &SqlitePool, id: &str, content: &str) -> AppResult<()> {
     let affected = sqlx::query("UPDATE messages SET content = ? WHERE id = ?")
         .bind(content)
         .bind(id)
@@ -317,11 +315,7 @@ pub async fn update_content_blocks(
 }
 
 /// 更新消息错误字段（流式生成失败时记录）
-pub async fn update_error(
-    pool: &SqlitePool,
-    id: &str,
-    error: &str,
-) -> AppResult<()> {
+pub async fn update_error(pool: &SqlitePool, id: &str, error: &str) -> AppResult<()> {
     let affected = sqlx::query("UPDATE messages SET error = ? WHERE id = ?")
         .bind(error)
         .bind(id)
@@ -348,11 +342,7 @@ pub async fn update_error(
 /// # 注意
 /// - 0 视为合法值（被存储）
 /// - 负数应被业务侧拦截；这里仅做最基础的 SQL 执行
-pub async fn update_token_count(
-    pool: &SqlitePool,
-    id: &str,
-    token_count: i32,
-) -> AppResult<()> {
+pub async fn update_token_count(pool: &SqlitePool, id: &str, token_count: i32) -> AppResult<()> {
     let affected = sqlx::query("UPDATE messages SET token_count = ? WHERE id = ?")
         .bind(token_count)
         .bind(id)
@@ -504,7 +494,10 @@ mod tests {
     #[tokio::test]
     async fn update_token_count_writes_value() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed_message(&pool, "msg-1", "conv-1").await;
 
         update_token_count(&pool, "msg-1", 42).await.unwrap();
@@ -515,7 +508,10 @@ mod tests {
     #[tokio::test]
     async fn update_token_count_unknown_id_returns_err() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
 
         let result = update_token_count(&pool, "nonexistent", 10).await;
         assert!(result.is_err());
@@ -531,7 +527,10 @@ mod tests {
     #[tokio::test]
     async fn update_token_count_zero_is_stored() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed_message(&pool, "msg-1", "conv-1").await;
 
         update_token_count(&pool, "msg-1", 0).await.unwrap();
@@ -543,7 +542,10 @@ mod tests {
     #[tokio::test]
     async fn delete_removes_message_and_reports_unknown_id() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed_message(&pool, "msg-del", "conv-del").await;
 
         // 已存在 → 删除成功

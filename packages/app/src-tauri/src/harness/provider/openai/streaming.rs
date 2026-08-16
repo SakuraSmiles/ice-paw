@@ -17,9 +17,9 @@
 //! - OpenAI 流结束标记是 `data: [DONE]`（非 Anthropic 的 `event: message_stop`）
 //! - 增量字段在 `choices[0].delta.content`（单层）
 
-use std::collections::HashMap;
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
+use std::collections::HashMap;
 use tokio::sync::mpsc;
 
 use crate::error::{AppError, AppResult};
@@ -150,8 +150,7 @@ pub(crate) fn parse_sse_stream<S, E>(
         // 用 Vec<u8> 缓冲区避免 UTF-8 跨 chunk 边界截断
         let mut buf: Vec<u8> = Vec::new();
         // 追踪每个工具调用的状态：index → (id, name, arguments_buffer, started)
-        let mut tool_call_states: HashMap<usize, (String, String, String, bool)> =
-            HashMap::new();
+        let mut tool_call_states: HashMap<usize, (String, String, String, bool)> = HashMap::new();
         // OpenAI 的 usage chunk 排在 finish_reason 之后，finish_reason 分支只记下原因、
         // 不立即发 Done；真正的 Done 由 [DONE] 分支或流自然结束兜底带此原因发出。
         let mut pending_finish_reason: Option<String> = None;
@@ -174,9 +173,7 @@ pub(crate) fn parse_sse_stream<S, E>(
                 Ok(c) => c,
                 Err(e) => {
                     let _ = tx
-                        .send(Err(AppError::Stream(format!(
-                            "HTTP 流读取失败: {e}"
-                        ))))
+                        .send(Err(AppError::Stream(format!("HTTP 流读取失败: {e}"))))
                         .await;
                     return;
                 }
@@ -202,16 +199,15 @@ pub(crate) fn parse_sse_stream<S, E>(
                 }
 
                 // 只解码完整的行，确保 UTF-8 不会被截断
-                let line = String::from_utf8(line_bytes)
-                    .unwrap_or_else(|e| {
-                        tracing::warn!(
-                            target: "ice_paw.llm",
-                            "SSE 行 UTF-8 解码失败（容错回退）: {}",
-                            e,
-                        );
-                        // 容错：丢弃无效字节
-                        String::from_utf8_lossy(&e.into_bytes()).to_string()
-                    });
+                let line = String::from_utf8(line_bytes).unwrap_or_else(|e| {
+                    tracing::warn!(
+                        target: "ice_paw.llm",
+                        "SSE 行 UTF-8 解码失败（容错回退）: {}",
+                        e,
+                    );
+                    // 容错：丢弃无效字节
+                    String::from_utf8_lossy(&e.into_bytes()).to_string()
+                });
 
                 // 只处理 `data: ` 开头的行
                 let Some(data) = line.strip_prefix("data: ") else {
@@ -251,7 +247,8 @@ pub(crate) fn parse_sse_stream<S, E>(
                                     usage: TokenUsage {
                                         prompt_tokens: usage.prompt_tokens.unwrap_or(0),
                                         completion_tokens: usage.completion_tokens.unwrap_or(0),
-                                        cached_tokens: usage.prompt_tokens_details
+                                        cached_tokens: usage
+                                            .prompt_tokens_details
                                             .and_then(|d| d.cached_tokens)
                                             .unwrap_or(0),
                                     },
@@ -270,9 +267,7 @@ pub(crate) fn parse_sse_stream<S, E>(
                                 for (id, _, _, started) in tool_call_states.values() {
                                     if *started {
                                         let _ = tx
-                                            .send(Ok(ChatDelta::ToolCallEnd {
-                                                id: id.clone(),
-                                            }))
+                                            .send(Ok(ChatDelta::ToolCallEnd { id: id.clone() }))
                                             .await;
                                     }
                                 }
@@ -292,14 +287,11 @@ pub(crate) fn parse_sse_stream<S, E>(
                                 if scrubber.is_enabled() {
                                     let emit = scrubber.feed(&content);
                                     if !emit.is_empty() {
-                                        let _ = tx
-                                            .send(Ok(ChatDelta::Delta { content: emit }))
-                                            .await;
+                                        let _ =
+                                            tx.send(Ok(ChatDelta::Delta { content: emit })).await;
                                     }
                                 } else if !content.is_empty() {
-                                    let _ = tx
-                                        .send(Ok(ChatDelta::Delta { content }))
-                                        .await;
+                                    let _ = tx.send(Ok(ChatDelta::Delta { content })).await;
                                 }
                             }
 
@@ -307,7 +299,9 @@ pub(crate) fn parse_sse_stream<S, E>(
                             if let Some(rc) = &choice.delta.reasoning_content {
                                 if !rc.is_empty() {
                                     if let Err(e) = tx
-                                        .send(Ok(ChatDelta::Thinking { content: rc.clone() }))
+                                        .send(Ok(ChatDelta::Thinking {
+                                            content: rc.clone(),
+                                        }))
                                         .await
                                     {
                                         tracing::warn!(
@@ -322,12 +316,8 @@ pub(crate) fn parse_sse_stream<S, E>(
 
                             // 工具调用增量
                             if let Some(tc_deltas) = choice.delta.tool_calls {
-                                process_tool_call_deltas(
-                                    tc_deltas,
-                                    &tx,
-                                    &mut tool_call_states,
-                                )
-                                .await;
+                                process_tool_call_deltas(tc_deltas, &tx, &mut tool_call_states)
+                                    .await;
                             }
                         }
                     }
@@ -347,9 +337,7 @@ pub(crate) fn parse_sse_stream<S, E>(
         // 发送未完成的 ToolCallEnd（finish_reason 分支已 clear，通常为空）
         for (id, _, _, started) in tool_call_states.values() {
             if *started {
-                let _ = tx
-                    .send(Ok(ChatDelta::ToolCallEnd { id: id.clone() }))
-                    .await;
+                let _ = tx.send(Ok(ChatDelta::ToolCallEnd { id: id.clone() })).await;
             }
         }
         // 冲刷 sentinel 截断器的未决尾部（与 [DONE] 分支对称）
@@ -440,8 +428,7 @@ mod tests {
                    data: [DONE]\n";
 
         // 错误类型用 std::io::Error（满足 `Display + Send + 'static`）
-        let chunks: Vec<Result<Bytes, std::io::Error>> =
-            vec![Ok(Bytes::copy_from_slice(raw))];
+        let chunks: Vec<Result<Bytes, std::io::Error>> = vec![Ok(Bytes::copy_from_slice(raw))];
         let byte_stream = stream::iter(chunks);
 
         let (tx, mut rx) = mpsc::channel::<AppResult<ChatDelta>>(64);
@@ -482,8 +469,7 @@ mod tests {
                    data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":4}}\n\
                    data: [DONE]\n";
 
-        let chunks: Vec<Result<Bytes, std::io::Error>> =
-            vec![Ok(Bytes::copy_from_slice(raw))];
+        let chunks: Vec<Result<Bytes, std::io::Error>> = vec![Ok(Bytes::copy_from_slice(raw))];
         let byte_stream = stream::iter(chunks);
         let (tx, mut rx) = mpsc::channel::<AppResult<ChatDelta>>(64);
         let cancel = CancellationToken::new();
@@ -521,8 +507,7 @@ mod tests {
                    data: {\"choices\":[{\"finish_reason\":\"length\",\"delta\":{}}],\"usage\":{\"prompt_tokens\":20,\"completion_tokens\":8}}\n\
                    data: [DONE]\n";
 
-        let chunks: Vec<Result<Bytes, std::io::Error>> =
-            vec![Ok(Bytes::copy_from_slice(raw))];
+        let chunks: Vec<Result<Bytes, std::io::Error>> = vec![Ok(Bytes::copy_from_slice(raw))];
         let byte_stream = stream::iter(chunks);
         let (tx, mut rx) = mpsc::channel::<AppResult<ChatDelta>>(64);
         let cancel = CancellationToken::new();
@@ -667,8 +652,7 @@ mod tests {
                    data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"\",\"content\":\" world\"}}]}\n\
                    data: [DONE]\n";
 
-        let chunks: Vec<Result<Bytes, std::io::Error>> =
-            vec![Ok(Bytes::copy_from_slice(raw))];
+        let chunks: Vec<Result<Bytes, std::io::Error>> = vec![Ok(Bytes::copy_from_slice(raw))];
         let byte_stream = stream::iter(chunks);
 
         let (tx, mut rx) = mpsc::channel::<AppResult<ChatDelta>>(64);
@@ -864,6 +848,10 @@ mod tests {
                 deltas.push(content);
             }
         }
-        assert_eq!(deltas.concat(), content, "非 minimax 模型应原样透传，不截断");
+        assert_eq!(
+            deltas.concat(),
+            content,
+            "非 minimax 模型应原样透传，不截断"
+        );
     }
 }

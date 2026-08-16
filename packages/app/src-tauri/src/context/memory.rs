@@ -37,9 +37,7 @@ use tracing::{debug, info, warn};
 
 use crate::context::history::{resolve_window, sanitize_history};
 use crate::context::pipeline::{PipelineContext, PipelineStage};
-use crate::context::token::{
-    estimate_message_tokens, estimate_messages_tokens, estimate_tokens,
-};
+use crate::context::token::{estimate_message_tokens, estimate_messages_tokens, estimate_tokens};
 use crate::db::repo::summary::{
     get_latest_summary_state, insert_summary_message, update_summary_message, SUMMARY_PREFIX,
 };
@@ -240,7 +238,11 @@ impl PipelineStage for MemoryStage {
                 format!("[Prior summary]\n{}", s.text),
             ));
         }
-        summary_input.extend(ctx.history_messages[verbatim_start..fold_end].iter().cloned());
+        summary_input.extend(
+            ctx.history_messages[verbatim_start..fold_end]
+                .iter()
+                .cloned(),
+        );
 
         info!(
             target: "ice_paw.context",
@@ -251,14 +253,31 @@ impl PipelineStage for MemoryStage {
             "MemoryStage: 触发滚动折叠",
         );
 
-        let s_new = self
+        // 摘要是优化而非对话的前提：调用失败（网络 / 端点拒收 / 熔断跳过）绝不
+        // 阻塞主对话——与「返回空」同路径降级（注入既有摘要 + 丢已覆盖前缀），
+        // 下轮重试。provider 侧（summary_provider）已对失败计数熔断。
+        let s_new = match self
             .summary_provider
             .summarize(&summary_input, SUMMARY_FOLD_TOKENS, &ctx.cancel_token)
-            .await?;
+            .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                warn!(
+                    target: "ice_paw.context",
+                    "MemoryStage: 摘要调用失败（{e}），本轮跳过折叠不阻塞对话"
+                );
+                if let Some(s) = &state {
+                    ctx.summary = Some(s.text.clone());
+                }
+                truncate_history_to(ctx, verbatim_start);
+                return Ok(());
+            }
+        };
 
         // 取消 / 空 → 不落库，下轮重试。仍注入既有摘要（若有）+ 丢已覆盖前缀。
         if s_new.trim().is_empty() {
-            warn!(target: "ice_paw.context", "MemoryStage: 摘要返回空（取消或 provider 空），跳过落库");
+            warn!(target: "ice_paw.context", "MemoryStage: 摘要返回空（取消 / provider 空 / 熔断中），跳过落库");
             if let Some(s) = &state {
                 ctx.summary = Some(s.text.clone());
             }
@@ -575,9 +594,7 @@ mod tests {
             false,
             None,
             vec![],
-            ContextBudget {
-                max_input_tokens,
-            },
+            ContextBudget { max_input_tokens },
             "conv-t".into(),
             CancellationToken::new(),
         );

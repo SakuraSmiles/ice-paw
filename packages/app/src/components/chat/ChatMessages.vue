@@ -24,6 +24,7 @@ import TurnRail from "./TurnRail.vue";
 import { useThinkingTimer } from "../../composables/useThinkingTimer";
 import { useScrollFollow } from "../../composables/useScrollFollow";
 import { useTurnRail } from "../../composables/useTurnRail";
+import { useActiveTurn } from "../../composables/useActiveTurn";
 import type { Message, MessageRole, PlanItem } from "../../types";
 
 const chat = useChatStore();
@@ -34,21 +35,17 @@ const listRef = ref<HTMLElement | null>(null);
 const { showScrollBtn, autoFollow, paginating, scrollToBottom, restoreForConversation } = useScrollFollow(listRef);
 
 // =========================================================================
-// 轮次导航条（UX #5 v2）：锚点（后端轻量行，已排除 tool_result 占位）+
+// 轮次导航条（UX #5 v2）：锚点（后端轻量行，已排除占位行）+
 // 视位侦测 + 跨页跳转；定容窗口（当前轮居中）状态在 TurnRail 组件内。
 // 定位是「目录」不是 minimap——未加载页的内容高度不可知，按轮次索引对
 // 任意规模（几千轮）都成立。
 // =========================================================================
 const { anchors, loadAnchors } = useTurnRail();
 
-// ---- 视位侦测：视口顶所在轮（throttle 用 rAF 合帧；查询走缓存 tops） ----
-const activeTurn = ref<number | null>(null);
-const turnOfMsg = computed(() => {
-  const m = new Map<string, number>();
-  anchors.value.forEach((a, i) => m.set(a.message_id, i + 1));
-  return m;
-});
-let topsCache: { top: number; turn: number | null }[] = [];
+// ---- 视位侦测（useActiveTurn）：IntersectionObserver 实时视位——只对实际
+// 相交（已渲染、坐标真实）的锚点判定，治旧 topsCache 静态 offsetTop 在
+// content-visibility:auto 估高布局下系统性漂移（导航条卡旧轮/错位）的根因 ----
+const { activeTurn, refresh: refreshActiveTurn } = useActiveTurn(listRef, anchors);
 
 // 锚点刷新：会话切换 + 尾消息变化（= 新一轮开始；向前翻页不动尾，不误触）
 watch(() => chat.activeConvId, (cid) => {
@@ -59,46 +56,9 @@ watch(() => chat.messages[chat.messages.length - 1]?.id, () => {
   if (chat.activeConvId) void loadAnchors(chat.activeConvId);
 });
 
-function rebuildTops() {
-  const root = listRef.value;
-  if (!root) { topsCache = []; return; }
-  const map = turnOfMsg.value;
-  topsCache = Array.from(root.querySelectorAll<HTMLElement>("[data-mid]")).map((el) => ({
-    top: el.offsetTop,
-    turn: map.get(el.dataset.mid ?? "") ?? null,
-  }));
-  onRailScroll();
-}
-watch([() => chat.messages.length, anchors], () => { void nextTick(rebuildTops); });
-
-let railRafPending = false;
-function onRailScroll() {
-  if (railRafPending) return;
-  railRafPending = true;
-  requestAnimationFrame(() => {
-    railRafPending = false;
-    const root = listRef.value;
-    if (!root || topsCache.length === 0) { activeTurn.value = null; return; }
-    const threshold = root.scrollTop + 80;
-    // 最后一个 top ≤ 阈值的条目 = 视口顶可见组；向前找最近的 user 锚即当前轮
-    for (let i = topsCache.length - 1; i >= 0; i--) {
-      if (topsCache[i].top <= threshold) {
-        for (let j = i; j >= 0; j--) {
-          if (topsCache[j].turn !== null) { activeTurn.value = topsCache[j].turn; return; }
-        }
-        break;
-      }
-    }
-    activeTurn.value = null;
-  });
-}
-
-// 滚动监听挂 listRef（useScrollFollow 自挂自管，这里独立一份互不干扰）
-watch(listRef, (el, _, onCleanup) => {
-  if (!el) return;
-  el.addEventListener("scroll", onRailScroll, { passive: true });
-  onCleanup(() => el.removeEventListener("scroll", onRailScroll));
-});
+// 翻页/新轮/锚点重载后重绑观察（与旧 rebuildTops 同触发面；滚动监听由
+// composable 自挂在 listRef 上）
+watch([() => chat.messages.length, anchors], () => { void nextTick(refreshActiveTurn); });
 
 // ---- 跳转：窗口内直接滚；窗口外逐页补到锚点（上限防失控） ----
 async function jumpToTurn(messageId: string) {
@@ -116,7 +76,6 @@ async function jumpToTurn(messageId: string) {
   if (!el) return;
   autoFollow.value = false; // 跳历史位 = 非跟随态（与 restoreForConversation 同语义）
   root.scrollTo({ top: Math.max(0, el.offsetTop - 12), behavior: "smooth" });
-  void nextTick(rebuildTops);
 }
 
 // 工具调用卡片展开状态
