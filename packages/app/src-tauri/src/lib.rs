@@ -200,6 +200,19 @@ pub fn run() {
                 pool.size()
             );
 
+            // 2b) 崩溃自愈扫尾（幂等）：上次进程死亡（崩溃/kill/断电/关窗时在途）
+            //     绕过所有退出路径，未闭合的 turn 会永远「进行中」并毒害
+            //     turn_ended 派生状态机（MA-2 台账）。本地单进程 → 启动时任何
+            //     未闭合 turn 定义上已死，补记 truthful 终态 interrupted。
+            let swept =
+                tauri::async_runtime::block_on(harness::event_log::sweep_interrupted_turns(&pool));
+            if swept > 0 {
+                tracing::info!(
+                    target: "ice_paw",
+                    "崩溃自愈：补记 {swept} 个中断 turn 的 turn_ended(interrupted)"
+                );
+            }
+
             // 3) A2-3: 安装工具授权响应全局监听器（前端 chat:tool-auth-response）
             let auth_registry = harness::tool_executor::ToolAuthRegistry::new();
             auth_registry.install_listener(

@@ -8,7 +8,8 @@
 //!
 //! 硬规则（保序）：事件一律 inline `.await`，禁止 `tokio::spawn` 包裹。
 //! `turn_ended` 必须在 cleanup() unregister 之前落，保证跨 turn 的 seq 序
-//! 确定（同会话 turn 串行由 ChatState 保证）。
+//! 确定（同会话 turn 串行由 ChatState 保证）。进程死亡绕过全部退出路径的
+//! 兜底 = [`sweep_interrupted_turns`]（lib.rs 启动时调用，幂等）。
 //!
 //! 接线一律在 harness/command 语义层，不放 repo 层（repo 不知 turn 语境，
 //! 且「占位 create + finalize」两点会双记）。
@@ -257,7 +258,8 @@ pub struct MessageDiscardedPayload {
 pub struct TurnEndedPayload {
     #[serde(default = "version_one")]
     pub v: u8,
-    /// stop | length | max_tokens | tool_use | budget_exceeded | stuck | abort | error
+    /// stop | length | max_tokens | tool_use | budget_exceeded | stuck | abort | error |
+    /// interrupted（boot 自愈补记：进程死亡时 turn 中断，非任何退出路径产生）
     pub termination: String,
     pub rounds: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -485,6 +487,45 @@ pub async fn log_turn_ended(
     append_event(pool, ctx, kind::TURN_ENDED, &ctx.agent_actor(), final_message_id, payload).await;
 }
 
+/// 崩溃自愈扫尾（boot-time，幂等）：为全部未闭合 turn 补记 truthful 终态。
+///
+/// 终止事件只挂在进程内退出路径上，进程死亡（崩溃/kill/断电/关窗时在途）
+/// 绕过所有路径——turn 从此只有开没有关，轨迹永远「进行中」，并毒害未来的
+/// turn_ended 派生状态机（MA-2 台账）。本地单进程应用在启动时刻可确定性
+/// 判定：任何未闭合 turn 都已死。补记 `termination="interrupted"` 是事实
+/// （进程中断时的 turn 确实中断了），非伪造；不违反 append-only（只新增）。
+/// derive/reconcile 零影响：turn_ended 是 skip 事件不产生行。
+///
+/// 返回补记条数（0 = 干净启动，零写入）。查询失败仅 warn 不阻断启动——
+/// 与 heal_checksum_drift / fix_orphan_tool_results 同款 boot 自愈定位。
+pub async fn sweep_interrupted_turns(pool: &SqlitePool) -> usize {
+    let open = match repo::session_event::find_open_turns(pool).await {
+        Ok(o) => o,
+        Err(e) => {
+            tracing::warn!(target: "ice_paw.event_log", "崩溃自愈扫尾查询失败（不影响启动）: {e}");
+            return 0;
+        }
+    };
+    let mut swept = 0usize;
+    for (session_id, turn_id, actor, rounds) in open {
+        // actor 复用原 turn_context 行的归属（agent:<uuid>），不自造 system
+        // actor——事件闭合的是该 agent 的 turn；EventCtx 仅承载定位三元组
+        // （agent_id 不经 agent_actor() 路径，留空）。
+        let ctx = EventCtx::new(&session_id, &turn_id, "");
+        let payload = TurnEndedPayload {
+            v: version_one(),
+            termination: "interrupted".to_string(),
+            rounds: rounds.max(0) as u32,
+            // usage 无法从事后回溯（崩溃时未落盘），None 诚实
+            usage: None,
+            user_token_count: None,
+        };
+        append_event(pool, &ctx, kind::TURN_ENDED, &actor, None, &payload).await;
+        swept += 1;
+    }
+    swept
+}
+
 /// 视觉模态适配（投影期模型可见内容变更）。
 pub async fn log_modal_adapted(pool: &SqlitePool, ctx: &EventCtx, payload: &ModalAdaptedPayload) {
     append_event(pool, ctx, kind::MODAL_ADAPTED, &ctx.agent_actor(), None, payload).await;
@@ -643,6 +684,59 @@ mod tests {
         assert!(back.is_error);
         assert_eq!(back.duration_ms, 1_234);
         assert_eq!(back.tool_use_id.as_deref(), Some("tu-1"));
+    }
+
+    #[tokio::test]
+    async fn sweep_interrupted_turns_closes_open_and_idempotent() {
+        let pool = fresh_pool().await;
+        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        seed(&pool).await;
+        sqlx::query("INSERT INTO conversations (id, agent_id, title) VALUES ('conv-2', 'agent-1', 't')")
+            .execute(&pool)
+            .await
+            .expect("seed conversation 2");
+
+        // conv-1：崩溃残留——turn_context + assistant_message 已落，无 turn_ended
+        // （payload 对扫尾不敏感，只看 kind/turn_id）
+        session_event::append(&pool, "conv-1", kind::TURN_CONTEXT, "agent:agent-1", Some("turn-open"), None, "{}")
+            .await
+            .unwrap();
+        session_event::append(&pool, "conv-1", kind::ASSISTANT_MESSAGE, "agent:agent-1", Some("turn-open"), Some("msg-a1"), "{}")
+            .await
+            .unwrap();
+        // conv-2：正常闭合 turn（扫尾不得触碰）
+        let closed_ctx = EventCtx::new("conv-2", "turn-closed", "agent-1");
+        session_event::append(&pool, "conv-2", kind::TURN_CONTEXT, "agent:agent-1", Some("turn-closed"), None, "{}")
+            .await
+            .unwrap();
+        log_turn_ended(
+            &pool,
+            &closed_ctx,
+            Some("msg-a2"),
+            &TurnEndedPayload { v: 1, termination: "stop".into(), rounds: 1, usage: None, user_token_count: None },
+        )
+        .await;
+
+        // 扫尾：只补 conv-1 的未闭合 turn
+        assert_eq!(sweep_interrupted_turns(&pool).await, 1);
+        let rows = session_event::list_by_session(&pool, "conv-1", None).await.unwrap();
+        assert_eq!(rows.len(), 3, "补记后 conv-1 应有 3 条事件");
+        let last = &rows[2];
+        assert_eq!(last.kind, kind::TURN_ENDED);
+        assert_eq!(last.turn_id.as_deref(), Some("turn-open"));
+        assert_eq!(last.actor, "agent:agent-1", "复用原 turn_context 的 actor");
+        assert_eq!(last.message_id, None);
+        let p: TurnEndedPayload = serde_json::from_str(&last.payload).unwrap();
+        assert_eq!(p.termination, "interrupted");
+        assert_eq!(p.rounds, 1, "rounds = 已落 assistant_message 事件数");
+        assert!(p.usage.is_none());
+
+        // conv-2 不受干扰（仍 2 条，无新增）
+        assert_eq!(session_event::list_by_session(&pool, "conv-2", None).await.unwrap().len(), 2);
+
+        // 幂等：再扫零补记、零写入
+        assert_eq!(sweep_interrupted_turns(&pool).await, 0);
+        assert_eq!(session_event::list_by_session(&pool, "conv-1", None).await.unwrap().len(), 3);
     }
 
     #[tokio::test]
