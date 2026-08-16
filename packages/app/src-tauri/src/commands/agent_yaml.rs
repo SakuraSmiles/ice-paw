@@ -271,7 +271,11 @@ mod tests {
         let out = patch_agent_yaml(yaml, "max_total_tokens", &YamlPatchAction::Set(500000));
         assert_eq!(out, "provider: glm\nmax_total_tokens: 500000\n");
         // 末行无换行时补一个再追加
-        let out2 = patch_agent_yaml("provider: glm", "tool_max_rounds", &YamlPatchAction::Set(30));
+        let out2 = patch_agent_yaml(
+            "provider: glm",
+            "tool_max_rounds",
+            &YamlPatchAction::Set(30),
+        );
         assert_eq!(out2, "provider: glm\ntool_max_rounds: 30\n");
     }
 
@@ -312,14 +316,19 @@ mod tests {
         assert!(out.starts_with('\u{FEFF}'));
         assert!(out.contains("max_total_tokens: 9\n"));
         // 缺键追加时 BOM 也保留
-        let out2 = patch_agent_yaml("\u{FEFF}provider: glm\n", "tool_max_rounds", &YamlPatchAction::Set(5));
+        let out2 = patch_agent_yaml(
+            "\u{FEFF}provider: glm\n",
+            "tool_max_rounds",
+            &YamlPatchAction::Set(5),
+        );
         assert!(out2.starts_with('\u{FEFF}'));
         assert!(out2.ends_with("tool_max_rounds: 5\n"));
     }
 
     #[test]
     fn indented_and_prefixed_keys_not_matched() {
-        let yaml = "extra_params:\n  max_total_tokens: 1\nmax_total_tokens_x: 2\n# max_total_tokens: 3\n";
+        let yaml =
+            "extra_params:\n  max_total_tokens: 1\nmax_total_tokens_x: 2\n# max_total_tokens: 3\n";
         let out = patch_agent_yaml(yaml, "max_total_tokens", &YamlPatchAction::CommentOut);
         assert_eq!(out, yaml, "缩进子键/前缀相似键/注释行一律不误伤");
     }
@@ -327,7 +336,11 @@ mod tests {
     #[test]
     fn system_prompt_block_preserved_byte_for_byte() {
         let yaml = sample_yaml();
-        let out = patch_agent_yaml(&yaml.clone(), "tool_max_rounds", &YamlPatchAction::CommentOut);
+        let out = patch_agent_yaml(
+            &yaml.clone(),
+            "tool_max_rounds",
+            &YamlPatchAction::CommentOut,
+        );
         // 除目标行加前缀外，整文件其余部分逐字节一致
         let expected = yaml.replace("tool_max_rounds: 50", "# tool_max_rounds: 50");
         assert_eq!(out, expected);
@@ -354,24 +367,43 @@ mod tests {
         assert!(validate_patched(&patched2, "tool_max_rounds", &YamlPatchAction::Set(70)).is_err());
 
         // u64 超出 tool_max_rounds 的 u32 范围 → 解析失败 → 拒绝
-        let patched3 = patch_agent_yaml("provider: glm\n", "tool_max_rounds", &YamlPatchAction::Set(u64::MAX));
-        assert!(
-            validate_patched(&patched3, "tool_max_rounds", &YamlPatchAction::Set(u64::MAX)).is_err()
+        let patched3 = patch_agent_yaml(
+            "provider: glm\n",
+            "tool_max_rounds",
+            &YamlPatchAction::Set(u64::MAX),
         );
+        assert!(validate_patched(
+            &patched3,
+            "tool_max_rounds",
+            &YamlPatchAction::Set(u64::MAX)
+        )
+        .is_err());
     }
 
     #[test]
     fn validate_accepts_valid_patches_and_reads_back() {
-        let patched = patch_agent_yaml(&sample_yaml(), "max_total_tokens", &YamlPatchAction::Set(1_000_000));
-        let fields = validate_patched(&patched, "max_total_tokens", &YamlPatchAction::Set(1_000_000))
-            .unwrap();
+        let patched = patch_agent_yaml(
+            &sample_yaml(),
+            "max_total_tokens",
+            &YamlPatchAction::Set(1_000_000),
+        );
+        let fields = validate_patched(
+            &patched,
+            "max_total_tokens",
+            &YamlPatchAction::Set(1_000_000),
+        )
+        .unwrap();
         assert_eq!(fields.max_total_tokens, Some(1_000_000));
         assert_eq!(fields.tool_max_rounds, Some(50)); // 另一字段不受影响
 
         // CommentOut：目标字段须回读为 None（另一字段照常保留）
-        let commented = patch_agent_yaml(&sample_yaml(), "tool_max_rounds", &YamlPatchAction::CommentOut);
-        let fields2 = validate_patched(&commented, "tool_max_rounds", &YamlPatchAction::CommentOut)
-            .unwrap();
+        let commented = patch_agent_yaml(
+            &sample_yaml(),
+            "tool_max_rounds",
+            &YamlPatchAction::CommentOut,
+        );
+        let fields2 =
+            validate_patched(&commented, "tool_max_rounds", &YamlPatchAction::CommentOut).unwrap();
         assert_eq!(fields2.tool_max_rounds, None);
         assert_eq!(fields2.max_total_tokens, Some(800000));
     }

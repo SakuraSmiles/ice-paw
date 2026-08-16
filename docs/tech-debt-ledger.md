@@ -37,13 +37,13 @@
 | # | 项 | 内容 | 备注 |
 |---|---|---|---|
 | S1 | **Phase 2B legacy 读路径退役** | 删 legacy 拼装整条路径 + 摘要锚点 `covered_until_rowid`→seq + Image base64 双份存储治理 | 最大一笔减法；给旧会话补事件 backfill 先行 |
-| S2 | protocol.rs 拆分（A5） | 983 行混 4 类：LlmProvider trait / 图片校验 / 前端输入 / 事件负载分家 | 纯搬运，测试护体，适合先动 |
+| S2 | protocol.rs 拆分（A5）✅ 已执行 2026-08-16 | 1161 行混 3 类 + 测试（image_validation / LlmProvider 早已迁出）→ `protocol/` 目录：llm.rs（ContentBlock/ChatMessage/TokenUsage/ChatDelta/ToolDef）+ input.rs（前端输入）+ events.rs（事件负载）+ mod.rs glob re-export **全库导入零改**；两条 legacy 兼容 re-export 保留（image_validation 条目、`harness::provider::LlmProvider`） | 32 个协议测试随迁（5+4+6+17）；831 passed 持平 |
 | S3 | chat_cmd send_message 收尾（A1） | ~280 行单函数 → 委托拼装已做一半，收尾成编排门面 | 热路径 |
 | S4 | LoopConfig 数据袋（A6） | 22 扁平字段 → 按不可变配置 / 可变运行时分组 | |
 | S5 | send_message 集成测试（A2） | MockProvider 787 行仍无人用（2026-08-16 grep 复核）——补全链路 e2e 或删掉 mock | 做了才配谈 loop_engine 可测性（A3） |
 | S6 | loop_engine 去 AppHandle 硬依赖（A3） | 与 S5 锁死，一起动 | |
-| S7 | 废弃字段清理 | `enabled_tools` 白名单已废 + `tool_trim_threshold` 存而不读——Rust 侧停读，DB 列按「已发布 migration 不可变」纪律保留 | |
-| S8 | **无限续写机制（治本）** | 摘要失败回退链：自适应额度（已有）→ **确定性折叠**（保 system + 首末 N 轮原文，中段压成工具调用骨架，不依赖 LLM 永不失败）；终止语义重排：stuck 无进展为唯一常规终止，budget 降格为失控保护（本地模型 = 真·无限，付费 API = 成本上限） | 设计输入等 claude code auto-compact 研读；现状的隐性代价 = 摘要失败时 TokenWindowStage 裸截断丢历史 |
+| S7 | 废弃字段清理 ✅ 已执行 2026-08-16（tool_trim_threshold 部分） | `tool_trim_threshold` 全链摘除：models.rs（AgentRow/AgentFileConfig/Agent/NewAgent/AgentUpdate + apply_to×2）/ repo/agent.rs（SELECT×2 + INSERT 17 列 + update 签名与 SQL）/ agent_cmd + 5 处测试夹具 / 前端 types ×2 / client.rs 注释措辞。serde 默认忽略未知字段 → 旧 yaml/JSON 负载向后兼容；migration 06 列按「已发布 migration 不可变」纪律保留 | `enabled_tools` 复核为**活字段**（proposal 分级 Medium 依据 + proposal_tool args + yaml 模板写入 + 前端审批流）——只白名单概念死，字段本身保留；`register_meta_tools` 刻意保留（未来白名单 UI 活口）；831 passed 持平 |
+| S8 | **无限续写机制（治本）** | 摘要失败回退链：自适应额度（已有）→ **确定性折叠**（保 system + 首末 N 轮原文，中段压成工具调用骨架，不依赖 LLM 永不失败）；终止语义重排：stuck 无进展为唯一常规终止，budget 降格为失控保护（本地模型 = 真·无限，付费 API = 成本上限） | **设计输入已备：docs/competitor-claude-code.md（借鉴拍第一份）**——补两个新输入：历史工具结果瘦身（预览+指针）排最前、摘要请求自身截头防超长；Claude Code 熔断后无回退会搁浅，我们的确定性折叠恰好强于此。待用户拍板动工；现状隐性代价 = 摘要失败时 TokenWindowStage 裸截断丢历史 |
 
 ## 批次 P — 产品打磨
 
@@ -88,5 +88,5 @@
 
 **清扫 → 借鉴（竞品研读，只积累不实施）→ 加法 → 再清扫。** 每拍有 Done 标准：
 - 清扫拍：本表批次清零（V/S/P 逐批销项）
-- 借鉴拍：每产品一份四问笔记（它解决什么问题 / 靠什么架构 / 我们要不要 / 引入成本）
+- 借鉴拍：每产品一份**全景**四问笔记（它解决什么问题 / 靠什么架构 / 我们要不要 / 引入成本）——**范围 = 整产品**（架构设计、技术实现、设计理念、各关键功能的特点与优势），不是单痛点切片（2026-08-16 用户纠偏）。已产出：claude code **压缩续跑切片**（docs/competitor-claude-code.md，喂 S8；全景研读待做）；候选：codex / opencode / openclaw
 - 简化拍约束：测试数不降、clippy 零警告、行为零变化（重构与功能改动不同 commit）
