@@ -50,7 +50,10 @@ impl ProviderConnectionResult {
 pub enum ProbeTarget {
     /// `explicit_base_url`：表单入参或 agent 存量里的显式地址（None = 未显式
     /// 指定，探测时按注册表 [默认, ...备选] 顺序回退）
-    Ready { explicit_base_url: Option<String>, api_key: String },
+    Ready {
+        explicit_base_url: Option<String>,
+        api_key: String,
+    },
     /// 需鉴权的 provider 但没有任何可用 key——不发注定 401 的请求，
     /// 直接给「先选内置目录 / 填 Key 再拉」的引导（模型浏览与拉取分离）
     MissingKey,
@@ -97,7 +100,10 @@ pub fn resolve_probe_target(
     if info.requires_key && api_key.is_empty() {
         return Ok(ProbeTarget::MissingKey);
     }
-    Ok(ProbeTarget::Ready { explicit_base_url, api_key })
+    Ok(ProbeTarget::Ready {
+        explicit_base_url,
+        api_key,
+    })
 }
 
 /// 探测候选端点序列（纯函数，可单测）：显式地址只测它自己；未显式时
@@ -162,7 +168,10 @@ pub async fn test_provider_connection(
         stored.as_ref(),
     )?;
     let (explicit_base_url, api_key) = match target {
-        ProbeTarget::Ready { explicit_base_url, api_key } => (explicit_base_url, api_key),
+        ProbeTarget::Ready {
+            explicit_base_url,
+            api_key,
+        } => (explicit_base_url, api_key),
         ProbeTarget::MissingKey => {
             tracing::info!(
                 target: "ice_paw.llm",
@@ -283,7 +292,10 @@ mod tests {
         let same = stored_creds("glm", "glm-key", None);
         assert_eq!(
             resolve_probe_target(&glm, None, None, Some(&same)).unwrap(),
-            ProbeTarget::Ready { explicit_base_url: None, api_key: "glm-key".into() }
+            ProbeTarget::Ready {
+                explicit_base_url: None,
+                api_key: "glm-key".into()
+            }
         );
         // 跨 provider：glm 的存量 key 不拿去打 deepseek（各家 key 多不通用）
         let cross = stored_creds("glm", "glm-key", None);
@@ -297,7 +309,11 @@ mod tests {
     fn stored_base_url_counts_as_explicit() {
         // 存量 base_url 是已固化的选择：只测它自己，不做多端点回退
         let glm = info("glm");
-        let stored = stored_creds("glm", "k", Some("https://open.bigmodel.cn/api/coding/paas/v4"));
+        let stored = stored_creds(
+            "glm",
+            "k",
+            Some("https://open.bigmodel.cn/api/coding/paas/v4"),
+        );
         assert_eq!(
             resolve_probe_target(&glm, None, None, Some(&stored)).unwrap(),
             ProbeTarget::Ready {
@@ -313,7 +329,10 @@ mod tests {
         let i = info("ollama");
         assert_eq!(
             resolve_probe_target(&i, None, None, None).unwrap(),
-            ProbeTarget::Ready { explicit_base_url: None, api_key: String::new() }
+            ProbeTarget::Ready {
+                explicit_base_url: None,
+                api_key: String::new()
+            }
         );
     }
 
@@ -330,7 +349,10 @@ mod tests {
         let glm = info("glm");
         let c = probe_candidates(&glm, Some("https://my-proxy/v1"));
         assert_eq!(c.len(), 1);
-        assert_eq!(c[0], ("指定地址".to_string(), "https://my-proxy/v1".to_string()));
+        assert_eq!(
+            c[0],
+            ("指定地址".to_string(), "https://my-proxy/v1".to_string())
+        );
     }
 
     #[test]
@@ -340,7 +362,13 @@ mod tests {
         let c = probe_candidates(&glm, None);
         assert_eq!(c.len(), 2);
         assert_eq!(c[0].1, "https://open.bigmodel.cn/api/paas/v4");
-        assert_eq!(c[1], ("Coding 端点".to_string(), "https://open.bigmodel.cn/api/coding/paas/v4".to_string()));
+        assert_eq!(
+            c[1],
+            (
+                "Coding 端点".to_string(),
+                "https://open.bigmodel.cn/api/coding/paas/v4".to_string()
+            )
+        );
         // 无备选的 provider：单候选
         assert_eq!(probe_candidates(&info("deepseek"), None).len(), 1);
     }
@@ -352,14 +380,14 @@ mod tests {
             ("标准端点".to_string(), "https://a".to_string()),
             ("Coding 端点".to_string(), "https://b".to_string()),
         ];
-        let msg = aggregate_probe_error(&candidates, &["HTTP 401: 认证失败".into(), "HTTP 404".into()]);
+        let msg = aggregate_probe_error(
+            &candidates,
+            &["HTTP 401: 认证失败".into(), "HTTP 404".into()],
+        );
         assert!(msg.contains("全部端点未通过"));
         assert!(msg.contains("标准端点：HTTP 401: 认证失败"));
         assert!(msg.contains("Coding 端点：HTTP 404"));
         let single = vec![("指定地址".to_string(), "https://a".to_string())];
-        assert_eq!(
-            aggregate_probe_error(&single, &["boom".into()]),
-            "boom"
-        );
+        assert_eq!(aggregate_probe_error(&single, &["boom".into()]), "boom");
     }
 }

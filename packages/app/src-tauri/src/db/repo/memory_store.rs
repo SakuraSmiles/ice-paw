@@ -164,9 +164,9 @@ pub async fn load_latest_summary_string(
     match load_latest_memory(pool, agent_id, "summary").await? {
         Some(bytes) => {
             let s = String::from_utf8(bytes).map_err(|e| {
-                AppError::Validation(
-                    format!("memory_store.content 不是合法 UTF-8(agent_id={agent_id}): {e}"),
-                )
+                AppError::Validation(format!(
+                    "memory_store.content 不是合法 UTF-8(agent_id={agent_id}): {e}"
+                ))
             })?;
             Ok(Some(s))
         }
@@ -181,10 +181,7 @@ pub async fn load_latest_summary_string(
 /// 删除某 agent 的全部记忆(清空该 agent 的长期记忆)
 ///
 /// @returns 实际删除的行数
-pub async fn delete_memories_for_agent(
-    pool: &SqlitePool,
-    agent_id: &str,
-) -> AppResult<u64> {
+pub async fn delete_memories_for_agent(pool: &SqlitePool, agent_id: &str) -> AppResult<u64> {
     let affected = sqlx::query("DELETE FROM memory_store WHERE agent_id = ?")
         .bind(agent_id)
         .execute(pool)
@@ -195,16 +192,11 @@ pub async fn delete_memories_for_agent(
 
 /// 统计某 agent 的记忆条数
 #[cfg(test)]
-pub async fn count_memories_for_agent(
-    pool: &SqlitePool,
-    agent_id: &str,
-) -> AppResult<i64> {
-    let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM memory_store WHERE agent_id = ?",
-    )
-    .bind(agent_id)
-    .fetch_one(pool)
-    .await?;
+pub async fn count_memories_for_agent(pool: &SqlitePool, agent_id: &str) -> AppResult<i64> {
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM memory_store WHERE agent_id = ?")
+        .bind(agent_id)
+        .fetch_one(pool)
+        .await?;
     Ok(count)
 }
 
@@ -258,7 +250,10 @@ mod tests {
     #[tokio::test]
     async fn insert_and_load_roundtrip() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed_agent(&pool, "agent-a").await;
 
         let content = "用户想修改 foo 函数".as_bytes();
@@ -267,13 +262,12 @@ mod tests {
             .unwrap();
 
         // 直接从 DB 取密文,验证不是明文
-        let (raw_bytes,): (Vec<u8>,) = sqlx::query_as(
-            "SELECT content_encrypted FROM memory_store WHERE id = ?",
-        )
-        .bind(&id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let (raw_bytes,): (Vec<u8>,) =
+            sqlx::query_as("SELECT content_encrypted FROM memory_store WHERE id = ?")
+                .bind(&id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert!(
             !raw_bytes.windows(content.len()).any(|w| w == content),
             "密文中不应出现明文"
@@ -292,7 +286,10 @@ mod tests {
     async fn insert_empty_content_succeeds() {
         // 空明文加密 → 仍然产生 nonce (24) + tag (16) = 40 字节密文
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed_agent(&pool, "agent-b").await;
 
         let id = insert_encrypted_memory(&pool, "agent-b", b"", "summary")
@@ -308,7 +305,10 @@ mod tests {
     async fn insert_large_content_succeeds() {
         // 1 MB 明文 → 加密 → 存储 → 解密
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed_agent(&pool, "agent-c").await;
 
         let content: Vec<u8> = (0..1_000_000).map(|i| (i % 256) as u8).collect();
@@ -325,7 +325,10 @@ mod tests {
     #[tokio::test]
     async fn load_memories_filters_by_agent() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed_agent(&pool, "agent-d1").await;
         seed_agent(&pool, "agent-d2").await;
 
@@ -364,7 +367,10 @@ mod tests {
     #[tokio::test]
     async fn load_latest_returns_most_recent() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed_agent(&pool, "agent-e").await;
 
         insert_encrypted_memory(&pool, "agent-e", b"old-summary", "summary")
@@ -406,7 +412,10 @@ mod tests {
     #[tokio::test]
     async fn load_latest_returns_none_when_empty() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed_agent(&pool, "agent-f").await;
 
         let r = load_latest_memory(&pool, "agent-f", "summary")
@@ -420,7 +429,10 @@ mod tests {
     #[tokio::test]
     async fn load_latest_summary_string_decodes_utf8() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed_agent(&pool, "agent-g").await;
 
         insert_encrypted_memory(
@@ -440,7 +452,10 @@ mod tests {
     async fn load_latest_summary_string_rejects_non_utf8() {
         // 加密二进制内容(非 UTF-8)后用 *_string 读取 → 应报 Validation
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed_agent(&pool, "agent-h").await;
 
         // 0xFF 0xFE 是非法 UTF-8 起始字节
@@ -464,7 +479,10 @@ mod tests {
     #[tokio::test]
     async fn delete_memories_clears_all_for_agent() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed_agent(&pool, "agent-i1").await;
         seed_agent(&pool, "agent-i2").await;
 
@@ -478,9 +496,7 @@ mod tests {
             .await
             .unwrap();
 
-        let affected = delete_memories_for_agent(&pool, "agent-i1")
-            .await
-            .unwrap();
+        let affected = delete_memories_for_agent(&pool, "agent-i1").await.unwrap();
         assert_eq!(affected, 2);
 
         assert!(load_memories(&pool, "agent-i1").await.unwrap().is_empty());
@@ -491,13 +507,13 @@ mod tests {
     #[tokio::test]
     async fn count_memories_returns_correct_count() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed_agent(&pool, "agent-j").await;
 
-        assert_eq!(
-            count_memories_for_agent(&pool, "agent-j").await.unwrap(),
-            0
-        );
+        assert_eq!(count_memories_for_agent(&pool, "agent-j").await.unwrap(), 0);
         insert_encrypted_memory(&pool, "agent-j", b"c1", "summary")
             .await
             .unwrap();
@@ -507,10 +523,7 @@ mod tests {
         insert_encrypted_memory(&pool, "agent-j", b"c3", "fact")
             .await
             .unwrap();
-        assert_eq!(
-            count_memories_for_agent(&pool, "agent-j").await.unwrap(),
-            3
-        );
+        assert_eq!(count_memories_for_agent(&pool, "agent-j").await.unwrap(), 3);
     }
 
     // ---- 输入校验 ----
@@ -518,7 +531,10 @@ mod tests {
     #[tokio::test]
     async fn insert_rejects_empty_agent_id() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
 
         let err = insert_encrypted_memory(&pool, "", b"x", "summary")
             .await
@@ -531,10 +547,13 @@ mod tests {
         }
     }
 
-    #[tokio::test] 
+    #[tokio::test]
     async fn insert_rejects_empty_content_type() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed_agent(&pool, "agent-k").await;
 
         let err = insert_encrypted_memory(&pool, "agent-k", b"x", "")
@@ -554,7 +573,10 @@ mod tests {
     #[tokio::test]
     async fn tampered_ciphertext_is_rejected() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed_agent(&pool, "agent-l").await;
 
         let id = insert_encrypted_memory(&pool, "agent-l", b"secret-text", "summary")
@@ -562,13 +584,12 @@ mod tests {
             .unwrap();
 
         // 直接改密文 BLOB 中的一个字节(nonce 之后)
-        let (mut bytes,): (Vec<u8>,) = sqlx::query_as(
-            "SELECT content_encrypted FROM memory_store WHERE id = ?",
-        )
-        .bind(&id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let (mut bytes,): (Vec<u8>,) =
+            sqlx::query_as("SELECT content_encrypted FROM memory_store WHERE id = ?")
+                .bind(&id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert!(bytes.len() > 25, "密文长度应至少 24+1 字节");
         bytes[25] ^= 0x01; // 翻转 ciphertext 区域第 1 字节
         sqlx::query("UPDATE memory_store SET content_encrypted = ? WHERE id = ?")
@@ -584,7 +605,10 @@ mod tests {
             .unwrap_err();
         match err {
             AppError::Validation(message) => {
-                assert!(message.contains("认证失败"), "msg 应提及认证失败: {message}");
+                assert!(
+                    message.contains("认证失败"),
+                    "msg 应提及认证失败: {message}"
+                );
             }
             other => panic!("篡改密文应返回 Validation,实际: {other:?}"),
         }
@@ -594,20 +618,22 @@ mod tests {
     #[tokio::test]
     async fn tampered_nonce_is_rejected() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed_agent(&pool, "agent-m").await;
 
         let id = insert_encrypted_memory(&pool, "agent-m", b"hi", "summary")
             .await
             .unwrap();
 
-        let (mut bytes,): (Vec<u8>,) = sqlx::query_as(
-            "SELECT content_encrypted FROM memory_store WHERE id = ?",
-        )
-        .bind(&id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let (mut bytes,): (Vec<u8>,) =
+            sqlx::query_as("SELECT content_encrypted FROM memory_store WHERE id = ?")
+                .bind(&id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         bytes[0] ^= 0x80; // 翻转 nonce 第 0 字节
         sqlx::query("UPDATE memory_store SET content_encrypted = ? WHERE id = ?")
             .bind(&bytes)

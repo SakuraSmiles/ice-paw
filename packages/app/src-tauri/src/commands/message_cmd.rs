@@ -35,13 +35,8 @@ pub async fn list_messages(
 ) -> AppResult<Vec<Message>> {
     let cursor = parse_before_cursor(before)?;
 
-    let rows = repo::message::list_by_conversation(
-        state.inner(),
-        &conversation_id,
-        limit,
-        cursor,
-    )
-    .await?;
+    let rows =
+        repo::message::list_by_conversation(state.inner(), &conversation_id, limit, cursor).await?;
     Ok(rows.into_iter().map(Message::from).collect())
 }
 
@@ -51,19 +46,15 @@ pub async fn list_messages(
 ///
 /// 错误情况返回 `AppError::Validation`，由前端错误归一化（`bridge.wrapInvokeError`）
 /// 转成可读 Error 上抛。
-fn parse_before_cursor(
-    raw: Option<serde_json::Value>,
-) -> AppResult<Option<(String, i64)>> {
+fn parse_before_cursor(raw: Option<serde_json::Value>) -> AppResult<Option<(String, i64)>> {
     let Some(v) = raw else { return Ok(None) };
     if v.is_null() {
         return Ok(None);
     }
 
-    let arr = v
-        .as_array()
-        .ok_or_else(|| crate::error::AppError::Validation(
-            "before 参数必须是 [created_at, rowid] 数组".into(),
-        ))?;
+    let arr = v.as_array().ok_or_else(|| {
+        crate::error::AppError::Validation("before 参数必须是 [created_at, rowid] 数组".into())
+    })?;
     if arr.len() != 2 {
         return Err(crate::error::AppError::Validation(format!(
             "before 参数数组长度必须为 2，实际为 {}",
@@ -73,34 +64,27 @@ fn parse_before_cursor(
 
     let ts = arr[0]
         .as_str()
-        .ok_or_else(|| crate::error::AppError::Validation(
-            "before[0] 必须是字符串（created_at）".into(),
-        ))?
+        .ok_or_else(|| {
+            crate::error::AppError::Validation("before[0] 必须是字符串（created_at）".into())
+        })?
         .to_string();
 
-    let rowid = arr[1]
-        .as_i64()
-        .ok_or_else(|| {
-            // JSON 数字如果是浮点会被 serde_json 解成 f64；to_string 兜底取整
-            if let Some(n) = arr[1].as_f64() {
-                return crate::error::AppError::Validation(format!(
-                    "before[1] 必须是整数（rowid），但收到 {n}"
-                ));
-            }
-            crate::error::AppError::Validation(
-                "before[1] 必须是整数（rowid）".into(),
-            )
-        })?;
+    let rowid = arr[1].as_i64().ok_or_else(|| {
+        // JSON 数字如果是浮点会被 serde_json 解成 f64；to_string 兜底取整
+        if let Some(n) = arr[1].as_f64() {
+            return crate::error::AppError::Validation(format!(
+                "before[1] 必须是整数（rowid），但收到 {n}"
+            ));
+        }
+        crate::error::AppError::Validation("before[1] 必须是整数（rowid）".into())
+    })?;
 
     Ok(Some((ts, rowid)))
 }
 
 /// 写入新消息
 #[tauri::command]
-pub async fn create_message(
-    state: State<'_, SqlitePool>,
-    input: NewMessage,
-) -> AppResult<Message> {
+pub async fn create_message(state: State<'_, SqlitePool>, input: NewMessage) -> AppResult<Message> {
     if input.conversation_id.trim().is_empty() {
         return Err(crate::error::AppError::Validation(
             "conversation_id 不能为空".into(),
@@ -115,4 +99,3 @@ pub async fn create_message(
     let row = repo::message::create(state.inner(), &id, &input).await?;
     Ok(Message::from(row))
 }
-

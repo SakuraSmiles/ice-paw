@@ -144,7 +144,10 @@ mod tests {
 
         // messages 不应被改写为数组（因为函数在 len <= 3 时直接 return）
         assert!(msgs[0]["content"].is_string(), "user content 应保持字符串");
-        assert!(msgs[1]["content"].is_string(), "assistant content 应保持字符串");
+        assert!(
+            msgs[1]["content"].is_string(),
+            "assistant content 应保持字符串"
+        );
 
         // 总断点数 = 1
         assert_eq!(count_cache_breakpoints(&system, &msgs), 1);
@@ -169,8 +172,7 @@ mod tests {
         // 总断点数 = 4（Anthropic 硬限制 = MAX_CACHE_BREAKPOINTS）
         let total = count_cache_breakpoints(&system, &msgs);
         assert_eq!(
-            total,
-            MAX_CACHE_BREAKPOINTS,
+            total, MAX_CACHE_BREAKPOINTS,
             "长对话应达到 4 断点上限，实际 = {total}"
         );
 
@@ -178,24 +180,24 @@ mod tests {
         assert!(system.as_ref().unwrap()[0].get("cache_control").is_some());
 
         // messages[0]（首条 user）被 skip(1) 跳过 → content 仍为字符串，无 cache_control
-        assert!(msgs[0]["content"].is_string(), "首条 user 的 content 应保持字符串");
+        assert!(
+            msgs[0]["content"].is_string(),
+            "首条 user 的 content 应保持字符串"
+        );
 
         // messages 末尾 3 条（indices 7, 8, 9）不应有 cache_control（cutoff = 7，take(7) 后 skip(1) = indices 1..7）
         for msg in msgs.iter().skip(7) {
-            assert!(
-                msg["content"].is_string(),
-                "末尾消息 content 应保持字符串"
-            );
+            assert!(msg["content"].is_string(), "末尾消息 content 应保持字符串");
         }
 
         // messages[1..4] 中的 3 条（indices 1, 2, 3）应有 cache_control（system 已用 1 个，剩 3 个配额）
         for (idx, msg) in msgs.iter().enumerate().take(4).skip(1) {
-            let blocks = msg["content"].as_array()
+            let blocks = msg["content"]
+                .as_array()
                 .unwrap_or_else(|| panic!("idx={idx} content 应被转换为数组"));
             assert_eq!(blocks.len(), 1, "字符串 content 转换后应有 1 个 block");
             assert_eq!(
-                blocks[0]["cache_control"]["type"],
-                "ephemeral",
+                blocks[0]["cache_control"]["type"], "ephemeral",
                 "idx={idx} 应该有 cache_control"
             );
         }
@@ -233,30 +235,29 @@ mod tests {
         );
 
         assert_eq!(
-            total,
-            MAX_CACHE_BREAKPOINTS,
+            total, MAX_CACHE_BREAKPOINTS,
             "无 system 时 10 条消息应用满 4 个断点配额"
         );
 
         // 末尾 3 条不应有断点
         for msg in msgs.iter().skip(7) {
-            assert!(
-                msg["content"].is_string(),
-                "末尾消息 content 应保持字符串"
-            );
+            assert!(msg["content"].is_string(), "末尾消息 content 应保持字符串");
         }
 
         // 首条 user（idx=0）不应有断点（被 skip(1) 跳过）
-        assert!(msgs[0]["content"].is_string(), "首条 user content 应保持字符串");
+        assert!(
+            msgs[0]["content"].is_string(),
+            "首条 user content 应保持字符串"
+        );
 
         // messages[1..5] 中的 4 条应有 cache_control
         for (idx, msg) in msgs.iter().enumerate().take(5).skip(1) {
-            let blocks = msg["content"].as_array()
+            let blocks = msg["content"]
+                .as_array()
                 .unwrap_or_else(|| panic!("idx={idx} content 应被转换为数组"));
             assert_eq!(blocks.len(), 1);
             assert_eq!(
-                blocks[0]["cache_control"]["type"],
-                "ephemeral",
+                blocks[0]["cache_control"]["type"], "ephemeral",
                 "idx={idx} 应该有 cache_control"
             );
         }
@@ -284,10 +285,19 @@ mod tests {
 
         let sys_blocks = system.as_ref().unwrap();
         // block 1 / block 2 不应有 cache_control
-        assert!(sys_blocks[0].get("cache_control").is_none(), "block 1 不应有 cache_control");
-        assert!(sys_blocks[1].get("cache_control").is_none(), "block 2 不应有 cache_control");
+        assert!(
+            sys_blocks[0].get("cache_control").is_none(),
+            "block 1 不应有 cache_control"
+        );
+        assert!(
+            sys_blocks[1].get("cache_control").is_none(),
+            "block 2 不应有 cache_control"
+        );
         // 只有 block 3（最后一个）应有 cache_control
-        assert_eq!(sys_blocks[2]["cache_control"]["type"], "ephemeral", "block 3 应有 cache_control");
+        assert_eq!(
+            sys_blocks[2]["cache_control"]["type"], "ephemeral",
+            "block 3 应有 cache_control"
+        );
 
         // block 1 / 2 的原始 text 必须保留（未被覆盖）
         assert_eq!(sys_blocks[0]["text"], "block 1");

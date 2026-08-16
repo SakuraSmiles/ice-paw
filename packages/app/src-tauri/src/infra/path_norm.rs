@@ -87,7 +87,9 @@ pub fn path_within(target: &Path, root: &Path) -> bool {
 /// 会话授权记忆的归一缓存键：词法归一（+ Windows 大小写折叠——同一文件
 /// 不同写法不应重复弹窗；Unix 保持区分，两文件仅大小写不同就是两个文件）。
 pub fn auth_cache_key(path: &str) -> String {
-    let normalized = lexical_normalize(Path::new(path)).to_string_lossy().into_owned();
+    let normalized = lexical_normalize(Path::new(path))
+        .to_string_lossy()
+        .into_owned();
     if cfg!(windows) {
         normalized.to_lowercase()
     } else {
@@ -97,10 +99,7 @@ pub fn auth_cache_key(path: &str) -> String {
 
 #[cfg(windows)]
 fn comp_eq(a: &Component<'_>, b: &Component<'_>) -> bool {
-    a.as_os_str()
-        .to_string_lossy()
-        .to_lowercase()
-        == b.as_os_str().to_string_lossy().to_lowercase()
+    a.as_os_str().to_string_lossy().to_lowercase() == b.as_os_str().to_string_lossy().to_lowercase()
 }
 
 #[cfg(not(windows))]
@@ -121,7 +120,10 @@ mod tests {
     #[test]
     fn within_subpath() {
         assert!(path_within(Path::new("/ws/sub/file.txt"), Path::new("/ws")));
-        assert!(path_within(Path::new("/ws/sub/deep/file.rs"), Path::new("/ws")));
+        assert!(path_within(
+            Path::new("/ws/sub/deep/file.rs"),
+            Path::new("/ws")
+        ));
     }
 
     #[test]
@@ -133,7 +135,10 @@ mod tests {
     #[test]
     fn rejects_sibling_prefix() {
         // 字符串 starts_with 的经典漏洞：/ws-secret 不属于 /ws
-        assert!(!path_within(Path::new("/ws-secret/file.txt"), Path::new("/ws")));
+        assert!(!path_within(
+            Path::new("/ws-secret/file.txt"),
+            Path::new("/ws")
+        ));
     }
 
     #[test]
@@ -163,7 +168,10 @@ mod tests {
     #[test]
     fn dotdot_stays_inside_when_resolved_inside() {
         // 消解后仍在 root 内 → 放行（合法等价写法，不该误弹）
-        assert!(path_within(Path::new("/ws/sub/../file.txt"), Path::new("/ws")));
+        assert!(path_within(
+            Path::new("/ws/sub/../file.txt"),
+            Path::new("/ws")
+        ));
     }
 
     // ----- 词法归一 -----
@@ -209,7 +217,10 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn case_insensitive_on_windows() {
-        assert!(path_within(Path::new(r"c:\WS\File.txt"), Path::new(r"C:\ws")));
+        assert!(path_within(
+            Path::new(r"c:\WS\File.txt"),
+            Path::new(r"C:\ws")
+        ));
         assert!(path_within(
             Path::new(r"C:\ws\FILE.txt"),
             Path::new(r"\\?\c:\Ws")

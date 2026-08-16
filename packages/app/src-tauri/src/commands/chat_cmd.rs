@@ -12,19 +12,19 @@ use std::sync::Arc;
 use tauri::{AppHandle, State};
 use uuid::Uuid;
 
+use crate::commands::agent_cmd::AgentCmd;
 use crate::db::repo;
 use crate::error::{AppError, AppResult};
-use crate::infra::file_validation::validate_files;
-use crate::infra::protocol::{
-    AttachedFile, ConfigProposalResponse, ContentBlock,
-    ProposalDecision, SendMessageInput, ToolAuthResponse, strip_empty_image_blocks, validate_images,
-};
-use crate::commands::agent_cmd::AgentCmd;
 use crate::harness::chat_state::ChatState;
 use crate::harness::provider;
 use crate::harness::session_runner;
+use crate::infra::file_validation::validate_files;
+use crate::infra::protocol::{
+    strip_empty_image_blocks, validate_images, AttachedFile, ConfigProposalResponse, ContentBlock,
+    ProposalDecision, SendMessageInput, ToolAuthResponse,
+};
 
-use crate::harness::mcp::{McpServerManager, McpRegistry};
+use crate::harness::mcp::{McpRegistry, McpServerManager};
 
 /// 小文件阈值：提取正文总 token ≤ 此值则**全量内联**（零行为变化，不分页）。
 /// 超过则按块分页，只内联首页 + `read_attachment_page` 工具按页取。
@@ -360,8 +360,17 @@ pub(crate) fn materialize_file_blocks(
              （1-based，全局 1~{}）读取指定页。]\n\
              {}{}\n\
              </uploaded_file>",
-            e.name, e.kind_label, final_total_pages, file_pages, start_page, end_page,
-            final_total_pages, message_id, final_total_pages, body, vision_hint
+            e.name,
+            e.kind_label,
+            final_total_pages,
+            file_pages,
+            start_page,
+            end_page,
+            final_total_pages,
+            message_id,
+            final_total_pages,
+            body,
+            vision_hint
         )));
     }
 
@@ -377,10 +386,12 @@ pub(crate) fn materialize_file_blocks(
 /// 校验已拦，此处复用为上限）的 PDF 都留存，由 agent 按层②提示自行决定是否调视觉工具。
 /// Office 文档无渲染路径，不存（省 BLOB）。`ext` 须为小写（调用方 [`materialize_file_blocks`]
 /// 已用 `to_ascii_lowercase` 归一）。
-pub(crate) fn should_store_pdf_vision_bytes(ext: &str, bytes_len: usize, extract_failed: bool) -> bool {
-    ext == "pdf"
-        && !extract_failed
-        && bytes_len <= crate::infra::file_validation::MAX_FILE_SIZE
+pub(crate) fn should_store_pdf_vision_bytes(
+    ext: &str,
+    bytes_len: usize,
+    extract_failed: bool,
+) -> bool {
+    ext == "pdf" && !extract_failed && bytes_len <= crate::infra::file_validation::MAX_FILE_SIZE
 }
 
 /// 层②：非空提取 PDF 的视觉读取提示。拼进 `<uploaded_file>` 内联正文末尾，告知 agent 在
@@ -447,16 +458,24 @@ pub async fn send_message(
         let blocks = input.content_blocks.clone().filter(|v| !v.is_empty());
         let legacy = input.content.as_ref().and_then(|s| {
             let t = s.trim();
-            if t.is_empty() { None } else { Some(t.to_owned()) }
+            if t.is_empty() {
+                None
+            } else {
+                Some(t.to_owned())
+            }
         });
         match (blocks, legacy) {
             (Some(b), _) => b,
             (None, Some(t)) => vec![ContentBlock::text(t)],
             // 纯附件无文本：允许（materialize 会填充 Attachment + 提取正文）
-            (None, None) if input.files.as_ref().map(|v| !v.is_empty()).unwrap_or(false) => Vec::new(),
-            (None, None) => return Err(AppError::Validation(
-                "content 或 content_blocks 至少提供一个".into(),
-            )),
+            (None, None) if input.files.as_ref().map(|v| !v.is_empty()).unwrap_or(false) => {
+                Vec::new()
+            }
+            (None, None) => {
+                return Err(AppError::Validation(
+                    "content 或 content_blocks 至少提供一个".into(),
+                ))
+            }
         }
     };
     validate_images(&final_blocks)?;
@@ -484,7 +503,10 @@ pub async fn send_message(
     let hooks = agent_with_creds.hooks;
 
     let llm_provider = provider::create_provider(
-        &agent.provider, &agent.model, base_url, agent.cache_prompt != 0,
+        &agent.provider,
+        &agent.model,
+        base_url,
+        agent.cache_prompt != 0,
     )?;
 
     // Phase 3 + Phase A：office/pdf 附件 → 后端提取为 Text 块追加到 final_blocks 末尾。
@@ -619,7 +641,9 @@ pub async fn respond_config_proposal(
         "modified" => ProposalDecision::Modified {
             changes: input.changes.unwrap_or_default(),
         },
-        "rejected" => ProposalDecision::Rejected { reason: input.reason },
+        "rejected" => ProposalDecision::Rejected {
+            reason: input.reason,
+        },
         other => {
             return Err(AppError::Validation(format!(
                 "未知提案 decision: '{other}'（需 approved/modified/rejected）"
@@ -669,4 +693,3 @@ pub struct ConfigProposalResponseInput {
     #[serde(default)]
     pub changes: Option<HashMap<String, String>>,
 }
-

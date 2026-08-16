@@ -277,9 +277,7 @@ impl LlmProvider for MockProvider {
                         .map(|m| m.content_text())
                         .unwrap_or_else(|| "Hello from MockProvider".to_string());
 
-                    let _ = tx
-                        .send(Ok(ChatDelta::Delta { content: user_text }))
-                        .await;
+                    let _ = tx.send(Ok(ChatDelta::Delta { content: user_text })).await;
                     let _ = tx
                         .send(Ok(ChatDelta::Done {
                             finish_reason: Some("stop".to_string()),
@@ -368,7 +366,9 @@ mod tests {
     // -----------------------------------------------------------------
     // 工具：把 stream 消耗到一个 Vec，便于断言
     // -----------------------------------------------------------------
-    async fn drain(stream: Pin<Box<dyn Stream<Item = AppResult<ChatDelta>> + Send>>) -> Vec<ChatDelta> {
+    async fn drain(
+        stream: Pin<Box<dyn Stream<Item = AppResult<ChatDelta>> + Send>>,
+    ) -> Vec<ChatDelta> {
         let mut out = Vec::new();
         let mut s = stream;
         while let Some(item) = s.next().await {
@@ -396,7 +396,10 @@ mod tests {
             MockScenario::ServiceUnavailable
         );
         assert_eq!(MockProvider::timeout("m").scenario, MockScenario::Timeout);
-        assert_eq!(MockProvider::empty("m").scenario, MockScenario::EmptyResponse);
+        assert_eq!(
+            MockProvider::empty("m").scenario,
+            MockScenario::EmptyResponse
+        );
         assert_eq!(MockProvider::new("m", MockScenario::EchoUser).model, "m");
     }
 
@@ -473,10 +476,7 @@ mod tests {
             "错误消息应包含 HTTP 503，实际：{}",
             msg
         );
-        assert!(
-            err.is_retryable(),
-            "503 应被 is_retryable() 判定为可重试"
-        );
+        assert!(err.is_retryable(), "503 应被 is_retryable() 判定为可重试");
     }
 
     // -----------------------------------------------------------------
@@ -563,7 +563,12 @@ mod tests {
         let chunks = drain(stream).await;
 
         // 仅有 1 个 Done，不应有 Delta
-        assert_eq!(chunks.len(), 1, "空响应应只有 1 个 Done，实际：{:?}", chunks);
+        assert_eq!(
+            chunks.len(),
+            1,
+            "空响应应只有 1 个 Done，实际：{:?}",
+            chunks
+        );
         match &chunks[0] {
             ChatDelta::Done { finish_reason } => {
                 assert_eq!(finish_reason.as_deref(), Some("stop"));
@@ -749,10 +754,7 @@ mod tests {
     // -----------------------------------------------------------------
     #[tokio::test]
     async fn custom_text_respects_cancellation() {
-        let provider = MockProvider::new(
-            "mock",
-            MockScenario::CustomText("abcdefghij".into()),
-        );
+        let provider = MockProvider::new("mock", MockScenario::CustomText("abcdefghij".into()));
         let cancel = CancellationToken::new();
         cancel.cancel(); // 预先取消
 

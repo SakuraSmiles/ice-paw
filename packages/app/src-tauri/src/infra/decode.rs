@@ -74,14 +74,20 @@ fn decode_system_ansi(bytes: &[u8]) -> Option<String> {
 pub(crate) fn decode_bytes(bytes: &[u8]) -> DecodedText {
     // 1. UTF-8（Linux/Mac 几乎必命中；Windows 现代工具也常命中）
     if let Ok(s) = std::str::from_utf8(bytes) {
-        return DecodedText { text: s.to_string(), encoding: "utf-8" };
+        return DecodedText {
+            text: s.to_string(),
+            encoding: "utf-8",
+        };
     }
 
     // 2. Windows：系统 ANSI 代码页（CP_ACP 自动适配任意语言版本）
     #[cfg(windows)]
     {
         if let Some(s) = decode_system_ansi(bytes) {
-            return DecodedText { text: s, encoding: "system-ansi" };
+            return DecodedText {
+                text: s,
+                encoding: "system-ansi",
+            };
         }
     }
 

@@ -104,7 +104,8 @@ mod tests {
         assert_eq!(budget.max_total_tokens, 1_000_000);
         // 模拟一个 round 使用了 5000 tokens → 远低于 1_000_000
         let cumulative_tokens: usize = 5_000;
-        let exceeded = budget.max_total_tokens != usize::MAX && cumulative_tokens > budget.max_total_tokens;
+        let exceeded =
+            budget.max_total_tokens != usize::MAX && cumulative_tokens > budget.max_total_tokens;
         assert!(!exceeded, "默认预算不应在 5000 tokens 时触发终止");
     }
 
@@ -120,11 +121,13 @@ mod tests {
         };
         // 模拟 round 1 用了 800 tokens，round 2 累计到 1600 → 超过 1000
         let mut cumulative_tokens: usize = 800;
-        let exceeded_1 = budget.max_total_tokens != usize::MAX && cumulative_tokens > budget.max_total_tokens;
+        let exceeded_1 =
+            budget.max_total_tokens != usize::MAX && cumulative_tokens > budget.max_total_tokens;
         assert!(!exceeded_1, "800 tokens 不应超过 1000 预算");
 
         cumulative_tokens += 800; // 1600
-        let exceeded_2 = budget.max_total_tokens != usize::MAX && cumulative_tokens > budget.max_total_tokens;
+        let exceeded_2 =
+            budget.max_total_tokens != usize::MAX && cumulative_tokens > budget.max_total_tokens;
         assert!(exceeded_2, "1600 tokens 应超过 1000 预算");
     }
 
@@ -140,7 +143,8 @@ mod tests {
         };
         // 模拟极端大的累计值
         let cumulative_tokens: usize = usize::MAX - 1;
-        let exceeded = budget.max_total_tokens != usize::MAX && cumulative_tokens > budget.max_total_tokens;
+        let exceeded =
+            budget.max_total_tokens != usize::MAX && cumulative_tokens > budget.max_total_tokens;
         assert!(!exceeded, "usize::MAX 预算永远不应触发终止");
     }
 

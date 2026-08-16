@@ -129,7 +129,10 @@ pub(crate) async fn resolve_dispatchable(
     Ok(rows
         .into_iter()
         .filter(|a| a.id != initiator_agent_id)
-        .map(|a| DispatchableAgent { id: a.id, name: a.name })
+        .map(|a| DispatchableAgent {
+            id: a.id,
+            name: a.name,
+        })
         .collect())
 }
 
@@ -212,9 +215,8 @@ impl McpClient for DelegateTool {
     }
 
     async fn execute_with_context(&self, args: &str, ctx: &ToolContext) -> AppResult<String> {
-        let parsed: DelegateArgs = serde_json::from_str(args).map_err(|e| {
-            AppError::Validation(format!("delegate_to_agent 参数解析失败: {e}"))
-        })?;
+        let parsed: DelegateArgs = serde_json::from_str(args)
+            .map_err(|e| AppError::Validation(format!("delegate_to_agent 参数解析失败: {e}")))?;
         validate_args(&parsed)?;
 
         // run_agent_turn 的环境依赖全部经 Tauri managed state 取（工具轮已注入 app_handle）
@@ -246,12 +248,15 @@ impl McpClient for DelegateTool {
 
         // --- 2. 专家档案 + 凭据（专家用自己的模型，与主 agent 无关） ---
         let agent_cmd = app.state::<Arc<dyn AgentCmd>>().inner().clone();
-        let creds = agent_cmd.get_with_credentials(&target.id).await.map_err(|e| {
-            AppError::Internal(format!(
-                "读取专家 agent（{}）配置/凭据失败: {e}——请换一个 agent 或如实告知用户",
-                target.name
-            ))
-        })?;
+        let creds = agent_cmd
+            .get_with_credentials(&target.id)
+            .await
+            .map_err(|e| {
+                AppError::Internal(format!(
+                    "读取专家 agent（{}）配置/凭据失败: {e}——请换一个 agent 或如实告知用户",
+                    target.name
+                ))
+            })?;
         let expert_provider = provider::create_provider(
             &creds.agent.provider,
             &creds.agent.model,
@@ -269,7 +274,8 @@ impl McpClient for DelegateTool {
         // 标题 = 裸 task 文本（UX #4：「委派: 」前缀与正文冗余——上下文里
         // kind/父边/agent 已各自可见，标题只负责可读的任务摘要）。旧数据的
         // 前缀由前端展示侧归一剥离，不做 migration。
-        let title = crate::infra::strings::truncate_to_byte_boundary(parsed.task.trim(), 60, Some("…"));
+        let title =
+            crate::infra::strings::truncate_to_byte_boundary(parsed.task.trim(), 60, Some("…"));
         let child_conv_id = Uuid::new_v4().to_string();
         let child_conv = repo::conversation::create(
             &ctx.pool,
@@ -286,9 +292,10 @@ impl McpClient for DelegateTool {
         .await?;
 
         // --- 4. cancel 级联 + ChatState 注册（早退路径 RAII 兜底注销） ---
-        let parent_cancel = ctx.cancel.clone().ok_or_else(|| {
-            AppError::Internal("delegate_to_agent 缺少父会话取消令牌".into())
-        })?;
+        let parent_cancel = ctx
+            .cancel
+            .clone()
+            .ok_or_else(|| AppError::Internal("delegate_to_agent 缺少父会话取消令牌".into()))?;
         let child_cancel = parent_cancel.child_token();
         let chat_state = app.state::<ChatState>().inner().clone();
         chat_state.register(&child_conv_id, child_cancel.clone());
@@ -354,31 +361,27 @@ impl McpClient for DelegateTool {
         let _ = scopeguard::ScopeGuard::into_inner(cancel_guard);
 
         // --- 6. 壁钟护栏 await（子 loop 的 budget/stuck 才是主要终止器） ---
-        let summary = match tokio::time::timeout(
-            Duration::from_secs(WALL_CLOCK_GUARD_SECS),
-            done_rx,
-        )
-        .await
-        {
-            Ok(Ok(summary)) => summary,
-            // 超时：先 cancel 子会话（其 loop 会走 finalize_cancel 自清）再回 Err
-            Err(_) => {
-                chat_state.stop(&child_conv_id);
-                return Err(AppError::Internal(format!(
-                    "委派超时（{} 分钟壁钟护栏）——子会话 {child_conv_id} 已被取消，\
+        let summary =
+            match tokio::time::timeout(Duration::from_secs(WALL_CLOCK_GUARD_SECS), done_rx).await {
+                Ok(Ok(summary)) => summary,
+                // 超时：先 cancel 子会话（其 loop 会走 finalize_cancel 自清）再回 Err
+                Err(_) => {
+                    chat_state.stop(&child_conv_id);
+                    return Err(AppError::Internal(format!(
+                        "委派超时（{} 分钟壁钟护栏）——子会话 {child_conv_id} 已被取消，\
                      请缩小任务范围或换一个 agent",
-                    WALL_CLOCK_GUARD_SECS / 60
-                )));
-            }
-            // RecvError：spawn 任务在发送完成信号前消失（panic / runtime 关闭）
-            Ok(Err(_)) => {
-                return Err(AppError::Internal(
-                    "子会话流式循环异常退出（未产出完成信号）——请如实告知用户该委派失败，\
+                        WALL_CLOCK_GUARD_SECS / 60
+                    )));
+                }
+                // RecvError：spawn 任务在发送完成信号前消失（panic / runtime 关闭）
+                Ok(Err(_)) => {
+                    return Err(AppError::Internal(
+                        "子会话流式循环异常退出（未产出完成信号）——请如实告知用户该委派失败，\
                      可在轨迹页查看子会话已落库的部分"
-                        .into(),
-                ));
-            }
-        };
+                            .into(),
+                    ));
+                }
+            };
 
         tracing::info!(
             target: "ice_paw.delegate",
@@ -443,7 +446,10 @@ mod tests {
     #[test]
     fn resolve_target_ambiguous_name_returns_none() {
         let list = vec![agent("a1", "写作"), agent("a2", "写作")];
-        assert!(resolve_target(&list, "写作").is_none(), "重名不猜，逼调用方用 id");
+        assert!(
+            resolve_target(&list, "写作").is_none(),
+            "重名不猜，逼调用方用 id"
+        );
     }
 
     #[test]
@@ -456,7 +462,10 @@ mod tests {
     fn dispatch_hint_lists_id_and_name() {
         let list = vec![agent("a1", "翻译"), agent("a2", "写作")];
         let hint = build_dispatch_hint(&list);
-        assert!(hint.contains("翻译（agent_id: a1）"), "清单须同时含 name 与 id: {hint}");
+        assert!(
+            hint.contains("翻译（agent_id: a1）"),
+            "清单须同时含 name 与 id: {hint}"
+        );
         assert!(hint.contains("delegate_to_agent"));
         assert!(hint.contains("自包含"), "须提示 task 自包含");
     }
@@ -464,7 +473,10 @@ mod tests {
     #[test]
     fn validate_args_rejects_empty_task() {
         for task in ["", "   ", "\n\t"] {
-            let args = DelegateArgs { agent_id: "a1".into(), task: task.into() };
+            let args = DelegateArgs {
+                agent_id: "a1".into(),
+                task: task.into(),
+            };
             assert!(
                 validate_args(&args).is_err(),
                 "空/纯空白 task（{task:?}）必须输入侧拒绝——专家看不到任何上下文，空任务只会被自由发挥填补"
@@ -474,7 +486,10 @@ mod tests {
 
     #[test]
     fn validate_args_accepts_normal_task() {
-        let args = DelegateArgs { agent_id: "a1".into(), task: "  翻译 README 首页  ".into() };
+        let args = DelegateArgs {
+            agent_id: "a1".into(),
+            task: "  翻译 README 首页  ".into(),
+        };
         assert!(validate_args(&args).is_ok());
     }
 
@@ -482,12 +497,23 @@ mod tests {
     fn normal_completion_covers_both_provider_families() {
         // OpenAI 系正常 = stop；Anthropic 系原样透传 = end_turn——两者同义
         assert!(is_normal_completion("stop"));
-        assert!(is_normal_completion("end_turn"), "手测坐实的误标根因：end_turn 是正常完成");
+        assert!(
+            is_normal_completion("end_turn"),
+            "手测坐实的误标根因：end_turn 是正常完成"
+        );
     }
 
     #[test]
     fn normal_completion_rejects_abnormal_reasons() {
-        for r in ["length", "max_tokens", "budget_exceeded", "stuck", "abort", "tool_use", ""] {
+        for r in [
+            "length",
+            "max_tokens",
+            "budget_exceeded",
+            "stuck",
+            "abort",
+            "tool_use",
+            "",
+        ] {
             assert!(!is_normal_completion(r), "{r} 须附「可能不完整」note");
         }
     }

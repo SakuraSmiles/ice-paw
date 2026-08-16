@@ -175,11 +175,7 @@ impl BatchWriter {
     ///
     /// 推入后内部检查：若字符增量达阈值 → 异步触发 flush_now。
     pub async fn push_text(&self, latest_full_text: String) {
-        if let Err(e) = self
-            .tx
-            .send(BatchCommand::PushText(latest_full_text))
-            .await
-        {
+        if let Err(e) = self.tx.send(BatchCommand::PushText(latest_full_text)).await {
             warn!(
                 target: "ice_paw.batch_writer",
                 "BatchWriter push_text 发送失败（writer 可能已关闭）: {}",
@@ -366,9 +362,9 @@ mod tests {
     /// 验证：BatchWriter 能在内存 SQLite 上 spawn 后正常 push / flush
     #[tokio::test]
     async fn batch_writer_writes_to_db() {
+        use crate::db::models::NewMessage;
         use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
         use std::str::FromStr;
-        use crate::db::models::NewMessage;
 
         // 准备内存数据库 + 跑迁移
         let opts = SqliteConnectOptions::from_str("sqlite::memory:")
@@ -380,7 +376,10 @@ mod tests {
             .connect_with(opts)
             .await
             .unwrap();
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
 
         // 准备 agent + conversation + assistant message
         sqlx::query(
@@ -428,9 +427,9 @@ mod tests {
         let (writer, handle) = BatchWriter::spawn_with_thresholds(
             pool.clone(),
             msg_id.to_string(),
-            5,                          // char threshold
-            Duration::from_millis(50),  // time threshold
-            Duration::from_millis(20),  // tick interval
+            5,                         // char threshold
+            Duration::from_millis(50), // time threshold
+            Duration::from_millis(20), // tick interval
         );
 
         // push_text 推入 10 字符（> 阈值）应触发字符阈值 flush
@@ -463,9 +462,9 @@ mod tests {
     /// 验证：低频 chunk（< 字符阈值）也能在时间阈值内被 flush
     #[tokio::test]
     async fn batch_writer_time_threshold_triggers_flush() {
+        use crate::db::models::NewMessage;
         use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
         use std::str::FromStr;
-        use crate::db::models::NewMessage;
 
         let opts = SqliteConnectOptions::from_str("sqlite::memory:")
             .unwrap()
@@ -476,7 +475,10 @@ mod tests {
             .connect_with(opts)
             .await
             .unwrap();
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
 
         sqlx::query(
             "INSERT INTO agents (id, name, provider, model, system_prompt, api_key_ref, temperature, max_tokens, extra_params, sort_order, cache_prompt)
@@ -523,13 +525,13 @@ mod tests {
         let (writer, handle) = BatchWriter::spawn_with_thresholds(
             pool.clone(),
             msg_id.to_string(),
-            1000,                       // char threshold (高)
-            Duration::from_millis(50),  // time threshold (短)
-            Duration::from_millis(20),  // tick interval
+            1000,                      // char threshold (高)
+            Duration::from_millis(50), // time threshold (短)
+            Duration::from_millis(20), // tick interval
         );
 
         writer.push_text("hi".to_string()).await; // 2 chars < 1000
-        // 等时间阈值 tick
+                                                  // 等时间阈值 tick
         tokio::time::sleep(Duration::from_millis(150)).await;
         writer.shutdown().await;
         let _ = handle.await;

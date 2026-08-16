@@ -21,9 +21,7 @@ use crate::harness::provider::embedding::EmbeddingBackend;
 /// 任一缺失或 provider 未知 → `None`（调用方回退关键词检索 / 跳过预生成）。
 ///
 /// 抽成纯函数，便于单测「前端 JSON 存储能否被正确解析为 backend 配置」。
-pub fn resolve_embedding_config(
-    prefs: &UserPreferences,
-) -> Option<(String, String, String)> {
+pub fn resolve_embedding_config(prefs: &UserPreferences) -> Option<(String, String, String)> {
     let model = prefs.embedding_model.clone()?;
     let provider = prefs.embedding_provider.as_deref()?;
     let api_key = prefs.embedding_api_key.clone()?;
@@ -98,7 +96,10 @@ mod tests {
             .connect_with(opts)
             .await
             .unwrap();
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         pool
     }
 

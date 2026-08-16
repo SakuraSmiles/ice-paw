@@ -71,12 +71,22 @@ pub async fn create(pool: &SqlitePool, input: &NewProject, id: &str) -> AppResul
 pub async fn update(pool: &SqlitePool, input: &UpdateProject) -> AppResult<ProjectRow> {
     let mut current = get_by_id(pool, &input.id).await?;
 
-    if let Some(v) = input.name.as_deref() { current.name = v.to_string(); }
-    if let Some(v) = input.description.as_deref() { current.description = v.to_string(); }
-    if let Some(v) = input.icon.as_deref() { current.icon = v.to_string(); }
+    if let Some(v) = input.name.as_deref() {
+        current.name = v.to_string();
+    }
+    if let Some(v) = input.description.as_deref() {
+        current.description = v.to_string();
+    }
+    if let Some(v) = input.icon.as_deref() {
+        current.icon = v.to_string();
+    }
     // 双层 Option：None=不改, Some(None)=清空, Some(Some(v))=设定
-    if let Some(v) = &input.workspace_path { current.workspace_path = v.clone(); }
-    if let Some(v) = &input.theme_color { current.theme_color = v.clone(); }
+    if let Some(v) = &input.workspace_path {
+        current.workspace_path = v.clone();
+    }
+    if let Some(v) = &input.theme_color {
+        current.theme_color = v.clone();
+    }
 
     sqlx::query(
         "UPDATE projects SET name=?, description=?, icon=?, workspace_path=?, theme_color=?, updated_at=datetime('now') WHERE id=?",
@@ -116,7 +126,11 @@ pub async fn set_archived(pool: &SqlitePool, id: &str, archived: bool) -> AppRes
 /// false 则依赖 conversations.project_id ON DELETE SET NULL，会话转为散落。
 ///
 /// 整个操作在事务中执行——若删项目失败，会话不会丢。
-pub async fn permanent_delete(pool: &SqlitePool, id: &str, delete_conversations: bool) -> AppResult<()> {
+pub async fn permanent_delete(
+    pool: &SqlitePool,
+    id: &str,
+    delete_conversations: bool,
+) -> AppResult<()> {
     let mut txn = pool.begin().await?;
     if delete_conversations {
         sqlx::query("DELETE FROM conversations WHERE project_id = ?")
@@ -191,14 +205,12 @@ pub async fn set_agents(
         .execute(&mut *txn)
         .await?;
     for (agent_id, role) in members {
-        sqlx::query(
-            "INSERT INTO project_agents (project_id, agent_id, role) VALUES (?, ?, ?)",
-        )
-        .bind(project_id)
-        .bind(agent_id)
-        .bind(role)
-        .execute(&mut *txn)
-        .await?;
+        sqlx::query("INSERT INTO project_agents (project_id, agent_id, role) VALUES (?, ?, ?)")
+            .bind(project_id)
+            .bind(agent_id)
+            .bind(role)
+            .execute(&mut *txn)
+            .await?;
     }
     txn.commit().await?;
     Ok(())

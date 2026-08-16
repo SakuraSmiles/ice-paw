@@ -49,8 +49,18 @@ pub(crate) fn primary_monitor_work_area(hwnd: Hwnd) -> Option<WorkRect> {
 
     let mut info = MONITORINFO {
         cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-        rcMonitor: RECT { left: 0, top: 0, right: 0, bottom: 0 },
-        rcWork: RECT { left: 0, top: 0, right: 0, bottom: 0 },
+        rcMonitor: RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        },
+        rcWork: RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        },
         dwFlags: 0,
     };
     // SAFETY：hmon 来自上面的 Win32 调用；info 是 cbSize 已初始化的出参缓冲区。

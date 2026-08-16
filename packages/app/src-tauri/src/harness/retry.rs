@@ -190,7 +190,10 @@ impl RetryContext {
 
     /// 构造带 round_text 的上下文（用于 retry）
     pub fn with_round_text(messages: Vec<ChatMessage>, round_text: String) -> Self {
-        Self { round_text, messages }
+        Self {
+            round_text,
+            messages,
+        }
     }
 }
 
@@ -208,11 +211,14 @@ mod tests {
     fn test_retry_state_first_to_retrying_1() {
         let s = RetryState::new();
         let s2 = s.next_retry(4, 1);
-        assert_eq!(s2, RetryState::Retrying {
-            attempt: 1,
-            max_attempts: 4,
-            wait_secs: 1,
-        });
+        assert_eq!(
+            s2,
+            RetryState::Retrying {
+                attempt: 1,
+                max_attempts: 4,
+                wait_secs: 1,
+            }
+        );
     }
 
     #[test]
@@ -223,11 +229,14 @@ mod tests {
             wait_secs: 1,
         };
         let s2 = s.next_retry(4, 2);
-        assert_eq!(s2, RetryState::Retrying {
-            attempt: 2,
-            max_attempts: 4,
-            wait_secs: 2,
-        });
+        assert_eq!(
+            s2,
+            RetryState::Retrying {
+                attempt: 2,
+                max_attempts: 4,
+                wait_secs: 2,
+            }
+        );
     }
 
     #[test]

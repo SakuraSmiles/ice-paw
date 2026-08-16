@@ -219,25 +219,25 @@ impl McpClient for ProposeConfigChangeTool {
     }
 
     async fn execute_with_context(&self, args: &str, ctx: &ToolContext) -> AppResult<String> {
-        let parsed: ProposeConfigArgs =
-            serde_json::from_str(args).map_err(|e| {
-                AppError::Validation(format!("propose_config_change 参数解析失败: {e}"))
-            })?;
+        let parsed: ProposeConfigArgs = serde_json::from_str(args).map_err(|e| {
+            AppError::Validation(format!("propose_config_change 参数解析失败: {e}"))
+        })?;
 
         // 1. 平铺参数 → ProposalAction 枚举
         let action = into_proposal_action(&parsed)?;
         let summary = parsed.summary;
 
         // 2. Guardrail 校验（红线直接返回 Err 给 LLM，不 emit 事件）
-        let (sensitivity, _warnings) =
-            proposal_guard::validate_proposal(&action, &ctx.agent_id)?;
+        let (sensitivity, _warnings) = proposal_guard::validate_proposal(&action, &ctx.agent_id)?;
 
         // 3. 获取 AppHandle 和 ProposalRegistry（由 execute_tool_round 注入到 ctx）
         let app_handle = ctx.app_handle.as_ref().ok_or_else(|| {
             AppError::Internal("propose_config_change: app_handle 未注入到 ToolContext".into())
         })?;
         let proposal_registry = ctx.proposal_registry.as_ref().ok_or_else(|| {
-            AppError::Internal("propose_config_change: proposal_registry 未注入到 ToolContext".into())
+            AppError::Internal(
+                "propose_config_change: proposal_registry 未注入到 ToolContext".into(),
+            )
         })?;
 
         // 4. 生成 request_id
@@ -326,9 +326,7 @@ impl McpClient for ProposeConfigChangeTool {
                     })
                     .to_string()),
                     ProposalDecision::Rejected { reason } => {
-                        let msg = reason
-                            .as_deref()
-                            .unwrap_or("用户拒绝了此配置变更");
+                        let msg = reason.as_deref().unwrap_or("用户拒绝了此配置变更");
                         Ok(serde_json::json!({
                             "status": "rejected",
                             "message": msg,
@@ -408,8 +406,14 @@ mod tests {
 
         let params = tool.parameters();
         assert_eq!(params["type"], "object");
-        assert!(params["required"].as_array().unwrap().contains(&serde_json::json!("action")));
-        assert!(params["required"].as_array().unwrap().contains(&serde_json::json!("summary")));
+        assert!(params["required"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("action")));
+        assert!(params["required"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("summary")));
     }
 
     #[tokio::test]
@@ -417,7 +421,10 @@ mod tests {
         let tool = ProposeConfigChangeTool;
         let result = tool.execute("{}").await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("execute_with_context"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("execute_with_context"));
     }
 
     #[test]
@@ -440,7 +447,15 @@ mod tests {
 
         let action = into_proposal_action(&args).unwrap();
         match action {
-            ProposalAction::CreateAgent { id, name, provider, model, api_key, temperature, .. } => {
+            ProposalAction::CreateAgent {
+                id,
+                name,
+                provider,
+                model,
+                api_key,
+                temperature,
+                ..
+            } => {
                 assert_eq!(id, "test-bot");
                 assert_eq!(name, "测试助手");
                 assert_eq!(provider, "anthropic");
@@ -467,7 +482,12 @@ mod tests {
 
         let action = into_proposal_action(&args).unwrap();
         match action {
-            ProposalAction::UpdateAgent { agent_id, name, temperature, .. } => {
+            ProposalAction::UpdateAgent {
+                agent_id,
+                name,
+                temperature,
+                ..
+            } => {
                 assert_eq!(agent_id, "my-agent");
                 assert_eq!(name, Some("新名字".into()));
                 assert_eq!(temperature, Some(0.5));

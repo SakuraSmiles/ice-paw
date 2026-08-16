@@ -67,7 +67,10 @@ mod tests {
     #[test]
     fn friendly_error_anthropic_safety_policy() {
         // Anthropic 的 content policy / safety（旧实现完全漏匹配 → 英文原文暴露）
-        assert!(friendly_error("HTTP 400: invalid_request_error: content policy violation").contains("安全审核"));
+        assert!(
+            friendly_error("HTTP 400: invalid_request_error: content policy violation")
+                .contains("安全审核")
+        );
         assert!(friendly_error("HTTP 400: safety violation").contains("安全审核"));
     }
 

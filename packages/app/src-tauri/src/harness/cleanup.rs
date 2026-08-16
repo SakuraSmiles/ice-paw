@@ -151,7 +151,9 @@ pub(crate) async fn finalize_assistant_without_tool_use(
         }
         TerminationDecision::PersistFallback => {
             let fb = fallback_text.expect("PersistFallback 仅在 has_fallback 时返回");
-            let blocks = vec![ContentBlock::Text { text: fb.to_string() }];
+            let blocks = vec![ContentBlock::Text {
+                text: fb.to_string(),
+            }];
             batch_writer.flush_now().await;
             finalize_assistant_message(pool, asst_msg_id, fb, &blocks, completion_tokens).await;
             PersistOutcome::Persisted {
@@ -219,7 +221,8 @@ pub(crate) async fn finalize_success(
     let pool_clone = pool.clone();
     let user_id = ev.turn_id.clone();
     tokio::spawn(async move {
-        if let Err(e) = repo::message::update_token_count(&pool_clone, &user_id, user_tokens).await {
+        if let Err(e) = repo::message::update_token_count(&pool_clone, &user_id, user_tokens).await
+        {
             tracing::warn!(target: "ice_paw.cleanup", "回写 user token_count 失败: msg_id={}, err={}", user_id, e);
         }
     });
@@ -357,10 +360,17 @@ mod tests {
         ContentBlock::Text { text: t.into() }
     }
     fn thinking(t: &str) -> ContentBlock {
-        ContentBlock::Thinking { thinking: t.into(), signature: None }
+        ContentBlock::Thinking {
+            thinking: t.into(),
+            signature: None,
+        }
     }
     fn tool_use() -> ContentBlock {
-        ContentBlock::ToolUse { id: "tu_1".into(), name: "search".into(), input: "{}".into() }
+        ContentBlock::ToolUse {
+            id: "tu_1".into(),
+            name: "search".into(),
+            input: "{}".into(),
+        }
     }
 
     // --- 有 Text：恒 PersistFiltered（fallback 不抢占真实文本）---

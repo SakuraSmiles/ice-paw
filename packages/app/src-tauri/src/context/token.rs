@@ -202,10 +202,7 @@ mod tests {
     #[test]
     fn estimate_block_tokens_text() {
         // "test" = 4 ascii → 1 token
-        assert_eq!(
-            estimate_block_tokens(&ContentBlock::text("test")),
-            1
-        );
+        assert_eq!(estimate_block_tokens(&ContentBlock::text("test")), 1);
     }
 
     #[test]
@@ -349,7 +346,7 @@ mod tests {
         };
         assert_eq!(b.fold_trigger_tokens(), 5_500); // 55%
         assert_eq!(b.fold_target_tokens(), 4_000); // 40%
-        // trigger 必须 > target，否则折叠逻辑无意义
+                                                   // trigger 必须 > target，否则折叠逻辑无意义
         assert!(b.fold_trigger_tokens() > b.fold_target_tokens());
     }
 }

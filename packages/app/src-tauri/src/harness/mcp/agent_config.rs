@@ -72,7 +72,10 @@ mod tests {
         let tool = ReadAgentConfigTool;
         let result = tool.execute("{}").await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("execute_with_context"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("execute_with_context"));
     }
 
     #[test]

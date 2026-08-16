@@ -98,6 +98,9 @@ mod tests {
             })
             .filter(|p| !p.is_empty())
             .collect();
-        assert_eq!(pages, vec!["第一页内容".to_string(), "第二页内容".to_string()]);
+        assert_eq!(
+            pages,
+            vec!["第一页内容".to_string(), "第二页内容".to_string()]
+        );
     }
 }

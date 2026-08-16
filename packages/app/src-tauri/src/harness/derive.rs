@@ -61,30 +61,28 @@ pub fn derive_history(events: &[SessionEventRow]) -> DeriveResult {
     for ev in events {
         let seq = ev.seq;
         match ev.kind.as_str() {
-            "user_message" => {
-                match parse::<UserMessagePayload>(&ev.payload) {
-                    Ok(p) => {
-                        let mid = require_message_id(ev, &mut result);
-                        push_message(
-                            &mut result,
-                            DerivedMessage {
-                                message_id: mid,
-                                role: "user".into(),
-                                content: p.content,
-                                blocks: p.blocks,
-                                turn_id: ev.turn_id.clone(),
-                                first_seq: seq,
-                                last_seq: seq,
-                            },
-                        );
-                    }
-                    Err(e) => result.issues.push(DeriveIssue {
-                        seq,
-                        kind: ev.kind.clone(),
-                        reason: format!("payload 解析失败: {e}"),
-                    }),
+            "user_message" => match parse::<UserMessagePayload>(&ev.payload) {
+                Ok(p) => {
+                    let mid = require_message_id(ev, &mut result);
+                    push_message(
+                        &mut result,
+                        DerivedMessage {
+                            message_id: mid,
+                            role: "user".into(),
+                            content: p.content,
+                            blocks: p.blocks,
+                            turn_id: ev.turn_id.clone(),
+                            first_seq: seq,
+                            last_seq: seq,
+                        },
+                    );
                 }
-            }
+                Err(e) => result.issues.push(DeriveIssue {
+                    seq,
+                    kind: ev.kind.clone(),
+                    reason: format!("payload 解析失败: {e}"),
+                }),
+            },
             "tool_result_message" => match parse::<ToolResultMessagePayload>(&ev.payload) {
                 Ok(p) => {
                     let mid = require_message_id(ev, &mut result);
@@ -113,10 +111,8 @@ pub fn derive_history(events: &[SessionEventRow]) -> DeriveResult {
                     Ok(p) => {
                         let mid = require_message_id(ev, &mut result);
                         // supersede：同 message_id 已存在 → 原位覆写内容（位置取首现）
-                        if let Some(existing) = result
-                            .messages
-                            .iter_mut()
-                            .find(|m| m.message_id == mid)
+                        if let Some(existing) =
+                            result.messages.iter_mut().find(|m| m.message_id == mid)
                         {
                             existing.content = p.content;
                             existing.blocks = p.blocks;
@@ -183,7 +179,9 @@ fn push_message(result: &mut DeriveResult, mut msg: DerivedMessage) {
     // 与 legacy 提取器同构的空回退：blocks 空 → [Text(content)]（空内容则为 [Text("")]，
     // 与行「content=''+blocks='[]'」的提取结果一致，差异不会被回退规则抹掉）。
     if msg.blocks.is_empty() {
-        msg.blocks = vec![ContentBlock::Text { text: msg.content.clone() }];
+        msg.blocks = vec![ContentBlock::Text {
+            text: msg.content.clone(),
+        }];
     }
     result.messages.push(msg);
 }
@@ -262,11 +260,14 @@ mod tests {
         assert_eq!(out.messages[0].message_id, "m-u1");
         assert_eq!(out.messages[0].blocks, vec![text_block("读文件")]);
         assert_eq!(out.messages[1].role, "assistant");
-        assert_eq!(out.messages[1].blocks[0].clone(), ContentBlock::ToolUse {
-            id: "tu_1".into(),
-            name: "read_file".into(),
-            input: "{}".into(),
-        });
+        assert_eq!(
+            out.messages[1].blocks[0].clone(),
+            ContentBlock::ToolUse {
+                id: "tu_1".into(),
+                name: "read_file".into(),
+                input: "{}".into(),
+            }
+        );
         // tool_result → user，content 恒空
         assert_eq!(out.messages[2].role, "user");
         assert_eq!(out.messages[2].content, "");
@@ -315,10 +316,30 @@ mod tests {
     #[test]
     fn derive_error_and_discarded_skipped() {
         let events = vec![
-            row(1, "user_message", Some("m-u1"), r#"{"v":1,"content":"q","blocks":[]}"#.into()),
-            row(2, "message_error", Some("m-a1"), r#"{"v":1,"kind":"Network","error":"refused"}"#.into()),
-            row(3, "message_discarded", Some("m-a2"), r#"{"v":1,"reason":"cancel_top_placeholder"}"#.into()),
-            row(4, "turn_ended", None, r#"{"v":1,"termination":"abort","rounds":0}"#.into()),
+            row(
+                1,
+                "user_message",
+                Some("m-u1"),
+                r#"{"v":1,"content":"q","blocks":[]}"#.into(),
+            ),
+            row(
+                2,
+                "message_error",
+                Some("m-a1"),
+                r#"{"v":1,"kind":"Network","error":"refused"}"#.into(),
+            ),
+            row(
+                3,
+                "message_discarded",
+                Some("m-a2"),
+                r#"{"v":1,"reason":"cancel_top_placeholder"}"#.into(),
+            ),
+            row(
+                4,
+                "turn_ended",
+                None,
+                r#"{"v":1,"termination":"abort","rounds":0}"#.into(),
+            ),
         ];
         let out = derive_history(&events);
         assert_eq!(out.messages.len(), 1, "error/discarded 不进回放");
@@ -328,10 +349,20 @@ mod tests {
     #[test]
     fn derive_unknown_kind_and_bad_payload_reported() {
         let events = vec![
-            row(1, "user_message", Some("m-u1"), r#"{"v":1,"content":"q","blocks":[]}"#.into()),
+            row(
+                1,
+                "user_message",
+                Some("m-u1"),
+                r#"{"v":1,"content":"q","blocks":[]}"#.into(),
+            ),
             row(2, "task_started", None, r#"{"v":1}"#.into()),
             row(3, "assistant_message", Some("m-a1"), r#"NOT JSON"#.into()),
-            row(4, "user_message", None, r#"{"v":1,"content":"无id","blocks":[]}"#.into()),
+            row(
+                4,
+                "user_message",
+                None,
+                r#"{"v":1,"content":"无id","blocks":[]}"#.into(),
+            ),
         ];
         let out = derive_history(&events);
         // 未知 kind + 坏 payload + 缺 message_id → 三条 issue
@@ -344,9 +375,24 @@ mod tests {
     #[test]
     fn derive_modal_and_hook_events_ignored() {
         let events = vec![
-            row(1, "modal_adapted", None, r#"{"v":1,"stage":"user_image","mode":"ocr_substitute","items":[]}"#.into()),
-            row(2, "hook_injected", None, r#"{"v":1,"point":"before_llm","prompt":"x"}"#.into()),
-            row(3, "attachment_stored", Some("m-u1"), r#"{"kind":"bytes","v":1,"items":[]}"#.into()),
+            row(
+                1,
+                "modal_adapted",
+                None,
+                r#"{"v":1,"stage":"user_image","mode":"ocr_substitute","items":[]}"#.into(),
+            ),
+            row(
+                2,
+                "hook_injected",
+                None,
+                r#"{"v":1,"point":"before_llm","prompt":"x"}"#.into(),
+            ),
+            row(
+                3,
+                "attachment_stored",
+                Some("m-u1"),
+                r#"{"kind":"bytes","v":1,"items":[]}"#.into(),
+            ),
         ];
         let out = derive_history(&events);
         assert!(out.messages.is_empty());

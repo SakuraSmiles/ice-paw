@@ -28,17 +28,11 @@ pub const SUPPORTED_PROVIDERS: &[&str] = &["openai", "glm", "deepseek", "minimax
 /// 任一缺失或 provider 未知 → `None`（调用方回退：Agent 自带视觉模型，或治标诚实提示）。
 ///
 /// 抽成纯函数，便于单测「前端 JSON 存储能否被正确解析为 vision 配置」。
-pub fn resolve_vision_config(
-    prefs: &UserPreferences,
-) -> Option<(String, String, String)> {
+pub fn resolve_vision_config(prefs: &UserPreferences) -> Option<(String, String, String)> {
     let model = prefs.vision_model.clone()?;
     let provider = prefs.vision_provider.as_deref()?;
     let api_key = prefs.vision_api_key.clone()?;
-    let url = match prefs
-        .vision_base_url
-        .as_deref()
-        .filter(|s| !s.is_empty())
-    {
+    let url = match prefs.vision_base_url.as_deref().filter(|s| !s.is_empty()) {
         Some(u) => u.to_string(),
         None => match provider {
             "openai" => "https://api.openai.com".into(),
@@ -204,7 +198,15 @@ impl VisionCredential {
     /// `media_type` 必须与 `bytes` 真实格式一致（如 pdfium 渲染恒为 `image/png`；
     /// 用户上传图可能是 `image/jpeg` / `image/gif` / `image/webp`）。
     pub async fn describe(&self, bytes: &[u8], media_type: &str) -> AppResult<String> {
-        describe_image(&self.provider, &self.model, &self.base_url, &self.api_key, media_type, bytes).await
+        describe_image(
+            &self.provider,
+            &self.model,
+            &self.base_url,
+            &self.api_key,
+            media_type,
+            bytes,
+        )
+        .await
     }
 }
 

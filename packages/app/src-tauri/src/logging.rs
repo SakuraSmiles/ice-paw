@@ -53,8 +53,7 @@ pub fn init(app: &AppHandle) -> AppResult<Mutex<WorkerGuard>> {
     let file_appender = tracing_appender::rolling::daily(&dir, LOG_PREFIX);
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
-    let filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     // 双 layer：stdout 带 ANSI 彩色（终端可读），文件去 ANSI（纯文本便于 tail/导出）
     tracing_subscriber::registry()

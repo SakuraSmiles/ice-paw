@@ -132,13 +132,19 @@ impl AgentRow {
     /// 从 extra_params JSON 中读取工具调用最大轮数（None = 使用系统默认）
     pub fn tool_max_rounds(&self) -> Option<u32> {
         let params: serde_json::Value = serde_json::from_str(&self.extra_params).ok()?;
-        params.get("tool_max_rounds").and_then(|v| v.as_u64()).map(|v| v as u32)
+        params
+            .get("tool_max_rounds")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32)
     }
 
     /// 从 extra_params JSON 中读取 Token 预算上限（None = 使用系统默认）
     pub fn max_total_tokens(&self) -> Option<usize> {
         let params: serde_json::Value = serde_json::from_str(&self.extra_params).ok()?;
-        params.get("max_total_tokens").and_then(|v| v.as_u64()).map(|v| v as usize)
+        params
+            .get("max_total_tokens")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
     }
 
     /// 若 workspace_path 存在，尝试读取 `<workspace_path>/agent.yaml` 并解析为文件配置。
@@ -154,17 +160,39 @@ impl AgentRow {
 impl AgentFileConfig {
     /// 把文件配置合并到 Agent 中（文件配置优先覆盖 DB 值）
     pub fn apply_to(&self, agent: &mut Agent) {
-        if let Some(v) = &self.description { agent.description = v.clone(); }
-        if let Some(v) = &self.system_prompt { agent.system_prompt = v.clone(); }
-        if let Some(v) = self.temperature { agent.temperature = v; }
-        if let Some(v) = self.max_tokens { agent.max_tokens = v; }
-        if let Some(v) = self.cache_prompt { agent.cache_prompt = v; }
-        if let Some(v) = self.supports_vision { agent.supports_vision = v; }
-        if let Some(v) = self.max_history_messages { agent.max_history_messages = Some(v); }
-        if let Some(v) = self.tool_trim_threshold { agent.tool_trim_threshold = Some(v); }
-        if let Some(v) = self.context_window { agent.context_window = Some(v); }
-        if let Some(v) = &self.enabled_tools { agent.enabled_tools = Some(v.clone()); }
-        if let Some(v) = &self.extra_params { agent.extra_params = v.clone(); }
+        if let Some(v) = &self.description {
+            agent.description = v.clone();
+        }
+        if let Some(v) = &self.system_prompt {
+            agent.system_prompt = v.clone();
+        }
+        if let Some(v) = self.temperature {
+            agent.temperature = v;
+        }
+        if let Some(v) = self.max_tokens {
+            agent.max_tokens = v;
+        }
+        if let Some(v) = self.cache_prompt {
+            agent.cache_prompt = v;
+        }
+        if let Some(v) = self.supports_vision {
+            agent.supports_vision = v;
+        }
+        if let Some(v) = self.max_history_messages {
+            agent.max_history_messages = Some(v);
+        }
+        if let Some(v) = self.tool_trim_threshold {
+            agent.tool_trim_threshold = Some(v);
+        }
+        if let Some(v) = self.context_window {
+            agent.context_window = Some(v);
+        }
+        if let Some(v) = &self.enabled_tools {
+            agent.enabled_tools = Some(v.clone());
+        }
+        if let Some(v) = &self.extra_params {
+            agent.extra_params = v.clone();
+        }
         if let Some(v) = self.tool_max_rounds {
             if let Some(obj) = agent.extra_params.as_object_mut() {
                 obj.insert("tool_max_rounds".into(), serde_json::json!(v));
@@ -179,15 +207,33 @@ impl AgentFileConfig {
 
     /// 把文件配置合并到 AgentRow 中（供 chat_cmd 内部使用）
     pub fn apply_to_row(&self, row: &mut AgentRow) {
-        if let Some(v) = &self.description { row.description = v.clone(); }
-        if let Some(v) = &self.system_prompt { row.system_prompt = v.clone(); }
-        if let Some(v) = self.temperature { row.temperature = v; }
-        if let Some(v) = self.max_tokens { row.max_tokens = v; }
-        if let Some(v) = self.cache_prompt { row.cache_prompt = if v { 1 } else { 0 }; }
-        if let Some(v) = self.supports_vision { row.supports_vision = if v { 1 } else { 0 }; }
-        if let Some(v) = self.max_history_messages { row.max_history_messages = Some(v); }
-        if let Some(v) = self.tool_trim_threshold { row.tool_trim_threshold = Some(v); }
-        if let Some(v) = self.context_window { row.context_window = Some(v); }
+        if let Some(v) = &self.description {
+            row.description = v.clone();
+        }
+        if let Some(v) = &self.system_prompt {
+            row.system_prompt = v.clone();
+        }
+        if let Some(v) = self.temperature {
+            row.temperature = v;
+        }
+        if let Some(v) = self.max_tokens {
+            row.max_tokens = v;
+        }
+        if let Some(v) = self.cache_prompt {
+            row.cache_prompt = if v { 1 } else { 0 };
+        }
+        if let Some(v) = self.supports_vision {
+            row.supports_vision = if v { 1 } else { 0 };
+        }
+        if let Some(v) = self.max_history_messages {
+            row.max_history_messages = Some(v);
+        }
+        if let Some(v) = self.tool_trim_threshold {
+            row.tool_trim_threshold = Some(v);
+        }
+        if let Some(v) = self.context_window {
+            row.context_window = Some(v);
+        }
         if let Some(v) = &self.enabled_tools {
             row.enabled_tools = Some(serde_json::to_string(v).unwrap_or_default());
         }
@@ -309,7 +355,8 @@ impl From<AgentRow> for Agent {
             max_history_messages: row.max_history_messages,
             tool_trim_threshold: row.tool_trim_threshold,
             context_window: row.context_window,
-            enabled_tools: row.enabled_tools
+            enabled_tools: row
+                .enabled_tools
                 .as_deref()
                 .map(|s| serde_json::from_str::<Vec<String>>(s).unwrap_or_default()),
             supports_vision: row.supports_vision != 0,
@@ -368,7 +415,9 @@ pub struct NewAgent {
     pub workspace_path: Option<String>,
 }
 
-fn default_temperature() -> f64 { 0.7 }
+fn default_temperature() -> f64 {
+    0.7
+}
 /// 新建 agent 的输出 token 上限默认值（页面不暴露此字段，进阶配置走 agent.yaml）。
 ///
 /// 旧值为 4096，会截断稍长的回答（如两份数千字文档的对比，输出常达 6–12K token），
@@ -376,8 +425,12 @@ fn default_temperature() -> f64 { 0.7 }
 /// 长回答；运行时由 chat_cmd 的 effective_max_tokens（模型策展表 .max，只抬不降）再
 /// 抬到模型能力值（已知模型 32K）。需突破上限的进阶用户在 agent.yaml 配置 max_tokens。
 /// 历史 agent 的 4096 由 migration 41 一并抬升。
-fn default_max_tokens() -> i32 { 16384 }
-fn default_cache_prompt() -> bool { true }
+fn default_max_tokens() -> i32 {
+    16384
+}
+fn default_cache_prompt() -> bool {
+    true
+}
 
 /// 更新 agent 入参（partial update）
 ///
@@ -501,7 +554,8 @@ impl From<ConversationRow> for Conversation {
             pinned: row.pinned != 0,
             created_at: row.created_at,
             updated_at: row.updated_at,
-            tools_override: row.tools_override
+            tools_override: row
+                .tools_override
                 .as_deref()
                 .map(|s| serde_json::from_str::<HashMap<String, bool>>(s).unwrap_or_default()),
             project_id: row.project_id,
@@ -725,8 +779,8 @@ pub struct SessionEvent {
 
 impl From<SessionEventRow> for SessionEvent {
     fn from(r: SessionEventRow) -> Self {
-        let payload: serde_json::Value =
-            serde_json::from_str(&r.payload).unwrap_or(serde_json::Value::String(r.payload.clone()));
+        let payload: serde_json::Value = serde_json::from_str(&r.payload)
+            .unwrap_or(serde_json::Value::String(r.payload.clone()));
         Self {
             id: r.id,
             session_id: r.session_id,
@@ -1007,5 +1061,3 @@ pub struct UpdateProject {
     #[serde(default, deserialize_with = "deserialize_double_option")]
     pub theme_color: Option<Option<String>>,
 }
-
-

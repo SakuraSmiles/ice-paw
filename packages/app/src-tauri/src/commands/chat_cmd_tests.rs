@@ -68,7 +68,11 @@ mod tests {
         let blocks = content_blocks.filter(|v| !v.is_empty());
         let legacy = content.as_ref().and_then(|s| {
             let t = s.trim();
-            if t.is_empty() { None } else { Some(t.to_owned()) }
+            if t.is_empty() {
+                None
+            } else {
+                Some(t.to_owned())
+            }
         });
         match (blocks, legacy) {
             (Some(b), _) => Ok(b),
@@ -101,11 +105,7 @@ mod tests {
         use crate::infra::protocol::ContentBlock;
         let blocks = vec![ContentBlock::text("from blocks")];
         // content_blocks 优先于 legacy content
-        let result = validate_send_input(
-            Some("from content".into()),
-            Some(blocks),
-        )
-        .unwrap();
+        let result = validate_send_input(Some("from content".into()), Some(blocks)).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].as_text(), Some("from blocks"));
     }
@@ -113,11 +113,7 @@ mod tests {
     #[test]
     fn validate_empty_blocks_falls_back_to_content() {
         // 空 content_blocks 被过滤 → 回退到 content
-        let result = validate_send_input(
-            Some("fallback".into()),
-            Some(vec![]),
-        )
-        .unwrap();
+        let result = validate_send_input(Some("fallback".into()), Some(vec![])).unwrap();
         assert_eq!(result[0].as_text(), Some("fallback"));
     }
 
@@ -205,11 +201,18 @@ mod tests {
     fn modality_hint_counts_images() {
         use crate::infra::protocol::ContentBlock;
         let blocks = vec![
-            ContentBlock::Image { data: "x".into(), media_type: "image/png".into() },
+            ContentBlock::Image {
+                data: "x".into(),
+                media_type: "image/png".into(),
+            },
             ContentBlock::text("hi"),
-            ContentBlock::Image { data: "y".into(), media_type: "image/jpeg".into() },
+            ContentBlock::Image {
+                data: "y".into(),
+                media_type: "image/jpeg".into(),
+            },
         ];
-        let hint = crate::commands::chat_cmd::build_modality_hint(&blocks).expect("有图应返回提示块");
+        let hint =
+            crate::commands::chat_cmd::build_modality_hint(&blocks).expect("有图应返回提示块");
         let s = ContentBlock::join_text(std::slice::from_ref(&hint));
         assert!(s.contains("2 张图片"), "应含图片数 2，实际: {s}");
         assert!(s.contains("无需调用"), "应告知无需调图片工具，实际: {s}");
@@ -240,9 +243,8 @@ mod tests {
             name: "empty.pdf".into(),
             data: String::new(), // 0 字节（空 base64 → 解码为空 Vec）
         }];
-        let (blocks, db_chunks, db_files) =
-            materialize_file_blocks("msg-empty", vec![], &files)
-                .expect("0 字节附件应软失败为诚实提示，而非 Err 阻塞整条消息");
+        let (blocks, db_chunks, db_files) = materialize_file_blocks("msg-empty", vec![], &files)
+            .expect("0 字节附件应软失败为诚实提示，而非 Err 阻塞整条消息");
 
         // 0 字节 / extract_failed → 不留存原始字节（渲染同样失败，白占 BLOB）
         assert!(db_files.is_empty(), "0 字节附件不应留存原始字节");
@@ -270,9 +272,8 @@ mod tests {
             name: "blank.docx".into(),
             data: String::new(),
         }];
-        let (blocks, _db_chunks, db_files) =
-            materialize_file_blocks("msg-blank", vec![], &files)
-                .expect("0 字节 docx 应软失败而非 Err");
+        let (blocks, _db_chunks, db_files) = materialize_file_blocks("msg-blank", vec![], &files)
+            .expect("0 字节 docx 应软失败而非 Err");
         assert!(db_files.is_empty(), "0 字节 docx 不留存原始字节");
         let texts: Vec<&str> = blocks.iter().filter_map(|b| b.as_text()).collect();
         assert!(
@@ -294,7 +295,10 @@ mod tests {
         use crate::infra::file_validation::MAX_FILE_SIZE;
 
         // 混合型 PDF（图纸，有零星文字）：治本核心——旧门槛会漏，现在必留
-        assert!(gate("pdf", 282_000, false), "混合型 PDF 应留字节（治本核心）");
+        assert!(
+            gate("pdf", 282_000, false),
+            "混合型 PDF 应留字节（治本核心）"
+        );
         // 纯文字 PDF：也留（由 agent 自行决定是否用视觉，不替它预测）
         assert!(gate("pdf", 1_000, false));
         // 达上传上限的 PDF 仍留（不设更小二级门槛，避免大扫描件回退到 bug）
@@ -314,7 +318,10 @@ mod tests {
         let h = pdf_vision_hint("msg-abc");
         // 指引工具 + 带 message_id（工具必填参数）+ page 示例
         assert!(h.contains("view_attachment_image"), "应指引工具: {h}");
-        assert!(h.contains(r#"message_id="msg-abc""#), "应带 message_id: {h}");
+        assert!(
+            h.contains(r#"message_id="msg-abc""#),
+            "应带 message_id: {h}"
+        );
         assert!(h.contains("page=1"), "应给 page 示例: {h}");
         // 覆盖混合型场景关键词（让 agent 识别"文字不完整"）
         assert!(h.contains("图纸"), "应覆盖图纸类混合型场景: {h}");

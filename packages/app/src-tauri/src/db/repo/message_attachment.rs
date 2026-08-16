@@ -94,10 +94,11 @@ pub async fn get_page(
 
 /// 一个消息的块数（= read_attachment_page 的 `total_pages`）。
 pub async fn count_by_message(pool: &SqlitePool, message_id: &str) -> AppResult<i64> {
-    let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM message_attachments WHERE message_id = ?")
-        .bind(message_id)
-        .fetch_one(pool)
-        .await?;
+    let (n,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM message_attachments WHERE message_id = ?")
+            .bind(message_id)
+            .fetch_one(pool)
+            .await?;
     Ok(n)
 }
 

@@ -35,18 +35,18 @@ use uuid::Uuid;
 
 use crate::db::models::{HookConfig, HookPoint};
 use crate::db::repo;
-use crate::infra::protocol::{
-    AuthScope, ChatToolResultPayload, ContentBlock, PendingRequestCancelPayload,
-    ToolAuthRequestPayload, ToolAuthResponse,
-};
-use crate::harness::mcp::{AuthorizationLevel, McpRegistry, ToolContext};
-use crate::harness::mcp::client::ToolOutput;
-use base64::Engine as _;
 use crate::harness::authority::{
     check_authorization_with_session, AuthorizationDecision, PathAuthSession, PathWhitelistConfig,
 };
 use crate::harness::hooks::{has_actions, run_hooks};
+use crate::harness::mcp::client::ToolOutput;
+use crate::harness::mcp::{AuthorizationLevel, McpRegistry, ToolContext};
 pub use crate::harness::oneshot_registry::ToolAuthRegistry;
+use crate::infra::protocol::{
+    AuthScope, ChatToolResultPayload, ContentBlock, PendingRequestCancelPayload,
+    ToolAuthRequestPayload, ToolAuthResponse,
+};
+use base64::Engine as _;
 
 /// 工具执行编排（A2-3 升级版）
 ///
@@ -102,7 +102,11 @@ pub(crate) async fn execute_tool_round(
     enriched_ctx.turn_id = Some(ev.turn_id.clone());
     enriched_ctx.proposal_registry = app
         .try_state::<crate::harness::proposal_registry::ProposalRegistry>()
-        .map(|s: tauri::State<'_, crate::harness::proposal_registry::ProposalRegistry>| s.inner().clone());
+        .map(
+            |s: tauri::State<'_, crate::harness::proposal_registry::ProposalRegistry>| {
+                s.inner().clone()
+            },
+        );
     let tool_ctx = &enriched_ctx;
 
     // agent workspace 内的文件免授权（workspace 是 agent 的信任领地，
@@ -123,12 +127,7 @@ pub(crate) async fn execute_tool_round(
             AuthorizationDecision::Allow
         } else {
             check_authorization_with_session(
-                level,
-                &file_path,
-                whitelist,
-                tc_name,
-                tc_args,
-                session,
+                level, &file_path, whitelist, tc_name, tc_args, session,
             )
             .await
         };
@@ -351,12 +350,14 @@ pub(crate) async fn execute_tool_round(
                     } else {
                         // 非视觉：复用统一适配（OCR 成功→Text；失败/无凭据→诚实提示）。
                         let candidates = match &agent_opt {
-                            Some(a) => crate::harness::modal::gather_vision_candidates(
-                                &tool_ctx.pool,
-                                a,
-                                tool_ctx.api_key.as_deref(),
-                            )
-                            .await,
+                            Some(a) => {
+                                crate::harness::modal::gather_vision_candidates(
+                                    &tool_ctx.pool,
+                                    a,
+                                    tool_ctx.api_key.as_deref(),
+                                )
+                                .await
+                            }
                             None => Vec::new(),
                         };
                         let data = base64::engine::general_purpose::STANDARD.encode(&png);
@@ -835,7 +836,10 @@ mod tests {
     #[test]
     fn path_within_workspace_rejects_outside() {
         let ws = Some(std::env::temp_dir());
-        assert!(!path_within_workspace("C:/Windows/System32/drivers/etc/hosts", &ws));
+        assert!(!path_within_workspace(
+            "C:/Windows/System32/drivers/etc/hosts",
+            &ws
+        ));
     }
 
     #[test]
@@ -863,10 +867,7 @@ mod tests {
             .canonicalize()
             .expect("temp dir 应存在");
         let ws = Some(ws_path.clone());
-        let escape = ws_path
-            .join("..")
-            .join("..")
-            .join("no_such_top_p1r12");
+        let escape = ws_path.join("..").join("..").join("no_such_top_p1r12");
         assert!(!path_within_workspace(escape.to_str().unwrap(), &ws));
     }
 }

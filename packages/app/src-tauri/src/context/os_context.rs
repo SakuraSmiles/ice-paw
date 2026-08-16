@@ -12,7 +12,11 @@
 /// - 操作系统类型 / CPU 架构 / 用户主目录 / 时区 / 当前时间
 /// - Agent 配置目录（KB 和 agent.yaml 所在路径）
 /// - 工作目录外的文件访问说明
-pub(crate) fn build_os_context(timezone: Option<&str>, agent_workspace: Option<&str>, project_workspace: Option<&str>) -> String {
+pub(crate) fn build_os_context(
+    timezone: Option<&str>,
+    agent_workspace: Option<&str>,
+    project_workspace: Option<&str>,
+) -> String {
     let mut parts: Vec<String> = Vec::new();
 
     // OS 类型

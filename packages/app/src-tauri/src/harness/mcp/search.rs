@@ -87,7 +87,10 @@ fn walk(
                 }
             }
             // 跳过大文件 + 非 UTF8
-            if fs::metadata(&path).map(|m| m.len() > MAX_FILE_SIZE).unwrap_or(true) {
+            if fs::metadata(&path)
+                .map(|m| m.len() > MAX_FILE_SIZE)
+                .unwrap_or(true)
+            {
                 continue;
             }
             let Ok(content) = fs::read_to_string(&path) else {

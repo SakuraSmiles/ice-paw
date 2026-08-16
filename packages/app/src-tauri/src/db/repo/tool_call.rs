@@ -121,20 +121,25 @@ mod tests {
             .await
             .expect("seed conversation");
 
-        sqlx::query("INSERT INTO messages (id, conversation_id, role, content) VALUES (?, ?, ?, ?)")
-            .bind(msg_id)
-            .bind(conv_id)
-            .bind("assistant")
-            .bind("hi")
-            .execute(pool)
-            .await
-            .expect("seed message");
+        sqlx::query(
+            "INSERT INTO messages (id, conversation_id, role, content) VALUES (?, ?, ?, ?)",
+        )
+        .bind(msg_id)
+        .bind(conv_id)
+        .bind("assistant")
+        .bind("hi")
+        .execute(pool)
+        .await
+        .expect("seed message");
     }
 
     #[tokio::test]
     async fn create_inserts_row_and_feeds_list_recent() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed_message(&pool, "msg-1", "conv-1").await;
 
         create(

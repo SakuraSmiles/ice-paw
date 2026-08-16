@@ -36,4 +36,3 @@ pub struct RoundState {
     pub cached_tokens: u32,
     pub retry_count: u32,
 }
-

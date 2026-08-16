@@ -107,13 +107,12 @@ impl PipelineStage for OsContextStage {
 
     async fn execute(&self, ctx: &mut PipelineContext) -> AppResult<()> {
         // 从用户预设中读取时区配置
-        let tz: Option<String> = sqlx::query_scalar(
-            "SELECT value FROM user_preferences WHERE key = 'timezone'"
-        )
-        .fetch_optional(&self.pool)
-        .await
-        .ok()
-        .flatten();
+        let tz: Option<String> =
+            sqlx::query_scalar("SELECT value FROM user_preferences WHERE key = 'timezone'")
+                .fetch_optional(&self.pool)
+                .await
+                .ok()
+                .flatten();
         ctx.os_context = build_os_context(
             tz.as_deref(),
             ctx.agent.workspace_path.as_deref(),
@@ -129,10 +128,8 @@ impl PipelineStage for OsContextStage {
             let project_md = dir_path.join("project.md");
             if let Ok(content) = tokio::fs::read_to_string(&project_md).await {
                 if !content.trim().is_empty() {
-                    ctx.os_context.push_str(&format!(
-                        "\n\n## 项目说明\n{}",
-                        content.trim()
-                    ));
+                    ctx.os_context
+                        .push_str(&format!("\n\n## 项目说明\n{}", content.trim()));
                 }
             }
 
@@ -140,10 +137,8 @@ impl PipelineStage for OsContextStage {
             let conv_md = dir_path.join("conventions.md");
             if let Ok(content) = tokio::fs::read_to_string(&conv_md).await {
                 if !content.trim().is_empty() {
-                    ctx.os_context.push_str(&format!(
-                        "\n\n## 编码规范\n{}",
-                        content.trim()
-                    ));
+                    ctx.os_context
+                        .push_str(&format!("\n\n## 编码规范\n{}", content.trim()));
                 }
             }
         }
@@ -293,7 +288,11 @@ impl PipelineStage for TokenWindowStage {
         let target = max_input * TOKEN_WINDOW_TARGET_PCT / 100;
 
         // 不可裁剪部分（必须保留）：system prompt + 摘要 + 当前用户消息
-        let sys_tokens = ctx.system_prompt.as_deref().map(estimate_tokens).unwrap_or(0);
+        let sys_tokens = ctx
+            .system_prompt
+            .as_deref()
+            .map(estimate_tokens)
+            .unwrap_or(0);
         let summary_tokens = ctx.summary.as_deref().map(estimate_tokens).unwrap_or(0);
         let user_tokens: usize = ctx.final_blocks.iter().map(estimate_block_tokens).sum();
         let fixed = sys_tokens + summary_tokens + user_tokens;

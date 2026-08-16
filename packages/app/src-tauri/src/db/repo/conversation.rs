@@ -22,10 +22,7 @@ pub async fn list_all(pool: &SqlitePool) -> AppResult<Vec<ConversationRow>> {
 }
 
 /// 列出某 agent 下的全部会话，按 `pinned DESC, updated_at DESC`
-pub async fn list_by_agent(
-    pool: &SqlitePool,
-    agent_id: &str,
-) -> AppResult<Vec<ConversationRow>> {
+pub async fn list_by_agent(pool: &SqlitePool, agent_id: &str) -> AppResult<Vec<ConversationRow>> {
     let rows = sqlx::query_as::<_, ConversationRow>(&format!(
         "SELECT {CONV_COLS} FROM conversations WHERE agent_id = ? ORDER BY pinned DESC, updated_at DESC"
     ))
@@ -85,11 +82,7 @@ pub async fn create(
 }
 
 /// 重命名
-pub async fn rename(
-    pool: &SqlitePool,
-    id: &str,
-    new_title: &str,
-) -> AppResult<()> {
+pub async fn rename(pool: &SqlitePool, id: &str, new_title: &str) -> AppResult<()> {
     let affected = sqlx::query("UPDATE conversations SET title = ? WHERE id = ?")
         .bind(new_title)
         .bind(id)
@@ -106,11 +99,7 @@ pub async fn rename(
 }
 
 /// 置顶 / 取消置顶
-pub async fn set_pinned(
-    pool: &SqlitePool,
-    id: &str,
-    pinned: bool,
-) -> AppResult<()> {
+pub async fn set_pinned(pool: &SqlitePool, id: &str, pinned: bool) -> AppResult<()> {
     let affected = sqlx::query("UPDATE conversations SET pinned = ? WHERE id = ?")
         .bind(if pinned { 1_i32 } else { 0_i32 })
         .bind(id)

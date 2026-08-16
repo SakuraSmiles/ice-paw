@@ -85,9 +85,8 @@ impl McpClient for SearchKbTool {
     }
 
     async fn execute_with_context(&self, args: &str, ctx: &ToolContext) -> AppResult<String> {
-        let parsed: SearchKbArgs = serde_json::from_str(args).map_err(|e| {
-            AppError::Validation(format!("search_kb 参数解析失败: {e}"))
-        })?;
+        let parsed: SearchKbArgs = serde_json::from_str(args)
+            .map_err(|e| AppError::Validation(format!("search_kb 参数解析失败: {e}")))?;
 
         // 1. 确定检索范围：agent 专有 + global（v1 不查 project）
         let mut kb_ids: Vec<String> = Vec::new();
@@ -108,26 +107,23 @@ impl McpClient for SearchKbTool {
         }
 
         // 3. 关键词检索（repo 已做 title 权重排序 + limit）→ SearchHitOut
-        let kw_hits: Vec<SearchHitOut> = repo::kb::search(&ctx.pool, &parsed.query, &kb_ids, parsed.limit)
-            .await?
-            .into_iter()
-            .map(|h| SearchHitOut {
-                kb_name: h.kb_name,
-                file_path: h.file_path,
-                title: h.title,
-                summary: h.summary,
-            })
-            .collect();
+        let kw_hits: Vec<SearchHitOut> =
+            repo::kb::search(&ctx.pool, &parsed.query, &kb_ids, parsed.limit)
+                .await?
+                .into_iter()
+                .map(|h| SearchHitOut {
+                    kb_name: h.kb_name,
+                    file_path: h.file_path,
+                    title: h.title,
+                    summary: h.summary,
+                })
+                .collect();
 
         // 4. 语义检索（全局 embedding 配置，独立于聊天 Agent；未启用/失败 → 空）
-        let sem_hits = try_semantic_search(
-            &ctx.pool,
-            &parsed.query,
-            &kb_ids,
-            parsed.limit as usize,
-        )
-        .await
-        .unwrap_or_default();
+        let sem_hits =
+            try_semantic_search(&ctx.pool, &parsed.query, &kb_ids, parsed.limit as usize)
+                .await
+                .unwrap_or_default();
 
         // 5. RRF 融合两路排名（关键词 + 语义），按融合分数排序
         let results = rrf_fuse(kw_hits, sem_hits, parsed.limit as usize);
@@ -190,9 +186,11 @@ async fn try_semantic_search(
     kb_ids: &[String],
     limit: usize,
 ) -> Option<Vec<SearchHitOut>> {
-    use crate::harness::kb::embedding::{ensure_chunks_embedded, resolve_embedding_config};
-    use crate::harness::provider::embedding::{top_k_recall, EmbeddingBackend, OpenAiEmbeddingBackend};
     use crate::db::repo::kb::{bytes_to_embedding, load_chunks_for_vector_search};
+    use crate::harness::kb::embedding::{ensure_chunks_embedded, resolve_embedding_config};
+    use crate::harness::provider::embedding::{
+        top_k_recall, EmbeddingBackend, OpenAiEmbeddingBackend,
+    };
 
     // 1. 配置（必须走 get_all 反序列化，见 harness::kb::embedding 模块文档 / v2 阻断①）
     let prefs = repo::preferences::get_all(pool).await.ok()?;
@@ -330,19 +328,18 @@ impl McpClient for SaveToKbTool {
     }
 
     async fn execute_with_context(&self, args: &str, ctx: &ToolContext) -> AppResult<String> {
-        let parsed: SaveToKbArgs =
-            serde_json::from_str(args).map_err(|e| {
-                AppError::Validation(format!("save_to_kb 参数解析失败: {e}"))
-            })?;
+        let parsed: SaveToKbArgs = serde_json::from_str(args)
+            .map_err(|e| AppError::Validation(format!("save_to_kb 参数解析失败: {e}")))?;
         validate_save_scope(&parsed.scope)?;
 
         // 推导目标 knowledge 目录
         let directory = resolve_kb_directory(&ctx.pool, &parsed.scope, &ctx.agent_id).await?;
 
         // 文件名（默认 note-{timestamp}，保证不冲突）
-        let stem = parsed.filename.clone().unwrap_or_else(|| {
-            format!("note-{}", chrono::Utc::now().format("%Y%m%d-%H%M%S"))
-        });
+        let stem = parsed
+            .filename
+            .clone()
+            .unwrap_or_else(|| format!("note-{}", chrono::Utc::now().format("%Y%m%d-%H%M%S")));
         let filename = format!("{stem}.md");
         let file_path = directory.join(&filename);
 
@@ -360,11 +357,16 @@ impl McpClient for SaveToKbTool {
         // 不会被「启动时一次性注册」的 watcher 监听（见 ensure_agent_kb），仅靠
         // watcher 的话这些文件永远进不了 kb_document 表、UI 列表为空。这里写盘后
         // 直接 index_directory，保证工具返回时即可被 search_kb 检索。
-        let owner = if parsed.scope == "agent" { Some(ctx.agent_id.as_str()) } else { None };
+        let owner = if parsed.scope == "agent" {
+            Some(ctx.agent_id.as_str())
+        } else {
+            None
+        };
         let kbs = repo::kb::list_by_scope(&ctx.pool, &parsed.scope, owner).await?;
         let mut indexed_msg = "已索引，立即可用 search_kb 检索。";
         if let Some(kb) = kbs.first() {
-            match crate::harness::kb::indexer::index_directory(&ctx.pool, &kb.id, &directory).await {
+            match crate::harness::kb::indexer::index_directory(&ctx.pool, &kb.id, &directory).await
+            {
                 Ok(stats) => tracing::info!(
                     target: "ice_paw.kb",
                     "save_to_kb 内联索引完成 kb={} indexed={} skipped={}",
@@ -502,10 +504,8 @@ impl McpClient for ReadKbDocumentTool {
     }
 
     async fn execute_with_context(&self, args: &str, ctx: &ToolContext) -> AppResult<String> {
-        let parsed: ReadKbDocArgs =
-            serde_json::from_str(args).map_err(|e| {
-                AppError::Validation(format!("read_kb_document 参数解析失败: {e}"))
-            })?;
+        let parsed: ReadKbDocArgs = serde_json::from_str(args)
+            .map_err(|e| AppError::Validation(format!("read_kb_document 参数解析失败: {e}")))?;
 
         // 定位范围与 search_kb 一致：agent 专有 → global
         let agent_kbs = repo::kb::list_by_scope(&ctx.pool, "agent", Some(&ctx.agent_id)).await?;
@@ -576,7 +576,10 @@ mod tests {
             .connect_with(opts)
             .await
             .unwrap();
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         pool
     }
 
@@ -617,20 +620,38 @@ mod tests {
         seed_kb(&pool, "kb-b", "agent", Some("agent-b")).await;
 
         repo::kb::upsert_document(
-            &pool, "kb-global", "global.md", "Global Rust 笔记", "rust 语言基础", "[]",
-            Some("h1"), None,
+            &pool,
+            "kb-global",
+            "global.md",
+            "Global Rust 笔记",
+            "rust 语言基础",
+            "[]",
+            Some("h1"),
+            None,
         )
         .await
         .unwrap();
         repo::kb::upsert_document(
-            &pool, "kb-a", "a.md", "AgentA Rust 私货", "rust 进阶", "[]",
-            Some("h2"), None,
+            &pool,
+            "kb-a",
+            "a.md",
+            "AgentA Rust 私货",
+            "rust 进阶",
+            "[]",
+            Some("h2"),
+            None,
         )
         .await
         .unwrap();
         repo::kb::upsert_document(
-            &pool, "kb-b", "b.md", "AgentB 机密", "rust 机密内容", "[]",
-            Some("h3"), None,
+            &pool,
+            "kb-b",
+            "b.md",
+            "AgentB 机密",
+            "rust 机密内容",
+            "[]",
+            Some("h3"),
+            None,
         )
         .await
         .unwrap();
@@ -749,9 +770,18 @@ mod tests {
         )
         .await
         .unwrap();
-        repo::kb::upsert_document(&pool, "kb-rd", "note.md", "测试标题", "摘要", "[]", Some("h"), None)
-            .await
-            .unwrap();
+        repo::kb::upsert_document(
+            &pool,
+            "kb-rd",
+            "note.md",
+            "测试标题",
+            "摘要",
+            "[]",
+            Some("h"),
+            None,
+        )
+        .await
+        .unwrap();
 
         let tool = ReadKbDocumentTool;
         let ctx = ToolContext {
@@ -766,7 +796,10 @@ mod tests {
             turn_id: None,
             cancel: None,
         };
-        let result = tool.execute_with_context(r#"{"file_path":"note.md"}"#, &ctx).await.unwrap();
+        let result = tool
+            .execute_with_context(r#"{"file_path":"note.md"}"#, &ctx)
+            .await
+            .unwrap();
         let v: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(v["title"], "测试标题");
         assert!(v["content"].as_str().unwrap().contains("完整正文"));
@@ -791,7 +824,10 @@ mod tests {
             turn_id: None,
             cancel: None,
         };
-        let result = tool.execute_with_context(r#"{"file_path":"nope.md"}"#, &ctx).await.unwrap();
+        let result = tool
+            .execute_with_context(r#"{"file_path":"nope.md"}"#, &ctx)
+            .await
+            .unwrap();
         let v: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(v["found"], false);
     }
@@ -803,9 +839,15 @@ mod tests {
     async fn embedding_config_reads_json_stringified_storage() {
         let pool = fresh_pool().await;
         // 模拟前端存储（bridge.preferences.set → JSON.stringify → DB 带引号）
-        repo::preferences::set(&pool, "embedding_provider", "\"glm\"").await.unwrap();
-        repo::preferences::set(&pool, "embedding_model", "\"embedding-3\"").await.unwrap();
-        repo::preferences::set(&pool, "embedding_api_key", "\"sk-test-xxx\"").await.unwrap();
+        repo::preferences::set(&pool, "embedding_provider", "\"glm\"")
+            .await
+            .unwrap();
+        repo::preferences::set(&pool, "embedding_model", "\"embedding-3\"")
+            .await
+            .unwrap();
+        repo::preferences::set(&pool, "embedding_api_key", "\"sk-test-xxx\"")
+            .await
+            .unwrap();
 
         // get_all 必须去 JSON 引号
         let prefs = repo::preferences::get_all(&pool).await.unwrap();
@@ -814,7 +856,8 @@ mod tests {
         assert_eq!(prefs.embedding_api_key.as_deref(), Some("sk-test-xxx"));
 
         // 且 resolve_embedding_config 能解析出 glm 端点
-        let (model, url, key) = crate::harness::kb::embedding::resolve_embedding_config(&prefs).expect("glm 配置应被解析");
+        let (model, url, key) = crate::harness::kb::embedding::resolve_embedding_config(&prefs)
+            .expect("glm 配置应被解析");
         assert_eq!(model, "embedding-3");
         assert_eq!(url, "https://open.bigmodel.cn/api/paas/v4");
         assert_eq!(key, "sk-test-xxx");
@@ -823,7 +866,12 @@ mod tests {
     /// RRF：两路都命中的文档 score 叠加，应排第一
     #[test]
     fn rrf_fuse_ranks_two_route_hits_higher() {
-        let mk = |p: &str| SearchHitOut { kb_name: "k".into(), file_path: p.into(), title: p.into(), summary: "s".into() };
+        let mk = |p: &str| SearchHitOut {
+            kb_name: "k".into(),
+            file_path: p.into(),
+            title: p.into(),
+            summary: "s".into(),
+        };
         let kw = vec![mk("a.md"), mk("b.md")];
         let sem = vec![mk("b.md"), mk("c.md")];
         let out = rrf_fuse(kw, sem, 5);
@@ -833,7 +881,12 @@ mod tests {
 
     #[test]
     fn rrf_fuse_empty_semantic_keeps_keyword_order() {
-        let mk = |p: &str| SearchHitOut { kb_name: "k".into(), file_path: p.into(), title: p.into(), summary: "s".into() };
+        let mk = |p: &str| SearchHitOut {
+            kb_name: "k".into(),
+            file_path: p.into(),
+            title: p.into(),
+            summary: "s".into(),
+        };
         let out = rrf_fuse(vec![mk("a.md"), mk("b.md")], vec![], 5);
         assert_eq!(out.len(), 2);
         assert_eq!(out[0].file_path, "a.md", "语义为空 → 关键词原序");
@@ -841,7 +894,12 @@ mod tests {
 
     #[test]
     fn rrf_fuse_respects_limit() {
-        let mk = |p: &str| SearchHitOut { kb_name: "k".into(), file_path: p.into(), title: p.into(), summary: "s".into() };
+        let mk = |p: &str| SearchHitOut {
+            kb_name: "k".into(),
+            file_path: p.into(),
+            title: p.into(),
+            summary: "s".into(),
+        };
         let out = rrf_fuse(vec![mk("a.md"), mk("b.md")], vec![], 1);
         assert_eq!(out.len(), 1, "limit 截断");
     }
@@ -866,29 +924,50 @@ mod tests {
         let pool = fresh_pool().await;
 
         // 模拟前端 JSON.stringify 存储（与真实 app 完全一致）
-        repo::preferences::set(&pool, "embedding_provider", "\"glm\"").await.unwrap();
-        repo::preferences::set(&pool, "embedding_model", "\"embedding-3\"").await.unwrap();
-        repo::preferences::set(&pool, "embedding_api_key", &format!("\"{key}\"")).await.unwrap();
+        repo::preferences::set(&pool, "embedding_provider", "\"glm\"")
+            .await
+            .unwrap();
+        repo::preferences::set(&pool, "embedding_model", "\"embedding-3\"")
+            .await
+            .unwrap();
+        repo::preferences::set(&pool, "embedding_api_key", &format!("\"{key}\""))
+            .await
+            .unwrap();
 
         // seed global KB + 文档 + 3 个 chunk（embedding=NULL）
         seed_kb(&pool, "kb-g", "global", None).await;
         let doc_id = upsert_document(
-            &pool, "kb-g", "rust-web.md", "Rust Web 开发",
-            "用 axum 搭建 HTTP 服务的入门笔记", "[]", Some("h"), None,
+            &pool,
+            "kb-g",
+            "rust-web.md",
+            "Rust Web 开发",
+            "用 axum 搭建 HTTP 服务的入门笔记",
+            "[]",
+            Some("h"),
+            None,
         )
         .await
         .unwrap();
-        upsert_chunks_incremental(&pool, &doc_id, &[
-            "Rust 的异步运行时 tokio 提供了高效的并发能力。".into(),
-            "axum 是基于 tower 的轻量 web 框架，支持路由与中间件。".into(),
-            "序列化通常用 serde，性能与生态都很好。".into(),
-        ])
+        upsert_chunks_incremental(
+            &pool,
+            &doc_id,
+            &[
+                "Rust 的异步运行时 tokio 提供了高效的并发能力。".into(),
+                "axum 是基于 tower 的轻量 web 框架，支持路由与中间件。".into(),
+                "序列化通常用 serde，性能与生态都很好。".into(),
+            ],
+        )
         .await
         .unwrap();
 
         // 调用前：chunk embedding 应全为 NULL（刚入库）
-        let before = load_chunks_for_vector_search(&pool, &["kb-g".to_string()]).await.unwrap();
-        assert!(before.iter().all(|c| c.embedding.is_none()), "入库后 embedding 应为 NULL");
+        let before = load_chunks_for_vector_search(&pool, &["kb-g".to_string()])
+            .await
+            .unwrap();
+        assert!(
+            before.iter().all(|c| c.embedding.is_none()),
+            "入库后 embedding 应为 NULL"
+        );
 
         // 触发 search_kb：语义检索路径会懒生成 embedding
         let tool = SearchKbTool;
@@ -913,7 +992,9 @@ mod tests {
 
         // 关键断言：语义路径执行后，embedding 应被填充。
         // 修复前 try_semantic_search 读配置失败 → return None → 不生成 → 这里会是 0。
-        let after = load_chunks_for_vector_search(&pool, &["kb-g".to_string()]).await.unwrap();
+        let after = load_chunks_for_vector_search(&pool, &["kb-g".to_string()])
+            .await
+            .unwrap();
         let filled = after.iter().filter(|c| c.embedding.is_some()).count();
         assert_eq!(
             filled, 3,

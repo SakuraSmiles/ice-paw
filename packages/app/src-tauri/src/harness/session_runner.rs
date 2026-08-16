@@ -37,7 +37,7 @@ use crate::harness::budget::LoopBudget;
 use crate::harness::chat_state::{CancellationToken, ChatState};
 use crate::harness::event_log::{self, EventCtx};
 use crate::harness::hooks::{has_actions, run_hooks};
-use crate::harness::mcp::{McpServerManager, McpRegistry};
+use crate::harness::mcp::{McpRegistry, McpServerManager};
 use crate::harness::provider;
 use crate::harness::read_route::ReadRouteRegistry;
 use crate::harness::tool_executor::{build_tool_ctx, ToolAuthRegistry};
@@ -140,15 +140,14 @@ pub(crate) async fn run_agent_turn(
     // --- 历史解析（session-events Phase 2A：按会话路由读路径） ---
     // 干净会话（有事件 + 对账零 diff + 纯事件纪元）→ 事件派生；其余 → legacy。
     // 偏好 `session_read_path=legacy` 一键强制回 legacy（回滚开关）。
-    let force_legacy: bool = sqlx::query_scalar(
-        "SELECT value FROM user_preferences WHERE key = 'session_read_path'",
-    )
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten()
-    .map(|v: String| v.trim().eq_ignore_ascii_case("legacy"))
-    .unwrap_or(false);
+    let force_legacy: bool =
+        sqlx::query_scalar("SELECT value FROM user_preferences WHERE key = 'session_read_path'")
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten()
+            .map(|v: String| v.trim().eq_ignore_ascii_case("legacy"))
+            .unwrap_or(false);
     let route = env
         .route_registry
         .resolve(pool, &conv_id, force_legacy)
@@ -158,22 +157,24 @@ pub(crate) async fn run_agent_turn(
             crate::harness::read_route::load_history_from_events(pool, &conv_id).await?
         }
         crate::harness::read_route::ReadRoute::Legacy => {
-            repo::message::list_by_conversation(pool, &conv_id, Some(repo::message::HISTORY_LOAD_LIMIT), None)
-                .await?
+            repo::message::list_by_conversation(
+                pool,
+                &conv_id,
+                Some(repo::message::HISTORY_LOAD_LIMIT),
+                None,
+            )
+            .await?
         }
     };
     // 最近 10 条工具消息名（loop_engine 动态工具打分用）
-    let tool_call_history =
-        repo::message::list_recent_tool_names(pool, &conv_id, 10).await?;
+    let tool_call_history = repo::message::list_recent_tool_names(pool, &conv_id, 10).await?;
 
     // 上下文窗口（agent 显式 → 模型表 → 128K 兜底）；max_input_tokens 由
     // TokenWindowStage（硬裁）+ MemoryStage（折叠）消费。
     let context_window = agent
         .context_window
         .map(|v| v as usize)
-        .or_else(|| {
-            provider::default_context_window(&agent.provider, &agent.model)
-        })
+        .or_else(|| provider::default_context_window(&agent.provider, &agent.model))
         .unwrap_or(128_000);
 
     // --- Pipeline 拼装（Template → OsContext → SystemPrompt → History →
@@ -204,11 +205,7 @@ pub(crate) async fn run_agent_turn(
         // 项目上下文目录：{default_ws}/projects/{project_id}/
         if let Ok(prefs) = repo::preferences::get_all(pool).await {
             if let Some(ref ws) = prefs.default_workspace_path {
-                let dir = format!(
-                    "{}/projects/{}",
-                    ws.trim_end_matches(['/', '\\']),
-                    pid
-                );
+                let dir = format!("{}/projects/{}", ws.trim_end_matches(['/', '\\']), pid);
                 pipeline_ctx.project_context_dir = Some(dir);
             }
         }
@@ -243,11 +240,12 @@ pub(crate) async fn run_agent_turn(
     }
 
     // M1.5: 构造 LlmSummaryProvider 注入 Pipeline
-    use crate::harness::summary_provider::LlmSummaryProvider;
     use crate::context::memory::SummaryProvider;
-    let summary_provider: Box<dyn SummaryProvider> = Box::new(
-        LlmSummaryProvider::new(llm_provider.clone(), api_key.clone()),
-    );
+    use crate::harness::summary_provider::LlmSummaryProvider;
+    let summary_provider: Box<dyn SummaryProvider> = Box::new(LlmSummaryProvider::new(
+        llm_provider.clone(),
+        api_key.clone(),
+    ));
     PipelineRunner::default_pipeline(pool, Some(summary_provider))
         .run(&mut pipeline_ctx)
         .await?;
@@ -266,13 +264,18 @@ pub(crate) async fn run_agent_turn(
     // content_text 快照供 user_message 事件（create 会 move）。
     let user_content_snapshot = content_text.clone();
     repo::message::create(
-        pool, &user_msg_id,
+        pool,
+        &user_msg_id,
         &NewMessage {
-            conversation_id: conv_id.clone(), role: "user".into(),
-            content: content_text.clone(), token_count: None, error: None,
+            conversation_id: conv_id.clone(),
+            role: "user".into(),
+            content: content_text.clone(),
+            token_count: None,
+            error: None,
             model: None,
         },
-    ).await?;
+    )
+    .await?;
     // 回填 content_blocks：用适配前的原始 persist_blocks（含原图 + 附件卡片/正文）。
     // 视觉适配只改发给 LLM 的 messages，不改用户落库内容——历史回看须保留用户真实发送的图片。
     let blocks_json = serde_json::to_string(&persist_blocks).unwrap_or_else(|_| "[]".into());
@@ -347,24 +350,38 @@ pub(crate) async fn run_agent_turn(
 
     let asst_msg_id = Uuid::new_v4().to_string();
     // 助手消息的 model 字段使用 override（若有），否则回退 Agent 默认 model。
-    let effective_model = model_override.clone().unwrap_or_else(|| agent.model.clone());
+    let effective_model = model_override
+        .clone()
+        .unwrap_or_else(|| agent.model.clone());
     repo::message::create(
-        pool, &asst_msg_id,
+        pool,
+        &asst_msg_id,
         &NewMessage {
-            conversation_id: conv_id.clone(), role: "assistant".into(),
-            content: String::new(), token_count: None, error: None,
+            conversation_id: conv_id.clone(),
+            role: "assistant".into(),
+            content: String::new(),
+            token_count: None,
+            error: None,
             model: Some(effective_model.clone()),
         },
-    ).await?;
+    )
+    .await?;
 
     // --- emit chat:start（cancel_token 已由调用方注册） ---
     // 含附件时把 materialize 后的 content_blocks 带给前端，patch 乐观用户消息。
-    env.app.emit("chat:start", crate::infra::protocol::ChatStartPayload {
-        conversation_id: conv_id.clone(),
-        user_message_id: user_msg_id.clone(),
-        assistant_message_id: asst_msg_id.clone(),
-        user_content_blocks: if emit_user_blocks { Some(blocks_json.clone()) } else { None },
-    })?;
+    env.app.emit(
+        "chat:start",
+        crate::infra::protocol::ChatStartPayload {
+            conversation_id: conv_id.clone(),
+            user_message_id: user_msg_id.clone(),
+            assistant_message_id: asst_msg_id.clone(),
+            user_content_blocks: if emit_user_blocks {
+                Some(blocks_json.clone())
+            } else {
+                None
+            },
+        },
+    )?;
 
     // --- 预算（B1 自动续期：显式=硬上限→额度 0；默认 model-aware 3×→可续期） ---
     let tool_max_rounds = agent.tool_max_rounds();
@@ -373,9 +390,7 @@ pub(crate) async fn run_agent_turn(
         let window = agent
             .context_window
             .map(|v| v as usize)
-            .or_else(|| {
-                provider::default_context_window(&agent.provider, &agent.model)
-            })
+            .or_else(|| provider::default_context_window(&agent.provider, &agent.model))
             .unwrap_or(128_000);
         window.saturating_mul(3)
     });
@@ -387,8 +402,7 @@ pub(crate) async fn run_agent_turn(
 
     // 单轮输出上限：agent.max_tokens 与模型策展表取 max（只抬不降）。
     let effective_max_tokens = agent.max_tokens.max(
-        provider::default_max_output_tokens(&agent.provider, &agent.model)
-            .unwrap_or(16_384) as i32,
+        provider::default_max_output_tokens(&agent.provider, &agent.model).unwrap_or(16_384) as i32,
     );
 
     // --- 工具组装：全局注册表快照（boot 时已启动全部 server） ---
@@ -416,7 +430,10 @@ pub(crate) async fn run_agent_turn(
             let reg = Arc::clone(&env.global_registry);
             let ws = workspace.to_string();
             tokio::spawn(async move {
-                for cfg in mcp_configs.iter().filter(|c| c.enabled && c.scope == "per_agent") {
+                for cfg in mcp_configs
+                    .iter()
+                    .filter(|c| c.enabled && c.scope == "per_agent")
+                {
                     mgr.rebind_workspace_if_needed(&cfg.id, &ws, &reg).await;
                 }
             });
@@ -467,7 +484,14 @@ pub(crate) async fn run_agent_turn(
             Some(api_key.clone()),
         )
         .await;
-        match run_hooks(HookPoint::ConversationStart, &hooks, &hook_ctx, &tool_registry).await {
+        match run_hooks(
+            HookPoint::ConversationStart,
+            &hooks,
+            &hook_ctx,
+            &tool_registry,
+        )
+        .await
+        {
             Ok(outcome) => {
                 if let Some(inj) = outcome.injected_prompt {
                     // session-events：钩子注入是模型可见事实（Model-visible means logged）。
@@ -494,14 +518,29 @@ pub(crate) async fn run_agent_turn(
     // --- spawn 流式循环 + 完成信号 ---
     let (done_tx, done_rx) = tokio::sync::oneshot::channel::<TurnSummary>();
     spawn_stream_loop(
-        env.app.clone(), pool.clone(), llm_provider, api_key,
-        assembled.messages, agent.temperature, effective_max_tokens,
-        cancel_token, conv_id, user_msg_id, asst_msg_id, tools_enabled,
-        Some(content_text), tool_call_history,
-        model_override, Some(effective_model), tool_max_rounds, budget_max_tokens, budget_renewals,
+        env.app.clone(),
+        pool.clone(),
+        llm_provider,
+        api_key,
+        assembled.messages,
+        agent.temperature,
+        effective_max_tokens,
+        cancel_token,
+        conv_id,
+        user_msg_id,
+        asst_msg_id,
+        tools_enabled,
+        Some(content_text),
+        tool_call_history,
+        model_override,
+        Some(effective_model),
+        tool_max_rounds,
+        budget_max_tokens,
+        budget_renewals,
         env.auth_registry.clone(),
         tool_registry,
-        conv.agent_id.clone(), conv.project_id.clone(),
+        conv.agent_id.clone(),
+        conv.project_id.clone(),
         hooks,
         Some(done_tx),
     );
@@ -555,15 +594,13 @@ pub(crate) async fn read_turn_outcome(
         }
     };
     let final_text = match &message_id {
-        Some(id) => {
-            sqlx::query_scalar::<_, String>("SELECT content FROM messages WHERE id = ?")
-                .bind(id)
-                .fetch_optional(pool)
-                .await
-                .ok()
-                .flatten()
-                .unwrap_or_default()
-        }
+        Some(id) => sqlx::query_scalar::<_, String>("SELECT content FROM messages WHERE id = ?")
+            .bind(id)
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default(),
         None => String::new(),
     };
     TurnSummary {
@@ -584,11 +621,20 @@ pub(crate) async fn read_turn_outcome(
 /// State/输入），保留 `#[allow(clippy::too_many_arguments)]`。
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_stream_loop(
-    app: AppHandle, pool: SqlitePool, provider: Arc<dyn LlmProvider>,
-    api_key: String, messages: Vec<crate::infra::protocol::ChatMessage>, temperature: f64, max_tokens: i32,
-    cancel_token: CancellationToken, conv_id: String, user_msg_id: String,
-    asst_msg_id: String, tools_enabled: bool,
-    query: Option<String>, call_history: Vec<String>,
+    app: AppHandle,
+    pool: SqlitePool,
+    provider: Arc<dyn LlmProvider>,
+    api_key: String,
+    messages: Vec<crate::infra::protocol::ChatMessage>,
+    temperature: f64,
+    max_tokens: i32,
+    cancel_token: CancellationToken,
+    conv_id: String,
+    user_msg_id: String,
+    asst_msg_id: String,
+    tools_enabled: bool,
+    query: Option<String>,
+    call_history: Vec<String>,
     model_override: Option<String>,
     asst_model: Option<String>,
     tool_max_rounds: Option<u32>,
@@ -697,7 +743,9 @@ pub(crate) fn inject_into_system(
     injected: &str,
 ) {
     if let Some(sys_msg) = messages.iter_mut().find(|m| m.role == "system") {
-        sys_msg.content.push(ContentBlock::text(injected.to_string()));
+        sys_msg
+            .content
+            .push(ContentBlock::text(injected.to_string()));
     } else {
         messages.insert(
             0,

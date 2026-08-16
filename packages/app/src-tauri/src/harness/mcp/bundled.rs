@@ -45,20 +45,29 @@ pub struct BundledSpec {
 /// 2 个内置 bundled server 的查表。未命中返回 None（调用方报错）。
 pub fn spec_for(server_id: &str) -> Option<&'static BundledSpec> {
     static SPECS: &[(&str, BundledSpec)] = &[
-        ("builtin-thinking", BundledSpec {
-            package_dir: "@modelcontextprotocol/server-sequential-thinking",
-            entry_script: "dist/index.js",
-            env_template: &[],
-        }),
-        ("builtin-memory", BundledSpec {
-            package_dir: "@modelcontextprotocol/server-memory",
-            // memory server 读 MEMORY_FILE_PATH 决定持久化位置（默认会写到 npx 缓存深处、
-            // 清缓存即丢）。指向 app_data_dir 下可写文件，跨会话保留知识图谱。
-            entry_script: "dist/index.js",
-            env_template: &[("MEMORY_FILE_PATH", MEMORY_FILE_PLACEHOLDER)],
-        }),
+        (
+            "builtin-thinking",
+            BundledSpec {
+                package_dir: "@modelcontextprotocol/server-sequential-thinking",
+                entry_script: "dist/index.js",
+                env_template: &[],
+            },
+        ),
+        (
+            "builtin-memory",
+            BundledSpec {
+                package_dir: "@modelcontextprotocol/server-memory",
+                // memory server 读 MEMORY_FILE_PATH 决定持久化位置（默认会写到 npx 缓存深处、
+                // 清缓存即丢）。指向 app_data_dir 下可写文件，跨会话保留知识图谱。
+                entry_script: "dist/index.js",
+                env_template: &[("MEMORY_FILE_PATH", MEMORY_FILE_PLACEHOLDER)],
+            },
+        ),
     ];
-    SPECS.iter().find(|(id, _)| *id == server_id).map(|(_, s)| s)
+    SPECS
+        .iter()
+        .find(|(id, _)| *id == server_id)
+        .map(|(_, s)| s)
 }
 
 /// bundled runtime 根目录（resource_dir 下）。
@@ -125,15 +134,23 @@ pub fn verify(app: &AppHandle) -> AppResult<()> {
 pub fn memory_data_file(app: &AppHandle) -> AppResult<String> {
     let dir = crate::logging::data_dir(app)?.join("mcp-memory");
     std::fs::create_dir_all(&dir).map_err(|e| {
-        AppError::Io(std::io::Error::other(format!("创建 memory 数据目录失败: {e}")))
+        AppError::Io(std::io::Error::other(format!(
+            "创建 memory 数据目录失败: {e}"
+        )))
     })?;
     // node 在 Windows 上接受正斜杠；统一用正斜杠避免反斜杠转义问题
-    Ok(dir.join("memory.jsonl").to_string_lossy().replace('\\', "/"))
+    Ok(dir
+        .join("memory.jsonl")
+        .to_string_lossy()
+        .replace('\\', "/"))
 }
 
 /// 把 spec 的 env 模板渲染成具体 env（替换 {memory_data_file} 占位符）。
 /// 返回 serde_json object，供 start_server 与用户 env 合并后传给 spawn。
-pub fn render_env_template(spec: &BundledSpec, app: &AppHandle) -> AppResult<serde_json::Map<String, serde_json::Value>> {
+pub fn render_env_template(
+    spec: &BundledSpec,
+    app: &AppHandle,
+) -> AppResult<serde_json::Map<String, serde_json::Value>> {
     let mut map = serde_json::Map::new();
     for (k, v) in spec.env_template {
         let rendered = if v.contains(MEMORY_FILE_PLACEHOLDER) {
@@ -172,13 +189,20 @@ mod tests {
         let spec = spec_for("builtin-memory").unwrap();
         let keys: Vec<_> = spec.env_template.iter().map(|(k, _)| *k).collect();
         assert!(keys.contains(&"MEMORY_FILE_PATH"));
-        let (_, v) = spec.env_template.iter().find(|(k, _)| *k == "MEMORY_FILE_PATH").unwrap();
+        let (_, v) = spec
+            .env_template
+            .iter()
+            .find(|(k, _)| *k == "MEMORY_FILE_PATH")
+            .unwrap();
         assert!(v.contains(MEMORY_FILE_PLACEHOLDER));
     }
 
     #[test]
     fn thinking_has_no_env_template() {
-        assert!(spec_for("builtin-thinking").unwrap().env_template.is_empty());
+        assert!(spec_for("builtin-thinking")
+            .unwrap()
+            .env_template
+            .is_empty());
     }
 
     #[test]

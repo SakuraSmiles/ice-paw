@@ -98,16 +98,13 @@ impl McpClient for ViewAttachmentImageTool {
     async fn execute(&self, _args: &str) -> AppResult<String> {
         // 需 conv_id 上下文做越权守卫 + 回传图片，走 execute_with_output。
         Err(AppError::Internal(
-            "view_attachment_image 必须通过 execute_with_output 调用（需要 conv_id + 回传图片）".into(),
+            "view_attachment_image 必须通过 execute_with_output 调用（需要 conv_id + 回传图片）"
+                .into(),
         ))
     }
 
     /// 覆盖 rich 方法：越权守卫 → 取字节 → pdfium 渲染 → 图片 + JSON 摘要。
-    async fn execute_with_output(
-        &self,
-        args: &str,
-        ctx: &ToolContext,
-    ) -> AppResult<ToolOutput> {
+    async fn execute_with_output(&self, args: &str, ctx: &ToolContext) -> AppResult<ToolOutput> {
         let parsed: ViewAttachmentImageArgs = serde_json::from_str(args).map_err(|e| {
             AppError::Validation(format!("view_attachment_image 参数解析失败: {e}"))
         })?;
@@ -131,13 +128,14 @@ impl McpClient for ViewAttachmentImageTool {
 
         // 取该消息首个视觉候选文件的原始字节（B.1：空提取时存进 message_attachment_files）。
         // v1 默认单文件场景；多文件时取 idx 最小者（get_first_by_message）。
-        let row = repo::message_attachment_file::get_first_by_message(&ctx.pool, &parsed.message_id)
-            .await?
-            .ok_or_else(|| {
-                AppError::Validation(
-                    "该消息无可视化附件字节（可能附件并非扫描件、或已随消息删除）".into(),
-                )
-            })?;
+        let row =
+            repo::message_attachment_file::get_first_by_message(&ctx.pool, &parsed.message_id)
+                .await?
+                .ok_or_else(|| {
+                    AppError::Validation(
+                        "该消息无可视化附件字节（可能附件并非扫描件、或已随消息删除）".into(),
+                    )
+                })?;
 
         let ext = row.ext.to_lowercase();
         if ext != "pdf" {
@@ -161,8 +159,7 @@ impl McpClient for ViewAttachmentImageTool {
         // 渲染指定页 → PNG。page 已校验，render 内仍会再查一次边界（防御）。
         let page = parsed.page as usize;
         let pdf_bytes_for_render = row.bytes.clone();
-        let png: Vec<u8> =
-            run_pdf(move || render_page_to_png(&pdf_bytes_for_render, page)).await?;
+        let png: Vec<u8> = run_pdf(move || render_page_to_png(&pdf_bytes_for_render, page)).await?;
 
         tracing::info!(
             target: "ice_paw.attach",
@@ -221,12 +218,14 @@ impl McpClient for ViewAttachmentImageTool {
         //（用户在「设置-视觉读取」配的）→ agent 自带视觉模型（GLM→glm-4v / OpenAI→gpt-4o）→
         // GLM 视觉 MCP env（Z_AI_API_KEY）。每条失败不阻塞，全失败如实告知（不中断整轮工具）。
         let candidates: Vec<vision::VisionCredential> = match &agent_opt {
-            Some(a) => crate::harness::modal::gather_vision_candidates(
-                &ctx.pool,
-                a,
-                ctx.api_key.as_deref(),
-            )
-            .await,
+            Some(a) => {
+                crate::harness::modal::gather_vision_candidates(
+                    &ctx.pool,
+                    a,
+                    ctx.api_key.as_deref(),
+                )
+                .await
+            }
             None => Vec::new(),
         };
 

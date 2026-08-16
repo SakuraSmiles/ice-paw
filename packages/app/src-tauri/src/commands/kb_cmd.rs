@@ -102,7 +102,11 @@ pub async fn test_embedding_config(
             "openai" => "https://api.openai.com".into(),
             "glm" => "https://open.bigmodel.cn/api/paas/v4".into(),
             "deepseek" => "https://api.deepseek.com".into(),
-            _ => return Err(AppError::Validation(format!("未知 embedding provider: {provider}"))),
+            _ => {
+                return Err(AppError::Validation(format!(
+                    "未知 embedding provider: {provider}"
+                )))
+            }
         },
     };
     let backend = OpenAiEmbeddingBackend::new(model, url)?;
@@ -137,13 +141,18 @@ pub async fn rebuild_all_embeddings(pool: State<'_, SqlitePool>) -> AppResult<Re
     let mut total_chunks = 0usize;
     for kb in &kbs {
         let dir = std::path::Path::new(&kb.directory);
-        if let Err(e) = crate::harness::kb::indexer::index_directory(pool.inner(), &kb.id, dir).await {
+        if let Err(e) =
+            crate::harness::kb::indexer::index_directory(pool.inner(), &kb.id, dir).await
+        {
             tracing::warn!(target: "ice_paw.kb", "重建索引失败 kb={} err={}", kb.id, e);
         }
         let (chunks, _) = repo::kb::kb_chunk_stats(pool.inner(), &kb.id).await?;
         total_chunks += chunks as usize;
     }
-    Ok(RebuildStats { kbs: kbs.len(), chunks: total_chunks })
+    Ok(RebuildStats {
+        kbs: kbs.len(),
+        chunks: total_chunks,
+    })
 }
 
 /// 校验 scope 合法性

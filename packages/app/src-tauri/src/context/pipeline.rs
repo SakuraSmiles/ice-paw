@@ -42,7 +42,9 @@ use crate::context::token::ContextBudget;
 use crate::db::models::{AgentRow, MessageRow};
 use crate::error::AppResult;
 use crate::infra::cancel::CancellationToken;
-use crate::infra::protocol::{ChatMessage, ChatSummaryInjectedPayload, ContentBlock, TemplateInput};
+use crate::infra::protocol::{
+    ChatMessage, ChatSummaryInjectedPayload, ContentBlock, TemplateInput,
+};
 
 // =========================================================================
 // PipelineContext — 贯穿所有 Stage 的可变共享状态

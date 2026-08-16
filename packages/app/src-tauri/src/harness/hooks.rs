@@ -52,16 +52,18 @@ pub async fn run_hooks(
             HookAction::InjectPrompt { content } => {
                 injected.push(content.clone());
             }
-            HookAction::CallTool { tool, args } => match registry.dispatch_catch_panic(tool, args, tool_ctx).await {
-                Ok(_) => tracing::info!(
-                    target: "ice_paw.hooks",
-                    "钩子 CallTool 成功: point={:?} tool={}", point, tool
-                ),
-                Err(e) => tracing::warn!(
-                    target: "ice_paw.hooks",
-                    "钩子 CallTool 失败（忽略，不中断对话）: point={:?} tool={} err={}", point, tool, e
-                ),
-            },
+            HookAction::CallTool { tool, args } => {
+                match registry.dispatch_catch_panic(tool, args, tool_ctx).await {
+                    Ok(_) => tracing::info!(
+                        target: "ice_paw.hooks",
+                        "钩子 CallTool 成功: point={:?} tool={}", point, tool
+                    ),
+                    Err(e) => tracing::warn!(
+                        target: "ice_paw.hooks",
+                        "钩子 CallTool 失败（忽略，不中断对话）: point={:?} tool={} err={}", point, tool, e
+                    ),
+                }
+            }
             HookAction::Log { message } => {
                 tracing::info!(target: "ice_paw.hooks", "钩子 Log: point={:?} {}", point, message);
             }
@@ -131,7 +133,9 @@ mod tests {
     fn has_actions_detects_configured_point_only() {
         let hooks = one_action(
             HookPoint::BeforeLlm,
-            HookAction::Log { message: "hi".into() },
+            HookAction::Log {
+                message: "hi".into(),
+            },
         );
         assert!(has_actions(&hooks, HookPoint::BeforeLlm));
         assert!(!has_actions(&hooks, HookPoint::ConversationEnd));
@@ -174,8 +178,12 @@ mod tests {
         hooks.insert(
             HookPoint::BeforeLlm,
             vec![
-                HookAction::InjectPrompt { content: "rule A".into() },
-                HookAction::InjectPrompt { content: "rule B".into() },
+                HookAction::InjectPrompt {
+                    content: "rule A".into(),
+                },
+                HookAction::InjectPrompt {
+                    content: "rule B".into(),
+                },
             ],
         );
         let ctx = mk_ctx().await;
@@ -192,7 +200,9 @@ mod tests {
     async fn run_hooks_log_only_no_injected_prompt() {
         let hooks = one_action(
             HookPoint::ConversationEnd,
-            HookAction::Log { message: "ended".into() },
+            HookAction::Log {
+                message: "ended".into(),
+            },
         );
         let ctx = mk_ctx().await;
         let reg = McpRegistry::new();
@@ -215,7 +225,7 @@ mod tests {
         );
         let ctx = mk_ctx().await;
         let reg = McpRegistry::new(); // 空 registry → dispatch 必失败
-        // 钩子失败不向上传播：仍返回 Ok
+                                      // 钩子失败不向上传播：仍返回 Ok
         let out = run_hooks(HookPoint::AfterTool, &hooks, &ctx, &reg)
             .await
             .unwrap();
@@ -230,10 +240,19 @@ mod tests {
         hooks.insert(
             HookPoint::BeforeLlm,
             vec![
-                HookAction::InjectPrompt { content: "keep going".into() },
-                HookAction::Log { message: "round start".into() },
-                HookAction::CallTool { tool: "nope".into(), args: "{}".into() },
-                HookAction::InjectPrompt { content: "stay focused".into() },
+                HookAction::InjectPrompt {
+                    content: "keep going".into(),
+                },
+                HookAction::Log {
+                    message: "round start".into(),
+                },
+                HookAction::CallTool {
+                    tool: "nope".into(),
+                    args: "{}".into(),
+                },
+                HookAction::InjectPrompt {
+                    content: "stay focused".into(),
+                },
             ],
         );
         let ctx = mk_ctx().await;
@@ -242,6 +261,9 @@ mod tests {
             .await
             .unwrap();
         // 仅两个 InjectPrompt 被拼接；Log/CallTool(失败) 不贡献
-        assert_eq!(out.injected_prompt.as_deref(), Some("keep going\nstay focused"));
+        assert_eq!(
+            out.injected_prompt.as_deref(),
+            Some("keep going\nstay focused")
+        );
     }
 }
