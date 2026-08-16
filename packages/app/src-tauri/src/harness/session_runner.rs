@@ -517,33 +517,33 @@ pub(crate) async fn run_agent_turn(
 
     // --- spawn 流式循环 + 完成信号 ---
     let (done_tx, done_rx) = tokio::sync::oneshot::channel::<TurnSummary>();
-    spawn_stream_loop(
-        env.app.clone(),
-        pool.clone(),
-        llm_provider,
+    spawn_stream_loop(StreamLoopInput {
+        app: env.app.clone(),
+        pool: pool.clone(),
+        provider: llm_provider,
         api_key,
-        assembled.messages,
-        agent.temperature,
-        effective_max_tokens,
+        messages: assembled.messages,
+        temperature: agent.temperature,
+        max_tokens: effective_max_tokens,
         cancel_token,
         conv_id,
         user_msg_id,
         asst_msg_id,
         tools_enabled,
-        Some(content_text),
-        tool_call_history,
+        query: Some(content_text),
+        call_history: tool_call_history,
         model_override,
-        Some(effective_model),
+        asst_model: Some(effective_model),
         tool_max_rounds,
         budget_max_tokens,
         budget_renewals,
-        env.auth_registry.clone(),
+        auth_registry: env.auth_registry.clone(),
         tool_registry,
-        conv.agent_id.clone(),
-        conv.project_id.clone(),
+        agent_id: conv.agent_id.clone(),
+        project_id: conv.project_id.clone(),
         hooks,
-        Some(done_tx),
-    );
+        done_tx: Some(done_tx),
+    });
     Ok(done_rx)
 }
 
@@ -611,42 +611,72 @@ pub(crate) async fn read_turn_outcome(
     }
 }
 
+/// `spawn_stream_loop` 的入参收拢（S4）：编排层（[`run_agent_turn`]）分散收集的
+/// 各 Tauri State / 输入一次性成袋传递，消除 26 参数超长签名与
+/// `#[allow(clippy::too_many_arguments)]`。字段与原形参平移；进入循环后的语义
+/// 分组见 `LoopConfig` 的注释段与 `LoopContext` 的运行时件。
+pub(crate) struct StreamLoopInput {
+    pub app: AppHandle,
+    pub pool: SqlitePool,
+    pub provider: Arc<dyn LlmProvider>,
+    pub api_key: String,
+    pub messages: Vec<crate::infra::protocol::ChatMessage>,
+    pub temperature: f64,
+    pub max_tokens: i32,
+    pub cancel_token: CancellationToken,
+    pub conv_id: String,
+    pub user_msg_id: String,
+    pub asst_msg_id: String,
+    pub tools_enabled: bool,
+    pub query: Option<String>,
+    pub call_history: Vec<String>,
+    pub model_override: Option<String>,
+    pub asst_model: Option<String>,
+    pub tool_max_rounds: Option<u32>,
+    pub budget_max_tokens: usize,
+    pub budget_renewals: u32,
+    pub auth_registry: ToolAuthRegistry,
+    pub tool_registry: McpRegistry,
+    pub agent_id: String,
+    pub project_id: Option<String>,
+    pub hooks: HookConfig,
+    pub done_tx: Option<tokio::sync::oneshot::Sender<TurnSummary>>,
+}
+
 /// spawn LLM 流式协程，把编排结果交给 `harness::loop_engine::stream_loop`。
 ///
 /// MA-1 从 `commands/chat_cmd.rs` 迁入（唯一调用方是 [`run_agent_turn`]），并新增
 /// `done_tx` 完成信号：循环退出后从事件日志读取 [`TurnSummary`] 发送。接收方已
 /// drop（用户路径不关心结果）时 send 失败，静默忽略。
-///
-/// 注意：`spawn_stream_loop` 自身的形参列表仍超长（编排层分散收集各 Tauri
-/// State/输入），保留 `#[allow(clippy::too_many_arguments)]`。
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn spawn_stream_loop(
-    app: AppHandle,
-    pool: SqlitePool,
-    provider: Arc<dyn LlmProvider>,
-    api_key: String,
-    messages: Vec<crate::infra::protocol::ChatMessage>,
-    temperature: f64,
-    max_tokens: i32,
-    cancel_token: CancellationToken,
-    conv_id: String,
-    user_msg_id: String,
-    asst_msg_id: String,
-    tools_enabled: bool,
-    query: Option<String>,
-    call_history: Vec<String>,
-    model_override: Option<String>,
-    asst_model: Option<String>,
-    tool_max_rounds: Option<u32>,
-    budget_max_tokens: usize,
-    budget_renewals: u32,
-    auth_registry: ToolAuthRegistry,
-    tool_registry: McpRegistry,
-    agent_id: String,
-    project_id: Option<String>,
-    hooks: HookConfig,
-    done_tx: Option<tokio::sync::oneshot::Sender<TurnSummary>>,
-) {
+pub(crate) fn spawn_stream_loop(input: StreamLoopInput) {
+    // 解构还原原形参：函数体零改动（S4 仅收袋，不改行为）。
+    let StreamLoopInput {
+        app,
+        pool,
+        provider,
+        api_key,
+        messages,
+        temperature,
+        max_tokens,
+        cancel_token,
+        conv_id,
+        user_msg_id,
+        asst_msg_id,
+        tools_enabled,
+        query,
+        call_history,
+        model_override,
+        asst_model,
+        tool_max_rounds,
+        budget_max_tokens,
+        budget_renewals,
+        auth_registry,
+        tool_registry,
+        agent_id,
+        project_id,
+        hooks,
+        done_tx,
+    } = input;
     tokio::spawn(async move {
         // ★ RAII Drop 守卫：无论此任务如何退出（正常完成 / panic / runtime 关闭时被 drop），
         // 都保证注销 ChatState 中的 cancel_token。这消除了 scopeguard disarm 后
@@ -686,7 +716,7 @@ pub(crate) fn spawn_stream_loop(
         // A2-3: 路径白名单配置（当前为空 → 全部走 Confirm 流程）
         let whitelist = crate::harness::authority::PathWhitelistConfig::default();
 
-        // A6: LoopConfig(不可变配置) + LoopContext(配置 + 可变消息缓冲)
+        // A6/S4: LoopConfig(不可变配置) + LoopContext(配置 + 可变运行时件 + 可变消息缓冲)
         let config = crate::harness::loop_engine::LoopConfig {
             conv_id: conv_id.clone(),
             asst_msg_id,
@@ -701,8 +731,6 @@ pub(crate) fn spawn_stream_loop(
             max_tokens,
             tool_registry,
             tools_enabled,
-            auth_registry,
-            auth_session,
             whitelist,
             cancel: cancel_token,
             budget,
@@ -712,7 +740,12 @@ pub(crate) fn spawn_stream_loop(
             asst_model,
             hooks,
         };
-        let mut ctx = crate::harness::loop_engine::LoopContext::new(config, messages);
+        let mut ctx = crate::harness::loop_engine::LoopContext::new(
+            config,
+            auth_registry,
+            auth_session,
+            messages,
+        );
         crate::harness::loop_engine::stream_loop(&mut ctx, &mut observable).await;
         // W2.4: emit final round-state after stream_loop completes
         let _ = emit_app.emit(
