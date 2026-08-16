@@ -86,7 +86,7 @@ stream_loop_inner
 
 三层授权模型：
 - `Always` — 安全只读操作（git status、web fetch）
-- `PathWhitelist` — 限定目录的文件操作（预留）
+- `PathWhitelist` — 限定目录的文件操作
 - `Confirm` — 危险操作需用户逐条批准（shell 命令）
 
 外部 MCP Server 通过 stdio JSON-RPC 连接。子进程环境经白名单过滤（`build_safe_env`），防止 API key 泄漏。
@@ -128,9 +128,9 @@ agent.yaml 中配置生命周期回调，在对话不同阶段自动触发：
 
 | 层 | 框架 | 覆盖 |
 |----|------|------|
-| Rust 单元测试 | `cargo test --lib` | 420 tests: harness/commands/context/db |
+| Rust 单元测试 | `cargo test --lib` | 712 tests: harness/commands/context/db |
 | Rust 集成测试 | `cargo test` | provider SSE + memory e2e + message repo |
-| 前端单元测试 | Vitest + happy-dom | 22 tests: utils/stores/bridge |
+| 前端单元测试 | Vitest + happy-dom | 51 tests: utils/stores/bridge |
 | 前端组件测试 | （计划中） | Combobox/ChatMessages 交互测试 |
 
 ### 测试命令
