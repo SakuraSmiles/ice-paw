@@ -17,7 +17,10 @@
 //!   provider 在每次 chunk 消费前检查 `is_cancelled()`，
 //!   已取消立刻停止 stream 消费
 //! - **温度 = 0**：摘要应稳定可复现
-//! - **max_tokens = 512 硬上限**：摘要最多 3 句话，远低于 512 tokens 实际限制
+//! - **max_tokens 自适应额度**（4096 起步，空结果翻倍至 16384 封顶）：不赌
+//!   vendor 思考开关是否生效——thinking 模型（glm-5.2 coding 端点实测忽略
+//!   `thinking:disabled`）会把小额度全烧在思考通道，额度自适应让 content
+//!   仍有余量；成功即回落起点
 //! - **不启用 tools**：摘要阶段不调用工具
 
 use std::collections::HashMap;
@@ -47,10 +50,14 @@ const SUMMARY_SYSTEM_PROMPT: &str = "你是一位对话摘要员。将早期对�
 代码块仅保留函数名和用途。忽略：客套与 Markdown 格式。\
 若提供了前序摘要，在其基础上扩展更新，切勿丢弃已捕获的事实。";
 
-/// 摘要 LLM 调用的 max_tokens 硬上限
+/// 自适应摘要额度起点
 ///
-/// 最多 3 句话 + 标记词 ≈ 200 tokens；给到 512 留 buffer 避免被服务端截断。
-const SUMMARY_MAX_TOKENS: i32 = 512;
+/// 摘要最多 3 句话（content 本身 ≈200 tokens），但 thinking 模型的思考通道
+/// 会先消耗额度（glm-5.2 coding 端点实测 7~11s 思考生成、忽略思考开关）；
+/// 512 起步会被全部烧光导致 content 恒空，4096 让正常端点一次成功。
+const SUMMARY_CAP_START: i32 = 4096;
+/// 自适应额度上限：连续空结果翻倍至此封顶（有界，防无限抬额度）。
+const SUMMARY_CAP_MAX: i32 = 16384;
 
 /// 摘要 prompt 中**文本 / 工具入参**的截断字符数
 ///
@@ -70,10 +77,34 @@ const SUMMARY_BREAKER_TRIP_AFTER: u32 = 3;
 const SUMMARY_BREAKER_COOLDOWN_MS: u64 = 10 * 60 * 1000;
 
 /// 单模型熔断状态（纯数据；判定/记录逻辑在下方纯函数，便于单测时间旅行）
-#[derive(Default)]
+///
+/// `adaptive_cap` 与熔断计数共存于同一状态（同一把锁、同一批纯函数记账）：
+/// - 空结果 / 调用 Err → 计数 +1 **且** 额度翻倍（封顶 [`SUMMARY_CAP_MAX`]）
+/// - 成功 → 计数清零 **且** 额度回落 [`SUMMARY_CAP_START`]
+///
+/// 与熔断器的交互：START 空→×2 空→×4 空 = 3 连空恰好触发熔断（10min 冷却）
+/// 且额度已饱和在 MAX；半开探测用 MAX 额度，成功则双复位。熔断器仍是最终
+/// 兜底，自适应额度把「第 2 次就成功」的概率最大化。
 struct SummaryBreakerState {
     consecutive_empty: u32,
     open_until_ms: u64,
+    /// 自适应摘要额度（见 [`SUMMARY_CAP_START`]）
+    adaptive_cap: i32,
+}
+
+impl Default for SummaryBreakerState {
+    fn default() -> Self {
+        Self {
+            consecutive_empty: 0,
+            open_until_ms: 0,
+            adaptive_cap: SUMMARY_CAP_START,
+        }
+    }
+}
+
+/// 额度翻倍（封顶 [`SUMMARY_CAP_MAX`]）
+fn double_cap(cap: i32) -> i32 {
+    cap.saturating_mul(2).min(SUMMARY_CAP_MAX)
 }
 
 /// 进程级注册表。`LlmSummaryProvider` 每次 send 都重新构造（持的是
@@ -98,8 +129,10 @@ fn breaker_should_skip(st: &SummaryBreakerState, now_ms: u64) -> bool {
 }
 
 /// 记录一次空结果。返回是否**新触发**熔断（供调用方升级日志，只报一次）。
+/// 同时额度翻倍——空结果大概率是思考通道烧光额度，下次给 content 留余量。
 fn breaker_record_empty(st: &mut SummaryBreakerState, now_ms: u64) -> bool {
     st.consecutive_empty = st.consecutive_empty.saturating_add(1);
+    st.adaptive_cap = double_cap(st.adaptive_cap);
     if st.consecutive_empty >= SUMMARY_BREAKER_TRIP_AFTER {
         let newly_tripped = st.open_until_ms <= now_ms; // 之前未开/冷却已过 → 新一轮熔断
         st.open_until_ms = now_ms.saturating_add(SUMMARY_BREAKER_COOLDOWN_MS);
@@ -109,10 +142,11 @@ fn breaker_record_empty(st: &mut SummaryBreakerState, now_ms: u64) -> bool {
     }
 }
 
-/// 记录一次成功（清零计数 + 解除熔断）
+/// 记录一次成功（清零计数 + 解除熔断 + 额度回落起点）
 fn breaker_record_success(st: &mut SummaryBreakerState) {
     st.consecutive_empty = 0;
     st.open_until_ms = 0;
+    st.adaptive_cap = SUMMARY_CAP_START;
 }
 
 /// 记一次摘要失败（空文本**或调用 Err**）并按需升级告警。
@@ -130,13 +164,13 @@ fn breaker_note_failure(model_key: &str) {
         error!(
             target: "ice_paw.summary",
             "摘要熔断：模型 {} 连续 {} 次摘要调用失败或返回空文本，{} 分钟内跳过摘要调用。\
-             最常见根因：thinking 模型（如 glm-5.2）把 max_tokens={} 全部消耗在思考通道，\
-             content 恒为空——滚动摘要失效会导致历史无法折叠、每轮全量重发直到预算熔断。\
+             最常见根因：thinking 模型（如 glm-5.2）把额度全部消耗在思考通道，content 恒为空\
+             （自适应额度已翻倍至 {} 仍空）——滚动摘要失效会导致历史无法折叠、每轮全量重发直到预算熔断。\
              请检查该模型的思考开关是否已禁用（stream_summary 通道）或更换摘要模型。",
             model_key,
             SUMMARY_BREAKER_TRIP_AFTER,
             SUMMARY_BREAKER_COOLDOWN_MS / 60_000,
-            SUMMARY_MAX_TOKENS
+            SUMMARY_CAP_MAX
         );
     }
 }
@@ -175,7 +209,7 @@ impl SummaryProvider for LlmSummaryProvider {
     async fn summarize(
         &self,
         messages: &[ChatMessage],
-        max_tokens: usize,
+        _max_tokens: usize,
         cancel: &CancellationToken,
     ) -> AppResult<String> {
         if messages.is_empty() {
@@ -185,8 +219,9 @@ impl SummaryProvider for LlmSummaryProvider {
 
         // 熔断检查：连续空结果的模型直接跳过本次调用（省一次 6~11s 延迟 +
         // 一次全量输入计费）。返回空串 → MemoryStage 走既有「跳过落库」路径。
+        // 自适应额度在同一临界区内顺带读出（避免二次加锁/TOCTOU）。
         let model_key = self.provider.model_name().to_string();
-        {
+        let cap = {
             let mut breakers = summary_breakers()
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -200,11 +235,10 @@ impl SummaryProvider for LlmSummaryProvider {
                 );
                 return Ok(String::new());
             }
-        }
-
-        // 调用方（MemoryStage）传入目标 token 上限；clamp 到 [200, 硬上限]，
-        // 既尊重调用方意图（折叠批次大小不同），又守住摘要长度纪律。
-        let cap = max_tokens.clamp(200, SUMMARY_MAX_TOKENS as usize) as i32;
+            // 调用方（MemoryStage）传入的 max_tokens 不再作上限（自适应额度
+            // 恒 ≥4096 已覆盖其 512 语义）；仅保留下限 200 的精神防误传 0。
+            st.adaptive_cap.max(200)
+        };
 
         info!(
             target: "ice_paw.summary",
@@ -248,6 +282,7 @@ impl SummaryProvider for LlmSummaryProvider {
 
         // 消费 stream 拼接完整文本
         let mut full = String::new();
+        let mut summary_usage: Option<crate::infra::protocol::TokenUsage> = None;
         tokio::pin!(stream);
         while let Some(result) = stream.next().await {
             // 每次 chunk 前检查取消（与 harness 内部风格一致）
@@ -260,14 +295,14 @@ impl SummaryProvider for LlmSummaryProvider {
                 break;
             }
             match result {
-                Ok(delta) => {
-                    if let ChatDelta::Delta { content } = delta {
-                        full.push_str(&content);
-                    }
-                    // 其它 delta（ToolCallStart / Done / Usage 等）忽略
+                Ok(delta) => match delta {
+                    ChatDelta::Delta { content } => full.push_str(&content),
+                    ChatDelta::Usage { usage } => summary_usage = Some(usage),
+                    // 其它 delta（ToolCallStart / Done 等）忽略
                     // - 摘要不启用 tools，ToolCall* 不应出现
-                    // - Usage / Done 是控制信号，不影响文本拼接
-                }
+                    // - Done 是控制信号，不影响文本拼接
+                    _ => {}
+                },
                 Err(e) => {
                     // 流错误：warn + 终止（避免无限循环）
                     warn!(
@@ -285,7 +320,13 @@ impl SummaryProvider for LlmSummaryProvider {
             target: "ice_paw.summary",
             "摘要完成：{} 条消息 → {} 字符",
             messages.len(),
-            full.len()
+            full.chars().count()
+        );
+        // usage 遥测：判读「思考通道烧光额度」的生产实证（替代受控 curl 实验）
+        info!(
+            target: "ice_paw.summary",
+            "{}",
+            format_summary_usage(cap, summary_usage.as_ref(), full.chars().count())
         );
 
         // 熔断记账：取消不计（用户主动停止非 provider 故障）；空结果累计，
@@ -393,6 +434,27 @@ fn truncate_str(s: &str, max_chars: usize) -> String {
     out
 }
 
+/// 格式化摘要 usage 遥测行（纯函数便于单测断言文案）
+///
+/// 判读指引：completion≈cap 而产出字符≈0 = 思考通道烧光额度的铁证
+/// （额度被 reasoning 消耗，content 无余量）。端点不回 usage 时降级提示。
+fn format_summary_usage(
+    cap: i32,
+    usage: Option<&crate::infra::protocol::TokenUsage>,
+    content_chars: usize,
+) -> String {
+    match usage {
+        Some(u) => format!(
+            "摘要用量：prompt={} completion={}（cap={}，产出 {} 字符）——completion≈cap 而字符≈0 即思考通道烧光铁证",
+            u.prompt_tokens, u.completion_tokens, cap, content_chars
+        ),
+        None => format!(
+            "摘要用量：端点未回 usage（cap={}，产出 {} 字符）——部分 coding 端点不回 include_usage，遥测缺失不影响功能",
+            cap, content_chars
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -429,12 +491,14 @@ mod tests {
     // ---------------------------------------------------------------
 
     /// 计数 + 可配置产出的测试 Provider（emit=None 空流 / Some=先产一条 Delta；
-    /// fail=true 时 stream_chat 直接 Err，模拟端点拒收 / 网络故障）
+    /// fail=true 时 stream_chat 直接 Err，模拟端点拒收 / 网络故障）；
+    /// caps 记录每次调用收到的 max_tokens（自适应额度序列断言用）
     struct CountingProvider {
         model: String,
         calls: std::sync::atomic::AtomicUsize,
         emit: std::sync::Mutex<Option<String>>,
         fail: std::sync::atomic::AtomicBool,
+        caps: std::sync::Mutex<Vec<i32>>,
     }
 
     impl CountingProvider {
@@ -444,11 +508,16 @@ mod tests {
                 calls: std::sync::atomic::AtomicUsize::new(0),
                 emit: std::sync::Mutex::new(emit),
                 fail: std::sync::atomic::AtomicBool::new(false),
+                caps: std::sync::Mutex::new(Vec::new()),
             }
         }
 
         fn calls(&self) -> usize {
             self.calls.load(std::sync::atomic::Ordering::SeqCst)
+        }
+
+        fn recorded_caps(&self) -> Vec<i32> {
+            self.caps.lock().unwrap().clone()
         }
 
         fn set_emit(&self, emit: Option<String>) {
@@ -468,11 +537,12 @@ mod tests {
             _messages: Vec<ChatMessage>,
             _tools: Option<Vec<crate::infra::protocol::ToolDef>>,
             _temperature: f64,
-            _max_tokens: i32,
+            max_tokens: i32,
             _model: Option<&str>,
             _cancel: CancellationToken,
         ) -> AppResult<Pin<Box<dyn futures::Stream<Item = AppResult<ChatDelta>> + Send>>> {
             self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.caps.lock().unwrap().push(max_tokens);
             if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
                 return Err(crate::error::AppError::Llm("HTTP 400 模拟拒收".into()));
             }
@@ -587,6 +657,86 @@ mod tests {
         // 未熔断：第 6 次仍真正调用（若成功未清零，第 5 次就触顶跳过了）
         sp.summarize(&msgs, 300, &cancel).await.unwrap();
         assert_eq!(provider.calls(), 6, "成功清零后计数从 1 重计，6 次全真调");
+    }
+
+    // ---------------------------------------------------------------
+    // 自适应额度：空结果翻倍、成功回落、与熔断器协同
+    // ---------------------------------------------------------------
+
+    /// 纯状态机时间旅行：空 → 翻倍封顶；成功 → 双复位
+    #[test]
+    fn adaptive_cap_doubles_and_saturates_in_state_machine() {
+        let mut st = SummaryBreakerState::default();
+        assert_eq!(st.adaptive_cap, SUMMARY_CAP_START);
+        breaker_record_empty(&mut st, 1_000);
+        assert_eq!(st.adaptive_cap, SUMMARY_CAP_START * 2);
+        breaker_record_empty(&mut st, 1_001);
+        assert_eq!(st.adaptive_cap, SUMMARY_CAP_START * 4);
+        assert_eq!(st.adaptive_cap, SUMMARY_CAP_MAX, "START×4 恰好等于 MAX");
+        breaker_record_empty(&mut st, 1_002);
+        assert_eq!(
+            st.adaptive_cap,
+            SUMMARY_CAP_MAX,
+            "封顶后不再翻倍（有界）"
+        );
+        breaker_record_success(&mut st);
+        assert_eq!(st.adaptive_cap, SUMMARY_CAP_START, "成功回落起点");
+    }
+
+    /// 集成路径：真实 summarize 调用序列里 cap 随空/成功自适应
+    /// （调用方传入的 max_tokens=300 不再钳制上限）
+    #[tokio::test]
+    async fn adaptive_cap_sequence_through_summarize() {
+        let provider = Arc::new(CountingProvider::new("ad-seq-test", None));
+        let sp = LlmSummaryProvider::new(provider.clone(), "key".into());
+        let cancel = CancellationToken::new();
+        let msgs = sample_messages();
+
+        // 空×3：读取 4096 → 8192 → 16384（第 3 次空恰好触发熔断；
+        // cap 在调用开始时读、失败在结束时记账，故记录的是当次使用的额度）
+        for _ in 0..3 {
+            sp.summarize(&msgs, 300, &cancel).await.unwrap();
+        }
+        // 手动复位熔断（等价半开探测成功）：计数清零 + 额度回落 4096
+        provider.set_emit(Some("有内容".into()));
+        breaker_note_success("ad-seq-test");
+        sp.summarize(&msgs, 300, &cancel).await.unwrap();
+        // 再空×2：从回落后的 4096 重新翻倍
+        provider.set_emit(None);
+        sp.summarize(&msgs, 300, &cancel).await.unwrap();
+        sp.summarize(&msgs, 300, &cancel).await.unwrap();
+
+        assert_eq!(
+            provider.recorded_caps(),
+            vec![
+                SUMMARY_CAP_START,
+                SUMMARY_CAP_START * 2,
+                SUMMARY_CAP_MAX,
+                SUMMARY_CAP_START,
+                SUMMARY_CAP_START,
+                SUMMARY_CAP_START * 2
+            ],
+            "cap 序列：4096→8192→16384（熔断前）→ 回落 4096 → 成功仍 4096 → 空→8192"
+        );
+    }
+
+    #[test]
+    fn format_summary_usage_variants() {
+        let u = crate::infra::protocol::TokenUsage {
+            prompt_tokens: 1200,
+            completion_tokens: 4090,
+            cached_tokens: 0,
+        };
+        let s = format_summary_usage(SUMMARY_CAP_START, Some(&u), 0);
+        assert!(s.contains("prompt=1200"), "应含 prompt 数: {s}");
+        assert!(s.contains("completion=4090"), "应含 completion 数: {s}");
+        assert!(s.contains("cap=4096"), "应含 cap: {s}");
+        assert!(s.contains("产出 0 字符"), "应含产出字符数: {s}");
+        assert!(s.contains("铁证"), "应含判读指引: {s}");
+
+        let none = format_summary_usage(SUMMARY_CAP_MAX, None, 42);
+        assert!(none.contains("未回 usage"), "None 分支应提示: {none}");
+        assert!(none.contains("cap=16384"), "None 分支也应含 cap: {none}");
     }
 
     #[test]

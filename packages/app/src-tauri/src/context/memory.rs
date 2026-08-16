@@ -47,8 +47,9 @@ use crate::infra::protocol::{ChatMessage, ChatSummaryInjectedPayload};
 
 /// 单次折叠生成摘要的目标 token 上限（传给 [`SummaryProvider::summarize`]）。
 ///
-/// 摘要本身要短：它将被每轮注入上下文。512 token 足以承载多轮事实要点，
-/// 又不会喧宾夺主。provider 内部会按 `max_tokens` clamp。
+/// 摘要本身要短：它将被每轮注入上下文。此值已不再是硬钳制——thinking 模型
+/// 会把小额度全烧在思考通道导致 content 恒空，provider 实际额度按模型自适应
+/// （4096~16384，见 summary_provider.rs），本值仅保留作历史语义参考。
 const SUMMARY_FOLD_TOKENS: usize = 512;
 
 // =========================================================================

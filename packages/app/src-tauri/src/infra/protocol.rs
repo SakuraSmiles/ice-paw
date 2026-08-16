@@ -382,6 +382,31 @@ pub struct ChatRoundStatePayload {
     pub retry_count: u32,
 }
 
+/// `chat:budget` 事件 payload — 会话级 token 预算可观测（前端 HUD / 续期 toast）。
+///
+/// 与 round-state 语义不同：round-state 是单轮性能快照，本 payload 是跨轮
+/// 累计状态 + 续期变更。发射点：每轮 usage 累计后（renewed=false）+ 触顶自动
+/// 续期时（renewed=true）+ budget_exceeded 终止前（终态）。
+/// 不入 session-event-log（瞬态 UI 事件；静态预算快照已由 turn_context 落库）。
+#[derive(Clone, Serialize, Debug)]
+pub struct ChatBudgetPayload {
+    pub conversation_id: String,
+    /// 本轮 usage 累计后的毛成本 Σ(prompt_i + completion_i)
+    pub cumulative_tokens: u64,
+    /// 当前生效上限（续期后已抬升；= initial × (renewal_index + 1)）
+    pub effective_cap: u64,
+    /// 初始上限（= turn_context.budget_max_tokens）
+    pub initial_cap: u64,
+    /// 已发生的自动续期次数（0 起）
+    pub renewal_index: u32,
+    /// 续期额度（0 = agent.yaml 显式硬上限，不续期）
+    pub max_renewals: u32,
+    /// 本次事件是否因触顶续期（前端 toast 触发器）
+    pub renewed: bool,
+    /// 当前工具轮数（0 起，与 round-state 对齐）
+    pub round: u32,
+}
+
 /// `chat:retrying` 事件 payload — 通知前端正在重试
 #[derive(Clone, Serialize)]
 pub struct ChatRetryingPayload {

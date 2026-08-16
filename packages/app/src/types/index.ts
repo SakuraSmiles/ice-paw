@@ -333,6 +333,24 @@ export interface TurnContextPayload {
   budget_max_tokens?: number | null;
   context_window?: number | null;
 }
+/** `chat:budget` 事件 payload — 会话级 token 预算状态（HUD / 续期 toast） */
+export interface ChatBudgetPayload {
+  conversation_id: string;
+  /** 本轮 usage 累计后的毛成本 Σ(prompt_i + completion_i) */
+  cumulative_tokens: number;
+  /** 当前生效上限（续期后已抬升） */
+  effective_cap: number;
+  /** 初始上限（= turn_context.budget_max_tokens） */
+  initial_cap: number;
+  /** 已发生的自动续期次数（0 起） */
+  renewal_index: number;
+  /** 续期额度（0 = 显式硬上限不续期） */
+  max_renewals: number;
+  /** 本次事件是否因触顶续期（toast 触发器） */
+  renewed: boolean;
+  /** 当前工具轮数（0 起） */
+  round: number;
+}
 export interface UserMessagePayload { v?: number; content: string; blocks: ContentBlock[]; }
 export interface AssistantMessagePayload {
   v?: number;

@@ -373,4 +373,56 @@ describe("chatStore", () => {
       expect(mockInvoke).toHaveBeenCalled();
     });
   });
+
+  describe("预算 HUD（chat:budget → updateBudget）", () => {
+    /** 最小 budget payload 工厂 */
+    const budgetPayload = (overrides?: Partial<import("../../types").ChatBudgetPayload>) => ({
+      conversation_id: "c1",
+      cumulative_tokens: 120_000,
+      effective_cap: 600_000,
+      initial_cap: 600_000,
+      renewal_index: 0,
+      max_renewals: 2,
+      renewed: false,
+      round: 3,
+      ...overrides,
+    });
+
+    it("常规更新：写入 budget 状态，不产生续期提示", () => {
+      const store = useChatStore();
+      store.updateBudget(budgetPayload());
+      expect(store.budget?.cumulative_tokens).toBe(120_000);
+      expect(store.budget?.effective_cap).toBe(600_000);
+      expect(store.renewalNotice).toBeNull();
+    });
+
+    it("续期事件（renewed=true）：置位提示 + 5s 后自动清除（fake timers）", () => {
+      vi.useFakeTimers();
+      const store = useChatStore();
+      store.updateBudget(budgetPayload({
+        renewed: true, renewal_index: 1, effective_cap: 1_200_000,
+      }));
+      expect(store.renewalNotice).toContain("1/2");
+      expect(store.renewalNotice).toContain("120万");
+      vi.advanceTimersByTime(5000);
+      expect(store.renewalNotice).toBeNull();
+      // budget 本体仍在（HUD 显示续期后上限）
+      expect(store.budget?.effective_cap).toBe(1_200_000);
+      vi.useRealTimers();
+    });
+
+    it("切会话 / 新回合发送：预算状态重置", async () => {
+      mockInvoke.mockResolvedValue(undefined);
+      const store = useChatStore();
+      store.conversations = [fakeConv("c1"), fakeConv("c2")];
+      store.updateBudget(budgetPayload());
+
+      store.selectConversation("c2");
+      expect(store.budget).toBeNull();
+
+      store.updateBudget(budgetPayload());
+      await store.sendMessage("继续");
+      expect(store.budget).toBeNull(); // 新回合新预算（后端 per-send）
+    });
+  });
 });

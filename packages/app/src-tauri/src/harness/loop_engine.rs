@@ -87,7 +87,7 @@ use super::tool_executor::{build_tool_ctx, execute_tool_round};
 use crate::harness::r#loop::retry_round::{stream_with_retry, RoundStreamResult};
 
 // emit_intermediate_round_state 已迁移到 crate::harness::r#loop::events
-use crate::harness::r#loop::events::emit_intermediate_round_state;
+use crate::harness::r#loop::events::{emit_budget_state, emit_intermediate_round_state};
 
 // ==========================================================================
 // W6.2: LoopConfig / LoopContext 已迁移到 crate::harness::r#loop::context
@@ -97,6 +97,27 @@ pub(crate) use crate::harness::r#loop::context::{LoopConfig, LoopContext};
 
 // synthesize_usage 已迁移到 crate::harness::r#loop::token_usage
 use crate::harness::r#loop::token_usage::synthesize_usage;
+
+/// budget_exceeded 终止时的 fallback 提示文案（纯函数便于单测）。
+///
+/// 两分支：显式硬上限（续期额度 0）给出「注释掉该行恢复自适应+续期」的
+/// 自助指引；默认额度用尽则说明续期次数已耗完。数字与 chat:budget 终态
+/// 事件一致，用户在提示行即可看到「已用多少 / 上限多少」。
+fn budget_exceeded_fallback(cumulative: usize, cap: usize, max_renewals: u32) -> String {
+    if max_renewals == 0 {
+        format!(
+            "（本次累计已消耗 {cumulative} tokens，达到显式预算上限 {cap}，已停止。\
+             发送新消息即可继续。注：agent.yaml 显式设置的 max_total_tokens 为\
+             硬上限、不自动续期，长对话会频繁触顶；注释掉该行可恢复按上下文\
+             窗口 3× 自适应并自动续期。）"
+        )
+    } else {
+        format!(
+            "（本次累计已消耗 {cumulative} tokens，已达预算上限 {cap} 且自动续期\
+             额度（{max_renewals} 次）用尽，已停止。发送新消息即可继续。）"
+        )
+    }
+}
 
 /// 流式生成内部协程 — 支持指数退避重试 + 工具执行循环
 ///
@@ -488,6 +509,18 @@ async fn stream_loop_inner(
         let round_gen_ms = round_timer.elapsed_ms();
         observable.elapsed_ms = round_gen_ms;
         emit_intermediate_round_state(&ctx.app, &ctx.conv_id, observable);
+        // 预算 HUD 数据源：本轮 usage 累计后的会话级状态（renewed=false 常规更新）
+        emit_budget_state(
+            &ctx.app,
+            &ctx.conv_id,
+            tool_round,
+            cumulative_tokens,
+            effective_max_tokens,
+            initial_max_tokens,
+            budget_renewals,
+            ctx.budget.max_budget_renewals,
+            false,
+        );
         // 【改】progress_text 跨轮累积，仅供停滞检测（不持久化）
         progress_text.push_str(&round_text);
 
@@ -589,12 +622,36 @@ async fn stream_loop_inner(
                     ctx.budget.max_budget_renewals,
                     effective_max_tokens,
                 );
+                // 续期 toast 数据源（renewed=true，前端非阻塞提示后继续）
+                emit_budget_state(
+                    &ctx.app,
+                    &ctx.conv_id,
+                    tool_round,
+                    cumulative_tokens,
+                    effective_max_tokens,
+                    initial_max_tokens,
+                    budget_renewals,
+                    ctx.budget.max_budget_renewals,
+                    true,
+                );
             } else {
                 tracing::warn!(
                     target: "ice_paw.chat",
                     "Token 预算已超限（续期额度用尽）: cumulative={} > budget={}",
                     cumulative_tokens,
                     effective_max_tokens,
+                );
+                // 终态事件：让 HUD 停在最终值（与终止提示行的数字一致）
+                emit_budget_state(
+                    &ctx.app,
+                    &ctx.conv_id,
+                    tool_round,
+                    cumulative_tokens,
+                    effective_max_tokens,
+                    initial_max_tokens,
+                    budget_renewals,
+                    ctx.budget.max_budget_renewals,
+                    false,
                 );
                 finalize_guard_logged(
                     &ctx.pool,
@@ -604,7 +661,11 @@ async fn stream_loop_inner(
                     &msg_text,
                     &round_blocks,
                     round_completion_tokens,
-                    Some("（本次累计 token 达到上限，已停止。发送新消息即可继续。）"),
+                    Some(&budget_exceeded_fallback(
+                        cumulative_tokens,
+                        effective_max_tokens,
+                        ctx.budget.max_budget_renewals,
+                    )),
                     tool_round,
                     ctx.asst_model.as_deref(),
                     !continue_full_text.is_empty(),
@@ -1084,4 +1145,29 @@ async fn stream_loop_inner(
         effective_max_rounds,
     )
     .await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::budget_exceeded_fallback;
+
+    /// 显式硬上限分支：含数字 + 自助指引（注释掉该行恢复自适应+续期）
+    #[test]
+    fn budget_exceeded_fallback_explicit_cap_has_numbers_and_hint() {
+        let s = budget_exceeded_fallback(845_000, 800_000, 0);
+        assert!(s.contains("845000"), "应含累计数: {s}");
+        assert!(s.contains("800000"), "应含上限数: {s}");
+        assert!(s.contains("硬上限"), "应说明硬上限语义: {s}");
+        assert!(s.contains("注释掉该行"), "应给自助指引: {s}");
+    }
+
+    /// 默认额度用尽分支：说明续期次数已耗完
+    #[test]
+    fn budget_exceeded_fallback_renewed_out_mentions_quota() {
+        let s = budget_exceeded_fallback(1_900_000, 1_800_000, 2);
+        assert!(s.contains("1900000"), "应含累计数: {s}");
+        assert!(s.contains("1800000"), "应含上限数: {s}");
+        assert!(s.contains("续期"), "应提及续期额度: {s}");
+        assert!(!s.contains("注释掉该行"), "非硬上限不给 yaml 指引: {s}");
+    }
 }
