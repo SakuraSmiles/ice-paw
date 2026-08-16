@@ -94,6 +94,34 @@ pub async fn list_tail(
     Ok(rows)
 }
 
+/// 崩溃自愈扫尾的输入：全部「已开始但未闭合」的 turn——有 `turn_context`
+/// 但无同 turn_id 的 `turn_ended`（进程死亡绕过了所有退出路径）。
+///
+/// 本地单进程应用在启动时刻可确定性判定这些 turn 已死（不可能还有进程在
+/// 生成）。返回 `(session_id, turn_id, actor, rounds)`；rounds 取该 turn 已落
+/// 的 assistant_message 事件数（每条对应一个 finalize 点，续写 supersede 场景
+/// 为近似值——终态 payload 的 rounds 仅作展示，不参与任何判定）。
+pub async fn find_open_turns(
+    pool: &SqlitePool,
+) -> AppResult<Vec<(String, String, String, i64)>> {
+    let rows = sqlx::query_as::<_, (String, String, String, i64)>(
+        "SELECT e.session_id, e.turn_id, e.actor,
+                (SELECT COUNT(*) FROM session_events a
+                  WHERE a.session_id = e.session_id AND a.turn_id = e.turn_id
+                    AND a.kind = 'assistant_message') AS rounds
+           FROM session_events e
+          WHERE e.kind = 'turn_context' AND e.turn_id IS NOT NULL
+            AND NOT EXISTS (
+                SELECT 1 FROM session_events t
+                 WHERE t.session_id = e.session_id AND t.turn_id = e.turn_id
+                   AND t.kind = 'turn_ended')
+          ORDER BY e.id ASC",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 /// 正向增量读取（轨迹 live 追加）：取 seq 严格大于 `after_seq` 的最早 `limit` 条
 /// （seq 正序）。`after_seq = 0`/`None` = 从头取。轮询方以已载最大 seq 作游标，
 /// 返回空 = 已追平。append-only 保证增量只会出现在尾部，无需考虑中间插入。

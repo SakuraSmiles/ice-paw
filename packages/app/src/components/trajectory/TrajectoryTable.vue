@@ -176,6 +176,7 @@ const TERM_LABELS: Record<string, string> = {
   budget_exceeded: "预算超限",
   stuck: "无进展终止",
   error: "出错",
+  interrupted: "应用中断",
 };
 function termLabel(t: string): string {
   return TERM_LABELS[t] ?? t;

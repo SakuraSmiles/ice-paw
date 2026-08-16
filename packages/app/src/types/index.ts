@@ -372,7 +372,7 @@ export interface MessageDiscardedPayload { v?: number; reason: string; }
 export interface TokenUsage { prompt_tokens: number; completion_tokens: number; cached_tokens: number; }
 export interface TurnEndedPayload {
   v?: number;
-  termination: string; // stop|length|max_tokens|tool_use|budget_exceeded|stuck|abort|error
+  termination: string; // stop|length|max_tokens|tool_use|budget_exceeded|stuck|abort|error|interrupted(boot 自愈补记：进程死亡时 turn 中断)
   rounds: number;
   usage?: TokenUsage | null;
   user_token_count?: number | null;
