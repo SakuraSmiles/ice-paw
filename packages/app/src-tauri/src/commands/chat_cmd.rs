@@ -126,10 +126,12 @@ pub async fn send_message(
     // @ 引用展开（Reference 块 → 快照 Text 块）：在 persist_blocks 落库快照
     // clone **之前**，落库消息 = 引用卡 + 展开快照（回放保真，session_events
     // 零特例）。失效降级为占位 Text，绝不阻塞整条消息。
+    // content_text = 用户正文（相关性补选的打分 query；多引用总量护栏在内部分摊）。
     let mut final_blocks = crate::harness::references::materialize_reference_blocks(
         pool.inner(),
         &conv_id,
         final_blocks,
+        &content_text,
     )
     .await;
 

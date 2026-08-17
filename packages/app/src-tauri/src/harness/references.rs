@@ -13,33 +13,76 @@
 //! 失效降级（确定性兜底）：目标查不到 / 跨会话引消息 → 展开
 //! `[引用已失效：display]`，绝不阻塞整条消息。
 //!
-//! 上限全 L1 默认（不进配置）：会话快照 8000 字符（头 2 轮 + 尾 8 轮）、
-//! 消息快照 4000 字符（assistant 组 ≤10 条）、agent 身份卡 ~500 字符。
+//! ## 压缩策略（截断不可避免，截断什么才是关键）
+//!
+//! 会话快照按被引会话自身状态选视图：
+//! - **有滚动摘要**（MemoryStage 产物，锚点可解析）→「摘要 + 锚点后近窗」——
+//!   滚动摘要本身就是从中段开头折叠的压缩产物，复用它零额外 LLM 成本，
+//!   且比机械头尾保留更多关键决策
+//! - **无摘要** → 头 2 轮（最初目标）+ 尾 8 轮（最新状态）+ 发送正文相关性
+//!   补选最多 4 个中段轮（CJK bigram 打分，复用工具排序的 tokenize）
+//!
+//! **多引用总量护栏**：一条消息里所有会话/消息快照的潜在上限之和超过总预算时
+//! 按比例收缩各自的字符上限（10 个会话引用不再 = 80K 字符灌入）。
+//!
+//! **诚实标注**：每处压缩都写明省略了多少、完整内容在哪——LLM 知道信息不全
+//! 才会引导用户去源会话，而不是在缺口的幻觉上编造。
+//!
+//! 上限全 L1 默认（不进配置）：会话快照 8000 字符、消息快照 4000 字符
+//! （assistant 组 ≤10 条）、agent 身份卡 ~500 字符、多引用总量 24000 字符。
+
+use std::collections::HashSet;
 
 use sqlx::SqlitePool;
 
+use crate::db::models::MessageRow;
 use crate::db::repo;
 use crate::infra::protocol::ContentBlock;
 
-/// 会话快照总字符上限
+/// 会话快照总字符上限（单引用）
 const CONVERSATION_CHAR_CAP: usize = 8_000;
-/// 会话快照保留的头部/尾部轮数
+/// 会话快照保留的头部/尾部轮数（无摘要视图）
 const CONVERSATION_HEAD_TURNS: usize = 2;
 const CONVERSATION_TAIL_TURNS: usize = 8;
 /// 会话快照的消息读取窗口（尾部最近 N 条；超出窗口的更早轮不进快照）
 const CONVERSATION_MSG_WINDOW: i64 = 200;
-/// 消息（assistant 组）快照总字符上限
+/// 无摘要视图的相关性补选轮数上限（头尾之外，按发送正文打分）
+const REF_RELEVANCE_EXTRA_TURNS: usize = 4;
+/// 摘要视图中摘要正文占字符上限的比例（余量留给锚点后近窗）
+const SUMMARY_SHARE: usize = 6; // /10，即 60%
+/// 消息（assistant 组）快照总字符上限（单引用）
 const MESSAGE_CHAR_CAP: usize = 4_000;
 /// assistant 组快照最多并入的消息条数（前端「一次回答」组的后端对齐语义）
 const GROUP_MAX_MESSAGES: usize = 10;
+/// 多引用总量护栏：一条消息里所有会话/消息快照展开的总字符预算。
+/// 潜在上限之和（会话数×8000 + 消息数×4000）超此值时按比例收缩各自上限；
+/// agent 身份卡（~500 字符元数据）不参与——挤它只会丢委派引导，无信息收益。
+const TOTAL_REF_CHAR_BUDGET: usize = 24_000;
 
 /// 遍历 `blocks`，为每个 Reference 块在其后插入展开 Text 块（无 Reference 时原样返回）。
+///
+/// `query` = 发送正文（仅用户文本，不含附件提取文）——无摘要视图的相关性
+/// 补选用它给中段轮打分。
 pub(crate) async fn materialize_reference_blocks(
     pool: &SqlitePool,
     current_conv_id: &str,
     blocks: Vec<ContentBlock>,
+    query: &str,
 ) -> Vec<ContentBlock> {
-    let mut out = Vec::with_capacity(blocks.len());
+    // 预扫：多引用总量护栏——潜在上限之和超总预算时按比例收缩（静态预分摊，
+    // 比「先展开再截断」可预期：不会把已渲染的快照拦腰砍断）
+    let n_conv = refs_of_kind(&blocks, "conversation");
+    let n_msg = refs_of_kind(&blocks, "message");
+    let potential = n_conv * CONVERSATION_CHAR_CAP + n_msg * MESSAGE_CHAR_CAP;
+    let scale = if potential > TOTAL_REF_CHAR_BUDGET {
+        TOTAL_REF_CHAR_BUDGET as f64 / potential as f64
+    } else {
+        1.0
+    };
+    let conv_cap = ((CONVERSATION_CHAR_CAP as f64) * scale) as usize;
+    let msg_cap = ((MESSAGE_CHAR_CAP as f64) * scale) as usize;
+
+    let mut out = Vec::with_capacity(blocks.len() + n_conv + n_msg);
     let mut touched = false;
     for b in blocks {
         let expansion = if let ContentBlock::Reference {
@@ -49,7 +92,10 @@ pub(crate) async fn materialize_reference_blocks(
         } = &b
         {
             touched = true;
-            Some(expand_one(pool, current_conv_id, ref_kind, target_id, display).await)
+            Some(
+                expand_one(pool, current_conv_id, ref_kind, target_id, display, query, conv_cap, msg_cap)
+                    .await,
+            )
         } else {
             None
         };
@@ -65,28 +111,46 @@ pub(crate) async fn materialize_reference_blocks(
     out
 }
 
+fn refs_of_kind(blocks: &[ContentBlock], kind: &str) -> usize {
+    blocks
+        .iter()
+        .filter(|b| {
+            matches!(b, ContentBlock::Reference { ref_kind, .. } if ref_kind == kind)
+        })
+        .count()
+}
+
 /// 单个引用的展开文本（含失效降级；永不 Err）。
+#[allow(clippy::too_many_arguments)]
 async fn expand_one(
     pool: &SqlitePool,
     current_conv_id: &str,
     ref_kind: &str,
     target_id: &str,
     display: &str,
+    query: &str,
+    conv_cap: usize,
+    msg_cap: usize,
 ) -> String {
     let snapshot = match ref_kind {
-        "conversation" => expand_conversation(pool, target_id).await,
+        "conversation" => expand_conversation(pool, target_id, query, conv_cap).await,
         "agent" => expand_agent(pool, target_id).await,
-        "message" => expand_message(pool, current_conv_id, target_id).await,
+        "message" => expand_message(pool, current_conv_id, target_id, msg_cap).await,
         _ => None, // 未知类型（前端版本不匹配）：按失效处理
     };
     snapshot.unwrap_or_else(|| format!("[引用已失效：{display}]"))
 }
 
 // =========================================================================
-// @会话：头部 2 轮 + 尾部 8 轮节选
+// @会话：摘要视图（有滚动摘要）或 头尾 + 相关性补选（无摘要）
 // =========================================================================
 
-async fn expand_conversation(pool: &SqlitePool, conv_id: &str) -> Option<String> {
+async fn expand_conversation(
+    pool: &SqlitePool,
+    conv_id: &str,
+    query: &str,
+    char_cap: usize,
+) -> Option<String> {
     let conv = repo::conversation::get_by_id(pool, conv_id).await.ok()?;
     let agent_name = repo::agent::get_by_id(pool, &conv.agent_id)
         .await
@@ -112,46 +176,181 @@ async fn expand_conversation(pool: &SqlitePool, conv_id: &str) -> Option<String>
         .map(|(i, _)| i)
         .collect();
     let total_turns = turns.len();
-
-    // 头尾轮区间（窗口内）：全量 ≤ 头+尾 轮时整段保留
-    let keep: Vec<usize> = if total_turns <= CONVERSATION_HEAD_TURNS + CONVERSATION_TAIL_TURNS {
-        (0..msgs.len()).collect()
-    } else {
-        let head_end = turns[CONVERSATION_HEAD_TURNS]; // 第 3 轮起点 = 头部保留终点
-        let tail_start = turns[total_turns - CONVERSATION_TAIL_TURNS];
-        let mut v: Vec<usize> = (0..head_end).collect();
-        v.extend(tail_start..msgs.len());
-        v
-    };
-    let omitted = total_turns.saturating_sub(CONVERSATION_HEAD_TURNS + CONVERSATION_TAIL_TURNS);
+    let window_full = msgs.len() as i64 >= CONVERSATION_MSG_WINDOW;
 
     let mut out = String::with_capacity(1024);
     out.push_str(&format!(
-        "<referenced_conversation id=\"{conv_id}\">\n会话「{title}」（agent：{agent_name}，共 {total_turns} 轮）。以下为节选快照：\n",
+        "<referenced_conversation id=\"{conv_id}\">\n会话「{title}」（agent：{agent_name}，共 {ge}{total_turns} 轮，最后活动 {ts}）。以下为压缩快照，非完整记录：\n",
         title = if conv.title.is_empty() { "（未命名）" } else { &conv.title },
+        ge = if window_full { "≥" } else { "" },
+        ts = conv.updated_at,
     ));
-    let mut used = out.len();
-    let mut prev_kept = true;
-    for (i, m) in msgs.iter().enumerate() {
-        if !keep.contains(&i) {
-            if prev_kept {
-                out.push_str(&format!(
-                    "…（中间省略 {omitted} 轮，如需更早内容请让用户在源会话中查阅）\n"
-                ));
-                prev_kept = false;
-            }
-            continue;
+
+    // 摘要视图：锚点可解析（Phase 2 摘要行恒带 rowid 锚；旧版行 None → 走头尾
+    // 视图保守处理，不猜覆盖范围）。残余定位用 rowid——MessageRow 恒有，与
+    // seq/rowid 双锚的 LLM 视图连续性无关。
+    let summary_state = repo::summary::get_latest_summary_state(pool, conv_id)
+        .await
+        .ok()
+        .flatten();
+    let residual_start = summary_state
+        .as_ref()
+        .and_then(|s| s.covered_until_rowid)
+        .map(|anchor| msgs.iter().position(|m| m.rowid > anchor).unwrap_or(msgs.len()));
+
+    if let (Some(state), Some(residual)) = (summary_state.as_ref(), residual_start) {
+        render_summary_view(&mut out, state, &msgs, &turns, residual, char_cap);
+    } else {
+        render_headtail_view(&mut out, &msgs, &turns, query, char_cap);
+    }
+
+    out.push_str("</referenced_conversation>");
+    Some(out)
+}
+
+/// 摘要视图：滚动摘要（60% 子预算，防 16K 自适应摘要挤掉近窗）+ 锚点后近窗
+/// 尾部轮。摘要从中段开头折叠——它就是比头尾节选更好的中段压缩，复用零成本。
+fn render_summary_view(
+    out: &mut String,
+    state: &crate::db::repo::summary::SummaryState,
+    msgs: &[MessageRow],
+    turns: &[usize],
+    residual_start: usize,
+    char_cap: usize,
+) {
+    let summary_cap = char_cap / 10 * SUMMARY_SHARE;
+    out.push_str("【早期内容摘要】（源会话自动折叠生成，覆盖近期内容之前的对话）\n");
+    out.push_str(&truncate_chars(&state.text, summary_cap));
+    if state.text.chars().count() > summary_cap {
+        out.push_str("\n（摘要超长已截短）");
+    }
+    out.push_str("\n―――― 摘要之后的近期内容 ――――\n");
+
+    // 近窗尾部轮选择：残余轮数 > 尾轮数时保尾部，中段省略标注
+    let residual_turns: Vec<usize> = turns.iter().copied().filter(|&i| i >= residual_start).collect();
+    let tail_start = residual_turns
+        .len()
+        .checked_sub(CONVERSATION_TAIL_TURNS)
+        .filter(|&omit| omit > 0)
+        .map(|omit| {
+            let start = residual_turns[omit];
+            out.push_str(&format!(
+                "…（摘要之后省略 {omit} 轮，完整内容在源会话）\n"
+            ));
+            start
+        })
+        .unwrap_or(residual_start);
+
+    for m in msgs.iter().skip(tail_start) {
+        if m.role == "system" {
+            continue; // 摘要行不进消息流（上方已显式渲染受控版本）
         }
         let line = render_message_line(m);
-        used += line.len();
-        if used > CONVERSATION_CHAR_CAP {
-            out.push_str("…（已达快照长度上限，后续内容省略）\n");
-            break;
+        if out.chars().count() + line.chars().count() > char_cap {
+            out.push_str("…（已达快照长度上限，后续省略）\n");
+            return;
         }
         out.push_str(&line);
     }
-    out.push_str("</referenced_conversation>");
-    Some(out)
+}
+
+/// 头尾视图：头 2 轮（最初目标）+ 尾 8 轮（最新状态）+ 发送正文相关性补选
+/// 最多 [`REF_RELEVANCE_EXTRA_TURNS`] 个中段轮（保序；query 为空时纯头尾）。
+fn render_headtail_view(
+    out: &mut String,
+    msgs: &[MessageRow],
+    turns: &[usize],
+    query: &str,
+    char_cap: usize,
+) {
+    // 全量轮数 ≤ 头+尾（或零轮）时整段保留
+    if turns.len() <= CONVERSATION_HEAD_TURNS + CONVERSATION_TAIL_TURNS || turns.is_empty() {
+        for m in msgs {
+            if m.role == "system" {
+                continue;
+            }
+            let line = render_message_line(m);
+            if out.chars().count() + line.chars().count() > char_cap {
+                out.push_str("…（已达快照长度上限，后续省略）\n");
+                return;
+            }
+            out.push_str(&line);
+        }
+        return;
+    }
+
+    let n = turns.len();
+    let mut keep_turn = vec![true; n];
+    let mid_range = CONVERSATION_HEAD_TURNS..n - CONVERSATION_TAIL_TURNS;
+    for i in mid_range.clone() {
+        keep_turn[i] = false;
+    }
+
+    // 相关性补选：中段轮按「发送正文 token 在轮文本中命中数」打分（去重 token，
+    // CJK bigram 与工具排序同语义），取分最高的 ≤4 轮（同分靠前优先）
+    let tokens: HashSet<String> = crate::harness::scoring::tokenize(query).into_iter().collect();
+    if !tokens.is_empty() {
+        let mut scored: Vec<(u32, usize)> = mid_range
+            .clone()
+            .filter_map(|ti| {
+                let span = turn_span(turns, ti, msgs.len());
+                let text = msgs[span]
+                    .iter()
+                    .map(|m| m.content.to_lowercase())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let score = tokens.iter().filter(|t| text.contains(t.as_str())).count() as u32;
+                (score > 0).then_some((score, ti))
+            })
+            .collect();
+        scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+        for (_, ti) in scored.into_iter().take(REF_RELEVANCE_EXTRA_TURNS) {
+            keep_turn[ti] = true;
+        }
+    }
+
+    // 渲染：消息行按所属轮的取舍进退；跨省略段时标注该段省略的轮数（多段各自计数）
+    let mut omitted_run = 0usize;
+    let mut in_omission = false;
+    for (i, m) in msgs.iter().enumerate() {
+        let ord = turn_ord(i, turns);
+        if !keep_turn[ord] {
+            if turns.get(ord) == Some(&i) {
+                omitted_run += 1; // 轮锚点进入省略段才计数（占位/assistant 行不膨胀计数）
+            }
+            in_omission = true;
+            continue;
+        }
+        if in_omission {
+            out.push_str(&format!(
+                "…（省略 {omitted_run} 轮，完整内容在源会话）\n"
+            ));
+            omitted_run = 0;
+            in_omission = false;
+        }
+        if m.role == "system" {
+            continue;
+        }
+        let line = render_message_line(m);
+        if out.chars().count() + line.chars().count() > char_cap {
+            out.push_str("…（已达快照长度上限，后续省略）\n");
+            return;
+        }
+        out.push_str(&line);
+    }
+}
+
+/// 消息所属轮号（0 基）：`turns[k] ≤ i < turns[k+1]` → k；首锚点前的窗口
+/// 前缀消息（窗口恰好切进某轮中段时）归属第 0 轮，与首锚点同进退。
+fn turn_ord(i: usize, turns: &[usize]) -> usize {
+    turns.iter().rposition(|&t| t <= i).unwrap_or(0)
+}
+
+/// 第 `ti` 轮的消息区间 `[turns[ti], turns[ti+1])`（末轮到窗口尾）
+fn turn_span(turns: &[usize], ti: usize, len: usize) -> std::ops::Range<usize> {
+    let start = turns[ti];
+    let end = turns.get(ti + 1).copied().unwrap_or(len);
+    start..end
 }
 
 // =========================================================================
@@ -180,6 +379,7 @@ async fn expand_message(
     pool: &SqlitePool,
     current_conv_id: &str,
     message_id: &str,
+    char_cap: usize,
 ) -> Option<String> {
     let m = repo::message::find_by_id(pool, message_id).await.ok()??;
     // 安全：消息引用限当前会话（前端入口本就只给当前会话，此处后端兜底）
@@ -214,8 +414,8 @@ async fn expand_message(
                     }
                     let line = render_message_line(m);
                     used += line.len();
-                    if used > MESSAGE_CHAR_CAP {
-                        out.push_str("…（已达快照长度上限）\n");
+                    if used > char_cap {
+                        out.push_str("…（已达快照长度上限，完整内容在源会话）\n");
                         break;
                     }
                     out.push_str(&line);
@@ -492,20 +692,90 @@ mod tests {
             seed_msg(&pool, &format!("u{t}"), "c1", "user", &format!("第{t}个问题")).await;
             seed_msg(&pool, &format!("a{t}"), "c1", "assistant", &format!("第{t}个回答")).await;
         }
-        let text = expand_conversation(&pool, "c1").await.expect("展开成功");
+        let text = expand_conversation(&pool, "c1", "", 8_000)
+            .await
+            .expect("展开成功");
         assert!(text.contains("会话「设计讨论」"));
         assert!(text.contains("agent：助手"));
         assert!(text.contains("共 12 轮"));
+        assert!(text.contains("压缩快照")); // 头部诚实标注
         assert!(text.contains("第1个问题")); // 头部保留
         assert!(text.contains("第2个回答"));
         assert!(!text.contains("第3个问题")); // 中段省略（第 3、4 轮）
         assert!(text.contains("第12个回答")); // 尾部保留
-        assert!(text.contains("中间省略"));
+        assert!(text.contains("省略 2 轮")); // 省略段计数标注
 
         // 不存在的会话 / 空会话 → None
-        assert!(expand_conversation(&pool, "nope").await.is_none());
+        assert!(expand_conversation(&pool, "nope", "", 8_000).await.is_none());
         seed_conv(&pool, "c2", "空", "a1").await;
-        assert!(expand_conversation(&pool, "c2").await.is_none());
+        assert!(expand_conversation(&pool, "c2", "", 8_000).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn expand_conversation_summary_view() {
+        let pool = test_pool().await;
+        seed_agent(&pool, "a1", "助手", "").await;
+        seed_conv(&pool, "c1", "长会话", "a1").await;
+        // 14 轮；第 6 轮后插入滚动摘要（锚 = a6 的 rowid，Phase 2 摘要行恒带锚）
+        for t in 1..=14 {
+            seed_msg(&pool, &format!("u{t}"), "c1", "user", &format!("第{t}个问题")).await;
+            seed_msg(&pool, &format!("a{t}"), "c1", "assistant", &format!("第{t}个回答")).await;
+        }
+        let a6_rowid: i64 = sqlx::query_scalar("SELECT rowid FROM messages WHERE id = 'a6'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        repo::summary::insert_summary_message(
+            &pool,
+            "c1",
+            "用户在做性能优化，前几轮定位到数据库慢查询",
+            None,
+            a6_rowid,
+        )
+        .await
+        .unwrap();
+
+        let text = expand_conversation(&pool, "c1", "", 8_000)
+            .await
+            .expect("展开成功");
+        // 摘要视图：摘要显式渲染 + 锚点后近窗（残余 8 轮 ≤ 尾轮数 → 全保留）
+        assert!(text.contains("【早期内容摘要】"));
+        assert!(text.contains("用户在做性能优化"));
+        assert!(text.contains("摘要之后的近期内容"));
+        assert!(text.contains("第7个问题")); // 残余首轮
+        assert!(text.contains("第14个回答")); // 残余末轮
+        // 被摘要覆盖的早期轮不再以消息行出现（内容在摘要里，不双份渲染）
+        assert!(!text.contains("第1个问题"));
+        assert!(!text.contains("第3个问题"));
+        // system 摘要行不进消息流（受控版本已显式渲染）
+        assert!(!text.contains("[system]"));
+    }
+
+    #[tokio::test]
+    async fn expand_conversation_relevance_fill() {
+        let pool = test_pool().await;
+        seed_agent(&pool, "a1", "助手", "").await;
+        seed_conv(&pool, "c1", "排障会话", "a1").await;
+        // 16 轮，第 5 轮内容与发送正文同主题；query 为空时它本会被头尾省略
+        for t in 1..=16 {
+            let q = if t == 5 { "数据库连接池怎么配" } else { &format!("第{t}个问题") };
+            seed_msg(&pool, &format!("u{t}"), "c1", "user", q).await;
+            seed_msg(&pool, &format!("a{t}"), "c1", "assistant", &format!("第{t}个回答")).await;
+        }
+
+        // query 命中 → 第 5 轮被补选进快照（CJK bigram 打分，复用工具排序分词）
+        let text = expand_conversation(&pool, "c1", "帮我看看数据库连接池", 8_000)
+            .await
+            .expect("展开成功");
+        assert!(text.contains("数据库连接池怎么配"));
+        assert!(text.contains("第1个问题")); // 头部仍在
+        assert!(text.contains("第16个回答")); // 尾部仍在
+        assert!(text.contains("省略")); // 头尾之外仍有省略段标注
+        assert!(!text.contains("第4个问题")); // 未命中且无摘要 → 仍省略
+
+        // 空 query → 纯头尾（既有行为不变）
+        let plain = expand_conversation(&pool, "c1", "", 8_000).await.unwrap();
+        assert!(!plain.contains("数据库连接池怎么配"));
     }
 
     #[tokio::test]
@@ -519,21 +789,21 @@ mod tests {
         seed_msg(&pool, "u2", "c1", "user", "再来").await;
 
         // user 单条
-        let text = expand_message(&pool, "c1", "u1").await.expect("展开");
+        let text = expand_message(&pool, "c1", "u1", 4_000).await.expect("展开");
         assert!(text.contains("[user]: 帮我看看"));
         assert!(!text.contains("第一段"));
 
         // assistant 组：从 s1 起连续到 role 变化（s1+s2，不含 u2）
-        let text = expand_message(&pool, "c1", "s1").await.expect("展开");
+        let text = expand_message(&pool, "c1", "s1", 4_000).await.expect("展开");
         assert!(text.contains("[assistant]: 第一段"));
         assert!(text.contains("[assistant]: 第二段"));
         assert!(!text.contains("再来"));
 
         // 跨会话引用 → None（后端兜底，前端入口本就只给当前会话）
         seed_conv(&pool, "c9", "别的", "a1").await;
-        assert!(expand_message(&pool, "c9", "u1").await.is_none());
+        assert!(expand_message(&pool, "c9", "u1", 4_000).await.is_none());
         // 不存在 → None
-        assert!(expand_message(&pool, "c1", "nope").await.is_none());
+        assert!(expand_message(&pool, "c1", "nope", 4_000).await.is_none());
     }
 
     #[tokio::test]
@@ -548,7 +818,7 @@ mod tests {
             ContentBlock::reference("message", "u1", "消息#1234"),
             ContentBlock::reference("conversation", "nope", "幽灵#0000"), // 失效
         ];
-        let out = materialize_reference_blocks(&pool, "c1", blocks).await;
+        let out = materialize_reference_blocks(&pool, "c1", blocks, "看看这个").await;
         // text + ref + 展开 + ref + 降级占位 = 5 块，顺序：每个 ref 后紧跟其展开
         assert_eq!(out.len(), 5);
         assert!(matches!(&out[1], ContentBlock::Reference { .. }));
@@ -563,7 +833,47 @@ mod tests {
     async fn materialize_no_references_returns_blocks_unchanged() {
         let pool = test_pool().await;
         let blocks = vec![ContentBlock::text("普通消息")];
-        let out = materialize_reference_blocks(&pool, "c1", blocks).await;
+        let out = materialize_reference_blocks(&pool, "c1", blocks, "正文").await;
         assert_eq!(out.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn materialize_total_budget_scales_caps() {
+        let pool = test_pool().await;
+        seed_agent(&pool, "a1", "助手", "").await;
+        seed_conv(&pool, "c1", "超长会话", "a1").await;
+        // 40 轮 × 每条 600 字符 ≈ 48K 字符 >> 单引用上限——单引用也会触顶
+        let long = "长".repeat(600);
+        for t in 1..=40 {
+            seed_msg(&pool, &format!("u{t}"), "c1", "user", &format!("第{t}{long}")).await;
+            seed_msg(&pool, &format!("a{t}"), "c1", "assistant", &format!("答{t}{long}")).await;
+        }
+
+        // 单引用：8000 上限内
+        let single = materialize_reference_blocks(
+            &pool,
+            "c1",
+            vec![ContentBlock::reference("conversation", "c1", "超长#0001")],
+            "",
+        )
+        .await;
+        let snap1 = single[1].as_text().unwrap();
+        assert!(snap1.chars().count() <= 8_200);
+        assert!(snap1.contains("已达快照长度上限"));
+
+        // 4 个会话引用：潜在 32K > 总预算 24K → 各自收缩到 6000
+        let refs: Vec<ContentBlock> = (0..4)
+            .map(|i| ContentBlock::reference("conversation", "c1", format!("超长#000{i}")))
+            .collect();
+        let multi = materialize_reference_blocks(&pool, "c1", refs, "").await;
+        for (i, b) in multi.iter().enumerate() {
+            if let Some(text) = b.as_text() {
+                assert!(
+                    text.chars().count() <= 6_200,
+                    "第 {i} 个快照应 ≤ ~6000：{}",
+                    text.chars().count()
+                );
+            }
+        }
     }
 }
