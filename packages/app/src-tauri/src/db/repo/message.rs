@@ -105,8 +105,13 @@ pub async fn list_by_conversation(
 /// 轮次锚点（聊天「轮次导航条」UX #5）：一轮 = 一条**真实**用户消息。
 ///
 /// 两类占位行必须排除（否则轮次被膨胀/幽灵化）：
-/// 1. 工具轮的 tool_result 占位行（content='' + content_blocks 全
-///    tool_result）——真机：10 轮会话曾数出 49；
+/// 1. 工具轮的 tool_result 占位行（content='' + content_blocks 含
+///    tool_result）——真机：10 轮会话曾数出 49。词表与前端渲染侧
+///    `isToolResultOnlyUser`（ChatMessages.vue：content 空才排除）严格对齐：
+///    排除条件必须是「content 空 **且** blocks 含 tool_result」的合取，
+///    不能单看 blocks 子串——用户正文里粘贴了含 `"type":"tool_result"`
+///    字面量的 JSON/日志时，该子串会嵌进 blocks 的 text 块，单看子串会把
+///    正常消息误排除出锚点，而前端照样渲染 → 轮号整体偏移（P11 症状①）。
 /// 2. **空占位行**（content='' 且 content_blocks 空/'[]'）——loop_engine
 ///    阶段 F 先 create 占位再 update_content_blocks，进程死亡/崩溃残留的
 ///    空行会被误当锚点（真机：34 真实轮曾数出 36，导航条与实际位置错位）。
@@ -135,7 +140,8 @@ pub async fn list_turn_anchors(
         "SELECT id, substr(content, 1, 120), created_at \
            FROM messages \
           WHERE conversation_id = ? AND role = 'user' \
-            AND COALESCE(content_blocks, '') NOT LIKE '%\"type\":\"tool_result\"%' \
+            AND NOT (TRIM(COALESCE(content, '')) = '' \
+                     AND COALESCE(content_blocks, '') LIKE '%\"type\":\"tool_result\"%') \
             AND NOT (TRIM(COALESCE(content, '')) = '' \
                      AND COALESCE(content_blocks, '') IN ('', '[]')) \
           ORDER BY created_at ASC, rowid ASC",

@@ -556,6 +556,90 @@ async fn list_turn_anchors_excludes_empty_placeholder_keeps_image_only() {
     assert_eq!(anchors[1].preview, "", "纯图消息 content 空 → 空串预览");
 }
 
+/// P11 词表对齐：排除条件必须是「content 空 ∧ blocks 含 tool_result」的合取。
+/// 用户正文粘贴了含 `"type":"tool_result"` 字面量的 JSON/日志时，该子串会
+/// 嵌进 blocks 的 text 块——旧谓词单看 blocks 子串会把这条正常消息误排除
+/// 出锚点，而前端照样渲染它 → 轮号整体偏移（导航条数字不准来源之一）。
+/// 词表与前端渲染侧 `isToolResultOnlyUser`（ChatMessages.vue）严格对齐。
+#[tokio::test]
+async fn list_turn_anchors_keeps_text_rows_embedding_tool_result_literal() {
+    let pool = fresh_pool().await;
+    let conv_id = seed_agent_and_conv(&pool).await;
+
+    // 真实轮：正文恰好含 tool_result 字面量（粘贴 MCP 日志的真实形态）
+    let pasted = r#"日志：{"type":"tool_result","content":"ok"}"#;
+    message::create(
+        &pool,
+        "paste-1",
+        &NewMessage {
+            conversation_id: conv_id.clone(),
+            role: "user".into(),
+            content: pasted.into(),
+            token_count: None,
+            error: None,
+            model: None,
+        },
+    )
+    .await
+    .unwrap();
+    // text 块把正文原样嵌进 blocks —— 旧谓词（blocks NOT LIKE）在此行误命中
+    let blocks = format!(
+        r#"[{{"type":"text","text":"{}"}}]"#,
+        pasted.replace('"', "\\\"")
+    );
+    message::update_content_blocks(&pool, "paste-1", &blocks)
+        .await
+        .unwrap();
+
+    // 工具轮占位行：content='' + blocks 全 tool_result —— 仍须排除
+    message::create(
+        &pool,
+        "ghost-result",
+        &NewMessage {
+            conversation_id: conv_id.clone(),
+            role: "user".into(),
+            content: String::new(),
+            token_count: None,
+            error: None,
+            model: None,
+        },
+    )
+    .await
+    .unwrap();
+    message::update_content_blocks(
+        &pool,
+        "ghost-result",
+        r#"[{"type":"tool_result","tool_use_id":"call_0","content":"ok"}]"#,
+    )
+    .await
+    .unwrap();
+
+    // 空占位行：仍须排除
+    message::create(
+        &pool,
+        "ghost-empty",
+        &NewMessage {
+            conversation_id: conv_id.clone(),
+            role: "user".into(),
+            content: String::new(),
+            token_count: None,
+            error: None,
+            model: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let anchors = message::list_turn_anchors(&pool, &conv_id).await.unwrap();
+    let ids: Vec<&str> = anchors.iter().map(|a| a.message_id.as_str()).collect();
+    assert_eq!(
+        ids,
+        vec!["paste-1"],
+        "正文含 tool_result 字面量的真实消息必须是锚点；\
+         纯 tool_result / 空占位行仍排除（词表与前端 isToolResultOnlyUser 对齐）"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // 公共函数存在性：避免命名漂移导致测试假阳性
 // ---------------------------------------------------------------------------
