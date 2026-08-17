@@ -1,42 +1,56 @@
-// useActiveTurn — 轮次导航条的视位侦测（治本替换 topsCache 静态 offsetTop 扫描）
+// useActiveTurn — 轮次导航条的视位侦测（底线语义，2026-08-17 二轮重设计）
 //
-// 根因（2026-08-15 生产诊断）：消息列表启用 content-visibility:auto +
-// contain-intrinsic-size（千轮渲染虚拟化，H1）后，未渲染组按**估高**参与
-// 布局，静态缓存的 offsetTop 与真实位置系统性漂移——导航条卡死在旧轮、
-// 切会话错位、拉到最底才对上，都是同一根因的投影。
+// 一根判定线：消息区底边上移 LINE_FROM_BOTTOM_PX（输入框正上方的横线）。
+// 线落在哪个轮的区域里（区域 = [锚点i顶, 锚点i+1顶)），活动轮就是哪轮。
+// 与事件无关：跳转/翻页/图片加载/流式追加一律经 IO 相交集重算，无逐事件补丁。
 //
-// 治本 = 只对**实际相交（= 已渲染，坐标真实）**的锚点元素做判定：
-// - IntersectionObserver 维护「当前相交集合」（成员真相，IO 只报真实渲染区）
-// - scroll（rAF 合帧）在集合内做边界判定：相交的最小轮 t，
-//   其元素顶边过「视口顶 +80px」判定线 → active = t，否则 t-1（正在读上一轮尾部）
-// - 集合空（视口落在长轮中部，前后锚点都不相交）→ 保持上次值
+// 为何从顶线换底线（用户拍板）：顶线规则「最小相交轮过线→该轮，否则 -1」
+// 两处系统性少报一——贴底跟随短轮显示 N-1（最高频投诉面孔）；居中阅读时
+// 显示不在屏上的前一轮。底线语义贴底恒对（线恒在最新轮区域内），阅读位
+// 显示占据下方阅读区的真实轮。固有限制：多轮同屏读屏顶轮时显示的是线下
+// 轮，方向恒定（单线规则的数学下限）。
 //
-// 判定线语义与旧实现一致（scrollTop+80 的视口顶基准）。
+// 跳转钉子：点 tick N 的落点把锚 N 停在视口顶（阅读位），线却可能落在
+// N+k 的区域——纯线判定会让跳转显得没到位。跳转 = 显式位置声明，钉住 N；
+// 用户亲手滚动（滚轮/触摸/滚动键）即解钉，交还线判定。
+//
+// 坐标可信性根因不变（2026-08-15）：content-visibility:auto 估高布局下未
+// 渲染组 offsetTop 系统性漂移——只对实际相交（= 已渲染，坐标真实）的锚点
+// 读 gBCR 判定；集合空（线在长轮中部，前后锚点都不相交）保持上次值。
 
 import { computed, onBeforeUnmount, ref, watch, type Ref } from "vue";
 import type { TurnAnchor } from "../types";
 
-/** 视口顶判定线（px）：锚点顶边越过此线即视为「正在读这一轮」。
- *  导出供跳转落点对齐复用（ChatMessages.jumpToTurn）——单一真相源，跳转
- *  落点与视位判定线永不漂移。 */
+/** 跳转落点基准线（px，距视口顶）：锚点顶边停在 THRESHOLD_PX - 边际 的阅读位。
+ *  与视位判定线（底线）已解耦：落点服务眼睛，号码由钉子保证。导出供
+ *  ChatMessages.jumpToTurn 复用。 */
 export const THRESHOLD_PX = 80;
 
-/** 纯函数：由「当前相交锚点的 (轮号, 距视口顶距离)」判定活动轮。
+/** 视位判定线（px，距消息区底边）：即输入框正上方一点。
+ *  导出供测试与调用方对齐语义。 */
+export const LINE_FROM_BOTTOM_PX = 24;
+
+/** 纯函数：由「当前相交锚点的 (轮号, 距视口顶距离) + 判定线高度」判定活动轮。
  *  - 空列表 → null（视口落在长轮中部等，调用方保持上次值）
- *  - 最小轮的锚点顶边已过判定线 → 该轮（正在读它的开头）
- *  - 否则 → 最小轮 - 1（视口还在读上一轮的尾部内容） */
-export function pickActiveTurn(intersecting: { turn: number; top: number }[]): number | null {
+ *  - 线以上有锚点 → 线以上最大轮号（线落在其区域内）
+ *  - 线以上无、线下有 → 线下最小轮 - 1（线在首锚上方，钳 ≥1） */
+export function pickActiveTurn(intersecting: { turn: number; top: number }[], lineY: number): number | null {
   if (intersecting.length === 0) return null;
-  let minTurn = Infinity;
-  let minTop = Infinity;
+  let aboveMax = 0; // 线以上最大轮号（0 = 无）
+  let belowMin = Infinity; // 线以下最小轮号
   for (const { turn, top } of intersecting) {
-    if (turn < minTurn) {
-      minTurn = turn;
-      minTop = top;
+    if (top <= lineY) {
+      if (turn > aboveMax) aboveMax = turn;
+    } else if (turn < belowMin) {
+      belowMin = turn;
     }
   }
-  return minTop <= THRESHOLD_PX ? minTurn : Math.max(1, minTurn - 1);
+  if (aboveMax > 0) return aboveMax;
+  return Math.max(1, belowMin - 1);
 }
+
+/** 解钉的滚动键（滚轮/触摸之外，键盘滚动也是亲手滚动） */
+const SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
 
 export function useActiveTurn(
   container: Ref<HTMLElement | null>,
@@ -44,7 +58,10 @@ export function useActiveTurn(
 ) {
   const activeTurn = ref<number | null>(null);
 
-  /** messageId → 轮号（1 起）。锚点重载（翻页/新轮）后轮号可能整体平移，
+  /** 跳转钉住的轮号（null = 线判定接管） */
+  const pinned = ref<number | null>(null);
+
+  /** messageId → 轮号（1 起）。锚点重载（新轮）后轮号可能变化，
    *  相交集合的成员→轮号映射在 IO 回调时实时查此表，永不吃旧值。 */
   const turnOfMsg = computed(() => {
     const m = new Map<string, number>();
@@ -65,15 +82,30 @@ export function useActiveTurn(
 
   /** 边界判定：只在「真实相交」的元素上读 gBCR——已渲染，坐标可信 */
   function recompute() {
+    if (pinned.value !== null) return; // 钉住期线判定静默（activeTurn 已由 pin 直写）
     const root = container.value;
     if (!root || intersecting.size === 0) return;
     const rootTop = root.getBoundingClientRect().top;
+    const lineY = root.clientHeight - LINE_FROM_BOTTOM_PX;
     const visible = Array.from(intersecting, ([el, turn]) => ({
       turn,
       top: el.getBoundingClientRect().top - rootTop,
     }));
-    const picked = pickActiveTurn(visible);
+    const picked = pickActiveTurn(visible, lineY);
     if (picked !== null) activeTurn.value = picked; // null = 保持上次值
+  }
+
+  /** 跳转钉子：显式位置声明，立即生效（不等滚动/IO 事件） */
+  function pin(turn: number) {
+    pinned.value = turn;
+    activeTurn.value = turn;
+  }
+
+  /** 解钉并立即回归线判定（不等下一次滚动） */
+  function clearPin() {
+    if (pinned.value === null) return;
+    pinned.value = null;
+    recompute();
   }
 
   function onIoEntries(entries: IntersectionObserverEntry[]) {
@@ -111,12 +143,31 @@ export function useActiveTurn(
     });
   }
 
+  /** 亲手滚动意图（滚轮/触摸/滚动键）→ 解钉交还线判定 */
+  function onUserScrollIntent() {
+    if (pinned.value !== null) clearPin();
+  }
+  function onKeyDown(e: KeyboardEvent) {
+    if (SCROLL_KEYS.has(e.key)) onUserScrollIntent();
+  }
+
+  // 锚点列表重载（切会话/新轮开始）→ 钉子失效：轮号语义已换界，旧号不可信
+  watch(anchors, () => { pinned.value = null; });
+
   // 容器挂载/更换：重挂滚动监听 + 重建观察（root 变了 IO 必须重建）
   watch(container, (el, _, onCleanup) => {
     if (!el) return;
     el.addEventListener("scroll", onScroll, { passive: true });
+    el.addEventListener("wheel", onUserScrollIntent, { passive: true });
+    el.addEventListener("touchmove", onUserScrollIntent, { passive: true });
+    el.addEventListener("keydown", onKeyDown);
     refresh();
-    onCleanup(() => el.removeEventListener("scroll", onScroll));
+    onCleanup(() => {
+      el.removeEventListener("scroll", onScroll);
+      el.removeEventListener("wheel", onUserScrollIntent);
+      el.removeEventListener("touchmove", onUserScrollIntent);
+      el.removeEventListener("keydown", onKeyDown);
+    });
   });
 
   onBeforeUnmount(() => {
@@ -124,5 +175,5 @@ export function useActiveTurn(
     observer = null;
   });
 
-  return { activeTurn, turnOfMsg, refresh };
+  return { activeTurn, turnOfMsg, refresh, pin, clearPin };
 }

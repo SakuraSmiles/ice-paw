@@ -44,13 +44,15 @@ const { showScrollBtn, autoFollow, paginating, scrollToBottom, restoreForConvers
 // =========================================================================
 const { anchors, loadAnchors } = useTurnRail();
 
-// ---- 视位侦测（useActiveTurn）：IntersectionObserver 实时视位——只对实际
-// 相交（已渲染、坐标真实）的锚点判定，治旧 topsCache 静态 offsetTop 在
+// ---- 视位侦测（useActiveTurn）：底线语义——输入框上方一根判定线，线在
+// 哪轮的区域里就是哪轮（P11 二轮）；IntersectionObserver 只对实际相交
+// （已渲染、坐标真实）的锚点判定，治旧 topsCache 静态 offsetTop 在
 // content-visibility:auto 估高布局下系统性漂移（导航条卡旧轮/错位）的根因 ----
-const { activeTurn, refresh: refreshActiveTurn } = useActiveTurn(listRef, anchors);
+const { activeTurn, turnOfMsg, refresh: refreshActiveTurn, pin: pinTurn, clearPin } = useActiveTurn(listRef, anchors);
 
 // 锚点刷新：会话切换 + 尾消息变化（= 新一轮开始；向前翻页不动尾，不误触）
 watch(() => chat.activeConvId, (cid) => {
+  clearPin(); // 旧会话的跳转钉子不可跨会话存活（composable 内锚点重载兜底，双保险）
   activeTurn.value = null;
   void loadAnchors(cid);
 }, { immediate: true });
@@ -63,10 +65,11 @@ watch(() => chat.messages[chat.messages.length - 1]?.id, () => {
 watch([() => chat.messages.length, anchors], () => { void nextTick(refreshActiveTurn); });
 
 // ---- 跳转：窗口内直接滚；窗口外逐页补到锚点（无进展即止，无页数上限——
-// 大会话深跳不静默失败）。落点对齐视位判定线（P11：跳后 activeTurn 读 N-1
-// 的根因是落点 12px 与判定线 80px 错位，估高漂移时锚点落在线下）；滚动结束
-// 后复核漂移并瞬时校正（content-visibility 估高 → 渲染后真实高度的换算） ----
-/** 落点余量（px）：锚点顶边停在判定线上方这一距离，pickActiveTurn 确定性读出目标轮 */
+// 大会话深跳不静默失败）。落点 = 锚点顶停在视口顶 THRESHOLD_PX 上方的阅读位
+// （服务眼睛）；轮号即时性由钉子保证（视位判定是底线语义——P11 二轮：跳转
+// 落点后线落在 N+k 区域，纯线判定会显得跳错，钉住 N 直到用户亲手滚动）。
+// 滚动结束后复核漂移并瞬时校正（content-visibility 估高 → 渲染后真实高度） ----
+/** 落点余量（px）：锚点顶边停在阅读位基准线上方这一距离 */
 const JUMP_MARGIN_PX = 24;
 /** 漂移校正容差（px）：scrollend 后锚点实际位与目标位差超此值才补滚 */
 const JUMP_DRIFT_PX = 32;
@@ -85,10 +88,18 @@ async function jumpToTurn(messageId: string) {
     el = root.querySelector<HTMLElement>(`[data-mid="${messageId}"]`);
   }
   if (!el) return;
+  const turn = turnOfMsg.value.get(messageId);
+  if (turn !== undefined) pinTurn(turn); // 钉号先行：号码即时反馈，不依赖滚动完成
   autoFollow.value = false; // 跳历史位 = 非跟随态（与 restoreForConversation 同语义）
   const desired = THRESHOLD_PX - JUMP_MARGIN_PX;
   root.scrollTo({ top: Math.max(0, el.offsetTop - desired), behavior: "smooth" });
   scheduleJumpCorrection(root, el, desired);
+}
+
+/** 跳到最新 = 显式滚动意图：解钉（钉住会压住底线判定）+ 贴底跟随 */
+function jumpLatest() {
+  clearPin();
+  scrollToBottom();
 }
 
 /** smooth 滚动结束后复核：估高布局被真实渲染替换会使锚点实际位置漂移，
@@ -980,12 +991,12 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
       :active-turn="activeTurn"
       :show-latest="showScrollBtn"
       @jump="jumpToTurn"
-      @latest="scrollToBottom()"
+      @latest="jumpLatest()"
     />
 
     <!-- 「跳到最新」兜底：无导航条（<2 轮）时保留原右侧轨道按钮 -->
     <Transition name="fade-up">
-      <button v-if="showScrollBtn && anchors.length < 2" class="scroll-bottom-btn" title="回到底部并跟随最新" @click="scrollToBottom()">
+      <button v-if="showScrollBtn && anchors.length < 2" class="scroll-bottom-btn" title="回到底部并跟随最新" @click="jumpLatest()">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <line x1="12" y1="5" x2="12" y2="19" /><polyline points="19 12 12 19 5 12" />
         </svg>
