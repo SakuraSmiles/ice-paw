@@ -299,9 +299,10 @@ const refOptions = computed<RefOption[]>(() => {
   }
   const convCount = out.length;
 
-  // Agent：身份卡语义（name + desc），与 delegate 权限零冲突
+  // Agent：身份卡语义（name + desc），与 delegate 权限零冲突；
+  // id 也参与模糊匹配（精确找某个 agent 的场景，uuid 可粘贴搜索）
   for (const a of agentStore.list) {
-    if (!match(a.name)) continue;
+    if (!match(a.name) && !match(a.id)) continue;
     const code = shortCode(a.id);
     out.push({
       kind: "agent", targetId: a.id,
@@ -334,6 +335,28 @@ const refOptions = computed<RefOption[]>(() => {
 const atActive = computed(() => atQuery.value !== null && refOptions.value.length > 0);
 const activeIdx = ref(0);
 watch(refOptions, () => { activeIdx.value = 0; });
+
+/** 候选是否已在引用列表（弹层里直接可见「已引用」，不必点了才发现重复）。*/
+function isPending(opt: RefOption): boolean {
+  return chat.pendingRefs.some((r) => r.refKind === opt.kind && r.targetId === opt.targetId);
+}
+
+/** 高亮切片：query 命中段标 hit（大小写不敏感，与过滤同规则），模板渲染绿底标记。*/
+function highlightParts(text: string, query: string | null): { t: string; hit: boolean }[] {
+  const q = query?.trim().toLowerCase();
+  if (!q) return [{ t: text, hit: false }];
+  const lower = text.toLowerCase();
+  const out: { t: string; hit: boolean }[] = [];
+  let i = 0;
+  while (i < text.length) {
+    const idx = lower.indexOf(q, i);
+    if (idx === -1) { out.push({ t: text.slice(i), hit: false }); break; }
+    if (idx > i) out.push({ t: text.slice(i, idx), hit: false });
+    out.push({ t: text.slice(idx, idx + q.length), hit: true });
+    i = idx + q.length;
+  }
+  return out;
+}
 
 /** 选中候选：删掉 `@query` 文本 + push chip + 关弹层 + 焦点回输入框。
  *  重复选择（同 kind+target 已在 chip 条）不加，闪已有 chip 提示。*/
@@ -482,7 +505,12 @@ function handleKeydown(e: KeyboardEvent) {
             @click="chooseRef(opt)"
             @mousemove="activeIdx = i"
           >
-            <span class="at-option-label" :title="opt.label">{{ opt.label }}</span>
+            <span class="at-option-label" :title="opt.label">
+              <template v-for="(p, pi) in highlightParts(opt.label, atQuery)" :key="pi">
+                <span v-if="p.hit" class="at-hit">{{ p.t }}</span><template v-else>{{ p.t }}</template>
+              </template>
+            </span>
+            <span v-if="isPending(opt)" class="at-option-tag">已引用</span>
             <span class="at-option-sub">{{ opt.sub }}</span>
           </button>
         </div>
@@ -553,6 +581,10 @@ function handleKeydown(e: KeyboardEvent) {
 .at-option.active { background-color:var(--ip-color-bg-hover); }
 .at-option-label { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; color:var(--ip-color-text-primary); }
 .at-option-sub { flex-shrink:0; font-size:11px; color:var(--ip-color-text-disabled); }
+/* 已在引用列表的候选：tint 胶囊 tag（与高亮同族视觉，一眼看出选没选过） */
+.at-option-tag { flex-shrink:0; font-size:10px; line-height:1; padding:3px 7px; border-radius:var(--ip-radius-full); background:var(--ip-color-primary-tint-bg); color:var(--ip-color-primary-tint-text); }
+/* 匹配高亮：浅绿底 + tint 文字（主色 tint 约定，不用原生 mark 黄底） */
+.at-hit { background:var(--ip-color-primary-tint-bg); color:var(--ip-color-primary-tint-text); border-radius:2px; padding:0 1px; }
 
 /* @ 引用 chip：按 ref_kind 微调图标色（会话=主色 / agent=紫 / 消息=中性） */
 .ref-chip[data-ref-kind="agent"] .file-chip-icon { color:#7c6bd6; }

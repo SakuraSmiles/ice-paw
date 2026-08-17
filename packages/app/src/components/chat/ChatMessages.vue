@@ -1138,7 +1138,10 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
 .message-group.assistant .message-item + .message-item { margin-top:16px; }
 
 /* ===== 用户消息气泡 ===== */
-.message-group.user .message-bubble { padding:10px 16px; border-radius:12px; font-size:var(--ip-text-body-size); line-height:1.6; white-space:pre-wrap; word-break:break-word; background-color:var(--color-message-user-bg); color:var(--color-message-user-text); border-bottom-right-radius:4px; }
+/* flex column + 统一 gap：正文 / 引用卡 / 附件卡（含堆叠）/ 图片（含堆叠）纵向
+   排布的唯一间距来源——旧实现靠各元素零散 margin-top（6/4/0px 不一，单图单卡
+   贴正文），多元素混排时参差；卡片的独立 margin 已移除，调间距只改 gap。 */
+.message-group.user .message-bubble { display:flex; flex-direction:column; gap:8px; padding:10px 16px; border-radius:12px; font-size:var(--ip-text-body-size); line-height:1.6; white-space:pre-wrap; word-break:break-word; background-color:var(--color-message-user-bg); color:var(--color-message-user-text); border-bottom-right-radius:4px; }
 
 /* ===== 助手消息文字（无自带背景，由组容器承载气泡块）===== */
 .message-group.assistant .message-bubble { padding:0; border-radius:0; font-size:var(--ip-text-body-size); line-height:1.6; white-space:pre-wrap; word-break:break-word; background:transparent; }
@@ -1181,7 +1184,7 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
 
 /* @ 引用卡片（用户气泡内）：轻量内联卡——图标按 ref_kind 着色，agent 无跳转 */
 .user-ref-card {
-  display:flex; align-items:center; gap:6px; margin-top:6px;
+  display:flex; align-items:center; gap:6px;
   max-width:260px; padding:5px 10px; border-radius:8px;
   background:#ffffff; border:1px solid rgba(0,0,0,0.08);
   box-shadow:0 1px 2px rgba(0,0,0,0.06);
@@ -1197,13 +1200,13 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
 
 /* 多文档重叠堆叠：子卡片 position:relative 才能让 zIndex 生效；负 margin 由内联 style 给；
    堆叠态加重投影，让"一摞卡片"的层次可见 */
-.doc-stack { position:relative; margin-top:6px; max-width:260px; cursor:pointer; }
+.doc-stack { position:relative; max-width:260px; cursor:pointer; }
 .doc-stack .user-attachment-card { position:relative; box-shadow:0 3px 10px rgba(0,0,0,0.18); }
 .doc-stack .user-attachment-card:hover { background:#fafafa; }
 
 /* 多图重叠堆叠：固定方形容器，子图绝对定位错位 */
 .image-stack {
-  position:relative; width:170px; height:170px; margin-top:4px; cursor:zoom-in;
+  position:relative; width:170px; height:170px; cursor:zoom-in;
 }
 .image-stack .user-image.stacked {
   position:absolute; top:0; left:0; width:150px; height:150px;
