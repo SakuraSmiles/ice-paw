@@ -25,6 +25,7 @@ import type {
 import type { TrajectoryRow } from "../../composables/useTrajectory";
 import MarkdownRenderer from "../chat/MarkdownRenderer.vue";
 import ImagePreview from "../chat/ImagePreview.vue";
+import { termLabel } from "../../utils/termLabels";
 
 const props = defineProps<{ row: TrajectoryRow }>();
 const emit = defineEmits<{ close: [] }>();
@@ -258,7 +259,7 @@ async function copyPayload() {
             <h4 class="isec-title">终止与用量</h4>
             <div class="ikv"><span>起始时间</span><b>{{ fullTime(header.createdAt) }}</b></div>
             <div v-if="header.ended" class="ikv">
-              <span>终止原因</span><b>{{ header.ended.termination }}（{{ header.ended.rounds }} 轮）</b>
+              <span>终止原因</span><b>{{ termLabel(header.ended.termination) }}（{{ header.ended.rounds }} 轮）</b>
             </div>
             <div v-else class="insp-muted">未记录 turn_ended（进行中 / 崩溃未收尾）</div>
             <div v-if="header.ended?.usage" class="ikv">
