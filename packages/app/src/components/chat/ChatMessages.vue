@@ -215,10 +215,11 @@ function copyContent(content: string, id?: string) {
 // ===== @ 引用：气泡引用按钮（一键成 chip）+ 历史引用卡片（点击跳转） =====
 const quotedId = ref<string | null>(null);
 
-/** 引用按钮：把该消息（assistant=整组）推入输入框引用 chip，与 @ 弹层同产物。*/
+/** 引用按钮：把该消息（assistant=整组）推入输入框引用 chip，与 @ 弹层同产物。
+ *  重复点击不重复加 chip（store 去重），成功态照常显示——按钮语义已满足。*/
 function quoteMessage(msgId: string, role: string) {
   const kindLabel = role === "assistant" ? "回答" : "消息";
-  chat.pendingRefs.push({
+  chat.addPendingRef({
     refKind: "message",
     targetId: msgId,
     display: `${kindLabel}#${shortCode(msgId)}`,

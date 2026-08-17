@@ -176,6 +176,15 @@ export const useChatStore = defineStore("chat", () => {
   // 与 pendingImages 同生命周期：sendMessage 并块后清空。
   const pendingRefs = ref<PendingRef[]>([]);
 
+  /** 加入引用 chip；同 kind+target 已存在则不加（返回 false，调用方闪已有 chip 反馈）。*/
+  function addPendingRef(ref: PendingRef): boolean {
+    if (pendingRefs.value.some((r) => r.refKind === ref.refKind && r.targetId === ref.targetId)) {
+      return false;
+    }
+    pendingRefs.value.push(ref);
+    return true;
+  }
+
   // ===== 流式发送 =====
   const sending = ref(false);
   const streamingText = ref("");
@@ -646,7 +655,7 @@ export const useChatStore = defineStore("chat", () => {
     deleteConversation, undoDeleteConversation, hasPendingDelete, pinConversation,
     // 事件层调用的状态动作（freezeCurrentAssistant 把流式态冻结进末条 assistant）
     resetSendTimeout, clearSendTimeout, freezeCurrentAssistant, resetRoundStreaming,
-    createConversation, clearActiveConversation, reset,
+    createConversation, clearActiveConversation, reset, addPendingRef,
     openTrajectoryNext, openConversationAtTrajectory,
   };
 });
