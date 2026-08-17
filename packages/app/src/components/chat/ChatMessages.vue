@@ -25,7 +25,7 @@ import BudgetPill from "./BudgetPill.vue";
 import { useThinkingTimer } from "../../composables/useThinkingTimer";
 import { useScrollFollow } from "../../composables/useScrollFollow";
 import { useTurnRail } from "../../composables/useTurnRail";
-import { useActiveTurn } from "../../composables/useActiveTurn";
+import { useActiveTurn, THRESHOLD_PX } from "../../composables/useActiveTurn";
 import { formatTokenCount } from "../../utils/format";
 import type { Message, MessageRole, PlanItem } from "../../types";
 
@@ -62,13 +62,22 @@ watch(() => chat.messages[chat.messages.length - 1]?.id, () => {
 // composable 自挂在 listRef 上）
 watch([() => chat.messages.length, anchors], () => { void nextTick(refreshActiveTurn); });
 
-// ---- 跳转：窗口内直接滚；窗口外逐页补到锚点（上限防失控） ----
+// ---- 跳转：窗口内直接滚；窗口外逐页补到锚点（无进展即止，无页数上限——
+// 大会话深跳不静默失败）。落点对齐视位判定线（P11：跳后 activeTurn 读 N-1
+// 的根因是落点 12px 与判定线 80px 错位，估高漂移时锚点落在线下）；滚动结束
+// 后复核漂移并瞬时校正（content-visibility 估高 → 渲染后真实高度的换算） ----
+/** 落点余量（px）：锚点顶边停在判定线上方这一距离，pickActiveTurn 确定性读出目标轮 */
+const JUMP_MARGIN_PX = 24;
+/** 漂移校正容差（px）：scrollend 后锚点实际位与目标位差超此值才补滚 */
+const JUMP_DRIFT_PX = 32;
+/** 连点/切会话时作废旧校正（旧闭包的 el 可能已不在 DOM） */
+let jumpToken = 0;
+
 async function jumpToTurn(messageId: string) {
   const root = listRef.value;
   if (!root) return;
   let el = root.querySelector<HTMLElement>(`[data-mid="${messageId}"]`);
-  let guard = 0;
-  while (!el && chat.hasMore && guard++ < 60) {
+  while (!el && chat.hasMore) {
     const before = chat.messages.length;
     await chat.loadMoreMessages();
     if (chat.messages.length === before) break; // 无进展防死循环
@@ -77,7 +86,28 @@ async function jumpToTurn(messageId: string) {
   }
   if (!el) return;
   autoFollow.value = false; // 跳历史位 = 非跟随态（与 restoreForConversation 同语义）
-  root.scrollTo({ top: Math.max(0, el.offsetTop - 12), behavior: "smooth" });
+  const desired = THRESHOLD_PX - JUMP_MARGIN_PX;
+  root.scrollTo({ top: Math.max(0, el.offsetTop - desired), behavior: "smooth" });
+  scheduleJumpCorrection(root, el, desired);
+}
+
+/** smooth 滚动结束后复核：估高布局被真实渲染替换会使锚点实际位置漂移，
+ *  超容差则瞬时补滚一次（scrollend 优先，环境缺失时 500ms 定时兜底）。 */
+function scheduleJumpCorrection(root: HTMLElement, el: HTMLElement, desired: number) {
+  const token = ++jumpToken;
+  const check = () => {
+    if (token !== jumpToken) return; // 已有更新的跳转/校正，本次作废
+    const top = el.getBoundingClientRect().top - root.getBoundingClientRect().top;
+    const drift = top - desired;
+    if (Math.abs(drift) > JUMP_DRIFT_PX) {
+      root.scrollTo({ top: Math.max(0, root.scrollTop + drift), behavior: "auto" });
+    }
+  };
+  if ("onscrollend" in root) {
+    root.addEventListener("scrollend", check, { once: true });
+  } else {
+    setTimeout(check, 500);
+  }
 }
 
 // 工具调用卡片展开状态

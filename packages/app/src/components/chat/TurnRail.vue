@@ -103,11 +103,14 @@ function tickTime(iso: string): string {
         @click="emit('jump', t.messageId)"
       />
 
-      <!-- hover tooltip（轮号 + 首行预览 + 时间） -->
+      <!-- hover tooltip（轮号 + 首行预览 + 时间 + 锚点 id 前缀）；
+           id 行是诊断辅助（P11 台账「先采集」）：症状复现时 hover 即知
+           锚点 messageId，与视位轮号对查定位，不用盲改 -->
       <div v-if="hover" class="turn-tip" :style="{ top: `${hover.top}px` }">
         <span class="turn-tip-no">第 {{ hover.tick.turn }} 轮</span>
         <span class="turn-tip-preview">{{ hover.tick.preview || "(无文本)" }}</span>
         <span class="turn-tip-time">{{ tickTime(hover.tick.createdAt) }}</span>
+        <span class="turn-tip-mid">#{{ hover.tick.messageId.slice(0, 8) }}</span>
       </div>
     </div>
 
@@ -242,6 +245,7 @@ function tickTime(iso: string): string {
   text-overflow: ellipsis;
 }
 .turn-tip-time { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
+.turn-tip-mid { font-size: 10px; color: var(--ip-color-text-disabled); font-family: var(--ip-font-mono, monospace); }
 
 /* 「跳到最新」：下三角小圆钮（区别于轮次线的视觉语系） */
 .turn-latest {

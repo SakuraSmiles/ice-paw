@@ -16,8 +16,10 @@
 import { computed, onBeforeUnmount, ref, watch, type Ref } from "vue";
 import type { TurnAnchor } from "../types";
 
-/** 视口顶判定线（px）：锚点顶边越过此线即视为「正在读这一轮」 */
-const THRESHOLD_PX = 80;
+/** 视口顶判定线（px）：锚点顶边越过此线即视为「正在读这一轮」。
+ *  导出供跳转落点对齐复用（ChatMessages.jumpToTurn）——单一真相源，跳转
+ *  落点与视位判定线永不漂移。 */
+export const THRESHOLD_PX = 80;
 
 /** 纯函数：由「当前相交锚点的 (轮号, 距视口顶距离)」判定活动轮。
  *  - 空列表 → null（视口落在长轮中部等，调用方保持上次值）
