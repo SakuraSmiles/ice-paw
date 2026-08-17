@@ -68,18 +68,21 @@ describe("ProjectSwitcher 胶囊形态", () => {
   it("chip 点击开向下切换菜单，选中项 emit select 并关闭", async () => {
     const w = mountSwitcher();
     await w.find(".proj-chip").trigger("click");
-    expect(w.find(".switcher-menu").exists()).toBe(true);
+    // 菜单常驻 DOM（class 驱动开合），断言 open 类
+    expect(w.find(".switcher-menu").classes()).toContain("open");
+    expect(w.find(".switcher-overlay").classes()).toContain("open");
     expect(w.findAll(".switcher-item").length).toBe(3); // 散落 + 2 项目
 
     await w.findAll(".switcher-item")[2].trigger("click"); // Beta
     expect(w.emitted("select")?.[0]).toEqual(["p2"]);
-    expect(w.find(".switcher-menu").exists()).toBe(false);
+    expect(w.find(".switcher-menu").classes()).not.toContain("open");
+    expect(w.find(".switcher-overlay").classes()).not.toContain("open");
   });
 
   it("管理钮 emit manage，不牵动菜单", async () => {
     const w = mountSwitcher();
     await w.find('.capsule-btn[title="管理项目"]').trigger("click");
     expect(w.emitted("manage")).toHaveLength(1);
-    expect(w.find(".switcher-menu").exists()).toBe(false);
+    expect(w.find(".switcher-menu").classes()).not.toContain("open");
   });
 });
