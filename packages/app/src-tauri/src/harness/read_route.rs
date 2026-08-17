@@ -51,7 +51,8 @@ pub enum ReadRoute {
 #[derive(Debug, Clone, Serialize)]
 pub struct RouteDecision {
     pub route: ReadRoute,
-    /// 如 `green` / `no_events` / `reconcile_diffs:3` / `mixed_epoch` / `forced`。
+    /// 如 `green` / `no_events`（有行零事件，异常）/ `no_events_empty`（空会话，正常）/
+    /// `reconcile_diffs:3` / `mixed_epoch` / `forced`。
     pub reason: String,
     /// 决策所依据对账报告的事件总数（零事件会话为 0）。
     pub events_total: usize,
@@ -180,7 +181,14 @@ impl ReadRouteRegistry {
 
         let decision = if max_seq == 0 {
             // 零事件：pre-Phase-0 旧会话，无事件可派生。
-            RouteDecision::legacy("no_events", 0, 0)
+            // 细分（降噪）：零事件**且零行** = 新建未发消息的空会话——正常形态，
+            // 监控侧按 debug 报（no_events_empty）；**有行零事件**才是异常
+            // （backfill 漏网残留 / 写路径漏发事件），保持 no_events + error 告警。
+            if max_rowid == 0 {
+                RouteDecision::legacy("no_events_empty", 0, 0)
+            } else {
+                RouteDecision::legacy("no_events", 0, 0)
+            }
         } else {
             let report = reconcile_session(pool, conversation_id).await?;
             let d = classify(&report);
@@ -756,6 +764,18 @@ mod tests {
         let d = reg.resolve(&pool, "c1").await.unwrap();
         assert_eq!(d.route, ReadRoute::Legacy);
         assert_eq!(d.reason, "no_events");
+    }
+
+    /// 路由：零事件**且零行**（新建未发消息的空会话）→ no_events_empty（正常形态，
+    /// 监控侧降 debug；有行零事件才是异常，见上一用例）。
+    #[tokio::test]
+    async fn resolve_empty_conversation_is_no_events_empty() {
+        let pool = seeded_pool().await;
+        let reg = ReadRouteRegistry::new();
+        // 无事件、无行——只建会话不发消息
+        let d = reg.resolve(&pool, "c1").await.unwrap();
+        assert_eq!(d.route, ReadRoute::Legacy);
+        assert_eq!(d.reason, "no_events_empty");
     }
 
     /// **Phase 2B 行为锁定**：零事件会话（boot backfill 未覆盖的残留，如孤儿降级）
