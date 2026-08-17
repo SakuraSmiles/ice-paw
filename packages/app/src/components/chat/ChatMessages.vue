@@ -27,6 +27,8 @@ import { useScrollFollow } from "../../composables/useScrollFollow";
 import { useTurnRail } from "../../composables/useTurnRail";
 import { useActiveTurn, THRESHOLD_PX } from "../../composables/useActiveTurn";
 import { formatTokenCount } from "../../utils/format";
+import { shortCode, parseReferenceBlocks, resolveGroupMid } from "../../utils/refs";
+import type { ParsedRef } from "../../utils/refs";
 import type { Message, MessageRole, PlanItem } from "../../types";
 
 const chat = useChatStore();
@@ -207,6 +209,33 @@ function copyContent(content: string, id?: string) {
   if (id) {
     copiedId.value = id;
     setTimeout(() => { copiedId.value = null; }, 2000);
+  }
+}
+
+// ===== @ 引用：气泡引用按钮（一键成 chip）+ 历史引用卡片（点击跳转） =====
+const quotedId = ref<string | null>(null);
+
+/** 引用按钮：把该消息（assistant=整组）推入输入框引用 chip，与 @ 弹层同产物。*/
+function quoteMessage(msgId: string, role: string) {
+  const kindLabel = role === "assistant" ? "回答" : "消息";
+  chat.pendingRefs.push({
+    refKind: "message",
+    targetId: msgId,
+    display: `${kindLabel}#${shortCode(msgId)}`,
+  });
+  quotedId.value = msgId;
+  setTimeout(() => { if (quotedId.value === msgId) quotedId.value = null; }, 2000);
+}
+
+/** 历史引用卡片点击跳转：会话 → 打开该会话；消息 → 同会话滚动定位；
+ *  agent → 无动作（title 已示身份）。目标已删（会话不在列表）则静默 no-op。*/
+function openReference(r: ParsedRef) {
+  if (r.refKind === "conversation") {
+    if (chat.conversations.some((c) => c.id === r.targetId)) chat.selectConversation(r.targetId);
+    return;
+  }
+  if (r.refKind === "message") {
+    void jumpToTurn(resolveGroupMid(chat.messages, r.targetId));
   }
 }
 
@@ -650,8 +679,21 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
           <!-- ===== 用户消息组（单条，透明壳）===== -->
           <template v-if="group.role === 'user'">
             <div class="message-content user">
-              <div v-if="cleanUserContent(group.items[0].msg.content) || hasUserMedia(group.items[0].msg)" class="message-bubble">
+              <div v-if="cleanUserContent(group.items[0].msg.content) || hasUserMedia(group.items[0].msg) || parseReferenceBlocks(group.items[0].msg.content_blocks).length > 0" class="message-bubble">
                 <span v-if="cleanUserContent(group.items[0].msg.content)" class="user-text">{{ cleanUserContent(group.items[0].msg.content) }}</span>
+
+                <!-- @ 引用卡片（快照存在消息里；点击跳转：会话切换 / 消息定位） -->
+                <div
+                  v-for="r in parseReferenceBlocks(group.items[0].msg.content_blocks)"
+                  :key="'ref-' + r.targetId"
+                  class="user-ref-card"
+                  :data-ref-kind="r.refKind"
+                  :title="r.refKind === 'agent' ? `Agent：${r.display}` : '跳转到引用对象'"
+                  @click="openReference(r)"
+                >
+                  <svg class="ref-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>
+                  <span class="ref-label">{{ r.display }}</span>
+                </div>
 
                 <!-- 文档附件：单个直显 / ≥2 重叠堆叠；点击看提取原文 -->
                 <template v-if="parseAttachmentBlocks(group.items[0].msg.content_blocks).length === 1">
@@ -718,7 +760,7 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
                   <span v-if="parseImageBlocks(group.items[0].msg.content_blocks).length > 3" class="stack-badge">+{{ parseImageBlocks(group.items[0].msg.content_blocks).length - 3 }}</span>
                 </div>
               </div>
-              <div v-if="cleanUserContent(group.items[0].msg.content) || hasUserMedia(group.items[0].msg)" class="message-footer">
+              <div v-if="cleanUserContent(group.items[0].msg.content) || hasUserMedia(group.items[0].msg) || parseReferenceBlocks(group.items[0].msg.content_blocks).length > 0" class="message-footer">
                 <div class="footer-left">
                   <span class="message-time">{{ formatTime(group.items[0].msg.created_at) }}</span>
                 </div>
@@ -727,6 +769,10 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
                     <svg v-if="copiedId !== group.items[0].msg.id" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                       <rect x="9" y="9" width="13" height="13" rx="2" ry="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
                     </svg>
+                    <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--ip-success-base, #16a34a)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+                  </button>
+                  <button class="copy-btn" :title="quotedId === group.items[0].msg.id ? '已加入输入框引用' : '引用'" @click="quoteMessage(group.items[0].msg.id, 'user')">
+                    <svg v-if="quotedId !== group.items[0].msg.id" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>
                     <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--ip-success-base, #16a34a)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
                   </button>
                 </div>
@@ -928,6 +974,11 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
                   </svg>
                   <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--ip-success-base, #16a34a)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
                 </button>
+                <!-- 引用整组（组首 id；后端按连续 assistant 组展开=一次完整回答） -->
+                <button class="copy-btn" :title="quotedId === group.items[0].msg.id ? '已加入输入框引用' : '引用'" @click="quoteMessage(group.items[0].msg.id, 'assistant')">
+                  <svg v-if="quotedId !== group.items[0].msg.id" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>
+                  <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--ip-success-base, #16a34a)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+                </button>
               </div>
             </div>
           </template>
@@ -1126,6 +1177,22 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
 .user-attachment-card.clickable:hover { background:#f3f4f6; }
 .user-image.clickable { cursor:zoom-in; transition:transform var(--ip-duration-fast) var(--ip-ease-out); }
 .user-image.clickable:hover { transform:scale(1.02); }
+
+/* @ 引用卡片（用户气泡内）：轻量内联卡——图标按 ref_kind 着色，agent 无跳转 */
+.user-ref-card {
+  display:flex; align-items:center; gap:6px; margin-top:6px;
+  max-width:260px; padding:5px 10px; border-radius:8px;
+  background:#ffffff; border:1px solid rgba(0,0,0,0.08);
+  box-shadow:0 1px 2px rgba(0,0,0,0.06);
+  cursor:pointer; transition:background var(--ip-duration-fast) var(--ip-ease-out);
+  color:#1f2937; font-size:12.5px;
+}
+.user-ref-card:hover { background:#f3f4f6; }
+.user-ref-card .ref-icon { flex:none; color:var(--ip-primary-600, #2e8d64); }
+.user-ref-card[data-ref-kind="agent"] .ref-icon { color:#7c6bd6; }
+.user-ref-card[data-ref-kind="message"] .ref-icon { color:#6b7280; }
+.user-ref-card[data-ref-kind="agent"] { cursor:default; }
+.user-ref-card .ref-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
 /* 多文档重叠堆叠：子卡片 position:relative 才能让 zIndex 生效；负 margin 由内联 style 给；
    堆叠态加重投影，让"一摞卡片"的层次可见 */

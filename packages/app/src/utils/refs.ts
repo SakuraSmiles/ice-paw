@@ -13,3 +13,42 @@ export function shortCode(id: string): string {
   }
   return String((h >>> 0) % 10000).padStart(4, "0");
 }
+
+/** 消息 content_blocks 里的 Reference 块（ChatMessages 渲染引用卡片用）。 */
+export interface ParsedRef {
+  refKind: "conversation" | "agent" | "message";
+  targetId: string;
+  display: string;
+}
+
+/** 解析 content_blocks 中的 reference 块（同 parseAttachmentBlocks 模式）。 */
+export function parseReferenceBlocks(contentBlocks: string | null | undefined): ParsedRef[] {
+  if (!contentBlocks || contentBlocks === "[]") return [];
+  try {
+    const blocks: unknown[] = JSON.parse(contentBlocks);
+    if (!Array.isArray(blocks)) return [];
+    return blocks.filter(
+      (b): b is { ref_kind: ParsedRef["refKind"]; target_id: string; display: string } =>
+        typeof b === "object" && b !== null && (b as Record<string, unknown>).type === "reference",
+    ).map((b) => ({ refKind: b.ref_kind, targetId: b.target_id, display: b.display }));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 消息 id → 所在消息组的组首 id（@消息 跳转定位用）。
+ * ChatMessages 的 DOM 定位符 data-mid 挂在组首（连续同 role 合并组）；引用目标
+ * 可能是组中任意一条（历史引用/乐观 id 刷新后），向前回溯到 role 变化处即组首。
+ * 未命中返回原 id（调用方按 data-mid 直查，查不到自有兜底）。
+ */
+export function resolveGroupMid<T extends { id: string; role: string }>(
+  messages: T[],
+  messageId: string,
+): string {
+  const idx = messages.findIndex((m) => m.id === messageId);
+  if (idx < 0) return messageId;
+  let head = idx;
+  while (head > 0 && messages[head - 1].role === messages[idx].role) head--;
+  return messages[head].id;
+}
