@@ -10,6 +10,7 @@
 
 pub mod attachments;
 pub mod authority;
+pub mod backfill;
 pub mod batch_writer;
 pub mod budget;
 pub mod chat_state;
