@@ -57,7 +57,10 @@ fn is_separator(ch: char) -> bool {
 ///
 /// 用 bigram 而非单字：常见单字（如"的""用"）噪声过大，会让大量不相关描述命中子串匹配；
 /// bigram 显著降低误匹配，同时仍能在含中文描述（远程工具的 server 名前缀）上命中。
-fn tokenize(text: &str) -> Vec<String> {
+///
+/// pub(crate)：references.rs 复用作 @引用 选轮分词（发送正文 ↔ 被引会话轮文本
+/// 的相关性打分），与工具排序同一套 CJK 语义。
+pub(crate) fn tokenize(text: &str) -> Vec<String> {
     let lower = text.to_lowercase();
     let mut tokens = Vec::new();
     let mut ascii_buf = String::new();
