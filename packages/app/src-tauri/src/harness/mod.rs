@@ -34,6 +34,8 @@ pub mod reconcile;
 pub mod retry;
 pub mod scoring;
 pub mod session_runner;
+#[cfg(test)]
+mod session_runner_e2e;
 pub mod stream_consumer;
 pub mod summary_provider;
 pub mod tool_executor;
