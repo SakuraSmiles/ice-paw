@@ -205,10 +205,9 @@ function timeAgo(dateStr: string): string {
       </div>
     </div>
 
-    <!-- 会话列表（TransitionGroup：会话进出淡入、touchConversation 重排时平滑让位） -->
-    <TransitionGroup name="conv-list" tag="nav" class="conv-list">
-      <!-- 新建对话（第一条，特殊样式） -->
-      <button key="conv-new" class="conv-item conv-item-new" @click="newChat">
+    <!-- 顶部固定区：新建对话（单行，常驻不随列表滚走）+ 项目空间胶囊（左内容右按钮） -->
+    <div class="sidebar-top">
+      <button class="conv-item conv-item-new" @click="newChat">
         <div class="conv-item-title">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <line x1="12" y1="5" x2="12" y2="19" />
@@ -216,12 +215,24 @@ function timeAgo(dateStr: string): string {
           </svg>
           <span class="conv-name">新建对话</span>
         </div>
-        <div class="conv-preview">开始一个新的对话…</div>
       </button>
 
-      <!-- 分隔线 -->
-      <div key="conv-divider" class="conv-divider"></div>
+      <!-- 当前项目空间胶囊（开关态内部自持，select/create/manage 上交处理） -->
+      <ProjectSwitcher
+        :current-project-name="currentProjectName"
+        :scope-project-id="scopeProjectId"
+        :projects="project.activeProjects"
+        @select="selectProject"
+        @create="quickCreateProject"
+        @manage="gotoManage"
+      />
+    </div>
 
+    <!-- 分隔线（钉在列表上方，不随列表滚动） -->
+    <div class="conv-divider"></div>
+
+    <!-- 会话列表（TransitionGroup：会话进出淡入、touchConversation 重排时平滑让位） -->
+    <TransitionGroup name="conv-list" tag="nav" class="conv-list">
       <!-- 骨架屏只在「无可显示内容」时出现（首次加载语义）。若不加空判断，
            委派等触发的后台列表刷新会让骨架屏叠在仍可见的列表上方闪现 +
            布局下压再弹回（v-for 不在 v-if 互斥链内）——即"委派时侧栏异常动画" -->
@@ -259,19 +270,8 @@ function timeAgo(dateStr: string): string {
       </button>
     </TransitionGroup>
 
-    <!-- 底部：项目空间切换器（展开内含切换项 + 管理入口）/ 系统设置 -->
+    <!-- 底部：系统设置 -->
     <div class="sidebar-footer">
-      <!-- 当前项目空间切换器（开关态内部自持，select/manage 上交处理） -->
-      <ProjectSwitcher
-        :current-project-name="currentProjectName"
-        :scope-project-id="scopeProjectId"
-        :projects="project.activeProjects"
-        @select="selectProject"
-        @create="quickCreateProject"
-        @manage="gotoManage"
-      />
-
-      <!-- 设置：独立的系统设置入口 -->
       <button class="footer-btn" :class="{ active: isSettingsPage }" @click="router.push('/settings/general')">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="3" />
@@ -392,6 +392,15 @@ function timeAgo(dateStr: string): string {
   color: var(--ip-color-text-tertiary);
 }
 
+/* 顶部固定区：新建对话 + 项目空间胶囊（不随会话列表滚动） */
+.sidebar-top {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 8px 8px;
+  flex-shrink: 0;
+}
+
 /* 会话列表 */
 .conv-list {
   position: relative; /* leave-active 绝对定位的锚（离场项脱离流防跳动） */
@@ -458,8 +467,11 @@ function timeAgo(dateStr: string): string {
   margin-right: 2px;
 }
 
-/* 新建对话项（特殊样式） */
+/* 新建对话项（特殊样式，单行常驻顶部） */
 .conv-item-new {
+  flex-direction: row;
+  align-items: center;
+  padding: 8px 12px;
   border: 1px dashed var(--ip-color-border-default);
   background-color: transparent;
   transition: all var(--ip-duration-fast) var(--ip-ease-out);
@@ -485,17 +497,12 @@ function timeAgo(dateStr: string): string {
   font-weight: var(--ip-font-weight-medium);
 }
 
-.conv-item-new .conv-preview {
-  padding-left: 22px;
-  color: var(--ip-color-text-tertiary);
-  font-size: var(--ip-text-caption-size);
-}
-
-/* 分隔线 */
+/* 分隔线（钉在会话列表上方） */
 .conv-divider {
   height: 1px;
   background-color: var(--color-sidebar-border);
-  margin: 4px 4px 2px;
+  margin: 0 12px 4px;
+  flex-shrink: 0;
 }
 
 .conv-item-title {
@@ -521,15 +528,6 @@ function timeAgo(dateStr: string): string {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.conv-preview {
-  font-size: var(--ip-text-caption-size);
-  color: var(--ip-color-text-tertiary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  line-height: 1.4;
 }
 
 .conv-meta {
