@@ -44,14 +44,17 @@ pub fn lexical_normalize(path: &Path) -> PathBuf {
             Err(_) => strip_verbatim(path),
         }
     };
-    // 组件级消解 ./..：`..` 只回退 Normal 组件，不许弹出盘符/根
+    // 组件级消解 ./..：`..` 恰好回退**一个** Normal 组件，不许弹出盘符/根
     // （否则 C:\..\x 会塌成驱动器相对路径 C:x，比较语义错乱）。
+    // ⚠️ 用 `if` 不是 `while`：连环弹出会把 /ws/sub/../file 错算成 /file
+    // （丢 ws 段）——Windows 上无盘符路径先过 absolute() 预消解 `..` 掩盖了
+    // 此 bug，Linux 绝对路径直达循环即暴露（CI 2026-08-17）。
     let mut comps: Vec<Component<'_>> = Vec::new();
     for comp in abs.components() {
         match comp {
             Component::CurDir => {}
             Component::ParentDir => {
-                while matches!(comps.last(), Some(Component::Normal(_))) {
+                if matches!(comps.last(), Some(Component::Normal(_))) {
                     comps.pop();
                 }
             }
@@ -250,6 +253,24 @@ mod tests {
         // C:\..\x 不得塌成驱动器相对路径 C:x
         let n = lexical_normalize(Path::new(r"C:\..\x"));
         assert_eq!(n, PathBuf::from(r"C:\x"));
+    }
+
+    /// 回归（CI Linux 2026-08-17）：`..` 恰好回退一个组件。`while` 连环弹
+    /// 版本会把 `C:\ws\sub\..\file` 错算成 `C:\file`（丢 ws 段）——无盘符
+    /// 路径先过 absolute() 预消解 `..` 掩盖了它，带盘符路径直达词法循环，
+    /// Windows 侧也能钉住此语义。
+    #[cfg(windows)]
+    #[test]
+    fn dotdot_pops_exactly_one_component() {
+        assert_eq!(
+            lexical_normalize(Path::new(r"C:\ws\sub\..\file")),
+            PathBuf::from(r"C:\ws\file")
+        );
+        // 连续 .. 各弹一个
+        assert_eq!(
+            lexical_normalize(Path::new(r"C:\ws\a\b\..\..\c")),
+            PathBuf::from(r"C:\ws\c")
+        );
     }
 
     // ----- 会话授权缓存键 -----
