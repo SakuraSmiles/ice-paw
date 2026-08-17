@@ -17,9 +17,8 @@ use ice_paw_lib::db::models::NewMessage;
 use ice_paw_lib::db::repo;
 use ice_paw_lib::harness::event_log::{
     log_assistant_message, log_attachment_stored, log_tool_execution, log_tool_result_message,
-    log_turn_context, log_turn_ended, log_user_message, AssistantMessagePayload,
-    AttachmentPageItem, AttachmentStoredPayload, EventCtx, TurnContextPayload, TurnEndedPayload,
-    UserMessagePayload,
+    log_turn_context, log_turn_ended, log_user_message, AttachmentPageItem,
+    AttachmentStoredPayload, EventCtx, TurnContextPayload, TurnEndedPayload,
 };
 use ice_paw_lib::harness::read_route::{ReadRoute, ReadRouteRegistry};
 use ice_paw_lib::harness::reconcile::{reconcile_session, ReconcileReport};
@@ -124,11 +123,8 @@ async fn script_consistent_turn(pool: &SqlitePool) {
         pool,
         &ev,
         "turn-1",
-        &UserMessagePayload {
-            v: 1,
-            content: "看这张图，再读一下 README".into(),
-            blocks: user_blocks.clone(),
-        },
+        "看这张图，再读一下 README",
+        &user_blocks,
     )
     .await;
     log_attachment_stored(
@@ -180,16 +176,13 @@ async fn script_consistent_turn(pool: &SqlitePool) {
         pool,
         &ev,
         "msg-a1",
-        &AssistantMessagePayload {
-            v: 1,
-            model: Some("glm-5.2".into()),
-            content: "我来看一下".into(),
-            blocks: a1_blocks.clone(),
-            token_count: Some(12),
-            duration_ms: None,
-            round: 0,
-            continuation: false,
-        },
+        Some("glm-5.2"),
+        "我来看一下",
+        &a1_blocks,
+        Some(12),
+        None,
+        0,
+        false,
     )
     .await;
     log_tool_execution(
@@ -229,16 +222,13 @@ async fn script_consistent_turn(pool: &SqlitePool) {
         pool,
         &ev,
         "msg-a2",
-        &AssistantMessagePayload {
-            v: 1,
-            model: Some("glm-5.2".into()),
-            content: "README 说这是本地优先的 LLM 工作站。".into(),
-            blocks: a2_blocks.clone(),
-            token_count: Some(20),
-            duration_ms: None,
-            round: 1,
-            continuation: false,
-        },
+        Some("glm-5.2"),
+        "README 说这是本地优先的 LLM 工作站。",
+        &a2_blocks,
+        Some(20),
+        None,
+        1,
+        false,
     )
     .await;
     log_turn_ended(

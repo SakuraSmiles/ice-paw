@@ -73,7 +73,7 @@ use crate::harness::cleanup::{
     fail_round_and_cancel, finalize_assistant_message, finalize_assistant_without_tool_use,
     finalize_cancel, finalize_success, PersistOutcome,
 };
-use crate::harness::event_log::{self, AssistantMessagePayload, EventCtx};
+use crate::harness::event_log::{self, EventCtx};
 use crate::harness::hooks::{has_actions, run_hooks};
 use crate::harness::observable::{RoundState, RoundTimer};
 use crate::infra::protocol::{ChatAssistantStartPayload, ChatMessage, ContentBlock, TokenUsage};
@@ -223,16 +223,13 @@ async fn finalize_guard_logged(
                 pool,
                 ev,
                 asst_msg_id,
-                &AssistantMessagePayload {
-                    v: 1,
-                    model: model.map(str::to_string),
-                    content: content.clone(),
-                    blocks: blocks.clone(),
-                    token_count: completion_tokens.map(|t| t.max(1) as i64),
-                    duration_ms: Some(duration_ms),
-                    round,
-                    continuation,
-                },
+                model,
+                content,
+                blocks,
+                completion_tokens.map(|t| t.max(1) as i64),
+                Some(duration_ms),
+                round,
+                continuation,
             )
             .await;
         }
@@ -786,16 +783,13 @@ async fn stream_loop_inner(
             &ctx.pool,
             &ev,
             &current_asst_msg_id,
-            &AssistantMessagePayload {
-                v: 1,
-                model: ctx.asst_model.clone(),
-                content: msg_text.clone(),
-                blocks: round_blocks.clone(),
-                token_count: round_completion_tokens.map(|t| t.max(1) as i64),
-                duration_ms: Some(round_gen_ms),
-                round: tool_round,
-                continuation: !continue_full_text.is_empty(),
-            },
+            ctx.asst_model.as_deref(),
+            &msg_text,
+            &round_blocks,
+            round_completion_tokens.map(|t| t.max(1) as i64),
+            Some(round_gen_ms),
+            tool_round,
+            !continue_full_text.is_empty(),
         )
         .await;
         // 阶段 C 已对当前占位落库+发事件 → loop 顶 cancel 不再补 discard（见标记定义处）

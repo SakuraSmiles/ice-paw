@@ -288,17 +288,8 @@ pub(crate) async fn run_agent_turn(
 
     // --- session_events 影子写入（Phase 0）：turn 用户侧事实 ---
     let ev = EventCtx::new(&conv_id, &user_msg_id, &agent.id);
-    event_log::log_user_message(
-        pool,
-        &ev,
-        &user_msg_id,
-        &event_log::UserMessagePayload {
-            v: 1,
-            content: user_content_snapshot,
-            blocks: persist_blocks,
-        },
-    )
-    .await;
+    event_log::log_user_message(pool, &ev, &user_msg_id, &user_content_snapshot, &persist_blocks)
+        .await;
     // 附件留存事实——仅元信息（正文在 messages/分页表，字节在 files 表；防三重冗余）。
     if !attach_db_inputs.is_empty() {
         event_log::log_attachment_stored(

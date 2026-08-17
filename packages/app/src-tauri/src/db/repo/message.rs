@@ -224,6 +224,22 @@ pub async fn id_rowid_map(
     Ok(rows.into_iter().collect())
 }
 
+/// 按 id 取行 `content_blocks` 原文（Image 引用水合的行侧原语，S1 阶段 3）。
+///
+/// `messages.id` 全局唯一（TEXT PRIMARY KEY）——事件 payload 的 image_ref 只带
+/// message_id + block_index，水合即「查行 → parse → 取下标」。缺行 → None
+/// （调用方按 [`crate::harness::derive::IMAGE_UNRECOVERABLE_MARKER`] 降级）。
+pub async fn get_content_blocks_by_id(
+    pool: &SqlitePool,
+    id: &str,
+) -> AppResult<Option<String>> {
+    let row: Option<(String,)> = sqlx::query_as("SELECT content_blocks FROM messages WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.map(|(content_blocks,)| content_blocks))
+}
+
 /// 写入新消息
 pub async fn create(pool: &SqlitePool, id: &str, new_msg: &NewMessage) -> AppResult<MessageRow> {
     // 基本校验
