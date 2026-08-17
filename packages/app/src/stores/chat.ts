@@ -27,6 +27,14 @@ import { useAgentStore } from "./agent";
  *  （120s 到点后端自动取消并发 tool-auth-request-cancel 清条目）*/
 export const TOOL_AUTH_TIMEOUT_MS = 120_000;
 
+/** @ 引用条目（输入框 chip；发送时映射为 ContentBlock reference 块） */
+export interface PendingRef {
+  refKind: "conversation" | "agent" | "message";
+  targetId: string;
+  /** 展示名（`名称#短码`；短码由 utils/refs.ts shortCode 生成，纯装饰） */
+  display: string;
+}
+
 export const useChatStore = defineStore("chat", () => {
   // ===== 会话列表（全部会话，不限 agent） =====
   const conversations = ref<Conversation[]>([]);
@@ -163,6 +171,11 @@ export const useChatStore = defineStore("chat", () => {
   // 不进 ContentBlock（LLM 读不了 OOXML 二进制）。前端只持有 base64 + 文件名 + 字节数（用于展示）。
   const pendingFiles = ref<{ name: string; data: string; size: number }[]>([]);
 
+  // ===== @ 引用列表（会话 / agent / 消息）=====
+  // Reference 块纯 UI 卡（后端 send 时 materialize 为快照 Text 给 LLM）。
+  // 与 pendingImages 同生命周期：sendMessage 并块后清空。
+  const pendingRefs = ref<PendingRef[]>([]);
+
   // ===== 流式发送 =====
   const sending = ref(false);
   const streamingText = ref("");
@@ -298,6 +311,15 @@ export const useChatStore = defineStore("chat", () => {
         blocks.push({ type: "image", data: img.data, media_type: img.mediaType });
       }
       pendingImages.value = [];
+    }
+
+    // @ 引用：Reference 块（纯 UI 卡）进 blocks；后端 send 时为每个 Reference
+    // 紧随插入展开快照 Text（发 LLM）——Reference 本身保留落库渲染卡片。
+    if (pendingRefs.value.length > 0) {
+      for (const r of pendingRefs.value) {
+        blocks.push({ type: "reference", ref_kind: r.refKind, target_id: r.targetId, display: r.display });
+      }
+      pendingRefs.value = [];
     }
 
     // office/pdf 附件：后端 materialize 为 attachment（UI 卡片，不进 LLM）+ text（提取正文，进 LLM）。
@@ -560,6 +582,7 @@ export const useChatStore = defineStore("chat", () => {
     pendingProposals.value = new Map();
     pendingAuthRequests.value = new Map();
     draftText.value = "";
+    pendingRefs.value = [];
     openTrajectoryNext.value = false;
   }
 
@@ -579,6 +602,7 @@ export const useChatStore = defineStore("chat", () => {
     bgStreams.value = new Map();
     pendingProposals.value = new Map();
     pendingAuthRequests.value = new Map();
+    pendingRefs.value = [];
     openTrajectoryNext.value = false;
   }
 
@@ -610,7 +634,7 @@ export const useChatStore = defineStore("chat", () => {
     conversations, convLoading,
     activeConvId, activeConversation,
     messages, msgLoading, hasMore, loadingMore,
-    sending, streamingText, draftText, pendingImages, pendingFiles, lastFinishReason, currentModel,
+    sending, streamingText, draftText, pendingImages, pendingFiles, pendingRefs, lastFinishReason, currentModel,
     budget, renewalNotice, updateBudget,
     streamingToolCalls, streamingThinking, thinkingStartTime, thinkingDuration, lastThinkingContent, thinkingDurations,
     // 事件层（useChatEvents）直接读写的内部 Map——暴露供其 mutate；对外读取走下方 computed

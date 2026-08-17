@@ -17,9 +17,12 @@ import { computed, watch, nextTick, ref } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
 import { useChatStore } from "../../stores/chat";
+import { useAgentStore } from "../../stores/agent";
+import { shortCode } from "../../utils/refs";
 import type { ContentBlock } from "../../types";
 
 const chat = useChatStore();
+const agentStore = useAgentStore();
 const textareaRef = ref<HTMLTextAreaElement | null>(null);
 
 const input = computed({
@@ -36,6 +39,12 @@ function autoResize() {
   if (!el) return;
   el.style.height = "auto";
   el.style.height = Math.min(el.scrollHeight, 200) + "px";
+}
+
+/** textarea 原生 input：自适应高度 + @ 引用触发检测。*/
+function onInput() {
+  autoResize();
+  detectAtTrigger();
 }
 
 // ===== base64 编码（图片/文件共用）=====
@@ -213,10 +222,131 @@ async function onPaste(e: ClipboardEvent) {
   await addAttachmentsFromFileList(Array.from(files));
 }
 
+// ===== @ 引用（会话 / agent / 消息）=====
+// 触发：光标前最近的 `@`（其前是行首/空白/起点，其后到光标无空白）进入引用
+// 模式，`@` 后文本作过滤 query。选中后删掉 `@query` 文本、push 引用 chip——
+// 输入框保持纯文本，引用以 chip 徽章形态存在（可删，非裸文本）。
+const atQuery = ref<string | null>(null); // null = 未激活
+
+function detectAtTrigger() {
+  const el = textareaRef.value;
+  if (!el) return;
+  const pos = el.selectionStart ?? 0;
+  const before = el.value.slice(0, pos);
+  const atIdx = before.lastIndexOf("@");
+  if (atIdx === -1 || atQueryClosed(before, atIdx)) {
+    atQuery.value = null;
+    activeIdx.value = 0;
+    return;
+  }
+  atQuery.value = before.slice(atIdx + 1);
+}
+
+/** @ 是否失效：前一个字符非空白（如邮箱 a@b），或 @ 到光标之间出现空白（词已结束）。*/
+function atQueryClosed(before: string, atIdx: number): boolean {
+  if (atIdx > 0 && !/\s/.test(before[atIdx - 1])) return true;
+  return /\s/.test(before.slice(atIdx + 1));
+}
+
+/** 弹层候选（三段：会话 / Agent / 当前会话消息）。*/
+interface RefOption {
+  kind: "conversation" | "agent" | "message";
+  targetId: string;
+  display: string; // `名称#短码`（落库展示，后端失效降级也用它）
+  label: string; // 弹层主行
+  sub: string; // 弹层副行（kind 徽标）
+}
+
+/** 会话标题：空 → 「会话」+ 短码（未命名会话显示 `会话#3357` 兜底）。*/
+function convLabel(title: string): string {
+  return title.trim() || "会话";
+}
+
+const SECTION_CAP = 5; // 每段最多展示条数（克制）
+const MESSAGE_POOL = 20; // 消息段参与过滤的池（当前会话最近 N 条）
+
+const refOptions = computed<RefOption[]>(() => {
+  if (atQuery.value === null) return [];
+  const q = atQuery.value.toLowerCase();
+  const match = (s: string) => !q || s.toLowerCase().includes(q);
+  const out: RefOption[] = [];
+
+  // 会话：排除委派子会话（侧栏不可见）与当前会话（其历史本就在上下文里）
+  for (const c of chat.conversations) {
+    if (c.kind === "delegation" || c.id === chat.activeConvId) continue;
+    const label = convLabel(c.title);
+    if (!match(label) && !match(c.title)) continue;
+    const code = shortCode(c.id);
+    out.push({
+      kind: "conversation", targetId: c.id,
+      display: `${label}#${code}`, label, sub: "会话",
+    });
+    if (out.length >= SECTION_CAP) break;
+  }
+  const convCount = out.length;
+
+  // Agent：身份卡语义（name + desc），与 delegate 权限零冲突
+  for (const a of agentStore.list) {
+    if (!match(a.name)) continue;
+    const code = shortCode(a.id);
+    out.push({
+      kind: "agent", targetId: a.id,
+      display: `${a.name}#${code}`, label: a.name, sub: `Agent · ${a.model}`,
+    });
+    if (out.length - convCount >= SECTION_CAP) break;
+  }
+  const agentCount = out.length - convCount;
+
+  // 消息：当前会话最近 N 条（倒序取池再正序展示），占位行（tool_result / 空内容）不参与
+  const pool = chat.messages
+    .filter((m) => m.content.trim() && (m.role === "user" || m.role === "assistant"))
+    .slice(-MESSAGE_POOL)
+    .reverse();
+  for (const m of pool) {
+    if (!match(m.content)) continue;
+    const code = shortCode(m.id);
+    const kindLabel = m.role === "assistant" ? "回答" : "消息";
+    out.push({
+      kind: "message", targetId: m.id,
+      display: `${kindLabel}#${code}`,
+      label: m.content.length > 60 ? m.content.slice(0, 60) + "…" : m.content,
+      sub: kindLabel,
+    });
+    if (out.length - convCount - agentCount >= SECTION_CAP) break;
+  }
+  return out;
+});
+
+const atActive = computed(() => atQuery.value !== null && refOptions.value.length > 0);
+const activeIdx = ref(0);
+watch(refOptions, () => { activeIdx.value = 0; });
+
+/** 选中候选：删掉 `@query` 文本 + push chip + 关弹层 + 焦点回输入框。*/
+function chooseRef(opt: RefOption) {
+  const el = textareaRef.value;
+  if (el) {
+    const pos = el.selectionStart ?? 0;
+    const atIdx = el.value.slice(0, pos).lastIndexOf("@");
+    if (atIdx >= 0) {
+      const next = el.value.slice(0, atIdx) + el.value.slice(pos);
+      input.value = next;
+      nextTick(() => el.setSelectionRange(atIdx, atIdx));
+    }
+  }
+  chat.pendingRefs.push({ refKind: opt.kind, targetId: opt.targetId, display: opt.display });
+  atQuery.value = null;
+  activeIdx.value = 0;
+  nextTick(() => textareaRef.value?.focus());
+}
+
+function removeRef(index: number) {
+  chat.pendingRefs.splice(index, 1);
+}
+
 // ===== 发送 =====
 function send() {
   const text = input.value.trim();
-  if ((!text && chat.pendingImages.length === 0 && chat.pendingFiles.length === 0) || chat.sending) return;
+  if ((!text && chat.pendingImages.length === 0 && chat.pendingFiles.length === 0 && chat.pendingRefs.length === 0) || chat.sending) return;
 
   const blocks: ContentBlock[] = [];
   if (text) blocks.push({ type: "text", text });
@@ -229,6 +359,29 @@ function send() {
 }
 
 function handleKeydown(e: KeyboardEvent) {
+  // @ 弹层键盘导航（激活时优先于发送）
+  if (atActive.value) {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      activeIdx.value = (activeIdx.value + 1) % refOptions.value.length;
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      activeIdx.value = (activeIdx.value - 1 + refOptions.value.length) % refOptions.value.length;
+      return;
+    }
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      chooseRef(refOptions.value[activeIdx.value]);
+      return;
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      atQuery.value = null;
+      return;
+    }
+  }
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
     send();
@@ -265,21 +418,49 @@ function handleKeydown(e: KeyboardEvent) {
         </div>
       </div>
 
+      <!-- @ 引用 chip 条（复用 file-chip 视觉） -->
+      <div v-if="chat.pendingRefs.length > 0" class="file-strip">
+        <div v-for="(r, idx) in chat.pendingRefs" :key="r.refKind + ':' + r.targetId" class="file-chip ref-chip" :data-ref-kind="r.refKind">
+          <svg class="file-chip-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>
+          <span class="file-chip-name" :title="r.display">{{ r.display }}</span>
+          <button class="file-chip-remove" title="移除" @click="removeRef(idx)">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+          </button>
+        </div>
+      </div>
+
       <div class="input-wrapper" :class="{ 'is-sending': chat.sending, 'drag-over': dragOver }" @dragover="onDragOver" @dragleave="onDragLeave" @drop="onDrop">
+        <!-- @ 引用弹层（输入框上方；mousedown.prevent 保证点选不丢 textarea 焦点） -->
+        <div v-if="atActive" class="at-popover">
+          <button
+            v-for="(opt, i) in refOptions"
+            :key="opt.kind + ':' + opt.targetId"
+            class="at-option"
+            :class="{ active: i === activeIdx }"
+            type="button"
+            @mousedown.prevent
+            @click="chooseRef(opt)"
+            @mousemove="activeIdx = i"
+          >
+            <span class="at-option-label" :title="opt.label">{{ opt.label }}</span>
+            <span class="at-option-sub">{{ opt.sub }}</span>
+          </button>
+        </div>
         <div class="input-row">
           <textarea
             ref="textareaRef"
             v-model="input"
             class="chat-textarea"
-            placeholder="输入消息…（可拖拽/粘贴 office、pdf 附件）"
+            placeholder="输入消息…（@ 引用 · 拖拽/粘贴附件）"
             rows="1"
             :disabled="chat.sending"
             @keydown="handleKeydown"
-            @input="autoResize"
+            @input="onInput"
             @paste="onPaste"
+            @blur="atQuery = null"
           />
           <div class="btn-group">
-            <button v-if="!chat.sending" class="btn-send" :class="{ active: input.trim() || chat.pendingImages.length > 0 || chat.pendingFiles.length > 0 }" :disabled="!input.trim() && chat.pendingImages.length === 0 && chat.pendingFiles.length === 0" title="发送 (Enter)" @click="send">
+            <button v-if="!chat.sending" class="btn-send" :class="{ active: input.trim() || chat.pendingImages.length > 0 || chat.pendingFiles.length > 0 || chat.pendingRefs.length > 0 }" :disabled="!input.trim() && chat.pendingImages.length === 0 && chat.pendingFiles.length === 0 && chat.pendingRefs.length === 0" title="发送 (Enter)" @click="send">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" />
               </svg>
@@ -296,7 +477,7 @@ function handleKeydown(e: KeyboardEvent) {
         </div>
       </div>
       <p v-if="attachWarn" class="attach-warn">{{ attachWarn }}</p>
-      <p class="input-hint">{{ chat.sending ? "正在生成…" : "Enter 发送 · Shift+Enter 换行" }}</p>
+      <p class="input-hint">{{ chat.sending ? "正在生成…" : "@ 引用会话/Agent/消息 · Enter 发送 · Shift+Enter 换行" }}</p>
     </div>
   </div>
 </template>
@@ -321,7 +502,18 @@ function handleKeydown(e: KeyboardEvent) {
 .file-chip-remove { flex-shrink:0; display:flex; align-items:center; justify-content:center; width:16px; height:16px; border-radius:50%; border:none; background:transparent; color:var(--ip-color-text-disabled); cursor:pointer; transition:all var(--ip-duration-fast) var(--ip-ease-out); }
 .file-chip-remove:hover { background-color:var(--ip-color-bg-hover); color:var(--ip-danger-base); }
 
-.input-wrapper { display:flex; flex-direction:column; background-color:var(--color-input-bg); border:1px solid var(--color-input-border); border-radius:12px; transition:border-color var(--ip-duration-base) var(--ip-ease-out),box-shadow var(--ip-duration-base) var(--ip-ease-out); }
+.input-wrapper { position:relative; display:flex; flex-direction:column; background-color:var(--color-input-bg); border:1px solid var(--color-input-border); border-radius:12px; transition:border-color var(--ip-duration-base) var(--ip-ease-out),box-shadow var(--ip-duration-base) var(--ip-ease-out); }
+
+/* ===== @ 引用弹层（输入框上方） ===== */
+.at-popover { position:absolute; left:8px; right:8px; bottom:calc(100% + 6px); z-index:20; max-height:280px; overflow-y:auto; background-color:var(--ip-color-bg-primary); border:1px solid var(--ip-color-border-default); border-radius:var(--ip-radius-md); box-shadow:0 4px 16px rgba(0,0,0,0.12); padding:4px; }
+.at-option { display:flex; align-items:center; gap:8px; width:100%; padding:7px 10px; border:none; border-radius:var(--ip-radius-sm); background:transparent; cursor:pointer; text-align:left; }
+.at-option.active { background-color:var(--ip-color-bg-hover); }
+.at-option-label { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; color:var(--ip-color-text-primary); }
+.at-option-sub { flex-shrink:0; font-size:11px; color:var(--ip-color-text-disabled); }
+
+/* @ 引用 chip：按 ref_kind 微调图标色（会话=主色 / agent=紫 / 消息=中性） */
+.ref-chip[data-ref-kind="agent"] .file-chip-icon { color:#7c6bd6; }
+.ref-chip[data-ref-kind="message"] .file-chip-icon { color:var(--ip-color-text-secondary); }
 .input-row { display:flex; align-items:flex-start; gap:4px; padding:8px 8px 0 12px; }
 .input-wrapper:focus-within { border-color:var(--color-input-focus-border); box-shadow:0 0 0 3px rgba(46,141,100,0.12); }
 .input-wrapper.is-sending { border-color:var(--ip-primary-400); box-shadow:0 0 0 3px rgba(46,141,100,0.08); }
