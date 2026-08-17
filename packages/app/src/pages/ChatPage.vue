@@ -88,6 +88,10 @@ watch(() => chat.activeConvId, () => {
 
 <style scoped>
 .chat-view {
+  /* --msg-col-right：消息内容列右侧内边距令牌（ChatMessages 消费：气泡/日期线
+     右缘 + 轮次导航条预留带）；tabbar 侧任务胶囊也用它对齐气泡右缘（见
+     .chat-tabbar 内规则）。调轨道宽度只改这一个值。 */
+  --msg-col-right: 80px;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -111,6 +115,11 @@ watch(() => chat.activeConvId, () => {
   backdrop-filter: blur(8px);
   flex-shrink: 0;
 }
+
+/* 任务胶囊右移对齐（用户 2026-08-17）：胶囊右缘与消息区用户气泡右缘对齐
+   （= 滚动条槽 6px + --msg-col-right），展开的 popover（right:0 锚胶囊右缘）
+   不再遮右侧轮次导航条（其占右缘 35~57px 带）。24px = tabbar 右内边距。 */
+.chat-tabbar :deep(.task-panel) { margin-right: calc(var(--msg-col-right) + 6px - 24px); }
 
 .chat-tab {
   display: flex;
