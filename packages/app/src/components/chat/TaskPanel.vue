@@ -56,9 +56,31 @@ const tasks = computed<TaskRow[]>(() => {
 
 const anyRunning = computed(() => tasks.value.some((t) => t.running));
 
+// ---- 规模治理（用户拍板 2026-08-17）：胶囊面板是轻量索引，不做全量浏览 ----
+// 任务截断：running 全显（排序已置顶），非 running 最多 6 条，超出收计数行；
+// 全量浏览将来归 MA-2 项目台账（出口先不空头挂链接）。
+const MAX_DONE_TASK_ROWS = 6;
+const visibleTasks = computed<TaskRow[]>(() => {
+  const running = tasks.value.filter((t) => t.running);
+  const rest = tasks.value.filter((t) => !t.running).slice(0, MAX_DONE_TASK_ROWS);
+  return [...running, ...rest];
+});
+const hiddenTaskCount = computed(() => tasks.value.length - visibleTasks.value.length);
+
 // ---- 计划段（C5）：get_session_plan 快照；null = 无计划/已清空 → 列隐藏 ----
 const plan = ref<PlanSnapshot | null>(null);
 const planDone = computed(() => plan.value?.items.filter((i) => i.status === "done").length ?? 0);
+
+// 计划 done 折叠（规模治理，协议上限 30 条且推进后期 done 常占大头）：活跃条目
+// 原序展开（agent 的意图顺序不打乱），done 收「已完成 N」折叠行。行绑定携带
+// 原下标 i —— flash 键（plan-{i}）与折叠重排解耦。
+const planDoneExpanded = ref(false);
+const activePlanItems = computed(() =>
+  (plan.value?.items ?? []).map((it, i) => ({ it, i })).filter(({ it }) => it.status !== "done"),
+);
+const donePlanItems = computed(() =>
+  (plan.value?.items ?? []).map((it, i) => ({ it, i })).filter(({ it }) => it.status === "done"),
+);
 const planPct = computed(() => {
   const total = plan.value?.items.length ?? 0;
   return total > 0 ? Math.round((planDone.value / total) * 100) : 0;
@@ -163,9 +185,10 @@ watch(open, (v) => {
 });
 onBeforeUnmount(() => document.removeEventListener("click", onDocClick));
 
-// 切会话：收起 + 计划随数据源切换重载（任务 computed 自更新）
+// 切会话：收起 + 计划随数据源切换重载（任务 computed 自更新）+ done 折叠态复位
 watch(() => chat.activeConvId, () => {
   open.value = false;
+  planDoneExpanded.value = false;
   void loadPlan();
 }, { immediate: true });
 // 开面板时重拉（关闭期间可能有过更新——事件只在面板所在会话活跃时被消费）
@@ -219,7 +242,7 @@ function openTask(id: string) {
             <div class="col-body">
               <TransitionGroup name="task-fade" tag="div" class="col-body-inner">
                 <button
-                  v-for="t in tasks"
+                  v-for="t in visibleTasks"
                   :key="t.id"
                   :class="['task-row', { 'just-changed': flashKeys.has(t.id) }]"
                   @click="openTask(t.id)"
@@ -230,6 +253,7 @@ function openTask(id: string) {
                   <span class="task-row-time">{{ formatTime(new Date(t.updatedAt).toISOString()) }}</span>
                 </button>
               </TransitionGroup>
+              <div v-if="hiddenTaskCount > 0" class="task-more">还有 {{ hiddenTaskCount }} 个任务</div>
               <div v-if="tasks.length === 0" class="task-more">暂无委派任务</div>
             </div>
           </div>
@@ -244,10 +268,29 @@ function openTask(id: string) {
               </span>
             </div>
             <div class="col-body">
+              <!-- 活跃条目（pending/in_progress）原序展开；done 收折叠行（规模治理） -->
               <div
-                v-for="(it, i) in plan.items"
+                v-for="{ it, i } in activePlanItems"
                 :key="i"
                 :class="['task-plan-row', it.task_conversation_id ? 'task-plan-link' : '', { 'just-changed': flashKeys.has(`plan-${i}`) }]"
+                :title="it.task_conversation_id ? '此步骤挂有委派任务，点击打开' : it.text"
+                @click="it.task_conversation_id && openTask(it.task_conversation_id)"
+              >
+                <span :class="['plan-mark', `plan-mark-${it.status}`]" />
+                <span class="task-row-title">{{ it.text }}</span>
+                <span v-if="it.task_conversation_id" class="plan-jump" title="打开对应任务">↗</span>
+              </div>
+              <button v-if="donePlanItems.length > 0" class="plan-done-toggle" @click="planDoneExpanded = !planDoneExpanded">
+                <span class="plan-mark plan-mark-done" />
+                <span class="plan-done-label">已完成 {{ donePlanItems.length }}</span>
+                <span class="plan-done-caret" :class="{ expanded: planDoneExpanded }">{{ planDoneExpanded ? "收起" : "展开" }}</span>
+              </button>
+              <!-- done 展开区：行内容与活跃区同构（改动需两处同步） -->
+              <div
+                v-for="{ it, i } in donePlanItems"
+                v-show="planDoneExpanded"
+                :key="`done-${i}`"
+                :class="['task-plan-row', 'task-plan-done', it.task_conversation_id ? 'task-plan-link' : '', { 'just-changed': flashKeys.has(`plan-${i}`) }]"
                 :title="it.task_conversation_id ? '此步骤挂有委派任务，点击打开' : it.text"
                 @click="it.task_conversation_id && openTask(it.task_conversation_id)"
               >
@@ -346,6 +389,19 @@ function openTask(id: string) {
 }
 .task-plan-link { cursor: pointer; }
 .task-plan-link:hover { background: var(--ip-color-bg-tertiary); }
+
+/* done 折叠行（规模治理）：历史噪音的收纳口，caption 级弱化呈现 */
+.plan-done-toggle {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 6px 10px; border: none; border-radius: var(--ip-radius-md);
+  background: transparent; cursor: pointer; text-align: left;
+  font-family: inherit; font-size: var(--ip-text-caption-size);
+  color: var(--ip-color-text-tertiary);
+  transition: background-color var(--ip-duration-fast) var(--ip-ease-out);
+}
+.plan-done-toggle:hover { background: var(--ip-color-bg-tertiary); }
+.plan-done-caret { margin-left: auto; color: var(--ip-color-text-disabled); }
+.plan-done-caret.expanded { color: var(--ip-color-text-tertiary); }
 .plan-mark {
   width: 8px; height: 8px; flex-shrink: 0; border-radius: 50%;
   border: 1.5px solid var(--ip-color-text-tertiary);
