@@ -29,12 +29,13 @@ use std::time::Duration;
 
 use serde_json::Value;
 use sqlx::SqlitePool;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use crate::db::models::{HookConfig, HookPoint};
 use crate::db::repo;
+use crate::error::AppError;
 use crate::harness::authority::{
     check_authorization_with_session, AuthorizationDecision, PathAuthSession, PathWhitelistConfig,
 };
@@ -80,7 +81,8 @@ async fn invoke_tool(
 // `ev` 为 session-events 的 turn 上下文（tool_execution 事件归属用，Phase 0）。
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn execute_tool_round(
-    app: &AppHandle,
+    emitter: &dyn crate::harness::r#loop::emitter::LoopEmitter,
+    tool_app: Option<&AppHandle>,
     registry: &McpRegistry,
     auth_registry: &ToolAuthRegistry,
     session: &PathAuthSession,
@@ -97,16 +99,19 @@ pub(crate) async fn execute_tool_round(
     // 扩展 tool_ctx：注入 app_handle + proposal_registry（propose_config_change 等工具需要）
     // + turn_id（update_plan 等在工具执行点落 session-event 的工具需要——事件归组）
     let mut enriched_ctx = tool_ctx.clone();
-    enriched_ctx.app_handle = Some(app.clone());
+    // S6：app_handle / proposal_registry 仅在真 Tauri 运行时（tool_app=Some）注入；
+    // 测试（None）时依赖它们的工具（proposal / delegate）走既有「需要 App 上下文」降级。
+    enriched_ctx.app_handle = tool_app.cloned();
     enriched_ctx.cancel = Some(cancel.clone());
     enriched_ctx.turn_id = Some(ev.turn_id.clone());
-    enriched_ctx.proposal_registry = app
-        .try_state::<crate::harness::proposal_registry::ProposalRegistry>()
-        .map(
-            |s: tauri::State<'_, crate::harness::proposal_registry::ProposalRegistry>| {
-                s.inner().clone()
-            },
-        );
+    enriched_ctx.proposal_registry = tool_app.and_then(|app| {
+        app.try_state::<crate::harness::proposal_registry::ProposalRegistry>()
+            .map(
+                |s: tauri::State<'_, crate::harness::proposal_registry::ProposalRegistry>| {
+                    s.inner().clone()
+                },
+            )
+    });
     let tool_ctx = &enriched_ctx;
 
     // agent workspace 内的文件免授权（workspace 是 agent 的信任领地，
@@ -155,7 +160,12 @@ pub(crate) async fn execute_tool_round(
                     message_id: asst_msg_id.to_string(),
                     reason: reason.clone(),
                 };
-                if let Err(e) = app.emit("chat:tool-auth-request", payload) {
+                let emit_result = serde_json::to_value(&payload)
+                    .map_err(|e| AppError::Internal(format!("payload 序列化失败: {e}")))
+                    .map(|v| {
+                        emitter.emit("chat:tool-auth-request", v);
+                    });
+                if let Err(e) = emit_result {
                     // emit 失败：清理 receiver，视为拒绝
                     let _ = auth_registry.take(&request_id).await;
                     Err(format!("无法通知前端授权弹窗：{}", e))
@@ -173,7 +183,7 @@ pub(crate) async fn execute_tool_round(
                         cancel,
                         &request_id,
                         auth_registry,
-                        app,
+                        emitter,
                         &tool_ctx.conv_id,
                     )
                     .await;
@@ -290,9 +300,10 @@ pub(crate) async fn execute_tool_round(
 
         match final_result {
             Ok(out) => {
-                let _ = app.emit(
+                crate::harness::r#loop::emitter::emit_ser(
+                    emitter,
                     "chat:tool-result",
-                    ChatToolResultPayload {
+                    &ChatToolResultPayload {
                         conversation_id: tool_ctx.conv_id.clone(),
                         message_id: asst_msg_id.to_string(),
                         tool_use_id: tc_id.clone(),
@@ -420,9 +431,10 @@ pub(crate) async fn execute_tool_round(
                 }
             }
             Err(err_content) => {
-                let _ = app.emit(
+                crate::harness::r#loop::emitter::emit_ser(
+                    emitter,
                     "chat:tool-result",
-                    ChatToolResultPayload {
+                    &ChatToolResultPayload {
                         conversation_id: tool_ctx.conv_id.clone(),
                         message_id: asst_msg_id.to_string(),
                         tool_use_id: tc_id.clone(),
@@ -470,7 +482,7 @@ async fn wait_for_auth_response(
     cancel: &crate::harness::chat_state::CancellationToken,
     request_id: &str,
     auth_registry: &ToolAuthRegistry,
-    app: &AppHandle,
+    emitter: &dyn crate::harness::r#loop::emitter::LoopEmitter,
     conv_id: &str,
 ) -> Option<ToolAuthResponse> {
     const TIMEOUT: Duration = Duration::from_secs(120); // 2 分钟——用户不在时快速超时释放会话
@@ -481,7 +493,7 @@ async fn wait_for_auth_response(
         _ = wait_for_cancel(cancel) => {
             // 清理 sender，避免后续响应泄露
             let _ = auth_registry.take(request_id).await;
-            emit_auth_cancel(app, request_id, conv_id, "abort");
+            emit_auth_cancel(emitter, request_id, conv_id, "abort");
             None
         }
         // 超时自动拒绝（防止前端崩溃/用户离开导致会话永久锁死）
@@ -493,7 +505,7 @@ async fn wait_for_auth_response(
                 request_id,
             );
             let _ = auth_registry.take(request_id).await;
-            emit_auth_cancel(app, request_id, conv_id, "timeout");
+            emit_auth_cancel(emitter, request_id, conv_id, "timeout");
             None
         }
         // 收到前端响应
@@ -502,7 +514,7 @@ async fn wait_for_auth_response(
                 Ok(resp) => Some(resp),
                 Err(_) => {
                     // sender 被 drop → 视为取消
-                    emit_auth_cancel(app, request_id, conv_id, "cancelled");
+                    emit_auth_cancel(emitter, request_id, conv_id, "cancelled");
                     None
                 }
             }
@@ -512,20 +524,21 @@ async fn wait_for_auth_response(
 
 /// 通知前端清除对应授权弹窗（授权请求失效时调用）。
 /// 与 `proposal_tool::emit_proposal_cancel` 对称。emit 失败仅 warn。
-fn emit_auth_cancel(app: &AppHandle, request_id: &str, conv_id: &str, reason: &str) {
-    if let Err(e) = app.emit(
+fn emit_auth_cancel(
+    emitter: &dyn crate::harness::r#loop::emitter::LoopEmitter,
+    request_id: &str,
+    conv_id: &str,
+    reason: &str,
+) {
+    crate::harness::r#loop::emitter::emit_ser(
+        emitter,
         "chat:tool-auth-request-cancel",
-        PendingRequestCancelPayload {
+        &PendingRequestCancelPayload {
             request_id: request_id.into(),
             conversation_id: conv_id.into(),
             reason: reason.into(),
         },
-    ) {
-        tracing::warn!(
-            target: "ice_paw.tool_auth",
-            "emit chat:tool-auth-request-cancel 失败: {e}"
-        );
-    }
+    );
 }
 
 /// 等待 CancellationToken 触发（包装成 future）

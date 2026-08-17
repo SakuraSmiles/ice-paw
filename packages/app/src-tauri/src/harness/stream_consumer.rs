@@ -11,9 +11,6 @@
 use std::collections::HashMap;
 use std::pin::Pin;
 
-use futures::Stream;
-use tauri::{AppHandle, Emitter};
-
 use crate::error::AppError;
 use crate::harness::chat_state::CancellationToken;
 use crate::harness::observable::RoundState;
@@ -21,6 +18,7 @@ use crate::infra::protocol::{
     ChatChunkPayload, ChatDelta, ChatThinkingPayload, ChatToolCallDeltaPayload,
     ChatToolCallEndPayload, ChatToolCallStartPayload, TokenUsage,
 };
+use futures::Stream;
 
 /// 单轮流式消费结果
 #[derive(Debug, Clone)]
@@ -45,9 +43,9 @@ pub struct CollectedToolCall {
 ///
 /// 在消费过程中 emit chat:chunk / chat:thinking / chat:tool-call-*。
 /// 错误透传给调用方（loop_engine 根据 is_retryable() 决定策略）。
-pub async fn consume_stream(
+pub(crate) async fn consume_stream(
     stream: &mut Pin<Box<dyn Stream<Item = Result<ChatDelta, AppError>> + Send>>,
-    app: &AppHandle,
+    emitter: &dyn crate::harness::r#loop::emitter::LoopEmitter,
     cancel: &CancellationToken,
     round_state: &mut RoundState,
     conv_id: &str,
@@ -75,9 +73,10 @@ pub async fn consume_stream(
         match item {
             Ok(ChatDelta::Delta { content: delta }) => {
                 text.push_str(&delta);
-                let _ = app.emit(
+                crate::harness::r#loop::emitter::emit_ser(
+                    emitter,
                     "chat:chunk",
-                    ChatChunkPayload {
+                    &ChatChunkPayload {
                         conversation_id: conv_id.to_string(),
                         message_id: asst_msg_id.to_string(),
                         delta,
@@ -94,9 +93,10 @@ pub async fn consume_stream(
                         ended: false,
                     },
                 );
-                let _ = app.emit(
+                crate::harness::r#loop::emitter::emit_ser(
+                    emitter,
                     "chat:tool-call-start",
-                    ChatToolCallStartPayload {
+                    &ChatToolCallStartPayload {
                         conversation_id: conv_id.to_string(),
                         message_id: asst_msg_id.to_string(),
                         id,
@@ -111,9 +111,10 @@ pub async fn consume_stream(
                 if let Some(tc) = tool_calls.get_mut(&id) {
                     tc.arguments.push_str(&tool_delta);
                 }
-                let _ = app.emit(
+                crate::harness::r#loop::emitter::emit_ser(
+                    emitter,
                     "chat:tool-call-delta",
-                    ChatToolCallDeltaPayload {
+                    &ChatToolCallDeltaPayload {
                         conversation_id: conv_id.to_string(),
                         message_id: asst_msg_id.to_string(),
                         id,
@@ -125,9 +126,10 @@ pub async fn consume_stream(
                 if let Some(tc) = tool_calls.get_mut(&id) {
                     tc.ended = true;
                 }
-                let _ = app.emit(
+                crate::harness::r#loop::emitter::emit_ser(
+                    emitter,
                     "chat:tool-call-end",
-                    ChatToolCallEndPayload {
+                    &ChatToolCallEndPayload {
                         conversation_id: conv_id.to_string(),
                         message_id: asst_msg_id.to_string(),
                         id,
@@ -138,9 +140,10 @@ pub async fn consume_stream(
                 content: think_content,
             }) => {
                 think.push_str(&think_content);
-                let _ = app.emit(
+                crate::harness::r#loop::emitter::emit_ser(
+                    emitter,
                     "chat:thinking",
-                    ChatThinkingPayload {
+                    &ChatThinkingPayload {
                         conversation_id: conv_id.to_string(),
                         message_id: asst_msg_id.to_string(),
                         content: think_content,

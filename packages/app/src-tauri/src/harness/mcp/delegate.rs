@@ -328,7 +328,11 @@ impl McpClient for DelegateTool {
         let task_text = parsed.task.clone();
         let done_rx = session_runner::run_agent_turn(
             &TurnEnv {
-                app: app.clone(),
+                emitter: crate::harness::r#loop::emitter::tauri_emitter(
+                    app.clone(),
+                    child_conv_id.clone(),
+                ),
+                tool_app: Some(app.clone()),
                 pool: ctx.pool.clone(),
                 route_registry: app.state::<ReadRouteRegistry>().inner(),
                 global_registry: Arc::clone(app.state::<Arc<McpRegistry>>().inner()),

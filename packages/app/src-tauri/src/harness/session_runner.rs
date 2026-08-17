@@ -27,21 +27,21 @@
 use std::sync::Arc;
 
 use sqlx::SqlitePool;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::AppHandle;
 use uuid::Uuid;
 
 use crate::db::models::{ConversationRow, HookConfig, HookPoint, NewMessage};
 use crate::db::repo;
 use crate::error::AppResult;
 use crate::harness::budget::LoopBudget;
-use crate::harness::chat_state::{CancellationToken, ChatState};
+use crate::harness::chat_state::CancellationToken;
 use crate::harness::event_log::{self, EventCtx};
 use crate::harness::hooks::{has_actions, run_hooks};
 use crate::harness::mcp::{McpRegistry, McpServerManager};
 use crate::harness::provider;
 use crate::harness::read_route::ReadRouteRegistry;
 use crate::harness::tool_executor::{build_tool_ctx, ToolAuthRegistry};
-use crate::infra::protocol::{ChatRoundStatePayload, ContentBlock, LlmProvider, TokenUsage};
+use crate::infra::protocol::{ContentBlock, LlmProvider, TokenUsage};
 
 use crate::context::pipeline::{AssembledContext, PipelineContext, PipelineRunner};
 
@@ -63,7 +63,10 @@ pub(crate) struct TurnSummary {
 
 /// 环境依赖（Tauri managed state 快照，调用方从 State 取出传入）。
 pub(crate) struct TurnEnv<'a> {
-    pub app: AppHandle,
+    /// 对外进度事件出口（S6：编排与循环统一走 LoopEmitter，循环链零 AppHandle）。
+    pub emitter: Arc<dyn crate::harness::r#loop::emitter::LoopEmitter>,
+    /// 工具上下文注入用真句柄（ToolContext.app_handle；proposal/delegate 工具需要）。
+    pub tool_app: Option<AppHandle>,
     pub pool: SqlitePool,
     /// 读路径路由缓存（全局共享实例的引用）
     pub route_registry: &'a ReadRouteRegistry,
@@ -252,7 +255,11 @@ pub(crate) async fn run_agent_turn(
 
     // 摘要注入事件（前端暂未 listen，保留面向未来）
     if let Some(event) = pipeline_ctx.summary_event {
-        let _ = env.app.emit("chat:summary-injected", event);
+        crate::harness::r#loop::emitter::emit_ser(
+            env.emitter.as_ref(),
+            "chat:summary-injected",
+            &event,
+        );
     }
 
     let mut assembled = AssembledContext {
@@ -369,9 +376,12 @@ pub(crate) async fn run_agent_turn(
 
     // --- emit chat:start（cancel_token 已由调用方注册） ---
     // 含附件时把 materialize 后的 content_blocks 带给前端，patch 乐观用户消息。
-    env.app.emit(
+    // S6：emit 经 LoopEmitter（失败实现内 warn，不再向上传播——原 `?` 只因
+    // tauri emit 返回 Result；事件发不出去不应让已落库的回合整体失败）。
+    crate::harness::r#loop::emitter::emit_ser(
+        env.emitter.as_ref(),
         "chat:start",
-        crate::infra::protocol::ChatStartPayload {
+        &crate::infra::protocol::ChatStartPayload {
             conversation_id: conv_id.clone(),
             user_message_id: user_msg_id.clone(),
             assistant_message_id: asst_msg_id.clone(),
@@ -381,7 +391,7 @@ pub(crate) async fn run_agent_turn(
                 None
             },
         },
-    )?;
+    );
 
     // --- 预算（B1 自动续期：显式=硬上限→额度 0；默认 model-aware 3×→可续期） ---
     let tool_max_rounds = agent.tool_max_rounds();
@@ -518,7 +528,8 @@ pub(crate) async fn run_agent_turn(
     // --- spawn 流式循环 + 完成信号 ---
     let (done_tx, done_rx) = tokio::sync::oneshot::channel::<TurnSummary>();
     spawn_stream_loop(StreamLoopInput {
-        app: env.app.clone(),
+        emitter: env.emitter.clone(),
+        tool_app: env.tool_app.clone(),
         pool: pool.clone(),
         provider: llm_provider,
         api_key,
@@ -616,7 +627,11 @@ pub(crate) async fn read_turn_outcome(
 /// `#[allow(clippy::too_many_arguments)]`。字段与原形参平移；进入循环后的语义
 /// 分组见 `LoopConfig` 的注释段与 `LoopContext` 的运行时件。
 pub(crate) struct StreamLoopInput {
-    pub app: AppHandle,
+    /// 对外进度事件出口（S6：Tauri 世界 → 循环抽象世界的转换已在 TurnEnv 完成，
+    /// 此处只透传；spawn 内的 RAII 守卫复用其 on_loop_exit 注销 ChatState）。
+    pub emitter: Arc<dyn crate::harness::r#loop::emitter::LoopEmitter>,
+    /// 工具上下文注入用真句柄（生产 `Some(app)`；测试 `None`）。
+    pub tool_app: Option<AppHandle>,
     pub pool: SqlitePool,
     pub provider: Arc<dyn LlmProvider>,
     pub api_key: String,
@@ -651,7 +666,8 @@ pub(crate) struct StreamLoopInput {
 pub(crate) fn spawn_stream_loop(input: StreamLoopInput) {
     // 解构还原原形参：函数体零改动（S4 仅收袋，不改行为）。
     let StreamLoopInput {
-        app,
+        emitter,
+        tool_app,
         pool,
         provider,
         api_key,
@@ -682,13 +698,11 @@ pub(crate) fn spawn_stream_loop(input: StreamLoopInput) {
         // 都保证注销 ChatState 中的 cancel_token。这消除了 scopeguard disarm 后
         // 唯一清理路径失效的风险——之前若 stream_loop panic 或 runtime 关闭时 future 被
         // drop 而未执行到 finalize_* → cleanup → unregister，token 永久残留导致会话卡死。
+        // S6：经 LoopEmitter::on_loop_exit（TauriEmitter 实现内注销；与 cleanup() 双保险，
+        // unregister 幂等）。
         let _cleanup_guard = scopeguard::guard((), {
-            let app = app.clone();
-            let conv_id = conv_id.clone();
-            move |_| {
-                let chat_state = app.state::<ChatState>();
-                chat_state.unregister(&conv_id);
-            }
+            let emitter = emitter.clone();
+            move |_| emitter.on_loop_exit()
         });
 
         // tool_registry 由 run_agent_turn 组装（global server + per-agent server），直接使用
@@ -706,7 +720,6 @@ pub(crate) fn spawn_stream_loop(input: StreamLoopInput) {
             },
             ..LoopBudget::default()
         };
-        let emit_app = app.clone();
 
         // A2-3: 使用共享的工具授权注册表（与 lib.rs install_listener 同一个实例）
         // 这样前端 chat:tool-auth-response 事件能匹配到正确的 oneshot sender。
@@ -723,7 +736,8 @@ pub(crate) fn spawn_stream_loop(input: StreamLoopInput) {
             user_msg_id,
             agent_id,
             project_id,
-            app,
+            emitter,
+            tool_app,
             pool,
             provider,
             api_key,
@@ -747,18 +761,12 @@ pub(crate) fn spawn_stream_loop(input: StreamLoopInput) {
             messages,
         );
         crate::harness::loop_engine::stream_loop(&mut ctx, &mut observable).await;
-        // W2.4: emit final round-state after stream_loop completes
-        let _ = emit_app.emit(
-            "chat:round-state",
-            ChatRoundStatePayload {
-                conversation_id: ctx.conv_id.clone(),
-                round: observable.round,
-                elapsed_ms: observable.elapsed_ms,
-                tokens_prompt: observable.tokens_prompt,
-                tokens_completion: observable.tokens_completion,
-                cached_tokens: observable.cached_tokens,
-                retry_count: observable.retry_count,
-            },
+        // W2.4: emit final round-state after stream_loop completes（S6 起经 LoopEmitter，
+        // 与循环内的中间发射同一出口）
+        crate::harness::r#loop::events::emit_intermediate_round_state(
+            ctx.emitter.as_ref(),
+            &ctx.conv_id,
+            &observable,
         );
         // MA-1 完成信号：从事件日志读取终态后送达委派方（见模块注释）。
         if let Some(tx) = done_tx {

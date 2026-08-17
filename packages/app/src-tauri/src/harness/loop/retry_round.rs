@@ -12,8 +12,6 @@
 
 use std::time::Duration;
 
-use tauri::Emitter;
-
 use crate::harness::cleanup::emit_round_error;
 use crate::harness::error_mapping::error_kind;
 use crate::harness::event_log::EventCtx;
@@ -75,23 +73,17 @@ pub(crate) async fn stream_with_retry(
                 ws,
             );
             observable.retry_count += 1;
-            if let Err(e) = ctx.app.emit(
+            super::emitter::emit_ser(
+                ctx.emitter.as_ref(),
                 "chat:retrying",
-                ChatRetryingPayload {
+                &ChatRetryingPayload {
                     conversation_id: ctx.conv_id.clone(),
                     message_id: current_asst_msg_id.to_string(),
                     attempt: retry_state.attempt_num() + 1,
                     max_attempts: ctx.budget.max_attempts,
                     reason: last_retry_reason.clone(),
                 },
-            ) {
-                tracing::warn!(
-                    target: "ice_paw.chat",
-                    "emit chat:retrying 失败: conv_id={}, err={}",
-                    ctx.conv_id,
-                    e
-                );
-            }
+            );
             tokio::time::sleep(Duration::from_secs(ws)).await;
             if ctx.cancel.is_cancelled() {
                 return RoundStreamResult::Aborted;
@@ -124,7 +116,7 @@ pub(crate) async fn stream_with_retry(
             Ok(mut stream) => {
                 match consume_stream(
                     &mut stream,
-                    &ctx.app,
+                    ctx.emitter.as_ref(),
                     &ctx.cancel,
                     observable,
                     &ctx.conv_id,
@@ -156,7 +148,7 @@ pub(crate) async fn stream_with_retry(
                         } else {
                             let err_msg = e.to_string();
                             emit_round_error(
-                                &ctx.app,
+                                ctx.emitter.as_ref(),
                                 &ctx.pool,
                                 &ev,
                                 current_asst_msg_id,
@@ -185,7 +177,7 @@ pub(crate) async fn stream_with_retry(
                 } else {
                     let err_msg = e.to_string();
                     emit_round_error(
-                        &ctx.app,
+                        ctx.emitter.as_ref(),
                         &ctx.pool,
                         &ev,
                         current_asst_msg_id,
