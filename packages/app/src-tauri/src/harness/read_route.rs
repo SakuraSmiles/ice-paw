@@ -1,32 +1,19 @@
-//! 读路径路由（session-event-log Phase 2A）：事件日志转新会话的主读路径。
+//! 读路径健康监控（session-event-log Phase 2B：legacy 拼装已退役）。
 //!
-//! Phase 0/1 让 `session_events` 影子表与 legacy 多表并存并完成对账（真机零 diff）。
-//! 本模块把「事件回放」从**对账 B 侧**升级为**干净会话的历史加载源**——按会话路由：
+//! [`load_history_from_events`] 是**唯一**生产读路径：事件回放派生
+//! `Vec<MessageRow>`（锚回真实 rowid），走与原 legacy 拼装完全相同的下游 Pipeline
+//! （同函数同输入——reconcile 已证明两侧原始形态逐字节相等）。
 //!
-//! - **Derive**：有事件且对账零 diff、且无事件纪元前的 legacy 行（纯事件纪元会话）→
-//!   从事件回放出 `Vec<MessageRow>`，走与 legacy 完全相同的下游 Pipeline。
-//! - **Legacy**：其余全部（零事件旧会话 / 对账有 diff / 混合纪元 / 被偏好强制）→
-//!   原路径不变。
+//! ## resolve 的角色：监控而非路由
 //!
-//! ## 为什么零风险
+//! [`ReadRouteRegistry::resolve`] 仍按会话跑对账并分类（green / no_events /
+//! reconcile_diffs / mixed_epoch），但**决策不再分支读路径**——非绿时
+//! `session_runner` 打 error 日志后照常派生（历史可能缺行）。这是 S1 的既定
+//! 代价：写路径 bug 不再被「自动回退 legacy」静默吞掉，换来单一真相源。
 //!
-//! - 派生出的 `MessageRow` 与 legacy 行**同构**（`content` + 序列化 `content_blocks`），
-//!   锚回**真实 rowid**（`id_rowid_map`），下游 [`crate::context::history`]
-//!   `load_history_with_window` 跑的是**同一函数同一输入**——reconcile 已证明两侧
-//!   原始形态逐字节相等，故派生视图与 legacy 视图对干净会话**逐条相同**。
-//! - 摘要连续性：`source_rowid` 取真 rowid，MemoryStage 的 `covered_until_rowid`
-//!   按值定位在切换前后都能命中。
-//! - legacy 拼装**永不删除**：它降级为 fallback，Derive 失效（出现 diff）的会话
-//!   自动回退。这是"长期全绿"从「要等的闸门」变成「路由器维护的运行时属性」的关键。
-//!
-//! ## 路由判据（[`ReadRouteRegistry::resolve`]）
-//!
-//! 1. 偏好 `session_read_path = "legacy"` → 强制 Legacy（一键回滚）。
-//! 2. `max_seq == 0`（零事件，pre-Phase-0 旧会话）→ Legacy。
-//! 3. 对账 `diffs` 非空（某写路径漏发事件 / 行被外部改）→ Legacy。
-//! 4. 对账 `skipped` 含 `legacy_epoch_rows`（事件纪元前有旧行，派生看不到它们）→
-//!    Legacy（混合纪元会话）。
-//! 5. 否则 → Derive。
+//! 非绿会话的处理：error 日志 + `reconcile_session` / `get_read_route_status`
+//! 命令排查 + git revert 阶段 1 commit（messages 表双写持续存在，Legacy 拼装
+//! 可整体恢复，零数据损失）。
 //!
 //! 缓存：以 `(max_seq, max_rowid)` 作会话数据指纹；指纹未变即直接复用上次决策，
 //! 免去每轮全量对账（两个标量查询 vs 全表读 + 回放）。指纹追踪**新数据**（新事件涨
@@ -170,20 +157,16 @@ impl ReadRouteRegistry {
             .collect()
     }
 
-    /// 解析一个会话的读路径（带指纹缓存）。
+    /// 解析一个会话的读路径决策（带指纹缓存；Phase 2B 起仅作健康监控）。
     ///
-    /// `force_legacy`：偏好 `session_read_path = "legacy"` 时为 true（一键回滚）。
     /// 首次或指纹变化时跑一次全量 [`reconcile_session`]（只读，安全）；之后命中缓存
-    /// 仅花两个标量查询。
+    /// 仅花两个标量查询。返回值供日志 / `get_read_route_status` 诊断——生产读路径
+    /// 恒为 Derive（见模块头）。
     pub async fn resolve(
         &self,
         pool: &SqlitePool,
         conversation_id: &str,
-        force_legacy: bool,
     ) -> AppResult<RouteDecision> {
-        if force_legacy {
-            return Ok(RouteDecision::legacy("forced", 0, 0));
-        }
         // 指纹：事件侧 max_seq + 行侧 max_rowid。任一变化才会重跑对账。
         let max_seq = repo::session_event::max_seq(pool, conversation_id).await?;
         let max_rowid = repo::message::max_rowid(pool, conversation_id).await?;
@@ -679,25 +662,25 @@ mod tests {
         }
     }
 
-    /// 路由：一致脚本 → Derive（green）；出现「有行无事件」的写路径漏 → 指纹变 → 重解析 → Legacy。
+    /// 路由：一致脚本 → Derive（green）；出现「有行无事件」的写路径漏 → 指纹变 → 重解析 → 非绿。
     ///
     /// 生产事件 append-only、行 append-mostly；指纹 `(max_seq, max_rowid)` 追踪**新数据**：
     /// 新事件涨 max_seq、新行涨 max_rowid，任一即触发重对账。本测试用「写了一条无对应事件
     /// 的行」（真实写路径漏的形态）制造 max_rowid 上涨 → 缓存失效 → 重解析命中
-    /// MISSING_IN_DERIVED → 回退 Legacy。
+    /// MISSING_IN_DERIVED → 决策非绿（Phase 2B 后不再回退，仅监控告警）。
     #[tokio::test]
     async fn resolve_green_then_legacy_after_divergence() {
         let pool = seeded_pool().await;
         let reg = ReadRouteRegistry::new();
         script(&pool).await;
 
-        let d1 = reg.resolve(&pool, "c1", false).await.unwrap();
+        let d1 = reg.resolve(&pool, "c1").await.unwrap();
         assert_eq!(d1.route, ReadRoute::Derive);
         assert_eq!(d1.reason, "green");
         assert_eq!(d1.diffs, 0);
 
         // 缓存命中：指纹未变 → 第二次不重跑对账（仍 green）
-        let d1b = reg.resolve(&pool, "c1", false).await.unwrap();
+        let d1b = reg.resolve(&pool, "c1").await.unwrap();
         assert_eq!(d1b.reason, "green");
 
         // 制造分叉：插一条无对应事件的行（写路径漏发事件的形态）→ max_rowid 涨 → 重解析
@@ -709,11 +692,11 @@ mod tests {
             &[ContentBlock::text("幽灵回复")],
         )
         .await;
-        let d2 = reg.resolve(&pool, "c1", false).await.unwrap();
+        let d2 = reg.resolve(&pool, "c1").await.unwrap();
         assert_eq!(
             d2.route,
             ReadRoute::Legacy,
-            "有行无事件（写路径漏）应回退 legacy"
+            "有行无事件（写路径漏）应判非绿（监控语义，不再分支读路径）"
         );
         assert!(
             d2.reason.starts_with("reconcile_diffs"),
@@ -722,7 +705,7 @@ mod tests {
         );
     }
 
-    /// 路由：零事件（pre-Phase-0 旧会话）→ Legacy（no_events），且不报错。
+    /// 路由：零事件（pre-Phase-0 旧会话）→ 决策 no_events（非绿），且不报错。
     #[tokio::test]
     async fn resolve_legacy_for_no_events_conversation() {
         let pool = seeded_pool().await;
@@ -738,19 +721,33 @@ mod tests {
         )
         .await;
 
-        let d = reg.resolve(&pool, "c1", false).await.unwrap();
+        let d = reg.resolve(&pool, "c1").await.unwrap();
         assert_eq!(d.route, ReadRoute::Legacy);
         assert_eq!(d.reason, "no_events");
     }
 
-    /// 回滚开关：force_legacy 直接返回 Legacy，不查指纹/不跑对账。
+    /// **Phase 2B 行为锁定**：零事件会话（boot backfill 未覆盖的残留，如孤儿降级）
+    /// 的派生读路径返回**空历史且不报错**——legacy 拼装退役后这就是该形态会话的
+    /// 实际读行为（LLM 无历史，前端 list_messages 照常显示行）。下次 boot 会被
+    /// backfill 捕获自愈。
     #[tokio::test]
-    async fn force_legacy_short_circuits_resolve() {
+    async fn load_history_from_events_empty_for_zero_event_session() {
         let pool = seeded_pool().await;
-        let reg = ReadRouteRegistry::new();
-        script(&pool).await;
-        let d = reg.resolve(&pool, "c1", true).await.unwrap();
-        assert_eq!(d.route, ReadRoute::Legacy);
-        assert_eq!(d.reason, "forced");
+        // 只有行、零事件（不经 boot backfill 的残留形态）
+        write_row(&pool, "m-u", "user", "hi", &[ContentBlock::text("hi")]).await;
+        write_row(
+            &pool,
+            "m-a",
+            "assistant",
+            "hello",
+            &[ContentBlock::text("hello")],
+        )
+        .await;
+
+        let rows = load_history_from_events(&pool, "c1").await.unwrap();
+        assert!(
+            rows.is_empty(),
+            "零事件会话派生为空历史（不报错、不panic）: {rows:#?}"
+        );
     }
 }

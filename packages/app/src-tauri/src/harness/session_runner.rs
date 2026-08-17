@@ -140,35 +140,22 @@ pub(crate) async fn run_agent_turn(
     let conv_id = conv.id.clone();
     let pool = &env.pool;
 
-    // --- 历史解析（session-events Phase 2A：按会话路由读路径） ---
-    // 干净会话（有事件 + 对账零 diff + 纯事件纪元）→ 事件派生；其余 → legacy。
-    // 偏好 `session_read_path=legacy` 一键强制回 legacy（回滚开关）。
-    let force_legacy: bool =
-        sqlx::query_scalar("SELECT value FROM user_preferences WHERE key = 'session_read_path'")
-            .fetch_optional(pool)
-            .await
-            .ok()
-            .flatten()
-            .map(|v: String| v.trim().eq_ignore_ascii_case("legacy"))
-            .unwrap_or(false);
-    let route = env
-        .route_registry
-        .resolve(pool, &conv_id, force_legacy)
-        .await?;
-    let history = match route.route {
-        crate::harness::read_route::ReadRoute::Derive => {
-            crate::harness::read_route::load_history_from_events(pool, &conv_id).await?
-        }
-        crate::harness::read_route::ReadRoute::Legacy => {
-            repo::message::list_by_conversation(
-                pool,
-                &conv_id,
-                Some(repo::message::HISTORY_LOAD_LIMIT),
-                None,
-            )
-            .await?
-        }
-    };
+    // --- 历史解析（session-events Phase 2B：事件派生是唯一读路径） ---
+    // legacy 拼装已退役（S1）：resolve 仅作健康监控——非 Derive 说明该会话存在
+    // 对账 diff / 混合纪元 / 零事件残留，error 后**照常派生**（历史可能缺行，
+    // 不再静默回退）。排查走 reconcile_session / get_read_route_status；
+    // 回滚 = revert 阶段 1 commit（messages 表双写持续，Legacy 可整体恢复）。
+    let route = env.route_registry.resolve(pool, &conv_id).await?;
+    if route.route != crate::harness::read_route::ReadRoute::Derive {
+        tracing::error!(
+            target: "ice_paw.read_route",
+            conv = %conv_id,
+            reason = %route.reason,
+            diffs = route.diffs,
+            "会话读路径非绿（已无 legacy 兜底）：派生历史可能缺行，排查 reconcile_session"
+        );
+    }
+    let history = crate::harness::read_route::load_history_from_events(pool, &conv_id).await?;
     // 最近 10 条工具消息名（loop_engine 动态工具打分用）
     let tool_call_history = repo::message::list_recent_tool_names(pool, &conv_id, 10).await?;
 
