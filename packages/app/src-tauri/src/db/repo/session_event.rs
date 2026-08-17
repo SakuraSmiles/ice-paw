@@ -7,6 +7,14 @@
 //! Phase 0 定位是影子写入：调用方（`harness::event_log`）append 失败仅
 //! warn 不阻断主流程；产生的「缺口」无 seq 空洞（MAX+1 连续），只能靠
 //! Phase 1 derive 对账发现——这是已文档化的定位取舍，不是疏漏。
+//!
+//! ## append-only 的显式边界（Phase 2B backfill）
+//!
+//! **运行时事实**（agent/user 在对话中产生的事件）append-only 永不删改。
+//! `actor = BACKFILL_ACTOR` 的行是**派生数据**——从 messages 表全量可重建
+//! 的合成事件（旧会话补事件，见 `harness/backfill.rs`），唯一删除路径是
+//! backfill 模块自身的版本化重跑（[`delete_backfilled`]），删除它不丢失
+//! 任何已记录的事实。
 
 use sqlx::SqlitePool;
 
@@ -152,6 +160,64 @@ pub async fn max_seq(pool: &SqlitePool, session_id: &str) -> AppResult<i64> {
             .fetch_one(pool)
             .await?;
     Ok(max)
+}
+
+// =========================================================================
+// Phase 2B backfill（旧会话补事件）——append-only 边界的唯一例外，见模块头
+// =========================================================================
+
+/// backfill 合成事件的 actor 标记。删除（重跑）按此精确圈定范围。
+pub const BACKFILL_ACTOR: &str = "backfill";
+
+/// 一条待写入的合成事件（运行时 [`append`] 不携带的两样：显式 seq 与
+/// 行原始 `created_at`——时间戳保真让旧会话的轨迹时间线不坍缩成 backfill
+/// 那一刻）。
+pub struct BackfillEvent {
+    pub kind: String,
+    pub turn_id: Option<String>,
+    pub message_id: Option<String>,
+    pub payload: String,
+    pub created_at: String,
+}
+
+/// 单会话 backfill 事务：删旧合成行 → 按传入序全量重写（seq 从 1 连续）。
+///
+/// DELETE 与 INSERT 同事务原子——中途崩溃不留半个会话。显式 seq 仅对
+/// 「零事件」或「现有事件全部 actor=backfill」的会话合法（调用方保证，
+/// 见 `harness::backfill` 的资格判定），UNIQUE(session_id, seq) 兜底。
+///
+/// 返回写入条数。
+pub async fn rewrite_backfill_batch(
+    pool: &SqlitePool,
+    session_id: &str,
+    events: Vec<BackfillEvent>,
+) -> AppResult<u64> {
+    let n = events.len() as u64;
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM session_events WHERE session_id = ? AND actor = ?")
+        .bind(session_id)
+        .bind(BACKFILL_ACTOR)
+        .execute(&mut *tx)
+        .await?;
+    for (i, ev) in events.into_iter().enumerate() {
+        sqlx::query(
+            "INSERT INTO session_events
+                (session_id, seq, kind, actor, turn_id, message_id, payload, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(session_id)
+        .bind((i + 1) as i64)
+        .bind(&ev.kind)
+        .bind(BACKFILL_ACTOR)
+        .bind(&ev.turn_id)
+        .bind(&ev.message_id)
+        .bind(&ev.payload)
+        .bind(&ev.created_at)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(n)
 }
 
 /// 窗口前（`seq < before_seq` 一侧）的全局轮次数——轨迹尾部优先分页的轮号偏移（M3）。
@@ -519,5 +585,126 @@ mod tests {
         .execute(&pool)
         .await;
         assert!(err.is_err(), "重复 seq 必须被 UNIQUE 索引拒绝");
+    }
+
+    fn backfill_ev(kind: &str, turn: &str, mid: Option<&str>, created_at: &str) -> BackfillEvent {
+        BackfillEvent {
+            kind: kind.to_string(),
+            turn_id: Some(turn.to_string()),
+            message_id: mid.map(str::to_string),
+            payload: "{}".to_string(),
+            created_at: created_at.to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn rewrite_backfill_batch_assigns_explicit_seq_and_created_at() {
+        let pool = fresh_pool().await;
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
+        seed_agent(&pool).await;
+        seed_conversation(&pool, "conv-1").await;
+
+        let n = rewrite_backfill_batch(
+            &pool,
+            "conv-1",
+            vec![
+                backfill_ev("user_message", "t1", Some("m1"), "2026-08-01 10:00:00"),
+                backfill_ev("assistant_message", "t1", Some("m2"), "2026-08-01 10:00:05"),
+                backfill_ev("turn_ended", "t1", None, "2026-08-01 10:00:05"),
+            ],
+        )
+        .await
+        .unwrap();
+        assert_eq!(n, 3);
+
+        let rows = list_by_session(&pool, "conv-1", None).await.unwrap();
+        assert_eq!(seqs(&rows), vec![1, 2, 3], "显式 seq 从 1 连续");
+        assert!(
+            rows.iter().all(|r| r.actor == BACKFILL_ACTOR),
+            "actor 统一打 backfill 标记"
+        );
+        assert_eq!(rows[0].created_at, "2026-08-01 10:00:00", "created_at 保真");
+        assert_eq!(rows[2].message_id, None);
+    }
+
+    #[tokio::test]
+    async fn rewrite_backfill_batch_rerun_deletes_own_rows_only() {
+        let pool = fresh_pool().await;
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
+        seed_agent(&pool).await;
+        seed_conversation(&pool, "conv-1").await;
+
+        rewrite_backfill_batch(
+            &pool,
+            "conv-1",
+            vec![
+                backfill_ev("user_message", "t1", Some("m1"), "2026-08-01 10:00:00"),
+                backfill_ev("turn_ended", "t1", None, "2026-08-01 10:00:05"),
+            ],
+        )
+        .await
+        .unwrap();
+
+        // 重跑：批次缩为 1 条 → 旧行全删重写，不留残尾
+        rewrite_backfill_batch(
+            &pool,
+            "conv-1",
+            vec![backfill_ev("user_message", "t1", Some("m1"), "2026-08-01 10:00:00")],
+        )
+        .await
+        .unwrap();
+        let rows = list_by_session(&pool, "conv-1", None).await.unwrap();
+        assert_eq!(seqs(&rows), vec![1]);
+        assert_eq!(rows[0].kind, "user_message");
+    }
+
+    /// 契约测试：会话已有真实事件（非 backfill actor）时重写必失败且原子回滚
+    /// ——现有行（含旧 backfill 行）分毫未动。调用方（backfill.rs 冻结规则）
+    /// 依赖此语义保证不破坏真实事件流。
+    #[tokio::test]
+    async fn rewrite_backfill_batch_conflicts_with_real_events_and_rolls_back() {
+        let pool = fresh_pool().await;
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
+        seed_agent(&pool).await;
+        seed_conversation(&pool, "conv-1").await;
+
+        // 真实事件占 seq=1 + 既有 backfill 行占 seq=2
+        append(&pool, "conv-1", "turn_context", "agent:agent-1", Some("t-real"), None, "{}")
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO session_events (session_id, seq, kind, actor, turn_id, payload)
+             VALUES ('conv-1', 2, 'turn_ended', ?, 't-real', '{}')",
+        )
+        .bind(BACKFILL_ACTOR)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // 重写批次 seq 从 1 起 → 与真实事件 seq=1 撞 UNIQUE → 整个事务回滚
+        let err = rewrite_backfill_batch(
+            &pool,
+            "conv-1",
+            vec![
+                backfill_ev("user_message", "t1", Some("m1"), "2026-08-01 10:00:00"),
+                backfill_ev("turn_ended", "t1", None, "2026-08-01 10:00:05"),
+            ],
+        )
+        .await;
+        assert!(err.is_err(), "与真实事件 seq 冲突必须报错");
+
+        let rows = list_by_session(&pool, "conv-1", None).await.unwrap();
+        assert_eq!(seqs(&rows), vec![1, 2], "回滚后原行原样");
+        assert_eq!(rows[0].actor, "agent:agent-1", "真实事件未被删除");
+        assert_eq!(rows[1].actor, BACKFILL_ACTOR, "旧 backfill 行未被删除");
     }
 }
