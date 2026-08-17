@@ -321,7 +321,11 @@ const atActive = computed(() => atQuery.value !== null && refOptions.value.lengt
 const activeIdx = ref(0);
 watch(refOptions, () => { activeIdx.value = 0; });
 
-/** 选中候选：删掉 `@query` 文本 + push chip + 关弹层 + 焦点回输入框。*/
+/** 选中候选：删掉 `@query` 文本 + push chip + 关弹层 + 焦点回输入框。
+ *  重复选择（同 kind+target 已在 chip 条）不加，闪已有 chip 提示。*/
+const flashRef = ref<string | null>(null);
+let flashRefTimer: ReturnType<typeof setTimeout> | null = null;
+
 function chooseRef(opt: RefOption) {
   const el = textareaRef.value;
   if (el) {
@@ -333,7 +337,12 @@ function chooseRef(opt: RefOption) {
       nextTick(() => el.setSelectionRange(atIdx, atIdx));
     }
   }
-  chat.pendingRefs.push({ refKind: opt.kind, targetId: opt.targetId, display: opt.display });
+  const added = chat.addPendingRef({ refKind: opt.kind, targetId: opt.targetId, display: opt.display });
+  if (!added) {
+    flashRef.value = opt.kind + ":" + opt.targetId;
+    if (flashRefTimer) clearTimeout(flashRefTimer);
+    flashRefTimer = setTimeout(() => { flashRef.value = null; flashRefTimer = null; }, 700);
+  }
   atQuery.value = null;
   activeIdx.value = 0;
   nextTick(() => textareaRef.value?.focus());
@@ -437,7 +446,7 @@ function handleKeydown(e: KeyboardEvent) {
 
       <!-- @ 引用 chip 条（复用 file-chip 视觉） -->
       <div v-if="chat.pendingRefs.length > 0" class="file-strip">
-        <div v-for="(r, idx) in chat.pendingRefs" :key="r.refKind + ':' + r.targetId" class="file-chip ref-chip" :data-ref-kind="r.refKind">
+        <div v-for="(r, idx) in chat.pendingRefs" :key="r.refKind + ':' + r.targetId" class="file-chip ref-chip" :class="{ 'ref-flash': flashRef === r.refKind + ':' + r.targetId }" :data-ref-kind="r.refKind">
           <svg class="file-chip-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>
           <span class="file-chip-name" :title="r.display">{{ r.display }}</span>
           <button class="file-chip-remove" title="移除" @click="removeRef(idx)">
@@ -534,6 +543,12 @@ function handleKeydown(e: KeyboardEvent) {
 /* @ 引用 chip：按 ref_kind 微调图标色（会话=主色 / agent=紫 / 消息=中性） */
 .ref-chip[data-ref-kind="agent"] .file-chip-icon { color:#7c6bd6; }
 .ref-chip[data-ref-kind="message"] .file-chip-icon { color:var(--ip-color-text-secondary); }
+/* 重复选择时闪已有 chip（一次脉冲提示「已在引用列表」） */
+.ref-flash { animation: ref-chip-flash 0.7s var(--ip-ease-out); }
+@keyframes ref-chip-flash {
+  0%, 100% { background-color:var(--ip-color-bg-tertiary); }
+  40% { background-color:var(--ip-primary-50, #e8f5ef); border-color:var(--ip-primary-400, #2e8d64); }
+}
 .input-row { display:flex; align-items:flex-start; gap:4px; padding:8px 8px 0 12px; }
 .input-wrapper:focus-within { border-color:var(--color-input-focus-border); box-shadow:0 0 0 3px rgba(46,141,100,0.12); }
 .input-wrapper.is-sending { border-color:var(--ip-primary-400); box-shadow:0 0 0 3px rgba(46,141,100,0.08); }

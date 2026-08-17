@@ -124,6 +124,22 @@ describe("ChatInput @ 引用", () => {
     expect(ref).toMatchObject({ ref_kind: "conversation", target_id: "c2" });
   });
 
+  it("重复选择同一对象不重复加 chip（去重 + 闪已有 chip）", async () => {
+    const chat = useChatStore();
+    chat.conversations = [conv("c2", "设计讨论")];
+    const wrapper = mount(ChatInput);
+
+    await type(wrapper, "@");
+    await wrapper.find("textarea").trigger("keydown", { key: "Enter" });
+    expect(chat.pendingRefs.length).toBe(1);
+
+    // 再选同一个：chip 数不变，闪已有 chip（ref-flash class 短暂出现）
+    await type(wrapper, "@");
+    await wrapper.find("textarea").trigger("keydown", { key: "Enter" });
+    expect(chat.pendingRefs.length).toBe(1);
+    expect(wrapper.find(".ref-flash").exists()).toBe(true);
+  });
+
   it("纯引用无文本可发送（发送按钮不 disabled）", async () => {
     const chat = useChatStore();
     chat.conversations = [conv("c2", "设计讨论")];
