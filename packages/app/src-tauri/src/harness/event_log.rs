@@ -226,8 +226,8 @@ pub struct AttachmentBytesItem {
     pub bytes_len: usize,
 }
 
-/// 滚动摘要创建/更新（Phase 2 债：covered_until_rowid 是 messages 物理
-/// rowid，切事件主源后需改为 covered_until_seq）。
+/// 滚动摘要创建/更新。锚点双值：`covered_until_seq`（事件纪元主锚，Phase 2B
+/// 阶段 2 起）+ `covered_until_rowid`（物理 rowid 兜底，保持旧事件可读）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SummaryPayload {
     #[serde(default = "version_one")]
@@ -235,6 +235,9 @@ pub struct SummaryPayload {
     pub summary_message_id: String,
     pub content: String,
     pub covered_until_rowid: i64,
+    /// 覆盖终点消息的首现事件 seq。旧事件无此字段 → None（`duration_ms` 同款先例）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub covered_until_seq: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1164,6 +1167,7 @@ mod tests {
                 summary_message_id: "msg-s1".into(),
                 content: "[Previous conversation summary] ...".into(),
                 covered_until_rowid: 77,
+                covered_until_seq: Some(77),
             },
         )
         .await;

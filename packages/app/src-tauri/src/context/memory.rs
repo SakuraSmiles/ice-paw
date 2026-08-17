@@ -19,11 +19,14 @@
 //!   一次折到 `max_input*40%` 以下（使下次需积累 ~15% 新 token 才再触发——
 //!   天然频率闸门，无需冷却字段）。比例由 [`ContextBudget::fold_trigger_tokens`]
 //!   / [`fold_target_tokens`] 派生，与真实窗口挂钩。
-//! - **覆盖追踪 `covered_until_rowid`**：S 覆盖的**最后一条**消息的物理 rowid
-//!   （非计数——部分加载下计数会静默丢消息）。持久化在 messages 行上。
-//! - **`source_rowid` 桥接**：[`ChatMessage`] 携带 `#[serde(skip)] source_rowid`，
-//!   MemoryStage 用按值定位（`iter().position(source_rowid == r)`）找切断点，
-//!   天然扛住 [`ToolFailureFold`] 的合并 / 重排（identity-by-value）。
+//! - **覆盖追踪（锚点双值）**：S 覆盖的**最后一条**消息，锚点双写——
+//!   `covered_until_seq`（事件纪元锚：首现事件 seq，Phase 2B 阶段 2 起主锚）
+//!   与 `covered_until_rowid`（物理 rowid 兜底）。非计数——部分加载下计数会
+//!   静默丢消息。seq 主锚治 rowid 复用漂移（messages 无 AUTOINCREMENT）。
+//! - **按值定位桥接**：[`ChatMessage`] 携带 `#[serde(skip)] source_seq /
+//!   source_rowid`，MemoryStage 用按值定位（`iter().position(...)`，seq 优先
+//!   rowid 兜底）找切断点，天然扛住 [`ToolFailureFold`] 的合并 / 重排
+//!   （identity-by-value）。
 //! - **依赖倒置**：`SummaryProvider` trait 定义在 context 层，harness 层实现
 //!   （`LlmSummaryProvider`）。测试用 `NoopSummaryProvider` / fake provider。
 //!
@@ -187,16 +190,25 @@ impl PipelineStage for MemoryStage {
             }
         };
 
-        // 按值定位覆盖切断点（source_rowid 桥接，扛 ToolFailureFold 合并 / 重排）。
-        // covered_until_rowid 不在加载切片内（None）→ 当作「从头折叠」自愈。
-        let covered_idx = state
-            .as_ref()
-            .and_then(|s| s.covered_until_rowid)
-            .and_then(|r| {
-                ctx.history_messages
-                    .iter()
-                    .position(|m| m.source_rowid == Some(r))
-            });
+        // 按值定位覆盖切断点（seq 优先、rowid 兜底；扛 ToolFailureFold 合并 / 重排）。
+        // 两锚都不在加载切片内（None / 未命中）→ 当作「从头折叠」自愈。
+        // seq 主锚：事件纪元语义（与 derive 排序位一致）；rowid 兜底：覆盖旧摘要行
+        // （migration 46 前写入、无 seq）与零事件会话。
+        let covered_idx = state.as_ref().and_then(|s| {
+            s.covered_until_seq
+                .and_then(|q| {
+                    ctx.history_messages
+                        .iter()
+                        .position(|m| m.source_seq == Some(q))
+                })
+                .or_else(|| {
+                    s.covered_until_rowid.and_then(|r| {
+                        ctx.history_messages
+                            .iter()
+                            .position(|m| m.source_rowid == Some(r))
+                    })
+                })
+        });
         let verbatim_start = covered_idx.map(|i| i + 1).unwrap_or(0);
         let verbatim_tokens = estimate_messages_tokens(&ctx.history_messages[verbatim_start..]);
 
@@ -286,9 +298,11 @@ impl PipelineStage for MemoryStage {
             return Ok(());
         }
 
-        // 新覆盖点 = 本次折叠的最后一条消息的 source_rowid。
-        // 生产路径下 history_messages 全部来自 load_history_with_window，source_rowid 必为 Some；
-        // 若意外为 None（不可能状态），跳过落库避免 panic，仅本轮注入。
+        // 新覆盖点 = 本次折叠的最后一条消息的双锚（seq + rowid）。
+        // 生产路径下 history_messages 全部来自 load_history_with_window，source_rowid
+        // 必为 Some；若意外为 None（不可能状态），跳过落库避免 panic，仅本轮注入。
+        // source_seq 仅 derive 读路径填充（DB 读出行恒 None）→ 落 None 走 rowid 兜底。
+        let new_covered_seq = ctx.history_messages[fold_end - 1].source_seq;
         let new_covered_rowid = match ctx.history_messages[fold_end - 1].source_rowid {
             Some(r) => r,
             None => {
@@ -307,8 +321,14 @@ impl PipelineStage for MemoryStage {
         let mut summary_persisted: Option<(bool, String)> = None; // (created, summary row id)
         match &state {
             Some(s) => {
-                if let Err(e) =
-                    update_summary_message(&ctx.pool, &s.row_id, &s_new, new_covered_rowid).await
+                if let Err(e) = update_summary_message(
+                    &ctx.pool,
+                    &s.row_id,
+                    &s_new,
+                    new_covered_seq,
+                    new_covered_rowid,
+                )
+                .await
                 {
                     warn!(target: "ice_paw.context", "MemoryStage: 更新摘要失败: {e}，仍注入上下文");
                 } else {
@@ -320,6 +340,7 @@ impl PipelineStage for MemoryStage {
                     &ctx.pool,
                     &ctx.conversation_id,
                     &s_new,
+                    new_covered_seq,
                     new_covered_rowid,
                 )
                 .await
@@ -348,6 +369,7 @@ impl PipelineStage for MemoryStage {
                     summary_message_id: summary_row_id,
                     content: format!("{SUMMARY_PREFIX}\n{s_new}"),
                     covered_until_rowid: new_covered_rowid,
+                    covered_until_seq: new_covered_seq,
                 };
                 if created {
                     crate::harness::event_log::log_summary_created(&ctx.pool, &ev, &payload).await;
@@ -373,6 +395,7 @@ impl PipelineStage for MemoryStage {
         info!(
             target: "ice_paw.context",
             original_count, kept_count, summary_tokens,
+            covered_until_seq = ?new_covered_seq,
             covered_until_rowid = new_covered_rowid,
             "MemoryStage: 滚动折叠完成",
         );
@@ -434,6 +457,18 @@ mod tests {
             role: role.into(),
             content: vec![ContentBlock::text(text)],
             source_rowid: Some(rowid as i64),
+            source_seq: None,
+        }
+    }
+
+    /// 带独立双锚的「大」消息（Phase 2B 阶段 2：模拟派生读路径行——
+    /// seq 与 rowid 取**不同值**，断言锚点捕获时不串轴）
+    fn big_msg_with_anchors(role: &str, rowid: usize, seq: i64) -> ChatMessage {
+        ChatMessage {
+            role: role.into(),
+            content: vec![ContentBlock::text("a".repeat(1000))],
+            source_rowid: Some(rowid as i64),
+            source_seq: Some(seq),
         }
     }
 
@@ -618,8 +653,11 @@ mod tests {
 
     #[tokio::test]
     async fn memory_stage_first_fold_inserts_summary_and_sets_coverage() {
-        // 30 条 * ~254 token = 7620 > trigger(5500)；keep_n=20 → foldable_end=10
-        let history: Vec<_> = (0..30).map(|i| big_msg_with_rowid(alt(i), i)).collect();
+        // 30 条 * ~254 token = 7620 > trigger(5500)；keep_n=20 → foldable_end=10。
+        // 消息带独立双锚（rowid=i, seq=100+i）→ 断言两锚各自捕获不串轴。
+        let history: Vec<_> = (0..30)
+            .map(|i| big_msg_with_anchors(alt(i), i, 100 + i as i64))
+            .collect();
         let mut ctx = make_test_ctx(history, 10_000, None).await;
 
         let provider = RecordingProvider::new("summary-1");
@@ -641,22 +679,30 @@ mod tests {
             );
         } // guard 在下方 DB await 前 drop，避免 await_holding_lock
 
-        // DB：摘要行单例，covered_until_rowid=9（折进摘要的最后一条）
+        // DB：摘要行单例，双锚 = 折进摘要的最后一条（idx9：rowid=9, seq=109）
         let state = get_latest_summary_state(&ctx.pool, "conv-t")
             .await
             .unwrap()
             .unwrap();
         assert_eq!(state.text, "summary-1");
         assert_eq!(state.covered_until_rowid, Some(9));
+        assert_eq!(
+            state.covered_until_seq,
+            Some(109),
+            "seq 锚应独立捕获（fold 终点 idx9 → seq=109），不串 rowid"
+        );
     }
 
     #[tokio::test]
     async fn memory_stage_incremental_fold_advances_coverage() {
-        // 50 条；预置摘要 covered=9（msg idx9）→ verbatim 从 idx10 起 = 40 条
-        let history: Vec<_> = (0..50).map(|i| big_msg_with_rowid(alt(i), i)).collect();
+        // 50 条（rowid=i, seq=100+i）；预置摘要 covered=9（msg idx9）→ verbatim 从 idx10 起 = 40 条
+        let history: Vec<_> = (0..50)
+            .map(|i| big_msg_with_anchors(alt(i), i, 100 + i as i64))
+            .collect();
         let mut ctx = make_test_ctx(history, 10_000, None).await;
 
-        insert_summary_message(&ctx.pool, "conv-t", "summary-1", 9)
+        // seq=None + rowid=9：本测试同时证明 rowid 兜底（旧摘要行无 seq 锚）
+        insert_summary_message(&ctx.pool, "conv-t", "summary-1", None, 9)
             .await
             .unwrap();
 
@@ -694,6 +740,43 @@ mod tests {
             "covered 应前进: {:?}",
             state.covered_until_rowid
         );
+        assert!(
+            state.covered_until_seq.unwrap() > 109,
+            "seq 锚应随折叠前进: {:?}",
+            state.covered_until_seq
+        );
+    }
+
+    /// Phase 2B 阶段 2：**seq 锚优先于 rowid**。预置摘要双锚指向**不同消息**
+    /// （seq=105 → idx5；rowid=20 → idx20）。seq 赢 → verbatim 从 idx6 起
+    /// （若 rowid 赢则从 idx21 起、不会触发折叠）。用「是否发生折叠」判胜负。
+    #[tokio::test]
+    async fn memory_stage_seq_anchor_precedence_over_rowid() {
+        // 30 条，rowid=i、seq=100+i（独立轴）；trigger(5500)/target(4000)
+        let history: Vec<_> = (0..30)
+            .map(|i| big_msg_with_anchors(alt(i), i, 100 + i as i64))
+            .collect();
+        let mut ctx = make_test_ctx(history, 10_000, None).await;
+
+        // 双锚分叉：seq 指向 idx5（较早），rowid 指向 idx20（较晚）
+        insert_summary_message(&ctx.pool, "conv-t", "old-summary", Some(105), 20)
+            .await
+            .unwrap();
+
+        let provider = RecordingProvider::new("seq-won");
+        let stage = MemoryStage::new(Box::new(provider.clone()));
+        stage.execute(&mut ctx).await.unwrap();
+
+        // seq 赢：verbatim = [6..30) = 24 条 * ~254 tok ≈ 6096 > trigger(5500)
+        // → 触发折叠（provider 被调、摘要正文换新）。
+        // rowid 若赢：verbatim = [21..30) ≈ 2286 tok < trigger → 不折叠、
+        // summary 仍是 old-summary。
+        assert_eq!(
+            ctx.summary.as_deref(),
+            Some("seq-won"),
+            "seq 锚应胜出（触发折叠）；若 rowid 赢则 summary 仍为 old-summary"
+        );
+        assert_eq!(provider.calls.lock().unwrap().len(), 1, "应发生一次折叠");
     }
 
     #[tokio::test]
@@ -739,7 +822,7 @@ mod tests {
         // → 从头折叠（自愈），但仍把 legacy 摘要作为前序喂入
         let history: Vec<_> = (0..30).map(|i| big_msg_with_rowid(alt(i), i)).collect();
         let mut ctx = make_test_ctx(history, 10_000, None).await;
-        insert_summary_message(&ctx.pool, "conv-t", "legacy-summary", 9999)
+        insert_summary_message(&ctx.pool, "conv-t", "legacy-summary", None, 9999)
             .await
             .unwrap();
 
@@ -771,6 +854,7 @@ mod tests {
                         input: "{}".into(),
                     }],
                     source_rowid: Some(9),
+                    source_seq: None,
                 }
             } else if i == 10 {
                 ChatMessage {
@@ -781,6 +865,7 @@ mod tests {
                         is_error: None,
                     }],
                     source_rowid: Some(10),
+                    source_seq: None,
                 }
             } else {
                 big_msg_with_rowid(alt(i), i)
@@ -828,7 +913,7 @@ mod tests {
         // provider 返回空（取消 / 失败）→ 不落库、不发 event，仍丢已覆盖前缀
         let history: Vec<_> = (0..30).map(|i| big_msg_with_rowid(alt(i), i)).collect();
         let mut ctx = make_test_ctx(history, 10_000, None).await;
-        insert_summary_message(&ctx.pool, "conv-t", "old", 9)
+        insert_summary_message(&ctx.pool, "conv-t", "old", None, 9)
             .await
             .unwrap();
 

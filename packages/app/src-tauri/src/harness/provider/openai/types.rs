@@ -509,6 +509,7 @@ mod tests {
                 },
             ],
             source_rowid: None,
+            source_seq: None,
         };
         let out = chat_message_to_openai(&msg).unwrap();
         assert_eq!(out.len(), 2, "两条 ToolResult → 两条 role=tool 消息");
@@ -538,6 +539,7 @@ mod tests {
                 ContentBlock::image("iVBORw0KGgo", "image/png"),
             ],
             source_rowid: None,
+            source_seq: None,
         };
         let out = chat_message_to_openai(&msg).unwrap();
         assert_eq!(out.len(), 2, "ToolResult + Image → [tool, user(image)]");
@@ -569,6 +571,7 @@ mod tests {
                 is_error: Some(false),
             }],
             source_rowid: None,
+            source_seq: None,
         };
         let out = chat_message_to_openai(&msg).unwrap();
         assert_eq!(out.len(), 1);
@@ -583,6 +586,7 @@ mod tests {
             role: "user".into(),
             content: vec![ContentBlock::text("你好")],
             source_rowid: None,
+            source_seq: None,
         };
         let out = chat_message_to_openai(&msg).unwrap();
         assert_eq!(out.len(), 1);

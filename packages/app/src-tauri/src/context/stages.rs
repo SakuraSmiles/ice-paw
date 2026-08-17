@@ -524,6 +524,7 @@ impl PipelineStage for FinalAssembleStage {
             role: "user".into(),
             content: user_blocks,
             source_rowid: None,
+            source_seq: None,
         });
 
         ctx.messages = messages;

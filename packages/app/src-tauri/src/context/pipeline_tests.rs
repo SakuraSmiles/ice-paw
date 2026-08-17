@@ -73,6 +73,7 @@ pub(super) fn make_msg_row(role: &str, content: &str) -> MessageRow {
         rowid: 0,
         summary_id: None,
         model: None,
+        source_seq: None,
     }
 }
 
