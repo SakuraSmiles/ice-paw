@@ -96,10 +96,13 @@ function fireIO(io: FakeIO, entries: { el: Element; isIntersecting: boolean }[])
 
 const nextFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
 
-/** 标准夹具：容器高 600（线 Y=576），三轮锚点元素 m1/m2/m3 */
+/** 标准夹具：容器高 600（线 Y=576）、内容高 5000，锚点元素 m1..mN。
+ *  scrollHeight 必须桩——jsdom 全 0 几何下 0+600 ≥ 0-4 恒真，贴底分支
+ *  会劫持所有线判定用例。scrollTop 由用例按需设置（默认 0 = 顶部非贴底）。 */
 function fixture(turns: number) {
   const container = document.createElement("div");
   mockHeight(container, 600);
+  Object.defineProperty(container, "scrollHeight", { value: 5000, configurable: true });
   const els = Array.from({ length: turns }, (_, i) => {
     const el = document.createElement("div");
     el.dataset.mid = `m${i + 1}`;
@@ -246,16 +249,47 @@ describe("useActiveTurn 接线（底线语义）", () => {
     unmount();
   });
 
-  it("空集无上次值（切会话贴底长尾轮）→ bootstrap：贴底精确 = 末轮，不横杠", async () => {
-    const { result, unmount, els, io } = await setup(3);
-    // 场景：末轮回复很长，锚点全滚出视口 → IO 全员报不相交 → 集空
+  it("贴底确定性：末轮锚点滚出视口集空 → 直接末轮，不横杠", async () => {
+    const { result, unmount, container, els, io } = await setup(3);
+    // 场景：末轮回复很长，锚点全滚出视口 → IO 全员报不相交；但贴底（默认
+    // 进入态）→ 贴底分支优先于集合判定，直接末轮
+    container.scrollTop = 4400; // 4400+600 ≥ 5000-4 → 贴底
     fireIO(io, [
       { el: els[0], isIntersecting: false },
       { el: els[1], isIntersecting: false },
       { el: els[2], isIntersecting: false },
     ]);
-    // jsdom 滚动几何全 0：scrollTop+clientHeight(0) ≥ scrollHeight(0)-4 → 贴底
     expect(result.activeTurn.value).toBe(3); // 末轮，不是 null/横杠
+
+    unmount();
+  });
+
+  it("中毒值自愈：渲染期顶部锚点定下小轮号 + restore 瞬移贴底 → 强制末轮，不被「保持」锁死", async () => {
+    const { result, unmount, container, els, io } = await setup(3);
+    // 渲染期 scrollTop=0：顶部锚点先进集合，线判定写下轮 1
+    mockRect(els[0], 100);
+    fireIO(io, [{ el: els[0], isIntersecting: true }]);
+    expect(result.activeTurn.value).toBe(1);
+
+    // restore 瞬移贴底；IO 迟到一拍，scroll 重算时集合还是旧顶部锚（gBCR
+    // 现读 100 = 视口上方）——旧代码线判定仍给 1，随后集空「保持」锁死 1
+    container.scrollTop = 4400;
+    container.dispatchEvent(new Event("scroll"));
+    await nextFrame();
+    expect(result.activeTurn.value).toBe(3); // 贴底确定性压倒中毒集合
+
+    unmount();
+  });
+
+  it("空集无上次值 + 非贴底 → 按滚动比例粗估（估高布局下 bootstrap 够用）", async () => {
+    const { result, unmount, container, els, io } = await setup(3);
+    container.scrollTop = 2000; // 2600/5000 = 0.52 → ceil(0.52×3) = 2
+    fireIO(io, [
+      { el: els[0], isIntersecting: false },
+      { el: els[1], isIntersecting: false },
+      { el: els[2], isIntersecting: false },
+    ]);
+    expect(result.activeTurn.value).toBe(2);
 
     unmount();
   });
@@ -275,20 +309,21 @@ describe("useActiveTurn 接线（底线语义）", () => {
     unmount();
   });
 
-  it("DOM 换血竞态：旧元素移出容器 + 锚点重载失忆 → 空集 bootstrap，不出旧轮号", async () => {
+  it("DOM 换血竞态：旧元素移出容器 + 锚点重载失忆 → 贴底确定性兜住，不出旧轮号", async () => {
     const { result, unmount, container, els, io, anchorsRef } = await setup(3);
     mockRect(els[0], 100);
     fireIO(io, [{ el: els[0], isIntersecting: true }]);
     expect(result.activeTurn.value).toBe(1);
 
     // 竞态窗：切会话后元素已移出容器（gBCR 将全 0）、锚点已重载（失忆），
-    // refresh 重建前的这次滚动重算——剔除旧元素、空集走 bootstrap
+    // refresh 重建前的这次滚动重算——剔除旧元素后集空，但先撞上贴底分支
     els[0].remove();
     anchorsRef.value = [anchor(1), anchor(2), anchor(3)];
     await nextTick();
+    container.scrollTop = 4400; // 切会话默认贴底（restore 瞬移）
     container.dispatchEvent(new Event("scroll"));
     await nextFrame();
-    // 不读 0 坐标算出旧轮 1；bootstrap（jsdom 全 0 几何 = 贴底）→ 末轮
+    // 不读 0 坐标算出旧轮 1；贴底 → 确定性末轮
     expect(result.activeTurn.value).toBe(3);
 
     unmount();

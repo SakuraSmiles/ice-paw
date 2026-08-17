@@ -17,7 +17,8 @@
 // 坐标可信性根因不变（2026-08-15）：content-visibility:auto 估高布局下未
 // 渲染组 offsetTop 系统性漂移——只对实际相交（= 已渲染，坐标真实）的锚点
 // 读 gBCR 判定；集合空（线在长轮中部，前后锚点都不相交）保持上次值；
-// 无上次值（切会话/锚点重载后）按滚动几何 bootstrap（贴底精确 = 末轮），
+// 无上次值（切会话/锚点重载后）非贴底按滚动比例粗估 bootstrap。贴底
+// （默认进入态）是确定性的——优先于一切集合/上次值直接末轮（见 recompute），
 // detach 元素剔除防 DOM 换血竞态算出旧会话轮号。
 
 import { computed, onBeforeUnmount, ref, watch, type Ref } from "vue";
@@ -31,6 +32,9 @@ export const THRESHOLD_PX = 80;
 /** 视位判定线（px，距消息区底边）：即输入框正上方一点。
  *  导出供测试与调用方对齐语义。 */
 export const LINE_FROM_BOTTOM_PX = 24;
+
+/** 贴底判定容差（px）：距内容底这一距离内视为贴底 */
+const AT_BOTTOM_EPS = 4;
 
 /** 纯函数：由「当前相交锚点的 (轮号, 距视口顶距离) + 判定线高度」判定活动轮。
  *  - 空列表 → null（视口落在长轮中部等，调用方保持上次值）
@@ -87,6 +91,17 @@ export function useActiveTurn(
     if (pinned.value !== null) return; // 钉住期线判定静默（activeTurn 已由 pin 直写）
     const root = container.value;
     if (!root) return;
+    const total = anchors.value.length;
+    if (total === 0) return;
+    // 贴底确定性（优先于一切集合/上次值）：贴底 = 内容底对齐视口底，线
+    // （底上 24px）必然落在末轮区域内——直接末轮。治 restore 瞬移底部的
+    // 竞态窗：消息渲染期 scrollTop=0 阶段顶部锚点先进集合、瞬移后 IO 迟到
+    // 一拍，旧集合现读 gBCR 全在视口上方 → 线判定算出小轮号，随后集空
+    // 「保持」把中毒值锁死。贴底不看集合，竞态无从产生。
+    if (root.scrollTop + root.clientHeight >= root.scrollHeight - AT_BOTTOM_EPS) {
+      activeTurn.value = total;
+      return;
+    }
     // DOM 换血竞态（切会话 → refresh 重建之间的窗口）：旧会话元素已移出
     // 容器，gBCR 全 0 会被当作「线以上」算出旧轮号——剔除（root.contains
     // 而非 isConnected：判「是否还属于本容器」，与挂没挂 document 无关）
@@ -107,20 +122,14 @@ export function useActiveTurn(
     if (picked !== null) activeTurn.value = picked; // null = 保持上次值
   }
 
-  /** 空集兜底：无上次值（切会话/锚点重载后）时按滚动几何定初值。
-   *  贴底（默认进入态）精确 = 末轮——治「长尾轮会话贴底横杠」（末轮锚点
-   *  滚出视口顶、集空、上次值 null 三碰头）；中段按比例粗估（估高布局下
-   *  足够 bootstrap，任何锚点一进视口即被 IO 精确接管）。有上次值不动——
-   *  长轮中段滚动保持语义。 */
+  /** 空集兜底：无上次值（切会话/锚点重载后）时按滚动比例粗估初值。
+   *  估高布局下足够 bootstrap（贴底已被确定性分支精确接管），任何锚点一
+   *  进视口即被 IO 精确接管。有上次值不动——长轮中段滚动保持语义。 */
   function bootstrapIfUnknown(root: HTMLElement) {
     if (activeTurn.value !== null) return;
+    if (root.scrollHeight <= 0) return; // 布局不可得（测试环境）
     const total = anchors.value.length;
     if (total === 0) return;
-    if (root.scrollTop + root.clientHeight >= root.scrollHeight - 4) {
-      activeTurn.value = total; // 贴底 = 正在读末轮
-      return;
-    }
-    if (root.scrollHeight <= 0) return; // 布局不可得（测试环境）
     const frac = (root.scrollTop + root.clientHeight) / root.scrollHeight;
     activeTurn.value = Math.min(total, Math.max(1, Math.ceil(frac * total)));
   }
