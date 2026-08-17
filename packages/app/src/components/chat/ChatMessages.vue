@@ -1000,7 +1000,7 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
    气泡/日期线/提示行右侧统一用它对齐；调轨道宽度只改这一个值。 */
 .messages-wrap {
   flex:1; min-height:0; display:flex; position:relative;
-  --msg-col-right:80px;
+  /* --msg-col-right 已上提 ChatPage .chat-view（tabbar 任务胶囊对齐同一令牌） */
   /* 右侧带水平居中（手测反馈：right:10px 贴窗口边）：气泡列右缘与窗口右缘
      （有滚动条时=滚动条）之间的预留带内，TurnRail 两侧均匀留白。
      6px = global.css ::-webkit-scrollbar 宽；轨道视觉宽 22px（tick 道）。
