@@ -18,6 +18,7 @@
 //! 这些函数无业务副作用（`events` 仅 emit Tauri 事件），便于独立单元测试。
 
 pub(crate) mod context;
+pub(crate) mod emitter;
 pub(crate) mod events;
 pub(crate) mod reason;
 pub(crate) mod retry_round;

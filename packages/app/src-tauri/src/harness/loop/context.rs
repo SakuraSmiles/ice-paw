@@ -45,7 +45,13 @@ pub(crate) struct LoopConfig {
     pub project_id: Option<String>,
 
     // ---- 基础设施 ----
-    pub app: AppHandle,
+    /// 对外进度事件出口（S6：取代裸 `AppHandle`——循环不再依赖 Tauri 运行时，
+    /// 集成测试用收集型实现即可跑全链路）。瞬态 UI 事件专用；可回放事实走 event_log。
+    pub emitter: Arc<dyn crate::harness::r#loop::emitter::LoopEmitter>,
+    /// 工具上下文注入用的真 `AppHandle`（生产 `Some`；测试 `None`——依赖它的
+    /// 工具（proposal / delegate）对 `None` 已有「需要 App 上下文」降级报错）。
+    /// 这是循环链仅剩的 Tauri 句柄，仅透传给 `ToolContext.app_handle`。
+    pub tool_app: Option<AppHandle>,
     pub pool: SqlitePool,
 
     // ---- LLM Provider ----

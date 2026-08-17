@@ -65,7 +65,6 @@
 
 use std::collections::HashMap;
 
-use tauri::Emitter;
 use uuid::Uuid;
 
 use crate::db::models::{HookPoint, NewMessage};
@@ -335,8 +334,14 @@ async fn stream_loop_inner(
                 )
                 .await;
             }
-            return finalize_cancel(&ctx.app, &ctx.pool, &ev, &current_asst_msg_id, tool_round)
-                .await;
+            return finalize_cancel(
+                ctx.emitter.as_ref(),
+                &ctx.pool,
+                &ev,
+                &current_asst_msg_id,
+                tool_round,
+            )
+            .await;
         }
 
         // 【B1 轮数上限硬闸】无限 range 的等价界：正常流必在阶段 H 判定（终止或
@@ -344,7 +349,7 @@ async fn stream_loop_inner(
         // 此时上一轮 assistant 已 finalize + tool_result 已落盘，直接收尾安全。
         if tool_round >= effective_max_rounds {
             return finalize_success(
-                &ctx.app,
+                ctx.emitter.as_ref(),
                 &ctx.pool,
                 &ev,
                 &current_asst_msg_id,
@@ -487,7 +492,7 @@ async fn stream_loop_inner(
                 // consume_stream 始终失败，round_text 仍是初始空串，故无部分内容可回写。
                 let err_msg = format!("连接重试已耗尽（共 {} 次）", ctx.budget.max_attempts);
                 return fail_round_and_cancel(
-                    &ctx.app,
+                    ctx.emitter.as_ref(),
                     &ctx.pool,
                     &ev,
                     &current_asst_msg_id,
@@ -499,8 +504,14 @@ async fn stream_loop_inner(
             }
             RoundStreamResult::Aborted => {
                 // cancel 或不可重试错误（错误 emit 已由 stream_with_retry 内部完成）。
-                return finalize_cancel(&ctx.app, &ctx.pool, &ev, &current_asst_msg_id, tool_round)
-                    .await;
+                return finalize_cancel(
+                    ctx.emitter.as_ref(),
+                    &ctx.pool,
+                    &ev,
+                    &current_asst_msg_id,
+                    tool_round,
+                )
+                .await;
             }
         }
 
@@ -508,10 +519,10 @@ async fn stream_loop_inner(
         // 不用轮末重取——751/825 守卫点在工具执行后，重取会把工具耗时算进「生成耗时」。
         let round_gen_ms = round_timer.elapsed_ms();
         observable.elapsed_ms = round_gen_ms;
-        emit_intermediate_round_state(&ctx.app, &ctx.conv_id, observable);
+        emit_intermediate_round_state(ctx.emitter.as_ref(), &ctx.conv_id, observable);
         // 预算 HUD 数据源：本轮 usage 累计后的会话级状态（renewed=false 常规更新）
         emit_budget_state(
-            &ctx.app,
+            ctx.emitter.as_ref(),
             &ctx.conv_id,
             tool_round,
             cumulative_tokens,
@@ -595,7 +606,7 @@ async fn stream_loop_inner(
             )
             .await;
             return finalize_cancel(
-                &ctx.app,
+                ctx.emitter.as_ref(),
                 &ctx.pool,
                 &ev,
                 &current_asst_msg_id,
@@ -624,7 +635,7 @@ async fn stream_loop_inner(
                 );
                 // 续期 toast 数据源（renewed=true，前端非阻塞提示后继续）
                 emit_budget_state(
-                    &ctx.app,
+                    ctx.emitter.as_ref(),
                     &ctx.conv_id,
                     tool_round,
                     cumulative_tokens,
@@ -643,7 +654,7 @@ async fn stream_loop_inner(
                 );
                 // 终态事件：让 HUD 停在最终值（与终止提示行的数字一致）
                 emit_budget_state(
-                    &ctx.app,
+                    ctx.emitter.as_ref(),
                     &ctx.conv_id,
                     tool_round,
                     cumulative_tokens,
@@ -673,7 +684,7 @@ async fn stream_loop_inner(
                 )
                 .await;
                 return finalize_success(
-                    &ctx.app,
+                    ctx.emitter.as_ref(),
                     &ctx.pool,
                     &ev,
                     &current_asst_msg_id,
@@ -738,7 +749,7 @@ async fn stream_loop_inner(
             )
             .await;
             return finalize_success(
-                &ctx.app,
+                ctx.emitter.as_ref(),
                 &ctx.pool,
                 &ev,
                 &current_asst_msg_id,
@@ -825,7 +836,7 @@ async fn stream_loop_inner(
             // 终态：自然结束（stop）或续写次数用尽仍截断（length/max_tokens → 前端显示「已达长度上限」）。
             // 上方阶段 C 的 finalize_assistant_message 已用 msg_text 落盘完整全文。
             return finalize_success(
-                &ctx.app,
+                ctx.emitter.as_ref(),
                 &ctx.pool,
                 &ev,
                 &current_asst_msg_id,
@@ -865,7 +876,8 @@ async fn stream_loop_inner(
         )
         .await;
         let tool_result_blocks: Vec<ContentBlock> = match execute_tool_round(
-            &ctx.app,
+            ctx.emitter.as_ref(),
+            ctx.tool_app.as_ref(),
             &ctx.tool_registry,
             &ctx.auth_registry,
             &ctx.auth_session,
@@ -903,7 +915,7 @@ async fn stream_loop_inner(
                 )
                 .await;
                 return fail_round_and_cancel(
-                    &ctx.app,
+                    ctx.emitter.as_ref(),
                     &ctx.pool,
                     &ev,
                     &current_asst_msg_id,
@@ -940,7 +952,7 @@ async fn stream_loop_inner(
                 ctx.conv_id
             );
             return fail_round_and_cancel(
-                &ctx.app,
+                ctx.emitter.as_ref(),
                 &ctx.pool,
                 &ev,
                 &current_asst_msg_id,
@@ -985,7 +997,7 @@ async fn stream_loop_inner(
                 );
             }
             return fail_round_and_cancel(
-                &ctx.app,
+                ctx.emitter.as_ref(),
                 &ctx.pool,
                 &ev,
                 &current_asst_msg_id,
@@ -1058,7 +1070,7 @@ async fn stream_loop_inner(
                     effective_max_rounds,
                 );
                 return finalize_success(
-                    &ctx.app,
+                    ctx.emitter.as_ref(),
                     &ctx.pool,
                     &ev,
                     &current_asst_msg_id,
@@ -1093,7 +1105,7 @@ async fn stream_loop_inner(
             let err_msg = format!("创建下一轮 assistant 占位失败: {}", e);
             tracing::warn!(target: "ice_paw.chat", "{}", err_msg);
             return fail_round_and_cancel(
-                &ctx.app,
+                ctx.emitter.as_ref(),
                 &ctx.pool,
                 &ev,
                 &current_asst_msg_id,
@@ -1108,20 +1120,14 @@ async fn stream_loop_inner(
         batch_writer.set_msg_id(next_asst_id.clone()).await;
         // 通知前端：冻结上一条 assistant（写入其 tool_use/text/thinking）+ 插入 user(tool_result)
         // + 重置 streaming 状态 + push 新 assistant 占位。
-        if let Err(e) = ctx.app.emit(
+        crate::harness::r#loop::emitter::emit_ser(
+            ctx.emitter.as_ref(),
             "chat:assistant-start",
-            ChatAssistantStartPayload {
+            &ChatAssistantStartPayload {
                 conversation_id: ctx.conv_id.clone(),
                 message_id: next_asst_id.clone(),
             },
-        ) {
-            tracing::warn!(
-                target: "ice_paw.chat",
-                "emit chat:assistant-start 失败: conv_id={}, err={}",
-                ctx.conv_id,
-                e
-            );
-        }
+        );
         current_asst_msg_id = next_asst_id;
         // 新占位未 finalize——loop 顶若命中 cancel 需补 message_discarded
         current_asst_finalized = false;
@@ -1131,7 +1137,7 @@ async fn stream_loop_inner(
     // 顶部硬闸 return），保留以满足函数返回类型。current_asst_msg_id 此时为最后
     // 一条有内容的 assistant。
     finalize_success(
-        &ctx.app,
+        ctx.emitter.as_ref(),
         &ctx.pool,
         &ev,
         &current_asst_msg_id,

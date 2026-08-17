@@ -14,10 +14,8 @@
 //! user 消息里）。
 
 use sqlx::SqlitePool;
-use tauri::{AppHandle, Emitter, Manager};
 
 use crate::db::repo;
-use crate::harness::chat_state::ChatState;
 use crate::harness::error_mapping::friendly_error;
 use crate::harness::event_log::{self, EventCtx};
 use crate::infra::protocol::{ChatDonePayload, ChatErrorPayload, ContentBlock, TokenUsage};
@@ -188,11 +186,11 @@ pub(crate) async fn finalize_assistant_without_tool_use(
 ///
 /// `ev` 提供 conv_id / user_msg_id（token 回填目标）/ agent_id（actor）。
 /// `rounds` = 本 turn 完成的 LLM 轮数（含截断续写轮）。
-// 8 参数均为该收尾点的独立事实（app/pool + 事件上下文 + 终态四元组），无自然
+// 8 参数均为该收尾点的独立事实（emitter/pool + 事件上下文 + 终态四元组），无自然
 // 打包边界；强行收敛会造出只用一次的伪 struct。
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn finalize_success(
-    app: &AppHandle,
+    emitter: &dyn crate::harness::r#loop::emitter::LoopEmitter,
     pool: &SqlitePool,
     ev: &EventCtx,
     final_asst_msg_id: &str,
@@ -229,25 +227,24 @@ pub(crate) async fn finalize_success(
     // ★ 先 unregister 再 emit chat:done：消除竞态窗口——
     // 前端收到 chat:done 后可能立即发送下一条消息，若此时 token 尚未注销，
     // chat_state.start() 会命中"会话已有在途生成任务"。
-    cleanup(app, pool, &ev.conv_id);
-    if let Err(e) = app.emit(
+    cleanup(emitter);
+    crate::harness::r#loop::emitter::emit_ser(
+        emitter,
         "chat:done",
-        ChatDonePayload {
+        &ChatDonePayload {
             conversation_id: ev.conv_id.clone(),
             message_id: final_asst_msg_id.to_string(),
             finish_reason: finish_reason.to_string(),
             usage,
         },
-    ) {
-        tracing::warn!(target: "ice_paw.cleanup", "emit chat:done 失败: conv_id={}, err={}", ev.conv_id, e);
-    }
+    );
 }
 
 /// 中途取消：turn_ended(abort) 事件 + emit chat:done(abort) + 注销
 ///
 /// 当前 assistant 消息已由 BatchWriter flush 部分内容；本函数只负责收尾信号。
 pub(crate) async fn finalize_cancel(
-    app: &AppHandle,
+    emitter: &dyn crate::harness::r#loop::emitter::LoopEmitter,
     pool: &SqlitePool,
     ev: &EventCtx,
     asst_msg_id: &str,
@@ -268,18 +265,17 @@ pub(crate) async fn finalize_cancel(
     )
     .await;
     // ★ 先 unregister 再 emit chat:done（同 finalize_success 的排序修复）
-    cleanup(app, pool, &ev.conv_id);
-    if let Err(e) = app.emit(
+    cleanup(emitter);
+    crate::harness::r#loop::emitter::emit_ser(
+        emitter,
         "chat:done",
-        ChatDonePayload {
+        &ChatDonePayload {
             conversation_id: ev.conv_id.clone(),
             message_id: asst_msg_id.to_string(),
             finish_reason: "abort".to_string(),
             usage: None,
         },
-    ) {
-        tracing::warn!(target: "ice_paw.cleanup", "emit chat:done(abort) 失败: conv_id={}, err={}", ev.conv_id, e);
-    }
+    );
 }
 
 /// 本轮失败的错误收尾（不含 finalize）：回写错误信息 + `message_error` 事件 +
@@ -295,7 +291,7 @@ pub(crate) async fn finalize_cancel(
 /// session-events（Phase 0）：`message_error` 事件镜像 messages.error 回写
 /// （kind + 原始错误串，非 friendly 文案）。
 pub(crate) async fn emit_round_error(
-    app: &AppHandle,
+    emitter: &dyn crate::harness::r#loop::emitter::LoopEmitter,
     pool: &SqlitePool,
     ev: &EventCtx,
     msg_id: &str,
@@ -311,22 +307,16 @@ pub(crate) async fn emit_round_error(
         );
     }
     event_log::log_message_error(pool, ev, msg_id, kind, err_msg).await;
-    if let Err(em) = app.emit(
+    crate::harness::r#loop::emitter::emit_ser(
+        emitter,
         "chat:error",
-        ChatErrorPayload {
+        &ChatErrorPayload {
             conversation_id: ev.conv_id.clone(),
             message_id: msg_id.to_string(),
             kind: kind.to_string(),
             message: friendly_error(err_msg),
         },
-    ) {
-        tracing::warn!(
-            target: "ice_paw.chat",
-            "emit chat:error 失败: conv_id={}, err={}",
-            ev.conv_id,
-            em
-        );
-    }
+    );
 }
 
 /// 本轮失败收尾：[`emit_round_error`] + [`finalize_cancel`]。
@@ -334,7 +324,7 @@ pub(crate) async fn emit_round_error(
 /// 统一了 `stream_loop_inner` 内原先 6 处复制粘贴的「emit chat:error + update_error
 /// + finalize_cancel」块（重试耗尽 / 工具执行失败 / 持久化失败 / 占位创建失败等）。
 pub(crate) async fn fail_round_and_cancel(
-    app: &AppHandle,
+    emitter: &dyn crate::harness::r#loop::emitter::LoopEmitter,
     pool: &SqlitePool,
     ev: &EventCtx,
     msg_id: &str,
@@ -342,14 +332,16 @@ pub(crate) async fn fail_round_and_cancel(
     err_msg: &str,
     rounds: u32,
 ) {
-    emit_round_error(app, pool, ev, msg_id, kind, err_msg).await;
-    finalize_cancel(app, pool, ev, msg_id, rounds).await;
+    emit_round_error(emitter, pool, ev, msg_id, kind, err_msg).await;
+    finalize_cancel(emitter, pool, ev, msg_id, rounds).await;
 }
 
-/// 注销 CancellationToken（所有退出路径的公共收尾）
-pub(crate) fn cleanup(app: &AppHandle, _pool: &SqlitePool, conv_id: &str) {
-    let chat_state = app.state::<ChatState>();
-    chat_state.unregister(conv_id);
+/// 注销 CancellationToken（所有退出路径的公共收尾）。
+///
+/// S6 起经 [`LoopEmitter::on_loop_exit`] 走（生产实现自带 conv_id = ChatState
+/// 注销；测试实现收集/记录），本模块不再触碰 `tauri::AppHandle`。
+pub(crate) fn cleanup(emitter: &dyn crate::harness::r#loop::emitter::LoopEmitter) {
+    emitter.on_loop_exit();
 }
 
 #[cfg(test)]

@@ -164,7 +164,8 @@ pub async fn send_message(
     // 完成信号 Receiver 直接 drop，前端靠流式事件感知进度。
     let _turn_done = session_runner::run_agent_turn(
         &session_runner::TurnEnv {
-            app: app.clone(),
+            emitter: crate::harness::r#loop::emitter::tauri_emitter(app.clone(), conv_id.clone()),
+            tool_app: Some(app.clone()),
             pool: pool.inner().clone(),
             route_registry: route_registry.inner(),
             global_registry: Arc::clone(global_registry.inner()),
