@@ -1,6 +1,6 @@
-// useActiveTurn 单测：pickActiveTurn 纯判定 + fake IntersectionObserver 接线。
-// 背景见 composable 头注释——治 topsCache 静态 offsetTop 在
-// content-visibility:auto 估高布局下的系统性漂移。
+// useActiveTurn 单测：pickActiveTurn 纯判定（底线语义）+ fake IntersectionObserver
+// 接线 + 跳转钉子。背景见 composable 头注释——底线 = 输入框上方一根判定线，
+// 线在哪轮的区域里就是哪轮；跳转钉住 N，亲手滚动解钉。
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createApp, defineComponent, h, nextTick, ref } from "vue";
 import { pickActiveTurn, useActiveTurn } from "../useActiveTurn";
@@ -13,38 +13,30 @@ const anchor = (i: number): TurnAnchor => ({
 });
 
 // ---------------------------------------------------------------------------
-// pickActiveTurn 纯判定
+// pickActiveTurn 纯判定（底线语义：线落哪轮的区域就是哪轮）
 // ---------------------------------------------------------------------------
 
 describe("pickActiveTurn", () => {
   it("空相交集合 → null（视口落在长轮中部，保持上次值）", () => {
-    expect(pickActiveTurn([])).toBeNull();
+    expect(pickActiveTurn([], 576)).toBeNull();
   });
 
-  it("最小轮锚点已过判定线（top ≤ 80）→ 该轮", () => {
-    expect(pickActiveTurn([{ turn: 3, top: 80 }])).toBe(3);
-    expect(pickActiveTurn([{ turn: 3, top: 0 }])).toBe(3);
+  it("线以上有锚点 → 线以上最大轮号（线落在其区域内）", () => {
+    expect(pickActiveTurn([{ turn: 3, top: 576 }], 576)).toBe(3);
+    expect(pickActiveTurn([{ turn: 3, top: 0 }], 576)).toBe(3);
+    // 轮 1、3 都在线上，轮 2 缺席（不相交）→ 线在轮 3 的区域
+    expect(pickActiveTurn([{ turn: 1, top: 0 }, { turn: 3, top: 500 }], 576)).toBe(3);
+    // 轮 3 锚点在线下 → 线在轮 2 的区域
+    expect(pickActiveTurn([{ turn: 1, top: 0 }, { turn: 3, top: 500 }], 400)).toBe(1);
   });
 
-  it("最小轮锚点在线下（top > 80）→ 上一轮（在读其尾部）", () => {
-    expect(pickActiveTurn([{ turn: 3, top: 200 }])).toBe(2);
+  it("线以上无、线下有 → 线下最小轮 - 1（线在首锚上方，读上一轮尾部）", () => {
+    expect(pickActiveTurn([{ turn: 3, top: 200 }], 100)).toBe(2);
+    expect(pickActiveTurn([{ turn: 2, top: 300 }, { turn: 3, top: 500 }], 100)).toBe(1);
   });
 
-  it("t-1 下探钳制到 1（第 1 轮锚点在线下也不得变 0）", () => {
-    expect(pickActiveTurn([{ turn: 1, top: 300 }])).toBe(1);
-  });
-
-  it("取最小轮判定（多轮相交时 min-turn 主导，其余轮位置无关）", () => {
-    // 轮 2 过线、轮 5 也相交：读的是轮 2
-    expect(pickActiveTurn([
-      { turn: 5, top: 0 },
-      { turn: 2, top: 40 },
-    ])).toBe(2);
-    // 轮 2 未过线 → 轮 1（尽管轮 5 早已过线）
-    expect(pickActiveTurn([
-      { turn: 5, top: 0 },
-      { turn: 2, top: 120 },
-    ])).toBe(1);
+  it("u-1 下探钳制到 1（线在第 1 轮锚点上方也不得变 0）", () => {
+    expect(pickActiveTurn([{ turn: 1, top: 300 }], 100)).toBe(1);
   });
 });
 
@@ -90,6 +82,11 @@ function mockRect(el: HTMLElement, top: number) {
   el.getBoundingClientRect = () => ({ top, bottom: top, height: 0, left: 0, right: 0, width: 0, x: 0, y: top, toJSON: () => ({}) }) as DOMRect;
 }
 
+/** 容器高固定为 h（jsdom clientHeight 恒 0；线 Y = h - LINE_FROM_BOTTOM_PX(24)） */
+function mockHeight(el: HTMLElement, h: number) {
+  Object.defineProperty(el, "clientHeight", { value: h, configurable: true });
+}
+
 function fireIO(io: FakeIO, entries: { el: Element; isIntersecting: boolean }[]) {
   io.cb(
     entries.map(({ el, isIntersecting }) => ({ target: el, isIntersecting })) as unknown as IntersectionObserverEntry[],
@@ -99,7 +96,20 @@ function fireIO(io: FakeIO, entries: { el: Element; isIntersecting: boolean }[])
 
 const nextFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
 
-describe("useActiveTurn 接线", () => {
+/** 标准夹具：容器高 600（线 Y=576），三轮锚点元素 m1/m2/m3 */
+function fixture(turns: number) {
+  const container = document.createElement("div");
+  mockHeight(container, 600);
+  const els = Array.from({ length: turns }, (_, i) => {
+    const el = document.createElement("div");
+    el.dataset.mid = `m${i + 1}`;
+    container.appendChild(el);
+    return el;
+  });
+  return { container, els };
+}
+
+describe("useActiveTurn 接线（底线语义）", () => {
   beforeEach(() => {
     FakeIO.instances = [];
     vi.stubGlobal("IntersectionObserver", FakeIO as unknown as typeof IntersectionObserver);
@@ -109,68 +119,82 @@ describe("useActiveTurn 接线", () => {
     document.body.innerHTML = "";
   });
 
-  it("只观察有锚点的元素；IO 相交/离场驱动 activeTurn；离场后保持上次值", async () => {
-    const container = document.createElement("div");
-    const els = [1, 2, 3].map((i) => {
-      const el = document.createElement("div");
-      el.dataset.mid = `m${i}`;
-      container.appendChild(el);
-      return el;
-    });
-    // 无锚点对应的消息组（assistant 等）不得被观察
-    const noAnchor = document.createElement("div");
-    noAnchor.dataset.mid = "assistant-x";
-    container.appendChild(noAnchor);
-
+  async function setup(turns: number) {
+    const { container, els } = fixture(turns);
     const containerRef = ref<HTMLElement | null>(null);
-    const anchorsRef = ref<TurnAnchor[]>([anchor(1), anchor(2), anchor(3)]);
+    const anchorsRef = ref<TurnAnchor[]>(Array.from({ length: turns }, (_, i) => anchor(i + 1)));
     const { result, unmount } = withSetup(() => useActiveTurn(containerRef, anchorsRef));
     containerRef.value = container;
     await nextTick();
     result.refresh();
-
     const io = FakeIO.instances[FakeIO.instances.length - 1];
-    expect(io.root).toBe(container);
-    expect(io.observed.size).toBe(3);
-    expect(io.observed.has(noAnchor)).toBe(false);
+    return { result, unmount, container, els, io, anchorsRef };
+  }
 
-    // 轮 2 相交但锚点在判定线下（top=200）→ 正在读轮 1 尾部
+  it("线在哪轮的区域里就是哪轮；离场后保持上次值", async () => {
+    const { result, unmount, els, io } = await setup(3);
+    // 轮 2 锚点 top=200 ≤ 线 576 → 线在轮 2 区域（顶线旧规则在此给 1）
     mockRect(els[1], 200);
-    fireIO(io, [{ el: els[1], isIntersecting: true }]);
-    expect(result.activeTurn.value).toBe(1);
-
-    // 轮 2 锚点滚过判定线 → active = 2
-    mockRect(els[1], 40);
     fireIO(io, [{ el: els[1], isIntersecting: true }]);
     expect(result.activeTurn.value).toBe(2);
 
-    // 轮 2 离开视口（视口落在其后内容中）→ 保持 2
+    // 轮 3 也相交且在线上（top=500）→ 线以上最大轮 = 3
+    mockRect(els[2], 500);
+    fireIO(io, [{ el: els[2], isIntersecting: true }]);
+    expect(result.activeTurn.value).toBe(3);
+
+    // 轮 3 离开视口（线落回轮 2 区域尾部）→ 回 2
+    fireIO(io, [{ el: els[2], isIntersecting: false }]);
+    expect(result.activeTurn.value).toBe(2);
+
+    // 全员离场（线在长轮中部）→ 保持上次值
     fireIO(io, [{ el: els[1], isIntersecting: false }]);
     expect(result.activeTurn.value).toBe(2);
 
     unmount();
   });
 
-  it("scroll 只重判边界（rAF 合帧），不依赖 IO 再触发", async () => {
-    const container = document.createElement("div");
-    const el = document.createElement("div");
-    el.dataset.mid = "m1";
-    container.appendChild(el);
-
-    const containerRef = ref<HTMLElement | null>(null);
-    const anchorsRef = ref<TurnAnchor[]>([anchor(1)]);
-    const { result, unmount } = withSetup(() => useActiveTurn(containerRef, anchorsRef));
-    containerRef.value = container;
-    await nextTick();
-    result.refresh();
-
-    const io = FakeIO.instances[FakeIO.instances.length - 1];
-    mockRect(el, 40);
-    fireIO(io, [{ el, isIntersecting: true }]);
+  it("scroll 只重判边界（rAF 合帧）：元素滚过线即换号，不依赖 IO 再触发", async () => {
+    const { result, unmount, container, els, io } = await setup(2);
+    // 初始：轮 1 在线上（100）、轮 2 在线下（700）→ 线在轮 1 区域
+    mockRect(els[0], 100);
+    mockRect(els[1], 700);
+    fireIO(io, [{ el: els[0], isIntersecting: true }, { el: els[1], isIntersecting: true }]);
     expect(result.activeTurn.value).toBe(1);
 
-    // 持续相交、无 IO 事件，仅元素滚到判定线下 → scroll 路径更新为上一轮
-    mockRect(el, 300);
+    // 滚动：轮 2 锚点升到线上（500）→ 线在轮 2 区域（scroll 路径，无 IO 事件）
+    mockRect(els[1], 500);
+    container.dispatchEvent(new Event("scroll"));
+    await nextFrame();
+    expect(result.activeTurn.value).toBe(2);
+
+    unmount();
+  });
+
+  it("跳转钉子：pin 即时生效压住线判定；滚轮/滚动键解钉；锚点重载失效", async () => {
+    const { result, unmount, container, els, io, anchorsRef } = await setup(2);
+    mockRect(els[0], 100);
+    mockRect(els[1], 700);
+    fireIO(io, [{ el: els[0], isIntersecting: true }, { el: els[1], isIntersecting: true }]);
+    expect(result.activeTurn.value).toBe(1);
+
+    // 跳转钉住轮 5（线判定说 1，钉子赢——跳转后线可能落在 N+k 区域）
+    result.pin(5);
+    expect(result.activeTurn.value).toBe(5);
+    // 钉住期 IO/scroll 重算静默：锚点位置变化不改号
+    mockRect(els[1], 300);
+    container.dispatchEvent(new Event("scroll"));
+    await nextFrame();
+    expect(result.activeTurn.value).toBe(5);
+
+    // 滚轮 = 亲手滚动意图 → 解钉，立即回归线判定（轮 2 已在线上）
+    container.dispatchEvent(new Event("wheel"));
+    expect(result.activeTurn.value).toBe(2);
+
+    // 再钉 + 锚点列表重载（切会话/新轮）→ 钉子失效
+    result.pin(5);
+    anchorsRef.value = [anchor(1), anchor(2), { ...anchor(3), message_id: "m3" }];
+    mockRect(els[1], 700); // 轮 2 回线下 → 线在轮 1 区域
     container.dispatchEvent(new Event("scroll"));
     await nextFrame();
     expect(result.activeTurn.value).toBe(1);
@@ -178,23 +202,29 @@ describe("useActiveTurn 接线", () => {
     unmount();
   });
 
+  it("滚动键（键盘滚动）也解钉", async () => {
+    const { result, unmount, container, els, io } = await setup(2);
+    mockRect(els[0], 100);
+    mockRect(els[1], 700);
+    fireIO(io, [{ el: els[0], isIntersecting: true }, { el: els[1], isIntersecting: true }]);
+    result.pin(3);
+    expect(result.activeTurn.value).toBe(3);
+
+    container.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown" }));
+    expect(result.activeTurn.value).toBe(1); // 解钉 + 立即线判定
+
+    // 非滚动键不解钉
+    result.pin(3);
+    container.dispatchEvent(new KeyboardEvent("keydown", { key: "a" }));
+    expect(result.activeTurn.value).toBe(3);
+
+    unmount();
+  });
+
   it("refresh 重建观察：翻页后新元素入观察、旧实例断开；轮号重映射即时生效", async () => {
-    const container = document.createElement("div");
-    const el = document.createElement("div");
-    el.dataset.mid = "m1";
-    container.appendChild(el);
-
-    const containerRef = ref<HTMLElement | null>(null);
-    // 翻页场景：m1 原是轮 1，加载更早一页后 m1 变轮 2
-    const anchorsRef = ref<TurnAnchor[]>([anchor(1)]);
-    const { result, unmount } = withSetup(() => useActiveTurn(containerRef, anchorsRef));
-    containerRef.value = container;
-    await nextTick();
-    result.refresh();
-
-    const io1 = FakeIO.instances[FakeIO.instances.length - 1];
-    mockRect(el, 40);
-    fireIO(io1, [{ el, isIntersecting: true }]);
+    const { result, unmount, container, els, io: io1, anchorsRef } = await setup(1);
+    mockRect(els[0], 40);
+    fireIO(io1, [{ el: els[0], isIntersecting: true }]);
     expect(result.activeTurn.value).toBe(1);
 
     // 加载更早一页：锚点列表前置一条 → m1 变轮 2
@@ -209,8 +239,8 @@ describe("useActiveTurn 接线", () => {
     expect(io1.observed.size).toBe(0);
     expect(io2.observed.size).toBe(2);
 
-    // 同一元素同位置，轮号按新映射判：m1 过线 → 轮 2
-    fireIO(io2, [{ el, isIntersecting: true }]);
+    // 同一元素同位置，轮号按新映射判：m1 在线上 → 轮 2
+    fireIO(io2, [{ el: els[0], isIntersecting: true }]);
     expect(result.activeTurn.value).toBe(2);
 
     unmount();
