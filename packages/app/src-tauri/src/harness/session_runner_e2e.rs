@@ -13,7 +13,8 @@
 //! 4. **TurnSummary**：delegate 完成信号（finish_reason / final_text / rounds）
 //!
 //! 场景矩阵：正常回合 / 空响应 / 限流重试中取消 / 预算触顶（显式硬上限）/
-//! 流中取消（占位 discard）/ 工具轮（tool_use ↔ tool_execution ↔ tool_result 配对）。
+//! 流中取消（占位 discard）/ 工具轮（tool_use ↔ tool_execution ↔ tool_result 配对）/
+//! 零事件旧行会话（Phase 2B legacy 读路径退役的行为锁定）。
 //!
 //! 基建照抄 tests/session_event_log_e2e.rs（in-memory SQLite + migrate! + 种子行）；
 //! 须放 src/ 内部——`run_agent_turn` 是 pub(crate)，tests/ 目录拿不到。
@@ -148,6 +149,12 @@ struct TurnFixture {
 /// 跑一个完整回合（tools=false 时全局注册表为空）。
 async fn run_turn(scenario: MockScenario, tools: bool, extra_params: &str) -> TurnFixture {
     let pool = seeded_pool(extra_params).await;
+    run_turn_on(pool, scenario, tools).await
+}
+
+/// 在**已有库**上跑一个完整回合（调用方先注入自定义形态——如零事件旧行——
+/// 再驱动回合，验证读路径对存量数据的反应）。
+async fn run_turn_on(pool: SqlitePool, scenario: MockScenario, tools: bool) -> TurnFixture {
     let emitter = CollectEmitter::default();
     let cancel = CancellationToken::new();
 
@@ -595,4 +602,82 @@ async fn tool_round_pairs_use_execution_result() {
         names.contains(&"chat:done".to_string()),
         "应含终态 chat:done: {names:?}"
     );
+}
+
+// =========================================================================
+// 场景 7：零事件旧行会话 —— Phase 2B legacy 读路径退役的行为锁定。
+//
+// 形态：会话有 pre-Phase-0 旧行（无事件），boot backfill 未覆盖的残留
+// （如 backfill 后 SQLite 异常降级）。退役后这是**降级但诚实**的行为：
+// 派生历史为空 → LLM 看不到旧行 → 回合照常完成；旧行本身不动
+// （前端 list_messages 照常显示）；下次 boot 会被 backfill 捕获自愈。
+// =========================================================================
+
+/// 预置零事件旧行（不经事件日志的裸行——pre-Phase-0 形态）。
+async fn seed_legacy_rows_without_events(pool: &SqlitePool) {
+    for (id, role, text) in [("old-u", "user", "旧问题"), ("old-a", "assistant", "旧回答")] {
+        repo::message::create(
+            pool,
+            id,
+            &crate::db::models::NewMessage {
+                conversation_id: "conv-e".into(),
+                role: role.into(),
+                content: text.into(),
+                token_count: None,
+                error: None,
+                model: None,
+            },
+        )
+        .await
+        .expect("seed legacy row");
+        let blocks = serde_json::to_string(&[ContentBlock::text(text)]).unwrap();
+        repo::message::update_content_blocks(pool, id, &blocks)
+            .await
+            .expect("seed legacy blocks");
+    }
+}
+
+#[tokio::test]
+async fn legacy_rows_without_events_yield_empty_history_but_turn_completes() {
+    let pool = seeded_pool("{}").await;
+    seed_legacy_rows_without_events(&pool).await;
+    let mut fx = run_turn_on(pool, MockScenario::NormalReply, false).await;
+    let summary = finish(&mut fx).await;
+
+    // 回合照常完成（不 panic、不 Err——降级是「缺历史」不是「崩」）
+    assert_eq!(summary.finish_reason, "stop");
+    assert_eq!(summary.final_text, "Hello from MockProvider");
+
+    // 最硬证据：LLM 实际收到的 messages 里**没有**旧行（派生历史为空），
+    // 只有本轮输入（system 前缀 + user("hello")）。
+    let received = fx.mock.received_messages();
+    assert_eq!(received.len(), 1, "NormalReply 单次调用");
+    let texts: Vec<String> = received[0].iter().map(|m| m.content_text()).collect();
+    assert!(
+        !texts.iter().any(|t| t.contains("旧问题") || t.contains("旧回答")),
+        "零事件旧行不应进入 LLM 历史: {texts:?}"
+    );
+    assert!(
+        texts.iter().any(|t| t.contains("hello")),
+        "本轮输入应在: {texts:?}"
+    );
+
+    // 旧行原样保留（前端 list_messages 路径不受读路径退役影响）
+    let rows = message_rows(&fx.pool).await;
+    assert_eq!(rows.len(), 4, "旧行×2 + 本轮 user/assistant: {rows:#?}");
+    assert_eq!(rows[0].id, "old-u");
+    assert_eq!(rows[1].id, "old-a");
+
+    // 本轮事件从 seq=1 正常写入（该会话首个事件纪元，append-only 语义不受旧行影响）
+    let events = event_rows(&fx.pool).await;
+    assert_eq!(
+        kinds(&events),
+        vec![
+            "user_message",
+            "turn_context",
+            "assistant_message",
+            "turn_ended"
+        ]
+    );
+    assert_event_invariants(&events, &fx.user_msg_id);
 }

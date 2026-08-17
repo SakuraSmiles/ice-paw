@@ -154,6 +154,10 @@ pub struct MockProvider {
     /// `Arc<AtomicU32>` 保 Clone（多克隆共享同一计数——e2e 里 provider 经
     /// `Arc<dyn LlmProvider>` 单实例流转，计数天然连续）。
     call_index: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    /// 各次 `stream_chat` 收到的 messages 快照（e2e 断言「LLM 实际看到的历史」——
+    /// Phase 2B 读路径退役后验证「零事件会话派生空历史」的最硬证据）。
+    /// Arc<Mutex> 保 Clone 共享，与 call_index 同理。
+    received: std::sync::Arc<std::sync::Mutex<Vec<Vec<ChatMessage>>>>,
 }
 
 impl MockProvider {
@@ -163,12 +167,21 @@ impl MockProvider {
             model: model.into(),
             scenario,
             call_index: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            received: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         }
     }
 
     /// 已发生的 `stream_chat` 调用次数（e2e 断言「工具轮后确实二轮收尾」用）。
     pub fn call_count(&self) -> u32 {
         self.call_index.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// 各次调用收到的 messages（按调用序；测试断言用）。
+    pub fn received_messages(&self) -> Vec<Vec<ChatMessage>> {
+        self.received
+            .lock()
+            .map(|r| r.clone())
+            .unwrap_or_default()
     }
 
     /// 便利构造：默认 NormalReply 场景
@@ -217,6 +230,10 @@ impl LlmProvider for MockProvider {
         model: Option<&str>,
         cancel: CancellationToken,
     ) -> AppResult<Pin<Box<dyn Stream<Item = AppResult<ChatDelta>> + Send>>> {
+        // messages 快照留档（e2e 断言「LLM 实际看到的历史」用；锁竞争仅测试场景）
+        if let Ok(mut received) = self.received.lock() {
+            received.push(messages.clone());
+        }
         // P0-3: 与真实 Adapter 保持一致——优先用调用方传入的 model，否则 self.model
         // 仅在「已决定本次调用是否走通」前打印日志使用，不影响流内容。
         let effective_model = model.unwrap_or(&self.model);

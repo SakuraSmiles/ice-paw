@@ -295,7 +295,7 @@ pub async fn get_read_route_status(
 ) -> AppResult<crate::harness::read_route::ReadRouteStatus> {
     let resolved = if let Some(cid) = &conversation_id {
         repo::conversation::get_by_id(pool.inner(), cid).await?;
-        Some(route_registry.resolve(pool.inner(), cid, false).await?)
+        Some(route_registry.resolve(pool.inner(), cid).await?)
     } else {
         None
     };

@@ -376,11 +376,11 @@ async fn read_route_derive_for_reconcile_green_rich_script() {
     script_consistent_turn(&pool).await;
 
     let reg = ReadRouteRegistry::new();
-    let d = reg.resolve(&pool, "conv-e", false).await.expect("resolve");
+    let d = reg.resolve(&pool, "conv-e").await.expect("resolve");
     assert_eq!(
         d.route,
         ReadRoute::Derive,
-        "reconcile 零 diff 的丰富脚本应路由 derive: {:#?}",
+        "reconcile 零 diff 的丰富脚本应判绿（监控语义）: {:#?}",
         d
     );
     assert_eq!(d.reason, "green");
@@ -412,11 +412,11 @@ async fn read_route_legacy_for_mixed_epoch() {
     script_consistent_turn(&pool).await;
 
     let reg = ReadRouteRegistry::new();
-    let d = reg.resolve(&pool, "conv-e", false).await.expect("resolve");
+    let d = reg.resolve(&pool, "conv-e").await.expect("resolve");
     assert_eq!(
         d.route,
         ReadRoute::Legacy,
-        "混合纪元（旧行+新事件）应路由 legacy（派生看不到旧行）: {:#?}",
+        "混合纪元（旧行+新事件）应判非绿（派生看不到旧行）: {:#?}",
         d
     );
     assert_eq!(d.reason, "mixed_epoch");
@@ -455,4 +455,88 @@ async fn reconcile_real_db() {
         "{}",
         serde_json::to_string_pretty(&report).expect("serialize report")
     );
+}
+
+// =========================================================================
+// 真机快照 backfill 验证（非 CI；S1 Phase 2B 阶段 0 门槛）
+//
+// 对【真机库的拷贝】执行完整 boot 序列（migrate → backfill → 全会话对账路由），
+// 验证 backfill 把零事件旧会话转为纯事件纪元且构造性零 diff——legacy 读路径
+// 退役（S1 本体）的前置闸门。
+//
+// ⚠️ backfill 会写库——**只许指向拷贝**（sqlite backup API 先做一致性快照），
+// 绝不指向生产库。
+//
+//     ICEPAW_BACKFILL_DB="C:\Users\<u>\AppData\Local\Temp\s1-verify\ice-paw-copy.db" \
+//     cargo test --test session_reconcile_e2e backfill_real_db_snapshot -- --ignored --nocapture
+// =========================================================================
+
+#[tokio::test]
+#[ignore = "需真实库快照路径，显式触发；只指向拷贝"]
+async fn backfill_real_db_snapshot() {
+    let db_path =
+        std::env::var("ICEPAW_BACKFILL_DB").expect("设 ICEPAW_BACKFILL_DB=<真机库拷贝路径>");
+
+    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{db_path}"))
+        .expect("valid sqlite url")
+        .create_if_missing(false)
+        .foreign_keys(true);
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(opts)
+        .await
+        .expect("connect snapshot db");
+
+    // boot 序列 1：migrate（幂等——真实库已应用至最新则 no-op）
+    sqlx::migrate!("./src/db/migrations")
+        .run(&pool)
+        .await
+        .expect("migrations");
+
+    // boot 序列 2：backfill（写拷贝）
+    let report = ice_paw_lib::harness::backfill::backfill_legacy_sessions(&pool).await;
+    println!(
+        "backfill 报告: backfilled={} events_written={} failed={} epoch_rows={}",
+        report.backfilled, report.events_written, report.failed, report.epoch_rows
+    );
+    assert_eq!(report.failed, 0, "backfill 不应有失败会话");
+
+    // 全会话路由 + 对账：backfill 后所有会话应 Derive + 零 diff（打印细节后断言）
+    let convs: Vec<(String,)> = sqlx::query_as("SELECT id FROM conversations ORDER BY created_at")
+        .fetch_all(&pool)
+        .await
+        .expect("list conversations");
+
+    let reg = ReadRouteRegistry::new();
+    let mut derive_n = 0usize;
+    let mut legacy_n = 0usize;
+    for (cid,) in &convs {
+        let d = reg.resolve(&pool, cid).await.expect("resolve");
+        let rep = reconcile_session(&pool, cid).await.expect("reconcile");
+        if d.route == ReadRoute::Derive && rep.diffs.is_empty() {
+            derive_n += 1;
+        } else {
+            legacy_n += 1;
+            println!(
+                "非绿: {cid} route={:?} reason={} events={} diffs={} skipped={:?}",
+                d.route,
+                d.reason,
+                d.events_total,
+                rep.diffs.len(),
+                rep.skipped
+            );
+        }
+    }
+    println!(
+        "总结: {} 会话 = {} Derive+零diff / {} 非绿",
+        convs.len(),
+        derive_n,
+        legacy_n
+    );
+    assert_eq!(legacy_n, 0, "backfill 后仍存在非绿会话（细节见上方打印）");
+    assert!(
+        derive_n + legacy_n >= 9,
+        "9 个 pre-Phase-0 旧会话应全部覆盖（含 17 个已事件会话共 26）"
+    );
+    let _ = report.payload_bytes; // 报告字段留存（boot 日志同款计量）
 }

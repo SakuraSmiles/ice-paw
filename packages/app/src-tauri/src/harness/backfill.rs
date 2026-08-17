@@ -685,7 +685,7 @@ mod tests {
 
         // 路由：Derive green（零 diff + 无 epoch 行 → 现有判据直接放行）
         let reg = ReadRouteRegistry::new();
-        let d = reg.resolve(&pool, "conv-bf", false).await.unwrap();
+        let d = reg.resolve(&pool, "conv-bf").await.unwrap();
         assert_eq!(d.route, ReadRoute::Derive);
         assert_eq!(d.reason, "green");
     }
@@ -840,7 +840,7 @@ mod tests {
             rep.skipped
         );
         let reg = ReadRouteRegistry::new();
-        let d = reg.resolve(&pool, "conv-orphan", false).await.unwrap();
+        let d = reg.resolve(&pool, "conv-orphan").await.unwrap();
         assert_eq!(d.route, ReadRoute::Legacy);
         assert_eq!(d.reason, "mixed_epoch");
     }
@@ -882,7 +882,7 @@ mod tests {
         assert!(rep.diffs.is_empty(), "diffs: {:#?}", rep.diffs);
         let reg = ReadRouteRegistry::new();
         assert_eq!(
-            reg.resolve(&pool, "conv-bf", false).await.unwrap().route,
+            reg.resolve(&pool, "conv-bf").await.unwrap().route,
             ReadRoute::Derive
         );
         let v2 = repo::preferences::get(&pool, "session_backfill_version")
