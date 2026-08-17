@@ -32,6 +32,7 @@ pub mod proposal_registry;
 pub mod provider;
 pub mod read_route;
 pub mod reconcile;
+pub mod references;
 pub mod retry;
 pub mod scoring;
 pub mod session_runner;
