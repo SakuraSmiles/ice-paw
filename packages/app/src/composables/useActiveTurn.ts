@@ -16,7 +16,9 @@
 //
 // 坐标可信性根因不变（2026-08-15）：content-visibility:auto 估高布局下未
 // 渲染组 offsetTop 系统性漂移——只对实际相交（= 已渲染，坐标真实）的锚点
-// 读 gBCR 判定；集合空（线在长轮中部，前后锚点都不相交）保持上次值。
+// 读 gBCR 判定；集合空（线在长轮中部，前后锚点都不相交）保持上次值；
+// 无上次值（切会话/锚点重载后）按滚动几何 bootstrap（贴底精确 = 末轮），
+// detach 元素剔除防 DOM 换血竞态算出旧会话轮号。
 
 import { computed, onBeforeUnmount, ref, watch, type Ref } from "vue";
 import type { TurnAnchor } from "../types";
@@ -84,7 +86,17 @@ export function useActiveTurn(
   function recompute() {
     if (pinned.value !== null) return; // 钉住期线判定静默（activeTurn 已由 pin 直写）
     const root = container.value;
-    if (!root || intersecting.size === 0) return;
+    if (!root) return;
+    // DOM 换血竞态（切会话 → refresh 重建之间的窗口）：旧会话元素已移出
+    // 容器，gBCR 全 0 会被当作「线以上」算出旧轮号——剔除（root.contains
+    // 而非 isConnected：判「是否还属于本容器」，与挂没挂 document 无关）
+    for (const el of intersecting.keys()) {
+      if (!root.contains(el)) intersecting.delete(el);
+    }
+    if (intersecting.size === 0) {
+      bootstrapIfUnknown(root);
+      return;
+    }
     const rootTop = root.getBoundingClientRect().top;
     const lineY = root.clientHeight - LINE_FROM_BOTTOM_PX;
     const visible = Array.from(intersecting, ([el, turn]) => ({
@@ -93,6 +105,24 @@ export function useActiveTurn(
     }));
     const picked = pickActiveTurn(visible, lineY);
     if (picked !== null) activeTurn.value = picked; // null = 保持上次值
+  }
+
+  /** 空集兜底：无上次值（切会话/锚点重载后）时按滚动几何定初值。
+   *  贴底（默认进入态）精确 = 末轮——治「长尾轮会话贴底横杠」（末轮锚点
+   *  滚出视口顶、集空、上次值 null 三碰头）；中段按比例粗估（估高布局下
+   *  足够 bootstrap，任何锚点一进视口即被 IO 精确接管）。有上次值不动——
+   *  长轮中段滚动保持语义。 */
+  function bootstrapIfUnknown(root: HTMLElement) {
+    if (activeTurn.value !== null) return;
+    const total = anchors.value.length;
+    if (total === 0) return;
+    if (root.scrollTop + root.clientHeight >= root.scrollHeight - 4) {
+      activeTurn.value = total; // 贴底 = 正在读末轮
+      return;
+    }
+    if (root.scrollHeight <= 0) return; // 布局不可得（测试环境）
+    const frac = (root.scrollTop + root.clientHeight) / root.scrollHeight;
+    activeTurn.value = Math.min(total, Math.max(1, Math.ceil(frac * total)));
   }
 
   /** 跳转钉子：显式位置声明，立即生效（不等滚动/IO 事件） */
@@ -151,8 +181,13 @@ export function useActiveTurn(
     if (SCROLL_KEYS.has(e.key)) onUserScrollIntent();
   }
 
-  // 锚点列表重载（切会话/新轮开始）→ 钉子失效：轮号语义已换界，旧号不可信
-  watch(anchors, () => { pinned.value = null; });
+  // 锚点列表重载（切会话/新轮开始）→ 钉子与上次值双双失效：轮号语义已换界，
+  // 旧号不可信（切会话保留旧号 = 显示错号的来源之一）。失忆后由 IO/滚动
+  // 重算，空集则 bootstrap 兜底——「保持」只服务同界内的长轮中段滚动
+  watch(anchors, () => {
+    pinned.value = null;
+    activeTurn.value = null;
+  });
 
   // 容器挂载/更换：重挂滚动监听 + 重建观察（root 变了 IO 必须重建）
   watch(container, (el, _, onCleanup) => {
