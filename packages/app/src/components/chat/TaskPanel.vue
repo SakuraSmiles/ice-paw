@@ -287,14 +287,14 @@ function openTask(id: string) {
    不再撑出页面，各列独立 max-height 内滚；窄窗 wrap 堆叠回纵向） */
 .task-popover {
   position: absolute; top: calc(100% + 6px); right: 0; z-index: 100;
-  min-width: 320px; max-width: min(560px, calc(100vw - 48px)); padding: 6px;
+  min-width: 320px; max-width: min(720px, calc(100vw - 48px)); padding: 6px;
   background: var(--ip-color-bg-elevated);
   border: 1px solid var(--ip-color-border-default);
   border-radius: var(--ip-radius-lg);
   box-shadow: var(--ip-shadow-lg);
 }
 .task-columns { display: flex; flex-wrap: wrap; gap: 6px; }
-.task-col { flex: 1 1 0; min-width: 220px; display: flex; flex-direction: column; gap: 2px; }
+.task-col { flex: 1 1 0; min-width: 260px; display: flex; flex-direction: column; gap: 2px; }
 .col-head {
   display: flex; align-items: center; gap: 8px;
   font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary);
@@ -326,7 +326,7 @@ function openTask(id: string) {
 .task-row-time { flex-shrink: 0; font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
 /* 被委派的专家名（UX #4）：小徽标式弱化呈现，不与任务文本抢主信息 */
 .task-row-agent {
-  flex-shrink: 0; max-width: 96px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  flex-shrink: 0; max-width: 120px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
   font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary);
   padding: 1px 8px; border-radius: var(--ip-radius-full, 999px);
   background: var(--ip-color-bg-tertiary);
