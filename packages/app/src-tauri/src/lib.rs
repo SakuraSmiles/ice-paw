@@ -221,6 +221,25 @@ pub fn run() {
                 );
             }
 
+            // 2b-2) 旧会话事件 backfill（Phase 2B 前置，幂等、纯增量）：零事件
+            //        旧会话反向合成 session_events → 对账零 diff → read_route
+            //        自动路由 Derive。不碰 messages 行、不碰真实事件；就算合成
+            //        有错 → reconcile diff → 自动回退 Legacy（安全网）。
+            let bf = tauri::async_runtime::block_on(harness::backfill::backfill_legacy_sessions(
+                &pool,
+            ));
+            if bf.backfilled > 0 || bf.failed > 0 {
+                tracing::info!(
+                    target: "ice_paw.backfill",
+                    sessions = bf.backfilled,
+                    events = bf.events_written,
+                    bytes = bf.payload_bytes,
+                    failed = bf.failed,
+                    epoch_rows = bf.epoch_rows,
+                    "旧会话事件 backfill 完成"
+                );
+            }
+
             // 3) A2-3: 安装工具授权响应全局监听器（前端 chat:tool-auth-response）
             let auth_registry = harness::tool_executor::ToolAuthRegistry::new();
             auth_registry.install_listener(

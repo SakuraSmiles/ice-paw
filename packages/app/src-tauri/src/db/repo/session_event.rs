@@ -220,6 +220,23 @@ pub async fn rewrite_backfill_batch(
     Ok(n)
 }
 
+/// backfill 候选：有消息行但零事件的会话（pre-Phase-0 旧会话）。
+///
+/// 混合纪元会话（有真实事件 + 纪元前旧行）天然被排除——seq 的 MAX+1 追加
+/// 语义装不进历史前缀，补了只会错序（见 `harness::backfill` 模块头）。
+/// rowid 序保证多 boot 间处理顺序稳定。
+pub async fn find_zero_event_sessions(pool: &SqlitePool) -> AppResult<Vec<String>> {
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT c.id FROM conversations c
+          WHERE NOT EXISTS (SELECT 1 FROM session_events e WHERE e.session_id = c.id)
+            AND EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id)
+          ORDER BY c.rowid ASC",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|(id,)| id).collect())
+}
+
 /// 窗口前（`seq < before_seq` 一侧）的全局轮次数——轨迹尾部优先分页的轮号偏移（M3）。
 ///
 /// 按 `COUNT(DISTINCT turn_id)` 计（`turn_id IS NULL` 的孤儿事件经 COALESCE 算作
