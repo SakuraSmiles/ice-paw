@@ -170,6 +170,7 @@ fn big_msg(role: &str, text: &str, rowid: i64) -> ChatMessage {
         role: role.into(),
         content: vec![ContentBlock::text(text)],
         source_rowid: Some(rowid),
+        source_seq: None,
     }
 }
 
@@ -284,7 +285,7 @@ async fn test_memory_stage_incremental_fold_advances_coverage() {
     let history = make_long_messages(40, 3000);
     let mut ctx = make_ctx(history, 10_000, None).await;
 
-    insert_summary_message(&ctx.pool, &ctx.conversation_id, "旧摘要", 10)
+    insert_summary_message(&ctx.pool, &ctx.conversation_id, "旧摘要", None, 10)
         .await
         .expect("pre-insert summary");
 

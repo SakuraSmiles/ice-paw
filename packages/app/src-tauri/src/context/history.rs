@@ -82,7 +82,9 @@ pub(crate) fn load_history_with_window(
             _ => continue,
         };
         // Phase 2：记录源 rowid，供 MemoryStage 按值定位摘要覆盖切断点。
+        // Phase 2B 阶段 2：事件纪元锚（派生行有值；DB 读出行恒 None）。
         let source_rowid = Some(msg.rowid);
+        let source_seq = msg.source_seq;
 
         // P2-2 G1: 优先从 content_blocks 还原多模态消息。
         // 空数组 / 无效 JSON / 解析失败 → 回退到纯文本（兼容旧消息）。
@@ -105,6 +107,7 @@ pub(crate) fn load_history_with_window(
                 role,
                 content: vec![ContentBlock::text(msg.content.clone())],
                 source_rowid,
+                source_seq,
             });
             continue;
         }
@@ -123,6 +126,7 @@ pub(crate) fn load_history_with_window(
                     role: "assistant".into(),
                     content: asst_blocks,
                     source_rowid,
+                    source_seq,
                 });
             }
             if !result_blocks.is_empty() {
@@ -130,6 +134,7 @@ pub(crate) fn load_history_with_window(
                     role: "user".into(),
                     content: result_blocks,
                     source_rowid,
+                    source_seq,
                 });
             }
         } else {
@@ -137,6 +142,7 @@ pub(crate) fn load_history_with_window(
                 role,
                 content: blocks,
                 source_rowid,
+                source_seq,
             });
         }
     }
@@ -209,7 +215,9 @@ pub(crate) fn sanitize_history(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
     for msg in messages {
         let role = msg.role;
         // Phase 2：sanitize 重建消息时保留 source_rowid（合并连续同角色时保留首条的）。
+        // Phase 2B 阶段 2：source_seq 同款保留。
         let source_rowid = msg.source_rowid;
+        let source_seq = msg.source_seq;
         let mut content: Vec<ContentBlock> = Vec::new();
         for block in msg.content {
             let keep = match &block {
@@ -247,6 +255,7 @@ pub(crate) fn sanitize_history(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
                 role,
                 content,
                 source_rowid,
+                source_seq,
             });
         }
     }
@@ -552,6 +561,7 @@ mod tests {
             rowid: idx as i64,
             summary_id: None,
             model: None,
+            source_seq: None,
         }
     }
 
@@ -990,6 +1000,7 @@ mod tests {
             rowid: idx as i64,
             summary_id: None,
             model: None,
+            source_seq: None,
         }
     }
 

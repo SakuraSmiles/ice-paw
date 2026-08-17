@@ -591,6 +591,11 @@ pub struct MessageRow {
     pub summary_id: Option<String>,
     /// 消息实际使用的模型名（仅 assistant 消息有值；历史消息可能为 NULL）。
     pub model: Option<String>,
+    /// 消息首现事件 seq（Phase 2B 阶段 2，**非表列**）：仅 derive 读路径
+    /// （`read_route::to_message_row`）填充；DB SELECT 读出的行恒 `None`。
+    /// `#[sqlx(default)]` 兼容三个现有 SELECT（缺列取 Default）。
+    #[sqlx(default)]
+    pub source_seq: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]

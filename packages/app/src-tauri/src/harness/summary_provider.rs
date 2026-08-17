@@ -789,6 +789,7 @@ mod tests {
                 },
             ],
             source_rowid: None,
+            source_seq: None,
         }];
         let prompt = build_summary_user_prompt(&msgs);
         assert!(
@@ -808,6 +809,7 @@ mod tests {
                 is_error: Some(true),
             }],
             source_rowid: None,
+            source_seq: None,
         }];
         let prompt2 = build_summary_user_prompt(&result_msgs);
         assert!(prompt2.contains("[工具失败"), "失败结果应有标记: {prompt2}");
@@ -826,6 +828,7 @@ mod tests {
                 ContentBlock::text("实际回复"),
             ],
             source_rowid: None,
+            source_seq: None,
         }];
         let prompt = build_summary_user_prompt(&msgs);
         assert!(prompt.contains("实际回复"));
@@ -838,6 +841,7 @@ mod tests {
             role: "user".into(),
             content: vec![ContentBlock::image("BASE64", "image/png")],
             source_rowid: None,
+            source_seq: None,
         }];
         let prompt2 = build_summary_user_prompt(&img_msgs);
         assert!(prompt2.contains("[图片已省略]"), "图片应占位: {prompt2}");

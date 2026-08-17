@@ -266,6 +266,7 @@ mod tests {
                 is_error: Some(true),
             }],
             source_rowid: None,
+            source_seq: None,
         };
         let est = estimate_message_tokens(&m);
         assert!(est > 0, "tool_result 必须被计入，实际 {est}");
@@ -285,6 +286,7 @@ mod tests {
                 is_error: None,
             }],
             source_rowid: None,
+            source_seq: None,
         };
         let text_msg = ChatMessage::from_text("assistant", "ok"); // 1 token + 4
         let total = estimate_messages_tokens(&[tool_msg, text_msg]);

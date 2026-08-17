@@ -407,6 +407,7 @@ async fn stream_loop_inner(
                     tool_round, effective_max_rounds
                 ))],
                 source_rowid: None,
+                source_seq: None,
             });
         }
 
@@ -817,6 +818,7 @@ async fn stream_loop_inner(
                     role: "assistant".into(),
                     content: vec![ContentBlock::text(round_text.clone())],
                     source_rowid: None,
+                    source_seq: None,
                 });
                 ctx.messages.push(ChatMessage {
                     role: "user".into(),
@@ -824,6 +826,7 @@ async fn stream_loop_inner(
                         "（上一段因长度限制被中断。请直接从中断处继续输出剩余内容，不要重复已输出部分。）",
                     )],
                     source_rowid: None,
+                    source_seq: None,
                 });
                 tracing::info!(
                     target: "ice_paw.chat",
@@ -1034,11 +1037,13 @@ async fn stream_loop_inner(
             role: "assistant".into(),
             content: asst_blocks,
             source_rowid: None,
+            source_seq: None,
         });
         ctx.messages.push(ChatMessage {
             role: "user".into(),
             content: tool_result_blocks,
             source_rowid: None,
+            source_seq: None,
         });
 
         tracing::info!(

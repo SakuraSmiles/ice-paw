@@ -291,6 +291,8 @@ pub async fn load_history_from_events(
 /// - `rowid` 取真值（`id_rowid_map`）；缺失以 `first_seq` 兜底（单调唯一，仅防异常，
 ///   Derive 路由下不应发生——发生则该会话已被 diff 判回 legacy）。
 /// - `token_count` / `model` / `error` / `summary_id`：派生不携带（下游 Pipeline 不读这些字段）。
+/// - `source_seq = Some(first_seq)`：事件纪元锚（Phase 2B 阶段 2）——MemoryStage
+///   摘要覆盖定位 seq 优先 rowid 兜底；与消息序同基（supersede 取首现 seq）。
 fn to_message_row(
     m: &crate::harness::derive::DerivedMessage,
     conversation_id: &str,
@@ -311,6 +313,7 @@ fn to_message_row(
         rowid,
         summary_id: None,
         model: None,
+        source_seq: Some(m.first_seq),
     }
 }
 

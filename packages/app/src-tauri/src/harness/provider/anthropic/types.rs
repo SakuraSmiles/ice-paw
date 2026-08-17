@@ -334,6 +334,7 @@ mod tests {
                 ContentBlock::image("BBBB", "image/webp"),
             ],
             source_rowid: None,
+            source_seq: None,
         };
         let (sys, msgs) = split_system_prompt(&[msg]);
         assert!(sys.is_none());

@@ -133,6 +133,10 @@ impl ContentBlock {
 /// payload 或任何序化路径——仅 `load_history_with_window` 填充、`MemoryStage`
 /// 按「值」定位摘要覆盖切断点（identity-by-value，扛得住 ToolFailureFold
 /// 的合并/重排）。合成消息（当前用户、注入摘要等）为 `None`。
+///
+/// `source_seq`（Phase 2B 阶段 2）：同上语义的事件纪元锚——源自派生行的
+/// `first_seq`（消息首现事件 seq）。仅 derive 读路径填充（DB 行读出恒
+/// `None`）；MemoryStage 锚点定位 seq 优先、rowid 兜底。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ChatMessage {
     /// 角色："system" | "user" | "assistant" | "tool"
@@ -142,6 +146,9 @@ pub struct ChatMessage {
     /// pipeline 内部追踪：源 MessageRow.rowid（见类型 doc）；`#[serde(skip)]` 不外泄。
     #[serde(skip)]
     pub source_rowid: Option<i64>,
+    /// pipeline 内部追踪：源消息首现事件 seq（见类型 doc）；`#[serde(skip)]` 不外泄。
+    #[serde(skip)]
+    pub source_seq: Option<i64>,
 }
 
 impl ChatMessage {
@@ -151,6 +158,7 @@ impl ChatMessage {
             role: role.into(),
             content: vec![ContentBlock::text(content)],
             source_rowid: None,
+            source_seq: None,
         }
     }
 

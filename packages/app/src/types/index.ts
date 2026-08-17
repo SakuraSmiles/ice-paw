@@ -382,6 +382,8 @@ export interface SummaryPayload {
   summary_message_id: string;
   content: string;
   covered_until_rowid: number;
+  /** 覆盖终点消息的首现事件 seq（Phase 2B 阶段 2 起主锚；旧事件无此字段 → undefined） */
+  covered_until_seq?: number;
 }
 export interface MessageErrorPayload { v?: number; kind: string; error: string; }
 export interface MessageDiscardedPayload { v?: number; reason: string; }

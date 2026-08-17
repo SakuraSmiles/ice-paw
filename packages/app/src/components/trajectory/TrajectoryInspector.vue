@@ -314,7 +314,7 @@ async function copyPayload() {
         <section v-else-if="sumP" class="isec">
           <h4 class="isec-title">概览</h4>
           <div class="ikv"><span>类型</span><b>{{ ev!.event.kind === "summary_created" ? "新建" : "更新" }}</b></div>
-          <div class="ikv"><span>覆盖至 rowid</span><b>{{ sumP.covered_until_rowid }}</b></div>
+          <div class="ikv"><span>覆盖至</span><b>seq {{ sumP.covered_until_seq ?? `rowid ${sumP.covered_until_rowid}` }}</b></div>
           <div class="ikv ikv-top"><span>摘要预览</span><b class="iprev">{{ previewOf(sumP.content) }}</b></div>
         </section>
 
