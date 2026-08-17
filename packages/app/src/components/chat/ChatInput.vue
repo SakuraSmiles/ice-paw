@@ -255,13 +255,18 @@ function atQueryClosed(before: string, atIdx: number): boolean {
   return /\s/.test(before.slice(atIdx + 1));
 }
 
-/** 弹层候选（三段：会话 / Agent / 当前会话消息）。*/
+/** 弹层候选（三段：会话 / Agent / 当前会话消息）。
+ *  行布局（elementui 选择器风）：`名字 [id] …… 归属  类型`——
+ *  名字主体在左（agent 的 id 等宽淡色跟后，可省略），归属（项目名/模型）
+ *  与类型词（会话/Agent/消息/回答）靠右，类型词定宽贴右缘纵向对齐。*/
 interface RefOption {
   kind: "conversation" | "agent" | "message";
   targetId: string;
   display: string; // `名称#短码`（落库展示，后端失效降级也用它）
-  label: string; // 弹层主行
-  sub: string; // 弹层副行（kind 徽标）
+  label: string; // 名字（弹层主文本）
+  idText?: string; // agent 的完整 id（跟名字后，等宽淡色，title 全显）
+  owner?: string; // 归属（项目名 / 模型），右对齐淡色，超长省略
+  kindText: string; // 类型词，右缘定宽对齐
 }
 
 /** 会话标题：空 → 「会话」+ 短码（未命名会话显示 `会话#3357` 兜底）。*/
@@ -280,7 +285,7 @@ const refOptions = computed<RefOption[]>(() => {
 
   // 会话：排除委派子会话（侧栏不可见）、当前会话（其历史本就在上下文里）与
   // 归档项目的会话（用户已收起该项目，侧栏/项目页均不可见——@ 里出现即脏候选）。
-  // 副标题标注归属（项目名 / 散落）：候选是全量的，跨项目引用是功能，但来源
+  // 归属标注（项目名 / 散落）：候选是全量的，跨项目引用是功能，但来源
   // 必须看得见——否则跨项目会话在弹层里无法与当前上下文的会话区分。
   for (const c of chat.conversations) {
     if (c.kind === "delegation" || c.id === chat.activeConvId) continue;
@@ -292,21 +297,23 @@ const refOptions = computed<RefOption[]>(() => {
     out.push({
       kind: "conversation", targetId: c.id,
       display: `${label}#${code}`, label,
-      // 归属未知（项目列表惰性加载未完成）时不瞎标「散落」，保持中性「会话」
-      sub: proj ? `会话 · ${proj.name}` : c.project_id ? "会话" : "会话 · 散落",
+      // 归属未知（项目列表惰性加载未完成）时不瞎标「散落」，留空
+      owner: proj ? proj.name : c.project_id ? undefined : "散落",
+      kindText: "会话",
     });
     if (out.length >= SECTION_CAP) break;
   }
   const convCount = out.length;
 
   // Agent：身份卡语义（name + desc），与 delegate 权限零冲突；
-  // id 也参与模糊匹配（精确找某个 agent 的场景，uuid 可粘贴搜索）
+  // id 显示在名字后（等宽淡色可省略）并参与模糊匹配（uuid 片段可粘贴搜索）
   for (const a of agentStore.list) {
     if (!match(a.name) && !match(a.id)) continue;
     const code = shortCode(a.id);
     out.push({
       kind: "agent", targetId: a.id,
-      display: `${a.name}#${code}`, label: a.name, sub: `Agent · ${a.model}`,
+      display: `${a.name}#${code}`, label: a.name,
+      idText: a.id, owner: a.model, kindText: "Agent",
     });
     if (out.length - convCount >= SECTION_CAP) break;
   }
@@ -325,7 +332,7 @@ const refOptions = computed<RefOption[]>(() => {
       kind: "message", targetId: m.id,
       display: `${kindLabel}#${code}`,
       label: m.content.length > 60 ? m.content.slice(0, 60) + "…" : m.content,
-      sub: kindLabel,
+      kindText: kindLabel,
     });
     if (out.length - convCount - agentCount >= SECTION_CAP) break;
   }
@@ -499,7 +506,7 @@ function handleKeydown(e: KeyboardEvent) {
             v-for="(opt, i) in refOptions"
             :key="opt.kind + ':' + opt.targetId"
             class="at-option"
-            :class="{ active: i === activeIdx }"
+            :class="{ active: i === activeIdx, selected: isPending(opt) }"
             type="button"
             @mousedown.prevent
             @click="chooseRef(opt)"
@@ -510,8 +517,15 @@ function handleKeydown(e: KeyboardEvent) {
                 <span v-if="p.hit" class="at-hit">{{ p.t }}</span><template v-else>{{ p.t }}</template>
               </template>
             </span>
-            <span v-if="isPending(opt)" class="at-option-tag">已引用</span>
-            <span class="at-option-sub">{{ opt.sub }}</span>
+            <span v-if="opt.idText" class="at-option-id" :title="opt.idText">
+              <template v-for="(p, pi) in highlightParts(opt.idText, atQuery)" :key="pi">
+                <span v-if="p.hit" class="at-hit">{{ p.t }}</span><template v-else>{{ p.t }}</template>
+              </template>
+            </span>
+            <span class="at-option-right">
+              <span v-if="opt.owner" class="at-option-owner" :title="opt.owner">{{ opt.owner }}</span>
+              <span class="at-option-kind">{{ opt.kindText }}</span>
+            </span>
           </button>
         </div>
         <div class="input-row">
@@ -579,10 +593,17 @@ function handleKeydown(e: KeyboardEvent) {
 .at-popover { position:absolute; left:8px; right:8px; bottom:calc(100% + 6px); z-index:20; max-height:280px; overflow-y:auto; background-color:var(--ip-color-bg-primary); border:1px solid var(--ip-color-border-default); border-radius:var(--ip-radius-md); box-shadow:0 4px 16px rgba(0,0,0,0.12); padding:4px; }
 .at-option { display:flex; align-items:center; gap:8px; width:100%; padding:7px 10px; border:none; border-radius:var(--ip-radius-sm); background:transparent; cursor:pointer; text-align:left; }
 .at-option.active { background-color:var(--ip-color-bg-hover); }
-.at-option-label { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; color:var(--ip-color-text-primary); }
-.at-option-sub { flex-shrink:0; font-size:11px; color:var(--ip-color-text-disabled); }
-/* 已在引用列表的候选：tint 胶囊 tag（与高亮同族视觉，一眼看出选没选过） */
-.at-option-tag { flex-shrink:0; font-size:10px; line-height:1; padding:3px 7px; border-radius:var(--ip-radius-full); background:var(--ip-color-primary-tint-bg); color:var(--ip-color-primary-tint-text); }
+/* 已在引用列表：整行状态（elementui 选择器选中风）——柔和绿底 + 名字主色，
+ * 不加 tag/勾等额外元素（行内文本已密，选中态靠底色与字色一眼可辨） */
+.at-option.selected { background-color:var(--ip-color-primary-soft-bg); }
+.at-option.selected .at-option-label { color:var(--ip-primary-600); }
+.at-option-label { flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; color:var(--ip-color-text-primary); }
+/* agent id：名字后的等宽淡色尾随（完整 id 放 title，挤压时省略） */
+.at-option-id { flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; color:var(--ip-color-text-disabled); font-family:var(--ip-font-mono, monospace); }
+/* 右侧组：归属（项目名/模型，超长省略）+ 类型词定宽贴右缘，跨行纵向对齐 */
+.at-option-right { margin-left:auto; display:flex; align-items:center; gap:8px; flex:0 1 auto; min-width:0; justify-content:flex-end; }
+.at-option-owner { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; color:var(--ip-color-text-disabled); }
+.at-option-kind { flex-shrink:0; width:3.5em; text-align:right; font-size:11px; color:var(--ip-color-text-disabled); }
 /* 匹配高亮：浅绿底 + tint 文字（主色 tint 约定，不用原生 mark 黄底） */
 .at-hit { background:var(--ip-color-primary-tint-bg); color:var(--ip-color-primary-tint-text); border-radius:2px; padding:0 1px; }
 

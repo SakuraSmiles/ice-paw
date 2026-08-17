@@ -63,11 +63,14 @@ describe("ChatInput @ 引用", () => {
     const wrapper = mount(ChatInput);
     await type(wrapper, "@");
     expect(wrapper.find(".at-popover").exists()).toBe(true);
-    // 三段都有：会话 c2/c3（散落归属标注）+ agent 审查员 + 消息 2 条
-    const subs = wrapper.findAll(".at-option-sub").map((n) => n.text());
-    expect(subs.filter((s) => s === "会话 · 散落").length).toBe(2);
-    expect(subs.some((s) => s.startsWith("Agent"))).toBe(true);
-    expect(subs.some((s) => s === "回答" || s === "消息")).toBe(true);
+    // 三段都有：会话 c2/c3（散落归属）+ agent 审查员 + 消息 2 条
+    const kinds = wrapper.findAll(".at-option-kind").map((n) => n.text());
+    expect(kinds.filter((s) => s === "会话").length).toBe(2);
+    expect(kinds.filter((s) => s === "Agent").length).toBe(1);
+    expect(kinds.some((s) => s === "回答" || s === "消息")).toBe(true);
+    // agent 行：id 跟名字后 + model 归属
+    expect(wrapper.find(".at-option-id").text()).toBe("ag1");
+    expect(wrapper.findAll(".at-option-owner").some((n) => n.text() === "gpt-test")).toBe(true);
 
     // 过滤：输入「设计」只剩匹配项
     await type(wrapper, "设计");
@@ -92,10 +95,10 @@ describe("ChatInput @ 引用", () => {
     expect(labels).toContain("散落会话");
     // 归档项目会话（侧栏/项目页均不可见）不应出现在候选
     expect(labels).not.toContain("归档会话");
-    // 归属透明：项目会话带项目名，散落会话标散落
-    const subs = wrapper.findAll(".at-option-sub").map((n) => n.text());
-    expect(subs).toContain("会话 · 活跃项目");
-    expect(subs).toContain("会话 · 散落");
+    // 归属透明：项目会话 owner=项目名，散落会话 owner=散落，类型词统一右缘
+    const owners = wrapper.findAll(".at-option-owner").map((n) => n.text());
+    expect(owners).toContain("活跃项目");
+    expect(owners).toContain("散落");
   });
 
   it("Enter 选中 → @query 被删、chip 出现、pendingRefs 有值", async () => {
@@ -177,7 +180,7 @@ describe("ChatInput @ 引用", () => {
     expect(wrapper.find(".ref-flash").exists()).toBe(true);
   });
 
-  it("已选中的对象重开弹层时带「已引用」标识", async () => {
+  it("已选中的对象重开弹层时整行选中态（selected class）", async () => {
     const chat = useChatStore();
     chat.conversations = [conv("c2", "设计讨论")];
     const wrapper = mount(ChatInput);
@@ -186,9 +189,9 @@ describe("ChatInput @ 引用", () => {
     await wrapper.find("textarea").trigger("keydown", { key: "Enter" });
     expect(chat.pendingRefs.length).toBe(1);
 
-    // 重新打开弹层：该候选直接可见已选中（不必点了才发现重复）
+    // 重新打开弹层：该候选整行选中态（elementui 风：底色+字色，无额外元素）
     await type(wrapper, "@");
-    expect(wrapper.find(".at-option-tag").text()).toBe("已引用");
+    expect(wrapper.find(".at-option.selected").exists()).toBe(true);
   });
 
   it("匹配文本高亮：命中段带 .at-hit 标记", async () => {
@@ -202,7 +205,7 @@ describe("ChatInput @ 引用", () => {
     expect(hits).toContain("设计");
   });
 
-  it("Agent 按 id 模糊匹配（uuid 片段可搜）", async () => {
+  it("Agent 按 id 模糊匹配（uuid 片段可搜，id 命中段高亮）", async () => {
     const chat = useChatStore();
     const agents = useAgentStore();
     agents.list = [
@@ -215,6 +218,9 @@ describe("ChatInput @ 引用", () => {
     await type(wrapper, "@1234");
     const labels = wrapper.findAll(".at-option-label").map((n) => n.text());
     expect(labels).toContain("审查员");
+    // id 跟在名字后显示，命中段带高亮
+    expect(wrapper.find(".at-option-id").text()).toContain("agent-uuid-1234");
+    expect(wrapper.find(".at-option-id .at-hit").text()).toBe("1234");
   });
 
   it("纯引用无文本可发送（发送按钮不 disabled）", async () => {
