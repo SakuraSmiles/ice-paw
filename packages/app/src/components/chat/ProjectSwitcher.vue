@@ -114,19 +114,19 @@ function confirmCreate() {
         </button>
         <button class="capsule-btn" title="管理项目" @click="onManage">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="4" y1="21" x2="4" y2="14" /><line x1="4" y1="10" x2="4" y2="3" /><line x1="12" y1="21" x2="12" y2="12" /><line x1="12" y1="8" x2="12" y2="3" /><line x1="20" y1="21" x2="20" y2="16" /><line x1="20" y1="12" x2="20" y2="3" /><line x1="1" y1="14" x2="7" y2="14" /><line x1="9" y1="8" x2="15" y2="8" /><line x1="17" y1="16" x2="23" y2="16" />
+            <line x1="4" y1="21" y2="14" /><line x1="4" y1="10" y2="3" /><line x1="12" y1="21" y2="12" /><line x1="12" y1="8" y2="3" /><line x1="20" y1="21" y2="16" /><line x1="20" y1="12" y2="3" /><line x1="1" y1="14" x2="7" y2="14" /><line x1="9" y1="8" x2="15" y2="8" /><line x1="17" y1="16" x2="23" y2="16" />
           </svg>
         </button>
       </div>
     </template>
-  </div>
 
-  <!-- 切换菜单（向下弹出，锚 .project-capsule）。
-       开合用 class 驱动（open）+ CSS transition，不走 <Transition>+v-if 插拔：
-       真机复现过 Transition 包裹的 nav 在首开时不挂载（详见 commit 说明），
-       class 方案更新面最小（一条 class patch），enter/leave 动画照常由 CSS 过渡 -->
-  <div class="switcher-overlay" :class="{ open: isOpen }" @click="isOpen = false" />
-  <nav class="switcher-menu" :class="{ open: isOpen }" :aria-hidden="!isOpen || undefined">
+    <!-- 切换菜单（向下弹出）与遮罩必须在 .project-capsule 内部：
+         菜单 absolute 的锚是 capsule（position:relative），放组件根级兄弟位置时
+         会锚到 .sidebar 上（真机事故：top:calc(100%+6px) 参照整个侧边栏高度，
+         菜单弹到视口外——「点了没反应」的真正根因）。开合用 class 驱动（open）
+         + CSS transition，不走 <Transition>+v-if 插拔（首开不挂载，见前 commit） -->
+    <div class="switcher-overlay" :class="{ open: isOpen }" @click="isOpen = false" />
+    <nav class="switcher-menu" :class="{ open: isOpen }" :aria-hidden="!isOpen || undefined">
       <div class="switcher-list">
         <button class="switcher-item" :class="{ active: !isScoped }" @click="onSelect(null)">
           <span class="item-mark"><span class="item-dot muted" /></span>
@@ -153,11 +153,12 @@ function confirmCreate() {
         </template>
       </div>
     </nav>
+  </div>
 </template>
 
 <style scoped>
-/* ===== 项目空间胶囊：单行「左内容 + 右按钮」，多根组件（capsule + overlay + Transition/nav）
-   自持全部样式——父级 scoped CSS 命不中多根子组件的元素 ===== */
+/* ===== 项目空间胶囊：单行「左内容 + 右按钮」，单根组件（菜单/遮罩在 capsule 内，
+   absolute 锚定 capsule）。样式自持——不依赖父级 scoped CSS ===== */
 .project-capsule {
   position: relative; /* 切换菜单向下弹出的定位锚 */
   display: flex;
