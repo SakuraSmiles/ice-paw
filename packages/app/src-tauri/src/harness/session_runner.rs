@@ -147,13 +147,24 @@ pub(crate) async fn run_agent_turn(
     // 回滚 = revert 阶段 1 commit（messages 表双写持续，Legacy 可整体恢复）。
     let route = env.route_registry.resolve(pool, &conv_id).await?;
     if route.route != crate::harness::read_route::ReadRoute::Derive {
-        tracing::error!(
-            target: "ice_paw.read_route",
-            conv = %conv_id,
-            reason = %route.reason,
-            diffs = route.diffs,
-            "会话读路径非绿（已无 legacy 兜底）：派生历史可能缺行，排查 reconcile_session"
-        );
+        // no_events_empty = 新建未发消息的空会话（零事件零行）——正常形态，
+        // 不值得 error 级告警；其余非绿（有行零事件 / 对账 diff / 混合纪元）
+        // 才是「派生历史可能缺行」的 bug 嫌疑，保持 error。
+        if route.reason == "no_events_empty" {
+            tracing::debug!(
+                target: "ice_paw.read_route",
+                conv = %conv_id,
+                "空会话（零事件零行）：派生空历史，正常形态"
+            );
+        } else {
+            tracing::error!(
+                target: "ice_paw.read_route",
+                conv = %conv_id,
+                reason = %route.reason,
+                diffs = route.diffs,
+                "会话读路径非绿（已无 legacy 兜底）：派生历史可能缺行，排查 reconcile_session"
+            );
+        }
     }
     let history = crate::harness::read_route::load_history_from_events(pool, &conv_id).await?;
     // 最近 10 条工具消息名（loop_engine 动态工具打分用）
