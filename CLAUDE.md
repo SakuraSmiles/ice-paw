@@ -107,7 +107,7 @@ agent 调用 `propose_config_change` 工具提出创建/修改 agent 提案 → 
 - **4 入口接线**：① 用户上传+③ 历史 → `context/stages.rs::ModalCapabilityStage`（Pipeline，TokenWindow 后 Final 前）；② 工具返图 → `tool_executor` 注入 Image 前查 effective_vision（时序独立于 Stage——工具循环后续轮次的图进不了 Stage，必须在此守卫）；④ `view_attachment_image` 判断改 effective_supports_vision + 凭据收集复用 gather。
 - **⚠️ 不变式**：任何新增的 Image 块注入点都必须经 `effective_supports_vision` / `adapt_blocks_for_vision`，不得对非视觉模型直塞 Image。
 
-### 会话事件日志（session-event-log Phase 0+1 已 push 真机零 diff；Phase 2A 读路径切换已落地）
+### 会话事件日志（Phase 0+1+2A 已发布；Phase 2B 退役三件套已落地 2026-08-17）
 单一 append-only 事件日志基石（锁定愿景：统一 session / 多 agent 图协作 / 轨迹可还原）。
 - **表**：migration 44 `session_events`（seq INSERT 子查询原子 + UNIQUE 兜底；message_id 故意无 FK——事件须活得比被删占位行久）
 - **词表 13 kind** + typed emitters：`harness/event_log.rs`（EventCtx + warn-only 影子定位）
@@ -122,8 +122,8 @@ agent 调用 `propose_config_change` 工具提出创建/修改 agent 提案 → 
 - **Phase 2B 阶段 3 Image 双份存储治理（2026-08-17，3a 读侧 + 3b 写侧）**：消息类 payload 的 blocks 用 `PayloadBlock` untagged 双形态——`Full(ContentBlock)`（v1 内联，旧事件零迁移可读）/ `ImageRef{message_id, block_index}`（v2，字节只在 messages 行）。写侧唯一入口 `refify_blocks`（emitter 字段式签名内部做，调用方传与落库同值的 blocks）；读侧三路水合：derive `hydrate_image_refs`（纯同步 resolver 注入；未命中/越界/非 Image 降级 `Text("[图片内容已不可恢复]")`）+ `to_content_blocks` 防泄漏最后闸 + conversation_cmd JSON 级水合（list_session_events/export，前端零改动）。BACKFILL_VERSION=2（纯 backfill 会话删旧重写自愈，冻结会话保留 v1 照读）。**⚠️ 不变式：session_events 消息类 payload 禁止内联 Image base64——新增 message-kind emitter 必须经 `refify_blocks`，读侧必须经 `hydrate_image_refs` 水合后才能进对账/LLM 视图（ref 形态不得以非 Text 形态流出）**。
 
 ## 当前状态（2026-08-17）
-- 版本 **0.3.6 已发布**（= 0.3.5 + UX 细节轮 + 模型配置重设计 + token 预算全分层修复 + S 批次结构减法 + backfill），main 与 origin 推平
+- 版本 **0.3.6 已发布**（= 0.3.5 + UX 细节轮 + 模型配置重设计 + token 预算全分层修复 + S 批次结构减法 + backfill）；**S1 三件套四 commits（da63c82/1915dd2/f996543/d5ab926）未 push 未发版**
 - 分支：仅 `main`
-- 近期递进：0.3.5 发版 → UX 细节轮 + 模型配置重设计 → 摘要链路三重治理 → S 批次结构减法（S2-S7 全清）→ **Phase 2B 前置 backfill 落地（00e9cb1 repo 原语 / 1def468 合成+接线 / 6eed139 版本化重跑+冻结）→ 0.3.6 发版**
-- `cargo test --lib` 850 passed / 0 failed（+ 集成测试：session_runner_e2e 7、session_reconcile_e2e 6、session_event_log_e2e 3、memory_e2e 3、message_repo 5、provider 11）；clippy --tests -D warnings 0 警告
-- 仍待办：**backfill 真机验收**（boot 日志 `[ice_paw.backfill]` 行 + 旧会话 `get_read_route_status` 变 Derive + reconcile 抽查零 diff）、0.3.5 发版手测（0.3.3 三重点 + Phase 2A 手测）、视觉适配/KB watcher/自动续写生产手测、proposal Phase 2（MCP 域）、S1 Phase 2B legacy 退役本体（前置全清待验收后动工）、S8 无限续写（待拍板）
+- 近期递进：S 批次结构减法（S2-S7 全清）→ backfill → 0.3.6 发版 → **S1 Phase 2B legacy 读路径退役三件套全清**（恒 Derive + 摘要锚点 seq 化 + Image 双份存储治理，详见「会话事件日志」段）
+- `cargo test --lib` 858 passed / 0 failed（+ 集成测试：session_runner_e2e 7、session_reconcile_e2e 6+2 ignored、session_event_log_e2e 3、memory_e2e 3、message_repo 7、provider 11）；clippy --tests -D warnings 0 警告；vitest 153
+- 仍待办：**S1 真机手测四项**（旧会话续聊 Derive 正常 / 含图会话轨迹检查器图片显示 / 发图新会话 payload 无 base64 / 长会话折叠 covered_until_seq 落值）、backfill 真机验收（boot 日志 + 旧会话变 Derive + reconcile 抽查）、0.3.5 发版手测（0.3.3 三重点 + Phase 2A 手测）、视觉适配/KB watcher/自动续写生产手测、proposal Phase 2（MCP 域）、S8 无限续写（待拍板）
