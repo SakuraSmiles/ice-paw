@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+## [0.3.7] — 2026-08-17
+
+> 从 0.3.6 以来的主要调整：S1——session_events 升格唯一读路径（legacy 拼装退役）+ 摘要锚点 seq 化 + Image 双份存储治理；真机验收五项全绿。
+
+### Changed
+- **legacy 拼装退役（S1 阶段 1）**：事件派生 `load_history_from_events` 成为唯一生产读路径（恒 Derive）；read_route 降级为健康监控——非绿（无事件/对账差异/混合纪元）记 error 日志后**照常派生**，写路径 bug 不再被自动回退兜底静默吞掉。messages 表双写持续保留为回滚底座（revert 阶段 1 commit 可整体恢复，零数据损失）。
+- **摘要锚点 seq 化（S1 阶段 2）**：migration 46 `covered_until_seq`（被覆盖消息首现事件 seq，与派生排序位严格一致）+ 存量回填；摘要状态双写双读，锚点定位 seq 优先 rowid 兜底——根治 messages 表无 AUTOINCREMENT 的 rowid 复用漂移风险，旧事件零迁移。
+- **Image 双份存储治理（S1 阶段 3）**：消息类事件 payload 的 Image 块改轻量引用 `image_ref`（payload v2，字节只在 messages 行）；写侧唯一入口 `refify_blocks`，读侧三路水合（LLM 视图 / 对账 / 前端轨迹与导出），未命中诚实降级文本标记不静默消失；BACKFILL_VERSION=2 纯 backfill 会话 boot 自动重写自愈，v1 内联旧事件永久可读。真机实测：两张图的事件 payload 从潜在 4.7MB 双写降至 326 字节。
+- **S1 真机验收五项全绿**：backfill（9 会话 824 事件零失败）／恒 Derive（当日路由决策全 green 零 diff）／发图 payload 无 base64（模型回复描述画面 = 水合实证）／摘要折叠 `covered_until_seq` 落值／轨迹检查器图片 v1/v2 两形态显示正常。
+
+### Fixed
+- 终止原因文案收敛 `utils/termLabels` 单一真相源——`backfill` 补「历史补录」标注 + 非异常化呈现。
+
 ## [0.3.6] — 2026-08-17
 
 > 从 0.3.5 以来的主要调整：UX 细节轮收官、模型配置重设计、token 预算全分层修复、S 批次结构减法、旧会话事件 backfill。
