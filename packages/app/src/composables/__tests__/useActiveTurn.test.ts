@@ -245,4 +245,52 @@ describe("useActiveTurn 接线（底线语义）", () => {
 
     unmount();
   });
+
+  it("空集无上次值（切会话贴底长尾轮）→ bootstrap：贴底精确 = 末轮，不横杠", async () => {
+    const { result, unmount, els, io } = await setup(3);
+    // 场景：末轮回复很长，锚点全滚出视口 → IO 全员报不相交 → 集空
+    fireIO(io, [
+      { el: els[0], isIntersecting: false },
+      { el: els[1], isIntersecting: false },
+      { el: els[2], isIntersecting: false },
+    ]);
+    // jsdom 滚动几何全 0：scrollTop+clientHeight(0) ≥ scrollHeight(0)-4 → 贴底
+    expect(result.activeTurn.value).toBe(3); // 末轮，不是 null/横杠
+
+    unmount();
+  });
+
+  it("锚点重载即失忆：上次值不跨界存活（切会话错号来源）", async () => {
+    const { result, unmount, els, io, anchorsRef } = await setup(3);
+    mockRect(els[0], 100);
+    fireIO(io, [{ el: els[0], isIntersecting: true }]);
+    expect(result.activeTurn.value).toBe(1);
+
+    // 切会话：锚点列表整体替换（新界只有 2 轮）→ activeTurn 失忆（watch 是
+    // pre-flush，赋值后须 nextTick 才回调）
+    anchorsRef.value = [anchor(1), { ...anchor(2), message_id: "new-2" }];
+    await nextTick();
+    expect(result.activeTurn.value).toBeNull();
+
+    unmount();
+  });
+
+  it("DOM 换血竞态：旧元素移出容器 + 锚点重载失忆 → 空集 bootstrap，不出旧轮号", async () => {
+    const { result, unmount, container, els, io, anchorsRef } = await setup(3);
+    mockRect(els[0], 100);
+    fireIO(io, [{ el: els[0], isIntersecting: true }]);
+    expect(result.activeTurn.value).toBe(1);
+
+    // 竞态窗：切会话后元素已移出容器（gBCR 将全 0）、锚点已重载（失忆），
+    // refresh 重建前的这次滚动重算——剔除旧元素、空集走 bootstrap
+    els[0].remove();
+    anchorsRef.value = [anchor(1), anchor(2), anchor(3)];
+    await nextTick();
+    container.dispatchEvent(new Event("scroll"));
+    await nextFrame();
+    // 不读 0 坐标算出旧轮 1；bootstrap（jsdom 全 0 几何 = 贴底）→ 末轮
+    expect(result.activeTurn.value).toBe(3);
+
+    unmount();
+  });
 });
