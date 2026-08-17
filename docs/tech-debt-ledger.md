@@ -24,6 +24,7 @@
 | V7 | **Phase 2A 读路径切换** ✅ 2026-08-17 收官 | 已 commit | dev 正常对话零变化；日志见 `[read_route] → derive (green)`；DevTools `get_read_route_status`。**2026-08-16 真机首证：Derive green（events=891 diffs=0）**。**2026-08-17 观察期满收官**：用户日常使用 2 天无异常 + 日志复核（08-15/16 共 46 次路由决策，事件会话全 Derive green diffs=0；仅有的 Legacy 全为 `no_events` 旧会话，零 diff 回退）——S0 门槛解除 |
 | V8 | 孤儿 tool_use 对称清场 | 已合 main | 异常终止路径不留孤儿 tool_use 卡死 |
 | V9 | 远程 MCP 传输（streamable HTTP） | 记忆 remote-mcp-transport | 真 HTTP server 握手 + tools/call |
+| V10 | **@ 引用三件（@会话/@agent/@消息，2026-08-17）** | 39165d8..04c9c01（4 commits） | ① @ 弹层三段过滤/键盘导航，选会话/agent/消息各成 chip 可删 ② 气泡引用按钮（用户消息单条 / assistant 组整组）一键成 chip ③ 发送后消息内见引用卡片+展开快照进 LLM（模型回答应「知道」被引内容）④ 长会话引用有 `…（中间省略 N 轮）`；引用已删会话 → `[引用已失效]` 不报错 ⑤ 历史卡片点击跳转（会话切换/消息滚动定位）⑥ 轨迹页看该消息事件 payload 含 Reference 块 + 展开 Text，`get_read_route_status` 仍 green（append-only 零特例验证） |
 
 > 上下文预算 Phase 0+1+2 的手测已并入 V1（摘要链路本次重建）。
 >
