@@ -237,6 +237,39 @@ pub async fn find_zero_event_sessions(pool: &SqlitePool) -> AppResult<Vec<String
     Ok(rows.into_iter().map(|(id,)| id).collect())
 }
 
+/// 版本化重跑候选：现有事件**全部**为 backfill 合成的会话（零真实事件）。
+///
+/// 冻结规则的另一面：一旦会话混入真实事件（用户 backfill 后又聊过），重写
+/// 会把合成事件追到流尾造成错序，永不可重跑——那部分会话只进
+/// [`count_frozen_backfill_sessions`] 的诊断计数。
+pub async fn find_pure_backfill_sessions(pool: &SqlitePool) -> AppResult<Vec<String>> {
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT c.id FROM conversations c
+          WHERE EXISTS (SELECT 1 FROM session_events e WHERE e.session_id = c.id AND e.actor = ?)
+            AND NOT EXISTS (SELECT 1 FROM session_events e WHERE e.session_id = c.id AND e.actor != ?)
+          ORDER BY c.rowid ASC",
+    )
+    .bind(BACKFILL_ACTOR)
+    .bind(BACKFILL_ACTOR)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|(id,)| id).collect())
+}
+
+/// 冻结会话数：既有 backfill 行又有真实事件（重跑永不触碰，仅诊断计数）。
+pub async fn count_frozen_backfill_sessions(pool: &SqlitePool) -> AppResult<usize> {
+    let (n,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(DISTINCT session_id) FROM session_events
+          WHERE actor = ?
+            AND session_id IN (SELECT session_id FROM session_events WHERE actor != ?)",
+    )
+    .bind(BACKFILL_ACTOR)
+    .bind(BACKFILL_ACTOR)
+    .fetch_one(pool)
+    .await?;
+    Ok(n as usize)
+}
+
 /// 窗口前（`seq < before_seq` 一侧）的全局轮次数——轨迹尾部优先分页的轮号偏移（M3）。
 ///
 /// 按 `COUNT(DISTINCT turn_id)` 计（`turn_id IS NULL` 的孤儿事件经 COALESCE 算作
@@ -672,7 +705,12 @@ mod tests {
         rewrite_backfill_batch(
             &pool,
             "conv-1",
-            vec![backfill_ev("user_message", "t1", Some("m1"), "2026-08-01 10:00:00")],
+            vec![backfill_ev(
+                "user_message",
+                "t1",
+                Some("m1"),
+                "2026-08-01 10:00:00",
+            )],
         )
         .await
         .unwrap();
@@ -695,9 +733,17 @@ mod tests {
         seed_conversation(&pool, "conv-1").await;
 
         // 真实事件占 seq=1 + 既有 backfill 行占 seq=2
-        append(&pool, "conv-1", "turn_context", "agent:agent-1", Some("t-real"), None, "{}")
-            .await
-            .unwrap();
+        append(
+            &pool,
+            "conv-1",
+            "turn_context",
+            "agent:agent-1",
+            Some("t-real"),
+            None,
+            "{}",
+        )
+        .await
+        .unwrap();
         sqlx::query(
             "INSERT INTO session_events (session_id, seq, kind, actor, turn_id, payload)
              VALUES ('conv-1', 2, 'turn_ended', ?, 't-real', '{}')",

@@ -60,8 +60,8 @@ use crate::db::repo::summary::SUMMARY_PREFIX;
 use crate::db::repo::{self, session_event};
 use crate::error::AppResult;
 use crate::harness::event_log::{
-    kind, AssistantMessagePayload, MessageErrorPayload, ToolResultMessagePayload,
-    TurnEndedPayload, UserMessagePayload,
+    kind, AssistantMessagePayload, MessageErrorPayload, ToolResultMessagePayload, TurnEndedPayload,
+    UserMessagePayload,
 };
 use crate::infra::protocol::ContentBlock;
 
@@ -70,10 +70,21 @@ use crate::infra::protocol::ContentBlock;
 /// delegate 的 is_normal_completion）不会误把它当真实观测值。
 pub const TERMINATION_BACKFILL: &str = "backfill";
 
+/// backfill 合成逻辑的版本号。
+///
+/// 版本升级（修 bug）时自增：boot 检测库内标记落后 → 把「纯 backfill 会话」
+/// （零真实事件）一并纳入删旧重写，自愈无需 UI；冻结会话（已混入真实事件）
+/// 永不重写（重写会造成错序，见模块头范围界定）。
+pub const BACKFILL_VERSION: u32 = 1;
+
+/// 库内版本标记的 preferences key（内部标记，经 [`repo::preferences::get`]
+/// 原始读取，不进用户偏好 struct）。
+const PREF_KEY: &str = "session_backfill_version";
+
 /// boot 日志与测试断言用的执行汇总。
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct BackfillReport {
-    /// 零事件且有消息行的会话数
+    /// 本次待处理会话数（零事件 + 版本落后时的纯 backfill 会话）
     pub candidates: usize,
     /// 成功合成写入的会话数
     pub backfilled: usize,
@@ -85,6 +96,10 @@ pub struct BackfillReport {
     pub failed: usize,
     /// 首锚点前孤儿行总数（这些会话将路由 mixed_epoch → Legacy）
     pub epoch_rows: usize,
+    /// 本次是否为版本落后的强制重跑
+    pub forced: bool,
+    /// 冻结会话数（backfill 行 + 真实事件混合，重跑永不触碰，仅诊断）
+    pub frozen: usize,
 }
 
 /// 单会话合成结果。
@@ -94,20 +109,44 @@ struct SessionOutcome {
     epoch_rows: usize,
 }
 
-/// boot 入口（幂等）：给全部零事件旧会话补合成事件。
+/// boot 入口（幂等）：给全部零事件旧会话补合成事件；库内版本落后时把
+/// 纯 backfill 会话一并删旧重写（版本化自愈）。
 ///
 /// 定位与 sweep_interrupted_turns / heal_checksum_drift 同款 boot 自愈：
 /// 单会话失败仅 warn 跳过，绝不阻断启动。
 pub async fn backfill_legacy_sessions(pool: &SqlitePool) -> BackfillReport {
-    let convs = match session_event::find_zero_event_sessions(pool).await {
+    // 版本标记：落后于代码版本 → 强制重跑（重写所有可重写的合成行）
+    let stored = repo::preferences::get(pool, PREF_KEY)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(0);
+    let forced = stored < BACKFILL_VERSION;
+
+    let mut convs = match session_event::find_zero_event_sessions(pool).await {
         Ok(v) => v,
         Err(e) => {
             tracing::warn!(target: "ice_paw.backfill", "候选会话查询失败（不影响启动）: {e}");
             return BackfillReport::default();
         }
     };
+    if forced {
+        match session_event::find_pure_backfill_sessions(pool).await {
+            Ok(mut rerun) => convs.append(&mut rerun),
+            Err(e) => {
+                tracing::warn!(target: "ice_paw.backfill", "重跑候选查询失败（跳过重跑）: {e}")
+            }
+        }
+    }
+    let frozen = session_event::count_frozen_backfill_sessions(pool)
+        .await
+        .unwrap_or(0);
+
     let mut report = BackfillReport {
         candidates: convs.len(),
+        forced,
+        frozen,
         ..Default::default()
     };
     for conv_id in convs {
@@ -126,6 +165,24 @@ pub async fn backfill_legacy_sessions(pool: &SqlitePool) -> BackfillReport {
                     "单会话 backfill 失败（跳过，维持 legacy 读路径）: {e}"
                 );
             }
+        }
+    }
+
+    // 版本推进：全部成功才写（有失败保留旧版本 → 下次 boot 自动重试）。
+    // frozen 不算失败——它是文档化的终态，不是待重试项。
+    if forced {
+        if report.failed == 0 {
+            if let Err(e) =
+                repo::preferences::set(pool, PREF_KEY, &BACKFILL_VERSION.to_string()).await
+            {
+                tracing::warn!(target: "ice_paw.backfill", "版本标记写入失败（下次 boot 会重跑）: {e}");
+            }
+        } else {
+            tracing::warn!(
+                target: "ice_paw.backfill",
+                failed = report.failed,
+                "存在失败会话，版本标记未推进（下次 boot 重试）"
+            );
         }
     }
     report
@@ -308,7 +365,10 @@ fn backfill_event<T: Serialize>(
 /// content 恒空、每轮独立持久化）。误判的失败模式是 CONTENT_MISMATCH →
 /// diff → Legacy，错得安全。
 fn is_tool_result_row(blocks: &[ContentBlock]) -> bool {
-    !blocks.is_empty() && blocks.iter().all(|b| matches!(b, ContentBlock::ToolResult { .. }))
+    !blocks.is_empty()
+        && blocks
+            .iter()
+            .all(|b| matches!(b, ContentBlock::ToolResult { .. }))
 }
 
 /// 与 reconcile `LegacyRow::is_empty_assistant_placeholder` 同款判定。
@@ -339,9 +399,7 @@ fn effective_blocks(content: &str, blocks: &[ContentBlock]) -> Vec<ContentBlock>
 mod tests {
     use super::*;
     use crate::context::history::load_history_with_window;
-    use crate::harness::read_route::{
-        load_history_from_events, ReadRoute, ReadRouteRegistry,
-    };
+    use crate::harness::read_route::{load_history_from_events, ReadRoute, ReadRouteRegistry};
     use crate::harness::reconcile::reconcile_session;
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use std::str::FromStr;
@@ -417,21 +475,111 @@ mod tests {
     async fn seed_full_shape_legacy(pool: &SqlitePool) {
         seed_conv(pool, "conv-bf").await;
         let prefix = SUMMARY_PREFIX;
-        insert_row(pool, "conv-bf", "u1", "user", "你好", r#"[{"type":"text","text":"你好"}]"#, "2026-08-01 10:00:00").await;
-        insert_row(pool, "conv-bf", "a1", "assistant", "你好！有什么可以帮你？", r#"[{"type":"text","text":"你好！有什么可以帮你？"}]"#, "2026-08-01 10:00:05").await;
-        insert_row(pool, "conv-bf", "tr1", "user", "", r#"[{"type":"tool_result","tool_use_id":"tu_1","content":"内容","is_error":false}]"#, "2026-08-01 10:00:10").await;
-        insert_row(pool, "conv-bf", "a2", "assistant", "", r#"[{"type":"tool_use","id":"tu_1","name":"read_file","input":"{}"}]"#, "2026-08-01 10:00:15").await;
-        insert_row(pool, "conv-bf", "u2", "user", "继续", r#"[{"type":"text","text":"继续"}]"#, "2026-08-01 10:00:20").await;
-        insert_row(pool, "conv-bf", "a3", "assistant", "", "[]", "2026-08-01 10:00:25").await;
+        insert_row(
+            pool,
+            "conv-bf",
+            "u1",
+            "user",
+            "你好",
+            r#"[{"type":"text","text":"你好"}]"#,
+            "2026-08-01 10:00:00",
+        )
+        .await;
+        insert_row(
+            pool,
+            "conv-bf",
+            "a1",
+            "assistant",
+            "你好！有什么可以帮你？",
+            r#"[{"type":"text","text":"你好！有什么可以帮你？"}]"#,
+            "2026-08-01 10:00:05",
+        )
+        .await;
+        insert_row(
+            pool,
+            "conv-bf",
+            "tr1",
+            "user",
+            "",
+            r#"[{"type":"tool_result","tool_use_id":"tu_1","content":"内容","is_error":false}]"#,
+            "2026-08-01 10:00:10",
+        )
+        .await;
+        insert_row(
+            pool,
+            "conv-bf",
+            "a2",
+            "assistant",
+            "",
+            r#"[{"type":"tool_use","id":"tu_1","name":"read_file","input":"{}"}]"#,
+            "2026-08-01 10:00:15",
+        )
+        .await;
+        insert_row(
+            pool,
+            "conv-bf",
+            "u2",
+            "user",
+            "继续",
+            r#"[{"type":"text","text":"继续"}]"#,
+            "2026-08-01 10:00:20",
+        )
+        .await;
+        insert_row(
+            pool,
+            "conv-bf",
+            "a3",
+            "assistant",
+            "",
+            "[]",
+            "2026-08-01 10:00:25",
+        )
+        .await;
         sqlx::query("UPDATE messages SET error = 'boom' WHERE id = 'a3'")
             .execute(pool)
             .await
             .expect("set error");
-        insert_row(pool, "conv-bf", "a4", "assistant", "", "[]", "2026-08-01 10:00:30").await;
-        insert_row(pool, "conv-bf", "sum1", "system", &format!("{prefix}\n摘要正文"), "[]", "2026-08-01 10:00:31").await;
-        insert_row(pool, "conv-bf", "tool1", "tool", "原始工具输出", "[]", "2026-08-01 10:00:32").await;
+        insert_row(
+            pool,
+            "conv-bf",
+            "a4",
+            "assistant",
+            "",
+            "[]",
+            "2026-08-01 10:00:30",
+        )
+        .await;
+        insert_row(
+            pool,
+            "conv-bf",
+            "sum1",
+            "system",
+            &format!("{prefix}\n摘要正文"),
+            "[]",
+            "2026-08-01 10:00:31",
+        )
+        .await;
+        insert_row(
+            pool,
+            "conv-bf",
+            "tool1",
+            "tool",
+            "原始工具输出",
+            "[]",
+            "2026-08-01 10:00:32",
+        )
+        .await;
         insert_row(pool, "conv-bf", "u3", "user", "看附件", r#"[{"type":"text","text":"看附件"},{"type":"attachment","name":"plan.pdf","kind":"pdf","size":282000}]"#, "2026-08-01 10:00:40").await;
-        insert_row(pool, "conv-bf", "a5", "assistant", "收到", r#"[{"type":"text","text":"收到"}]"#, "2026-08-01 10:00:45").await;
+        insert_row(
+            pool,
+            "conv-bf",
+            "a5",
+            "assistant",
+            "收到",
+            r#"[{"type":"text","text":"收到"}]"#,
+            "2026-08-01 10:00:45",
+        )
+        .await;
         sqlx::query("UPDATE messages SET token_count = 120, model = 'glm-5.2' WHERE id = 'u1'")
             .execute(pool)
             .await
@@ -473,17 +621,17 @@ mod tests {
         assert_eq!(
             kinds_of(&events),
             vec![
-                "user_message",           // u1
-                "assistant_message",      // a1
-                "tool_result_message",    // tr1
-                "assistant_message",      // a2
-                "turn_ended",             // t1 闭合（rounds=2）
-                "user_message",           // u2
-                "message_error",          // a3（error 行不产 assistant_message）
-                "turn_ended",             // t2 闭合（rounds=0；a4 空占位/摘要/tool 行不合成）
-                "user_message",           // u3
-                "assistant_message",      // a5
-                "turn_ended",             // t3 闭合
+                "user_message",        // u1
+                "assistant_message",   // a1
+                "tool_result_message", // tr1
+                "assistant_message",   // a2
+                "turn_ended",          // t1 闭合（rounds=2）
+                "user_message",        // u2
+                "message_error",       // a3（error 行不产 assistant_message）
+                "turn_ended",          // t2 闭合（rounds=0；a4 空占位/摘要/tool 行不合成）
+                "user_message",        // u3
+                "assistant_message",   // a5
+                "turn_ended",          // t3 闭合
             ]
         );
         for (i, e) in events.iter().enumerate() {
@@ -508,7 +656,10 @@ mod tests {
         assert_eq!(a1.round, 0);
         // created_at 保真（行原始时间戳直传）
         assert_eq!(events[0].created_at, "2026-08-01 10:00:00");
-        assert_eq!(events[4].created_at, "2026-08-01 10:00:15", "turn_ended 取 turn 内最后行时间");
+        assert_eq!(
+            events[4].created_at, "2026-08-01 10:00:15",
+            "turn_ended 取 turn 内最后行时间"
+        );
 
         // 对账零 diff + 容忍清单齐全 + 无 epoch 行
         let rep = reconcile_session(&pool, "conv-bf").await.unwrap();
@@ -518,7 +669,12 @@ mod tests {
             "skipped: {:?}",
             rep.skipped
         );
-        for reason in ["error_row", "empty_placeholder", "summary_row", "non_conversational_role"] {
+        for reason in [
+            "error_row",
+            "empty_placeholder",
+            "summary_row",
+            "non_conversational_role",
+        ] {
             assert!(
                 rep.skipped.iter().any(|s| s.reason == reason),
                 "容忍项 {reason} 应在 skipped: {:?}",
@@ -545,9 +701,7 @@ mod tests {
         let legacy_rows = repo::message::list_all_by_rowid(&pool, "conv-bf")
             .await
             .unwrap();
-        let derived_rows = load_history_from_events(&pool, "conv-bf")
-            .await
-            .unwrap();
+        let derived_rows = load_history_from_events(&pool, "conv-bf").await.unwrap();
 
         let legacy_view = load_history_with_window(&legacy_rows, None);
         let derived_view = load_history_with_window(&derived_rows, None);
@@ -561,7 +715,10 @@ mod tests {
         for (i, (l, d)) in legacy_view.iter().zip(derived_view.iter()).enumerate() {
             assert_eq!(l.role, d.role, "msg#{i} role 不一致");
             assert_eq!(l.content, d.content, "msg#{i} blocks 不一致");
-            assert_eq!(l.source_rowid, d.source_rowid, "msg#{i} source_rowid 不一致");
+            assert_eq!(
+                l.source_rowid, d.source_rowid,
+                "msg#{i} source_rowid 不一致"
+            );
         }
     }
 
@@ -580,7 +737,10 @@ mod tests {
         assert_eq!(r2.backfilled, 0);
 
         let events_after_second = events_of(&pool, "conv-bf").await;
-        assert_eq!(kinds_of(&events_after_first), kinds_of(&events_after_second));
+        assert_eq!(
+            kinds_of(&events_after_first),
+            kinds_of(&events_after_second)
+        );
     }
 
     /// 测试 4：混合纪元会话（真实事件 + 旧行）不被触碰。
@@ -589,8 +749,26 @@ mod tests {
         let pool = migrated_pool().await;
         seed_conv(&pool, "conv-mix").await;
         // 纪元前旧行 + 真实事件（升级前后继续聊的形态）
-        insert_row(&pool, "conv-mix", "old-u", "user", "旧问题", r#"[{"type":"text","text":"旧问题"}]"#, "2026-07-01 09:00:00").await;
-        insert_row(&pool, "conv-mix", "new-u", "user", "新问题", r#"[{"type":"text","text":"新问题"}]"#, "2026-08-10 09:00:00").await;
+        insert_row(
+            &pool,
+            "conv-mix",
+            "old-u",
+            "user",
+            "旧问题",
+            r#"[{"type":"text","text":"旧问题"}]"#,
+            "2026-07-01 09:00:00",
+        )
+        .await;
+        insert_row(
+            &pool,
+            "conv-mix",
+            "new-u",
+            "user",
+            "新问题",
+            r#"[{"type":"text","text":"新问题"}]"#,
+            "2026-08-10 09:00:00",
+        )
+        .await;
         session_event::append(
             &pool,
             "conv-mix",
@@ -620,9 +798,36 @@ mod tests {
         seed_conv(&pool, "conv-orphan").await;
         // 病理形态：assistant 行先于任何 user 锚点（生产 send_message 不会产生，
         // 防御旧库手工修改等异常数据）
-        insert_row(&pool, "conv-orphan", "ghost", "assistant", "孤儿回复", r#"[{"type":"text","text":"孤儿回复"}]"#, "2026-08-01 10:00:00").await;
-        insert_row(&pool, "conv-orphan", "u1", "user", "你好", r#"[{"type":"text","text":"你好"}]"#, "2026-08-01 10:00:05").await;
-        insert_row(&pool, "conv-orphan", "a1", "assistant", "你好！", r#"[{"type":"text","text":"你好！"}]"#, "2026-08-01 10:00:10").await;
+        insert_row(
+            &pool,
+            "conv-orphan",
+            "ghost",
+            "assistant",
+            "孤儿回复",
+            r#"[{"type":"text","text":"孤儿回复"}]"#,
+            "2026-08-01 10:00:00",
+        )
+        .await;
+        insert_row(
+            &pool,
+            "conv-orphan",
+            "u1",
+            "user",
+            "你好",
+            r#"[{"type":"text","text":"你好"}]"#,
+            "2026-08-01 10:00:05",
+        )
+        .await;
+        insert_row(
+            &pool,
+            "conv-orphan",
+            "a1",
+            "assistant",
+            "你好！",
+            r#"[{"type":"text","text":"你好！"}]"#,
+            "2026-08-01 10:00:10",
+        )
+        .await;
 
         let report = backfill_legacy_sessions(&pool).await;
         assert_eq!(report.backfilled, 1);
@@ -638,5 +843,103 @@ mod tests {
         let d = reg.resolve(&pool, "conv-orphan", false).await.unwrap();
         assert_eq!(d.route, ReadRoute::Legacy);
         assert_eq!(d.reason, "mixed_epoch");
+    }
+
+    /// 测试 6：版本化重跑——库内版本落后时纯 backfill 会话被删旧重写，
+    /// 成功后版本标记推进（修 bug 自愈闭环，无需 UI）。
+    #[tokio::test]
+    async fn versioned_rerun_rewrites_pure_backfill_sessions() {
+        let pool = migrated_pool().await;
+        seed_full_shape_legacy(&pool).await;
+        backfill_legacy_sessions(&pool).await;
+
+        // 首跑即 forced（stored 缺省 0 < 1）→ 版本标记已推进
+        let v = repo::preferences::get(&pool, "session_backfill_version")
+            .await
+            .unwrap();
+        assert_eq!(v, Some(BACKFILL_VERSION.to_string()));
+
+        // 模拟 v1 合成 bug：污染一条合成行（对账会出 DERIVE_ISSUE）+ 版本标记回落
+        sqlx::query(
+            "UPDATE session_events SET payload = 'garbage'
+              WHERE actor = 'backfill' AND message_id = 'a1'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        repo::preferences::set(&pool, "session_backfill_version", "0")
+            .await
+            .unwrap();
+
+        let r = backfill_legacy_sessions(&pool).await;
+        assert!(r.forced);
+        assert_eq!(r.candidates, 1, "纯 backfill 会话进重跑候选");
+        assert_eq!(r.backfilled, 1);
+        assert_eq!(r.failed, 0);
+
+        // 污染被重写治愈：对账零 diff、路由 Derive、版本再次推进
+        let rep = reconcile_session(&pool, "conv-bf").await.unwrap();
+        assert!(rep.diffs.is_empty(), "diffs: {:#?}", rep.diffs);
+        let reg = ReadRouteRegistry::new();
+        assert_eq!(
+            reg.resolve(&pool, "conv-bf", false).await.unwrap().route,
+            ReadRoute::Derive
+        );
+        let v2 = repo::preferences::get(&pool, "session_backfill_version")
+            .await
+            .unwrap();
+        assert_eq!(v2, Some(BACKFILL_VERSION.to_string()));
+    }
+
+    /// 测试 7：冻结规则——backfill 后用户又聊过（混入真实事件）的会话
+    /// 永不重写（重写会把合成事件追到流尾造成错序），即使版本落后。
+    #[tokio::test]
+    async fn frozen_sessions_with_real_events_are_never_rerun() {
+        let pool = migrated_pool().await;
+        seed_full_shape_legacy(&pool).await;
+        backfill_legacy_sessions(&pool).await;
+
+        // 用户又聊了一轮：行 + 真实事件（追加在合成事件之后，时序天然正确）
+        insert_row(
+            &pool,
+            "conv-bf",
+            "u9",
+            "user",
+            "追加问题",
+            r#"[{"type":"text","text":"追加问题"}]"#,
+            "2026-08-02 09:00:00",
+        )
+        .await;
+        session_event::append(
+            &pool,
+            "conv-bf",
+            kind::USER_MESSAGE,
+            "user",
+            Some("u9"),
+            Some("u9"),
+            r#"{"v":1,"content":"追加问题","blocks":[{"type":"text","text":"追加问题"}]}"#,
+        )
+        .await
+        .unwrap();
+
+        // 版本落后触发强制重跑 → 冻结会话不在候选
+        repo::preferences::set(&pool, "session_backfill_version", "0")
+            .await
+            .unwrap();
+        let r = backfill_legacy_sessions(&pool).await;
+        assert!(r.forced);
+        assert_eq!(r.candidates, 0, "冻结会话不进重跑候选");
+        assert_eq!(r.backfilled, 0);
+        assert_eq!(r.frozen, 1);
+
+        // 事件原样：12 条 = 11 合成 + 1 真实，未被删改
+        let events = events_of(&pool, "conv-bf").await;
+        assert_eq!(events.len(), 12);
+        assert_eq!(events[11].actor, "user", "真实事件原样保留");
+        // 版本仍推进——frozen 是文档化终态，不是待重试失败
+        let v = repo::preferences::get(&pool, "session_backfill_version")
+            .await
+            .unwrap();
+        assert_eq!(v, Some(BACKFILL_VERSION.to_string()));
     }
 }
