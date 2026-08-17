@@ -126,5 +126,5 @@ agent 调用 `propose_config_change` 工具提出创建/修改 agent 提案 → 
 - 分支：仅 `main`
 - 近期递进：S 批次结构减法（S2-S7 全清）→ backfill → 0.3.6 发版 → **S1 Phase 2B legacy 读路径退役三件套全清**（恒 Derive + 摘要锚点 seq 化 + Image 双份存储治理，详见「会话事件日志」段）
 - `cargo test --lib` 858 passed / 0 failed（+ 集成测试：session_runner_e2e 7、session_reconcile_e2e 6+2 ignored、session_event_log_e2e 3、memory_e2e 3、message_repo 7、provider 11）；clippy --tests -D warnings 0 警告；vitest 153
-- 仍待办：**S1 真机手测收尾一项**（含图会话轨迹检查器图片显示——89904384 有 v1 内联 / 211db926 有 v2 ref 各 2 事件，开一次轨迹视图两形态齐验）、0.3.5 发版手测（0.3.3 三重点）、视觉适配/KB watcher/自动续写生产手测、proposal Phase 2（MCP 域）、S8 无限续写（待拍板）
+- 仍待办：0.3.5 发版手测（0.3.3 三重点）、视觉适配/KB watcher/自动续写生产手测、proposal Phase 2（MCP 域）、S8 无限续写（待拍板）
 - **S1 真机验收 2026-08-17 四项绿**：backfill（sessions=9 events=824 failed=0 epoch_rows=0，版本标记=2）+ 恒 Derive（当日路由决策全 green diffs=0，含 backfill 会话续聊 seq 1..933 连续）+ 发图 v2 payload 无 base64（image_ref 162B 指针，本体 851KB/3.8MB 只在 messages 行；模型回复描述画面=水合进 LLM 视图实证）+ 摘要折叠 `covered_until_seq=726`/rowid=1710 双值落库
