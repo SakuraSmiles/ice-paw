@@ -18,11 +18,13 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
 import { useChatStore } from "../../stores/chat";
 import { useAgentStore } from "../../stores/agent";
+import { useProjectStore } from "../../stores/project";
 import { shortCode } from "../../utils/refs";
 import type { ContentBlock } from "../../types";
 
 const chat = useChatStore();
 const agentStore = useAgentStore();
+const projectStore = useProjectStore();
 const textareaRef = ref<HTMLTextAreaElement | null>(null);
 
 const input = computed({
@@ -228,6 +230,11 @@ async function onPaste(e: ClipboardEvent) {
 // 输入框保持纯文本，引用以 chip 徽章形态存在（可删，非裸文本）。
 const atQuery = ref<string | null>(null); // null = 未激活
 
+// 弹层首次打开时惰性拉项目列表（loaded 标志防重复）：会话候选要排除归档项目的
+// 会话（侧栏不可见、项目页也已收起——@ 里再冒出来就是「已删内容未过滤」的观感）。
+// 聊天页常驻时 projectStore 可能从未加载，这里兜底；拉到后 refOptions 自动重算。
+watch(atQuery, (v) => { if (v !== null) void projectStore.load(); });
+
 function detectAtTrigger() {
   const el = textareaRef.value;
   if (!el) return;
@@ -271,15 +278,22 @@ const refOptions = computed<RefOption[]>(() => {
   const match = (s: string) => !q || s.toLowerCase().includes(q);
   const out: RefOption[] = [];
 
-  // 会话：排除委派子会话（侧栏不可见）与当前会话（其历史本就在上下文里）
+  // 会话：排除委派子会话（侧栏不可见）、当前会话（其历史本就在上下文里）与
+  // 归档项目的会话（用户已收起该项目，侧栏/项目页均不可见——@ 里出现即脏候选）。
+  // 副标题标注归属（项目名 / 散落）：候选是全量的，跨项目引用是功能，但来源
+  // 必须看得见——否则跨项目会话在弹层里无法与当前上下文的会话区分。
   for (const c of chat.conversations) {
     if (c.kind === "delegation" || c.id === chat.activeConvId) continue;
+    const proj = c.project_id ? projectStore.getById(c.project_id) : null;
+    if (proj?.archived) continue;
     const label = convLabel(c.title);
     if (!match(label) && !match(c.title)) continue;
     const code = shortCode(c.id);
     out.push({
       kind: "conversation", targetId: c.id,
-      display: `${label}#${code}`, label, sub: "会话",
+      display: `${label}#${code}`, label,
+      // 归属未知（项目列表惰性加载未完成）时不瞎标「散落」，保持中性「会话」
+      sub: proj ? `会话 · ${proj.name}` : c.project_id ? "会话" : "会话 · 散落",
     });
     if (out.length >= SECTION_CAP) break;
   }

@@ -6,12 +6,20 @@ import { mount } from "@vue/test-utils";
 import ChatInput from "../ChatInput.vue";
 import { useChatStore } from "../../../stores/chat";
 import { useAgentStore } from "../../../stores/agent";
+import { useProjectStore } from "../../../stores/project";
 
-function conv(id: string, title: string, kind?: string) {
+function conv(id: string, title: string, kind?: string, projectId?: string) {
   return {
     id, agent_id: "a1", title, pinned: false,
     created_at: "2026-08-15 00:00:00", updated_at: "2026-08-15 00:00:00",
-    project_id: null, kind,
+    project_id: projectId ?? null, kind,
+  };
+}
+function proj(id: string, name: string, archived: boolean) {
+  return {
+    id, name, description: "", icon: "folder", sort_order: 0,
+    workspace_path: null, theme_color: null, archived,
+    created_at: "", updated_at: "",
   };
 }
 function msg(id: string, role: "user" | "assistant", content: string) {
@@ -35,6 +43,12 @@ async function type(wrapper: ReturnType<typeof mount>, text: string) {
 describe("ChatInput @ 引用", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
+    // 组件在弹层打开时会惰性 load 项目列表（归档排除要用）。测试里 invoke 全局
+    // mock resolve undefined——挡住 load（loaded=true 早退），防 undefined 覆盖
+    // 夹具数据；各用例按需手动设置 projectStore.list。
+    const projects = useProjectStore();
+    projects.list = [];
+    projects.loaded = true;
   });
 
   it("输入 @ 弹层出现（三段：会话/Agent/消息），过滤生效", async () => {
@@ -49,9 +63,9 @@ describe("ChatInput @ 引用", () => {
     const wrapper = mount(ChatInput);
     await type(wrapper, "@");
     expect(wrapper.find(".at-popover").exists()).toBe(true);
-    // 三段都有：会话 c2/c3 + agent 审查员 + 消息 2 条
+    // 三段都有：会话 c2/c3（散落归属标注）+ agent 审查员 + 消息 2 条
     const subs = wrapper.findAll(".at-option-sub").map((n) => n.text());
-    expect(subs.filter((s) => s === "会话").length).toBe(2);
+    expect(subs.filter((s) => s === "会话 · 散落").length).toBe(2);
     expect(subs.some((s) => s.startsWith("Agent"))).toBe(true);
     expect(subs.some((s) => s === "回答" || s === "消息")).toBe(true);
 
@@ -59,6 +73,29 @@ describe("ChatInput @ 引用", () => {
     await type(wrapper, "设计");
     const labels = wrapper.findAll(".at-option-label").map((n) => n.text());
     expect(labels).toEqual(["设计讨论", "帮我看看这段设计"]);
+  });
+
+  it("归档项目的会话不进候选；跨项目归属标注在副标题", async () => {
+    const chat = useChatStore();
+    const projects = useProjectStore();
+    projects.list = [proj("p1", "活跃项目", false), proj("p2", "旧项目", true)];
+    chat.conversations = [
+      conv("c-live", "活跃会话", undefined, "p1"),
+      conv("c-arch", "归档会话", undefined, "p2"),
+      conv("c-loose", "散落会话"),
+    ];
+
+    const wrapper = mount(ChatInput);
+    await type(wrapper, "@");
+    const labels = wrapper.findAll(".at-option-label").map((n) => n.text());
+    expect(labels).toContain("活跃会话");
+    expect(labels).toContain("散落会话");
+    // 归档项目会话（侧栏/项目页均不可见）不应出现在候选
+    expect(labels).not.toContain("归档会话");
+    // 归属透明：项目会话带项目名，散落会话标散落
+    const subs = wrapper.findAll(".at-option-sub").map((n) => n.text());
+    expect(subs).toContain("会话 · 活跃项目");
+    expect(subs).toContain("会话 · 散落");
   });
 
   it("Enter 选中 → @query 被删、chip 出现、pendingRefs 有值", async () => {
