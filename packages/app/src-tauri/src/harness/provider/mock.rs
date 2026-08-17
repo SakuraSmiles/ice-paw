@@ -18,6 +18,7 @@
 //! | `Timeout`          | 持有 cancel 检查，永不主动 send，直到外部 cancel   |
 //! | `EmptyResponse`    | 仅产出 Done，不发任何 Delta（模拟 LLM 沉默）        |
 //! | `EchoUser`         | 把最后一条 user 消息的文本作为回复（用于交互测试）  |
+//! | `ToolCallThenText` | 第 1 次调用发 tool_use 流；后续调用发文本收尾（e2e 工具轮） |
 //!
 //! 所有 Scenario 都尊重 `cancel.is_cancelled()`：收到取消信号会立刻 yield Done{finish_reason=abort}
 //! 并结束流，保证「调用方主动取消不会卡死消费方」。
@@ -98,6 +99,21 @@ pub enum MockScenario {
     /// 末尾 yield `Done{finish_reason=stop}`。
     /// 用于「测试特定内容流式输出」的场景。
     CustomText(String),
+
+    /// 工具轮场景：第 1 次 `stream_chat` 产出一条完整 tool_use 流
+    /// （Start → Delta(参数) → End → `Done{finish_reason=tool_use}`，附 Usage），
+    /// 第 2 次及以后产出文本 + Usage + `Done{finish_reason=stop}` 收尾。
+    ///
+    /// 专为「发消息 → 主循环 → 工具执行 → 二轮收尾」的全链路 e2e 设计：
+    /// 循环会把第 1 轮的 tool_use 交给真实 McpRegistry 执行（测试注册内存
+    /// echo 工具），把 tool_result 回传后触发第 2 次调用。调用次数由
+    /// `MockProvider.call_index`（原子计数）区分——场景本身无状态。
+    ToolCallThenText {
+        /// 工具名（须与测试注册的工具名一致）
+        tool_name: String,
+        /// 工具参数 JSON 字符串（原样进 ToolCallDelta）
+        arguments: String,
+    },
 }
 
 impl MockScenario {
@@ -111,6 +127,7 @@ impl MockScenario {
             MockScenario::EmptyResponse => "EmptyResponse",
             MockScenario::EchoUser => "EchoUser",
             MockScenario::CustomText(_) => "CustomText",
+            MockScenario::ToolCallThenText { .. } => "ToolCallThenText",
         }
     }
 }
@@ -133,6 +150,10 @@ pub struct MockProvider {
     pub model: String,
     /// 当前场景（`pub` 允许测试中切换）
     pub scenario: MockScenario,
+    /// `stream_chat` 调用计数（ToolCallThenText 用：0=工具轮，≥1=文本轮）。
+    /// `Arc<AtomicU32>` 保 Clone（多克隆共享同一计数——e2e 里 provider 经
+    /// `Arc<dyn LlmProvider>` 单实例流转，计数天然连续）。
+    call_index: std::sync::Arc<std::sync::atomic::AtomicU32>,
 }
 
 impl MockProvider {
@@ -141,7 +162,13 @@ impl MockProvider {
         Self {
             model: model.into(),
             scenario,
+            call_index: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
         }
+    }
+
+    /// 已发生的 `stream_chat` 调用次数（e2e 断言「工具轮后确实二轮收尾」用）。
+    pub fn call_count(&self) -> u32 {
+        self.call_index.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// 便利构造：默认 NormalReply 场景
@@ -200,6 +227,15 @@ impl LlmProvider for MockProvider {
             effective_model,
             messages.len(),
         );
+
+        // ToolCallThenText 的轮次区分：首次调用 = 工具轮，之后 = 文本轮。
+        let tool_then_text_round = match &self.scenario {
+            MockScenario::ToolCallThenText { .. } => Some(
+                self.call_index
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+            ),
+            _ => None,
+        };
 
         // 错误场景：直接返回 Err，stream_chat 调用方会拿到 Result::Err
         match &self.scenario {
@@ -316,6 +352,72 @@ impl LlmProvider for MockProvider {
                             finish_reason: Some("stop".to_string()),
                         }))
                         .await;
+                }
+
+                MockScenario::ToolCallThenText {
+                    tool_name,
+                    arguments,
+                } => {
+                    if tool_then_text_round == Some(0) {
+                        // 第 1 轮：一条完整 tool_use 流（参数分 2 个 Delta 模拟增量）
+                        let id = "mock_tool_call_1".to_string();
+                        let _ = tx
+                            .send(Ok(ChatDelta::ToolCallStart {
+                                id: id.clone(),
+                                name: tool_name.clone(),
+                            }))
+                            .await;
+                        let mid = arguments.len() / 2;
+                        let (head, tail) = arguments.split_at(mid);
+                        let _ = tx
+                            .send(Ok(ChatDelta::ToolCallDelta {
+                                id: id.clone(),
+                                delta: head.to_string(),
+                            }))
+                            .await;
+                        let _ = tx
+                            .send(Ok(ChatDelta::ToolCallDelta {
+                                id: id.clone(),
+                                delta: tail.to_string(),
+                            }))
+                            .await;
+                        let _ = tx.send(Ok(ChatDelta::ToolCallEnd { id })).await;
+                        let _ = tx
+                            .send(Ok(ChatDelta::Usage {
+                                usage: TokenUsage {
+                                    prompt_tokens: 10,
+                                    completion_tokens: 5,
+                                    cached_tokens: 0,
+                                },
+                            }))
+                            .await;
+                        let _ = tx
+                            .send(Ok(ChatDelta::Done {
+                                finish_reason: Some("tool_use".to_string()),
+                            }))
+                            .await;
+                    } else {
+                        // 第 2 轮起：文本收尾（读到 tool_result 后的最终回答）
+                        let _ = tx
+                            .send(Ok(ChatDelta::Delta {
+                                content: "Tool finished. Final answer from mock.".to_string(),
+                            }))
+                            .await;
+                        let _ = tx
+                            .send(Ok(ChatDelta::Usage {
+                                usage: TokenUsage {
+                                    prompt_tokens: 20,
+                                    completion_tokens: 6,
+                                    cached_tokens: 0,
+                                },
+                            }))
+                            .await;
+                        let _ = tx
+                            .send(Ok(ChatDelta::Done {
+                                finish_reason: Some("stop".to_string()),
+                            }))
+                            .await;
+                    }
                 }
 
                 MockScenario::Timeout => {
@@ -744,6 +846,73 @@ mod tests {
 
         // 关键断言：provider 自身的 model_name 不应被改写
         assert_eq!(provider.model_name(), "default-model");
+    }
+
+    // -----------------------------------------------------------------
+    // ToolCallThenText：第 1 轮 tool_use 流 → 第 2 轮文本收尾
+    // -----------------------------------------------------------------
+    #[tokio::test]
+    async fn tool_call_then_text_two_rounds() {
+        let provider = MockProvider::new(
+            "mock",
+            MockScenario::ToolCallThenText {
+                tool_name: "echo".into(),
+                arguments: r#"{"msg":"hi"}"#.into(),
+            },
+        );
+        let cancel = CancellationToken::new();
+
+        // 第 1 轮：Start → Delta×2 → End → Usage → Done(tool_use)
+        let s1 = provider
+            .stream_chat(
+                "k",
+                MockProvider::sample_messages(),
+                None,
+                0.7,
+                100,
+                None,
+                cancel.clone(),
+            )
+            .await
+            .expect("第 1 轮应构造 stream");
+        let c1 = drain(s1).await;
+        assert_eq!(c1.len(), 6, "第 1 轮应 6 个 delta: {c1:?}");
+        assert!(matches!(&c1[0], ChatDelta::ToolCallStart { name, .. } if name == "echo"));
+        // 两个 Delta 拼回完整参数
+        let args: String = [1usize, 2]
+            .iter()
+            .map(|i| match &c1[*i] {
+                ChatDelta::ToolCallDelta { delta, .. } => delta.clone(),
+                other => panic!("expected ToolCallDelta, got: {other:?}"),
+            })
+            .collect();
+        assert_eq!(args, r#"{"msg":"hi"}"#);
+        assert!(matches!(&c1[3], ChatDelta::ToolCallEnd { .. }));
+        assert!(matches!(&c1[4], ChatDelta::Usage { .. }));
+        assert!(
+            matches!(&c1[5], ChatDelta::Done { finish_reason: Some(ref r) } if r == "tool_use")
+        );
+
+        // 第 2 轮：文本 + Usage + Done(stop)
+        let s2 = provider
+            .stream_chat(
+                "k",
+                MockProvider::sample_messages(),
+                None,
+                0.7,
+                100,
+                None,
+                cancel,
+            )
+            .await
+            .expect("第 2 轮应构造 stream");
+        let c2 = drain(s2).await;
+        assert_eq!(c2.len(), 3);
+        assert!(matches!(&c2[0], ChatDelta::Delta { content } if content.contains("Final answer")));
+        assert!(matches!(&c2[2], ChatDelta::Done { finish_reason: Some(ref r) } if r == "stop"));
+
+        // 计数已到 2
+        assert_eq!(provider.call_count(), 2);
     }
 
     // -----------------------------------------------------------------
