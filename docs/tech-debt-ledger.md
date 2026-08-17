@@ -21,7 +21,7 @@
 | V4 | MCP tools/call 120s 超时 | 05d0c14 | 慢视觉调用（5~67s 实况）不再被掐死 |
 | V5 | 对话钩子端到端 | 1c2a1d8 | agent.yaml hooks 四接入点真跑一遍 |
 | V6 | 轨迹千轮规模 + live 追加 | 4866e01 + aa96e16 系列 | 千轮会话滚动/搜索不卡；生成中实时追加 |
-| V7 | **Phase 2A 读路径切换** | 已 commit | dev 正常对话零变化；日志见 `[read_route] → derive (green)`；DevTools `get_read_route_status`。**2026-08-16 真机首证：Derive green（events=891 diffs=0）**，观察期累积中 |
+| V7 | **Phase 2A 读路径切换** ✅ 2026-08-17 收官 | 已 commit | dev 正常对话零变化；日志见 `[read_route] → derive (green)`；DevTools `get_read_route_status`。**2026-08-16 真机首证：Derive green（events=891 diffs=0）**。**2026-08-17 观察期满收官**：用户日常使用 2 天无异常 + 日志复核（08-15/16 共 46 次路由决策，事件会话全 Derive green diffs=0；仅有的 Legacy 全为 `no_events` 旧会话，零 diff 回退）——S0 门槛解除 |
 | V8 | 孤儿 tool_use 对称清场 | 已合 main | 异常终止路径不留孤儿 tool_use 卡死 |
 | V9 | 远程 MCP 传输（streamable HTTP） | 记忆 remote-mcp-transport | 真 HTTP server 握手 + tools/call |
 
@@ -32,7 +32,7 @@
 
 ## 批次 S — 结构减法（DeepSeek 式简化，测试数不降为硬约束）
 
-**S0（前置门槛）**: V7 真机持续绿观察 ≥ 一段日常使用期（2026-08-14 起计）→ 解锁 S1。
+**S0（前置门槛）✅ 2026-08-17 通过**: ~~V7 真机持续绿观察 ≥ 一段日常使用期~~ 用户日常 2 天 + 日志全绿复核（见 V7 行）→ **S1 已解锁，剩余前置 = 旧会话事件 backfill**。
 
 | # | 项 | 内容 | 备注 |
 |---|---|---|---|
