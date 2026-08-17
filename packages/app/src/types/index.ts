@@ -272,7 +272,9 @@ export type ContentBlock =
   | { type: "tool_use"; id: string; name: string; input: string }
   | { type: "tool_result"; tool_use_id: string; content: string; is_error?: boolean }
   | { type: "thinking"; thinking: string; signature?: string }
-  | { type: "attachment"; name: string; kind: string; size: number };
+  | { type: "attachment"; name: string; kind: string; size: number }
+  /** @ 引用卡（纯 UI；LLM 读后端 materialize 展开的 text 块） */
+  | { type: "reference"; ref_kind: "conversation" | "agent" | "message"; target_id: string; display: string };
 
 /**
  * 聊天文件附件（office/pdf）。后端在 send_message 入口 materialize：
