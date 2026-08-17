@@ -102,6 +102,42 @@ pub async fn list_tail(
     Ok(rows)
 }
 
+/// @引用「会话名片」投影：最后一次 `plan_updated` 的 payload。
+///
+/// plan_updated 是全量快照语义（每行即当时整个计划）→ last-wins 直接取最新一条。
+pub async fn last_plan_payload(pool: &SqlitePool, session_id: &str) -> AppResult<Option<String>> {
+    let row: Option<(String,)> = sqlx::query_as(
+        "SELECT payload FROM session_events
+          WHERE session_id = ? AND kind = 'plan_updated'
+          ORDER BY seq DESC LIMIT 1",
+    )
+    .bind(session_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(p,)| p))
+}
+
+/// @引用「会话名片」投影：全部成功工具调用的 `(tool_name, arguments)`。
+///
+/// json_extract 在 SQL 侧只取两字段——不拉 `$.result` 正文（大会话的工具
+/// 结果累计可达 MB 级，名片只要名字和参数里的路径）。
+pub async fn list_successful_tool_calls(
+    pool: &SqlitePool,
+    session_id: &str,
+) -> AppResult<Vec<(String, String)>> {
+    let rows = sqlx::query_as::<_, (String, String)>(
+        "SELECT json_extract(payload, '$.tool_name'), json_extract(payload, '$.arguments')
+           FROM session_events
+          WHERE session_id = ? AND kind = 'tool_execution'
+            AND COALESCE(json_extract(payload, '$.is_error'), 0) = 0
+          ORDER BY seq ASC",
+    )
+    .bind(session_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 /// 崩溃自愈扫尾的输入：全部「已开始但未闭合」的 turn——有 `turn_context`
 /// 但无同 turn_id 的 `turn_ended`（进程死亡绕过了所有退出路径）。
 ///

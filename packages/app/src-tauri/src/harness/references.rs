@@ -186,6 +186,19 @@ async fn expand_conversation(
         ts = conv.updated_at,
     ));
 
+    // 会话名片：事件日志的结构化投影（计划终态 + 产物清单）——高价值密度
+    // 优先于对话流水；消息表里没有这些信息（只活在 session_events）
+    if let Some(card) = build_conversation_card(pool, conv_id).await {
+        let remaining = char_cap.saturating_sub(out.chars().count());
+        if card.chars().count() <= remaining {
+            out.push_str(&card);
+        } else {
+            // 名片挤不进剩余预算（多引用分摊后）：截短保留而非整体丢弃
+            out.push_str(&truncate_chars(&card, remaining.max(200)));
+            out.push_str("\n（名片超预算已截短）\n");
+        }
+    }
+
     // 摘要视图：锚点可解析（Phase 2 摘要行恒带 rowid 锚；旧版行 None → 走头尾
     // 视图保守处理，不猜覆盖范围）。残余定位用 rowid——MessageRow 恒有，与
     // seq/rowid 双锚的 LLM 视图连续性无关。
@@ -198,18 +211,123 @@ async fn expand_conversation(
         .and_then(|s| s.covered_until_rowid)
         .map(|anchor| msgs.iter().position(|m| m.rowid > anchor).unwrap_or(msgs.len()));
 
-    if let (Some(state), Some(residual)) = (summary_state.as_ref(), residual_start) {
-        render_summary_view(&mut out, state, &msgs, &turns, residual, char_cap);
+    let compressed = if let (Some(state), Some(residual)) = (summary_state.as_ref(), residual_start)
+    {
+        render_summary_view(&mut out, state, &msgs, &turns, residual, char_cap)
     } else {
-        render_headtail_view(&mut out, &msgs, &turns, query, char_cap);
+        render_headtail_view(&mut out, &msgs, &turns, query, char_cap)
+    };
+
+    // 钻取提示（仅压缩过才给——全量保留的快照无需工具，避免噪声）：
+    // 把「塞多少」的决策从发送时刻移到模型使用时刻（read_attachment_page 同构）
+    if compressed {
+        out.push_str(&format!(
+            "\n（快照已压缩；如需完整内容，调用 read_reference(target_id=\"{conv_id}\", page=1) 按页读取）\n"
+        ));
     }
 
     out.push_str("</referenced_conversation>");
     Some(out)
 }
 
+// =========================================================================
+// 会话名片：session_events 的结构化投影（计划终态 + 产物清单）
+// =========================================================================
+
+/// 名片段数上限（计划条目 / 产物各 ≤ 此值，超出标省略计数）
+const CARD_MAX_ITEMS: usize = 8;
+const CARD_MAX_ARTIFACTS: usize = 12;
+/// 单条计划/产物的字符截断
+const CARD_ITEM_CHARS: usize = 80;
+
+/// 从事件日志派生「会话名片」：计划终态（plan_updated last-wins）+ 产物清单
+/// （write/edit/move/create 工具的路径参数）。两段全空（聊天型会话）→ None，
+/// 零噪声。这是 MessageRow 之外的增量信息——计划与工具调用不进消息表，
+/// 只活在事件日志里。
+async fn build_conversation_card(pool: &SqlitePool, conv_id: &str) -> Option<String> {
+    let plan = repo::session_event::last_plan_payload(pool, conv_id)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|p| serde_json::from_str::<serde_json::Value>(&p).ok());
+    let plan_items = plan
+        .as_ref()
+        .and_then(|v| v.get("items").and_then(|i| i.as_array()))
+        .map(|a| a.as_slice())
+        .unwrap_or(&[]);
+
+    let artifacts: Vec<String> = repo::session_event::list_successful_tool_calls(pool, conv_id)
+        .await
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|(name, args)| artifact_path(name, args))
+        .collect();
+    let mut deduped: Vec<String> = Vec::new();
+    for p in artifacts {
+        if !deduped.contains(&p) {
+            deduped.push(p);
+        }
+    }
+
+    if plan_items.is_empty() && deduped.is_empty() {
+        return None;
+    }
+
+    let mut card = String::from("【会话名片】\n");
+    if !plan_items.is_empty() {
+        let done = plan_items
+            .iter()
+            .filter(|it| it.get("status").and_then(|s| s.as_str()) == Some("done"))
+            .count();
+        card.push_str(&format!("计划（{done}/{} 完成）：\n", plan_items.len()));
+        for it in plan_items.iter().take(CARD_MAX_ITEMS) {
+            let status = it.get("status").and_then(|s| s.as_str()).unwrap_or("pending");
+            let mark = match status {
+                "done" => "✓",
+                "in_progress" => "▶",
+                _ => "○",
+            };
+            let text = it.get("text").and_then(|t| t.as_str()).unwrap_or("");
+            card.push_str(&format!("  {mark} {}\n", truncate_chars(text, CARD_ITEM_CHARS)));
+        }
+        if plan_items.len() > CARD_MAX_ITEMS {
+            card.push_str(&format!(
+                "  …（另有 {} 条，见 read_reference 或源会话）\n",
+                plan_items.len() - CARD_MAX_ITEMS
+            ));
+        }
+    }
+    if !deduped.is_empty() {
+        card.push_str(&format!("产物（{} 个文件）：\n", deduped.len()));
+        for p in deduped.iter().take(CARD_MAX_ARTIFACTS) {
+            card.push_str(&format!("  - {}\n", truncate_chars(p, CARD_ITEM_CHARS)));
+        }
+        if deduped.len() > CARD_MAX_ARTIFACTS {
+            card.push_str(&format!(
+                "  …（另有 {} 个，见 read_reference 或源会话）\n",
+                deduped.len() - CARD_MAX_ARTIFACTS
+            ));
+        }
+    }
+    Some(card)
+}
+
+/// 从工具调用参数提取产物路径（write/edit/create_directory → path；
+/// move_file → destination）。非产物类工具 / 解析失败 → None。
+fn artifact_path(tool_name: &str, arguments: &str) -> Option<String> {
+    let key = match tool_name {
+        "write_file" | "edit_file" | "create_directory" => "path",
+        "move_file" => "destination",
+        _ => return None,
+    };
+    let v: serde_json::Value = serde_json::from_str(arguments).ok()?;
+    let p = v.get(key)?.as_str()?.trim().to_string();
+    (!p.is_empty()).then_some(p)
+}
+
 /// 摘要视图：滚动摘要（60% 子预算，防 16K 自适应摘要挤掉近窗）+ 锚点后近窗
 /// 尾部轮。摘要从中段开头折叠——它就是比头尾节选更好的中段压缩，复用零成本。
+/// 返回值 = 是否发生压缩（早期内容被摘要替代即算，恒 true——钻取提示依据）。
 fn render_summary_view(
     out: &mut String,
     state: &crate::db::repo::summary::SummaryState,
@@ -217,7 +335,7 @@ fn render_summary_view(
     turns: &[usize],
     residual_start: usize,
     char_cap: usize,
-) {
+) -> bool {
     let summary_cap = char_cap / 10 * SUMMARY_SHARE;
     out.push_str("【早期内容摘要】（源会话自动折叠生成，覆盖近期内容之前的对话）\n");
     out.push_str(&truncate_chars(&state.text, summary_cap));
@@ -248,22 +366,24 @@ fn render_summary_view(
         let line = render_message_line(m);
         if out.chars().count() + line.chars().count() > char_cap {
             out.push_str("…（已达快照长度上限，后续省略）\n");
-            return;
+            return true;
         }
         out.push_str(&line);
     }
+    true
 }
 
 /// 头尾视图：头 2 轮（最初目标）+ 尾 8 轮（最新状态）+ 发送正文相关性补选
 /// 最多 [`REF_RELEVANCE_EXTRA_TURNS`] 个中段轮（保序；query 为空时纯头尾）。
+/// 返回值 = 是否发生压缩（省略段/上限截断/窗口截断）。
 fn render_headtail_view(
     out: &mut String,
     msgs: &[MessageRow],
     turns: &[usize],
     query: &str,
     char_cap: usize,
-) {
-    // 全量轮数 ≤ 头+尾（或零轮）时整段保留
+) -> bool {
+    // 全量轮数 ≤ 头+尾（或零轮）时整段保留（零压缩——除非撞字符上限）
     if turns.len() <= CONVERSATION_HEAD_TURNS + CONVERSATION_TAIL_TURNS || turns.is_empty() {
         for m in msgs {
             if m.role == "system" {
@@ -272,11 +392,11 @@ fn render_headtail_view(
             let line = render_message_line(m);
             if out.chars().count() + line.chars().count() > char_cap {
                 out.push_str("…（已达快照长度上限，后续省略）\n");
-                return;
+                return true;
             }
             out.push_str(&line);
         }
-        return;
+        return false;
     }
 
     let n = turns.len();
@@ -334,10 +454,11 @@ fn render_headtail_view(
         let line = render_message_line(m);
         if out.chars().count() + line.chars().count() > char_cap {
             out.push_str("…（已达快照长度上限，后续省略）\n");
-            return;
+            return true;
         }
         out.push_str(&line);
     }
+    true
 }
 
 /// 消息所属轮号（0 基）：`turns[k] ≤ i < turns[k+1]` → k；首锚点前的窗口
@@ -447,7 +568,8 @@ fn is_placeholder_user(m: &crate::db::models::MessageRow) -> bool {
 /// 单条消息 → `[role]: 正文` 一行。正文来自 blocks 全序列渲染
 /// （Text 原文、图片/附件降级占位——**绝不塞 base64**、工具/引用块简短占位），
 /// blocks 无可渲染内容时兜底 content。
-fn render_message_line(m: &crate::db::models::MessageRow) -> String {
+/// pub(crate)：read_reference 工具的全文分页与快照渲染共用同一消息行形态。
+pub(crate) fn render_message_line(m: &MessageRow) -> String {
     let parsed = crate::context::history::parse_content_blocks(&m.content_blocks);
     let mut body = String::new();
     for b in &parsed {
@@ -835,6 +957,77 @@ mod tests {
         let blocks = vec![ContentBlock::text("普通消息")];
         let out = materialize_reference_blocks(&pool, "c1", blocks, "正文").await;
         assert_eq!(out.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn conversation_card_from_events() {
+        let pool = test_pool().await;
+        seed_agent(&pool, "a1", "助手", "").await;
+        seed_conv(&pool, "c1", "工程会话", "a1").await;
+        // 3 轮短会话（≤ 头+尾 → 全量保留，零压缩 → 不该有钻取提示）
+        for t in 1..=3 {
+            seed_msg(&pool, &format!("u{t}"), "c1", "user", &format!("第{t}个问题")).await;
+            seed_msg(&pool, &format!("a{t}"), "c1", "assistant", &format!("第{t}个回答")).await;
+        }
+        // 事件侧：计划终态（全量快照语义）+ 产物工具调用（含失败与非产物工具）
+        let ev = |kind: &str, payload: String| {
+            let kind = kind.to_string();
+            let pool = pool.clone();
+            async move {
+                repo::session_event::append(&pool, "c1", &kind, "agent:a1", Some("t1"), None, &payload)
+                    .await
+                    .unwrap();
+            }
+        };
+        ev(
+            "plan_updated",
+            r#"{"items":[{"text":"搭脚手架","status":"done"},{"text":"写核心模块","status":"in_progress"},{"text":"补测试","status":"pending"}]}"#.into(),
+        )
+        .await;
+        ev("tool_execution", r#"{"tool_call_id":"c1","tool_name":"write_file","arguments":"{\"path\":\"src/main.rs\",\"content\":\"x\"}","is_error":false,"duration_ms":10}"#.into()).await;
+        ev("tool_execution", r#"{"tool_call_id":"c2","tool_name":"edit_file","arguments":"{\"path\":\"src/lib.rs\"}","is_error":false,"duration_ms":10}"#.into()).await;
+        ev("tool_execution", r#"{"tool_call_id":"c3","tool_name":"move_file","arguments":"{\"source\":\"a.md\",\"destination\":\"docs/a.md\"}","is_error":false,"duration_ms":10}"#.into()).await;
+        ev("tool_execution", r#"{"tool_call_id":"c4","tool_name":"write_file","arguments":"{\"path\":\"bad.rs\"}","is_error":true,"duration_ms":10}"#.into()).await;
+        ev("tool_execution", r#"{"tool_call_id":"c5","tool_name":"run_command","arguments":"{\"cmd\":\"ls\"}","is_error":false,"duration_ms":10}"#.into()).await;
+
+        let text = expand_conversation(&pool, "c1", "", 8_000)
+            .await
+            .expect("展开成功");
+        // 名片：计划终态 + 产物清单（事件投影，消息表里没有的信息）
+        assert!(text.contains("【会话名片】"));
+        assert!(text.contains("计划（1/3 完成）"));
+        assert!(text.contains("✓ 搭脚手架"));
+        assert!(text.contains("▶ 写核心模块"));
+        assert!(text.contains("○ 补测试"));
+        assert!(text.contains("产物（3 个文件）"));
+        assert!(text.contains("src/main.rs"));
+        assert!(text.contains("src/lib.rs"));
+        assert!(text.contains("docs/a.md")); // move 取 destination
+        assert!(!text.contains("bad.rs")); // 失败调用不算产物
+        // 短会话零压缩 → 无钻取提示（避免噪声）
+        assert!(!text.contains("read_reference"));
+
+        // 纯聊天会话（无计划无产物）→ 零名片
+        seed_conv(&pool, "c2", "闲聊", "a1").await;
+        seed_msg(&pool, "c2-u1", "c2", "user", "在吗").await;
+        seed_msg(&pool, "c2-a1", "c2", "assistant", "在的").await;
+        let plain = expand_conversation(&pool, "c2", "", 8_000).await.unwrap();
+        assert!(!plain.contains("【会话名片】"));
+    }
+
+    #[tokio::test]
+    async fn compressed_snapshot_carries_drill_hint() {
+        let pool = test_pool().await;
+        seed_agent(&pool, "a1", "助手", "").await;
+        seed_conv(&pool, "c1", "长会话", "a1").await;
+        // 12 轮（> 头2+尾8）→ 有省略段 → 尾部应带钻取提示
+        for t in 1..=12 {
+            seed_msg(&pool, &format!("u{t}"), "c1", "user", &format!("第{t}个问题")).await;
+            seed_msg(&pool, &format!("a{t}"), "c1", "assistant", &format!("第{t}个回答")).await;
+        }
+        let text = expand_conversation(&pool, "c1", "", 8_000).await.unwrap();
+        assert!(text.contains("省略 2 轮"));
+        assert!(text.contains("read_reference(target_id=\"c1\""));
     }
 
     #[tokio::test]
