@@ -269,6 +269,8 @@ impl McpRegistry {
         self.register_sync(Arc::new(
             super::attachment_image_tool::ViewAttachmentImageTool,
         ));
+        // @引用会话钻取（P2：压缩快照按页读全文；越权守卫=目标被当前会话引用过）
+        self.register_sync(Arc::new(super::read_reference_tool::ReadReferenceTool));
         // agentic 工具集（文件读写编辑 / shell / grep / git / web）
         self.register_sync(Arc::new(super::file_tools::WriteFileTool));
         self.register_sync(Arc::new(super::file_tools::EditFileTool));
