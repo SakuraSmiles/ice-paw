@@ -177,6 +177,46 @@ describe("ChatInput @ 引用", () => {
     expect(wrapper.find(".ref-flash").exists()).toBe(true);
   });
 
+  it("已选中的对象重开弹层时带「已引用」标识", async () => {
+    const chat = useChatStore();
+    chat.conversations = [conv("c2", "设计讨论")];
+    const wrapper = mount(ChatInput);
+
+    await type(wrapper, "@");
+    await wrapper.find("textarea").trigger("keydown", { key: "Enter" });
+    expect(chat.pendingRefs.length).toBe(1);
+
+    // 重新打开弹层：该候选直接可见已选中（不必点了才发现重复）
+    await type(wrapper, "@");
+    expect(wrapper.find(".at-option-tag").text()).toBe("已引用");
+  });
+
+  it("匹配文本高亮：命中段带 .at-hit 标记", async () => {
+    const chat = useChatStore();
+    chat.conversations = [conv("c2", "设计讨论")];
+    chat.messages = [];
+    const wrapper = mount(ChatInput);
+
+    await type(wrapper, "@设计");
+    const hits = wrapper.findAll(".at-hit").map((n) => n.text());
+    expect(hits).toContain("设计");
+  });
+
+  it("Agent 按 id 模糊匹配（uuid 片段可搜）", async () => {
+    const chat = useChatStore();
+    const agents = useAgentStore();
+    agents.list = [
+      { id: "agent-uuid-1234", name: "审查员", provider: "openai", model: "gpt-test", system_prompt: "", base_url: null, temperature: 0.7, max_tokens: 4096, extra_params: {}, sort_order: 0, cache_prompt: true, has_api_key: true, created_at: "", updated_at: "" },
+    ];
+    chat.conversations = [];
+    chat.messages = [];
+    const wrapper = mount(ChatInput);
+
+    await type(wrapper, "@1234");
+    const labels = wrapper.findAll(".at-option-label").map((n) => n.text());
+    expect(labels).toContain("审查员");
+  });
+
   it("纯引用无文本可发送（发送按钮不 disabled）", async () => {
     const chat = useChatStore();
     chat.conversations = [conv("c2", "设计讨论")];
