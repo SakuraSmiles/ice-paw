@@ -206,7 +206,7 @@ function openTask(id: string) {
     </button>
 
     <Transition name="dropdown">
-      <div v-if="open" class="task-popover" @click.stop>
+      <div v-if="open" class="task-popover" :class="{ 'has-plan': !!plan }" @click.stop>
         <!-- 双栏（P12）：左任务 / 右计划，各列独立滚动——溢出收敛进面板不出页面；
              窄窗 flex-wrap 自动堆叠回纵向 -->
         <div class="task-columns">
@@ -284,15 +284,20 @@ function openTask(id: string) {
 @keyframes task-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
 /* popover：胶囊正下展开；双栏 + 列内滚动（P12 溢出治理——多任务/多计划
-   不再撑出页面，各列独立 max-height 内滚；窄窗 wrap 堆叠回纵向） */
+   不再撑出页面，各列独立 max-height 内滚；窄窗 wrap 堆叠回纵向）。
+   ⚠️ 显式定宽（不用 min/max-width 内容自适应）：容器宽由内容决定时，
+   flex-basis:0 的两列实际宽度受 min-width 钳制，内容不够宽就会被 wrap
+   挤成上下堆叠（用户手测踩过：220→260 后并排阈值 526 超过内容宽）。
+   定宽后双栏恒并排：有计划 = 720 两列各 ~357，无计划 = 420 单列不空 */
 .task-popover {
   position: absolute; top: calc(100% + 6px); right: 0; z-index: 100;
-  min-width: 320px; max-width: min(720px, calc(100vw - 48px)); padding: 6px;
+  width: min(420px, calc(100vw - 48px)); padding: 6px;
   background: var(--ip-color-bg-elevated);
   border: 1px solid var(--ip-color-border-default);
   border-radius: var(--ip-radius-lg);
   box-shadow: var(--ip-shadow-lg);
 }
+.task-popover.has-plan { width: min(720px, calc(100vw - 48px)); }
 .task-columns { display: flex; flex-wrap: wrap; gap: 6px; }
 .task-col { flex: 1 1 0; min-width: 260px; display: flex; flex-direction: column; gap: 2px; }
 .col-head {
