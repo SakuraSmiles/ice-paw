@@ -32,11 +32,11 @@
 
 ## 批次 S — 结构减法（DeepSeek 式简化，测试数不降为硬约束）
 
-**S0（前置门槛）✅ 2026-08-17 通过**: ~~V7 真机持续绿观察 ≥ 一段日常使用期~~ 用户日常 2 天 + 日志全绿复核（见 V7 行）→ **S1 已解锁，剩余前置 = 旧会话事件 backfill**。
+**S0（前置门槛）✅ 2026-08-17 通过**: ~~V7 真机持续绿观察 ≥ 一段日常使用期~~ 用户日常 2 天 + 日志全绿复核（见 V7 行）→ **S1 已解锁；旧会话事件 backfill 已落地（2026-08-17，3 commits 00e9cb1..6eed139，848 passed），S1 前置全清，剩真机验收后即可动工**。
 
 | # | 项 | 内容 | 备注 |
 |---|---|---|---|
-| S1 | **Phase 2B legacy 读路径退役** | 删 legacy 拼装整条路径 + 摘要锚点 `covered_until_rowid`→seq + Image base64 双份存储治理 | 最大一笔减法；给旧会话补事件 backfill 先行 |
+| S1 | **Phase 2B legacy 读路径退役** | 删 legacy 拼装整条路径 + 摘要锚点 `covered_until_rowid`→seq + Image base64 双份存储治理 | 最大一笔减法；前置 backfill ✅ 已落地（boot 幂等扫尾 `harness/backfill.rs`：零事件旧会话反向合成事件，构造性零 diff → read_route 自动 Derive；版本化重跑自愈 + 冻结规则；待真机验收——boot 日志 `[ice_paw.backfill]` 行 + 旧会话 `get_read_route_status` 变 Derive） |
 | S2 | protocol.rs 拆分（A5）✅ 已执行 2026-08-16 | 1161 行混 3 类 + 测试（image_validation / LlmProvider 早已迁出）→ `protocol/` 目录：llm.rs（ContentBlock/ChatMessage/TokenUsage/ChatDelta/ToolDef）+ input.rs（前端输入）+ events.rs（事件负载）+ mod.rs glob re-export **全库导入零改**；两条 legacy 兼容 re-export 保留（image_validation 条目、`harness::provider::LlmProvider`） | 32 个协议测试随迁（5+4+6+17）；831 passed 持平 |
 | S3 | chat_cmd send_message 收尾（A1）✅ 已执行 2026-08-16 | 695 行中 1-435 行附件机器（2 consts + materialize_file_blocks + should_store_pdf_vision_bytes / pdf_vision_hint / build_modality_hint）整体迁 `harness/attachments.rs`，6 个相关测试随迁；chat_cmd 瘦身至 ~290 行回归纯编排门面（send_message 本体经 MA-1 早已是 ~160 行编排形态）；两处工具 doc 注释路径同步 | 831 passed 持平（测试只迁移不增删）；clippy -D warnings 0 |
 | S4 | LoopConfig 数据袋（A6）✅ 已执行 2026-08-16 | ①「不可变配置」声明修真：auth_registry / auth_session 两个运行时可变件（oneshot 通道配对 / 会话级授权累积+收尾 clear）从 LoopConfig 挪进 LoopContext——自有字段优先于 Deref，全库访问点 `ctx.auth_*` 零改；②spawn_stream_loop 26 参数超长签名 → `StreamLoopInput` 结构体成袋（调用方唯一，字段平移零语义），删 #[allow(too_many_arguments)]×2（LoopConfig 上那枚本就无效——struct 字段不触发该 lint，历史残留） | **明确不做**：24 字段全子结构化 + 147 处访问路径改名（ctx.pool 36 / ctx.app 25 / ctx.budget 21 / ctx.conv_id 19 占大头）——纯审美分组，平铺+注释分组可读性已够，review 成本 > 收益，勿复活。831 passed 持平 / clippy -D warnings 0 |
