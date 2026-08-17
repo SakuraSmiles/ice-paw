@@ -164,7 +164,13 @@ pub fn run() {
                 .unwrap_or(false);
             if !has_window_state {
                 if let Some(win) = app.get_webview_window("main") {
+                    // `hwnd()` 是 Tauri 的 Windows-only API（CI 在 ubuntu 编译裸调用即 E0599）。
+                    // 非 Windows：platform 层 Hwnd=() 且工作区恒 None → 跳过动态尺寸，
+                    // 保留 tauri.conf 默认尺寸。
+                    #[cfg(windows)]
                     let hwnd = win.hwnd().ok().map(|h| h.0).unwrap_or(std::ptr::null_mut());
+                    #[cfg(not(windows))]
+                    let hwnd = ();
                     if let Some(work) = platform::primary_monitor_work_area(hwnd) {
                         // 工作区是物理像素；窗口 API 用逻辑尺寸，按窗口缩放换算。
                         let scale = win.scale_factor().unwrap_or(1.0);
