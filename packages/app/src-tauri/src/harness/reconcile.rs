@@ -36,7 +36,9 @@ use crate::db::models::MessageRow;
 use crate::db::repo;
 use crate::db::repo::summary::SUMMARY_PREFIX;
 use crate::error::AppResult;
-use crate::harness::derive::{derive_history, DerivedMessage};
+use crate::harness::derive::{derive_history, hydrate_image_refs, DerivedMessage};
+use crate::harness::event_log::PayloadBlock;
+use crate::infra::protocol::ContentBlock;
 
 /// 对账报告（`reconcile_session` 命令直接序列化返回）。
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -99,7 +101,7 @@ pub async fn reconcile_session(
     }
 
     // B 侧：事件回放（issues 直接进 diffs——事件侧异常必须可见）
-    let derived = derive_history(&events);
+    let mut derived = derive_history(&events);
     for issue in &derived.issues {
         report.diffs.push(ReconcileDiff {
             category: "DERIVE_ISSUE",
@@ -107,6 +109,36 @@ pub async fn reconcile_session(
             message_id: None,
             detail: format!("seq={} kind={} {}", issue.seq, issue.kind, issue.reason),
         });
+    }
+
+    // Image 引用水合（S1 阶段 3）：ref 就地还原为所指行 `content_blocks` 下标的
+    // 完整块。resolver 只为 ref 指向的行 parse（图片少的会话零开销）。ref 本就
+    // 指向 A 侧同一行——水合后与行侧逐字节相等是构造性的，平面等式保持。
+    // 未命中（行已删 / 下标变形）记 warn；随后 compare_content 自然给出
+    // CONTENT_MISMATCH（marker ≠ 行内 Image），不会静默吞。
+    let ref_ids: HashSet<String> = derived
+        .messages
+        .iter()
+        .flat_map(|m| m.blocks.iter().filter_map(|b| match b {
+            PayloadBlock::ImageRef { message_id, .. } => Some(message_id.clone()),
+            _ => None,
+        }))
+        .collect();
+    if !ref_ids.is_empty() {
+        let index: HashMap<String, Vec<ContentBlock>> = rows
+            .iter()
+            .filter(|r| ref_ids.contains(r.id.as_str()))
+            .map(|r| (r.id.clone(), parse_content_blocks(&r.content_blocks)))
+            .collect();
+        let missed = hydrate_image_refs(&mut derived.messages, &|mid, idx| {
+            index.get(mid).and_then(|bs| bs.get(idx)).cloned()
+        });
+        if missed > 0 {
+            tracing::warn!(
+                target: "ice_paw.reconcile",
+                "Image 引用水合未命中 {missed} 处（行已删 / content_blocks 变形），将以 CONTENT_MISMATCH 上报"
+            );
+        }
     }
 
     // turn 集合：首现序 + 完整性（有 turn_ended）
@@ -330,11 +362,11 @@ fn compare_content(
             truncate_preview(&d.content),
         ));
     }
-    if entry.effective_blocks() != d.blocks {
+    if entry.effective_blocks() != d.to_content_blocks() {
         mismatches.push(format!(
             "blocks 不等（legacy {} 块 / derive {} 块）",
             entry.effective_blocks().len(),
-            d.blocks.len()
+            d.to_content_blocks().len()
         ));
     }
     if !mismatches.is_empty() {
@@ -384,9 +416,7 @@ impl<'a> SkipCounter<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::harness::event_log::{
-        self, AssistantMessagePayload, EventCtx, TurnEndedPayload, UserMessagePayload,
-    };
+    use crate::harness::event_log::{self, EventCtx, TurnEndedPayload};
     use crate::infra::protocol::ContentBlock;
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use std::str::FromStr;
@@ -462,37 +492,24 @@ mod tests {
             r#"[{"type":"text","text":"读文件"}]"#,
         )
         .await;
-        event_log::log_user_message(
-            pool,
-            &ev,
-            turn,
-            &UserMessagePayload {
-                v: 1,
-                content: "读文件".into(),
-                blocks: vec![text_block("读文件")],
-            },
-        )
-        .await;
+        event_log::log_user_message(pool, &ev, turn, "读文件", &[text_block("读文件")]).await;
         let a1_blocks = r#"[{"type":"tool_use","id":"tu_1","name":"read_file","input":"{}"}]"#;
         insert_row(pool, conv, &a1, "assistant", "", a1_blocks).await;
         event_log::log_assistant_message(
             pool,
             &ev,
             &a1,
-            &AssistantMessagePayload {
-                v: 1,
-                model: None,
-                content: String::new(),
-                blocks: vec![ContentBlock::ToolUse {
-                    id: "tu_1".into(),
-                    name: "read_file".into(),
-                    input: "{}".into(),
-                }],
-                token_count: None,
-                duration_ms: None,
-                round: 0,
-                continuation: false,
-            },
+            None,
+            "",
+            &[ContentBlock::ToolUse {
+                id: "tu_1".into(),
+                name: "read_file".into(),
+                input: "{}".into(),
+            }],
+            None,
+            None,
+            0,
+            false,
         )
         .await;
         let r1_blocks =
@@ -522,16 +539,13 @@ mod tests {
             pool,
             &ev,
             &a2,
-            &AssistantMessagePayload {
-                v: 1,
-                model: None,
-                content: "读到了".into(),
-                blocks: vec![text_block("读到了")],
-                token_count: None,
-                duration_ms: None,
-                round: 1,
-                continuation: false,
-            },
+            None,
+            "读到了",
+            &[text_block("读到了")],
+            None,
+            None,
+            1,
+            false,
         )
         .await;
         event_log::log_turn_ended(
@@ -733,19 +747,7 @@ mod tests {
         // discarded 容忍（规则 4）：事件有（含 assistant_message）但行不存在
         //（终止守卫已删占位）→ MISSING_IN_LEGACY 豁免为 discarded_row
         event_log::log_assistant_message(
-            &pool,
-            &ev,
-            "t1-gone",
-            &AssistantMessagePayload {
-                v: 1,
-                model: None,
-                content: String::new(),
-                blocks: vec![],
-                token_count: None,
-                duration_ms: None,
-                round: 0,
-                continuation: false,
-            },
+            &pool, &ev, "t1-gone", None, "", &[], None, None, 0, false,
         )
         .await;
         event_log::log_message_discarded(&pool, &ev, "t1-gone", "termination_guard_no_text").await;
@@ -808,17 +810,7 @@ mod tests {
             r#"[{"type":"text","text":"写长文"}]"#,
         )
         .await;
-        event_log::log_user_message(
-            &pool,
-            &ev,
-            "t1",
-            &UserMessagePayload {
-                v: 1,
-                content: "写长文".into(),
-                blocks: vec![text_block("写长文")],
-            },
-        )
-        .await;
+        event_log::log_user_message(&pool, &ev, "t1", "写长文", &[text_block("写长文")]).await;
         insert_row(
             &pool,
             "conv",
@@ -832,32 +824,26 @@ mod tests {
             &pool,
             &ev,
             "t1-a",
-            &AssistantMessagePayload {
-                v: 1,
-                model: None,
-                content: "前半段".into(),
-                blocks: vec![text_block("前半段")],
-                token_count: None,
-                duration_ms: None,
-                round: 0,
-                continuation: true,
-            },
+            None,
+            "前半段",
+            &[text_block("前半段")],
+            None,
+            None,
+            0,
+            true,
         )
         .await;
         event_log::log_assistant_message(
             &pool,
             &ev,
             "t1-a",
-            &AssistantMessagePayload {
-                v: 1,
-                model: None,
-                content: "前半段后半段".into(),
-                blocks: vec![text_block("前半段后半段")],
-                token_count: None,
-                duration_ms: None,
-                round: 1,
-                continuation: true,
-            },
+            None,
+            "前半段后半段",
+            &[text_block("前半段后半段")],
+            None,
+            None,
+            1,
+            true,
         )
         .await;
         event_log::log_turn_ended(
@@ -900,17 +886,7 @@ mod tests {
             r#"[{"type":"text","text":"问"}]"#,
         )
         .await;
-        event_log::log_user_message(
-            &pool,
-            &ev,
-            "t1",
-            &UserMessagePayload {
-                v: 1,
-                content: "问".into(),
-                blocks: vec![text_block("问")],
-            },
-        )
-        .await;
+        event_log::log_user_message(&pool, &ev, "t1", "问", &[text_block("问")]).await;
         // rowid 序：a2 在前；事件序：a1 在前
         insert_row(
             &pool,
@@ -935,16 +911,13 @@ mod tests {
                 &pool,
                 &ev,
                 mid,
-                &AssistantMessagePayload {
-                    v: 1,
-                    model: None,
-                    content: txt.into(),
-                    blocks: vec![text_block(txt)],
-                    token_count: None,
-                    duration_ms: None,
-                    round: 0,
-                    continuation: false,
-                },
+                None,
+                txt,
+                &[text_block(txt)],
+                None,
+                None,
+                0,
+                false,
             )
             .await;
         }
@@ -1002,5 +975,81 @@ mod tests {
             reasons.contains(&"non_conversational_role"),
             "reasons: {reasons:?}"
         );
+    }
+
+    /// S1 阶段 3：行含 Image + 事件 payload 为 image_ref（v2 形态，手写 JSON
+    /// 经 repo append——emitter 3b 才切 refify）→ 水合后零 diff（ref 指向行
+    /// 本身，平面等式构造性成立）。
+    #[tokio::test]
+    async fn image_ref_events_hydrate_to_zero_diff() {
+        let pool = fresh_pool().await;
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
+        seed(&pool, "conv").await;
+
+        let ev = EventCtx::new("conv", "t1", "agent-1");
+        // user 行：text + image(base64)；事件 payload 只带轻量 ref（无 base64）
+        insert_row(
+            &pool,
+            "conv",
+            "t1",
+            "user",
+            "看图",
+            r#"[{"type":"text","text":"看图"},{"type":"image","data":"QUJD","media_type":"image/png"}]"#,
+        )
+        .await;
+        crate::db::repo::session_event::append(
+            &pool,
+            "conv",
+            "user_message",
+            "user",
+            Some("t1"),
+            Some("t1"),
+            r#"{"v":2,"content":"看图","blocks":[{"type":"text","text":"看图"},{"type":"image_ref","message_id":"t1","block_index":1}]}"#,
+        )
+        .await
+        .unwrap();
+        insert_row(
+            &pool,
+            "conv",
+            "t1-a",
+            "assistant",
+            "收到",
+            r#"[{"type":"text","text":"收到"}]"#,
+        )
+        .await;
+        event_log::log_assistant_message(
+            &pool,
+            &ev,
+            "t1-a",
+            None,
+            "收到",
+            &[text_block("收到")],
+            None,
+            None,
+            1,
+            false,
+        )
+        .await;
+        event_log::log_turn_ended(
+            &pool,
+            &ev,
+            Some("t1-a"),
+            &TurnEndedPayload {
+                v: 1,
+                termination: "stop".into(),
+                rounds: 1,
+                usage: None,
+                user_token_count: None,
+            },
+        )
+        .await;
+
+        let report = reconcile_session(&pool, "conv").await.unwrap();
+        assert!(report.diffs.is_empty(), "diffs: {:#?}", report.diffs);
+        assert_eq!(report.turns_compared, 1);
+        assert_eq!(report.legacy_rows_compared, 2);
     }
 }

@@ -22,17 +22,20 @@
 //! 但活跃会话下一轮即刷新；休眠会话不被读取故无影响。**始终新鲜**的 ground truth 用
 //! `reconcile_session` 命令（不受缓存影响，每次全量对账）。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::RwLock;
 
 use serde::Serialize;
 use sqlx::SqlitePool;
 
+use crate::context::history::parse_content_blocks;
 use crate::db::models::MessageRow;
 use crate::db::repo;
 use crate::error::AppResult;
-use crate::harness::derive::derive_history;
+use crate::harness::derive::{derive_history, hydrate_image_refs, DerivedMessage};
+use crate::harness::event_log::PayloadBlock;
 use crate::harness::reconcile::{reconcile_session, ReconcileReport};
+use crate::infra::protocol::ContentBlock;
 
 /// 读路径选择。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -247,7 +250,7 @@ pub async fn load_history_from_events(
     conversation_id: &str,
 ) -> AppResult<Vec<MessageRow>> {
     let events = repo::session_event::list_by_session(pool, conversation_id, None).await?;
-    let derived = derive_history(&events);
+    let mut derived = derive_history(&events);
     // 回放 issues：路由阶段已保证 Derive 会话零 diff（issues 进 DERIVE_ISSUE diff），
     // 这里若非空属异常（路由缓存失效的窄窗），仅 warn，不阻塞——派生出的部分仍可用。
     if !derived.issues.is_empty() {
@@ -259,6 +262,44 @@ pub async fn load_history_from_events(
             derived.issues.first()
         );
     }
+
+    // Image 引用水合（S1 阶段 3）：事件 payload 的 image_ref → 行 content_blocks
+    // 对应下标的完整块。只为 ref 指向的 message_id 查行（图片少的会话零查询）。
+    // 未命中（行已删 / 下标变形）降级 marker——字节在 messages 行，行没了即真丢了。
+    let ref_ids: HashSet<String> = derived
+        .messages
+        .iter()
+        .flat_map(|m| m.blocks.iter().filter_map(|b| match b {
+            PayloadBlock::ImageRef { message_id, .. } => Some(message_id.clone()),
+            _ => None,
+        }))
+        .collect();
+    if !ref_ids.is_empty() {
+        let mut index: HashMap<String, Vec<ContentBlock>> = HashMap::new();
+        for mid in &ref_ids {
+            match repo::message::get_content_blocks_by_id(pool, mid).await {
+                Ok(Some(json)) => {
+                    index.insert(mid.clone(), parse_content_blocks(&json));
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::warn!(target: "ice_paw.read_route", "水合查行失败 mid={mid}: {e}")
+                }
+            }
+        }
+        let missed = hydrate_image_refs(&mut derived.messages, &|mid, idx| {
+            index.get(mid).and_then(|bs| bs.get(idx)).cloned()
+        });
+        if missed > 0 {
+            tracing::warn!(
+                target: "ice_paw.read_route",
+                conv = conversation_id,
+                missed,
+                "Image 引用水合未命中（行已删 / content_blocks 变形），降级为占位文本"
+            );
+        }
+    }
+
     let rowid_map = repo::message::id_rowid_map(pool, conversation_id).await?;
     // 首现事件 created_at（message_id → 时间戳），填 MessageRow.created_at。
     let mut created_map: HashMap<String, String> = HashMap::new();
@@ -294,13 +335,16 @@ pub async fn load_history_from_events(
 /// - `source_seq = Some(first_seq)`：事件纪元锚（Phase 2B 阶段 2）——MemoryStage
 ///   摘要覆盖定位 seq 优先 rowid 兜底；与消息序同基（supersede 取首现 seq）。
 fn to_message_row(
-    m: &crate::harness::derive::DerivedMessage,
+    m: &DerivedMessage,
     conversation_id: &str,
     rowid_map: &HashMap<String, i64>,
     created_map: &HashMap<String, String>,
 ) -> MessageRow {
     let rowid = rowid_map.get(&m.message_id).copied().unwrap_or(m.first_seq);
-    let content_blocks = serde_json::to_string(&m.blocks).unwrap_or_else(|_| "[]".to_string());
+    // 已水合的 Full 原样序列化；残留 ref（防御路径）降级 marker——content_blocks
+    // 列不得出现 image_ref 形态（下游 parse_content_blocks 无此词表）。
+    let content_blocks =
+        serde_json::to_string(&m.to_content_blocks()).unwrap_or_else(|_| "[]".to_string());
     MessageRow {
         id: m.message_id.clone(),
         conversation_id: conversation_id.to_string(),
@@ -398,12 +442,13 @@ mod tests {
     #[test]
     fn to_message_row_serializes_blocks_and_maps_rowid() {
         use crate::harness::derive::DerivedMessage;
+        use crate::harness::event_log::PayloadBlock;
         use crate::infra::protocol::ContentBlock;
         let m = DerivedMessage {
             message_id: "msg-1".into(),
             role: "assistant".into(),
             content: "你好".into(),
-            blocks: vec![ContentBlock::text("你好")],
+            blocks: vec![PayloadBlock::Full(ContentBlock::text("你好"))],
             turn_id: Some("t".into()),
             first_seq: 7,
             last_seq: 7,
@@ -430,12 +475,13 @@ mod tests {
     #[test]
     fn to_message_row_rowid_fallbacks_to_first_seq_when_unmapped() {
         use crate::harness::derive::DerivedMessage;
+        use crate::harness::event_log::PayloadBlock;
         use crate::infra::protocol::ContentBlock;
         let m = DerivedMessage {
             message_id: "msg-x".into(),
             role: "user".into(),
             content: "q".into(),
-            blocks: vec![ContentBlock::text("q")],
+            blocks: vec![PayloadBlock::Full(ContentBlock::text("q"))],
             turn_id: None,
             first_seq: 9,
             last_seq: 9,
@@ -453,9 +499,8 @@ mod tests {
     use crate::context::history::load_history_with_window;
     use crate::db::models::NewMessage;
     use crate::harness::event_log::{
-        log_assistant_message, log_turn_context, log_turn_ended, log_user_message,
-        AssistantMessagePayload, EventCtx, TurnContextPayload, TurnEndedPayload,
-        UserMessagePayload,
+        log_assistant_message, log_turn_context, log_turn_ended, log_user_message, EventCtx,
+        TurnContextPayload, TurnEndedPayload,
     };
     use crate::infra::protocol::ContentBlock;
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -527,17 +572,7 @@ mod tests {
         let ev = EventCtx::new("c1", "turn-1", "a1");
         let u = vec![ContentBlock::text("读一下 README")];
         write_row(pool, "turn-1", "user", "读一下 README", &u).await;
-        log_user_message(
-            pool,
-            &ev,
-            "turn-1",
-            &UserMessagePayload {
-                v: 1,
-                content: "读一下 README".into(),
-                blocks: u,
-            },
-        )
-        .await;
+        log_user_message(pool, &ev, "turn-1", "读一下 README", &u).await;
         log_turn_context(
             pool,
             &ev,
@@ -569,16 +604,13 @@ mod tests {
             pool,
             &ev,
             "m-a1",
-            &AssistantMessagePayload {
-                v: 1,
-                model: Some("glm-5.2".into()),
-                content: "我来看看".into(),
-                blocks: a1,
-                token_count: Some(12),
-                duration_ms: Some(2_100),
-                round: 0,
-                continuation: false,
-            },
+            Some("glm-5.2"),
+            "我来看看",
+            &a1,
+            Some(12),
+            Some(2_100),
+            0,
+            false,
         )
         .await;
         let tr = vec![ContentBlock::ToolResult {
@@ -601,16 +633,13 @@ mod tests {
             pool,
             &ev,
             "m-a2",
-            &AssistantMessagePayload {
-                v: 1,
-                model: Some("glm-5.2".into()),
-                content: "README 说这是本地优先工作站。".into(),
-                blocks: a2,
-                token_count: Some(20),
-                duration_ms: Some(1_800),
-                round: 1,
-                continuation: false,
-            },
+            Some("glm-5.2"),
+            "README 说这是本地优先工作站。",
+            &a2,
+            Some(20),
+            Some(1_800),
+            1,
+            false,
         )
         .await;
         log_turn_ended(
@@ -752,5 +781,45 @@ mod tests {
             rows.is_empty(),
             "零事件会话派生为空历史（不报错、不panic）: {rows:#?}"
         );
+    }
+
+    /// **S1 阶段 3 端到端**：行含 Image + 事件 payload 为 image_ref（v2 形态，
+    /// 手写 JSON 经 repo append）→ 派生读路径水合后 `content_blocks` 与 legacy
+    /// 行**逐字节相等**（`parse_content_blocks` 往返还原完整 Image 块）。
+    #[tokio::test]
+    async fn load_history_hydrates_image_refs_to_full_blocks() {
+        let pool = seeded_pool().await;
+        let img = ContentBlock::Image {
+            data: "iVBORw0KGgo=".into(),
+            media_type: "image/png".into(),
+        };
+        // user 行：text + image；事件 payload 只带轻量 ref（无 base64）
+        let blocks = vec![ContentBlock::text("看这张截图"), img.clone()];
+        write_row(&pool, "turn-1", "user", "看这张截图", &blocks).await;
+        crate::db::repo::session_event::append(
+            &pool,
+            "c1",
+            "user_message",
+            "user",
+            Some("turn-1"),
+            Some("turn-1"),
+            r#"{"v":2,"content":"看这张截图","blocks":[{"type":"text","text":"看这张截图"},{"type":"image_ref","message_id":"turn-1","block_index":1}]}"#,
+        )
+        .await
+        .unwrap();
+
+        let rows = load_history_from_events(&pool, "c1").await.unwrap();
+        assert_eq!(rows.len(), 1);
+        // content_blocks 不含 image_ref 形态（水合后已是完整块）
+        assert!(!rows[0].content_blocks.contains("image_ref"));
+        let parsed = parse_content_blocks(&rows[0].content_blocks);
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0], ContentBlock::text("看这张截图"));
+        assert_eq!(parsed[1], img, "Image 块应完整还原（data + media_type）");
+
+        // 经 legacy loader 视图同构（LLM 视图含完整 Image，与 legacy 行视图一致）
+        let view = load_history_with_window(&rows, None);
+        assert_eq!(view.len(), 1);
+        assert!(view[0].content.contains(&img));
     }
 }

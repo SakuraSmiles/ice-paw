@@ -43,8 +43,9 @@
 //!
 //! ## 已知取舍
 //!
-//! - Image 块原样进 payload = base64 在 messages.content_blocks 之外再存一份
-//!   （boot 日志计量新增字节）——S1 本体的「Image 双份存储治理」届时统一处理。
+//! - Image 块经 [`refify_blocks`] 换轻量引用（S1 阶段 3）——合成 payload 不落
+//!   base64 双份；读侧水合见 derive/reconcile。版本 2 重跑前已 backfill 的
+//!   会话保留 v1 内联形态（derive 照解 Full，读侧零迁移）。
 //! - 首锚点前的孤儿行不合成（计入 report.epoch_rows）→ 该会话对账出现
 //!   legacy_epoch_rows → 路由 mixed_epoch → Legacy（读路径与今天一致；合成
 //!   出的事件仍服务轨迹视图）。
@@ -60,8 +61,8 @@ use crate::db::repo::summary::SUMMARY_PREFIX;
 use crate::db::repo::{self, session_event};
 use crate::error::AppResult;
 use crate::harness::event_log::{
-    kind, AssistantMessagePayload, MessageErrorPayload, ToolResultMessagePayload, TurnEndedPayload,
-    UserMessagePayload,
+    kind, refify_blocks, AssistantMessagePayload, MessageErrorPayload, ToolResultMessagePayload,
+    TurnEndedPayload, UserMessagePayload,
 };
 use crate::infra::protocol::ContentBlock;
 
@@ -245,7 +246,7 @@ fn synthesize_events(rows: &[MessageRow]) -> (Vec<session_event::BackfillEvent>,
                             Some(row.id.clone()),
                             &ToolResultMessagePayload {
                                 v: 1,
-                                blocks: blocks.clone(),
+                                blocks: refify_blocks(&row.id, &blocks),
                             },
                             &row.created_at,
                         ));
@@ -263,7 +264,9 @@ fn synthesize_events(rows: &[MessageRow]) -> (Vec<session_event::BackfillEvent>,
                     &UserMessagePayload {
                         v: 1,
                         content: row.content.clone(),
-                        blocks: effective_blocks(&row.content, &blocks),
+                        // ref 化：Image 换轻量引用（v2 形态；3b 起 BACKFILL_VERSION=2
+                        // 重跑后生效）。空回退产物是 Text，refify 原样过。
+                        blocks: refify_blocks(&row.id, &effective_blocks(&row.content, &blocks)),
                     },
                     &row.created_at,
                 ));
@@ -308,7 +311,7 @@ fn synthesize_events(rows: &[MessageRow]) -> (Vec<session_event::BackfillEvent>,
                     v: 1,
                     model: row.model.clone(),
                     content: row.content.clone(),
-                    blocks: effective_blocks(&row.content, &blocks),
+                    blocks: refify_blocks(&row.id, &effective_blocks(&row.content, &blocks)),
                     token_count: row.token_count.map(i64::from),
                     duration_ms: None,
                     round,

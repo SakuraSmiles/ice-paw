@@ -14,12 +14,20 @@
 //!   `attachment_stored` / `summary_*`：非消息行事实，不进回放
 //! - 未知 kind（未来词表扩展）与 payload 解析失败：跳过并记入 `issues`
 //!   （对账侧作为差异上报，不静默吞）
+//!
+//! Image 引用（S1 阶段 3）：blocks 保持 payload 原始形态（可能含 `ImageRef`）。
+//! 消费前必须经 [`hydrate_image_refs`] 还原（字节只在 messages 行）或
+//! [`DerivedMessage::to_content_blocks`] 降级——ref 形态不得直接进 LLM / 对账平面。
 
 use crate::db::models::SessionEventRow;
 use crate::harness::event_log::{
-    AssistantMessagePayload, ToolResultMessagePayload, UserMessagePayload,
+    AssistantMessagePayload, PayloadBlock, ToolResultMessagePayload, UserMessagePayload,
 };
 use crate::infra::protocol::ContentBlock;
+
+/// Image 引用水合未命中（行已删 / content_blocks 变形）时的降级占位文本。
+/// 诚实标注字节不可恢复，不让 ref 静默消失。
+pub const IMAGE_UNRECOVERABLE_MARKER: &str = "[图片内容已不可恢复]";
 
 /// 回放出的一条消息（与 legacy 行提取结果同构，reconcile 按 message_id 对齐）。
 #[derive(Debug, Clone, PartialEq)]
@@ -30,13 +38,70 @@ pub struct DerivedMessage {
     /// 与行 `content` 列直比（user=pre-materialize 文本 / tool_result 恒空 /
     /// assistant=全文）。不与 blocks 交叉推导。
     pub content: String,
-    pub blocks: Vec<ContentBlock>,
+    /// payload 原始形态（含 ImageRef 时**未水合**）。进对账 / LLM 视图前必须
+    /// 先 [`hydrate_image_refs`]，或经 [`Self::to_content_blocks`] 降级提取。
+    pub blocks: Vec<PayloadBlock>,
     /// 所属 turn（= user_msg_id）；reconcile 按 turn 分组截断用
     pub turn_id: Option<String>,
     /// 首现事件 seq（消息在回放流中的位置锚点，ORDER 对齐用）
     pub first_seq: i64,
     /// 最后一次 supersede 的事件 seq（内容版本）
     pub last_seq: i64,
+}
+
+impl DerivedMessage {
+    /// 残留 ref 降级提取（防泄漏最后闸）：Full 原样、ImageRef → Text marker。
+    ///
+    /// 正常流程不应走到这里（读侧先 `hydrate_image_refs`）；仅供「跳过水合
+    /// 直接消费 blocks」的防御性路径（如 serialize 兜底），保证 ref 形态
+    /// **不可能**以非 Text 形态进入 LLM / 对账平面。
+    pub fn to_content_blocks(&self) -> Vec<ContentBlock> {
+        self.blocks
+            .iter()
+            .map(|b| match b {
+                PayloadBlock::Full(c) => c.clone(),
+                PayloadBlock::ImageRef { .. } => ContentBlock::Text {
+                    text: IMAGE_UNRECOVERABLE_MARKER.to_string(),
+                },
+            })
+            .collect()
+    }
+}
+
+/// Image 引用水合：把 `ImageRef` 就地还原为所指行 `content_blocks` 下标的完整块。
+///
+/// 纯同步（derive 保持无 IO）：`resolve(message_id, block_index)` 由调用方闭包
+/// 提供（查 messages 行 → parse → 取下标）。命中（且确为 Image 块）→ `Full(img)`；
+/// 未命中 / 下标越界 / 非 Image → 降级 `Text(IMAGE_UNRECOVERABLE_MARKER)`。
+///
+/// 返回未命中数（正常数据为 0；非零即行侧数据债，调用方记 warn/对账上报）。
+pub fn hydrate_image_refs(
+    messages: &mut [DerivedMessage],
+    resolve: &impl Fn(&str, usize) -> Option<ContentBlock>,
+) -> usize {
+    let mut missed = 0usize;
+    for msg in messages.iter_mut() {
+        for b in msg.blocks.iter_mut() {
+            if let PayloadBlock::ImageRef {
+                message_id,
+                block_index,
+                ..
+            } = b
+            {
+                let hydrated = match resolve(message_id, *block_index) {
+                    Some(c @ ContentBlock::Image { .. }) => PayloadBlock::Full(c),
+                    _ => {
+                        missed += 1;
+                        PayloadBlock::Full(ContentBlock::Text {
+                            text: IMAGE_UNRECOVERABLE_MARKER.to_string(),
+                        })
+                    }
+                };
+                *b = hydrated;
+            }
+        }
+    }
+    missed
 }
 
 /// 回放中跳过的事件（payload 解析失败 / 无 message_id / 未知 kind）。
@@ -179,9 +244,9 @@ fn push_message(result: &mut DeriveResult, mut msg: DerivedMessage) {
     // 与 legacy 提取器同构的空回退：blocks 空 → [Text(content)]（空内容则为 [Text("")]，
     // 与行「content=''+blocks='[]'」的提取结果一致，差异不会被回退规则抹掉）。
     if msg.blocks.is_empty() {
-        msg.blocks = vec![ContentBlock::Text {
+        msg.blocks = vec![PayloadBlock::Full(ContentBlock::Text {
             text: msg.content.clone(),
-        }];
+        })];
     }
     result.messages.push(msg);
 }
@@ -258,10 +323,13 @@ mod tests {
         assert_eq!(out.messages.len(), 4);
         assert_eq!(out.messages[0].role, "user");
         assert_eq!(out.messages[0].message_id, "m-u1");
-        assert_eq!(out.messages[0].blocks, vec![text_block("读文件")]);
+        assert_eq!(
+            out.messages[0].to_content_blocks(),
+            vec![text_block("读文件")]
+        );
         assert_eq!(out.messages[1].role, "assistant");
         assert_eq!(
-            out.messages[1].blocks[0].clone(),
+            out.messages[1].to_content_blocks()[0].clone(),
             ContentBlock::ToolUse {
                 id: "tu_1".into(),
                 name: "read_file".into(),
@@ -296,7 +364,7 @@ mod tests {
         assert_eq!(out.messages.len(), 2, "supersede 不新增消息");
         let a = &out.messages[1];
         assert_eq!(a.content, "前半段后半段");
-        assert_eq!(a.blocks, vec![text_block("前半段后半段")]);
+        assert_eq!(a.to_content_blocks(), vec![text_block("前半段后半段")]);
         assert_eq!(a.first_seq, 2, "位置取首现");
         assert_eq!(a.last_seq, 3, "内容取最后");
     }
@@ -310,7 +378,110 @@ mod tests {
             r#"{"v":1,"content":"纯文本","blocks":[]}"#.into(),
         )];
         let out = derive_history(&events);
-        assert_eq!(out.messages[0].blocks, vec![text_block("纯文本")]);
+        assert_eq!(
+            out.messages[0].to_content_blocks(),
+            vec![text_block("纯文本")]
+        );
+    }
+
+    /// Image 引用水合：ref（事件 payload）→ 所指行 content_blocks 下标的完整块。
+    /// v1 内联事件（Full(Image)）原样保留，不进 resolver。
+    #[test]
+    fn hydrate_resolves_refs_and_keeps_inline_images() {
+        let img = || ContentBlock::Image {
+            data: "QUJD".into(),
+            media_type: "image/png".into(),
+        };
+        let events = vec![
+            // v2 形态：text + ref(idx1)
+            row(
+                1,
+                "user_message",
+                Some("m-u1"),
+                r#"{"v":2,"content":"看图","blocks":[{"type":"text","text":"看图"},{"type":"image_ref","message_id":"m-u1","block_index":1}]}"#.into(),
+            ),
+            // v1 形态：内联 Image 原样
+            row(
+                2,
+                "user_message",
+                Some("m-u2"),
+                r#"{"v":1,"content":"旧图","blocks":[{"type":"image","data":"WFla","media_type":"image/png"}]}"#.into(),
+            ),
+        ];
+        let mut out = derive_history(&events);
+
+        // resolver 只会被 m-u1 的 ref 调用（v1 内联零查询）。
+        // hydrate 取 &impl Fn（非 FnMut）——记录调用用 RefCell 内部可变。
+        let queried = std::cell::RefCell::new(Vec::new());
+        let missed = hydrate_image_refs(&mut out.messages, &|mid, idx| {
+            queried.borrow_mut().push((mid.to_string(), idx));
+            assert_eq!(mid, "m-u1");
+            Some(img())
+        });
+        assert_eq!(missed, 0);
+        assert_eq!(queried.into_inner(), vec![("m-u1".to_string(), 1)]);
+
+        assert_eq!(
+            out.messages[0].to_content_blocks(),
+            vec![text_block("看图"), img()],
+            "ref 应水合为完整 Image 块"
+        );
+        // v1 内联 Image 原样保留（data 未被 resolver 的返回值覆盖）
+        assert_eq!(
+            out.messages[1].to_content_blocks(),
+            vec![ContentBlock::Image {
+                data: "WFla".into(),
+                media_type: "image/png".into(),
+            }]
+        );
+    }
+
+    /// 水合未命中（行已删 / 下标越界 / 行内该下标非 Image）→ 降级 marker；
+    /// `to_content_blocks` 对残留 ref 同款降级（防泄漏最后闸）。
+    #[test]
+    fn hydrate_miss_degrades_to_marker_and_to_content_blocks_gates() {
+        let events = vec![
+            row(
+                1,
+                "user_message",
+                Some("m-u1"),
+                r#"{"v":2,"content":"q","blocks":[{"type":"image_ref","message_id":"m-gone","block_index":0}]}"#.into(),
+            ),
+            row(
+                2,
+                "user_message",
+                Some("m-u2"),
+                r#"{"v":2,"content":"q","blocks":[{"type":"image_ref","message_id":"m-bad","block_index":3}]}"#.into(),
+            ),
+        ];
+        let mut out = derive_history(&events);
+
+        // resolver：m-gone 无行（None）；m-bad 行存在但下标 3 是 Text 非 Image
+        let missed = hydrate_image_refs(&mut out.messages, &|mid, _| {
+            match mid {
+                "m-gone" => None,
+                "m-bad" => Some(text_block("不是图片")),
+                _ => unreachable!(),
+            }
+        });
+        assert_eq!(missed, 2, "两种未命中形态都应计数");
+        assert_eq!(
+            out.messages[0].to_content_blocks(),
+            vec![text_block(IMAGE_UNRECOVERABLE_MARKER)]
+        );
+        // 非 Image 命中也降级（ref 语义只能指向 Image）
+        assert_eq!(
+            out.messages[1].to_content_blocks(),
+            vec![text_block(IMAGE_UNRECOVERABLE_MARKER)]
+        );
+
+        // to_content_blocks 对**未水合**的残留 ref 同样降级（跳过水合的防御路径）
+        let out2 = derive_history(&events);
+        assert_eq!(
+            out2.messages[0].to_content_blocks(),
+            vec![text_block(IMAGE_UNRECOVERABLE_MARKER)],
+            "残留 ref 不得以非 Text 形态流出"
+        );
     }
 
     #[test]

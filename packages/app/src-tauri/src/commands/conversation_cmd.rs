@@ -2,7 +2,7 @@
 //!
 //! Frontend 调用入口见 `icepaw-cleanup-plan.md` §2.3。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use tauri::{Manager, State};
 use uuid::Uuid;
@@ -12,6 +12,72 @@ use sqlx::SqlitePool;
 use crate::db::models::{Conversation, NewConversation, SessionEvent};
 use crate::db::repo;
 use crate::error::AppResult;
+use crate::harness::derive::IMAGE_UNRECOVERABLE_MARKER;
+
+/// JSON 级 Image 引用水合（S1 阶段 3）：消息类事件 payload `blocks` 里的
+/// `image_ref` 对象（v2 轻量引用——字节只在 messages 行）原位替换为该行
+/// `content_blocks` 对应下标的完整 JSON 块。服务端还原，前端（轨迹检查器
+/// 图片墙 userImages 等）零改动。
+///
+/// 非 image_ref 块与非消息 payload 天然 no-op；未命中（行已删 / 下标变形 /
+/// 下标非 Image）降级 Text marker（与 derive 侧同文案）。导出与轨迹是只读
+/// 视图——坏引用降级展示，不报错中断。
+async fn hydrate_image_refs_json(pool: &SqlitePool, payloads: &mut [&mut serde_json::Value]) {
+    // 第一遍：收集 ref 指向的 message_id（只为出现的 id 查行）
+    let mut ref_ids: HashSet<String> = HashSet::new();
+    for p in payloads.iter() {
+        let Some(blocks) = p.get("blocks").and_then(|b| b.as_array()) else {
+            continue;
+        };
+        for b in blocks {
+            if b.get("type").and_then(|t| t.as_str()) == Some("image_ref") {
+                if let Some(mid) = b.get("message_id").and_then(|m| m.as_str()) {
+                    ref_ids.insert(mid.to_string());
+                }
+            }
+        }
+    }
+    if ref_ids.is_empty() {
+        return;
+    }
+
+    let mut index: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
+    for mid in &ref_ids {
+        if let Ok(Some(json)) = repo::message::get_content_blocks_by_id(pool, mid).await {
+            if let Ok(serde_json::Value::Array(arr)) = serde_json::from_str(&json) {
+                index.insert(mid.clone(), arr);
+            }
+        }
+    }
+
+    // 第二遍：原位替换（命中且为 Image → 完整块；否则降级 marker）
+    for p in payloads.iter_mut() {
+        let Some(blocks) = p.get_mut("blocks").and_then(|b| b.as_array_mut()) else {
+            continue;
+        };
+        for b in blocks.iter_mut() {
+            if b.get("type").and_then(|t| t.as_str()) != Some("image_ref") {
+                continue;
+            }
+            let mid = b
+                .get("message_id")
+                .and_then(|m| m.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let idx = b
+                .get("block_index")
+                .and_then(|i| i.as_u64())
+                .map(|i| i as usize);
+            let hydrated = idx
+                .and_then(|i| index.get(&mid).and_then(|bs| bs.get(i)).cloned())
+                .filter(|c| c.get("type").and_then(|t| t.as_str()) == Some("image"))
+                .unwrap_or_else(|| {
+                    serde_json::json!({"type": "text", "text": IMAGE_UNRECOVERABLE_MARKER})
+                });
+            *b = hydrated;
+        }
+    }
+}
 
 /// 列出全部会话（不限 agent），按 pinned desc, updated_at desc
 #[tauri::command]
@@ -110,11 +176,20 @@ pub async fn export_session_trajectory(
     let ts = chrono::Utc::now().format("%Y%m%d-%H%M%S");
     let path = dir.join(format!("trajectory-{conversation_id}-{ts}.jsonl"));
 
-    // payload（TEXT 列）内嵌为 JSON 对象；万一存了非法 JSON 则原样降级为字符串
+    // payload（TEXT 列）内嵌为 JSON 对象；万一存了非法 JSON 则原样降级为字符串。
+    // image_ref 原位水合为完整 Image 块（导出文件自包含，离线可读）。
+    let mut payload_values: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            serde_json::from_str(&r.payload)
+                .unwrap_or(serde_json::Value::String(r.payload.clone()))
+        })
+        .collect();
+    let mut payload_refs: Vec<&mut serde_json::Value> = payload_values.iter_mut().collect();
+    hydrate_image_refs_json(pool.inner(), &mut payload_refs).await;
+
     let mut buf = String::new();
-    for r in &rows {
-        let payload_value: serde_json::Value = serde_json::from_str(&r.payload)
-            .unwrap_or(serde_json::Value::String(r.payload.clone()));
+    for (r, payload_value) in rows.iter().zip(&payload_values) {
         let line = serde_json::json!({
             "id": r.id,
             "session_id": r.session_id,
@@ -175,7 +250,12 @@ pub async fn list_session_events(
     } else {
         repo::session_event::list_by_session(pool.inner(), &conversation_id, None).await?
     };
-    Ok(rows.into_iter().map(SessionEvent::from).collect())
+    let mut events: Vec<SessionEvent> = rows.into_iter().map(SessionEvent::from).collect();
+    // image_ref 原位水合为完整 Image 块（前端 userImages 等零改动）
+    let mut payloads: Vec<&mut serde_json::Value> =
+        events.iter_mut().map(|e| &mut e.payload).collect();
+    hydrate_image_refs_json(pool.inner(), &mut payloads).await;
+    Ok(events)
 }
 
 /// 窗口前（`seq < before_seq` 一侧）的全局轮次数——轨迹「尾部优先分页」的轮号

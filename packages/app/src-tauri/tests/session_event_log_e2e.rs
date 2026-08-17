@@ -21,8 +21,8 @@ use ice_paw_lib::harness::event_log::{
     log_assistant_message, log_attachment_stored, log_message_discarded, log_message_error,
     log_tool_execution, log_tool_result_message, log_turn_context, log_turn_ended,
     log_user_message, AssistantMessagePayload, AttachmentPageItem, AttachmentStoredPayload,
-    EventCtx, MessageDiscardedPayload, MessageErrorPayload, ToolExecutionPayload,
-    ToolResultMessagePayload, TurnContextPayload, TurnEndedPayload, UserMessagePayload,
+    EventCtx, MessageDiscardedPayload, MessageErrorPayload, PayloadBlock, ToolExecutionPayload,
+    ToolResultMessagePayload, TurnContextPayload, TurnEndedPayload,
 };
 use ice_paw_lib::infra::protocol::{ContentBlock, TokenUsage};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -114,11 +114,8 @@ async fn full_tool_turn_sequence_is_replayable() {
         &pool,
         &ev,
         "msg-u1",
-        &UserMessagePayload {
-            v: 1,
-            content: "读一下 README".into(),
-            blocks: vec![ContentBlock::text("读一下 README")],
-        },
+        "读一下 README",
+        &[ContentBlock::text("读一下 README")],
     )
     .await;
     log_attachment_stored(
@@ -142,23 +139,20 @@ async fn full_tool_turn_sequence_is_replayable() {
         &pool,
         &ev,
         "msg-a1",
-        &AssistantMessagePayload {
-            v: 1,
-            model: Some("glm-5.2".into()),
-            content: "我来看一下".into(),
-            blocks: vec![
-                ContentBlock::text("我来看一下"),
-                ContentBlock::ToolUse {
-                    id: "tu_1".into(),
-                    name: "read_file".into(),
-                    input: "{\"path\":\"README.md\"}".into(),
-                },
-            ],
-            token_count: Some(12),
-            duration_ms: None,
-            round: 0,
-            continuation: false,
-        },
+        Some("glm-5.2"),
+        "我来看一下",
+        &[
+            ContentBlock::text("我来看一下"),
+            ContentBlock::ToolUse {
+                id: "tu_1".into(),
+                name: "read_file".into(),
+                input: "{\"path\":\"README.md\"}".into(),
+            },
+        ],
+        Some(12),
+        None,
+        0,
+        false,
     )
     .await;
     log_tool_execution(
@@ -190,16 +184,13 @@ async fn full_tool_turn_sequence_is_replayable() {
         &pool,
         &ev,
         "msg-a2",
-        &AssistantMessagePayload {
-            v: 1,
-            model: Some("glm-5.2".into()),
-            content: "README 说这是本地优先的 LLM 工作站。".into(),
-            blocks: vec![ContentBlock::text("README 说这是本地优先的 LLM 工作站。")],
-            token_count: Some(20),
-            duration_ms: None,
-            round: 1,
-            continuation: false,
-        },
+        Some("glm-5.2"),
+        "README 说这是本地优先的 LLM 工作站。",
+        &[ContentBlock::text("README 说这是本地优先的 LLM 工作站。")],
+        Some(20),
+        None,
+        1,
+        false,
     )
     .await;
     log_turn_ended(
@@ -262,7 +253,7 @@ async fn full_tool_turn_sequence_is_replayable() {
     let has_use = asst1.blocks.iter().any(|b| {
         matches!(
             b,
-            ContentBlock::ToolUse { id, .. } if id == "tu_1"
+            PayloadBlock::Full(ContentBlock::ToolUse { id, .. }) if id == "tu_1"
         )
     });
     assert!(has_use, "assistant_message 应含 ToolUse id=tu_1");
@@ -272,7 +263,7 @@ async fn full_tool_turn_sequence_is_replayable() {
     assert_eq!(exec.arguments, "{\"path\":\"README.md\"}");
     let trmsg: ToolResultMessagePayload = payload(&rs[5]);
     match &trmsg.blocks[0] {
-        ContentBlock::ToolResult { tool_use_id, .. } => {
+        PayloadBlock::Full(ContentBlock::ToolResult { tool_use_id, .. }) => {
             assert_eq!(tool_use_id, "tu_1", "tool_result 应按 id 配对 tool_use");
         }
         other => panic!("tool_result_message 首块应为 ToolResult，got {other:?}"),
@@ -321,11 +312,8 @@ async fn supersede_last_wins_and_seq_continues_across_turns() {
         &pool,
         &ev1,
         "msg-u1",
-        &UserMessagePayload {
-            v: 1,
-            content: "写一篇长文".into(),
-            blocks: vec![ContentBlock::text("写一篇长文")],
-        },
+        "写一篇长文",
+        &[ContentBlock::text("写一篇长文")],
     )
     .await;
     for (round, text) in [(0u32, "前半段"), (1u32, "前半段后半段")] {
@@ -333,16 +321,13 @@ async fn supersede_last_wins_and_seq_continues_across_turns() {
             &pool,
             &ev1,
             "msg-a1",
-            &AssistantMessagePayload {
-                v: 1,
-                model: Some("glm-5.2".into()),
-                content: text.into(),
-                blocks: vec![ContentBlock::text(text)],
-                token_count: Some(10),
-                duration_ms: None,
-                round,
-                continuation: round > 0,
-            },
+            Some("glm-5.2"),
+            text,
+            &[ContentBlock::text(text)],
+            Some(10),
+            None,
+            round,
+            round > 0,
         )
         .await;
     }
@@ -380,31 +365,18 @@ async fn supersede_last_wins_and_seq_continues_across_turns() {
         },
     )
     .await;
-    log_user_message(
-        &pool,
-        &ev2,
-        "msg-u2",
-        &UserMessagePayload {
-            v: 1,
-            content: "继续".into(),
-            blocks: vec![ContentBlock::text("继续")],
-        },
-    )
-    .await;
+    log_user_message(&pool, &ev2, "msg-u2", "继续", &[ContentBlock::text("继续")]).await;
     log_assistant_message(
         &pool,
         &ev2,
         "msg-a2",
-        &AssistantMessagePayload {
-            v: 1,
-            model: Some("glm-5.2".into()),
-            content: "好的".into(),
-            blocks: vec![ContentBlock::text("好的")],
-            token_count: Some(2),
-            duration_ms: None,
-            round: 0,
-            continuation: false,
-        },
+        Some("glm-5.2"),
+        "好的",
+        &[ContentBlock::text("好的")],
+        Some(2),
+        None,
+        0,
+        false,
     )
     .await;
     log_turn_ended(
@@ -492,11 +464,8 @@ async fn abort_and_discard_paths_form_complete_sequence() {
         &pool,
         &ev1,
         "msg-u1",
-        &UserMessagePayload {
-            v: 1,
-            content: "跑一下构建".into(),
-            blocks: vec![ContentBlock::text("跑一下构建")],
-        },
+        "跑一下构建",
+        &[ContentBlock::text("跑一下构建")],
     )
     .await;
     log_message_discarded(&pool, &ev1, "msg-a1", "termination_guard_no_text").await;
@@ -534,17 +503,7 @@ async fn abort_and_discard_paths_form_complete_sequence() {
         },
     )
     .await;
-    log_user_message(
-        &pool,
-        &ev2,
-        "msg-u2",
-        &UserMessagePayload {
-            v: 1,
-            content: "你好".into(),
-            blocks: vec![ContentBlock::text("你好")],
-        },
-    )
-    .await;
+    log_user_message(&pool, &ev2, "msg-u2", "你好", &[ContentBlock::text("你好")]).await;
     log_message_error(&pool, &ev2, "msg-a2", "Network", "connection refused").await;
     log_turn_ended(
         &pool,

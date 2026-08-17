@@ -107,6 +107,64 @@ fn version_one() -> u8 {
     1
 }
 
+// =========================================================================
+// PayloadBlock（消息类 payload 的块形态，S1 阶段 3 Image 双份存储治理）
+// =========================================================================
+
+fn image_ref_marker() -> String {
+    "image_ref".to_string()
+}
+
+/// 消息类事件 payload 里的块。untagged 双形态：
+///
+/// - `Full`：完整块内联（v1，全部旧事件；非 Image 块恒为此形态）
+/// - `ImageRef`：Image 轻量引用（v2）——payload 不再双份存 base64，字节只在
+///   messages 行 `content_blocks`；`block_index` 指向该行数组的下标。
+///
+/// untagged 反序列化先试 `Full`（ContentBlock 以 `type` 判别，`"image_ref"`
+/// 不在词表 → 失败）再落 `ImageRef`——v1 事件零迁移可读。**读侧必须经
+/// `hydrate_image_refs`（derive.rs）还原后才能进对账 / LLM 视图**。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PayloadBlock {
+    Full(ContentBlock),
+    ImageRef {
+        /// 判别标记，恒 `"image_ref"`（序列化写出；人读 + JSON 级水合定位用）
+        #[serde(default = "image_ref_marker", rename = "type")]
+        marker: String,
+        message_id: String,
+        block_index: usize,
+    },
+}
+
+impl PayloadBlock {
+    /// 全内联包装（v1 形态）。3a 期 emitter 的过渡行为；3b 起 Image 引用
+    /// 统一走 [`refify_blocks`]。
+    pub fn inline_all(blocks: &[ContentBlock]) -> Vec<Self> {
+        blocks.iter().cloned().map(Self::Full).collect()
+    }
+}
+
+/// blocks → payload 形态：非 Image 原样（Full），Image 换轻量引用。
+///
+/// **Image 治理的写侧唯一入口**（emitter / backfill 合成内部调用）。索引 =
+/// 入参数组下标 = 行 `content_blocks` 布局——调用方必须传「刚落库的同一
+/// blocks」（ref 是行内指针，不是独立拷贝）。
+pub fn refify_blocks(message_id: &str, blocks: &[ContentBlock]) -> Vec<PayloadBlock> {
+    blocks
+        .iter()
+        .enumerate()
+        .map(|(i, b)| match b {
+            ContentBlock::Image { .. } => PayloadBlock::ImageRef {
+                marker: image_ref_marker(),
+                message_id: message_id.to_string(),
+                block_index: i,
+            },
+            other => PayloadBlock::Full(other.clone()),
+        })
+        .collect()
+}
+
 /// turn 开始时的模型/工具/预算快照——「模型看到什么工具、用什么模型」
 /// 此前完全不落库，Phase 1 解释行为差异的锚点。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,7 +197,7 @@ pub struct UserMessagePayload {
     #[serde(default = "version_one")]
     pub v: u8,
     pub content: String,
-    pub blocks: Vec<ContentBlock>,
+    pub blocks: Vec<PayloadBlock>,
 }
 
 /// assistant 消息权威快照（每轮 finalize 点一条）。
@@ -153,7 +211,7 @@ pub struct AssistantMessagePayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     pub content: String,
-    pub blocks: Vec<ContentBlock>,
+    pub blocks: Vec<PayloadBlock>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token_count: Option<i64>,
     /// 本轮生成耗时（stream 开始 → finalize，毫秒；补齐后轨迹耗时投影有模型道
@@ -187,7 +245,7 @@ pub struct ToolExecutionPayload {
 pub struct ToolResultMessagePayload {
     #[serde(default = "version_one")]
     pub v: u8,
-    pub blocks: Vec<ContentBlock>,
+    pub blocks: Vec<PayloadBlock>,
 }
 
 /// 附件留存事实——**仅元信息**，正文/字节禁入（防三重冗余：内联首页在
@@ -384,38 +442,64 @@ pub async fn log_turn_context(pool: &SqlitePool, ctx: &EventCtx, payload: &TurnC
     .await;
 }
 
-/// 用户消息落库原文（actor=user）。
+/// 用户消息落库原文（actor=user）。字段式签名（Image 治理：`blocks` 的
+/// ref 化下沉 emitter 内部，调用方只管传与落库同值的 blocks）。
 pub async fn log_user_message(
     pool: &SqlitePool,
     ctx: &EventCtx,
     message_id: &str,
-    payload: &UserMessagePayload,
+    content: &str,
+    blocks: &[ContentBlock],
 ) {
+    let payload = UserMessagePayload {
+        v: version_one(),
+        content: content.to_string(),
+        blocks: PayloadBlock::inline_all(blocks), // 3b 切 refify_blocks(message_id, blocks)
+    };
     append_event(
         pool,
         ctx,
         kind::USER_MESSAGE,
         actor_user(),
         Some(message_id),
-        payload,
+        &payload,
     )
     .await;
 }
 
 /// assistant 权威快照（actor=agent；supersede：同 message_id 多条 last-wins）。
+// 字段式：Image 治理的 ref 化在 emitter 内部做（调用方传与落库同值的 blocks），
+// 10 参数镜像 AssistantMessagePayload 语义字段（log_tool_execution 同款先例）。
+#[allow(clippy::too_many_arguments)]
 pub async fn log_assistant_message(
     pool: &SqlitePool,
     ctx: &EventCtx,
     message_id: &str,
-    payload: &AssistantMessagePayload,
+    model: Option<&str>,
+    content: &str,
+    blocks: &[ContentBlock],
+    token_count: Option<i64>,
+    duration_ms: Option<u64>,
+    round: u32,
+    continuation: bool,
 ) {
+    let payload = AssistantMessagePayload {
+        v: version_one(),
+        model: model.map(str::to_string),
+        content: content.to_string(),
+        blocks: PayloadBlock::inline_all(blocks), // 3b 切 refify_blocks(message_id, blocks)
+        token_count,
+        duration_ms,
+        round,
+        continuation,
+    };
     append_event(
         pool,
         ctx,
         kind::ASSISTANT_MESSAGE,
         &ctx.agent_actor(),
         Some(message_id),
-        payload,
+        &payload,
     )
     .await;
 }
@@ -457,7 +541,7 @@ pub async fn log_tool_execution(
     .await;
 }
 
-/// 工具结果消息镜像。
+/// 工具结果消息镜像。`blocks` 须与刚落库行 content_blocks 同值（Image 治理）。
 pub async fn log_tool_result_message(
     pool: &SqlitePool,
     ctx: &EventCtx,
@@ -465,8 +549,8 @@ pub async fn log_tool_result_message(
     blocks: &[ContentBlock],
 ) {
     let payload = ToolResultMessagePayload {
-        v: 1,
-        blocks: blocks.to_vec(),
+        v: version_one(),
+        blocks: PayloadBlock::inline_all(blocks), // 3b 切 refify_blocks(message_id, blocks)
     };
     append_event(
         pool,
@@ -727,21 +811,17 @@ mod tests {
             .unwrap();
         seed(&pool).await;
 
-        let payload = UserMessagePayload {
-            v: 1,
-            content: "看这张图".into(),
-            blocks: vec![
-                ContentBlock::Text {
-                    text: "看这张图".into(),
-                },
-                ContentBlock::Attachment {
-                    name: "plan.pdf".into(),
-                    kind: "application/pdf".into(),
-                    size: 282_000,
-                },
-            ],
-        };
-        log_user_message(&pool, &ctx(), "msg-u1", &payload).await;
+        let blocks = vec![
+            ContentBlock::Text {
+                text: "看这张图".into(),
+            },
+            ContentBlock::Attachment {
+                name: "plan.pdf".into(),
+                kind: "application/pdf".into(),
+                size: 282_000,
+            },
+        ];
+        log_user_message(&pool, &ctx(), "msg-u1", "看这张图", &blocks).await;
 
         let row: SessionEventRow = session_event::list_by_session(&pool, "conv-1", None)
             .await
@@ -755,7 +835,10 @@ mod tests {
         let back: UserMessagePayload = serde_json::from_str(&row.payload).unwrap();
         assert_eq!(back.content, "看这张图");
         assert_eq!(back.blocks.len(), 2);
-        assert!(matches!(back.blocks[1], ContentBlock::Attachment { .. }));
+        assert!(matches!(
+            back.blocks[1],
+            PayloadBlock::Full(ContentBlock::Attachment { .. })
+        ));
     }
 
     #[tokio::test]
@@ -767,21 +850,38 @@ mod tests {
             .unwrap();
         seed(&pool).await;
 
-        let mk = |content: &str, round: u32, continuation: bool| AssistantMessagePayload {
-            v: 1,
-            model: Some("glm-5.2".into()),
-            content: content.into(),
-            blocks: vec![ContentBlock::Text {
+        let mk_blocks = |content: &str| {
+            vec![ContentBlock::Text {
                 text: content.into(),
-            }],
-            token_count: Some(42),
-            duration_ms: Some(3_500),
-            round,
-            continuation,
+            }]
         };
         // 自动续写：同 message_id 两条（supersede last-wins）
-        log_assistant_message(&pool, &ctx(), "msg-a1", &mk("前半段", 0, false)).await;
-        log_assistant_message(&pool, &ctx(), "msg-a1", &mk("前半段后半段", 1, true)).await;
+        log_assistant_message(
+            &pool,
+            &ctx(),
+            "msg-a1",
+            Some("glm-5.2"),
+            "前半段",
+            &mk_blocks("前半段"),
+            Some(42),
+            Some(3_500),
+            0,
+            false,
+        )
+        .await;
+        log_assistant_message(
+            &pool,
+            &ctx(),
+            "msg-a1",
+            Some("glm-5.2"),
+            "前半段后半段",
+            &mk_blocks("前半段后半段"),
+            Some(42),
+            Some(3_500),
+            1,
+            true,
+        )
+        .await;
 
         let rows = session_event::list_by_session(&pool, "conv-1", None)
             .await
@@ -801,6 +901,62 @@ mod tests {
         )
         .unwrap();
         assert_eq!(legacy.duration_ms, None);
+    }
+
+    /// refify_blocks：Image 换轻量引用（payload 无 base64），其余原样 Full；
+    /// 序列化 wire 形态可被 untagged 往返。
+    #[test]
+    fn refify_replaces_images_keeps_others() {
+        let blocks = vec![
+            ContentBlock::text("看图"),
+            ContentBlock::Image {
+                data: "QUJD".into(),
+                media_type: "image/png".into(),
+            },
+            ContentBlock::ToolUse {
+                id: "tu1".into(),
+                name: "read_file".into(),
+                input: "{}".into(),
+            },
+        ];
+        let payload_blocks = refify_blocks("msg-u1", &blocks);
+
+        // Image → ref（指向下标 1），其余 Full
+        assert!(matches!(
+            payload_blocks[0],
+            PayloadBlock::Full(ContentBlock::Text { .. })
+        ));
+        match &payload_blocks[1] {
+            PayloadBlock::ImageRef {
+                marker,
+                message_id,
+                block_index,
+            } => {
+                assert_eq!(marker, "image_ref");
+                assert_eq!(message_id, "msg-u1");
+                assert_eq!(*block_index, 1, "索引 = 数组下标（行布局对齐）");
+            }
+            other => panic!("expected ImageRef, got {other:?}"),
+        }
+        assert!(matches!(
+            payload_blocks[2],
+            PayloadBlock::Full(ContentBlock::ToolUse { .. })
+        ));
+
+        // wire 序列化：无 base64 + untagged 往返还原
+        let wire = serde_json::to_string(&payload_blocks).unwrap();
+        assert!(!wire.contains("QUJD"), "payload 不应含图片字节: {wire}");
+        assert!(wire.contains("image_ref"));
+        let back: Vec<PayloadBlock> = serde_json::from_str(&wire).unwrap();
+        assert_eq!(back, payload_blocks);
+
+        // v1 内联事件（Image 原样）→ 反序列化落 Full，读侧零迁移
+        let v1 = r#"[{"type":"text","text":"q"},{"type":"image","data":"QUJD","media_type":"image/png"}]"#;
+        let legacy: Vec<PayloadBlock> = serde_json::from_str(v1).unwrap();
+        assert!(matches!(
+            legacy[1],
+            PayloadBlock::Full(ContentBlock::Image { .. })
+        ));
     }
 
     #[tokio::test]
