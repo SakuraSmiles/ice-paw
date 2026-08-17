@@ -246,6 +246,19 @@ pub async fn get_content_blocks_by_id(
     Ok(row.map(|(content_blocks,)| content_blocks))
 }
 
+/// 按消息 id 取整行，不存在返回 None（@ 引用展开用：需要
+/// role/content/blocks/conversation_id；与私有 `get_by_id` 的 NotFound 语义区分）。
+pub async fn find_by_id(pool: &SqlitePool, id: &str) -> AppResult<Option<MessageRow>> {
+    let row = sqlx::query_as::<_, MessageRow>(
+        "SELECT id, conversation_id, role, content, content_blocks, token_count, error, created_at, rowid, summary_id, model
+           FROM messages WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
 /// 写入新消息
 pub async fn create(pool: &SqlitePool, id: &str, new_msg: &NewMessage) -> AppResult<MessageRow> {
     // 基本校验

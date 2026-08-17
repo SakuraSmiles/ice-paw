@@ -114,7 +114,7 @@ pub async fn send_message(
     // user_msg_id 预生成（仅 UUID 字符串，无 IO）：materialize 需把它嵌进大文件首页的
     // read_attachment_page 工具提示里；真正落库时复用同一 id。
     let user_msg_id = Uuid::new_v4().to_string();
-    let (mut final_blocks, attach_db_inputs, attach_file_inputs) =
+    let (final_blocks, attach_db_inputs, attach_file_inputs) =
         match input.files.as_ref().filter(|v| !v.is_empty()) {
             Some(files) => {
                 validate_files(files)?;
@@ -122,6 +122,16 @@ pub async fn send_message(
             }
             None => (final_blocks, Vec::new(), Vec::new()),
         };
+
+    // @ 引用展开（Reference 块 → 快照 Text 块）：在 persist_blocks 落库快照
+    // clone **之前**，落库消息 = 引用卡 + 展开快照（回放保真，session_events
+    // 零特例）。失效降级为占位 Text，绝不阻塞整条消息。
+    let mut final_blocks = crate::harness::references::materialize_reference_blocks(
+        pool.inner(),
+        &conv_id,
+        final_blocks,
+    )
+    .await;
 
     // 事1 + 事2：视觉模态元信息注入。仅当 agent「有效支持视觉」时插入"你已直接收到 N 张图、
     // 无需调图片工具"的元提示——纠正视觉 agent「看到了却说没看到」的认知偏差。
