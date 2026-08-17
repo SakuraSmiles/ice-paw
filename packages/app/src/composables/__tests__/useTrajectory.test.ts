@@ -170,6 +170,31 @@ describe("buildRows 行模型", () => {
     expect(evRows(events).events()[0].summary).toBe("旧世界");
   });
 
+  it("user_message 块徽标：图片/文档/引用计数进摘要（正文与徽标并存）", () => {
+    // 纯附件消息（content 空）：徽标即摘要——引用/文档不再从轨迹里消失
+    const bare = [ev("user_message", {
+      content: "",
+      blocks: [
+        { type: "image", data: "x", media_type: "image/png" },
+        { type: "reference", ref_kind: "conversation", target_id: "c1", display: "会话#1234" },
+        { type: "reference", ref_kind: "agent", target_id: "a1", display: "审查员#5678" },
+        { type: "attachment", name: "spec.pdf", kind: "pdf", size: 4096 },
+      ],
+    })];
+    expect(evRows(bare).events()[0].summary).toBe("[图片 ×1 · 文档 ×1 · 引用 ×2]");
+
+    // 有正文：正文 + 徽标
+    const withText = [ev("user_message", {
+      content: "看看这些材料",
+      blocks: [{ type: "attachment", name: "spec.pdf", kind: "pdf", size: 4096 }],
+    })];
+    expect(evRows(withText).events()[0].summary).toBe("看看这些材料 [文档 ×1]");
+
+    // 纯文本：行为不变（无徽标尾巴）
+    const plain = [ev("user_message", { content: "第一问", blocks: [] })];
+    expect(evRows(plain).events()[0].summary).toBe("第一问");
+  });
+
   it("多 turn 顺序与 turnIndex 递增", () => {
     const events = [
       ev("user_message", { content: "q1", blocks: [] }, { turnId: "t1" }),

@@ -151,9 +151,18 @@ function summarizeEvent(ev: SessionEvent): { kind: RowKind; summary: string; isE
   switch (ev.kind) {
     case "user_message": {
       const p = ev.payload as UserMessagePayload;
-      const imgs = p.blocks?.filter((b) => b.type === "image").length ?? 0;
-      const text = firstLine(p.content);
-      const summary = text || (imgs ? `[图片 ×${imgs}]` : "(空消息)");
+      // 块构成徽标（图片/文档/引用）：轨迹行扫读「这条消息装了什么」。正文与
+      // 徽标并存（正文截短），纯附件消息（content 空）时徽标即摘要——旧实现
+      // 只统计图片，引用/文档消息在轨迹里只剩一行 "[图片 ×N]" 甚至空摘要。
+      const blocks = p.blocks ?? [];
+      const count = (t: string) => blocks.filter((b) => b.type === t).length;
+      const tags: string[] = [];
+      if (count("image")) tags.push(`图片 ×${count("image")}`);
+      if (count("attachment")) tags.push(`文档 ×${count("attachment")}`);
+      if (count("reference")) tags.push(`引用 ×${count("reference")}`);
+      const tag = tags.length ? ` [${tags.join(" · ")}]` : "";
+      const text = firstLine(p.content, 80);
+      const summary = `${text}${tag}`.trim() || "(空消息)";
       return { kind: "user", summary, isError: false, durationMs: null, tokens: null, thinkingDerived: false };
     }
     case "assistant_message": {

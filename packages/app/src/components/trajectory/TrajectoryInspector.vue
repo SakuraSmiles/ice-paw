@@ -55,11 +55,25 @@ const attachP = computed(() =>
 
 type ThinkingBlock = Extract<ContentBlock, { type: "thinking" }>;
 type ImageBlock = Extract<ContentBlock, { type: "image" }>;
+type ReferenceBlock = Extract<ContentBlock, { type: "reference" }>;
+type AttachmentBlock = Extract<ContentBlock, { type: "attachment" }>;
 
 const thinkings = computed<ThinkingBlock[]>(() => (asstP.value?.blocks ?? []).filter((b): b is ThinkingBlock => b.type === "thinking"));
 const userImages = computed<{ data: string; mediaType: string }[]>(() =>
   (userP.value?.blocks ?? []).filter((b): b is ImageBlock => b.type === "image").map((b) => ({ data: b.data, mediaType: b.media_type })),
 );
+/** 用户消息的引用卡（快照元数据：display + ref_kind）与文档卡（name/kind/size）——
+ *  轨迹审计视图只呈现元信息（引用展开正文在消息行侧，文档提取文在分页表） */
+const userRefs = computed<ReferenceBlock[]>(() => (userP.value?.blocks ?? []).filter((b): b is ReferenceBlock => b.type === "reference"));
+const userDocs = computed<AttachmentBlock[]>(() => (userP.value?.blocks ?? []).filter((b): b is AttachmentBlock => b.type === "attachment"));
+
+const REF_KIND_LABELS: Record<ReferenceBlock["ref_kind"], string> = { conversation: "会话", agent: "Agent", message: "消息" };
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 /** assistant 概要：块构成速览（这条消息里装了什么） */
 const blockComposition = computed(() => {
@@ -294,6 +308,8 @@ async function copyPayload() {
           <h4 class="isec-title">概览</h4>
           <div class="ikv ikv-top"><span>正文预览</span><b class="iprev">{{ previewOf(userP.content) || "（无文本）" }}</b></div>
           <div v-if="userImages.length" class="ikv"><span>图片</span><b>{{ userImages.length }} 张（正文标签页查看）</b></div>
+          <div v-if="userDocs.length" class="ikv"><span>文档</span><b>{{ userDocs.length }} 个（正文标签页查看）</b></div>
+          <div v-if="userRefs.length" class="ikv"><span>引用</span><b>{{ userRefs.length }} 条（正文标签页查看）</b></div>
           <div class="ikv"><span>字符数</span><b>{{ userP.content?.length ?? 0 }}</b></div>
         </section>
 
@@ -381,7 +397,21 @@ async function copyPayload() {
       <template v-else-if="activeTab === 'text'">
         <div v-if="userP" class="isec">
           <MarkdownRenderer v-if="userP.content" :content="userP.content" />
-          <div v-else class="insp-muted">（无文本，仅图片）</div>
+          <div v-else class="insp-muted">（无文本）</div>
+          <!-- 引用卡：快照元数据（展开正文作为 text 块随消息存储，不在审计视图重放） -->
+          <div v-if="userRefs.length" class="iref-list">
+            <div v-for="(r, i) in userRefs" :key="'ref-' + i" class="iref">
+              <span class="iref-kind" :data-kind="r.ref_kind">{{ REF_KIND_LABELS[r.ref_kind] }}</span>
+              <span class="iref-label">{{ r.display }}</span>
+            </div>
+          </div>
+          <!-- 文档卡：name · kind · size -->
+          <div v-if="userDocs.length" class="iref-list">
+            <div v-for="(d, i) in userDocs" :key="'doc-' + i" class="idoc">
+              <span class="iref-kind" data-kind="doc">{{ d.kind.toUpperCase() }}</span>
+              <span class="iref-label">{{ d.name }} · {{ formatSize(d.size) }}</span>
+            </div>
+          </div>
           <div v-if="userImages.length" class="iimgs">
             <img
               v-for="(img, i) in userImages"
@@ -690,6 +720,24 @@ async function copyPayload() {
 .imono { font-family: var(--ip-font-mono, monospace); }
 
 .iimgs { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+
+/* 引用/文档卡列表（user_message 正文 tab）：轻量行卡 = 类型胶囊 + 元信息 */
+.iref-list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.iref, .idoc {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 10px; border-radius: var(--ip-radius-md);
+  background: var(--ip-color-bg-tertiary); font-size: var(--ip-text-caption-size);
+}
+.iref-kind {
+  flex-shrink: 0; font-size: 10px; line-height: 1; padding: 3px 7px;
+  border-radius: var(--ip-radius-full);
+  background: var(--ip-color-primary-tint-bg); color: var(--ip-color-primary-tint-text);
+}
+.iref-kind[data-kind="agent"] { background: #ece9fb; color: #5b4bbd; }
+.iref-kind[data-kind="message"] { background: var(--ip-color-bg-secondary); color: var(--ip-color-text-secondary); border: 1px solid var(--ip-color-border-default); }
+.iref-kind[data-kind="doc"] { background: var(--ip-color-bg-secondary); color: var(--ip-color-text-secondary); border: 1px solid var(--ip-color-border-default); }
+.iref-label, .idoc { color: var(--ip-color-text-secondary); }
+.iref-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .iimg { width: 96px; height: 96px; object-fit: cover; border-radius: var(--ip-radius-md); cursor: pointer; border: 1px solid var(--ip-color-border-default); }
 
 .iadapted { margin: 8px 0; font-size: var(--ip-text-caption-size); color: var(--ip-color-text-secondary); }
