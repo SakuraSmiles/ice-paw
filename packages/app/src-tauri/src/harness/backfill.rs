@@ -76,7 +76,10 @@ pub const TERMINATION_BACKFILL: &str = "backfill";
 /// 版本升级（修 bug）时自增：boot 检测库内标记落后 → 把「纯 backfill 会话」
 /// （零真实事件）一并纳入删旧重写，自愈无需 UI；冻结会话（已混入真实事件）
 /// 永不重写（重写会造成错序，见模块头范围界定）。
-pub const BACKFILL_VERSION: u32 = 1;
+///
+/// v2：消息类合成 payload 走 refify_blocks（Image 轻量引用，不再内联
+/// base64）——v1 纯 backfill 会话删旧重写自愈，冻结会话保留 v1 内联照读。
+pub const BACKFILL_VERSION: u32 = 2;
 
 /// 库内版本标记的 preferences key（内部标记，经 [`repo::preferences::get`]
 /// 原始读取，不进用户偏好 struct）。
@@ -245,7 +248,7 @@ fn synthesize_events(rows: &[MessageRow]) -> (Vec<session_event::BackfillEvent>,
                             Some(t.id.clone()),
                             Some(row.id.clone()),
                             &ToolResultMessagePayload {
-                                v: 1,
+                                v: 2,
                                 blocks: refify_blocks(&row.id, &blocks),
                             },
                             &row.created_at,
@@ -262,10 +265,10 @@ fn synthesize_events(rows: &[MessageRow]) -> (Vec<session_event::BackfillEvent>,
                     Some(row.id.clone()),
                     Some(row.id.clone()),
                     &UserMessagePayload {
-                        v: 1,
+                        v: 2,
                         content: row.content.clone(),
-                        // ref 化：Image 换轻量引用（v2 形态；3b 起 BACKFILL_VERSION=2
-                        // 重跑后生效）。空回退产物是 Text，refify 原样过。
+                        // ref 化：Image 换轻量引用（字节只在行）。空回退产物是
+                        // Text，refify 原样过。
                         blocks: refify_blocks(&row.id, &effective_blocks(&row.content, &blocks)),
                     },
                     &row.created_at,
@@ -308,7 +311,7 @@ fn synthesize_events(rows: &[MessageRow]) -> (Vec<session_event::BackfillEvent>,
                 Some(t.id.clone()),
                 Some(row.id.clone()),
                 &AssistantMessagePayload {
-                    v: 1,
+                    v: 2,
                     model: row.model.clone(),
                     content: row.content.clone(),
                     blocks: refify_blocks(&row.id, &effective_blocks(&row.content, &blocks)),
@@ -722,6 +725,84 @@ mod tests {
                 l.source_rowid, d.source_rowid,
                 "msg#{i} source_rowid 不一致"
             );
+        }
+    }
+
+    /// 测试 2b（3b 写侧）：含 Image 行 backfill → 合成 payload 是 ref 形态
+    /// （无 base64 双份）+ 对账零 diff（A 侧行 ↔ B 侧水合后的平面等式）+
+    /// 视图等价（水合还原完整 Image，LLM 视图照常带图）。
+    #[tokio::test]
+    async fn image_rows_backfill_to_refs_zero_diff() {
+        let pool = migrated_pool().await;
+        seed_conv(&pool, "conv-img").await;
+        // 独特 base64 串：断言「payload 无字节」时不会被 media_type 等误命中
+        const IMG_B64: &str = "aW1hZ2UtYnl0ZXMtZm9yLXRlc3Q";
+        insert_row(
+            &pool,
+            "conv-img",
+            "u1",
+            "user",
+            "看这张图",
+            &format!(
+                r#"[{{"type":"text","text":"看这张图"}},{{"type":"image","data":"{IMG_B64}","media_type":"image/png"}}]"#
+            ),
+            "2026-08-01 11:00:00",
+        )
+        .await;
+        insert_row(
+            &pool,
+            "conv-img",
+            "a1",
+            "assistant",
+            "看到了",
+            r#"[{"type":"text","text":"看到了"}]"#,
+            "2026-08-01 11:00:05",
+        )
+        .await;
+
+        let report = backfill_legacy_sessions(&pool).await;
+        assert_eq!(report.backfilled, 1);
+        assert_eq!(report.failed, 0);
+
+        // 写侧形态：user_message payload = v2 + image_ref，绝不内联 base64
+        let events = events_of(&pool, "conv-img").await;
+        let user_ev = events.iter().find(|e| e.kind == "user_message").unwrap();
+        assert!(!user_ev.payload.contains(IMG_B64), "payload 不应含图片字节");
+        assert!(user_ev.payload.contains("image_ref"));
+        let p: UserMessagePayload = serde_json::from_str(&user_ev.payload).unwrap();
+        assert_eq!(p.v, 2);
+        match &p.blocks[1] {
+            crate::harness::event_log::PayloadBlock::ImageRef {
+                message_id,
+                block_index,
+                ..
+            } => {
+                assert_eq!(message_id, "u1");
+                assert_eq!(*block_index, 1);
+            }
+            other => panic!("Image 块应合成 ref，got {other:?}"),
+        }
+
+        // 对账零 diff：B 侧 ref 经水合还原后与 A 侧行逐块相等
+        let rep = reconcile_session(&pool, "conv-img").await.unwrap();
+        assert!(rep.diffs.is_empty(), "diffs: {:#?}", rep.diffs);
+
+        // 视图等价：派生行经水合含完整 Image（LLM/前端视图与 legacy 完全一致）
+        let derived_rows = load_history_from_events(&pool, "conv-img").await.unwrap();
+        assert!(
+            derived_rows[0].content_blocks.contains(IMG_B64),
+            "派生行 content_blocks 应水合出完整图片: {}",
+            derived_rows[0].content_blocks
+        );
+        let legacy_rows = repo::message::list_all_by_rowid(&pool, "conv-img")
+            .await
+            .unwrap();
+        let legacy_view = load_history_with_window(&legacy_rows, None);
+        let derived_view = load_history_with_window(&derived_rows, None);
+        assert_eq!(legacy_view.len(), derived_view.len());
+        for (l, d) in legacy_view.iter().zip(derived_view.iter()) {
+            assert_eq!(l.role, d.role);
+            assert_eq!(l.content, d.content, "blocks 不一致（水合应逐块还原）");
         }
     }
 

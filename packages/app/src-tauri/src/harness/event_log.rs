@@ -107,6 +107,13 @@ fn version_one() -> u8 {
     1
 }
 
+/// 消息类 payload（blocks 含图）的当前版本：v2 = Image 走 `image_ref` 轻量
+/// 引用（S1 阶段 3b 起），payload 不再内联 base64。旧事件显式 `"v":1`
+/// 照常反序列化；缺 `v` 字段的极旧 payload 保守按 1 解（v1 内联兼容）。
+fn version_two() -> u8 {
+    2
+}
+
 // =========================================================================
 // PayloadBlock（消息类 payload 的块形态，S1 阶段 3 Image 双份存储治理）
 // =========================================================================
@@ -137,19 +144,11 @@ pub enum PayloadBlock {
     },
 }
 
-impl PayloadBlock {
-    /// 全内联包装（v1 形态）。3a 期 emitter 的过渡行为；3b 起 Image 引用
-    /// 统一走 [`refify_blocks`]。
-    pub fn inline_all(blocks: &[ContentBlock]) -> Vec<Self> {
-        blocks.iter().cloned().map(Self::Full).collect()
-    }
-}
-
 /// blocks → payload 形态：非 Image 原样（Full），Image 换轻量引用。
 ///
-/// **Image 治理的写侧唯一入口**（emitter / backfill 合成内部调用）。索引 =
-/// 入参数组下标 = 行 `content_blocks` 布局——调用方必须传「刚落库的同一
-/// blocks」（ref 是行内指针，不是独立拷贝）。
+/// **Image 治理的写侧唯一入口**（emitter / backfill 合成内部调用；v1 事件
+/// 已不可再产生）。索引 = 入参数组下标 = 行 `content_blocks` 布局——调用方
+/// 必须传「刚落库的同一 blocks」（ref 是行内指针，不是独立拷贝）。
 pub fn refify_blocks(message_id: &str, blocks: &[ContentBlock]) -> Vec<PayloadBlock> {
     blocks
         .iter()
@@ -194,7 +193,7 @@ pub struct TurnContextPayload {
 /// 适配前版本；视觉代读结果是 `modal_adapted` 事件的事）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserMessagePayload {
-    #[serde(default = "version_one")]
+    #[serde(default = "version_two")]
     pub v: u8,
     pub content: String,
     pub blocks: Vec<PayloadBlock>,
@@ -206,7 +205,7 @@ pub struct UserMessagePayload {
 /// （全文覆写），回放 last-wins。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AssistantMessagePayload {
-    #[serde(default = "version_one")]
+    #[serde(default = "version_two")]
     pub v: u8,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
@@ -243,7 +242,7 @@ pub struct ToolExecutionPayload {
 /// 工具结果消息镜像（role='user' 含 ToolResult 块的行，derive 直接用）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolResultMessagePayload {
-    #[serde(default = "version_one")]
+    #[serde(default = "version_two")]
     pub v: u8,
     pub blocks: Vec<PayloadBlock>,
 }
@@ -452,9 +451,9 @@ pub async fn log_user_message(
     blocks: &[ContentBlock],
 ) {
     let payload = UserMessagePayload {
-        v: version_one(),
+        v: version_two(),
         content: content.to_string(),
-        blocks: PayloadBlock::inline_all(blocks), // 3b 切 refify_blocks(message_id, blocks)
+        blocks: refify_blocks(message_id, blocks),
     };
     append_event(
         pool,
@@ -484,10 +483,10 @@ pub async fn log_assistant_message(
     continuation: bool,
 ) {
     let payload = AssistantMessagePayload {
-        v: version_one(),
+        v: version_two(),
         model: model.map(str::to_string),
         content: content.to_string(),
-        blocks: PayloadBlock::inline_all(blocks), // 3b 切 refify_blocks(message_id, blocks)
+        blocks: refify_blocks(message_id, blocks),
         token_count,
         duration_ms,
         round,
@@ -549,8 +548,8 @@ pub async fn log_tool_result_message(
     blocks: &[ContentBlock],
 ) {
     let payload = ToolResultMessagePayload {
-        v: version_one(),
-        blocks: PayloadBlock::inline_all(blocks), // 3b 切 refify_blocks(message_id, blocks)
+        v: version_two(),
+        blocks: refify_blocks(message_id, blocks),
     };
     append_event(
         pool,
