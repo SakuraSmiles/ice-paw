@@ -89,7 +89,7 @@ describe("TaskPanel 委派时序（手测 bug 复现）", () => {
     await flushAsync();
 
     expect(wrapper.find(".task-panel").exists()).toBe(true);
-    expect(wrapper.find(".task-pill-count").text()).toBe("1");
+    expect(wrapper.find(".task-pill-label").text()).toBe("任务 1");
   });
 
   it("running 迟到：子会话首个 chunk 进 bgStreams 时 popover 自动展开一次", async () => {
@@ -118,5 +118,51 @@ describe("TaskPanel 委派时序（手测 bug 复现）", () => {
 
     expect(chat.streamingConvIds.has(CHILD)).toBe(true);
     expect(wrapper.find(".task-popover").exists()).toBe(true); // 自动展开
+  });
+
+  it("任务 running 翻转：行背景轻闪 .just-changed，约 1.1s 后褪去（P12）", async () => {
+    vi.useFakeTimers();
+    try {
+      const handlers = captureHandlers();
+      const chat = useChatStore();
+      await useChatEvents();
+
+      chat.conversations = [conv(PARENT)];
+      chat.selectConversation(PARENT);
+      const wrapper = mountPanel();
+
+      mockInvoke.mockResolvedValue([
+        conv(CHILD, { kind: "delegation", parent_conversation_id: PARENT }),
+        conv(PARENT),
+      ]);
+      handlers.get("chat:delegation-started")!({ payload: {} });
+      await flushAsync();
+      // 进入 running（false→true 翻转本身会闪一次，且触发自动展开）——
+      // 先走完闪动窗口
+      handlers.get("chat:chunk")!({ payload: { conversation_id: CHILD, delta: "x" } });
+      await flushAsync();
+      vi.advanceTimersByTime(1200);
+      await flushAsync();
+
+      // 面板行存在且无闪（running 到来时已自动展开；未展开则手动点开——
+      // 注意点击是 toggle，已展开时再点会关上）
+      if (!wrapper.find(".task-popover").exists()) {
+        await wrapper.find(".task-pill").trigger("click");
+        await flushAsync();
+      }
+      expect(wrapper.find(".task-row").classes()).not.toContain("just-changed");
+
+      // running→结束翻转：bgStreams 整替清空 → 行背景轻闪
+      chat.bgStreams = new Map();
+      await flushAsync();
+      expect(wrapper.find(".task-row").classes()).toContain("just-changed");
+
+      // ~1.1s 后自动褪去
+      vi.advanceTimersByTime(1200);
+      await flushAsync();
+      expect(wrapper.find(".task-row").classes()).not.toContain("just-changed");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
