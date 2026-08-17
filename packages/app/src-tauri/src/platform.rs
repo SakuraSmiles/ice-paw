@@ -87,7 +87,12 @@ mod tests {
     #[test]
     fn work_area_shape_sane_or_none() {
         // Windows 真机：工作区宽高为正；非 Windows：恒 None。
-        if let Some(r) = primary_monitor_work_area(std::ptr::null_mut()) {
+        // Hwnd 形态按平台给（非 Windows 是 ()，CI 在 Linux 编译 test 代码）。
+        #[cfg(windows)]
+        let hwnd: Hwnd = std::ptr::null_mut();
+        #[cfg(not(windows))]
+        let hwnd: Hwnd = ();
+        if let Some(r) = primary_monitor_work_area(hwnd) {
             assert!(r.right > r.left && r.bottom > r.top);
         }
     }
