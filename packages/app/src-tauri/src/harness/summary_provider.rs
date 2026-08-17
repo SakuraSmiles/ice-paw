@@ -413,6 +413,8 @@ fn render_message_for_summary(m: &ChatMessage) -> String {
             // 附件元信息块：纯 UI，跳过——紧随其后的 Text(extracted) 块以
             // "[附件 name（kind）]" 开头，已携带附件名+正文进摘要，无需重复。
             ContentBlock::Attachment { .. } => {}
+            // @ 引用卡：纯 UI，跳过——紧随其后的展开 Text 块已携带引用快照。
+            ContentBlock::Reference { .. } => {}
         }
     }
     parts.join(" ")

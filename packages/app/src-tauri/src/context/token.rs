@@ -99,6 +99,8 @@ pub fn estimate_block_tokens(block: &ContentBlock) -> usize {
         }
         // 附件元信息块：纯 UI，不发给 LLM → 不占 token 预算
         ContentBlock::Attachment { .. } => 0,
+        // @ 引用卡：纯 UI → 不占 token 预算（展开 Text 块按文本正常估算）
+        ContentBlock::Reference { .. } => 0,
     }
 }
 
@@ -252,6 +254,13 @@ mod tests {
         // 巨幅 base64（模拟 5MB 解码量）应被封顶
         let huge = ContentBlock::image("x".repeat(8_000_000), "image/png");
         assert_eq!(estimate_block_tokens(&huge), IMAGE_TOKEN_CAP);
+    }
+
+    #[test]
+    fn estimate_block_tokens_reference_is_zero() {
+        // @ 引用卡纯 UI 不进 LLM → 不占 token 预算（展开 Text 块按文本正常算）
+        let b = ContentBlock::reference("conversation", "conv-1", "设计讨论#1234");
+        assert_eq!(estimate_block_tokens(&b), 0);
     }
 
     #[test]

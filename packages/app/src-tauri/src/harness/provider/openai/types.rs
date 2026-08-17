@@ -293,6 +293,8 @@ fn single_openai_message(msg: &ChatMessage) -> AppResult<OpenAiMessage> {
                     })),
                     // 附件元信息块：纯 UI，不发给 LLM（与 anthropic 适配层同模式）
                     ContentBlock::Attachment { .. } => None,
+                    // @ 引用卡：纯 UI（LLM 读 materialize 展开的 Text 块）
+                    ContentBlock::Reference { .. } => None,
                     _ => Some(serde_json::json!({"type": "text", "text": ""})),
                 })
                 .collect();
@@ -354,6 +356,8 @@ fn single_openai_message(msg: &ChatMessage) -> AppResult<OpenAiMessage> {
                     })),
                     // 附件元信息块：纯 UI，不发给 LLM（与 anthropic 适配层同模式）
                     ContentBlock::Attachment { .. } => None,
+                    // @ 引用卡：纯 UI（LLM 读 materialize 展开的 Text 块）
+                    ContentBlock::Reference { .. } => None,
                     _ => Some(serde_json::json!({"type": "text", "text": ""})),
                 })
                 .collect();

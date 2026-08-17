@@ -73,6 +73,21 @@ pub enum ContentBlock {
         kind: String,
         size: usize,
     },
+    /// @ 引用块（输入框 @会话 / @agent / @消息）
+    ///
+    /// **纯 UI 展示用**（与 Attachment 同模式）：落库+历史渲染引用卡片；
+    /// LLM 实际读到的是 `materialize_reference_blocks` 在其后插入的展开
+    /// Text 块（`<referenced_*>` 快照）。快照语义 = send 时展开落库，轨迹
+    /// 回放保真，session_events 内核零特例。
+    ///
+    /// - `ref_kind`：`"conversation" | "agent" | "message"`
+    /// - `target_id`：conversation_id / agent_id / message_id（后端真查找键）
+    /// - `display`：`"名称#短码"`（前端 fnv1a 派生 4 位数字短码，纯装饰）
+    Reference {
+        ref_kind: String,
+        target_id: String,
+        display: String,
+    },
 }
 
 impl ContentBlock {
@@ -95,6 +110,19 @@ impl ContentBlock {
             name: name.into(),
             kind: kind.into(),
             size,
+        }
+    }
+
+    /// @ 引用块（ref_kind/target_id/display 语义见 variant 注释）
+    pub fn reference(
+        ref_kind: impl Into<String>,
+        target_id: impl Into<String>,
+        display: impl Into<String>,
+    ) -> Self {
+        ContentBlock::Reference {
+            ref_kind: ref_kind.into(),
+            target_id: target_id.into(),
+            display: display.into(),
         }
     }
 

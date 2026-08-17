@@ -168,6 +168,7 @@ fn chat_message_to_anthropic_content(msg: &ChatMessage) -> serde_json::Value {
             })),
             ContentBlock::Thinking { .. } => None, // 不回传给 Anthropic
             ContentBlock::Attachment { .. } => None, // 附件元信息块：纯 UI，不发给 LLM
+            ContentBlock::Reference { .. } => None, // @ 引用卡：纯 UI（LLM 读展开 Text 块）
         })
         .collect();
 
