@@ -16,6 +16,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import type { TrajectoryRow } from "../../composables/useTrajectory";
+import { isWarnTermination, termLabel } from "../../utils/termLabels";
 
 const props = defineProps<{
   rows: TrajectoryRow[];
@@ -166,21 +167,7 @@ watch(
 );
 defineExpose({ scrollToSeq, scrollToTurn, scrollToBottom, smoothScrollToBottom, isNearBottom, isPinned, beginPrepend });
 
-// 终止原因文案：镜像 ChatMessages finishReasonLabels + stop/error 补全（TODO 统一到 utils）
-const TERM_LABELS: Record<string, string> = {
-  stop: "正常结束",
-  length: "长度截断",
-  max_tokens: "长度截断",
-  tool_use: "工具轮数上限",
-  abort: "手动停止",
-  budget_exceeded: "预算超限",
-  stuck: "无进展终止",
-  error: "出错",
-  interrupted: "应用中断",
-};
-function termLabel(t: string): string {
-  return TERM_LABELS[t] ?? t;
-}
+// 终止原因文案：单一真相源在 utils/termLabels（词表外裸透原值）
 
 function fmtTime(iso: string): string {
   const d = new Date(iso);
@@ -254,7 +241,7 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
           <span
             v-if="item.row.ended"
             class="th-term"
-            :class="{ 'th-term-warn': item.row.ended.termination !== 'stop' }"
+            :class="{ 'th-term-warn': isWarnTermination(item.row.ended.termination) }"
           >{{ termLabel(item.row.ended.termination) }}</span>
           <span v-else class="th-term th-term-pending">进行中</span>
           <span class="th-right">
