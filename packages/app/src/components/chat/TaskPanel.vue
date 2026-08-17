@@ -9,16 +9,19 @@
 // get_session_plan（最后一条 plan_updated 全量快照），切会话/开面板/
 // session:event-appended(kind=plan_updated) 三处刷新。
 // 排序律（已拍板）：状态优先（进行中置顶）+ 时间倒序；不分页——本会话任务
-// 天然有限（深度=1、串行），P12 起全量进列内滚动（不再 MAX_ROWS 截断）。
+// 天然有限（深度=1、串行）。规模治理（二轮拍板 2026-08-17）：弹窗高度挂
+// 58vh，计划列全量平铺 + 列内滚动；任务列按高度预算截断（放不下才收
+// 「还有 N 个」计数行，running 恒优先），全显是常态。
 // 状态两态：进行中（脉冲）/已结束（中性点）——done/failed 精确终态是 MA-2
 // 台账（turn_ended 派生状态机）的事，此处不伪造。计划勾选同理恒为 agent 判断。
-import { computed, ref, watch, onMounted, onBeforeUnmount } from "vue";
+import { computed, ref, watch, onMounted, onBeforeUnmount, nextTick } from "vue";
 import { listen } from "@tauri-apps/api/event";
 import { useChatStore } from "../../stores/chat";
 import { useAgentStore } from "../../stores/agent";
 import { formatTime, parseDbTime } from "../../utils/time";
 import { bridge } from "../../api/bridge";
 import type { PlanSnapshot } from "../../types";
+import { budgetDoneRows } from "./taskBudget";
 
 const chat = useChatStore();
 const agentStore = useAgentStore();
@@ -56,31 +59,39 @@ const tasks = computed<TaskRow[]>(() => {
 
 const anyRunning = computed(() => tasks.value.some((t) => t.running));
 
-// ---- 规模治理（用户拍板 2026-08-17）：胶囊面板是轻量索引，不做全量浏览 ----
-// 任务截断：running 全显（排序已置顶），非 running 最多 6 条，超出收计数行；
-// 全量浏览将来归 MA-2 项目台账（出口先不空头挂链接）。
-const MAX_DONE_TASK_ROWS = 6;
+// ---- 规模治理（用户拍板 2026-08-17）：平铺优先，空间不够才降级 ----
+// 计划列全量平铺 + 列内滚动；任务列按高度预算截断——预算内全显，超出才收
+// 「还有 N 个」计数行（budgetDoneRows 纯函数，见 taskBudget.ts）。
+// 预算 = 开面板时实测列身高 ÷ 实测行高；测不到（布局不可得）时保持全显平铺。
+const taskBodyRef = ref<HTMLElement | null>(null);
+const rowBudget = ref<number | null>(null);
+const ROW_H_FALLBACK = 32;
+
+function measureBudget() {
+  const body = taskBodyRef.value;
+  if (!body) return;
+  const h = body.clientHeight;
+  if (h <= 0) return; // 布局不可得（测试环境/未分配）→ 平铺兜底
+  const first = body.querySelector<HTMLElement>(".task-row");
+  const rowH = first ? first.offsetHeight : ROW_H_FALLBACK;
+  if (rowH <= 0) return;
+  rowBudget.value = Math.max(1, Math.floor(h / rowH));
+}
+
 const visibleTasks = computed<TaskRow[]>(() => {
+  if (rowBudget.value === null) return tasks.value;
   const running = tasks.value.filter((t) => t.running);
-  const rest = tasks.value.filter((t) => !t.running).slice(0, MAX_DONE_TASK_ROWS);
-  return [...running, ...rest];
+  const rest = tasks.value.filter((t) => !t.running);
+  const doneVisible = budgetDoneRows(rowBudget.value, running.length, rest.length);
+  return [...running, ...rest.slice(0, doneVisible)];
 });
 const hiddenTaskCount = computed(() => tasks.value.length - visibleTasks.value.length);
 
 // ---- 计划段（C5）：get_session_plan 快照；null = 无计划/已清空 → 列隐藏 ----
 const plan = ref<PlanSnapshot | null>(null);
 const planDone = computed(() => plan.value?.items.filter((i) => i.status === "done").length ?? 0);
+// 规模治理拍板：计划全量平铺（含 done 划线），不折叠——高度预算不足由列内滚动承接
 
-// 计划 done 折叠（规模治理，协议上限 30 条且推进后期 done 常占大头）：活跃条目
-// 原序展开（agent 的意图顺序不打乱），done 收「已完成 N」折叠行。行绑定携带
-// 原下标 i —— flash 键（plan-{i}）与折叠重排解耦。
-const planDoneExpanded = ref(false);
-const activePlanItems = computed(() =>
-  (plan.value?.items ?? []).map((it, i) => ({ it, i })).filter(({ it }) => it.status !== "done"),
-);
-const donePlanItems = computed(() =>
-  (plan.value?.items ?? []).map((it, i) => ({ it, i })).filter(({ it }) => it.status === "done"),
-);
 const planPct = computed(() => {
   const total = plan.value?.items.length ?? 0;
   return total > 0 ? Math.round((planDone.value / total) * 100) : 0;
@@ -185,14 +196,35 @@ watch(open, (v) => {
 });
 onBeforeUnmount(() => document.removeEventListener("click", onDocClick));
 
-// 切会话：收起 + 计划随数据源切换重载（任务 computed 自更新）+ done 折叠态复位
+// 切会话：收起 + 计划随数据源切换重载（任务 computed 自更新）
 watch(() => chat.activeConvId, () => {
   open.value = false;
-  planDoneExpanded.value = false;
   void loadPlan();
 }, { immediate: true });
-// 开面板时重拉（关闭期间可能有过更新——事件只在面板所在会话活跃时被消费）
-watch(open, (v) => { if (v) void loadPlan(); });
+// 开面板：重拉计划（关闭期间可能有过更新）+ nextTick 后测量高度预算
+// （popover 的 max-height 经 flex 链分配到列身，此刻布局已定）
+watch(open, (v) => {
+  if (v) {
+    void loadPlan();
+    void nextTick(measureBudget);
+  }
+});
+
+// 窗口尺寸变化：重算预算（弹窗开着时列身高会变）；节流 200ms
+let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+function onResize() {
+  if (resizeTimer) clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(measureBudget, 200);
+}
+onMounted(() => window.addEventListener("resize", onResize));
+onBeforeUnmount(() => {
+  window.removeEventListener("resize", onResize);
+  if (resizeTimer) clearTimeout(resizeTimer);
+});
+
+// 面板开着时任务增删：行数变了预算要重算（列身高由弹窗 58vh 决定，测量稳定，
+// 不会自激——预算只改可见行数，不改列身高）
+watch(() => tasks.value.length, () => { if (open.value) void nextTick(measureBudget); });
 
 // live：本会话有新 plan_updated 即刷新（附录：通知在落库后发出，到达时必可查）
 let unlistenAppended: (() => void) | null = null;
@@ -239,7 +271,7 @@ function openTask(id: string) {
               <span>任务</span>
               <span class="col-count">{{ tasks.length }}</span>
             </div>
-            <div class="col-body">
+            <div ref="taskBodyRef" class="col-body">
               <TransitionGroup name="task-fade" tag="div" class="col-body-inner">
                 <button
                   v-for="t in visibleTasks"
@@ -268,29 +300,11 @@ function openTask(id: string) {
               </span>
             </div>
             <div class="col-body">
-              <!-- 活跃条目（pending/in_progress）原序展开；done 收折叠行（规模治理） -->
+              <!-- 全量平铺（含 done 划线，用户拍板 2026-08-17）：溢出由列内滚动承接 -->
               <div
-                v-for="{ it, i } in activePlanItems"
+                v-for="(it, i) in plan.items"
                 :key="i"
                 :class="['task-plan-row', it.task_conversation_id ? 'task-plan-link' : '', { 'just-changed': flashKeys.has(`plan-${i}`) }]"
-                :title="it.task_conversation_id ? '此步骤挂有委派任务，点击打开' : it.text"
-                @click="it.task_conversation_id && openTask(it.task_conversation_id)"
-              >
-                <span :class="['plan-mark', `plan-mark-${it.status}`]" />
-                <span class="task-row-title">{{ it.text }}</span>
-                <span v-if="it.task_conversation_id" class="plan-jump" title="打开对应任务">↗</span>
-              </div>
-              <button v-if="donePlanItems.length > 0" class="plan-done-toggle" @click="planDoneExpanded = !planDoneExpanded">
-                <span class="plan-mark plan-mark-done" />
-                <span class="plan-done-label">已完成 {{ donePlanItems.length }}</span>
-                <span class="plan-done-caret" :class="{ expanded: planDoneExpanded }">{{ planDoneExpanded ? "收起" : "展开" }}</span>
-              </button>
-              <!-- done 展开区：行内容与活跃区同构（改动需两处同步） -->
-              <div
-                v-for="{ it, i } in donePlanItems"
-                v-show="planDoneExpanded"
-                :key="`done-${i}`"
-                :class="['task-plan-row', 'task-plan-done', it.task_conversation_id ? 'task-plan-link' : '', { 'just-changed': flashKeys.has(`plan-${i}`) }]"
                 :title="it.task_conversation_id ? '此步骤挂有委派任务，点击打开' : it.text"
                 @click="it.task_conversation_id && openTask(it.task_conversation_id)"
               >
@@ -326,22 +340,31 @@ function openTask(id: string) {
 .task-pill-label { font-weight: var(--ip-font-weight-medium); }
 @keyframes task-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
-/* popover：胶囊正下展开；双栏 + 列内滚动（P12 溢出治理——多任务/多计划
-   不再撑出页面，各列独立 max-height 内滚；窄窗 wrap 堆叠回纵向）。
+/* popover：胶囊正下展开；高度治理（用户拍板 2026-08-17）——max-height 58vh
+   挂应用窗口（底部恒留 42%+），flex 链把高度预算分到列身：并排时两列
+   col-body 各自 flex:1 + min-height:0 独立滚动；窄窗 wrap 堆叠时 columns
+   容器自身滚动（整体一个滚动条，优雅降级）。
    ⚠️ 显式定宽（不用 min/max-width 内容自适应）：容器宽由内容决定时，
    flex-basis:0 的两列实际宽度受 min-width 钳制，内容不够宽就会被 wrap
    挤成上下堆叠（用户手测踩过：220→260 后并排阈值 526 超过内容宽）。
-   定宽后双栏恒并排：有计划 = 720 两列各 ~357，无计划 = 420 单列不空 */
+   定宽后双栏恒并排：有计划 = 880 两列各 ~431，无计划 = 420 单列不空。
+   宽度上限按胶囊右缘实际位（右移对齐气泡右缘后距视口右 86px）扣回：
+   --msg-col-right(80) + 滚动条槽 6 + 左安全距 24（令牌来自 ChatPage）。 */
 .task-popover {
   position: absolute; top: calc(100% + 6px); right: 0; z-index: 100;
-  width: min(420px, calc(100vw - 48px)); padding: 6px;
+  width: min(420px, calc(100vw - var(--msg-col-right, 80px) - 30px));
+  max-height: 58vh; padding: 6px;
+  display: flex; flex-direction: column;
   background: var(--ip-color-bg-elevated);
   border: 1px solid var(--ip-color-border-default);
   border-radius: var(--ip-radius-lg);
   box-shadow: var(--ip-shadow-lg);
 }
-.task-popover.has-plan { width: min(720px, calc(100vw - 48px)); }
-.task-columns { display: flex; flex-wrap: wrap; gap: 6px; }
+.task-popover.has-plan { width: min(880px, calc(100vw - var(--msg-col-right, 80px) - 30px)); }
+.task-columns {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  flex: 1 1 auto; min-height: 0; overflow-y: auto; /* 窄窗堆叠态的整体滚动 */
+}
 .task-col { flex: 1 1 0; min-width: 260px; display: flex; flex-direction: column; gap: 2px; }
 .col-head {
   display: flex; align-items: center; gap: 8px;
@@ -349,8 +372,10 @@ function openTask(id: string) {
   padding: 4px 10px 6px;
 }
 .col-count { font-weight: var(--ip-font-weight-medium); color: var(--ip-color-text-secondary); }
+/* 列身：高度由弹窗 58vh 经 flex 链分配（内容短=自适应高，超出=列内滚动）；
+   任务列的可见行预算即按此实测身高计算（measureBudget） */
 .col-body {
-  max-height: min(320px, 48vh); overflow-y: auto;
+  flex: 1; min-height: 0; overflow-y: auto;
   display: flex; flex-direction: column; gap: 2px; padding-right: 2px;
 }
 .col-body-inner { display: flex; flex-direction: column; gap: 2px; }
@@ -390,18 +415,8 @@ function openTask(id: string) {
 .task-plan-link { cursor: pointer; }
 .task-plan-link:hover { background: var(--ip-color-bg-tertiary); }
 
-/* done 折叠行（规模治理）：历史噪音的收纳口，caption 级弱化呈现 */
-.plan-done-toggle {
-  display: flex; align-items: center; gap: 8px; width: 100%;
-  padding: 6px 10px; border: none; border-radius: var(--ip-radius-md);
-  background: transparent; cursor: pointer; text-align: left;
-  font-family: inherit; font-size: var(--ip-text-caption-size);
-  color: var(--ip-color-text-tertiary);
-  transition: background-color var(--ip-duration-fast) var(--ip-ease-out);
-}
-.plan-done-toggle:hover { background: var(--ip-color-bg-tertiary); }
-.plan-done-caret { margin-left: auto; color: var(--ip-color-text-disabled); }
-.plan-done-caret.expanded { color: var(--ip-color-text-tertiary); }
+/* done 折叠行样式已删（2026-08-17 二轮规模治理）：计划全量平铺，done 行
+   由 .plan-mark-done 划线区分（见下行规则），溢出走列内滚动 */
 .plan-mark {
   width: 8px; height: 8px; flex-shrink: 0; border-radius: 50%;
   border: 1.5px solid var(--ip-color-text-tertiary);

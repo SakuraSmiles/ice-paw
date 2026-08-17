@@ -174,7 +174,7 @@ describe("TaskPanel 委派时序（手测 bug 复现）", () => {
   });
 });
 
-describe("TaskPanel 规模治理（任务截断 / 计划 done 折叠）", () => {
+describe("TaskPanel 规模治理（高度预算截断 / 计划全量平铺）", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     mockInvoke.mockReset();
@@ -184,7 +184,46 @@ describe("TaskPanel 规模治理（任务截断 / 计划 done 折叠）", () => 
     document.body.innerHTML = "";
   });
 
-  it("任务 10 个（全非 running）：非 running 最多 6 行 + 「还有 4 个任务」计数行", async () => {
+  /** 种入 n 个已结束委派任务并等胶囊出现（不自动展开——非 running 不触发） */
+  async function seedDoneTasks(handlers: Map<string, (event: { payload: unknown }) => void>, n: number) {
+    mockInvoke.mockResolvedValue([
+      ...Array.from({ length: n }, (_, i) =>
+        conv(`child-${i}`, { kind: "delegation", parent_conversation_id: PARENT })),
+      conv(PARENT),
+    ]);
+    handlers.get("chat:delegation-started")!({ payload: {} });
+    await flushAsync();
+  }
+
+  it("高度预算 7 行：10 个已结束任务显示 6 行 + 「还有 4 个任务」（一行让位计数行）", async () => {
+    // jsdom 无布局（clientHeight 恒 0）→ prototype getter 桩驱动：列身 224px、
+    // 行高 32px → 预算 7；10 个非 running → 显示 7-1=6 行（budgetDoneRows 语义）
+    const bodySpy = vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(224);
+    const rowSpy = vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(32);
+    try {
+      const handlers = captureHandlers();
+      const chat = useChatStore();
+      await useChatEvents();
+
+      chat.conversations = [conv(PARENT)];
+      chat.selectConversation(PARENT);
+      const wrapper = mountPanel();
+      await seedDoneTasks(handlers, 10);
+
+      await wrapper.find(".task-pill").trigger("click");
+      await flushAsync();
+      await flushAsync(); // nextTick(measureBudget) → rowBudget → 重渲染
+      expect(wrapper.findAll(".task-row")).toHaveLength(6);
+      expect(wrapper.find(".task-more").text()).toBe("还有 4 个任务");
+      // 胶囊计数仍是全量 10
+      expect(wrapper.find(".task-pill-label").text()).toBe("任务 10");
+    } finally {
+      bodySpy.mockRestore();
+      rowSpy.mockRestore();
+    }
+  });
+
+  it("布局不可得（jsdom 零高度）：平铺兜底全显、无计数行", async () => {
     const handlers = captureHandlers();
     const chat = useChatStore();
     await useChatEvents();
@@ -192,25 +231,15 @@ describe("TaskPanel 规模治理（任务截断 / 计划 done 折叠）", () => 
     chat.conversations = [conv(PARENT)];
     chat.selectConversation(PARENT);
     const wrapper = mountPanel();
-
-    // 10 个已结束的委派任务
-    mockInvoke.mockResolvedValue([
-      ...Array.from({ length: 10 }, (_, i) =>
-        conv(`child-${i}`, { kind: "delegation", parent_conversation_id: PARENT })),
-      conv(PARENT),
-    ]);
-    handlers.get("chat:delegation-started")!({ payload: {} });
-    await flushAsync();
+    await seedDoneTasks(handlers, 10);
 
     await wrapper.find(".task-pill").trigger("click");
     await flushAsync();
-    expect(wrapper.findAll(".task-row")).toHaveLength(6);
-    expect(wrapper.find(".task-more").text()).toBe("还有 4 个任务");
-    // 胶囊计数仍是全量 10
-    expect(wrapper.find(".task-pill-label").text()).toBe("任务 10");
+    expect(wrapper.findAll(".task-row")).toHaveLength(10);
+    expect(wrapper.find(".task-more").exists()).toBe(false);
   });
 
-  it("计划 2 活跃 + 5 done：活跃展开、done 收「已完成 5」，点击展开/收起", async () => {
+  it("计划 2 活跃 + 5 done：全量平铺 7 行（done 划线区分），无折叠行", async () => {
     const handlers = captureHandlers();
     const chat = useChatStore();
     await useChatEvents();
@@ -239,23 +268,14 @@ describe("TaskPanel 规模治理（任务截断 / 计划 done 折叠）", () => 
     await wrapper.find(".task-pill").trigger("click");
     await flushAsync();
 
-    // 活跃 2 行展开；done 收进折叠行
+    // 全量平铺：活跃与 done 同列原序，不再有折叠行
     const rows = wrapper.findAll(".task-plan-row");
-    expect(rows).toHaveLength(7); // v-show 常驻 DOM，断言可见性
-    const visibleTexts = rows.filter((r) => r.isVisible()).map((r) => r.text());
-    expect(visibleTexts).toContain("步骤三");
-    expect(visibleTexts).toContain("步骤五");
-    expect(visibleTexts.filter((t) => t.includes("步骤一"))).toHaveLength(0); // done 藏起
-    expect(wrapper.find(".plan-done-toggle").text()).toContain("已完成 5");
-
-    // 展开：done 7 行全部可见
-    await wrapper.find(".plan-done-toggle").trigger("click");
-    await flushAsync();
-    expect(wrapper.findAll(".task-plan-row").filter((r) => r.isVisible())).toHaveLength(7 + 0); // 2 活跃 + 5 done（toggle 行非 plan-row）
-
-    // 收起回折叠
-    await wrapper.find(".plan-done-toggle").trigger("click");
-    await flushAsync();
-    expect(wrapper.findAll(".task-plan-row").filter((r) => r.isVisible())).toHaveLength(2);
+    expect(rows).toHaveLength(7);
+    const texts = rows.map((r) => r.text());
+    expect(texts.some((t) => t.includes("步骤一"))).toBe(true);
+    expect(texts.some((t) => t.includes("步骤三"))).toBe(true);
+    expect(texts.some((t) => t.includes("步骤七"))).toBe(true);
+    expect(wrapper.find(".plan-done-toggle").exists()).toBe(false);
+    expect(wrapper.find(".task-pill-label").text()).toBe("计划 5/7");
   });
 });
