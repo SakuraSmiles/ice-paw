@@ -92,6 +92,18 @@ pub async fn get_all(pool: &SqlitePool) -> AppResult<UserPreferences> {
     Ok(prefs)
 }
 
+/// 原始读取单个 key。
+///
+/// 不走 [`get_all`] 的 KNOWN_KEYS 过滤与 struct 反序列化——内部标记类键
+/// （如 backfill 版本号）不属于用户偏好 struct，但共用同一张表。
+pub async fn get(pool: &SqlitePool, key: &str) -> AppResult<Option<String>> {
+    let row: Option<(String,)> = sqlx::query_as("SELECT value FROM user_preferences WHERE key = ?")
+        .bind(key)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.map(|(v,)| v))
+}
+
 /// UPSERT 单个偏好项
 pub async fn set(pool: &SqlitePool, key: &str, value: &str) -> AppResult<()> {
     sqlx::query(
