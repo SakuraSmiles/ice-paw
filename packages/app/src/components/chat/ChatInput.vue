@@ -343,6 +343,23 @@ function removeRef(index: number) {
   chat.pendingRefs.splice(index, 1);
 }
 
+/** @ 按钮：光标处插入 @ 并触发弹层（与手输 @ 同效果，提升可发现性）。
+ *  光标前非空白且非起点时补一个空格，保证触发条件（@ 前行首/空白）成立。*/
+async function insertAtTrigger() {
+  const el = textareaRef.value;
+  if (!el || chat.sending) return;
+  const pos = el.selectionStart ?? el.value.length;
+  const prev = el.value.slice(0, pos);
+  const insert = pos > 0 && !/\s/.test(prev[prev.length - 1]) ? " @" : "@";
+  input.value = prev + insert + el.value.slice(pos);
+  await nextTick(); // v-model 同步到 DOM 后再定位光标
+  const newPos = pos + insert.length;
+  el.focus();
+  el.setSelectionRange(newPos, newPos);
+  autoResize();
+  detectAtTrigger(); // 程序化改值不触发 @input，手动检测
+}
+
 // ===== 发送 =====
 function send() {
   const text = input.value.trim();
@@ -451,7 +468,7 @@ function handleKeydown(e: KeyboardEvent) {
             ref="textareaRef"
             v-model="input"
             class="chat-textarea"
-            placeholder="输入消息…（@ 引用 · 拖拽/粘贴附件）"
+            placeholder="输入消息…（可拖拽/粘贴附件）"
             rows="1"
             :disabled="chat.sending"
             @keydown="handleKeydown"
@@ -474,10 +491,13 @@ function handleKeydown(e: KeyboardEvent) {
           <button class="btn-img" :disabled="chat.sending" title="添加附件（图片 / docx / xlsx / xls / pdf）" @click="pickAttachments">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" /></svg>
           </button>
+          <button class="btn-img btn-at" :disabled="chat.sending" title="引用（@ 会话 / Agent / 消息）" @click="insertAtTrigger">
+            <span class="at-glyph">@</span>
+          </button>
         </div>
       </div>
       <p v-if="attachWarn" class="attach-warn">{{ attachWarn }}</p>
-      <p class="input-hint">{{ chat.sending ? "正在生成…" : "@ 引用会话/Agent/消息 · Enter 发送 · Shift+Enter 换行" }}</p>
+      <p class="input-hint">{{ chat.sending ? "正在生成…" : "Enter 发送 · Shift+Enter 换行" }}</p>
     </div>
   </div>
 </template>
@@ -523,6 +543,8 @@ function handleKeydown(e: KeyboardEvent) {
 .btn-img { display:flex; align-items:center; justify-content:center; width:24px; height:24px; border-radius:var(--ip-radius-md); border:none; background:transparent; color:var(--ip-color-text-tertiary); cursor:pointer; transition:all var(--ip-duration-fast) var(--ip-ease-out); }
 .btn-img:hover { background-color:var(--ip-color-bg-tertiary); color:var(--ip-primary-600); }
 .btn-img:disabled { opacity:0.35; cursor:not-allowed; }
+/* @ 引用按钮：字符图标（加粗微调基线，视觉与 16px 线性图标等重） */
+.btn-at .at-glyph { font-size:14px; font-weight:700; line-height:1; }
 
 .chat-textarea { flex:1; border:none; outline:none; background:transparent; resize:none; font-size:var(--ip-text-body-size); line-height:1.5; color:var(--ip-color-text-primary); max-height:200px; min-height:22px; padding:4px 0 0; overflow-y:auto; }
 .chat-textarea::placeholder { color:var(--ip-color-text-placeholder); }

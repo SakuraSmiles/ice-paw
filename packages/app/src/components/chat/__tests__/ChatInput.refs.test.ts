@@ -132,4 +132,24 @@ describe("ChatInput @ 引用", () => {
     await wrapper.find("textarea").trigger("keydown", { key: "Enter" });
     expect((wrapper.find(".btn-send").element as HTMLButtonElement).disabled).toBe(false);
   });
+
+  it("@ 按钮点击 = 光标处插入 @ 并触发弹层；光标前有文本时补空格", async () => {
+    const chat = useChatStore();
+    chat.conversations = [conv("c2", "设计讨论")];
+    const wrapper = mount(ChatInput);
+
+    // 空输入框：直接插 @
+    await wrapper.find(".btn-at").trigger("click");
+    await Promise.resolve();
+    expect((wrapper.find("textarea").element as HTMLTextAreaElement).value).toBe("@");
+    expect(wrapper.find(".at-popover").exists()).toBe(true);
+    await wrapper.find("textarea").trigger("keydown", { key: "Escape" });
+
+    // 光标前有文本：补空格再插 @（保证触发条件）
+    const ta = wrapper.find("textarea").element as HTMLTextAreaElement;
+    ta.setSelectionRange(0, 0); // 光标移到行首 → 前无字符，不补空格
+    await wrapper.find(".btn-at").trigger("click");
+    await Promise.resolve();
+    expect(ta.value).toBe("@@");
+  });
 });
