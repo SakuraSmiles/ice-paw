@@ -4,7 +4,32 @@
 
 ## [Unreleased]
 
-> 从 0.2.7 到当前 0.3.5 的主要功能调整（合并概括，未逐小版本拆分）。
+## [0.3.6] — 2026-08-17
+
+> 从 0.3.5 以来的主要调整：UX 细节轮收官、模型配置重设计、token 预算全分层修复、S 批次结构减法、旧会话事件 backfill。
+
+### Added
+- **模型配置重设计（Provider 注册表单一真相源）**：后端 `PROVIDERS` 9 条目录元数据供前后端共用 + `list_providers` / `test_provider_connection` 命令（测试连接与拉取模型合一，一次往返两用）；前端模型选择改 GroupedSelect 分组下拉（Provider 品牌图标、组头不可选）→ combobox 可选可输（手输目录外名字落自定义）；预设厂商 URL 锁定只读，智谱双端点 `alt_urls` 自动匹配固化；空 Key 按 provider 目录判定放宽（Ollama 本机无需 Key）。
+- **UX 细节优化清单 12 项 + 修复轮**：审批重做——按注意力路由（输入区上方/消息流内分层）+ 分层授权记忆；可调面板宽度 + 记忆 + 规范化管理；轮次导航条 v2（定容滑动窗口，N/M 徽标跨位不漂移）+ 任务胶囊深化；全局过渡动画统一「淡入+微升」+ `prefers-reduced-motion` 兜底；委派标题去前缀 + agent 名徽标；项目快速新建；头部操作外置。
+- **token 预算全分层修复**：摘要自适应额度 4096→16384（连续空结果翻倍、成功回落、3 连空触发熔断）；预算可观测——`chat:budget` 事件 + 预算 pill HUD（≥80% warn 态）+ 续期 toast，终止文案带数字与指引；agent.yaml 定向改写命令（`get_agent_yaml_fields` / `set_agent_yaml_field`，白名单键 + 写前重解析校验 + 原子写）。
+- **旧会话事件 backfill（session-event-log Phase 2B 前置）**：boot 幂等扫尾——给零事件旧会话反向合成 `session_events`（reconcile 的逆函数：同 parser / 同空回退 / 同容忍清单 → 构造性零 diff → read_route 自动路由 Derive）；`turn_context` 不合成（旧行无 provider/model 快照，不伪造）；actor=`backfill` 行是派生数据可重跑，termination=`backfill` 诚实标注，created_at 直传行时间戳；版本化重跑自愈（BACKFILL_VERSION 落 preferences，代码>库内 → 纯 backfill 会话删旧重写）+ 冻结规则（混入真实事件后永不可重写）。
+- **send_message 全链路 e2e（S5）**：`session_runner_e2e` 六场景（正常 / 空响应 / 限流退避中取消 / 显式预算触顶 / 流中取消占位 discard / 工具轮配对），MockProvider `ToolCallThenText` 驱动，断言消息行 + 事件序 + UI 瞬态事件 + TurnSummary 四层。
+
+### Changed
+- **S 批次结构减法（测试数不降硬约束）**：S2 `protocol.rs` 1161 行拆 `protocol/` 目录（llm / input / events，全库导入零改）；S3 chat_cmd 附件机器整体迁 `harness/attachments.rs`（695→~290 行回归编排门面）；S4 LoopConfig 数据袋（auth 运行时件挪 LoopContext、`StreamLoopInput` 成袋删超长签名）；S6 主循环链去 AppHandle 硬依赖——`LoopEmitter` trait + 七模块换装（瞬态 UI 进度与可回放事实两通道分明）；S7 `tool_trim_threshold` 废弃字段全链摘除（schema/repo/命令/前端，serde 容忍旧 yaml）。
+- **摘要链路治理**：stream_summary 走默认方法 + GLM 摘要请求注入 `thinking:disabled` + 连续空结果熔断（3 次 10min）；MemoryStage Err 降级不阻塞回合。
+
+### Fixed
+- **GLM thinking 烧光摘要额度 → 空摘要 → 历史永不折叠 → 每轮全量重发触顶**：三重治理 + 摘要锚点 SQL 排空占位行 + IO 视位修复；轮次导航条双修（视位冻结）。
+- **崩溃后 turn 永远「进行中」死数据**：boot 补记未闭合 turn 的 `turn_ended(interrupted)`（幂等扫尾，历史脏数据自动治好）。
+- **父会话委派卡泄漏进子会话**（跨会话流式态复位收敛单一入口）、删除复活竞态、审批卡宽度对齐输入框。
+- **workspace 路径判定**：`infra/path_norm` 共享归一判定；前端 DB 时间解析归一 `parseDbTime` + 侧栏后台刷新骨架屏闪现。
+- **模型拉取 401 撞脸**：无 Key 短路引导 + 错误翻译 + 存量 Key 不跨 provider 混用。
+- CI Linux 编译：首启窗口尺寸的 `hwnd()` 调用补 `cfg` 门。
+
+## [0.3.5] — 2026-08-15
+
+> 从 0.2.7 到 0.3.5 的主要功能调整（合并概括，未逐小版本拆分）。
 
 ### Added
 - **会话事件日志与轨迹视图**：基于 migration 44 `session_events` 表的 append-only 事件日志基石，统一 session / 多 agent 图协作 / 轨迹可还原。词表 13 kind + typed emitters，事件 inline `.await` 禁 spawn，turn_ended 必须先于 cleanup() unregister 落库；supersede 机制让同一 `message_id` 的多次 assistant_message 自动续写，回放 last-wins；导出命令 `export_session_trajectory` → JSONL。

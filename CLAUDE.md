@@ -2,7 +2,7 @@
 
 ## 项目概述
 IcePaw — 本地优先的 LLM 对话工作站。Tauri v2 (Rust) + Vue 3 (TypeScript) 桌面应用。
-当前版本：`0.3.5`。
+当前版本：`0.3.6`。
 
 ## 设计规则（用户拍板，勿翻案）
 
@@ -120,8 +120,8 @@ agent 调用 `propose_config_change` 工具提出创建/修改 agent 提案 → 
 - Phase 2B 本体/远期：legacy 拼装退役（前置已全清，待 backfill 真机验收）；summary `covered_until_rowid`→seq；Image base64 双份存储治理
 
 ## 当前状态（2026-08-17）
-- 版本 **0.3.5 已发布**。main 领先 origin（S 批次 + backfill，用户未要求不推）
+- 版本 **0.3.6 已发布**（= 0.3.5 + UX 细节轮 + 模型配置重设计 + token 预算全分层修复 + S 批次结构减法 + backfill），main 与 origin 推平
 - 分支：仅 `main`
-- 近期递进：0.3.5 发版 → S 批次结构减法（S2-S7 全清）→ S5 send_message e2e + S6 LoopEmitter → **Phase 2B 前置 backfill 落地（00e9cb1 repo 原语 / 1def468 合成+接线 / 6eed139 版本化重跑+冻结）**
+- 近期递进：0.3.5 发版 → UX 细节轮 + 模型配置重设计 → 摘要链路三重治理 → S 批次结构减法（S2-S7 全清）→ **Phase 2B 前置 backfill 落地（00e9cb1 repo 原语 / 1def468 合成+接线 / 6eed139 版本化重跑+冻结）→ 0.3.6 发版**
 - `cargo test --lib` 848 passed / 0 failed（+ 集成测试：session_runner_e2e 6、session_reconcile_e2e 6、session_event_log_e2e 3、memory_e2e 3、message_repo 5、provider 11）；clippy --tests -D warnings 0 警告
 - 仍待办：**backfill 真机验收**（boot 日志 `[ice_paw.backfill]` 行 + 旧会话 `get_read_route_status` 变 Derive + reconcile 抽查零 diff）、0.3.5 发版手测（0.3.3 三重点 + Phase 2A 手测）、视觉适配/KB watcher/自动续写生产手测、proposal Phase 2（MCP 域）、S1 Phase 2B legacy 退役本体（前置全清待验收后动工）、S8 无限续写（待拍板）
