@@ -121,10 +121,12 @@ function confirmCreate() {
     </template>
   </div>
 
-  <!-- 切换菜单（向下弹出，锚 .project-capsule） -->
-  <div v-if="isOpen" class="switcher-overlay" @click="isOpen = false" />
-  <Transition name="switcher-pop">
-    <nav v-if="isOpen" class="switcher-menu">
+  <!-- 切换菜单（向下弹出，锚 .project-capsule）。
+       开合用 class 驱动（open）+ CSS transition，不走 <Transition>+v-if 插拔：
+       真机复现过 Transition 包裹的 nav 在首开时不挂载（详见 commit 说明），
+       class 方案更新面最小（一条 class patch），enter/leave 动画照常由 CSS 过渡 -->
+  <div class="switcher-overlay" :class="{ open: isOpen }" @click="isOpen = false" />
+  <nav class="switcher-menu" :class="{ open: isOpen }" :aria-hidden="!isOpen || undefined">
       <div class="switcher-list">
         <button class="switcher-item" :class="{ active: !isScoped }" @click="onSelect(null)">
           <span class="item-mark"><span class="item-dot muted" /></span>
@@ -151,7 +153,6 @@ function confirmCreate() {
         </template>
       </div>
     </nav>
-  </Transition>
 </template>
 
 <style scoped>
@@ -288,11 +289,22 @@ function confirmCreate() {
 .create-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .create-btn:disabled:hover { background: none; color: var(--ip-color-text-tertiary); }
 
-/* ===== 切换菜单（向下弹出，锚 .project-capsule） ===== */
+/* ===== 切换菜单（向下弹出，锚 .project-capsule）。
+   开合 = .open class 切换 visibility/opacity/transform（常驻 DOM，不插拔）：
+   overlay 关态必须完全不可交互，菜单关态藏出无障碍树 ===== */
 .switcher-overlay {
   position: fixed;
   inset: 0;
   z-index: 50;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity var(--ip-duration-fast) var(--ip-ease-out);
+}
+.switcher-overlay.open {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
 }
 
 .switcher-menu {
@@ -308,6 +320,21 @@ function confirmCreate() {
   box-shadow: var(--ip-shadow-lg);
   max-height: min(320px, 48vh);
   overflow-y: auto;
+  /* 关态：藏出视口 + 无障碍树 + 不可交互（与 .open 间 CSS 过渡） */
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(-6px) scaleY(0.96);
+  transform-origin: top left;
+  transition: opacity var(--ip-duration-fast) var(--ip-ease-out),
+    transform var(--ip-duration-fast) var(--ip-ease-out),
+    visibility var(--ip-duration-fast);
+}
+.switcher-menu.open {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: none;
 }
 
 .switcher-item {
@@ -365,18 +392,5 @@ function confirmCreate() {
   height: 1px;
   background-color: var(--ip-color-border-default);
   margin: 4px 2px;
-}
-
-/* 弹出动画（从上方缩放进入） */
-.switcher-pop-enter-active,
-.switcher-pop-leave-active {
-  transition: opacity var(--ip-duration-fast) var(--ip-ease-out),
-    transform var(--ip-duration-fast) var(--ip-ease-out);
-  transform-origin: top left;
-}
-.switcher-pop-enter-from,
-.switcher-pop-leave-to {
-  opacity: 0;
-  transform: translateY(-6px) scaleY(0.96);
 }
 </style>
