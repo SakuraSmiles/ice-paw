@@ -33,7 +33,7 @@ function resetForm() {
   editForm.workspacePath = p?.workspace_path ?? "";
   editError.value = "";
 }
-// keep-alive 按 :key=项目id 重建实例，watch 兜底直链热替换等边缘
+// keep-alive 按 :key=route.path 重建实例（项目+tab 维度），watch 兜底直链热替换等边缘
 watch(projectId, resetForm, { immediate: true });
 
 const dirty = computed(
