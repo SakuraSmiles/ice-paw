@@ -1,5 +1,24 @@
 import { describe, it, expect } from "vitest";
-import { formatTokenCount } from "../format";
+import { formatTokenCompact, formatTokenCount } from "../format";
+
+describe("formatTokenCompact", () => {
+  it("三档：原数 / K / M（图表语境，不走万进制）", () => {
+    expect(formatTokenCompact(0)).toBe("0");
+    expect(formatTokenCompact(42)).toBe("42");
+    expect(formatTokenCompact(999)).toBe("999");
+    expect(formatTokenCompact(1000)).toBe("1K");
+    expect(formatTokenCompact(2700)).toBe("2.7K");
+    expect(formatTokenCompact(11_700)).toBe("11.7K");
+    // 999999 → 999.999K 四舍五入进位 1000.0K（toFixed 语义，与万进制版同款边界）
+    expect(formatTokenCompact(999_999)).toBe("1000.0K");
+    expect(formatTokenCompact(1_000_000)).toBe("1M");
+    expect(formatTokenCompact(1_230_000)).toBe("1.2M");
+  });
+
+  it("非有限数原样返回字符串", () => {
+    expect(formatTokenCompact(Number.NaN)).toBe("NaN");
+  });
+});
 
 describe("formatTokenCount", () => {
   it("三档：原数 / K / 万", () => {

@@ -15,7 +15,7 @@ import { useAgentStore } from "../../stores/agent";
 import { useChatStore } from "../../stores/chat";
 import { useProjectStore } from "../../stores/project";
 import { taskStatus, TASK_STATUS_LABELS } from "../../utils/taskStatus";
-import { formatTokenCount } from "../../utils/format";
+import { formatTokenCompact } from "../../utils/format";
 import { timeAgo } from "../../utils/time";
 import type { ProjectOverview as OverviewData } from "../../types";
 
@@ -166,7 +166,7 @@ function sharePercent(r: ShareRow): string {
 }
 /** 行/弧段 hover title：名字 · 占比（token + 消息双口径） */
 function rowTitle(r: ShareRow): string {
-  const tok = hasTokens.value ? `${formatTokenCount(r.tokens)} tokens · ` : "";
+  const tok = hasTokens.value ? `${formatTokenCompact(r.tokens)} tokens · ` : "";
   return `${r.name} · ${sharePercent(r)}（${tok}${r.messages} 条）`;
 }
 
@@ -269,18 +269,17 @@ const donutSegs = computed(() => {
             </circle>
           </svg>
           <div class="donut-center">
-            <span class="donut-value">{{ formatTokenCount(tokensTotal) }}</span>
+            <span class="donut-value">{{ formatTokenCompact(tokensTotal) }}</span>
             <span class="donut-sub">≈ tokens</span>
           </div>
         </div>
+        <!-- 四列共享 grid（名字/模型 | 轨道条 | tokens | 消息数）——跨行天然
+             列对齐；行容器 display:contents 只留分组语义，title 挂 label 格
+             （contents 元素不渲染盒子，title 无效）。数字列显式 grid-column，
+             缺格不塌位（other 行无消息小字）。 -->
         <div class="share-rows">
-          <div
-            v-for="row in shareRows"
-            :key="row.key"
-            class="share-row"
-            :title="rowTitle(row)"
-          >
-            <div class="share-label">
+          <div v-for="row in shareRows" :key="row.key" class="share-row">
+            <div class="share-label" :title="rowTitle(row)">
               <i class="share-dot" :style="{ background: row.color }" />
               <span class="share-name">{{ row.name }}</span>
               <span v-if="row.model" class="share-model">{{ row.model }}</span>
@@ -288,10 +287,8 @@ const donutSegs = computed(() => {
             <div class="share-track">
               <span class="share-bar" :style="{ width: shareWidth(row), background: row.color }" />
             </div>
-            <span class="share-counts">
-              <span class="count-tokens">{{ hasTokens ? formatTokenCount(row.tokens) : row.messages }}</span>
-              <span v-if="hasTokens && !row.other" class="count-msgs">{{ row.messages }} 条</span>
-            </span>
+            <span class="count-tokens">{{ hasTokens ? formatTokenCompact(row.tokens) : row.messages }}</span>
+            <span v-if="hasTokens && !row.other" class="count-msgs">{{ row.messages }} 条</span>
           </div>
         </div>
       </div>
@@ -433,14 +430,19 @@ const donutSegs = computed(() => {
 }
 .donut-sub { font-size: 11px; color: var(--ip-color-text-tertiary); }
 
-.share-rows { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
-.share-row {
+/* 排行：四列共享 grid——所有行的 tokens/消息数字列天然右对齐同列，
+   行容器 display:contents 只留分组语义（跨行对齐的关键） */
+.share-rows {
+  flex: 1; min-width: 0;
   display: grid;
-  grid-template-columns: minmax(120px, 200px) 1fr auto;
-  gap: 12px;
+  grid-template-columns: minmax(120px, 200px) 1fr auto auto;
+  column-gap: 12px;
+  row-gap: 10px;
   align-items: center;
 }
+.share-row { display: contents; }
 .share-label {
+  grid-column: 1;
   display: flex; align-items: center; gap: 6px;
   min-width: 0;
 }
@@ -455,6 +457,7 @@ const donutSegs = computed(() => {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .share-track {
+  grid-column: 2;
   height: 6px;
   border-radius: var(--ip-radius-full);
   background-color: var(--ip-color-bg-tertiary);
@@ -465,19 +468,21 @@ const donutSegs = computed(() => {
   border-radius: inherit;
   transition: width var(--ip-duration-normal, 200ms) var(--ip-ease-out);
 }
-.share-counts {
-  display: flex; align-items: baseline; gap: 6px;
-  justify-self: end;
-}
 .count-tokens {
+  grid-column: 3;
+  justify-self: end;
   font-size: var(--ip-text-body-sm-size);
+  font-weight: var(--ip-font-weight-medium);
   color: var(--ip-color-text-secondary);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 .count-msgs {
+  grid-column: 4;
+  justify-self: end;
+  min-width: 3.5em;
   font-size: var(--ip-text-caption-size);
-  color: var(--ip-color-text-tertiary);
+  color: var(--ip-color-text-disabled);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
