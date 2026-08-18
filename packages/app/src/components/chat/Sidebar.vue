@@ -14,6 +14,10 @@ import ProjectSwitcher from "./ProjectSwitcher.vue";
 const router = useRouter();
 const project = useProjectStore();
 const isSettingsPage = computed(() => router.currentRoute.value.path.startsWith("/settings"));
+// 会话选中高亮 = 「内容区正在看该会话」——非会话内容页（项目/设置）不高亮，
+// 与底部设置按钮 isSettingsPage 同一语义。activeConvId 在 store 保留，
+// 回首页原会话原样（高亮只是视觉降调，不丢上下文）。
+const isChatRoute = computed(() => router.currentRoute.value.name === "Home");
 
 // 会话列表 scope 唯一真相源：当前选中的项目空间（null = 散落会话）。
 // 与路由解耦：在项目里点开会话去首页聊天时，侧栏仍保持该项目 scope，不会闪回散落。
@@ -264,7 +268,7 @@ function timeAgo(dateStr: string): string {
       <button
         v-for="conv in filteredConversations"
         :key="conv.id"
-        :class="['conv-item', { active: chat.activeConvId === conv.id, streaming: chat.streamingConvIds.has(conv.id) }]"
+        :class="['conv-item', { active: isChatRoute && chat.activeConvId === conv.id, streaming: chat.streamingConvIds.has(conv.id) }]"
         @click="selectConv(conv.id)"
       >
         <div class="conv-item-title">
