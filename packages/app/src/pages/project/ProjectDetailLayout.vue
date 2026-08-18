@@ -1,8 +1,10 @@
 <script setup lang="ts">
 // ProjectDetailLayout.vue — 项目详情页布局（MA-2）：头部（返回 + 项目名 +
 // 描述）+ tab 条（概览·任务台账 / 项目轨迹 / 设置）+ keep-alive 内容区。
-// 先例 SettingsLayout，差异：路由带 :id 参数——keep-alive 的 component 必须
-// `:key="route.params.id"`，否则 A/B 项目切换时复用同一组件实例（缓存串数据）。
+// 先例 SettingsLayout，差异：路由带 :id 参数。⚠️ keep-alive 的 component 必须
+// `:key="route.path"`：KeepAlive 以 vnode.key 为缓存键，若只按项目 id（三 tab
+// 同 key），切 tab 时缓存命中旧 tab 实例直接嫁接——URL 变了视图冻结（真机踩坑）。
+// route.path 同时含项目 id + tab，跨项目不串数据、tab 间各留缓存。
 // 进入详情页不改变侧栏 scope：「看项目」与「切空间工作」是两个动作。
 import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
@@ -99,7 +101,7 @@ const updatedLabel = computed(() => {
       </div>
       <router-view v-else v-slot="{ Component }">
         <keep-alive>
-          <component :is="Component" :key="String(route.params.id)" />
+          <component :is="Component" :key="route.path" />
         </keep-alive>
       </router-view>
     </div>
