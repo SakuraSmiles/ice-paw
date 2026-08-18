@@ -4,6 +4,7 @@ import { ref, computed, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { useProjectStore } from "../../stores/project";
 import { formatDate, parseDbTime } from "../../utils/time";
+import { loadLastSession, planRestore } from "../../utils/sessionRestore";
 import { useNewConversation } from "../../composables/useNewConversation";
 import { useTheme } from "../../composables/useTheme";
 import { useResizablePanel } from "../../composables/useResizablePanel";
@@ -114,20 +115,25 @@ onMounted(async () => {
   agent.load();
   await project.load();
   await chat.loadConversations();
-  // 打开软件时恢复上次会话：跳过归档/已删项目的会话（其 project 不在活跃列表），
-  // 选最近一条有效会话，并把项目空间同步到该会话所属项目。delegation 后台会话
-  // 不作为恢复目标（用户上次主动停留的位置不该是后台子会话）。
-  if (!chat.activeConvId && chat.conversations.length > 0) {
-    const activeIds = new Set(project.activeProjects.map((p) => p.id));
-    const valid = visibleConversations.value.filter(
-      (c) => !c.project_id || activeIds.has(c.project_id),
+  // 启动恢复（planRestore 决策纯函数，记忆由 App.vue watch 落盘）：优先恢复
+  // 「上次会话与所在页面」；持久化会话失效回退最近一条（原打开行为）；上次
+  // 明确欢迎态则保持欢迎态。delegation 后台会话不作为恢复目标（用户上次
+  // 主动停留的位置不该是后台子会话）。
+  if (!chat.activeConvId) {
+    const plan = planRestore(
+      loadLastSession(),
+      visibleConversations.value,
+      new Set(project.activeProjects.map((p) => p.id)),
     );
-    if (valid.length > 0) {
-      const latest = valid.reduce((a, b) =>
-        parseDbTime(b.updated_at) > parseDbTime(a.updated_at) ? b : a
-      );
-      project.setActiveProject(latest.project_id ?? null);
-      chat.selectConversation(latest.id);
+    project.setActiveProject(plan.projectId);
+    if (plan.convId) {
+      chat.selectConversation(plan.convId);
+    } else {
+      chat.clearActiveConversation();
+    }
+    // 非首页记忆（项目详情/设置等）需要主动跳转；首页已在此无需跳
+    if (plan.route && router.currentRoute.value.path === "/") {
+      router.push(plan.route);
     }
   }
 });
