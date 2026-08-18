@@ -34,8 +34,8 @@ const OVERVIEW_OUT = {
   tasks_total: 3, tasks_done: 1, tasks_failed: 1, tasks_ended_other: 0,
   last_activity_at: "2026-08-18 01:00:00",
   agent_shares: [
-    { agent_id: "a1", messages: 30 },
-    { agent_id: "a2", messages: 12 },
+    { agent_id: "a1", messages: 30, tokens: 9000 },
+    { agent_id: "a2", messages: 12, tokens: 2700 },
   ],
 };
 
@@ -112,26 +112,49 @@ describe("ProjectOverview 概览 tab（二轮重设计）", () => {
     expect(w.find(".view-all").exists()).toBe(false);
   });
 
-  it("成员分布：名字+模型+计数渲染，条宽按最大行归一", async () => {
+  it("成员负载：环图 + 排行行（名字/模型/token 主数字/消息小字），条按 token 归一", async () => {
     const w = await mountOverview();
+    // 环图：6 段弧（2 成员 + track），中心总量 9000+2700=11700 → 1.2万
+    expect(w.find(".donut").exists()).toBe(true);
+    const segs = w.findAll(".donut-seg");
+    expect(segs.length).toBe(2);
+    expect(w.find(".donut-value").text()).toBe("1.2万");
+    // 行：名字 + 模型 + token 主数字（9000→9K）+ 消息小字
     const rows = w.findAll(".share-row");
     expect(rows.length).toBe(2);
     expect(rows[0].text()).toContain("前端专家");
     expect(rows[0].text()).toContain("glm-5.2");
-    expect(rows[0].find(".share-count").text()).toBe("30");
-    // 榜首满宽 100%，次行 12/30 = 40%
+    expect(rows[0].find(".count-tokens").text()).toBe("9K");
+    expect(rows[0].find(".count-msgs").text()).toBe("30 条");
+    // 条宽按 token 归一：榜首 100%，次行 2700/9000 = 30%
     const bars = w.findAll(".share-bar");
     expect(bars[0].attributes("style")).toContain("width: 100%");
-    expect(bars[1].attributes("style")).toContain("width: 40%");
-    // title 带占比（30/42 = 71%）
-    expect(rows[0].attributes("title")).toContain("71%");
+    expect(bars[1].attributes("style")).toContain("width: 30%");
+    // title 带占比（9000/11700 = 77%）
+    expect(rows[0].attributes("title")).toContain("77%");
   });
 
-  it("成员分布 >5 截断为 Top5 + 「其他 N 位」聚合行", async () => {
+  it("token 全零（估算未回填）：环图隐藏，条回退消息口径", async () => {
+    mockBackend([], {
+      ...OVERVIEW_OUT,
+      agent_shares: [
+        { agent_id: "a1", messages: 30, tokens: 0 },
+        { agent_id: "a2", messages: 12, tokens: 0 },
+      ],
+    });
+    const w = await mountOverview();
+    expect(w.find(".donut").exists()).toBe(false);
+    const rows = w.findAll(".share-row");
+    expect(rows[0].find(".count-tokens").text()).toBe("30");
+    expect(rows[0].find(".count-msgs").exists()).toBe(false);
+    expect(w.findAll(".share-bar")[1].attributes("style")).toContain("width: 40%");
+  });
+
+  it("成员负载 >5 截断为 Top5 + 「其他 N 位」聚合行（消息与 token 双聚合）", async () => {
     mockBackend([], {
       ...OVERVIEW_OUT,
       agent_shares: Array.from({ length: 8 }, (_, i) => ({
-        agent_id: `a${i}`, messages: 10 - i,
+        agent_id: `a${i}`, messages: 10 - i, tokens: (10 - i) * 100,
       })),
     });
     const w = await mountOverview();
@@ -139,12 +162,13 @@ describe("ProjectOverview 概览 tab（二轮重设计）", () => {
     // Top5 + 其他 1 行
     expect(rows.length).toBe(6);
     expect(rows[5].text()).toContain("其他 3 位");
-    expect(rows[5].find(".share-bar").classes()).toContain("other");
-    // 聚合数 = 末三位 5+4+3
-    expect(rows[5].find(".share-count").text()).toBe("12");
+    // 聚合：消息 5+4+3=12，token 500+400+300=1200 → 1.2K
+    expect(rows[5].find(".count-tokens").text()).toBe("1.2K");
+    // 环图 6 段（含其他聚合段）
+    expect(w.findAll(".donut-seg").length).toBe(6);
   });
 
-  it("成员分布空态：无消息成员不出现", async () => {
+  it("成员负载空态：无消息成员不出现", async () => {
     mockBackend([], { ...OVERVIEW_OUT, agent_shares: [] });
     const w = await mountOverview();
     expect(w.find(".share-row").exists()).toBe(false);

@@ -352,6 +352,8 @@ pub struct ProjectOverviewOut {
 pub struct ProjectAgentShareOut {
     pub agent_id: String,
     pub messages: i64,
+    /// token 估算合计（messages.token_count SUM；展示层标 ≈）
+    pub tokens: i64,
 }
 
 #[tauri::command]
@@ -499,6 +501,7 @@ async fn get_project_overview_impl(
         .map(|r| ProjectAgentShareOut {
             agent_id: r.agent_id,
             messages: r.messages,
+            tokens: r.tokens,
         })
         .collect();
     Ok(ProjectOverviewOut {

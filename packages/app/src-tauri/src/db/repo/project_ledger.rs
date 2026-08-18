@@ -146,24 +146,28 @@ pub struct ProjectOverviewRow {
     pub last_activity_at: Option<String>,
 }
 
-/// 成员消息占比行（概览「成员分布」横条排行的数据源）。
+/// 成员消息占比行（概览「成员负载」环图 + 横条排行的数据源）。
 ///
-/// 口径 = messages 行数（工作量 proxy，覆盖 chat + delegation 全部会话），
-/// 按会话归属 agent 计数；agent 名/模型不在 SQL 解析（前端 agent store
-/// getById——migration 45 明确不设 FK 到 agents，名字解析是展示层职责）。
+/// 口径 = messages 行数（工作量 proxy，覆盖 chat + delegation 全部会话）；
+/// tokens = SUM(token_count)——**本地估算值**（列可空「流式完成后回填」，
+/// SUM 忽略 NULL，展示层标 ≈ 诚实）。agent 名/模型不在 SQL 解析（前端
+/// agent store getById——migration 45 明确不设 FK 到 agents，名字解析是
+/// 展示层职责）。
 #[derive(Debug, Clone, FromRow)]
 pub struct ProjectAgentShareRow {
     pub agent_id: String,
     pub messages: i64,
+    pub tokens: i64,
 }
 
-/// 成员消息占比：本项目会话按 agent 分组计数，降序。
+/// 成员消息占比：本项目会话按 agent 分组计数（消息数 + token 估算），
+/// 按消息数降序（token 含 NULL 缺失不宜做序）。
 pub async fn list_project_agent_shares(
     pool: &SqlitePool,
     project_id: &str,
 ) -> AppResult<Vec<ProjectAgentShareRow>> {
     let rows = sqlx::query_as::<_, ProjectAgentShareRow>(
-        "SELECT c.agent_id, COUNT(*) AS messages
+        "SELECT c.agent_id, COUNT(*) AS messages, COALESCE(SUM(m.token_count), 0) AS tokens
            FROM messages m JOIN conversations c ON c.id = m.conversation_id
           WHERE c.project_id = ?
           GROUP BY c.agent_id
@@ -465,6 +469,25 @@ mod tests {
         assert_eq!(p2[0].message_id.as_deref(), Some("m3"));
     }
 
+    /// seed_message 的 token 可空版本（「估算未回填」行，SUM 须忽略 NULL）
+    async fn seed_message_tokens(
+        pool: &SqlitePool,
+        id: &str,
+        conv_id: &str,
+        token_count: Option<i32>,
+    ) {
+        sqlx::query(
+            "INSERT INTO messages (id, conversation_id, role, content, content_blocks, token_count)
+             VALUES (?, ?, 'user', 'hi', '[]', ?)",
+        )
+        .bind(id)
+        .bind(conv_id)
+        .bind(token_count)
+        .execute(pool)
+        .await
+        .expect("seed message with tokens");
+    }
+
     #[tokio::test]
     async fn list_project_agent_shares_groups_and_isolates() {
         let pool = migrated_pool().await;
@@ -477,7 +500,7 @@ mod tests {
         .await
         .expect("seed agent-2");
 
-        // agent-1 名下 2 条（c1 两条）；t1 划给 agent-2 名下 1 条
+        // agent-1 名下 2 条（token 100 + NULL 未回填）；t1 划给 agent-2 名下 1 条（token 40）
         seed_conv(&pool, "c1", "chat", Some("p1"), None, None, "2026-08-18 10:00:00").await;
         seed_conv(&pool, "t1", "delegation", Some("p1"), Some("agent-1"), Some("c1"), "2026-08-18 10:00:00").await;
         // 注意：seed_conv 的 agent_id 固定 agent-1——第二条会话用 agent-2 需 UPDATE
@@ -485,9 +508,9 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        seed_message(&pool, "m1", "c1").await;
-        seed_message(&pool, "m2", "c1").await;
-        seed_message(&pool, "m3", "t1").await;
+        seed_message_tokens(&pool, "m1", "c1", Some(100)).await;
+        seed_message_tokens(&pool, "m2", "c1", None).await;
+        seed_message_tokens(&pool, "m3", "t1", Some(40)).await;
         // 他项目混入（不进任何桶）
         seed_conv(&pool, "x", "chat", Some("p2"), None, None, "2026-08-18 10:00:00").await;
         seed_message(&pool, "m4", "x").await;
@@ -496,8 +519,10 @@ mod tests {
         assert_eq!(shares.len(), 2, "按 agent 分组");
         assert_eq!(shares[0].agent_id, "agent-1");
         assert_eq!(shares[0].messages, 2, "降序：多者在前");
+        assert_eq!(shares[0].tokens, 100, "SUM 忽略 NULL 未回填行");
         assert_eq!(shares[1].agent_id, "agent-2");
         assert_eq!(shares[1].messages, 1);
+        assert_eq!(shares[1].tokens, 40);
 
         // 空项目空数组（成员招了没说话也不出现——口径是消息数不是成员数）
         let empty = list_project_agent_shares(&pool, "p-none").await.unwrap();
