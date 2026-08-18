@@ -188,20 +188,17 @@ const donutSegs = computed(() => {
   const rows = shareRows.value;
   const total = metricTotal.value;
   if (total <= 0) return [];
-  /* 几何模型（butt 方头端点，所见即所得）：
-   * 方头无端点延伸——dash 路径长 = 所见弧段长，段间视觉间隙恒为 SEG_GAP，
-   * hover 变粗是纯径向扩张（CSS stroke-width），切向零位移，永不压邻段。
-   * （曾用 round cap：端点每侧伸半个线宽，极小段的「最小胶囊」下限会
-   * 直接覆盖邻段——两次衔接错乱均源于此，弃。）
-   * 极小占比段给 1.5 弧长最小可见宽（≈2.4px），只在占比 <0.6% 时轻微
-   * 蚀入间隙，不触邻段。 */
-  const SEG_GAP = 4; // 段间视觉间隙（弧长单位，≈6.4px @160px 环）
-  const multi = rows.length > 1;
+  /* 几何模型（butt 方头 + 无间隙连续环）：
+   * 段所见长 = 占比 × 周长，首尾直接相接（曾留 4 弧长段间间隙，但极小段
+   * 的最小可见宽比间隙还窄——缝隙比数据大，失真，弃）。
+   * hover 变粗是纯径向扩张（CSS stroke-width），切向零位移，相接无重叠
+   * （round cap 端点延伸两次造成衔接错乱，已弃）。
+   * 极小段最小可见宽 1 弧长（≈1.6px，保 hover 可命中），只在占比 <0.4%
+   * 时轻微覆盖下一段开头，不可感知。 */
   let offset = 0;
   return rows.map((r) => {
     const len = (metric(r) / total) * DONUT_C;
-    const vis = multi ? Math.max(len - SEG_GAP, 1.5) : len;
-    const seg = { key: r.key, row: r, len: vis, offset: offset + (multi ? SEG_GAP / 2 : 0) };
+    const seg = { key: r.key, row: r, len: Math.max(len, 1), offset };
     offset += len;
     return seg;
   });
