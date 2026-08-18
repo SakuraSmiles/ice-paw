@@ -1,7 +1,7 @@
 // 项目（Project）状态管理
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
-import type { Project, NewProject, UpdateProject } from "../types";
+import type { Project, NewProject, UpdateProject, ProjectContext } from "../types";
 import { bridge } from "../api/bridge";
 
 export const useProjectStore = defineStore("project", () => {
@@ -101,6 +101,34 @@ export const useProjectStore = defineStore("project", () => {
     await load(true);
   }
 
+  // ===== 项目上下文（project.md / conventions.md）=====
+  /** 最近一次读取的项目上下文（单条缓存：欢迎态状态条与项目页编辑区共用，
+   *  避免两处各拉一次；切项目后 pid 对不上自然失效重拉） */
+  const context = ref<(ProjectContext & { pid: string }) | null>(null);
+
+  /** 读项目上下文；force=true 时绕过缓存（项目页编辑展开时用，防外部编辑器改后陈旧） */
+  async function loadContext(pid: string, force = false): Promise<ProjectContext & { pid: string }> {
+    if (!force && context.value?.pid === pid) return context.value;
+    const out = await bridge.projects.getContext(pid);
+    context.value = { pid, ...out };
+    return context.value;
+  }
+
+  /** 写单个上下文文件并同步缓存（编辑区脏检查两文件分别保存） */
+  async function saveContext(
+    pid: string,
+    file: "project.md" | "conventions.md",
+    content: string,
+  ): Promise<void> {
+    await bridge.projects.setContext(pid, file, content);
+    if (context.value?.pid === pid) {
+      context.value =
+        file === "project.md"
+          ? { ...context.value, project_md: content }
+          : { ...context.value, conventions_md: content };
+    }
+  }
+
   return {
     list,
     loading,
@@ -120,5 +148,8 @@ export const useProjectStore = defineStore("project", () => {
     archive,
     unarchive,
     permanentDelete,
+    context,
+    loadContext,
+    saveContext,
   };
 });

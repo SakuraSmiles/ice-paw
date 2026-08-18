@@ -121,4 +121,71 @@ describe("projectStore", () => {
       expect(store.list[0].id).toBe("new-id");
     });
   });
+
+  describe("context（project.md 项目上下文）", () => {
+    const mockCtx = {
+      available: true,
+      dir: "C:/ws/projects/p1",
+      project_md: "# 说明",
+      conventions_md: "",
+    };
+
+    it("loadContext fetches and caches by pid", async () => {
+      mockInvoke.mockResolvedValueOnce(mockCtx);
+
+      const store = useProjectStore();
+      await store.loadContext("p1");
+
+      expect(mockInvoke).toHaveBeenCalledWith("get_project_context", { projectId: "p1" });
+      expect(store.context?.pid).toBe("p1");
+      expect(store.context?.project_md).toBe("# 说明");
+
+      // 同 pid 再拉 → 走缓存不再 invoke
+      await store.loadContext("p1");
+      expect(mockInvoke).toHaveBeenCalledTimes(1);
+    });
+
+    it("loadContext force=true bypasses cache; different pid refetches", async () => {
+      mockInvoke
+        .mockResolvedValueOnce(mockCtx)
+        .mockResolvedValueOnce({ ...mockCtx, project_md: "# 外部改过" });
+
+      const store = useProjectStore();
+      await store.loadContext("p1");
+      await store.loadContext("p1", true); // force 绕过缓存（编辑区展开防陈旧）
+      await store.loadContext("p2", true);
+
+      expect(mockInvoke).toHaveBeenCalledTimes(3);
+      expect(store.context?.pid).toBe("p2");
+    });
+
+    it("saveContext writes file and syncs cache", async () => {
+      mockInvoke.mockResolvedValueOnce(mockCtx);
+
+      const store = useProjectStore();
+      await store.loadContext("p1");
+
+      mockInvoke.mockClear();
+      await store.saveContext("p1", "project.md", "# 新内容");
+
+      expect(mockInvoke).toHaveBeenCalledWith("set_project_context", {
+        projectId: "p1",
+        file: "project.md",
+        content: "# 新内容",
+      });
+      // 缓存同步（保存后不再拉一次也能反映新内容）
+      expect(store.context?.project_md).toBe("# 新内容");
+      expect(store.context?.conventions_md).toBe("");
+    });
+
+    it("saveContext does not touch cache of other pid", async () => {
+      mockInvoke.mockResolvedValueOnce(mockCtx);
+      const store = useProjectStore();
+      await store.loadContext("p1");
+
+      await store.saveContext("other", "project.md", "x");
+      expect(store.context?.pid).toBe("p1");
+      expect(store.context?.project_md).toBe("# 说明");
+    });
+  });
 });

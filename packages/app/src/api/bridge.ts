@@ -20,6 +20,7 @@ import type {
   NewProject,
   PlanSnapshot,
   Project,
+  ProjectContext,
   ProviderConnectionResult,
   ProviderInfo,
   SessionEvent,
@@ -167,6 +168,25 @@ const projects = {
   async permanentDelete(id: string, deleteConversations: boolean): Promise<void> {
     try { await invoke<void>("permanent_delete_project", { id, deleteConversations }); }
     catch (err) { throw wrapInvokeError("projects.permanentDelete", err); }
+  },
+  /** 读项目上下文（project.md / conventions.md，注入本项目全部会话） */
+  async getContext(projectId: string): Promise<ProjectContext> {
+    try { return await invoke<ProjectContext>("get_project_context", { projectId }); }
+    catch (err) { throw wrapInvokeError("projects.getContext", err); }
+  },
+  /** 写项目上下文（file 白名单 project.md / conventions.md；后端原子写） */
+  async setContext(
+    projectId: string,
+    file: "project.md" | "conventions.md",
+    content: string,
+  ): Promise<void> {
+    try { await invoke<void>("set_project_context", { projectId, file, content }); }
+    catch (err) { throw wrapInvokeError("projects.setContext", err); }
+  },
+  /** 用系统文件管理器打开项目上下文目录 */
+  async openContextDir(projectId: string): Promise<void> {
+    try { await invoke<void>("open_project_context_dir", { projectId }); }
+    catch (err) { throw wrapInvokeError("projects.openContextDir", err); }
   },
 };
 
