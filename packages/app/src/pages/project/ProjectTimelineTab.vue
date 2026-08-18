@@ -1,17 +1,17 @@
 <script setup lang="ts">
-// ProjectTimelineTab.vue — 项目详情「项目轨迹」tab（MA-2 Commit 6 落地）。
-// 当前为骨架占位：跨会话合并事件流（TrajectoryTable/Inspector 复用 +
-// scopeTurnKeys 适配 + 全局 id 游标）随后续 commit 进驻。
+// ProjectTimelineTab.vue — 项目详情「项目轨迹」tab：薄容器（路由参数 → 组件）。
+// 跨会话合并事件流的全部逻辑在 components/project/ProjectTimeline.vue（复用
+// TrajectoryTable/Inspector + scopeTurnKeys 适配 + 全局 id 游标分页）。
+// 实例由 DetailLayout 的 keep-alive `:key=项目id` 重建——切项目即重挂载，组件内
+// 不需感知项目切换。
+import { computed } from "vue";
+import { useRoute } from "vue-router";
+import ProjectTimeline from "../../components/project/ProjectTimeline.vue";
+
+const route = useRoute();
+const projectId = computed(() => String(route.params.id ?? ""));
 </script>
 
 <template>
-  <div class="timeline-stub">项目轨迹建设中（跨会话事件流即将上线）</div>
+  <ProjectTimeline :project-id="projectId" />
 </template>
-
-<style scoped>
-.timeline-stub {
-  padding: 24px;
-  font-size: var(--ip-text-body-sm-size);
-  color: var(--ip-color-text-tertiary);
-}
-</style>
