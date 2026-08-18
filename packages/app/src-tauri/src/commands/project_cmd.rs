@@ -273,6 +273,230 @@ async fn set_project_context_impl(
 }
 
 // =========================================================================
+// MA-2 项目台账 / 项目轨迹 / 概览（纯只读派生，repo 见 repo::project_ledger）
+// =========================================================================
+
+use crate::db::models::SessionEvent;
+use crate::db::repo::project_ledger;
+use crate::harness::event_log::TurnEndedPayload;
+
+/// 任务台账行（前端终态推导见 utils/taskStatus.ts——running 由流式 overlay、
+/// done/failed 由 termination 分桶，两侧注释互指）。
+#[derive(Serialize, Clone, Debug)]
+pub struct ProjectTaskOut {
+    pub conv_id: String,
+    pub title: String,
+    /// 执行者（被委派的专家 agent；名字前端 agent store 解析，无 FK 语义）
+    pub executor_agent_id: String,
+    /// 发起者（NULL ≡ 用户发起）
+    pub initiator_agent_id: Option<String>,
+    /// 委派图边——父会话（跳转回父会话用）
+    pub parent_conversation_id: Option<String>,
+    pub started_at: String,
+    pub updated_at: String,
+    /// 最后一条 turn_ended 落库时间（无 = 进行中/中断）
+    pub ended_at: Option<String>,
+    pub termination: Option<String>,
+    pub rounds: Option<u32>,
+}
+
+#[tauri::command]
+pub async fn list_project_tasks(
+    pool: State<'_, SqlitePool>,
+    project_id: String,
+) -> AppResult<Vec<ProjectTaskOut>> {
+    list_project_tasks_impl(pool.inner(), &project_id).await
+}
+
+/// 项目事件流行：`SessionEvent` 同构 + 会话标注列（前端会话徽章）。
+/// `#[serde(flatten)]` 使 JSON 形态与单会话事件完全一致，只是多两列。
+#[derive(Serialize, Clone, Debug)]
+pub struct ProjectEventOut {
+    #[serde(flatten)]
+    pub event: SessionEvent,
+    pub session_title: String,
+    pub session_kind: String,
+}
+
+/// `limit=Some` + `after_id` → 正向增量（live 追加，返回空 = 已追平）；
+/// `limit=Some` → 尾部优先分页（`before_id` 游标向前翻）；`None` → 全量正序。
+/// 语义与 `list_session_events` 对齐，游标从 per-conv seq 换成全局 id。
+#[tauri::command]
+pub async fn list_project_events(
+    pool: State<'_, SqlitePool>,
+    project_id: String,
+    limit: Option<i64>,
+    before_id: Option<i64>,
+    after_id: Option<i64>,
+) -> AppResult<Vec<ProjectEventOut>> {
+    list_project_events_impl(pool.inner(), &project_id, limit, before_id, after_id).await
+}
+
+/// 概览统计（详情页统计卡 + 台账分桶）。
+#[derive(Serialize, Clone, Debug)]
+pub struct ProjectOverviewOut {
+    pub chat_conversations: i64,
+    pub delegation_conversations: i64,
+    pub messages: i64,
+    pub tasks_total: i64,
+    pub tasks_done: i64,
+    pub tasks_failed: i64,
+    pub tasks_ended_other: i64,
+    pub last_activity_at: Option<String>,
+}
+
+#[tauri::command]
+pub async fn get_project_overview(
+    pool: State<'_, SqlitePool>,
+    project_id: String,
+) -> AppResult<ProjectOverviewOut> {
+    get_project_overview_impl(pool.inner(), &project_id).await
+}
+
+/// 台账任务终态三桶——done/failed 的权威分桶（与前端 utils/taskStatus.ts
+/// 同款规则，注释互指）。词表外值归 failed（不猜：技术兜底，与 termLabels
+/// 裸透原值一致；台账粒度只需三桶）。
+pub(crate) enum TaskBucket {
+    Done,
+    Failed,
+    EndedOther,
+}
+
+pub(crate) fn termination_bucket(t: &str) -> TaskBucket {
+    // 正常完成判定与 delegate.rs is_normal_completion 同源（stop | end_turn）
+    match t {
+        "stop" | "end_turn" => TaskBucket::Done,
+        // backfill 是历史补录（boot 扫尾给零事件旧会话合成的事件）——中性，
+        // 不算 failed（与 termLabels isWarnTermination 同款豁免）
+        "backfill" => TaskBucket::EndedOther,
+        _ => TaskBucket::Failed,
+    }
+}
+
+// ---- impl 层（命令壳只做 State 解包，逻辑在此便于测试）----
+
+async fn list_project_tasks_impl(
+    pool: &SqlitePool,
+    project_id: &str,
+) -> AppResult<Vec<ProjectTaskOut>> {
+    find_project(pool, project_id).await?;
+    let rows = project_ledger::list_project_tasks(pool, project_id).await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            // payload 解析失败 warn 降级 None，不吞会话行（行本身仍要显示）
+            let ended = r.ended_payload.as_deref().and_then(|p| {
+                serde_json::from_str::<TurnEndedPayload>(p)
+                    .map_err(|e| {
+                        tracing::warn!(
+                            conv = %r.id,
+                            error = %e,
+                            "turn_ended payload 解析失败，台账终态降级为未知"
+                        )
+                    })
+                    .ok()
+            });
+            ProjectTaskOut {
+                conv_id: r.id,
+                title: r.title,
+                executor_agent_id: r.agent_id,
+                initiator_agent_id: r.initiator_agent_id,
+                parent_conversation_id: r.parent_conversation_id,
+                started_at: r.created_at,
+                updated_at: r.updated_at,
+                ended_at: r.ended_at,
+                termination: ended.as_ref().map(|e| e.termination.clone()),
+                rounds: ended.map(|e| e.rounds),
+            }
+        })
+        .collect())
+}
+
+async fn list_project_events_impl(
+    pool: &SqlitePool,
+    project_id: &str,
+    limit: Option<i64>,
+    before_id: Option<i64>,
+    after_id: Option<i64>,
+) -> AppResult<Vec<ProjectEventOut>> {
+    find_project(pool, project_id).await?;
+    let rows = if let Some(n) = limit {
+        if after_id.is_some() {
+            project_ledger::list_project_events_after(pool, project_id, after_id, n).await?
+        } else {
+            project_ledger::list_project_events_tail(pool, project_id, before_id, n).await?
+        }
+    } else {
+        // 全量正序 = after_id=0 的正向读取（与 list_session_events 的 None 分支同语义）
+        project_ledger::list_project_events_after(pool, project_id, None, -1).await?
+    };
+    // payload parse 兜底（非法 JSON 降级字符串值，与 SessionEvent::from 同款）
+    let mut events: Vec<ProjectEventOut> = rows
+        .into_iter()
+        .map(|r| ProjectEventOut {
+            event: SessionEvent {
+                id: r.id,
+                session_id: r.session_id,
+                seq: r.seq,
+                kind: r.kind,
+                actor: r.actor,
+                turn_id: r.turn_id,
+                message_id: r.message_id,
+                payload: serde_json::from_str::<serde_json::Value>(&r.payload)
+                    .unwrap_or(serde_json::Value::String(r.payload.clone())),
+                created_at: r.created_at,
+            },
+            session_title: r.session_title,
+            session_kind: r.session_kind,
+        })
+        .collect();
+    // image_ref 原位水合（Phase 2B 不变式：ref 形态不得以非 Text 形态流出）
+    let mut payloads: Vec<&mut serde_json::Value> =
+        events.iter_mut().map(|e| &mut e.event.payload).collect();
+    crate::commands::conversation_cmd::hydrate_image_refs_json(pool, &mut payloads).await;
+    Ok(events)
+}
+
+async fn get_project_overview_impl(
+    pool: &SqlitePool,
+    project_id: &str,
+) -> AppResult<ProjectOverviewOut> {
+    find_project(pool, project_id).await?;
+    let ov = project_ledger::get_project_overview(pool, project_id).await?;
+    // 任务分桶复用台账查询结果（零重复 SQL）。payload 解析失败与无 turn_ended
+    // 同归 None（不进三桶）——与 list_project_tasks_impl 的降级语义一致；
+    // 进行中/中断也不进三桶：running 是前端流式 overlay，静态视角终止未落
+    // = interrupted。前端可由 total - 三桶推得 open 数。
+    let tasks = project_ledger::list_project_tasks(pool, project_id).await?;
+    let mut done = 0i64;
+    let mut failed = 0i64;
+    let mut ended_other = 0i64;
+    for t in &tasks {
+        let term = t
+            .ended_payload
+            .as_deref()
+            .and_then(|p| serde_json::from_str::<TurnEndedPayload>(p).ok())
+            .map(|e| e.termination);
+        match term.as_deref().map(termination_bucket) {
+            Some(TaskBucket::Done) => done += 1,
+            Some(TaskBucket::Failed) => failed += 1,
+            Some(TaskBucket::EndedOther) => ended_other += 1,
+            None => {}
+        }
+    }
+    Ok(ProjectOverviewOut {
+        chat_conversations: ov.chat_conversations,
+        delegation_conversations: ov.delegation_conversations,
+        messages: ov.messages,
+        tasks_total: tasks.len() as i64,
+        tasks_done: done,
+        tasks_failed: failed,
+        tasks_ended_other: ended_other,
+        last_activity_at: ov.last_activity_at,
+    })
+}
+
+// =========================================================================
 // 单元测试（in-memory SQLite + 临时目录）
 // =========================================================================
 
@@ -433,5 +657,237 @@ mod tests {
         let out = get_project_context_impl(&pool, "p1").await.unwrap();
         assert_eq!(out.project_md, "用户写的说明");
         let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    // ---- MA-2 台账 / 事件流 / 概览 ----
+
+    async fn seed_agent_row(pool: &SqlitePool) {
+        sqlx::query(
+            "INSERT INTO agents (id, name, provider, model, system_prompt, api_key_ref, temperature, max_tokens, extra_params, sort_order, cache_prompt)
+             VALUES ('a1', '专家', 'anthropic', 'claude-test', '', '', 0.7, 1024, '{}', 0, 0)",
+        )
+        .execute(pool)
+        .await
+        .expect("seed agent");
+    }
+
+    /// 会话 seed（updated_at INSERT 时写死——UPDATE 触发器会重置，见
+    /// project_ledger 测试 helper 同款注释）。
+    async fn seed_conv_row(
+        pool: &SqlitePool,
+        id: &str,
+        kind: &str,
+        project_id: Option<&str>,
+        updated_at: &str,
+    ) {
+        sqlx::query(
+            "INSERT INTO conversations (id, agent_id, title, kind, project_id, updated_at)
+             VALUES (?, 'a1', ?, ?, ?, ?)",
+        )
+        .bind(id)
+        .bind(format!("conv {id}"))
+        .bind(kind)
+        .bind(project_id)
+        .bind(updated_at)
+        .execute(pool)
+        .await
+        .expect("seed conversation");
+    }
+
+    fn ended_payload(termination: &str, rounds: u32) -> String {
+        format!(
+            r#"{{"v":1,"termination":"{termination}","rounds":{rounds},"usage":null,"user_token_count":null}}"#
+        )
+    }
+
+    /// termination 全词表 + 词表外兜底（与前端 utils/taskStatus.ts 同款规则，
+    /// 两侧注释互指——此处是后端权威分桶）。
+    #[test]
+    fn termination_bucket_full_vocabulary() {
+        use TaskBucket::*;
+        for t in ["stop", "end_turn"] {
+            assert!(matches!(termination_bucket(t), Done), "{t}");
+        }
+        for t in [
+            "length",
+            "max_tokens",
+            "tool_use",
+            "budget_exceeded",
+            "stuck",
+            "abort",
+            "error",
+            "interrupted",
+        ] {
+            assert!(matches!(termination_bucket(t), Failed), "{t}");
+        }
+        assert!(matches!(termination_bucket("backfill"), EndedOther));
+        // 词表外（未来新增/脏数据）不猜，归 failed
+        assert!(matches!(termination_bucket("who_dis"), Failed));
+    }
+
+    #[tokio::test]
+    async fn list_project_tasks_impl_parses_and_degrades_bad_payload() {
+        let pool = test_pool().await;
+        seed_agent_row(&pool).await;
+        seed_project(&pool, "p1", "P").await;
+
+        seed_conv_row(&pool, "done", "delegation", Some("p1"), "2026-08-18 10:00:00").await;
+        repo::session_event::append(
+            &pool,
+            "done",
+            "turn_ended",
+            "agent:a1",
+            Some("t1"),
+            None,
+            &ended_payload("stop", 3),
+        )
+        .await
+        .unwrap();
+        // 损坏 payload：解析失败必须降级 None，不吞会话行
+        seed_conv_row(&pool, "corrupt", "delegation", Some("p1"), "2026-08-18 11:00:00").await;
+        repo::session_event::append(
+            &pool,
+            "corrupt",
+            "turn_ended",
+            "agent:a1",
+            Some("t1"),
+            None,
+            r#"{"v":1,"termination":"stop""#, // 截断 JSON
+        )
+        .await
+        .unwrap();
+        // 进行中：有事件但无 turn_ended
+        seed_conv_row(&pool, "running", "delegation", Some("p1"), "2026-08-18 12:00:00").await;
+        repo::session_event::append(&pool, "running", "turn_context", "user", Some("t1"), None, "{}")
+            .await
+            .unwrap();
+
+        let tasks = list_project_tasks_impl(&pool, "p1").await.unwrap();
+        assert_eq!(tasks.len(), 3, "损坏 payload 不吞行");
+        let by_id = |id: &str| tasks.iter().find(|t| t.conv_id == id).unwrap();
+
+        let d = by_id("done");
+        assert_eq!(d.termination.as_deref(), Some("stop"));
+        assert_eq!(d.rounds, Some(3));
+        assert!(d.ended_at.is_some());
+
+        let c = by_id("corrupt");
+        assert!(c.termination.is_none() && c.rounds.is_none(), "降级 None");
+        assert!(c.ended_at.is_some(), "落库时间本身可用");
+
+        let r = by_id("running");
+        assert!(r.termination.is_none() && r.rounds.is_none() && r.ended_at.is_none());
+
+        // 项目不存在 → NotFound（不返回空数组造成「无任务」误导）
+        let err = list_project_tasks_impl(&pool, "ghost").await.unwrap_err();
+        assert!(matches!(err, AppError::NotFound { .. }));
+    }
+
+    #[tokio::test]
+    async fn list_project_events_impl_cursors_and_payload_parse() {
+        let pool = test_pool().await;
+        seed_agent_row(&pool).await;
+        seed_project(&pool, "p1", "P").await;
+        seed_conv_row(&pool, "a", "chat", Some("p1"), "2026-08-18 10:00:00").await;
+        seed_conv_row(&pool, "b", "delegation", Some("p1"), "2026-08-18 10:00:00").await;
+
+        for (conv, marker) in [("a", "m1"), ("b", "m2"), ("a", "m3")] {
+            repo::session_event::append(
+                &pool,
+                conv,
+                "user_message",
+                "user",
+                Some("t"),
+                Some(marker),
+                r#"{"text":"你好"}"#,
+            )
+            .await
+            .unwrap();
+        }
+
+        // 尾部优先分页：最新 2 条 → 反转为全局 id 正序
+        let tail = list_project_events_impl(&pool, "p1", Some(2), None, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            tail.iter().map(|e| e.event.message_id.as_deref()).collect::<Vec<_>>(),
+            vec![Some("m2"), Some("m3")]
+        );
+        // payload 已 parse 为对象 + 会话标注列挂上
+        assert!(tail[0].event.payload.is_object(), "payload 服务端 parse");
+        assert_eq!(tail[0].session_title, "conv b");
+        assert_eq!(tail[0].session_kind, "delegation");
+        assert_eq!(tail[1].session_kind, "chat");
+
+        // 游标向前翻：m2 之前恰剩 m1
+        let m2_id = tail[0].event.id;
+        let earlier = list_project_events_impl(&pool, "p1", Some(2), Some(m2_id), None)
+            .await
+            .unwrap();
+        assert_eq!(earlier.len(), 1);
+        assert_eq!(earlier[0].event.message_id.as_deref(), Some("m1"));
+
+        // 正向增量：m3 之后追平返回空
+        let m3_id = tail[1].event.id;
+        let inc = list_project_events_impl(&pool, "p1", Some(10), None, Some(m3_id))
+            .await
+            .unwrap();
+        assert!(inc.is_empty());
+
+        // 全量（limit=None）
+        let full = list_project_events_impl(&pool, "p1", None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(full.len(), 3);
+
+        // NotFound
+        let err = list_project_events_impl(&pool, "ghost", None, None, None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AppError::NotFound { .. }));
+    }
+
+    #[tokio::test]
+    async fn get_project_overview_impl_buckets_and_not_found() {
+        let pool = test_pool().await;
+        seed_agent_row(&pool).await;
+        seed_project(&pool, "p1", "P").await;
+
+        seed_conv_row(&pool, "chat1", "chat", Some("p1"), "2026-08-18 10:00:00").await;
+        // done / failed / ended-other / 进行中 各一
+        for (id, term) in [
+            ("done", Some("stop")),
+            ("failed", Some("abort")),
+            ("backfill", Some("backfill")),
+            ("open", None),
+        ] {
+            seed_conv_row(&pool, id, "delegation", Some("p1"), "2026-08-18 10:00:00").await;
+            if let Some(t) = term {
+                repo::session_event::append(
+                    &pool,
+                    id,
+                    "turn_ended",
+                    "agent:a1",
+                    Some("t1"),
+                    None,
+                    &ended_payload(t, 1),
+                )
+                .await
+                .unwrap();
+            }
+        }
+
+        let ov = get_project_overview_impl(&pool, "p1").await.unwrap();
+        assert_eq!(ov.chat_conversations, 1);
+        assert_eq!(ov.delegation_conversations, 4);
+        assert_eq!(ov.tasks_total, 4);
+        assert_eq!(ov.tasks_done, 1);
+        assert_eq!(ov.tasks_failed, 1);
+        assert_eq!(ov.tasks_ended_other, 1);
+        // open（进行中+损坏）不进三桶，前端由 total - 三桶推得
+        assert!(ov.last_activity_at.is_some());
+
+        let err = get_project_overview_impl(&pool, "ghost").await.unwrap_err();
+        assert!(matches!(err, AppError::NotFound { .. }));
     }
 }

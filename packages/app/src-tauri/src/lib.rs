@@ -140,6 +140,10 @@ pub fn run() {
             commands::project_cmd::get_project_context,
             commands::project_cmd::set_project_context,
             commands::project_cmd::open_project_context_dir,
+            // MA-2 项目台账 / 项目轨迹 / 概览（纯只读派生）
+            commands::project_cmd::list_project_tasks,
+            commands::project_cmd::list_project_events,
+            commands::project_cmd::get_project_overview,
         ])
         // 启动逻辑
         .setup(|app| {
