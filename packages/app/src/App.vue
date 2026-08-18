@@ -1,12 +1,31 @@
 <script setup lang="ts">
 // App.vue — 应用根组件
 // 初始化全局事件监听（流式聊天事件 + 键盘快捷键）
-import { onMounted, onUnmounted } from "vue";
+import { onMounted, onUnmounted, watch } from "vue";
+import { useRouter } from "vue-router";
 import { useChatStore } from "./stores/chat";
+import { useProjectStore } from "./stores/project";
 import { useChatEvents } from "./composables/useChatEvents";
 import { loadTimezone } from "./utils/time";
+import { saveLastSession } from "./utils/sessionRestore";
 
 const chat = useChatStore();
+const project = useProjectStore();
+const router = useRouter();
+
+// 启动恢复的记忆写入：路由 / 活跃会话 / 侧栏 scope 任一变化即落盘——每次
+// 导航写一次（廉价），崩溃/断电不丢，不依赖窗口关闭事件。恢复侧在 Sidebar
+// onMounted（见 planRestore 决策纯函数），本 watch 不读只写、无循环风险。
+watch(
+  () => [
+    router.currentRoute.value.fullPath,
+    chat.activeConvId,
+    project.activeProjectId,
+  ] as const,
+  ([route, convId, projectId]) => {
+    saveLastSession({ route, convId, projectId });
+  },
+);
 // 事件监听拆卸函数（useChatEvents 返回；卸载时调用，补齐此前缺失的 teardown）
 let cleanupChatEvents: (() => void) | null = null;
 
