@@ -36,3 +36,22 @@ export function formatTokenCount(n: number): string {
   // 80万 / 12.5万；整数倍不带小数
   return `${Number.isInteger(wan) ? wan : wan.toFixed(1)}万`;
 }
+
+/**
+ * token 数的国际惯用短格式（K/M）——图表/统计卡语境。
+ *
+ * 与 formatTokenCount（中文万进制）分工：万进制是预算/窗口量级的主场
+ * （BudgetPill 等，中文用户对「80万窗口」的直觉）；图表数字列宽敏感且
+ * 面向仪表盘惯例，用 K/M。≥1M → 1.2M；≥1K → 9.8K（整数倍 9K）；
+ * 其余原数。
+ */
+export function formatTokenCompact(n: number): string {
+  if (!Number.isFinite(n) || n < 1000) return String(n);
+  if (n < 1_000_000) {
+    const k = n / 1000;
+    return `${Number.isInteger(k) ? k : k.toFixed(1)}K`;
+  }
+  const m = n / 1_000_000;
+  // 1.2M / 23.5M
+  return `${Number.isInteger(m) ? m : m.toFixed(1)}M`;
+}

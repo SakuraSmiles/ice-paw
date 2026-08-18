@@ -114,11 +114,11 @@ describe("ProjectOverview 概览 tab（二轮重设计）", () => {
 
   it("成员负载：环图 + 排行行（名字/模型/token 主数字/消息小字），条按 token 归一", async () => {
     const w = await mountOverview();
-    // 环图：6 段弧（2 成员 + track），中心总量 9000+2700=11700 → 1.2万
+    // 环图：2 段弧 + track，中心总量 9000+2700=11700 → 11.7K（K/M 惯用格式）
     expect(w.find(".donut").exists()).toBe(true);
     const segs = w.findAll(".donut-seg");
     expect(segs.length).toBe(2);
-    expect(w.find(".donut-value").text()).toBe("1.2万");
+    expect(w.find(".donut-value").text()).toBe("11.7K");
     // 行：名字 + 模型 + token 主数字（9000→9K）+ 消息小字
     const rows = w.findAll(".share-row");
     expect(rows.length).toBe(2);
@@ -130,8 +130,8 @@ describe("ProjectOverview 概览 tab（二轮重设计）", () => {
     const bars = w.findAll(".share-bar");
     expect(bars[0].attributes("style")).toContain("width: 100%");
     expect(bars[1].attributes("style")).toContain("width: 30%");
-    // title 带占比（9000/11700 = 77%）
-    expect(rows[0].attributes("title")).toContain("77%");
+    // title 挂在 label 格（行容器 display:contents 不渲染盒子）——带占比 9000/11700 = 77%
+    expect(w.findAll(".share-label")[0].attributes("title")).toContain("77%");
   });
 
   it("token 全零（估算未回填）：环图隐藏，条回退消息口径", async () => {
