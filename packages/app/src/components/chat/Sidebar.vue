@@ -3,7 +3,7 @@
 import { ref, computed, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { useProjectStore } from "../../stores/project";
-import { formatDate, parseDbTime } from "../../utils/time";
+import { parseDbTime, timeAgo } from "../../utils/time";
 import { loadLastSession, planRestore } from "../../utils/sessionRestore";
 import { useNewConversation } from "../../composables/useNewConversation";
 import { useTheme } from "../../composables/useTheme";
@@ -165,20 +165,10 @@ onUnmounted(() => {
   if (nowTickInterval) clearInterval(nowTickInterval);
 });
 
-// 取相对时间显示
-function timeAgo(dateStr: string): string {
-  const d = parseDbTime(dateStr);
-  // 用 nowTick.value 作「现在」基准：同时建立响应式依赖，nowTick 每分钟变化时整列重算
-  const now = new Date(nowTick.value);
-  const diff = now.getTime() - d.getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return "刚刚";
-  if (mins < 60) return `${mins}分钟前`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}小时前`;
-  const days = Math.floor(hours / 24);
-  if (days < 30) return `${days}天前`;
-  return formatDate(dateStr);
+// 取相对时间显示（timeAgo 抽至 utils/time 共用；nowTick 作「现在」基准并
+// 建立响应式依赖，每分钟变化时整列重算）
+function timeAgoLabel(dateStr: string): string {
+  return timeAgo(dateStr, nowTick.value);
 }
 </script>
 
@@ -282,7 +272,7 @@ function timeAgo(dateStr: string): string {
           <span v-if="chat.streamingConvIds.has(conv.id)" class="stream-indicator" title="正在生成…">
             <span class="stream-bars"><span class="bar"></span><span class="bar"></span><span class="bar"></span></span>生成中
           </span>
-          <span v-else class="conv-time">{{ timeAgo(conv.updated_at) }}</span>
+          <span v-else class="conv-time">{{ timeAgoLabel(conv.updated_at) }}</span>
         </div>
       </button>
     </TransitionGroup>
