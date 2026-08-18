@@ -5,10 +5,10 @@
 // 导航落一次盘，崩溃/断电不丢，不依赖窗口关闭事件。
 //
 // 决策（planRestore，纯函数可测）：
-// - 持久化会话仍存在、非后台子会话（kind 过滤）、所属项目未归档 → 恢复它，
-//   scope 跟随其所属项目；
+// - 持久化会话仍存在、非后台子会话（kind 过滤）、所属项目未归档 → 恢复它；
+//   scope 忠实上次侧栏所在（记忆的 projectId；与会话所属项目解耦）；
 // - 持久化会话失效（被删 / 项目归档 / delegation 子会话）且并非明确欢迎态 →
-//   回退「最近一条有效会话」（原打开软件行为）；
+//   回退「最近一条有效会话」（原打开软件行为），scope 跟随回退会话所属项目；
 // - 上次明确停在欢迎态（convId=null）→ 保持欢迎态，不硬跳最近会话；
 // - scope 指向已归档项目 → 降级散落；route 原样返回，非法路径由路由表通配
 //   兜底回首页。
@@ -81,13 +81,17 @@ export function planRestore(
 ): RestorePlan {
   const valid = (c: RestoreConvLike) => !c.project_id || activeProjectIds.has(c.project_id);
 
-  // 1) 持久化会话仍有效 → 恢复，scope 跟随其项目
+  // 1) 持久化会话仍有效 → 恢复；scope 忠实上次侧栏所在（记忆的 projectId），
+  //    不跟随会话所属项目——scope 与会话已解耦（详情页不动 scope / 切项目
+  //    不动会话上下文），跟随会话会在「scope=项目A + 活跃会话为散落会话」
+  //    组合下错位（重启后侧栏散落但内容页是 A 详情页）。归档/已删由
+  //    scopeOrNull 降级散落。
   if (saved?.convId) {
     const hit = convs.find((c) => c.id === saved.convId && valid(c));
     if (hit) {
       return {
         convId: hit.id,
-        projectId: hit.project_id ?? null,
+        projectId: scopeOrNull(saved.projectId, activeProjectIds),
         route: restoreRoute(saved.route),
       };
     }
