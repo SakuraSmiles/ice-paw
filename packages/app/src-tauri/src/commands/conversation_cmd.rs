@@ -22,7 +22,10 @@ use crate::harness::derive::IMAGE_UNRECOVERABLE_MARKER;
 /// 非 image_ref 块与非消息 payload 天然 no-op；未命中（行已删 / 下标变形 /
 /// 下标非 Image）降级 Text marker（与 derive 侧同文案）。导出与轨迹是只读
 /// 视图——坏引用降级展示，不报错中断。
-async fn hydrate_image_refs_json(pool: &SqlitePool, payloads: &mut [&mut serde_json::Value]) {
+pub(crate) async fn hydrate_image_refs_json(
+    pool: &SqlitePool,
+    payloads: &mut [&mut serde_json::Value],
+) {
     // 第一遍：收集 ref 指向的 message_id（只为出现的 id 查行）
     let mut ref_ids: HashSet<String> = HashSet::new();
     for p in payloads.iter() {
