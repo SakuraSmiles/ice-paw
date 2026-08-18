@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // ProjectList.vue — 项目管理：列表 + 内联新建 + 内联编辑（点卡片展开配置）
-import { ref, reactive, onMounted } from "vue";
+import { ref, reactive, computed, onMounted } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useProjectStore } from "../stores/project";
 import { useAgentStore } from "../stores/agent";
@@ -95,6 +95,21 @@ const editWorkspace = ref("");
 const editError = ref("");
 const savingEdit = ref(false);
 
+// ----- 项目背景（project.md / conventions.md，注入本项目全部会话） -----
+const ctxLoading = ref(false);
+const ctxAvailable = ref(true);
+const ctxDir = ref<string | null>(null);
+const ctxProjectMd = ref("");
+const ctxConventionsMd = ref("");
+const ctxOriginalMd = ref("");
+const ctxOriginalConv = ref("");
+const showConventions = ref(false);
+const ctxError = ref("");
+const ctxSaving = ref(false);
+const ctxDirty = computed(
+  () => ctxProjectMd.value !== ctxOriginalMd.value || ctxConventionsMd.value !== ctxOriginalConv.value,
+);
+
 function toggleEdit(p: Project) {
   if (expandedId.value === p.id) {
     expandedId.value = null;
@@ -106,6 +121,54 @@ function toggleEdit(p: Project) {
   editDesc.value = p.description || "";
   editWorkspace.value = p.workspace_path || "";
   editError.value = "";
+  // 项目背景惰性加载（force——外部编辑器改过也不显示陈旧内容）
+  ctxLoading.value = true;
+  ctxError.value = "";
+  showConventions.value = false;
+  project
+    .loadContext(p.id, true)
+    .then((c) => {
+      ctxAvailable.value = c.available;
+      ctxDir.value = c.dir ?? null;
+      ctxProjectMd.value = c.project_md;
+      ctxConventionsMd.value = c.conventions_md;
+      ctxOriginalMd.value = c.project_md;
+      ctxOriginalConv.value = c.conventions_md;
+    })
+    .catch((e) => {
+      ctxError.value = e instanceof Error ? e.message : "加载项目背景失败";
+    })
+    .finally(() => {
+      ctxLoading.value = false;
+    });
+}
+
+async function saveProjectContext(p: Project) {
+  if (ctxSaving.value || !ctxDirty.value) return;
+  ctxSaving.value = true;
+  ctxError.value = "";
+  try {
+    if (ctxProjectMd.value !== ctxOriginalMd.value) {
+      await project.saveContext(p.id, "project.md", ctxProjectMd.value);
+      ctxOriginalMd.value = ctxProjectMd.value;
+    }
+    if (ctxConventionsMd.value !== ctxOriginalConv.value) {
+      await project.saveContext(p.id, "conventions.md", ctxConventionsMd.value);
+      ctxOriginalConv.value = ctxConventionsMd.value;
+    }
+  } catch (e) {
+    ctxError.value = e instanceof Error ? e.message : "保存项目背景失败";
+  } finally {
+    ctxSaving.value = false;
+  }
+}
+
+async function openContextDir(p: Project) {
+  try {
+    await bridge.projects.openContextDir(p.id);
+  } catch (e) {
+    console.error("打开项目上下文目录失败:", e);
+  }
 }
 
 function cancelEdit() {
@@ -465,6 +528,56 @@ onMounted(() => {
             </div>
           </div>
 
+          <!-- 项目背景：project.md 注入本项目全部会话（system prompt，修改即时生效） -->
+          <div class="field">
+            <div class="field-label">
+              <span>项目背景</span>
+              <span class="hint">project.md · 注入本项目全部会话，修改即时生效</span>
+              <button
+                v-if="ctxDir"
+                type="button"
+                class="ctx-dir-btn"
+                :title="ctxDir"
+                @click="openContextDir(p)"
+              >打开目录</button>
+            </div>
+            <div v-if="!ctxAvailable" class="ctx-guide">
+              未解析到默认工作区，项目背景暂不可用——请在「设置 → 通用」确认默认工作区后重试。
+            </div>
+            <template v-else>
+              <textarea
+                v-model="ctxProjectMd"
+                class="ctx-md"
+                rows="10"
+                :disabled="ctxLoading"
+                placeholder="# 项目说明&#10;&#10;技术栈 / 架构 / 业务背景 / 术语表……项目内所有会话都会带上这份背景"
+              ></textarea>
+              <button type="button" class="conv-toggle" @click="showConventions = !showConventions">
+                <svg class="tasks-chev" :class="{ rotated: showConventions }" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6" /></svg>
+                <span>编码规范 conventions.md</span>
+                <span class="hint">可选，与项目背景一同注入</span>
+              </button>
+              <textarea
+                v-show="showConventions"
+                v-model="ctxConventionsMd"
+                class="ctx-md"
+                rows="6"
+                :disabled="ctxLoading"
+                placeholder="命名 / 格式 / 最佳实践……"
+              ></textarea>
+              <div class="ctx-actions">
+                <button
+                  class="btn btn-primary btn-sm"
+                  :disabled="!ctxDirty || ctxSaving || ctxLoading"
+                  @click="saveProjectContext(p)"
+                >{{ ctxSaving ? "保存中" : "保存项目背景" }}</button>
+                <span v-if="!ctxDirty && !ctxLoading && !ctxSaving" class="ctx-saved">已与文件同步</span>
+              </div>
+              <p class="field-hint">文件存放在 IcePaw 工作区（projects/{{ p.id }}/），不进项目源码目录</p>
+            </template>
+            <div v-if="ctxError" class="form-error">{{ ctxError }}</div>
+          </div>
+
           <div v-if="editError" class="form-error">{{ editError }}</div>
 
           <div class="form-actions">
@@ -683,6 +796,47 @@ onMounted(() => {
   color: var(--ip-color-primary-tint-text); background-color: var(--ip-color-primary-tint-bg);
   border-color: var(--ip-primary-400);
 }
+
+/* ===== 项目背景（project.md 编辑区） ===== */
+.ctx-dir-btn {
+  margin-left: auto; height: 22px; padding: 0 8px;
+  font-size: var(--ip-text-caption-size); font-family: inherit;
+  color: var(--ip-color-text-tertiary); background: none;
+  border: 1px solid var(--ip-color-border-default); border-radius: var(--ip-radius-full);
+  cursor: pointer;
+  transition: all var(--ip-duration-fast) var(--ip-ease-out);
+}
+.ctx-dir-btn:hover { color: var(--ip-primary-600); border-color: var(--ip-primary-300); }
+.ctx-guide {
+  padding: 10px 12px;
+  font-size: var(--ip-text-caption-size); color: var(--ip-color-text-secondary);
+  background-color: var(--ip-color-bg-tertiary);
+  border-radius: var(--ip-radius-md);
+}
+.ctx-md {
+  width: 100%; padding: 10px 12px;
+  background-color: var(--ip-color-bg-tertiary);
+  border: 1px solid transparent;
+  border-radius: var(--ip-radius-md);
+  font-family: var(--ip-font-mono);
+  font-size: var(--ip-text-caption-size); line-height: 1.7;
+  color: var(--ip-color-text-primary);
+  resize: vertical;
+  transition: all var(--ip-duration-fast) var(--ip-ease-out);
+}
+.ctx-md:focus { outline: none; border-color: var(--color-input-focus-border); background-color: var(--color-input-bg); }
+.ctx-md:disabled { opacity: 0.6; }
+.ctx-md::placeholder { color: var(--ip-color-text-disabled); }
+.conv-toggle {
+  display: flex; align-items: center; gap: 6px;
+  background: none; border: none; padding: 0; cursor: pointer;
+  font-family: inherit; font-size: var(--ip-text-caption-size);
+  color: var(--ip-color-text-tertiary);
+  transition: color var(--ip-duration-fast) var(--ip-ease-out);
+}
+.conv-toggle:hover { color: var(--ip-color-text-secondary); }
+.ctx-actions { display: flex; align-items: center; gap: 8px; }
+.ctx-saved { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-disabled); }
 
 .form-error { font-size: var(--ip-text-caption-size); color: var(--ip-danger-text); }
 

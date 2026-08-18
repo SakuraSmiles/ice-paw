@@ -182,6 +182,16 @@ export interface UpdateProject {
   theme_color?: string | null;
 }
 
+/** 项目上下文读取结果（get_project_context）。
+ *  available=false = 未解析到默认工作区（防御分支，正常启动不触发——
+ *  preferences 会自动初始化默认工作区）；两文件内容读失败降级空串。 */
+export interface ProjectContext {
+  available: boolean;
+  dir?: string | null;
+  project_md: string;
+  conventions_md: string;
+}
+
 // ============================================================================
 // Message
 // ============================================================================
