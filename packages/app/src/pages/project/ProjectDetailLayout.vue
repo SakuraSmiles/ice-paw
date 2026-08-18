@@ -1,6 +1,7 @@
 <script setup lang="ts">
-// ProjectDetailLayout.vue — 项目详情页布局（MA-2）：头部（返回 + 项目名 +
-// 描述）+ tab 条（概览·任务台账 / 项目轨迹 / 设置）+ keep-alive 内容区。
+// ProjectDetailLayout.vue — 项目详情页布局（MA-2）：头部（项目名 + 描述）+
+// tab 条（概览·任务台账 / 项目轨迹 / 设置）+ keep-alive 内容区。
+// 头部不放「返回列表」钮——项目列表的唯一入口是侧栏按钮（入口收敛）。
 // 先例 SettingsLayout，差异：路由带 :id 参数。⚠️ keep-alive 的 component 必须
 // `:key="route.path"`：KeepAlive 以 vnode.key 为缓存键，若只按项目 id（三 tab
 // 同 key），切 tab 时缓存命中旧 tab 实例直接嫁接——URL 变了视图冻结（真机踩坑）。
@@ -66,11 +67,6 @@ const updatedLabel = computed(() => {
 <template>
   <div class="detail-page">
     <header class="detail-header">
-      <button class="back-btn" title="返回项目列表" @click="router.push('/projects')">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <line x1="19" y1="12" x2="5" y2="12" /><polyline points="12 19 5 12 12 5" />
-        </svg>
-      </button>
       <div class="head-main">
         <template v-if="current">
           <h1 class="head-name">{{ current.name }}</h1>
@@ -127,16 +123,6 @@ const updatedLabel = computed(() => {
   backdrop-filter: blur(8px);
   flex-shrink: 0;
 }
-
-.back-btn {
-  display: flex; align-items: center; justify-content: center;
-  width: 30px; height: 30px; flex-shrink: 0;
-  border: none; border-radius: var(--ip-radius-md);
-  background: none; cursor: pointer;
-  color: var(--ip-color-text-secondary);
-  transition: all var(--ip-duration-fast) var(--ip-ease-out);
-}
-.back-btn:hover { background-color: var(--ip-color-bg-tertiary); color: var(--ip-color-text-primary); }
 
 .head-main { flex: 1; min-width: 0; }
 .head-name {
