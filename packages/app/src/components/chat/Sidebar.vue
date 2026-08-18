@@ -27,10 +27,14 @@ const currentProjectName = computed(() => project.activeProject?.name ?? "散落
 // ProjectSwitcher 的 select/manage 上交处理（开关态由组件内部自持）
 function selectProject(id: string | null) {
   project.setActiveProject(id);
-  // 与「打开软件」一致：切到该空间最近一条会话；无会话则留在欢迎态。再回首页对话。
-  const scoped = visibleConversations.value.filter((c) =>
-    id === null ? !c.project_id : c.project_id === id
-  );
+  if (id !== null) {
+    // 切项目 → 直达项目详情页（2026-08-18 用户拍板）：先看台账/轨迹再进会话；
+    // 会话上下文不动，从详情页点侧栏会话照常回首页
+    router.push(`/projects/${id}`);
+    return;
+  }
+  // 散落：选最近一条会话回首页（无会话留欢迎态）
+  const scoped = visibleConversations.value.filter((c) => !c.project_id);
   if (scoped.length > 0) {
     const latest = scoped.reduce((a, b) =>
       parseDbTime(b.updated_at) > parseDbTime(a.updated_at) ? b : a
