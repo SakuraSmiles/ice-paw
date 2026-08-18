@@ -169,6 +169,19 @@ pub async fn run_agent_turn(app: &AppHandle, input: AgentTurnInput)
 
 ## 5. MA-2 任务台账 + 项目轨迹
 
+> **实施状态（2026-08-18 已落地）**：任务台账 + 项目轨迹 + `/projects/:id` 详情页
+> 三 tab（概览·台账 / 项目轨迹 / 设置）全部落地，零新表零 migration（5.1 派生
+> 路线）。与本节草图的偏差，按拍板记录：
+> - 状态机收敛为五桶 `running/done/failed/ended-other/interrupted`（termination
+>   词表映射，running 由前端流式 overlay 恒最高优先；`backfill` 中性豁免），
+>   未做 `returned` 独立态（回传成功可从父会话 tool_result 读，v1 不单列）。
+> - 项目轨迹 v1 **砍瀑布图**（5.3-1 per-agent 泳道待独立设计）；TrajectoryTable/
+>   Inspector 零改动复用 + turn 键加 session 前缀防跨会话合桶；轮号弱化为段
+>   序号（5.3-2 的 per-session 偏移未做——跨会话分段展示下意义有限）。
+> - 5.3-3 过滤维度、5.3-4 委派边呈现未做（v1 边界）；项目级 JSONL 导出未做。
+> - live 更新：事件驱动（turn_ended/delegation-started）+ onActivated 补拉，
+>   无常驻轮询。
+
 ### 5.1 任务 = 派生视图（不变式 4）
 
 不建 task 表。**任务 ≡ kind='delegation' 会话**：

@@ -65,6 +65,12 @@ watch(
   },
   { immediate: true },
 );
+
+/** 状态条点击 → 项目详情设置 tab（MA-2 直达编辑区；pill 渲染即有 activeProjectId） */
+function openContextSettings() {
+  const pid = project.activeProjectId;
+  if (pid) router.push(`/projects/${pid}/settings`);
+}
 </script>
 
 <template>
@@ -86,8 +92,8 @@ watch(
       <button
         v-if="ctxState === 'ready' || ctxState === 'empty'"
         class="ctx-pill"
-        title="project.md 随每轮对话注入本项目会话（system prompt），修改即时生效"
-        @click="router.push('/projects')"
+        title="project.md 随每轮对话注入本项目会话（system prompt），修改即时生效——点击直达项目设置编辑"
+        @click="openContextSettings"
       >
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" />
