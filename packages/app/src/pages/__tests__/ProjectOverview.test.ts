@@ -33,13 +33,24 @@ const OVERVIEW_OUT = {
   chat_conversations: 7, delegation_conversations: 3, messages: 42,
   tasks_total: 3, tasks_done: 1, tasks_failed: 1, tasks_ended_other: 0,
   last_activity_at: "2026-08-18 01:00:00",
+  agent_shares: [
+    { agent_id: "a1", messages: 30 },
+    { agent_id: "a2", messages: 12 },
+  ],
 };
 
-function mockBackend(tasks: unknown[] = []) {
+function mockBackend(tasks: unknown[] = [], overview = OVERVIEW_OUT) {
   mockInvoke.mockImplementation((async (cmd: string) => {
     switch (cmd) {
-      case "get_project_overview": return OVERVIEW_OUT;
+      case "get_project_overview": return overview;
       case "list_project_tasks": return tasks;
+      case "list_agents": return [
+        { id: "a1", name: "前端专家", model: "glm-5.2" },
+        { id: "a2", name: "测试专家", model: "minimax-m3" },
+        ...Array.from({ length: 6 }, (_, i) => ({
+          id: `x${i}`, name: `成员${i}`, model: "m-x",
+        })),
+      ];
       default: return undefined;
     }
   }) as never);
@@ -99,5 +110,44 @@ describe("ProjectOverview 概览 tab（二轮重设计）", () => {
     const w = await mountOverview();
     expect(w.find(".conv-section").exists()).toBe(false);
     expect(w.find(".view-all").exists()).toBe(false);
+  });
+
+  it("成员分布：名字+模型+计数渲染，条宽按最大行归一", async () => {
+    const w = await mountOverview();
+    const rows = w.findAll(".share-row");
+    expect(rows.length).toBe(2);
+    expect(rows[0].text()).toContain("前端专家");
+    expect(rows[0].text()).toContain("glm-5.2");
+    expect(rows[0].find(".share-count").text()).toBe("30");
+    // 榜首满宽 100%，次行 12/30 = 40%
+    const bars = w.findAll(".share-bar");
+    expect(bars[0].attributes("style")).toContain("width: 100%");
+    expect(bars[1].attributes("style")).toContain("width: 40%");
+    // title 带占比（30/42 = 71%）
+    expect(rows[0].attributes("title")).toContain("71%");
+  });
+
+  it("成员分布 >5 截断为 Top5 + 「其他 N 位」聚合行", async () => {
+    mockBackend([], {
+      ...OVERVIEW_OUT,
+      agent_shares: Array.from({ length: 8 }, (_, i) => ({
+        agent_id: `a${i}`, messages: 10 - i,
+      })),
+    });
+    const w = await mountOverview();
+    const rows = w.findAll(".share-row");
+    // Top5 + 其他 1 行
+    expect(rows.length).toBe(6);
+    expect(rows[5].text()).toContain("其他 3 位");
+    expect(rows[5].find(".share-bar").classes()).toContain("other");
+    // 聚合数 = 末三位 5+4+3
+    expect(rows[5].find(".share-count").text()).toBe("12");
+  });
+
+  it("成员分布空态：无消息成员不出现", async () => {
+    mockBackend([], { ...OVERVIEW_OUT, agent_shares: [] });
+    const w = await mountOverview();
+    expect(w.find(".share-row").exists()).toBe(false);
+    expect(w.find(".share-card").text()).toContain("成员暂无消息");
   });
 });

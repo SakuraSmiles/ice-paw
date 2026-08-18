@@ -146,6 +146,35 @@ pub struct ProjectOverviewRow {
     pub last_activity_at: Option<String>,
 }
 
+/// 成员消息占比行（概览「成员分布」横条排行的数据源）。
+///
+/// 口径 = messages 行数（工作量 proxy，覆盖 chat + delegation 全部会话），
+/// 按会话归属 agent 计数；agent 名/模型不在 SQL 解析（前端 agent store
+/// getById——migration 45 明确不设 FK 到 agents，名字解析是展示层职责）。
+#[derive(Debug, Clone, FromRow)]
+pub struct ProjectAgentShareRow {
+    pub agent_id: String,
+    pub messages: i64,
+}
+
+/// 成员消息占比：本项目会话按 agent 分组计数，降序。
+pub async fn list_project_agent_shares(
+    pool: &SqlitePool,
+    project_id: &str,
+) -> AppResult<Vec<ProjectAgentShareRow>> {
+    let rows = sqlx::query_as::<_, ProjectAgentShareRow>(
+        "SELECT c.agent_id, COUNT(*) AS messages
+           FROM messages m JOIN conversations c ON c.id = m.conversation_id
+          WHERE c.project_id = ?
+          GROUP BY c.agent_id
+          ORDER BY messages DESC",
+    )
+    .bind(project_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 /// 项目概览统计：会话分 kind 计数 + 消息数 + 最近活跃。
 ///
 /// 多条小 SQL 各走现成索引（kind 索引 / idx_messages_conversation），单职责
@@ -434,6 +463,45 @@ mod tests {
         let p2 = list_project_events_tail(&pool, "p2", None, 10).await.unwrap();
         assert_eq!(p2.len(), 1);
         assert_eq!(p2[0].message_id.as_deref(), Some("m3"));
+    }
+
+    #[tokio::test]
+    async fn list_project_agent_shares_groups_and_isolates() {
+        let pool = migrated_pool().await;
+        // 第二个 agent（conversations.agent_id 有 FK 到 agents）
+        sqlx::query(
+            "INSERT INTO agents (id, name, provider, model, system_prompt, api_key_ref, temperature, max_tokens, extra_params, sort_order, cache_prompt)
+             VALUES ('agent-2', 'agent-two', 'openai', 'gpt-test', '', '', 0.7, 1024, '{}', 1, 0)",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed agent-2");
+
+        // agent-1 名下 2 条（c1 两条）；t1 划给 agent-2 名下 1 条
+        seed_conv(&pool, "c1", "chat", Some("p1"), None, None, "2026-08-18 10:00:00").await;
+        seed_conv(&pool, "t1", "delegation", Some("p1"), Some("agent-1"), Some("c1"), "2026-08-18 10:00:00").await;
+        // 注意：seed_conv 的 agent_id 固定 agent-1——第二条会话用 agent-2 需 UPDATE
+        sqlx::query("UPDATE conversations SET agent_id = 'agent-2' WHERE id = 't1'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        seed_message(&pool, "m1", "c1").await;
+        seed_message(&pool, "m2", "c1").await;
+        seed_message(&pool, "m3", "t1").await;
+        // 他项目混入（不进任何桶）
+        seed_conv(&pool, "x", "chat", Some("p2"), None, None, "2026-08-18 10:00:00").await;
+        seed_message(&pool, "m4", "x").await;
+
+        let shares = list_project_agent_shares(&pool, "p1").await.unwrap();
+        assert_eq!(shares.len(), 2, "按 agent 分组");
+        assert_eq!(shares[0].agent_id, "agent-1");
+        assert_eq!(shares[0].messages, 2, "降序：多者在前");
+        assert_eq!(shares[1].agent_id, "agent-2");
+        assert_eq!(shares[1].messages, 1);
+
+        // 空项目空数组（成员招了没说话也不出现——口径是消息数不是成员数）
+        let empty = list_project_agent_shares(&pool, "p-none").await.unwrap();
+        assert!(empty.is_empty());
     }
 
     #[tokio::test]

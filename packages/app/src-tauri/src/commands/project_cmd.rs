@@ -332,7 +332,7 @@ pub async fn list_project_events(
     list_project_events_impl(pool.inner(), &project_id, limit, before_id, after_id).await
 }
 
-/// 概览统计（详情页统计卡 + 台账分桶）。
+/// 概览统计（详情页统计卡 + 台账分桶 + 成员分布）。
 #[derive(Serialize, Clone, Debug)]
 pub struct ProjectOverviewOut {
     pub chat_conversations: i64,
@@ -343,6 +343,15 @@ pub struct ProjectOverviewOut {
     pub tasks_failed: i64,
     pub tasks_ended_other: i64,
     pub last_activity_at: Option<String>,
+    /// 成员消息占比（「成员分布」横条排行数据源；名字/模型前端解析）
+    pub agent_shares: Vec<ProjectAgentShareOut>,
+}
+
+/// 成员消息占比行（repo `ProjectAgentShareRow` 的序列化形态）。
+#[derive(Serialize, Clone, Debug)]
+pub struct ProjectAgentShareOut {
+    pub agent_id: String,
+    pub messages: i64,
 }
 
 #[tauri::command]
@@ -484,6 +493,14 @@ async fn get_project_overview_impl(
             None => {}
         }
     }
+    let agent_shares = project_ledger::list_project_agent_shares(pool, project_id)
+        .await?
+        .into_iter()
+        .map(|r| ProjectAgentShareOut {
+            agent_id: r.agent_id,
+            messages: r.messages,
+        })
+        .collect();
     Ok(ProjectOverviewOut {
         chat_conversations: ov.chat_conversations,
         delegation_conversations: ov.delegation_conversations,
@@ -493,6 +510,7 @@ async fn get_project_overview_impl(
         tasks_failed: failed,
         tasks_ended_other: ended_other,
         last_activity_at: ov.last_activity_at,
+        agent_shares,
     })
 }
 

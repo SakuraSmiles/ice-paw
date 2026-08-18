@@ -11,6 +11,7 @@ import { computed, onActivated, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { bridge } from "../../api/bridge";
 import { useProjectTasks } from "../../composables/useProjectTasks";
+import { useAgentStore } from "../../stores/agent";
 import { useChatStore } from "../../stores/chat";
 import { useProjectStore } from "../../stores/project";
 import { taskStatus, TASK_STATUS_LABELS } from "../../utils/taskStatus";
@@ -21,6 +22,7 @@ const route = useRoute();
 const router = useRouter();
 const chat = useChatStore();
 const project = useProjectStore();
+const agent = useAgentStore();
 
 const projectId = computed(() => String(route.params.id ?? ""));
 const overview = ref<OverviewData | null>(null);
@@ -48,7 +50,10 @@ onActivated(() => {
 // 相对时间每分钟刷新（Sidebar nowTick 同款机制）
 const nowTick = ref(Date.now());
 let tick: ReturnType<typeof setInterval> | null = null;
-onMounted(() => { tick = setInterval(() => (nowTick.value = Date.now()), 60000); });
+onMounted(() => {
+  tick = setInterval(() => (nowTick.value = Date.now()), 60000);
+  if (!agent.loaded) void agent.load(); // 成员分布的名字/模型解析依赖
+});
 onUnmounted(() => { if (tick) clearInterval(tick); });
 
 function ago(iso: string): string {
@@ -75,6 +80,66 @@ const buckets = computed(() => {
   return b;
 });
 const taskTotal = computed(() => tasks.value.length);
+
+// ---- 成员分布：横条排行（口径 = 消息数，工作量 proxy） ----
+// 名字/模型由 agent store 解析（SQL 只回 id——migration 45 不设 FK，展示层职责）。
+// >TOP_N 截断聚合为「其他 N 位」；条宽相对最大行归一（榜首满宽），title 给占比。
+const TOP_N = 5;
+interface ShareRow {
+  key: string;
+  name: string;
+  model: string | null;
+  messages: number;
+  other: boolean;
+  othersCount: number;
+}
+const shareRows = computed<ShareRow[]>(() => {
+  const shares = overview.value?.agent_shares ?? [];
+  const named = (s: { agent_id: string; messages: number }): ShareRow => {
+    const a = agent.getById(s.agent_id);
+    return {
+      key: s.agent_id,
+      name: a?.name ?? "未知成员",
+      model: a?.model ?? null,
+      messages: s.messages,
+      other: false,
+      othersCount: 0,
+    };
+  };
+  if (shares.length <= TOP_N) return shares.map(named);
+  const rest = shares.slice(TOP_N);
+  return [
+    ...shares.slice(0, TOP_N).map(named),
+    {
+      key: "__others__",
+      name: `其他 ${rest.length} 位`,
+      model: null,
+      messages: rest.reduce((sum, s) => sum + s.messages, 0),
+      other: true,
+      othersCount: rest.length,
+    },
+  ];
+});
+const shareMax = computed(() =>
+  shareRows.value.reduce((m, r) => Math.max(m, r.messages), 0),
+);
+const shareTotal = computed(() =>
+  (overview.value?.agent_shares ?? []).reduce((sum, s) => sum + s.messages, 0),
+);
+/** 条宽 %（相对最大行；榜首满宽对比感最强） */
+function shareWidth(messages: number): string {
+  if (shareMax.value <= 0) return "0%";
+  return `${Math.max((messages / shareMax.value) * 100, 1.5)}%`;
+}
+/** 占比 %（相对总量；进 title，不占版面） */
+function sharePercent(messages: number): string {
+  if (shareTotal.value <= 0) return "0%";
+  return `${Math.round((messages / shareTotal.value) * 100)}%`;
+}
+/** 排名递减透明度（安静的次序感；「其他」行走灰色不走透明度） */
+function shareDim(i: number): number {
+  return Math.max(1 - i * 0.12, 0.4);
+}
 </script>
 
 <template>
@@ -127,6 +192,40 @@ const taskTotal = computed(() => tasks.value.length);
           <span v-if="lastActivityLabel">最近活动 {{ lastActivityLabel }}</span>
         </div>
       </div>
+    </div>
+
+    <!-- ===== 成员分布：横条排行（口径 = 消息数） ===== -->
+    <div v-if="shareRows.length > 0" class="stat-card share-card">
+      <div class="share-head">
+        <span class="share-title">成员分布</span>
+        <span class="share-meta">按消息数</span>
+      </div>
+      <div
+        v-for="(row, i) in shareRows"
+        :key="row.key"
+        class="share-row"
+        :title="`${row.name} · ${sharePercent(row.messages)}（${row.messages} 条）`"
+      >
+        <div class="share-label">
+          <span class="share-name">{{ row.name }}</span>
+          <span v-if="row.model" class="share-model">{{ row.model }}</span>
+        </div>
+        <div class="share-track">
+          <span
+            class="share-bar"
+            :class="{ other: row.other }"
+            :style="{ width: shareWidth(row.messages), opacity: row.other ? undefined : shareDim(i) }"
+          />
+        </div>
+        <span class="share-count">{{ row.messages }}</span>
+      </div>
+    </div>
+    <div v-else class="stat-card share-card">
+      <div class="share-head">
+        <span class="share-title">成员分布</span>
+        <span class="share-meta">按消息数</span>
+      </div>
+      <div class="mix-empty">成员暂无消息</div>
     </div>
     <!-- 会话入口（用户拍板撤下：完整列表在侧栏）与任务台账区（重设计中）
          先空着，只留统计带 -->
@@ -213,6 +312,54 @@ const taskTotal = computed(() => tasks.value.length);
 .mix-empty {
   flex: 1; display: flex; align-items: center;
   font-size: var(--ip-text-body-sm-size); color: var(--ip-color-text-secondary);
+}
+
+/* ===== 成员分布：横条排行（名字+模型 | 轨道条 | 计数） ===== */
+.share-card { gap: 12px; }
+.share-head { display: flex; align-items: baseline; gap: 8px; }
+.share-title {
+  font-size: var(--ip-text-body-sm-size);
+  font-weight: var(--ip-font-weight-medium);
+  color: var(--ip-color-text-primary);
+}
+.share-meta { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
+
+.share-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 200px) 1fr auto;
+  gap: 12px;
+  align-items: center;
+}
+.share-label {
+  display: flex; align-items: baseline; gap: 6px;
+  min-width: 0;
+}
+.share-name {
+  font-size: var(--ip-text-body-sm-size);
+  color: var(--ip-color-text-primary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.share-model {
+  font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.share-track {
+  height: 6px;
+  border-radius: var(--ip-radius-full);
+  background-color: var(--ip-color-bg-tertiary);
+  overflow: hidden;
+}
+.share-bar {
+  display: block; height: 100%;
+  border-radius: inherit;
+  background: var(--ip-primary-500);
+  transition: width var(--ip-duration-normal, 200ms) var(--ip-ease-out);
+}
+.share-bar.other { background: var(--ip-color-text-tertiary); }
+.share-count {
+  font-size: var(--ip-text-body-sm-size);
+  color: var(--ip-color-text-secondary);
+  font-variant-numeric: tabular-nums;
 }
 .mix-meta {
   display: flex; justify-content: space-between; gap: 12px;
