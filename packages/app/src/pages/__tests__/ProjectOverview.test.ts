@@ -168,14 +168,18 @@ describe("ProjectOverview 概览 tab（二轮重设计）", () => {
     expect(w.findAll(".donut-seg").length).toBe(6);
   });
 
-  it("hover 联动：弧段 hover → 其余段淡化 + 对应行提亮 + 中心切为该成员值；行 hover 反向联动", async () => {
+  it("hover 联动：弧段 hover → 聚焦段变粗 + 其余段/行淡化 + 中心切为该成员值；行 hover 反向联动", async () => {
     const w = await mountOverview();
+    // 默认态：中心总量 + 字距小标 TOKENS
+    expect(w.find(".donut-label").text()).toBe("TOKENS");
     // hover 第 2 段（a2，2700 tokens → 2.7K）
     await w.findAll(".donut-seg")[1].trigger("mouseenter");
     const segs = w.findAll(".donut-seg");
-    expect(segs[0].classes()).toContain("dim");
-    expect(segs[1].classes()).not.toContain("dim");
-    expect(w.findAll(".share-row")[1].classes()).toContain("hovered");
+    expect(segs[1].classes()).toContain("active"); // 聚焦段变粗
+    expect(segs[0].classes()).toContain("dim");   // 其余段淡出
+    const rows = w.findAll(".share-row");
+    expect(rows[1].classes()).toContain("hovered");
+    expect(rows[0].classes()).toContain("dim");    // 其余行同步淡出
     expect(w.find(".donut-value").text()).toBe("2.7K");
     expect(w.find(".donut-sub-name").text()).toContain("测试专家");
     // 移出环图恢复总量态
@@ -183,9 +187,11 @@ describe("ProjectOverview 概览 tab（二轮重设计）", () => {
     expect(w.find(".donut-value").text()).toBe("11.7K");
     expect(w.findAll(".share-row")[1].classes()).not.toContain("hovered");
 
-    // 反向：hover 第 1 行 label → 对应段强调、其余淡化、中心切换
+    // 反向：hover 第 1 行 label → 对应段变粗、其余淡化、中心切换
     await w.findAll(".share-label")[0].trigger("mouseenter");
-    expect(w.findAll(".donut-seg")[1].classes()).toContain("dim");
+    const segs2 = w.findAll(".donut-seg");
+    expect(segs2[0].classes()).toContain("active");
+    expect(segs2[1].classes()).toContain("dim");
     expect(w.find(".donut-value").text()).toBe("9K");
     // 移出排行区清空
     await w.find(".share-rows").trigger("mouseleave");

@@ -172,7 +172,9 @@ function rowTitle(r: ShareRow): string {
 
 // ---- 环图弧段（SVG stroke-dasharray；r=40 周长恒定） ----
 const DONUT_C = 2 * Math.PI * 40;
-/** hover 联动：环图段 ↔ 排行行双向高亮（key 共享；null = 无 hover） */
+/** hover 联动：环图段 ↔ 排行行双向聚焦（key 共享；null = 无 hover）。
+ *  反馈语言 = 聚焦透镜：聚焦段变粗（stroke 11→14.5）+ 其余段/行整体淡化，
+ *  中心切为该成员值——粗细对比 + 全场淡出，不止颜色差异。 */
 const hoverKey = ref<string | null>(null);
 const hoverRow = computed(() =>
   shareRows.value.find((r) => r.key === hoverKey.value) ?? null,
@@ -186,7 +188,8 @@ const donutSegs = computed(() => {
   const rows = shareRows.value;
   const total = metricTotal.value;
   if (total <= 0) return [];
-  const GAP = 1.5; // 段间微隙（弧长单位）；单段满环不留
+  // 段间留白（弧长单位）：round cap 每端延伸 strokeWidth/2，视觉间隙 = GAP - strokeWidth
+  const GAP = 12;
   let offset = 0;
   return rows.map((r) => {
     const len = (metric(r) / total) * DONUT_C;
@@ -258,7 +261,7 @@ const donutSegs = computed(() => {
       </div>
       <div class="share-body">
         <!-- 环图：token 占比分段，中心总量；token 全零时整体隐藏（回退消息口径）。
-             hover 联动：段强调其余淡化 + 中心切换为该成员值 + 对应行提亮 -->
+             hover = 聚焦透镜：聚焦段变粗 + 其余段/行淡化 + 中心切该成员值 -->
         <div v-if="hasTokens" class="donut-wrap">
           <svg viewBox="0 0 100 100" class="donut" role="img" :aria-label="donutAria" @mouseleave="hoverKey = null">
             <circle class="donut-track" cx="50" cy="50" r="40" />
@@ -266,7 +269,7 @@ const donutSegs = computed(() => {
               v-for="s in donutSegs"
               :key="s.key"
               class="donut-seg"
-              :class="{ dim: hoverKey !== null && hoverKey !== s.key }"
+              :class="{ active: hoverKey === s.key, dim: hoverKey !== null && hoverKey !== s.key }"
               cx="50" cy="50" r="40"
               :stroke="s.row.color"
               :stroke-dasharray="`${s.len} ${DONUT_C - s.len}`"
@@ -279,11 +282,11 @@ const donutSegs = computed(() => {
           <div class="donut-center">
             <template v-if="hoverRow">
               <span class="donut-value">{{ formatTokenCompact(hoverRow.tokens) }}</span>
-              <span class="donut-sub donut-sub-name" :title="hoverRow.name">{{ hoverRow.name }} · {{ sharePercent(hoverRow) }}</span>
+              <span class="donut-sub donut-sub-name" :title="rowTitle(hoverRow)">{{ hoverRow.name }} · {{ sharePercent(hoverRow) }}</span>
             </template>
             <template v-else>
               <span class="donut-value">{{ formatTokenCompact(tokensTotal) }}</span>
-              <span class="donut-sub">tokens</span>
+              <span class="donut-sub donut-label">TOKENS</span>
             </template>
           </div>
         </div>
@@ -291,14 +294,14 @@ const donutSegs = computed(() => {
              列对齐；行容器 display:contents 只留分组语义，title 挂 label 格
              （contents 元素不渲染盒子，title 无效）。数字列显式 grid-column，
              缺格不塌位（other 行无消息小字）。
-             hover 联动（反向）：cell enter 设 key（cell 无 leave，跨 cell/跨行
-             移动由 enter 覆盖），容器级 leave 统一清空。 -->
+             hover（反向）：cell enter 设 key（cell 无 leave，跨 cell/跨行
+             移动由 enter 覆盖），容器级 leave 统一清空；聚焦行提亮、其余行淡化。 -->
         <div class="share-rows" @mouseleave="hoverKey = null">
           <div
             v-for="row in shareRows"
             :key="row.key"
             class="share-row"
-            :class="{ hovered: hoverKey === row.key }"
+            :class="{ hovered: hoverKey === row.key, dim: hoverKey !== null && hoverKey !== row.key }"
           >
             <div class="share-label" :title="rowTitle(row)" @mouseenter="hoverKey = row.key">
               <i class="share-dot" :style="{ background: row.color }" />
@@ -421,42 +424,50 @@ const donutSegs = computed(() => {
 .share-body {
   display: flex;
   align-items: center;
-  gap: 24px;
+  gap: 32px;
 }
 
-/* 环图：SVG 弧段 + 绝对定位中心文字 */
-.donut-wrap { position: relative; flex-shrink: 0; width: 128px; height: 128px; }
+/* 环图：SVG 弧段 + 绝对定位中心文字（160px 大环做视觉锚点） */
+.donut-wrap { position: relative; flex-shrink: 0; width: 160px; height: 160px; }
 .donut { width: 100%; height: 100%; transform: rotate(-90deg); }
 .donut-track {
   fill: none;
   stroke: var(--ip-color-bg-tertiary);
-  stroke-width: 10;
+  stroke-width: 11;
 }
 .donut-seg {
   fill: none;
-  stroke-width: 10;
+  stroke-width: 11;
+  stroke-linecap: round;
   pointer-events: stroke;
-  transition: opacity 120ms var(--ip-ease-out, ease);
+  transition: stroke-width 180ms var(--ip-ease-out, ease), opacity 160ms var(--ip-ease-out, ease);
 }
-/* hover 联动：非 hover 段淡化（段强调靠对比不靠放大，克制） */
-.donut-seg.dim { opacity: 0.3; }
+/* 聚焦透镜：聚焦段变粗（径向扩张，占位不变），其余段淡出 */
+.donut-seg.active { stroke-width: 14.5; }
+.donut-seg.dim { opacity: 0.25; }
 .donut-center {
   position: absolute; inset: 0;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 2px;
+  gap: 4px;
   pointer-events: none;
 }
 .donut-value {
-  font-size: 17px;
+  font-size: 20px;
   font-weight: var(--ip-font-weight-semibold);
   color: var(--ip-color-text-primary);
   font-variant-numeric: tabular-nums;
   line-height: 1.1;
 }
 .donut-sub { font-size: 11px; color: var(--ip-color-text-tertiary); }
-/* hover 态中心副行换成成员名+占比：环内宽 ~90px，溢出 ellipsis */
+/* 默认态单位小标：拉开字距的小型大写风格（科技感排版惯例） */
+.donut-label {
+  font-size: 9.5px;
+  letter-spacing: 0.16em;
+  margin-right: -0.16em; /* 补偿末字符字距，视觉居中 */
+}
+/* hover 态中心副行换成成员名+占比：聚焦态环内径 ~105px，溢出 ellipsis */
 .donut-sub-name {
-  max-width: 88px;
+  max-width: 104px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   color: var(--ip-color-text-secondary);
 }
@@ -466,23 +477,28 @@ const donutSegs = computed(() => {
 .share-rows {
   flex: 1; min-width: 0;
   display: grid;
-  grid-template-columns: minmax(120px, 200px) 1fr auto auto;
-  column-gap: 12px;
-  row-gap: 10px;
+  grid-template-columns: minmax(140px, 220px) 1fr auto auto;
+  column-gap: 14px;
+  row-gap: 13px;
   align-items: center;
 }
 .share-row { display: contents; }
 .share-label {
   grid-column: 1;
-  display: flex; align-items: center; gap: 6px;
+  display: flex; align-items: center; gap: 8px;
   min-width: 0;
+  transition: opacity 160ms var(--ip-ease-out, ease);
 }
-.share-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.share-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+  transition: transform 160ms var(--ip-ease-out, ease);
+}
 .share-name {
   font-size: var(--ip-text-body-sm-size);
+  font-weight: var(--ip-font-weight-medium);
   color: var(--ip-color-text-primary);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  transition: color 120ms var(--ip-ease-out, ease);
+  transition: color 160ms var(--ip-ease-out, ease);
 }
 .share-model {
   font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary);
@@ -494,6 +510,7 @@ const donutSegs = computed(() => {
   border-radius: var(--ip-radius-full);
   background-color: var(--ip-color-bg-tertiary);
   overflow: hidden;
+  transition: opacity 160ms var(--ip-ease-out, ease);
 }
 .share-bar {
   display: block; height: 100%;
@@ -508,13 +525,8 @@ const donutSegs = computed(() => {
   color: var(--ip-color-text-secondary);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-  transition: color 120ms var(--ip-ease-out, ease);
+  transition: color 160ms var(--ip-ease-out, ease), opacity 160ms var(--ip-ease-out, ease);
 }
-
-/* hover 联动：对应行提亮（行容器 display:contents 无盒子，反馈落在
-   名字/数字变色——克制不加大背景块） */
-.share-row.hovered .share-name,
-.share-row.hovered .count-tokens { color: var(--ip-primary-600); }
 .count-msgs {
   grid-column: 4;
   justify-self: end;
@@ -523,7 +535,18 @@ const donutSegs = computed(() => {
   color: var(--ip-color-text-disabled);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+  transition: opacity 160ms var(--ip-ease-out, ease);
 }
+
+/* hover 聚焦透镜（行侧）：聚焦行名字/数字提亮 + 色点放大，
+   其余行整体淡出（display:contents 行无盒子，逐 cell 施加） */
+.share-row.hovered .share-name,
+.share-row.hovered .count-tokens { color: var(--ip-primary-600); }
+.share-row.hovered .share-dot { transform: scale(1.35); }
+.share-row.dim .share-label,
+.share-row.dim .share-track,
+.share-row.dim .count-tokens { opacity: 0.35; }
+.share-row.dim .count-msgs { opacity: 0.35; }
 .mix-meta {
   display: flex; justify-content: space-between; gap: 12px;
   padding-top: 8px;
