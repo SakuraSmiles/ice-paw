@@ -1,12 +1,17 @@
 <script setup lang="ts">
-// ProjectList.vue — 项目管理：列表 + 内联新建 + 内联编辑（点卡片展开配置）
-import { ref, reactive, computed, onMounted } from "vue";
+// ProjectList.vue — 项目管理：列表 + 内联新建 + 内联编辑（点卡片展开配置）。
+// 编辑区三块（基础信息/成员/项目背景）已抽共享组件（components/project/），
+// 与项目详情页设置 tab 双入口复用；本页新建表单单入口不抽。
+import { ref, reactive, onMounted } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useProjectStore } from "../stores/project";
 import { useAgentStore } from "../stores/agent";
 import { useChatStore } from "../stores/chat";
 import { bridge } from "../api/bridge";
 import { formatTime, parseDbTime } from "../utils/time";
+import ProjectBasicForm from "../components/project/ProjectBasicForm.vue";
+import ProjectMembersChips from "../components/project/ProjectMembersChips.vue";
+import ProjectContextEditor from "../components/project/ProjectContextEditor.vue";
 import type { NewProject, Project } from "../types";
 
 const project = useProjectStore();
@@ -87,28 +92,11 @@ async function createProject() {
   }
 }
 
-// ===== 内联编辑（点卡片展开） =====
+// ===== 内联编辑（点卡片展开；编辑区三块为共享组件） =====
 const expandedId = ref<string | null>(null);
-const editName = ref("");
-const editDesc = ref("");
-const editWorkspace = ref("");
+const editForm = reactive({ name: "", description: "", workspacePath: "" });
 const editError = ref("");
 const savingEdit = ref(false);
-
-// ----- 项目背景（project.md / conventions.md，注入本项目全部会话） -----
-const ctxLoading = ref(false);
-const ctxAvailable = ref(true);
-const ctxDir = ref<string | null>(null);
-const ctxProjectMd = ref("");
-const ctxConventionsMd = ref("");
-const ctxOriginalMd = ref("");
-const ctxOriginalConv = ref("");
-const showConventions = ref(false);
-const ctxError = ref("");
-const ctxSaving = ref(false);
-const ctxDirty = computed(
-  () => ctxProjectMd.value !== ctxOriginalMd.value || ctxConventionsMd.value !== ctxOriginalConv.value,
-);
 
 function toggleEdit(p: Project) {
   if (expandedId.value === p.id) {
@@ -117,58 +105,10 @@ function toggleEdit(p: Project) {
   }
   isCreating.value = false;
   expandedId.value = p.id;
-  editName.value = p.name;
-  editDesc.value = p.description || "";
-  editWorkspace.value = p.workspace_path || "";
+  editForm.name = p.name;
+  editForm.description = p.description || "";
+  editForm.workspacePath = p.workspace_path || "";
   editError.value = "";
-  // 项目背景惰性加载（force——外部编辑器改过也不显示陈旧内容）
-  ctxLoading.value = true;
-  ctxError.value = "";
-  showConventions.value = false;
-  project
-    .loadContext(p.id, true)
-    .then((c) => {
-      ctxAvailable.value = c.available;
-      ctxDir.value = c.dir ?? null;
-      ctxProjectMd.value = c.project_md;
-      ctxConventionsMd.value = c.conventions_md;
-      ctxOriginalMd.value = c.project_md;
-      ctxOriginalConv.value = c.conventions_md;
-    })
-    .catch((e) => {
-      ctxError.value = e instanceof Error ? e.message : "加载项目背景失败";
-    })
-    .finally(() => {
-      ctxLoading.value = false;
-    });
-}
-
-async function saveProjectContext(p: Project) {
-  if (ctxSaving.value || !ctxDirty.value) return;
-  ctxSaving.value = true;
-  ctxError.value = "";
-  try {
-    if (ctxProjectMd.value !== ctxOriginalMd.value) {
-      await project.saveContext(p.id, "project.md", ctxProjectMd.value);
-      ctxOriginalMd.value = ctxProjectMd.value;
-    }
-    if (ctxConventionsMd.value !== ctxOriginalConv.value) {
-      await project.saveContext(p.id, "conventions.md", ctxConventionsMd.value);
-      ctxOriginalConv.value = ctxConventionsMd.value;
-    }
-  } catch (e) {
-    ctxError.value = e instanceof Error ? e.message : "保存项目背景失败";
-  } finally {
-    ctxSaving.value = false;
-  }
-}
-
-async function openContextDir(p: Project) {
-  try {
-    await bridge.projects.openContextDir(p.id);
-  } catch (e) {
-    console.error("打开项目上下文目录失败:", e);
-  }
 }
 
 function cancelEdit() {
@@ -176,19 +116,9 @@ function cancelEdit() {
   editError.value = "";
 }
 
-async function pickEditWorkspace() {
-  const selected = await open({
-    directory: true,
-    multiple: false,
-    title: "选择项目源码目录",
-    defaultPath: editWorkspace.value || undefined,
-  });
-  if (selected) editWorkspace.value = selected;
-}
-
 async function saveEdit(p: Project) {
   if (savingEdit.value) return;
-  if (!editName.value.trim()) {
+  if (!editForm.name.trim()) {
     editError.value = "项目名称不能为空";
     return;
   }
@@ -197,9 +127,9 @@ async function saveEdit(p: Project) {
   try {
     await project.update({
       id: p.id,
-      name: editName.value.trim(),
-      description: editDesc.value.trim(),
-      workspace_path: editWorkspace.value.trim() || null,
+      name: editForm.name.trim(),
+      description: editForm.description.trim(),
+      workspace_path: editForm.workspacePath.trim() || null,
     });
     expandedId.value = null;
   } catch (e) {
@@ -211,10 +141,6 @@ async function saveEdit(p: Project) {
 
 function memberIdsOf(p: Project): string[] {
   return (p.agents ?? []).map((a) => a.agent_id);
-}
-function candidateAgents(p: Project) {
-  const ids = new Set(memberIdsOf(p));
-  return agent.list.filter((a) => !ids.has(a.id));
 }
 async function addMember(p: Project, agentId: string) {
   try {
@@ -480,103 +406,19 @@ onMounted(() => {
           </div>
         </div>
 
-        <!-- 展开态：内联编辑配置（不跳页、不切换对话空间） -->
+        <!-- 展开态：内联编辑配置（不跳页、不切换对话空间）——三块共享组件
+             （与项目详情页设置 tab 双入口复用，状态同步靠 store 缓存） -->
         <div v-if="expandedId === p.id" class="expand-panel" @click.stop>
-          <div class="field">
-            <label class="field-label">名称 <span class="req">*</span></label>
-            <input v-model="editName" type="text" class="input" placeholder="项目名称" />
-          </div>
-
-          <div class="field">
-            <label class="field-label">描述</label>
-            <input v-model="editDesc" type="text" class="input" placeholder="一句话说明项目用途（可选）" />
-          </div>
-
-          <div class="field">
-            <label class="field-label">源码目录</label>
-            <div class="workspace-group">
-              <input v-model="editWorkspace" type="text" class="input workspace-input" placeholder="选择项目源码根目录（可选）" readonly @click="pickEditWorkspace" />
-              <button type="button" class="ws-btn" title="选择目录" @click="pickEditWorkspace">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-                </svg>
-              </button>
-            </div>
-            <p class="field-hint">绑定后，项目内会话的文件/代码工具切换到此目录；留空则回退 agent 工作区</p>
-          </div>
-
-          <div class="field">
-            <label class="field-label">成员</label>
-            <div v-if="memberIdsOf(p).length === 0 && candidateAgents(p).length === 0" class="members-empty">暂无可用智能体</div>
-            <div v-else class="member-chips">
-              <button
-                v-for="m in memberIdsOf(p)"
-                :key="'m-' + m"
-                type="button"
-                class="member-chip selected"
-                :title="`移除 ${agent.getById(m)?.name ?? ''}`"
-                @click="removeMember(p, m)"
-              >× {{ agent.getById(m)?.name ?? '未知' }}</button>
-              <button
-                v-for="a in candidateAgents(p)"
-                :key="'a-' + a.id"
-                type="button"
-                class="member-chip"
-                :title="`添加 ${a.name}`"
-                @click="addMember(p, a.id)"
-              >+ {{ a.name }}</button>
-            </div>
-          </div>
-
-          <!-- 项目背景：project.md 注入本项目全部会话（system prompt，修改即时生效） -->
-          <div class="field">
-            <div class="field-label">
-              <span>项目背景</span>
-              <span class="hint">project.md · 注入本项目全部会话，修改即时生效</span>
-              <button
-                v-if="ctxDir"
-                type="button"
-                class="ctx-dir-btn"
-                :title="ctxDir"
-                @click="openContextDir(p)"
-              >打开目录</button>
-            </div>
-            <div v-if="!ctxAvailable" class="ctx-guide">
-              未解析到默认工作区，项目背景暂不可用——请在「设置 → 通用」确认默认工作区后重试。
-            </div>
-            <template v-else>
-              <textarea
-                v-model="ctxProjectMd"
-                class="ctx-md"
-                rows="10"
-                :disabled="ctxLoading"
-                placeholder="# 项目说明&#10;&#10;技术栈 / 架构 / 业务背景 / 术语表……项目内所有会话都会带上这份背景"
-              ></textarea>
-              <button type="button" class="conv-toggle" @click="showConventions = !showConventions">
-                <svg class="tasks-chev" :class="{ rotated: showConventions }" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6" /></svg>
-                <span>编码规范 conventions.md</span>
-                <span class="hint">可选，与项目背景一同注入</span>
-              </button>
-              <textarea
-                v-show="showConventions"
-                v-model="ctxConventionsMd"
-                class="ctx-md"
-                rows="6"
-                :disabled="ctxLoading"
-                placeholder="命名 / 格式 / 最佳实践……"
-              ></textarea>
-              <div class="ctx-actions">
-                <button
-                  class="btn btn-primary btn-sm"
-                  :disabled="!ctxDirty || ctxSaving || ctxLoading"
-                  @click="saveProjectContext(p)"
-                >{{ ctxSaving ? "保存中" : "保存项目背景" }}</button>
-                <span v-if="!ctxDirty && !ctxLoading && !ctxSaving" class="ctx-saved">已与文件同步</span>
-              </div>
-              <p class="field-hint">文件存放在 IcePaw 工作区（projects/{{ p.id }}/），不进项目源码目录</p>
-            </template>
-            <div v-if="ctxError" class="form-error">{{ ctxError }}</div>
-          </div>
+          <ProjectBasicForm
+            :model-value="editForm"
+            @update:model-value="Object.assign(editForm, $event)"
+          />
+          <ProjectMembersChips
+            :member-ids="memberIdsOf(p)"
+            @add="(agentId) => addMember(p, agentId)"
+            @remove="(agentId) => removeMember(p, agentId)"
+          />
+          <ProjectContextEditor :project-id="p.id" />
 
           <div v-if="editError" class="form-error">{{ editError }}</div>
 
@@ -797,46 +639,7 @@ onMounted(() => {
   border-color: var(--ip-primary-400);
 }
 
-/* ===== 项目背景（project.md 编辑区） ===== */
-.ctx-dir-btn {
-  margin-left: auto; height: 22px; padding: 0 8px;
-  font-size: var(--ip-text-caption-size); font-family: inherit;
-  color: var(--ip-color-text-tertiary); background: none;
-  border: 1px solid var(--ip-color-border-default); border-radius: var(--ip-radius-full);
-  cursor: pointer;
-  transition: all var(--ip-duration-fast) var(--ip-ease-out);
-}
-.ctx-dir-btn:hover { color: var(--ip-primary-600); border-color: var(--ip-primary-300); }
-.ctx-guide {
-  padding: 10px 12px;
-  font-size: var(--ip-text-caption-size); color: var(--ip-color-text-secondary);
-  background-color: var(--ip-color-bg-tertiary);
-  border-radius: var(--ip-radius-md);
-}
-.ctx-md {
-  width: 100%; padding: 10px 12px;
-  background-color: var(--ip-color-bg-tertiary);
-  border: 1px solid transparent;
-  border-radius: var(--ip-radius-md);
-  font-family: var(--ip-font-mono);
-  font-size: var(--ip-text-caption-size); line-height: 1.7;
-  color: var(--ip-color-text-primary);
-  resize: vertical;
-  transition: all var(--ip-duration-fast) var(--ip-ease-out);
-}
-.ctx-md:focus { outline: none; border-color: var(--color-input-focus-border); background-color: var(--color-input-bg); }
-.ctx-md:disabled { opacity: 0.6; }
-.ctx-md::placeholder { color: var(--ip-color-text-disabled); }
-.conv-toggle {
-  display: flex; align-items: center; gap: 6px;
-  background: none; border: none; padding: 0; cursor: pointer;
-  font-family: inherit; font-size: var(--ip-text-caption-size);
-  color: var(--ip-color-text-tertiary);
-  transition: color var(--ip-duration-fast) var(--ip-ease-out);
-}
-.conv-toggle:hover { color: var(--ip-color-text-secondary); }
-.ctx-actions { display: flex; align-items: center; gap: 8px; }
-.ctx-saved { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-disabled); }
+/* 项目背景编辑区样式已随 ProjectContextEditor 组件自持搬走 */
 
 .form-error { font-size: var(--ip-text-caption-size); color: var(--ip-danger-text); }
 
