@@ -198,7 +198,7 @@ describe("ProjectOverview 概览 tab（二轮重设计）", () => {
     expect(w.find(".donut-value").text()).toBe("11.7K");
   });
 
-  it("环图几何：方头段所见即所得——段间间隙恒定，极小段不覆盖邻段", async () => {
+  it("环图几何：无间隙连续环——段首尾相接，所见长=占比×周长，极小段有最小可见宽", async () => {
     const w = await mountOverview();
     // 从 DOM 读 dash 几何：dasharray[0] = dash 长（butt = 所见长），dashoffset = -start
     const read = (i: number) => {
@@ -210,24 +210,24 @@ describe("ProjectOverview 概览 tab（二轮重设计）", () => {
     };
     const a = read(0);
     const b = read(1);
-    // 段 0 视觉终点 = start + dash；段 1 视觉起点 = start；间隙 = SEG_GAP
-    expect(b.start - (a.start + a.dash)).toBeCloseTo(4, 5);
-    // 段 0 所见长 = 9000/11700 周长 - 间隙
+    // 首尾相接：段 1 起点 = 段 0 终点（无间隙）
+    expect(b.start - (a.start + a.dash)).toBeCloseTo(0, 5);
+    // 段 0 所见长 = 9000/11700 × 周长
     const C = 2 * Math.PI * 40;
-    expect(a.dash).toBeCloseTo((9000 / 11700) * C - 4, 5);
+    expect(a.dash).toBeCloseTo((9000 / 11700) * C, 5);
 
-    // 极小占比段（1.5%）：最小可见宽 1.5，不越过自身区间+间隙触达邻段
+    // 极小占比段（0.15%）：最小可见宽 1 弧长，保 hover 可命中
     mockBackend([], {
       ...OVERVIEW_OUT,
       agent_shares: [
-        { agent_id: "a1", messages: 99, tokens: 98500 },
-        { agent_id: "a2", messages: 1, tokens: 1500 },
+        { agent_id: "a1", messages: 99, tokens: 99850 },
+        { agent_id: "a2", messages: 1, tokens: 150 },
       ],
     });
     const w2 = await mountOverview();
     const s2 = w2.findAll(".donut-seg")[1]!;
     const dash2 = parseFloat(s2.attributes("stroke-dasharray")!.split(" ")[0]!);
-    expect(dash2).toBeCloseTo(1.5, 5); // 最小可见宽，而非负值/零
+    expect(dash2).toBeCloseTo(1, 5);
   });
 
   it("成员负载空态：无消息成员不出现", async () => {
