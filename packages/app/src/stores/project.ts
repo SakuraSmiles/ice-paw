@@ -10,22 +10,32 @@ export const useProjectStore = defineStore("project", () => {
   const loaded = ref(false);
   const activeProjectId = ref<string | null>(null);
 
-  async function load(force = false) {
+  /** 飞行中的加载请求——并发调用方共享同一个 Promise 而非跳过。
+   *  （曾用「loading 中直接 return」防重复请求，但刷新时 Sidebar 的 load()
+   *  在飞行中、详情页的 load(true) 立即返回空 → 误判「项目不存在」——
+   *  直链组件必须能等飞行请求落地再下结论。） */
+  let inflight: Promise<void> | null = null;
+
+  async function load(force = false): Promise<void> {
+    if (inflight) return inflight; // 等同一个请求（数据源相同，force 并发窗口内降级为等待）
     if (loaded.value && !force) return;
-    if (loading.value) return; // 已有进行中的加载，跳过避免并发覆盖
     loading.value = true;
-    try {
-      list.value = await bridge.projects.list();
-      loaded.value = true;
-      // 校验 activeProjectId：若指向已删除/归档的项目则清空，避免 app 处于"已选项目但找不到"的无效状态
-      if (activeProjectId.value && !list.value.some((p) => p.id === activeProjectId.value)) {
-        setActiveProject(null);
+    inflight = (async () => {
+      try {
+        list.value = await bridge.projects.list();
+        loaded.value = true;
+        // 校验 activeProjectId：若指向已删除/归档的项目则清空，避免 app 处于"已选项目但找不到"的无效状态
+        if (activeProjectId.value && !list.value.some((p) => p.id === activeProjectId.value)) {
+          setActiveProject(null);
+        }
+      } catch (e) {
+        console.error("加载项目列表失败:", e);
+      } finally {
+        loading.value = false;
+        inflight = null;
       }
-    } catch (e) {
-      console.error("加载项目列表失败:", e);
-    } finally {
-      loading.value = false;
-    }
+    })();
+    return inflight;
   }
 
   /** 设置当前活跃项目（校验存在性，无效 ID 会被拒绝并 warn）。

@@ -51,21 +51,43 @@ describe("projectStore", () => {
       expect(mockInvoke).toHaveBeenCalledTimes(1);
     });
 
-    it("skips duplicate concurrent loads", async () => {
-      // 第一次调用 pending，第二次直接跳过
+    it("concurrent loads share the in-flight promise (no duplicate invoke)", async () => {
+      // 第一次调用 pending，第二次共享同一个 Promise 等待（不再「跳过即返回」）
       let resolveFirst: (v: unknown) => void;
       const firstPromise = new Promise((r) => { resolveFirst = r; });
       mockInvoke.mockReturnValueOnce(firstPromise);
 
       const store = useProjectStore();
       const p1 = store.load(true);
-      const p2 = store.load(true); // 被 loading 守卫跳过
+      const p2 = store.load(true);
 
       resolveFirst!([mockProject("p1", "A")]);
       await p1;
       await p2;
 
       expect(mockInvoke).toHaveBeenCalledTimes(1);
+      // 关键：后到的调用方等到数据落地（刷新时详情页 load(true) 不再误判空列表）
+      expect(store.loaded).toBe(true);
+      expect(store.getById("p1")?.name).toBe("A");
+    });
+
+    it("refresh race: detail page load(true) awaits sidebar's in-flight load and sees data", async () => {
+      // 复刻刷新时序：Sidebar load() 先发起（pending）→ 详情页 onMounted
+      // load(true)。旧实现 force 被「loading 中 return」短路立即返回，
+      // getById 仍 null → 误报「项目不存在或已删除」。
+      let resolveFirst: (v: unknown) => void;
+      const firstPromise = new Promise((r) => { resolveFirst = r; });
+      mockInvoke.mockReturnValueOnce(firstPromise);
+
+      const store = useProjectStore();
+      const sidebarLoad = store.load();      // Sidebar onMounted
+      const detailLoad = store.load(true);   // 详情页 onMounted（force）
+
+      // 详情页的检查在 await 之后才发生
+      resolveFirst!([mockProject("p1", "真实项目")]);
+      await detailLoad;
+      expect(store.getById("p1")?.name).toBe("真实项目");
+      await sidebarLoad;
     });
   });
 
