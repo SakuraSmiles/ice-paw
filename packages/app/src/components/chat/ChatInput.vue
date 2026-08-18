@@ -626,7 +626,7 @@ function handleKeydown(e: KeyboardEvent) {
 .input-wrapper.drag-over { border-color:var(--ip-primary-500); box-shadow:0 0 0 3px rgba(46,141,100,0.18); background-color:var(--ip-primary-50); }
 
 /* 底部工具栏：附件/引用（24px）… 提示居中 … 发送（32px，大一圈） */
-.input-footer { display:flex; align-items:center; gap:6px; padding:6px 12px 10px; }
+.input-footer { display:flex; align-items:center; gap:6px; padding:4px 12px 7px; }
 .btn-img { display:flex; align-items:center; justify-content:center; width:24px; height:24px; border-radius:var(--ip-radius-md); border:none; background:transparent; color:var(--ip-color-text-tertiary); cursor:pointer; transition:all var(--ip-duration-fast) var(--ip-ease-out); }
 .btn-img:hover { background-color:var(--ip-color-bg-tertiary); color:var(--ip-primary-600); }
 .btn-img:disabled { opacity:0.35; cursor:not-allowed; }
