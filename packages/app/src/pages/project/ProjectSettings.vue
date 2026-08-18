@@ -158,6 +158,9 @@ async function archive() {
 </template>
 
 <style scoped>
+/* 表单类内容限宽居中（GitHub/Linear settings 先例）：超宽窗口下卡片居中
+   960px（比 720 舒展、不失扫视性）；窄窗口自然全宽。概览/轨迹 tab 保持全宽
+   （表格列多，宽度是收益）。滚动条隐藏视觉、滚轮仍可滚（overflow 保留） */
 .proj-settings {
   flex: 1;
   overflow-y: auto;
@@ -165,7 +168,12 @@ async function archive() {
   flex-direction: column;
   gap: 14px;
   min-height: 0;
+  width: 100%;
+  max-width: 960px;
+  margin: 0 auto;
+  scrollbar-width: none; /* 标准 */
 }
+.proj-settings::-webkit-scrollbar { display: none; } /* Chromium/WebView2 */
 
 .settings-card {
   display: flex;

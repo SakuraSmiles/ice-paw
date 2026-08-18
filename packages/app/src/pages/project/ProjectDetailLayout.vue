@@ -66,7 +66,7 @@ const updatedLabel = computed(() => {
 
 <template>
   <div class="detail-page">
-    <header class="detail-header">
+    <header class="detail-header" :class="{ 'has-tabbar': !!current }">
       <div class="head-main">
         <template v-if="current">
           <h1 class="head-name">{{ current.name }}</h1>
@@ -112,22 +112,26 @@ const updatedLabel = computed(() => {
   background-color: var(--ip-color-bg-primary);
 }
 
+/* 头部视觉对齐 ChatHeader（会话页）：同 padding/字号/底色；tab 条在场时去底
+   边线，header+tab 条视觉一体（见 .tab-bar 注释） */
 .detail-header {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 14px 32px;
+  padding: 14px 24px;
   min-height: 68px;
   border-bottom: 1px solid var(--color-chat-header-border);
   background-color: var(--color-chat-header-bg);
   backdrop-filter: blur(8px);
   flex-shrink: 0;
 }
+/* 标签条在场（正常态）：去底边线（error 态无 tab 条，保留分割线） */
+.detail-header.has-tabbar { border-bottom: none; }
 
 .head-main { flex: 1; min-width: 0; }
+/* 字号对齐 ChatHeader 标题（body 级，非 h3——项目名与会话标题同层级） */
 .head-name {
   margin: 0;
-  font-size: var(--ip-text-h3-size); font-weight: var(--ip-font-weight-semibold);
+  font-size: var(--ip-text-body-size); font-weight: var(--ip-font-weight-semibold);
   color: var(--ip-color-text-primary);
 }
 .head-name.err { color: var(--ip-danger-text); }
@@ -139,34 +143,39 @@ const updatedLabel = computed(() => {
 .head-desc {
   min-width: 0; max-width: 40%;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--ip-color-text-secondary);
 }
-.head-members { color: var(--ip-color-text-secondary); }
+/* 成员用 primary 强调——与会话 meta 的 agent 名同层次映射（谁在干活） */
+.head-members {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--ip-primary-600);
+}
 .head-updated { color: var(--ip-color-text-disabled); }
 
+/* tab 条对齐 .chat-tabbar：同底色与 header 视觉一体（无分割线，tab 底线即
+   内容区分界）；tab 样式复刻 .chat-tab（同尺寸/层次/hover 档） */
 .tab-bar {
-  display: flex; gap: 4px;
-  padding: 0 32px;
-  border-bottom: 1px solid var(--ip-color-border-default);
+  display: flex; gap: 10px;
+  padding: 0 24px;
+  background: var(--color-chat-header-bg);
+  backdrop-filter: blur(8px);
   flex-shrink: 0;
 }
 .tab-item {
-  position: relative;
-  padding: 10px 12px;
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 20px;
   border: none; background: none; cursor: pointer;
   font-family: inherit; font-size: var(--ip-text-body-sm-size);
-  color: var(--ip-color-text-secondary);
-  transition: color var(--ip-duration-fast) var(--ip-ease-out);
+  color: var(--ip-color-text-tertiary);
+  border-bottom: 2px solid transparent;
+  transition: color var(--ip-duration-fast) var(--ip-ease-out), border-color var(--ip-duration-fast) var(--ip-ease-out);
 }
-.tab-item:hover { color: var(--ip-color-text-primary); }
-.tab-item.active { color: var(--ip-primary-600); font-weight: var(--ip-font-weight-medium); }
-.tab-item.active::after {
-  content: ""; position: absolute; left: 10px; right: 10px; bottom: -1px;
-  height: 2px; border-radius: 1px; background: var(--ip-primary-500);
-}
+.tab-item:hover { color: var(--ip-color-text-secondary); }
+.tab-item.active { color: var(--ip-primary-600); border-bottom-color: var(--ip-primary-500); font-weight: var(--ip-font-weight-medium); }
 
 .detail-body {
   flex: 1; min-height: 0;
-  padding: 20px 32px 24px;
+  padding: 20px 24px 24px;
   display: flex; flex-direction: column;
 }
 .load-error {
