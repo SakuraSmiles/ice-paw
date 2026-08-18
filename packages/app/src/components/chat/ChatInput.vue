@@ -625,8 +625,10 @@ function handleKeydown(e: KeyboardEvent) {
 .input-wrapper.is-sending { border-color:var(--ip-primary-400); box-shadow:0 0 0 3px rgba(46,141,100,0.08); }
 .input-wrapper.drag-over { border-color:var(--ip-primary-500); box-shadow:0 0 0 3px rgba(46,141,100,0.18); background-color:var(--ip-primary-50); }
 
-/* 底部工具栏：附件/引用（24px）… 提示居中 … 发送（32px，大一圈） */
-.input-footer { display:flex; align-items:center; gap:6px; padding:4px 12px 7px; }
+/* 底部工具栏：附件/引用（24px）… 提示居中 … 发送（32px，大一圈）。
+   底边对齐（flex-end）：大小混排的按钮行底边齐平更稳，居中会让 24px
+   小按钮悬在大按钮半腰 */
+.input-footer { display:flex; align-items:flex-end; gap:6px; padding:4px 12px 7px; }
 .btn-img { display:flex; align-items:center; justify-content:center; width:24px; height:24px; border-radius:var(--ip-radius-md); border:none; background:transparent; color:var(--ip-color-text-tertiary); cursor:pointer; transition:all var(--ip-duration-fast) var(--ip-ease-out); }
 .btn-img:hover { background-color:var(--ip-color-bg-tertiary); color:var(--ip-primary-600); }
 .btn-img:disabled { opacity:0.35; cursor:not-allowed; }
