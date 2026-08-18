@@ -188,13 +188,24 @@ const donutSegs = computed(() => {
   const rows = shareRows.value;
   const total = metricTotal.value;
   if (total <= 0) return [];
-  // 段间留白（弧长单位）：round cap 每端延伸 strokeWidth/2，视觉间隙 = GAP - strokeWidth
-  const GAP = 12;
+  /* 几何模型（所见即所得）：
+   * round cap 会让每端向外延伸 CAP（= 线宽一半），dash 路径本身不包含这段。
+   * 因此 dash 长 = 目标视觉长 - 2·CAP、dash 起点右移 CAP——所见弧段长与
+   * 间隙精确可控：段间视觉间隙恒为 SEG_GAP，hover 变粗（CSS 11→14.5，
+   * 每端多伸 1.75）也落在 SEG_GAP 余量内，不压邻段。
+   * 极小占比段：视觉长下限 = 一个胶囊直径（dash→0，退化成圆点）。 */
+  const STROKE = 11;          // 与 CSS .donut-seg stroke-width 保持一致
+  const CAP = STROKE / 2;     // round cap 每端延伸
+  const SEG_GAP = 4;          // 段间视觉间隙（弧长单位，≈6.4px @160px 环）
+  const multi = rows.length > 1;
   let offset = 0;
   return rows.map((r) => {
     const len = (metric(r) / total) * DONUT_C;
-    const gap = rows.length > 1 ? Math.min(GAP, len * 0.5) : 0;
-    const seg = { key: r.key, row: r, len: Math.max(len - gap, 0.5), offset };
+    // 单段满环：dash = C - 2·CAP，两端 cap 各补 CAP，闭合成无缝整圆
+    const vis = multi ? Math.max(len - SEG_GAP, STROKE) : len;
+    const dash = Math.max(vis - CAP * 2, 0.01);
+    const start = offset + (multi ? SEG_GAP / 2 : 0) + CAP;
+    const seg = { key: r.key, row: r, len: dash, offset: start };
     offset += len;
     return seg;
   });
@@ -437,7 +448,7 @@ const donutSegs = computed(() => {
 }
 .donut-seg {
   fill: none;
-  stroke-width: 11;
+  stroke-width: 11; /* 几何常量：改这里须同步 script donutSegs 的 STROKE */
   stroke-linecap: round;
   pointer-events: stroke;
   transition: stroke-width 180ms var(--ip-ease-out, ease), opacity 160ms var(--ip-ease-out, ease);
