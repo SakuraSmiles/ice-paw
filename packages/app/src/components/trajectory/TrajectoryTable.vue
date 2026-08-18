@@ -30,6 +30,13 @@ const props = defineProps<{
   searchQuery: string;
   hasMore: boolean;
   loadingEarlier: boolean;
+  /** 选中行的 row key（跨会话合并流用：seq 是 per-conv 的，不同会话可同 seq
+   *  → 按 seq 高亮会串行。传了本字段则优先按 key 精确匹配；单会话路径不传零变化） */
+  selectedKey?: string | null;
+  /** 会话元信息（跨会话合并流用：turn 头渲染会话名徽章）。key = session_id；
+   *  不传 = 单会话路径零变化。turn 头的桶键是 `${session_id}::${turn_id}`
+   *  前缀形态（useProjectTrajectory.scopeTurnKeys），按前缀反查会话 */
+  sessionMeta?: Map<string, { title: string; kind: string }>;
 }>();
 const emit = defineEmits<{
   "select-row": [row: TrajectoryRow];
@@ -122,6 +129,13 @@ function scrollToTurn(turnKey: string) {
   scroller.value.scrollTop = Math.max(0, layout.value.offsets[idx] - scroller.value.clientHeight / 3);
 }
 
+/** 滚到指定 row key 所在行（跨会话合并流：seq 不唯一，按 key 定位） */
+function scrollToKey(key: string) {
+  const idx = props.rows.findIndex((r) => r.key === key);
+  if (idx < 0 || !scroller.value) return;
+  scroller.value.scrollTop = Math.max(0, layout.value.offsets[idx] - scroller.value.clientHeight / 3);
+}
+
 /** 是否贴近底部（外部跟随判据：pinned 状态机主导，此函数供首载等场景查询） */
 function isNearBottom(threshold = FOLLOW_THRESHOLD): boolean {
   if (!scroller.value) return true;
@@ -165,7 +179,7 @@ watch(
     if (dh > 0) scroller.value.scrollTop += dh;
   },
 );
-defineExpose({ scrollToSeq, scrollToTurn, scrollToBottom, smoothScrollToBottom, isNearBottom, isPinned, beginPrepend });
+defineExpose({ scrollToSeq, scrollToTurn, scrollToKey, scrollToBottom, smoothScrollToBottom, isNearBottom, isPinned, beginPrepend });
 
 // 终止原因文案：单一真相源在 utils/termLabels（词表外裸透原值）
 
@@ -183,6 +197,20 @@ function fmtDuration(ms: number | null): string {
 
 function fmtTokens(n: number): string {
   return n >= 10000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+}
+
+/** 事件行选中判定：跨会话流优先 row key（seq 跨会话可重复），单会话按 seq */
+function isEventSelected(row: TrajectoryRow): boolean {
+  if (row.type !== "event") return false;
+  if (props.selectedKey != null) return row.key === props.selectedKey;
+  return row.seq === props.selectedSeq;
+}
+
+/** turn 头的会话徽章（跨会话流）：桶键前缀 `${session_id}::` 反查；孤儿桶/查无 → null */
+function sessionOfHeader(turnId: string | null): { title: string; kind: string } | null {
+  if (!props.sessionMeta || !turnId) return null;
+  const sid = turnId.split("::", 1)[0];
+  return props.sessionMeta.get(sid) ?? null;
 }
 
 /** 搜索命中片段切分：把 summary 按 query（大小写不敏感）切成 [普通, 命中, …] 段 */
@@ -222,7 +250,7 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
         :key="item.row.key"
         class="trow"
         :class="[`trow-${item.row.type}`, {
-          selected: item.row.type === 'event' && item.row.seq === selectedSeq,
+          selected: isEventSelected(item.row),
           'turn-selected': item.row.type === 'turn-header' && item.row.turnKey === selectedTurnKey,
           'turn-errored': item.row.type === 'turn-header' && item.row.errorCount > 0,
           dim: searching && item.row.type === 'event' && !item.row.match,
@@ -232,9 +260,15 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
         :title="item.row.type === 'turn-header' ? (item.row.collapsed ? '展开此轮' : '折叠此轮') : item.row.summary"
         @click="item.row.type === 'event' && !item.row.streaming ? emit('select-row', item.row) : item.row.type === 'turn-header' ? emit('toggle-turn', item.row.turnKey) : undefined"
       >
-        <!-- turn 分割头：左（折叠箭头 + 轮次 + 日期·时间 + 终止）｜右（⚠ · 统计 · 耗时 · 用量） -->
+        <!-- turn 分割头：左（折叠箭头 + 会话徽章 + 轮次 + 日期·时间 + 终止）｜右（⚠ · 统计 · 耗时 · 用量） -->
         <template v-if="item.row.type === 'turn-header'">
           <span class="th-chevron">{{ item.row.collapsed ? "▸" : "▾" }}</span>
+          <span
+            v-if="sessionOfHeader(item.row.turnId)"
+            class="th-session"
+            :class="{ 'th-session-delegation': sessionOfHeader(item.row.turnId)!.kind === 'delegation' }"
+            :title="sessionOfHeader(item.row.turnId)!.kind === 'delegation' ? '委派任务会话' : '对话会话'"
+          >{{ sessionOfHeader(item.row.turnId)!.title }}</span>
           <span class="th-no">{{ item.row.turnId ? `第 ${item.row.turnIndex + 1} 轮` : "纪元前事件" }}</span>
           <span v-if="item.row.dateLabel" class="th-date">{{ item.row.dateLabel }}</span>
           <span class="th-time">{{ fmtTime(item.row.createdAt) }}</span>
@@ -380,6 +414,21 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
 .trow-turn-header.turn-errored:hover { background: var(--ip-danger-bg); filter: brightness(0.97); }
 .trow-turn-header.turn-errored.turn-selected { background: var(--ip-color-selection-bg); }
 .th-chevron { font-size: 9px; color: var(--ip-color-text-tertiary); width: 10px; flex-shrink: 0; }
+/* 会话徽章（跨会话合并流）：委派会话走 tint 令牌（soft 系，勿直接 primary 底），
+   chat 会话中性；max-width 兜长标题（title 悬停看全名） */
+.th-session {
+  max-width: 140px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 11px; line-height: 18px;
+  padding: 0 8px; border-radius: var(--ip-radius-full);
+  color: var(--ip-color-text-tertiary);
+  background: var(--ip-color-bg-secondary);
+  flex-shrink: 0;
+}
+.th-session-delegation {
+  color: var(--ip-color-primary-tint-text);
+  background: var(--ip-color-primary-tint-bg);
+}
 .th-no { font-weight: var(--ip-font-weight-semibold); color: var(--ip-color-text-primary); white-space: nowrap; }
 .th-date, .th-time {
   font-family: var(--ip-font-mono, monospace);
