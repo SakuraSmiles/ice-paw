@@ -227,6 +227,8 @@ export type ProjectEvent = SessionEvent & {
 export interface ProjectAgentShare {
   agent_id: string;
   messages: number;
+  /** token 估算合计（messages.token_count SUM；展示标 ≈） */
+  tokens: number;
 }
 
 export interface ProjectOverview {

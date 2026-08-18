@@ -15,6 +15,7 @@ import { useAgentStore } from "../../stores/agent";
 import { useChatStore } from "../../stores/chat";
 import { useProjectStore } from "../../stores/project";
 import { taskStatus, TASK_STATUS_LABELS } from "../../utils/taskStatus";
+import { formatTokenCount } from "../../utils/format";
 import { timeAgo } from "../../utils/time";
 import type { ProjectOverview as OverviewData } from "../../types";
 
@@ -81,29 +82,45 @@ const buckets = computed(() => {
 });
 const taskTotal = computed(() => tasks.value.length);
 
-// ---- 成员分布：横条排行（口径 = 消息数，工作量 proxy） ----
+// ---- 成员负载：环图（token 口径）+ 横条排行 ----
 // 名字/模型由 agent store 解析（SQL 只回 id——migration 45 不设 FK，展示层职责）。
-// >TOP_N 截断聚合为「其他 N 位」；条宽相对最大行归一（榜首满宽），title 给占比。
+// 视觉主口径 = token 估算（环图分段 + 条宽归一），消息数做行尾小字；
+// token 全零（估算未回填的旧库）回退消息口径并隐藏环图，诚实不伪造。
+// >TOP_N 截断聚合为「其他 N 位」；占比进 title 不占版面。
 const TOP_N = 5;
+/** 环图/色点/条 共用顺序色板：primary 单色阶（克制、双主题成立、无语义误编码） */
+const PALETTE = [
+  "var(--ip-primary-600)",
+  "var(--ip-primary-500)",
+  "var(--ip-primary-400)",
+  "var(--ip-primary-300)",
+  "var(--ip-primary-200)",
+];
+const COLOR_OTHER = "var(--ip-color-text-tertiary)";
+
 interface ShareRow {
   key: string;
   name: string;
   model: string | null;
   messages: number;
+  tokens: number;
   other: boolean;
   othersCount: number;
+  color: string;
 }
 const shareRows = computed<ShareRow[]>(() => {
   const shares = overview.value?.agent_shares ?? [];
-  const named = (s: { agent_id: string; messages: number }): ShareRow => {
+  const named = (s: { agent_id: string; messages: number; tokens: number }, i: number): ShareRow => {
     const a = agent.getById(s.agent_id);
     return {
       key: s.agent_id,
       name: a?.name ?? "未知成员",
       model: a?.model ?? null,
       messages: s.messages,
+      tokens: s.tokens,
       other: false,
       othersCount: 0,
+      color: PALETTE[i] ?? COLOR_OTHER,
     };
   };
   if (shares.length <= TOP_N) return shares.map(named);
@@ -115,31 +132,65 @@ const shareRows = computed<ShareRow[]>(() => {
       name: `其他 ${rest.length} 位`,
       model: null,
       messages: rest.reduce((sum, s) => sum + s.messages, 0),
+      tokens: rest.reduce((sum, s) => sum + s.tokens, 0),
       other: true,
       othersCount: rest.length,
+      color: COLOR_OTHER,
     },
   ];
 });
-const shareMax = computed(() =>
-  shareRows.value.reduce((m, r) => Math.max(m, r.messages), 0),
+
+const tokensTotal = computed(() =>
+  shareRows.value.reduce((sum, r) => sum + r.tokens, 0),
 );
-const shareTotal = computed(() =>
-  (overview.value?.agent_shares ?? []).reduce((sum, s) => sum + s.messages, 0),
+const hasTokens = computed(() => tokensTotal.value > 0);
+/** 视觉口径数值：token 优先，全零回退消息数 */
+function metric(r: ShareRow): number {
+  return hasTokens.value ? r.tokens : r.messages;
+}
+const metricMax = computed(() =>
+  shareRows.value.reduce((m, r) => Math.max(m, metric(r)), 0),
+);
+const metricTotal = computed(() =>
+  shareRows.value.reduce((s, r) => s + metric(r), 0),
 );
 /** 条宽 %（相对最大行；榜首满宽对比感最强） */
-function shareWidth(messages: number): string {
-  if (shareMax.value <= 0) return "0%";
-  return `${Math.max((messages / shareMax.value) * 100, 1.5)}%`;
+function shareWidth(r: ShareRow): string {
+  if (metricMax.value <= 0) return "0%";
+  return `${Math.max((metric(r) / metricMax.value) * 100, 1.5)}%`;
 }
 /** 占比 %（相对总量；进 title，不占版面） */
-function sharePercent(messages: number): string {
-  if (shareTotal.value <= 0) return "0%";
-  return `${Math.round((messages / shareTotal.value) * 100)}%`;
+function sharePercent(r: ShareRow): string {
+  if (metricTotal.value <= 0) return "0%";
+  return `${Math.round((metric(r) / metricTotal.value) * 100)}%`;
 }
-/** 排名递减透明度（安静的次序感；「其他」行走灰色不走透明度） */
-function shareDim(i: number): number {
-  return Math.max(1 - i * 0.12, 0.4);
+/** 行/弧段 hover title：名字 · 占比（token + 消息双口径） */
+function rowTitle(r: ShareRow): string {
+  const tok = hasTokens.value ? `${formatTokenCount(r.tokens)} tokens · ` : "";
+  return `${r.name} · ${sharePercent(r)}（${tok}${r.messages} 条）`;
 }
+
+// ---- 环图弧段（SVG stroke-dasharray；r=40 周长恒定） ----
+const DONUT_C = 2 * Math.PI * 40;
+/** 环图无障碍标签（榜首 + 占比） */
+const donutAria = computed(() => {
+  const top = shareRows.value[0];
+  return top ? `token 占比：${top.name} ${sharePercent(top)}` : "token 占比";
+});
+const donutSegs = computed(() => {
+  const rows = shareRows.value;
+  const total = metricTotal.value;
+  if (total <= 0) return [];
+  const GAP = 1.5; // 段间微隙（弧长单位）；单段满环不留
+  let offset = 0;
+  return rows.map((r) => {
+    const len = (metric(r) / total) * DONUT_C;
+    const gap = rows.length > 1 ? Math.min(GAP, len * 0.5) : 0;
+    const seg = { key: r.key, row: r, len: Math.max(len - gap, 0.5), offset };
+    offset += len;
+    return seg;
+  });
+});
 </script>
 
 <template>
@@ -194,36 +245,61 @@ function shareDim(i: number): number {
       </div>
     </div>
 
-    <!-- ===== 成员分布：横条排行（口径 = 消息数） ===== -->
+    <!-- ===== 成员负载：环图（token 口径）+ 横条排行（消息数小字） ===== -->
     <div v-if="shareRows.length > 0" class="stat-card share-card">
       <div class="share-head">
-        <span class="share-title">成员分布</span>
-        <span class="share-meta">按消息数</span>
+        <span class="share-title">成员负载</span>
+        <span class="share-meta">{{ hasTokens ? "token 估算 · 消息数" : "按消息数" }}</span>
       </div>
-      <div
-        v-for="(row, i) in shareRows"
-        :key="row.key"
-        class="share-row"
-        :title="`${row.name} · ${sharePercent(row.messages)}（${row.messages} 条）`"
-      >
-        <div class="share-label">
-          <span class="share-name">{{ row.name }}</span>
-          <span v-if="row.model" class="share-model">{{ row.model }}</span>
+      <div class="share-body">
+        <!-- 环图：token 占比分段，中心总量；token 全零时整体隐藏（回退消息口径） -->
+        <div v-if="hasTokens" class="donut-wrap">
+          <svg viewBox="0 0 100 100" class="donut" role="img" :aria-label="donutAria">
+            <circle class="donut-track" cx="50" cy="50" r="40" />
+            <circle
+              v-for="s in donutSegs"
+              :key="s.key"
+              class="donut-seg"
+              cx="50" cy="50" r="40"
+              :stroke="s.row.color"
+              :stroke-dasharray="`${s.len} ${DONUT_C - s.len}`"
+              :stroke-dashoffset="-s.offset"
+            >
+              <title>{{ rowTitle(s.row) }}</title>
+            </circle>
+          </svg>
+          <div class="donut-center">
+            <span class="donut-value">{{ formatTokenCount(tokensTotal) }}</span>
+            <span class="donut-sub">≈ tokens</span>
+          </div>
         </div>
-        <div class="share-track">
-          <span
-            class="share-bar"
-            :class="{ other: row.other }"
-            :style="{ width: shareWidth(row.messages), opacity: row.other ? undefined : shareDim(i) }"
-          />
+        <div class="share-rows">
+          <div
+            v-for="row in shareRows"
+            :key="row.key"
+            class="share-row"
+            :title="rowTitle(row)"
+          >
+            <div class="share-label">
+              <i class="share-dot" :style="{ background: row.color }" />
+              <span class="share-name">{{ row.name }}</span>
+              <span v-if="row.model" class="share-model">{{ row.model }}</span>
+            </div>
+            <div class="share-track">
+              <span class="share-bar" :style="{ width: shareWidth(row), background: row.color }" />
+            </div>
+            <span class="share-counts">
+              <span class="count-tokens">{{ hasTokens ? formatTokenCount(row.tokens) : row.messages }}</span>
+              <span v-if="hasTokens && !row.other" class="count-msgs">{{ row.messages }} 条</span>
+            </span>
+          </div>
         </div>
-        <span class="share-count">{{ row.messages }}</span>
       </div>
     </div>
     <div v-else class="stat-card share-card">
       <div class="share-head">
-        <span class="share-title">成员分布</span>
-        <span class="share-meta">按消息数</span>
+        <span class="share-title">成员负载</span>
+        <span class="share-meta">token 估算 · 消息数</span>
       </div>
       <div class="mix-empty">成员暂无消息</div>
     </div>
@@ -314,8 +390,8 @@ function shareDim(i: number): number {
   font-size: var(--ip-text-body-sm-size); color: var(--ip-color-text-secondary);
 }
 
-/* ===== 成员分布：横条排行（名字+模型 | 轨道条 | 计数） ===== */
-.share-card { gap: 12px; }
+/* ===== 成员负载：环图 + 横条排行 ===== */
+.share-card { gap: 14px; }
 .share-head { display: flex; align-items: baseline; gap: 8px; }
 .share-title {
   font-size: var(--ip-text-body-sm-size);
@@ -324,6 +400,40 @@ function shareDim(i: number): number {
 }
 .share-meta { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
 
+.share-body {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+
+/* 环图：SVG 弧段 + 绝对定位中心文字 */
+.donut-wrap { position: relative; flex-shrink: 0; width: 128px; height: 128px; }
+.donut { width: 100%; height: 100%; transform: rotate(-90deg); }
+.donut-track {
+  fill: none;
+  stroke: var(--ip-color-bg-tertiary);
+  stroke-width: 10;
+}
+.donut-seg {
+  fill: none;
+  stroke-width: 10;
+}
+.donut-center {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 2px;
+  pointer-events: none;
+}
+.donut-value {
+  font-size: 17px;
+  font-weight: var(--ip-font-weight-semibold);
+  color: var(--ip-color-text-primary);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+.donut-sub { font-size: 11px; color: var(--ip-color-text-tertiary); }
+
+.share-rows { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
 .share-row {
   display: grid;
   grid-template-columns: minmax(120px, 200px) 1fr auto;
@@ -331,9 +441,10 @@ function shareDim(i: number): number {
   align-items: center;
 }
 .share-label {
-  display: flex; align-items: baseline; gap: 6px;
+  display: flex; align-items: center; gap: 6px;
   min-width: 0;
 }
+.share-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 .share-name {
   font-size: var(--ip-text-body-sm-size);
   color: var(--ip-color-text-primary);
@@ -352,14 +463,23 @@ function shareDim(i: number): number {
 .share-bar {
   display: block; height: 100%;
   border-radius: inherit;
-  background: var(--ip-primary-500);
   transition: width var(--ip-duration-normal, 200ms) var(--ip-ease-out);
 }
-.share-bar.other { background: var(--ip-color-text-tertiary); }
-.share-count {
+.share-counts {
+  display: flex; align-items: baseline; gap: 6px;
+  justify-self: end;
+}
+.count-tokens {
   font-size: var(--ip-text-body-sm-size);
   color: var(--ip-color-text-secondary);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.count-msgs {
+  font-size: var(--ip-text-caption-size);
+  color: var(--ip-color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .mix-meta {
   display: flex; justify-content: space-between; gap: 12px;
