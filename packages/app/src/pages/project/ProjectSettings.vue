@@ -165,7 +165,6 @@ async function archive() {
   flex-direction: column;
   gap: 14px;
   min-height: 0;
-  max-width: 720px;
 }
 
 .settings-card {
