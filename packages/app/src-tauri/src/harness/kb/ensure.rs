@@ -60,38 +60,53 @@ pub async fn ensure_default_kbs(pool: &SqlitePool) -> AppResult<()> {
 /// 为每个项目创建上下文目录 {workspace}/projects/{id}/，
 /// 并生成默认 project.md。由 IcePaw 管理，不污染用户项目源码目录。
 pub async fn ensure_project_context_dirs(pool: &SqlitePool, default_workspace: Option<&str>) {
-    let Some(root) = default_workspace else {
-        return;
-    };
     let projects = match repo::project::list(pool).await {
         Ok(p) => p,
         Err(_) => return,
     };
     for project in &projects {
-        let dir = PathBuf::from(root).join("projects").join(&project.id);
-        if dir.exists() {
-            continue;
-        }
-        if let Err(e) = std::fs::create_dir_all(&dir) {
-            tracing::warn!(target: "ice_paw.kb", "创建项目上下文目录失败: {e}");
-            continue;
-        }
-        // 生成默认 project.md
-        let project_md = dir.join("project.md");
-        let content = format!(
-            "# {}\n\n\
-             在此填写项目说明（技术栈、架构、业务背景等）。\n\
-             此文件由 IcePaw 管理，位于 IcePaw 工作空间，不会进入项目源码目录。\n\
-             修改后即时生效，无需重启。\n",
-            project.name
-        );
-        let _ = std::fs::write(&project_md, content);
-        tracing::info!(
-            target: "ice_paw.kb",
-            "已创建项目上下文目录: {}",
-            dir.display()
-        );
+        ensure_project_context_dir(default_workspace, &project.id, &project.name);
     }
+}
+
+/// 为单个项目创建上下文目录 {workspace}/projects/{id}/ 并生成默认 project.md。
+/// 幂等（已存在不覆盖用户内容）；返回目录路径，default_workspace 为 None → None。
+///
+/// 除了 boot 全量扫描（[`ensure_project_context_dirs`]），创建项目
+/// （project_cmd::create_project）与读写命令（get/set_project_context）也会
+/// 调它做 lazy ensure——新建项目不必等下次启动就有 project.md。
+pub fn ensure_project_context_dir(
+    default_workspace: Option<&str>,
+    project_id: &str,
+    project_name: &str,
+) -> Option<PathBuf> {
+    let root = default_workspace?;
+    let dir = PathBuf::from(root).join("projects").join(project_id);
+    if dir.exists() {
+        return Some(dir);
+    }
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        // 返回路径而非 None：目录建失败与「无默认工作区」是两回事——
+        // 后续读写会报出具体 fs 错误，不静默改道
+        tracing::warn!(target: "ice_paw.kb", "创建项目上下文目录失败: {e}");
+        return Some(dir);
+    }
+    // 生成默认 project.md
+    let project_md = dir.join("project.md");
+    let content = format!(
+        "# {}\n\n\
+         在此填写项目说明（技术栈、架构、业务背景等）。\n\
+         此文件由 IcePaw 管理，位于 IcePaw 工作空间，不会进入项目源码目录。\n\
+         修改后即时生效，无需重启。\n",
+        project_name
+    );
+    let _ = std::fs::write(&project_md, content);
+    tracing::info!(
+        target: "ice_paw.kb",
+        "已创建项目上下文目录: {}",
+        dir.display()
+    );
+    Some(dir)
 }
 
 /// workspace 根 → knowledge 目录（约定）。
@@ -344,5 +359,30 @@ mod tests {
         ensure_help_docs(ws.to_str().unwrap());
         assert!(target.exists(), "删掉的文件下次运行应补回");
         let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn ensure_project_context_dir_creates_template_and_idempotent() {
+        let ws = unique_temp_ws();
+        let dir =
+            ensure_project_context_dir(Some(ws.to_str().unwrap()), "p9", "测试项目").unwrap();
+        assert_eq!(dir, ws.join("projects").join("p9"));
+        let md = std::fs::read_to_string(dir.join("project.md")).unwrap();
+        assert!(md.contains("# 测试项目"));
+        assert!(md.contains("技术栈"));
+
+        // 幂等：已存在不重建、不覆盖
+        std::fs::write(dir.join("project.md"), "用户内容").unwrap();
+        ensure_project_context_dir(Some(ws.to_str().unwrap()), "p9", "测试项目").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join("project.md")).unwrap(),
+            "用户内容"
+        );
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn ensure_project_context_dir_none_without_workspace() {
+        assert!(ensure_project_context_dir(None, "p1", "P").is_none());
     }
 }
