@@ -16,12 +16,16 @@ const router = useRouter();
 // 启动恢复的记忆写入：路由 / 活跃会话 / 侧栏 scope 任一变化即落盘——每次
 // 导航写一次（廉价），崩溃/断电不丢，不依赖窗口关闭事件。恢复侧在 Sidebar
 // onMounted（见 planRestore 决策纯函数），本 watch 不读只写、无循环风险。
+// ⚠️ 必须是「多源独立 getter」而非单 getter 返回数组：后者每次求值产新数组
+// 引用，vue-router 初始导航 currentRoute 引用更换（值仍 '/'）即误触发，
+// 在 Sidebar 恢复前把空状态 {convId:null} 写进 localStorage 覆盖上次记忆
+// ——真机「重启永远欢迎态」的根因。多源逐元素 Object.is，值不变不写。
 watch(
-  () => [
-    router.currentRoute.value.fullPath,
-    chat.activeConvId,
-    project.activeProjectId,
-  ] as const,
+  [
+    () => router.currentRoute.value.fullPath,
+    () => chat.activeConvId,
+    () => project.activeProjectId,
+  ],
   ([route, convId, projectId]) => {
     saveLastSession({ route, convId, projectId });
   },
