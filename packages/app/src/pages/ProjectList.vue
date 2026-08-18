@@ -3,6 +3,7 @@
 // 编辑区三块（基础信息/成员/项目背景）已抽共享组件（components/project/），
 // 与项目详情页设置 tab 双入口复用；本页新建表单单入口不抽。
 import { ref, reactive, onMounted } from "vue";
+import { useRouter } from "vue-router";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useProjectStore } from "../stores/project";
 import { useAgentStore } from "../stores/agent";
@@ -17,6 +18,7 @@ import type { NewProject, Project } from "../types";
 const project = useProjectStore();
 const agent = useAgentStore();
 const chat = useChatStore();
+const router = useRouter();
 
 // ===== 新建项目 =====
 const isCreating = ref(false);
@@ -249,7 +251,11 @@ function taskRunning(convId: string): boolean {
   return chat.streamingConvIds.has(convId);
 }
 
+/** 委派任务点击 → 首页 + 落到该子会话轨迹 tab。router.push 必须有——
+ *  本页在 /projects 时 ChatPage 未挂载，openTrajectoryNext 标志会滞留
+ *  （MA-1 遗留 bug，MA-2 顺带修）。 */
 function openDelegation(convId: string) {
+  router.push("/");
   chat.openConversationAtTrajectory(convId);
 }
 

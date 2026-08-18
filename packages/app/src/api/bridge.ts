@@ -21,6 +21,9 @@ import type {
   PlanSnapshot,
   Project,
   ProjectContext,
+  ProjectEvent,
+  ProjectOverview,
+  ProjectTask,
   ProviderConnectionResult,
   ProviderInfo,
   SessionEvent,
@@ -187,6 +190,37 @@ const projects = {
   async openContextDir(projectId: string): Promise<void> {
     try { await invoke<void>("open_project_context_dir", { projectId }); }
     catch (err) { throw wrapInvokeError("projects.openContextDir", err); }
+  },
+
+  // ===== MA-2 项目台账 / 项目轨迹 / 概览（纯只读派生：任务 ≡ delegation 会话） =====
+
+  /** 任务台账：项目内全部 delegation 会话 + 最后一条 turn_ended 投影 */
+  async listTasks(projectId: string): Promise<ProjectTask[]> {
+    try { return await invoke<ProjectTask[]>("list_project_tasks", { projectId }); }
+    catch (err) { throw wrapInvokeError("projects.listTasks", err); }
+  },
+
+  /** 项目事件流：limit+afterId=正向增量 / limit=尾部优先 / 不传=全量正序。
+   *  游标是 session_events 全局 id（跨会话可比），与单会话的 seq 语义对齐。 */
+  async listEvents(
+    projectId: string,
+    opts: { limit?: number; beforeId?: number | null; afterId?: number | null } = {},
+  ): Promise<ProjectEvent[]> {
+    try {
+      return await invoke<ProjectEvent[]>("list_project_events", {
+        projectId,
+        limit: opts.limit ?? null,
+        beforeId: opts.beforeId ?? null,
+        afterId: opts.afterId ?? null,
+      });
+    }
+    catch (err) { throw wrapInvokeError("projects.listEvents", err); }
+  },
+
+  /** 项目概览统计（详情页统计卡 + 任务分桶） */
+  async getOverview(projectId: string): Promise<ProjectOverview> {
+    try { return await invoke<ProjectOverview>("get_project_overview", { projectId }); }
+    catch (err) { throw wrapInvokeError("projects.getOverview", err); }
   },
 };
 

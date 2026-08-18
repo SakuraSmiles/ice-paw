@@ -23,6 +23,35 @@ const routes: RouteRecordRaw[] = [
         meta: { title: "项目" },
       },
       {
+        // 项目详情（MA-2）：概览·任务台账 / 项目轨迹 / 设置 三 tab
+        path: "projects/:id",
+        component: () => import("../pages/project/ProjectDetailLayout.vue"),
+        children: [
+          {
+            path: "",
+            redirect: { name: "ProjectOverviewTab" },
+          },
+          {
+            path: "overview",
+            name: "ProjectOverviewTab",
+            component: () => import("../pages/project/ProjectOverview.vue"),
+            meta: { title: "项目概览" },
+          },
+          {
+            path: "timeline",
+            name: "ProjectTimelineTab",
+            component: () => import("../pages/project/ProjectTimelineTab.vue"),
+            meta: { title: "项目轨迹" },
+          },
+          {
+            path: "settings",
+            name: "ProjectSettingsTab",
+            component: () => import("../pages/project/ProjectSettings.vue"),
+            meta: { title: "项目设置" },
+          },
+        ],
+      },
+      {
         path: "settings",
         component: () => import("../pages/settings/SettingsLayout.vue"),
         children: [
