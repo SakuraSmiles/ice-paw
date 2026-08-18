@@ -41,6 +41,12 @@ function gotoManage() {
   router.push("/projects");
 }
 
+/** 项目名点击 → 项目详情页（概览·任务台账/项目轨迹/设置）。不改变侧栏
+ * scope——「看项目」与「切空间工作」是两个动作，回来时空间原样 */
+function openProjectDetail(id: string) {
+  router.push(`/projects/${id}`);
+}
+
 /** 快速新建（UX #1）：纯名字创建即切到新空间（欢迎态开聊）；完整字段留给项目页 */
 async function quickCreateProject(name: string) {
   try {
@@ -217,7 +223,7 @@ function timeAgo(dateStr: string): string {
         </div>
       </button>
 
-      <!-- 当前项目空间胶囊（开关态内部自持，select/create/manage 上交处理） -->
+      <!-- 当前项目空间胶囊（开关态内部自持，select/create/manage/open 上交处理） -->
       <ProjectSwitcher
         :current-project-name="currentProjectName"
         :scope-project-id="scopeProjectId"
@@ -225,6 +231,7 @@ function timeAgo(dateStr: string): string {
         @select="selectProject"
         @create="quickCreateProject"
         @manage="gotoManage"
+        @open="openProjectDetail"
       />
     </div>
 

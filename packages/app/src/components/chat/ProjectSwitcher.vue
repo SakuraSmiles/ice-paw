@@ -1,8 +1,9 @@
 <script setup lang="ts">
 // ProjectSwitcher.vue — 侧栏顶部的「项目空间胶囊」
-// 左侧 chip（主题色圆点 + 当前空间名，点击开向下切换菜单）+ 右侧动作钮
-// （快速新建 / 管理）。开关态（isOpen）与快速新建表单态内部自持；
-// select / create / manage 通过 emit 上交 Sidebar 处理。
+// 左侧名称区（主题色圆点 + 当前空间名，scoped 点击直达项目详情页）+ 右侧
+// 动作钮（⇄ 切换空间开菜单 / 快速新建 / 管理）——显示/切换/管理三动作三入口。
+// 开关态（isOpen）与快速新建表单态内部自持；select / create / manage / open
+// 通过 emit 上交 Sidebar 处理。
 import { ref, computed, nextTick } from "vue";
 import type { Project } from "../../types";
 
@@ -17,6 +18,8 @@ const emit = defineEmits<{
   select: [id: string | null];
   create: [name: string];
   manage: [];
+  /** 项目名点击 → 打开项目详情页（散落态按钮 disabled，本 emit 不触发） */
+  open: [id: string];
 }>();
 
 const isOpen = ref(false);
@@ -37,6 +40,12 @@ function onSelect(id: string | null) {
 function onManage() {
   isOpen.value = false;
   emit("manage");
+}
+
+/** 名称区点击 → 项目详情页（散落态按钮 disabled，防御性兜底） */
+function onOpenDetail() {
+  if (!props.scopeProjectId) return;
+  emit("open", props.scopeProjectId);
 }
 
 // ---- 快速新建（UX #1）：+ 钮把胶囊整行原地替换为迷你表单，纯名字创建 ——
@@ -91,22 +100,34 @@ function confirmCreate() {
     </div>
 
     <template v-else>
-      <!-- 左侧：当前空间 chip（点开切换菜单） -->
+      <!-- 左侧：当前空间名纯展示——scoped 点击直达项目详情页（轨迹/台账/
+           设置），散落态置灰不可点。「看项目」与「切空间」是两个动作，不混一个入口 -->
       <button
-        class="proj-chip"
-        :class="{ 'switcher-open': isOpen, scoped: isScoped }"
-        :title="isScoped ? `当前项目空间：${currentProjectName}` : '未选择项目（散落会话）'"
-        @click="isOpen = !isOpen"
+        class="proj-name"
+        :class="{ scoped: isScoped }"
+        :disabled="!isScoped"
+        :title="isScoped ? `${currentProjectName}——点击查看项目详情` : '散落会话：不属于任何项目的会话'"
+        @click="onOpenDetail"
       >
         <span class="item-dot" :class="{ muted: !isScoped }" :style="scopeDotStyle" />
         <span class="switcher-name">{{ currentProjectName }}</span>
-        <svg class="switcher-caret" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="6 9 12 15 18 9" />
-        </svg>
       </button>
 
-      <!-- 右侧：动作钮（快速新建 / 管理）——对集合的操作外置，不藏进菜单 -->
+      <!-- 右侧：动作钮（⇄ 切换空间 / 快速新建 / 管理）——对集合的操作外置，不藏进菜单 -->
       <div class="capsule-actions">
+        <button
+          class="capsule-btn"
+          :class="{ 'switcher-open': isOpen }"
+          title="切换项目空间"
+          @click="isOpen = !isOpen"
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="17 1 21 5 17 9" />
+            <path d="M3 11V9a4 4 0 0 1 4-4h14" />
+            <polyline points="7 23 3 19 7 15" />
+            <path d="M21 13v2a4 4 0 0 1-4 4H3" />
+          </svg>
+        </button>
         <button class="capsule-btn" title="快速新建项目" @click="startCreate">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
@@ -166,8 +187,8 @@ function confirmCreate() {
   gap: 4px;
 }
 
-/* 左侧 chip：当前空间名 + 圆点 + caret */
-.proj-chip {
+/* 左侧名称区：当前空间名 + 圆点（纯展示，scoped 可点去详情页） */
+.proj-name {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -184,16 +205,21 @@ function confirmCreate() {
   line-height: 1;
   transition: background-color var(--ip-duration-fast) var(--ip-ease-out);
 }
-.proj-chip:hover {
+.proj-name:hover {
   background-color: var(--color-sidebar-item-hover);
   color: var(--ip-color-text-primary);
 }
-/* 展开态 = 选中底色（与会话选中项同款），表明控件处于打开 */
-.proj-chip.switcher-open {
-  background-color: var(--color-sidebar-item-active);
-}
 /* 选中某项目时，名称提亮（轻微强调当前空间，区别于散落会话） */
-.proj-chip.scoped .switcher-name { color: var(--ip-color-text-primary); }
+.proj-name.scoped .switcher-name { color: var(--ip-color-text-primary); }
+/* 散落态：置灰不可点（无 hover 反馈，名称按钮 disabled） */
+.proj-name:disabled {
+  cursor: default;
+  color: var(--ip-color-text-tertiary);
+}
+.proj-name:disabled:hover {
+  background: none;
+  color: var(--ip-color-text-tertiary);
+}
 
 .switcher-name {
   flex: 1;
@@ -202,16 +228,6 @@ function confirmCreate() {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.switcher-caret {
-  flex-shrink: 0;
-  color: var(--ip-color-text-tertiary);
-  transition: transform var(--ip-duration-fast) var(--ip-ease-out);
-}
-.proj-chip.switcher-open .switcher-caret {
-  transform: rotate(180deg);
-  color: var(--ip-primary-600);
 }
 
 .item-dot {
@@ -245,6 +261,11 @@ function confirmCreate() {
 }
 .capsule-btn:hover {
   background-color: var(--color-sidebar-item-hover);
+  color: var(--ip-primary-600);
+}
+/* ⇄ 钮展开态 = 选中底色（与会话选中项同款），表明菜单处于打开 */
+.capsule-btn.switcher-open {
+  background-color: var(--color-sidebar-item-active);
   color: var(--ip-primary-600);
 }
 
