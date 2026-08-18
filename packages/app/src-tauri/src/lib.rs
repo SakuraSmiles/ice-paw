@@ -137,6 +137,9 @@ pub fn run() {
             commands::project_cmd::archive_project,
             commands::project_cmd::unarchive_project,
             commands::project_cmd::permanent_delete_project,
+            commands::project_cmd::get_project_context,
+            commands::project_cmd::set_project_context,
+            commands::project_cmd::open_project_context_dir,
         ])
         // 启动逻辑
         .setup(|app| {
