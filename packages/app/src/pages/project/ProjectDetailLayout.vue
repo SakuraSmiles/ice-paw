@@ -1,29 +1,27 @@
 <script setup lang="ts">
-// ProjectDetailLayout.vue — 项目详情页布局（MA-2）：头部（项目名 + 描述）+
-// tab 条（概览·任务台账 / 项目轨迹 / 设置）+ keep-alive 内容区。
+// ProjectDetailLayout.vue — 项目详情页布局（MA-2）：头部（项目名 + 简介——
+// 2026-08-18 重设计：成员/更新时间移入概览 tab 统计区，头部只留最简骨架）+
+// tab 条（概览 / 项目轨迹 / 设置）+ keep-alive 内容区。
 // 头部不放「返回列表」钮——项目列表的唯一入口是侧栏按钮（入口收敛）。
-// 先例 SettingsLayout，差异：路由带 :id 参数。⚠️ keep-alive 的 component 必须
-// `:key="route.path"`：KeepAlive 以 vnode.key 为缓存键，若只按项目 id（三 tab
-// 同 key），切 tab 时缓存命中旧 tab 实例直接嫁接——URL 变了视图冻结（真机踩坑）。
-// route.path 同时含项目 id + tab，跨项目不串数据、tab 间各留缓存。
+// ⚠️ keep-alive 的 component 必须 `:key="route.path"`：KeepAlive 以 vnode.key
+// 为缓存键，若只按项目 id（三 tab 同 key），切 tab 时缓存命中旧 tab 实例直接
+// 嫁接——URL 变了视图冻结（真机踩坑）。route.path 同时含项目 id + tab，
+// 跨项目不串数据、tab 间各留缓存。
 // 进入详情页不改变侧栏 scope：「看项目」与「切空间工作」是两个动作。
 import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useProjectStore } from "../../stores/project";
-import { useAgentStore } from "../../stores/agent";
-import { parseDbTime } from "../../utils/time";
 
 const route = useRoute();
 const router = useRouter();
 const project = useProjectStore();
-const agentStore = useAgentStore();
 
 const projectId = computed(() => String(route.params.id ?? ""));
 const current = computed(() => project.getById(projectId.value));
 const loadError = ref(false);
 
 const tabs = [
-  { key: "overview", label: "概览 · 任务台账" },
+  { key: "overview", label: "概览" },
   { key: "timeline", label: "项目轨迹" },
   { key: "settings", label: "设置" },
 ];
@@ -37,8 +35,6 @@ function navigate(key: string) {
 }
 
 onMounted(async () => {
-  // agent 名单（头部成员 meta / 台账执行者列共用；store 内 loaded 幂等）
-  void agentStore.load();
   // 直链进入时 store 可能未加载（刷新/外部跳转）
   if (!current.value) {
     try {
@@ -49,19 +45,6 @@ onMounted(async () => {
     }
   }
 });
-
-/** 成员名（卡片头部 meta；agent store onMounted 拉取） */
-const memberSummary = computed(() => {
-  const names = (current.value?.agents ?? [])
-    .map((a) => agentStore.getById(a.agent_id)?.name)
-    .filter(Boolean) as string[];
-  return names.length ? names.join("、") : "未分配成员";
-});
-
-const updatedLabel = computed(() => {
-  const t = current.value ? parseDbTime(current.value.updated_at) : null;
-  return t ? t.toLocaleString() : "";
-});
 </script>
 
 <template>
@@ -70,10 +53,8 @@ const updatedLabel = computed(() => {
       <div class="head-main">
         <template v-if="current">
           <h1 class="head-name">{{ current.name }}</h1>
-          <div class="head-meta">
-            <span v-if="current.description" class="head-desc">{{ current.description }}</span>
-            <span class="head-members">{{ memberSummary }}</span>
-            <span v-if="updatedLabel" class="head-updated">更新于 {{ updatedLabel }}</span>
+          <div v-if="current.description" class="head-meta">
+            <span class="head-desc">{{ current.description }}</span>
           </div>
         </template>
         <h1 v-else-if="loadError" class="head-name err">项目不存在或已删除</h1>
@@ -141,16 +122,10 @@ const updatedLabel = computed(() => {
   font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary);
 }
 .head-desc {
-  min-width: 0; max-width: 40%;
+  min-width: 0; max-width: 60%;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   color: var(--ip-color-text-secondary);
 }
-/* 成员用 primary 强调——与会话 meta 的 agent 名同层次映射（谁在干活） */
-.head-members {
-  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  color: var(--ip-primary-600);
-}
-.head-updated { color: var(--ip-color-text-disabled); }
 
 /* tab 条对齐 .chat-tabbar：同底色与 header 视觉一体（无分割线，tab 底线即
    内容区分界）；tab 样式复刻 .chat-tab（同尺寸/层次/hover 档） */

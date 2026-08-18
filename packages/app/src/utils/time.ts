@@ -82,6 +82,22 @@ export function formatTime(iso: string, seconds = false): string {
   return seconds ? `${base}:${pad(d.getSeconds())}` : base;
 }
 
+/** 相对时间（刚刚 / N分钟前 / N小时前 / N天前 / 日期）——侧栏会话列表、
+ *  项目概览共用。now 参数化：调用方传响应式时钟（如 Sidebar 的 nowTick）
+ *  建立 reactive 依赖，每分钟刷新整列。 */
+export function timeAgo(dateStr: string, now: number = Date.now()): string {
+  const d = parseDbTime(dateStr);
+  const diff = now - d.getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "刚刚";
+  if (mins < 60) return `${mins}分钟前`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}小时前`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}天前`;
+  return formatDate(dateStr);
+}
+
 /** 日期分隔线标签：今天 / 昨天 / M月D日 —— 全部在同一时区下计算。 */
 export function formatDateLabel(iso: string): string | null {
   const d = parseDbTime(iso);

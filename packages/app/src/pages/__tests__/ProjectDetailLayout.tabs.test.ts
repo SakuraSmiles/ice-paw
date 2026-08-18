@@ -96,7 +96,7 @@ describe("ProjectDetailLayout tab 导航", () => {
 
     await w.findAll(".tab-item").find((b) => b.text() === "项目轨迹")!.trigger("click");
     await flushPromises();
-    await w.findAll(".tab-item").find((b) => b.text() === "概览 · 任务台账")!.trigger("click");
+    await w.findAll(".tab-item").find((b) => b.text() === "概览")!.trigger("click");
     await flushPromises();
 
     expect(w.find(".dummy-ov").exists()).toBe(true);
