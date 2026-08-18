@@ -224,6 +224,11 @@ export type ProjectEvent = SessionEvent & {
 
 /** 项目概览统计（get_project_overview）。open（进行中+中断）不单列——
  *  前端由 tasks_total - 三桶推得。 */
+export interface ProjectAgentShare {
+  agent_id: string;
+  messages: number;
+}
+
 export interface ProjectOverview {
   chat_conversations: number;
   delegation_conversations: number;
@@ -233,6 +238,8 @@ export interface ProjectOverview {
   tasks_failed: number;
   tasks_ended_other: number;
   last_activity_at: string | null;
+  /** 成员消息占比（「成员分布」横条排行；名字/模型前端 agent store 解析） */
+  agent_shares: ProjectAgentShare[];
 }
 
 // ============================================================================
