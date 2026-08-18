@@ -82,7 +82,7 @@ const buckets = computed(() => {
 });
 const taskTotal = computed(() => tasks.value.length);
 
-// ---- 成员负载：环图（token 口径）+ 横条排行 ----
+// ---- 项目成员：环图（token 口径）+ 横条排行 ----
 // 名字/模型由 agent store 解析（SQL 只回 id——migration 45 不设 FK，展示层职责）。
 // 视觉主口径 = token 估算（环图分段 + 条宽归一），消息数做行尾小字；
 // token 全零（估算未回填的旧库）回退消息口径并隐藏环图，诚实不伪造。
@@ -172,6 +172,11 @@ function rowTitle(r: ShareRow): string {
 
 // ---- 环图弧段（SVG stroke-dasharray；r=40 周长恒定） ----
 const DONUT_C = 2 * Math.PI * 40;
+/** hover 联动：环图段 ↔ 排行行双向高亮（key 共享；null = 无 hover） */
+const hoverKey = ref<string | null>(null);
+const hoverRow = computed(() =>
+  shareRows.value.find((r) => r.key === hoverKey.value) ?? null,
+);
 /** 环图无障碍标签（榜首 + 占比） */
 const donutAria = computed(() => {
   const top = shareRows.value[0];
@@ -245,57 +250,73 @@ const donutSegs = computed(() => {
       </div>
     </div>
 
-    <!-- ===== 成员负载：环图（token 口径）+ 横条排行（消息数小字） ===== -->
+    <!-- ===== 项目成员：环图（token 口径）+ 横条排行（消息数小字） ===== -->
     <div v-if="shareRows.length > 0" class="stat-card share-card">
       <div class="share-head">
-        <span class="share-title">成员负载</span>
+        <span class="share-title">项目成员</span>
         <span class="share-meta">{{ hasTokens ? "token 估算 · 消息数" : "按消息数" }}</span>
       </div>
       <div class="share-body">
-        <!-- 环图：token 占比分段，中心总量；token 全零时整体隐藏（回退消息口径） -->
+        <!-- 环图：token 占比分段，中心总量；token 全零时整体隐藏（回退消息口径）。
+             hover 联动：段强调其余淡化 + 中心切换为该成员值 + 对应行提亮 -->
         <div v-if="hasTokens" class="donut-wrap">
-          <svg viewBox="0 0 100 100" class="donut" role="img" :aria-label="donutAria">
+          <svg viewBox="0 0 100 100" class="donut" role="img" :aria-label="donutAria" @mouseleave="hoverKey = null">
             <circle class="donut-track" cx="50" cy="50" r="40" />
             <circle
               v-for="s in donutSegs"
               :key="s.key"
               class="donut-seg"
+              :class="{ dim: hoverKey !== null && hoverKey !== s.key }"
               cx="50" cy="50" r="40"
               :stroke="s.row.color"
               :stroke-dasharray="`${s.len} ${DONUT_C - s.len}`"
               :stroke-dashoffset="-s.offset"
+              @mouseenter="hoverKey = s.key"
             >
               <title>{{ rowTitle(s.row) }}</title>
             </circle>
           </svg>
           <div class="donut-center">
-            <span class="donut-value">{{ formatTokenCompact(tokensTotal) }}</span>
-            <span class="donut-sub">≈ tokens</span>
+            <template v-if="hoverRow">
+              <span class="donut-value">{{ formatTokenCompact(hoverRow.tokens) }}</span>
+              <span class="donut-sub donut-sub-name" :title="hoverRow.name">{{ hoverRow.name }} · {{ sharePercent(hoverRow) }}</span>
+            </template>
+            <template v-else>
+              <span class="donut-value">{{ formatTokenCompact(tokensTotal) }}</span>
+              <span class="donut-sub">tokens</span>
+            </template>
           </div>
         </div>
         <!-- 四列共享 grid（名字/模型 | 轨道条 | tokens | 消息数）——跨行天然
              列对齐；行容器 display:contents 只留分组语义，title 挂 label 格
              （contents 元素不渲染盒子，title 无效）。数字列显式 grid-column，
-             缺格不塌位（other 行无消息小字）。 -->
-        <div class="share-rows">
-          <div v-for="row in shareRows" :key="row.key" class="share-row">
-            <div class="share-label" :title="rowTitle(row)">
+             缺格不塌位（other 行无消息小字）。
+             hover 联动（反向）：cell enter 设 key（cell 无 leave，跨 cell/跨行
+             移动由 enter 覆盖），容器级 leave 统一清空。 -->
+        <div class="share-rows" @mouseleave="hoverKey = null">
+          <div
+            v-for="row in shareRows"
+            :key="row.key"
+            class="share-row"
+            :class="{ hovered: hoverKey === row.key }"
+          >
+            <div class="share-label" :title="rowTitle(row)" @mouseenter="hoverKey = row.key">
               <i class="share-dot" :style="{ background: row.color }" />
               <span class="share-name">{{ row.name }}</span>
               <span v-if="row.model" class="share-model">{{ row.model }}</span>
             </div>
-            <div class="share-track">
+            <div class="share-track" @mouseenter="hoverKey = row.key">
               <span class="share-bar" :style="{ width: shareWidth(row), background: row.color }" />
             </div>
-            <span class="count-tokens">{{ hasTokens ? formatTokenCompact(row.tokens) : row.messages }}</span>
-            <span v-if="hasTokens && !row.other" class="count-msgs">{{ row.messages }} 条</span>
+            <span class="count-tokens" @mouseenter="hoverKey = row.key">{{ hasTokens ? formatTokenCompact(row.tokens) : row.messages }}</span>
+            <span v-if="hasTokens && !row.other" class="count-msgs" @mouseenter="hoverKey = row.key">{{ row.messages }} 条</span>
           </div>
         </div>
       </div>
     </div>
     <div v-else class="stat-card share-card">
       <div class="share-head">
-        <span class="share-title">成员负载</span>
+        <span class="share-title">项目成员</span>
         <span class="share-meta">token 估算 · 消息数</span>
       </div>
       <div class="mix-empty">成员暂无消息</div>
@@ -414,7 +435,11 @@ const donutSegs = computed(() => {
 .donut-seg {
   fill: none;
   stroke-width: 10;
+  pointer-events: stroke;
+  transition: opacity 120ms var(--ip-ease-out, ease);
 }
+/* hover 联动：非 hover 段淡化（段强调靠对比不靠放大，克制） */
+.donut-seg.dim { opacity: 0.3; }
 .donut-center {
   position: absolute; inset: 0;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -429,6 +454,12 @@ const donutSegs = computed(() => {
   line-height: 1.1;
 }
 .donut-sub { font-size: 11px; color: var(--ip-color-text-tertiary); }
+/* hover 态中心副行换成成员名+占比：环内宽 ~90px，溢出 ellipsis */
+.donut-sub-name {
+  max-width: 88px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--ip-color-text-secondary);
+}
 
 /* 排行：四列共享 grid——所有行的 tokens/消息数字列天然右对齐同列，
    行容器 display:contents 只留分组语义（跨行对齐的关键） */
@@ -451,6 +482,7 @@ const donutSegs = computed(() => {
   font-size: var(--ip-text-body-sm-size);
   color: var(--ip-color-text-primary);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  transition: color 120ms var(--ip-ease-out, ease);
 }
 .share-model {
   font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary);
@@ -476,7 +508,13 @@ const donutSegs = computed(() => {
   color: var(--ip-color-text-secondary);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+  transition: color 120ms var(--ip-ease-out, ease);
 }
+
+/* hover 联动：对应行提亮（行容器 display:contents 无盒子，反馈落在
+   名字/数字变色——克制不加大背景块） */
+.share-row.hovered .share-name,
+.share-row.hovered .count-tokens { color: var(--ip-primary-600); }
 .count-msgs {
   grid-column: 4;
   justify-self: end;

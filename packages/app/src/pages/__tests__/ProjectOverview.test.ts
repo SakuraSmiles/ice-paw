@@ -168,6 +168,30 @@ describe("ProjectOverview 概览 tab（二轮重设计）", () => {
     expect(w.findAll(".donut-seg").length).toBe(6);
   });
 
+  it("hover 联动：弧段 hover → 其余段淡化 + 对应行提亮 + 中心切为该成员值；行 hover 反向联动", async () => {
+    const w = await mountOverview();
+    // hover 第 2 段（a2，2700 tokens → 2.7K）
+    await w.findAll(".donut-seg")[1].trigger("mouseenter");
+    const segs = w.findAll(".donut-seg");
+    expect(segs[0].classes()).toContain("dim");
+    expect(segs[1].classes()).not.toContain("dim");
+    expect(w.findAll(".share-row")[1].classes()).toContain("hovered");
+    expect(w.find(".donut-value").text()).toBe("2.7K");
+    expect(w.find(".donut-sub-name").text()).toContain("测试专家");
+    // 移出环图恢复总量态
+    await w.find(".donut").trigger("mouseleave");
+    expect(w.find(".donut-value").text()).toBe("11.7K");
+    expect(w.findAll(".share-row")[1].classes()).not.toContain("hovered");
+
+    // 反向：hover 第 1 行 label → 对应段强调、其余淡化、中心切换
+    await w.findAll(".share-label")[0].trigger("mouseenter");
+    expect(w.findAll(".donut-seg")[1].classes()).toContain("dim");
+    expect(w.find(".donut-value").text()).toBe("9K");
+    // 移出排行区清空
+    await w.find(".share-rows").trigger("mouseleave");
+    expect(w.find(".donut-value").text()).toBe("11.7K");
+  });
+
   it("成员负载空态：无消息成员不出现", async () => {
     mockBackend([], { ...OVERVIEW_OUT, agent_shares: [] });
     const w = await mountOverview();
