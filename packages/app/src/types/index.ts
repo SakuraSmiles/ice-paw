@@ -193,6 +193,49 @@ export interface ProjectContext {
 }
 
 // ============================================================================
+// MA-2 项目台账 / 项目轨迹 / 概览（纯只读派生：任务 ≡ kind='delegation' 会话）
+// ============================================================================
+
+/** 任务台账行（list_project_tasks）。终态推导见 utils/taskStatus.ts：
+ *  running 由前端流式 overlay（streamingConvIds），done/failed 由 termination 分桶。 */
+export interface ProjectTask {
+  conv_id: string;
+  title: string;
+  /** 执行者（被委派的专家 agent；名字 agent store 解析，无 FK 语义） */
+  executor_agent_id: string;
+  /** 发起者（null ≡ 用户发起） */
+  initiator_agent_id: string | null;
+  /** 委派图边——父会话（跳转回父会话用） */
+  parent_conversation_id: string | null;
+  started_at: string;
+  updated_at: string;
+  /** 最后一条 turn_ended 落库时间（无 = 进行中/中断） */
+  ended_at: string | null;
+  termination: string | null;
+  rounds: number | null;
+}
+
+/** 项目事件流行（list_project_events）：`SessionEvent` 同构 + 会话标注列
+ *  （后端 serde(flatten) 使 JSON 与单会话事件完全一致，只是多两列）。 */
+export type ProjectEvent = SessionEvent & {
+  session_title: string;
+  session_kind: string; // chat | delegation
+};
+
+/** 项目概览统计（get_project_overview）。open（进行中+中断）不单列——
+ *  前端由 tasks_total - 三桶推得。 */
+export interface ProjectOverview {
+  chat_conversations: number;
+  delegation_conversations: number;
+  messages: number;
+  tasks_total: number;
+  tasks_done: number;
+  tasks_failed: number;
+  tasks_ended_other: number;
+  last_activity_at: string | null;
+}
+
+// ============================================================================
 // Message
 // ============================================================================
 
