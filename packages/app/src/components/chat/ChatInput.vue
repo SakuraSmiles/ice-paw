@@ -541,17 +541,10 @@ function handleKeydown(e: KeyboardEvent) {
             @paste="onPaste"
             @blur="atQuery = null"
           />
-          <div class="btn-group">
-            <button v-if="!chat.sending" class="btn-send" :class="{ active: input.trim() || chat.pendingImages.length > 0 || chat.pendingFiles.length > 0 || chat.pendingRefs.length > 0 }" :disabled="!input.trim() && chat.pendingImages.length === 0 && chat.pendingFiles.length === 0 && chat.pendingRefs.length === 0" title="发送 (Enter)" @click="send">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" />
-              </svg>
-            </button>
-            <button v-else class="btn-stop" title="停止生成" @click="chat.stopGeneration()">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2" /></svg>
-            </button>
-          </div>
         </div>
+        <!-- 底部工具栏（输入框内）：附件/引用在左 · 快捷键提示居中 · 发送/停止
+             最右（比工具按钮大一圈，主操作视觉权重）——输入区因此全宽，
+             右上不再为发送按钮留位 -->
         <div class="input-footer">
           <button class="btn-img" :disabled="chat.sending" title="添加附件（图片 / docx / xlsx / xls / pdf）" @click="pickAttachments">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" /></svg>
@@ -559,10 +552,20 @@ function handleKeydown(e: KeyboardEvent) {
           <button class="btn-img btn-at" :disabled="chat.sending" title="引用（@ 会话 / Agent / 消息）" @click="insertAtTrigger">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4" /><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8" /></svg>
           </button>
+          <span class="input-hint">{{ chat.sending ? "正在生成…" : "Enter 发送 · Shift+Enter 换行" }}</span>
+          <div class="btn-group">
+            <button v-if="!chat.sending" class="btn-send" :class="{ active: input.trim() || chat.pendingImages.length > 0 || chat.pendingFiles.length > 0 || chat.pendingRefs.length > 0 }" :disabled="!input.trim() && chat.pendingImages.length === 0 && chat.pendingFiles.length === 0 && chat.pendingRefs.length === 0" title="发送 (Enter)" @click="send">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" />
+              </svg>
+            </button>
+            <button v-else class="btn-stop" title="停止生成" @click="chat.stopGeneration()">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2" /></svg>
+            </button>
+          </div>
         </div>
       </div>
       <p v-if="attachWarn" class="attach-warn">{{ attachWarn }}</p>
-      <p class="input-hint">{{ chat.sending ? "正在生成…" : "Enter 发送 · Shift+Enter 换行" }}</p>
     </div>
   </div>
 </template>
@@ -616,21 +619,23 @@ function handleKeydown(e: KeyboardEvent) {
   0%, 100% { background-color:var(--ip-color-bg-tertiary); }
   40% { background-color:var(--ip-primary-50, #e8f5ef); border-color:var(--ip-primary-400, #2e8d64); }
 }
-.input-row { display:flex; align-items:flex-start; gap:4px; padding:8px 8px 0 12px; }
+/* 输入区全宽（右上不再为发送按钮留位）；四周到边框统一留呼吸间隙 */
+.input-row { display:flex; align-items:flex-start; padding:12px 12px 0; }
 .input-wrapper:focus-within { border-color:var(--color-input-focus-border); box-shadow:0 0 0 3px rgba(46,141,100,0.12); }
 .input-wrapper.is-sending { border-color:var(--ip-primary-400); box-shadow:0 0 0 3px rgba(46,141,100,0.08); }
 .input-wrapper.drag-over { border-color:var(--ip-primary-500); box-shadow:0 0 0 3px rgba(46,141,100,0.18); background-color:var(--ip-primary-50); }
 
-.input-footer { display:flex; align-items:center; gap:2px; padding:0 4px 4px 4px; }
+/* 底部工具栏：附件/引用（24px）… 提示居中 … 发送（32px，大一圈） */
+.input-footer { display:flex; align-items:center; gap:6px; padding:6px 12px 10px; }
 .btn-img { display:flex; align-items:center; justify-content:center; width:24px; height:24px; border-radius:var(--ip-radius-md); border:none; background:transparent; color:var(--ip-color-text-tertiary); cursor:pointer; transition:all var(--ip-duration-fast) var(--ip-ease-out); }
 .btn-img:hover { background-color:var(--ip-color-bg-tertiary); color:var(--ip-primary-600); }
 .btn-img:disabled { opacity:0.35; cursor:not-allowed; }
 
-.chat-textarea { flex:1; border:none; outline:none; background:transparent; resize:none; font-size:var(--ip-text-body-size); line-height:1.5; color:var(--ip-color-text-primary); max-height:200px; min-height:22px; padding:4px 0 0; overflow-y:auto; }
+.chat-textarea { flex:1; border:none; outline:none; background:transparent; resize:none; font-size:var(--ip-text-body-size); line-height:1.5; color:var(--ip-color-text-primary); max-height:200px; min-height:22px; padding:0; overflow-y:auto; }
 .chat-textarea::placeholder { color:var(--ip-color-text-placeholder); }
 .chat-textarea:disabled { opacity:0.35; cursor:not-allowed; }
 
-.btn-group { position:relative; width:36px; height:36px; flex-shrink:0; }
+.btn-group { position:relative; width:32px; height:32px; flex-shrink:0; }
 .btn-send { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; border-radius:var(--ip-radius-md); background-color:var(--ip-color-bg-tertiary); color:var(--ip-color-text-disabled); border:none; cursor:pointer; transition:all var(--ip-duration-fast) var(--ip-ease-out); }
 .btn-send.active { background-color:var(--color-message-user-bg); color:white; }
 .btn-send.active:hover { opacity:0.9; transform:scale(1.05); }
@@ -638,6 +643,7 @@ function handleKeydown(e: KeyboardEvent) {
 .btn-stop { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; border-radius:var(--ip-radius-md); background-color:var(--ip-danger-base); color:white; border:none; cursor:pointer; transition:all var(--ip-duration-fast) var(--ip-ease-out); animation:stop-enter 0.2s ease-out; }
 .btn-stop:hover { opacity:0.9; }
 @keyframes stop-enter { from { opacity:0; transform:scale(0.85); } to { opacity:1; transform:scale(1); } }
-.input-hint { font-size:11px; color:var(--ip-color-text-disabled); text-align:center; }
+/* 快捷键提示：占据左右按钮之间的剩余空间并居中（输入框内部的轻脚注） */
+.input-hint { flex:1; min-width:0; font-size:11px; color:var(--ip-color-text-disabled); text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .attach-warn { font-size:12px; line-height:1.5; white-space:pre-line; color:var(--ip-danger-base); text-align:center; margin:0; }
 </style>
