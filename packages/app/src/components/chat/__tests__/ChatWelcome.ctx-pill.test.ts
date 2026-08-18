@@ -1,7 +1,7 @@
 // ChatWelcome.ctx-pill.test.ts — 项目背景注入状态条（L2 状态上屏）行为锁定：
 // 项目空间 + 有内容 → 「已注入项目说明 · N 字」；空内容 → 「未填写 · 去填写」；
 // 散落空间 / available=false / 加载失败 → 整条隐藏（零噪声）。
-// 点击跳 /projects（与 useNewConversation「去添加成员」同目标）。
+// 点击直达项目详情设置 tab（/projects/:id/settings，MA-2 编辑区所在）。
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { mount, flushPromises } from "@vue/test-utils";
@@ -54,7 +54,7 @@ describe("ChatWelcome 项目背景状态条", () => {
     push.mockReset();
   });
 
-  it("项目空间 + 有内容 → 显示已注入与字数，点击跳项目页", async () => {
+  it("项目空间 + 有内容 → 显示已注入与字数，点击直达设置 tab", async () => {
     mockInvoke.mockResolvedValue(ctxOut("# Alpha\n技术栈：Tauri v2") as never);
     const w = await mountWelcome("p1");
 
@@ -64,7 +64,7 @@ describe("ChatWelcome 项目背景状态条", () => {
     expect(pill.text()).toContain("20 字"); // "# Alpha\n技术栈：Tauri v2".trim().length
 
     await pill.trigger("click");
-    expect(push).toHaveBeenCalledWith("/projects");
+    expect(push).toHaveBeenCalledWith("/projects/p1/settings");
   });
 
   it("项目空间 + 空内容 → 「未填写」+ 去填写", async () => {
