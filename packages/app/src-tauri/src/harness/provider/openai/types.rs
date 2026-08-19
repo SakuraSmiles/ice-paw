@@ -105,6 +105,14 @@ pub(crate) struct SseUsage {
     pub completion_tokens: Option<u32>,
     #[serde(default)]
     pub prompt_tokens_details: Option<SseUsageDetails>,
+    /// DeepSeek 私有缓存字段（官方文档 prompt_cache_hit_tokens / prompt_cache_miss_tokens）。
+    /// 生产实证部分 v4 端点标准 prompt_tokens_details 间歇缺失且 prompt_tokens 只报
+    /// miss——两私有字段同时在位时按官方恒等式 prompt = hit + miss 重建（解析优先级
+    /// 见 streaming.rs），权威程度高于标准字段。
+    #[serde(default)]
+    pub prompt_cache_hit_tokens: Option<u32>,
+    #[serde(default)]
+    pub prompt_cache_miss_tokens: Option<u32>,
 }
 
 /// P2-3: OpenAI prompt_tokens_details（含 cached_tokens）

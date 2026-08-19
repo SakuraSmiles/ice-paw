@@ -242,15 +242,30 @@ pub(crate) fn parse_sse_stream<S, E>(
                         // take() 在处理 choices 前提取，两种情况都覆盖（否则 usage 丢失 →
                         // token_count=0、max_total_tokens 预算熔断对 OpenAI 路径失效）。
                         if let Some(usage) = parsed.usage.take() {
+                            // 缓存命中解析优先级：DeepSeek 私有对（hit+miss）> 标准
+                            // prompt_tokens_details。私有对同时在位时按官方恒等式
+                            // prompt = hit + miss 重建总输入（治「prompt 只报 miss」的
+                            // 端点 quirk——生产实证 cached > prompt 即此症状）；否则退
+                            // 标准字段，再否则 0（预算按全价，保守方向不失真）。
+                            let (prompt, cached) = match (
+                                usage.prompt_cache_hit_tokens,
+                                usage.prompt_cache_miss_tokens,
+                            ) {
+                                (Some(hit), Some(miss)) => (hit.saturating_add(miss), hit),
+                                _ => (
+                                    usage.prompt_tokens.unwrap_or(0),
+                                    usage
+                                        .prompt_tokens_details
+                                        .and_then(|d| d.cached_tokens)
+                                        .unwrap_or(0),
+                                ),
+                            };
                             let _ = tx
                                 .send(Ok(ChatDelta::Usage {
                                     usage: TokenUsage {
-                                        prompt_tokens: usage.prompt_tokens.unwrap_or(0),
+                                        prompt_tokens: prompt,
                                         completion_tokens: usage.completion_tokens.unwrap_or(0),
-                                        cached_tokens: usage
-                                            .prompt_tokens_details
-                                            .and_then(|d| d.cached_tokens)
-                                            .unwrap_or(0),
+                                        cached_tokens: cached,
                                     },
                                 }))
                                 .await;
@@ -532,6 +547,76 @@ mod tests {
             Some(Some("length".to_string())),
             "Done 应携带 finish_reason=length"
         );
+    }
+
+    // =====================================================================
+    // 缓存 usage 解析优先级：DeepSeek 私有对（hit+miss）> 标准 details
+    // =====================================================================
+
+    /// 跑一段只含 usage chunk 的流，收集发出的 TokenUsage
+    async fn collect_usage_from_sse(usage_json: &str) -> TokenUsage {
+        let raw = format!("data: {{\"choices\":[],\"usage\":{usage_json}}}\ndata: [DONE]\n");
+        let chunks: Vec<Result<Bytes, std::io::Error>> = vec![Ok(Bytes::from(raw))];
+        let (tx, mut rx) = mpsc::channel::<AppResult<ChatDelta>>(64);
+        let cancel = CancellationToken::new();
+        parse_sse_stream(stream::iter(chunks), tx, cancel, "deepseek-v4-flash".to_string());
+        let mut got: Option<TokenUsage> = None;
+        while let Some(item) = rx.recv().await {
+            match item {
+                Ok(ChatDelta::Usage { usage }) => got = Some(usage),
+                Ok(ChatDelta::Done { .. }) => {}
+                Ok(_) => {}
+                Err(e) => panic!("不应出现错误: {e:?}"),
+            }
+        }
+        got.expect("必须收到 usage")
+    }
+
+    /// 私有对同时在位（quirk 复刻：prompt_tokens 只报 miss=30k）→ 恒等式重建
+    /// prompt = hit+miss = 430k、cached = hit = 400k——这是生产实证的端点形态。
+    #[tokio::test]
+    async fn sse_usage_prefers_deepseek_private_pair() {
+        let usage = collect_usage_from_sse(
+            "{\"prompt_tokens\":30000,\"completion_tokens\":500,\
+             \"prompt_cache_hit_tokens\":400000,\"prompt_cache_miss_tokens\":30000}",
+        )
+        .await;
+        assert_eq!(usage.prompt_tokens, 430_000, "按恒等式重建总输入 hit+miss");
+        assert_eq!(usage.cached_tokens, 400_000);
+        assert_eq!(usage.completion_tokens, 500);
+    }
+
+    /// 无私有字段 → 标准 prompt_tokens_details.cached_tokens 生效（现状回归保护）
+    #[tokio::test]
+    async fn sse_usage_falls_back_to_standard_cached_tokens() {
+        let usage = collect_usage_from_sse(
+            "{\"prompt_tokens\":10000,\"completion_tokens\":200,\
+             \"prompt_tokens_details\":{\"cached_tokens\":6000}}",
+        )
+        .await;
+        assert_eq!(usage.prompt_tokens, 10_000);
+        assert_eq!(usage.cached_tokens, 6_000);
+    }
+
+    /// 两者皆缺 → cached=0（预算按全价，保守方向不失真）
+    #[tokio::test]
+    async fn sse_usage_full_price_when_no_cache_fields() {
+        let usage =
+            collect_usage_from_sse("{\"prompt_tokens\":1000,\"completion_tokens\":100}").await;
+        assert_eq!(usage.prompt_tokens, 1_000);
+        assert_eq!(usage.cached_tokens, 0);
+    }
+
+    /// 私有对残缺（只有 hit 无 miss）→ 忽略，退标准路径
+    #[tokio::test]
+    async fn sse_usage_private_pair_partial_ignored() {
+        let usage = collect_usage_from_sse(
+            "{\"prompt_tokens\":8000,\"completion_tokens\":50,\
+             \"prompt_cache_hit_tokens\":5000,\"prompt_tokens_details\":{\"cached_tokens\":3000}}",
+        )
+        .await;
+        assert_eq!(usage.prompt_tokens, 8_000);
+        assert_eq!(usage.cached_tokens, 3_000, "残缺私有对不得部分生效");
     }
 
     /// 工具调用增量测试（OpenAI 风格）：
