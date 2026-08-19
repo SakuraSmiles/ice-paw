@@ -10,6 +10,8 @@ import { useAgentStore } from "../stores/agent";
 import { useChatStore } from "../stores/chat";
 import { bridge } from "../api/bridge";
 import { formatTime, parseDbTime } from "../utils/time";
+import { emojiFromIcon } from "../utils/avatar";
+import EntityAvatar from "../components/common/EntityAvatar.vue";
 import ProjectBasicForm from "../components/project/ProjectBasicForm.vue";
 import ProjectMembersChips from "../components/project/ProjectMembersChips.vue";
 import ProjectContextEditor from "../components/project/ProjectContextEditor.vue";
@@ -96,7 +98,14 @@ async function createProject() {
 
 // ===== 内联编辑（点卡片展开；编辑区三块为共享组件） =====
 const expandedId = ref<string | null>(null);
-const editForm = reactive({ name: "", description: "", workspacePath: "" });
+const editForm = reactive({
+  name: "",
+  description: "",
+  workspacePath: "",
+  avatar: null as string | null,
+  emoji: null as string | null,
+  themeColor: null as string | null,
+});
 const editError = ref("");
 const savingEdit = ref(false);
 
@@ -110,6 +119,9 @@ function toggleEdit(p: Project) {
   editForm.name = p.name;
   editForm.description = p.description || "";
   editForm.workspacePath = p.workspace_path || "";
+  editForm.avatar = p.avatar ?? null;
+  editForm.emoji = emojiFromIcon(p.icon);
+  editForm.themeColor = p.theme_color ?? null;
   editError.value = "";
 }
 
@@ -132,6 +144,10 @@ async function saveEdit(p: Project) {
       name: editForm.name.trim(),
       description: editForm.description.trim(),
       workspace_path: editForm.workspacePath.trim() || null,
+      // 身份字段（表单态即真值）：icon 列承载 emoji（清空回 folder 默认）
+      icon: editForm.emoji ?? "folder",
+      avatar: editForm.avatar,
+      theme_color: editForm.themeColor,
     });
     expandedId.value = null;
   } catch (e) {
@@ -364,7 +380,14 @@ onMounted(() => {
         @click="toggleEdit(p)"
       >
         <div class="card-top">
-          <div class="card-avatar">{{ p.name.charAt(0) }}</div>
+          <EntityAvatar
+            class="card-avatar"
+            :name="p.name"
+            :image="p.avatar"
+            :emoji="emojiFromIcon(p.icon)"
+            :accent="p.theme_color"
+            size="lg"
+          />
           <div class="card-body">
             <div class="card-name-row">
               <span class="card-name">{{ p.name }}</span>
@@ -535,13 +558,8 @@ onMounted(() => {
 
 .card-top { display: flex; align-items: center; gap: 12px; }
 
-.card-avatar {
-  width: 36px; height: 36px; border-radius: var(--ip-radius-md);
-  background: linear-gradient(135deg, var(--ip-primary-400), var(--ip-primary-600));
-  color: white; display: flex; align-items: center; justify-content: center;
-  font-size: var(--ip-text-body-sm-size); font-weight: var(--ip-font-weight-semibold);
-  flex-shrink: 0;
-}
+/* 项目头像（lg=36px，EntityAvatar 三级链：图片/emoji/名字渐变） */
+.card-avatar { flex-shrink: 0; }
 .new-plus { flex-shrink: 0; color: var(--ip-color-primary-tint-text); }
 
 .card-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }

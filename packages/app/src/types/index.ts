@@ -162,6 +162,8 @@ export interface Project {
   sort_order: number;
   workspace_path?: string | null;
   theme_color?: string | null;
+  /** 项目头像图片（base64 dataURL；null 走名字渐变兜底） */
+  avatar?: string | null;
   archived: boolean;
   created_at: string;
   updated_at: string;
@@ -175,10 +177,11 @@ export interface NewProject {
   icon?: string;
   workspace_path?: string;
   theme_color?: string;
+  avatar?: string;
   agent_ids?: string[];
 }
 
-/** 更新项目入参（partial update；undefined = 不改） */
+/** 更新项目入参（partial update；undefined = 不改 / null = 清空） */
 export interface UpdateProject {
   id: string;
   name?: string;
@@ -186,6 +189,7 @@ export interface UpdateProject {
   icon?: string;
   workspace_path?: string | null;
   theme_color?: string | null;
+  avatar?: string | null;
 }
 
 /** 项目上下文读取结果（get_project_context）。

@@ -565,6 +565,7 @@ mod tests {
                 icon: None,
                 workspace_path: None,
                 theme_color: None,
+                avatar: None,
                 agent_ids: vec![],
             },
             id,

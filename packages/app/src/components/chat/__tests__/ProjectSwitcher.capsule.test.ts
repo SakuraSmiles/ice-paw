@@ -41,15 +41,19 @@ function mountSwitcher(overrides?: { scopeProjectId?: string | null }) {
 }
 
 describe("ProjectSwitcher 胶囊形态", () => {
-  it("名称区渲染当前空间名与主题色圆点", () => {
+  it("名称区渲染当前空间名与项目头像（EntityAvatar，主题色作底色）", () => {
     const w = mountSwitcher();
     expect(w.find(".proj-name .switcher-name").text()).toBe("Alpha");
-    const dot = w.find(".proj-name .item-dot");
-    expect(dot.attributes("style")).toContain("#ff5500");
+    // 头像接线：scoped 态头像 = EntityAvatar（icon=folder 走渐变兜底，theme_color 作 accent 底色）
+    const avatar = w.find(".proj-name .scope-avatar");
+    expect(avatar.exists()).toBe(true);
+    expect(avatar.attributes("style")).toContain("#ff5500");
+    expect(avatar.text()).toBe("A"); // 名字首字兜底
   });
 
-  it("散落会话态：圆点回落灰色、名称区 disabled 置灰不可点", async () => {
+  it("散落会话态：头像回落灰圆点、名称区 disabled 置灰不可点", async () => {
     const w = mountSwitcher({ scopeProjectId: null });
+    expect(w.find(".proj-name .scope-avatar").exists()).toBe(false);
     expect(w.find(".proj-name .item-dot").classes()).toContain("muted");
     expect(w.find(".proj-name .item-dot").attributes("style")).toBeUndefined();
     const nameBtn = w.find(".proj-name");
@@ -85,6 +89,9 @@ describe("ProjectSwitcher 胶囊形态", () => {
     expect(w.find(".switcher-menu").classes()).toContain("open");
     expect(w.find(".switcher-overlay").classes()).toContain("open");
     expect(w.findAll(".switcher-item").length).toBe(3); // 散落 + 2 项目
+    // 菜单行头像接线：项目行 EntityAvatar、散落行 muted 圆点
+    expect(w.findAll(".switcher-item .entity-avatar").length).toBe(2);
+    expect(w.find(".switcher-item .item-dot.muted").exists()).toBe(true);
 
     await w.findAll(".switcher-item")[2].trigger("click"); // Beta
     expect(w.emitted("select")?.[0]).toEqual(["p2"]);

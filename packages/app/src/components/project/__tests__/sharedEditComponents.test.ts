@@ -53,7 +53,7 @@ beforeEach(() => {
 });
 
 describe("ProjectBasicForm", () => {
-  const base = { name: "Alpha", description: "说明", workspacePath: "" };
+  const base = { name: "Alpha", description: "说明", workspacePath: "", avatar: null, emoji: null, themeColor: null };
 
   it("字段初值渲染 + 单对象 v-model 整体替换（未改字段保留）", async () => {
     const w = mount(ProjectBasicForm, { props: { modelValue: { ...base } } });
@@ -61,7 +61,7 @@ describe("ProjectBasicForm", () => {
 
     await w.findAll('input[type="text"]')[0].setValue("Beta");
     const emitted = w.emitted("update:modelValue");
-    expect(emitted?.[0]).toEqual([{ name: "Beta", description: "说明", workspacePath: "" }]);
+    expect(emitted?.[0]).toEqual([{ name: "Beta", description: "说明", workspacePath: "", avatar: null, emoji: null, themeColor: null }]);
   });
 
   it("目录选择内聚：ws-btn / 只读输入框点击都开 directory 对话框并回填", async () => {
@@ -74,14 +74,14 @@ describe("ProjectBasicForm", () => {
     );
     const emitted = w.emitted("update:modelValue");
     expect(emitted?.[0]).toEqual([
-      { name: "Alpha", description: "说明", workspacePath: "D:/code/ice-paw" },
+      { name: "Alpha", description: "说明", workspacePath: "D:/code/ice-paw", avatar: null, emoji: null, themeColor: null },
     ]);
 
     // 只读输入框点击同路（readonly 仍触发 click）
     mockOpen.mockResolvedValue("E:/other" as never);
     await w.find(".workspace-input").trigger("click");
     expect(w.emitted("update:modelValue")?.[1]).toEqual([
-      { name: "Alpha", description: "说明", workspacePath: "E:/other" },
+      { name: "Alpha", description: "说明", workspacePath: "E:/other", avatar: null, emoji: null, themeColor: null },
     ]);
   });
 
