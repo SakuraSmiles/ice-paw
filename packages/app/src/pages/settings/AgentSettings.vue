@@ -2,6 +2,7 @@
 // AgentSettings.vue — 智能体设置（卡片展开内联编辑 + 顶部特殊新建卡片）
 import { ref, computed, onMounted } from "vue";
 import AgentForm from "../../components/agent/AgentForm.vue";
+import EntityAvatar from "../../components/common/EntityAvatar.vue";
 import KbDocumentList from "../../components/kb/KbDocumentList.vue";
 import type { Agent, ProviderInfo } from "../../types";
 import { bridge } from "../../api/bridge";
@@ -111,7 +112,9 @@ const providerLabel = (name: string) => providerLabelOf(providerList.value, name
         @click="toggleEdit(agent)"
       >
         <div class="card-top">
-          <div class="card-avatar">{{ agent.name.charAt(0) }}</div>
+          <!-- 卡片头像与全 App 同渲染链（EntityAvatar 两级链：上传图/名字渐变首字）——
+               表单里传完头像、此处立见，不再「设置与头像割裂」 -->
+          <EntityAvatar class="card-avatar" :name="agent.name" :image="agent.avatar" size="lg" />
           <div class="card-body">
             <div class="card-name-row">
               <span class="card-name">{{ agent.name }}</span>
@@ -211,11 +214,8 @@ const providerLabel = (name: string) => providerLabelOf(providerList.value, name
   cursor: pointer;
 }
 
+/* 卡片头像（EntityAvatar lg=36px 圆形；头像行样式自持于组件，这里只管占位间距） */
 .card-avatar {
-  width: 36px; height: 36px; border-radius: var(--ip-radius-md);
-  background: linear-gradient(135deg, var(--ip-primary-400), var(--ip-primary-600));
-  color: white; display: flex; align-items: center; justify-content: center;
-  font-size: var(--ip-text-body-sm-size); font-weight: var(--ip-font-weight-semibold);
   flex-shrink: 0;
 }
 /* 新建卡：内联 + 图标（仿侧栏「新建对话」，无填充图标盒） */
