@@ -12,6 +12,13 @@
 //! 与 `session_events` 事件日志的分工：本出口是**瞬态 UI 进度**（chat:chunk /
 //! chat:round-state / 授权弹窗），失败仅 warn 不落库；跨会话可回放的事实走
 //! `harness::event_log`（append-only，inline await）——两条通道勿混。
+//!
+//! **事件节奏约定（不变式）**：token 级进度事件（`chat:chunk` / `chat:thinking` /
+//! `chat:tool-call-delta`）**禁止**在流式消费循环里逐条 emit——必须经
+//! `stream_consumer::DeltaAggregator` 按 40ms 窗口聚合后发出。Windows/WebView2 上
+//! 后端 emit 的 JS 注入走主线程，逐 delta emit 会打满主线程（同步命令 / IPC 分发
+//! 全体排队）并触发前端全列表重渲染，低配机器放大为生成中全局卡顿。新增 token
+//! 级事件时：内容为可拼接字符串 ⇒ 进 DeltaAggregator；否则先评估发射频率再定。
 
 use std::sync::Arc;
 
