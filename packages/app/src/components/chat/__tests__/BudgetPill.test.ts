@@ -1,4 +1,4 @@
-// BudgetPill — 会话级预算胶囊（chat:budget HUD）测试：数值渲染 / 80% warn 态 / 续期计数
+// BudgetPill — 会话级预算胶囊（chat:budget HUD）测试：数值渲染 / 80% warn 态 / 续期计数 / 缓存命中 chip
 import { describe, it, expect } from "vitest";
 import { mount } from "@vue/test-utils";
 import BudgetPill from "../BudgetPill.vue";
@@ -7,6 +7,8 @@ import type { ChatBudgetPayload } from "../../../types";
 const budget = (overrides?: Partial<ChatBudgetPayload>): ChatBudgetPayload => ({
   conversation_id: "c1",
   cumulative_tokens: 120_000,
+  cumulative_cached_tokens: 0,
+  cumulative_prompt_tokens: 120_000,
   effective_cap: 600_000,
   initial_cap: 600_000,
   renewal_index: 0,
@@ -42,6 +44,29 @@ describe("BudgetPill", () => {
       props: { budget: budget({ cumulative_tokens: 999_999 }) },
     });
     expect(over.find(".budget-fill").attributes("style")).toContain("width: 100%");
+  });
+
+  it("缓存命中：cached>0 时显示百分比 chip（生产实证量级 96%）", () => {
+    const w = mount(BudgetPill, {
+      props: {
+        budget: budget({
+          cumulative_cached_tokens: 413_184,
+          cumulative_prompt_tokens: 430_000,
+        }),
+      },
+    });
+    expect(w.find(".cached").text()).toContain("缓存命中 96%");
+  });
+
+  it("无缓存数据不渲染命中 chip（Ollama 等无缓存 provider）", () => {
+    const w = mount(BudgetPill, { props: { budget: budget() } });
+    expect(w.find(".cached").exists()).toBe(false);
+  });
+
+  it("title 说明计费口径与折扣公式", () => {
+    const w = mount(BudgetPill, { props: { budget: budget() } });
+    expect(w.attributes("title")).toContain("计费口径");
+    expect(w.attributes("title")).toContain("1/10");
   });
 
   it("续期后：显示（已续期 i/n），上限为续期后的 effective_cap", () => {

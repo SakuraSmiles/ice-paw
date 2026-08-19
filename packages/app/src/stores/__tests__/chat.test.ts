@@ -379,6 +379,8 @@ describe("chatStore", () => {
     const budgetPayload = (overrides?: Partial<import("../../types").ChatBudgetPayload>) => ({
       conversation_id: "c1",
       cumulative_tokens: 120_000,
+      cumulative_cached_tokens: 0,
+      cumulative_prompt_tokens: 120_000,
       effective_cap: 600_000,
       initial_cap: 600_000,
       renewal_index: 0,
@@ -388,11 +390,14 @@ describe("chatStore", () => {
       ...overrides,
     });
 
-    it("常规更新：写入 budget 状态，不产生续期提示", () => {
+    it("常规更新：写入 budget 状态（含缓存命中两路字段），不产生续期提示", () => {
       const store = useChatStore();
-      store.updateBudget(budgetPayload());
+      store.updateBudget(budgetPayload({
+        cumulative_cached_tokens: 90_000, cumulative_prompt_tokens: 120_000,
+      }));
       expect(store.budget?.cumulative_tokens).toBe(120_000);
       expect(store.budget?.effective_cap).toBe(600_000);
+      expect(store.budget?.cumulative_cached_tokens).toBe(90_000);
       expect(store.renewalNotice).toBeNull();
     });
 
