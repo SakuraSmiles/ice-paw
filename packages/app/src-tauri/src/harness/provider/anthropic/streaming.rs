@@ -108,10 +108,20 @@ pub(crate) fn parse_sse_stream<S>(
                         // P2-3: 解析 usage（cache_read_input_tokens）
                         if let Ok(p) = serde_json::from_str::<MessageStartPayload>(&data_buf) {
                             if let Some(usage) = p.message.usage {
+                                // 归一到 TokenUsage 规范语义（prompt = 总输入含命中）：
+                                // Anthropic 的 input_tokens 不含 cache_read（单列）、
+                                // cache_creation（写缓存，计价 1.25×）此前完全漏计——
+                                // 折入 prompt 按 1× 计量比 0× 更接近真实，且写缓存
+                                // 仅发生在断点新增轮，量级小。
+                                let prompt_tokens = usage
+                                    .input_tokens
+                                    .unwrap_or(0)
+                                    .saturating_add(usage.cache_creation_input_tokens.unwrap_or(0))
+                                    .saturating_add(usage.cache_read_input_tokens.unwrap_or(0));
                                 let _ = tx
                                     .send(Ok(ChatDelta::Usage {
                                         usage: TokenUsage {
-                                            prompt_tokens: usage.input_tokens.unwrap_or(0),
+                                            prompt_tokens,
                                             completion_tokens: usage.output_tokens.unwrap_or(0),
                                             cached_tokens: usage
                                                 .cache_read_input_tokens
@@ -235,10 +245,26 @@ pub(crate) fn parse_sse_stream<S>(
                             // P2-3: 发出最终 token usage，供前端展示 cached_tokens。
                             // 如果上游未带 usage 字段（比如只发送了 stop_reason）则跳过。
                             if let Some(usage) = p.usage {
+                                // input 缺席（标准 Anthropic：input 只在 message_start）
+                                // 时保持 prompt=0——stream_consumer 的字段级合并会保留
+                                // message_start 的归一值；此处若把 prompt 填成
+                                // cache_read 单值（非零）反而会冲掉它。
+                                let prompt_tokens = usage
+                                    .input_tokens
+                                    .map(|input| {
+                                        input
+                                            .saturating_add(
+                                                usage.cache_creation_input_tokens.unwrap_or(0),
+                                            )
+                                            .saturating_add(
+                                                usage.cache_read_input_tokens.unwrap_or(0),
+                                            )
+                                    })
+                                    .unwrap_or(0);
                                 let _ = tx
                                     .send(Ok(ChatDelta::Usage {
                                         usage: TokenUsage {
-                                            prompt_tokens: usage.input_tokens.unwrap_or(0),
+                                            prompt_tokens,
                                             completion_tokens: usage.output_tokens.unwrap_or(0),
                                             cached_tokens: usage
                                                 .cache_read_input_tokens
@@ -295,6 +321,8 @@ struct MessageStartMessage {
 struct MessageStartUsage {
     #[serde(default)]
     input_tokens: Option<u32>,
+    #[serde(default)]
+    cache_creation_input_tokens: Option<u32>,
     #[serde(default)]
     cache_read_input_tokens: Option<u32>,
     #[serde(default)]
@@ -365,6 +393,8 @@ struct MessageDeltaBody {
 struct MessageDeltaUsage {
     #[serde(default)]
     input_tokens: Option<u32>,
+    #[serde(default)]
+    cache_creation_input_tokens: Option<u32>,
     #[serde(default)]
     cache_read_input_tokens: Option<u32>,
     #[serde(default)]
@@ -458,5 +488,50 @@ data: {\"type\":\"message_stop\"}\n\
         assert_eq!(deltas, vec!["你", "好", "！"]);
         assert_eq!(done, Some(Some("end_turn".into())));
         assert!(!cancel.is_cancelled());
+    }
+
+    /// 预算诚实化：usage 归一到规范语义（prompt = 总输入含命中 + 写缓存折入）。
+    /// message_start 的 input_tokens 不含 cache_read/cache_creation（Anthropic 单列），
+    /// 出口须合并；message_delta 无 input（字段级合并保留 message_start 归一值，
+    /// 不能把 prompt 冲成 cache_read 单值）。
+    #[tokio::test]
+    async fn message_start_usage_prompt_includes_cache_read_and_creation() {
+        let raw = "\
+event: message_start\n\
+data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_01\",\"usage\":{\"input_tokens\":1000,\"cache_creation_input_tokens\":2000,\"cache_read_input_tokens\":4000,\"output_tokens\":3}}}\n\
+\n\
+event: message_delta\n\
+data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":500,\"cache_read_input_tokens\":4000}}\n\
+\n\
+event: message_stop\n\
+data: {\"type\":\"message_stop\"}\n\
+\n";
+
+        let bytes = Bytes::from(raw);
+        let stream = futures::stream::iter(vec![Ok::<Bytes, reqwest::Error>(bytes)]);
+
+        let (tx, mut rx) = mpsc::channel::<AppResult<ChatDelta>>(64);
+        let cancel = CancellationToken::new();
+        parse_sse_stream(stream, tx, cancel);
+
+        let mut usages: Vec<TokenUsage> = Vec::new();
+        while let Some(item) = rx.recv().await {
+            match item {
+                Ok(ChatDelta::Usage { usage }) => usages.push(usage),
+                Ok(ChatDelta::Done { .. }) => break,
+                Ok(_) => {}
+                Err(_) => panic!("不应出现错误"),
+            }
+        }
+
+        assert_eq!(usages.len(), 2);
+        // message_start：prompt = input + cache_creation + cache_read = 1000+2000+4000
+        assert_eq!(usages[0].prompt_tokens, 7_000);
+        assert_eq!(usages[0].cached_tokens, 4_000);
+        assert_eq!(usages[0].completion_tokens, 3);
+        // message_delta：input 缺席 → prompt 保持 0（合并层保留 message_start 归一值）
+        assert_eq!(usages[1].prompt_tokens, 0);
+        assert_eq!(usages[1].completion_tokens, 500);
+        assert_eq!(usages[1].cached_tokens, 4_000);
     }
 }
