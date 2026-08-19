@@ -195,6 +195,68 @@ pub async fn heal_checksum_drift(pool: &SqlitePool, migrator: &Migrator) {
     }
 }
 
+/// 启动时自愈 `_sqlx_migrations` 表的「已 apply 但解析集缺席」记录。
+///
+/// **背景**：未发布（未进安装包）的 migration 在开发期可能被删除/改号——本地 dev
+/// 库已 apply 过该版本，新版二进制的解析集里没有它 → `sqlx::migrate!().run()` 报
+/// "migration N was previously applied but is missing in the resolved migrations"
+/// → boot 闪退（实例：migration 47 agent emoji 列随 emoji 档移除而删，2026-08-19）。
+///
+/// 本函数在 `migrate!().run()` **之前**跑：删除 `_sqlx_migrations` 里版本号不在
+/// 编译集内的行。**只删登记记录，不触碰 schema**——本仓库 migration 全是
+/// append-only（ALTER ADD COLUMN / CREATE TABLE），缺席版本意味着 db 里多一个
+/// 惰性列/表，SELECT 均显式列名，无害；不会出现「缺列」（那来自「db 没有 + 二进制
+/// 有」的反向情形，由 run() 正常补跑）。全新安装无缺席记录，no-op。
+///
+/// **风险**：若未来误删**已发布** migration 文件，本函数会把 db 登记记录一并抹掉、
+/// 掩盖事故（schema 残留但不报错）。缓解：缺席删除必打 warn 日志（版本号可追溯），
+/// 且发布纪律本身要求已发布 migration 不可变；两害相权（闪退 all users vs 静默
+/// 残留 schema），取自愈。
+pub async fn heal_dropped_migrations(pool: &SqlitePool, migrator: &Migrator) {
+    // 首次安装：_sqlx_migrations 尚不存在（migrate!().run() 会建），无需自愈
+    let table_exists: Option<(i64,)> = sqlx::query_as(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='_sqlx_migrations'",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+    let exists = table_exists.map(|(c,)| c > 0).unwrap_or(false);
+    if !exists {
+        return;
+    }
+
+    let applied: Vec<(i64,)> = sqlx::query_as("SELECT version FROM _sqlx_migrations")
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+    let dropped: Vec<i64> = applied
+        .into_iter()
+        .map(|(v,)| v)
+        .filter(|v| !migrator.migrations.iter().any(|m| m.version == *v))
+        .collect();
+    if dropped.is_empty() {
+        return;
+    }
+    for v in &dropped {
+        warn!(
+            target: "ice_paw.migrate",
+            "migration {} 已 apply 但二进制解析集缺席（未发布 migration 被删），清除登记记录（schema 残留惰性无害）",
+            v
+        );
+        let _ = sqlx::query("DELETE FROM _sqlx_migrations WHERE version = ?")
+            .bind(v)
+            .execute(pool)
+            .await;
+    }
+    info!(
+        target: "ice_paw.migrate",
+        "缺席 migration 自愈完成：清除 {} 个登记记录（{:?}）",
+        dropped.len(),
+        dropped
+    );
+}
+
 // =========================================================================
 // 单元测试
 // =========================================================================
@@ -391,5 +453,44 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(before.0, after.0, "干净 db 自愈不应改动 checksum");
+    }
+
+    #[tokio::test]
+    async fn heal_dropped_migrations_clears_missing_version_records() {
+        // 复现 2026-08-19 实况：migration 47 被删后启动即
+        // "migration 47 was previously applied but is missing in the resolved migrations"
+        let pool = fresh_pool().await;
+        let migrator = sqlx::migrate!("./src/db/migrations");
+        sqlx::query("INSERT INTO _sqlx_migrations (version, description, installed_on, success, checksum, execution_time)
+                     VALUES (47, 'ghost', '2026-08-19 00:00:00', 1, X'00', 0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        heal_dropped_migrations(&pool, &migrator).await;
+
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM _sqlx_migrations WHERE version = 47")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count.0, 0, "缺席版本的登记记录应被清除");
+        // 自愈后 run() 不再报 missing（这是 boot 不闪退的行为锁）
+        migrator.run(&pool).await.expect("自愈后 run 应通过");
+    }
+
+    #[tokio::test]
+    async fn heal_dropped_migrations_noop_when_all_present() {
+        let pool = fresh_pool().await;
+        let migrator = sqlx::migrate!("./src/db/migrations");
+        let before: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM _sqlx_migrations")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        heal_dropped_migrations(&pool, &migrator).await;
+        let after: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM _sqlx_migrations")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(before.0, after.0, "无缺席记录时不应改动 _sqlx_migrations");
     }
 }
