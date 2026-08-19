@@ -19,17 +19,6 @@ export class AvatarTooLargeError extends Error {
   }
 }
 
-/**
- * projects.icon 列值 → emoji 档判定：含非 ASCII 字符视为 emoji（本项目只写
- * emoji 或 "folder" 默认）；历史图标名（folder/star 等纯 ASCII）返回 null
- * 走名字渐变兜底——不让旧值以文本形态漏进头像。
- */
-export function emojiFromIcon(icon: string | null | undefined): string | null {
-  if (!icon) return null;
-  // 逐 code point 判非 ASCII（不用正则——no-control-regex 拒绝控制字符区间写法）
-  return Array.from(icon).some((ch) => (ch.codePointAt(0) ?? 0) > 0x7f) ? icon : null;
-}
-
 function readFile(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const r = new FileReader();

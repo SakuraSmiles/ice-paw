@@ -1,12 +1,11 @@
 <!--
-  EntityAvatar — 项目/agent 统一头像（三级兜底）
+  EntityAvatar — 项目/agent 统一头像（两级兜底）
 
-  渲染链：image（base64/dataURL 图片）→ emoji（accent 或哈希渐变底）→
-  名字哈希渐变 + 首字（零配置好默认；稳定哈希同名恒定）。
+  渲染链：image（base64/dataURL 图片）→ 名字哈希渐变 + 首字
+  （零配置好默认；稳定哈希同名恒定）。
   Props: name: string（实体名，兜底首字与哈希来源）
          image?: string | null（图片 dataURL/base64；加载失败自动降级）
-         emoji?: string | null（选定的 emoji 字符）
-         accent?: string | null（主题色 hex，emoji 底色优先用）
+         accent?: string | null（主题色 hex，兜底档底色优先用）
          size?: 'xs' | 'sm' | 'md' | 'lg'（16/20/28/36px）
   Emits: 无
 -->
@@ -17,11 +16,10 @@ const props = withDefaults(
   defineProps<{
     name: string;
     image?: string | null;
-    emoji?: string | null;
     accent?: string | null;
     size?: "xs" | "sm" | "md" | "lg";
   }>(),
-  { image: null, emoji: null, accent: null, size: "md" },
+  { image: null, accent: null, size: "md" },
 );
 
 /** img 加载失败（脏 base64/断链）→ 降级下一级，防空白块。 */
@@ -34,7 +32,7 @@ watch(
   },
 );
 
-/** 名字首字（CJK 安全：取首个 code point，emoji 组合字符不裂开）。 */
+/** 名字首字（CJK 安全：取首个 code point）。 */
 const initial = computed(() => {
   const chs = Array.from((props.name || "").trim());
   return chs[0] ?? "?";
@@ -69,7 +67,7 @@ const gradient = computed(() => {
   return `linear-gradient(135deg, ${from}, ${to})`;
 });
 
-/** emoji/首字底色：显式主题色（纯色）优先，否则哈希渐变。 */
+/** 兜底档底色：显式主题色（纯色）优先，否则哈希渐变。 */
 const bg = computed(() => (props.accent ? props.accent : gradient.value));
 
 /** 是否走图片级（image 存在且未加载失败）。 */
@@ -83,7 +81,6 @@ function onImgError() {
 <template>
   <span :class="['entity-avatar', `size-${size}`]" :style="{ background: useImage ? undefined : bg }">
     <img v-if="useImage" :key="image ?? ''" :src="image ?? undefined" alt="" @error="onImgError" />
-    <template v-else-if="emoji">{{ emoji }}</template>
     <template v-else>{{ initial }}</template>
   </span>
 </template>
@@ -116,6 +113,5 @@ function onImgError() {
 .size-md { width: 28px; height: 28px; font-size: 13px; }
 .size-lg { width: 36px; height: 36px; font-size: 16px; }
 
-/* emoji 展示档（emoji 字形自带色彩，字号略放大） */
 .entity-avatar { font-family: var(--ip-font-sans); }
 </style>

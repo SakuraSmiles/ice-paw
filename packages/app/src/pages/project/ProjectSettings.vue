@@ -9,7 +9,6 @@ import { useRoute, useRouter } from "vue-router";
 import { useProjectStore } from "../../stores/project";
 import { useChatStore } from "../../stores/chat";
 import { bridge } from "../../api/bridge";
-import { emojiFromIcon } from "../../utils/avatar";
 import ProjectBasicForm from "../../components/project/ProjectBasicForm.vue";
 import ProjectMembersChips from "../../components/project/ProjectMembersChips.vue";
 import ProjectContextEditor from "../../components/project/ProjectContextEditor.vue";
@@ -28,7 +27,6 @@ const editForm = reactive({
   description: "",
   workspacePath: "",
   avatar: null as string | null,
-  emoji: null as string | null,
   themeColor: null as string | null,
 });
 const editError = ref("");
@@ -40,7 +38,6 @@ function resetForm() {
   editForm.description = p?.description ?? "";
   editForm.workspacePath = p?.workspace_path ?? "";
   editForm.avatar = p?.avatar ?? null;
-  editForm.emoji = emojiFromIcon(p?.icon);
   editForm.themeColor = p?.theme_color ?? null;
   editError.value = "";
 }
@@ -53,7 +50,6 @@ const dirty = computed(
     editForm.description !== (current.value?.description ?? "") ||
     editForm.workspacePath !== (current.value?.workspace_path ?? "") ||
     editForm.avatar !== (current.value?.avatar ?? null) ||
-    editForm.emoji !== emojiFromIcon(current.value?.icon) ||
     editForm.themeColor !== (current.value?.theme_color ?? null),
 );
 
@@ -71,8 +67,7 @@ async function save() {
       name: editForm.name.trim(),
       description: editForm.description.trim(),
       workspace_path: editForm.workspacePath.trim() || null,
-      // 身份字段（表单态即真值）：icon 列承载 emoji（清空回 folder 默认）
-      icon: editForm.emoji ?? "folder",
+      // 身份字段（表单态即真值）
       avatar: editForm.avatar,
       theme_color: editForm.themeColor,
     });

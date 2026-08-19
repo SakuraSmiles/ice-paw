@@ -1,4 +1,4 @@
-// EntityAvatar — 三级兜底头像测试：image → emoji → 名字哈希渐变+首字
+// EntityAvatar — 两级兜底头像测试：image → 名字哈希渐变+首字
 import { describe, it, expect } from "vitest";
 import { mount } from "@vue/test-utils";
 import EntityAvatar from "../EntityAvatar.vue";
@@ -12,13 +12,7 @@ describe("EntityAvatar", () => {
     expect(w.attributes("style") ?? "").not.toContain("linear-gradient");
   });
 
-  it("二级：无 image 有 emoji 时显示 emoji 字符", () => {
-    const w = mount(EntityAvatar, { props: { name: "架构师", emoji: "🦊" } });
-    expect(w.find("img").exists()).toBe(false);
-    expect(w.text()).toBe("🦊");
-  });
-
-  it("三级：什么都没有时名字哈希渐变 + 首字（CJK 安全）", () => {
+  it("二级：无 image 时名字哈希渐变 + 首字（CJK 安全）", () => {
     const w = mount(EntityAvatar, { props: { name: "架构师" } });
     expect(w.text()).toBe("架");
     expect(w.attributes("style")).toContain("linear-gradient");
@@ -34,7 +28,7 @@ describe("EntityAvatar", () => {
 
   it("accent 优先于哈希渐变作为底色（项目主题色）", () => {
     const w = mount(EntityAvatar, {
-      props: { name: "x", emoji: "📁", accent: "#ff0000" },
+      props: { name: "x", accent: "#ff0000" },
     });
     expect(w.attributes("style")).toContain("#ff0000");
     expect(w.attributes("style")).not.toContain("linear-gradient");

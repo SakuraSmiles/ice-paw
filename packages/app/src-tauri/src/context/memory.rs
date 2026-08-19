@@ -615,7 +615,6 @@ mod tests {
             supports_vision: 0,
             description: String::new(),
             avatar: None,
-            emoji: None,
             workspace_path: None,
             created_at: "2026-01-01T00:00:00Z".into(),
             updated_at: "2026-01-01T00:00:00Z".into(),

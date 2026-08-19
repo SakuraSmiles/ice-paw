@@ -1,6 +1,6 @@
 // AgentForm.avatar.test.ts — 头像出生证字段读写锁：
-// 编辑态预填（预览三级链）→ 保存透传 update payload（null=清空语义）；
-// emoji 弹层选择与图片互斥；清除归 null；新建透传 create input。
+// 编辑态预填（预览两级链：图片/名字渐变首字）→ 保存透传 update payload
+// （null=清空语义）；清除归 null；新建透传 create input。
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mount, flushPromises, type VueWrapper } from "@vue/test-utils";
 import type { Agent } from "../../../types";
@@ -85,75 +85,44 @@ describe("AgentForm 头像字段", () => {
     document.body.innerHTML = "";
   });
 
-  it("编辑态预填：emoji 档预览显示选定字符", async () => {
-    const w = await mountForm(editAgent({ emoji: "🧊" }));
-    expect(preview(w).text()).toBe("🧊");
+  it("编辑态预填：图片档预览 img；无图回名字首字渐变", async () => {
+    const w = await mountForm(editAgent({ avatar: "data:image/webp;base64,old" }));
+    expect(preview(w).find("img").attributes("src")).toBe("data:image/webp;base64,old");
+
+    const w2 = await mountForm(editAgent());
+    expect(preview(w2).find("img").exists()).toBe(false);
+    expect(preview(w2).text()).toBe("助"); // 首字兜底
   });
 
-  it("编辑态保存透传：emoji 原样进 update payload", async () => {
-    const a = editAgent({ emoji: "🧊" });
+  it("编辑态保存透传：avatar 原样进 update payload", async () => {
+    const a = editAgent({ avatar: "data:image/webp;base64,old" });
     const w = await mountForm(a);
     await saveBtn(w).trigger("click");
     await flushPromises();
     expect(updateMock).toHaveBeenCalledTimes(1);
     const payload = updateMock.mock.calls[0][0];
-    expect(payload.avatar).toBeNull();
-    expect(payload.emoji).toBe("🧊");
+    expect(payload.avatar).toBe("data:image/webp;base64,old");
   });
 
-  it("emoji 弹层选择：emit select → 表单态更新 + 图片互斥清空 + 保存清空 avatar", async () => {
-    const a = editAgent({ avatar: "data:image/webp;base64,old" });
-    const w = await mountForm(a);
-    expect(preview(w).find("img").attributes("src")).toBe("data:image/webp;base64,old");
-
-    // 开弹层 → 点第一个 emoji cell
+  it("清除按钮：图片归 null（预览回兜底首字），保存 payload avatar=null", async () => {
+    const w = await mountForm(editAgent({ avatar: "data:image/webp;base64,x" }));
+    // 只剩两个操作钮（上传/清除），清除是第二个
     await w.findAll(".avatar-actions .avatar-btn")[1].trigger("click");
-    await w.find(".emoji-pop .emoji-cell").trigger("click");
-    await flushPromises();
-
-    // 互斥：图片清空、emoji 生效（预览不再是 img）
-    expect(preview(w).find("img").exists()).toBe(false);
-    expect(preview(w).text()).toBe("🦊");
+    expect(preview(w).text()).toBe("助");
 
     await saveBtn(w).trigger("click");
     await flushPromises();
     const payload = updateMock.mock.calls[0][0];
     expect(payload.avatar).toBeNull(); // 清空（双层 Option 的 Some(None) 语义）
-    expect(payload.emoji).toBe("🦊");
   });
 
-  it("「不使用 emoji」清除：emoji 归 null，保存 payload 双 null", async () => {
-    const w = await mountForm(editAgent({ emoji: "🧊" }));
-    await w.findAll(".avatar-actions .avatar-btn")[1].trigger("click");
-    await w.find(".emoji-pop .emoji-clear").trigger("click");
-    expect(preview(w).text()).toBe("助"); // 回名字首字兜底
-
-    await saveBtn(w).trigger("click");
-    await flushPromises();
-    const payload = updateMock.mock.calls[0][0];
-    expect(payload.avatar).toBeNull();
-    expect(payload.emoji).toBeNull();
-  });
-
-  it("清除按钮：图片 + emoji 双清（预览回兜底首字）", async () => {
-    const w = await mountForm(editAgent({ avatar: "data:image/webp;base64,x", emoji: null }));
-    await w.findAll(".avatar-actions .avatar-btn")[2].trigger("click"); // 第三个按钮=清除
-    expect(preview(w).text()).toBe("助");
-  });
-
-  it("新建：选 emoji 后 create input 透传 avatar undefined / emoji 值", async () => {
+  it("新建：未选头像 create input 透传 avatar undefined", async () => {
     createMock.mockResolvedValue(editAgent());
     const w = await mountForm(null);
-    // 填出生证必填项（模型选预设需交互，直接走 GroupedSelect 之外的兜底：
-    // 手输模型落 custom 会要求 URL——用预设组第一项更简单）
     const nameInput = w.findAll("input.input")[0];
     await nameInput.setValue("新助手");
     const idInput = w.findAll("input.input")[1];
     await idInput.setValue("new-helper");
-
-    // 选 emoji
-    await w.findAll(".avatar-actions .avatar-btn")[1].trigger("click");
-    await w.find(".emoji-pop .emoji-cell").trigger("click");
 
     // 模型：开下拉点预设条目（真实用户路径，同 providers 测试范式）
     await w.find(".gs-input").trigger("focus");
@@ -170,7 +139,6 @@ describe("AgentForm 头像字段", () => {
     await flushPromises();
     expect(createMock).toHaveBeenCalledTimes(1);
     const input = createMock.mock.calls[0][0];
-    expect(input.emoji).toBe("🦊");
     expect(input.avatar).toBeUndefined();
   });
 });

@@ -268,8 +268,7 @@ interface RefOption {
   idText?: string; // agent 的完整 id（跟名字后，等宽淡色，title 全显）
   owner?: string; // 归属（项目名 / 模型），右对齐淡色，超长省略
   kindText: string; // 类型词，右缘定宽对齐
-  avatar?: string | null; // agent 头像图（EntityAvatar 三级链）
-  emoji?: string | null; // agent 选定 emoji
+  avatar?: string | null; // agent 头像图（EntityAvatar 两级链）
 }
 
 /** 会话标题：空 → 「会话」+ 短码（未命名会话显示 `会话#3357` 兜底）。*/
@@ -317,7 +316,7 @@ const refOptions = computed<RefOption[]>(() => {
       kind: "agent", targetId: a.id,
       display: `${a.name}#${code}`, label: a.name,
       idText: a.id, owner: a.model, kindText: "Agent",
-      avatar: a.avatar ?? null, emoji: a.emoji ?? null,
+      avatar: a.avatar ?? null,
     });
     if (out.length - convCount >= SECTION_CAP) break;
   }
@@ -521,7 +520,6 @@ function handleKeydown(e: KeyboardEvent) {
               class="at-option-avatar"
               :name="opt.label"
               :image="opt.avatar ?? null"
-              :emoji="opt.emoji ?? null"
               size="sm"
             />
             <span class="at-option-label" :title="opt.label">

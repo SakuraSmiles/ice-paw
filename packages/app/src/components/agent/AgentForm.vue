@@ -12,7 +12,7 @@
 //   （Ollama/custom/旧入口）不进下拉，仅编辑态存量兜底合成一组显示
 // Key/URL 字段的规则（requires_key / requires_base_url）由推导出的 provider
 // 驱动，与后端校验一致；「测试连接」一次往返两用——验证配置 + 拉取模型并入下拉。
-import { ref, computed, onMounted, onUnmounted, watch } from "vue";
+import { ref, computed, onMounted, watch } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { Agent, NewAgent, AgentUpdate, ProviderConnectionResult, ProviderInfo } from "../../types";
@@ -23,7 +23,6 @@ import ProviderIcon from "../common/ProviderIcon.vue";
 import type { ComboboxGroup, ComboboxItem } from "../common/Combobox.vue";
 import MoreMenu from "../common/MoreMenu.vue";
 import EntityAvatar from "../common/EntityAvatar.vue";
-import EmojiPicker from "../common/EmojiPicker.vue";
 import { compressAvatar } from "../../utils/avatar";
 
 const props = defineProps<{
@@ -52,25 +51,13 @@ const form = ref({
   api_key: "",
   base_url: props.agent?.base_url ?? "",
   workspace_path: props.agent?.workspace_path ?? "",
-  // 头像（身份出生证字段，非运行时配置）：图片/emoji 互斥，都不选走名字渐变兜底
+  // 头像（身份出生证字段，非运行时配置）：不传图走名字渐变兜底
   avatar: (props.agent?.avatar as string | null) ?? null,
-  emoji: (props.agent?.emoji as string | null) ?? null,
 });
 
 // ---- 头像行 ----
 const avatarInput = ref<HTMLInputElement | null>(null);
-const emojiWrap = ref<HTMLDivElement | null>(null);
-const emojiOpen = ref(false);
 const avatarError = ref("");
-
-// 点外部关 emoji 弹层（对齐 GroupedSelect 的 mousedown 委托模式）
-function onDocMouseDown(e: MouseEvent) {
-  if (emojiOpen.value && emojiWrap.value && !emojiWrap.value.contains(e.target as Node)) {
-    emojiOpen.value = false;
-  }
-}
-onMounted(() => document.addEventListener("mousedown", onDocMouseDown));
-onUnmounted(() => document.removeEventListener("mousedown", onDocMouseDown));
 
 async function onAvatarFile(e: Event) {
   const input = e.target as HTMLInputElement;
@@ -80,27 +67,13 @@ async function onAvatarFile(e: Event) {
   avatarError.value = "";
   try {
     form.value.avatar = await compressAvatar(file);
-    form.value.emoji = null; // 互斥：图片优先，emoji 让位
-    emojiOpen.value = false;
   } catch (err) {
     avatarError.value = err instanceof Error ? err.message : "图片处理失败";
   }
 }
 
-function onEmojiSelect(e: string) {
-  form.value.emoji = e;
-  form.value.avatar = null; // 互斥
-  emojiOpen.value = false;
-}
-
-function onEmojiClear() {
-  form.value.emoji = null;
-  emojiOpen.value = false;
-}
-
 function clearAvatar() {
   form.value.avatar = null;
-  form.value.emoji = null;
   avatarError.value = "";
 }
 
@@ -338,7 +311,6 @@ async function save() {
         workspace_path: form.value.workspace_path || null,
         // 头像双层 Option：null=清空 / string=设定（表单态即真值，无「不改」分支）
         avatar: form.value.avatar,
-        emoji: form.value.emoji,
       };
       const updated = await bridge.agents.update(update);
 
@@ -363,7 +335,6 @@ async function save() {
         base_url: form.value.base_url || undefined,
         workspace_path: form.value.workspace_path || undefined,
         avatar: form.value.avatar ?? undefined,
-        emoji: form.value.emoji ?? undefined,
       };
       const created = await bridge.agents.create(input);
       emit("saved", created);
@@ -417,21 +388,15 @@ function confirmDelete() {
         </div>
       </div>
 
-      <!-- 头像（身份出生证：图片/emoji/名字渐变三级，EntityAvatar 统一渲染链） -->
+      <!-- 头像（身份出生证：图片/名字渐变两级，EntityAvatar 统一渲染链） -->
       <div class="field">
         <label class="field-label">头像 <span class="hint">不选则按名字生成</span></label>
         <div class="avatar-row">
-          <EntityAvatar :name="form.name || form.id || '?'" :image="form.avatar" :emoji="form.emoji" size="lg" />
+          <EntityAvatar :name="form.name || form.id || '?'" :image="form.avatar" size="lg" />
           <div class="avatar-actions">
             <button type="button" class="avatar-btn" @click="avatarInput?.click()">上传图片</button>
-            <div ref="emojiWrap" class="emoji-pop-wrap">
-              <button type="button" class="avatar-btn" @click="emojiOpen = !emojiOpen">选 emoji</button>
-              <div v-if="emojiOpen" class="emoji-pop">
-                <EmojiPicker @select="onEmojiSelect" @clear="onEmojiClear" />
-              </div>
-            </div>
             <button
-              v-if="form.avatar || form.emoji"
+              v-if="form.avatar"
               type="button"
               class="avatar-btn"
               @click="clearAvatar"
@@ -728,7 +693,7 @@ function confirmDelete() {
   font-family: var(--ip-font-mono);
 }
 
-/* 头像行（预览 + 小操作钮 + emoji 弹层） */
+/* 头像行（预览 + 小操作钮） */
 .avatar-row {
   display: flex;
   align-items: center;
@@ -758,20 +723,6 @@ function confirmDelete() {
 }
 .avatar-file {
   display: none;
-}
-.emoji-pop-wrap {
-  position: relative;
-  display: inline-flex;
-}
-.emoji-pop {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  z-index: 60;
-  background-color: var(--ip-color-bg-primary);
-  border: 1px solid var(--ip-color-border-default);
-  border-radius: var(--ip-radius-md);
-  box-shadow: var(--ip-shadow-md);
 }
 
 .field-hint {

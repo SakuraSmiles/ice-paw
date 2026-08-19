@@ -29,7 +29,7 @@ const props = defineProps<{
 }>();
 
 const agent = useAgentStore();
-/** 头像取数：agentId 命中 store 才有 image/emoji，否则纯名字兜底。 */
+/** 头像取数：agentId 命中 store 才有 image，否则纯名字兜底。 */
 const targetAgent = computed(() => (props.agentId ? agent.getById(props.agentId) : undefined));
 
 const emit = defineEmits<{ (e: "open-child", childId: string): void }>();
@@ -60,7 +60,6 @@ const FINISH_LABEL: Record<string, string> = {
         class="dlg-avatar"
         :name="targetAgent?.name ?? agentName"
         :image="targetAgent?.avatar ?? null"
-        :emoji="targetAgent?.emoji ?? null"
         size="sm"
       />
       <span class="dlg-title">委派给 {{ agentName }}</span>

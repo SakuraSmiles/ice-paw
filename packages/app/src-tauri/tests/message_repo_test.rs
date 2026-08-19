@@ -72,7 +72,6 @@ async fn seed_agent_and_conv(pool: &SqlitePool) -> String {
             supports_vision: false,
             workspace_path: None,
             avatar: None,
-            emoji: None,
         },
         agent_id,
         agent_id, // api_key_ref 简化为 agent_id 自身

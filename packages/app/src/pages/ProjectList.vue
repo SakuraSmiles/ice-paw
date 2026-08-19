@@ -10,7 +10,6 @@ import { useAgentStore } from "../stores/agent";
 import { useChatStore } from "../stores/chat";
 import { bridge } from "../api/bridge";
 import { formatTime, parseDbTime } from "../utils/time";
-import { emojiFromIcon } from "../utils/avatar";
 import EntityAvatar from "../components/common/EntityAvatar.vue";
 import ProjectBasicForm from "../components/project/ProjectBasicForm.vue";
 import ProjectMembersChips from "../components/project/ProjectMembersChips.vue";
@@ -103,7 +102,6 @@ const editForm = reactive({
   description: "",
   workspacePath: "",
   avatar: null as string | null,
-  emoji: null as string | null,
   themeColor: null as string | null,
 });
 const editError = ref("");
@@ -120,7 +118,6 @@ function toggleEdit(p: Project) {
   editForm.description = p.description || "";
   editForm.workspacePath = p.workspace_path || "";
   editForm.avatar = p.avatar ?? null;
-  editForm.emoji = emojiFromIcon(p.icon);
   editForm.themeColor = p.theme_color ?? null;
   editError.value = "";
 }
@@ -144,8 +141,7 @@ async function saveEdit(p: Project) {
       name: editForm.name.trim(),
       description: editForm.description.trim(),
       workspace_path: editForm.workspacePath.trim() || null,
-      // 身份字段（表单态即真值）：icon 列承载 emoji（清空回 folder 默认）
-      icon: editForm.emoji ?? "folder",
+      // 身份字段（表单态即真值）
       avatar: editForm.avatar,
       theme_color: editForm.themeColor,
     });
@@ -384,7 +380,6 @@ onMounted(() => {
             class="card-avatar"
             :name="p.name"
             :image="p.avatar"
-            :emoji="emojiFromIcon(p.icon)"
             :accent="p.theme_color"
             size="lg"
           />
@@ -558,7 +553,7 @@ onMounted(() => {
 
 .card-top { display: flex; align-items: center; gap: 12px; }
 
-/* 项目头像（lg=36px，EntityAvatar 三级链：图片/emoji/名字渐变） */
+/* 项目头像（lg=36px，EntityAvatar 两级链：图片/名字渐变） */
 .card-avatar { flex-shrink: 0; }
 .new-plus { flex-shrink: 0; color: var(--ip-color-primary-tint-text); }
 
