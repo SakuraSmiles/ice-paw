@@ -830,7 +830,7 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
                     </div>
                     <Transition name="think-fade">
                       <div v-if="expandedThinking.has('streaming')" class="think-body">
-                        <MarkdownRenderer :content="chat.streamingThinking" />
+                        <MarkdownRenderer :content="chat.streamingThinking" streaming />
                       </div>
                     </Transition>
                   </div>
@@ -849,7 +849,7 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
 
                 <!-- 文字（按时间线顺序：thinking → 文本 → 工具，匹配 content_blocks）-->
                 <div v-if="item.msg.content" class="message-bubble">
-                  <MarkdownRenderer :content="item.msg.content" />
+                  <MarkdownRenderer :content="item.msg.content" :streaming="isLiveAssistant(item)" />
                 </div>
 
                 <!-- 工具调用（历史/刚结束，从 content_blocks 解析，非流式） -->
