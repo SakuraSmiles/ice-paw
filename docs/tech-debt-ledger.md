@@ -50,7 +50,7 @@
 
 | # | 项 | 备注 |
 |---|---|---|
-| P1 | 项目 icon / theme_color 无 UI | 项目维度自查仅剩这条 |
+| P1 | 项目 icon / theme_color 无 UI ✅ 已执行 2026-08-19（f62d322） | UI 升级批 C5 闭：ProjectBasicForm「图标与颜色」行（avatar 新列 migration 48 + emoji 沿用 icon 列 + theme_color swatch），展示位 ProjectSwitcher 胶囊/菜单、ProjectList 卡片、ProjectDetailLayout 头部 |
 | P2 | 对话重名检查（U13 空值已修） | |
 | P3 | ChatHeader 绕 store 直接改标题（U17） | |
 | P4 | 侧栏最后消息预览（U10） | |
