@@ -270,6 +270,97 @@
   scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
 }
 
+/* ------------------- 代码块容器（语言标签 + 复制 + 超长折叠） ------------------- */
+
+.markdown-body .md-code-block {
+  position: relative;
+  margin: var(--ip-spacing-3, 12px) 0;
+  border-radius: var(--ip-radius-md, 6px);
+  overflow: hidden;
+  background: #1a1a1a; /* 与 pre 同底——头部条/折叠遮罩衔接连续 */
+}
+
+/* 容器内的 pre 去独立外边距/圆角（由容器统一承载） */
+.markdown-body .md-code-block .markdown-body-code-pre,
+.markdown-body .md-code-block pre {
+  margin: 0;
+  border-radius: 0;
+}
+
+.md-code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 6px 5px 14px;
+  background: rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.md-code-lang {
+  font-family: var(--ip-font-mono);
+  font-size: 11px;
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.55);
+  user-select: none;
+}
+
+.md-code-copy,
+.md-code-toggle {
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: var(--ip-radius-sm, 4px);
+  background: transparent;
+  color: rgba(255, 255, 255, 0.6);
+  cursor: pointer;
+  user-select: none;
+}
+
+.md-code-copy:hover,
+.md-code-toggle:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+/* 超长折叠：限高 + 底部渐隐遮罩 + 展开按钮 */
+.markdown-body .md-code-block.collapsed .markdown-body-code-pre,
+.markdown-body .md-code-block.collapsed pre {
+  max-height: 420px;
+  overflow-y: hidden;
+}
+
+.markdown-body .md-code-block.collapsed::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 30px; /* 让位展开按钮 */
+  height: 48px;
+  background: linear-gradient(transparent, #1a1a1a);
+  pointer-events: none;
+}
+
+.md-code-toggle {
+  display: block;
+  width: 100%;
+  text-align: center;
+  padding: 7px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* 流式生成中：不折叠（解除限高、隐藏遮罩与按钮），完成后的重渲染恢复折叠 */
+.md-streaming .md-code-block.collapsed .markdown-body-code-pre,
+.md-streaming .md-code-block.collapsed pre {
+  max-height: none;
+}
+
+.md-streaming .md-code-block.collapsed::after,
+.md-streaming .md-code-block.collapsed .md-code-toggle {
+  display: none;
+}
+
 /* ------------------- 表格 ------------------- */
 
 .markdown-body-table,
