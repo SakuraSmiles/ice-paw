@@ -45,8 +45,6 @@ pub struct AgentRow {
     pub description: String,
     /// M2-1: Agent 头像（URL 或 base64）
     pub avatar: Option<String>,
-    /// Agent emoji 头像（migration 47；NULL = 渲染层走名字哈希渐变兜底）
-    pub emoji: Option<String>,
     /// Phase 3: 工作区目录路径（存放 agent.yaml 的本地目录）
     pub workspace_path: Option<String>,
     pub created_at: String,
@@ -282,9 +280,6 @@ pub struct Agent {
     /// M2-1: Agent 头像
     #[serde(default)]
     pub avatar: Option<String>,
-    /// Agent emoji 头像（migration 47；None = 渲染层走名字哈希渐变兜底）
-    #[serde(default)]
-    pub emoji: Option<String>,
     /// Phase 3: 工作区目录路径
     #[serde(default)]
     pub workspace_path: Option<String>,
@@ -351,7 +346,6 @@ impl From<AgentRow> for Agent {
             has_api_key,
             description: row.description,
             avatar: row.avatar,
-            emoji: row.emoji,
         }
     }
 }
@@ -399,9 +393,6 @@ pub struct NewAgent {
     /// M2-1: 头像图片（base64 dataURL，前端 canvas 压缩）
     #[serde(default)]
     pub avatar: Option<String>,
-    /// emoji 头像（migration 47）
-    #[serde(default)]
-    pub emoji: Option<String>,
 }
 
 fn default_temperature() -> f64 {
@@ -468,9 +459,6 @@ pub struct AgentUpdate {
     /// - Some(Some(v)) = 设定
     #[serde(default, deserialize_with = "deserialize_double_option")]
     pub avatar: Option<Option<String>>,
-    /// emoji 头像。双层 Option 语义同 avatar。
-    #[serde(default, deserialize_with = "deserialize_double_option")]
-    pub emoji: Option<Option<String>>,
 }
 
 /// 轮换 API Key 入参

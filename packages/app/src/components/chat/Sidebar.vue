@@ -278,7 +278,6 @@ function timeAgoLabel(dateStr: string): string {
               class="conv-agent-avatar"
               :name="agent.getById(conv.agent_id)?.name || '?'"
               :image="agent.getById(conv.agent_id)?.avatar ?? null"
-              :emoji="agent.getById(conv.agent_id)?.emoji ?? null"
               size="xs"
             />
             <span class="conv-agent-name">{{ agent.getById(conv.agent_id)?.name || "未知" }}</span>

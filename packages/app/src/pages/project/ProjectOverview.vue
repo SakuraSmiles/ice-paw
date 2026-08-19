@@ -104,7 +104,6 @@ interface ShareRow {
   name: string;
   model: string | null;
   avatar: string | null;
-  emoji: string | null;
   messages: number;
   tokens: number;
   other: boolean;
@@ -120,7 +119,6 @@ const shareRows = computed<ShareRow[]>(() => {
       name: a?.name ?? "未知成员",
       model: a?.model ?? null,
       avatar: a?.avatar ?? null,
-      emoji: a?.emoji ?? null,
       messages: s.messages,
       tokens: s.tokens,
       other: false,
@@ -137,7 +135,6 @@ const shareRows = computed<ShareRow[]>(() => {
       name: `其他 ${rest.length} 位`,
       model: null,
       avatar: null,
-      emoji: null,
       messages: rest.reduce((sum, s) => sum + s.messages, 0),
       tokens: rest.reduce((sum, s) => sum + s.tokens, 0),
       other: true,
@@ -315,14 +312,13 @@ const donutSegs = computed(() => {
             :class="{ hovered: hoverKey === row.key, dim: hoverKey !== null && hoverKey !== row.key }"
           >
             <div class="share-label" :title="rowTitle(row)" @mouseenter="hoverKey = row.key">
-              <!-- 成员头像（sm，EntityAvatar 三级链，与其他展示位同视觉；
+              <!-- 成员头像（sm，EntityAvatar 两级链，与其他展示位同视觉；
                    弧段图例联动由右侧色条承载；other 聚合行回退色点） -->
               <EntityAvatar
                 v-if="!row.other"
                 class="share-avatar"
                 :name="row.name"
                 :image="row.avatar"
-                :emoji="row.emoji"
                 size="sm"
               />
               <i v-else class="share-dot" :style="{ background: row.color }" />

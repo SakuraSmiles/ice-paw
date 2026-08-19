@@ -193,7 +193,6 @@ async function togglePin() {
             class="header-agent-avatar"
             :name="activeAgent.name"
             :image="activeAgent.avatar"
-            :emoji="activeAgent.emoji"
             size="md"
           />
           <span v-if="activeAgent" class="header-agent">{{ activeAgent.name }}</span>

@@ -12,7 +12,6 @@ import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useProjectStore } from "../../stores/project";
 import EntityAvatar from "../../components/common/EntityAvatar.vue";
-import { emojiFromIcon } from "../../utils/avatar";
 
 const route = useRoute();
 const router = useRouter();
@@ -54,12 +53,11 @@ onMounted(async () => {
     <header class="detail-header" :class="{ 'has-tabbar': !!current }">
       <div class="head-main">
         <template v-if="current">
-          <!-- 项目头像（lg，EntityAvatar 三级链；主题色作 emoji/兜底底色点缀头部） -->
+          <!-- 项目头像（lg，EntityAvatar 两级链；主题色作兜底底色点缀头部） -->
           <EntityAvatar
             class="head-avatar"
             :name="current.name"
             :image="current.avatar"
-            :emoji="emojiFromIcon(current.icon)"
             :accent="current.theme_color"
             size="lg"
           />

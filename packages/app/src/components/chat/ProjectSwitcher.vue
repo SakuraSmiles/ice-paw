@@ -7,7 +7,6 @@
 import { ref, computed, nextTick } from "vue";
 import type { Project } from "../../types";
 import EntityAvatar from "../common/EntityAvatar.vue";
-import { emojiFromIcon } from "../../utils/avatar";
 
 const props = defineProps<{
   currentProjectName: string;
@@ -114,7 +113,6 @@ function confirmCreate() {
           class="scope-avatar"
           :name="currentProject.name"
           :image="currentProject.avatar"
-          :emoji="emojiFromIcon(currentProject.icon)"
           :accent="currentProject.theme_color"
           size="sm"
         />
@@ -179,7 +177,6 @@ function confirmCreate() {
               <EntityAvatar
                 :name="p.name"
                 :image="p.avatar"
-                :emoji="emojiFromIcon(p.icon)"
                 :accent="p.theme_color"
                 size="sm"
               />

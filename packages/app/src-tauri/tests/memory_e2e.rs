@@ -104,7 +104,6 @@ async fn make_ctx(
         context_window: None,
         enabled_tools: None,
         avatar: None,
-        emoji: None,
         workspace_path: None,
         description: String::new(),
         supports_vision: 0,

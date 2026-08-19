@@ -36,7 +36,7 @@ const visibleAgents = computed(() =>
           class="picker-item"
           @click="emit('select', a.id)"
         >
-          <EntityAvatar class="picker-avatar" :name="a.name" :image="a.avatar" :emoji="a.emoji" size="lg" />
+          <EntityAvatar class="picker-avatar" :name="a.name" :image="a.avatar" size="lg" />
           <div class="picker-info">
             <div class="picker-name">{{ a.name }}</div>
             <div class="picker-desc">{{ a.description || a.model }}</div>

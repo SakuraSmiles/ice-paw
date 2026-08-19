@@ -22,7 +22,6 @@ export interface Agent {
   supports_vision?: boolean;
   description?: string;
   avatar?: string | null;
-  emoji?: string | null;
   workspace_path?: string | null;
   config_from_file?: boolean;
   created_at: string;
@@ -48,7 +47,6 @@ export interface NewAgent {
   supports_vision?: boolean;
   workspace_path?: string;
   avatar?: string;
-  emoji?: string;
 }
 
 export interface AgentUpdate {
@@ -69,7 +67,6 @@ export interface AgentUpdate {
   workspace_path?: string | null;
   /** 头像：undefined=不改 / null=清空 / string=设定（双层 Option 语义） */
   avatar?: string | null;
-  emoji?: string | null;
 }
 
 // ============================================================================

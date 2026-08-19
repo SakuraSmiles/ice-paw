@@ -1,4 +1,4 @@
-// AgentPicker.avatar.test.ts — 头像接线锁：列表项渲染 EntityAvatar（三级链），
+// AgentPicker.avatar.test.ts — 头像接线锁：列表项渲染 EntityAvatar（两级链），
 // 不再回退到手写首字母 + 硬编码蓝渐变（picker-avatar 文本节点即回归信号）。
 import { describe, it, expect, beforeEach } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
@@ -33,7 +33,6 @@ function mountPicker() {
   const store = useAgentStore();
   store.list = [
     agent({ id: "a-img", name: "图片位", avatar: "data:image/webp;base64,xxx" }),
-    agent({ id: "a-emoji", name: "表情位", emoji: "🧊" }),
     agent({ id: "a-fallback", name: "兜底位" }),
   ];
   return mount(AgentPicker);
@@ -44,16 +43,14 @@ describe("AgentPicker 头像接线", () => {
     setActivePinia(createPinia());
   });
 
-  it("每行渲染 EntityAvatar：图片档出 <img>、emoji 档显字符、兜底档显首字", () => {
+  it("每行渲染 EntityAvatar：图片档出 <img>、兜底档显首字", () => {
     const w = mountPicker();
     const avatars = w.findAllComponents({ name: "EntityAvatar" });
-    expect(avatars.length).toBe(3);
+    expect(avatars.length).toBe(2);
     // 图片档：img src 指向 dataURL
     expect(avatars[0].find("img").attributes("src")).toBe("data:image/webp;base64,xxx");
-    // emoji 档：文本为选定 emoji
-    expect(avatars[1].text()).toBe("🧊");
     // 兜底档：名字首字（非旧手写首字母节点——首字本就在兜底链里）
-    expect(avatars[2].text()).toBe("兜");
+    expect(avatars[1].text()).toBe("兜");
     // 旧手写实现回归信号：picker-avatar 里不应再有裸文本节点渲染链
     expect(w.find(".picker-avatar").classes()).toContain("entity-avatar");
   });
@@ -62,9 +59,9 @@ describe("AgentPicker 头像接线", () => {
     const store = useAgentStore();
     store.list = [
       agent({ id: "a-img", name: "图片位", avatar: "data:image/webp;base64,xxx" }),
-      agent({ id: "a-emoji", name: "表情位", emoji: "🧊" }),
+      agent({ id: "a-other", name: "兜底位" }),
     ];
-    const w = mount(AgentPicker, { props: { agentIds: ["a-emoji"] } });
+    const w = mount(AgentPicker, { props: { agentIds: ["a-other"] } });
     expect(w.findAllComponents({ name: "EntityAvatar" }).length).toBe(1);
     expect(w.text()).not.toContain("图片位");
   });
