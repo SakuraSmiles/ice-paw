@@ -471,14 +471,20 @@ async fn stream_loop_inner(
                     total_completion_tokens =
                         total_completion_tokens.saturating_add(u.completion_tokens);
                     round_completion_tokens = Some(u.completion_tokens);
-                    // W4.2: Token 预算累计 —— 必须基于【本轮】usage 累加。prompt+completion 均为
-                    // provider 该轮真实计费的毛成本（历史每轮被重发、被重新计费，故 Σ 跨轮 prompt
-                    // 不是虚高而是真实开销）。关键：只能用本轮 `u`，不可复用跨轮 collected_usage
-                    //——后者在 provider 间歇不回 usage 时保留上一轮旧值，会被每轮重复累加导致虚高。
+                    // W4.2→预算诚实化: Token 预算累计 —— 按「计费口径」（缓存命中
+                    // 1/10 折扣，见 budget::billed_tokens）：provider 对命中部分只收
+                    // 1/10~1/50 费用，按毛成本 Σ(prompt+completion) 计量会把 96% 命中
+                    // 的长任务当失控熔断（生产实证）。关键：只能用本轮 `u`，不可复用
+                    // 跨轮 collected_usage——后者在 provider 间歇不回 usage 时保留
+                    // 上一轮旧值，会被每轮重复累加导致虚高。
                     //（须在下方 `collected_usage = Some(u)` move 之前读取 u 的字段。）
-                    cumulative_tokens = cumulative_tokens
-                        .saturating_add(u.prompt_tokens as usize)
-                        .saturating_add(u.completion_tokens as usize);
+                    cumulative_tokens = cumulative_tokens.saturating_add(
+                        crate::harness::budget::billed_tokens(
+                            u.prompt_tokens as u64,
+                            u.cached_tokens as u64,
+                            u.completion_tokens as u64,
+                        ) as usize,
+                    );
                     collected_usage = Some(u);
                 }
                 // 【彻底重构】token_count 由本轮 finalize_assistant_message 即时写入

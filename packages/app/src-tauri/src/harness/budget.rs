@@ -37,6 +37,29 @@ pub const MAX_ATTEMPTS: u32 = 4;
 pub const DEFAULT_AUTO_RENEWALS: u32 = 2;
 
 // ============================================================================
+// 预算计量（缓存折扣）——预算按「计费口径」而非毛成本累计
+// ============================================================================
+
+/// 上下文缓存计价折扣分母：命中部分按 1/10 计入预算。
+///
+/// 取 1/10 是各 provider 缓存定价的**最贵档**（Anthropic cache read 0.1×、
+/// MiniMax 前缀缓存 ~输入价 10%、DeepSeek 1/10~1/50）——按最贵档折算即保守
+/// 口径：宁可高估成本早续期，不可低估成本放任熔断失真。生产实证命中 96% 的
+/// 长任务曾按全价计量被提前熔断（毛成本 9M 触顶 → 计费口径实际 ≈1.5M）。
+pub const CACHE_HIT_DISCOUNT_DIVISOR: u64 = 10;
+
+/// 预算「计费口径」token 数：未命中全价 + 命中按 [`CACHE_HIT_DISCOUNT_DIVISOR`]
+/// 折扣 + 输出全价。
+///
+/// 入参须为规范语义 TokenUsage（prompt 含命中、cached ≤ prompt；适配层归一 +
+/// `into_canonical` 自愈保证）；`cached.min(prompt)` 为末道防御——脏数据下宁可
+/// 全价不可负数。整除截断每轮 ≤9 token，相对十万级 cached 可忽略。
+pub fn billed_tokens(prompt: u64, cached: u64, completion: u64) -> u64 {
+    let cached = cached.min(prompt);
+    (prompt - cached) + cached / CACHE_HIT_DISCOUNT_DIVISOR + completion
+}
+
+// ============================================================================
 // LoopBudget — 三道熔断配置（W3.1 B1-1 + B1-2）
 // ============================================================================
 
@@ -56,8 +79,10 @@ pub struct LoopBudget {
     pub stuck_threshold: u32,
     /// 整次对话累计 token 预算（默认 3× 上下文窗口，由 chat_cmd model-aware 兜底；
     /// 此处 `1_000_000` 仅作 `LoopBudget::default()` 的库级兜底，send_message 路径不走它）。
-    /// Σ(prompt_i+completion_i) = provider 真实毛成本（历史每轮重发、被重新计费）；
-    /// loop_engine 基于【本轮】usage 累加（避免间歇缺失时旧值重复累加致虚高）。
+    /// 累计口径 = [`billed_tokens`] 计费口径（缓存命中按 1/10 折扣——provider 对
+    /// 命中部分只收 1/10~1/50 费用，按毛成本 Σ(prompt+completion) 计量会提前熔断
+    /// 高命中的长任务）；loop_engine 基于【本轮】usage 累加（避免间歇缺失时旧值
+    /// 重复累加致虚高）。
     /// agent.yaml 的 max_total_tokens 可显式覆盖；撞预算由守卫对称清场，不再卡死。
     pub max_total_tokens: usize,
     /// B1：`max_total_tokens` 触顶时可自动续期的次数（每次 +初始上限）。0 = 硬上限即停。
@@ -148,7 +173,7 @@ mod tests {
         assert!(!exceeded, "usize::MAX 预算永远不应触发终止");
     }
 
-    /// 验证：TokenUsage 累加准确性
+    /// 验证：TokenUsage 累加准确性（计费口径——loop_engine 累加点同款公式）
     #[test]
     fn test_token_accumulation_accuracy() {
         let u1 = TokenUsage {
@@ -162,9 +187,50 @@ mod tests {
             cached_tokens: 20,
         };
         let mut cumulative: usize = 0;
-        cumulative += u1.prompt_tokens as usize + u1.completion_tokens as usize;
-        cumulative += u2.prompt_tokens as usize + u2.completion_tokens as usize;
-        assert_eq!(cumulative, 430, "累计应为 100+50+200+80=430");
+        cumulative += billed_tokens(
+            u1.prompt_tokens as u64,
+            u1.cached_tokens as u64,
+            u1.completion_tokens as u64,
+        ) as usize;
+        cumulative += billed_tokens(
+            u2.prompt_tokens as u64,
+            u2.cached_tokens as u64,
+            u2.completion_tokens as u64,
+        ) as usize;
+        // (100-10+1+50) + (200-20+2+80) = 141 + 262 = 403
+        assert_eq!(cumulative, 403, "计费口径累计应为 (90+1+50)+(180+2+80)=403");
+    }
+
+    /// billed_tokens：无缓存退化 = 全价（Ollama / mock 路径行为不变式）
+    #[test]
+    fn billed_tokens_full_price_when_no_cache() {
+        assert_eq!(billed_tokens(100_000, 0, 5_000), 105_000);
+        assert_eq!(billed_tokens(0, 0, 0), 0);
+    }
+
+    /// billed_tokens：命中按 1/10 折扣（生产被熔断 turn 末轮量级——毛 405k → 计费 63k）
+    #[test]
+    fn billed_tokens_cache_hit_discounted_tenth() {
+        let prompt = 400_000;
+        let cached = 380_000; // 命中 95%
+        let completion = 5_000;
+        // 未命中 20k 全价 + 命中 38k（1/10） + 输出 5k
+        assert_eq!(billed_tokens(prompt, cached, completion), 20_000 + 38_000 + 5_000);
+    }
+
+    /// billed_tokens：cached > prompt 钳制（脏数据末道防御，宁可全价不可下溢）
+    #[test]
+    fn billed_tokens_cached_exceeds_prompt_clamped() {
+        // 未归一脏数据：cached=400 但 prompt=100 → 按 prompt 全为命中算也不下溢
+        let billed = billed_tokens(100, 400, 10);
+        assert_eq!(billed, 100 / CACHE_HIT_DISCOUNT_DIVISOR + 10);
+    }
+
+    /// billed_tokens：整除截断边界（cached=9 → +0；cached=19 → +1）
+    #[test]
+    fn billed_tokens_truncation_boundary() {
+        assert_eq!(billed_tokens(9, 9, 0), 0);
+        assert_eq!(billed_tokens(19, 19, 0), 1);
     }
 
     /// B1: 预算续期总量有界——每次触顶 +初始上限，N 次续期后 = 初始 × (N+1)

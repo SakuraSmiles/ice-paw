@@ -282,6 +282,10 @@ pub(crate) async fn consume_stream(
                     },
                     None => u,
                 });
+                // 归一守卫：修复「prompt 只报 miss」的兼容端点（cached > prompt 时
+                // 补上命中部分）——对已规范 usage 是幂等 no-op。放汇聚点一处治三条
+                // 出口（预算累加 / round-state 上屏 / turn_ended 落库）。
+                last_usage = last_usage.map(TokenUsage::into_canonical);
                 if let Some(ref merged) = last_usage {
                     round_state.tokens_prompt = merged.prompt_tokens;
                     round_state.tokens_completion = merged.completion_tokens;

@@ -197,13 +197,35 @@ impl ChatMessage {
 }
 
 /// P2-3: Token 用量信息
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+///
+/// 规范语义（各 provider 适配层出口必须满足，供预算计量 / HUD / 落库统一消费）：
+/// - `prompt_tokens`：该轮总输入（**含**缓存命中部分）
+/// - `cached_tokens`：其中命中 provider 上下文缓存的部分（恒 ≤ prompt_tokens）
+///
+/// 背景：OpenAI 标准 prompt 含命中；Anthropic `input_tokens` 不含 cache_read（单列）；
+/// 少数 OpenAI 兼容端点（生产实证 deepseek-v4-flash）prompt 只报 miss——语义分裂曾致
+/// 预算按全价计量（96% 命中被当作 0% 计），长任务被提前熔断。归一由适配层显式
+/// 完成（Anthropic），兼容端点的残余症状由 [`TokenUsage::into_canonical`] 自愈。
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct TokenUsage {
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
     /// P2-3: 缓存命中的 token 数（Anthropic: cache_read_input_tokens, OpenAI: cached_tokens）
     #[serde(default)]
     pub cached_tokens: u32,
+}
+
+impl TokenUsage {
+    /// 归一化守卫：修复「prompt 只报 miss」的兼容端点。若命中数超过 prompt
+    /// （规范语义下不可能），说明 provider 把 prompt 当 miss 报告 → 补上命中部分。
+    /// 对已规范的 usage 是幂等 no-op；在 stream_consumer 汇聚点统一调用，
+    /// 一处修复预算累加 / round-state 上屏 / turn_ended 落库三条出口。
+    pub fn into_canonical(mut self) -> Self {
+        if self.cached_tokens > self.prompt_tokens {
+            self.prompt_tokens = self.cached_tokens.saturating_add(self.prompt_tokens);
+        }
+        self
+    }
 }
 
 /// 流式增量 — LLM 返回的每个 chunk
@@ -276,6 +298,55 @@ mod tests {
         let b = ContentBlock::image("abc", "image/jpeg");
         assert!(b.is_image());
         assert!(b.as_text().is_none());
+    }
+
+    /// into_canonical：规范语义（cached ≤ prompt）下是 no-op
+    #[test]
+    fn token_usage_into_canonical_noop_when_invariant_holds() {
+        let u = TokenUsage {
+            prompt_tokens: 430_000,
+            completion_tokens: 1_200,
+            cached_tokens: 413_184,
+        }
+        .into_canonical();
+        assert_eq!(u.prompt_tokens, 430_000);
+        assert_eq!(u.cached_tokens, 413_184);
+    }
+
+    /// into_canonical：cached > prompt（端点把 prompt 当 miss 报）→ 补上命中部分
+    #[test]
+    fn token_usage_into_canonical_bumps_prompt_when_cached_exceeds() {
+        // 生产实证形态：prompt 只报 miss、cached 单列（deepseek-v4-flash 兼容端点）
+        let u = TokenUsage {
+            prompt_tokens: 363_805,
+            completion_tokens: 500,
+            cached_tokens: 413_184,
+        }
+        .into_canonical();
+        // miss + hit = 真实总输入
+        assert_eq!(u.prompt_tokens, 363_805 + 413_184);
+        assert_eq!(u.cached_tokens, 413_184);
+    }
+
+    /// into_canonical：幂等（汇聚点逐事件调用，重复调用值不变）
+    #[test]
+    fn token_usage_into_canonical_idempotent() {
+        let u = TokenUsage {
+            prompt_tokens: 100,
+            completion_tokens: 10,
+            cached_tokens: 400,
+        };
+        let once = u.clone().into_canonical();
+        let twice = once.clone().into_canonical();
+        assert_eq!(once, twice);
+        // u32 饱和：极端大值不 panic
+        let sat = TokenUsage {
+            prompt_tokens: u32::MAX,
+            cached_tokens: u32::MAX,
+            ..TokenUsage::default()
+        }
+        .into_canonical();
+        assert_eq!(sat.prompt_tokens, u32::MAX);
     }
 
     #[test]
