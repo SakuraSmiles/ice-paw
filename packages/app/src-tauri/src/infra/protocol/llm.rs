@@ -257,7 +257,7 @@ pub enum ChatDelta {
 }
 
 /// 工具定义（发给 LLM 的 tool schema）
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ToolDef {
     pub name: String,
     pub description: String,
