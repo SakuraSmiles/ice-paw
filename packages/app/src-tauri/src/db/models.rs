@@ -980,6 +980,9 @@ pub struct ProjectRow {
     pub workspace_path: Option<String>,
     #[serde(default)]
     pub theme_color: Option<String>,
+    /// 项目头像图片（base64 dataURL；NULL 走前端名字渐变兜底）
+    #[serde(default)]
+    pub avatar: Option<String>,
     /// 是否已归档（软删除）：0 = 活跃，1 = 已归档
     #[serde(default)]
     pub archived: bool,
@@ -1026,6 +1029,9 @@ pub struct NewProject {
     pub workspace_path: Option<String>,
     #[serde(default)]
     pub theme_color: Option<String>,
+    /// 项目头像图片（base64 dataURL，前端压缩后）
+    #[serde(default)]
+    pub avatar: Option<String>,
     /// 初始成员 agent_id 列表（role 默认 member）
     #[serde(default)]
     pub agent_ids: Vec<String>,
@@ -1059,4 +1065,7 @@ pub struct UpdateProject {
     /// None=不改 / Some(None)=清空 / Some(Some(v))=设定
     #[serde(default, deserialize_with = "deserialize_double_option")]
     pub theme_color: Option<Option<String>>,
+    /// 项目头像图片。None=不改 / Some(None)=清空 / Some(Some(v))=设定
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub avatar: Option<Option<String>>,
 }

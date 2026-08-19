@@ -7,7 +7,7 @@ use sqlx::SqlitePool;
 use crate::db::models::{NewProject, ProjectAgentRow, ProjectRow, UpdateProject};
 use crate::error::{AppError, AppResult};
 
-const PROJECT_COLS: &str = "id, name, description, icon, sort_order, workspace_path, theme_color, archived, created_at, updated_at";
+const PROJECT_COLS: &str = "id, name, description, icon, sort_order, workspace_path, theme_color, avatar, archived, created_at, updated_at";
 
 // ===== projects CRUD =====
 
@@ -37,8 +37,8 @@ pub async fn get_by_id(pool: &SqlitePool, id: &str) -> AppResult<ProjectRow> {
 
 pub async fn create(pool: &SqlitePool, input: &NewProject, id: &str) -> AppResult<ProjectRow> {
     sqlx::query(
-        "INSERT INTO projects (id, name, description, icon, workspace_path, theme_color)
-         VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO projects (id, name, description, icon, workspace_path, theme_color, avatar)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(id)
     .bind(&input.name)
@@ -46,6 +46,7 @@ pub async fn create(pool: &SqlitePool, input: &NewProject, id: &str) -> AppResul
     .bind(input.icon.as_deref().unwrap_or("folder"))
     .bind(input.workspace_path.as_deref())
     .bind(input.theme_color.as_deref())
+    .bind(input.avatar.as_deref())
     .execute(pool)
     .await?;
 
@@ -87,15 +88,19 @@ pub async fn update(pool: &SqlitePool, input: &UpdateProject) -> AppResult<Proje
     if let Some(v) = &input.theme_color {
         current.theme_color = v.clone();
     }
+    if let Some(v) = &input.avatar {
+        current.avatar = v.clone();
+    }
 
     sqlx::query(
-        "UPDATE projects SET name=?, description=?, icon=?, workspace_path=?, theme_color=?, updated_at=datetime('now') WHERE id=?",
+        "UPDATE projects SET name=?, description=?, icon=?, workspace_path=?, theme_color=?, avatar=?, updated_at=datetime('now') WHERE id=?",
     )
     .bind(&current.name)
     .bind(&current.description)
     .bind(&current.icon)
     .bind(&current.workspace_path)
     .bind(&current.theme_color)
+    .bind(&current.avatar)
     .bind(&input.id)
     .execute(pool)
     .await?;
@@ -240,4 +245,113 @@ pub async fn remove_agent(pool: &SqlitePool, project_id: &str, agent_id: &str) -
         .execute(pool)
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// in-memory SQLite + 全量 migrations（migration 48 引入 projects.avatar）
+    async fn test_pool() -> SqlitePool {
+        use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+        use std::str::FromStr;
+        let opts = SqliteConnectOptions::from_str("sqlite::memory:")
+            .expect("valid sqlite url")
+            .create_if_missing(true)
+            .foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .expect("connect in-memory sqlite");
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .expect("migrate");
+        pool
+    }
+
+    fn new_project(avatar: Option<&str>) -> NewProject {
+        NewProject {
+            name: "测试项目".into(),
+            description: None,
+            icon: Some("🚀".into()),
+            workspace_path: None,
+            theme_color: None,
+            avatar: avatar.map(String::from),
+            agent_ids: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn project_avatar_roundtrip() {
+        let pool = test_pool().await;
+        create(&pool, &new_project(Some("data:image/webp;base64,xxx")), "p1")
+            .await
+            .expect("create");
+        let row = get_by_id(&pool, "p1").await.expect("get");
+        assert_eq!(row.avatar.as_deref(), Some("data:image/webp;base64,xxx"));
+        assert_eq!(row.icon.as_str(), "🚀");
+
+        // 不带头像创建 → NULL（渲染层走渐变兜底）
+        create(&pool, &new_project(None), "p2").await.expect("create 2");
+        assert_eq!(get_by_id(&pool, "p2").await.expect("get 2").avatar, None);
+    }
+
+    #[tokio::test]
+    async fn project_avatar_update_double_option_semantics() {
+        let pool = test_pool().await;
+        create(&pool, &new_project(None), "p1").await.expect("create");
+
+        // 全 None = 不改
+        let row = update(
+            &pool,
+            &UpdateProject {
+                id: "p1".into(),
+                name: None,
+                description: None,
+                icon: None,
+                workspace_path: None,
+                theme_color: None,
+                avatar: None,
+            },
+        )
+        .await
+        .expect("update no-op");
+        assert_eq!(row.avatar, None);
+
+        // Some(Some) = 设定
+        let row = update(
+            &pool,
+            &UpdateProject {
+                id: "p1".into(),
+                name: None,
+                description: None,
+                icon: None,
+                workspace_path: None,
+                theme_color: None,
+                avatar: Some(Some("data:image/webp;base64,yyy".into())),
+            },
+        )
+        .await
+        .expect("update set");
+        assert_eq!(row.avatar.as_deref(), Some("data:image/webp;base64,yyy"));
+
+        // Some(None) = 清空
+        let row = update(
+            &pool,
+            &UpdateProject {
+                id: "p1".into(),
+                name: None,
+                description: None,
+                icon: None,
+                workspace_path: None,
+                theme_color: None,
+                avatar: Some(None),
+            },
+        )
+        .await
+        .expect("update clear");
+        assert_eq!(row.avatar, None);
+    }
 }

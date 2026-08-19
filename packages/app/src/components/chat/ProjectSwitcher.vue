@@ -6,6 +6,8 @@
 // 通过 emit 上交 Sidebar 处理。
 import { ref, computed, nextTick } from "vue";
 import type { Project } from "../../types";
+import EntityAvatar from "../common/EntityAvatar.vue";
+import { emojiFromIcon } from "../../utils/avatar";
 
 const props = defineProps<{
   currentProjectName: string;
@@ -25,12 +27,10 @@ const emit = defineEmits<{
 const isOpen = ref(false);
 const isScoped = computed(() => props.scopeProjectId !== null);
 
-/** chip 圆点 = 当前项目主题色（散落 / 无主题色时回落 CSS 默认灰） */
-const scopeDotStyle = computed(() => {
-  if (!props.scopeProjectId) return {};
-  const p = props.projects.find((x) => x.id === props.scopeProjectId);
-  return p?.theme_color ? { backgroundColor: p.theme_color } : {};
-});
+/** 当前项目对象（散落态 null）——胶囊头像取数 */
+const currentProject = computed(() =>
+  props.scopeProjectId ? (props.projects.find((x) => x.id === props.scopeProjectId) ?? null) : null,
+);
 
 function onSelect(id: string | null) {
   isOpen.value = false;
@@ -109,7 +109,16 @@ function confirmCreate() {
         :title="isScoped ? `${currentProjectName}——点击查看项目详情` : '散落会话：不属于任何项目的会话'"
         @click="onOpenDetail"
       >
-        <span class="item-dot" :class="{ muted: !isScoped }" :style="scopeDotStyle" />
+        <EntityAvatar
+          v-if="currentProject"
+          class="scope-avatar"
+          :name="currentProject.name"
+          :image="currentProject.avatar"
+          :emoji="emojiFromIcon(currentProject.icon)"
+          :accent="currentProject.theme_color"
+          size="sm"
+        />
+        <span v-else class="item-dot muted" />
         <span class="switcher-name">{{ currentProjectName }}</span>
       </button>
 
@@ -166,7 +175,15 @@ function confirmCreate() {
             :class="{ active: scopeProjectId === p.id }"
             @click="onSelect(p.id)"
           >
-            <span class="item-mark"><span class="item-dot" :style="p.theme_color ? { backgroundColor: p.theme_color } : {}" /></span>
+            <span class="item-mark">
+              <EntityAvatar
+                :name="p.name"
+                :image="p.avatar"
+                :emoji="emojiFromIcon(p.icon)"
+                :accent="p.theme_color"
+                size="sm"
+              />
+            </span>
             <span class="item-name">{{ p.name }}</span>
             <svg v-if="scopeProjectId === p.id" class="item-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="20 6 9 17 4 12" />
@@ -241,6 +258,8 @@ function confirmCreate() {
 .item-dot.muted {
   background-color: var(--ip-color-text-tertiary);
 }
+/* 胶囊当前项目头像（sm=20px，EntityAvatar 三级链） */
+.scope-avatar { flex-shrink: 0; }
 
 /* 右侧动作钮 */
 .capsule-actions {
@@ -377,10 +396,10 @@ function confirmCreate() {
 .switcher-item:hover { background-color: var(--color-sidebar-item-hover); }
 .switcher-item.active { background-color: var(--color-sidebar-item-active); }
 
-/* 前导标记列：固定 16px 宽，让圆点 / 文字左对齐 */
+/* 前导标记列：固定 20px 宽（EntityAvatar sm / 圆点），让标记与文字左对齐 */
 .item-mark {
-  width: 16px;
-  height: 16px;
+  width: 20px;
+  height: 20px;
   flex-shrink: 0;
   display: flex;
   align-items: center;

@@ -1,17 +1,34 @@
 <script setup lang="ts">
-// ProjectBasicForm.vue — 项目基础信息表单（名称/描述/源码目录）共享组件。
+// ProjectBasicForm.vue — 项目基础信息表单（名称/描述/源码目录/图标与颜色）共享组件。
 // 双入口复用：ProjectList 展开区 + 项目详情页设置 tab。目录选择内聚
-// （plugin-dialog），值走单对象 v-model——父级持有表单状态，本组件无状态。
+// （plugin-dialog），值走单对象 v-model——父级持有表单状态，本组件无状态
+// （头像处理的瞬时错误提示除外——不进表单值）。
+import { onMounted, onUnmounted, ref } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
+import EntityAvatar from "../common/EntityAvatar.vue";
+import EmojiPicker from "../common/EmojiPicker.vue";
+import { compressAvatar } from "../../utils/avatar";
 
 interface ProjectBasicValue {
   name: string;
   description: string;
   workspacePath: string;
+  /** 头像图片（base64 dataURL；与 emoji 互斥，都空走名字渐变兜底） */
+  avatar: string | null;
+  /** 选定 emoji（存 icon 列；null = 清空） */
+  emoji: string | null;
+  /** 主题色 hex；null = 无 */
+  themeColor: string | null;
 }
 
 const props = defineProps<{ modelValue: ProjectBasicValue }>();
 const emit = defineEmits<{ "update:modelValue": [value: ProjectBasicValue] }>();
+
+/** 策展主题色（10 档；与 EntityAvatar 渐变色板同族，双主题可读） */
+const THEME_COLORS: ReadonlyArray<string> = [
+  "#4680C2", "#3BAF7A", "#B8862A", "#B83D3D", "#7C6BC4",
+  "#3D9DB3", "#C46B9A", "#6FA1D6", "#8A9B4A", "#8D8D9E",
+];
 
 /** 局部字段更新（单对象 v-model 的对象整体替换，props 不就地改） */
 function patch(part: Partial<ProjectBasicValue>) {
@@ -26,6 +43,50 @@ async function pickWorkspace() {
     defaultPath: props.modelValue.workspacePath || undefined,
   });
   if (selected) patch({ workspacePath: selected });
+}
+
+// ---- 图标与颜色行（图片/emoji 互斥，主题色独立） ----
+const avatarInput = ref<HTMLInputElement | null>(null);
+const emojiWrap = ref<HTMLDivElement | null>(null);
+const emojiOpen = ref(false);
+const avatarError = ref("");
+
+// 点外部关 emoji 弹层（对齐 GroupedSelect 的 mousedown 委托模式）
+function onDocMouseDown(e: MouseEvent) {
+  if (emojiOpen.value && emojiWrap.value && !emojiWrap.value.contains(e.target as Node)) {
+    emojiOpen.value = false;
+  }
+}
+onMounted(() => document.addEventListener("mousedown", onDocMouseDown));
+onUnmounted(() => document.removeEventListener("mousedown", onDocMouseDown));
+
+async function onAvatarFile(e: Event) {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = ""; // 允许重复选同一文件
+  if (!file) return;
+  avatarError.value = "";
+  try {
+    patch({ avatar: await compressAvatar(file), emoji: null }); // 互斥：图片优先
+    emojiOpen.value = false;
+  } catch (err) {
+    avatarError.value = err instanceof Error ? err.message : "图片处理失败";
+  }
+}
+
+function onEmojiSelect(emoji: string) {
+  patch({ emoji, avatar: null }); // 互斥
+  emojiOpen.value = false;
+}
+
+function onEmojiClear() {
+  patch({ emoji: null });
+  emojiOpen.value = false;
+}
+
+function clearAvatar() {
+  patch({ avatar: null, emoji: null });
+  avatarError.value = "";
 }
 </script>
 
@@ -51,6 +112,57 @@ async function pickWorkspace() {
         placeholder="一句话说明项目用途（可选）"
         @input="patch({ description: ($event.target as HTMLInputElement).value })"
       />
+    </div>
+
+    <!-- 图标与颜色（身份出生证：图片/emoji/名字渐变三级 + 主题色点缀） -->
+    <div class="field">
+      <label class="field-label">图标与颜色 <span class="opt">可选</span></label>
+      <div class="icon-row">
+        <EntityAvatar
+          :name="modelValue.name || '?'"
+          :image="modelValue.avatar"
+          :emoji="modelValue.emoji"
+          :accent="modelValue.themeColor"
+          size="lg"
+        />
+        <div class="icon-actions">
+          <button type="button" class="icon-btn" @click="avatarInput?.click()">上传图片</button>
+          <div ref="emojiWrap" class="emoji-pop-wrap">
+            <button type="button" class="icon-btn" @click="emojiOpen = !emojiOpen">选 emoji</button>
+            <div v-if="emojiOpen" class="emoji-pop">
+              <EmojiPicker @select="onEmojiSelect" @clear="onEmojiClear" />
+            </div>
+          </div>
+          <button
+            v-if="modelValue.avatar || modelValue.emoji"
+            type="button"
+            class="icon-btn"
+            @click="clearAvatar"
+          >清除</button>
+          <span v-if="avatarError" class="icon-err">{{ avatarError }}</span>
+        </div>
+        <input ref="avatarInput" type="file" accept="image/*" class="avatar-file" @change="onAvatarFile" />
+      </div>
+      <div class="swatch-row">
+        <span class="swatch-label">主题色</span>
+        <button
+          v-for="c in THEME_COLORS"
+          :key="c"
+          type="button"
+          class="swatch"
+          :class="{ active: modelValue.themeColor === c }"
+          :style="{ background: c }"
+          :title="c"
+          @click="patch({ themeColor: c })"
+        />
+        <button
+          type="button"
+          class="swatch swatch-none"
+          :class="{ active: !modelValue.themeColor }"
+          title="不使用主题色"
+          @click="patch({ themeColor: null })"
+        >无</button>
+      </div>
     </div>
 
     <div class="field">
@@ -86,6 +198,7 @@ async function pickWorkspace() {
   display: flex; align-items: center; gap: 6px;
 }
 .req { color: var(--ip-danger-text); }
+.opt { color: var(--ip-color-text-tertiary); font-weight: var(--ip-font-weight-regular); }
 
 .input {
   height: 34px; padding: 0 10px;
@@ -111,4 +224,53 @@ async function pickWorkspace() {
 .ws-btn:hover { border-color: var(--ip-primary-300); color: var(--ip-primary-600); }
 
 .field-hint { margin: 0; font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); line-height: 1.5; }
+
+/* 图标与颜色行 */
+.icon-row { display: flex; align-items: center; gap: 10px; }
+.icon-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.icon-btn {
+  height: 22px; padding: 0 10px;
+  font-size: 11px;
+  color: var(--ip-color-text-secondary);
+  background-color: var(--ip-color-bg-tertiary);
+  border: none; border-radius: var(--ip-radius-full);
+  cursor: pointer;
+  transition: all var(--ip-duration-fast) var(--ip-ease-out);
+}
+.icon-btn:hover { color: var(--ip-color-text-primary); background-color: var(--ip-color-bg-secondary); }
+.icon-err { font-size: 10px; color: var(--ip-danger-text); }
+.avatar-file { display: none; }
+.emoji-pop-wrap { position: relative; display: inline-flex; }
+.emoji-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 60;
+  background-color: var(--ip-color-bg-primary);
+  border: 1px solid var(--ip-color-border-default);
+  border-radius: var(--ip-radius-md);
+  box-shadow: var(--ip-shadow-md);
+}
+
+/* 主题色 swatch 行 */
+.swatch-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.swatch-label { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
+.swatch {
+  width: 18px; height: 18px; flex-shrink: 0;
+  border-radius: var(--ip-radius-full);
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+  transition: all var(--ip-duration-fast) var(--ip-ease-out);
+}
+.swatch:hover { transform: scale(1.15); }
+.swatch.active { border-color: var(--ip-color-bg-primary); outline: 1.5px solid var(--ip-color-text-primary); }
+.swatch-none {
+  width: auto; height: 18px; padding: 0 8px;
+  background: transparent;
+  border: 1px dashed var(--ip-color-border-default);
+  border-radius: var(--ip-radius-full);
+  font-size: 10px; color: var(--ip-color-text-tertiary);
+}
+.swatch-none:hover { color: var(--ip-color-text-primary); transform: none; }
 </style>

@@ -11,6 +11,8 @@
 import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useProjectStore } from "../../stores/project";
+import EntityAvatar from "../../components/common/EntityAvatar.vue";
+import { emojiFromIcon } from "../../utils/avatar";
 
 const route = useRoute();
 const router = useRouter();
@@ -52,9 +54,20 @@ onMounted(async () => {
     <header class="detail-header" :class="{ 'has-tabbar': !!current }">
       <div class="head-main">
         <template v-if="current">
-          <h1 class="head-name">{{ current.name }}</h1>
-          <div v-if="current.description" class="head-meta">
-            <span class="head-desc">{{ current.description }}</span>
+          <!-- 项目头像（lg，EntityAvatar 三级链；主题色作 emoji/兜底底色点缀头部） -->
+          <EntityAvatar
+            class="head-avatar"
+            :name="current.name"
+            :image="current.avatar"
+            :emoji="emojiFromIcon(current.icon)"
+            :accent="current.theme_color"
+            size="lg"
+          />
+          <div class="head-text">
+            <h1 class="head-name">{{ current.name }}</h1>
+            <div v-if="current.description" class="head-meta">
+              <span class="head-desc">{{ current.description }}</span>
+            </div>
           </div>
         </template>
         <h1 v-else-if="loadError" class="head-name err">项目不存在或已删除</h1>
@@ -109,6 +122,9 @@ onMounted(async () => {
 .detail-header.has-tabbar { border-bottom: none; }
 
 .head-main { flex: 1; min-width: 0; }
+/* 项目头像与文本列（头像 lg=36px + 文字竖排） */
+.head-avatar { flex-shrink: 0; margin-right: 12px; }
+.head-text { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 /* 字号对齐 ChatHeader 标题（body 级，非 h3——项目名与会话标题同层级） */
 .head-name {
   margin: 0;

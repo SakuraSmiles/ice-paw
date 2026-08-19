@@ -9,6 +9,7 @@ import { useRoute, useRouter } from "vue-router";
 import { useProjectStore } from "../../stores/project";
 import { useChatStore } from "../../stores/chat";
 import { bridge } from "../../api/bridge";
+import { emojiFromIcon } from "../../utils/avatar";
 import ProjectBasicForm from "../../components/project/ProjectBasicForm.vue";
 import ProjectMembersChips from "../../components/project/ProjectMembersChips.vue";
 import ProjectContextEditor from "../../components/project/ProjectContextEditor.vue";
@@ -21,8 +22,15 @@ const chat = useChatStore();
 const projectId = computed(() => String(route.params.id ?? ""));
 const current = computed(() => project.getById(projectId.value));
 
-// ---- 基础信息表单（出生证：name/description/workspace）----
-const editForm = reactive({ name: "", description: "", workspacePath: "" });
+// ---- 基础信息表单（出生证：name/description/workspace/图标与颜色）----
+const editForm = reactive({
+  name: "",
+  description: "",
+  workspacePath: "",
+  avatar: null as string | null,
+  emoji: null as string | null,
+  themeColor: null as string | null,
+});
 const editError = ref("");
 const saving = ref(false);
 
@@ -31,6 +39,9 @@ function resetForm() {
   editForm.name = p?.name ?? "";
   editForm.description = p?.description ?? "";
   editForm.workspacePath = p?.workspace_path ?? "";
+  editForm.avatar = p?.avatar ?? null;
+  editForm.emoji = emojiFromIcon(p?.icon);
+  editForm.themeColor = p?.theme_color ?? null;
   editError.value = "";
 }
 // keep-alive 按 :key=route.path 重建实例（项目+tab 维度），watch 兜底直链热替换等边缘
@@ -40,7 +51,10 @@ const dirty = computed(
   () =>
     editForm.name !== (current.value?.name ?? "") ||
     editForm.description !== (current.value?.description ?? "") ||
-    editForm.workspacePath !== (current.value?.workspace_path ?? ""),
+    editForm.workspacePath !== (current.value?.workspace_path ?? "") ||
+    editForm.avatar !== (current.value?.avatar ?? null) ||
+    editForm.emoji !== emojiFromIcon(current.value?.icon) ||
+    editForm.themeColor !== (current.value?.theme_color ?? null),
 );
 
 async function save() {
@@ -57,6 +71,10 @@ async function save() {
       name: editForm.name.trim(),
       description: editForm.description.trim(),
       workspace_path: editForm.workspacePath.trim() || null,
+      // 身份字段（表单态即真值）：icon 列承载 emoji（清空回 folder 默认）
+      icon: editForm.emoji ?? "folder",
+      avatar: editForm.avatar,
+      theme_color: editForm.themeColor,
     });
   } catch (e) {
     editError.value = e instanceof Error ? e.message : "保存失败";
