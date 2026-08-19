@@ -295,17 +295,24 @@ impl McpRegistry {
         clients.get(name).cloned()
     }
 
-    /// 列出所有已注册客户端的工具定义（发给 LLM）
+    /// 列出所有已注册客户端的工具定义（发给 LLM）。
+    ///
+    /// 出口恒按 name 排序：底层 HashMap `values()` 迭代序逐进程不确定
+    /// （RandomState），而工具定义位于 provider 请求体最前缀（MiniMax/DeepSeek
+    /// 等上下文缓存按前缀字节匹配）——顺序漂移会逐轮打散前缀缓存，命中率归零。
+    /// 排序后同一进程内逐轮工具列表字节级一致，缓存前缀得以稳定命中。
     pub async fn list_tool_defs(&self) -> Vec<ToolDef> {
         let clients = self.clients.read().await;
-        clients
+        let mut defs: Vec<ToolDef> = clients
             .values()
             .map(|c| ToolDef {
                 name: c.name().to_string(),
                 description: c.description().to_string(),
                 parameters: c.parameters(),
             })
-            .collect()
+            .collect();
+        defs.sort_by(|a, b| a.name.cmp(&b.name));
+        defs
     }
 
     /// 列出工具定义；工具数超过 `sort_threshold` 时按 query 相关性排序，否则保持注册原序。
@@ -338,7 +345,9 @@ impl McpRegistry {
         order.sort_by(|&a, &b| {
             let sa = scores.get(&defs[a].name).copied().unwrap_or(0);
             let sb = scores.get(&defs[b].name).copied().unwrap_or(0);
-            sb.cmp(&sa).then(a.cmp(&b))
+            // tie-break 显式按 name（基准序已按名排 + 稳定排序下本已确定）：
+            // 让确定性不依赖 defs 预排序这一远端不变式，防未来重构破坏。
+            sb.cmp(&sa).then(defs[a].name.cmp(&defs[b].name))
         });
 
         order.into_iter().map(|i| defs[i].clone()).collect()
@@ -604,7 +613,7 @@ mod tests {
     #[tokio::test]
     async fn sort_threshold_above_no_reorder() {
         // 工具数(2) ≤ 阈值(5) → 不排序。验「未触发排序 → 与 baseline 一致」；
-        // baseline 取自 list_tool_defs()（HashMap 序，非插入序），故此处断言的是
+        // baseline 取自 list_tool_defs()（出口恒按名排序），故此处断言的是
         // 「无 reorder」而非字面注册顺序。
         let registry = make_registry_with_n_tools(2).await;
         let baseline = registry.list_tool_defs().await;
@@ -653,7 +662,7 @@ mod tests {
 
     #[tokio::test]
     async fn sort_none_threshold_no_reorder() {
-        // None → 永不排序。验「与 baseline 一致（无 reorder）」；baseline 为 HashMap 序。
+        // None → 永不排序。验「与 baseline 一致（无 reorder）」；baseline 为出口按名序。
         let registry = make_registry_with_n_tools(3).await;
         let baseline = registry.list_tool_defs().await;
         let out = registry
@@ -674,6 +683,62 @@ mod tests {
         let registry = make_registry_with_n_tools(2).await;
         let out = registry.list_tool_defs_with_query("", Some(0), &[]).await;
         assert_eq!(out.len(), 2, "即便总触发排序也不得丢工具");
+    }
+
+    // =====================================================================
+    // 出口按名排序——前缀缓存确定性（HashMap 迭代序不得影响输出）
+    // =====================================================================
+
+    #[tokio::test]
+    async fn list_tool_defs_sorted_by_name() {
+        // 有序性不变式断言（windows 全 ≤），与插入序/哈希序无关——
+        // HashMap 随机性无法跨 seed 在单测暴露，只能锁不变式。
+        let registry = McpRegistry::new();
+        for name in ["zeta", "alpha", "mike", "beta", "yankee", "delta"] {
+            registry.register(make_stub(name, "stub desc")).await;
+        }
+        let defs = registry.list_tool_defs().await;
+        let names: Vec<_> = defs.iter().map(|d| d.name.as_str()).collect();
+        assert!(names.windows(2).all(|w| w[0] <= w[1]), "出口应按名升序: {names:?}");
+        assert_eq!(names.first(), Some(&"alpha"));
+    }
+
+    #[tokio::test]
+    async fn list_tool_defs_stable_across_calls() {
+        // 连续两次调用结果全等——逐轮重取时字节级一致是前缀缓存命中的前提
+        let registry = McpRegistry::new();
+        for name in ["t_c", "t_a", "t_b"] {
+            registry.register(make_stub(name, "stub desc")).await;
+        }
+        let first = registry.list_tool_defs().await;
+        let second = registry.list_tool_defs().await;
+        assert_eq!(first, second, "两次调用顺序必须一致");
+    }
+
+    #[tokio::test]
+    async fn list_tool_defs_with_query_all_tied_returns_name_order() {
+        // 全员 0 分并列 → tie-break 按名（此前索引序源自 HashMap 迭代，不确定）
+        let registry = McpRegistry::new();
+        for name in ["z_tool", "a_tool", "m_tool", "b_tool"] {
+            registry.register(make_stub(name, "irrelevant words")).await;
+        }
+        let out = registry
+            .list_tool_defs_with_query("nothing matches this", Some(1), &[])
+            .await;
+        let names: Vec<_> = out.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(names, vec!["a_tool", "b_tool", "m_tool", "z_tool"]);
+    }
+
+    #[tokio::test]
+    async fn list_tool_defs_with_query_keeps_same_set_as_unsorted() {
+        // 排序路径与无排序路径输出同一集合（排序只动序不裁剪）
+        let registry = make_registry_with_n_tools(5).await;
+        let mut plain = registry.list_tool_defs().await;
+        let sorted = registry.list_tool_defs_with_query("", Some(2), &[]).await;
+        let mut sorted = sorted;
+        plain.sort_by(|a, b| a.name.cmp(&b.name));
+        sorted.sort_by(|a, b| a.name.cmp(&b.name));
+        assert_eq!(plain, sorted, "排序路径不得增删工具");
     }
 
     #[tokio::test]

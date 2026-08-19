@@ -367,7 +367,9 @@ async fn stream_loop_inner(
 
         let tools: Option<Vec<crate::infra::protocol::ToolDef>> = if ctx.tools_enabled {
             // 工具数超过阈值时按相关性排序（相关工具靠前），始终全量发送、不降级不裁剪。
-            // 每轮重新打分是因为 call_history 每轮增长（query 本身不变），历史加权会改变排序。
+            // turn 内 query/call_history 固定（session_runner 组装期加载一次），逐轮
+            // 重取只是防御注册表快照中途变化；顺序确定性由 list_tool_defs 出口按名
+            // 排序保证（provider 上下文缓存按请求前缀匹配，工具列表在最前缀）。
             // 阈值用 scoring 模块的专用常量，不再误用 ContextBudget 的 token 预算默认值
             // （后者属不同维度，误用导致 per-agent 配置成为 dead config）。
             Some(
