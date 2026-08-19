@@ -29,6 +29,7 @@ import { useActiveTurn, THRESHOLD_PX } from "../../composables/useActiveTurn";
 import { formatTokenCount } from "../../utils/format";
 import { shortCode, parseReferenceBlocks, resolveGroupMid } from "../../utils/refs";
 import type { ParsedRef } from "../../utils/refs";
+import { memoized } from "../../utils/blockMemo";
 import type { Message, MessageRole, PlanItem } from "../../types";
 
 const chat = useChatStore();
@@ -160,13 +161,18 @@ function formatDuration(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
-/** 判断一个 assistant 消息是否有非 text 的附属内容（tool/thinking） */
-function hasExtras(msg: { content_blocks?: string }): boolean {
-  if (!msg.content_blocks || msg.content_blocks === '[]') return false;
+/** 判断一个 assistant 消息是否有非 text 的附属内容（tool/thinking）。
+ *  memo 化：模板热路径每渲染每消息调用（见 utils/blockMemo.ts）。 */
+const hasExtras = memoized((contentBlocks: string): boolean => {
+  if (contentBlocks === '[]') return false;
   try {
-    const blocks = JSON.parse(msg.content_blocks);
+    const blocks = JSON.parse(contentBlocks);
     return Array.isArray(blocks) && blocks.some((b: Record<string, unknown>) => b.type === 'tool_use' || b.type === 'thinking');
   } catch { return false; }
+});
+
+function msgHasExtras(msg: { content_blocks?: string }): boolean {
+  return hasExtras(msg.content_blocks ?? '[]');
 }
 
 onActivated(() => {
@@ -240,7 +246,8 @@ function openReference(r: ParsedRef) {
   }
 }
 
-function parseImageBlocks(contentBlocks: string): { data: string; mediaType: string }[] {
+/** 解析 image 块。memo 化：模板热路径每渲染每消息调用。 */
+const parseImageBlocks = memoized((contentBlocks: string): { data: string; mediaType: string }[] => {
   try {
     const blocks: unknown[] = JSON.parse(contentBlocks);
     if (!Array.isArray(blocks)) return [];
@@ -248,10 +255,10 @@ function parseImageBlocks(contentBlocks: string): { data: string; mediaType: str
       typeof b === 'object' && b !== null && (b as Record<string, unknown>).type === 'image'
     ).map((b) => ({ data: b.data, mediaType: b.media_type }));
   } catch { return []; }
-}
+});
 
-/** 解析 attachment 块（附件元信息卡片：文件名 / 类型 / 字节数） */
-function parseAttachmentBlocks(contentBlocks: string): { name: string; kind: string; size: number }[] {
+/** 解析 attachment 块（附件元信息卡片：文件名 / 类型 / 字节数）。memo 化同上。 */
+const parseAttachmentBlocks = memoized((contentBlocks: string): { name: string; kind: string; size: number }[] => {
   try {
     const blocks: unknown[] = JSON.parse(contentBlocks);
     if (!Array.isArray(blocks)) return [];
@@ -259,7 +266,7 @@ function parseAttachmentBlocks(contentBlocks: string): { name: string; kind: str
       typeof b === 'object' && b !== null && (b as Record<string, unknown>).type === 'attachment'
     ).map((b) => ({ name: b.name, kind: b.kind, size: b.size }));
   } catch { return []; }
-}
+});
 
 /** 字节数 → 人类可读（如 "1.2 MB"） */
 function formatFileSize(bytes: number): string {
@@ -341,7 +348,8 @@ function openAttachmentDetail(attachments: { name: string; kind: string; size: n
   detailTexts.value = parseExtractedTexts(contentBlocks);
 }
 
-function parseToolUseBlocks(contentBlocks: string): { id: string; name: string; input: string }[] {
+/** 解析 tool_use 块。memo 化：模板热路径每渲染每消息调用。 */
+const parseToolUseBlocks = memoized((contentBlocks: string): { id: string; name: string; input: string }[] => {
   try {
     const blocks: unknown[] = JSON.parse(contentBlocks);
     if (!Array.isArray(blocks)) return [];
@@ -349,9 +357,10 @@ function parseToolUseBlocks(contentBlocks: string): { id: string; name: string; 
       typeof b === 'object' && b !== null && (b as Record<string, unknown>).type === 'tool_use'
     ).map((b) => ({ id: b.id, name: b.name, input: b.input }));
   } catch { return []; }
-}
+});
 
-function parseToolResultBlocks(contentBlocks: string): { toolUseId: string; content: string; isError: boolean }[] {
+/** 解析 tool_result 块。memo 化同上。 */
+const parseToolResultBlocks = memoized((contentBlocks: string): { toolUseId: string; content: string; isError: boolean }[] => {
   try {
     const blocks: unknown[] = JSON.parse(contentBlocks);
     if (!Array.isArray(blocks)) return [];
@@ -359,9 +368,10 @@ function parseToolResultBlocks(contentBlocks: string): { toolUseId: string; cont
       typeof b === 'object' && b !== null && (b as Record<string, unknown>).type === 'tool_result'
     ).map((b) => ({ toolUseId: b.tool_use_id, content: b.content, isError: b.is_error ?? false }));
   } catch { return []; }
-}
+});
 
-function parseThinkingBlocks(contentBlocks: string): string[] {
+/** 解析 thinking 块。memo 化同上。 */
+const parseThinkingBlocks = memoized((contentBlocks: string): string[] => {
   try {
     const blocks: unknown[] = JSON.parse(contentBlocks);
     if (!Array.isArray(blocks)) return [];
@@ -369,30 +379,32 @@ function parseThinkingBlocks(contentBlocks: string): string[] {
       typeof b === 'object' && b !== null && (b as Record<string, unknown>).type === 'thinking'
     ).map((b) => b.thinking);
   } catch { return []; }
-}
+});
 
-/** 从 idx+1 起向后查相邻 user 消息里 tool_use_id 对应的 tool_result。
- *  彻底重构后 tool_result 独立存于相邻 user 消息（不再与 tool_use 同条）。*/
-function findToolResult(
-  toolUseId: string,
-  msgIdx: number,
-): { content: string; isError: boolean } | null {
-  for (let i = msgIdx + 1; i < chat.messages.length; i++) {
-    const m = chat.messages[i];
-    if (m.role === "assistant") break; // tool_result 必紧跟其 tool_use 的 assistant
-    if (m.role === "user") {
-      const found = parseToolResultBlocks(m.content_blocks).find(
-        (r) => r.toolUseId === toolUseId,
-      );
-      if (found) return { content: found.content, isError: found.isError };
+/** tool_use_id → tool_result 全局索引（替代逐 tool_use 向后扫 + 逐次 JSON.parse
+ *  的 O(n²)：messages 每次（末条整对象替换式）更新时 O(n) 重建，parse 走 memo，
+ *  重建即查表。tool_use_id 全局唯一，同 id 复用仅见于畸形数据——取最后出现。 */
+const toolResultIndex = computed(() => {
+  const idx = new Map<string, { content: string; isError: boolean }>();
+  for (const m of chat.messages) {
+    if (m.role !== "user") continue;
+    for (const r of parseToolResultBlocks(m.content_blocks)) {
+      idx.set(r.toolUseId, { content: r.content, isError: r.isError });
     }
   }
-  return null;
+  return idx;
+});
+
+/** 查 tool_use_id 对应的 tool_result（查全局索引，见 toolResultIndex）。*/
+function findToolResult(
+  toolUseId: string,
+): { content: string; isError: boolean } | null {
+  return toolResultIndex.value.get(toolUseId) ?? null;
 }
 
 /** 查询某个 tool_use_id 对应的 tool_result 是否有 isError（跨消息配对）*/
-function getToolHasError(toolUseId: string, msgIdx: number): boolean {
-  return findToolResult(toolUseId, msgIdx)?.isError ?? false;
+function getToolHasError(toolUseId: string): boolean {
+  return findToolResult(toolUseId)?.isError ?? false;
 }
 
 // ===== MA-1：delegate_to_agent 委派卡片（DelegationCard 的取数层）=====
@@ -443,14 +455,13 @@ const runningDelegationChildId = computed(() => {
 /** 历史 tool_use 的委派卡片取数：跨消息配对 tool_result，无结果=进行中。 */
 function delegateCardFor(
   tu: { id: string; name: string; input: string },
-  msgIdx: number,
 ): {
   agentName: string; task: string; status: "running" | "done" | "error";
   childConvId: string | null; finishReason: string | null; rounds: number | null; hasError: boolean;
 } | null {
   if (tu.name !== "delegate_to_agent") return null;
   const input = parseDelegateInput(tu.input);
-  const tr = findToolResult(tu.id, msgIdx);
+  const tr = findToolResult(tu.id);
   const dr = tr && !tr.isError ? parseDelegateResult(tr.content) : null;
   const status = !tr ? "running" : tr.isError ? "error" : "done";
   return {
@@ -514,12 +525,11 @@ function parsePlanInput(input: string): PlanItem[] | null {
 /** 历史 tool_use 的计划卡片取数：Err（校验失败）→ null 落回通用行承载错误。 */
 function planCardFor(
   tu: { id: string; name: string; input: string },
-  msgIdx: number,
 ): PlanItem[] | null {
   if (tu.name !== "update_plan") return null;
   const items = parsePlanInput(tu.input);
   if (!items) return null;
-  return findToolResult(tu.id, msgIdx)?.isError ? null : items;
+  return findToolResult(tu.id)?.isError ? null : items;
 }
 
 /** 流式中的计划卡片取数：arguments 逐字到达（解析成功即出卡）；Err → 通用行。 */
@@ -532,17 +542,22 @@ function planStreamCard(call: {
   return parsePlanInput(call.arguments || "{}");
 }
 
-/** 判断 user 消息是否仅含 tool_result（无文本/图片）。
- *  这种消息是工具调用结果，不单独成气泡，其内容并入上一条 assistant 的工具卡片。*/
-function isToolResultOnlyUser(msg: { role: string; content: string; content_blocks: string }): boolean {
-  if (msg.role !== "user" || msg.content) return false;
+/** blocks 是否全部为 tool_result（memo 化：messageGroups 每次重算对每消息调用）。 */
+const isAllToolResultBlocks = memoized((contentBlocks: string): boolean => {
   try {
-    const blocks = JSON.parse(msg.content_blocks);
+    const blocks = JSON.parse(contentBlocks);
     if (!Array.isArray(blocks) || blocks.length === 0) return false;
     return blocks.every((b: Record<string, unknown>) => b.type === "tool_result");
   } catch {
     return false;
   }
+});
+
+/** 判断 user 消息是否仅含 tool_result（无文本/图片）。
+ *  这种消息是工具调用结果，不单独成气泡，其内容并入上一条 assistant 的工具卡片。*/
+function isToolResultOnlyUser(msg: { role: string; content: string; content_blocks: string }): boolean {
+  if (msg.role !== "user" || msg.content) return false;
+  return isAllToolResultBlocks(msg.content_blocks);
 }
 
 // ===== 消息分组（连续同 agent 的 assistant 合并成一个气泡块）=====
@@ -605,7 +620,7 @@ function groupText(g: MessageGroup): string {
 /** assistant 组 footer 是否可见：组内有文本或附属内容（工具/思考）才显示；
  *  纯流式空占位（只有三个点动画、无内容）不显示，避免时间戳/model 悬在空气泡下。*/
 function assistantGroupFooterVisible(g: MessageGroup): boolean {
-  return g.items.some((it) => it.msg.content || hasExtras(it.msg));
+  return g.items.some((it) => it.msg.content || msgHasExtras(it.msg));
 }
 
 /** assistant 组 token 求和（前向兼容：当前仅末轮有 token_count）。*/
@@ -841,7 +856,7 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
                 <div v-if="parseToolUseBlocks(item.msg.content_blocks).length > 0 && !(isLiveAssistant(item) && toolCallList.length > 0)" class="tools-strip">
                   <div v-for="tu in parseToolUseBlocks(item.msg.content_blocks)" :key="tu.id">
                     <!-- MA-1：delegate_to_agent 渲染为委派卡片（失败时补通用行承载原始错误） -->
-                    <template v-for="d in [delegateCardFor(tu, item.idx)]" :key="d ? 'dlg-card' : 'dlg-none'">
+                    <template v-for="d in [delegateCardFor(tu)]" :key="d ? 'dlg-card' : 'dlg-none'">
                       <template v-if="d">
                         <DelegationCard
                           :agent-name="d.agentName"
@@ -865,7 +880,7 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
                                 <div class="tool-expand-hdr">参数</div>
                                 <pre class="tool-expand-code">{{ formatJson(tu.input) }}</pre>
                               </div>
-                              <template v-for="tr in [findToolResult(tu.id, item.idx)]" :key="tr ? 'has-result' : 'no-result'">
+                              <template v-for="tr in [findToolResult(tu.id)]" :key="tr ? 'has-result' : 'no-result'">
                                 <div v-if="tr" class="tool-expand-group">
                                   <div class="tool-expand-hdr hdr-err">错误</div>
                                   <pre class="tool-expand-code code-err">{{ tr.content }}</pre>
@@ -877,14 +892,14 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
                       </template>
                       <template v-else>
                         <!-- C5：update_plan 渲染为计划卡片；校验失败（Err）落回通用行承载原始错误 -->
-                        <template v-for="p in [planCardFor(tu, item.idx)]" :key="p ? 'plan-card' : 'plan-none'">
+                        <template v-for="p in [planCardFor(tu)]" :key="p ? 'plan-card' : 'plan-none'">
                           <PlanCard v-if="p" :items="p" @open-task="openChildConv" />
                           <template v-else>
                             <div class="tool-toggle" @click="toggleToolCall(tu.id)">
                               <span class="tool-chevron">{{ expandedToolCalls.has(tu.id) ? '▾' : '▸' }}</span>
                               <span class="tool-name">{{ tu.name }}</span>
                               <span class="tool-preview">{{ truncateJson(tu.input) }}</span>
-                              <span :class="['tool-dot', getToolHasError(tu.id, item.idx) ? 'tool-dot-err' : 'tool-dot-ok']"></span>
+                              <span :class="['tool-dot', getToolHasError(tu.id) ? 'tool-dot-err' : 'tool-dot-ok']"></span>
                             </div>
                             <Transition name="tool-slide">
                               <div v-if="expandedToolCalls.has(tu.id)" class="tool-expand">
@@ -892,7 +907,7 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
                                   <div class="tool-expand-hdr">参数</div>
                                   <pre class="tool-expand-code">{{ formatJson(tu.input) }}</pre>
                                 </div>
-                                <template v-for="tr in [findToolResult(tu.id, item.idx)]" :key="tr ? 'has-result' : 'no-result'">
+                                <template v-for="tr in [findToolResult(tu.id)]" :key="tr ? 'has-result' : 'no-result'">
                                   <div v-if="tr" class="tool-expand-group">
                                     <div :class="['tool-expand-hdr', tr.isError ? 'hdr-err' : '']">{{ tr.isError ? '错误' : '结果' }}</div>
                                     <pre :class="['tool-expand-code', tr.isError ? 'code-err' : '']">{{ tr.content }}</pre>

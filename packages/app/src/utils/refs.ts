@@ -4,6 +4,8 @@
 // 不用 rowid——SQLite VACUUM 可重排物理行号。碰撞（万分之一级）由名称前缀消歧。
 // 后端只认 target_id，短码纯装饰（不参与任何查找）。
 
+import { memoized } from "./blockMemo";
+
 /** FNV-1a 32 位 → 4 位数字短码（前导零补齐）。 */
 export function shortCode(id: string): string {
   let h = 0x811c9dc5;
@@ -21,19 +23,28 @@ export interface ParsedRef {
   display: string;
 }
 
-/** 解析 content_blocks 中的 reference 块（同 parseAttachmentBlocks 模式）。 */
-export function parseReferenceBlocks(contentBlocks: string | null | undefined): ParsedRef[] {
-  if (!contentBlocks || contentBlocks === "[]") return [];
+/** 冻结空数组常量：早退/解析失败路径共享，不进 memo 缓存。 */
+const EMPTY_REFS: ParsedRef[] = [];
+
+/** 解析 content_blocks 中的 reference 块。
+ *  memo 化（ChatMessages 模板热路径每渲染每消息调用，见 utils/blockMemo.ts）。 */
+const parseRefsMemo = memoized((contentBlocks: string): ParsedRef[] => {
+  if (contentBlocks === "[]") return EMPTY_REFS;
   try {
     const blocks: unknown[] = JSON.parse(contentBlocks);
-    if (!Array.isArray(blocks)) return [];
+    if (!Array.isArray(blocks)) return EMPTY_REFS;
     return blocks.filter(
       (b): b is { ref_kind: ParsedRef["refKind"]; target_id: string; display: string } =>
         typeof b === "object" && b !== null && (b as Record<string, unknown>).type === "reference",
     ).map((b) => ({ refKind: b.ref_kind, targetId: b.target_id, display: b.display }));
   } catch {
-    return [];
+    return EMPTY_REFS;
   }
+});
+
+export function parseReferenceBlocks(contentBlocks: string | null | undefined): ParsedRef[] {
+  if (!contentBlocks) return EMPTY_REFS;
+  return parseRefsMemo(contentBlocks);
 }
 
 /**
