@@ -18,6 +18,7 @@ import { taskStatus, TASK_STATUS_LABELS } from "../../utils/taskStatus";
 import { formatTokenCompact } from "../../utils/format";
 import { timeAgo } from "../../utils/time";
 import type { ProjectOverview as OverviewData } from "../../types";
+import EntityAvatar from "../../components/common/EntityAvatar.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -102,6 +103,8 @@ interface ShareRow {
   key: string;
   name: string;
   model: string | null;
+  avatar: string | null;
+  emoji: string | null;
   messages: number;
   tokens: number;
   other: boolean;
@@ -116,6 +119,8 @@ const shareRows = computed<ShareRow[]>(() => {
       key: s.agent_id,
       name: a?.name ?? "未知成员",
       model: a?.model ?? null,
+      avatar: a?.avatar ?? null,
+      emoji: a?.emoji ?? null,
       messages: s.messages,
       tokens: s.tokens,
       other: false,
@@ -131,6 +136,8 @@ const shareRows = computed<ShareRow[]>(() => {
       key: "__others__",
       name: `其他 ${rest.length} 位`,
       model: null,
+      avatar: null,
+      emoji: null,
       messages: rest.reduce((sum, s) => sum + s.messages, 0),
       tokens: rest.reduce((sum, s) => sum + s.tokens, 0),
       other: true,
@@ -308,7 +315,17 @@ const donutSegs = computed(() => {
             :class="{ hovered: hoverKey === row.key, dim: hoverKey !== null && hoverKey !== row.key }"
           >
             <div class="share-label" :title="rowTitle(row)" @mouseenter="hoverKey = row.key">
-              <i class="share-dot" :style="{ background: row.color }" />
+              <!-- 成员头像（sm，EntityAvatar 三级链，与其他展示位同视觉；
+                   弧段图例联动由右侧色条承载；other 聚合行回退色点） -->
+              <EntityAvatar
+                v-if="!row.other"
+                class="share-avatar"
+                :name="row.name"
+                :image="row.avatar"
+                :emoji="row.emoji"
+                size="sm"
+              />
+              <i v-else class="share-dot" :style="{ background: row.color }" />
               <span class="share-name">{{ row.name }}</span>
               <span v-if="row.model" class="share-model">{{ row.model }}</span>
             </div>
@@ -496,6 +513,8 @@ const donutSegs = computed(() => {
   width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
   transition: transform 160ms var(--ip-ease-out, ease);
 }
+/* 成员头像（sm=20px，EntityAvatar 三级链） */
+.share-avatar { flex-shrink: 0; }
 .share-name {
   font-size: var(--ip-text-body-sm-size);
   font-weight: var(--ip-font-weight-medium);

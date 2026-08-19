@@ -2,6 +2,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useAgentStore } from "../../stores/agent";
+import EntityAvatar from "../common/EntityAvatar.vue";
 
 const props = defineProps<{ agentIds?: string[] }>();
 const emit = defineEmits<{
@@ -35,7 +36,7 @@ const visibleAgents = computed(() =>
           class="picker-item"
           @click="emit('select', a.id)"
         >
-          <div class="picker-avatar">{{ a.name.charAt(0) }}</div>
+          <EntityAvatar class="picker-avatar" :name="a.name" :image="a.avatar" :emoji="a.emoji" size="lg" />
           <div class="picker-info">
             <div class="picker-name">{{ a.name }}</div>
             <div class="picker-desc">{{ a.description || a.model }}</div>
@@ -90,12 +91,8 @@ const visibleAgents = computed(() =>
   transition: background-color var(--ip-duration-fast) var(--ip-ease-out);
 }
 .picker-item:hover { background: var(--color-sidebar-item-hover); }
-.picker-avatar {
-  width: 36px; height: 36px; border-radius: var(--ip-radius-md); flex-shrink: 0;
-  background: linear-gradient(135deg, var(--ip-primary-400), var(--ip-primary-600));
-  color: white; display: flex; align-items: center; justify-content: center;
-  font-size: var(--ip-text-body-sm-size); font-weight: var(--ip-font-weight-semibold);
-}
+/* EntityAvatar 容器（lg=36px；视觉由组件内三级链接管） */
+.picker-avatar { flex-shrink: 0; }
 .picker-info { flex: 1; min-width: 0; }
 .picker-name { font-size: var(--ip-text-body-sm-size); font-weight: var(--ip-font-weight-medium); color: var(--ip-color-text-primary); }
 .picker-desc { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

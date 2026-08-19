@@ -254,6 +254,7 @@ mod tests {
                 supports_vision: 0,
                 description: String::new(),
                 avatar: None,
+                emoji: None,
                 workspace_path: None,
                 created_at: String::new(),
                 updated_at: String::new(),

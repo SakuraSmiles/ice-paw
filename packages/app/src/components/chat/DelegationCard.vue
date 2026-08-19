@@ -7,9 +7,15 @@
 //   可达（运行中也可跳——childConvId 由 ChatMessages 取数层从 store 补齐）
 // - 完成/失败：专家名 + 轮数 + finish_reason 徽章 + 「打开任务」入口
 // 展开看原始参数/结果走原工具行（本卡片不重复承载，减少双份维护）。
+import { computed } from "vue";
+import { useAgentStore } from "../../stores/agent";
+import EntityAvatar from "../common/EntityAvatar.vue";
+
 const props = defineProps<{
   /** 目标 agent 显示名（参数里的 agent_id 原样兜底） */
   agentName: string;
+  /** 目标 agent id（可解析时用于头像；流式参数未到齐为 null → 走名字渐变兜底） */
+  agentId?: string | null;
   /** 委派任务文本（参数 task，截断展示） */
   task: string;
   /** running=进行中（无结果）；done=正常回传；error=Err 回传 */
@@ -21,6 +27,10 @@ const props = defineProps<{
   /** 终止原因词表（stop/cancelled/budget_exceeded/…） */
   finishReason?: string | null;
 }>();
+
+const agent = useAgentStore();
+/** 头像取数：agentId 命中 store 才有 image/emoji，否则纯名字兜底。 */
+const targetAgent = computed(() => (props.agentId ? agent.getById(props.agentId) : undefined));
 
 const emit = defineEmits<{ (e: "open-child", childId: string): void }>();
 
@@ -46,7 +56,13 @@ const FINISH_LABEL: Record<string, string> = {
 <template>
   <div class="dlg-card" :data-status="status">
     <div class="dlg-head">
-      <svg class="dlg-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 7L3 12l5 5M16 7l5 5-5 5"/></svg>
+      <EntityAvatar
+        class="dlg-avatar"
+        :name="targetAgent?.name ?? agentName"
+        :image="targetAgent?.avatar ?? null"
+        :emoji="targetAgent?.emoji ?? null"
+        size="sm"
+      />
       <span class="dlg-title">委派给 {{ agentName }}</span>
       <span class="dlg-status">
         <span class="dlg-dot" :data-status="status" />
@@ -92,7 +108,8 @@ const FINISH_LABEL: Record<string, string> = {
 .dlg-card[data-status="running"] { border-left-color: var(--ip-warning-base, #d97706); }
 
 .dlg-head { display: flex; align-items: center; gap: 6px; }
-.dlg-icon { color: var(--ip-primary-500); flex-shrink: 0; }
+/* 目标 agent 头像（sm=20px，EntityAvatar 三级链；取代旧交换箭头图标） */
+.dlg-avatar { flex-shrink: 0; }
 .dlg-title { font-size: var(--ip-text-body-sm-size); font-weight: var(--ip-font-weight-semibold); color: var(--ip-color-text-primary); }
 .dlg-status { margin-left: auto; display: flex; align-items: center; gap: 5px; font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
 

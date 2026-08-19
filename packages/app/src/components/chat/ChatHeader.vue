@@ -15,6 +15,7 @@ import { ref, computed, watch, nextTick, onUnmounted } from "vue";
 import { useChatStore }from "../../stores/chat";
 import { useAgentStore } from "../../stores/agent";
 import { bridge } from "../../api/bridge";
+import EntityAvatar from "../common/EntityAvatar.vue";
 
 // hasTabbar：标题下方有标签条（会话态）→ 去掉底边线，与标签条视觉连成一体
 //（ChatPage 传入；欢迎态无标签条，保留分割线区分标题与欢迎内容）
@@ -187,6 +188,14 @@ async function togglePin() {
           </span>
         </h1>
         <div class="header-meta">
+          <EntityAvatar
+            v-if="activeAgent"
+            class="header-agent-avatar"
+            :name="activeAgent.name"
+            :image="activeAgent.avatar"
+            :emoji="activeAgent.emoji"
+            size="md"
+          />
           <span v-if="activeAgent" class="header-agent">{{ activeAgent.name }}</span>
           <span v-if="activeAgent" class="header-sep">·</span>
           <span v-if="activeAgent" class="header-model">{{ activeAgent.model }}</span>
@@ -263,6 +272,8 @@ async function togglePin() {
 .header-title:hover .header-title-text { border-bottom-color:var(--ip-color-text-tertiary); }
 .header-edit-input { font-size:var(--ip-text-body-size); font-weight:var(--ip-font-weight-semibold); color:var(--ip-color-text-primary); background:var(--color-input-bg); border:1px solid var(--color-input-focus-border); border-radius:var(--ip-radius-md); padding:2px 8px; outline:none; width:100%; min-width:200px; font-family:inherit; box-shadow:0 0 0 3px rgba(46,141,100,0.12); }
 .header-meta { display:flex; align-items:center; gap:6px; }
+/* agent 头像（md=28px，EntityAvatar 三级链） */
+.header-agent-avatar { flex: none; }
 .header-agent { font-size:var(--ip-text-caption-size); color:var(--ip-primary-600); line-height:1.4; font-weight:var(--ip-font-weight-medium); }
 .header-sep { font-size:var(--ip-text-caption-size); color:var(--ip-color-text-tertiary); line-height:1.4; }
 .header-model { font-size:var(--ip-text-caption-size); color:var(--ip-color-text-tertiary); line-height:1.4; }

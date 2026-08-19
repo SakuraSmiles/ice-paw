@@ -456,7 +456,7 @@ const runningDelegationChildId = computed(() => {
 function delegateCardFor(
   tu: { id: string; name: string; input: string },
 ): {
-  agentName: string; task: string; status: "running" | "done" | "error";
+  agentName: string; agentId: string | null; task: string; status: "running" | "done" | "error";
   childConvId: string | null; finishReason: string | null; rounds: number | null; hasError: boolean;
 } | null {
   if (tu.name !== "delegate_to_agent") return null;
@@ -466,6 +466,7 @@ function delegateCardFor(
   const status = !tr ? "running" : tr.isError ? "error" : "done";
   return {
     agentName: dr?.agentName ?? input?.agentId ?? "…",
+    agentId: input?.agentId ?? null,
     task: input?.task ?? "",
     status,
     childConvId: dr?.childConvId ?? (status === "running" ? runningDelegationChildId.value : null),
@@ -480,7 +481,7 @@ function delegateStreamCard(call: {
   name: string; arguments: string; ended: boolean;
   result?: { content: string; isError: boolean } | null;
 }): {
-  agentName: string; task: string; status: "running" | "done" | "error";
+  agentName: string; agentId: string | null; task: string; status: "running" | "done" | "error";
   childConvId: string | null; finishReason: string | null; rounds: number | null;
 } | null {
   if (call.name !== "delegate_to_agent") return null;
@@ -489,6 +490,7 @@ function delegateStreamCard(call: {
   const status = !call.result ? "running" : call.result.isError ? "error" : "done";
   return {
     agentName: dr?.agentName ?? input?.agentId ?? "…",
+    agentId: input?.agentId ?? null,
     task: input?.task ?? (call.ended ? "" : "正在接收参数…"),
     status,
     childConvId: dr?.childConvId ?? (status === "running" ? runningDelegationChildId.value : null),
@@ -860,6 +862,7 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
                       <template v-if="d">
                         <DelegationCard
                           :agent-name="d.agentName"
+                          :agent-id="d.agentId"
                           :task="d.task"
                           :status="d.status"
                           :child-conv-id="d.childConvId"
@@ -930,6 +933,7 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
                       <DelegationCard
                         v-if="d"
                         :agent-name="d.agentName"
+                        :agent-id="d.agentId"
                         :task="d.task"
                         :status="d.status"
                         :child-conv-id="d.childConvId"
