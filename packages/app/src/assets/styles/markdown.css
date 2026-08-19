@@ -197,17 +197,97 @@
   margin: 0 0 var(--ip-spacing-2, 8px);
 }
 
+/* ------------------- 代码配色令牌（浅深双套）+ hljs mini 语法主题 -------------------
+   语法色此前从未有过（全仓库零 .hljs-* 定义，代码块纯单色渲染）——本组补齐。
+   容器：浅色 = 浅底深字（GitHub 风），深色 = 深底浅字；语义遵循 tint 约定
+   （diff 红绿底走 success/danger 的 bg/text 语义色，不用原色档）。 */
+
+:root {
+  /* 容器 */
+  --ip-code-bg: var(--ip-gray-200);
+  --ip-code-border: var(--ip-gray-300);
+  --ip-code-head-bg: rgba(20, 24, 31, 0.05);
+  --ip-code-head-text: var(--ip-gray-500);
+  --ip-code-text: var(--ip-gray-900);
+  --ip-code-btn-hover-bg: rgba(20, 24, 31, 0.08);
+  --ip-code-scrollbar: rgba(20, 24, 31, 0.25);
+  --ip-code-inline-bg: var(--ip-gray-200);
+  /* hljs 语义色（浅色） */
+  --ip-hljs-keyword: #B83D3D;
+  --ip-hljs-string: #2A4F85;
+  --ip-hljs-number: #3565A8;
+  --ip-hljs-literal: #3565A8;
+  --ip-hljs-comment: var(--ip-gray-500);
+  --ip-hljs-title: #8250DF;
+  --ip-hljs-attr: #953800;
+  --ip-hljs-meta: var(--ip-gray-600);
+  --ip-hljs-addition-bg: var(--ip-success-bg);
+  --ip-hljs-addition-text: var(--ip-success-text);
+  --ip-hljs-deletion-bg: var(--ip-danger-bg);
+  --ip-hljs-deletion-text: var(--ip-danger-text);
+}
+
+[data-theme='dark'],
+.dark {
+  --ip-code-bg: var(--ip-gray-950);
+  --ip-code-border: var(--ip-gray-800);
+  --ip-code-head-bg: rgba(255, 255, 255, 0.05);
+  --ip-code-head-text: var(--ip-gray-400);
+  --ip-code-text: var(--ip-gray-100);
+  --ip-code-btn-hover-bg: rgba(255, 255, 255, 0.1);
+  --ip-code-scrollbar: rgba(255, 255, 255, 0.2);
+  --ip-code-inline-bg: var(--ip-gray-800);
+  --ip-hljs-keyword: #D46B6B;
+  --ip-hljs-string: #9BC2E6;
+  --ip-hljs-number: #6FA1D6;
+  --ip-hljs-literal: #6FA1D6;
+  --ip-hljs-comment: var(--ip-gray-400);
+  --ip-hljs-title: #D2A8FF;
+  --ip-hljs-attr: #FFA657;
+  --ip-hljs-meta: var(--ip-gray-300);
+  --ip-hljs-addition-bg: var(--ip-success-bg);
+  --ip-hljs-addition-text: var(--ip-success-text);
+  --ip-hljs-deletion-bg: var(--ip-danger-bg);
+  --ip-hljs-deletion-text: var(--ip-danger-text);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']):not(.light) {
+    --ip-code-bg: var(--ip-gray-950);
+    --ip-code-border: var(--ip-gray-800);
+    --ip-code-head-bg: rgba(255, 255, 255, 0.05);
+    --ip-code-head-text: var(--ip-gray-400);
+    --ip-code-text: var(--ip-gray-100);
+    --ip-code-btn-hover-bg: rgba(255, 255, 255, 0.1);
+    --ip-code-scrollbar: rgba(255, 255, 255, 0.2);
+    --ip-code-inline-bg: var(--ip-gray-800);
+    --ip-hljs-keyword: #D46B6B;
+    --ip-hljs-string: #9BC2E6;
+    --ip-hljs-number: #6FA1D6;
+    --ip-hljs-literal: #6FA1D6;
+    --ip-hljs-comment: var(--ip-gray-400);
+    --ip-hljs-title: #D2A8FF;
+    --ip-hljs-attr: #FFA657;
+    --ip-hljs-meta: var(--ip-gray-300);
+    --ip-hljs-addition-bg: var(--ip-success-bg);
+    --ip-hljs-addition-text: var(--ip-success-text);
+    --ip-hljs-deletion-bg: var(--ip-danger-bg);
+    --ip-hljs-deletion-text: var(--ip-danger-text);
+  }
+}
+
 /* ------------------- 行内代码 ------------------- */
 
-.markdown-body-code-inline {
+/* markdown-it 输出裸 <code>（pre 外）——此前无任何样式（旧类名从未被生成） */
+.markdown-body :not(pre) > code {
   font-family: var(--ip-font-mono);
   font-size: 0.875em; /* 比正文略小，符合行业惯例 */
   padding: 2px 6px;
   margin: 0 2px;
-  background: var(--ip-color-bg-tertiary, var(--ip-gray-100, #f5f5f5));
-  border: 1px solid var(--ip-color-border-default, #e5e5e5);
+  background: var(--ip-code-inline-bg);
+  border: 1px solid var(--ip-code-border);
   border-radius: var(--ip-radius-sm, 4px);
-  color: var(--ip-danger-active, #b91c1c);
+  color: var(--ip-color-text-primary);
   word-break: break-word;
   white-space: pre-wrap;
 }
@@ -221,8 +301,9 @@
   line-height: var(--ip-line-height-monospace, 1.57);
   margin: var(--ip-spacing-3, 12px) 0;
   padding: var(--ip-spacing-3, 12px) var(--ip-spacing-4, 16px);
-  background: #1a1a1a; /* 代码块始终深色背景，避免与正文色块混淆 */
-  color: #e5e5e5;
+  background: var(--ip-code-bg); /* 跟随主题：浅底深字 / 深底浅字 */
+  color: var(--ip-code-text);
+  border: 1px solid var(--ip-code-border);
   border-radius: var(--ip-radius-md, 6px);
   overflow-x: auto;
   overflow-y: hidden;
@@ -255,19 +336,14 @@
 
 .markdown-body-code-pre::-webkit-scrollbar-thumb,
 .markdown-body pre::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.2);
+  background: var(--ip-code-scrollbar);
   border-radius: var(--ip-radius-full, 9999px);
-}
-
-.markdown-body-code-pre::-webkit-scrollbar-thumb:hover,
-.markdown-body pre::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.35);
 }
 
 .markdown-body-code-pre,
 .markdown-body pre {
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+  scrollbar-color: var(--ip-code-scrollbar) transparent;
 }
 
 /* ------------------- 代码块容器（语言标签 + 复制 + 超长折叠） ------------------- */
@@ -277,14 +353,17 @@
   margin: var(--ip-spacing-3, 12px) 0;
   border-radius: var(--ip-radius-md, 6px);
   overflow: hidden;
-  background: #1a1a1a; /* 与 pre 同底——头部条/折叠遮罩衔接连续 */
+  background: var(--ip-code-bg); /* 与 pre 同底——头部条/折叠遮罩衔接连续 */
+  border: 1px solid var(--ip-code-border);
 }
 
-/* 容器内的 pre 去独立外边距/圆角（由容器统一承载） */
+/* 容器内的 pre 去独立外边距/圆角/边框（由容器统一承载） */
 .markdown-body .md-code-block .markdown-body-code-pre,
 .markdown-body .md-code-block pre {
   margin: 0;
+  border: 0;
   border-radius: 0;
+  background: transparent;
 }
 
 .md-code-head {
@@ -292,15 +371,15 @@
   align-items: center;
   justify-content: space-between;
   padding: 5px 6px 5px 14px;
-  background: rgba(255, 255, 255, 0.06);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--ip-code-head-bg);
+  border-bottom: 1px solid var(--ip-code-border);
 }
 
 .md-code-lang {
   font-family: var(--ip-font-mono);
   font-size: 11px;
   line-height: 1;
-  color: rgba(255, 255, 255, 0.55);
+  color: var(--ip-code-head-text);
   user-select: none;
 }
 
@@ -313,15 +392,15 @@
   border: 0;
   border-radius: var(--ip-radius-sm, 4px);
   background: transparent;
-  color: rgba(255, 255, 255, 0.6);
+  color: var(--ip-code-head-text);
   cursor: pointer;
   user-select: none;
 }
 
 .md-code-copy:hover,
 .md-code-toggle:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: rgba(255, 255, 255, 0.9);
+  background: var(--ip-code-btn-hover-bg);
+  color: var(--ip-code-text);
 }
 
 /* 超长折叠：限高 + 底部渐隐遮罩 + 展开按钮 */
@@ -338,7 +417,7 @@
   right: 0;
   bottom: 30px; /* 让位展开按钮 */
   height: 48px;
-  background: linear-gradient(transparent, #1a1a1a);
+  background: linear-gradient(transparent, var(--ip-code-bg));
   pointer-events: none;
 }
 
@@ -347,7 +426,7 @@
   width: 100%;
   text-align: center;
   padding: 7px 0;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 1px solid var(--ip-code-border);
 }
 
 /* 流式生成中：不折叠（解除限高、隐藏遮罩与按钮），完成后的重渲染恢复折叠 */
@@ -359,6 +438,55 @@
 .md-streaming .md-code-block.collapsed::after,
 .md-streaming .md-code-block.collapsed .md-code-toggle {
   display: none;
+}
+
+/* ------------------- hljs 类 → 语义色映射（mini 主题） ------------------- */
+/* 此前全仓库零 .hljs-* 定义——高亮 span 无色，代码块纯单色渲染；本组补齐。 */
+
+.markdown-body .hljs { color: var(--ip-code-text); background: transparent; }
+.markdown-body .hljs-keyword,
+.markdown-body .hljs-selector-tag,
+.markdown-body .hljs-tag { color: var(--ip-hljs-keyword); }
+.markdown-body .hljs-built_in,
+.markdown-body .hljs-type,
+.markdown-body .hljs-class,
+.markdown-body .hljs-literal { color: var(--ip-hljs-literal); }
+.markdown-body .hljs-string,
+.markdown-body .hljs-regexp,
+.markdown-body .hljs-meta-string,
+.markdown-body .hljs-template-string { color: var(--ip-hljs-string); }
+.markdown-body .hljs-number,
+.markdown-body .hljs-bullet { color: var(--ip-hljs-number); }
+.markdown-body .hljs-title,
+.markdown-body .hljs-function,
+.markdown-body .hljs-title.function_ { color: var(--ip-hljs-title); }
+.markdown-body .hljs-attr,
+.markdown-body .hljs-attribute,
+.markdown-body .hljs-variable,
+.markdown-body .hljs-template-variable,
+.markdown-body .hljs-property,
+.markdown-body .hljs-selector-attr,
+.markdown-body .hljs-selector-class,
+.markdown-body .hljs-selector-id { color: var(--ip-hljs-attr); }
+.markdown-body .hljs-comment,
+.markdown-body .hljs-quote,
+.markdown-body .hljs-doctag { color: var(--ip-hljs-comment); font-style: italic; }
+.markdown-body .hljs-meta,
+.markdown-body .hljs-meta-keyword,
+.markdown-body .hljs-section,
+.markdown-body .hljs-name,
+.markdown-body .hljs-symbol { color: var(--ip-hljs-meta); }
+.markdown-body .hljs-emphasis { font-style: italic; }
+.markdown-body .hljs-strong { font-weight: var(--ip-font-weight-semibold, 600); }
+.markdown-body .hljs-link { text-decoration: underline; }
+/* diff：+/- 行级底色（tint 语义色——success/danger 的 bg/text 档） */
+.markdown-body .hljs-addition {
+  color: var(--ip-hljs-addition-text);
+  background: var(--ip-hljs-addition-bg);
+}
+.markdown-body .hljs-deletion {
+  color: var(--ip-hljs-deletion-text);
+  background: var(--ip-hljs-deletion-bg);
 }
 
 /* ------------------- 表格 ------------------- */

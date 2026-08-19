@@ -671,8 +671,8 @@ async function copyPayload() {
   font-family: var(--ip-font-mono, monospace);
   white-space: pre-wrap;
   word-break: break-word;
-  background: var(--ip-color-bg-tertiary);
-  color: var(--ip-color-text-secondary);
+  background: var(--ip-code-bg);
+  color: var(--ip-code-text);
   padding: 10px;
   border-radius: var(--ip-radius-md);
   margin: 0;
