@@ -1,7 +1,9 @@
 <script setup lang="ts">
-// 会话级 token 预算胶囊 — chat:budget 事件驱动的用量 HUD。
-// 两处挂载：发送中（cursor-bar 内）与轮末（finish-reason 行），持续可见
-// 「已用 X / 上限 Y」；续期后上限自动抬升；用量 ≥80% 上限时转 warn 态提醒。
+// 会话级 token 预算 HUD — chat:budget 事件驱动。
+// 两处挂载：发送中（cursor-bar 内）与轮末（finish-reason 行），持续可见。
+// 形态：微型进度条（灰轨绿芯，80% 处弱刻度线）+「已用 X / 上限 Y」数字——
+// 预算本质是比值，填充度一眼读出余量；用量 ≥80% 越过刻度转 warn 态
+// （芯条加深 + 字重 600），续期后上限自动抬升（条随之回落）。
 import { computed } from "vue";
 import type { ChatBudgetPayload } from "../../types";
 import { formatTokenCount } from "../../utils/format";
@@ -13,6 +15,8 @@ const usagePct = computed(() =>
     ? props.budget.cumulative_tokens / props.budget.effective_cap
     : 0,
 );
+/** 填充宽（%）；钳 100% 防瞬时超限撑破轨道 */
+const fillWidth = computed(() => `${Math.min(100, usagePct.value * 100)}%`);
 /** 用量达 80%（TokenWindowStage 同款水位语义）转 warn 态 */
 const warn = computed(() => usagePct.value >= 0.8);
 const title = computed(() => {
@@ -25,6 +29,10 @@ const title = computed(() => {
 
 <template>
   <span class="budget-pill" :class="{ warn }" :title="title">
+    <span class="budget-bar" aria-hidden="true">
+      <span class="budget-fill" :style="{ width: fillWidth }" />
+      <span class="budget-tick" />
+    </span>
     预算 {{ formatTokenCount(props.budget.cumulative_tokens) }} /
     {{ formatTokenCount(props.budget.effective_cap) }}
     <span v-if="props.budget.renewal_index > 0" class="renewed">
@@ -35,19 +43,42 @@ const title = computed(() => {
 
 <style scoped>
 .budget-pill {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: var(--ip-text-caption-size);
-  color: var(--ip-color-primary-tint-text);
-  padding: 2px 10px;
-  border-radius: var(--ip-radius-full);
-  background: var(--ip-color-primary-tint-bg);
+  color: var(--ip-color-text-tertiary);
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
-/* 80% 水位：换 soft 底色加重提醒（仍非错误——续期/继续都可恢复） */
-.budget-pill.warn {
-  background: var(--ip-color-primary-soft-bg);
-  font-weight: 600;
+/* 微型进度条：灰轨绿芯；80% 处一道弱刻度线 = warn 水位可视锚点 */
+.budget-bar {
+  position: relative;
+  width: 56px;
+  height: 4px;
+  border-radius: var(--ip-radius-full);
+  background: var(--ip-color-bg-tertiary);
+  overflow: hidden;
 }
+.budget-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  background: var(--ip-primary-500);
+  transition: width var(--ip-duration-fast) var(--ip-ease-out);
+}
+.budget-tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 80%;
+  width: 1px;
+  background: var(--ip-color-border-default);
+  opacity: 0.6;
+}
+/* 80% 水位：芯条加深 + 字重提醒（仍非错误——续期/继续都可恢复） */
+.budget-pill.warn { font-weight: 600; }
+.budget-pill.warn .budget-fill { background: var(--ip-color-primary-tint-text); }
 .renewed {
   opacity: 0.85;
 }

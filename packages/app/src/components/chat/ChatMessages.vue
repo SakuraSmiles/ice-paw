@@ -1262,7 +1262,7 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
 @keyframes think-bounce { 0%,80%,100% { transform:translateY(0); opacity:0.4; } 40% { transform:translateY(-6px); opacity:1; } }
 
 /* ===== 流式光标 ===== */
-.cursor-bar { display:flex; justify-content:flex-start; padding:4px 48px 0; }
+.cursor-bar { display:flex; justify-content:flex-start; align-items:center; gap:10px; padding:4px 48px 0; }
 .cursor-track { display:flex; align-items:center; gap:8px; padding:4px 0; }
 .cursor-glow { width:8px; height:8px; border-radius:50%; background-color:var(--ip-primary-500); animation:cursor-pulse 1.2s ease-in-out infinite; }
 .cursor-label { font-size:var(--ip-text-caption-size); color:var(--ip-color-text-tertiary); }

@@ -33,6 +33,17 @@ describe("BudgetPill", () => {
     expect(hot.classes()).toContain("warn");
   });
 
+  it("微型进度条：填充宽随用量走 + 80% 刻度线存在", () => {
+    const w = mount(BudgetPill, { props: { budget: budget() } }); // 12万/60万 = 20%
+    expect(w.find(".budget-fill").attributes("style")).toContain("width: 20%");
+    expect(w.find(".budget-tick").exists()).toBe(true);
+    // 满格钳制：瞬时超限不撑破轨道
+    const over = mount(BudgetPill, {
+      props: { budget: budget({ cumulative_tokens: 999_999 }) },
+    });
+    expect(over.find(".budget-fill").attributes("style")).toContain("width: 100%");
+  });
+
   it("续期后：显示（已续期 i/n），上限为续期后的 effective_cap", () => {
     const w = mount(BudgetPill, {
       props: {
