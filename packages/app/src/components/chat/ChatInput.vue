@@ -20,6 +20,7 @@ import { useChatStore } from "../../stores/chat";
 import { useAgentStore } from "../../stores/agent";
 import { useProjectStore } from "../../stores/project";
 import { shortCode } from "../../utils/refs";
+import EntityAvatar from "../common/EntityAvatar.vue";
 import type { ContentBlock } from "../../types";
 
 const chat = useChatStore();
@@ -267,6 +268,8 @@ interface RefOption {
   idText?: string; // agent 的完整 id（跟名字后，等宽淡色，title 全显）
   owner?: string; // 归属（项目名 / 模型），右对齐淡色，超长省略
   kindText: string; // 类型词，右缘定宽对齐
+  avatar?: string | null; // agent 头像图（EntityAvatar 三级链）
+  emoji?: string | null; // agent 选定 emoji
 }
 
 /** 会话标题：空 → 「会话」+ 短码（未命名会话显示 `会话#3357` 兜底）。*/
@@ -314,6 +317,7 @@ const refOptions = computed<RefOption[]>(() => {
       kind: "agent", targetId: a.id,
       display: `${a.name}#${code}`, label: a.name,
       idText: a.id, owner: a.model, kindText: "Agent",
+      avatar: a.avatar ?? null, emoji: a.emoji ?? null,
     });
     if (out.length - convCount >= SECTION_CAP) break;
   }
@@ -512,6 +516,14 @@ function handleKeydown(e: KeyboardEvent) {
             @click="chooseRef(opt)"
             @mousemove="activeIdx = i"
           >
+            <EntityAvatar
+              v-if="opt.kind === 'agent'"
+              class="at-option-avatar"
+              :name="opt.label"
+              :image="opt.avatar ?? null"
+              :emoji="opt.emoji ?? null"
+              size="sm"
+            />
             <span class="at-option-label" :title="opt.label">
               <template v-for="(p, pi) in highlightParts(opt.label, atQuery)" :key="pi">
                 <span v-if="p.hit" class="at-hit">{{ p.t }}</span><template v-else>{{ p.t }}</template>
@@ -595,6 +607,8 @@ function handleKeydown(e: KeyboardEvent) {
 /* ===== @ 引用弹层（输入框上方） ===== */
 .at-popover { position:absolute; left:8px; right:8px; bottom:calc(100% + 6px); z-index:20; max-height:280px; overflow-y:auto; background-color:var(--ip-color-bg-primary); border:1px solid var(--ip-color-border-default); border-radius:var(--ip-radius-md); box-shadow:0 4px 16px rgba(0,0,0,0.12); padding:4px; }
 .at-option { display:flex; align-items:center; gap:8px; width:100%; padding:7px 10px; border:none; border-radius:var(--ip-radius-sm); background:transparent; cursor:pointer; text-align:left; }
+/* agent 候选头像（sm=20px，EntityAvatar 三级链；会话/消息候选无头像） */
+.at-option-avatar { flex-shrink: 0; }
 .at-option.active { background-color:var(--ip-color-bg-hover); }
 /* 已在引用列表：整行状态（elementui 选择器选中风）——柔和绿底 + 名字主色，
  * 不加 tag/勾等额外元素（行内文本已密，选中态靠底色与字色一眼可辨） */

@@ -741,6 +741,8 @@ mod tests {
                 context_window: None,
                 enabled_tools: None,
                 workspace_path: None,
+                avatar: None,
+                emoji: None,
             },
             id,
             "ref-slot",

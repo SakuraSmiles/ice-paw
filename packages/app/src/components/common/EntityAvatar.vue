@@ -82,7 +82,7 @@ function onImgError() {
 
 <template>
   <span :class="['entity-avatar', `size-${size}`]" :style="{ background: useImage ? undefined : bg }">
-    <img v-if="useImage" :src="image ?? undefined" alt="" :key="image ?? ''" @error="onImgError" />
+    <img v-if="useImage" :key="image ?? ''" :src="image ?? undefined" alt="" @error="onImgError" />
     <template v-else-if="emoji">{{ emoji }}</template>
     <template v-else>{{ initial }}</template>
   </span>

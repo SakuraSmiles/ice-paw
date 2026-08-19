@@ -15,7 +15,7 @@ pub async fn list(pool: &SqlitePool) -> AppResult<Vec<AgentRow>> {
         "SELECT id, name, provider, model, system_prompt, api_key_ref, base_url,
                 temperature, max_tokens, extra_params, sort_order, cache_prompt,
                 max_history_messages, enabled_tools, context_window,
-                supports_vision, description, avatar,
+                supports_vision, description, avatar, emoji,
                 workspace_path, created_at, updated_at
            FROM agents
           ORDER BY sort_order ASC, created_at ASC",
@@ -31,7 +31,7 @@ pub async fn get_by_id(pool: &SqlitePool, id: &str) -> AppResult<AgentRow> {
         "SELECT id, name, provider, model, system_prompt, api_key_ref, base_url,
                 temperature, max_tokens, extra_params, sort_order, cache_prompt,
                 max_history_messages, enabled_tools, context_window,
-                supports_vision, description, avatar,
+                supports_vision, description, avatar, emoji,
                 workspace_path, created_at, updated_at
            FROM agents WHERE id = ?",
     )
@@ -70,8 +70,8 @@ pub async fn create(
            (id, name, provider, model, system_prompt, api_key_ref, base_url,
             temperature, max_tokens, extra_params, sort_order, cache_prompt,
             max_history_messages, enabled_tools, supports_vision,
-            workspace_path, context_window)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            workspace_path, context_window, avatar, emoji)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(id)
     .bind(&new_agent.name)
@@ -95,6 +95,8 @@ pub async fn create(
     .bind(supports_vision_i)
     .bind(new_agent.workspace_path.as_deref())
     .bind(new_agent.context_window)
+    .bind(new_agent.avatar.as_deref())
+    .bind(new_agent.emoji.as_deref())
     .execute(pool)
     .await?;
 
@@ -121,6 +123,8 @@ pub async fn update(
     enabled_tools: Option<Option<Vec<String>>>,
     supports_vision: Option<bool>,
     workspace_path: Option<Option<&str>>,
+    avatar: Option<Option<&str>>,
+    emoji: Option<Option<&str>>,
 ) -> AppResult<AgentRow> {
     // 先读出来再合并，避免拼接动态 SQL
     let mut current = get_by_id(pool, id).await?;
@@ -175,13 +179,21 @@ pub async fn update(
     if let Some(v) = workspace_path {
         current.workspace_path = v.map(String::from);
     }
+    // 头像双层 Option（None=不改 / Some(None)=清空 / Some(Some)=设定）
+    if let Some(v) = avatar {
+        current.avatar = v.map(String::from);
+    }
+    if let Some(v) = emoji {
+        current.emoji = v.map(String::from);
+    }
 
     sqlx::query(
         "UPDATE agents
             SET name = ?, provider = ?, model = ?, system_prompt = ?,
                 base_url = ?, temperature = ?, max_tokens = ?, extra_params = ?, sort_order = ?,
                 cache_prompt = ?, max_history_messages = ?,
-                enabled_tools = ?, supports_vision = ?, workspace_path = ?, context_window = ?
+                enabled_tools = ?, supports_vision = ?, workspace_path = ?, context_window = ?,
+                avatar = ?, emoji = ?
           WHERE id = ?",
     )
     .bind(&current.name)
@@ -199,6 +211,8 @@ pub async fn update(
     .bind(current.supports_vision)
     .bind(&current.workspace_path)
     .bind(current.context_window)
+    .bind(&current.avatar)
+    .bind(&current.emoji)
     .bind(id)
     .execute(pool)
     .await?;
@@ -245,4 +259,106 @@ pub async fn delete(pool: &SqlitePool, id: &str) -> AppResult<()> {
         });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// in-memory SQLite + 全量 migrations（migration 47 引入 agents.emoji）
+    async fn test_pool() -> SqlitePool {
+        use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+        use std::str::FromStr;
+        let opts = SqliteConnectOptions::from_str("sqlite::memory:")
+            .expect("valid sqlite url")
+            .create_if_missing(true)
+            .foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .expect("connect in-memory sqlite");
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .expect("migrate");
+        pool
+    }
+
+    fn new_agent(avatar: Option<&str>, emoji: Option<&str>) -> NewAgent {
+        NewAgent {
+            id: "a1".into(),
+            name: "测试".into(),
+            provider: "openai".into(),
+            model: "m".into(),
+            system_prompt: String::new(),
+            api_key: String::new(),
+            base_url: None,
+            temperature: 0.7,
+            max_tokens: 4096,
+            extra_params: None,
+            sort_order: 0,
+            cache_prompt: true,
+            supports_vision: false,
+            max_history_messages: None,
+            context_window: None,
+            enabled_tools: None,
+            workspace_path: None,
+            avatar: avatar.map(String::from),
+            emoji: emoji.map(String::from),
+        }
+    }
+
+    #[tokio::test]
+    async fn avatar_emoji_roundtrip() {
+        let pool = test_pool().await;
+        // create 带头像（migration 20 列 + migration 47 列）
+        create(&pool, &new_agent(Some("data:image/png;base64,xxx"), Some("🦊")), "a1", "a1")
+            .await
+            .expect("create");
+        let row = get_by_id(&pool, "a1").await.expect("get");
+        assert_eq!(row.avatar.as_deref(), Some("data:image/png;base64,xxx"));
+        assert_eq!(row.emoji.as_deref(), Some("🦊"));
+
+        // 不带头像创建 → NULL（渲染层走渐变兜底）
+        create(&pool, &new_agent(None, None), "a2", "a2")
+            .await
+            .expect("create 2");
+        let row = get_by_id(&pool, "a2").await.expect("get 2");
+        assert_eq!(row.avatar, None);
+        assert_eq!(row.emoji, None);
+    }
+
+    #[tokio::test]
+    async fn avatar_emoji_update_double_option_semantics() {
+        let pool = test_pool().await;
+        create(&pool, &new_agent(None, None), "a1", "a1")
+            .await
+            .expect("create");
+
+        // 全 None = 不改（name..workspace_path 15 项 + avatar/emoji）
+        let row = update(&pool, "a1", None, None, None, None, None, None, None, None, None,
+            None, None, None, None, None, None, None, None)
+            .await
+            .expect("update no-op");
+        assert_eq!(row.avatar, None);
+        assert_eq!(row.emoji, None);
+
+        // Some(Some) = 设定
+        let row = update(&pool, "a1", None, None, None, None, None, None, None, None, None,
+            None, None, None, None, None, None,
+            Some(Some("data:image/webp;base64,yyy")), Some(Some("🧊")))
+            .await
+            .expect("update set");
+        assert_eq!(row.avatar.as_deref(), Some("data:image/webp;base64,yyy"));
+        assert_eq!(row.emoji.as_deref(), Some("🧊"));
+
+        // Some(None) = 清空
+        let row = update(&pool, "a1", None, None, None, None, None, None, None, None, None,
+            None, None, None, None, None, None, Some(None), Some(None))
+            .await
+            .expect("update clear");
+        assert_eq!(row.avatar, None);
+        assert_eq!(row.emoji, None);
+    }
 }

@@ -9,6 +9,7 @@ import { useNewConversation } from "../../composables/useNewConversation";
 import { useTheme } from "../../composables/useTheme";
 import { useResizablePanel } from "../../composables/useResizablePanel";
 import PanelResizeHandle from "../common/PanelResizeHandle.vue";
+import EntityAvatar from "../common/EntityAvatar.vue";
 import ProjectSwitcher from "./ProjectSwitcher.vue";
 
 const router = useRouter();
@@ -272,7 +273,16 @@ function timeAgoLabel(dateStr: string): string {
           </span>
         </div>
         <div class="conv-meta">
-          <span class="conv-agent-tag">{{ agent.getById(conv.agent_id)?.name || "未知" }}</span>
+          <span class="conv-agent-tag">
+            <EntityAvatar
+              class="conv-agent-avatar"
+              :name="agent.getById(conv.agent_id)?.name || '?'"
+              :image="agent.getById(conv.agent_id)?.avatar ?? null"
+              :emoji="agent.getById(conv.agent_id)?.emoji ?? null"
+              size="xs"
+            />
+            <span class="conv-agent-name">{{ agent.getById(conv.agent_id)?.name || "未知" }}</span>
+          </span>
           <span v-if="chat.streamingConvIds.has(conv.id)" class="stream-indicator" title="正在生成…">
             <span class="stream-bars"><span class="bar"></span><span class="bar"></span><span class="bar"></span></span>生成中
           </span>
@@ -549,13 +559,23 @@ function timeAgoLabel(dateStr: string): string {
 }
 
 .conv-agent-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: 11px;
   color: var(--ip-primary-600);
   font-weight: var(--ip-font-weight-medium);
   white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+}
+/* agent 小头像（xs=16px，EntityAvatar 三级链） */
+.conv-agent-avatar { flex-shrink: 0; }
+/* 名字层（ellipsis 须落在文本节点所在元素上，flex 容器自身省略无效） */
+.conv-agent-name {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  min-width: 0;
 }
 
 .conv-time {

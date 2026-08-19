@@ -438,6 +438,8 @@ impl AgentCmd for SqlAgentCmd {
             input.enabled_tools,
             input.supports_vision,
             input.workspace_path.as_ref().map(|opt| opt.as_deref()),
+            input.avatar.as_ref().map(|opt| opt.as_deref()),
+            input.emoji.as_ref().map(|opt| opt.as_deref()),
         )
         .await?;
 
@@ -652,6 +654,7 @@ impl AgentCmd for MockAgentCmd {
             supports_vision: if input.supports_vision { 1 } else { 0 },
             description: String::new(),
             avatar: None,
+            emoji: None,
             workspace_path: input.workspace_path.clone(),
             created_at: "2024-01-01 00:00:00".to_string(),
             updated_at: "2024-01-01 00:00:00".to_string(),
@@ -720,6 +723,12 @@ impl AgentCmd for MockAgentCmd {
         }
         if let Some(v) = input.workspace_path {
             entry.0.workspace_path = v;
+        }
+        if let Some(v) = input.avatar {
+            entry.0.avatar = v;
+        }
+        if let Some(v) = input.emoji {
+            entry.0.emoji = v;
         }
         entry.0.updated_at = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
         Ok(Agent::from(entry.0.clone()))
@@ -819,6 +828,7 @@ mod tests {
             supports_vision: 0,
             description: String::new(),
             avatar: None,
+            emoji: None,
             workspace_path: None,
             created_at: "2024-01-01 00:00:00".to_string(),
             updated_at: "2024-01-01 00:00:00".to_string(),
@@ -845,6 +855,8 @@ mod tests {
             enabled_tools: None,
             supports_vision: false,
             workspace_path: None,
+            avatar: None,
+            emoji: None,
         }
     }
 
@@ -983,6 +995,8 @@ mod tests {
             enabled_tools: None,
             supports_vision: false,
             workspace_path: None,
+            avatar: None,
+            emoji: None,
         };
 
         let a = mock.create(new).await.unwrap();
@@ -1012,6 +1026,8 @@ mod tests {
             enabled_tools: None,
             supports_vision: None,
             workspace_path: None,
+            avatar: None,
+            emoji: None,
         };
 
         let a = mock.update(input).await.unwrap();
