@@ -105,8 +105,14 @@ pub struct ChatRoundStatePayload {
 #[derive(Clone, Serialize, Debug)]
 pub struct ChatBudgetPayload {
     pub conversation_id: String,
-    /// 本轮 usage 累计后的毛成本 Σ(prompt_i + completion_i)
+    /// 本轮 usage 累计后的计费口径 Σ(未命中全价 + 命中 1/10 + 输出全价)。
+    /// 缓存折扣前为毛成本 Σ(prompt_i + completion_i)——按毛成本计量会提前
+    /// 熔断高命中长任务（预算诚实化，见 budget::billed_tokens）。
     pub cumulative_tokens: u64,
+    /// 累计缓存命中 Σ cached_i（HUD「缓存命中 X%」分子；规范语义，见 TokenUsage）
+    pub cumulative_cached_tokens: u64,
+    /// 累计总输入 Σ prompt_i（HUD 命中率分母；含命中部分，规范语义）
+    pub cumulative_prompt_tokens: u64,
     /// 当前生效上限（续期后已抬升；= initial × (renewal_index + 1)）
     pub effective_cap: u64,
     /// 初始上限（= turn_context.budget_max_tokens）

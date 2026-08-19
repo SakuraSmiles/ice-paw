@@ -16,7 +16,8 @@
 //!   - `max_total_tokens`：Token 预算上限（默认 3× 上下文窗口，chat_cmd model-aware 兜底；agent.yaml 可覆盖）
 //!   - `max_budget_renewals` / `max_round_renewals`：B1 自动续期额度——触顶时若额度
 //!     未尽则 +初始上限续跑（合法长任务不误杀），额度用尽才真停。失控循环不靠它
-//!     兜底（stuck_detect 独立熔断），额度有界保证总开销封顶 = 初始 × (1+额度)。
+//!     兜底（stuck_detect 独立熔断），额度有界保证总开销封顶 = 初始 × (1+额度)
+//!     （计费口径，见 [`billed_tokens`]）。
 
 // ============================================================================
 // 与 `commands/chat_loop.rs` 中原硬编码常量对齐的 pub const（短期兼容）
@@ -31,10 +32,15 @@ pub const MAX_TOOL_ROUNDS: u32 = 50;
 pub const MAX_ATTEMPTS: u32 = 4;
 
 /// B1 自动续期默认额度：预算/轮数触顶时可自动续期的次数（每次 +初始上限），
-/// 总开销封顶 = 初始上限 × (1 + 此值)。默认路径（model-aware 兜底）用此值；
-/// agent.yaml 显式 max_total_tokens / tool_max_rounds → chat_cmd 置 0
-///（用户拍板的显式硬上限不被静默突破）。
-pub const DEFAULT_AUTO_RENEWALS: u32 = 2;
+/// 总开销封顶 = 初始上限 × (1 + 此值)（计费口径）。默认路径（model-aware
+/// 兜底）用此值；agent.yaml 显式 max_total_tokens / tool_max_rounds →
+/// chat_cmd 置 0（用户拍板的显式硬上限不被静默突破）。
+///
+/// 2→4（预算诚实化）：预算已改按缓存折扣计量（高命中时同窗口容纳 4~10×
+/// 轮次，正常路径很难触顶），但极端未命中（首轮冷缓存/长任务前几轮）仍按
+/// 近全价燃烧——4 次额度保证冷启动长任务不被过早真停；失控循环不靠它兜底
+///（stuck_detect 独立熔断），封顶 = 初始 × 5 仍线性有界。
+pub const DEFAULT_AUTO_RENEWALS: u32 = 4;
 
 // ============================================================================
 // 预算计量（缓存折扣）——预算按「计费口径」而非毛成本累计
@@ -273,17 +279,20 @@ mod tests {
         assert_eq!(renewals, 0);
     }
 
-    /// B1: 轮数续期默认额度与预算一致（2 次 → 总轮数 = 初始 × 3），可独立置 0
+    /// B1: 轮数续期默认额度与预算一致（总轮数 = 初始 × (1+额度)），可独立置 0
     #[test]
     fn test_round_renewal_defaults_align_with_budget() {
         let budget = LoopBudget::default();
         assert_eq!(budget.max_budget_renewals, DEFAULT_AUTO_RENEWALS);
         assert_eq!(budget.max_round_renewals, DEFAULT_AUTO_RENEWALS);
-        // 轮数上限同步封顶：初始 50 × (1+2) = 150 轮
+        // 轮数上限同步封顶：初始 × (1+额度)——用表达式断言，杜绝常量调整后再硬编码
         let mut effective = budget.max_tool_rounds;
         for _ in 0..budget.max_round_renewals {
             effective = effective.saturating_add(budget.max_tool_rounds);
         }
-        assert_eq!(effective, 150);
+        assert_eq!(
+            effective,
+            MAX_TOOL_ROUNDS * (1 + DEFAULT_AUTO_RENEWALS)
+        );
     }
 }

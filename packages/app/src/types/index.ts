@@ -398,8 +398,12 @@ export interface TurnContextPayload {
 /** `chat:budget` 事件 payload — 会话级 token 预算状态（HUD / 续期 toast） */
 export interface ChatBudgetPayload {
   conversation_id: string;
-  /** 本轮 usage 累计后的毛成本 Σ(prompt_i + completion_i) */
+  /** 本轮 usage 累计后的计费口径 Σ(未命中全价 + 命中 1/10 + 输出全价) */
   cumulative_tokens: number;
+  /** 累计缓存命中 Σ cached_i（「缓存命中 X%」分子；规范语义含命中部分） */
+  cumulative_cached_tokens: number;
+  /** 累计总输入 Σ prompt_i（命中率分母；含命中部分，规范语义） */
+  cumulative_prompt_tokens: number;
   /** 当前生效上限（续期后已抬升） */
   effective_cap: number;
   /** 初始上限（= turn_context.budget_max_tokens） */

@@ -101,7 +101,8 @@ use crate::harness::r#loop::token_usage::synthesize_usage;
 ///
 /// 两分支：显式硬上限（续期额度 0）给出「注释掉该行恢复自适应+续期」的
 /// 自助指引；默认额度用尽则说明续期次数已耗完。数字与 chat:budget 终态
-/// 事件一致，用户在提示行即可看到「已用多少 / 上限多少」。
+/// 事件一致（计费口径：缓存命中按 1/10 折扣），用户在提示行即可看到
+/// 「已用多少 / 上限多少」。
 fn budget_exceeded_fallback(cumulative: usize, cap: usize, max_renewals: u32) -> String {
     if max_renewals == 0 {
         format!(
@@ -271,8 +272,11 @@ async fn stream_loop_inner(
     let mut progress_text = String::new();
     let mut collected_usage: Option<TokenUsage> = None;
 
-    // W4.2: Token 预算累计追踪
+    // W4.2: Token 预算累计追踪（cumulative_tokens = 计费口径，见 budget::billed_tokens；
+    // cached/prompt 两路毛口径累计仅供 HUD「缓存命中 X%」展示，不参与熔断判断）
     let mut cumulative_tokens: usize = 0;
+    let mut cumulative_cached_tokens: usize = 0;
+    let mut cumulative_prompt_tokens: usize = 0;
 
     // M1.3: Token 入库
     // - `first_prompt_tokens`：首次 provider 返回的 prompt_tokens，
@@ -487,6 +491,10 @@ async fn stream_loop_inner(
                             u.completion_tokens as u64,
                         ) as usize,
                     );
+                    cumulative_cached_tokens =
+                        cumulative_cached_tokens.saturating_add(u.cached_tokens as usize);
+                    cumulative_prompt_tokens =
+                        cumulative_prompt_tokens.saturating_add(u.prompt_tokens as usize);
                     collected_usage = Some(u);
                 }
                 // 【彻底重构】token_count 由本轮 finalize_assistant_message 即时写入
@@ -532,6 +540,8 @@ async fn stream_loop_inner(
             &ctx.conv_id,
             tool_round,
             cumulative_tokens,
+            cumulative_cached_tokens,
+            cumulative_prompt_tokens,
             effective_max_tokens,
             initial_max_tokens,
             budget_renewals,
@@ -645,6 +655,8 @@ async fn stream_loop_inner(
                     &ctx.conv_id,
                     tool_round,
                     cumulative_tokens,
+                    cumulative_cached_tokens,
+                    cumulative_prompt_tokens,
                     effective_max_tokens,
                     initial_max_tokens,
                     budget_renewals,
@@ -664,6 +676,8 @@ async fn stream_loop_inner(
                     &ctx.conv_id,
                     tool_round,
                     cumulative_tokens,
+                    cumulative_cached_tokens,
+                    cumulative_prompt_tokens,
                     effective_max_tokens,
                     initial_max_tokens,
                     budget_renewals,

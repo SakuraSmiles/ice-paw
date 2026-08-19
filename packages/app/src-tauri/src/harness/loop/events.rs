@@ -32,6 +32,8 @@ pub(crate) fn emit_budget_state(
     conv_id: &str,
     round: u32,
     cumulative_tokens: usize,
+    cumulative_cached: usize,
+    cumulative_prompt: usize,
     effective_cap: usize,
     initial_cap: usize,
     renewal_index: u32,
@@ -41,6 +43,8 @@ pub(crate) fn emit_budget_state(
     let payload = ChatBudgetPayload {
         conversation_id: conv_id.to_string(),
         cumulative_tokens: cumulative_tokens as u64,
+        cumulative_cached_tokens: cumulative_cached as u64,
+        cumulative_prompt_tokens: cumulative_prompt as u64,
         effective_cap: effective_cap as u64,
         initial_cap: initial_cap as u64,
         renewal_index,
