@@ -16,7 +16,9 @@ use super::agent_cmd::{AgentCmd, AgentWithCredentials};
 
 /// Provider 目录（注册表快照，前端下拉框数据源）
 #[tauri::command]
-pub fn list_providers() -> AppResult<Vec<ProviderInfo>> {
+pub async fn list_providers() -> AppResult<Vec<ProviderInfo>> {
+    // async 化：同步命令跑 Tauri 主线程，生成中事件注入洪泛时会被排队十几秒
+    // （模型下拉数据源）。纯内存快照，async 化零成本。
     Ok(list_provider_infos())
 }
 

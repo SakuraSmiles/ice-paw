@@ -178,12 +178,19 @@ pub async fn set_mcp_enabled(
     Ok(())
 }
 
-/// 检测 Node.js 是否可用（OnceLock 缓存，全进程只检测一次）
+/// 检测 Node.js 是否可用（OnceLock 缓存，全进程只检测一次）。
+///
+/// async 化：原同步命令跑 Tauri 主线程，且首调 `cmd.status()` 同步阻塞等子进程
+/// （Windows 含杀毒扫描时可达数百 ms）。热路径 OnceLock 命中纯内存直返；
+/// 未命中走 `spawn_blocking`（与 log_cmd::get_logs 同款模式）。
 #[tauri::command]
-pub fn check_nodejs() -> bool {
+pub async fn check_nodejs() -> bool {
     use std::sync::OnceLock;
     static AVAILABLE: OnceLock<bool> = OnceLock::new();
-    *AVAILABLE.get_or_init(|| {
+    if let Some(b) = AVAILABLE.get() {
+        return *b;
+    }
+    let probed = tauri::async_runtime::spawn_blocking(|| {
         let mut cmd = std::process::Command::new("node");
         cmd.arg("--version")
             .stdout(std::process::Stdio::null())
@@ -192,6 +199,9 @@ pub fn check_nodejs() -> bool {
         crate::infra::process::suppress_console_window(&mut cmd);
         cmd.status().map(|s| s.success()).unwrap_or(false)
     })
+    .await
+    .unwrap_or(false);
+    *AVAILABLE.get_or_init(|| probed)
 }
 
 /// 内置工具信息（给前端「内置工具」清单展示用）
