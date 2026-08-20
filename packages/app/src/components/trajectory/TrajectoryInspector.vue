@@ -733,7 +733,7 @@ async function copyPayload() {
   border-radius: var(--ip-radius-full);
   background: var(--ip-color-primary-tint-bg); color: var(--ip-color-primary-tint-text);
 }
-.iref-kind[data-kind="agent"] { background: #ece9fb; color: #5b4bbd; }
+.iref-kind[data-kind="agent"] { background: var(--ip-accent-agent-bg); color: var(--ip-accent-agent-text); }
 .iref-kind[data-kind="message"] { background: var(--ip-color-bg-secondary); color: var(--ip-color-text-secondary); border: 1px solid var(--ip-color-border-default); }
 .iref-kind[data-kind="doc"] { background: var(--ip-color-bg-secondary); color: var(--ip-color-text-secondary); border: 1px solid var(--ip-color-border-default); }
 .iref-label, .idoc { color: var(--ip-color-text-secondary); }
