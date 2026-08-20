@@ -262,10 +262,15 @@ const providerLabel = (name: string) => providerLabelOf(providerList.value, name
   color: var(--ip-color-text-secondary);
   flex-shrink: 0;
 }
-.provider-badge.provider-openai { background: #E8F4EE; color: #237552; }
+.provider-badge.provider-openai { background: #E8F0F8; color: #2A4F85; }
 .provider-badge.provider-anthropic { background: #EDE8F4; color: #5B3D8A; }
 .provider-badge.provider-deepseek { background: #F4E8E8; color: #8A3D3D; }
 .provider-badge.provider-glm { background: #E8EEF4; color: #3D5B8A; }
+/* 厂商徽章 = 数据身份色（不随主题镜像）：暗色下底色加深、字色提亮，保持可辨 */
+[data-theme='dark'] .provider-badge.provider-openai { background: #1A2A3D; color: #9BC2E6; }
+[data-theme='dark'] .provider-badge.provider-anthropic { background: #251F3D; color: #B0A4EE; }
+[data-theme='dark'] .provider-badge.provider-deepseek { background: #3D1F1F; color: #E0A8A8; }
+[data-theme='dark'] .provider-badge.provider-glm { background: #1F2C3D; color: #A8C4E0; }
 
 .card-model { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 

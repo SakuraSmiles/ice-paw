@@ -357,7 +357,7 @@ function confirmDelete() {
 .input:focus {
   border-color: var(--color-input-focus-border);
   background-color: var(--color-input-bg);
-  box-shadow: 0 0 0 3px rgba(46, 141, 100, 0.12);
+  box-shadow: 0 0 0 3px rgba(var(--ip-primary-500-rgb), 0.12);
 }
 .input::placeholder { color: var(--ip-color-text-placeholder); }
 .input-disabled { opacity: 0.6; cursor: not-allowed; }
@@ -490,10 +490,10 @@ function confirmDelete() {
 .btn-sm { height: 28px; }
 .btn-primary {
   color: white;
-  background-color: var(--ip-primary-600);
+  background-color: var(--ip-primary-500);
   border: none;
 }
-.btn-primary:hover { background-color: var(--ip-primary-700); }
+.btn-primary:hover { background-color: var(--ip-primary-600); }
 .btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
 
 /* 删除（danger 色文字，hover 加深 + 浅红背景） */

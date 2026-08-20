@@ -25,17 +25,24 @@
 :root {
   /* ------------------- 1. 原始色板 ------------------- */
 
-  /* 主色梯度（IcePaw 品牌冷蓝） */
-  --ip-primary-50:  #F0F6FC;
-  --ip-primary-100: #E1EDF9;
-  --ip-primary-200: #C5DCF2;
-  --ip-primary-300: #9BC2E6;
-  --ip-primary-400: #6FA1D6;
-  --ip-primary-500: #4680C2;
-  --ip-primary-600: #3565A8;
-  --ip-primary-700: #2A4F85;
-  --ip-primary-800: #1F3D6B;
-  --ip-primary-900: #152B4D;
+  /* 主色梯度（IcePaw 藏青 navy 双锚点 v2.0 —— 2026-08-20 拍板）
+   * 浅色主题锚点 500=#1E4976（L≈31，墨水质感）；深色主题锚点 400=#4E80C0（L≈53，
+   * = 藏青色相 + 旧冰蓝明度）。档位镜像：浅色悬浮加深（500→600）、深色主交互用亮档
+   * （400）、收敛档 500。十一档完整色阶，单一真相源在此，global.css 禁止再定义。 */
+  --ip-primary-50:  #F2F6FA;
+  --ip-primary-100: #E2ECF5;
+  --ip-primary-200: #C3D7EA;
+  --ip-primary-300: #93B7D8;
+  --ip-primary-400: #4E80C0;
+  --ip-primary-500: #1E4976;
+  --ip-primary-600: #173D66;
+  --ip-primary-700: #123150;
+  --ip-primary-800: #0E263D;
+  --ip-primary-900: #0A1C2D;
+  --ip-primary-950: #071420;
+  /* rgb 三元组：焦点环/阴影按透明度派生用（rgba(var(--ip-primary-500-rgb), α)） */
+  --ip-primary-500-rgb: 30, 73, 118;  /* #1E4976 */
+  --ip-primary-400-rgb: 78, 128, 192; /* #4E80C0 */
 
   /* 灰度（亮色 10 级 / 暗色 11 级通过同一套变量实现语义分离） */
   --ip-gray-50:  #FAFBFC;
@@ -56,8 +63,8 @@
   --ip-black: #000000;
   --ip-overlay-light: rgba(20, 24, 31, 0.5);
   --ip-overlay-dark:  rgba(20, 24, 31, 0.7);
-  --ip-focus-ring-light: rgba(70, 128, 194, 0.30);
-  --ip-focus-ring-dark:  rgba(111, 161, 214, 0.35);
+  --ip-focus-ring-light: rgba(30, 73, 118, 0.30);
+  --ip-focus-ring-dark:  rgba(78, 128, 192, 0.35);
   --ip-focus-ring-danger-light: rgba(184, 61, 61, 0.20);
 
   /* ------------------- 2. 字体栈 / 排版 ------------------- */
@@ -360,11 +367,12 @@
   --ip-danger-border:  #E0B0B0;
 
   /* Info — 复用 primary */
-  --ip-info-base:    #4680C2;
-  --ip-info-hover:   #3565A8;
-  --ip-info-active:  #2A4F85;
-  --ip-info-bg:      #F0F6FC;
-  --ip-info-text:    #2A4F85;
+  /* info 并入主色（v2.0 拍板）：信息提示=品牌蓝，不设独立第五色 */
+  --ip-info-base:    var(--ip-primary-500);
+  --ip-info-hover:   var(--ip-primary-600);
+  --ip-info-active:  var(--ip-primary-700);
+  --ip-info-bg:      var(--ip-primary-50);
+  --ip-info-text:    var(--ip-primary-700);
   --ip-info-border:  #9BC2E6;
 
   /* ------------------- 10. 语义层 token（组件引用的统一入口） ------------------- */
@@ -417,6 +425,25 @@
 
 [data-theme='dark'],
 .dark {
+  /* ===== 主色双锚点（v2.0 藏青）：深色主题档位镜像 =====
+   * 浅色主题：500=#1E4976 锚点（hover 加深到 600）
+   * 深色主题：整体镜像——400=#4E80C0 成为视觉"主档"（亮档作主交互），
+   * 500=#3E6FA8 为收敛/悬浮档。组件代码继续引用 --ip-primary-{400..600}，
+   * 档位语义随主题自动反转，无需组件感知。 */
+  --ip-primary-50:  #071420;
+  --ip-primary-100: #0A1C2D;
+  --ip-primary-200: #0E263D;
+  --ip-primary-300: #123150;
+  --ip-primary-400: #4E80C0;
+  --ip-primary-500: #3E6FA8;
+  --ip-primary-600: #5B8FCC;
+  --ip-primary-700: #93B7D8;
+  --ip-primary-800: #C3D7EA;
+  --ip-primary-900: #E2ECF5;
+  --ip-primary-950: #F2F6FA;
+  --ip-primary-500-rgb: 62, 111, 168;  /* 镜像档 #3E6FA8 */
+  --ip-primary-400-rgb: 78, 128, 192;
+
   /* 原始色板：暗色专属 gray-50/950 在组件代码里不直接出现，仅保留内部 token */
   --ip-success-base:    #3BAF7A;
   --ip-success-hover:   #2D8B66;
@@ -439,12 +466,18 @@
   --ip-danger-text:    #E0B0B0;
   --ip-danger-border:  #7D2323;
 
-  --ip-info-base:    #6FA1D6;
-  --ip-info-hover:   #4680C2;
-  --ip-info-active:  #3565A8;
-  --ip-info-bg:      #0D1A2B;
-  --ip-info-text:    #9BC2E6;
-  --ip-info-border:  #2A4F85;
+  /* info 并入主色（v2.0）：深色走镜像亮档 */
+  --ip-info-base:    var(--ip-primary-400);
+  --ip-info-hover:   var(--ip-primary-600);
+  --ip-info-active:  var(--ip-primary-500);
+  --ip-info-bg:      var(--ip-primary-950);
+  --ip-info-text:    var(--ip-primary-700);
+  --ip-info-border:  var(--ip-primary-500);
+
+  /* 身份层点缀色（v2.0）：agent 引用紫 —— 数据身份标识，不进交互层 */
+  --ip-accent-agent:       #7C6BD6;
+  --ip-accent-agent-text:  #5B4BBD;
+  --ip-accent-agent-bg:    #ECE9FB;
 
   /* 语义层重映射 */
   --ip-color-bg-primary:      var(--ip-gray-900);
@@ -452,8 +485,8 @@
   --ip-color-bg-tertiary:     var(--ip-gray-800);
   --ip-color-bg-elevated:     var(--ip-gray-800);                  /* v1.0.1: #262626，与 secondary 12 阶对比 */
   --ip-color-bg-overlay:      var(--ip-overlay-dark);
-  --ip-color-bg-user-bubble:        var(--ip-primary-600);   /* v1.0.3: 暗色模式仍用蓝（蓝底白字对比度稳） */
-  --ip-color-bg-user-bubble-hover:  var(--ip-primary-500);   /* v1.0.3: hover 微亮 */
+  --ip-color-bg-user-bubble:        var(--ip-primary-500);   /* v2.0 藏青镜像档（#3E6FA8 白字≈4.9:1） */
+  --ip-color-bg-user-bubble-hover:  var(--ip-primary-400);   /* v2.0 hover 提亮（#4E80C0） */
   --ip-color-text-on-user-bubble:   var(--ip-white);         /* v1.0.3: 蓝底白字 */
   --ip-color-bg-ai-bubble:          var(--ip-gray-850);      /* #1A1A1A  v1.0.3: 暗色 AI 气泡（近黑） */
   --ip-color-text-link-on-ai:       var(--ip-primary-400);   /* #60A5FA  v1.0.3: 暗色 AI 气泡内链接色 */
@@ -530,7 +563,7 @@
     --ip-success-base:    #3BAF7A;
     --ip-warning-base:    #D4A03C;
     --ip-danger-base:     #D46B6B;
-    --ip-info-base:       #6FA1D6;
+    --ip-info-base:       #4E80C0;  /* v2.0：info=主色深锚 */
 
     --ip-shadow-focus:    0 0 0 3px var(--ip-focus-ring-dark);
 

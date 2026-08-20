@@ -1,56 +1,37 @@
 /* ============================================================
- * IcePaw App - Global Styles（重写中）
+ * IcePaw App - Global Styles
  *
- * 覆盖 UI 库的蓝色主色为绿色系（干净简洁风格）
+ * v2.0（2026-08-20）：品牌色单一真相源收敛——本文件不再覆盖
+ * --ip-primary-*（藏青色阶与暗色镜像全部在 packages/ui/styles/tokens.css）。
+ * 原 --color-* 平行令牌已并入语义层（--ip-color-*），见下方映射区。
  * ============================================================ */
 
 :root {
-  /* ---- 绿色主色板（override UI 库的蓝色 --ip-primary-*） ---- */
-  --ip-primary-50:  #F4FAF7;
-  --ip-primary-100: #E8F4EE;
-  --ip-primary-200: #C5E6D4;
-  --ip-primary-300: #9ED4B8;
-  --ip-primary-400: #6DBE95;
-  --ip-primary-500: #44A87A;
-  --ip-primary-600: #2E8D64;
-  --ip-primary-700: #237552;
-  --ip-primary-800: #1A5A3E;
-  --ip-primary-900: #11402B;
-
-  /* 重映射 focus ring */
-  --ip-focus-ring-light: rgba(46, 141, 100, 0.30);
-  --ip-focus-ring-dark:  rgba(109, 190, 149, 0.35);
-  --ip-focus-ring-danger-light: rgba(184, 61, 61, 0.20);
-
-  /* ---- 布局层 token ---- */
-  /* 侧栏宽度不再用固定 token（UX #2 可调宽 + 记忆，见 useResizablePanel） */
-
-  /* ---- 自定义语义色 ---- */
-  --color-sidebar-bg:        #FAFBFC;
-  --color-sidebar-border:    #E6EAEF;
-  --color-sidebar-item-hover: #F0F2F5;
-  --color-sidebar-item-active: #E8F4EE;
-  --color-sidebar-item-active-border: #44A87A;
+  /* ---- 原 --color-* 平行令牌迁移为语义层别名（v2.0 收敛）----
+   * 组件仍可引用 --color-*（兼容期），但新代码一律直接用右侧语义令牌。
+   * 迁移完成后（UI-4 战役）删除本别名块。 */
+  --color-sidebar-bg:        var(--ip-color-bg-primary);
+  --color-sidebar-border:    var(--ip-color-border-default);
+  --color-sidebar-item-hover: var(--ip-color-bg-hover);
+  --color-sidebar-item-active: var(--ip-color-primary-soft-bg);
+  --color-sidebar-item-active-border: var(--ip-primary-500);
 
   --color-chat-header-bg:    rgba(255, 255, 255, 0.85);
-  --color-chat-header-border: #E6EAEF;
+  --color-chat-header-border: var(--ip-color-border-default);
 
-  --color-input-bg:          #FFFFFF;
-  --color-input-border:      #CFD5DD;
-  --color-input-focus-border: #44A87A;
+  --color-input-bg:          var(--ip-color-bg-primary);
+  --color-input-border:      var(--ip-color-border-default);
+  --color-input-focus-border: var(--ip-primary-500);
 
-  --color-message-user-bg:   #2E8D64;
+  --color-message-user-bg:   var(--ip-color-bg-user-bubble);
   --color-message-user-text: #FFFFFF;
-  --color-message-ai-bg:     #F4F6F8;
-  --color-message-ai-text:   #252C36;
+  --color-message-ai-bg:     var(--ip-color-bg-secondary);
+  --color-message-ai-text:   var(--ip-color-text-primary);
 
-  /* 主色 tint 语义令牌：浅绿底/标签底/标签字。
-   * 用以替代直接引用 --ip-primary-50/100/700 —— 这些原始色阶在暗色模式下
-   * 不会反转（仍是浅色），会导致图标盒、徽章、按钮在暗色下刺眼。
-   * 这里集中给出暗色变体（深绿底 + 亮绿字），组件只需引用语义令牌。 */
-  --ip-color-primary-soft-bg:   var(--ip-primary-50);    /* 柔和绿底：图标盒 / 新建按钮 */
-  --ip-color-primary-tint-bg:   var(--ip-primary-100);   /* 浅绿底：徽章 / 标签 */
-  --ip-color-primary-tint-text: var(--ip-primary-700);   /* 浅绿底上的文字 */
+  /* 主色 tint 语义令牌（v2.0 藏青）：柔和底/标签底/标签字 */
+  --ip-color-primary-soft-bg:   var(--ip-primary-50);
+  --ip-color-primary-tint-bg:   var(--ip-primary-100);
+  --ip-color-primary-tint-text: var(--ip-primary-700);
 }
 
 /* ---- body 基础 ---- */
@@ -84,28 +65,28 @@ body {
 
 /* ---- 暗色模式 ---- */
 [data-theme='dark'], .dark {
-  --color-sidebar-bg:        #1C222B;
-  --color-sidebar-border:    #2A323E;
-  --color-sidebar-item-hover: #252C36;
-  --color-sidebar-item-active: #1A3A2E;
-  --color-sidebar-item-active-border: #44A87A;
+  --color-sidebar-bg:        var(--ip-color-bg-primary);
+  --color-sidebar-border:    var(--ip-color-border-default);
+  --color-sidebar-item-hover: var(--ip-color-bg-hover);
+  --color-sidebar-item-active: var(--ip-color-primary-soft-bg);
+  --color-sidebar-item-active-border: var(--ip-primary-400);
 
   --color-chat-header-bg:    rgba(20, 24, 31, 0.85);
-  --color-chat-header-border: #2A323E;
+  --color-chat-header-border: var(--ip-color-border-default);
 
-  --color-input-bg:          #252C36;
-  --color-input-border:      #3A4350;
-  --color-input-focus-border: #44A87A;
+  --color-input-bg:          var(--ip-color-bg-primary);
+  --color-input-border:      var(--ip-color-border-default);
+  --color-input-focus-border: var(--ip-primary-400);
 
-  --color-message-user-bg:   #2E8D64;
+  --color-message-user-bg:   var(--ip-color-bg-user-bubble);
   --color-message-user-text: #FFFFFF;
-  --color-message-ai-bg:     #252C36;
-  --color-message-ai-text:   #E6EAEF;
+  --color-message-ai-bg:     var(--ip-color-bg-secondary);
+  --color-message-ai-text:   var(--ip-color-text-primary);
 
-  /* 暗色模式：主色 tint 反转 —— 深绿底 + 亮绿字（#9ED4B8 复用浅色阶 300） */
-  --ip-color-primary-soft-bg:   #102B20;
-  --ip-color-primary-tint-bg:   #173B2A;
-  --ip-color-primary-tint-text: #9ED4B8;
+  /* 暗色模式：主色 tint 走藏青镜像档（深底亮字自动成立） */
+  --ip-color-primary-soft-bg:   var(--ip-primary-100);
+  --ip-color-primary-tint-bg:   var(--ip-primary-200);
+  --ip-color-primary-tint-text: var(--ip-primary-700);
 }
 
 /* ---- 暗色模式切换动画（View Transitions API） ---- */

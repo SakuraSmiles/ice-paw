@@ -233,7 +233,7 @@ function onKeydown(e: KeyboardEvent) {
 .gs-open .gs-control {
   border-color: var(--color-input-focus-border);
   background-color: var(--color-input-bg);
-  box-shadow: 0 0 0 3px rgba(46, 141, 100, 0.12);
+  box-shadow: 0 0 0 3px rgba(var(--ip-primary-500-rgb), 0.12);
 }
 .gs-disabled .gs-control {
   opacity: 0.6;

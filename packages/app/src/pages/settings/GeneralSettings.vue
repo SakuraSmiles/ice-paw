@@ -1042,7 +1042,7 @@ const hasFilterResults = computed(() => {
 .form-input:focus {
   border-color: var(--color-input-focus-border);
   background-color: var(--ip-color-bg-secondary);
-  box-shadow: 0 0 0 3px rgba(46, 141, 100, 0.12);
+  box-shadow: 0 0 0 3px rgba(var(--ip-primary-500-rgb), 0.12);
 }
 .form-input::placeholder {
   color: var(--ip-color-text-placeholder);
@@ -1090,7 +1090,7 @@ const hasFilterResults = computed(() => {
   font-size: var(--ip-text-body-sm-size);
   font-weight: var(--ip-font-weight-medium);
   color: white;
-  background-color: var(--ip-primary-600);
+  background-color: var(--ip-primary-500);
   border: none;
   border-radius: var(--ip-radius-md);
   cursor: pointer;
@@ -1189,7 +1189,7 @@ const hasFilterResults = computed(() => {
 .tz-combobox:focus-within {
   border-color: var(--color-input-focus-border);
   background-color: var(--color-input-bg);
-  box-shadow: 0 0 0 3px rgba(46, 141, 100, 0.12);
+  box-shadow: 0 0 0 3px rgba(var(--ip-primary-500-rgb), 0.12);
 }
 
 .tz-input {

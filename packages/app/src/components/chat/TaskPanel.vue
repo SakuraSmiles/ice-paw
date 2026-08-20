@@ -334,7 +334,7 @@ function openTask(id: string) {
   transition: all var(--ip-duration-fast) var(--ip-ease-out);
 }
 .task-pill:hover { color: var(--ip-color-text-primary); border-color: var(--ip-primary-400); }
-.task-pill.open { color: var(--ip-primary-600); border-color: var(--ip-primary-400); background: var(--ip-primary-soft-bg, rgba(46,141,100,0.08)); }
+.task-pill.open { color: var(--ip-primary-600); border-color: var(--ip-primary-400); background: var(--ip-primary-soft-bg, rgba(var(--ip-primary-500-rgb), 0.08)); }
 .task-pill-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: var(--ip-color-text-tertiary); }
 .task-pill-dot.running { background: var(--ip-warning-base, #d97706); animation: task-pulse 1.2s ease-in-out infinite; }
 .task-pill-label { font-weight: var(--ip-font-weight-medium); }
@@ -430,7 +430,7 @@ function openTask(id: string) {
 /* 状态变更轻闪（P12）：soft-bg 底色 ~1s 褪去（prefers-reduced-motion 由全局兜底归零） */
 .just-changed { animation: row-flash 0.9s var(--ip-ease-out); }
 @keyframes row-flash {
-  from { background-color: var(--ip-primary-soft-bg, rgba(46,141,100,0.12)); }
+  from { background-color: var(--ip-primary-soft-bg, rgba(var(--ip-primary-500-rgb), 0.12)); }
   to { background-color: transparent; }
 }
 
