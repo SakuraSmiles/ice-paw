@@ -36,9 +36,7 @@
       "icons/icon.ico"
     ],
     "resources": [
-      "resources/mcp-runtime/node/node.exe",
-      "resources/mcp-runtime/node_modules/**/*",
-      "resources/pdfium/pdfium.dll"
+      "resources/mcp-runtime/node_modules/**/*"
     ],
     "windows": {
       "webviewInstallMode": {
