@@ -115,7 +115,8 @@ watch(() => props.projectId, () => { void loadAndScroll(); });
 // ---- 键盘（DevTools 习惯的子集）：↑/↓ 移动选中 · Esc 关检查器/清搜索 · / 聚焦 ----
 function moveSelection(dir: 1 | -1) {
   if (!rows.value.length) return;
-  const curIdx = rows.value.findIndex((r) => r === selectedRow.value);
+  // 按 key 判同（T-1：rows 是 computed，live 追加/搜索后重派生产新对象，身份比较失配致 ↑↓ 跳首尾）
+  const curIdx = rows.value.findIndex((r) => r.key === selectedRow.value?.key);
   const idx = curIdx < 0 ? (dir === 1 ? 0 : rows.value.length - 1) : Math.min(rows.value.length - 1, Math.max(0, curIdx + dir));
   selectedRow.value = rows.value[idx];
   void nextTick(() => {

@@ -432,6 +432,10 @@ function send() {
 }
 
 function handleKeydown(e: KeyboardEvent) {
+  // IME 组合期防护（UI-A1）：拼音/五笔等输入法选词的 Enter/方向键不得触发
+  // 发送或弹层导航。isComposing=true 表示组合进行中；keyCode 229 是旧式标记。
+  if (e.isComposing || e.keyCode === 229) return;
+
   // @ 弹层键盘导航（激活时优先于发送）
   if (atActive.value) {
     if (e.key === "ArrowDown") {
@@ -455,7 +459,8 @@ function handleKeydown(e: KeyboardEvent) {
       return;
     }
   }
-  if (e.key === "Enter" && !e.shiftKey) {
+  // Enter 发送；Cmd/Ctrl+Enter 备选发送（mac 肌肉记忆，UI-E1）
+  if ((e.key === "Enter" && !e.shiftKey) || ((e.metaKey || e.ctrlKey) && e.key === "Enter")) {
     e.preventDefault();
     send();
   }
@@ -539,13 +544,14 @@ function handleKeydown(e: KeyboardEvent) {
           </button>
         </div>
         <div class="input-row">
+          <!-- UI-A2：生成中不再整体禁用——允许预写下一条（draft 自动保存已就位），
+               发送由 send() 内 chat.sending 守卫拦截；IME/Enter 逻辑不受影响 -->
           <textarea
             ref="textareaRef"
             v-model="input"
             class="chat-textarea"
             placeholder="输入消息…（可拖拽/粘贴附件）"
             rows="1"
-            :disabled="chat.sending"
             @keydown="handleKeydown"
             @input="onInput"
             @paste="onPaste"
@@ -623,19 +629,19 @@ function handleKeydown(e: KeyboardEvent) {
 .at-hit { background:var(--ip-color-primary-tint-bg); color:var(--ip-color-primary-tint-text); border-radius:2px; padding:0 1px; }
 
 /* @ 引用 chip：按 ref_kind 微调图标色（会话=主色 / agent=紫 / 消息=中性） */
-.ref-chip[data-ref-kind="agent"] .file-chip-icon { color:#7c6bd6; }
+.ref-chip[data-ref-kind="agent"] .file-chip-icon { color:var(--ip-accent-agent); }
 .ref-chip[data-ref-kind="message"] .file-chip-icon { color:var(--ip-color-text-secondary); }
 /* 重复选择时闪已有 chip（一次脉冲提示「已在引用列表」） */
 .ref-flash { animation: ref-chip-flash 0.7s var(--ip-ease-out); }
 @keyframes ref-chip-flash {
   0%, 100% { background-color:var(--ip-color-bg-tertiary); }
-  40% { background-color:var(--ip-primary-50, #e8f5ef); border-color:var(--ip-primary-400, #2e8d64); }
+  40% { background-color:var(--ip-primary-50, var(--ip-primary-100)); border-color:var(--ip-primary-400, var(--ip-primary-600)); }
 }
 /* 输入区全宽（右上不再为发送按钮留位）；四周到边框统一留呼吸间隙 */
 .input-row { display:flex; align-items:flex-start; padding:12px 12px 0; }
-.input-wrapper:focus-within { border-color:var(--color-input-focus-border); box-shadow:0 0 0 3px rgba(46,141,100,0.12); }
-.input-wrapper.is-sending { border-color:var(--ip-primary-400); box-shadow:0 0 0 3px rgba(46,141,100,0.08); }
-.input-wrapper.drag-over { border-color:var(--ip-primary-500); box-shadow:0 0 0 3px rgba(46,141,100,0.18); background-color:var(--ip-primary-50); }
+.input-wrapper:focus-within { border-color:var(--color-input-focus-border); box-shadow:0 0 0 3px rgba(var(--ip-primary-500-rgb), 0.12); }
+.input-wrapper.is-sending { border-color:var(--ip-primary-400); box-shadow:0 0 0 3px rgba(var(--ip-primary-500-rgb), 0.08); }
+.input-wrapper.drag-over { border-color:var(--ip-primary-500); box-shadow:0 0 0 3px rgba(var(--ip-primary-500-rgb), 0.18); background-color:var(--ip-primary-50); }
 
 /* 底部工具栏：附件/引用（24px）… 提示居中 … 发送（32px，大一圈）。
    底边对齐（flex-end）：大小混排的按钮行底边齐平更稳，居中会让 24px

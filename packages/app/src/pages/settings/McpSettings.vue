@@ -253,7 +253,7 @@ const builtinDescZh: Record<string, string> = {
               <template v-else-if="glmTag(t)">
                 <div class="glm-template-main">
                   <span class="glm-template-name">{{ t.name }}</span>
-                  <span class="status-dot" :class="'dot-' + glmStatusCls(t)" />
+                  <span v-if="['starting', 'failed'].includes(glmStatusCls(t))" class="status-dot" :class="'dot-' + glmStatusCls(t)" :title="glmStatusCls(t) === 'failed' ? '启动失败' : '启动中'" />
                   <span class="status-tag" :class="'tag-' + glmStatusCls(t)">{{ glmTag(t) }}</span>
                 </div>
                 <div class="glm-template-sub">
@@ -282,7 +282,6 @@ const builtinDescZh: Record<string, string> = {
       <!-- 内置工具 -->
       <div class="mcp-card builtin-card" :class="{ expanded: builtinExpanded }" @click="builtinExpanded = !builtinExpanded">
         <div class="card-top">
-          <span class="status-dot dot-running" />
           <div class="card-body">
             <div class="card-name-row">
               <span class="card-name">内置工具</span>
@@ -305,7 +304,7 @@ const builtinDescZh: Record<string, string> = {
       <!-- Server 列表 -->
       <div v-for="s in servers" :key="s.id" class="mcp-card" :class="{ expanded: expandedEditId === s.id }" @click="toggleEdit(s)">
         <div class="card-top">
-          <span class="status-dot" :class="'dot-' + statusClass(s)" />
+          <span v-if="['starting', 'failed'].includes(statusClass(s))" class="status-dot" :class="'dot-' + statusClass(s)" :title="statusClass(s) === 'failed' ? '启动失败' : '启动中'" />
           <div class="card-body">
             <div class="card-name-row">
               <span class="card-name">{{ s.name }}</span>
@@ -407,10 +406,10 @@ const builtinDescZh: Record<string, string> = {
 .card-top { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
 
 .status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; margin-top: 6px; }
-.dot-running { background: var(--ip-success-base); }
-.dot-stopped, .dot-disabled { background: var(--ip-color-border-default); }
 .dot-failed { background: var(--ip-danger-base); animation: dot-pulse 1.2s ease-in-out infinite; }
 .dot-starting { background: var(--ip-primary-500); animation: dot-pulse 1.2s ease-in-out infinite; }
+/* v2.0 状态点语义收敛：正常态（running/configured/stopped/disabled）不渲染点——
+ * 正常无需标记，视觉只留给异常（starting 蓝脉冲 / failed 红脉冲）。右侧 tag 文案仍标注完整状态。 */
 @keyframes dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
 .card-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
@@ -481,12 +480,12 @@ const builtinDescZh: Record<string, string> = {
 
 /* GLM 卡用到的输入 / 按钮（McpForm 的 scoped 样式不外泄，这里补一份） */
 .input { width: 100%; height: 30px; padding: 0 10px; font-size: var(--ip-text-body-sm-size); color: var(--ip-color-text-primary); background-color: var(--ip-color-bg-tertiary); border: 1px solid var(--ip-color-border-default); border-radius: var(--ip-radius-md); outline: none; box-sizing: border-box; transition: all var(--ip-duration-fast) var(--ip-ease-out); }
-.input:focus { border-color: var(--color-input-focus-border); background-color: var(--color-input-bg); box-shadow: 0 0 0 3px rgba(46, 141, 100, 0.12); }
+.input:focus { border-color: var(--color-input-focus-border); background-color: var(--color-input-bg); box-shadow: 0 0 0 3px rgba(var(--ip-primary-500-rgb), 0.12); }
 .input::placeholder { color: var(--ip-color-text-placeholder); }
 .input-mono { font-family: var(--ip-font-mono); }
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 0 14px; font-size: var(--ip-text-body-sm-size); font-weight: var(--ip-font-weight-medium); border-radius: var(--ip-radius-md); cursor: pointer; white-space: nowrap; transition: all var(--ip-duration-fast) var(--ip-ease-out); }
 .btn-sm { height: 28px; }
-.btn-primary { color: white; background-color: var(--ip-primary-600); border: none; }
-.btn-primary:hover { background-color: var(--ip-primary-700); }
+.btn-primary { color: white; background-color: var(--ip-primary-500); border: none; }
+.btn-primary:hover { background-color: var(--ip-primary-600); }  /* 档位镜像语义：浅色 600 更深、深色 600 稍亮，方向都正确 */
 .btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
 </style>

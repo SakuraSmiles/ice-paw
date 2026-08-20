@@ -152,7 +152,8 @@ function toggleTurns() {
 
 // ---- 选中（再点同一行 = 取消选中收起检查器） ----
 function selectRow(row: TrajectoryRow) {
-  selectedRow.value = selectedRow.value === row ? null : row;
+  // 按 key 判同（T-2：live 追加/搜索后重派生，身份比较失配致再点同行无法取消选中）
+  selectedRow.value = selectedRow.value?.key === row.key ? null : row;
 }
 
 // ---- 检查器宽度：useResizablePanel 共享机制（UX #2 规范化，原手搓版迁移） ----
