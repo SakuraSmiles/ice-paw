@@ -1,0 +1,46 @@
+/* ============================================================
+ * IcePaw 字体本地化（v2.0 2026-08-20）
+ * 产品哲学：本地优先，禁止网络字体——首启离线观感是验收线。
+ *
+ * 拉丁字体走 @fontsource npm 包（vite 打包）；
+ * 中文走 assets/fonts 自托管：
+ *   - Noto Sans SC：简中子集 × 实际用到的 3 字重（~3.4MB 总量）
+ *   - LXGW WenKai：官方 unicode-range 分片（98 片按需加载，未用到的片不下载）
+ * font-display: swap 防止离线回退时的不可见文本。
+ * ============================================================ */
+
+/* ---- 拉丁：DM Sans（正文 UI） ---- */
+@import '@fontsource/dm-sans/400.css';
+@import '@fontsource/dm-sans/500.css';
+@import '@fontsource/dm-sans/600.css';
+
+/* ---- 拉丁：JetBrains Mono（代码） ---- */
+@import '@fontsource/jetbrains-mono/400.css';
+@import '@fontsource/jetbrains-mono/500.css';
+
+/* ---- 拉丁：Instrument Serif（展示字） ---- */
+@import '@fontsource/instrument-serif/400.css';
+@import '@fontsource/instrument-serif/400-italic.css';
+
+/* ---- 中文：Noto Sans SC（正文，简中子集） ---- */
+@font-face {
+  font-family: 'Noto Sans SC';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('../fonts/noto-sans-sc-400.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Noto Sans SC';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('../fonts/noto-sans-sc-500.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Noto Sans SC';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('../fonts/noto-sans-sc-600.woff2') format('woff2');
+}
