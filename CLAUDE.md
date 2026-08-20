@@ -14,6 +14,24 @@ IcePaw — 本地优先的 LLM 对话工作站。Tauri v2 (Rust) + Vue 3 (TypeSc
 
 一句话：**状态上屏，配置进 yaml，表单只管出生证**。透明度问题（看不见）≠ 可配置性问题（不能改），勿用加表单字段治看不见——此为用户多次纠正的系统性偏差（最近一次 2026-08-16，P7 回滚 AgentForm 高级区）。
 
+**视觉规范三则**（2026-08-20 表现层走查后拍板）：
+
+1. **色彩三层架构**——交互层藏青单色（浅 #1E4976 / 深 #4E80C0，双锚点十一档）+ 语义层三色（danger/success/warning，已建勿动）+ 身份层点缀（--ip-accent-agent 紫等）。info 并入主色（信息提示=品牌蓝，不新增第五色）。品牌色单一真相源在 tokens.css，global.css 不得再定义 --ip-primary-*。
+2. **图标规则（系统级零 emoji）**——一律 Lucide（lucide-vue-next），24×24 stroke 线性语言、currentColor 单色；禁止 emoji 出现在 UI 任何位置（含按钮/标签/占位文案）。语义档位（原 🟢🟡🔴）用「语义色圆点 + 文字」或 Lucide shield 系图标。例外区仅两个：ProviderIcon 品牌 glyph（simple-icons 填充式，集中管理）+ EntityAvatar 哈希色板（数据色板）。存量 105 个手写 SVG 渐进替换，新代码一律 Lucide。
+3. **字号与间距**——字号走 --ip-text-* 八档梯度（display40/h1-28/h2-22/h3-18/body-lg-17/body-15/body-sm-13/caption-12/code-14），新增 micro-11 档收编亚小字号；**9px/10px 是可读性黑洞，禁止新增**，存量分批升档。间距：布局级（页面 padding/卡片内边距/区块 gap/列表行距）走 --ip-spacing-* 令牌，光学微调位（图标间隙 2-4px）允许字面量；新代码布局间距强制令牌。字体家族一律 --ip-font-sans/mono/display，勿直写字体名。
+
+4. **字体本地化（产品哲学）**——IcePaw 是本地优先产品，**禁止任何网络字体加载**（Google Fonts/CDN 字体一律不用）；字体经 @fontsource npm 包或 assets/fonts 自托管 woff2 打进安装包。中文字体注意子集化（只带实际用到的字重）。首启离线环境的观感是验收线。
+
+5. **z-index 阶梯令牌化**——层叠层级一律 var(--ip-z-*)（base/dropdown/popover/modal/toast 等 tokens 已定义），禁止裸数字 z-index。浮层嵌套时用「相对层级」思路（父层提高，子层跟父），不做 9999 军备竞赛。
+
+6. **加载态三档规范**——按场景选型：**首屏/首载 → 骨架屏**（shimmer，侧栏样式为模板）；**列表刷新 → 顶部细进度条**（不顶开内容）；**操作等待 → 按钮内 spinner/文案变化**（如"保存中…"）。禁止全屏遮罩 loading（除模态流程必须阻塞时）。
+
+7. **图片内容规范**——气泡附件图：max-width 限定 + 圆角 --ip-radius-lg + loading=lazy + 点击进预览器；头像：EntityAvatar 三级降级链（勿绕过）；图片预览器须支持键盘 ←→ 翻张/Esc 关闭；加载失败用中性占位块 + "图片不可用"文案，不留破图图标。
+
+8. **文案规范（ux writing）**——直接、克制、不感叹、不用语气词（哦/啦/呢）；对用户称"你"不用"您"；错误文案三段式：**发生了什么 + 为什么 + 怎么办**（error_mapping 已是此形状，前端展示对齐）；域术语固定写法：会话/Agent（大写 A）/委派/轨迹/预算/知识库（KB 首次出现标注）；数字与单位之间空格（"3.2 MB"、"214 ms"）；时间一律相对时（timeAgo）+ hover 绝对时。
+
+9. **无障碍基线**——键盘可达所有操作（Tab/Enter/Esc/方向键，弹层焦点管理）；:focus-visible 全局焦点环（组件不得用 outline:none 抵消而不补替代）；文本对比度 AA（4.5:1，大字 3:1）；reduced-motion 全局降级已有（tokens §12），新增动效必须跟随。
+
 ## 构建命令
 
 ### 先看你在哪个平台（勿跨平台照搬命令）

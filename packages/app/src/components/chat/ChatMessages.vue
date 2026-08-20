@@ -1211,8 +1211,8 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
   color:#1f2937; font-size:12.5px;
 }
 .user-ref-card:hover { background:#f3f4f6; }
-.user-ref-card .ref-icon { flex:none; color:var(--ip-primary-600, #2e8d64); }
-.user-ref-card[data-ref-kind="agent"] .ref-icon { color:#7c6bd6; }
+.user-ref-card .ref-icon { flex:none; color:var(--ip-primary-600, var(--ip-primary-600)); }
+.user-ref-card[data-ref-kind="agent"] .ref-icon { color:var(--ip-accent-agent); }
 .user-ref-card[data-ref-kind="message"] .ref-icon { color:#6b7280; }
 .user-ref-card[data-ref-kind="agent"] { cursor:default; }
 .user-ref-card .ref-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
