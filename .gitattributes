@@ -22,3 +22,6 @@ packages/app/src-tauri/src/db/migrations/*.sql text eol=lf
 *.toml text eol=lf
 *.yaml text eol=lf
 *.yml  text eol=lf
+# bash 脚本带 CRLF 在 macOS/Linux 直接语法报错，必须锁 LF。
+*.sh   text eol=lf
+*.mjs  text eol=lf

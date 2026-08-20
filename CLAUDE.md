@@ -16,7 +16,12 @@ IcePaw — 本地优先的 LLM 对话工作站。Tauri v2 (Rust) + Vue 3 (TypeSc
 
 ## 构建命令
 
-### Rust
+### 先看你在哪个平台（勿跨平台照搬命令）
+- **Windows**：sodium 用仓库内预编译（下述 SODIUM_LIB_DIR）；端口占用 `taskkill //F //PID <pid>`。
+- **macOS**：sodium 静态链接 brew 的 `libsodium.a`（**推荐**：仓库根 `.cargo/config.toml` 设 `SODIUM_LIB_DIR=/opt/homebrew/lib`，机器级配置已 gitignore；勿用 `SODIUM_USE_PKG_CONFIG`——pkg-config 分支只会动态链接，产物依赖目标机装了 brew）。⚠️ `SODIUM_LIB_DIR` 与 `SODIUM_USE_PKG_CONFIG` 互斥，crates 的 build.rs 遇双设直接 panic。crates.io 直连不稳时同文件配 rsproxy 镜像。端口占用 `lsof -ti:1420 | xargs kill`。prepare 脚本按平台自动分派（`node scripts/prepare.mjs`：win→ps1，mac/linux→sh）。
+- **跨机器传代码只用 git clone，勿用压缩包**——机器级 `src-tauri/.cargo/config.toml` 被 gitignore 挡住但 tarball 会带出来（2026-08-20 实测：Windows 的 D:/ 路径毒死 mac 构建）。
+
+### Rust（Windows）
 ```bash
 # cargo check（推荐）——需显式传 sodium 库路径
 SODIUM_LIB_DIR="D:/workspace/ice-paw/sodium-prebuilt/libsodium/x64/Release/v143/static" \
@@ -28,6 +33,13 @@ cargo check --manifest-path packages/app/src-tauri/Cargo.toml
 #   ⚠️ 曾长期误记为「sodium DLL STATUS_ENTRYPOINT_NOT_FOUND」，真根因是 lib #[test]
 #   harness 缺 Common-Controls v6 manifest（TaskDialogIndirect 静态导入），与 sodium 无关。
 #   现状：684 passed / 0 failed（+ 集成测试：session_event_log_e2e 3、memory_e2e 3 等）
+```
+
+### Rust（macOS，Apple Silicon）
+```bash
+brew install rust libsodium pkg-config   # 一次性；libsodium 由 pkg-config 自动发现
+cargo check --manifest-path packages/app/src-tauri/Cargo.toml
+cargo test --lib                          # build.rs 的 manifest 注入仅 MSVC 生效，mac 跳过
 ```
 
 ### 前端
