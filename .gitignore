@@ -65,3 +65,6 @@ _preview-*.html
 *.sqlite
 backup-data.sql
 restore-data.py
+
+# 品牌设计草稿区（选色卡/色彩架构决策卡等 HTML，本地工作产物不入库）
+brand/
