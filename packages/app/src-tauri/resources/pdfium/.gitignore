@@ -2,3 +2,5 @@
 # （本地 sodium-prebuilt 复制 或 下载 chromium/6721），不入库：
 #   pdfium.dll   ← bblanchon/pdfium_binaries chromium/6721 win-x64 二进制
 *.dll
+*.dylib
+*.so

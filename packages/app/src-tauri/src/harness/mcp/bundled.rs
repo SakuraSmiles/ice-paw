@@ -94,7 +94,8 @@ pub fn runtime_dir(app: &AppHandle) -> AppResult<PathBuf> {
 
 /// 内置 node.exe 绝对路径。
 pub fn node_exe(app: &AppHandle) -> AppResult<PathBuf> {
-    Ok(runtime_dir(app)?.join("node").join("node.exe"))
+    let name = if cfg!(windows) { "node.exe" } else { "node" };
+    Ok(runtime_dir(app)?.join("node").join(name))
 }
 
 /// 某个 bundled server 的 entry script 绝对路径。

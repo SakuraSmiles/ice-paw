@@ -13,8 +13,8 @@
     "tauri:dev": "pnpm --filter @ice-paw/app tauri dev",
     "tauri:build": "pnpm --filter @ice-paw/app tauri build",
 
-    "prepare:mcp": "powershell -ExecutionPolicy Bypass -File scripts/prepare-mcp-runtime.ps1",
-    "prepare:pdfium": "powershell -ExecutionPolicy Bypass -File scripts/prepare-pdfium.ps1",
+    "prepare:mcp": "node scripts/prepare.mjs mcp",
+    "prepare:pdfium": "node scripts/prepare.mjs pdfium",
 
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
