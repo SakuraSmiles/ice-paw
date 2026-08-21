@@ -404,13 +404,16 @@ async fn rate_limited_retry_cancelled_mid_backoff() {
 }
 
 // =========================================================================
-// 场景 4：预算触顶（显式硬上限）—— fallback 文案落库 + budget_exceeded 终态
+// 场景 4：预算触顶（显式硬上限）—— S8-4 后语义：先收尾轮再终止
 // =========================================================================
 
 #[tokio::test]
 async fn explicit_budget_cap_terminates_with_guidance() {
     // NormalReply 的 usage(prompt=10+completion=4=14) > 显式上限 1；
-    // 显式 max_total_tokens → 续期额度 0 → 直接终止。
+    // 显式 max_total_tokens → 续期额度 0。
+    // S8-4（2026-08-21）：触顶不再硬停——先给 +4096 收尾额度并注入收尾指令，
+    // Mock 的后续回复为正常文本 → 收尾轮自然完成（finish_reason=stop，
+    // 模型输出收尾总结）。这正是 S8-4 的设计行为：给 agent 一次收尾发言权。
     let mut fx = run_turn(
         MockScenario::NormalReply,
         false,
@@ -419,7 +422,10 @@ async fn explicit_budget_cap_terminates_with_guidance() {
     .await;
     let summary = finish(&mut fx).await;
 
-    assert_eq!(summary.finish_reason, "budget_exceeded");
+    assert_eq!(
+        summary.finish_reason, "stop",
+        "S8-4：触顶先走收尾轮（+4096 额度注入收尾指令），Mock 正常回文本 → 自然 stop"
+    );
 
     // 守卫语义快照：本轮有真实文本（NormalReply）→ fallback 被忽略、
     // 保留模型文本（fallback 只救「无 Text 的纯 tool_use/thinking-only 轮」）
@@ -448,7 +454,8 @@ async fn explicit_budget_cap_terminates_with_guidance() {
     assert_event_invariants(&events, &fx.user_msg_id);
     let ended: crate::harness::event_log::TurnEndedPayload =
         serde_json::from_str(&events[3].payload).expect("turn_ended payload");
-    assert_eq!(ended.termination, "budget_exceeded");
+    // S8-4：触顶走收尾轮后自然完成 → termination=stop（收尾轮有真实文本输出）
+    assert_eq!(ended.termination, "stop");
 
     // UI：终态 chat:budget + chat:done(budget_exceeded)
     let names = fx.emitter.names();
