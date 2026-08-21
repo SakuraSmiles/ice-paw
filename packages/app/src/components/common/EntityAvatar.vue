@@ -6,7 +6,7 @@
   Props: name: string（实体名，兜底首字与哈希来源）
          image?: string | null（图片 dataURL/base64；加载失败自动降级）
          accent?: string | null（主题色 hex，兜底档底色优先用）
-         size?: 'xs' | 'sm' | 'md' | 'lg'（16/20/28/36px）
+         size?: 'xs' | 'sm' | 'md' | 'lg' | 'xl'（16/20/28/36/44px）
   Emits: 无
 -->
 <script setup lang="ts">
@@ -17,7 +17,7 @@ const props = withDefaults(
     name: string;
     image?: string | null;
     accent?: string | null;
-    size?: "xs" | "sm" | "md" | "lg";
+    size?: "xs" | "sm" | "md" | "lg" | "xl";
   }>(),
   { image: null, accent: null, size: "md" },
 );
@@ -107,11 +107,12 @@ function onImgError() {
   display: block;
 }
 
-/* 尺寸梯度：xs 侧栏小标签 / sm 菜单与列表行 / md 聊天头与选择器 / lg 表单预览 */
+/* 尺寸梯度：xs 侧栏小标签 / sm 菜单与列表行 / md 聊天头与选择器 / lg 表单预览 / xl ChatHeader 占两行高度 */
 .size-xs { width: 16px; height: 16px; font-size: var(--ip-text-micro-size); }
 .size-sm { width: 20px; height: 20px; font-size: var(--ip-text-micro-size); }
 .size-md { width: 28px; height: 28px; font-size: 13px; }
 .size-lg { width: 36px; height: 36px; font-size: 16px; }
+.size-xl { width: 44px; height: 44px; font-size: 18px; }
 
 .entity-avatar { font-family: var(--ip-font-sans); }
 </style>
