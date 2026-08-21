@@ -15,15 +15,15 @@
 
 | # | 项 | 位置 | 症状与建议 | 量级 |
 |---|---|---|---|---|
-| UI-A1 | **IME 组合期 Enter 误发送** | `ChatInput.vue` handleKeydown（全库 grep 无 isComposing/compositionstart 防护） | 中文拼音输入中按 Enter 确认候选词 → 消息被直接发送。对中文首位的产品是最高频手感伤害。建议：`if (e.isComposing || e.keyCode === 229) return;` 加在 Enter 分支前；@ 弹层的 Enter 选择分支同理。**修复需真机 IME 手测**（拼音/五笔/日文 IME 各一遍） | 极小（一行级） |
-| UI-A2 | **生成中输入框整体禁用** | `ChatInput.vue` `:disabled="chat.sending"`（textarea + 附件/@ 按钮全禁） | 生成期间无法预写下一条消息（连续提问工作流被打断）。业界主流（ChatGPT/Claude/DeepSeek 官方）均允许生成中继续输入、仅禁发送。建议：textarea 解除禁用，send 按钮保持禁用/切停止态；draft 持久化机制已就位，零额外成本 | 小 |
+| UI-A1 | ~~IME 组合期 Enter 误发送~~ ✅ 2026-08-21（761aaac：isComposing/229 防护） | — |
+| UI-A2 | ~~生成中输入框整体禁用~~ ✅ 2026-08-21（761aaac：textarea 解禁 + draft 承接） | — |
 | UI-A3 | **全局快捷键 DOM query 脆弱 + 覆盖薄** | `App.vue` handleGlobalKeydown | ① `(document.querySelector(".conv-item-new") as …)?.click()`——类名即契约，样式重构即断且无报错；② 仅 N/W/K 三键（P6 台账已有「快捷键文档」项，此处补实现面）：缺 Cmd+F 聚焦侧栏搜索、Esc 统一关弹层（图片预览/附件详情/@ 弹层各自为政）、Cmd+1..9 切会话。建议：shortcuts 收敛为一个 composable（发布定制的 `icepaw:new-chat` 事件或 store action，DOM 解耦），Esc 栈统一管理 | 中 |
 
 ## 批次 UI-B — 视觉一致性（视觉，令牌收敛战役）
 
 | # | 项 | 位置 | 症状与建议 | 量级 |
 |---|---|---|---|---|
-| UI-B1 | **焦点环颜色魔法数** | `ChatInput.vue:636-638` 三处 `rgba(46,141,100,…)` | 品牌绿的 rgb 值以字面量散布（focus 环/发送态/拖拽态各一），改品牌色必漏。建议：tokens.css 增 `--ip-color-focus-ring`（rgb 三元组变量 `--ip-primary-500-rgb` + `rgba(var(…), α)` 模式），全库替换 | 小 |
+| UI-B1 | ~~焦点环颜色魔法数~~ ✅ 2026-08-21（5f2b03a：rgb 三元组令牌） | — |
 | UI-B2 | ~~markdown.css / global.css 硬编码色集中区~~ ✅ 2026-08-20（UI-4：fallback 清零 + global 别名升格；hljs 变量组本就健康） | — | | `assets/styles/markdown.css`（43 处 hex）、`global.css`（40 处） | 代码高亮 mini 主题与全局样式的色值未走令牌——暗色模式切换时这些值靠 `[data-theme]` 选择器手工配对，新增主题即爆炸。建议：hljs 主题色收进 tokens（语义组：`--hl-keyword/--hl-string/…`），global.css 的散值逐个对位既有令牌 | 中 |
 | UI-B3 | **组件内残留硬编码色** | `ChatMessages.vue`（22 hex + 11 rgba）、`EntityAvatar.vue`（21 hex，渐变名字哈希色板可豁免）、`ProjectBasicForm.vue`（10）、`AgentSettings.vue`（8）、`ConfigProposalCard.vue`（8） | 建议：EntityAvatar 的哈希色板是算法资产可保留（但应移到 tokens 注释声明豁免理由）；其余逐个对位令牌。**验收 grep 门**：`grep -c '#[0-9a-f]{6}' 组件.vue == 0`（豁免清单外） | 中（分批） |
 | UI-B4 | ~~成功态图标的 fallback 色重复~~ ✅ 2026-08-20（UI-4：颜色内联 fallback 全库清零） | — | | `ChatMessages.vue:790,794,995…` `var(--ip-success-base, #16a34a)` 内联 fallback 多处重复 | fallback 值与令牌漂移风险。建议：确认令牌已定义后删除全部内联 fallback（fallback 只在令牌可能缺席的边界处用） | 小 |
@@ -41,15 +41,15 @@
 | # | 项 | 位置 | 症状与建议 | 量级 |
 |---|---|---|---|---|
 | UI-D1 | **组件层焦点可见性被抵消** | base.css:109 已有全局 `:focus-visible` 焦点环（FORK-A 证实），但 GroupedSelect `outline:none`（:253）等组件层主动抵消了它 | 建议：审计所有 `outline:none` 出现点（grep 门），逐个补回 `:focus-within`/`:focus-visible` 等效物；热点位（tabbar/侧栏/弹层）把 click-only 元素渐进改 button/tabindex | 中（起步小） |
-| UI-D2 | **ChatPage tabbar 无 tablist 语义/方向键** | `ChatPage.vue:44-61` | 对话/轨迹切换是纯鼠标操作。建议：`role=tablist/tab` + 左右方向键 + aria-selected（aria-hidden 已做，说明有意识，补全即可） | 小 |
+| UI-D2 | ~~tablist 语义/方向键~~ ✅ 2026-08-21（41c5330：useTablist 两处接线） | — |
 | UI-D3 | **点击目标非语义元素** | tool-toggle/think-toggle/用户引用卡等 div+@click | 屏幕阅读器不可达、不可 Tab。建议随 UI-D1 顺路渐进改善，不单独开批 | 👁 渐进 |
 
 ## 批次 UI-E — 桌面平台质感（平台）
 
 | # | 项 | 位置 | 症状与建议 | 量级 |
 |---|---|---|---|---|
-| UI-E1 | **Cmd+Enter 备选发送** | `ChatInput.vue` | mac 用户肌肉记忆。一行级：Enter 分支并列 `|| (e.metaKey||e.ctrlKey) && e.key==='Enter'`（与 IME 防护同点处理） | 极小 |
-| UI-E2 | **窗口标题随会话名联动** | `ChatHeader.vue` / Tauri window API | 桌面惯例：当前会话名进窗口标题（可选：会话名 — IcePaw）。capabilities 已含 core:window 相关权限面，核实 `core:window:allow-set-title` 后即可 | 小 |
+| UI-E1 | ~~Cmd+Enter 备选发送~~ ✅ 2026-08-21（761aaac） | — |
+| UI-E2 | ~~窗口标题联动~~ ✅ 2026-08-21（41c5330：setTitle + capabilities） | — |
 | UI-E3 | **未聚焦窗的流式感知** | 观察池 | app 在后台生成时无任何 OS 级提示（badge/flash/dock）。Tauri 有 setBadgeCount/请求用户注意力 API。**先观察**：单机本地工具的场景是否真需要——撞上用户抱怨再做 | 👁 |
 | UI-E4 | **图片预览无缩放/拖拽** | `ImagePreview.vue` | 大图（3.8MB 实测附件）只有原尺寸展示？走查 fork 确认现状后定 | 待 fork |
 
