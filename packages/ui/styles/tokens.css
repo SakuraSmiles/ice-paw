@@ -512,6 +512,12 @@
   --ip-color-border-default:  var(--ip-gray-700);
   --ip-color-border-strong:   var(--ip-gray-600);
   --ip-color-border-focus:    var(--ip-primary-400);
+  --ip-color-bg-input:              #252C36;
+  --ip-color-bg-sidebar-item-hover: #252C36;
+  --ip-color-bg-sidebar-item-active: var(--ip-color-primary-soft-bg);
+  --ip-color-bg-chat-header:        rgba(20, 24, 31, 0.85);
+  --ip-color-text-message-ai:       #E6EAEF;
+  --ip-color-bg-message-ai:         #252C36;
 
   --ip-color-icon-default:    var(--ip-gray-200);
   --ip-color-icon-muted:      var(--ip-gray-400);
@@ -541,9 +547,26 @@
     --ip-color-bg-tertiary:    var(--ip-gray-800);
     --ip-color-bg-elevated:    var(--ip-gray-800);
     --ip-color-bg-overlay:     var(--ip-overlay-dark);
-    --ip-color-bg-user-bubble:        var(--ip-primary-600);   /* v1.0.3 */
-    --ip-color-bg-user-bubble-hover:  var(--ip-primary-500);   /* v1.0.3 */
-    --ip-color-text-on-user-bubble:   var(--ip-white);         /* v1.0.3 */
+    --ip-primary-50:  #071420;
+    --ip-primary-100: #0A1C2D;
+    --ip-primary-200: #0E263D;
+    --ip-primary-300: #123150;
+    --ip-primary-400: #4E80C0;
+    --ip-primary-500: #3E6FA8;
+    --ip-primary-600: #5B8FCC;
+    --ip-primary-700: #93B7D8;
+    --ip-primary-800: #C3D7EA;
+    --ip-primary-900: #E2ECF5;
+    --ip-primary-950: #F2F6FA;
+    --ip-color-bg-user-bubble:        var(--ip-primary-500);   /* v2.0 藏青镜像档 */
+    --ip-color-bg-user-bubble-hover:  var(--ip-primary-400);   /* v2.0 hover 提亮 */
+    --ip-color-text-on-user-bubble:   var(--ip-white);
+    --ip-color-bg-input:              #252C36;
+    --ip-color-bg-sidebar-item-hover: #252C36;
+    --ip-color-bg-sidebar-item-active: var(--ip-color-primary-soft-bg);
+    --ip-color-bg-chat-header:        rgba(20, 24, 31, 0.85);
+    --ip-color-text-message-ai:       #E6EAEF;
+    --ip-color-bg-message-ai:         #252C36;
     --ip-color-bg-ai-bubble:          var(--ip-gray-850);      /* v1.0.3 */
     --ip-color-text-link-on-ai:       var(--ip-primary-400);   /* v1.0.3 */
     --ip-color-bg-header-backdrop:          rgba(20, 20, 20, 0.72);

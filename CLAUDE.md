@@ -16,7 +16,7 @@ IcePaw — 本地优先的 LLM 对话工作站。Tauri v2 (Rust) + Vue 3 (TypeSc
 
 **视觉规范三则**（2026-08-20 表现层走查后拍板）：
 
-1. **色彩三层架构**——交互层藏青单色（浅 #1E4976 / 深 #4E80C0，双锚点十一档）+ 语义层三色（danger/success/warning，已建勿动）+ 身份层点缀（--ip-accent-agent 紫等）。info 并入主色（信息提示=品牌蓝，不新增第五色）。品牌色单一真相源在 tokens.css，global.css 不得再定义 --ip-primary-*。
+1. **色彩三层架构**——交互层藏青单色（浅 #1E4976 / 深 #4E80C0，双锚点十一档）+ 语义层三色（danger/success/warning，已建勿动）+ 身份层点缀（--ip-accent-agent 紫等）。info 并入主色（信息提示=品牌蓝，不新增第五色）。品牌色单一真相源在 tokens.css，global.css 不得再定义 --ip-primary-*。tokens 三主题区（:root 浅 / data-theme 暗 / prefers-scheme 自动暗）改动必须三区同步——2026-08-20 实测：单区插入静默失败致暗色聊天区整体回落浅色值。
 2. **图标规则（系统级零 emoji）**——一律 Lucide（lucide-vue-next），24×24 stroke 线性语言、currentColor 单色；禁止 emoji 出现在 UI 任何位置（含按钮/标签/占位文案）。语义档位（原 🟢🟡🔴）用「语义色圆点 + 文字」或 Lucide shield 系图标。例外区仅两个：ProviderIcon 品牌 glyph（simple-icons 填充式，集中管理）+ EntityAvatar 哈希色板（数据色板）。存量 105 个手写 SVG 渐进替换，新代码一律 Lucide。
 3. **字号与间距**——字号走 --ip-text-* 九档梯度（display40/h1-28/h2-22/h3-18/body-lg-17/body-15/body-sm-13/caption-12/**micro-11**/code-14）；micro 是最小合法档（~86 处幽灵字号已于 UI-4 批次 A 收编）；**9px/10px 是可读性黑洞，禁止出现**，新代码小字一律 micro。间距：布局级（页面 padding/卡片内边距/区块 gap/列表行距）走 --ip-spacing-* 令牌，光学微调位（图标间隙 2-4px）允许字面量；新代码布局间距强制令牌。字体家族一律 --ip-font-sans/mono/display，勿直写字体名。
 
