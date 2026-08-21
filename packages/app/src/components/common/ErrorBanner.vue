@@ -32,9 +32,9 @@ defineEmits<{ retry: []; dismiss: [] }>();
 <template>
   <!-- inline 形态：纯文本 danger 行（重试为下划线链接） -->
   <p v-if="variant === 'inline'" class="eb-inline">
-    <span>{{ title }}</span><span v-if="detail">：{{ detail }}</span>
+    <span>{{ title }}</span><span v-if="detail">: {{ detail }}</span>
     <template v-if="retryLabel !== null">
-      　<button type="button" class="eb-inline-retry" @click="$emit('retry')">{{ retryLabel ?? "重试" }}</button>
+       <button type="button" class="eb-inline-retry" @click="$emit('retry')">{{ retryLabel ?? "重试" }}</button>
     </template>
   </p>
 
@@ -57,6 +57,9 @@ defineEmits<{ retry: []; dismiss: [] }>();
 <style scoped>
 /* ===== inline：纯文本 danger（走语义令牌，明暗自动适配） ===== */
 .eb-inline {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
   margin: 6px 0 0;
   padding: 0;
   font-size: 11.5px;
