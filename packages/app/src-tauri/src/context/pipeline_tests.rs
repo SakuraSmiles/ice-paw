@@ -11,6 +11,7 @@ use sqlx::SqlitePool;
 use std::str::FromStr;
 
 use crate::context::pipeline::{PipelineContext, PipelineRunner, PipelineStage};
+use crate::context::memory::MemoryStage;
 use crate::context::stages::{FinalAssembleStage, HistoryStage, OsContextStage, SystemPromptStage};
 use crate::db::models::{AgentRow, MessageRow};
 use crate::error::AppResult;
@@ -436,6 +437,118 @@ async fn pipeline_runner_short_circuits_on_error() {
     let result = runner.run(&mut ctx).await;
     assert!(result.is_err(), "FailStage 后应返回错误");
     assert!(!*flag.lock().unwrap(), "FailStage 之后的 Stage 不应被执行");
+}
+
+// ---- S8-1: 确定性折叠（摘要失败路径）----
+
+/// 摘要 provider 恒失败——验证 MemoryStage 降级为中段骨架化而非裸截断。
+struct FailingSummaryProvider;
+#[async_trait::async_trait]
+impl crate::context::memory::SummaryProvider for FailingSummaryProvider {
+    async fn summarize(
+        &self,
+        _messages: &[ChatMessage],
+        _max_tokens: usize,
+        _cancel: &crate::infra::cancel::CancellationToken,
+    ) -> Result<String, crate::error::AppError> {
+        Err(crate::error::AppError::Internal("模拟摘要失败".into()))
+    }
+}
+
+/// 失败路径：中段不蒸发——骨架保留工具名与结构（对比裸截断的消息数骤减）。
+#[tokio::test]
+async fn s8_deterministic_fold_on_summary_failure() {
+    let pool = fresh_pool().await;
+    // 构造超限历史：多条长文本 assistant 消息触发折叠
+    let history: Vec<MessageRow> = (0..40)
+        .map(|i| {
+            let role = if i % 2 == 0 { "assistant" } else { "user" };
+            let mut row = make_msg_row(role, &format!("消息{i}：{}", "内容".repeat(200)));
+            row.rowid = i as i64 + 1;
+            row.source_seq = Some(i as i64 + 1);
+            row
+        })
+        .collect();
+    let mut ctx = make_ctx(
+        pool.clone(),
+        make_agent(),
+        None,
+        history,
+        vec![ContentBlock::text("继续")],
+        false,
+    );
+    // 压低预算强制触发折叠
+    ctx.context_budget.max_input_tokens = 4000;
+
+    let failing: Box<dyn crate::context::memory::SummaryProvider> = Box::new(FailingSummaryProvider);
+    PipelineRunner::new(vec![Box::new(HistoryStage), Box::new(MemoryStage::new(failing))])
+        .run(&mut ctx)
+        .await
+        .unwrap();
+
+    // 骨架化而非清空：历史仍有大量消息（裸截断会把中段整段丢掉）
+    assert!(
+        ctx.history_messages.len() > 10,
+        "失败路径应保留骨架结构，实际剩 {} 条",
+        ctx.history_messages.len()
+    );
+    // 骨架消息含折叠标记（证明走的是 skeleton 而非原样保留）
+    let has_marker = ctx
+        .history_messages
+        .iter()
+        .any(|m| {
+            m.content.iter().any(|b| matches!(b, ContentBlock::Text { text } if text.contains("已折叠")))
+        });
+    assert!(has_marker, "应存在骨架折叠标记");
+}
+
+/// 空摘要（熔断中）路径同样走骨架化。
+struct EmptySummaryProvider;
+#[async_trait::async_trait]
+impl crate::context::memory::SummaryProvider for EmptySummaryProvider {
+    async fn summarize(
+        &self,
+        _messages: &[ChatMessage],
+        _max_tokens: usize,
+        _cancel: &crate::infra::cancel::CancellationToken,
+    ) -> Result<String, crate::error::AppError> {
+        Ok(String::new()) // 空串 = 熔断/取消语义
+    }
+}
+
+#[tokio::test]
+async fn s8_deterministic_fold_on_empty_summary() {
+    let pool = fresh_pool().await;
+    let history: Vec<MessageRow> = (0..30)
+        .map(|i| {
+            let role = if i % 2 == 0 { "user" } else { "assistant" };
+            let mut row = make_msg_row(role, &format!("历史{i}：{}", "x".repeat(300)));
+            row.rowid = i as i64 + 1;
+            row.source_seq = Some(i as i64 + 1);
+            row
+        })
+        .collect();
+    let mut ctx = make_ctx(
+        pool.clone(),
+        make_agent(),
+        None,
+        history,
+        vec![ContentBlock::text("继续")],
+        false,
+    );
+    ctx.context_budget.max_input_tokens = 3000;
+
+    let empty: Box<dyn crate::context::memory::SummaryProvider> = Box::new(EmptySummaryProvider);
+    PipelineRunner::new(vec![Box::new(HistoryStage), Box::new(MemoryStage::new(empty))])
+        .run(&mut ctx)
+        .await
+        .unwrap();
+
+    assert!(
+        ctx.history_messages.len() > 8,
+        "空摘要路径同样保留骨架，实际剩 {} 条",
+        ctx.history_messages.len()
+    );
 }
 
 // ---- M1.4: MemoryStage 集成 ----
