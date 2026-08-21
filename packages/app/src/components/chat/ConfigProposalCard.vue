@@ -251,30 +251,30 @@ async function reject() {
 .proposal-header {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--ip-spacing-2);
   padding: 10px 14px 4px;
 }
 
 .proposal-badge {
-  font-size: 11px;
+  font-size: var(--ip-text-micro-size);
   font-weight: var(--ip-font-weight-semibold);
   padding: 1px 8px;
   border-radius: var(--ip-radius-full);
 }
 
 .sensitivity-low .proposal-badge {
-  background: var(--ip-success-soft-bg, #ecfdf5);
-  color: var(--ip-success-tint-text, #065f46);
+  background: var(--ip-success-soft-bg);
+  color: var(--ip-success-tint-text);
 }
 
 .sensitivity-medium .proposal-badge {
-  background: var(--ip-warning-soft-bg, #fffbeb);
-  color: var(--ip-warning-tint-text, #92400e);
+  background: var(--ip-warning-soft-bg);
+  color: var(--ip-warning-tint-text);
 }
 
 .sensitivity-redline .proposal-badge {
-  background: var(--ip-danger-soft-bg, #fef2f2);
-  color: var(--ip-danger-tint-text, #991b1b);
+  background: var(--ip-danger-soft-bg);
+  color: var(--ip-danger-tint-text);
 }
 
 .proposal-title {
@@ -300,7 +300,7 @@ async function reject() {
 .proposal-field {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--ip-spacing-2);
   font-size: var(--ip-text-caption-size);
 }
 
@@ -314,7 +314,7 @@ async function reject() {
 .field-value {
   color: var(--ip-color-text-primary);
   font-family: var(--ip-font-mono, monospace);
-  font-size: 11px;
+  font-size: var(--ip-text-micro-size);
   word-break: break-all;
 }
 
@@ -323,7 +323,7 @@ async function reject() {
   padding: 2px 6px;
   border: 1px solid var(--ip-color-border-default);
   border-radius: var(--ip-radius-sm);
-  font-size: 11px;
+  font-size: var(--ip-text-micro-size);
   font-family: var(--ip-font-mono, monospace);
   background: var(--ip-color-bg-secondary);
   color: var(--ip-color-text-primary);
@@ -339,7 +339,7 @@ async function reject() {
   font-size: var(--ip-text-caption-size);
   color: var(--ip-danger-base);
   padding: 4px 8px;
-  background: var(--ip-danger-soft-bg, #fef2f2);
+  background: var(--ip-danger-soft-bg);
   border-radius: var(--ip-radius-sm);
 }
 
@@ -370,7 +370,7 @@ async function reject() {
   color: var(--ip-color-text-secondary);
 }
 .btn-reject:hover:not(:disabled) {
-  background: var(--ip-danger-soft-bg, #fef2f2);
+  background: var(--ip-danger-soft-bg);
   color: var(--ip-danger-base);
 }
 

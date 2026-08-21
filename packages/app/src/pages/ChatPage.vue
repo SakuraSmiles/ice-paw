@@ -103,15 +103,15 @@ watch(() => chat.activeConvId, () => {
    ⚠️ position+z-index 必须保留：tabbar 是非定位元素时，其内任务胶囊 popover
    的 z-index 只在 tabbar 子树内生效；而下方 .chat-render 的双 pane 是
    position:absolute 定位元素，绘制在所有非定位元素之上 → popover 被内容区
-   整层盖住。z-index:20 需高于内容区内部最高层（轨迹页 10 / 撤销 toast 10）。 */
+   整层盖住。z-index:20（现为 --ip-z-raised）需高于内容区内部最高层（轨迹页 10 / 撤销 toast 10）。 */
 .chat-tabbar {
   position: relative;
-  z-index: 20;
+  z-index: var(--ip-z-raised);
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--ip-spacing-2_5);
   padding: 0 24px;
-  background: var(--color-chat-header-bg);
+  background: var(--ip-color-bg-chat-header);
   backdrop-filter: blur(8px);
   flex-shrink: 0;
 }

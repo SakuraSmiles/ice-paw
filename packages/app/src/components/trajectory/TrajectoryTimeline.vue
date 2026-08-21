@@ -693,7 +693,7 @@ const labels = computed(() => LANE_LABELS.map((text, i) => ({ text, active: lane
   align-items: center;
   justify-content: flex-end;
   padding-right: 8px;
-  font-size: 10px;
+  font-size: var(--ip-text-micro-size);
   letter-spacing: 0.3px;
   color: var(--ip-color-text-tertiary);
   transition: color var(--ip-duration-fast) var(--ip-ease-out);
@@ -738,7 +738,7 @@ const labels = computed(() => LANE_LABELS.map((text, i) => ({ text, active: lane
   position: absolute;
   pointer-events: none;
   padding: 2px 8px;
-  font-size: 10px;
+  font-size: var(--ip-text-micro-size);
   font-family: var(--ip-font-mono, monospace);
   color: var(--ip-color-text-primary);
   background: var(--ip-color-bg-elevated);

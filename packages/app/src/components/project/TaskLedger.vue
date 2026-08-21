@@ -118,11 +118,11 @@ function openTask(task: ProjectTask) {
   display: grid;
   grid-template-columns: 92px minmax(0, 1fr) 90px 90px 64px 48px 88px;
   align-items: center;
-  gap: 8px;
+  gap: var(--ip-spacing-2);
   padding: 6px 10px;
 }
 .ledger-head {
-  font-size: 11px;
+  font-size: var(--ip-text-micro-size);
   color: var(--ip-color-text-tertiary);
   position: sticky; top: 0;
   background: var(--ip-color-bg-primary);
@@ -161,7 +161,7 @@ function openTask(task: ProjectTask) {
 .state-dot.interrupted { background: var(--ip-warning-base); }
 @keyframes dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
-.state-label { font-size: 11px; color: var(--ip-color-text-tertiary); }
+.state-label { font-size: var(--ip-text-micro-size); color: var(--ip-color-text-tertiary); }
 .state-label.running { color: var(--ip-primary-600); }
 .state-label.done { color: var(--ip-success-text); }
 .state-label.failed { color: var(--ip-danger-text); }

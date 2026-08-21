@@ -75,8 +75,8 @@ function openTask(it: PlanItem) {
 
 .plan-mark { width: 9px; height: 9px; flex-shrink: 0; border-radius: 50%; border: 1.5px solid var(--ip-color-text-tertiary); }
 .plan-mark-pending { border-color: var(--ip-color-text-tertiary); }
-.plan-mark-in_progress { border-color: var(--ip-warning-base, #d97706); background: var(--ip-warning-base, #d97706); animation: plan-pulse 1.2s ease-in-out infinite; }
-.plan-mark-done { border-color: var(--ip-success-base, #16a34a); background: var(--ip-success-base, #16a34a); }
+.plan-mark-in_progress { border-color: var(--ip-warning-base); background: var(--ip-warning-base); animation: plan-pulse 1.2s ease-in-out infinite; }
+.plan-mark-done { border-color: var(--ip-success-base); background: var(--ip-success-base); }
 @keyframes plan-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
 .plan-item .plan-mark-done + .plan-text { text-decoration: line-through; color: var(--ip-color-text-tertiary); }

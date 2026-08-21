@@ -102,7 +102,7 @@ defineExpose({ focusSearch });
 .tbar {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--ip-spacing-3);
   height: 40px;
   padding: 0 14px;
   border-bottom: 1px solid var(--ip-color-border-default);
@@ -143,7 +143,7 @@ defineExpose({ focusSearch });
   border: none;
   background: none;
   padding: 0 2px;
-  font-size: 10px;
+  font-size: var(--ip-text-micro-size);
   color: var(--ip-color-text-tertiary);
   cursor: pointer;
   border-radius: var(--ip-radius-full);

@@ -206,7 +206,7 @@ function confirmCreate() {
 .proj-name {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--ip-spacing-2);
   flex: 1;
   min-width: 0;
   padding: 7px 10px;
@@ -221,7 +221,7 @@ function confirmCreate() {
   transition: background-color var(--ip-duration-fast) var(--ip-ease-out);
 }
 .proj-name:hover {
-  background-color: var(--color-sidebar-item-hover);
+  background-color: var(--ip-color-bg-sidebar-item-hover);
   color: var(--ip-color-text-primary);
 }
 /* 选中某项目时，名称提亮（轻微强调当前空间，区别于散落会话） */
@@ -277,12 +277,12 @@ function confirmCreate() {
   transition: all var(--ip-duration-fast) var(--ip-ease-out);
 }
 .capsule-btn:hover {
-  background-color: var(--color-sidebar-item-hover);
+  background-color: var(--ip-color-bg-sidebar-item-hover);
   color: var(--ip-primary-600);
 }
 /* ⇄ 钮展开态 = 选中底色（与会话选中项同款），表明菜单处于打开 */
 .capsule-btn.switcher-open {
-  background-color: var(--color-sidebar-item-active);
+  background-color: var(--ip-color-bg-sidebar-item-active);
   color: var(--ip-primary-600);
 }
 
@@ -324,7 +324,7 @@ function confirmCreate() {
   cursor: pointer;
   transition: all var(--ip-duration-fast) var(--ip-ease-out);
 }
-.create-btn:hover { background-color: var(--color-sidebar-item-hover); color: var(--ip-primary-600); }
+.create-btn:hover { background-color: var(--ip-color-bg-sidebar-item-hover); color: var(--ip-primary-600); }
 .create-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .create-btn:disabled:hover { background: none; color: var(--ip-color-text-tertiary); }
 
@@ -334,7 +334,7 @@ function confirmCreate() {
 .switcher-overlay {
   position: fixed;
   inset: 0;
-  z-index: 50;
+  z-index: var(--ip-z-dropdown);
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
@@ -351,7 +351,7 @@ function confirmCreate() {
   top: calc(100% + 6px);
   left: 0;
   right: 0;
-  z-index: 51;
+  z-index: calc(var(--ip-z-dropdown) + 1);
   padding: 0;
   background-color: var(--ip-color-bg-elevated);
   border: 1px solid var(--ip-color-border-default);
@@ -379,7 +379,7 @@ function confirmCreate() {
 .switcher-item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--ip-spacing-2);
   width: 100%;
   padding: 7px 10px;
   border-radius: var(--ip-radius-md);
@@ -390,8 +390,8 @@ function confirmCreate() {
   text-align: left;
   transition: background-color var(--ip-duration-fast) var(--ip-ease-out);
 }
-.switcher-item:hover { background-color: var(--color-sidebar-item-hover); }
-.switcher-item.active { background-color: var(--color-sidebar-item-active); }
+.switcher-item:hover { background-color: var(--ip-color-bg-sidebar-item-hover); }
+.switcher-item.active { background-color: var(--ip-color-bg-sidebar-item-active); }
 
 /* 前导标记列：固定 20px 宽（EntityAvatar sm / 圆点），让标记与文字左对齐 */
 .item-mark {

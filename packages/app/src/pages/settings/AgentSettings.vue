@@ -188,7 +188,7 @@ const providerLabel = (name: string) => providerLabelOf(providerList.value, name
 /* ===== 列表 ===== */
 .agent-list {
   flex: 1; overflow-y: auto; padding: 8px 28px 24px;
-  display: flex; flex-direction: column; gap: 8px; min-height: 0;
+  display: flex; flex-direction: column; gap: var(--ip-spacing-2); min-height: 0;
 }
 
 /* ===== 卡片 ===== */
@@ -234,7 +234,7 @@ const providerLabel = (name: string) => providerLabelOf(providerList.value, name
 .card-top {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--ip-spacing-3);
   cursor: pointer;
 }
 
@@ -265,7 +265,7 @@ const providerLabel = (name: string) => providerLabelOf(providerList.value, name
 .card-file-badge {
   display: inline-flex; align-items: center;
   height: 18px; padding: 0 6px;
-  font-size: 9px; font-weight: var(--ip-font-weight-semibold);
+  font-size: var(--ip-text-micro-size); font-weight: var(--ip-font-weight-semibold);
   color: var(--ip-color-primary-tint-text);
   background-color: var(--ip-color-primary-tint-bg);
   border-radius: var(--ip-radius-full);
@@ -280,7 +280,7 @@ const providerLabel = (name: string) => providerLabelOf(providerList.value, name
 
 .provider-badge {
   display: inline-block; padding: 0 6px; line-height: 18px;
-  font-size: 10px; font-weight: var(--ip-font-weight-medium);
+  font-size: var(--ip-text-micro-size); font-weight: var(--ip-font-weight-medium);
   border-radius: var(--ip-radius-full);
   background-color: var(--ip-color-bg-tertiary);
   color: var(--ip-color-text-secondary);
@@ -300,7 +300,7 @@ const providerLabel = (name: string) => providerLabelOf(providerList.value, name
 
 .card-tag {
   flex-shrink: 0;
-  font-size: 10px; color: var(--ip-color-text-tertiary);
+  font-size: var(--ip-text-micro-size); color: var(--ip-color-text-tertiary);
   background: var(--ip-color-bg-tertiary);
   padding: 0 6px; line-height: 18px;
   border-radius: var(--ip-radius-full);
@@ -343,7 +343,7 @@ const providerLabel = (name: string) => providerLabelOf(providerList.value, name
   margin-top: 18px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--ip-spacing-2);
 }
 .region-title {
   font-size: var(--ip-text-caption-size);

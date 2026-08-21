@@ -159,7 +159,7 @@ function tickTime(iso: string): string {
   gap: 2px;
   white-space: nowrap;
   font-family: var(--ip-font-mono, monospace);
-  font-size: 10px;
+  font-size: var(--ip-text-micro-size);
   line-height: 1;
   color: var(--ip-color-text-tertiary);
   user-select: none;
@@ -245,7 +245,7 @@ function tickTime(iso: string): string {
   text-overflow: ellipsis;
 }
 .turn-tip-time { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
-.turn-tip-mid { font-size: 10px; color: var(--ip-color-text-disabled); font-family: var(--ip-font-mono, monospace); }
+.turn-tip-mid { font-size: var(--ip-text-micro-size); color: var(--ip-color-text-disabled); font-family: var(--ip-font-mono, monospace); }
 
 /* 「跳到最新」：下三角小圆钮（区别于轮次线的视觉语系） */
 .turn-latest {

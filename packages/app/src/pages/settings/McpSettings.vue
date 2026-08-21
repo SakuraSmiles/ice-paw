@@ -409,7 +409,7 @@ const builtinDescZh: Record<string, string> = {
 /* ===== 列表 ===== */
 .mcp-list {
   flex: 1; overflow-y: auto; padding: 8px 28px 24px;
-  display: flex; flex-direction: column; gap: 8px; min-height: 0;
+  display: flex; flex-direction: column; gap: var(--ip-spacing-2); min-height: 0;
 }
 
 /* ===== 卡片 ===== */
@@ -430,18 +430,18 @@ const builtinDescZh: Record<string, string> = {
 .new-plus { flex-shrink: 0; color: var(--ip-color-primary-tint-text); }
 
 .builtin-badge {
-  font-size: 10px; font-weight: var(--ip-font-weight-medium); padding: 0 6px; line-height: 18px;
+  font-size: var(--ip-text-micro-size); font-weight: var(--ip-font-weight-medium); padding: 0 6px; line-height: 18px;
   color: var(--ip-color-primary-tint-text); background: var(--ip-color-primary-tint-bg); border-radius: var(--ip-radius-full);
 }
 .builtin-count { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); flex-shrink: 0; }
-.builtin-tools { display: flex; flex-direction: column; gap: 10px; }
-.builtin-tool { display: flex; align-items: baseline; gap: 12px; }
+.builtin-tools { display: flex; flex-direction: column; gap: var(--ip-spacing-2_5); }
+.builtin-tool { display: flex; align-items: baseline; gap: var(--ip-spacing-3); }
 .builtin-tool-name { flex-shrink: 0; min-width: 120px; font-family: var(--ip-font-mono); font-size: var(--ip-text-caption-size); color: var(--ip-color-text-primary); }
 .builtin-tool-desc { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
 
 .list-divider { height: 1px; background-color: var(--ip-color-border-default); margin: 2px 4px; }
 
-.card-top { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
+.card-top { display: flex; align-items: flex-start; gap: var(--ip-spacing-2_5); cursor: pointer; }
 
 .status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; margin-top: 6px; }
 .dot-failed { background: var(--ip-danger-base); animation: dot-pulse 1.2s ease-in-out infinite; }
@@ -451,23 +451,23 @@ const builtinDescZh: Record<string, string> = {
 @keyframes dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
 .card-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-.card-name-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.card-name-row { display: flex; align-items: center; gap: var(--ip-spacing-2); flex-wrap: wrap; }
 .card-name { font-size: var(--ip-text-body-sm-size); font-weight: var(--ip-font-weight-semibold); color: var(--ip-color-text-primary); }
 .new-name { color: var(--ip-color-primary-tint-text); }
 .new-hint { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); padding-left: 24px; }
 
-.status-tag { font-size: 10px; font-weight: var(--ip-font-weight-medium); padding: 0 6px; line-height: 18px; border-radius: var(--ip-radius-full); flex-shrink: 0; }
+.status-tag { font-size: var(--ip-text-micro-size); font-weight: var(--ip-font-weight-medium); padding: 0 6px; line-height: 18px; border-radius: var(--ip-radius-full); flex-shrink: 0; }
 .tag-running { background: var(--ip-success-bg); color: var(--ip-success-text); }
 .tag-stopped, .tag-disabled { background: var(--ip-color-bg-tertiary); color: var(--ip-color-text-tertiary); }
 .tag-failed { background: var(--ip-danger-bg); color: var(--ip-danger-text); }
 .tag-starting { background: var(--ip-color-bg-tertiary); color: var(--ip-color-text-tertiary); }
 
-.probe-tag { font-size: 10px; padding: 0 6px; line-height: 18px; border-radius: var(--ip-radius-full); flex-shrink: 0; font-weight: var(--ip-font-weight-medium); }
+.probe-tag { font-size: var(--ip-text-micro-size); padding: 0 6px; line-height: 18px; border-radius: var(--ip-radius-full); flex-shrink: 0; font-weight: var(--ip-font-weight-medium); }
 .probe-probing { background: var(--ip-color-bg-tertiary); color: var(--ip-color-text-tertiary); animation: probe-pulse 1.5s ease-in-out infinite; }
 .probe-done { background: var(--ip-success-bg); color: var(--ip-success-text); }
 .probe-error { background: var(--ip-danger-bg); color: var(--ip-danger-text); cursor: help; }
 @keyframes probe-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
-.probe-error-bar { display: flex; align-items: center; gap: 8px; padding: 6px 10px; margin-bottom: 8px; background: var(--ip-danger-bg); border-radius: var(--ip-radius-sm); }
+.probe-error-bar { display: flex; align-items: center; gap: var(--ip-spacing-2); padding: 6px 10px; margin-bottom: 8px; background: var(--ip-danger-bg); border-radius: var(--ip-radius-sm); }
 .probe-error-msg { font-size: var(--ip-text-caption-size); color: var(--ip-danger-text); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .probe-retry-btn { flex-shrink: 0; }
 
@@ -476,21 +476,21 @@ const builtinDescZh: Record<string, string> = {
 
 .expand-panel { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--ip-color-border-default); }
 
-.region { margin-top: 18px; display: flex; flex-direction: column; gap: 8px; }
+.region { margin-top: 18px; display: flex; flex-direction: column; gap: var(--ip-spacing-2); }
 .region-head { display: flex; align-items: center; justify-content: space-between; }
 .region-title { font-size: var(--ip-text-caption-size); font-weight: var(--ip-font-weight-semibold); color: var(--ip-color-text-tertiary); letter-spacing: 0.02em; }
 .region-meta { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-secondary); }
 .region-hint { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
 
 .tool-chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.tool-chip { font-size: 11px; font-family: var(--ip-font-mono); padding: 2px 8px; line-height: 18px; color: var(--ip-color-primary-tint-text); background-color: var(--ip-color-bg-tertiary); border-radius: var(--ip-radius-full); }
+.tool-chip { font-size: var(--ip-text-micro-size); font-family: var(--ip-font-mono); padding: 2px 8px; line-height: 18px; color: var(--ip-color-primary-tint-text); background-color: var(--ip-color-bg-tertiary); border-radius: var(--ip-radius-full); }
 
 .btn-link { display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 8px; font-size: var(--ip-text-caption-size); color: var(--ip-color-text-secondary); background: none; border: none; border-radius: var(--ip-radius-md); cursor: pointer; transition: all var(--ip-duration-fast) var(--ip-ease-out); }
 .btn-link:hover { color: var(--ip-primary-600); background-color: var(--ip-color-bg-tertiary); }
 
 .loading-state { padding: 20px; text-align: center; color: var(--ip-color-text-tertiary); font-size: var(--ip-text-body-sm-size); }
 .empty-hint { padding: 16px 12px; text-align: center; font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
-.node-warning { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 12px; padding: 10px 14px; background: #fffbeb; border: 1px solid #fde68a; border-radius: var(--ip-radius-md); font-size: var(--ip-text-body-sm-size); color: #92400e; }
+.node-warning { display: flex; align-items: flex-start; gap: var(--ip-spacing-2); margin: 0 0 12px; padding: 10px 14px; background: #fffbeb; border: 1px solid #fde68a; border-radius: var(--ip-radius-md); font-size: var(--ip-text-body-sm-size); color: #92400e; }
 .node-warning a { color: #d97706; font-weight: var(--ip-font-weight-medium); }
 .node-warn-icon { display: flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; background: #f59e0b; color: #fff; font-size: 12px; font-weight: 700; flex-shrink: 0; }
 
@@ -503,9 +503,9 @@ const builtinDescZh: Record<string, string> = {
 .glm-error { padding: 6px 10px; margin-bottom: 10px; font-size: var(--ip-text-caption-size); color: var(--ip-danger-text); background-color: var(--ip-danger-bg); border: 1px solid var(--ip-danger-border); border-radius: var(--ip-radius-md); }
 
 /* 模板列表：每个模板「名称 + 操作」主行 + 「类型 · 描述」次行，无边框无分隔线，靠 gap 分隔 */
-.glm-templates { display: flex; flex-direction: column; gap: 12px; }
+.glm-templates { display: flex; flex-direction: column; gap: var(--ip-spacing-3); }
 .glm-template { display: flex; flex-direction: column; gap: 2px; }
-.glm-template-main { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.glm-template-main { display: flex; align-items: center; gap: var(--ip-spacing-2); min-width: 0; }
 .glm-template-main .btn-link { margin-left: auto; flex-shrink: 0; }
 /* 已配置行的状态点 / 标签：清掉 server 卡的 margin-top，并推到右侧与「添加」按钮对齐 */
 .glm-template-main .status-dot { margin-top: 0; margin-left: auto; }
@@ -517,8 +517,8 @@ const builtinDescZh: Record<string, string> = {
 .glm-key-input { flex: 1; min-width: 0; height: 28px; }
 
 /* GLM 卡用到的输入 / 按钮（McpForm 的 scoped 样式不外泄，这里补一份） */
-.input { width: 100%; height: 30px; padding: 0 10px; font-size: var(--ip-text-body-sm-size); color: var(--ip-color-text-primary); background-color: var(--ip-color-bg-tertiary); border: 1px solid var(--ip-color-border-default); border-radius: var(--ip-radius-md); outline: none; box-sizing: border-box; transition: all var(--ip-duration-fast) var(--ip-ease-out); }
-.input:focus { border-color: var(--color-input-focus-border); background-color: var(--color-input-bg); box-shadow: 0 0 0 3px rgba(var(--ip-primary-500-rgb), 0.12); }
+.input { width: 100%; height: var(--ip-input-h-sm); padding: 0 10px; font-size: var(--ip-text-body-sm-size); color: var(--ip-color-text-primary); background-color: var(--ip-color-bg-tertiary); border: 1px solid var(--ip-color-border-default); border-radius: var(--ip-radius-md); outline: none; box-sizing: border-box; transition: all var(--ip-duration-fast) var(--ip-ease-out); }
+.input:focus { border-color: var(--ip-color-border-focus); background-color: var(--ip-color-bg-input); box-shadow: var(--ip-shadow-focus); }
 .input::placeholder { color: var(--ip-color-text-placeholder); }
 .input-mono { font-family: var(--ip-font-mono); }
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 0 14px; font-size: var(--ip-text-body-sm-size); font-weight: var(--ip-font-weight-medium); border-radius: var(--ip-radius-md); cursor: pointer; white-space: nowrap; transition: all var(--ip-duration-fast) var(--ip-ease-out); }

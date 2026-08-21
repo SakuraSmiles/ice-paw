@@ -521,7 +521,7 @@ async function copyPayload() {
   z-index: 2;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--ip-spacing-2);
   padding: 10px 16px 6px;
   background: var(--ip-color-bg-secondary);
   flex-shrink: 0;
@@ -530,7 +530,7 @@ async function copyPayload() {
 .insp-kind {
   display: inline-flex;
   align-items: center;
-  font-size: 10px;
+  font-size: var(--ip-text-micro-size);
   font-weight: var(--ip-font-weight-semibold);
   letter-spacing: 0.5px;
   padding: 2px 9px;
@@ -548,19 +548,19 @@ async function copyPayload() {
 .ev-plan { color: var(--ip-success-text); background: var(--ip-success-bg); }
 
 /* 计划清单行：与 PlanCard/TaskPanel 同款状态标记（局部 scoped，不复用跨组件样式） */
-.iplan-row { display: flex; align-items: flex-start; gap: 8px; padding: 6px 0; }
+.iplan-row { display: flex; align-items: flex-start; gap: var(--ip-spacing-2); padding: 6px 0; }
 .iplan-mark {
   width: 8px; height: 8px; margin-top: 5px; flex-shrink: 0;
   border-radius: var(--ip-radius-full);
   border: 1.5px solid var(--ip-color-text-tertiary);
 }
-.iplan-mark[data-status="in_progress"] { border-color: var(--ip-warning-base, #d97706); background: var(--ip-warning-base, #d97706); }
-.iplan-mark[data-status="done"] { border-color: var(--ip-success-base, #16a34a); background: var(--ip-success-base, #16a34a); }
+.iplan-mark[data-status="in_progress"] { border-color: var(--ip-warning-base); background: var(--ip-warning-base); }
+.iplan-mark[data-status="done"] { border-color: var(--ip-success-base); background: var(--ip-success-base); }
 .iplan-row .iplan-mark[data-status="done"] + .iplan-text { text-decoration: line-through; color: var(--ip-color-text-tertiary); }
 .iplan-text { flex: 1; font-size: var(--ip-text-body-sm-size); color: var(--ip-color-text-body); }
-.iplan-task { flex-shrink: 0; font-size: 11px; color: var(--ip-primary-600); }
+.iplan-task { flex-shrink: 0; font-size: var(--ip-text-micro-size); color: var(--ip-primary-600); }
 .insp-meta {
-  font-size: 11px;
+  font-size: var(--ip-text-micro-size);
   font-family: var(--ip-font-mono, monospace);
   color: var(--ip-color-text-tertiary);
   white-space: nowrap;
@@ -617,7 +617,7 @@ async function copyPayload() {
 .insp-tab:hover { color: var(--ip-color-text-secondary); }
 .insp-tab.active { color: var(--ip-primary-600); border-bottom-color: var(--ip-primary-500); font-weight: var(--ip-font-weight-medium); }
 .itab-badge {
-  font-size: 9px;
+  font-size: var(--ip-text-micro-size);
   padding: 0 5px;
   border-radius: var(--ip-radius-full);
   background: var(--ip-color-bg-tertiary);
@@ -643,9 +643,9 @@ async function copyPayload() {
   margin: 0 0 10px;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--ip-spacing-2);
 }
-.ikv { display: flex; gap: 10px; font-size: var(--ip-text-body-sm-size); padding: 4px 0; }
+.ikv { display: flex; gap: var(--ip-spacing-2_5); font-size: var(--ip-text-body-sm-size); padding: 4px 0; }
 .ikv span { color: var(--ip-color-text-tertiary); flex-shrink: 0; width: 92px; }
 .ikv b { font-weight: var(--ip-font-weight-medium); color: var(--ip-color-text-primary); word-break: break-all; }
 /* 多行预览行：标签顶对齐；预览是内容引文而非事实，降为常规字重 + 次级色 */
@@ -663,7 +663,7 @@ async function copyPayload() {
 .iprev-think { font-style: italic; color: var(--ip-color-text-tertiary); }
 .iprev-err { color: var(--ip-danger-base); }
 
-.isub { font-size: 10px; font-weight: var(--ip-font-weight-semibold); color: var(--ip-color-text-tertiary); letter-spacing: 0.5px; margin: 12px 0 6px; }
+.isub { font-size: var(--ip-text-micro-size); font-weight: var(--ip-font-weight-semibold); color: var(--ip-color-text-tertiary); letter-spacing: 0.5px; margin: 12px 0 6px; }
 .isub-err { color: var(--ip-danger-text); }
 
 .ipre {
@@ -682,7 +682,7 @@ async function copyPayload() {
 .ipre-err { color: var(--ip-danger-base); }
 .ipre-raw { max-height: none; }
 .ipre-copy {
-  font-size: 10px;
+  font-size: var(--ip-text-micro-size);
   padding: 2px 10px;
   border-radius: var(--ip-radius-full);
   border: 1px solid var(--ip-color-border-default);
@@ -707,7 +707,7 @@ async function copyPayload() {
 
 .itags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 .itag {
-  font-size: 10px;
+  font-size: var(--ip-text-micro-size);
   padding: 2px 9px;
   border-radius: var(--ip-radius-full);
   background: var(--ip-color-bg-tertiary);
@@ -719,17 +719,17 @@ async function copyPayload() {
 
 .imono { font-family: var(--ip-font-mono, monospace); }
 
-.iimgs { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+.iimgs { display: flex; gap: var(--ip-spacing-2_5); flex-wrap: wrap; margin-top: 10px; }
 
 /* 引用/文档卡列表（user_message 正文 tab）：轻量行卡 = 类型胶囊 + 元信息 */
 .iref-list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
 .iref, .idoc {
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; gap: var(--ip-spacing-2);
   padding: 5px 10px; border-radius: var(--ip-radius-md);
   background: var(--ip-color-bg-tertiary); font-size: var(--ip-text-caption-size);
 }
 .iref-kind {
-  flex-shrink: 0; font-size: 10px; line-height: 1; padding: 3px 7px;
+  flex-shrink: 0; font-size: var(--ip-text-micro-size); line-height: 1; padding: 3px 7px;
   border-radius: var(--ip-radius-full);
   background: var(--ip-color-primary-tint-bg); color: var(--ip-color-primary-tint-text);
 }
@@ -745,7 +745,7 @@ async function copyPayload() {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 10px;
+  gap: var(--ip-spacing-2_5);
   padding: 5px 0;
   font-size: var(--ip-text-caption-size);
   border-bottom: 1px solid var(--ip-color-border-default);

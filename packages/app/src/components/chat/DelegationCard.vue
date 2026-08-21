@@ -103,8 +103,8 @@ const FINISH_LABEL: Record<string, string> = {
   gap: 5px;
   max-width: 560px;
 }
-.dlg-card[data-status="error"] { border-left-color: var(--ip-danger-base, #dc2626); }
-.dlg-card[data-status="running"] { border-left-color: var(--ip-warning-base, #d97706); }
+.dlg-card[data-status="error"] { border-left-color: var(--ip-danger-base); }
+.dlg-card[data-status="running"] { border-left-color: var(--ip-warning-base); }
 
 .dlg-head { display: flex; align-items: center; gap: 6px; }
 /* 目标 agent 头像（sm=20px，EntityAvatar 三级链；取代旧交换箭头图标） */
@@ -113,9 +113,9 @@ const FINISH_LABEL: Record<string, string> = {
 .dlg-status { margin-left: auto; display: flex; align-items: center; gap: 5px; font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
 
 .dlg-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
-.dlg-dot[data-status="running"] { background: var(--ip-warning-base, #d97706); animation: dlg-pulse 1.2s ease-in-out infinite; }
-.dlg-dot[data-status="done"] { background: var(--ip-success-base, #16a34a); }
-.dlg-dot[data-status="error"] { background: var(--ip-danger-base, #dc2626); }
+.dlg-dot[data-status="running"] { background: var(--ip-warning-base); animation: dlg-pulse 1.2s ease-in-out infinite; }
+.dlg-dot[data-status="done"] { background: var(--ip-success-base); }
+.dlg-dot[data-status="error"] { background: var(--ip-danger-base); }
 @keyframes dlg-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
 .dlg-task {
@@ -126,7 +126,7 @@ const FINISH_LABEL: Record<string, string> = {
   text-overflow: ellipsis;
 }
 
-.dlg-foot { display: flex; align-items: center; gap: 8px; min-height: 22px; }
+.dlg-foot { display: flex; align-items: center; gap: var(--ip-spacing-2); min-height: 22px; }
 .dlg-meta { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
 .dlg-open {
   margin-left: auto;

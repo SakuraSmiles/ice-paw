@@ -345,12 +345,12 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
   z-index: 4;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--ip-spacing-3);
   height: 32px;
   padding: 0 20px 0 32px;
   background: var(--ip-color-bg-secondary);
   border-bottom: 1px solid var(--ip-color-border-default);
-  font-size: 11px;
+  font-size: var(--ip-text-micro-size);
   font-weight: var(--ip-font-weight-medium);
   letter-spacing: 0.3px;
   color: var(--ip-color-text-tertiary);
@@ -388,7 +388,7 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
   right: 0;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--ip-spacing-3);
   overflow: hidden;
   cursor: pointer;
 }
@@ -413,13 +413,13 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
 .trow-turn-header.turn-errored { background: var(--ip-danger-bg); }
 .trow-turn-header.turn-errored:hover { background: var(--ip-danger-bg); filter: brightness(0.97); }
 .trow-turn-header.turn-errored.turn-selected { background: var(--ip-color-selection-bg); }
-.th-chevron { font-size: 9px; color: var(--ip-color-text-tertiary); width: 10px; flex-shrink: 0; }
+.th-chevron { font-size: var(--ip-text-micro-size); color: var(--ip-color-text-tertiary); width: 10px; flex-shrink: 0; }
 /* 会话徽章（跨会话合并流）：委派会话走 tint 令牌（soft 系，勿直接 primary 底），
    chat 会话中性；max-width 兜长标题（title 悬停看全名） */
 .th-session {
   max-width: 140px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-size: 11px; line-height: 18px;
+  font-size: var(--ip-text-micro-size); line-height: 18px;
   padding: 0 8px; border-radius: var(--ip-radius-full);
   color: var(--ip-color-text-tertiary);
   background: var(--ip-color-bg-secondary);
@@ -432,7 +432,7 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
 .th-no { font-weight: var(--ip-font-weight-semibold); color: var(--ip-color-text-primary); white-space: nowrap; }
 .th-date, .th-time {
   font-family: var(--ip-font-mono, monospace);
-  font-size: 11px;
+  font-size: var(--ip-text-micro-size);
   color: var(--ip-color-text-disabled);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
@@ -449,12 +449,12 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
   background: var(--ip-color-bg-secondary);
   color: var(--ip-color-text-tertiary);
   white-space: nowrap;
-  font-size: 11px;
+  font-size: var(--ip-text-micro-size);
 }
 .th-term-warn { color: var(--ip-warning-text); background: var(--ip-warning-bg); }
 .th-term-pending { color: var(--ip-color-text-disabled); font-style: italic; }
 
-.th-right { margin-left: auto; display: flex; align-items: center; gap: 12px; white-space: nowrap; }
+.th-right { margin-left: auto; display: flex; align-items: center; gap: var(--ip-spacing-3); white-space: nowrap; }
 /* ⓘ 轮次详情入口：默认隐没，悬停轮次头或已选中时可见 */
 .th-info {
   display: inline-flex;
@@ -479,18 +479,18 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
   background: var(--ip-danger-bg);
   padding: 1px 8px;
   border-radius: var(--ip-radius-full);
-  font-size: 11px;
+  font-size: var(--ip-text-micro-size);
 }
 .th-match {
   color: var(--ip-primary-600);
   background: var(--ip-color-primary-soft-bg, var(--ip-primary-50));
   padding: 1px 8px;
   border-radius: var(--ip-radius-full);
-  font-size: 11px;
+  font-size: var(--ip-text-micro-size);
 }
 .th-usage {
   font-family: var(--ip-font-mono, monospace);
-  font-size: 11px;
+  font-size: var(--ip-text-micro-size);
   color: var(--ip-color-text-tertiary);
   font-variant-numeric: tabular-nums;
 }
@@ -535,7 +535,7 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 10px;
+  font-size: var(--ip-text-micro-size);
   font-weight: var(--ip-font-weight-semibold);
   letter-spacing: 0.5px;
   border-radius: var(--ip-radius-full);
@@ -575,7 +575,7 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
 .ev-tokens, .ev-dur {
   flex-shrink: 0;
   font-family: var(--ip-font-mono, monospace);
-  font-size: 11px;
+  font-size: var(--ip-text-micro-size);
   color: var(--ip-color-text-tertiary);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;

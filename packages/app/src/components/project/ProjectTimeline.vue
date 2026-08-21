@@ -268,7 +268,7 @@ onActivated(async () => {
 .pt-bar {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--ip-spacing-3);
   height: 40px;
   padding: 0 14px;
   border-bottom: 1px solid var(--ip-color-border-default);
@@ -296,7 +296,7 @@ onActivated(async () => {
 .pt-search input::placeholder { color: var(--ip-color-text-placeholder); }
 .pt-search-clear {
   border: none; background: none; padding: 0 2px;
-  font-size: 10px; color: var(--ip-color-text-tertiary); cursor: pointer;
+  font-size: var(--ip-text-micro-size); color: var(--ip-color-text-tertiary); cursor: pointer;
   border-radius: var(--ip-radius-full); flex-shrink: 0;
 }
 .pt-search-clear:hover { color: var(--ip-color-text-primary); }

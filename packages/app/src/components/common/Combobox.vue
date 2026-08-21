@@ -234,7 +234,7 @@ onUnmounted(() => {
 .combobox-input-wrap {
   display: flex;
   align-items: center;
-  height: 36px;
+  height: var(--ip-select-option-h, 36px);
   padding: 0 0 0 12px;
   background-color: var(--ip-color-bg-tertiary);
   border: 1px solid var(--ip-color-border-default);
@@ -244,9 +244,9 @@ onUnmounted(() => {
 
 .combobox-open .combobox-input-wrap,
 .combobox-input-wrap:focus-within {
-  border-color: var(--color-input-focus-border);
-  background-color: var(--color-input-bg);
-  box-shadow: 0 0 0 3px rgba(var(--ip-primary-500-rgb), 0.12);
+  border-color: var(--ip-color-border-focus);
+  background-color: var(--ip-color-bg-input);
+  box-shadow: var(--ip-shadow-focus);
 }
 
 .combobox-input {
@@ -299,7 +299,7 @@ onUnmounted(() => {
   top: calc(100% + 4px);
   left: 0;
   right: 0;
-  z-index: 100;
+  z-index: var(--ip-z-dropdown);
   max-height: 200px;
   overflow-y: auto;
   background-color: var(--ip-color-bg-elevated);
@@ -324,7 +324,7 @@ onUnmounted(() => {
 }
 
 .combobox-option:hover {
-  background-color: var(--color-sidebar-item-hover);
+  background-color: var(--ip-color-bg-sidebar-item-hover);
 }
 
 .combobox-option.active {
@@ -341,7 +341,7 @@ onUnmounted(() => {
 }
 
 .combobox-option-note {
-  font-size: 11px;
+  font-size: var(--ip-text-micro-size);
   color: var(--ip-color-text-tertiary);
   line-height: 1.4;
 }

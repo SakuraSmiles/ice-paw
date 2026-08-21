@@ -181,7 +181,7 @@ const directoryShort = computed(() => {
 .kb-doc-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--ip-spacing-2);
 }
 
 /* ===== 顶部条 ===== */
@@ -189,7 +189,7 @@ const directoryShort = computed(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--ip-spacing-2);
 }
 .kb-meta {
   display: flex;
@@ -315,7 +315,7 @@ const directoryShort = computed(() => {
   color: var(--ip-color-text-primary);
 }
 .doc-tag {
-  font-size: 10px;
+  font-size: var(--ip-text-micro-size);
   padding: 0 6px;
   line-height: 18px;
   color: var(--ip-color-primary-tint-text);
@@ -344,7 +344,7 @@ const directoryShort = computed(() => {
 }
 .doc-indexed {
   margin-top: 4px;
-  font-size: 10px;
+  font-size: var(--ip-text-micro-size);
   color: var(--ip-color-text-disabled);
 }
 

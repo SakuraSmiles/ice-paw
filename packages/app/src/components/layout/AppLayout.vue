@@ -71,7 +71,7 @@ onMounted(() => {
 .splash-overlay {
   position: fixed;
   inset: 0;
-  z-index: 9999;
+  z-index: var(--ip-z-modal-overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -97,7 +97,7 @@ onMounted(() => {
 
 .splash-dots {
   display: flex;
-  gap: 8px;
+  gap: var(--ip-spacing-2);
 }
 
 .splash-dots .dot {

@@ -17,7 +17,7 @@
   font-family: var(--ip-font-sans);
   font-size: var(--ip-text-body-size, 15px);
   line-height: var(--ip-line-height-relaxed, 1.55);
-  color: var(--ip-color-text-body, var(--ip-gray-700, #434343));
+  color: var(--ip-color-text-body, var(--ip-gray-700));
 }
 
 .markdown-body > *:first-child {
@@ -36,7 +36,7 @@
   line-height: var(--ip-text-h1-lh, 34px);
   font-weight: var(--ip-font-weight-semibold, 600);
   margin: var(--ip-spacing-6, 24px) 0 var(--ip-spacing-3, 12px);
-  color: var(--ip-color-text-primary, var(--ip-gray-900, #141414));
+  color: var(--ip-color-text-primary, var(--ip-gray-900));
 }
 
 .markdown-body-h2,
@@ -46,8 +46,8 @@
   font-weight: var(--ip-font-weight-semibold, 600);
   margin: var(--ip-spacing-5, 20px) 0 var(--ip-spacing-3, 12px);
   padding-bottom: var(--ip-spacing-2, 8px);
-  border-bottom: 1px solid var(--ip-color-border-default, #d9d9d9);
-  color: var(--ip-color-text-primary, var(--ip-gray-900, #141414));
+  border-bottom: 1px solid var(--ip-color-border-default);
+  color: var(--ip-color-text-primary, var(--ip-gray-900));
 }
 
 .markdown-body-h3,
@@ -56,7 +56,7 @@
   line-height: var(--ip-text-h3-lh, 24px);
   font-weight: var(--ip-font-weight-semibold, 600);
   margin: var(--ip-spacing-5, 20px) 0 var(--ip-spacing-2, 8px);
-  color: var(--ip-color-text-primary, var(--ip-gray-900, #141414));
+  color: var(--ip-color-text-primary, var(--ip-gray-900));
 }
 
 .markdown-body-h4,
@@ -69,7 +69,7 @@
   line-height: var(--ip-text-body-lg-lh, 28px);
   font-weight: var(--ip-font-weight-semibold, 600);
   margin: var(--ip-spacing-4, 16px) 0 var(--ip-spacing-2, 8px);
-  color: var(--ip-color-text-primary, var(--ip-gray-900, #141414));
+  color: var(--ip-color-text-primary, var(--ip-gray-900));
 }
 
 /* ------------------- 段落 ------------------- */
@@ -77,7 +77,7 @@
 .markdown-body-p,
 .markdown-body p {
   margin: 0 0 var(--ip-spacing-3, 12px);
-  color: var(--ip-color-text-body, var(--ip-gray-700, #434343));
+  color: var(--ip-color-text-body, var(--ip-gray-700));
 }
 
 /* ------------------- 强调 ------------------- */
@@ -85,7 +85,7 @@
 .markdown-body-strong,
 .markdown-body strong {
   font-weight: var(--ip-font-weight-semibold, 600);
-  color: var(--ip-color-text-primary, var(--ip-gray-900, #141414));
+  color: var(--ip-color-text-primary, var(--ip-gray-900));
 }
 
 .markdown-body-em,
@@ -95,7 +95,7 @@
 
 .markdown-body-del,
 .markdown-body del {
-  color: var(--ip-color-text-tertiary, var(--ip-gray-500, #8c8c8c));
+  color: var(--ip-color-text-tertiary, var(--ip-gray-500));
   text-decoration: line-through;
 }
 
@@ -103,7 +103,7 @@
 
 .markdown-body-a,
 .markdown-body a {
-  color: var(--ip-color-text-link, var(--ip-primary-600, #2563eb));
+  color: var(--ip-color-text-link, var(--ip-primary-600));
   text-decoration: none;
   border-bottom: 1px solid transparent;
   transition:
@@ -113,19 +113,19 @@
 
 .markdown-body-a:hover,
 .markdown-body a:hover {
-  color: var(--ip-primary-700, #1d4ed8);
+  color: var(--ip-primary-700);
   border-bottom-color: currentColor;
 }
 
 /* AI 气泡内的链接色（在 #F5F5F5 浅灰底上感知更稳） */
 .markdown-body--on-ai-bubble.markdown-body-a,
 .markdown-body--on-ai-bubble a {
-  color: var(--ip-color-text-link-on-ai, var(--ip-primary-700, #1d4ed8));
+  color: var(--ip-color-text-link-on-ai, var(--ip-primary-700));
 }
 
 .markdown-body--on-ai-bubble.markdown-body-a:hover,
 .markdown-body--on-ai-bubble a:hover {
-  color: var(--ip-primary-800, #1e40af);
+  color: var(--ip-primary-800);
   border-bottom-color: currentColor;
 }
 
@@ -176,9 +176,9 @@
 .markdown-body blockquote {
   margin: var(--ip-spacing-3, 12px) 0;
   padding: var(--ip-spacing-2, 8px) var(--ip-spacing-4, 16px);
-  border-left: 4px solid var(--ip-color-border-default, #d9d9d9);
-  background: var(--ip-color-bg-tertiary, var(--ip-gray-100, #f5f5f5));
-  color: var(--ip-color-text-secondary, var(--ip-gray-600, #595959));
+  border-left: 4px solid var(--ip-color-border-default);
+  background: var(--ip-color-bg-tertiary, var(--ip-gray-100));
+  color: var(--ip-color-text-secondary, var(--ip-gray-600));
   border-radius: 0 var(--ip-radius-sm, 4px) var(--ip-radius-sm, 4px) 0;
 }
 
@@ -510,10 +510,10 @@
 .markdown-body thead,
 .markdown-body-th,
 .markdown-body th {
-  background: var(--ip-color-bg-tertiary, var(--ip-gray-100, #f5f5f5));
+  background: var(--ip-color-bg-tertiary, var(--ip-gray-100));
   font-weight: var(--ip-font-weight-semibold, 600);
   text-align: left;
-  color: var(--ip-color-text-primary, var(--ip-gray-900, #141414));
+  color: var(--ip-color-text-primary, var(--ip-gray-900));
 }
 
 .markdown-body-th,
@@ -521,13 +521,13 @@
 .markdown-body-td,
 .markdown-body td {
   padding: var(--ip-spacing-2, 8px) var(--ip-spacing-3, 12px);
-  border: 1px solid var(--ip-color-border-default, #d9d9d9);
+  border: 1px solid var(--ip-color-border-default);
   vertical-align: top;
 }
 
 .markdown-body-tr:nth-child(even) td,
 .markdown-body tbody tr:nth-child(even) td {
-  background: var(--ip-color-bg-secondary, var(--ip-gray-50, #fafafa));
+  background: var(--ip-color-bg-secondary, var(--ip-gray-50));
 }
 
 /* ------------------- 分隔线 ------------------- */
@@ -536,7 +536,7 @@
 .markdown-body hr {
   border: 0;
   height: 1px;
-  background: var(--ip-color-border-default, #d9d9d9);
+  background: var(--ip-color-border-default);
   margin: var(--ip-spacing-6, 24px) 0;
 }
 
@@ -558,9 +558,9 @@
   padding: 1px 6px;
   font-family: var(--ip-font-mono);
   font-size: 0.85em;
-  background: var(--ip-color-bg-secondary, var(--ip-gray-50, #fafafa));
-  border: 1px solid var(--ip-color-border-default, #d9d9d9);
+  background: var(--ip-color-bg-secondary, var(--ip-gray-50));
+  border: 1px solid var(--ip-color-border-default);
   border-bottom-width: 2px;
   border-radius: var(--ip-radius-sm, 4px);
-  color: var(--ip-color-text-primary, var(--ip-gray-900, #141414));
+  color: var(--ip-color-text-primary, var(--ip-gray-900));
 }

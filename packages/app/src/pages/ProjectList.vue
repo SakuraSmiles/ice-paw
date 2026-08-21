@@ -517,7 +517,7 @@ onMounted(() => {
 .page-inner { flex: 1; display: flex; flex-direction: column; padding: 0; min-height: 0; }
 
 .content-header {
-  display: flex; align-items: baseline; gap: 12px;
+  display: flex; align-items: baseline; gap: var(--ip-spacing-3);
   padding: 20px 28px 0; flex-shrink: 0; min-height: 56px;
 }
 .content-title {
@@ -529,7 +529,7 @@ onMounted(() => {
 /* ===== 列表 ===== */
 .proj-list {
   flex: 1; overflow-y: auto; padding: 8px 28px 24px;
-  display: flex; flex-direction: column; gap: 8px; min-height: 0;
+  display: flex; flex-direction: column; gap: var(--ip-spacing-2); min-height: 0;
 }
 
 /* ===== 卡片 ===== */
@@ -551,7 +551,7 @@ onMounted(() => {
 
 .list-divider { height: 1px; background-color: var(--ip-color-border-default); margin: 2px 4px; }
 
-.card-top { display: flex; align-items: center; gap: 12px; }
+.card-top { display: flex; align-items: center; gap: var(--ip-spacing-3); }
 
 /* 项目头像（lg=36px，EntityAvatar 两级链：图片/名字渐变） */
 .card-avatar { flex-shrink: 0; }
@@ -568,7 +568,7 @@ onMounted(() => {
 .new-hint { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); padding-left: 22px; }
 
 .card-tag {
-  flex-shrink: 0; font-size: 10px;
+  flex-shrink: 0; font-size: var(--ip-text-micro-size);
   color: var(--ip-color-primary-tint-text); background: var(--ip-color-primary-tint-bg);
   padding: 0 6px; line-height: 18px; border-radius: var(--ip-radius-full);
 }
@@ -625,7 +625,7 @@ onMounted(() => {
   font-family: inherit;
   transition: all var(--ip-duration-fast) var(--ip-ease-out);
 }
-.input:focus { outline: none; border-color: var(--color-input-focus-border); background-color: var(--color-input-bg); }
+.input:focus { outline: none; border-color: var(--ip-color-border-focus); background-color: var(--ip-color-bg-input); }
 
 .workspace-group { display: flex; gap: 6px; }
 .workspace-input { flex: 1; cursor: pointer; font-family: var(--ip-font-mono); }
@@ -662,7 +662,7 @@ onMounted(() => {
 
 .form-error { font-size: var(--ip-text-caption-size); color: var(--ip-danger-text); }
 
-.form-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.form-actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--ip-spacing-2); }
 
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
@@ -699,13 +699,13 @@ onMounted(() => {
 .archive-chev { transition: transform var(--ip-duration-fast) var(--ip-ease-out); }
 .archive-chev.rotated { transform: rotate(90deg); }
 .archive-count {
-  font-size: 10px; line-height: 16px; padding: 0 5px;
+  font-size: var(--ip-text-micro-size); line-height: 16px; padding: 0 5px;
   color: var(--ip-color-text-tertiary); background: var(--ip-color-bg-tertiary);
   border-radius: var(--ip-radius-full);
 }
 .archive-list { display: flex; flex-direction: column; gap: 2px; padding-left: 4px; }
 .archive-row {
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; gap: var(--ip-spacing-2);
   padding: 7px 10px;
   background-color: var(--ip-color-bg-tertiary);
   border-radius: var(--ip-radius-md);
@@ -740,18 +740,18 @@ onMounted(() => {
   border-radius: var(--ip-radius-xl);
   box-shadow: var(--ip-shadow-xl);
   padding: 20px;
-  display: flex; flex-direction: column; gap: 12px;
+  display: flex; flex-direction: column; gap: var(--ip-spacing-3);
 }
 .perm-title { margin: 0; font-size: var(--ip-text-h3-size); font-weight: var(--ip-font-weight-semibold); color: var(--ip-color-text-primary); }
 .perm-desc { margin: 0; font-size: var(--ip-text-body-sm-size); color: var(--ip-color-text-secondary); }
-.perm-options { display: flex; flex-direction: column; gap: 8px; }
+.perm-options { display: flex; flex-direction: column; gap: var(--ip-spacing-2); }
 .perm-option {
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; gap: var(--ip-spacing-2);
   font-size: var(--ip-text-body-sm-size); color: var(--ip-color-text-primary);
   cursor: pointer;
 }
 .perm-option input { accent-color: var(--ip-primary-500); }
-.perm-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.perm-actions { display: flex; justify-content: flex-end; gap: var(--ip-spacing-2); margin-top: 4px; }
 
 .btn-danger { background-color: var(--ip-danger-base); color: white; }
 .btn-danger:hover:not(:disabled) { opacity: 0.9; }
@@ -779,19 +779,19 @@ onMounted(() => {
 .tasks-chev { transition: transform var(--ip-duration-fast) var(--ip-ease-out); }
 .tasks-chev.rotated { transform: rotate(90deg); }
 .tasks-count {
-  font-size: 10px; line-height: 16px; padding: 0 5px;
+  font-size: var(--ip-text-micro-size); line-height: 16px; padding: 0 5px;
   color: var(--ip-color-text-tertiary); background: var(--ip-color-bg-tertiary);
   border-radius: var(--ip-radius-full);
 }
 /* 「进行中」徽章走 tint 令牌（soft 系），不直接用 primary 底色 */
 .tasks-live {
-  font-size: 10px; line-height: 16px; padding: 0 6px;
+  font-size: var(--ip-text-micro-size); line-height: 16px; padding: 0 6px;
   color: var(--ip-color-primary-tint-text); background: var(--ip-color-primary-tint-bg);
   border-radius: var(--ip-radius-full);
 }
 .tasks-list { margin-top: 6px; display: flex; flex-direction: column; gap: 2px; }
 .task-item {
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; gap: var(--ip-spacing-2);
   padding: 6px 8px; border: none; border-radius: var(--ip-radius-md);
   background-color: var(--ip-color-bg-tertiary); cursor: pointer;
   font-family: inherit; text-align: left;
@@ -808,6 +808,6 @@ onMounted(() => {
   font-size: var(--ip-text-caption-size); color: var(--ip-color-text-secondary);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.task-agent { flex-shrink: 0; font-size: 11px; color: var(--ip-primary-600); font-weight: var(--ip-font-weight-medium); }
-.task-time { flex-shrink: 0; font-size: 11px; color: var(--ip-color-text-disabled); font-variant-numeric: tabular-nums; }
+.task-agent { flex-shrink: 0; font-size: var(--ip-text-micro-size); color: var(--ip-primary-600); font-weight: var(--ip-font-weight-medium); }
+.task-time { flex-shrink: 0; font-size: var(--ip-text-micro-size); color: var(--ip-color-text-disabled); font-variant-numeric: tabular-nums; }
 </style>
