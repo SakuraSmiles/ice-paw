@@ -665,10 +665,11 @@ async fn anthropic_usage_event_from_stream() {
         "应收到 2 个 Usage 事件（message_start + message_delta）"
     );
 
-    // 第 1 个 Usage 来自 message_start：prompt_tokens=100, cached_tokens=30
+    // 第 1 个 Usage 来自 message_start：归一语义（0.3.9 预算诚实化）
+    // prompt = input + cache_creation + cache_read = 100+50+30 = 180（总输入含命中与写缓存折入）
     assert_eq!(
-        usage_events[0].prompt_tokens, 100,
-        "message_start usage: prompt_tokens 应为 100"
+        usage_events[0].prompt_tokens, 180,
+        "message_start usage: prompt_tokens 应为 180（归一：input100+creation50+read30）"
     );
     assert_eq!(
         usage_events[0].cached_tokens, 30,
