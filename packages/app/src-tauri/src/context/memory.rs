@@ -41,6 +41,8 @@ use tracing::{debug, info, warn};
 use crate::context::history::{resolve_window, sanitize_history};
 use crate::context::pipeline::{PipelineContext, PipelineStage};
 use crate::context::token::{estimate_message_tokens, estimate_messages_tokens, estimate_tokens};
+use super::skeleton::skeletonize_messages;
+use super::slim::slim_tool_results;
 use crate::db::repo::summary::{
     get_latest_summary_state, insert_summary_message, update_summary_message, SUMMARY_PREFIX,
 };
@@ -171,6 +173,17 @@ impl PipelineStage for MemoryStage {
     }
 
     async fn execute(&self, ctx: &mut PipelineContext) -> AppResult<()> {
+        let r = self.run_inner(ctx).await;
+        // S8-2：无论折叠与否，verbatim 区巨结果统一瘦身（纯投影，指针可回溯）
+        if slim_tool_results(&mut ctx.history_messages) {
+            debug!(target: "ice_paw.context", "S8-2: 历史工具结果已瘦身（超阈值截头尾+指针）");
+        }
+        r
+    }
+}
+
+impl MemoryStage {
+    async fn run_inner(&self, ctx: &mut PipelineContext) -> AppResult<()> {
         let max_input = ctx.context_budget.max_input_tokens;
         let len = ctx.history_messages.len();
         if len == 0 || max_input == 0 {
@@ -276,25 +289,26 @@ impl PipelineStage for MemoryStage {
         {
             Ok(s) => s,
             Err(e) => {
+                // S8-1：失败不裸截断——中段骨架化（本地计算永不失败），保留结构线索
                 warn!(
                     target: "ice_paw.context",
-                    "MemoryStage: 摘要调用失败（{e}），本轮跳过折叠不阻塞对话"
+                    "MemoryStage: 摘要调用失败（{e}），本轮中段骨架化（S8-1 确定性折叠）"
                 );
                 if let Some(s) = &state {
                     ctx.summary = Some(s.text.clone());
                 }
-                truncate_history_to(ctx, verbatim_start);
+                deterministic_fold(ctx, verbatim_start, fold_end);
                 return Ok(());
             }
         };
 
         // 取消 / 空 → 不落库，下轮重试。仍注入既有摘要（若有）+ 丢已覆盖前缀。
         if s_new.trim().is_empty() {
-            warn!(target: "ice_paw.context", "MemoryStage: 摘要返回空（取消 / provider 空 / 熔断中），跳过落库");
+            warn!(target: "ice_paw.context", "MemoryStage: 摘要返回空（取消 / provider 空 / 熔断中），本轮中段骨架化（S8-1）");
             if let Some(s) = &state {
                 ctx.summary = Some(s.text.clone());
             }
-            truncate_history_to(ctx, verbatim_start);
+            deterministic_fold(ctx, verbatim_start, fold_end);
             return Ok(());
         }
 
@@ -413,6 +427,23 @@ impl PipelineStage for MemoryStage {
 /// 已装下）→ 孤儿存活 → 严格端点（MiniMax）400。
 ///
 /// [`TokenWindowStage`]: crate::context::stages::TokenWindowStage
+/// S8-1 确定性折叠：折叠区（verbatim_start..fold_end）骨架化**就地保留**，
+/// 不再丢弃——agent 至少知道「发生过什么」（工具名/成败/首行预览），
+/// 而不是失忆。永不失败（纯本地），不落库（仅本次投影）。
+fn deterministic_fold(ctx: &mut PipelineContext, verbatim_start: usize, fold_end: usize) {
+    if verbatim_start >= fold_end {
+        truncate_history_to(ctx, verbatim_start);
+        return;
+    }
+    let folded: Vec<ChatMessage> =
+        skeletonize_messages(&ctx.history_messages[verbatim_start..fold_end]);
+    let mut out = Vec::with_capacity(ctx.history_messages.len() - (fold_end - verbatim_start) + folded.len());
+    out.extend_from_slice(&ctx.history_messages[..verbatim_start]);
+    out.extend(folded);
+    out.extend_from_slice(&ctx.history_messages[fold_end..]);
+    ctx.history_messages = sanitize_history(out);
+}
+
 fn truncate_history_to(ctx: &mut PipelineContext, idx: usize) {
     if idx == 0 {
         return;

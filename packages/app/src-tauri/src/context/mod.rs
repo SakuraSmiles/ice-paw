@@ -16,6 +16,8 @@ pub(crate) mod history;
 pub(crate) mod memory;
 pub(crate) mod os_context;
 pub(crate) mod pipeline;
+pub(crate) mod skeleton;
+pub(crate) mod slim;
 pub(crate) mod stages;
 pub(crate) mod system_prompt;
 pub(crate) mod template;
