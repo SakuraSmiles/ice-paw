@@ -74,18 +74,12 @@ export async function compressAvatar(
   if (!ctx) throw new Error("canvas 不可用");
   ctx.drawImage(img, sx, sy, edge, edge, 0, 0, out, out);
 
-  // WebP 优先，回退 JPEG（个别环境 canvas.toDataURL('image/webp') 静默回退成 png
-  // 兜底判断返回前缀）
-  let data = canvas.toDataURL("image/webp", 0.85);
-  if (!data.startsWith("data:image/webp")) {
-    data = canvas.toDataURL("image/jpeg", 0.85);
-  }
-  return data;
+  return encodeCanvas(canvas, hasSourceAlpha(img));
 }
 
 
 /** 已加载图 + 偏移 → 压缩 dataURL（AvatarCropper 确认时用，避免重复读文件/解码）。
- *  与 compressAvatar 同管道：方形 cover + ≤256px + WebP/JPEG。 */
+ *  与 compressAvatar 同管道：方形 cover + ≤256px + 按透明度选编码。 */
 export async function compressAvatarImage(
   img: HTMLImageElement,
   offset?: CropOffset,
@@ -102,6 +96,37 @@ export async function compressAvatarImage(
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("canvas 不可用");
   ctx.drawImage(img, sx, sy, edge, edge, 0, 0, out, out);
+  return encodeCanvas(canvas, hasSourceAlpha(img));
+}
+
+/** 源图是否含透明像素（采样 5 点：四角+中心，任一 alpha<255 即判定）。
+ *  WKWebView 的 WebP 编码可能丢 alpha、JPEG 格式级无 alpha——透明图必须走 PNG。 */
+function hasSourceAlpha(img: HTMLImageElement): boolean {
+  const c = document.createElement("canvas");
+  const n = 8; // 8×8 采样网格（比 5 点更稳，成本忽略不计）
+  c.width = n;
+  c.height = n;
+  const ctx = c.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return false; // 检测不了按无透明（保守走有损，行为同旧版）
+  ctx.drawImage(img, 0, 0, n, n);
+  try {
+    const d = ctx.getImageData(0, 0, n, n).data;
+    for (let i = 3; i < d.length; i += 4) {
+      if (d[i] < 255) return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+/** 编码策略（2026-08-21 透明修复）：
+ *  含 alpha → PNG（无损保透明；≤256px 头像体积可控）
+ *  无 alpha → WebP 0.85 → JPEG 0.85 回退（体积优先） */
+function encodeCanvas(canvas: HTMLCanvasElement, withAlpha: boolean): string {
+  if (withAlpha) {
+    return canvas.toDataURL("image/png");
+  }
   let data = canvas.toDataURL("image/webp", 0.85);
   if (!data.startsWith("data:image/webp")) {
     data = canvas.toDataURL("image/jpeg", 0.85);
