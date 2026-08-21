@@ -24,9 +24,9 @@
 | # | 项 | 位置 | 症状与建议 | 量级 |
 |---|---|---|---|---|
 | UI-B1 | **焦点环颜色魔法数** | `ChatInput.vue:636-638` 三处 `rgba(46,141,100,…)` | 品牌绿的 rgb 值以字面量散布（focus 环/发送态/拖拽态各一），改品牌色必漏。建议：tokens.css 增 `--ip-color-focus-ring`（rgb 三元组变量 `--ip-primary-500-rgb` + `rgba(var(…), α)` 模式），全库替换 | 小 |
-| UI-B2 | **markdown.css / global.css 硬编码色集中区** | `assets/styles/markdown.css`（43 处 hex）、`global.css`（40 处） | 代码高亮 mini 主题与全局样式的色值未走令牌——暗色模式切换时这些值靠 `[data-theme]` 选择器手工配对，新增主题即爆炸。建议：hljs 主题色收进 tokens（语义组：`--hl-keyword/--hl-string/…`），global.css 的散值逐个对位既有令牌 | 中 |
+| UI-B2 | ~~markdown.css / global.css 硬编码色集中区~~ ✅ 2026-08-20（UI-4：fallback 清零 + global 别名升格；hljs 变量组本就健康） | — | | `assets/styles/markdown.css`（43 处 hex）、`global.css`（40 处） | 代码高亮 mini 主题与全局样式的色值未走令牌——暗色模式切换时这些值靠 `[data-theme]` 选择器手工配对，新增主题即爆炸。建议：hljs 主题色收进 tokens（语义组：`--hl-keyword/--hl-string/…`），global.css 的散值逐个对位既有令牌 | 中 |
 | UI-B3 | **组件内残留硬编码色** | `ChatMessages.vue`（22 hex + 11 rgba）、`EntityAvatar.vue`（21 hex，渐变名字哈希色板可豁免）、`ProjectBasicForm.vue`（10）、`AgentSettings.vue`（8）、`ConfigProposalCard.vue`（8） | 建议：EntityAvatar 的哈希色板是算法资产可保留（但应移到 tokens 注释声明豁免理由）；其余逐个对位令牌。**验收 grep 门**：`grep -c '#[0-9a-f]{6}' 组件.vue == 0`（豁免清单外） | 中（分批） |
-| UI-B4 | **成功态图标的 fallback 色重复** | `ChatMessages.vue:790,794,995…` `var(--ip-success-base, #16a34a)` 内联 fallback 多处重复 | fallback 值与令牌漂移风险。建议：确认令牌已定义后删除全部内联 fallback（fallback 只在令牌可能缺席的边界处用） | 小 |
+| UI-B4 | ~~成功态图标的 fallback 色重复~~ ✅ 2026-08-20（UI-4：颜色内联 fallback 全库清零） | — | | `ChatMessages.vue:790,794,995…` `var(--ip-success-base, #16a34a)` 内联 fallback 多处重复 | fallback 值与令牌漂移风险。建议：确认令牌已定义后删除全部内联 fallback（fallback 只在令牌可能缺席的边界处用） | 小 |
 
 ## 批次 UI-C — 状态完备性（状态）
 
@@ -155,13 +155,13 @@
 - UI-C1 剪贴板兜底、UI-C2 聊天错误横幅加重试/关闭
 - T 组 overview 失败全显"—"（区分新项目 vs 失败）
 
-**战役 UI-3：品牌色单一真相源**（~1-2 天，地基工程）
+**战役 UI-3：品牌色单一真相源** ✅ 2026-08-20（藏青双锚点落地，见 5f2b03a）（~1-2 天，地基工程）
 - D-1：global.css vs tokens.css 双源收敛（81 处 --color-* 迁移语义层）
 - 5 个死令牌激活（shadow-focus/select-option-h/dropdown-item-h/spacing-1_5/btn-press）
 - 缺口补齐：选中态语义层、danger 背景/悬停层、输入控件高度接入
 - 验收 grep 门：`rgba(46,141,100` 全库归零、死令牌全部有消费
 
-**战役 UI-4：视觉散值收敛**（分批，依赖 UI-3）
+**战役 UI-4：视觉散值收敛** ✅ 2026-08-20 收官（commit 6452037：z-index/别名升格/死令牌/幽灵字号 micro 收编/间距令牌化/输入样式合并/颜色 fallback 清零——四 grep 门全归零）
 - markdown.css（43 hex）/global.css（40 hex）主题化
 - 组件残留（ChatMessages 22+11 / ConfigProposalCard 8 / AgentSettings 8 / TrajectoryInspector 引用卡等）
 - 设置域三套输入样式合并（FORK-B）+ EntityAvatar 色板豁免声明
