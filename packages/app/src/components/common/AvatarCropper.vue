@@ -101,23 +101,21 @@ function imgDisplay(): { w: number; h: number } {
     : { w: Math.round((short * imgW.value) / imgH.value), h: short };
 }
 
-/** 图片左上位置：offset 中心换算 + 钳制（图片四边恒盖住取景框）。 */
+/** 图片左上位置：offset 中心换算 + 钳制（图片四边恒盖住取景框；
+ *  长图/放大图允许溢出舞台（overflow hidden 裁掉），不是把图锁死在舞台内）。 */
 const imgPos = computed(() => {
   const st = stageRef.value?.getBoundingClientRect();
   const d = imgDisplay();
   if (!st || d.w === 0) return { left: 0, top: 0 };
-  const cxMin = frameSize() / 2;
-  const cxMax = st.width - frameSize() / 2;
-  const cyMin = frameSize() / 2;
-  const cyMax = st.height - frameSize() / 2;
-  const left = Math.min(
-    Math.max(offset.value.x * st.width - d.w / 2, cxMin - d.w / 2),
-    cxMax - d.w / 2,
-  );
-  const top = Math.min(
-    Math.max(offset.value.y * st.height - d.h / 2, cyMin - d.h / 2),
-    cyMax - d.h / 2,
-  );
+  const f = frameSize();
+  // 取景框边界（舞台中央）
+  const fxL = (st.width - f) / 2, fxR = (st.width + f) / 2;
+  const fyT = (st.height - f) / 2, fyB = (st.height + f) / 2;
+  // 图片盖住框 ⟺ 图左 ≤ 框左 且 图右 ≥ 框右（垂直同理）→ 中心允许区间
+  const cxMin = fxR - d.w / 2, cxMax = fxL + d.w / 2;
+  const cyMin = fyB - d.h / 2, cyMax = fyT + d.h / 2;
+  const left = Math.min(Math.max(offset.value.x * st.width - d.w / 2, cxMin), cxMax);
+  const top = Math.min(Math.max(offset.value.y * st.height - d.h / 2, cyMin), cyMax);
   return { left, top };
 });
 
@@ -143,13 +141,12 @@ function onPointerMove(e: PointerEvent) {
   if (d.w === 0) return;
   const cx = e.clientX - st.left;
   const cy = e.clientY - st.top;
-  // 指针位置 = 图片中心；按 imgPos 同款钳制（图片盖满取景框）
-  const cxMin = frameSize() / 2;
-  const cxMax = st.width - frameSize() / 2;
-  const cyMin = frameSize() / 2;
-  const cyMax = st.height - frameSize() / 2;
-  const left = Math.min(Math.max(cx - d.w / 2, cxMin - d.w / 2), cxMax - d.w / 2);
-  const top = Math.min(Math.max(cy - d.h / 2, cyMin - d.h / 2), cyMax - d.h / 2);
+  // 指针位置 = 图片中心；imgPos 同款钳制（盖住框；长图允许出舞台）
+  const f = frameSize();
+  const fxL = (st.width - f) / 2, fxR = (st.width + f) / 2;
+  const fyT = (st.height - f) / 2, fyB = (st.height + f) / 2;
+  const left = Math.min(Math.max(cx - d.w / 2, fxR - d.w / 2), fxL + d.w / 2);
+  const top = Math.min(Math.max(cy - d.h / 2, fyB - d.h / 2), fyT + d.h / 2);
   offset.value = { x: (left + d.w / 2) / st.width, y: (top + d.h / 2) / st.height };
 }
 
