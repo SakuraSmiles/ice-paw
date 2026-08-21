@@ -320,6 +320,11 @@ async fn stream_loop_inner(
     // 复用同一 assistant 消息无缝拼接长输出（模式 C 治本）。
     // B1: 无限 range + 顶部硬闸——轮数上限由 effective_max_rounds 动态决定
     //（阶段 H 续期后抬升，max_tool_rounds=0 等边界由闸兜住），不再绑死在 range 上。
+    // S8-3/S8-4 跨轮状态：reminder 只发一次、收尾轮只给一次（须在轮循环外声明）
+    let mut budget_reminder_sent = false;
+    let mut budget_wrapup_used = false;
+    let mut budget_wrapup_prompt: Option<String> = None;
+
     'tool_round: for tool_round in 0u32.. {
         if ctx.cancel.is_cancelled() {
             // 残留占位补事件：此处占位行必然是「新鲜空行」（chat_cmd 首占位，或上一轮
@@ -440,6 +445,36 @@ async fn stream_loop_inner(
         } else {
             None
         };
+        // S8-3 预算 reminder（Codex 输入）：剩余额度 <10% 时向 agent 本身注入提醒——
+        // 让模型自管理收尾/分段（与 HUD pill 给人看互补：一个治透明度一个治自调度）。
+        // 语义：只提醒一次（首达阈值那轮），不逐轮轰炸；与钩子注入共用 round_injected 通道。
+        let budget_reminder = if effective_max_tokens != usize::MAX
+            && cumulative_tokens * 10 >= effective_max_tokens * 9  // ≥90% 已用
+            && cumulative_tokens <= effective_max_tokens            // 未触顶（触顶走终止路径）
+        {
+            let first = !budget_reminder_sent;
+            budget_reminder_sent = true; // 首次置位；此后轮次 false
+            first
+        } else {
+            false
+        };
+        // S8-4：收尾指令优先并入（若有）
+        let round_injected = match (budget_wrapup_prompt.take(), round_injected, budget_reminder) {
+            (Some(wrap), hook, _) => Some(match hook {
+                Some(h) => format!("{h}\n\n{wrap}"),
+                None => wrap,
+            }),
+            (None, hook, rem) => match (hook, rem) {
+                (Some(hook), true) => Some(format!(
+                    "{hook}\n\n[System] Token 预算即将用尽（已用 {cumulative_tokens}/{effective_max_tokens}）。请尽快收敛当前任务：输出阶段性结论，或把未完成部分整理成清晰的手接点（下一步做什么、关键状态在哪），让用户可以低成本继续。"
+                )),
+                (None, true) => Some(format!(
+                    "[System] Token 预算即将用尽（已用 {cumulative_tokens}/{effective_max_tokens}）。请尽快收敛当前任务：输出阶段性结论，或把未完成部分整理成清晰的手接点（下一步做什么、关键状态在哪），让用户可以低成本继续。"
+                )),
+                (inj, _) => inj,
+            },
+        };
+
         // session-events：钩子注入是模型可见事实（「Model-visible means logged」），
         // 每轮一条（BeforeLlm 本就每轮注入一次，事件密度与之对齐）。
         if let Some(inj) = &round_injected {
@@ -662,6 +697,20 @@ async fn stream_loop_inner(
                     budget_renewals,
                     ctx.budget.max_budget_renewals,
                     true,
+                );
+            } else if !budget_wrapup_used {
+                // S8-4 触顶文本收尾（OpenCode 输入）：续期用尽时不硬停——抬一次
+                // 收尾额度（约 4K，只够输出总结），收尾轮注入收尾指令让模型交代
+                // 进展与手接点；再次触顶则真正终止（budget_wrapup_used 已置位）。
+                budget_wrapup_used = true;
+                effective_max_tokens = effective_max_tokens.saturating_add(4096);
+                tracing::info!(
+                    target: "ice_paw.chat",
+                    "S8-4 预算收尾轮: cumulative={} 超限，注入收尾指令（+4096 额度）",
+                    cumulative_tokens,
+                );
+                budget_wrapup_prompt = Some(
+                    "[System] Token 预算已用尽，这是最后一轮。请立即停止调用任何工具，用 3-6 句话输出收尾总结：已完成什么、未完成什么、用户接下来该做什么（手接点）。".to_string(),
                 );
             } else {
                 tracing::warn!(
