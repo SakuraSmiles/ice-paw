@@ -18,6 +18,7 @@ const documents = ref<KbDocument[]>([]);
 const chunkStats = ref<KbStats | null>(null);
 const embeddingPrefs = ref<UserPreferences | null>(null);
 const loading = ref(true);
+const loadError = ref<string | null>(null);
 const reindexing = ref(false);
 const reindexResult = ref<string | null>(null);
 
@@ -31,6 +32,7 @@ const matched = (k: Kb) =>
   props.scope === "global" ? k.owner_id === null : k.owner_id === props.ownerId;
 
 async function load() {
+  loadError.value = null;
   loading.value = true;
   try {
     const [all, prefs] = await Promise.all([bridge.kb.list(), bridge.preferences.get()]);
@@ -45,6 +47,7 @@ async function load() {
     }
   } catch (e) {
     console.error("加载知识库失败:", e);
+    loadError.value = e instanceof Error ? e.message : String(e);
   } finally {
     loading.value = false;
   }
@@ -153,6 +156,14 @@ const directoryShort = computed(() => {
         <div v-if="doc.summary" class="doc-summary">{{ doc.summary }}</div>
         <div class="doc-path">{{ doc.file_path }}</div>
       </div>
+    </div>
+
+    <!-- 加载失败（UI-2 批次二 2/3：失败 ≠ 空，互斥可区分） -->
+    <div v-else-if="loadError" class="kb-load-fail">
+      <span class="kb-load-fail-icon">!</span>
+      <div class="kb-load-fail-title">知识库文档加载失败</div>
+      <div class="kb-load-fail-why">{{ loadError }}</div>
+      <button type="button" class="kb-load-fail-retry" @click="load">重试</button>
     </div>
 
     <!-- 空状态 -->
@@ -359,4 +370,12 @@ const directoryShort = computed(() => {
   color: var(--ip-color-text-disabled);
   line-height: 1.5;
 }
+
+/* ===== 加载失败态（UI-2）：与空态同位置的第三种状态 ===== */
+.kb-load-fail { padding: 24px 12px; display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; }
+.kb-load-fail-icon { width: 30px; height: 30px; border-radius: 50%; background: var(--ip-danger-bg); color: var(--ip-danger-base); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 15px; margin-bottom: 2px; }
+.kb-load-fail-title { font-size: var(--ip-text-body-sm-size); font-weight: 600; color: var(--ip-danger-text); }
+.kb-load-fail-why { font-size: var(--ip-text-caption-size); color: var(--ip-danger-base); opacity: .8; }
+.kb-load-fail-retry { margin-top: 6px; border: 1px solid var(--ip-danger-base); background: transparent; color: var(--ip-danger-text); border-radius: var(--ip-radius-md); padding: 4px 16px; font-size: var(--ip-text-body-sm-size); font-weight: var(--ip-font-weight-medium); cursor: pointer; }
+.kb-load-fail-retry:hover { background: var(--ip-danger-bg); }
 </style>

@@ -22,6 +22,7 @@ import ImagePreview from "./ImagePreview.vue";
 import AttachmentDetail from "./AttachmentDetail.vue";
 import TurnRail from "./TurnRail.vue";
 import BudgetPill from "./BudgetPill.vue";
+import ErrorBanner from "../common/ErrorBanner.vue";
 import { useThinkingTimer } from "../../composables/useThinkingTimer";
 import { useScrollFollow } from "../../composables/useScrollFollow";
 import { useTurnRail } from "../../composables/useTurnRail";
@@ -210,12 +211,34 @@ watch(
 
 const copiedId = ref<string | null>(null);
 
-function copyContent(content: string, id?: string) {
-  navigator.clipboard.writeText(content);
-  if (id) {
-    copiedId.value = id;
-    setTimeout(() => { copiedId.value = null; }, 2000);
+/** 复制：现代 API → execCommand 降级 → 如实失败态（宁可红 ✕ 不假绿 ✓）。*/
+async function copyContent(content: string, id?: string) {
+  let ok = false;
+  try {
+    await navigator.clipboard.writeText(content);
+    ok = true;
+  } catch {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = content;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      ok = document.execCommand("copy");
+      document.body.removeChild(ta);
+    } catch { ok = false; }
   }
+  if (!id) return;
+  copiedId.value = ok ? id : "fail:" + id;
+  setTimeout(() => { copiedId.value = null; }, 2000);
+}
+
+/** 错误横幅「重试」：以同内容重发上一条失败发送（store.lastFailedSend 为据）。*/
+function retryLastSend() {
+  const last = chat.lastFailedSend;
+  if (!last || chat.sending) return;
+  void chat.sendMessage(last.content, last.blocks.length > 0 ? last.blocks : undefined);
 }
 
 // ===== @ 引用：气泡引用按钮（一键成 chip）+ 历史引用卡片（点击跳转） =====
@@ -670,11 +693,18 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
        绝对定位子元素若挂在滚动容器内会随内容滚动，位置漂移） -->
   <div class="messages-wrap">
     <div ref="listRef" class="messages-area">
-    <!-- 错误提示 -->
-    <div v-if="chat.lastError" class="chat-error-banner">
-      <span class="chat-error-icon">!</span>
-      <span class="chat-error-text">{{ chat.lastError }}</span>
-    </div>
+    <!-- 错误提示（UI-2 批次三：ErrorBanner 化——有失败发送可重发，否则仅关闭） -->
+    <ErrorBanner
+      v-if="chat.lastError"
+      variant="banner"
+      class="chat-error-banner"
+      :title="chat.lastFailedSend ? '发送失败' : '请求出错'"
+      :detail="chat.lastError"
+      :retry-label="chat.lastFailedSend ? '重试' : null"
+      dismissible
+      @retry="retryLastSend"
+      @dismiss="chat.clearConvError()"
+    />
     <!-- 分页加载指示器 -->
     <div v-if="chat.loadingMore" class="load-more-hint">加载更早消息…</div>
     <div v-if="!chat.hasMore && chat.messages.length > 50" class="load-more-hint load-more-end">已显示全部消息</div>
@@ -783,10 +813,11 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
                   <span class="message-time">{{ formatTime(group.items[0].msg.created_at) }}</span>
                 </div>
                 <div class="footer-actions">
-                  <button class="copy-btn" :title="copiedId === group.items[0].msg.id ? '已复制' : '复制'" @click="copyContent(group.items[0].msg.content, group.items[0].msg.id)">
+                  <button class="copy-btn" :title="copiedId === group.items[0].msg.id ? '已复制' : copiedId === 'fail:' + group.items[0].msg.id ? '复制失败：剪贴板不可用' : '复制'" @click="copyContent(group.items[0].msg.content, group.items[0].msg.id)">
                     <svg v-if="copiedId !== group.items[0].msg.id" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                       <rect x="9" y="9" width="13" height="13" rx="2" ry="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
                     </svg>
+                    <svg v-else-if="copiedId === 'fail:' + group.items[0].msg.id" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--ip-danger-base)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
                     <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--ip-success-base, #16a34a)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
                   </button>
                   <button class="copy-btn" :title="quotedId === group.items[0].msg.id ? '已加入输入框引用' : '引用'" @click="quoteMessage(group.items[0].msg.id, 'user')">
@@ -988,11 +1019,12 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
                 <span v-if="groupTokenSum(group) > 0" class="badge-tokens">{{ groupTokenSum(group) }} tokens</span>
               </div>
               <div class="footer-actions">
-                <button v-if="groupText(group)" class="copy-btn" :title="copiedId === 'grp-' + group.firstIdx ? '已复制' : '复制'" @click="copyContent(groupText(group), 'grp-' + group.firstIdx)">
+                <button v-if="groupText(group)" class="copy-btn" :title="copiedId === 'grp-' + group.firstIdx ? '已复制' : copiedId === 'fail:' + 'grp-' + group.firstIdx ? '复制失败：剪贴板不可用' : '复制'" @click="copyContent(groupText(group), 'grp-' + group.firstIdx)">
                   <svg v-if="copiedId !== 'grp-' + group.firstIdx" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <rect x="9" y="9" width="13" height="13" rx="2" ry="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
                   </svg>
-                  <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--ip-success-base, #16a34a)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+                  <svg v-else-if="copiedId === 'fail:' + 'grp-' + group.firstIdx" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--ip-danger-base)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+                    <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--ip-success-base, #16a34a)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
                 </button>
                 <!-- 引用整组（组首 id；后端按连续 assistant 组展开=一次完整回答） -->
                 <button class="copy-btn" :title="quotedId === group.items[0].msg.id ? '已加入输入框引用' : '引用'" @click="quoteMessage(group.items[0].msg.id, 'assistant')">

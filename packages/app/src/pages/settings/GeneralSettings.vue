@@ -18,11 +18,16 @@ import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
 import { bridge } from "../../api/bridge";
 import { setTimezone } from "../../utils/time";
+import ErrorBanner from "../../components/common/ErrorBanner.vue";
 import Combobox from "../../components/common/Combobox.vue";
 import type { UserPreferences } from "../../types";
 
 const prefs = ref<UserPreferences>({});
 const loading = ref(true);
+// 页级数据源失败（UI-2 banner 形态）：prefs 不可信时全页表态，防照空表单误配置
+const loadError = ref<string | null>(null);
+// 保存失败（UI-2 批次二 3/3）：组级 inline 错误位——key='embedding'|'vision'；成功态 saved 保持对称
+const saveErrors = ref<Record<string, { msg: string; retry: () => void }>>({});
 const saving = ref(false);
 const saved = ref(false);
 /** 用户主动操作（保存工作空间 / 打开数据目录）失败的可见反馈 */
@@ -30,6 +35,7 @@ const actionError = ref("");
 
 async function load() {
   loading.value = true;
+  loadError.value = null;
   try {
     const raw = await bridge.preferences.get();
     // 统一为 / 分隔符（后端 Windows 返回 \）
@@ -40,6 +46,7 @@ async function load() {
     oldEmbedding.value = { provider: raw.embedding_provider ?? "", model: raw.embedding_model ?? "" };
   } catch (e) {
     console.error("加载设置失败:", e);
+    loadError.value = e instanceof Error ? e.message : String(e);
   } finally {
     loading.value = false;
   }
@@ -213,6 +220,7 @@ function cancelSwitch() {
 
 async function saveEmbedding() {
   saving.value = true;
+  delete saveErrors.value.embedding;
   try {
     await Promise.all([
       bridge.preferences.set("embedding_provider", prefs.value.embedding_provider ?? ""),
@@ -223,6 +231,7 @@ async function saveEmbedding() {
     setTimeout(() => { saved.value = false; }, 2000);
   } catch (e) {
     console.error("保存 embedding 配置失败:", e);
+    saveErrors.value.embedding = { msg: e instanceof Error ? e.message : String(e), retry: () => void saveEmbedding() };
   } finally {
     saving.value = false;
   }
@@ -258,6 +267,7 @@ function onVisionModelChange(newModel: string) {
 }
 async function saveVision() {
   saving.value = true;
+  delete saveErrors.value.vision;
   try {
     await Promise.all([
       bridge.preferences.set("vision_provider", prefs.value.vision_provider ?? ""),
@@ -268,6 +278,7 @@ async function saveVision() {
     setTimeout(() => { saved.value = false; }, 2000);
   } catch (e) {
     console.error("保存 vision 配置失败:", e);
+    saveErrors.value.vision = { msg: e instanceof Error ? e.message : String(e), retry: () => void saveVision() };
   } finally {
     saving.value = false;
   }
@@ -426,6 +437,7 @@ async function detectTimezone() {
 
 /** 保存时区到后端 */
 async function saveTimezone() {
+  delete saveErrors.value.timezone;
   saving.value = true;
   try {
     await bridge.preferences.set("timezone", prefs.value.timezone ?? "");
@@ -434,6 +446,7 @@ async function saveTimezone() {
     setTimeout(() => { saved.value = false; }, 2000);
   } catch (e) {
     console.error("save tz failed:", e);
+    saveErrors.value.timezone = { msg: e instanceof Error ? e.message : String(e), retry: () => void saveTimezone() };
   } finally {
     saving.value = false;
   }
@@ -516,7 +529,16 @@ const hasFilterResults = computed(() => {
     </div>
 
     <div v-if="loading" class="loading-state">加载中...</div>
-    <div v-else class="settings-list">
+    <template v-else>
+      <ErrorBanner
+        v-if="loadError"
+        variant="banner"
+        title="设置加载失败"
+        :detail="loadError + '。下方显示的可能不是最新配置，重试成功前请勿编辑保存'"
+        retry-label="重试"
+        @retry="load"
+      />
+      <div class="settings-list" :class="{ 'list-untrusted': !!loadError }">
 
       <!-- 操作失败提示（保存工作空间 / 打开数据目录等用户主动操作） -->
       <div v-if="actionError" class="action-error">{{ actionError }}</div>
@@ -562,6 +584,7 @@ const hasFilterResults = computed(() => {
             <span class="tip-icon" data-tip="设置后消息时间按当地时间显示，并作为上下文传给模型">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
             </span>
+            <ErrorBanner v-if="saveErrors.timezone" variant="inline" title="保存失败" :detail="saveErrors.timezone.msg" @retry="saveErrors.timezone?.retry()" />
           </div>
         </div>
         <div class="setting-control">
@@ -681,6 +704,7 @@ const hasFilterResults = computed(() => {
             <span class="tip-icon" data-tip="配置后知识库支持语义匹配（向量检索），比关键词更精准。独立于聊天 Agent。">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
             </span>
+            <ErrorBanner v-if="saveErrors.embedding" variant="inline" title="保存失败" :detail="saveErrors.embedding.msg" @retry="saveErrors.embedding?.retry()" />
           </div>
         </div>
         <div class="setting-control">
@@ -753,6 +777,8 @@ const hasFilterResults = computed(() => {
             <span class="tip-icon" data-tip="扫描件/图片型 PDF 文本提取为空时，由视觉模型把页面读成文字。&#10;· Agent 自带视觉（supports_vision）→ 优先用它自己的模型读图，无需此配置。&#10;· Agent 无视觉时，按顺序自动兜底：① 此处配置（精确控制模型/Key）→ ② Agent 自己的 GLM/OpenAI/MiniMax 凭据（glm-4v / gpt-4o / MiniMax-M3）→ ③ 已配的「GLM 视觉理解」MCP 凭据。&#10;即此处留空通常也能用——只要 Agent 是 GLM/OpenAI/MiniMax 系、或已配 GLM 视觉 MCP，扫描件即可自动代读。仅在想精确指定模型/Key 时才需填。">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
             </span>
+          
+            <ErrorBanner v-if="saveErrors.vision" variant="inline" title="保存失败" :detail="saveErrors.vision.msg" @retry="saveErrors.vision?.retry()" />
           </div>
         </div>
         <div class="setting-control">
@@ -797,11 +823,16 @@ const hasFilterResults = computed(() => {
         </div>
       </template>
 
-    </div>
+      </div>
+    </template>
   </div>
 </template>
 
 <style scoped>
+/* 页级数据不可信：内容降透明（配 ErrorBanner banner 形态） */
+.settings-list.list-untrusted { opacity: 0.55; pointer-events: none; }
+.settings-list.list-untrusted .action-error { pointer-events: auto; }
+
 /* ===== 页面布局 ===== */
 .settings-content-inner {
   flex: 1;

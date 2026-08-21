@@ -217,6 +217,7 @@ export async function useChatEvents(): Promise<() => void> {
       return;
     }
     chat.clearSendTimeout();
+    chat.lastFailedSend = null; // 成功完成 → 失败重发依据失效
 
     // 记录思考耗时与内容
     if (chat.thinkingStartTime) {
