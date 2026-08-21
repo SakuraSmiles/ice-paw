@@ -48,7 +48,8 @@ function onImgLoad() {
   if (imgEl.value) {
     imgW.value = imgEl.value.naturalWidth;
     imgH.value = imgEl.value.naturalHeight;
-    resetWinSize(); // 图就绪：视窗回默认 72%
+    scale.value = 1;        // 新图：cover 基线
+    offset.value = { x: 0.5, y: 0.5 }; // 居中
   }
 }
 
@@ -62,55 +63,70 @@ _w(imgSrc, async () => {
   }
 });
 
-// ---- 视窗定位（归一化中心点，渲染时换算像素）----
+// ---- 图片变换模型（用户拍板 2026-08-21）：固定取景框（舞台中央）+ 图片平移/缩放 ----
+// offset = 图片中心在舞台坐标的归一化位置（拖动改）；scale = 缩放系数（1 = cover 基线）。
 const offset = ref<CropOffset>({ x: 0.5, y: 0.5 });
+const scale = ref(1);
 const stageRef = ref<HTMLElement | null>(null);
 
-// 视窗边长（px，相对原图）与 stage 显示尺寸的比例换算：
-// 显示层用 <img> 自然布局（max 约束），直接以 stage 内像素工作——
-// 视窗 = 原图短边的显示比例。简化：视窗占 stage 短边的 72%（留呼吸）。
-// 视窗边长（ref：滚轮/捏合可缩放）。初值取舞台短边 72%，钳制 [25%, 100%]。
-const winSize = ref(150);
-
-function clampWinSize(v: number): number {
+/** 取景框边长（固定：舞台短边与 200 的较小者）。 */
+function frameSize(): number {
   const st = stageRef.value?.getBoundingClientRect();
-  const max = st ? Math.round(Math.min(st.width, st.height)) : 240;
-  return Math.round(Math.min(Math.max(v, Math.round(max * 0.25)), max));
+  const short = st ? Math.min(st.width, st.height) : 240;
+  return Math.round(Math.min(short, 200));
 }
 
-/** stage 挂载/图就绪时重置为 72%（新图回默认框）。 */
-function resetWinSize() {
+const FRAME_MIN_SCALE = 1;
+const FRAME_MAX_SCALE = 6;
+function clampScale(v: number): number {
+  return Math.min(Math.max(v, FRAME_MIN_SCALE), FRAME_MAX_SCALE);
+}
+
+/** 缩放步进 15%（zoomIn=放大看更细）。 */
+function zoom(dir: 1 | -1) {
+  scale.value = clampScale(+(scale.value * (1 + dir * 0.15)).toFixed(3));
+}
+
+/** 图片显示短边 = 取景框边长 × scale。 */
+function imgDisplayShort(): number {
+  return Math.round(frameSize() * scale.value);
+}
+
+/** 图片完整显示宽高（按原始宽高比从短边推）。 */
+function imgDisplay(): { w: number; h: number } {
+  if (imgW.value === 0 || imgH.value === 0) return { w: 0, h: 0 };
+  const short = imgDisplayShort();
+  return imgW.value <= imgH.value
+    ? { w: short, h: Math.round((short * imgH.value) / imgW.value) }
+    : { w: Math.round((short * imgW.value) / imgH.value), h: short };
+}
+
+/** 图片左上位置：offset 中心换算 + 钳制（图片四边恒盖住取景框）。 */
+const imgPos = computed(() => {
   const st = stageRef.value?.getBoundingClientRect();
-  if (st) winSize.value = Math.round(Math.min(st.width, st.height) * 0.72);
-}
-
-// 滚轮/触控板捏合缩放视窗（ctrlKey=捏合在 WKWebView 映射为带 ctrl 的 wheel）
-function onWheel(e: WheelEvent) {
-  if (!ready.value) return;
-  e.preventDefault();
-  // deltaY 正=缩小视窗（看得更多），负=放大（看得更细）；步进与当前尺寸成比例
-  const step = Math.max(6, Math.round(winSize.value * 0.08));
-  const delta = e.deltaY > 0 ? step : -step;
-  winSize.value = clampWinSize(winSize.value + delta);
-}
-
-/** 视窗左上像素位（stage 坐标系）——由 offset 中心点换算，钳制在 stage 内。 */
-const winPos = computed(() => {
-  const s = stageRef.value?.getBoundingClientRect();
-  if (!s) return { left: 0, top: 0 };
-  const w = winSize.value;
-  // offset 是相对【原图】的比例；stage 即原图显示区（图铺满 stage），
-  // 中心点直接按 stage 尺寸换算，短边方向天然贴边可用。
+  const d = imgDisplay();
+  if (!st || d.w === 0) return { left: 0, top: 0 };
+  const cxMin = frameSize() / 2;
+  const cxMax = st.width - frameSize() / 2;
+  const cyMin = frameSize() / 2;
+  const cyMax = st.height - frameSize() / 2;
   const left = Math.min(
-    Math.max(offset.value.x * s.width - w / 2, 0),
-    Math.max(s.width - w, 0),
+    Math.max(offset.value.x * st.width - d.w / 2, cxMin - d.w / 2),
+    cxMax - d.w / 2,
   );
   const top = Math.min(
-    Math.max(offset.value.y * s.height - w / 2, 0),
-    Math.max(s.height - w, 0),
+    Math.max(offset.value.y * st.height - d.h / 2, cyMin - d.h / 2),
+    cyMax - d.h / 2,
   );
   return { left, top };
 });
+
+// 滚轮/捏合缩放（+/- 按钮同调 zoom；ctrlKey 捏合在 WKWebView 映射为 wheel）
+function onWheel(e: WheelEvent) {
+  if (!ready.value) return;
+  e.preventDefault();
+  zoom(e.deltaY < 0 ? 1 : -1);
+}
 
 // ---- 拖动（pointer events：鼠标+触摸统一）----
 let dragging = false;
@@ -122,17 +138,19 @@ function onPointerDown(e: PointerEvent) {
 
 function onPointerMove(e: PointerEvent) {
   if (!dragging || !stageRef.value) return;
-  const s = stageRef.value.getBoundingClientRect();
-  const w = winSize.value;
-  // 指针位置 → 视窗中心（钳制），再反解归一化 offset
-  const cx = e.clientX - s.left;
-  const cy = e.clientY - s.top;
-  const left = Math.min(Math.max(cx - w / 2, 0), Math.max(s.width - w, 0));
-  const top = Math.min(Math.max(cy - w / 2, 0), Math.max(s.height - w, 0));
-  offset.value = {
-    x: s.width > w ? (left + w / 2) / s.width : 0.5,
-    y: s.height > w ? (top + w / 2) / s.height : 0.5,
-  };
+  const st = stageRef.value.getBoundingClientRect();
+  const d = imgDisplay();
+  if (d.w === 0) return;
+  const cx = e.clientX - st.left;
+  const cy = e.clientY - st.top;
+  // 指针位置 = 图片中心；按 imgPos 同款钳制（图片盖满取景框）
+  const cxMin = frameSize() / 2;
+  const cxMax = st.width - frameSize() / 2;
+  const cyMin = frameSize() / 2;
+  const cyMax = st.height - frameSize() / 2;
+  const left = Math.min(Math.max(cx - d.w / 2, cxMin - d.w / 2), cxMax - d.w / 2);
+  const top = Math.min(Math.max(cy - d.h / 2, cyMin - d.h / 2), cyMax - d.h / 2);
+  offset.value = { x: (left + d.w / 2) / st.width, y: (top + d.h / 2) / st.height };
 }
 
 function onPointerUp() {
@@ -153,11 +171,20 @@ const working = ref(false);
 const errMsg = ref("");
 
 async function onConfirm() {
-  if (!imgEl.value || working.value) return;
+  if (!imgEl.value || !stageRef.value || working.value) return;
   working.value = true;
   errMsg.value = "";
   try {
-    const data = await compressAvatarImage(imgEl.value, offset.value);
+    // 取景框中心在舞台的位置 → 图片显示坐标 → 原图归一化坐标
+    const st = stageRef.value.getBoundingClientRect();
+    const fx = st.width / 2 - imgPos.value.left;
+    const fy = st.height / 2 - imgPos.value.top;
+    const d = imgDisplay();
+    const cropOffset: CropOffset = d.w > 0 ? {
+      x: Math.min(Math.max(fx / d.w, 0), 1),
+      y: Math.min(Math.max(fy / d.h, 0), 1),
+    } : { x: 0.5, y: 0.5 };
+    const data = await compressAvatarImage(imgEl.value, cropOffset);
     emit("confirm", data);
   } catch (e) {
     errMsg.value = e instanceof Error ? e.message : "图片处理失败";
@@ -176,7 +203,7 @@ async function onConfirm() {
           <span class="ac-sub">拖动定位 · 滚轮/捏合缩放</span>
         </h4>
 
-        <!-- 裁剪舞台（常渲染：img 必须在 DOM 里才会触发 load——ready 死锁修复） -->
+        <!-- 裁剪舞台：固定取景框（中央）+ 可拖拽/缩放的图片（用户拍板模型） -->
         <div
           v-if="imgSrc"
           ref="stageRef"
@@ -184,21 +211,20 @@ async function onConfirm() {
           @pointerdown.prevent="onPointerDown"
           @wheel.prevent="onWheel"
         >
+          <!-- 底层：图片（拖动/缩放的变换载体；宽度=显示宽，位置=钳制后左上） -->
           <img
             ref="imgEl"
             :src="imgSrc ?? undefined"
             class="ac-img"
+            :style="{ width: imgDisplay().w + 'px', height: imgDisplay().h + 'px', left: imgPos.left + 'px', top: imgPos.top + 'px' }"
             draggable="false"
             @load="onImgLoad"
             @error="errMsg = '图片加载失败，请重新选择'"
           />
-          <!-- 全景蒙层：视窗外压暗（box-shadow 大投影技巧） -->
-          <div
-            v-if="ready"
-            class="ac-win"
-            :style="{ width: winSize + 'px', height: winSize + 'px', left: winPos.left + 'px', top: winPos.top + 'px' }"
-          >
-            <span class="ac-grip" aria-hidden="true" />
+          <!-- 顶层：固定取景框（中央白框 + 框外压暗 + 四角刻度） -->
+          <div v-if="ready" class="ac-frame" :style="{ width: frameSize() + 'px', height: frameSize() + 'px' }">
+            <span class="ac-corner tl" /><span class="ac-corner tr" />
+            <span class="ac-corner bl" /><span class="ac-corner br" />
           </div>
         </div>
 
@@ -209,7 +235,15 @@ async function onConfirm() {
         </div>
 
         <div class="ac-foot">
-          <span class="ac-hint">{{ errMsg || (ready ? winSize + "×" + winSize : "") }}</span>
+          <div class="ac-zoom">
+            <button type="button" class="ac-zoom-btn" title="缩小" :disabled="scale <= FRAME_MIN_SCALE" @click="zoom(-1)">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            </button>
+            <span class="ac-zoom-val">{{ Math.round(scale * 100) }}%</span>
+            <button type="button" class="ac-zoom-btn" title="放大" :disabled="scale >= FRAME_MAX_SCALE" @click="zoom(1)">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            </button>
+          </div>
           <div class="ac-actions">
             <button type="button" class="ac-btn ghost" @click="fileInput?.click()">重新选图</button>
             <button type="button" class="ac-btn ghost" @click="emit('cancel')">取消</button>
@@ -255,27 +289,8 @@ async function onConfirm() {
   user-select: none;
   touch-action: none;
 }
-.ac-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
-/* 视窗：白框 + 大投影做蒙层；内嵌同图裁剪平移对齐（win-img 反向偏移由 left/top margin 实现） */
-.ac-win {
-  position: absolute;
-  border: 2.5px solid #fff;
-  border-radius: var(--ip-radius-sm);
-  box-shadow: 0 0 0 9999px rgba(11, 14, 18, 0.45);
-  overflow: hidden;
-  cursor: grab;
-}
-.ac-win:active { cursor: grabbing; }
-.ac-grip {
-  position: absolute;
-  right: 3px;
-  bottom: 3px;
-  width: 16px;
-  height: 16px;
-  background: rgba(255, 255, 255, 0.85);
-  border-radius: 0 0 4px 0;
-  clip-path: polygon(100% 0, 100% 100%, 0 100%);
-}
+
+
 
 .ac-empty {
   height: 160px;
@@ -310,5 +325,44 @@ async function onConfirm() {
 .ac-btn.primary:disabled { opacity: 0.5; cursor: not-allowed; }
 .ac-btn.ghost { background: transparent; color: var(--ip-color-text-secondary); }
 .ac-btn.ghost:hover { background: var(--ip-color-bg-tertiary); }
+/* 图片：绝对定位（变换载体；宽高/位置由内联 style 驱动） */
+.ac-img {
+  position: absolute;
+  object-fit: fill; /* 尺寸由 style 精确指定，禁 contain 的自动适配 */
+  cursor: grab;
+  max-width: none; /* 覆盖全局 img max-width 限制（可放大超舞台） */
+}
+.ac-img:active { cursor: grabbing; }
+
+/* 固定取景框：中央白框 + 框外压暗（大投影蒙层）+ 四角刻度 */
+.ac-frame {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 9999px rgba(11, 14, 18, 0.5);
+  pointer-events: none; /* 框是视觉层，拖的是底下的图 */
+}
+.ac-corner { position: absolute; width: 12px; height: 12px; border-color: #fff; border-style: solid; }
+.ac-corner.tl { left: -2px; top: -2px; border-width: 3px 0 0 3px; }
+.ac-corner.tr { right: -2px; top: -2px; border-width: 3px 3px 0 0; }
+.ac-corner.bl { left: -2px; bottom: -2px; border-width: 0 0 3px 3px; }
+.ac-corner.br { right: -2px; bottom: -2px; border-width: 0 3px 3px 0; }
+
+/* 缩放控件（+/- + 百分比） */
+.ac-zoom { display: flex; align-items: center; gap: 6px; }
+.ac-zoom-btn {
+  width: 24px; height: 24px;
+  border: 1px solid var(--ip-color-border-default);
+  border-radius: var(--ip-radius-md);
+  background: var(--ip-color-bg-primary);
+  color: var(--ip-color-text-secondary);
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+}
+.ac-zoom-btn:hover:not(:disabled) { color: var(--ip-primary-600); border-color: var(--ip-primary-400); }
+.ac-zoom-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.ac-zoom-val { font-size: var(--ip-text-micro-size); color: var(--ip-color-text-tertiary); font-family: var(--ip-font-mono); min-width: 38px; text-align: center; }
 .ac-file { display: none; }
 </style>
