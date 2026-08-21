@@ -596,7 +596,16 @@ function handleKeydown(e: KeyboardEvent) {
 .file-chip-remove { flex-shrink:0; display:flex; align-items:center; justify-content:center; width:16px; height:16px; border-radius:50%; border:none; background:transparent; color:var(--ip-color-text-disabled); cursor:pointer; transition:all var(--ip-duration-fast) var(--ip-ease-out); }
 .file-chip-remove:hover { background-color:var(--ip-color-bg-hover); color:var(--ip-danger-base); }
 
-.attach-file-input { display: none; }
+/* 视觉隐藏而非 display:none——WKWebView 某些版本对 display:none 的 input
+ * 调 .click() 静默不弹选择器（真机症状"点击没反应"）；保持可渲染即可靠。 */
+.attach-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
 .input-wrapper { position:relative; display:flex; flex-direction:column; background-color:var(--ip-color-bg-input); border:1px solid var(--ip-color-border-default); border-radius:12px; transition:border-color var(--ip-duration-base) var(--ip-ease-out),box-shadow var(--ip-duration-base) var(--ip-ease-out); }
 
 /* ===== @ 引用弹层（输入框上方） ===== */
