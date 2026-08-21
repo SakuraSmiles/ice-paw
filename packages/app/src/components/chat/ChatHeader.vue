@@ -161,6 +161,16 @@ async function togglePin() {
 <template>
   <header class="chat-header" :class="{ 'has-tabbar': hasTabbar }">
     <div class="header-left">
+      <!-- 外层头像：仅主会话（kind !== 'delegation'）+ 用户上传过头像时才显示。
+           xl=44px 占满主标题+副标题两行高度；正圆保证显示效果。
+           子会话走副标题 28px 小头像路径，避免两个头像并存。 -->
+      <EntityAvatar
+        v-if="activeAgent?.avatar && chat.activeConversation?.kind !== 'delegation'"
+        class="header-agent-avatar-xl"
+        :name="activeAgent.name"
+        :image="activeAgent.avatar"
+        size="xl"
+      />
       <div class="header-info">
         <input
           v-if="editing"
@@ -199,8 +209,11 @@ async function togglePin() {
           </span>
         </h1>
         <div class="header-meta">
+          <!-- 副标题头像：仅子会话（kind='delegation'）显示 28px 小头像。
+               主会话（kind='chat'）保持纯文本「agent 名 · model」，
+               外层 .header-left 的 44px 头像承担身份展示（仅在用户上传过 avatar 时）。 -->
           <EntityAvatar
-            v-if="activeAgent"
+            v-if="activeAgent && chat.activeConversation?.kind === 'delegation'"
             class="header-agent-avatar"
             :name="activeAgent.name"
             :image="activeAgent.avatar"
@@ -256,7 +269,7 @@ async function togglePin() {
 .chat-header { display:flex; align-items:center; justify-content:space-between; padding:14px 24px; min-height:68px; border-bottom:1px solid var(--ip-color-border-default); background-color:var(--ip-color-bg-chat-header); backdrop-filter:blur(8px); flex-shrink:0; position:relative; z-index:1; }
 /* 标签条在场（会话态）：去底边线，标题与标签条视觉一体（同底色无分割） */
 .chat-header.has-tabbar { border-bottom:none; }
-.header-left { display:flex; align-items:center; gap: var(--ip-spacing-2_5); min-width:0; }
+.header-left { display:flex; align-items:center; gap: var(--ip-spacing-3); min-width:0; }
 .header-info { display:flex; flex-direction:column; gap:2px; min-width:0; }
 /* 面包屑上文（父会话 › 本任务）：父会话即返回入口（子会话不在侧栏列表）。
    视觉降一档（caption/tertiary），hover 提亮为 primary 强调可点；不抢标题主体 */
@@ -284,6 +297,8 @@ async function togglePin() {
 .header-meta { display:flex; align-items:center; gap:6px; }
 /* agent 头像（md=28px，EntityAvatar 三级链） */
 .header-agent-avatar { flex: none; }
+/* 外层头像（xl=44px，占两行高度；用户上传时才有，无头像时元素 v-if 不渲染） */
+.header-agent-avatar-xl { flex: none; }
 .header-agent { font-size:var(--ip-text-caption-size); color:var(--ip-primary-600); line-height:1.4; font-weight:var(--ip-font-weight-medium); }
 .header-sep { font-size:var(--ip-text-caption-size); color:var(--ip-color-text-tertiary); line-height:1.4; }
 .header-model { font-size:var(--ip-text-caption-size); color:var(--ip-color-text-tertiary); line-height:1.4; }
