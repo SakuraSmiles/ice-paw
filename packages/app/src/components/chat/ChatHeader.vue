@@ -12,6 +12,8 @@
 -->
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onUnmounted } from "vue";
+import { useEscapeStack } from "../../composables/useEscapeStack";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useChatStore }from "../../stores/chat";
 import { useAgentStore } from "../../stores/agent";
 import { bridge } from "../../api/bridge";
@@ -37,24 +39,33 @@ function onDocClick(e: MouseEvent) {
     confirming.value = false;
   }
 }
-function onDocKeydown(e: KeyboardEvent) {
-  if (e.key === "Escape") confirming.value = false;
-}
+// Esc 关闭确认态走全局栈（与其它浮层互斥，只关栈顶）
+useEscapeStack(() => { confirming.value = false; });
 
 // U18: 只在确认条展开时注册监听，避免全局常驻
 watch(confirming, (open) => {
   if (open) {
     document.addEventListener("click", onDocClick);
-    document.addEventListener("keydown", onDocKeydown);
   } else {
     document.removeEventListener("click", onDocClick);
-    document.removeEventListener("keydown", onDocKeydown);
   }
 });
 onUnmounted(() => {
   document.removeEventListener("click", onDocClick);
-  document.removeEventListener("keydown", onDocKeydown);
 });
+
+// UI-E2 窗口标题随会话联动：桌面惯例（dock/窗口列表可辨当前会话），空回退产品名。
+// try-catch 防御：测试环境（happy-dom）无 Tauri runtime，getCurrentWindow 抛错须静默。
+watch(
+  () => chat.activeConversation?.title,
+  (title) => {
+    const t = title?.trim();
+    try {
+      void getCurrentWindow().setTitle(t ? `${t} — IcePaw` : "IcePaw").catch(() => {});
+    } catch { /* 非 Tauri 环境（测试/浏览器 dev）无窗口句柄 */ }
+  },
+  { immediate: true },
+);
 
 const activeAgent = computed(() => {
   const conv = chat.activeConversation;

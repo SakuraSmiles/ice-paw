@@ -13,6 +13,7 @@
 -->
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from "vue";
+import { useEscapeStack } from "../../composables/useEscapeStack";
 
 const props = defineProps<{
   images: { data: string; mediaType: string }[];
@@ -42,11 +43,13 @@ function toggleZoom(e: Event) {
   e.stopPropagation();
   scale.value = scale.value === 1 ? 2.5 : 1;
 }
+// Esc 走全局栈（useEscapeStack，只关栈顶层）；本组件仅处理翻张
 function onKey(e: KeyboardEvent) {
   if (e.key === "ArrowLeft") prev();
   else if (e.key === "ArrowRight") next();
-  else if (e.key === "Escape") emit("close");
 }
+useEscapeStack(() => emit("close"));
+
 onMounted(() => {
   window.addEventListener("keydown", onKey);
   document.body.style.overflow = "hidden";
