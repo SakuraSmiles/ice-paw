@@ -32,8 +32,8 @@
 
 | # | 项 | 位置 | 症状与建议 | 量级 |
 |---|---|---|---|---|
-| UI-C1 | **剪贴板无失败兜底** | `ChatMessages.vue` copyContent：`navigator.clipboard.writeText(content)` 裸调用 | clipboard API 在非聚焦文档/权限异常时 reject → 静默失败，用户以为复制成功。建议：`.catch` 走 `document.execCommand('copy')` 降级或至少把 copy 按钮态改为失败色 | 小 |
-| UI-C2 | **错误横幅无重试/关闭动作** | `ChatMessages.vue:674` chat-error-banner | 仅展示 lastError 文本，无「重试」入口也无关闭。建议：网络类错误附重试按钮（重发上一条），其余附关闭 ×。注意 L2 原则：这是状态上屏，不是配置 | 小 |
+| UI-C1 | ~~剪贴板无失败兜底~~ ✅ 2026-08-20（UI-2 批次三：三级降级链 + 如实红 ✕ 态） | — | — | — |
+| UI-C2 | ~~错误横幅无重试/关闭动作~~ ✅ 2026-08-20（UI-2 批次三：ErrorBanner 化 + lastFailedSend 重发） | — | — | — |
 | UI-C3 | **骨架屏覆盖不均** | 已有：消息列表/侧栏会话（shimmer 质量好）；缺：轨迹页首载、项目详情 tab 首载、设置页部分列表 | 走查 fork 补充定位后汇总 | 待 fork |
 
 ## 批次 UI-D — 可访问性与键盘（平台/手感）
@@ -149,7 +149,7 @@
 - UI-D2 tablist 语义（ChatPage tabbar + 项目 tab）
 - 手测：拼音/五笔 IME、纯键盘走完新建→发送→切 tab→查轨迹→开检查器
 
-**战役 UI-2：错误反馈原语**（~一天，符合 L2 状态上屏）
+**战役 UI-2：错误反馈原语** ✅ 2026-08-20 收官（commit 1bb59e7：ErrorBanner 双形态组件 + 8 处静默失败消灭 + 聊天横幅令牌化；批次一/二/三预览卡均经用户审核后落地）
 - 抽 ErrorBanner/保存反馈组件（含加载失败+重试态）
 - 接通设置域 ~8 处静默点（FORK-B S-1..S-5）
 - UI-C1 剪贴板兜底、UI-C2 聊天错误横幅加重试/关闭
