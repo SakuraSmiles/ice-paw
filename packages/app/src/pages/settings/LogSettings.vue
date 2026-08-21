@@ -194,7 +194,7 @@ onUnmounted(() => {
   padding: 20px 28px 0;
   flex-shrink: 0;
   height: 56px;
-  gap: 12px;
+  gap: var(--ip-spacing-3);
 }
 .content-title {
   font-size: var(--ip-text-h3-size);
@@ -206,14 +206,14 @@ onUnmounted(() => {
 .header-actions {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--ip-spacing-3);
 }
 
 /* 自动刷新开关 */
 .auto-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--ip-spacing-2);
   font-size: var(--ip-text-body-sm-size);
   color: var(--ip-color-text-secondary);
   cursor: pointer;
@@ -286,7 +286,7 @@ onUnmounted(() => {
 .log-line {
   display: flex;
   align-items: flex-start;
-  gap: 12px;
+  gap: var(--ip-spacing-3);
   padding: 0 16px 0 14px;
   /* 左侧 2px 严重度色条（默认透明，ERROR/WARN 着色） */
   border-left: 2px solid transparent;
@@ -384,13 +384,13 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
+  gap: var(--ip-spacing-2_5);
   color: var(--ip-color-text-tertiary);
   font-size: var(--ip-text-body-sm-size);
 }
 .log-state.is-error {
   flex-direction: column;
-  gap: 12px;
+  gap: var(--ip-spacing-3);
   color: var(--ip-danger-text);
 }
 </style>

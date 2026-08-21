@@ -88,6 +88,7 @@
   --ip-text-body-lg-size:  17px; --ip-text-body-lg-lh: 28px;
   --ip-text-body-size:     15px; --ip-text-body-lh:    24px;
   --ip-text-body-sm-size:  13px; --ip-text-body-sm-lh: 20px;
+  --ip-text-micro-size:    11px; --ip-text-micro-lh:    16px;
   --ip-text-caption-size:  12px; --ip-text-caption-lh: 18px;
   --ip-text-code-size:     14px; --ip-text-code-lh:    22px;
 
@@ -122,6 +123,7 @@
   --ip-spacing-0_5:  2px;
   --ip-spacing-1:    4px;
   --ip-spacing-2:    8px;
+  --ip-spacing-2_5:  10px;
   --ip-spacing-3:    12px;
   --ip-spacing-4:    16px;
   --ip-spacing-5:    20px;
@@ -183,7 +185,6 @@
   --ip-duration-cursor:    1000ms;
   --ip-duration-spinner:   720ms;
   --ip-duration-shake:     400ms;
-  --ip-duration-btn-press: 50ms;
   --ip-duration-modal-out: 200ms;
   --ip-duration-toast-collapse: 200ms;
 
@@ -205,6 +206,7 @@
 
   --ip-z-base:            0;
   --ip-z-badge:           10;
+  --ip-z-raised:          20;      /* 组件上浮层：@弹层 / 跳到底部按钮（不跨浮层嵌套） */
   --ip-z-dropdown:        100;
   --ip-z-sticky:          200;
   --ip-z-sidebar:         300;
@@ -314,7 +316,6 @@
   --ip-dropdown-popover-min-w:       180px;
   --ip-dropdown-popover-max-w:       280px;
   --ip-dropdown-popover-max-h:       360px;
-  --ip-dropdown-item-h:              32px;
 
   /* Popconfirm */
   --ip-popconfirm-popover-min-w:     200px;
@@ -333,7 +334,6 @@
   --ip-color-text-placeholder:       var(--ip-gray-400);
 
   /* 间距补齐（P0 新增：1_5=6px） */
-  --ip-spacing-1_5:                  6px;
 
   /* 图标尺寸通用 token（P0 新增） */
   --ip-icon-sm:                      14px;
@@ -407,6 +407,13 @@
   --ip-color-border-default:  var(--ip-gray-300);
   --ip-color-border-strong:   var(--ip-gray-500);
   --ip-color-border-focus:    var(--ip-primary-500);
+  /* 输入域（v2.0 自 --color-* 别名升格，值不变）：输入框底色偏主背景而非三级底 */
+  --ip-color-bg-input:         #FFFFFF;
+  --ip-color-bg-sidebar-item-hover: #F0F2F5;
+  --ip-color-bg-sidebar-item-active: var(--ip-color-primary-soft-bg);
+  --ip-color-bg-chat-header:   rgba(255, 255, 255, 0.85);
+  --ip-color-text-message-ai:  #252C36;
+  --ip-color-bg-message-ai:    #F4F6F8;
   --ip-color-border-error:    var(--ip-danger-base);
 
   /* 图标 */

@@ -362,7 +362,7 @@ const donutSegs = computed(() => {
 .stat-band {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr)) minmax(0, 1.9fr);
-  gap: 12px;
+  gap: var(--ip-spacing-3);
   align-items: stretch;
 }
 .stat-card {
@@ -395,8 +395,8 @@ const donutSegs = computed(() => {
 .stat-card-click:hover .label-chevron { opacity: 0.8; }
 
 /* 任务状态宽卡 */
-.task-mix { padding: 16px 20px; gap: 10px; }
-.mix-body { display: flex; flex-direction: column; gap: 10px; flex: 1; justify-content: center; }
+.task-mix { padding: 16px 20px; gap: var(--ip-spacing-2_5); }
+.mix-body { display: flex; flex-direction: column; gap: var(--ip-spacing-2_5); flex: 1; justify-content: center; }
 .mix-bar {
   display: flex; gap: 2px;
   height: 6px; border-radius: var(--ip-radius-full);
@@ -430,7 +430,7 @@ const donutSegs = computed(() => {
 
 /* ===== 成员负载：环图 + 横条排行 ===== */
 .share-card { gap: 14px; }
-.share-head { display: flex; align-items: baseline; gap: 8px; }
+.share-head { display: flex; align-items: baseline; gap: var(--ip-spacing-2); }
 .share-title {
   font-size: var(--ip-text-body-sm-size);
   font-weight: var(--ip-font-weight-medium);
@@ -474,10 +474,10 @@ const donutSegs = computed(() => {
   font-variant-numeric: tabular-nums;
   line-height: 1.1;
 }
-.donut-sub { font-size: 11px; color: var(--ip-color-text-tertiary); }
+.donut-sub { font-size: var(--ip-text-micro-size); color: var(--ip-color-text-tertiary); }
 /* 默认态单位小标：拉开字距的小型大写风格（科技感排版惯例） */
 .donut-label {
-  font-size: 9.5px;
+  font-size: var(--ip-text-micro-size);
   letter-spacing: 0.16em;
   margin-right: -0.16em; /* 补偿末字符字距，视觉居中 */
 }
@@ -501,7 +501,7 @@ const donutSegs = computed(() => {
 .share-row { display: contents; }
 .share-label {
   grid-column: 1;
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; gap: var(--ip-spacing-2);
   min-width: 0;
   transition: opacity 160ms var(--ip-ease-out, ease);
 }
@@ -566,7 +566,7 @@ const donutSegs = computed(() => {
 .share-row.dim .count-tokens { opacity: 0.35; }
 .share-row.dim .count-msgs { opacity: 0.35; }
 .mix-meta {
-  display: flex; justify-content: space-between; gap: 12px;
+  display: flex; justify-content: space-between; gap: var(--ip-spacing-3);
   padding-top: 8px;
   border-top: 1px solid var(--ip-color-border-default);
   font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary);

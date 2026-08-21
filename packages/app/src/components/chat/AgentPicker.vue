@@ -84,13 +84,13 @@ const visibleAgents = computed(() =>
   display: flex; flex-direction: column; gap: 2px;
 }
 .picker-item {
-  display: flex; align-items: center; gap: 12px;
+  display: flex; align-items: center; gap: var(--ip-spacing-3);
   width: 100%; padding: 10px 12px; text-align: left;
   border: none; border-radius: var(--ip-radius-lg); cursor: pointer;
   background: transparent; font: inherit; color: inherit;
   transition: background-color var(--ip-duration-fast) var(--ip-ease-out);
 }
-.picker-item:hover { background: var(--color-sidebar-item-hover); }
+.picker-item:hover { background: var(--ip-color-bg-sidebar-item-hover); }
 /* EntityAvatar 容器（lg=36px；视觉由组件内三级链接管） */
 .picker-avatar { flex-shrink: 0; }
 .picker-info { flex: 1; min-width: 0; }

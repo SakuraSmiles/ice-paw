@@ -169,7 +169,7 @@ async function openDir() {
   resize: vertical;
   transition: all var(--ip-duration-fast) var(--ip-ease-out);
 }
-.ctx-md:focus { outline: none; border-color: var(--color-input-focus-border); background-color: var(--color-input-bg); }
+.ctx-md:focus { outline: none; border-color: var(--ip-color-border-focus); background-color: var(--ip-color-bg-input); }
 .ctx-md:disabled { opacity: 0.6; }
 .ctx-md::placeholder { color: var(--ip-color-text-disabled); }
 .conv-toggle {
@@ -182,7 +182,7 @@ async function openDir() {
 .conv-toggle:hover { color: var(--ip-color-text-secondary); }
 .chev { transition: transform var(--ip-duration-fast) var(--ip-ease-out); }
 .chev.rotated { transform: rotate(90deg); }
-.ctx-actions { display: flex; align-items: center; gap: 8px; }
+.ctx-actions { display: flex; align-items: center; gap: var(--ip-spacing-2); }
 .ctx-saved { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-disabled); }
 .field-hint { margin: 0; font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); line-height: 1.5; }
 .form-error { font-size: var(--ip-text-caption-size); color: var(--ip-danger-text); }

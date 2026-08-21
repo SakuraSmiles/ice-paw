@@ -71,7 +71,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
 
 <style scoped>
 .att-detail-mask {
-  position: fixed; inset: 0; z-index: 9999;
+  position: fixed; inset: 0; z-index: var(--ip-z-modal-overlay);
   background: rgba(0, 0, 0, 0.5);
   display: flex; align-items: center; justify-content: center;
   backdrop-filter: blur(2px);
@@ -79,7 +79,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
 .att-detail-panel {
   width: min(640px, 92vw); max-height: 82vh;
   display: flex; flex-direction: column;
-  background: var(--ip-color-bg-elevated, #fff);
+  background: var(--ip-color-bg-elevated);
   border-radius: 12px; border: 1px solid var(--ip-color-border-default);
   box-shadow: 0 12px 48px rgba(0, 0, 0, 0.25);
   overflow: hidden;
@@ -101,7 +101,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
 .att-detail-item { border-radius: 8px; }
 .att-detail-item + .att-detail-item { border-top: 1px solid var(--ip-color-border-subtle, rgba(0,0,0,0.05)); }
 .att-detail-toggle {
-  width: 100%; display: flex; align-items: center; gap: 12px;
+  width: 100%; display: flex; align-items: center; gap: var(--ip-spacing-3);
   padding: 10px 12px; border: none; background: transparent;
   cursor: pointer; text-align: left; border-radius: 8px;
 }
@@ -119,7 +119,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
   font-size: 13px; font-weight: 500; color: var(--ip-color-text-primary);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.att-detail-meta { font-size: 11px; color: var(--ip-color-text-tertiary); }
+.att-detail-meta { font-size: var(--ip-text-micro-size); color: var(--ip-color-text-tertiary); }
 .att-detail-arrow { flex: none; color: var(--ip-color-text-tertiary); font-size: 12px; }
 
 .att-detail-text {

@@ -818,11 +818,11 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
                       <rect x="9" y="9" width="13" height="13" rx="2" ry="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
                     </svg>
                     <svg v-else-if="copiedId === 'fail:' + group.items[0].msg.id" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--ip-danger-base)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
-                    <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--ip-success-base, #16a34a)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+                    <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--ip-success-base)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
                   </button>
                   <button class="copy-btn" :title="quotedId === group.items[0].msg.id ? '已加入输入框引用' : '引用'" @click="quoteMessage(group.items[0].msg.id, 'user')">
                     <svg v-if="quotedId !== group.items[0].msg.id" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>
-                    <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--ip-success-base, #16a34a)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+                    <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--ip-success-base)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
                   </button>
                 </div>
               </div>
@@ -1024,12 +1024,12 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
                     <rect x="9" y="9" width="13" height="13" rx="2" ry="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
                   </svg>
                   <svg v-else-if="copiedId === 'fail:' + 'grp-' + group.firstIdx" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--ip-danger-base)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
-                    <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--ip-success-base, #16a34a)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+                    <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--ip-success-base)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
                 </button>
                 <!-- 引用整组（组首 id；后端按连续 assistant 组展开=一次完整回答） -->
                 <button class="copy-btn" :title="quotedId === group.items[0].msg.id ? '已加入输入框引用' : '引用'" @click="quoteMessage(group.items[0].msg.id, 'assistant')">
                   <svg v-if="quotedId !== group.items[0].msg.id" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>
-                  <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--ip-success-base, #16a34a)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+                  <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--ip-success-base)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
                 </button>
               </div>
             </div>
@@ -1124,18 +1124,18 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
 /* scrollbar-gutter:stable 恒定预留滚动条位——带内悬浮件（导航条/兜底按钮）
    不随滚动条出现/消失漂移，内容列也不再横向抖 6px */
 .messages-area { flex:1; overflow-y:auto; scrollbar-gutter:stable; padding:24px 0; position:relative; }
-.messages-container { display:flex; flex-direction:column; gap:16px; padding:0 var(--msg-col-right) 0 48px; }
+.messages-container { display:flex; flex-direction:column; gap: var(--ip-spacing-4); padding:0 var(--msg-col-right) 0 48px; }
 
 /* ===== 分页指示 ===== */
 .load-more-hint { text-align:center; font-size:var(--ip-text-caption-size); color:var(--ip-color-text-tertiary); padding:8px var(--msg-col-right) 8px 48px; }
 .load-more-end { color:var(--ip-color-text-disabled); }
 
 /* ===== 日期分组 ===== */
-.date-divider { display:flex; align-items:center; gap:12px; padding:20px var(--msg-col-right) 8px 48px; font-size:var(--ip-text-caption-size); color:var(--ip-color-text-disabled); }
+.date-divider { display:flex; align-items:center; gap: var(--ip-spacing-3); padding:20px var(--msg-col-right) 8px 48px; font-size:var(--ip-text-caption-size); color:var(--ip-color-text-disabled); }
 .date-divider::before, .date-divider::after { content:''; flex:1; height:1px; background:var(--ip-color-border-default); }
 
 /* ===== finish_reason 提示（B3：中性提示 + 可续跑类「继续」按钮）===== */
-.finish-reason { display:flex; align-items:center; justify-content:center; gap:8px; padding:4px var(--msg-col-right) 0 48px; }
+.finish-reason { display:flex; align-items:center; justify-content:center; gap: var(--ip-spacing-2); padding:4px var(--msg-col-right) 0 48px; }
 .finish-reason span { display:inline-block; font-size:var(--ip-text-caption-size); color:var(--ip-color-text-tertiary); padding:2px 10px; border-radius:var(--ip-radius-full); background:var(--ip-color-bg-tertiary); }
 .continue-btn { font-size:var(--ip-text-caption-size); color:var(--ip-color-text-secondary); padding:2px 12px; border-radius:var(--ip-radius-full); border:1px solid var(--ip-color-border-default); background:var(--ip-color-bg-secondary); cursor:pointer; transition:all var(--ip-duration-fast) var(--ip-ease-out); }
 .continue-btn:hover { color:var(--ip-color-text-primary); border-color:var(--ip-color-border-strong); }
@@ -1177,7 +1177,7 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
 .message-group { content-visibility:auto; contain-intrinsic-size:auto 300px; }
 .message-group.assistant {
   align-self:flex-start; max-width:85%;
-  background-color:var(--color-message-ai-bg); color:var(--color-message-ai-text);
+  background-color:var(--ip-color-bg-message-ai); color:var(--ip-color-text-message-ai);
   border-radius:12px; border-bottom-left-radius:4px; padding:14px 16px;
 }
 .message-group.user { align-self:flex-end; max-width:70%; }
@@ -1192,7 +1192,7 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
 /* flex column + 统一 gap：正文 / 引用卡 / 附件卡（含堆叠）/ 图片（含堆叠）纵向
    排布的唯一间距来源——旧实现靠各元素零散 margin-top（6/4/0px 不一，单图单卡
    贴正文），多元素混排时参差；卡片的独立 margin 已移除，调间距只改 gap。 */
-.message-group.user .message-bubble { display:flex; flex-direction:column; gap:8px; padding:10px 16px; border-radius:12px; font-size:var(--ip-text-body-size); line-height:1.6; white-space:pre-wrap; word-break:break-word; background-color:var(--color-message-user-bg); color:var(--color-message-user-text); border-bottom-right-radius:4px; }
+.message-group.user .message-bubble { display:flex; flex-direction:column; gap: var(--ip-spacing-2); padding:10px 16px; border-radius:12px; font-size:var(--ip-text-body-size); line-height:1.6; white-space:pre-wrap; word-break:break-word; background-color:var(--ip-color-bg-user-bubble); color:var(--ip-color-text-on-user-bubble); border-bottom-right-radius:4px; }
 
 /* ===== 助手消息文字（无自带背景，由组容器承载气泡块）===== */
 .message-group.assistant .message-bubble { padding:0; border-radius:0; font-size:var(--ip-text-body-size); line-height:1.6; white-space:pre-wrap; word-break:break-word; background:transparent; }
@@ -1207,7 +1207,7 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
    堆叠时不透明避免半透明叠加发灰/透字（半透明玻璃在重叠场景不可扩展） */
 .user-attachments { display:flex; flex-direction:column; gap:4px; margin-top:6px; }
 .user-attachment-card {
-  display:flex; align-items:center; gap:8px;
+  display:flex; align-items:center; gap: var(--ip-spacing-2);
   padding:6px 10px; border-radius:8px;
   background:#ffffff;
   border:1px solid rgba(0,0,0,0.08);
@@ -1218,14 +1218,14 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
 .att-icon {
   flex:none; width:26px; height:26px; border-radius:6px;
   display:flex; align-items:center; justify-content:center;
-  font-size:11px; font-weight:700; color:#fff; letter-spacing:-0.5px;
+  font-size: var(--ip-text-micro-size); font-weight:700; color:#fff; letter-spacing:-0.5px;
 }
 .att-icon[data-kind="pdf"] { background:rgba(220,38,38,0.9); }
 .att-icon[data-kind="docx"] { background:rgba(37,99,235,0.9); }
 .att-icon[data-kind="xlsx"], .att-icon[data-kind="xls"] { background:rgba(22,163,74,0.9); }
 .att-info { display:flex; flex-direction:column; min-width:0; line-height:1.35; }
 .att-name { font-size:13px; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.att-meta { font-size:11px; color:#6b7280; }
+.att-meta { font-size: var(--ip-text-micro-size); color:#6b7280; }
 
 /* 单个卡片/图片可点（hover 提示） */
 .user-attachment-card.clickable { cursor:pointer; transition:background var(--ip-duration-fast) var(--ip-ease-out); }
@@ -1269,26 +1269,26 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
 
 /* 堆叠溢出角标（图/文档通用） */
 .stack-badge {
-  position:absolute; right:-6px; bottom:-6px; z-index:20;
+  position:absolute; right:-6px; bottom:-6px; z-index: var(--ip-z-raised);
   min-width:22px; height:22px; padding:0 6px;
   border-radius:999px;
   background:rgba(0,0,0,0.6); color:#fff;
-  font-size:11px; font-weight:600; line-height:22px; text-align:center;
+  font-size: var(--ip-text-micro-size); font-weight:600; line-height:22px; text-align:center;
   border:1.5px solid rgba(255,255,255,0.85);
 }
 
 /* ===== 消息底部（时间 + 复制按钮） ===== */
-.message-footer { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:2px; padding:0 4px; }
+.message-footer { display:flex; align-items:center; justify-content:space-between; gap: var(--ip-spacing-2); margin-top:2px; padding:0 4px; }
 .footer-left { display:flex; align-items:center; gap:6px; }
 .footer-actions { display:flex; align-items:center; gap:6px; opacity:0; transition:opacity var(--ip-duration-fast) var(--ip-ease-out); }
 .message-group:hover .footer-actions { opacity:1; }
 .message-group:hover .message-footer { opacity:1; }
-.message-time { font-size:11px; color:var(--ip-color-text-disabled); }
+.message-time { font-size: var(--ip-text-micro-size); color:var(--ip-color-text-disabled); }
 .copy-btn { display:flex; align-items:center; justify-content:center; width:24px; height:24px; border-radius:var(--ip-radius-md); border:none; background:transparent; color:var(--ip-color-text-tertiary); cursor:pointer; transition:all var(--ip-duration-fast) var(--ip-ease-out); }
 .copy-btn:hover { background-color:var(--ip-color-bg-tertiary); color:var(--ip-color-text-secondary); }
 
-.badge-model { font-size:10px; color:var(--ip-color-text-tertiary); padding:1px 6px; border-radius:var(--ip-radius-sm); background:var(--ip-color-bg-tertiary); white-space:nowrap; }
-.badge-tokens { font-size:10px; color:var(--ip-color-text-tertiary); white-space:nowrap; font-variant-numeric:tabular-nums; }
+.badge-model { font-size: var(--ip-text-micro-size); color:var(--ip-color-text-tertiary); padding:1px 6px; border-radius:var(--ip-radius-sm); background:var(--ip-color-bg-tertiary); white-space:nowrap; }
+.badge-tokens { font-size: var(--ip-text-micro-size); color:var(--ip-color-text-tertiary); white-space:nowrap; font-variant-numeric:tabular-nums; }
 
 /* ===== 思考中动画 ===== */
 .think-dots { display:flex; align-items:center; gap:4px; padding:4px 0; min-height:22px; }
@@ -1298,19 +1298,19 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
 @keyframes think-bounce { 0%,80%,100% { transform:translateY(0); opacity:0.4; } 40% { transform:translateY(-6px); opacity:1; } }
 
 /* ===== 流式光标 ===== */
-.cursor-bar { display:flex; justify-content:flex-start; align-items:center; gap:10px; padding:4px 48px 0; }
-.cursor-track { display:flex; align-items:center; gap:8px; padding:4px 0; }
+.cursor-bar { display:flex; justify-content:flex-start; align-items:center; gap: var(--ip-spacing-2_5); padding:4px 48px 0; }
+.cursor-track { display:flex; align-items:center; gap: var(--ip-spacing-2); padding:4px 0; }
 .cursor-glow { width:8px; height:8px; border-radius:50%; background-color:var(--ip-primary-500); animation:cursor-pulse 1.2s ease-in-out infinite; }
 .cursor-label { font-size:var(--ip-text-caption-size); color:var(--ip-color-text-tertiary); }
 @keyframes cursor-pulse { 0%,100% { opacity:1; transform:scale(1); } 50% { opacity:0.4; transform:scale(0.75); } }
 
 /* ===== 状态 ===== */
-.state-hint { height:100%; display:flex; align-items:center; justify-content:center; gap:8px; color:var(--ip-color-text-tertiary); font-size:var(--ip-text-body-sm-size); }
+.state-hint { height:100%; display:flex; align-items:center; justify-content:center; gap: var(--ip-spacing-2); color:var(--ip-color-text-tertiary); font-size:var(--ip-text-body-sm-size); }
 .state-dot { width:6px; height:6px; border-radius:50%; background-color:var(--ip-primary-500); animation:cursor-pulse 1.2s ease-in-out infinite; }
 
 /* 骨架屏：消息列表加载中 */
-.msg-skeleton { display:flex; flex-direction:column; gap:24px; padding:24px; }
-.msg-skeleton-block { display:flex; flex-direction:column; gap:8px; }
+.msg-skeleton { display:flex; flex-direction:column; gap:24px; padding: var(--ip-spacing-6); }
+.msg-skeleton-block { display:flex; flex-direction:column; gap: var(--ip-spacing-2); }
 .msg-skeleton-line {
   height:14px; border-radius:var(--ip-radius-sm);
   background:linear-gradient(90deg, var(--ip-color-bg-tertiary) 25%, var(--ip-color-bg-secondary) 50%, var(--ip-color-bg-tertiary) 75%);
@@ -1341,7 +1341,7 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
 .think-block { margin:0; }
 .think-toggle { display:flex; align-items:center; gap:6px; padding:2px 6px; cursor:pointer; user-select:none; border-radius:var(--ip-radius-sm); transition:all var(--ip-duration-fast) var(--ip-ease-out); width:100%; }
 .think-toggle:hover { background:var(--ip-color-bg-tertiary); }
-.think-chevron { font-size:9px; color:var(--ip-color-text-disabled); line-height:1; width:10px; flex-shrink:0; transition:transform var(--ip-duration-fast) var(--ip-ease-out); }
+.think-chevron { font-size: var(--ip-text-micro-size); color:var(--ip-color-text-disabled); line-height:1; width:10px; flex-shrink:0; transition:transform var(--ip-duration-fast) var(--ip-ease-out); }
 .think-label { font-size:var(--ip-text-caption-size); font-weight:var(--ip-font-weight-medium); color:var(--ip-color-text-tertiary); letter-spacing:0.3px; text-transform:uppercase; }
 .think-status { margin-left:8px; font-size:var(--ip-text-caption-size); color:var(--ip-color-text-disabled); }
 .think-body { margin:4px 0 4px 22px; padding:6px 0 6px 14px; border-left:2px solid var(--ip-primary-200); font-size:var(--ip-text-body-sm-size); color:var(--ip-color-text-secondary); line-height:1.7; white-space:pre-wrap; word-break:break-word; }
@@ -1368,9 +1368,9 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
 .tools-strip { display:flex; flex-direction:column; gap:1px; margin:0; }
 .tool-toggle { display:flex; align-items:center; gap:6px; padding:2px 6px; cursor:pointer; user-select:none; border-radius:var(--ip-radius-sm); transition:background var(--ip-duration-fast) var(--ip-ease-out); width:100%; }
 .tool-toggle:hover { background:var(--ip-color-bg-tertiary); }
-.tool-chevron { font-size:9px; color:var(--ip-color-text-disabled); line-height:1; width:10px; flex-shrink:0; }
+.tool-chevron { font-size: var(--ip-text-micro-size); color:var(--ip-color-text-disabled); line-height:1; width:10px; flex-shrink:0; }
 .tool-name { font-size:var(--ip-text-caption-size); font-weight:var(--ip-font-weight-medium); color:var(--ip-color-text-tertiary); white-space:nowrap; }
-.tool-duration { font-size:10px; color:var(--ip-color-text-disabled); font-family:var(--ip-font-mono, monospace); white-space:nowrap; flex-shrink:0; }
+.tool-duration { font-size: var(--ip-text-micro-size); color:var(--ip-color-text-disabled); font-family:var(--ip-font-mono, monospace); white-space:nowrap; flex-shrink:0; }
 .tool-preview { font-size:var(--ip-text-caption-size); color:var(--ip-color-text-disabled); margin-left:auto; margin-right:6px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:right; flex-shrink:1; }
 
 /* 状态圆点 */
@@ -1385,7 +1385,7 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
 .tool-expand { margin:2px 0 2px 22px; padding:4px 0 6px 14px; border-left:2px solid var(--ip-primary-200); max-height:400px; overflow-y:auto; }
 .tool-expand-group { margin-bottom:8px; }
 .tool-expand-group:last-child { margin-bottom:0; }
-.tool-expand-hdr { font-size:10px; font-weight:var(--ip-font-weight-semibold); color:var(--ip-color-text-tertiary); margin-bottom:4px; letter-spacing:0.5px; }
+.tool-expand-hdr { font-size: var(--ip-text-micro-size); font-weight:var(--ip-font-weight-semibold); color:var(--ip-color-text-tertiary); margin-bottom:4px; letter-spacing:0.5px; }
 .tool-expand-hdr.hdr-err { color:var(--ip-danger-base); }
 .tool-expand-code { font-size:var(--ip-text-caption-size); font-family:var(--ip-font-mono, monospace); white-space:pre-wrap; word-break:break-word; color:var(--ip-code-text); background:var(--ip-code-bg); padding:6px 8px; border-radius:var(--ip-radius-sm); margin:0; line-height:1.5; max-height:200px; overflow-y:auto; }
 .tool-expand-code.code-err { color:var(--ip-danger-base); }
@@ -1400,13 +1400,13 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
 }
 .tool-detail-group { margin-bottom:8px; }
 .tool-detail-group:last-child { margin-bottom:0; }
-.tool-detail-hdr { font-size:10px; font-weight:var(--ip-font-weight-semibold); color:var(--ip-color-text-tertiary); margin-bottom:4px; text-transform:uppercase; letter-spacing:0.5px; }
+.tool-detail-hdr { font-size: var(--ip-text-micro-size); font-weight:var(--ip-font-weight-semibold); color:var(--ip-color-text-tertiary); margin-bottom:4px; text-transform:uppercase; letter-spacing:0.5px; }
 .tool-detail-hdr.hdr-err { color:var(--ip-danger-base); }
 .tool-detail-code { font-size:var(--ip-text-caption-size); font-family:var(--ip-font-mono, monospace); white-space:pre-wrap; word-break:break-word; color:var(--ip-color-text-secondary); background:var(--ip-color-bg-tertiary); padding:6px 8px; border-radius:var(--ip-radius-sm); max-height:180px; overflow-y:auto; margin:0; line-height:1.5; }
 .tool-detail-code.code-err { color:var(--ip-danger-base); }
 .tool-detail-pending { font-size:var(--ip-text-caption-size); color:var(--ip-color-text-disabled); font-style:italic; }
 .proposal-wrapper { padding: 0 48px; }
-.chat-error-banner { display:flex; align-items:flex-start; gap:8px; margin:8px 16px; padding:10px 14px; background:#fef2f2; border:1px solid #fecaca; border-radius:var(--ip-radius-md); font-size:var(--ip-text-body-sm-size); }
+.chat-error-banner { display:flex; align-items:flex-start; gap: var(--ip-spacing-2); margin:8px 16px; padding:10px 14px; background:#fef2f2; border:1px solid #fecaca; border-radius:var(--ip-radius-md); font-size:var(--ip-text-body-sm-size); }
 .chat-error-icon { display:flex; align-items:center; justify-content:center; width:20px; height:20px; border-radius:50%; background:#ef4444; color:#fff; font-size:12px; font-weight:700; flex-shrink:0; }
 .chat-error-text { color:#991b1b; line-height:1.5; word-break:break-word; }
 </style>

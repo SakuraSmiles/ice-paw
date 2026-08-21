@@ -587,11 +587,11 @@ function handleKeydown(e: KeyboardEvent) {
 </template>
 
 <style scoped>
-.input-area { flex-shrink:0; padding:16px 24px 24px; border-top:1px solid var(--color-chat-header-border); }
-.input-container { max-width:800px; margin:0 auto; display:flex; flex-direction:column; gap:8px; }
+.input-area { flex-shrink:0; padding:16px 24px 24px; border-top:1px solid var(--ip-color-border-default); }
+.input-container { max-width:800px; margin:0 auto; display:flex; flex-direction:column; gap: var(--ip-spacing-2); }
 
 /* ===== 图片预览条 ===== */
-.preview-strip { display:flex; gap:8px; flex-wrap:wrap; }
+.preview-strip { display:flex; gap: var(--ip-spacing-2); flex-wrap:wrap; }
 .preview-item { position:relative; width:72px; height:72px; border-radius:var(--ip-radius-lg); overflow:hidden; border:1px solid var(--ip-color-border-default); }
 .preview-thumb { width:100%; height:100%; object-fit:cover; }
 .preview-remove { position:absolute; top:2px; right:2px; width:20px; height:20px; border-radius:50%; background:rgba(0,0,0,0.5); color:white; border:none; cursor:pointer; display:flex; align-items:center; justify-content:center; opacity:0; transition:opacity var(--ip-duration-fast) var(--ip-ease-out); }
@@ -602,15 +602,15 @@ function handleKeydown(e: KeyboardEvent) {
 .file-chip { display:flex; align-items:center; gap:6px; max-width:240px; padding:4px 8px; border-radius:var(--ip-radius-md); background-color:var(--ip-color-bg-tertiary); border:1px solid var(--ip-color-border-default); color:var(--ip-color-text-secondary); font-size:12px; }
 .file-chip-icon { flex-shrink:0; color:var(--ip-primary-600); }
 .file-chip-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.file-chip-size { flex-shrink:0; color:var(--ip-color-text-disabled); font-size:11px; }
+.file-chip-size { flex-shrink:0; color:var(--ip-color-text-disabled); font-size: var(--ip-text-micro-size); }
 .file-chip-remove { flex-shrink:0; display:flex; align-items:center; justify-content:center; width:16px; height:16px; border-radius:50%; border:none; background:transparent; color:var(--ip-color-text-disabled); cursor:pointer; transition:all var(--ip-duration-fast) var(--ip-ease-out); }
 .file-chip-remove:hover { background-color:var(--ip-color-bg-hover); color:var(--ip-danger-base); }
 
-.input-wrapper { position:relative; display:flex; flex-direction:column; background-color:var(--color-input-bg); border:1px solid var(--color-input-border); border-radius:12px; transition:border-color var(--ip-duration-base) var(--ip-ease-out),box-shadow var(--ip-duration-base) var(--ip-ease-out); }
+.input-wrapper { position:relative; display:flex; flex-direction:column; background-color:var(--ip-color-bg-input); border:1px solid var(--ip-color-border-default); border-radius:12px; transition:border-color var(--ip-duration-base) var(--ip-ease-out),box-shadow var(--ip-duration-base) var(--ip-ease-out); }
 
 /* ===== @ 引用弹层（输入框上方） ===== */
-.at-popover { position:absolute; left:8px; right:8px; bottom:calc(100% + 6px); z-index:20; max-height:280px; overflow-y:auto; background-color:var(--ip-color-bg-primary); border:1px solid var(--ip-color-border-default); border-radius:var(--ip-radius-md); box-shadow:0 4px 16px rgba(0,0,0,0.12); padding:4px; }
-.at-option { display:flex; align-items:center; gap:8px; width:100%; padding:7px 10px; border:none; border-radius:var(--ip-radius-sm); background:transparent; cursor:pointer; text-align:left; }
+.at-popover { position:absolute; left:8px; right:8px; bottom:calc(100% + 6px); z-index: var(--ip-z-raised); max-height:280px; overflow-y:auto; background-color:var(--ip-color-bg-primary); border:1px solid var(--ip-color-border-default); border-radius:var(--ip-radius-md); box-shadow:0 4px 16px rgba(0,0,0,0.12); padding:4px; }
+.at-option { display:flex; align-items:center; gap: var(--ip-spacing-2); width:100%; padding:7px 10px; border:none; border-radius:var(--ip-radius-sm); background:transparent; cursor:pointer; text-align:left; }
 /* agent 候选头像（sm=20px，EntityAvatar 三级链；会话/消息候选无头像） */
 .at-option-avatar { flex-shrink: 0; }
 .at-option.active { background-color:var(--ip-color-bg-hover); }
@@ -620,11 +620,11 @@ function handleKeydown(e: KeyboardEvent) {
 .at-option.selected .at-option-label { color:var(--ip-primary-600); }
 .at-option-label { flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; color:var(--ip-color-text-primary); }
 /* agent id：名字后的等宽淡色尾随（完整 id 放 title，挤压时省略） */
-.at-option-id { flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; color:var(--ip-color-text-disabled); font-family:var(--ip-font-mono, monospace); }
+.at-option-id { flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size: var(--ip-text-micro-size); color:var(--ip-color-text-disabled); font-family:var(--ip-font-mono, monospace); }
 /* 右侧组：归属（项目名/模型，超长省略）+ 类型词定宽贴右缘，跨行纵向对齐 */
-.at-option-right { margin-left:auto; display:flex; align-items:center; gap:8px; flex:0 1 auto; min-width:0; justify-content:flex-end; }
-.at-option-owner { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; color:var(--ip-color-text-disabled); }
-.at-option-kind { flex-shrink:0; width:3.5em; text-align:right; font-size:11px; color:var(--ip-color-text-disabled); }
+.at-option-right { margin-left:auto; display:flex; align-items:center; gap: var(--ip-spacing-2); flex:0 1 auto; min-width:0; justify-content:flex-end; }
+.at-option-owner { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size: var(--ip-text-micro-size); color:var(--ip-color-text-disabled); }
+.at-option-kind { flex-shrink:0; width:3.5em; text-align:right; font-size: var(--ip-text-micro-size); color:var(--ip-color-text-disabled); }
 /* 匹配高亮：浅绿底 + tint 文字（主色 tint 约定，不用原生 mark 黄底） */
 .at-hit { background:var(--ip-color-primary-tint-bg); color:var(--ip-color-primary-tint-text); border-radius:2px; padding:0 1px; }
 
@@ -639,7 +639,7 @@ function handleKeydown(e: KeyboardEvent) {
 }
 /* 输入区全宽（右上不再为发送按钮留位）；四周到边框统一留呼吸间隙 */
 .input-row { display:flex; align-items:flex-start; padding:12px 12px 0; }
-.input-wrapper:focus-within { border-color:var(--color-input-focus-border); box-shadow:0 0 0 3px rgba(var(--ip-primary-500-rgb), 0.12); }
+.input-wrapper:focus-within { border-color:var(--ip-color-border-focus); box-shadow:0 0 0 3px rgba(var(--ip-primary-500-rgb), 0.12); }
 .input-wrapper.is-sending { border-color:var(--ip-primary-400); box-shadow:0 0 0 3px rgba(var(--ip-primary-500-rgb), 0.08); }
 .input-wrapper.drag-over { border-color:var(--ip-primary-500); box-shadow:0 0 0 3px rgba(var(--ip-primary-500-rgb), 0.18); background-color:var(--ip-primary-50); }
 
@@ -657,13 +657,13 @@ function handleKeydown(e: KeyboardEvent) {
 
 .btn-group { position:relative; width:32px; height:32px; flex-shrink:0; }
 .btn-send { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; border-radius:var(--ip-radius-md); background-color:var(--ip-color-bg-tertiary); color:var(--ip-color-text-disabled); border:none; cursor:pointer; transition:all var(--ip-duration-fast) var(--ip-ease-out); }
-.btn-send.active { background-color:var(--color-message-user-bg); color:white; }
+.btn-send.active { background-color:var(--ip-color-bg-user-bubble); color:white; }
 .btn-send.active:hover { opacity:0.9; transform:scale(1.05); }
 .btn-send.active:active { transform:scale(0.95); }
 .btn-stop { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; border-radius:var(--ip-radius-md); background-color:var(--ip-danger-base); color:white; border:none; cursor:pointer; transition:all var(--ip-duration-fast) var(--ip-ease-out); animation:stop-enter 0.2s ease-out; }
 .btn-stop:hover { opacity:0.9; }
 @keyframes stop-enter { from { opacity:0; transform:scale(0.85); } to { opacity:1; transform:scale(1); } }
 /* 快捷键提示：占据左右按钮之间的剩余空间并居中（输入框内部的轻脚注） */
-.input-hint { flex:1; min-width:0; font-size:11px; color:var(--ip-color-text-disabled); text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.input-hint { flex:1; min-width:0; font-size: var(--ip-text-micro-size); color:var(--ip-color-text-disabled); text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .attach-warn { font-size:12px; line-height:1.5; white-space:pre-line; color:var(--ip-danger-base); text-align:center; margin:0; }
 </style>

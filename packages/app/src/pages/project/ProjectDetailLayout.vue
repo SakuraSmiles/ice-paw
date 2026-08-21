@@ -111,8 +111,8 @@ onMounted(async () => {
   align-items: center;
   padding: 14px 24px;
   min-height: 68px;
-  border-bottom: 1px solid var(--color-chat-header-border);
-  background-color: var(--color-chat-header-bg);
+  border-bottom: 1px solid var(--ip-color-border-default);
+  background-color: var(--ip-color-bg-chat-header);
   backdrop-filter: blur(8px);
   flex-shrink: 0;
 }
@@ -131,7 +131,7 @@ onMounted(async () => {
 }
 .head-name.err { color: var(--ip-danger-text); }
 .head-meta {
-  display: flex; align-items: center; gap: 10px;
+  display: flex; align-items: center; gap: var(--ip-spacing-2_5);
   margin-top: 2px;
   font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary);
 }
@@ -144,9 +144,9 @@ onMounted(async () => {
 /* tab 条对齐 .chat-tabbar：同底色与 header 视觉一体（无分割线，tab 底线即
    内容区分界）；tab 样式复刻 .chat-tab（同尺寸/层次/hover 档） */
 .tab-bar {
-  display: flex; gap: 10px;
+  display: flex; gap: var(--ip-spacing-2_5);
   padding: 0 24px;
-  background: var(--color-chat-header-bg);
+  background: var(--ip-color-bg-chat-header);
   backdrop-filter: blur(8px);
   flex-shrink: 0;
 }
@@ -168,7 +168,7 @@ onMounted(async () => {
   display: flex; flex-direction: column;
 }
 .load-error {
-  padding: 24px; color: var(--ip-color-text-secondary);
+  padding: var(--ip-spacing-6); color: var(--ip-color-text-secondary);
   font-size: var(--ip-text-body-sm-size);
 }
 .btn-link {

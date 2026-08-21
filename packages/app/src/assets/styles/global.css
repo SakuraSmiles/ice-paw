@@ -7,28 +7,7 @@
  * ============================================================ */
 
 :root {
-  /* ---- 原 --color-* 平行令牌迁移为语义层别名（v2.0 收敛）----
-   * 组件仍可引用 --color-*（兼容期），但新代码一律直接用右侧语义令牌。
-   * 迁移完成后（UI-4 战役）删除本别名块。 */
-  --color-sidebar-bg:        var(--ip-color-bg-primary);
-  --color-sidebar-border:    var(--ip-color-border-default);
-  --color-sidebar-item-hover: var(--ip-color-bg-hover);
-  --color-sidebar-item-active: var(--ip-color-primary-soft-bg);
-  --color-sidebar-item-active-border: var(--ip-primary-500);
-
-  --color-chat-header-bg:    rgba(255, 255, 255, 0.85);
-  --color-chat-header-border: var(--ip-color-border-default);
-
-  --color-input-bg:          var(--ip-color-bg-primary);
-  --color-input-border:      var(--ip-color-border-default);
-  --color-input-focus-border: var(--ip-primary-500);
-
-  --color-message-user-bg:   var(--ip-color-bg-user-bubble);
-  --color-message-user-text: #FFFFFF;
-  --color-message-ai-bg:     var(--ip-color-bg-secondary);
-  --color-message-ai-text:   var(--ip-color-text-primary);
-
-  /* 主色 tint 语义令牌（v2.0 藏青）：柔和底/标签底/标签字 */
+  /* v2.0: 原 --color-* 平行令牌已升格为 --ip-color-* 正式语义令牌（tokens.css），别名删除 */
   --ip-color-primary-soft-bg:   var(--ip-primary-50);
   --ip-color-primary-tint-bg:   var(--ip-primary-100);
   --ip-color-primary-tint-text: var(--ip-primary-700);
@@ -65,25 +44,6 @@ body {
 
 /* ---- 暗色模式 ---- */
 [data-theme='dark'], .dark {
-  --color-sidebar-bg:        var(--ip-color-bg-primary);
-  --color-sidebar-border:    var(--ip-color-border-default);
-  --color-sidebar-item-hover: var(--ip-color-bg-hover);
-  --color-sidebar-item-active: var(--ip-color-primary-soft-bg);
-  --color-sidebar-item-active-border: var(--ip-primary-400);
-
-  --color-chat-header-bg:    rgba(20, 24, 31, 0.85);
-  --color-chat-header-border: var(--ip-color-border-default);
-
-  --color-input-bg:          var(--ip-color-bg-primary);
-  --color-input-border:      var(--ip-color-border-default);
-  --color-input-focus-border: var(--ip-primary-400);
-
-  --color-message-user-bg:   var(--ip-color-bg-user-bubble);
-  --color-message-user-text: #FFFFFF;
-  --color-message-ai-bg:     var(--ip-color-bg-secondary);
-  --color-message-ai-text:   var(--ip-color-text-primary);
-
-  /* 暗色模式：主色 tint 走藏青镜像档（深底亮字自动成立） */
   --ip-color-primary-soft-bg:   var(--ip-primary-100);
   --ip-color-primary-tint-bg:   var(--ip-primary-200);
   --ip-color-primary-tint-text: var(--ip-primary-700);

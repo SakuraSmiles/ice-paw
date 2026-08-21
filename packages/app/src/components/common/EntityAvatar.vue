@@ -92,7 +92,7 @@ function onImgError() {
   justify-content: center;
   flex: none;
   border-radius: var(--ip-radius-full, 9999px);
-  color: var(--ip-white, #fff);
+  color: var(--ip-white);
   font-weight: var(--ip-font-weight-semibold, 600);
   line-height: 1;
   overflow: hidden;
@@ -108,8 +108,8 @@ function onImgError() {
 }
 
 /* 尺寸梯度：xs 侧栏小标签 / sm 菜单与列表行 / md 聊天头与选择器 / lg 表单预览 */
-.size-xs { width: 16px; height: 16px; font-size: 9px; }
-.size-sm { width: 20px; height: 20px; font-size: 11px; }
+.size-xs { width: 16px; height: 16px; font-size: var(--ip-text-micro-size); }
+.size-sm { width: 20px; height: 20px; font-size: var(--ip-text-micro-size); }
 .size-md { width: 28px; height: 28px; font-size: 13px; }
 .size-lg { width: 36px; height: 36px; font-size: 16px; }
 

@@ -113,7 +113,7 @@ onUnmounted(() => document.removeEventListener("click", onDocClick, true));
   position: absolute;
   top: calc(100% + 4px);
   right: 0;
-  z-index: 50;
+  z-index: var(--ip-z-dropdown);
   min-width: 148px;
   padding: 4px;
   background-color: var(--ip-color-bg-elevated);
@@ -152,7 +152,7 @@ onUnmounted(() => document.removeEventListener("click", onDocClick, true));
   align-items: center;
   justify-content: space-between;
   padding: 8px 12px;
-  gap: 8px;
+  gap: var(--ip-spacing-2);
 }
 .confirm-text {
   font-size: var(--ip-text-body-sm-size);

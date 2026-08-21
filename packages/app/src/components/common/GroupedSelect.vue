@@ -215,7 +215,7 @@ function onKeydown(e: KeyboardEvent) {
 .gs-control {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--ip-spacing-2);
   width: 100%;
   height: 30px;
   padding: 0 4px 0 10px;
@@ -231,9 +231,9 @@ function onKeydown(e: KeyboardEvent) {
   border-color: var(--ip-primary-300);
 }
 .gs-open .gs-control {
-  border-color: var(--color-input-focus-border);
-  background-color: var(--color-input-bg);
-  box-shadow: 0 0 0 3px rgba(var(--ip-primary-500-rgb), 0.12);
+  border-color: var(--ip-color-border-focus);
+  background-color: var(--ip-color-bg-input);
+  box-shadow: var(--ip-shadow-focus);
 }
 .gs-disabled .gs-control {
   opacity: 0.6;
@@ -271,7 +271,7 @@ function onKeydown(e: KeyboardEvent) {
   top: calc(100% + 4px);
   left: 0;
   right: 0;
-  z-index: 100;
+  z-index: var(--ip-z-dropdown);
   background-color: var(--ip-color-bg-elevated);
   border: 1px solid var(--ip-color-border-default);
   border-radius: var(--ip-radius-md);
@@ -300,13 +300,13 @@ function onKeydown(e: KeyboardEvent) {
   margin-right: -3px;
 }
 .gs-group-name {
-  font-size: 11px;
+  font-size: var(--ip-text-micro-size);
   font-weight: var(--ip-font-weight-semibold);
   color: var(--ip-color-text-tertiary);
   letter-spacing: 0.02em;
 }
 .gs-group-note {
-  font-size: 10px;
+  font-size: var(--ip-text-micro-size);
   font-weight: var(--ip-font-weight-regular);
   color: var(--ip-color-text-disabled);
   overflow: hidden;
@@ -318,7 +318,7 @@ function onKeydown(e: KeyboardEvent) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--ip-spacing-2);
   width: 100%;
   padding: 6px 10px 6px 20px;
   text-align: left;
@@ -331,7 +331,7 @@ function onKeydown(e: KeyboardEvent) {
   transition: background-color var(--ip-duration-fast) var(--ip-ease-out);
 }
 .gs-option:hover {
-  background-color: var(--color-sidebar-item-hover);
+  background-color: var(--ip-color-bg-sidebar-item-hover);
 }
 .gs-option.active {
   background-color: var(--ip-primary-500);
@@ -344,7 +344,7 @@ function onKeydown(e: KeyboardEvent) {
 }
 .gs-option-note {
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: var(--ip-text-micro-size);
   color: var(--ip-color-text-tertiary);
 }
 .gs-option.active .gs-option-note {

@@ -98,8 +98,8 @@ function navigate(key: string) {
   align-items: center;
   padding: 14px 32px;
   min-height: 68px;
-  border-bottom: 1px solid var(--color-chat-header-border);
-  background-color: var(--color-chat-header-bg);
+  border-bottom: 1px solid var(--ip-color-border-default);
+  background-color: var(--ip-color-bg-chat-header);
   backdrop-filter: blur(8px);
   flex-shrink: 0;
 }
@@ -118,7 +118,7 @@ function navigate(key: string) {
   min-height: 0;
   display: flex;
   align-items: flex-start;
-  gap: 12px;
+  gap: var(--ip-spacing-3);
 }
 
 /* ===== 左菜单（纯文本导航） ===== */
@@ -140,7 +140,7 @@ function navigate(key: string) {
 .nav-item {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--ip-spacing-2_5);
   width: 100%;
   padding: 10px 12px 10px 16px;
   text-align: left;

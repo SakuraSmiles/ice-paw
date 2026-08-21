@@ -535,7 +535,7 @@ function confirmDelete() {
 .form-fields {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--ip-spacing-2_5);
 }
 
 .field {
@@ -548,7 +548,7 @@ function confirmDelete() {
 /* Provider + 模型 两列 */
 .field-row {
   display: flex;
-  gap: 10px;
+  gap: var(--ip-spacing-2_5);
 }
 .field-row .field {
   flex: 1;
@@ -566,12 +566,12 @@ function confirmDelete() {
 .hint {
   font-weight: var(--ip-font-weight-regular);
   color: var(--ip-color-text-tertiary);
-  font-size: 10px;
+  font-size: var(--ip-text-micro-size);
 }
 
 .badge {
   padding: 0 6px;
-  font-size: 10px;
+  font-size: var(--ip-text-micro-size);
   font-weight: var(--ip-font-weight-medium);
   border-radius: var(--ip-radius-full);
   line-height: 18px;
@@ -581,7 +581,7 @@ function confirmDelete() {
 
 .input {
   width: 100%;
-  height: 30px;
+  height: var(--ip-input-h-sm);
   padding: 0 10px;
   font-size: var(--ip-text-body-sm-size);
   color: var(--ip-color-text-primary);
@@ -593,9 +593,9 @@ function confirmDelete() {
   transition: all var(--ip-duration-fast) var(--ip-ease-out);
 }
 .input:focus {
-  border-color: var(--color-input-focus-border);
-  background-color: var(--color-input-bg);
-  box-shadow: 0 0 0 3px rgba(var(--ip-primary-500-rgb), 0.12);
+  border-color: var(--ip-color-border-focus);
+  background-color: var(--ip-color-bg-input);
+  box-shadow: var(--ip-shadow-focus);
 }
 .input::placeholder { color: var(--ip-color-text-placeholder); }
 .input-disabled { opacity: 0.6; cursor: not-allowed; }
@@ -611,14 +611,14 @@ function confirmDelete() {
 .conn-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--ip-spacing-2);
   min-height: 18px;
   flex-wrap: wrap;
 }
 .conn-btn {
   height: 20px;
   padding: 0 8px;
-  font-size: 10px;
+  font-size: var(--ip-text-micro-size);
   color: var(--ip-primary-600);
   background-color: var(--ip-color-primary-soft-bg);
   border: none;
@@ -629,7 +629,7 @@ function confirmDelete() {
 .conn-btn:hover { background-color: var(--ip-primary-100); }
 .conn-btn:disabled { opacity: 0.6; cursor: wait; }
 .conn-ok {
-  font-size: 10px;
+  font-size: var(--ip-text-micro-size);
   color: var(--ip-success-text);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -637,7 +637,7 @@ function confirmDelete() {
   max-width: 100%;
 }
 .conn-err {
-  font-size: 10px;
+  font-size: var(--ip-text-micro-size);
   color: var(--ip-danger-text);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -660,7 +660,7 @@ function confirmDelete() {
   align-items: center;
   justify-content: center;
   width: 30px;
-  height: 30px;
+  height: var(--ip-input-h-sm);
   flex-shrink: 0;
   background-color: var(--ip-color-bg-tertiary);
   border: 1px solid var(--ip-color-border-default);
@@ -672,7 +672,7 @@ function confirmDelete() {
 .ws-btn:hover {
   background-color: var(--ip-color-bg-secondary);
   color: var(--ip-primary-600);
-  border-color: var(--color-input-focus-border);
+  border-color: var(--ip-color-border-focus);
 }
 .ws-btn-open {
   color: var(--ip-primary-600);
@@ -684,7 +684,7 @@ function confirmDelete() {
   align-items: center;
   height: 22px;
   padding: 0 8px;
-  font-size: 10px;
+  font-size: var(--ip-text-micro-size);
   font-weight: var(--ip-font-weight-semibold);
   color: var(--ip-color-primary-tint-text);
   background-color: var(--ip-color-primary-tint-bg);
@@ -697,7 +697,7 @@ function confirmDelete() {
 .avatar-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--ip-spacing-2_5);
 }
 .avatar-actions {
   display: flex;
@@ -709,7 +709,7 @@ function confirmDelete() {
 .avatar-btn {
   height: 22px;
   padding: 0 10px;
-  font-size: 11px;
+  font-size: var(--ip-text-micro-size);
   color: var(--ip-color-text-secondary);
   background-color: var(--ip-color-bg-tertiary);
   border: none;
@@ -727,7 +727,7 @@ function confirmDelete() {
 
 .field-hint {
   margin: 0;
-  font-size: 10px;
+  font-size: var(--ip-text-micro-size);
   color: var(--ip-color-text-tertiary);
   line-height: 1.4;
 }
@@ -805,7 +805,7 @@ function confirmDelete() {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  height: 30px;
+  height: var(--ip-input-h-sm);
   padding: 0 14px;
   font-size: var(--ip-text-body-sm-size);
   font-weight: var(--ip-font-weight-medium);

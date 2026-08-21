@@ -85,7 +85,7 @@ function jumpTo(convId: string) {
   z-index: var(--ip-z-notification);
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--ip-spacing-2_5);
   width: 300px;
   max-width: calc(100vw - 32px);
   pointer-events: none; /* 容器不挡下层交互，条目自身恢复 */

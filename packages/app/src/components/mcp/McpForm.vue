@@ -309,7 +309,7 @@ function confirmDelete() {
 .form-fields {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--ip-spacing-2_5);
 }
 
 .field {
@@ -320,7 +320,7 @@ function confirmDelete() {
 }
 .field-row {
   display: flex;
-  gap: 10px;
+  gap: var(--ip-spacing-2_5);
 }
 .field-row .field {
   flex: 1;
@@ -338,12 +338,12 @@ function confirmDelete() {
 .hint {
   font-weight: var(--ip-font-weight-regular);
   color: var(--ip-color-text-tertiary);
-  font-size: 10px;
+  font-size: var(--ip-text-micro-size);
 }
 
 .input {
   width: 100%;
-  height: 30px;
+  height: var(--ip-input-h-sm);
   padding: 0 10px;
   font-size: var(--ip-text-body-sm-size);
   color: var(--ip-color-text-primary);
@@ -355,9 +355,9 @@ function confirmDelete() {
   transition: all var(--ip-duration-fast) var(--ip-ease-out);
 }
 .input:focus {
-  border-color: var(--color-input-focus-border);
-  background-color: var(--color-input-bg);
-  box-shadow: 0 0 0 3px rgba(var(--ip-primary-500-rgb), 0.12);
+  border-color: var(--ip-color-border-focus);
+  background-color: var(--ip-color-bg-input);
+  box-shadow: var(--ip-shadow-focus);
 }
 .input::placeholder { color: var(--ip-color-text-placeholder); }
 .input-disabled { opacity: 0.6; cursor: not-allowed; }
@@ -386,7 +386,7 @@ function confirmDelete() {
   align-items: center;
   justify-content: center;
   width: 28px;
-  height: 30px;
+  height: var(--ip-input-h-sm);
   flex-shrink: 0;
   color: var(--ip-color-text-tertiary);
   cursor: pointer;
@@ -442,8 +442,8 @@ function confirmDelete() {
 .switch-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  height: 30px;
+  gap: var(--ip-spacing-2);
+  height: var(--ip-input-h-sm);
 }
 .switch-label {
   font-size: var(--ip-text-caption-size);
@@ -452,7 +452,7 @@ function confirmDelete() {
 
 .field-hint {
   margin: 2px 0 0;
-  font-size: 10px;
+  font-size: var(--ip-text-micro-size);
   color: var(--ip-color-text-tertiary);
 }
 

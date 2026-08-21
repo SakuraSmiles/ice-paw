@@ -336,7 +336,7 @@ function openTask(id: string) {
 .task-pill:hover { color: var(--ip-color-text-primary); border-color: var(--ip-primary-400); }
 .task-pill.open { color: var(--ip-primary-600); border-color: var(--ip-primary-400); background: var(--ip-primary-soft-bg, rgba(var(--ip-primary-500-rgb), 0.08)); }
 .task-pill-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: var(--ip-color-text-tertiary); }
-.task-pill-dot.running { background: var(--ip-warning-base, #d97706); animation: task-pulse 1.2s ease-in-out infinite; }
+.task-pill-dot.running { background: var(--ip-warning-base); animation: task-pulse 1.2s ease-in-out infinite; }
 .task-pill-label { font-weight: var(--ip-font-weight-medium); }
 @keyframes task-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
@@ -351,7 +351,7 @@ function openTask(id: string) {
    宽度上限按胶囊右缘实际位（右移对齐气泡右缘后距视口右 86px）扣回：
    --msg-col-right(80) + 滚动条槽 6 + 左安全距 24（令牌来自 ChatPage）。 */
 .task-popover {
-  position: absolute; top: calc(100% + 6px); right: 0; z-index: 100;
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: var(--ip-z-dropdown);
   width: min(420px, calc(100vw - var(--msg-col-right, 80px) - 30px));
   max-height: 58vh; padding: 6px;
   display: flex; flex-direction: column;
@@ -367,7 +367,7 @@ function openTask(id: string) {
 }
 .task-col { flex: 1 1 0; min-width: 260px; display: flex; flex-direction: column; gap: 2px; }
 .col-head {
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; gap: var(--ip-spacing-2);
   font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary);
   padding: 4px 10px 6px;
 }
@@ -384,14 +384,14 @@ function openTask(id: string) {
 .plan-progress { flex: 1; max-width: 120px; height: 3px; border-radius: 2px; background: var(--ip-color-bg-tertiary); overflow: hidden; }
 .plan-progress-fill { display: block; height: 100%; border-radius: 2px; background: var(--ip-primary-500); transition: width var(--ip-duration-fast) var(--ip-ease-out); }
 .task-row {
-  display: flex; align-items: center; gap: 8px; width: 100%;
+  display: flex; align-items: center; gap: var(--ip-spacing-2); width: 100%;
   padding: 7px 10px; border: none; border-radius: var(--ip-radius-md);
   background: transparent; cursor: pointer; text-align: left;
   transition: background var(--ip-duration-fast) var(--ip-ease-out);
 }
 .task-row:hover { background: var(--ip-color-bg-tertiary); }
 .task-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: var(--ip-color-text-tertiary); }
-.task-dot.running { background: var(--ip-warning-base, #d97706); animation: task-pulse 1.2s ease-in-out infinite; }
+.task-dot.running { background: var(--ip-warning-base); animation: task-pulse 1.2s ease-in-out infinite; }
 .task-row-title {
   flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
   font-size: var(--ip-text-body-sm-size); color: var(--ip-color-text-primary);
@@ -408,7 +408,7 @@ function openTask(id: string) {
 
 /* 计划条目行（与 PlanCard 同款状态标记，非按钮——仅挂任务的条目可点） */
 .task-plan-row {
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; gap: var(--ip-spacing-2);
   padding: 6px 10px; border-radius: var(--ip-radius-md);
   transition: background-color var(--ip-duration-fast) var(--ip-ease-out);
 }
@@ -422,8 +422,8 @@ function openTask(id: string) {
   border: 1.5px solid var(--ip-color-text-tertiary);
   transition: background-color 0.25s var(--ip-ease-out), border-color 0.25s var(--ip-ease-out);
 }
-.plan-mark-in_progress { border-color: var(--ip-warning-base, #d97706); background: var(--ip-warning-base, #d97706); animation: task-pulse 1.2s ease-in-out infinite; }
-.plan-mark-done { border-color: var(--ip-success-base, #16a34a); background: var(--ip-success-base, #16a34a); }
+.plan-mark-in_progress { border-color: var(--ip-warning-base); background: var(--ip-warning-base); animation: task-pulse 1.2s ease-in-out infinite; }
+.plan-mark-done { border-color: var(--ip-success-base); background: var(--ip-success-base); }
 .task-plan-row .plan-mark-done + .task-row-title { text-decoration: line-through; color: var(--ip-color-text-tertiary); }
 .plan-jump { flex-shrink: 0; font-size: var(--ip-text-caption-size); color: var(--ip-primary-500); }
 

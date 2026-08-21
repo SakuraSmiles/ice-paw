@@ -262,7 +262,7 @@ function deny() {
 .auth-line3 {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--ip-spacing-2);
   min-width: 0;
 }
 .auth-scope-options {

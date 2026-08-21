@@ -875,7 +875,7 @@ const hasFilterResults = computed(() => {
 
 /* Embedding: Combobox 高度统一到 32px（和 form-input 一致） */
 :deep(.combobox-input-wrap) {
-  height: 32px;
+  height: var(--ip-input-h-sm);
 }
 .embed-key-link {
   font-size: var(--ip-text-caption-size);
@@ -894,7 +894,7 @@ const hasFilterResults = computed(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 100;
+  z-index: var(--ip-z-dropdown);
 }
 .embed-switch-panel {
   width: 380px;
@@ -906,7 +906,7 @@ const hasFilterResults = computed(() => {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--ip-spacing-2);
 }
 .embed-switch-panel h3 {
   margin: 0 0 4px;
@@ -937,7 +937,7 @@ const hasFilterResults = computed(() => {
 .embed-switch-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
+  gap: var(--ip-spacing-2);
   margin-top: 6px;
 }
 .embed-switch-actions button {
@@ -1059,7 +1059,7 @@ const hasFilterResults = computed(() => {
 .form-input {
   flex: 1;
   min-width: 0;
-  height: 32px;
+  height: var(--ip-input-h-sm);
   padding: 0 10px;
   font-size: var(--ip-text-body-sm-size);
   color: var(--ip-color-text-primary);
@@ -1071,7 +1071,7 @@ const hasFilterResults = computed(() => {
   transition: all var(--ip-duration-fast) var(--ip-ease-out);
 }
 .form-input:focus {
-  border-color: var(--color-input-focus-border);
+  border-color: var(--ip-color-border-focus);
   background-color: var(--ip-color-bg-secondary);
   box-shadow: 0 0 0 3px rgba(var(--ip-primary-500-rgb), 0.12);
 }
@@ -1095,7 +1095,7 @@ const hasFilterResults = computed(() => {
   align-items: center;
   justify-content: center;
   width: 32px;
-  height: 32px;
+  height: var(--ip-input-h-sm);
   flex-shrink: 0;
   background-color: var(--ip-color-bg-tertiary);
   border: 1px solid var(--ip-color-border-default);
@@ -1106,7 +1106,7 @@ const hasFilterResults = computed(() => {
 }
 .input-btn:hover {
   background-color: var(--ip-color-bg-secondary);
-  border-color: var(--color-input-focus-border);
+  border-color: var(--ip-color-border-focus);
   color: var(--ip-primary-600);
 }
 
@@ -1116,7 +1116,7 @@ const hasFilterResults = computed(() => {
   align-items: center;
   justify-content: center;
   gap: 4px;
-  height: 32px;
+  height: var(--ip-input-h-sm);
   padding: 0 12px;
   font-size: var(--ip-text-body-sm-size);
   font-weight: var(--ip-font-weight-medium);
@@ -1167,7 +1167,7 @@ const hasFilterResults = computed(() => {
   align-items: center;
   gap: 4px;
   flex-shrink: 0;
-  height: 32px;
+  height: var(--ip-input-h-sm);
   padding: 0 10px;
   font-size: var(--ip-text-body-sm-size);
   font-weight: var(--ip-font-weight-medium);
@@ -1181,7 +1181,7 @@ const hasFilterResults = computed(() => {
 }
 .tz-detect-btn:hover {
   background-color: var(--ip-color-bg-secondary);
-  border-color: var(--color-input-focus-border);
+  border-color: var(--ip-color-border-focus);
   color: var(--ip-primary-600);
 }
 .tz-detect-btn:disabled {
@@ -1209,7 +1209,7 @@ const hasFilterResults = computed(() => {
   min-width: 200px;
   display: flex;
   align-items: center;
-  height: 32px;
+  height: var(--ip-input-h-sm);
   padding: 0 0 0 10px;
   background-color: var(--ip-color-bg-tertiary);
   border: 1px solid var(--ip-color-border-default);
@@ -1218,8 +1218,8 @@ const hasFilterResults = computed(() => {
 }
 .tz-combobox.tz-open,
 .tz-combobox:focus-within {
-  border-color: var(--color-input-focus-border);
-  background-color: var(--color-input-bg);
+  border-color: var(--ip-color-border-focus);
+  background-color: var(--ip-color-bg-input);
   box-shadow: 0 0 0 3px rgba(var(--ip-primary-500-rgb), 0.12);
 }
 
@@ -1268,7 +1268,7 @@ const hasFilterResults = computed(() => {
   top: calc(100% + 4px);
   left: 0;
   right: 0;
-  z-index: 100;
+  z-index: var(--ip-z-dropdown);
   max-height: 280px;
   overflow-y: auto;
   background-color: var(--ip-color-bg-elevated);
@@ -1284,7 +1284,7 @@ const hasFilterResults = computed(() => {
 
 .tz-group-label {
   padding: 5px 10px 2px;
-  font-size: 10px;
+  font-size: var(--ip-text-micro-size);
   font-weight: var(--ip-font-weight-semibold);
   color: var(--ip-color-text-tertiary);
 }
@@ -1293,7 +1293,7 @@ const hasFilterResults = computed(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--ip-spacing-2);
   width: 100%;
   padding: 5px 10px;
   text-align: left;
@@ -1306,7 +1306,7 @@ const hasFilterResults = computed(() => {
   transition: background-color var(--ip-duration-fast) var(--ip-ease-out);
 }
 .tz-option:hover {
-  background-color: var(--color-sidebar-item-hover);
+  background-color: var(--ip-color-bg-sidebar-item-hover);
 }
 .tz-option.active {
   background-color: var(--ip-primary-500);

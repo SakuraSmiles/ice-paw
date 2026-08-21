@@ -177,7 +177,7 @@ function clearAvatar() {
   font-family: inherit;
   transition: all var(--ip-duration-fast) var(--ip-ease-out);
 }
-.input:focus { outline: none; border-color: var(--color-input-focus-border); background-color: var(--color-input-bg); }
+.input:focus { outline: none; border-color: var(--ip-color-border-focus); background-color: var(--ip-color-bg-input); }
 
 .workspace-group { display: flex; gap: 6px; }
 .workspace-input { flex: 1; cursor: pointer; font-family: var(--ip-font-mono); }
@@ -194,11 +194,11 @@ function clearAvatar() {
 .field-hint { margin: 0; font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); line-height: 1.5; }
 
 /* 图标与颜色行 */
-.icon-row { display: flex; align-items: center; gap: 10px; }
+.icon-row { display: flex; align-items: center; gap: var(--ip-spacing-2_5); }
 .icon-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .icon-btn {
   height: 22px; padding: 0 10px;
-  font-size: 11px;
+  font-size: var(--ip-text-micro-size);
   color: var(--ip-color-text-secondary);
   background-color: var(--ip-color-bg-tertiary);
   border: none; border-radius: var(--ip-radius-full);
@@ -206,7 +206,7 @@ function clearAvatar() {
   transition: all var(--ip-duration-fast) var(--ip-ease-out);
 }
 .icon-btn:hover { color: var(--ip-color-text-primary); background-color: var(--ip-color-bg-secondary); }
-.icon-err { font-size: 10px; color: var(--ip-danger-text); }
+.icon-err { font-size: var(--ip-text-micro-size); color: var(--ip-danger-text); }
 .avatar-file { display: none; }
 
 /* 主题色 swatch 行 */
@@ -227,7 +227,7 @@ function clearAvatar() {
   background: transparent;
   border: 1px dashed var(--ip-color-border-default);
   border-radius: var(--ip-radius-full);
-  font-size: 10px; color: var(--ip-color-text-tertiary);
+  font-size: var(--ip-text-micro-size); color: var(--ip-color-text-tertiary);
 }
 .swatch-none:hover { color: var(--ip-color-text-primary); transform: none; }
 </style>

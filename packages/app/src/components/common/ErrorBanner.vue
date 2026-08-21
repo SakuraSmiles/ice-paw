@@ -79,7 +79,7 @@ defineEmits<{ retry: []; dismiss: [] }>();
 .eb-banner {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--ip-spacing-2_5);
   padding: 9px 12px;
   border-radius: 9px;
   background: var(--ip-danger-bg);
@@ -103,7 +103,7 @@ defineEmits<{ retry: []; dismiss: [] }>();
   color: inherit;
   cursor: pointer;
 }
-.eb-retry:hover { background: var(--ip-danger-base); color: var(--ip-color-text-on-primary, #fff); }
+.eb-retry:hover { background: var(--ip-danger-base); color: var(--ip-color-text-on-primary); }
 .eb-dismiss {
   border: none;
   background: transparent;

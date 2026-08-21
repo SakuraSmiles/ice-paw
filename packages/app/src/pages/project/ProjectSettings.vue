@@ -191,7 +191,7 @@ async function archive() {
 .settings-card {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--ip-spacing-3);
   padding: 18px 20px;
   background-color: var(--ip-color-bg-secondary);
   border: 1px solid var(--ip-color-border-default);
@@ -206,7 +206,7 @@ async function archive() {
 .card-hint { margin: -6px 0 0; font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
 
 .form-error { font-size: var(--ip-text-caption-size); color: var(--ip-danger-text); }
-.form-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.form-actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--ip-spacing-2); }
 
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
@@ -231,7 +231,7 @@ async function archive() {
 .btn-link:hover:not(:disabled) { color: var(--ip-color-text-primary); }
 .btn-link:disabled { opacity: 0.5; cursor: not-allowed; }
 
-.load-error { padding: 24px; color: var(--ip-color-text-secondary); font-size: var(--ip-text-body-sm-size); }
+.load-error { padding: var(--ip-spacing-6); color: var(--ip-color-text-secondary); font-size: var(--ip-text-body-sm-size); }
 
 /* 归档弹窗（ProjectList 同款） */
 .perm-overlay {
@@ -246,11 +246,11 @@ async function archive() {
   border-radius: var(--ip-radius-xl);
   box-shadow: var(--ip-shadow-xl);
   padding: 20px;
-  display: flex; flex-direction: column; gap: 12px;
+  display: flex; flex-direction: column; gap: var(--ip-spacing-3);
 }
 .perm-title { margin: 0; font-size: var(--ip-text-h3-size); font-weight: var(--ip-font-weight-semibold); color: var(--ip-color-text-primary); }
 .perm-desc { margin: 0; font-size: var(--ip-text-body-sm-size); color: var(--ip-color-text-secondary); }
-.perm-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.perm-actions { display: flex; justify-content: flex-end; gap: var(--ip-spacing-2); margin-top: 4px; }
 
 .overlay-enter-active, .overlay-leave-active { transition: opacity var(--ip-duration-base) var(--ip-ease-out); }
 .overlay-enter-active .perm-panel, .overlay-leave-active .perm-panel { transition: transform var(--ip-duration-base) var(--ip-ease-out), opacity var(--ip-duration-base) var(--ip-ease-out); }
