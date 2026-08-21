@@ -3,16 +3,19 @@
 import { ref, onMounted, onActivated, onDeactivated, onBeforeUnmount } from "vue";
 import McpForm from "../../components/mcp/McpForm.vue";
 import Switch from "../../components/common/Switch.vue";
+import ErrorBanner from "../../components/common/ErrorBanner.vue";
 import type { McpServer, McpServerSnapshot } from "../../types";
 import { bridge } from "../../api/bridge";
 import { GLM_MCP_TEMPLATES, type GlmMcpTemplate } from "../../data/glmMcpTemplates";
 
 const servers = ref<McpServerSnapshot[]>([]);
 const loading = ref(true);
+const loadError = ref<string | null>(null);
 const nodeAvailable = ref(true);
 const lastLoadTime = ref(0);
 
 async function reload() {
+  loadError.value = null;
   loading.value = true;
   try {
     const [serverList, builtins] = await Promise.all([
@@ -27,6 +30,7 @@ async function reload() {
     lastLoadTime.value = Date.now();
   } catch (e) {
     console.error("加载 MCP Server 列表失败:", e);
+    loadError.value = e instanceof Error ? e.message : String(e);
   } finally {
     loading.value = false;
   }
@@ -89,12 +93,19 @@ function statusClass(s: McpServerSnapshot): string {
   return s.status; // running / starting / failed
 }
 
+// 切换/重试失败状态（UI-2：条目级 inline，错误贴身对应卡片）
+const toggleError = ref<{ id: string; msg: string; retry: () => void } | null>(null);
+// 删除失败（UI-2 批次二 1/3）：与切换失败同卡片同位置，独立状态位防互相覆盖
+const deleteError = ref<{ id: string; msg: string; retry: () => void } | null>(null);
+
 async function toggleEnabled(s: McpServerSnapshot, enabled: boolean) {
   try {
     await bridge.mcp.setEnabled(s.id, enabled);
+    toggleError.value = null;
     await reload();
   } catch (e) {
     console.error("切换启用状态失败:", e);
+    toggleError.value = { id: s.id, msg: e instanceof Error ? e.message : String(e), retry: () => void toggleEnabled(s, enabled) };
     await reload();
   }
 }
@@ -112,8 +123,15 @@ async function retryServer(s: McpServerSnapshot) {
 function onSaved(_s: McpServer) { isCreating.value = false; expandedEditId.value = null; reload(); }
 function onCancel() { isCreating.value = false; expandedEditId.value = null; }
 async function onDelete(s: McpServer) {
-  try { await bridge.mcp.remove(s.id); isCreating.value = false; expandedEditId.value = null; await reload(); }
-  catch (e) { console.error("删除 MCP Server 失败:", e); }
+  try {
+    await bridge.mcp.remove(s.id);
+    deleteError.value = null;
+    isCreating.value = false; expandedEditId.value = null;
+    await reload();
+  } catch (e) {
+    console.error("删除 MCP Server 失败:", e);
+    deleteError.value = { id: s.id, msg: e instanceof Error ? e.message : String(e), retry: () => void onDelete(s) };
+  }
 }
 
 // ---- GLM 模板：从 GLM Coding Plan 的 MCP 服务一键添加（仅前端组装，复用 bridge.mcp.create）----
@@ -312,6 +330,20 @@ const builtinDescZh: Record<string, string> = {
               <span v-if="s.status === 'running' && s.tool_count" class="probe-tag probe-done">{{ s.tool_count }} 工具</span>
               <span v-else-if="s.status === 'failed'" class="probe-tag probe-error" :title="s.error ?? undefined">未就绪</span>
             </div>
+            <ErrorBanner
+              v-if="toggleError?.id === s.id"
+              variant="inline"
+              :title="s.enabled ? '启用失败' : '停用失败'"
+              :detail="toggleError.msg"
+              @retry="toggleError?.retry()"
+            />
+            <ErrorBanner
+              v-else-if="deleteError?.id === s.id"
+              variant="inline"
+              title="删除失败"
+              :detail="deleteError.msg"
+              @retry="deleteError?.retry()"
+            />
           </div>
           <Switch :model-value="s.enabled" @update:model-value="(v: boolean) => toggleEnabled(s, v)" @click.stop />
           <svg class="card-chevron" :class="{ rotated: expandedEditId === s.id }" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -351,6 +383,12 @@ const builtinDescZh: Record<string, string> = {
       </div>
 
       <div v-if="loading && !servers.length" class="loading-state">加载中...</div>
+      <div v-else-if="loadError && !servers.length" class="load-fail">
+        <span class="load-fail-icon">!</span>
+        <span class="load-fail-msg">MCP Server 列表加载失败</span>
+        <span class="load-fail-why">{{ loadError }}</span>
+        <button type="button" class="load-fail-retry" @click="reload">重试</button>
+      </div>
       <div v-else-if="!loading && servers.length === 0" class="empty-hint">还没有 MCP Server，点上方「新建」接入</div>
     </div>
   </div>

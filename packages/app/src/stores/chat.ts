@@ -263,6 +263,19 @@ export const useChatStore = defineStore("chat", () => {
   const lastError = computed(() =>
     activeConvId.value ? lastErrors.value.get(activeConvId.value) ?? null : null,
   );
+
+  /** 最近一次失败发送的内容（UI-2 批次三：错误横幅「重试」的数据源）。
+   *  sendMessage 成功进入流式前记录；失败后据此可一键重发同内容。
+   *  会话隔离：只保留当前会话的（切会话即弃——旧会话的失败由用户自行去该会话处理）。*/
+  const lastFailedSend = ref<{ content: string; blocks: import("../types").ContentBlock[] } | null>(null);
+
+  /** 关闭错误横幅（纯视觉 dismissing，不动任何消息）。*/
+  function clearConvError() {
+    if (!activeConvId.value) return;
+    const m = new Map(lastErrors.value);
+    m.delete(activeConvId.value);
+    lastErrors.value = m;
+  }
   let sendTimeout: ReturnType<typeof setTimeout> | null = null;
 
   /** 后台会话的流式文本快照：切走「正在流式」的会话时把已累积文本存这里，
@@ -292,6 +305,7 @@ export const useChatStore = defineStore("chat", () => {
   async function sendMessage(content: string, contentBlocks?: import("../types").ContentBlock[]) {
     if (!activeConvId.value || sending.value) return;
     sending.value = true;
+    lastFailedSend.value = { content, blocks: contentBlocks ?? [] }; // 失败重发依据（chat:done 清）
     // 清掉当前会话的错误横幅（per-conv 隔离：只清本会话，不影响其它会话）
     if (activeConvId.value) {
       const m = new Map(lastErrors.value);
@@ -648,6 +662,7 @@ export const useChatStore = defineStore("chat", () => {
     streamingToolCalls, streamingThinking, thinkingStartTime, thinkingDuration, lastThinkingContent, thinkingDurations,
     // 事件层（useChatEvents）直接读写的内部 Map——暴露供其 mutate；对外读取走下方 computed
     bgStreams, pendingAuthRequests, pendingProposals, lastErrors,
+    lastFailedSend, clearConvError,
     activeConvAuthRequest, backgroundAuthRequests, pendingProposal, lastError,
     streamingConvIds,
     loadConversations, selectConversation, loadMoreMessages,

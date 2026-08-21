@@ -2,6 +2,7 @@
 // AgentSettings.vue — 智能体设置（卡片展开内联编辑 + 顶部特殊新建卡片）
 import { ref, computed, onMounted } from "vue";
 import AgentForm from "../../components/agent/AgentForm.vue";
+import ErrorBanner from "../../components/common/ErrorBanner.vue";
 import EntityAvatar from "../../components/common/EntityAvatar.vue";
 import KbDocumentList from "../../components/kb/KbDocumentList.vue";
 import type { Agent, ProviderInfo } from "../../types";
@@ -13,17 +14,21 @@ const store = useAgentStore();
 // 单一数据源：直接从 Pinia store 派生，避免本地 ref 与 store 不一致
 const agents = computed<Agent[]>(() => store.list);
 const loading = ref(true);
+// 列表加载失败（UI-2 批次二 2/3）：失败 ≠ 空——与空态引导互斥可区分
+const loadError = ref<string | null>(null);
 
 // 展开编辑的 agent id（null = 全部收起）；isCreating = 新建卡片展开态
 const expandedEditId = ref<string | null>(null);
 const isCreating = ref(false);
 
 async function loadAgents() {
+  loadError.value = null;
   loading.value = true;
   try {
     await store.load(true);
   } catch (e) {
     console.error("加载 Agent 列表失败:", e);
+    loadError.value = e instanceof Error ? e.message : String(e);
   } finally {
     loading.value = false;
   }
@@ -54,14 +59,20 @@ function onCancel() {
   expandedEditId.value = null;
 }
 
+// 删除失败状态（UI-2：条目级 inline 反馈；key=agent.id 使错误贴身对应卡片）
+const deleteError = ref<{ id: string; msg: string } | null>(null);
+
 async function onDelete(agent: Agent) {
   try {
     await bridge.agents.delete(agent.id);
+    deleteError.value = null;
     isCreating.value = false;
     expandedEditId.value = null;
     await loadAgents();
   } catch (e) {
     console.error("删除 Agent 失败:", e);
+    // e.message 形如 "受抚养的会话存在（…）"——直传后端原因（三段式：标题+原因）
+    deleteError.value = { id: agent.id, msg: e instanceof Error ? e.message : String(e) };
   }
 }
 
@@ -125,6 +136,13 @@ const providerLabel = (name: string) => providerLabelOf(providerList.value, name
               <span class="card-model">{{ agent.model }}</span>
               <span v-if="!agent.has_api_key" class="card-tag card-tag-warn">未配置 Key</span>
             </div>
+            <ErrorBanner
+              v-if="deleteError?.id === agent.id"
+              variant="inline"
+              title="删除失败"
+              :detail="deleteError.msg"
+              @retry="onDelete(agent)"
+            />
           </div>
           <svg class="card-chevron" :class="{ rotated: expandedEditId === agent.id }" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="9 18 15 12 9 6" />
@@ -144,6 +162,12 @@ const providerLabel = (name: string) => providerLabelOf(providerList.value, name
       </div>
 
       <div v-if="loading && !agents.length" class="loading-state">加载中...</div>
+      <div v-else-if="loadError" class="load-fail">
+        <span class="load-fail-icon">!</span>
+        <span class="load-fail-msg">Agent 列表加载失败</span>
+        <span class="load-fail-why">{{ loadError }}</span>
+        <button type="button" class="load-fail-retry" @click="loadAgents">重试</button>
+      </div>
       <div v-else-if="agents.length === 0" class="empty-hint">还没有其他智能体，点上方「新建智能体」创建</div>
     </div>
   </div>
