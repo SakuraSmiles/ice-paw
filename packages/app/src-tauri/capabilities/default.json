@@ -9,7 +9,6 @@
     "core:default",
     "opener:default",
     "dialog:default",
-    "fs:default",
     "core:window:allow-set-theme",
     "core:event:default",
     "core:window:allow-set-title"

@@ -14,8 +14,6 @@
 -->
 <script setup lang="ts">
 import { computed, watch, nextTick, ref } from "vue";
-import { open } from "@tauri-apps/plugin-dialog";
-import { readFile } from "@tauri-apps/plugin-fs";
 import { useChatStore } from "../../stores/chat";
 import { useAgentStore } from "../../stores/agent";
 import { useProjectStore } from "../../stores/project";
@@ -63,9 +61,6 @@ function uint8ToBase64(uint8: Uint8Array): string {
 
 function extOf(name: string): string {
   return name.split(".").pop()?.toLowerCase() ?? "";
-}
-function baseName(path: string): string {
-  return path.split(/[/\\]/).pop() || path;
 }
 
 // ===== 附件类型常量（图片 + 文档统一管理）=====
@@ -130,29 +125,6 @@ function pushAttachment(name: string, bytes: Uint8Array): PushResult {
   return "unsupported"; // 非图片/文档扩展名
 }
 
-/** 统一附件选择对话框（按钮触发）：图片 + 文档一个入口，按扩展名分流。*/
-async function pickAttachments() {
-  const files = await open({
-    multiple: true,
-    // 默认即"全部"（图片 + office 全范围），不细分图片/文档
-    filters: [{ name: "全部", extensions: [...imageExts, ...docExts] }],
-  });
-  if (!files) return;
-  const paths = Array.isArray(files) ? files : [files];
-  const fails: { name: string; reason: string }[] = [];
-  for (const filePath of paths) {
-    const name = baseName(filePath);
-    try {
-      const uint8 = await readFile(filePath);
-      const r = pushAttachment(name, uint8);
-      if (r !== true) fails.push({ name, reason: REJECT_LABEL[r] });
-    } catch (e) {
-      console.error("读取附件失败:", e);
-      fails.push({ name, reason: "读取失败" });
-    }
-  }
-  reportAttachFails(fails);
-}
 
 /** 从浏览器 File 列表（拖拽/粘贴）批量加入附件，按扩展名分流图片/文档。*/
 async function addAttachmentsFromFileList(fileList: File[]): Promise<void> {
@@ -189,6 +161,16 @@ function formatSize(bytes: number): string {
 // 6 秒后自动清除。逐个弹 toast 噪声大；一条汇总更克制。
 const attachWarn = ref("");
 let attachWarnTimer: ReturnType<typeof setTimeout> | null = null;
+// ===== 附件选择：浏览器原生 input（macOS 免系统权限弹窗——用户亲手递文件的
+// 一次性授权；与拖拽/粘贴同一条 File 通道，分流/校验零重复）=====
+const attachInput = ref<HTMLInputElement | null>(null);
+function onAttachFilesPicked(e: Event) {
+  const input = e.target as HTMLInputElement;
+  const files = Array.from(input.files ?? []);
+  input.value = ""; // 同文件可重选
+  if (files.length) void addAttachmentsFromFileList(files);
+}
+
 function reportAttachFails(fails: { name: string; reason: string }[]) {
   if (!fails.length) return;
   const lines = fails.map((f) => `• ${f.name}：${f.reason}`).join("\n");
@@ -543,6 +525,14 @@ function handleKeydown(e: KeyboardEvent) {
             </span>
           </button>
         </div>
+        <input
+          ref="attachInput"
+          type="file"
+          multiple
+          :accept="[...imageExts, ...docExts].map((e) => '.' + e).join(',')"
+          class="attach-file-input"
+          @change="onAttachFilesPicked"
+        />
         <div class="input-row">
           <!-- UI-A2：生成中不再整体禁用——允许预写下一条（draft 自动保存已就位），
                发送由 send() 内 chat.sending 守卫拦截；IME/Enter 逻辑不受影响 -->
@@ -562,7 +552,7 @@ function handleKeydown(e: KeyboardEvent) {
              最右（比工具按钮大一圈，主操作视觉权重）——输入区因此全宽，
              右上不再为发送按钮留位 -->
         <div class="input-footer">
-          <button class="btn-img" :disabled="chat.sending" title="添加附件（图片 / docx / xlsx / xls / pdf）" @click="pickAttachments">
+          <button class="btn-img" :disabled="chat.sending" title="添加附件（图片 / docx / xlsx / xls / pdf）" @click="attachInput?.click()">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" /></svg>
           </button>
           <button class="btn-img btn-at" :disabled="chat.sending" title="引用（@ 会话 / Agent / 消息）" @click="insertAtTrigger">
@@ -606,6 +596,7 @@ function handleKeydown(e: KeyboardEvent) {
 .file-chip-remove { flex-shrink:0; display:flex; align-items:center; justify-content:center; width:16px; height:16px; border-radius:50%; border:none; background:transparent; color:var(--ip-color-text-disabled); cursor:pointer; transition:all var(--ip-duration-fast) var(--ip-ease-out); }
 .file-chip-remove:hover { background-color:var(--ip-color-bg-hover); color:var(--ip-danger-base); }
 
+.attach-file-input { display: none; }
 .input-wrapper { position:relative; display:flex; flex-direction:column; background-color:var(--ip-color-bg-input); border:1px solid var(--ip-color-border-default); border-radius:12px; transition:border-color var(--ip-duration-base) var(--ip-ease-out),box-shadow var(--ip-duration-base) var(--ip-ease-out); }
 
 /* ===== @ 引用弹层（输入框上方） ===== */
