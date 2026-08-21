@@ -15,6 +15,7 @@ import { ref } from "vue";
 import { VueCropper } from "vue-cropper";
 import "vue-cropper/dist/index.css";
 import { useEscapeStack } from "../../composables/useEscapeStack";
+import { AVATAR_MAX_SRC_BYTES } from "../../utils/avatar";
 
 const props = defineProps<{ source?: string | null }>();
 const emit = defineEmits<{ confirm: [data: string]; cancel: [] }>();
@@ -36,8 +37,8 @@ function onFile(e: Event) {
   const f = (e.target as HTMLInputElement).files?.[0];
   (e.target as HTMLInputElement).value = "";
   if (!f) return;
-  if (f.size > 2 * 1024 * 1024) {
-    errMsg.value = `图片过大（${(f.size / 1024 / 1024).toFixed(1)}MB），请选择 2MB 以内的图片`;
+  if (f.size > AVATAR_MAX_SRC_BYTES) {
+    errMsg.value = `图片过大（${(f.size / 1024 / 1024).toFixed(1)}MB），请选择 10MB 以内的图片`;
     return;
   }
   errMsg.value = "";
