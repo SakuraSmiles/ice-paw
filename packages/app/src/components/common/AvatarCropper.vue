@@ -48,8 +48,19 @@ function onImgLoad() {
   if (imgEl.value) {
     imgW.value = imgEl.value.naturalWidth;
     imgH.value = imgEl.value.naturalHeight;
+    resetWinSize(); // 图就绪：视窗回默认 72%
   }
 }
+
+// 时序保险：换 src 时若图已解码（load 早于挂载/同 URL 复用），下一帧直读尺寸兜底
+import { watch as _w, nextTick as _nt } from "vue";
+_w(imgSrc, async () => {
+  await _nt();
+  if (imgEl.value && imgEl.value.complete && imgW.value === 0) {
+    imgW.value = imgEl.value.naturalWidth;
+    imgH.value = imgEl.value.naturalHeight;
+  }
+});
 
 // ---- 视窗定位（归一化中心点，渲染时换算像素）----
 const offset = ref<CropOffset>({ x: 0.5, y: 0.5 });
@@ -58,11 +69,30 @@ const stageRef = ref<HTMLElement | null>(null);
 // 视窗边长（px，相对原图）与 stage 显示尺寸的比例换算：
 // 显示层用 <img> 自然布局（max 约束），直接以 stage 内像素工作——
 // 视窗 = 原图短边的显示比例。简化：视窗占 stage 短边的 72%（留呼吸）。
-const winSize = computed(() => {
-  if (!stageRef.value) return 150;
-  const r = stageRef.value.getBoundingClientRect();
-  return Math.round(Math.min(r.width, r.height) * 0.72);
-});
+// 视窗边长（ref：滚轮/捏合可缩放）。初值取舞台短边 72%，钳制 [25%, 100%]。
+const winSize = ref(150);
+
+function clampWinSize(v: number): number {
+  const st = stageRef.value?.getBoundingClientRect();
+  const max = st ? Math.round(Math.min(st.width, st.height)) : 240;
+  return Math.round(Math.min(Math.max(v, Math.round(max * 0.25)), max));
+}
+
+/** stage 挂载/图就绪时重置为 72%（新图回默认框）。 */
+function resetWinSize() {
+  const st = stageRef.value?.getBoundingClientRect();
+  if (st) winSize.value = Math.round(Math.min(st.width, st.height) * 0.72);
+}
+
+// 滚轮/触控板捏合缩放视窗（ctrlKey=捏合在 WKWebView 映射为带 ctrl 的 wheel）
+function onWheel(e: WheelEvent) {
+  if (!ready.value) return;
+  e.preventDefault();
+  // deltaY 正=缩小视窗（看得更多），负=放大（看得更细）；步进与当前尺寸成比例
+  const step = Math.max(6, Math.round(winSize.value * 0.08));
+  const delta = e.deltaY > 0 ? step : -step;
+  winSize.value = clampWinSize(winSize.value + delta);
+}
 
 /** 视窗左上像素位（stage 坐标系）——由 offset 中心点换算，钳制在 stage 内。 */
 const winPos = computed(() => {
@@ -143,15 +173,16 @@ async function onConfirm() {
       <div class="ac-modal" role="dialog" aria-label="调整头像">
         <h4 class="ac-title">
           调整头像
-          <span class="ac-sub">拖动方框选择保留区域</span>
+          <span class="ac-sub">拖动定位 · 滚轮/捏合缩放</span>
         </h4>
 
-        <!-- 裁剪舞台 -->
+        <!-- 裁剪舞台（常渲染：img 必须在 DOM 里才会触发 load——ready 死锁修复） -->
         <div
-          v-if="ready"
+          v-if="imgSrc"
           ref="stageRef"
           class="ac-stage"
           @pointerdown.prevent="onPointerDown"
+          @wheel.prevent="onWheel"
         >
           <img
             ref="imgEl"
@@ -159,19 +190,20 @@ async function onConfirm() {
             class="ac-img"
             draggable="false"
             @load="onImgLoad"
+            @error="errMsg = '图片加载失败，请重新选择'"
           />
           <!-- 全景蒙层：视窗外压暗（box-shadow 大投影技巧） -->
           <div
+            v-if="ready"
             class="ac-win"
             :style="{ width: winSize + 'px', height: winSize + 'px', left: winPos.left + 'px', top: winPos.top + 'px' }"
           >
-            <img :src="imgSrc ?? undefined" class="ac-win-img" :style="{ width: stageRef?.clientWidth + 'px' }" draggable="false" />
             <span class="ac-grip" aria-hidden="true" />
           </div>
         </div>
 
         <!-- 无图：第一步选图 -->
-        <div v-else class="ac-empty" @click="fileInput?.click()">
+        <div v-if="!imgSrc" class="ac-empty" @click="fileInput?.click()">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
           <span>{{ imgSrc ? "图片加载中…" : "点击选择图片（支持拖入）" }}</span>
         </div>
@@ -234,7 +266,6 @@ async function onConfirm() {
   cursor: grab;
 }
 .ac-win:active { cursor: grabbing; }
-.ac-win-img { position: absolute; object-fit: contain; pointer-events: none; }
 .ac-grip {
   position: absolute;
   right: 3px;
