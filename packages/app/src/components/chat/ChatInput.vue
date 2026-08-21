@@ -455,7 +455,7 @@ function handleKeydown(e: KeyboardEvent) {
     }
     if (e.key === "Escape") {
       e.preventDefault();
-      atQuery.value = null;
+      atQuery.value = null; // @弹层是输入框内联浮层，恒处焦点上下文，直接关闭（无需入栈）
       return;
     }
   }

@@ -17,11 +17,19 @@ import AuthRequestCard from "../components/chat/AuthRequestCard.vue";
 import TaskPanel from "../components/chat/TaskPanel.vue";
 import TrajectoryView from "../components/trajectory/TrajectoryView.vue";
 import { useChatStore } from "../stores/chat";
+import { useTablist } from "../composables/useTablist";
 
 const chat = useChatStore();
 
 type ChatTab = "chat" | "trajectory";
+const CHAT_TABS = ["chat", "trajectory"] as const;
 const activeTab = ref<ChatTab>("chat");
+// UI-D2：tablist 键盘协议（←→ 循环切换焦点跟随 / Home End 跳边界）
+const { onKeydown: onTabKeydown } = useTablist(
+  CHAT_TABS,
+  () => activeTab.value,
+  (t) => { activeTab.value = t; },
+);
 
 // 切会话 → 回到「对话」标签（轨迹视图自身会按新 conversationId 重载）。
 // 例外：openConversationAtTrajectory 置了标志（委派卡片/项目任务列表入口）→
@@ -41,17 +49,25 @@ watch(() => chat.activeConvId, () => {
     <ChatHeader :has-tabbar="!!chat.activeConvId" />
     <ChatWelcome v-if="!chat.activeConvId" />
     <template v-else>
-      <nav class="chat-tabbar">
+      <nav class="chat-tabbar" role="tablist" @keydown="onTabKeydown">
         <button
           class="chat-tab"
+          role="tab"
+          data-tab="chat"
           :class="{ active: activeTab === 'chat' }"
+          :aria-selected="activeTab === 'chat'"
+          :tabindex="activeTab === 'chat' ? 0 : -1"
           @click="activeTab = 'chat'"
         >
           <span>对话</span>
         </button>
         <button
           class="chat-tab"
+          role="tab"
+          data-tab="trajectory"
           :class="{ active: activeTab === 'trajectory' }"
+          :aria-selected="activeTab === 'trajectory'"
+          :tabindex="activeTab === 'trajectory' ? 0 : -1"
           @click="activeTab = 'trajectory'"
         >
           <span>轨迹</span>

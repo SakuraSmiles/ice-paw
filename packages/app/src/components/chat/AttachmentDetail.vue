@@ -18,6 +18,8 @@ const props = defineProps<{
   startIndex: number;
   extractedTexts: Record<string, string>;
 }>();
+useEscapeStack(() => emit("close"));
+
 const emit = defineEmits<{ close: [] }>();
 
 // 默认展开起始项
@@ -33,12 +35,7 @@ function formatSize(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
-function onKey(e: KeyboardEvent) {
-  if (e.key === "Escape") emit("close");
-}
-import { onMounted, onUnmounted } from "vue";
-onMounted(() => window.addEventListener("keydown", onKey));
-onUnmounted(() => window.removeEventListener("keydown", onKey));
+import { useEscapeStack } from "../../composables/useEscapeStack";
 </script>
 
 <template>

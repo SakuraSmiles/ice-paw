@@ -9,6 +9,7 @@
 // 跨项目不串数据、tab 间各留缓存。
 // 进入详情页不改变侧栏 scope：「看项目」与「切空间工作」是两个动作。
 import { computed, onMounted, ref } from "vue";
+import { useTablist } from "../../composables/useTablist";
 import { useRoute, useRouter } from "vue-router";
 import { useProjectStore } from "../../stores/project";
 import EntityAvatar from "../../components/common/EntityAvatar.vue";
@@ -26,6 +27,13 @@ const tabs = [
   { key: "timeline", label: "项目轨迹" },
   { key: "settings", label: "设置" },
 ];
+const tabKeys = tabs.map((t) => t.key) as ("overview" | "timeline" | "settings")[];
+// UI-D2：tablist 键盘协议（←→/Home/End + roving tabindex）
+const { onKeydown: onTabKeydown } = useTablist(
+  tabKeys,
+  () => activeTab.value as (typeof tabKeys)[number],
+  (k) => navigate(k),
+);
 const activeTab = computed(() => {
   const seg = route.path.split("/").pop() || "overview";
   return tabs.some((t) => t.key === seg) ? seg : "overview";
@@ -73,12 +81,16 @@ onMounted(async () => {
       </div>
     </header>
 
-    <nav v-if="current" class="tab-bar">
+    <nav v-if="current" class="tab-bar" role="tablist" @keydown="onTabKeydown">
       <button
         v-for="t in tabs"
         :key="t.key"
         class="tab-item"
+        role="tab"
+        :data-tab="t.key"
         :class="{ active: activeTab === t.key }"
+        :aria-selected="activeTab === t.key"
+        :tabindex="activeTab === t.key ? 0 : -1"
         @click="navigate(t.key)"
       >{{ t.label }}</button>
     </nav>
