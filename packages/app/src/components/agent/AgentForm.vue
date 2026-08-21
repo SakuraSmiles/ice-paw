@@ -12,6 +12,7 @@
 //   （Ollama/custom/旧入口）不进下拉，仅编辑态存量兜底合成一组显示
 // Key/URL 字段的规则（requires_key / requires_base_url）由推导出的 provider
 // 驱动，与后端校验一致；「测试连接」一次往返两用——验证配置 + 拉取模型并入下拉。
+import AvatarField from "../common/AvatarField.vue";
 import { ref, computed, onMounted, watch } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -22,8 +23,6 @@ import GroupedSelect from "../common/GroupedSelect.vue";
 import ProviderIcon from "../common/ProviderIcon.vue";
 import type { ComboboxGroup, ComboboxItem } from "../common/Combobox.vue";
 import MoreMenu from "../common/MoreMenu.vue";
-import EntityAvatar from "../common/EntityAvatar.vue";
-import { compressAvatar } from "../../utils/avatar";
 
 const props = defineProps<{
   agent: Agent | null;
@@ -56,26 +55,9 @@ const form = ref({
 });
 
 // ---- 头像行 ----
-const avatarInput = ref<HTMLInputElement | null>(null);
-const avatarError = ref("");
 
-async function onAvatarFile(e: Event) {
-  const input = e.target as HTMLInputElement;
-  const file = input.files?.[0];
-  input.value = ""; // 允许重复选同一文件
-  if (!file) return;
-  avatarError.value = "";
-  try {
-    form.value.avatar = await compressAvatar(file);
-  } catch (err) {
-    avatarError.value = err instanceof Error ? err.message : "图片处理失败";
-  }
-}
 
-function clearAvatar() {
-  form.value.avatar = null;
-  avatarError.value = "";
-}
+
 
 onMounted(async () => {
   providerList.value = await loadProviders();
@@ -388,23 +370,10 @@ function confirmDelete() {
         </div>
       </div>
 
-      <!-- 头像（身份出生证：图片/名字渐变两级，EntityAvatar 统一渲染链） -->
+      <!-- 头像（AvatarField：hover 更换 + 右上×清空 + 裁剪器，点击/拖入/粘贴三通道） -->
       <div class="field">
         <label class="field-label">头像 <span class="hint">不选则按名字生成</span></label>
-        <div class="avatar-row">
-          <EntityAvatar :name="form.name || form.id || '?'" :image="form.avatar" size="lg" />
-          <div class="avatar-actions">
-            <button type="button" class="avatar-btn" @click="avatarInput?.click()">上传图片</button>
-            <button
-              v-if="form.avatar"
-              type="button"
-              class="avatar-btn"
-              @click="clearAvatar"
-            >清除</button>
-            <span v-if="avatarError" class="conn-err">{{ avatarError }}</span>
-          </div>
-          <input ref="avatarInput" type="file" accept="image/*" class="avatar-file" @change="onAvatarFile" />
-        </div>
+        <AvatarField v-model="form.avatar" :name="form.name || form.id || '?'" />
       </div>
 
       <!-- 模型（可选可输分组选择器：选预设即隐式确定厂商；手输目录外名字落自定义） -->
@@ -694,36 +663,10 @@ function confirmDelete() {
 }
 
 /* 头像行（预览 + 小操作钮） */
-.avatar-row {
-  display: flex;
-  align-items: center;
-  gap: var(--ip-spacing-2_5);
-}
-.avatar-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-/* 头像行小操作钮（独立于 conn-btn 的连接语义；中性底，非主色胶囊） */
-.avatar-btn {
-  height: 22px;
-  padding: 0 10px;
-  font-size: var(--ip-text-micro-size);
-  color: var(--ip-color-text-secondary);
-  background-color: var(--ip-color-bg-tertiary);
-  border: none;
-  border-radius: var(--ip-radius-full);
-  cursor: pointer;
-  transition: all var(--ip-duration-fast) var(--ip-ease-out);
-}
-.avatar-btn:hover {
-  color: var(--ip-color-text-primary);
-  background-color: var(--ip-color-bg-secondary);
-}
-.avatar-file {
-  display: none;
-}
+
+
+
+
 
 .field-hint {
   margin: 0;
