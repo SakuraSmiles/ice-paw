@@ -37,8 +37,18 @@ function loadImage(src: string): Promise<HTMLImageElement> {
   });
 }
 
+/** 裁剪视窗偏移（0~1 归一化，AvatarCropper 拖动定位产出）。
+ *  center = {x:0.5, y:0.5} 等价旧版固定中心裁剪。 */
+export interface CropOffset {
+  x: number;
+  y: number;
+}
+
 /** 头像文件 → 压缩 dataURL（≤300KB 量级）。不是图片类型时抛错。 */
-export async function compressAvatar(file: File): Promise<string> {
+export async function compressAvatar(
+  file: File,
+  offset?: CropOffset,
+): Promise<string> {
   if (!file.type.startsWith("image/")) {
     throw new Error("仅支持图片文件");
   }
@@ -48,10 +58,12 @@ export async function compressAvatar(file: File): Promise<string> {
   const src = await readFile(file);
   const img = await loadImage(src);
 
-  // 方形 cover 裁剪：取短边中心区域
+  // 方形 cover 裁剪：取短边，中心点由 offset 指定（默认几何中心）
   const edge = Math.min(img.naturalWidth, img.naturalHeight);
-  const sx = (img.naturalWidth - edge) / 2;
-  const sy = (img.naturalHeight - edge) / 2;
+  const cx = Math.round((offset?.x ?? 0.5) * img.naturalWidth);
+  const cy = Math.round((offset?.y ?? 0.5) * img.naturalHeight);
+  const sx = Math.min(Math.max(cx - edge / 2, 0), img.naturalWidth - edge);
+  const sy = Math.min(Math.max(cy - edge / 2, 0), img.naturalHeight - edge);
   // 不放大：源短边不足 MAX_EDGE 时按原尺寸输出
   const out = Math.min(edge, MAX_EDGE);
 
@@ -64,6 +76,32 @@ export async function compressAvatar(file: File): Promise<string> {
 
   // WebP 优先，回退 JPEG（个别环境 canvas.toDataURL('image/webp') 静默回退成 png
   // 兜底判断返回前缀）
+  let data = canvas.toDataURL("image/webp", 0.85);
+  if (!data.startsWith("data:image/webp")) {
+    data = canvas.toDataURL("image/jpeg", 0.85);
+  }
+  return data;
+}
+
+
+/** 已加载图 + 偏移 → 压缩 dataURL（AvatarCropper 确认时用，避免重复读文件/解码）。
+ *  与 compressAvatar 同管道：方形 cover + ≤256px + WebP/JPEG。 */
+export async function compressAvatarImage(
+  img: HTMLImageElement,
+  offset?: CropOffset,
+): Promise<string> {
+  const edge = Math.min(img.naturalWidth, img.naturalHeight);
+  const cx = Math.round((offset?.x ?? 0.5) * img.naturalWidth);
+  const cy = Math.round((offset?.y ?? 0.5) * img.naturalHeight);
+  const sx = Math.min(Math.max(cx - edge / 2, 0), img.naturalWidth - edge);
+  const sy = Math.min(Math.max(cy - edge / 2, 0), img.naturalHeight - edge);
+  const out = Math.min(edge, MAX_EDGE);
+  const canvas = document.createElement("canvas");
+  canvas.width = out;
+  canvas.height = out;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("canvas 不可用");
+  ctx.drawImage(img, sx, sy, edge, edge, 0, 0, out, out);
   let data = canvas.toDataURL("image/webp", 0.85);
   if (!data.startsWith("data:image/webp")) {
     data = canvas.toDataURL("image/jpeg", 0.85);

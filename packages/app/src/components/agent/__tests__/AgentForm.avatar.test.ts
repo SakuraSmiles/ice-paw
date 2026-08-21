@@ -67,7 +67,7 @@ async function mountForm(agent: Agent | null = null) {
 
 /** 预览头像（表单头像行的 EntityAvatar） */
 function preview(w: VueWrapper) {
-  return w.find(".avatar-row .entity-avatar");
+  return w.find(".avatar-field .entity-avatar");
 }
 
 /** 保存按钮（配置区头部） */
@@ -104,11 +104,11 @@ describe("AgentForm 头像字段", () => {
     expect(payload.avatar).toBe("data:image/webp;base64,old");
   });
 
-  it("清除按钮：图片归 null（预览回兜底首字），保存 payload avatar=null", async () => {
+  it("清空×：图片归 null（预览回兜底首字），保存 payload avatar=null", async () => {
     const w = await mountForm(editAgent({ avatar: "data:image/webp;base64,x" }));
-    // 只剩两个操作钮（上传/清除），清除是第二个
-    await w.findAll(".avatar-actions .avatar-btn")[1].trigger("click");
-    expect(preview(w).text()).toBe("助");
+    // AvatarField 右上角清空钮（hover 显形；测试直接触发）
+    await w.find(".af-clear").trigger("click");
+    expect(w.find(".avatar-field .entity-avatar").text()).toBe("助");
 
     await saveBtn(w).trigger("click");
     await flushPromises();

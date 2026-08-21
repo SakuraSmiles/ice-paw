@@ -44,17 +44,17 @@ describe("ProjectBasicForm 图标与颜色", () => {
     document.body.innerHTML = "";
   });
 
-  it("清除按钮：图片归 null；预览两级链（图片档 img / 无图首字渐变）", async () => {
+  it("清空×：图片归 null；预览两级链（图片档 img / 无图首字渐变）", async () => {
     const w = mountForm({ avatar: "data:image/webp;base64,x" });
-    expect(w.find(".icon-row .entity-avatar img").attributes("src")).toBe("data:image/webp;base64,x");
+    expect(w.find(".avatar-field .entity-avatar img").attributes("src")).toBe("data:image/webp;base64,x");
 
-    await w.findAll(".icon-actions .icon-btn")[1].trigger("click"); // 第二个=清除
+    await w.find(".af-clear").trigger("click"); // AvatarField 右上清空钮
     const p = lastPatch(w);
     expect(p.avatar).toBeNull();
 
     const w2 = mountForm();
-    expect(w2.find(".icon-row .entity-avatar img").exists()).toBe(false);
-    expect(w2.find(".icon-row .entity-avatar").text()).toBe("测");
+    expect(w2.find(".avatar-field .entity-avatar img").exists()).toBe(false);
+    expect(w2.find(".avatar-field .entity-avatar").text()).toBe("测");
   });
 
   it("主题色 swatch：点选落值 / 「无」清空；预览底色随 accent", async () => {
@@ -65,7 +65,7 @@ describe("ProjectBasicForm 图标与颜色", () => {
     await w.findAll(".swatch")[0].trigger("click");
     expect(lastPatch(w).themeColor).toBe("#4680C2");
     // 预览头像底色 = accent（兜底档共用）
-    expect(w.find(".icon-row .entity-avatar").attributes("style")).toContain("#4680C2");
+    expect(w.find(".avatar-field .entity-avatar").attributes("style")).toContain("#4680C2");
 
     await w.find(".swatch-none").trigger("click");
     expect(lastPatch(w).themeColor).toBeNull();

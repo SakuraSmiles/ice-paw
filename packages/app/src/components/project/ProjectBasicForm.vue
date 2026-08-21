@@ -3,10 +3,8 @@
 // 双入口复用：ProjectList 展开区 + 项目详情页设置 tab。目录选择内聚
 // （plugin-dialog），值走单对象 v-model——父级持有表单状态，本组件无状态
 // （头像处理的瞬时错误提示除外——不进表单值）。
-import { ref } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
-import EntityAvatar from "../common/EntityAvatar.vue";
-import { compressAvatar } from "../../utils/avatar";
+import AvatarField from "../common/AvatarField.vue";
 
 interface ProjectBasicValue {
   name: string;
@@ -42,27 +40,9 @@ async function pickWorkspace() {
   if (selected) patch({ workspacePath: selected });
 }
 
-// ---- 图标与颜色行（图片独立，主题色独立） ----
-const avatarInput = ref<HTMLInputElement | null>(null);
-const avatarError = ref("");
+// ---- 图标与颜色行（图片走 AvatarField，主题色独立） ----
 
-async function onAvatarFile(e: Event) {
-  const input = e.target as HTMLInputElement;
-  const file = input.files?.[0];
-  input.value = ""; // 允许重复选同一文件
-  if (!file) return;
-  avatarError.value = "";
-  try {
-    patch({ avatar: await compressAvatar(file) });
-  } catch (err) {
-    avatarError.value = err instanceof Error ? err.message : "图片处理失败";
-  }
-}
 
-function clearAvatar() {
-  patch({ avatar: null });
-  avatarError.value = "";
-}
 </script>
 
 <template>
@@ -93,23 +73,12 @@ function clearAvatar() {
     <div class="field">
       <label class="field-label">图标与颜色 <span class="opt">可选</span></label>
       <div class="icon-row">
-        <EntityAvatar
+        <AvatarField
+          :model-value="modelValue.avatar"
           :name="modelValue.name || '?'"
-          :image="modelValue.avatar"
           :accent="modelValue.themeColor"
-          size="lg"
+          @update:model-value="(v) => patch({ avatar: v })"
         />
-        <div class="icon-actions">
-          <button type="button" class="icon-btn" @click="avatarInput?.click()">上传图片</button>
-          <button
-            v-if="modelValue.avatar"
-            type="button"
-            class="icon-btn"
-            @click="clearAvatar"
-          >清除</button>
-          <span v-if="avatarError" class="icon-err">{{ avatarError }}</span>
-        </div>
-        <input ref="avatarInput" type="file" accept="image/*" class="avatar-file" @change="onAvatarFile" />
       </div>
       <div class="swatch-row">
         <span class="swatch-label">主题色</span>
