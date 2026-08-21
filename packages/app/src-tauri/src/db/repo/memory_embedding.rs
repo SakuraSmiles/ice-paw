@@ -56,9 +56,9 @@ pub fn decode_embedding(bytes: &[u8]) -> AppResult<Vec<f32>> {
         )));
     }
     let mut out = Vec::with_capacity(bytes.len() / 4);
-    for chunk in bytes.chunks_exact(4) {
-        let arr: [u8; 4] = [chunk[0], chunk[1], chunk[2], chunk[3]];
-        out.push(f32::from_le_bytes(arr));
+    // 长度已由上方 assert 校验为 4 的倍数；as_chunks 免运行时余数检查
+    for chunk in bytes.as_chunks::<4>().0 {
+        out.push(f32::from_le_bytes(*chunk));
     }
     Ok(out)
 }

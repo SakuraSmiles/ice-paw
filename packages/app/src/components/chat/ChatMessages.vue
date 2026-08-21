@@ -227,7 +227,9 @@ async function copyContent(content: string, id?: string) {
       ta.select();
       ok = document.execCommand("copy");
       document.body.removeChild(ta);
-    } catch { ok = false; }
+    } catch {
+      // 两级降级都失败：保持 ok=false 初值
+    }
   }
   if (!id) return;
   copiedId.value = ok ? id : "fail:" + id;
