@@ -14,6 +14,7 @@
 import { ref } from "vue";
 import EntityAvatar from "./EntityAvatar.vue";
 import AvatarCropper from "./AvatarCropper.vue";
+import { AVATAR_MAX_SRC_BYTES } from "../../utils/avatar";
 
 defineProps<{
   name: string;
@@ -78,8 +79,8 @@ async function ingestFile(f: File) {
     return;
   }
   // 大小校验（与 utils/avatar 的 AVATAR_MAX_SRC_BYTES 同源值，提前拦截免裁剪器内失败）
-  if (f.size > 2 * 1024 * 1024) {
-    errMsg.value = `图片过大（${(f.size / 1024 / 1024).toFixed(1)}MB），请选择 2MB 以内的图片`;
+  if (f.size > AVATAR_MAX_SRC_BYTES) {
+    errMsg.value = `图片过大（${(f.size / 1024 / 1024).toFixed(1)}MB），请选择 10MB 以内的图片`;
     return;
   }
   const url = URL.createObjectURL(f);
