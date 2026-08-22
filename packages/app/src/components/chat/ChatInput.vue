@@ -19,6 +19,7 @@ import { useAgentStore } from "../../stores/agent";
 import { useProjectStore } from "../../stores/project";
 import { shortCode } from "../../utils/refs";
 import EntityAvatar from "../common/EntityAvatar.vue";
+import BudgetPill from "./BudgetPill.vue";
 import type { ContentBlock } from "../../types";
 
 const chat = useChatStore();
@@ -558,7 +559,12 @@ function handleKeydown(e: KeyboardEvent) {
           <button class="btn-img btn-at" :disabled="chat.sending" title="引用（@ 会话 / Agent / 消息）" @click="insertAtTrigger">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4" /><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8" /></svg>
           </button>
-          <span class="input-hint">{{ chat.sending ? "正在生成…" : "Enter 发送 · Shift+Enter 换行" }}</span>
+          <!-- 中间位：预算 HUD（2026-08-22 拍板入栏）——有预算数据即占中，快捷键
+               提示让位（Enter 发送是肌肉记忆级常识，预算是回合活状态更值得常驻） -->
+          <span v-if="chat.budget" class="input-hint budget-hint">
+            <BudgetPill :budget="chat.budget" />
+          </span>
+          <span v-else class="input-hint">{{ chat.sending ? "正在生成…" : "Enter 发送 · Shift+Enter 换行" }}</span>
           <div class="btn-group">
             <button v-if="!chat.sending" class="btn-send" :class="{ active: input.trim() || chat.pendingImages.length > 0 || chat.pendingFiles.length > 0 || chat.pendingRefs.length > 0 }" :disabled="!input.trim() && chat.pendingImages.length === 0 && chat.pendingFiles.length === 0 && chat.pendingRefs.length === 0" title="发送 (Enter)" @click="send">
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -666,4 +672,7 @@ function handleKeydown(e: KeyboardEvent) {
 /* 快捷键提示：占据左右按钮之间的剩余空间并居中（输入框内部的轻脚注） */
 .input-hint { flex:1; min-width:0; font-size: var(--ip-text-micro-size); color:var(--ip-color-text-disabled); text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .attach-warn { font-size:12px; line-height:1.5; white-space:pre-line; color:var(--ip-danger-base); text-align:center; margin:0; }
+/* 预算 HUD 占据 footer 中间位（复用 input-hint 的 flex:1 居中槽）：HUD 自身
+   inline-flex，外套一层做居中排布 */
+.budget-hint { display:flex; justify-content:center; align-items:center; }
 </style>
