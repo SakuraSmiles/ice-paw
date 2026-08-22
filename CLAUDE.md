@@ -2,7 +2,7 @@
 
 ## 项目概述
 IcePaw — 本地优先的 LLM 对话工作站。Tauri v2 (Rust) + Vue 3 (TypeScript) 桌面应用。
-当前版本：`0.4.0`。
+当前版本：`0.4.1`。
 
 ## 设计规则（用户拍板，勿翻案）
 
@@ -158,8 +158,9 @@ agent 调用 `propose_config_change` 工具提出创建/修改 agent 提案 → 
 - **Phase 2B 阶段 2 摘要锚点 seq 化（2026-08-17）**：migration 46 `covered_until_seq`（= 被覆盖消息首现事件 seq，与 derive 排序位严格一致）+ 存量回填；`SummaryState`/insert/update/SELECT 双写双读；`ChatMessage.source_seq`（`#[serde(skip)]`，不进 LLM payload）；锚点定位 seq 优先 `.or_else` rowid 兜底；`SummaryPayload.covered_until_seq`（`#[serde(default)]`，旧事件零迁移）。显式双写过渡，回滚干净（列闲置无害）。
 - **Phase 2B 阶段 3 Image 双份存储治理（2026-08-17，3a 读侧 + 3b 写侧）**：消息类 payload 的 blocks 用 `PayloadBlock` untagged 双形态——`Full(ContentBlock)`（v1 内联，旧事件零迁移可读）/ `ImageRef{message_id, block_index}`（v2，字节只在 messages 行）。写侧唯一入口 `refify_blocks`（emitter 字段式签名内部做，调用方传与落库同值的 blocks）；读侧三路水合：derive `hydrate_image_refs`（纯同步 resolver 注入；未命中/越界/非 Image 降级 `Text("[图片内容已不可恢复]")`）+ `to_content_blocks` 防泄漏最后闸 + conversation_cmd JSON 级水合（list_session_events/export，前端零改动）。BACKFILL_VERSION=2（纯 backfill 会话删旧重写自愈，冻结会话保留 v1 照读）。**⚠️ 不变式：session_events 消息类 payload 禁止内联 Image base64——新增 message-kind emitter 必须经 `refify_blocks`，读侧必须经 `hydrate_image_refs` 水合后才能进对账/LLM 视图（ref 形态不得以非 Text 形态流出）**。
 
-## 当前状态（2026-08-21）
-- 版本 **0.4.0 已发布**（= 0.3.9 + 品牌视觉换代[藏青双锚点/字体离线/设计系统九档] + UI-1~5 表现层五战役 + S8 无限续写四件 + 错误反馈原语 + macOS Apple Silicon 支持；cargo 929 / vitest 311）
+## 当前状态（2026-08-22）
+- 版本 **0.4.1 已发布**（= 0.4.0 + 头像系统重塑[AvatarField/vue-cropper/默认头像三级链] + 项目身份减法[头像/主题色移除] + 预算 HUD 环形化迁输入框工具栏 + 60s 静默超时双保险 + 任务面板列按存在性；vitest 311）
+- 上一版 **0.4.0**（品牌视觉换代[藏青双锚点/字体离线/设计系统九档] + UI-1~5 表现层五战役 + S8 无限续写四件 + 错误反馈原语 + macOS Apple Silicon 支持；cargo 929 / vitest 311）
 - 0.4.0 真机手测改为**实际使用中验证**（用户拍板）：S8 三观察点——预算 90% reminder 后模型收敛 / 断网摘要失败走骨架不失忆 / 大 shell 输出瘦身指针可回溯（= 0.3.8 + Token 预算诚实化四件套 + 生成中卡顿系统性修复 + 预算胶囊微型进度条；cargo 917 / vitest 287）
 - 分支：仅 `main`
 - 近期递进：S 批次结构减法 → backfill → 0.3.6 发版 → **S1 Phase 2B legacy 退役三件套 + 真机验收五项绿** → 0.3.7 发版 → MA-2 详情页 + 概览成员卡 → 0.3.8 发版 → **生成中卡顿系统性修复（DeltaAggregator 40ms 聚合 + 命令 async + 前端 memo）→ Token 预算诚实化（billed_tokens 缓存折扣计量 + 工具列表按名排序保前缀缓存 + BudgetPill 命中 chip + DeepSeek 私有字段兜底 + 续期 2→4）** → 0.3.9 发版
