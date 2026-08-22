@@ -3,7 +3,6 @@
 import { computed } from "vue";
 import { useAgentStore } from "../../stores/agent";
 import EntityAvatar from "../common/EntityAvatar.vue";
-import defaultAgentAvatar from "../../assets/default-agent-avatar.png";
 
 const props = defineProps<{ agentIds?: string[] }>();
 const emit = defineEmits<{
@@ -37,8 +36,8 @@ const visibleAgents = computed(() =>
           class="picker-item"
           @click="emit('select', a.id)"
         >
-          <!-- 智能体列表语境：无图走默认头像（同 AgentSettings 列表；会话侧展示位不走） -->
-          <EntityAvatar class="picker-avatar" :name="a.name" :image="a.avatar || defaultAgentAvatar" size="lg" />
+          <!-- 无图走默认头像（链路内置于 EntityAvatar，2026-08-22 全语境统一） -->
+          <EntityAvatar class="picker-avatar" :name="a.name" :image="a.avatar" size="lg" />
           <div class="picker-info">
             <div class="picker-name">{{ a.name }}</div>
             <div class="picker-desc">{{ a.description || a.model }}</div>

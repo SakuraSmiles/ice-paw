@@ -312,8 +312,8 @@ const donutSegs = computed(() => {
             :class="{ hovered: hoverKey === row.key, dim: hoverKey !== null && hoverKey !== row.key }"
           >
             <div class="share-label" :title="rowTitle(row)" @mouseenter="hoverKey = row.key">
-              <!-- 成员头像（sm，EntityAvatar 两级链，与其他展示位同视觉；
-                   弧段图例联动由右侧色条承载；other 聚合行回退色点） -->
+              <!-- 成员头像（sm，与其他展示位同视觉：用户图 → 默认头像图（内置链）
+                   → 首字遗留兜底；弧段图例联动由右侧色条承载；other 聚合行回退色点） -->
               <EntityAvatar
                 v-if="!row.other"
                 class="share-avatar"
