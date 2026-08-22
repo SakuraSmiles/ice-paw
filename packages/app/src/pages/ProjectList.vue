@@ -10,7 +10,6 @@ import { useAgentStore } from "../stores/agent";
 import { useChatStore } from "../stores/chat";
 import { bridge } from "../api/bridge";
 import { formatTime, parseDbTime } from "../utils/time";
-import EntityAvatar from "../components/common/EntityAvatar.vue";
 import ProjectBasicForm from "../components/project/ProjectBasicForm.vue";
 import ProjectMembersChips from "../components/project/ProjectMembersChips.vue";
 import ProjectContextEditor from "../components/project/ProjectContextEditor.vue";
@@ -101,8 +100,6 @@ const editForm = reactive({
   name: "",
   description: "",
   workspacePath: "",
-  avatar: null as string | null,
-  themeColor: null as string | null,
 });
 const editError = ref("");
 const savingEdit = ref(false);
@@ -117,8 +114,6 @@ function toggleEdit(p: Project) {
   editForm.name = p.name;
   editForm.description = p.description || "";
   editForm.workspacePath = p.workspace_path || "";
-  editForm.avatar = p.avatar ?? null;
-  editForm.themeColor = p.theme_color ?? null;
   editError.value = "";
 }
 
@@ -141,9 +136,7 @@ async function saveEdit(p: Project) {
       name: editForm.name.trim(),
       description: editForm.description.trim(),
       workspace_path: editForm.workspacePath.trim() || null,
-      // 身份字段（表单态即真值）
-      avatar: editForm.avatar,
-      theme_color: editForm.themeColor,
+      // 身份字段（头像/主题色已移除，avatar/theme_color 不进 payload——库存值原地保留）
     });
     expandedId.value = null;
   } catch (e) {
@@ -376,13 +369,6 @@ onMounted(() => {
         @click="toggleEdit(p)"
       >
         <div class="card-top">
-          <EntityAvatar
-            class="card-avatar"
-            :name="p.name"
-            :image="p.avatar"
-            :accent="p.theme_color"
-            size="lg"
-          />
           <div class="card-body">
             <div class="card-name-row">
               <span class="card-name">{{ p.name }}</span>
@@ -553,8 +539,7 @@ onMounted(() => {
 
 .card-top { display: flex; align-items: center; gap: var(--ip-spacing-3); }
 
-/* 项目头像（lg=36px，EntityAvatar 两级链：图片/名字渐变） */
-.card-avatar { flex-shrink: 0; }
+/* 项目卡片（头像功能 2026-08-22 移除，卡片以名称行开头） */
 .new-plus { flex-shrink: 0; color: var(--ip-color-primary-tint-text); }
 
 .card-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }

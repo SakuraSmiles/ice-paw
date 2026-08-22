@@ -1,5 +1,5 @@
 /**
- * avatar.ts — 头像图片压缩（上传管道共用：agent / project）
+ * avatar.ts — 头像图片压缩（agent 上传管道；项目头像功能 2026-08-22 移除）
  *
  * file → Image → canvas 方形 cover 裁剪（取短边中心）→ 缩到 ≤256px →
  * WebP dataURL（WebView2 = Chromium，WebP 编码可用；回退 JPEG 0.85）。

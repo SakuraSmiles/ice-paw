@@ -12,7 +12,6 @@ import { computed, onMounted, ref } from "vue";
 import { useTablist } from "../../composables/useTablist";
 import { useRoute, useRouter } from "vue-router";
 import { useProjectStore } from "../../stores/project";
-import EntityAvatar from "../../components/common/EntityAvatar.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -61,14 +60,6 @@ onMounted(async () => {
     <header class="detail-header" :class="{ 'has-tabbar': !!current }">
       <div class="head-main">
         <template v-if="current">
-          <!-- 项目头像（lg，EntityAvatar 两级链；主题色作兜底底色点缀头部） -->
-          <EntityAvatar
-            class="head-avatar"
-            :name="current.name"
-            :image="current.avatar"
-            :accent="current.theme_color"
-            size="lg"
-          />
           <div class="head-text">
             <h1 class="head-name">{{ current.name }}</h1>
             <div v-if="current.description" class="head-meta">
@@ -132,8 +123,7 @@ onMounted(async () => {
 .detail-header.has-tabbar { border-bottom: none; }
 
 .head-main { flex: 1; min-width: 0; }
-/* 项目头像与文本列（头像 lg=36px + 文字竖排） */
-.head-avatar { flex-shrink: 0; margin-right: 12px; }
+/* 文本列（头像功能 2026-08-22 移除，头部只留名称+简介文字竖排） */
 .head-text { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 /* 字号对齐 ChatHeader 标题（body 级，非 h3——项目名与会话标题同层级） */
 .head-name {
