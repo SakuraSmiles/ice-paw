@@ -21,13 +21,11 @@ const chat = useChatStore();
 const projectId = computed(() => String(route.params.id ?? ""));
 const current = computed(() => project.getById(projectId.value));
 
-// ---- 基础信息表单（出生证：name/description/workspace/图标与颜色）----
+// ---- 基础信息表单（出生证：name/description/workspace）----
 const editForm = reactive({
   name: "",
   description: "",
   workspacePath: "",
-  avatar: null as string | null,
-  themeColor: null as string | null,
 });
 const editError = ref("");
 const saving = ref(false);
@@ -37,8 +35,6 @@ function resetForm() {
   editForm.name = p?.name ?? "";
   editForm.description = p?.description ?? "";
   editForm.workspacePath = p?.workspace_path ?? "";
-  editForm.avatar = p?.avatar ?? null;
-  editForm.themeColor = p?.theme_color ?? null;
   editError.value = "";
 }
 // keep-alive 按 :key=route.path 重建实例（项目+tab 维度），watch 兜底直链热替换等边缘
@@ -48,9 +44,7 @@ const dirty = computed(
   () =>
     editForm.name !== (current.value?.name ?? "") ||
     editForm.description !== (current.value?.description ?? "") ||
-    editForm.workspacePath !== (current.value?.workspace_path ?? "") ||
-    editForm.avatar !== (current.value?.avatar ?? null) ||
-    editForm.themeColor !== (current.value?.theme_color ?? null),
+    editForm.workspacePath !== (current.value?.workspace_path ?? ""),
 );
 
 async function save() {
@@ -67,9 +61,7 @@ async function save() {
       name: editForm.name.trim(),
       description: editForm.description.trim(),
       workspace_path: editForm.workspacePath.trim() || null,
-      // 身份字段（表单态即真值）
-      avatar: editForm.avatar,
-      theme_color: editForm.themeColor,
+      // 身份字段（头像/主题色已移除，avatar/theme_color 不进 payload——库存值原地保留）
     });
   } catch (e) {
     editError.value = e instanceof Error ? e.message : "保存失败";

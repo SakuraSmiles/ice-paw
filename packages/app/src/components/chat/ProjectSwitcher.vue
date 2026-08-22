@@ -6,7 +6,6 @@
 // 通过 emit 上交 Sidebar 处理。
 import { ref, computed, nextTick } from "vue";
 import type { Project } from "../../types";
-import EntityAvatar from "../common/EntityAvatar.vue";
 
 const props = defineProps<{
   currentProjectName: string;
@@ -25,11 +24,6 @@ const emit = defineEmits<{
 
 const isOpen = ref(false);
 const isScoped = computed(() => props.scopeProjectId !== null);
-
-/** 当前项目对象（散落态 null）——胶囊头像取数 */
-const currentProject = computed(() =>
-  props.scopeProjectId ? (props.projects.find((x) => x.id === props.scopeProjectId) ?? null) : null,
-);
 
 function onSelect(id: string | null) {
   isOpen.value = false;
@@ -108,15 +102,8 @@ function confirmCreate() {
         :title="isScoped ? `${currentProjectName}——点击查看项目详情` : '散落会话：不属于任何项目的会话'"
         @click="onOpenDetail"
       >
-        <EntityAvatar
-          v-if="currentProject"
-          class="scope-avatar"
-          :name="currentProject.name"
-          :image="currentProject.avatar"
-          :accent="currentProject.theme_color"
-          size="sm"
-        />
-        <span v-else class="item-dot muted" />
+        <!-- 圆点（scoped=主色，散落=灰点；头像/主题色功能已移除，纯状态标记） -->
+        <span class="item-dot" :class="{ muted: !isScoped }" />
         <span class="switcher-name">{{ currentProjectName }}</span>
       </button>
 
@@ -173,14 +160,7 @@ function confirmCreate() {
             :class="{ active: scopeProjectId === p.id }"
             @click="onSelect(p.id)"
           >
-            <span class="item-mark">
-              <EntityAvatar
-                :name="p.name"
-                :image="p.avatar"
-                :accent="p.theme_color"
-                size="sm"
-              />
-            </span>
+            <span class="item-mark"><span class="item-dot" /></span>
             <span class="item-name">{{ p.name }}</span>
             <svg v-if="scopeProjectId === p.id" class="item-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="20 6 9 17 4 12" />
@@ -255,8 +235,6 @@ function confirmCreate() {
 .item-dot.muted {
   background-color: var(--ip-color-text-tertiary);
 }
-/* 胶囊当前项目头像（sm=20px，EntityAvatar 三级链） */
-.scope-avatar { flex-shrink: 0; }
 
 /* 右侧动作钮 */
 .capsule-actions {
@@ -393,7 +371,7 @@ function confirmCreate() {
 .switcher-item:hover { background-color: var(--ip-color-bg-sidebar-item-hover); }
 .switcher-item.active { background-color: var(--ip-color-bg-sidebar-item-active); }
 
-/* 前导标记列：固定 20px 宽（EntityAvatar sm / 圆点），让标记与文字左对齐 */
+/* 前导标记列：固定 20px 宽（主色/灰圆点），让标记与文字左对齐 */
 .item-mark {
   width: 20px;
   height: 20px;

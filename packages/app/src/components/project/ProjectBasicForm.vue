@@ -1,29 +1,18 @@
 <script setup lang="ts">
-// ProjectBasicForm.vue — 项目基础信息表单（名称/描述/源码目录/图标与颜色）共享组件。
+// ProjectBasicForm.vue — 项目基础信息表单（名称/描述/源码目录）共享组件。
 // 双入口复用：ProjectList 展开区 + 项目详情页设置 tab。目录选择内聚
-// （plugin-dialog），值走单对象 v-model——父级持有表单状态，本组件无状态
-// （头像处理的瞬时错误提示除外——不进表单值）。
+// （plugin-dialog），值走单对象 v-model——父级持有表单状态，本组件无状态。
+// 2026-08-22 项目头像 + 主题色功能前端移除（用户拍板：多余）。
 import { open } from "@tauri-apps/plugin-dialog";
-import AvatarField from "../common/AvatarField.vue";
 
 interface ProjectBasicValue {
   name: string;
   description: string;
   workspacePath: string;
-  /** 头像图片（base64 dataURL；空走名字渐变兜底） */
-  avatar: string | null;
-  /** 主题色 hex；null = 无 */
-  themeColor: string | null;
 }
 
 const props = defineProps<{ modelValue: ProjectBasicValue }>();
 const emit = defineEmits<{ "update:modelValue": [value: ProjectBasicValue] }>();
-
-/** 策展主题色（10 档；与 EntityAvatar 渐变色板同族，双主题可读） */
-const THEME_COLORS: ReadonlyArray<string> = [
-  "#4680C2", "#3BAF7A", "#B8862A", "#B83D3D", "#7C6BC4",
-  "#3D9DB3", "#C46B9A", "#6FA1D6", "#8A9B4A", "#8D8D9E",
-];
 
 /** 局部字段更新（单对象 v-model 的对象整体替换，props 不就地改） */
 function patch(part: Partial<ProjectBasicValue>) {
@@ -39,10 +28,6 @@ async function pickWorkspace() {
   });
   if (selected) patch({ workspacePath: selected });
 }
-
-// ---- 图标与颜色行（图片走 AvatarField，主题色独立） ----
-
-
 </script>
 
 <template>
@@ -67,39 +52,6 @@ async function pickWorkspace() {
         placeholder="一句话说明项目用途（可选）"
         @input="patch({ description: ($event.target as HTMLInputElement).value })"
       />
-    </div>
-
-    <!-- 图标与颜色（身份出生证：图片/名字渐变两级 + 主题色点缀） -->
-    <div class="field">
-      <label class="field-label">图标与颜色 <span class="opt">可选</span></label>
-      <div class="icon-row">
-        <AvatarField
-          :model-value="modelValue.avatar"
-          :name="modelValue.name || '?'"
-          :accent="modelValue.themeColor"
-          @update:model-value="(v) => patch({ avatar: v })"
-        />
-      </div>
-      <div class="swatch-row">
-        <span class="swatch-label">主题色</span>
-        <button
-          v-for="c in THEME_COLORS"
-          :key="c"
-          type="button"
-          class="swatch"
-          :class="{ active: modelValue.themeColor === c }"
-          :style="{ background: c }"
-          :title="c"
-          @click="patch({ themeColor: c })"
-        />
-        <button
-          type="button"
-          class="swatch swatch-none"
-          :class="{ active: !modelValue.themeColor }"
-          title="不使用主题色"
-          @click="patch({ themeColor: null })"
-        >无</button>
-      </div>
     </div>
 
     <div class="field">
@@ -161,42 +113,4 @@ async function pickWorkspace() {
 .ws-btn:hover { border-color: var(--ip-primary-300); color: var(--ip-primary-600); }
 
 .field-hint { margin: 0; font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); line-height: 1.5; }
-
-/* 图标与颜色行 */
-.icon-row { display: flex; align-items: center; gap: var(--ip-spacing-2_5); }
-.icon-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.icon-btn {
-  height: 22px; padding: 0 10px;
-  font-size: var(--ip-text-micro-size);
-  color: var(--ip-color-text-secondary);
-  background-color: var(--ip-color-bg-tertiary);
-  border: none; border-radius: var(--ip-radius-full);
-  cursor: pointer;
-  transition: all var(--ip-duration-fast) var(--ip-ease-out);
-}
-.icon-btn:hover { color: var(--ip-color-text-primary); background-color: var(--ip-color-bg-secondary); }
-.icon-err { font-size: var(--ip-text-micro-size); color: var(--ip-danger-text); }
-.avatar-file { display: none; }
-
-/* 主题色 swatch 行 */
-.swatch-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.swatch-label { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
-.swatch {
-  width: 18px; height: 18px; flex-shrink: 0;
-  border-radius: var(--ip-radius-full);
-  border: 2px solid transparent;
-  cursor: pointer;
-  padding: 0;
-  transition: all var(--ip-duration-fast) var(--ip-ease-out);
-}
-.swatch:hover { transform: scale(1.15); }
-.swatch.active { border-color: var(--ip-color-bg-primary); outline: 1.5px solid var(--ip-color-text-primary); }
-.swatch-none {
-  width: auto; height: 18px; padding: 0 8px;
-  background: transparent;
-  border: 1px dashed var(--ip-color-border-default);
-  border-radius: var(--ip-radius-full);
-  font-size: var(--ip-text-micro-size); color: var(--ip-color-text-tertiary);
-}
-.swatch-none:hover { color: var(--ip-color-text-primary); transform: none; }
 </style>
