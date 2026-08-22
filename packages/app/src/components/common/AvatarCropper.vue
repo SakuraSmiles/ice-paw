@@ -80,7 +80,10 @@ function zoom(dir: 1 | -1) {
           <span class="ac-sub">拖动图片定位 · 滚轮/按钮缩放</span>
         </h4>
 
-        <!-- 裁剪区：vue-cropper 固定框模型（fixedBox + canMove + canScale） -->
+        <!-- 裁剪区：vue-cropper 固定框模型（fixedBox + canMove + canScale）。
+             fixed + fixedNumber=[1,1] 锁取景框恒正方形——autoCrop 初值虽是 200×200，
+             但源图小于取景框时库内钳制会按维度独立收缩（宽被压、高保持 → 瘦高框
+             → 瘦高头像，2026-08-22 真机发现），锁比例后钳制也保持 1:1 -->
         <div v-if="imgSrc" class="ac-crop-wrap">
           <VueCropper
             ref="cropperRef"
@@ -89,6 +92,8 @@ function zoom(dir: 1 | -1) {
             :auto-crop="true"
             :auto-crop-width="200"
             :auto-crop-height="200"
+            :fixed="true"
+            :fixed-number="[1, 1]"
             :fixed-box="true"
             :can-move="true"
             :can-move-box="false"

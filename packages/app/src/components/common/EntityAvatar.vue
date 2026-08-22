@@ -97,7 +97,9 @@ function onImgError() {
   line-height: 1;
   overflow: hidden;
   user-select: none;
-  box-shadow: var(--ip-avatar-border-shadow, inset 0 0 0 1px rgba(0, 0, 0, 0.04));
+  /* GitHub 风格两件套：发丝描边（ring）+ 轻投影（elev），令牌三主题区同步 */
+  box-shadow: var(--ip-avatar-ring, inset 0 0 0 1px rgba(0, 0, 0, 0.12)),
+    var(--ip-avatar-elev, 0 1px 2px rgba(0, 0, 0, 0.08));
 }
 
 .entity-avatar img {
@@ -113,6 +115,12 @@ function onImgError() {
 .size-md { width: 28px; height: 28px; font-size: 13px; }
 .size-lg { width: 36px; height: 36px; font-size: 16px; }
 .size-xl { width: 44px; height: 44px; font-size: 18px; }
+
+/* 小尺寸（xs/sm）：仅描边不加投影——16-20px 上投影只剩噪点 */
+.size-xs,
+.size-sm {
+  box-shadow: var(--ip-avatar-ring, inset 0 0 0 1px rgba(0, 0, 0, 0.12));
+}
 
 .entity-avatar { font-family: var(--ip-font-sans); }
 </style>
