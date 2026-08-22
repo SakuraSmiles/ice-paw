@@ -13,6 +13,7 @@
 // Key/URL 字段的规则（requires_key / requires_base_url）由推导出的 provider
 // 驱动，与后端校验一致；「测试连接」一次往返两用——验证配置 + 拉取模型并入下拉。
 import AvatarField from "../common/AvatarField.vue";
+import defaultAgentAvatar from "../../assets/default-agent-avatar.png";
 import { ref, computed, onMounted, watch } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -361,10 +362,16 @@ function confirmDelete() {
       <!-- 身份区（出生证字段围头像成组）：头像左侧跨三行；右侧第一行 名称+ID、第二行 模型、第三行 API Key+URL -->
       <div class="identity-row">
         <!-- 头像（AvatarField：hover 更换 + 右上×清空 + 裁剪器，点击/拖入/粘贴三通道）
-             列宽固定、高度拉伸跟随右列三行（stretch 链），无宽高比例约束 -->
+             列宽固定、高度拉伸跟随右列三行（stretch 链），无宽高比例约束；
+             无用户图时展示默认头像（仅编辑页语境——会话/列表展示位不走此档） -->
         <div class="field identity-avatar">
           <label class="field-label">头像</label>
-          <AvatarField v-model="form.avatar" :name="form.name || form.id || '?'" size="lg" />
+          <AvatarField
+            v-model="form.avatar"
+            :name="form.name || form.id || '?'"
+            :fallback-image="defaultAgentAvatar"
+            size="lg"
+          />
         </div>
 
         <div class="identity-fields">

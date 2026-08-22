@@ -1,4 +1,5 @@
-// AgentPicker.avatar.test.ts — 头像接线锁：列表项渲染 EntityAvatar（两级链），
+// AgentPicker.avatar.test.ts — 头像接线锁：列表项渲染 EntityAvatar
+// （用户图 → 默认头像图，2026-08-22 拍板——智能体列表语境无图走默认图），
 // 不再回退到手写首字母 + 硬编码蓝渐变（picker-avatar 文本节点即回归信号）。
 import { describe, it, expect, beforeEach } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
@@ -43,14 +44,14 @@ describe("AgentPicker 头像接线", () => {
     setActivePinia(createPinia());
   });
 
-  it("每行渲染 EntityAvatar：图片档出 <img>、兜底档显首字", () => {
+  it("每行渲染 EntityAvatar：用户图出 <img>、无图走默认头像图", () => {
     const w = mountPicker();
     const avatars = w.findAllComponents({ name: "EntityAvatar" });
     expect(avatars.length).toBe(2);
     // 图片档：img src 指向 dataURL
     expect(avatars[0].find("img").attributes("src")).toBe("data:image/webp;base64,xxx");
-    // 兜底档：名字首字（非旧手写首字母节点——首字本就在兜底链里）
-    expect(avatars[1].text()).toBe("兜");
+    // 无图档：默认头像图（智能体列表语境，非渐变首字）
+    expect(avatars[1].find("img").attributes("src")).toContain("default-agent-avatar");
     // 旧手写实现回归信号：picker-avatar 里不应再有裸文本节点渲染链
     expect(w.find(".picker-avatar").classes()).toContain("entity-avatar");
   });
