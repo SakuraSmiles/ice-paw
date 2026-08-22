@@ -91,6 +91,9 @@ export default [
   // 全局忽略目录
   {
     ignores: [
+      // agent 改文件前自动留的备份目录（已 gitignore；不忽略会把 lint 打红）
+      ".icepaw-backup/**",
+      "**/.icepaw-backup/**",
       "dist/**",
       "**/dist/**",
       "src-tauri/**",

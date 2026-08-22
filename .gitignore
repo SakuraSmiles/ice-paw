@@ -26,8 +26,8 @@ dist-ssr
 # Rust / Tauri
 target/
 
-# Machine-specific config（含本地绝对路径）
-.cargo/config.toml
+# Machine-specific config（含本地绝对路径；** 任意深度——src-tauri 下的机器级 cargo 配置同样忽略）
+**/.cargo/config.toml
 .claude/settings.json
 start-dev.cmd
 
