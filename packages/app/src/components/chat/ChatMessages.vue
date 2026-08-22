@@ -197,9 +197,13 @@ watch(() => chat.msgLoading, async (loading) => {
   }
 });
 
-// 自动滚到底部（分页加载时不触发；用户向上看内容时不抢滚动条）
+// 自动滚到底部（分页加载时不触发；用户向上看内容时不抢滚动条）。
+// 增长源必须盯全：只盯 messages.length/streamingText 时，工具卡出现/参数增长、
+// 思考块流式这些「内容在长高但两个源没动」的窗口会让视口漂离底部，下一个
+// 事件再来时猛拉回底——表现即工具调用期间滚动条「一跳一跳」。缩高场景
+// （折叠/塌陷）无需处理：贴底时浏览器自动钳制 scrollTop 保持贴底。
 watch(
-  [() => chat.messages.length, () => chat.streamingText],
+  [() => chat.messages.length, () => chat.streamingText, () => chat.streamingThinking, () => chat.streamingToolCalls],
   async () => {
     if (paginating.value || !autoFollow.value) return;
     await nextTick();
@@ -634,6 +638,14 @@ function isLiveAssistant(item: GroupedItem): boolean {
   return chat.sending && item.msg.role === "assistant" && item.idx === chat.messages.length - 1;
 }
 
+/** 该 item 是否属于当前回合（turnFirstIdx 锚点之后）——保持 MarkdownRenderer 的
+ *  streaming 视图（代码块不折叠）。多轮工具回合每轮冻结时若立即折叠，代码块
+ *  「展开→瞬间回到 420px 上限」会让列表高度骤缩、贴底滚动条跳一下；回合结束
+ *  （chat:done 清锚点）再统一沉淀，折叠只发生一次。*/
+function isTurnStreaming(item: GroupedItem): boolean {
+  return chat.sending && chat.turnFirstIdx !== null && item.idx >= chat.turnFirstIdx;
+}
+
 /** 该 item 是否是全局最后一条 assistant（用于 chat:done 后驻留的「思考·已完成」块）。*/
 function isLastAssistant(item: GroupedItem): boolean {
   return item.msg.role === "assistant" && item.idx === chat.messages.length - 1;
@@ -884,7 +896,7 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
 
                 <!-- 文字（按时间线顺序：thinking → 文本 → 工具，匹配 content_blocks）-->
                 <div v-if="item.msg.content" class="message-bubble">
-                  <MarkdownRenderer :content="item.msg.content" :streaming="isLiveAssistant(item)" />
+                  <MarkdownRenderer :content="item.msg.content" :streaming="isLiveAssistant(item) || isTurnStreaming(item)" />
                 </div>
 
                 <!-- 工具调用（历史/刚结束，从 content_blocks 解析，非流式） -->

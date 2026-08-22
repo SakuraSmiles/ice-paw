@@ -77,6 +77,13 @@ export const useChatStore = defineStore("chat", () => {
     thinkingStartTime.value = null;
   }
 
+  /** 回合终结统一收尾：清回合锚点（turnFirstIdx 令 streaming 视图折叠沉淀；
+   *  sendingConvId 令超时确认通道失效）。chat:done / chat:error / 停止时调用。 */
+  function clearTurnAnchors() {
+    sendingConvId.value = null;
+    turnFirstIdx.value = null;
+  }
+
   function selectConversation(id: string) {
     const oldId = activeConvId.value;
     // 离开「正在流式」的会话：把当前流式文本快照到 bgStreams，切回时可恢复
@@ -278,6 +285,16 @@ export const useChatStore = defineStore("chat", () => {
   }
   let sendTimeout: ReturnType<typeof setTimeout> | null = null;
 
+  /** 本次在途发送所属会话（sending 是全局单份，跨会话切换后仍指向发起回合的会话）。
+   *  60s 静默超时确认时用它问后端「该会话还在跑吗」。 */
+  const sendingConvId = ref<string | null>(null);
+
+  /** 当前回合首条消息（用户消息）在 messages 中的下标——回合进行期间该下标之后
+   *  的消息保持 MarkdownRenderer 的 streaming 视图（代码块不折叠），避免多轮工具
+   *  回合每轮冻结时代码块「展开→瞬间折叠」造成列表高度骤缩、滚动条跳动。
+   *  回合结束（chat:done / 出错 / 下次发送）失效，折叠在回合边界一次性沉淀。 */
+  const turnFirstIdx = ref<number | null>(null);
+
   /** 后台会话的流式文本快照：切走「正在流式」的会话时把已累积文本存这里，
    *  切回时恢复。此前 streamingText 是全局单份 + chunk 处理器丢弃非激活会话的事件，
    *  导致「流式中途切走再切回」时已渲染内容丢失、从一半继续渲染。
@@ -285,14 +302,34 @@ export const useChatStore = defineStore("chat", () => {
   const bgStreams = ref<Map<string, { text: string; thinking: string }>>(new Map());
 
   /** 重置 60s 静默超时（滑动窗口）：任何活动事件调用一次即重新计时。
-   *  超时只重置 sending 状态（不清 streaming，交由后端 chat:done(abort) 走 freeze）。*/
+   *
+   *  超时触发时**不直接**翻转 sending——先向后端确认（is_conversation_streaming）。
+   *  事件心跳靠逐点埋设、枚举永远不全（多图 OCR / 单个慢工具 / 慢 TTFT / 未来新增的
+   *  重活都可能静默超 60s）；后端注册表才是唯一真相。确认仍在跑 → 重新计时；
+   *  确认死了（或后端不可达）→ 翻转 sending（不清 streaming，交由后端
+   *  chat:done(abort) 走 freeze）。误判「已完成」会放行第二条消息打进还在跑的
+   *  回合，引发回复丢失/消息消失级联——宁可多等一轮也不误杀。*/
   function resetSendTimeout() {
     if (sendTimeout) clearTimeout(sendTimeout);
-    sendTimeout = setTimeout(() => {
-      if (sending.value && pendingAuthRequests.value.size === 0) {
-        console.warn("静默超时（60s 无活动），重置发送状态");
-        sending.value = false;
+    sendTimeout = setTimeout(async () => {
+      if (!sending.value || pendingAuthRequests.value.size > 0) return;
+      const cid = sendingConvId.value;
+      if (!cid) return;
+      let alive: boolean;
+      try {
+        alive = await bridge.chat.isStreaming(cid);
+      } catch {
+        alive = false; // 后端不可达（应用关闭中等）——按已死处理
       }
+      // await 期间回合可能已正常完成（chat:done 已翻转 sending）——不再动手
+      if (!sending.value) return;
+      if (alive) {
+        resetSendTimeout(); // 后端仍在跑：静默只是没有事件，继续等
+        return;
+      }
+      console.warn("静默超时（60s 无活动且后端确认无在途任务），重置发送状态");
+      sending.value = false;
+      sendingConvId.value = null;
     }, 60000);
   }
 
@@ -373,6 +410,9 @@ export const useChatStore = defineStore("chat", () => {
       model: currentModel.value,
     };
     messages.value = [...messages.value, userMsg];
+    // 回合锚点：本轮所有消息的下标基线（streaming 视图判定 + 超时确认的会话归属）
+    turnFirstIdx.value = messages.value.length - 1;
+    sendingConvId.value = activeConvId.value;
 
     // 侧栏卡片：把该会话标记为「刚交互」（更新时间 + 置顶到列表上方）
     if (activeConvId.value) touchConversation(activeConvId.value);
@@ -383,8 +423,24 @@ export const useChatStore = defineStore("chat", () => {
     try {
       await bridge.chat.sendMessage(activeConvId.value, content, blocks.length > 0 ? blocks : undefined, true, files);
     } catch (e) {
+      // 发送失败必须「看得见」：错误横幅（含重试）+ 回滚乐观用户消息。
+      // 此前只 console.error——并发防御（后端拒绝同会话在途时的新 send）被触发时
+      // 用户看到的是「发送没反应」，且乐观气泡从未落库、切走再切回就消失。
       console.error("发送消息失败:", e);
+      const raw = e instanceof Error ? e.message : String(e);
+      const detail = raw.includes("在途生成任务")
+        ? "上一条消息仍在处理中，这条没有发出。等上一条完成或先停止生成，再点重试。"
+        : `请求没有送达（${raw}）。这条消息未发出，可点重试。`;
+      if (activeConvId.value) {
+        const m = new Map(lastErrors.value);
+        m.set(activeConvId.value, detail);
+        lastErrors.value = m;
+      }
+      // 回滚乐观插入的用户气泡（后端已拒，这行从未落库，留着会在切回时凭空消失）
+      messages.value = messages.value.filter((msg) => msg.id !== userMsg.id);
       sending.value = false;
+      sendingConvId.value = null;
+      clearSendTimeout();
       streamingText.value = "";
     }
   }
@@ -397,6 +453,7 @@ export const useChatStore = defineStore("chat", () => {
     // 统一把已生成的部分冻结到末条 assistant。若这里先清空，chat:done 的 freeze
     // 会写入空内容，导致取消时输出到一半的气泡消失。
     sending.value = false;
+    clearTurnAnchors();
     try {
       await bridge.chat.stopGeneration(activeConvId.value);
     } catch { /* 静默忽略 */ }
@@ -596,6 +653,7 @@ export const useChatStore = defineStore("chat", () => {
     activeConvId.value = null;
     messages.value = [];
     sending.value = false;
+    clearTurnAnchors();
     streamingText.value = "";
     streamingThinking.value = "";
     thinkingStartTime.value = null;
@@ -660,6 +718,7 @@ export const useChatStore = defineStore("chat", () => {
     sending, streamingText, draftText, pendingImages, pendingFiles, pendingRefs, lastFinishReason, currentModel,
     budget, renewalNotice, updateBudget,
     streamingToolCalls, streamingThinking, thinkingStartTime, thinkingDuration, lastThinkingContent, thinkingDurations,
+    turnFirstIdx,
     // 事件层（useChatEvents）直接读写的内部 Map——暴露供其 mutate；对外读取走下方 computed
     bgStreams, pendingAuthRequests, pendingProposals, lastErrors,
     lastFailedSend, clearConvError,
@@ -669,7 +728,7 @@ export const useChatStore = defineStore("chat", () => {
     sendMessage, stopGeneration, respondToAuth, respondToProposal,
     deleteConversation, undoDeleteConversation, hasPendingDelete, pinConversation,
     // 事件层调用的状态动作（freezeCurrentAssistant 把流式态冻结进末条 assistant）
-    resetSendTimeout, clearSendTimeout, freezeCurrentAssistant, resetRoundStreaming,
+    resetSendTimeout, clearSendTimeout, freezeCurrentAssistant, resetRoundStreaming, clearTurnAnchors,
     createConversation, clearActiveConversation, reset, addPendingRef,
     openTrajectoryNext, openConversationAtTrajectory,
   };

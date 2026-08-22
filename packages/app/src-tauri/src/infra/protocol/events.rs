@@ -138,6 +138,36 @@ pub struct ChatRetryingPayload {
     pub reason: String,
 }
 
+/// `chat:processing` 事件 payload — send_message 重处理阶段心跳
+///
+/// **不变式（CLAUDE.md 同步）**：60s 静默超时计时器假定「后端必有活动事件回报」，
+/// 但 OCR / Pipeline / 写库横跨 chat:start 之前的多个串行阶段，多图 OCR 易超 60s。
+/// 后端在每个串行步骤「进入 / 完成」时 emit 一次，前端收到即重置 60s 滑动窗口，
+/// 让计时器真正反映后端活动状态，避免误判「已死」造成 sending 提前变 false。
+///
+/// 与 `chat:start/chunk/done` 的区别：本事件**不入 session-event-log**——它不是
+/// 业务事实、只是心跳；不入日志、不入轨迹。瞬态 UI 事件走 LoopEmitter 通道，
+/// 事实走 `harness::event_log`（分工固定，不混用）。
+///
+/// `stage` 取稳定词表（前端 i18n 用）：
+/// - `"pipeline"`    Pipeline 整体进入/出口（send_message 链路主节点）
+/// - `"ocr"`         ModalCapabilityStage OCR 阶段（`progress` 字段填 `(done, total)`）
+///
+/// 注：心跳只是「快速路径」的计时器重置；60s 静默超时的最终裁决走后端真相
+/// 确认（`is_conversation_streaming` 命令）——埋点枚举不全的静默窗口由它兜底。
+#[derive(Clone, Serialize)]
+pub struct ChatProcessingPayload {
+    pub conversation_id: String,
+    /// 阶段词表（见 struct 注释），前端按 i18n 表翻译展示。
+    pub stage: &'static str,
+    /// 人类可读的阶段描述（中文为主，前端可覆写为本地化文案）。
+    pub message: String,
+    /// 进度（仅 OCR 阶段填，格式 `(done, total)`，0 起计）。其他阶段为 None。
+    /// 序列化跳过 None 字段，与现有 Payload 一致。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progress: Option<(u32, u32)>,
+}
+
 // === P2-1 工具调用事件 payload ===
 
 /// `chat:tool-call-start` 事件 payload

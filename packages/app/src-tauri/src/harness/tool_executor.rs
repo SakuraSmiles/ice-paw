@@ -377,6 +377,7 @@ pub(crate) async fn execute_tool_round(
                             &tmp,
                             false,
                             &candidates,
+                            None,
                         )
                         .await;
                         // session-events：工具返图的投影期适配入日志（stage=tool_image，

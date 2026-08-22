@@ -222,6 +222,20 @@ pub async fn stop_generation(
     Ok(())
 }
 
+/// 查询某会话是否有在途生成回合（ChatState 注册表的后端真相）。
+///
+/// 前端 60s 静默超时的**确认通道**：事件心跳（chat:processing 等）靠逐点埋设、
+/// 枚举永远不全（OCR/长工具/慢 TTFT/未来新增的重活都可能静默超 60s）。超时触发时
+/// 前端先问后端「还在跑吗」——还在跑就重新计时，确认死了才翻转 sending。
+/// 这让误判在结构上不可能，而不是在每个静默窗口补一个埋点。
+#[tauri::command]
+pub async fn is_conversation_streaming(
+    chat_state: State<'_, ChatState>,
+    conversation_id: String,
+) -> AppResult<bool> {
+    Ok(chat_state.is_streaming(&conversation_id))
+}
+
 // ============================================================================
 // 前端 → 后端 响应通道（invoke 命令）
 //

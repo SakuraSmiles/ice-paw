@@ -34,6 +34,18 @@ use crate::harness::error_mapping::{classify_llm_error, LlmErrorKind};
 use crate::harness::vision::{self, VisionCredential};
 use crate::infra::protocol::ContentBlock;
 
+/// OCR 进度回调签名——每张图 OCR 完成（成功或失败）后触发一次。
+///
+/// 参数：`(done, total)` —— `done` 是 1-based「第几张完成」，`total` 是本批
+/// 图片总数。`done == total` 时调用方知道本批结束。
+///
+/// 用途：让调用方（如 `ModalCapabilityStage`）emit `chat:processing` 心跳，
+/// 把 OCR 真实进度透传给前端，撑住 60s 静默超时窗口（多图串行 OCR 易超 60s）。
+///
+/// 设计取舍：本函数保持纯函数语义——回调为外部注入的 `Fn`，不依赖 emitter
+/// 类型，调用方决定要不要 emit（测试 / 工具返图等单图场景传 None）。
+pub type ProgressCb<'a> = &'a (dyn Fn(u32, u32) + Send + Sync);
+
 /// 适配结果——便于调用方做 tracing、注入差异化元提示（Phase 3 Stage 消费）。
 #[derive(Debug, Clone, Default)]
 pub struct AdaptOutcome {
@@ -133,6 +145,7 @@ pub async fn adapt_blocks_for_vision(
     blocks: &[ContentBlock],
     effective_vision: bool,
     candidates: &[VisionCredential],
+    on_progress: Option<ProgressCb<'_>>,
 ) -> AdaptOutcome {
     // 视觉模型：原样过（绝大多数 agent 走这条，零开销）。
     if effective_vision {
@@ -153,10 +166,16 @@ pub async fn adapt_blocks_for_vision(
     // 记录最后一张被剥离图的失败原因，驱动诚实提示文案分支（缺口③）。
     // Some 优先：只要任一图是「有凭据但调用失败」(Some)，就不用「无凭据」(None) 文案。
     let mut last_drop_reason: Option<LlmErrorKind> = None;
+    // OCR 总数：本批 Image 块总数（不计非图块），用于进度回调的 total 字段。
+    // 计算一次避免回调内重复 len()——blocks 通常很短，但 ProgressCb 在
+    // ModalCapabilityStage 内可能 emit chat:processing，序列化 O(1) 仍宜最小化。
+    let total_images: u32 = blocks.iter().filter(|b| b.is_image()).count() as u32;
+    let mut done_images: u32 = 0;
 
     for (index, b) in blocks.iter().enumerate() {
         if let ContentBlock::Image { data, media_type } = b {
-            match ocr_image(data, media_type, candidates).await {
+            let result = ocr_image(data, media_type, candidates).await;
+            match result {
                 Ok(text) => {
                     ocr_replaced += 1;
                     out.push(ContentBlock::text(format!(
@@ -183,6 +202,12 @@ pub async fn adapt_blocks_for_vision(
                         None => last_drop_reason,
                     };
                 }
+            }
+            // 每张图完成（成功或失败都算 done）即回调——失败也算进度推进。
+            // total_images == 0 时回调永不触发（视觉模型早返回），无需空批次兜底。
+            done_images += 1;
+            if let Some(cb) = on_progress {
+                cb(done_images, total_images);
             }
         } else {
             out.push(b.clone());
@@ -362,7 +387,7 @@ mod tests {
             img("BBBB", "image/jpeg"),
         ];
         // 视觉模型 + 空凭据清单：仍原样过（不触发代读）。
-        let out = adapt_blocks_for_vision(&blocks, true, &[]).await;
+        let out = adapt_blocks_for_vision(&blocks, true, &[], None).await;
         assert_eq!(out.blocks.len(), 3, "passthrough 应保持块数");
         // 两张图原样保留（ContentBlock 无 PartialEq，按位置/类型断言）
         assert!(out.blocks[1].is_image());
@@ -381,7 +406,7 @@ mod tests {
             img("AAAA", "image/png"),
             img("BBBB", "image/jpeg"),
         ];
-        let out = adapt_blocks_for_vision(&blocks, false, &[]).await;
+        let out = adapt_blocks_for_vision(&blocks, false, &[], None).await;
         // 两张图都被剥离
         assert_eq!(out.dropped, 2);
         assert_eq!(out.ocr_replaced, 0);
@@ -401,7 +426,7 @@ mod tests {
     #[tokio::test]
     async fn non_vision_single_image_dropped_hint_count_is_one() {
         let blocks = vec![img("AAAA", "image/png")];
-        let out = adapt_blocks_for_vision(&blocks, false, &[]).await;
+        let out = adapt_blocks_for_vision(&blocks, false, &[], None).await;
         assert_eq!(out.dropped, 1);
         let hint = out.blocks.last().unwrap().as_text().unwrap();
         assert!(
@@ -419,7 +444,7 @@ mod tests {
             img("AAAA", "image/png"),
             ContentBlock::text("第二段"),
         ];
-        let out = adapt_blocks_for_vision(&blocks, false, &[]).await;
+        let out = adapt_blocks_for_vision(&blocks, false, &[], None).await;
         // 两个文本块顺序保留，中间图被剥，末尾加提示
         assert_eq!(out.blocks[0].as_text(), Some("第一段"));
         assert_eq!(out.blocks[1].as_text(), Some("第二段"));
@@ -439,7 +464,7 @@ mod tests {
     #[tokio::test]
     async fn non_vision_no_images_no_hint_injected() {
         let blocks = vec![ContentBlock::text("纯文本消息")];
-        let out = adapt_blocks_for_vision(&blocks, false, &[]).await;
+        let out = adapt_blocks_for_vision(&blocks, false, &[], None).await;
         assert_eq!(out.blocks.len(), 1);
         assert_eq!(out.blocks[0].as_text(), Some("纯文本消息"));
         assert_eq!(out.dropped, 0);
@@ -454,7 +479,7 @@ mod tests {
         let blocks = vec![img("@@@不是合法base64@@@", "image/png")];
         // 即使有候选（空清单里没法验，但解码在 describe 之前发生）：
         // 这里用空候选先验 dropped 计数路径。
-        let out = adapt_blocks_for_vision(&blocks, false, &[]).await;
+        let out = adapt_blocks_for_vision(&blocks, false, &[], None).await;
         assert_eq!(out.dropped, 1);
         assert!(out
             .blocks
@@ -570,5 +595,61 @@ mod tests {
         assert_eq!(out[0].as_text(), Some("前言"));
         assert_eq!(out[2].as_text(), Some("后语"));
         assert!(out[1].as_text().unwrap().contains("1 张图片"));
+    }
+
+    // ---- chat:processing 进度回调：覆盖三档行为 ----
+    //
+    // 心跳事件根因：60s 静默超时计时器假定「后端必有活动事件回报」，但 OCR 串行
+    // 多图易超 60s。回调契约是 `每张图 OCR 完成（成功或失败）即触发一次`——
+    // 让 ModalCapabilityStage 把回调内 emit 转成 chat:processing 心跳。
+    // 三档测试覆盖「无图不触发」「视觉直通不触发」「构造 N 张图回调 N 次」。
+
+    #[tokio::test]
+    async fn progress_cb_not_called_when_no_images() {
+        // 文本块 → 无回调调用（filter 出 0 张图）。这是高频路径（大多数消息走这条）。
+        use std::sync::atomic::{AtomicU32, Ordering};
+        let count = AtomicU32::new(0);
+        let cb: ProgressCb<'_> = &|_done, _total| {
+            count.fetch_add(1, Ordering::SeqCst);
+        };
+        let blocks = vec![ContentBlock::text("纯文本消息"), ContentBlock::text("第二条")];
+        let _ = adapt_blocks_for_vision(&blocks, false, &[], Some(cb)).await;
+        assert_eq!(count.load(Ordering::SeqCst), 0, "无图不应触发回调");
+    }
+
+    #[tokio::test]
+    async fn progress_cb_not_called_when_vision_passthrough() {
+        // 视觉模型走早返回分支 → 不应触发回调（OCR 不跑）。
+        use std::sync::atomic::{AtomicU32, Ordering};
+        let count = AtomicU32::new(0);
+        let cb: ProgressCb<'_> = &|_done, _total| {
+            count.fetch_add(1, Ordering::SeqCst);
+        };
+        let blocks = vec![img("AA", "image/png"), img("BB", "image/jpeg")];
+        let _ = adapt_blocks_for_vision(&blocks, true, &[], Some(cb)).await;
+        assert_eq!(count.load(Ordering::SeqCst), 0, "视觉直通不应触发回调");
+    }
+
+    #[tokio::test]
+    async fn progress_cb_total_reflects_image_count() {
+        // total 字段必须 == blocks 中 Image 块数（不含 Text 块）。done 字段的
+        // 1-based 序号在 OCR 串行调用中递增——这里只断言 total 的语义正确
+        // （done 需真实 OCR 跑通才能精确断言，集成测试覆盖）。
+        use std::sync::Mutex;
+        let last_total = Mutex::new(None::<u32>);
+        let cb: ProgressCb<'_> = &|_done, total| {
+            *last_total.lock().unwrap() = Some(total);
+        };
+        // 无凭据（空数组）会触发 dropped 分支，但 done 仍然递增（失败也算进度）
+        let blocks = vec![
+            ContentBlock::text("前缀"),
+            img("AA", "image/png"),
+            ContentBlock::text("中插文本"), // 不计入 total
+            img("BB", "image/jpeg"),
+            img("CC", "image/gif"),
+        ];
+        let _ = adapt_blocks_for_vision(&blocks, false, &[], Some(cb)).await;
+        let got = *last_total.lock().unwrap();
+        assert_eq!(got, Some(3), "total 应为 Image 块数 3（Text 不计入）");
     }
 }

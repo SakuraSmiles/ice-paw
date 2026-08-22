@@ -251,6 +251,11 @@ const chat = {
     try { await invoke<void>("stop_generation", { conversationId }); }
     catch (err) { throw wrapInvokeError("chat.stopGeneration", err); }
   },
+  /** 查询会话是否有在途生成回合——60s 静默超时的后端真相确认通道 */
+  async isStreaming(conversationId: string): Promise<boolean> {
+    try { return await invoke<boolean>("is_conversation_streaming", { conversationId }); }
+    catch (err) { throw wrapInvokeError("chat.isStreaming", err); }
+  },
   /** 配置提案审批响应（invoke：原 emit 通道因 Tauri v2 事件作用域不匹配而失效） */
   async respondProposal(input: {
     request_id: string;
