@@ -1,8 +1,9 @@
 <!--
-  EntityAvatar — 项目/agent 统一头像（两级兜底）
+  EntityAvatar — agent 头像（项目头像功能 2026-08-22 移除后仅服务 agent 语境）
 
-  渲染链：image（base64/dataURL 图片）→ 名字哈希渐变 + 首字
-  （零配置好默认；稳定哈希同名恒定）。
+  渲染链（2026-08-22 拍板全语境统一）：image（用户上传图）→ 默认头像图
+  （组件内置，所有展示位无图一律默认图）→ 名字哈希渐变 + 首字（遗留兜底：
+  默认图也加载失败才出现，打包资产正常不可达）。
   Props: name: string（实体名，兜底首字与哈希来源）
          image?: string | null（图片 dataURL/base64；加载失败自动降级）
          accent?: string | null（主题色 hex，兜底档底色优先用）
@@ -11,6 +12,7 @@
 -->
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
+import defaultAvatar from "../../assets/default-agent-avatar.png";
 
 const props = withDefaults(
   defineProps<{
@@ -22,13 +24,15 @@ const props = withDefaults(
   { image: null, accent: null, size: "md" },
 );
 
-/** img 加载失败（脏 base64/断链）→ 降级下一级，防空白块。 */
-const imgFailed = ref(false);
+/** 分层失败标记：用户图挂 → 默认图接棒；默认图也挂 → 首字遗留兜底。 */
+const userFailed = ref(false);
+const defaultFailed = ref(false);
 // 换图（image 变化）重置失败态重试——img 元素带 :key 换新，失败标记不会自动清
 watch(
   () => props.image,
   () => {
-    imgFailed.value = false;
+    userFailed.value = false;
+    defaultFailed.value = false;
   },
 );
 
@@ -70,17 +74,21 @@ const gradient = computed(() => {
 /** 兜底档底色：显式主题色（纯色）优先，否则哈希渐变。 */
 const bg = computed(() => (props.accent ? props.accent : gradient.value));
 
-/** 是否走图片级（image 存在且未加载失败）。 */
-const useImage = computed(() => !!props.image && !imgFailed.value);
+/** 图片源三级链：用户图 → 默认头像图 → 无（走首字遗留兜底）。 */
+const src = computed(() => (userFailed.value ? defaultAvatar : props.image || defaultAvatar));
+
+/** 是否走图片级（默认图未失败即真——用户图挂由 src 换默认图接棒）。 */
+const useImage = computed(() => !defaultFailed.value);
 
 function onImgError() {
-  imgFailed.value = true;
+  if (props.image && !userFailed.value) userFailed.value = true;
+  else defaultFailed.value = true;
 }
 </script>
 
 <template>
   <span :class="['entity-avatar', `size-${size}`]" :style="{ background: useImage ? undefined : bg }">
-    <img v-if="useImage" :key="image ?? ''" :src="image ?? undefined" alt="" @error="onImgError" />
+    <img v-if="useImage" :key="src" :src="src" alt="" @error="onImgError" />
     <template v-else>{{ initial }}</template>
   </span>
 </template>

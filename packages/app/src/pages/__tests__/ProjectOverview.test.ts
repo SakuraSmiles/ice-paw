@@ -126,6 +126,8 @@ describe("ProjectOverview 概览 tab（二轮重设计）", () => {
     expect(rows[0].text()).toContain("glm-5.2");
     expect(rows[0].find(".count-tokens").text()).toBe("9K");
     expect(rows[0].find(".count-msgs").text()).toBe("30 条");
+    // 成员头像：无图 agent 走默认头像图（智能体管理语境，同 AgentSettings/AgentPicker）
+    expect(rows[0].find(".share-avatar img").attributes("src")).toContain("default-agent-avatar");
     // 条宽按 token 归一：榜首 100%，次行 2700/9000 = 30%
     const bars = w.findAll(".share-bar");
     expect(bars[0].attributes("style")).toContain("width: 100%");
