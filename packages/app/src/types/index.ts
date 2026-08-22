@@ -310,6 +310,18 @@ export interface ChatDonePayload {
   usage?: { prompt_tokens: number; completion_tokens: number; cached_tokens: number };
 }
 
+
+/** send_message 重处理阶段心跳（后端 Pipeline / OCR / 写库期间 emit）。
+ *  前端订阅 chat:processing 仅做 resetSendTimeout()——撑住 60s 静默
+ *  超时窗口，避免多图串行 OCR 触发误判 sending=false。 */
+export interface ChatProcessingPayload {
+  conversation_id: string;
+  /** 阶段词表：pipeline | ocr | db_write */
+  stage: string;
+  message: string;
+  progress?: [number, number]; // [done, total]，仅 OCR 阶段填
+}
+
 export interface ChatErrorPayload {
   conversation_id: string;
   message_id: string;

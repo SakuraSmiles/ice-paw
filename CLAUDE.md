@@ -43,6 +43,11 @@ IcePaw — 本地优先的 LLM 对话工作站。Tauri v2 (Rust) + Vue 3 (TypeSc
 
 ### Rust（Windows）
 ```bash
+# 一劳永逸（推荐）：复制 packages/app/src-tauri/.cargo/config.toml.example → config.toml
+# 填本机 sodium-prebuilt 路径（gitignored 机器级文件）。tauri:dev/build 的 cargo 在
+# src-tauri 下运行会自动吃到，无需手传 env。⚠️ 机器间不同步（git 不带 gitignored 文件），
+# 换机/重拉工作区后要重建；仓库根跑 `cargo --manifest-path` 时按 CWD 找配置吃不到它，仍需显式传。
+
 # cargo check（推荐）——需显式传 sodium 库路径
 SODIUM_LIB_DIR="D:/workspace/ice-paw/sodium-prebuilt/libsodium/x64/Release/v143/static" \
 SODIUM_STATIC=true \
@@ -162,3 +167,30 @@ agent 调用 `propose_config_change` 工具提出创建/修改 agent 提案 → 
 - 仍待办：**0.3.9 真机手测**（卡顿修复六项 + 预算诚实化四项：长任务不再 budget_exceeded / 命中 chip / turn_ended.usage 无 cached>prompt）、视觉适配/KB watcher/自动续写生产手测、proposal Phase 2（MCP 域）、S8 无限续写（待拍板）
 - **预算诚实化不变式（0.3.9）**：新 provider usage 必须归一规范语义（prompt=总输入含命中、cached≤prompt；Anthropic 显式归一 + stream_consumer `into_canonical` 自愈兜底）；工具列表出口恒按名序（前缀缓存前提，勿回退）；DeepSeek 私有对优先于标准字段
 - **S1 真机验收 2026-08-17 四项绿**：backfill（sessions=9 events=824 failed=0 epoch_rows=0，版本标记=2）+ 恒 Derive（当日路由决策全 green diffs=0，含 backfill 会话续聊 seq 1..933 连续）+ 发图 v2 payload 无 base64（image_ref 162B 指针，本体 851KB/3.8MB 只在 messages 行；模型回复描述画面=水合进 LLM 视图实证）+ 摘要折叠 `covered_until_seq=726`/rowid=1710 双值落库
+
+## 关键不变式：60s 静默超时——心跳（快速路径）+ 后端真相确认（最终裁决）
+
+**问题**：前端 60s 静默超时（`stores/chat.ts:resetSendTimeout`）假定「后端必有活动事件回报」，但 send→done 之间横跨 Pipeline / 多图 OCR / MemoryStage 摘要 / 单个慢工具（MCP 上限 120s）/ 慢 TTFT 等串行重活，**逐点埋心跳枚举永远不全**。误判 `sending=false` 的后果是级联的：第二条消息打进还在跑的回合（后端 `chat_state.start` 拒绝 → 前端只 console.error，用户看「发送没反应」）+ 乐观用户消息从未落库（切走再切回凭空消失）。
+
+**根治（两层）**：
+1. **心跳快速路径**：后端在已知重活步骤 emit `chat:processing`（Pipeline 入口/出口 + OCR 每张图），前端收到即 `resetSendTimeout()`。
+2. **后端真相确认（最终裁决，2026-08-22）**：60s 超时触发时前端**不直接**翻转 sending，先 invoke `is_conversation_streaming` 问 ChatState 注册表——仍在跑就重新计时，确认死了才翻转。这让「未知静默窗口」在结构上不可能引发误判，新增长耗时路径无需埋点自动被兜住。后端注册表（`chat_state.start` 注册 / cleanup unregister）是唯一真相源。
+
+**不变式**（守住，勿删勿改）：
+1. **chat:processing 不进 session-event-log**：心跳不是业务事实，是瞬态 UI 信号——否则日志会爆。走 LoopEmitter 通道，与 session-event-log 分工固定。
+2. **稳定 stage 词表**：`pipeline | ocr`（前端 i18n 用）——别新增临时词条，每加一条要让前端 i18n 一起更新。
+3. **OCR 每张图完成（成功或失败都算 done）emit 一次**：通过 `adapt_blocks_for_vision` 第 4 参 `Option<ProgressCb>` 注入；视觉模型分支（早返回）不触发回调。
+4. **前端 chat:processing handler 只做 `resetSendTimeout()`**：别加 UI 文案 / 别加 store 状态——事件频率不可控（每张图 1 次），状态写入会让 store 频繁抖动；UI 文案由未来"进度条 UX"任务独立做。
+5. **60s 超时常量不动**：超时只触发「问后端」，不是翻转；改阈值会掩盖"心跳不够密"的真实问题。
+6. **超时确认的会话归属用 `sendingConvId`**（发起回合的会话），勿用 `activeConvId`——用户切走后 activeConvId 已变，问错会话必误判。
+7. **发送失败必须可见 + 回滚**：`sendMessage` catch 写 per-conv 错误横幅（含重试，`lastFailedSend` 已备）+ 移除乐观用户消息（后端已拒，未落库的气泡切回会消失）。并发拒绝（「在途生成任务」）走专属文案。
+
+**验收**：10 张图串行 OCR（每张 8s 网络延迟，总 80s）期间，前端不触发 `sending=false`，切走/切回 ChatPage 时 streaming 状态保持；chat:done 到达时正常进入完成态。人为制造 >60s 静默（如断点暂停后端）时，超时轮询确认后端仍在跑 → 不误判；回合进行中再发消息 → 横幅提示 + 气泡回滚。
+
+**关键文件**：
+- 协议：`infra/protocol/events.rs:ChatProcessingPayload`（stage + message + 可选 progress）
+- 发射：`harness/modal.rs:adapt_blocks_for_vision` 第 4 参 `ProgressCb` + `context/stages.rs:ModalCapabilityStage` 注入 emit 闭包 + `harness/session_runner.rs` Pipeline 入口/出口
+- 接收：`composables/useChatEvents.ts:chat:processing` → `chat.resetSendTimeout()`（勿加会话过滤）
+- 真相确认：`commands/chat_cmd.rs:is_conversation_streaming` ← `harness/chat_state.rs` 注册表；前端 `stores/chat.ts:resetSendTimeout`（超时→轮询→确认才翻转）+ `api/bridge.ts:chat.isStreaming`
+- 测试：`harness/modal.rs:progress_cb_*` 三档（无图 0 触发 / 视觉直通 0 触发 / total 等于 Image 块数）
+

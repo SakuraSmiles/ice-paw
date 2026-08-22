@@ -45,6 +45,7 @@ use crate::infra::cancel::CancellationToken;
 use crate::infra::protocol::{
     ChatMessage, ChatSummaryInjectedPayload, ContentBlock, TemplateInput,
 };
+use std::sync::Arc;
 
 // =========================================================================
 // PipelineContext — 贯穿所有 Stage 的可变共享状态
@@ -97,6 +98,14 @@ pub struct PipelineContext {
     /// 已解析的 agent 明文 API key（DB 只存引用槽位，由 `chat_cmd` 解析后注入）。
     /// 供 [`ModalCapabilityStage`] 收集视觉凭据（`vision::from_agent` 借 agent key 做零配置兜底）。
     pub api_key: Option<String>,
+    /// chat:processing 心跳发射器——可选注入，让 ModalCapabilityStage 在 OCR 每张
+    /// 图完成后 emit 一次 `chat:processing(stage="ocr", progress=(i,N))`，让前端
+    /// 60s 静默超时窗口能反映后端真实活动（OCR 串行易超 60s，否则前端会误判已死）。
+    /// 测试与无 emit 场景（构造 history 回顾等）保持 None：modal.rs 的纯函数签名
+    /// 对应 `Option<ProgressCb>` 第四参，本字段填 None 时 ModalCapabilityStage 不传回调。
+    /// `pub(crate)`：与 `LoopEmitter` 同可见性（trait 是 crate-private），
+    /// 否则会触发 "more private than item" 警告。
+    pub(crate) emitter: Option<Arc<dyn crate::harness::r#loop::emitter::LoopEmitter>>,
     /// MA-1：可调度 agent 清单注入段（`session_runner` 仅对 kind='chat' 会话填充；
     /// delegation 子会话没有 delegate 工具，注入只会误导）。由
     /// [`SystemPromptStage`](crate::context::stages::SystemPromptStage) 追加到 system prompt。
@@ -166,6 +175,7 @@ impl PipelineContext {
             project_workspace: None,
             project_context_dir: None,
             api_key: None,
+            emitter: None,
             delegation_hint: None,
             rendered_system_prompt: None,
             rendered_user_prefix: String::new(),

@@ -364,9 +364,60 @@ impl PipelineStage for ModalCapabilityStage {
         .await;
 
         // 门① 当前用户消息：完整适配（OCR 成功→Text；失败/无凭据→剥离+诚实提示）。
-        let outcome =
-            crate::harness::modal::adapt_blocks_for_vision(&ctx.final_blocks, false, &candidates)
-                .await;
+        // chat:processing 心跳：OCR 每张图完成时回调一次（撑住前端 60s 静默超时窗口，
+        // 多图串行 OCR 易超 60s）。视觉直通分支不构造回调（无 OCR，不发心跳）。
+        // 提前计算 image 数量决定是否构造回调——避免给纯文本调用附加无用闭包。
+        let image_total = ctx
+            .final_blocks
+            .iter()
+            .filter(|b| b.is_image())
+            .count() as u32;
+        // Box<dyn Fn> 必须先 bind 到 let 让生命周期跨越闭包创建作用域——
+        // 直接 map().as_ref() 会让 Box 临时值被立刻 drop，借用失效。
+        let cb_box: Option<Box<dyn Fn(u32, u32) + Send + Sync>> = if image_total > 0 {
+            ctx.emitter.as_ref().map(|emitter| {
+                let conv_id = ctx.conversation_id.clone();
+                Box::new(move |done: u32, total: u32| {
+                    // emit 是线程同步的（tauri::AppHandle.emit），可在 Sync 闭包内调用。
+                    crate::harness::r#loop::emitter::emit_ser(
+                        emitter.as_ref(),
+                        "chat:processing",
+                        &crate::infra::protocol::ChatProcessingPayload {
+                            conversation_id: conv_id.clone(),
+                            stage: "ocr",
+                            message: format!("正在识别图片 {done}/{total}"),
+                            progress: Some((done, total)),
+                        },
+                    );
+                }) as Box<dyn Fn(u32, u32) + Send + Sync>
+            })
+        } else {
+            None
+        };
+        let on_progress: Option<&(dyn Fn(u32, u32) + Send + Sync)> =
+            cb_box.as_deref().map(|b| b as &(dyn Fn(u32, u32) + Send + Sync));
+        if image_total > 0 {
+            if let Some(emitter) = ctx.emitter.as_ref() {
+                crate::harness::r#loop::emitter::emit_ser(
+                    emitter.as_ref(),
+                    "chat:processing",
+                    &crate::infra::protocol::ChatProcessingPayload {
+                        conversation_id: ctx.conversation_id.clone(),
+                        stage: "ocr",
+                        message: format!("开始识别 {image_total} 张图片"),
+                        progress: Some((0, image_total)),
+                    },
+                );
+            }
+        }
+
+        let outcome = crate::harness::modal::adapt_blocks_for_vision(
+            &ctx.final_blocks,
+            false,
+            &candidates,
+            on_progress,
+        )
+        .await;
         if outcome.changed() {
             tracing::info!(
                 target: "ice_paw.modal",
@@ -375,6 +426,22 @@ impl PipelineStage for ModalCapabilityStage {
                 agent_model = %ctx.agent.model,
                 "非视觉 agent 当前消息图片已适配（代读/剥离）"
             );
+            // chat:processing 收尾心跳：OCR 批结束，前端停止显示「正在识别」进度。
+            // 与"开始 OCR"形成配对，避免前端一直停在 0/N 等不到结束信号。
+            if image_total > 0 {
+                if let Some(emitter) = ctx.emitter.as_ref() {
+                    crate::harness::r#loop::emitter::emit_ser(
+                        emitter.as_ref(),
+                        "chat:processing",
+                        &crate::infra::protocol::ChatProcessingPayload {
+                            conversation_id: ctx.conversation_id.clone(),
+                            stage: "ocr",
+                            message: format!("图片识别完成 {}/{}", image_total, image_total),
+                            progress: Some((image_total, image_total)),
+                        },
+                    );
+                }
+            }
             // session-events：投影期模型可见内容变更入日志（「Model-visible means
             // logged」——OCR 代读文本是模型真实消费的内容）。turn_id 缺省（散落
             // 测试构造）时跳过，与 memory.rs summary 事件同一约定。

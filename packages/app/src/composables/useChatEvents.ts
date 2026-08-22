@@ -25,6 +25,7 @@ import type {
   ChatToolCallEndPayload,
   ChatToolResultPayload,
   ChatThinkingPayload,
+  ChatProcessingPayload,
   ToolAuthRequestPayload,
   ConfigProposalPayload,
   DelegationStartedPayload,
@@ -71,6 +72,19 @@ export async function useChatEvents(): Promise<() => void> {
       rowid: 0,
       model: chat.currentModel,
     });
+  });
+
+  // chat:processing — send_message 重处理阶段心跳（Pipeline 入口/出口 + OCR 每张图）。
+  // 唯一目的：重置 60s 静默超时窗口。后端在 chat:start 之前会跑 Pipeline / OCR / 写库
+  // 等串行重活，多图 OCR 易超 60s；前端在收到第一个 chunk / chunk 之前的任何
+  // 重处理事件都应折算为「后端还在跑」的信号。不渲染 UI 文案（处理"消息在哪"
+  // 已经在 chat:start 那一刻确定；本事件只是防 60s 误判超时）。
+  // session-events（Phase 0）的硬规则是"事实才入日志"，处理进度不是事实。
+  // ⚠️ 勿加 activeConvId 过滤：sending 是全局单份，用户切走会话后 OCR 仍在跑，
+  // 心跳按会话过滤会让 60s 计时器照常误判（与 chunk 处理器的 bgStreams 路径
+  // 同理——后台会话的活动同样证明「后端还在跑」）。
+  await subscribe<ChatProcessingPayload>("chat:processing", () => {
+    chat.resetSendTimeout();
   });
 
   // MA-1 UX：委派子会话创建成功即通知——刷新会话列表让子会话行立刻可见
@@ -213,10 +227,12 @@ export async function useChatEvents(): Promise<() => void> {
       recentErrorConvs.delete(cid);
       chat.clearSendTimeout();
       chat.sending = false;
+      chat.clearTurnAnchors();
       chat.resetRoundStreaming();
       return;
     }
     chat.clearSendTimeout();
+    chat.clearTurnAnchors(); // 回合结束：streaming 视图（代码块折叠）一次性沉淀
     chat.lastFailedSend = null; // 成功完成 → 失败重发依据失效
 
     // 记录思考耗时与内容
@@ -275,6 +291,7 @@ export async function useChatEvents(): Promise<() => void> {
     }
     chat.clearSendTimeout();
     chat.sending = false;
+    chat.clearTurnAnchors();
     chat.resetRoundStreaming();
     chat.lastFinishReason = null;
     // 错误横幅按会话隔离：只写到出错会话（此处 cid === activeConvId，已过上方 early-return）

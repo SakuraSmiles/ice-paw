@@ -198,6 +198,12 @@ pub(crate) async fn run_agent_turn(
     // session-events（Phase 0）：turn 归属键，MemoryStage 的 summary_* 事件用
     pipeline_ctx.turn_id = Some(user_msg_id.clone());
 
+    // chat:processing 心跳通道：把 emitter 注入 Pipeline，让 ModalCapabilityStage
+    // 在 OCR 每张图完成后 emit 心跳（撑住前端 60s 静默超时窗口，多图串行 OCR 易超）。
+    // 与 session-event-log 分工：本字段走的瞬态 UI 事件通道（LoopEmitter），
+    // 不落库、不入轨迹。
+    pipeline_ctx.emitter = Some(env.emitter.clone());
+
     // 项目 workspace + 上下文目录注入 Pipeline
     if let Some(ref pid) = conv.project_id {
         if let Ok(proj) = repo::project::get_by_id(pool, pid).await {
@@ -247,9 +253,33 @@ pub(crate) async fn run_agent_turn(
         llm_provider.clone(),
         api_key.clone(),
     ));
+    // chat:processing 心跳：Pipeline 入口。给前端"我正在拼装上下文"信号——
+    // OCR / Memory / TokenWindow / FinalAssemble 各 Stage 跑完的总时间可能超过
+    // 60s（多图 OCR + 大历史摘要折叠）。前端收到即重置静默计时器。
+    crate::harness::r#loop::emitter::emit_ser(
+        env.emitter.as_ref(),
+        "chat:processing",
+        &crate::infra::protocol::ChatProcessingPayload {
+            conversation_id: conv_id.clone(),
+            stage: "pipeline",
+            message: "正在处理上下文".into(),
+            progress: None,
+        },
+    );
     PipelineRunner::default_pipeline(pool, Some(summary_provider))
         .run(&mut pipeline_ctx)
         .await?;
+    // chat:processing 收尾心跳：Pipeline 跑完，即将进入"落库 + emit chat:start"阶段。
+    crate::harness::r#loop::emitter::emit_ser(
+        env.emitter.as_ref(),
+        "chat:processing",
+        &crate::infra::protocol::ChatProcessingPayload {
+            conversation_id: conv_id.clone(),
+            stage: "pipeline",
+            message: "上下文处理完成".into(),
+            progress: None,
+        },
+    );
 
     // 摘要注入事件（前端暂未 listen，保留面向未来）
     if let Some(event) = pipeline_ctx.summary_event {

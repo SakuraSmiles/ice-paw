@@ -97,6 +97,7 @@ pub fn run() {
             commands::message_cmd::create_message,
             commands::chat_cmd::send_message,
             commands::chat_cmd::stop_generation,
+            commands::chat_cmd::is_conversation_streaming,
             commands::chat_cmd::respond_config_proposal,
             commands::chat_cmd::respond_tool_auth,
             commands::preferences_cmd::get_preferences,
