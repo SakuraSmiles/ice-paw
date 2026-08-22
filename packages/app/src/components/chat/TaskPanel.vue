@@ -261,12 +261,13 @@ function openTask(id: string) {
     </button>
 
     <Transition name="dropdown">
-      <div v-if="open" class="task-popover" :class="{ 'has-plan': !!plan }" @click.stop>
+      <div v-if="open" class="task-popover" :class="{ dual: !!plan && tasks.length > 0 }" @click.stop>
         <!-- 双栏（P12）：左任务 / 右计划，各列独立滚动——溢出收敛进面板不出页面；
-             窄窗 flex-wrap 自动堆叠回纵向 -->
+             窄窗 flex-wrap 自动堆叠回纵向。列按存在性渲染（2026-08-22 拍板）：
+             单有哪边就只显哪边，恒右锚 420 单列，不留半张空列 -->
         <div class="task-columns">
-          <!-- 左列：任务 -->
-          <div class="task-col">
+          <!-- 左列：任务（无任务整列不渲染——不摆「暂无」空列） -->
+          <div v-if="tasks.length > 0" class="task-col">
             <div class="col-head">
               <span>任务</span>
               <span class="col-count">{{ tasks.length }}</span>
@@ -286,7 +287,6 @@ function openTask(id: string) {
                 </button>
               </TransitionGroup>
               <div v-if="hiddenTaskCount > 0" class="task-more">还有 {{ hiddenTaskCount }} 个任务</div>
-              <div v-if="tasks.length === 0" class="task-more">暂无委派任务</div>
             </div>
           </div>
 
@@ -347,7 +347,9 @@ function openTask(id: string) {
    ⚠️ 显式定宽（不用 min/max-width 内容自适应）：容器宽由内容决定时，
    flex-basis:0 的两列实际宽度受 min-width 钳制，内容不够宽就会被 wrap
    挤成上下堆叠（用户手测踩过：220→260 后并排阈值 526 超过内容宽）。
-   定宽后双栏恒并排：有计划 = 880 两列各 ~431，无计划 = 420 单列不空。
+   定宽后双栏恒并排：双列齐备（任务+计划）= 880 两列各 ~431；单列
+   （仅任务或仅计划，2026-08-22 列按存在性渲染）= 420，恒右锚下拉，
+   不出现「只占左半」的残缺双栏观感。
    宽度上限按胶囊右缘实际位（右移对齐气泡右缘后距视口右 86px）扣回：
    --msg-col-right(80) + 滚动条槽 6 + 左安全距 24（令牌来自 ChatPage）。 */
 .task-popover {
@@ -360,7 +362,7 @@ function openTask(id: string) {
   border-radius: var(--ip-radius-lg);
   box-shadow: var(--ip-shadow-lg);
 }
-.task-popover.has-plan { width: min(880px, calc(100vw - var(--msg-col-right, 80px) - 30px)); }
+.task-popover.dual { width: min(880px, calc(100vw - var(--msg-col-right, 80px) - 30px)); }
 .task-columns {
   display: flex; flex-wrap: wrap; gap: 6px;
   flex: 1 1 auto; min-height: 0; overflow-y: auto; /* 窄窗堆叠态的整体滚动 */

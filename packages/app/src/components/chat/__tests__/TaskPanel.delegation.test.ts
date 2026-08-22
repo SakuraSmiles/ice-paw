@@ -278,4 +278,33 @@ describe("TaskPanel 规模治理（高度预算截断 / 计划全量平铺）", 
     expect(wrapper.find(".plan-done-toggle").exists()).toBe(false);
     expect(wrapper.find(".task-pill-label").text()).toBe("计划 5/7");
   });
+
+  it("仅计划无任务：只显计划单列（无任务列/暂无占位），宽度档非 dual（2026-08-22 列按存在性渲染）", async () => {
+    const handlers = captureHandlers();
+    const chat = useChatStore();
+    await useChatEvents();
+
+    chat.conversations = [conv(PARENT)];
+    chat.selectConversation(PARENT);
+    const wrapper = mountPanel();
+
+    (bridge.trajectory as unknown as { __setPlanForTest: (p: unknown) => void }).__setPlanForTest({
+      conversation_id: PARENT,
+      items: [{ text: "步骤一", status: "done", task_conversation_id: null }],
+      updated_at: "2026-08-17 00:00:00",
+    });
+    handlers.get("session:event-appended")!({ payload: { kind: "plan_updated", conversation_id: PARENT } });
+    await flushAsync();
+
+    await wrapper.find(".task-pill").trigger("click");
+    await flushAsync();
+
+    // 单列 = 计划列：无任务列头、无任务行、无「暂无」占位；880 双列档只在两列齐备时上
+    expect(wrapper.findAll(".task-col")).toHaveLength(1);
+    expect(wrapper.find(".col-head").text()).toContain("计划");
+    expect(wrapper.find(".task-row").exists()).toBe(false);
+    expect(wrapper.find(".task-more").exists()).toBe(false);
+    expect(wrapper.find(".task-popover").classes()).not.toContain("dual");
+    expect(wrapper.find(".task-pill-label").text()).toBe("计划 1/1");
+  });
 });
