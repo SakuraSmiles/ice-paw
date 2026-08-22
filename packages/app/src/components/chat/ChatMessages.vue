@@ -21,7 +21,6 @@ import PlanCard from "./PlanCard.vue";
 import ImagePreview from "./ImagePreview.vue";
 import AttachmentDetail from "./AttachmentDetail.vue";
 import TurnRail from "./TurnRail.vue";
-import BudgetPill from "./BudgetPill.vue";
 import ErrorBanner from "../common/ErrorBanner.vue";
 import { useThinkingTimer } from "../../composables/useThinkingTimer";
 import { useScrollFollow } from "../../composables/useScrollFollow";
@@ -1060,7 +1059,8 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
     <!-- finish_reason 提示（B3：可续跑类附「继续」按钮，一键发「继续」续跑任务） -->
     <div v-if="chat.lastFinishReason && chat.lastFinishReason !== 'stop' && chat.lastFinishReason !== 'end_turn' && chat.messages.length > 0" class="finish-reason">
       <span>{{ finishReasonLabel(chat.lastFinishReason) }}</span>
-      <BudgetPill v-if="chat.budget" :budget="chat.budget" />
+      <!-- 预算 HUD 已迁 ChatInput 输入框下方（2026-08-22）；budget_exceeded 的
+           具体数字仍由 finishReasonLabel 行内联 -->
       <button
         v-if="RESUMABLE_REASONS.has(chat.lastFinishReason) && !chat.sending"
         class="continue-btn"
@@ -1073,7 +1073,6 @@ const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "leng
       <div class="cursor-track">
         <div class="cursor-glow" /><span class="cursor-label">正在生成…</span>
       </div>
-      <BudgetPill v-if="chat.budget" :budget="chat.budget" />
     </div>
 
     <!-- 全屏图片预览（多图可翻页） -->

@@ -1,4 +1,4 @@
-// BudgetPill — 会话级预算胶囊（chat:budget HUD）测试：数值渲染 / 80% warn 态 / 续期计数 / 缓存命中 chip
+// BudgetPill — 会话级预算胶囊（chat:budget HUD）测试：数值渲染 / 环形进度 / 80% warn 态 / 续期计数 / 缓存命中 chip
 import { describe, it, expect } from "vitest";
 import { mount } from "@vue/test-utils";
 import BudgetPill from "../BudgetPill.vue";
@@ -35,15 +35,16 @@ describe("BudgetPill", () => {
     expect(hot.classes()).toContain("warn");
   });
 
-  it("微型进度条：填充宽随用量走 + 80% 刻度线存在", () => {
+  it("环形进度：偏移随用量走 + 80% 刻度点存在", () => {
     const w = mount(BudgetPill, { props: { budget: budget() } }); // 12万/60万 = 20%
-    expect(w.find(".budget-fill").attributes("style")).toContain("width: 20%");
+    // C=2π·8≈50.265，20% 填充 → offset = C×0.8 ≈ 40.21
+    expect(w.find(".ring-fill").attributes("stroke-dashoffset")).toContain("40.2");
     expect(w.find(".budget-tick").exists()).toBe(true);
-    // 满格钳制：瞬时超限不撑破轨道
+    // 满环钳制：瞬时超限不撑破环
     const over = mount(BudgetPill, {
       props: { budget: budget({ cumulative_tokens: 999_999 }) },
     });
-    expect(over.find(".budget-fill").attributes("style")).toContain("width: 100%");
+    expect(over.find(".ring-fill").attributes("stroke-dashoffset")).toBe("0");
   });
 
   it("缓存命中：cached>0 时显示百分比 chip（生产实证量级 96%）", () => {
