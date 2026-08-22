@@ -98,7 +98,7 @@ a {
 /* ---- 文本选择高亮 ---- */
 ::selection {
   background: var(--ip-color-selection-bg);
-  color: var(--ip-color-text-primary);
+  color: var(--ip-color-selection-text);
 }
 
 /* ---- 通用焦点环 ---- */
