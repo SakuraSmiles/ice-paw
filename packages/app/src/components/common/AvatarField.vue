@@ -10,6 +10,9 @@
 
   Props: name: string（EntityAvatar 渐变兜底名）
          modelValue?: string | null（头像 dataURL，v-model）
+         fallbackImage?: string | null（默认头像 url——modelValue 为空时展示，
+           如 agent 表单默认图；不算「已设置」，更换蒙层/清空钮/点击进裁剪仍以
+           modelValue 为准，清空即回到默认图）
   Emits: update:modelValue（dataURL | null——null = 清空）
 -->
 <script setup lang="ts">
@@ -23,6 +26,8 @@ defineProps<{
   modelValue?: string | null;
   /** 主题色 hex（项目场景：EntityAvatar 渐变兜底档优先用） */
   accent?: string | null;
+  /** 默认头像 url：modelValue 为空时展示（agent 表单默认图），不算已设置 */
+  fallbackImage?: string | null;
   /** 头像框边长：md=64px（默认）| lg=填满父容器（agent 表单身份区，高度跟随右列三行） */
   size?: "md" | "lg";
 }>();
@@ -98,7 +103,7 @@ async function ingestFile(f: File) {
     <div
       ref="boxRef"
       class="af-box"
-      :class="{ 'is-empty': !modelValue, 'drag-over': dragOver, 'af-box-lg': size === 'lg' }"
+      :class="{ 'is-empty': !(modelValue || fallbackImage), 'drag-over': dragOver, 'af-box-lg': size === 'lg' }"
       :title="modelValue ? '点击调整头像' : '点击上传头像'"
       tabindex="0"
       role="button"
@@ -110,8 +115,8 @@ async function ingestFile(f: File) {
       @drop="onDrop"
       @paste="onPaste"
     >
-      <!-- 始终渲染：无图自动走名字渐变兜底（与展示位一致的降级链） -->
-      <EntityAvatar :name="name" :image="modelValue" :accent="accent" class="af-avatar" />
+      <!-- 始终渲染：用户图 → fallbackImage（agent 默认图）→ 名字渐变兜底 -->
+      <EntityAvatar :name="name" :image="modelValue || fallbackImage" :accent="accent" class="af-avatar" />
 
       <!-- hover 蒙层（有图时） -->
       <span v-if="modelValue" class="af-mask">更换</span>

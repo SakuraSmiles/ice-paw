@@ -4,6 +4,7 @@ import { ref, computed, onMounted } from "vue";
 import AgentForm from "../../components/agent/AgentForm.vue";
 import ErrorBanner from "../../components/common/ErrorBanner.vue";
 import EntityAvatar from "../../components/common/EntityAvatar.vue";
+import defaultAgentAvatar from "../../assets/default-agent-avatar.png";
 import KbDocumentList from "../../components/kb/KbDocumentList.vue";
 import type { Agent, ProviderInfo } from "../../types";
 import { bridge } from "../../api/bridge";
@@ -123,9 +124,10 @@ const providerLabel = (name: string) => providerLabelOf(providerList.value, name
         @click="toggleEdit(agent)"
       >
         <div class="card-top">
-          <!-- 卡片头像与全 App 同渲染链（EntityAvatar 两级链：上传图/名字渐变首字）——
-               表单里传完头像、此处立见，不再「设置与头像割裂」 -->
-          <EntityAvatar class="card-avatar" :name="agent.name" :image="agent.avatar" size="lg" />
+          <!-- 卡片头像与全 App 同渲染链（用户图 → 默认头像 → 名字渐变首字）——
+               表单里传完头像、此处立见；无图 agent 展示默认图（2026-08-22 拍板，
+               仅智能体管理语境；会话侧展示位不走默认图） -->
+          <EntityAvatar class="card-avatar" :name="agent.name" :image="agent.avatar || defaultAgentAvatar" size="lg" />
           <div class="card-body">
             <div class="card-name-row">
               <span class="card-name">{{ agent.name }}</span>

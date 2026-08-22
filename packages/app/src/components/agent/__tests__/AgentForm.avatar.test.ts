@@ -1,6 +1,7 @@
 // AgentForm.avatar.test.ts — 头像出生证字段读写锁：
-// 编辑态预填（预览两级链：图片/名字渐变首字）→ 保存透传 update payload
-// （null=清空语义）；清除归 null；新建透传 create input。
+// 编辑态预填（预览链：用户图 / 默认头像图 / 名字渐变首字——默认图仅表单语境，
+// 2026-08-22 拍板）→ 保存透传 update payload（null=清空语义）；清除归 null
+// （清空=回默认图，非渐变首字）；新建透传 create input。
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mount, flushPromises, type VueWrapper } from "@vue/test-utils";
 import type { Agent } from "../../../types";
@@ -85,13 +86,13 @@ describe("AgentForm 头像字段", () => {
     document.body.innerHTML = "";
   });
 
-  it("编辑态预填：图片档预览 img；无图回名字首字渐变", async () => {
+  it("编辑态预填：用户图档预览 img；无图回默认头像图（非渐变首字）", async () => {
     const w = await mountForm(editAgent({ avatar: "data:image/webp;base64,old" }));
     expect(preview(w).find("img").attributes("src")).toBe("data:image/webp;base64,old");
 
     const w2 = await mountForm(editAgent());
-    expect(preview(w2).find("img").exists()).toBe(false);
-    expect(preview(w2).text()).toBe("助"); // 首字兜底
+    const src = preview(w2).find("img").attributes("src");
+    expect(src, "无图展示默认头像").toContain("default-agent-avatar");
   });
 
   it("编辑态保存透传：avatar 原样进 update payload", async () => {
@@ -104,11 +105,12 @@ describe("AgentForm 头像字段", () => {
     expect(payload.avatar).toBe("data:image/webp;base64,old");
   });
 
-  it("清空×：图片归 null（预览回兜底首字），保存 payload avatar=null", async () => {
+  it("清空×：图片归 null（预览回默认头像图），保存 payload avatar=null", async () => {
     const w = await mountForm(editAgent({ avatar: "data:image/webp;base64,x" }));
     // AvatarField 右上角清空钮（hover 显形；测试直接触发）
     await w.find(".af-clear").trigger("click");
-    expect(w.find(".avatar-field .entity-avatar").text()).toBe("助");
+    const src = w.find(".avatar-field .entity-avatar img").attributes("src");
+    expect(src, "清空回默认头像（非渐变首字）").toContain("default-agent-avatar");
 
     await saveBtn(w).trigger("click");
     await flushPromises();
