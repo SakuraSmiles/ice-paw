@@ -358,96 +358,99 @@ function confirmDelete() {
     <div v-if="error" class="form-error">{{ error }}</div>
 
     <div class="form-fields">
-      <!-- 名称 + ID（两列） -->
-      <div class="field-row">
-        <div class="field">
-          <label class="field-label">名称 <span class="req">*</span></label>
-          <input v-model="form.name" type="text" class="input" placeholder="例如：代码助手" />
+      <!-- 身份区（出生证字段围头像成组）：头像左侧跨三行；右侧第一行 名称+ID、第二行 模型、第三行 API Key+URL -->
+      <div class="identity-row">
+        <!-- 头像（AvatarField：hover 更换 + 右上×清空 + 裁剪器，点击/拖入/粘贴三通道）
+             列宽固定、高度拉伸跟随右列三行（stretch 链），无宽高比例约束 -->
+        <div class="field identity-avatar">
+          <label class="field-label">头像</label>
+          <AvatarField v-model="form.avatar" :name="form.name || form.id || '?'" size="lg" />
         </div>
-        <div class="field">
-          <label class="field-label">ID <span class="req">*</span><span class="hint">不可改</span></label>
-          <input v-model="form.id" type="text" class="input" placeholder="code-assistant" :disabled="isEdit" :class="{ 'input-disabled': isEdit }" />
-        </div>
-      </div>
 
-      <!-- 头像（AvatarField：hover 更换 + 右上×清空 + 裁剪器，点击/拖入/粘贴三通道） -->
-      <div class="field">
-        <label class="field-label">头像 <span class="hint">不选则按名字生成</span></label>
-        <AvatarField v-model="form.avatar" :name="form.name || form.id || '?'" />
-      </div>
+        <div class="identity-fields">
+          <!-- 名称 + ID（两列） -->
+          <div class="field-row">
+            <div class="field">
+              <label class="field-label">名称 <span class="req">*</span></label>
+              <input v-model="form.name" type="text" class="input" placeholder="例如：代码助手" />
+            </div>
+            <div class="field">
+              <label class="field-label">ID <span class="req">*</span><span class="hint">不可改</span></label>
+              <input v-model="form.id" type="text" class="input" placeholder="code-assistant" :disabled="isEdit" :class="{ 'input-disabled': isEdit }" />
+            </div>
+          </div>
 
-      <!-- 模型（可选可输分组选择器：选预设即隐式确定厂商；手输目录外名字落自定义） -->
-      <div class="field">
-        <label class="field-label">模型 <span class="req">*</span></label>
-        <GroupedSelect
-          :model-value="modelValue"
-          :groups="modelGroups"
-          allow-custom
-          :unmatched-label="form.model"
-          placeholder="选择或输入模型名"
-          @select="onModelSelect"
-        >
-          <!-- 关闭态控件前缀：当前归属厂商的图标 -->
-          <template #control-icon>
-            <ProviderIcon v-if="form.model" :name="form.provider" />
-          </template>
-          <!-- 组头：厂商品牌图标（未知 provider 渲染为空，不破版式） -->
-          <template #group-icon="{ group }">
-            <ProviderIcon :name="group.id ?? ''" :size="13" />
-          </template>
-        </GroupedSelect>
-        <p class="field-hint">
-          当前服务：{{ currentProvider?.label ?? form.provider }}{{ requiresKey ? "" : "（免 API Key）" }} · 「测试连接」会拉取该端点的最新模型并入列表
-        </p>
-      </div>
-
-      <!-- API Key + API URL（两列） -->
-      <div class="field-row">
-        <div class="field">
-          <label class="field-label">
-            API Key
-            <span v-if="requiresKey && !isEdit" class="req">*</span>
-            <span v-if="isEdit && requiresKey" :class="props.agent?.has_api_key ? 'badge badge-ok' : 'badge badge-warn'">
-              {{ props.agent?.has_api_key ? "已配置" : "未配置" }}
-            </span>
-          </label>
-          <input
-            v-model="form.api_key"
-            type="password"
-            class="input"
-            :placeholder="requiresKey ? (isEdit ? '留空保持现有' : '输入 API Key') : '本地服务无需 API Key'"
-          />
-        </div>
-        <div class="field">
-          <label class="field-label">
-            API URL
-            <span v-if="requiresBaseUrl" class="req">*</span>
-            <span v-else-if="!urlEditable" class="hint">预设厂商地址（测试连接自动匹配端点）</span>
-            <span v-else class="hint">可选</span>
-          </label>
-          <input
-            v-model="form.base_url"
-            type="text"
-            class="input"
-            :class="{ 'input-locked': !urlEditable }"
-            :readonly="!urlEditable"
-            :placeholder="urlPlaceholder"
-            :title="urlEditable ? undefined : '预设厂商地址由系统管理（测试连接会自动匹配端点）；如需自定义端点，请在上方模型框手动输入模型名'"
-          />
-          <!-- 连接测试行：按钮 + 行内结果 -->
-          <div class="conn-row">
-            <button
-              type="button"
-              class="conn-btn"
-              :disabled="testing"
-              title="验证配置并拉取模型列表（在线服务需先填 API Key；本机/自建端点填好 URL 即可）"
-              @click="runTest"
+          <!-- 模型（可选可输分组选择器：选预设即隐式确定厂商；手输目录外名字落自定义） -->
+          <div class="field">
+            <label class="field-label">模型 <span class="req">*</span></label>
+            <GroupedSelect
+              :model-value="modelValue"
+              :groups="modelGroups"
+              allow-custom
+              :unmatched-label="form.model"
+              placeholder="选择或输入模型名"
+              @select="onModelSelect"
             >
-              {{ testing ? "测试中…" : "测试连接" }}
-            </button>
-            <span v-if="connResult" :class="connResult.ok ? 'conn-ok' : 'conn-err'" :title="connResult.error ?? undefined">
-              {{ connResult.ok ? `连接成功，发现 ${connResult.model_count} 个模型` : connResult.error }}
-            </span>
+              <!-- 关闭态控件前缀：当前归属厂商的图标 -->
+              <template #control-icon>
+                <ProviderIcon v-if="form.model" :name="form.provider" />
+              </template>
+              <!-- 组头：厂商品牌图标（未知 provider 渲染为空，不破版式） -->
+              <template #group-icon="{ group }">
+                <ProviderIcon :name="group.id ?? ''" :size="13" />
+              </template>
+            </GroupedSelect>
+          </div>
+
+          <!-- API Key + API URL（两列）。Key：状态徽标内嵌输入框右缘；
+               URL：label 行内联「测试连接」+ 行内结果（2026-08-22 拍板，替代原提示文字） -->
+          <div class="field-row">
+            <div class="field">
+              <label class="field-label">
+                API Key
+                <span v-if="requiresKey && !isEdit" class="req">*</span>
+              </label>
+              <div class="input-wrap" :class="{ 'has-badge': isEdit && requiresKey }">
+                <input
+                  v-model="form.api_key"
+                  type="password"
+                  class="input"
+                  :placeholder="requiresKey ? (isEdit ? '留空保持现有' : '输入 API Key') : '本地服务无需 API Key'"
+              />
+                <span v-if="isEdit && requiresKey" :class="props.agent?.has_api_key ? 'badge badge-ok' : 'badge badge-warn'">
+                  {{ props.agent?.has_api_key ? "已配置" : "未配置" }}
+                </span>
+              </div>
+            </div>
+            <div class="field">
+              <div class="label-row">
+                <label class="field-label">
+                  API URL
+                  <span v-if="requiresBaseUrl" class="req">*</span>
+                </label>
+                <button
+                  type="button"
+                  class="conn-btn"
+                  :disabled="testing"
+                  title="验证配置并拉取模型列表（在线服务需先填 API Key；本机/自建端点填好 URL 即可）"
+                  @click="runTest"
+                >
+                  {{ testing ? "测试中…" : "测试连接" }}
+                </button>
+                <span v-if="connResult" :class="connResult.ok ? 'conn-ok' : 'conn-err'" :title="connResult.error ?? undefined">
+                  {{ connResult.ok ? `连接成功，发现 ${connResult.model_count} 个模型` : connResult.error }}
+                </span>
+              </div>
+              <input
+                v-model="form.base_url"
+                type="text"
+                class="input"
+                :class="{ 'input-locked': !urlEditable }"
+                :readonly="!urlEditable"
+                :placeholder="urlPlaceholder"
+                :title="urlEditable ? undefined : '预设厂商地址由系统管理（测试连接会自动匹配端点）；如需自定义端点，请在上方模型框手动输入模型名'"
+              />
+            </div>
           </div>
         </div>
       </div>
@@ -502,6 +505,37 @@ function confirmDelete() {
 }
 
 .form-fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ip-spacing-2_5);
+}
+
+/* 身份区：头像左（跨三行）、右侧 名称/ID 行 + 模型 行 + API Key/URL 行。
+ * 高度拉伸跟随右列（stretch 链：列 → avatar-field → box 逐级 100%）；
+ * 宽度按右列名义行高静态写死（用户拍板 2026-08-22，勿改回运行时推导——
+ * aspect-ratio 循环尺寸 + ResizeObserver 实测两轮翻车后弃用）。 */
+.identity-row {
+  display: flex;
+  gap: var(--ip-spacing-3);
+  align-items: stretch;
+}
+.identity-avatar {
+  flex-shrink: 0;
+  /* 宽度 = 右列三行名义高度的推导（改行高/增删行时同步改）：
+   * 行1 名称/ID   label18 + gap4 + input32 = 54
+   * 行2 模型       label18 + gap4 + select30 = 52（hint 已删 2026-08-22）
+   * 行3 Key/URL   label行20（含20px测试按钮） + gap4 + input32 = 56（测试行上移进 label）
+   * 行间距 spacing-2_5×2 = 20 → 右列总高 182 − 头像自身 label 行 18+4 = 160 */
+  width: 160px;
+}
+.identity-avatar :deep(.avatar-field) {
+  flex: 1;
+  align-self: stretch;
+  align-items: stretch; /* 头像盒（lg 档 100%×100%）撑满 label 以下列高 */
+}
+.identity-fields {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: var(--ip-spacing-2_5);
@@ -577,12 +611,31 @@ function confirmDelete() {
 
 /* 连接测试行：小号文字按钮 + 行内结果（绿/红），失败原因可 hover 看全；
    同时是模型列表的唯一拉取入口（一次往返两用） */
-.conn-row {
+/* label 行内联动作（API URL：label + 测试连接按钮 + 行内结果，2026-08-22 拍板） */
+.label-row {
   display: flex;
   align-items: center;
-  gap: var(--ip-spacing-2);
-  min-height: 18px;
-  flex-wrap: wrap;
+  gap: 6px;
+}
+.label-row .conn-ok,
+.label-row .conn-err {
+  flex: 1;
+  min-width: 0; /* 超长错误省略不换行（ellipsis 见 conn-ok/conn-err 自身） */
+}
+
+/* Key 输入框内嵌状态徽标：右缘垂直居中；有徽标时输入文本让位 */
+.input-wrap {
+  position: relative;
+}
+.input-wrap .badge {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+.input-wrap.has-badge .input {
+  padding-right: 64px;
 }
 .conn-btn {
   height: 20px;

@@ -5,6 +5,8 @@
   无独立编辑态/按钮排/体积文案——点击框 → 裁剪器（内含选图）→ 确认更新。
   三通道：点击 / 拖入图片 / Ctrl+V 粘贴 → 直达裁剪器。
   清空：hover 右上 × （danger 色 hover 提示；无确认弹窗——操作可逆）。
+  无常驻提示文案（2026-08-22 用户拍板）——框的 hover 态/title 自解释；
+  仅校验失败（非图片/超 10MB）时在框旁显示 inline 红字。
 
   Props: name: string（EntityAvatar 渐变兜底名）
          modelValue?: string | null（头像 dataURL，v-model）
@@ -21,6 +23,8 @@ defineProps<{
   modelValue?: string | null;
   /** 主题色 hex（项目场景：EntityAvatar 渐变兜底档优先用） */
   accent?: string | null;
+  /** 头像框边长：md=64px（默认）| lg=填满父容器（agent 表单身份区，高度跟随右列三行） */
+  size?: "md" | "lg";
 }>();
 
 const emit = defineEmits<{ "update:modelValue": [v: string | null] }>();
@@ -94,7 +98,7 @@ async function ingestFile(f: File) {
     <div
       ref="boxRef"
       class="af-box"
-      :class="{ 'is-empty': !modelValue, 'drag-over': dragOver }"
+      :class="{ 'is-empty': !modelValue, 'drag-over': dragOver, 'af-box-lg': size === 'lg' }"
       :title="modelValue ? '点击调整头像' : '点击上传头像'"
       tabindex="0"
       role="button"
@@ -124,7 +128,8 @@ async function ingestFile(f: File) {
       </button>
     </div>
 
-    <span class="af-hint" :class="{ 'is-error': !!errMsg }">{{ errMsg || (modelValue ? "点击调整 · 支持拖入 / 粘贴" : "点击上传 · 支持拖入 / 粘贴") }}</span>
+    <!-- 错误提示：仅校验失败时出现（无常驻提示文案——交互靠 hover 蒙层/title 自解释） -->
+    <span v-if="errMsg" class="af-hint is-error">{{ errMsg }}</span>
 
     <!-- 裁剪器弹层 -->
     <AvatarCropper
@@ -165,6 +170,15 @@ async function ingestFile(f: File) {
 .af-box:not(.is-empty) {
   border-color: transparent; /* 有图：隐形边框占位（不画虚线） */
   background: none;
+  /* GitHub 式描边 + 轻投影（与 EntityAvatar 展示位同款令牌；空态虚线框不加投影） */
+  box-shadow: var(--ip-avatar-ring, inset 0 0 0 1px rgba(0, 0, 0, 0.12)),
+    var(--ip-avatar-elev, 0 1px 2px rgba(0, 0, 0, 0.08));
+}
+/* lg 档：填满父容器——宽=列宽、高=列内剩余高度，由表单 stretch 链决定；
+ * 圆角矩形，无正方形约束（比例推导方案已否决，勿回退 aspect-ratio/实测） */
+.af-box-lg {
+  width: 100%;
+  height: 100%;
 }
 .af-box:focus-visible {
   outline: 2px solid var(--ip-primary-500);
@@ -174,10 +188,13 @@ async function ingestFile(f: File) {
   border-color: var(--ip-primary-400);
   background: var(--ip-color-primary-soft-bg);
 }
-.af-avatar {
+/* 内层 EntityAvatar：占满框、走圆角矩形（高优先级覆盖其圆形默认）；
+ * 描边/投影由外层 .af-box 统一给，内层清零避免圆环贴矩形边的双重效果 */
+.af-box > .af-avatar {
   width: 100%;
   height: 100%;
   border-radius: var(--ip-radius-lg);
+  box-shadow: none;
 }
 .af-placeholder-icon { color: inherit; }
 
@@ -221,6 +238,7 @@ async function ingestFile(f: File) {
 .af-hint {
   font-size: var(--ip-text-micro-size);
   color: var(--ip-color-text-tertiary);
+  align-self: center; /* 父容器被 stretch 时错误文案保持垂直居中（不被拉高顶格） */
 }
 /* 错误态：danger 色提示（inline 纯文本规范） */
 .af-hint.is-error { color: var(--ip-danger-base); }

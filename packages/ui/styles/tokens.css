@@ -291,8 +291,9 @@
   --ip-toast-duration-danger:  8000ms;
 
   /* P0 组件级 token（icepaw-p0-component-specs.md §7.1） */
-  /* Avatar */
-  --ip-avatar-border-shadow:        inset 0 0 0 1px rgba(0, 0, 0, 0.04);
+  /* Avatar —— GitHub 风格两件套（2026-08-22）：ring 发丝描边恒上、elev 轻投影 md 起叠 */
+  --ip-avatar-ring:                 inset 0 0 0 1px rgba(22, 34, 51, 0.14);
+  --ip-avatar-elev:                 0 1px 2px rgba(22, 34, 51, 0.08), 0 2px 6px rgba(22, 34, 51, 0.05);
   --ip-avatar-overlay-light:        rgba(0, 0, 0, 0.08);
   --ip-avatar-overlay-light-active: rgba(0, 0, 0, 0.12);
   --ip-avatar-overlay-dark:         rgba(255, 255, 255, 0.10);
@@ -532,7 +533,8 @@
   --ip-shadow-focus:          0 0 0 3px var(--ip-focus-ring-dark);
 
   /* P0 暗色模式覆盖（icepaw-p0-component-specs.md §7.3） */
-  --ip-avatar-border-shadow:        inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  --ip-avatar-ring:                 inset 0 0 0 1px rgba(240, 246, 252, 0.14);
+  --ip-avatar-elev:                 0 1px 2px rgba(0, 0, 0, 0.35), 0 2px 6px rgba(0, 0, 0, 0.22);
   --ip-color-text-placeholder:      var(--ip-gray-500);
 
   /* Avatar overlay 暗色模式切换 */
@@ -603,7 +605,8 @@
     --ip-shadow-focus:    0 0 0 3px var(--ip-focus-ring-dark);
 
     /* P0 暗色模式覆盖（system-prefers） */
-    --ip-avatar-border-shadow:        inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+    --ip-avatar-ring:                 inset 0 0 0 1px rgba(240, 246, 252, 0.14);
+    --ip-avatar-elev:                 0 1px 2px rgba(0, 0, 0, 0.35), 0 2px 6px rgba(0, 0, 0, 0.22);
     --ip-color-text-placeholder:      var(--ip-gray-500);
 
     color-scheme: dark;
