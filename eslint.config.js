@@ -107,6 +107,8 @@ export default [
       "packages/ui/dev/dist/**",
       // 品牌/logo 设计工作区（不入库的草稿区，含本地脚本）
       "brand/**",
+      // 仓库根的一次性 .cjs 脚本（图片处理等本地工具，非工程源码）
+      "/*.cjs",
       "**/*.min.js",
       "**/*.bundle.js",
     ],
