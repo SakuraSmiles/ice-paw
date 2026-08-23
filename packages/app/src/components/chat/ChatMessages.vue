@@ -685,6 +685,8 @@ const finishReasonLabels: Record<string, string> = {
   abort: "已手动停止",
   budget_exceeded: "本次 token 预算已达上限",
   stuck: "连续多轮无进展，已自动终止",
+  // P10④ doom_loop：同一工具以同类方式反复失败（连纠正指令都无效），自动终止止损
+  doom_loop: "同一工具反复失败，已自动终止",
   tool_use: "已达工具调用轮数上限",
 };
 
@@ -698,7 +700,14 @@ function finishReasonLabel(reason: string): string {
   return finishReasonLabels[reason] || reason;
 }
 // 「发送消息即可续跑」的终止类：提示行内附「继续」按钮（abort=用户主动停，不列）
-const RESUMABLE_REASONS = new Set(["budget_exceeded", "tool_use", "stuck", "length", "max_tokens"]);
+const RESUMABLE_REASONS = new Set([
+  "budget_exceeded",
+  "tool_use",
+  "stuck",
+  "doom_loop",
+  "length",
+  "max_tokens",
+]);
 </script>
 
 <template>

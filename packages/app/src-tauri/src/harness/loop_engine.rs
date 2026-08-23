@@ -97,6 +97,9 @@ pub(crate) use crate::harness::r#loop::context::{LoopConfig, LoopContext};
 // synthesize_usage 已迁移到 crate::harness::r#loop::token_usage
 use crate::harness::r#loop::token_usage::synthesize_usage;
 
+// P10④ doom_loop 检测（同工具+同错误签名连败跟踪）
+use crate::harness::r#loop::doom_detect::{self, DoomLoopTracker};
+
 /// budget_exceeded 终止时的 fallback 提示文案（纯函数便于单测）。
 ///
 /// 两分支：显式硬上限（续期额度 0）给出「注释掉该行恢复自适应+续期」的
@@ -291,6 +294,11 @@ async fn stream_loop_inner(
     // `last_round_hash`：上一轮的进度指纹 hash；首轮为 None（无论如何不视为停滞）
     let mut stuck_counter: u32 = 0;
     let mut last_round_hash: Option<u64> = None;
+
+    // === P10④ doom_loop 跟踪（同工具+同错误签名连败；见 loop::doom_detect 模块注释）===
+    // stuck_detect 对「每轮换文件名重试同类失败」失明（轮指纹恒变），这里补位：
+    // 连败 NUDGE_AT 次 nudge、TERMINATE_AT 次终止。
+    let mut doom = DoomLoopTracker::new();
 
     // === 自动续写状态（模式 C 治本：finish_reason=length/max_tokens 不再当终态）===
     // `continue_full_text`：续写激活后持有「本消息累积全文」，供下轮拼接 + 全文覆写落盘
@@ -943,7 +951,7 @@ async fn stream_loop_inner(
             Some(ctx.api_key.clone()),
         )
         .await;
-        let tool_result_blocks: Vec<ContentBlock> = match execute_tool_round(
+        let mut tool_result_blocks: Vec<ContentBlock> = match execute_tool_round(
             ctx.emitter.as_ref(),
             ctx.tool_app.as_ref(),
             &ctx.tool_registry,
@@ -994,6 +1002,92 @@ async fn stream_loop_inner(
                 .await;
             }
         };
+
+        // === P10④ doom_loop：同工具同错误签名连续失败检测（阶段 E 出口）===
+        // 按 tool+error_kind 跟踪：连败 NUDGE_AT 次在该条 tool_result 尾部注入纠正
+        // 指令（模型可见 → 入事件日志；前端 chat:tool-result 已发，展示保持原始错误），
+        // 连败 TERMINATE_AT 次终止回合。终止走 finalize_guard 与阶段 E 错误分支同一
+        // 清场路径（本轮 tool_use 已在阶段 C 落盘 → 剔除后收尾；tool_result 尚未
+        // 持久化，无孤儿）。
+        let mut doom_terminate = false;
+        for block in tool_result_blocks.iter_mut() {
+            let ContentBlock::ToolResult {
+                tool_use_id,
+                content,
+                is_error,
+            } = block
+            else {
+                continue;
+            };
+            let Some((_, tc_name, _)) = completed_calls
+                .iter()
+                .find(|(id, _, _)| id == &*tool_use_id)
+            else {
+                continue;
+            };
+            if is_error.unwrap_or(false) {
+                let streak = doom.record_failure(tc_name, content);
+                if streak >= doom_detect::TERMINATE_AT {
+                    doom_terminate = true;
+                } else if streak == doom_detect::NUDGE_AT {
+                    let nudge = doom_detect::nudge_text(tc_name, streak);
+                    tracing::warn!(
+                        target: "ice_paw.loop",
+                        "doom_loop 纠正指令注入: tool={} streak={}",
+                        tc_name,
+                        streak
+                    );
+                    // 模型可见注入 → 入事件日志（复用 hook_injected 通道，point 区分；
+                    // derive 对 hook_injected 不派生消息，仅审计留痕）
+                    event_log::log_hook_injected(
+                        &ctx.pool,
+                        &ev,
+                        &event_log::HookInjectedPayload {
+                            v: 1,
+                            point: "doom_loop_nudge".into(),
+                            prompt: nudge.clone(),
+                        },
+                    )
+                    .await;
+                    content.push_str(&nudge);
+                }
+            } else {
+                doom.record_success(tc_name);
+            }
+        }
+        if doom_terminate {
+            tracing::warn!(
+                target: "ice_paw.loop",
+                "doom_loop 终止：同一工具以同类方式连续失败达 {} 次",
+                doom_detect::TERMINATE_AT
+            );
+            let _ = finalize_guard_logged(
+                &ctx.pool,
+                &batch_writer,
+                &ev,
+                &current_asst_msg_id,
+                &msg_text,
+                &round_blocks,
+                round_completion_tokens,
+                Some("（检测到同一工具反复以相同方式失败，已自动终止。发送新消息即可继续。）"),
+                tool_round,
+                ctx.asst_model.as_deref(),
+                !continue_full_text.is_empty(),
+                round_gen_ms,
+            )
+            .await;
+            return finalize_success(
+                ctx.emitter.as_ref(),
+                &ctx.pool,
+                &ev,
+                &current_asst_msg_id,
+                "doom_loop",
+                synthesize_usage(first_prompt_tokens, total_completion_tokens, collected_usage),
+                first_prompt_tokens,
+                tool_round + 1,
+            )
+            .await;
+        }
 
         // 【阶段 F】持久化 tool_result 为独立 user 消息（role=user，符合 Anthropic 协议：
         // tool_result 必须在 user 消息里）。多个 tool_result 合并进同一条 user 消息。

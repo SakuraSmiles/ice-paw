@@ -39,9 +39,18 @@ impl McpClient for RunCommandTool {
     }
 
     fn description(&self) -> &str {
-        "Execute a shell command line in the agent workspace and return combined \
+        // 平台差异写进描述（Codex A2）：Windows 侧告知代码页已统一 UTF-8，
+        // 模型不必再猜测中文输出的编码形态
+        if cfg!(windows) {
+            "Execute a shell command line in the agent workspace and return combined \
+stdout+stderr plus exit code. Runs via `cmd /C` with UTF-8 codepage (chcp 65001), so \
+Chinese output decodes correctly. Use for builds, tests, git, etc. Non-zero exit is not \
+an error—read exit_code and output to decide next steps."
+        } else {
+            "Execute a shell command line in the agent workspace and return combined \
 stdout+stderr plus exit code. Use for builds, tests, git, etc. Non-zero exit is not an error—\
 read exit_code and output to decide next steps."
+        }
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -76,10 +85,15 @@ read exit_code and output to decide next steps."
         let parsed: RunCommandArgs = serde_json::from_str(args)
             .map_err(|e| AppError::Validation(format!("run_command 参数解析失败: {e}")))?;
 
-        // 走系统 shell：Unix 用 sh -c，Windows 用 cmd /C（支持 PATH/.cmd/管道）
+        // 走系统 shell：Unix 用 sh -c，Windows 用 cmd /C（支持 PATH/.cmd/管道）。
+        // Windows 前置 `chcp 65001 >nul & `：中文系统默认 GBK 代码页，git/node 等子进程
+        // 按控制台代码页编码输出 → 解码端混淆/乱码（诊断 2026-08-22：真乱码样本全部
+        // 集中在 PowerShell/cmd 中文输出）。切到 UTF-8 代码页从源头统一，>nul 吞掉
+        // 切换回显，& 串联原命令。
         let mut cmd = if cfg!(windows) {
             let mut c = tokio::process::Command::new("cmd");
-            c.args(["/C", &parsed.command]);
+            let full = format!("chcp 65001 >nul & {}", parsed.command);
+            c.args(["/C", &full]);
             c
         } else {
             let mut c = tokio::process::Command::new("sh");
@@ -214,5 +228,24 @@ mod tests {
             .execute_with_context(r#"{"timeout_secs":5}"#, &ctx)
             .await;
         assert!(result.is_err());
+    }
+
+    /// Agent 质量拍（2026-08-23）：Windows 前置 chcp 65001 生效验证——
+    /// 通过工具跑 `chcp` 查询活动代码页，应报 65001（包装是否真挂上以运行时为准）
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn windows_codepage_is_utf8() {
+        let tool = RunCommandTool;
+        let ctx = test_ctx().await;
+        let result = tool
+            .execute_with_context(r#"{"command":"chcp","timeout_secs":10}"#, &ctx)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(v["exit_code"], 0);
+        assert!(
+            v["output"].as_str().unwrap().contains("65001"),
+            "活动代码页应为 65001: {result}"
+        );
     }
 }

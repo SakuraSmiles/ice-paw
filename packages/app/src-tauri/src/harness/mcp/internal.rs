@@ -112,9 +112,19 @@ impl McpClient for ReadFileTool {
         let path = Path::new(&parsed.path);
 
         // 安全检查：拒绝读取特殊文件
-        let canonical = path
-            .canonicalize()
-            .map_err(|e| AppError::Validation(format!("文件路径无效: {e}")))?;
+        let canonical = match path.canonicalize() {
+            Ok(c) => c,
+            // 报错即行为契约：not-found 时扫真实文件系统给近似候选（did-you-mean），
+            // 把「猜路径循环」变成一次纠偏；其余（权限等）保持裸错误
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(AppError::Validation(format!(
+                    "文件不存在: {}。{}",
+                    parsed.path,
+                    super::path_suggest::suggest_for_missing(path)
+                )));
+            }
+            Err(e) => return Err(AppError::Validation(format!("文件路径无效: {e}"))),
+        };
 
         let path_str = canonical.to_string_lossy();
         if path_str.starts_with("/proc/")
@@ -126,12 +136,22 @@ impl McpClient for ReadFileTool {
             ));
         }
 
-        let metadata = tokio::fs::metadata(&canonical).await.map_err(|e| {
-            AppError::Io(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("文件不存在或不可访问: {e}"),
-            ))
-        })?;
+        let metadata = tokio::fs::metadata(&canonical)
+            .await
+            .map_err(|e| {
+                AppError::Io(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("文件不存在或不可访问: {e}"),
+                ))
+            })?;
+
+        // 目录直达 read 会报莫名的 os error 5（Windows 拒绝读目录）——显式指出该用哪个工具
+        if metadata.is_dir() {
+            return Err(AppError::Validation(format!(
+                "路径是目录不是文件: {}。如需查看其内容请用 list_directory / directory_tree。",
+                parsed.path
+            )));
+        }
 
         let file_size = metadata.len() as usize;
         if file_size > parsed.max_bytes {
@@ -259,7 +279,11 @@ impl McpClient for ListDirectoryTool {
         let path = Path::new(&parsed.path);
 
         if !path.exists() {
-            return Err(AppError::Validation(format!("目录不存在: {}", parsed.path)));
+            return Err(AppError::Validation(format!(
+                "目录不存在: {}。{}",
+                parsed.path,
+                super::path_suggest::suggest_for_missing(path)
+            )));
         }
 
         if !path.is_dir() {
@@ -576,6 +600,20 @@ async fn read_one_for_multiple(path_str: &str) -> MultipleReadItem {
     let path = Path::new(path_str);
     let canonical = match path.canonicalize() {
         Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // 与 read_file 同款契约：not-found 给近似候选（did-you-mean）
+            return MultipleReadItem {
+                path: path_str.into(),
+                ok: false,
+                error: Some(format!(
+                    "文件不存在: {}。{}",
+                    path_str,
+                    super::path_suggest::suggest_for_missing(path)
+                )),
+                content: None,
+                bytes: None,
+            };
+        }
         Err(e) => {
             return MultipleReadItem {
                 path: path_str.into(),
@@ -729,6 +767,25 @@ mod tests {
 
         let result = tool.execute(args).await;
         assert!(result.is_err());
+    }
+
+    /// Agent 质量拍（2026-08-23）：not-found 报错带同目录近似候选（did-you-mean）。
+    /// 测试 CWD = crate 根（src-tauri），"Cargo.tom" 的同目录近似即 Cargo.toml。
+    #[tokio::test]
+    async fn read_file_not_found_suggests_sibling() {
+        let tool = ReadFileTool;
+        let err = tool.execute(r#"{"path": "Cargo.tom"}"#).await.unwrap_err().to_string();
+        assert!(err.contains("文件不存在"), "{err}");
+        assert!(err.contains("Cargo.toml"), "应给出近似候选: {err}");
+    }
+
+    /// 目录直达 read：给「该用哪个工具」指引，而非裸 os error
+    #[tokio::test]
+    async fn read_file_on_directory_gives_tool_guidance() {
+        let tool = ReadFileTool;
+        let err = tool.execute(r#"{"path": "."}"#).await.unwrap_err().to_string();
+        assert!(err.contains("目录不是文件"), "{err}");
+        assert!(err.contains("list_directory"), "{err}");
     }
 
     #[tokio::test]
