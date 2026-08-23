@@ -79,6 +79,7 @@ pub fn run() {
             commands::agent_cmd::delete_agent,
             commands::agent_yaml::get_agent_yaml_fields,
             commands::agent_yaml::set_agent_yaml_field,
+            commands::agent_yaml::set_agent_system_prompt,
             commands::conversation_cmd::list_all_conversations,
             commands::conversation_cmd::list_conversations,
             commands::conversation_cmd::create_conversation,
