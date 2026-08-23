@@ -23,7 +23,8 @@ import GroupedSelect from "../common/GroupedSelect.vue";
 import ProviderIcon from "../common/ProviderIcon.vue";
 import type { ComboboxGroup, ComboboxItem } from "../common/Combobox.vue";
 import MoreMenu from "../common/MoreMenu.vue";
-import { STYLE_PRESETS, fillPresetName, isBirthDefaultPrompt, type StylePreset } from "../../data/stylePresets";
+import StylePresetPicker from "./StylePresetPicker.vue";
+import { fillPresetName, type StylePreset } from "../../data/stylePresets";
 
 const props = defineProps<{
   agent: Agent | null;
@@ -256,64 +257,42 @@ function openInExplorer() {
 
 const hasWorkspacePath = computed(() => !!form.value.workspace_path?.trim());
 
-// ---- 风格预设（编辑态：三档素材插入 agent.yaml system_prompt，2026-08-23） ----
+// ---- 风格预设（创建/编辑两用弹层，2026-08-23） ----
 // 两层设计（docs/agent-prompt-draft.md）：平台层纪律所有 agent 背（后端
 // system_prompt.rs），人格风格归 yaml system_prompt——预设是素材不是档位，
 // 插入即用户文本，后续自由修改。与「会话模板」（TemplateStage）是两个概念。
-const presetOpen = ref(false);
-const presetLoading = ref(false);
+// 创建态：选中随表单保存进 NewAgent.system_prompt（出生 yaml 即带，零后端改动）；
+// 编辑态：选档即写 agent.yaml（覆盖确认在弹层内）。
+const pickerOpen = ref(false);
+const presetFetching = ref(false);
 const presetError = ref("");
 const presetDone = ref("");
 const inserting = ref(false);
 /** 现有 system_prompt：null=明确无值（免确认）/ undefined=读取失败（按需确认保守） */
 const existingPrompt = ref<string | null | undefined>(null);
-/** 进入覆盖确认态的档 id（MoreMenu 同款就地二次确认） */
-const confirmingPreset = ref<string | null>(null);
+/** 创建态已选档（随保存写入；null=用默认通用句） */
+const selectedPreset = ref<StylePreset | null>(null);
 
-async function togglePresets() {
-  presetOpen.value = !presetOpen.value;
-  if (!presetOpen.value || !props.agent) return;
-  presetLoading.value = true;
+async function openPicker() {
   presetError.value = "";
   presetDone.value = "";
-  confirmingPreset.value = null;
-  try {
-    const fields = await bridge.agents.yamlFields(props.agent.id);
-    existingPrompt.value = fields.system_prompt ?? null;
-  } catch {
-    existingPrompt.value = undefined; // 未知：写前确认（保守）
-  } finally {
-    presetLoading.value = false;
+  // 编辑态先拉现有 system_prompt（覆盖确认判据），拉完再开——避免弹层闪确认态
+  if (isEdit.value && props.agent) {
+    presetFetching.value = true;
+    try {
+      const fields = await bridge.agents.yamlFields(props.agent.id);
+      existingPrompt.value = fields.system_prompt ?? null;
+    } catch {
+      existingPrompt.value = undefined; // 未知：写前确认（保守）
+    } finally {
+      presetFetching.value = false;
+    }
   }
+  pickerOpen.value = true;
 }
 
-/** 覆盖确认判据：明确无值 → 免；出生默认句 → 免（最常见操作，拦一道是噪音）；其余（含未知）→ 确认 */
-function presetNeedsConfirm(): boolean {
-  const cur = existingPrompt.value;
-  if (cur === null) return false;
-  if (cur === undefined) return true;
-  return !isBirthDefaultPrompt(cur, props.agent?.name ?? "");
-}
-
-/** 现有内容首行（覆盖确认里展示，让用户认出自己写的东西） */
-const existingFirstLine = computed(
-  () => (existingPrompt.value ?? "").split("\n").find((l) => l.trim()) || "（空）",
-);
-
-function presetPreview(p: StylePreset): string {
-  return fillPresetName(p.text, form.value.name).split("\n").slice(0, 3).join("\n");
-}
-
-function onPickPreset(p: StylePreset) {
-  if (inserting.value) return;
-  if (presetNeedsConfirm() && confirmingPreset.value !== p.id) {
-    confirmingPreset.value = p.id;
-    return;
-  }
-  void applyPreset(p);
-}
-
-async function applyPreset(p: StylePreset) {
+/** 编辑态：弹层确认已过 → 写 agent.yaml */
+async function onPickPreset(p: StylePreset) {
   if (!props.agent || inserting.value) return;
   inserting.value = true;
   presetError.value = "";
@@ -321,14 +300,19 @@ async function applyPreset(p: StylePreset) {
     const text = fillPresetName(p.text, form.value.name);
     await bridge.agents.setSystemPrompt(props.agent.id, text);
     existingPrompt.value = text;
-    confirmingPreset.value = null;
-    presetOpen.value = false;
+    pickerOpen.value = false;
     presetDone.value = "已写入 agent.yaml，可在文件中继续修改";
   } catch (e) {
     presetError.value = e instanceof Error ? e.message : "写入失败";
   } finally {
     inserting.value = false;
   }
+}
+
+/** 创建态：选中/清除（随保存写入） */
+function onSelectPreset(p: StylePreset | null) {
+  selectedPreset.value = p;
+  pickerOpen.value = false;
 }
 
 const error = ref("");
@@ -393,6 +377,11 @@ async function save() {
         base_url: form.value.base_url || undefined,
         workspace_path: form.value.workspace_path || undefined,
         avatar: form.value.avatar ?? undefined,
+        // 风格预设（创建态选档）：出生 yaml 即带这段文本（后端用 row.system_prompt
+        // 生成默认 yaml，空则落通用句——零后端改动）
+        system_prompt: selectedPreset.value
+          ? fillPresetName(selectedPreset.value.text, form.value.name)
+          : undefined,
       };
       const created = await bridge.agents.create(input);
       emit("saved", created);
@@ -560,46 +549,37 @@ function confirmDelete() {
             </svg>
           </button>
           <span v-if="hasFileConfig" class="ws-badge">agent.yaml</span>
+          <!-- 风格预设入口（创建/编辑两用；创建态选中随保存写入，编辑态选档即写 yaml） -->
           <button
-            v-if="hasFileConfig"
+            v-if="!isEdit || hasWorkspacePath"
             type="button"
             class="ws-preset-btn"
-            :class="{ active: presetOpen }"
-            title="选择一套风格预设插入 agent.yaml 的 system_prompt——插入后就是你的文本，可继续修改"
-            @click="togglePresets"
-          >风格预设</button>
-        </div>
-        <!-- 风格预设面板（就地展开：三档素材预览 → 插入 agent.yaml） -->
-        <div v-if="presetOpen" class="preset-panel">
-          <div v-if="presetLoading" class="preset-status">读取现有配置…</div>
-          <template v-else>
-            <div v-for="p in STYLE_PRESETS" :key="p.id" class="preset-card">
-              <div class="preset-head">
-                <span class="preset-name">{{ p.name }}</span>
-                <span class="preset-note">{{ p.note }}</span>
-              </div>
-              <pre class="preset-preview">{{ presetPreview(p) }}</pre>
-              <!-- 覆盖确认态（就地，非空非默认句才进） -->
-              <div v-if="confirmingPreset === p.id" class="preset-confirm">
-                <span class="preset-confirm-text">将覆盖现有 system_prompt（首行：{{ existingFirstLine }}）</span>
-                <div class="preset-confirm-actions">
-                  <button type="button" class="btn btn-primary btn-sm" :disabled="inserting" @click="applyPreset(p)">
-                    {{ inserting ? "写入中…" : "覆盖写入" }}
-                  </button>
-                  <button type="button" class="btn-link" @click="confirmingPreset = null">取消</button>
-                </div>
-              </div>
-              <button v-else type="button" class="preset-insert" :disabled="inserting" @click="onPickPreset(p)">
-                {{ inserting ? "写入中…" : "插入到 agent.yaml" }}
-              </button>
-            </div>
-          </template>
-          <div v-if="presetError" class="preset-error">{{ presetError }}</div>
+            :class="{ active: pickerOpen, chosen: !!selectedPreset }"
+            :disabled="presetFetching"
+            :title="isEdit
+              ? '选择一套风格预设插入 agent.yaml 的 system_prompt——插入后就是你的文本，可继续修改'
+              : '选一套风格预设作为 system_prompt 起点——保存时写入，不选用默认'"
+            @click="openPicker"
+          >{{ selectedPreset ? `风格 · ${selectedPreset.name}` : "风格预设" }}</button>
         </div>
         <p v-if="presetDone" class="field-hint preset-done">{{ presetDone }}</p>
         <p class="field-hint">在此目录下创建 <code>agent.yaml</code> 可配置 system_prompt、temperature 等</p>
       </div>
     </div>
+
+    <!-- 风格预设弹层（Teleport 到 body，创建/编辑两用） -->
+    <StylePresetPicker
+      v-if="pickerOpen"
+      :mode="isEdit ? 'edit' : 'create'"
+      :agent-name="form.name || form.id || ''"
+      :selected-id="selectedPreset?.id ?? null"
+      :existing-prompt="isEdit ? existingPrompt : null"
+      :inserting="inserting"
+      :error="presetError"
+      @close="pickerOpen = false"
+      @select="onSelectPreset"
+      @pick="onPickPreset"
+    />
   </div>
 </template>
 
@@ -831,7 +811,7 @@ function confirmDelete() {
   white-space: nowrap;
   font-family: var(--ip-font-mono);
 }
-/* 风格预设入口（与 agent.yaml 徽章同排；面板在下方就地展开） */
+/* 风格预设入口（与 agent.yaml 徽章同排；弹层 Teleport 到 body） */
 .ws-preset-btn {
   height: 22px;
   padding: 0 8px;
@@ -850,90 +830,17 @@ function confirmDelete() {
   color: var(--ip-primary-600);
   border-color: var(--ip-color-border-focus);
 }
-
-.preset-panel {
-  display: flex;
-  flex-direction: column;
-  gap: var(--ip-spacing-2);
-  padding: var(--ip-spacing-2_5);
-  border: 1px solid var(--ip-color-border-default);
-  border-radius: var(--ip-radius-md);
-  background-color: var(--ip-color-bg-secondary);
+/* 创建态已选档：主色 tint 化（一眼可见已带风格） */
+.ws-preset-btn.chosen {
+  color: var(--ip-color-primary-tint-text);
+  background-color: var(--ip-color-primary-tint-bg);
+  border-color: transparent;
 }
-.preset-status {
-  font-size: var(--ip-text-micro-size);
-  color: var(--ip-color-text-tertiary);
-}
-.preset-card {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: var(--ip-spacing-2);
-  border: 1px solid var(--ip-color-border-default);
-  border-radius: var(--ip-radius-md);
-  background-color: var(--ip-color-bg-primary);
-}
-.preset-head {
-  display: flex;
-  align-items: baseline;
-  gap: var(--ip-spacing-2);
-}
-.preset-name {
-  font-size: var(--ip-text-body-sm-size);
-  font-weight: var(--ip-font-weight-semibold);
-  color: var(--ip-color-text-primary);
-  white-space: nowrap;
-}
-.preset-note {
-  font-size: var(--ip-text-micro-size);
-  color: var(--ip-color-text-tertiary);
-}
-.preset-preview {
-  margin: 0;
-  font-family: var(--ip-font-mono);
-  font-size: var(--ip-text-micro-size);
-  color: var(--ip-color-text-secondary);
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-.preset-insert {
-  align-self: flex-start;
-  height: 24px;
-  padding: 0 10px;
-  font-size: var(--ip-text-micro-size);
-  color: var(--ip-primary-600);
-  background-color: var(--ip-color-primary-soft-bg);
-  border: 1px solid var(--ip-primary-300);
-  border-radius: var(--ip-radius-md);
-  cursor: pointer;
-  white-space: nowrap;
-  transition: all var(--ip-duration-fast) var(--ip-ease-out);
-}
-.preset-insert:disabled {
+.ws-preset-btn:disabled {
   opacity: 0.6;
   cursor: default;
 }
-.preset-confirm {
-  display: flex;
-  flex-direction: column;
-  gap: var(--ip-spacing-2);
-}
-.preset-confirm-text {
-  font-size: var(--ip-text-micro-size);
-  color: var(--ip-warning-text);
-  word-break: break-all;
-}
-.preset-confirm-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--ip-spacing-2);
-}
-.preset-error {
-  font-size: var(--ip-text-micro-size);
-  color: var(--ip-danger-text);
-  word-break: break-all;
-}
+
 .preset-done {
   color: var(--ip-success-text);
 }
