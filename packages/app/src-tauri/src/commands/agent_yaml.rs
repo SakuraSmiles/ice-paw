@@ -1,4 +1,4 @@
-//! `commands::agent_yaml` — agent.yaml 预算字段定向改写
+//! `commands::agent_yaml` — agent.yaml 定向改写（预算标量 + system_prompt 块）
 //!
 //! 背景：yaml 覆盖 DB（`AgentFileConfig::apply_to`），AgentForm 想暴露
 //! `max_total_tokens` / `tool_max_rounds` 就必须直写 yaml 文件——而 agent.yaml
@@ -13,6 +13,10 @@
 //! 语义对齐 B1：显式值 = 硬上限（触顶即停、不自动续期）；注释掉 = 恢复
 //! 按上下文窗口自适应 3× + 自动续期 2 次。前端「高级设置」据此把
 //! 「空 = 默认自适应」做成一等选项。
+//!
+//! 2026-08-23 增多行块通道 [`patch_agent_yaml_block`] + [`set_agent_system_prompt`]：
+//! 「风格预设」三档（前端素材）整块写入 `system_prompt: |`——标量补丁装不下
+//! 多行文本，两函数同款纪律、各自命令入口。
 
 use std::sync::Arc;
 
@@ -32,11 +36,13 @@ pub enum YamlPatchAction {
     CommentOut,
 }
 
-/// 预算字段快照（读命令返回 / 写命令成功后回显）
+/// 字段快照（读命令返回 / 写命令成功后回显）
 #[derive(Debug, Default, PartialEq, Eq, serde::Serialize)]
 pub struct AgentYamlFields {
     pub max_total_tokens: Option<u64>,
     pub tool_max_rounds: Option<u64>,
+    /// 现有 system_prompt——前端「风格预设」覆盖确认的判据（2026-08-23 加入）
+    pub system_prompt: Option<String>,
 }
 
 impl AgentYamlFields {
@@ -44,6 +50,7 @@ impl AgentYamlFields {
         Self {
             max_total_tokens: cfg.max_total_tokens.map(|v| v as u64),
             tool_max_rounds: cfg.tool_max_rounds.map(|v| v as u64),
+            system_prompt: cfg.system_prompt.clone(),
         }
     }
 }
@@ -111,6 +118,58 @@ pub fn patch_agent_yaml(content: &str, key: &str, action: &YamlPatchAction) -> S
             out.push_str(&v.to_string());
             out.push('\n');
         }
+    }
+    format!("{bom}{out}")
+}
+
+/// 多行块键整体替换（`key: |` + 缩进块体）——「风格预设」写 `system_prompt` 用
+/// （2026-08-23，docs/agent-prompt-draft.md）。
+///
+/// 与 [`patch_agent_yaml`] 同款逐行补丁纪律（BOM 摘出回填、非目标行逐字节保留），
+/// 差异在目标键的值占多行：目标键行 + 其后所有「缩进 >0 或纯空白」行（旧块体，
+/// 兼容 `|`/`>`/行内标量三种既有形态）整段替换为 2 空格缩进的新文本；无目标键
+/// 则追加。块内空行零缩进合法，原样输出；生成行沿用文件既有行尾风格（CRLF 不混）。
+pub fn patch_agent_yaml_block(content: &str, key: &str, text: &str) -> String {
+    let (bom, body) = match content.strip_prefix('\u{FEFF}') {
+        Some(rest) => ("\u{FEFF}", rest),
+        None => ("", content),
+    };
+    let nl = if body.contains("\r\n") { "\r\n" } else { "\n" };
+    let mut block = format!("{key}: |{nl}");
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            block.push_str(nl);
+        } else {
+            block.push_str("  ");
+            block.push_str(line);
+            block.push_str(nl);
+        }
+    }
+
+    let mut out = String::with_capacity(content.len() + block.len());
+    let mut replaced = false;
+    let mut in_block = false; // 正在跳过旧块体
+    for line in body.split_inclusive('\n') {
+        if !replaced && !in_block && line_is_active_key(line, key) {
+            out.push_str(&block);
+            replaced = true;
+            in_block = true;
+            continue;
+        }
+        if in_block {
+            let bare = line.trim_end_matches(['\r', '\n']);
+            if bare.trim().is_empty() || bare.starts_with([' ', '\t']) {
+                continue; // 旧块体行（含空行）：吞掉
+            }
+            in_block = false; // 列 0 有内容的行：块体结束，正常输出
+        }
+        out.push_str(line);
+    }
+    if !replaced {
+        if !body.is_empty() && !body.ends_with('\n') {
+            out.push_str(nl);
+        }
+        out.push_str(&block);
     }
     format!("{bom}{out}")
 }
@@ -210,6 +269,69 @@ pub async fn set_agent_yaml_field(
     tracing::info!(
         target: "ice_paw.agent",
         "agent.yaml 已改写: {field} → {action:?}（{}）",
+        yaml_path.display()
+    );
+    Ok(fields)
+}
+
+/// 块补丁的写前闸：整文件重解析 + `system_prompt` 回读比对（`|` 块解析值恒带
+/// 尾换行，trim_end 对齐）。不过则调用方放弃写盘（原文件不动）。
+fn validate_system_prompt_patched(new_content: &str, text: &str) -> AppResult<AgentYamlFields> {
+    let cfg: AgentFileConfig = serde_yaml::from_str(new_content).map_err(|e| {
+        AppError::Validation(format!("改写后 agent.yaml 无法解析（已放弃写入）: {e}"))
+    })?;
+    let matches = cfg
+        .system_prompt
+        .as_deref()
+        .is_some_and(|v| v.trim_end() == text);
+    if !matches {
+        return Err(AppError::Validation(
+            "改写后 system_prompt 回读值与请求不符（已放弃写入）".into(),
+        ));
+    }
+    Ok(AgentYamlFields::from_config(&cfg))
+}
+
+/// 写 agent.yaml `system_prompt` 多行块（整块替换）——前端「风格预设」入口的
+/// 落盘通道（2026-08-23）。预设是**素材不是档位**：落盘即用户文本，后续编辑
+/// 与系统无关；已有内容会被**覆盖**（是否确认由前端负责）。安全闸与
+/// [`set_agent_yaml_field`] 同款：改写后重解析 + 回读比对，不过则原文件不动。
+#[tauri::command]
+pub async fn set_agent_system_prompt(
+    cmd: State<'_, Arc<dyn AgentCmd>>,
+    agent_id: String,
+    text: String,
+) -> AppResult<AgentYamlFields> {
+    let text = text.trim().to_string();
+    if text.is_empty() {
+        return Err(AppError::Validation(
+            "system_prompt 文本不能为空（清空请直接编辑 agent.yaml）".into(),
+        ));
+    }
+    let row = cmd.inner().get(&agent_id).await?;
+    let dir = row.workspace_path.clone().ok_or_else(|| {
+        AppError::Validation(format!("agent {agent_id} 未配置工作区目录，无 agent.yaml"))
+    })?;
+    let yaml_path = std::path::Path::new(&dir).join("agent.yaml");
+    if !yaml_path.exists() {
+        return Err(AppError::NotFound {
+            resource: "agent.yaml",
+            id: yaml_path.display().to_string(),
+        });
+    }
+    let content = std::fs::read_to_string(&yaml_path)?;
+
+    let new_content = patch_agent_yaml_block(&content, "system_prompt", &text);
+    let fields = validate_system_prompt_patched(&new_content, &text)?;
+
+    // 原子写：同目录 .tmp → rename（半途失败不会留下截断的 yaml）
+    let tmp_path = yaml_path.with_extension("yaml.tmp");
+    std::fs::write(&tmp_path, &new_content)?;
+    std::fs::rename(&tmp_path, &yaml_path)?;
+    tracing::info!(
+        target: "ice_paw.agent",
+        "agent.yaml 已改写: system_prompt ← {} 行（{}）",
+        text.lines().count(),
         yaml_path.display()
     );
     Ok(fields)
@@ -406,5 +528,103 @@ mod tests {
             validate_patched(&commented, "tool_max_rounds", &YamlPatchAction::CommentOut).unwrap();
         assert_eq!(fields2.tool_max_rounds, None);
         assert_eq!(fields2.max_total_tokens, Some(800000));
+    }
+
+    // ---- 多行块补丁（patch_agent_yaml_block / set_agent_system_prompt 通道） ----
+
+    /// 风格预设文本形态：多段 + 空行 + 列表（与前端 stylePresets 三档同构）
+    fn preset_text() -> String {
+        "你是 Alpha，一名工程助手。\n\n做事方式：\n- 先确认再动手\n- 改代码前先读目标文件".into()
+    }
+
+    #[test]
+    fn block_patch_replaces_existing_block() {
+        let out = patch_agent_yaml_block(&sample_yaml(), "system_prompt", &preset_text());
+        assert!(out.contains(
+            "system_prompt: |\n  你是 Alpha，一名工程助手。\n\n  做事方式：\n  - 先确认再动手\n  - 改代码前先读目标文件\n"
+        ));
+        // 旧块体整体消失（两行都被换掉）
+        assert!(!out.contains("品牌设计助手"));
+        assert!(!out.contains("第二行保留缩进"));
+        // 前后键与中文注释原样
+        assert!(out.contains("provider: glm"));
+        assert!(out.contains("temperature: 0.7"));
+        assert!(out.contains("# 工具调用最大轮数（默认 50 + 自动续期 2 次）"));
+        assert!(out.contains("tool_max_rounds: 50"));
+    }
+
+    #[test]
+    fn block_patch_missing_key_appends() {
+        let out = patch_agent_yaml_block("provider: glm\n", "system_prompt", "你好");
+        assert_eq!(out, "provider: glm\nsystem_prompt: |\n  你好\n");
+        // 末行无换行：补一个再追加
+        let out2 = patch_agent_yaml_block("provider: glm", "system_prompt", "你好");
+        assert_eq!(out2, "provider: glm\nsystem_prompt: |\n  你好\n");
+    }
+
+    #[test]
+    fn block_patch_inline_scalar_replaced() {
+        // 用户手写的单行形态：键行替换为块，后续列 0 行不是块体、原样保留
+        let out = patch_agent_yaml_block("system_prompt: 单行值\nprovider: glm\n", "system_prompt", "新文本");
+        assert!(out.starts_with("system_prompt: |\n  新文本\n"));
+        assert!(out.contains("provider: glm"));
+        assert!(!out.contains("单行值"));
+    }
+
+    #[test]
+    fn block_patch_crlf_and_bom_preserved() {
+        let yaml = "\u{FEFF}provider: glm\r\nsystem_prompt: |\r\n  旧\r\ntool_max_rounds: 50\r\n";
+        let out = patch_agent_yaml_block(yaml, "system_prompt", "新");
+        assert!(out.starts_with('\u{FEFF}'));
+        // 生成行沿用 CRLF（不混行尾）
+        assert!(out.contains("system_prompt: |\r\n  新\r\n"));
+        assert!(out.contains("tool_max_rounds: 50\r\n"));
+        assert!(!out.contains("旧"));
+    }
+
+    #[test]
+    fn block_patch_trailing_blank_lines_of_block_consumed() {
+        // 旧块体后的空行属于块（替换后不残留空行堆积）
+        let yaml = "system_prompt: |\n  旧\n\n\nprovider: glm\n";
+        let out = patch_agent_yaml_block(yaml, "system_prompt", "新");
+        assert!(out.starts_with("system_prompt: |\n  新\nprovider: glm\n"));
+    }
+
+    #[test]
+    fn block_patch_indented_and_prefixed_keys_not_matched() {
+        let yaml = "extra_params:\n  system_prompt: 内层\nsystem_prompt_x: 前缀\n# system_prompt: 注释\n";
+        let out = patch_agent_yaml_block(yaml, "system_prompt", "新");
+        // 无列 0 活跃键 → 追加，原有行一律不动
+        assert_eq!(
+            out,
+            format!("{yaml}system_prompt: |\n  新\n")
+        );
+    }
+
+    #[test]
+    fn block_patch_roundtrip_parses_to_text() {
+        let text = preset_text();
+        let out = patch_agent_yaml_block(&sample_yaml(), "system_prompt", &text);
+        let cfg: AgentFileConfig = serde_yaml::from_str(&out).unwrap();
+        // | 块解析值恒带尾换行 → trim_end 对齐
+        assert_eq!(cfg.system_prompt.as_deref().map(str::trim_end), Some(text.as_str()));
+        // 其余字段不受影响
+        assert_eq!(cfg.max_total_tokens, Some(800000));
+        assert_eq!(cfg.tool_max_rounds, Some(50));
+    }
+
+    #[test]
+    fn validate_system_prompt_gate() {
+        // 正常补丁 → 过闸，回读一致
+        let out = patch_agent_yaml_block(&sample_yaml(), "system_prompt", "新文本");
+        let fields = validate_system_prompt_patched(&out, "新文本").unwrap();
+        assert_eq!(fields.system_prompt.as_deref(), Some("新文本\n"));
+
+        // 内容被篡改 → 回读不符 → 拒
+        let tampered = out.replace("新文本", "别的");
+        assert!(validate_system_prompt_patched(&tampered, "新文本").is_err());
+
+        // 解析失败（类型不符）→ 拒
+        assert!(validate_system_prompt_patched("system_prompt: [", "x").is_err());
     }
 }

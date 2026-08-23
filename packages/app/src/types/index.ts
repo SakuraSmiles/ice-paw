@@ -29,6 +29,13 @@ export interface Agent {
   has_api_key: boolean;
 }
 
+/** agent.yaml 字段快照（get_agent_yaml_fields 返回；null = 未设置/默认自适应） */
+export interface AgentYamlFields {
+  max_total_tokens: number | null;
+  tool_max_rounds: number | null;
+  system_prompt: string | null;
+}
+
 export interface NewAgent {
   id: string;
   name: string;

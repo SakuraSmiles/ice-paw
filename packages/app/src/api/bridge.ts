@@ -2,6 +2,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   Agent,
+  AgentYamlFields,
   AuthScope,
   AgentUpdate,
   Conversation,
@@ -64,6 +65,16 @@ const agents = {
   async delete(id: string): Promise<void> {
     try { await invoke<void>("delete_agent", { id }); }
     catch (err) { throw wrapInvokeError("agents.delete", err); }
+  },
+  /** agent.yaml 字段快照（预算字段 + system_prompt；风格预设覆盖确认的判据） */
+  async yamlFields(agentId: string): Promise<AgentYamlFields> {
+    try { return await invoke<AgentYamlFields>("get_agent_yaml_fields", { agentId }); }
+    catch (err) { throw wrapInvokeError("agents.yamlFields", err); }
+  },
+  /** 整块写 agent.yaml system_prompt（风格预设落盘；覆盖已有内容，确认由调用方负责） */
+  async setSystemPrompt(agentId: string, text: string): Promise<AgentYamlFields> {
+    try { return await invoke<AgentYamlFields>("set_agent_system_prompt", { agentId, text }); }
+    catch (err) { throw wrapInvokeError("agents.setSystemPrompt", err); }
   },
 };
 
