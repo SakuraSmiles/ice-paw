@@ -128,8 +128,15 @@ pub struct WriteFileTool;
 struct WriteFileArgs {
     path: String,
     content: String,
-    #[serde(default)]
+    /// 默认 true：自动创建父目录。生产样本（2026-08-22）：write_file 连写 8 个
+    /// 不存在目录下的文件 8 连败——「写新文件」不该先失败一次再学会带 flag。
+    /// 显式传 false 才要求父目录已存在。
+    #[serde(default = "default_create_dirs")]
     create_dirs: bool,
+}
+
+fn default_create_dirs() -> bool {
+    true
 }
 
 #[async_trait]
@@ -139,8 +146,8 @@ impl McpClient for WriteFileTool {
     }
 
     fn description(&self) -> &str {
-        "Write text content to a local file (overwrites if it exists). \
-Use create_dirs=true to create parent directories."
+        "Write text content to a local file (overwrites if it exists). Missing parent \
+directories are created automatically (default create_dirs=true)."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -157,8 +164,8 @@ Use create_dirs=true to create parent directories."
                 },
                 "create_dirs": {
                     "type": "boolean",
-                    "default": false,
-                    "description": "Create parent directories if they don't exist."
+                    "default": true,
+                    "description": "Create missing parent directories (default true)."
                 }
             },
             "required": ["path", "content"]
@@ -178,18 +185,25 @@ Use create_dirs=true to create parent directories."
 
         if parsed.create_dirs {
             if let Some(parent) = path.parent() {
-                tokio::fs::create_dir_all(parent)
-                    .await
-                    .map_err(AppError::Io)?;
+                tokio::fs::create_dir_all(parent).await.map_err(|e| {
+                    AppError::Validation(format!(
+                        "write_file 创建父目录失败: {}: {e}。请确认路径合法且在授权工作区内。",
+                        parent.display()
+                    ))
+                })?;
             }
         }
 
         // 修改前自动备份
         let backup = backup_if_exists(path)?;
 
-        tokio::fs::write(path, &parsed.content)
-            .await
-            .map_err(AppError::Io)?;
+        tokio::fs::write(path, &parsed.content).await.map_err(|e| {
+            AppError::Validation(format!(
+                "write_file 写入失败: {}: {e}。请确认路径合法且在授权工作区内；\
+                 磁盘/权限问题请如实告知用户，勿重试同样调用。",
+                parsed.path
+            ))
+        })?;
 
         Ok(serde_json::json!({
             "path": parsed.path,
@@ -214,6 +228,33 @@ struct EditFileArgs {
     new_string: String,
     #[serde(default)]
     replace_all: bool,
+}
+
+/// edit_file old_string 未命中时的近似诊断（报错即行为契约）。
+///
+/// 三档，每档指认差异所在 + 对应动作，杜绝模型「凭记忆再猜一次参数」：
+/// ① 首行（trim 相等）在文件中出现 → 差异在细节（空白/换行/标点），报出行号；
+/// ② 按空白归一后可匹配 → 差异纯在空白/缩进；
+/// ③ 无相近内容 → old_string 出自记忆而非当前文件。
+fn edit_mismatch_hint(content: &str, old_string: &str) -> String {
+    let first_line = old_string.lines().next().unwrap_or("").trim();
+    if !first_line.is_empty() {
+        for (idx, line) in content.lines().enumerate() {
+            if line.trim() == first_line {
+                return format!(
+                    "提示：old_string 首行出现在文件第 {} 行附近，但整体未精确匹配——\
+                     差异可能在空白/换行/标点。请用 read_file 读取该区域，逐字符复制实际内容重写 old_string。",
+                    idx + 1
+                );
+            }
+        }
+    }
+    let norm = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let normed_old = norm(old_string);
+    if !normed_old.is_empty() && norm(content).contains(&normed_old) {
+        return "提示：忽略空白后可匹配——差异在空白/缩进。请用 read_file 读取目标区域，按实际内容逐字符复制。".into();
+    }
+    "提示：文件中无相近内容——old_string 可能出自记忆而非当前文件。请先 read_file 读取文件实际内容。".into()
 }
 
 #[async_trait]
@@ -251,9 +292,29 @@ whitespace) and be unique unless replace_all=true. Fails if old_string is not fo
         let path = Path::new(&parsed.path);
         reject_sensitive(path)?;
 
-        let content = tokio::fs::read_to_string(path)
-            .await
-            .map_err(AppError::Io)?;
+        if path.is_dir() {
+            return Err(AppError::Validation(format!(
+                "路径是目录不是文件: {}。edit_file 只能编辑文件。",
+                parsed.path
+            )));
+        }
+
+        let content = match tokio::fs::read_to_string(path).await {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(AppError::Validation(format!(
+                    "文件不存在: {}。{}",
+                    parsed.path,
+                    super::path_suggest::suggest_for_missing(path)
+                )));
+            }
+            Err(e) => {
+                return Err(AppError::Validation(format!(
+                    "edit_file 读取失败: {}: {e}",
+                    parsed.path
+                )));
+            }
+        };
 
         // 修改前自动备份
         let backup = backup_if_exists(path)?;
@@ -261,8 +322,9 @@ whitespace) and be unique unless replace_all=true. Fails if old_string is not fo
         let count = content.matches(&parsed.old_string).count();
         if count == 0 {
             return Err(AppError::Validation(format!(
-                "edit_file: 未在 {} 中找到 old_string",
-                parsed.path
+                "edit_file: 未在 {} 中找到 old_string（要求逐字符精确匹配，含空白与缩进）。{}",
+                parsed.path,
+                edit_mismatch_hint(&content, &parsed.old_string)
             )));
         }
         if count > 1 && !parsed.replace_all {
@@ -624,5 +686,65 @@ mod tests {
     fn reject_sensitive_allows_normal_files() {
         assert!(reject_sensitive(std::path::Path::new("/proj/src/main.rs")).is_ok());
         assert!(reject_sensitive(std::path::Path::new("C:\\proj\\src\\main.rs")).is_ok());
+    }
+
+    // ---- Agent 质量拍（2026-08-23）：create_dirs 好默认 + 报错行为契约 ----
+
+    /// 不带 create_dirs 的调用（模型最常见形态）应直接成功——父目录自动创建
+    #[tokio::test]
+    async fn write_file_creates_missing_parents_by_default() {
+        let dir = std::env::temp_dir().join(format!("icepaw_wf_{}", uuid::Uuid::new_v4()));
+        let target = dir.join("a/b/c.txt");
+        let args =
+            serde_json::json!({"path": target.to_string_lossy(), "content": "hi"}).to_string();
+        let out = WriteFileTool
+            .execute(&args)
+            .await
+            .expect("默认应自动建父目录并写入成功");
+        assert!(out.contains("bytes_written"));
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "hi");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 显式 create_dirs=false 失败时给契约文案（发生了什么 + 勿重试指令），非裸 io 错误
+    #[tokio::test]
+    async fn write_file_explicit_no_dirs_fails_with_contract() {
+        let dir = std::env::temp_dir().join(format!("icepaw_wf_{}", uuid::Uuid::new_v4()));
+        let target = dir.join("nope/x.txt");
+        let args = serde_json::json!({
+            "path": target.to_string_lossy(), "content": "x", "create_dirs": false
+        })
+        .to_string();
+        let err = WriteFileTool.execute(&args).await.unwrap_err().to_string();
+        assert!(err.contains("写入失败"), "报发生了什么: {err}");
+        assert!(err.contains("勿重试同样调用"), "给行为指令: {err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 档①：首行能定位（trim 相等）→ 报行号，指认差异在细节
+    #[test]
+    fn edit_mismatch_hint_locates_first_line() {
+        let content = "fn main() {\n    let x = 1;\n}\n";
+        // 整体有一处空格数差异，首行完全相同
+        let old = "fn main() {\n   let x = 1;\n}";
+        let hint = edit_mismatch_hint(content, old);
+        assert!(hint.contains("第 1 行"), "应报出首行行号: {hint}");
+        assert!(hint.contains("read_file"), "应指向读取实际内容: {hint}");
+    }
+
+    /// 档②：首行 trim 不等但空白归一后匹配 → 差异纯在空白
+    #[test]
+    fn edit_mismatch_hint_whitespace_only() {
+        let content = "alpha beta\ngamma\n";
+        let old = "alpha  beta\ngamma"; // 首行双空格
+        let hint = edit_mismatch_hint(content, old);
+        assert!(hint.contains("空白"), "应指认空白差异: {hint}");
+    }
+
+    /// 档③：无相近内容 → old_string 出自记忆
+    #[test]
+    fn edit_mismatch_hint_nothing_close() {
+        let hint = edit_mismatch_hint("print('hi')\n", "def totally_different():\n    pass");
+        assert!(hint.contains("记忆"), "应指认凭记忆拼串: {hint}");
     }
 }

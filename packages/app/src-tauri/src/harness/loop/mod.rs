@@ -6,6 +6,8 @@
 //! - `stuck_detect`：停滞检测
 //!   - `compute_round_key()` — 计算本轮进度指纹 hash
 //!   - `should_terminate_stuck()` — 判断是否连续 N 轮无进展
+//! - `doom_detect`：doom_loop 检测（P10④）
+//!   - `DoomLoopTracker` — 同工具+同错误签名连续失败计数（nudge / 终止）
 //! - `token_usage`：多轮 usage 合成
 //!   - `synthesize_usage()` — 合并多轮工具调用的 prompt/completion token
 //! - `reason`：retry reason 分类
@@ -18,6 +20,7 @@
 //! 这些函数无业务副作用（`events` 仅 emit Tauri 事件），便于独立单元测试。
 
 pub(crate) mod context;
+pub(crate) mod doom_detect;
 pub(crate) mod emitter;
 pub(crate) mod events;
 pub(crate) mod reason;
