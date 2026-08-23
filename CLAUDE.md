@@ -127,6 +127,7 @@ agent 调用 `propose_config_change` 工具提出创建/修改 agent 提案 → 
 - **错误文案首行 = 稳定家族前缀**（家族词在前、路径在后，冒号分隔）——doom_loop 按「工具名+首行冒号前缀」算错误签名，路径混进前缀会把签名打散、连败检测失效
 - write_file `create_dirs` 默认 true（好默认，用户拍板 2026-08-23）；run_command Windows 恒前置 `chcp 65001 >nul & `（中文输出统一 UTF-8，勿删）
 - **doom_loop**（`loop/doom_detect.rs`，P10④）：同签名连败 3 次 nudge（tool_result 尾注纠正指令 + hook_injected point=doom_loop_nudge 入日志）/ 6 次终止（finish_reason=doom_loop 走 finalize_guard 对称清场）；与 stuck_detect 分工——前者抓「签名不变」，后者抓「轮指纹不变」（换文件名重试同类失败只有前者能看到）
+- **⑤ system prompt 两层设计（2026-08-23，docs/agent-prompt-draft.md）**：平台层（`context/system_prompt.rs`）只放风格中立纪律（错误纪律/诚实边界/语言跟随；意图确认归工程档**不进平台层**——与创作档「动笔前先对齐」重复）；风格是人格，归 agent.yaml `system_prompt`，前端「风格预设」三档（`data/stylePresets.ts`）是**素材不是档位**——插入即用户文本，零版本纠缠。写 yaml 多行块走 `set_agent_system_prompt`（块级补丁+回读闸+原子写）；`set_agent_yaml_field` 是 u64 标量专用，勿混用。
 
 ### 上下文预算（Phase 0+1+2，已 commit push）
 - 真实 token 估算（覆盖 tool_use/tool_result/thinking/image 块）+ per-agent context_window
