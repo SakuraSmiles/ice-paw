@@ -172,12 +172,12 @@ agent 调用 `propose_config_change` 工具提出创建/修改 agent 提案 → 
 - **Phase 2B 阶段 3 Image 双份存储治理（2026-08-17，3a 读侧 + 3b 写侧）**：消息类 payload 的 blocks 用 `PayloadBlock` untagged 双形态——`Full(ContentBlock)`（v1 内联，旧事件零迁移可读）/ `ImageRef{message_id, block_index}`（v2，字节只在 messages 行）。写侧唯一入口 `refify_blocks`（emitter 字段式签名内部做，调用方传与落库同值的 blocks）；读侧三路水合：derive `hydrate_image_refs`（纯同步 resolver 注入；未命中/越界/非 Image 降级 `Text("[图片内容已不可恢复]")`）+ `to_content_blocks` 防泄漏最后闸 + conversation_cmd JSON 级水合（list_session_events/export，前端零改动）。BACKFILL_VERSION=2（纯 backfill 会话删旧重写自愈，冻结会话保留 v1 照读）。**⚠️ 不变式：session_events 消息类 payload 禁止内联 Image base64——新增 message-kind emitter 必须经 `refify_blocks`，读侧必须经 `hydrate_image_refs` 水合后才能进对账/LLM 视图（ref 形态不得以非 Text 形态流出）**。
 
 ## 当前状态（2026-08-24）
-- 版本 **0.5.0 已发布**（= 0.4.1 + **Word 能力演进整线**[S0a 结构模型/S0b inspect 五档投影/手术引擎六操作/S3 两波/D9 通用元素手术层] + **Agent 质量拍 Phase 1**[工具层四件 + system prompt 两层 + 风格预设弹层重做] + copy_file/.ps1 BOM 等真机复盘修正；cargo 1060 / vitest 326）
-- 上一版 **0.4.1**（头像系统重塑 + 项目身份减法 + 预算 HUD 环形化迁位 + 60s 静默超时双保险；vitest 311）；再上 **0.4.0**（品牌视觉换代 + UI 五战役 + S8 无限续写 + macOS Apple Silicon；cargo 929）
+- 版本 **0.5.1 已打包**（= 0.5.0 + **S3 三波·表格四件**[projection=table 网格编址/insert_table_after/set_cell_text/insert_table_row_after + 同块批组合虚拟行模拟]；cargo 1071）——生产驱动：交付物文档核心内容是表格，agent 此前无表格写入途径
+- 上一版 **0.5.0**（Word 能力演进整线 + Agent 质量拍 Phase 1；cargo 1060 / vitest 326）；再上 **0.4.1**（头像系统重塑 + 项目身份减法 + 预算 HUD 环形化迁位 + 60s 静默超时双保险；vitest 311）
 - 分支：仅 `main`
-- 近期递进：0.3.9（卡顿修复+预算诚实化）→ 0.4.0 → 0.4.1 → **codex harness 研读喂 Agent 质量拍 → 质量拍 Phase 1（工具层四件+⑤ prompt 两层+风格预设 UI 两轮）→ Word 能力演进开工（步骤 0→3：S0a/S0b/手术引擎 MVP，replace_text Word 打开验收✅）→ S3 首波四件（numbering/set_format/set_style/页眉页脚）→ 真机复盘两批修正（numbering start 语义+小修复批）→ D9 通用元素手术层（set_ppr_element）** → 0.5.0 发版
-- `cargo test --lib` 1060 passed / 0 failed（+ 集成测试：session_runner_e2e 7、session_reconcile_e2e 6+2 ignored、session_event_log_e2e 3、memory_e2e 3、message_repo 7、provider 11）；clippy --tests -D warnings 0 警告；vitest 326
-- 仍待办：**0.5.0 真机手测**（Word 线：set_format/set_style/set_ppr_element 路径 Word 打开验收 + inspect 投影对话问答准不准；质量拍：复跑 DB 诊断失败率 5.7%→<2% 验证 + 风格预设手测；word 线 WPS 样本仍缺）、视觉适配/KB watcher/自动续写生产手测、proposal Phase 2（MCP 域）、V5 钩子未用未测
+- 近期递进：0.4.1 → 质量拍 Phase 1 + Word 能力演进整线（S0a→S0b→手术引擎→S3 首波→真机复盘两批→D9 set_ppr_element）→ 0.5.0 发版 → **生产实战反馈表格双缺口（写侧全拒+读侧无格分隔）→ S3 三波表格四件（D10「四件全做」）** → 0.5.1 打包
+- `cargo test --lib` 1071 passed / 0 failed（+ 集成测试：session_runner_e2e 7、session_reconcile_e2e 6+2 ignored、session_event_log_e2e 3、memory_e2e 3、message_repo 7、provider 11）；clippy --tests -D warnings 0 警告；vitest 326
+- 仍待办：**0.5.1 真机手测**（表格四件：三操作 Word 打开验收[尤其合并格表] + projection=table 寻址准确度；另有 0.5.0 遗留：set_format/set_style/set_ppr_element Word 打开验收、DB 诊断复跑 5.7%→<2%、风格预设手测；WPS 样本仍缺）、视觉适配/KB watcher/自动续写生产手测、proposal Phase 2（MCP 域）、V5 钩子未用未测
 - **预算诚实化不变式（0.3.9）**：新 provider usage 必须归一规范语义（prompt=总输入含命中、cached≤prompt；Anthropic 显式归一 + stream_consumer `into_canonical` 自愈兜底）；工具列表出口恒按名序（前缀缓存前提，勿回退）；DeepSeek 私有对优先于标准字段
 - **S1 真机验收 2026-08-17 四项绿**：backfill（sessions=9 events=824 failed=0 epoch_rows=0，版本标记=2）+ 恒 Derive（当日路由决策全 green diffs=0，含 backfill 会话续聊 seq 1..933 连续）+ 发图 v2 payload 无 base64（image_ref 162B 指针，本体 851KB/3.8MB 只在 messages 行；模型回复描述画面=水合进 LLM 视图实证）+ 摘要折叠 `covered_until_seq=726`/rowid=1710 双值落库
 
