@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+## [0.5.1] — 2026-08-24
+
+> 从 0.5.0 以来的主要调整：**S3 三波·表格四件**（生产实战驱动——交付物文档核心内容是表格，agent 此前无任何表格写入途径）。
+
+### Added
+- **Word 表格能力四件**（native 手术，不走 pandoc/COM 外部工具）：
+  - `inspect_docx projection=table`：表格网格投影——行r×格c 双 1-based 编址 = 表格操作地址地基；`(跨N列)/(续)/(合并头)/(空)/(嵌套表)` 标注即手术边界说明；列数 = gridSpan 求和（抗整行跨列）；
+  - `insert_table_after`：锚块后建表——矩形矩阵 ≤200 行 × 30 列，默认表头加粗 + 跨页重复，100% 宽全边框、列宽按节内容宽派生均分；
+  - `set_cell_text`：改格文本——保 tcPr（含合并属性）/首段 pPr/首 run rPr；格内 `\n` = 多段；纵向合并续格拒绝并指路合并头；
+  - `insert_table_row_after`：克隆模板行增行——gridSpan/vMerge 整结构克隆，合并格表格唯一正确的增行法；
+  - **同块表格批组合**：set_cell_text / insert_table_row_after 同块可多条按序生效（预检虚拟行模拟，「增行 + 填新行格」一批完成）；段落操作误指表格块的报错从「不支持」改为指路三件。
+- 真机测试点：表格三操作 Word 打开验收（尤其带合并格的表）+ projection=table 寻址准确度。
+
 ## [0.5.0] — 2026-08-24
 
 > 从 0.4.1 以来的主要调整：**Word 能力演进整线**（S0a 结构模型 → inspect_docx 读侧投影 → edit_docx 手术引擎 → S3 格式/编号两波 → D9 通用元素手术层）；**Agent 质量拍 Phase 1**（工具层四件 + system prompt 两层设计 + 风格预设交互重做）。
