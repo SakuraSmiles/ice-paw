@@ -284,6 +284,55 @@ fn corpus_inspect_three_projections() {
 }
 
 #[test]
+fn corpus_numbering_values_rendered() {
+    let Some((sdp, srs, _install)) = all_corpus() else { return };
+    // S3①：自动编号实际值进投影——语料锚点（全结构断言，不写具体编号文本进代码）
+    // SDP：H1 自动编号标题（真实 Word 产物），编号从 1 起
+    let report = inspect_document(
+        &sdp,
+        &InspectRequest { projection: InspectProjection::Outline, start: None, end: None },
+    )
+    .unwrap();
+    assert!(
+        report.content.lines().any(|l| l.contains("H1 ") && l.contains("列表 1 ")),
+        "SDP 应有自动编号 H1（列表 1 形态）"
+    );
+    assert!(
+        report.content.lines().any(|l| l.contains("列表 2 ")),
+        "SDP 自动编号应连续推进到 2"
+    );
+    // SRS：三级编号形态存在（N.N.N 计数模拟）
+    let report = inspect_document(
+        &srs,
+        &InspectRequest { projection: InspectProjection::Outline, start: None, end: None },
+    )
+    .unwrap();
+    assert!(
+        report
+            .content
+            .lines()
+            .any(|l| l.contains("列表 ") && {
+                let v = l.split("列表 ").nth(1).unwrap_or("").split(' ').next().unwrap_or("");
+                v.split('.').count() == 3 && v.split('.').all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+            }),
+        "SRS 应有多级编号形态 N.N.N"
+    );
+    // 三份语料投影里不出现未解析引用形式（numPr 引用全部解析出值/或该段无值回退——
+    // 语料 numbering.xml 完整，默认 400 块渲染面内引用形式应为零）
+    for bytes in [&sdp, &srs] {
+        let report = inspect_document(
+            bytes,
+            &InspectRequest { projection: InspectProjection::Outline, start: None, end: None },
+        )
+        .unwrap();
+        assert!(
+            !report.content.contains("列表(num"),
+            "渲染面内不应有未解析编号引用（numbering.xml 解析缺口）"
+        );
+    }
+}
+
+#[test]
 fn corpus_install_revisions_visible_in_format() {
     let Some(install) = corpus("install.docx") else { return };
     // 含修订语料的 format 全量扫描：插入/删除 run 必须带标记（edit_docx 不触碰修订 run
