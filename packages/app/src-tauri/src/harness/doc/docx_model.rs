@@ -426,7 +426,7 @@ pub(super) fn document_text(doc: &DocxDocument) -> String {
     out
 }
 
-fn blocks_text(blocks: &[Block], out: &mut String) {
+pub(super) fn blocks_text(blocks: &[Block], out: &mut String) {
     for b in blocks {
         match b {
             Block::Paragraph(p) => {

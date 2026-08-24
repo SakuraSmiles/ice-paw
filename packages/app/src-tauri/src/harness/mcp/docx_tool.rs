@@ -1,11 +1,14 @@
-//! `inspect_docx` 工具（word-capability-roadmap 步骤 2 / S0b）。
+//! `inspect_docx` / `edit_docx` 工具（word-capability-roadmap 步骤 2 / 步骤 3）。
 //!
-//! read_file 对 docx 只给线性文本（结构全丢）；本工具在结构模型上出三档投影
-//! （outline / format / text，见 harness::doc::docx_inspect），块号 1-based 混排
-//! 统一编号——这是后续 edit_docx 的地址地基。
+//! - **inspect_docx**（S0b）：read_file 对 docx 只给线性文本（结构全丢）；本工具
+//!   在结构模型上出三档投影（outline / format / text，见 harness::doc::docx_inspect），
+//!   块号 1-based 混排统一编号——这是 edit_docx 的地址地基。
+//! - **edit_docx**（步骤 3，D3 批量事务）：在块编址上做块级手术，一批操作全有或
+//!   全无；手术引擎在 harness::doc::docx_edit（纯函数）。
 //!
-//! 薄壳职责：读文件 + 扩展名守卫 + 参数解析；投影逻辑全在 docx_inspect（纯函数，
-//! 独立单测）。错误契约三段式：not-found 挂 did-you-mean；非 docx 指向 read_file。
+//! 薄壳职责：读文件 + 扩展名守卫 + 参数解析 + 备份/原子写；全部业务逻辑在
+//! harness::doc 纯函数层，独立单测。错误契约三段式：not-found 挂 did-you-mean；
+//! 非 docx 指向 read_file / inspect_docx。
 
 use std::path::Path;
 
@@ -13,7 +16,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, AppResult};
-use crate::harness::doc::{inspect_document, InspectProjection, InspectRequest};
+use crate::harness::doc::{apply_edits_to_bytes, inspect_document, EditOp, InspectProjection, InspectRequest};
 
 use super::client::McpClient;
 use super::types::AuthorizationLevel;
@@ -159,6 +162,215 @@ impl McpClient for InspectDocxTool {
 }
 
 // =========================================================================
+// edit_docx —— 块级手术工具（步骤 3，D3 批量事务）
+// =========================================================================
+
+pub struct EditDocxTool;
+
+#[derive(Deserialize)]
+struct EditDocxArgs {
+    path: String,
+    /// 操作批（全有或全无；每块每批限一个操作）
+    operations: Vec<OperationSpec>,
+}
+
+/// 参数态操作（tag = op）；转成引擎的 [`EditOp`] 后全批进入手术。
+#[derive(Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case")]
+enum OperationSpec {
+    ReplaceText { block: usize, expect_prefix: String, new_text: String },
+    InsertParagraphAfter {
+        block: usize,
+        expect_prefix: String,
+        text: String,
+        /// 样式显示名（inspect_docx outline 样式列口径）；缺省继承锚块格式
+        #[serde(default)]
+        style: Option<String>,
+    },
+    DeleteBlock { block: usize, expect_prefix: String },
+}
+
+impl From<OperationSpec> for EditOp {
+    fn from(spec: OperationSpec) -> Self {
+        match spec {
+            OperationSpec::ReplaceText { block, expect_prefix, new_text } => {
+                EditOp::ReplaceText { block, expect_prefix, new_text }
+            }
+            OperationSpec::InsertParagraphAfter { block, expect_prefix, text, style } => {
+                EditOp::InsertParagraphAfter { block, expect_prefix, text, style }
+            }
+            OperationSpec::DeleteBlock { block, expect_prefix } => {
+                EditOp::DeleteBlock { block, expect_prefix }
+            }
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct EditDocxResult {
+    path: String,
+    /// 实际生效的操作数（= operations.len()，全有或全无）
+    applied: usize,
+    /// 修改前备份（<parent>/.icepaw-backup/<时间戳>_<文件名>；文件不存在时无）
+    backup: Option<String>,
+    /// 逐操作摘要（before/after 各前 60 字；agent 读回验证用）
+    operations: Vec<crate::harness::doc::AppliedOp>,
+}
+
+#[async_trait]
+impl McpClient for EditDocxTool {
+    fn name(&self) -> &str {
+        "edit_docx"
+    }
+
+    fn description(&self) -> &str {
+        "Edit a Word .docx document at block granularity. Takes a batch of operations \
+         applied as one all-or-nothing transaction: op=replace_text rewrites a paragraph's \
+         text while keeping its paragraph/character formatting; op=insert_paragraph_after \
+         adds a new paragraph after an anchor block (inherits its formatting, or an \
+         explicit style by display name); op=delete_block removes a whole block. Every \
+         operation must carry expect_prefix, the current text prefix of its target block, \
+         as a fingerprint guard — if any block no longer matches, the whole batch is \
+         rejected and the file is left untouched. Blocks are addressed by inspect_docx \
+         block numbers (1-based, paragraphs and tables in document order); tables and \
+         revision-marked blocks are rejected for replace/delete. The file is backed up \
+         before writing. Workflow: inspect_docx (outline, then text) to find blocks, \
+         edit_docx, then inspect_docx again to verify the result."
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Path to the .docx file to edit."
+                },
+                "operations": {
+                    "type": "array",
+                    "minItems": 1,
+                    "description": "Operations applied as one all-or-nothing batch. \
+                     Each item is tagged with op; block numbers come from inspect_docx.",
+                    "items": {
+                        "oneOf": [
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "op": { "const": "replace_text" },
+                                    "block": { "type": "integer", "description": "Target paragraph block (1-based; tables rejected)." },
+                                    "expect_prefix": { "type": "string", "description": "Current text prefix of the block (fingerprint guard)." },
+                                    "new_text": { "type": "string", "description": "Replacement text. \\n → line break, \\t → tab." }
+                                },
+                                "required": ["op", "block", "expect_prefix", "new_text"]
+                            },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "op": { "const": "insert_paragraph_after" },
+                                    "block": { "type": "integer", "description": "Anchor block (1-based)." },
+                                    "expect_prefix": { "type": "string", "description": "Current text prefix of the anchor block." },
+                                    "text": { "type": "string", "description": "New paragraph text. \\n → line break, \\t → tab." },
+                                    "style": { "type": "string", "description": "Optional style display name from inspect_docx outline; default inherits anchor formatting." }
+                                },
+                                "required": ["op", "block", "expect_prefix", "text"]
+                            },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "op": { "const": "delete_block" },
+                                    "block": { "type": "integer", "description": "Block to delete (1-based; revision-marked and section-break blocks rejected)." },
+                                    "expect_prefix": { "type": "string", "description": "Current text prefix of the block." }
+                                },
+                                "required": ["op", "block", "expect_prefix"]
+                            }
+                        ]
+                    }
+                }
+            },
+            "required": ["path", "operations"]
+        })
+    }
+
+    fn authorization_level(&self) -> AuthorizationLevel {
+        AuthorizationLevel::PathWhitelist
+    }
+
+    async fn execute(&self, args: &str) -> AppResult<String> {
+        let parsed: EditDocxArgs = serde_json::from_str(args)
+            .map_err(|e| AppError::Validation(format!("edit_docx 参数解析失败: {e}")))?;
+
+        let path = Path::new(&parsed.path);
+        let canonical = match path.canonicalize() {
+            Ok(c) => c,
+            // 报错即行为契约：not-found 扫真实文件系统给近似候选（did-you-mean）
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(AppError::Validation(format!(
+                    "文件不存在: {}。{}",
+                    parsed.path,
+                    super::path_suggest::suggest_for_missing(path)
+                )));
+            }
+            Err(e) => return Err(AppError::Validation(format!("文件路径无效: {e}"))),
+        };
+
+        let ext = canonical
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if ext != "docx" {
+            return Err(AppError::Validation(format!(
+                "不是 Word 文档: 扩展名 .{ext}。edit_docx 只支持 .docx；读取其他文件请用 read_file。"
+            )));
+        }
+
+        let bytes = tokio::fs::read(&canonical)
+            .await
+            .map_err(|e| AppError::Io(std::io::Error::other(format!("读取文件失败: {e}"))))?;
+
+        // 全有或全无：手术在内存完成（含整批预检 + 产物再解析校验），通过才落盘
+        let ops: Vec<EditOp> = parsed.operations.into_iter().map(EditOp::from).collect();
+        let (new_bytes, applied) = apply_edits_to_bytes(&bytes, &ops)?;
+
+        // 修改前备份（与 write_file 同一通道）；tmp + rename 原子替换（崩溃不损坏原文件）
+        let backup = super::file_tools::backup_if_exists(&canonical)?;
+        let mut tmp_name = canonical
+            .file_name()
+            .unwrap_or_default()
+            .to_os_string();
+        tmp_name.push(".icepaw-tmp");
+        let tmp = canonical.with_file_name(tmp_name);
+        if let Err(e) = write_and_rename(&tmp, &canonical, &new_bytes).await {
+            tokio::fs::remove_file(&tmp).await.ok();
+            return Err(AppError::Validation(format!(
+                "edit_docx 写入失败: {}: {e}。原文件未改动。请确认路径在授权工作区内；\
+                 备份位于 .icepaw-backup/（若有）。",
+                canonical.display()
+            )));
+        }
+
+        let result = EditDocxResult {
+            path: parsed.path,
+            applied: applied.len(),
+            backup,
+            operations: applied,
+        };
+        Ok(serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string()))
+    }
+}
+
+/// 先写 tmp 再 rename 覆盖目标（std rename 语义：目标存在则替换）。
+async fn write_and_rename(tmp: &Path, target: &Path, bytes: &[u8]) -> AppResult<()> {
+    tokio::fs::write(tmp, bytes)
+        .await
+        .map_err(|e| AppError::Io(std::io::Error::other(format!("临时文件写入失败: {e}"))))?;
+    tokio::fs::rename(tmp, target)
+        .await
+        .map_err(|e| AppError::Io(std::io::Error::other(format!("原子替换失败: {e}"))))?;
+    Ok(())
+}
+
+// =========================================================================
 // 单元测试
 // =========================================================================
 
@@ -221,5 +433,118 @@ mod tests {
         let args = serde_json::json!({ "path": "Z:/不存在的/文档.docx" }).to_string();
         let err = tool.execute(&args).await.unwrap_err().to_string();
         assert!(err.contains("文件不存在"), "实际: {err}");
+    }
+
+    // ---- edit_docx ----
+
+    /// 三段正文的最小真实包。
+    fn three_para_docx() -> Vec<u8> {
+        use docx_rs::{Docx, Document, Paragraph, Run};
+        let document = Document::new()
+            .add_paragraph(Paragraph::new().add_run(Run::new().add_text("第一段")))
+            .add_paragraph(Paragraph::new().add_run(Run::new().add_text("第二段")))
+            .add_paragraph(Paragraph::new().add_run(Run::new().add_text("第三段")));
+        let mut cursor = std::io::Cursor::new(Vec::<u8>::new());
+        Docx::new().document(document).build().pack(&mut cursor).unwrap();
+        cursor.into_inner()
+    }
+
+    #[tokio::test]
+    async fn edit_batch_applies_and_backs_up() {
+        let dir = std::env::temp_dir().join("icepaw_edit_docx_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("样本.docx");
+        std::fs::write(&file, three_para_docx()).unwrap();
+
+        let tool = EditDocxTool;
+        let args = serde_json::json!({
+            "path": file.to_string_lossy(),
+            "operations": [
+                { "op": "replace_text", "block": 2, "expect_prefix": "第二段", "new_text": "改写段" },
+                { "op": "insert_paragraph_after", "block": 1, "expect_prefix": "第一段", "text": "新插段" },
+                { "op": "delete_block", "block": 3, "expect_prefix": "第三段" }
+            ]
+        })
+        .to_string();
+        let out = tool.execute(&args).await.unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["applied"], 3);
+        assert!(v["backup"].as_str().is_some(), "应已备份: {out}");
+        assert_eq!(v["operations"].as_array().unwrap().len(), 3);
+
+        // 读回验证：全文 = 第一段/新插段/改写段（第三段已删）
+        let bytes = std::fs::read(&file).unwrap();
+        let inspect = crate::harness::doc::inspect_document(
+            &bytes,
+            &InspectRequest { projection: InspectProjection::Text, start: None, end: None },
+        )
+        .unwrap();
+        assert!(inspect.content.contains("新插段"));
+        assert!(inspect.content.contains("改写段"));
+        assert!(!inspect.content.contains("第三段"));
+        assert_eq!(inspect.total_blocks, 3, "3 块 +1 插 -1 删");
+
+        // 备份内容 = 原始字节
+        let backup_path = v["backup"].as_str().unwrap();
+        assert_eq!(std::fs::read(backup_path).unwrap(), three_para_docx());
+        // tmp 不残留
+        assert!(!file.with_file_name("样本.docx.icepaw-tmp").exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn fingerprint_mismatch_leaves_file_untouched() {
+        let dir = std::env::temp_dir().join("icepaw_edit_docx_test2");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("样本.docx");
+        std::fs::write(&file, three_para_docx()).unwrap();
+        let before = std::fs::read(&file).unwrap();
+
+        let tool = EditDocxTool;
+        let args = serde_json::json!({
+            "path": file.to_string_lossy(),
+            "operations": [
+                { "op": "replace_text", "block": 1, "expect_prefix": "第一段", "new_text": "x" },
+                { "op": "delete_block", "block": 2, "expect_prefix": "过时指纹" }
+            ]
+        })
+        .to_string();
+        let err = tool.execute(&args).await.unwrap_err().to_string();
+        assert!(err.contains("指纹不符"), "实际: {err}");
+        // 全有或全无：合法的第 1 条也未生效，文件字节原样
+        assert_eq!(std::fs::read(&file).unwrap(), before);
+        // 无备份产生（未动刀）
+        assert!(!dir.join(".icepaw-backup").exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn edit_rejects_non_docx_and_missing() {
+        let tool = EditDocxTool;
+        let dir = std::env::temp_dir().join("icepaw_edit_docx_test3");
+        std::fs::create_dir_all(&dir).unwrap();
+        let txt = dir.join("note.txt");
+        std::fs::write(&txt, b"hello").unwrap();
+        let args = serde_json::json!({
+            "path": txt.to_string_lossy(),
+            "operations": [{ "op": "delete_block", "block": 1, "expect_prefix": "" }]
+        })
+        .to_string();
+        let err = tool.execute(&args).await.unwrap_err().to_string();
+        assert!(err.contains("read_file"), "应指向 read_file: {err}");
+
+        let args = serde_json::json!({
+            "path": "Z:/不存在的/文档.docx",
+            "operations": [{ "op": "delete_block", "block": 1, "expect_prefix": "" }]
+        })
+        .to_string();
+        let err = tool.execute(&args).await.unwrap_err().to_string();
+        assert!(err.contains("文件不存在"), "实际: {err}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn edit_auth_level_is_path_whitelist() {
+        assert_eq!(EditDocxTool.authorization_level(), AuthorizationLevel::PathWhitelist);
     }
 }

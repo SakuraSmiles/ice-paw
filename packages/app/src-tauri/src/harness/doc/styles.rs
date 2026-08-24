@@ -58,6 +58,38 @@ impl Stylesheet {
         self.by_id.get(id).and_then(|s| s.outline_lvl)
     }
 
+    /// 样式名（或 ID）→ styleId（edit_docx 插入段的 style 参数解析：inspect outline
+    /// 显示的是样式名，先按显示名匹配，也接受直接传 ID）。
+    pub(super) fn id_of(&self, name_or_id: &str) -> Option<&str> {
+        // 显示名精确匹配（优先——inspect 展示的就是显示名）
+        if let Some(id) = self
+            .by_id
+            .iter()
+            .find(|(_, s)| s.name == name_or_id)
+            .map(|(id, _)| id.as_str())
+        {
+            return Some(id);
+        }
+        // 直接传 ID（返回 self 持有的 key，生命周期与 &self 一致）
+        self.by_id
+            .keys()
+            .find(|k| k.as_str() == name_or_id)
+            .map(|k| k.as_str())
+    }
+
+    /// 样式显示名清单（报错提示用；按名排序，`max` 条 + 「等 N 个」）。
+    pub(super) fn display_names_joined(&self, max: usize) -> String {
+        let mut names: Vec<&str> = self.by_id.values().map(|s| s.name.as_str()).collect();
+        names.sort_unstable();
+        names.dedup();
+        let shown: Vec<&str> = names.iter().take(max).copied().collect();
+        if names.len() > max {
+            format!("{} 等 {} 个", shown.join("、"), names.len())
+        } else {
+            shown.join("、")
+        }
+    }
+
     /// styleId → basedOn 继承链（自身在前，逐级向父；防环、最多 10 级）。
     pub(super) fn resolve_chain<'a>(&'a self, id: &str) -> Vec<&'a StyleDef> {
         let mut chain = Vec::new();
