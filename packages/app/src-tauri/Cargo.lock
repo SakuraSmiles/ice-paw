@@ -2532,6 +2532,7 @@ dependencies = [
  "notify-debouncer-full",
  "pdf-extract",
  "pdfium-render",
+ "quick-xml",
  "rand 0.8.6",
  "regex",
  "reqwest 0.12.28",

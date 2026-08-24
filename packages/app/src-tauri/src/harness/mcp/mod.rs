@@ -21,6 +21,7 @@ pub mod types;
 // 内置 agentic 工具（文件读写编辑 / shell / grep / git / web）
 pub mod agent_config;
 pub mod delegate;
+pub mod docx_tool;
 pub mod file_tools;
 pub mod git;
 pub mod plan_tool;
