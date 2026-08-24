@@ -26,7 +26,7 @@ pub struct InspectDocxTool;
 #[derive(Deserialize)]
 struct InspectDocxArgs {
     path: String,
-    /// outline（默认，全图）/ format（run 级格式）/ text（带块号正文）/ headers_footers（页眉页脚）
+    /// outline（默认，全图）/ format（run 级格式）/ text（带块号正文）/ headers_footers（页眉页脚）/ table（表格网格）
     #[serde(default)]
     projection: Option<String>,
     /// 起始块号（1-based，含）
@@ -68,11 +68,15 @@ impl McpClient for InspectDocxTool {
          projection=text: document text with block-number prefixes. \
          projection=headers_footers: per-section header/footer references with their \
          content (start/end do not apply — organized by sections, not block ranges). \
+         projection=table: per-table cell grid for a block range — every cell on one row \
+         line with merge/nested markers; the cell address scheme (row r × cell c, both \
+         1-based) is exactly what edit_docx set_cell_text / insert_table_row_after use. \
          Blocks are numbered \
          1-based in document order (paragraphs and tables together); these numbers are \
          the addressing scheme used to reference locations for editing. Workflow: outline \
-         first to locate blocks, then format/text with start/end for details. Defaults: \
-         outline renders up to 400 blocks, format up to 50, ppr up to 20, text up to 100."
+         first to locate blocks, then format/text/table with start/end for details. Defaults: \
+         outline renders up to 400 blocks, format up to 50, ppr up to 20, text up to 100, \
+         table up to 10."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -85,8 +89,8 @@ impl McpClient for InspectDocxTool {
                 },
                 "projection": {
                     "type": "string",
-                    "enum": ["outline", "format", "ppr", "text", "headers_footers"],
-                    "description": "Level of detail: outline (block map, default), format (run-level formatting), ppr (raw pPr XML per block — basis for set_ppr_element), text (block-numbered text), headers_footers (per-section header/footer content; no start/end)."
+                    "enum": ["outline", "format", "ppr", "text", "headers_footers", "table"],
+                    "description": "Level of detail: outline (block map, default), format (run-level formatting), ppr (raw pPr XML per block — basis for set_ppr_element), text (block-numbered text), headers_footers (per-section header/footer content; no start/end), table (cell grid of table blocks — basis for set_cell_text / insert_table_row_after)."
                 },
                 "start": {
                     "type": "integer",
@@ -115,9 +119,10 @@ impl McpClient for InspectDocxTool {
             Some("ppr") => InspectProjection::Ppr,
             Some("text") => InspectProjection::Text,
             Some("headers_footers") => InspectProjection::HeadersFooters,
+            Some("table") => InspectProjection::Table,
             Some(other) => {
                 return Err(AppError::Validation(format!(
-                    "未知投影档位: {other}。支持 outline（块级地图，默认）/ format（run 级格式）/ text（带块号正文）。"
+                    "未知投影档位: {other}。支持 outline（块级地图，默认）/ format（run 级格式）/ text（带块号正文）/ headers_footers（页眉页脚）/ table（表格网格）。"
                 )));
             }
         };
@@ -178,7 +183,8 @@ pub struct EditDocxTool;
 #[derive(Deserialize)]
 struct EditDocxArgs {
     path: String,
-    /// 操作批（全有或全无；每块每批限一个操作）
+    /// 操作批（全有或全无；段级操作每块限一个，表格操作（set_cell_text /
+    /// insert_table_row_after）可同块多条按序组合，(行, 格) 去重）
     operations: Vec<OperationSpec>,
 }
 
@@ -217,6 +223,27 @@ enum OperationSpec {
         element: String,
         #[serde(default)]
         xml: Option<String>,
+    },
+    /// 锚块后建新表：rows 矩形矩阵（首行默认表头——加粗 + 跨页重复）；列宽均分
+    InsertTableAfter {
+        block: usize,
+        expect_prefix: String,
+        rows: Vec<Vec<String>>,
+        #[serde(default)]
+        header: Option<bool>,
+    },
+    /// 改单元格文本：(row, cell) 双 1-based，与 projection=table 网格同口径；
+    /// 保 tcPr / 首段 pPr / 首 run rPr；\n = 格内多段
+    SetCellText { block: usize, expect_prefix: String, row: usize, cell: usize, text: String },
+    /// 克隆模板行增行（after_row 缺省 = 末行）：整结构克隆（tcPr/gridSpan/vMerge
+    /// 原样），格文本替换为 cells（缺省全空）——合并格表格唯一正确增行方式
+    InsertTableRowAfter {
+        block: usize,
+        expect_prefix: String,
+        #[serde(default)]
+        after_row: Option<usize>,
+        #[serde(default)]
+        cells: Option<Vec<String>>,
     },
 }
 
@@ -303,6 +330,15 @@ impl From<OperationSpec> for EditOp {
             OperationSpec::SetPprElement { block, expect_prefix, element, xml } => {
                 EditOp::SetPprElement { block, expect_prefix, element, xml }
             }
+            OperationSpec::InsertTableAfter { block, expect_prefix, rows, header } => {
+                EditOp::InsertTableAfter { block, expect_prefix, rows, header }
+            }
+            OperationSpec::SetCellText { block, expect_prefix, row, cell, text } => {
+                EditOp::SetCellText { block, expect_prefix, row, cell, text }
+            }
+            OperationSpec::InsertTableRowAfter { block, expect_prefix, after_row, cells } => {
+                EditOp::InsertTableRowAfter { block, expect_prefix, after_row, cells }
+            }
         }
     }
 }
@@ -342,13 +378,23 @@ impl McpClient for EditDocxTool {
          element, xml=<w:...> fragment replaces/inserts it at its schema position (copy \
          the current XML from inspect_docx projection=ppr, never write from memory; if \
          removing numPr while the style chain still defines numbering, the result warns \
-         that Word falls back to the style's numbers). Every \
+         that Word falls back to the style's numbers). Table operations: \
+         op=insert_table_after creates a new table after an anchor block from a \
+         rectangular rows matrix (first row is a bold repeating header by default; \
+         100% width, all borders, evenly split columns); op=set_cell_text rewrites one \
+         cell's text by (row, cell) address — the exact grid shown by inspect_docx \
+         projection=table, keeping the cell's structure properties and the first \
+         paragraph's formatting; op=insert_table_row_after appends a row by cloning a \
+         template row (default: the last one) so merged cells keep working — multiple \
+         set_cell_text / insert_table_row_after ops on the same table are applied in \
+         order within one batch. Every \
          operation must carry expect_prefix, the current text prefix of its target block, \
          as a fingerprint guard — if any block no longer matches, the whole batch is \
          rejected and the file is left untouched. Blocks are addressed by inspect_docx \
-         block numbers (1-based, paragraphs and tables in document order); tables and \
-         revision-marked blocks are rejected for replace/delete/set_style/set_format/set_ppr_element. The file is backed up \
-         before writing. Workflow: inspect_docx (outline, then text) to find blocks, \
+         block numbers (1-based, paragraphs and tables in document order); text ops \
+         (replace/delete/set_style/set_format/set_ppr_element) reject table and \
+         revision-marked blocks. The file is backed up \
+         before writing. Workflow: inspect_docx (outline, then text/table) to find blocks, \
          edit_docx, then inspect_docx again to verify the result."
     }
 
@@ -459,6 +505,49 @@ impl McpClient for EditDocxTool {
                                 },
                                 "required": ["op", "block", "expect_prefix", "element"],
                                 "description": "Generic surgery on any paragraph-property element. Removing numPr converts auto-numbered paragraphs to plain text numbering (compute the displayed numbers first via inspect_docx outline if you need to hardcode them into the text with replace_text)."
+                            },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "op": { "const": "insert_table_after" },
+                                    "block": { "type": "integer", "description": "Anchor block (1-based); the new table becomes the next block." },
+                                    "expect_prefix": { "type": "string", "description": "Current text prefix of the anchor block (fingerprint guard)." },
+                                    "rows": {
+                                        "type": "array",
+                                        "minItems": 1,
+                                        "maxItems": 200,
+                                        "description": "Rectangular matrix of cell texts (every row same length, 1-30 cells). \\n inside a cell = multiple paragraphs.",
+                                        "items": { "type": "array", "minItems": 1, "maxItems": 30, "items": { "type": "string" } }
+                                    },
+                                    "header": { "type": "boolean", "description": "true (default): first row is bold and repeats across pages; false: plain data rows only." }
+                                },
+                                "required": ["op", "block", "expect_prefix", "rows"],
+                                "description": "Create a new table after the anchor block. Default styling: 100% width, single borders, evenly split columns, bold repeating header row."
+                            },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "op": { "const": "set_cell_text" },
+                                    "block": { "type": "integer", "description": "Target table block (1-based)." },
+                                    "expect_prefix": { "type": "string", "description": "Current text prefix of the table block (fingerprint guard; any cell text works)." },
+                                    "row": { "type": "integer", "description": "Row number r (1-based) — same as the rN lines of inspect_docx projection=table." },
+                                    "cell": { "type": "integer", "description": "Cell number c within the row (1-based; a merged/spanning cell counts as one)." },
+                                    "text": { "type": "string", "description": "New cell text. \\n = multiple paragraphs inside the cell; empty string = clear. Formatting of the cell's first paragraph is preserved." }
+                                },
+                                "required": ["op", "block", "expect_prefix", "row", "cell", "text"],
+                                "description": "Rewrite one table cell's text. Cells marked (续) in projection=table are vertical-merge continuations and cannot be edited — edit their (合并头) cell instead."
+                            },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "op": { "const": "insert_table_row_after" },
+                                    "block": { "type": "integer", "description": "Target table block (1-based)." },
+                                    "expect_prefix": { "type": "string", "description": "Current text prefix of the table block (fingerprint guard)." },
+                                    "after_row": { "type": "integer", "description": "Template row number (1-based) to clone and insert after; default = last row. Structure (widths, spans, merges) is cloned verbatim — the only correct way to add rows to a merged-cell table." },
+                                    "cells": { "type": "array", "description": "Cell texts for the new row; length must equal the template row's cell count. Default = all empty." }
+                                },
+                                "required": ["op", "block", "expect_prefix"],
+                                "description": "Append a row to a table by cloning an existing row's structure and filling its text."
                             }
                         ]
                     }

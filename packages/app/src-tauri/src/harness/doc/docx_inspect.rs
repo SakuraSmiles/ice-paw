@@ -5,6 +5,7 @@
 //! - **outline**：每块一行的全局地图（块号 + 样式/层级 + 文本摘要）
 //! - **format**：区间内 run 级有效格式（样式链合并后的值 = 「这段实际长什么样」）
 //! - **text**：带块号前缀的正文（块号即行首地址）
+//! - **table**：表格块网格矩阵（S3 三波①）——格地址 (行, 格) 是表格三操作的编址地基
 //!
 //! **块编址是步骤 3 edit_docx 的地址地基**：body 顺序 1-based（段落与表格混排统一
 //! 编号），三档投影同一编址——outline 定位 → format 看格式 → text 引用，闭环。
@@ -36,6 +37,9 @@ pub enum InspectProjection {
     /// 页眉页脚：逐节列 header/footer 引用与部件内容（S3 首波④；按节组织，
     /// 不按块区间——start/end 不适用）
     HeadersFooters,
+    /// 表格网格：区间内每表格块渲染行×格矩阵（S3 三波①）。格地址 (行, 格)
+    /// 与 set_cell_text / insert_table_row_after 同口径；段落块不展开。默认前 10 块
+    Table,
 }
 
 impl InspectProjection {
@@ -48,6 +52,8 @@ impl InspectProjection {
             InspectProjection::Text => 100,
             // 按节组织不走块区间路径（inspect_document 特判，span 不参与）
             InspectProjection::HeadersFooters => 1,
+            // 网格行多（每表最多 30 行），块级配额收紧
+            InspectProjection::Table => 10,
         }
     }
 
@@ -58,6 +64,7 @@ impl InspectProjection {
             InspectProjection::Ppr => "ppr",
             InspectProjection::Text => "text",
             InspectProjection::HeadersFooters => "headers_footers",
+            InspectProjection::Table => "table",
         }
     }
 }
@@ -158,6 +165,28 @@ pub fn inspect_document(bytes: &[u8], req: &InspectRequest) -> AppResult<Inspect
         }
         InspectProjection::HeadersFooters => {
             render_headers_footers(bytes, &model, &mut content)?;
+        }
+        InspectProjection::Table => {
+            let (mut tables, mut paragraphs) = (0usize, 0usize);
+            for (i, block) in model.body.iter().enumerate().take(end).skip(start - 1) {
+                match block {
+                    Block::Table(t) => {
+                        tables += 1;
+                        render_table_grid(i + 1, t, &mut content);
+                    }
+                    Block::Paragraph(_) => paragraphs += 1,
+                }
+            }
+            // 段落块不展开（本投影只服务表格寻址）；空结果给指路，勿让 agent 盲试
+            if tables == 0 {
+                content.push_str(
+                    "(区间内无表格块——表格块在 outline 投影显示为「▦ 表 R行×C列」，定位块号后再来)\n",
+                );
+            } else if paragraphs > 0 {
+                content.push_str(&format!(
+                    "(区间内另有 {paragraphs} 个段落块未显示——正文见 text 投影)\n"
+                ));
+            }
         }
     }
     Ok(InspectReport { total_blocks: total, range: (start, end), has_more, content })
@@ -484,6 +513,68 @@ fn render_table_text(t: &docx_model::Table, prefix: &str, out: &mut String) {
             }
         }
     }
+}
+
+/// table 网格投影（S3 三波①）：行 × 格矩阵。格地址 = (行 r, 格 c) 双 1-based，
+/// 与 set_cell_text / insert_table_row_after 的 row/cell 参数同口径（跨列格算 1 格）。
+/// 合并/嵌套标注即手术边界说明：`(续)` 不可编辑、`(合并头)` 可编辑。
+fn render_table_grid(n: usize, t: &docx_model::Table, out: &mut String) {
+    // 网格列数 = 任一行的 gridSpan 之和（首行可能整行跨列，格数 ≠ 列数）
+    let cols: u32 = t
+        .rows
+        .iter()
+        .map(|r| r.cells.iter().map(|c| c.grid_span.unwrap_or(1)).sum::<u32>())
+        .max()
+        .unwrap_or(0);
+    out.push_str(&format!(
+        "[{n}] ▦ 表 {}行×{cols}列（格地址 = 行r×格c，1-based）\n",
+        t.rows.len()
+    ));
+    const MAX_ROWS: usize = 30;
+    for (ri, row) in t.rows.iter().enumerate().take(MAX_ROWS) {
+        let cells: Vec<String> = row.cells.iter().map(grid_cell_text).collect();
+        out.push_str(&format!("  r{}: {}\n", ri + 1, cells.join(" | ")));
+    }
+    if t.rows.len() > MAX_ROWS {
+        out.push_str(&format!(
+            "  … 还有 {} 行未显示（寻址/编辑仍覆盖全部行，无需翻页）\n",
+            t.rows.len() - MAX_ROWS
+        ));
+    }
+}
+
+/// 网格格文本：段落摘要（／连接）+ 标注。标注即可编辑性：续格不可编辑、
+/// 合并头/跨列格可编辑（结构随行克隆保留）。
+fn grid_cell_text(c: &docx_model::TableCell) -> String {
+    if c.v_merge.as_deref() == Some("continue") {
+        return "(续)".into();
+    }
+    let mut paras: Vec<String> = Vec::new();
+    let mut nested = false;
+    for b in &c.blocks {
+        match b {
+            Block::Paragraph(p) => paras.push(para_text(p)),
+            Block::Table(_) => nested = true,
+        }
+    }
+    let joined = paras.join("／");
+    let mut cell = if joined.trim().is_empty() {
+        "(空)".to_string()
+    } else {
+        summarize(&joined, 24)
+    };
+    if nested {
+        cell.push_str("(嵌套表)");
+    }
+    if c.v_merge.as_deref() == Some("restart") {
+        cell.push_str("(合并头)");
+    }
+    if let Some(span) = c.grid_span {
+        if span > 1 {
+            cell.push_str(&format!("(跨{span}列)"));
+        }
+    }
+    cell
 }
 
 // =========================================================================
@@ -860,5 +951,56 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(err.contains("不接受 start/end"), "实际: {err}");
+    }
+
+    /// 带合并格/空格的最小表格包。
+    fn tbl_docx_bytes() -> Vec<u8> {
+        use std::io::Write;
+        let doc_xml = concat!(
+            r#"<?xml version="1.0"?><w:document xmlns:w="w"><w:body>"#,
+            r#"<w:p><w:r><w:t>引言段</w:t></w:r></w:p>"#,
+            // 表：r1 整行跨 2 列；r2 = 续格 + 空格
+            r#"<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="100"/><w:gridCol w:w="100"/></w:tblGrid>"#,
+            r#"<w:tr><w:tc><w:tcPr><w:gridSpan w:val="2"/></w:tcPr><w:p><w:r><w:t>总览</w:t></w:r></w:p></w:tc></w:tr>"#,
+            r#"<w:tr><w:tc><w:tcPr><w:vMerge/></w:tcPr><w:p/></w:tc><w:tc><w:tcPr/><w:p/></w:tc></w:tr>"#,
+            r#"</w:tbl></w:body></w:document>"#,
+        );
+        let mut buf = Vec::new();
+        {
+            let mut w = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            w.start_file("word/document.xml", zip::write::SimpleFileOptions::default()).unwrap();
+            w.write_all(doc_xml.as_bytes()).unwrap();
+            w.finish().unwrap();
+        }
+        buf
+    }
+
+    #[test]
+    fn table_projection_renders_grid_with_markers() {
+        let bytes = tbl_docx_bytes();
+        let report = inspect_document(&bytes, &InspectRequest {
+            projection: InspectProjection::Table,
+            start: None,
+            end: None,
+        })
+        .unwrap();
+        // 头行：真列数（跨列行 gridSpan 求和，非格数）
+        assert!(report.content.contains("[2] ▦ 表 2行×2列"), "{}", report.content);
+        // 跨列 / 续 / 空标注
+        assert!(report.content.contains("r1: 总览(跨2列)"), "{}", report.content);
+        assert!(report.content.contains("(续)"), "{}", report.content);
+        assert!(report.content.contains("(空)"), "{}", report.content);
+        // 段落块不展开，但计数诚实
+        assert!(report.content.contains("1 个段落块未显示"), "{}", report.content);
+
+        // 无表格区间 → 指路（勿盲试）
+        let only_para = inspect_document(&bytes, &InspectRequest {
+            projection: InspectProjection::Table,
+            start: Some(1),
+            end: Some(1),
+        })
+        .unwrap();
+        assert!(only_para.content.contains("无表格块"), "{}", only_para.content);
+        assert!(only_para.content.contains("outline"), "应指向 outline: {}", only_para.content);
     }
 }
