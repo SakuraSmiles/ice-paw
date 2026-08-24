@@ -25,6 +25,9 @@ pub(super) struct StyleDef {
     pub based_on: Option<String>,
     /// w:pPr/w:outlineLvl val（0 = 一级标题 … 8 = 九级；大纲层级来源）
     pub outline_lvl: Option<u32>,
+    /// 样式定义自带编号（w:pPr/w:numPr）。段落摘除段级 numPr 后编号回退到
+    /// 此处——set_ppr_element 移除 numPr 的回退警告判定用
+    pub has_numbering: bool,
     pub run_props: RunProps,
     pub para_props: ParaProps,
 }
@@ -88,6 +91,12 @@ impl Stylesheet {
         } else {
             shown.join("、")
         }
+    }
+
+    /// 样式链（含自身）是否任一级定义编号。段级 numPr 摘除后 Word 回退样式编号，
+    /// 编号不会消失——诚实警告判定。
+    pub(super) fn chain_defines_numbering(&self, id: &str) -> bool {
+        self.resolve_chain(id).iter().any(|s| s.has_numbering)
     }
 
     /// styleId → basedOn 继承链（自身在前，逐级向父；防环、最多 10 级）。
@@ -158,6 +167,7 @@ fn parse_style(el: &Element) -> Option<StyleDef> {
         name: String::new(),
         based_on: None,
         outline_lvl: None,
+        has_numbering: false,
         run_props: RunProps::default(),
         para_props: ParaProps::default(),
     };
@@ -173,6 +183,9 @@ fn parse_style(el: &Element) -> Option<StyleDef> {
                     .find(|e| e.name == "w:outlineLvl")
                     .and_then(|e| e.attr("w:val"))
                     .and_then(|v| v.parse().ok());
+                def.has_numbering = child
+                    .child_elements()
+                    .any(|e| e.name == "w:numPr");
             }
             _ => {}
         }

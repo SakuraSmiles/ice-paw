@@ -62,6 +62,9 @@ impl McpClient for InspectDocxTool {
          level, text summary; the map of the whole document. projection=format: run-level \
          effective formatting (font size/weight/color, fonts, alignment, line spacing, \
          indents after style-chain resolution) plus table grids for a block range. \
+         projection=ppr: raw paragraph-property (pPr) XML of each block — the editing \
+         basis for edit_docx set_ppr_element (copy the element XML you see here, modify \
+         it, send it back; also the verification view after that op). \
          projection=text: document text with block-number prefixes. \
          projection=headers_footers: per-section header/footer references with their \
          content (start/end do not apply — organized by sections, not block ranges). \
@@ -69,7 +72,7 @@ impl McpClient for InspectDocxTool {
          1-based in document order (paragraphs and tables together); these numbers are \
          the addressing scheme used to reference locations for editing. Workflow: outline \
          first to locate blocks, then format/text with start/end for details. Defaults: \
-         outline renders up to 400 blocks, format up to 50, text up to 100."
+         outline renders up to 400 blocks, format up to 50, ppr up to 20, text up to 100."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -82,8 +85,8 @@ impl McpClient for InspectDocxTool {
                 },
                 "projection": {
                     "type": "string",
-                    "enum": ["outline", "format", "text", "headers_footers"],
-                    "description": "Level of detail: outline (block map, default), format (run-level formatting), text (block-numbered text), headers_footers (per-section header/footer content; no start/end)."
+                    "enum": ["outline", "format", "ppr", "text", "headers_footers"],
+                    "description": "Level of detail: outline (block map, default), format (run-level formatting), ppr (raw pPr XML per block — basis for set_ppr_element), text (block-numbered text), headers_footers (per-section header/footer content; no start/end)."
                 },
                 "start": {
                     "type": "integer",
@@ -109,6 +112,7 @@ impl McpClient for InspectDocxTool {
         let projection = match parsed.projection.as_deref() {
             None | Some("outline") => InspectProjection::Outline,
             Some("format") => InspectProjection::Format,
+            Some("ppr") => InspectProjection::Ppr,
             Some("text") => InspectProjection::Text,
             Some("headers_footers") => InspectProjection::HeadersFooters,
             Some(other) => {
@@ -204,6 +208,16 @@ enum OperationSpec {
         #[serde(default)]
         character: Option<CharFormatSpec>,
     },
+    /// 通用段落属性元素手术：element 为 pPr 子元素名（无 w: 前缀）；xml=null 移除
+    /// 整元素，xml=片段按 schema 序整元素替换/插入。片段从 inspect_docx
+    /// projection=ppr 的原文复制修改，不凭记忆新写
+    SetPprElement {
+        block: usize,
+        expect_prefix: String,
+        element: String,
+        #[serde(default)]
+        xml: Option<String>,
+    },
 }
 
 /// 参数态段落格式（单位与 format 投影显示一致：行距=倍数 / 段前后=pt / 缩进=twips）。
@@ -286,6 +300,9 @@ impl From<OperationSpec> for EditOp {
                     character: character.map(Into::into),
                 }
             }
+            OperationSpec::SetPprElement { block, expect_prefix, element, xml } => {
+                EditOp::SetPprElement { block, expect_prefix, element, xml }
+            }
         }
     }
 }
@@ -319,12 +336,18 @@ impl McpClient for EditDocxTool {
          (nothing changed; do not retry the same op); \
          op=set_format changes paragraph formatting (alignment, line spacing, spacing \
          before/after, indents) and/or character formatting (bold/italic, font size, \
-         color, font family applied to every run) with unspecified properties preserved. Every \
+         color, font family applied to every run) with unspecified properties preserved; \
+         op=set_ppr_element is the generic escape hatch for any other paragraph-property \
+         element (numPr, keepNext, shd, tabs, outlineLvl, ...) — xml=null removes the \
+         element, xml=<w:...> fragment replaces/inserts it at its schema position (copy \
+         the current XML from inspect_docx projection=ppr, never write from memory; if \
+         removing numPr while the style chain still defines numbering, the result warns \
+         that Word falls back to the style's numbers). Every \
          operation must carry expect_prefix, the current text prefix of its target block, \
          as a fingerprint guard — if any block no longer matches, the whole batch is \
          rejected and the file is left untouched. Blocks are addressed by inspect_docx \
          block numbers (1-based, paragraphs and tables in document order); tables and \
-         revision-marked blocks are rejected for replace/delete/set_style/set_format. The file is backed up \
+         revision-marked blocks are rejected for replace/delete/set_style/set_format/set_ppr_element. The file is backed up \
          before writing. Workflow: inspect_docx (outline, then text) to find blocks, \
          edit_docx, then inspect_docx again to verify the result."
     }
@@ -418,6 +441,24 @@ impl McpClient for EditDocxTool {
                                 },
                                 "required": ["op", "block", "expect_prefix"],
                                 "description": "At least one field inside paragraph or character must be set."
+                            },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "op": { "const": "set_ppr_element" },
+                                    "block": { "type": "integer", "description": "Target paragraph block (1-based; tables rejected)." },
+                                    "expect_prefix": { "type": "string", "description": "Current text prefix of the block (fingerprint guard)." },
+                                    "element": {
+                                        "type": "string",
+                                        "description": "Paragraph-property (pPr) child element name without the w: prefix, e.g. numPr, keepNext, shd, tabs, outlineLvl, widowControl. Legal elements (schema order): pStyle keepNext keepLines pageBreakBefore framePr widowControl numPr suppressLineNumbers pBdr shd tabs suppressAutoHyphens kinsoku wordWrap overflowPunct topLinePunct autoSpaceDE autoSpaceDN bidi adjustRightInd snapToGrid spacing ind contextualSpacing mirrorIndents suppressOverlap jc textDirection textAlignment textboxTightWrap outlineLvl divId cnfStyle rPr. sectPr/pPrChange are protected (rejected)."
+                                    },
+                                    "xml": {
+                                        "type": ["string", "null"],
+                                        "description": "null (or omitted) = remove the whole element; a string = well-formed single-root fragment '<w:ELEMENT ...>...</w:pPr-level element>' replacing the existing element or inserted at its schema position. Copy the current XML from inspect_docx projection=ppr and modify it — never write OOXML from memory. No xmlns declarations allowed. Example: to strip auto-numbering use element=numPr, xml=null."
+                                    }
+                                },
+                                "required": ["op", "block", "expect_prefix", "element"],
+                                "description": "Generic surgery on any paragraph-property element. Removing numPr converts auto-numbered paragraphs to plain text numbering (compute the displayed numbers first via inspect_docx outline if you need to hardcode them into the text with replace_text)."
                             }
                         ]
                     }
