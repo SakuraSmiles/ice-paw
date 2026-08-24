@@ -314,7 +314,9 @@ impl McpClient for EditDocxTool {
          adds a new paragraph after an anchor block (inherits its formatting, or an \
          explicit style by display name); op=delete_block removes a whole block; \
          op=set_style changes a paragraph's style (e.g. promote to a heading) touching \
-         only the style element while leaving text and character formatting intact; \
+         only the style element while leaving text and character formatting intact — \
+         if the paragraph already has that style the result carries style_unchanged=true \
+         (nothing changed; do not retry the same op); \
          op=set_format changes paragraph formatting (alignment, line spacing, spacing \
          before/after, indents) and/or character formatting (bold/italic, font size, \
          color, font family applied to every run) with unspecified properties preserved. Every \

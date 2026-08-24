@@ -239,6 +239,11 @@ pub struct AppliedOp {
     /// set_style 专用：应用后的样式 ID（其余操作 None，序列化省略）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub style: Option<String>,
+    /// set_style 专用：目标段当前已是该样式（空转）。显式报出而非让 agent 从
+    /// 「成功但文档没变」里猜——生产样本（2026-08-24）：agent 对已带目标样式的段
+    /// set_style 读到成功，误判为「工具没生效」，转而回滚已正确的文档
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub style_unchanged: Option<bool>,
 }
 
 /// 组合入口（工具层消费）：docx 字节 + 操作批 → 新 docx 字节 + 摘要。
@@ -433,6 +438,7 @@ pub(super) fn apply_edits(
                         before: projected_of(&model, block),
                         after: truncate(&after, 60),
                         style: None,
+                        style_unchanged: None,
                     },
                 });
             }
@@ -450,6 +456,7 @@ pub(super) fn apply_edits(
                         before: projected_of(&model, block),
                         after: truncate(&text, 60),
                         style: None,
+                        style_unchanged: None,
                     },
                 });
             }
@@ -465,6 +472,7 @@ pub(super) fn apply_edits(
                         before: projected_of(&model, block),
                         after: String::new(),
                         style: None,
+                        style_unchanged: None,
                     },
                 });
             }
@@ -472,6 +480,12 @@ pub(super) fn apply_edits(
                 let span = spans[block - 1];
                 // 预检已校验样式存在；此处重解析拿 ID（批内样式表不可变，无 TOCTOU）
                 let style_id = styles.id_of(&style).expect("预检已校验样式存在");
+                // 空转检测：目标段 pStyle 已是该样式 ID → 显式报 style_unchanged，
+                // 勿让 agent 把「成功」读成「生效了」
+                let already = match &model.body[block - 1] {
+                    Block::Paragraph(p) => p.props.style.as_deref() == Some(style_id),
+                    Block::Table(_) => false, // 预检已拒表格块
+                };
                 let new_block =
                     restyle_paragraph(&xml[span.start..span.end], style_id)
                         .ok_or_else(|| AppError::Internal(format!(
@@ -488,6 +502,7 @@ pub(super) fn apply_edits(
                         before: projected.clone(),
                         after: projected, // 文本不变；样式见 style 字段
                         style: Some(style_id.to_string()),
+                        style_unchanged: already.then_some(true),
                     },
                 });
             }
@@ -518,6 +533,7 @@ pub(super) fn apply_edits(
                         // 文本不变；after 携带本次应用的格式摘要（agent 读回验证）
                         after: truncate(&describe_formats(paragraph.as_ref(), character.as_ref()), 60),
                         style: None,
+                        style_unchanged: None,
                     },
                 });
             }
@@ -1570,6 +1586,34 @@ mod tests {
         let mut t = String::new();
         docx_model::blocks_text(&m.body, &mut t);
         assert_eq!(t, "正文段\n");
+    }
+
+    #[test]
+    fn set_style_noop_reports_style_unchanged() {
+        // 目标段 pStyle 已是 h2，再 set 成 heading 2（显示名解析到同一 ID）→ 空转，
+        // AppliedOp 显式报 style_unchanged=true；换到不同样式则 None（字段省略）
+        let xml = wrap(r#"<w:p><w:pPr><w:pStyle w:val="h2"/></w:pPr><w:r><w:t>已是标题段</w:t></w:r></w:p>"#);
+        let (_, applied) = apply_edits(
+            &xml,
+            &heading_styles(),
+            &[EditOp::SetStyle { block: 1, expect_prefix: "已是标题段".into(), style: "heading 2".into() }],
+        )
+        .unwrap();
+        assert_eq!(applied[0].style_unchanged, Some(true));
+        // agent 读回的 JSON 必须携带该信号（skip_serializing_if 只对 None 生效）
+        let json = serde_json::to_string(&applied[0]).unwrap();
+        assert!(json.contains("\"style_unchanged\":true"), "实际: {json}");
+
+        let (out, applied) = apply_edits(
+            &xml,
+            &heading_styles(),
+            &[EditOp::SetStyle { block: 1, expect_prefix: "已是标题段".into(), style: "Normal".into() }],
+        )
+        .unwrap();
+        assert_eq!(applied[0].style_unchanged, None);
+        let json = serde_json::to_string(&applied[0]).unwrap();
+        assert!(!json.contains("style_unchanged"), "非空转不应带字段: {json}");
+        assert!(out.contains(r#"<w:pStyle w:val="body"/>"#), "真换样式仍生效");
     }
 
     #[test]
