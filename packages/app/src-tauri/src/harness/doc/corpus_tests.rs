@@ -317,6 +317,13 @@ fn corpus_numbering_values_rendered() {
             }),
         "SRS 应有多级编号形态 N.N.N"
     );
+    // 手调 start 形态（作者用 lvl1 start=2 / lvl2 start=6 对齐手写编号）：首个 lvl2
+    // 段的祖先级按其 start 渲染——回归 2026-08-24 真机发现（算成 1.1.6 误导 agent
+    // 得出「章节号错位」误诊；Word 实渲染/目录静态文本/用户肉眼三方一致 1.2.6）
+    assert!(
+        report.content.contains("列表 1.2.6"),
+        "SRS 手调 start 编号应渲染 1.2.6（而非 1.1.6）"
+    );
     // 三份语料投影里不出现未解析引用形式（numPr 引用全部解析出值/或该段无值回退——
     // 语料 numbering.xml 完整，默认 400 块渲染面内引用形式应为零）
     for bytes in [&sdp, &srs] {
