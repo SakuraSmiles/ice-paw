@@ -751,3 +751,133 @@ fn corpus_ppr_element_surgery() {
     }
     assert!(ran >= 2, "SDP/SRS 语料应均有段级编号块可跑（实际 {ran} 份）");
 }
+
+/// S3 三波·表格四件：真实语料上三写操作闭环（set_cell_text 保结构改格 /
+/// insert_table_row_after 克隆增行 / insert_table_after 建新表）+ 网格投影。
+/// 目标块、(行, 格) 地址与指纹全运行时派生（语料字符串不进代码）。
+#[test]
+fn corpus_table_surgery() {
+    let Some((sdp, srs, install)) = all_corpus() else { return };
+    use super::docx_model::{blocks_text, Block};
+    // 自造短语（非语料来源——禁令）
+    const FILL: &str = "表格格测试甲乙丙";
+    const NEW_HEAD: &str = "新表头甲";
+
+    // 干净表判定：非空、无嵌套表、全格无修订 run
+    fn table_clean(t: &super::docx_model::Table) -> bool {
+        fn blocks_clean(blocks: &[Block]) -> bool {
+            blocks.iter().all(|b| match b {
+                Block::Paragraph(p) => p.runs.iter().all(|r| r.revision.is_none()),
+                Block::Table(_) => false, // 嵌套表整表跳过
+            })
+        }
+        !t.rows.is_empty() && t.rows.iter().all(|r| r.cells.iter().all(|c| blocks_clean(&c.blocks)))
+    }
+
+    let mut ran = 0usize;
+    for (name, bytes) in [("SDP", &sdp), ("SRS", &srs), ("INSTALL", &install)] {
+        let xml = super::docx::read_document_xml(bytes).unwrap();
+        let spans = super::docx_edit::locate_blocks(&xml).unwrap();
+        let model = super::docx_model::build_document(&xml_dom::parse(&xml).unwrap());
+
+        // 找干净表 + 可编辑格（非续格、有 ≥2 字文本）+ 整表投影首字符非空行
+        let mut found: Option<(usize, usize, usize, usize)> = None; // (块, 行, 格, 原行数)
+        'tables: for (i, b) in model.body.iter().enumerate() {
+            let Block::Table(t) = b else { continue };
+            if !table_clean(t) {
+                continue;
+            }
+            let mut whole = String::new();
+            blocks_text(&model.body[i..i + 1], &mut whole);
+            let whole = whole.trim_end_matches('\n');
+            if whole.starts_with('\n') || whole.trim().is_empty() {
+                continue; // 首格空段会让前 4 字指纹对不上投影首字符
+            }
+            for (ri, row) in t.rows.iter().enumerate() {
+                for (ci, c) in row.cells.iter().enumerate() {
+                    if c.v_merge.as_deref() == Some("continue") {
+                        continue;
+                    }
+                    let mut txt = String::new();
+                    blocks_text(&c.blocks, &mut txt);
+                    if txt.trim().chars().count() >= 2 {
+                        found = Some((i + 1, ri + 1, ci + 1, t.rows.len()));
+                        break 'tables;
+                    }
+                }
+            }
+        }
+        let Some((tbl_block, row, cell, rows0)) = found else { continue };
+        let anchor = pick_editable_block(&xml, &spans, &model, &[tbl_block])
+            .unwrap_or_else(|| panic!("{name} 无独立锚段"));
+        // 指纹口径与预检一致：只去尾换行，取前 4 字
+        let prefix_of = |n: usize| -> String {
+            let mut t = String::new();
+            blocks_text(&model.body[n - 1..n], &mut t);
+            t.trim_end_matches('\n').chars().take(4).collect()
+        };
+
+        let (new_bytes, applied) = super::apply_edits_to_bytes(
+            bytes,
+            &[
+                super::EditOp::SetCellText {
+                    block: tbl_block,
+                    expect_prefix: prefix_of(tbl_block),
+                    row,
+                    cell,
+                    text: FILL.into(),
+                },
+                super::EditOp::InsertTableRowAfter {
+                    block: tbl_block,
+                    expect_prefix: prefix_of(tbl_block),
+                    after_row: None,
+                    cells: None,
+                },
+                super::EditOp::InsertTableAfter {
+                    block: anchor,
+                    expect_prefix: prefix_of(anchor),
+                    rows: vec![vec![NEW_HEAD.into(), "新表体乙".into()], vec!["行一".into(), "行二".into()]],
+                    header: None,
+                },
+            ],
+        )
+        .unwrap_or_else(|e| panic!("{name} 表格手术失败: {e}"));
+        assert_eq!(applied.len(), 3, "{name} 三操作应全过");
+        ran += 1;
+
+        // untouched 保真：只有 document.xml 变
+        assert_untouched_entries_identical(bytes, &new_bytes, "word/document.xml");
+
+        // 读回：块数 +1（新建表）；目标表行数 +1；目标格文本已换。
+        // 锚段在目标表之前时，插表使目标表块号 +1（位移感知）
+        let new_xml = super::docx::read_document_xml(&new_bytes).unwrap();
+        let model2 = super::docx_model::build_document(&xml_dom::parse(&new_xml).unwrap());
+        assert_eq!(model2.body.len(), model.body.len() + 1, "{name} 块数应 +1");
+        let at = if anchor < tbl_block { tbl_block + 1 } else { tbl_block };
+        let Block::Table(t2) = &model2.body[at - 1] else { panic!("{name} 目标块应仍是表") };
+        assert_eq!(t2.rows.len(), rows0 + 1, "{name} 增行未生效");
+        let mut got = String::new();
+        blocks_text(&t2.rows[row - 1].cells[cell - 1].blocks, &mut got);
+        assert_eq!(got.trim(), FILL, "{name} 改格未生效");
+        // 新表落位（首格文本 = NEW_HEAD 派生查找，不依赖块号偏移）
+        let new_tbl_found = model2.body.iter().any(|b| {
+            let Block::Table(t) = b else { return false };
+            let mut s = String::new();
+            if let Some(c) = t.rows.first().and_then(|r| r.cells.first()) {
+                blocks_text(&c.blocks, &mut s);
+            }
+            s.trim() == NEW_HEAD
+        });
+        assert!(new_tbl_found, "{name} 新建表未落位");
+
+        // 网格投影（真实 Word 产物）：目标表块号渲染出矩阵行
+        let grid = inspect_document(
+            &new_bytes,
+            &InspectRequest { projection: InspectProjection::Table, start: Some(at), end: Some(at) },
+        )
+        .unwrap();
+        assert!(grid.content.contains(&format!("[{at}] ▦ 表")), "{name} 网格头行缺失");
+        assert!(grid.content.contains("r1:"), "{name} 网格应有行线");
+    }
+    assert!(ran >= 2, "SDP/SRS 语料应均有干净表可跑（实际 {ran} 份）");
+}

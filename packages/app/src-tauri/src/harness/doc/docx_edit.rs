@@ -16,6 +16,7 @@
 //! `insert_paragraph_after` / `delete_block` / `set_style` / `set_format`。
 //! 表格内容操作后续批。
 
+use std::collections::HashMap;
 use std::io::{Cursor, Write};
 
 use quick_xml::events::Event;
@@ -235,6 +236,34 @@ pub enum EditOp {
         element: String,
         xml: Option<String>,
     },
+    /// 在锚块后插入整表（S3 三波·表格件）：rows 矩形字符串矩阵（\n = 格内多段）；
+    /// header（缺省 true）首行表头——加粗 + 跨页重复；全边框 + 列宽按节宽均分。
+    InsertTableAfter {
+        block: usize,
+        expect_prefix: String,
+        rows: Vec<Vec<String>>,
+        header: Option<bool>,
+    },
+    /// 改表格单元格文本（S3 三波·表格件）：(row, cell) 1-based，口径与
+    /// inspect_docx projection=table 所见一致（跨列格占 1 个序号）；保 tcPr +
+    /// 首段 pPr + 首 run rPr；\n = 格内多段；纵向合并续格/嵌套表拒绝。
+    /// 同批同表允许多个本操作按序应用（(row, cell) 不得重复）。
+    SetCellText {
+        block: usize,
+        expect_prefix: String,
+        row: usize,
+        cell: usize,
+        text: String,
+    },
+    /// 表格增行（S3 三波·表格件）：克隆模板行（after_row 缺省 = 末行）的整行
+    /// 结构（tcPr/gridSpan/vMerge 原样——含合并格的表增行的唯一正确姿势），
+    /// 文本换 cells（缺省全空串）。同批同表可多个，按数组序应用。
+    InsertTableRowAfter {
+        block: usize,
+        expect_prefix: String,
+        after_row: Option<usize>,
+        cells: Option<Vec<String>>,
+    },
 }
 
 /// CT_PPr 法定子元素，ECMA-376 schema 序。双职：合法性白名单 + 插入位序。
@@ -307,7 +336,15 @@ pub(super) fn apply_edits(
     }
 
     // ---- 预检全批（验证后变异：全部通过才动刀）----
+    // 占用规则：段落操作/锚操作（insert_*_after）每块每批限一个；表格修改操作
+    // （set_cell_text / insert_table_row_after）同块可多个按序组合（一次填整行/
+    // 整表），但与段落操作/锚互斥，且 (row, cell) 目标格不得重复。
     let mut used_blocks: Vec<usize> = Vec::new();
+    let mut table_modified: Vec<usize> = Vec::new();
+    let mut used_cells: Vec<(usize, usize, usize)> = Vec::new(); // (block, row, cell)
+    // 表格批内虚拟行状态（block → (每行格数, 虚拟行的原模型模板行)）：
+    // 同块「先增行后填格」合法——寻址按批内输入序生效，结构与格数继承模板行
+    let mut table_state: HashMap<usize, (Vec<usize>, Vec<Option<usize>>)> = HashMap::new();
     for op in ops {
         let block = *match op {
             EditOp::ReplaceText { block, .. }
@@ -315,7 +352,10 @@ pub(super) fn apply_edits(
             | EditOp::DeleteBlock { block, .. }
             | EditOp::SetStyle { block, .. }
             | EditOp::SetFormat { block, .. }
-            | EditOp::SetPprElement { block, .. } => block,
+            | EditOp::SetPprElement { block, .. }
+            | EditOp::InsertTableAfter { block, .. }
+            | EditOp::SetCellText { block, .. }
+            | EditOp::InsertTableRowAfter { block, .. } => block,
         };
         if block == 0 || block > spans.len() {
             return Err(AppError::Validation(format!(
@@ -324,12 +364,33 @@ pub(super) fn apply_edits(
                 spans.len()
             )));
         }
-        if used_blocks.contains(&block) {
-            return Err(AppError::Validation(format!(
-                "同一块多操作: 块 {block} 在本批中被多次引用。每块每批限一个操作；请拆成多批。"
-            )));
+        let is_table_modify = matches!(
+            op,
+            EditOp::SetCellText { .. } | EditOp::InsertTableRowAfter { .. }
+        );
+        if is_table_modify {
+            if used_blocks.contains(&block) {
+                return Err(AppError::Validation(format!(
+                    "同一块多操作: 块 {block} 已被段落操作/锚操作引用，不能再挂表格操作。请拆批。"
+                )));
+            }
+            if !table_modified.contains(&block) {
+                table_modified.push(block);
+            }
+        } else {
+            if used_blocks.contains(&block) {
+                return Err(AppError::Validation(format!(
+                    "同一块多操作: 块 {block} 在本批中被多次引用。每块每批限一个操作\
+                     （表格块可挂多个 set_cell_text / insert_table_row_after）；请拆成多批。"
+                )));
+            }
+            if table_modified.contains(&block) {
+                return Err(AppError::Validation(format!(
+                    "同一块多操作: 块 {block} 已挂表格操作，不能再被段落操作/锚操作引用。请拆批。"
+                )));
+            }
+            used_blocks.push(block);
         }
-        used_blocks.push(block);
 
         let idx = block - 1;
         let span = spans[idx];
@@ -455,6 +516,128 @@ pub(super) fn apply_edits(
                     validate_ppr_fragment(element, x)?;
                 }
             }
+            EditOp::InsertTableAfter { rows, .. } => {
+                validate_table_rows(rows)?;
+            }
+            EditOp::SetCellText { row, cell, .. } => {
+                let Block::Table(t) = &model.body[idx] else {
+                    return Err(AppError::Validation(format!(
+                        "非表格块: 块 {block} 是段落，set_cell_text 只作用于表格块。\
+                         改段落文字用 replace_text；建表用 insert_table_after。"
+                    )));
+                };
+                if has_revision(&model.body[idx]) {
+                    return Err(AppError::Validation(format!(
+                        "含修订标记: 块 {block}（表格）带插入/删除修订，默认不触碰修订内容。\
+                         请先在 Word 中接受或拒绝修订后再编辑该表。"
+                    )));
+                }
+                // 批内虚拟行：同块先增行后填格合法（寻址按序生效）
+                let (counts, tpls) = table_state.entry(block).or_insert_with(|| {
+                    (
+                        t.rows.iter().map(|r| r.cells.len()).collect::<Vec<_>>(),
+                        vec![None; t.rows.len()],
+                    )
+                });
+                if *row == 0 || *row > counts.len() {
+                    return Err(AppError::Validation(format!(
+                        "单元格越界: 块 {block} 第 {row} 行不存在（该表当前共 {} 行，1-based，\
+                         含本批已增行）。网格视图用 inspect_docx projection=table 复核行列号。",
+                        counts.len()
+                    )));
+                }
+                if *cell == 0 || *cell > counts[*row - 1] {
+                    return Err(AppError::Validation(format!(
+                        "单元格越界: 块 {block} 第 {row} 行第 {cell} 格不存在（该行共 {} 格，\
+                         1-based 按网格显示顺序数，跨列格占 1 个序号）。\
+                         网格视图用 inspect_docx projection=table。",
+                        counts[*row - 1]
+                    )));
+                }
+                // 结构检查按「来源行」：原行直查；本批增行查其模板行（克隆继承结构）
+                let real_row = tpls[*row - 1].unwrap_or(*row);
+                let r = &t.rows[real_row - 1];
+                let c = &r.cells[*cell - 1];
+                if c.v_merge.as_deref() == Some("continue") {
+                    return Err(AppError::Validation(format!(
+                        "纵向合并续格: 块 {block} 第 {row} 行第 {cell} 格是纵向合并的续格（显示「(续)」），\
+                         其内容由上方合并头格统一持有。请对该列上方带「(合并头)」标记的格执行 set_cell_text。"
+                    )));
+                }
+                if c.blocks.iter().any(|b| matches!(b, Block::Table(_))) {
+                    return Err(AppError::Validation(format!(
+                        "嵌套表: 块 {block} 第 {row} 行第 {cell} 格内含表格，暂不支持嵌套表编辑。\
+                         可用 delete_block 删整表后 insert_table_after 重建。"
+                    )));
+                }
+                if tpls[*row - 1].is_none() && c.blocks.is_empty() {
+                    return Err(AppError::Validation(format!(
+                        "单元格结构异常: 块 {block} 第 {row} 行第 {cell} 格无段落，套不了格式模板。\
+                         请用 insert_table_row_after 重建该行。"
+                    )));
+                }
+                if used_cells.contains(&(block, *row, *cell)) {
+                    return Err(AppError::Validation(format!(
+                        "同一格多操作: 块 {block} 第 {row} 行第 {cell} 格在本批中被多次引用。\
+                         同表多操作按序组合可行，但同一格只能一个操作。"
+                    )));
+                }
+                used_cells.push((block, *row, *cell));
+            }
+            EditOp::InsertTableRowAfter { after_row, cells, .. } => {
+                let Block::Table(t) = &model.body[idx] else {
+                    return Err(AppError::Validation(format!(
+                        "非表格块: 块 {block} 是段落，insert_table_row_after 只作用于表格块。\
+                         建表用 insert_table_after。"
+                    )));
+                };
+                if has_revision(&model.body[idx]) {
+                    return Err(AppError::Validation(format!(
+                        "含修订标记: 块 {block}（表格）带插入/删除修订，默认不触碰修订内容。\
+                         请先在 Word 中接受或拒绝修订后再编辑该表。"
+                    )));
+                }
+                let (counts, tpls) = table_state.entry(block).or_insert_with(|| {
+                    (
+                        t.rows.iter().map(|r| r.cells.len()).collect::<Vec<_>>(),
+                        vec![None; t.rows.len()],
+                    )
+                });
+                // 缺省模板 = 当前末行（含本批已增行——连续追加多条也成立）
+                let tpl_virtual = after_row.unwrap_or(counts.len());
+                if tpl_virtual == 0 || tpl_virtual > counts.len() {
+                    return Err(AppError::Validation(format!(
+                        "行号越界: after_row={tpl_virtual} 不存在（该表当前共 {} 行，1-based；\
+                         缺省 = 末行后追加）。网格视图用 inspect_docx projection=table。",
+                        counts.len()
+                    )));
+                }
+                let real_tpl = tpls[tpl_virtual - 1].unwrap_or(tpl_virtual);
+                let tpl = &t.rows[real_tpl - 1];
+                if let Some(cs) = cells {
+                    if cs.len() != tpl.cells.len() {
+                        return Err(AppError::Validation(format!(
+                            "列数不符: cells 给了 {} 格，模板行（第 {tpl_virtual} 行）共 {} 格\
+                             （含跨列/合并格，各占 1 个序号）。请与网格视图对齐。",
+                            cs.len(),
+                            tpl.cells.len()
+                        )));
+                    }
+                }
+                if tpl
+                    .cells
+                    .iter()
+                    .any(|c| c.blocks.iter().any(|b| matches!(b, Block::Table(_))))
+                {
+                    return Err(AppError::Validation(format!(
+                        "嵌套表: 模板行（第 {tpl_virtual} 行）内有格含表格，克隆会复制嵌套结构，暂不支持。\
+                         请选无嵌套表的模板行。"
+                    )));
+                }
+                // 虚拟行入账：格数与结构继承模板
+                counts.push(tpl.cells.len());
+                tpls.push(Some(real_tpl));
+            }
         }
         // Replace / SetStyle / SetFormat / SetPprElement 目标必须是段落块
         if matches!(
@@ -466,19 +649,23 @@ pub(super) fn apply_edits(
         ) && span.is_table {
             return Err(AppError::Validation(format!(
                 "表格块: 块 {block} 是表格，该操作只支持段落。\
-                 表格内容编辑暂不支持（后续批次）；可用 inspect_docx text 查看表格内容。"
+                 表格编辑请用：set_cell_text（改格文本）/ insert_table_row_after（增行）/ \
+                 insert_table_after（建新表）；网格视图用 inspect_docx projection=table。"
             )));
         }
     }
 
-    // ---- 生成 splice 计划（原始偏移；互不重叠，见预检的每块一操作）----
+    // ---- 生成 splice 计划（原始偏移；互不重叠，见预检的占用规则）----
     struct Splice {
         pos: usize,
         remove_end: usize,
         insert: String,
-        summary: AppliedOp,
+        /// 该 splice 的逐操作摘要（同块表格批组合 = 多条；顺序 = 输入序）
+        summaries: Vec<AppliedOp>,
     }
     let mut plan: Vec<Splice> = Vec::new();
+    // 同表多操作聚合：块号 → plan 索引（共享一个 splice，按序改写 insert 文本）
+    let mut table_plan_idx: HashMap<usize, usize> = HashMap::new();
     for op in ops {
         match op.clone() {
             EditOp::ReplaceText { block, new_text, .. } => {
@@ -489,14 +676,14 @@ pub(super) fn apply_edits(
                     pos: span.start,
                     remove_end: span.end,
                     insert: new_block,
-                    summary: AppliedOp {
+                    summaries: vec![AppliedOp {
                         op: "replace_text",
                         block,
                         before: projected_of(&model, block),
                         after: truncate(&after, 60),
                         style: None,
                         style_unchanged: None,
-                    },
+                    }],
                 });
             }
             EditOp::InsertParagraphAfter { block, text, style, .. } => {
@@ -507,14 +694,14 @@ pub(super) fn apply_edits(
                     pos: span.end, // 锚块末尾插入（区间外，不与同批其他 splice 重叠）
                     remove_end: span.end,
                     insert: new_block,
-                    summary: AppliedOp {
+                    summaries: vec![AppliedOp {
                         op: "insert_paragraph_after",
                         block,
                         before: projected_of(&model, block),
                         after: truncate(&text, 60),
                         style: None,
                         style_unchanged: None,
-                    },
+                    }],
                 });
             }
             EditOp::DeleteBlock { block, .. } => {
@@ -523,14 +710,14 @@ pub(super) fn apply_edits(
                     pos: span.start,
                     remove_end: span.end,
                     insert: String::new(),
-                    summary: AppliedOp {
+                    summaries: vec![AppliedOp {
                         op: "delete_block",
                         block,
                         before: projected_of(&model, block),
                         after: String::new(),
                         style: None,
                         style_unchanged: None,
-                    },
+                    }],
                 });
             }
             EditOp::SetStyle { block, style, .. } => {
@@ -553,14 +740,14 @@ pub(super) fn apply_edits(
                     pos: span.start,
                     remove_end: span.end,
                     insert: new_block,
-                    summary: AppliedOp {
+                    summaries: vec![AppliedOp {
                         op: "set_style",
                         block,
                         before: projected.clone(),
                         after: projected, // 文本不变；样式见 style 字段
                         style: Some(style_id.to_string()),
                         style_unchanged: already.then_some(true),
-                    },
+                    }],
                 });
             }
             EditOp::SetFormat { block, paragraph, character, .. } => {
@@ -583,7 +770,7 @@ pub(super) fn apply_edits(
                     pos: span.start,
                     remove_end: span.end,
                     insert: new_block,
-                    summary: AppliedOp {
+                    summaries: vec![AppliedOp {
                         op: "set_format",
                         block,
                         before: projected.clone(),
@@ -591,7 +778,7 @@ pub(super) fn apply_edits(
                         after: truncate(&describe_formats(paragraph.as_ref(), character.as_ref()), 60),
                         style: None,
                         style_unchanged: None,
-                    },
+                    }],
                 });
             }
             EditOp::SetPprElement { block, element, xml: frag, .. } => {
@@ -624,20 +811,109 @@ pub(super) fn apply_edits(
                     pos: span.start,
                     remove_end: span.end,
                     insert: new_block,
-                    summary: AppliedOp {
+                    summaries: vec![AppliedOp {
                         op: "set_ppr_element",
                         block,
                         before: projected,
                         after,
                         style: None,
                         style_unchanged: None,
-                    },
+                    }],
+                });
+            }
+            EditOp::InsertTableAfter { block, rows, header, .. } => {
+                let span = spans[block - 1];
+                let new_tbl = build_table_xml(&rows, header.unwrap_or(true), content_width_twips(&model));
+                let after = format!(
+                    "{}行×{}列 表",
+                    rows.len(),
+                    rows.first().map(|r| r.len()).unwrap_or(0)
+                );
+                plan.push(Splice {
+                    pos: span.end, // 锚块末尾插入
+                    remove_end: span.end,
+                    insert: new_tbl,
+                    summaries: vec![AppliedOp {
+                        op: "insert_table_after",
+                        block,
+                        before: projected_of(&model, block),
+                        after,
+                        style: None,
+                        style_unchanged: None,
+                    }],
+                });
+            }
+            EditOp::SetCellText { block, row, cell, text, .. } => {
+                let span = spans[block - 1];
+                // 同表聚合：首次触达建 splice（以原块为底），后续操作改写 insert
+                let entry = match table_plan_idx.get(&block) {
+                    Some(&i) => i,
+                    None => {
+                        plan.push(Splice {
+                            pos: span.start,
+                            remove_end: span.end,
+                            insert: xml[span.start..span.end].to_string(),
+                            summaries: Vec::new(),
+                        });
+                        table_plan_idx.insert(block, plan.len() - 1);
+                        plan.len() - 1
+                    }
+                };
+                let cur = plan[entry].insert.clone();
+                let new_xml = set_cell_text(&cur, row, cell, &text)
+                    .ok_or_else(|| AppError::Internal(format!(
+                        "单元格手术失败: 块 {block} 第 {row} 行第 {cell} 格 XML 形态异常（内部 bug，未写盘）"
+                    )))?;
+                plan[entry].insert = new_xml;
+                plan[entry].summaries.push(AppliedOp {
+                    op: "set_cell_text",
+                    block,
+                    before: cell_projected_of(&model, block, row, cell),
+                    after: truncate(&text, 60),
+                    style: None,
+                    style_unchanged: None,
+                });
+            }
+            EditOp::InsertTableRowAfter { block, after_row, cells, .. } => {
+                let span = spans[block - 1];
+                let entry = match table_plan_idx.get(&block) {
+                    Some(&i) => i,
+                    None => {
+                        plan.push(Splice {
+                            pos: span.start,
+                            remove_end: span.end,
+                            insert: xml[span.start..span.end].to_string(),
+                            summaries: Vec::new(),
+                        });
+                        table_plan_idx.insert(block, plan.len() - 1);
+                        plan.len() - 1
+                    }
+                };
+                let cur = plan[entry].insert.clone();
+                let new_xml = insert_table_row_after(&cur, after_row, cells.as_deref())
+                    .ok_or_else(|| AppError::Internal(format!(
+                        "表格增行失败: 块 {block} XML 形态异常（内部 bug，未写盘）"
+                    )))?;
+                plan[entry].insert = new_xml;
+                let filled = cells.as_ref().map(|c| c.len()).unwrap_or(0);
+                let after = format!(
+                    "克隆第 {} 行插入（{}）",
+                    after_row.map(|r| r.to_string()).unwrap_or_else(|| "末行".into()),
+                    if filled > 0 { format!("{filled} 格已填") } else { "空行".to_string() }
+                );
+                plan[entry].summaries.push(AppliedOp {
+                    op: "insert_table_row_after",
+                    block,
+                    before: projected_of(&model, block),
+                    after,
+                    style: None,
+                    style_unchanged: None,
                 });
             }
         }
     }
 
-    // ---- splice（按位置升序单 pass；区间互不重叠，见预检的每块一操作）----
+    // ---- splice（按位置升序单 pass；区间互不重叠，见预检的占用规则）----
     plan.sort_by(|a, b| a.pos.cmp(&b.pos).then(a.remove_end.cmp(&b.remove_end)));
     let mut out = String::with_capacity(xml.len() + 256);
     let mut cursor = 0usize;
@@ -649,10 +925,13 @@ pub(super) fn apply_edits(
     }
     out.push_str(&xml[cursor..]);
 
-    // 产物必须仍是合法 XML 且块数守恒（删 N 块插 M 段 → 总数变化可推算）
+    // 产物必须仍是合法 XML 且块数守恒（删 N 块插 M 块 → 总数变化可推算）
     let dom2 = super::xml_dom::parse(&out)?;
     let model2 = docx_model::build_document(&dom2);
-    let inserted = ops.iter().filter(|o| matches!(o, EditOp::InsertParagraphAfter { .. })).count();
+    let inserted = ops
+        .iter()
+        .filter(|o| matches!(o, EditOp::InsertParagraphAfter { .. } | EditOp::InsertTableAfter { .. }))
+        .count();
     let deleted = ops.iter().filter(|o| matches!(o, EditOp::DeleteBlock { .. })).count();
     let expect_blocks = model.body.len() + inserted - deleted;
     if model2.body.len() != expect_blocks {
@@ -662,7 +941,7 @@ pub(super) fn apply_edits(
         )));
     }
 
-    let applied = plan.into_iter().map(|s| s.summary).collect();
+    let applied = plan.into_iter().flat_map(|s| s.summaries).collect();
     Ok((out, applied))
 }
 
@@ -673,7 +952,10 @@ fn expect_prefix_of(op: &EditOp) -> &str {
         | EditOp::DeleteBlock { expect_prefix, .. }
         | EditOp::SetStyle { expect_prefix, .. }
         | EditOp::SetFormat { expect_prefix, .. }
-        | EditOp::SetPprElement { expect_prefix, .. } => expect_prefix,
+        | EditOp::SetPprElement { expect_prefix, .. }
+        | EditOp::InsertTableAfter { expect_prefix, .. }
+        | EditOp::SetCellText { expect_prefix, .. }
+        | EditOp::InsertTableRowAfter { expect_prefix, .. } => expect_prefix,
     }
 }
 
@@ -1523,6 +1805,271 @@ fn truncate(s: &str, max_chars: usize) -> String {
     } else {
         s.chars().take(max_chars).collect()
     }
+}
+
+// =========================================================================
+// 表格手术（insert_table_after / set_cell_text / insert_table_row_after）
+// =========================================================================
+
+/// 建表规模上限（防 agent 一次生成巨型表；超限走增行分批）。
+const TABLE_MAX_ROWS: usize = 200;
+const TABLE_MAX_COLS: usize = 30;
+
+/// rows 矩阵校验：非空 / 行列上限 / 矩形一致。全挂「表格数据无效」家族前缀
+/// （doom_loop 错误签名按家族前缀聚合，勿混入具体格内容）。
+fn validate_table_rows(rows: &[Vec<String>]) -> AppResult<()> {
+    let Some(first) = rows.first() else {
+        return Err(AppError::Validation(
+            "表格数据无效: rows 为空，至少一行（首行默认表头）".into(),
+        ));
+    };
+    if rows.len() > TABLE_MAX_ROWS {
+        return Err(AppError::Validation(format!(
+            "表格数据无效: 行数 {} 超上限 {TABLE_MAX_ROWS}——先建前 {TABLE_MAX_ROWS} 行，余下 insert_table_row_after 分批增补",
+            rows.len()
+        )));
+    }
+    let cols = first.len();
+    if cols == 0 || cols > TABLE_MAX_COLS {
+        return Err(AppError::Validation(format!(
+            "表格数据无效: 列数 {cols} 越界（每行须 1..={TABLE_MAX_COLS} 格）"
+        )));
+    }
+    for (i, r) in rows.iter().enumerate() {
+        if r.len() != cols {
+            return Err(AppError::Validation(format!(
+                "表格数据无效: 第 {} 行 {} 格与首行 {cols} 格不一致——rows 须矩形矩阵（格内多段用 \\n 表达，勿多造行）",
+                i + 1,
+                r.len()
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// 节内容宽度（twips）：取最后出现的页宽与左右边距（缺省 1 英寸 = 1440），
+/// 页宽全缺省按 Letter 12240；结果下限钳 2000（防 0/负），再低回落 9026。
+fn content_width_twips(model: &docx_model::DocxDocument) -> u32 {
+    let mut page_w: Option<u32> = None;
+    let mut margin_l = 1440u32;
+    let mut margin_r = 1440u32;
+    for s in &model.sections {
+        if let Some(w) = s.page_w {
+            page_w = Some(w);
+        }
+        if let Some(m) = s.margin_left {
+            margin_l = m;
+        }
+        if let Some(m) = s.margin_right {
+            margin_r = m;
+        }
+    }
+    let w = page_w.unwrap_or(12240).saturating_sub(margin_l).saturating_sub(margin_r);
+    if w < 2000 { 9026 } else { w }
+}
+
+/// 建整表 XML：tblW pct 5000（100% 宽）+ 全边框 single sz=4 + 列宽均分；
+/// header=true 时首行加粗 + tblHeader（跨页重复表头）。
+fn build_table_xml(rows: &[Vec<String>], header: bool, width_tw: u32) -> String {
+    let cols = rows.first().map(|r| r.len()).unwrap_or(1).max(1);
+    let col_w = (width_tw / cols as u32).max(200);
+    let mut s = String::with_capacity(64 + rows.len() * cols * 48);
+    s.push_str(r#"<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:tblBorders>"#);
+    for side in ["top", "left", "bottom", "right", "insideH", "insideV"] {
+        s.push_str(&format!(
+            r#"<w:{side} w:val="single" w:sz="4" w:space="0" w:color="auto"/>"#
+        ));
+    }
+    s.push_str("</w:tblBorders></w:tblPr><w:tblGrid>");
+    for _ in 0..cols {
+        s.push_str(&format!(r#"<w:gridCol w:w="{col_w}"/>"#));
+    }
+    s.push_str("</w:tblGrid>");
+    for (ri, row) in rows.iter().enumerate() {
+        s.push_str("<w:tr>");
+        let is_header = header && ri == 0;
+        if is_header {
+            s.push_str("<w:trPr><w:tblHeader/></w:trPr>");
+        }
+        for cell in row {
+            s.push_str(&format!(
+                r#"<w:tc><w:tcPr><w:tcW w:w="{col_w}" w:type="dxa"/></w:tcPr>{}"#,
+                cell_paragraphs_xml(cell, is_header)
+            ));
+            s.push_str("</w:tc>");
+        }
+        s.push_str("</w:tr>");
+    }
+    s.push_str("</w:tbl>");
+    s
+}
+
+/// 单元格文本 → 段落序列：空文本 = 单空段；`\n` 分段；表头行加粗。
+fn cell_paragraphs_xml(text: &str, bold: bool) -> String {
+    let rpr = if bold { "<w:rPr><w:b/></w:rPr>" } else { "" };
+    if text.is_empty() {
+        return "<w:p/>".to_string();
+    }
+    let mut s = String::new();
+    for line in text.split('\n') {
+        s.push_str(&format!("<w:p>{}</w:p>", run_xml(rpr, line)));
+    }
+    s
+}
+
+/// `s` 内 `w:{name}` **直接子元素**的字节范围列表（相对 `s`；更深层同名忽略）。
+/// 表格结构手术专用：行/格定位必须抗嵌套表（tc 内 w:tbl 含同名 w:tr/w:tc）。
+/// 形态异常（扫描 Err / 未闭合）返回空表——调用方按手术失败处理，不写盘。
+fn direct_children_spans(s: &str, name: &str) -> Vec<(usize, usize)> {
+    let mut reader = Reader::from_str(s);
+    reader.config_mut().trim_text(false); // 偏移与原始字节对齐
+    let target = format!("w:{name}");
+    let mut spans = Vec::new();
+    let mut depth = 0usize; // 当前嵌套在目标元素内的层数
+    let mut direct_start: Option<usize> = None; // 最外层（直接子级）起点
+    let mut balanced = true;
+    loop {
+        // buffer_position = 上一事件结束处 = 本事件开始处
+        let ev_start = reader.buffer_position() as usize;
+        let ev = match reader.read_event() {
+            Ok(Event::Eof) => break,
+            Ok(e) => e,
+            Err(_) => return Vec::new(),
+        };
+        let ev_end = reader.buffer_position() as usize;
+        match ev {
+            Event::Start(e) if e.name().as_ref() == target.as_bytes() => {
+                if depth == 0 {
+                    direct_start = Some(ev_start);
+                }
+                depth += 1;
+            }
+            Event::End(e) if e.name().as_ref() == target.as_bytes() => {
+                if depth == 0 {
+                    balanced = false; // 多闭：形态异常
+                    break;
+                }
+                depth -= 1;
+                if depth == 0 {
+                    if let Some(start) = direct_start.take() {
+                        spans.push((start, ev_end));
+                    }
+                }
+            }
+            Event::Empty(e) if e.name().as_ref() == target.as_bytes() && depth == 0 => {
+                spans.push((ev_start, ev_end));
+            }
+            _ => {}
+        }
+    }
+    if !balanced || depth != 0 || direct_start.is_some() {
+        return Vec::new(); // 未闭合 / 悬空开标签：形态异常
+    }
+    spans
+}
+
+/// set_cell_text 手术：定位第 `row` 行第 `cell` 格（1-based，与 projection=table
+/// 视图同口径——跨列格算 1 格），重建格文本，其余字节原样。
+fn set_cell_text(block_xml: &str, row: usize, cell: usize, text: &str) -> Option<String> {
+    let rows = direct_children_spans(block_xml, "tr");
+    let (rs, re) = *rows.get(row.checked_sub(1)?)?;
+    let row_xml = &block_xml[rs..re];
+    let cells = direct_children_spans(row_xml, "tc");
+    let (cs, ce) = *cells.get(cell.checked_sub(1)?)?;
+    let new_cell = rebuild_cell_content(&row_xml[cs..ce], text)?;
+    let mut out = String::with_capacity(block_xml.len() + 64);
+    out.push_str(&block_xml[..rs]);
+    out.push_str(&row_xml[..cs]);
+    out.push_str(&new_cell);
+    out.push_str(&row_xml[ce..]);
+    out.push_str(&block_xml[re..]);
+    Some(out)
+}
+
+/// 重建单元格：保开标签属性 + tcPr（含 gridSpan/vMerge/tcW），段落由 text 生成。
+/// 模板格式 = 原首段的 pPr + 首 run 的 rPr（与 replace_text 保真纪律同源）。
+/// 嵌套表保护：格内含 w:tbl 时返回 None（预检已拒，此处兜底防直调误伤）。
+fn rebuild_cell_content(cell_xml: &str, text: &str) -> Option<String> {
+    if cell_xml.contains("<w:tbl>") || cell_xml.contains("<w:tbl ") {
+        return None;
+    }
+    let open_end = cell_xml.find('>')? + 1; // 开标签止于 '>'（tc 无自闭合形态）
+    let tcpr = find_element_span(cell_xml, "tcPr");
+    let content_from = tcpr.map(|(_, e)| e).unwrap_or(open_end);
+    let content = &cell_xml[content_from..cell_xml.len().saturating_sub("</w:tc>".len())];
+    let first_p = find_element_span(content, "p")?;
+    let p_xml = &content[first_p.0..first_p.1];
+    let ppr = slice_ppr(p_xml);
+    let rpr = slice_first_run_rpr(p_xml);
+    let mut paras = String::new();
+    if text.is_empty() {
+        paras.push_str(&format!("<w:p>{ppr}</w:p>"));
+    } else {
+        for line in text.split('\n') {
+            paras.push_str(&format!("<w:p>{ppr}{}</w:p>", run_xml(&rpr, line)));
+        }
+    }
+    let mut out = String::with_capacity(cell_xml.len() + paras.len() + 8);
+    out.push_str(&cell_xml[..open_end]);
+    if let Some((s, e)) = tcpr {
+        out.push_str(&cell_xml[s..e]);
+    }
+    out.push_str(&paras);
+    out.push_str("</w:tc>");
+    Some(out)
+}
+
+/// 增行手术：克隆模板行（after_row 缺省 = 末行）整结构——tcPr/gridSpan/vMerge
+/// 原样保留，格文本替换为 cells（缺省全空）。结构克隆是合并格表格唯一正确的
+/// 增行方式（凭空造行会破坏 gridSpan/vMerge 与 tblGrid 的对应）。
+fn insert_table_row_after(
+    block_xml: &str,
+    after_row: Option<usize>,
+    cells: Option<&[String]>,
+) -> Option<String> {
+    let rows = direct_children_spans(block_xml, "tr");
+    if rows.is_empty() {
+        return None;
+    }
+    let tpl_idx = match after_row {
+        Some(r) => r.checked_sub(1)?,
+        None => rows.len() - 1,
+    };
+    let (ts, te) = *rows.get(tpl_idx)?;
+    let tpl = &block_xml[ts..te];
+    let tcs = direct_children_spans(tpl, "tc");
+    if tcs.is_empty() {
+        return None;
+    }
+    let filled: Vec<&str> = match cells {
+        Some(cs) => cs.iter().map(String::as_str).collect(),
+        None => vec![""; tcs.len()],
+    };
+    let mut new_row = String::with_capacity(tpl.len() + 32);
+    new_row.push_str(&tpl[..tcs[0].0]); // <w:tr> + trPr（若有）原样
+    for (i, (cs, ce)) in tcs.iter().enumerate() {
+        let rebuilt = rebuild_cell_content(&tpl[*cs..*ce], filled.get(i).copied().unwrap_or(""))?;
+        new_row.push_str(&rebuilt);
+    }
+    new_row.push_str("</w:tr>");
+    let mut out = String::with_capacity(block_xml.len() + new_row.len());
+    out.push_str(&block_xml[..te]);
+    out.push_str(&new_row);
+    out.push_str(&block_xml[te..]);
+    Some(out)
+}
+
+/// (row, cell) 单元格投影文本（前 60 字）——set_cell_text 摘要的 before 值。
+fn cell_projected_of(model: &docx_model::DocxDocument, block: usize, row: usize, cell: usize) -> String {
+    let mut s = String::new();
+    if let Block::Table(t) = &model.body[block - 1] {
+        if let Some(r) = t.rows.get(row - 1) {
+            if let Some(c) = r.cells.get(cell - 1) {
+                docx_model::blocks_text(&c.blocks, &mut s);
+            }
+        }
+    }
+    truncate(s.trim_end_matches('\n'), 60)
 }
 
 // =========================================================================
@@ -2575,5 +3122,411 @@ mod tests {
         let mut data = Vec::new();
         entry.read_to_end(&mut data).unwrap();
         (name, data)
+    }
+
+    // ---- 表格四件（S3 三波）----
+
+    /// 两格行 / 两行两格表 fixture。
+    fn cell_xml(text: &str) -> String {
+        format!(
+            r#"<w:tc><w:tcPr><w:tcW w:w="4500" w:type="dxa"/></w:tcPr><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:tc>"#
+        )
+    }
+    fn row_xml(a: &str, b: &str) -> String {
+        format!("<w:tr>{}{}</w:tr>", cell_xml(a), cell_xml(b))
+    }
+    fn tbl_of(rows: &[String]) -> String {
+        format!(
+            r#"<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/></w:tblPr><w:tblGrid><w:gridCol w:w="4500"/><w:gridCol w:w="4500"/></w:tblGrid>{}</w:tbl>"#,
+            rows.concat()
+        )
+    }
+    fn two_row_table_doc() -> String {
+        wrap(&tbl_of(&[row_xml("甲一", "乙一"), row_xml("甲二", "乙二")]))
+    }
+
+    #[test]
+    fn insert_table_after_builds_grid() {
+        let xml = wrap(r#"<w:p><w:r><w:t>锚段</w:t></w:r></w:p>"#);
+        let (out, applied) = apply_edits(
+            &xml,
+            &Stylesheet::empty(),
+            &[EditOp::InsertTableAfter {
+                block: 1,
+                expect_prefix: "锚段".into(),
+                rows: vec![vec!["列一".into(), "列二".into()], vec!["1".into(), "2".into()]],
+                header: None,
+            }],
+        )
+        .unwrap();
+        assert_eq!(applied.len(), 1);
+        assert_eq!(applied[0].op, "insert_table_after");
+        // 块数守恒：1 段 + 1 表
+        let m = model_of(&out);
+        assert_eq!(m.body.len(), 2);
+        let Block::Table(t) = &m.body[1] else { panic!("块 2 应为表格") };
+        assert_eq!(t.rows.len(), 2);
+        assert_eq!(t.rows[0].cells.len(), 2);
+        // 默认表头：加粗 + 跨页重复 + 全边框 + 100% 宽
+        assert!(out.contains("<w:tblHeader/>"), "表头行应带 tblHeader");
+        assert!(out.contains("<w:b/>"), "表头应加粗");
+        assert!(out.contains(r#"w:type="pct""#), "tblW 应为百分比宽");
+        assert!(out.contains("<w:insideH"), "应有内框线");
+        // header=false：无表头标记无加粗
+        let (out2, _) = apply_edits(
+            &xml,
+            &Stylesheet::empty(),
+            &[EditOp::InsertTableAfter {
+                block: 1,
+                expect_prefix: "锚段".into(),
+                rows: vec![vec!["a".into(), "b".into()]],
+                header: Some(false),
+            }],
+        )
+        .unwrap();
+        assert!(!out2.contains("<w:tblHeader/>"));
+        // \n = 格内多段（两个 <w:p>，非 br——表格格内软换行走真段落）
+        let (out3, _) = apply_edits(
+            &xml,
+            &Stylesheet::empty(),
+            &[EditOp::InsertTableAfter {
+                block: 1,
+                expect_prefix: "锚段".into(),
+                rows: vec![vec!["一\n二".into(), "b".into()]],
+                header: Some(false),
+            }],
+        )
+        .unwrap();
+        assert!(!out3.contains("<w:br/>"), "格内 \\n 不应转 br（设计=分段）");
+        let cell1 = out3.find("一</w:t>").map(|p| out3[..p].matches("<w:p>").count()).unwrap_or(0);
+        assert_eq!(cell1, 2, "首格应含两个段落: {}", &out3[out3.find("<w:tbl>").unwrap()..out3.find("<w:tbl>").unwrap() + 300]);
+    }
+
+    #[test]
+    fn insert_table_after_rejects_bad_rows() {
+        let xml = wrap(r#"<w:p><w:r><w:t>锚</w:t></w:r></w:p>"#);
+        // 空 rows
+        let err = val_msg(apply_edits(
+            &xml,
+            &Stylesheet::empty(),
+            &[EditOp::InsertTableAfter { block: 1, expect_prefix: "锚".into(), rows: vec![], header: None }],
+        ).unwrap_err());
+        assert!(err.starts_with("表格数据无效"), "实际: {err}");
+        // 非矩形
+        let err = val_msg(apply_edits(
+            &xml,
+            &Stylesheet::empty(),
+            &[EditOp::InsertTableAfter {
+                block: 1,
+                expect_prefix: "锚".into(),
+                rows: vec![vec!["a".into(), "b".into()], vec!["c".into()]],
+                header: None,
+            }],
+        ).unwrap_err());
+        assert!(err.starts_with("表格数据无效"), "实际: {err}");
+        assert!(err.contains("2 行"), "应指明行号: {err}");
+        // 超行数上限
+        let big: Vec<Vec<String>> = (0..201).map(|i| vec![i.to_string()]).collect();
+        let err = val_msg(apply_edits(
+            &xml,
+            &Stylesheet::empty(),
+            &[EditOp::InsertTableAfter { block: 1, expect_prefix: "锚".into(), rows: big, header: None }],
+        ).unwrap_err());
+        assert!(err.starts_with("表格数据无效"), "实际: {err}");
+        assert!(err.contains("超上限"), "实际: {err}");
+    }
+
+    #[test]
+    fn set_cell_text_preserves_structure_and_formats() {
+        // 格 (1,1)：gridSpan=2 + 段 pPr 居中 + run 加粗——改文本全保留
+        let span_cell = r#"<w:tc><w:tcPr><w:tcW w:w="4500" w:type="dxa"/><w:gridSpan w:val="2"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>旧文</w:t></w:r></w:p></w:tc>"#;
+        let xml = wrap(&format!(
+            r#"<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="4500"/><w:gridCol w:w="4500"/></w:tblGrid><w:tr>{}{}</w:tr></w:tbl>"#,
+            span_cell,
+            cell_xml("乙")
+        ));
+        let (out, applied) = apply_edits(
+            &xml,
+            &Stylesheet::empty(),
+            &[EditOp::SetCellText {
+                block: 1,
+                expect_prefix: "旧文".into(),
+                row: 1,
+                cell: 1,
+                text: "新文\n二段".into(),
+            }],
+        )
+        .unwrap();
+        assert_eq!(applied.len(), 1);
+        assert_eq!(applied[0].op, "set_cell_text");
+        assert_eq!(applied[0].before, "旧文");
+        assert_eq!(applied[0].after, "新文\n二段");
+        // tcPr 整体保留（tcW + gridSpan）
+        assert!(out.contains(r#"<w:gridSpan w:val="2"/>"#), "gridSpan 应保留");
+        // 段/字符格式保留 + \n 成两段
+        assert!(out.contains(r#"<w:jc w:val="center"/>"#), "段落格式应保留");
+        assert!(out.contains("<w:b/>"), "字符格式应保留");
+        assert!(out.contains("新文"), "新文本应写入");
+        assert!(!out.contains("旧文"), "旧文本应替换");
+        assert_eq!(out.matches("<w:p>").count(), 2 + 1, "格 1 两段 + 格 2 一段");
+        // 产物可回读且结构不变
+        let m = model_of(&out);
+        let Block::Table(t) = &m.body[0] else { panic!() };
+        assert_eq!(t.rows[0].cells.len(), 2);
+        assert_eq!(t.rows[0].cells[0].grid_span, Some(2));
+        // 空文本 = 清空（留一个带原格式的空段）
+        let (out2, _) = apply_edits(
+            &xml,
+            &Stylesheet::empty(),
+            &[EditOp::SetCellText {
+                block: 1,
+                expect_prefix: "旧文".into(),
+                row: 1,
+                cell: 1,
+                text: String::new(),
+            }],
+        )
+        .unwrap();
+        assert!(out2.contains(r#"<w:jc w:val="center"/>"#), "清空仍保留段落格式");
+        assert!(!out2.contains("旧文"));
+    }
+
+    #[test]
+    fn set_cell_text_error_families() {
+        // 非表格块
+        let xml = wrap(r#"<w:p><w:r><w:t>段</w:t></w:r></w:p>"#);
+        let err = val_msg(apply_edits(
+            &xml,
+            &Stylesheet::empty(),
+            &[EditOp::SetCellText { block: 1, expect_prefix: "段".into(), row: 1, cell: 1, text: "x".into() }],
+        ).unwrap_err());
+        assert!(err.starts_with("非表格块"), "实际: {err}");
+        // 行越界 / 格越界
+        let xml = two_row_table_doc();
+        let err = val_msg(apply_edits(
+            &xml,
+            &Stylesheet::empty(),
+            &[EditOp::SetCellText { block: 1, expect_prefix: "甲".into(), row: 5, cell: 1, text: "x".into() }],
+        ).unwrap_err());
+        assert!(err.starts_with("单元格越界"), "实际: {err}");
+        let err = val_msg(apply_edits(
+            &xml,
+            &Stylesheet::empty(),
+            &[EditOp::SetCellText { block: 1, expect_prefix: "甲".into(), row: 1, cell: 3, text: "x".into() }],
+        ).unwrap_err());
+        assert!(err.starts_with("单元格越界"), "实际: {err}");
+        // 纵向合并续格（bare vMerge = continue）——续格放第 2 行，指纹取首行
+        let cont_cell = r#"<w:tc><w:tcPr><w:vMerge/></w:tcPr><w:p/></w:tc>"#;
+        let cont_row = format!("<w:tr>{}{}</w:tr>", cont_cell, cell_xml("乙二"));
+        let xml = wrap(&format!(
+            r#"<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="4500"/><w:gridCol w:w="4500"/></w:tblGrid>{}{}</w:tbl>"#,
+            row_xml("甲一", "乙一"),
+            cont_row
+        ));
+        let err = val_msg(apply_edits(
+            &xml,
+            &Stylesheet::empty(),
+            &[EditOp::SetCellText { block: 1, expect_prefix: "甲一".into(), row: 2, cell: 1, text: "x".into() }],
+        ).unwrap_err());
+        assert!(err.starts_with("纵向合并续格"), "实际: {err}");
+        assert!(err.contains("合并头"), "应指向合并头: {err}");
+        // 同一格多操作
+        let xml = two_row_table_doc();
+        let err = val_msg(apply_edits(
+            &xml,
+            &Stylesheet::empty(),
+            &[
+                EditOp::SetCellText { block: 1, expect_prefix: "甲".into(), row: 1, cell: 1, text: "x".into() },
+                EditOp::SetCellText { block: 1, expect_prefix: "甲".into(), row: 1, cell: 1, text: "y".into() },
+            ],
+        ).unwrap_err());
+        assert!(err.starts_with("同一格多操作"), "实际: {err}");
+        // 段落操作与表格操作同块冲突
+        let err = val_msg(apply_edits(
+            &xml,
+            &Stylesheet::empty(),
+            &[
+                EditOp::SetCellText { block: 1, expect_prefix: "甲".into(), row: 1, cell: 1, text: "x".into() },
+                EditOp::DeleteBlock { block: 1, expect_prefix: "甲".into() },
+            ],
+        ).unwrap_err());
+        assert!(err.starts_with("同一块多操作"), "实际: {err}");
+    }
+
+    #[test]
+    fn insert_table_row_after_clones_template() {
+        // 模板行带 vMerge restart + gridSpan——克隆后结构原样、文本替换
+        let merged_cell = r#"<w:tc><w:tcPr><w:tcW w:w="4500" w:type="dxa"/><w:vMerge w:val="restart"/><w:gridSpan w:val="1"/></w:tcPr><w:p><w:r><w:t>头</w:t></w:r></w:p></w:tc>"#;
+        let merged_row = format!("<w:tr>{}{}</w:tr>", merged_cell, cell_xml("右"));
+        let xml = wrap(&format!(
+            r#"<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="4500"/><w:gridCol w:w="4500"/></w:tblGrid>{}{}</w:tbl>"#,
+            merged_row,
+            row_xml("甲二", "乙二")
+        ));
+        // 克隆第 1 行插到其后 + 填文本
+        let (out, applied) = apply_edits(
+            &xml,
+            &Stylesheet::empty(),
+            &[EditOp::InsertTableRowAfter {
+                block: 1,
+                expect_prefix: "头".into(),
+                after_row: Some(1),
+                cells: Some(vec!["新甲".into(), "新乙".into()]),
+            }],
+        )
+        .unwrap();
+        assert_eq!(applied.len(), 1);
+        assert_eq!(applied[0].op, "insert_table_row_after");
+        let m = model_of(&out);
+        let Block::Table(t) = &m.body[0] else { panic!() };
+        assert_eq!(t.rows.len(), 3, "2 行 + 1 克隆");
+        // 新行（第 2 行）结构继承：vMerge restart / 格数一致；文本已换
+        assert_eq!(t.rows[1].cells[0].v_merge.as_deref(), Some("restart"), "vMerge 应随克隆保留");
+        assert!(out.contains("新甲"), "cells 文本应写入");
+        // 缺省：克隆末行、全空格
+        let (out2, _) = apply_edits(
+            &xml,
+            &Stylesheet::empty(),
+            &[EditOp::InsertTableRowAfter {
+                block: 1,
+                expect_prefix: "头".into(),
+                after_row: None,
+                cells: None,
+            }],
+        )
+        .unwrap();
+        let m2 = model_of(&out2);
+        let Block::Table(t2) = &m2.body[0] else { panic!() };
+        assert_eq!(t2.rows.len(), 3);
+        // 新末行文本为空（甲二/乙二 不重复出现三次）
+        assert_eq!(out2.matches("甲二").count(), 1, "克隆行文本应清空");
+    }
+
+    #[test]
+    fn insert_table_row_after_error_families() {
+        let xml = two_row_table_doc();
+        // 行号越界
+        let err = val_msg(apply_edits(
+            &xml,
+            &Stylesheet::empty(),
+            &[EditOp::InsertTableRowAfter {
+                block: 1,
+                expect_prefix: "甲".into(),
+                after_row: Some(9),
+                cells: None,
+            }],
+        ).unwrap_err());
+        assert!(err.starts_with("行号越界"), "实际: {err}");
+        // 列数不符
+        let err = val_msg(apply_edits(
+            &xml,
+            &Stylesheet::empty(),
+            &[EditOp::InsertTableRowAfter {
+                block: 1,
+                expect_prefix: "甲".into(),
+                after_row: Some(1),
+                cells: Some(vec!["只给一格".into(), "两格".into(), "三格".into()]),
+            }],
+        ).unwrap_err());
+        assert!(err.starts_with("列数不符"), "实际: {err}");
+        // 非表格块
+        let xml_p = wrap(r#"<w:p><w:r><w:t>段</w:t></w:r></w:p>"#);
+        let err = val_msg(apply_edits(
+            &xml_p,
+            &Stylesheet::empty(),
+            &[EditOp::InsertTableRowAfter {
+                block: 1,
+                expect_prefix: "段".into(),
+                after_row: None,
+                cells: None,
+            }],
+        ).unwrap_err());
+        assert!(err.starts_with("非表格块"), "实际: {err}");
+    }
+
+    #[test]
+    fn same_table_batch_insert_then_fill() {
+        // 「增行 + 填新行格」一批完成：虚拟行寻址 + 按序生效
+        let xml = two_row_table_doc();
+        let (out, applied) = apply_edits(
+            &xml,
+            &Stylesheet::empty(),
+            &[
+                EditOp::InsertTableRowAfter {
+                    block: 1,
+                    expect_prefix: "甲".into(),
+                    after_row: None,
+                    cells: None,
+                },
+                EditOp::SetCellText {
+                    block: 1,
+                    expect_prefix: "甲".into(),
+                    row: 3,
+                    cell: 1,
+                    text: "新行甲".into(),
+                },
+                EditOp::SetCellText {
+                    block: 1,
+                    expect_prefix: "甲".into(),
+                    row: 3,
+                    cell: 2,
+                    text: "新行乙".into(),
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(applied.len(), 3, "三操作同块按序组合");
+        let m = model_of(&out);
+        let Block::Table(t) = &m.body[0] else { panic!() };
+        assert_eq!(t.rows.len(), 3);
+        let mut text = String::new();
+        for c in &t.rows[2].cells {
+            docx_model::blocks_text(&c.blocks, &mut text);
+        }
+        assert_eq!(text, "新行甲\n新行乙\n", "新行两格已填: {text}");
+        // 原行不动
+        let mut text0 = String::new();
+        for c in &t.rows[0].cells {
+            docx_model::blocks_text(&c.blocks, &mut text0);
+        }
+        assert_eq!(text0, "甲一\n乙一\n");
+    }
+
+    #[test]
+    fn text_op_on_table_points_to_table_ops() {
+        // 段落操作命中表格块 → 家族前缀「表格块」+ 指路新三件
+        let xml = two_row_table_doc();
+        let err = val_msg(apply_edits(
+            &xml,
+            &Stylesheet::empty(),
+            &[EditOp::ReplaceText { block: 1, expect_prefix: "甲一".into(), new_text: "x".into() }],
+        ).unwrap_err());
+        assert!(err.starts_with("表格块"), "实际: {err}");
+        assert!(err.contains("set_cell_text"), "应指路 set_cell_text: {err}");
+        assert!(err.contains("insert_table_after"), "应指路建表: {err}");
+    }
+
+    #[test]
+    fn direct_children_spans_skips_nested() {
+        // 行内嵌套表（tc 里的 w:tbl 含 w:tr）不得计入直接子行
+        let nested_row = format!(
+            r#"<w:tr>{}<w:tc><w:tcPr><w:tcW w:w="4500" w:type="dxa"/></w:tcPr><w:tbl><w:tr>{}</w:tr></w:tbl><w:p/></w:tc></w:tr>"#,
+            cell_xml("外"),
+            row_xml("内甲", "内乙")
+        );
+        let tbl = format!(
+            r#"<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="4500"/><w:gridCol w:w="4500"/></w:tblGrid>{nested_row}{}</w:tbl>"#,
+            row_xml("二行", "二行乙")
+        );
+        let rows = super::direct_children_spans(&tbl, "tr");
+        assert_eq!(rows.len(), 2, "嵌套 w:tr 不计入: {}", rows.len());
+        for (s, e) in &rows {
+            assert!(tbl[*s..*e].starts_with("<w:tr>"));
+            assert!(tbl[*s..*e].ends_with("</w:tr>"));
+        }
+        // 格级同理：首行 2 格（嵌套表在格内，其 w:tc 不计入）
+        let first_row = &tbl[rows[0].0..rows[0].1];
+        let cells = super::direct_children_spans(first_row, "tc");
+        assert_eq!(cells.len(), 2, "嵌套 w:tc 不计入");
     }
 }
