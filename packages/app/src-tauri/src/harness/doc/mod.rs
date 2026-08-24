@@ -19,6 +19,7 @@ mod docx;
 mod docx_edit;
 mod docx_inspect;
 mod docx_model;
+mod numbering;
 mod pdf;
 mod pdf_render;
 mod spreadsheet;

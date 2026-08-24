@@ -13,8 +13,11 @@
 
 use crate::error::{AppError, AppResult};
 
+use std::collections::HashMap;
+
 use super::docx;
 use super::docx_model::{self, Block, Revision};
+use super::numbering::{self, NumberingCatalog};
 use super::styles::{self, Stylesheet};
 use super::xml_dom;
 
@@ -81,13 +84,25 @@ pub fn inspect_document(bytes: &[u8], req: &InspectRequest) -> AppResult<Inspect
             .unwrap_or_else(|_| Stylesheet::empty()),
         None => Stylesheet::empty(),
     };
+    // numbering.xml 可选部件：解析编号定义 → 文档顺序计数模拟出实际编号值
+    // （"3.2.1"/"一、"——Word 渲染时才算的值，不接此处 agent 全盲）
+    let numbers: HashMap<usize, String> = match docx::read_entry(bytes, "word/numbering.xml")? {
+        Some(xml) => match xml_dom::parse(&xml) {
+            Ok(dom) => {
+                let catalog: NumberingCatalog = numbering::parse_numbering(&dom);
+                numbering::compute_numbers(&model.body, &catalog)
+            }
+            Err(_) => HashMap::new(), // 损坏 → 回退引用形式显示，不挡主路径
+        },
+        None => HashMap::new(),
+    };
 
     let total = model.body.len();
     let (start, end, has_more) = resolve_range(total, req)?;
 
     let mut content = String::new();
     render_header(&model, total, &mut content);
-    let ctx = RenderCtx { styles: &styles };
+    let ctx = RenderCtx { styles: &styles, numbers: &numbers };
     match req.projection {
         InspectProjection::Outline => {
             for (i, block) in model.body.iter().enumerate().take(end).skip(start - 1) {
@@ -142,6 +157,8 @@ fn resolve_range(total: usize, req: &InspectRequest) -> AppResult<(usize, usize,
 
 struct RenderCtx<'a> {
     styles: &'a Stylesheet,
+    /// 顶层段落块号 → 自动编号实际值（numbering.xml 计数模拟；空 = 无编号部件）
+    numbers: &'a HashMap<usize, String>,
 }
 
 /// 文档摘要头（三档共用）：规模 / 节与页面 / 修订警告。
@@ -199,7 +216,7 @@ fn render_outline_line(ctx: &RenderCtx, n: usize, block: &Block, out: &mut Strin
     match block {
         Block::Paragraph(p) => {
             let text = para_text(p);
-            let meta = para_meta(ctx, &p.props);
+            let meta = para_meta(ctx, n, &p.props);
             if text.trim().is_empty() {
                 out.push_str(&format!("[{n}] ¶ {meta} (空)\n"));
             } else {
@@ -217,8 +234,8 @@ fn render_outline_line(ctx: &RenderCtx, n: usize, block: &Block, out: &mut Strin
     }
 }
 
-/// 段落元信息：样式（显示名 + 大纲层级）/ 列表引用。
-fn para_meta(ctx: &RenderCtx, props: &docx_model::ParaProps) -> String {
+/// 段落元信息：样式（显示名 + 大纲层级）/ 列表（有编号值显示实际值，否则引用形式）。
+fn para_meta(ctx: &RenderCtx, n: usize, props: &docx_model::ParaProps) -> String {
     let mut parts: Vec<String> = Vec::new();
     match &props.style {
         Some(id) => {
@@ -231,7 +248,12 @@ fn para_meta(ctx: &RenderCtx, props: &docx_model::ParaProps) -> String {
         None => parts.push("(无样式)".to_string()),
     }
     if let Some(num) = &props.numbering {
-        parts.push(format!("列表(num{},lvl{})", num.num_id, num.ilvl));
+        match ctx.numbers.get(&n) {
+            // 实际编号值（Word 渲染口径）：「列表 一、」/「列表 2.1)」
+            Some(text) => parts.push(format!("列表 {text}")),
+            // 引用无法解析（numId 不在目录/部件缺失）→ 原样引用，agent 可感知异常
+            None => parts.push(format!("列表(num{},lvl{})", num.num_id, num.ilvl)),
+        }
     }
     parts.join(" ")
 }
@@ -240,7 +262,7 @@ fn para_meta(ctx: &RenderCtx, props: &docx_model::ParaProps) -> String {
 fn render_format_block(ctx: &RenderCtx, n: usize, block: &Block, out: &mut String) {
     match block {
         Block::Paragraph(p) => {
-            out.push_str(&format!("[{n}] ¶ {}\n", para_meta(ctx, &p.props)));
+            out.push_str(&format!("[{n}] ¶ {}\n", para_meta(ctx, n, &p.props)));
             let chain = p
                 .props
                 .style
@@ -292,17 +314,18 @@ fn render_format_block(ctx: &RenderCtx, n: usize, block: &Block, out: &mut Strin
     }
 }
 
-/// text：带块号的正文（表格展开为格内段落行）。
-fn render_text_block(_ctx: &RenderCtx, n: usize, block: &Block, out: &mut String) {
+/// text：带块号的正文（表格展开为格内段落行）；列表段带实际编号前缀（贴近 Word 视图）。
+fn render_text_block(ctx: &RenderCtx, n: usize, block: &Block, out: &mut String) {
     match block {
         Block::Paragraph(p) => {
             let text = para_text(p);
+            let num_prefix = ctx.numbers.get(&n).map(|t| format!("{t} ")).unwrap_or_default();
             if text.trim().is_empty() {
                 out.push_str(&format!("[{n}] (空)\n"));
             } else {
                 // 段内软换行（w:br）原样保留为多行
                 for line in text.split('\n') {
-                    out.push_str(&format!("[{n}] {line}\n"));
+                    out.push_str(&format!("[{n}] {num_prefix}{line}\n"));
                 }
             }
         }
