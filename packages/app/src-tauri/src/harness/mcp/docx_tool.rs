@@ -26,7 +26,7 @@ pub struct InspectDocxTool;
 #[derive(Deserialize)]
 struct InspectDocxArgs {
     path: String,
-    /// outline（默认，全图）/ format（run 级格式）/ text（带块号正文）
+    /// outline（默认，全图）/ format（run 级格式）/ text（带块号正文）/ headers_footers（页眉页脚）
     #[serde(default)]
     projection: Option<String>,
     /// 起始块号（1-based，含）
@@ -62,7 +62,10 @@ impl McpClient for InspectDocxTool {
          level, text summary; the map of the whole document. projection=format: run-level \
          effective formatting (font size/weight/color, fonts, alignment, line spacing, \
          indents after style-chain resolution) plus table grids for a block range. \
-         projection=text: document text with block-number prefixes. Blocks are numbered \
+         projection=text: document text with block-number prefixes. \
+         projection=headers_footers: per-section header/footer references with their \
+         content (start/end do not apply — organized by sections, not block ranges). \
+         Blocks are numbered \
          1-based in document order (paragraphs and tables together); these numbers are \
          the addressing scheme used to reference locations for editing. Workflow: outline \
          first to locate blocks, then format/text with start/end for details. Defaults: \
@@ -79,16 +82,16 @@ impl McpClient for InspectDocxTool {
                 },
                 "projection": {
                     "type": "string",
-                    "enum": ["outline", "format", "text"],
-                    "description": "Level of detail: outline (block map, default), format (run-level formatting), text (block-numbered text)."
+                    "enum": ["outline", "format", "text", "headers_footers"],
+                    "description": "Level of detail: outline (block map, default), format (run-level formatting), text (block-numbered text), headers_footers (per-section header/footer content; no start/end)."
                 },
                 "start": {
                     "type": "integer",
-                    "description": "First block number to render (1-based, inclusive). Default 1."
+                    "description": "First block number to render (1-based, inclusive). Default 1. Not applicable to headers_footers."
                 },
                 "end": {
                     "type": "integer",
-                    "description": "Last block number to render (1-based, inclusive). Default: start + span - 1 (span depends on projection)."
+                    "description": "Last block number to render (1-based, inclusive). Default: start + span - 1 (span depends on projection). Not applicable to headers_footers."
                 }
             },
             "required": ["path"]
@@ -107,6 +110,7 @@ impl McpClient for InspectDocxTool {
             None | Some("outline") => InspectProjection::Outline,
             Some("format") => InspectProjection::Format,
             Some("text") => InspectProjection::Text,
+            Some("headers_footers") => InspectProjection::HeadersFooters,
             Some(other) => {
                 return Err(AppError::Validation(format!(
                     "未知投影档位: {other}。支持 outline（块级地图，默认）/ format（run 级格式）/ text（带块号正文）。"

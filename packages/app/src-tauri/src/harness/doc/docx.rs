@@ -62,6 +62,37 @@ pub(super) fn read_entry(bytes: &[u8], name: &str) -> AppResult<Option<String>> 
     Ok(Some(String::from_utf8_lossy(&buf).into_owned()))
 }
 
+/// 解析 `word/_rels/document.xml.rels`：rId → 页眉/页脚部件路径（如
+/// `word/header1.xml`）。只收 Type 尾段为 header/footer 的关系（正文图片等
+/// 其余关系与页眉页脚投影无关）；rels 缺失 → 空表（无页眉页脚引用的简文档）。
+/// Target 相对 `word/` 归一（`header1.xml` → `word/header1.xml`；绝对
+/// `/word/header1.xml` 去前导斜杠容错）。
+pub(super) fn parse_header_footer_rels(
+    bytes: &[u8],
+) -> AppResult<std::collections::HashMap<String, String>> {
+    let mut map = std::collections::HashMap::new();
+    let Some(rels_xml) = read_entry(bytes, "word/_rels/document.xml.rels")? else {
+        return Ok(map);
+    };
+    let dom = super::xml_dom::parse(&rels_xml)?;
+    for rel in dom.child_elements().filter(|e| e.name == "Relationship") {
+        let ty = rel.attr("Type").unwrap_or("");
+        if !ty.ends_with("/header") && !ty.ends_with("/footer") {
+            continue;
+        }
+        let (Some(id), Some(target)) = (rel.attr("Id"), rel.attr("Target")) else {
+            continue;
+        };
+        let path = if let Some(stripped) = target.strip_prefix('/') {
+            stripped.to_string()
+        } else {
+            format!("word/{target}")
+        };
+        map.insert(id.to_string(), path);
+    }
+    Ok(map)
+}
+
 // =========================================================================
 // golden 扫描器（旧实现原样保留，仅测试编译——零回归的对照面）
 // =========================================================================
