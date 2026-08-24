@@ -161,7 +161,7 @@ pub(super) fn compute_numbers(
         }
 
         // lvlText 模板渲染：%1..%9 → 对应级计数值经 numFmt 格式化
-        let text = sanitize_bullet_glyph(&render_lvl_text(def, num.num_id, &counters));
+        let text = sanitize_bullet_glyph(&render_lvl_text(def, num.num_id, catalog, &counters));
         if !text.trim().is_empty() {
             out.insert(i + 1, text);
         }
@@ -184,6 +184,7 @@ fn sanitize_bullet_glyph(s: &str) -> String {
 fn render_lvl_text(
     def: &LvlDef,
     num_id: u32,
+    catalog: &NumberingCatalog,
     counters: &HashMap<(u32, u32), u32>,
 ) -> String {
     let mut out = String::with_capacity(def.lvl_text.len() + 8);
@@ -200,9 +201,26 @@ fn render_lvl_text(
         }
         let ilvl = next_char.unwrap().to_digit(10).unwrap() - 1;
         out.push_str(&rest[..pct]);
-        // 该级当前值：未出现过（模板引用了未出现层级——如 lvl2 段先于 lvl0 出现）按 1
-        let value = counters.get(&(num_id, ilvl)).copied().unwrap_or(1);
-        out.push_str(&render_number(&def.num_fmt, value));
+        // 该级当前值。Word 渲染口径：每级计数从自身 start 起步——模板引用了
+        // 「从未出现的祖先级」或「被浅层推进重置后未复现的级」时显示该级 start，
+        // 不是 1（真实语料有作者手调 start 对齐手写编号的形态：lvl1 start=2、
+        // lvl2 start=6 → 首个 lvl2 段渲染 "1.2.6"；此前按 1 算成 "1.1.6"）。
+        // 计数器值域 = {start-1（重置待复现）} ∪ {≥start}，故 < start 即回退 start。
+        let lvl_start = catalog
+            .lvl_of(num_id, ilvl)
+            .map(|d| d.start)
+            .unwrap_or(1);
+        let value = match counters.get(&(num_id, ilvl)).copied() {
+            Some(v) if v >= lvl_start => v,
+            _ => lvl_start,
+        };
+        // %N 按该级自己的 numFmt 渲染（"%1.%2" 而 %2 是 lowerLetter → "1.b"），
+        // 级定义缺失回退当前级格式
+        let lvl_fmt = catalog
+            .lvl_of(num_id, ilvl)
+            .map(|d| d.num_fmt.as_str())
+            .unwrap_or(&def.num_fmt);
+        out.push_str(&render_number(lvl_fmt, value));
         rest = &after[1..];
     }
     out.push_str(rest);
@@ -385,6 +403,49 @@ mod tests {
         assert_eq!(nums.get(&2), Some(&"2.".to_string()));
         // 同 abstractNum 不同 num 实例：计数独立（Word 复制列表语义）
         assert_eq!(nums.get(&3), Some(&"1.".to_string()));
+    }
+
+    #[test]
+    fn hand_tuned_starts_render_ancestors_at_their_start() {
+        // 真实语料形态（SRS）：作者手调各级 start 对齐手写编号——lvl1 start=2、
+        // lvl2 start=6；首个 lvl2 段（先于 lvl0/lvl1 出现）Word 渲染 "1.2.6"
+        // 而非 "1.1.6"。回归：未出现祖先级按其自身 start 渲染。
+        let cat = numbering_xml(
+            r#"<w:abstractNum w:abstractNumId="17">
+                <w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1"/></w:lvl>
+                <w:lvl w:ilvl="1"><w:start w:val="2"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1.%2"/></w:lvl>
+                <w:lvl w:ilvl="2"><w:start w:val="6"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1.%2.%3"/></w:lvl>
+            </w:abstractNum>
+            <w:num w:numId="2"><w:abstractNumId w:val="17"/></w:num>"#,
+        );
+        // 首个 lvl2 段：lvl0/lvl1 从未出现 → 各按 start（1/2），本级首现 = 6
+        let body = body_with_nums(&[(2, 2)]);
+        let nums = compute_numbers(&body, &cat);
+        assert_eq!(nums.get(&1), Some(&"1.2.6".to_string()));
+
+        // lvl0 推进两轮后 lvl2 复现：lvl0 取新值，lvl1 仍从未出现 → 取其 start
+        let body = body_with_nums(&[(2, 0), (2, 0), (2, 2)]);
+        let nums = compute_numbers(&body, &cat);
+        assert_eq!(nums.get(&1), Some(&"1".to_string()));
+        assert_eq!(nums.get(&2), Some(&"2".to_string()));
+        assert_eq!(nums.get(&3), Some(&"2.2.6".to_string()), "lvl1 未出现按 start=2");
+    }
+
+    #[test]
+    fn placeholder_uses_referenced_level_numfmt() {
+        // "%1.%2" 而 %2 是 lowerLetter：占位按被引用级自己的 numFmt 渲染
+        let cat = numbering_xml(
+            r#"<w:abstractNum w:abstractNumId="1">
+                <w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/></w:lvl>
+                <w:lvl w:ilvl="1"><w:start w:val="1"/><w:numFmt w:val="lowerLetter"/><w:lvlText w:val="%1.%2"/></w:lvl>
+            </w:abstractNum>
+            <w:num w:numId="5"><w:abstractNumId w:val="1"/></w:num>"#,
+        );
+        let body = body_with_nums(&[(5, 0), (5, 1), (5, 1)]);
+        let nums = compute_numbers(&body, &cat);
+        assert_eq!(nums.get(&1), Some(&"1.".to_string()));
+        assert_eq!(nums.get(&2), Some(&"1.a".to_string()));
+        assert_eq!(nums.get(&3), Some(&"1.b".to_string()));
     }
 
     #[test]
