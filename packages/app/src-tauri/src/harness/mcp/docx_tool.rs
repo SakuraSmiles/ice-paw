@@ -194,6 +194,73 @@ enum OperationSpec {
     DeleteBlock { block: usize, expect_prefix: String },
     /// 改段落样式（标题升降级等）：style 接受显示名或样式 ID；正文 run 不动
     SetStyle { block: usize, expect_prefix: String, style: String },
+    /// 改格式：paragraph（对齐/行距/段前后/缩进）与 character（粗斜/字号/颜色/字体）
+    /// 至少一项内有字段；None 字段原样保留
+    SetFormat {
+        block: usize,
+        expect_prefix: String,
+        #[serde(default)]
+        paragraph: Option<ParaFormatSpec>,
+        #[serde(default)]
+        character: Option<CharFormatSpec>,
+    },
+}
+
+/// 参数态段落格式（单位与 format 投影显示一致：行距=倍数 / 段前后=pt / 缩进=twips）。
+#[derive(Deserialize)]
+struct ParaFormatSpec {
+    #[serde(default)]
+    align: Option<String>,
+    #[serde(default)]
+    line_spacing: Option<f32>,
+    #[serde(default)]
+    space_before_pt: Option<f32>,
+    #[serde(default)]
+    space_after_pt: Option<f32>,
+    #[serde(default)]
+    indent_first_line_tw: Option<i32>,
+    #[serde(default)]
+    indent_left_tw: Option<i32>,
+}
+
+/// 参数态字符格式（应用到段落内每个 run）。
+#[derive(Deserialize)]
+struct CharFormatSpec {
+    #[serde(default)]
+    bold: Option<bool>,
+    #[serde(default)]
+    italic: Option<bool>,
+    #[serde(default)]
+    font_size_pt: Option<f32>,
+    #[serde(default)]
+    color: Option<String>,
+    #[serde(default)]
+    font: Option<String>,
+}
+
+impl From<ParaFormatSpec> for crate::harness::doc::ParaFormat {
+    fn from(s: ParaFormatSpec) -> Self {
+        Self {
+            align: s.align,
+            line_spacing: s.line_spacing,
+            space_before_pt: s.space_before_pt,
+            space_after_pt: s.space_after_pt,
+            indent_first_line_tw: s.indent_first_line_tw,
+            indent_left_tw: s.indent_left_tw,
+        }
+    }
+}
+
+impl From<CharFormatSpec> for crate::harness::doc::CharFormat {
+    fn from(s: CharFormatSpec) -> Self {
+        Self {
+            bold: s.bold,
+            italic: s.italic,
+            font_size_pt: s.font_size_pt,
+            color: s.color,
+            font: s.font,
+        }
+    }
 }
 
 impl From<OperationSpec> for EditOp {
@@ -210,6 +277,14 @@ impl From<OperationSpec> for EditOp {
             }
             OperationSpec::SetStyle { block, expect_prefix, style } => {
                 EditOp::SetStyle { block, expect_prefix, style }
+            }
+            OperationSpec::SetFormat { block, expect_prefix, paragraph, character } => {
+                EditOp::SetFormat {
+                    block,
+                    expect_prefix,
+                    paragraph: paragraph.map(Into::into),
+                    character: character.map(Into::into),
+                }
             }
         }
     }
@@ -239,12 +314,15 @@ impl McpClient for EditDocxTool {
          adds a new paragraph after an anchor block (inherits its formatting, or an \
          explicit style by display name); op=delete_block removes a whole block; \
          op=set_style changes a paragraph's style (e.g. promote to a heading) touching \
-         only the style element while leaving text and character formatting intact. Every \
+         only the style element while leaving text and character formatting intact; \
+         op=set_format changes paragraph formatting (alignment, line spacing, spacing \
+         before/after, indents) and/or character formatting (bold/italic, font size, \
+         color, font family applied to every run) with unspecified properties preserved. Every \
          operation must carry expect_prefix, the current text prefix of its target block, \
          as a fingerprint guard — if any block no longer matches, the whole batch is \
          rejected and the file is left untouched. Blocks are addressed by inspect_docx \
          block numbers (1-based, paragraphs and tables in document order); tables and \
-         revision-marked blocks are rejected for replace/delete/set_style. The file is backed up \
+         revision-marked blocks are rejected for replace/delete/set_style/set_format. The file is backed up \
          before writing. Workflow: inspect_docx (outline, then text) to find blocks, \
          edit_docx, then inspect_docx again to verify the result."
     }
@@ -303,6 +381,41 @@ impl McpClient for EditDocxTool {
                                     "style": { "type": "string", "description": "Style display name or ID from inspect_docx outline style column; text and character formatting are left intact." }
                                 },
                                 "required": ["op", "block", "expect_prefix", "style"]
+                            },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "op": { "const": "set_format" },
+                                    "block": { "type": "integer", "description": "Target paragraph block (1-based; tables rejected)." },
+                                    "expect_prefix": { "type": "string", "description": "Current text prefix of the block (fingerprint guard)." },
+                                    "paragraph": {
+                                        "type": "object",
+                                        "description": "Paragraph-level formatting; omitted fields are left unchanged. Units match the format projection: line_spacing as a multiple (1.5 = 1.5-line spacing), spacing in pt, indents in twips (1 CJK char = 240tw).",
+                                        "properties": {
+                                            "align": { "type": "string", "enum": ["left", "center", "right", "both", "distribute", "start", "end"], "description": "both = justified, distribute = spread." },
+                                            "line_spacing": { "type": "number", "description": "Line spacing multiple, e.g. 1.5. Must be > 0." },
+                                            "space_before_pt": { "type": "number", "description": "Space before paragraph in points." },
+                                            "space_after_pt": { "type": "number", "description": "Space after paragraph in points." },
+                                            "indent_first_line_tw": { "type": "integer", "description": "First-line indent in twips, >= 0. 2 CJK chars = 480tw." },
+                                            "indent_left_tw": { "type": "integer", "description": "Left indent in twips (negative = outdent)." }
+                                        },
+                                        "additionalProperties": false
+                                    },
+                                    "character": {
+                                        "type": "object",
+                                        "description": "Character formatting applied to EVERY run in the paragraph; omitted fields are left unchanged.",
+                                        "properties": {
+                                            "bold": { "type": "boolean" },
+                                            "italic": { "type": "boolean" },
+                                            "font_size_pt": { "type": "number", "description": "Font size in points (1-400)." },
+                                            "color": { "type": "string", "description": "Hex RGB without '#', e.g. FF0000." },
+                                            "font": { "type": "string", "description": "Font family name; sets eastAsia/ascii/hAnsi together." }
+                                        },
+                                        "additionalProperties": false
+                                    }
+                                },
+                                "required": ["op", "block", "expect_prefix"],
+                                "description": "At least one field inside paragraph or character must be set."
                             }
                         ]
                     }

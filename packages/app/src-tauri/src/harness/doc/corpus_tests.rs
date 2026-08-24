@@ -577,3 +577,78 @@ fn corpus_set_style_surgery() {
         assert_eq!(old_t, new_t, "{name} set_style 不应改动文本");
     }
 }
+
+#[test]
+fn corpus_set_format_surgery() {
+    let Some((sdp, srs, install)) = all_corpus() else { return };
+    // S3②：真实 Word 产物上段落+字符格式手术闭环。目标块与指纹全运行时派生
+    // （语料字符串不进代码）；格式值用与语料无关的自造值。
+    for (name, bytes) in [("SDP", &sdp), ("SRS", &srs), ("INSTALL", &install)] {
+        let xml = super::docx::read_document_xml(bytes).unwrap();
+        let spans = super::docx_edit::locate_blocks(&xml).unwrap();
+        let model = super::docx_model::build_document(&xml_dom::parse(&xml).unwrap());
+        let target = pick_editable_block(&xml, &spans, &model, &[]).expect("{name} 无可编辑块");
+        let t2 = pick_editable_block(&xml, &spans, &model, &[target]).expect("{name} 无第 2 可编辑块");
+        let prefix_of = |n: usize| -> String {
+            let mut t = String::new();
+            super::docx_model::blocks_text(&model.body[n - 1..n], &mut t);
+            t.trim().chars().take(4).collect()
+        };
+        let (new_bytes, applied) = super::apply_edits_to_bytes(
+            bytes,
+            &[
+                super::EditOp::SetFormat {
+                    block: target,
+                    expect_prefix: prefix_of(target),
+                    paragraph: Some(super::ParaFormat {
+                        align: Some("center".into()),
+                        line_spacing: Some(1.5),
+                        ..Default::default()
+                    }),
+                    character: Some(super::CharFormat {
+                        bold: Some(true),
+                        font_size_pt: Some(14.0),
+                        color: Some("FF0000".into()),
+                        ..Default::default()
+                    }),
+                },
+                // 第二块独立验段落格式（合并分支：真实文档常有既有 spacing/ind）
+                super::EditOp::SetFormat {
+                    block: t2,
+                    expect_prefix: prefix_of(t2),
+                    paragraph: Some(super::ParaFormat {
+                        space_after_pt: Some(6.0),
+                        indent_first_line_tw: Some(480),
+                        ..Default::default()
+                    }),
+                    character: None,
+                },
+            ],
+        )
+        .unwrap_or_else(|e| panic!("{name} set_format 失败: {e}"));
+        assert_eq!(applied.len(), 2);
+        assert_eq!(applied[0].op, "set_format");
+
+        // untouched 保真：只有 document.xml 变
+        assert_untouched_entries_identical(bytes, &new_bytes, "word/document.xml");
+
+        // 读回：块数/文本不变；目标块格式生效（段落 + 每 run 字符格式）
+        let new_xml = super::docx::read_document_xml(&new_bytes).unwrap();
+        let model2 = super::docx_model::build_document(&xml_dom::parse(&new_xml).unwrap());
+        assert_eq!(model2.body.len(), model.body.len(), "{name} 块数应守恒");
+        let super::docx_model::Block::Paragraph(p) = &model2.body[target - 1] else {
+            panic!("{name} 目标块应仍是段落")
+        };
+        assert_eq!(p.props.alignment.as_deref(), Some("center"), "{name} 对齐未生效");
+        assert_eq!(p.props.spacing_line, Some(360), "{name} 行距未生效");
+        for (i, r) in p.runs.iter().enumerate() {
+            assert_eq!(r.props.bold, Some(true), "{name} run {i} 加粗未生效");
+            assert_eq!(r.props.size_half_pt, Some(28), "{name} run {i} 字号未生效");
+            assert_eq!(r.props.color.as_deref(), Some("FF0000"), "{name} run {i} 颜色未生效");
+        }
+        let (mut old_t, mut new_t) = (String::new(), String::new());
+        super::docx_model::blocks_text(&model.body[target - 1..target], &mut old_t);
+        super::docx_model::blocks_text(&model2.body[target - 1..target], &mut new_t);
+        assert_eq!(old_t, new_t, "{name} set_format 不应改动文本");
+    }
+}

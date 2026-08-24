@@ -38,7 +38,7 @@ pub use pdf_render::{page_count, render_page_to_png};
 pub use docx_inspect::{inspect_document, InspectProjection, InspectReport, InspectRequest};
 
 // edit_docx 块级手术（步骤 3）：批量事务，纯函数；IO/授权/写盘在 mcp::docx_tool。
-pub use docx_edit::{apply_edits_to_bytes, AppliedOp, EditOp};
+pub use docx_edit::{apply_edits_to_bytes, AppliedOp, CharFormat, EditOp, ParaFormat};
 
 /// 从一个文档中提取出的结果。
 #[derive(Debug, Clone)]

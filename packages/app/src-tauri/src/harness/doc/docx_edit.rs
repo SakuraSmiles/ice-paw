@@ -13,7 +13,8 @@
 //!    entry 用 `raw_copy_file` **原样字节复制**（不解压重压，压缩参数/元数据不变）。
 //!
 //! MVP 操作词表（批量事务，D3 拍板 2026-08-24）：`replace_text` /
-//! `insert_paragraph_after` / `delete_block` / `set_style`。格式/表格操作后续批。
+//! `insert_paragraph_after` / `delete_block` / `set_style` / `set_format`。
+//! 表格内容操作后续批。
 
 use std::io::{Cursor, Write};
 
@@ -151,6 +152,59 @@ pub(super) fn locate_blocks(xml: &str) -> AppResult<Vec<BlockSpan>> {
 // 操作词表（批量事务）
 // =========================================================================
 
+/// 段落级格式（set_format 用；None 字段不动）。单位与 format 投影显示一致——
+/// agent 读到什么单位就写什么单位（诚实回环）：行距=倍数 / 段前后=pt / 缩进=twips。
+#[derive(Debug, Clone, Default)]
+pub struct ParaFormat {
+    /// w:jc val：left/center/right/both(两端)/distribute(分散)/start/end
+    pub align: Option<String>,
+    /// 倍数行距（1.5 → 1.5 倍行距；w:line = 倍×240，lineRule=auto）
+    pub line_spacing: Option<f32>,
+    /// 段前间距（pt；twips = pt×20）
+    pub space_before_pt: Option<f32>,
+    /// 段后间距（pt）
+    pub space_after_pt: Option<f32>,
+    /// 首行缩进（twips，非负；1 字符 ≈ 240tw）
+    pub indent_first_line_tw: Option<i32>,
+    /// 左缩进（twips，可负=悬挂出格）
+    pub indent_left_tw: Option<i32>,
+}
+
+impl ParaFormat {
+    fn is_empty(&self) -> bool {
+        self.align.is_none()
+            && self.line_spacing.is_none()
+            && self.space_before_pt.is_none()
+            && self.space_after_pt.is_none()
+            && self.indent_first_line_tw.is_none()
+            && self.indent_left_tw.is_none()
+    }
+}
+
+/// 字符级格式（set_format 用；应用到段落内**每个 run**；None 字段不动）。
+#[derive(Debug, Clone, Default)]
+pub struct CharFormat {
+    /// 加粗（true=加粗 false=显式不加粗——压过样式链）
+    pub bold: Option<bool>,
+    pub italic: Option<bool>,
+    /// 字号（pt；w:sz 半磅 = pt×2，sz/szCs 同步）
+    pub font_size_pt: Option<f32>,
+    /// 颜色（RRGGBB 六位十六进制）
+    pub color: Option<String>,
+    /// 字体族（同时写 eastAsia/ascii/hAnsi——中文文档常态是同名字体）
+    pub font: Option<String>,
+}
+
+impl CharFormat {
+    fn is_empty(&self) -> bool {
+        self.bold.is_none()
+            && self.italic.is_none()
+            && self.font_size_pt.is_none()
+            && self.color.is_none()
+            && self.font.is_none()
+    }
+}
+
 /// 一个编辑操作（块号 1-based，与 inspect_docx 编址一致）。
 #[derive(Debug, Clone)]
 pub enum EditOp {
@@ -163,6 +217,14 @@ pub enum EditOp {
     /// 改段落样式（标题升降级等）：只动 pStyle 一个元素，正文 run 字节不动；
     /// 表格块拒绝。style 接受显示名或样式 ID（inspect_docx outline 样式列口径）。
     SetStyle { block: usize, expect_prefix: String, style: String },
+    /// 改段落/字符格式：pPr 三元素（spacing/ind/jc）属性级合并 + 每个 run 的
+    /// rPr（b/i/sz/color/rFonts）；未提及的属性原样保留；表格块拒绝。
+    SetFormat {
+        block: usize,
+        expect_prefix: String,
+        paragraph: Option<ParaFormat>,
+        character: Option<CharFormat>,
+    },
 }
 
 /// 单操作执行摘要（agent 读回验证用）。
@@ -203,7 +265,7 @@ pub(super) fn apply_edits(
 ) -> AppResult<(String, Vec<AppliedOp>)> {
     if ops.is_empty() {
         return Err(AppError::Validation(
-            "操作列表为空: edit_docx 至少需要一个操作。请提供 replace_text / insert_paragraph_after / delete_block / set_style 操作。".into(),
+            "操作列表为空: edit_docx 至少需要一个操作。请提供 replace_text / insert_paragraph_after / delete_block / set_style / set_format 操作。".into(),
         ));
     }
 
@@ -225,7 +287,8 @@ pub(super) fn apply_edits(
             EditOp::ReplaceText { block, .. }
             | EditOp::InsertParagraphAfter { block, .. }
             | EditOp::DeleteBlock { block, .. }
-            | EditOp::SetStyle { block, .. } => block,
+            | EditOp::SetStyle { block, .. }
+            | EditOp::SetFormat { block, .. } => block,
         };
         if block == 0 || block > spans.len() {
             return Err(AppError::Validation(format!(
@@ -318,9 +381,27 @@ pub(super) fn apply_edits(
                 }
                 // sectPr 在 pPr 内被原样保留（手术只动 pStyle 元素），改样式不破坏分节——放行
             }
+            EditOp::SetFormat { paragraph, character, .. } => {
+                if has_revision(&model.body[idx]) {
+                    return Err(AppError::Validation(format!(
+                        "含修订标记: 块 {block} 带插入/删除修订，默认不触碰修订内容。\
+                         请先在 Word 中接受或拒绝修订后再编辑该块。"
+                    )));
+                }
+                if block_xml.contains("<w:pPrChange") {
+                    return Err(AppError::Validation(format!(
+                        "含修订标记: 块 {block} 带段落属性修订（pPrChange），默认不触碰修订内容。\
+                         请先在 Word 中接受或拒绝修订后再编辑该块。"
+                    )));
+                }
+                validate_formats(paragraph.as_ref(), character.as_ref())?;
+            }
         }
-        // Replace / SetStyle 目标必须是段落块
-        if matches!(op, EditOp::ReplaceText { .. } | EditOp::SetStyle { .. }) && span.is_table {
+        // Replace / SetStyle / SetFormat 目标必须是段落块
+        if matches!(
+            op,
+            EditOp::ReplaceText { .. } | EditOp::SetStyle { .. } | EditOp::SetFormat { .. }
+        ) && span.is_table {
             return Err(AppError::Validation(format!(
                 "表格块: 块 {block} 是表格，该操作只支持段落。\
                  表格内容编辑暂不支持（后续批次）；可用 inspect_docx text 查看表格内容。"
@@ -410,6 +491,36 @@ pub(super) fn apply_edits(
                     },
                 });
             }
+            EditOp::SetFormat { block, paragraph, character, .. } => {
+                let span = spans[block - 1];
+                let mut new_block = xml[span.start..span.end].to_string();
+                if let Some(para) = &paragraph {
+                    new_block = reformat_ppr(&new_block, para)
+                        .ok_or_else(|| AppError::Internal(format!(
+                            "段落格式手术失败: 块 {block} XML 形态异常（内部 bug，未写盘）"
+                        )))?;
+                }
+                if let Some(ch) = &character {
+                    new_block = reformat_runs(&new_block, ch)
+                        .ok_or_else(|| AppError::Internal(format!(
+                            "字符格式手术失败: 块 {block} XML 形态异常（内部 bug，未写盘）"
+                        )))?;
+                }
+                let projected = projected_of(&model, block);
+                plan.push(Splice {
+                    pos: span.start,
+                    remove_end: span.end,
+                    insert: new_block,
+                    summary: AppliedOp {
+                        op: "set_format",
+                        block,
+                        before: projected.clone(),
+                        // 文本不变；after 携带本次应用的格式摘要（agent 读回验证）
+                        after: truncate(&describe_formats(paragraph.as_ref(), character.as_ref()), 60),
+                        style: None,
+                    },
+                });
+            }
         }
     }
 
@@ -447,7 +558,8 @@ fn expect_prefix_of(op: &EditOp) -> &str {
         EditOp::ReplaceText { expect_prefix, .. }
         | EditOp::InsertParagraphAfter { expect_prefix, .. }
         | EditOp::DeleteBlock { expect_prefix, .. }
-        | EditOp::SetStyle { expect_prefix, .. } => expect_prefix,
+        | EditOp::SetStyle { expect_prefix, .. }
+        | EditOp::SetFormat { expect_prefix, .. } => expect_prefix,
     }
 }
 
@@ -541,6 +653,452 @@ fn restyle_paragraph(block_xml: &str, style_id: &str) -> Option<String> {
         &block_xml[..gt + 1],
         &block_xml[gt + 1..]
     ))
+}
+
+/// set_format 值域校验（家族前缀稳定：空格式操作/对齐值无效/颜色值无效/…）。
+fn validate_formats(para: Option<&ParaFormat>, ch: Option<&CharFormat>) -> AppResult<()> {
+    let empty_para = para.is_none_or(|p| p.is_empty());
+    let empty_ch = ch.is_none_or(|c| c.is_empty());
+    if empty_para && empty_ch {
+        return Err(AppError::Validation(
+            "空格式操作: set_format 未提供任何要修改的字段。\
+             paragraph（对齐/行距/段前后/缩进）与 character（粗斜/字号/颜色/字体）\
+             至少一项内有字段。"
+                .into(),
+        ));
+    }
+    const ALIGNS: [&str; 7] = ["left", "center", "right", "both", "distribute", "start", "end"];
+    if let Some(p) = para {
+        if let Some(v) = &p.align {
+            if !ALIGNS.contains(&v.as_str()) {
+                return Err(AppError::Validation(format!(
+                    "对齐值无效: {v:?}。可用 left/center/right/both(两端对齐)/distribute(分散对齐)/start/end。"
+                )));
+            }
+        }
+        if let Some(v) = p.line_spacing {
+            if !v.is_finite() || v <= 0.0 {
+                return Err(AppError::Validation(format!(
+                    "行距值无效: {v}。应为正数倍数（1.5 = 1.5 倍行距）。"
+                )));
+            }
+        }
+        for (label, v) in [("段前", p.space_before_pt), ("段后", p.space_after_pt)] {
+            if let Some(v) = v {
+                if !v.is_finite() || !(0.0..=1000.0).contains(&v) {
+                    return Err(AppError::Validation(format!(
+                        "间距值无效: {label}={v}pt。合法范围 0-1000pt。"
+                    )));
+                }
+            }
+        }
+        if let Some(v) = p.indent_first_line_tw {
+            if v < 0 {
+                return Err(AppError::Validation(format!(
+                    "缩进值无效: 首行缩进 first_line={v}tw。应为非负 twips（1 字符 ≈ 240tw；\
+                     悬挂缩进请在 Word 中或经样式设置）。"
+                )));
+            }
+        }
+    }
+    if let Some(c) = ch {
+        if let Some(v) = c.font_size_pt {
+            if !v.is_finite() || !(1.0..=400.0).contains(&v) {
+                return Err(AppError::Validation(format!(
+                    "字号超出范围: {v}pt。合法范围 1-400pt。"
+                )));
+            }
+        }
+        if let Some(v) = &c.color {
+            let ok = v.len() == 6 && v.chars().all(|c| c.is_ascii_hexdigit());
+            if !ok {
+                return Err(AppError::Validation(format!(
+                    "颜色值无效: {v:?}。应为 6 位十六进制 RRGGBB（如 FF0000 红色）。"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// applied 摘要：本次应用的格式清单（如「段落(对齐=center 行距=1.5倍) 字符(粗 14pt)」）。
+fn describe_formats(para: Option<&ParaFormat>, ch: Option<&CharFormat>) -> String {
+    let mut parts = Vec::new();
+    if let Some(p) = para {
+        let mut seg = Vec::new();
+        if let Some(v) = &p.align {
+            seg.push(format!("对齐={v}"));
+        }
+        if let Some(v) = p.line_spacing {
+            seg.push(format!("行距={v}倍"));
+        }
+        if let Some(v) = p.space_before_pt {
+            seg.push(format!("段前={v}pt"));
+        }
+        if let Some(v) = p.space_after_pt {
+            seg.push(format!("段后={v}pt"));
+        }
+        if let Some(v) = p.indent_first_line_tw {
+            seg.push(format!("首行缩进={v}tw"));
+        }
+        if let Some(v) = p.indent_left_tw {
+            seg.push(format!("左缩进={v}tw"));
+        }
+        if !seg.is_empty() {
+            parts.push(format!("段落({})", seg.join(" ")));
+        }
+    }
+    if let Some(c) = ch {
+        let mut seg = Vec::new();
+        if let Some(v) = c.bold {
+            seg.push(if v { "加粗" } else { "取消加粗" }.to_string());
+        }
+        if let Some(v) = c.italic {
+            seg.push(if v { "斜体" } else { "取消斜体" }.to_string());
+        }
+        if let Some(v) = c.font_size_pt {
+            seg.push(format!("字号={v}pt"));
+        }
+        if let Some(v) = &c.color {
+            seg.push(format!("颜色=#{v}"));
+        }
+        if let Some(v) = &c.font {
+            seg.push(format!("字体={v}"));
+        }
+        if !seg.is_empty() {
+            parts.push(format!("字符({})", seg.join(" ")));
+        }
+    }
+    if parts.is_empty() {
+        "（无字段）".into()
+    } else {
+        parts.join(" ")
+    }
+}
+
+// =========================================================================
+// set_format 手术辅助（元素定位 / 属性合并 / schema 序插入）
+// =========================================================================
+
+/// 在 `s` 中找名为 `w:{name}` 的元素字节区间（`[start, end)`，自闭合或配对形式）。
+/// 撞名前缀（找 w:b 会先撞 w:bCs / w:bdr）按「后随字符是字母则跳过继续找」排除。
+/// None = 不存在。
+fn find_element_span(s: &str, name: &str) -> Option<(usize, usize)> {
+    let pat = format!("<w:{name}");
+    let mut from = 0usize;
+    loop {
+        let rel = s[from..].find(&pat)?;
+        let start = from + rel;
+        let after = start + pat.len();
+        let next_ch = s[after..].chars().next()?;
+        if next_ch.is_ascii_alphanumeric() {
+            from = after; // w:b 撞上 w:bCs——继续找下一个出现
+            continue;
+        }
+        // 开标签止于 '>'（自闭合时前一字符是 '/'）
+        let gt = after + s[after..].find('>')?;
+        let end = if s.as_bytes()[gt - 1] == b'/' {
+            gt + 1
+        } else {
+            let close = format!("</w:{name}>");
+            gt + 1 + s[gt + 1..].find(&close)? + close.len()
+        };
+        return Some((start, end));
+    }
+}
+
+/// 解析元素开标签的属性表（`name="value"` 对；仅到首个 '>'）。
+fn parse_attrs(el: &str) -> Vec<(String, String)> {
+    let gt = el.find('>').unwrap_or(el.len());
+    let tag = &el[..gt];
+    let mut out = Vec::new();
+    let mut rest = tag;
+    while let Some(eq) = rest.find('=') {
+        let head = &rest[..eq];
+        let name = head.trim_end().rsplit(char::is_whitespace).next().unwrap_or("").to_string();
+        let after = &rest[eq + 1..];
+        let quote = after.chars().next();
+        if quote != Some('"') {
+            rest = &rest[eq + 1..];
+            continue;
+        }
+        let Some(end_rel) = after[1..].find('"') else { break };
+        let value = after[1..1 + end_rel].to_string();
+        if !name.is_empty() {
+            out.push((name, value));
+        }
+        rest = &after[end_rel + 2..];
+    }
+    out
+}
+
+/// 由属性表构造标准自闭合标签（属性序 = 传入序）。
+fn build_tag(name: &str, attrs: &[(String, String)]) -> String {
+    if attrs.is_empty() {
+        return format!("<w:{name}/>");
+    }
+    let inner: Vec<String> = attrs.iter().map(|(k, v)| format!(r#"{k}="{v}""#)).collect();
+    format!("<w:{name} {}/>", inner.join(" "))
+}
+
+/// 属性表 set/remove（原地）。
+fn attr_set(attrs: &mut Vec<(String, String)>, key: &str, val: &str) {
+    if let Some(a) = attrs.iter_mut().find(|(k, _)| k == key) {
+        a.1 = val.to_string();
+    } else {
+        attrs.push((key.to_string(), val.to_string()));
+    }
+}
+fn attr_remove(attrs: &mut Vec<(String, String)>, key: &str) {
+    attrs.retain(|(k, _)| k != key);
+}
+
+/// 在父元素内容里替换或按 schema 序插入一个属性元素。
+/// - 已存在 → 整元素替换为 `new_tag`
+/// - 不存在 → 插到 `later`（schema 序中排在后面的兄弟元素名）最早出现处之前，
+///   或 `end_marker`（如 `</w:pPr>`）之前
+fn upsert_element(parent: &str, name: &str, new_tag: &str, later: &[&str], end_marker: &str) -> String {
+    if let Some((s, e)) = find_element_span(parent, name) {
+        return format!("{}{new_tag}{}", &parent[..s], &parent[e..]);
+    }
+    let mut insert_at = parent.find(end_marker).unwrap_or(parent.len());
+    for later_name in later {
+        if let Some(p) = parent.find(&format!("<w:{later_name}")) {
+            insert_at = insert_at.min(p);
+        }
+    }
+    format!("{}{new_tag}{}", &parent[..insert_at], &parent[insert_at..])
+}
+
+/// pPr 内容里应用段落格式（spacing/ind 属性级合并——未提及的属性原样保留）。
+fn apply_para_formats(ppr_inner: &str, p: &ParaFormat) -> String {
+    let mut out = ppr_inner.to_string();
+    // spacing（行距/段前后共用一个元素，必须合并不是覆盖）
+    if p.line_spacing.is_some() || p.space_before_pt.is_some() || p.space_after_pt.is_some() {
+        let mut attrs = match find_element_span(&out, "spacing") {
+            Some((s, e)) => parse_attrs(&out[s..e]),
+            None => Vec::new(),
+        };
+        if let Some(v) = p.line_spacing {
+            attr_set(&mut attrs, "w:line", &format!("{}", (v * 240.0).round() as i64));
+            attr_set(&mut attrs, "w:lineRule", "auto");
+        }
+        if let Some(v) = p.space_before_pt {
+            attr_set(&mut attrs, "w:before", &format!("{}", (v * 20.0).round() as i64));
+            attr_remove(&mut attrs, "w:beforeLines");
+            attr_remove(&mut attrs, "w:beforeAutospacing");
+        }
+        if let Some(v) = p.space_after_pt {
+            attr_set(&mut attrs, "w:after", &format!("{}", (v * 20.0).round() as i64));
+            attr_remove(&mut attrs, "w:afterLines");
+            attr_remove(&mut attrs, "w:afterAutospacing");
+        }
+        let tag = build_tag("spacing", &attrs);
+        out = upsert_element(&out, "spacing", &tag, &["ind", "jc", "rPr", "sectPr", "pPrChange"], "</w:pPr>");
+    }
+    // ind（首行/左缩进合并；两变体互斥需清对方）
+    if p.indent_first_line_tw.is_some() || p.indent_left_tw.is_some() {
+        let mut attrs = match find_element_span(&out, "ind") {
+            Some((s, e)) => parse_attrs(&out[s..e]),
+            None => Vec::new(),
+        };
+        if let Some(v) = p.indent_first_line_tw {
+            attr_set(&mut attrs, "w:firstLine", &v.to_string());
+            for k in ["w:hanging", "w:firstLineChars", "w:hangingChars"] {
+                attr_remove(&mut attrs, k);
+            }
+        }
+        if let Some(v) = p.indent_left_tw {
+            attr_set(&mut attrs, "w:left", &v.to_string());
+            attr_remove(&mut attrs, "w:leftChars");
+        }
+        let tag = build_tag("ind", &attrs);
+        out = upsert_element(&out, "ind", &tag, &["jc", "rPr", "sectPr", "pPrChange"], "</w:pPr>");
+    }
+    // jc（单属性，整元素替换/插入）
+    if let Some(v) = &p.align {
+        let tag = format!(r#"<w:jc w:val="{v}"/>"#);
+        out = upsert_element(&out, "jc", &tag, &["textDirection", "outlineLvl", "rPr", "sectPr", "pPrChange"], "</w:pPr>");
+    }
+    out
+}
+
+/// rPr 内容里应用字符格式（b/bCs、i/iCs、sz/szCs 成对；color 单元素；rFonts 合并）。
+fn apply_char_formats(rpr_inner: &str, c: &CharFormat) -> String {
+    let mut out = rpr_inner.to_string();
+    if let Some(v) = c.bold {
+        let tag = if v { "<w:b/>".to_owned() } else { r#"<w:b w:val="0"/>"#.to_owned() };
+        out = upsert_element(&out, "b", &tag, &["i", "color", "sz", "u"], "</w:rPr>");
+        let tag_cs = if v { "<w:bCs/>".to_owned() } else { r#"<w:bCs w:val="0"/>"#.to_owned() };
+        out = upsert_element(&out, "bCs", &tag_cs, &["i", "color", "sz", "u"], "</w:rPr>");
+    }
+    if let Some(v) = c.italic {
+        let tag = if v { "<w:i/>".to_owned() } else { r#"<w:i w:val="0"/>"#.to_owned() };
+        out = upsert_element(&out, "i", &tag, &["color", "sz", "u"], "</w:rPr>");
+        let tag_cs = if v { "<w:iCs/>".to_owned() } else { r#"<w:iCs w:val="0"/>"#.to_owned() };
+        out = upsert_element(&out, "iCs", &tag_cs, &["color", "sz", "u"], "</w:rPr>");
+    }
+    if let Some(v) = c.font_size_pt {
+        let half = (v * 2.0).round() as i64;
+        out = upsert_element(
+            &out,
+            "sz",
+            &format!(r#"<w:sz w:val="{half}"/>"#),
+            &["szCs", "highlight", "u"],
+            "</w:rPr>",
+        );
+        out = upsert_element(
+            &out,
+            "szCs",
+            &format!(r#"<w:szCs w:val="{half}"/>"#),
+            &["highlight", "u"],
+            "</w:rPr>",
+        );
+    }
+    if let Some(v) = &c.color {
+        out = upsert_element(
+            &out,
+            "color",
+            &format!(r#"<w:color w:val="{v}"/>"#),
+            &["sz", "u"],
+            "</w:rPr>",
+        );
+    }
+    if let Some(v) = &c.font {
+        let mut attrs = match find_element_span(&out, "rFonts") {
+            Some((s, e)) => parse_attrs(&out[s..e]),
+            None => Vec::new(),
+        };
+        attr_set(&mut attrs, "w:ascii", v);
+        attr_set(&mut attrs, "w:hAnsi", v);
+        attr_set(&mut attrs, "w:eastAsia", v);
+        let tag = build_tag("rFonts", &attrs);
+        out = upsert_element(&out, "rFonts", &tag, &["b", "i", "color", "sz", "u"], "</w:rPr>");
+    }
+    out
+}
+
+/// 全新 pPr 内容（无 pPr / 自闭合空 pPr 两分支共用；schema 序 spacing→ind→jc）。
+fn fresh_ppr_inner(p: &ParaFormat) -> String {
+    let mut inner = String::new();
+    let mut attrs: Vec<(String, String)> = Vec::new();
+    if let Some(v) = p.line_spacing {
+        attr_set(&mut attrs, "w:line", &format!("{}", (v * 240.0).round() as i64));
+        attr_set(&mut attrs, "w:lineRule", "auto");
+    }
+    if let Some(v) = p.space_before_pt {
+        attr_set(&mut attrs, "w:before", &format!("{}", (v * 20.0).round() as i64));
+    }
+    if let Some(v) = p.space_after_pt {
+        attr_set(&mut attrs, "w:after", &format!("{}", (v * 20.0).round() as i64));
+    }
+    if !attrs.is_empty() {
+        inner.push_str(&build_tag("spacing", &attrs));
+    }
+    let mut ind_attrs: Vec<(String, String)> = Vec::new();
+    if let Some(v) = p.indent_first_line_tw {
+        ind_attrs.push(("w:firstLine".into(), v.to_string()));
+    }
+    if let Some(v) = p.indent_left_tw {
+        ind_attrs.push(("w:left".into(), v.to_string()));
+    }
+    if !ind_attrs.is_empty() {
+        inner.push_str(&build_tag("ind", &ind_attrs));
+    }
+    if let Some(v) = &p.align {
+        inner.push_str(&format!(r#"<w:jc w:val="{v}"/>"#));
+    }
+    inner
+}
+
+/// 段落格式手术：定位/新建 pPr，应用段落格式；其余字节不动。
+/// None 仅防御形态异常。
+fn reformat_ppr(block_xml: &str, p: &ParaFormat) -> Option<String> {
+    // 定位 pPr（精确 `<w:pPr` + 非字母后随，排除 pPrChange）
+    let ppr_at = block_xml.find("<w:pPr").filter(|s| {
+        matches!(
+            block_xml.as_bytes().get(s + "<w:pPr".len()),
+            Some(b'>') | Some(b'/') | Some(b' ')
+        )
+    });
+    let Some(s) = ppr_at else {
+        // 无 pPr：开标签后新建（自闭合空段顺势展开成对标签）
+        let gt = block_xml.find('>')?;
+        let new_ppr = format!("<w:pPr>{}</w:pPr>", fresh_ppr_inner(p));
+        if block_xml.as_bytes()[gt - 1] == b'/' {
+            let head = &block_xml[..gt - 1];
+            return Some(format!("{head}>{new_ppr}</w:p>"));
+        }
+        return Some(format!("{}{new_ppr}{}", &block_xml[..gt + 1], &block_xml[gt + 1..]));
+    };
+    // 有 pPr：内容区间内应用
+    let open_end = s + block_xml[s..].find('>')? + 1;
+    if block_xml.as_bytes()[open_end - 2] == b'/' {
+        // 自闭合空 pPr（防御）：整体替换为含格式的完整 pPr
+        return Some(format!(
+            "{}<w:pPr>{}</w:pPr>{}",
+            &block_xml[..s],
+            fresh_ppr_inner(p),
+            &block_xml[open_end..]
+        ));
+    }
+    let close_rel = block_xml[open_end..].find("</w:pPr>")?;
+    let close_at = open_end + close_rel;
+    let inner = &block_xml[open_end..close_at];
+    let new_inner = apply_para_formats(inner, p);
+    Some(format!(
+        "{}{}{}",
+        &block_xml[..open_end],
+        new_inner,
+        &block_xml[close_at..]
+    ))
+}
+
+/// 字符格式手术：块内每个 run（含 hyperlink 内）的 rPr 应用字符格式；
+/// 无 rPr 的 run 在开标签后新建（rPr 是 w:r 的 schema 首子元素）。
+/// None 仅防御形态异常。
+fn reformat_runs(block_xml: &str, c: &CharFormat) -> Option<String> {
+    // 收集 run 开标签区间（"<w:r>" / "<w:r "）——倒序应用使偏移始终有效。
+    // "<w:rPr" / "<w:rFonts" 等因后随字母不会被 "<w:r " / "<w:r>" 误配。
+    let mut run_starts: Vec<usize> = Vec::new();
+    let mut from = 0usize;
+    loop {
+        let rel_a = block_xml[from..].find("<w:r>").map(|p| (from + p, "<w:r>".len()));
+        let rel_b = block_xml[from..].find("<w:r ").map(|p| (from + p, "<w:r ".len()));
+        let hit = match (rel_a, rel_b) {
+            (Some(a), Some(b)) => Some(if a.0 < b.0 { a } else { b }),
+            (a, b) => a.or(b),
+        };
+        let Some((pos, len)) = hit else { break };
+        run_starts.push(pos);
+        from = pos + len;
+    }
+    let mut out = block_xml.to_string();
+    for &rs in run_starts.iter().rev() {
+        // 本轮处理后 out 与 block_xml 等长前缀可能已变——倒序应用时后续（更小的）
+        // 偏移仍未被触碰。但 rs 是 block_xml 偏移，out 只在更靠后的位置变过，
+        // 因此 rs 在 out 中仍有效。
+        let open_end = rs + out[rs..].find('>')? + 1;
+        // 直接子 rPr：紧跟开标签
+        if out[open_end..].starts_with("<w:rPr>") {
+            let close = open_end + "<w:rPr>".len();
+            let inner_end = close + out[close..].find("</w:rPr>")?;
+            let new_inner = apply_char_formats(&out[close..inner_end], c);
+            out.replace_range(close..inner_end, &new_inner);
+        } else if out[open_end..].starts_with("<w:rPr ") || out[open_end..].starts_with("<w:rPr/") {
+            // 带属性/自闭合的 rPr 罕见：保守跳过该 run（不动比错动好）
+            continue;
+        } else {
+            // 无 rPr：新建（rPr 是 w:r 的 schema 首子元素；空内容起手 = 全新插入，
+            // apply_char_formats 的追加路径天然按 schema 序生成）
+            let inner = apply_char_formats("", c);
+            if !inner.is_empty() {
+                let fresh = format!("<w:rPr>{inner}</w:rPr>");
+                out.insert_str(open_end, &fresh);
+            }
+        }
+    }
+    Some(out)
 }
 
 /// 构造插入段：style 显示名 → pPr；缺省继承锚块 pPr。rPr 继承锚块首 run
@@ -1077,6 +1635,232 @@ mod tests {
         .unwrap_err());
         assert!(err.starts_with("含修订标记"), "实际: {err}");
         assert!(err.contains("pPrChange"));
+    }
+
+    #[test]
+    fn set_format_paragraph_merges_existing_attrs() {
+        // 已有 spacing(before)/ind(firstLine)：合并——未提及的 before 原样，新字段进同一元素
+        let xml = wrap(concat!(
+            r#"<w:p><w:pPr><w:pStyle w:val="body"/><w:spacing w:before="120"/>"#,
+            r#"<w:ind w:firstLine="480"/></w:pPr><w:r><w:t>正文段</w:t></w:r></w:p>"#,
+        ));
+        let (out, applied) = apply_edits(
+            &xml,
+            &Stylesheet::empty(),
+            &[EditOp::SetFormat {
+                block: 1,
+                expect_prefix: "正文段".into(),
+                paragraph: Some(ParaFormat {
+                    align: Some("center".into()),
+                    line_spacing: Some(1.5),
+                    space_after_pt: Some(6.0),
+                    indent_first_line_tw: Some(720),
+                    ..Default::default()
+                }),
+                character: None,
+            }],
+        )
+        .unwrap();
+        assert_eq!(applied[0].op, "set_format");
+        assert!(applied[0].after.contains("对齐=center"), "摘要: {}", applied[0].after);
+        // 合并断言：before 未提及原样 120；line/lineRule/after 追加进同一 spacing；firstLine 覆盖 720
+        assert!(
+            out.contains(r#"<w:spacing w:before="120" w:line="360" w:lineRule="auto" w:after="120"/>"#),
+            "spacing 合并: {out}"
+        );
+        assert!(out.contains(r#"<w:ind w:firstLine="720"/>"#), "ind 覆盖: {out}");
+        assert!(out.contains(r#"<w:jc w:val="center"/>"#), "jc 插入: {out}");
+        // schema 序：pStyle < spacing < ind < jc
+        let ppr = out.find("<w:pPr>").unwrap();
+        let end = out.find("</w:pPr>").unwrap();
+        let seg = &out[ppr..end];
+        let pos = |pat: &str| seg.find(pat).unwrap();
+        assert!(pos("<w:pStyle") < pos("<w:spacing")
+            && pos("<w:spacing") < pos("<w:ind")
+            && pos("<w:ind") < pos("<w:jc"));
+        // 模型读回
+        let m = model_of(&out);
+        let super::docx_model::Block::Paragraph(p) = &m.body[0] else { panic!() };
+        assert_eq!(p.props.alignment.as_deref(), Some("center"));
+        assert_eq!(p.props.spacing_line, Some(360));
+        assert_eq!(p.props.line_rule.as_deref(), Some("auto"));
+        assert_eq!(p.props.spacing_before, Some(120));
+        assert_eq!(p.props.spacing_after, Some(120)); // 6pt × 20
+        assert_eq!(p.props.indent_first_line, Some(720));
+    }
+
+    #[test]
+    fn set_format_character_applies_to_all_runs() {
+        // 两个 run：已有含 rFonts/u 的 rPr / 无 rPr——全量应用且无关子元素保留
+        let xml = wrap(concat!(
+            r#"<w:p><w:r><w:rPr><w:rFonts w:ascii="Times"/><w:u/></w:rPr><w:t>甲</w:t></w:r>"#,
+            r#"<w:r><w:t>乙</w:t></w:r></w:p>"#,
+        ));
+        let (out, _) = apply_edits(
+            &xml,
+            &Stylesheet::empty(),
+            &[EditOp::SetFormat {
+                block: 1,
+                expect_prefix: "甲".into(),
+                paragraph: None,
+                character: Some(CharFormat {
+                    bold: Some(true),
+                    font_size_pt: Some(14.0),
+                    color: Some("FF0000".into()),
+                    ..Default::default()
+                }),
+            }],
+        )
+        .unwrap();
+        // run 1：rFonts 原样（本操作未设 font）+ u 保留；b/bCs/color/sz/szCs 按 schema 序插入
+        assert!(out.contains(r#"<w:rFonts w:ascii="Times"/>"#), "rFonts 原样: {out}");
+        assert!(out.contains("<w:u/>"), "无关子元素保留: {out}");
+        assert_eq!(out.matches("<w:b/>").count(), 2, "两个 run 都加粗: {out}");
+        assert_eq!(out.matches(r#"<w:sz w:val="28"/>"#).count(), 2, "14pt = 28 半磅: {out}");
+        assert_eq!(out.matches(r#"<w:color w:val="FF0000"/>"#).count(), 2);
+        // run 2 无 rPr → 新建（rPr 是 w:r 的 schema 首子元素）
+        assert!(out.contains(r#"<w:r><w:rPr>"#), "无 rPr 的 run 新建 rPr: {out}");
+        // 模型读回
+        let m = model_of(&out);
+        let super::docx_model::Block::Paragraph(p) = &m.body[0] else { panic!() };
+        for r in &p.runs {
+            assert_eq!(r.props.bold, Some(true));
+            assert_eq!(r.props.size_half_pt, Some(28));
+            assert_eq!(r.props.color.as_deref(), Some("FF0000"));
+        }
+    }
+
+    #[test]
+    fn set_format_creates_ppr_and_rpr_when_absent() {
+        // 裸段：pPr/rPr 均新建；自闭合空段展开成对标签并新建 pPr
+        let xml = wrap(concat!(
+            r#"<w:p><w:r><w:t>裸段</w:t></w:r></w:p>"#,
+            r#"<w:p/>"#,
+        ));
+        let (out, _) = apply_edits(
+            &xml,
+            &Stylesheet::empty(),
+            &[
+                EditOp::SetFormat {
+                    block: 1,
+                    expect_prefix: "裸段".into(),
+                    paragraph: Some(ParaFormat {
+                        align: Some("both".into()),
+                        indent_first_line_tw: Some(480),
+                        indent_left_tw: Some(-240),
+                        ..Default::default()
+                    }),
+                    character: Some(CharFormat { bold: Some(true), ..Default::default() }),
+                },
+                EditOp::SetFormat {
+                    block: 2,
+                    expect_prefix: "".into(),
+                    paragraph: Some(ParaFormat { line_spacing: Some(2.0), ..Default::default() }),
+                    character: None,
+                },
+            ],
+        )
+        .unwrap();
+        assert!(
+            out.contains(r#"<w:p><w:pPr><w:spacing w:line="480" w:lineRule="auto"/></w:pPr></w:p>"#),
+            "块 2 自闭合空段展开并新建 pPr: {out}"
+        );
+        let m = model_of(&out);
+        assert_eq!(m.body.len(), 2);
+        let super::docx_model::Block::Paragraph(p1) = &m.body[0] else { panic!() };
+        assert_eq!(p1.props.alignment.as_deref(), Some("both"));
+        assert_eq!(p1.props.indent_first_line, Some(480));
+        assert_eq!(p1.props.indent_left, None, "负左缩进 i32 → 模型 u32 不收，XML 已写");
+        assert!(out.contains(r#"w:left="-240""#), "负左缩进写入: {out}");
+        assert_eq!(p1.runs[0].props.bold, Some(true));
+        let super::docx_model::Block::Paragraph(p2) = &m.body[1] else { panic!() };
+        assert_eq!(p2.props.spacing_line, Some(480));
+    }
+
+    #[test]
+    fn set_format_validation_families() {
+        let xml = wrap(r#"<w:p><w:r><w:t>一段</w:t></w:r></w:p>"#);
+        let empty_op = |paragraph, character| EditOp::SetFormat {
+            block: 1,
+            expect_prefix: "一段".into(),
+            paragraph,
+            character,
+        };
+        // 空格式
+        let err = val_msg(apply_edits(&xml, &Stylesheet::empty(), &[empty_op(None, None)]).unwrap_err());
+        assert!(err.starts_with("空格式操作"), "实际: {err}");
+        let err = val_msg(
+            apply_edits(&xml, &Stylesheet::empty(), &[empty_op(Some(ParaFormat::default()), None)]).unwrap_err(),
+        );
+        assert!(err.starts_with("空格式操作"), "实际: {err}");
+        // 对齐白名单
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &Stylesheet::empty(),
+                &[empty_op(
+                    Some(ParaFormat { align: Some("middle".into()), ..Default::default() }),
+                    None,
+                )],
+            )
+            .unwrap_err(),
+        );
+        assert!(err.starts_with("对齐值无效"), "实际: {err}");
+        // 颜色 hex
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &Stylesheet::empty(),
+                &[empty_op(
+                    None,
+                    Some(CharFormat { color: Some("RED".into()), ..Default::default() }),
+                )],
+            )
+            .unwrap_err(),
+        );
+        assert!(err.starts_with("颜色值无效"), "实际: {err}");
+        // 字号范围
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &Stylesheet::empty(),
+                &[empty_op(
+                    None,
+                    Some(CharFormat { font_size_pt: Some(999.0), ..Default::default() }),
+                )],
+            )
+            .unwrap_err(),
+        );
+        assert!(err.starts_with("字号超出范围"), "实际: {err}");
+        // 负首行缩进
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &Stylesheet::empty(),
+                &[empty_op(
+                    Some(ParaFormat { indent_first_line_tw: Some(-10), ..Default::default() }),
+                    None,
+                )],
+            )
+            .unwrap_err(),
+        );
+        assert!(err.starts_with("缩进值无效"), "实际: {err}");
+        // 表格块（前缀对准表内文字，确保落在表格拒绝而非指纹不符）
+        let tbl = wrap(r#"<w:tbl><w:tr><w:tc><w:p><w:r><w:t>表</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#);
+        let err = val_msg(
+            apply_edits(
+                &tbl,
+                &Stylesheet::empty(),
+                &[EditOp::SetFormat {
+                    block: 1,
+                    expect_prefix: "表".into(),
+                    paragraph: None,
+                    character: Some(CharFormat { bold: Some(true), ..Default::default() }),
+                }],
+            )
+            .unwrap_err(),
+        );
+        assert!(err.starts_with("表格块"), "实际: {err}");
     }
 
     #[test]
