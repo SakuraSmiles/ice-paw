@@ -4,6 +4,26 @@
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-08-24
+
+> 从 0.4.1 以来的主要调整：**Word 能力演进整线**（S0a 结构模型 → inspect_docx 读侧投影 → edit_docx 手术引擎 → S3 格式/编号两波 → D9 通用元素手术层）；**Agent 质量拍 Phase 1**（工具层四件 + system prompt 两层设计 + 风格预设交互重做）。
+
+### Added
+- **Word 拟人水平能力线**（改优先，路线见 docs/word-capability-roadmap.md）：
+  - **读侧地基**：xml_dom 极小 DOM + docx_model 类型树（段落/runs/表格网格/页面设置/样式链有效格式三层合并：直接 > basedOn 链 > docDefaults）；numbering.xml 接入（编号定义解析 + 计数模拟，outline/format 直接显示自动编号实际值——祖先级未现时按该级自身 start 渲染，治「agent 看不见 3.2.1 是几」盲区）；
+  - **inspect_docx 工具**：outline（大纲+样式层级+摘要）/ format（区间 run 级**有效格式**）/ text（带块号正文）/ headers_footers（页眉页脚逐节+空标注+悬空检测）/ ppr（原文 pPr XML）五档投影 + start/end 区间分页；块编址 1-based 混排统一编号 = 编辑地址地基；
+  - **edit_docx 手术引擎**：只替换目标 XML 部件、其余 zip entry 字节原样重打包（untouched 逐字节断言）；operations 批量事务全有或全无 + 地址指纹核对（expect_prefix）+ 模型级 diff 读回 + 自动备份/原子写。六操作：replace_text（保 pPr/rPr/开标签属性字节切片）/ insert_paragraph_after（继承锚格式或样式名反查 ID）/ delete_block / set_format（字符+段落格式属性级手术，spacing/ind 属性合并不覆盖未提及值）/ set_style（换样式 3 形态 pStyle 手术，空转显式信号）/ **set_ppr_element**（D9 通用元素手术层——pPr 子元素 ~34 封闭 schema 集一个操作永久收敛段落格式长尾：xml=null 摘除/整体替换按 schema 位插入 + 片段校验禁 xmlns/单根/根名一致 + sectPr/pPrChange 受保护 + 摘 numPr 时样式链回退诚实警告）；
+  - **Word 打开验收**：replace_text 路径真机 ✅（用户打开改后文档无报错）；其余操作路径待同标准验收。诚实边界：统一手写编号后 TOC 域缓存是旧值，需在 Word 里 F9 刷新；
+  - 配套基建：copy_file 工具（此前复制只能 PowerShell 硬凑，引号经 cmd /C 转手连败 12 次的治本）。
+- **Agent 质量拍 Phase 1**（诊断驱动，826 次失败样本分析）：
+  - **工具层四件**：write_file `create_dirs` 好默认（父目录自动建，不再因缺目录失败）；报错即行为契约——错误文案三段式（发生了什么+为什么+怎么办）+ not-found 必挂近似候选（did-you-mean）+ **错误首行 = 稳定家族前缀**（doom_loop 错误签名依赖，路径混进前缀会把连败检测打散）；run_command Windows 恒前置 `chcp 65001`（中文输出统一 UTF-8）；**doom_loop 检测**（同签名连败 3 次 nudge 纠正 / 6 次终止清场；与 stuck_detect 分工——前者抓「错误签名不变」，后者抓「轮指纹不变」）；
+  - **system prompt 两层设计**：平台层只放风格中立纪律三条（错误纪律/诚实边界/语言跟随）；风格归 agent.yaml `system_prompt`；风格预设三档为**素材**（插入即用户文本，零版本纠缠）；写 yaml 多行块走 set_agent_system_prompt（块级补丁+回读闸+原子写）；
+  - write_file 生成 .ps1 自动补 UTF-8 BOM（PowerShell 5.1 无 BOM 按 GBK 解码，中文实参乱码）。
+
+### Changed
+- **风格预设交互重做**：居中弹层全文展示（胶囊 tab + 单片全文 + 底部显式确认），创建 Agent 流程可选风格。
+- 备份目录嵌套防护：从备份目录恢复不再生成二级备份目录。
+
 ## [0.4.1] — 2026-08-22
 
 > 从 0.4.0 以来的主要调整：头像系统重塑（AvatarField 统一组件 + vue-cropper 成熟库裁剪器 + 默认头像全语境统一）；项目身份减法（头像/主题色移除）；预算 HUD 环形化迁位；会话可靠性（60s 静默超时双保险 / 发送失败可见回滚）；任务面板列按存在性渲染。

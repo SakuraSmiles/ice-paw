@@ -2,7 +2,7 @@
 
 ## 项目概述
 IcePaw — 本地优先的 LLM 对话工作站。Tauri v2 (Rust) + Vue 3 (TypeScript) 桌面应用。
-当前版本：`0.4.1`。
+当前版本：`0.5.0`。
 
 ## 设计规则（用户拍板，勿翻案）
 
@@ -117,6 +117,12 @@ agent 调用 `propose_config_change` 工具提出创建/修改 agent 提案 → 
 - 内置 MCP runtime：内置 Node + 预打包包（runtime_kind 列）；当前 2 包（builtin-thinking + builtin-memory，filesystem 已于 v0.2.5 下线）
 - 文件工具 native 化：`file_tools.rs`（Write/Edit/Delete/Move/CreateDirectory），不再依赖外部 filesystem server
 
+### Word 文档能力（0.5.0，docs/word-capability-roadmap.md 为路线真相源）
+- 读侧 `inspect_docx`（mcp/docx_tool.rs + doc/docx_inspect.rs）：outline/format/text/headers_footers/ppr 五档投影 + start/end 区间；块编址 1-based 混排（sdt 摊平）= 编辑地址地基；有效格式三层合并（直接 > basedOn 链 > docDefaults，doc/styles.rs）+ numbering.xml 计数模拟（自动编号实际值，祖先级未现按该级自身 start 渲染）
+- 编辑 `edit_docx`（doc/docx_edit.rs）：zip 手术引擎——只替换目标 XML 部件、其余 entry 字节原样重打包；operations 批量事务（全有或全无 + expect_prefix 地址指纹 + 模型级 diff 读回 + 备份/原子写）；六操作 replace_text / insert_paragraph_after / delete_block / set_format / set_style / set_ppr_element
+- **D9 通用元素手术层**：pPr 子元素 ~34 封闭 schema 集（`PPR_ELEMENTS` 白名单兼当 schema 位插入序）→ set_ppr_element 一个操作永久收敛段落格式长尾；sectPr/pPrChange 受保护；片段校验（禁 xmlns/单根/根名与 element 一致/深度平衡）；摘段级 numPr 时样式链回退诚实警告
+- ⚠️ 不变式：编辑从 docx_model 类型树出发勿回字符串扫描；找元素验后随字符防前缀碰撞（`<w:pPr` 撞 pPrChange / `<w:b` 撞 bCs）；含活动修订（w:ins/w:del）文档编辑默认拒；AppliedOp 摘要按 splice 序非输入序（断言须次序无关）。🚫 语料保密（D7 硬禁令）：三份真机 docx 只留本地 tests/fixtures/docx/（gitignore），任何语料字符串（标题/正文词/样式名）零进代码/注释/文档，corpus 测试运行时读取+缺失 skip
+
 ### 对话钩子系统（已 commit 1c2a1d8 + push）
 - 4 接入点：ConversationStart(chat_cmd) / BeforeLlm(loop_engine) / AfterTool(tool_executor) / ConversationEnd(loop_engine)
 - 内置动作：InjectPrompt/CallTool/Log
@@ -165,14 +171,13 @@ agent 调用 `propose_config_change` 工具提出创建/修改 agent 提案 → 
 - **Phase 2B 阶段 2 摘要锚点 seq 化（2026-08-17）**：migration 46 `covered_until_seq`（= 被覆盖消息首现事件 seq，与 derive 排序位严格一致）+ 存量回填；`SummaryState`/insert/update/SELECT 双写双读；`ChatMessage.source_seq`（`#[serde(skip)]`，不进 LLM payload）；锚点定位 seq 优先 `.or_else` rowid 兜底；`SummaryPayload.covered_until_seq`（`#[serde(default)]`，旧事件零迁移）。显式双写过渡，回滚干净（列闲置无害）。
 - **Phase 2B 阶段 3 Image 双份存储治理（2026-08-17，3a 读侧 + 3b 写侧）**：消息类 payload 的 blocks 用 `PayloadBlock` untagged 双形态——`Full(ContentBlock)`（v1 内联，旧事件零迁移可读）/ `ImageRef{message_id, block_index}`（v2，字节只在 messages 行）。写侧唯一入口 `refify_blocks`（emitter 字段式签名内部做，调用方传与落库同值的 blocks）；读侧三路水合：derive `hydrate_image_refs`（纯同步 resolver 注入；未命中/越界/非 Image 降级 `Text("[图片内容已不可恢复]")`）+ `to_content_blocks` 防泄漏最后闸 + conversation_cmd JSON 级水合（list_session_events/export，前端零改动）。BACKFILL_VERSION=2（纯 backfill 会话删旧重写自愈，冻结会话保留 v1 照读）。**⚠️ 不变式：session_events 消息类 payload 禁止内联 Image base64——新增 message-kind emitter 必须经 `refify_blocks`，读侧必须经 `hydrate_image_refs` 水合后才能进对账/LLM 视图（ref 形态不得以非 Text 形态流出）**。
 
-## 当前状态（2026-08-22）
-- 版本 **0.4.1 已发布**（= 0.4.0 + 头像系统重塑[AvatarField/vue-cropper/默认头像三级链] + 项目身份减法[头像/主题色移除] + 预算 HUD 环形化迁输入框工具栏 + 60s 静默超时双保险 + 任务面板列按存在性；vitest 311）
-- 上一版 **0.4.0**（品牌视觉换代[藏青双锚点/字体离线/设计系统九档] + UI-1~5 表现层五战役 + S8 无限续写四件 + 错误反馈原语 + macOS Apple Silicon 支持；cargo 929 / vitest 311）
-- 0.4.0 真机手测改为**实际使用中验证**（用户拍板）：S8 三观察点——预算 90% reminder 后模型收敛 / 断网摘要失败走骨架不失忆 / 大 shell 输出瘦身指针可回溯（= 0.3.8 + Token 预算诚实化四件套 + 生成中卡顿系统性修复 + 预算胶囊微型进度条；cargo 917 / vitest 287）
+## 当前状态（2026-08-24）
+- 版本 **0.5.0 已发布**（= 0.4.1 + **Word 能力演进整线**[S0a 结构模型/S0b inspect 五档投影/手术引擎六操作/S3 两波/D9 通用元素手术层] + **Agent 质量拍 Phase 1**[工具层四件 + system prompt 两层 + 风格预设弹层重做] + copy_file/.ps1 BOM 等真机复盘修正；cargo 1060 / vitest 326）
+- 上一版 **0.4.1**（头像系统重塑 + 项目身份减法 + 预算 HUD 环形化迁位 + 60s 静默超时双保险；vitest 311）；再上 **0.4.0**（品牌视觉换代 + UI 五战役 + S8 无限续写 + macOS Apple Silicon；cargo 929）
 - 分支：仅 `main`
-- 近期递进：S 批次结构减法 → backfill → 0.3.6 发版 → **S1 Phase 2B legacy 退役三件套 + 真机验收五项绿** → 0.3.7 发版 → MA-2 详情页 + 概览成员卡 → 0.3.8 发版 → **生成中卡顿系统性修复（DeltaAggregator 40ms 聚合 + 命令 async + 前端 memo）→ Token 预算诚实化（billed_tokens 缓存折扣计量 + 工具列表按名排序保前缀缓存 + BudgetPill 命中 chip + DeepSeek 私有字段兜底 + 续期 2→4）** → 0.3.9 发版
-- `cargo test --lib` 917 passed / 0 failed（+ 集成测试：session_runner_e2e 7、session_reconcile_e2e 6+2 ignored、session_event_log_e2e 3、memory_e2e 3、message_repo 7、provider 11）；clippy --tests -D warnings 0 警告；vitest 287（0.3.9）
-- 仍待办：**0.3.9 真机手测**（卡顿修复六项 + 预算诚实化四项：长任务不再 budget_exceeded / 命中 chip / turn_ended.usage 无 cached>prompt）、视觉适配/KB watcher/自动续写生产手测、proposal Phase 2（MCP 域）、S8 无限续写（待拍板）
+- 近期递进：0.3.9（卡顿修复+预算诚实化）→ 0.4.0 → 0.4.1 → **codex harness 研读喂 Agent 质量拍 → 质量拍 Phase 1（工具层四件+⑤ prompt 两层+风格预设 UI 两轮）→ Word 能力演进开工（步骤 0→3：S0a/S0b/手术引擎 MVP，replace_text Word 打开验收✅）→ S3 首波四件（numbering/set_format/set_style/页眉页脚）→ 真机复盘两批修正（numbering start 语义+小修复批）→ D9 通用元素手术层（set_ppr_element）** → 0.5.0 发版
+- `cargo test --lib` 1060 passed / 0 failed（+ 集成测试：session_runner_e2e 7、session_reconcile_e2e 6+2 ignored、session_event_log_e2e 3、memory_e2e 3、message_repo 7、provider 11）；clippy --tests -D warnings 0 警告；vitest 326
+- 仍待办：**0.5.0 真机手测**（Word 线：set_format/set_style/set_ppr_element 路径 Word 打开验收 + inspect 投影对话问答准不准；质量拍：复跑 DB 诊断失败率 5.7%→<2% 验证 + 风格预设手测；word 线 WPS 样本仍缺）、视觉适配/KB watcher/自动续写生产手测、proposal Phase 2（MCP 域）、V5 钩子未用未测
 - **预算诚实化不变式（0.3.9）**：新 provider usage 必须归一规范语义（prompt=总输入含命中、cached≤prompt；Anthropic 显式归一 + stream_consumer `into_canonical` 自愈兜底）；工具列表出口恒按名序（前缀缓存前提，勿回退）；DeepSeek 私有对优先于标准字段
 - **S1 真机验收 2026-08-17 四项绿**：backfill（sessions=9 events=824 failed=0 epoch_rows=0，版本标记=2）+ 恒 Derive（当日路由决策全 green diffs=0，含 backfill 会话续聊 seq 1..933 连续）+ 发图 v2 payload 无 base64（image_ref 162B 指针，本体 851KB/3.8MB 只在 messages 行；模型回复描述画面=水合进 LLM 视图实证）+ 摘要折叠 `covered_until_seq=726`/rowid=1710 双值落库
 
