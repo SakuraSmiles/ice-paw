@@ -16,6 +16,7 @@ use crate::context::token::estimate_tokens;
 use crate::error::AppResult;
 
 mod docx;
+mod docx_edit;
 mod docx_inspect;
 mod docx_model;
 mod pdf;
@@ -34,6 +35,9 @@ pub use pdf_render::{page_count, render_page_to_png};
 
 // inspect_docx 三级投影（S0b）：mcp::docx_tool 薄壳消费。
 pub use docx_inspect::{inspect_document, InspectProjection, InspectReport, InspectRequest};
+
+// edit_docx 块级手术（步骤 3）：批量事务，纯函数；IO/授权/写盘在 mcp::docx_tool。
+pub use docx_edit::{apply_edits_to_bytes, AppliedOp, EditOp};
 
 /// 从一个文档中提取出的结果。
 #[derive(Debug, Clone)]

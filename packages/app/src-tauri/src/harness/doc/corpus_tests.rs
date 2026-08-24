@@ -303,3 +303,134 @@ fn corpus_install_revisions_visible_in_format() {
     .unwrap();
     assert!(text.content.lines().count() > 100, "正文行数过少: {}", text.content.lines().count());
 }
+
+// =========================================================================
+// 步骤 3 edit_docx 手术引擎（真实语料：定位器全量对齐 + 手术闭环 + untouched 保真）
+// =========================================================================
+
+/// 选一个「安全可编辑」块（1-based）：非表格、无修订 run、非 sectPr 载体、投影 ≥4 字。
+/// 三操作各需不同块（每块每批限一操作），`skip` 排除已选块号。
+/// 🚫 语料字符串不进代码：目标块与 expect_prefix 指纹全部运行时派生。
+fn pick_editable_block(
+    xml: &str,
+    spans: &[super::docx_edit::BlockSpan],
+    model: &super::docx_model::DocxDocument,
+    skip: &[usize],
+) -> Option<usize> {
+    use super::docx_model::{blocks_text, Block};
+    for (i, b) in model.body.iter().enumerate() {
+        let n = i + 1;
+        if skip.contains(&n) {
+            continue;
+        }
+        if matches!(b, Block::Table(_)) {
+            continue; // replace 拒表格
+        }
+        if let Block::Paragraph(p) = b {
+            if p.runs.iter().any(|r| r.revision.is_some()) {
+                continue; // replace/delete 拒修订块
+            }
+        }
+        let block_xml = &xml[spans[i].start..spans[i].end];
+        if block_xml.contains("<w:sectPr") {
+            continue; // delete 拒节属性载体
+        }
+        let mut t = String::new();
+        blocks_text(&model.body[i..i + 1], &mut t);
+        if t.trim().chars().count() >= 4 {
+            return Some(n); // 投影 ≥4 字：够派生指纹前缀
+        }
+    }
+    None
+}
+
+/// 逐 entry 对比两个 docx 包：`except` 外的 entry 内容必须逐字节相等（保真不变式）。
+fn assert_untouched_entries_identical(orig: &[u8], new: &[u8], except: &str) {
+    use std::io::Read;
+    let mut za = zip::ZipArchive::new(std::io::Cursor::new(orig)).unwrap();
+    let mut zb = zip::ZipArchive::new(std::io::Cursor::new(new)).unwrap();
+    assert_eq!(za.len(), zb.len(), "entry 数应一致");
+    for i in 0..za.len() {
+        let mut da = Vec::new();
+        let mut ea = za.by_index(i).unwrap();
+        let name = ea.name().to_string();
+        ea.read_to_end(&mut da).unwrap();
+        let mut db = Vec::new();
+        let mut eb = zb.by_index(i).unwrap();
+        eb.read_to_end(&mut db).unwrap();
+        if name == except {
+            assert_ne!(da, db, "{name} 应已替换");
+        } else {
+            assert_eq!(da, db, "{name} 应逐字节相等（untouched 保真）");
+        }
+    }
+}
+
+#[test]
+fn corpus_edit_engine_roundtrip() {
+    let Some((sdp, srs, install)) = all_corpus() else { return };
+    // 手术替换/插入用自造短语（非语料来源——禁令）
+    const REPLACED: &str = "测试替换后文本甲乙丙";
+    const INSERTED: &str = "测试插入段XYZ";
+    for (name, bytes) in [("SDP", &sdp), ("SRS", &srs), ("INSTALL", &install)] {
+        let xml = super::docx::read_document_xml(bytes).unwrap();
+
+        // ① 定位器全量对齐（真实 Word 16.0 产物：sdt/域/多节/表格混杂，千块级压测）
+        let spans = super::docx_edit::locate_blocks(&xml).unwrap();
+        let dom = xml_dom::parse(&xml).unwrap();
+        let model = super::docx_model::build_document(&dom);
+        assert_eq!(spans.len(), model.body.len(), "{name} 定位器/模型块数不一致");
+        for (i, span) in spans.iter().enumerate() {
+            let piece = &xml[span.start..span.end];
+            let piece_model = super::docx_model::build_document(&xml_dom::parse(piece).unwrap());
+            assert_eq!(piece_model.body.len(), 1, "{name} 块 {} span 子串非单块", i + 1);
+        }
+
+        // ② 手术闭环（纯函数不落盘；三操作三块，指纹 = 投影前 4 字运行时派生）
+        let t1 = pick_editable_block(&xml, &spans, &model, &[]).expect("{name} 无可编辑块");
+        let t2 = pick_editable_block(&xml, &spans, &model, &[t1]).expect("{name} 无第 2 可编辑块");
+        let t3 = pick_editable_block(&xml, &spans, &model, &[t1, t2]).expect("{name} 无第 3 可编辑块");
+        let prefix_of = |n: usize| -> String {
+            let mut t = String::new();
+            super::docx_model::blocks_text(&model.body[n - 1..n], &mut t);
+            t.trim().chars().take(4).collect()
+        };
+        let (new_bytes, applied) = super::apply_edits_to_bytes(
+            bytes,
+            &[
+                super::EditOp::ReplaceText {
+                    block: t1,
+                    expect_prefix: prefix_of(t1),
+                    new_text: REPLACED.into(),
+                },
+                super::EditOp::InsertParagraphAfter {
+                    block: t2,
+                    expect_prefix: prefix_of(t2),
+                    text: INSERTED.into(),
+                    style: None,
+                },
+                super::EditOp::DeleteBlock { block: t3, expect_prefix: prefix_of(t3) },
+            ],
+        )
+        .unwrap_or_else(|e| panic!("{name} 手术失败: {e}"));
+        assert_eq!(applied.len(), 3);
+
+        // ③ untouched 保真：除 document.xml 外逐 entry 字节相等
+        assert_untouched_entries_identical(bytes, &new_bytes, "word/document.xml");
+
+        // ④ 读回复核：t1 = REPLACED；t2 后紧跟 INSERTED；总块数 n+1-1 = n
+        let seg = inspect_document(
+            &new_bytes,
+            &InspectRequest { projection: InspectProjection::Text, start: Some(t1), end: Some(t2 + 1) },
+        )
+        .unwrap();
+        assert!(seg.content.contains(REPLACED), "{name} t1={t1} 替换未生效:\n{}", seg.content);
+        assert!(seg.content.contains(INSERTED), "{name} t2={t2} 后插入未生效:\n{}", seg.content);
+        let full = inspect_document(
+            &new_bytes,
+            &InspectRequest { projection: InspectProjection::Outline, start: None, end: None },
+        )
+        .unwrap();
+        assert_eq!(full.total_blocks, spans.len(), "{name} 块数守恒（+1 插 -1 删）");
+    }
+}

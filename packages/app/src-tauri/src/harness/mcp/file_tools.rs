@@ -58,7 +58,7 @@ fn reject_sensitive(path: &Path) -> AppResult<()> {
 /// 备份到 `<parent>/.icepaw-backup/<timestamp>_<filename>`，
 /// 每个文件最多保留 MAX_BACKUPS 份旧备份。
 /// 返回备份路径（None = 文件不存在，无需备份）。
-fn backup_if_exists(path: &Path) -> AppResult<Option<String>> {
+pub(super) fn backup_if_exists(path: &Path) -> AppResult<Option<String>> {
     if !path.exists() {
         return Ok(None);
     }
