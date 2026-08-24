@@ -28,6 +28,9 @@ pub enum InspectProjection {
     Outline,
     /// run 级格式：区间内段落/表格的有效格式明细，默认前 50 块
     Format,
+    /// pPr 原文：区间内每段落的段落属性 XML 原样字节。set_ppr_element 的编辑
+    /// 依据（复制→修改→回写），也是术后验证视图。默认前 20 块
+    Ppr,
     /// 带块号的正文，默认前 100 块
     Text,
     /// 页眉页脚：逐节列 header/footer 引用与部件内容（S3 首波④；按节组织，
@@ -41,6 +44,7 @@ impl InspectProjection {
         match self {
             InspectProjection::Outline => 400,
             InspectProjection::Format => 50,
+            InspectProjection::Ppr => 20,
             InspectProjection::Text => 100,
             // 按节组织不走块区间路径（inspect_document 特判，span 不参与）
             InspectProjection::HeadersFooters => 1,
@@ -51,6 +55,7 @@ impl InspectProjection {
         match self {
             InspectProjection::Outline => "outline",
             InspectProjection::Format => "format",
+            InspectProjection::Ppr => "ppr",
             InspectProjection::Text => "text",
             InspectProjection::HeadersFooters => "headers_footers",
         }
@@ -130,6 +135,20 @@ pub fn inspect_document(bytes: &[u8], req: &InspectRequest) -> AppResult<Inspect
         InspectProjection::Format => {
             for (i, block) in model.body.iter().enumerate().take(end).skip(start - 1) {
                 render_format_block(&ctx, i + 1, block, &mut content);
+            }
+        }
+        InspectProjection::Ppr => {
+            // pPr 原文走源码区间（模型不留 XML）；定位器与模型编址严格一致
+            let spans = super::docx_edit::locate_blocks(&doc_xml)?;
+            for (i, block) in model.body.iter().enumerate().take(end).skip(start - 1) {
+                let line = match block {
+                    // 表格块内含多个单元格段落的 pPr，直取会误导——显式标注
+                    Block::Table(_) => "(表格块，无段落属性)".to_string(),
+                    Block::Paragraph(_) => slice_raw_ppr(&doc_xml[spans[i].start..spans[i].end])
+                        .map(str::to_string)
+                        .unwrap_or_else(|| "(无 pPr)".into()),
+                };
+                content.push_str(&format!("#{}\t{}\n", i + 1, line));
             }
         }
         InspectProjection::Text => {
@@ -351,8 +370,24 @@ fn para_meta(ctx: &RenderCtx, n: usize, props: &docx_model::ParaProps) -> String
 }
 
 /// format：块级格式明细（有效格式 = 样式链合并值）。
-fn render_format_block(ctx: &RenderCtx, n: usize, block: &Block, out: &mut String) {
-    match block {
+/// 切出段落块的 pPr 原文（含自闭合形态；无 pPr / 非段落 → None）。
+/// 排除 pPrChange（前缀碰撞：`<w:pPr` 后随字符必须非字母数字）。
+fn slice_raw_ppr(block_xml: &str) -> Option<&str> {
+    let s = block_xml.find("<w:pPr").filter(|s| {
+        matches!(
+            block_xml.as_bytes().get(s + "<w:pPr".len()),
+            Some(b'>') | Some(b'/') | Some(b' ')
+        )
+    })?;
+    let open_end = s + block_xml[s..].find('>')? + 1;
+    if block_xml.as_bytes()[open_end - 2] == b'/' {
+        return Some(&block_xml[s..open_end]); // 自闭合 <w:pPr/>
+    }
+    let close = open_end + block_xml[open_end..].find("</w:pPr>")?;
+    Some(&block_xml[s..close + "</w:pPr>".len()])
+}
+
+fn render_format_block(ctx: &RenderCtx, n: usize, block: &Block, out: &mut String) {    match block {
         Block::Paragraph(p) => {
             out.push_str(&format!("[{n}] ¶ {}\n", para_meta(ctx, n, &p.props)));
             let chain = p

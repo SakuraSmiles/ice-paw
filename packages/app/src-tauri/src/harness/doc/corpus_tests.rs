@@ -659,3 +659,95 @@ fn corpus_set_format_surgery() {
         assert_eq!(old_t, new_t, "{name} set_format 不应改动文本");
     }
 }
+
+/// S3 二波（D9 通用元素手术）：真实语料上 set_ppr_element 闭环——段级 numPr
+/// 摘除（去自动编号的正路）+ keepNext 插入。目标块与指纹全运行时派生。
+#[test]
+fn corpus_ppr_element_surgery() {
+    let Some((sdp, srs, install)) = all_corpus() else { return };
+    use super::docx_model::{blocks_text, Block};
+    let mut ran = 0usize;
+    for (name, bytes) in [("SDP", &sdp), ("SRS", &srs), ("INSTALL", &install)] {
+        let xml = super::docx::read_document_xml(bytes).unwrap();
+        let spans = super::docx_edit::locate_blocks(&xml).unwrap();
+        let model = super::docx_model::build_document(&xml_dom::parse(&xml).unwrap());
+
+        // 找一个带段级编号、无修订、非表格、非 pPrChange 的有字段落
+        let numbered = 'outer: {
+            for (i, b) in model.body.iter().enumerate() {
+                let Block::Paragraph(p) = b else { continue };
+                if p.props.numbering.is_none() || p.runs.iter().any(|r| r.revision.is_some()) {
+                    continue;
+                }
+                let bx = &xml[spans[i].start..spans[i].end];
+                if bx.contains("<w:pPrChange") || bx.contains("<w:sectPr") {
+                    continue;
+                }
+                let mut t = String::new();
+                blocks_text(&model.body[i..i + 1], &mut t);
+                if t.trim().chars().count() >= 4 {
+                    break 'outer Some(i + 1);
+                }
+            }
+            None
+        };
+        let Some(numbered) = numbered else { continue };
+        // 第二目标（keepNext upsert）：任意可编辑段
+        let other = pick_editable_block(&xml, &spans, &model, &[numbered])
+            .expect("{name} 无第 2 可编辑块");
+        let prefix_of = |n: usize| -> String {
+            let mut t = String::new();
+            blocks_text(&model.body[n - 1..n], &mut t);
+            t.trim().chars().take(4).collect()
+        };
+
+        let (new_bytes, applied) = super::apply_edits_to_bytes(
+            bytes,
+            &[
+                super::EditOp::SetPprElement {
+                    block: numbered,
+                    expect_prefix: prefix_of(numbered),
+                    element: "numPr".into(),
+                    xml: None,
+                },
+                super::EditOp::SetPprElement {
+                    block: other,
+                    expect_prefix: prefix_of(other),
+                    element: "keepNext".into(),
+                    xml: Some("<w:keepNext/>".into()),
+                },
+            ],
+        )
+        .unwrap_or_else(|e| panic!("{name} set_ppr_element 失败: {e}"));
+        assert_eq!(applied.len(), 2);
+        assert!(applied.iter().all(|a| a.op == "set_ppr_element"));
+        // 摘要序按 splice 位置（块序）非入参序——按内容断言
+        assert!(
+            applied.iter().any(|a| a.after.starts_with("removed numPr")),
+            "{name} 应含 numPr 摘除摘要，实际: {:?}",
+            applied.iter().map(|a| a.after.as_str()).collect::<Vec<_>>()
+        );
+        ran += 1;
+
+        // untouched 保真：只有 document.xml 变
+        assert_untouched_entries_identical(bytes, &new_bytes, "word/document.xml");
+
+        // 读回：块数/文本不变；编号引用消失；keepNext 落位
+        let new_xml = super::docx::read_document_xml(&new_bytes).unwrap();
+        let model2 = super::docx_model::build_document(&xml_dom::parse(&new_xml).unwrap());
+        assert_eq!(model2.body.len(), model.body.len(), "{name} 块数应守恒");
+        let Block::Paragraph(p) = &model2.body[numbered - 1] else { panic!() };
+        assert!(p.props.numbering.is_none(), "{name} 段级编号引用应消失");
+        let new_spans = super::docx_edit::locate_blocks(&new_xml).unwrap();
+        assert!(
+            new_xml[new_spans[other - 1].start..new_spans[other - 1].end]
+                .contains("<w:keepNext"),
+            "{name} keepNext 未落位"
+        );
+        let (mut old_t, mut new_t) = (String::new(), String::new());
+        blocks_text(&model.body[numbered - 1..numbered], &mut old_t);
+        blocks_text(&model2.body[numbered - 1..numbered], &mut new_t);
+        assert_eq!(old_t, new_t, "{name} 元素手术不应改动文本");
+    }
+    assert!(ran >= 2, "SDP/SRS 语料应均有段级编号块可跑（实际 {ran} 份）");
+}

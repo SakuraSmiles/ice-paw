@@ -225,7 +225,28 @@ pub enum EditOp {
         paragraph: Option<ParaFormat>,
         character: Option<CharFormat>,
     },
+    /// 通用段落属性元素手术（S3 二波 D9：一个操作收编 pPr 全部法定子元素长尾）：
+    /// element 无前缀名（numPr/keepNext/shd/…）；xml=None 移除整元素（pPr 摘空则
+    /// 整体清理），Some=合法单根片段按 CT_PPr schema 序整元素替换/插入。片段须
+    /// 从 inspect_docx（projection=ppr）看到的原文复制修改，不接受凭记忆新写。
+    SetPprElement {
+        block: usize,
+        expect_prefix: String,
+        element: String,
+        xml: Option<String>,
+    },
 }
+
+/// CT_PPr 法定子元素，ECMA-376 schema 序。双职：合法性白名单 + 插入位序。
+/// sectPr（分节符载体）/pPrChange（修订记录）受保护不开放，不在本表。
+const PPR_ELEMENTS: [&str; 34] = [
+    "pStyle", "keepNext", "keepLines", "pageBreakBefore", "framePr", "widowControl",
+    "numPr", "suppressLineNumbers", "pBdr", "shd", "tabs", "suppressAutoHyphens",
+    "kinsoku", "wordWrap", "overflowPunct", "topLinePunct", "autoSpaceDE", "autoSpaceDN",
+    "bidi", "adjustRightInd", "snapToGrid", "spacing", "ind", "contextualSpacing",
+    "mirrorIndents", "suppressOverlap", "jc", "textDirection", "textAlignment",
+    "textboxTightWrap", "outlineLvl", "divId", "cnfStyle", "rPr",
+];
 
 /// 单操作执行摘要（agent 读回验证用）。
 #[derive(Debug, Serialize)]
@@ -293,7 +314,8 @@ pub(super) fn apply_edits(
             | EditOp::InsertParagraphAfter { block, .. }
             | EditOp::DeleteBlock { block, .. }
             | EditOp::SetStyle { block, .. }
-            | EditOp::SetFormat { block, .. } => block,
+            | EditOp::SetFormat { block, .. }
+            | EditOp::SetPprElement { block, .. } => block,
         };
         if block == 0 || block > spans.len() {
             return Err(AppError::Validation(format!(
@@ -401,11 +423,46 @@ pub(super) fn apply_edits(
                 }
                 validate_formats(paragraph.as_ref(), character.as_ref())?;
             }
+            EditOp::SetPprElement { element, xml, .. } => {
+                if has_revision(&model.body[idx]) {
+                    return Err(AppError::Validation(format!(
+                        "含修订标记: 块 {block} 带插入/删除修订，默认不触碰修订内容。\
+                         请先在 Word 中接受或拒绝修订后再编辑该块。"
+                    )));
+                }
+                if block_xml.contains("<w:pPrChange") {
+                    return Err(AppError::Validation(format!(
+                        "含修订标记: 块 {block} 带段落属性修订（pPrChange），默认不触碰修订内容。\
+                         请先在 Word 中接受或拒绝修订后再编辑该块。"
+                    )));
+                }
+                if element == "sectPr" || element == "pPrChange" {
+                    return Err(AppError::Validation(format!(
+                        "受保护子元素: {element} 不开放通用元素操作（sectPr 是分节符载体，\
+                         pPrChange 是修订记录）。修改分节结构不在支持范围；换段落样式请用 set_style。"
+                    )));
+                }
+                if !PPR_ELEMENTS.contains(&element.as_str()) {
+                    return Err(AppError::Validation(format!(
+                        "非法pPr子元素: {:?} 不在段落属性（pPr）法定子元素清单。合法元素\
+                         （schema 序）: {}。名称不带 w: 前缀；查现有元素原文用 inspect_docx \
+                         projection=ppr。",
+                        element,
+                        PPR_ELEMENTS.join(" ")
+                    )));
+                }
+                if let Some(x) = xml {
+                    validate_ppr_fragment(element, x)?;
+                }
+            }
         }
-        // Replace / SetStyle / SetFormat 目标必须是段落块
+        // Replace / SetStyle / SetFormat / SetPprElement 目标必须是段落块
         if matches!(
             op,
-            EditOp::ReplaceText { .. } | EditOp::SetStyle { .. } | EditOp::SetFormat { .. }
+            EditOp::ReplaceText { .. }
+                | EditOp::SetStyle { .. }
+                | EditOp::SetFormat { .. }
+                | EditOp::SetPprElement { .. }
         ) && span.is_table {
             return Err(AppError::Validation(format!(
                 "表格块: 块 {block} 是表格，该操作只支持段落。\
@@ -537,6 +594,46 @@ pub(super) fn apply_edits(
                     },
                 });
             }
+            EditOp::SetPprElement { block, element, xml: frag, .. } => {
+                let span = spans[block - 1];
+                let (new_block, changed) =
+                    set_ppr_element(&xml[span.start..span.end], &element, frag.as_deref())
+                        .ok_or_else(|| AppError::Internal(format!(
+                            "pPr元素手术失败: 块 {block} XML 形态异常（内部 bug，未写盘）"
+                        )))?;
+                // 诚实边界：段级 numPr 移除后，若样式链仍定义编号，Word 会回退显示
+                // 样式编号（直接格式覆盖样式 → 摘除直接格式 = 落回样式定义）——
+                // 显式警告，勿让 agent 以为编号已消失
+                let mut after = if changed {
+                    match frag.as_deref() {
+                        None => format!("removed {element}"),
+                        Some(_) => format!("set {element}"),
+                    }
+                } else {
+                    format!("{element} 不存在（空转，文档未变）")
+                };
+                if changed
+                    && frag.is_none()
+                    && element == "numPr"
+                    && style_chain_defines_numbering(&model, block, styles)
+                {
+                    after.push_str("；警告：该段样式链仍定义编号，Word 将回退显示样式编号——需改样式定义才彻底去编号");
+                }
+                let projected = projected_of(&model, block);
+                plan.push(Splice {
+                    pos: span.start,
+                    remove_end: span.end,
+                    insert: new_block,
+                    summary: AppliedOp {
+                        op: "set_ppr_element",
+                        block,
+                        before: projected,
+                        after,
+                        style: None,
+                        style_unchanged: None,
+                    },
+                });
+            }
         }
     }
 
@@ -575,7 +672,8 @@ fn expect_prefix_of(op: &EditOp) -> &str {
         | EditOp::InsertParagraphAfter { expect_prefix, .. }
         | EditOp::DeleteBlock { expect_prefix, .. }
         | EditOp::SetStyle { expect_prefix, .. }
-        | EditOp::SetFormat { expect_prefix, .. } => expect_prefix,
+        | EditOp::SetFormat { expect_prefix, .. }
+        | EditOp::SetPprElement { expect_prefix, .. } => expect_prefix,
     }
 }
 
@@ -1068,6 +1166,208 @@ fn reformat_ppr(block_xml: &str, p: &ParaFormat) -> Option<String> {
         new_inner,
         &block_xml[close_at..]
     ))
+}
+
+/// 校验 pPr 子元素片段（set_ppr_element 的 xml 参数）：
+/// - 单根：首个元素必须是 `<w:{element}`，闭合后只允许空白
+/// - well-formed：quick-xml 全程无错、深度归零
+/// - 不得携带 xmlns 声明（w 前缀已在文档根声明；新声明可能指向不同 URI）
+/// - 不得内嵌 sectPr/pPrChange（受保护元素防夹带）
+fn validate_ppr_fragment(element: &str, xml: &str) -> AppResult<()> {
+    if xml.contains("xmlns") {
+        return Err(AppError::Validation(
+            "片段校验失败: 不得携带 xmlns 声明（w 前缀已在文档根声明）。请去掉 xmlns 属性。".into(),
+        ));
+    }
+    if xml.contains("<w:sectPr") || xml.contains("<w:pPrChange") {
+        return Err(AppError::Validation(
+            "片段校验失败: 不得包含 sectPr/pPrChange（分节符载体/修订记录，受保护）。".into(),
+        ));
+    }
+    let expected_root = format!("w:{element}");
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+    let mut depth = 0i32;
+    let mut root_seen = false;
+    let mut trailing = false;
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => {
+                if depth == 0 {
+                    if trailing || root_seen {
+                        return Err(AppError::Validation(
+                            "片段校验失败: 必须恰好一个根元素（不得平铺多个）。".into(),
+                        ));
+                    }
+                    root_seen = true;
+                    if e.name().as_ref() != expected_root.as_bytes() {
+                        return Err(AppError::Validation(format!(
+                            "片段校验失败: 根元素必须是 <w:{element}>（与 element 参数一致），\
+                             实际是 <{}>。",
+                            String::from_utf8_lossy(e.name().as_ref())
+                        )));
+                    }
+                }
+                depth += 1;
+            }
+            Ok(Event::Empty(e)) => {
+                if depth == 0 {
+                    if trailing || root_seen {
+                        return Err(AppError::Validation(
+                            "片段校验失败: 必须恰好一个根元素（不得平铺多个）。".into(),
+                        ));
+                    }
+                    root_seen = true;
+                    if e.name().as_ref() != expected_root.as_bytes() {
+                        return Err(AppError::Validation(format!(
+                            "片段校验失败: 根元素必须是 <w:{element}>（与 element 参数一致），\
+                             实际是 <{}>。",
+                            String::from_utf8_lossy(e.name().as_ref())
+                        )));
+                    }
+                }
+                // 自闭合不入深度
+            }
+            Ok(Event::End(_)) => {
+                depth -= 1;
+                if depth == 0 {
+                    trailing = true; // 根已闭合，之后只允许空白
+                }
+            }
+            Ok(Event::Text(t)) => {
+                if !t.iter().all(|b| b.is_ascii_whitespace()) && (depth == 0 || trailing) {
+                    return Err(AppError::Validation(
+                        "片段校验失败: 根元素闭合后不得再有文本。".into(),
+                    ));
+                }
+            }
+            Ok(Event::Eof) => break,
+            Ok(_) => {}
+            Err(e) => {
+                return Err(AppError::Validation(format!(
+                    "片段校验失败: XML 不合法（{e}）。请从 inspect_docx projection=ppr \
+                     看到的原文复制后修改，不要凭记忆手写。"
+                )));
+            }
+        }
+    }
+    if !root_seen {
+        return Err(AppError::Validation(format!(
+            "片段校验失败: 缺少根元素 <w:{element}>。"
+        )));
+    }
+    if depth != 0 {
+        return Err(AppError::Validation(
+            "片段校验失败: 元素未闭合（标签不配对）。".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// 通用 pPr 子元素手术（纯函数）。
+/// - xml=None：移除 `<w:{element}>` 整元素；pPr 摘空（无其它子元素）则 pPr 整体清理
+/// - xml=Some：整元素替换（已存在）或按 CT_PPr schema 序插入（不存在）；
+///   无 pPr 时新建（自闭合空段顺势展开成对标签）
+///
+/// 返回 (新块 XML, 是否实际改动)。None 仅防御形态异常。
+fn set_ppr_element(block_xml: &str, element: &str, xml: Option<&str>) -> Option<(String, bool)> {
+    let frag = match xml {
+        Some(f) => f,
+        None => return remove_ppr_element(block_xml, element),
+    };
+    // 定位 pPr（精确 `<w:pPr` + 非字母后随，排除 pPrChange）
+    let ppr_at = block_xml.find("<w:pPr").filter(|s| {
+        matches!(
+            block_xml.as_bytes().get(s + "<w:pPr".len()),
+            Some(b'>') | Some(b'/') | Some(b' ')
+        )
+    });
+    let Some(s) = ppr_at else {
+        // 无 pPr：开标签后新建（自闭合空段顺势展开）
+        let gt = block_xml.find('>')?;
+        let new_ppr = format!("<w:pPr>{frag}</w:pPr>");
+        if block_xml.as_bytes()[gt - 1] == b'/' {
+            let head = &block_xml[..gt - 1];
+            return Some((format!("{head}>{new_ppr}</w:p>"), true));
+        }
+        return Some((
+            format!("{}{new_ppr}{}", &block_xml[..gt + 1], &block_xml[gt + 1..]),
+            true,
+        ));
+    };
+    let open_end = s + block_xml[s..].find('>')? + 1;
+    if block_xml.as_bytes()[open_end - 2] == b'/' {
+        // 自闭合空 pPr：整体替换为含片段的完整 pPr
+        return Some((
+            format!("{}<w:pPr>{frag}</w:pPr>{}", &block_xml[..s], &block_xml[open_end..]),
+            true,
+        ));
+    }
+    // later = schema 序中排在 element 之后的兄弟名（upsert_element 的插入位依据）
+    let idx = PPR_ELEMENTS.iter().position(|n| *n == element)?;
+    let later: Vec<&str> = PPR_ELEMENTS[idx + 1..].to_vec();
+    let ppr_end = open_end + block_xml[open_end..].find("</w:pPr>")? + "</w:pPr>".len();
+    let ppr = &block_xml[s..ppr_end];
+    let new_ppr = upsert_element(ppr, element, frag, &later, "</w:pPr>");
+    Some((
+        format!("{}{new_ppr}{}", &block_xml[..s], &block_xml[ppr_end..]),
+        true,
+    ))
+}
+
+/// 移除 pPr 子元素；pPr 摘空则整体清理。元素不存在 → 空转（文档不变）。
+fn remove_ppr_element(block_xml: &str, element: &str) -> Option<(String, bool)> {
+    let s = block_xml.find("<w:pPr").filter(|s| {
+        matches!(
+            block_xml.as_bytes().get(s + "<w:pPr".len()),
+            Some(b'>') | Some(b'/') | Some(b' ')
+        )
+    })?;
+    let open_end = s + block_xml[s..].find('>')? + 1;
+    if block_xml.as_bytes()[open_end - 2] == b'/' {
+        // 自闭合空 pPr：无任何子元素，必空转
+        return Some((block_xml.to_string(), false));
+    }
+    let close_rel = block_xml[open_end..].find("</w:pPr>")?;
+    let close_at = open_end + close_rel;
+    let inner = &block_xml[open_end..close_at];
+    let Some((es, ee)) = find_element_span(inner, element) else {
+        return Some((block_xml.to_string(), false)); // 不存在 → 空转
+    };
+    let new_inner = format!("{}{}", &inner[..es], &inner[ee..]);
+    if new_inner.trim().is_empty() {
+        // 摘空 → pPr 整体移除（Word 自身也这样清理）
+        return Some((
+            format!("{}{}", &block_xml[..s], &block_xml[close_at + "</w:pPr>".len()..]),
+            true,
+        ));
+    }
+    Some((
+        format!(
+            "{}{}{}",
+            &block_xml[..open_end],
+            new_inner,
+            &block_xml[close_at..]
+        ),
+        true,
+    ))
+}
+
+/// 段落的样式链是否定义编号（w:style/w:pPr/w:numPr）。段级 numPr 摘除后
+/// 编号回退到样式定义——警告判定用。
+fn style_chain_defines_numbering(
+    model: &docx_model::DocxDocument,
+    block: usize,
+    styles: &Stylesheet,
+) -> bool {
+    match &model.body[block - 1] {
+        Block::Paragraph(p) => p
+            .props
+            .style
+            .as_deref()
+            .is_some_and(|id| styles.chain_defines_numbering(id)),
+        Block::Table(_) => false,
+    }
 }
 
 /// 字符格式手术：块内每个 run（含 hyperlink 内）的 rPr 应用字符格式；
@@ -1614,6 +1914,302 @@ mod tests {
         let json = serde_json::to_string(&applied[0]).unwrap();
         assert!(!json.contains("style_unchanged"), "非空转不应带字段: {json}");
         assert!(out.contains(r#"<w:pStyle w:val="body"/>"#), "真换样式仍生效");
+    }
+
+    // ---- S3 二波（D9）：set_ppr_element 通用 pPr 元素手术 ----
+
+    #[test]
+    fn ppr_remove_keeps_sibling_elements() {
+        // numPr 摘除，pStyle/spacing 兄弟字节原样，编号引用从模型消失
+        let xml = wrap(concat!(
+            r#"<w:p><w:pPr><w:pStyle w:val="3"/><w:numPr><w:ilvl w:val="2"/><w:numId w:val="2"/></w:numPr>"#,
+            r#"<w:spacing w:before="163"/></w:pPr><w:r><w:t>1.2.6 标题段</w:t></w:r></w:p>"#,
+        ));
+        let (out, applied) = apply_edits(
+            &xml,
+            &heading_styles(),
+            &[EditOp::SetPprElement {
+                block: 1,
+                expect_prefix: "1.2.6".into(),
+                element: "numPr".into(),
+                xml: None,
+            }],
+        )
+        .unwrap();
+        assert_eq!(applied[0].op, "set_ppr_element");
+        assert!(applied[0].after.starts_with("removed numPr"), "实际: {}", applied[0].after);
+        assert!(!out.contains("<w:numPr"), "numPr 应消失");
+        assert!(
+            out.contains(r#"<w:pPr><w:pStyle w:val="3"/><w:spacing w:before="163"/></w:pPr>"#),
+            "兄弟元素原样: {out}"
+        );
+        let m = model_of(&out);
+        let Block::Paragraph(p) = &m.body[0] else { panic!() };
+        assert!(p.props.numbering.is_none(), "模型侧编号引用应消失");
+    }
+
+    #[test]
+    fn ppr_remove_last_child_drops_empty_ppr() {
+        // numPr 是唯一子元素 → 摘空后 pPr 整体清理
+        let xml = wrap(
+            r#"<w:p><w:pPr><w:numPr><w:numId w:val="2"/></w:numPr></w:pPr><w:r><w:t>仅编号段</w:t></w:r></w:p>"#,
+        );
+        let (out, applied) = apply_edits(
+            &xml,
+            &heading_styles(),
+            &[EditOp::SetPprElement {
+                block: 1,
+                expect_prefix: "仅编号".into(),
+                element: "numPr".into(),
+                xml: None,
+            }],
+        )
+        .unwrap();
+        assert!(applied[0].after.starts_with("removed numPr"));
+        assert!(!out.contains("<w:pPr"), "空 pPr 应整体清理: {out}");
+        let m = model_of(&out);
+        assert_eq!(m.body.len(), 1, "块数守恒");
+    }
+
+    #[test]
+    fn ppr_remove_absent_reports_noop() {
+        // 段落无 numPr → 空转：文档逐字节不变 + 摘要明示
+        let xml = wrap(
+            r#"<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t>普通段</w:t></w:r></w:p>"#,
+        );
+        let (out, applied) = apply_edits(
+            &xml,
+            &heading_styles(),
+            &[EditOp::SetPprElement {
+                block: 1,
+                expect_prefix: "普通".into(),
+                element: "numPr".into(),
+                xml: None,
+            }],
+        )
+        .unwrap();
+        assert!(applied[0].after.contains("空转"), "实际: {}", applied[0].after);
+        assert_eq!(out, xml, "空转输出应与输入逐字节一致");
+    }
+
+    #[test]
+    fn ppr_upsert_inserts_at_schema_position() {
+        // keepNext（schema 序早于 numPr）插在 pStyle 与 numPr 之间；
+        // outlineLvl（序晚于 spacing、早于 rPr）插在 spacing 与 rPr 之间
+        let mk = |text: &str| {
+            format!(
+                concat!(
+                    r#"<w:p><w:pPr><w:pStyle w:val="3"/><w:numPr><w:numId w:val="2"/></w:numPr>"#,
+                    r#"<w:spacing w:before="120"/><w:rPr><w:b/></w:rPr></w:pPr>"#,
+                    r#"<w:r><w:t>{}</w:t></w:r></w:p>"#,
+                ),
+                text
+            )
+        };
+        let xml = wrap(&(mk("位序A") + &mk("位序B")));
+        let (out, applied) = apply_edits(
+            &xml,
+            &heading_styles(),
+            &[
+                EditOp::SetPprElement {
+                    block: 1,
+                    expect_prefix: "位序A".into(),
+                    element: "keepNext".into(),
+                    xml: Some("<w:keepNext/>".into()),
+                },
+                EditOp::SetPprElement {
+                    block: 2,
+                    expect_prefix: "位序B".into(),
+                    element: "outlineLvl".into(),
+                    xml: Some(r#"<w:outlineLvl w:val="0"/>"#.into()),
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(applied.len(), 2);
+        assert!(
+            out.contains(r#"<w:pStyle w:val="3"/><w:keepNext/><w:numPr>"#),
+            "keepNext 应插在 numPr 前: {out}"
+        );
+        assert!(
+            out.contains(r#"<w:spacing w:before="120"/><w:outlineLvl w:val="0"/><w:rPr>"#),
+            "outlineLvl 应插在 spacing 后 rPr 前: {out}"
+        );
+    }
+
+    #[test]
+    fn ppr_upsert_replaces_existing_whole_element() {
+        // 已存在 jc → 整元素替换（属性值 + 属性集都以片段为准）
+        let xml = wrap(r#"<w:p><w:pPr><w:jc w:val="left"/></w:pPr><w:r><w:t>替换段</w:t></w:r></w:p>"#);
+        let (out, _) = apply_edits(
+            &xml,
+            &heading_styles(),
+            &[EditOp::SetPprElement {
+                block: 1,
+                expect_prefix: "替换".into(),
+                element: "jc".into(),
+                xml: Some(r#"<w:jc w:val="right"/>"#.into()),
+            }],
+        )
+        .unwrap();
+        assert!(out.contains(r#"<w:pPr><w:jc w:val="right"/></w:pPr>"#), "整元素替换: {out}");
+    }
+
+    #[test]
+    fn ppr_upsert_creates_ppr_in_bare_paragraph() {
+        // 无 pPr 裸段 → 开标签后新建；自闭合空段 → 顺势展开成对标签
+        let xml = wrap(concat!(
+            r#"<w:p><w:r><w:t>裸段</w:t></w:r></w:p>"#,
+            r#"<w:p w14:paraId="E"/>"#,
+        ));
+        let (out, _) = apply_edits(
+            &xml,
+            &heading_styles(),
+            &[
+                EditOp::SetPprElement {
+                    block: 1,
+                    expect_prefix: "裸段".into(),
+                    element: "keepNext".into(),
+                    xml: Some("<w:keepNext/>".into()),
+                },
+                EditOp::SetPprElement {
+                    block: 2,
+                    expect_prefix: "".into(),
+                    element: "keepLines".into(),
+                    xml: Some("<w:keepLines/>".into()),
+                },
+            ],
+        )
+        .unwrap();
+        assert!(out.contains(r#"<w:p><w:pPr><w:keepNext/></w:pPr><w:r><w:t>裸段</w:t></w:r></w:p>"#));
+        assert!(
+            out.contains(r#"<w:p w14:paraId="E"><w:pPr><w:keepLines/></w:pPr></w:p>"#),
+            "自闭合段展开: {out}"
+        );
+    }
+
+    #[test]
+    fn ppr_rejects_illegal_protected_and_table() {
+        let styles = heading_styles();
+        let para = wrap(r#"<w:p><w:r><w:t>一段</w:t></w:r></w:p>"#);
+        // 非法元素名（numId 是 numPr 的子元素，不是 pPr 子元素）
+        let err = val_msg(apply_edits(
+            &para,
+            &styles,
+            &[EditOp::SetPprElement { block: 1, expect_prefix: "一段".into(), element: "numId".into(), xml: None }],
+        ).unwrap_err());
+        assert!(err.starts_with("非法pPr子元素"), "实际: {err}");
+        // 受保护：sectPr / pPrChange
+        for protected in ["sectPr", "pPrChange"] {
+            let err = val_msg(apply_edits(
+                &para,
+                &styles,
+                &[EditOp::SetPprElement {
+                    block: 1,
+                    expect_prefix: "一段".into(),
+                    element: protected.into(),
+                    xml: None,
+                }],
+            ).unwrap_err());
+            assert!(err.starts_with("受保护子元素"), "实际: {err}");
+        }
+        // 表格块
+        let tbl = wrap(r#"<w:tbl><w:tr><w:tc><w:p><w:r><w:t>表</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#);
+        let err = val_msg(apply_edits(
+            &tbl,
+            &styles,
+            &[EditOp::SetPprElement { block: 1, expect_prefix: "表".into(), element: "keepNext".into(), xml: None }],
+        ).unwrap_err());
+        assert!(err.starts_with("表格块"), "实际: {err}");
+    }
+
+    #[test]
+    fn ppr_fragment_validation_families() {
+        let styles = heading_styles();
+        let para = wrap(r#"<w:p><w:r><w:t>片段段</w:t></w:r></w:p>"#);
+        let run = |xml: Option<&str>| {
+            val_msg(apply_edits(
+                &para,
+                &styles,
+                &[EditOp::SetPprElement {
+                    block: 1,
+                    expect_prefix: "片段".into(),
+                    element: "numPr".into(),
+                    xml: xml.map(str::to_string),
+                }],
+            ).unwrap_err())
+        };
+        // 根元素名与 element 不一致
+        let err = run(Some(r#"<w:jc w:val="center"/>"#));
+        assert!(err.starts_with("片段校验失败"), "实际: {err}");
+        assert!(err.contains("根元素"));
+        // 未闭合
+        let err = run(Some(r#"<w:numPr><w:ilvl w:val="0"/>"#));
+        assert!(err.starts_with("片段校验失败"), "实际: {err}");
+        // xmlns 声明
+        let err = run(Some(r#"<w:numPr xmlns:w="http://x"/>"#));
+        assert!(err.starts_with("片段校验失败") && err.contains("xmlns"), "实际: {err}");
+        // 夹带受保护元素
+        let err = run(Some(r#"<w:numPr><w:sectPr/></w:numPr>"#));
+        assert!(err.starts_with("片段校验失败"), "实际: {err}");
+        // 平铺双根
+        let err = run(Some("<w:keepNext/><w:keepLines/>"));
+        assert!(err.starts_with("片段校验失败"), "实际: {err}");
+    }
+
+    /// 样式定义自带编号（h2 直接带 / h3 经 basedOn 继承）——链检测 fixture
+    fn numbered_heading_styles() -> Stylesheet {
+        let styles_xml = r#"<w:styles>
+            <w:style w:type="paragraph" w:styleId="h2"><w:name w:val="heading 2"/>
+              <w:pPr><w:numPr><w:numId w:val="9"/></w:numPr></w:pPr></w:style>
+            <w:style w:type="paragraph" w:styleId="h3"><w:name w:val="heading 3"/>
+              <w:basedOn w:val="h2"/></w:style>
+            <w:style w:type="paragraph" w:styleId="body"><w:name w:val="Normal"/></w:style>
+        </w:styles>"#;
+        super::super::styles::parse_styles(&super::super::xml_dom::parse(styles_xml).unwrap())
+    }
+
+    #[test]
+    fn ppr_numpr_removal_warns_on_style_chain_numbering() {
+        // 样式链（含 basedOn 继承）定义编号 → 段级 numPr 摘除后显式警告；
+        // 样式无编号 → 无警告
+        let mk = |style: &str| {
+            format!(
+                r#"<w:p><w:pPr><w:pStyle w:val="{style}"/><w:numPr><w:ilvl w:val="2"/><w:numId w:val="2"/></w:numPr></w:pPr><w:r><w:t>双源段</w:t></w:r></w:p>"#
+            )
+        };
+        for style in ["h2", "h3"] {
+            let xml = wrap(&mk(style));
+            let (_, applied) = apply_edits(
+                &xml,
+                &numbered_heading_styles(),
+                &[EditOp::SetPprElement {
+                    block: 1,
+                    expect_prefix: "双源".into(),
+                    element: "numPr".into(),
+                    xml: None,
+                }],
+            )
+            .unwrap();
+            assert!(
+                applied[0].after.contains("样式链仍定义编号"),
+                "{style} 应触发回退警告，实际: {}",
+                applied[0].after
+            );
+        }
+        let xml = wrap(&mk("h2"));
+        let (_, applied) = apply_edits(
+            &xml,
+            &heading_styles(),
+            &[EditOp::SetPprElement {
+                block: 1,
+                expect_prefix: "双源".into(),
+                element: "numPr".into(),
+                xml: None,
+            }],
+        )
+        .unwrap();
+        assert!(!applied[0].after.contains("样式链仍定义编号"), "样式无编号不应警告");
     }
 
     #[test]
