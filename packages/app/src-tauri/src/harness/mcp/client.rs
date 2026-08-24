@@ -279,6 +279,7 @@ impl McpRegistry {
         self.register_sync(Arc::new(super::file_tools::EditFileTool));
         self.register_sync(Arc::new(super::file_tools::DeleteFileTool));
         self.register_sync(Arc::new(super::file_tools::MoveFileTool));
+        self.register_sync(Arc::new(super::file_tools::CopyFileTool));
         self.register_sync(Arc::new(super::file_tools::CreateDirectoryTool));
         self.register_sync(Arc::new(super::shell::RunCommandTool));
         self.register_sync(Arc::new(super::search::SearchFilesTool));

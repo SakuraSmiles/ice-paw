@@ -86,6 +86,22 @@ pub(super) fn backup_if_exists(path: &Path) -> AppResult<Option<String>> {
     Ok(Some(backup_path.to_string_lossy().to_string()))
 }
 
+/// 带备份目录守卫的备份：目标已在 `.icepaw-backup` 目录**内部**时跳过备份。
+///
+/// 生产样本（2026-08-24）：agent 从备份目录把文件 move/copy 出来回滚，
+/// 源文件再被备份一次 → 生成 `.icepaw-backup/.icepaw-backup/…` 嵌套目录。
+/// 备份目录内的文件本身就是备份（或恢复现场），不产生二级备份。
+pub(super) fn backup_unless_in_backup_dir(path: &Path) -> AppResult<Option<String>> {
+    let in_backup_dir = path
+        .parent()
+        .and_then(|p| p.file_name())
+        .is_some_and(|n| n == ".icepaw-backup");
+    if in_backup_dir {
+        return Ok(None);
+    }
+    backup_if_exists(path)
+}
+
 /// 清理同一文件的旧备份，只保留最近 MAX_BACKUPS 个。
 fn cleanup_old_backups(backup_dir: &Path, original_filename: &str) -> AppResult<()> {
     let suffix = format!("_{original_filename}");
@@ -197,7 +213,21 @@ directories are created automatically (default create_dirs=true)."
         // 修改前自动备份
         let backup = backup_if_exists(path)?;
 
-        tokio::fs::write(path, &parsed.content).await.map_err(|e| {
+        // PowerShell 5.1 把无 BOM 的 .ps1 按 ANSI/GBK 解码，中文参数全部乱码
+        // （生产样本 2026-08-24：agent 写的 .ps1 中文实参变形 + 非终止错误不改
+        // 退出码假绿）。仅 .ps1 补 UTF-8 BOM；.bat/.cmd 不补——cmd.exe 对 BOM 的
+        // 处理不可靠（BOM 会粘进首行命令名）。
+        let content_bytes: Vec<u8> =
+            if path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("ps1")) {
+                let mut v = Vec::with_capacity(parsed.content.len() + 3);
+                v.extend_from_slice("\u{FEFF}".as_bytes());
+                v.extend_from_slice(parsed.content.as_bytes());
+                v
+            } else {
+                parsed.content.into_bytes()
+            };
+
+        tokio::fs::write(path, &content_bytes).await.map_err(|e| {
             AppError::Validation(format!(
                 "write_file 写入失败: {}: {e}。请确认路径合法且在授权工作区内；\
                  磁盘/权限问题请如实告知用户，勿重试同样调用。",
@@ -207,7 +237,7 @@ directories are created automatically (default create_dirs=true)."
 
         Ok(serde_json::json!({
             "path": parsed.path,
-            "bytes_written": parsed.content.len(),
+            "bytes_written": content_bytes.len(),
             "backup": backup,
         })
         .to_string())
@@ -498,9 +528,9 @@ falls back to copy+delete. The source file is backed up before moving."
             )));
         }
 
-        // 源文件备份（目录不备份，与 delete_file 一致）
+        // 源文件备份（目录不备份，与 delete_file 一致；源已在备份目录内则跳过，防嵌套）
         let backup = if !src.is_dir() {
-            backup_if_exists(src)?
+            backup_unless_in_backup_dir(src)?
         } else {
             None
         };
@@ -525,6 +555,94 @@ falls back to copy+delete. The source file is backed up before moving."
                 }
             }
             Err(e) => return Err(AppError::Io(e)),
+        }
+
+        Ok(serde_json::json!({
+            "source": parsed.source,
+            "destination": parsed.destination,
+            "backup": backup,
+        })
+        .to_string())
+    }
+}
+
+// =========================================================================
+// copy_file
+// =========================================================================
+
+/// `copy_file` 工具：复制文件或目录（源保留）
+///
+/// 生产样本（2026-08-24）：agent 只能用 run_command 里的 PowerShell Copy-Item
+/// 凑复制，引号经 cmd /C 转手后变形连败 12 次。复制是文件操作，应在本层有原生工具。
+pub struct CopyFileTool;
+
+#[derive(Deserialize)]
+struct CopyFileArgs {
+    source: String,
+    destination: String,
+}
+
+#[async_trait]
+impl McpClient for CopyFileTool {
+    fn name(&self) -> &str {
+        "copy_file"
+    }
+
+    fn description(&self) -> &str {
+        "Copy a file or directory (source is kept). Directories are copied recursively. \
+If the destination file already exists it is backed up before being overwritten."
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "source": { "type": "string", "description": "Path to the file or directory to copy." },
+                "destination": { "type": "string", "description": "Target path." }
+            },
+            "required": ["source", "destination"]
+        })
+    }
+
+    fn authorization_level(&self) -> AuthorizationLevel {
+        AuthorizationLevel::PathWhitelist
+    }
+
+    async fn execute(&self, args: &str) -> AppResult<String> {
+        let parsed: CopyFileArgs = serde_json::from_str(args)
+            .map_err(|e| AppError::Validation(format!("copy_file 参数解析失败: {e}")))?;
+
+        let src = Path::new(&parsed.source);
+        let dst = Path::new(&parsed.destination);
+        reject_sensitive(src)?;
+        reject_sensitive(dst)?;
+
+        if !src.exists() {
+            return Err(AppError::Validation(format!(
+                "copy_file: 源路径不存在: {}",
+                parsed.source
+            )));
+        }
+
+        // 被覆盖的是目标（源不动）——目标已存在则先备份；目标已在备份目录内则
+        // 跳过（防嵌套，与 move_file 同守卫）
+        let backup = if !dst.is_dir() {
+            backup_unless_in_backup_dir(dst)?
+        } else {
+            None
+        };
+
+        // 目标父目录缺失则自动建（与 move_file 一致）
+        if let Some(parent) = dst.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(AppError::Io)?;
+        }
+
+        if src.is_dir() {
+            copy_recursive(src, dst).await?;
+        } else {
+            tokio::fs::copy(src, dst).await.map_err(AppError::Io)?;
         }
 
         Ok(serde_json::json!({
@@ -746,5 +864,171 @@ mod tests {
     fn edit_mismatch_hint_nothing_close() {
         let hint = edit_mismatch_hint("print('hi')\n", "def totally_different():\n    pass");
         assert!(hint.contains("记忆"), "应指认凭记忆拼串: {hint}");
+    }
+
+    // ---- 小修复批（2026-08-24，生产样本驱动）----
+
+    #[test]
+    fn copy_file_auth_level() {
+        assert_eq!(
+            CopyFileTool.authorization_level(),
+            AuthorizationLevel::PathWhitelist
+        );
+    }
+
+    /// 复制保留源 + 新目标不触发备份
+    #[tokio::test]
+    async fn copy_file_keeps_source_and_skips_backup_for_new_dest() {
+        let dir = std::env::temp_dir().join(format!("icepaw_cf_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("src.txt");
+        std::fs::write(&src, "内容").unwrap();
+
+        let args = serde_json::json!({
+            "source": src.to_string_lossy(),
+            "destination": dir.join("out/copy.txt").to_string_lossy(),
+        })
+        .to_string();
+        let out = CopyFileTool.execute(&args).await.expect("复制应成功");
+        assert!(out.contains(r#""backup":null"#), "新目标无需备份: {out}");
+
+        assert!(src.exists(), "源保留（与 move_file 的本质区别）");
+        assert_eq!(std::fs::read_to_string(dir.join("out/copy.txt")).unwrap(), "内容");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 目标已存在 → 先备份再覆盖
+    #[tokio::test]
+    async fn copy_file_backs_up_existing_destination() {
+        let dir = std::env::temp_dir().join(format!("icepaw_cf_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("dst.txt"), "旧内容").unwrap();
+
+        let args = serde_json::json!({
+            "source": dir.join("src.txt").to_string_lossy(),
+            "destination": dir.join("dst.txt").to_string_lossy(),
+        })
+        .to_string();
+        std::fs::write(dir.join("src.txt"), "新内容").unwrap();
+        let out = CopyFileTool.execute(&args).await.expect("覆盖复制应成功");
+        assert!(out.contains(".icepaw-backup"), "应报出目标备份路径: {out}");
+
+        assert_eq!(std::fs::read_to_string(dir.join("dst.txt")).unwrap(), "新内容");
+        let backup_dir = dir.join(".icepaw-backup");
+        let entries: Vec<_> = std::fs::read_dir(&backup_dir).unwrap().collect();
+        assert_eq!(entries.len(), 1, "应恰好一份备份");
+        assert_eq!(
+            std::fs::read_to_string(entries[0].as_ref().unwrap().path()).unwrap(),
+            "旧内容"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 目录递归复制
+    #[tokio::test]
+    async fn copy_file_recursive_directory() {
+        let dir = std::env::temp_dir().join(format!("icepaw_cf_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("tree/nested")).unwrap();
+        std::fs::write(dir.join("tree/nested/leaf.txt"), "叶子").unwrap();
+
+        let args = serde_json::json!({
+            "source": dir.join("tree").to_string_lossy(),
+            "destination": dir.join("tree-copy").to_string_lossy(),
+        })
+        .to_string();
+        CopyFileTool.execute(&args).await.expect("目录复制应成功");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("tree-copy/nested/leaf.txt")).unwrap(),
+            "叶子"
+        );
+        assert!(dir.join("tree/nested/leaf.txt").exists(), "源目录保留");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 从备份目录 move/copy 出来回滚：不再生成 .icepaw-backup/.icepaw-backup 嵌套
+    #[tokio::test]
+    async fn move_and_copy_out_of_backup_dir_do_not_nest() {
+        let dir = std::env::temp_dir().join(format!("icepaw_cf_{}", uuid::Uuid::new_v4()));
+        let backup_dir = dir.join(".icepaw-backup");
+        std::fs::create_dir_all(&backup_dir).unwrap();
+        std::fs::write(backup_dir.join("a.txt"), "快照").unwrap();
+        std::fs::write(backup_dir.join("b.txt"), "快照2").unwrap();
+
+        // move：源在备份目录内 → 跳过源备份
+        let args = serde_json::json!({
+            "source": backup_dir.join("a.txt").to_string_lossy(),
+            "destination": dir.join("restored.txt").to_string_lossy(),
+        })
+        .to_string();
+        let out = MoveFileTool.execute(&args).await.expect("恢复 move 应成功");
+        assert!(out.contains(r#""backup":null"#), "备份目录内的源不再备份: {out}");
+
+        // copy：源同上
+        let args = serde_json::json!({
+            "source": backup_dir.join("b.txt").to_string_lossy(),
+            "destination": dir.join("restored2.txt").to_string_lossy(),
+        })
+        .to_string();
+        CopyFileTool.execute(&args).await.expect("恢复 copy 应成功");
+
+        assert!(!dir.join(".icepaw-backup/.icepaw-backup").exists(), "不得出现嵌套备份目录");
+        assert_eq!(std::fs::read_to_string(dir.join("restored.txt")).unwrap(), "快照");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 覆盖备份目录内的目标文件：同样不嵌套备份
+    #[tokio::test]
+    async fn copy_into_backup_dir_skips_backup() {
+        let dir = std::env::temp_dir().join(format!("icepaw_cf_{}", uuid::Uuid::new_v4()));
+        let backup_dir = dir.join(".icepaw-backup");
+        std::fs::create_dir_all(&backup_dir).unwrap();
+        std::fs::write(backup_dir.join("target.txt"), "旧快照").unwrap();
+        std::fs::write(dir.join("fresh.txt"), "新内容").unwrap();
+
+        let args = serde_json::json!({
+            "source": dir.join("fresh.txt").to_string_lossy(),
+            "destination": backup_dir.join("target.txt").to_string_lossy(),
+        })
+        .to_string();
+        let out = CopyFileTool.execute(&args).await.expect("应成功");
+        assert!(out.contains(r#""backup":null"#), "备份目录内的目标不备份: {out}");
+        assert_eq!(std::fs::read_to_string(backup_dir.join("target.txt")).unwrap(), "新内容");
+        assert!(!backup_dir.join(".icepaw-backup").exists(), "不得嵌套");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// PowerShell 5.1 无 BOM .ps1 按 ANSI/GBK 解码 → 中文乱码；仅 .ps1 补 UTF-8 BOM
+    #[tokio::test]
+    async fn write_file_ps1_gets_utf8_bom() {
+        let dir = std::env::temp_dir().join(format!("icepaw_wf_{}", uuid::Uuid::new_v4()));
+        let target = dir.join("script.ps1");
+        let args = serde_json::json!({
+            "path": target.to_string_lossy(),
+            "content": "Write-Output '中文参数'",
+        })
+        .to_string();
+        WriteFileTool.execute(&args).await.unwrap();
+
+        let bytes = std::fs::read(&target).unwrap();
+        assert_eq!(&bytes[..3], "\u{FEFF}".as_bytes(), ".ps1 必须 UTF-8 BOM 开头");
+        assert_eq!(&bytes[3..], "Write-Output '中文参数'".as_bytes());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 其它扩展名（含 .bat/.cmd——cmd.exe 对 BOM 处理不可靠）不加 BOM
+    #[tokio::test]
+    async fn write_file_other_extensions_no_bom() {
+        let dir = std::env::temp_dir().join(format!("icepaw_wf_{}", uuid::Uuid::new_v4()));
+        for name in ["a.txt", "b.bat", "c.cmd", "d.ps1x", "无扩展名"] {
+            let target = dir.join(name);
+            let args =
+                serde_json::json!({"path": target.to_string_lossy(), "content": "x"}).to_string();
+            WriteFileTool.execute(&args).await.unwrap();
+            let bytes = std::fs::read(&target).unwrap();
+            let has_bom = bytes.len() >= 3 && &bytes[..3] == "\u{FEFF}".as_bytes();
+            assert!(!has_bom, "{name} 不应有 BOM");
+            assert_eq!(bytes, b"x");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

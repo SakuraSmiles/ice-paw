@@ -656,8 +656,8 @@ fn path_within_workspace(file_path: &str, workspace: &Option<PathBuf>) -> bool {
 /// 从工具参数 JSON 提取路径字段（`path` / `file_path` / `dir` / `source` / `destination`），
 /// 返回 `(字段名, 路径)`。
 ///
-/// `source`/`destination` 供 `move_file`：tool_executor 只提取单个路径做白名单校验，
-/// 故 move_file 以 source 为代表路径（destination 由工具内 `reject_sensitive` 兜底）。
+/// `source`/`destination` 供 `move_file`/`copy_file`：tool_executor 只提取单个路径做白名单
+/// 校验，故以 source 为代表路径（destination 由工具内 `reject_sensitive` 兜底）。
 /// 多路径工具（如 `read_multiple_files` 的 paths 数组）无法提取，会回退到弹窗确认。
 fn extract_path_from_args(args: &str) -> Option<(String, String)> {
     let parsed: Value = serde_json::from_str(args).ok()?;

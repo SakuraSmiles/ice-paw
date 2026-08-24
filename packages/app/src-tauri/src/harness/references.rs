@@ -313,11 +313,11 @@ async fn build_conversation_card(pool: &SqlitePool, conv_id: &str) -> Option<Str
 }
 
 /// 从工具调用参数提取产物路径（write/edit/create_directory → path；
-/// move_file → destination）。非产物类工具 / 解析失败 → None。
+/// move_file/copy_file → destination）。非产物类工具 / 解析失败 → None。
 fn artifact_path(tool_name: &str, arguments: &str) -> Option<String> {
     let key = match tool_name {
         "write_file" | "edit_file" | "create_directory" => "path",
-        "move_file" => "destination",
+        "move_file" | "copy_file" => "destination",
         _ => return None,
     };
     let v: serde_json::Value = serde_json::from_str(arguments).ok()?;
