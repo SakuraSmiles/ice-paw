@@ -100,6 +100,9 @@ docx-rs = "0.4.22"
 pdf-extract = "0.12.0"
 # zip 与 docx-rs/calamine 传递依赖同版本（lockfile 8.6.0），显式声明以在 docx.rs 直读 word/document.xml。
 zip = "8.6"
+# docx 结构模型（word-capability-roadmap S0a）：document.xml → xml_dom 极小 DOM → 类型树。
+# 版本与 lockfile 中 plist 传递依赖一致（0.41），零新增编译。
+quick-xml = "0.41"
 # Phase B：扫描件/图片型 PDF 视觉读取。pdfium-render 是 pdfium（Chrome PDF 引擎）的安全
 # Rust wrapper，运行时动态加载 pdfium.dll（编译期不需要二进制）。
 # ⚠️ feature 必须显式 pin pdfium_6721：crate 默认 pdfium_latest 会随版本漂移（0.8.37 时

@@ -1,30 +1,29 @@
-//! `.docx` → 文本提取。
+//! `.docx` → 文本提取（结构模型路径，word-capability-roadmap 步骤 1 / S0a）。
 //!
-//! docx 是 OOXML 的 ZIP 容器；正文在 `word/document.xml`，可见文字位于 `<w:t>` 元素内。
+//! docx 是 OOXML 的 ZIP 容器；正文在 `word/document.xml`。当前路径：
+//! zip 直读 document.xml → [`super::xml_dom`] 极小 DOM → [`super::docx_model`]
+//! 类型树（段落/run/表格网格/节属性/修订标记）→ `document_text` 投影 → normalize。
 //!
-//! 为什么不走 docx-rs 的类型树：docx-rs 主要面向**写入**，读取的节点树嵌套极深
-//! （`DocumentChild`(9 变体) → `ParagraphChild`(12) → `RunChild` → `Text`，表格还要
-//! `Table`→`TableRow`→`TableCell`→`Paragraph` 四层递归），枚举变体多、且 hyperlink /
-//! 修订（Insert/Delete）等也各自包 runs——容易漏取文本。直接从 ZIP 读 `document.xml`
-//! 扫描 `<w:t>` 能**无视任何包裹元素**地拿到全部可见文字，更鲁棒、代码更短。
+//! 历史与零回归闸门：原实现是纯字符串扫描（`extract_text_from_xml`，保留为
+//! **golden 参考**，仅测试编译）——模型投影必须与它逐字节相等，断言见本文件
+//! `model_text_matches_golden_scanner` 与 corpus_tests 的真实语料双份比对。
 //!
-//! 提取规则（轻量 tag 扫描，不引入 XML 解析器）：
-//! - `<w:t ...>` 开 → 进入文本捕获；其后纯文本经 XML 实体解码后追加；`</w:t>` 关。
-//! - `</w:p>`（段落结束）→ 换行。
-//! - 自闭合 `<w:tab/>` → 制表符；`<w:br/>` / `<w:cr/>` → 换行。
-//! - 表格结构当前**不单独保形为网格**（单元格内容按段落顺序成行）——LLM 仍可读懂，
-//!   KB chunk 仍按段落切；网格化留作后续增强。
+//! 已知微差（接受）：扫描器对**配对形式**的 `<w:tab></w:tab>` 不输出 `\t`（只认
+//! 自闭合），模型统一输出——Word/WPS 恒发自闭合形式，真实文档无此差异。
 
 use std::io::{Cursor, Read};
 
 use crate::error::{AppError, AppResult};
 
+use super::docx_model;
 use super::{first_nonempty_line, normalize, DocKind, ExtractedDoc};
 
-/// 从 docx 字节流提取文本。
+/// 从 docx 字节流提取文本（模型路径）。
 pub(super) fn extract(bytes: &[u8]) -> AppResult<ExtractedDoc> {
     let xml = read_document_xml(bytes)?;
-    let mut text = extract_text_from_xml(&xml);
+    let dom = super::xml_dom::parse(&xml)?;
+    let model = docx_model::build_document(&dom);
+    let mut text = docx_model::document_text(&model);
     normalize(&mut text);
     let title = first_nonempty_line(&text);
     Ok(ExtractedDoc {
@@ -39,23 +38,38 @@ pub(super) fn extract(bytes: &[u8]) -> AppResult<ExtractedDoc> {
 /// 容器非法 / 缺 document.xml → `Err`（绝不退回 lossy 让调用方误判成功）。
 /// document.xml 约定为 UTF-8；对极少数编码损坏的文件用 lossy 兜底（仅此一处，
 /// 不影响"非 office 走原文本解码"的总体约定——此处已确认是 docx）。
-fn read_document_xml(bytes: &[u8]) -> AppResult<String> {
+pub(super) fn read_document_xml(bytes: &[u8]) -> AppResult<String> {
+    read_entry(bytes, "word/document.xml")?.ok_or_else(|| {
+        AppError::Internal("docx 内缺少 word/document.xml".to_string())
+    })
+}
+
+/// 从 docx (ZIP) 容器读出任意部件为字符串；部件不存在 → `Ok(None)`（styles.xml
+/// 等可选部件）。容器非法 → `Err`。inspect_docx（S0b）与未来的手术引擎共用。
+pub(super) fn read_entry(bytes: &[u8], name: &str) -> AppResult<Option<String>> {
     let cur = Cursor::new(bytes);
     let mut archive = zip::ZipArchive::new(cur)
         .map_err(|e| AppError::Internal(format!("docx 不是合法 ZIP 容器: {e}")))?;
     let mut buf = Vec::with_capacity(bytes.len() / 2);
-    let mut entry = archive
-        .by_name("word/document.xml")
-        .map_err(|e| AppError::Internal(format!("docx 内缺少 word/document.xml: {e}")))?;
+    let mut entry = match archive.by_name(name) {
+        Ok(e) => e,
+        Err(zip::result::ZipError::FileNotFound) => return Ok(None),
+        Err(e) => {
+            return Err(AppError::Internal(format!("docx 内读取 {name} 失败: {e}")));
+        }
+    };
     entry.read_to_end(&mut buf).map_err(AppError::Io)?;
-    Ok(String::from_utf8_lossy(&buf).into_owned())
+    Ok(Some(String::from_utf8_lossy(&buf).into_owned()))
 }
 
-/// 扫描 document.xml，提取可见文本。
-///
-/// 纯字符串扫描：遇 `<` 解析一个 tag（到下一个 `>`），据 tag 名/闭合性推进状态机；
-/// 在 `<w:t>` 内的纯文本做实体解码后追加。
-fn extract_text_from_xml(xml: &str) -> String {
+// =========================================================================
+// golden 扫描器（旧实现原样保留，仅测试编译——零回归的对照面）
+// =========================================================================
+
+/// 旧实现的线性文本扫描：遇 `<` 解析一个 tag（到下一个 `>`），据 tag 名/闭合性
+/// 推进状态机；在 `<w:t>` 内的纯文本做实体解码后追加；`</w:p>` → 换行。
+#[cfg(test)]
+pub(super) fn extract_text_from_xml(xml: &str) -> String {
     let n = xml.len();
     let mut out = String::with_capacity(n / 4);
     let mut i = 0usize;
@@ -103,7 +117,7 @@ fn extract_text_from_xml(xml: &str) -> String {
         } else if in_t {
             // 捕获到下一个 '<' 为止的文本
             let next = xml[i..].find('<').map(|j| i + j).unwrap_or(n);
-            decode_entities_into(&xml[i..next], &mut out);
+            docx_model::decode_entities_into(&xml[i..next], &mut out);
             i = next;
         } else {
             // tag 之间的空白 / 非 w:t 文本 → 跳过
@@ -114,74 +128,81 @@ fn extract_text_from_xml(xml: &str) -> String {
     out
 }
 
-/// 把一段（不含 tag 的）纯文本中的 XML 实体解码后追加到 `out`。
-///
-/// 支持：`&amp; &lt; &gt; &quot; &apos;` 与 `&#DD;` / `&#xHH;`。
-/// 不认识的实体原样保留 `&`。
-fn decode_entities_into(input: &str, out: &mut String) {
-    let bytes = input.as_bytes();
-    let len = input.len();
-    let mut i = 0usize;
-    while i < len {
-        if bytes[i] == b'&' {
-            if let Some(semi_rel) = input[i..].find(';') {
-                let ent = &input[i + 1..i + semi_rel];
-                if let Some(ch) = decode_entity(ent) {
-                    out.push(ch);
-                    i += semi_rel + 1;
-                    continue;
-                }
-            }
-            // 末找到合法实体 → 原样输出 '&'
-            out.push('&');
-            i += 1;
-        } else {
-            // 复制到下一个 '&'
-            let next = input[i..].find('&').map(|j| i + j).unwrap_or(len);
-            out.push_str(&input[i..next]);
-            i = next;
-        }
-    }
-}
-
-/// 解析单个实体名（不含首尾的 `&` `;`）为字符。
-fn decode_entity(ent: &str) -> Option<char> {
-    match ent {
-        "amp" => Some('&'),
-        "lt" => Some('<'),
-        "gt" => Some('>'),
-        "quot" => Some('"'),
-        "apos" => Some('\''),
-        _ => {
-            if let Some(hex) = ent.strip_prefix("#x").or_else(|| ent.strip_prefix("#X")) {
-                u32::from_str_radix(hex, 16).ok().and_then(char::from_u32)
-            } else if let Some(dec) = ent.strip_prefix('#') {
-                dec.parse::<u32>().ok().and_then(char::from_u32)
-            } else {
-                None
-            }
-        }
-    }
-}
-
 // =========================================================================
-// 单元测试（XML 扫描逻辑；真实 docx 字节的端到端测试见 tests/ 集成测）
+// 单元测试（golden 扫描器语义锁 + 模型零回归比对；真实语料见 corpus_tests）
 // =========================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::xml_dom;
 
+    /// golden 路径：扫描器 + normalize
     fn run(xml: &str) -> String {
         let mut t = extract_text_from_xml(xml);
         normalize(&mut t);
         t
     }
 
+    /// 模型路径：DOM → 模型 → 投影 + normalize
+    fn model_text(xml: &str) -> String {
+        let dom = xml_dom::parse(xml).unwrap();
+        let model = docx_model::build_document(&dom);
+        let mut t = docx_model::document_text(&model);
+        normalize(&mut t);
+        t
+    }
+
+    /// 零回归核心断言：同一 XML，模型路径与 golden 扫描器输出相等
+    fn assert_zero_regression(xml: &str) {
+        assert_eq!(model_text(xml), run(xml), "模型投影 ≠ 扫描器: {xml}");
+    }
+
+    #[test]
+    fn model_text_matches_golden_scanner() {
+        // 基础形态
+        assert_zero_regression(r#"<w:p><w:r><w:t>Hello</w:t></w:r></w:p><w:p><w:r><w:t>World</w:t></w:r></w:p>"#);
+        assert_zero_regression("<w:p><w:r><w:t xml:space=\"preserve\">保留空格</w:t></w:r></w:p>");
+        // 实体（已知/数字/未知）
+        assert_zero_regression(
+            "<w:p><w:r><w:t>a &amp; b &lt; c &gt; d &quot;e&quot; &apos;f&apos;</w:t></w:r></w:p>",
+        );
+        assert_zero_regression("<w:p><w:r><w:t>&#65;&#x42;&#20013;</w:t></w:r></w:p>");
+        assert_zero_regression("<w:p><w:r><w:t>a &foo; b</w:t></w:r></w:p>");
+        // tab / br / 空段折叠
+        assert_zero_regression("<w:p><w:r><w:t>A</w:t><w:tab/><w:t>B</w:t></w:r></w:p>");
+        assert_zero_regression("<w:p><w:r><w:t>A</w:t><w:br/><w:t>B</w:t></w:r></w:p>");
+        assert_zero_regression(
+            "<w:p></w:p><w:p></w:p><w:p></w:p><w:p><w:r><w:t>正文</w:t></w:r></w:p>",
+        );
+        // 修订 / 超链接 / 内容控件 / 域
+        assert_zero_regression(
+            r#"<w:p><w:ins><w:r><w:t>新增</w:t></w:r></w:ins><w:del><w:r><w:delText>旧文</w:delText></w:r></w:del></w:p>"#,
+        );
+        assert_zero_regression(r#"<w:p><w:hyperlink><w:r><w:t>链接</w:t></w:r></w:hyperlink></w:p>"#);
+        assert_zero_regression(
+            r#"<w:sdt><w:sdtContent><w:p><w:r><w:t>目录</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+        );
+        assert_zero_regression(
+            r#"<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>TOC</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>域结果</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#,
+        );
+        // 表格（含嵌套）
+        assert_zero_regression(
+            r#"<w:tbl><w:tr><w:tc><w:p><w:r><w:t>A1</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>B1</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+        );
+        assert_zero_regression(
+            r#"<w:tbl><w:tr><w:tc><w:tbl><w:tr><w:tc><w:p><w:r><w:t>内层</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:tc></w:tr></w:tbl>"#,
+        );
+        // 文本框（奇异子树摊平）
+        assert_zero_regression(
+            r#"<w:p><w:r><w:drawing><w:pict><w:txbxContent><w:p><w:r><w:t>框内</w:t></w:r></w:p></w:txbxContent></w:pict></w:drawing></w:r></w:p>"#,
+        );
+    }
+
     #[test]
     fn roundtrip_real_docx() {
-        // 用 docx-rs 写入器生成真实 docx 包 → 喂给本模块的 extract，
-        // 验证 zip 直读 + <w:t> 扫描对真实 OOXML 包工作（这是本模块风险最高的代码）。
+        // 用 docx-rs 写入器生成真实 docx 包 → 喂给本模块的 extract（模型路径），
+        // 验证 zip 直读 + DOM + 模型对真实 OOXML 包工作（这是本模块风险最高的代码）。
         use docx_rs::{Document, Docx, Paragraph, Run};
         let document = Document::new()
             .add_paragraph(Paragraph::new().add_run(Run::new().add_text("你好世界")))
@@ -217,13 +238,7 @@ mod tests {
 <w:p><w:r><w:t>World</w:t></w:r></w:p>
 </w:body></w:document>"#;
         assert_eq!(run(xml), "Hello\nWorld");
-    }
-
-    #[test]
-    fn wt_with_attrs_still_captured() {
-        // <w:t xml:space="preserve"> 形式
-        let xml = "<w:p><w:r><w:t xml:space=\"preserve\">保留空格</w:t></w:r></w:p>";
-        assert_eq!(run(xml), "保留空格");
+        assert_zero_regression(xml);
     }
 
     #[test]
@@ -258,25 +273,5 @@ mod tests {
         // 三个连续空段 → normalize 折叠
         let xml = "<w:p></w:p><w:p></w:p><w:p></w:p><w:p><w:r><w:t>正文</w:t></w:r></w:p>";
         assert_eq!(run(xml), "正文");
-    }
-
-    #[test]
-    fn decode_entity_table() {
-        assert_eq!(decode_entity("amp"), Some('&'));
-        assert_eq!(decode_entity("lt"), Some('<'));
-        assert_eq!(decode_entity("gt"), Some('>'));
-        assert_eq!(decode_entity("quot"), Some('"'));
-        assert_eq!(decode_entity("apos"), Some('\''));
-        assert_eq!(decode_entity("#65"), Some('A'));
-        assert_eq!(decode_entity("#x42"), Some('B'));
-        assert_eq!(decode_entity("#X4E2D"), Some('中'));
-        assert_eq!(decode_entity("nbsp"), None); // 未实现 → None（保留原样）
-    }
-
-    #[test]
-    fn decode_entities_into_copies_plain() {
-        let mut out = String::new();
-        decode_entities_into("纯文本 no entities", &mut out);
-        assert_eq!(out, "纯文本 no entities");
     }
 }

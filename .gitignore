@@ -68,3 +68,6 @@ restore-data.py
 
 # 品牌设计草稿区（选色卡/色彩架构决策卡等 HTML，本地工作产物不入库）
 brand/
+
+# docx 语料（真实工程文档，用户拍板严禁版本控制/上传；仅本地供 corpus 测试运行时读取）
+packages/app/src-tauri/tests/fixtures/docx/*.docx

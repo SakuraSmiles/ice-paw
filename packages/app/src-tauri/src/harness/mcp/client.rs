@@ -254,6 +254,8 @@ impl McpRegistry {
     pub fn register_builtin(&self) {
         // 只读 / 知识库
         self.register_sync(Arc::new(super::internal::ReadFileTool));
+        // Word 结构投影（S0b：outline/format/text 三档；块编址是 edit_docx 的地址地基）
+        self.register_sync(Arc::new(super::docx_tool::InspectDocxTool));
         self.register_sync(Arc::new(super::internal::ListDirectoryTool));
         self.register_sync(Arc::new(super::internal::DirectoryTreeTool));
         self.register_sync(Arc::new(super::internal::GetFileInfoTool));

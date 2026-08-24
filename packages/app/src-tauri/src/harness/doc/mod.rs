@@ -16,12 +16,24 @@ use crate::context::token::estimate_tokens;
 use crate::error::AppResult;
 
 mod docx;
+mod docx_inspect;
+mod docx_model;
 mod pdf;
 mod pdf_render;
 mod spreadsheet;
+mod styles;
+mod xml_dom;
+
+// 真实语料冒烟（word-capability-roadmap 步骤 0；语料仅本地 tests/fixtures/docx/，
+// 🚫不入库（用户禁令，gitignore 排除）——运行时读取，缺失自动 skip）
+#[cfg(test)]
+mod corpus_tests;
 
 // Phase B 视觉路径：PDF 页面 → PNG（扫描件/图片型 PDF 读图用）。
 pub use pdf_render::{page_count, render_page_to_png};
+
+// inspect_docx 三级投影（S0b）：mcp::docx_tool 薄壳消费。
+pub use docx_inspect::{inspect_document, InspectProjection, InspectReport, InspectRequest};
 
 /// 从一个文档中提取出的结果。
 #[derive(Debug, Clone)]
