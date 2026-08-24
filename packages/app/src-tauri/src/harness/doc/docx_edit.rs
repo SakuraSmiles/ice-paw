@@ -13,7 +13,7 @@
 //!    entry 用 `raw_copy_file` **原样字节复制**（不解压重压，压缩参数/元数据不变）。
 //!
 //! MVP 操作词表（批量事务，D3 拍板 2026-08-24）：`replace_text` /
-//! `insert_paragraph_after` / `delete_block`。格式/表格操作后续批。
+//! `insert_paragraph_after` / `delete_block` / `set_style`。格式/表格操作后续批。
 
 use std::io::{Cursor, Write};
 
@@ -160,6 +160,9 @@ pub enum EditOp {
     InsertParagraphAfter { block: usize, expect_prefix: String, text: String, style: Option<String> },
     /// 删除整块（含段落标记）；块内含 sectPr（节属性载体）拒绝。
     DeleteBlock { block: usize, expect_prefix: String },
+    /// 改段落样式（标题升降级等）：只动 pStyle 一个元素，正文 run 字节不动；
+    /// 表格块拒绝。style 接受显示名或样式 ID（inspect_docx outline 样式列口径）。
+    SetStyle { block: usize, expect_prefix: String, style: String },
 }
 
 /// 单操作执行摘要（agent 读回验证用）。
@@ -171,6 +174,9 @@ pub struct AppliedOp {
     pub before: String,
     /// 新块投影文本（前 60 字；delete 为空）
     pub after: String,
+    /// set_style 专用：应用后的样式 ID（其余操作 None，序列化省略）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub style: Option<String>,
 }
 
 /// 组合入口（工具层消费）：docx 字节 + 操作批 → 新 docx 字节 + 摘要。
@@ -197,7 +203,7 @@ pub(super) fn apply_edits(
 ) -> AppResult<(String, Vec<AppliedOp>)> {
     if ops.is_empty() {
         return Err(AppError::Validation(
-            "操作列表为空: edit_docx 至少需要一个操作。请提供 replace_text / insert_paragraph_after / delete_block 操作。".into(),
+            "操作列表为空: edit_docx 至少需要一个操作。请提供 replace_text / insert_paragraph_after / delete_block / set_style 操作。".into(),
         ));
     }
 
@@ -218,7 +224,8 @@ pub(super) fn apply_edits(
         let block = *match op {
             EditOp::ReplaceText { block, .. }
             | EditOp::InsertParagraphAfter { block, .. }
-            | EditOp::DeleteBlock { block, .. } => block,
+            | EditOp::DeleteBlock { block, .. }
+            | EditOp::SetStyle { block, .. } => block,
         };
         if block == 0 || block > spans.len() {
             return Err(AppError::Validation(format!(
@@ -286,15 +293,38 @@ pub(super) fn apply_edits(
                     }
                 }
             }
-        }
-        // Replace 目标必须是段落块
-        if let EditOp::ReplaceText { .. } = op {
-            if span.is_table {
-                return Err(AppError::Validation(format!(
-                    "表格块: 块 {block} 是表格，replace_text 只支持段落。\
-                     表格内容编辑暂不支持（后续批次）；可用 inspect_docx text 查看表格内容。"
-                )));
+            EditOp::SetStyle { style, .. } => {
+                if styles.id_of(style).is_none() {
+                    return Err(AppError::Validation(format!(
+                        "未知样式: {:?} 不在本文档样式表中。可用样式（前 20）: {}。\
+                         样式名接受显示名或 ID，来自 inspect_docx outline 的样式列。",
+                        style,
+                        styles.display_names_joined(20)
+                    )));
+                }
+                if has_revision(&model.body[idx]) {
+                    return Err(AppError::Validation(format!(
+                        "含修订标记: 块 {block} 带插入/删除修订，默认不触碰修订内容。\
+                         请先在 Word 中接受或拒绝修订后再编辑该块。"
+                    )));
+                }
+                // pPrChange 是段落属性修订记录（内含旧 pStyle）——换样式会与其语义
+                // 纠缠，MVP 与修订块同判拒绝
+                if block_xml.contains("<w:pPrChange") {
+                    return Err(AppError::Validation(format!(
+                        "含修订标记: 块 {block} 带段落属性修订（pPrChange），默认不触碰修订内容。\
+                         请先在 Word 中接受或拒绝修订后再编辑该块。"
+                    )));
+                }
+                // sectPr 在 pPr 内被原样保留（手术只动 pStyle 元素），改样式不破坏分节——放行
             }
+        }
+        // Replace / SetStyle 目标必须是段落块
+        if matches!(op, EditOp::ReplaceText { .. } | EditOp::SetStyle { .. }) && span.is_table {
+            return Err(AppError::Validation(format!(
+                "表格块: 块 {block} 是表格，该操作只支持段落。\
+                 表格内容编辑暂不支持（后续批次）；可用 inspect_docx text 查看表格内容。"
+            )));
         }
     }
 
@@ -321,6 +351,7 @@ pub(super) fn apply_edits(
                         block,
                         before: projected_of(&model, block),
                         after: truncate(&after, 60),
+                        style: None,
                     },
                 });
             }
@@ -337,6 +368,7 @@ pub(super) fn apply_edits(
                         block,
                         before: projected_of(&model, block),
                         after: truncate(&text, 60),
+                        style: None,
                     },
                 });
             }
@@ -351,6 +383,30 @@ pub(super) fn apply_edits(
                         block,
                         before: projected_of(&model, block),
                         after: String::new(),
+                        style: None,
+                    },
+                });
+            }
+            EditOp::SetStyle { block, style, .. } => {
+                let span = spans[block - 1];
+                // 预检已校验样式存在；此处重解析拿 ID（批内样式表不可变，无 TOCTOU）
+                let style_id = styles.id_of(&style).expect("预检已校验样式存在");
+                let new_block =
+                    restyle_paragraph(&xml[span.start..span.end], style_id)
+                        .ok_or_else(|| AppError::Internal(format!(
+                            "段落改样式失败: 块 {block} XML 形态异常（内部 bug，未写盘）"
+                        )))?;
+                let projected = projected_of(&model, block);
+                plan.push(Splice {
+                    pos: span.start,
+                    remove_end: span.end,
+                    insert: new_block,
+                    summary: AppliedOp {
+                        op: "set_style",
+                        block,
+                        before: projected.clone(),
+                        after: projected, // 文本不变；样式见 style 字段
+                        style: Some(style_id.to_string()),
                     },
                 });
             }
@@ -390,7 +446,8 @@ fn expect_prefix_of(op: &EditOp) -> &str {
     match op {
         EditOp::ReplaceText { expect_prefix, .. }
         | EditOp::InsertParagraphAfter { expect_prefix, .. }
-        | EditOp::DeleteBlock { expect_prefix, .. } => expect_prefix,
+        | EditOp::DeleteBlock { expect_prefix, .. }
+        | EditOp::SetStyle { expect_prefix, .. } => expect_prefix,
     }
 }
 
@@ -435,6 +492,55 @@ fn rebuild_paragraph(xml: &str, span: BlockSpan, new_text: Option<&str>) -> Stri
     let ppr = slice_ppr(block_xml);
     let rpr = slice_first_run_rpr(block_xml);
     format!("{open_tag}{ppr}{}</w:p>", run_xml(&rpr, text))
+}
+
+/// 段落改样式手术：只动 pStyle 一个元素，pPr 其余子元素 / rPr / run 字节一概不碰。
+/// 三形态：已有 pStyle（首个 = 生效样式，schema 序在 pPrChange 前）→ 整元素替换；
+/// 有 pPr 无 pStyle → pStyle 是 pPr 的 schema 首子元素，插开标签后即正确位置；
+/// 无 pPr → 开标签后新建（自闭合空段 `<w:p/>` 顺势展开成对标签）。
+/// 返回 None 仅防御形态异常（调用方报内部错误）。
+fn restyle_paragraph(block_xml: &str, style_id: &str) -> Option<String> {
+    let tag = format!(r#"<w:pStyle w:val="{style_id}"/>"#);
+    // 1) 已有 pStyle：定位首个（自闭合或配对形式均支持）
+    if let Some(s) = block_xml.find("<w:pStyle") {
+        let gt = s + block_xml[s..].find('>')? + 1; // '>' 后一位
+        let e = if block_xml.as_bytes()[gt - 2] == b'/' {
+            gt // 自闭合：元素止于 '/>'
+        } else {
+            gt + block_xml[gt..].find("</w:pStyle>")? + "</w:pStyle>".len()
+        };
+        return Some(format!("{}{tag}{}", &block_xml[..s], &block_xml[e..]));
+    }
+    // 2) 有 pPr：精确到 `<w:pPr` 后跟 '>' / '/' / 空格（排除 `<w:pPrChange`——字母 C 跟随）
+    let ppr_at = block_xml.find("<w:pPr").filter(|s| {
+        matches!(
+            block_xml.as_bytes().get(s + "<w:pPr".len()),
+            Some(b'>') | Some(b'/') | Some(b' ')
+        )
+    });
+    if let Some(s) = ppr_at {
+        let gt = s + block_xml[s..].find('>')? + 1;
+        // 自闭合空 pPr（Word 不写，防御）：整体换成含 pStyle 的完整 pPr
+        if block_xml.as_bytes()[gt - 2] == b'/' {
+            return Some(format!(
+                "{}<w:pPr>{tag}</w:pPr>{}",
+                &block_xml[..s],
+                &block_xml[gt..]
+            ));
+        }
+        return Some(format!("{}{tag}{}", &block_xml[..gt], &block_xml[gt..]));
+    }
+    // 3) 无 pPr：开标签后新建；自闭合空段展开
+    let gt = block_xml.find('>')?;
+    if block_xml.as_bytes()[gt - 1] == b'/' {
+        let head = &block_xml[..gt - 1]; // 去掉 '/'
+        return Some(format!("{head}><w:pPr>{tag}</w:pPr></w:p>"));
+    }
+    Some(format!(
+        "{}<w:pPr>{tag}</w:pPr>{}",
+        &block_xml[..gt + 1],
+        &block_xml[gt + 1..]
+    ))
 }
 
 /// 构造插入段：style 显示名 → pPr；缺省继承锚块 pPr。rPr 继承锚块首 run
@@ -871,6 +977,106 @@ mod tests {
         )
         .unwrap_err());
         assert!(err.starts_with("表格块"), "实际: {err}");
+    }
+
+    fn heading_styles() -> Stylesheet {
+        let styles_xml = r#"<w:styles>
+            <w:style w:type="paragraph" w:styleId="h2"><w:name w:val="heading 2"/></w:style>
+            <w:style w:type="paragraph" w:styleId="body"><w:name w:val="Normal"/></w:style>
+        </w:styles>"#;
+        super::super::styles::parse_styles(&super::super::xml_dom::parse(styles_xml).unwrap())
+    }
+
+    #[test]
+    fn set_style_replaces_pstyle_val_only() {
+        // 已有 pStyle：只换 val，pPr 其余子元素 / run / rPr 字节原样
+        let xml = wrap(
+            r#"<w:p w14:paraId="X1"><w:pPr><w:pStyle w:val="body"/><w:jc w:val="center"/></w:pPr>\
+               <w:r><w:rPr><w:b/></w:rPr><w:t>正文段</w:t></w:r></w:p>"#,
+        );
+        let (out, applied) = apply_edits(
+            &xml,
+            &heading_styles(),
+            &[EditOp::SetStyle { block: 1, expect_prefix: "正文段".into(), style: "heading 2".into() }],
+        )
+        .unwrap();
+        assert_eq!(applied[0].op, "set_style");
+        assert_eq!(applied[0].style.as_deref(), Some("h2"));
+        assert!(out.contains(r#"<w:p w14:paraId="X1">"#), "开标签属性保留");
+        assert!(out.contains(r#"<w:pPr><w:pStyle w:val="h2"/><w:jc w:val="center"/></w:pPr>"#));
+        assert!(out.contains(r#"<w:rPr><w:b/></w:rPr><w:t>正文段</w:t></w:r>"#), "run 原样");
+        // 模型侧：样式生效 + 文本不变
+        let m = model_of(&out);
+        let super::docx_model::Block::Paragraph(p) = &m.body[0] else { panic!() };
+        assert_eq!(p.props.style.as_deref(), Some("h2"));
+        let mut t = String::new();
+        docx_model::blocks_text(&m.body, &mut t);
+        assert_eq!(t, "正文段\n");
+    }
+
+    #[test]
+    fn set_style_inserts_or_creates_ppr() {
+        // 块 1：有 pPr 无 pStyle → 插在 pPr 开标签后（schema 首子元素位，先于 numPr）
+        // 块 2：无 pPr → 开标签后新建；块 3：自闭合空段 → 展开成对标签
+        let xml = wrap(concat!(
+            r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="3"/></w:numPr></w:pPr><w:r><w:t>列表项</w:t></w:r></w:p>"#,
+            r#"<w:p><w:r><w:t>裸段</w:t></w:r></w:p>"#,
+            r#"<w:p w14:paraId="E"/>"#,
+        ));
+        let (out, applied) = apply_edits(
+            &xml,
+            &heading_styles(),
+            &[
+                EditOp::SetStyle { block: 1, expect_prefix: "列表项".into(), style: "h2".into() },
+                EditOp::SetStyle { block: 2, expect_prefix: "裸段".into(), style: "h2".into() },
+                EditOp::SetStyle { block: 3, expect_prefix: "".into(), style: "body".into() },
+            ],
+        )
+        .unwrap();
+        assert_eq!(applied.len(), 3);
+        assert!(
+            out.contains(r#"<w:pPr><w:pStyle w:val="h2"/><w:numPr>"#),
+            "pStyle 应插在 pPr 首位: {out}"
+        );
+        assert!(out.contains(r#"<w:p><w:pPr><w:pStyle w:val="h2"/></w:pPr><w:r><w:t>裸段</w:t></w:r></w:p>"#));
+        assert!(out.contains(r#"<w:p w14:paraId="E"><w:pPr><w:pStyle w:val="body"/></w:pPr></w:p>"#));
+        let m = model_of(&out);
+        assert_eq!(m.body.len(), 3, "块数守恒");
+    }
+
+    #[test]
+    fn set_style_unknown_and_table_rejected() {
+        let styles = heading_styles();
+        // 未知样式（家族前缀）
+        let xml = wrap(r#"<w:p><w:r><w:t>一段</w:t></w:r></w:p>"#);
+        let err = val_msg(apply_edits(
+            &xml,
+            &styles,
+            &[EditOp::SetStyle { block: 1, expect_prefix: "一段".into(), style: "没有这样式".into() }],
+        )
+        .unwrap_err());
+        assert!(err.starts_with("未知样式"), "实际: {err}");
+        // 表格块
+        let xml = wrap(r#"<w:tbl><w:tr><w:tc><w:p><w:r><w:t>表</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#);
+        let err = val_msg(apply_edits(
+            &xml,
+            &styles,
+            &[EditOp::SetStyle { block: 1, expect_prefix: "表".into(), style: "h2".into() }],
+        )
+        .unwrap_err());
+        assert!(err.starts_with("表格块"), "实际: {err}");
+        // 段落属性修订（pPrChange）——换样式与其语义纠缠，拒
+        let xml = wrap(
+            r#"<w:p><w:pPr><w:pStyle w:val="body"/><w:pPrChange w:id="1"><w:pPr><w:pStyle w:val="h2"/></w:pPr></w:pPrChange></w:pPr><w:r><w:t>改格段</w:t></w:r></w:p>"#,
+        );
+        let err = val_msg(apply_edits(
+            &xml,
+            &styles,
+            &[EditOp::SetStyle { block: 1, expect_prefix: "改格段".into(), style: "h2".into() }],
+        )
+        .unwrap_err());
+        assert!(err.starts_with("含修订标记"), "实际: {err}");
+        assert!(err.contains("pPrChange"));
     }
 
     #[test]
