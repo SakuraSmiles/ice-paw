@@ -188,6 +188,8 @@ enum OperationSpec {
         style: Option<String>,
     },
     DeleteBlock { block: usize, expect_prefix: String },
+    /// 改段落样式（标题升降级等）：style 接受显示名或样式 ID；正文 run 不动
+    SetStyle { block: usize, expect_prefix: String, style: String },
 }
 
 impl From<OperationSpec> for EditOp {
@@ -201,6 +203,9 @@ impl From<OperationSpec> for EditOp {
             }
             OperationSpec::DeleteBlock { block, expect_prefix } => {
                 EditOp::DeleteBlock { block, expect_prefix }
+            }
+            OperationSpec::SetStyle { block, expect_prefix, style } => {
+                EditOp::SetStyle { block, expect_prefix, style }
             }
         }
     }
@@ -228,12 +233,14 @@ impl McpClient for EditDocxTool {
          applied as one all-or-nothing transaction: op=replace_text rewrites a paragraph's \
          text while keeping its paragraph/character formatting; op=insert_paragraph_after \
          adds a new paragraph after an anchor block (inherits its formatting, or an \
-         explicit style by display name); op=delete_block removes a whole block. Every \
+         explicit style by display name); op=delete_block removes a whole block; \
+         op=set_style changes a paragraph's style (e.g. promote to a heading) touching \
+         only the style element while leaving text and character formatting intact. Every \
          operation must carry expect_prefix, the current text prefix of its target block, \
          as a fingerprint guard — if any block no longer matches, the whole batch is \
          rejected and the file is left untouched. Blocks are addressed by inspect_docx \
          block numbers (1-based, paragraphs and tables in document order); tables and \
-         revision-marked blocks are rejected for replace/delete. The file is backed up \
+         revision-marked blocks are rejected for replace/delete/set_style. The file is backed up \
          before writing. Workflow: inspect_docx (outline, then text) to find blocks, \
          edit_docx, then inspect_docx again to verify the result."
     }
@@ -282,6 +289,16 @@ impl McpClient for EditDocxTool {
                                     "expect_prefix": { "type": "string", "description": "Current text prefix of the block." }
                                 },
                                 "required": ["op", "block", "expect_prefix"]
+                            },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "op": { "const": "set_style" },
+                                    "block": { "type": "integer", "description": "Target paragraph block (1-based; tables rejected)." },
+                                    "expect_prefix": { "type": "string", "description": "Current text prefix of the block (fingerprint guard)." },
+                                    "style": { "type": "string", "description": "Style display name or ID from inspect_docx outline style column; text and character formatting are left intact." }
+                                },
+                                "required": ["op", "block", "expect_prefix", "style"]
                             }
                         ]
                     }

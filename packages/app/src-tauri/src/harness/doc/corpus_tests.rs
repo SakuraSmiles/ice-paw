@@ -483,3 +483,71 @@ fn corpus_edit_engine_roundtrip() {
         assert_eq!(full.total_blocks, spans.len(), "{name} 块数守恒（+1 插 -1 删）");
     }
 }
+
+#[test]
+fn corpus_set_style_surgery() {
+    let Some((sdp, srs, install)) = all_corpus() else { return };
+    // S3③：真实 Word 产物上换样式闭环。样式目标与指纹全运行时派生（语料字符串不进代码）：
+    // 目标样式 = 文档 styles.xml 里第一个与目标块当前样式不同的段落样式 ID。
+    for (name, bytes) in [("SDP", &sdp), ("SRS", &srs), ("INSTALL", &install)] {
+        let xml = super::docx::read_document_xml(bytes).unwrap();
+        let spans = super::docx_edit::locate_blocks(&xml).unwrap();
+        let model = super::docx_model::build_document(&xml_dom::parse(&xml).unwrap());
+        let target = pick_editable_block(&xml, &spans, &model, &[]).expect("{name} 无可编辑块");
+
+        // 段落样式 ID 清单（来自 styles.xml；排除目标当前样式）
+        let styles_xml = super::docx::read_entry(bytes, "word/styles.xml")
+            .unwrap()
+            .expect("{name} 应有 styles.xml");
+        let styles_dom = xml_dom::parse(&styles_xml).unwrap();
+        let current = match &model.body[target - 1] {
+            super::docx_model::Block::Paragraph(p) => p.props.style.clone(),
+            _ => None,
+        };
+        let mut candidates = Vec::new();
+        for st in styles_dom.child_elements().filter(|e| e.name == "w:style") {
+            if st.attr("w:type") != Some("paragraph") {
+                continue;
+            }
+            if let Some(id) = st.attr("w:styleId") {
+                if Some(id) != current.as_deref() {
+                    candidates.push(id.to_string());
+                }
+            }
+        }
+        let want = candidates.first().expect("{name} 无可切换的段落样式").clone();
+
+        let prefix_of = |n: usize| -> String {
+            let mut t = String::new();
+            super::docx_model::blocks_text(&model.body[n - 1..n], &mut t);
+            t.trim().chars().take(4).collect()
+        };
+        let (new_bytes, applied) = super::apply_edits_to_bytes(
+            bytes,
+            &[super::EditOp::SetStyle {
+                block: target,
+                expect_prefix: prefix_of(target),
+                style: want.clone(),
+            }],
+        )
+        .unwrap_or_else(|e| panic!("{name} set_style 失败: {e}"));
+        assert_eq!(applied.len(), 1);
+        assert_eq!(applied[0].style.as_deref(), Some(want.as_str()));
+
+        // untouched 保真：只有 document.xml 变
+        assert_untouched_entries_identical(bytes, &new_bytes, "word/document.xml");
+
+        // 读回：目标块样式 == want，文本与块数不变
+        let new_xml = super::docx::read_document_xml(&new_bytes).unwrap();
+        let model2 = super::docx_model::build_document(&xml_dom::parse(&new_xml).unwrap());
+        assert_eq!(model2.body.len(), model.body.len(), "{name} 块数应守恒");
+        let super::docx_model::Block::Paragraph(p) = &model2.body[target - 1] else {
+            panic!("{name} 目标块应仍是段落")
+        };
+        assert_eq!(p.props.style.as_deref(), Some(want.as_str()), "{name} 样式未生效");
+        let (mut old_t, mut new_t) = (String::new(), String::new());
+        super::docx_model::blocks_text(&model.body[target - 1..target], &mut old_t);
+        super::docx_model::blocks_text(&model2.body[target - 1..target], &mut new_t);
+        assert_eq!(old_t, new_t, "{name} set_style 不应改动文本");
+    }
+}
