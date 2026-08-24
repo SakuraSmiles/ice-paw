@@ -333,6 +333,32 @@ fn corpus_numbering_values_rendered() {
 }
 
 #[test]
+fn corpus_headers_footers_projection() {
+    let Some((sdp, srs, install)) = all_corpus() else { return };
+    // S3④：页眉页脚投影（真实 Word 产物：SDP/SRS 有 even/default/first 全形态引用，
+    // INSTALL 三节全 default；空部件与有内容部件并存——（空）标注 + 非空行都要出现）
+    for (name, bytes) in [("SDP", &sdp), ("SRS", &srs), ("INSTALL", &install)] {
+        let report = inspect_document(
+            bytes,
+            &InspectRequest { projection: InspectProjection::HeadersFooters, start: None, end: None },
+        )
+        .unwrap();
+        assert!(report.content.contains("[节 1]"), "{name} 应有节行: {}", report.content);
+        assert!(
+            report.content.lines().any(|l| l.contains("页眉") && l.contains(':') && !l.contains("（空）")),
+            "{name} 应有非空页眉行"
+        );
+        assert!(
+            report.content.lines().any(|l| l.contains("页脚") && l.contains(':') && !l.contains("（空）")),
+            "{name} 应有非空页脚行（页码域缓存值）"
+        );
+        assert!(report.content.contains("（空）"), "{name} 空部件应诚实标注");
+        // 悬空引用（rels 有但 document 未引用的部件）不出现；已引用的全部解析
+        assert!(!report.content.contains("悬空"), "{name} 不应有悬空引用");
+    }
+}
+
+#[test]
 fn corpus_install_revisions_visible_in_format() {
     let Some(install) = corpus("install.docx") else { return };
     // 含修订语料的 format 全量扫描：插入/删除 run 必须带标记（edit_docx 不触碰修订 run

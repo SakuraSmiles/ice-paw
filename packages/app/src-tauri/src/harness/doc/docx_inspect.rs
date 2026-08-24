@@ -30,6 +30,9 @@ pub enum InspectProjection {
     Format,
     /// 带块号的正文，默认前 100 块
     Text,
+    /// 页眉页脚：逐节列 header/footer 引用与部件内容（S3 首波④；按节组织，
+    /// 不按块区间——start/end 不适用）
+    HeadersFooters,
 }
 
 impl InspectProjection {
@@ -39,6 +42,8 @@ impl InspectProjection {
             InspectProjection::Outline => 400,
             InspectProjection::Format => 50,
             InspectProjection::Text => 100,
+            // 按节组织不走块区间路径（inspect_document 特判，span 不参与）
+            InspectProjection::HeadersFooters => 1,
         }
     }
 
@@ -47,6 +52,7 @@ impl InspectProjection {
             InspectProjection::Outline => "outline",
             InspectProjection::Format => "format",
             InspectProjection::Text => "text",
+            InspectProjection::HeadersFooters => "headers_footers",
         }
     }
 }
@@ -98,7 +104,19 @@ pub fn inspect_document(bytes: &[u8], req: &InspectRequest) -> AppResult<Inspect
     };
 
     let total = model.body.len();
-    let (start, end, has_more) = resolve_range(total, req)?;
+    // headers_footers 按节组织：不接受块区间参数，range = 节区间
+    let (start, end, has_more) = if req.projection == InspectProjection::HeadersFooters {
+        if req.start.is_some() || req.end.is_some() {
+            return Err(AppError::Validation(
+                "参数不适用：projection=headers_footers 按节组织，不接受 start/end。\
+                 三档块区间投影（outline/format/text）才支持分页。"
+                    .into(),
+            ));
+        }
+        (1, model.sections.len().max(1), false)
+    } else {
+        resolve_range(total, req)?
+    };
 
     let mut content = String::new();
     render_header(&model, total, &mut content);
@@ -118,6 +136,9 @@ pub fn inspect_document(bytes: &[u8], req: &InspectRequest) -> AppResult<Inspect
             for (i, block) in model.body.iter().enumerate().take(end).skip(start - 1) {
                 render_text_block(&ctx, i + 1, block, &mut content);
             }
+        }
+        InspectProjection::HeadersFooters => {
+            render_headers_footers(bytes, &model, &mut content)?;
         }
     }
     Ok(InspectReport { total_blocks: total, range: (start, end), has_more, content })
@@ -181,6 +202,77 @@ fn render_header(model: &docx_model::DocxDocument, total: usize, out: &mut Strin
         ));
     }
     out.push('\n');
+}
+
+/// headers_footers 投影：逐节列页眉/页脚引用与部件文本（S3 首波④）。
+///
+/// Word 语义注（诚实呈现）：节未显式引用时沿用上一节（首节则无）；type
+/// default=默认页 / first=首页（需 titlePg）/ even=偶数页（需 evenAndOddHeaders）。
+/// 部件内的域（页码/日期等）按最后保存的缓存值显示（XML 里只有缓存结果）。
+fn render_headers_footers(
+    bytes: &[u8],
+    model: &docx_model::DocxDocument,
+    out: &mut String,
+) -> AppResult<()> {
+    let rels = docx::parse_header_footer_rels(bytes)?;
+    out.push_str(&format!(
+        "页眉页脚（{} 节；类型 default=默认页 first=首页 even=偶数页；未显式引用的节沿用上一节）\n",
+        model.sections.len()
+    ));
+    if model.sections.is_empty() {
+        out.push_str("（文档无分节信息——无页眉页脚）\n");
+        return Ok(());
+    }
+    // 部件文本缓存：同一部件被多节引用只解析一次
+    let mut cache: HashMap<String, String> = HashMap::new();
+    for (i, sec) in model.sections.iter().enumerate() {
+        out.push_str(&format!("\n[节 {}]\n", i + 1));
+        let mut lines = 0usize;
+        for (label, refs) in [("页眉", &sec.header_refs), ("页脚", &sec.footer_refs)] {
+            for (typ, rid) in refs {
+                let desc = match rels.get(rid) {
+                    Some(part) => {
+                        let text = part_text(bytes, part, &mut cache)?;
+                        if text.is_empty() { "（空）".to_string() } else { indent_continuation(&text) }
+                    }
+                    None => format!("（引用 {rid} 在 rels 中悬空——部件缺失）"),
+                };
+                out.push_str(&format!("  {label} {typ}: {desc}\n"));
+                lines += 1;
+            }
+        }
+        if lines == 0 {
+            out.push_str("  （本节未显式引用——Word 沿用上一节；首节则为空）\n");
+        }
+    }
+    Ok(())
+}
+
+/// 读一个 header/footer 部件并投影为文本（缓存 miss 才解析）。
+/// 部件根是 w:hdr/w:ftr——build_document 的「其他容器」分支直接按块遍历复用。
+fn part_text(bytes: &[u8], part: &str, cache: &mut HashMap<String, String>) -> AppResult<String> {
+    if let Some(t) = cache.get(part) {
+        return Ok(t.clone());
+    }
+    let text = match docx::read_entry(bytes, part)? {
+        Some(xml) => match xml_dom::parse(&xml) {
+            Ok(dom) => {
+                let m = docx_model::build_document(&dom);
+                let mut t = String::new();
+                docx_model::blocks_text(&m.body, &mut t);
+                t.trim().to_string()
+            }
+            Err(_) => "（部件 XML 损坏）".to_string(),
+        },
+        None => format!("（部件 {part} 在包中缺失）"),
+    };
+    cache.insert(part.to_string(), text.clone());
+    Ok(text)
+}
+
+/// 多行部件文本的续行缩进（投影行内层级对齐）。
+fn indent_continuation(s: &str) -> String {
+    s.replace('\n', "\n    ")
 }
 
 fn count_revisions(blocks: &[Block]) -> (usize, usize) {
@@ -660,5 +752,78 @@ mod tests {
         assert_eq!(summarize(&long, 60).chars().count(), 61); // 60 字 + …
         assert_eq!(trim_float(1.5), "1.5");
         assert_eq!(trim_float(2.0), "2");
+    }
+
+    /// 手工拼带页眉页脚的最小 zip 包（docx-rs 不便造 rels/部件）。
+    fn hf_docx_bytes() -> Vec<u8> {
+        use std::io::Write;
+        let doc_xml = concat!(
+            r#"<?xml version="1.0"?><w:document xmlns:w="w" xmlns:r="r"><w:body>"#,
+            r#"<w:p><w:r><w:t>正文一</w:t></w:r></w:p>"#,
+            r#"<w:p><w:pPr><w:sectPr>"#,
+            r#"<w:headerReference w:type="default" r:id="rIdH"/>"#,
+            r#"<w:footerReference w:type="default" r:id="rIdF"/>"#,
+            r#"</w:sectPr></w:pPr><w:r><w:t>节一末</w:t></w:r></w:p>"#,
+            r#"<w:sectPr><w:headerReference w:type="default" r:id="rIdH"/>"#,
+            r#"<w:footerReference w:type="first" r:id="rIdMISSING"/>"#,
+            r#"</w:sectPr></w:body></w:document>"#,
+        );
+        let rels_xml = concat!(
+            r#"<?xml version="1.0"?><Relationships>"#,
+            r#"<Relationship Id="rIdH" Type="http://x/header" Target="header1.xml"/>"#,
+            r#"<Relationship Id="rIdF" Type="http://x/footer" Target="footer1.xml"/>"#,
+            r#"<Relationship Id="rIdIMG" Type="http://x/image" Target="media/a.png"/>"#,
+            r#"</Relationships>"#,
+        );
+        let hdr_xml = r#"<?xml version="1.0"?><w:hdr xmlns:w="w"><w:p><w:r><w:t>页眉甲行</w:t></w:r></w:p><w:p><w:r><w:t>页眉乙行</w:t></w:r></w:p></w:hdr>"#;
+        let ftr_xml = r#"<?xml version="1.0"?><w:ftr xmlns:w="w"><w:p><w:r><w:t>页脚一行</w:t></w:r></w:p></w:ftr>"#;
+        let mut buf = Vec::new();
+        {
+            let mut w = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            for (name, data) in [
+                ("word/document.xml", doc_xml),
+                ("word/_rels/document.xml.rels", rels_xml),
+                ("word/header1.xml", hdr_xml),
+                ("word/footer1.xml", ftr_xml),
+            ] {
+                w.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+                w.write_all(data.as_bytes()).unwrap();
+            }
+            w.finish().unwrap();
+        }
+        buf
+    }
+
+    #[test]
+    fn headers_footers_projection_renders_parts() {
+        let bytes = hf_docx_bytes();
+        let report = inspect_document(&bytes, &InspectRequest {
+            projection: InspectProjection::HeadersFooters,
+            start: None,
+            end: None,
+        })
+        .unwrap();
+        assert!(report.content.contains("2 节"), "节计数: {}", report.content);
+        assert_eq!(report.range, (1, 2), "range = 节区间");
+        assert!(!report.has_more);
+        // 部件内容 + 多行续行
+        assert!(report.content.contains("页眉 default: 页眉甲行\n    页眉乙行"), "{}", report.content);
+        assert!(report.content.contains("页脚 default: 页脚一行"), "{}", report.content);
+        // 同部件多节引用（rIdH 两节）经缓存呈现一致
+        assert_eq!(report.content.matches("页眉甲行").count(), 2);
+        // rels 悬空引用诚实呈现（rIdMISSING 无对应 Relationship）
+        assert!(report.content.contains("悬空"), "{}", report.content);
+        // 图片关系（http://x/image）不进页眉脚表
+        assert!(!report.content.contains("media/a.png"));
+
+        // start/end 不适用 → 家族报错
+        let err = inspect_document(&bytes, &InspectRequest {
+            projection: InspectProjection::HeadersFooters,
+            start: Some(1),
+            end: None,
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("不接受 start/end"), "实际: {err}");
     }
 }
