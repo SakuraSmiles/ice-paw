@@ -46,6 +46,15 @@ pub enum InspectProjection {
     /// 与 set_table_element 同口径（默认表级；row → 行级；row+cell → 格级）。
     /// set_table_element 的编辑依据（复制→修改→回写），也是术后验证视图。默认前 10 块
     Tblpr,
+    /// 样式清单：逐样式一行（ID|显示名|type|basedOn链|自带特征），200 行顶（D12）。
+    /// 定义编辑（create_style/set_style_element）的寻址地基；不接受块区间
+    Styles,
+    /// 单样式定义原文：目标 w:style 的 XML 整段（D12；style= 显示名或 ID，重名拒）。
+    /// set_style_element 的编辑依据（复制→修改→回写），也是术后验证视图
+    Styledef,
+    /// 编号目录：逐 numId 分段（共享披露 + 正文引用数 + 逐级摘要）（D12）；
+    /// num_id+level 下钻到该级 w:lvl 原文——set_numbering_element 的编辑依据
+    Numbering,
 }
 
 impl InspectProjection {
@@ -61,6 +70,9 @@ impl InspectProjection {
             // 网格行多（每表最多 30 行），块级配额收紧
             InspectProjection::Table => 10,
             InspectProjection::Tblpr => 10,
+            // 定义三投影不走块区间路径；styles 的 span = 行数上限（超过指路 style= 下钻）
+            InspectProjection::Styles => 200,
+            InspectProjection::Styledef | InspectProjection::Numbering => 1,
         }
     }
 
@@ -73,6 +85,9 @@ impl InspectProjection {
             InspectProjection::HeadersFooters => "headers_footers",
             InspectProjection::Table => "table",
             InspectProjection::Tblpr => "tblpr",
+            InspectProjection::Styles => "styles",
+            InspectProjection::Styledef => "styledef",
+            InspectProjection::Numbering => "numbering",
         }
     }
 }
@@ -88,6 +103,12 @@ pub struct InspectRequest {
     pub row: Option<usize>,
     /// 格号（1-based；仅 projection=tblpr 且 row 给定时有效）
     pub cell: Option<usize>,
+    /// 样式显示名或 ID（仅 projection=styledef 有效；重名显示名拒、指路 ID）
+    pub style: Option<String>,
+    /// numId（仅 projection=numbering 有效：下钻到该编号实例段）
+    pub num_id: Option<u32>,
+    /// ilvl 0-8（仅 projection=numbering 且 num_id 给定时有效：下钻 w:lvl 原文）
+    pub level: Option<u32>,
 }
 
 /// inspect 报告。
@@ -114,30 +135,74 @@ pub fn inspect_document(bytes: &[u8], req: &InspectRequest) -> AppResult<Inspect
             .unwrap_or_else(|_| Stylesheet::empty()),
         None => Stylesheet::empty(),
     };
-    // numbering.xml 可选部件：解析编号定义 → 文档顺序计数模拟出实际编号值
-    // （"3.2.1"/"一、"——Word 渲染时才算的值，不接此处 agent 全盲）
-    let numbers: HashMap<usize, String> = match docx::read_entry(bytes, "word/numbering.xml")? {
-        Some(xml) => match xml_dom::parse(&xml) {
-            Ok(dom) => {
-                let catalog: NumberingCatalog = numbering::parse_numbering(&dom);
-                numbering::compute_numbers(&model.body, &catalog)
-            }
-            Err(_) => HashMap::new(), // 损坏 → 回退引用形式显示，不挡主路径
-        },
-        None => HashMap::new(),
+    // numbering.xml 可选部件：目录（numbering 投影 / 定义编辑消费）+ 文档顺序
+    // 计数模拟出实际编号值（"3.2.1"/"一、"——Word 渲染时才算的值，不接此处
+    // agent 全盲）。损坏 → 空目录回退（引用形式显示，不挡主路径）
+    let catalog: NumberingCatalog = match docx::read_entry(bytes, "word/numbering.xml")? {
+        Some(xml) => xml_dom::parse(&xml)
+            .map(|dom| numbering::parse_numbering(&dom))
+            .unwrap_or_default(),
+        None => NumberingCatalog::empty(),
     };
+    let numbers: HashMap<usize, String> = numbering::compute_numbers(&model.body, &catalog);
 
     let total = model.body.len();
-    // headers_footers 按节组织：不接受块区间参数，range = 节区间
-    let (start, end, has_more) = if req.projection == InspectProjection::HeadersFooters {
-        if req.start.is_some() || req.end.is_some() {
-            return Err(AppError::Validation(
-                "参数不适用：projection=headers_footers 按节组织，不接受 start/end。\
-                 三档块区间投影（outline/format/text）才支持分页。"
-                    .into(),
-            ));
+    // headers_footers 按节组织、定义三投影按定义部件组织——都不走块区间路径
+    let no_range = matches!(
+        req.projection,
+        InspectProjection::HeadersFooters
+            | InspectProjection::Styles
+            | InspectProjection::Styledef
+            | InspectProjection::Numbering
+    );
+    if no_range && (req.start.is_some() || req.end.is_some()) {
+        return Err(AppError::Validation(format!(
+            "参数不适用：projection={} 按节/定义部件组织，不接受 start/end。块区间分页\
+             仅 outline/format/ppr/text/table/tblpr；样式下钻用 style，编号下钻用 num_id+level。",
+            req.projection.as_str()
+        )));
+    }
+    if !matches!(
+        req.projection,
+        InspectProjection::Styledef | InspectProjection::Numbering
+    ) && (req.style.is_some() || req.num_id.is_some() || req.level.is_some())
+    {
+        return Err(AppError::Validation(
+            "参数不适用：style/num_id/level 仅定义投影接受（styledef/numbering）。\
+             块寻址用 start/end；表格下钻用 projection=tblpr 的 row/cell。"
+                .into(),
+        ));
+    }
+    if req.projection == InspectProjection::Styledef && req.style.is_none() {
+        return Err(AppError::Validation(
+            "参数校验失败：projection=styledef 需要 style 参数（样式显示名或 ID；\
+             完整清单用 projection=styles）。"
+                .into(),
+        ));
+    }
+    if req.projection == InspectProjection::Numbering
+        && req.level.is_some()
+        && req.num_id.is_none()
+    {
+        return Err(AppError::Validation(
+            "参数校验失败：level 需要 num_id 同传（级寻址挂在编号实例下；\
+             目录用无参 projection=numbering）。"
+                .into(),
+        ));
+    }
+    let (start, end, has_more) = if no_range {
+        match req.projection {
+            InspectProjection::HeadersFooters => (1, model.sections.len().max(1), false),
+            InspectProjection::Styles => {
+                let n = styles.all_styles().len();
+                let cap = InspectProjection::Styles.default_span();
+                (1, n.min(cap), n > cap)
+            }
+            InspectProjection::Styledef => (1, 1, false),
+            // numId 数量级小（通常 <10），清单不分页
+            InspectProjection::Numbering => (1, catalog.num_entries().len().max(1), false),
+            _ => unreachable!("no_range 已圈定四投影"),
         }
-        (1, model.sections.len().max(1), false)
     } else {
         resolve_range(total, req)?
     };
@@ -252,6 +317,13 @@ pub fn inspect_document(bytes: &[u8], req: &InspectRequest) -> AppResult<Inspect
                     "(区间内另有 {paragraphs} 个段落块无表属性)\n"
                 ));
             }
+        }
+        InspectProjection::Styles => render_styles(&styles, &mut content),
+        InspectProjection::Styledef => {
+            render_styledef(bytes, &styles, req.style.as_deref().unwrap_or_default(), &mut content)?
+        }
+        InspectProjection::Numbering => {
+            render_numbering(bytes, &model, &catalog, req.num_id, req.level, &mut content)?
         }
     }
     Ok(InspectReport { total_blocks: total, range: (start, end), has_more, content })
@@ -386,6 +458,320 @@ fn part_text(bytes: &[u8], part: &str, cache: &mut HashMap<String, String>) -> A
 /// 多行部件文本的续行缩进（投影行内层级对齐）。
 fn indent_continuation(s: &str) -> String {
     s.replace('\n', "\n    ")
+}
+
+// =========================================================================
+// 定义三投影（D12）：styles / styledef / numbering
+// 「调定义的前提是看得见定义」——样式与编号定义是 zip 里的 styles.xml /
+// numbering.xml 部件，此前完全只读不可见；三投影 + def_edit 手术成对闭环。
+// =========================================================================
+
+/// styles 投影：逐样式一行——ID | 显示名 | type | basedOn 链 | 自带特征。
+/// 寻址地基：style 参数（styledef / set_style_element）接受显示名或 ID；
+/// 重名显示名只能用 ID（「←」链即 basedOn 继承序，自身在前）。
+fn render_styles(styles: &Stylesheet, out: &mut String) {
+    let defs = styles.all_styles();
+    out.push_str(&format!(
+        "样式表（{} 个样式，ID 升序；type: paragraph/character/table/numbering；\
+         ← 后为 basedOn 继承链；「自带」= 该样式直接定义的格式（不含继承值））\n",
+        defs.len()
+    ));
+    if defs.is_empty() {
+        out.push_str("（无样式定义——styles.xml 缺失或为空）\n");
+        return;
+    }
+    for def in defs.iter().take(InspectProjection::Styles.default_span()) {
+        let chain: Vec<&str> = styles
+            .resolve_chain(&def.id)
+            .iter()
+            .skip(1) // 自身已在显示名列
+            .map(|s| s.name.as_str())
+            .collect();
+        let mut feats: Vec<String> = Vec::new();
+        if let Some(lvl) = def.outline_lvl {
+            feats.push(format!("H{}", lvl + 1));
+        }
+        if def.has_numbering {
+            feats.push("带编号".into());
+        }
+        if let Some(r) = fmt_direct_run(&def.run_props) {
+            feats.push(r);
+        }
+        let para = fmt_para_props(&def.para_props);
+        if para != "(默认)" {
+            feats.push(para);
+        }
+        out.push_str(&format!(
+            "ID={} | {} | {} | {} | {}\n",
+            def.id,
+            def.name,
+            def.style_type.as_deref().unwrap_or("paragraph"),
+            if chain.is_empty() {
+                "(无父)".to_string()
+            } else {
+                format!("←{}", chain.join("←"))
+            },
+            if feats.is_empty() { "-".to_string() } else { feats.join(" ") },
+        ));
+    }
+    let cap = InspectProjection::Styles.default_span();
+    if defs.len() > cap {
+        out.push_str(&format!(
+            "… 另有 {} 个样式未列出——目标样式用 style=（显示名或 ID）下钻 projection=styledef。\n",
+            defs.len() - cap
+        ));
+    }
+}
+
+/// styledef 投影：目标 w:style 的 XML 原文整段——set_style_element 的抄写源
+/// （never write from memory）与术后验证视图。解析口径与 def_edit 一致：
+/// 重名显示名拒（列全部 ID）、显示名优先、ID 兜底、未知名挂候选。
+fn render_styledef(
+    bytes: &[u8],
+    styles: &Stylesheet,
+    style: &str,
+    out: &mut String,
+) -> AppResult<()> {
+    let Some(xml) = docx::read_entry(bytes, "word/styles.xml")? else {
+        out.push_str("（无样式部件: 本文档没有 word/styles.xml（极少见），无样式定义可看。）\n");
+        return Ok(());
+    };
+    let named = styles.ids_named(style);
+    if named.len() > 1 {
+        return Err(AppError::Validation(format!(
+            "样式名重复: style {style:?} 是重复的显示名，对应多个样式 ID（{}）。\
+             请改用 styleId 寻址（style 参数传其中之一）。",
+            named.join("、")
+        )));
+    }
+    let id = named
+        .first()
+        .map(|s| (*s).to_string())
+        .or_else(|| styles.id_of(style).map(str::to_string));
+    let Some(id) = id else {
+        return Err(AppError::Validation(format!(
+            "样式不存在: style {style:?} 不在本文档样式表。可用样式（前 20）: {}。\
+             完整清单用 projection=styles。",
+            styles.display_names_joined(20)
+        )));
+    };
+    let children = super::def_edit::root_children(&xml).ok_or_else(|| {
+        AppError::Validation("样式部件形态异常: styles.xml 结构解析失败（文档可能损坏）。".into())
+    })?;
+    let hit = children.iter().find(|c| {
+        c.name == "w:style"
+            && super::def_edit::child_attr(&xml, c, "w:styleId").as_deref() == Some(id.as_str())
+    });
+    let Some(hit) = hit else {
+        return Err(AppError::Validation(format!(
+            "样式部件形态异常: 样式 {id:?} 在结构层定位失败。请用 projection=styles 复核。"
+        )));
+    };
+    let raw = &xml[hit.start..hit.end];
+    if let Some(m) = super::def_edit::change_marker(raw) {
+        out.push_str(&format!(
+            "⚠ 该样式定义带修订记录（w:{m}）——edit_docx 定义手术会拒绝，请先在 Word 里接受/拒绝修订。\n"
+        ));
+    }
+    let display = styles.name_of(&id).unwrap_or(id.as_str());
+    out.push_str(&format!(
+        "样式 {display}（ID {id}）定义原文（复制→修改→回写 edit_docx set_style_element；\
+         容器四档 style/pPr/rPr/tblPr，各档合法子元素与 schema 序见该工具说明）:\n{raw}\n"
+    ));
+    Ok(())
+}
+
+/// numbering 投影：逐 numId 分段（共享披露 + 正文引用数 + 逐级摘要）；
+/// num_id（实例段）/ num_id+level（该级 w:lvl 原文——set_numbering_element
+/// 的抄写源）两档下钻。级摘要的 lvlText 过 Wingdings 净化（对 LLM 是乱码）；
+/// 下钻原文**原样**（抄写源须逐字节可复制）。
+fn render_numbering(
+    bytes: &[u8],
+    model: &docx_model::DocxDocument,
+    catalog: &NumberingCatalog,
+    num_id: Option<u32>,
+    level: Option<u32>,
+    out: &mut String,
+) -> AppResult<()> {
+    let Some(xml) = docx::read_entry(bytes, "word/numbering.xml")? else {
+        if num_id.is_some() {
+            return Err(AppError::Validation(
+                "无编号部件: 本文档没有 word/numbering.xml（还没有任何自动编号列表）。"
+                    .into(),
+            ));
+        }
+        out.push_str(
+            "（无编号部件: 本文档没有 word/numbering.xml——尚无自动编号列表。建列表 = 对段落\
+             \n  set_ppr_element 插入 numPr 后由 Word 补全定义，再回来调级。）\n",
+        );
+        return Ok(());
+    };
+
+    // 正文引用计数（全树含表格内段落；「被引用数」是改定义影响面的诚实披露）
+    let mut refs: HashMap<u32, usize> = HashMap::new();
+    fn count_refs(blocks: &[Block], refs: &mut HashMap<u32, usize>) {
+        for b in blocks {
+            match b {
+                Block::Paragraph(p) => {
+                    if let Some(n) = &p.props.numbering {
+                        if n.num_id != 0 {
+                            *refs.entry(n.num_id).or_insert(0) += 1;
+                        }
+                    }
+                }
+                Block::Table(t) => {
+                    for row in &t.rows {
+                        for cell in &row.cells {
+                            count_refs(&cell.blocks, refs);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    count_refs(&model.body, &mut refs);
+
+    let entries = catalog.num_entries();
+    let Some(nid) = num_id else {
+        out.push_str(&format!(
+            "编号目录（{} 个 numId；ilvl 0-8 = 列表 1-9 级；改定义用 edit_docx \
+             set_numbering_element）\n",
+            entries.len()
+        ));
+        if entries.is_empty() {
+            out.push_str("（编号目录为空——numbering.xml 存在但无 w:num 实例。）\n");
+            return Ok(());
+        }
+        for (n, a) in &entries {
+            render_num_section(catalog, &refs, *n, *a, out);
+        }
+        return Ok(());
+    };
+
+    // 下钻：numId（+level）
+    if nid == 0 {
+        return Err(AppError::Validation(
+            "编号引用或级别不存在: numId 0 是 Word 的「显式无编号」标记，不是列表。".into(),
+        ));
+    }
+    let Some(abs_id) = catalog.abstract_of(nid) else {
+        let ids: Vec<String> = entries.iter().map(|(n, _)| n.to_string()).collect();
+        return Err(AppError::Validation(format!(
+            "编号引用或级别不存在: numId {nid} 不在编号目录。已有 numId: {}。",
+            if ids.is_empty() { "（空）".to_string() } else { ids.join("、") }
+        )));
+    };
+    let ilvls = catalog.ilvls_of_num(nid);
+    let Some(lvl) = level else {
+        render_num_section(catalog, &refs, nid, abs_id, out);
+        return Ok(());
+    };
+    if !ilvls.contains(&lvl) {
+        let ls: Vec<String> = ilvls.iter().map(|l| l.to_string()).collect();
+        return Err(AppError::Validation(format!(
+            "编号引用或级别不存在: numId {nid} 没有 level {lvl} 定义（已有级: {}）。",
+            if ls.is_empty() { "（空）".to_string() } else { ls.join("、") }
+        )));
+    }
+    // 结构寻位 raw w:lvl（abstractNum → 直接子级 w:lvl 按 ilvl——与 def_edit 同口径）
+    let children = super::def_edit::root_children(&xml).ok_or_else(|| {
+        AppError::Validation("编号部件形态异常: numbering.xml 结构解析失败（文档可能损坏）。".into())
+    })?;
+    let abs_id_str = abs_id.to_string();
+    let abs_hit = children.iter().find(|c| {
+        c.name == "w:abstractNum"
+            && super::def_edit::child_attr(&xml, c, "w:abstractNumId").as_deref()
+                == Some(abs_id_str.as_str())
+    });
+    let Some(abs_hit) = abs_hit else {
+        return Err(AppError::Validation(
+            "编号部件形态异常: abstractNum 在结构层定位失败。请用无参 projection=numbering 复核。"
+                .into(),
+        ));
+    };
+    let abs_xml = &xml[abs_hit.start..abs_hit.end];
+    let lvl_str = lvl.to_string();
+    let lvl_hit = super::def_edit::root_children(abs_xml)
+        .ok_or_else(|| {
+            AppError::Validation("编号部件形态异常: abstractNum 结构解析失败。".into())
+        })?
+        .into_iter()
+        .find(|c| {
+            c.name == "w:lvl"
+                && super::def_edit::child_attr(abs_xml, c, "w:ilvl").as_deref()
+                    == Some(lvl_str.as_str())
+        });
+    let Some(lvl_hit) = lvl_hit else {
+        return Err(AppError::Validation(format!(
+            "编号部件形态异常: numId {nid} level {lvl} 在结构层定位失败。请用无参 \
+             projection=numbering 复核。"
+        )));
+    };
+    let raw = &abs_xml[lvl_hit.start..lvl_hit.end];
+    if let Some(m) = super::def_edit::change_marker(raw) {
+        out.push_str(&format!(
+            "⚠ 该级定义带修订记录（w:{m}）——edit_docx 定义手术会拒绝，请先在 Word 里接受/拒绝修订。\n"
+        ));
+    }
+    let shared = catalog.num_ids_of_abstract(abs_id);
+    let share_note = if shared.len() > 1 {
+        let ids: Vec<String> = shared.iter().map(|n| n.to_string()).collect();
+        format!("（影响 numId {}，共享 abstractNum {abs_id}）", ids.join("、"))
+    } else {
+        String::new()
+    };
+    out.push_str(&format!(
+        "numId {nid} level {lvl} 定义原文{share_note}（复制→修改→回写 edit_docx \
+         set_numbering_element；合法子元素 schema 序: start numFmt lvlRestart pStyle \
+         isLgl suff lvlText lvlPicBulletId legacy lvlJc pPr rPr）:\n{raw}\n"
+    ));
+    Ok(())
+}
+
+/// 单个 numId 段（清单与下钻共用）：实例映射 + 共享披露 + 引用数 + 逐级摘要。
+fn render_num_section(
+    catalog: &NumberingCatalog,
+    refs: &HashMap<u32, usize>,
+    nid: u32,
+    abs_id: u32,
+    out: &mut String,
+) {
+    let shared = catalog.num_ids_of_abstract(abs_id);
+    let share = if shared.len() > 1 {
+        let others: Vec<String> = shared
+            .iter()
+            .filter(|n| **n != nid)
+            .map(|n| n.to_string())
+            .collect();
+        format!("，与 numId {} 共享 abstractNum {abs_id}（改定义同影响）", others.join("、"))
+    } else {
+        String::new()
+    };
+    let used = refs.get(&nid).copied().unwrap_or(0);
+    out.push_str(&format!(
+        "numId {nid} → abstractNum {abs_id}{share}｜正文引用 {used} 处\n"
+    ));
+    let ilvls = catalog.ilvls_of_num(nid);
+    if ilvls.is_empty() {
+        out.push_str("  （无级别定义——空壳实例）\n");
+        return;
+    }
+    for ilvl in ilvls {
+        if let Some(def) = catalog.lvl_of(nid, ilvl) {
+            let pstyle = def
+                .pstyle
+                .as_deref()
+                .map(|s| format!(" pStyle={s}"))
+                .unwrap_or_default();
+            out.push_str(&format!(
+                "  lvl {}: {} \"{}\" start={}{pstyle}\n",
+                ilvl,
+                def.num_fmt,
+                numbering::sanitize_bullet_glyph(&def.lvl_text),
+                def.start
+            ));
+        }
+    }
 }
 
 fn count_revisions(blocks: &[Block]) -> (usize, usize) {
@@ -992,6 +1378,9 @@ mod tests {
             end: None,
             row: None,
             cell: None,
+            style: None,
+            num_id: None,
+            level: None,
         })
         .unwrap();
         assert_eq!(report.total_blocks, 2);
@@ -1006,6 +1395,9 @@ mod tests {
             end: None,
             row: None,
             cell: None,
+            style: None,
+            num_id: None,
+            level: None,
         })
         .unwrap();
         assert!(text.content.contains("[2] 第二段"));
@@ -1016,6 +1408,9 @@ mod tests {
             end: None,
             row: None,
             cell: None,
+            style: None,
+            num_id: None,
+            level: None,
         })
         .unwrap();
         assert!(fmt.content.contains("文本:"), "format 应有文本行: {}", fmt.content);
@@ -1031,6 +1426,9 @@ mod tests {
             end: None,
             row: None,
             cell: None,
+            style: None,
+            num_id: None,
+            level: None,
         })
         .unwrap_err();
         assert!(err.to_string().contains("块号越界"), "实际: {err}");
@@ -1041,6 +1439,9 @@ mod tests {
             end: Some(1),
             row: None,
             cell: None,
+            style: None,
+            num_id: None,
+            level: None,
         })
         .unwrap_err();
         assert!(err.to_string().contains("区间无效"), "实际: {err}");
@@ -1051,6 +1452,9 @@ mod tests {
             end: Some(99),
             row: None,
             cell: None,
+            style: None,
+            num_id: None,
+            level: None,
         })
         .unwrap();
         assert_eq!(report.range, (1, 2));
@@ -1127,6 +1531,9 @@ mod tests {
             end: None,
             row: None,
             cell: None,
+            style: None,
+            num_id: None,
+            level: None,
         })
         .unwrap();
         assert!(report.content.contains("2 节"), "节计数: {}", report.content);
@@ -1149,6 +1556,9 @@ mod tests {
             end: None,
             row: None,
             cell: None,
+            style: None,
+            num_id: None,
+            level: None,
         })
         .unwrap_err()
         .to_string();
@@ -1186,6 +1596,9 @@ mod tests {
             end: None,
             row: None,
             cell: None,
+            style: None,
+            num_id: None,
+            level: None,
         })
         .unwrap();
         // 头行：真列数（跨列行 gridSpan 求和，非格数）
@@ -1204,6 +1617,9 @@ mod tests {
             end: Some(1),
             row: None,
             cell: None,
+            style: None,
+            num_id: None,
+            level: None,
         })
         .unwrap();
         assert!(only_para.content.contains("无表格块"), "{}", only_para.content);
@@ -1246,6 +1662,9 @@ mod tests {
             end: None,
             row: None,
             cell: None,
+            style: None,
+            num_id: None,
+            level: None,
         })
         .unwrap();
         // 表属性摘要行
@@ -1271,6 +1690,9 @@ mod tests {
             end: None,
             row: None,
             cell: None,
+            style: None,
+            num_id: None,
+            level: None,
         })
         .unwrap();
         assert!(
@@ -1286,6 +1708,9 @@ mod tests {
             end: None,
             row: Some(1),
             cell: None,
+            style: None,
+            num_id: None,
+            level: None,
         })
         .unwrap();
         assert!(report.content.contains("[1] r1 trPr: (无 trPr)"), "{}", report.content);
@@ -1296,6 +1721,9 @@ mod tests {
             end: None,
             row: Some(1),
             cell: Some(1),
+            style: None,
+            num_id: None,
+            level: None,
         })
         .unwrap();
         assert!(
@@ -1316,6 +1744,9 @@ mod tests {
             end: None,
             row: Some(9),
             cell: None,
+            style: None,
+            num_id: None,
+            level: None,
         })
         .unwrap_err()
         .to_string();
@@ -1327,6 +1758,9 @@ mod tests {
             end: None,
             row: Some(1),
             cell: Some(9),
+            style: None,
+            num_id: None,
+            level: None,
         })
         .unwrap_err()
         .to_string();
@@ -1339,6 +1773,9 @@ mod tests {
             end: None,
             row: None,
             cell: Some(1),
+            style: None,
+            num_id: None,
+            level: None,
         })
         .unwrap_err()
         .to_string();
@@ -1350,6 +1787,9 @@ mod tests {
             end: None,
             row: Some(1),
             cell: None,
+            style: None,
+            num_id: None,
+            level: None,
         })
         .unwrap_err()
         .to_string();
@@ -1361,9 +1801,288 @@ mod tests {
             end: Some(1),
             row: Some(1),
             cell: None,
+            style: None,
+            num_id: None,
+            level: None,
         })
         .unwrap_err()
         .to_string();
         assert!(err.contains("非表格块"), "实际: {err}");
+    }
+
+    // ------------------------------------------------------------------
+    // 定义三投影（D12）：styles / styledef / numbering
+    // ------------------------------------------------------------------
+
+    /// 带样式表 + 编号部件 + 正文编号引用的最小包（定义三投影共用）。
+    fn def_docx_bytes() -> Vec<u8> {
+        use std::io::Write;
+        let doc_xml = concat!(
+            r#"<w:document xmlns:w="w"><w:body>"#,
+            r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="21"/></w:numPr></w:pPr><w:r><w:t>条目一</w:t></w:r></w:p>"#,
+            r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="1"/><w:numId w:val="21"/></w:numPr></w:pPr><w:r><w:t>子项甲</w:t></w:r></w:p>"#,
+            r#"</w:body></w:document>"#,
+        );
+        let styles_xml = concat!(
+            r#"<w:styles xmlns:w="w"><w:docDefaults><w:rPrDefault><w:rPr/></w:rPrDefault></w:docDefaults>"#,
+            r#"<w:style w:type="paragraph" w:styleId="1"><w:name w:val="Normal"/></w:style>"#,
+            r#"<w:style w:type="paragraph" w:styleId="2"><w:name w:val="heading 1"/><w:basedOn w:val="1"/>"#,
+            r#"<w:pPr><w:spacing w:line="360"/><w:outlineLvl w:val="0"/></w:pPr>"#,
+            r#"<w:rPr><w:b/><w:sz w:val="32"/></w:rPr></w:style>"#,
+            r#"<w:style w:type="table" w:styleId="T1"><w:name w:val="Grid Table"/><w:tblPr><w:tblW w:w="0" w:type="auto"/></w:tblPr></w:style>"#,
+            r#"</w:styles>"#,
+        );
+        let bullet_glyph = "\u{F0B7}"; // Wingdings 私有区（bullet 净化断言用）
+        let numbering_xml = format!(
+            concat!(
+                r#"<w:numbering xmlns:w="w">"#,
+                r#"<w:abstractNum w:abstractNumId="7">"#,
+                r#"<w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/><w:lvlJc w:val="left"/></w:lvl>"#,
+                r#"<w:lvl w:ilvl="1"><w:start w:val="1"/><w:numFmt w:val="lowerLetter"/><w:lvlText w:val="%2)"/><w:lvlJc w:val="left"/></w:lvl>"#,
+                r#"</w:abstractNum>"#,
+                r#"<w:abstractNum w:abstractNumId="8">"#,
+                r#"<w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="{bullet}"/><w:lvlJc w:val="left"/></w:lvl>"#,
+                r#"</w:abstractNum>"#,
+                r#"<w:num w:numId="21"><w:abstractNumId w:val="7"/></w:num>"#,
+                r#"<w:num w:numId="33"><w:abstractNumId w:val="7"/></w:num>"#,
+                r#"<w:num w:numId="40"><w:abstractNumId w:val="8"/></w:num>"#,
+                r#"</w:numbering>"#,
+            ),
+            bullet = bullet_glyph,
+        );
+        let mut buf = Vec::new();
+        {
+            let mut w = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            for (name, data) in [
+                ("word/document.xml", doc_xml),
+                ("word/styles.xml", styles_xml),
+                ("word/numbering.xml", numbering_xml.as_str()),
+            ] {
+                w.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+                w.write_all(data.as_bytes()).unwrap();
+            }
+            w.finish().unwrap();
+        }
+        buf
+    }
+
+    fn def_req(projection: InspectProjection) -> InspectRequest {
+        InspectRequest {
+            projection,
+            start: None,
+            end: None,
+            row: None,
+            cell: None,
+            style: None,
+            num_id: None,
+            level: None,
+        }
+    }
+
+    #[test]
+    fn styles_projection_lists_chain_and_features() {
+        let bytes = def_docx_bytes();
+        let report = inspect_document(&bytes, &def_req(InspectProjection::Styles)).unwrap();
+        assert!(report.content.contains("3 个样式"), "{}", report.content);
+        assert_eq!(report.range, (1, 3));
+        assert!(!report.has_more);
+        // 继承链 + 大纲级 + 自带字符格式
+        assert!(
+            report
+                .content
+                .contains("ID=2 | heading 1 | paragraph | ←Normal | H1 b sz=32"),
+            "{}",
+            report.content
+        );
+        // 表样式的 type 与空特征
+        assert!(
+            report.content.contains("ID=T1 | Grid Table | table | (无父) | -"),
+            "{}",
+            report.content
+        );
+        // start/end 不适用
+        let mut req = def_req(InspectProjection::Styles);
+        req.start = Some(1);
+        let err = inspect_document(&bytes, &req).unwrap_err().to_string();
+        assert!(err.contains("不接受 start/end"), "实际: {err}");
+    }
+
+    #[test]
+    fn styledef_projection_returns_raw_and_rejects() {
+        let bytes = def_docx_bytes();
+        // 按显示名下钻 → 原文整段
+        let mut req = def_req(InspectProjection::Styledef);
+        req.style = Some("heading 1".into());
+        let report = inspect_document(&bytes, &req).unwrap();
+        assert!(
+            report.content.contains("样式 heading 1（ID 2）定义原文"),
+            "{}",
+            report.content
+        );
+        assert!(
+            report.content.contains(r#"<w:style w:type="paragraph" w:styleId="2">"#),
+            "应含原文开标签: {}",
+            report.content
+        );
+        assert!(
+            report.content.contains(r#"<w:outlineLvl w:val="0"/>"#),
+            "{}",
+            report.content
+        );
+        assert!(report.content.contains("</w:style>"), "原文完整");
+        // 按 ID 下钻同样命中
+        let mut req = def_req(InspectProjection::Styledef);
+        req.style = Some("T1".into());
+        let report = inspect_document(&bytes, &req).unwrap();
+        assert!(report.content.contains("Grid Table"), "{}", report.content);
+
+        // 未知名 → 家族报错 + 指路清单
+        let mut req = def_req(InspectProjection::Styledef);
+        req.style = Some("不存在样式".into());
+        let err = inspect_document(&bytes, &req).unwrap_err().to_string();
+        assert!(err.contains("样式不存在"), "实际: {err}");
+        assert!(err.contains("projection=styles"), "应指路清单: {err}");
+        // 缺 style 参数
+        let err = inspect_document(&bytes, &def_req(InspectProjection::Styledef))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("参数校验失败"), "实际: {err}");
+        // 无样式部件（手造包无 styles.xml）→ 诚实提示非报错（style 参数照给——
+        // 参数缺失是请求侧错误，须先于部件检查报出）
+        let mut req = def_req(InspectProjection::Styledef);
+        req.style = Some("任意".into());
+        let report = inspect_document(&tbl_docx_bytes(), &req).unwrap();
+        assert!(report.content.contains("无样式部件"), "{}", report.content);
+    }
+
+    #[test]
+    fn styledef_rejects_duplicate_display_names() {
+        use std::io::Write;
+        let styles_xml = concat!(
+            r#"<w:styles xmlns:w="w">"#,
+            r#"<w:style w:type="paragraph" w:styleId="a1"><w:name w:val="同名"/></w:style>"#,
+            r#"<w:style w:type="paragraph" w:styleId="b2"><w:name w:val="同名"/></w:style>"#,
+            r#"</w:styles>"#,
+        );
+        let mut buf = Vec::new();
+        {
+            let mut w = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            w.start_file("word/document.xml", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            w.write_all(br#"<w:document xmlns:w="w"/>"#).unwrap();
+            w.start_file("word/styles.xml", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            w.write_all(styles_xml.as_bytes()).unwrap();
+            w.finish().unwrap();
+        }
+        let mut req = def_req(InspectProjection::Styledef);
+        req.style = Some("同名".into());
+        let err = inspect_document(&buf, &req).unwrap_err().to_string();
+        assert!(err.contains("样式名重复"), "实际: {err}");
+        assert!(err.contains("a1") && err.contains("b2"), "应列全部 ID: {err}");
+        // ID 寻址不受重名影响
+        let mut req = def_req(InspectProjection::Styledef);
+        req.style = Some("b2".into());
+        let report = inspect_document(&buf, &req).unwrap();
+        assert!(report.content.contains(r#"w:styleId="b2""#), "{}", report.content);
+    }
+
+    #[test]
+    fn numbering_projection_sections_and_drill() {
+        let bytes = def_docx_bytes();
+        let report = inspect_document(&bytes, &def_req(InspectProjection::Numbering)).unwrap();
+        assert!(report.content.contains("3 个 numId"), "{}", report.content);
+        // 共享披露 + 正文引用数（两段引用 numId 21）
+        assert!(
+            report
+                .content
+                .contains("numId 21 → abstractNum 7，与 numId 33 共享 abstractNum 7（改定义同影响）｜正文引用 2 处"),
+            "{}",
+            report.content
+        );
+        // 级摘要：格式 / lvlText / start；Wingdings 私有区净化为 •
+        assert!(
+            report.content.contains(r#"lvl 0: decimal "%1." start=1"#),
+            "{}",
+            report.content
+        );
+        assert!(
+            report.content.contains(r#"lvl 1: lowerLetter "%2)"#),
+            "{}",
+            report.content
+        );
+        assert!(
+            report.content.contains(r#"lvl 0: bullet "•""#),
+            "私有区应净化: {}",
+            report.content
+        );
+        // numId=33 无正文引用 → 0 处
+        assert!(report.content.contains("numId 33 → abstractNum 7"), "{}", report.content);
+
+        // 下钻：numId+level → w:lvl 原文（抄写源，须含完整标签）
+        let mut req = def_req(InspectProjection::Numbering);
+        req.num_id = Some(21);
+        req.level = Some(1);
+        let report = inspect_document(&bytes, &req).unwrap();
+        assert!(
+            report.content.contains("numId 21 level 1 定义原文（影响 numId 21、33，共享 abstractNum 7）"),
+            "{}",
+            report.content
+        );
+        assert!(
+            report.content.contains(r#"<w:numFmt w:val="lowerLetter"/>"#),
+            "{}",
+            report.content
+        );
+        assert!(report.content.contains("</w:lvl>"), "原文完整");
+
+        // 只给 num_id → 该实例段展开
+        let mut req = def_req(InspectProjection::Numbering);
+        req.num_id = Some(40);
+        let report = inspect_document(&bytes, &req).unwrap();
+        assert!(report.content.contains("numId 40 → abstractNum 8"), "{}", report.content);
+
+        // 错误族
+        let mut req = def_req(InspectProjection::Numbering);
+        req.num_id = Some(99);
+        let err = inspect_document(&bytes, &req).unwrap_err().to_string();
+        assert!(err.contains("编号引用或级别不存在"), "实际: {err}");
+        assert!(err.contains("21、33、40"), "应列已有 numId: {err}");
+        let mut req = def_req(InspectProjection::Numbering);
+        req.num_id = Some(0);
+        let err = inspect_document(&bytes, &req).unwrap_err().to_string();
+        assert!(err.contains("显式无编号"), "实际: {err}");
+        // level 不带 num_id
+        let mut req = def_req(InspectProjection::Numbering);
+        req.level = Some(0);
+        let err = inspect_document(&bytes, &req).unwrap_err().to_string();
+        assert!(err.contains("参数校验失败"), "实际: {err}");
+
+        // 无编号部件：清单诚实提示；点名下钻 → 报错
+        let report = inspect_document(&tbl_docx_bytes(), &def_req(InspectProjection::Numbering))
+            .unwrap();
+        assert!(report.content.contains("无编号部件"), "{}", report.content);
+        let mut req = def_req(InspectProjection::Numbering);
+        req.num_id = Some(1);
+        let err = inspect_document(&tbl_docx_bytes(), &req)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("无编号部件"), "实际: {err}");
+    }
+
+    #[test]
+    fn def_params_rejected_by_block_projections() {
+        let bytes = def_docx_bytes();
+        // style/num_id/level 误传给块投影 → 参数不适用
+        let mut req = def_req(InspectProjection::Text);
+        req.num_id = Some(21);
+        let err = inspect_document(&bytes, &req).unwrap_err().to_string();
+        assert!(err.contains("参数不适用"), "实际: {err}");
+        assert!(err.contains("style/num_id/level"), "实际: {err}");
+        // styles 清单投影也不接受 style 参数（下钻是 styledef 的事）
+        let mut req = def_req(InspectProjection::Styles);
+        req.style = Some("Normal".into());
+        let err = inspect_document(&bytes, &req).unwrap_err().to_string();
+        assert!(err.contains("参数不适用"), "实际: {err}");
     }
 }

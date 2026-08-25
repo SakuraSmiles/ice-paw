@@ -21,6 +21,8 @@ pub(super) struct StyleDef {
     pub id: String,
     /// w:name val（显示名，如 "heading 1"）
     pub name: String,
+    /// @w:type（paragraph / character / table / numbering；None = 缺省按 paragraph）
+    pub style_type: Option<String>,
     /// w:basedOn val（父样式 ID）
     pub based_on: Option<String>,
     /// w:pPr/w:outlineLvl val（0 = 一级标题 … 8 = 九级；大纲层级来源）
@@ -78,6 +80,40 @@ impl Stylesheet {
             .keys()
             .find(|k| k.as_str() == name_or_id)
             .map(|k| k.as_str())
+    }
+
+    /// 同显示名的全部样式 ID（升序；重名显示名下 id_of 迭代序不确定不可用——
+    /// def_edit 重名报错列全部 ID 指路 ID 寻址）。
+    pub(super) fn ids_named(&self, name: &str) -> Vec<&str> {
+        let mut ids: Vec<&str> = self
+            .by_id
+            .iter()
+            .filter(|(_, s)| s.name == name)
+            .map(|(id, _)| id.as_str())
+            .collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    /// 样式名（或 ID）→ 表样式 styleId（insert_table_after 的 table_style 参数
+    /// 解析：限定 @w:type="table"，非表样式/未知名均 None——调用方区分报错）。
+    pub(super) fn table_style_id(&self, name_or_id: &str) -> Option<&str> {
+        let hit = self
+            .by_id
+            .iter()
+            .find(|(_, s)| s.name == name_or_id || s.id == name_or_id)?;
+        if hit.1.style_type.as_deref() == Some("table") {
+            Some(hit.0.as_str())
+        } else {
+            None
+        }
+    }
+
+    /// 全部样式定义（ID 升序——styles 投影/确定性输出）。
+    pub(super) fn all_styles(&self) -> Vec<&StyleDef> {
+        let mut defs: Vec<&StyleDef> = self.by_id.values().collect();
+        defs.sort_unstable_by(|a, b| a.id.cmp(&b.id));
+        defs
     }
 
     /// 样式显示名清单（报错提示用；按名排序，`max` 条 + 「等 N 个」）。
@@ -165,6 +201,7 @@ fn parse_style(el: &Element) -> Option<StyleDef> {
     let mut def = StyleDef {
         id,
         name: String::new(),
+        style_type: el.attr("w:type").map(str::to_string),
         based_on: None,
         outline_lvl: None,
         has_numbering: false,
