@@ -1,4 +1,7 @@
 #![warn(clippy::all)]
+// edit_docx 的 oneOf 操作 schema（mcp/docx_tool.rs，14 个操作逐个展开）超
+// serde_json::json! 宏默认递归上限 128——宏展开纯编译期数据，抬到 256 无运行时影响。
+#![recursion_limit = "256"]
 
 //! IcePaw Tauri 应用入口
 //!

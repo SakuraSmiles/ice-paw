@@ -222,7 +222,7 @@ fn corpus_inspect_three_projections() {
         // outline：默认上限 400（SDP 顶层块 ~1780，全量会爆 token——上限被语料正当化）
         let report = inspect_document(
             bytes,
-            &InspectRequest { projection: InspectProjection::Outline, start: None, end: None, row: None, cell: None },
+            &InspectRequest { projection: InspectProjection::Outline, start: None, end: None, row: None, cell: None, style: None, num_id: None, level: None },
         )
         .unwrap();
         assert!(report.total_blocks > 80, "{name} 块数过少: {}", report.total_blocks);
@@ -257,7 +257,7 @@ fn corpus_inspect_three_projections() {
         // format：默认 span=50，has_more，含有效格式行
         let fmt = inspect_document(
             bytes,
-            &InspectRequest { projection: InspectProjection::Format, start: None, end: None, row: None, cell: None },
+            &InspectRequest { projection: InspectProjection::Format, start: None, end: None, row: None, cell: None, style: None, num_id: None, level: None },
         )
         .unwrap();
         assert_eq!(fmt.range, (1, 50), "{name} format 默认区间");
@@ -267,7 +267,7 @@ fn corpus_inspect_three_projections() {
         // text：带块号正文，区间续读
         let text = inspect_document(
             bytes,
-            &InspectRequest { projection: InspectProjection::Text, start: Some(2), end: Some(6), row: None, cell: None },
+            &InspectRequest { projection: InspectProjection::Text, start: Some(2), end: Some(6), row: None, cell: None, style: None, num_id: None, level: None },
         )
         .unwrap();
         assert_eq!(text.range, (2, 6));
@@ -275,7 +275,7 @@ fn corpus_inspect_three_projections() {
         // 越界错误带总数（报错契约）
         let err = inspect_document(
             bytes,
-            &InspectRequest { projection: InspectProjection::Text, start: Some(report.total_blocks + 1), end: None, row: None, cell: None },
+            &InspectRequest { projection: InspectProjection::Text, start: Some(report.total_blocks + 1), end: None, row: None, cell: None, style: None, num_id: None, level: None },
         )
         .unwrap_err()
         .to_string();
@@ -290,7 +290,7 @@ fn corpus_numbering_values_rendered() {
     // SDP：H1 自动编号标题（真实 Word 产物），编号从 1 起
     let report = inspect_document(
         &sdp,
-        &InspectRequest { projection: InspectProjection::Outline, start: None, end: None, row: None, cell: None },
+        &InspectRequest { projection: InspectProjection::Outline, start: None, end: None, row: None, cell: None, style: None, num_id: None, level: None },
     )
     .unwrap();
     assert!(
@@ -304,7 +304,7 @@ fn corpus_numbering_values_rendered() {
     // SRS：三级编号形态存在（N.N.N 计数模拟）
     let report = inspect_document(
         &srs,
-        &InspectRequest { projection: InspectProjection::Outline, start: None, end: None, row: None, cell: None },
+        &InspectRequest { projection: InspectProjection::Outline, start: None, end: None, row: None, cell: None, style: None, num_id: None, level: None },
     )
     .unwrap();
     assert!(
@@ -329,7 +329,7 @@ fn corpus_numbering_values_rendered() {
     for bytes in [&sdp, &srs] {
         let report = inspect_document(
             bytes,
-            &InspectRequest { projection: InspectProjection::Outline, start: None, end: None, row: None, cell: None },
+            &InspectRequest { projection: InspectProjection::Outline, start: None, end: None, row: None, cell: None, style: None, num_id: None, level: None },
         )
         .unwrap();
         assert!(
@@ -347,7 +347,7 @@ fn corpus_headers_footers_projection() {
     for (name, bytes) in [("SDP", &sdp), ("SRS", &srs), ("INSTALL", &install)] {
         let report = inspect_document(
             bytes,
-            &InspectRequest { projection: InspectProjection::HeadersFooters, start: None, end: None, row: None, cell: None },
+            &InspectRequest { projection: InspectProjection::HeadersFooters, start: None, end: None, row: None, cell: None, style: None, num_id: None, level: None },
         )
         .unwrap();
         assert!(report.content.contains("[节 1]"), "{name} 应有节行: {}", report.content);
@@ -372,7 +372,7 @@ fn corpus_install_revisions_visible_in_format() {
     // 的前提 = agent 能看见它们在哪）
     let fmt = inspect_document(
         &install,
-        &InspectRequest { projection: InspectProjection::Format, start: Some(1), end: Some(171), row: None, cell: None },
+        &InspectRequest { projection: InspectProjection::Format, start: Some(1), end: Some(171), row: None, cell: None, style: None, num_id: None, level: None },
     )
     .unwrap();
     assert!(fmt.content.contains("〔插入修订〕"), "插入修订 run 未标记");
@@ -380,7 +380,7 @@ fn corpus_install_revisions_visible_in_format() {
     // text 投影剔除删除修订（接受修订后视图）——修订剔除不应清空正文（默认 span=100 块量级仍在）
     let text = inspect_document(
         &install,
-        &InspectRequest { projection: InspectProjection::Text, start: Some(1), end: None, row: None, cell: None },
+        &InspectRequest { projection: InspectProjection::Text, start: Some(1), end: None, row: None, cell: None, style: None, num_id: None, level: None },
     )
     .unwrap();
     assert!(text.content.lines().count() > 100, "正文行数过少: {}", text.content.lines().count());
@@ -503,14 +503,14 @@ fn corpus_edit_engine_roundtrip() {
         // ④ 读回复核：t1 = REPLACED；t2 后紧跟 INSERTED；总块数 n+1-1 = n
         let seg = inspect_document(
             &new_bytes,
-            &InspectRequest { projection: InspectProjection::Text, start: Some(t1), end: Some(t2 + 1), row: None, cell: None },
+            &InspectRequest { projection: InspectProjection::Text, start: Some(t1), end: Some(t2 + 1), row: None, cell: None, style: None, num_id: None, level: None },
         )
         .unwrap();
         assert!(seg.content.contains(REPLACED), "{name} t1={t1} 替换未生效:\n{}", seg.content);
         assert!(seg.content.contains(INSERTED), "{name} t2={t2} 后插入未生效:\n{}", seg.content);
         let full = inspect_document(
             &new_bytes,
-            &InspectRequest { projection: InspectProjection::Outline, start: None, end: None, row: None, cell: None },
+            &InspectRequest { projection: InspectProjection::Outline, start: None, end: None, row: None, cell: None, style: None, num_id: None, level: None },
         )
         .unwrap();
         assert_eq!(full.total_blocks, spans.len(), "{name} 块数守恒（+1 插 -1 删）");
@@ -838,6 +838,7 @@ fn corpus_table_surgery() {
                     expect_prefix: prefix_of(anchor),
                     rows: vec![vec![NEW_HEAD.into(), "新表体乙".into()], vec!["行一".into(), "行二".into()]],
                     header: None,
+                    table_style: None,
                 },
             ],
         )
@@ -873,7 +874,7 @@ fn corpus_table_surgery() {
         // 网格投影（真实 Word 产物）：目标表块号渲染出矩阵行
         let grid = inspect_document(
             &new_bytes,
-            &InspectRequest { projection: InspectProjection::Table, start: Some(at), end: Some(at), row: None, cell: None },
+            &InspectRequest { projection: InspectProjection::Table, start: Some(at), end: Some(at), row: None, cell: None, style: None, num_id: None, level: None },
         )
         .unwrap();
         assert!(grid.content.contains(&format!("[{at}] ▦ 表")), "{name} 网格头行缺失");
@@ -986,7 +987,7 @@ fn corpus_table_format_surgery() {
         // 读回：tblpr 投影可见 + table 投影表属性行
         let tblpr = inspect_document(
             &b1,
-            &InspectRequest { projection: InspectProjection::Tblpr, start: Some(tbl), end: Some(tbl), row: None, cell: None },
+            &InspectRequest { projection: InspectProjection::Tblpr, start: Some(tbl), end: Some(tbl), row: None, cell: None, style: None, num_id: None, level: None },
         )
         .unwrap();
         assert!(tblpr.content.contains(FILL), "{name} tblpr 投影应含新底纹");
@@ -1029,10 +1030,12 @@ fn corpus_table_format_surgery() {
             &[super::EditOp::MergeCells {
                 block: tbl,
                 expect_prefix: prefix.clone(),
-                direction: super::MergeDirection::Horizontal,
+                direction: Some(super::MergeDirection::Horizontal),
                 row: h_row,
                 cell: h_cell,
                 span: Some(2),
+                end_row: None,
+                end_cell: None,
             }],
         )
         .unwrap_or_else(|e| panic!("{name} merge(horizontal) 失败: {e}"));
@@ -1076,10 +1079,12 @@ fn corpus_table_format_surgery() {
             &[super::EditOp::MergeCells {
                 block: tbl,
                 expect_prefix: prefix.clone(),
-                direction: super::MergeDirection::Vertical,
+                direction: Some(super::MergeDirection::Vertical),
                 row: 1,
                 cell: v_head,
                 span: Some(v_span),
+                end_row: None,
+                end_cell: None,
             }],
         )
         .unwrap_or_else(|e| panic!("{name} merge(vertical) 失败: {e}"));
@@ -1109,4 +1114,259 @@ fn corpus_table_format_surgery() {
         ran += 1;
     }
     assert!(ran >= 2, "SDP/SRS 语料应均有干净表可跑（实际 {ran} 份）");
+}
+
+// =========================================================================
+// S3 五波·定义部件手术（D12）：styles / numbering 族真实语料闭环
+// =========================================================================
+
+/// styles 族闭环：styles 投影全量 → 运行时选首个带 outlineLvl 的干净样式 →
+/// styledef 原文投影（抄写源）→ pPr/shd 手术 → 幂等 + 其余 w:style 与
+/// latentStyles/docDefaults 逐字节不变 + document.xml 逐字节不变（含修订样本
+/// 的 INSTALL 不受影响）。目标样式全运行时派生（语料字符串不进代码）。
+#[test]
+fn corpus_def_style_surgery() {
+    let Some((sdp, srs, install)) = all_corpus() else { return };
+    use super::def_edit::{change_marker, child_attr, root_children};
+    use super::styles::parse_styles;
+    // 自造片段与值（非语料来源——禁令）
+    const SHD_FRAG: &str = r#"<w:shd w:val="clear" w:color="auto" w:fill="EEF3FA"/>"#;
+    const FILL: &str = "EEF3FA";
+
+    let mut ran = 0usize;
+    for (name, bytes) in [("SDP", &sdp), ("SRS", &srs), ("INSTALL", &install)] {
+        // styles 投影全量：表头 + 逐样式行（真实 Word 样式表规模）
+        let list = inspect_document(
+            bytes,
+            &InspectRequest { projection: InspectProjection::Styles, start: None, end: None, row: None, cell: None, style: None, num_id: None, level: None },
+        )
+        .unwrap();
+        assert!(list.content.contains("样式表"), "{name} styles 表头缺失");
+        assert!(
+            list.content.lines().filter(|l| l.contains("ID=")).count() >= 5,
+            "{name} 样式行过少"
+        );
+
+        // 运行时选目标：首个带 outlineLvl 且定义子树无修订记录的样式（按 ID 寻址）
+        let styles_xml = super::docx::read_entry(bytes, "word/styles.xml")
+            .unwrap()
+            .unwrap_or_else(|| panic!("{name} 应有 styles.xml"));
+        let sheet = parse_styles(&xml_dom::parse(&styles_xml).unwrap());
+        let children = root_children(&styles_xml).unwrap();
+        let all = sheet.all_styles();
+        let target = all
+            .iter()
+            .filter_map(|s| {
+                children
+                    .iter()
+                    .find(|c| {
+                        c.name == "w:style"
+                            && child_attr(&styles_xml, c, "w:styleId").as_deref() == Some(s.id.as_str())
+                    })
+                    .map(|c| (s, c))
+            })
+            .find(|(s, c)| {
+                s.outline_lvl.is_some() && change_marker(&styles_xml[c.start..c.end]).is_none()
+            });
+        let Some((style_def, _)) = target else { continue };
+        let sid = style_def.id.clone();
+
+        // styledef 原文投影：抄写源可见
+        let def = inspect_document(
+            bytes,
+            &InspectRequest { projection: InspectProjection::Styledef, start: None, end: None, row: None, cell: None, style: Some(sid.clone()), num_id: None, level: None },
+        )
+        .unwrap();
+        assert!(def.content.contains("<w:style"), "{name} styledef 应渲染原文");
+        assert!(
+            def.content.contains(&format!("w:styleId=\"{sid}\"")),
+            "{name} styledef 应是目标样式"
+        );
+
+        // 手术：pPr/shd upsert（目标样式变；其余逐子级不变）
+        let op = super::StyleEditOp::SetStyleElement {
+            style: sid.clone(),
+            container: super::StyleContainer::PPr,
+            element: "shd".into(),
+            xml: Some(SHD_FRAG.into()),
+        };
+        let (new_bytes, applied) = super::apply_style_edits_to_bytes(bytes, std::slice::from_ref(&op))
+            .unwrap_or_else(|e| panic!("{name} set_style_element 失败: {e}"));
+        assert_eq!(applied.len(), 1);
+        assert_eq!(applied[0].op, "set_style_element");
+        assert!(
+            applied[0].target.as_deref().is_some_and(|t| t.contains("pPr/shd")),
+            "{name} 摘要应带 target 定位串"
+        );
+
+        // untouched 保真：只有 styles.xml 变（document.xml 逐字节不动）
+        assert_untouched_entries_identical(bytes, &new_bytes, "word/styles.xml");
+
+        // 幂等：二次套用逐字节稳定
+        let (new_bytes2, _) =
+            super::apply_style_edits_to_bytes(&new_bytes, std::slice::from_ref(&op)).unwrap();
+        assert_eq!(
+            super::docx::read_entry(&new_bytes, "word/styles.xml").unwrap().unwrap(),
+            super::docx::read_entry(&new_bytes2, "word/styles.xml").unwrap().unwrap(),
+            "{name} set_style_element 应幂等"
+        );
+
+        // 同部件逐子级对比：目标样式变、其余 w:style 与 latentStyles/docDefaults
+        // 等非样式直接子级逐字节不变
+        let new_xml = super::docx::read_entry(&new_bytes, "word/styles.xml").unwrap().unwrap();
+        let new_children = root_children(&new_xml).unwrap();
+        assert_eq!(children.len(), new_children.len(), "{name} styles 直接子级数应守恒");
+        for (a, b) in children.iter().zip(new_children.iter()) {
+            let (sa, sb) = (&styles_xml[a.start..a.end], &new_xml[b.start..b.end]);
+            let is_target =
+                a.name == "w:style" && child_attr(&styles_xml, a, "w:styleId").as_deref() == Some(sid.as_str());
+            if is_target {
+                assert_ne!(sa, sb, "{name} 目标样式应已改");
+                assert!(sb.contains(FILL), "{name} 手术值未落位");
+            } else {
+                assert_eq!(
+                    sa, sb,
+                    "{name} 非目标子级应逐字节不变（latentStyles/docDefaults/其余样式）"
+                );
+            }
+        }
+
+        // 读回：styledef 投影见新值；重解析样式计数守恒
+        let def2 = inspect_document(
+            &new_bytes,
+            &InspectRequest { projection: InspectProjection::Styledef, start: None, end: None, row: None, cell: None, style: Some(sid.clone()), num_id: None, level: None },
+        )
+        .unwrap();
+        assert!(def2.content.contains(FILL), "{name} styledef 读回应含新底纹");
+        let sheet2 = parse_styles(&xml_dom::parse(&new_xml).unwrap());
+        assert_eq!(sheet2.all_styles().len(), sheet.all_styles().len(), "{name} 样式计数应守恒");
+        ran += 1;
+    }
+    assert!(ran >= 2, "SDP/SRS 语料应均有 outline 样式可跑（实际 {ran} 份）");
+}
+
+/// numbering 族闭环：numbering 目录投影 → numId+level 下钻原文 →
+/// lvl0/lvlRestart 手术（compute_numbers 不读 lvlRestart → 编号值不变）→
+/// 幂等 + document.xml 逐字节不变。目标 numId 全运行时派生。
+#[test]
+fn corpus_def_numbering_surgery() {
+    let Some((sdp, srs, install)) = all_corpus() else { return };
+    use super::numbering::{compute_numbers, parse_numbering};
+    // 自造片段（非语料来源——禁令）
+    const RESTART_FRAG: &str = r#"<w:lvlRestart w:val="4"/>"#;
+
+    let mut ran = 0usize;
+    for (name, bytes) in [("SDP", &sdp), ("SRS", &srs), ("INSTALL", &install)] {
+        let Some(numbering_xml) = super::docx::read_entry(bytes, "word/numbering.xml").unwrap() else {
+            continue;
+        };
+        let catalog = parse_numbering(&xml_dom::parse(&numbering_xml).unwrap());
+        let Some((num_id, _)) = catalog.num_entries().into_iter().min_by_key(|(n, _)| *n) else {
+            continue;
+        };
+
+        // 目录投影：表头 + 目标 numId 段
+        let list = inspect_document(
+            bytes,
+            &InspectRequest { projection: InspectProjection::Numbering, start: None, end: None, row: None, cell: None, style: None, num_id: None, level: None },
+        )
+        .unwrap();
+        assert!(list.content.contains("编号目录"), "{name} numbering 表头缺失");
+        assert!(
+            list.content.contains(&format!("numId {num_id} ")),
+            "{name} 目录应含目标 numId"
+        );
+
+        // 级下钻：lvl 0 原文（抄写源）
+        let drill = inspect_document(
+            bytes,
+            &InspectRequest { projection: InspectProjection::Numbering, start: None, end: None, row: None, cell: None, style: None, num_id: Some(num_id), level: Some(0) },
+        )
+        .unwrap();
+        assert!(drill.content.contains("<w:lvl"), "{name} 下钻应渲染 lvl 原文");
+
+        // 手术 + 幂等 + untouched
+        let op = super::NumberingEditOp::SetNumberingElement {
+            num_id,
+            level: 0,
+            element: "lvlRestart".into(),
+            xml: Some(RESTART_FRAG.into()),
+        };
+        let (new_bytes, applied) = super::apply_numbering_edits_to_bytes(bytes, std::slice::from_ref(&op))
+            .unwrap_or_else(|e| panic!("{name} set_numbering_element 失败: {e}"));
+        assert_eq!(applied.len(), 1);
+        assert_eq!(applied[0].op, "set_numbering_element");
+        assert_untouched_entries_identical(bytes, &new_bytes, "word/numbering.xml");
+        let (new_bytes2, _) =
+            super::apply_numbering_edits_to_bytes(&new_bytes, std::slice::from_ref(&op)).unwrap();
+        assert_eq!(
+            super::docx::read_entry(&new_bytes, "word/numbering.xml").unwrap().unwrap(),
+            super::docx::read_entry(&new_bytes2, "word/numbering.xml").unwrap().unwrap(),
+            "{name} set_numbering_element 应幂等"
+        );
+
+        // 编号值不变：同一正文，新旧 catalog 算出的自动编号全表相等
+        let new_numbering = super::docx::read_entry(&new_bytes, "word/numbering.xml").unwrap().unwrap();
+        let catalog2 = parse_numbering(&xml_dom::parse(&new_numbering).unwrap());
+        let doc_xml = super::docx::read_document_xml(bytes).unwrap();
+        let model = super::docx_model::build_document(&xml_dom::parse(&doc_xml).unwrap());
+        assert_eq!(
+            compute_numbers(&model.body, &catalog),
+            compute_numbers(&model.body, &catalog2),
+            "{name} lvlRestart 手术不应改变自动编号值"
+        );
+
+        // 读回：下钻可见新元素
+        let drill2 = inspect_document(
+            &new_bytes,
+            &InspectRequest { projection: InspectProjection::Numbering, start: None, end: None, row: None, cell: None, style: None, num_id: Some(num_id), level: Some(0) },
+        )
+        .unwrap();
+        assert!(drill2.content.contains("lvlRestart"), "{name} 下钻读回应含新元素");
+        ran += 1;
+    }
+    assert!(ran >= 2, "SDP/SRS 语料应均有编号定义可跑（实际 {ran} 份）");
+}
+
+/// 合成 *Change 拒改：往真实 styles.xml 的目标样式子树注入自造修订记录元素，
+/// set_style_element 必须拒（指路先在 Word 接受/拒绝修订）。纯函数无盘上
+/// 副作用——拒改即原字节原样。
+#[test]
+fn corpus_def_change_guard() {
+    let Some((sdp, _srs, _install)) = all_corpus() else { return };
+    use super::def_edit::{child_attr, root_children};
+    let styles_xml = super::docx::read_entry(&sdp, "word/styles.xml").unwrap().unwrap();
+    let children = root_children(&styles_xml).unwrap();
+    // 任选一个非自闭合样式，注入自造 rPrChange 到其子树尾部（well-formed）
+    let hit = children
+        .iter()
+        .find(|c| c.name == "w:style" && !c.self_closed && child_attr(&styles_xml, c, "w:styleId").is_some())
+        .expect("SDP 应有常规样式");
+    let sid = child_attr(&styles_xml, hit, "w:styleId").unwrap();
+    let close = "</w:style>";
+    let span = &styles_xml[hit.start..hit.end];
+    assert!(span.ends_with(close), "非自闭合样式应以 </w:style> 收尾");
+    let inner_end = hit.end - close.len();
+    let poisoned_xml = format!(
+        "{}{}{}{}",
+        &styles_xml[..inner_end],
+        r#"<w:rPrChange w:id="1"><w:rPr/></w:rPrChange>"#,
+        close,
+        &styles_xml[hit.end..]
+    );
+    let poisoned = super::docx_edit::repack_part(&sdp, "word/styles.xml", &poisoned_xml).unwrap();
+
+    let err = super::apply_style_edits_to_bytes(
+        &poisoned,
+        &[super::StyleEditOp::SetStyleElement {
+            style: sid,
+            container: super::StyleContainer::RPr,
+            element: "b".into(),
+            xml: Some("<w:b/>".into()),
+        }],
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("受保护"), "实际: {err}");
+    assert!(err.contains("修订记录"), "实际: {err}");
 }

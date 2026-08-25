@@ -15,6 +15,7 @@
 use crate::context::token::estimate_tokens;
 use crate::error::AppResult;
 
+mod def_edit;
 mod docx;
 mod docx_edit;
 mod docx_inspect;
@@ -40,6 +41,12 @@ pub use docx_inspect::{inspect_document, InspectProjection, InspectReport, Inspe
 // edit_docx 块级手术（步骤 3）：批量事务，纯函数；IO/授权/写盘在 mcp::docx_tool。
 pub use docx_edit::{
     apply_edits_to_bytes, AppliedOp, CharFormat, EditOp, MergeDirection, ParaFormat, TableLevel,
+};
+
+// edit_docx 定义部件手术（D12）：styles/numbering 通用元素手术，纯函数。
+pub use def_edit::{
+    apply_numbering_edits_to_bytes, apply_style_edits_to_bytes, NumberingEditOp, StyleContainer,
+    StyleEditOp, StyleType,
 };
 
 /// 从一个文档中提取出的结果。

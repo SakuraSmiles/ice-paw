@@ -32,8 +32,7 @@ pub(super) struct LvlDef {
     /// w:start val（该级起始计数，通常 1）
     pub start: u32,
     /// w:pStyle val（样式关联编号：该级服务于哪个样式；MVP 只记录不参与计算，
-    /// 等真实样本出现再接线——字段本身是解析产物，保留供下一波使用）
-    #[allow(dead_code)] // 测试读它，非测试构建下无人读（解析产物先行保留）
+    /// 等真实样本出现再接线——numbering 投影的级摘要行展示它）
     pub pstyle: Option<String>,
 }
 
@@ -60,9 +59,47 @@ impl NumberingCatalog {
 
     /// numId + ilvl → 级定义（num 缺失 / abstractNum 缺失 / 级缺失 → None，
     /// 调用方回退引用形式显示）。
-    fn lvl_of(&self, num_id: u32, ilvl: u32) -> Option<&LvlDef> {
+    pub(super) fn lvl_of(&self, num_id: u32, ilvl: u32) -> Option<&LvlDef> {
         let abs_id = self.nums.get(&num_id)?;
         self.abstracts.get(abs_id)?.lvls.get(&ilvl)
+    }
+
+    /// numId → abstractNumId（def_edit 手术定位：改定义落 abstract 的 lvl，
+    /// 而非 num 实例）。numId 不存在（含 0——「显式无编号」不入映射）→ None。
+    pub(super) fn abstract_of(&self, num_id: u32) -> Option<u32> {
+        self.nums.get(&num_id).copied()
+    }
+
+    /// numId 已定义的 ilvl 清单（升序；def_edit 越界报错列已有级用）。
+    pub(super) fn ilvls_of_num(&self, num_id: u32) -> Vec<u32> {
+        let Some(abs_id) = self.nums.get(&num_id) else { return Vec::new() };
+        let mut lvls: Vec<u32> = self
+            .abstracts
+            .get(abs_id)
+            .map(|a| a.lvls.keys().copied().collect())
+            .unwrap_or_default();
+        lvls.sort_unstable();
+        lvls
+    }
+
+    /// 共享同一 abstractNum 的全部 numId（升序，含自身；改定义影响面的诚实披露）。
+    pub(super) fn num_ids_of_abstract(&self, abs_id: u32) -> Vec<u32> {
+        let mut ids: Vec<u32> = self
+            .nums
+            .iter()
+            .filter(|(_, &a)| a == abs_id)
+            .map(|(&n, _)| n)
+            .collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    /// 全部 num 实例（numId 升序；numbering 投影逐 numId 分段用）。
+    pub(super) fn num_entries(&self) -> Vec<(u32, u32)> {
+        let mut entries: Vec<(u32, u32)> =
+            self.nums.iter().map(|(&n, &a)| (n, a)).collect();
+        entries.sort_unstable();
+        entries
     }
 }
 
@@ -171,7 +208,8 @@ pub(super) fn compute_numbers(
 
 /// bullet 列表的 lvlText 常是 Wingdings 私有区符号（U+F0xx，对 LLM 是乱码/空白）。
 /// 私有区字符统一替换为 •（语义：无序符号列表，具体符号形状无信息量）。
-fn sanitize_bullet_glyph(s: &str) -> String {
+/// （numbering 投影的级摘要行共用；下钻原文投影**不**过此函数——抄写源须原样）
+pub(super) fn sanitize_bullet_glyph(s: &str) -> String {
     if !s.chars().any(|c| ('\u{E000}'..='\u{F8FF}').contains(&c)) {
         return s.to_string();
     }

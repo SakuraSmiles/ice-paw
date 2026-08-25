@@ -9,7 +9,8 @@
 //!    重复块）通过才动刀；每个操作只替换目标块的字节区间，区间外**一个字节不动**
 //!    （pPr/rPr 原样切片保留，「不敢懂的不碰」）。操作按位置降序 splice，原始
 //!    偏移全程有效。
-//! 3. **容器重打包** [`repack_document`]：只替换 `word/document.xml`，其余 zip
+//! 3. **容器重打包** [`repack_part`]：只替换目标 entry（document.xml 或
+//!    styles.xml / numbering.xml 定义部件），其余 zip
 //!    entry 用 `raw_copy_file` **原样字节复制**（不解压重压，压缩参数/元数据不变）。
 //!
 //! MVP 操作词表（批量事务，D3 拍板 2026-08-24）：`replace_text` /
@@ -238,11 +239,14 @@ pub enum EditOp {
     },
     /// 在锚块后插入整表（S3 三波·表格件）：rows 矩形字符串矩阵（\n = 格内多段）；
     /// header（缺省 true）首行表头——加粗 + 跨页重复；全边框 + 列宽按节宽均分。
+    /// table_style（S3 五波·模板件）：表样式显示名或 ID——建表即挂用户模板的
+    /// 表样式（边框/底纹/条纹带由样式定义，tblPr 首位 tblStyle 引用）。
     InsertTableAfter {
         block: usize,
         expect_prefix: String,
         rows: Vec<Vec<String>>,
         header: Option<bool>,
+        table_style: Option<String>,
     },
     /// 改表格单元格文本（S3 三波·表格件）：(row, cell) 1-based，口径与
     /// inspect_docx projection=table 所见一致（跨列格占 1 个序号）；保 tcPr +
@@ -290,17 +294,22 @@ pub enum EditOp {
         element: String,
         xml: Option<String>,
     },
-    /// 合并单元格（S3 四波·结构件，Word 原生语义）：horizontal=同行连续格横并
+    /// 合并单元格（S3 四波·结构件，Word 原生语义；五波补矩形区）：两形态二选一——
+    /// ① 简单线并（direction + span，span 缺省 2）：horizontal=同行连续格横并
     /// （gridSpan 求和、内容按序拼接到首格）；vertical=同列对齐格纵并（首格
-    /// restart / 其余 continue，内容原样保留——拆分即恢复显示）。span 缺省 2。
-    /// 结构重构使地址重排，独占一批（不与其他表格操作同块组合）。
+    /// restart / 其余 continue，内容原样保留——拆分即恢复显示）。
+    /// ② 矩形区（end_row + end_cell，与 direction/span 互斥）：(row,cell) 至
+    /// (end_row,end_cell) 显示地址围成的区域一次合并（逐行横并 → 结果列纵并，
+    /// Word 合并区域 UX 同款）。结构重构使地址重排，独占一批。
     MergeCells {
         block: usize,
         expect_prefix: String,
-        direction: MergeDirection,
+        direction: Option<MergeDirection>,
         row: usize,
         cell: usize,
         span: Option<usize>,
+        end_row: Option<usize>,
+        end_cell: Option<usize>,
     },
     /// 拆分单元格（S3 四波·结构件，merge_cells 的逆）：vertical 对 (合并头) 拆
     /// 整条纵并链（各格恢复自有内容显示）；horizontal 对 (跨N列) 格拆回 N 个
@@ -312,6 +321,12 @@ pub enum EditOp {
         row: usize,
         cell: usize,
     },
+    /// 清空正文全部块（S3 五波·模板件）：copy_file 复制模板 docx 后清掉旧内容、
+    /// 保留页面设置与节结构，再写新正文。含 sectPr 的块（节属性载体）保留；
+    /// body 末尾的直属 sectPr 本就不是块、天然保留。expect_blocks = 当前块数
+    /// 指纹（验证后变异——清空是破坏性操作，块数不符 = 文档已变，防陈旧心智）。
+    /// 独占一批（清空后一切块号失效，与其他操作组合必然寻址错乱）。
+    ClearBody { expect_blocks: usize },
 }
 
 /// set_table_element 的三层作用域。
@@ -331,7 +346,8 @@ pub enum MergeDirection {
 
 /// CT_PPr 法定子元素，ECMA-376 schema 序。双职：合法性白名单 + 插入位序。
 /// sectPr（分节符载体）/pPrChange（修订记录）受保护不开放，不在本表。
-const PPR_ELEMENTS: [&str; 34] = [
+/// def_edit 的样式 pPr 容器复用本表（pub(super)）。
+pub(super) const PPR_ELEMENTS: [&str; 34] = [
     "pStyle", "keepNext", "keepLines", "pageBreakBefore", "framePr", "widowControl",
     "numPr", "suppressLineNumbers", "pBdr", "shd", "tabs", "suppressAutoHyphens",
     "kinsoku", "wordWrap", "overflowPunct", "topLinePunct", "autoSpaceDE", "autoSpaceDN",
@@ -340,8 +356,9 @@ const PPR_ELEMENTS: [&str; 34] = [
     "textboxTightWrap", "outlineLvl", "divId", "cnfStyle", "rPr",
 ];
 
-/// CT_TblPrBase 法定子元素，ECMA-376 schema 序（set_table_element level=table）。
-const TBLPR_ELEMENTS: [&str; 17] = [
+/// CT_TblPrBase 法定子元素，ECMA-376 schema 序（set_table_element level=table；
+/// def_edit 的表样式 tblPr 容器复用本表，pub(super)）。
+pub(super) const TBLPR_ELEMENTS: [&str; 17] = [
     "tblStyle", "tblpPr", "tblOverlap", "bidiVisual", "tblStyleRowBandSize",
     "tblStyleColBandSize", "tblW", "jc", "tblCellSpacing", "tblInd",
     "tblBorders", "shd", "tblLayout", "tblCellMar", "tblLook",
@@ -381,6 +398,10 @@ pub struct AppliedOp {
     /// set_style 读到成功，误判为「工具没生效」，转而回滚已正确的文档
     #[serde(skip_serializing_if = "Option::is_none")]
     pub style_unchanged: Option<bool>,
+    /// 定义部件操作（styles/numbering）专用：操作定位串（如
+    /// `style 'heading 1' pPr/spacing`），块级操作 None（序列化省略）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
 }
 
 /// 组合入口（工具层消费）：docx 字节 + 操作批 → 新 docx 字节 + 摘要。
@@ -394,7 +415,7 @@ pub fn apply_edits_to_bytes(bytes: &[u8], ops: &[EditOp]) -> AppResult<(Vec<u8>,
         None => Stylesheet::empty(),
     };
     let (new_xml, applied) = apply_edits(&xml, &styles, ops)?;
-    let out = repack_document(bytes, &new_xml)?;
+    let out = repack_part(bytes, "word/document.xml", &new_xml)?;
     Ok((out, applied))
 }
 
@@ -435,6 +456,25 @@ pub(super) fn apply_edits(
     // 同块「先增行后填格」合法——寻址按批内输入序生效，结构与格数继承模板行
     let mut table_state: HashMap<usize, (Vec<usize>, Vec<Option<usize>>)> = HashMap::new();
     for op in ops {
+        // ClearBody 不寻址块——先于块号提取处理（独占一批 + 块数指纹）
+        if let EditOp::ClearBody { expect_blocks } = op {
+            if ops.len() != 1 {
+                return Err(AppError::Validation(
+                    "同一批多操作: clear_body 须独占一批（清空后一切块号失效，\
+                     与其他操作组合必然寻址错乱）。请拆批：先 clear_body，\
+                     再重新 inspect_docx 寻址写入。".into(),
+                ));
+            }
+            if *expect_blocks != model.body.len() {
+                return Err(AppError::Validation(format!(
+                    "指纹不符: 文档当前共 {} 块，expect_blocks={expect_blocks}。\
+                     文档可能已被其他编辑改动——请先用 inspect_docx outline \
+                     复核块数再重试。",
+                    model.body.len()
+                )));
+            }
+            continue;
+        }
         let block = *match op {
             EditOp::ReplaceText { block, .. }
             | EditOp::InsertParagraphAfter { block, .. }
@@ -449,6 +489,8 @@ pub(super) fn apply_edits(
             | EditOp::SetTableElement { block, .. }
             | EditOp::MergeCells { block, .. }
             | EditOp::SplitCell { block, .. } => block,
+            // clear_body 无块寻址（上文 if-let 已 continue，此 match 不会遇到）
+            EditOp::ClearBody { .. } => unreachable!("clear_body 已在上文 continue"),
         };
         if block == 0 || block > spans.len() {
             return Err(AppError::Validation(format!(
@@ -630,8 +672,27 @@ pub(super) fn apply_edits(
                     validate_fragment(element, x, "ppr")?;
                 }
             }
-            EditOp::InsertTableAfter { rows, .. } => {
+            EditOp::InsertTableAfter { rows, table_style, .. } => {
                 validate_table_rows(rows)?;
+                if let Some(s) = table_style {
+                    if styles.table_style_id(s).is_none() {
+                        if styles.id_of(s).is_some() {
+                            return Err(AppError::Validation(format!(
+                                "类型不符: 样式 {:?} 存在但不是表样式（w:type=table 的样式才能\
+                                 挂在表上）。表样式清单用 inspect_docx projection=styles 的 \
+                                 type 列筛选。",
+                                s
+                            )));
+                        }
+                        return Err(AppError::Validation(format!(
+                            "未知样式: {:?} 不在本文档样式表中。可用样式（前 20）: {}。\
+                             表样式清单用 inspect_docx projection=styles 的 type 列筛选；\
+                             或省略 table_style 用默认全边框样式。",
+                            s,
+                            styles.display_names_joined(20)
+                        )));
+                    }
+                }
             }
             EditOp::SetCellText { row, cell, .. } => {
                 if has_revision(&model.body[idx]) {
@@ -803,7 +864,9 @@ pub(super) fn apply_edits(
                     validate_fragment(element, x, "tblpr")?;
                 }
             }
-            EditOp::MergeCells { direction, row, cell, span, .. } => {
+            // clear_body 已在上文 continue——本 match 只覆盖寻址类操作
+            EditOp::ClearBody { .. } => unreachable!("clear_body 已在上文 continue"),
+            EditOp::MergeCells { direction, row, cell, span, end_row, end_cell, .. } => {
                 let Block::Table(t) = &model.body[idx] else {
                     return Err(AppError::Validation(format!(
                         "非表格块: 块 {block} 是段落，merge_cells 只作用于表格块。"
@@ -815,78 +878,163 @@ pub(super) fn apply_edits(
                          请先在 Word 中接受或拒绝修订后再编辑该表。"
                     )));
                 }
-                let span = span.unwrap_or(2);
-                if span < 2 {
-                    return Err(AppError::Validation(format!(
-                        "合并跨度无效: span={span}（≥2 才构成合并）。拆分已有合并用 split_cell。"
-                    )));
-                }
-                match direction {
-                    MergeDirection::Horizontal => {
-                        let r = row_bounds(t, *row)?;
-                        if *cell == 0 || cell + span - 1 > r.cells.len() {
+                let is_rect = end_row.is_some() || end_cell.is_some();
+                match (is_rect, direction, span) {
+                    // 矩形区形态：end_row+end_cell 同给，且不得带 direction/span
+                    (true, Some(_), _) | (true, _, Some(_)) => {
+                        return Err(AppError::Validation(
+                            "参数冲突: 矩形合并（end_row+end_cell）不接受 direction/span。\
+                             简单线并用 direction+span，矩形区用 end_row+end_cell，二选一。".into(),
+                        ));
+                    }
+                    (true, None, None) => {
+                        let (Some(er), Some(ec)) = (*end_row, *end_cell) else {
+                            return Err(AppError::Validation(
+                                "参数缺失: 矩形合并须同时给 end_row 与 end_cell（区域右下角，\
+                                 与 (row,cell) 左上角配对）。".into(),
+                            ));
+                        };
+                        if er < *row || ec < *cell || (er == *row && ec == *cell) {
                             return Err(AppError::Validation(format!(
-                                "合并跨度无效: 第 {} 行从格 {} 起横并 {span} 格越界（该行共 {} 格，\
-                                 1-based，跨列格占 1 个序号）。网格视图用 inspect_docx projection=table。",
-                                row, cell, r.cells.len()
+                                "合并区域无效: ({row},{cell})..({er},{ec}) 不构成 ≥2 格的区域\
+                                 （end_row/end_cell 不得小于左上角，且区域至少 2 格）。\
+                                 网格视图用 inspect_docx projection=table。"
                             )));
                         }
-                        for c in &r.cells[*cell - 1..*cell - 1 + span] {
-                            if c.v_merge.is_some() {
-                                return Err(AppError::Validation(
-                                    "合并结构冲突: 范围内含纵向合并格（(合并头)/(续) 标记），\
-                                     横并向其扩展会破坏下方网格对齐。先 split_cell 拆纵并，或换不含合并格的范围。"
-                                        .into(),
-                                ));
+                        if er > t.rows.len() {
+                            return Err(AppError::Validation(format!(
+                                "合并区域无效: end_row={er} 越界（该表共 {} 行，1-based）。",
+                                t.rows.len()
+                            )));
+                        }
+                        // 各行区域检查 + 网格列区间对齐（纵并判据 = 同网格列区间）
+                        let mut anchor: Option<(u32, u32)> = None; // (前缀网格 g0, 区域网格宽)
+                        for r in *row..=er {
+                            let r_model = &t.rows[r - 1];
+                            if ec > r_model.cells.len() {
+                                return Err(AppError::Validation(format!(
+                                    "合并区域无效: 第 {r} 行共 {} 格，end_cell={ec} 越界。\
+                                     网格视图用 inspect_docx projection=table。",
+                                    r_model.cells.len()
+                                )));
                             }
-                            if c.blocks.iter().any(|b| matches!(b, Block::Table(_))) {
-                                return Err(AppError::Validation(
-                                    "合并结构冲突: 范围内含嵌套表，暂不支持。".into(),
-                                ));
+                            for c in &r_model.cells[*cell - 1..ec] {
+                                if c.v_merge.is_some() {
+                                    return Err(AppError::Validation(format!(
+                                        "合并结构冲突: 第 {r} 行区域内含纵向合并格（(合并头)/(续) 标记），\
+                                         向其扩展会破坏下方网格对齐。先 split_cell 拆纵并，或换不含合并格的区域。"
+                                    )));
+                                }
+                                if c.blocks.iter().any(|b| matches!(b, Block::Table(_))) {
+                                    return Err(AppError::Validation(format!(
+                                        "合并结构冲突: 第 {r} 行区域内含嵌套表，暂不支持。"
+                                    )));
+                                }
+                            }
+                            let (g0, _) = grid_range_of(r_model, *cell);
+                            let w: u32 = r_model.cells[*cell - 1..ec]
+                                .iter()
+                                .map(|c| c.grid_span.unwrap_or(1))
+                                .sum();
+                            match anchor {
+                                None => anchor = Some((g0, w)),
+                                Some((h0, hw)) if h0 == g0 && hw == w => {}
+                                Some(_) => {
+                                    return Err(AppError::Validation(
+                                        "合并结构冲突: 各行区域边界的网格列不对齐（跨列格布局不同），\
+                                         无法合并成矩形。Word 同样拒绝这种合并。".into(),
+                                    ));
+                                }
                             }
                         }
                     }
-                    MergeDirection::Vertical => {
-                        if *row == 0 || row + span - 1 > t.rows.len() {
+                    (false, None, None) => {
+                        return Err(AppError::Validation(
+                            "参数缺失: merge_cells 须给 direction（简单线并：horizontal/vertical \
+                             + 可选 span）或 end_row+end_cell（矩形区域），二选一。".into(),
+                        ));
+                    }
+                    (false, None, Some(_)) => {
+                        return Err(AppError::Validation(
+                            "参数冲突: span 须与 direction 同用（简单线并）。矩形区合并\
+                             请改用 end_row+end_cell（不带 span）。".into(),
+                        ));
+                    }
+                    (false, Some(dir), sp) => {
+                        let span = sp.unwrap_or(2);
+                        if span < 2 {
                             return Err(AppError::Validation(format!(
-                                "合并跨度无效: 第 {} 行起纵并 {span} 行越界（该表共 {} 行，1-based）。",
-                                row, t.rows.len()
+                                "合并跨度无效: span={span}（≥2 才构成合并）。拆分已有合并用 split_cell。"
                             )));
                         }
-                        let head = row_bounds(t, *row)?;
-                        if *cell == 0 || *cell > head.cells.len() {
-                            return Err(AppError::Validation(format!(
-                                "单元格越界: 块 {block} 第 {row} 行第 {cell} 格不存在（该行共 {} 格）。\
-                                 网格视图用 inspect_docx projection=table。",
-                                head.cells.len()
-                            )));
-                        }
-                        if head.cells[*cell - 1].v_merge.as_deref() == Some("continue") {
-                            return Err(AppError::Validation(format!(
-                                "纵向合并续格: 块 {block} 第 {row} 行第 {cell} 格是续格（(续)），\
-                                 请对该列上方带「(合并头)」标记的格执行合并。"
-                            )));
-                        }
-                        if head.cells[*cell - 1].blocks.iter().any(|b| matches!(b, Block::Table(_))) {
-                            return Err(AppError::Validation(
-                                "合并结构冲突: 首格含嵌套表，暂不支持。".into(),
-                            ));
-                        }
-                        let (g0, g1) = grid_range_of(head, *cell);
-                        for r2 in *row + 1..=*row + span - 1 {
-                            let r_model = &t.rows[r2 - 1];
-                            match cell_at_grid_range(r_model, g0, g1) {
-                                None => {
+                        match dir {
+                            MergeDirection::Horizontal => {
+                                let r = row_bounds(t, *row)?;
+                                if *cell == 0 || cell + span - 1 > r.cells.len() {
                                     return Err(AppError::Validation(format!(
-                                        "合并结构冲突: 第 {r2} 行该列的格边界不对齐（跨列格布局不同），\
-                                         无法纵向合并。Word 同样拒绝这种合并。"
+                                        "合并跨度无效: 第 {} 行从格 {} 起横并 {span} 格越界（该行共 {} 格，\
+                                         1-based，跨列格占 1 个序号）。网格视图用 inspect_docx projection=table。",
+                                        row, cell, r.cells.len()
                                     )));
                                 }
-                                Some(c) => {
+                                for c in &r.cells[*cell - 1..*cell - 1 + span] {
+                                    if c.v_merge.is_some() {
+                                        return Err(AppError::Validation(
+                                            "合并结构冲突: 范围内含纵向合并格（(合并头)/(续) 标记），\
+                                             横并向其扩展会破坏下方网格对齐。先 split_cell 拆纵并，或换不含合并格的范围。"
+                                                .into(),
+                                        ));
+                                    }
                                     if c.blocks.iter().any(|b| matches!(b, Block::Table(_))) {
-                                        return Err(AppError::Validation(format!(
-                                            "合并结构冲突: 第 {r2} 行该列含嵌套表，暂不支持。"
-                                        )));
+                                        return Err(AppError::Validation(
+                                            "合并结构冲突: 范围内含嵌套表，暂不支持。".into(),
+                                        ));
+                                    }
+                                }
+                            }
+                            MergeDirection::Vertical => {
+                                if *row == 0 || row + span - 1 > t.rows.len() {
+                                    return Err(AppError::Validation(format!(
+                                        "合并跨度无效: 第 {} 行起纵并 {span} 行越界（该表共 {} 行，1-based）。",
+                                        row, t.rows.len()
+                                    )));
+                                }
+                                let head = row_bounds(t, *row)?;
+                                if *cell == 0 || *cell > head.cells.len() {
+                                    return Err(AppError::Validation(format!(
+                                        "单元格越界: 块 {block} 第 {row} 行第 {cell} 格不存在（该行共 {} 格）。\
+                                         网格视图用 inspect_docx projection=table。",
+                                        head.cells.len()
+                                    )));
+                                }
+                                if head.cells[*cell - 1].v_merge.as_deref() == Some("continue") {
+                                    return Err(AppError::Validation(format!(
+                                        "纵向合并续格: 块 {block} 第 {row} 行第 {cell} 格是续格（(续)），\
+                                         请对该列上方带「(合并头)」标记的格执行合并。"
+                                    )));
+                                }
+                                if head.cells[*cell - 1].blocks.iter().any(|b| matches!(b, Block::Table(_))) {
+                                    return Err(AppError::Validation(
+                                        "合并结构冲突: 首格含嵌套表，暂不支持。".into(),
+                                    ));
+                                }
+                                let (g0, g1) = grid_range_of(head, *cell);
+                                for r2 in *row + 1..=*row + span - 1 {
+                                    let r_model = &t.rows[r2 - 1];
+                                    match cell_at_grid_range(r_model, g0, g1) {
+                                        None => {
+                                            return Err(AppError::Validation(format!(
+                                                "合并结构冲突: 第 {r2} 行该列的格边界不对齐（跨列格布局不同），\
+                                                 无法纵向合并。Word 同样拒绝这种合并。"
+                                            )));
+                                        }
+                                        Some(c) => {
+                                            if c.blocks.iter().any(|b| matches!(b, Block::Table(_))) {
+                                                return Err(AppError::Validation(format!(
+                                                    "合并结构冲突: 第 {r2} 行该列含嵌套表，暂不支持。"
+                                                )));
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -987,6 +1135,7 @@ pub(super) fn apply_edits(
                         after: truncate(&after, 60),
                         style: None,
                         style_unchanged: None,
+                        target: None,
                     }],
                 });
             }
@@ -1005,6 +1154,7 @@ pub(super) fn apply_edits(
                         after: truncate(&text, 60),
                         style: None,
                         style_unchanged: None,
+                        target: None,
                     }],
                 });
             }
@@ -1021,6 +1171,7 @@ pub(super) fn apply_edits(
                         after: String::new(),
                         style: None,
                         style_unchanged: None,
+                        target: None,
                     }],
                 });
             }
@@ -1051,6 +1202,7 @@ pub(super) fn apply_edits(
                         after: projected, // 文本不变；样式见 style 字段
                         style: Some(style_id.to_string()),
                         style_unchanged: already.then_some(true),
+                        target: None,
                     }],
                 });
             }
@@ -1082,6 +1234,7 @@ pub(super) fn apply_edits(
                         after: truncate(&describe_formats(paragraph.as_ref(), character.as_ref()), 60),
                         style: None,
                         style_unchanged: None,
+                        target: None,
                     }],
                 });
             }
@@ -1122,17 +1275,28 @@ pub(super) fn apply_edits(
                         after,
                         style: None,
                         style_unchanged: None,
+                        target: None,
                     }],
                 });
             }
-            EditOp::InsertTableAfter { block, rows, header, .. } => {
+            EditOp::InsertTableAfter { block, rows, header, table_style, .. } => {
                 let span = spans[block - 1];
-                let new_tbl = build_table_xml(&rows, header.unwrap_or(true), content_width_twips(&model));
-                let after = format!(
+                // 预检已验存在 + 类型；此处取 ID 挂 tblStyle（批内样式表不可变，无 TOCTOU）
+                let style_id = table_style.as_deref().and_then(|s| styles.table_style_id(s));
+                let new_tbl = build_table_xml(
+                    &rows,
+                    header.unwrap_or(true),
+                    style_id,
+                    content_width_twips(&model),
+                );
+                let mut after = format!(
                     "{}行×{}列 表",
                     rows.len(),
                     rows.first().map(|r| r.len()).unwrap_or(0)
                 );
+                if let Some(s) = &table_style {
+                    after.push_str(&format!("（表样式 {s}）"));
+                }
                 plan.push(Splice {
                     pos: span.end, // 锚块末尾插入
                     remove_end: span.end,
@@ -1144,6 +1308,7 @@ pub(super) fn apply_edits(
                         after,
                         style: None,
                         style_unchanged: None,
+                        target: None,
                     }],
                 });
             }
@@ -1176,6 +1341,7 @@ pub(super) fn apply_edits(
                     after: truncate(&text, 60),
                     style: None,
                     style_unchanged: None,
+                    target: None,
                 });
             }
             EditOp::InsertTableRowAfter { block, after_row, cells, .. } => {
@@ -1212,6 +1378,7 @@ pub(super) fn apply_edits(
                     after,
                     style: None,
                     style_unchanged: None,
+                    target: None,
                 });
             }
             EditOp::SetCellFormat { block, row, cell, paragraph, character, .. } => {
@@ -1243,6 +1410,7 @@ pub(super) fn apply_edits(
                     after: truncate(&describe_formats(paragraph.as_ref(), character.as_ref()), 60),
                     style: None,
                     style_unchanged: None,
+                    target: None,
                 });
             }
             EditOp::SetTableElement { block, level, row, cell, element, xml: frag, .. } => {
@@ -1288,13 +1456,14 @@ pub(super) fn apply_edits(
                     after,
                     style: None,
                     style_unchanged: None,
+                    target: None,
                 });
             }
-            EditOp::MergeCells { block, direction, row, cell, span: mspan, .. } => {
+            EditOp::MergeCells { block, direction, row, cell, span: mspan, end_row, end_cell, .. } => {
                 let span = spans[block - 1];
                 let block_xml = &xml[span.start..span.end];
                 let (new_xml, summary) =
-                    merge_cells_xml(block_xml, direction, row, cell, mspan.unwrap_or(2))
+                    merge_cells_xml(block_xml, direction, row, cell, mspan, end_row, end_cell)
                         .ok_or_else(|| AppError::Internal(format!(
                             "合并手术失败: 块 {block} XML 形态异常（内部 bug，未写盘）"
                         )))?;
@@ -1309,6 +1478,7 @@ pub(super) fn apply_edits(
                         after: summary,
                         style: None,
                         style_unchanged: None,
+                        target: None,
                     }],
                 });
             }
@@ -1330,6 +1500,40 @@ pub(super) fn apply_edits(
                         after: summary,
                         style: None,
                         style_unchanged: None,
+                        target: None,
+                    }],
+                });
+            }
+            EditOp::ClearBody { .. } => {
+                // 单 splice 覆盖 [首块起点, 末块终点)，保留块原字节回填——
+                // 含 sectPr 的块（节属性载体）不动，其余全删。独占一批（预检已验）。
+                let kept: String = spans
+                    .iter()
+                    .map(|s| &xml[s.start..s.end])
+                    .filter(|b| b.contains("<w:sectPr"))
+                    .collect();
+                let kept_n = spans
+                    .iter()
+                    .filter(|s| xml[s.start..s.end].contains("<w:sectPr"))
+                    .count();
+                let deleted_n = spans.len() - kept_n;
+                let (pos, remove_end) = match (spans.first(), spans.last()) {
+                    (Some(f), Some(l)) => (f.start, l.end),
+                    // 空 body：无块可清——no-op splice 仍出摘要（applied 计数一致）
+                    _ => (xml.len(), xml.len()),
+                };
+                plan.push(Splice {
+                    pos,
+                    remove_end,
+                    insert: kept,
+                    summaries: vec![AppliedOp {
+                        op: "clear_body",
+                        block: 0,
+                        before: format!("{} 块", spans.len()),
+                        after: format!("清空（删 {deleted_n} 块，保留 {kept_n} 个节属性块）"),
+                        style: None,
+                        style_unchanged: None,
+                        target: None,
                     }],
                 });
             }
@@ -1356,7 +1560,15 @@ pub(super) fn apply_edits(
         .filter(|o| matches!(o, EditOp::InsertParagraphAfter { .. } | EditOp::InsertTableAfter { .. }))
         .count();
     let deleted = ops.iter().filter(|o| matches!(o, EditOp::DeleteBlock { .. })).count();
-    let expect_blocks = model.body.len() + inserted - deleted;
+    let expect_blocks = if ops.iter().any(|o| matches!(o, EditOp::ClearBody { .. })) {
+        // 独占一批：清空后 = 含 sectPr 的保留块数
+        spans
+            .iter()
+            .filter(|s| xml[s.start..s.end].contains("<w:sectPr"))
+            .count()
+    } else {
+        model.body.len() + inserted - deleted
+    };
     if model2.body.len() != expect_blocks {
         return Err(AppError::Internal(format!(
             "手术后块数校验失败: 期望 {expect_blocks} 块，实际 {} 块（内部 bug，未写盘）",
@@ -1383,6 +1595,8 @@ fn expect_prefix_of(op: &EditOp) -> &str {
         | EditOp::SetTableElement { expect_prefix, .. }
         | EditOp::MergeCells { expect_prefix, .. }
         | EditOp::SplitCell { expect_prefix, .. } => expect_prefix,
+        // ClearBody 无文本前缀——指纹走块数（预检先于本函数处理并 continue）
+        EditOp::ClearBody { .. } => "",
     }
 }
 
@@ -1727,7 +1941,7 @@ fn describe_formats(para: Option<&ParaFormat>, ch: Option<&CharFormat>) -> Strin
 /// 在 `s` 中找名为 `w:{name}` 的元素字节区间（`[start, end)`，自闭合或配对形式）。
 /// 撞名前缀（找 w:b 会先撞 w:bCs / w:bdr）按「后随字符是字母则跳过继续找」排除。
 /// None = 不存在。
-fn find_element_span(s: &str, name: &str) -> Option<(usize, usize)> {
+pub(super) fn find_element_span(s: &str, name: &str) -> Option<(usize, usize)> {
     let pat = format!("<w:{name}");
     let mut from = 0usize;
     loop {
@@ -1752,7 +1966,7 @@ fn find_element_span(s: &str, name: &str) -> Option<(usize, usize)> {
 }
 
 /// 解析元素开标签的属性表（`name="value"` 对；仅到首个 '>'）。
-fn parse_attrs(el: &str) -> Vec<(String, String)> {
+pub(super) fn parse_attrs(el: &str) -> Vec<(String, String)> {
     let gt = el.find('>').unwrap_or(el.len());
     let tag = &el[..gt];
     let mut out = Vec::new();
@@ -1777,7 +1991,7 @@ fn parse_attrs(el: &str) -> Vec<(String, String)> {
 }
 
 /// 由属性表构造标准自闭合标签（属性序 = 传入序）。
-fn build_tag(name: &str, attrs: &[(String, String)]) -> String {
+pub(super) fn build_tag(name: &str, attrs: &[(String, String)]) -> String {
     if attrs.is_empty() {
         return format!("<w:{name}/>");
     }
@@ -1801,7 +2015,7 @@ fn attr_remove(attrs: &mut Vec<(String, String)>, key: &str) {
 /// - 已存在 → 整元素替换为 `new_tag`
 /// - 不存在 → 插到 `later`（schema 序中排在后面的兄弟元素名）最早出现处之前，
 ///   或 `end_marker`（如 `</w:pPr>`）之前
-fn upsert_element(parent: &str, name: &str, new_tag: &str, later: &[&str], end_marker: &str) -> String {
+pub(super) fn upsert_element(parent: &str, name: &str, new_tag: &str, later: &[&str], end_marker: &str) -> String {
     if let Some((s, e)) = find_element_span(parent, name) {
         return format!("{}{new_tag}{}", &parent[..s], &parent[e..]);
     }
@@ -2005,7 +2219,7 @@ fn reformat_ppr(block_xml: &str, p: &ParaFormat) -> Option<String> {
 /// - 不得内嵌 sectPr/pPrChange（受保护元素防夹带）
 ///
 /// `source_hint` = 抄原文的投影档位名（报错指路用）。
-fn validate_fragment(element: &str, xml: &str, source_hint: &str) -> AppResult<()> {
+pub(super) fn validate_fragment(element: &str, xml: &str, source_hint: &str) -> AppResult<()> {
     if xml.contains("xmlns") {
         return Err(AppError::Validation(
             "片段校验失败: 不得携带 xmlns 声明（w 前缀已在文档根声明）。请去掉 xmlns 属性。".into(),
@@ -2351,7 +2565,7 @@ fn escape_into(text: &str, out: &mut String) {
     }
 }
 
-fn truncate(s: &str, max_chars: usize) -> String {
+pub(super) fn truncate(s: &str, max_chars: usize) -> String {
     if s.chars().count() <= max_chars {
         s.to_string()
     } else {
@@ -2421,12 +2635,18 @@ fn content_width_twips(model: &docx_model::DocxDocument) -> u32 {
 }
 
 /// 建整表 XML：tblW pct 5000（100% 宽）+ 全边框 single sz=4 + 列宽均分；
-/// header=true 时首行加粗 + tblHeader（跨页重复表头）。
-fn build_table_xml(rows: &[Vec<String>], header: bool, width_tw: u32) -> String {
+/// header=true 时首行加粗 + tblHeader（跨页重复表头）。style_id 给定时 tblPr
+/// 首位注 `<w:tblStyle>`（CT_TblPrBase schema 首子元素——用户模板表样式优先于
+/// 默认边框，Word 按样式定义渲染条纹带/边框）。
+fn build_table_xml(rows: &[Vec<String>], header: bool, style_id: Option<&str>, width_tw: u32) -> String {
     let cols = rows.first().map(|r| r.len()).unwrap_or(1).max(1);
     let col_w = (width_tw / cols as u32).max(200);
     let mut s = String::with_capacity(64 + rows.len() * cols * 48);
-    s.push_str(r#"<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:tblBorders>"#);
+    s.push_str(r#"<w:tbl><w:tblPr>"#);
+    if let Some(sid) = style_id {
+        s.push_str(&format!(r#"<w:tblStyle w:val="{sid}"/>"#));
+    }
+    s.push_str(r#"<w:tblW w:w="5000" w:type="pct"/><w:tblBorders>"#);
     for side in ["top", "left", "bottom", "right", "insideH", "insideV"] {
         s.push_str(&format!(
             r#"<w:{side} w:val="single" w:sz="4" w:space="0" w:color="auto"/>"#
@@ -2858,115 +3078,163 @@ fn xml_cell_span_at_grid_range(
     None
 }
 
-/// merge_cells 手术（Word 原生语义）：
-/// - 横并：首格 tcPr upsert gridSpan=各格跨度之和；全部格内容（各自去 tcPr）
-///   按序拼进首格；其余格整段删除
-/// - 纵并：首格 upsert `<w:vMerge w:val="restart"/>`，后续行同网格列区间的格
-///   upsert `<w:vMerge/>`（continue）；内容原样保留（拆分即恢复显示）
-fn merge_cells_xml(
+/// 简单横并原语（merge_cells 线并形态与矩形区的逐行步骤共用）：
+/// 第 row 行 display 格 cell..cell+span-1 并 1 格——首格 tcPr upsert
+/// gridSpan=各格跨度之和；全部格内容（各自去 tcPr）按序拼进首格；其余格整段删除。
+fn merge_horizontal_xml(
     block_xml: &str,
-    direction: MergeDirection,
     row: usize,
     cell: usize,
     span: usize,
+) -> Option<(String, u32)> {
+    let (rs, re) = row_span_of(block_xml, row)?;
+    let row_xml = &block_xml[rs..re];
+    let cells = direct_children_spans(row_xml, "tc");
+    let first = cell.checked_sub(1)?;
+    let last = first.checked_add(span.checked_sub(1)?)?;
+    let range = cells.get(first..=last)?.to_vec();
+    let sum: u32 = range
+        .iter()
+        .map(|(s, e)| xml_grid_span(&row_xml[*s..*e]))
+        .sum();
+    // 首格容器手术 upsert gridSpan；内容 = 各格 inner（去 tcPr）按序拼接
+    let head_xml = &row_xml[range[0].0..range[0].1];
+    let (new_head, _) = set_container_element_xml(
+        head_xml,
+        "tcPr",
+        "gridSpan",
+        Some(&format!(r#"<w:gridSpan w:val="{sum}"/>"#)),
+        &TCPR_ELEMENTS,
+    )?;
+    let mut content = String::new();
+    for (s, e) in &range {
+        let cxml = &row_xml[*s..*e];
+        let open_end = cxml.find('>')? + 1;
+        let from = find_element_span(cxml, "tcPr")
+            .map(|(_, te)| te)
+            .unwrap_or(open_end);
+        content.push_str(&cxml[from..cxml.len().saturating_sub("</w:tc>".len())]);
+    }
+    let open_end = head_xml.find('>')? + 1;
+    let (ts, te) = find_element_span(&new_head, "tcPr")?; // upsert 后必在
+    let merged = format!(
+        "{}{}{}</w:tc>",
+        &head_xml[..open_end],
+        &new_head[ts..te],
+        content
+    );
+    let new_row = format!(
+        "{}{merged}{}",
+        &row_xml[..range[0].0],
+        &row_xml[range[last - first].1..]
+    );
+    Some((
+        format!("{}{new_row}{}", &block_xml[..rs], &block_xml[re..]),
+        sum,
+    ))
+}
+
+/// 简单纵并原语：首格 (row,cell) 起同网格列区间 span 行——首格 upsert
+/// `<w:vMerge w:val="restart"/>`，后续行同网格列区间的格 upsert `<w:vMerge/>`
+/// （continue）；内容原样保留（拆分即恢复显示）。
+fn merge_vertical_xml(block_xml: &str, row: usize, cell: usize, span: usize) -> Option<String> {
+    let (hrs, hre) = row_span_of(block_xml, row)?;
+    let head_row_xml = &block_xml[hrs..hre];
+    let head_cells = direct_children_spans(head_row_xml, "tc");
+    let (hcs, hce) = *head_cells.get(cell.checked_sub(1)?)?;
+    // 首格网格区间 [g0, g1)（对齐判据）
+    let mut g0 = 0u32;
+    for (s, e) in head_cells.iter().take(cell - 1) {
+        g0 += xml_grid_span(&head_row_xml[*s..*e]);
+    }
+    let g1 = g0 + xml_grid_span(&head_row_xml[hcs..hce]);
+    // 逐行容器手术（行 span 互不重叠，按原偏移重组）
+    let mut fixed: Vec<(usize, usize, String)> = Vec::new();
+    for i in 0..span {
+        let r = row + i;
+        let (rs2, re2) = row_span_of(block_xml, r)?;
+        let row_xml = &block_xml[rs2..re2];
+        let (cs2, ce2) = xml_cell_span_at_grid_range(row_xml, g0, g1)?;
+        let frag = if i == 0 {
+            r#"<w:vMerge w:val="restart"/>"#
+        } else {
+            "<w:vMerge/>"
+        };
+        let (new_cell, _) = set_container_element_xml(
+            &row_xml[cs2..ce2],
+            "tcPr",
+            "vMerge",
+            Some(frag),
+            &TCPR_ELEMENTS,
+        )?;
+        fixed.push((
+            rs2,
+            re2,
+            format!("{}{new_cell}{}", &row_xml[..cs2], &row_xml[ce2..]),
+        ));
+    }
+    let mut out = String::with_capacity(block_xml.len() + 64);
+    let mut cursor = 0usize;
+    for (rs2, re2, nr) in fixed {
+        out.push_str(&block_xml[cursor..rs2]);
+        out.push_str(&nr);
+        cursor = re2;
+    }
+    out.push_str(&block_xml[cursor..]);
+    Some(out)
+}
+
+/// merge_cells 手术（Word 原生语义，两形态）：
+/// - 简单线并（direction+span）：横并原语或纵并原语单发
+/// - 矩形区（end_row+end_cell）：逐行横并（行互不重叠，倒序保原始偏移）→
+///   结果列纵并——Word 合并区域 UX 同款，一次调用完成多行多列合并
+fn merge_cells_xml(
+    block_xml: &str,
+    direction: Option<MergeDirection>,
+    row: usize,
+    cell: usize,
+    span: Option<usize>,
+    end_row: Option<usize>,
+    end_cell: Option<usize>,
 ) -> Option<(String, String)> {
-    match direction {
-        MergeDirection::Horizontal => {
-            let (rs, re) = row_span_of(block_xml, row)?;
-            let row_xml = &block_xml[rs..re];
-            let cells = direct_children_spans(row_xml, "tc");
-            let first = cell.checked_sub(1)?;
-            let last = first.checked_add(span.checked_sub(1)?)?;
-            let range = cells.get(first..=last)?.to_vec();
-            let sum: u32 = range
-                .iter()
-                .map(|(s, e)| xml_grid_span(&row_xml[*s..*e]))
-                .sum();
-            // 首格容器手术 upsert gridSpan；内容 = 各格 inner（去 tcPr）按序拼接
-            let head_xml = &row_xml[range[0].0..range[0].1];
-            let (new_head, _) = set_container_element_xml(
-                head_xml,
-                "tcPr",
-                "gridSpan",
-                Some(&format!(r#"<w:gridSpan w:val="{sum}"/>"#)),
-                &TCPR_ELEMENTS,
-            )?;
-            let mut content = String::new();
-            for (s, e) in &range {
-                let cxml = &row_xml[*s..*e];
-                let open_end = cxml.find('>')? + 1;
-                let from = find_element_span(cxml, "tcPr")
-                    .map(|(_, te)| te)
-                    .unwrap_or(open_end);
-                content.push_str(&cxml[from..cxml.len().saturating_sub("</w:tc>".len())]);
+    match (end_row, end_cell) {
+        (Some(er), Some(ec)) => {
+            let width = ec - cell + 1;
+            let rows_n = er - row + 1;
+            let mut out = block_xml.to_string();
+            if ec > cell {
+                for r in (row..=er).rev() {
+                    let (next, _) = merge_horizontal_xml(&out, r, cell, width)?;
+                    out = next;
+                }
             }
-            let open_end = head_xml.find('>')? + 1;
-            let (ts, te) = find_element_span(&new_head, "tcPr")?; // upsert 后必在
-            let merged = format!(
-                "{}{}{}</w:tc>",
-                &head_xml[..open_end],
-                &new_head[ts..te],
-                content
-            );
-            let new_row = format!(
-                "{}{merged}{}",
-                &row_xml[..range[0].0],
-                &row_xml[range[last - first].1..]
-            );
-            let out = format!("{}{new_row}{}", &block_xml[..rs], &block_xml[re..]);
+            if er > row {
+                out = merge_vertical_xml(&out, row, cell, rows_n)?;
+            }
             Some((
                 out,
-                format!("r{row} c{cell} 起横并 {span} 格（跨 {sum} 列，内容已按序拼接）"),
+                format!("r{row}c{cell}..r{er}c{ec} 矩形合并（{width} 格宽 × {rows_n} 行）"),
             ))
         }
-        MergeDirection::Vertical => {
-            let (hrs, hre) = row_span_of(block_xml, row)?;
-            let head_row_xml = &block_xml[hrs..hre];
-            let head_cells = direct_children_spans(head_row_xml, "tc");
-            let (hcs, hce) = *head_cells.get(cell.checked_sub(1)?)?;
-            // 首格网格区间 [g0, g1)（对齐判据）
-            let mut g0 = 0u32;
-            for (s, e) in head_cells.iter().take(cell - 1) {
-                g0 += xml_grid_span(&head_row_xml[*s..*e]);
+        _ => {
+            let dir = direction?; // 预检已挡缺参
+            let s = span.unwrap_or(2);
+            match dir {
+                MergeDirection::Horizontal => merge_horizontal_xml(block_xml, row, cell, s)
+                    .map(|(out, sum)| {
+                        (
+                            out,
+                            format!("r{row} c{cell} 起横并 {s} 格（跨 {sum} 列，内容已按序拼接）"),
+                        )
+                    }),
+                MergeDirection::Vertical => merge_vertical_xml(block_xml, row, cell, s)
+                    .map(|out| {
+                        (
+                            out,
+                            format!("r{row}c{cell} 起纵并 {s} 行（内容保留，split_cell 即恢复）"),
+                        )
+                    }),
             }
-            let g1 = g0 + xml_grid_span(&head_row_xml[hcs..hce]);
-            // 逐行容器手术（行 span 互不重叠，按原偏移重组）
-            let mut fixed: Vec<(usize, usize, String)> = Vec::new();
-            for i in 0..span {
-                let r = row + i;
-                let (rs2, re2) = row_span_of(block_xml, r)?;
-                let row_xml = &block_xml[rs2..re2];
-                let (cs2, ce2) = xml_cell_span_at_grid_range(row_xml, g0, g1)?;
-                let frag = if i == 0 {
-                    r#"<w:vMerge w:val="restart"/>"#
-                } else {
-                    "<w:vMerge/>"
-                };
-                let (new_cell, _) = set_container_element_xml(
-                    &row_xml[cs2..ce2],
-                    "tcPr",
-                    "vMerge",
-                    Some(frag),
-                    &TCPR_ELEMENTS,
-                )?;
-                fixed.push((
-                    rs2,
-                    re2,
-                    format!("{}{new_cell}{}", &row_xml[..cs2], &row_xml[ce2..]),
-                ));
-            }
-            let mut out = String::with_capacity(block_xml.len() + 64);
-            let mut cursor = 0usize;
-            for (rs2, re2, nr) in fixed {
-                out.push_str(&block_xml[cursor..rs2]);
-                out.push_str(&nr);
-                cursor = re2;
-            }
-            out.push_str(&block_xml[cursor..]);
-            Some((
-                out,
-                format!("r{row}c{cell} 起纵并 {span} 行（内容保留，split_cell 即恢复）"),
-            ))
         }
     }
 }
@@ -3088,9 +3356,10 @@ fn split_cell_xml(
 // 容器重打包（只换 document.xml，其余 entry 原样字节复制）
 // =========================================================================
 
-/// 重打包 docx：`word/document.xml` 替换为 `new_xml`，其余 entry 经
-/// `raw_copy_file` 原样复制（不解压重压——压缩参数与元数据不变）。
-pub(super) fn repack_document(bytes: &[u8], new_xml: &str) -> AppResult<Vec<u8>> {
+/// 重打包 docx：`part` 指定的 entry 替换为 `new_xml`（document.xml / styles.xml /
+/// numbering.xml 通用），其余 entry 经 `raw_copy_file` 原样复制（不解压重压——
+/// 压缩参数与元数据不变）。
+pub(super) fn repack_part(bytes: &[u8], part: &str, new_xml: &str) -> AppResult<Vec<u8>> {
     let cur = Cursor::new(bytes);
     let mut archive = zip::ZipArchive::new(cur)
         .map_err(|e| AppError::Internal(format!("docx 不是合法 ZIP 容器: {e}")))?;
@@ -3102,11 +3371,11 @@ pub(super) fn repack_document(bytes: &[u8], new_xml: &str) -> AppResult<Vec<u8>>
                 .by_index_raw(i)
                 .map_err(|e| AppError::Internal(format!("docx 内读取 entry 失败: {e}")))?;
             let name = entry.name().to_string();
-            if name == "word/document.xml" {
-                // 逐 entry 借用冲突：document.xml 先收名，循环外统一写
+            if name == part {
+                // 逐 entry 借用冲突：目标部件先收名，循环外统一写
                 drop(entry);
-                w.start_file("word/document.xml", zip::write::SimpleFileOptions::default())
-                    .map_err(|e| AppError::Internal(format!("重打包 document.xml 失败: {e}")))?;
+                w.start_file(part, zip::write::SimpleFileOptions::default())
+                    .map_err(|e| AppError::Internal(format!("重打包 {part} 失败: {e}")))?;
                 w.write_all(new_xml.as_bytes()).map_err(AppError::Io)?;
             } else {
                 w.raw_copy_file(entry)
@@ -4095,7 +4364,7 @@ mod tests {
         let original = cursor.into_inner();
 
         let xml = docx::read_document_xml(&original).unwrap();
-        let repacked = repack_document(&original, &xml).unwrap();
+        let repacked = repack_part(&original, "word/document.xml", &xml).unwrap();
 
         // 解包对比逐 entry 内容字节
         let mut orig_zip = zip::ZipArchive::new(Cursor::new(&original)).unwrap();
@@ -4111,7 +4380,7 @@ mod tests {
         // document.xml 替换后其余 entry 仍相等
         let new_xml = xml.replace("第一段", "改后段");
         assert_ne!(new_xml, xml);
-        let repacked2 = repack_document(&original, &new_xml).unwrap();
+        let repacked2 = repack_part(&original, "word/document.xml", &new_xml).unwrap();
         let mut new_zip2 = zip::ZipArchive::new(Cursor::new(&repacked2)).unwrap();
         for i in 0..orig_zip.len() {
             let (oname, odata) = read_entry_at(&mut orig_zip, i);
@@ -4168,6 +4437,7 @@ mod tests {
                 expect_prefix: "锚段".into(),
                 rows: vec![vec!["列一".into(), "列二".into()], vec!["1".into(), "2".into()]],
                 header: None,
+                table_style: None,
             }],
         )
         .unwrap();
@@ -4193,6 +4463,7 @@ mod tests {
                 expect_prefix: "锚段".into(),
                 rows: vec![vec!["a".into(), "b".into()]],
                 header: Some(false),
+                table_style: None,
             }],
         )
         .unwrap();
@@ -4206,6 +4477,7 @@ mod tests {
                 expect_prefix: "锚段".into(),
                 rows: vec![vec!["一\n二".into(), "b".into()]],
                 header: Some(false),
+                table_style: None,
             }],
         )
         .unwrap();
@@ -4221,7 +4493,7 @@ mod tests {
         let err = val_msg(apply_edits(
             &xml,
             &Stylesheet::empty(),
-            &[EditOp::InsertTableAfter { block: 1, expect_prefix: "锚".into(), rows: vec![], header: None }],
+            &[EditOp::InsertTableAfter { block: 1, expect_prefix: "锚".into(), rows: vec![], header: None, table_style: None }],
         ).unwrap_err());
         assert!(err.starts_with("表格数据无效"), "实际: {err}");
         // 非矩形
@@ -4233,6 +4505,7 @@ mod tests {
                 expect_prefix: "锚".into(),
                 rows: vec![vec!["a".into(), "b".into()], vec!["c".into()]],
                 header: None,
+                table_style: None,
             }],
         ).unwrap_err());
         assert!(err.starts_with("表格数据无效"), "实际: {err}");
@@ -4242,7 +4515,7 @@ mod tests {
         let err = val_msg(apply_edits(
             &xml,
             &Stylesheet::empty(),
-            &[EditOp::InsertTableAfter { block: 1, expect_prefix: "锚".into(), rows: big, header: None }],
+            &[EditOp::InsertTableAfter { block: 1, expect_prefix: "锚".into(), rows: big, header: None, table_style: None }],
         ).unwrap_err());
         assert!(err.starts_with("表格数据无效"), "实际: {err}");
         assert!(err.contains("超上限"), "实际: {err}");
@@ -4928,10 +5201,12 @@ mod tests {
             &[EditOp::MergeCells {
                 block: 1,
                 expect_prefix: "头".into(),
-                direction: MergeDirection::Vertical,
+                direction: Some(MergeDirection::Vertical),
                 row: 1,
                 cell: 1,
                 span: Some(3),
+                end_row: None,
+                end_cell: None,
             }],
         )
         .unwrap();
@@ -4962,10 +5237,12 @@ mod tests {
             &[EditOp::MergeCells {
                 block: 1,
                 expect_prefix: "甲".into(),
-                direction: MergeDirection::Vertical,
+                direction: Some(MergeDirection::Vertical),
                 row: 1,
                 cell: 1,
                 span: Some(2),
+                end_row: None,
+                end_cell: None,
             }],
         ).unwrap_err());
         assert!(err.starts_with("合并结构冲突"), "实际: {err}");
@@ -4981,10 +5258,12 @@ mod tests {
             &[EditOp::MergeCells {
                 block: 1,
                 expect_prefix: "甲一".into(),
-                direction: MergeDirection::Horizontal,
+                direction: Some(MergeDirection::Horizontal),
                 row: 1,
                 cell: 1,
                 span: Some(2),
+                end_row: None,
+                end_cell: None,
             }],
         )
         .unwrap();
@@ -5011,10 +5290,12 @@ mod tests {
             &[EditOp::MergeCells {
                 block: 1,
                 expect_prefix: "头".into(),
-                direction: MergeDirection::Vertical,
+                direction: Some(MergeDirection::Vertical),
                 row: 1,
                 cell: 1,
                 span: Some(3),
+                end_row: None,
+                end_cell: None,
             }],
         )
         .unwrap();
@@ -5050,10 +5331,12 @@ mod tests {
             &[EditOp::MergeCells {
                 block: 1,
                 expect_prefix: "甲一".into(),
-                direction: MergeDirection::Horizontal,
+                direction: Some(MergeDirection::Horizontal),
                 row: 1,
                 cell: 1,
                 span: Some(2),
+                end_row: None,
+                end_cell: None,
             }],
         )
         .unwrap();
@@ -5093,10 +5376,12 @@ mod tests {
             &[EditOp::MergeCells {
                 block: 1,
                 expect_prefix: "头".into(),
-                direction: MergeDirection::Vertical,
+                direction: Some(MergeDirection::Vertical),
                 row: 1,
                 cell: 1,
                 span: Some(1),
+                end_row: None,
+                end_cell: None,
             }],
         ).unwrap_err());
         assert!(err.starts_with("合并跨度无效"), "实际: {err}");
@@ -5107,10 +5392,12 @@ mod tests {
             &[EditOp::MergeCells {
                 block: 1,
                 expect_prefix: "头".into(),
-                direction: MergeDirection::Vertical,
+                direction: Some(MergeDirection::Vertical),
                 row: 1,
                 cell: 1,
                 span: None,
+                end_row: None,
+                end_cell: None,
             }],
         ).is_ok());
         // 纵并 onto 续格 → 指路合并头
@@ -5120,10 +5407,12 @@ mod tests {
             &[EditOp::MergeCells {
                 block: 1,
                 expect_prefix: "头".into(),
-                direction: MergeDirection::Vertical,
+                direction: Some(MergeDirection::Vertical),
                 row: 2,
                 cell: 1,
                 span: Some(2),
+                end_row: None,
+                end_cell: None,
             }],
         ).unwrap_err());
         assert!(err.starts_with("纵向合并续格"), "实际: {err}");
@@ -5161,10 +5450,12 @@ mod tests {
             &[EditOp::MergeCells {
                 block: 1,
                 expect_prefix: "头".into(),
-                direction: MergeDirection::Vertical,
+                direction: Some(MergeDirection::Vertical),
                 row: 9,
                 cell: 1,
                 span: Some(2),
+                end_row: None,
+                end_cell: None,
             }],
         ).unwrap_err());
         // 行越界归并进跨度家族（首行前缀稳定 + 报行数事实）
@@ -5184,10 +5475,12 @@ mod tests {
                 EditOp::MergeCells {
                     block: 1,
                     expect_prefix: "甲一".into(),
-                    direction: MergeDirection::Horizontal,
+                    direction: Some(MergeDirection::Horizontal),
                     row: 1,
                     cell: 1,
                     span: Some(2),
+                    end_row: None,
+                    end_cell: None,
                 },
             ],
         ).unwrap_err());
@@ -5201,10 +5494,12 @@ mod tests {
                 EditOp::MergeCells {
                     block: 1,
                     expect_prefix: "甲一".into(),
-                    direction: MergeDirection::Horizontal,
+                    direction: Some(MergeDirection::Horizontal),
                     row: 1,
                     cell: 1,
                     span: Some(2),
+                    end_row: None,
+                    end_cell: None,
                 },
                 EditOp::SetCellText { block: 1, expect_prefix: "甲一".into(), row: 1, cell: 1, text: "x".into() },
             ],
