@@ -118,6 +118,12 @@ pub struct AgentFileConfig {
     /// 对话钩子（生命周期回调，由 agent.yaml 配置；见 [`HookConfig`]）
     #[serde(default)]
     pub hooks: Option<HookConfig>,
+    /// Word 文档样式偏好（自由文字块，D12 双轨承载之一）：非空时注入
+    /// system prompt「Word 文档样式偏好」小节——agent 写 docx 时的字体/字号/
+    /// 配色/表格样式约定；不解析不校验，原文进 prompt。另一轨是 workspace
+    /// templates/ 目录约定（模板 docx 由工具层自然发现，无系统写入方）。
+    #[serde(default)]
+    pub word_style_profile: Option<String>,
 }
 
 impl AgentRow {

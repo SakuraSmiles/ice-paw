@@ -110,6 +110,11 @@ pub struct PipelineContext {
     /// delegation 子会话没有 delegate 工具，注入只会误导）。由
     /// [`SystemPromptStage`](crate::context::stages::SystemPromptStage) 追加到 system prompt。
     pub delegation_hint: Option<String>,
+    /// Word 文档样式偏好（agent.yaml `word_style_profile` 自由文字块，hooks 同款
+    /// 纯文件旁路；`session_runner` 填充）。非空时 [`SystemPromptStage`] 追加
+    /// 「Word 文档样式偏好」小节——原文注入，不解析不校验（D12 双轨承载之一，
+    /// 另一轨是 workspace templates/ 模板目录约定）。
+    pub word_style_profile: Option<String>,
 
     // ---- Stage 1: Template 渲染输出 ----
     pub rendered_system_prompt: Option<String>,
@@ -177,6 +182,7 @@ impl PipelineContext {
             api_key: None,
             emitter: None,
             delegation_hint: None,
+            word_style_profile: None,
             rendered_system_prompt: None,
             rendered_user_prefix: String::new(),
             os_context: String::new(),

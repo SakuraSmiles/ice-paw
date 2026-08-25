@@ -1,7 +1,7 @@
 ---
 title: agent.yaml 进阶配置
-summary: agent.yaml 所有字段详解：人设、温度、token 预算、历史窗口、工具轮数上限、工具白名单，以及 hooks 生命周期钩子（inject_prompt/call_tool/log）。
-tags: [agent.yaml, 配置, system_prompt, temperature, max_tokens, hooks, 钩子, 预算, tool_max_rounds, max_total_tokens, 进阶]
+summary: agent.yaml 所有字段详解：人设、温度、token 预算、历史窗口、工具轮数上限、工具白名单、hooks 生命周期钩子，以及 Word 文档样式偏好（word_style_profile + templates/ 模板目录）。
+tags: [agent.yaml, 配置, system_prompt, temperature, max_tokens, hooks, 钩子, 预算, tool_max_rounds, max_total_tokens, word_style_profile, Word, 样式, 模板, 进阶]
 ---
 
 # agent.yaml 进阶配置
@@ -27,6 +27,7 @@ tags: [agent.yaml, 配置, system_prompt, temperature, max_tokens, hooks, 钩子
 | `cache_prompt` | bool | 继承 | 开启 prompt caching（Anthropic 显式断点） |
 | `supports_vision` | bool | 继承 | 是否支持图片输入 |
 | `hooks` | map | - | 生命周期钩子（见下） |
+| `word_style_profile` | string | - | Word 文档样式偏好（见下） |
 
 ## 示例
 
@@ -70,6 +71,29 @@ hooks:
 ```
 
 > 钩子是 fail-safe 的：任何动作失败只记警告，**不会中断对话**。没配 `hooks` 则完全无开销。
+
+## word_style_profile：Word 文档样式偏好
+
+写 Word 文档（docx）时的个性化约定——**一次定义，处处生效**。非空时每个回合的 system prompt 会自动带上「Word 文档样式偏好」小节，agent 用 edit_docx / insert_table_after 等工具写文档时遵循它。
+
+**两种用法：**
+
+1. **口头提案（推荐）**：直接在对话里告诉 agent 你的偏好，比如「以后正文用宋体小四，表头深蓝底白字，标题黑体」。agent 会通过 `propose_config_change` 发起提案，你批准后偏好自动写进 agent.yaml——之后所有文档都遵循，不用每次重复。
+
+2. **手写 yaml**：直接编辑 `word_style_profile` 多行块：
+
+```yaml
+word_style_profile: |
+  正文字体：宋体小四（12pt），行距 1.5 倍。
+  标题：黑体，一级 16pt / 二级 14pt。
+  表格：表头深蓝底白字加粗，隔行浅灰底纹。
+```
+
+偏好是自由文字，不解析不校验——写清楚你关心的字体/字号/配色/表格样式即可。摘除 = 删掉这个块（或让 agent 提一次「清除 Word 样式偏好」的提案）。
+
+**配套：templates/ 模板目录**
+
+如果偏好复杂到文字描述不清（整套样式定义、页眉页脚、封面），把模板 docx 放进 workspace 的 `templates/` 目录。agent 建新文档时会先列目录发现模板，复制后用 `clear_body` 清空正文再写入——样式定义原样保留，这是「继承整套模板」的正路。`word_style_profile` 管的是「每次写内容时的格式纪律」，两条轨道互补。
 
 ## 相关
 

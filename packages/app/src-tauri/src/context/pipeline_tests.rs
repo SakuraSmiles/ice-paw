@@ -171,6 +171,73 @@ async fn system_prompt_stage_tools_enabled_appends_hint() {
     assert!(s.contains("你是助手"), "agent prompt 仍应作为基础: {s}");
 }
 
+#[tokio::test]
+async fn system_prompt_stage_word_profile_appends_section() {
+    // D12：word_style_profile 非空 → 「Word 文档样式偏好」小节 + 用户原文
+    let pool = fresh_pool().await;
+    let mut ctx = make_ctx(
+        pool,
+        make_agent(),
+        None,
+        vec![],
+        vec![ContentBlock::text("hi")],
+        false,
+    );
+    ctx.os_context = String::new();
+    ctx.word_style_profile = Some("正文宋体小四，表头深蓝底白字。".into());
+
+    SystemPromptStage.execute(&mut ctx).await.unwrap();
+    let s = ctx.system_prompt.unwrap();
+    assert!(s.contains("## Word 文档样式偏好"), "应注入小节标题: {s}");
+    assert!(s.contains("正文宋体小四，表头深蓝底白字。"), "应注入用户原文: {s}");
+    assert!(s.contains("你是助手"), "agent prompt 仍应作为基础: {s}");
+}
+
+#[tokio::test]
+async fn system_prompt_stage_word_profile_blank_not_injected() {
+    // None / 纯空白 → 不注入小节（trim 过滤；空 profile 是「没写」不是「空偏好」）
+    for profile in [None, Some("  \n ".into())] {
+        let pool = fresh_pool().await;
+        let mut ctx = make_ctx(
+            pool,
+            make_agent(),
+            None,
+            vec![],
+            vec![ContentBlock::text("hi")],
+            false,
+        );
+        ctx.os_context = String::new();
+        ctx.word_style_profile = profile;
+
+        SystemPromptStage.execute(&mut ctx).await.unwrap();
+        let s = ctx.system_prompt.unwrap();
+        assert!(!s.contains("Word 文档样式偏好"), "空白偏好不应注入: {s}");
+    }
+}
+
+#[tokio::test]
+async fn system_prompt_stage_word_profile_after_delegation_hint() {
+    // 顺位：委派清单在前、样式偏好殿后（样式偏好是文档产出纪律，语义上最靠近正文）
+    let pool = fresh_pool().await;
+    let mut ctx = make_ctx(
+        pool,
+        make_agent(),
+        None,
+        vec![],
+        vec![ContentBlock::text("hi")],
+        false,
+    );
+    ctx.os_context = String::new();
+    ctx.delegation_hint = Some("## 可调度的 agent".into());
+    ctx.word_style_profile = Some("标题黑体".into());
+
+    SystemPromptStage.execute(&mut ctx).await.unwrap();
+    let s = ctx.system_prompt.unwrap();
+    let hint_pos = s.find("可调度的 agent").unwrap();
+    let profile_pos = s.find("Word 文档样式偏好").unwrap();
+    assert!(hint_pos < profile_pos, "委派清单应在样式偏好之前: {s}");
+}
+
 // =========================================================================
 // HistoryStage tests
 // =========================================================================

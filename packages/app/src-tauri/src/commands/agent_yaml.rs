@@ -43,6 +43,8 @@ pub struct AgentYamlFields {
     pub tool_max_rounds: Option<u64>,
     /// 现有 system_prompt——前端「风格预设」覆盖确认的判据（2026-08-23 加入）
     pub system_prompt: Option<String>,
+    /// 现有 Word 样式偏好块——D12 双轨承载（提案卡显示 / 摘除判据）
+    pub word_style_profile: Option<String>,
 }
 
 impl AgentYamlFields {
@@ -51,6 +53,7 @@ impl AgentYamlFields {
             max_total_tokens: cfg.max_total_tokens.map(|v| v as u64),
             tool_max_rounds: cfg.tool_max_rounds.map(|v| v as u64),
             system_prompt: cfg.system_prompt.clone(),
+            word_style_profile: cfg.word_style_profile.clone(),
         }
     }
 }
@@ -332,6 +335,108 @@ pub async fn set_agent_system_prompt(
         target: "ice_paw.agent",
         "agent.yaml 已改写: system_prompt ← {} 行（{}）",
         text.lines().count(),
+        yaml_path.display()
+    );
+    Ok(fields)
+}
+
+/// 多行块键整体摘除（键行 + 其后缩进块体）——[`set_agent_word_profile`] 的
+/// 摘除通道（None / 空串 = 移除偏好块，prompt 不再注入）。与
+/// [`patch_agent_yaml_block`] 同款块体吞行口径；无活跃键行 = no-op（幂等）。
+pub fn patch_agent_yaml_remove_block(content: &str, key: &str) -> String {
+    let (bom, body) = match content.strip_prefix('\u{FEFF}') {
+        Some(rest) => ("\u{FEFF}", rest),
+        None => ("", content),
+    };
+    let mut out = String::with_capacity(content.len());
+    let mut removing = false;
+    let mut removed = false;
+    for line in body.split_inclusive('\n') {
+        if !removed && line_is_active_key(line, key) {
+            removed = true;
+            removing = true;
+            continue;
+        }
+        if removing {
+            let bare = line.trim_end_matches(['\r', '\n']);
+            if bare.trim().is_empty() || bare.starts_with([' ', '\t']) {
+                continue; // 块体行（含空行）：随键行一起摘除
+            }
+            removing = false; // 列 0 有内容的行：块体结束，正常输出
+        }
+        out.push_str(line);
+    }
+    format!("{bom}{out}")
+}
+
+/// word_style_profile 的写前闸：重解析 + 回读比对（Some → trim_end 对齐；
+/// None → 须确实为 None）。不过则调用方放弃写盘。
+fn validate_word_profile_patched(
+    new_content: &str,
+    expect: Option<&str>,
+) -> AppResult<AgentYamlFields> {
+    let cfg: AgentFileConfig = serde_yaml::from_str(new_content).map_err(|e| {
+        AppError::Validation(format!("改写后 agent.yaml 无法解析（已放弃写入）: {e}"))
+    })?;
+    let matches = match expect {
+        Some(text) => cfg
+            .word_style_profile
+            .as_deref()
+            .is_some_and(|v| v.trim_end() == text),
+        None => cfg.word_style_profile.is_none(),
+    };
+    if !matches {
+        return Err(AppError::Validation(
+            "改写后 word_style_profile 回读值与请求不符（已放弃写入）".into(),
+        ));
+    }
+    Ok(AgentYamlFields::from_config(&cfg))
+}
+
+/// 写 / 摘除 agent.yaml `word_style_profile` 多行块（D12 双轨承载之一）。
+///
+/// `text = Some(非空)`：整块替换（自由文字，不解析不校验——原文注入 system
+/// prompt「Word 文档样式偏好」小节）；`text = None 或空白`：**摘除**（键行 +
+/// 块体整体删，prompt 不再注入——与提案通道「""=摘除」语义对齐）。
+/// 安全闸与 [`set_agent_system_prompt`] 同款，不过则原文件不动。
+#[tauri::command]
+pub async fn set_agent_word_profile(
+    cmd: State<'_, Arc<dyn AgentCmd>>,
+    agent_id: String,
+    text: Option<String>,
+) -> AppResult<AgentYamlFields> {
+    let trimmed = text.unwrap_or_default().trim().to_string();
+    let row = cmd.inner().get(&agent_id).await?;
+    let dir = row.workspace_path.clone().ok_or_else(|| {
+        AppError::Validation(format!("agent {agent_id} 未配置工作区目录，无 agent.yaml"))
+    })?;
+    let yaml_path = std::path::Path::new(&dir).join("agent.yaml");
+    if !yaml_path.exists() {
+        return Err(AppError::NotFound {
+            resource: "agent.yaml",
+            id: yaml_path.display().to_string(),
+        });
+    }
+    let content = std::fs::read_to_string(&yaml_path)?;
+
+    let (new_content, fields, is_removal) = if trimmed.is_empty() {
+        let nc = patch_agent_yaml_remove_block(&content, "word_style_profile");
+        let f = validate_word_profile_patched(&nc, None)?;
+        (nc, f, true)
+    } else {
+        let nc = patch_agent_yaml_block(&content, "word_style_profile", &trimmed);
+        let f = validate_word_profile_patched(&nc, Some(&trimmed))?;
+        (nc, f, false)
+    };
+
+    // 原子写：同目录 .tmp → rename（半途失败不会留下截断的 yaml）
+    let tmp_path = yaml_path.with_extension("yaml.tmp");
+    std::fs::write(&tmp_path, &new_content)?;
+    std::fs::rename(&tmp_path, &yaml_path)?;
+    tracing::info!(
+        target: "ice_paw.agent",
+        "agent.yaml 已改写: word_style_profile {}（{}）",
+        if is_removal { "摘除" } else { "写入" },
         yaml_path.display()
     );
     Ok(fields)
@@ -626,5 +731,62 @@ mod tests {
 
         // 解析失败（类型不符）→ 拒
         assert!(validate_system_prompt_patched("system_prompt: [", "x").is_err());
+    }
+
+    // ---- word_style_profile（set_agent_word_profile 通道：块写 / 块摘除） ----
+
+    #[test]
+    fn word_profile_block_write_and_readback() {
+        // 缺键追加 → 过闸；已有块整体替换 → 旧值消失
+        let profile = "表头：黑体 11pt 深蓝底白字\n正文：宋体 10.5pt，行距 1.5";
+        let out = patch_agent_yaml_block(&sample_yaml(), "word_style_profile", profile);
+        let fields = validate_word_profile_patched(&out, Some(profile)).unwrap();
+        assert_eq!(
+            fields.word_style_profile.as_deref().map(str::trim_end),
+            Some(profile)
+        );
+        // system_prompt 块与预算字段不受影响
+        assert!(out.contains("  你是一个品牌设计助手。"));
+        assert_eq!(fields.max_total_tokens, Some(800000));
+    }
+
+    #[test]
+    fn word_profile_removal_drops_block_and_is_idempotent() {
+        let with_block = patch_agent_yaml_block(
+            &sample_yaml(),
+            "word_style_profile",
+            "表头黑体\n正文宋体",
+        );
+        let removed = patch_agent_yaml_remove_block(&with_block, "word_style_profile");
+        assert!(!removed.contains("word_style_profile"));
+        assert!(!removed.contains("表头黑体"), "块体随键行整体摘除");
+        assert!(!removed.contains("正文宋体"));
+        // 邻居逐字节保留
+        assert!(removed.contains("system_prompt: |"));
+        assert!(removed.contains("tool_max_rounds: 50"));
+        let fields = validate_word_profile_patched(&removed, None).unwrap();
+        assert_eq!(fields.word_style_profile, None);
+
+        // 无键 = no-op（幂等摘除）；缩进子键 / 注释行不误伤
+        assert_eq!(patch_agent_yaml_remove_block(&sample_yaml(), "word_style_profile"), sample_yaml());
+        let nested = "extra_params:\n  word_style_profile: 内层\n# word_style_profile: 注释\n";
+        assert_eq!(patch_agent_yaml_remove_block(nested, "word_style_profile"), nested);
+    }
+
+    #[test]
+    fn word_profile_removal_crlf_bom() {
+        let yaml = "\u{FEFF}provider: glm\r\nword_style_profile: |\r\n  偏好\r\ntool_max_rounds: 50\r\n";
+        let out = patch_agent_yaml_remove_block(yaml, "word_style_profile");
+        assert!(out.starts_with('\u{FEFF}'));
+        assert_eq!(out, "\u{FEFF}provider: glm\r\ntool_max_rounds: 50\r\n");
+    }
+
+    #[test]
+    fn word_profile_gate_rejects_mismatch() {
+        // 回读不符（键仍在）→ 拒
+        let with_block = patch_agent_yaml_block("provider: glm\n", "word_style_profile", "偏好");
+        assert!(validate_word_profile_patched(&with_block, None).is_err());
+        // 解析失败 → 拒
+        assert!(validate_word_profile_patched("word_style_profile: [", Some("x")).is_err());
     }
 }

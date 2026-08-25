@@ -88,6 +88,9 @@ pub(crate) struct AgentTurnInput {
     pub agent: crate::db::models::AgentRow,
     /// agent.yaml 钩子配置
     pub hooks: HookConfig,
+    /// Word 文档样式偏好（agent.yaml `word_style_profile`；hooks 同款纯文件
+    /// 旁路——非空时注入 system prompt「Word 文档样式偏好」小节，D12 双轨承载之一）
+    pub word_style_profile: Option<String>,
     pub provider: Arc<dyn LlmProvider>,
     pub api_key: String,
     /// 预生成的用户消息 ID（附件分页提示里已嵌此 id，必须复用）
@@ -123,6 +126,7 @@ pub(crate) async fn run_agent_turn(
         conv,
         agent,
         hooks,
+        word_style_profile,
         provider: llm_provider,
         api_key,
         user_msg_id,
@@ -197,6 +201,10 @@ pub(crate) async fn run_agent_turn(
     );
     // session-events（Phase 0）：turn 归属键，MemoryStage 的 summary_* 事件用
     pipeline_ctx.turn_id = Some(user_msg_id.clone());
+
+    // Word 文档样式偏好（agent.yaml 纯文件旁路）：SystemPromptStage 在非空时
+    // 注入「Word 文档样式偏好」小节（delegation_hint 同款字段穿透）。
+    pipeline_ctx.word_style_profile = word_style_profile;
 
     // chat:processing 心跳通道：把 emitter 注入 Pipeline，让 ModalCapabilityStage
     // 在 OCR 每张图完成后 emit 心跳（撑住前端 60s 静默超时窗口，多图串行 OCR 易超）。

@@ -184,6 +184,16 @@ impl PipelineStage for SystemPromptStage {
                 None => hint,
             });
         }
+        // D12：Word 文档样式偏好注入（agent.yaml `word_style_profile` 自由文字块）。
+        // 原文进独立小节，不解析不校验——agent 写 docx 时据此选字体/字号/配色/
+        // 表格样式（具体格式由工具层 edit_docx/set_table_element 等落地）。
+        if let Some(profile) = ctx.word_style_profile.take().filter(|s| !s.trim().is_empty()) {
+            let section = format!("## Word 文档样式偏好\n\n{profile}");
+            ctx.system_prompt = Some(match ctx.system_prompt.take() {
+                Some(s) => format!("{s}\n\n{section}"),
+                None => section,
+            });
+        }
         Ok(())
     }
 }
