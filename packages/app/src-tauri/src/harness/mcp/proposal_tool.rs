@@ -64,6 +64,9 @@ struct ProposeConfigArgs {
     // ---- update_agent 字段 ----
     #[serde(default)]
     agent_id: Option<String>,
+    /// Word 文档样式偏好原文（update_agent 专属；`""` = 摘除该偏好块）
+    #[serde(default)]
+    word_style_profile: Option<String>,
 
     // ---- 公共 ----
     /// 审批卡片上显示的提案摘要
@@ -107,6 +110,7 @@ fn into_proposal_action(args: &ProposeConfigArgs) -> AppResult<ProposalAction> {
                 max_tokens: args.max_tokens,
                 enabled_tools: args.enabled_tools.clone(),
                 workspace_path: args.workspace_path.clone(),
+                word_style_profile: args.word_style_profile.clone(),
             })
         }
         other => Err(AppError::Validation(format!(
@@ -131,6 +135,9 @@ impl McpClient for ProposeConfigChangeTool {
          当用户要求修改 agent 名称、模型、system prompt、temperature、\
          或启用的工具列表时——你必须调用本工具。\
          \
+         当用户口头表达 Word 文档样式偏好（字体/字号/配色/表格样式）时，\
+         用 action='update_agent' + word_style_profile 字段提案——\
+         批准一次，之后所有 Word 文档自动遵循。\
          新建 agent：action='create_agent'，填写 id/name/provider/model，\
          api_key 固定为 '__SLOT__'（用户在审批卡片上填写真实 key）。\
          \
@@ -198,6 +205,10 @@ impl McpClient for ProposeConfigChangeTool {
                 "agent_id": {
                     "type": "string",
                     "description": "【update_agent 必填】要修改的 agent ID（必须是你自己的 agent ID。不确定先调 read_agent_config）。"
+                },
+                "word_style_profile": {
+                    "type": "string",
+                    "description": "【update_agent 专属】Word 文档样式偏好，用户口头偏好的原文整理（如「正文宋体小四、表头深蓝底白字、标题黑体」）。批准后写入 agent.yaml，写 Word 文档时自动生效。传空字符串表示摘除此偏好。"
                 },
                 "summary": {
                     "type": "string",

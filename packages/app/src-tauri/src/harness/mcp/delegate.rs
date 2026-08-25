@@ -346,6 +346,8 @@ impl McpClient for DelegateTool {
                 conv: child_conv,
                 agent: creds.agent.clone(),
                 hooks: creds.hooks,
+                // 专家 agent 写交付物文档同样吃到其 yaml 的样式偏好（hooks 同款旁路）
+                word_style_profile: creds.word_style_profile,
                 provider: expert_provider,
                 api_key: creds.api_key,
                 user_msg_id: Uuid::new_v4().to_string(),

@@ -92,8 +92,10 @@ pub async fn send_message(
     let agent = agent_with_creds.agent;
     let api_key = agent_with_creds.api_key;
     let base_url = agent_with_creds.base_url.as_deref();
-    // 钩子配置（来自 agent.yaml `hooks`；纯文件，不进 DB）
+    // 钩子配置（来自 agent.yaml `hooks`；纯文件，不进 DB）+
+    // Word 样式偏好（agent.yaml `word_style_profile`；同款纯文件旁路）
     let hooks = agent_with_creds.hooks;
+    let word_style_profile = agent_with_creds.word_style_profile;
 
     let llm_provider = provider::create_provider(
         &agent.provider,
@@ -188,6 +190,7 @@ pub async fn send_message(
             conv,
             agent,
             hooks,
+            word_style_profile,
             provider: llm_provider,
             api_key,
             user_msg_id,

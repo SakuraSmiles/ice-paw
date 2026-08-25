@@ -188,6 +188,7 @@ async fn run_turn_on(pool: SqlitePool, scenario: MockScenario, tools: bool) -> T
         conv,
         agent,
         hooks: HookConfig::new(),
+        word_style_profile: None,
         provider: mock.clone(),
         api_key: "e2e-key".into(),
         user_msg_id: user_msg_id.clone(),

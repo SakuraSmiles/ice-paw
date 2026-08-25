@@ -346,6 +346,10 @@ pub enum ProposalAction {
         enabled_tools: Option<Vec<String>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         workspace_path: Option<String>,
+        /// Word 文档样式偏好（用户口头偏好的原文；`Some("")` = 摘除 yaml 块）。
+        /// 落地走 `set_agent_word_profile`（agent.yaml 纯文件旁路，D12 双轨承载）
+        #[serde(skip_serializing_if = "Option::is_none")]
+        word_style_profile: Option<String>,
     },
 }
 
@@ -526,9 +530,12 @@ mod tests {
             max_tokens: None,
             enabled_tools: None,
             workspace_path: None,
+            word_style_profile: Some("正文宋体小四".into()),
         };
         let json = serde_json::to_string(&action).unwrap();
         assert!(json.contains(r#""action":"update_agent""#));
+        // D12：偏好字段随事件透传（None 时 skip 不占位）
+        assert!(json.contains(r#""word_style_profile":"正文宋体小四""#));
         let back: ProposalAction = serde_json::from_str(&json).unwrap();
         match back {
             ProposalAction::UpdateAgent { agent_id, .. } => {

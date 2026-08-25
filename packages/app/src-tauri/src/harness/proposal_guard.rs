@@ -18,6 +18,8 @@
 //! ### 🟢 非敏感（一键批准）
 //! - 创建无工具的 agent
 //! - 修改自己的 name/system_prompt/temperature/max_tokens/base_url/workspace_path
+//!   /word_style_profile（Word 样式偏好自由文字块；空串=摘除，同 Low——落地走
+//!   set_agent_word_profile，agent.yaml 侧无害）
 //!
 //! ## 安全边界
 //! Phase 1 仅处理 agent 域。Phase 2-4 扩展时在此文件加 match arm 即可，
@@ -143,6 +145,7 @@ mod tests {
             max_tokens: None,
             enabled_tools: enabled_tools.unwrap_or(None),
             workspace_path: None,
+            word_style_profile: None,
         }
     }
 
@@ -181,6 +184,24 @@ mod tests {
         let (tier, warnings) = validate_proposal(&action, "caller-1").unwrap();
         assert_eq!(tier, SensitivityTier::Medium);
         assert!(!warnings.is_empty());
+    }
+
+    #[test]
+    fn update_self_word_profile_is_low_sensitivity() {
+        // D12：Word 样式偏好（含空串=摘除语义）不触任何红线——自由文字块，
+        // 落地走 set_agent_word_profile 写 agent.yaml，无权限面变化
+        for profile in [Some("正文宋体小四".to_string()), Some(String::new())] {
+            let mut action = make_update_agent("caller-1", None);
+            if let ProposalAction::UpdateAgent {
+                word_style_profile, ..
+            } = &mut action
+            {
+                *word_style_profile = profile;
+            }
+            let (tier, warnings) = validate_proposal(&action, "caller-1").unwrap();
+            assert_eq!(tier, SensitivityTier::Low);
+            assert!(warnings.is_empty());
+        }
     }
 
     // === 🔴 红线拒绝 ===

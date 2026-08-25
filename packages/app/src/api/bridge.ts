@@ -76,6 +76,11 @@ const agents = {
     try { return await invoke<AgentYamlFields>("set_agent_system_prompt", { agentId, text }); }
     catch (err) { throw wrapInvokeError("agents.setSystemPrompt", err); }
   },
+  /** 整块写 agent.yaml word_style_profile（Word 文档样式偏好；null/空串 = 摘除该块） */
+  async setWordProfile(agentId: string, text: string | null): Promise<AgentYamlFields> {
+    try { return await invoke<AgentYamlFields>("set_agent_word_profile", { agentId, text }); }
+    catch (err) { throw wrapInvokeError("agents.setWordProfile", err); }
+  },
 };
 
 const providers = {

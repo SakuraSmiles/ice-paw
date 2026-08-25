@@ -74,6 +74,15 @@ const visibleFields = computed(() => {
     if (u.base_url != null) fields.push({ key: "base_url", label: "Base URL", value: u.base_url, isKeySlot: false });
     if (u.enabled_tools != null) fields.push({ key: "enabled_tools", label: "启用工具", value: u.enabled_tools.join(", "), isKeySlot: false });
     if (u.workspace_path != null) fields.push({ key: "workspace_path", label: "工作区", value: u.workspace_path, isKeySlot: false });
+    // Word 样式偏好：空串 = 摘除（卡片上明示，避免误以为写成空块）
+    if (u.word_style_profile != null) {
+      fields.push({
+        key: "word_style_profile",
+        label: "Word 样式偏好",
+        value: u.word_style_profile === "" ? "（摘除现有偏好）" : u.word_style_profile,
+        isKeySlot: false,
+      });
+    }
   }
 
   return fields;
@@ -91,7 +100,8 @@ function startEdit() {
   editing.value = true;
   const fields: Record<string, string> = {};
   for (const f of visibleFields.value) {
-    if (!f.isKeySlot) {
+    // 多行自由文字块不入单行编辑（String() 会压掉换行，损坏原文）
+    if (!f.isKeySlot && f.key !== "word_style_profile") {
       fields[f.key] = String(f.value ?? "");
     }
   }
@@ -143,6 +153,11 @@ async function approve() {
         enabled_tools: a.enabled_tools ?? undefined,
         workspace_path: a.workspace_path ?? undefined,
       });
+      // Word 样式偏好走 agent.yaml 专用命令（纯文件旁路，不进 DB 字段）；
+      // `""` = 摘除语义由后端命令解释
+      if (a.word_style_profile !== undefined) {
+        await bridge.agents.setWordProfile(a.agent_id, a.word_style_profile ?? null);
+      }
     }
 
     // 刷新 agent store 缓存
@@ -202,9 +217,9 @@ async function reject() {
           placeholder="输入 API Key（必填）"
           autocomplete="off"
         />
-        <!-- 编辑模式下的可编辑字段 -->
+        <!-- 编辑模式下的可编辑字段（agent_id/id 只读；多行偏好块不入单行编辑） -->
         <input
-          v-if="editing && !field.isKeySlot && field.key !== 'agent_id' && field.key !== 'id'"
+          v-if="editing && !field.isKeySlot && field.key !== 'agent_id' && field.key !== 'id' && field.key !== 'word_style_profile'"
           v-model="editFields[field.key]"
           type="text"
           class="field-input"

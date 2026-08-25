@@ -98,6 +98,10 @@ pub struct AgentWithCredentials {
     /// 对话钩子配置（来自 agent.yaml `hooks` 字段；hooks 不进 DB，纯文件）。
     /// chat_cmd 据此在各生命周期点执行 inject_prompt/call_tool/log。
     pub hooks: HookConfig,
+    /// Word 文档样式偏好（agent.yaml `word_style_profile` 自由文字块；不进 DB，
+    /// 纯文件）——D12 双轨承载。非空时注入 system prompt「Word 文档样式偏好」
+    /// 小节；与 hooks 同款旁路：不参与 apply_to_row 的字段覆盖。
+    pub word_style_profile: Option<String>,
 }
 
 // ============================================================================
@@ -310,15 +314,21 @@ impl AgentCmd for SqlAgentCmd {
     async fn get_with_credentials(&self, agent_id: &str) -> AppResult<AgentWithCredentials> {
         let mut agent = repo::agent::get_by_id(&self.pool, agent_id).await?;
         // 尝试从 workspace_path 加载 agent.yaml 配置，合并到 AgentRow（覆盖 chat_cmd 用的字段）。
-        // 同时提取 hooks（hooks 不进 DB，纯文件，不参与 apply_to_row 的字段覆盖）。
-        let hooks: HookConfig = match agent.load_file_config() {
-            Some(file_cfg) => {
-                let h = file_cfg.hooks.clone().unwrap_or_default();
-                file_cfg.apply_to_row(&mut agent);
-                h
-            }
-            None => HookConfig::default(),
-        };
+        // 同时提取 hooks 与 word_style_profile（两者不进 DB，纯文件，不参与
+        // apply_to_row 的字段覆盖）。
+        let (hooks, word_style_profile): (HookConfig, Option<String>) =
+            match agent.load_file_config() {
+                Some(file_cfg) => {
+                    let h = file_cfg.hooks.clone().unwrap_or_default();
+                    let w = file_cfg
+                        .word_style_profile
+                        .clone()
+                        .filter(|s| !s.trim().is_empty());
+                    file_cfg.apply_to_row(&mut agent);
+                    (h, w)
+                }
+                None => (HookConfig::default(), None),
+            };
         let (api_key, vault_base_url) = crypto::fetch_api_key(&self.app, &agent.api_key_ref)?;
         // base_url：agent 配置优先（如果有），否则回退到 vault 里存的 base_url
         let base_url = agent
@@ -332,6 +342,7 @@ impl AgentCmd for SqlAgentCmd {
             api_key,
             base_url,
             hooks,
+            word_style_profile,
         })
     }
 
@@ -617,6 +628,7 @@ impl AgentCmd for MockAgentCmd {
             api_key,
             base_url,
             hooks: HookConfig::default(),
+            word_style_profile: None,
         })
     }
 

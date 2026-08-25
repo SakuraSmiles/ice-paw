@@ -590,6 +590,8 @@ export interface ProposalActionUpdateAgent {
   max_tokens?: number | null;
   enabled_tools?: string[] | null;
   workspace_path?: string | null;
+  /** Word 文档样式偏好（自由文字块；空串 = 摘除 yaml 块） */
+  word_style_profile?: string | null;
 }
 
 export type ProposalAction = ProposalActionCreateAgent | ProposalActionUpdateAgent;

@@ -261,6 +261,7 @@ mod tests {
             api_key: api_key.into(),
             base_url: base_url.map(|s| s.into()),
             hooks: Default::default(),
+            word_style_profile: None,
         }
     }
 
