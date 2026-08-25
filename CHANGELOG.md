@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+## [0.5.2] — 2026-08-26
+
+> 从 0.5.1 以来的主要调整：**S3 四波·表格格式四件**（生产反馈——表格内容能写了但边框/底纹/字体/样式无工具）+ **S3 五波·样式档案与模板个性化**（引擎通用抽象 + 双轨承载）。
+
+### Added
+- **Word 表格格式四件**（native 手术，D11「四件全做」）：
+  - 读侧格式可见：模型解析 tblPr/trPr/tcPr 特征（样式名/底纹 fill/边框/宽度/垂直对齐）+ `projection=table` 表属性摘要行与格级标注（`(底纹#×)/(垂直=×)/(自定边框)`）+ `projection=tblpr` 三级原文下钻（默认 tblPr / row→trPr / row+cell→tcPr）；
+  - `set_table_element`：表/行/格三级通用元素手术——TBLPR 17 / TRPR 12 / TCPR 13 封闭白名单兼 schema 位插入序；gridSpan/hMerge/vMerge 受保护拒改并指路 merge_cells；
+  - `set_cell_format`：格级段落+字符格式（段落→格内全部段、字符→格内全部 run），入表格批组合；
+  - `merge_cells` / `split_cell`：Word 原生语义——纵并 restart/continue 内容留原格（拆分即恢复）、横并 gridSpan 求和内容按序拼首格；网格列区间对齐判据（同显示格号 ≠ 同网格列）；结构重构独占一批。
+- **样式档案与模板个性化**（D12「引擎通用抽象 + 双轨承载」）：
+  - 引擎层（def_edit.rs 三操作 + 三投影）：`create_style` 最小出生（同批 create→set 可组合）/ `set_style_element` 容器四档（style 直接子级·pPr·rPr·tblPr，STYLE 22 / RPR 39 白名单 + 复用 PPR/TBLPR）/ `set_numbering_element`（numId→abstractNum→lvl 解析，LVL 12 白名单，共享 abstract 的 numId 披露）；读侧 `projection=styles`（清单+basedOn 链）/ `styledef`（原文整段 = never-write-from-memory 抄写源）/ `numbering`（目录+级别下钻）；顺路件——`insert_table_after` 加 `table_style` 引用建表 / `clear_body`（模板复用清场，块数指纹）/ `merge_cells` 矩形区合并；分族路由（doc/style/numbering 同批「部件互斥」）；
+  - 承载层：agent.yaml `word_style_profile` 自由文字块——非空时每回合 system prompt 自动带「Word 文档样式偏好」小节（hooks 同款纯文件旁路）；`set_agent_word_profile` 命令（写/摘除双闸）；**提案通道**——对话里口头表达偏好（如「正文宋体小四、表头深蓝底白字」）→ agent 提案 → 批准一次永久生效（`""`=摘除，🟢 非敏感）；前端审批卡展示项；配套 workspace `templates/` 模板目录约定（copy_file→clear_body→写正文 = 整套模板继承正路）。
+- 真机测试点：表格格式四件 Word 打开验收（**尤其合并格表、横并后拆分**——结构重构风险最高）；样式定义改写后投影三层合并显示新值、自动编号值不变；word_style_profile 全链路（口头偏好→审批卡→yaml 落块→下回合 prompt 生效）。
+
 ## [0.5.1] — 2026-08-24
 
 > 从 0.5.0 以来的主要调整：**S3 三波·表格四件**（生产实战驱动——交付物文档核心内容是表格，agent 此前无任何表格写入途径）。
