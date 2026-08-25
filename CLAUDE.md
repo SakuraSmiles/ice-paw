@@ -121,6 +121,7 @@ agent 调用 `propose_config_change` 工具提出创建/修改 agent 提案 → 
 - 读侧 `inspect_docx`（mcp/docx_tool.rs + doc/docx_inspect.rs）：outline/format/text/headers_footers/ppr 五档投影 + start/end 区间；块编址 1-based 混排（sdt 摊平）= 编辑地址地基；有效格式三层合并（直接 > basedOn 链 > docDefaults，doc/styles.rs）+ numbering.xml 计数模拟（自动编号实际值，祖先级未现按该级自身 start 渲染）
 - 编辑 `edit_docx`（doc/docx_edit.rs）：zip 手术引擎——只替换目标 XML 部件、其余 entry 字节原样重打包；operations 批量事务（全有或全无 + expect_prefix 地址指纹 + 模型级 diff 读回 + 备份/原子写）；六操作 replace_text / insert_paragraph_after / delete_block / set_format / set_style / set_ppr_element
 - **D9 通用元素手术层**：pPr 子元素 ~34 封闭 schema 集（`PPR_ELEMENTS` 白名单兼当 schema 位插入序）→ set_ppr_element 一个操作永久收敛段落格式长尾；sectPr/pPrChange 受保护；片段校验（禁 xmlns/单根/根名与 element 一致/深度平衡）；摘段级 numPr 时样式链回退诚实警告
+- **S3 四波·表格格式四件（D11，2026-08-25）**：读侧格式可见（模型 tblPr/trPr/tcPr 特征 + table 投影「表属性」摘要行与格级标注 + `projection=tblpr` 三级原文下钻：默认 tblPr / row→trPr / row+cell→tcPr）+ `set_table_element`（level=table/row/cell 通用元素手术，TBLPR 17 / TRPR 12 / TCPR 13 封闭白名单兼 schema 位插入序；gridSpan/hMerge/vMerge 受保护指路 merge_cells）+ `set_cell_format`（格级段落+字符格式，段落→格内全部段、字符→格内全部 run）+ `merge_cells`/`split_cell`（Word 原生语义：纵并 restart/continue 内容留原格、横并 gridSpan 求和内容拼首格；**网格列区间对齐判据**（同格号 ≠ 同网格列）；结构重构独占一批）。⚠️ 排障纪要：内层元素寻位（find_element_span 返回**切片内偏移**）勿拿去索引原串——须用切片变量索引（凑巧对齐时假绿，tcW 后跟 vMerge 即读垃圾）
 - ⚠️ 不变式：编辑从 docx_model 类型树出发勿回字符串扫描；找元素验后随字符防前缀碰撞（`<w:pPr` 撞 pPrChange / `<w:b` 撞 bCs）；含活动修订（w:ins/w:del）文档编辑默认拒；AppliedOp 摘要按 splice 序非输入序（断言须次序无关）。🚫 语料保密（D7 硬禁令）：三份真机 docx 只留本地 tests/fixtures/docx/（gitignore），任何语料字符串（标题/正文词/样式名）零进代码/注释/文档，corpus 测试运行时读取+缺失 skip
 
 ### 对话钩子系统（已 commit 1c2a1d8 + push）
@@ -171,13 +172,14 @@ agent 调用 `propose_config_change` 工具提出创建/修改 agent 提案 → 
 - **Phase 2B 阶段 2 摘要锚点 seq 化（2026-08-17）**：migration 46 `covered_until_seq`（= 被覆盖消息首现事件 seq，与 derive 排序位严格一致）+ 存量回填；`SummaryState`/insert/update/SELECT 双写双读；`ChatMessage.source_seq`（`#[serde(skip)]`，不进 LLM payload）；锚点定位 seq 优先 `.or_else` rowid 兜底；`SummaryPayload.covered_until_seq`（`#[serde(default)]`，旧事件零迁移）。显式双写过渡，回滚干净（列闲置无害）。
 - **Phase 2B 阶段 3 Image 双份存储治理（2026-08-17，3a 读侧 + 3b 写侧）**：消息类 payload 的 blocks 用 `PayloadBlock` untagged 双形态——`Full(ContentBlock)`（v1 内联，旧事件零迁移可读）/ `ImageRef{message_id, block_index}`（v2，字节只在 messages 行）。写侧唯一入口 `refify_blocks`（emitter 字段式签名内部做，调用方传与落库同值的 blocks）；读侧三路水合：derive `hydrate_image_refs`（纯同步 resolver 注入；未命中/越界/非 Image 降级 `Text("[图片内容已不可恢复]")`）+ `to_content_blocks` 防泄漏最后闸 + conversation_cmd JSON 级水合（list_session_events/export，前端零改动）。BACKFILL_VERSION=2（纯 backfill 会话删旧重写自愈，冻结会话保留 v1 照读）。**⚠️ 不变式：session_events 消息类 payload 禁止内联 Image base64——新增 message-kind emitter 必须经 `refify_blocks`，读侧必须经 `hydrate_image_refs` 水合后才能进对账/LLM 视图（ref 形态不得以非 Text 形态流出）**。
 
-## 当前状态（2026-08-24）
+## 当前状态（2026-08-25）
 - 版本 **0.5.1 已打包**（= 0.5.0 + **S3 三波·表格四件**[projection=table 网格编址/insert_table_after/set_cell_text/insert_table_row_after + 同块批组合虚拟行模拟]；cargo 1071）——生产驱动：交付物文档核心内容是表格，agent 此前无表格写入途径
+- **0.5.1 之后新增（未打包未 push）：S3 四波·表格格式四件（D11）**——读侧格式可见（tblpr 三级投影 + table 格式标注）+ set_table_element + set_cell_format + merge_cells/split_cell；cargo 1088 / clippy 0 / 词表 0；语料四操作闭环全绿
 - 上一版 **0.5.0**（Word 能力演进整线 + Agent 质量拍 Phase 1；cargo 1060 / vitest 326）；再上 **0.4.1**（头像系统重塑 + 项目身份减法 + 预算 HUD 环形化迁位 + 60s 静默超时双保险；vitest 311）
 - 分支：仅 `main`
-- 近期递进：0.4.1 → 质量拍 Phase 1 + Word 能力演进整线（S0a→S0b→手术引擎→S3 首波→真机复盘两批→D9 set_ppr_element）→ 0.5.0 发版 → **生产实战反馈表格双缺口（写侧全拒+读侧无格分隔）→ S3 三波表格四件（D10「四件全做」）** → 0.5.1 打包
-- `cargo test --lib` 1071 passed / 0 failed（+ 集成测试：session_runner_e2e 7、session_reconcile_e2e 6+2 ignored、session_event_log_e2e 3、memory_e2e 3、message_repo 7、provider 11）；clippy --tests -D warnings 0 警告；vitest 326
-- 仍待办：**0.5.1 真机手测**（表格四件：三操作 Word 打开验收[尤其合并格表] + projection=table 寻址准确度；另有 0.5.0 遗留：set_format/set_style/set_ppr_element Word 打开验收、DB 诊断复跑 5.7%→<2%、风格预设手测；WPS 样本仍缺）、视觉适配/KB watcher/自动续写生产手测、proposal Phase 2（MCP 域）、V5 钩子未用未测
+- 近期递进：0.4.1 → 质量拍 Phase 1 + Word 能力演进整线（S0a→S0b→手术引擎→S3 首波→真机复盘两批→D9 set_ppr_element）→ 0.5.0 发版 → 生产实战反馈表格双缺口 → S3 三波表格四件（D10）→ 0.5.1 打包 → **生产反馈表格格式缺口（边框/底纹/字体/样式无工具）→ S3 四波表格格式四件（D11「四件全做」）**
+- `cargo test --lib` 1088 passed / 0 failed（+ 集成测试：session_runner_e2e 7、session_reconcile_e2e 6+2 ignored、session_event_log_e2e 3、memory_e2e 3、message_repo 7、provider 11）；clippy --tests -D warnings 0 警告；vitest 326
+- 仍待办：**0.5.1+四波 真机手测**（表格内容四件 + 表格格式四件：Word 打开验收[尤其合并格表/横并拆分] + projection=table/tblpr 寻址准确度；另有 0.5.0 遗留：set_format/set_style/set_ppr_element Word 打开验收、DB 诊断复跑 5.7%→<2%、风格预设手测；WPS 样本仍缺）、视觉适配/KB watcher/自动续写生产手测、proposal Phase 2（MCP 域）、V5 钩子未用未测
 - **预算诚实化不变式（0.3.9）**：新 provider usage 必须归一规范语义（prompt=总输入含命中、cached≤prompt；Anthropic 显式归一 + stream_consumer `into_canonical` 自愈兜底）；工具列表出口恒按名序（前缀缓存前提，勿回退）；DeepSeek 私有对优先于标准字段
 - **S1 真机验收 2026-08-17 四项绿**：backfill（sessions=9 events=824 failed=0 epoch_rows=0，版本标记=2）+ 恒 Derive（当日路由决策全 green diffs=0，含 backfill 会话续聊 seq 1..933 连续）+ 发图 v2 payload 无 base64（image_ref 162B 指针，本体 851KB/3.8MB 只在 messages 行；模型回复描述画面=水合进 LLM 视图实证）+ 摘要折叠 `covered_until_seq=726`/rowid=1710 双值落库
 

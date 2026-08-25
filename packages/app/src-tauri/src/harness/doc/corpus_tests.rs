@@ -222,7 +222,7 @@ fn corpus_inspect_three_projections() {
         // outline：默认上限 400（SDP 顶层块 ~1780，全量会爆 token——上限被语料正当化）
         let report = inspect_document(
             bytes,
-            &InspectRequest { projection: InspectProjection::Outline, start: None, end: None },
+            &InspectRequest { projection: InspectProjection::Outline, start: None, end: None, row: None, cell: None },
         )
         .unwrap();
         assert!(report.total_blocks > 80, "{name} 块数过少: {}", report.total_blocks);
@@ -257,7 +257,7 @@ fn corpus_inspect_three_projections() {
         // format：默认 span=50，has_more，含有效格式行
         let fmt = inspect_document(
             bytes,
-            &InspectRequest { projection: InspectProjection::Format, start: None, end: None },
+            &InspectRequest { projection: InspectProjection::Format, start: None, end: None, row: None, cell: None },
         )
         .unwrap();
         assert_eq!(fmt.range, (1, 50), "{name} format 默认区间");
@@ -267,7 +267,7 @@ fn corpus_inspect_three_projections() {
         // text：带块号正文，区间续读
         let text = inspect_document(
             bytes,
-            &InspectRequest { projection: InspectProjection::Text, start: Some(2), end: Some(6) },
+            &InspectRequest { projection: InspectProjection::Text, start: Some(2), end: Some(6), row: None, cell: None },
         )
         .unwrap();
         assert_eq!(text.range, (2, 6));
@@ -275,7 +275,7 @@ fn corpus_inspect_three_projections() {
         // 越界错误带总数（报错契约）
         let err = inspect_document(
             bytes,
-            &InspectRequest { projection: InspectProjection::Text, start: Some(report.total_blocks + 1), end: None },
+            &InspectRequest { projection: InspectProjection::Text, start: Some(report.total_blocks + 1), end: None, row: None, cell: None },
         )
         .unwrap_err()
         .to_string();
@@ -290,7 +290,7 @@ fn corpus_numbering_values_rendered() {
     // SDP：H1 自动编号标题（真实 Word 产物），编号从 1 起
     let report = inspect_document(
         &sdp,
-        &InspectRequest { projection: InspectProjection::Outline, start: None, end: None },
+        &InspectRequest { projection: InspectProjection::Outline, start: None, end: None, row: None, cell: None },
     )
     .unwrap();
     assert!(
@@ -304,7 +304,7 @@ fn corpus_numbering_values_rendered() {
     // SRS：三级编号形态存在（N.N.N 计数模拟）
     let report = inspect_document(
         &srs,
-        &InspectRequest { projection: InspectProjection::Outline, start: None, end: None },
+        &InspectRequest { projection: InspectProjection::Outline, start: None, end: None, row: None, cell: None },
     )
     .unwrap();
     assert!(
@@ -329,7 +329,7 @@ fn corpus_numbering_values_rendered() {
     for bytes in [&sdp, &srs] {
         let report = inspect_document(
             bytes,
-            &InspectRequest { projection: InspectProjection::Outline, start: None, end: None },
+            &InspectRequest { projection: InspectProjection::Outline, start: None, end: None, row: None, cell: None },
         )
         .unwrap();
         assert!(
@@ -347,7 +347,7 @@ fn corpus_headers_footers_projection() {
     for (name, bytes) in [("SDP", &sdp), ("SRS", &srs), ("INSTALL", &install)] {
         let report = inspect_document(
             bytes,
-            &InspectRequest { projection: InspectProjection::HeadersFooters, start: None, end: None },
+            &InspectRequest { projection: InspectProjection::HeadersFooters, start: None, end: None, row: None, cell: None },
         )
         .unwrap();
         assert!(report.content.contains("[节 1]"), "{name} 应有节行: {}", report.content);
@@ -372,7 +372,7 @@ fn corpus_install_revisions_visible_in_format() {
     // 的前提 = agent 能看见它们在哪）
     let fmt = inspect_document(
         &install,
-        &InspectRequest { projection: InspectProjection::Format, start: Some(1), end: Some(171) },
+        &InspectRequest { projection: InspectProjection::Format, start: Some(1), end: Some(171), row: None, cell: None },
     )
     .unwrap();
     assert!(fmt.content.contains("〔插入修订〕"), "插入修订 run 未标记");
@@ -380,7 +380,7 @@ fn corpus_install_revisions_visible_in_format() {
     // text 投影剔除删除修订（接受修订后视图）——修订剔除不应清空正文（默认 span=100 块量级仍在）
     let text = inspect_document(
         &install,
-        &InspectRequest { projection: InspectProjection::Text, start: Some(1), end: None },
+        &InspectRequest { projection: InspectProjection::Text, start: Some(1), end: None, row: None, cell: None },
     )
     .unwrap();
     assert!(text.content.lines().count() > 100, "正文行数过少: {}", text.content.lines().count());
@@ -503,14 +503,14 @@ fn corpus_edit_engine_roundtrip() {
         // ④ 读回复核：t1 = REPLACED；t2 后紧跟 INSERTED；总块数 n+1-1 = n
         let seg = inspect_document(
             &new_bytes,
-            &InspectRequest { projection: InspectProjection::Text, start: Some(t1), end: Some(t2 + 1) },
+            &InspectRequest { projection: InspectProjection::Text, start: Some(t1), end: Some(t2 + 1), row: None, cell: None },
         )
         .unwrap();
         assert!(seg.content.contains(REPLACED), "{name} t1={t1} 替换未生效:\n{}", seg.content);
         assert!(seg.content.contains(INSERTED), "{name} t2={t2} 后插入未生效:\n{}", seg.content);
         let full = inspect_document(
             &new_bytes,
-            &InspectRequest { projection: InspectProjection::Outline, start: None, end: None },
+            &InspectRequest { projection: InspectProjection::Outline, start: None, end: None, row: None, cell: None },
         )
         .unwrap();
         assert_eq!(full.total_blocks, spans.len(), "{name} 块数守恒（+1 插 -1 删）");
@@ -873,11 +873,240 @@ fn corpus_table_surgery() {
         // 网格投影（真实 Word 产物）：目标表块号渲染出矩阵行
         let grid = inspect_document(
             &new_bytes,
-            &InspectRequest { projection: InspectProjection::Table, start: Some(at), end: Some(at) },
+            &InspectRequest { projection: InspectProjection::Table, start: Some(at), end: Some(at), row: None, cell: None },
         )
         .unwrap();
         assert!(grid.content.contains(&format!("[{at}] ▦ 表")), "{name} 网格头行缺失");
         assert!(grid.content.contains("r1:"), "{name} 网格应有行线");
+    }
+    assert!(ran >= 2, "SDP/SRS 语料应均有干净表可跑（实际 {ran} 份）");
+}
+
+/// S3 四波·表格格式件：真实语料上四操作闭环（每操作独立事务，互不借址）——
+/// ① set_table_element 表级 shd upsert + 幂等（二次套用逐字节稳定）
+/// ② set_cell_format 格级段落+字符格式（文本/块数不变）
+/// ③ merge_cells + split_cell 横向往返（格数/跨度还原，文本集合守恒）
+/// ④ merge_cells + split_cell 纵向往返（整表文本投影与原表逐字节相等）
+/// 目标表/格地址与指纹全运行时派生（语料字符串不进代码）。
+#[test]
+fn corpus_table_format_surgery() {
+    let Some((sdp, srs, install)) = all_corpus() else { return };
+    use super::docx_model::{blocks_text, Block};
+    // 自造片段与值（非语料来源——禁令）
+    const SHD_FRAG: &str = r#"<w:shd w:val="clear" w:color="auto" w:fill="EEF3FA"/>"#;
+    const FILL: &str = "EEF3FA";
+
+    fn table_clean(t: &super::docx_model::Table) -> bool {
+        fn blocks_clean(blocks: &[Block]) -> bool {
+            blocks.iter().all(|b| match b {
+                Block::Paragraph(p) => p.runs.iter().all(|r| r.revision.is_none()),
+                Block::Table(_) => false, // 嵌套表整表跳过
+            })
+        }
+        !t.rows.is_empty() && t.rows.iter().all(|r| r.cells.iter().all(|c| blocks_clean(&c.blocks)))
+    }
+
+    let mut ran = 0usize;
+    for (name, bytes) in [("SDP", &sdp), ("SRS", &srs), ("INSTALL", &install)] {
+        let xml = super::docx::read_document_xml(bytes).unwrap();
+        let model = super::docx_model::build_document(&xml_dom::parse(&xml).unwrap());
+
+        // 找干净表：≥2 行（纵并用）且存在某行两个相邻单跨非续格（横并用）
+        let mut found: Option<usize> = None;
+        'tables: for (i, b) in model.body.iter().enumerate() {
+            let Block::Table(t) = b else { continue };
+            if !table_clean(t) || t.rows.len() < 2 {
+                continue;
+            }
+            for row in &t.rows {
+                for w in row.cells.windows(2) {
+                    let (a, b2) = (&w[0], &w[1]);
+                    if a.grid_span.is_none() && b2.grid_span.is_none()
+                        && a.v_merge.is_none() && b2.v_merge.is_none()
+                    {
+                        found = Some(i + 1);
+                        break 'tables;
+                    }
+                }
+            }
+        }
+        let Some(tbl) = found else { continue };
+        let Block::Table(t0) = &model.body[tbl - 1] else { unreachable!() };
+        // 纵并头候选：首行首个单跨非合并格（下行同网格区间自然对齐——单跨必齐）
+        let v_head = t0
+            .rows
+            .first()
+            .unwrap()
+            .cells
+            .iter()
+            .position(|c| c.grid_span.is_none() && c.v_merge.is_none())
+            .unwrap()
+            + 1;
+        // 横并候选行/格：运行时重找（与发现判据同）
+        let (h_row, h_cell) = {
+            let mut pick = (1usize, 1usize);
+            'pick: for (ri, row) in t0.rows.iter().enumerate() {
+                for w in row.cells.windows(2) {
+                    if w[0].grid_span.is_none() && w[1].grid_span.is_none()
+                        && w[0].v_merge.is_none() && w[1].v_merge.is_none()
+                    {
+                        pick = (ri + 1, row.cells.iter().position(|c| c.grid_span.is_none() && c.v_merge.is_none()).unwrap() + 1);
+                        break 'pick;
+                    }
+                }
+            }
+            pick
+        };
+        let prefix = {
+            let mut s = String::new();
+            blocks_text(&model.body[tbl - 1..tbl], &mut s);
+            s.trim_end_matches('\n').chars().take(4).collect::<String>()
+        };
+
+        // ---- ① set_table_element 表级 shd：upsert + 幂等 ----
+        let op = super::EditOp::SetTableElement {
+            block: tbl,
+            expect_prefix: prefix.clone(),
+            level: super::TableLevel::Table,
+            row: None,
+            cell: None,
+            element: "shd".into(),
+            xml: Some(SHD_FRAG.into()),
+        };
+        let (b1, applied) = super::apply_edits_to_bytes(bytes, std::slice::from_ref(&op))
+            .unwrap_or_else(|e| panic!("{name} set_table_element 失败: {e}"));
+        assert_eq!(applied.len(), 1);
+        assert_untouched_entries_identical(bytes, &b1, "word/document.xml");
+        let (b1b, _) = super::apply_edits_to_bytes(&b1, &[op]).unwrap();
+        assert_eq!(
+            super::docx::read_document_xml(&b1).unwrap(),
+            super::docx::read_document_xml(&b1b).unwrap(),
+            "{name} set_table_element 应幂等（二次套用逐字节稳定）"
+        );
+        // 读回：tblpr 投影可见 + table 投影表属性行
+        let tblpr = inspect_document(
+            &b1,
+            &InspectRequest { projection: InspectProjection::Tblpr, start: Some(tbl), end: Some(tbl), row: None, cell: None },
+        )
+        .unwrap();
+        assert!(tblpr.content.contains(FILL), "{name} tblpr 投影应含新底纹");
+        assert!(tblpr.content.contains("<w:tblPr"), "{name} tblpr 应渲染原文");
+
+        // ---- ② set_cell_format：格级段落+字符格式，文本/块数不变 ----
+        let (b2, applied) = super::apply_edits_to_bytes(
+            bytes,
+            &[super::EditOp::SetCellFormat {
+                block: tbl,
+                expect_prefix: prefix.clone(),
+                row: h_row,
+                cell: h_cell,
+                paragraph: Some(super::ParaFormat { align: Some("center".into()), ..Default::default() }),
+                character: Some(super::CharFormat { bold: Some(true), ..Default::default() }),
+            }],
+        )
+        .unwrap_or_else(|e| panic!("{name} set_cell_format 失败: {e}"));
+        assert_eq!(applied.len(), 1);
+        assert_untouched_entries_identical(bytes, &b2, "word/document.xml");
+        let model2 = super::docx_model::build_document(&xml_dom::parse(&super::docx::read_document_xml(&b2).unwrap()).unwrap());
+        assert_eq!(model2.body.len(), model.body.len(), "{name} 块数应守恒");
+        let (mut old_t, mut new_t) = (String::new(), String::new());
+        blocks_text(&model.body[tbl - 1..tbl], &mut old_t);
+        blocks_text(&model2.body[tbl - 1..tbl], &mut new_t);
+        assert_eq!(old_t, new_t, "{name} set_cell_format 不应改动文本");
+        let Block::Table(t2) = &model2.body[tbl - 1] else { panic!() };
+        let cell2 = &t2.rows[h_row - 1].cells[h_cell - 1];
+        for b in &cell2.blocks {
+            let Block::Paragraph(p) = b else { continue };
+            assert_eq!(p.props.alignment.as_deref(), Some("center"), "{name} 格内段落应居中");
+            for r in &p.runs {
+                assert_eq!(r.props.bold, Some(true), "{name} 格内 run 应加粗");
+            }
+        }
+
+        // ---- ③ 横并 + 拆分往返：格数/跨度还原，行内非空文本集合守恒 ----
+        let (m1, _) = super::apply_edits_to_bytes(
+            bytes,
+            &[super::EditOp::MergeCells {
+                block: tbl,
+                expect_prefix: prefix.clone(),
+                direction: super::MergeDirection::Horizontal,
+                row: h_row,
+                cell: h_cell,
+                span: Some(2),
+            }],
+        )
+        .unwrap_or_else(|e| panic!("{name} merge(horizontal) 失败: {e}"));
+        let model_m = super::docx_model::build_document(&xml_dom::parse(&super::docx::read_document_xml(&m1).unwrap()).unwrap());
+        let Block::Table(tm) = &model_m.body[tbl - 1] else { panic!() };
+        assert_eq!(tm.rows[h_row - 1].cells.len(), t0.rows[h_row - 1].cells.len() - 1, "{name} 横并应少一格");
+        assert_eq!(tm.rows[h_row - 1].cells[h_cell - 1].grid_span, Some(2), "{name} 横并跨度应为 2");
+        let (s1, _) = super::apply_edits_to_bytes(
+            &m1,
+            &[super::EditOp::SplitCell {
+                block: tbl,
+                expect_prefix: prefix.clone(),
+                direction: super::MergeDirection::Horizontal,
+                row: h_row,
+                cell: h_cell,
+            }],
+        )
+        .unwrap_or_else(|e| panic!("{name} split(horizontal) 失败: {e}"));
+        let model_s = super::docx_model::build_document(&xml_dom::parse(&super::docx::read_document_xml(&s1).unwrap()).unwrap());
+        let Block::Table(ts) = &model_s.body[tbl - 1] else { panic!() };
+        let row0 = &t0.rows[h_row - 1];
+        let row_s = &ts.rows[h_row - 1];
+        assert_eq!(row_s.cells.len(), row0.cells.len(), "{name} 横拆后格数应还原");
+        assert!(row_s.cells.iter().all(|c| c.grid_span.is_none()), "{name} 横拆后应无跨度");
+        let texts_of = |row: &super::docx_model::TableRow| -> Vec<String> {
+            let mut v = Vec::new();
+            for c in &row.cells {
+                let mut s = String::new();
+                blocks_text(&c.blocks, &mut s);
+                v.extend(s.split('\n').map(|p| p.trim().to_string()).filter(|p| !p.is_empty()));
+            }
+            v.sort();
+            v
+        };
+        assert_eq!(texts_of(row0), texts_of(row_s), "{name} 横并拆往返文本集合应守恒");
+
+        // ---- ④ 纵并 + 拆分往返：整表文本投影逐字节相等（内容留原格的语义还原） ----
+        let v_span = 2usize;
+        let (m2, _) = super::apply_edits_to_bytes(
+            bytes,
+            &[super::EditOp::MergeCells {
+                block: tbl,
+                expect_prefix: prefix.clone(),
+                direction: super::MergeDirection::Vertical,
+                row: 1,
+                cell: v_head,
+                span: Some(v_span),
+            }],
+        )
+        .unwrap_or_else(|e| panic!("{name} merge(vertical) 失败: {e}"));
+        let model_v = super::docx_model::build_document(&xml_dom::parse(&super::docx::read_document_xml(&m2).unwrap()).unwrap());
+        let Block::Table(tv) = &model_v.body[tbl - 1] else { panic!() };
+        assert_eq!(tv.rows[0].cells[v_head - 1].v_merge.as_deref(), Some("restart"), "{name} 纵并头应为 restart");
+        assert_eq!(tv.rows[1].cells[v_head - 1].v_merge.as_deref(), Some("continue"), "{name} 纵并续格应为 continue");
+        let (s2, _) = super::apply_edits_to_bytes(
+            &m2,
+            &[super::EditOp::SplitCell {
+                block: tbl,
+                expect_prefix: prefix.clone(),
+                direction: super::MergeDirection::Vertical,
+                row: 1,
+                cell: v_head,
+            }],
+        )
+        .unwrap_or_else(|e| panic!("{name} split(vertical) 失败: {e}"));
+        let model_v2 = super::docx_model::build_document(&xml_dom::parse(&super::docx::read_document_xml(&s2).unwrap()).unwrap());
+        let Block::Table(tv2) = &model_v2.body[tbl - 1] else { panic!() };
+        assert!(tv2.rows.iter().all(|r| r.cells.iter().all(|c| c.v_merge.is_none())), "{name} 纵拆后应无 vMerge");
+        let (mut ta, mut tb) = (String::new(), String::new());
+        blocks_text(&model.body[tbl - 1..tbl], &mut ta);
+        blocks_text(&model_v2.body[tbl - 1..tbl], &mut tb);
+        assert_eq!(ta, tb, "{name} 纵并拆往返整表文本应逐字节还原");
+        assert_untouched_entries_identical(&m2, &s2, "word/document.xml");
+        ran += 1;
     }
     assert!(ran >= 2, "SDP/SRS 语料应均有干净表可跑（实际 {ran} 份）");
 }
