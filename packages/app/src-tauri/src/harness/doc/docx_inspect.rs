@@ -6,6 +6,8 @@
 //! - **format**：区间内 run 级有效格式（样式链合并后的值 = 「这段实际长什么样」）
 //! - **text**：带块号前缀的正文（块号即行首地址）
 //! - **table**：表格块网格矩阵（S3 三波①）——格地址 (行, 格) 是表格三操作的编址地基
+//! - **tblpr**：表格属性原文（S3 四波①）——tblPr/trPr/tcPr 逐级下钻，set_table_element
+//!   的编辑依据（复制→修改→回写），也是术后验证视图
 //!
 //! **块编址是步骤 3 edit_docx 的地址地基**：body 顺序 1-based（段落与表格混排统一
 //! 编号），三档投影同一编址——outline 定位 → format 看格式 → text 引用，闭环。
@@ -40,6 +42,10 @@ pub enum InspectProjection {
     /// 表格网格：区间内每表格块渲染行×格矩阵（S3 三波①）。格地址 (行, 格)
     /// 与 set_cell_text / insert_table_row_after 同口径；段落块不展开。默认前 10 块
     Table,
+    /// 表格属性原文：tblPr / trPr / tcPr 的 XML 原样字节（S3 四波①）。level 寻址
+    /// 与 set_table_element 同口径（默认表级；row → 行级；row+cell → 格级）。
+    /// set_table_element 的编辑依据（复制→修改→回写），也是术后验证视图。默认前 10 块
+    Tblpr,
 }
 
 impl InspectProjection {
@@ -54,6 +60,7 @@ impl InspectProjection {
             InspectProjection::HeadersFooters => 1,
             // 网格行多（每表最多 30 行），块级配额收紧
             InspectProjection::Table => 10,
+            InspectProjection::Tblpr => 10,
         }
     }
 
@@ -65,6 +72,7 @@ impl InspectProjection {
             InspectProjection::Text => "text",
             InspectProjection::HeadersFooters => "headers_footers",
             InspectProjection::Table => "table",
+            InspectProjection::Tblpr => "tblpr",
         }
     }
 }
@@ -76,6 +84,10 @@ pub struct InspectRequest {
     pub start: Option<usize>,
     /// 结束块号（1-based，含）；None = start + span - 1（按投影档）
     pub end: Option<usize>,
+    /// 行号（1-based；仅 projection=tblpr 有效，与 projection=table 的 rN 同口径）
+    pub row: Option<usize>,
+    /// 格号（1-based；仅 projection=tblpr 且 row 给定时有效）
+    pub cell: Option<usize>,
 }
 
 /// inspect 报告。
@@ -129,6 +141,20 @@ pub fn inspect_document(bytes: &[u8], req: &InspectRequest) -> AppResult<Inspect
     } else {
         resolve_range(total, req)?
     };
+    // row/cell 仅 tblpr 使用（与其他投影的编址语义无关，误传即早失败）
+    if req.projection != InspectProjection::Tblpr && (req.row.is_some() || req.cell.is_some()) {
+        return Err(AppError::Validation(
+            "参数不适用：row/cell 仅 projection=tblpr 接受（表格属性逐级下钻）。\
+             块区间用 start/end；表格网格用 projection=table。"
+                .into(),
+        ));
+    }
+    if req.projection == InspectProjection::Tblpr && req.cell.is_some() && req.row.is_none() {
+        return Err(AppError::Validation(
+            "参数校验失败：cell 需要 row 同传（level 寻址：row → 行级，row+cell → 格级）。"
+                .into(),
+        ));
+    }
 
     let mut content = String::new();
     render_header(&model, total, &mut content);
@@ -172,7 +198,7 @@ pub fn inspect_document(bytes: &[u8], req: &InspectRequest) -> AppResult<Inspect
                 match block {
                     Block::Table(t) => {
                         tables += 1;
-                        render_table_grid(i + 1, t, &mut content);
+                        render_table_grid(&ctx, i + 1, t, &mut content);
                     }
                     Block::Paragraph(_) => paragraphs += 1,
                 }
@@ -185,6 +211,45 @@ pub fn inspect_document(bytes: &[u8], req: &InspectRequest) -> AppResult<Inspect
             } else if paragraphs > 0 {
                 content.push_str(&format!(
                     "(区间内另有 {paragraphs} 个段落块未显示——正文见 text 投影)\n"
+                ));
+            }
+        }
+        InspectProjection::Tblpr => {
+            // 属性原文走源码区间（模型不留 XML）；定位器与模型编址严格一致
+            let spans = super::docx_edit::locate_blocks(&doc_xml)?;
+            let (mut tables, mut paragraphs) = (0usize, 0usize);
+            for (i, block) in model.body.iter().enumerate().take(end).skip(start - 1) {
+                match block {
+                    Block::Table(t) => {
+                        tables += 1;
+                        render_tblpr(
+                            &doc_xml[spans[i].start..spans[i].end],
+                            t,
+                            i + 1,
+                            req.row,
+                            req.cell,
+                            &mut content,
+                        )?;
+                    }
+                    Block::Paragraph(_) => {
+                        if req.row.is_some() {
+                            return Err(AppError::Validation(format!(
+                                "非表格块: 块 {} 是段落，projection=tblpr 的 row/cell 只对表格块有效。\
+                                 表格块在 outline 投影显示为「▦ 表 R行×C列」。",
+                                i + 1
+                            )));
+                        }
+                        paragraphs += 1;
+                    }
+                }
+            }
+            if tables == 0 {
+                content.push_str(
+                    "(区间内无表格块——表格块在 outline 投影显示为「▦ 表 R行×C列」，定位块号后再来)\n",
+                );
+            } else if paragraphs > 0 {
+                content.push_str(&format!(
+                    "(区间内另有 {paragraphs} 个段落块无表属性)\n"
                 ));
             }
         }
@@ -399,21 +464,28 @@ fn para_meta(ctx: &RenderCtx, n: usize, props: &docx_model::ParaProps) -> String
 }
 
 /// format：块级格式明细（有效格式 = 样式链合并值）。
-/// 切出段落块的 pPr 原文（含自闭合形态；无 pPr / 非段落 → None）。
-/// 排除 pPrChange（前缀碰撞：`<w:pPr` 后随字符必须非字母数字）。
+/// 切出 pPr 原文（含自闭合形态；无 pPr / 非段落 → None）。
 fn slice_raw_ppr(block_xml: &str) -> Option<&str> {
-    let s = block_xml.find("<w:pPr").filter(|s| {
+    slice_raw_element(block_xml, "pPr")
+}
+
+/// 切出片段内首个 `<w:{name}>` 元素原文（含自闭合形态；不存在 → None）。
+/// 前缀碰撞防护：`<w:pPr` 后随字符必须非字母数字（pPrChange / tblPrChange 同理）。
+fn slice_raw_element<'a>(s: &'a str, name: &str) -> Option<&'a str> {
+    let pat = format!("<w:{name}");
+    let start = s.find(&pat).filter(|start| {
         matches!(
-            block_xml.as_bytes().get(s + "<w:pPr".len()),
+            s.as_bytes().get(start + pat.len()),
             Some(b'>') | Some(b'/') | Some(b' ')
         )
     })?;
-    let open_end = s + block_xml[s..].find('>')? + 1;
-    if block_xml.as_bytes()[open_end - 2] == b'/' {
-        return Some(&block_xml[s..open_end]); // 自闭合 <w:pPr/>
+    let open_end = start + s[start..].find('>')? + 1;
+    if s.as_bytes()[open_end - 2] == b'/' {
+        return Some(&s[start..open_end]); // 自闭合 <w:x/>
     }
-    let close = open_end + block_xml[open_end..].find("</w:pPr>")?;
-    Some(&block_xml[s..close + "</w:pPr>".len()])
+    let close_tag = format!("</w:{name}>");
+    let close = open_end + s[open_end..].find(&close_tag)?;
+    Some(&s[start..close + close_tag.len()])
 }
 
 fn render_format_block(ctx: &RenderCtx, n: usize, block: &Block, out: &mut String) {    match block {
@@ -518,7 +590,9 @@ fn render_table_text(t: &docx_model::Table, prefix: &str, out: &mut String) {
 /// table 网格投影（S3 三波①）：行 × 格矩阵。格地址 = (行 r, 格 c) 双 1-based，
 /// 与 set_cell_text / insert_table_row_after 的 row/cell 参数同口径（跨列格算 1 格）。
 /// 合并/嵌套标注即手术边界说明：`(续)` 不可编辑、`(合并头)` 可编辑。
-fn render_table_grid(n: usize, t: &docx_model::Table, out: &mut String) {
+/// S3 四波①：表属性摘要行 + 格级格式标注（底纹/垂直对齐/自定边框）——「调格式
+/// 的前提是看得见格式」。
+fn render_table_grid(ctx: &RenderCtx, n: usize, t: &docx_model::Table, out: &mut String) {
     // 网格列数 = 任一行的 gridSpan 之和（首行可能整行跨列，格数 ≠ 列数）
     let cols: u32 = t
         .rows
@@ -530,6 +604,24 @@ fn render_table_grid(n: usize, t: &docx_model::Table, out: &mut String) {
         "[{n}] ▦ 表 {}行×{cols}列（格地址 = 行r×格c，1-based）\n",
         t.rows.len()
     ));
+    // 表属性摘要（tblPr 特征投影；改表级属性用 set_table_element level=table）
+    let mut attrs: Vec<String> = Vec::new();
+    if let Some(id) = &t.style_id {
+        let name = ctx.styles.name_of(id).unwrap_or(id);
+        attrs.push(format!("样式={name}"));
+    }
+    if let Some(fill) = &t.shd_fill {
+        attrs.push(format!("底纹#{fill}"));
+    }
+    if t.has_borders {
+        attrs.push("边框=自定义".into());
+    }
+    if let Some(w) = &t.width_desc {
+        attrs.push(format!("宽={w}"));
+    }
+    if !attrs.is_empty() {
+        out.push_str(&format!("  表属性: {}\n", attrs.join(" ")));
+    }
     const MAX_ROWS: usize = 30;
     for (ri, row) in t.rows.iter().enumerate().take(MAX_ROWS) {
         let cells: Vec<String> = row.cells.iter().map(grid_cell_text).collect();
@@ -574,7 +666,101 @@ fn grid_cell_text(c: &docx_model::TableCell) -> String {
             cell.push_str(&format!("(跨{span}列)"));
         }
     }
+    if let Some(fill) = &c.shd_fill {
+        cell.push_str(&format!("(底纹#{fill})"));
+    }
+    if let Some(v) = &c.v_align {
+        cell.push_str(&format!("(垂直={v})"));
+    }
+    if c.has_custom_borders {
+        cell.push_str("(自定边框)");
+    }
     cell
+}
+
+/// tblpr 投影（S3 四波①）：属性容器原文按 level 下钻渲染。
+/// - 默认（无 row）：每表格块的 tblPr 原文
+/// - row：该行 trPr 原文
+/// - row+cell：该格 tcPr 原文
+///
+/// 寻址与 set_table_element 同口径；行/格越界三段式报错。
+fn render_tblpr(
+    block_xml: &str,
+    t: &docx_model::Table,
+    n: usize,
+    row: Option<usize>,
+    cell: Option<usize>,
+    out: &mut String,
+) -> AppResult<()> {
+    match (row, cell) {
+        (None, _) => {
+            let line = slice_raw_element(block_xml, "tblPr")
+                .map(str::to_string)
+                .unwrap_or_else(|| "(无 tblPr)".into());
+            out.push_str(&format!("[{n}] tblPr: {line}\n"));
+        }
+        (Some(r), None) => {
+            let row_xml = raw_row_xml(block_xml, t, n, r)?;
+            let line = slice_raw_element(row_xml, "trPr")
+                .map(str::to_string)
+                .unwrap_or_else(|| "(无 trPr)".into());
+            out.push_str(&format!("[{n}] r{r} trPr: {line}\n"));
+        }
+        (Some(r), Some(c)) => {
+            let row_xml = raw_row_xml(block_xml, t, n, r)?;
+            let Some(row) = t.rows.get(r - 1) else {
+                return Err(AppError::Validation(format!(
+                    "行号越界: row={r} 不存在（该表共 {} 行，1-based）。",
+                    t.rows.len()
+                )));
+            };
+            if c < 1 || c > row.cells.len() {
+                return Err(AppError::Validation(format!(
+                    "单元格越界: r{r}c{c} 不存在（该行共 {} 格，1-based，跨列格算 1 格——\
+                     网格视图用 inspect_docx projection=table）。",
+                    row.cells.len()
+                )));
+            }
+            let cell_xml = raw_cell_xml(row_xml, c);
+            let line = slice_raw_element(cell_xml, "tcPr")
+                .map(str::to_string)
+                .unwrap_or_else(|| "(无 tcPr)".into());
+            out.push_str(&format!("[{n}] r{r}c{c} tcPr: {line}\n"));
+        }
+    }
+    Ok(())
+}
+
+/// 源码层取第 r 行的 XML 区间（模型不留 XML；locate_blocks 只到块级）。
+fn raw_row_xml<'a>(
+    block_xml: &'a str,
+    t: &docx_model::Table,
+    n: usize,
+    r: usize,
+) -> AppResult<&'a str> {
+    if r < 1 || r > t.rows.len() {
+        return Err(AppError::Validation(format!(
+            "行号越界: row={r} 不存在（该表共 {} 行，1-based。块 {n} 的网格视图用 \
+             inspect_docx projection=table）。",
+            t.rows.len()
+        )));
+    }
+    let spans = super::docx_edit::direct_children_spans(block_xml, "tr");
+    spans.get(r - 1).map(|(s, e)| &block_xml[*s..*e]).ok_or_else(|| {
+        AppError::Validation(format!(
+            "单元格结构异常: 块 {n} 第 {r} 行在源码层定位失败（表格形态异常）。请用 \
+             inspect_docx projection=table 复核。"
+        ))
+    })
+}
+
+/// 行 XML 内取第 c 格的 XML 区间（1-based，与模型格序同口径）。
+fn raw_cell_xml(row_xml: &str, c: usize) -> &str {
+    let spans = super::docx_edit::direct_children_spans(row_xml, "tc");
+    spans
+        .get(c - 1)
+        .map(|(s, e)| &row_xml[*s..*e])
+        .unwrap_or("")
 }
 
 // =========================================================================
@@ -804,6 +990,8 @@ mod tests {
             projection: InspectProjection::Outline,
             start: None,
             end: None,
+            row: None,
+            cell: None,
         })
         .unwrap();
         assert_eq!(report.total_blocks, 2);
@@ -816,6 +1004,8 @@ mod tests {
             projection: InspectProjection::Text,
             start: None,
             end: None,
+            row: None,
+            cell: None,
         })
         .unwrap();
         assert!(text.content.contains("[2] 第二段"));
@@ -824,6 +1014,8 @@ mod tests {
             projection: InspectProjection::Format,
             start: None,
             end: None,
+            row: None,
+            cell: None,
         })
         .unwrap();
         assert!(fmt.content.contains("文本:"), "format 应有文本行: {}", fmt.content);
@@ -837,6 +1029,8 @@ mod tests {
             projection: InspectProjection::Outline,
             start: Some(5),
             end: None,
+            row: None,
+            cell: None,
         })
         .unwrap_err();
         assert!(err.to_string().contains("块号越界"), "实际: {err}");
@@ -845,6 +1039,8 @@ mod tests {
             projection: InspectProjection::Outline,
             start: Some(2),
             end: Some(1),
+            row: None,
+            cell: None,
         })
         .unwrap_err();
         assert!(err.to_string().contains("区间无效"), "实际: {err}");
@@ -853,6 +1049,8 @@ mod tests {
             projection: InspectProjection::Outline,
             start: Some(1),
             end: Some(99),
+            row: None,
+            cell: None,
         })
         .unwrap();
         assert_eq!(report.range, (1, 2));
@@ -927,6 +1125,8 @@ mod tests {
             projection: InspectProjection::HeadersFooters,
             start: None,
             end: None,
+            row: None,
+            cell: None,
         })
         .unwrap();
         assert!(report.content.contains("2 节"), "节计数: {}", report.content);
@@ -947,6 +1147,8 @@ mod tests {
             projection: InspectProjection::HeadersFooters,
             start: Some(1),
             end: None,
+            row: None,
+            cell: None,
         })
         .unwrap_err()
         .to_string();
@@ -982,6 +1184,8 @@ mod tests {
             projection: InspectProjection::Table,
             start: None,
             end: None,
+            row: None,
+            cell: None,
         })
         .unwrap();
         // 头行：真列数（跨列行 gridSpan 求和，非格数）
@@ -998,9 +1202,168 @@ mod tests {
             projection: InspectProjection::Table,
             start: Some(1),
             end: Some(1),
+            row: None,
+            cell: None,
         })
         .unwrap();
         assert!(only_para.content.contains("无表格块"), "{}", only_para.content);
         assert!(only_para.content.contains("outline"), "应指向 outline: {}", only_para.content);
+    }
+
+    /// 带格式特征的表（S3 四波①）：表级 shd/边框/宽度 + 格级 shd/vAlign/tcBorders。
+    fn fmt_tbl_docx_bytes() -> Vec<u8> {
+        use std::io::Write;
+        let doc_xml = concat!(
+            r#"<?xml version="1.0"?><w:document xmlns:w="w"><w:body>"#,
+            r#"<w:tbl><w:tblPr><w:tblStyle w:val="T1"/><w:tblW w:w="5000" w:type="pct"/>"#,
+            r#"<w:tblBorders><w:top w:val="single" w:sz="4"/></w:tblBorders>"#,
+            r#"<w:shd w:val="clear" w:color="auto" w:fill="F2F2F2"/></w:tblPr>"#,
+            r#"<w:tblGrid><w:gridCol w:w="4500"/><w:gridCol w:w="4500"/></w:tblGrid>"#,
+            r#"<w:tr><w:tc><w:tcPr><w:shd w:val="clear" w:fill="DDEEFF"/><w:vAlign w:val="center"/>"#,
+            r#"</w:tcPr><w:p><w:r><w:t>表头甲</w:t></w:r></w:p></w:tc>"#,
+            r#"<w:tc><w:tcPr><w:tcBorders><w:top w:val="double" w:sz="4"/></w:tcBorders>"#,
+            r#"</w:tcPr><w:p><w:r><w:t>表头乙</w:t></w:r></w:p></w:tc></w:tr>"#,
+            r#"<w:tr><w:tc><w:tcPr/><w:p><w:r><w:t>数据</w:t></w:r></w:p></w:tc>"#,
+            r#"<w:tc><w:tcPr/><w:p/></w:tc></w:tr></w:tbl>"#,
+            r#"</w:body></w:document>"#,
+        );
+        let mut buf = Vec::new();
+        {
+            let mut w = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            w.start_file("word/document.xml", zip::write::SimpleFileOptions::default()).unwrap();
+            w.write_all(doc_xml.as_bytes()).unwrap();
+            w.finish().unwrap();
+        }
+        buf
+    }
+
+    #[test]
+    fn table_projection_shows_format_markers() {
+        let bytes = fmt_tbl_docx_bytes();
+        let report = inspect_document(&bytes, &InspectRequest {
+            projection: InspectProjection::Table,
+            start: None,
+            end: None,
+            row: None,
+            cell: None,
+        })
+        .unwrap();
+        // 表属性摘要行
+        assert!(report.content.contains("表属性:"), "{}", report.content);
+        assert!(report.content.contains("样式=T1"), "{}", report.content);
+        assert!(report.content.contains("底纹#F2F2F2"), "{}", report.content);
+        assert!(report.content.contains("边框=自定义"), "{}", report.content);
+        assert!(report.content.contains("宽=5000 pct"), "{}", report.content);
+        // 格级标注
+        assert!(report.content.contains("表头甲(底纹#DDEEFF)(垂直=center)"), "{}", report.content);
+        assert!(report.content.contains("表头乙(自定边框)"), "{}", report.content);
+        // 无特征的格不挂标注（「数据」格无括号尾巴）
+        assert!(report.content.contains("r2: 数据 | (空)\n"), "{}", report.content);
+    }
+
+    #[test]
+    fn tblpr_projection_drills_three_levels() {
+        let bytes = fmt_tbl_docx_bytes();
+        // 表级
+        let report = inspect_document(&bytes, &InspectRequest {
+            projection: InspectProjection::Tblpr,
+            start: None,
+            end: None,
+            row: None,
+            cell: None,
+        })
+        .unwrap();
+        assert!(
+            report.content.contains("[1] tblPr: <w:tblPr><w:tblStyle w:val=\"T1\"/>"),
+            "{}",
+            report.content
+        );
+        assert!(report.content.contains("</w:tblPr>"), "原文完整: {}", report.content);
+        // 行级
+        let report = inspect_document(&bytes, &InspectRequest {
+            projection: InspectProjection::Tblpr,
+            start: None,
+            end: None,
+            row: Some(1),
+            cell: None,
+        })
+        .unwrap();
+        assert!(report.content.contains("[1] r1 trPr: (无 trPr)"), "{}", report.content);
+        // 格级
+        let report = inspect_document(&bytes, &InspectRequest {
+            projection: InspectProjection::Tblpr,
+            start: None,
+            end: None,
+            row: Some(1),
+            cell: Some(1),
+        })
+        .unwrap();
+        assert!(
+            report.content.contains("[1] r1c1 tcPr: <w:tcPr><w:shd w:val=\"clear\" w:fill=\"DDEEFF\"/>"),
+            "{}",
+            report.content
+        );
+        assert!(report.content.contains("<w:vAlign w:val=\"center\"/>"), "{}", report.content);
+    }
+
+    #[test]
+    fn tblpr_projection_error_families() {
+        let bytes = fmt_tbl_docx_bytes();
+        // 行越界
+        let err = inspect_document(&bytes, &InspectRequest {
+            projection: InspectProjection::Tblpr,
+            start: None,
+            end: None,
+            row: Some(9),
+            cell: None,
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("行号越界"), "实际: {err}");
+        // 格越界
+        let err = inspect_document(&bytes, &InspectRequest {
+            projection: InspectProjection::Tblpr,
+            start: None,
+            end: None,
+            row: Some(1),
+            cell: Some(9),
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("单元格越界"), "实际: {err}");
+        assert!(err.contains("projection=table"), "应指路网格视图: {err}");
+        // cell 不带 row
+        let err = inspect_document(&bytes, &InspectRequest {
+            projection: InspectProjection::Tblpr,
+            start: None,
+            end: None,
+            row: None,
+            cell: Some(1),
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("参数校验失败"), "实际: {err}");
+        // row/cell 误传给其他投影
+        let err = inspect_document(&bytes, &InspectRequest {
+            projection: InspectProjection::Text,
+            start: None,
+            end: None,
+            row: Some(1),
+            cell: None,
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("参数不适用"), "实际: {err}");
+        // row 指到段落块区间（fmt fixture 只有表——换带前导段的 tbl_docx_bytes，表=块 2）
+        let err = inspect_document(&tbl_docx_bytes(), &InspectRequest {
+            projection: InspectProjection::Tblpr,
+            start: Some(1),
+            end: Some(1),
+            row: Some(1),
+            cell: None,
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("非表格块"), "实际: {err}");
     }
 }

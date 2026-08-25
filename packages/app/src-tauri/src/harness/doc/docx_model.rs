@@ -100,6 +100,14 @@ pub(super) struct RunProps {
 
 pub(super) struct Table {
     pub rows: Vec<TableRow>,
+    /// 表级格式特征（table 投影摘要行用；原文 XML 见 projection=tblpr，S3 四波①）
+    pub style_id: Option<String>,
+    /// tblPr shd w:fill（"auto" 视为无底纹）
+    pub shd_fill: Option<String>,
+    /// tblPr 是否带 tblBorders（表级边框定义）
+    pub has_borders: bool,
+    /// 表宽简述（"5000 pct" / "9026 twips"）
+    pub width_desc: Option<String>,
 }
 
 pub(super) struct TableRow {
@@ -113,6 +121,11 @@ pub(super) struct TableCell {
     pub grid_span: Option<u32>,
     /// w:vMerge：Some("restart")=纵向合并头，Some("continue")=被合并续格，None=不合并
     pub v_merge: Option<String>,
+    /// tcPr 格式特征（table 投影格标注用；原文 XML 见 projection=tblpr）
+    pub shd_fill: Option<String>,
+    pub v_align: Option<String>,
+    /// tcPr 是否带 tcBorders（格级自定义边框）
+    pub has_custom_borders: bool,
 }
 
 /// 节属性（w:sectPr）。尺寸单位 twips（1/20 pt）。
@@ -341,6 +354,28 @@ pub(super) fn parse_run_props(r_pr: &Element) -> RunProps {
 }
 
 fn parse_table(el: &Element) -> Table {
+    // 表级格式特征（grid 投影摘要行；原文 XML 由 tblpr 投影走字节层切片）
+    let (mut style_id, mut shd_fill, mut has_borders, mut width_desc) = (None, None, false, None);
+    if let Some(tbl_pr) = el.child_elements().find(|c| c.name == "w:tblPr") {
+        for child in tbl_pr.child_elements() {
+            match child.name.as_str() {
+                "w:tblStyle" => style_id = child.attr("w:val").map(str::to_string),
+                "w:tblBorders" => has_borders = true,
+                "w:shd" => {
+                    shd_fill = child
+                        .attr("w:fill")
+                        .filter(|v| *v != "auto")
+                        .map(str::to_string);
+                }
+                "w:tblW" => {
+                    if let (Some(w), Some(ty)) = (child.attr("w:w"), child.attr("w:type")) {
+                        width_desc = Some(format!("{w} {ty}"));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
     let rows = el
         .child_elements()
         .filter(|c| c.name == "w:tr")
@@ -353,7 +388,7 @@ fn parse_table(el: &Element) -> Table {
             TableRow { cells }
         })
         .collect();
-    Table { rows }
+    Table { rows, style_id, shd_fill, has_borders, width_desc }
 }
 
 fn parse_cell(el: &Element) -> TableCell {
@@ -362,6 +397,7 @@ fn parse_cell(el: &Element) -> TableCell {
     let mut dummy_sections = Vec::new();
     walk_blocks(&el.children, &mut blocks, &mut dummy_sections);
     let (mut grid_span, mut v_merge) = (None, None);
+    let (mut shd_fill, mut v_align, mut has_custom_borders) = (None, None, false);
     if let Some(tc_pr) = el.child_elements().find(|c| c.name == "w:tcPr") {
         grid_span = tc_pr
             .child_elements()
@@ -379,8 +415,21 @@ fn parse_cell(el: &Element) -> TableCell {
                     .find(|c| c.name == "w:vMerge")
                     .map(|_| "continue".to_string())
             });
+        for child in tc_pr.child_elements() {
+            match child.name.as_str() {
+                "w:shd" => {
+                    shd_fill = child
+                        .attr("w:fill")
+                        .filter(|v| *v != "auto")
+                        .map(str::to_string);
+                }
+                "w:vAlign" => v_align = child.attr("w:val").map(str::to_string),
+                "w:tcBorders" => has_custom_borders = true,
+                _ => {}
+            }
+        }
     }
-    TableCell { blocks, grid_span, v_merge }
+    TableCell { blocks, grid_span, v_merge, shd_fill, v_align, has_custom_borders }
 }
 
 fn parse_sect_pr(el: &Element) -> SectionProps {

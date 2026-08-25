@@ -26,7 +26,8 @@ pub struct InspectDocxTool;
 #[derive(Deserialize)]
 struct InspectDocxArgs {
     path: String,
-    /// outline（默认，全图）/ format（run 级格式）/ text（带块号正文）/ headers_footers（页眉页脚）/ table（表格网格）
+    /// outline（默认，全图）/ format（run 级格式）/ text（带块号正文）/ headers_footers（页眉页脚）
+    /// / table（表格网格）/ tblpr（表格属性原文，S3 四波①）/ ppr（段落属性原文）
     #[serde(default)]
     projection: Option<String>,
     /// 起始块号（1-based，含）
@@ -35,6 +36,12 @@ struct InspectDocxArgs {
     /// 结束块号（1-based，含）
     #[serde(default)]
     end: Option<usize>,
+    /// 行号（仅 tblpr：level 下钻到行级 trPr）
+    #[serde(default)]
+    row: Option<usize>,
+    /// 格号（仅 tblpr 且 row 给定：下钻到格级 tcPr）
+    #[serde(default)]
+    cell: Option<usize>,
 }
 
 #[derive(Serialize)]
@@ -69,14 +76,19 @@ impl McpClient for InspectDocxTool {
          projection=headers_footers: per-section header/footer references with their \
          content (start/end do not apply — organized by sections, not block ranges). \
          projection=table: per-table cell grid for a block range — every cell on one row \
-         line with merge/nested markers; the cell address scheme (row r × cell c, both \
-         1-based) is exactly what edit_docx set_cell_text / insert_table_row_after use. \
+         line with merge/nested markers plus a table-property summary line (style, \
+         shading, borders, width) and per-cell format markers; the cell address scheme \
+         (row r × cell c, both 1-based) is exactly what edit_docx set_cell_text / \
+         set_cell_format use. projection=tblpr: raw table-property XML — tblPr per table \
+         block by default, trPr with row, tcPr with row+cell; the editing basis for \
+         edit_docx set_table_element (copy the element XML you see here, modify it, send \
+         it back; also the verification view after that op). \
          Blocks are numbered \
          1-based in document order (paragraphs and tables together); these numbers are \
          the addressing scheme used to reference locations for editing. Workflow: outline \
-         first to locate blocks, then format/text/table with start/end for details. Defaults: \
-         outline renders up to 400 blocks, format up to 50, ppr up to 20, text up to 100, \
-         table up to 10."
+         first to locate blocks, then format/text/table/tblpr with start/end for details. \
+         Defaults: outline renders up to 400 blocks, format up to 50, ppr up to 20, text \
+         up to 100, table/tblpr up to 10."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -89,8 +101,8 @@ impl McpClient for InspectDocxTool {
                 },
                 "projection": {
                     "type": "string",
-                    "enum": ["outline", "format", "ppr", "text", "headers_footers", "table"],
-                    "description": "Level of detail: outline (block map, default), format (run-level formatting), ppr (raw pPr XML per block — basis for set_ppr_element), text (block-numbered text), headers_footers (per-section header/footer content; no start/end), table (cell grid of table blocks — basis for set_cell_text / insert_table_row_after)."
+                    "enum": ["outline", "format", "ppr", "text", "headers_footers", "table", "tblpr"],
+                    "description": "Level of detail: outline (block map, default), format (run-level formatting), ppr (raw pPr XML per block — basis for set_ppr_element), text (block-numbered text), headers_footers (per-section header/footer content; no start/end), table (cell grid of table blocks — basis for set_cell_text / set_cell_format), tblpr (raw tblPr/trPr/tcPr XML — basis for set_table_element)."
                 },
                 "start": {
                     "type": "integer",
@@ -99,6 +111,14 @@ impl McpClient for InspectDocxTool {
                 "end": {
                     "type": "integer",
                     "description": "Last block number to render (1-based, inclusive). Default: start + span - 1 (span depends on projection). Not applicable to headers_footers."
+                },
+                "row": {
+                    "type": "integer",
+                    "description": "Row number r (1-based, projection=tblpr only): drill down to that row's trPr. Must be used with the block range selecting one table block."
+                },
+                "cell": {
+                    "type": "integer",
+                    "description": "Cell number c (1-based, projection=tblpr only, requires row): drill down to that cell's tcPr."
                 }
             },
             "required": ["path"]
@@ -120,9 +140,10 @@ impl McpClient for InspectDocxTool {
             Some("text") => InspectProjection::Text,
             Some("headers_footers") => InspectProjection::HeadersFooters,
             Some("table") => InspectProjection::Table,
+            Some("tblpr") => InspectProjection::Tblpr,
             Some(other) => {
                 return Err(AppError::Validation(format!(
-                    "未知投影档位: {other}。支持 outline（块级地图，默认）/ format（run 级格式）/ text（带块号正文）/ headers_footers（页眉页脚）/ table（表格网格）。"
+                    "未知投影档位: {other}。支持 outline（块级地图，默认）/ format（run 级格式）/ text（带块号正文）/ headers_footers（页眉页脚）/ table（表格网格）/ tblpr（表格属性原文）/ ppr（段落属性原文）。"
                 )));
             }
         };
@@ -158,7 +179,13 @@ impl McpClient for InspectDocxTool {
 
         let report = inspect_document(
             &bytes,
-            &InspectRequest { projection, start: parsed.start, end: parsed.end },
+            &InspectRequest {
+                projection,
+                start: parsed.start,
+                end: parsed.end,
+                row: parsed.row,
+                cell: parsed.cell,
+            },
         )?;
 
         let result = InspectDocxResult {
@@ -184,7 +211,8 @@ pub struct EditDocxTool;
 struct EditDocxArgs {
     path: String,
     /// 操作批（全有或全无；段级操作每块限一个，表格操作（set_cell_text /
-    /// insert_table_row_after）可同块多条按序组合，(行, 格) 去重）
+    /// insert_table_row_after / set_cell_format / set_table_element）可同块多条
+    /// 按序组合，(行, 格) 去重；merge_cells / split_cell 须独占该表）
     operations: Vec<OperationSpec>,
 }
 
@@ -245,6 +273,91 @@ enum OperationSpec {
         #[serde(default)]
         cells: Option<Vec<String>>,
     },
+    /// 改格内文字格式：set_format 的格级版（段落格式作用于格内全部段落，字符格式
+    /// 作用于格内全部 run）；(row, cell) 双 1-based
+    SetCellFormat {
+        block: usize,
+        expect_prefix: String,
+        row: usize,
+        cell: usize,
+        #[serde(default)]
+        paragraph: Option<ParaFormatSpec>,
+        #[serde(default)]
+        character: Option<CharFormatSpec>,
+    },
+    /// 通用表格属性元素手术（set_ppr_element 的容器版）：level=table/row/cell
+    /// 三档容器（tblPr/trPr/tcPr）；element 为容器子元素名（无 w: 前缀）；xml=null
+    /// 移除整元素，xml=片段按 schema 序替换/插入。片段从 inspect_docx
+    /// projection=tblpr 的原文复制修改，不凭记忆新写
+    SetTableElement {
+        block: usize,
+        expect_prefix: String,
+        level: TableLevelSpec,
+        #[serde(default)]
+        row: Option<usize>,
+        #[serde(default)]
+        cell: Option<usize>,
+        element: String,
+        #[serde(default)]
+        xml: Option<String>,
+    },
+    /// 合并单元格（Word 原生语义）：horizontal=同行 span 格并 1 格（gridSpan 求和、
+    /// 内容按序拼接）；vertical=同列 span 行纵并（vMerge 头 restart 续 continue、
+    /// 内容留原格，split_cell 即恢复）。结构重构须独占该表
+    MergeCells {
+        block: usize,
+        expect_prefix: String,
+        direction: MergeDirectionSpec,
+        row: usize,
+        cell: usize,
+        #[serde(default)]
+        span: Option<usize>,
+    },
+    /// 拆分单元格（merge_cells 的逆）：vertical=拆整条纵并链（各格内容恢复独立
+    /// 显示）；horizontal=跨 N 列格拆回 N 个单格（内容留首格，其余空段）
+    SplitCell {
+        block: usize,
+        expect_prefix: String,
+        direction: MergeDirectionSpec,
+        row: usize,
+        cell: usize,
+    },
+}
+
+/// 参数态容器档位（tblPr / trPr / tcPr）。
+#[derive(Deserialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+enum TableLevelSpec {
+    Table,
+    Row,
+    Cell,
+}
+
+/// 参数态合并方向。
+#[derive(Deserialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+enum MergeDirectionSpec {
+    Horizontal,
+    Vertical,
+}
+
+impl From<TableLevelSpec> for crate::harness::doc::TableLevel {
+    fn from(s: TableLevelSpec) -> Self {
+        match s {
+            TableLevelSpec::Table => crate::harness::doc::TableLevel::Table,
+            TableLevelSpec::Row => crate::harness::doc::TableLevel::Row,
+            TableLevelSpec::Cell => crate::harness::doc::TableLevel::Cell,
+        }
+    }
+}
+
+impl From<MergeDirectionSpec> for crate::harness::doc::MergeDirection {
+    fn from(s: MergeDirectionSpec) -> Self {
+        match s {
+            MergeDirectionSpec::Horizontal => crate::harness::doc::MergeDirection::Horizontal,
+            MergeDirectionSpec::Vertical => crate::harness::doc::MergeDirection::Vertical,
+        }
+    }
 }
 
 /// 参数态段落格式（单位与 format 投影显示一致：行距=倍数 / 段前后=pt / 缩进=twips）。
@@ -339,6 +452,43 @@ impl From<OperationSpec> for EditOp {
             OperationSpec::InsertTableRowAfter { block, expect_prefix, after_row, cells } => {
                 EditOp::InsertTableRowAfter { block, expect_prefix, after_row, cells }
             }
+            OperationSpec::SetCellFormat {
+                block,
+                expect_prefix,
+                row,
+                cell,
+                paragraph,
+                character,
+            } => EditOp::SetCellFormat {
+                block,
+                expect_prefix,
+                row,
+                cell,
+                paragraph: paragraph.map(Into::into),
+                character: character.map(Into::into),
+            },
+            OperationSpec::SetTableElement { block, expect_prefix, level, row, cell, element, xml } => {
+                EditOp::SetTableElement { block, expect_prefix, level: level.into(), row, cell, element, xml }
+            }
+            OperationSpec::MergeCells { block, expect_prefix, direction, row, cell, span } => {
+                EditOp::MergeCells {
+                    block,
+                    expect_prefix,
+                    direction: direction.into(),
+                    row,
+                    cell,
+                    span,
+                }
+            }
+            OperationSpec::SplitCell { block, expect_prefix, direction, row, cell } => {
+                EditOp::SplitCell {
+                    block,
+                    expect_prefix,
+                    direction: direction.into(),
+                    row,
+                    cell,
+                }
+            }
         }
     }
 }
@@ -387,15 +537,34 @@ impl McpClient for EditDocxTool {
          paragraph's formatting; op=insert_table_row_after appends a row by cloning a \
          template row (default: the last one) so merged cells keep working — multiple \
          set_cell_text / insert_table_row_after ops on the same table are applied in \
-         order within one batch. Every \
+         order within one batch. Table formatting ops: op=set_cell_format changes \
+         paragraph and/or character formatting of one cell (paragraph formatting hits \
+         every paragraph in the cell, character formatting every run — same param shape \
+         as set_format); op=set_table_element is the generic escape hatch for any \
+         table-property element (borders tblBorders, shading shd, width tblW, cell \
+         margins tblCellMar, row height trHeight, vertical alignment vAlign, ...) at \
+         three container levels: level=table (tblPr, no row/cell), level=row (trPr, \
+         with row), level=cell (tcPr, with row+cell) — xml=null removes the element, \
+         xml=<w:...> fragment replaces/inserts it at its schema position (copy the \
+         current XML from inspect_docx projection=tblpr, never write from memory; \
+         gridSpan/hMerge/vMerge are protected — use merge_cells / split_cell instead). \
+         Structural ops: op=merge_cells merges cells with Word-native semantics — \
+         horizontal merges span adjacent cells in one row (gridSpan sums, content \
+         concatenates into the first cell); vertical merges cells across rows at the \
+         same grid columns (vMerge head restarts, content stays in place — split_cell \
+         restores it). op=split_cell is the inverse — vertical splits the whole merge \
+         chain, horizontal splits a spanning cell back into unit cells (content stays \
+         in the first). merge_cells / split_cell renumber row/cell addresses, so each \
+         must be the only op on its table block in a batch (finish structure first, \
+         then re-inspect projection=table to address content). Every \
          operation must carry expect_prefix, the current text prefix of its target block, \
          as a fingerprint guard — if any block no longer matches, the whole batch is \
          rejected and the file is left untouched. Blocks are addressed by inspect_docx \
          block numbers (1-based, paragraphs and tables in document order); text ops \
          (replace/delete/set_style/set_format/set_ppr_element) reject table and \
          revision-marked blocks. The file is backed up \
-         before writing. Workflow: inspect_docx (outline, then text/table) to find blocks, \
-         edit_docx, then inspect_docx again to verify the result."
+         before writing. Workflow: inspect_docx (outline, then text/table/tblpr) to find \
+         blocks, edit_docx, then inspect_docx again to verify the result."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -548,6 +717,91 @@ impl McpClient for EditDocxTool {
                                 },
                                 "required": ["op", "block", "expect_prefix"],
                                 "description": "Append a row to a table by cloning an existing row's structure and filling its text."
+                            },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "op": { "const": "set_cell_format" },
+                                    "block": { "type": "integer", "description": "Target table block (1-based)." },
+                                    "expect_prefix": { "type": "string", "description": "Current text prefix of the table block (fingerprint guard)." },
+                                    "row": { "type": "integer", "description": "Row number r (1-based) — same as the rN lines of inspect_docx projection=table." },
+                                    "cell": { "type": "integer", "description": "Cell number c within the row (1-based; a merged/spanning cell counts as one)." },
+                                    "paragraph": {
+                                        "type": "object",
+                                        "description": "Paragraph formatting applied to EVERY paragraph in the cell; omitted fields unchanged. Units match set_format.",
+                                        "properties": {
+                                            "align": { "type": "string", "enum": ["left", "center", "right", "both", "distribute", "start", "end"] },
+                                            "line_spacing": { "type": "number", "description": "Line spacing multiple, e.g. 1.5." },
+                                            "space_before_pt": { "type": "number" },
+                                            "space_after_pt": { "type": "number" },
+                                            "indent_first_line_tw": { "type": "integer" },
+                                            "indent_left_tw": { "type": "integer" }
+                                        },
+                                        "additionalProperties": false
+                                    },
+                                    "character": {
+                                        "type": "object",
+                                        "description": "Character formatting applied to EVERY run in the cell; omitted fields unchanged.",
+                                        "properties": {
+                                            "bold": { "type": "boolean" },
+                                            "italic": { "type": "boolean" },
+                                            "font_size_pt": { "type": "number" },
+                                            "color": { "type": "string", "description": "Hex RGB without '#', e.g. FF0000." },
+                                            "font": { "type": "string", "description": "Font family; sets eastAsia/ascii/hAnsi together." }
+                                        },
+                                        "additionalProperties": false
+                                    }
+                                },
+                                "required": ["op", "block", "expect_prefix", "row", "cell"],
+                                "description": "Change one cell's text formatting (cell-level version of set_format). At least one field inside paragraph or character must be set."
+                            },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "op": { "const": "set_table_element" },
+                                    "block": { "type": "integer", "description": "Target table block (1-based)." },
+                                    "expect_prefix": { "type": "string", "description": "Current text prefix of the table block (fingerprint guard)." },
+                                    "level": { "type": "string", "enum": ["table", "row", "cell"], "description": "Which property container to operate on: table → tblPr (no row/cell), row → trPr (with row), cell → tcPr (with row+cell)." },
+                                    "row": { "type": "integer", "description": "Row number r (1-based); required for level=row/cell, rejected for level=table." },
+                                    "cell": { "type": "integer", "description": "Cell number c (1-based); required for level=cell, rejected otherwise." },
+                                    "element": {
+                                        "type": "string",
+                                        "description": "Container child element name without the w: prefix. tblPr (level=table): tblStyle tblpPr tblOverlap bidiVisual tblStyleRowBandSize tblStyleColBandSize tblW jc tblCellSpacing tblInd tblBorders shd tblLayout tblCellMar tblLook tblCaption tblDescription. trPr (level=row): cnfStyle divId gridBefore gridAfter wBefore wAfter cantSplit trHeight tblHeader tblCellSpacing jc hidden. tcPr (level=cell): cnfStyle tcW tcBorders shd noWrap tcMar textDirection tcFitText vAlign hideMark. gridSpan/hMerge/vMerge are protected (rejected — use merge_cells / split_cell)."
+                                    },
+                                    "xml": {
+                                        "type": ["string", "null"],
+                                        "description": "null (or omitted) = remove the whole element; a string = well-formed single-root fragment '<w:ELEMENT ...>...</w:ELEMENT>' replacing the existing element or inserted at its schema position. Copy the current XML from inspect_docx projection=tblpr and modify it — never write OOXML from memory. No xmlns declarations. Example: cell shading → level=cell, element=shd, xml='<w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"DDEEFF\"/>'."
+                                    }
+                                },
+                                "required": ["op", "block", "expect_prefix", "level", "element"],
+                                "description": "Generic surgery on any table-property element — borders, shading, widths, margins, row heights, vertical alignment, repeating header (tblHeader), etc."
+                            },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "op": { "const": "merge_cells" },
+                                    "block": { "type": "integer", "description": "Target table block (1-based). Must be the only op on this table in the batch." },
+                                    "expect_prefix": { "type": "string", "description": "Current text prefix of the table block (fingerprint guard)." },
+                                    "direction": { "type": "string", "enum": ["horizontal", "vertical"] },
+                                    "row": { "type": "integer", "description": "Row of the head (top-left) cell of the merged region (1-based)." },
+                                    "cell": { "type": "integer", "description": "Head cell number within the row (1-based)." },
+                                    "span": { "type": "integer", "minimum": 2, "description": "How many cells (horizontal) or rows (vertical) to merge; default 2." }
+                                },
+                                "required": ["op", "block", "expect_prefix", "direction", "row", "cell"],
+                                "description": "Merge cells with Word-native semantics. Horizontal: merges span adjacent cells in one row — their texts concatenate into the head cell. Vertical: merges cells across rows at the same grid columns — content stays in each cell, split_cell later restores independent display."
+                            },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "op": { "const": "split_cell" },
+                                    "block": { "type": "integer", "description": "Target table block (1-based). Must be the only op on this table in the batch." },
+                                    "expect_prefix": { "type": "string", "description": "Current text prefix of the table block (fingerprint guard)." },
+                                    "direction": { "type": "string", "enum": ["horizontal", "vertical"] },
+                                    "row": { "type": "integer", "description": "Row of the cell to split (1-based)." },
+                                    "cell": { "type": "integer", "description": "Cell number within the row (1-based). vertical: the head (restart) cell of the merge chain. horizontal: the spanning (gridSpan > 1) cell." }
+                                },
+                                "required": ["op", "block", "expect_prefix", "direction", "row", "cell"],
+                                "description": "Split a merged cell. Vertical: splits the whole vertical-merge chain under the head cell — each cell's content reappears. Horizontal: splits a spanning cell back into unit cells — content stays in the first, the rest get empty paragraphs with the same formatting."
                             }
                         ]
                     }
@@ -742,7 +996,7 @@ mod tests {
         let bytes = std::fs::read(&file).unwrap();
         let inspect = crate::harness::doc::inspect_document(
             &bytes,
-            &InspectRequest { projection: InspectProjection::Text, start: None, end: None },
+            &InspectRequest { projection: InspectProjection::Text, start: None, end: None, row: None, cell: None },
         )
         .unwrap();
         assert!(inspect.content.contains("新插段"));
