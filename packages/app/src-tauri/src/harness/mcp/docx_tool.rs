@@ -85,7 +85,9 @@ impl McpClient for InspectDocxTool {
          indents after style-chain resolution) plus table grids for a block range. \
          projection=ppr: raw paragraph-property (pPr) XML of each block — the editing \
          basis for edit_docx set_ppr_element (copy the element XML you see here, modify \
-         it, send it back; also the verification view after that op). \
+         it, send it back; also the verification view after that op). For table blocks, \
+         pass row+cell to list the pPr of every paragraph inside that cell (same \
+         addressing as set_cell_format). \
          projection=text: document text with block-number prefixes. \
          projection=headers_footers: per-section header/footer references with their \
          content (start/end do not apply — organized by sections, not block ranges). \
@@ -141,11 +143,11 @@ impl McpClient for InspectDocxTool {
                 },
                 "row": {
                     "type": "integer",
-                    "description": "Row number r (1-based, projection=tblpr only): drill down to that row's trPr. Must be used with the block range selecting one table block."
+                    "description": "Row number r (1-based; projection=tblpr: that row's trPr; projection=ppr on a table block: that cell's paragraphs, requires cell). Must be used with the block range selecting one table block."
                 },
                 "cell": {
                     "type": "integer",
-                    "description": "Cell number c (1-based, projection=tblpr only, requires row): drill down to that cell's tcPr."
+                    "description": "Cell number c (1-based, requires row; projection=tblpr: that cell's tcPr; projection=ppr on a table block: every paragraph's pPr inside the cell)."
                 },
                 "style": {
                     "type": "string",
@@ -325,7 +327,8 @@ enum OperationSpec {
         cells: Option<Vec<String>>,
     },
     /// 改格内文字格式：set_format 的格级版（段落格式作用于格内全部段落，字符格式
-    /// 作用于格内全部 run）；(row, cell) 双 1-based
+    /// 作用于格内全部 run）；(row, cell) 双 1-based。style=格内全段套段落样式
+    /// （显示名或 ID）——表格格内段落脱离正文样式（如首行缩进透出）的正路
     SetCellFormat {
         block: usize,
         expect_prefix: String,
@@ -335,6 +338,8 @@ enum OperationSpec {
         paragraph: Option<ParaFormatSpec>,
         #[serde(default)]
         character: Option<CharFormatSpec>,
+        #[serde(default)]
+        style: Option<String>,
     },
     /// 通用表格属性元素手术（set_ppr_element 的容器版）：level=table/row/cell
     /// 三档容器（tblPr/trPr/tcPr）；element 为容器子元素名（无 w: 前缀）；xml=null
@@ -614,6 +619,7 @@ impl From<OperationSpec> for FamilyOp {
                 cell,
                 paragraph,
                 character,
+                style,
             } => FamilyOp::Doc(EditOp::SetCellFormat {
                 block,
                 expect_prefix,
@@ -621,6 +627,7 @@ impl From<OperationSpec> for FamilyOp {
                 cell,
                 paragraph: paragraph.map(Into::into),
                 character: character.map(Into::into),
+                style,
             }),
             OperationSpec::SetTableElement { block, expect_prefix, level, row, cell, element, xml } => {
                 FamilyOp::Doc(EditOp::SetTableElement {
@@ -740,9 +747,12 @@ impl McpClient for EditDocxTool {
          template row (default: the last one) so merged cells keep working — multiple \
          set_cell_text / insert_table_row_after ops on the same table are applied in \
          order within one batch. Table formatting ops: op=set_cell_format changes \
-         paragraph and/or character formatting of one cell (paragraph formatting hits \
-         every paragraph in the cell, character formatting every run — same param shape \
-         as set_format); op=set_table_element is the generic escape hatch for any \
+         paragraph and/or character formatting of one cell and/or applies a paragraph \
+         style to it (paragraph formatting hits every paragraph in the cell, character \
+         formatting every run — same param shape as set_format; style re-styles every \
+         paragraph — the fix for a body style's first-line indent bleeding into cells, \
+         usable together with paragraph.indent_first_line_tw=0); \
+         op=set_table_element is the generic escape hatch for any \
          table-property element (borders tblBorders, shading shd, width tblW, cell \
          margins tblCellMar, row height trHeight, vertical alignment vAlign, ...) at \
          three container levels: level=table (tblPr, no row/cell), level=row (trPr, \
@@ -918,7 +928,7 @@ impl McpClient for EditDocxTool {
                                     "table_style": { "type": "string", "description": "Table style (display name or ID, @w:type=table — see projection=styles): attach the house template's table style so shading/borders follow it. Default: plain single-border table." }
                                 },
                                 "required": ["op", "block", "expect_prefix", "rows"],
-                                "description": "Create a new table after the anchor block. Default styling: 100% width, single borders, evenly split columns, bold repeating header row. Pass table_style to bind a named table style instead."
+                                "description": "Create a new table after the anchor block. For house-template look pass table_style (a @w:type=table style — pick from inspect_docx projection=styles) so borders/shading/row banding follow the style; without it the table is plain: 100% width, single borders, evenly split columns, bold repeating header row."
                             },
                             {
                                 "type": "object",
@@ -953,6 +963,10 @@ impl McpClient for EditDocxTool {
                                     "expect_prefix": { "type": "string", "description": "Current text prefix of the table block (fingerprint guard)." },
                                     "row": { "type": "integer", "description": "Row number r (1-based) — same as the rN lines of inspect_docx projection=table." },
                                     "cell": { "type": "integer", "description": "Cell number c within the row (1-based; a merged/spanning cell counts as one)." },
+                                    "style": {
+                                        "type": "string",
+                                        "description": "Paragraph style (display name or ID, from inspect_docx outline or projection=styles) applied to EVERY paragraph in the cell. This is the clean way to escape a body style bleeding into table cells (e.g. Normal's first-line indent): point the cell at a style without that indent, or combine with paragraph.indent_first_line_tw=0."
+                                    },
                                     "paragraph": {
                                         "type": "object",
                                         "description": "Paragraph formatting applied to EVERY paragraph in the cell; omitted fields unchanged. Units match set_format.",
@@ -980,7 +994,7 @@ impl McpClient for EditDocxTool {
                                     }
                                 },
                                 "required": ["op", "block", "expect_prefix", "row", "cell"],
-                                "description": "Change one cell's text formatting (cell-level version of set_format). At least one field inside paragraph or character must be set."
+                                "description": "Change one cell's formatting (cell-level version of set_format): paragraph/character formats for every paragraph/run in the cell, and/or style to re-style every paragraph. At least one of style / a paragraph field / a character field must be set."
                             },
                             {
                                 "type": "object",

@@ -271,6 +271,8 @@ pub enum EditOp {
     /// 改格内文字格式（S3 四波·格式件）：set_format 的格级版本——同参数面，
     /// 地址 (row, cell) 与 projection=table 同口径。段落格式作用于格内全部
     /// 段落、字符格式作用于格内全部 run。同批同表可多条，(row, cell) 去重。
+    /// style（六波·缺口 1）：格内全段套段落样式（显示名或 ID）——表格格内
+    /// 段落脱离正文样式（如 Normal 首行缩进透出）的正路。
     SetCellFormat {
         block: usize,
         expect_prefix: String,
@@ -278,6 +280,7 @@ pub enum EditOp {
         cell: usize,
         paragraph: Option<ParaFormat>,
         character: Option<CharFormat>,
+        style: Option<String>,
     },
     /// 通用表格属性元素手术（S3 四波·格式件，set_ppr_element 的表格域镜像）：
     /// level=table/row/cell 三层，element 为对应容器（tblPr/trPr/tcPr）法定子
@@ -638,7 +641,7 @@ pub(super) fn apply_edits(
                          请先在 Word 中接受或拒绝修订后再编辑该块。"
                     )));
                 }
-                validate_formats(paragraph.as_ref(), character.as_ref(), "set_format")?;
+                validate_formats(paragraph.as_ref(), character.as_ref(), false, "set_format")?;
             }
             EditOp::SetPprElement { element, xml, .. } => {
                 if has_revision(&model.body[idx]) {
@@ -760,7 +763,7 @@ pub(super) fn apply_edits(
                 counts.push(tpl.cells.len());
                 tpls.push(Some(real_tpl));
             }
-            EditOp::SetCellFormat { row, cell, paragraph, character, .. } => {
+            EditOp::SetCellFormat { row, cell, paragraph, character, style, .. } => {
                 if has_revision(&model.body[idx]) {
                     return Err(AppError::Validation(format!(
                         "含修订标记: 块 {block}（表格）带插入/删除修订，默认不触碰修订内容。\
@@ -774,7 +777,17 @@ pub(super) fn apply_edits(
                          请先在 Word 中接受或拒绝修订后再编辑该表。"
                     )));
                 }
-                validate_formats(paragraph.as_ref(), character.as_ref(), "set_cell_format")?;
+                if let Some(name) = style {
+                    if styles.id_of(name).is_none() {
+                        return Err(AppError::Validation(format!(
+                            "未知样式: {:?} 不在本文档样式表中。可用样式（前 20）: {}。\
+                             样式名接受显示名或 ID，来自 inspect_docx outline 的样式列。",
+                            name,
+                            styles.display_names_joined(20)
+                        )));
+                    }
+                }
+                validate_formats(paragraph.as_ref(), character.as_ref(), style.is_some(), "set_cell_format")?;
                 precheck_cell_target(
                     &model, idx, block, *row, *cell, "set_cell_format",
                     &mut table_state, &mut used_cells,
@@ -1381,7 +1394,7 @@ pub(super) fn apply_edits(
                     target: None,
                 });
             }
-            EditOp::SetCellFormat { block, row, cell, paragraph, character, .. } => {
+            EditOp::SetCellFormat { block, row, cell, paragraph, character, style, .. } => {
                 let span = spans[block - 1];
                 let entry = match table_plan_idx.get(&block) {
                     Some(&i) => i,
@@ -1397,18 +1410,28 @@ pub(super) fn apply_edits(
                     }
                 };
                 let cur = plan[entry].insert.clone();
+                // 预检已校验样式存在；此处重解析拿 ID（批内样式表不可变，无 TOCTOU）
+                let style_id = style.as_deref().map(|name| {
+                    styles.id_of(name).expect("预检已校验样式存在")
+                });
                 let new_xml =
-                    set_cell_format_xml(&cur, row, cell, paragraph.as_ref(), character.as_ref())
+                    set_cell_format_xml(&cur, row, cell, paragraph.as_ref(), character.as_ref(), style_id)
                         .ok_or_else(|| AppError::Internal(format!(
                             "格内格式手术失败: 块 {block} 第 {row} 行第 {cell} 格 XML 形态异常（内部 bug，未写盘）"
                         )))?;
                 plan[entry].insert = new_xml;
+                let fmts = describe_formats(paragraph.as_ref(), character.as_ref());
+                let after = match &style {
+                    Some(name) if fmts == "（无字段）" => format!("样式={name}"),
+                    Some(name) => format!("样式={name} {fmts}"),
+                    None => fmts,
+                };
                 plan[entry].summaries.push(AppliedOp {
                     op: "set_cell_format",
                     block,
                     before: cell_projected_of(&model, block, row, cell),
-                    after: truncate(&describe_formats(paragraph.as_ref(), character.as_ref()), 60),
-                    style: None,
+                    after: truncate(&after, 60),
+                    style: style_id.map(str::to_string),
                     style_unchanged: None,
                     target: None,
                 });
@@ -1812,11 +1835,17 @@ fn restyle_paragraph(block_xml: &str, style_id: &str) -> Option<String> {
 
 /// set_format / set_cell_format 值域校验（家族前缀稳定：空格式操作/对齐值无效/颜色值无效/…）。
 ///
-/// `op_label` 进文案（报错指向具体操作名）。
-fn validate_formats(para: Option<&ParaFormat>, ch: Option<&CharFormat>, op_label: &str) -> AppResult<()> {
+/// `op_label` 进文案（报错指向具体操作名）；`style_present` = 调用方带样式参数
+/// （set_cell_format 专属），此时 paragraph/character 全空也合法（纯换样式操作）。
+fn validate_formats(
+    para: Option<&ParaFormat>,
+    ch: Option<&CharFormat>,
+    style_present: bool,
+    op_label: &str,
+) -> AppResult<()> {
     let empty_para = para.is_none_or(|p| p.is_empty());
     let empty_ch = ch.is_none_or(|c| c.is_empty());
-    if empty_para && empty_ch {
+    if empty_para && empty_ch && !style_present {
         return Err(AppError::Validation(
             format!(
                 "空格式操作: {op_label} 未提供任何要修改的字段。\
@@ -2061,14 +2090,26 @@ fn apply_para_formats(ppr_inner: &str, p: &ParaFormat) -> String {
             None => Vec::new(),
         };
         if let Some(v) = p.indent_first_line_tw {
+            // 跨层压制（2026-08-26 生产反馈缺口 2）：chars 单位变体不能只删——直接层
+            // 删掉后样式层（如正文样式的 firstLineChars=200）会透出，工具报成功但
+            // 缩进仍在。显式写 0 才是「直接层覆盖样式层」的语义（chars 单位优先于
+            // twips）。零值连 hanging 系一并压零——任意元素内优先序下都渲染无缩进；
+            // 非零值不写 hanging=0（同元素内 hanging 会压掉 firstLine，反伤目标）
             attr_set(&mut attrs, "w:firstLine", &v.to_string());
-            for k in ["w:hanging", "w:firstLineChars", "w:hangingChars"] {
-                attr_remove(&mut attrs, k);
+            attr_set(&mut attrs, "w:firstLineChars", "0");
+            if v == 0 {
+                attr_set(&mut attrs, "w:hanging", "0");
+                attr_set(&mut attrs, "w:hangingChars", "0");
+            } else {
+                for k in ["w:hanging", "w:hangingChars"] {
+                    attr_remove(&mut attrs, k);
+                }
             }
         }
         if let Some(v) = p.indent_left_tw {
+            // leftChars 同理显式写 0 压样式层（left 无互斥变体，恒安全）
             attr_set(&mut attrs, "w:left", &v.to_string());
-            attr_remove(&mut attrs, "w:leftChars");
+            attr_set(&mut attrs, "w:leftChars", "0");
         }
         let tag = build_tag("ind", &attrs);
         out = upsert_element(&out, "ind", &tag, &["jc", "rPr", "sectPr", "pPrChange"], "</w:pPr>");
@@ -2155,10 +2196,19 @@ fn fresh_ppr_inner(p: &ParaFormat) -> String {
     }
     let mut ind_attrs: Vec<(String, String)> = Vec::new();
     if let Some(v) = p.indent_first_line_tw {
+        // 跨层压制同 apply_para_formats（缺口 2）：chars 变体显式写 0——无 pPr 的
+        // 格内段落正是生产踩空形态（样式层 firstLineChars 透出）；零值连 hanging
+        // 系一并压零，非零只压 chars（元素内 hanging 优先 firstLine，写 0 反伤）
         ind_attrs.push(("w:firstLine".into(), v.to_string()));
+        ind_attrs.push(("w:firstLineChars".into(), "0".into()));
+        if v == 0 {
+            ind_attrs.push(("w:hanging".into(), "0".into()));
+            ind_attrs.push(("w:hangingChars".into(), "0".into()));
+        }
     }
     if let Some(v) = p.indent_left_tw {
         ind_attrs.push(("w:left".into(), v.to_string()));
+        ind_attrs.push(("w:leftChars".into(), "0".into()));
     }
     if !ind_attrs.is_empty() {
         inner.push_str(&build_tag("ind", &ind_attrs));
@@ -2998,13 +3048,16 @@ fn set_table_element_xml(
 }
 
 /// set_cell_format 手术：段落格式作用于格内全部直接 `<w:p>`（reformat_ppr 逐段，
-/// 含自闭合空段展开），字符格式作用于格内全部 run（reformat_runs 整格）。
+/// 含自闭合空段展开），字符格式作用于格内全部 run（reformat_runs 整格），
+/// 样式（style_id 已反查）作用于格内全部段落（restyle_paragraph 逐段——与
+/// 直接格式互不冲突，pStyle 与 spacing/ind 等 pPr 子元素各占各位）。
 fn set_cell_format_xml(
     block_xml: &str,
     row: usize,
     cell: usize,
     paragraph: Option<&ParaFormat>,
     character: Option<&CharFormat>,
+    style_id: Option<&str>,
 ) -> Option<String> {
     apply_to_cell(block_xml, row, cell, |cell_xml| {
         if cell_xml.contains("<w:tbl>") || cell_xml.contains("<w:tbl ") {
@@ -3018,6 +3071,16 @@ fn set_cell_format_xml(
             }
             for (ps, pe) in paras.iter().rev() {
                 let new_p = reformat_ppr(&out[*ps..*pe], p)?;
+                out.replace_range(ps..pe, &new_p);
+            }
+        }
+        if let Some(id) = style_id {
+            let paras = direct_children_spans(&out, "p");
+            if paras.is_empty() {
+                return None; // Word 格必含 ≥1 段——形态异常
+            }
+            for (ps, pe) in paras.iter().rev() {
+                let new_p = restyle_paragraph(&out[*ps..*pe], id)?;
                 out.replace_range(ps..pe, &new_p);
             }
         }
@@ -4136,7 +4199,10 @@ mod tests {
             out.contains(r#"<w:spacing w:before="120" w:line="360" w:lineRule="auto" w:after="120"/>"#),
             "spacing 合并: {out}"
         );
-        assert!(out.contains(r#"<w:ind w:firstLine="720"/>"#), "ind 覆盖: {out}");
+        assert!(
+            out.contains(r#"<w:ind w:firstLine="720" w:firstLineChars="0"/>"#),
+            "ind 覆盖 + chars 变体压 0（跨层压制）: {out}"
+        );
         assert!(out.contains(r#"<w:jc w:val="center"/>"#), "jc 插入: {out}");
         // schema 序：pStyle < spacing < ind < jc
         let ppr = out.find("<w:pPr>").unwrap();
@@ -4243,6 +4309,165 @@ mod tests {
         assert_eq!(p1.runs[0].props.bold, Some(true));
         let super::docx_model::Block::Paragraph(p2) = &m.body[1] else { panic!() };
         assert_eq!(p2.props.spacing_line, Some(480));
+    }
+
+    #[test]
+    fn set_format_indent_zero_suppresses_chars_variants() {
+        // 缺口 2（2026-08-26 生产反馈）：正文样式带 firstLineChars=200，工具只写
+        // firstLine=0、删掉直接层 chars 变体 → 样式层 chars 透出、缩进仍在。
+        // 修复后显式写 0（chars 单位优先于 twips，跨层压制唯一正解）
+        let xml = concat!(
+            r#"<w:p><w:pPr><w:pStyle w:val="body"/>"#,
+            r#"<w:ind w:firstLine="480" w:firstLineChars="200"/></w:pPr><w:r><w:t>甲</w:t></w:r></w:p>"#,
+        );
+        // ① 直接层原带 chars 变体（生产真实形态）→ 四变体显式归零
+        let (out, _) = apply_edits(
+            &wrap(xml),
+            &heading_styles(),
+            &[EditOp::SetFormat {
+                block: 1,
+                expect_prefix: "甲".into(),
+                paragraph: Some(ParaFormat { indent_first_line_tw: Some(0), ..Default::default() }),
+                character: None,
+            }],
+        )
+        .unwrap();
+        assert!(
+            out.contains(r#"<w:ind w:firstLine="0" w:firstLineChars="0" w:hanging="0" w:hangingChars="0"/>"#),
+            "四变体归零（任意元素内优先序下都渲染无缩进）: {out}"
+        );
+        // ② 无直接 ind → 新建即四零（压制不依赖直接层已有 ind）
+        let xml2 = wrap(r#"<w:p><w:r><w:t>乙</w:t></w:r></w:p>"#);
+        let (out2, _) = apply_edits(
+            &xml2,
+            &Stylesheet::empty(),
+            &[EditOp::SetFormat {
+                block: 1,
+                expect_prefix: "乙".into(),
+                paragraph: Some(ParaFormat { indent_first_line_tw: Some(0), ..Default::default() }),
+                character: None,
+            }],
+        )
+        .unwrap();
+        assert!(
+            out2.contains(r#"<w:ind w:firstLine="0" w:firstLineChars="0" w:hanging="0" w:hangingChars="0"/>"#),
+            "新建即四零: {out2}"
+        );
+        // ③ 非零值：chars 压 0、hanging 系移除（写 hanging=0 会反伤——元素内 hanging 优先 firstLine）
+        let (out3, _) = apply_edits(
+            &wrap(xml),
+            &heading_styles(),
+            &[EditOp::SetFormat {
+                block: 1,
+                expect_prefix: "甲".into(),
+                paragraph: Some(ParaFormat { indent_first_line_tw: Some(480), ..Default::default() }),
+                character: None,
+            }],
+        )
+        .unwrap();
+        assert!(
+            out3.contains(r#"<w:ind w:firstLine="480" w:firstLineChars="0"/>"#),
+            "非零：chars=0: {out3}"
+        );
+        assert!(!out3.contains("w:hanging"), "非零不写 hanging（反伤 firstLine）: {out3}");
+        // ④ 左缩进同律：leftChars=0 压样式层
+        let (out4, _) = apply_edits(
+            &xml2,
+            &Stylesheet::empty(),
+            &[EditOp::SetFormat {
+                block: 1,
+                expect_prefix: "乙".into(),
+                paragraph: Some(ParaFormat { indent_left_tw: Some(0), ..Default::default() }),
+                character: None,
+            }],
+        )
+        .unwrap();
+        assert!(out4.contains(r#"<w:ind w:left="0" w:leftChars="0"/>"#), "左缩进双零: {out4}");
+    }
+
+    #[test]
+    fn set_cell_format_style_restyles_cell_paragraphs() {
+        // 缺口 1（2026-08-26 生产反馈）：格内段落无法套段落样式（set_style 拒表格块）。
+        // set_cell_format 加 style：格内全段 pStyle 手术，名/ID 反查同 set_style
+        let cell = concat!(
+            r#"<w:tc><w:tcPr><w:tcW w:w="4500" w:type="dxa"/></w:tcPr>"#,
+            r#"<w:p><w:pPr><w:ind w:firstLine="480"/></w:pPr><w:r><w:t>上</w:t></w:r></w:p>"#,
+            r#"<w:p><w:r><w:t>下</w:t></w:r></w:p></w:tc>"#,
+        );
+        let xml = wrap(&format!(
+            r#"<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="4500"/><w:gridCol w:w="4500"/></w:tblGrid><w:tr>{}{}</w:tr></w:tbl>"#,
+            cell,
+            cell_xml("邻")
+        ));
+        // ① 纯样式操作（paragraph/character 全空）合法 + 摘要携带样式
+        let (out, applied) = apply_edits(
+            &xml,
+            &heading_styles(),
+            &[EditOp::SetCellFormat {
+                block: 1,
+                expect_prefix: "上".into(),
+                row: 1,
+                cell: 1,
+                paragraph: None,
+                character: None,
+                style: Some("heading 2".into()),
+            }],
+        )
+        .unwrap();
+        assert_eq!(applied[0].op, "set_cell_format");
+        assert_eq!(applied[0].style.as_deref(), Some("h2"), "AppliedOp.style 携带解析后 ID");
+        assert!(applied[0].after.contains("样式=heading 2"), "摘要: {}", applied[0].after);
+        assert_eq!(out.matches(r#"<w:pStyle w:val="h2"/>"#).count(), 2, "格内两段都换样式: {out}");
+        assert!(out.contains(r#"<w:ind w:firstLine="480"/>"#), "既有 ind 保留: {out}");
+        let before_last_close = out.rsplit_once("</w:tc>").unwrap().0;
+        let neighbor = &out[before_last_close.rfind("<w:tc>").unwrap()..];
+        assert!(!neighbor.contains("w:pStyle"), "邻格未动: {neighbor}");
+        // 模型读回：格内两段样式都生效
+        let m = model_of(&out);
+        let super::docx_model::Block::Table(t) = &m.body[0] else { panic!() };
+        for b in &t.rows[0].cells[0].blocks {
+            let super::docx_model::Block::Paragraph(p) = b else { continue };
+            assert_eq!(p.props.style.as_deref(), Some("h2"));
+        }
+        // ② 样式 + 直接格式同手：pStyle 首位 + 四零 ind（与缺口 2 修复叠加的生产配方）
+        let (out2, _) = apply_edits(
+            &xml,
+            &heading_styles(),
+            &[EditOp::SetCellFormat {
+                block: 1,
+                expect_prefix: "上".into(),
+                row: 1,
+                cell: 1,
+                paragraph: Some(ParaFormat { indent_first_line_tw: Some(0), ..Default::default() }),
+                character: None,
+                style: Some("heading 2".into()),
+            }],
+        )
+        .unwrap();
+        assert!(
+            out2.contains(
+                r#"<w:pPr><w:pStyle w:val="h2"/><w:ind w:firstLine="0" w:firstLineChars="0" w:hanging="0" w:hangingChars="0"/></w:pPr>"#
+            ),
+            "pStyle 首位（schema 序）+ 四零 ind: {out2}"
+        );
+        // ③ 未知样式家族前缀（与 set_style 同判）
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &heading_styles(),
+                &[EditOp::SetCellFormat {
+                    block: 1,
+                    expect_prefix: "上".into(),
+                    row: 1,
+                    cell: 1,
+                    paragraph: None,
+                    character: None,
+                    style: Some("没有这样式".into()),
+                }],
+            )
+            .unwrap_err(),
+        );
+        assert!(err.starts_with("未知样式"), "实际: {err}");
     }
 
     #[test]
@@ -5119,6 +5344,7 @@ mod tests {
                 cell: 1,
                 paragraph: Some(ParaFormat { align: Some("center".into()), ..Default::default() }),
                 character: Some(CharFormat { bold: Some(true), ..Default::default() }),
+                style: None,
             }],
         )
         .unwrap();
@@ -5141,6 +5367,7 @@ mod tests {
                 cell: 1,
                 paragraph: None,
                 character: Some(CharFormat { font_size_pt: Some(14.0), ..Default::default() }),
+                style: None,
             }],
         )
         .unwrap();
@@ -5156,6 +5383,7 @@ mod tests {
                 cell: 1,
                 paragraph: None,
                 character: None,
+                style: None,
             }],
         ).unwrap_err());
         assert!(err.starts_with("空格式操作"), "实际: {err}");
@@ -5171,6 +5399,7 @@ mod tests {
                 cell: 9,
                 paragraph: Some(ParaFormat { align: Some("center".into()), ..Default::default() }),
                 character: None,
+                style: None,
             }],
         ).unwrap_err());
         assert!(err.starts_with("单元格越界"), "实际: {err}");
@@ -5532,6 +5761,7 @@ mod tests {
                     cell: 1,
                     paragraph: None,
                     character: Some(CharFormat { bold: Some(true), ..Default::default() }),
+                    style: None,
                 },
                 EditOp::SetCellText { block: 1, expect_prefix: "甲一".into(), row: 2, cell: 2, text: "新乙二".into() },
             ],
