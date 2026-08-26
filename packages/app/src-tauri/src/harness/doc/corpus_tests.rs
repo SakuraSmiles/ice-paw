@@ -1003,6 +1003,7 @@ fn corpus_table_format_surgery() {
                 cell: h_cell,
                 paragraph: Some(super::ParaFormat { align: Some("center".into()), ..Default::default() }),
                 character: Some(super::CharFormat { bold: Some(true), ..Default::default() }),
+                style: None,
             }],
         )
         .unwrap_or_else(|e| panic!("{name} set_cell_format 失败: {e}"));
