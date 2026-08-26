@@ -325,6 +325,17 @@ function validate(): boolean {
   if (requiresKey.value && !isEdit.value && !form.value.api_key.trim()) {
     error.value = "API Key 不能为空"; return false;
   }
+  // B（生产反馈根治）：换厂商必须带新 key——旧厂商的 key 不能跨厂商使用，留空
+  // 保存会让会话用旧 key 打新端点，报出来的是对端厂商的错误（误导排障）。
+  // 免鉴权厂商（ollama/custom）照常放行。
+  if (
+    requiresKey.value && isEdit.value && props.agent &&
+    form.value.provider !== props.agent.provider && !form.value.api_key.trim()
+  ) {
+    const label = currentProvider.value?.label ?? form.value.provider;
+    error.value = `切换到${label}需要填写该厂商的 API Key（旧厂商的 Key 不能跨厂商使用）`;
+    return false;
+  }
   if (requiresKey.value && isEdit.value && form.value.api_key && form.value.api_key.trim().length < 8) {
     error.value = "API Key 格式不正确"; return false;
   }

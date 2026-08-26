@@ -46,7 +46,7 @@ use crate::db::models::{Agent, AgentRow, AgentUpdate, HookConfig, NewAgent, Rota
 use crate::db::repo;
 use crate::error::{AppError, AppResult};
 use crate::harness::kb::{ensure, watcher_manager::KbWatcherManager};
-use crate::harness::provider::provider_requires_key;
+use crate::harness::provider::{provider_default_url, provider_requires_key};
 
 // ============================================================================
 // 入参校验
@@ -269,6 +269,17 @@ fn build_default_agent_yaml_content(
     content
 }
 
+/// B：换厂商时未显式提供 base_url → 新厂商注册表默认地址（端点跟随厂商）。
+/// 纯函数便于测试；custom/未知 provider 无默认（空串）→ None（保持不改）。
+fn default_url_on_provider_switch(provider_changed: bool, new_provider: Option<&str>) -> Option<String> {
+    if !provider_changed {
+        return None;
+    }
+    new_provider
+        .map(provider_default_url)
+        .filter(|url| !url.is_empty())
+}
+
 impl SqlAgentCmd {
     pub fn new(app: AppHandle, pool: SqlitePool) -> Self {
         Self { app, pool }
@@ -426,11 +437,24 @@ impl AgentCmd for SqlAgentCmd {
     }
 
     async fn update(&self, input: AgentUpdate) -> AppResult<Agent> {
-        // 记录旧 workspace_path，用于检测变更后通知 watcher 重新绑定。
-        let old_workspace = repo::agent::get_by_id(&self.pool, &input.id)
-            .await
-            .ok()
-            .and_then(|r| r.workspace_path);
+        // 记录旧行，用于检测 workspace / provider 变更（watcher 重绑定 + 端点跟随）。
+        let old_row = repo::agent::get_by_id(&self.pool, &input.id).await.ok();
+        let old_workspace = old_row.as_ref().and_then(|r| r.workspace_path.clone());
+        // B（2026-08-26 生产反馈根治）：换厂商而未显式提供 base_url → 重置为新
+        // 厂商注册表默认地址。否则 DB 残留旧厂商 URL，新 provider 客户端会打到
+        // 旧厂商端点 + 旧 vault key，报出来的是**对端厂商**的错误（如旧 key 余额
+        // 用完），完全误导排障。端点跟随厂商；custom/未知无默认则保持不改（前端
+        // 本就要求 custom 显式填 URL）。
+        let provider_changed = input
+            .provider
+            .as_deref()
+            .zip(old_row.as_ref().map(|r| r.provider.as_str()))
+            .is_some_and(|(new, old)| new != old);
+        let switch_url = default_url_on_provider_switch(provider_changed, input.provider.as_deref());
+        let base_url_arg = match &input.base_url {
+            Some(opt) => Some(opt.as_deref()),
+            None => Some(switch_url.as_deref()),
+        };
         let row = repo::agent::update(
             &self.pool,
             &input.id,
@@ -438,7 +462,7 @@ impl AgentCmd for SqlAgentCmd {
             input.provider.as_deref(),
             input.model.as_deref(),
             input.system_prompt.as_deref(),
-            input.base_url.as_ref().map(|opt| opt.as_deref()),
+            base_url_arg,
             input.temperature,
             input.max_tokens,
             input.extra_params.as_ref(),
@@ -452,6 +476,33 @@ impl AgentCmd for SqlAgentCmd {
             input.avatar.as_ref().map(|opt| opt.as_deref()),
         )
         .await?;
+        if provider_changed && switch_url.is_some() && input.base_url.is_none() {
+            tracing::info!(
+                target: "ice_paw.agent",
+                "agent {} 换厂商（{} → {}）且未显式提供地址：base_url 已重置为注册表默认 {}",
+                row.id,
+                old_row.as_ref().map(|r| r.provider.as_str()).unwrap_or("?"),
+                row.provider,
+                row.base_url.as_deref().unwrap_or("")
+            );
+        }
+
+        // A（2026-08-26 生产反馈根治）：同步 agent.yaml 的 provider/model/base_url
+        // 镜像行——它们是创建时写入的信息性镜像（运行时不读），不更新会与 UI 分裂
+        // 误导排障。文件不存在不创建；失败 best-effort warn（DB 已更新，不回滚）。
+        if let Some(ws) = row.workspace_path.as_deref() {
+            if let Err(e) = super::agent_yaml::sync_agent_yaml_mirror_file(
+                ws,
+                &row.provider,
+                &row.model,
+                row.base_url.as_deref(),
+            ) {
+                tracing::warn!(
+                    target: "ice_paw.agent",
+                    "agent.yaml 镜像同步失败（DB 已更新，文件保持原样）: {e}"
+                );
+            }
+        }
 
         // 如果更新后的 workspace_path 有值，确保目录存在
         if let Some(ref path) = row.workspace_path {
@@ -863,6 +914,25 @@ mod tests {
             workspace_path: None,
             avatar: None,
         }
+    }
+
+    #[test]
+    fn switch_base_url_follows_provider() {
+        // 未换厂商：不注入默认地址（保持「不改」语义）
+        assert_eq!(default_url_on_provider_switch(false, Some("glm")), None);
+        // 换厂商：注册表默认地址（端点跟随厂商，防 DB 残留旧厂商 URL）
+        assert_eq!(
+            default_url_on_provider_switch(true, Some("glm")).as_deref(),
+            Some("https://open.bigmodel.cn/api/paas/v4")
+        );
+        assert_eq!(
+            default_url_on_provider_switch(true, Some("deepseek")).as_deref(),
+            Some("https://api.deepseek.com")
+        );
+        // custom / 未知 provider 无默认（空串）→ None（保持不改）
+        assert_eq!(default_url_on_provider_switch(true, Some("custom")), None);
+        assert_eq!(default_url_on_provider_switch(true, Some("nope")), None);
+        assert_eq!(default_url_on_provider_switch(true, None), None);
     }
 
     #[test]
