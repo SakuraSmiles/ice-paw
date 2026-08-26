@@ -244,6 +244,50 @@ describe("AgentForm 可选可输分组模型选择器", () => {
     expect(input.base_url).toBe(GLM_CODING_URL);
   });
 
+  it("智谱端点切换：Coding 套餐显式入口——切 Coding 后 URL/探测/保存全跟随，无备选厂商不渲染", async () => {
+    const w = await mountForm();
+    await openDropdown(w);
+    await clickOption(w, "glm-5-turbo");
+    // 默认标准端点选中；URL 锁定注册表地址（切换入口只换系统管理的注册表值）
+    const opts = w.findAll(".endpoint-opt");
+    expect(opts).toHaveLength(2);
+    expect(opts[0].text()).toBe("标准端点");
+    expect(opts[0].classes()).toContain("active");
+    expect(baseUrlValue(w)).toBe(GLM_STD_URL);
+    expect(baseUrlLocked(w)).toBe(true);
+    // 切 Coding：URL 跟随（仍只读）、高亮转移；探测显式传该地址（不走 [标准→Coding] 回退）
+    await opts[1].trigger("click");
+    await flushPromises();
+    expect(baseUrlValue(w)).toBe(GLM_CODING_URL);
+    expect(baseUrlLocked(w)).toBe(true);
+    expect(w.findAll(".endpoint-opt")[1].classes()).toContain("active");
+    testConnectionMock.mockResolvedValue({ ok: true, model_count: 2, models: ["glm-5.2", "glm-5.1"], error: null, matched_url: GLM_CODING_URL });
+    await w.find(".conn-btn").trigger("click");
+    await flushPromises();
+    expect(testConnectionMock).toHaveBeenCalledWith("glm", GLM_CODING_URL, undefined, undefined);
+    // 保存固化 Coding 端点（glm requires_key，create 态须填 Key）
+    await fillBasics(w, "GLM 助手", "glm-helper");
+    await textInputs(w)[2].setValue("sk-coding-key");
+    await save(w);
+    const input = createMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(input.base_url).toBe(GLM_CODING_URL);
+    w.unmount();
+
+    // 编辑态存量 Coding 地址：高亮 Coding 不误显标准；可切回标准（URL 归位默认）
+    const w2 = await mountForm(editAgent({ provider: "glm", model: "glm-5.2", base_url: GLM_CODING_URL }));
+    const opts2 = w2.findAll(".endpoint-opt");
+    expect(opts2[1].classes()).toContain("active");
+    await opts2[0].trigger("click");
+    expect(baseUrlValue(w2)).toBe(GLM_STD_URL);
+    w2.unmount();
+
+    // 无备选端点厂商（deepseek）不渲染切换行
+    const w3 = await mountForm();
+    await openDropdown(w3);
+    await clickOption(w3, "deepseek-chat");
+    expect(w3.find(".endpoint-row").exists()).toBe(false);
+  });
+
   it("自定义路径测试连接：显式传用户填的 URL；拉取结果合成「自定义端点」组", async () => {
     testConnectionMock.mockResolvedValue({ ok: true, model_count: 1, models: ["qwen3:8b", "llama3:70b"], error: null, matched_url: "http://localhost:11434/v1" });
     const w = await mountForm();

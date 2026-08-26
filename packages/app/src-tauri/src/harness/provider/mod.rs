@@ -146,7 +146,7 @@ const PROVIDERS: &[ProviderDesc] = &[
     ProviderDesc {
         name: "glm", protocol: ProviderProtocol::OpenAI, default_url: "https://open.bigmodel.cn/api/paas/v4",
         alt_urls: &[("Coding 端点", "https://open.bigmodel.cn/api/coding/paas/v4")],
-        label: "智谱", note: Some("GLM 系列；标准/Coding 端点自动匹配"),
+        label: "智谱", note: Some("GLM 系列；标准/Coding 端点可切换，Coding 套餐请选 Coding 端点"),
         requires_key: true, requires_base_url: false, hidden: false,
         models: &["glm-5-turbo", "glm-5.2", "glm-5.1", "glm-4", "glm-4-flash"],
     },
