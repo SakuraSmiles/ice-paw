@@ -237,6 +237,31 @@ const urlPlaceholder = computed(() =>
     : "留空用默认",
 );
 
+// ---- 端点切换：带备选端点的可见预设厂商（当前仅智谱）----
+// 智谱标准/Coding 两套端点 key 不通用，Coding 套餐额度只在 Coding 端点生效；
+// 「测试连接」的自动回退救不了「标准端点列模型能通、对话报 1113」的假绿
+// （列模型是鉴权层动作，不代表该端点认可对话权益——生产实案 2026-08-26），
+// 必须给显式入口。选中的端点地址仍是系统管理的注册表值（只读显示，防抄错）。
+const endpointOptions = computed(() => {
+  const p = currentProvider.value;
+  if (!p || p.hidden || p.alt_urls.length === 0) return [];
+  return [
+    { label: "标准端点", url: p.default_url },
+    ...p.alt_urls.map(([label, url]) => ({ label, url })),
+  ];
+});
+
+/** 当前选中端点（按 URL 匹配；存量固化地址不在已知清单时无高亮，点选即归位） */
+const selectedEndpoint = computed(
+  () => endpointOptions.value.find((o) => o.url === form.value.base_url)?.url ?? null,
+);
+
+function pickEndpoint(url: string) {
+  if (form.value.base_url === url) return;
+  connResult.value = null; // 换端点后旧探测结论失效
+  form.value.base_url = url;
+}
+
 async function pickWorkspace() {
   const selected = await open({
     directory: true,
@@ -531,6 +556,16 @@ function confirmDelete() {
                 :placeholder="urlPlaceholder"
                 :title="urlEditable ? undefined : '预设厂商地址由系统管理（测试连接会自动匹配端点）；如需自定义端点，请在上方模型框手动输入模型名'"
               />
+              <div v-if="endpointOptions.length > 1" class="endpoint-row" title="智谱标准/Coding 端点 key 不通用：Coding 套餐额度只在 Coding 端点生效">
+                <button
+                  v-for="opt in endpointOptions"
+                  :key="opt.url"
+                  type="button"
+                  class="endpoint-opt"
+                  :class="{ active: selectedEndpoint === opt.url }"
+                  @click="pickEndpoint(opt.url)"
+                >{{ opt.label }}</button>
+              </div>
             </div>
           </div>
         </div>
@@ -715,6 +750,34 @@ function confirmDelete() {
   cursor: default;
   color: var(--ip-color-text-secondary);
   background-color: var(--ip-color-bg-secondary);
+}
+
+/* 端点切换（智谱标准/Coding）：URL 框下的分段小胶囊，选中态主色浅底 */
+.endpoint-row {
+  display: flex;
+  gap: 4px;
+  margin-top: 6px;
+}
+.endpoint-opt {
+  padding: 0 10px;
+  font-size: var(--ip-text-micro-size);
+  line-height: 20px;
+  color: var(--ip-color-text-secondary);
+  background-color: var(--ip-color-bg-tertiary);
+  border: 1px solid var(--ip-color-border-default);
+  border-radius: var(--ip-radius-full);
+  cursor: pointer;
+  transition: all var(--ip-duration-fast) var(--ip-ease-out);
+}
+.endpoint-opt:hover {
+  border-color: var(--ip-color-border-focus);
+  color: var(--ip-color-text-primary);
+}
+.endpoint-opt.active {
+  color: var(--ip-primary-600);
+  background-color: var(--ip-color-primary-soft-bg);
+  border-color: transparent;
+  font-weight: var(--ip-font-weight-medium);
 }
 
 /* 连接测试行：小号文字按钮 + 行内结果（绿/红），失败原因可 hover 看全；

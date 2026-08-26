@@ -182,6 +182,12 @@ pub enum LlmErrorKind {
     /// `insufficient_quota` 等）。确定性错误（需充值 / 换包），区别于瞬时限流——
     /// GLM 把这类账户问题**也以 HTTP 429 返回**，[`classify_llm_error`] 须先于 429 命中。
     InsufficientBalance,
+    /// GLM 资源包/余额不足（code:1113，措辞含「无可用资源包」——智谱专属用词）。
+    /// 语义细分自 [`LlmErrorKind::InsufficientBalance`]：1113 有一个高发非余额成因——
+    /// **Coding 套餐额度只在 Coding 端点生效**（标准/Coding 端点 key 不通用），拿 Coding
+    /// key 打标准端点就报它，文案需指路端点切换而非只叫人充值（生产实案 2026-08-26：
+    /// 套餐有余额仍报 1113，排障被引去查余额）。同样不可重试。
+    GlmResourcePack,
     /// 鉴权失败（401，密钥无效/过期）。重试无意义。
     Auth,
     /// 权限不足（403）。重试无意义。
@@ -203,6 +209,14 @@ impl LlmErrorKind {
             Self::Sensitive => "图片内容未通过安全审核，请更换图片后重试",
             Self::RateLimited => "请求过于频繁，请稍后再试",
             Self::InsufficientBalance => "API 余额或配额不足，请充值或更换套餐后重试",
+            // 三段式：发生了什么（智谱 1113）+ 为什么（Coding 额度只认 Coding 端点 /
+            // 模型不在套餐覆盖）+ 怎么办（切端点 / 控制台核对）
+            Self::GlmResourcePack => concat!(
+                "智谱返回「余额不足或无可用资源包」。若你使用 Coding 套餐：它的额度只在 ",
+                "Coding 端点生效（标准/Coding 端点不通用），请在编辑 agent 时把 API URL ",
+                "下方的端点切换为「Coding 端点」后重试；其他情况请到智谱控制台核对该模型",
+                "的资源包与余额"
+            ),
             Self::Auth => "API 密钥无效或已过期，请在设置中检查",
             Self::Forbidden => "API 权限不足，请检查配置",
             Self::ContextTooLong => "消息过长，请缩短内容或清除部分历史消息",
@@ -220,7 +234,8 @@ impl LlmErrorKind {
             | Self::Auth
             | Self::Forbidden
             | Self::ContextTooLong
-            | Self::InsufficientBalance => false,
+            | Self::InsufficientBalance
+            | Self::GlmResourcePack => false,
         }
     }
 
@@ -278,8 +293,12 @@ pub fn classify_llm_error(msg: &str) -> LlmErrorKind {
     // 余额 / 配额不足。**须先于 429**——GLM 把 code:1113「余额不足或无可用资源包,请充值」
     // 也以 HTTP 429 返回，但它是确定性账户问题（需充值 / 换包），非瞬时限流；先命中此处
     // 才不会被下面的 429 → RateLimited 误判成「请求过于频繁」（误导用户等待重试）。
+    // 「无可用资源包」是智谱专属措辞 → 细分为 GlmResourcePack（文案指路 Coding 端点切换，
+    // Coding 套餐 key 打标准端点正是报它——充值提示会误导排障方向）。
+    if s.contains("无可用资源包") {
+        return LlmErrorKind::GlmResourcePack;
+    }
     if s.contains("余额不足")
-        || s.contains("无可用资源包")
         || s.contains("充值")
         || s.contains("insufficient balance")
         || s.contains("insufficient_quota")
@@ -537,13 +556,13 @@ mod tests {
 
     #[test]
     fn classify_insufficient_balance_beats_429() {
-        // 实测 GLM 措辞：HTTP 429 + code:1113 + 余额不足
+        // 实测 GLM 措辞：HTTP 429 + code:1113 + 余额不足或无可用资源包 → 智谱专属细分
         assert_eq!(
             classify_llm_error(
                 "HTTP 429 Too Many Requests: {\"error\":{\"code\":\"1113\",\
                                 \"message\":\"余额不足或无可用资源包,请充值。\"}}"
             ),
-            LlmErrorKind::InsufficientBalance
+            LlmErrorKind::GlmResourcePack
         );
         // OpenAI 措辞
         assert_eq!(
@@ -561,6 +580,19 @@ mod tests {
                 .contains("余额"),
             "余额不足应有充值文案"
         );
+    }
+
+    #[test]
+    fn classify_glm_resource_pack_points_to_coding_endpoint() {
+        // Coding 套餐 key 打标准端点报 1113（生产实案：套餐有余额仍报错）
+        assert_eq!(
+            classify_llm_error("HTTP 429: {\"error\":{\"code\":\"1113\",\"message\":\"Insufficient balance or no available resource packages: 无可用资源包\"}}"),
+            LlmErrorKind::GlmResourcePack
+        );
+        // 文案指路端点切换（不是只叫人充值），且同样不可重试
+        let text = LlmErrorKind::GlmResourcePack.friendly_text();
+        assert!(text.contains("Coding 端点"), "应指路 Coding 端点切换: {text}");
+        assert!(!LlmErrorKind::GlmResourcePack.is_retryable());
     }
 
     #[test]
