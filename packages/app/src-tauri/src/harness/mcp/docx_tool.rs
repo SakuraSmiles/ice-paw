@@ -257,9 +257,12 @@ pub struct EditDocxTool;
 #[derive(Deserialize)]
 struct EditDocxArgs {
     path: String,
-    /// 操作批（全有或全无；段级操作每块限一个，表格操作（set_cell_text /
+    /// 操作批（全有或全无；段级操作每块限一个——例外：同锚块可挂多条
+    /// insert_paragraph_after 按序链式插入；表格操作（set_cell_text /
     /// insert_table_row_after / set_cell_format / set_table_element）可同块多条
-    /// 按序组合，(行, 格) 去重；merge_cells / split_cell 须独占该表）。
+    /// 按序组合，且**跨表格块也可同批**（一次给多张表挂同一属性）——同格内
+    /// set_table_element 按元素去重（不同元素可组合），内容/格式手术每格限一条；
+    /// merge_cells / split_cell / delete_table_row 须独占该表）。
     /// 正文操作与定义操作（create_style / set_style_element /
     /// set_numbering_element / clear_body）不可混批（部件互斥），拆两批先后发
     operations: Vec<OperationSpec>,
@@ -386,6 +389,10 @@ enum OperationSpec {
         row: usize,
         cell: usize,
     },
+    /// 删除表格一行（S3 七波·生产反馈 P0）：row 1-based 与 projection=table 同
+    /// 口径。结构重构（行号重排）须独占该表；行内含纵向合并头且下方有续格 → 拒
+    /// （指路先 split_cell）；仅剩 1 行 → 拒（指路 delete_block 删整表）
+    DeleteTableRow { block: usize, expect_prefix: String, row: usize },
     /// 清空正文（模板复用终件，D12）：删全部 body 块（含 sectPr 的块跳过——分节/
     /// 页面/页眉页脚结构保留）；expect_blocks = 当前块数指纹（防错删别人的文档）。
     /// 独占一批
@@ -668,6 +675,9 @@ impl From<OperationSpec> for FamilyOp {
                     cell,
                 })
             }
+            OperationSpec::DeleteTableRow { block, expect_prefix, row } => {
+                FamilyOp::Doc(EditOp::DeleteTableRow { block, expect_prefix, row })
+            }
             // ---- styles 族 ----
             OperationSpec::CreateStyle { style_type, name, style_id, based_on } => {
                 FamilyOp::Style(StyleEditOp::CreateStyle {
@@ -724,7 +734,9 @@ impl McpClient for EditDocxTool {
          applied as one all-or-nothing transaction: op=replace_text rewrites a paragraph's \
          text while keeping its paragraph/character formatting; op=insert_paragraph_after \
          adds a new paragraph after an anchor block (inherits its formatting, or an \
-         explicit style by display name); op=delete_block removes a whole block; \
+         explicit style by display name) — several insert_paragraph_after ops on the \
+         SAME anchor chain in order within one batch, so a multi-paragraph entry \
+         (label + description + attributes) is one call; op=delete_block removes a whole block; \
          op=set_style changes a paragraph's style (e.g. promote to a heading) touching \
          only the style element while leaving text and character formatting intact — \
          if the paragraph already has that style the result carries style_unchanged=true \
@@ -744,9 +756,12 @@ impl McpClient for EditDocxTool {
          cell's text by (row, cell) address — the exact grid shown by inspect_docx \
          projection=table, keeping the cell's structure properties and the first \
          paragraph's formatting; op=insert_table_row_after appends a row by cloning a \
-         template row (default: the last one) so merged cells keep working — multiple \
-         set_cell_text / insert_table_row_after ops on the same table are applied in \
-         order within one batch. Table formatting ops: op=set_cell_format changes \
+         template row (default: the last one) so merged cells keep working. Table ops \
+         (set_cell_text / insert_table_row_after / set_cell_format / set_table_element) \
+         compose freely within one batch: several ops on the same table in order, AND \
+         ops on different table blocks in the same batch (e.g. apply the same \
+         tblCellMar or three-line borders to every table of the document in one call). \
+         Table formatting ops: op=set_cell_format changes \
          paragraph and/or character formatting of one cell and/or applies a paragraph \
          style to it (paragraph formatting hits every paragraph in the cell, character \
          formatting every run — same param shape as set_format; style re-styles every \
@@ -759,16 +774,22 @@ impl McpClient for EditDocxTool {
          with row), level=cell (tcPr, with row+cell) — xml=null removes the element, \
          xml=<w:...> fragment replaces/inserts it at its schema position (copy the \
          current XML from inspect_docx projection=tblpr, never write from memory; \
-         gridSpan/hMerge/vMerge are protected — use merge_cells / split_cell instead). \
-         Structural ops: op=merge_cells merges cells with Word-native semantics — \
+         gridSpan/hMerge/vMerge are protected — use merge_cells / split_cell instead; \
+         several set_table_element ops on the SAME cell compose in one batch as long \
+         as element differs, e.g. vAlign + tcBorders together). \
+         Structural ops: op=delete_table_row removes one table row (row 1-based, same \
+         as projection=table; refuses when the row holds a vertical-merge head whose \
+         chain continues below — split_cell vertical first — and when it is the table's \
+         only row — delete_block the whole table instead). op=merge_cells merges cells \
+         with Word-native semantics — \
          horizontal merges span adjacent cells in one row (gridSpan sums, content \
          concatenates into the first cell); vertical merges cells across rows at the \
          same grid columns (vMerge head restarts, content stays in place — split_cell \
          restores it). op=split_cell is the inverse — vertical splits the whole merge \
          chain, horizontal splits a spanning cell back into unit cells (content stays \
-         in the first). merge_cells / split_cell renumber row/cell addresses, so each \
-         must be the only op on its table block in a batch (finish structure first, \
-         then re-inspect projection=table to address content). \
+         in the first). merge_cells / split_cell / delete_table_row renumber row/cell \
+         addresses, so each must be the only op on its table block in a batch (finish \
+         structure first, then re-inspect projection=table to address content). \
          Definition ops (styles.xml / numbering.xml — 'define once, reference \
          everywhere'): op=create_style creates a new style (minimal birth: \
          style_type/name/based_on; add detail with set_style_element in the same batch); \
@@ -786,7 +807,10 @@ impl McpClient for EditDocxTool {
          Body ops and definition ops cannot mix in one batch (component exclusivity) — \
          send two batches. Recipes: header emphasis = set_table_element level=row \
          element=shd on the header row + set_cell_format character; banded rows = \
-         set_table_element level=row element=shd on alternate rows; whole-document \
+         set_table_element level=row element=shd on alternate rows; content-fitted \
+         column widths = read projection=table, weight each column by its longest \
+         text, set_table_element level=cell element=tcW on every cell proportionally \
+         (sum ≈ table width); whole-document \
          typography = set_style_element on heading/body styles instead of per-paragraph \
          set_format. New document from a house template: check the workspace templates/ \
          directory first (list_directory), copy_file to the target, edit_docx \
@@ -815,7 +839,11 @@ impl McpClient for EditDocxTool {
                     "type": "array",
                     "minItems": 1,
                     "description": "Operations applied as one all-or-nothing batch. \
-                     Each item is tagged with op; block numbers come from inspect_docx.",
+                     Each item is tagged with op; block numbers come from inspect_docx. \
+                     Composition: table ops on different table blocks share one batch; \
+                     several insert_paragraph_after ops on the same anchor chain in order; \
+                     merge_cells / split_cell / delete_table_row must each be the only op \
+                     on its table block.",
                     "items": {
                         "oneOf": [
                             {
@@ -837,7 +865,8 @@ impl McpClient for EditDocxTool {
                                     "text": { "type": "string", "description": "New paragraph text. \\n → line break, \\t → tab." },
                                     "style": { "type": "string", "description": "Optional style display name from inspect_docx outline; default inherits anchor formatting." }
                                 },
-                                "required": ["op", "block", "expect_prefix", "text"]
+                                "required": ["op", "block", "expect_prefix", "text"],
+                                "description": "Insert a paragraph after the anchor. Several ops on the SAME anchor in one batch chain in order — a multi-paragraph entry (label + description + attributes) is one call."
                             },
                             {
                                 "type": "object",
@@ -1045,6 +1074,17 @@ impl McpClient for EditDocxTool {
                                 },
                                 "required": ["op", "block", "expect_prefix", "direction", "row", "cell"],
                                 "description": "Split a merged cell. Vertical: splits the whole vertical-merge chain under the head cell — each cell's content reappears. Horizontal: splits a spanning cell back into unit cells — content stays in the first, the rest get empty paragraphs with the same formatting."
+                            },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "op": { "const": "delete_table_row" },
+                                    "block": { "type": "integer", "description": "Target table block (1-based). Must be the only op on this table in the batch." },
+                                    "expect_prefix": { "type": "string", "description": "Current text prefix of the table block (fingerprint guard)." },
+                                    "row": { "type": "integer", "description": "Row to delete (1-based, same numbering as inspect_docx projection=table)." }
+                                },
+                                "required": ["op", "block", "expect_prefix", "row"],
+                                "description": "Delete one table row. Refuses when the row holds a vertical-merge HEAD whose chain continues below (split_cell vertical first, then delete), and when it is the table's only row (delete_block the whole table instead). Renumbers row addresses, so it must be the only op on its table block in the batch."
                             },
                             {
                                 "type": "object",
