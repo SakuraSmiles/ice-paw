@@ -213,6 +213,8 @@ pub enum EditOp {
     /// 替换段落文本：保留 pPr 与首个 run 的 rPr（周边格式不动）；表格块拒绝。
     ReplaceText { block: usize, expect_prefix: String, new_text: String },
     /// 在锚块后插入新段：style（显示名，可选）指定样式；缺省继承锚块段落格式。
+    /// 同锚块一批可多条链式（S3 七波：按输入序连续排列——写「标识行+描述行+
+    /// 属性行」这类多段条目一批搞定，不再逐段拆批重寻址）。
     InsertParagraphAfter { block: usize, expect_prefix: String, text: String, style: Option<String> },
     /// 删除整块（含段落标记）；块内含 sectPr（节属性载体）拒绝。
     DeleteBlock { block: usize, expect_prefix: String },
@@ -287,7 +289,8 @@ pub enum EditOp {
     /// 元素名（无 w: 前缀）；xml=None 移除整元素，Some=合法单根片段整元素替换/
     /// 按 schema 序插入。片段从 inspect_docx projection=tblpr 原文复制修改。
     /// gridSpan/hMerge/vMerge 是结构属性受保护（改了破坏网格对齐）——合并拆分
-    /// 走 merge_cells / split_cell。
+    /// 走 merge_cells / split_cell。同格不同 element 可同批组合（S3 七波：
+    /// vAlign + tcBorders 一批，序无关）。
     SetTableElement {
         block: usize,
         expect_prefix: String,
@@ -323,6 +326,16 @@ pub enum EditOp {
         direction: MergeDirection,
         row: usize,
         cell: usize,
+    },
+    /// 删除表格一行（S3 七波·生产反馈 P0）：结构重构（行号重排），独占一批。
+    /// 纵向合并守卫——行内含合并头且下方同网格列仍有续格 → 拒（内容在头格，
+    /// 删 = 内容丢失 + 续格孤儿化），指路 split_cell 先拆；行内仅普通格/纯续格
+    /// （头在上方）可删，链条缩短仍合法。仅剩 1 行 → 拒（空表非法），指路
+    /// delete_block 删整表。
+    DeleteTableRow {
+        block: usize,
+        expect_prefix: String,
+        row: usize,
     },
     /// 清空正文全部块（S3 五波·模板件）：copy_file 复制模板 docx 后清掉旧内容、
     /// 保留页面设置与节结构，再写新正文。含 sectPr 的块（节属性载体）保留；
@@ -447,13 +460,17 @@ pub(super) fn apply_edits(
     }
 
     // ---- 预检全批（验证后变异：全部通过才动刀）----
-    // 占用规则：段落操作/锚操作（insert_*_after）每块每批限一个；表格修改操作
-    // （set_cell_text / set_cell_format / set_table_element / insert_table_row_after）
-    // 同块可多个按序组合（一次填整行/整表），但与段落操作/锚互斥，且 (row, cell)
-    // 目标格不得重复；结构重构（merge_cells / split_cell）改地址布局，独占一批。
+    // 占用规则：段落操作/锚操作（insert_*_after）每块每批限一个——例外：同锚块可挂
+    // 多条 insert_paragraph_after 按序链式（S3 七波）；表格修改操作（set_cell_text /
+    // set_cell_format / set_table_element / insert_table_row_after）同块可多个按序组合
+    // （一次填整行/整表；跨表格块也各自可挂，一次批多张表），但与段落操作/锚互斥，
+    // 同格去重键 = (row, cell, 目标键)——set_table_element 按元素去重（同格不同元素
+    // 可组合），内容/格式手术每格限一条；结构重构（merge_cells / split_cell /
+    // delete_table_row）改地址布局，独占一批。
     let mut used_blocks: Vec<usize> = Vec::new();
     let mut table_modified: Vec<usize> = Vec::new();
-    let mut used_cells: Vec<(usize, usize, usize)> = Vec::new(); // (block, row, cell)
+    let mut used_cells: Vec<(usize, usize, usize, String)> = Vec::new(); // (block, row, cell, 目标键)
+    let mut insert_anchors: Vec<usize> = Vec::new(); // 链式插入锚块（同块多条 insert_paragraph_after）
     let mut table_structural: Vec<usize> = Vec::new(); // merge/split 独占标记
     // 表格批内虚拟行状态（block → (每行格数, 虚拟行的原模型模板行)）：
     // 同块「先增行后填格」合法——寻址按批内输入序生效，结构与格数继承模板行
@@ -491,7 +508,8 @@ pub(super) fn apply_edits(
             | EditOp::SetCellFormat { block, .. }
             | EditOp::SetTableElement { block, .. }
             | EditOp::MergeCells { block, .. }
-            | EditOp::SplitCell { block, .. } => block,
+            | EditOp::SplitCell { block, .. }
+            | EditOp::DeleteTableRow { block, .. } => block,
             // clear_body 无块寻址（上文 if-let 已 continue，此 match 不会遇到）
             EditOp::ClearBody { .. } => unreachable!("clear_body 已在上文 continue"),
         };
@@ -502,20 +520,23 @@ pub(super) fn apply_edits(
                 spans.len()
             )));
         }
-        if matches!(op, EditOp::MergeCells { .. } | EditOp::SplitCell { .. }) {
-            // 结构重构独占：合并/拆分使行列地址重排，与任何其他操作同块都歧义
+        if matches!(
+            op,
+            EditOp::MergeCells { .. } | EditOp::SplitCell { .. } | EditOp::DeleteTableRow { .. }
+        ) {
+            // 结构重构独占：合并/拆分/删行使行列地址重排，与任何其他操作同块都歧义
             if used_blocks.contains(&block) || table_modified.contains(&block) {
                 return Err(AppError::Validation(format!(
-                    "同一块多操作: 块 {block} 已被其他操作引用。merge_cells / split_cell \
-                     使行列地址重排，须独占该表——请拆批，结构改完再寻址。"
+                    "同一块多操作: 块 {block} 已被其他操作引用。merge_cells / split_cell / \
+                     delete_table_row 使行列地址重排，须独占该表——请拆批，结构改完再寻址。"
                 )));
             }
             used_blocks.push(block);
             table_structural.push(block);
         } else if table_structural.contains(&block) {
             return Err(AppError::Validation(format!(
-                "同一块多操作: 块 {block} 已挂 merge_cells / split_cell（结构重构独占）。\
-                 请拆批：结构改完重新 inspect_docx projection=table 寻址。"
+                "同一块多操作: 块 {block} 已挂 merge_cells / split_cell / delete_table_row\
+                 （结构重构独占）。请拆批：结构改完重新 inspect_docx projection=table 寻址。"
             )));
         } else {
             let is_table_modify = matches!(
@@ -534,12 +555,31 @@ pub(super) fn apply_edits(
                 if !table_modified.contains(&block) {
                     table_modified.push(block);
                 }
+            } else if matches!(op, EditOp::InsertParagraphAfter { .. }) {
+                // 链式插入（S3 七波）：同锚块多条 insert_paragraph_after 按输入序
+                // 连续排列（apply 侧聚合进一个插入 splice）；与其他段落/锚/表格操作仍互斥
+                if used_blocks.contains(&block) || table_modified.contains(&block) {
+                    return Err(AppError::Validation(format!(
+                        "同一块多操作: 块 {block} 已被段落操作/锚操作/表格操作引用，\
+                         不能再挂 insert_paragraph_after。请拆批。"
+                    )));
+                }
+                if !insert_anchors.contains(&block) {
+                    insert_anchors.push(block);
+                }
             } else {
                 if used_blocks.contains(&block) {
                     return Err(AppError::Validation(format!(
                         "同一块多操作: 块 {block} 在本批中被多次引用。每块每批限一个操作\
-                         （表格块可挂多个 set_cell_text / set_cell_format / set_table_element / \
+                         （例外：同一锚块可挂多条 insert_paragraph_after 按序链式插入；\
+                         表格块可挂多个 set_cell_text / set_cell_format / set_table_element / \
                          insert_table_row_after）；请拆成多批。"
+                    )));
+                }
+                if insert_anchors.contains(&block) {
+                    return Err(AppError::Validation(format!(
+                        "同一块多操作: 块 {block} 已挂链式 insert_paragraph_after，\
+                         不能再被其他段落操作/锚操作引用。请拆批。"
                     )));
                 }
                 if table_modified.contains(&block) {
@@ -705,7 +745,7 @@ pub(super) fn apply_edits(
                     )));
                 }
                 precheck_cell_target(
-                    &model, idx, block, *row, *cell, "set_cell_text",
+                    &model, idx, block, *row, *cell, "set_cell_text", "",
                     &mut table_state, &mut used_cells,
                 )?;
             }
@@ -789,7 +829,7 @@ pub(super) fn apply_edits(
                 }
                 validate_formats(paragraph.as_ref(), character.as_ref(), style.is_some(), "set_cell_format")?;
                 precheck_cell_target(
-                    &model, idx, block, *row, *cell, "set_cell_format",
+                    &model, idx, block, *row, *cell, "set_cell_format", "",
                     &mut table_state, &mut used_cells,
                 )?;
             }
@@ -854,7 +894,7 @@ pub(super) fn apply_edits(
                             ));
                         };
                         precheck_cell_target(
-                            &model, idx, block, r, c, "set_table_element",
+                            &model, idx, block, r, c, "set_table_element", element.as_str(),
                             &mut table_state, &mut used_cells,
                         )?;
                         (&TCPR_ELEMENTS, "tcPr")
@@ -1101,6 +1141,54 @@ pub(super) fn apply_edits(
                     }
                 }
             }
+            EditOp::DeleteTableRow { row, .. } => {
+                let Block::Table(t) = &model.body[idx] else {
+                    return Err(AppError::Validation(format!(
+                        "非表格块: 块 {block} 是段落，delete_table_row 只作用于表格块。\
+                         删段落块用 delete_block。"
+                    )));
+                };
+                if has_revision(&model.body[idx]) {
+                    return Err(AppError::Validation(format!(
+                        "含修订标记: 块 {block}（表格）带插入/删除修订，默认不触碰修订内容。\
+                         请先在 Word 中接受或拒绝修订后再编辑该表。"
+                    )));
+                }
+                let r_model = row_bounds(t, *row)?;
+                if t.rows.len() == 1 {
+                    return Err(AppError::Validation(
+                        "空表保护: 该表仅剩此 1 行——删掉后成空表（非法结构）。\
+                         要移除整个表请用 delete_block 删该表格块。"
+                            .into(),
+                    ));
+                }
+                // 纵向合并守卫：本行含合并头且下方同网格列还有续格 → 删除该行会
+                // 孤儿化续格（内容在头格，删 = 内容一并丢失）。纯续格行可删——
+                // 头在上方，链条缩短仍是合法结构。
+                for (ci, c) in r_model.cells.iter().enumerate() {
+                    if c.v_merge.as_deref() != Some("restart") {
+                        continue;
+                    }
+                    let (g0, g1) = grid_range_of(r_model, ci + 1);
+                    let orphan = t.rows[*row..].iter().any(|below| {
+                        below.cells.iter().enumerate().any(|(bi, bc)| {
+                            bc.v_merge.as_deref() == Some("continue") && {
+                                let (b0, b1) = grid_range_of(below, bi + 1);
+                                b0 < g1 && b1 > g0
+                            }
+                        })
+                    });
+                    if orphan {
+                        return Err(AppError::Validation(format!(
+                            "合并结构冲突: 块 {block} 第 {row} 行第 {} 格是纵向合并头\
+                             （(合并头) 标记）且合并区延伸到下方行——删除该行会丢失合并格\
+                             内容并孤儿化下方续格。请先 split_cell vertical 拆掉纵并链再删行，\
+                             或改删合并区下方不含合并头的行。",
+                            ci + 1
+                        )));
+                    }
+                }
+            }
         }
         // Replace / SetStyle / SetFormat / SetPprElement 目标必须是段落块
         if matches!(
@@ -1131,6 +1219,10 @@ pub(super) fn apply_edits(
     let mut plan: Vec<Splice> = Vec::new();
     // 同表多操作聚合：块号 → plan 索引（共享一个 splice，按序改写 insert 文本）
     let mut table_plan_idx: HashMap<usize, usize> = HashMap::new();
+    // 同锚多段聚合（S3 七波）：锚块号 → plan 索引——链式 insert_paragraph_after
+    // 追加进同一个插入 splice（链序 = 输入序）。不按「span.end + 累计长度」定位：
+    // 那会伸进相邻块的 splice 区间（块间缝隙可能为 0），聚合进单 splice 无重叠风险。
+    let mut insert_plan_idx: HashMap<usize, usize> = HashMap::new();
     for op in ops {
         match op.clone() {
             EditOp::ReplaceText { block, new_text, .. } => {
@@ -1156,19 +1248,30 @@ pub(super) fn apply_edits(
                 let span = spans[block - 1];
                 let anchor_has_revision = has_revision(&model.body[block - 1]);
                 let new_block = build_inserted_paragraph(xml, span, &text, style.as_deref(), styles, anchor_has_revision);
-                plan.push(Splice {
-                    pos: span.end, // 锚块末尾插入（区间外，不与同批其他 splice 重叠）
-                    remove_end: span.end,
-                    insert: new_block,
-                    summaries: vec![AppliedOp {
-                        op: "insert_paragraph_after",
-                        block,
-                        before: projected_of(&model, block),
-                        after: truncate(&text, 60),
-                        style: None,
-                        style_unchanged: None,
-                        target: None,
-                    }],
+                // 同锚链式（S3 七波）：首条建插入 splice（锚块末尾，区间外），后续
+                // 条追加——整链是一个插入 blob，链序 = 输入序，无 splice 重叠
+                let entry = match insert_plan_idx.get(&block) {
+                    Some(&i) => i,
+                    None => {
+                        plan.push(Splice {
+                            pos: span.end, // 锚块末尾插入（区间外，不与同批其他 splice 重叠）
+                            remove_end: span.end,
+                            insert: String::new(),
+                            summaries: Vec::new(),
+                        });
+                        insert_plan_idx.insert(block, plan.len() - 1);
+                        plan.len() - 1
+                    }
+                };
+                plan[entry].insert.push_str(&new_block);
+                plan[entry].summaries.push(AppliedOp {
+                    op: "insert_paragraph_after",
+                    block,
+                    before: projected_of(&model, block),
+                    after: truncate(&text, 60),
+                    style: None,
+                    style_unchanged: None,
+                    target: None,
                 });
             }
             EditOp::DeleteBlock { block, .. } => {
@@ -1527,6 +1630,28 @@ pub(super) fn apply_edits(
                     }],
                 });
             }
+            EditOp::DeleteTableRow { block, row, .. } => {
+                let span = spans[block - 1];
+                let block_xml = &xml[span.start..span.end];
+                let (new_xml, summary) = delete_table_row_xml(block_xml, row)
+                    .ok_or_else(|| AppError::Internal(format!(
+                        "删行手术失败: 块 {block} XML 形态异常（内部 bug，未写盘）"
+                    )))?;
+                plan.push(Splice {
+                    pos: span.start,
+                    remove_end: span.end,
+                    insert: new_xml,
+                    summaries: vec![AppliedOp {
+                        op: "delete_table_row",
+                        block,
+                        before: projected_of(&model, block),
+                        after: summary,
+                        style: None,
+                        style_unchanged: None,
+                        target: None,
+                    }],
+                });
+            }
             EditOp::ClearBody { .. } => {
                 // 单 splice 覆盖 [首块起点, 末块终点)，保留块原字节回填——
                 // 含 sectPr 的块（节属性载体）不动，其余全删。独占一批（预检已验）。
@@ -1617,7 +1742,8 @@ fn expect_prefix_of(op: &EditOp) -> &str {
         | EditOp::SetCellFormat { expect_prefix, .. }
         | EditOp::SetTableElement { expect_prefix, .. }
         | EditOp::MergeCells { expect_prefix, .. }
-        | EditOp::SplitCell { expect_prefix, .. } => expect_prefix,
+        | EditOp::SplitCell { expect_prefix, .. }
+        | EditOp::DeleteTableRow { expect_prefix, .. } => expect_prefix,
         // ClearBody 无文本前缀——指纹走块数（预检先于本函数处理并 continue）
         EditOp::ClearBody { .. } => "",
     }
@@ -1625,8 +1751,10 @@ fn expect_prefix_of(op: &EditOp) -> &str {
 
 /// 表格格地址预检（set_cell_text / set_cell_format / set_table_element
 /// level=cell 共用）：表格块边界、批内虚拟行边界、结构检查（续格指路合并头 /
-/// 嵌套表 / 空段落——按来源行落到模板行）、(block, row, cell) 去重。
-/// `op_label` 仅用于非表格块报错文案。修订检查在调用方。
+/// 嵌套表 / 空段落——按来源行落到模板行）、(block, row, cell, target_key) 去重。
+/// `target_key`（S3 七波）：set_table_element 传元素名——同格**不同元素**可同批
+/// 组合（vAlign + tcBorders 一批，序无关）；内容/格式手术传 ""（重写语义，每格
+/// 每批限一条）。`op_label` 仅用于非表格块报错文案。修订检查在调用方。
 #[allow(clippy::too_many_arguments)]
 fn precheck_cell_target(
     model: &docx_model::DocxDocument,
@@ -1635,8 +1763,9 @@ fn precheck_cell_target(
     row: usize,
     cell: usize,
     op_label: &str,
+    target_key: &str,
     table_state: &mut HashMap<usize, (Vec<usize>, Vec<Option<usize>>)>,
-    used_cells: &mut Vec<(usize, usize, usize)>,
+    used_cells: &mut Vec<(usize, usize, usize, String)>,
 ) -> AppResult<()> {
     let Block::Table(t) = &model.body[idx] else {
         return Err(AppError::Validation(format!(
@@ -1688,13 +1817,18 @@ fn precheck_cell_target(
              请用 insert_table_row_after 重建该行。"
         )));
     }
-    if used_cells.contains(&(block, row, cell)) {
+    if used_cells
+        .iter()
+        .any(|(b, r, c, k)| *b == block && *r == row && *c == cell && k == target_key)
+    {
         return Err(AppError::Validation(format!(
-            "同一格多操作: 块 {block} 第 {row} 行第 {cell} 格在本批中被多次引用。\
-             同表多操作按序组合可行，但同一格只能一个操作。"
+            "同一格多操作: 块 {block} 第 {row} 行第 {cell} 格{}在本批中被多次引用。\
+             同格同目标每批限一条；同格多项表格属性用不同 element 的多条 \
+             set_table_element 组合（如 vAlign + tcBorders 一批）。",
+            if target_key.is_empty() { String::new() } else { format!("的 {target_key}") }
         )));
     }
-    used_cells.push((block, row, cell));
+    used_cells.push((block, row, cell, target_key.to_string()));
     Ok(())
 }
 
@@ -3413,6 +3547,17 @@ fn split_cell_xml(
             ))
         }
     }
+}
+
+/// 删表格一行（S3 七波·生产反馈 P0）：direct_children_spans 定位直接子 tr
+/// （嵌套表的内层 tr 不计），整段摘除。合并链与末行守卫在预检。
+fn delete_table_row_xml(table_xml: &str, row: usize) -> Option<(String, String)> {
+    let rows = direct_children_spans(table_xml, "tr");
+    let (rs, re) = *rows.get(row.checked_sub(1)?)?;
+    let mut out = String::with_capacity(table_xml.len());
+    out.push_str(&table_xml[..rs]);
+    out.push_str(&table_xml[re..]);
+    Some((out, format!("删第 {row} 行（剩 {} 行）", rows.len() - 1)))
 }
 
 // =========================================================================
@@ -5774,5 +5919,250 @@ mod tests {
         // 产物再解析健康（apply_edits 内部已有模型级 diff 校验，这里再锁块数）
         let m = model_of(&out);
         assert_eq!(m.body.len(), 1);
+    }
+
+    // ---- S3 七波·删行 + 批组合放宽（生产反馈 P0/P2）----
+
+    /// 纵并表（显式 restart 头）：r1c1 头、r2c1 续、r2c2 普通——删守卫用。
+    fn vchain_doc() -> String {
+        let head = r#"<w:tc><w:tcPr><w:tcW w:w="4500" w:type="dxa"/><w:vMerge w:val="restart"/></w:tcPr><w:p><w:r><w:t>头</w:t></w:r></w:p></w:tc>"#;
+        let cont = r#"<w:tc><w:tcPr><w:tcW w:w="4500" w:type="dxa"/><w:vMerge/></w:tcPr><w:p><w:r><w:t>藏一</w:t></w:r></w:p></w:tc>"#;
+        wrap(&tbl_of(&[
+            format!("<w:tr>{}{}</w:tr>", head, cell_xml("右上")),
+            format!("<w:tr>{}{}</w:tr>", cont, cell_xml("右中")),
+            row_xml("甲三", "乙三"),
+        ]))
+    }
+
+    #[test]
+    fn delete_table_row_removes_row_keeps_rest() {
+        let xml = wrap(&tbl_of(&[row_xml("甲一", "乙一"), row_xml("甲二", "乙二"), row_xml("甲三", "乙三")]));
+        let (out, applied) = apply_edits(
+            &xml,
+            &Stylesheet::empty(),
+            &[EditOp::DeleteTableRow { block: 1, expect_prefix: "甲一".into(), row: 2 }],
+        )
+        .unwrap();
+        assert_eq!(applied.len(), 1);
+        assert_eq!(applied[0].op, "delete_table_row");
+        assert!(applied[0].after.contains("剩 2 行"), "摘要带剩余行数: {}", applied[0].after);
+        assert!(!out.contains("甲二"), "目标行内容应删除");
+        assert!(out.contains("甲一") && out.contains("甲三"), "其余行不中枪");
+        // 块数不变（表仍是 1 块）、行数 3→2、tblGrid 原样
+        let m = model_of(&out);
+        assert_eq!(m.body.len(), 1);
+        let Block::Table(t) = &m.body[0] else { panic!() };
+        assert_eq!(t.rows.len(), 2);
+        assert_eq!(out.matches("<w:gridCol").count(), 2, "tblGrid 不动");
+    }
+
+    #[test]
+    fn delete_table_row_guards() {
+        // ① 末行保护：单行表删唯一行 → 拒、指路 delete_block
+        let one = wrap(&tbl_of(&[row_xml("仅", "一")]));
+        let err = val_msg(apply_edits(
+            &one,
+            &Stylesheet::empty(),
+            &[EditOp::DeleteTableRow { block: 1, expect_prefix: "仅".into(), row: 1 }],
+        ).unwrap_err());
+        assert!(err.starts_with("空表保护"), "实际: {err}");
+        assert!(err.contains("delete_block"), "应指路整表删除: {err}");
+
+        // ② 合并头行（下方有续格）→ 拒、指路 split_cell
+        let err = val_msg(apply_edits(
+            &vchain_doc(),
+            &Stylesheet::empty(),
+            &[EditOp::DeleteTableRow { block: 1, expect_prefix: "头".into(), row: 1 }],
+        ).unwrap_err());
+        assert!(err.starts_with("合并结构冲突"), "实际: {err}");
+        assert!(err.contains("split_cell"), "应指路先拆纵并: {err}");
+
+        // ③ 纯续格行可删（头在上方，链条缩短仍合法）
+        let (out, applied) = apply_edits(
+            &vchain_doc(),
+            &Stylesheet::empty(),
+            &[EditOp::DeleteTableRow { block: 1, expect_prefix: "头".into(), row: 2 }],
+        )
+        .unwrap();
+        assert_eq!(applied.len(), 1);
+        let m = model_of(&out);
+        let Block::Table(t) = &m.body[0] else { panic!() };
+        assert_eq!(t.rows.len(), 2, "删续格行后剩 2 行");
+        assert_eq!(t.rows[0].cells[0].v_merge.as_deref(), Some("restart"), "头保留");
+        assert!(!out.contains("藏一"), "续格内容随行删除");
+
+        // ④ 独占一批：同批挂 set_cell_text → 拒
+        let err = val_msg(apply_edits(
+            &two_row_table_doc(),
+            &Stylesheet::empty(),
+            &[
+                EditOp::SetCellText { block: 1, expect_prefix: "甲一".into(), row: 1, cell: 1, text: "x".into() },
+                EditOp::DeleteTableRow { block: 1, expect_prefix: "甲一".into(), row: 2 },
+            ],
+        ).unwrap_err());
+        assert!(err.starts_with("同一块多操作"), "实际: {err}");
+        assert!(err.contains("delete_table_row"), "应点名结构重构家族: {err}");
+
+        // ⑤ 行号越界
+        let err = val_msg(apply_edits(
+            &two_row_table_doc(),
+            &Stylesheet::empty(),
+            &[EditOp::DeleteTableRow { block: 1, expect_prefix: "甲一".into(), row: 5 }],
+        ).unwrap_err());
+        assert!(err.starts_with("行号越界"), "实际: {err}");
+    }
+
+    #[test]
+    fn set_table_element_same_cell_different_elements_compose() {
+        // 同格不同 element 一批组合（vAlign + tcBorders）——生产反馈「拆两批」修正
+        let xml = two_row_table_doc();
+        let borders = r#"<w:tcBorders><w:top w:val="single" w:sz="4" w:color="auto"/></w:tcBorders>"#;
+        let (out, applied) = apply_edits(
+            &xml,
+            &Stylesheet::empty(),
+            &[
+                EditOp::SetTableElement {
+                    block: 1,
+                    expect_prefix: "甲一".into(),
+                    level: TableLevel::Cell,
+                    row: Some(1),
+                    cell: Some(1),
+                    element: "vAlign".into(),
+                    xml: Some(r#"<w:vAlign w:val="center"/>"#.into()),
+                },
+                EditOp::SetTableElement {
+                    block: 1,
+                    expect_prefix: "甲一".into(),
+                    level: TableLevel::Cell,
+                    row: Some(1),
+                    cell: Some(1),
+                    element: "tcBorders".into(),
+                    xml: Some(borders.into()),
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(applied.len(), 2);
+        assert!(out.contains(r#"<w:vAlign w:val="center"/>"#), "vAlign 生效");
+        assert!(out.contains("<w:tcBorders>"), "tcBorders 生效");
+        // schema 序：tcBorders 应排在 vAlign 前（tcW → tcBorders → … → vAlign）
+        let b = out.find("<w:tcBorders>").unwrap();
+        let v = out.find(r#"<w:vAlign"#).unwrap();
+        assert!(b < v, "schema 序 tcBorders < vAlign");
+        // 邻格不中枪
+        let m = model_of(&out);
+        let Block::Table(t) = &m.body[0] else { panic!() };
+        assert_eq!(t.rows[0].cells[1].v_align, None, "右格不中枪");
+
+        // 同元素两条 → 拒「同一格多操作」
+        let err = val_msg(apply_edits(
+            &xml,
+            &Stylesheet::empty(),
+            &[
+                EditOp::SetTableElement {
+                    block: 1, expect_prefix: "甲一".into(), level: TableLevel::Cell,
+                    row: Some(1), cell: Some(1), element: "vAlign".into(),
+                    xml: Some(r#"<w:vAlign w:val="center"/>"#.into()),
+                },
+                EditOp::SetTableElement {
+                    block: 1, expect_prefix: "甲一".into(), level: TableLevel::Cell,
+                    row: Some(1), cell: Some(1), element: "vAlign".into(),
+                    xml: Some(r#"<w:vAlign w:val="bottom"/>"#.into()),
+                },
+            ],
+        ).unwrap_err());
+        assert!(err.starts_with("同一格多操作"), "实际: {err}");
+        assert!(err.contains("vAlign"), "应点名冲突元素: {err}");
+
+        // set_cell_text + set_table_element 同格（不同目标键）→ 合法组合
+        let (out2, _) = apply_edits(
+            &xml,
+            &Stylesheet::empty(),
+            &[
+                EditOp::SetCellText { block: 1, expect_prefix: "甲一".into(), row: 1, cell: 1, text: "新甲一".into() },
+                EditOp::SetTableElement {
+                    block: 1, expect_prefix: "甲一".into(), level: TableLevel::Cell,
+                    row: Some(1), cell: Some(1), element: "vAlign".into(),
+                    xml: Some(r#"<w:vAlign w:val="center"/>"#.into()),
+                },
+            ],
+        )
+        .unwrap();
+        assert!(out2.contains("新甲一") && out2.contains(r#"<w:vAlign w:val="center"/>"#));
+
+        // set_cell_text 同格两条仍拒（重写语义）
+        let err = val_msg(apply_edits(
+            &xml,
+            &Stylesheet::empty(),
+            &[
+                EditOp::SetCellText { block: 1, expect_prefix: "甲一".into(), row: 1, cell: 1, text: "a".into() },
+                EditOp::SetCellText { block: 1, expect_prefix: "甲一".into(), row: 1, cell: 1, text: "b".into() },
+            ],
+        ).unwrap_err());
+        assert!(err.starts_with("同一格多操作"), "实际: {err}");
+    }
+
+    #[test]
+    fn insert_paragraph_after_same_anchor_chains_in_order() {
+        let xml = wrap(r#"<w:p><w:r><w:t>锚</w:t></w:r></w:p>"#);
+        let (out, applied) = apply_edits(
+            &xml,
+            &Stylesheet::empty(),
+            &[
+                EditOp::InsertParagraphAfter { block: 1, expect_prefix: "锚".into(), text: "一".into(), style: None },
+                EditOp::InsertParagraphAfter { block: 1, expect_prefix: "锚".into(), text: "二".into(), style: None },
+                EditOp::InsertParagraphAfter { block: 1, expect_prefix: "锚".into(), text: "三".into(), style: None },
+            ],
+        )
+        .unwrap();
+        assert_eq!(applied.len(), 3, "逐操作摘要");
+        assert_eq!(applied[0].op, "insert_paragraph_after");
+        // 块数守恒：1 锚 + 3 新段
+        let m = model_of(&out);
+        assert_eq!(m.body.len(), 4);
+        // 链序 = 输入序：锚 → 一 → 二 → 三
+        let p0 = out.find("锚</w:t>").unwrap();
+        let p1 = out.find("一</w:t>").unwrap();
+        let p2 = out.find("二</w:t>").unwrap();
+        let p3 = out.find("三</w:t>").unwrap();
+        assert!(p0 < p1 && p1 < p2 && p2 < p3, "链序应为锚→一→二→三");
+
+        // 异块组合仍合法：块 1 链式插 2 段 + 块 2 改文本，一批
+        let xml2 = wrap(r#"<w:p><w:r><w:t>锚</w:t></w:r></w:p><w:p><w:r><w:t>他段</w:t></w:r></w:p>"#);
+        let (out2, applied2) = apply_edits(
+            &xml2,
+            &Stylesheet::empty(),
+            &[
+                EditOp::InsertParagraphAfter { block: 1, expect_prefix: "锚".into(), text: "甲".into(), style: None },
+                EditOp::InsertParagraphAfter { block: 1, expect_prefix: "锚".into(), text: "乙".into(), style: None },
+                EditOp::ReplaceText { block: 2, expect_prefix: "他段".into(), new_text: "改段".into() },
+            ],
+        )
+        .unwrap();
+        assert_eq!(applied2.len(), 3);
+        assert!(out2.contains("改段"));
+        let m2 = model_of(&out2);
+        assert_eq!(m2.body.len(), 4);
+
+        // 同锚混其他段落操作仍拒（链式例外只对 insert_paragraph_after 开放）
+        let err = val_msg(apply_edits(
+            &xml,
+            &Stylesheet::empty(),
+            &[
+                EditOp::InsertParagraphAfter { block: 1, expect_prefix: "锚".into(), text: "一".into(), style: None },
+                EditOp::ReplaceText { block: 1, expect_prefix: "锚".into(), new_text: "改".into() },
+            ],
+        ).unwrap_err());
+        assert!(err.starts_with("同一块多操作"), "实际: {err}");
+        // 反序：replace 在前，insert 在后 → 同样拒
+        let err = val_msg(apply_edits(
+            &xml,
+            &Stylesheet::empty(),
+            &[
+                EditOp::ReplaceText { block: 1, expect_prefix: "锚".into(), new_text: "改".into() },
+                EditOp::InsertParagraphAfter { block: 1, expect_prefix: "锚".into(), text: "一".into(), style: None },
+            ],
+        ).unwrap_err());
+        assert!(err.starts_with("同一块多操作"), "实际: {err}");
     }
 }
