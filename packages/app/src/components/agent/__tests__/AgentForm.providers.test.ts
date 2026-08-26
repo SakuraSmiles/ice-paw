@@ -15,6 +15,8 @@ vi.mock("@tauri-apps/plugin-opener", () => ({ revealItemInDir: vi.fn() }));
 const providersListMock = vi.fn();
 const testConnectionMock = vi.fn();
 const createMock = vi.fn();
+const updateMock = vi.fn();
+const rotateKeyMock = vi.fn();
 
 // useProviders 与 AgentForm 各自从不同相对路径 import 同一 bridge 模块——一份 mock 全覆盖
 vi.mock("../../../api/bridge", () => ({
@@ -26,8 +28,8 @@ vi.mock("../../../api/bridge", () => ({
     preferences: { get: async () => ({}) },
     agents: {
       create: (...a: unknown[]) => createMock(...a),
-      update: vi.fn().mockResolvedValue({}),
-      rotateKey: vi.fn().mockResolvedValue(undefined),
+      update: (...a: unknown[]) => updateMock(...a),
+      rotateKey: (...a: unknown[]) => rotateKeyMock(...a),
       list: async () => [],
     },
   },
@@ -129,6 +131,8 @@ beforeEach(() => {
   vi.resetModules();
   providersListMock.mockResolvedValue(PROVIDERS);
   createMock.mockResolvedValue({});
+  updateMock.mockResolvedValue({});
+  rotateKeyMock.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -274,6 +278,37 @@ describe("AgentForm 可选可输分组模型选择器", () => {
     const err = w.find(".conn-err");
     expect(err.exists()).toBe(true);
     expect(err.text()).toContain("全部端点未通过");
+  });
+
+  it("编辑态换厂商必须带新 Key：空 Key 保存被拦（提示厂商名），填后 update+rotateKey 同批生效；同厂商换模型不受限", async () => {
+    // 存量 openai agent → 点选智谱模型（provider 随模型切）
+    const w = await mountForm(editAgent({ provider: "openai", model: "gpt-4o" }));
+    await openDropdown(w);
+    await clickOption(w, "glm-5-turbo");
+    await save(w);
+    // 空 key → 拦 + 提示含新厂商名与 Key 指引
+    const errText = w.find(".form-error").text();
+    expect(errText).toContain("智谱");
+    expect(errText).toContain("API Key");
+    expect(updateMock).not.toHaveBeenCalled();
+    // 填新 key → 放行：update 与 rotateKey（新 key + 切换后的厂商地址）都被调
+    await textInputs(w)[2].setValue("sk-glm-new-key");
+    await save(w);
+    expect(w.find(".form-error").exists()).toBe(false);
+    expect(updateMock).toHaveBeenCalledWith(expect.objectContaining({ provider: "glm", model: "glm-5-turbo" }));
+    expect(rotateKeyMock).toHaveBeenCalledWith("ag-1", "sk-glm-new-key", GLM_STD_URL);
+    w.unmount();
+
+    // 同厂商换模型：key 留空（=不改）照常保存，不被新闸误伤
+    updateMock.mockClear();
+    rotateKeyMock.mockClear();
+    const w2 = await mountForm(editAgent({ provider: "openai", model: "gpt-4o" }));
+    await openDropdown(w2);
+    await clickOption(w2, "gpt-4o-mini");
+    await save(w2);
+    expect(w2.find(".form-error").exists()).toBe(false);
+    expect(updateMock).toHaveBeenCalledWith(expect.objectContaining({ model: "gpt-4o-mini" }));
+    expect(rotateKeyMock).not.toHaveBeenCalled();
   });
 
   it("编辑态：可见厂商存量目录外模型插回所属组；hidden 旧入口（glm-coding）合成兜底组且 URL 可编辑", async () => {

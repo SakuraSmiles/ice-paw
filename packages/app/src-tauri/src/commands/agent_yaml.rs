@@ -443,6 +443,152 @@ pub async fn set_agent_word_profile(
 }
 
 // ============================================================================
+// 镜像行同步（A，2026-08-26 生产反馈：UI 显示智谱而 yaml 停在出生时的 deepseek）
+// ============================================================================
+
+/// `provider` / `model` / `base_url` 三行是创建时 [`write_default_agent_yaml`]
+/// 写入的**信息性镜像**：`AgentFileConfig` 不解析它们（serde 静默忽略未知键，
+/// 运行时 provider/model/base_url 全部来自 DB 行），但对用户它们是文件里的
+/// 「配置真相」。update() 只改 DB 不同步镜像 → UI 与文件分裂，直接误导排障
+/// （生产实例：用户看到 yaml 是 deepseek，怀疑端点配错，实际运行时根本不读）。
+///
+/// 同步语义：文件存在才补丁（不创建）；活跃行替换 / 缺失追加；base_url 为空
+/// 时移除活跃行（与创建时「空不写」对称）。与 [`patch_agent_yaml`] 同款逐行
+/// 纪律：BOM 摘出回填、非目标行逐字节保留。
+pub fn patch_agent_yaml_string(content: &str, key: &str, value: &str) -> String {
+    let (bom, body) = match content.strip_prefix('\u{FEFF}') {
+        Some(rest) => ("\u{FEFF}", rest),
+        None => ("", content),
+    };
+
+    let mut out = String::with_capacity(content.len() + key.len() + value.len() + 4);
+    let mut found = false;
+    for line in body.split_inclusive('\n') {
+        if !found && line_is_active_key(line, key) {
+            found = true;
+            out.push_str(key);
+            out.push_str(": ");
+            out.push_str(value);
+            out.push_str(line_end(line));
+        } else {
+            out.push_str(line);
+        }
+    }
+    if !found {
+        if !body.is_empty() && !body.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str(key);
+        out.push_str(": ");
+        out.push_str(value);
+        out.push('\n');
+    }
+    format!("{bom}{out}")
+}
+
+/// 移除某键的活跃行（整行删，含行尾）；无活跃行 = no-op。镜像 base_url 清空用。
+pub fn remove_active_scalar_line(content: &str, key: &str) -> String {
+    let (bom, body) = match content.strip_prefix('\u{FEFF}') {
+        Some(rest) => ("\u{FEFF}", rest),
+        None => ("", content),
+    };
+    let mut out = String::with_capacity(content.len());
+    for line in body.split_inclusive('\n') {
+        if line_is_active_key(line, key) {
+            continue;
+        }
+        out.push_str(line);
+    }
+    format!("{bom}{out}")
+}
+
+/// 一次性同步三行镜像（provider / model / base_url）。
+pub fn sync_agent_yaml_mirror(
+    content: &str,
+    provider: &str,
+    model: &str,
+    base_url: Option<&str>,
+) -> String {
+    let out = patch_agent_yaml_string(content, "provider", provider);
+    let out = patch_agent_yaml_string(&out, "model", model);
+    match base_url.filter(|s| !s.is_empty()) {
+        Some(url) => patch_agent_yaml_string(&out, "base_url", url),
+        None => remove_active_scalar_line(&out, "base_url"),
+    }
+}
+
+/// 读某键活跃行的值（`key: value` 冒号后 trim）——镜像回读闸用（镜像键不是
+/// `AgentFileConfig` 字段，回读走行级而非 serde 字段）。
+fn active_scalar_value(content: &str, key: &str) -> Option<String> {
+    let body = content.strip_prefix('\u{FEFF}').unwrap_or(content);
+    body.split_inclusive('\n')
+        .find(|line| line_is_active_key(line, key))
+        .map(|line| {
+            line.trim_end_matches(['\r', '\n'])
+                .strip_prefix(key)
+                .and_then(|rest| rest.strip_prefix(':'))
+                .map(|v| v.trim().to_string())
+                .unwrap_or_default()
+        })
+}
+
+/// 镜像同步的写前闸：整文件重解析（用户其余配置不得被破坏）+ 三行行级回读
+/// 比对。不过则调用方放弃写盘。
+fn validate_mirror_sync(
+    new_content: &str,
+    provider: &str,
+    model: &str,
+    base_url: Option<&str>,
+) -> AppResult<()> {
+    serde_yaml::from_str::<AgentFileConfig>(new_content).map_err(|e| {
+        AppError::Validation(format!("镜像同步后 agent.yaml 无法解析（已放弃写入）: {e}"))
+    })?;
+    let expect_url = base_url.filter(|s| !s.is_empty());
+    if active_scalar_value(new_content, "provider").as_deref() != Some(provider)
+        || active_scalar_value(new_content, "model").as_deref() != Some(model)
+        || active_scalar_value(new_content, "base_url").as_deref() != expect_url
+    {
+        return Err(AppError::Validation(
+            "镜像同步后 provider/model/base_url 回读值与请求不符（已放弃写入）".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// 对某 agent 工作区的 agent.yaml 做镜像行同步（update() 调用）。
+///
+/// - 文件不存在 → Ok（**不创建**——镜像只跟随已存在的文件）
+/// - 内容无变化（逐字节相等）→ 直接返回，不动文件
+/// - 写前闸 + 原子写（同目录 .tmp → rename）
+pub fn sync_agent_yaml_mirror_file(
+    workspace_dir: &str,
+    provider: &str,
+    model: &str,
+    base_url: Option<&str>,
+) -> AppResult<()> {
+    let yaml_path = std::path::Path::new(workspace_dir).join("agent.yaml");
+    if !yaml_path.exists() {
+        return Ok(());
+    }
+    let content = std::fs::read_to_string(&yaml_path)?;
+    let new_content = sync_agent_yaml_mirror(content.as_str(), provider, model, base_url);
+    if new_content == content {
+        return Ok(());
+    }
+    validate_mirror_sync(&new_content, provider, model, base_url)?;
+
+    let tmp_path = yaml_path.with_extension("yaml.tmp");
+    std::fs::write(&tmp_path, &new_content)?;
+    std::fs::rename(&tmp_path, &yaml_path)?;
+    tracing::info!(
+        target: "ice_paw.agent",
+        "agent.yaml 镜像已同步: provider={provider} model={model}（{}）",
+        yaml_path.display()
+    );
+    Ok(())
+}
+
+// ============================================================================
 // 单元测试（纯函数层：patch 逐字节语义 + 三道安全闸）
 // ============================================================================
 
@@ -788,5 +934,127 @@ mod tests {
         assert!(validate_word_profile_patched(&with_block, None).is_err());
         // 解析失败 → 拒
         assert!(validate_word_profile_patched("word_style_profile: [", Some("x")).is_err());
+    }
+
+    // ---- 镜像行同步（A：update() 后 provider/model/base_url 跟随 DB） ----
+
+    /// 生产实例形态：出生 yaml 带 deepseek 镜像行 + base_url + 中文注释 + 块
+    fn born_deepseek_yaml() -> String {
+        [
+            "# agent.yaml — Agent 行为和角色配置",
+            "# 修改后即时生效，无需重启",
+            "",
+            "provider: deepseek",
+            "model: deepseek-v4-flash",
+            "system_prompt: |",
+            "  你是一个工程助手。",
+            "temperature: 0.7",
+            "base_url: https://api.deepseek.com",
+        ]
+        .join("\n")
+            + "\n"
+    }
+
+    #[test]
+    fn mirror_sync_updates_lines_and_preserves_rest() {
+        let out = sync_agent_yaml_mirror(
+            &born_deepseek_yaml(),
+            "glm",
+            "glm-5.2",
+            Some("https://open.bigmodel.cn/api/coding/paas/v4"),
+        );
+        assert!(out.contains("provider: glm\n"));
+        assert!(out.contains("model: glm-5.2\n"));
+        assert!(out.contains("base_url: https://open.bigmodel.cn/api/coding/paas/v4\n"));
+        assert!(!out.contains("deepseek"));
+        // 非目标行逐字节保留：注释、块体、temperature
+        assert!(out.contains("# agent.yaml — Agent 行为和角色配置"));
+        assert!(out.contains("  你是一个工程助手。"));
+        assert!(out.contains("temperature: 0.7"));
+        // 写前闸：重解析过 + 三行回读一致
+        validate_mirror_sync(
+            &out,
+            "glm",
+            "glm-5.2",
+            Some("https://open.bigmodel.cn/api/coding/paas/v4"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn mirror_sync_appends_when_lines_missing() {
+        // 存量 yaml 无镜像行（旧格式/用户删除）→ 追加（文件不重排、其余行不动）
+        let yaml = "system_prompt: |\n  你好\ntemperature: 0.3\n";
+        let out = sync_agent_yaml_mirror(yaml, "glm", "glm-5.2", None);
+        assert_eq!(
+            out,
+            format!("{yaml}provider: glm\nmodel: glm-5.2\n")
+        );
+        validate_mirror_sync(&out, "glm", "glm-5.2", None).unwrap();
+    }
+
+    #[test]
+    fn mirror_sync_removes_base_url_when_none() {
+        let out = sync_agent_yaml_mirror(&born_deepseek_yaml(), "ollama", "qwen3", None);
+        assert!(!out.contains("base_url"));
+        assert!(out.contains("provider: ollama\n"));
+        assert!(out.contains("model: qwen3\n"));
+        // 清空幂等：再同步一次逐字节不变
+        let again = sync_agent_yaml_mirror(&out, "ollama", "qwen3", None);
+        assert_eq!(out, again);
+        // 从无到有再写回：Some 恢复行
+        let restored = sync_agent_yaml_mirror(&out, "ollama", "qwen3", Some("http://localhost:11434/v1"));
+        assert!(restored.contains("base_url: http://localhost:11434/v1\n"));
+    }
+
+    #[test]
+    fn mirror_sync_idempotent_byte_equal() {
+        // 值未变 → 逐字节相等（sync_agent_yaml_mirror_file 据此跳过写盘）
+        let once = sync_agent_yaml_mirror(
+            &born_deepseek_yaml(),
+            "glm",
+            "glm-5.2",
+            Some("https://open.bigmodel.cn/api/coding/paas/v4"),
+        );
+        let twice = sync_agent_yaml_mirror(
+            &once,
+            "glm",
+            "glm-5.2",
+            Some("https://open.bigmodel.cn/api/coding/paas/v4"),
+        );
+        assert_eq!(once, twice);
+    }
+
+    #[test]
+    fn mirror_sync_crlf_bom_preserved() {
+        let yaml = "\u{FEFF}provider: deepseek\r\nmodel: deepseek-v4-flash\r\ntemperature: 0.7\r\n";
+        let out = sync_agent_yaml_mirror(yaml, "glm", "glm-5.2", None);
+        assert!(out.starts_with('\u{FEFF}'));
+        assert!(out.contains("provider: glm\r\n"));
+        assert!(out.contains("model: glm-5.2\r\n"));
+        assert!(out.contains("temperature: 0.7\r\n"));
+    }
+
+    #[test]
+    fn mirror_sync_quotes_and_nested_keys_not_matched() {
+        // 注释行 / 缩进子键 / 前缀相似键一律不误伤；缺活跃键 → 追加
+        let yaml =
+            "# provider: glm\nextra:\n  provider: 内层\nprovider_x: 前缀\n";
+        let out = sync_agent_yaml_mirror(yaml, "glm", "glm-5.2", None);
+        assert!(out.starts_with("# provider: glm\n"));
+        assert!(out.contains("  provider: 内层\n"));
+        assert!(out.contains("provider_x: 前缀\n"));
+        assert!(out.ends_with("provider: glm\nmodel: glm-5.2\n"));
+    }
+
+    #[test]
+    fn mirror_gate_rejects_broken_yaml() {
+        // 文件其余部分本就解析失败（未闭合序列）：补丁后重解析不过 → 拒绝写盘
+        let broken = "provider: deepseek\nbroken: [unclosed\n";
+        let patched = patch_agent_yaml_string(broken, "provider", "glm");
+        assert!(validate_mirror_sync(&patched, "glm", "any", None).is_err());
+        // 重解析过但行级回读不符（provider 行 ≠ 期望）→ 拒
+        assert!(validate_mirror_sync("provider: glm\n", "deepseek", "m", None).is_err());
+        assert!(validate_mirror_sync("provider: glm\nmodel: m\n", "glm", "m", Some("https://x")).is_err());
     }
 }
