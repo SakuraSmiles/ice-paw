@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+## [0.5.3] — 2026-08-26
+
+> 从 0.5.2 以来的主要调整：**S3 六波·生产反馈修正三件**（生产 agent 缺口报告，对码核实后定级修复——其一实为跨层语义 bug 非缺功能）。
+
+### Fixed
+- **缩进跨层压制**（生产报告缺口 2，升格为 bug）：此前 `set_format` / `set_cell_format` 写首行缩进 0 只删同层 chars 单位变体，**样式层**（如正文样式 `firstLineChars=200`）透出——工具报成功但缩进仍在。修复：chars 变体（`firstLineChars`/`leftChars`）显式写 0（chars 单位优先于 twips，跨层压制唯一正解），`apply_para_formats` 与 `fresh_ppr_inner`（无 pPr 段落的新建路径）双位点；零值连 hanging 系一并四零（任意元素内优先序下都渲染无缩进），非零值只压 chars。
+
+### Added
+- **`set_cell_format` 加 `style` 参数**（生产报告缺口 1）：格内全部段落套用段落样式（显示名或 ID，反查与 set_style 同判）——表格格内段落脱离正文样式的正路（如换到无首行缩进的样式），与「缩进写 0」可叠加使用；纯样式操作合法；结果摘要携带解析后样式 ID。
+- **`ppr` 投影格内下钻**（生产报告缺口 3）：表格块从一句「(表格块，无段落属性)」改为指路提示；带 `row+cell` 渲染格内逐段 pPr 原文（寻址与 tblpr / set_cell_format 同口径，行/格越界三段式报错）。
+- 顺带：`insert_table_after` / `edit_docx` 工具说明把 `table_style` 参数提显眼（五波已建的能力，生产 agent 不知道）。
+- 真机测试点：跨机验证——① 正文样式带首行缩进的文档里，格内段落 `indent_first_line_tw=0` 后 Word 打开无缩进；② `set_cell_format style=` 换样式后格内格式正确；③ `projection=ppr row= cell=` 下钻寻址准确。
+
 ## [0.5.2] — 2026-08-26
 
 > 从 0.5.1 以来的主要调整：**S3 四波·表格格式四件**（生产反馈——表格内容能写了但边框/底纹/字体/样式无工具）+ **S3 五波·样式档案与模板个性化**（引擎通用抽象 + 双轨承载）。
