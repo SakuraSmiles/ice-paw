@@ -2,7 +2,7 @@
 
 ## 项目概述
 IcePaw — 本地优先的 LLM 对话工作站。Tauri v2 (Rust) + Vue 3 (TypeScript) 桌面应用。
-当前版本：`0.5.3`。
+当前版本：`0.5.4`。
 
 ## 设计规则（用户拍板，勿翻案）
 
@@ -176,9 +176,8 @@ agent 调用 `propose_config_change` 工具提出创建/修改 agent 提案 → 
 - **Phase 2B 阶段 3 Image 双份存储治理（2026-08-17，3a 读侧 + 3b 写侧）**：消息类 payload 的 blocks 用 `PayloadBlock` untagged 双形态——`Full(ContentBlock)`（v1 内联，旧事件零迁移可读）/ `ImageRef{message_id, block_index}`（v2，字节只在 messages 行）。写侧唯一入口 `refify_blocks`（emitter 字段式签名内部做，调用方传与落库同值的 blocks）；读侧三路水合：derive `hydrate_image_refs`（纯同步 resolver 注入；未命中/越界/非 Image 降级 `Text("[图片内容已不可恢复]")`）+ `to_content_blocks` 防泄漏最后闸 + conversation_cmd JSON 级水合（list_session_events/export，前端零改动）。BACKFILL_VERSION=2（纯 backfill 会话删旧重写自愈，冻结会话保留 v1 照读）。**⚠️ 不变式：session_events 消息类 payload 禁止内联 Image base64——新增 message-kind emitter 必须经 `refify_blocks`，读侧必须经 `hydrate_image_refs` 水合后才能进对账/LLM 视图（ref 形态不得以非 Text 形态流出）**。
 
 ## 当前状态（2026-08-26）
-- 版本 **0.5.3 已打包**（= 0.5.2 + **S3 六波·生产反馈修正三件（D13）**：① 缩进跨层压制修复[apply_para_formats + fresh_ppr_inner 双位点，chars 变体显式写 0 压样式层 firstLineChars 透出；零值四零、非零只压 chars；leftChars 同律] ② set_cell_format 加 style 参数[格内全段 pStyle 手术，名/ID 反查同 set_style，纯样式操作合法] ③ ppr 投影 row+cell 下钻格内逐段 pPr 原文[守卫 drills={tblpr,ppr}]；顺带 description 把 table_style 提显眼；cargo 1125）——生产驱动：agent 缺口报告三件，对码核实后定级（缺口2 实为跨层 bug 非缺功能）
-- **main 已领先 0.5.3 一个 commit**：S3 七波·删行+批组合三放宽（D14，66c55cf 未发版）——delete_table_row[P0，合并链三态守卫+独占一批] + 同格多元素同批[去重键加元素] + 同锚多段链式[聚合单 splice] + description 两处澄清[跨表同批/列宽配方]；生产 agent 缺口报告第二弹，五条对码核实分流（两条实为「引擎已支持、描述不清」）
-- 上一版 **0.5.2**（四波·表格格式四件 + 五波·样式档案与模板个性化[word_style_profile 双轨承载]；cargo 1122）；再上 **0.5.1**（三波·表格内容四件；cargo 1071）；再上 **0.5.0**（Word 能力演进整线 + Agent 质量拍 Phase 1；cargo 1060 / vitest 326）
+- 版本 **0.5.4 已打包**（= 0.5.3 + **S3 七波·删行+批组合三放宽（D14）**：① delete_table_row[P0 真缺位——vMerge 三态守卫：行内合并头下方同网格列有续格拒指路 split_cell / 纯续格行可删 / 仅剩 1 行空表保护指路 delete_block；结构重构独占一批] ② 同格多元素同批[used_cells 去重键加元素名——vAlign+tcBorders 一批序无关组合；组合判据：序无关/序确定才可组合，重写语义保持互斥] ③ 同锚多段链式[镜像 table_plan_idx 的 insert_plan_idx 聚合单 splice，勿做偏移数学——块间 gap 可为 0；链序=输入序] ④⑤ description 两处澄清[跨表同批如全文档统一边框一句话 + 列宽按内容加权 tcW 配方]——生产 agent 缺口报告第二弹，五条对码核实分流，两条实为「引擎已支持、描述不清」；cargo 1125→1129）
+- 上一版 **0.5.3**（六波·生产反馈修正三件[D13]：缩进跨层压制[chars 变体显式写 0 双位点] + set_cell_format.style 格内样式 + ppr 投影 row+cell 下钻；cargo 1125）；再上 **0.5.2**（四波·表格格式四件 + 五波·样式档案与模板个性化[word_style_profile 双轨承载]；cargo 1122）；再上 **0.5.1**（三波·表格内容四件；cargo 1071）；再上 **0.5.0**（Word 能力演进整线 + Agent 质量拍 Phase 1；cargo 1060 / vitest 326）
 - 分支：仅 `main`
 - 近期递进：0.4.1 → 质量拍 Phase 1 + Word 能力演进整线（S0a→S0b→手术引擎→S3 首波→真机复盘两批→D9 set_ppr_element）→ 0.5.0 发版 → 生产实战反馈表格双缺口 → S3 三波表格四件（D10）→ 0.5.1 打包 → 生产反馈表格格式缺口 → 四波（D11）→ 样式通用抽象+个性化需求 → 五波（D12 双轨承载）→ 0.5.2 打包 → 生产 agent 缺口报告 → 六波修正三件（D13）→ 0.5.3 打包 → 缺口报告第二弹 → **七波删行+批组合（D14，未发版）**
 - `cargo test --lib` 1129 passed / 0 failed（+ 集成测试：session_runner_e2e 7、session_reconcile_e2e 6+2 ignored、session_event_log_e2e 3、memory_e2e 3、message_repo 7、provider 11）；clippy --tests -D warnings 0 警告；vitest 326
