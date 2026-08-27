@@ -35,10 +35,21 @@ pub struct RgbaFrame {
 // Trait
 // =========================================================================
 
+/// 可捕获窗口的摘要信息（`list_windows` 产出）。
+///
+/// `hwnd` 是稳定句柄值（窗口存活期内不变），模型把它原样传回
+/// `capture_window` 即可精确锁定窗口——比标题匹配可靠（同名窗口/标题变动）。
+#[derive(Debug, Clone)]
+pub struct WindowInfo {
+    pub hwnd: i64,
+    pub title: String,
+    pub rect: PhysRect,
+}
+
 /// 屏幕捕获后端。
 ///
-/// 阶段一（看屏）方法集：虚拟桌面布局 / 显示器枚举 / 区域捕获。
-/// capture_window / list_windows（看屏2）与 send_input（操作阶段）后续在此扩展。
+/// 阶段一（看屏）方法集：虚拟桌面布局 / 显示器枚举 / 区域捕获 / 窗口枚举与捕获。
+/// send_input（操作阶段）后续在此扩展。
 pub trait ScreenBackend: Send + Sync {
     /// 后端名（写进截图摘要，诊断用）。
     fn name(&self) -> &'static str;
@@ -52,6 +63,19 @@ pub trait ScreenBackend: Send + Sync {
 
     /// 捕获物理区域（虚拟桌面绝对坐标，可为负原点）→ RGBA 帧。
     fn capture(&self, region: PhysRect) -> AppResult<RgbaFrame>;
+
+    /// 枚举可捕获窗口（实现负责过滤：可见 + 有标题 + 非工具窗 + 非自身进程 +
+    /// 非 DWM cloaked；最小化窗口保留在列表里但捕获时会诚实报错）。
+    fn windows(&self) -> AppResult<Vec<WindowInfo>>;
+
+    /// 按句柄捕获窗口（PrintWindow 免聚焦，被遮挡窗口可捕获）。
+    ///
+    /// 返回帧 + 捕获时刻的窗口矩形（写进 CaptureMeta.phys_region——
+    /// 窗口会移动，坐标基准锚定在捕获那一刻的位置）。
+    fn capture_window(&self, hwnd: i64) -> AppResult<(RgbaFrame, PhysRect)>;
+
+    /// 前台窗口句柄（无前台窗口/锁屏时 None）。
+    fn foreground_window(&self) -> Option<i64>;
 }
 
 // =========================================================================
@@ -63,15 +87,23 @@ mod gdi {
     use super::*;
 
     use windows_sys::Win32::Foundation::{GetLastError, LPARAM, RECT};
+    use windows_sys::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
     use windows_sys::Win32::Graphics::Gdi::{
         BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
         EnumDisplayMonitors, GetDC, GetDIBits, ReleaseDC, SelectObject, BITMAPINFO,
         BITMAPINFOHEADER, CAPTUREBLT, DIB_RGB_COLORS, SRCCOPY,
     };
+    // PrintWindow 在 windows-sys 0.59 被归进 Xps 打印路径的 feature（Win32_Storage_Xps）
+    use windows_sys::Win32::Storage::Xps::PrintWindow;
+    use windows_sys::Win32::System::Threading::GetCurrentProcessId;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
-        SM_YVIRTUALSCREEN,
+        EnumWindows, GetForegroundWindow, GetSystemMetrics, GetWindowLongW, GetWindowRect,
+        GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
+        GWL_EXSTYLE, PW_RENDERFULLCONTENT, WS_EX_TOOLWINDOW, SM_CXVIRTUALSCREEN,
+        SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
     };
+
+    type Hwnd = windows_sys::Win32::Foundation::HWND;
 
     /// GDI 截屏后端（无状态，可全局单例）。
     pub struct GdiBackend;
@@ -210,6 +242,110 @@ mod gdi {
                 })
             }
         }
+
+        fn windows(&self) -> AppResult<Vec<WindowInfo>> {
+            let mut out: Vec<WindowInfo> = Vec::new();
+            // SAFETY: 枚举回调与 monitors 同通道模式（LPARAM 回传 Vec 指针）。
+            let ok = unsafe {
+                EnumWindows(
+                    Some(enum_window_proc),
+                    &mut out as *mut Vec<WindowInfo> as LPARAM,
+                )
+            };
+            if ok == 0 {
+                return Err(capture_err("EnumWindows 中止", "窗口枚举失败，稍后重试"));
+            }
+            Ok(out)
+        }
+
+        fn capture_window(&self, hwnd: i64) -> AppResult<(RgbaFrame, PhysRect)> {
+            let hwnd = hwnd as Hwnd;
+            // SAFETY: 句柄来自模型回传——所有查询都做失败防御，不做存活假设。
+            unsafe {
+                if IsIconic(hwnd) != 0 {
+                    return Err(AppError::Validation(
+                        "screen 捕获失败: 目标窗口已最小化，PrintWindow 无法渲染最小化窗口\
+                         ——请让用户还原窗口，或改用 capture_screen 截全屏".into(),
+                    ));
+                }
+                let rect = window_rect(hwnd).ok_or_else(|| {
+                    AppError::Validation(
+                        "screen 捕获失败: 窗口不存在或矩形不可得——句柄可能已失效\
+                         （窗口被关闭），请重新 list_windows".into(),
+                    )
+                })?;
+                let (w, h) = (rect.width as i32, rect.height as i32);
+                let hdc_screen = GetDC(std::ptr::null_mut());
+                let hdc_mem = CreateCompatibleDC(hdc_screen);
+                let hbmp = if !hdc_mem.is_null() {
+                    CreateCompatibleBitmap(hdc_screen, w, h)
+                } else {
+                    std::ptr::null_mut()
+                };
+                if hdc_mem.is_null() || hbmp.is_null() {
+                    release_capture_objects(hdc_screen, hdc_mem, hbmp, std::ptr::null_mut());
+                    return Err(capture_err(
+                        "创建窗口捕获 DC/位图失败",
+                        "系统资源不足或显示驱动异常，稍后重试",
+                    ));
+                }
+                let old = SelectObject(hdc_mem, hbmp);
+                // PW_RENDERFULLCONTENT：连 DirectX 渲染内容（Chrome/Electron/游戏 UI）
+                // 一起渲染；个别老应用不认 FULLCONTENT，失败降级普通 PrintWindow 再试。
+                let mut printed = PrintWindow(hwnd, hdc_mem, PW_RENDERFULLCONTENT);
+                if printed == 0 {
+                    printed = PrintWindow(hwnd, hdc_mem, 0);
+                }
+                if printed == 0 {
+                    release_capture_objects(hdc_screen, hdc_mem, hbmp, old);
+                    return Err(AppError::Validation(
+                        "screen 捕获失败: PrintWindow 渲染失败——该窗口可能不允许抓取\
+                         （DRM 保护/特殊渲染管线），可改用 capture_screen 截其所在区域".into(),
+                    ));
+                }
+                let mut bmi: BITMAPINFO = std::mem::zeroed();
+                bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+                bmi.bmiHeader.biWidth = w;
+                bmi.bmiHeader.biHeight = -h;
+                bmi.bmiHeader.biPlanes = 1;
+                bmi.bmiHeader.biBitCount = 32;
+                let mut buf = vec![0u8; (w as usize) * (h as usize) * 4];
+                let got = GetDIBits(
+                    hdc_mem,
+                    hbmp,
+                    0,
+                    h as u32,
+                    buf.as_mut_ptr().cast(),
+                    &mut bmi,
+                    DIB_RGB_COLORS,
+                );
+                release_capture_objects(hdc_screen, hdc_mem, hbmp, old);
+                if got == 0 {
+                    return Err(capture_err("GetDIBits 失败", "读取窗口像素位图失败，稍后重试"));
+                }
+                for px in buf.chunks_exact_mut(4) {
+                    px.swap(0, 2);
+                }
+                Ok((
+                    RgbaFrame {
+                        width: w as u32,
+                        height: h as u32,
+                        rgba: buf,
+                    },
+                    rect,
+                ))
+            }
+        }
+
+        fn foreground_window(&self) -> Option<i64> {
+            // SAFETY: GetForegroundWindow 只读，无句柄则返回 null。
+            let hwnd = unsafe { GetForegroundWindow() };
+            if hwnd.is_null() {
+                None
+            } else {
+                Some(hwnd as i64)
+            }
+        }
     }
 
     /// GDI 错误家族化：`screen 捕获失败: <步骤>（GDI 错误码 N）——<怎么办>`。
@@ -218,6 +354,76 @@ mod gdi {
         // SAFETY: GetLastError 是线程槽查询，无副作用。
         let gle = unsafe { GetLastError() };
         AppError::Internal(format!("screen 捕获失败: {step}（GDI 错误码 {gle}）——{hint}"))
+    }
+
+    /// 窗口标题（空标题返回空串；Win32 窗口标题无长度上限约定，动态探测）。
+    ///
+    /// # Safety
+    /// `hwnd` 必须是存活窗口句柄（调用方已过 EnumWindows/前台来源）。
+    unsafe fn window_title(hwnd: Hwnd) -> String {
+        // SAFETY: GetWindowTextW 写入的缓冲区按 GetWindowTextLengthW 预留 +1 NUL。
+        unsafe {
+            let len = GetWindowTextLengthW(hwnd);
+            if len <= 0 {
+                return String::new();
+            }
+            let mut buf = vec![0u16; len as usize + 1];
+            let got = GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32);
+            if got <= 0 {
+                return String::new();
+            }
+            String::from_utf16_lossy(&buf[..got as usize])
+        }
+    }
+
+    /// DWM cloaked 判定：cloaked 窗口（UWP 挂起的幽灵窗/另一虚拟桌面的窗口）
+    /// 不可见且 PrintWindow 产出空帧，枚举时直接排除。
+    ///
+    /// # Safety
+    /// `hwnd` 必须是存活窗口句柄。
+    unsafe fn is_cloaked(hwnd: Hwnd) -> bool {
+        // SAFETY: DwmGetWindowAttribute 写入 4 字节 u32；失败（如 DWM 未运行）
+        // 视为未 cloaked——宁多列不漏列（列出的坏窗口捕获时会诚实报错）。
+        unsafe {
+            let mut cloaked: u32 = 0;
+            let hr = DwmGetWindowAttribute(
+                hwnd,
+                DWMWA_CLOAKED as u32,
+                &mut cloaked as *mut u32 as *mut core::ffi::c_void,
+                std::mem::size_of::<u32>() as u32,
+            );
+            hr == 0 && cloaked != 0
+        }
+    }
+
+    /// 窗口在屏幕上的矩形（失败返回 None——窗口销毁竞态）。
+    ///
+    /// # Safety
+    /// `hwnd` 必须是存活窗口句柄。
+    unsafe fn window_rect(hwnd: Hwnd) -> Option<PhysRect> {
+        // SAFETY: GetWindowRect 写入调用方栈上 RECT。
+        unsafe {
+            let mut r = RECT {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            };
+            if GetWindowRect(hwnd, &mut r) == 0 {
+                return None;
+            }
+            let width = (r.right - r.left).max(0) as u32;
+            let height = (r.bottom - r.top).max(0) as u32;
+            if width == 0 || height == 0 {
+                return None;
+            }
+            Some(PhysRect {
+                x: r.left,
+                y: r.top,
+                width,
+                height,
+            })
+        }
     }
 
     /// 释放一次捕获涉及的三个 GDI 对象（old 为 SelectObject 的返回值，可能为 1/0 之外的
@@ -264,6 +470,42 @@ mod gdi {
         }
         1 // TRUE：继续枚举
     }
+
+    /// `EnumWindows` 回调：五条过滤（可见/有标题/非工具窗/非自身/非 cloaked）
+    /// 全过才进结果。返回 TRUE 继续枚举——过滤失败不中止枚举（漏一个好过断列）。
+    unsafe extern "system" fn enum_window_proc(hwnd: Hwnd, data: LPARAM) -> i32 {
+        // SAFETY: 同 monitors 通道模式；窗口查询全部只读。
+        unsafe {
+            let out = &mut *(data as *mut Vec<WindowInfo>);
+            if IsWindowVisible(hwnd) == 0 {
+                return 1;
+            }
+            let title = window_title(hwnd);
+            if title.is_empty() {
+                return 1;
+            }
+            if GetWindowLongW(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW as i32 != 0 {
+                return 1;
+            }
+            let mut pid: u32 = 0;
+            GetWindowThreadProcessId(hwnd, &mut pid);
+            if pid != 0 && pid == GetCurrentProcessId() {
+                return 1; // 自身窗口（IcePaw 主窗/托盘）不进列表——不遮自身窗
+            }
+            if is_cloaked(hwnd) {
+                return 1;
+            }
+            let Some(rect) = window_rect(hwnd) else {
+                return 1;
+            };
+            out.push(WindowInfo {
+                hwnd: hwnd as i64,
+                title,
+                rect,
+            });
+        }
+        1
+    }
 }
 
 #[cfg(windows)]
@@ -295,6 +537,18 @@ impl ScreenBackend for UnsupportedBackend {
 
     fn capture(&self, _region: PhysRect) -> AppResult<RgbaFrame> {
         Err(unsupported())
+    }
+
+    fn windows(&self) -> AppResult<Vec<WindowInfo>> {
+        Err(unsupported())
+    }
+
+    fn capture_window(&self, _hwnd: i64) -> AppResult<(RgbaFrame, PhysRect)> {
+        Err(unsupported())
+    }
+
+    fn foreground_window(&self) -> Option<i64> {
+        None
     }
 }
 

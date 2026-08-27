@@ -298,9 +298,11 @@ impl McpRegistry {
         self.register_sync(Arc::new(super::proposal_tool::ProposeConfigChangeTool));
         // 计划维护（全局注册：委派子会话的专家也能维护自己的计划，事件落子会话日志）
         self.register_sync(Arc::new(super::plan_tool::UpdatePlanTool));
-        // computer use（阶段一·看屏）：截屏（Confirm 级授权 + 披露文案；
-        // 非 Windows 注册同 schema 的「不支持」实现，工具列表跨平台一致）
+        // computer use（阶段一·看屏）：截屏/窗口枚举/窗口捕获（截屏类 Confirm 级
+        // 授权 + 披露文案；非 Windows 注册同 schema 的「不支持」实现，跨平台一致）
         self.register_sync(Arc::new(super::screen::CaptureScreenTool::builtin()));
+        self.register_sync(Arc::new(super::screen::ListWindowsTool::builtin()));
+        self.register_sync(Arc::new(super::screen::CaptureWindowTool::builtin()));
         // 注：delegate_to_agent 不在 register_builtin（全局注册表）中——由
         // session_runner 组装期按会话 kind 注册（仅 'chat'，委派深度=1 护栏）。
     }
