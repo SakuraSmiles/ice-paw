@@ -45,20 +45,45 @@ pub struct OpenAiAdapter {
     base_url: String,
     /// 注册表 provider 名（如 "glm" / "glm-coding" / "openai"）
     ///
-    /// 摘要调用的思考开关注入按此判定（[`summary_thinking_disabled`]）——
+    /// 摘要调用的思考开关注入按此判定（[`summary_thinking`]）——
     /// vendor 专属请求体字段只能对已知端点注入，未知 provider 一律不注。
     provider: String,
     /// HTTP 客户端（复用连接池）
     client: reqwest::Client,
 }
 
-/// 是否支持在摘要调用中关闭深度思考（智谱 `thinking.type` 字段）。
+/// 摘要调用的思考开关策略（见 [`summary_thinking`]）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SummaryThinking {
+    /// 非 GLM 端点：不注入任何 vendor 专属字段
+    None,
+    /// GLM 且模型支持关思考：`thinking:{"type":"disabled"}`——思考通道不占摘要额度
+    Disabled,
+    /// GLM 且模型思考常开（glm-5.3 系不支持 disabled，硬发整请求直接被拒）：
+    /// 按官方迁移指引改注入 `enabled` + `reasoning_effort:"low"`（轻量推理最省）
+    LowEffort,
+}
+
+/// 摘要调用的思考开关策略。
 ///
-/// 仅认注册表 GLM 名（glm / glm-coding）——智谱官方定义该字段，注入零风险；
-/// 其他 OpenAI 兼容服务（openai/deepseek/custom/vLLM…）未定义，盲目注入
-/// 可能被严格服务端 400 拒收。
-fn summary_thinking_disabled(provider: &str) -> bool {
-    matches!(provider, "glm" | "glm-coding")
+/// 仅认注册表 GLM 名（glm / glm-coding）——智谱官方定义 `thinking` /
+/// `reasoning_effort` 字段，注入零风险；其他 OpenAI 兼容服务（openai/deepseek/
+/// custom/vLLM…）未定义，盲目注入可能被严格服务端 400 拒收。
+///
+/// ⚠️ glm-5.3 系（含 5.3-Flash，2026-08 起）思考**常开**，官方已移除
+/// `thinking.type:"disabled"` 支持——硬发会让整个请求失败；此时降级为
+/// `enabled` + `reasoning_effort:"low"`（官方迁移指引的等价替代，摘要场景
+/// 仍最大限度省思考额度）。
+fn summary_thinking(provider: &str, model: &str) -> SummaryThinking {
+    if !matches!(provider, "glm" | "glm-coding") {
+        return SummaryThinking::None;
+    }
+    let m = model.to_lowercase();
+    if m.contains("glm-5.3") {
+        SummaryThinking::LowEffort
+    } else {
+        SummaryThinking::Disabled
+    }
 }
 
 impl OpenAiAdapter {
@@ -190,8 +215,9 @@ impl LlmProvider for OpenAiAdapter {
         .await
     }
 
-    /// 摘要专用通道：对 GLM 端点注入 `thinking:{"type":"disabled"}`——
+    /// 摘要专用通道：对 GLM 端点注入思考开关（省摘要额度）——
     /// 否则 thinking 模型把摘要的小 max_tokens 全烧在思考通道，content 恒空。
+    /// glm-5.3 系思考常开不支持 disabled（硬发被拒），降级 enabled+low。
     async fn stream_summary(
         &self,
         api_key: &str,
@@ -200,13 +226,23 @@ impl LlmProvider for OpenAiAdapter {
         max_tokens: i32,
         cancel: CancellationToken,
     ) -> AppResult<Pin<Box<dyn Stream<Item = AppResult<ChatDelta>> + Send>>> {
-        let thinking =
-            summary_thinking_disabled(&self.provider).then(types::ThinkingSwitch::disabled);
+        let thinking = match summary_thinking(&self.provider, &self.model) {
+            SummaryThinking::None => None,
+            SummaryThinking::Disabled => Some(types::ThinkingInject {
+                switch: types::ThinkingSwitch::disabled(),
+                reasoning_effort: None,
+            }),
+            SummaryThinking::LowEffort => Some(types::ThinkingInject {
+                switch: types::ThinkingSwitch::enabled(),
+                reasoning_effort: Some("low"),
+            }),
+        };
         if thinking.is_some() {
             tracing::info!(
                 target: "ice_paw.llm",
-                "摘要调用注入 thinking:type=disabled（provider={}，思考通道不占摘要额度）",
-                self.provider
+                "摘要调用注入思考开关（provider={}，model={}，思考通道尽量不占摘要额度）",
+                self.provider,
+                self.model
             );
         }
         self.stream_chat_inner(
@@ -238,8 +274,13 @@ impl OpenAiAdapter {
         max_tokens: i32,
         model: Option<&str>,
         cancel: CancellationToken,
-        thinking: Option<types::ThinkingSwitch>,
+        thinking: Option<types::ThinkingInject>,
     ) -> AppResult<Pin<Box<dyn Stream<Item = AppResult<ChatDelta>> + Send>>> {
+        // vendor 思考字段注入包拆成请求体两个字段（None 零发送）
+        let (thinking, reasoning_effort) = match thinking {
+            Some(i) => (Some(i.switch), i.reasoning_effort),
+            None => (None, None),
+        };
         // P0-3: 会话级 model override —— 优先使用调用方传入的 model，
         // 否则回退到 Adapter 构造时绑定的默认 model（self.model）。
         // 注意：不会改写 self.model，下次 None 调用仍走默认。
@@ -288,6 +329,7 @@ impl OpenAiAdapter {
                 include_usage: true,
             },
             thinking,
+            reasoning_effort,
         };
 
         // 调试日志：确认工具是否注入
@@ -357,16 +399,38 @@ mod tests {
     // ---------------------------------------------------------------
 
     #[test]
-    fn summary_thinking_disabled_only_for_glm_registry_names() {
+    fn summary_thinking_by_provider_and_model() {
         // 摘要思考开关只对智谱官方定义该字段的端点注入；其他服务盲目注入
         // 可能被严格服务端 400 拒收
-        assert!(summary_thinking_disabled("glm"));
-        assert!(summary_thinking_disabled("glm-coding"));
-        assert!(!summary_thinking_disabled("openai"));
-        assert!(!summary_thinking_disabled("deepseek"));
-        assert!(!summary_thinking_disabled("custom"));
-        assert!(!summary_thinking_disabled("ollama"));
-        assert!(!summary_thinking_disabled(""));
+        for p in ["openai", "deepseek", "custom", "ollama", ""] {
+            assert_eq!(summary_thinking(p, "glm-5.2"), SummaryThinking::None, "{p}");
+        }
+        // GLM + 可关思考的模型：disabled（思考通道不占摘要额度）
+        assert_eq!(
+            summary_thinking("glm", "glm-5.2"),
+            SummaryThinking::Disabled
+        );
+        assert_eq!(
+            summary_thinking("glm-coding", "glm-5.1"),
+            SummaryThinking::Disabled
+        );
+        assert_eq!(
+            summary_thinking("glm", "glm-5-turbo"),
+            SummaryThinking::Disabled
+        );
+        // GLM + glm-5.3 系（思考常开，disabled 硬发整请求被拒）→ enabled+low
+        assert_eq!(
+            summary_thinking("glm", "glm-5.3"),
+            SummaryThinking::LowEffort
+        );
+        assert_eq!(
+            summary_thinking("glm-coding", "glm-5.3-flash"),
+            SummaryThinking::LowEffort
+        );
+        assert_eq!(
+            summary_thinking("glm", "GLM-5.3-Flash[1M]"),
+            SummaryThinking::LowEffort
+        );
     }
 
     #[test]

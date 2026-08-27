@@ -27,13 +27,18 @@ pub(crate) struct ChatRequest<'a> {
     pub max_tokens: i32,
     pub stream_options: StreamOptions,
     /// 智谱思考开关（`{"thinking":{"type":"disabled"}}`）——provider 专属
-    /// 字段，**仅**对 GLM 端点注入（见 `openai::summary_thinking_disabled`）；
+    /// 字段，**仅**对 GLM 端点注入（见 `openai::summary_thinking`）；
     /// 其他 OpenAI 兼容服务可能拒收未知字段（400），一律 None 不发送。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking: Option<ThinkingSwitch>,
+    /// 智谱思考强度（`reasoning_effort`："low"/"high"/"max"）——与 thinking
+    /// 同批的 provider 专属字段，仅对思考常开模型（glm-5.3 系，disabled 已被
+    /// 官方移除）随 `enabled` 一起注入；其他场景一律 None 不发送。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<&'static str>,
 }
 
-/// `thinking` 字段值：`{"type":"disabled"}` 关闭深度思考
+/// `thinking` 字段值：`{"type":"disabled"}` 关闭深度思考、`enabled` 开启
 #[derive(Serialize)]
 pub(crate) struct ThinkingSwitch {
     #[serde(rename = "type")]
@@ -44,6 +49,18 @@ impl ThinkingSwitch {
     pub fn disabled() -> Self {
         Self { kind: "disabled" }
     }
+
+    pub fn enabled() -> Self {
+        Self { kind: "enabled" }
+    }
+}
+
+/// vendor 思考字段注入包（仅摘要路径对 GLM 端点使用，见 `openai::summary_thinking`）：
+/// 开关 + 可选强度档一起进请求体。
+pub(crate) struct ThinkingInject {
+    pub switch: ThinkingSwitch,
+    /// 思考常开模型（glm-5.3 系）随 enabled 注入的低强度档；其余 None
+    pub reasoning_effort: Option<&'static str>,
 }
 
 /// `stream_options.include_usage = true` 让 API 返回 token 用量
@@ -387,7 +404,11 @@ fn single_openai_message(msg: &ChatMessage) -> AppResult<OpenAiMessage> {
 mod tests {
     use super::*;
 
-    fn minimal_request(thinking: Option<ThinkingSwitch>) -> ChatRequest<'static> {
+    fn minimal_request(inject: Option<ThinkingInject>) -> ChatRequest<'static> {
+        let (thinking, reasoning_effort) = match inject {
+            Some(i) => (Some(i.switch), i.reasoning_effort),
+            None => (None, None),
+        };
         ChatRequest {
             model: "glm-5.2",
             messages: vec![OpenAiMessage {
@@ -405,10 +426,12 @@ mod tests {
                 include_usage: true,
             },
             thinking,
+            reasoning_effort,
         }
     }
 
-    /// thinking 字段 None 不发送（未知服务零污染），Some 注入智谱关闭开关
+    /// thinking / reasoning_effort 字段 None 不发送（未知服务零污染），
+    /// Some 注入智谱开关；glm-5.3 系（思考常开）走 enabled + low
     #[test]
     fn chat_request_thinking_switch_serialization() {
         let none = serde_json::to_value(minimal_request(None)).unwrap();
@@ -416,10 +439,27 @@ mod tests {
             none.get("thinking").is_none(),
             "None 时不得发送 thinking 字段"
         );
+        assert!(
+            none.get("reasoning_effort").is_none(),
+            "None 时不得发送 reasoning_effort 字段"
+        );
 
-        let disabled =
-            serde_json::to_value(minimal_request(Some(ThinkingSwitch::disabled()))).unwrap();
+        let disabled = serde_json::to_value(minimal_request(Some(ThinkingInject {
+            switch: ThinkingSwitch::disabled(),
+            reasoning_effort: None,
+        })))
+        .unwrap();
         assert_eq!(disabled["thinking"]["type"], "disabled");
+        assert!(disabled.get("reasoning_effort").is_none());
+
+        // glm-5.3 系不支持 disabled（硬发整请求被拒）→ enabled + reasoning_effort=low
+        let low = serde_json::to_value(minimal_request(Some(ThinkingInject {
+            switch: ThinkingSwitch::enabled(),
+            reasoning_effort: Some("low"),
+        })))
+        .unwrap();
+        assert_eq!(low["thinking"]["type"], "enabled");
+        assert_eq!(low["reasoning_effort"], "low");
     }
 
     /// user 含图片时，序列化出的 content 应是数组，
