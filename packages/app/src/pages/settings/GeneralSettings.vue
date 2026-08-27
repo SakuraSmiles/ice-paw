@@ -255,9 +255,11 @@ type VisionTestState =
   | { status: "ok"; msg: string }
   | { status: "fail"; msg: string };
 
-const visionProviders = ["智谱 GLM", "DeepSeek", "OpenAI", "MiniMax"];
+const visionProviders = ["智谱 GLM", "智谱 Coding", "DeepSeek", "OpenAI", "MiniMax"];
 const visionModelMap: Record<string, { provider: string; models: string[]; keyUrl: string }> = {
   "智谱 GLM": { provider: "glm", models: ["glm-5.3-flash", "glm-5v-turbo", "glm-4v-plus", "glm-4.5v", "glm-4v"], keyUrl: "https://open.bigmodel.cn/usercenter/proj-mgmt/apikeys" },
+  // Coding 套餐 key 只认 Coding 端点（标准端点必 1113），独立成档而非手填端点——与聊天侧端点胶囊同语义
+  "智谱 Coding": { provider: "glm-coding", models: ["glm-5.3-flash", "glm-5v-turbo", "glm-4v-plus", "glm-4.5v", "glm-4v"], keyUrl: "https://open.bigmodel.cn/usercenter/proj-mgmt/apikeys" },
   "DeepSeek": { provider: "deepseek", models: ["deepseek-v4-flash-vision-exp"], keyUrl: "https://platform.deepseek.com/api_keys" },
   "OpenAI": { provider: "openai", models: ["gpt-4o", "gpt-4o-mini"], keyUrl: "https://platform.openai.com/api-keys" },
   "MiniMax": { provider: "minimax", models: ["MiniMax-M3"], keyUrl: "https://platform.minimaxi.com/" },
@@ -373,7 +375,9 @@ function visionTestOf(i: number): VisionTestState {
 /** ok/fail 的结果文案（模板插值无法跨调用收窄联合类型，收口在此） */
 function visionTestMsgOf(i: number): string {
   const t = visionTestOf(i);
-  return t.status === "ok" || t.status === "fail" ? t.msg : "";
+  if (t.status !== "ok" && t.status !== "fail") return "";
+  // 剥掉 invoke 层包装前缀（[preferences.testVisionConfig/internal] 内部错误: ），只留正文
+  return t.msg.replace(/^\[[^\]]*\]\s*(?:内部错误:\s*)?/, "");
 }
 
 onMounted(loadDataDir);
@@ -866,7 +870,7 @@ const hasFilterResults = computed(() => {
         <div class="setting-label">
           <div class="setting-label-text">
             视觉读取
-            <span class="tip-icon" data-tip="Agent 模型无视觉能力时，图片/扫描件由这里的配置链代读成文字。&#10;· Agent 自带视觉 → 直接用自己的模型读图，不经此链。&#10;· 按条目顺序尝试，首个成功即用；代读文本会标注实际读图模型。&#10;· 未配置 → 图片仅保留占位提示，无法代读。">
+            <span class="tip-icon" data-tip="Agent 模型无视觉能力时，图片/扫描件由这里的配置链代读成文字。&#10;· Agent 自带视觉 → 直接用自己的模型读图，不经此链。&#10;· 按条目顺序尝试，首个成功即用；代读文本会标注实际读图模型。&#10;· 智谱 Coding 套餐请选「智谱 Coding」档（标准端点不认 Coding 额度）。&#10;· 未配置 → 图片仅保留占位提示，无法代读。">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
             </span>
 
@@ -885,16 +889,6 @@ const hasFilterResults = computed(() => {
             <div v-for="(e, i) in visionEntries" :key="i" class="vision-entry">
               <div class="vision-entry-head">
                 <span class="vision-tag" :class="{ 'vision-tag--primary': i === 0 }">{{ visionTagOf(i) }}</span>
-                <span class="vision-entry-result">
-                  <template v-if="visionTestOf(i).status === 'ok'">
-                    <Check :size="14" class="vision-ok-icon" />
-                    <span class="vision-ok-text">{{ visionTestMsgOf(i) }}</span>
-                  </template>
-                  <template v-else-if="visionTestOf(i).status === 'fail'">
-                    <X :size="14" class="vision-fail-icon" />
-                    <span class="vision-fail-text">{{ visionTestMsgOf(i) }}</span>
-                  </template>
-                </span>
                 <button
                   class="vision-icon-btn"
                   :title="i === 0 ? (visionEntries.length > 1 ? '删除主模型（降级条目将上移）' : '删除（清空视觉读取配置）') : '删除此降级条目'"
@@ -902,6 +896,11 @@ const hasFilterResults = computed(() => {
                 >
                   <Trash2 :size="14" />
                 </button>
+              </div>
+              <div v-if="visionTestOf(i).status === 'ok' || visionTestOf(i).status === 'fail'" class="vision-entry-result">
+                <Check v-if="visionTestOf(i).status === 'ok'" :size="14" class="vision-ok-icon" />
+                <X v-else :size="14" class="vision-fail-icon" />
+                <span :class="visionTestOf(i).status === 'ok' ? 'vision-ok-text' : 'vision-fail-text'" :title="visionTestMsgOf(i)">{{ visionTestMsgOf(i) }}</span>
               </div>
               <div class="vision-entry-grid">
                 <Combobox
@@ -1107,7 +1106,7 @@ const hasFilterResults = computed(() => {
 .vision-entry-head {
   display: flex;
   align-items: center;
-  gap: var(--ip-spacing-2);
+  justify-content: space-between;
   min-height: 22px;
 }
 .vision-tag {
@@ -1124,19 +1123,21 @@ const hasFilterResults = computed(() => {
   background: var(--ip-primary-600);
   border-color: var(--ip-primary-600);
 }
+/* 测试结果独立成块：长错误文案（含 provider JSON 片段）可换行，不挤标签行 */
 .vision-entry-result {
-  flex: 1;
-  min-width: 0;
-  display: inline-flex;
-  align-items: center;
+  display: flex;
+  align-items: flex-start;
   gap: 4px;
+  padding: var(--ip-spacing-2) var(--ip-spacing-3);
+  border-radius: var(--ip-radius-sm);
+  background: var(--ip-color-bg-tertiary);
   font-size: var(--ip-text-micro-size);
-  line-height: 1.4;
+  line-height: 1.5;
 }
-.vision-ok-icon { color: var(--ip-success-text); flex-shrink: 0; }
-.vision-ok-text { color: var(--ip-success-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.vision-fail-icon { color: var(--ip-danger-text); flex-shrink: 0; }
-.vision-fail-text { color: var(--ip-danger-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vision-ok-icon { color: var(--ip-success-text); flex-shrink: 0; margin-top: 1px; }
+.vision-ok-text { color: var(--ip-success-text); word-break: break-all; }
+.vision-fail-icon { color: var(--ip-danger-text); flex-shrink: 0; margin-top: 1px; }
+.vision-fail-text { color: var(--ip-danger-text); word-break: break-all; }
 .vision-icon-btn {
   display: inline-flex;
   align-items: center;

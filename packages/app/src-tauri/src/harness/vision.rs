@@ -31,7 +31,10 @@ const VISION_OCR_PROMPT: &str = "\
 fn default_vision_base_url(provider: &str) -> Option<&'static str> {
     match provider {
         "openai" => Some("https://api.openai.com"),
-        "glm" | "glm-coding" => Some("https://open.bigmodel.cn/api/paas/v4"),
+        "glm" => Some("https://open.bigmodel.cn/api/paas/v4"),
+        // Coding 套餐 key 只在 Coding 端点生效（打标准端点必 1113「无可用资源包」），
+        // 端点成对原则——与聊天注册表 glm-coding 同语义（实测同坑）
+        "glm-coding" => Some("https://open.bigmodel.cn/api/coding/paas/v4"),
         "deepseek" => Some("https://api.deepseek.com"),
         // MiniMax 聊天走 Anthropic 协议（/anthropic），但视觉走 OpenAI 兼容端点（/v1），
         // 因为 describe_image 用 image_url 格式（OpenAI 协议）。同一 API key 两端点通用。
@@ -324,6 +327,14 @@ mod tests {
         // 来源标签带序号（日志诊断用）
         assert_eq!(chain[0].source, "视觉配置#1");
         assert_eq!(chain[1].source, "视觉配置#2");
+    }
+
+    #[test]
+    fn glm_coding_entry_defaults_to_coding_endpoint() {
+        // Coding 套餐 key 只认 Coding 端点；打标准端点必 1113「无可用资源包」（端点成对原则）
+        let p = entries_prefs(vec![entry("glm-coding", "glm-5.3-flash", "gk")]);
+        let chain = resolve_vision_entries(&p);
+        assert_eq!(chain[0].base_url, "https://open.bigmodel.cn/api/coding/paas/v4");
     }
 
     #[test]
