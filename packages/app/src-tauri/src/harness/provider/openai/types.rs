@@ -27,7 +27,7 @@ pub(crate) struct ChatRequest<'a> {
     pub max_tokens: i32,
     pub stream_options: StreamOptions,
     /// 智谱思考开关（`{"thinking":{"type":"disabled"}}`）——provider 专属
-    /// 字段，**仅**对 GLM 端点注入（见 `openai::summary_thinking`）；
+    /// 字段，**仅**对 GLM 端点注入（见 `model_info::utility_thinking`）；
     /// 其他 OpenAI 兼容服务可能拒收未知字段（400），一律 None 不发送。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking: Option<ThinkingSwitch>,

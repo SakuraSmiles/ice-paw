@@ -148,6 +148,41 @@ pub fn effective_supports_vision(agent_supports_vision: i32, provider: &str, mod
     agent_supports_vision != 0 || model_capabilities(provider, model).vision
 }
 
+/// 短输出工具调用的思考开关策略（唯一真相源）。
+///
+/// 供**摘要通道**（`openai::stream_summary`）与**视觉代读**（`vision::describe_image`）
+/// 共用——两者都是"小额度、要结果不要过程"的辅助调用，思考通道会烧光输出预算
+///（glm-5.3 系思考常开，2048 token 的 OCR 额度会被推理吃尽 → 空回复）。
+///
+/// 策略（按 provider + model）：
+/// - 非 GLM 端点 → `None`：vendor 专属字段只对已知端点注入，盲注可能被严格服务端 400。
+/// - GLM 且模型可关思考（5.3 之外）→ `Disabled`（`thinking.type="disabled"`）。
+/// - GLM + glm-5.3 系（含 5.3-Flash，2026-08 起）→ `LowEffort`：思考**常开**，
+///   官方已移除 `disabled` 支持——硬发整请求失败；降级 `enabled` +
+///   `reasoning_effort:"low"`（官方迁移指引的等价替代，仍最大限度省思考额度）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UtilityThinking {
+    /// 非 GLM 端点：不注入任何 vendor 专属字段
+    None,
+    /// GLM 且模型支持关思考：`thinking:{"type":"disabled"}`——思考通道不占额度
+    Disabled,
+    /// GLM 且思考常开（glm-5.3 系）：`enabled` + `reasoning_effort:"low"`
+    LowEffort,
+}
+
+/// 见 [`UtilityThinking`]。未来新 GLM 模型若也常开思考，扩本判定而非在调用点各写各的。
+pub fn utility_thinking(provider: &str, model: &str) -> UtilityThinking {
+    if !matches!(provider, "glm" | "glm-coding") {
+        return UtilityThinking::None;
+    }
+    let m = model.to_lowercase();
+    if m.contains("glm-5.3") {
+        UtilityThinking::LowEffort
+    } else {
+        UtilityThinking::Disabled
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -333,5 +368,30 @@ mod tests {
         assert!(!effective_supports_vision(0, "deepseek", "deepseek-v4-pro"));
         // agent =0 且未知模型 → false
         assert!(!effective_supports_vision(0, "", "some-custom-llm"));
+    }
+
+    // ---- utility_thinking（摘要/视觉代读共用的思考开关策略）----
+
+    #[test]
+    fn utility_thinking_by_provider_and_model() {
+        // 只对智谱官方定义该字段的端点注入；其他服务盲目注入可能被严格服务端 400 拒收
+        for p in ["openai", "deepseek", "custom", "ollama", ""] {
+            assert_eq!(utility_thinking(p, "glm-5.2"), UtilityThinking::None, "{p}");
+        }
+        // GLM + 可关思考的模型：disabled（思考通道不占额度）
+        assert_eq!(utility_thinking("glm", "glm-5.2"), UtilityThinking::Disabled);
+        assert_eq!(utility_thinking("glm-coding", "glm-5.1"), UtilityThinking::Disabled);
+        assert_eq!(utility_thinking("glm", "glm-5-turbo"), UtilityThinking::Disabled);
+        assert_eq!(utility_thinking("glm", "glm-4v"), UtilityThinking::Disabled);
+        // GLM + glm-5.3 系（思考常开，disabled 硬发整请求被拒）→ enabled+low
+        assert_eq!(utility_thinking("glm", "glm-5.3"), UtilityThinking::LowEffort);
+        assert_eq!(
+            utility_thinking("glm-coding", "glm-5.3-flash"),
+            UtilityThinking::LowEffort
+        );
+        assert_eq!(
+            utility_thinking("glm", "GLM-5.3-Flash[1M]"),
+            UtilityThinking::LowEffort
+        );
     }
 }
