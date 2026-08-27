@@ -239,6 +239,23 @@ impl LlmErrorKind {
         }
     }
 
+    /// 前端可读的稳定 slug（`chat:error` 事件 kind 细类，形如 `llm.auth` 的后半段）。
+    /// 前端据此决定错误横幅的行动按钮（如鉴权/余额类 →「去检查配置」），
+    /// 分类真相源保持在本枚举，前端只做 slug 集合匹配、不重复 substring 分类。
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::Sensitive => "sensitive",
+            Self::RateLimited => "rate_limited",
+            Self::InsufficientBalance => "insufficient_balance",
+            Self::GlmResourcePack => "glm_resource_pack",
+            Self::Auth => "auth",
+            Self::Forbidden => "forbidden",
+            Self::ContextTooLong => "context_too_long",
+            Self::Network => "network",
+            Self::Unknown => "unknown",
+        }
+    }
+
     /// 多个视觉凭据全失败时，选**最具行动价值**的错误上报（[`crate::harness::modal`]
     /// 代读循环 + [`crate::harness::mcp::attachment_image_tool`] Arch B fallback 共用）。
     ///

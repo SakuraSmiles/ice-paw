@@ -16,17 +16,20 @@
 //   - title:   string 必填
 //   - detail?: string 原因/提示
 //   - retryLabel?: string | null —— 传 null 隐藏重试；默认「重试」
+//   - actionLabel?: string —— 与重试并排的主行动按钮（如「去检查配置」）；
+//               不传则不渲染。适合错误原因不在本页、需跳走处理的场景。
 //   - dismissible?: boolean 仅 banner；默认 false
-// Emits: retry / dismiss
+// Emits: retry / dismiss / action
 defineProps<{
   variant?: "inline" | "banner";
   title: string;
   detail?: string;
   retryLabel?: string | null;
+  actionLabel?: string;
   dismissible?: boolean;
 }>();
 
-defineEmits<{ retry: []; dismiss: [] }>();
+defineEmits<{ retry: []; dismiss: []; action: [] }>();
 </script>
 
 <template>
@@ -48,6 +51,7 @@ defineEmits<{ retry: []; dismiss: [] }>();
       <span v-if="detail" class="eb-detail">{{ detail }}</span>
     </span>
     <span class="eb-actions">
+      <button v-if="actionLabel" type="button" class="eb-retry" @click="$emit('action')">{{ actionLabel }}</button>
       <button v-if="retryLabel !== null" type="button" class="eb-retry" @click="$emit('retry')">{{ retryLabel ?? "重试" }}</button>
       <button v-if="dismissible" type="button" class="eb-dismiss" title="关闭" aria-label="关闭" @click="$emit('dismiss')">×</button>
     </span>
