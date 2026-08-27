@@ -81,6 +81,16 @@ const agents = {
     try { return await invoke<AgentYamlFields>("set_agent_word_profile", { agentId, text }); }
     catch (err) { throw wrapInvokeError("agents.setWordProfile", err); }
   },
+  /** 写 agent.yaml 标量字段（max_total_tokens/tool_max_rounds/max_tokens 整数族 + temperature 浮点族；null = 注释掉恢复默认） */
+  async setYamlField(agentId: string, field: string, value: number | null): Promise<AgentYamlFields> {
+    try { return await invoke<AgentYamlFields>("set_agent_yaml_field", { agentId, field, value }); }
+    catch (err) { throw wrapInvokeError("agents.setYamlField", err); }
+  },
+  /** 写 agent.yaml enabled_tools（名单收窄；null = 摘除恢复全量工具） */
+  async setEnabledTools(agentId: string, tools: string[] | null): Promise<AgentYamlFields> {
+    try { return await invoke<AgentYamlFields>("set_agent_enabled_tools", { agentId, tools }); }
+    catch (err) { throw wrapInvokeError("agents.setEnabledTools", err); }
+  },
 };
 
 const providers = {

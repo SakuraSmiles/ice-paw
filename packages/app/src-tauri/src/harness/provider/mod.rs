@@ -114,6 +114,10 @@ struct ProviderDesc {
     requires_key: bool,
     /// 是否必须显式填写 base_url（custom 无默认地址，必填）
     requires_base_url: bool,
+    /// API Key 申请页地址（前端「去申请 ↗」直达；免 key 厂商为 None）。
+    /// 单一真相源在此，GeneralSettings 的 embedding keyUrl 映射是本表子集的
+    /// 前端旧副本（后续可顺手收敛）。
+    key_url: Option<&'static str>,
     /// 隐藏条目：不进前端下拉（UI 已收敛/下线），但注册表仍可解析——
     /// 存量 agent 的创建/探测/徽标显示照常，零破坏
     hidden: bool,
@@ -140,6 +144,7 @@ const PROVIDERS: &[ProviderDesc] = &[
     ProviderDesc {
         name: "openai", protocol: ProviderProtocol::OpenAI, default_url: "https://api.openai.com",
         alt_urls: &[], label: "OpenAI", note: None, requires_key: true, requires_base_url: false,
+        key_url: Some("https://platform.openai.com/api-keys"),
         hidden: false,
         models: &["gpt-4o", "gpt-4o-mini", "o3-mini", "gpt-4.1", "gpt-4.1-mini"],
     },
@@ -147,31 +152,46 @@ const PROVIDERS: &[ProviderDesc] = &[
         name: "glm", protocol: ProviderProtocol::OpenAI, default_url: "https://open.bigmodel.cn/api/paas/v4",
         alt_urls: &[("Coding 端点", "https://open.bigmodel.cn/api/coding/paas/v4")],
         label: "智谱", note: Some("GLM 系列；标准/Coding 端点可切换，Coding 套餐请选 Coding 端点"),
-        requires_key: true, requires_base_url: false, hidden: false,
+        requires_key: true, requires_base_url: false,
+        key_url: Some("https://open.bigmodel.cn/usercenter/proj-mgmt/apikeys"),
+        hidden: false,
         models: &["glm-5-turbo", "glm-5.2", "glm-5.1", "glm-4", "glm-4-flash"],
     },
     ProviderDesc {
         name: "glm-coding", protocol: ProviderProtocol::OpenAI, default_url: "https://open.bigmodel.cn/api/coding/paas/v4",
         alt_urls: &[], label: "智谱 GLM Coding",
         note: Some("旧入口：新配置请选「智谱」，测试连接会自动匹配端点"),
-        requires_key: true, requires_base_url: false, hidden: true,
+        requires_key: true, requires_base_url: false,
+        key_url: Some("https://open.bigmodel.cn/usercenter/proj-mgmt/apikeys"),
+        hidden: true,
         models: &["glm-5.2", "glm-5.1", "glm-5-turbo"],
     },
     ProviderDesc {
         name: "deepseek", protocol: ProviderProtocol::OpenAI, default_url: "https://api.deepseek.com",
         alt_urls: &[], label: "DeepSeek", note: None, requires_key: true, requires_base_url: false,
+        key_url: Some("https://platform.deepseek.com/api_keys"),
         hidden: false,
         models: &["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-chat", "deepseek-reasoner"],
     },
     ProviderDesc {
         name: "anthropic", protocol: ProviderProtocol::Anthropic, default_url: "https://api.anthropic.com",
         alt_urls: &[], label: "Anthropic", note: None, requires_key: true, requires_base_url: false,
+        key_url: Some("https://console.anthropic.com/settings/keys"),
         hidden: false,
-        models: &["claude-sonnet-4-20250514", "claude-haiku-3-5-20241022", "claude-opus-4-20250514"],
+        models: &[
+            "claude-opus-5",
+            "claude-sonnet-5",
+            "claude-fable-5",
+            "claude-haiku-4-5",
+            "claude-sonnet-4-20250514",
+            "claude-opus-4-20250514",
+            "claude-haiku-3-5-20241022",
+        ],
     },
     ProviderDesc {
         name: "minimax", protocol: ProviderProtocol::Anthropic, default_url: "https://api.minimaxi.com/anthropic",
         alt_urls: &[], label: "MiniMax", note: Some("国内站"), requires_key: true, requires_base_url: false,
+        key_url: Some("https://platform.minimaxi.com/user-center/basic-information/interface-key"),
         hidden: false,
         models: &["MiniMax-M3", "MiniMax-M2.5", "MiniMax-M2.5-highspeed"],
     },
@@ -179,21 +199,23 @@ const PROVIDERS: &[ProviderDesc] = &[
         name: "minimax-cn", protocol: ProviderProtocol::Anthropic, default_url: "https://api.minimaxi.com/anthropic",
         alt_urls: &[], label: "MiniMax（国内站·旧）",
         note: Some("旧入口：与 MiniMax 同端点"),
-        requires_key: true, requires_base_url: false, hidden: true,
+        requires_key: true, requires_base_url: false,
+        key_url: Some("https://platform.minimaxi.com/user-center/basic-information/interface-key"),
+        hidden: true,
         models: &["MiniMax-M3", "MiniMax-M2.5", "MiniMax-M2.5-highspeed"],
     },
     ProviderDesc {
         name: "ollama", protocol: ProviderProtocol::OpenAI, default_url: "http://localhost:11434/v1",
         alt_urls: &[], label: "Ollama 本地",
         note: Some("已下线：新配置请在模型框手输模型名 + API URL 填本机地址（默认 http://localhost:11434/v1），无需 Key"),
-        requires_key: false, requires_base_url: false, hidden: true,
+        requires_key: false, requires_base_url: false, key_url: None, hidden: true,
         models: &[],
     },
     ProviderDesc {
         name: "custom", protocol: ProviderProtocol::OpenAI, default_url: "",
         alt_urls: &[], label: "自定义（OpenAI 兼容）",
         note: Some("模型框手输目录外名字即落此处；必填 API URL（Ollama 等本机服务如 http://localhost:11434/v1），无需鉴权可留空 Key"),
-        requires_key: false, requires_base_url: true, hidden: true,
+        requires_key: false, requires_base_url: true, key_url: None, hidden: true,
         models: &[],
     },
 ];
@@ -289,6 +311,7 @@ pub struct ProviderInfo {
     pub note: Option<String>,
     pub requires_key: bool,
     pub requires_base_url: bool,
+    pub key_url: Option<String>,
     pub hidden: bool,
     pub models: Vec<String>,
 }
@@ -310,6 +333,7 @@ pub fn list_provider_infos() -> Vec<ProviderInfo> {
             note: d.note.map(|s| s.to_string()),
             requires_key: d.requires_key,
             requires_base_url: d.requires_base_url,
+            key_url: d.key_url.map(|s| s.to_string()),
             hidden: d.hidden,
             models: d.models.iter().map(|s| s.to_string()).collect(),
         })

@@ -37,7 +37,7 @@ use crate::harness::budget::LoopBudget;
 use crate::harness::chat_state::CancellationToken;
 use crate::harness::event_log::{self, EventCtx};
 use crate::harness::hooks::{has_actions, run_hooks};
-use crate::harness::mcp::{McpRegistry, McpServerManager};
+use crate::harness::mcp::{McpClient, McpRegistry, McpServerManager};
 use crate::harness::provider;
 use crate::harness::read_route::ReadRouteRegistry;
 use crate::harness::tool_executor::{build_tool_ctx, ToolAuthRegistry};
@@ -445,8 +445,17 @@ pub(crate) async fn run_agent_turn(
     // --- 工具组装：全局注册表快照（boot 时已启动全部 server） ---
     // 默认全开：所有已注册工具（内置 + 全局/per_agent MCP server，含平台元工具）
     // 对每个 agent 可用。per_agent server 的 workspace 后台异步绑定，不阻塞。
+    //
+    // ②-3：`enabled_tools` 旋钮真生效——非空名单 = 收窄快照到名单 ∪ 平台元工具；
+    // 空/缺 = 全开（不变）。名单来自 DB 行（出生 yaml 的 enabled_tools 经
+    // apply_to_row 覆盖进 row，此处读行即生效值）。
     let tool_registry = if tools_enabled {
-        let reg = McpRegistry::from_map(env.global_registry.snapshot().await);
+        let allow: Option<Vec<String>> = agent
+            .enabled_tools
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok());
+        let snap = filter_tools_by_allowlist(env.global_registry.snapshot().await, allow.as_deref());
+        let reg = McpRegistry::from_map(snap);
 
         // MA-1：delegate 工具按会话类型注册——只有用户会话（kind='chat'）可发起
         // 委派。全局注册表不含此工具（register_builtin 不注入），组装期按 kind
@@ -822,6 +831,28 @@ pub(crate) fn inject_into_system(
     }
 }
 
+/// ②-3：enabled_tools 名单过滤（纯函数）——非空名单 = 名单 ∪ 平台元工具；
+/// 空 / None = 原样全量（系统约定：空 ≡ 全开，与提案 guard / 出生模板同一判定）。
+///
+/// 平台元工具（`propose_config_change` / `read_agent_config` / `delegate_to_agent`）
+/// 恒保留：它们是平台能力而非领域工具，收窄不应切断 agent 的自我配置与委派
+/// （delegate 在组装期按 conv.kind 注册，此处过滤兜底全局注册表可能含它的场景）。
+fn filter_tools_by_allowlist(
+    snap: std::collections::HashMap<String, Arc<dyn McpClient>>,
+    allow: Option<&[String]>,
+) -> std::collections::HashMap<String, Arc<dyn McpClient>> {
+    const PLATFORM_TOOLS: &[&str] =
+        &["propose_config_change", "read_agent_config", "delegate_to_agent"];
+    let Some(allow) = allow.filter(|v| !v.is_empty()) else {
+        return snap;
+    };
+    snap.into_iter()
+        .filter(|(name, _)| {
+            allow.iter().any(|a| a == name) || PLATFORM_TOOLS.contains(&name.as_str())
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -851,5 +882,64 @@ mod tests {
         assert_eq!(messages[0].content_text(), "system rule");
         // 原 user 消息被推到第二位
         assert_eq!(messages[1].role, "user");
+    }
+
+    /// enabled_tools 过滤测试替身：名字即身份
+    struct NamedStub(String);
+    #[async_trait::async_trait]
+    impl McpClient for NamedStub {
+        fn name(&self) -> &str {
+            &self.0
+        }
+        fn description(&self) -> &str {
+            "stub"
+        }
+        fn parameters(&self) -> serde_json::Value {
+            serde_json::json!({})
+        }
+        async fn execute(&self, _args: &str) -> crate::error::AppResult<String> {
+            Ok("stub".into())
+        }
+    }
+
+    fn snap_of(names: &[&str]) -> std::collections::HashMap<String, Arc<dyn McpClient>> {
+        names
+            .iter()
+            .map(|n| (n.to_string(), Arc::new(NamedStub(n.to_string())) as Arc<dyn McpClient>))
+            .collect()
+    }
+
+    #[test]
+    fn enabled_tools_filter_narrows_and_keeps_platform() {
+        let snap = snap_of(&[
+            "t0_read_file",
+            "t1_search_kb",
+            "propose_config_change",
+            "read_agent_config",
+            "delegate_to_agent",
+        ]);
+        // 非空名单：领域工具按名单收窄，平台元工具恒保留
+        let allow = vec!["t0_read_file".to_string()];
+        let out = filter_tools_by_allowlist(snap.clone(), Some(&allow));
+        let mut names: Vec<String> = out.keys().cloned().collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec![
+                "delegate_to_agent".to_string(),
+                "propose_config_change".to_string(),
+                "read_agent_config".to_string(),
+                "t0_read_file".to_string(),
+            ]
+        );
+        // 空 / None：原样全量（空 ≡ 全开约定）
+        assert_eq!(
+            filter_tools_by_allowlist(snap.clone(), Some(&[])).len(),
+            snap.len()
+        );
+        assert_eq!(
+            filter_tools_by_allowlist(snap.clone(), None).len(),
+            snap.len()
+        );
     }
 }

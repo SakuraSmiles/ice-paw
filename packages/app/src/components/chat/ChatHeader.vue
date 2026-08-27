@@ -73,6 +73,16 @@ const activeAgent = computed(() => {
   return agent.getById(conv.agent_id);
 });
 
+// ②-4：回合进行中显示**本回合发送时的模型快照**（chat store 发送时捕获）——
+// 中途改模型，头部立即变新名字但本回合仍用旧快照，会误导「改完即生效」；
+// 回合结束回落实时配置值。
+const headerModel = computed(() => {
+  const conv = chat.activeConversation;
+  if (!conv) return "";
+  if (chat.streamingConvIds.has(conv.id) && chat.currentModel) return chat.currentModel;
+  return activeAgent.value?.model ?? "";
+});
+
 // ===== MA-1 任务详情 v1：委派子会话的回路与状态 =====
 // 子会话不在侧栏，用户从委派卡片/任务胶囊进来——头部必须给「我是谁的任务、
 // 从哪来、回哪去」。深度=1 护栏保证父会话必为 kind='chat'（在侧栏列表内）。
@@ -221,7 +231,7 @@ async function togglePin() {
           />
           <span v-if="activeAgent" class="header-agent">{{ activeAgent.name }}</span>
           <span v-if="activeAgent" class="header-sep">·</span>
-          <span v-if="activeAgent" class="header-model">{{ activeAgent.model }}</span>
+          <span v-if="activeAgent" class="header-model">{{ headerModel }}</span>
           <span v-else class="header-hint">选择一个对话开始</span>
         </div>
       </div>

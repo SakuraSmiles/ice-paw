@@ -27,12 +27,14 @@ use crate::db::models::AgentFileConfig;
 use crate::error::{AppError, AppResult};
 
 /// 可改写键白名单（新增键须同步 `validate_patched` 的回读分支）
-const WRITABLE_FIELDS: &[&str] = &["max_total_tokens", "tool_max_rounds"];
+const WRITABLE_FIELDS: &[&str] = &["max_total_tokens", "tool_max_rounds", "temperature", "max_tokens"];
 
 /// 改写动作：设值 / 注释掉（注释掉 = 恢复默认自适应 + 自动续期）
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum YamlPatchAction {
     Set(u64),
+    /// 浮点设值（temperature；Debug 格式化保证 `1.0` 不退化成 `1`）
+    SetFloat(f64),
     CommentOut,
 }
 
@@ -102,6 +104,14 @@ pub fn patch_agent_yaml(content: &str, key: &str, action: &YamlPatchAction) -> S
                     out.push_str(&v.to_string());
                     out.push_str(line_end(line));
                 }
+                YamlPatchAction::SetFloat(v) => {
+                    out.push_str(key);
+                    out.push_str(": ");
+                    // Debug 格式化：1.0 保持 `1.0`（Display 会退化成 `1`，虽然
+                    // YAML 重解析仍等价，但文件里保留浮点形态更可读）
+                    out.push_str(&format!("{v:?}"));
+                    out.push_str(line_end(line));
+                }
                 YamlPatchAction::CommentOut => {
                     out.push_str("# ");
                     out.push_str(line);
@@ -112,14 +122,26 @@ pub fn patch_agent_yaml(content: &str, key: &str, action: &YamlPatchAction) -> S
         }
     }
     if !found {
-        if let YamlPatchAction::Set(v) = action {
-            if !body.is_empty() && !body.ends_with('\n') {
+        match action {
+            YamlPatchAction::Set(v) => {
+                if !body.is_empty() && !body.ends_with('\n') {
+                    out.push('\n');
+                }
+                out.push_str(key);
+                out.push_str(": ");
+                out.push_str(&v.to_string());
                 out.push('\n');
             }
-            out.push_str(key);
-            out.push_str(": ");
-            out.push_str(&v.to_string());
-            out.push('\n');
+            YamlPatchAction::SetFloat(v) => {
+                if !body.is_empty() && !body.ends_with('\n') {
+                    out.push('\n');
+                }
+                out.push_str(key);
+                out.push_str(": ");
+                out.push_str(&format!("{v:?}"));
+                out.push('\n');
+            }
+            YamlPatchAction::CommentOut => {}
         }
     }
     format!("{bom}{out}")
@@ -195,8 +217,12 @@ fn validate_patched(
     let field_matches = match (field, action) {
         ("max_total_tokens", YamlPatchAction::Set(v)) => cfg.max_total_tokens == Some(*v as usize),
         ("tool_max_rounds", YamlPatchAction::Set(v)) => cfg.tool_max_rounds == Some(*v as u32),
+        ("max_tokens", YamlPatchAction::Set(v)) => cfg.max_tokens == Some(*v as i32),
+        ("temperature", YamlPatchAction::SetFloat(v)) => cfg.temperature == Some(*v),
         ("max_total_tokens", YamlPatchAction::CommentOut) => cfg.max_total_tokens.is_none(),
         ("tool_max_rounds", YamlPatchAction::CommentOut) => cfg.tool_max_rounds.is_none(),
+        ("max_tokens", YamlPatchAction::CommentOut) => cfg.max_tokens.is_none(),
+        ("temperature", YamlPatchAction::CommentOut) => cfg.temperature.is_none(),
         _ => false, // 白名单外，不可达
     };
     if !field_matches {
@@ -227,17 +253,18 @@ pub async fn get_agent_yaml_fields(
     Ok(read_fields(&row.workspace_path).unwrap_or_default())
 }
 
-/// 设置 / 注释掉单个预算字段。
+/// 设置 / 注释掉单个标量字段（预算整数族 + `temperature` 浮点族）。
 ///
-/// `value = Some(v)`：设为显式值（硬上限，v ≥ 1）；
-/// `value = None`：注释掉该行（恢复默认自适应 + 自动续期）。
+/// `value = Some(v)`：设为显式值（预算族 = 硬上限 v ≥ 1 整数；temperature
+/// 0–2 浮点，0 合法——OpenAI 确定性档）；
+/// `value = None`：注释掉该行（恢复默认）。
 /// 安全闸全部先于写盘——失败时原文件一个字节都不动。
 #[tauri::command]
 pub async fn set_agent_yaml_field(
     cmd: State<'_, Arc<dyn AgentCmd>>,
     agent_id: String,
     field: String,
-    value: Option<u64>,
+    value: Option<f64>,
 ) -> AppResult<AgentYamlFields> {
     let row = cmd.inner().get(&agent_id).await?;
     let dir = row.workspace_path.clone().ok_or_else(|| {
@@ -252,14 +279,32 @@ pub async fn set_agent_yaml_field(
     }
     let content = std::fs::read_to_string(&yaml_path)?;
 
+    // 整数族（预算/出力上限）收整数；temperature 浮点族 0 合法（如 OpenAI 确定性档）
+    const INT_FIELDS: &[&str] = &["max_total_tokens", "tool_max_rounds", "max_tokens"];
     let action = match value {
-        Some(0) => {
-            return Err(AppError::Validation(
-                "值必须 ≥ 1（清空请传 null = 注释掉恢复默认）".into(),
-            ));
-        }
-        Some(v) => YamlPatchAction::Set(v),
         None => YamlPatchAction::CommentOut,
+        Some(v) if !v.is_finite() => {
+            return Err(AppError::Validation("值必须是有限数字".into()));
+        }
+        Some(v) if field == "temperature" => {
+            if !(0.0..=2.0).contains(&v) {
+                return Err(AppError::Validation(
+                    "temperature 须在 0–2 之间（清空请传 null = 注释掉恢复默认）".into(),
+                ));
+            }
+            YamlPatchAction::SetFloat(v)
+        }
+        Some(v) => {
+            if !INT_FIELDS.contains(&field.as_str()) {
+                return Err(AppError::Validation(format!("未知字段 {field}")));
+            }
+            if v < 1.0 || v.fract() != 0.0 {
+                return Err(AppError::Validation(
+                    "值必须是 ≥ 1 的整数（清空请传 null = 注释掉恢复默认）".into(),
+                ));
+            }
+            YamlPatchAction::Set(v as u64)
+        }
     };
 
     let new_content = patch_agent_yaml(&content, &field, &action);
@@ -437,6 +482,143 @@ pub async fn set_agent_word_profile(
         target: "ice_paw.agent",
         "agent.yaml 已改写: word_style_profile {}（{}）",
         if is_removal { "摘除" } else { "写入" },
+        yaml_path.display()
+    );
+    Ok(fields)
+}
+
+// ============================================================================
+// enabled_tools 序列通道（②-1：旋钮唯一写入通道 = yaml）
+// ============================================================================
+
+/// 序列键单行替换：`key: [a, b, c]`（flow 风格）。
+///
+/// 目标键行 + 其后缩进块体（出生模板写的是 block 风格 `- name` 多行）整段
+/// 替换为一行 flow 序列；无目标键则追加。与 [`patch_agent_yaml`] 同款逐行
+/// 纪律（BOM 摘出回填、非目标行逐字节保留）。
+pub fn patch_agent_yaml_seq(content: &str, key: &str, items: &[String]) -> String {
+    let flow = items
+        .iter()
+        .map(|s| yaml_flow_str(s))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let line = format!("{key}: [{flow}]");
+
+    let (bom, body) = match content.strip_prefix('\u{FEFF}') {
+        Some(rest) => ("\u{FEFF}", rest),
+        None => ("", content),
+    };
+    let mut out = String::with_capacity(content.len() + line.len() + 4);
+    let mut replaced = false;
+    let mut in_block = false; // 正在跳过旧块体（缩进行 / `- 项` 行）
+    for l in body.split_inclusive('\n') {
+        if !replaced && !in_block && line_is_active_key(l, key) {
+            out.push_str(&line);
+            out.push_str(line_end(l));
+            replaced = true;
+            in_block = true;
+            continue;
+        }
+        if in_block {
+            let bare = l.trim_end_matches(['\r', '\n']);
+            if bare.trim().is_empty() || bare.starts_with([' ', '\t', '-']) {
+                continue; // 旧块体行（block 风格 `- 项` / 缩进续行 / 空行）：吞掉
+            }
+            in_block = false;
+        }
+        out.push_str(l);
+    }
+    if !replaced {
+        if !body.is_empty() && !body.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str(&line);
+        out.push('\n');
+    }
+    format!("{bom}{out}")
+}
+
+/// flow 序列项的安全引用：工具名规约 `^[a-zA-Z0-9_-]+$` 无需引号，其余
+/// （防御性：来自提案的名单可能不合规）双引号 + 反斜杠/引号转义。
+fn yaml_flow_str(s: &str) -> String {
+    let plain = !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    if plain {
+        s.to_string()
+    } else {
+        format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+    }
+}
+
+/// 序列写回读闸：整文件重解析 + `enabled_tools` 与请求逐项相等。
+fn validate_enabled_tools_patched(
+    new_content: &str,
+    expected: Option<&[String]>,
+) -> AppResult<AgentYamlFields> {
+    let cfg: AgentFileConfig = serde_yaml::from_str(new_content).map_err(|e| {
+        AppError::Validation(format!("改写后 agent.yaml 无法解析（已放弃写入）: {e}"))
+    })?;
+    let matches = match expected {
+        Some(items) => cfg.enabled_tools.as_deref() == Some(items),
+        None => cfg.enabled_tools.is_none(),
+    };
+    if !matches {
+        return Err(AppError::Validation(
+            "改写后 enabled_tools 回读值与请求不符（已放弃写入）".into(),
+        ));
+    }
+    Ok(AgentYamlFields::from_config(&cfg))
+}
+
+/// 写 / 摘除 agent.yaml `enabled_tools`（②-1：`enabled_tools` 是旋钮，唯一
+/// 写入通道 = yaml，与 temperature/max_tokens 同族）。
+///
+/// `tools = Some(非空 list)`：收窄到名单；`None` **或空列表**：摘除键行 + 块体
+/// （恢复全量工具）——空列表按系统既有约定 ≡ 全开（提案 guard / 出生模板同款
+/// 判定），落一行 `enabled_tools: []` 只会误导排障。
+#[tauri::command]
+pub async fn set_agent_enabled_tools(
+    cmd: State<'_, Arc<dyn AgentCmd>>,
+    agent_id: String,
+    tools: Option<Vec<String>>,
+) -> AppResult<AgentYamlFields> {
+    let tools = tools.filter(|v| !v.is_empty());
+    let row = cmd.inner().get(&agent_id).await?;
+    let dir = row.workspace_path.clone().ok_or_else(|| {
+        AppError::Validation(format!("agent {agent_id} 未配置工作区目录，无 agent.yaml"))
+    })?;
+    let yaml_path = std::path::Path::new(&dir).join("agent.yaml");
+    if !yaml_path.exists() {
+        return Err(AppError::NotFound {
+            resource: "agent.yaml",
+            id: yaml_path.display().to_string(),
+        });
+    }
+    let content = std::fs::read_to_string(&yaml_path)?;
+
+    let (new_content, fields, is_removal) = match &tools {
+        Some(items) => {
+            let nc = patch_agent_yaml_seq(&content, "enabled_tools", items);
+            let f = validate_enabled_tools_patched(&nc, Some(items))?;
+            (nc, f, false)
+        }
+        None => {
+            let nc = patch_agent_yaml_remove_block(&content, "enabled_tools");
+            let f = validate_enabled_tools_patched(&nc, None)?;
+            (nc, f, true)
+        }
+    };
+
+    // 原子写：同目录 .tmp → rename（半途失败不会留下截断的 yaml）
+    let tmp_path = yaml_path.with_extension("yaml.tmp");
+    std::fs::write(&tmp_path, &new_content)?;
+    std::fs::rename(&tmp_path, &yaml_path)?;
+    tracing::info!(
+        target: "ice_paw.agent",
+        "agent.yaml 已改写: enabled_tools {}（{} 项）（{}）",
+        if is_removal { "摘除" } else { "收窄" },
+        tools.as_ref().map_or(0, Vec::len),
         yaml_path.display()
     );
     Ok(fields)
@@ -934,6 +1116,79 @@ mod tests {
         assert!(validate_word_profile_patched(&with_block, None).is_err());
         // 解析失败 → 拒
         assert!(validate_word_profile_patched("word_style_profile: [", Some("x")).is_err());
+    }
+
+    // ---- 标量浮点族（temperature/max_tokens 扩展） + enabled_tools 序列 ----
+
+    #[test]
+    fn set_float_overwrites_and_keeps_float_form() {
+        let out = patch_agent_yaml(&sample_yaml(), "temperature", &YamlPatchAction::SetFloat(0.3));
+        assert!(out.contains("temperature: 0.3\n"));
+        // 整值浮点保持 `1.0` 形态（Display 会退化成 `1`）
+        let out2 = patch_agent_yaml(&sample_yaml(), "temperature", &YamlPatchAction::SetFloat(1.0));
+        assert!(out2.contains("temperature: 1.0\n"));
+        // 缺键追加
+        let out3 = patch_agent_yaml("provider: glm\n", "temperature", &YamlPatchAction::SetFloat(0.5));
+        assert!(out3.contains("temperature: 0.5\n"));
+    }
+
+    #[test]
+    fn set_float_validate_readback() {
+        let out = patch_agent_yaml(&sample_yaml(), "temperature", &YamlPatchAction::SetFloat(0.9));
+        let fields = validate_patched(&out, "temperature", &YamlPatchAction::SetFloat(0.9));
+        assert!(fields.is_ok());
+        // 回读不符（改成 0.9 但按 0.7 校验）→ 拒
+        assert!(validate_patched(&out, "temperature", &YamlPatchAction::SetFloat(0.7)).is_err());
+        // max_tokens 整数族：i32 回读
+        let out2 = patch_agent_yaml(&sample_yaml(), "max_tokens", &YamlPatchAction::Set(2048));
+        assert!(validate_patched(&out2, "max_tokens", &YamlPatchAction::Set(2048)).is_ok());
+        assert!(out2.contains("max_tokens: 2048\n"));
+        // 注释掉 → 回读 None
+        let out3 = patch_agent_yaml(&out2, "max_tokens", &YamlPatchAction::CommentOut);
+        assert!(validate_patched(&out3, "max_tokens", &YamlPatchAction::CommentOut).is_ok());
+    }
+
+    #[test]
+    fn enabled_tools_seq_replaces_block_style() {
+        // 出生模板形态：block 风格多行 `- name`
+        let yaml = [
+            "provider: glm",
+            "enabled_tools:",
+            "  - t1_search_kb",
+            "  - t2_write_file",
+            "temperature: 0.7",
+        ]
+        .join("\n")
+            + "\n";
+        let out = patch_agent_yaml_seq(&yaml, "enabled_tools", &["t1_search_kb".into(), "t3_read_file".into()]);
+        assert!(out.contains("enabled_tools: [t1_search_kb, t3_read_file]\n"));
+        assert!(!out.contains("- t2_write_file"));
+        assert!(out.contains("temperature: 0.7"));
+        // 重解析回读逐项相等
+        assert!(
+            validate_enabled_tools_patched(&out, Some(&["t1_search_kb".into(), "t3_read_file".into()])).is_ok()
+        );
+    }
+
+    #[test]
+    fn enabled_tools_seq_appends_and_flow_replace() {
+        // 缺键追加（含需要引号的防御性名字）
+        let out = patch_agent_yaml_seq("provider: glm\n", "enabled_tools", &["a-b_1".into(), "we:ird".into()]);
+        assert!(out.contains("enabled_tools: [a-b_1, \"we:ird\"]\n"));
+        // 已是 flow 单行 → 原位替换
+        let out2 = patch_agent_yaml_seq(&out, "enabled_tools", &["only_one".into()]);
+        assert!(out2.contains("enabled_tools: [only_one]\n"));
+        assert!(!out2.contains("a-b_1"));
+    }
+
+    #[test]
+    fn enabled_tools_removal_gates() {
+        let yaml = "enabled_tools:\n  - t1_x\nprovider: glm\n";
+        let out = patch_agent_yaml_remove_block(yaml, "enabled_tools");
+        assert_eq!(out, "provider: glm\n");
+        assert!(validate_enabled_tools_patched(&out, None).is_ok());
+        // 键仍在时按 None 校验 → 拒
+        assert!(validate_enabled_tools_patched(yaml, None).is_err());
     }
 
     // ---- 镜像行同步（A：update() 后 provider/model/base_url 跟随 DB） ----

@@ -100,6 +100,8 @@ export interface ProviderInfo {
   requires_key: boolean;
   /** 是否必须显式填写 API URL（仅 custom） */
   requires_base_url: boolean;
+  /** API Key 申请页地址（免 key 厂商为 null）——表单「去申请」直达 */
+  key_url: string | null;
   /** 隐藏条目：不进前端下拉（旧入口/已下线），存量 agent 编辑仍可解析 */
   hidden: boolean;
   /** 静态模型目录（起点参考；「拉取」拿实时列表，手输永远保留） */

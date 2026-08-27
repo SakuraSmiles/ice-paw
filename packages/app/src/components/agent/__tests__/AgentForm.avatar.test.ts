@@ -57,7 +57,7 @@ const wrappers: VueWrapper[] = [];
 
 async function mountForm(agent: Agent | null = null) {
   providersListMock.mockResolvedValue([
-    { name: "openai", protocol: "openai", default_url: "https://api.openai.com", alt_urls: [], label: "OpenAI", note: null, requires_key: true, requires_base_url: false, hidden: false, models: ["gpt-4o"] },
+    { name: "openai", protocol: "openai", default_url: "https://api.openai.com", alt_urls: [], label: "OpenAI", note: null, requires_key: true, requires_base_url: false, key_url: null, hidden: false, models: ["gpt-4o"] },
   ]);
   const { default: AgentForm } = await import("../AgentForm.vue");
   const w = mount(AgentForm, { props: { agent }, attachTo: document.body });

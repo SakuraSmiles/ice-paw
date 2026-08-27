@@ -38,6 +38,17 @@ pub fn default_context_window(_provider: &str, model: &str) -> Option<usize> {
             Some(200_000)
         };
     }
+    // Claude 3 / 4 / 5 全系 200K 标准窗口（家族名兜底覆盖带日期戳的变体）
+    if m.contains("claude-3")
+        || m.contains("claude-4")
+        || m.contains("claude-5")
+        || m.contains("claude-opus")
+        || m.contains("claude-sonnet")
+        || m.contains("claude-haiku")
+        || m.contains("claude-fable")
+    {
+        return Some(200_000);
+    }
 
     None
 }
@@ -97,9 +108,10 @@ pub fn model_capabilities(_provider: &str, model: &str) -> ModelCapabilities {
     let vision = m.contains("gpt-4o")        // gpt-4o / gpt-4o-mini（OpenAI 视觉主力）
         || m.contains("gpt-4-vision")
         || m.contains("gpt-4-turbo")         // gpt-4 vision 变体
-        // Claude 3.0+ / 4.x 全系视觉（claude-2 太老，项目不用，不收录）
-        || m.contains("claude-3") || m.contains("claude-4")
+        // Claude 3.0+ / 4.x / 5.x 全系视觉（claude-2 太老，项目不用，不收录）
+        || m.contains("claude-3") || m.contains("claude-4") || m.contains("claude-5")
         || m.contains("claude-sonnet") || m.contains("claude-opus") || m.contains("claude-haiku")
+        || m.contains("claude-fable")
         || m.contains("gemini")              // Gemini 1.0+ 全系视觉
         || m.contains("glm-4v") || m.contains("glm-4.6v") || m.contains("glm4v")  // 智谱视觉系列
         || m.contains("qwen-vl") || m.contains("qwen2-vl") || m.contains("qwenvl") // 通义视觉
@@ -165,6 +177,22 @@ mod tests {
         // 裸名不再回退：厂商文档基准 200K
         assert_eq!(default_context_window("glm", "glm-5.2"), Some(200_000));
         assert_eq!(default_context_window("glm", "glm-5.1"), Some(200_000));
+    }
+
+    #[test]
+    fn claude_family_200k_window_and_vision() {
+        // 目录现役系列（②-5）+ 带日期戳的存量变体，家族名兜底全覆盖
+        for model in [
+            "claude-opus-5",
+            "claude-sonnet-5",
+            "claude-fable-5",
+            "claude-haiku-4-5",
+            "claude-sonnet-4-20250514",
+            "claude-haiku-3-5-20241022",
+        ] {
+            assert_eq!(default_context_window("anthropic", model), Some(200_000));
+            assert!(model_capabilities("anthropic", model).vision, "{model}");
+        }
     }
 
     #[test]

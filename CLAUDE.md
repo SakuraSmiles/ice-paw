@@ -109,6 +109,7 @@ agent 调用 `propose_config_change` 工具提出创建/修改 agent 提案 → 
 - `proposal_tool.rs`(mcp/) + `proposal_guard.rs` + `proposal_registry.rs`(harness/) + `ConfigProposalCard.vue`
 - guardrail：🔴红线→Err，🟡→Medium，🟢→Low；API Key 走引用槽位（`key_slot:"__SLOT__"`），用户在卡片亲手填
 - 安全加固(132cf19)：写工具 `reject_sensitive()` 拦硬写 agent.yaml + `register_meta_tools()` 强制注入合法通道
+- **旋钮唯一写入通道不变式（2026-08-27 ②-1）**：旋钮字段（system_prompt / temperature / max_tokens / max_total_tokens / tool_max_rounds / enabled_tools / word_style_profile / hooks）的写入通道 = yaml 通道命令（`set_agent_system_prompt` / `set_agent_yaml_field`[整数族+temperature 浮点] / `set_agent_enabled_tools` / `set_agent_word_profile`），`update_agent` 只管出生证字段（name/provider/model/base_url/workspace/avatar/key）。出生 yaml 的活行遮蔽 DB 列（apply_to_row），写 DB = 「批准后生效」假象。ConfigProposalCard 批准路径按字段分派（编辑值 editFields 覆盖优先）；`base_url` 双层 Option：显式 Some=设/清、absent=保持（仅换厂商且有默认时跟随，`resolve_base_url_arg`——回归测试在 agent_cmd tests）
 
 ### MCP 工具系统
 - `McpClient` trait：name/description/parameters/execute/execute_with_context
