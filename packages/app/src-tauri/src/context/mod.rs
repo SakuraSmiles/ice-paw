@@ -16,6 +16,7 @@ pub(crate) mod history;
 pub(crate) mod memory;
 pub(crate) mod os_context;
 pub(crate) mod pipeline;
+pub(crate) mod screenshot_history;
 pub(crate) mod skeleton;
 pub(crate) mod slim;
 pub(crate) mod stages;
