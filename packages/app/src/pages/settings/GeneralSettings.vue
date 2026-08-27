@@ -317,6 +317,8 @@ function onVisionModelChange(i: number, newModel: string) {
 }
 function addVisionEntry() {
   visionEntries.value.push({ provider: "", model: "", apiKey: "", baseUrl: "" });
+  // 立即落库：空条目后端解析时跳过（无害），但不落库则「加了没填就刷新」会整行蒸发
+  saveVision();
 }
 function removeVisionEntry(i: number) {
   visionEntries.value.splice(i, 1);
@@ -894,9 +896,8 @@ const hasFilterResults = computed(() => {
                   </template>
                 </span>
                 <button
-                  v-if="visionEntries.length > 1 || i > 0"
                   class="vision-icon-btn"
-                  :title="i === 0 ? '删除主模型（降级条目将上移）' : '删除此降级条目'"
+                  :title="i === 0 ? (visionEntries.length > 1 ? '删除主模型（降级条目将上移）' : '删除（清空视觉读取配置）') : '删除此降级条目'"
                   @click="removeVisionEntry(i)"
                 >
                   <Trash2 :size="14" />

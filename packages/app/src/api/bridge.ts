@@ -320,7 +320,13 @@ const preferences = {
     base_url?: string;
   }): Promise<{ latency_ms: number; sample: string }> {
     try {
-      return await invoke<{ latency_ms: number; sample: string }>("test_vision_config", input);
+      // Tauri v2 命令参数按 camelCase 传（Rust 侧 snake_case 自动转换，同 testEmbeddingConfig）
+      return await invoke<{ latency_ms: number; sample: string }>("test_vision_config", {
+        provider: input.provider,
+        model: input.model,
+        apiKey: input.api_key,
+        baseUrl: input.base_url ?? null,
+      });
     }
     catch (err) { throw wrapInvokeError("preferences.testVisionConfig", err); }
   },
