@@ -137,6 +137,19 @@ pub(crate) async fn execute_tool_round(
             .await
         };
 
+        // Confirm 级工具若声明了 auth_reason（如截屏「画面将发送给模型服务商」），
+        // 替换通用 reason 展示在审批卡上——用户点「允许」前必须知道数据去向。
+        let mut decision = decision;
+        if let AuthorizationDecision::Confirm { reason, tool_name, .. } = &mut decision {
+            if let Some(custom) = registry
+                .get(tool_name)
+                .await
+                .and_then(|t| t.auth_reason())
+            {
+                *reason = custom;
+            }
+        }
+
         // 2. 根据决策执行
         let final_result: Result<ToolOutput, String> = match decision {
             AuthorizationDecision::Allow => invoke_tool(registry, tc_name, tc_args, tool_ctx).await,

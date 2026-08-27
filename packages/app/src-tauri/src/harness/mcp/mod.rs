@@ -26,6 +26,7 @@ pub mod file_tools;
 pub mod git;
 pub mod plan_tool;
 pub mod proposal_tool;
+pub mod screen;
 pub mod search;
 pub mod shell;
 pub mod web;

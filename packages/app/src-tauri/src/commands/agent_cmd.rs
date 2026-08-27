@@ -294,7 +294,7 @@ fn resolve_base_url_arg<'a>(
 ) -> Option<Option<&'a str>> {
     match explicit {
         Some(opt) => Some(opt),
-        None => switch_url.map(|url| Some(url)),
+        None => switch_url.map(Some),
     }
 }
 
