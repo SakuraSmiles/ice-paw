@@ -97,7 +97,8 @@ pub struct PipelineContext {
     /// 项目上下文目录（IcePaw 管理的 {workspace}/projects/{id}/，存 project.md）
     pub project_context_dir: Option<String>,
     /// 已解析的 agent 明文 API key（DB 只存引用槽位，由 `chat_cmd` 解析后注入）。
-    /// 供 [`ModalCapabilityStage`] 收集视觉凭据（`vision::from_agent` 借 agent key 做零配置兜底）。
+    /// 供 LLM 调用使用；视觉代读已不消费它（两档制：非视觉 agent 走平台视觉配置链，
+    /// 见 `modal::gather_vision_candidates`）。
     pub api_key: Option<String>,
     /// chat:processing 心跳发射器——可选注入，让 ModalCapabilityStage 在 OCR 每张
     /// 图完成后 emit 一次 `chat:processing(stage="ocr", progress=(i,N))`，让前端

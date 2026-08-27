@@ -948,12 +948,28 @@ pub struct UserPreferences {
     pub embedding_model: Option<String>,
     pub embedding_api_key: Option<String>,
     pub embedding_base_url: Option<String>,
-    /// Vision 全局配置（Phase B）：当前 Agent 不支持视觉（supports_vision=0）时，
-    /// 附件图片识别 fallback 到此配置。仿 embedding。Agent 自带 supports_vision=1 时优先用 Agent 自己的模型。
+    /// Vision 旧版四键（Phase B 单配置）。仅作**读侧兼容回落**（`vision_config` 缺失时
+    /// 拼成单条目），新写入一律走 [`Self::vision_config`]（两档制，2026-08-27）。
     pub vision_provider: Option<String>,
     pub vision_model: Option<String>,
     pub vision_api_key: Option<String>,
     pub vision_base_url: Option<String>,
+    /// Vision 条目链（两档制）：`Some` = 新格式权威（`Some(vec![])` = 用户显式清空，
+    /// 不再回落旧键）；`None` = 未用新格式，读侧回落旧四键单条目。
+    pub vision_config: Option<Vec<VisionConfigEntry>>,
+}
+
+/// 视觉读取配置的一个条目（主模型或降级模型）。见 `vision.rs` 的解析与顺序重试。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct VisionConfigEntry {
+    /// provider 标签（glm / openai / deepseek / minimax）
+    pub provider: String,
+    /// 视觉模型名（如 glm-5.3-flash）
+    pub model: String,
+    pub api_key: String,
+    /// 自定义端点（可选；空 = 按 provider 推导官方 OpenAI 兼容端点）
+    #[serde(default)]
+    pub base_url: Option<String>,
 }
 
 // =========================================================================

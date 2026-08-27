@@ -1,15 +1,21 @@
-//! `harness::vision` — Vision（视觉/图片识别）全局配置解析（Phase B）。
+//! `harness::vision` — Vision（视觉/图片识别）平台配置解析。
 //!
-//! 扫描件/图片型附件文本提取为空，只能靠视觉模型读图。当前 Agent 若不支持视觉
-//!（`supports_vision = 0`），附件图片识别 fallback 到此**全局 vision 配置**（独立于
-//! 聊天 Agent，仿 embedding）。Agent 自带 `supports_vision = 1` 时优先用它自己的模型。
+//! 扫描件/图片型附件文本提取为空，只能靠视觉模型读图。视觉路由为**两档制**
+//!（2026-08-27 收敛，取代旧三环 fallback）：
 //!
-//! 见 [`resolve_vision_config`] —— 纯函数，便于单测。
+//! - agent 模型有视觉（`effective_supports_vision`）→ 图直发 agent，本模块不参与。
+//! - agent 模型无视觉 → 用**平台视觉配置**（设置-通用-视觉读取）代读：主模型 +
+//!   可选降级链（[`resolve_vision_entries`]），按序尝试、首个成功即用，marker 标注
+//!   实际读图模型。未配置 → 剥图 + 诚实提示（绝不伪造）。
+//!
+//! 旧三环（agent 借凭据 / GLM 视觉 MCP env 借 key）已删除：借凭据不借端点是
+//! 假环（Coding key 打标准端点必败），静默换人不可见；显式配置链把「谁读图」
+//! 变成用户可说清、可测试（`test_vision_config`）的事。
 //!
 //! 与 embedding 的关系：embedding 配置给 KB 向量生成（[`crate::harness::kb::embedding`]），
 //! vision 配置给附件图片识别；两者结构对称、各自独立。
 
-use crate::db::models::UserPreferences;
+use crate::db::models::{UserPreferences, VisionConfigEntry};
 use crate::error::{AppError, AppResult};
 
 /// OCR/读图提示词——让视觉模型把文档图片转成结构化文本（扫描件读图的"描述"）。
@@ -18,38 +24,87 @@ const VISION_OCR_PROMPT: &str = "\
 保持原有的段落、列表与层次结构；如遇表格，用 markdown 表格还原。\
 若有公式/图注，照原样转写。只输出识别到的正文内容，不要添加任何解释、前言或总结。";
 
-/// 已配置的 vision provider 标签（与 embedding 一致）。
-/// minimax 仅 MiniMax-M3 支持图片输入（M2.x 不支持），但 M3 是当前主力多模态模型，故纳入。
-pub const SUPPORTED_PROVIDERS: &[&str] = &["openai", "glm", "deepseek", "minimax"];
-
-/// 从 [`UserPreferences`] 解析 vision 配置 `(model, base_url, api_key)`。
+/// provider 的默认视觉端点（OpenAI 兼容，`describe_image` 走 image_url 格式）。
 ///
-/// `base_url` 缺省时按 `provider` 推导（openai / glm / deepseek）。`model`、`api_key`
-/// 任一缺失或 provider 未知 → `None`（调用方回退：Agent 自带视觉模型，或治标诚实提示）。
-///
-/// 抽成纯函数，便于单测「前端 JSON 存储能否被正确解析为 vision 配置」。
-pub fn resolve_vision_config(prefs: &UserPreferences) -> Option<(String, String, String)> {
-    let model = prefs.vision_model.clone()?;
-    let provider = prefs.vision_provider.as_deref()?;
-    let api_key = prefs.vision_api_key.clone()?;
-    let url = match prefs.vision_base_url.as_deref().filter(|s| !s.is_empty()) {
-        Some(u) => u.to_string(),
-        None => match provider {
-            "openai" => "https://api.openai.com".into(),
-            "glm" => "https://open.bigmodel.cn/api/paas/v4".into(),
-            "deepseek" => "https://api.deepseek.com".into(),
-            // MiniMax 聊天走 Anthropic 协议（/anthropic），但视觉走 OpenAI 兼容端点（/v1），
-            // 因为 describe_image 用 image_url 格式（OpenAI 协议）。同一 API key 两端点通用。
-            "minimax" | "minimax-cn" => "https://api.minimaxi.com/v1".into(),
-            _ => return None,
-        },
-    };
-    Some((model, url, api_key))
+/// 注意与聊天注册表（PROVIDERS default_url）**不是同一张表**：MiniMax 聊天走
+/// Anthropic 协议端点、视觉走 OpenAI 兼容 `/v1`，故视觉端点在本模块单独成表。
+fn default_vision_base_url(provider: &str) -> Option<&'static str> {
+    match provider {
+        "openai" => Some("https://api.openai.com"),
+        "glm" | "glm-coding" => Some("https://open.bigmodel.cn/api/paas/v4"),
+        "deepseek" => Some("https://api.deepseek.com"),
+        // MiniMax 聊天走 Anthropic 协议（/anthropic），但视觉走 OpenAI 兼容端点（/v1），
+        // 因为 describe_image 用 image_url 格式（OpenAI 协议）。同一 API key 两端点通用。
+        "minimax" | "minimax-cn" => Some("https://api.minimaxi.com/v1"),
+        _ => None,
+    }
 }
 
-/// vision 是否已配置（model + provider + api_key 齐全）。供 UI / 路由判断。
+/// 把一个配置条目解析成可用凭据；无效条目（provider 未知 / model 或 key 空）→ None。
+///
+/// 端点成对原则：条目自带 `base_url` 优先，缺省按 provider 推导——key 与端点
+/// 属同一鉴权域，永远不猜第三方的。
+pub fn entry_to_credential(entry: &VisionConfigEntry, index: usize) -> Option<VisionCredential> {
+    let provider = entry.provider.trim();
+    let model = entry.model.trim();
+    let api_key = entry.api_key.trim();
+    if provider.is_empty() || model.is_empty() || api_key.is_empty() {
+        return None;
+    }
+    let base_url = match entry.base_url.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(u) => u.to_string(),
+        None => default_vision_base_url(provider)?.to_string(),
+    };
+    Some(VisionCredential {
+        provider: provider.to_string(),
+        model: model.to_string(),
+        base_url,
+        api_key: api_key.to_string(),
+        source: format!("视觉配置#{index}"),
+    })
+}
+
+/// 解析平台视觉配置为**有序凭据链**（主模型在前，降级依次）。
+///
+/// - `vision_config = Some(entries)` → 新格式权威（含 `Some(vec![])` = 显式清空 → 空链）。
+/// - `vision_config = None` → 旧四键（vision_provider/model/api_key/base_url）拼成单条目
+///   （读侧兼容，存量用户零迁移；前端首次保存后即转新格式）。
+/// - 无效条目跳过不阻塞（日志提示），返回剩余可用链。
+///
+/// 纯函数，便于单测「前端 JSON 存储能否被正确解析为凭据链」。
+pub fn resolve_vision_entries(prefs: &UserPreferences) -> Vec<VisionCredential> {
+    let entries: Vec<VisionConfigEntry> = match &prefs.vision_config {
+        Some(entries) => entries.clone(),
+        None => {
+            // 旧四键回落：拼成单条目（字段不齐 = 未配置，entry_to_credential 会过滤）
+            vec![VisionConfigEntry {
+                provider: prefs.vision_provider.clone().unwrap_or_default(),
+                model: prefs.vision_model.clone().unwrap_or_default(),
+                api_key: prefs.vision_api_key.clone().unwrap_or_default(),
+                base_url: prefs.vision_base_url.clone(),
+            }]
+        }
+    };
+    entries
+        .iter()
+        .enumerate()
+        .filter_map(|(i, e)| {
+            let cred = entry_to_credential(e, i + 1);
+            if cred.is_none() {
+                tracing::warn!(
+                    target: "ice_paw.vision",
+                    provider = %e.provider, model = %e.model,
+                    "视觉配置条目 #{i} 无效（provider 未知或字段缺失），已跳过"
+                );
+            }
+            cred
+        })
+        .collect()
+}
+
+/// vision 是否已配置（至少一条有效凭据）。供 UI / 路由判断。
 pub fn is_vision_configured(prefs: &UserPreferences) -> bool {
-    resolve_vision_config(prefs).is_some()
+    !resolve_vision_entries(prefs).is_empty()
 }
 
 /// 用全局 vision 配置识别一张图片，返回模型读出的文本。
@@ -168,19 +223,15 @@ fn build_chat_endpoint(base_url: &str) -> String {
 }
 
 // ===========================================================================
-// 多级凭据 fallback（Phase B+：扫描件代读零配置最大化）
+// 视觉凭据（平台视觉配置的一条，见 [`resolve_vision_entries`])
 // ---------------------------------------------------------------------------
-// 非视觉 agent 调 view_attachment_image 时，按优先级收集视觉凭据，逐个试 describe_image：
-//   ① 显式 vision config（用户在「设置-视觉读取」配的——精确控制 model/url，最高优先级）
-//   ② 当前 agent 自己的凭据（GLM→glm-4v / OpenAI→gpt-4o，零配置兜底）
-//   ③ 已配的视觉 MCP server 的 env（智谱 GLM 视觉 MCP 的 Z_AI_API_KEY→glm-4v，零配置兜底）
-//   ④ 都没有 / 都失败 → 如实告知（绝不伪造）
-//
-// 设计要点：解析逻辑全为纯函数（便于单测）；DB 查询（取 agent / 列 MCP）由调用方做，
-// 把候选 Vec<VisionCredential> 组装好后顺序试。某条凭据失效（401/网络）不阻塞——继续下一条。
+// 非视觉 agent 的图按条目顺序逐个试 describe_image：主模型 → 降级① → …；
+// 每条失败不阻塞——继续下一条；全失败 → 如实告知（绝不伪造）。
+// 旧三环（prefs 单配置 / agent 借凭据 / MCP env 借 key）已收敛为本配置链
+// （2026-08-27）：链的组装权从系统暗门交还用户显式配置。
 // ===========================================================================
 
-/// 一个可用的视觉读取凭据（describe_image 用）。多级 fallback 的每一级解析出一个。
+/// 一个可用的视觉读取凭据（describe_image 用）。配置链的每一项解析出一个。
 #[derive(Debug, Clone)]
 pub struct VisionCredential {
     /// provider 标签（describe_image 路由用：glm/openai/...）
@@ -188,7 +239,7 @@ pub struct VisionCredential {
     pub model: String,
     pub base_url: String,
     pub api_key: String,
-    /// 来源标签（日志 + tool_result.reader 用，便于诊断"图是谁读的"）
+    /// 来源标签（日志诊断用，如「视觉配置#1」）
     pub source: String,
 }
 
@@ -210,85 +261,21 @@ impl VisionCredential {
     }
 }
 
-/// provider 的默认视觉模型（fallback 用；用户可在 vision config 显式覆盖成更强模型）。
-/// 只列能走 OpenAI 兼容 image_url 的通用视觉模型；deepseek/anthropic 不在此列
-///（deepseek 标准 API 无视觉模型；anthropic 走另一套 image block 格式，不兼容 image_url）。
-/// MiniMax 仅 M3 支持图片输入（M2.x 不支持多模态）。
-fn default_vision_model(provider: &str) -> Option<&'static str> {
-    match provider {
-        "glm" => Some("glm-4v"),
-        "openai" => Some("gpt-4o"),
-        "minimax" | "minimax-cn" => Some("MiniMax-M3"),
-        _ => None,
-    }
-}
-
-/// provider 的默认 base_url（与 [`resolve_vision_config`] 的默认 URL 同源）。
-fn default_provider_base_url(provider: &str) -> Option<String> {
-    match provider {
-        "openai" => Some("https://api.openai.com".into()),
-        "glm" => Some("https://open.bigmodel.cn/api/paas/v4".into()),
-        "deepseek" => Some("https://api.deepseek.com".into()),
-        "minimax" | "minimax-cn" => Some("https://api.minimaxi.com/v1".into()),
-        _ => None,
-    }
-}
-
-/// ① 显式 vision config（用户在「设置-视觉读取」配的）——最高优先级，精确控制 model/url。
-/// 复用 [`resolve_vision_config`] 的解析（含 provider 默认 URL 推导）。
-pub fn from_prefs(prefs: &UserPreferences) -> Option<VisionCredential> {
-    let (model, base_url, api_key) = resolve_vision_config(prefs)?;
-    let provider = prefs.vision_provider.clone().unwrap_or_default();
-    Some(VisionCredential {
-        provider,
-        model,
-        base_url,
-        api_key,
-        source: "vision 配置".into(),
-    })
-}
-
-/// ② 当前 agent 自己的凭据——零配置兜底：GLM→glm-4v / OpenAI→gpt-4o / MiniMax→MiniMax-M3，
-/// 用 agent 的 key。其它 provider（deepseek/anthropic/...）无通用视觉模型，返回 None。
-pub fn from_agent(provider: &str, api_key: &str) -> Option<VisionCredential> {
-    let model = default_vision_model(provider)?.to_string();
-    let base_url = default_provider_base_url(provider)?;
-    Some(VisionCredential {
-        provider: provider.to_string(),
-        model,
-        base_url,
-        api_key: api_key.to_string(),
-        source: format!("agent:{provider}"),
-    })
-}
-
-/// ③ 已配的视觉 MCP server 的 env 借凭据——零配置兜底第二环。
-/// 识别智谱 GLM 视觉 MCP（`@z_ai/mcp-server`）env 里的 `Z_AI_API_KEY` → glm-4v。
-/// 不实际启动/调用 MCP（只读静态配置 env），故无 stdio 往返、不依赖 MCP server 运行时状态。
-/// 未来其它视觉 MCP 可在此扩展识别（如 OPENAI_API_KEY）。
-pub fn from_mcp_env(env: &serde_json::Value) -> Option<VisionCredential> {
-    let obj = env.as_object()?;
-    if let Some(key) = obj
-        .get("Z_AI_API_KEY")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-    {
-        return Some(VisionCredential {
-            provider: "glm".into(),
-            model: "glm-4v".into(),
-            base_url: "https://open.bigmodel.cn/api/paas/v4".into(),
-            api_key: key.to_string(),
-            source: "MCP:GLM 视觉理解".into(),
-        });
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn prefs(provider: &str, model: &str, key: &str, url: Option<&str>) -> UserPreferences {
+    fn entry(provider: &str, model: &str, key: &str) -> VisionConfigEntry {
+        VisionConfigEntry {
+            provider: provider.into(),
+            model: model.into(),
+            api_key: key.into(),
+            base_url: None,
+        }
+    }
+
+    /// 旧四键拼出的 prefs（读侧兼容回落用）
+    fn legacy_prefs(provider: &str, model: &str, key: &str, url: Option<&str>) -> UserPreferences {
         UserPreferences {
             vision_provider: Some(provider.into()),
             vision_model: Some(model.into()),
@@ -298,42 +285,99 @@ mod tests {
         }
     }
 
+    fn entries_prefs(entries: Vec<VisionConfigEntry>) -> UserPreferences {
+        UserPreferences {
+            vision_config: Some(entries),
+            ..Default::default()
+        }
+    }
+
+    // ---- 新格式：条目链 ----
+
     #[test]
-    fn resolves_with_explicit_url() {
-        let p = prefs("openai", "gpt-4o", "sk-x", Some("https://my.proxy/v1"));
-        let (m, url, k) = resolve_vision_config(&p).expect("explicit url");
-        assert_eq!(m, "gpt-4o");
-        assert_eq!(url, "https://my.proxy/v1");
-        assert_eq!(k, "sk-x");
+    fn entries_resolve_in_order_with_default_urls() {
+        let p = entries_prefs(vec![
+            entry("glm", "glm-5.3-flash", "gk"),
+            entry("deepseek", "deepseek-v4-flash-vision-exp", "dk"),
+        ]);
+        let chain = resolve_vision_entries(&p);
+        assert_eq!(chain.len(), 2, "两条有效条目都在链上");
+        assert_eq!(chain[0].model, "glm-5.3-flash");
+        assert_eq!(chain[0].base_url, "https://open.bigmodel.cn/api/paas/v4");
+        assert_eq!(chain[1].model, "deepseek-v4-flash-vision-exp");
+        assert_eq!(chain[1].base_url, "https://api.deepseek.com");
+        // 来源标签带序号（日志诊断用）
+        assert_eq!(chain[0].source, "视觉配置#1");
+        assert_eq!(chain[1].source, "视觉配置#2");
     }
 
     #[test]
-    fn resolves_default_url_per_provider() {
-        let p = prefs("glm", "glm-4v", "k", None);
-        let (_, url, _) = resolve_vision_config(&p).expect("glm default");
-        assert_eq!(url, "https://open.bigmodel.cn/api/paas/v4");
+    fn entry_explicit_url_wins() {
+        let mut e = entry("openai", "gpt-4o", "sk-x");
+        e.base_url = Some("https://my.proxy/v1".into());
+        let c = entry_to_credential(&e, 1).expect("显式 url");
+        assert_eq!(c.base_url, "https://my.proxy/v1");
     }
 
     #[test]
-    fn missing_model_or_key_returns_none() {
-        let mut p = prefs("openai", "gpt-4o", "sk-x", None);
+    fn invalid_entries_are_skipped_not_blocking() {
+        let p = entries_prefs(vec![
+            entry("", "some-model", "k"),       // provider 空
+            entry("glm", "  ", "k"),            // model 空（含空白）
+            entry("deepseek", "m", ""),         // key 空
+            entry("anthropic", "claude", "k"),  // provider 无视觉端点
+            entry("minimax", "MiniMax-M3", "mk"), // 有效
+        ]);
+        let chain = resolve_vision_entries(&p);
+        assert_eq!(chain.len(), 1, "只剩 minimax 一条有效");
+        assert_eq!(chain[0].model, "MiniMax-M3");
+    }
+
+    #[test]
+    fn explicit_empty_entries_means_unconfigured() {
+        // Some(vec![]) = 用户显式清空 → 权威空链，不回落旧键（旧键可能还躺在库里）
+        let mut p = legacy_prefs("glm", "glm-4v", "k", None);
+        p.vision_config = Some(vec![]);
+        assert!(resolve_vision_entries(&p).is_empty());
+        assert!(!is_vision_configured(&p));
+    }
+
+    // ---- 旧格式回落：vision_config = None 时旧四键拼单条目 ----
+
+    #[test]
+    fn legacy_four_keys_fallback_to_single_entry() {
+        let p = legacy_prefs("glm", "glm-4v-plus", "k", None);
+        let chain = resolve_vision_entries(&p);
+        assert_eq!(chain.len(), 1);
+        assert_eq!(chain[0].model, "glm-4v-plus");
+        assert_eq!(chain[0].base_url, "https://open.bigmodel.cn/api/paas/v4");
+        assert!(is_vision_configured(&p));
+    }
+
+    #[test]
+    fn legacy_with_explicit_url() {
+        let p = legacy_prefs("openai", "gpt-4o", "sk-x", Some("https://my.proxy/v1"));
+        let chain = resolve_vision_entries(&p);
+        assert_eq!(chain[0].base_url, "https://my.proxy/v1");
+    }
+
+    #[test]
+    fn legacy_missing_fields_is_unconfigured() {
+        let mut p = legacy_prefs("openai", "gpt-4o", "sk-x", None);
         p.vision_model = None;
-        assert!(resolve_vision_config(&p).is_none());
+        assert!(resolve_vision_entries(&p).is_empty());
 
-        let mut p = prefs("openai", "gpt-4o", "sk-x", None);
+        let mut p = legacy_prefs("openai", "gpt-4o", "sk-x", None);
         p.vision_api_key = None;
-        assert!(resolve_vision_config(&p).is_none());
+        assert!(resolve_vision_entries(&p).is_empty());
+
+        let p = legacy_prefs("anthropic", "claude", "k", None);
+        assert!(resolve_vision_entries(&p).is_empty());
     }
 
     #[test]
-    fn unknown_provider_returns_none() {
-        let p = prefs("anthropic", "claude", "k", None);
-        assert!(resolve_vision_config(&p).is_none());
-    }
-
-    #[test]
-    fn unconfigured_is_none() {
-        assert!(resolve_vision_config(&UserPreferences::default()).is_none());
+    fn unconfigured_is_empty() {
+        assert!(resolve_vision_entries(&UserPreferences::default()).is_empty());
         assert!(!is_vision_configured(&UserPreferences::default()));
     }
 
@@ -355,95 +399,19 @@ mod tests {
         );
     }
 
-    // ---- 多级凭据 fallback ----
-
-    #[test]
-    fn from_agent_glm_and_openai_have_vision_model() {
-        let g = from_agent("glm", "gk").expect("glm 有视觉");
-        assert_eq!(g.provider, "glm");
-        assert_eq!(g.model, "glm-4v");
-        assert_eq!(g.base_url, "https://open.bigmodel.cn/api/paas/v4");
-        assert_eq!(g.api_key, "gk");
-        assert!(g.source.contains("agent"));
-
-        let o = from_agent("openai", "ok").expect("openai 有视觉");
-        assert_eq!(o.model, "gpt-4o");
-        assert_eq!(o.base_url, "https://api.openai.com");
-    }
-
-    #[test]
-    fn from_agent_minimax_borrows_m3() {
-        // minimax / minimax-cn 两标签都应映射到 MiniMax-M3（M3 是 MiniMax 唯一支持图片的模型）
-        let m = from_agent("minimax", "mk").expect("minimax 有视觉 (M3)");
-        assert_eq!(m.provider, "minimax");
-        assert_eq!(m.model, "MiniMax-M3");
-        assert_eq!(m.base_url, "https://api.minimaxi.com/v1");
-        assert_eq!(m.api_key, "mk");
-        assert!(m.source.contains("agent"));
-
-        let cn = from_agent("minimax-cn", "ck").expect("minimax-cn 同源 M3");
-        assert_eq!(cn.model, "MiniMax-M3");
-        assert_eq!(cn.base_url, "https://api.minimaxi.com/v1");
-    }
-
-    #[test]
-    fn from_agent_non_vision_provider_is_none() {
-        // deepseek/anthropic 无通用视觉模型 → 不能借 agent key
-        //（minimax 已支持，见 from_agent_minimax_borrows_m3）
-        assert!(from_agent("deepseek", "k").is_none());
-        assert!(from_agent("anthropic", "k").is_none());
-        assert!(from_agent("unknown", "k").is_none());
-    }
-
-    #[test]
-    fn from_mcp_env_borrows_zhipu_key() {
-        let env = serde_json::json!({"Z_AI_API_KEY": "zhi-xxx", "Z_AI_MODE": "ZHIPU"});
-        let c = from_mcp_env(&env).expect("有 Z_AI_API_KEY");
-        assert_eq!(c.provider, "glm");
-        assert_eq!(c.model, "glm-4v");
-        assert_eq!(c.api_key, "zhi-xxx");
-        assert!(c.source.contains("MCP"));
-    }
-
-    #[test]
-    fn from_mcp_env_ignores_empty_or_missing_key() {
-        assert!(from_mcp_env(&serde_json::json!({})).is_none());
-        assert!(from_mcp_env(&serde_json::json!({"Z_AI_API_KEY": ""})).is_none());
-        // 非 object
-        assert!(from_mcp_env(&serde_json::json!(["a"])).is_none());
-    }
-
-    #[test]
-    fn from_prefs_wraps_resolve_vision_config() {
-        let p = prefs("glm", "glm-4v-plus", "k", None);
-        let c = from_prefs(&p).expect("已配");
-        // 用户显式配的 model 优先于默认
-        assert_eq!(c.model, "glm-4v-plus");
-        assert_eq!(c.provider, "glm");
-        assert!(c.source.contains("vision"));
-    }
-
-    #[test]
-    fn fallback_order_prefs_before_agent_before_mcp() {
-        // 调用方负责组装顺序；这里只校验每级都能解析出正确凭据，
-        // 且显式 model（prefs）不被 agent 默认 model 覆盖。
-        let p = prefs("openai", "gpt-4o-mini", "pk", None);
-        let from_p = from_prefs(&p).unwrap();
-        let from_a = from_agent("openai", "ak").unwrap();
-        assert_eq!(from_p.model, "gpt-4o-mini"); // 显式
-        assert_eq!(from_a.model, "gpt-4o"); // 默认
-    }
-
     // ---- MiniMax 适配（M3 reasoning + 弃用字段 + 默认 URL）----
 
     #[test]
-    fn resolve_vision_config_minimax_default_url() {
-        // 显式 vision config 选 minimax、不填 base_url → 默认 OpenAI 兼容端点 /v1
-        let p = prefs("minimax", "MiniMax-M3", "mk", None);
-        let (m, url, k) = resolve_vision_config(&p).expect("minimax 可解析");
-        assert_eq!(m, "MiniMax-M3");
-        assert_eq!(url, "https://api.minimaxi.com/v1");
-        assert_eq!(k, "mk");
+    fn minimax_entry_defaults_to_openai_compat_url() {
+        // 条目选 minimax、不填 base_url → 默认 OpenAI 兼容端点 /v1（非聊天的 Anthropic 端点）
+        let p = entries_prefs(vec![entry("minimax", "MiniMax-M3", "mk")]);
+        let chain = resolve_vision_entries(&p);
+        assert_eq!(chain.len(), 1);
+        assert_eq!(chain[0].base_url, "https://api.minimaxi.com/v1");
+
+        // minimax-cn 标签同源
+        let p = entries_prefs(vec![entry("minimax-cn", "MiniMax-M3", "mk")]);
+        assert_eq!(resolve_vision_entries(&p)[0].base_url, "https://api.minimaxi.com/v1");
     }
 
     #[test]

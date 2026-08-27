@@ -213,34 +213,24 @@ impl McpClient for ViewAttachmentImageTool {
             return Ok(ToolOutput::with_image(summary.to_string(), png));
         }
 
-        // === Arch B：agent 无视觉 → 统一收集视觉凭据（modal::gather_vision_candidates）===
-        // 4 个图片入口共用同一份凭据收集（事2 / 方案 C），顺序即优先级：显式 vision 配置
-        //（用户在「设置-视觉读取」配的）→ agent 自带视觉模型（GLM→glm-4v / OpenAI→gpt-4o）→
-        // GLM 视觉 MCP env（Z_AI_API_KEY）。每条失败不阻塞，全失败如实告知（不中断整轮工具）。
-        let candidates: Vec<vision::VisionCredential> = match &agent_opt {
-            Some(a) => {
-                crate::harness::modal::gather_vision_candidates(
-                    &ctx.pool,
-                    a,
-                    ctx.api_key.as_deref(),
-                )
-                .await
-            }
-            None => Vec::new(),
-        };
+        // === Arch B：agent 无视觉 → 平台视觉配置链代读（两档制第二档）===
+        // 候选 = 设置-通用-视觉读取的条目链（主模型 → 降级① → …）。
+        // 每条失败不阻塞，全失败如实告知（不中断整轮工具）。
+        let candidates: Vec<vision::VisionCredential> =
+            crate::harness::modal::gather_vision_candidates(&ctx.pool).await;
 
         if candidates.is_empty() {
-            // 既无 agent 视觉、又无任何视觉凭据：如实告知，不伪造。
+            // 既无 agent 视觉、又未配置平台视觉读取：如实告知，不伪造。
             let summary = serde_json::json!({
                 "message_id": parsed.message_id,
                 "page": parsed.page,
                 "total_pages": total_pages,
                 "name": row.name,
-                "note": "Rendered the page to an image, but neither the current agent nor any \
-                         vision credential (vision config / the agent's own GLM-or-OpenAI key / \
-                         GLM vision MCP) is available to read it. Tell the user: this \
-                         scanned/image PDF needs vision — configure it in Settings, use a \
-                         vision-capable agent, or paste the relevant text."
+                "note": "Rendered the page to an image, but the current agent has no vision \
+                         and no platform vision reader is configured. Tell the user: this \
+                         scanned/image PDF needs vision — configure a reader in \
+                         Settings → General → Vision Reading, use a vision-capable agent, \
+                         or paste the relevant text."
             });
             return Ok(ToolOutput::text(summary.to_string()));
         }

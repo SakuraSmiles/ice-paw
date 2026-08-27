@@ -12,9 +12,9 @@
 //! 模型"声称看不到"（即本次生产反馈的 agent 行为）。本模块提供统一适配，供 4 个入口共用。
 //!
 //! ## 两个核心函数
-//! - [`gather_vision_candidates`]：从 DB 收集可用视觉凭据（按优先级：显式 vision 配置 →
-//!   agent 自带视觉模型 → GLM 视觉 MCP env）。把原本散在 `view_attachment_image` 里的
-//!   收集逻辑抽公共，4 个入口用同一份。
+//! - [`gather_vision_candidates`]：从 DB 读**平台视觉配置**并解析成有序凭据链
+//!   （两档制，2026-08-27：主模型 + 可选降级链，见 [`crate::harness::vision`]）。
+//!   旧三环（agent 借凭据 / GLM 视觉 MCP env）已删除——链的组装权交还用户显式配置。
 //! - [`adapt_blocks_for_vision`]：按目标模型"有效视觉能力"适配 blocks——支持视觉则原样过；
 //!   否则逐图用候选凭据代读（OCR）成 `Text`，代读不了的剥离 + 诚实提示（绝不伪造）。
 //!
@@ -28,7 +28,6 @@
 
 use sqlx::SqlitePool;
 
-use crate::db::models::AgentRow;
 use crate::db::repo;
 use crate::harness::error_mapping::{classify_llm_error, LlmErrorKind};
 use crate::harness::vision::{self, VisionCredential};
@@ -74,59 +73,23 @@ impl AdaptOutcome {
     }
 }
 
-/// 从 DB 收集可用视觉凭据，按优先级排序（多级 fallback 的候选清单）。
+/// 从 DB 读平台视觉配置，解析成**有序凭据链**（两档制的第二档）。
 ///
-/// 顺序与原 `view_attachment_image` 工具一致（[`crate::harness::vision`] 模块头注释）：
-/// ① 显式 vision 配置（用户在「设置-视觉读取」配的——精确 model/url，最高优先级）
-/// ② 当前 agent 自己的凭据（GLM→glm-4v / OpenAI→gpt-4o / MiniMax→M3，用 agent 的 key）
-/// ③ 已配的 GLM 视觉 MCP 的 env（`Z_AI_API_KEY`→glm-4v，零配置兜底第二环）
-///
-/// `api_key` 为已解析的 agent 明文 key（DB 只存引用槽位，由调用方解析后传入）。
-/// 任一级 DB 查询失败仅 warn 跳过——降级到能拿到的凭据，不阻塞主流程。
-pub async fn gather_vision_candidates(
-    pool: &SqlitePool,
-    agent: &AgentRow,
-    api_key: Option<&str>,
-) -> Vec<VisionCredential> {
-    let mut candidates: Vec<VisionCredential> = Vec::new();
-
-    // ① 显式 vision 配置
+/// 候选 = 设置-通用-视觉读取的条目链（主模型 → 降级① → …，见
+/// [`vision::resolve_vision_entries`]；旧四键单配置自动回落兼容）。
+/// 非视觉 agent 的图按此顺序逐条尝试代读。DB 读取失败仅 warn 返回空链
+/// （走诚实剥离，不阻塞主流程）。
+pub async fn gather_vision_candidates(pool: &SqlitePool) -> Vec<VisionCredential> {
     match repo::preferences::get_all(pool).await {
-        Ok(prefs) => {
-            if let Some(c) = vision::from_prefs(&prefs) {
-                candidates.push(c);
-            }
-        }
-        Err(e) => tracing::warn!(
-            target: "ice_paw.modal",
-            err = %e, "读取 preferences 失败，跳过 vision 配置凭据"
-        ),
-    }
-
-    // ② 当前 agent 自带视觉模型
-    if let Some(key) = api_key.filter(|s| !s.is_empty()) {
-        if let Some(c) = vision::from_agent(&agent.provider, key) {
-            candidates.push(c);
+        Ok(prefs) => vision::resolve_vision_entries(&prefs),
+        Err(e) => {
+            tracing::warn!(
+                target: "ice_paw.modal",
+                err = %e, "读取 preferences 失败，无视觉凭据可用"
+            );
+            Vec::new()
         }
     }
-
-    // ③ GLM 视觉 MCP env
-    match repo::mcp_server::list_all(pool).await {
-        Ok(servers) => {
-            for s in servers.iter().filter(|s| s.enabled) {
-                if let Some(c) = vision::from_mcp_env(&s.env) {
-                    candidates.push(c);
-                    break; // 同质 GLM key，取第一个即够
-                }
-            }
-        }
-        Err(e) => tracing::warn!(
-            target: "ice_paw.modal",
-            err = %e, "列出 MCP server 失败，跳过 MCP env 凭据"
-        ),
-    }
-
-    candidates
 }
 
 /// 按"目标模型是否支持视觉"统一适配 blocks（4 个图片入口共用）。
@@ -244,14 +207,14 @@ pub(crate) fn dropped_hint(dropped: usize, drop_reason: Option<LlmErrorKind>) ->
     }
     let hint = match drop_reason {
         None => format!(
-            "[系统提示：本次消息含 {dropped} 张图片，但当前模型不支持视觉，且未配置可用的视觉\
-             读取凭据（视觉配置 / agent 自带视觉模型 / GLM 视觉 MCP）。如需识别图片内容，\
-             请在「设置-视觉读取」配置视觉模型，或换用支持视觉的 agent。]"
+            "[系统提示：本次消息含 {dropped} 张图片，但当前模型不支持视觉，且未配置平台\
+             视觉读取。如需识别图片内容，请在「设置-通用-视觉读取」配置视觉模型\
+             （主模型 + 可选降级），或换用支持视觉的 agent。]"
         ),
         Some(LlmErrorKind::Unknown) => format!(
-            "[系统提示：本次消息含 {dropped} 张图片，当前模型不支持视觉，已尝试用可用视觉凭据\
-             代读但未能识别。如需识别，请换用支持视觉的 agent，或在「设置-视觉读取」\
-             检查视觉模型配置。]"
+            "[系统提示：本次消息含 {dropped} 张图片，当前模型不支持视觉，已尝试用配置的\
+             视觉模型代读但未能识别。如需识别，请换用支持视觉的 agent，或在\
+             「设置-通用-视觉读取」检查视觉模型配置（可用「测试」逐条验证）。]"
         ),
         // 已知分类（敏感/限流/鉴权/超长/网络）：friendly_text 非空，给出真实原因。
         Some(kind) => format!(
@@ -283,7 +246,7 @@ pub fn strip_image_blocks_to_marker(blocks: &[ContentBlock]) -> Vec<ContentBlock
             if !marker_inserted {
                 out.push(ContentBlock::text(format!(
                     "[此历史消息曾含 {image_count} 张图片；当前模型无视觉能力，已省略图片内容。\
-                     如需识别，请在「设置-视觉读取」配置视觉模型或换用视觉 agent。]"
+                     如需识别，请在「设置-通用-视觉读取」配置视觉模型或换用视觉 agent。]"
                 )));
                 marker_inserted = true;
             }

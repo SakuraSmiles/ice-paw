@@ -30,6 +30,7 @@ const KNOWN_KEYS: &[&str] = &[
     "vision_model",
     "vision_api_key",
     "vision_base_url",
+    "vision_config",
 ];
 
 /// 系统默认工作空间根路径（安装即用，自动创建）
