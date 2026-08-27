@@ -20,6 +20,7 @@ import { bridge } from "../../api/bridge";
 import { setTimezone } from "../../utils/time";
 import ErrorBanner from "../../components/common/ErrorBanner.vue";
 import Combobox from "../../components/common/Combobox.vue";
+import { Plus, Trash2, FlaskConical, Loader2, Check, X } from "@lucide/vue";
 import type { UserPreferences } from "../../types";
 
 const prefs = ref<UserPreferences>({});
@@ -44,6 +45,7 @@ async function load() {
     }
     prefs.value = raw;
     oldEmbedding.value = { provider: raw.embedding_provider ?? "", model: raw.embedding_model ?? "" };
+    initVisionEntries(raw);
   } catch (e) {
     console.error("加载设置失败:", e);
     loadError.value = e instanceof Error ? e.message : String(e);
@@ -237,12 +239,22 @@ async function saveEmbedding() {
   }
 }
 
-// ---- Vision 配置（Phase B：扫描件/图片型 PDF 视觉读取）----
-// 与 embedding 对称但更简：vision 是无状态的（每次 view_attachment_image 现取现用），
-// 切换 provider/model 不需重建任何东西，故无 embedding 那套切换确认 overlay。
-// 仅列真正提供视觉模型的 provider（DeepSeek 于 2026-08 上线视觉实验模型
-// deepseek-v4-flash-vision-exp，故补列）。
-// MiniMax 仅 M3 支持图片输入（M2.x 不支持多模态），故只列 M3。
+// ---- Vision 视觉读取（两档制：agent 无视觉时由平台配置链代读）----
+// 条目链：主模型 + 可选降级（按序尝试、首个成功即用；marker 标注实际读图模型）。
+// 旧三环（agent 借凭据 / GLM 视觉 MCP env）已删——链的组装权交还显式配置。
+// 仅列真正提供视觉模型的 provider；MiniMax 仅 M3 支持图片输入（M2.x 不支持）。
+interface VisionEntryUI {
+  provider: string;
+  model: string;
+  apiKey: string;
+  baseUrl: string;
+}
+type VisionTestState =
+  | { status: "idle" }
+  | { status: "testing" }
+  | { status: "ok"; msg: string }
+  | { status: "fail"; msg: string };
+
 const visionProviders = ["智谱 GLM", "DeepSeek", "OpenAI", "MiniMax"];
 const visionModelMap: Record<string, { provider: string; models: string[]; keyUrl: string }> = {
   "智谱 GLM": { provider: "glm", models: ["glm-5.3-flash", "glm-5v-turbo", "glm-4v-plus", "glm-4.5v", "glm-4v"], keyUrl: "https://open.bigmodel.cn/usercenter/proj-mgmt/apikeys" },
@@ -250,32 +262,82 @@ const visionModelMap: Record<string, { provider: string; models: string[]; keyUr
   "OpenAI": { provider: "openai", models: ["gpt-4o", "gpt-4o-mini"], keyUrl: "https://platform.openai.com/api-keys" },
   "MiniMax": { provider: "minimax", models: ["MiniMax-M3"], keyUrl: "https://platform.minimaxi.com/" },
 };
-const visionProviderDisplay = computed(() => {
-  const p = prefs.value.vision_provider || "";
-  return Object.entries(visionModelMap).find(([, v]) => v.provider === p)?.[0] ?? "";
-});
-const visionModelSuggestions = computed(() => visionModelMap[visionProviderDisplay.value]?.models ?? []);
-const visionKeyUrl = computed(() => visionModelMap[visionProviderDisplay.value]?.keyUrl ?? "");
+const visionEntries = ref<VisionEntryUI[]>([]);
+/** 逐条测试状态（键 = 条目下标）；保存/编辑重置为 idle */
+const visionTests = ref<Record<number, VisionTestState>>({});
 
-function onVisionProviderChange(displayName: string) {
+/** prefs → 条目 UI：新格式权威；缺失回落旧四键单条目（存量兼容，首存即转新格式） */
+function initVisionEntries(raw: UserPreferences) {
+  if (raw.vision_config) {
+    visionEntries.value = raw.vision_config.map((e) => ({
+      provider: e.provider,
+      model: e.model,
+      apiKey: e.api_key,
+      baseUrl: e.base_url ?? "",
+    }));
+  } else if (raw.vision_provider) {
+    visionEntries.value = [{
+      provider: raw.vision_provider,
+      model: raw.vision_model ?? "",
+      apiKey: raw.vision_api_key ?? "",
+      baseUrl: raw.vision_base_url ?? "",
+    }];
+  } else {
+    visionEntries.value = [];
+  }
+  visionTests.value = {};
+}
+
+function visionProviderDisplayOf(entry: VisionEntryUI): string {
+  return Object.entries(visionModelMap).find(([, v]) => v.provider === entry.provider)?.[0] ?? "";
+}
+function visionModelSuggestionsOf(entry: VisionEntryUI): string[] {
+  return visionModelMap[visionProviderDisplayOf(entry)]?.models ?? [];
+}
+function visionKeyUrlOf(entry: VisionEntryUI): string {
+  return visionModelMap[visionProviderDisplayOf(entry)]?.keyUrl ?? "";
+}
+function visionTagOf(i: number): string {
+  return i === 0 ? "主模型" : `降级 ${i}`;
+}
+
+function onVisionProviderChange(i: number, displayName: string) {
   const mapping = visionModelMap[displayName];
-  prefs.value.vision_provider = mapping?.provider ?? "";
-  prefs.value.vision_model = mapping?.models[0] ?? "";
+  const e = visionEntries.value[i];
+  if (!e) return;
+  e.provider = mapping?.provider ?? "";
+  e.model = mapping?.models[0] ?? "";
   saveVision();
 }
-function onVisionModelChange(newModel: string) {
-  prefs.value.vision_model = newModel;
+function onVisionModelChange(i: number, newModel: string) {
+  const e = visionEntries.value[i];
+  if (!e) return;
+  e.model = newModel;
   saveVision();
 }
+function addVisionEntry() {
+  visionEntries.value.push({ provider: "", model: "", apiKey: "", baseUrl: "" });
+}
+function removeVisionEntry(i: number) {
+  visionEntries.value.splice(i, 1);
+  saveVision();
+}
+
 async function saveVision() {
   saving.value = true;
   delete saveErrors.value.vision;
+  visionTests.value = {};
   try {
-    await Promise.all([
-      bridge.preferences.set("vision_provider", prefs.value.vision_provider ?? ""),
-      bridge.preferences.set("vision_model", prefs.value.vision_model ?? ""),
-      bridge.preferences.set("vision_api_key", prefs.value.vision_api_key ?? ""),
-    ]);
+    // 存量单配置在此转新格式（后端读侧：Some=权威，旧四键从此不再被读）
+    await bridge.preferences.set(
+      "vision_config",
+      visionEntries.value.map((e) => ({
+        provider: e.provider,
+        model: e.model,
+        api_key: e.apiKey,
+        base_url: e.baseUrl || null,
+      })),
+    );
     saved.value = true;
     setTimeout(() => { saved.value = false; }, 2000);
   } catch (e) {
@@ -284,6 +346,32 @@ async function saveVision() {
   } finally {
     saving.value = false;
   }
+}
+
+/** 逐条健康检查：1×1 探针图走完整代读链路（端点+key+模型三合一验证） */
+async function testVisionEntry(i: number) {
+  const e = visionEntries.value[i];
+  if (!e) return;
+  visionTests.value[i] = { status: "testing" };
+  try {
+    const r = await bridge.preferences.testVisionConfig({
+      provider: e.provider,
+      model: e.model,
+      api_key: e.apiKey,
+      base_url: e.baseUrl || undefined,
+    });
+    visionTests.value[i] = { status: "ok", msg: `${r.latency_ms} ms · ${r.sample || "（空回复）"}` };
+  } catch (err) {
+    visionTests.value[i] = { status: "fail", msg: err instanceof Error ? err.message : String(err) };
+  }
+}
+function visionTestOf(i: number): VisionTestState {
+  return visionTests.value[i] ?? { status: "idle" };
+}
+/** ok/fail 的结果文案（模板插值无法跨调用收窄联合类型，收口在此） */
+function visionTestMsgOf(i: number): string {
+  const t = visionTestOf(i);
+  return t.status === "ok" || t.status === "fail" ? t.msg : "";
 }
 
 onMounted(loadDataDir);
@@ -771,59 +859,84 @@ const hasFilterResults = computed(() => {
         </div>
       </Transition>
 
-      <!-- ===== 视觉读取（Phase B：扫描件/图片型 PDF）===== -->
+      <!-- ===== 视觉读取（两档制：agent 无视觉时由平台配置链代读）===== -->
       <div class="setting-row">
         <div class="setting-label">
           <div class="setting-label-text">
             视觉读取
-            <span class="tip-icon" data-tip="扫描件/图片型 PDF 文本提取为空时，由视觉模型把页面读成文字。&#10;· Agent 自带视觉（supports_vision）→ 优先用它自己的模型读图，无需此配置。&#10;· Agent 无视觉时，按顺序自动兜底：① 此处配置（精确控制模型/Key）→ ② Agent 自己的 GLM/OpenAI/MiniMax 凭据（glm-4v / gpt-4o / MiniMax-M3）→ ③ 已配的「GLM 视觉理解」MCP 凭据。&#10;即此处留空通常也能用——只要 Agent 是 GLM/OpenAI/MiniMax 系、或已配 GLM 视觉 MCP，扫描件即可自动代读。仅在想精确指定模型/Key 时才需填。">
+            <span class="tip-icon" data-tip="Agent 模型无视觉能力时，图片/扫描件由这里的配置链代读成文字。&#10;· Agent 自带视觉 → 直接用自己的模型读图，不经此链。&#10;· 按条目顺序尝试，首个成功即用；代读文本会标注实际读图模型。&#10;· 未配置 → 图片仅保留占位提示，无法代读。">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
             </span>
-          
+
             <ErrorBanner v-if="saveErrors.vision" variant="inline" title="保存失败" :detail="saveErrors.vision.msg" @retry="saveErrors.vision?.retry()" />
           </div>
         </div>
         <div class="setting-control">
-          <div class="input-group">
-            <Combobox
-              :model-value="visionProviderDisplay"
-              :options="visionProviders"
-              placeholder="留空则自动兜底"
-              @update:model-value="onVisionProviderChange"
-            />
+          <!-- 空态即引导：说明后果 + 直达下一步 -->
+          <div v-if="visionEntries.length === 0" class="vision-empty">
+            <span>未配置——无视觉能力的 Agent 发图或扫描件将无法代读。</span>
+            <button class="btn" @click="addVisionEntry">
+              <Plus :size="14" />配置主模型
+            </button>
           </div>
+          <template v-else>
+            <div v-for="(e, i) in visionEntries" :key="i" class="vision-entry">
+              <div class="vision-entry-head">
+                <span class="vision-tag" :class="{ 'vision-tag--primary': i === 0 }">{{ visionTagOf(i) }}</span>
+                <span class="vision-entry-result">
+                  <template v-if="visionTestOf(i).status === 'ok'">
+                    <Check :size="14" class="vision-ok-icon" />
+                    <span class="vision-ok-text">{{ visionTestMsgOf(i) }}</span>
+                  </template>
+                  <template v-else-if="visionTestOf(i).status === 'fail'">
+                    <X :size="14" class="vision-fail-icon" />
+                    <span class="vision-fail-text">{{ visionTestMsgOf(i) }}</span>
+                  </template>
+                </span>
+                <button
+                  v-if="visionEntries.length > 1 || i > 0"
+                  class="vision-icon-btn"
+                  :title="i === 0 ? '删除主模型（降级条目将上移）' : '删除此降级条目'"
+                  @click="removeVisionEntry(i)"
+                >
+                  <Trash2 :size="14" />
+                </button>
+              </div>
+              <div class="vision-entry-grid">
+                <Combobox
+                  :model-value="visionProviderDisplayOf(e)"
+                  :options="visionProviders"
+                  placeholder="厂商"
+                  @update:model-value="(v: string) => onVisionProviderChange(i, v)"
+                />
+                <Combobox
+                  v-if="visionModelSuggestionsOf(e).length > 0"
+                  :model-value="e.model"
+                  :options="visionModelSuggestionsOf(e)"
+                  placeholder="模型"
+                  @update:model-value="(v: string) => onVisionModelChange(i, v)"
+                />
+                <input v-else v-model="e.model" class="form-input" placeholder="模型名" @blur="saveVision" />
+              </div>
+              <div class="vision-entry-grid">
+                <div class="input-group">
+                  <input v-model="e.apiKey" type="password" class="form-input" placeholder="API Key" @blur="saveVision" />
+                  <a v-if="visionKeyUrlOf(e)" :href="visionKeyUrlOf(e)" target="_blank" class="embed-key-link">申请 Key →</a>
+                </div>
+                <button class="btn vision-test-btn" :disabled="visionTestOf(i).status === 'testing' || !e.model || !e.apiKey" @click="testVisionEntry(i)">
+                  <Loader2 v-if="visionTestOf(i).status === 'testing'" :size="14" class="vision-spin" />
+                  <FlaskConical v-else :size="14" />
+                  {{ visionTestOf(i).status === "testing" ? "测试中…" : "测试" }}
+                </button>
+              </div>
+              <input v-model="e.baseUrl" class="form-input vision-url-input" placeholder="端点（可选，默认按厂商官方端点）" @blur="saveVision" />
+            </div>
+            <button class="btn vision-add-fallback" @click="addVisionEntry">
+              <Plus :size="14" />添加降级模型
+            </button>
+          </template>
         </div>
       </div>
-      <template v-if="prefs.vision_provider">
-        <div class="setting-row">
-          <div class="setting-label">
-            <div class="setting-label-text">视觉模型</div>
-          </div>
-          <div class="setting-control">
-            <div class="input-group">
-              <Combobox
-                v-if="visionModelSuggestions.length > 0"
-                :model-value="prefs.vision_model || ''"
-                :options="visionModelSuggestions"
-                placeholder="选择或输入模型名"
-                @update:model-value="onVisionModelChange"
-              />
-              <input v-else v-model="prefs.vision_model" class="form-input" placeholder="输入模型名" @blur="saveVision" />
-            </div>
-          </div>
-        </div>
-        <div class="setting-row">
-          <div class="setting-label">
-            <div class="setting-label-text">视觉 API Key</div>
-          </div>
-          <div class="setting-control">
-            <div class="input-group">
-              <input v-model="prefs.vision_api_key" type="password" class="form-input" placeholder="粘贴 API Key" @blur="saveVision" />
-            </div>
-            <a v-if="visionKeyUrl" :href="visionKeyUrl" target="_blank" class="embed-key-link">申请 Key →</a>
-          </div>
-        </div>
-      </template>
 
       </div>
     </template>
@@ -968,6 +1081,94 @@ const hasFilterResults = computed(() => {
 }
 .overlay-enter-from, .overlay-leave-to {
   opacity: 0;
+}
+
+/* ===== 视觉读取条目编辑器 ===== */
+.vision-empty {
+  display: flex;
+  align-items: center;
+  gap: var(--ip-spacing-3);
+  font-size: var(--ip-text-body-sm-size);
+  color: var(--ip-color-text-tertiary);
+  line-height: 1.5;
+}
+.vision-empty .btn { flex-shrink: 0; }
+
+.vision-entry {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ip-spacing-2);
+  padding: var(--ip-spacing-3);
+  border: 1px solid var(--ip-color-border-default);
+  border-radius: var(--ip-radius-md);
+  background: var(--ip-color-bg-secondary);
+}
+.vision-entry-head {
+  display: flex;
+  align-items: center;
+  gap: var(--ip-spacing-2);
+  min-height: 22px;
+}
+.vision-tag {
+  flex-shrink: 0;
+  padding: 1px 8px;
+  font-size: var(--ip-text-micro-size);
+  font-weight: var(--ip-font-weight-medium);
+  border-radius: var(--ip-radius-sm);
+  color: var(--ip-color-text-secondary);
+  border: 1px solid var(--ip-color-border-default);
+}
+.vision-tag--primary {
+  color: #fff;
+  background: var(--ip-primary-600);
+  border-color: var(--ip-primary-600);
+}
+.vision-entry-result {
+  flex: 1;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--ip-text-micro-size);
+  line-height: 1.4;
+}
+.vision-ok-icon { color: var(--ip-success-text); flex-shrink: 0; }
+.vision-ok-text { color: var(--ip-success-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vision-fail-icon { color: var(--ip-danger-text); flex-shrink: 0; }
+.vision-fail-text { color: var(--ip-danger-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vision-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: var(--ip-radius-sm);
+  background: transparent;
+  color: var(--ip-color-text-tertiary);
+  cursor: pointer;
+  transition: color var(--ip-duration-fast) var(--ip-ease-out), background var(--ip-duration-fast) var(--ip-ease-out);
+}
+.vision-icon-btn:hover { color: var(--ip-danger-text); background: var(--ip-color-bg-tertiary); }
+
+.vision-entry-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  gap: var(--ip-spacing-2);
+  align-items: center;
+}
+.vision-test-btn { flex-shrink: 0; }
+.vision-url-input { height: var(--ip-input-h-sm); }
+
+.vision-add-fallback { align-self: flex-start; }
+.vision-spin { animation: vision-rotate 1s linear infinite; }
+@keyframes vision-rotate {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .vision-spin { animation: none; }
 }
 
 /* ===== 设置行 ===== */

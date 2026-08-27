@@ -312,6 +312,18 @@ const preferences = {
     try { await invoke<void>("set_preference", { key, value: JSON.stringify(value) }); }
     catch (err) { throw wrapInvokeError("preferences.set", err); }
   },
+  /** 视觉读取条目健康检查：1×1 探针图走完整代读链路（传入式，测未保存的新值） */
+  async testVisionConfig(input: {
+    provider: string;
+    model: string;
+    api_key: string;
+    base_url?: string;
+  }): Promise<{ latency_ms: number; sample: string }> {
+    try {
+      return await invoke<{ latency_ms: number; sample: string }>("test_vision_config", input);
+    }
+    catch (err) { throw wrapInvokeError("preferences.testVisionConfig", err); }
+  },
 };
 
 const mcp = {

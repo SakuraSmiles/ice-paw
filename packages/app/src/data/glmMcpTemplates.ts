@@ -1,9 +1,12 @@
 // glmMcpTemplates.ts — GLM Coding Plan 套餐自带的 MCP 服务模板
 //
-// 4 个 GLM MCP 服务（官方文档核实）：
-// - 3 个 Remote（streamable HTTP）：联网搜索 / 网页读取 / 开源仓库
-//   端点 https://open.bigmodel.cn/api/mcp/{name}/mcp，Authorization: Bearer KEY
-// - 1 个 Local（stdio）：视觉理解 —— npx @z_ai/mcp-server，env Z_AI_API_KEY + Z_AI_MODE
+// 3 个 GLM MCP 服务（官方文档核实），全部 Remote（streamable HTTP）：
+// 联网搜索 / 网页读取 / 开源仓库
+// 端点 https://open.bigmodel.cn/api/mcp/{name}/mcp，Authorization: Bearer KEY
+//
+// 视觉理解模板已撤（2026-08-27 视觉两档制）：@z_ai/mcp-server 内置 GLM-4.6V
+// 不可控（随包升级漂移）、Coding 套餐专属，且与「设置-通用-视觉读取」配置链
+// 职责重复——平台兜底已由显式配置链承载，不再需要借 MCP env 的暗通道。
 //
 // 模板只做「预填」：build(apiKey) 产出可直接 create 的配置，用户仍可在表单二次编辑。
 // API Key 明文存 server 配置（headers / env，同安全级别），后续可升级 key_slot / 脱敏。
@@ -17,10 +20,8 @@ export interface GlmMcpTemplate {
   name: string;
   /** 一句话说明 */
   description: string;
-  /** 类型标签文案（远程 / 本地） */
+  /** 类型标签文案（远程） */
   badge: string;
-  /** 是否本地（stdio）—— 决定 API Key 注入位置与前端提示 */
-  local: boolean;
   /** 用 API Key 构造一份可直接创建的配置（不含 id，调用方 randomUUID） */
   build: (apiKey: string) => Omit<NewMcpServer, "id">;
 }
@@ -39,7 +40,6 @@ function remoteTemplate(
     name,
     description,
     badge: "远程",
-    local: false,
     build: (apiKey) => ({
       name,
       description,
@@ -58,22 +58,4 @@ export const GLM_MCP_TEMPLATES: GlmMcpTemplate[] = [
   remoteTemplate("glm-web-search", "GLM 联网搜索", "实时联网搜索（web_search_prime）", "web_search_prime"),
   remoteTemplate("glm-web-reader", "GLM 网页读取", "抓取并理解网页正文（web_reader）", "web_reader"),
   remoteTemplate("glm-zread", "GLM 开源仓库", "检索开源仓库代码（ZRead）", "zread"),
-  {
-    key: "glm-vision",
-    name: "GLM 视觉理解",
-    description: "图像理解（本地 npx @z_ai/mcp-server）",
-    badge: "本地",
-    local: true,
-    build: (apiKey) => ({
-      name: "GLM 视觉理解",
-      description: "图像理解（本地 npx @z_ai/mcp-server）",
-      command: "npx",
-      args: ["@z_ai/mcp-server"],
-      env: { Z_AI_API_KEY: apiKey, Z_AI_MODE: "ZHIPU" },
-      transport: "stdio",
-      trust_level: "trusted", // 对齐 builtin-playwright 的本地工具信任级
-      enabled: true,
-      scope: "global",
-    }),
-  },
 ];
