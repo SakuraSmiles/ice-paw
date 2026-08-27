@@ -13,6 +13,7 @@
 // Key/URL 字段的规则（requires_key / requires_base_url）由推导出的 provider
 // 驱动，与后端校验一致；「测试连接」一次往返两用——验证配置 + 拉取模型并入下拉。
 import AvatarField from "../common/AvatarField.vue";
+import { ExternalLink } from "@lucide/vue";
 import { ref, computed, onMounted, watch } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -90,6 +91,8 @@ const currentProvider = computed(
   () => providerList.value.find((p) => p.name === form.value.provider) ?? null,
 );
 const requiresKey = computed(() => currentProvider.value?.requires_key ?? true);
+/** Key 申请页直达（注册表 key_url 单一真相源；免 key 厂商无此链接） */
+const keyApplyUrl = computed(() => currentProvider.value?.key_url ?? "");
 const requiresBaseUrl = computed(() => currentProvider.value?.requires_base_url ?? false);
 const defaultUrl = computed(() => currentProvider.value?.default_url ?? "");
 
@@ -385,6 +388,7 @@ async function save() {
         name: form.value.name,
         provider: form.value.provider,
         model: form.value.model,
+        // 空 → 不传（后端「保持不改」；显式清空端点不设路径——预设厂商地址系统管理）
         base_url: form.value.base_url || undefined,
         workspace_path: form.value.workspace_path || null,
         // 头像双层 Option：null=清空 / string=设定（表单态即真值，无「不改」分支）
@@ -515,6 +519,13 @@ function confirmDelete() {
               <label class="field-label">
                 API Key
                 <span v-if="requiresKey && !isEdit" class="req">*</span>
+                <a
+                  v-if="requiresKey && keyApplyUrl"
+                  :href="keyApplyUrl"
+                  target="_blank"
+                  class="key-apply-link"
+                  title="打开厂商 Key 管理页（外链）"
+                >去申请<ExternalLink :size="10" /></a>
               </label>
               <div class="input-wrap" :class="{ 'has-badge': isEdit && requiresKey }">
                 <input
@@ -556,6 +567,8 @@ function confirmDelete() {
                 :placeholder="urlPlaceholder"
                 :title="urlEditable ? undefined : '预设厂商地址由系统管理（测试连接会自动匹配端点）；如需自定义端点，请在上方模型框手动输入模型名'"
               />
+              <!-- 测试连接副文案常显（原 hover tooltip 不可发现；「测试连接」是拉模型唯一入口） -->
+              <p class="field-hint">「测试连接」验证配置并拉取模型列表；在线服务需先填 API Key，本机/自建端点填好 URL 即可</p>
               <div v-if="endpointOptions.length > 1" class="endpoint-row" title="智谱标准/Coding 端点 key 不通用：Coding 套餐额度只在 Coding 端点生效">
                 <button
                   v-for="opt in endpointOptions"
@@ -709,6 +722,17 @@ function confirmDelete() {
   color: var(--ip-color-text-secondary);
 }
 .req { color: var(--ip-danger-base); }
+/* Key 申请直达（注册表 key_url；仅需要 Key 的厂商显示） */
+.key-apply-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: var(--ip-text-micro-size);
+  font-weight: var(--ip-font-weight-regular);
+  color: var(--ip-color-text-tertiary);
+  text-decoration: none;
+}
+.key-apply-link:hover { color: var(--ip-color-text-secondary); }
 .hint {
   font-weight: var(--ip-font-weight-regular);
   color: var(--ip-color-text-tertiary);

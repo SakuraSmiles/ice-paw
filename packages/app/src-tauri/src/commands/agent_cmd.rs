@@ -280,6 +280,24 @@ fn default_url_on_provider_switch(provider_changed: bool, new_provider: Option<&
         .filter(|url| !url.is_empty())
 }
 
+/// base_url 双层 Option 解析（纯函数，便于测试回归）。
+///
+/// 显式 `Some(opt)` → 照设/照清（Some(None)=清空端点是合法显式意图）；
+/// absent → 仅「换厂商且有注册表默认」时跟随（端点跟随厂商）；否则 `None`
+/// = 保持不改。此前 absent 一律映射成 `Some(switch_url)`，未换厂商时变成
+/// `Some(None)` = **静默清空端点**——任何不带 base_url 的 update（含提案卡）
+/// 都会抹掉测试连接选定的端点；custom 换入无默认也被清空（与 B 修注释
+/// 「保持不改」矛盾）。与 MockAgentCmd 的 if-let-Some 语义对齐。
+fn resolve_base_url_arg<'a>(
+    explicit: Option<Option<&'a str>>,
+    switch_url: Option<&'a str>,
+) -> Option<Option<&'a str>> {
+    match explicit {
+        Some(opt) => Some(opt),
+        None => switch_url.map(|url| Some(url)),
+    }
+}
+
 impl SqlAgentCmd {
     pub fn new(app: AppHandle, pool: SqlitePool) -> Self {
         Self { app, pool }
@@ -303,16 +321,26 @@ impl SqlAgentCmd {
             .ok()
             .and_then(|v| v.into_iter().next())
     }
+
+    /// 组装前端 Agent DTO：合并 agent.yaml + `has_api_key` 真相实查。
+    /// models.rs 的旧值 `!api_key_ref.is_empty()` 恒真（api_key_ref 建行时就被填成
+    /// agent id），「未配置 Key」徽标形同虚设。真相 = 免 key 厂商（ollama/custom）
+    /// 恒 true；要求 key 的厂商查 stronghold 记录存在（空占位记录只会出现在免 key
+    /// 厂商，create/rotate 的必填校验保证）。
+    fn agent_dto(&self, row: AgentRow) -> Agent {
+        let has_api_key = !provider_requires_key(&row.provider)
+            || crypto::has_api_key(&self.app, &row.api_key_ref).unwrap_or(false);
+        let mut agent = Agent::from_row_with_file_config(row);
+        agent.has_api_key = has_api_key;
+        agent
+    }
 }
 
 #[async_trait]
 impl AgentCmd for SqlAgentCmd {
     async fn list(&self) -> AppResult<Vec<Agent>> {
         let rows = repo::agent::list(&self.pool).await?;
-        Ok(rows
-            .into_iter()
-            .map(Agent::from_row_with_file_config)
-            .collect())
+        Ok(rows.into_iter().map(|row| self.agent_dto(row)).collect())
     }
 
     async fn get(&self, agent_id: &str) -> AppResult<AgentRow> {
@@ -433,7 +461,7 @@ impl AgentCmd for SqlAgentCmd {
             );
         }
 
-        Ok(Agent::from_row_with_file_config(row))
+        Ok(self.agent_dto(row))
     }
 
     async fn update(&self, input: AgentUpdate) -> AppResult<Agent> {
@@ -451,10 +479,10 @@ impl AgentCmd for SqlAgentCmd {
             .zip(old_row.as_ref().map(|r| r.provider.as_str()))
             .is_some_and(|(new, old)| new != old);
         let switch_url = default_url_on_provider_switch(provider_changed, input.provider.as_deref());
-        let base_url_arg = match &input.base_url {
-            Some(opt) => Some(opt.as_deref()),
-            None => Some(switch_url.as_deref()),
-        };
+        let base_url_arg = resolve_base_url_arg(
+            input.base_url.as_ref().map(|o| o.as_deref()),
+            switch_url.as_deref(),
+        );
         let row = repo::agent::update(
             &self.pool,
             &input.id,
@@ -534,7 +562,7 @@ impl AgentCmd for SqlAgentCmd {
             }
         }
 
-        Ok(Agent::from_row_with_file_config(row))
+        Ok(self.agent_dto(row))
     }
 
     async fn rotate_key(&self, input: RotateAgentKey) -> AppResult<Agent> {
@@ -933,6 +961,25 @@ mod tests {
         assert_eq!(default_url_on_provider_switch(true, Some("custom")), None);
         assert_eq!(default_url_on_provider_switch(true, Some("nope")), None);
         assert_eq!(default_url_on_provider_switch(true, None), None);
+    }
+
+    #[test]
+    fn base_url_absent_keeps_endpoint() {
+        // absent + switch_url=None（未换厂商，或换入 custom 无默认）→ None（保持
+        // 不改；回归：曾一律映射成 Some(None) 静默清空端点）
+        assert_eq!(resolve_base_url_arg(None, None), None);
+        // absent + 换厂商有默认 → Some(Some(默认))
+        assert_eq!(
+            resolve_base_url_arg(None, Some("https://api.deepseek.com")),
+            Some(Some("https://api.deepseek.com"))
+        );
+        // 显式设值 → 照设
+        assert_eq!(
+            resolve_base_url_arg(Some(Some("https://x.example")), None),
+            Some(Some("https://x.example"))
+        );
+        // 显式清空 → 照清（合法显式意图）
+        assert_eq!(resolve_base_url_arg(Some(None), None), Some(None));
     }
 
     #[test]

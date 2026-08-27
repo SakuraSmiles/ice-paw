@@ -141,18 +141,48 @@ async function approve() {
       });
     } else {
       const a = action.value as ProposalActionUpdateAgent;
+      // 编辑值覆盖优先：批准的东西 = 卡片上现在显示的值（创建路径同款形状）
+      const edited = (key: string): string | undefined =>
+        editing.value && editFields.value[key] !== undefined ? editFields.value[key] : undefined;
+      const val = (key: string, orig: string | null | undefined): string | undefined => {
+        const e = edited(key);
+        if (e !== undefined) return e.trim() === "" ? undefined : e.trim();
+        return orig ?? undefined;
+      };
+      // ① 出生证字段 → update_agent（DB 列）
       await bridge.agents.update({
         id: a.agent_id,
-        name: a.name ?? undefined,
-        provider: a.provider ?? undefined,
-        model: a.model ?? undefined,
-        system_prompt: a.system_prompt ?? undefined,
-        base_url: a.base_url ?? undefined,
-        temperature: a.temperature ?? undefined,
-        max_tokens: a.max_tokens ?? undefined,
-        enabled_tools: a.enabled_tools ?? undefined,
-        workspace_path: a.workspace_path ?? undefined,
+        name: val("name", a.name),
+        provider: val("provider", a.provider),
+        model: val("model", a.model),
+        base_url: val("base_url", a.base_url),
+        workspace_path: val("workspace_path", a.workspace_path),
       });
+      // ② 旋钮字段 → yaml 通道（出生 yaml 的活行遮蔽 DB 列，写 DB 是「假生效」；
+      //    旋钮唯一权威 = agent.yaml，update_agent 只管出生证）
+      if (a.system_prompt != null || edited("system_prompt")) {
+        const sp = edited("system_prompt")?.trim() || a.system_prompt;
+        if (sp) await bridge.agents.setSystemPrompt(a.agent_id, sp);
+      }
+      const applyNum = (key: "temperature" | "max_tokens", orig: number | null | undefined) => {
+        if (orig == null && edited(key) === undefined) return Promise.resolve();
+        const e = edited(key);
+        const v = e === undefined ? orig : e.trim() === "" ? null : Number(e);
+        if (v === undefined) return Promise.resolve();
+        if (typeof v === "number" && Number.isNaN(v)) {
+          return Promise.reject(new Error(`${key} 不是合法数字`));
+        }
+        return bridge.agents.setYamlField(a.agent_id, key, v);
+      };
+      await applyNum("temperature", a.temperature);
+      await applyNum("max_tokens", a.max_tokens);
+      if (a.enabled_tools != null || edited("enabled_tools")) {
+        const e = edited("enabled_tools");
+        const list = e !== undefined
+          ? e.split(",").map((s) => s.trim()).filter(Boolean)
+          : (a.enabled_tools ?? []);
+        await bridge.agents.setEnabledTools(a.agent_id, list);
+      }
       // Word 样式偏好走 agent.yaml 专用命令（纯文件旁路，不进 DB 字段）；
       // `""` = 摘除语义由后端命令解释
       if (a.word_style_profile !== undefined) {

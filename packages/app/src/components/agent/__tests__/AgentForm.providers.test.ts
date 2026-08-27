@@ -41,12 +41,12 @@ const GLM_CODING_URL = "https://open.bigmodel.cn/api/coding/paas/v4";
 // 后端注册表镜像（子集足够驱动表单分支；ollama/custom/glm-coding 均 hidden——
 // Ollama 不进下拉：本地服务地址因人而异，手输模型名 + 填本机 URL 覆盖）
 const PROVIDERS: ProviderInfo[] = [
-  { name: "openai", protocol: "openai", default_url: "https://api.openai.com", alt_urls: [], label: "OpenAI", note: null, requires_key: true, requires_base_url: false, hidden: false, models: ["gpt-4o", "gpt-4o-mini"] },
-  { name: "glm", protocol: "openai", default_url: GLM_STD_URL, alt_urls: [["Coding 端点", GLM_CODING_URL]], label: "智谱", note: null, requires_key: true, requires_base_url: false, hidden: false, models: ["glm-5-turbo", "glm-4-flash"] },
-  { name: "deepseek", protocol: "openai", default_url: "https://api.deepseek.com", alt_urls: [], label: "DeepSeek", note: null, requires_key: true, requires_base_url: false, hidden: false, models: ["deepseek-chat"] },
-  { name: "ollama", protocol: "openai", default_url: "http://localhost:11434/v1", alt_urls: [], label: "Ollama 本地", note: "已下线", requires_key: false, requires_base_url: false, hidden: true, models: [] },
-  { name: "glm-coding", protocol: "openai", default_url: GLM_CODING_URL, alt_urls: [], label: "智谱 GLM Coding", note: "旧入口", requires_key: true, requires_base_url: false, hidden: true, models: ["glm-5.2"] },
-  { name: "custom", protocol: "openai", default_url: "", alt_urls: [], label: "自定义（OpenAI 兼容）", note: null, requires_key: false, requires_base_url: true, hidden: true, models: [] },
+  { name: "openai", protocol: "openai", default_url: "https://api.openai.com", alt_urls: [], label: "OpenAI", note: null, requires_key: true, requires_base_url: false, key_url: null, hidden: false, models: ["gpt-4o", "gpt-4o-mini"] },
+  { name: "glm", protocol: "openai", default_url: GLM_STD_URL, alt_urls: [["Coding 端点", GLM_CODING_URL]], label: "智谱", note: null, requires_key: true, requires_base_url: false, key_url: null, hidden: false, models: ["glm-5-turbo", "glm-4-flash"] },
+  { name: "deepseek", protocol: "openai", default_url: "https://api.deepseek.com", alt_urls: [], label: "DeepSeek", note: null, requires_key: true, requires_base_url: false, key_url: null, hidden: false, models: ["deepseek-chat"] },
+  { name: "ollama", protocol: "openai", default_url: "http://localhost:11434/v1", alt_urls: [], label: "Ollama 本地", note: "已下线", requires_key: false, requires_base_url: false, key_url: null, hidden: true, models: [] },
+  { name: "glm-coding", protocol: "openai", default_url: GLM_CODING_URL, alt_urls: [], label: "智谱 GLM Coding", note: "旧入口", requires_key: true, requires_base_url: false, key_url: null, hidden: true, models: ["glm-5.2"] },
+  { name: "custom", protocol: "openai", default_url: "", alt_urls: [], label: "自定义（OpenAI 兼容）", note: null, requires_key: false, requires_base_url: true, key_url: null, hidden: true, models: [] },
 ];
 
 function editAgent(overrides?: Partial<Agent>): Agent {
