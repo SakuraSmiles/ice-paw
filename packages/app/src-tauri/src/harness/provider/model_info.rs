@@ -30,8 +30,9 @@ pub fn default_context_window(_provider: &str, model: &str) -> Option<usize> {
     if m.contains("glm-5-turbo") || m.contains("glm5-turbo") {
         return Some(200_000);
     }
-    // GLM-5.1 / 5.2：带 [1m] 后缀 → 1M（显式解锁）；裸名 → 200K 基准
-    if m.contains("glm-5.1") || m.contains("glm-5.2") {
+    // GLM-5.1 / 5.2 / 5.3 系（含 5.3-Flash）：官方页声明 1M 支持，但 5.x 的
+    // 1M 一直需 model 名带 [1m] 后缀显式解锁（智谱约束）；裸名按厂商基准 200K
+    if m.contains("glm-5.1") || m.contains("glm-5.2") || m.contains("glm-5.3") {
         return if m.contains("[1m]") {
             Some(1_048_576)
         } else {
@@ -74,6 +75,8 @@ pub fn default_max_output_tokens(_provider: &str, model: &str) -> Option<usize> 
         || m.contains("glm5-turbo")
         || m.contains("glm-5.1")
         || m.contains("glm-5.2")
+        || m.contains("glm-5.3")
+        || m.contains("glm-5v")
         || m.contains("claude")
         || m.contains("gpt-4")
         || m.contains("gpt-4o")
@@ -113,10 +116,20 @@ pub fn model_capabilities(_provider: &str, model: &str) -> ModelCapabilities {
         || m.contains("claude-sonnet") || m.contains("claude-opus") || m.contains("claude-haiku")
         || m.contains("claude-fable")
         || m.contains("gemini")              // Gemini 1.0+ 全系视觉
-        || m.contains("glm-4v") || m.contains("glm-4.6v") || m.contains("glm4v")  // 智谱视觉系列
+        // 智谱视觉系列：4v/4.6v 老三样 + 4.5v/4.1v（不含 "glm-4v" 子串需单列）
+        // + glm-5v 系（GLM-5V-Turbo 多模态 Coding 基座）+ glm-5.3-flash
+        //（GLM-5 系首个原生多模态，2026-08）。
+        // ⚠️ 只认 "glm-5.3-flash" 不认 "glm-5.3"——5.3 旗舰是纯文本模型，
+        // 宽匹配会把图硬发给非视觉模型 → 400。
+        || m.contains("glm-4v") || m.contains("glm-4.6v") || m.contains("glm4v")
+        || m.contains("glm-4.5v") || m.contains("glm-4.1v")
+        || m.contains("glm-5v") || m.contains("glm-5.3-flash")
         || m.contains("qwen-vl") || m.contains("qwen2-vl") || m.contains("qwenvl") // 通义视觉
         || m.contains("minimax-m3")          // MiniMax M3 支持视觉（M2.x 不支持，不匹配 m3）
-        || m.contains("deepseek-vl"); // DeepSeek 视觉系列（v4 chat 不含 -vl → 保守 false）
+        // DeepSeek 视觉两线：开源 VL 系列 + API 实验模型 deepseek-v4-flash-vision-exp
+        //（2026-08 上线；连字符锚定 "-vision" 防 "provision" 类误报）。v4 chat
+        // 纯文本不含 -vl/-vision → 保守 false
+        || m.contains("deepseek-vl") || m.contains("-vision");
     ModelCapabilities { vision }
 }
 
@@ -180,6 +193,20 @@ mod tests {
     }
 
     #[test]
+    fn glm_53_family_same_suffix_rule() {
+        // 5.3 / 5.3-Flash（2026-08 发布）沿用 5.x [1m] 后缀约束
+        assert_eq!(default_context_window("glm", "glm-5.3"), Some(200_000));
+        assert_eq!(
+            default_context_window("glm", "glm-5.3-flash"),
+            Some(200_000)
+        );
+        assert_eq!(
+            default_context_window("glm", "GLM-5.3-Flash[1M]"),
+            Some(1_048_576)
+        );
+    }
+
+    #[test]
     fn claude_family_200k_window_and_vision() {
         // 目录现役系列（②-5）+ 带日期戳的存量变体，家族名兜底全覆盖
         for model in [
@@ -233,6 +260,20 @@ mod tests {
         // 裸名不再因缺后缀被排除（输出上限与窗口后缀无关）
         assert_eq!(default_max_output_tokens("glm", "glm-5.2"), Some(32_768));
         assert_eq!(default_max_output_tokens("glm", "glm-5.1"), Some(32_768));
+        // 5.3 系（官方上限 128K）与 5V 系：保守 32K，用户可 yaml 显式调高
+        assert_eq!(default_max_output_tokens("glm", "glm-5.3"), Some(32_768));
+        assert_eq!(
+            default_max_output_tokens("glm", "glm-5.3-flash"),
+            Some(32_768)
+        );
+        assert_eq!(
+            default_max_output_tokens("glm", "glm-5v-turbo"),
+            Some(32_768)
+        );
+        assert_eq!(
+            default_max_output_tokens("deepseek", "deepseek-v4-flash-vision-exp"),
+            Some(32_768)
+        );
     }
 
     #[test]
@@ -252,6 +293,14 @@ mod tests {
         assert!(model_capabilities("glm", "glm-4v").vision);
         assert!(model_capabilities("", "gemini-1.5-pro").vision);
         assert!(model_capabilities("qwen", "qwen2-vl-72b").vision);
+        // 2026-08 新增：GLM-5 系首个原生多模态 + 5V 系 + 4.5v/4.1v 存量补漏
+        assert!(model_capabilities("glm", "glm-5.3-flash").vision);
+        assert!(model_capabilities("glm", "GLM-5.3-Flash").vision);
+        assert!(model_capabilities("glm", "glm-5v-turbo").vision);
+        assert!(model_capabilities("glm", "glm-4.5v").vision);
+        assert!(model_capabilities("glm", "glm-4.1v-thinking").vision);
+        // DeepSeek API 视觉实验模型（2026-08-21 上线）
+        assert!(model_capabilities("deepseek", "deepseek-v4-flash-vision-exp").vision);
     }
 
     #[test]
@@ -262,6 +311,10 @@ mod tests {
         assert!(!model_capabilities("deepseek", "deepseek-v4-pro").vision);
         // glm-5.2（coding）不含 4v → 保守 false
         assert!(!model_capabilities("glm", "glm-5.2").vision);
+        // ⚠️ glm-5.3 旗舰是纯文本（官方文档明示「仅支持处理文本模态」）——
+        // 只有 -flash 后缀是多模态，宽匹配 "glm-5.3" 会把图硬发给它 → 400
+        assert!(!model_capabilities("glm", "glm-5.3").vision);
+        assert!(!model_capabilities("glm-coding", "glm-5.3[1m]").vision);
         // 未知模型保守 false
         assert!(!model_capabilities("", "some-custom-llm").vision);
     }
