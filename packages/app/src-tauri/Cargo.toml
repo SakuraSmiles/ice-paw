@@ -123,10 +123,12 @@ windows-sys = { version = "0.59", features = [
     "Win32_Graphics_Gdi",
     "Win32_UI_WindowsAndMessaging",
     # computer use（harness/mcp/screen）：DWM cloak 判定（list_windows 过滤 UWP 幽灵窗）/
-    # 进程 pid（排除自身窗口）/ SendInput 鼠标键盘模拟
+    # 进程 pid（排除自身窗口）/ SendInput 鼠标键盘模拟 / PrintWindow（windows-sys 0.59
+    # 把它放进了 Xps 打印路径的 feature，别处找不到）
     "Win32_Graphics_Dwm",
     "Win32_System_Threading",
     "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_Storage_Xps",
 ] }
 
 # === 集成测试 ===
