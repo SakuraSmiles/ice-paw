@@ -12,11 +12,17 @@
 // 重导出分类器，供 harness 各处（modal / attachment tool）通过 `error_mapping` 统一入口访问。
 pub(crate) use crate::error::{classify_llm_error, LlmErrorKind};
 
-/// 把 AppError 映射为前端可读的 kind 字符串
+/// 把 AppError 映射为前端可读的 kind 字符串。
+/// LLM 错误展开细类 `llm.<slug>`（如 `llm.auth`）——前端错误横幅据此挂行动按钮
+/// （鉴权/余额类 →「去检查配置」），分类真相源在 [`crate::error::classify_llm_error`]。
 pub(crate) fn error_kind(e: &crate::error::AppError) -> String {
     match e {
-        crate::error::AppError::Llm(_) => "llm".into(),
-        crate::error::AppError::Stream(_) => "stream".into(),
+        crate::error::AppError::Llm(msg) => {
+            format!("llm.{}", classify_llm_error(msg).slug())
+        }
+        crate::error::AppError::Stream(msg) => {
+            format!("llm.{}", classify_llm_error(msg).slug())
+        }
         crate::error::AppError::Cancelled => "cancelled".into(),
         crate::error::AppError::AuthorizationRequired { .. } => "auth_required".into(),
         _ => "internal".into(),
@@ -114,6 +120,25 @@ mod tests {
         // 旧实现未覆盖网络层措辞 → passthrough 英文；现统一友好提示
         assert!(friendly_error("HTTP 502: bad gateway").contains("网络"));
         assert!(friendly_error("vision 请求失败 (glm): connection timeout").contains("网络"));
+    }
+
+    // ---- kind 细类展开（前端行动按钮的路由依据）----
+    #[test]
+    fn error_kind_llm_slug_expansion() {
+        use crate::error::AppError;
+        assert_eq!(
+            error_kind(&AppError::Llm("HTTP 401 Unauthorized: invalid api key".into())),
+            "llm.auth"
+        );
+        assert_eq!(
+            error_kind(&AppError::Stream("HTTP 429: rate_limit_exceeded".into())),
+            "llm.rate_limited"
+        );
+        assert_eq!(error_kind(&AppError::Cancelled), "cancelled");
+        assert_eq!(
+            error_kind(&AppError::NotFound { resource: "x", id: "1".into() }),
+            "internal"
+        );
     }
 
     // ---- 未识别：回落原文（可调试）----

@@ -295,11 +295,8 @@ export async function useChatEvents(): Promise<() => void> {
     chat.resetRoundStreaming();
     chat.lastFinishReason = null;
     // 错误横幅按会话隔离：只写到出错会话（此处 cid === activeConvId，已过上方 early-return）
-    {
-      const m = new Map(chat.lastErrors);
-      m.set(cid, friendlyError(e.payload.message));
-      chat.lastErrors = m;
-    }
+    // kind 为后端单一真相源 slug（llm.auth 等），横幅据此挂「去检查配置」行动按钮
+    chat.setConvError(cid, friendlyError(e.payload.message), e.payload.kind ?? "internal");
     // 用 message_id 定位出错的 assistant（多轮工具下不能遍历改所有 assistant）
     const errId = e.payload.message_id;
     chat.messages = chat.messages.map((msg) => {

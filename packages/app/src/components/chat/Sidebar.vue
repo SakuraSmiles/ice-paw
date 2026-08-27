@@ -95,7 +95,7 @@ import AgentPicker from "./AgentPicker.vue";
 const chat = useChatStore();
 const agent = useAgentStore();
 // 新建会话逻辑（与欢迎页共用 useNewConversation，保证项目内限成员一致）
-const { showPicker, pickerAgentIds, startNew, onPickAgent } = useNewConversation();
+const { showPicker, pickerAgentIds, ctaKind, startNew, onPickAgent } = useNewConversation();
 const searchQuery = ref("");
 
 // MA-1：侧栏只显示用户会话——delegation 后台子会话不污染主列表（可见入口是
@@ -257,7 +257,9 @@ function timeAgoLabel(dateStr: string): string {
       </div>
       <div v-else-if="searchQuery && filteredConversations.length === 0" key="conv-empty-search" class="conv-empty">无匹配对话</div>
       <div v-else-if="!searchQuery && scopedConversations.length === 0 && agent.loaded" key="conv-empty-scope" class="conv-empty">
-        {{ scopeProjectId ? "项目内暂无对话" : "暂无对话" }}
+        <!-- 空态即引导：全新用户给出下一步方向，「新建对话」按钮此刻的行为就是去创建智能体 -->
+        <template v-if="ctaKind === 'no-agents'">还没有智能体——点上方「新建对话」先创建一个</template>
+        <template v-else>{{ scopeProjectId ? "项目内暂无对话" : "暂无对话" }}</template>
       </div>
 
       <button

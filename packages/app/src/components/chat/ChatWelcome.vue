@@ -13,14 +13,17 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useRouter } from "vue-router";
+import { TriangleAlert } from "@lucide/vue";
 import { useChatStore } from "../../stores/chat";
 import { useProjectStore } from "../../stores/project";
+import { useAgentStore } from "../../stores/agent";
 import { useNewConversation } from "../../composables/useNewConversation";
 import AgentPicker from "./AgentPicker.vue";
 
 const router = useRouter();
 const chat = useChatStore();
 const project = useProjectStore();
+const agentStore = useAgentStore();
 const { showPicker, pickerAgentIds, ctaKind, ctaLabel, startNew, onPickAgent } = useNewConversation();
 
 const inProject = computed(() => project.activeProjectId !== null);
@@ -34,6 +37,21 @@ const descText = computed(() => {
   if (inProject.value) return "选择一位项目成员开始对话";
   return "选择一位助手开始对话";
 });
+
+// ----- Key 配置盲区引导：可选 agent 全部未配 key 时警示（部分缺 key 不提示，避免噪音） -----
+const selectableAgents = computed(() => {
+  const ids = inProject.value
+    ? (project.activeProject?.agents ?? []).map((a) => a.agent_id)
+    : null;
+  return ids ? agentStore.list.filter((a) => ids.includes(a.id)) : agentStore.list;
+});
+const allKeyless = computed(
+  () =>
+    agentStore.loaded &&
+    ctaKind.value === "new-chat" &&
+    selectableAgents.value.length > 0 &&
+    selectableAgents.value.every((a) => !a.has_api_key),
+);
 
 // ----- 项目背景注入状态条（仅项目空间；失败/不可用静默隐藏，非关键路径） -----
 const ctxState = ref<"loading" | "ready" | "empty" | "hidden">("hidden");
@@ -88,6 +106,11 @@ function openContextSettings() {
           <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
         </svg>
         <span>{{ ctaLabel }}</span>
+      </button>
+      <button v-if="allKeyless" class="keyless-pill" @click="router.push('/settings/agents')">
+        <TriangleAlert :size="12" />
+        <span>智能体未配置 API Key，发送消息会失败</span>
+        <span class="keyless-action">去配置</span>
       </button>
       <button
         v-if="ctxState === 'ready' || ctxState === 'empty'"
@@ -197,4 +220,21 @@ function openContextSettings() {
 }
 .ctx-pill:hover { border-color: var(--ip-primary-300); }
 .ctx-pill-action { font-weight: var(--ip-font-weight-medium); text-decoration: underline; text-underline-offset: 2px; }
+
+/* Key 缺失警示条（语义 warning 三件套，形状与 ctx-pill 同族） */
+.keyless-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--ip-warning-border);
+  border-radius: var(--ip-radius-full);
+  background-color: var(--ip-warning-bg);
+  color: var(--ip-warning-text);
+  font-family: inherit;
+  font-size: var(--ip-text-caption-size);
+  cursor: pointer;
+}
+.keyless-action { font-weight: var(--ip-font-weight-medium); text-decoration: underline; text-underline-offset: 2px; }
 </style>

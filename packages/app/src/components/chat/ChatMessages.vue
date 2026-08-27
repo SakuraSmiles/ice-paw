@@ -12,6 +12,7 @@
 -->
 <script setup lang="ts">
 import { watch, nextTick, ref, computed, onActivated } from "vue";
+import { useRouter } from "vue-router";
 import { useChatStore } from "../../stores/chat";
 import { formatTime, formatDateLabel } from "../../utils/time";
 import MarkdownRenderer from "./MarkdownRenderer.vue";
@@ -33,7 +34,20 @@ import { memoized } from "../../utils/blockMemo";
 import type { Message, MessageRole, PlanItem } from "../../types";
 
 const chat = useChatStore();
+const router = useRouter();
 const listRef = ref<HTMLElement | null>(null);
+
+// 错误横幅行动按钮：这批 kind 的「怎么办」落在 agent 设置页（Key/端点/套餐），
+// slug 与后端 error_mapping 的 LlmErrorKind::slug 一一对应，前端只做集合匹配
+const CONFIG_FIXABLE_ERROR_KINDS = new Set([
+  "llm.auth",
+  "llm.forbidden",
+  "llm.insufficient_balance",
+  "llm.glm_resource_pack",
+]);
+const errorActionable = computed(() =>
+  chat.lastErrorKind ? CONFIG_FIXABLE_ERROR_KINDS.has(chat.lastErrorKind) : false,
+);
 
 // 滚动跟随 + 分页 + 阅读位置记忆（逻辑抽到 composable：自动贴底 / 上滚暂停 /
 // 顶部触发分页 / 每会话滚动锚点——切走再回来按意图贴底或原位恢复）
@@ -715,7 +729,8 @@ const RESUMABLE_REASONS = new Set([
        绝对定位子元素若挂在滚动容器内会随内容滚动，位置漂移） -->
   <div class="messages-wrap">
     <div ref="listRef" class="messages-area">
-    <!-- 错误提示（UI-2 批次三：ErrorBanner 化——有失败发送可重发，否则仅关闭） -->
+    <!-- 错误提示（UI-2 批次三：ErrorBanner 化——有失败发送可重发，否则仅关闭；
+         配置类错误附「去检查配置」直达 agent 设置，怎么办不再只有一句话） -->
     <ErrorBanner
       v-if="chat.lastError"
       variant="banner"
@@ -723,8 +738,10 @@ const RESUMABLE_REASONS = new Set([
       :title="chat.lastFailedSend ? '发送失败' : '请求出错'"
       :detail="chat.lastError"
       :retry-label="chat.lastFailedSend ? '重试' : null"
+      :action-label="errorActionable ? '去检查配置' : undefined"
       dismissible
       @retry="retryLastSend"
+      @action="router.push('/settings/agents')"
       @dismiss="chat.clearConvError()"
     />
     <!-- 分页加载指示器 -->

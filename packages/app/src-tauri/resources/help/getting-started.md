@@ -1,26 +1,26 @@
 ---
 title: 快速上手（首个 agent 与 API Key）
-summary: 从零开始：创建 agent、配置 provider/model/API Key、发送第一条消息。新用户必读。
+summary: 从零开始：创建 agent、选模型、配 API Key、发送第一条消息。新用户必读。
 tags: [快速上手, 新手, 开始, 创建agent, API Key, provider, model, base_url, 第一次使用, 入门]
 ---
 
 # 快速上手（首个 agent 与 API Key）
 
-ice-paw 通过 **agent** 调用大模型。第一次使用，按这三步就能聊起来。
+IcePaw 通过 **agent** 调用大模型。第一次使用，按这三步就能聊起来。
 
-## 1. 创建 agent 并配置模型
+## 1. 创建 agent 并选择模型
 
-进入 **设置 → Agent**，新建一个 agent，关键配置：
+点左侧栏底部的 **设置** 进入 **Agent** 页，新建一个 agent。表单只管「出生证」，关键项：
 
 | 字段 | 说明 |
 |---|---|
-| Provider | 模型服务商（如智谱 GLM、OpenAI、DeepSeek 等，或 Anthropic / OpenAI 兼容端点） |
-| Model | 具体模型名，如 `glm-5.2`、`gpt-4o` 等 |
-| Base URL | 走兼容端点时填（如智谱 Anthropic 兼容端点）；官方直连一般留空 |
-| API Key | 该 provider 的接口密钥，加密保存 |
-| System Prompt | agent 的人设/指令（也可在 agent.yaml 里改） |
+| 名称 / ID / 头像 | agent 的身份标识 |
+| 模型 | 合并下拉：按厂商分组选模型（智谱、OpenAI、DeepSeek、Anthropic 等），选中即锁定该厂商官方端点；目录外模型直接手输名字（落「自定义」，需自己填 API URL） |
+| API Key | 该厂商的接口密钥，加密保存。字段旁有「去申请」直达厂商 Key 管理页 |
+| API URL | 预设厂商由系统管理（只读显示实际生效地址）；自定义端点必填。旁边的「测试连接」一次验证配置并拉取模型列表 |
+| 工作区 | agent 的文件目录。旁边的「风格预设」可一键选一套 system_prompt 起点 |
 
-> API Key 被加密存储，不会明文落盘。
+> API Key 加密存储，不明文落盘。编辑 agent 时 Key 留空即保持现有，徽标显示「已配置/未配置」。
 
 ## 2. 回到对话页选择该 agent
 
@@ -32,14 +32,15 @@ ice-paw 通过 **agent** 调用大模型。第一次使用，按这三步就能�
 
 ## 常见卡点
 
-- **发不出消息 / 报错**：99% 是 API Key 没配、配错，或 provider/model/base_url 不匹配。回设置页核对。
-- **用智谱 GLM**：走 Anthropic 兼容端点，provider 选对、填好 base_url 和 Key。
+- **发不出消息 / 报错**：多数是 API Key 没配、配错，或模型与厂商不匹配。错误横幅带「去检查配置」按钮，点它直达 agent 设置页。
+- **用智谱 GLM**：直接在模型下拉选「智谱」组的模型即可；标准/Coding 端点由「测试连接」自动匹配，不需要手填地址。
+- **本地模型（Ollama 等）**：在模型框手输模型名，API URL 填本机地址（如 `http://localhost:11434/v1`），无需 Key。
 - **响应慢 / 卡住**：见「常见问题」里的「对话卡住怎么办」。
 
 ## 进阶
 
 配好基础对话后，可以接着开：
-- **知识库（RAG）**：让 agent 检索你的文档 → 见「配置知识库与 embedding」。
+- **知识库（KB）**：让 agent 检索你的文档 → 见「配置知识库与 embedding」。
 - **工具（MCP）**：让 agent 读写文件、跑命令 → 见「配置 MCP 工具」。
 - **agent.yaml**：细调人设/温度/预算/钩子 → 见「agent.yaml 进阶配置」。
 

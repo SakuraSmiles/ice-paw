@@ -263,18 +263,30 @@ export const useChatStore = defineStore("chat", () => {
   const pendingProposal = computed(() =>
     activeConvId.value ? pendingProposals.value.get(activeConvId.value) ?? null : null,
   );
-  /** 每会话最近一次发送错误的可见提示（chat:error 携带的用户可读消息）。
+  /** 每会话最近一次发送错误（chat:error 的用户可读消息 + 后端分类 kind）。
    *  按 conversation_id 隔离——A 会话的错误横幅不会串到 B 会话顶部。
+   *  kind 是后端 error_mapping 单一真相源产的 slug（如 `llm.auth`），前端只做
+   *  集合匹配挂行动按钮，不重复 substring 分类。
    *  （chat:error 仅在错误属于当前激活会话时才写入；切会话时 computed 自然取目标会话条目）*/
-  const lastErrors = ref<Map<string, string>>(new Map());
+  const lastErrors = ref<Map<string, { message: string; kind: string }>>(new Map());
   const lastError = computed(() =>
-    activeConvId.value ? lastErrors.value.get(activeConvId.value) ?? null : null,
+    activeConvId.value ? lastErrors.value.get(activeConvId.value)?.message ?? null : null,
+  );
+  const lastErrorKind = computed(() =>
+    activeConvId.value ? lastErrors.value.get(activeConvId.value)?.kind ?? null : null,
   );
 
   /** 最近一次失败发送的内容（UI-2 批次三：错误横幅「重试」的数据源）。
    *  sendMessage 成功进入流式前记录；失败后据此可一键重发同内容。
    *  会话隔离：只保留当前会话的（切会话即弃——旧会话的失败由用户自行去该会话处理）。*/
   const lastFailedSend = ref<{ content: string; blocks: import("../types").ContentBlock[] } | null>(null);
+
+  /** 写入会话错误横幅（唯一入口，message 与 kind 成对出现不漂移）。*/
+  function setConvError(cid: string, message: string, kind: string) {
+    const m = new Map(lastErrors.value);
+    m.set(cid, { message, kind });
+    lastErrors.value = m;
+  }
 
   /** 关闭错误横幅（纯视觉 dismissing，不动任何消息）。*/
   function clearConvError() {
@@ -432,9 +444,7 @@ export const useChatStore = defineStore("chat", () => {
         ? "上一条消息仍在处理中，这条没有发出。等上一条完成或先停止生成，再点重试。"
         : `请求没有送达（${raw}）。这条消息未发出，可点重试。`;
       if (activeConvId.value) {
-        const m = new Map(lastErrors.value);
-        m.set(activeConvId.value, detail);
-        lastErrors.value = m;
+        setConvError(activeConvId.value, detail, "send_failed");
       }
       // 回滚乐观插入的用户气泡（后端已拒，这行从未落库，留着会在切回时凭空消失）
       messages.value = messages.value.filter((msg) => msg.id !== userMsg.id);
@@ -721,8 +731,8 @@ export const useChatStore = defineStore("chat", () => {
     turnFirstIdx,
     // 事件层（useChatEvents）直接读写的内部 Map——暴露供其 mutate；对外读取走下方 computed
     bgStreams, pendingAuthRequests, pendingProposals, lastErrors,
-    lastFailedSend, clearConvError,
-    activeConvAuthRequest, backgroundAuthRequests, pendingProposal, lastError,
+    lastFailedSend, clearConvError, setConvError,
+    activeConvAuthRequest, backgroundAuthRequests, pendingProposal, lastError, lastErrorKind,
     streamingConvIds,
     loadConversations, selectConversation, loadMoreMessages,
     sendMessage, stopGeneration, respondToAuth, respondToProposal,
