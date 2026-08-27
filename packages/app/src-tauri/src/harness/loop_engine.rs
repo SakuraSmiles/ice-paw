@@ -1205,6 +1205,25 @@ async fn stream_loop_inner(
             source_seq: None,
         });
 
+        // 【阶段 G+】截图历史压缩（computer use）：长工具循环里截图工具每轮
+        // 返图，不压缩则下一轮 LLM 调用全量重发所有旧图（O(n²) 膨胀）。只动
+        // in-flight LLM 视图；DB 行与 session-events 保完整图（append-only 不变式）。
+        // 跨回合的 DB 回灌历史由 ScreenshotHistoryStage（pipeline 钩）同规则治理。
+        {
+            let compacted = crate::context::screenshot_history::compact_screenshot_history(
+                &mut ctx.messages,
+                crate::context::screenshot_history::SCREENSHOT_KEEP_LAST_K,
+            );
+            if compacted > 0 {
+                tracing::info!(
+                    target: "ice_paw.chat",
+                    compacted,
+                    "截图历史压缩：仅保留最近 {} 张工具截图（LLM 视图）",
+                    crate::context::screenshot_history::SCREENSHOT_KEEP_LAST_K,
+                );
+            }
+        }
+
         tracing::info!(
             target: "ice_paw.chat",
             "工具执行完成: round={}，准备下一轮 LLM 调用",

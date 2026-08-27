@@ -34,6 +34,7 @@ use sqlx::SqlitePool;
 use tracing::debug;
 
 use crate::context::memory::{MemoryStage, NoopSummaryProvider, SummaryProvider};
+use crate::context::screenshot_history::ScreenshotHistoryStage;
 use crate::context::stages::{
     FinalAssembleStage, HistoryStage, ModalCapabilityStage, OsContextStage, SystemPromptStage,
     TemplateStage, TokenWindowStage, ToolFailureFoldStage,
@@ -262,6 +263,9 @@ impl PipelineRunner {
             Box::new(SystemPromptStage),
             Box::new(HistoryStage),
             Box::new(ToolFailureFoldStage),
+            // 截图历史压缩（computer use）：必须在 MemoryStage/TokenWindowStage
+            // 之前——摘要与 token 裁剪看到的都应是压缩后体积，否则治理晚一拍。
+            Box::new(ScreenshotHistoryStage),
             Box::new(MemoryStage::new(provider)),
             Box::new(TokenWindowStage),
             Box::new(ModalCapabilityStage),
