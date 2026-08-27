@@ -1158,7 +1158,7 @@ const hasFilterResults = computed(() => {
   gap: var(--ip-spacing-2);
   align-items: center;
 }
-.vision-test-btn { flex-shrink: 0; }
+.vision-test-btn { flex-shrink: 0; justify-self: end; }
 .vision-url-input { height: var(--ip-input-h-sm); }
 
 .vision-add-fallback { align-self: flex-start; }
@@ -1314,6 +1314,34 @@ const hasFilterResults = computed(() => {
 }
 
 /* ===== 按钮 ===== */
+/* .btn 次级基类（视觉条目编辑器引入；此前本页只有 .btn-primary——embed 区按钮
+   靠 .embed-switch-actions 后代选择器吃样式，页内裸 .btn 是无样式原生按钮） */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: var(--ip-input-h-sm);
+  padding: 0 12px;
+  font-size: var(--ip-text-body-sm-size);
+  font-weight: var(--ip-font-weight-medium);
+  color: var(--ip-color-text-secondary);
+  background-color: var(--ip-color-bg-tertiary);
+  border: 1px solid var(--ip-color-border-default);
+  border-radius: var(--ip-radius-md);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all var(--ip-duration-fast) var(--ip-ease-out);
+}
+.btn:hover {
+  background-color: var(--ip-color-bg-secondary);
+  border-color: var(--ip-color-border-focus);
+  color: var(--ip-primary-600);
+}
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
 .btn-primary {
   display: flex;
   align-items: center;
