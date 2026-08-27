@@ -372,18 +372,9 @@ pub(crate) async fn execute_tool_round(
                             "工具回传图片，已注入 Image 块给视觉 agent"
                         );
                     } else {
-                        // 非视觉：复用统一适配（OCR 成功→Text；失败/无凭据→诚实提示）。
-                        let candidates = match &agent_opt {
-                            Some(a) => {
-                                crate::harness::modal::gather_vision_candidates(
-                                    &tool_ctx.pool,
-                                    a,
-                                    tool_ctx.api_key.as_deref(),
-                                )
-                                .await
-                            }
-                            None => Vec::new(),
-                        };
+                        // 非视觉：复用统一适配（两档制第二档——平台视觉配置链代读）。
+                        let candidates = crate::harness::modal::gather_vision_candidates(&tool_ctx.pool)
+                            .await;
                         let data = base64::engine::general_purpose::STANDARD.encode(&png);
                         let tmp = vec![ContentBlock::image(data, "image/png")];
                         let outcome = crate::harness::modal::adapt_blocks_for_vision(

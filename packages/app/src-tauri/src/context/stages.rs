@@ -365,13 +365,8 @@ impl PipelineStage for ModalCapabilityStage {
             return Ok(());
         }
 
-        // 非视觉：收集凭据（显式 vision 配置 → agent 自带视觉模型 → GLM 视觉 MCP env）。
-        let candidates = crate::harness::modal::gather_vision_candidates(
-            &ctx.pool,
-            &ctx.agent,
-            ctx.api_key.as_deref(),
-        )
-        .await;
+        // 非视觉：读平台视觉配置链（两档制第二档：主模型 + 可选降级，按序尝试）。
+        let candidates = crate::harness::modal::gather_vision_candidates(&ctx.pool).await;
 
         // 门① 当前用户消息：完整适配（OCR 成功→Text；失败/无凭据→剥离+诚实提示）。
         // chat:processing 心跳：OCR 每张图完成时回调一次（撑住前端 60s 静默超时窗口，
