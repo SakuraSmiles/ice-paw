@@ -171,7 +171,7 @@ impl McpClient for ProposeConfigChangeTool {
                 },
                 "model": {
                     "type": "string",
-                    "description": "【create_agent 必填】模型名称。各厂商推荐：anthropic→claude-sonnet-5 / claude-opus-5 / claude-haiku-4-5；openai→gpt-4o / gpt-4o-mini / o3-mini；deepseek→deepseek-v4-pro / deepseek-v4-flash；glm→glm-5.2 / glm-5-turbo；minimax→MiniMax-M3 / MiniMax-M2.5。简单任务选小模型，复杂推理/编程选大模型。"
+                    "description": "【create_agent 必填】模型名称。各厂商推荐：anthropic→claude-sonnet-5 / claude-opus-5 / claude-haiku-4-5；openai→gpt-4o / gpt-4o-mini / o3-mini；deepseek→deepseek-v4-pro / deepseek-v4-flash / deepseek-v4-flash-vision-exp(视觉)；glm→glm-5.3 / glm-5.3-flash(多模态) / glm-5.2；minimax→MiniMax-M3 / MiniMax-M2.5。简单任务选小模型，复杂推理/编程选大模型。"
                 },
                 "api_key": {
                     "type": "string",

@@ -240,11 +240,13 @@ async function saveEmbedding() {
 // ---- Vision 配置（Phase B：扫描件/图片型 PDF 视觉读取）----
 // 与 embedding 对称但更简：vision 是无状态的（每次 view_attachment_image 现取现用），
 // 切换 provider/model 不需重建任何东西，故无 embedding 那套切换确认 overlay。
-// 仅列真正提供视觉模型的 provider（DeepSeek 标准 API 无视觉模型，故不列）。
+// 仅列真正提供视觉模型的 provider（DeepSeek 于 2026-08 上线视觉实验模型
+// deepseek-v4-flash-vision-exp，故补列）。
 // MiniMax 仅 M3 支持图片输入（M2.x 不支持多模态），故只列 M3。
-const visionProviders = ["智谱 GLM", "OpenAI", "MiniMax"];
+const visionProviders = ["智谱 GLM", "DeepSeek", "OpenAI", "MiniMax"];
 const visionModelMap: Record<string, { provider: string; models: string[]; keyUrl: string }> = {
-  "智谱 GLM": { provider: "glm", models: ["glm-4v-plus", "glm-4.5v", "glm-4v"], keyUrl: "https://open.bigmodel.cn/usercenter/proj-mgmt/apikeys" },
+  "智谱 GLM": { provider: "glm", models: ["glm-5.3-flash", "glm-5v-turbo", "glm-4v-plus", "glm-4.5v", "glm-4v"], keyUrl: "https://open.bigmodel.cn/usercenter/proj-mgmt/apikeys" },
+  "DeepSeek": { provider: "deepseek", models: ["deepseek-v4-flash-vision-exp"], keyUrl: "https://platform.deepseek.com/api_keys" },
   "OpenAI": { provider: "openai", models: ["gpt-4o", "gpt-4o-mini"], keyUrl: "https://platform.openai.com/api-keys" },
   "MiniMax": { provider: "minimax", models: ["MiniMax-M3"], keyUrl: "https://platform.minimaxi.com/" },
 };

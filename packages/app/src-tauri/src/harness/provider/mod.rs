@@ -151,11 +151,11 @@ const PROVIDERS: &[ProviderDesc] = &[
     ProviderDesc {
         name: "glm", protocol: ProviderProtocol::OpenAI, default_url: "https://open.bigmodel.cn/api/paas/v4",
         alt_urls: &[("Coding 端点", "https://open.bigmodel.cn/api/coding/paas/v4")],
-        label: "智谱", note: Some("GLM 系列；标准/Coding 端点可切换，Coding 套餐请选 Coding 端点"),
+        label: "智谱", note: Some("GLM 系列；标准/Coding 端点可切换，Coding 套餐请选 Coding 端点；5.3 系思考常开不可关"),
         requires_key: true, requires_base_url: false,
         key_url: Some("https://open.bigmodel.cn/usercenter/proj-mgmt/apikeys"),
         hidden: false,
-        models: &["glm-5-turbo", "glm-5.2", "glm-5.1", "glm-4", "glm-4-flash"],
+        models: &["glm-5.3", "glm-5.3-flash", "glm-5.2", "glm-5.1", "glm-5v-turbo", "glm-5-turbo", "glm-4-flash"],
     },
     ProviderDesc {
         name: "glm-coding", protocol: ProviderProtocol::OpenAI, default_url: "https://open.bigmodel.cn/api/coding/paas/v4",
@@ -164,14 +164,15 @@ const PROVIDERS: &[ProviderDesc] = &[
         requires_key: true, requires_base_url: false,
         key_url: Some("https://open.bigmodel.cn/usercenter/proj-mgmt/apikeys"),
         hidden: true,
-        models: &["glm-5.2", "glm-5.1", "glm-5-turbo"],
+        models: &["glm-5.3", "glm-5.2", "glm-5.1", "glm-5-turbo"],
     },
     ProviderDesc {
         name: "deepseek", protocol: ProviderProtocol::OpenAI, default_url: "https://api.deepseek.com",
-        alt_urls: &[], label: "DeepSeek", note: None, requires_key: true, requires_base_url: false,
+        alt_urls: &[], label: "DeepSeek", note: Some("V4 系 1M 窗口；vision-exp 为视觉实验模型；chat/reasoner 旧名已于 2026-07 弃用"),
+        requires_key: true, requires_base_url: false,
         key_url: Some("https://platform.deepseek.com/api_keys"),
         hidden: false,
-        models: &["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-chat", "deepseek-reasoner"],
+        models: &["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp"],
     },
     ProviderDesc {
         name: "anthropic", protocol: ProviderProtocol::Anthropic, default_url: "https://api.anthropic.com",
