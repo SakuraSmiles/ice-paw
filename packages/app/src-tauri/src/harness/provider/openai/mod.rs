@@ -28,6 +28,10 @@ use crate::error::{AppError, AppResult};
 use crate::harness::chat_state::CancellationToken;
 use crate::infra::protocol::{ChatDelta, ChatMessage, LlmProvider, ToolDef};
 
+/// 摘要调用的思考开关：复用 [`crate::harness::provider::model_info::utility_thinking`]
+/// （与视觉代读共用的唯一真相源——短输出辅助调用的思考策略不在调用点各写各的）。
+use crate::harness::provider::model_info::{utility_thinking, UtilityThinking as SummaryThinking};
+
 pub(crate) mod streaming;
 pub(crate) mod types;
 
@@ -50,40 +54,6 @@ pub struct OpenAiAdapter {
     provider: String,
     /// HTTP 客户端（复用连接池）
     client: reqwest::Client,
-}
-
-/// 摘要调用的思考开关策略（见 [`summary_thinking`]）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SummaryThinking {
-    /// 非 GLM 端点：不注入任何 vendor 专属字段
-    None,
-    /// GLM 且模型支持关思考：`thinking:{"type":"disabled"}`——思考通道不占摘要额度
-    Disabled,
-    /// GLM 且模型思考常开（glm-5.3 系不支持 disabled，硬发整请求直接被拒）：
-    /// 按官方迁移指引改注入 `enabled` + `reasoning_effort:"low"`（轻量推理最省）
-    LowEffort,
-}
-
-/// 摘要调用的思考开关策略。
-///
-/// 仅认注册表 GLM 名（glm / glm-coding）——智谱官方定义 `thinking` /
-/// `reasoning_effort` 字段，注入零风险；其他 OpenAI 兼容服务（openai/deepseek/
-/// custom/vLLM…）未定义，盲目注入可能被严格服务端 400 拒收。
-///
-/// ⚠️ glm-5.3 系（含 5.3-Flash，2026-08 起）思考**常开**，官方已移除
-/// `thinking.type:"disabled"` 支持——硬发会让整个请求失败；此时降级为
-/// `enabled` + `reasoning_effort:"low"`（官方迁移指引的等价替代，摘要场景
-/// 仍最大限度省思考额度）。
-fn summary_thinking(provider: &str, model: &str) -> SummaryThinking {
-    if !matches!(provider, "glm" | "glm-coding") {
-        return SummaryThinking::None;
-    }
-    let m = model.to_lowercase();
-    if m.contains("glm-5.3") {
-        SummaryThinking::LowEffort
-    } else {
-        SummaryThinking::Disabled
-    }
 }
 
 impl OpenAiAdapter {
@@ -226,7 +196,7 @@ impl LlmProvider for OpenAiAdapter {
         max_tokens: i32,
         cancel: CancellationToken,
     ) -> AppResult<Pin<Box<dyn Stream<Item = AppResult<ChatDelta>> + Send>>> {
-        let thinking = match summary_thinking(&self.provider, &self.model) {
+        let thinking = match utility_thinking(&self.provider, &self.model) {
             SummaryThinking::None => None,
             SummaryThinking::Disabled => Some(types::ThinkingInject {
                 switch: types::ThinkingSwitch::disabled(),
@@ -399,36 +369,15 @@ mod tests {
     // ---------------------------------------------------------------
 
     #[test]
-    fn summary_thinking_by_provider_and_model() {
-        // 摘要思考开关只对智谱官方定义该字段的端点注入；其他服务盲目注入
-        // 可能被严格服务端 400 拒收
-        for p in ["openai", "deepseek", "custom", "ollama", ""] {
-            assert_eq!(summary_thinking(p, "glm-5.2"), SummaryThinking::None, "{p}");
-        }
-        // GLM + 可关思考的模型：disabled（思考通道不占摘要额度）
+    fn summary_thinking_reuses_model_info_policy() {
+        // 策略本体已提升到 model_info::utility_thinking（与视觉代读共用，测试在那边）；
+        // 这里只钉住摘要通道仍走同一函数（改绑定会编译失败，防未来分叉）。
         assert_eq!(
-            summary_thinking("glm", "glm-5.2"),
+            utility_thinking("glm", "glm-5.2"),
             SummaryThinking::Disabled
         );
         assert_eq!(
-            summary_thinking("glm-coding", "glm-5.1"),
-            SummaryThinking::Disabled
-        );
-        assert_eq!(
-            summary_thinking("glm", "glm-5-turbo"),
-            SummaryThinking::Disabled
-        );
-        // GLM + glm-5.3 系（思考常开，disabled 硬发整请求被拒）→ enabled+low
-        assert_eq!(
-            summary_thinking("glm", "glm-5.3"),
-            SummaryThinking::LowEffort
-        );
-        assert_eq!(
-            summary_thinking("glm-coding", "glm-5.3-flash"),
-            SummaryThinking::LowEffort
-        );
-        assert_eq!(
-            summary_thinking("glm", "GLM-5.3-Flash[1M]"),
+            utility_thinking("glm", "glm-5.3-flash"),
             SummaryThinking::LowEffort
         );
     }

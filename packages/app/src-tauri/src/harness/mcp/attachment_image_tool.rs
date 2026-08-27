@@ -258,9 +258,9 @@ impl McpClient for ViewAttachmentImageTool {
                         "page": parsed.page,
                         "total_pages": total_pages,
                         "name": row.name,
-                        "reader": &cred.source,
+                        "reader": &cred.model,
                         "note": "Current agent lacks vision; the page image was read by the \
-                                 borrowed vision credential above ('reader') and its recognized \
+                                 platform vision model above ('reader') and its recognized \
                                  text is in 'recognized_text'. Use that text to answer. Call \
                                  again with page+1 to continue.",
                         "recognized_text": recognized,

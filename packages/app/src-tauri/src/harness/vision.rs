@@ -154,6 +154,21 @@ pub async fn describe_image(
         body["max_tokens"] = serde_json::json!(2048);
     }
 
+    // 思考开关：与摘要通道共用 model_info::utility_thinking（唯一真相源）。
+    // 不注入的话，思考常开模型（glm-5.3 系）会把 2048 额度烧在推理通道 → 空回复
+    //（同 540490e 摘要 bug 的形状）。JSON 形状与 openai::types::ChatRequest 对齐。
+    use crate::harness::provider::model_info::{utility_thinking, UtilityThinking};
+    match utility_thinking(provider, model) {
+        UtilityThinking::None => {}
+        UtilityThinking::Disabled => {
+            body["thinking"] = serde_json::json!({"type": "disabled"});
+        }
+        UtilityThinking::LowEffort => {
+            body["thinking"] = serde_json::json!({"type": "enabled"});
+            body["reasoning_effort"] = serde_json::json!("low");
+        }
+    }
+
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(90))
         .build()

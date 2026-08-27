@@ -139,15 +139,18 @@ pub async fn adapt_blocks_for_vision(
         if let ContentBlock::Image { data, media_type } = b {
             let result = ocr_image(data, media_type, candidates).await;
             match result {
-                Ok(text) => {
+                Ok(hit) => {
                     ocr_replaced += 1;
+                    // marker 带实际读图模型——链式降级「换了双眼睛」要可见（用户与
+                    // agent 都能知道这次是谁读的、主模型是否又挂了）。
                     out.push(ContentBlock::text(format!(
-                        "[图片经视觉凭据代读为文本]\n{text}"
+                        "[图片经视觉模型代读为文本（{}）]\n{}",
+                        hit.reader, hit.text
                     )));
                     items.push(crate::harness::event_log::ModalAdaptedItem {
                         index,
                         outcome: "substituted".into(),
-                        ocr_text: Some(text),
+                        ocr_text: Some(hit.text),
                     });
                 }
                 Err(reason) => {
@@ -257,10 +260,17 @@ pub fn strip_image_blocks_to_marker(blocks: &[ContentBlock]) -> Vec<ContentBlock
     out
 }
 
-/// 用候选凭据逐个试 [`vision::VisionCredential::describe`]；首个成功返回其文本。
+/// 代读成功结果：识别文本 + 实际读图的模型名（marker 透明用）。
+struct OcrHit {
+    text: String,
+    /// 读图的模型名（如 glm-5.3-flash）——模型名比来源标签更有信息量（谁是这双眼睛）
+    reader: String,
+}
+
+/// 用候选凭据逐个试 [`vision::VisionCredential::describe`]；首个成功返回其文本与模型。
 ///
-/// 返回 `Result<String, Option<LlmErrorKind>>`：
-/// - `Ok(text)` —— 代读成功。
+/// 返回 `Result<OcrHit, Option<LlmErrorKind>>`：
+/// - `Ok(hit)` —— 代读成功（`hit.reader` = 实际读图的模型，marker 标注用）。
 /// - `Err(None)` —— 未发起有效调用（候选为空 / base64 解码失败）。
 /// - `Err(Some(kind))` —— 已有候选但全部 `describe` 调用失败，`kind` 为按
 ///   [`LlmErrorKind::prefer`] 选出的**最具行动价值**的错误分类（`Sensitive` 输入判定
@@ -271,7 +281,7 @@ async fn ocr_image(
     data_base64: &str,
     media_type: &str,
     candidates: &[VisionCredential],
-) -> Result<String, Option<LlmErrorKind>> {
+) -> Result<OcrHit, Option<LlmErrorKind>> {
     use base64::Engine as _;
 
     if candidates.is_empty() {
@@ -295,10 +305,14 @@ async fn ocr_image(
                 tracing::info!(
                     target: "ice_paw.modal",
                     source = %cred.source,
+                    model = %cred.model,
                     chars = text.len(),
                     "视觉凭据代读图片成功"
                 );
-                return Ok(text);
+                return Ok(OcrHit {
+                    text,
+                    reader: cred.model.clone(),
+                });
             }
             Err(e) => {
                 // 分类错误（敏感/限流/鉴权/网络...）驱动上层诚实提示文案——比旧实现的
