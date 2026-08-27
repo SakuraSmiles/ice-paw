@@ -118,7 +118,16 @@ tauri-plugin-window-state = "2.4.1"
 # 仅 Windows target 引入，decode.rs 用它按「系统当前 ANSI 代码页」解码子进程
 # 输出，自动适配任意语言版本的 Windows（中文=GBK、英文=1252、日文=Shift-JIS…）。
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Globalization", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.59", features = [
+    "Win32_Globalization",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_WindowsAndMessaging",
+    # computer use（harness/mcp/screen）：DWM cloak 判定（list_windows 过滤 UWP 幽灵窗）/
+    # 进程 pid（排除自身窗口）/ SendInput 鼠标键盘模拟
+    "Win32_Graphics_Dwm",
+    "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
+] }
 
 # === 集成测试 ===
 [dev-dependencies]
