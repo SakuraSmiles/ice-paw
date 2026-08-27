@@ -108,6 +108,7 @@ pub fn run() {
             commands::chat_cmd::respond_tool_auth,
             commands::preferences_cmd::get_preferences,
             commands::preferences_cmd::set_preference,
+            commands::preferences_cmd::test_vision_config,
             commands::mcp_cmd::list_mcp_servers,
             commands::mcp_cmd::create_mcp_server,
             commands::mcp_cmd::update_mcp_server,
