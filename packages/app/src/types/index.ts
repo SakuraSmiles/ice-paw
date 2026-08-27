@@ -639,12 +639,22 @@ export interface UserPreferences {
   embedding_model?: string;
   embedding_api_key?: string;
   embedding_base_url?: string;
-  /** Phase B 视觉读取：扫描件/图片型 PDF 文本提取为空时，由视觉模型把页面读成文字。
-   *  当前聊天 Agent 不支持视觉（supports_vision=0）时自动启用此配置（仿 embedding）。 */
+  /** Phase B 视觉读取（旧四键，仅读侧兼容回落——vision_config 缺失时拼成单条目） */
   vision_provider?: string;
   vision_model?: string;
   vision_api_key?: string;
   vision_base_url?: string;
+  /** 视觉读取条目链（两档制）：Some=新格式权威（[] = 显式清空）；null/undefined=回落旧四键 */
+  vision_config?: VisionConfigEntry[] | null;
+}
+
+/** 视觉读取配置的一个条目（主模型或降级模型，按序尝试、首个成功即用） */
+export interface VisionConfigEntry {
+  provider: string;
+  model: string;
+  api_key: string;
+  /** 自定义端点（可选；空=按 provider 推导官方 OpenAI 兼容端点） */
+  base_url?: string | null;
 }
 
 // ============================================================================

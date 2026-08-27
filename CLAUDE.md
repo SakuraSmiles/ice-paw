@@ -155,12 +155,16 @@ agent 调用 `propose_config_change` 工具提出创建/修改 agent 提案 → 
 ### 大文件拆分（已 ff-merge 到 main 17b1ffc，分支已删）
 - loop_engine 1343→697 + 抽 `loop/` 子模块；chat.ts 843→532（抽 useChatEvents）；Sidebar/ChatMessages 抽 composables
 
-### 视觉能力统一适配（事2 / 方案 C，bfcd2ce + 2ce76cb + f054e38 + c10d02e，未手测）
+### 视觉能力统一适配（事2 / 方案 C；**两档制重构 2026-08-27**）
 4 个 Image 块注入入口统一走"按有效视觉能力适配"，杜绝向非视觉模型塞 Image（→400/"看不到"）：
 - **能力探测**：`provider/model_info.rs::effective_supports_vision(agent.supports_vision, provider, model)`——OR 关系（agent 显式 =1 权威；=0 按模型表自动探测，如 MiniMax-M3）。零 schema 改动。
-- **统一适配**：`harness/modal.rs`——`gather_vision_candidates`（DB 收集凭据：显式 vision 配置→agent 自带视觉模型→GLM 视觉 MCP env）/ `adapt_blocks_for_vision`（有效视觉原样过；非视觉逐图代读成 Text、失败剥离+诚实提示）/ `strip_image_blocks_to_marker`（历史静默剥离）。
+- **两档制路由（2026-08-27 重构，取代旧三环兜底）**：① agent 有效视觉 → Image 直过（链不被咨询）；② 非视觉 agent → **平台视觉配置链**（「设置-通用-视觉读取」条目数组：主模型 + 可选降级，按序尝试首个成功即用）；未配置 → 剥离 + 诚实提示指路设置页。旧环②（agent 借自身厂商凭据）环③（GLM 视觉 MCP env）已删——环③ 系假环：@z_ai/mcp-server 内置 GLM-4.6V 不可控且 Coding 套餐专属，借到的 Coding key 打标准端点必 1113；glmMcpTemplates 视觉模板同步撤下。
+- **存储**：pref key `vision_config` = `Vec<VisionConfigEntry{provider,model,api_key,base_url?}>`；**Some=权威（含 Some(vec![]) 显式清空）、None=回落旧四键单条目**（读侧兼容零迁移）；旧三环键写入侧已死。视觉端点表在 `harness/vision.rs` 独立于 chat 注册表（minimax chat=Anthropic 协议但 vision=OpenAI 兼容端点，非重复代码）；条目 base_url 显式优先、否则按厂商默认——**端点成对原则：key 与端点同一鉴权域，不猜第三方**。
+- **统一适配**：`harness/modal.rs`——`gather_vision_candidates(pool)`（= 读 vision_config 条目链，单次 DB 读）/ `adapt_blocks_for_vision`（有效视觉原样过；非视觉逐图代读成 Text、失败剥离+诚实提示）/ `strip_image_blocks_to_marker`（历史静默剥离）。代读 marker 带实际读图模型 `[图片经视觉模型代读为文本（{model}）]`——降级换模型对用户与 agent 可见。
 - **4 入口接线**：① 用户上传+③ 历史 → `context/stages.rs::ModalCapabilityStage`（Pipeline，TokenWindow 后 Final 前）；② 工具返图 → `tool_executor` 注入 Image 前查 effective_vision（时序独立于 Stage——工具循环后续轮次的图进不了 Stage，必须在此守卫）；④ `view_attachment_image` 判断改 effective_supports_vision + 凭据收集复用 gather。
-- **⚠️ 不变式**：任何新增的 Image 块注入点都必须经 `effective_supports_vision` / `adapt_blocks_for_vision`，不得对非视觉模型直塞 Image。
+- **utility thinking 唯一真相**：`provider/model_info.rs::utility_thinking(provider, model)` 三态（None 非智谱不注入 / Disabled 智谱非 5.3 注入 `{"type":"disabled"}` / LowEffort 智谱 glm-5.3 子串注入 enabled+reasoning_effort=low——5.3 全系拒 disabled 硬发必败）；摘要通道（openai stream_summary）与 describe_image 共用，勿再各自硬编码。
+- **健康检查**：`test_vision_config` 命令（设置页逐条「测试」按钮）——1×1 PNG 探针走 `entry_to_credential` + describe_image 全链路（同端点推导/同 JSON 形状/同思考策略），测过=正式可用。
+- **⚠️ 不变式**：任何新增的 Image 块注入点都必须经 `effective_supports_vision` / `adapt_blocks_for_vision`，不得对非视觉模型直塞 Image；视觉兜底凭据只来自 vision_config 条目链，勿复活借凭据暗通道；新增 message-kind emitter 的 Image 存储仍走 refify_blocks（见会话事件日志节）。
 
 ### 会话事件日志（Phase 0+1+2A 已发布；Phase 2B 退役三件套已落地 2026-08-17）
 单一 append-only 事件日志基石（锁定愿景：统一 session / 多 agent 图协作 / 轨迹可还原）。

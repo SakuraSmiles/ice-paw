@@ -253,7 +253,7 @@ const builtinDescZh: Record<string, string> = {
               </svg>
               <span class="card-name new-name">从 GLM 模板添加</span>
             </div>
-            <div class="new-hint">联网搜索 · 网页读取 · 开源仓库 · 视觉理解</div>
+            <div class="new-hint">联网搜索 · 网页读取 · 开源仓库</div>
           </div>
           <svg class="card-chevron" :class="{ rotated: showGlm }" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6" /></svg>
         </div>
@@ -263,7 +263,7 @@ const builtinDescZh: Record<string, string> = {
             <div v-for="t in GLM_MCP_TEMPLATES" :key="t.key" class="glm-template">
               <!-- 正在输入 Key -->
               <div v-if="selectedGlmKey === t.key" class="glm-key-row">
-                <input v-model="glmApiKey" type="password" class="input glm-key-input input-mono" :placeholder="t.local ? 'Z_AI_API_KEY' : 'GLM API Key'" />
+                <input v-model="glmApiKey" type="password" class="input glm-key-input input-mono" placeholder="GLM API Key" />
                 <button class="btn btn-sm btn-primary" :disabled="addingGlm || !glmApiKey.trim()" @click="confirmAddGlm(t)">{{ addingGlm ? "添加中" : "确认" }}</button>
                 <button class="btn-link" @click="selectedGlmKey = null">取消</button>
               </div>
