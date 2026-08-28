@@ -303,6 +303,12 @@ impl McpRegistry {
         self.register_sync(Arc::new(super::screen::CaptureScreenTool::builtin()));
         self.register_sync(Arc::new(super::screen::ListWindowsTool::builtin()));
         self.register_sync(Arc::new(super::screen::CaptureWindowTool::builtin()));
+        // computer use（阶段二·操作）：鼠标四件——全部 Confirm 级（模拟输入真实
+        // 作用于用户机器）；坐标走 ScreenState 基准 + 布局 revalidate，见 input.rs。
+        self.register_sync(Arc::new(super::screen::input::MouseMoveTool::builtin()));
+        self.register_sync(Arc::new(super::screen::input::MouseClickTool::builtin()));
+        self.register_sync(Arc::new(super::screen::input::MouseDragTool::builtin()));
+        self.register_sync(Arc::new(super::screen::input::MouseScrollTool::builtin()));
         // 注：delegate_to_agent 不在 register_builtin（全局注册表）中——由
         // session_runner 组装期按会话 kind 注册（仅 'chat'，委派深度=1 护栏）。
     }

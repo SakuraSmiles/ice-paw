@@ -46,10 +46,19 @@ pub struct WindowInfo {
     pub rect: PhysRect,
 }
 
+/// 鼠标按键（输入方法用）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseButton {
+    Left,
+    Right,
+    Middle,
+}
+
 /// 屏幕捕获后端。
 ///
-/// 阶段一（看屏）方法集：虚拟桌面布局 / 显示器枚举 / 区域捕获 / 窗口枚举与捕获。
-/// send_input（操作阶段）后续在此扩展。
+/// 阶段一（看屏）：虚拟桌面布局 / 显示器枚举 / 区域捕获 / 窗口枚举与捕获。
+/// 阶段二（操作）：鼠标三原语（移动 / 按键 / 滚轮）——工具层负责全部坐标数学
+/// （`coords::phys_to_absolute`），后端只收 SendInput 绝对坐标，零换算。
 pub trait ScreenBackend: Send + Sync {
     /// 后端名（写进截图摘要，诊断用）。
     fn name(&self) -> &'static str;
@@ -76,6 +85,19 @@ pub trait ScreenBackend: Send + Sync {
 
     /// 前台窗口句柄（无前台窗口/锁屏时 None）。
     fn foreground_window(&self) -> Option<i64>;
+
+    // -------------------- 阶段二：输入原语（操作） --------------------
+
+    /// 移动鼠标到 SendInput 绝对坐标（`MOUSEEVENTF_ABSOLUTE|VIRTUALDESK`，
+    /// 0..=65535——工具层用 [`super::coords::phys_to_absolute`] 算好）。
+    fn mouse_move_abs(&self, abs_x: i32, abs_y: i32) -> AppResult<()>;
+
+    /// 按下/释放鼠标按键（drag/click 由工具层组合）。
+    fn mouse_button(&self, button: MouseButton, down: bool) -> AppResult<()>;
+
+    /// 滚轮（刻数 notch：dy 正=向上、dx 正=向右；`WHEEL_DELTA=120` 由后端换算）。
+    /// 两个分量都非零时分两次事件发。
+    fn mouse_scroll(&self, dx_notches: i32, dy_notches: i32) -> AppResult<()>;
 }
 
 // =========================================================================
@@ -88,6 +110,12 @@ mod gdi {
 
     use windows_sys::Win32::Foundation::{GetLastError, LPARAM, RECT};
     use windows_sys::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        SendInput, INPUT, INPUT_MOUSE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_HWHEEL,
+        MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP,
+        MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK,
+        MOUSEEVENTF_WHEEL, MOUSEINPUT,
+    };
     use windows_sys::Win32::Graphics::Gdi::{
         BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
         EnumDisplayMonitors, GetDC, GetDIBits, ReleaseDC, SelectObject, BITMAPINFO,
@@ -346,6 +374,84 @@ mod gdi {
                 Some(hwnd as i64)
             }
         }
+
+        fn mouse_move_abs(&self, abs_x: i32, abs_y: i32) -> AppResult<()> {
+            send_mouse(MOUSEINPUT {
+                dx: abs_x,
+                dy: abs_y,
+                mouseData: 0,
+                dwFlags: MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
+                time: 0,
+                dwExtraInfo: 0,
+            })
+        }
+
+        fn mouse_button(&self, button: MouseButton, down: bool) -> AppResult<()> {
+            let flags = match (button, down) {
+                (MouseButton::Left, true) => MOUSEEVENTF_LEFTDOWN,
+                (MouseButton::Left, false) => MOUSEEVENTF_LEFTUP,
+                (MouseButton::Right, true) => MOUSEEVENTF_RIGHTDOWN,
+                (MouseButton::Right, false) => MOUSEEVENTF_RIGHTUP,
+                (MouseButton::Middle, true) => MOUSEEVENTF_MIDDLEDOWN,
+                (MouseButton::Middle, false) => MOUSEEVENTF_MIDDLEUP,
+            };
+            send_mouse(MOUSEINPUT {
+                dx: 0,
+                dy: 0,
+                mouseData: 0,
+                dwFlags: flags,
+                time: 0,
+                dwExtraInfo: 0,
+            })
+        }
+
+        fn mouse_scroll(&self, dx_notches: i32, dy_notches: i32) -> AppResult<()> {
+            if dy_notches != 0 {
+                send_mouse(MOUSEINPUT {
+                    dx: 0,
+                    dy: 0,
+                    // 负刻数（向下/向左）经补码落进 DWORD——API 即按全 32 位解读。
+                    mouseData: (dy_notches * WHEEL_DELTA_UNITS) as u32,
+                    dwFlags: MOUSEEVENTF_WHEEL,
+                    time: 0,
+                    dwExtraInfo: 0,
+                })?;
+            }
+            if dx_notches != 0 {
+                send_mouse(MOUSEINPUT {
+                    dx: 0,
+                    dy: 0,
+                    mouseData: (dx_notches * WHEEL_DELTA_UNITS) as u32,
+                    dwFlags: MOUSEEVENTF_HWHEEL,
+                    time: 0,
+                    dwExtraInfo: 0,
+                })?;
+            }
+            Ok(())
+        }
+    }
+
+    /// 滚轮一格的 SendInput 单位数（`WHEEL_DELTA` 恒 120；不 import 系统常量，
+    /// windows-sys 各版本对它的模块归属漂过）。
+    const WHEEL_DELTA_UNITS: i32 = 120;
+
+    /// 发一条鼠标 SendInput 事件；被阻断（安全软件/UIPI 提权目标）时家族化报错。
+    fn send_mouse(mi: MOUSEINPUT) -> AppResult<()> {
+        // SAFETY: INPUT 是纯数据结构；zeroed 后逐字段填值，绕过 union 命名
+        //（windows-sys 各版本对 INPUT 内嵌 union 的类型名不稳定）。
+        let mut input: INPUT = unsafe { std::mem::zeroed() };
+        input.r#type = INPUT_MOUSE;
+        input.Anonymous.mi = mi;
+        // SAFETY: SendInput 只读输入数组，无句柄/状态；返回实际注入条数。
+        let sent = unsafe { SendInput(1, &input, std::mem::size_of::<INPUT>() as i32) };
+        if sent != 1 {
+            return Err(AppError::Internal(
+                "screen 输入失败: SendInput 鼠标事件被系统拒绝——\
+                 目标可能是提权窗口（UIPI 拦截非同权限输入）或安全软件/反作弊\
+                 拦截了输入模拟；请改用需要用户手动完成的替代方式".into(),
+            ));
+        }
+        Ok(())
     }
 
     /// GDI 错误家族化：`screen 捕获失败: <步骤>（GDI 错误码 N）——<怎么办>`。
@@ -549,6 +655,18 @@ impl ScreenBackend for UnsupportedBackend {
 
     fn foreground_window(&self) -> Option<i64> {
         None
+    }
+
+    fn mouse_move_abs(&self, _abs_x: i32, _abs_y: i32) -> AppResult<()> {
+        Err(unsupported())
+    }
+
+    fn mouse_button(&self, _button: MouseButton, _down: bool) -> AppResult<()> {
+        Err(unsupported())
+    }
+
+    fn mouse_scroll(&self, _dx_notches: i32, _dy_notches: i32) -> AppResult<()> {
+        Err(unsupported())
     }
 }
 
