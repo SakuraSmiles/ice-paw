@@ -689,7 +689,7 @@ const hasFilterResults = computed(() => {
             <input
               v-model="prefs.default_workspace_path"
               type="text"
-              class="form-input"
+              class="form-input is-pick"
               placeholder="点击选择目录"
               readonly
               @click="pickDirectory"
@@ -936,18 +936,16 @@ const hasFilterResults = computed(() => {
               />
               <input v-else v-model="e.model" class="form-input" placeholder="模型名" @blur="saveVision" />
             </div>
-            <div class="vision-entry-grid">
-              <div class="input-group">
-                <input v-model="e.apiKey" type="password" class="form-input" placeholder="API Key" @blur="saveVision" />
-                <a v-if="visionKeyUrlOf(e)" :href="visionKeyUrlOf(e)" target="_blank" class="embed-key-link">申请 Key →</a>
-              </div>
-              <button class="btn vision-test-btn" :disabled="visionTestOf(i).status === 'testing' || !e.model || !e.apiKey" @click="testVisionEntry(i)">
+            <div class="input-group">
+              <input v-model="e.apiKey" type="password" class="form-input" placeholder="API Key" @blur="saveVision" />
+              <a v-if="visionKeyUrlOf(e)" :href="visionKeyUrlOf(e)" target="_blank" class="embed-key-link">申请 Key →</a>
+              <button class="btn" :disabled="visionTestOf(i).status === 'testing' || !e.model || !e.apiKey" @click="testVisionEntry(i)">
                 <Loader2 v-if="visionTestOf(i).status === 'testing'" :size="14" class="spin" />
                 <FlaskConical v-else :size="14" />
                 {{ visionTestOf(i).status === "testing" ? "测试中…" : "测试" }}
               </button>
             </div>
-            <input v-model="e.baseUrl" class="form-input vision-url-input" placeholder="端点（可选，默认按厂商官方端点；Coding 套餐可直接选「智谱 Coding」档免填）" @blur="saveVision" />
+            <input v-model="e.baseUrl" class="form-input vision-url-input" placeholder="端点 URL（可选，默认按厂商官方端点）" @blur="saveVision" />
           </div>
           <button class="btn vision-add-fallback" @click="addVisionEntry">
             <Plus :size="14" />添加降级模型
@@ -1087,17 +1085,20 @@ const hasFilterResults = computed(() => {
   border: 1px solid var(--ip-color-border-default);
   border-radius: var(--ip-radius-md);
   outline: none;
-  cursor: pointer;
   transition: all var(--ip-duration-fast) var(--ip-ease-out);
 }
 .form-input:focus {
   border-color: var(--ip-color-border-focus);
-  background-color: var(--ip-color-bg-secondary);
+  background-color: var(--ip-color-bg-input);
   box-shadow: 0 0 0 3px rgba(var(--ip-primary-500-rgb), 0.12);
 }
 .form-input::placeholder {
   color: var(--ip-color-text-placeholder);
 }
+
+/* 点选型只读框（工作空间=点击弹目录选择器）：手型光标暗示可交互 */
+.form-input.is-pick { cursor: pointer; }
+.form-input.is-pick:hover { border-color: var(--ip-color-border-focus); }
 
 /* 只读展示态（如「数据目录」系统路径：不可编辑、不响应聚焦） */
 .form-input.is-readonly {
@@ -1290,7 +1291,7 @@ const hasFilterResults = computed(() => {
   padding: var(--ip-spacing-3);
   border: 1px solid var(--ip-color-border-default);
   border-radius: var(--ip-radius-md);
-  background: var(--ip-color-bg-tertiary);
+  background: transparent;
 }
 .vision-entry-head {
   display: flex;
@@ -1326,7 +1327,7 @@ const hasFilterResults = computed(() => {
   cursor: pointer;
   transition: color var(--ip-duration-fast) var(--ip-ease-out), background var(--ip-duration-fast) var(--ip-ease-out);
 }
-.vision-icon-btn:hover { color: var(--ip-danger-text); background: var(--ip-color-bg-secondary); }
+.vision-icon-btn:hover { color: var(--ip-danger-text); background: var(--ip-color-bg-tertiary); }
 
 .vision-entry-grid {
   display: grid;
@@ -1334,7 +1335,6 @@ const hasFilterResults = computed(() => {
   gap: var(--ip-spacing-2);
   align-items: center;
 }
-.vision-test-btn { flex-shrink: 0; justify-self: end; }
 .vision-url-input { height: var(--ip-input-h-sm); }
 
 .vision-add-fallback { align-self: flex-start; }
