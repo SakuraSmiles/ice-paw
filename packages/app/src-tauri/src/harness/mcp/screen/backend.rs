@@ -98,6 +98,13 @@ pub trait ScreenBackend: Send + Sync {
     /// 滚轮（刻数 notch：dy 正=向上、dx 正=向右；`WHEEL_DELTA=120` 由后端换算）。
     /// 两个分量都非零时分两次事件发。
     fn mouse_scroll(&self, dx_notches: i32, dy_notches: i32) -> AppResult<()>;
+
+    /// 按下/释放一个虚拟键（VK 码；组合键由工具层解析拼装）。
+    fn key_vk(&self, vk: u16, down: bool) -> AppResult<()>;
+
+    /// 按下/释放一个 Unicode 字符（UTF-16 单元——BMP 外字符由工具层
+    /// 拆代理对逐单元发；type_text 用）。
+    fn key_unicode(&self, unit: u16, down: bool) -> AppResult<()>;
 }
 
 // =========================================================================
@@ -111,10 +118,11 @@ mod gdi {
     use windows_sys::Win32::Foundation::{GetLastError, LPARAM, RECT};
     use windows_sys::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        SendInput, INPUT, INPUT_MOUSE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_HWHEEL,
-        MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP,
-        MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK,
-        MOUSEEVENTF_WHEEL, MOUSEINPUT,
+        SendInput, INPUT, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_KEYUP,
+        KEYEVENTF_UNICODE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_HWHEEL, MOUSEEVENTF_LEFTDOWN,
+        MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE,
+        MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL,
+        MOUSEINPUT,
     };
     use windows_sys::Win32::Graphics::Gdi::{
         BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
@@ -429,6 +437,30 @@ mod gdi {
             }
             Ok(())
         }
+
+        fn key_vk(&self, vk: u16, down: bool) -> AppResult<()> {
+            send_keyboard(KEYBDINPUT {
+                wVk: vk,
+                wScan: 0,
+                dwFlags: if down { 0 } else { KEYEVENTF_KEYUP },
+                time: 0,
+                dwExtraInfo: 0,
+            })
+        }
+
+        fn key_unicode(&self, unit: u16, down: bool) -> AppResult<()> {
+            let mut flags = KEYEVENTF_UNICODE;
+            if !down {
+                flags |= KEYEVENTF_KEYUP;
+            }
+            send_keyboard(KEYBDINPUT {
+                wVk: 0,
+                wScan: unit,
+                dwFlags: flags,
+                time: 0,
+                dwExtraInfo: 0,
+            })
+        }
     }
 
     /// 滚轮一格的 SendInput 单位数（`WHEEL_DELTA` 恒 120；不 import 系统常量，
@@ -447,6 +479,24 @@ mod gdi {
         if sent != 1 {
             return Err(AppError::Internal(
                 "screen 输入失败: SendInput 鼠标事件被系统拒绝——\
+                 目标可能是提权窗口（UIPI 拦截非同权限输入）或安全软件/反作弊\
+                 拦截了输入模拟；请改用需要用户手动完成的替代方式".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// 发一条键盘 SendInput 事件（与 [`send_mouse`] 同错误家族）。
+    fn send_keyboard(ki: KEYBDINPUT) -> AppResult<()> {
+        // SAFETY: 同 send_mouse——zeroed INPUT 绕 union 命名，逐字段填值。
+        let mut input: INPUT = unsafe { std::mem::zeroed() };
+        input.r#type = INPUT_KEYBOARD;
+        input.Anonymous.ki = ki;
+        // SAFETY: SendInput 只读输入数组；返回实际注入条数。
+        let sent = unsafe { SendInput(1, &input, std::mem::size_of::<INPUT>() as i32) };
+        if sent != 1 {
+            return Err(AppError::Internal(
+                "screen 输入失败: SendInput 键盘事件被系统拒绝——\
                  目标可能是提权窗口（UIPI 拦截非同权限输入）或安全软件/反作弊\
                  拦截了输入模拟；请改用需要用户手动完成的替代方式".into(),
             ));
@@ -666,6 +716,14 @@ impl ScreenBackend for UnsupportedBackend {
     }
 
     fn mouse_scroll(&self, _dx_notches: i32, _dy_notches: i32) -> AppResult<()> {
+        Err(unsupported())
+    }
+
+    fn key_vk(&self, _vk: u16, _down: bool) -> AppResult<()> {
+        Err(unsupported())
+    }
+
+    fn key_unicode(&self, _unit: u16, _down: bool) -> AppResult<()> {
         Err(unsupported())
     }
 }

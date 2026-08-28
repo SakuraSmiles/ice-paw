@@ -309,6 +309,11 @@ impl McpRegistry {
         self.register_sync(Arc::new(super::screen::input::MouseClickTool::builtin()));
         self.register_sync(Arc::new(super::screen::input::MouseDragTool::builtin()));
         self.register_sync(Arc::new(super::screen::input::MouseScrollTool::builtin()));
+        // computer use（阶段二·操作）：键盘三件 + 节奏件 wait——type/press 为
+        // Confirm 级；wait Always 级（无外部作用，select 取消令牌可中断）。
+        self.register_sync(Arc::new(super::screen::keyboard::TypeTextTool::builtin()));
+        self.register_sync(Arc::new(super::screen::keyboard::PressKeyTool::builtin()));
+        self.register_sync(Arc::new(super::screen::keyboard::WaitTool::builtin()));
         // 注：delegate_to_agent 不在 register_builtin（全局注册表）中——由
         // session_runner 组装期按会话 kind 注册（仅 'chat'，委派深度=1 护栏）。
     }

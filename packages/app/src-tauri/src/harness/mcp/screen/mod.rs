@@ -4,7 +4,9 @@
 //! - [`backend`]：`ScreenBackend` trait（GDI / 不支持 / Fake 可注入）
 //! - [`coords`]：纯坐标数学（图片像素 ↔ 物理像素 ↔ SendInput 归一化）
 //! - [`state`]：会话级「最近一次截图」坐标基准（conv_id 键控 LRU）
-//! - [`input`]：操作工具（鼠标四件 → 键盘三件；坐标走 state 基准 + 布局 revalidate）
+//! - [`input`]：操作工具·鼠标四件（坐标走 state 基准 + 布局 revalidate）
+//! - [`keyboard`]：操作工具·键盘三件 + 节奏件 wait（Unicode 注入 / 组合键解析 /
+//!   取消感知等待——无坐标，作用于当前焦点）
 //!
 //! **坐标契约**：模型传的一切坐标（region 裁剪、操作阶段的鼠标键盘）
 //! = 本会话**最近一次截图的图片像素空间**；每次截图的文本摘要声明
@@ -16,6 +18,7 @@
 pub mod backend;
 pub mod coords;
 pub mod input;
+pub mod keyboard;
 pub mod state;
 
 pub use backend::{MouseButton, RgbaFrame, ScreenBackend, WindowInfo};
@@ -688,7 +691,7 @@ mod tests {
         fn foreground_window(&self) -> Option<i64> {
             self.foreground
         }
-        // 输入三方法：看屏测试用不到，no-op 守编译（输入记录型 Fake 在 input.rs）。
+        // 输入方法：看屏测试用不到，no-op 守编译（输入记录型 Fake 在 input.rs / keyboard.rs）。
         fn mouse_move_abs(&self, _abs_x: i32, _abs_y: i32) -> AppResult<()> {
             Ok(())
         }
@@ -696,6 +699,12 @@ mod tests {
             Ok(())
         }
         fn mouse_scroll(&self, _dx_notches: i32, _dy_notches: i32) -> AppResult<()> {
+            Ok(())
+        }
+        fn key_vk(&self, _vk: u16, _down: bool) -> AppResult<()> {
+            Ok(())
+        }
+        fn key_unicode(&self, _unit: u16, _down: bool) -> AppResult<()> {
             Ok(())
         }
     }
