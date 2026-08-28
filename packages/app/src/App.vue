@@ -5,12 +5,14 @@ import { onMounted, onUnmounted, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useChatStore } from "./stores/chat";
 import { useProjectStore } from "./stores/project";
+import { useScreenChannelStore } from "./stores/screenChannel";
 import { useChatEvents } from "./composables/useChatEvents";
 import { loadTimezone } from "./utils/time";
 import { saveLastSession } from "./utils/sessionRestore";
 
 const chat = useChatStore();
 const project = useProjectStore();
+const screenChannel = useScreenChannelStore();
 const router = useRouter();
 
 // 启动恢复的记忆写入：路由 / 活跃会话 / 侧栏 scope 任一变化即落盘——每次
@@ -30,8 +32,9 @@ watch(
     saveLastSession({ route, convId, projectId });
   },
 );
-// 事件监听拆卸函数（useChatEvents 返回；卸载时调用，补齐此前缺失的 teardown）
+// 事件监听拆卸函数（useChatEvents / screenChannel.init 返回；卸载时调用，补齐此前缺失的 teardown）
 let cleanupChatEvents: (() => void) | null = null;
+let cleanupScreenChannel: (() => void) | null = null;
 
 // 文件拖拽全局守卫：拖文件到「输入框以外」的区域时，阻止浏览器默认行为（导航 / 打开文件）。
 // 真正的附件 intake 仍在 ChatInput 的 .input-wrapper 上（@drop→addAttachmentsFromFileList）；
@@ -63,6 +66,8 @@ function handleGlobalKeydown(e: KeyboardEvent) {
 
 onMounted(async () => {
   cleanupChatEvents = await useChatEvents();
+  // 屏幕共享通道（批次④）：初拉通道态 + 订阅全量事件（幂等；进程级单例，重启即 Off）
+  cleanupScreenChannel = await screenChannel.init();
   loadTimezone();
   document.addEventListener("keydown", handleGlobalKeydown);
   document.addEventListener("dragover", handleGlobalDragOver);
@@ -71,6 +76,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   cleanupChatEvents?.();
+  cleanupScreenChannel?.();
   document.removeEventListener("keydown", handleGlobalKeydown);
   document.removeEventListener("dragover", handleGlobalDragOver);
   document.removeEventListener("drop", handleGlobalDrop);

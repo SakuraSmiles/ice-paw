@@ -41,6 +41,7 @@ use crate::harness::authority::{
 };
 use crate::harness::hooks::{has_actions, run_hooks};
 use crate::harness::mcp::client::ToolOutput;
+use crate::harness::mcp::screen::channel as screen_channel;
 use crate::harness::mcp::{AuthorizationLevel, McpRegistry, ToolContext};
 pub use crate::harness::oneshot_registry::ToolAuthRegistry;
 use crate::infra::protocol::{
@@ -150,6 +151,11 @@ pub(crate) async fn execute_tool_round(
             }
         }
 
+        // 批次④ 步骤 1：屏幕通道授权短路（§4.11）——通道 Active 且本会话已附着
+        // 时，computer-use 家族工具的 Confirm 上收为 Allow（用户开启通道/批准
+        // 加入的动作即知情同意）。只吃 Confirm，不碰 Deny（显式拒绝不被越权）。
+        let decision = screen_channel::short_circuit(decision, tc_name, &tool_ctx.conv_id);
+
         // 2. 根据决策执行
         let final_result: Result<ToolOutput, String> = match decision {
             AuthorizationDecision::Allow => invoke_tool(registry, tc_name, tc_args, tool_ctx).await,
@@ -190,7 +196,8 @@ pub(crate) async fn execute_tool_round(
                         file_path,
                         request_id,
                     );
-                    // 2c. 等待响应（带取消支持 + 30 分钟超时防止永久挂起）
+                    // 2c. 等待响应（带取消支持 + 2 分钟超时防止永久挂起——
+                    //     用户不在时快速超时释放会话，见 wait_for_auth_response）
                     let outcome = wait_for_auth_response(
                         rx,
                         cancel,
@@ -224,6 +231,32 @@ pub(crate) async fn execute_tool_round(
                                 file_path,
                                 resp.scope,
                             );
+                            // 批次④ 步骤 1：屏幕通道「首用加入即附着」（§4.1 B5）——
+                            // 通道 Active + 本会话未附着 + 家族工具获批 → 附着，
+                            // 本会话后续免卡。附着只发生在用户刚点过允许之后
+                            //（每条附着路径都以一次用户点击为前提，无静默附着）；
+                            // delegate 子会话同路径逐个点头。
+                            if screen_channel::SCREEN_TOOLS.contains(&tc_name.as_str()) {
+                                let ch = screen_channel::global();
+                                if ch.is_active() && !ch.is_attached(&tool_ctx.conv_id) {
+                                    let info = screen_channel::attach_info_from_db(
+                                        &tool_ctx.pool,
+                                        &tool_ctx.agent_id,
+                                        &tool_ctx.conv_id,
+                                    )
+                                    .await;
+                                    if ch.attach_if_active(&tool_ctx.conv_id, info.clone()) {
+                                        tracing::info!(
+                                            target: "ice_paw.screen_channel",
+                                            conv = %tool_ctx.conv_id, agent = %info.agent_name,
+                                            "会话首用批准后加入屏幕通道"
+                                        );
+                                        if let Some(app) = tool_app {
+                                            screen_channel::emit_state(app);
+                                        }
+                                    }
+                                }
+                            }
                             invoke_tool(registry, tc_name, tc_args, tool_ctx).await
                         }
                         Some(_) => {

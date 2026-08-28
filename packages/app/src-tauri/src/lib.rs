@@ -131,6 +131,10 @@ pub fn run() {
             commands::log_cmd::open_data_dir,
             commands::provider_cmd::list_providers,
             commands::provider_cmd::test_provider_connection,
+            // 屏幕共享通道（批次④ 步骤 1：开/关 + 状态拉取）
+            commands::screen_cmd::screen_channel_open,
+            commands::screen_cmd::screen_channel_stop,
+            commands::screen_cmd::get_screen_channel_state,
             // 项目管理
             commands::project_cmd::list_projects,
             commands::project_cmd::create_project,

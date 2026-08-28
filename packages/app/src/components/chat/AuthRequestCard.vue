@@ -19,6 +19,10 @@ const entry = computed(() => chat.activeConvAuthRequest);
 const req = computed(() => entry.value?.payload ?? null);
 const hasPath = computed(() => !!req.value?.file_path);
 
+// 批次④ 步骤 1：request_screen_session 特判为二键卡——批准即开屏幕共享通道，
+// scope 档（仅此一次/此目录/此工具）对它无意义（后端忽略，once 兜底无害）。
+const isChannelRequest = computed(() => req.value?.tool_name === "request_screen_session");
+
 // ---- 范围档选择（新请求到达时重置回最小档）----
 const scope = ref<AuthScope>("once");
 watch(
@@ -96,9 +100,10 @@ function deny() {
           </details>
         </div>
 
-        <!-- L3 范围档（选择作用于「允许」）+ 拒绝/允许，一行收束 -->
+        <!-- L3 范围档（选择作用于「允许」）+ 拒绝/允许，一行收束。
+             通道请求卡无范围概念（批准 = 开通道），隐藏单选组、按钮改语义文案 -->
         <div class="auth-line3">
-          <div class="auth-scope-options" role="radiogroup" aria-label="允许范围">
+          <div v-if="!isChannelRequest" class="auth-scope-options" role="radiogroup" aria-label="允许范围">
             <button
               v-for="opt in scopeOptions"
               :key="opt.value"
@@ -115,7 +120,9 @@ function deny() {
           </div>
           <div class="auth-actions">
             <button class="auth-btn auth-btn-deny" :disabled="expired" @click="deny">拒绝</button>
-            <button class="auth-btn auth-btn-allow" :disabled="expired" @click="allow">允许</button>
+            <button class="auth-btn auth-btn-allow" :disabled="expired" @click="allow">
+              {{ isChannelRequest ? "开启屏幕共享" : "允许" }}
+            </button>
           </div>
         </div>
       </div>

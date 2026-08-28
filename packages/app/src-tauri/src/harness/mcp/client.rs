@@ -314,6 +314,10 @@ impl McpRegistry {
         self.register_sync(Arc::new(super::screen::keyboard::TypeTextTool::builtin()));
         self.register_sync(Arc::new(super::screen::keyboard::PressKeyTool::builtin()));
         self.register_sync(Arc::new(super::screen::keyboard::WaitTool::builtin()));
+        // computer use（批次④ 步骤 1·通道入口）：agent 请求开启屏幕共享——
+        // Confirm 级（前端特判二键「开启/拒绝」），批准即通道开启+本会话附着。
+        // 刻意不在 channel::SCREEN_TOOLS 集合内（不被授权短路）。
+        self.register_sync(Arc::new(super::screen::session::RequestScreenSessionTool));
         // 注：delegate_to_agent 不在 register_builtin（全局注册表）中——由
         // session_runner 组装期按会话 kind 注册（仅 'chat'，委派深度=1 护栏）。
     }

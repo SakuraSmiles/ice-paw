@@ -27,6 +27,7 @@ import type {
   ProjectTask,
   ProviderConnectionResult,
   ProviderInfo,
+  ScreenChannelState,
   SessionEvent,
   TurnAnchor,
   UpdateProject,
@@ -453,5 +454,24 @@ const trajectory = {
   },
 };
 
-export const bridge = { agents, providers, conversations, projects, messages, chat, preferences, mcp, kb, logs, trajectory };
+const screen = {
+  /** 开启屏幕共享通道（聊天头开关主入口）；通道已开 = 把本会话加入共享（附着）。
+   *  返回最新通道态（命令内已广播 screen:channel-state）。 */
+  async openChannel(conversationId: string): Promise<ScreenChannelState> {
+    try { return await invoke<ScreenChannelState>("screen_channel_open", { conversationId }); }
+    catch (err) { throw wrapInvokeError("screen.openChannel", err); }
+  },
+  /** 关闭通道（终止键的步骤 1 形态）：全部附着会话清空；Off 状态幂等 */
+  async stopChannel(): Promise<ScreenChannelState> {
+    try { return await invoke<ScreenChannelState>("screen_channel_stop"); }
+    catch (err) { throw wrapInvokeError("screen.stopChannel", err); }
+  },
+  /** 通道态初拉（启动/开关渲染用；运行期更新走 screen:channel-state 事件） */
+  async getChannelState(): Promise<ScreenChannelState> {
+    try { return await invoke<ScreenChannelState>("get_screen_channel_state"); }
+    catch (err) { throw wrapInvokeError("screen.getChannelState", err); }
+  },
+};
+
+export const bridge = { agents, providers, conversations, projects, messages, chat, preferences, mcp, kb, logs, trajectory, screen };
 export default bridge;
