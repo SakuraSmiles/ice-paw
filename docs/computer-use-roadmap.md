@@ -197,7 +197,7 @@ park 统一形态：select { 状态恢复, 对话取消(→Err 取消), 通道�
 
 ### 4.12 提交切分（每步 cargo 绿 + 可独立手测）
 
-1. **通道态+授权短路+request_screen_session**：无 HUD，聊天头开关（简单 toggle 按钮）验证授权上收与开关语义。
+1. **通道态+授权短路+request_screen_session**：无 HUD，聊天头开关（简单 toggle 按钮）验证授权上收与开关语义。（已落地 2026-08-28：后端 channel.rs/session.rs/screen_cmd + 前端 store/开关/审批卡二键特判；cargo 1196 / vitest 328；待真机手测）
 2. **HUD 工具栏窗+红边框+capabilities+事件协议**：多窗口基建落地。
 3. **单写令牌+排队+gate 重构**：input/keyboard 序列原子步化，读写工具过 gate。
 4. **人类优先仲裁**：LL hook 线程+human_active+抢占安全收尾。

@@ -560,6 +560,33 @@ export interface PendingAuthEntry {
 }
 
 // ============================================================================
+// 屏幕共享通道（computer-use 批次④：授权与可见性的单位）
+// ============================================================================
+
+/** 附着会话（screen:channel-state 负载形态，键值拍平；与后端 AttachedConv 对齐） */
+export interface ScreenChannelAttached {
+  conv_id: string;
+  agent_name: string;
+  conv_title: string;
+  purpose: string;
+}
+
+/** 通道单一全量事件负载（§4.9：形状跨步骤稳定）。步骤 1 只有 status/opened_at/
+ *  attached 真生效；paused/hud_monitor/holder/queue/human_active 是步骤 2-4
+ *  的占位字段（协议从第一天定型，前端不随步骤演进改形状）。 */
+export interface ScreenChannelState {
+  status: "off" | "active";
+  paused: boolean;
+  opened_at: number | null;
+  hud_monitor: number;
+  attached: ScreenChannelAttached[];
+  holder: string | null;
+  queue: string[];
+  human_active: boolean;
+  screenshot_count: number;
+}
+
+// ============================================================================
 // 配置提案事件
 // ============================================================================
 

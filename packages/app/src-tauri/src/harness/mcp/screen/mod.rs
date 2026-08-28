@@ -14,11 +14,16 @@
 //!
 //! **授权**：截图/输入工具全部 `Confirm` 级——首弹由用户选 scope
 //! （仅此一次 / 此工具·本会话），现有三档授权记忆复用，不加新机制。
+//! 批次④ 起 [`channel::ScreenChannel`]（屏幕共享通道）提供授权上收：通道
+//! Active 且本会话已附着时，本家族工具的 Confirm 被 `channel::short_circuit`
+//! 覆盖为 Allow（开启/加入通道的动作即知情同意，§4.11）。
 
 pub mod backend;
+pub mod channel;
 pub mod coords;
 pub mod input;
 pub mod keyboard;
+pub mod session;
 pub mod state;
 // 真机冒烟（#[ignore] 默认跳过，显式 --ignored 运行）——真实 GDI/SendInput，
 // 不进常规测试面（移动用户光标/读用户屏幕，只在手测节点按需跑）。
@@ -194,6 +199,7 @@ impl McpClient for CaptureScreenTool {
             monitor: p.monitor,
         };
         self.state.update(&ctx.conv_id, meta.clone());
+        channel::global().note_screenshot();
         tracing::info!(
             target: "ice_paw.screen",
             conv = %ctx.conv_id, monitor = ?p.monitor, has_region = p.region.is_some(),
@@ -553,6 +559,7 @@ impl McpClient for CaptureWindowTool {
             monitor: None,
         };
         self.state.update(&ctx.conv_id, meta.clone());
+        channel::global().note_screenshot();
         tracing::info!(
             target: "ice_paw.screen",
             conv = %ctx.conv_id, hwnd, title = matched_title.as_deref().unwrap_or(""),

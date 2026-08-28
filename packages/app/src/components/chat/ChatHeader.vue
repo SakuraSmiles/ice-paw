@@ -3,7 +3,7 @@
 
   行为：
   - 双击标题进入编辑模式（Enter 保存 / Escape 取消）
-  - 外置横排操作（取代旧「更多」下拉菜单）：星标置顶（左）+ 删除（右）
+  - 外置横排操作（取代旧「更多」下拉菜单）：屏幕共享开关 + 星标置顶（左）+ 删除（右）
   - 删除确认 = 从删除按钮向左横向扩展的确认条（非弹窗，Esc/点击外部收起）
   - 显示当前 Agent 名称 + 模型
 
@@ -14,8 +14,10 @@
 import { ref, computed, watch, nextTick, onUnmounted } from "vue";
 import { useEscapeStack } from "../../composables/useEscapeStack";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { ScreenShare } from "@lucide/vue";
 import { useChatStore }from "../../stores/chat";
 import { useAgentStore } from "../../stores/agent";
+import { useScreenChannelStore } from "../../stores/screenChannel";
 import { bridge } from "../../api/bridge";
 import EntityAvatar from "../common/EntityAvatar.vue";
 
@@ -25,6 +27,7 @@ defineProps<{ hasTabbar?: boolean }>();
 
 const chat = useChatStore();
 const agent = useAgentStore();
+const screenChannel = useScreenChannelStore();
 
 const editing = ref(false);
 const editValue = ref("");
@@ -166,6 +169,33 @@ async function togglePin() {
   if (!conv) return;
   await chat.pinConversation(conv.id, !conv.pinned);
 }
+
+// ===== 屏幕共享通道开关（批次④ 步骤 1 主入口）=====
+// 三态：Off → 开启（本会话即刻附着，computer-use 家族免逐次授权）；
+// Active+本会话附着 → 关闭（全部附着会话清空）；Active+他者开启 → 本会话加入。
+const screenAttachedHere = computed(() =>
+  screenChannel.isAttached(chat.activeConversation?.id),
+);
+const screenBtnTitle = computed(() => {
+  if (!screenChannel.isOn) return "开启屏幕共享：本会话可直接截屏与操作屏幕（免逐次授权）";
+  if (screenAttachedHere.value) return "屏幕共享中——点击关闭（所有会话退出共享）";
+  return "加入屏幕共享：本会话同样免逐次授权";
+});
+
+async function toggleScreenShare() {
+  const convId = chat.activeConversation?.id;
+  if (!convId) return;
+  try {
+    if (screenChannel.isOn && screenAttachedHere.value) {
+      await screenChannel.stop();
+    } else {
+      await screenChannel.openFrom(convId);
+    }
+  } catch (e) {
+    // 步骤 1 无横幅/HUD：失败只记日志，开关态（store 镜像）即真相源
+    console.error("切换屏幕共享失败:", e);
+  }
+}
 </script>
 
 <template>
@@ -236,9 +266,19 @@ async function togglePin() {
         </div>
       </div>
     </div>
-    <!-- 外置操作（UX #9）：星标（左）+ 删除（右，占原「更多」位置）。
+    <!-- 外置操作（UX #9）：屏幕共享开关 + 星标（左）+ 删除（右，占原「更多」位置）。
          删除确认 = 右锚定、向左横向扩展的确认条（覆盖星标，布局零位移） -->
     <div v-if="chat.activeConversation" class="header-right">
+      <!-- 屏幕共享通道开关（批次④ 步骤 1）：附着态图标常显主色（状态可见） -->
+      <button
+        class="header-btn screen-btn"
+        :class="{ active: screenAttachedHere }"
+        :title="screenBtnTitle"
+        :disabled="screenChannel.busy"
+        @click="toggleScreenShare"
+      >
+        <ScreenShare :size="16" />
+      </button>
       <button
         class="header-btn pin-btn"
         :class="{ 'pin-hidden': confirming, pinned: chat.activeConversation?.pinned }"
@@ -316,6 +356,12 @@ async function togglePin() {
 .header-right { display:flex; align-items:center; gap:4px; position:relative; }
 .header-btn { display:flex; align-items:center; justify-content:center; width:32px; height:32px; border-radius:var(--ip-radius-md); color:var(--ip-color-text-secondary); border:none; cursor:pointer; background:transparent; transition:all var(--ip-duration-fast) var(--ip-ease-out); }
 .header-btn:hover { background-color:var(--ip-color-bg-tertiary); color:var(--ip-color-text-primary); }
+
+/* ===== 屏幕共享通道开关（批次④）：本会话附着 = 授权免卡生效，图标常显主色 ===== */
+.screen-btn svg { color: var(--ip-color-text-tertiary); }
+.screen-btn:hover svg { color: var(--ip-color-text-primary); }
+.screen-btn.active svg { color: var(--ip-primary-500); }
+.screen-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* ===== 外置星标（UX #9）：确认条展开时淡出让位（布局不动，条覆盖其上） ===== */
 .pin-btn { transition:opacity var(--ip-duration-fast) var(--ip-ease-out), background-color var(--ip-duration-fast) var(--ip-ease-out), color var(--ip-duration-fast) var(--ip-ease-out); }
