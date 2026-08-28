@@ -811,9 +811,9 @@ const hasFilterResults = computed(() => {
           <span v-if="savedTip.embedding" class="save-tip">已保存</span>
         </div>
 
-        <div class="field">
-          <div class="field-label">厂商</div>
-          <div class="input-group">
+        <div class="pair-grid" :class="{ single: !prefs.embedding_provider }">
+          <div class="field">
+            <div class="field-label">厂商</div>
             <Combobox
               :model-value="embeddingProviderDisplay"
               :options="embeddingProviders"
@@ -821,43 +821,39 @@ const hasFilterResults = computed(() => {
               @update:model-value="onEmbeddingProviderChange"
             />
           </div>
-        </div>
-        <template v-if="prefs.embedding_provider">
-          <div class="field">
+          <div v-if="prefs.embedding_provider" class="field">
             <div class="field-label">模型</div>
-            <div class="input-group">
-              <Combobox
-                v-if="embeddingModelSuggestions.length > 0"
-                :model-value="prefs.embedding_model || ''"
-                :options="embeddingModelSuggestions"
-                placeholder="选择或输入模型名"
-                @update:model-value="onEmbeddingModelChange"
-              />
-              <input v-else v-model="prefs.embedding_model" class="form-input" placeholder="输入模型名" @blur="saveEmbedding" />
-            </div>
+            <Combobox
+              v-if="embeddingModelSuggestions.length > 0"
+              :model-value="prefs.embedding_model || ''"
+              :options="embeddingModelSuggestions"
+              placeholder="选择或输入模型名"
+              @update:model-value="onEmbeddingModelChange"
+            />
+            <input v-else v-model="prefs.embedding_model" class="form-input" placeholder="输入模型名" @blur="saveEmbedding" />
           </div>
-          <div class="field">
-            <div class="field-label">API Key</div>
-            <div class="input-group">
-              <input v-model="prefs.embedding_api_key" type="password" class="form-input" placeholder="粘贴 API Key" @blur="saveEmbedding" />
-              <button
-                class="btn"
-                :disabled="embedTest.status === 'testing' || !prefs.embedding_provider || !prefs.embedding_model || !prefs.embedding_api_key"
-                @click="testEmbedding"
-              >
-                <Loader2 v-if="embedTest.status === 'testing'" :size="14" class="spin" />
-                <FlaskConical v-else :size="14" />
-                {{ embedTest.status === "testing" ? "测试中…" : "测试" }}
-              </button>
-            </div>
-            <a v-if="embeddingKeyUrl" :href="embeddingKeyUrl" target="_blank" class="embed-key-link">申请 Key →</a>
-            <div v-if="embedTest.status === 'ok' || embedTest.status === 'fail'" class="test-result">
-              <Check v-if="embedTest.status === 'ok'" :size="14" class="test-ok-icon" />
-              <X v-else :size="14" class="test-fail-icon" />
-              <span :class="embedTest.status === 'ok' ? 'test-ok-text' : 'test-fail-text'" :title="embedTestMsgOf()">{{ embedTestMsgOf() }}</span>
-            </div>
+        </div>
+        <div v-if="prefs.embedding_provider" class="field">
+          <div class="field-label">API Key</div>
+          <div class="input-group">
+            <input v-model="prefs.embedding_api_key" type="password" class="form-input" placeholder="粘贴 API Key" @blur="saveEmbedding" />
+            <button
+              class="btn"
+              :disabled="embedTest.status === 'testing' || !prefs.embedding_provider || !prefs.embedding_model || !prefs.embedding_api_key"
+              @click="testEmbedding"
+            >
+              <Loader2 v-if="embedTest.status === 'testing'" :size="14" class="spin" />
+              <FlaskConical v-else :size="14" />
+              {{ embedTest.status === "testing" ? "测试中…" : "测试" }}
+            </button>
           </div>
-        </template>
+          <a v-if="embeddingKeyUrl" :href="embeddingKeyUrl" target="_blank" class="embed-key-link">申请 Key →</a>
+          <div v-if="embedTest.status === 'ok' || embedTest.status === 'fail'" class="test-result">
+            <Check v-if="embedTest.status === 'ok'" :size="14" class="test-ok-icon" />
+            <X v-else :size="14" class="test-fail-icon" />
+            <span :class="embedTest.status === 'ok' ? 'test-ok-text' : 'test-fail-text'" :title="embedTestMsgOf()">{{ embedTestMsgOf() }}</span>
+          </div>
+        </div>
         <ErrorBanner v-if="saveErrors.embedding" variant="inline" title="保存失败" :detail="saveErrors.embedding.msg" @retry="saveErrors.embedding?.retry()" />
       </section>
 
@@ -920,7 +916,7 @@ const hasFilterResults = computed(() => {
               <X v-else :size="14" class="test-fail-icon" />
               <span :class="visionTestOf(i).status === 'ok' ? 'test-ok-text' : 'test-fail-text'" :title="visionTestMsgOf(i)">{{ visionTestMsgOf(i) }}</span>
             </div>
-            <div class="vision-entry-grid">
+            <div class="pair-grid">
               <Combobox
                 :model-value="visionProviderDisplayOf(e)"
                 :options="visionProviders"
@@ -1328,11 +1324,15 @@ const hasFilterResults = computed(() => {
 }
 .vision-icon-btn:hover { color: var(--ip-danger-text); background: var(--ip-color-bg-tertiary); }
 
-.vision-entry-grid {
+/* 厂商|模型 双列（语义检索/视觉条目共用语言）；.single=未启用时厂商满宽 */
+.pair-grid {
   display: grid;
   grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
   gap: var(--ip-spacing-2);
-  align-items: center;
+  align-items: start;
+}
+.pair-grid.single {
+  grid-template-columns: minmax(0, 1fr);
 }
 /* 独占一行的 form-input（vision-entry 是 column flex，.form-input 的 flex:1 会把
    flex-basis 压成 0% 塌掉 height）——flex:none 让 height 令牌生效 */
