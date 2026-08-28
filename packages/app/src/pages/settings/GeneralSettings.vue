@@ -1,38 +1,48 @@
 <!--
-  GeneralSettings — 通用设置页（937 行）
+  GeneralSettings — 通用设置页（卡片分组式，2026-08-28 重设计）
 
-  逻辑分区（共享 prefs ref）：
-  A. 加载/保存/重置      (~50 行)
-  B. 主题 + 字体         (~60 行)
-  C. 语言                (~30 行)
-  D. 时区                (~200 行, 含 Intl 时区列表+搜索)
-  E. 快捷键              (~100 行, 含录制模式)
-  F. 自动滚动+时间戳     (~30 行)
-  G. 工作区路径          (~80 行, 含 dialog 选择)
-  H. 数据目录            (~40 行)
+  三卡信息架构（ProjectSettings 同款 settings-card 惯例）：
+  1. 本地环境   工作空间（选定即存）/ 时区 / 数据目录（只读）
+  2. 语义检索   KB 嵌入配置（厂商/模型/Key + 逐项测试）+ 切换重建 overlay
+  3. 视觉读取   两档制平台代读链（主模型 + 可选降级条目，逐条测试）
 
-  未来迭代建议：D/E/G 区可提取为独立子组件（需处理 prefs ref 共享）。
+  约定：
+  - 全字段即时保存（工作空间 = 目录选定即存）；成功 = 卡片头「已保存」2s 淡出，
+    失败 = 字段级 ErrorBanner inline + retry（saveErrors 单一错误通道）
+  - 瞬态清理：onActivated 清测试态（KeepAlive 缓存下防「测试提示残留」误导持久化判断）
+  - 图标一律 @lucide/vue（HelpCircle/Folder/FolderOpen/LocateFixed/ChevronDown...）
 -->
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from "vue";
+import { ref, computed, onMounted, onUnmounted, onActivated, watch } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
 import { bridge } from "../../api/bridge";
 import { setTimezone } from "../../utils/time";
 import ErrorBanner from "../../components/common/ErrorBanner.vue";
 import Combobox from "../../components/common/Combobox.vue";
-import { Plus, Trash2, FlaskConical, Loader2, Check, X } from "@lucide/vue";
+import {
+  Plus, Trash2, FlaskConical, Loader2, Check, X,
+  HelpCircle, Folder, FolderOpen, LocateFixed, ChevronDown,
+} from "@lucide/vue";
 import type { UserPreferences } from "../../types";
 
 const prefs = ref<UserPreferences>({});
 const loading = ref(true);
 // 页级数据源失败（UI-2 banner 形态）：prefs 不可信时全页表态，防照空表单误配置
 const loadError = ref<string | null>(null);
-// 保存失败（UI-2 批次二 3/3）：组级 inline 错误位——key='embedding'|'vision'；成功态 saved 保持对称
+// 字段/动作级 inline 错误位（单一错误通道）：key = 'workspace'|'datadir'|'timezone'|'embedding'|'vision'
 const saveErrors = ref<Record<string, { msg: string; retry: () => void }>>({});
-const saving = ref(false);
-const saved = ref(false);
-/** 用户主动操作（保存工作空间 / 打开数据目录）失败的可见反馈 */
-const actionError = ref("");
+/** 保存成功提示（键 = 卡片：local/embedding/vision），2s 淡出——状态上屏，不做保存按钮 */
+const savedTip = ref<Record<string, boolean>>({});
+
+function flashSaved(key: string) {
+  savedTip.value[key] = true;
+  setTimeout(() => { savedTip.value[key] = false; }, 2000);
+}
+
+/** 错误文案剥掉 invoke 层包装前缀（[op/kind] 内部错误: ），只留正文 */
+function stripInvokePrefix(msg: string): string {
+  return msg.replace(/^\[[^\]]*\]\s*(?:内部错误:\s*)?/, "");
+}
 
 async function load() {
   loading.value = true;
@@ -54,6 +64,11 @@ async function load() {
   }
 }
 
+// =========================================================================
+// 本地环境卡：工作空间（选定即存）/ 时区 / 数据目录（只读）
+// =========================================================================
+const savingWorkspace = ref(false);
+
 async function pickDirectory() {
   const selected = await open({
     directory: true,
@@ -62,32 +77,28 @@ async function pickDirectory() {
     defaultPath: prefs.value.default_workspace_path || undefined,
   });
   if (selected) {
-    prefs.value.default_workspace_path = selected;
+    prefs.value.default_workspace_path = selected.replace(/\\/g, "/");
+    await saveWorkspacePath();
   }
 }
 
 async function saveWorkspacePath() {
-  saved.value = false;
-  saving.value = true;
-  actionError.value = "";
+  savingWorkspace.value = true;
+  delete saveErrors.value.workspace;
   try {
     await bridge.preferences.set(
       "default_workspace_path",
       prefs.value.default_workspace_path ?? "",
     );
-    saved.value = true;
-    setTimeout(() => { saved.value = false; }, 2000);
+    flashSaved("local");
   } catch (e) {
-    actionError.value = `保存失败：${e instanceof Error ? e.message : String(e)}`;
     console.error("保存失败:", e);
+    saveErrors.value.workspace = { msg: e instanceof Error ? e.message : String(e), retry: () => void saveWorkspacePath() };
   } finally {
-    saving.value = false;
+    savingWorkspace.value = false;
   }
 }
 
-// =========================================================================
-// 数据目录（数据库 / stronghold / 日志 所在目录）
-// =========================================================================
 const dataDir = ref("");
 
 async function loadDataDir() {
@@ -101,18 +112,28 @@ async function loadDataDir() {
 }
 
 async function openDataDir() {
-  actionError.value = "";
+  delete saveErrors.value.datadir;
   try {
     await bridge.logs.openDataDir();
   } catch (e) {
-    actionError.value = `打开数据目录失败：${e instanceof Error ? e.message : String(e)}`;
     console.error("打开数据目录失败:", e);
+    saveErrors.value.datadir = { msg: e instanceof Error ? e.message : String(e), retry: () => void openDataDir() };
   }
 }
 
 onMounted(load);
+onMounted(loadDataDir);
 
-// ---- Embedding 配置 ----
+// KeepAlive 瞬态清理：测试态是「刚操作过」的即时反馈，回到本页时已过期——
+// 残留会误导用户分不清「缓存还在」还是「配置持久化」（2026-08-28 实测反馈）
+onActivated(() => {
+  visionTests.value = {};
+  embedTest.value = { status: "idle" };
+});
+
+// =========================================================================
+// 语义检索卡：KB 嵌入配置（provider/model/key + 测试）+ 切换重建 overlay
+// =========================================================================
 const embeddingProviders = ["智谱 GLM", "OpenAI", "DeepSeek"];
 const embeddingModelMap: Record<string, { provider: string; models: string[]; keyUrl: string }> = {
   "智谱 GLM": { provider: "glm", models: ["embedding-3"], keyUrl: "https://open.bigmodel.cn/usercenter/proj-mgmt/apikeys" },
@@ -221,25 +242,40 @@ function cancelSwitch() {
 }
 
 async function saveEmbedding() {
-  saving.value = true;
   delete saveErrors.value.embedding;
+  embedTest.value = { status: "idle" };
   try {
     await Promise.all([
       bridge.preferences.set("embedding_provider", prefs.value.embedding_provider ?? ""),
       bridge.preferences.set("embedding_model", prefs.value.embedding_model ?? ""),
       bridge.preferences.set("embedding_api_key", prefs.value.embedding_api_key ?? ""),
     ]);
-    saved.value = true;
-    setTimeout(() => { saved.value = false; }, 2000);
+    flashSaved("embedding");
   } catch (e) {
     console.error("保存 embedding 配置失败:", e);
     saveErrors.value.embedding = { msg: e instanceof Error ? e.message : String(e), retry: () => void saveEmbedding() };
-  } finally {
-    saving.value = false;
   }
 }
 
-// ---- Vision 视觉读取（两档制：agent 无视觉时由平台配置链代读）----
+/** 逐项测试（与视觉读取对称）：健康检查当前 provider/model/key 三合一 */
+async function testEmbedding() {
+  embedTest.value = { status: "testing" };
+  try {
+    await bridge.kb.testEmbeddingConfig(
+      prefs.value.embedding_provider ?? "",
+      prefs.value.embedding_model ?? "",
+      prefs.value.embedding_api_key ?? "",
+      prefs.value.embedding_base_url ?? undefined,
+    );
+    embedTest.value = { status: "ok", msg: "连接正常" };
+  } catch (err) {
+    embedTest.value = { status: "fail", msg: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+// =========================================================================
+// 视觉读取卡（两档制：agent 无视觉时由平台配置链代读）
+// =========================================================================
 // 条目链：主模型 + 可选降级（按序尝试、首个成功即用；marker 标注实际读图模型）。
 // 旧三环（agent 借凭据 / GLM 视觉 MCP env）已删——链的组装权交还显式配置。
 // 仅列真正提供视觉模型的 provider；MiniMax 仅 M3 支持图片输入（M2.x 不支持）。
@@ -249,7 +285,7 @@ interface VisionEntryUI {
   apiKey: string;
   baseUrl: string;
 }
-type VisionTestState =
+type TestState =
   | { status: "idle" }
   | { status: "testing" }
   | { status: "ok"; msg: string }
@@ -266,7 +302,9 @@ const visionModelMap: Record<string, { provider: string; models: string[]; keyUr
 };
 const visionEntries = ref<VisionEntryUI[]>([]);
 /** 逐条测试状态（键 = 条目下标）；保存/编辑重置为 idle */
-const visionTests = ref<Record<number, VisionTestState>>({});
+const visionTests = ref<Record<number, TestState>>({});
+/** 语义检索的测试态（视觉区同形状） */
+const embedTest = ref<TestState>({ status: "idle" });
 
 /** prefs → 条目 UI：新格式权威；缺失回落旧四键单条目（存量兼容，首存即转新格式） */
 function initVisionEntries(raw: UserPreferences) {
@@ -328,7 +366,6 @@ function removeVisionEntry(i: number) {
 }
 
 async function saveVision() {
-  saving.value = true;
   delete saveErrors.value.vision;
   visionTests.value = {};
   try {
@@ -342,13 +379,10 @@ async function saveVision() {
         base_url: e.baseUrl || null,
       })),
     );
-    saved.value = true;
-    setTimeout(() => { saved.value = false; }, 2000);
+    flashSaved("vision");
   } catch (e) {
     console.error("保存 vision 配置失败:", e);
     saveErrors.value.vision = { msg: e instanceof Error ? e.message : String(e), retry: () => void saveVision() };
-  } finally {
-    saving.value = false;
   }
 }
 
@@ -369,18 +403,19 @@ async function testVisionEntry(i: number) {
     visionTests.value[i] = { status: "fail", msg: err instanceof Error ? err.message : String(err) };
   }
 }
-function visionTestOf(i: number): VisionTestState {
+function visionTestOf(i: number): TestState {
   return visionTests.value[i] ?? { status: "idle" };
 }
+
 /** ok/fail 的结果文案（模板插值无法跨调用收窄联合类型，收口在此） */
+function embedTestMsgOf(): string {
+  const t = embedTest.value;
+  return t.status === "ok" || t.status === "fail" ? stripInvokePrefix(t.msg) : "";
+}
 function visionTestMsgOf(i: number): string {
   const t = visionTestOf(i);
-  if (t.status !== "ok" && t.status !== "fail") return "";
-  // 剥掉 invoke 层包装前缀（[preferences.testVisionConfig/internal] 内部错误: ），只留正文
-  return t.msg.replace(/^\[[^\]]*\]\s*(?:内部错误:\s*)?/, "");
+  return t.status === "ok" || t.status === "fail" ? stripInvokePrefix(t.msg) : "";
 }
-
-onMounted(loadDataDir);
 
 // =========================================================================
 // 时区选择器
@@ -534,17 +569,13 @@ async function detectTimezone() {
 /** 保存时区到后端 */
 async function saveTimezone() {
   delete saveErrors.value.timezone;
-  saving.value = true;
   try {
     await bridge.preferences.set("timezone", prefs.value.timezone ?? "");
     setTimezone(prefs.value.timezone ?? ""); // 同步全局时区状态，所有时间显示即时刷新
-    saved.value = true;
-    setTimeout(() => { saved.value = false; }, 2000);
+    flashSaved("local");
   } catch (e) {
     console.error("save tz failed:", e);
     saveErrors.value.timezone = { msg: e instanceof Error ? e.message : String(e), retry: () => void saveTimezone() };
-  } finally {
-    saving.value = false;
   }
 }
 
@@ -636,54 +667,47 @@ const hasFilterResults = computed(() => {
       />
       <div class="settings-list" :class="{ 'list-untrusted': !!loadError }">
 
-      <!-- 操作失败提示（保存工作空间 / 打开数据目录等用户主动操作） -->
-      <div v-if="actionError" class="action-error">{{ actionError }}</div>
+      <!-- ===== 卡 1：本地环境 ===== -->
+      <section class="settings-card">
+        <div class="card-head">
+          <div class="card-head-text">
+            <h3 class="card-title">本地环境</h3>
+            <p class="card-hint">数据位置与区域偏好</p>
+          </div>
+          <span v-if="savingWorkspace" class="save-pending">保存中…</span>
+          <span v-else-if="savedTip.local" class="save-tip">已保存</span>
+        </div>
 
-      <!-- ===== 工作空间 ===== -->
-      <div class="setting-row">
-        <div class="setting-label">
-          <div class="setting-label-text">
+        <div class="field">
+          <div class="field-label">
             默认工作空间
             <span class="tip-icon" data-tip="新 Agent 未指定工作区时，自动在此目录下创建子文件夹">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+              <HelpCircle :size="14" />
             </span>
           </div>
-        </div>
-        <div class="setting-control">
           <div class="input-group">
             <input
               v-model="prefs.default_workspace_path"
               type="text"
               class="form-input"
-              placeholder="选择或输入默认工作空间路径"
+              placeholder="点击选择目录"
               readonly
               @click="pickDirectory"
             />
             <button type="button" class="input-btn" title="选择目录" @click="pickDirectory">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-              </svg>
-            </button>
-            <button type="button" class="btn-primary btn-sm" :disabled="saving" @click="saveWorkspacePath">
-              {{ saving ? "保存中" : "保存" }}
+              <Folder :size="16" />
             </button>
           </div>
-          <span v-if="saved" class="save-tip">已保存</span>
+          <ErrorBanner v-if="saveErrors.workspace" variant="inline" title="保存失败" :detail="saveErrors.workspace.msg" @retry="saveErrors.workspace?.retry()" />
         </div>
-      </div>
 
-      <!-- ===== 时区 ===== -->
-      <div class="setting-row">
-        <div class="setting-label">
-          <div class="setting-label-text">
+        <div class="field">
+          <div class="field-label">
             时区
             <span class="tip-icon" data-tip="设置后消息时间按当地时间显示，并作为上下文传给模型">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+              <HelpCircle :size="14" />
             </span>
-            <ErrorBanner v-if="saveErrors.timezone" variant="inline" title="保存失败" :detail="saveErrors.timezone.msg" @retry="saveErrors.timezone?.retry()" />
           </div>
-        </div>
-        <div class="setting-control">
           <div ref="tzWrapRef" class="tz-row">
             <button
               type="button"
@@ -692,15 +716,7 @@ const hasFilterResults = computed(() => {
               title="自动检测时区"
               @click="detectTimezone"
             >
-              <svg
-                v-if="!detecting"
-                width="14" height="14" viewBox="0 0 24 24"
-                fill="none" stroke="currentColor" stroke-width="2"
-                stroke-linecap="round" stroke-linejoin="round"
-              >
-                <circle cx="12" cy="12" r="10" />
-                <polyline points="12 6 12 12 16 14" />
-              </svg>
+              <LocateFixed v-if="!detecting" :size="14" />
               <span v-else class="tz-spinner" />
               <span>检测</span>
             </button>
@@ -726,9 +742,7 @@ const hasFilterResults = computed(() => {
                 @mousedown.prevent
                 @click="tzInputOpen ? closeDropdown() : openDropdown()"
               >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <polyline points="6 9 12 15 18 9" />
-                </svg>
+                <ChevronDown :size="14" />
               </button>
 
               <Transition name="tz-drop">
@@ -759,20 +773,16 @@ const hasFilterResults = computed(() => {
           <div v-else class="tz-status off">
             未设置
           </div>
+          <ErrorBanner v-if="saveErrors.timezone" variant="inline" title="保存失败" :detail="saveErrors.timezone.msg" @retry="saveErrors.timezone?.retry()" />
         </div>
-      </div>
 
-      <!-- ===== 数据目录 ===== -->
-      <div class="setting-row">
-        <div class="setting-label">
-          <div class="setting-label-text">
-            数据目录
+        <div class="field">
+          <div class="field-label">
+            数据目录 · 只读
             <span class="tip-icon" data-tip="数据库、加密凭证、运行日志均存储在此目录">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+              <HelpCircle :size="14" />
             </span>
           </div>
-        </div>
-        <div class="setting-control">
           <div class="input-group">
             <input
               :value="dataDir"
@@ -784,26 +794,25 @@ const hasFilterResults = computed(() => {
               aria-readonly="true"
             />
             <button type="button" class="input-btn" title="在文件管理器中打开" @click="openDataDir">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7l-2-3H5a2 2 0 0 0-2 2z" />
-              </svg>
+              <FolderOpen :size="16" />
             </button>
           </div>
+          <ErrorBanner v-if="saveErrors.datadir" variant="inline" title="打开失败" :detail="saveErrors.datadir.msg" @retry="saveErrors.datadir?.retry()" />
         </div>
-      </div>
+      </section>
 
-      <!-- ===== 知识库语义检索 ===== -->
-      <div class="setting-row">
-        <div class="setting-label">
-          <div class="setting-label-text">
-            语义检索
-            <span class="tip-icon" data-tip="配置后知识库支持语义匹配（向量检索），比关键词更精准。独立于聊天 Agent。">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
-            </span>
-            <ErrorBanner v-if="saveErrors.embedding" variant="inline" title="保存失败" :detail="saveErrors.embedding.msg" @retry="saveErrors.embedding?.retry()" />
+      <!-- ===== 卡 2：语义检索 ===== -->
+      <section class="settings-card">
+        <div class="card-head">
+          <div class="card-head-text">
+            <h3 class="card-title">语义检索 · 知识库索引</h3>
+            <p class="card-hint">配置后知识库支持语义匹配（向量检索），比关键词更精准；独立于聊天 Agent</p>
           </div>
+          <span v-if="savedTip.embedding" class="save-tip">已保存</span>
         </div>
-        <div class="setting-control">
+
+        <div class="field">
+          <div class="field-label">厂商</div>
           <div class="input-group">
             <Combobox
               :model-value="embeddingProviderDisplay"
@@ -813,13 +822,9 @@ const hasFilterResults = computed(() => {
             />
           </div>
         </div>
-      </div>
-      <template v-if="prefs.embedding_provider">
-        <div class="setting-row">
-          <div class="setting-label">
-            <div class="setting-label-text">检索模型</div>
-          </div>
-          <div class="setting-control">
+        <template v-if="prefs.embedding_provider">
+          <div class="field">
+            <div class="field-label">模型</div>
             <div class="input-group">
               <Combobox
                 v-if="embeddingModelSuggestions.length > 0"
@@ -831,19 +836,30 @@ const hasFilterResults = computed(() => {
               <input v-else v-model="prefs.embedding_model" class="form-input" placeholder="输入模型名" @blur="saveEmbedding" />
             </div>
           </div>
-        </div>
-        <div class="setting-row">
-          <div class="setting-label">
-            <div class="setting-label-text">检索 API Key</div>
-          </div>
-          <div class="setting-control">
+          <div class="field">
+            <div class="field-label">API Key</div>
             <div class="input-group">
               <input v-model="prefs.embedding_api_key" type="password" class="form-input" placeholder="粘贴 API Key" @blur="saveEmbedding" />
+              <a v-if="embeddingKeyUrl" :href="embeddingKeyUrl" target="_blank" class="embed-key-link">申请 Key →</a>
+              <button
+                class="btn"
+                :disabled="embedTest.status === 'testing' || !prefs.embedding_provider || !prefs.embedding_model || !prefs.embedding_api_key"
+                @click="testEmbedding"
+              >
+                <Loader2 v-if="embedTest.status === 'testing'" :size="14" class="spin" />
+                <FlaskConical v-else :size="14" />
+                {{ embedTest.status === "testing" ? "测试中…" : "测试" }}
+              </button>
             </div>
-            <a v-if="embeddingKeyUrl" :href="embeddingKeyUrl" target="_blank" class="embed-key-link">申请 Key →</a>
+            <div v-if="embedTest.status === 'ok' || embedTest.status === 'fail'" class="test-result">
+              <Check v-if="embedTest.status === 'ok'" :size="14" class="test-ok-icon" />
+              <X v-else :size="14" class="test-fail-icon" />
+              <span :class="embedTest.status === 'ok' ? 'test-ok-text' : 'test-fail-text'" :title="embedTestMsgOf()">{{ embedTestMsgOf() }}</span>
+            </div>
           </div>
-        </div>
-      </template>
+        </template>
+        <ErrorBanner v-if="saveErrors.embedding" variant="inline" title="保存失败" :detail="saveErrors.embedding.msg" @retry="saveErrors.embedding?.retry()" />
+      </section>
 
       <!-- 切换 embedding 模型确认 overlay -->
       <Transition name="overlay">
@@ -865,78 +881,80 @@ const hasFilterResults = computed(() => {
         </div>
       </Transition>
 
-      <!-- ===== 视觉读取（两档制：agent 无视觉时由平台配置链代读）===== -->
-      <div class="setting-row">
-        <div class="setting-label">
-          <div class="setting-label-text">
-            视觉读取
-            <span class="tip-icon" data-tip="Agent 模型无视觉能力时，图片/扫描件由这里的配置链代读成文字。&#10;· Agent 自带视觉 → 直接用自己的模型读图，不经此链。&#10;· 按条目顺序尝试，首个成功即用；代读文本会标注实际读图模型。&#10;· 智谱 Coding 套餐请选「智谱 Coding」档（标准端点不认 Coding 额度）。&#10;· 未配置 → 图片仅保留占位提示，无法代读。">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
-            </span>
+      <!-- ===== 卡 3：视觉读取（两档制：agent 无视觉时由平台配置链代读）===== -->
+      <section class="settings-card">
+        <div class="card-head">
+          <div class="card-head-text">
+            <h3 class="card-title">
+              视觉读取 · 图片代读
+              <span class="tip-icon" data-tip="Agent 模型无视觉能力时，图片/扫描件由这里的配置链代读成文字。&#10;· Agent 自带视觉 → 直接用自己的模型读图，不经此链。&#10;· 按条目顺序尝试，首个成功即用；代读文本会标注实际读图模型。&#10;· 智谱 Coding 套餐请选「智谱 Coding」档（标准端点不认 Coding 额度）。&#10;· 未配置 → 图片仅保留占位提示，无法代读。">
+                <HelpCircle :size="14" />
+              </span>
+            </h3>
+            <p class="card-hint">无视觉能力的 Agent 发图时，由这条模型链把图代读成文字</p>
+          </div>
+          <span v-if="savedTip.vision" class="save-tip">已保存</span>
+        </div>
 
-            <ErrorBanner v-if="saveErrors.vision" variant="inline" title="保存失败" :detail="saveErrors.vision.msg" @retry="saveErrors.vision?.retry()" />
-          </div>
+        <!-- 空态即引导：说明后果 + 直达下一步 -->
+        <div v-if="visionEntries.length === 0" class="vision-empty">
+          <span>未配置——无视觉能力的 Agent 发图或扫描件将无法代读。</span>
+          <button class="btn" @click="addVisionEntry">
+            <Plus :size="14" />配置主模型
+          </button>
         </div>
-        <div class="setting-control">
-          <!-- 空态即引导：说明后果 + 直达下一步 -->
-          <div v-if="visionEntries.length === 0" class="vision-empty">
-            <span>未配置——无视觉能力的 Agent 发图或扫描件将无法代读。</span>
-            <button class="btn" @click="addVisionEntry">
-              <Plus :size="14" />配置主模型
-            </button>
-          </div>
-          <template v-else>
-            <div v-for="(e, i) in visionEntries" :key="i" class="vision-entry">
-              <div class="vision-entry-head">
-                <span class="vision-tag" :class="{ 'vision-tag--primary': i === 0 }">{{ visionTagOf(i) }}</span>
-                <button
-                  class="vision-icon-btn"
-                  :title="i === 0 ? (visionEntries.length > 1 ? '删除主模型（降级条目将上移）' : '删除（清空视觉读取配置）') : '删除此降级条目'"
-                  @click="removeVisionEntry(i)"
-                >
-                  <Trash2 :size="14" />
-                </button>
-              </div>
-              <div v-if="visionTestOf(i).status === 'ok' || visionTestOf(i).status === 'fail'" class="vision-entry-result">
-                <Check v-if="visionTestOf(i).status === 'ok'" :size="14" class="vision-ok-icon" />
-                <X v-else :size="14" class="vision-fail-icon" />
-                <span :class="visionTestOf(i).status === 'ok' ? 'vision-ok-text' : 'vision-fail-text'" :title="visionTestMsgOf(i)">{{ visionTestMsgOf(i) }}</span>
-              </div>
-              <div class="vision-entry-grid">
-                <Combobox
-                  :model-value="visionProviderDisplayOf(e)"
-                  :options="visionProviders"
-                  placeholder="厂商"
-                  @update:model-value="(v: string) => onVisionProviderChange(i, v)"
-                />
-                <Combobox
-                  v-if="visionModelSuggestionsOf(e).length > 0"
-                  :model-value="e.model"
-                  :options="visionModelSuggestionsOf(e)"
-                  placeholder="模型"
-                  @update:model-value="(v: string) => onVisionModelChange(i, v)"
-                />
-                <input v-else v-model="e.model" class="form-input" placeholder="模型名" @blur="saveVision" />
-              </div>
-              <div class="vision-entry-grid">
-                <div class="input-group">
-                  <input v-model="e.apiKey" type="password" class="form-input" placeholder="API Key" @blur="saveVision" />
-                  <a v-if="visionKeyUrlOf(e)" :href="visionKeyUrlOf(e)" target="_blank" class="embed-key-link">申请 Key →</a>
-                </div>
-                <button class="btn vision-test-btn" :disabled="visionTestOf(i).status === 'testing' || !e.model || !e.apiKey" @click="testVisionEntry(i)">
-                  <Loader2 v-if="visionTestOf(i).status === 'testing'" :size="14" class="vision-spin" />
-                  <FlaskConical v-else :size="14" />
-                  {{ visionTestOf(i).status === "testing" ? "测试中…" : "测试" }}
-                </button>
-              </div>
-              <input v-model="e.baseUrl" class="form-input vision-url-input" placeholder="端点（可选，默认按厂商官方端点）" @blur="saveVision" />
+        <template v-else>
+          <div v-for="(e, i) in visionEntries" :key="i" class="vision-entry">
+            <div class="vision-entry-head">
+              <span class="vision-tag" :class="{ 'vision-tag--primary': i === 0 }">{{ visionTagOf(i) }}</span>
+              <button
+                class="vision-icon-btn"
+                :title="i === 0 ? (visionEntries.length > 1 ? '删除主模型（降级条目将上移）' : '删除（清空视觉读取配置）') : '删除此降级条目'"
+                @click="removeVisionEntry(i)"
+              >
+                <Trash2 :size="14" />
+              </button>
             </div>
-            <button class="btn vision-add-fallback" @click="addVisionEntry">
-              <Plus :size="14" />添加降级模型
-            </button>
-          </template>
-        </div>
-      </div>
+            <div v-if="visionTestOf(i).status === 'ok' || visionTestOf(i).status === 'fail'" class="test-result">
+              <Check v-if="visionTestOf(i).status === 'ok'" :size="14" class="test-ok-icon" />
+              <X v-else :size="14" class="test-fail-icon" />
+              <span :class="visionTestOf(i).status === 'ok' ? 'test-ok-text' : 'test-fail-text'" :title="visionTestMsgOf(i)">{{ visionTestMsgOf(i) }}</span>
+            </div>
+            <div class="vision-entry-grid">
+              <Combobox
+                :model-value="visionProviderDisplayOf(e)"
+                :options="visionProviders"
+                placeholder="厂商"
+                @update:model-value="(v: string) => onVisionProviderChange(i, v)"
+              />
+              <Combobox
+                v-if="visionModelSuggestionsOf(e).length > 0"
+                :model-value="e.model"
+                :options="visionModelSuggestionsOf(e)"
+                placeholder="模型"
+                @update:model-value="(v: string) => onVisionModelChange(i, v)"
+              />
+              <input v-else v-model="e.model" class="form-input" placeholder="模型名" @blur="saveVision" />
+            </div>
+            <div class="vision-entry-grid">
+              <div class="input-group">
+                <input v-model="e.apiKey" type="password" class="form-input" placeholder="API Key" @blur="saveVision" />
+                <a v-if="visionKeyUrlOf(e)" :href="visionKeyUrlOf(e)" target="_blank" class="embed-key-link">申请 Key →</a>
+              </div>
+              <button class="btn vision-test-btn" :disabled="visionTestOf(i).status === 'testing' || !e.model || !e.apiKey" @click="testVisionEntry(i)">
+                <Loader2 v-if="visionTestOf(i).status === 'testing'" :size="14" class="spin" />
+                <FlaskConical v-else :size="14" />
+                {{ visionTestOf(i).status === "testing" ? "测试中…" : "测试" }}
+              </button>
+            </div>
+            <input v-model="e.baseUrl" class="form-input vision-url-input" placeholder="端点（可选，默认按厂商官方端点；Coding 套餐可直接选「智谱 Coding」档免填）" @blur="saveVision" />
+          </div>
+          <button class="btn vision-add-fallback" @click="addVisionEntry">
+            <Plus :size="14" />添加降级模型
+          </button>
+        </template>
+        <ErrorBanner v-if="saveErrors.vision" variant="inline" title="保存失败" :detail="saveErrors.vision.msg" @retry="saveErrors.vision?.retry()" />
+      </section>
 
       </div>
     </template>
@@ -946,7 +964,6 @@ const hasFilterResults = computed(() => {
 <style scoped>
 /* 页级数据不可信：内容降透明（配 ErrorBanner banner 形态） */
 .settings-list.list-untrusted { opacity: 0.55; pointer-events: none; }
-.settings-list.list-untrusted .action-error { pointer-events: auto; }
 
 /* ===== 页面布局 ===== */
 .settings-content-inner {
@@ -980,278 +997,76 @@ const hasFilterResults = computed(() => {
   font-size: var(--ip-text-body-sm-size);
 }
 
-/* ===== 设置列表 ===== */
+/* ===== 卡片列表（滚动容器 + 限宽，兄弟设置页同款惯例） ===== */
 .settings-list {
   flex: 1;
-  padding: 4px 28px 24px;
+  width: 100%;
+  max-width: 780px;
+  margin: 0 auto;
+  padding: 8px 28px 24px;
   display: flex;
   flex-direction: column;
+  gap: var(--ip-spacing-3);
+  overflow-y: auto;
 }
 
-/* Embedding: Combobox 高度统一到 32px（和 form-input 一致） */
-:deep(.combobox-input-wrap) {
-  height: var(--ip-input-h-sm);
-}
-.embed-key-link {
-  font-size: var(--ip-text-caption-size);
-  color: var(--ip-primary-600);
-  text-decoration: none;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-.embed-key-link:hover { text-decoration: underline; }
-
-/* ===== 切换 embedding 模型确认 overlay ===== */
-.embed-switch-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.4);
+/* ===== 设置卡片（ProjectSettings 同款惯例） ===== */
+.settings-card {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: var(--ip-z-dropdown);
-}
-.embed-switch-panel {
-  width: 380px;
-  max-width: 90vw;
-  padding: 20px 22px;
-  background: var(--ip-color-bg-primary);
+  flex-direction: column;
+  gap: var(--ip-spacing-3);
+  padding: var(--ip-card-padding-md);
+  background: var(--ip-color-bg-secondary);
   border: 1px solid var(--ip-color-border-default);
-  border-radius: 12px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+  border-radius: var(--ip-card-radius);
+}
+.card-head {
   display: flex;
-  flex-direction: column;
+  align-items: flex-start;
+  justify-content: space-between;
   gap: var(--ip-spacing-2);
 }
-.embed-switch-panel h3 {
-  margin: 0 0 4px;
-  font-size: var(--ip-text-body-size);
+.card-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: var(--ip-text-body-sm-size);
   font-weight: var(--ip-font-weight-semibold);
   color: var(--ip-color-text-primary);
 }
-.embed-switch-row {
-  margin: 0;
-  font-size: var(--ip-text-body-sm-size);
-  color: var(--ip-color-text-secondary);
-}
-.embed-switch-warn {
-  margin: 0;
+.card-hint {
+  margin: 2px 0 0;
   font-size: var(--ip-text-caption-size);
   color: var(--ip-color-text-tertiary);
   line-height: 1.5;
 }
-.embed-switch-error {
-  font-size: var(--ip-text-caption-size);
-  color: #e5484d;
-  line-height: 1.5;
+
+/* ===== 字段（AgentForm/McpForm 同款竖排惯例） ===== */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
-.embed-switch-info {
+.field-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--ip-text-caption-size);
+  font-weight: var(--ip-font-weight-medium);
+  color: var(--ip-color-text-secondary);
+}
+
+/* ===== 保存反馈（状态上屏，不做保存按钮） ===== */
+.save-tip {
   font-size: var(--ip-text-caption-size);
   color: var(--ip-success-text);
-}
-.embed-switch-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--ip-spacing-2);
-  margin-top: 6px;
-}
-.embed-switch-actions button {
-  height: 30px;
-  padding: 0 14px;
-  font-size: var(--ip-text-body-sm-size);
-  font-weight: var(--ip-font-weight-medium);
-  border-radius: var(--ip-radius-md);
-  border: 1px solid var(--ip-color-border-default);
-  background: var(--ip-color-bg-tertiary);
-  color: var(--ip-color-text-secondary);
-  cursor: pointer;
-  transition: all var(--ip-duration-fast) var(--ip-ease-out);
-}
-.embed-switch-actions button.btn-primary {
-  background: var(--ip-primary-600);
-  border-color: var(--ip-primary-600);
-  color: #fff;
-}
-.embed-switch-actions button:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-.overlay-enter-active, .overlay-leave-active {
-  transition: opacity var(--ip-duration-fast) var(--ip-ease-out);
-}
-.overlay-enter-from, .overlay-leave-to {
-  opacity: 0;
-}
-
-/* ===== 视觉读取条目编辑器 ===== */
-.vision-empty {
-  display: flex;
-  align-items: center;
-  gap: var(--ip-spacing-3);
-  font-size: var(--ip-text-body-sm-size);
-  color: var(--ip-color-text-tertiary);
-  line-height: 1.5;
-}
-.vision-empty .btn { flex-shrink: 0; }
-
-.vision-entry {
-  display: flex;
-  flex-direction: column;
-  gap: var(--ip-spacing-2);
-  padding: var(--ip-spacing-3);
-  border: 1px solid var(--ip-color-border-default);
-  border-radius: var(--ip-radius-md);
-  background: var(--ip-color-bg-secondary);
-}
-.vision-entry-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 22px;
-}
-.vision-tag {
   flex-shrink: 0;
-  padding: 1px 8px;
-  font-size: var(--ip-text-micro-size);
-  font-weight: var(--ip-font-weight-medium);
-  border-radius: var(--ip-radius-sm);
-  color: var(--ip-color-text-secondary);
-  border: 1px solid var(--ip-color-border-default);
 }
-.vision-tag--primary {
-  color: #fff;
-  background: var(--ip-primary-600);
-  border-color: var(--ip-primary-600);
-}
-/* 测试结果独立成块：长错误文案（含 provider JSON 片段）可换行，不挤标签行 */
-.vision-entry-result {
-  display: flex;
-  align-items: flex-start;
-  gap: 4px;
-  padding: var(--ip-spacing-2) var(--ip-spacing-3);
-  border-radius: var(--ip-radius-sm);
-  background: var(--ip-color-bg-tertiary);
-  font-size: var(--ip-text-micro-size);
-  line-height: 1.5;
-}
-.vision-ok-icon { color: var(--ip-success-text); flex-shrink: 0; margin-top: 1px; }
-.vision-ok-text { color: var(--ip-success-text); word-break: break-all; }
-.vision-fail-icon { color: var(--ip-danger-text); flex-shrink: 0; margin-top: 1px; }
-.vision-fail-text { color: var(--ip-danger-text); word-break: break-all; }
-.vision-icon-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  flex-shrink: 0;
-  border: none;
-  border-radius: var(--ip-radius-sm);
-  background: transparent;
-  color: var(--ip-color-text-tertiary);
-  cursor: pointer;
-  transition: color var(--ip-duration-fast) var(--ip-ease-out), background var(--ip-duration-fast) var(--ip-ease-out);
-}
-.vision-icon-btn:hover { color: var(--ip-danger-text); background: var(--ip-color-bg-tertiary); }
-
-.vision-entry-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
-  gap: var(--ip-spacing-2);
-  align-items: center;
-}
-.vision-test-btn { flex-shrink: 0; justify-self: end; }
-.vision-url-input { height: var(--ip-input-h-sm); }
-
-.vision-add-fallback { align-self: flex-start; }
-.vision-spin { animation: vision-rotate 1s linear infinite; }
-@keyframes vision-rotate {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .vision-spin { animation: none; }
-}
-
-/* ===== 设置行 ===== */
-.setting-row {
-  display: flex;
-  align-items: flex-start;
-  padding: 14px 0;
-  gap: 24px;
-}
-
-.setting-label {
-  flex-shrink: 0;
-  width: 120px;
-}
-
-.setting-label-text {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: var(--ip-text-body-sm-size);
-  font-weight: var(--ip-font-weight-medium);
-  color: var(--ip-color-text-primary);
-  line-height: 1.4;
-  padding-top: 6px;
-}
-
-/* ===== 问号提示图标 ===== */
-.tip-icon {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  color: var(--ip-color-text-tertiary);
-  cursor: help;
-  flex-shrink: 0;
-  transition: color var(--ip-duration-fast) var(--ip-ease-out);
-}
-.tip-icon:hover {
-  color: var(--ip-primary-600);
-}
-.tip-icon::after {
-  content: attr(data-tip);
-  position: absolute;
-  left: 50%;
-  bottom: calc(100% + 6px);
-  transform: translateX(-50%);
-  max-width: 260px;
-  width: max-content;
-  padding: 5px 10px;
+.save-pending {
   font-size: var(--ip-text-caption-size);
-  font-weight: var(--ip-font-weight-regular);
-  color: var(--ip-color-text-on-primary);
-  background: var(--ip-gray-800);
-  border-radius: var(--ip-radius-md);
-  box-shadow: var(--ip-shadow-lg);
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity var(--ip-duration-fast) var(--ip-ease-out);
-  z-index: 10;
-  line-height: 1.5;
-  text-align: center;
-}
-.tip-icon:hover::after {
-  opacity: 1;
-}
-
-/* 暗色模式 tooltip 背景变亮 */
-[data-theme='dark'] .tip-icon::after {
-  background: var(--ip-gray-200);
-  color: var(--ip-gray-900);
-}
-
-.setting-control {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+  color: var(--ip-color-text-tertiary);
+  flex-shrink: 0;
 }
 
 /* ===== 输入组 ===== */
@@ -1316,8 +1131,6 @@ const hasFilterResults = computed(() => {
 }
 
 /* ===== 按钮 ===== */
-/* .btn 次级基类（视觉条目编辑器引入；此前本页只有 .btn-primary——embed 区按钮
-   靠 .embed-switch-actions 后代选择器吃样式，页内裸 .btn 是无样式原生按钮） */
 .btn {
   display: inline-flex;
   align-items: center;
@@ -1354,7 +1167,7 @@ const hasFilterResults = computed(() => {
   font-size: var(--ip-text-body-sm-size);
   font-weight: var(--ip-font-weight-medium);
   color: white;
-  background-color: var(--ip-primary-500);
+  background-color: var(--ip-primary-600);
   border: none;
   border-radius: var(--ip-radius-md);
   cursor: pointer;
@@ -1369,19 +1182,219 @@ const hasFilterResults = computed(() => {
   cursor: not-allowed;
 }
 
-.save-tip {
+/* ===== 测试结果块（语义检索/视觉条目共用）：长错误文案（含 provider JSON 片段）可换行 */
+.test-result {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  padding: var(--ip-spacing-2) var(--ip-spacing-3);
+  border-radius: var(--ip-radius-sm);
+  background: var(--ip-color-bg-tertiary);
+  font-size: var(--ip-text-micro-size);
+  line-height: 1.5;
+}
+.test-ok-icon { color: var(--ip-success-text); flex-shrink: 0; margin-top: 1px; }
+.test-ok-text { color: var(--ip-success-text); word-break: break-all; }
+.test-fail-icon { color: var(--ip-danger-text); flex-shrink: 0; margin-top: 1px; }
+.test-fail-text { color: var(--ip-danger-text); word-break: break-all; }
+
+/* Embedding: Combobox 高度统一到 32px（和 form-input 一致） */
+:deep(.combobox-input-wrap) {
+  height: var(--ip-input-h-sm);
+}
+.embed-key-link {
+  font-size: var(--ip-text-caption-size);
+  color: var(--ip-primary-600);
+  text-decoration: none;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.embed-key-link:hover { text-decoration: underline; }
+
+/* ===== 切换 embedding 模型确认 overlay ===== */
+.embed-switch-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: var(--ip-z-dropdown);
+}
+.embed-switch-panel {
+  width: 380px;
+  max-width: 90vw;
+  padding: 20px 22px;
+  background: var(--ip-color-bg-primary);
+  border: 1px solid var(--ip-color-border-default);
+  border-radius: 12px;
+  box-shadow: var(--ip-shadow-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ip-spacing-2);
+}
+.embed-switch-panel h3 {
+  margin: 0 0 4px;
+  font-size: var(--ip-text-body-size);
+  font-weight: var(--ip-font-weight-semibold);
+  color: var(--ip-color-text-primary);
+}
+.embed-switch-row {
+  margin: 0;
+  font-size: var(--ip-text-body-sm-size);
+  color: var(--ip-color-text-secondary);
+}
+.embed-switch-warn {
+  margin: 0;
+  font-size: var(--ip-text-caption-size);
+  color: var(--ip-color-text-tertiary);
+  line-height: 1.5;
+}
+.embed-switch-error {
+  font-size: var(--ip-text-caption-size);
+  color: var(--ip-danger-text);
+  line-height: 1.5;
+}
+.embed-switch-info {
   font-size: var(--ip-text-caption-size);
   color: var(--ip-success-text);
 }
+.embed-switch-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--ip-spacing-2);
+  margin-top: 6px;
+}
+.overlay-enter-active, .overlay-leave-active {
+  transition: opacity var(--ip-duration-fast) var(--ip-ease-out);
+}
+.overlay-enter-from, .overlay-leave-to {
+  opacity: 0;
+}
 
-/* 用户主动操作失败的可见提示 */
-.action-error {
-  font-size: var(--ip-text-caption-size);
-  color: var(--ip-danger-text);
-  padding: 6px 10px;
-  margin-bottom: 4px;
-  background-color: var(--ip-danger-bg);
+/* ===== 视觉读取条目编辑器 ===== */
+.vision-empty {
+  display: flex;
+  align-items: center;
+  gap: var(--ip-spacing-3);
+  font-size: var(--ip-text-body-sm-size);
+  color: var(--ip-color-text-tertiary);
+  line-height: 1.5;
+}
+.vision-empty .btn { flex-shrink: 0; }
+
+.vision-entry {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ip-spacing-2);
+  padding: var(--ip-spacing-3);
+  border: 1px solid var(--ip-color-border-default);
   border-radius: var(--ip-radius-md);
+  background: var(--ip-color-bg-tertiary);
+}
+.vision-entry-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 22px;
+}
+.vision-tag {
+  flex-shrink: 0;
+  padding: 1px 8px;
+  font-size: var(--ip-text-micro-size);
+  font-weight: var(--ip-font-weight-medium);
+  border-radius: var(--ip-radius-sm);
+  color: var(--ip-color-text-secondary);
+  border: 1px solid var(--ip-color-border-default);
+}
+.vision-tag--primary {
+  color: #fff;
+  background: var(--ip-primary-600);
+  border-color: var(--ip-primary-600);
+}
+.vision-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: var(--ip-radius-sm);
+  background: transparent;
+  color: var(--ip-color-text-tertiary);
+  cursor: pointer;
+  transition: color var(--ip-duration-fast) var(--ip-ease-out), background var(--ip-duration-fast) var(--ip-ease-out);
+}
+.vision-icon-btn:hover { color: var(--ip-danger-text); background: var(--ip-color-bg-secondary); }
+
+.vision-entry-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  gap: var(--ip-spacing-2);
+  align-items: center;
+}
+.vision-test-btn { flex-shrink: 0; justify-self: end; }
+.vision-url-input { height: var(--ip-input-h-sm); }
+
+.vision-add-fallback { align-self: flex-start; }
+
+.spin { animation: rotate-cw 1s linear infinite; }
+@keyframes rotate-cw {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .spin { animation: none; }
+}
+
+/* ===== 问号提示图标 ===== */
+.tip-icon {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  color: var(--ip-color-text-tertiary);
+  cursor: help;
+  flex-shrink: 0;
+  transition: color var(--ip-duration-fast) var(--ip-ease-out);
+}
+.tip-icon:hover {
+  color: var(--ip-primary-600);
+}
+.tip-icon::after {
+  content: attr(data-tip);
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 6px);
+  transform: translateX(-50%);
+  max-width: 260px;
+  width: max-content;
+  padding: 5px 10px;
+  font-size: var(--ip-text-caption-size);
+  font-weight: var(--ip-font-weight-regular);
+  color: var(--ip-color-text-on-primary);
+  background: var(--ip-gray-800);
+  border-radius: var(--ip-radius-md);
+  box-shadow: var(--ip-shadow-lg);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--ip-duration-fast) var(--ip-ease-out);
+  z-index: 10;
+  line-height: 1.5;
+  text-align: center;
+}
+.tip-icon:hover::after {
+  opacity: 1;
+}
+
+/* 暗色模式 tooltip 背景变亮 */
+[data-theme='dark'] .tip-icon::after {
+  background: var(--ip-gray-200);
+  color: var(--ip-gray-900);
 }
 
 /* =========================================================================
