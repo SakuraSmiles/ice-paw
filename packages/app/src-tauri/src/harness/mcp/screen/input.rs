@@ -662,6 +662,13 @@ mod tests {
             self.scrolls.lock().unwrap().push((dx_notches, dy_notches));
             Ok(())
         }
+        // 键盘方法：鼠标测试用不到，no-op 守编译（记录型 Fake 在 keyboard.rs）。
+        fn key_vk(&self, _vk: u16, _down: bool) -> AppResult<()> {
+            Ok(())
+        }
+        fn key_unicode(&self, _unit: u16, _down: bool) -> AppResult<()> {
+            Ok(())
+        }
     }
 
     /// 全屏 1920×1080 → 发送 1600×900 的坐标基准（scale 1.2）。
