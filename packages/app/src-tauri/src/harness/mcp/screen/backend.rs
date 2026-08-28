@@ -10,8 +10,9 @@
 //! 线程模型：GDI 调用全是阻塞的同步 API，trait 方法即同步；工具层用
 //! `spawn_blocking` 把捕获挪出 async runtime（BitBlt 大屏可耗时几十 ms）。
 //!
-//! DPI：Tauri v2 清单默认 PerMonitorV2 DPI 感知，`GetSystemMetrics` 与
-//! BitBlt 坐标同为物理像素——捕获与 SendInput 共用同一坐标空间，无换算。
+//! DPI：tao 在运行时调 SetProcessDpiAwarenessContext 设 PerMonitorV2（非清单
+//! 声明——测试进程无 tao 时需自设同档，见 real_smoke.rs），`GetSystemMetrics`
+//! 与 BitBlt 坐标同为物理像素——捕获与 SendInput 共用同一坐标空间，无换算。
 
 use crate::error::{AppError, AppResult};
 
@@ -267,10 +268,8 @@ mod gdi {
                 if got == 0 {
                     return Err(capture_err("GetDIBits 失败", "读取像素位图失败，稍后重试"));
                 }
-                // GDI 32bpp 是 BGRA —— 换位成 RGBA 供 image crate 直用。
-                for px in buf.chunks_exact_mut(4) {
-                    px.swap(0, 2);
-                }
+                // GDI 32bpp 是 BGRA —— 换位成 RGBA 供 image crate 直用（alpha 压 255）。
+                bgra_to_opaque_rgba(&mut buf);
                 Ok(RgbaFrame {
                     width: w as u32,
                     height: h as u32,
@@ -359,9 +358,7 @@ mod gdi {
                 if got == 0 {
                     return Err(capture_err("GetDIBits 失败", "读取窗口像素位图失败，稍后重试"));
                 }
-                for px in buf.chunks_exact_mut(4) {
-                    px.swap(0, 2);
-                }
+                bgra_to_opaque_rgba(&mut buf);
                 Ok((
                     RgbaFrame {
                         width: w as u32,
@@ -510,6 +507,16 @@ mod gdi {
         // SAFETY: GetLastError 是线程槽查询，无副作用。
         let gle = unsafe { GetLastError() };
         AppError::Internal(format!("screen 捕获失败: {step}（GDI 错误码 {gle}）——{hint}"))
+    }
+
+    /// GDI 32bpp DIB 是 BGRA，且 alpha 字节文档未定义（实测 DWM 屏幕路径常 255，
+    /// 但 RDP/服务会话等环境见过 0）——统一换位 + 压 255：PNG 侧永远不透明，
+    /// 红蓝通道对调也在此一处钉死（契约测试见 mod gdi_contract_tests）。
+    fn bgra_to_opaque_rgba(buf: &mut [u8]) {
+        for px in buf.chunks_exact_mut(4) {
+            px.swap(0, 2);
+            px[3] = 255;
+        }
     }
 
     /// 窗口标题（空标题返回空串；Win32 窗口标题无长度上限约定，动态探测）。
@@ -661,6 +668,82 @@ mod gdi {
             });
         }
         1
+    }
+
+    /// GDI 字节序契约（无头、确定性，随常规套件跑）：`SetPixel` 写已知色 →
+    /// 走与 capture/capture_window **完全相同形状**的 GetDIBits（负 biHeight
+    /// 顶向下 / 32bpp）→ 过 `bgra_to_opaque_rgba` → 断言通道序与行序。
+    /// 红蓝对调是方差类数值检查抓不住的（对调后的图照样五颜六色），只有
+    /// 契约测试能钉死——真机冒烟（real_smoke.rs）管内容，这里管字节。
+    #[cfg(test)]
+    mod gdi_contract_tests {
+        use super::bgra_to_opaque_rgba;
+        use windows_sys::Win32::Graphics::Gdi::{
+            CreateBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, GetDIBits,
+            ReleaseDC, SelectObject, SetPixel, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
+        };
+
+        #[test]
+        fn gdi_32bpp_dib_is_bgra_top_down() {
+            const W: i32 = 8;
+            const H: i32 = 6;
+            // SAFETY: 与生产捕获序列同模板——句柄逐一回滚释放，无跨线程共享。
+            unsafe {
+                let hdc_screen = GetDC(std::ptr::null_mut());
+                assert!(!hdc_screen.is_null(), "GetDC 失败（无显示会话？）");
+                let hdc_mem = CreateCompatibleDC(hdc_screen);
+                // 直接造 32bpp DDB（不随屏幕色深漂移），SetPixel 写 COLORREF=0x00BBGGRR
+                let hbmp = CreateBitmap(W, H, 1, 32, std::ptr::null());
+                assert!(!hdc_mem.is_null() && !hbmp.is_null(), "内存 DC/位图创建失败");
+                let old = SelectObject(hdc_mem, hbmp);
+                // 顶行区：红(2,2) 绿(4,2) 蓝(6,2)；末行：白(2,5) 黑(4,5)
+                for (x, y, c) in [
+                    (2, 2, 0xFFu32),     // RGB(255,0,0) 纯红
+                    (4, 2, 0xFF_00),     // RGB(0,255,0) 纯绿
+                    (6, 2, 0xFF_0000),   // RGB(0,0,255) 纯蓝
+                    (2, 5, 0xFF_FF_FF),  // 白
+                    (4, 5, 0x00_00_00),  // 黑
+                ] {
+                    assert_ne!(SetPixel(hdc_mem, x, y, c), u32::MAX, "SetPixel({x},{y}) 失败");
+                }
+                // 与生产完全相同的 GetDIBits 形状（负 biHeight = 自上而下）
+                let mut bmi: BITMAPINFO = std::mem::zeroed();
+                bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+                bmi.bmiHeader.biWidth = W;
+                bmi.bmiHeader.biHeight = -H;
+                bmi.bmiHeader.biPlanes = 1;
+                bmi.bmiHeader.biBitCount = 32;
+                bmi.bmiHeader.biCompression = 0; // BI_RGB
+                let mut buf = vec![0u8; (W as usize) * (H as usize) * 4];
+                let got = GetDIBits(
+                    hdc_mem,
+                    hbmp,
+                    0,
+                    H as u32,
+                    buf.as_mut_ptr().cast(),
+                    &mut bmi,
+                    DIB_RGB_COLORS,
+                );
+                SelectObject(hdc_mem, old);
+                DeleteObject(hbmp);
+                DeleteDC(hdc_mem);
+                ReleaseDC(std::ptr::null_mut(), hdc_screen);
+                assert_ne!(got, 0, "GetDIBits 失败");
+
+                bgra_to_opaque_rgba(&mut buf);
+                let px = |x: i32, y: i32| -> [u8; 4] {
+                    let i = ((y * W + x) * 4) as usize;
+                    buf[i..i + 4].try_into().unwrap()
+                };
+                // 通道序：BGRA 换位后 R 在首字节（若漏换位，纯红像素会是 [0,0,255,255]）
+                assert_eq!(px(2, 2), [255, 0, 0, 255], "纯红像素通道序错误（BGRA 未换位？）");
+                assert_eq!(px(4, 2), [0, 255, 0, 255], "纯绿像素通道序错误");
+                assert_eq!(px(6, 2), [0, 0, 255, 255], "纯蓝像素通道序错误");
+                // 行序：顶行区的色应在 y=2；若行序翻转，(2,2) 处会是空像素/黑
+                assert_eq!(px(2, 5), [255, 255, 255, 255], "末行白像素错位（行序翻转？）");
+                assert_eq!(px(4, 5), [0, 0, 0, 255], "末行黑像素错位（行序翻转？）");
+            }
+        }
     }
 }
 

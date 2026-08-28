@@ -129,6 +129,9 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_Threading",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_Storage_Xps",
+    # 真机冒烟测试（screen/real_smoke.rs）：测试进程无 tao 的运行时 DPI 感知设置，
+    # 自己补设 PerMonitorV2 才与生产同坐标基准（DPI 缩放机器上否则拿到虚拟化坐标）
+    "Win32_UI_HiDpi",
 ] }
 
 # === 集成测试 ===

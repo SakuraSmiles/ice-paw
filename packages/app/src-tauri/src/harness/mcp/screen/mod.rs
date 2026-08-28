@@ -20,6 +20,10 @@ pub mod coords;
 pub mod input;
 pub mod keyboard;
 pub mod state;
+// 真机冒烟（#[ignore] 默认跳过，显式 --ignored 运行）——真实 GDI/SendInput，
+// 不进常规测试面（移动用户光标/读用户屏幕，只在手测节点按需跑）。
+#[cfg(all(test, windows))]
+mod real_smoke;
 
 pub use backend::{MouseButton, RgbaFrame, ScreenBackend, WindowInfo};
 #[cfg(not(windows))]
