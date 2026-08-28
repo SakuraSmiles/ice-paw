@@ -840,7 +840,6 @@ const hasFilterResults = computed(() => {
             <div class="field-label">API Key</div>
             <div class="input-group">
               <input v-model="prefs.embedding_api_key" type="password" class="form-input" placeholder="粘贴 API Key" @blur="saveEmbedding" />
-              <a v-if="embeddingKeyUrl" :href="embeddingKeyUrl" target="_blank" class="embed-key-link">申请 Key →</a>
               <button
                 class="btn"
                 :disabled="embedTest.status === 'testing' || !prefs.embedding_provider || !prefs.embedding_model || !prefs.embedding_api_key"
@@ -851,6 +850,7 @@ const hasFilterResults = computed(() => {
                 {{ embedTest.status === "testing" ? "测试中…" : "测试" }}
               </button>
             </div>
+            <a v-if="embeddingKeyUrl" :href="embeddingKeyUrl" target="_blank" class="embed-key-link">申请 Key →</a>
             <div v-if="embedTest.status === 'ok' || embedTest.status === 'fail'" class="test-result">
               <Check v-if="embedTest.status === 'ok'" :size="14" class="test-ok-icon" />
               <X v-else :size="14" class="test-fail-icon" />
@@ -938,13 +938,13 @@ const hasFilterResults = computed(() => {
             </div>
             <div class="input-group">
               <input v-model="e.apiKey" type="password" class="form-input" placeholder="API Key" @blur="saveVision" />
-              <a v-if="visionKeyUrlOf(e)" :href="visionKeyUrlOf(e)" target="_blank" class="embed-key-link">申请 Key →</a>
               <button class="btn" :disabled="visionTestOf(i).status === 'testing' || !e.model || !e.apiKey" @click="testVisionEntry(i)">
                 <Loader2 v-if="visionTestOf(i).status === 'testing'" :size="14" class="spin" />
                 <FlaskConical v-else :size="14" />
                 {{ visionTestOf(i).status === "testing" ? "测试中…" : "测试" }}
               </button>
             </div>
+            <a v-if="visionKeyUrlOf(e)" :href="visionKeyUrlOf(e)" target="_blank" class="embed-key-link">申请 Key →</a>
             <input v-model="e.baseUrl" class="form-input vision-url-input" placeholder="端点 URL（可选，默认按厂商官方端点）" @blur="saveVision" />
           </div>
           <button class="btn vision-add-fallback" @click="addVisionEntry">
@@ -1208,7 +1208,6 @@ const hasFilterResults = computed(() => {
   color: var(--ip-primary-600);
   text-decoration: none;
   white-space: nowrap;
-  flex-shrink: 0;
 }
 .embed-key-link:hover { text-decoration: underline; }
 
@@ -1335,7 +1334,9 @@ const hasFilterResults = computed(() => {
   gap: var(--ip-spacing-2);
   align-items: center;
 }
-.vision-url-input { height: var(--ip-input-h-sm); }
+/* 独占一行的 form-input（vision-entry 是 column flex，.form-input 的 flex:1 会把
+   flex-basis 压成 0% 塌掉 height）——flex:none 让 height 令牌生效 */
+.vision-url-input { flex: none; }
 
 .vision-add-fallback { align-self: flex-start; }
 
