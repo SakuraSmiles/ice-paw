@@ -408,11 +408,11 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
 .trow-turn-header:hover { background: var(--ip-color-bg-elevated); }
 .trow-turn-header:active { background: var(--ip-color-bg-secondary); }
 /* 轮次头选中（检查器展示中）：底色与事件行选中态同语言 */
-.trow-turn-header.turn-selected { background: var(--ip-color-selection-bg); }
+.trow-turn-header.turn-selected { background: var(--ip-color-bg-sidebar-item-active); }
 /* 含错误轮次：淡红底扫读锚点（比 ⚠ 计数徽章更醒目）；hover 仍可辨 */
 .trow-turn-header.turn-errored { background: var(--ip-danger-bg); }
 .trow-turn-header.turn-errored:hover { background: var(--ip-danger-bg); filter: brightness(0.97); }
-.trow-turn-header.turn-errored.turn-selected { background: var(--ip-color-selection-bg); }
+.trow-turn-header.turn-errored.turn-selected { background: var(--ip-color-bg-sidebar-item-active); }
 .th-chevron { font-size: var(--ip-text-micro-size); color: var(--ip-color-text-tertiary); width: 10px; flex-shrink: 0; }
 /* 会话徽章（跨会话合并流）：委派会话走 tint 令牌（soft 系，勿直接 primary 底），
    chat 会话中性；max-width 兜长标题（title 悬停看全名） */
@@ -508,7 +508,7 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
   transition: background var(--ip-duration-fast) var(--ip-ease-out);
 }
 .trow-event:hover { background: var(--ip-color-bg-tertiary); }
-.trow-event.selected { background: var(--ip-color-selection-bg); }
+.trow-event.selected { background: var(--ip-color-bg-sidebar-item-active); }
 .trow-event.dim { opacity: 0.28; }
 /* 生成中 ephemeral 行：弱化底色 + 呼吸感（临时态，终态落库后被真实行取代） */
 .trow-event.streaming { font-style: italic; color: var(--ip-color-text-secondary); }
