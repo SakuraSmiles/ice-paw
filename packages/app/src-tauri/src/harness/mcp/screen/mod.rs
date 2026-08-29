@@ -15,8 +15,11 @@
 //! **act-and-look（操作后自动附图）**：操作工具成功后等一拍再抓一张
 //! 「操作效果」图附进 tool_result，且**即刻写为新的坐标基准**——动作与视觉
 //! 反馈合并为一次往返，模型不再需要每步主动 capture_screen 确认（省一整轮
-//! LLM），下一步坐标天然基于最新画面。`wait` 例外保持纯文本：它是 Always
-//! 级，暗中截屏会绕过用户对「画面离开本机」的授权同意。
+//! LLM），下一步坐标天然基于最新画面。附图前**等画面稳定**（隔拍两帧相同
+//! 才算收敛，上限保护）——办公场景「操作后被动变化」（开应用/切窗口/保存
+//! 对话框）多在 1-2s 收敛，等稳定再附图让模型看到最终态而非半开的中间态；
+//! 到上限仍不稳（持续动画）就如实附当前帧并在 note 标注。`wait` 例外保持
+//! 纯文本：它是 Always 级，暗中截屏会绕过用户对「画面离开本机」的授权同意。
 //!
 //! **授权**：截图/输入工具全部 `Confirm` 级——首弹由用户选 scope
 //! （仅此一次 / 此工具·本会话），现有三档授权记忆复用，不加新机制。
@@ -327,24 +330,55 @@ fn encode_png_ladder_with(
 // act-and-look：操作后自动附图（操作工具共用）
 // =========================================================================
 
-/// 操作后附图前的稳定等待：点击/输入引发的重绘、菜单展开、页面跳转动画
-/// 多在 100-300ms 量级——等一拍再抓，模型看到的是收敛后的画面而非中间态。
-/// 这是「动作 → 视觉反馈」合一往返的固定成本，远小于省掉的一整轮确认往返。
+/// 操作后附图前的初始稳定等待：点击/输入引发的重绘、菜单展开、页面跳转动画
+/// 多在 100-300ms 量级——先等一拍再开始观察。
 const ACT_SHOT_SETTLE_MS: u64 = 300;
+/// 稳定性观察间隔：隔一拍抓两帧比较，内容仍变（加载/动画进行中）就继续等。
+/// 办公场景「被动变化」多由操作引起（开应用/切窗口/保存对话框），收敛在
+/// 1-2s 量级——等稳定再附图，模型看到的是最终态而非半开的中间态。
+const ACT_SHOT_STABLE_GAP_MS: u64 = 250;
+/// 附图等待总上限（含初始 settle）：到上限仍不稳定（真动画/视频）就如实附
+/// 当前帧，note 标注「仍在变化」——上限保护防持续动画把每步操作拖满。
+const ACT_SHOT_MAX_WAIT_MS: u64 = 2000;
+
+/// 等待节奏的时间缩放：真实时钟 tokio sleep，测试构建压到 1ms 级保套件速度
+/// （循环次数/顺序语义不变，只缩时间）。cfg!(test) 是编译期常量，生产恒走真值。
+fn act_shot_settle_ms() -> u64 {
+    if cfg!(test) {
+        1
+    } else {
+        ACT_SHOT_SETTLE_MS
+    }
+}
+fn act_shot_stable_gap_ms() -> u64 {
+    if cfg!(test) {
+        1
+    } else {
+        ACT_SHOT_STABLE_GAP_MS
+    }
+}
+fn act_shot_max_wait_ms() -> u64 {
+    if cfg!(test) {
+        8
+    } else {
+        ACT_SHOT_MAX_WAIT_MS
+    }
+}
 
 /// 操作成功后抓一张「操作效果」图并即刻写为坐标基准。
 ///
 /// 捕获目标 = 上一张基准图覆盖的**同一物理区域**（全屏基准→全屏；窗口/裁剪
 /// 基准→同矩形走桌面 GDI——被遮挡时如实呈现遮挡者，输入本就作用于最顶层）；
-/// 无基准（原位操作）→ 整个虚拟桌面。附图失败降级 None（操作已成功不回滚，
-/// 调用方回落纯文本指路 capture_screen）——失败只 warn 不进工具错误文案，
-/// 不污染家族前缀（doom_detect 依赖首段稳定）。
+/// 无基准（原位操作）→ 整个虚拟桌面。抓到后**等画面稳定**（隔拍两帧相同才
+/// 收敛，上限保护），返回 `(png, meta, stable)`。附图失败降级 None（操作已
+/// 成功不回滚，调用方回落纯文本指路 capture_screen）——失败只 warn 不进工具
+/// 错误文案，不污染家族前缀（doom_detect 依赖首段稳定）。
 async fn action_shot(
     backend: &Arc<dyn ScreenBackend>,
     state: &Arc<ScreenState>,
     ctx: &ToolContext,
-) -> Option<(Vec<u8>, CaptureMeta)> {
-    tokio::time::sleep(std::time::Duration::from_millis(ACT_SHOT_SETTLE_MS)).await;
+) -> Option<(Vec<u8>, CaptureMeta, bool)> {
+    tokio::time::sleep(std::time::Duration::from_millis(act_shot_settle_ms())).await;
     let layout = backend.virtual_screen().ok()?;
     let layout_rect = PhysRect {
         x: layout.origin_x,
@@ -358,20 +392,20 @@ async fn action_shot(
         .and_then(|m| intersect_rects(m.phys_region, layout_rect))
         .unwrap_or(layout_rect);
 
-    let b = backend.clone();
-    let frame = match tokio::task::spawn_blocking(move || b.capture(region)).await {
-        Ok(Ok(f)) => f,
-        Ok(Err(e)) => {
-            tracing::warn!(target: "ice_paw.screen", conv = %ctx.conv_id, error = %e,
-                "act-and-look 附图失败（捕获）");
-            return None;
+    let mut frame = capture_frame(backend, ctx, region).await?;
+    let mut waited = act_shot_settle_ms();
+    let mut stable = false;
+    while waited + act_shot_stable_gap_ms() <= act_shot_max_wait_ms() {
+        tokio::time::sleep(std::time::Duration::from_millis(act_shot_stable_gap_ms())).await;
+        waited += act_shot_stable_gap_ms();
+        let next = capture_frame(backend, ctx, region).await?;
+        let same = frames_equal(&frame, &next);
+        frame = next;
+        if same {
+            stable = true;
+            break;
         }
-        Err(e) => {
-            tracing::warn!(target: "ice_paw.screen", conv = %ctx.conv_id, error = %e,
-                "act-and-look 附图失败（线程 join）");
-            return None;
-        }
-    };
+    }
     let (png, sent_w, sent_h) = match encode_png_ladder(frame) {
         Ok(v) => v,
         Err(e) => {
@@ -393,33 +427,67 @@ async fn action_shot(
         target: "ice_paw.screen",
         conv = %ctx.conv_id,
         phys = ?(region.x, region.y, region.width, region.height),
-        sent = ?(sent_w, sent_h), png_bytes = png.len(),
+        sent = ?(sent_w, sent_h), png_bytes = png.len(), stable,
         "act-and-look 附图（操作后画面，已更新坐标基准）"
     );
-    Some((png, meta))
+    Some((png, meta, stable))
+}
+
+/// 抓一帧（阻塞捕获走 spawn_blocking）。失败降级 None——warn 不进错误文案。
+async fn capture_frame(
+    backend: &Arc<dyn ScreenBackend>,
+    ctx: &ToolContext,
+    region: PhysRect,
+) -> Option<RgbaFrame> {
+    let b = backend.clone();
+    match tokio::task::spawn_blocking(move || b.capture(region)).await {
+        Ok(Ok(f)) => Some(f),
+        Ok(Err(e)) => {
+            tracing::warn!(target: "ice_paw.screen", conv = %ctx.conv_id, error = %e,
+                "act-and-look 附图失败（捕获）");
+            None
+        }
+        Err(e) => {
+            tracing::warn!(target: "ice_paw.screen", conv = %ctx.conv_id, error = %e,
+                "act-and-look 附图失败（线程 join）");
+            None
+        }
+    }
+}
+
+/// 两帧是否相同（同 region 必同尺寸；逐字节比较，全屏 ~15MB memcmp 是 µs-ms 级，
+/// 在两次捕获的间隙里开销可忽略）。
+fn frames_equal(a: &RgbaFrame, b: &RgbaFrame) -> bool {
+    a.width == b.width && a.height == b.height && a.rgba == b.rgba
 }
 
 /// 操作工具的统一收尾：有图 → 附图 + 声明新坐标基准；无图 → 纯文本降级指路。
 /// note 统一由这里落（覆盖调用方残留）——文案即行为契约。
 fn finish_action_output(
     mut echo: serde_json::Map<String, serde_json::Value>,
-    shot: Option<(Vec<u8>, CaptureMeta)>,
+    shot: Option<(Vec<u8>, CaptureMeta, bool)>,
 ) -> ToolOutput {
     match shot {
-        Some((png, meta)) => {
+        Some((png, meta, stable)) => {
             let (sx, sy) = pixel_scale_of(&meta);
             echo.insert(
                 "image_size".into(),
                 serde_json::json!({ "width": meta.sent_width, "height": meta.sent_height }),
             );
             echo.insert("pixel_scale".into(), serde_json::json!({ "x": sx, "y": sy }));
-            echo.insert("note".into(), serde_json::json!(
+            let note = if stable {
                 "Done. A screenshot taken right after this action is attached and is NOW the most \
                  recent image — use ITS pixel space (image_size) for your next coordinates. Judge \
                  the effect from it directly: no capture_screen needed just to verify this action. \
                  Re-capture only for a different area, a closer look (region crop), or when you \
                  suspect the screen changed on its own."
-            ));
+            } else {
+                "Done. A screenshot is attached and is NOW the most recent image — use ITS pixel \
+                 space (image_size) for your next coordinates. NOTE: the screen was still changing \
+                 when it was captured (loading or animation in progress) — if it looks \
+                 mid-transition, use the wait tool and re-capture before judging the effect."
+            };
+            echo.insert("note".into(), serde_json::json!(note));
             ToolOutput::with_image(serde_json::Value::Object(echo).to_string(), png)
         }
         None => {

@@ -581,7 +581,7 @@ mod tests {
     use super::*;
     use crate::harness::mcp::screen::coords::{PhysRect, VirtualScreenLayout};
     use crate::harness::mcp::screen::{RgbaFrame, WindowInfo};
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Mutex;
 
     /// 可变布局 + 输入记录的假后端（捕获走 act-and-look 附图路径——记录区域）。
@@ -594,6 +594,10 @@ mod tests {
         captures: Mutex<Vec<PhysRect>>,
         /// 置 true 后 capture 报错（测附图失败降级路径）。
         fail_capture: AtomicBool,
+        /// 前 N 次捕获返回互不相同的帧（首像素 = 捕获序号），之后返回稳定零帧
+        /// ——驱动等稳定循环（N=0 即恒稳定）。
+        vary_first: AtomicUsize,
+        capture_count: AtomicUsize,
     }
 
     impl FakeInputBackend {
@@ -610,6 +614,8 @@ mod tests {
                 scrolls: Mutex::new(Vec::new()),
                 captures: Mutex::new(Vec::new()),
                 fail_capture: AtomicBool::new(false),
+                vary_first: AtomicUsize::new(0),
+                capture_count: AtomicUsize::new(0),
             }
         }
 
@@ -640,10 +646,16 @@ mod tests {
                 return Err(AppError::Internal("fake 捕获失败（测试注入）".into()));
             }
             self.captures.lock().unwrap().push(region);
+            let seq = self.capture_count.fetch_add(1, Ordering::SeqCst);
+            let mut rgba = vec![0u8; region.width as usize * region.height as usize * 4];
+            if seq < self.vary_first.load(Ordering::SeqCst) {
+                // 变化帧：首像素写捕获序号，保证任意两帧不同。
+                rgba[0] = (seq + 1) as u8;
+            }
             Ok(RgbaFrame {
                 width: region.width,
                 height: region.height,
-                rgba: vec![0; region.width as usize * region.height as usize * 4],
+                rgba,
             })
         }
         fn windows(&self) -> AppResult<Vec<WindowInfo>> {
@@ -913,16 +925,15 @@ mod tests {
 
         tool.execute_with_output(r#"{"x":10,"y":10}"#, &ctx).await.unwrap();
         let captures = backend.captures.lock().unwrap().clone();
-        assert_eq!(captures.len(), 1, "恰好一张附图");
-        assert_eq!(
-            captures[0],
-            PhysRect {
-                x: 100,
-                y: 50,
-                width: 800,
-                height: 600
-            },
-            "附图应抓上一基准的同一物理矩形（与当前布局取交集）"
+        let expected = PhysRect {
+            x: 100,
+            y: 50,
+            width: 800,
+            height: 600,
+        };
+        assert!(
+            captures.iter().all(|c| *c == expected),
+            "附图的每次捕获（含等稳定观察帧）都应是上一基准的同一物理矩形，实际: {captures:?}"
         );
     }
 
@@ -945,5 +956,52 @@ mod tests {
             "降级 note 应指路 capture_screen，实际: {}",
             v["note"]
         );
+    }
+
+    /// 等稳定循环：前几次捕获互不相同（加载中）→ 继续观察到帧相同才附图。
+    #[tokio::test]
+    async fn action_shot_waits_until_frames_stabilize() {
+        let backend = Arc::new(FakeInputBackend::new());
+        let state = Arc::new(ScreenState::new());
+        state.update("a4", full_screen_meta());
+        let tool = MouseClickTool::new(backend.clone(), state);
+        let ctx = make_ctx("a4").await;
+
+        // vary_first=2：帧序列 = [变, 变, 0, 0, ...]——第 3 次比较（0==0）才稳定。
+        backend.vary_first.store(2, Ordering::SeqCst);
+        let out = tool.execute_with_output(r#"{"x":400,"y":300}"#, &ctx).await.unwrap();
+        assert!(out.image_png.is_some(), "稳定后应附图");
+        let v: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+        assert!(
+            !v["note"].as_str().unwrap().contains("still changing"),
+            "稳定附图的 note 不应带「仍在变化」警告"
+        );
+        // 捕获次数 ≥ 3：初始帧 + 至少两次变化帧后才出现相同对
+        assert!(
+            backend.captures.lock().unwrap().len() >= 3,
+            "等稳定循环应在帧稳定前持续观察"
+        );
+    }
+
+    /// 上限保护：画面永不稳定（持续动画）→ 耗满等待仍如实附图 + note 标注。
+    #[tokio::test]
+    async fn action_shot_caps_wait_when_never_stable() {
+        let backend = Arc::new(FakeInputBackend::new());
+        let state = Arc::new(ScreenState::new());
+        state.update("a5", full_screen_meta());
+        let tool = MouseClickTool::new(backend.clone(), state);
+        let ctx = make_ctx("a5").await;
+
+        backend.vary_first.store(usize::MAX, Ordering::SeqCst);
+        let out = tool.execute_with_output(r#"{"x":400,"y":300}"#, &ctx).await.unwrap();
+        assert!(out.image_png.is_some(), "上限耗尽也应附图（如实呈现中间态）");
+        let v: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+        assert!(
+            v["note"].as_str().unwrap().contains("still changing"),
+            "未稳附图的 note 应标注仍在变化并指路 wait"
+        );
+        // 测试构建 max_wait=8ms / gap=1ms：观察帧有界（≤ 8 次），不无限循环
+        let n = backend.captures.lock().unwrap().len();
+        assert!(n <= 9, "上限应限制观察次数，实际 {n} 次");
     }
 }
