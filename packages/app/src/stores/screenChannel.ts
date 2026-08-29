@@ -75,5 +75,19 @@ export const useScreenChannelStore = defineStore("screenChannel", () => {
     }
   }
 
-  return { state, busy, isOn, isAttached, init, openFrom, stop };
+  /** 暂停/恢复（步骤 3 播放器语义：读写 gate 挂起/唤醒，通道与授权保持）。
+   *  Off 状态后端幂等无操作。抛错交调用方处理。 */
+  async function setPaused(paused: boolean): Promise<void> {
+    if (busy.value) return;
+    busy.value = true;
+    try {
+      state.value = paused
+        ? await bridge.screen.pauseChannel()
+        : await bridge.screen.resumeChannel();
+    } finally {
+      busy.value = false;
+    }
+  }
+
+  return { state, busy, isOn, isAttached, init, openFrom, stop, setPaused };
 });

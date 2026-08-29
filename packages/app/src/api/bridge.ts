@@ -471,6 +471,16 @@ const screen = {
     try { return await invoke<ScreenChannelState>("get_screen_channel_state"); }
     catch (err) { throw wrapInvokeError("screen.getChannelState", err); }
   },
+  /** 暂停通道（批次④ 步骤 3）：读写 gate 全部挂起，通道/授权/附着保持 */
+  async pauseChannel(): Promise<ScreenChannelState> {
+    try { return await invoke<ScreenChannelState>("screen_channel_pause"); }
+    catch (err) { throw wrapInvokeError("screen.pauseChannel", err); }
+  },
+  /** 恢复通道：挂起中的读写被唤醒继续 */
+  async resumeChannel(): Promise<ScreenChannelState> {
+    try { return await invoke<ScreenChannelState>("screen_channel_resume"); }
+    catch (err) { throw wrapInvokeError("screen.resumeChannel", err); }
+  },
 };
 
 export const bridge = { agents, providers, conversations, projects, messages, chat, preferences, mcp, kb, logs, trajectory, screen };
