@@ -68,6 +68,9 @@ impl LoopEmitter for TauriEmitter {
         use tauri::Manager as _;
         let chat_state = self.app.state::<crate::harness::chat_state::ChatState>();
         chat_state.unregister(&self.conv_id);
+        // 屏幕通道写令牌归还（§4.3 持有粒度=回合）：归属检查 + 队列摘除 +
+        // 队头授予全在 `release_write` 内；通道 Off 时是空操作。
+        crate::harness::mcp::screen::channel::global().release_write(&self.conv_id);
     }
 }
 

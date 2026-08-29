@@ -1,5 +1,5 @@
-//! 屏幕通道命令（批次④ 步骤 1）：`screen_channel_open` / `screen_channel_stop` /
-//! `get_screen_channel_state`。
+//! 屏幕通道命令（批次④ 步骤 1+3）：`screen_channel_open` / `screen_channel_stop` /
+//! `get_screen_channel_state` + 暂停/恢复/手动授予/脱离四件。
 //!
 //! 通道生命周期走 tracing（`ice_paw.screen_channel`）不进 session_events——
 //! 开/关由用户命令触发、无 conv/turn 容器，伪造 turn_id 会毒化 reconcile 的
@@ -74,4 +74,71 @@ pub async fn screen_channel_stop(app: AppHandle) -> AppResult<ScreenChannelState
 #[tauri::command]
 pub async fn get_screen_channel_state() -> AppResult<ScreenChannelState> {
     Ok(channel::global().snapshot())
+}
+
+/// 暂停（§4.4：读写 gate 全部 park；通道/授权/附着保持——播放器语义）。
+/// Off 状态幂等无操作。挂起中的会话被「停止生成」打断时收到家族错误
+/// `screen 通道已暂停`（评审 B1 取消感知 park）。
+#[tauri::command]
+pub async fn screen_channel_pause(app: AppHandle) -> AppResult<ScreenChannelState> {
+    let ch = channel::global();
+    if ch.is_active() {
+        ch.pause();
+        tracing::info!(target: "ice_paw.screen_channel", "屏幕通道暂停（读写挂起）");
+        channel::emit_state(&app);
+    }
+    Ok(ch.snapshot())
+}
+
+/// 恢复：park 中的读写 gate 被唤醒继续。Off 状态幂等无操作。
+#[tauri::command]
+pub async fn screen_channel_resume(app: AppHandle) -> AppResult<ScreenChannelState> {
+    let ch = channel::global();
+    if ch.is_active() {
+        ch.resume();
+        tracing::info!(target: "ice_paw.screen_channel", "屏幕通道恢复");
+        channel::emit_state(&app);
+    }
+    Ok(ch.snapshot())
+}
+
+/// 手动切换写令牌（HUD 队列「授予」；步骤 2 接 HUD，先备命令面）：
+/// 目标会话立即持有；原持有者入队尾（评审 B9——不入队即丢失唤醒），不中止其回合。
+#[tauri::command]
+pub async fn screen_channel_grant(
+    app: AppHandle,
+    conversation_id: String,
+) -> AppResult<ScreenChannelState> {
+    let ch = channel::global();
+    if !ch.is_active() {
+        return Err(AppError::Validation(
+            "screen 通道未开启: 无法授予屏幕操作权——通道已关闭".into(),
+        ));
+    }
+    if !ch.is_attached(&conversation_id) {
+        return Err(AppError::Validation(format!(
+            "screen 通道授予失败: 会话 {conversation_id} 未加入屏幕共享——\
+             只有已加入的会话能获得操作权"
+        )));
+    }
+    ch.grant(&conversation_id);
+    tracing::info!(
+        target: "ice_paw.screen_channel",
+        conv = %conversation_id,
+        "写令牌手动授予（用户切换）"
+    );
+    channel::emit_state(&app);
+    Ok(ch.snapshot())
+}
+
+/// 会话脱离通道（连带归还令牌/摘除排队位；HUD「移除会话」/清理钩子用）。
+#[tauri::command]
+pub async fn screen_channel_detach(
+    app: AppHandle,
+    conversation_id: String,
+) -> AppResult<ScreenChannelState> {
+    let ch = channel::global();
+    ch.detach(&conversation_id);
+    channel::emit_state(&app);
+    Ok(ch.snapshot())
 }

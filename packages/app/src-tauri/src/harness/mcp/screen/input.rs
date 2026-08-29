@@ -230,6 +230,11 @@ impl McpClient for MouseMoveTool {
         let p: MouseMoveArgs = serde_json::from_str(args).map_err(|e| {
             AppError::Validation(format!("mouse_move 参数解析失败: {e}"))
         })?;
+        // 写 gate（§4.3 单写者令牌）：Off 首入兼容直过；他者持有 → 排队 park
+        //（取消感知）；暂停 → 挂起；域内被关 → 家族错误。
+        super::channel::global()
+            .gate_write(&ctx.conv_id, ctx.cancel.as_ref())
+            .await?;
         let (meta, px, py, ax, ay) =
             resolve_point(self.backend.as_ref(), &self.state, ctx, p.x, p.y)?;
         self.backend.mouse_move_abs(ax, ay)?;
@@ -308,6 +313,10 @@ impl McpClient for MouseClickTool {
         let p: MouseClickArgs = serde_json::from_str(args).map_err(|e| {
             AppError::Validation(format!("mouse_click 参数解析失败: {e}"))
         })?;
+        // 写 gate（§4.3 单写者令牌）：一次工具调用 = 一个原子步（按下+抬起不拆）。
+        super::channel::global()
+            .gate_write(&ctx.conv_id, ctx.cancel.as_ref())
+            .await?;
 
         let button: MouseButton = p.button.into();
         let mut echo = serde_json::Map::new();
@@ -421,6 +430,10 @@ impl McpClient for MouseDragTool {
         let p: MouseDragArgs = serde_json::from_str(args).map_err(|e| {
             AppError::Validation(format!("mouse_drag 参数解析失败: {e}"))
         })?;
+        // 写 gate（§4.3）：整段插值拖拽 = 一个原子步，gate 在序列起点、步内不 park。
+        super::channel::global()
+            .gate_write(&ctx.conv_id, ctx.cancel.as_ref())
+            .await?;
 
         // 两端各自换算（同一次 resolve 共享同一 meta + 同一布局校验）。
         let (meta, fx, fy, fax, fay) =
@@ -531,6 +544,10 @@ impl McpClient for MouseScrollTool {
         let p: MouseScrollArgs = serde_json::from_str(args).map_err(|e| {
             AppError::Validation(format!("mouse_scroll 参数解析失败: {e}"))
         })?;
+        // 写 gate（§4.3 单写者令牌）
+        super::channel::global()
+            .gate_write(&ctx.conv_id, ctx.cancel.as_ref())
+            .await?;
         if p.dx == 0 && p.dy == 0 {
             return Err(AppError::Validation(
                 "mouse_scroll 参数无效: dx 与 dy 至少一个非零（收到 0, 0）".into(),
