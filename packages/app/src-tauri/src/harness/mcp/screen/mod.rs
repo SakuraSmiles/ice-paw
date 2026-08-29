@@ -12,6 +12,12 @@
 //! = 本会话**最近一次截图的图片像素空间**；每次截图的文本摘要声明
 //! image_size / pixel_scale，工具侧用 [`state::ScreenState`] 换算回物理像素。
 //!
+//! **act-and-look（操作后自动附图）**：操作工具成功后等一拍再抓一张
+//! 「操作效果」图附进 tool_result，且**即刻写为新的坐标基准**——动作与视觉
+//! 反馈合并为一次往返，模型不再需要每步主动 capture_screen 确认（省一整轮
+//! LLM），下一步坐标天然基于最新画面。`wait` 例外保持纯文本：它是 Always
+//! 级，暗中截屏会绕过用户对「画面离开本机」的授权同意。
+//!
 //! **授权**：截图/输入工具全部 `Confirm` 级——首弹由用户选 scope
 //! （仅此一次 / 此工具·本会话），现有三档授权记忆复用，不加新机制。
 //! 批次④ 起 [`channel::ScreenChannel`]（屏幕共享通道）提供授权上收：通道
@@ -318,8 +324,142 @@ fn encode_png_ladder_with(
 }
 
 // =========================================================================
+// act-and-look：操作后自动附图（操作工具共用）
+// =========================================================================
+
+/// 操作后附图前的稳定等待：点击/输入引发的重绘、菜单展开、页面跳转动画
+/// 多在 100-300ms 量级——等一拍再抓，模型看到的是收敛后的画面而非中间态。
+/// 这是「动作 → 视觉反馈」合一往返的固定成本，远小于省掉的一整轮确认往返。
+const ACT_SHOT_SETTLE_MS: u64 = 300;
+
+/// 操作成功后抓一张「操作效果」图并即刻写为坐标基准。
+///
+/// 捕获目标 = 上一张基准图覆盖的**同一物理区域**（全屏基准→全屏；窗口/裁剪
+/// 基准→同矩形走桌面 GDI——被遮挡时如实呈现遮挡者，输入本就作用于最顶层）；
+/// 无基准（原位操作）→ 整个虚拟桌面。附图失败降级 None（操作已成功不回滚，
+/// 调用方回落纯文本指路 capture_screen）——失败只 warn 不进工具错误文案，
+/// 不污染家族前缀（doom_detect 依赖首段稳定）。
+async fn action_shot(
+    backend: &Arc<dyn ScreenBackend>,
+    state: &Arc<ScreenState>,
+    ctx: &ToolContext,
+) -> Option<(Vec<u8>, CaptureMeta)> {
+    tokio::time::sleep(std::time::Duration::from_millis(ACT_SHOT_SETTLE_MS)).await;
+    let layout = backend.virtual_screen().ok()?;
+    let layout_rect = PhysRect {
+        x: layout.origin_x,
+        y: layout.origin_y,
+        width: layout.width.max(1) as u32,
+        height: layout.height.max(1) as u32,
+    };
+    let prev = state.get(&ctx.conv_id);
+    let region = prev
+        .as_ref()
+        .and_then(|m| intersect_rects(m.phys_region, layout_rect))
+        .unwrap_or(layout_rect);
+
+    let b = backend.clone();
+    let frame = match tokio::task::spawn_blocking(move || b.capture(region)).await {
+        Ok(Ok(f)) => f,
+        Ok(Err(e)) => {
+            tracing::warn!(target: "ice_paw.screen", conv = %ctx.conv_id, error = %e,
+                "act-and-look 附图失败（捕获）");
+            return None;
+        }
+        Err(e) => {
+            tracing::warn!(target: "ice_paw.screen", conv = %ctx.conv_id, error = %e,
+                "act-and-look 附图失败（线程 join）");
+            return None;
+        }
+    };
+    let (png, sent_w, sent_h) = match encode_png_ladder(frame) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(target: "ice_paw.screen", conv = %ctx.conv_id, error = %e,
+                "act-and-look 附图失败（编码）");
+            return None;
+        }
+    };
+    let meta = CaptureMeta {
+        layout,
+        phys_region: region,
+        sent_width: sent_w,
+        sent_height: sent_h,
+        monitor: prev.as_ref().and_then(|m| m.monitor),
+    };
+    state.update(&ctx.conv_id, meta.clone());
+    channel::global().note_screenshot();
+    tracing::info!(
+        target: "ice_paw.screen",
+        conv = %ctx.conv_id,
+        phys = ?(region.x, region.y, region.width, region.height),
+        sent = ?(sent_w, sent_h), png_bytes = png.len(),
+        "act-and-look 附图（操作后画面，已更新坐标基准）"
+    );
+    Some((png, meta))
+}
+
+/// 操作工具的统一收尾：有图 → 附图 + 声明新坐标基准；无图 → 纯文本降级指路。
+/// note 统一由这里落（覆盖调用方残留）——文案即行为契约。
+fn finish_action_output(
+    mut echo: serde_json::Map<String, serde_json::Value>,
+    shot: Option<(Vec<u8>, CaptureMeta)>,
+) -> ToolOutput {
+    match shot {
+        Some((png, meta)) => {
+            let (sx, sy) = pixel_scale_of(&meta);
+            echo.insert(
+                "image_size".into(),
+                serde_json::json!({ "width": meta.sent_width, "height": meta.sent_height }),
+            );
+            echo.insert("pixel_scale".into(), serde_json::json!({ "x": sx, "y": sy }));
+            echo.insert("note".into(), serde_json::json!(
+                "Done. A screenshot taken right after this action is attached and is NOW the most \
+                 recent image — use ITS pixel space (image_size) for your next coordinates. Judge \
+                 the effect from it directly: no capture_screen needed just to verify this action. \
+                 Re-capture only for a different area, a closer look (region crop), or when you \
+                 suspect the screen changed on its own."
+            ));
+            ToolOutput::with_image(serde_json::Value::Object(echo).to_string(), png)
+        }
+        None => {
+            echo.insert("note".into(), serde_json::json!(
+                "Done, but the automatic follow-up screenshot failed — call capture_screen to see \
+                 the result before deciding the next step."
+            ));
+            ToolOutput::text(serde_json::Value::Object(echo).to_string())
+        }
+    }
+}
+
+/// 两矩形求交（不相交返回 None）。
+fn intersect_rects(a: PhysRect, b: PhysRect) -> Option<PhysRect> {
+    let x0 = a.x.max(b.x);
+    let y0 = a.y.max(b.y);
+    let x1 = a.right().min(b.right());
+    let y1 = a.bottom().min(b.bottom());
+    if x1 <= x0 || y1 <= y0 {
+        return None;
+    }
+    Some(PhysRect {
+        x: x0,
+        y: y0,
+        width: (x1 - x0) as u32,
+        height: (y1 - y0) as u32,
+    })
+}
+
+// =========================================================================
 // 摘要
 // =========================================================================
+
+/// [`CaptureMeta`] 的像素缩放比（图片像素 → 物理像素），两种摘要共用。
+fn pixel_scale_of(meta: &CaptureMeta) -> (f64, f64) {
+    (
+        (meta.phys_region.width as f64 / meta.sent_width.max(1) as f64 * 100.0).round() / 100.0,
+        (meta.phys_region.height as f64 / meta.sent_height.max(1) as f64 * 100.0).round() / 100.0,
+    )
+}
 
 /// 截图附带文本摘要：声明坐标契约 + 缩放比例 + 显示器布局。
 ///
@@ -330,9 +470,7 @@ fn capture_summary(
     monitors: &[PhysRect],
     png_bytes: usize,
 ) -> serde_json::Value {
-    let sx = (meta.phys_region.width as f64 / meta.sent_width.max(1) as f64 * 100.0).round() / 100.0;
-    let sy =
-        (meta.phys_region.height as f64 / meta.sent_height.max(1) as f64 * 100.0).round() / 100.0;
+    let (sx, sy) = pixel_scale_of(meta);
     serde_json::json!({
         "backend": backend,
         "monitor": meta.monitor,
