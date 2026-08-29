@@ -232,6 +232,10 @@ impl McpClient for TypeTextTool {
         let p: TypeTextArgs =
             serde_json::from_str(args)
                 .map_err(|e| AppError::Validation(format!("type_text 参数解析失败: {e}")))?;
+        // 写 gate（§4.3 单写者令牌）：逐字符注入 = 一个原子步。
+        super::channel::global()
+            .gate_write(&ctx.conv_id, ctx.cancel.as_ref())
+            .await?;
         let chars = p.text.chars().count();
         if chars == 0 {
             return Err(AppError::Validation(
@@ -326,6 +330,10 @@ impl McpClient for PressKeyTool {
         let p: PressKeyArgs =
             serde_json::from_str(args)
                 .map_err(|e| AppError::Validation(format!("press_key 参数解析失败: {e}")))?;
+        // 写 gate（§4.3 单写者令牌）：组合键全程 = 一个原子步（按下→点按→逆序释放不拆）。
+        super::channel::global()
+            .gate_write(&ctx.conv_id, ctx.cancel.as_ref())
+            .await?;
         let presses = p.presses.unwrap_or(1).clamp(1, 10);
         let (mods, main) = parse_combo(&p.combo)?;
 

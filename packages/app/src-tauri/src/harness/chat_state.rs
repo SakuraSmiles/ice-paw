@@ -23,6 +23,7 @@ pub use crate::infra::cancel::CancellationToken;
 // =========================================================================
 
 /// 全局聊天状态（注入到 Tauri managed state）
+/// （`Clone` 见文件尾手写 impl——同柄 `Arc` 共享，屏幕通道活性查询共用）
 pub struct ChatState {
     /// 会话 ID → 取消令牌
     inner: Arc<Mutex<HashMap<String, CancellationToken>>>,

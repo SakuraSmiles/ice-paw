@@ -167,6 +167,10 @@ impl McpClient for CaptureScreenTool {
             AppError::Validation(format!("capture_screen 参数解析失败: {e}"))
         })?;
 
+        // 读 gate（§4.3 读写分家）：Off 首入兼容直过；暂停 park（取消感知）；
+        // 域内被关 → 家族错误。截图彼此自由并发，不取写令牌。
+        channel::global().gate_read(ctx.cancel.as_ref()).await?;
+
         let layout = self.backend.virtual_screen()?;
         let monitors = self.backend.monitors()?;
         let target: PhysRect = match p.monitor {
@@ -467,6 +471,10 @@ fn finish_action_output(
     mut echo: serde_json::Map<String, serde_json::Value>,
     shot: Option<(Vec<u8>, CaptureMeta, bool)>,
 ) -> ToolOutput {
+    // 排队情报（§4.3「队列对模型可见」）：写结果附带通道快照注记，无争用静默。
+    if let Some(n) = channel::global().contention_note() {
+        echo.insert("screen_contention".into(), serde_json::json!(n));
+    }
     match shot {
         Some((png, meta, stable)) => {
             let (sx, sy) = pixel_scale_of(&meta);
@@ -716,6 +724,9 @@ impl McpClient for CaptureWindowTool {
         let p: CaptureWindowArgs = serde_json::from_str(args).map_err(|e| {
             AppError::Validation(format!("capture_window 参数解析失败: {e}"))
         })?;
+
+        // 读 gate（同 capture_screen：Off 首入兼容直过 / 暂停 park / 域内被关家族错误）
+        channel::global().gate_read(ctx.cancel.as_ref()).await?;
 
         // 目标解析：hwnd（直接）→ title_contains（列表匹配）→ 前台窗口。
         let (hwnd, matched_title) = match p.hwnd {
