@@ -14,6 +14,10 @@
 //!
 //! **授权**：全部 `Confirm` 级——输入模拟真实作用于用户机器上的应用。
 //!
+//! **act-and-look**：四件成功后统一走 [`super::action_shot`] 附「操作效果」图
+//! （~300ms 后同区域重抓，即刻成为新坐标基准）——省掉模型每步主动
+//! capture_screen 的确认往返（见 mod.rs 模块文档）。
+//!
 //! SendInput 是微秒级 syscall，不走 `spawn_blocking`（与几十 ms 的 BitBlt 不同）；
 //! 拖拽的步进间隔用 tokio sleep，天然可被取消令牌打断（工具执行层的超时罩着）。
 
@@ -27,7 +31,7 @@ use crate::error::{AppError, AppResult};
 use super::backend::{MouseButton, ScreenBackend};
 use super::coords::{self, CaptureMeta};
 use super::state::ScreenState;
-use crate::harness::mcp::client::{McpClient, ToolContext};
+use crate::harness::mcp::client::{McpClient, ToolContext, ToolOutput};
 use crate::harness::mcp::types::AuthorizationLevel;
 
 #[cfg(windows)]
@@ -189,9 +193,12 @@ impl McpClient for MouseMoveTool {
     fn description(&self) -> &str {
         "Move the mouse cursor to a point on the screen. Coordinates (x, y) are in the pixel \
          space of the MOST RECENT captured image (the coordinate contract declared by \
-         capture_screen/capture_window). Fails with 'coordinate base missing' if no screenshot \
-         was taken yet in this conversation, and 'coordinates stale' if the display layout \
-         changed since — re-capture and retry. Moving alone clicks nothing."
+         capture_screen/capture_window). Only needed for hover effects (tooltips, hover menus) \
+         or positioning — to CLICK something, pass (x, y) to mouse_click directly: it moves and \
+         clicks in one step, no mouse_move needed first. Fails with 'coordinate base missing' if \
+         no screenshot was taken yet, 'coordinates stale' if the display layout changed — \
+         re-capture and retry. The result includes a screenshot taken right after the move \
+         which becomes the new coordinate basis."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -210,16 +217,16 @@ impl McpClient for MouseMoveTool {
     }
 
     fn auth_reason(&self) -> Option<String> {
-        Some("将移动鼠标指针（会真实作用于你机器上的当前桌面）".into())
+        Some("将移动鼠标指针并回传操作后的屏幕截图给当前模型服务商（会真实作用于你机器上的当前桌面）".into())
     }
 
     async fn execute(&self, _args: &str) -> AppResult<String> {
         Err(AppError::Internal(
-            "mouse_move 必须通过 execute_with_context 调用（需要 conv_id 定位坐标基准）".into(),
+            "mouse_move 必须通过 execute_with_output 调用（需要 conv_id 定位坐标基准 + 回传附图）".into(),
         ))
     }
 
-    async fn execute_with_context(&self, args: &str, ctx: &ToolContext) -> AppResult<String> {
+    async fn execute_with_output(&self, args: &str, ctx: &ToolContext) -> AppResult<ToolOutput> {
         let p: MouseMoveArgs = serde_json::from_str(args).map_err(|e| {
             AppError::Validation(format!("mouse_move 参数解析失败: {e}"))
         })?;
@@ -233,13 +240,8 @@ impl McpClient for MouseMoveTool {
         );
         let mut out = echo_point(&meta, p.x, p.y, px, py);
         out.insert("action".into(), "mouse_move".into());
-        out.insert(
-            "note".into(),
-            "Cursor moved (nothing clicked). Coordinates for all screen tools stay in the most \
-             recent image's pixel space."
-                .into(),
-        );
-        Ok(serde_json::Value::Object(out).to_string())
+        let shot = super::action_shot(&self.backend, &self.state, ctx).await;
+        Ok(super::finish_action_output(out, shot))
     }
 }
 
@@ -267,11 +269,13 @@ impl McpClient for MouseClickTool {
     }
 
     fn description(&self) -> &str {
-        "Click the mouse. Give (x, y) in the most recent image's pixel space to move there \
-         first, or omit both to click at the current cursor position. button: left (default) / \
-         right (context menu) / middle. double: true for a double-click. The click acts on \
-         whatever is under the point on the user's real screen — prefer precise coordinates \
-         from a fresh capture."
+        "Click the mouse at (x, y) in the most recent image's pixel space — this moves and \
+         clicks in ONE step, so do NOT call mouse_move first. Omit x/y to click at the current \
+         cursor position. button: left (default) / right (context menu) / middle; double: true \
+         for a double-click. The click acts on whatever is under the point on the user's real \
+         screen — prefer precise coordinates from a fresh capture. The result ALWAYS includes a \
+         fresh screenshot taken right after the click, which becomes the new coordinate basis — \
+         read it to see what the click did; do NOT call capture_screen just to verify."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -291,16 +295,16 @@ impl McpClient for MouseClickTool {
     }
 
     fn auth_reason(&self) -> Option<String> {
-        Some("将模拟鼠标点击——会真实作用于屏幕上当前打开的应用".into())
+        Some("将模拟鼠标点击并回传操作后的屏幕截图给当前模型服务商（会真实作用于屏幕上当前打开的应用）".into())
     }
 
     async fn execute(&self, _args: &str) -> AppResult<String> {
         Err(AppError::Internal(
-            "mouse_click 必须通过 execute_with_context 调用（需要 conv_id 定位坐标基准）".into(),
+            "mouse_click 必须通过 execute_with_output 调用（需要 conv_id 定位坐标基准 + 回传附图）".into(),
         ))
     }
 
-    async fn execute_with_context(&self, args: &str, ctx: &ToolContext) -> AppResult<String> {
+    async fn execute_with_output(&self, args: &str, ctx: &ToolContext) -> AppResult<ToolOutput> {
         let p: MouseClickArgs = serde_json::from_str(args).map_err(|e| {
             AppError::Validation(format!("mouse_click 参数解析失败: {e}"))
         })?;
@@ -351,15 +355,8 @@ impl McpClient for MouseClickTool {
         if p.double {
             echo.insert("double".into(), serde_json::json!(true));
         }
-        echo.insert(
-            "note".into(),
-            serde_json::json!(format!(
-                "Clicked. The effect depends on what was under the point — capture again to see \
-                 the result.{}",
-                if p.double { " (double-click)" } else { "" }
-            )),
-        );
-        Ok(serde_json::Value::Object(echo).to_string())
+        let shot = super::action_shot(&self.backend, &self.state, ctx).await;
+        Ok(super::finish_action_output(echo, shot))
     }
 }
 
@@ -387,7 +384,9 @@ impl McpClient for MouseDragTool {
         "Drag with the mouse: press at (from_x, from_y), move to (to_x, to_y) in smooth steps, \
          release. All four coordinates are in the most recent image's pixel space. Used for \
          moving sliders, repositioning windows, selecting text ranges. The path is \
-         interpolated (~10 steps) so drag-over targets can react."
+         interpolated (~10 steps) so drag-over targets can react. The result includes a \
+         post-action screenshot that becomes the new coordinate basis — check it to see the \
+         drag result without re-capturing."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -409,16 +408,16 @@ impl McpClient for MouseDragTool {
     }
 
     fn auth_reason(&self) -> Option<String> {
-        Some("将模拟鼠标拖拽——按下、移动、释放会真实作用于屏幕上的应用".into())
+        Some("将模拟鼠标拖拽并回传操作后的屏幕截图给当前模型服务商（按下、移动、释放会真实作用于屏幕上的应用）".into())
     }
 
     async fn execute(&self, _args: &str) -> AppResult<String> {
         Err(AppError::Internal(
-            "mouse_drag 必须通过 execute_with_context 调用（需要 conv_id 定位坐标基准）".into(),
+            "mouse_drag 必须通过 execute_with_output 调用（需要 conv_id 定位坐标基准 + 回传附图）".into(),
         ))
     }
 
-    async fn execute_with_context(&self, args: &str, ctx: &ToolContext) -> AppResult<String> {
+    async fn execute_with_output(&self, args: &str, ctx: &ToolContext) -> AppResult<ToolOutput> {
         let p: MouseDragArgs = serde_json::from_str(args).map_err(|e| {
             AppError::Validation(format!("mouse_drag 参数解析失败: {e}"))
         })?;
@@ -451,17 +450,20 @@ impl McpClient for MouseDragTool {
             from_phys = ?(fx, fy), to_phys = ?(tx, ty),
             "mouse_drag 成功"
         );
-        let mut out = serde_json::json!({
-            "action": "mouse_drag",
-            "button": p.button.as_str(),
-            "from": { "image_xy": [p.from_x, p.from_y], "physical_xy": [fx, fy] },
-            "to": { "image_xy": [p.to_x, p.to_y], "physical_xy": [tx, ty] },
-            "note": "Dragged. Capture again to see the result."
-        });
-        out.as_object_mut()
-            .unwrap()
-            .extend(echo_point(&meta, p.from_x, p.from_y, fx, fy));
-        Ok(out.to_string())
+        let mut echo = serde_json::Map::new();
+        echo.insert("action".into(), "mouse_drag".into());
+        echo.insert("button".into(), p.button.as_str().into());
+        echo.insert(
+            "from".into(),
+            serde_json::json!({ "image_xy": [p.from_x, p.from_y], "physical_xy": [fx, fy] }),
+        );
+        echo.insert(
+            "to".into(),
+            serde_json::json!({ "image_xy": [p.to_x, p.to_y], "physical_xy": [tx, ty] }),
+        );
+        echo.extend(echo_point(&meta, p.from_x, p.from_y, fx, fy));
+        let shot = super::action_shot(&self.backend, &self.state, ctx).await;
+        Ok(super::finish_action_output(echo, shot))
     }
 }
 
@@ -495,7 +497,8 @@ impl McpClient for MouseScrollTool {
          current cursor position (omit x/y). dy = vertical notches (positive up, negative \
          down; 1 notch ≈ 3 lines), dx = horizontal notches (positive right). Scrolling acts \
          on whatever is under the point — hover state matters, prefer explicit x/y from a \
-         fresh capture."
+         fresh capture. The result includes a post-action screenshot that becomes the new \
+         coordinate basis — check it to see how far it scrolled without re-capturing."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -515,16 +518,16 @@ impl McpClient for MouseScrollTool {
     }
 
     fn auth_reason(&self) -> Option<String> {
-        Some("将模拟鼠标滚轮——会真实作用于指针位置下的应用".into())
+        Some("将模拟鼠标滚轮并回传操作后的屏幕截图给当前模型服务商（会真实作用于指针位置下的应用）".into())
     }
 
     async fn execute(&self, _args: &str) -> AppResult<String> {
         Err(AppError::Internal(
-            "mouse_scroll 必须通过 execute_with_context 调用（需要 conv_id 定位坐标基准）".into(),
+            "mouse_scroll 必须通过 execute_with_output 调用（需要 conv_id 定位坐标基准 + 回传附图）".into(),
         ))
     }
 
-    async fn execute_with_context(&self, args: &str, ctx: &ToolContext) -> AppResult<String> {
+    async fn execute_with_output(&self, args: &str, ctx: &ToolContext) -> AppResult<ToolOutput> {
         let p: MouseScrollArgs = serde_json::from_str(args).map_err(|e| {
             AppError::Validation(format!("mouse_scroll 参数解析失败: {e}"))
         })?;
@@ -533,48 +536,39 @@ impl McpClient for MouseScrollTool {
                 "mouse_scroll 参数无效: dx 与 dy 至少一个非零（收到 0, 0）".into(),
             ));
         }
+        let mut echo = serde_json::Map::new();
+        echo.insert("action".into(), "mouse_scroll".into());
+        echo.insert("dx".into(), serde_json::json!(p.dx));
+        echo.insert("dy".into(), serde_json::json!(p.dy));
+
+        // 有点 → 移动过去再滚；无点 → 原位滚（无需坐标基准）。
         match (p.x, p.y) {
             (Some(x), Some(y)) => {
                 let (meta, px, py, ax, ay) =
                     resolve_point(self.backend.as_ref(), &self.state, ctx, x, y)?;
                 self.backend.mouse_move_abs(ax, ay)?;
                 tokio::time::sleep(Duration::from_millis(SETTLE_MS)).await;
-                self.backend.mouse_scroll(p.dx, p.dy)?;
-                tracing::info!(
-                    target: "ice_paw.screen",
-                    conv = %ctx.conv_id, dx = p.dx, dy = p.dy,
-                    image = ?(x, y), phys = ?(px, py),
-                    "mouse_scroll 成功"
-                );
-                let mut out = serde_json::json!({
-                    "action": "mouse_scroll",
-                    "dx": p.dx, "dy": p.dy,
-                    "note": "Scrolled. Capture again to see the result."
-                });
-                out.as_object_mut()
-                    .unwrap()
-                    .extend(echo_point(&meta, x, y, px, py));
-                Ok(out.to_string())
+                echo.extend(echo_point(&meta, x, y, px, py));
             }
             (None, None) => {
-                self.backend.mouse_scroll(p.dx, p.dy)?;
-                tracing::info!(
-                    target: "ice_paw.screen",
-                    conv = %ctx.conv_id, dx = p.dx, dy = p.dy,
-                    "mouse_scroll 成功（原位）"
-                );
-                Ok(serde_json::json!({
-                    "action": "mouse_scroll",
-                    "dx": p.dx, "dy": p.dy,
-                    "position": "current_cursor",
-                    "note": "Scrolled at the current cursor position. Capture again to see the result."
-                })
-                .to_string())
+                echo.insert("position".into(), "current_cursor".into());
             }
-            _ => Err(AppError::Validation(
-                "mouse_scroll 参数不完整: x 与 y 必须同时给出（或同时省略表示原位滚动）".into(),
-            )),
+            // 半给坐标是最常见的模型笔误——直接拦下而不是悄悄用半个。
+            _ => {
+                return Err(AppError::Validation(
+                    "mouse_scroll 参数不完整: x 与 y 必须同时给出（或同时省略表示原位滚动）".into(),
+                ));
+            }
         }
+
+        self.backend.mouse_scroll(p.dx, p.dy)?;
+        tracing::info!(
+            target: "ice_paw.screen",
+            conv = %ctx.conv_id, dx = p.dx, dy = p.dy, image = ?(p.x, p.y),
+            "mouse_scroll 成功"
+        );
+        let shot = super::action_shot(&self.backend, &self.state, ctx).await;
+        Ok(super::finish_action_output(echo, shot))
     }
 }
 
@@ -587,14 +581,19 @@ mod tests {
     use super::*;
     use crate::harness::mcp::screen::coords::{PhysRect, VirtualScreenLayout};
     use crate::harness::mcp::screen::{RgbaFrame, WindowInfo};
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Mutex;
 
-    /// 可变布局 + 输入记录的假后端（捕获方法最小实现——输入测试不经过它们）。
+    /// 可变布局 + 输入记录的假后端（捕获走 act-and-look 附图路径——记录区域）。
     struct FakeInputBackend {
         layout: Mutex<VirtualScreenLayout>,
         moves: Mutex<Vec<(i32, i32)>>,
         buttons: Mutex<Vec<(MouseButton, bool)>>,
         scrolls: Mutex<Vec<(i32, i32)>>,
+        /// act-and-look 附图实际捕获的物理区域序列（同源断言用）。
+        captures: Mutex<Vec<PhysRect>>,
+        /// 置 true 后 capture 报错（测附图失败降级路径）。
+        fail_capture: AtomicBool,
     }
 
     impl FakeInputBackend {
@@ -609,6 +608,8 @@ mod tests {
                 moves: Mutex::new(Vec::new()),
                 buttons: Mutex::new(Vec::new()),
                 scrolls: Mutex::new(Vec::new()),
+                captures: Mutex::new(Vec::new()),
+                fail_capture: AtomicBool::new(false),
             }
         }
 
@@ -635,6 +636,10 @@ mod tests {
             }])
         }
         fn capture(&self, region: PhysRect) -> AppResult<RgbaFrame> {
+            if self.fail_capture.load(Ordering::SeqCst) {
+                return Err(AppError::Internal("fake 捕获失败（测试注入）".into()));
+            }
+            self.captures.lock().unwrap().push(region);
             Ok(RgbaFrame {
                 width: region.width,
                 height: region.height,
@@ -711,7 +716,7 @@ mod tests {
     async fn move_requires_prior_capture() {
         let tool = MouseMoveTool::new(Arc::new(FakeInputBackend::new()), Arc::new(ScreenState::new()));
         let ctx = make_ctx("m0").await;
-        let err = tool.execute_with_context(r#"{"x":10,"y":10}"#, &ctx).await.unwrap_err();
+        let err = tool.execute_with_output(r#"{"x":10,"y":10}"#, &ctx).await.unwrap_err();
         assert!(
             err.to_string().contains("screen 坐标基准缺失"),
             "家族前缀应为坐标基准缺失，实际: {err}"
@@ -727,20 +732,21 @@ mod tests {
         let ctx = make_ctx("m1").await;
 
         // 图中 (800, 450) → 物理 (960, 540)（1.2×）→ 绝对（端点精确映射 65535/span-1）
-        tool.execute_with_context(r#"{"x":800,"y":450}"#, &ctx)
+        tool.execute_with_output(r#"{"x":800,"y":450}"#, &ctx)
             .await
             .unwrap();
         let moves = backend.moves.lock().unwrap().clone();
         assert_eq!(moves.len(), 1);
         assert_eq!(moves[0], (960 * 65535 / 1919, 540 * 65535 / 1079));
 
-        // 摘要回显物理坐标 + 图片尺寸（坐标契约自文档）
+        // 摘要回显物理坐标 + 附「操作效果」图（act-and-look）
         let out = tool
-            .execute_with_context(r#"{"x":0,"y":0}"#, &ctx)
+            .execute_with_output(r#"{"x":0,"y":0}"#, &ctx)
             .await
             .unwrap();
-        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out.text).unwrap();
         assert_eq!(v["physical_xy"][0].as_i64().unwrap(), 0);
+        assert!(out.image_png.is_some(), "操作后应附操作效果图");
         assert_eq!(v["image_size"]["width"].as_u64().unwrap(), 1600);
     }
 
@@ -753,7 +759,7 @@ mod tests {
         let tool = MouseClickTool::new(backend.clone(), state);
         let ctx = make_ctx("m2").await;
         let err = tool
-            .execute_with_context(r#"{"x":100,"y":100}"#, &ctx)
+            .execute_with_output(r#"{"x":100,"y":100}"#, &ctx)
             .await
             .unwrap_err();
         assert!(
@@ -773,7 +779,7 @@ mod tests {
         let tool = MouseClickTool::new(backend.clone(), state);
         let ctx = make_ctx("c1").await;
 
-        tool.execute_with_context(r#"{"x":400,"y":300}"#, &ctx)
+        tool.execute_with_output(r#"{"x":400,"y":300}"#, &ctx)
             .await
             .unwrap();
         assert_eq!(backend.moves.lock().unwrap().len(), 1);
@@ -782,17 +788,17 @@ mod tests {
 
         // double = 两段按压
         backend.buttons.lock().unwrap().clear();
-        tool.execute_with_context(r#"{"x":400,"y":300,"double":true}"#, &ctx)
+        tool.execute_with_output(r#"{"x":400,"y":300,"double":true}"#, &ctx)
             .await
             .unwrap();
         assert_eq!(backend.buttons.lock().unwrap().len(), 4);
 
-        // 原位右键：不移动、无坐标基准也能点
+        // 原位右键：不移动、无坐标基准也能点（附图回落整桌面）
         backend.moves.lock().unwrap().clear();
         let state2 = Arc::new(ScreenState::new());
         let tool2 = MouseClickTool::new(backend.clone(), state2);
         let ctx2 = make_ctx("c1-nometa").await;
-        tool2.execute_with_context(r#"{"button":"right"}"#, &ctx2)
+        tool2.execute_with_output(r#"{"button":"right"}"#, &ctx2)
             .await
             .unwrap();
         assert!(backend.moves.lock().unwrap().is_empty());
@@ -803,7 +809,7 @@ mod tests {
 
         // 半给坐标 = 参数不完整（模型笔误拦下）
         let err = tool
-            .execute_with_context(r#"{"x":400}"#, &ctx)
+            .execute_with_output(r#"{"x":400}"#, &ctx)
             .await
             .unwrap_err();
         assert!(err.to_string().contains("x 与 y 必须同时给出"));
@@ -817,7 +823,7 @@ mod tests {
         let tool = MouseDragTool::new(backend.clone(), state);
         let ctx = make_ctx("d1").await;
 
-        tool.execute_with_context(
+        tool.execute_with_output(
             r#"{"from_x":200,"from_y":150,"to_x":1000,"to_y":750}"#,
             &ctx,
         )
@@ -847,23 +853,97 @@ mod tests {
         let ctx = make_ctx("s1").await;
 
         // 原位滚动：无需坐标基准，dx/dy 透传
-        tool.execute_with_context(r#"{"dy":-3}"#, &ctx).await.unwrap();
+        tool.execute_with_output(r#"{"dy":-3}"#, &ctx).await.unwrap();
         assert_eq!(backend.scrolls.lock().unwrap().last().copied(), Some((0, -3)));
         assert!(backend.moves.lock().unwrap().is_empty());
 
         // 定点滚动：先移动后滚
-        tool.execute_with_context(r#"{"x":800,"y":450,"dx":2,"dy":1}"#, &ctx)
+        tool.execute_with_output(r#"{"x":800,"y":450,"dx":2,"dy":1}"#, &ctx)
             .await
             .unwrap();
         assert_eq!(backend.scrolls.lock().unwrap().last().copied(), Some((2, 1)));
         assert_eq!(backend.moves.lock().unwrap().len(), 1);
 
         // 零滚动量拒绝
-        let err = tool.execute_with_context(r#"{"dx":0,"dy":0}"#, &ctx).await.unwrap_err();
+        let err = tool.execute_with_output(r#"{"dx":0,"dy":0}"#, &ctx).await.unwrap_err();
         assert!(err.to_string().contains("至少一个非零"));
 
         // 半给坐标拒绝
-        let err = tool.execute_with_context(r#"{"dy":1,"x":5}"#, &ctx).await.unwrap_err();
+        let err = tool.execute_with_output(r#"{"dy":1,"x":5}"#, &ctx).await.unwrap_err();
         assert!(err.to_string().contains("x 与 y 必须同时给出"));
+    }
+
+    /// act-and-look 核心契约：成功操作后附图 + 附图即刻写为新坐标基准。
+    #[tokio::test]
+    async fn click_attaches_shot_and_updates_basis() {
+        let backend = Arc::new(FakeInputBackend::new());
+        let state = Arc::new(ScreenState::new());
+        state.update("a1", full_screen_meta());
+        let tool = MouseClickTool::new(backend.clone(), state.clone());
+        let ctx = make_ctx("a1").await;
+
+        let out = tool.execute_with_output(r#"{"x":400,"y":300}"#, &ctx).await.unwrap();
+        assert!(out.image_png.is_some(), "点击后应附操作效果图");
+
+        // 附图即时成为新基准：sent 尺寸与摘要 image_size 一致（Fake 1920×1080 → 长边 1600 档）
+        let v: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+        let meta = state.get("a1").expect("附图后基准应已更新");
+        assert_eq!(v["image_size"]["width"].as_u64().unwrap(), meta.sent_width as u64);
+        assert_eq!(v["image_size"]["height"].as_u64().unwrap(), meta.sent_height as u64);
+        assert_eq!(meta.sent_width, 1600, "首档长边 1600");
+        // 摘要声明「本图即最新基准」的行为契约
+        assert!(v["note"].as_str().unwrap().contains("most recent image"));
+    }
+
+    /// 同源捕获：上一张基准是窗口/裁剪矩形 → 附图抓同一物理矩形（像素空间连续）。
+    #[tokio::test]
+    async fn action_shot_captures_same_region_as_previous_basis() {
+        let backend = Arc::new(FakeInputBackend::new());
+        let state = Arc::new(ScreenState::new());
+        let mut window_meta = full_screen_meta();
+        window_meta.phys_region = PhysRect {
+            x: 100,
+            y: 50,
+            width: 800,
+            height: 600,
+        };
+        state.update("a2", window_meta);
+        let tool = MouseClickTool::new(backend.clone(), state);
+        let ctx = make_ctx("a2").await;
+
+        tool.execute_with_output(r#"{"x":10,"y":10}"#, &ctx).await.unwrap();
+        let captures = backend.captures.lock().unwrap().clone();
+        assert_eq!(captures.len(), 1, "恰好一张附图");
+        assert_eq!(
+            captures[0],
+            PhysRect {
+                x: 100,
+                y: 50,
+                width: 800,
+                height: 600
+            },
+            "附图应抓上一基准的同一物理矩形（与当前布局取交集）"
+        );
+    }
+
+    /// 降级路径：捕获失败 → 操作结果仍成功、纯文本指路 capture_screen，无家族错误。
+    #[tokio::test]
+    async fn action_shot_failure_degrades_to_text_hint() {
+        let backend = Arc::new(FakeInputBackend::new());
+        let state = Arc::new(ScreenState::new());
+        state.update("a3", full_screen_meta());
+        let tool = MouseClickTool::new(backend.clone(), state);
+        let ctx = make_ctx("a3").await;
+
+        backend.fail_capture.store(true, Ordering::SeqCst);
+        let out = tool.execute_with_output(r#"{"x":400,"y":300}"#, &ctx).await.unwrap();
+        assert!(out.image_png.is_none(), "捕获失败不应附图");
+        let v: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+        assert!(v["action"].as_str().unwrap() == "mouse_click", "操作本身成功");
+        assert!(
+            v["note"].as_str().unwrap().contains("capture_screen"),
+            "降级 note 应指路 capture_screen，实际: {}",
+            v["note"]
+        );
     }
 }

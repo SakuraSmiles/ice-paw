@@ -11,6 +11,12 @@
 //!
 //! 键盘无坐标——作用于**当前焦点窗口**；模型流程 = capture → click 定位 →
 //! type。type/press 全部 Confirm 级（模拟输入真实作用于用户机器）。
+//!
+//! **act-and-look**：type/press 成功后走 [`super::action_shot`] 附「操作效果」
+//! 图（同区域重抓，即刻成为新坐标基准）——输入后是否落对位置，模型从附图
+//! 直接判断，无需再 capture 一轮。**wait 刻意保持纯文本**：它是 Always 级
+//! （无外部作用才免审批），静默附图会让画面在用户不知情下离开本机——授权
+//! 治理优先于节奏便利（见 mod.rs 模块文档）。
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -20,7 +26,8 @@ use std::time::Duration;
 use crate::error::{AppError, AppResult};
 
 use super::backend::ScreenBackend;
-use crate::harness::mcp::client::{McpClient, ToolContext};
+use super::state::ScreenState;
+use crate::harness::mcp::client::{McpClient, ToolContext, ToolOutput};
 use crate::harness::mcp::types::AuthorizationLevel;
 
 #[cfg(windows)]
@@ -144,23 +151,25 @@ fn builtin_backend() -> Arc<dyn ScreenBackend> {
     }
 }
 
-/// 工具持有面（backend 注入；wait 无字段）。
+/// 工具持有面（backend + 坐标基准状态；wait 无字段）。
 macro_rules! screen_key_tool {
     ($name:ident) => {
         pub struct $name {
             backend: Arc<dyn ScreenBackend>,
+            state: Arc<ScreenState>,
         }
 
         impl $name {
-            /// 注入式构造（测试用 Fake 后端）。
-            pub fn new(backend: Arc<dyn ScreenBackend>) -> Self {
-                Self { backend }
+            /// 注入式构造（测试用 Fake 后端 + 隔离状态）。
+            pub fn new(backend: Arc<dyn ScreenBackend>, state: Arc<ScreenState>) -> Self {
+                Self { backend, state }
             }
 
-            /// 生产构造。
+            /// 生产构造（与看屏/鼠标工具共用进程级 ScreenState——同一坐标基准）。
             pub fn builtin() -> Self {
                 Self {
                     backend: builtin_backend(),
+                    state: super::state::global(),
                 }
             }
         }
@@ -190,7 +199,9 @@ impl McpClient for TypeTextTool {
          input first). Works with any Unicode text (CJK, emoji) regardless of the target \
          window's keyboard layout. This sends real keystrokes to the user's machine — it \
          does not read or modify files directly. Max 2000 chars per call; split longer \
-         content into multiple calls."
+         content into multiple calls. The result includes a post-action screenshot showing \
+         what the focused area looks like now — read it to confirm the text landed where \
+         expected, no re-capture needed."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -208,16 +219,16 @@ impl McpClient for TypeTextTool {
     }
 
     fn auth_reason(&self) -> Option<String> {
-        Some("将模拟键盘输入——内容会真实输入到你机器上当前聚焦的窗口".into())
+        Some("将模拟键盘输入并回传操作后的屏幕截图给当前模型服务商（内容会真实输入到你机器上当前聚焦的窗口）".into())
     }
 
     async fn execute(&self, _args: &str) -> AppResult<String> {
         Err(AppError::Internal(
-            "type_text 必须通过 execute_with_context 调用（需要 conv_id 记录输入日志）".into(),
+            "type_text 必须通过 execute_with_output 调用（需要 conv_id 记录输入日志 + 回传附图）".into(),
         ))
     }
 
-    async fn execute_with_context(&self, args: &str, ctx: &ToolContext) -> AppResult<String> {
+    async fn execute_with_output(&self, args: &str, ctx: &ToolContext) -> AppResult<ToolOutput> {
         let p: TypeTextArgs =
             serde_json::from_str(args)
                 .map_err(|e| AppError::Validation(format!("type_text 参数解析失败: {e}")))?;
@@ -250,13 +261,12 @@ impl McpClient for TypeTextTool {
             preview = %&p.text.chars().take(30).collect::<String>(),
             "type_text 成功"
         );
-        Ok(serde_json::json!({
-            "action": "type_text",
-            "chars": chars,
-            "utf16_units": units,
-            "note": "Typed at the current focus. Capture again to verify it landed where expected."
-        })
-        .to_string())
+        let mut echo = serde_json::Map::new();
+        echo.insert("action".into(), "type_text".into());
+        echo.insert("chars".into(), serde_json::json!(chars));
+        echo.insert("utf16_units".into(), serde_json::json!(units));
+        let shot = super::action_shot(&self.backend, &self.state, ctx).await;
+        Ok(super::finish_action_output(echo, shot))
     }
 }
 
@@ -283,7 +293,8 @@ impl McpClient for PressKeyTool {
          with '+', main key last. Named keys: enter, esc, tab, space, backspace, delete, \
          insert, up, down, left, right, home, end, pageup, pagedown, printscreen, capslock, \
          numlock, plus, minus, f1-f12, letters a-z, digits 0-9. Acts on the focused window \
-         on the user's real machine."
+         on the user's real machine. The result includes a post-action screenshot — read it \
+         to see what the shortcut did, no re-capture needed."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -302,16 +313,16 @@ impl McpClient for PressKeyTool {
     }
 
     fn auth_reason(&self) -> Option<String> {
-        Some("将模拟按键——快捷键会真实作用于你机器上聚焦的应用".into())
+        Some("将模拟按键并回传操作后的屏幕截图给当前模型服务商（快捷键会真实作用于你机器上聚焦的应用）".into())
     }
 
     async fn execute(&self, _args: &str) -> AppResult<String> {
         Err(AppError::Internal(
-            "press_key 必须通过 execute_with_context 调用（需要 conv_id 记录输入日志）".into(),
+            "press_key 必须通过 execute_with_output 调用（需要 conv_id 记录输入日志 + 回传附图）".into(),
         ))
     }
 
-    async fn execute_with_context(&self, args: &str, ctx: &ToolContext) -> AppResult<String> {
+    async fn execute_with_output(&self, args: &str, ctx: &ToolContext) -> AppResult<ToolOutput> {
         let p: PressKeyArgs =
             serde_json::from_str(args)
                 .map_err(|e| AppError::Validation(format!("press_key 参数解析失败: {e}")))?;
@@ -343,13 +354,12 @@ impl McpClient for PressKeyTool {
             conv = %ctx.conv_id, combo = %p.combo, presses,
             "press_key 成功"
         );
-        Ok(serde_json::json!({
-            "action": "press_key",
-            "combo": p.combo,
-            "presses": presses,
-            "note": "Keys sent to the focused window. Capture again to see the effect."
-        })
-        .to_string())
+        let mut echo = serde_json::Map::new();
+        echo.insert("action".into(), "press_key".into());
+        echo.insert("combo".into(), serde_json::json!(p.combo));
+        echo.insert("presses".into(), serde_json::json!(presses));
+        let shot = super::action_shot(&self.backend, &self.state, ctx).await;
+        Ok(super::finish_action_output(echo, shot))
     }
 }
 
@@ -545,11 +555,12 @@ mod tests {
     #[tokio::test]
     async fn type_text_sends_utf16_units_down_up() {
         let backend = Arc::new(FakeKeyboardBackend::new());
-        let tool = TypeTextTool::new(backend.clone());
+        let tool = TypeTextTool::new(backend.clone(), Arc::new(ScreenState::new()));
         let ctx = make_ctx("t1").await;
 
         // "hi你😀"：h(0x68) i(0x69) 你(0x4F60) 😀=代理对(0xD83D,0xDE00)
-        tool.execute_with_context(r#"{"text":"hi你😀"}"#, &ctx)
+        let out = tool
+            .execute_with_output(r#"{"text":"hi你😀"}"#, &ctx)
             .await
             .unwrap();
         let units = backend.units.lock().unwrap().clone();
@@ -559,20 +570,25 @@ mod tests {
             .collect();
         assert_eq!(units, expected);
         assert!(backend.vks.lock().unwrap().is_empty());
+        // act-and-look：输入后附操作效果图（无基准 → 整桌面回落）
+        assert!(out.image_png.is_some(), "type 后应附操作效果图");
+        let v: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+        assert_eq!(v["utf16_units"].as_u64().unwrap(), 5);
+        assert!(v["note"].as_str().unwrap().contains("most recent image"));
 
         // 空文本 → 家族错误（指路 ctrl+a+delete 而非傻输入）
-        let err = tool.execute_with_context(r#"{"text":""}"#, &ctx).await.unwrap_err();
+        let err = tool.execute_with_output(r#"{"text":""}"#, &ctx).await.unwrap_err();
         assert!(err.to_string().contains("screen 输入参数无效"), "实际: {err}");
     }
 
     #[tokio::test]
     async fn press_key_combo_orders_modifiers_main_reverse_release() {
         let backend = Arc::new(FakeKeyboardBackend::new());
-        let tool = PressKeyTool::new(backend.clone());
+        let tool = PressKeyTool::new(backend.clone(), Arc::new(ScreenState::new()));
         let ctx = make_ctx("k1").await;
 
         // ctrl(0x11)+shift(0x10)+t(0x54)
-        tool.execute_with_context(r#"{"combo":"ctrl+shift+t"}"#, &ctx)
+        tool.execute_with_output(r#"{"combo":"ctrl+shift+t"}"#, &ctx)
             .await
             .unwrap();
         assert_eq!(
@@ -589,14 +605,14 @@ mod tests {
 
         // 单键 + 别名 + 大小写不敏感
         backend.vks.lock().unwrap().clear();
-        tool.execute_with_context(r#"{"combo":"ENTER"}"#, &ctx).await.unwrap();
+        tool.execute_with_output(r#"{"combo":"ENTER"}"#, &ctx).await.unwrap();
         assert_eq!(
             backend.vks.lock().unwrap().clone(),
             vec![(0x0D, true), (0x0D, false)]
         );
 
         backend.vks.lock().unwrap().clear();
-        tool.execute_with_context(r#"{"combo":"F5"}"#, &ctx).await.unwrap();
+        tool.execute_with_output(r#"{"combo":"F5"}"#, &ctx).await.unwrap();
         assert_eq!(
             backend.vks.lock().unwrap().clone(),
             vec![(0x74, true), (0x74, false)]
@@ -604,7 +620,7 @@ mod tests {
 
         // presses=2：两轮完整序列
         backend.vks.lock().unwrap().clear();
-        tool.execute_with_context(r#"{"combo":"tab","presses":2}"#, &ctx)
+        tool.execute_with_output(r#"{"combo":"tab","presses":2}"#, &ctx)
             .await
             .unwrap();
         assert_eq!(
@@ -615,11 +631,14 @@ mod tests {
 
     #[tokio::test]
     async fn press_key_rejects_unknown_and_empty_segments() {
-        let tool = PressKeyTool::new(Arc::new(FakeKeyboardBackend::new()));
+        let tool = PressKeyTool::new(
+            Arc::new(FakeKeyboardBackend::new()),
+            Arc::new(ScreenState::new()),
+        );
         let ctx = make_ctx("k2").await;
 
         let err = tool
-            .execute_with_context(r#"{"combo":"ctrl+nonsense"}"#, &ctx)
+            .execute_with_output(r#"{"combo":"ctrl+nonsense"}"#, &ctx)
             .await
             .unwrap_err();
         let msg = err.to_string();
@@ -627,11 +646,11 @@ mod tests {
         assert!(msg.contains("nonsense"), "应点名坏键名: {msg}");
 
         // 空段（"ctrl+"）
-        let err = tool.execute_with_context(r#"{"combo":"ctrl+"}"#, &ctx).await.unwrap_err();
+        let err = tool.execute_with_output(r#"{"combo":"ctrl+"}"#, &ctx).await.unwrap_err();
         assert!(err.to_string().contains("空段"), "实际: {err}");
 
         // f13 越界不认
-        let err = tool.execute_with_context(r#"{"combo":"f13"}"#, &ctx).await.unwrap_err();
+        let err = tool.execute_with_output(r#"{"combo":"f13"}"#, &ctx).await.unwrap_err();
         assert!(err.to_string().contains("screen 按键无效"), "实际: {err}");
     }
 
