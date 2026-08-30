@@ -481,6 +481,27 @@ const screen = {
     try { return await invoke<ScreenChannelState>("screen_channel_resume"); }
     catch (err) { throw wrapInvokeError("screen.resumeChannel", err); }
   },
+  /** 手动授予写令牌（HUD 队列块）：目标立即持有，原持有者入队尾 */
+  async grantChannel(conversationId: string): Promise<ScreenChannelState> {
+    try { return await invoke<ScreenChannelState>("screen_channel_grant", { conversationId }); }
+    catch (err) { throw wrapInvokeError("screen.grantChannel", err); }
+  },
+  /** 会话脱离通道（连带归还令牌/摘除排队位） */
+  async detachChannel(conversationId: string): Promise<ScreenChannelState> {
+    try { return await invoke<ScreenChannelState>("screen_channel_detach", { conversationId }); }
+    catch (err) { throw wrapInvokeError("screen.detachChannel", err); }
+  },
+  /** HUD 显示器切换（◀▶ 键）：delta ±1，按显示器总数取模环绕 */
+  async cycleHudMonitor(delta: number): Promise<ScreenChannelState> {
+    try { return await invoke<ScreenChannelState>("screen_channel_cycle_hud_monitor", { delta }); }
+    catch (err) { throw wrapInvokeError("screen.cycleHudMonitor", err); }
+  },
+  /** HUD 窗形态切换（B7 写避让/手动收起）：mini=收缩角部微条；
+   *  passthrough=点击穿透（仅写执行中的自动收缩用——用户收起必须可点回） */
+  async setHudForm(mini: boolean, passthrough: boolean): Promise<void> {
+    try { await invoke("screen_hud_set_form", { mini, passthrough }); }
+    catch (err) { throw wrapInvokeError("screen.setHudForm", err); }
+  },
 };
 
 export const bridge = { agents, providers, conversations, projects, messages, chat, preferences, mcp, kb, logs, trajectory, screen };

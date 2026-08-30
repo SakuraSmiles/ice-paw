@@ -199,9 +199,11 @@ impl McpClient for TypeTextTool {
          input first). Works with any Unicode text (CJK, emoji) regardless of the target \
          window's keyboard layout. This sends real keystrokes to the user's machine — it \
          does not read or modify files directly. Max 2000 chars per call; split longer \
-         content into multiple calls. The result includes a post-action screenshot showing \
-         what the focused area looks like now — read it to confirm the text landed where \
-         expected, no re-capture needed."
+         content into multiple calls. Human priority: if the user starts using the \
+         keyboard/mouse mid-typing, typing stops at the next character boundary and the \
+         error reports how many units already landed — wait a moment and re-type the rest. \
+         The result includes a post-action screenshot showing what the focused area looks \
+         like now — read it to confirm the text landed where expected, no re-capture needed."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -303,8 +305,11 @@ impl McpClient for PressKeyTool {
          with '+', main key last. Named keys: enter, esc, tab, space, backspace, delete, \
          insert, up, down, left, right, home, end, pageup, pagedown, printscreen, capslock, \
          numlock, plus, minus, f1-f12, letters a-z, digits 0-9. Acts on the focused window \
-         on the user's real machine. The result includes a post-action screenshot — read it \
-         to see what the shortcut did, no re-capture needed."
+         on the user's real machine. Human priority: with multiple presses, if the user \
+         starts using the keyboard/mouse mid-sequence it stops at the next press boundary \
+         and reports how many presses completed — wait and retry the remainder. The result \
+         includes a post-action screenshot — read it to see what the shortcut did, no \
+         re-capture needed."
     }
 
     fn parameters(&self) -> serde_json::Value {

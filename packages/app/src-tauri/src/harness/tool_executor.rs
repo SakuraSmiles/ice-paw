@@ -70,6 +70,18 @@ async fn invoke_tool(
     args: &str,
     ctx: &ToolContext,
 ) -> Result<ToolOutput, String> {
+    // 批次④ 步骤 2（§4.2 purpose + B7 写操作避让）：通道 Active 且本会话附着时——
+    // ① 家族工具执行前刷新「正在做什么」（当前回合用户指令摘要，HUD 使用者块）；
+    // ② 写件执行期间登记 write_in_flight → HUD 收缩角部微条让路。包边覆盖执行
+    // 全程（含 gate 排队/human park——排队期间收缩同样是给用户让路）；RAII
+    // guard 取消安全（abort 丢弃 future 时 Drop 仍运行，计数不泄漏）。
+    let screen_attached = screen_channel::SCREEN_TOOLS.contains(&name)
+        && screen_channel::global().is_active_and_attached(&ctx.conv_id);
+    if screen_attached {
+        screen_channel::refresh_purpose(ctx).await;
+    }
+    let _write_bracket = (screen_attached && screen_channel::WRITE_TOOLS.contains(&name))
+        .then(screen_channel::WriteBracket::enter);
     match registry.dispatch_catch_panic(name, args, ctx).await {
         Ok(out) => Ok(out),
         Err(e) => Err(e.to_string()),

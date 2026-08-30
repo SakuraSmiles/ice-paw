@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "screen-hud",
+  "description": "Capability for the screen HUD toolbar window (批次④ 步骤 2)：只需事件订阅（screen:channel-state 驱动渲染）；invoke 的通道命令是自定义命令不受 ACL gate，故不授予 core:default 全套。screen-frame 窗零交互零权限，不在任何 capability 中。",
+  "windows": [
+    "screen-hud"
+  ],
+  "permissions": [
+    "core:event:default"
+  ]
+}

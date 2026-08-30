@@ -19,6 +19,7 @@ const OFF_STATE: ScreenChannelState = {
   holder: null,
   queue: [],
   human_active: false,
+  writing: false,
   screenshot_count: 0,
 };
 
@@ -89,5 +90,26 @@ export const useScreenChannelStore = defineStore("screenChannel", () => {
     }
   }
 
-  return { state, busy, isOn, isAttached, init, openFrom, stop, setPaused };
+  /** 手动授予写令牌（HUD 队列块「授予」）。抛错交调用方处理。 */
+  async function grantTo(convId: string): Promise<void> {
+    if (busy.value) return;
+    busy.value = true;
+    try {
+      state.value = await bridge.screen.grantChannel(convId);
+    } finally {
+      busy.value = false;
+    }
+  }
+
+  /** HUD 轮询补真相（步骤 2）：human_active/writing 无事件源变化（时间戳/
+   *  计数翻转不广播），HUD 页 1s 轮询调用本方法刷新全量态。 */
+  async function refresh(): Promise<void> {
+    try {
+      state.value = await bridge.screen.getChannelState();
+    } catch {
+      // 轮询失败不致命：下一拍重试（事件通道仍在）
+    }
+  }
+
+  return { state, busy, isOn, isAttached, init, openFrom, stop, setPaused, grantTo, refresh };
 });

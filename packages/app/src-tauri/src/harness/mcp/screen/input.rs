@@ -393,9 +393,11 @@ impl McpClient for MouseDragTool {
         "Drag with the mouse: press at (from_x, from_y), move to (to_x, to_y) in smooth steps, \
          release. All four coordinates are in the most recent image's pixel space. Used for \
          moving sliders, repositioning windows, selecting text ranges. The path is \
-         interpolated (~10 steps) so drag-over targets can react. The result includes a \
-         post-action screenshot that becomes the new coordinate basis — check it to see the \
-         drag result without re-capturing."
+         interpolated (~10 steps) so drag-over targets can react. Human priority: if the user \
+         is using the mouse/keyboard, the drag aborts safely at the next step (button released, \
+         error says how far it got) — wait a moment and retry; never fight the user for the \
+         pointer. The result includes a post-action screenshot that becomes the new coordinate \
+         basis — check it to see the drag result without re-capturing."
     }
 
     fn parameters(&self) -> serde_json::Value {

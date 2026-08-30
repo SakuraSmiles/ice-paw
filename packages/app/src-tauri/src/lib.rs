@@ -144,6 +144,8 @@ pub fn run() {
             commands::screen_cmd::screen_channel_resume,
             commands::screen_cmd::screen_channel_grant,
             commands::screen_cmd::screen_channel_detach,
+            commands::screen_cmd::screen_channel_cycle_hud_monitor,
+            commands::screen_cmd::screen_hud_set_form,
             // 项目管理
             commands::project_cmd::list_projects,
             commands::project_cmd::create_project,
@@ -169,6 +171,10 @@ pub fn run() {
         // 启动逻辑
         .setup(|app| {
             let handle = app.handle().clone();
+
+            // 批次④ 步骤 2：屏幕通道状态广播器——gate 路径的令牌/队列变化
+            // （不经命令层）由此 emit 到 HUD/主窗（channel::bump 内调用）。
+            harness::mcp::screen::channel::global().set_broadcaster(handle.clone());
 
             // 0) 初始化日志（stdout + 文件 daily 轮转，非阻塞写）+ panic hook。
             //    WorkerGuard 托管到 app state，进程退出时随 state drop 自动 flush。

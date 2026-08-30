@@ -66,8 +66,11 @@ impl McpClient for RequestScreenSessionTool {
             conv = %ctx.conv_id, agent = %info.agent_name, newly_opened = newly,
             "屏幕通道开启/附着（request_screen_session 用户批准）"
         );
-        if let Some(app) = &ctx.app_handle {
-            channel::emit_state(app);
+        // 状态广播由 open 的 bump 自动完成（步骤 2 起通道内建 broadcaster）。
+        if newly {
+            if let Some(app) = &ctx.app_handle {
+                super::hud::ensure_windows(app);
+            }
         }
         let msg = if newly {
             "屏幕共享通道已开启，本会话已附着——截屏与操作工具即刻起免逐次授权，可连续操作屏幕。\
