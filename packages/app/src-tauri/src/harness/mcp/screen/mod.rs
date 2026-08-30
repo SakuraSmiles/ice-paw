@@ -30,6 +30,7 @@
 pub mod backend;
 pub mod channel;
 pub mod coords;
+pub mod human;
 pub mod input;
 pub mod keyboard;
 pub mod session;

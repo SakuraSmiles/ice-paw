@@ -444,9 +444,18 @@ impl McpClient for MouseDragTool {
         let button: MouseButton = p.button.into();
         self.backend.mouse_move_abs(fax, fay)?;
         tokio::time::sleep(Duration::from_millis(SETTLE_MS)).await;
+        // 按下前检查点（尚未按住，无需收尾；§4.5）
+        if super::channel::global().human_preempted() {
+            return Err(super::human::preempted_error("（尚未按下鼠标按钮）"));
+        }
         self.backend.mouse_button(button, true)?;
         // 线性插值步进（绝对坐标空间线性 = 物理像素空间线性，仿射等价）。
+        // 人类优先检查点：步进期间用户夺回鼠标 → 先释放按住的按钮再中止。
         for i in 1..=DRAG_STEPS {
+            if super::channel::global().human_preempted() {
+                self.backend.mouse_button(button, false)?;
+                return Err(super::human::preempted_error("并已释放按住的鼠标按钮"));
+            }
             let t = i as f64 / DRAG_STEPS as f64;
             let ax = (fax as f64 + (tax - fax) as f64 * t).round() as i32;
             let ay = (fay as f64 + (tay - fay) as f64 * t).round() as i32;
@@ -615,6 +624,9 @@ mod tests {
         /// ——驱动等稳定循环（N=0 即恒稳定）。
         vary_first: AtomicUsize,
         capture_count: AtomicUsize,
+        /// 第 N 次绝对移动后翻转人类抢占检查点（0=不翻转）——测「序列中途
+        /// 抢占→安全收尾」路径，避免触碰进程级通道单例。
+        flip_preempt_after_moves: AtomicUsize,
     }
 
     impl FakeInputBackend {
@@ -633,6 +645,7 @@ mod tests {
                 fail_capture: AtomicBool::new(false),
                 vary_first: AtomicUsize::new(0),
                 capture_count: AtomicUsize::new(0),
+                flip_preempt_after_moves: AtomicUsize::new(0),
             }
         }
 
@@ -685,7 +698,12 @@ mod tests {
             None
         }
         fn mouse_move_abs(&self, abs_x: i32, abs_y: i32) -> AppResult<()> {
-            self.moves.lock().unwrap().push((abs_x, abs_y));
+            let mut moves = self.moves.lock().unwrap();
+            moves.push((abs_x, abs_y));
+            let flip = self.flip_preempt_after_moves.load(Ordering::SeqCst);
+            if flip != 0 && moves.len() == flip {
+                super::super::human::test_support::set_fake_preempt(Some(true));
+            }
             Ok(())
         }
         fn mouse_button(&self, button: MouseButton, down: bool) -> AppResult<()> {
@@ -871,6 +889,39 @@ mod tests {
         // 按下在步进前、释放 在全部移动之后
         assert_eq!(buttons.first().copied(), Some((MouseButton::Left, true)));
         assert_eq!(buttons.last().copied(), Some((MouseButton::Left, false)));
+    }
+
+    /// §4.5 序列检查点：步进中途用户夺回鼠标 → 先释放按住的按钮再中止，
+    /// 家族错误 `screen 用户抢占`。
+    #[tokio::test]
+    async fn drag_aborts_midway_and_releases_button_on_human_preempt() {
+        let backend = Arc::new(FakeInputBackend::new());
+        // 首移（1 次）+ 步进第 1 步（第 2 次移动）后翻转抢占 → 第 2 步边界中止
+        backend.flip_preempt_after_moves.store(2, Ordering::SeqCst);
+        let state = Arc::new(ScreenState::new());
+        state.update("d2", full_screen_meta());
+        let tool = MouseDragTool::new(backend.clone(), state);
+        let ctx = make_ctx("d2").await;
+
+        let err = tool
+            .execute_with_output(
+                r#"{"from_x":200,"from_y":150,"to_x":1000,"to_y":750}"#,
+                &ctx,
+            )
+            .await
+            .unwrap_err();
+        super::super::human::test_support::set_fake_preempt(None);
+        let msg = err.to_string();
+        assert!(msg.contains("screen 用户抢占"), "家族前缀漂移: {msg}");
+        assert!(msg.contains("释放按住的鼠标按钮"), "应披露安全收尾: {msg}");
+
+        // 中止时按钮必已释放（不留按住的左键）；只走到第 1 步步进
+        let buttons = backend.buttons.lock().unwrap().clone();
+        assert_eq!(
+            buttons,
+            vec![(MouseButton::Left, true), (MouseButton::Left, false)]
+        );
+        assert_eq!(backend.moves.lock().unwrap().len(), 2);
     }
 
     #[tokio::test]
