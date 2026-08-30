@@ -210,7 +210,7 @@ park 统一形态：select { 状态恢复, 对话取消(→Err 取消), 通道�
 1. **通道态+授权短路+request_screen_session**：无 HUD，聊天头开关（简单 toggle 按钮）验证授权上收与开关语义。（已落地 2026-08-28：后端 channel.rs/session.rs/screen_cmd + 前端 store/开关/审批卡二键特判；cargo 1196 / vitest 328；待真机手测）
 2. **HUD 工具栏窗+红边框+capabilities+事件协议**：多窗口基建落地。
 3. **单写令牌+排队+gate 重构**：input/keyboard 序列原子步化，读写工具过 gate。（步骤 3 已落地 2026-08-29：3a channel.rs 仲裁核心[FSM 测试 12 件先行·B14] + 3b 接线[六写件 gate_write / 截图 gate_read / on_loop_exit 归还 / pause·resume·grant·detach 四命令 + set_liveness 注入] + 3c 前端暂停键；**Off 两副面孔**——首入 Off 兼容直过走逐次 Confirm（§4.1 入口 3），域内被 Off 才收家族错误；不变式 Held(x)⇒x∉queue[陈旧排队位会让释放把令牌再授予自己]；contention_note 写结果附排队情报；cargo 1212 / vitest 328；待真机手测。原子步化取 v1 形态：一次工具调用=一个原子步，gate 在 execute 起点、步内不 park——插值级逐步 gate 留待有真实需求再收）
-4. **人类优先仲裁**：LL hook 线程+human_active+抢占安全收尾。
+4. **人类优先仲裁**：LL hook 线程+human_active+抢占安全收尾。（步骤 4 已落地 2026-08-30：human.rs——WH_MOUSE_LL+WH_KEYBOARD_LL 专线程消息泵，回调只登记**非注入**事件时间戳[LLMHF/LLKHF_INJECTED 过滤 SendInput 自身]，回调内仅微秒级时间戳写[系统 ~300ms 摘超时钩子]；2s 去抖窗口 human_active；钩子随通道装卸[open 装/stop 卸，Off 兼容路径不装]，安装失败诚实降级[无时间戳=恒不活跃，功能不损只失避让]；测试构建 install 短路 no-op[LL 钩子进程级会串并行测试]。gate 优先级 **paused > human_active > 令牌**、读不受影响[截图不打扰人]；park 三臂=watch+取消+**去抖心跳自醒**[物理输入无事件可广播，用户闲置窗口过后写 gate 自动恢复]；取消文案统一家族 `screen 操作取消:` 三态分派[暂停/用户使用鼠标键盘/等待操作权]。原子序列检查点=通道 Active 且人类在场才抢占[Off 兼容路径逐次 Confirm 是全部授权，用户亲手点批准=人类在场，此时抢占判定会误杀刚批准的操作]：drag 步进每步[命中→先释放按住按钮]+按下前、type_text 每字符边界[报已输入 N 单元]、press_key 每轮边界[报已完成 N 次]——家族错误 `screen 用户抢占`。测试缝 thread-local 双覆盖[set_fake_active/set_fake_preempt——current_thread runtime 同线程零并行污染；Fake 后端按事件计数翻转测序列中途抢占→安全收尾]；cargo 1224 / clippy 0；待真机手测[真钩子抢占/避让体感]）
 5. **全屏识别+文案终准**：帧均匀性检查、描述/错误文案收口。
 
 依赖序：1→3→4 严格；2 可与 3 并行；5 收尾。批次③ 真机手测不阻塞（引擎语义不因通道改变，通道 Off = 现状）。

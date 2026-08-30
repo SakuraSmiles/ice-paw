@@ -253,6 +253,12 @@ impl McpClient for TypeTextTool {
         // 逐 UTF-16 单元 down+up（BMP 外字符 = 代理对两单元）。
         let mut units = 0usize;
         for unit in p.text.encode_utf16() {
+            // 人类优先检查点（§4.5）：字符间隙无按键按住，直接中止并如实报进度。
+            if super::channel::global().human_preempted() {
+                return Err(super::human::preempted_error(&format!(
+                    "（已输入 {units} 个 UTF-16 单元）"
+                )));
+            }
             self.backend.key_unicode(unit, true)?;
             self.backend.key_unicode(unit, false)?;
             units += 1;
@@ -338,6 +344,12 @@ impl McpClient for PressKeyTool {
         let (mods, main) = parse_combo(&p.combo)?;
 
         for i in 0..presses {
+            // 人类优先检查点（§4.5）：轮次边界无按键按住，直接中止并如实报进度。
+            if super::channel::global().human_preempted() {
+                return Err(super::human::preempted_error(&format!(
+                    "（已完成 {i} 次按键）"
+                )));
+            }
             if i > 0 {
                 tokio::time::sleep(Duration::from_millis(PRESS_GAP_MS)).await;
             }
@@ -474,11 +486,16 @@ mod tests {
     use super::*;
     use crate::harness::mcp::screen::coords::{PhysRect, VirtualScreenLayout};
     use crate::harness::mcp::screen::{MouseButton, RgbaFrame, WindowInfo};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
 
     struct FakeKeyboardBackend {
         vks: Mutex<Vec<(u16, bool)>>,
         units: Mutex<Vec<(u16, bool)>>,
+        /// 累计键事件（vk+unicode）达到 N 后翻转人类抢占检查点（0=不翻转）
+        /// ——测「序列中途抢占→中止」路径（thread-local 缝，见 human.rs）。
+        flip_preempt_after_key_events: AtomicUsize,
+        key_events: AtomicUsize,
     }
 
     impl FakeKeyboardBackend {
@@ -486,6 +503,16 @@ mod tests {
             Self {
                 vks: Mutex::new(Vec::new()),
                 units: Mutex::new(Vec::new()),
+                flip_preempt_after_key_events: AtomicUsize::new(0),
+                key_events: AtomicUsize::new(0),
+            }
+        }
+
+        fn note_key_event(&self) {
+            let n = self.key_events.fetch_add(1, Ordering::SeqCst) + 1;
+            let flip = self.flip_preempt_after_key_events.load(Ordering::SeqCst);
+            if flip != 0 && n == flip {
+                super::super::human::test_support::set_fake_preempt(Some(true));
             }
         }
     }
@@ -537,10 +564,12 @@ mod tests {
         }
         fn key_vk(&self, vk: u16, down: bool) -> AppResult<()> {
             self.vks.lock().unwrap().push((vk, down));
+            self.note_key_event();
             Ok(())
         }
         fn key_unicode(&self, unit: u16, down: bool) -> AppResult<()> {
             self.units.lock().unwrap().push((unit, down));
+            self.note_key_event();
             Ok(())
         }
     }
@@ -635,6 +664,48 @@ mod tests {
             backend.vks.lock().unwrap().clone(),
             vec![(0x09, true), (0x09, false), (0x09, true), (0x09, false)]
         );
+    }
+
+    /// §4.5 序列检查点：字符间隙用户夺回键盘 → 立即中止并如实报已输入进度。
+    #[tokio::test]
+    async fn type_text_aborts_on_human_preempt_reports_progress() {
+        let backend = Arc::new(FakeKeyboardBackend::new());
+        // "hello" 每字符 down+up 两事件；输完 2 字符（4 事件）后翻转 → 第 3 字符边界中止
+        backend.flip_preempt_after_key_events.store(4, Ordering::SeqCst);
+        let tool = TypeTextTool::new(backend.clone(), Arc::new(ScreenState::new()));
+        let ctx = make_ctx("t2").await;
+
+        let err = tool
+            .execute_with_output(r#"{"text":"hello"}"#, &ctx)
+            .await
+            .unwrap_err();
+        super::super::human::test_support::set_fake_preempt(None);
+        let msg = err.to_string();
+        assert!(msg.contains("screen 用户抢占"), "家族前缀漂移: {msg}");
+        assert!(msg.contains("已输入 2 个 UTF-16 单元"), "应如实报进度: {msg}");
+        // 恰好输入 2 字符（4 事件），第 3 字符未发出
+        assert_eq!(backend.units.lock().unwrap().len(), 4);
+    }
+
+    /// §4.5 序列检查点：轮次边界用户夺回键盘 → 中止（边界处无按键按住，免收尾）。
+    #[tokio::test]
+    async fn press_key_aborts_at_iteration_boundary_on_human_preempt() {
+        let backend = Arc::new(FakeKeyboardBackend::new());
+        // ctrl+a 一轮 = 4 事件；第 1 轮完成后翻转 → 第 2 轮边界中止
+        backend.flip_preempt_after_key_events.store(4, Ordering::SeqCst);
+        let tool = PressKeyTool::new(backend.clone(), Arc::new(ScreenState::new()));
+        let ctx = make_ctx("k3").await;
+
+        let err = tool
+            .execute_with_output(r#"{"combo":"ctrl+a","presses":3}"#, &ctx)
+            .await
+            .unwrap_err();
+        super::super::human::test_support::set_fake_preempt(None);
+        let msg = err.to_string();
+        assert!(msg.contains("screen 用户抢占"), "家族前缀漂移: {msg}");
+        assert!(msg.contains("已完成 1 次按键"), "应如实报进度: {msg}");
+        // 第 1 轮完整（修饰键已逆序释放），第 2 轮零事件
+        assert_eq!(backend.vks.lock().unwrap().len(), 4);
     }
 
     #[tokio::test]

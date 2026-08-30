@@ -18,6 +18,11 @@
 //! 归还挂 [`crate::harness::loop::emitter`] 的 `on_loop_exit`（RAII 全退出路径
 //! 必经，评审 B6）。
 //!
+//! 步骤 4 落地：**人类优先仲裁**（§4.5，见 [`super::human`]）。优先级
+//! paused > human_active > 令牌；写 gate 见人类在场即 park（读不受影响——截图
+//! 不打扰人），park 心跳臂按去抖窗口自醒重查，用户闲置窗口过后自动恢复。
+//! 钩子随通道生命周期装卸（[`ScreenChannel::open`]/[`ScreenChannel::stop`]）。
+//!
 //! 线程模型：`std::sync::Mutex` 包整体，临界区只有 clone/insert（微秒级），
 //! 持锁期间无 await——async 上下文安全（同 `ScreenState` 纪律）。唤醒用
 //! `tokio::sync::watch` 版本号广播：每次状态突变 `bump()`，park 者醒来重查。
@@ -122,6 +127,28 @@ enum WriteToken {
     Held(String),
 }
 
+/// gate park 的原因（取消时的家族文案分派）。
+/// 前缀统一 `screen 操作取消`——doom_detect 冒号切分依赖首段稳定。
+enum ParkReason {
+    /// 通道暂停（§4.4：读写全部挂起）。
+    Paused,
+    /// 人类在场（§4.5：写 park，读不受影响）。
+    Human,
+    /// 等待写令牌（§4.3：排队）。
+    WaitToken,
+}
+
+impl ParkReason {
+    fn cancel_message(&self) -> String {
+        let why = match self {
+            ParkReason::Paused => "屏幕共享暂停期间",
+            ParkReason::Human => "等待用户停止使用鼠标/键盘期间",
+            ParkReason::WaitToken => "等待屏幕操作权期间",
+        };
+        format!("screen 操作取消: {why}对话被用户取消，本操作未执行")
+    }
+}
+
 impl Active {
     fn new() -> Self {
         Self {
@@ -197,6 +224,11 @@ impl ScreenChannel {
         active.attached.insert(conv_id.to_string(), info);
         drop(g);
         self.bump();
+        if newly {
+            // 人类优先仲裁的数据源随通道装卸（§4.5）；仅 Off→Active 转换时装
+            // （幂等，但省一次锁）。失败诚实降级：无时间戳 = 恒不活跃。
+            super::human::install();
+        }
         newly
     }
 
@@ -222,6 +254,8 @@ impl ScreenChannel {
         drop(g);
         self.bump();
         if cleared.is_some() {
+            // 卸钩在临界区外（join 等钩子线程退出，不能持锁）
+            super::human::uninstall();
             tracing::info!(target: "ice_paw.screen_channel", "通道关闭（令牌/队列随状态清空）");
         }
         cleared
@@ -265,8 +299,14 @@ impl ScreenChannel {
     }
 
     /// gate 统一体：`write=false` 为读（conv_id 不参与）；`write=true` 为写。
-    /// park 形态（评审 B1 硬要求）：select { watch 唤醒, 对话取消 }——
-    /// 用户暂停后点「停止生成」必须能打断挂起，否则 ChatState 注册表吊死。
+    ///
+    /// **优先级**（§4.5 人类最高）：paused > human_active > 令牌。读不受
+    /// human_active 影响（截图不打扰人）。
+    ///
+    /// park 三臂（评审 B1 硬要求 + §4.5）：select { watch 唤醒, 对话取消,
+    /// 去抖心跳 }——「停止生成」必须能打断挂起（否则 ChatState 注册表吊死）；
+    /// 心跳臂是 human park 的自愈源（物理输入只是时间戳、无事件可广播），
+    /// park 者按去抖窗口自醒重查，用户闲置窗口过后写 gate 自动恢复。
     async fn gate_impl(
         &self,
         conv_id: &str,
@@ -278,7 +318,7 @@ impl ScreenChannel {
         let mut rx = self.version.subscribe();
         let mut entered = false; // 曾见 Active = 已进入通道仲裁域
         loop {
-            {
+            let reason = {
                 let mut g = self.lock();
                 let Some(a) = g.as_mut() else {
                     if entered {
@@ -292,7 +332,9 @@ impl ScreenChannel {
                 };
                 entered = true;
                 if a.paused {
-                    // park（读写都挂起，§4.4）
+                    ParkReason::Paused // park（读写都挂起，§4.4）
+                } else if write && super::human::active() {
+                    ParkReason::Human // 人类优先（§4.5）：写 park；读不受影响
                 } else if !write {
                     return Ok(()); // 读：通道 Active 且未暂停即过
                 } else {
@@ -326,14 +368,18 @@ impl ScreenChannel {
                             }
                         }
                     }
+                    ParkReason::WaitToken
                 }
-            }
-            // park：等状态突变唤醒，或对话取消打断（B1）。
-            // wait_cancel_safe(None) 永不完成——select 退化为纯 watch 等待。
+            };
+            // park：等状态突变唤醒、对话取消打断（B1）、去抖心跳自醒（§4.5）。
+            // wait_cancel_safe(None) 永不完成——cancel 臂退化为纯等待。
             tokio::select! {
                 changed = rx.changed() => {
                     let _ = changed;
                     continue;
+                }
+                _ = tokio::time::sleep(super::human::quiesce_duration()) => {
+                    continue; // 心跳重查（human park 自愈；其余 park 无害空转）
                 }
                 _ = wait_cancel_safe(cancel) => {
                     // 取消：摘除自己的排队（死会话占队列，B6 同款问题）再返回
@@ -342,13 +388,19 @@ impl ScreenChannel {
                         a.queue.retain(|c| c != conv_id);
                     }
                     drop(g);
-                    return Err(AppError::Validation(
-                        "screen 通道已暂停: 等待屏幕共享恢复期间对话被用户取消，本操作未执行"
-                            .into(),
-                    ));
+                    return Err(AppError::Validation(reason.cancel_message()));
                 }
             }
         }
+    }
+
+    /// 原子序列检查点（§4.5「每步插值后非阻塞检查」）：通道 Active 且检测到
+    /// 人类在场。**仅通道 Active 时生效**——Off 兼容路径的逐次 Confirm 就是
+    /// 那次操作的全部授权（用户亲手点批准即人类在场，此时抢占判定会误杀
+    /// 刚被批准的操作）。命中方须先安全收尾（释放按住的键/按钮）再返回
+    /// [`super::human::preempted_error`]。
+    pub fn human_preempted(&self) -> bool {
+        super::human::preempt_now(self.is_active())
     }
 
     /// 归还写令牌 + 摘除本会话排队（回合结束/会话退出钩子挂 `on_loop_exit`）。
@@ -497,7 +549,7 @@ impl ScreenChannel {
                         WriteToken::Held(h) => Some(h.clone()),
                     },
                     queue: a.queue.iter().cloned().collect(),
-                    human_active: false,
+                    human_active: super::human::active(),
                     screenshot_count: a.screenshot_count,
                 }
             }
@@ -797,7 +849,7 @@ mod tests {
 
         token.cancel();
         let err = h.await.expect("c2 任务未 panic").expect_err("取消应中断 park");
-        assert!(err_text(err).starts_with("screen 通道已暂停"), "取消错误家族前缀漂移");
+        assert!(err_text(err).starts_with("screen 操作取消"), "取消错误家族前缀漂移");
         // 摘除自己的排队位，不惊动持有者
         until(&ch, |s| !s.queue.contains(&"c2".to_string())).await;
         assert_eq!(ch.snapshot().holder.as_deref(), Some("c1"));
@@ -968,5 +1020,76 @@ mod tests {
         assert!(!s.paused);
         assert_eq!(s.holder, None);
         assert!(s.queue.is_empty());
+    }
+
+    // ------------------------------------------------------------------
+    // 步骤 4：人类优先仲裁（§4.5）——fake_active 走 thread-local 缝
+    // ------------------------------------------------------------------
+
+    /// 人类在场：写 gate park；用户闲置（去抖窗口过后）→ 心跳臂自醒恢复。
+    #[tokio::test]
+    async fn human_park_blocks_write_and_recovers_on_idle() {
+        super::super::human::test_support::set_fake_active(Some(true));
+        let ch = std::sync::Arc::new(ScreenChannel::new());
+        ch.open("c1", info("a"));
+
+        let h = {
+            let ch = ch.clone();
+            tokio::spawn(async move { ch.gate_write("c1", None).await })
+        };
+        tokio::time::sleep(std::time::Duration::from_millis(8)).await;
+        assert!(!h.is_finished(), "人类在场时写 gate 应 park");
+
+        // 用户停止操作（窗口内无新输入）→ 心跳臂 ≤ 去抖窗口自醒重查
+        super::super::human::test_support::set_fake_active(Some(false));
+        h.await.expect("任务未 panic").expect("用户闲置后写 gate 应恢复");
+        super::super::human::test_support::set_fake_active(None);
+    }
+
+    /// 读 gate 不受人类在场影响（截图不打扰人，§4.5）；snapshot 如实上报。
+    #[tokio::test]
+    async fn human_park_read_unaffected_and_snapshot_reflects() {
+        super::super::human::test_support::set_fake_active(Some(true));
+        let ch = ScreenChannel::new();
+        ch.open("c1", info("a"));
+        ch.gate_read(None).await.expect("读 gate 不受人类在场影响");
+        assert!(ch.snapshot().human_active, "snapshot 应如实上报 human_active");
+        super::super::human::test_support::set_fake_active(None);
+    }
+
+    /// human park 期间取消 → 家族错误带人类原因段（三态取消文案分派）。
+    #[tokio::test]
+    async fn human_park_cancel_reports_human_reason() {
+        super::super::human::test_support::set_fake_active(Some(true));
+        let ch = std::sync::Arc::new(ScreenChannel::new());
+        ch.open("c1", info("a"));
+        let token = CancellationToken::new();
+        let h = {
+            let ch = ch.clone();
+            let t = token.clone();
+            tokio::spawn(async move { ch.gate_write("c1", Some(&t)).await })
+        };
+        tokio::time::sleep(std::time::Duration::from_millis(4)).await;
+
+        token.cancel();
+        let err = h.await.expect("任务未 panic").expect_err("取消应中断 human park");
+        super::super::human::test_support::set_fake_active(None);
+        let msg = err_text(err);
+        assert!(msg.starts_with("screen 操作取消"), "取消家族前缀漂移: {msg}");
+        assert!(msg.contains("等待用户停止使用鼠标/键盘"), "应分派人类原因: {msg}");
+    }
+
+    /// 检查点谓词仅通道 Active 时生效——Off 兼容路径的逐次 Confirm 是那次操作的
+    /// 全部授权，用户亲手点批准（=人类在场）不得误杀刚被批准的操作。
+    #[tokio::test]
+    async fn human_preempted_requires_active_channel() {
+        super::super::human::test_support::set_fake_active(Some(true));
+        let ch = ScreenChannel::new();
+        assert!(!ch.human_preempted(), "通道 Off（兼容路径）不应抢占");
+        ch.open("c1", info("a"));
+        assert!(ch.human_preempted(), "通道 Active 且人类在场应抢占");
+        super::super::human::test_support::set_fake_active(Some(false));
+        assert!(!ch.human_preempted(), "用户闲置不应抢占");
+        super::super::human::test_support::set_fake_active(None);
     }
 }
