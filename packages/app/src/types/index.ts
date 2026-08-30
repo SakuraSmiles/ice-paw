@@ -572,8 +572,8 @@ export interface ScreenChannelAttached {
 }
 
 /** 通道单一全量事件负载（§4.9：形状跨步骤稳定）。步骤 1 只有 status/opened_at/
- *  attached 真生效；paused/hud_monitor/holder/queue/human_active 是步骤 2-4
- *  的占位字段（协议从第一天定型，前端不随步骤演进改形状）。 */
+ *  attached 真生效；paused/hud_monitor/holder/queue/human_active/writing 随
+ *  步骤 2-4 逐步点亮（协议从第一天定型，前端不随步骤演进改形状）。 */
 export interface ScreenChannelState {
   status: "off" | "active";
   paused: boolean;
@@ -583,6 +583,8 @@ export interface ScreenChannelState {
   holder: string | null;
   queue: string[];
   human_active: boolean;
+  /** 写件执行中（B7 写操作避让：HUD 自动收缩 + 点击穿透） */
+  writing: boolean;
   screenshot_count: number;
 }
 

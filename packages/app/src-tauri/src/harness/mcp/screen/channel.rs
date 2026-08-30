@@ -23,6 +23,14 @@
 //! 不打扰人），park 心跳臂按去抖窗口自醒重查，用户闲置窗口过后自动恢复。
 //! 钩子随通道生命周期装卸（[`ScreenChannel::open`]/[`ScreenChannel::stop`]）。
 //!
+//! 步骤 2 落地：**可见性广播 + HUD 态**。`bump()` 除了唤醒 park 者还向
+//! broadcaster（AppHandle，lib.rs 注入）emit `screen:channel-state`——gate
+//! 路径的令牌/队列变化（不在命令层）由此到达 HUD；命令层不再手动 emit。
+//! 态新增 `hud_monitor`（HUD 所在显示器，可切换）与 `write_in_flight`
+//! （B7 写操作避让：写件执行期间 HUD 收缩角部微条）。
+//! `human_active`/`writing` 无事件源变化（时间戳/计数翻转不 bump）——HUD
+//! 侧 1s 轮询补真相。
+//!
 //! 线程模型：`std::sync::Mutex` 包整体，临界区只有 clone/insert（微秒级），
 //! 持锁期间无 await——async 上下文安全（同 `ScreenState` 纪律）。唤醒用
 //! `tokio::sync::watch` 版本号广播：每次状态突变 `bump()`，park 者醒来重查。
@@ -52,6 +60,17 @@ pub const SCREEN_TOOLS: &[&str] = &[
     "type_text",
     "press_key",
     "wait",
+];
+
+/// 写件子集（六件注入类）——`write_in_flight` 计数只对这批生效（B7 写操作
+/// 避让：执行期间 HUD 自动收缩，见 tool_executor 的计数包边）。
+pub const WRITE_TOOLS: &[&str] = &[
+    "mouse_move",
+    "mouse_click",
+    "mouse_drag",
+    "mouse_scroll",
+    "type_text",
+    "press_key",
 ];
 
 /// 附着会话信息（HUD「谁在用」；步骤 1 无 HUD，先供状态事件与日志）。
@@ -88,6 +107,8 @@ pub struct ScreenChannelState {
     pub queue: Vec<String>,
     /// 最近 2s 有物理输入（人类优先仲裁，步骤 4 起有值）。
     pub human_active: bool,
+    /// 写件执行中（B7 写操作避让：HUD 收缩角部微条 + 点击穿透；步骤 2 起有值）。
+    pub writing: bool,
     /// 通道累计截图张数（capture 成功即计，HUD 成本块可选件）。
     pub screenshot_count: u64,
 }
@@ -103,6 +124,7 @@ impl ScreenChannelState {
             holder: None,
             queue: Vec::new(),
             human_active: false,
+            writing: false,
             screenshot_count: 0,
         }
     }
@@ -118,6 +140,12 @@ struct Active {
     token: WriteToken,
     /// 等待写令牌的会话（FIFO；用户手动切换的出口）。
     queue: VecDeque<String>,
+    /// HUD 所在显示器索引（步骤 2；序号属 tauri available_monitors，与 GDI
+    /// backend.monitors 顺序无对应关系——HUD 定位是窗口层自治域）。
+    hud_monitor: usize,
+    /// 写件执行中计数（B7：>0 = HUD 收缩。写件执行全程含 gate 排队——排队/
+    /// human park 期间收缩同样是「给用户让路」，语义反而更贴切）。
+    write_in_flight: u64,
 }
 
 /// 写者令牌状态。
@@ -161,6 +189,8 @@ impl Active {
             paused: false,
             token: WriteToken::Free,
             queue: VecDeque::new(),
+            hud_monitor: 0,
+            write_in_flight: 0,
         }
     }
 
@@ -183,6 +213,10 @@ pub struct ScreenChannel {
     /// 写者活性查询源（持有者泄漏回收 §4.3）：lib.rs 初始化时注入 ChatState。
     /// 未注入（测试/启动早期）时保守视为「活着」——不回收，宁可用户手动切换。
     liveness: Mutex<Option<crate::harness::chat_state::ChatState>>,
+    /// 状态广播器（AppHandle，lib.rs setup 注入；测试不注入 = no-op）。
+    /// `bump()` 时 emit `screen:channel-state`——gate 路径的令牌/队列变化
+    /// 不经命令层，靠它到达 HUD。
+    broadcaster: Mutex<Option<tauri::AppHandle>>,
 }
 
 impl ScreenChannel {
@@ -194,7 +228,13 @@ impl ScreenChannel {
             inner: Mutex::new(None),
             version: tx,
             liveness: Mutex::new(None),
+            broadcaster: Mutex::new(None),
         }
+    }
+
+    /// 注入状态广播器（lib.rs setup 时一次；None = 不广播——测试/无头环境）。
+    pub fn set_broadcaster(&self, app: tauri::AppHandle) {
+        *self.broadcaster.lock().unwrap_or_else(|e| e.into_inner()) = Some(app);
     }
 
     /// 注入活性查询源（lib.rs 启动时一次；重复注入以后者为准——测试重排用）。
@@ -211,8 +251,18 @@ impl ScreenChannel {
     }
 
     /// 状态突变后的唤醒广播（在临界区内调用安全——watch send_modify 无锁竞争面）。
+    /// 步骤 2 起同时向 broadcaster emit 全量态（HUD/主窗同源渲染；低频——只在
+    /// 真突变点调用，no-op 路径不 bump，防伪事件刷屏）。
     fn bump(&self) {
         self.version.send_modify(|v| *v += 1);
+        let app = self
+            .broadcaster
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if let Some(app) = app {
+            emit_state(&app);
+        }
     }
 
     /// 开启通道（已开则仅附着本会话——§4.1 request_screen_session 批准语义）。
@@ -233,7 +283,7 @@ impl ScreenChannel {
     }
 
     /// 仅在通道已 Active 时附着本会话（首用批准路径：批准加入 ≠ 开启通道）。
-    /// 返回 true = 实际新附着（Off / 已附着返回 false，幂等）。
+    /// 返回 true = 实际新附着（Off / 已附着返回 false，幂等；仅真附着才 bump）。
     pub fn attach_if_active(&self, conv_id: &str, info: AttachInfo) -> bool {
         let mut g = self.lock();
         let attached = match g.as_mut() {
@@ -241,7 +291,9 @@ impl ScreenChannel {
             None => false,
         };
         drop(g);
-        self.bump();
+        if attached {
+            self.bump();
+        }
         attached
     }
 
@@ -252,8 +304,8 @@ impl ScreenChannel {
         let mut g = self.lock();
         let cleared = g.take().map(|a| a.attached.into_iter().collect());
         drop(g);
-        self.bump();
         if cleared.is_some() {
+            self.bump();
             // 卸钩在临界区外（join 等钩子线程退出，不能持锁）
             super::human::uninstall();
             tracing::info!(target: "ice_paw.screen_channel", "通道关闭（令牌/队列随状态清空）");
@@ -264,21 +316,21 @@ impl ScreenChannel {
     /// 暂停（读写全部挂起；通道/授权/附着保持——播放器语义 §4.4）。
     pub fn pause(&self) {
         let mut g = self.lock();
-        if let Some(a) = g.as_mut() {
-            a.paused = true;
-        }
+        let changed = g.as_mut().is_some_and(|a| !std::mem::replace(&mut a.paused, true));
         drop(g);
-        self.bump();
+        if changed {
+            self.bump();
+        }
     }
 
     /// 恢复（park 中的读写 gate 被唤醒继续）。
     pub fn resume(&self) {
         let mut g = self.lock();
-        if let Some(a) = g.as_mut() {
-            a.paused = false;
-        }
+        let changed = g.as_mut().is_some_and(|a| std::mem::replace(&mut a.paused, false));
         drop(g);
-        self.bump();
+        if changed {
+            self.bump();
+        }
     }
 
     /// 读 gate（§4.3 读写分家：截图自由并发，只受通道状态约束）。
@@ -341,6 +393,10 @@ impl ScreenChannel {
                     match a.token.clone() {
                         WriteToken::Free => {
                             a.grant_token_to(conv_id);
+                            drop(g);
+                            // 授予是状态突变（HUD holder 变化）——命令层不经手，
+                            // 广播只能挂在这（watch 唤醒对 park 者非必需：无排队者）。
+                            self.bump();
                             return Ok(());
                         }
                         WriteToken::Held(ref h) if h == conv_id => return Ok(()),
@@ -449,6 +505,60 @@ impl ScreenChannel {
         self.bump();
     }
 
+    /// 切换 HUD 所在显示器（命令层校验/取模；真值变化才 bump）。
+    pub fn set_hud_monitor(&self, index: usize) {
+        let mut g = self.lock();
+        let changed = g
+            .as_mut()
+            .is_some_and(|a| std::mem::replace(&mut a.hud_monitor, index) != index);
+        drop(g);
+        if changed {
+            self.bump();
+        }
+    }
+
+    /// 当前 HUD 显示器索引（Off 返回 0）。
+    pub fn hud_monitor(&self) -> usize {
+        self.lock().as_ref().map_or(0, |a| a.hud_monitor)
+    }
+
+    /// 写件执行开始（B7 写操作避让）：write_in_flight +1 → HUD 收缩。
+    /// 计数翻转 bump 广播（HUD 需即时收缩，等 1s 轮询会闪整条）。
+    pub fn note_write_begin(&self) {
+        if let Some(a) = self.lock().as_mut() {
+            a.write_in_flight += 1;
+        }
+        self.bump();
+    }
+
+    /// 写件执行结束：计数 -1（饱和到 0——防御性，正常配对不会下探）。
+    pub fn note_write_end(&self) {
+        if let Some(a) = self.lock().as_mut() {
+            a.write_in_flight = a.write_in_flight.saturating_sub(1);
+        }
+        self.bump();
+    }
+
+    /// 刷新附着会话的 purpose（HUD「正在做什么」= 当前回合用户指令摘要，§4.2）。
+    /// 真值变化才 bump（每次家族工具执行都会调，同回合重复写不刷事件）。
+    pub fn set_purpose(&self, conv_id: &str, purpose: String) {
+        let mut g = self.lock();
+        let changed = g.as_mut().is_some_and(|a| {
+            a.attached.get_mut(conv_id).is_some_and(|i| {
+                if i.purpose != purpose {
+                    i.purpose = purpose;
+                    true
+                } else {
+                    false
+                }
+            })
+        });
+        drop(g);
+        if changed {
+            self.bump();
+        }
+    }
+
     /// 写操作的排队情报注记（§4.3「队列情报对模型可见」）：park 中的模型无法
     /// 自行放弃，「排不到就友善终止/先读/告知用户」的决策点只能发生在下一次
     /// 思考——靠结果里的这份快照支撑。无争用（队列空）返回 None 静默。
@@ -542,7 +652,7 @@ impl ScreenChannel {
                     status: "active",
                     paused: a.paused,
                     opened_at: Some(a.opened_at_unix),
-                    hud_monitor: 0,
+                    hud_monitor: a.hud_monitor,
                     attached,
                     holder: match &a.token {
                         WriteToken::Free => None,
@@ -550,6 +660,7 @@ impl ScreenChannel {
                     },
                     queue: a.queue.iter().cloned().collect(),
                     human_active: super::human::active(),
+                    writing: a.write_in_flight > 0,
                     screenshot_count: a.screenshot_count,
                 }
             }
@@ -593,7 +704,9 @@ pub fn short_circuit(
     global().short_circuit(decision, tool_name, conv_id)
 }
 
-/// 广播 `screen:channel-state`（全窗；主窗开关与未来 HUD 同源渲染）。
+/// 广播 `screen:channel-state`（全窗；主窗开关与 HUD 同源渲染）。
+/// 主路径是 [`ScreenChannel::bump`] 内的自动广播；命令层仅在无突变路径
+/// （如 stop 后的 closed 归因序）需要手动补发。
 pub fn emit_state(app: &tauri::AppHandle) {
     use tauri::Emitter as _;
     let _ = app.emit("screen:channel-state", global().snapshot());
@@ -620,6 +733,71 @@ pub async fn attach_info_from_db(
         conv_title: conv.map(|c| c.title).unwrap_or_default(),
         purpose: String::new(),
     }
+}
+
+/// purpose 摘要长度上限（字符数，非字节——CJK 安全截断）。
+const PURPOSE_MAX_CHARS: usize = 40;
+
+/// 写件执行包边 guard（B7 写操作避让）：构造即计数 +1，Drop 即 -1——
+/// RAII 取消安全（回合 abort 丢弃 future 时 Drop 仍运行，计数不泄漏；
+/// 显式 begin/end 配对在异常路径会漏 end 把 HUD 卡在收缩态）。
+/// tool_executor 的 invoke_tool 对写件统一持握。
+pub struct WriteBracket(());
+
+impl WriteBracket {
+    /// 进入写件执行（global 通道 write_in_flight+1 → HUD 收缩）。
+    pub fn enter() -> Self {
+        global().note_write_begin();
+        Self(())
+    }
+}
+
+impl Drop for WriteBracket {
+    fn drop(&mut self) {
+        global().note_write_end();
+    }
+}
+
+/// 家族工具执行时刷新 purpose（§4.2「正在做什么」= 当前回合用户指令摘要）。
+/// turn_id 即用户消息 id（session-events 不变式 turn_id == user_msg_id），查库取
+/// 首文本块截断；turn 外（None）/ 查不到 / 通道未附着本会话都静默跳过（best-effort，
+/// HUD 回落显示会话标题）。每次家族工具执行都会调，同回合重复值不 bump。
+pub async fn refresh_purpose(ctx: &crate::harness::mcp::client::ToolContext) {
+    let Some(turn_id) = ctx.turn_id.as_deref() else {
+        return;
+    };
+    let ch = global();
+    if !ch.is_active_and_attached(&ctx.conv_id) {
+        return;
+    }
+    let purpose = crate::db::repo::message::find_by_id(&ctx.pool, turn_id)
+        .await
+        .ok()
+        .flatten()
+        .map(|row| first_text_summary(&row))
+        .unwrap_or_default();
+    ch.set_purpose(&ctx.conv_id, purpose);
+}
+
+/// 消息行取首文本块并按字符截断（content_blocks 优先，无文本块/旧行回落裸 content）。
+fn first_text_summary(row: &crate::db::models::MessageRow) -> String {
+    let raw = if row.content_blocks.trim_start().starts_with('[') {
+        crate::context::history::parse_content_blocks(&row.content_blocks)
+            .into_iter()
+            .find_map(|b| match b {
+                crate::infra::protocol::ContentBlock::Text { text } => Some(text),
+                _ => None,
+            })
+            .unwrap_or_else(|| row.content.clone())
+    } else {
+        row.content.clone()
+    };
+    let trimmed = raw.trim();
+    if trimmed.chars().count() <= PURPOSE_MAX_CHARS {
+        return trimmed.to_string();
+    }
+    let cut: String = trimmed.chars().take(PURPOSE_MAX_CHARS).collect();
+    format!("{cut}…")
 }
 
 // =========================================================================
@@ -1091,5 +1269,86 @@ mod tests {
         super::super::human::test_support::set_fake_active(Some(false));
         assert!(!ch.human_preempted(), "用户闲置不应抢占");
         super::super::human::test_support::set_fake_active(None);
+    }
+
+    // ------------------------------------------------------------------
+    // 步骤 2：HUD 态（hud_monitor / write_in_flight / purpose）
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn hud_monitor_and_writing_reflected_in_snapshot() {
+        let ch = ScreenChannel::new();
+        // Off：hud_monitor 0 / writing false
+        let s = ch.snapshot();
+        assert_eq!(s.hud_monitor, 0);
+        assert!(!s.writing);
+        // Off 状态切显示器无操作（真值守卫）
+        ch.set_hud_monitor(2);
+        assert_eq!(ch.snapshot().hud_monitor, 0);
+
+        ch.open("c1", info("a"));
+        ch.set_hud_monitor(1);
+        assert_eq!(ch.snapshot().hud_monitor, 1);
+        assert_eq!(ch.hud_monitor(), 1);
+
+        // 写执行计数：begin/end 配对 + 嵌套（>0 即 writing）
+        ch.note_write_begin();
+        assert!(ch.snapshot().writing);
+        ch.note_write_begin();
+        ch.note_write_end();
+        assert!(ch.snapshot().writing, "嵌套未归零仍是 writing");
+        ch.note_write_end();
+        assert!(!ch.snapshot().writing);
+        // 防御性饱和：多余 end 不下探（不 panic、不翻转 writing）
+        ch.note_write_end();
+        assert!(!ch.snapshot().writing);
+        // 通道 Off 时计数操作不 panic、不复活状态
+        ch.stop();
+        ch.note_write_begin();
+        let s = ch.snapshot();
+        assert_eq!(s.status, "off");
+        assert!(!s.writing);
+    }
+
+    #[test]
+    fn set_purpose_updates_attached_conv_and_snapshot() {
+        let ch = ScreenChannel::new();
+        // Off / 未附着：静默
+        ch.set_purpose("c1", "整理设计稿".into());
+        ch.open("c1", info("a"));
+        ch.set_purpose("c1", "整理设计稿".into());
+        let s = ch.snapshot();
+        assert_eq!(s.attached[0].purpose, "整理设计稿");
+        // 未附着会话（c2）写 purpose 不报错不生效
+        ch.set_purpose("c2", "别的活".into());
+        assert_eq!(ch.snapshot().attached.len(), 1);
+    }
+
+    #[test]
+    fn first_text_summary_truncates_by_chars() {
+        let mut row = crate::db::models::MessageRow {
+            id: "m".into(),
+            conversation_id: "c".into(),
+            role: "user".into(),
+            content: "短指令".into(),
+            content_blocks: "[]".into(),
+            token_count: None,
+            error: None,
+            created_at: String::new(),
+            rowid: 1,
+            summary_id: None,
+            model: None,
+            source_seq: None,
+        };
+        assert_eq!(first_text_summary(&row), "短指令");
+        // 裸 content 长文本：按字符截断 40 + 省略号（CJK 不出乱码）
+        row.content = "一".repeat(50);
+        let s = first_text_summary(&row);
+        assert_eq!(s.chars().count(), PURPOSE_MAX_CHARS + 1);
+        assert!(s.ends_with('…'));
+        // content_blocks 数组优先（首文本块）
+        row.content_blocks =
+            r#"[{"type":"text","text":"块文本"},{"type":"text","text":"第二块"}]"#.into();
+        assert_eq!(first_text_summary(&row), "块文本");
     }
 }

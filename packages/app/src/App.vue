@@ -15,6 +15,14 @@ const project = useProjectStore();
 const screenChannel = useScreenChannelStore();
 const router = useRouter();
 
+// 批次④ 步骤 2：/screen-hud、/screen-frame 是独立工具窗（非主窗）。localStorage
+// 同源共享——工具窗若参与主窗的会话记忆写入（saveLastSession watch）会把
+// {route:"/screen-hud"} 覆盖进主窗的启动恢复态；聊天事件接线/全局快捷键对
+// 无聊天 UI 的工具窗也无意义。工具窗只保留 screenChannel 事件接线 + 拖拽守卫。
+const isToolWindow =
+  window.location.pathname.startsWith("/screen-hud") ||
+  window.location.pathname.startsWith("/screen-frame");
+
 // 启动恢复的记忆写入：路由 / 活跃会话 / 侧栏 scope 任一变化即落盘——每次
 // 导航写一次（廉价），崩溃/断电不丢，不依赖窗口关闭事件。恢复侧在 Sidebar
 // onMounted（见 planRestore 决策纯函数），本 watch 不读只写、无循环风险。
@@ -29,6 +37,7 @@ watch(
     () => project.activeProjectId,
   ],
   ([route, convId, projectId]) => {
+    if (isToolWindow) return;
     saveLastSession({ route, convId, projectId });
   },
 );
@@ -65,11 +74,14 @@ function handleGlobalKeydown(e: KeyboardEvent) {
 }
 
 onMounted(async () => {
-  cleanupChatEvents = await useChatEvents();
-  // 屏幕共享通道（批次④）：初拉通道态 + 订阅全量事件（幂等；进程级单例，重启即 Off）
+  if (!isToolWindow) {
+    cleanupChatEvents = await useChatEvents();
+    loadTimezone();
+    document.addEventListener("keydown", handleGlobalKeydown);
+  }
+  // 屏幕共享通道（批次④）：初拉通道态 + 订阅全量事件（幂等；进程级单例，重启即 Off）。
+  // 工具窗（HUD）也要接线——它就是这些事件的消费者。
   cleanupScreenChannel = await screenChannel.init();
-  loadTimezone();
-  document.addEventListener("keydown", handleGlobalKeydown);
   document.addEventListener("dragover", handleGlobalDragOver);
   document.addEventListener("drop", handleGlobalDrop);
 });
@@ -77,7 +89,9 @@ onMounted(async () => {
 onUnmounted(() => {
   cleanupChatEvents?.();
   cleanupScreenChannel?.();
-  document.removeEventListener("keydown", handleGlobalKeydown);
+  if (!isToolWindow) {
+    document.removeEventListener("keydown", handleGlobalKeydown);
+  }
   document.removeEventListener("dragover", handleGlobalDragOver);
   document.removeEventListener("drop", handleGlobalDrop);
 });

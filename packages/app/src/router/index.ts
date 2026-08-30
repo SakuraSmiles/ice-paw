@@ -93,6 +93,18 @@ const routes: RouteRecordRaw[] = [
       },
     ],
   },
+  // 批次④ 步骤 2：屏幕共享工具窗（顶层路由，不走 AppLayout——无侧栏/无会话
+  // 语境；窗口由 Rust 侧随通道开/关建/毁，见 harness/mcp/screen/hud.rs）
+  {
+    path: "/screen-hud",
+    name: "ScreenHud",
+    component: () => import("../pages/screen/ScreenHud.vue"),
+  },
+  {
+    path: "/screen-frame",
+    name: "ScreenFrame",
+    component: () => import("../pages/screen/ScreenFrame.vue"),
+  },
   // 通配兜底
   {
     path: "/:pathMatch(.*)*",
