@@ -50,8 +50,13 @@ pub fn run() {
         // 窗口状态记忆（尺寸/位置/最大化跨启动保持）：restore 发生在插件加载阶段，
         // 早于 setup —— setup 里的「首启动态默认尺寸」只在无保存状态时生效。
         .plugin(tauri_plugin_window_state::Builder::default().build())
-        // 聊天全局状态（CancellationToken 注册表）
-        .manage(harness::chat_state::ChatState::new())
+        // 聊天全局状态（CancellationToken 注册表）。屏幕通道写令牌的活性回收
+        //（§4.3）共用本注册表：同柄 Clone 注入，is_streaming 只读查询。
+        .manage({
+            let cs = harness::chat_state::ChatState::new();
+            harness::mcp::screen::channel::global().set_liveness(cs.clone());
+            cs
+        })
         // REQ-XC-010: AgentCmd trait 抽象注入
         .manage::<Option<std::sync::Arc<dyn commands::agent_cmd::AgentCmd>>>(None)
         // Phase 2: 全局 MCP 工具注册表（外部 Server 管理器改在 setup 内注入，见下）。
@@ -135,6 +140,10 @@ pub fn run() {
             commands::screen_cmd::screen_channel_open,
             commands::screen_cmd::screen_channel_stop,
             commands::screen_cmd::get_screen_channel_state,
+            commands::screen_cmd::screen_channel_pause,
+            commands::screen_cmd::screen_channel_resume,
+            commands::screen_cmd::screen_channel_grant,
+            commands::screen_cmd::screen_channel_detach,
             // 项目管理
             commands::project_cmd::list_projects,
             commands::project_cmd::create_project,
