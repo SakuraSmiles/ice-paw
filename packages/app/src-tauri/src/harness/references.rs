@@ -313,10 +313,12 @@ async fn build_conversation_card(pool: &SqlitePool, conv_id: &str) -> Option<Str
 }
 
 /// 从工具调用参数提取产物路径（write/edit/create_directory → path；
-/// move_file/copy_file → destination）。非产物类工具 / 解析失败 → None。
-fn artifact_path(tool_name: &str, arguments: &str) -> Option<String> {
+/// move_file/copy_file → destination；docx 三件同 path——D15 顺路让委派进度
+/// 报告与 @会话名片都能看见 Word 产物）。非产物类工具 / 解析失败 → None。
+pub(crate) fn artifact_path(tool_name: &str, arguments: &str) -> Option<String> {
     let key = match tool_name {
-        "write_file" | "edit_file" | "create_directory" => "path",
+        "write_file" | "edit_file" | "create_directory" | "edit_docx" | "inspect_docx"
+        | "validate_docx" => "path",
         "move_file" | "copy_file" => "destination",
         _ => return None,
     };
