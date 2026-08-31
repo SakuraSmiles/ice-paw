@@ -82,6 +82,16 @@ pub enum AssertSpec {
     },
     /// 格内段落数断言（嵌套表块不计段）
     CellParagraphCount { block: usize, row: usize, cell: usize, equals: usize },
+    /// 段内图片数断言（D18 十波；w:drawing/w:pict 计数）；表格块 → 该条 fail。
+    /// count 缺省 = 存在性断言（≥1）
+    BlockImage {
+        block: usize,
+        #[serde(default)]
+        count: Option<usize>,
+    },
+    /// 段内域指令断言（D18 十波）：任一域指令（fldSimple w:instr / instrText）
+    /// 包含 instr_contains 子串（如 "TOC" / "PAGE"）；表格块 → 该条 fail
+    BlockField { block: usize, instr_contains: String },
 }
 
 /// 单条失败。
@@ -334,6 +344,55 @@ fn eval_assert(
                     kind: "cell_paragraph_count",
                     target: format!("块{block} r{row}c{cell}"),
                     detail: format!("期望 {equals} 段，实际 {actual} 段（嵌套表块不计段）"),
+                })
+            }
+        }
+        AssertSpec::BlockImage { block, count } => {
+            let block_ref = block_or_fail(body, *block, "block_image")?;
+            let Block::Paragraph(p) = block_ref else {
+                return Err(AssertFailure {
+                    kind: "block_image",
+                    target: format!("块{block}"),
+                    detail: "是表格块，block_image 只断言段落。格内图片暂不覆盖（嵌套内容块）".into(),
+                });
+            };
+            let actual = p.image_count as usize;
+            let ok = match count {
+                Some(want) => actual == *want,
+                None => actual >= 1,
+            };
+            if ok {
+                Ok("block_image")
+            } else {
+                Err(AssertFailure {
+                    kind: "block_image",
+                    target: format!("块{block}"),
+                    detail: match count {
+                        Some(want) => format!("期望 {want} 张图，实际 {actual} 张"),
+                        None => "期望至少 1 张图，实际 0 张（段内无 w:drawing/w:pict）".into(),
+                    },
+                })
+            }
+        }
+        AssertSpec::BlockField { block, instr_contains } => {
+            let block_ref = block_or_fail(body, *block, "block_field")?;
+            let Block::Paragraph(p) = block_ref else {
+                return Err(AssertFailure {
+                    kind: "block_field",
+                    target: format!("块{block}"),
+                    detail: "是表格块，block_field 只断言段落。格内域暂不覆盖（嵌套内容块）".into(),
+                });
+            };
+            if p.field_instrs.iter().any(|i| i.contains(instr_contains.as_str())) {
+                Ok("block_field")
+            } else {
+                Err(AssertFailure {
+                    kind: "block_field",
+                    target: format!("块{block}"),
+                    detail: format!(
+                        "期望段内域指令包含 {instr_contains:?}，实际域指令 {:?}（空 = 段内无域）",
+                        p.field_instrs
+                    ),
                 })
             }
         }

@@ -29,6 +29,7 @@ use std::io::Write;
 use crate::error::{AppError, AppResult};
 
 use super::docx_edit::{apply_edits_to_bytes, repack_part, EditOp};
+use super::docx_pkg::ImagePayload;
 use super::docx_validate::{validate_document, AssertSpec, MAX_ASSERTS};
 use super::styles::Stylesheet;
 use super::{docx, docx_model, styles, xml_dom};
@@ -47,6 +48,13 @@ pub enum WriteBlock {
     /// 表格：rows 矩阵（格内 \n=多段）；header 缺省 true（表头加粗+跨页重复）；
     /// table_style 显式表样式名（缺省默认全边框直排）
     Table { rows: Vec<Vec<String>>, header: Option<bool>, table_style: Option<String> },
+    /// TOC 域段（D18 十波）：levels 1-9（目录收录的标题深度）；hyperlink 目录
+    /// 项超链接。产物 = 裸 fldSimple 单段 + settings 自动置 updateFields——
+    /// Word 打开即刷新；WPS 不保证（description 诚实边界：F9 手动刷新）
+    Toc { levels: u32, hyperlink: bool },
+    /// 图片段（D18 十波）：image 由工具壳 load_image 装载（字节/宽高/格式）；
+    /// width_mm 显式宽（毫米，钳版心）；缺省 min(原生像素宽, 版心) 不放大小图
+    Image { image: ImagePayload, width_mm: Option<f64> },
 }
 
 /// 生成结果摘要（工具壳转 JSON 用）。
@@ -55,6 +63,10 @@ pub struct GeneratedDoc {
     pub bytes: Vec<u8>,
     pub paragraphs: usize,
     pub tables: usize,
+    /// 图片块数（toc 同理独立计数——工具层结果摘要披露）
+    pub images: usize,
+    /// TOC 域块数
+    pub tocs: usize,
 }
 
 /// 模板优先生成主入口（纯函数，bytes → bytes）。
@@ -108,6 +120,8 @@ pub fn generate_from_template(template: &[u8], blocks: &[WriteBlock]) -> AppResu
     let mut anchor = 1usize;
     let mut paragraphs = 0usize;
     let mut tables = 0usize;
+    let mut images = 0usize;
+    let mut tocs = 0usize;
     let mut i = 0usize;
     while i < blocks.len() {
         match &blocks[i] {
@@ -127,11 +141,49 @@ pub fn generate_from_template(template: &[u8], blocks: &[WriteBlock]) -> AppResu
                 anchor += 1;
                 i += 1;
             }
+            WriteBlock::Toc { levels, hyperlink } => {
+                // TOC / 图片 = run-breaker 独占一批（与段落链同锚互斥；单 op 批
+                // 锚 +1 前进——正确性优先，全内存无性能焦虑）
+                let op = EditOp::InsertTocAfter {
+                    block: anchor,
+                    expect_prefix: String::new(),
+                    levels: *levels,
+                    hyperlink: *hyperlink,
+                };
+                let (nb, _) = apply_edits_to_bytes(&bytes, &[op])?;
+                bytes = nb;
+                tocs += 1;
+                anchor += 1;
+                i += 1;
+            }
+            WriteBlock::Image { image, width_mm } => {
+                let op = EditOp::InsertImageAfter {
+                    block: anchor,
+                    expect_prefix: String::new(),
+                    image: image.clone(),
+                    width_mm: *width_mm,
+                    // 注入占位（zip 层编排覆盖——引擎唯一写入点）
+                    rid: String::new(),
+                    cx_emu: 0,
+                    cy_emu: 0,
+                    docpr_id: 0,
+                };
+                let (nb, _) = apply_edits_to_bytes(&bytes, &[op])?;
+                bytes = nb;
+                images += 1;
+                anchor += 1;
+                i += 1;
+            }
             _ => {
                 // 连续段落（含 heading）聚一批：同锚链式按输入序排列
                 let run_len = blocks[i..]
                     .iter()
-                    .take_while(|b| !matches!(b, WriteBlock::Table { .. }))
+                    .take_while(|b| {
+                        !matches!(
+                            b,
+                            WriteBlock::Table { .. } | WriteBlock::Toc { .. } | WriteBlock::Image { .. }
+                        )
+                    })
                     .count();
                 let ops: Vec<EditOp> = blocks[i..i + run_len]
                     .iter()
@@ -163,7 +215,7 @@ pub fn generate_from_template(template: &[u8], blocks: &[WriteBlock]) -> AppResu
 
     // 6. 生成自检（不过 = 引擎 bug，Err 而非数据）
     self_check(&bytes, blocks)?;
-    Ok(GeneratedDoc { bytes, paragraphs, tables })
+    Ok(GeneratedDoc { bytes, paragraphs, tables, images, tocs })
 }
 
 /// heading 级别 → 样式名候选链（首中即用）：中文显示名 / 规范 w:name / 英文
@@ -206,7 +258,9 @@ fn paragraph_style_of(block: &WriteBlock, stylesheet: &Stylesheet) -> (String, O
             };
             (text.clone(), resolved)
         }
-        WriteBlock::Table { .. } => unreachable!("表格走独立批，不入段落链"),
+        WriteBlock::Table { .. } | WriteBlock::Toc { .. } | WriteBlock::Image { .. } => {
+            unreachable!("表格/TOC/图片走独立批，不入段落链")
+        }
     }
 }
 
@@ -284,6 +338,16 @@ fn self_check(bytes: &[u8], blocks: &[WriteBlock]) -> AppResult<()> {
                         });
                     }
                 }
+            }
+            // TOC / 图片：块存在 + 特征断言（fldSimple 指令含 TOC / 恰 1 张图）
+            WriteBlock::Toc { .. } => {
+                asserts.push(AssertSpec::BlockField {
+                    block: block_no,
+                    instr_contains: "TOC".into(),
+                });
+            }
+            WriteBlock::Image { .. } => {
+                asserts.push(AssertSpec::BlockImage { block: block_no, count: Some(1) });
             }
         }
     }

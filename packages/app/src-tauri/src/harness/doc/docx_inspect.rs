@@ -840,10 +840,15 @@ fn render_outline_line(ctx: &RenderCtx, n: usize, block: &Block, out: &mut Strin
         Block::Paragraph(p) => {
             let text = para_text(p);
             let meta = para_meta(ctx, n, &p.props);
+            let feature = inline_feature_suffix(p);
             if text.trim().is_empty() {
-                out.push_str(&format!("[{n}] ¶ {meta} (空)\n"));
+                if feature.is_empty() {
+                    out.push_str(&format!("[{n}] ¶ {meta} (空)\n"));
+                } else {
+                    out.push_str(&format!("[{n}] ¶ {meta}{feature}\n"));
+                }
             } else {
-                out.push_str(&format!("[{n}] ¶ {meta} {}\n", summarize(&text, 60)));
+                out.push_str(&format!("[{n}] ¶ {meta} {}{feature}\n", summarize(&text, 60)));
             }
         }
         Block::Table(t) => {
@@ -854,6 +859,31 @@ fn render_outline_line(ctx: &RenderCtx, n: usize, block: &Block, out: &mut Strin
                 table_row_summary(t.rows.first()),
             ));
         }
+    }
+}
+
+/// 段内结构内容标记（D18 十波）：图片计数 + 域指令首词——治「插图后读回来是
+/// 空段」盲区。域只显首词（TOC/PAGE/REF…，最多两个）——识别用不是全文用。
+fn inline_feature_suffix(p: &docx_model::Paragraph) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if p.image_count > 0 {
+        parts.push(format!("图片×{}", p.image_count));
+    }
+    if !p.field_instrs.is_empty() {
+        let heads: Vec<String> = p
+            .field_instrs
+            .iter()
+            .take(2)
+            .filter_map(|i| i.split_whitespace().next().map(str::to_string))
+            .collect();
+        if !heads.is_empty() {
+            parts.push(format!("域:{}", heads.join(",")));
+        }
+    }
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(" [{}]", parts.join(" "))
     }
 }
 
@@ -966,12 +996,19 @@ fn render_text_block(ctx: &RenderCtx, n: usize, block: &Block, out: &mut String)
         Block::Paragraph(p) => {
             let text = para_text(p);
             let num_prefix = ctx.numbers.get(&n).map(|t| format!("{t} ")).unwrap_or_default();
+            let feature = inline_feature_suffix(p);
             if text.trim().is_empty() {
-                out.push_str(&format!("[{n}] (空)\n"));
+                if feature.is_empty() {
+                    out.push_str(&format!("[{n}] (空)\n"));
+                } else {
+                    out.push_str(&format!("[{n}]{feature}\n"));
+                }
             } else {
-                // 段内软换行（w:br）原样保留为多行
-                for line in text.split('\n') {
-                    out.push_str(&format!("[{n}] {num_prefix}{line}\n"));
+                // 段内软换行（w:br）原样保留为多行；特征标记挂尾行
+                let lines: Vec<&str> = text.split('\n').collect();
+                for (li, line) in lines.iter().enumerate() {
+                    let suffix = if li + 1 == lines.len() { feature.as_str() } else { "" };
+                    out.push_str(&format!("[{n}] {num_prefix}{line}{suffix}\n"));
                 }
             }
         }
