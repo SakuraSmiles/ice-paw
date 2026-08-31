@@ -36,6 +36,11 @@ pub(super) struct Paragraph {
     pub runs: Vec<Run>,
     /// 段落直接格式（S0b inspect_docx 投影消费；有效格式 = 样式链合并，见 styles.rs）
     pub props: ParaProps,
+    /// 段内图片数（w:drawing / w:pict 计数，D18 十波读侧可见性 + block_image 断言）
+    pub image_count: u32,
+    /// 段内域指令（w:instrText 文本 + w:fldSimple 的 w:instr 属性；D18 十波
+    /// block_field 断言 + inspect 标注）。文本投影不收 instrText（既有口径不变）
+    pub field_instrs: Vec<String>,
 }
 
 pub(super) struct Run {
@@ -191,6 +196,8 @@ fn walk_blocks(nodes: &[Node], out: &mut Vec<Block>, sections: &mut Vec<SectionP
 fn parse_paragraph(el: &Element, sections: &mut Vec<SectionProps>) -> Paragraph {
     let mut runs = Vec::new();
     let mut props = ParaProps::default();
+    let mut image_count = 0u32;
+    let mut field_instrs = Vec::new();
     for child in el.child_elements() {
         match child.name.as_str() {
             "w:pPr" => {
@@ -200,10 +207,48 @@ fn parse_paragraph(el: &Element, sections: &mut Vec<SectionProps>) -> Paragraph 
                     sections.push(parse_sect_pr(s));
                 }
             }
-            _ => collect_runs(child, RunCtx::default(), &mut runs),
+            _ => {
+                collect_runs(child, RunCtx::default(), &mut runs);
+                collect_inline_features(child, &mut image_count, &mut field_instrs);
+            }
         }
     }
-    Paragraph { runs, props }
+    Paragraph { runs, props, image_count, field_instrs }
+}
+
+/// 段内结构特征收集（D18 十波）：图片计数 + 域指令。与 collect_runs 分道——
+/// 文本投影口径不变（instrText 本就不进文本）；跳过 pPr（无内联语义）。
+/// fldSimple 的 cached result 递归收（内嵌 instrText 罕见但合法）。
+fn collect_inline_features(el: &Element, images: &mut u32, instrs: &mut Vec<String>) {
+    match el.name.as_str() {
+        "w:pPr" => {}
+        // 组合图（组内多图）按 1 计——Word UI「选中的是一个 drawing」同口径
+        "w:drawing" | "w:pict" => *images += 1,
+        "w:instrText" => {
+            let mut t = String::new();
+            decode_entities_into(&el.raw_text(), &mut t);
+            let t = t.trim();
+            if !t.is_empty() {
+                instrs.push(t.to_string());
+            }
+        }
+        "w:fldSimple" => {
+            // attr 已过实体解码（xml_dom decoded_and_normalized_value）
+            if let Some(i) = el.attr("w:instr").map(str::trim) {
+                if !i.is_empty() {
+                    instrs.push(i.to_string());
+                }
+            }
+            for child in el.child_elements() {
+                collect_inline_features(child, images, instrs);
+            }
+        }
+        _ => {
+            for child in el.child_elements() {
+                collect_inline_features(child, images, instrs);
+            }
+        }
+    }
 }
 
 /// 解析 w:pPr（styles.rs 的样式内 pPr 复用同一解析）。

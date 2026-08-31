@@ -129,12 +129,12 @@ pub(super) struct PkgAdditions {
     pub appends: Vec<(String, Vec<u8>)>,
 }
 
-/// 规划包级增补：images 按批内操作序（allocs[i] 一一对应）；has_toc = 批内含
-/// TOC 插入（settings 置 updateFields）。无图且无 TOC → 空计划（连 zip 都不打开，
-/// 纯段落批次零开销零风险）。
+/// 规划包级增补：images（借用切片，零拷贝）按批内操作序——allocs[i] 一一对应；
+/// has_toc = 批内含 TOC 插入（settings 置 updateFields）。无图且无 TOC → 空计划
+/// （连 zip 都不打开，纯段落批次零开销零风险）。
 pub(super) fn plan_package_additions(
     bytes: &[u8],
-    images: &[ImagePayload],
+    images: &[&ImagePayload],
     has_toc: bool,
 ) -> AppResult<(Vec<ImageAlloc>, PkgAdditions)> {
     if images.is_empty() && !has_toc {
@@ -225,7 +225,14 @@ pub(super) fn plan_package_additions(
             None => Some(MINIMAL_SETTINGS_XML.to_string()),
         };
         if let Some(s) = new_settings {
-            additions.replacements.push(("word/settings.xml".into(), s));
+            if settings.is_some() {
+                // 既有件：走替换（repack 校验部件存在）
+                additions.replacements.push(("word/settings.xml".into(), s));
+            } else {
+                // 缺失：**新建 entry 走追加**（替换件必须已在包内——repack 显式
+                // Err「重打包部件缺失」正是为拦这个）
+                additions.appends.push(("word/settings.xml".into(), s.into_bytes()));
+            }
         }
     }
 
@@ -619,6 +626,11 @@ mod tests {
         ImagePayload { bytes: tiny_png(w, h), width_px: w, height_px: h, ext: "png" }
     }
 
+    /// 借用切片辅助（plan_package_additions 零拷贝签名）。
+    fn refs(imgs: &[ImagePayload]) -> Vec<&ImagePayload> {
+        imgs.iter().collect()
+    }
+
     /// 错误断言辅助：剥 AppError 类型前缀，对准家族前缀。
     fn val_msg(e: AppError) -> String {
         let s = e.to_string();
@@ -669,7 +681,7 @@ mod tests {
             &[("word/media/image1.png", b"old1"), ("word/media/image3.png", b"old3")],
         );
         let (allocs, additions) =
-            plan_package_additions(&doc, &[png_payload(2, 2), png_payload(2, 2)], false).unwrap();
+            plan_package_additions(&doc, &refs(&[png_payload(2, 2), png_payload(2, 2)]), false).unwrap();
         assert_eq!(allocs[0].rid, "rId6");
         assert_eq!(allocs[0].media_name, "word/media/image4.png");
         assert_eq!(allocs[1].rid, "rId7");
@@ -705,7 +717,7 @@ mod tests {
     fn rels_missing_rejected_for_images() {
         let doc = fixture_doc(None, None, &[]);
         let e = val_msg(
-            plan_package_additions(&doc, &[png_payload(2, 2)], false).unwrap_err(),
+            plan_package_additions(&doc, &refs(&[png_payload(2, 2)]), false).unwrap_err(),
         );
         assert!(e.starts_with("图片插入无效:"), "实际: {e}");
         assert!(e.contains("document.xml.rels"));
@@ -718,7 +730,7 @@ mod tests {
         // 包内无 png Default → 补；已有 → 不进 replacements（逐字节保真）
         let doc = fixture_doc(Some(RELS_R1_R5), None, &[]);
         let (_, additions) =
-            plan_package_additions(&doc, &[png_payload(2, 2)], false).unwrap();
+            plan_package_additions(&doc, &refs(&[png_payload(2, 2)]), false).unwrap();
         let ct = additions
             .replacements
             .iter()
@@ -732,7 +744,7 @@ mod tests {
         let repacked = repack_package(&doc, &additions.replacements, &additions.appends)
             .unwrap();
         let (_, additions2) =
-            plan_package_additions(&repacked, &[png_payload(2, 2)], false).unwrap();
+            plan_package_additions(&repacked, &refs(&[png_payload(2, 2)]), false).unwrap();
         assert!(
             !additions2.replacements.iter().any(|(p, _)| p == "[Content_Types].xml"),
             "CT 已有 png Default 不应重写"
@@ -740,7 +752,7 @@ mod tests {
         // jpeg 图仍缺 Default → 补 jpeg 项
         let jpeg = ImagePayload { bytes: tiny_jpeg(2, 2), width_px: 2, height_px: 2, ext: "jpeg" };
         let (_, additions3) =
-            plan_package_additions(&repacked, &[jpeg], false).unwrap();
+            plan_package_additions(&repacked, &refs(&[jpeg]), false).unwrap();
         let ct3 = additions3
             .replacements
             .iter()
@@ -780,15 +792,20 @@ mod tests {
 
     #[test]
     fn settings_missing_created_with_ct_override() {
-        // 包内无 settings.xml + has_toc → 新建最小件 + CT 补 Override
+        // 包内无 settings.xml + has_toc → 新建最小件（**追加**而非替换——替换件
+        // 须已在包内）+ CT 补 Override
         let doc = fixture_doc(Some(RELS_R1_R5), None, &[]);
         let (_, additions) = plan_package_additions(&doc, &[], true).unwrap();
+        assert!(
+            !additions.replacements.iter().any(|(p, _)| p == "word/settings.xml"),
+            "缺失件不得走替换（repack 会 Err 部件缺失）"
+        );
         let settings = additions
-            .replacements
+            .appends
             .iter()
             .find(|(p, _)| p == "word/settings.xml")
-            .map(|(_, v)| v.as_str())
-            .expect("settings 缺失应新建");
+            .map(|(_, v)| String::from_utf8_lossy(v).into_owned())
+            .expect("settings 缺失应新建追加");
         assert!(settings.contains(r#"<w:updateFields w:val="true"/>"#));
         let ct = additions
             .replacements
@@ -951,7 +968,7 @@ mod tests {
         let doc = fixture_doc(Some(RELS_R1_R5), None, &[]);
         let img1 = png_payload(4, 4);
         let bytes1 = img1.bytes.clone();
-        let (allocs1, add1) = plan_package_additions(&doc, &[img1], false).unwrap();
+        let (allocs1, add1) = plan_package_additions(&doc, &[&img1], false).unwrap();
         let out1 = repack_package(&doc, &add1.replacements, &add1.appends).unwrap();
         assert_eq!(allocs1[0].media_name, "word/media/image1.png");
         assert_eq!(read_part(&out1, "word/media/image1.png"), bytes1);
@@ -960,7 +977,7 @@ mod tests {
         // 第二轮（对产物再插）：rId6 已占 → rId7；image1 已占 → image2
         let img2 = png_payload(4, 4);
         let bytes2 = img2.bytes.clone();
-        let (allocs2, add2) = plan_package_additions(&out1, &[img2], false).unwrap();
+        let (allocs2, add2) = plan_package_additions(&out1, &[&img2], false).unwrap();
         assert_eq!(allocs2[0].rid, "rId7");
         assert_eq!(allocs2[0].media_name, "word/media/image2.png");
         let out2 = repack_package(&out1, &add2.replacements, &add2.appends).unwrap();
