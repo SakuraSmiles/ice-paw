@@ -268,6 +268,8 @@ impl McpRegistry {
         self.register_sync(Arc::new(super::docx_tool::EditDocxTool));
         // Word 断言验收（D15 八波①）：可执行验收清单——断言失败是数据不是错误
         self.register_sync(Arc::new(super::docx_tool::ValidateDocxTool));
+        // Word 模板优先生成（D16 九波）：一次调用出整篇文档，模板三层（内置/项目/路径）
+        self.register_sync(Arc::new(super::docx_tool::WriteDocxTool));
         self.register_sync(Arc::new(super::internal::ListDirectoryTool));
         self.register_sync(Arc::new(super::internal::DirectoryTreeTool));
         self.register_sync(Arc::new(super::internal::GetFileInfoTool));

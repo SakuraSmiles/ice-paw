@@ -93,7 +93,7 @@ word_style_profile: |
 
 **配套：templates/ 模板目录**
 
-如果偏好复杂到文字描述不清（整套样式定义、页眉页脚、封面），把模板 docx 放进 workspace 的 `templates/` 目录。agent 建新文档时会先列目录发现模板，复制后用 `clear_body` 清空正文再写入——样式定义原样保留，这是「继承整套模板」的正路。`word_style_profile` 管的是「每次写内容时的格式纪律」，两条轨道互补。
+如果偏好复杂到文字描述不清（整套样式定义、页眉页脚、封面），把模板 docx 放进 workspace 的 `templates/` 目录。agent 建新文档时用 `write_docx` 一次调用完成：`template` 参数直接填目录里的模板文件名（相对路径，如 `memo.docx`），模板的样式/编号/页面设置原样继承，正文按块序写入并自检后才落盘——这是「继承整套模板」的正路（应用未配模板时可先用内置档位 `report` 起步）。`word_style_profile` 管的是「每次写内容时的格式纪律」，两条轨道互补。
 
 ## 相关
 

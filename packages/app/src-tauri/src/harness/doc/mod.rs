@@ -21,6 +21,7 @@ mod docx_edit;
 mod docx_inspect;
 mod docx_model;
 mod docx_validate;
+mod docx_write;
 mod numbering;
 mod pdf;
 mod pdf_render;
@@ -54,6 +55,13 @@ pub use def_edit::{
 
 // validate_docx 断言验收（D15 八波①）：纯读引擎，断言失败是数据不是错误。
 pub use docx_validate::{validate_document, AssertSpec, ValidateReport, MAX_ASSERTS};
+
+// write_docx 模板优先生成（D16 九波）：clear→锚→顺序写入→自检，纯编排复用
+// 手术链；内置模板代码内建（用户 Word 造正式模板后替换）。IO 在 mcp::docx_tool。
+pub use docx_write::{
+    build_builtin_template, generate_from_template, BUILTIN_TEMPLATES, GeneratedDoc,
+    MAX_WRITE_BLOCKS, WriteBlock,
+};
 
 /// 从一个文档中提取出的结果。
 #[derive(Debug, Clone)]
