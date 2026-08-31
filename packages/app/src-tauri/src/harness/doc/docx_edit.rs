@@ -423,6 +423,17 @@ pub struct AppliedOp {
 /// 组合入口（工具层消费）：docx 字节 + 操作批 → 新 docx 字节 + 摘要。
 /// 读 document.xml 与 styles.xml → 手术 → 重打包；IO/写盘/授权在调用方。
 pub fn apply_edits_to_bytes(bytes: &[u8], ops: &[EditOp]) -> AppResult<(Vec<u8>, Vec<AppliedOp>)> {
+    apply_edits_to_bytes_locked(bytes, ops, None)
+}
+
+/// [`apply_edits_to_bytes`] 的带锁版（D15 八波②）：`allowed_blocks = Some((lo, hi))`
+/// 区间锁（1-based 闭区间）——批内任何操作的块地址越界 → 整批拒；clear_body 与
+/// 锁语义冲突拒。范围守护是引擎硬约束（与 expect_prefix 同族），不靠 agent 自觉。
+pub fn apply_edits_to_bytes_locked(
+    bytes: &[u8],
+    ops: &[EditOp],
+    allowed_blocks: Option<(usize, usize)>,
+) -> AppResult<(Vec<u8>, Vec<AppliedOp>)> {
     let xml = super::docx::read_document_xml(bytes)?;
     let styles = match super::docx::read_entry(bytes, "word/styles.xml")? {
         Some(s) => {
@@ -430,17 +441,29 @@ pub fn apply_edits_to_bytes(bytes: &[u8], ops: &[EditOp]) -> AppResult<(Vec<u8>,
         }
         None => Stylesheet::empty(),
     };
-    let (new_xml, applied) = apply_edits(&xml, &styles, ops)?;
+    let (new_xml, applied) = apply_edits_locked(&xml, &styles, ops, allowed_blocks)?;
     let out = repack_part(bytes, "word/document.xml", &new_xml)?;
     Ok((out, applied))
 }
 
 /// 应用一批操作，返回新 document.xml 与逐操作摘要。**全有或全无**：任一预检
-/// 不通过 → Err，原 xml 不动。
+/// 不通过 → Err，原 xml 不动。（生产路径走 [`apply_edits_to_bytes_locked`]；
+/// 本无锁形态是测试直调入口——xml/styles 层单测百余处。）
+#[cfg(test)]
 pub(super) fn apply_edits(
     xml: &str,
     styles: &Stylesheet,
     ops: &[EditOp],
+) -> AppResult<(String, Vec<AppliedOp>)> {
+    apply_edits_locked(xml, styles, ops, None)
+}
+
+/// [`apply_edits`] 的实现（带区间锁参数；None = 不锁，测试直调 `apply_edits` 即可）。
+pub(super) fn apply_edits_locked(
+    xml: &str,
+    styles: &Stylesheet,
+    ops: &[EditOp],
+    allowed_blocks: Option<(usize, usize)>,
 ) -> AppResult<(String, Vec<AppliedOp>)> {
     if ops.is_empty() {
         return Err(AppError::Validation(
@@ -478,6 +501,15 @@ pub(super) fn apply_edits(
     for op in ops {
         // ClearBody 不寻址块——先于块号提取处理（独占一批 + 块数指纹）
         if let EditOp::ClearBody { expect_blocks } = op {
+            if allowed_blocks.is_some() {
+                // 锁检查够不到 continue 之后——在此特判：清空正文作用于全文，
+                // 与任何区间语义冲突（D15 八波②）
+                return Err(AppError::Validation(
+                    "区间外块: clear_body 清空全部正文，与 allowed_blocks 区间锁冲突。\
+                     带锁批次只允许区间内的块级操作。如确需清空正文，请去掉 \
+                     allowed_blocks 重发。".into(),
+                ));
+            }
             if ops.len() != 1 {
                 return Err(AppError::Validation(
                     "同一批多操作: clear_body 须独占一批（清空后一切块号失效，\
@@ -519,6 +551,18 @@ pub(super) fn apply_edits(
                 spans.len(),
                 spans.len()
             )));
+        }
+        // 区间锁（D15 八波②）：块提取+越界校验之后、占用判定之前——block 已得且
+        // 未动任何账本；InsertParagraphAfter / DeleteBlock 锚=目标同址，天然全覆盖
+        if let Some((lo, hi)) = allowed_blocks {
+            if block < lo || block > hi {
+                return Err(AppError::Validation(format!(
+                    "区间外块: 块 {block} 不在允许编辑区间 {lo}..={hi}（本批带 \
+                     allowed_blocks 范围锁，锁外块禁止改动）。为什么：范围锁由任务方\
+                     设定，防止越界改动受保护内容。怎么办：复核任务范围只动区间内块；\
+                     如任务确需改动锁外块，请与任务方确认后去掉 allowed_blocks 重发。"
+                )));
+            }
         }
         if matches!(
             op,
