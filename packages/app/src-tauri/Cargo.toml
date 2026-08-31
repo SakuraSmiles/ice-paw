@@ -111,7 +111,8 @@ quick-xml = "0.41"
 #    故 default-features=false + 显式 pdfium_6721 与已下载二进制对齐；thread_safe/image
 #    是默认 features 里被关掉、本 crate 实际需要的两项（as_image()/PNG 编码）。
 pdfium-render = { version = "0.8.27", default-features = false, features = ["pdfium_6721", "thread_safe", "image"] }
-image = { version = "0.25", default-features = false, features = ["png"] }
+# 十波 D18：docx 图片插入探测 JPEG 尺寸（into_dimensions 需格式 feature）；png 原供 pdfium 渲染。
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 tauri-plugin-window-state = "2.4.1"
 
 # === Windows 专用：系统 ANSI 代码页解码（MultiByteToWideChar + CP_ACP）===
