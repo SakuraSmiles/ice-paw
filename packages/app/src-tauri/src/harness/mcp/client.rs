@@ -266,6 +266,8 @@ impl McpRegistry {
         // Word 结构投影（S0b：outline/format/text 三档；块编址是 edit_docx 的地址地基）
         self.register_sync(Arc::new(super::docx_tool::InspectDocxTool));
         self.register_sync(Arc::new(super::docx_tool::EditDocxTool));
+        // Word 断言验收（D15 八波①）：可执行验收清单——断言失败是数据不是错误
+        self.register_sync(Arc::new(super::docx_tool::ValidateDocxTool));
         self.register_sync(Arc::new(super::internal::ListDirectoryTool));
         self.register_sync(Arc::new(super::internal::DirectoryTreeTool));
         self.register_sync(Arc::new(super::internal::GetFileInfoTool));

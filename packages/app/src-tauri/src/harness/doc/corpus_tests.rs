@@ -1371,3 +1371,67 @@ fn corpus_def_change_guard() {
     assert!(err.contains("受保护"), "实际: {err}");
     assert!(err.contains("修订记录"), "实际: {err}");
 }
+
+// =========================================================================
+// D15 八波① validate_docx 断言验收（真实语料：派生断言全过 + 错值精确失败）
+// =========================================================================
+
+/// 结构锚点运行时派生断言批全过 + 自造错值断言恰好失败（断言失败是数据不是
+/// Err 的语义契约）。🚫 语料字符串不进代码：断言值全部从模型派生。
+#[test]
+fn corpus_validate_assertions() {
+    let Some((sdp, srs, install)) = all_corpus() else { return };
+    use super::docx_model::{blocks_text, Block};
+    let mut ran = 0usize;
+    for (name, bytes) in [("SDP", &sdp), ("SRS", &srs), ("INSTALL", &install)] {
+        let xml = super::docx::read_document_xml(bytes).unwrap();
+        let model = super::docx_model::build_document(&xml_dom::parse(&xml).unwrap());
+
+        // 派生断言批：块数 + 首表形状（行数）+ 首个非空非续格格文本 starts_with 前 3 字
+        let mut asserts = vec![super::AssertSpec::BlockCount { equals: model.body.len() }];
+        if let Some(ti) = model.body.iter().position(|b| matches!(b, Block::Table(_))) {
+            let Block::Table(t) = &model.body[ti] else { unreachable!() };
+            asserts.push(super::AssertSpec::TableShape {
+                block: ti + 1,
+                rows: Some(t.rows.len()),
+                cols: None,
+                style: None,
+            });
+            'cells: for (ri, row) in t.rows.iter().enumerate() {
+                for (ci, c) in row.cells.iter().enumerate() {
+                    if c.v_merge.as_deref() == Some("continue") {
+                        continue;
+                    }
+                    let mut s = String::new();
+                    blocks_text(&c.blocks, &mut s);
+                    let trimmed = s.trim();
+                    if !trimmed.is_empty() {
+                        asserts.push(super::AssertSpec::CellText {
+                            block: ti + 1,
+                            row: ri + 1,
+                            cell: ci + 1,
+                            equals: None,
+                            contains: None,
+                            starts_with: Some(trimmed.chars().take(3).collect()),
+                        });
+                        break 'cells;
+                    }
+                }
+            }
+        }
+        let report = super::validate_document(bytes, &asserts)
+            .unwrap_or_else(|e| panic!("{name} 断言批快检失败: {e}"));
+        assert!(report.passed, "{name} 派生断言应全过: {:?}", report.failures);
+        assert_eq!(report.total, asserts.len());
+        assert_eq!(report.passed_kinds.len(), asserts.len());
+
+        // 自造错值：块数 +1 → 恰好一条失败，工具语义仍是 Ok（失败是数据）
+        let wrong = [super::AssertSpec::BlockCount { equals: model.body.len() + 1 }];
+        let report = super::validate_document(bytes, &wrong).unwrap();
+        assert!(!report.passed);
+        assert_eq!(report.failed, 1);
+        assert!(report.failures[0].detail.contains("实际"), "{name} 失败明细应含实际值");
+        ran += 1;
+    }
+    assert!(ran == 3, "三份语料都应跑过（实际 {ran} 份）");
+}

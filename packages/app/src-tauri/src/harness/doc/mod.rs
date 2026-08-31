@@ -20,6 +20,7 @@ mod docx;
 mod docx_edit;
 mod docx_inspect;
 mod docx_model;
+mod docx_validate;
 mod numbering;
 mod pdf;
 mod pdf_render;
@@ -39,8 +40,10 @@ pub use pdf_render::{page_count, render_page_to_png};
 pub use docx_inspect::{inspect_document, InspectProjection, InspectReport, InspectRequest};
 
 // edit_docx 块级手术（步骤 3）：批量事务，纯函数；IO/授权/写盘在 mcp::docx_tool。
+// apply_edits_to_bytes_locked 带 allowed_blocks 区间锁（D15 八波②），工具层专用。
 pub use docx_edit::{
-    apply_edits_to_bytes, AppliedOp, CharFormat, EditOp, MergeDirection, ParaFormat, TableLevel,
+    apply_edits_to_bytes, apply_edits_to_bytes_locked, AppliedOp, CharFormat, EditOp,
+    MergeDirection, ParaFormat, TableLevel,
 };
 
 // edit_docx 定义部件手术（D12）：styles/numbering 通用元素手术，纯函数。
@@ -48,6 +51,9 @@ pub use def_edit::{
     apply_numbering_edits_to_bytes, apply_style_edits_to_bytes, NumberingEditOp, StyleContainer,
     StyleEditOp, StyleType,
 };
+
+// validate_docx 断言验收（D15 八波①）：纯读引擎，断言失败是数据不是错误。
+pub use docx_validate::{validate_document, AssertSpec, ValidateReport, MAX_ASSERTS};
 
 /// 从一个文档中提取出的结果。
 #[derive(Debug, Clone)]

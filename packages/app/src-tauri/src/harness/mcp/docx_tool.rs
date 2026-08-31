@@ -17,9 +17,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, AppResult};
 use crate::harness::doc::{
-    apply_edits_to_bytes, apply_numbering_edits_to_bytes, apply_style_edits_to_bytes,
-    inspect_document, EditOp, InspectProjection, InspectRequest, NumberingEditOp, StyleContainer,
-    StyleEditOp, StyleType,
+    apply_edits_to_bytes_locked, apply_numbering_edits_to_bytes, apply_style_edits_to_bytes,
+    inspect_document, validate_document, AssertSpec, EditOp, InspectProjection, InspectRequest,
+    NumberingEditOp, StyleContainer, StyleEditOp, StyleType, ValidateReport,
 };
 
 use super::client::McpClient;
@@ -249,6 +249,186 @@ impl McpClient for InspectDocxTool {
 }
 
 // =========================================================================
+// validate_docx —— 断言验收工具（D15 八波①）
+// =========================================================================
+
+pub struct ValidateDocxTool;
+
+#[derive(Deserialize)]
+struct ValidateDocxArgs {
+    path: String,
+    /// 断言批（≤50 条；全部独立评估不短路，一次报告全量）
+    assertions: Vec<AssertSpec>,
+}
+
+#[derive(Serialize)]
+struct ValidateDocxResult {
+    path: String,
+    #[serde(flatten)]
+    report: ValidateReport,
+}
+
+#[async_trait]
+impl McpClient for ValidateDocxTool {
+    fn name(&self) -> &str {
+        "validate_docx"
+    }
+
+    fn description(&self) -> &str {
+        "Executable acceptance check for a Word .docx document — turns 'what does done \
+         look like' into machine-verifiable assertions instead of repeated inspect + \
+         eyeballing. Takes a list of assertions (max 50), evaluates ALL of them \
+         independently (no short-circuit), reports per-assertion pass/fail. \
+         kind=block_count: total block count. kind=table_shape: the block must be a \
+         table; optional rows / cols (cols = max gridSpan sum per row — the same \
+         wording as the projection=table header) and style (table style display name \
+         or ID). kind=block_text: paragraph full-text match — exactly one of equals / \
+         contains / starts_with (full text, not the 60-char outline summary). \
+         kind=block_style: paragraph style display name (outline meta wording; \
+         unstyled paragraphs are '(无样式)'). kind=cell_text: cell full text \
+         (multi-paragraph cells join with \\n; block/row/cell addressing identical to \
+         projection=table; a vMerge continuation cell fails with a pointer to its \
+         merge head). kind=cell_paragraph_count: paragraph count inside one cell. \
+         An assertion failure is a NORMAL result (passed=false plus per-assertion \
+         expected-vs-actual details), not a tool error; out-of-range block/row/cell \
+         addresses are per-assertion failures showing the actual extent. Usage \
+         pattern: when delegating document work, send the acceptance list along \
+         (table N rows × M cols, r1c1 = ..., style = ...) so the executor can \
+         self-check before claiming done — then re-run the SAME list to audit the \
+         result without re-inspecting by eye."
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Path to the .docx file to validate."
+                },
+                "assertions": {
+                    "type": "array",
+                    "maxItems": 50,
+                    "description": "Acceptance assertions; all evaluated independently, results reported per-assertion.",
+                    "items": {
+                        "oneOf": [
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "kind": { "const": "block_count" },
+                                    "equals": { "type": "integer", "description": "Expected total block count." }
+                                },
+                                "required": ["kind", "equals"]
+                            },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "kind": { "const": "table_shape" },
+                                    "block": { "type": "integer", "description": "Block number (1-based)." },
+                                    "rows": { "type": "integer", "description": "Expected row count (optional)." },
+                                    "cols": { "type": "integer", "description": "Expected column count = max gridSpan sum per row (optional)." },
+                                    "style": { "type": "string", "description": "Expected table style display name or ID (optional)." }
+                                },
+                                "required": ["kind", "block"]
+                            },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "kind": { "const": "block_text" },
+                                    "block": { "type": "integer", "description": "Paragraph block number (1-based)." },
+                                    "equals": { "type": "string", "description": "Full text must equal this." },
+                                    "contains": { "type": "string", "description": "Text must contain this." },
+                                    "starts_with": { "type": "string", "description": "Text must start with this." }
+                                },
+                                "required": ["kind", "block"],
+                                "description": "Exactly one of equals / contains / starts_with."
+                            },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "kind": { "const": "block_style" },
+                                    "block": { "type": "integer", "description": "Paragraph block number (1-based)." },
+                                    "equals": { "type": "string", "description": "Expected style display name (outline meta wording)." }
+                                },
+                                "required": ["kind", "block", "equals"]
+                            },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "kind": { "const": "cell_text" },
+                                    "block": { "type": "integer", "description": "Table block number (1-based)." },
+                                    "row": { "type": "integer", "description": "Row r (1-based, projection=table addressing)." },
+                                    "cell": { "type": "integer", "description": "Cell c (1-based)." },
+                                    "equals": { "type": "string", "description": "Full cell text must equal this (multi-paragraph joined with \\n)." },
+                                    "contains": { "type": "string", "description": "Cell text must contain this." },
+                                    "starts_with": { "type": "string", "description": "Cell text must start with this." }
+                                },
+                                "required": ["kind", "block", "row", "cell"],
+                                "description": "Exactly one of equals / contains / starts_with."
+                            },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "kind": { "const": "cell_paragraph_count" },
+                                    "block": { "type": "integer", "description": "Table block number (1-based)." },
+                                    "row": { "type": "integer", "description": "Row r (1-based)." },
+                                    "cell": { "type": "integer", "description": "Cell c (1-based)." },
+                                    "equals": { "type": "integer", "description": "Expected paragraph count inside the cell." }
+                                },
+                                "required": ["kind", "block", "row", "cell", "equals"]
+                            }
+                        ]
+                    }
+                }
+            },
+            "required": ["path", "assertions"]
+        })
+    }
+
+    fn authorization_level(&self) -> AuthorizationLevel {
+        AuthorizationLevel::PathWhitelist
+    }
+
+    async fn execute(&self, args: &str) -> AppResult<String> {
+        let parsed: ValidateDocxArgs = serde_json::from_str(args)
+            .map_err(|e| AppError::Validation(format!("validate_docx 参数解析失败: {e}")))?;
+
+        let path = Path::new(&parsed.path);
+        let canonical = match path.canonicalize() {
+            Ok(c) => c,
+            // 报错即行为契约：not-found 扫真实文件系统给近似候选（did-you-mean）
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(AppError::Validation(format!(
+                    "文件不存在: {}。{}",
+                    parsed.path,
+                    super::path_suggest::suggest_for_missing(path)
+                )));
+            }
+            Err(e) => return Err(AppError::Validation(format!("文件路径无效: {e}"))),
+        };
+
+        let ext = canonical
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if ext != "docx" {
+            return Err(AppError::Validation(format!(
+                "不是 Word 文档: 扩展名 .{ext}。validate_docx 只支持 .docx；其他文件请用 read_file。"
+            )));
+        }
+
+        let bytes = tokio::fs::read(&canonical)
+            .await
+            .map_err(|e| AppError::Io(std::io::Error::other(format!("读取文件失败: {e}"))))?;
+
+        let report = validate_document(&bytes, &parsed.assertions)?;
+        let result = ValidateDocxResult { path: parsed.path, report };
+        Ok(serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string()))
+    }
+}
+
+// =========================================================================
 // edit_docx —— 块级手术工具（步骤 3，D3 批量事务）
 // =========================================================================
 
@@ -266,6 +446,11 @@ struct EditDocxArgs {
     /// 正文操作与定义操作（create_style / set_style_element /
     /// set_numbering_element / clear_body）不可混批（部件互斥），拆两批先后发
     operations: Vec<OperationSpec>,
+    /// 范围锁（D15 八波②）：`[lo, hi]` 闭区间（1-based 块号，与 inspect 块号同口径）。
+    /// 设了锁 → 批内任何操作的块地址越界整批拒（引擎硬约束，不靠 agent 自觉）；
+    /// clear_body / 样式族 / 编号族与锁冲突拒（它们无块号概念或作用于全文）。
+    #[serde(default)]
+    allowed_blocks: Option<(usize, usize)>,
 }
 
 /// 参数态操作（tag = op）；转成引擎的 [`EditOp`] 后全批进入手术。
@@ -306,11 +491,17 @@ enum OperationSpec {
     },
     /// 锚块后建新表：rows 矩形矩阵（首行默认表头——加粗 + 跨页重复）；列宽均分。
     /// table_style（D12 模板件）：表样式显示名或 ID——建表即挂模板样式（底纹/
-    /// 边框随样式走）；缺省默认全边框直排
+    /// 边框随样式走）；缺省默认全边框直排。
+    /// rows 与 rows_text 二选一（D15 八波③值优先）：rows=结构化矩阵（格内可多段，
+    /// \n=多段）；rows_text=Markdown 表格或 TSV 纯文本，工具层解析成矩阵（弱构造
+    /// 模型优先形态——纯文本是强项、嵌套 JSON 是翻车点；格内只支持单段文本）
     InsertTableAfter {
         block: usize,
         expect_prefix: String,
-        rows: Vec<Vec<String>>,
+        #[serde(default)]
+        rows: Option<Vec<Vec<String>>>,
+        #[serde(default)]
+        rows_text: Option<String>,
         #[serde(default)]
         header: Option<bool>,
         #[serde(default)]
@@ -583,9 +774,11 @@ enum FamilyOp {
     Numbering(NumberingEditOp),
 }
 
-impl From<OperationSpec> for FamilyOp {
-    fn from(spec: OperationSpec) -> Self {
-        match spec {
+/// 参数态 → 引擎态的族路由转换。固有方法而非 From：rows_text 解析可失败
+/// （D15 八波③），From 签名装不下 Err。
+impl OperationSpec {
+    fn into_family(self) -> AppResult<FamilyOp> {
+        Ok(match self {
             // ---- document 族 ----
             OperationSpec::ReplaceText { block, expect_prefix, new_text } => {
                 FamilyOp::Doc(EditOp::ReplaceText { block, expect_prefix, new_text })
@@ -610,7 +803,8 @@ impl From<OperationSpec> for FamilyOp {
             OperationSpec::SetPprElement { block, expect_prefix, element, xml } => {
                 FamilyOp::Doc(EditOp::SetPprElement { block, expect_prefix, element, xml })
             }
-            OperationSpec::InsertTableAfter { block, expect_prefix, rows, header, table_style } => {
+            OperationSpec::InsertTableAfter { block, expect_prefix, rows, rows_text, header, table_style } => {
+                let rows = resolve_table_rows(rows, rows_text)?;
                 FamilyOp::Doc(EditOp::InsertTableAfter { block, expect_prefix, rows, header, table_style })
             }
             OperationSpec::SetCellText { block, expect_prefix, row, cell, text } => {
@@ -708,8 +902,106 @@ impl From<OperationSpec> for FamilyOp {
             OperationSpec::ClearBody { expect_blocks } => {
                 FamilyOp::Doc(EditOp::ClearBody { expect_blocks })
             }
+        })
+    }
+}
+
+/// insert_table_after 行矩阵二选一解析（D15 八波③）：rows（结构化，格内可多段）
+/// / rows_text（值优先——Markdown 表格或 TSV，工具层解析成矩阵）。都给/都不给 →
+/// `表格文本无效:` 家族拒。解析只管文本→矩阵；非矩形由引擎 validate_table_rows 兜底。
+fn resolve_table_rows(
+    rows: Option<Vec<Vec<String>>>,
+    rows_text: Option<String>,
+) -> AppResult<Vec<Vec<String>>> {
+    match (rows, rows_text) {
+        (Some(rows), None) => Ok(rows),
+        (None, Some(text)) => parse_rows_text(&text),
+        (Some(_), Some(_)) => Err(AppError::Validation(
+            "表格文本无效: rows 与 rows_text 同时给出，二者互斥。rows=结构化矩阵\
+             （格内可多段，\\n=多段）；rows_text=Markdown 表格或 TSV 纯文本（平台\
+             解析）。请只保留一种。"
+                .into(),
+        )),
+        (None, None) => Err(AppError::Validation(
+            "表格文本无效: insert_table_after 需要 rows 或 rows_text 之一。rows=结构化\
+             矩阵（格内可多段，\\n=多段）；rows_text=Markdown 表格或 TSV 纯文本\
+             （弱构造模型优先用这个）。"
+                .into(),
+        )),
+    }
+}
+
+/// 解析行式表格文本：含 `|` 的行按 Markdown 表格（剥离 `\|---\|` 分隔行，`\|`
+/// 转义字面竖线）；含制表符的行按 TSV；两者都不含 → 拒（无法切列）。空行忽略。
+fn parse_rows_text(text: &str) -> AppResult<Vec<Vec<String>>> {
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let cells: Vec<String> = if line.contains('|') {
+            split_markdown_row(line)
+        } else if line.contains('\t') {
+            line.split('\t').map(|c| c.trim().to_string()).collect()
+        } else {
+            return Err(AppError::Validation(format!(
+                "表格文本无效: 行 {:?} 既不含 | 也不含制表符，无法切列。rows_text 须是\
+                 Markdown 表格（| 分列）或 TSV（制表符分列），示例：| 列1 | 列2 |",
+                clip(line, 30)
+            )));
+        };
+        // Markdown 对齐分隔行（--- / :---: 等）= 表头与正文边界，跳过
+        let is_separator = cells.iter().all(|c| {
+            let t = c.trim_matches(':');
+            !t.is_empty() && t.chars().all(|ch| ch == '-')
+        });
+        if is_separator {
+            continue;
+        }
+        if cells.iter().all(String::is_empty) {
+            return Err(AppError::Validation(format!(
+                "表格文本无效: 行 {:?} 解析出全空列。请检查该行的分隔符（| 或制表符）数量。",
+                clip(line, 30)
+            )));
+        }
+        rows.push(cells);
+    }
+    if rows.is_empty() {
+        return Err(AppError::Validation(
+            "表格文本无效: rows_text 解析后为空。须至少一行数据（Markdown 表格或 TSV）。".into(),
+        ));
+    }
+    Ok(rows)
+}
+
+/// 剥 Markdown 行首尾包裹竖线 + 按未转义 `|` 切列 + `\|` 还原字面竖线。
+fn split_markdown_row(line: &str) -> Vec<String> {
+    let line = line.strip_prefix('|').unwrap_or(line);
+    let line = line.strip_suffix('|').unwrap_or(line);
+    let mut cells: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut chars = line.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\\' if chars.peek() == Some(&'|') => {
+                chars.next();
+                cur.push('|');
+            }
+            '|' => {
+                let cell = std::mem::take(&mut cur);
+                cells.push(cell.trim().to_string());
+            }
+            _ => cur.push(ch),
         }
     }
+    cells.push(cur.trim().to_string());
+    cells
+}
+
+/// char 安全截断（错误文案展示行内容用；勿用 String::truncate——中文 panic）。
+fn clip(s: &str, max_chars: usize) -> String {
+    s.chars().take(max_chars).collect()
 }
 
 #[derive(Serialize)]
@@ -752,7 +1044,10 @@ impl McpClient for EditDocxTool {
          that Word falls back to the style's numbers). Table operations: \
          op=insert_table_after creates a new table after an anchor block from a \
          rectangular rows matrix (first row is a bold repeating header by default; \
-         100% width, all borders, evenly split columns); op=set_cell_text rewrites one \
+         100% width, all borders, evenly split columns) — or from rows_text, a \
+         Markdown-table/TSV text the platform parses (value-first: prefer it when \
+         building nested JSON arrays is error-prone; one paragraph per cell); \
+         op=set_cell_text rewrites one \
          cell's text by (row, cell) address — the exact grid shown by inspect_docx \
          projection=table, keeping the cell's structure properties and the first \
          paragraph's formatting; op=insert_table_row_after appends a row by cloning a \
@@ -821,7 +1116,11 @@ impl McpClient for EditDocxTool {
          rejected and the file is left untouched. Blocks are addressed by inspect_docx \
          block numbers (1-based, paragraphs and tables in document order); text ops \
          (replace/delete/set_style/set_format/set_ppr_element) reject table and \
-         revision-marked blocks. The file is backed up \
+         revision-marked blocks. Optional allowed_blocks=[lo, hi] is a range lock for \
+         delegated work: when set, any operation addressing a block outside lo..=hi \
+         rejects the whole batch (engine-level hard constraint — use it when a task \
+         must confine edits to a region, e.g. 'only the tables after section 3'). \
+         The file is backed up \
          before writing. Workflow: inspect_docx (outline, then text/table/tblpr for \
          blocks; styles/styledef/numbering for definitions) to find targets, edit_docx, \
          then inspect_docx again to verify the result."
@@ -950,14 +1249,18 @@ impl McpClient for EditDocxTool {
                                         "type": "array",
                                         "minItems": 1,
                                         "maxItems": 200,
-                                        "description": "Rectangular matrix of cell texts (every row same length, 1-30 cells). \\n inside a cell = multiple paragraphs.",
+                                        "description": "Structured rectangular matrix of cell texts (every row same length, 1-30 cells). \\n inside a cell = multiple paragraphs. Mutually exclusive with rows_text.",
                                         "items": { "type": "array", "minItems": 1, "maxItems": 30, "items": { "type": "string" } }
+                                    },
+                                    "rows_text": {
+                                        "type": "string",
+                                        "description": "Value-first alternative to rows (mutually exclusive — provide exactly one): paste the table as text and the platform parses it. A line containing | parses as a Markdown row (leading/trailing wrapping pipes optional, \\| escapes a literal pipe, the |---|---| separator line is skipped); otherwise a line with tabs parses as TSV. Blank lines are ignored. LIMITATION: one paragraph per cell — for multi-paragraph cells use the rows array. Preferred when constructing nested JSON is error-prone."
                                     },
                                     "header": { "type": "boolean", "description": "true (default): first row is bold and repeats across pages; false: plain data rows only." },
                                     "table_style": { "type": "string", "description": "Table style (display name or ID, @w:type=table — see projection=styles): attach the house template's table style so shading/borders follow it. Default: plain single-border table." }
                                 },
-                                "required": ["op", "block", "expect_prefix", "rows"],
-                                "description": "Create a new table after the anchor block. For house-template look pass table_style (a @w:type=table style — pick from inspect_docx projection=styles) so borders/shading/row banding follow the style; without it the table is plain: 100% width, single borders, evenly split columns, bold repeating header row."
+                                "required": ["op", "block", "expect_prefix"],
+                                "description": "Create a new table after the anchor block. Cell data comes from rows (structured matrix; supports multi-paragraph cells) OR rows_text (Markdown/TSV text the platform parses; single-paragraph cells — the value-first form when nested JSON is error-prone). For house-template look pass table_style (a @w:type=table style — pick from inspect_docx projection=styles) so borders/shading/row banding follow the style; without it the table is plain: 100% width, single borders, evenly split columns, bold repeating header row."
                             },
                             {
                                 "type": "object",
@@ -1145,6 +1448,13 @@ impl McpClient for EditDocxTool {
                             }
                         ]
                     }
+                },
+                "allowed_blocks": {
+                    "type": "array",
+                    "items": { "type": "integer", "minimum": 1 },
+                    "minItems": 2,
+                    "maxItems": 2,
+                    "description": "Range lock [lo, hi] (inclusive, 1-based block numbers) for delegated edits: when set, ANY operation whose block address falls outside the range rejects the whole batch (engine-level hard constraint — protects content the delegating agent must not touch). clear_body and style/numbering-family batches are incompatible with the lock. Omit for unrestricted edits."
                 }
             },
             "required": ["path", "operations"]
@@ -1194,11 +1504,21 @@ impl McpClient for EditDocxTool {
                 "操作列表为空: operations 至少需要一个操作。".into(),
             ));
         }
+        // 区间锁参数合法性（D15 八波②）：1-based 闭区间，lo≥1 且 lo≤hi
+        if let Some((lo, hi)) = parsed.allowed_blocks {
+            if lo == 0 || lo > hi {
+                return Err(AppError::Validation(format!(
+                    "区间锁无效: allowed_blocks=[{lo}, {hi}]，须 lo≥1 且 lo≤hi\
+                     （1-based 闭区间，与 inspect 块号同口径）。请用 inspect_docx \
+                     outline 复核块号后重发。"
+                )));
+            }
+        }
         let mut doc_ops: Vec<EditOp> = Vec::new();
         let mut style_ops: Vec<StyleEditOp> = Vec::new();
         let mut numbering_ops: Vec<NumberingEditOp> = Vec::new();
         for spec in parsed.operations {
-            match FamilyOp::from(spec) {
+            match spec.into_family()? {
                 FamilyOp::Doc(op) => doc_ops.push(op),
                 FamilyOp::Style(op) => style_ops.push(op),
                 FamilyOp::Numbering(op) => numbering_ops.push(op),
@@ -1217,10 +1537,19 @@ impl McpClient for EditDocxTool {
                     .into(),
             ));
         }
+        // 锁只作用于正文块批：样式/编号定义按样式名/numId 寻址，无块号概念
+        if parsed.allowed_blocks.is_some() && doc_ops.is_empty() {
+            return Err(AppError::Validation(
+                "区间锁无效: allowed_blocks 只作用于正文块手术批（replace_text / \
+                 set_cell_text 等）。样式/编号定义手术按样式名或 numId 寻址，无块号\
+                 概念。请去掉 allowed_blocks，或拆批后再带锁。"
+                    .into(),
+            ));
+        }
 
         // 全有或全无：手术在内存完成（含整批预检 + 产物再解析校验），通过才落盘
         let (new_bytes, applied) = if !doc_ops.is_empty() {
-            apply_edits_to_bytes(&bytes, &doc_ops)?
+            apply_edits_to_bytes_locked(&bytes, &doc_ops, parsed.allowed_blocks)?
         } else if !style_ops.is_empty() {
             apply_style_edits_to_bytes(&bytes, &style_ops)?
         } else {
@@ -1493,5 +1822,313 @@ mod tests {
         assert!(err.contains("部件互斥"), "实际: {err}");
         assert_eq!(std::fs::read(&file).unwrap(), before);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ---- validate_docx（D15 八波①）----
+
+    #[tokio::test]
+    async fn validate_reports_failures_as_data_not_error() {
+        let dir = std::env::temp_dir().join("icepaw_validate_docx_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("样本.docx");
+        std::fs::write(&file, three_para_docx()).unwrap();
+
+        let tool = ValidateDocxTool;
+        // 混合断言：2 过 2 败——失败是正常输出（passed=false），不是工具 Err
+        let args = serde_json::json!({
+            "path": file.to_string_lossy(),
+            "assertions": [
+                { "kind": "block_count", "equals": 3 },
+                { "kind": "block_text", "block": 2, "contains": "第二" },
+                { "kind": "block_text", "block": 1, "equals": "错文本" },
+                { "kind": "cell_text", "block": 1, "row": 1, "cell": 1, "contains": "x" }
+            ]
+        })
+        .to_string();
+        let out = tool.execute(&args).await.unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["passed"], false, "{out}");
+        assert_eq!(v["total"], 4);
+        assert_eq!(v["failed"], 2);
+        let kinds: Vec<&str> = v["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["kind"].as_str().unwrap())
+            .collect();
+        // 独立评估不短路：两条失败都报（段落块打 cell 断言 → fail 指路，非 Err）
+        assert_eq!(kinds, ["block_text", "cell_text"], "{out}");
+
+        // 全过形态：failures 空、passed_kinds 摘要在场
+        let args = serde_json::json!({
+            "path": file.to_string_lossy(),
+            "assertions": [
+                { "kind": "block_count", "equals": 3 },
+                { "kind": "block_style", "block": 1, "equals": "(无样式)" }
+            ]
+        })
+        .to_string();
+        let out = tool.execute(&args).await.unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["passed"], true, "{out}");
+        assert_eq!(v["failed"], 0);
+        assert!(v["failures"].as_array().unwrap().is_empty());
+        assert!(!v["passed_kinds"].as_array().unwrap().is_empty(), "{out}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn validate_rejects_over_limit_and_missing_file() {
+        let dir = std::env::temp_dir().join("icepaw_validate_docx_test2");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("样本.docx");
+        std::fs::write(&file, three_para_docx()).unwrap();
+
+        let tool = ValidateDocxTool;
+        // 断言数超限 = 参数错 → Err（区别于断言失败）
+        let assertions: Vec<_> = (0..51)
+            .map(|i| serde_json::json!({ "kind": "block_count", "equals": i }))
+            .collect();
+        let args =
+            serde_json::json!({ "path": file.to_string_lossy(), "assertions": assertions })
+                .to_string();
+        let err = tool.execute(&args).await.unwrap_err().to_string();
+        assert!(err.contains("断言数超限"), "实际: {err}");
+
+        // 文件不存在：did-you-mean 契约同 inspect/edit
+        let args = serde_json::json!({
+            "path": "Z:/不存在的/文档.docx",
+            "assertions": [{ "kind": "block_count", "equals": 1 }]
+        })
+        .to_string();
+        let err = tool.execute(&args).await.unwrap_err().to_string();
+        assert!(err.contains("文件不存在"), "实际: {err}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ---- allowed_blocks 区间锁（D15 八波②）----
+
+    #[tokio::test]
+    async fn range_lock_allows_in_range_and_rejects_out_of_range() {
+        let dir = std::env::temp_dir().join("icepaw_edit_docx_lock_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("样本.docx");
+        std::fs::write(&file, three_para_docx()).unwrap();
+
+        let tool = EditDocxTool;
+        // 区间内：lock [1,2] 改块 2 → 通过
+        let args = serde_json::json!({
+            "path": file.to_string_lossy(),
+            "allowed_blocks": [1, 2],
+            "operations": [
+                { "op": "replace_text", "block": 2, "expect_prefix": "第二段", "new_text": "改写段" }
+            ]
+        })
+        .to_string();
+        let out = tool.execute(&args).await.unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["applied"], 1, "{out}");
+
+        // 区间外：lock [1,2] 动块 3 → 整批拒（家族前缀），文件字节原样
+        let before = std::fs::read(&file).unwrap();
+        let args = serde_json::json!({
+            "path": file.to_string_lossy(),
+            "allowed_blocks": [1, 2],
+            "operations": [
+                { "op": "replace_text", "block": 3, "expect_prefix": "第三段", "new_text": "越界段" }
+            ]
+        })
+        .to_string();
+        let err = tool.execute(&args).await.unwrap_err().to_string();
+        assert!(err.contains("区间外块"), "实际: {err}");
+        assert!(err.contains("1..=2"), "区间要在文案里: {err}");
+        assert_eq!(std::fs::read(&file).unwrap(), before, "拒批文件逐字节 untouched");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn range_lock_rejects_clear_body_and_bad_bounds() {
+        let dir = std::env::temp_dir().join("icepaw_edit_docx_lock_test2");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("样本.docx");
+        std::fs::write(&file, three_para_docx()).unwrap();
+        let before = std::fs::read(&file).unwrap();
+
+        let tool = EditDocxTool;
+        // clear_body 清空全文，与任何区间语义冲突 → 拒
+        let args = serde_json::json!({
+            "path": file.to_string_lossy(),
+            "allowed_blocks": [1, 3],
+            "operations": [ { "op": "clear_body", "expect_blocks": 3 } ]
+        })
+        .to_string();
+        let err = tool.execute(&args).await.unwrap_err().to_string();
+        assert!(err.contains("区间外块"), "实际: {err}");
+        assert!(err.contains("clear_body"), "实际: {err}");
+        assert_eq!(std::fs::read(&file).unwrap(), before);
+
+        // 非法区间 lo>hi → 工具层拒
+        let args = serde_json::json!({
+            "path": file.to_string_lossy(),
+            "allowed_blocks": [3, 2],
+            "operations": [ { "op": "delete_block", "block": 2, "expect_prefix": "第二段" } ]
+        })
+        .to_string();
+        let err = tool.execute(&args).await.unwrap_err().to_string();
+        assert!(err.contains("区间锁无效"), "实际: {err}");
+
+        // lo=0（块号 1-based）→ 拒
+        let args = serde_json::json!({
+            "path": file.to_string_lossy(),
+            "allowed_blocks": [0, 2],
+            "operations": [ { "op": "delete_block", "block": 2, "expect_prefix": "第二段" } ]
+        })
+        .to_string();
+        let err = tool.execute(&args).await.unwrap_err().to_string();
+        assert!(err.contains("区间锁无效"), "实际: {err}");
+
+        // 样式族无块号概念，与锁互斥 → 拒
+        let args = serde_json::json!({
+            "path": file.to_string_lossy(),
+            "allowed_blocks": [1, 3],
+            "operations": [ { "op": "create_style", "style_type": "paragraph", "name": "某样式" } ]
+        })
+        .to_string();
+        let err = tool.execute(&args).await.unwrap_err().to_string();
+        assert!(err.contains("区间锁无效"), "实际: {err}");
+        assert_eq!(std::fs::read(&file).unwrap(), before);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ---- insert_table_after rows_text（D15 八波③）----
+
+    /// 表格工具测试用锚段包。
+    fn anchored_docx() -> Vec<u8> {
+        use docx_rs::{Docx, Document, Paragraph, Run};
+        let document =
+            Document::new().add_paragraph(Paragraph::new().add_run(Run::new().add_text("锚段")));
+        let mut cursor = std::io::Cursor::new(Vec::<u8>::new());
+        Docx::new().document(document).build().pack(&mut cursor).unwrap();
+        cursor.into_inner()
+    }
+
+    #[tokio::test]
+    async fn rows_text_parses_markdown_and_matches_rows_form() {
+        let dir = std::env::temp_dir().join("icepaw_rows_text_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let tool = EditDocxTool;
+
+        // 同一表格两种形态：rows_text（Markdown 含分隔行 + \| 转义）vs rows 矩阵。
+        // 模板字节取一次写两份（docx-rs 可能嵌时间戳，两次 build 字节不保证相同）
+        let template = anchored_docx();
+        let md = "| 列1 | 列2 |\n| --- | :---: |\n| 甲 | a\\|b |\n\n";
+        let cases: [(&str, serde_json::Value); 2] = [
+            ("rows_text", serde_json::json!(md)),
+            ("rows", serde_json::json!([["列1", "列2"], ["甲", "a|b"]])),
+        ];
+        let mut summaries = Vec::new();
+        let mut file_bytes = Vec::new();
+        for (form, data) in cases {
+            let file = dir.join(format!("{form}.docx"));
+            std::fs::write(&file, &template).unwrap();
+            let mut op = serde_json::json!({
+                "op": "insert_table_after", "block": 1, "expect_prefix": "锚段"
+            });
+            op[form] = data;
+            let args =
+                serde_json::json!({ "path": file.to_string_lossy(), "operations": [op] })
+                    .to_string();
+            let out = tool.execute(&args).await.unwrap();
+            let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+            assert_eq!(v["applied"], 1, "{form}: {out}");
+            summaries.push(v["operations"].to_string());
+            file_bytes.push(std::fs::read(&file).unwrap());
+        }
+        // 值优先与结构化等价：applied 摘要相等 + 产物字节逐字节相等
+        assert_eq!(summaries[0], summaries[1], "两种形态 applied 摘要须一致");
+        assert_eq!(file_bytes[0], file_bytes[1], "两种形态产物须一致");
+
+        // 读回：表格内容正确落格（含 \| 还原的字面竖线）
+        let inspect = crate::harness::doc::inspect_document(
+            &file_bytes[0],
+            &InspectRequest { projection: InspectProjection::Table, start: None, end: None, row: None, cell: None, style: None, num_id: None, level: None },
+        )
+        .unwrap();
+        assert!(inspect.content.contains("a|b"), "{}", inspect.content);
+        assert!(inspect.content.contains("列1"), "{}", inspect.content);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn rows_text_tsv_and_error_paths() {
+        let dir = std::env::temp_dir().join("icepaw_rows_text_test2");
+        std::fs::create_dir_all(&dir).unwrap();
+        let tool = EditDocxTool;
+        let file = dir.join("t.docx");
+        std::fs::write(&file, anchored_docx()).unwrap();
+
+        // TSV：制表符分列
+        let args = serde_json::json!({
+            "path": file.to_string_lossy(),
+            "operations": [ {
+                "op": "insert_table_after", "block": 1, "expect_prefix": "锚段",
+                "rows_text": "甲\t乙\n丙\t丁"
+            } ]
+        })
+        .to_string();
+        let out = tool.execute(&args).await.unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["applied"], 1, "{out}");
+
+        // rows 与 rows_text 同时给 → 互斥拒
+        let args = serde_json::json!({
+            "path": file.to_string_lossy(),
+            "operations": [ {
+                "op": "insert_table_after", "block": 1, "expect_prefix": "锚段",
+                "rows": [["x"]], "rows_text": "| x |"
+            } ]
+        })
+        .to_string();
+        let err = tool.execute(&args).await.unwrap_err().to_string();
+        assert!(err.contains("表格文本无效"), "实际: {err}");
+
+        // 都不给 → 拒（必填二选一）
+        let args = serde_json::json!({
+            "path": file.to_string_lossy(),
+            "operations": [ { "op": "insert_table_after", "block": 1, "expect_prefix": "锚段" } ]
+        })
+        .to_string();
+        let err = tool.execute(&args).await.unwrap_err().to_string();
+        assert!(err.contains("表格文本无效"), "实际: {err}");
+
+        // 既无 | 也无制表符 → 无法切列
+        let args = serde_json::json!({
+            "path": file.to_string_lossy(),
+            "operations": [ {
+                "op": "insert_table_after", "block": 1, "expect_prefix": "锚段",
+                "rows_text": "就一行没有分隔符"
+            } ]
+        })
+        .to_string();
+        let err = tool.execute(&args).await.unwrap_err().to_string();
+        assert!(err.contains("无法切列"), "实际: {err}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// parse_rows_text 边缘（同步直调）：首尾包裹竖线剥离 / 空行忽略 / 空文本拒。
+    #[test]
+    fn parse_rows_text_edges() {
+        let rows = parse_rows_text("| a | b |\n| c | d |").unwrap();
+        assert_eq!(rows, [["a", "b"], ["c", "d"]]);
+
+        // 无包裹竖线的 Markdown 行同样合法；空行忽略
+        let rows = parse_rows_text("a | b\n\nc | d").unwrap();
+        assert_eq!(rows, [["a", "b"], ["c", "d"]]);
+
+        // 只有分隔行 → 空，拒
+        let err = parse_rows_text("| --- | --- |").unwrap_err().to_string();
+        assert!(err.contains("解析后为空"), "实际: {err}");
+        let err = parse_rows_text("").unwrap_err().to_string();
+        assert!(err.contains("解析后为空"), "实际: {err}");
     }
 }
