@@ -67,8 +67,8 @@ fn assert_live_content(frame: &RgbaFrame, what: &str) {
     let total = frame.width as usize * frame.height as usize;
     let step = (total / 4096).max(1);
     let mut colors = HashSet::new();
-    for px in frame.rgba.chunks_exact(4).step_by(step) {
-        colors.insert(u32::from_le_bytes([px[0], px[1], px[2], px[3]]));
+    for px in frame.rgba.as_chunks::<4>().0.iter().step_by(step) {
+        colors.insert(u32::from_le_bytes(*px));
     }
     assert!(
         colors.len() >= 8,

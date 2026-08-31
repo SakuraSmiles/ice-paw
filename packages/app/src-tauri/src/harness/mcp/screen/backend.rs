@@ -513,7 +513,9 @@ mod gdi {
     /// 但 RDP/服务会话等环境见过 0）——统一换位 + 压 255：PNG 侧永远不透明，
     /// 红蓝通道对调也在此一处钉死（契约测试见 mod gdi_contract_tests）。
     fn bgra_to_opaque_rgba(buf: &mut [u8]) {
-        for px in buf.chunks_exact_mut(4) {
+        // as_chunks_mut 而非 chunks_exact_mut：像素定长 4，新 clippy
+        // （chunks_exact_to_as_chunks，1.96+）要求定长切片走 as_chunks 族
+        for px in buf.as_chunks_mut::<4>().0 {
             px.swap(0, 2);
             px[3] = 255;
         }

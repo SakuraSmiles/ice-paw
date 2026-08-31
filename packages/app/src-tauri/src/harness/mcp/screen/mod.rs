@@ -1373,7 +1373,7 @@ mod tests {
 
         // 前半一色后半一色 → 2（采样步长必然跨到两段）
         let mut rgba = vec![0u8; 64 * 64 * 4];
-        for (i, b) in rgba.chunks_exact_mut(4).enumerate() {
+        for (i, b) in rgba.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             b.fill(if i < 64 * 64 / 2 { 0x10 } else { 0x20 });
         }
         let two = RgbaFrame {
