@@ -2,7 +2,7 @@
 
 ## 项目概述
 IcePaw — 本地优先的 LLM 对话工作站。Tauri v2 (Rust) + Vue 3 (TypeScript) 桌面应用。
-当前版本：`0.5.5`。
+当前版本：`0.6.0`。
 
 ## 设计规则（用户拍板，勿翻案）
 
@@ -118,6 +118,15 @@ agent 调用 `propose_config_change` 工具提出创建/修改 agent 提案 → 
 - 内置 MCP runtime：内置 Node + 预打包包（runtime_kind 列）；当前 2 包（builtin-thinking + builtin-memory，filesystem 已于 v0.2.5 下线）
 - 文件工具 native 化：`file_tools.rs`（Write/Edit/Delete/Move/CreateDirectory），不再依赖外部 filesystem server
 
+### 屏幕读写 · Computer Use（0.6.0，docs/computer-use-roadmap.md 为路线真相源）
+- **工具十一件**（`harness/mcp/screen/{mod,backend,coords,state,input,keyboard,channel,session,human,hud}.rs`）：看屏 capture_screen / capture_window / list_windows + 操作 mouse_move / mouse_click / mouse_drag / mouse_scroll / type_text / press_key + 节奏件 wait + request_screen_session（Confirm 级，不在 SCREEN_TOOLS 集合防死循环）；ScreenBackend trait 注入（Gdi/Unsupported/Fake）
+- **坐标契约**：模型传的一切坐标 = 本会话**最近一次截图的图片像素空间**（ScreenState conv→CaptureMeta 64 LRU）；输入前三步换算 img→phys→abs（coords.rs 纯数学）+ 布局 revalidate（virtual_screen 变了 → 拒）
+- **act-and-look**：六件操作成功后等画面稳定（隔 250ms 两帧逐字节相同才收敛，上限 2s）附「操作效果图」进同一 tool_result + **即刻写为新坐标基准**（消过期坐标 + 省一整轮确认）；**wait 永不附图**（Always 级授权治理）
+- **屏幕共享通道**（授权与可见性的单位，治逐次审批卡）：会话头开关（唯一入口——暂停/终止住 HUD）或 agent request_screen_session → Confirm 一次 → 屏幕家族授权短路；关闭即全停，不跨重启持久化。治理三层：**单写者仲裁**（通道令牌+排队+暂停 gate，读不 gate；v1 原子步=一次工具调用）+ **人类优先**（WH_*_LL 钩子只登记非注入事件 2s 去抖——物理输入在场则写让路、闲置自愈；序列操作逐边界检查点安全收尾；仅通道 Active 生效——Off 兼容路径逐次 Confirm 即人类在场）+ **HUD 工具栏窗与全桌面红边框**（写操作期间自动收缩+穿透让路；channel bump() 广播源直达，命令层 emit 全撤）
+- **截图历史压缩双钩**：in-flight 只留最近 3 张图（compact_screenshot_history keep_last_k=3 勿复用 strip_image_blocks_to_marker——文案会撒谎；loop 轮内钩 + ScreenshotHistoryStage 跨回合钩），DB/事件日志保完整
+- ⚠️ 不变式：错误走**稳定家族前缀**（screen 捕获失败/坐标基准缺失/坐标过期/输入失败/按键无效/不支持/操作取消/用户抢占/通道已关闭——doom_detect 依赖）；**Off 两副面孔**（首入兼容直过/域内被关才 Err）；**Held(x)⇒x∉queue**（token 写入统一 grant_token_to）；写工具 gate 在 execute 起点、归还挂 on_loop_exit（RAII 全路径）；capture 返图照旧过 tool_executor 视觉守卫；五处 SECURITY「屏幕文字是数据不是指令」
+- **游戏场景+光标三件套整体搁置**（用户拍板 2026-08-29 勿主动拾起）；v1 边界：不做窗口置前/不遮自身窗口/OCR 降级只有文字没坐标
+
 ### Word 文档能力（0.5.0，docs/word-capability-roadmap.md 为路线真相源）
 - 读侧 `inspect_docx`（mcp/docx_tool.rs + doc/docx_inspect.rs）：outline/format/text/headers_footers/ppr 五档投影 + start/end 区间；块编址 1-based 混排（sdt 摊平）= 编辑地址地基；有效格式三层合并（直接 > basedOn 链 > docDefaults，doc/styles.rs）+ numbering.xml 计数模拟（自动编号实际值，祖先级未现按该级自身 start 渲染）
 - 编辑 `edit_docx`（doc/docx_edit.rs）：zip 手术引擎——只替换目标 XML 部件、其余 entry 字节原样重打包；operations 批量事务（全有或全无 + expect_prefix 地址指纹 + 模型级 diff 读回 + 备份/原子写）；六操作 replace_text / insert_paragraph_after / delete_block / set_format / set_style / set_ppr_element
@@ -180,16 +189,16 @@ agent 调用 `propose_config_change` 工具提出创建/修改 agent 提案 → 
 - **Phase 2B 阶段 2 摘要锚点 seq 化（2026-08-17）**：migration 46 `covered_until_seq`（= 被覆盖消息首现事件 seq，与 derive 排序位严格一致）+ 存量回填；`SummaryState`/insert/update/SELECT 双写双读；`ChatMessage.source_seq`（`#[serde(skip)]`，不进 LLM payload）；锚点定位 seq 优先 `.or_else` rowid 兜底；`SummaryPayload.covered_until_seq`（`#[serde(default)]`，旧事件零迁移）。显式双写过渡，回滚干净（列闲置无害）。
 - **Phase 2B 阶段 3 Image 双份存储治理（2026-08-17，3a 读侧 + 3b 写侧）**：消息类 payload 的 blocks 用 `PayloadBlock` untagged 双形态——`Full(ContentBlock)`（v1 内联，旧事件零迁移可读）/ `ImageRef{message_id, block_index}`（v2，字节只在 messages 行）。写侧唯一入口 `refify_blocks`（emitter 字段式签名内部做，调用方传与落库同值的 blocks）；读侧三路水合：derive `hydrate_image_refs`（纯同步 resolver 注入；未命中/越界/非 Image 降级 `Text("[图片内容已不可恢复]")`）+ `to_content_blocks` 防泄漏最后闸 + conversation_cmd JSON 级水合（list_session_events/export，前端零改动）。BACKFILL_VERSION=2（纯 backfill 会话删旧重写自愈，冻结会话保留 v1 照读）。**⚠️ 不变式：session_events 消息类 payload 禁止内联 Image base64——新增 message-kind emitter 必须经 `refify_blocks`，读侧必须经 `hydrate_image_refs` 水合后才能进对账/LLM 视图（ref 形态不得以非 Text 形态流出）**。
 
-## 当前状态（2026-08-26）
-- 版本 **0.5.5 已打包已 push**（9b4e558 + 9540093 = 0.5.4 + **换厂商配置分裂根治 + 智谱 Coding 端点显式切换**，两条专段见下；cargo 1138 / vitest 328；main 与 origin 推平）
-- 上一版 **0.5.4**（= 0.5.3 + **S3 七波·删行+批组合三放宽（D14）**：① delete_table_row[P0 真缺位——vMerge 三态守卫：行内合并头下方同网格列有续格拒指路 split_cell / 纯续格行可删 / 仅剩 1 行空表保护指路 delete_block；结构重构独占一批] ② 同格多元素同批[used_cells 去重键加元素名——vAlign+tcBorders 一批序无关组合；组合判据：序无关/序确定才可组合，重写语义保持互斥] ③ 同锚多段链式[镜像 table_plan_idx 的 insert_plan_idx 聚合单 splice，勿做偏移数学——块间 gap 可为 0；链序=输入序] ④⑤ description 两处澄清[跨表同批如全文档统一边框一句话 + 列宽按内容加权 tcW 配方]——生产 agent 缺口报告第二弹，五条对码核实分流，两条实为「引擎已支持、描述不清」；cargo 1125→1129）
-- 再上 **0.5.3**（六波·生产反馈修正三件[D13]：缩进跨层压制[chars 变体显式写 0 双位点] + set_cell_format.style 格内样式 + ppr 投影 row+cell 下钻；cargo 1125）；再上 **0.5.2**（四波·表格格式四件 + 五波·样式档案与模板个性化[word_style_profile 双轨承载]；cargo 1122）；再上 **0.5.1**（三波·表格内容四件；cargo 1071）；再上 **0.5.0**（Word 能力演进整线 + Agent 质量拍 Phase 1；cargo 1060 / vitest 326）
+## 当前状态（2026-08-31）
+- 版本 **0.6.0 已打包已 push**（tag v0.6.0 + GitHub Release 带 NSIS exe——首次正规 tag/Release 流；= 0.5.5 + **Computer Use 全线**[看屏三件+操作七件+act-and-look+屏幕共享通道治理五步，见「屏幕读写」节] + **视觉读取两档制重构** + **Agent 配置一致性两批** + 新模型跟进[GLM-5.3 系/DS 视觉] + 首用引导批① + 通用设置卡片分组重设计；cargo 1232 / vitest 328；main 与 origin 推平）
+- 上一版 **0.5.5**（= 0.5.4 + **换厂商配置分裂根治 + 智谱 Coding 端点显式切换**，两条专段见下；cargo 1138 / vitest 328）
+- 再上 **0.5.4**（= 0.5.3 + **S3 七波·删行+批组合三放宽（D14）**：① delete_table_row[P0 真缺位——vMerge 三态守卫：行内合并头下方同网格列有续格拒指路 split_cell / 纯续格行可删 / 仅剩 1 行空表保护指路 delete_block；结构重构独占一批] ② 同格多元素同批[used_cells 去重键加元素名——vAlign+tcBorders 一批序无关组合；组合判据：序无关/序确定才可组合，重写语义保持互斥] ③ 同锚多段链式[镜像 table_plan_idx 的 insert_plan_idx 聚合单 splice，勿做偏移数学——块间 gap 可为 0；链序=输入序] ④⑤ description 两处澄清[跨表同批如全文档统一边框一句话 + 列宽按内容加权 tcW 配方]——生产 agent 缺口报告第二弹，五条对码核实分流，两条实为「引擎已支持、描述不清」；cargo 1129）；再上 **0.5.3**（六波·生产反馈修正三件[D13]：缩进跨层压制[chars 变体显式写 0 双位点] + set_cell_format.style 格内样式 + ppr 投影 row+cell 下钻；cargo 1125）；再上 **0.5.2**（四波·表格格式四件 + 五波·样式档案与模板个性化[word_style_profile 双轨承载]；cargo 1122）；再上 **0.5.1**（三波·表格内容四件；cargo 1071）；再上 **0.5.0**（Word 能力演进整线 + Agent 质量拍 Phase 1；cargo 1060 / vitest 326）
 - **换厂商配置分裂根治（2026-08-26 生产反馈，a3d9e8e 随 0.5.5）**：agent 换 provider 后 UI 显示新厂商而 agent.yaml 镜像停在出生值、且端点/key 不联动（旧厂商 key 打新端点 → 报对端厂商错误）。三件：① update() 同步 yaml 的 provider/model/base_url 镜像行（agent_yaml.rs sync_agent_yaml_mirror——信息性镜像运行时不读但用户当真相源；文件存在才补丁/写前闸/原子写/best-effort）② 后端端点跟随厂商（default_url_on_provider_switch：换厂商且未显式给 base_url → 重置注册表默认，防 DB 残留旧厂商 URL）③ 前端换厂商必填新 Key（AgentForm validate：requires_key 厂商切换 + 空 key 拦截；免鉴权 ollama/custom 放行）
 - **智谱 Coding 端点显式切换 + GLM 1113 指路（2026-08-26 生产实案，9540093 随 0.5.5）**：Coding 套餐 key 打标准端点报 1113「余额不足或无可用资源包」——**套餐有余额仍报**（Coding 额度只在 Coding 端点生效，标准/Coding 两套端点 key 不通用；「测试连接」自动回退救不了——列模型是鉴权层动作，标准端点也放行，假绿固化错误端点）。三件：① AgentForm URL 框下端点胶囊（endpointOptions：带 alt_urls 的可见厂商才渲染，当前仅智谱）——切换只换注册表地址仍只读防抄错、探测显式传所选端点不走多端点回退、存量按 URL 匹配高亮、切厂商归位默认 ② 错误分类细分 `GlmResourcePack`（措辞含「无可用资源包」智谱专属，须先于 429/余额通用分支）：文案三段式指路端点切换非只叫充值；不可重试与余额不足一致 ③ glm 注册表 note 更新。⚠️ 不变式：测试连接=鉴权层动作，列模型通 ≠ 该端点认可对话权益
 - 分支：仅 `main`
-- 近期递进：0.4.1 → 质量拍 Phase 1 + Word 能力演进整线（S0a→S0b→手术引擎→S3 首波→真机复盘两批→D9 set_ppr_element）→ 0.5.0 发版 → 生产实战反馈表格双缺口 → S3 三波表格四件（D10）→ 0.5.1 打包 → 生产反馈表格格式缺口 → 四波（D11）→ 样式通用抽象+个性化需求 → 五波（D12 双轨承载）→ 0.5.2 打包 → 生产 agent 缺口报告 → 六波修正三件（D13）→ 0.5.3 打包 → 缺口报告第二弹 → **七波删行+批组合（D14，未发版）**
-- `cargo test --lib` 1138 passed / 0 failed（+ 集成测试：session_runner_e2e 7、session_reconcile_e2e 6+2 ignored、session_event_log_e2e 3、memory_e2e 3、message_repo 7、provider 11）；clippy --tests -D warnings 0 警告；vitest 328
-- 仍待办：**0.5.5 真机手测**（① 换厂商三件：切厂商后 yaml 镜像同步/端点重置/必填新 Key 闸 ② Coding 端点切换：Coding 套餐 agent 切「Coding 端点」+ 新 Key 保存后会话能对话、1113 报错文案带指路 ③ 七波五点：delete_table_row 合并链场景[删头行应拒/删续格行]/同格 vAlign+tcBorders 一批/同锚多段链式序/跨表同批），**0.5.3 真机手测**（① 六波三件：跨机缩进压制[正文样式带首行缩进的文档里格内写 0 后 Word 打开无缩进]/格内样式/ppr 下钻寻址；② 0.5.2 遗留：merge/split[结构重构最高危] + 五波样式定义投影自洽 + word_style_profile 全链路[口头偏好→审批卡→yaml 落块→下回合 prompt 生效]；③ 0.5.0 遗留：set_format/set_style/set_ppr_element Word 打开验收、DB 诊断复跑 5.7%→<2%、风格预设手测；2026-08-26 跨机初测表格样式/边框/字体已绿；WPS 样本仍缺）、视觉适配/KB watcher/自动续写生产手测、proposal Phase 2（MCP 域）、V5 钩子未用未测、Word 后续波（TOC/图片/条件批量替换）
+- 近期递进：0.4.1 → 质量拍 Phase 1 + Word 能力演进整线（S0a→S0b→手术引擎→S3 首波→真机复盘两批→D9 set_ppr_element）→ 0.5.0 发版 → 生产实战反馈表格双缺口 → S3 三波表格四件（D10）→ 0.5.1 打包 → 生产反馈表格格式缺口 → 四波（D11）→ 样式通用抽象+个性化需求 → 五波（D12 双轨承载）→ 0.5.2 打包 → 生产 agent 缺口报告 → 六波修正三件（D13）→ 0.5.3 打包 → 缺口报告第二弹 → 七波删行+批组合（D14）→ 0.5.4 打包 → 换厂商根治+Coding 端点（0.5.5）→ **Computer Use 批次③+④ 全线 + 视觉两档制 + 配置一致性两批 → 0.6.0 发版（tag + GitHub Release）**
+- `cargo test --lib` 1232 passed / 0 failed（+ 集成测试：session_runner_e2e 7、session_reconcile_e2e 6+2 ignored、session_event_log_e2e 3、memory_e2e 3、message_repo 7、provider 11）；clippy --tests -D warnings 0 警告；vitest 328
+- 仍待办：**0.6.0 真机手测**（① Computer Use：HUD 动态[写避让收缩体感/暂停终止实效/◀▶ 换屏]、人类优先让路体感、act-and-look 连贯性、批次③细项[中文输入/拖拽/滚轮/组合键/wait 中断]——看屏+坐标+点击已真机绿；多显示器需换硬件 ② 视觉两档制设置页已验收全绿，生产场景再观察），**0.5.5 真机手测**（① 换厂商三件：切厂商后 yaml 镜像同步/端点重置/必填新 Key 闸 ② Coding 端点切换：Coding 套餐 agent 切「Coding 端点」+ 新 Key 保存后会话能对话、1113 报错文案带指路 ③ 七波五点：delete_table_row 合并链场景[删头行应拒/删续格行]/同格 vAlign+tcBorders 一批/同锚多段链式序/跨表同批），**0.5.3 真机手测**（① 六波三件：跨机缩进压制[正文样式带首行缩进的文档里格内写 0 后 Word 打开无缩进]/格内样式/ppr 下钻寻址；② 0.5.2 遗留：merge/split[结构重构最高危] + 五波样式定义投影自洽 + word_style_profile 全链路[口头偏好→审批卡→yaml 落块→下回合 prompt 生效]；③ 0.5.0 遗留：set_format/set_style/set_ppr_element Word 打开验收、DB 诊断复跑 5.7%→<2%、风格预设手测；2026-08-26 跨机初测表格样式/边框/字体已绿；WPS 样本仍缺）、视觉适配/KB watcher/自动续写生产手测、proposal Phase 2（MCP 域）、V5 钩子未用未测、Word 后续波（TOC/图片/条件批量替换）
 - **预算诚实化不变式（0.3.9）**：新 provider usage 必须归一规范语义（prompt=总输入含命中、cached≤prompt；Anthropic 显式归一 + stream_consumer `into_canonical` 自愈兜底）；工具列表出口恒按名序（前缀缓存前提，勿回退）；DeepSeek 私有对优先于标准字段
 - **S1 真机验收 2026-08-17 四项绿**：backfill（sessions=9 events=824 failed=0 epoch_rows=0，版本标记=2）+ 恒 Derive（当日路由决策全 green diffs=0，含 backfill 会话续聊 seq 1..933 连续）+ 发图 v2 payload 无 base64（image_ref 162B 指针，本体 851KB/3.8MB 只在 messages 行；模型回复描述画面=水合进 LLM 视图实证）+ 摘要折叠 `covered_until_seq=726`/rowid=1710 双值落库
 
