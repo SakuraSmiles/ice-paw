@@ -20,6 +20,7 @@ mod docx;
 mod docx_edit;
 mod docx_inspect;
 mod docx_model;
+mod docx_pkg;
 mod docx_validate;
 mod docx_write;
 pub mod shared_templates;
@@ -63,6 +64,11 @@ pub use docx_write::{
     build_builtin_template, generate_from_template, BUILTIN_TEMPLATES, GeneratedDoc,
     MAX_WRITE_BLOCKS, WriteBlock,
 };
+
+// docx 包级增补通道（D18 十波）：图片 media/rels/CT/settings 只增补 + 图片装载
+// 校验。load_image/ImagePayload 供 mcp::docx_tool 工具壳；其余 zip 层编排件
+// （plan_package_additions / repack_package / XML 构造）为 doc 子模块内部细节。
+pub use docx_pkg::{load_image, ImagePayload, MAX_IMAGE_BYTES};
 
 /// 从一个文档中提取出的结果。
 #[derive(Debug, Clone)]
