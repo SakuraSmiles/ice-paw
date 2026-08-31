@@ -21,9 +21,10 @@ use serde::{Deserialize, Serialize};
 use crate::error::{AppError, AppResult};
 use crate::harness::doc::{
     apply_edits_to_bytes_locked, apply_numbering_edits_to_bytes, apply_style_edits_to_bytes,
-    build_builtin_template, generate_from_template, inspect_document, validate_document,
-    AssertSpec, BUILTIN_TEMPLATES, EditOp, InspectProjection, InspectRequest, MAX_WRITE_BLOCKS,
-    NumberingEditOp, StyleContainer, StyleEditOp, StyleType, ValidateReport, WriteBlock,
+    build_builtin_template, generate_from_template, inspect_document, load_image,
+    validate_document, AssertSpec, BUILTIN_TEMPLATES, EditOp, InspectProjection, InspectRequest,
+    MAX_WRITE_BLOCKS, NumberingEditOp, StyleContainer, StyleEditOp, StyleType, ValidateReport,
+    WriteBlock,
 };
 
 use super::client::{McpClient, ToolContext};
@@ -293,6 +294,11 @@ impl McpClient for ValidateDocxTool {
          (multi-paragraph cells join with \\n; block/row/cell addressing identical to \
          projection=table; a vMerge continuation cell fails with a pointer to its \
          merge head). kind=cell_paragraph_count: paragraph count inside one cell. \
+         kind=block_image: paragraph image count (omit equals for 'has ≥1 image'; \
+         matches the [图片×N] projection suffix; paragraph blocks only). \
+         kind=block_field: paragraph field instructions must contain this substring \
+         (e.g. 'TOC', 'PAGE'; matches the [域:…] projection suffix; paragraph blocks \
+         only). \
          An assertion failure is a NORMAL result (passed=false plus per-assertion \
          expected-vs-actual details), not a tool error; out-of-range block/row/cell \
          addresses are per-assertion failures showing the actual extent. Usage \
@@ -380,6 +386,24 @@ impl McpClient for ValidateDocxTool {
                                     "equals": { "type": "integer", "description": "Expected paragraph count inside the cell." }
                                 },
                                 "required": ["kind", "block", "row", "cell", "equals"]
+                            },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "kind": { "const": "block_image" },
+                                    "block": { "type": "integer", "description": "Paragraph block number (1-based)." },
+                                    "equals": { "type": "integer", "description": "Expected image count in the paragraph; omit to assert 'has at least one image'." }
+                                },
+                                "required": ["kind", "block"]
+                            },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "kind": { "const": "block_field" },
+                                    "block": { "type": "integer", "description": "Paragraph block number (1-based)." },
+                                    "instr_contains": { "type": "string", "description": "Substring that must appear in the paragraph's field instructions (e.g. 'TOC')." }
+                                },
+                                "required": ["kind", "block", "instr_contains"]
                             }
                         ]
                     }
@@ -442,7 +466,8 @@ pub struct EditDocxTool;
 struct EditDocxArgs {
     path: String,
     /// 操作批（全有或全无；段级操作每块限一个——例外：同锚块可挂多条
-    /// insert_paragraph_after 按序链式插入；表格操作（set_cell_text /
+    /// insert_paragraph_after / insert_image_after / insert_toc_after 按序链式插入；
+    /// 表格操作（set_cell_text /
     /// insert_table_row_after / set_cell_format / set_table_element）可同块多条
     /// 按序组合，且**跨表格块也可同批**（一次给多张表挂同一属性）——同格内
     /// set_table_element 按元素去重（不同元素可组合），内容/格式手术每格限一条；
@@ -510,6 +535,28 @@ enum OperationSpec {
         header: Option<bool>,
         #[serde(default)]
         table_style: Option<String>,
+    },
+    /// 锚块后插入图片（D18 十波）：image_path = 图片文件路径（绝对，或相对
+    /// agent workspace；png/jpg，≤10MiB）；width_mm 显式宽（毫米，钳版心；
+    /// 缺省 min(原生像素宽, 版心) 不放大小图，高等比）。同锚可与
+    /// insert_paragraph_after / insert_toc_after 链式同批（按输入序）
+    InsertImageAfter {
+        block: usize,
+        expect_prefix: String,
+        image_path: String,
+        #[serde(default)]
+        width_mm: Option<f64>,
+    },
+    /// 锚块后插入 TOC 目录域（D18 十波）：levels 1-9（目录收录的标题深度，缺省
+    /// 3）；hyperlink 目录项超链接（缺省 true）。settings 自动置 updateFields——
+    /// Word 打开即刷新目录；WPS 不保证（需全选后 F9，域缓存首刷前显示占位文案）
+    InsertTocAfter {
+        block: usize,
+        expect_prefix: String,
+        #[serde(default)]
+        levels: Option<u32>,
+        #[serde(default)]
+        hyperlink: Option<bool>,
     },
     /// 改单元格文本：(row, cell) 双 1-based，与 projection=table 网格同口径；
     /// 保 tcPr / 首段 pPr / 首 run rPr；\n = 格内多段
@@ -779,9 +826,10 @@ enum FamilyOp {
 }
 
 /// 参数态 → 引擎态的族路由转换。固有方法而非 From：rows_text 解析可失败
-/// （D15 八波③），From 签名装不下 Err。
+/// （D15 八波③）、图片装载可失败（D18 十波），From 签名装不下 Err。
+/// `workspace`（D18）：insert_image_after 相对图片路径的解析锚（绝对路径直读）。
 impl OperationSpec {
-    fn into_family(self) -> AppResult<FamilyOp> {
+    fn into_family(self, workspace: Option<&str>) -> AppResult<FamilyOp> {
         Ok(match self {
             // ---- document 族 ----
             OperationSpec::ReplaceText { block, expect_prefix, new_text } => {
@@ -810,6 +858,29 @@ impl OperationSpec {
             OperationSpec::InsertTableAfter { block, expect_prefix, rows, rows_text, header, table_style } => {
                 let rows = resolve_table_rows(rows, rows_text)?;
                 FamilyOp::Doc(EditOp::InsertTableAfter { block, expect_prefix, rows, header, table_style })
+            }
+            OperationSpec::InsertImageAfter { block, expect_prefix, image_path, width_mm } => {
+                // 图片装载（读侧第二路径：只读不授权 + 格式/大小闸在装载层）
+                let image = load_image(&image_path, workspace)?;
+                FamilyOp::Doc(EditOp::InsertImageAfter {
+                    block,
+                    expect_prefix,
+                    image,
+                    width_mm,
+                    // 注入占位——zip 层编排统一分配覆盖（引擎唯一写入点）
+                    rid: String::new(),
+                    cx_emu: 0,
+                    cy_emu: 0,
+                    docpr_id: 0,
+                })
+            }
+            OperationSpec::InsertTocAfter { block, expect_prefix, levels, hyperlink } => {
+                FamilyOp::Doc(EditOp::InsertTocAfter {
+                    block,
+                    expect_prefix,
+                    levels: levels.unwrap_or(3),
+                    hyperlink: hyperlink.unwrap_or(true),
+                })
             }
             OperationSpec::SetCellText { block, expect_prefix, row, cell, text } => {
                 FamilyOp::Doc(EditOp::SetCellText { block, expect_prefix, row, cell, text })
@@ -1045,7 +1116,19 @@ impl McpClient for EditDocxTool {
          element, xml=<w:...> fragment replaces/inserts it at its schema position (copy \
          the current XML from inspect_docx projection=ppr, never write from memory; if \
          removing numPr while the style chain still defines numbering, the result warns \
-         that Word falls back to the style's numbers). Table operations: \
+         that Word falls back to the style's numbers). Media & TOC ops: \
+         op=insert_image_after inserts a picture after the anchor block (image_path = \
+         absolute path or path relative to the workspace, png/jpg up to 10 MiB; \
+         width_mm optional explicit width in mm clamped to the page content width — \
+         default is min(native pixel width, content width), never upscaling small \
+         images, height keeps aspect ratio; the image bytes are embedded into the \
+         package, the source file is only read); op=insert_toc_after inserts a \
+         table-of-contents field after the anchor block (levels 1-9 = heading depth \
+         collected, default 3; hyperlink=true links TOC entries; the document's \
+         settings get updateFields=true so Word refreshes the TOC on open — WPS may \
+         not: select-all + F9 there; until first refresh the field shows a \
+         placeholder line). Both chain with insert_paragraph_after on the same \
+         anchor in input order within one batch. Table operations: \
          op=insert_table_after creates a new table after an anchor block from a \
          rectangular rows matrix (first row is a bold repeating header by default; \
          100% width, all borders, evenly split columns) — or from rows_text, a \
@@ -1145,7 +1228,8 @@ impl McpClient for EditDocxTool {
                     "description": "Operations applied as one all-or-nothing batch. \
                      Each item is tagged with op; block numbers come from inspect_docx. \
                      Composition: table ops on different table blocks share one batch; \
-                     several insert_paragraph_after ops on the same anchor chain in order; \
+                     several insert_paragraph_after / insert_image_after / \
+                     insert_toc_after ops on the same anchor chain in input order; \
                      merge_cells / split_cell / delete_table_row must each be the only op \
                      on its table block.",
                     "items": {
@@ -1266,6 +1350,30 @@ impl McpClient for EditDocxTool {
                                 },
                                 "required": ["op", "block", "expect_prefix"],
                                 "description": "Create a new table after the anchor block. Cell data comes from rows (structured matrix; supports multi-paragraph cells) OR rows_text (Markdown/TSV text the platform parses; single-paragraph cells — the value-first form when nested JSON is error-prone). For house-template look pass table_style (a @w:type=table style — pick from inspect_docx projection=styles) so borders/shading/row banding follow the style; without it the table is plain: 100% width, single borders, evenly split columns, bold repeating header row."
+                            },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "op": { "const": "insert_image_after" },
+                                    "block": { "type": "integer", "description": "Anchor block (1-based); the picture paragraph becomes the next block." },
+                                    "expect_prefix": { "type": "string", "description": "Current text prefix of the anchor block (fingerprint guard)." },
+                                    "image_path": { "type": "string", "description": "Picture file path: absolute, or relative to the workspace. png/jpg, up to 10 MiB. The source file is only read (never modified); bytes are embedded into the docx package." },
+                                    "width_mm": { "type": "number", "description": "Optional explicit width in millimeters, clamped to the page content width. Default: min(native pixel width, content width) — small images are never upscaled; height always keeps aspect ratio." }
+                                },
+                                "required": ["op", "block", "expect_prefix", "image_path"],
+                                "description": "Insert a picture after the anchor block. Chains with insert_paragraph_after / insert_toc_after on the same anchor in input order within one batch. The new block shows as [图片×1] in inspect_docx outline/text projections."
+                            },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "op": { "const": "insert_toc_after" },
+                                    "block": { "type": "integer", "description": "Anchor block (1-based) — usually the document title; the TOC field becomes the next block." },
+                                    "expect_prefix": { "type": "string", "description": "Current text prefix of the anchor block (fingerprint guard)." },
+                                    "levels": { "type": "integer", "minimum": 1, "maximum": 9, "description": "Heading depth collected into the TOC (default 3: headings 1-3)." },
+                                    "hyperlink": { "type": "boolean", "description": "true (default): TOC entries hyperlink to sections." }
+                                },
+                                "required": ["op", "block", "expect_prefix"],
+                                "description": "Insert a table-of-contents field after the anchor block. The document's settings get updateFields=true so Word refreshes the TOC automatically on open; WPS may not — select all and press F9 there. Until first refresh the field shows a placeholder line instead of page numbers. TOC entries come from heading styles (write_docx headings / 标题 N styles)."
                             },
                             {
                                 "type": "object",
@@ -1471,6 +1579,20 @@ impl McpClient for EditDocxTool {
     }
 
     async fn execute(&self, args: &str) -> AppResult<String> {
+        // dispatch 统一走 execute_with_context（图片相对路径解析需要 workspace）；
+        // 直调 execute 的旧路径（测试/无头）可用，图片相对路径会在装载层报
+        // 「无 workspace」并指路绝对路径
+        self.run(args, None).await
+    }
+
+    async fn execute_with_context(&self, args: &str, ctx: &ToolContext) -> AppResult<String> {
+        self.run(args, ctx.workspace.as_deref()).await
+    }
+}
+
+impl EditDocxTool {
+    /// 双入口共体：workspace 注入图片相对路径解析锚（None = 无头/测试直调）。
+    async fn run(&self, args: &str, workspace: Option<&str>) -> AppResult<String> {
         let parsed: EditDocxArgs = serde_json::from_str(args)
             .map_err(|e| AppError::Validation(format!("edit_docx 参数解析失败: {e}")))?;
 
@@ -1523,7 +1645,7 @@ impl McpClient for EditDocxTool {
         let mut style_ops: Vec<StyleEditOp> = Vec::new();
         let mut numbering_ops: Vec<NumberingEditOp> = Vec::new();
         for spec in parsed.operations {
-            match spec.into_family()? {
+            match spec.into_family(workspace)? {
                 FamilyOp::Doc(op) => doc_ops.push(op),
                 FamilyOp::Style(op) => style_ops.push(op),
                 FamilyOp::Numbering(op) => numbering_ops.push(op),
@@ -1620,7 +1742,7 @@ struct WriteDocxArgs {
     /// 同名文件优先于内置档位）| 任意 .docx 绝对路径。缺省 "report"。
     #[serde(default)]
     template: Option<String>,
-    /// 内容块序列（heading / paragraph / table）
+    /// 内容块序列（heading / paragraph / table / toc / image）
     blocks: Vec<WriteBlockSpec>,
 }
 
@@ -1651,6 +1773,20 @@ enum WriteBlockSpec {
         #[serde(default)]
         style: Option<String>,
     },
+    /// TOC 目录域（D18 十波）：levels/hyperlink 缺省 3/true
+    Toc {
+        #[serde(default)]
+        levels: Option<u32>,
+        #[serde(default)]
+        hyperlink: Option<bool>,
+    },
+    /// 图片段（D18 十波）：path 相对 workspace 或绝对；width_mm 显式宽（缺省
+    /// min(原生, 版心) 不放大，等比高）
+    Image {
+        path: String,
+        #[serde(default)]
+        width_mm: Option<f64>,
+    },
 }
 
 #[derive(Serialize)]
@@ -1662,6 +1798,10 @@ struct WriteDocxResult {
     blocks: usize,
     paragraphs: usize,
     tables: usize,
+    /// 图片块数（D18 十波）
+    images: usize,
+    /// TOC 域块数（D18 十波）
+    tocs: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     backup: Option<String>,
     bytes: usize,
@@ -1796,8 +1936,8 @@ impl McpClient for WriteDocxTool {
         "Create a new .docx document from a template in ONE call — the preferred way to \
          produce Word files. The template's styles / numbering / page setup are preserved \
          verbatim, its body is cleared, your blocks are written in order, and a built-in \
-         self-check verifies every block (text and table shape) BEFORE anything is written \
-         to disk. Template resolution: a relative name is looked up first under the agent \
+         self-check verifies every block (text, table shape, image/TOC fields) BEFORE \
+         anything is written to disk. Template resolution: a relative name is looked up first under the agent \
          workspace templates/ directory (house templates), then in the app's SHARED \
          templates folder (ships with 'formal-report.docx' — formal report styles: \
          4-level headings, table/list styles, classified-mark header + page-number \
@@ -1813,11 +1953,17 @@ impl McpClient for WriteDocxTool {
          paragraphs, send multiple blocks; omit style for the template body default), \
          {type:'table', rows_text | rows, header=true, style?} (rows_text value-first: a \
          Markdown table or TSV; rows structured, where \\n inside a cell = multiple \
-         paragraphs in that cell). Single-section templates only (multi-section templates \
+         paragraphs in that cell), {type:'toc', levels? 1-9 default 3, hyperlink? default \
+         true} (a table-of-contents FIELD placed after the title heading — settings get \
+         updateFields=true so Word refreshes it on open; WPS may need select-all + F9, a \
+         placeholder line tells the reader), {type:'image', path, width_mm?} (embeds a \
+         picture; png/jpg up to 10 MiB; path absolute or workspace-relative; width_mm \
+         clamped to content width and never upscaled, height keeps aspect ratio). \
+         Single-section templates only (multi-section templates \
          are rejected — for those use copy_file + edit_docx clear_body). The target's \
          parent directory is created if missing; an existing file at the target is backed \
-         up to .icepaw-backup/ then replaced atomically. Result reports paragraphs/tables \
-         counts and check:'passed' — inspect_docx the result only if you need structure \
+         up to .icepaw-backup/ then replaced atomically. Result reports paragraphs/tables/\
+         images/tocs counts and check:'passed' — inspect_docx the result only if you need structure \
          details."
     }
 
@@ -1868,6 +2014,24 @@ impl McpClient for WriteDocxTool {
                                     "style": { "type": "string", "description": "Optional table style display name or ID from the template; omit for the default grid." }
                                 },
                                 "required": ["type"]
+                            },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "type": { "const": "toc" },
+                                    "levels": { "type": "integer", "minimum": 1, "maximum": 9, "description": "Heading depth included in the TOC (1-9). Default 3." },
+                                    "hyperlink": { "type": "boolean", "description": "TOC entries clickable. Default true." }
+                                },
+                                "required": ["type"]
+                            },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "type": { "const": "image" },
+                                    "path": { "type": "string", "description": "Image file path: absolute, or relative to the agent workspace. png/jpg/jpeg up to 10 MiB. Read-only — the bytes are embedded into the document." },
+                                    "width_mm": { "type": "number", "description": "Display width in millimeters. Clamped to the template content width; never upscaled. Omit for min(native, content width); height keeps aspect ratio." }
+                                },
+                                "required": ["type", "path"]
                             }
                         ]
                     }
@@ -1946,6 +2110,18 @@ impl McpClient for WriteDocxTool {
                         table_style: style,
                     });
                 }
+                WriteBlockSpec::Toc { levels, hyperlink } => {
+                    blocks.push(WriteBlock::Toc {
+                        levels: levels.unwrap_or(3),
+                        hyperlink: hyperlink.unwrap_or(true),
+                    });
+                }
+                WriteBlockSpec::Image { path, width_mm } => {
+                    // 图片装载（读侧第二路径：同 template 先例只读不授权；
+                    // 相对路径挂 ctx.workspace——run 侧与模板解析同锚）
+                    let image = load_image(&path, ctx.workspace.as_deref())?;
+                    blocks.push(WriteBlock::Image { image, width_mm });
+                }
             }
         }
 
@@ -1995,6 +2171,8 @@ impl McpClient for WriteDocxTool {
             blocks: blocks.len(),
             paragraphs: generated.paragraphs,
             tables: generated.tables,
+            images: generated.images,
+            tocs: generated.tocs,
             backup,
             bytes: generated.bytes.len(),
             check: "passed",
@@ -2834,7 +3012,7 @@ mod tests {
         // 未知块型（serde tag 拒）→ 参数解析失败
         let args = serde_json::json!({
             "path": dir.join("d.docx").to_string_lossy(),
-            "blocks": [ { "type": "image", "text": "x" } ]
+            "blocks": [ { "type": "video", "text": "x" } ]
         })
         .to_string();
         let err = WriteDocxTool
@@ -2843,6 +3021,231 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("参数解析失败"), "实际: {err}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // =========================================================================
+    // toc/image 块 + insert 两操作（D18 十波③ 工具层）
+    // =========================================================================
+
+    /// 造一张真实 PNG（image crate 编码，10×6 纯色）——装载层格式/尺寸探测实弹。
+    fn tiny_png() -> Vec<u8> {
+        let img = image::RgbaImage::from_pixel(10, 6, image::Rgba([180, 60, 60, 255]));
+        let mut buf = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut buf, image::ImageFormat::Png)
+            .unwrap();
+        buf.into_inner()
+    }
+
+    /// 读 zip 内某文本部件（缺失返 None）。
+    fn zip_part(bytes: &[u8], name: &str) -> Option<String> {
+        use std::io::Read;
+        let mut a = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut f = match a.by_name(name) {
+            Ok(f) => f,
+            Err(_) => return None,
+        };
+        let mut s = String::new();
+        f.read_to_string(&mut s).unwrap();
+        Some(s)
+    }
+
+    /// zip 内部件存在性（二进制件如 media 只探不读）。
+    fn zip_has(bytes: &[u8], name: &str) -> bool {
+        zip::ZipArchive::new(std::io::Cursor::new(bytes))
+            .unwrap()
+            .by_name(name)
+            .is_ok()
+    }
+
+    #[tokio::test]
+    async fn write_docx_toc_and_image_blocks() {
+        let dir = std::env::temp_dir().join("icepaw_write_docx_tocimg");
+        std::fs::remove_dir_all(&dir).ok();
+        let ws = dir.join("ws");
+        std::fs::create_dir_all(ws.join("figs")).unwrap();
+        let png = tiny_png();
+        std::fs::write(ws.join("figs").join("图1.png"), &png).unwrap();
+        let file = dir.join("报告.docx");
+
+        // image 相对路径挂 workspace；toc 缺省 levels=3/hyperlink=true
+        let args = serde_json::json!({
+            "path": file.to_string_lossy(),
+            "blocks": [
+                { "type": "heading", "level": 1, "text": "系统报告" },
+                { "type": "toc", "levels": 3 },
+                { "type": "image", "path": "figs/图1.png", "width_mm": 120 },
+                { "type": "paragraph", "text": "部署完成。" }
+            ]
+        })
+        .to_string();
+        let ctx = write_ctx(Some(ws.to_string_lossy().to_string())).await;
+        let out = WriteDocxTool
+            .execute_with_context(&args, &ctx)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["images"], 1, "{out}");
+        assert_eq!(v["tocs"], 1, "{out}");
+        assert_eq!(v["check"], "passed", "{out}");
+
+        // 产物：media 字节全等 + settings updateFields（内置 report 无 settings →
+        // 新建路径）+ 读回投影域/图片标记可见（治「空段」盲区）
+        let bytes = std::fs::read(&file).unwrap();
+        let media = {
+            use std::io::Read;
+            let mut a = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+            let mut m = Vec::new();
+            a.by_name("word/media/image1.png").unwrap().read_to_end(&mut m).unwrap();
+            m
+        };
+        assert_eq!(media, png, "media 部件应与源文件字节全等");
+        assert!(
+            zip_part(&bytes, "word/settings.xml")
+                .unwrap()
+                .contains("updateFields"),
+            "settings 应自动置 updateFields"
+        );
+        let text = read_back_text(&bytes);
+        assert!(text.contains("[域:TOC]"), "{text}");
+        assert!(text.contains("[图片×1]"), "{text}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn edit_docx_insert_image_and_toc() {
+        let dir = std::env::temp_dir().join("icepaw_edit_tocimg");
+        std::fs::remove_dir_all(&dir).ok();
+        let ws = dir.join("ws");
+        std::fs::create_dir_all(ws.join("figs")).unwrap();
+        let png = tiny_png();
+        std::fs::write(ws.join("figs").join("fig.png"), &png).unwrap();
+        let file = dir.join("t.docx");
+        std::fs::write(&file, anchored_docx()).unwrap();
+
+        // 同批图 + TOC（doc 族混排合法）；image 相对路径挂 ctx.workspace
+        let args = serde_json::json!({
+            "path": file.to_string_lossy(),
+            "operations": [
+                { "op": "insert_image_after", "block": 1, "expect_prefix": "锚段",
+                  "image_path": "figs/fig.png" },
+                { "op": "insert_toc_after", "block": 1, "expect_prefix": "锚段", "levels": 2 }
+            ]
+        })
+        .to_string();
+        let ctx = write_ctx(Some(ws.to_string_lossy().to_string())).await;
+        let out = EditDocxTool
+            .execute_with_context(&args, &ctx)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["applied"], 2, "{out}");
+
+        let bytes = std::fs::read(&file).unwrap();
+        assert!(zip_has(&bytes, "word/media/image1.png"), "media 应入包");
+        assert!(
+            zip_part(&bytes, "word/settings.xml")
+                .unwrap()
+                .contains("updateFields")
+        );
+        let text = read_back_text(&bytes);
+        assert!(text.contains("[域:TOC]"), "{text}");
+        assert!(text.contains("[图片×1]"), "{text}");
+
+        // 直调 execute（无 workspace）+ 相对路径 → 图片无效 + 指路绝对路径
+        let file2 = dir.join("t2.docx");
+        std::fs::write(&file2, anchored_docx()).unwrap();
+        let args = serde_json::json!({
+            "path": file2.to_string_lossy(),
+            "operations": [ { "op": "insert_image_after", "block": 1,
+                              "expect_prefix": "锚段", "image_path": "figs/fig.png" } ]
+        })
+        .to_string();
+        let err = EditDocxTool.execute(&args).await.unwrap_err().to_string();
+        assert!(err.contains("图片无效"), "实际: {err}");
+        assert!(err.contains("绝对路径"), "应指路绝对路径: {err}");
+
+        // schema 披露抽查：两操作进 edit schema、两块型进 write schema
+        let p = EditDocxTool.parameters().to_string();
+        assert!(p.contains("insert_image_after"), "edit schema 缺插图操作");
+        assert!(p.contains("insert_toc_after"), "edit schema 缺 TOC 操作");
+        let p = WriteDocxTool.parameters().to_string();
+        assert!(p.contains(r#""const":"toc""#), "write schema 缺 toc 块");
+        assert!(p.contains(r#""const":"image""#), "write schema 缺 image 块");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn validate_docx_image_and_field_assertions() {
+        // write_docx 全链造带域带图的文档（heading=1 toc=2 image=3）
+        let dir = std::env::temp_dir().join("icepaw_validate_tocimg");
+        std::fs::remove_dir_all(&dir).ok();
+        let ws = dir.join("ws");
+        std::fs::create_dir_all(ws.join("figs")).unwrap();
+        std::fs::write(ws.join("figs").join("f.png"), tiny_png()).unwrap();
+        let file = dir.join("v.docx");
+        let args = serde_json::json!({
+            "path": file.to_string_lossy(),
+            "blocks": [
+                { "type": "heading", "level": 1, "text": "标题" },
+                { "type": "toc" },
+                { "type": "image", "path": "figs/f.png" }
+            ]
+        })
+        .to_string();
+        let ctx = write_ctx(Some(ws.to_string_lossy().to_string())).await;
+        WriteDocxTool
+            .execute_with_context(&args, &ctx)
+            .await
+            .unwrap();
+
+        let tool = ValidateDocxTool;
+        let args = serde_json::json!({
+            "path": file.to_string_lossy(),
+            "assertions": [
+                { "kind": "block_image", "block": 3, "equals": 1 },
+                { "kind": "block_field", "block": 2, "instr_contains": "TOC" },
+                { "kind": "block_field", "block": 3, "instr_contains": "TOC" },
+                { "kind": "block_image", "block": 1 },
+                { "kind": "block_image", "block": 99 }
+            ]
+        })
+        .to_string();
+        let out = tool.execute(&args).await.unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        // 失败 = 正常数据：块 3 是图非域、块 1 标题段无图、块 99 越界
+        assert_eq!(v["passed"], false, "{out}");
+        assert_eq!(v["total"], 5);
+        assert_eq!(v["failed"], 3, "{out}");
+        let kinds: Vec<&str> = v["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["kind"].as_str().unwrap())
+            .collect();
+        assert_eq!(kinds, ["block_field", "block_image", "block_image"], "{out}");
+
+        // 全过形态：存在性（省 equals）+ 子串两 kind 进摘要
+        let args = serde_json::json!({
+            "path": file.to_string_lossy(),
+            "assertions": [
+                { "kind": "block_image", "block": 3 },
+                { "kind": "block_field", "block": 2, "instr_contains": "TOC" }
+            ]
+        })
+        .to_string();
+        let out = tool.execute(&args).await.unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["passed"], true, "{out}");
+        let kinds: Vec<&str> = v["passed_kinds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|k| k.as_str().unwrap())
+            .collect();
+        let kinds = kinds.join(",");
+        assert!(kinds.contains("block_image") && kinds.contains("block_field"), "{out}");
         std::fs::remove_dir_all(&dir).ok();
     }
 }

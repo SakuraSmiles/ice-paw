@@ -81,15 +81,46 @@ mod tests {
 
     /// 资产健康度闸：每份种子必须能过生成引擎全链（清空→锚→写块→自检）。
     /// 模板资产被误改（如手工编辑损坏）时 CI 在此红，而非真机 Word 打不开。
+    /// 块覆盖五变体（heading/toc/image/paragraph/table）——toc/image 顺路证明
+    /// 真模板接受包级增补（settings updateFields + media/rels/CT）。
     #[test]
     fn seeds_digest_through_generation_engine() {
+        let img = super::super::ImagePayload {
+            bytes: vec![0x89, b'P', b'N', b'G', 0, 0, 0, 0],
+            width_px: 100,
+            height_px: 50,
+            ext: "png",
+        };
         for (name, bytes) in SHARED_TEMPLATE_SEEDS {
-            let blocks = vec![super::super::WriteBlock::Heading {
-                level: 1,
-                text: "样式自检".into(),
-            }];
+            let blocks = vec![
+                super::super::WriteBlock::Heading {
+                    level: 1,
+                    text: "样式自检".into(),
+                },
+                super::super::WriteBlock::Toc {
+                    levels: 3,
+                    hyperlink: true,
+                },
+                super::super::WriteBlock::Image {
+                    image: img.clone(),
+                    width_mm: None,
+                },
+                super::super::WriteBlock::Paragraph {
+                    text: "正文自检".into(),
+                    style: None,
+                },
+                super::super::WriteBlock::Table {
+                    rows: vec![vec!["列甲".into(), "列乙".into()]],
+                    header: Some(true),
+                    table_style: None,
+                },
+            ];
             match super::super::generate_from_template(bytes, &blocks) {
-                Ok(doc) => assert_eq!(doc.paragraphs, 1, "{name}"),
+                Ok(doc) => {
+                    assert_eq!(doc.paragraphs, 2, "{name}");
+                    assert_eq!(doc.images, 1, "{name}");
+                    assert_eq!(doc.tocs, 1, "{name}");
+                }
                 Err(e) => panic!("{name} 未过生成引擎: {e}"),
             }
         }

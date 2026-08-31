@@ -113,12 +113,10 @@ pub(super) fn probe_image(bytes: Vec<u8>) -> AppResult<ImagePayload> {
 // 包级增补计划（扫原包定名 → 只增补）
 // =========================================================================
 
-/// 单图分配结果（zip 层编排注入回 EditOp 的 rId / media 名）。
+/// 单图分配结果（zip 层编排注入回 EditOp 的 rId；media 名已在本计划内消费）。
 #[derive(Debug)]
 pub(super) struct ImageAlloc {
     pub rid: String,
-    /// zip 内完整路径（如 `word/media/image4.png`）
-    pub media_name: String,
 }
 
 /// 包级增补计划：replacements = 替换的文本部件（原 entry 必须存在）；appends =
@@ -181,7 +179,7 @@ pub(super) fn plan_package_additions(
         for name in &names {
             let Some(rest) = name.strip_prefix("word/media/image") else { continue };
             let digits_end = rest.find('.').unwrap_or(rest.len());
-            if let Some(n) = rest[..digits_end].parse::<u32>().ok() {
+            if let Ok(n) = rest[..digits_end].parse::<u32>() {
                 max_k = max_k.max(n);
             }
         }
@@ -200,7 +198,7 @@ pub(super) fn plan_package_additions(
             let media_name = loop {
                 let cand = format!("word/media/image{next_k}.{}", img.ext);
                 next_k += 1;
-                if !names.iter().any(|n| *n == cand) {
+                if !names.contains(&cand) {
                     break cand;
                 }
             };
@@ -209,7 +207,7 @@ pub(super) fn plan_package_additions(
                 media_name.strip_prefix("word/").unwrap_or(&media_name),
             ));
             additions.appends.push((media_name.clone(), img.bytes.clone()));
-            allocs.push(ImageAlloc { rid, media_name });
+            allocs.push(ImageAlloc { rid });
         }
         let extended = append_before_close(&rels, "</Relationships>", &new_rels)?;
         additions
@@ -683,9 +681,7 @@ mod tests {
         let (allocs, additions) =
             plan_package_additions(&doc, &refs(&[png_payload(2, 2), png_payload(2, 2)]), false).unwrap();
         assert_eq!(allocs[0].rid, "rId6");
-        assert_eq!(allocs[0].media_name, "word/media/image4.png");
         assert_eq!(allocs[1].rid, "rId7");
-        assert_eq!(allocs[1].media_name, "word/media/image5.png");
         // rels 替换件：原两条 Relationship 原样 + 新两条 image 关系
         let rels_new = additions
             .replacements
@@ -970,7 +966,8 @@ mod tests {
         let bytes1 = img1.bytes.clone();
         let (allocs1, add1) = plan_package_additions(&doc, &[&img1], false).unwrap();
         let out1 = repack_package(&doc, &add1.replacements, &add1.appends).unwrap();
-        assert_eq!(allocs1[0].media_name, "word/media/image1.png");
+        assert_eq!(allocs1[0].rid, "rId6");
+        assert_eq!(add1.appends[0].0, "word/media/image1.png");
         assert_eq!(read_part(&out1, "word/media/image1.png"), bytes1);
         assert!(part_exists(&out1, "word/media/image1.png"));
 
@@ -979,7 +976,7 @@ mod tests {
         let bytes2 = img2.bytes.clone();
         let (allocs2, add2) = plan_package_additions(&out1, &[&img2], false).unwrap();
         assert_eq!(allocs2[0].rid, "rId7");
-        assert_eq!(allocs2[0].media_name, "word/media/image2.png");
+        assert_eq!(add2.appends[0].0, "word/media/image2.png");
         let out2 = repack_package(&out1, &add2.replacements, &add2.appends).unwrap();
         assert_eq!(read_part(&out2, "word/media/image1.png"), bytes1, "第一张图字节不动");
         assert_eq!(read_part(&out2, "word/media/image2.png"), bytes2);
