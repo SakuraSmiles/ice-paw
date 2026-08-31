@@ -454,7 +454,27 @@ pub(crate) async fn run_agent_turn(
             .enabled_tools
             .as_deref()
             .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok());
-        let snap = filter_tools_by_allowlist(env.global_registry.snapshot().await, allow.as_deref());
+        let snap = env.global_registry.snapshot().await;
+        // 治「看不见」：收窄生效时披露被裁名单（排障第一线索——2026-08-31 生产
+        // 实案：旧白名单升级激活致工具静默缺失，无任何日志线索两轮才定位）。
+        // 每回合一条、名单稳定时内容恒定，低噪；配 L2「状态上屏」哲学非 L3。
+        if let Some(list) = allow.as_deref().filter(|v| !v.is_empty()) {
+            let dropped: Vec<&str> = snap
+                .keys()
+                .map(String::as_str)
+                .filter(|n| !list.iter().any(|a| a == n) && !PLATFORM_TOOLS.contains(n))
+                .collect();
+            tracing::info!(
+                target: "ice_paw.chat",
+                "工具收窄生效: agent={} 名单 {} 项 → 保留 {} / 裁掉 {} [{}]",
+                agent.id,
+                list.len(),
+                snap.len() - dropped.len(),
+                dropped.len(),
+                dropped.join(", ")
+            );
+        }
+        let snap = filter_tools_by_allowlist(snap, allow.as_deref());
         let reg = McpRegistry::from_map(snap);
 
         // MA-1：delegate 工具按会话类型注册——只有用户会话（kind='chat'）可发起
@@ -831,18 +851,19 @@ pub(crate) fn inject_into_system(
     }
 }
 
-/// ②-3：enabled_tools 名单过滤（纯函数）——非空名单 = 名单 ∪ 平台元工具；
-/// 空 / None = 原样全量（系统约定：空 ≡ 全开，与提案 guard / 出生模板同一判定）。
-///
 /// 平台元工具（`propose_config_change` / `read_agent_config` / `delegate_to_agent`）
 /// 恒保留：它们是平台能力而非领域工具，收窄不应切断 agent 的自我配置与委派
-/// （delegate 在组装期按 conv.kind 注册，此处过滤兜底全局注册表可能含它的场景）。
+/// （delegate 在组装期按 conv.kind 注册，filter 兜底全局注册表可能含它的场景）。
+/// 模块级：组装期收窄披露日志与 filter 共用同一份名单。
+const PLATFORM_TOOLS: &[&str] =
+    &["propose_config_change", "read_agent_config", "delegate_to_agent"];
+
+/// ②-3：enabled_tools 名单过滤（纯函数）——非空名单 = 名单 ∪ 平台元工具；
+/// 空 / None = 原样全量（系统约定：空 ≡ 全开，与提案 guard / 出生模板同一判定）。
 fn filter_tools_by_allowlist(
     snap: std::collections::HashMap<String, Arc<dyn McpClient>>,
     allow: Option<&[String]>,
 ) -> std::collections::HashMap<String, Arc<dyn McpClient>> {
-    const PLATFORM_TOOLS: &[&str] =
-        &["propose_config_change", "read_agent_config", "delegate_to_agent"];
     let Some(allow) = allow.filter(|v| !v.is_empty()) else {
         return snap;
     };
