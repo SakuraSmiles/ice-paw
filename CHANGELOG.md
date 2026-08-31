@@ -4,6 +4,26 @@
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-08-31
+
+> 从 0.6.0 以来的主要调整：**Word 能力三波连发**——八波验收工具与范围锁（D15）、九波 write_docx 模板优先生成（D16）、共享模板目录随包分发（D17）。
+
+### Added
+
+- **validate_docx 验收断言工具**（八波，统筹 agent 质检真空）：6 种断言（块数/表形状/块文本/块样式/格文本/格内段数），`(row,cell)` 双 1-based 与 projection=table 同口径；断言失败是数据不是错误（passed=false 正常输出，不触发失败循环检测）；越界地址=该条 fail 附实际范围；全部独立评估不短路，上限 50 条。
+- **edit_docx allowed_blocks 范围锁**：顶层 `[lo,hi]` 区间硬约束（「叮嘱别动某标题仍越界」从 agent 自觉变引擎拒绝），拒批全有或无文件逐字节不动；ClearBody 与 style/numbering 定义族不支持锁（无块号概念）。
+- **insert_table_after rows_text 值优先**：Markdown 表格/TSV 纯文本直入（弱模型嵌套 JSON 构造必败、纯文本输出是强项），`|---|` 分隔行剥离、`\|` 转义；等价 rows 输入产物逐字节相同。
+- **委派进度报告**：统筹者收到的委派结果恒带机器事实（成功工具聚合计数 + 最后失败摘要 + 涉及文件去重清单），正常完成也带——治弱模型「自认为完成」漏报；@会话名片顺路带 Word 产物。
+- **doom 连败纠正升级**：同类错误连败 3/4/5 次各注入一次纠正（此前只 3 次时一次），超限追加「停止重试 + 报告三件套」。
+- **write_docx 模板优先生成**（九波）：一次调用从模板生成完整文档（`blocks` 内容块数组：heading/paragraph/table），取代 copy_file→clear_body→逐块写 N 轮 workaround；正序锚定编排 + 生成自检不过不落盘；`template` 参数四层解析（workspace templates/ → 软件共享目录 → 内置档位 → 绝对路径）。
+- **共享模板目录**：`formal-report.docx` 正式报告模板随安装包分发，启动时落盘 `%APPDATA%\com.icepaw.app\templates\`（已存在不动、删除自动重建）；全 agent 共享，用户可直接改文件定制样式；同名文件可覆盖内置档位。
+
+### 真机测试点
+
+- 委派实战观察：弱模型产表用 rows_text 成功率对照、validate_docx 统筹质检节奏、范围锁拒批文案；
+- write_docx 真机验收：agent 用 formal-report.docx 生成报告，Word/WPS 打开排版合格；
+- 共享模板目录：安装后确认 `%APPDATA%\com.icepaw.app\templates\formal-report.docx` 存在、改样式后重启不被覆盖、删除后重启重建。
+
 ## [0.6.0] — 2026-08-31
 
 > 从 0.5.5 以来的主要调整：**Computer Use 全线**（agent 像人一样「看着屏幕操作」——看屏三件 + 操作七件 + act-and-look 附图 + 屏幕共享通道治理五步）；**视觉读取两档制重构**；**Agent 配置一致性两批**；新模型跟进（GLM-5.3 系 + DeepSeek 视觉）；通用设置页卡片分组重设计。
