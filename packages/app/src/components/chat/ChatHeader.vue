@@ -14,7 +14,7 @@
 import { ref, computed, watch, nextTick, onUnmounted } from "vue";
 import { useEscapeStack } from "../../composables/useEscapeStack";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ScreenShare, Pause, Play } from "@lucide/vue";
+import { ScreenShare } from "@lucide/vue";
 import { useChatStore }from "../../stores/chat";
 import { useAgentStore } from "../../stores/agent";
 import { useScreenChannelStore } from "../../stores/screenChannel";
@@ -197,21 +197,8 @@ async function toggleScreenShare() {
   }
 }
 
-// 暂停键（步骤 3 播放器语义）：通道 On 时出现。暂停 = 读写 gate 全部挂起
-//（截图/鼠标键盘注入暂停，通道与授权保持）；恢复 = 挂起中的操作被唤醒继续。
-const screenPauseTitle = computed(() =>
-  screenChannel.state.paused
-    ? "恢复屏幕操作：挂起中的截图与操作继续"
-    : "暂停屏幕操作：截图与鼠标键盘注入挂起（通道与授权保持，恢复后继续）",
-);
-
-async function toggleScreenPause() {
-  try {
-    await screenChannel.setPaused(!screenChannel.state.paused);
-  } catch (e) {
-    console.error("切换屏幕操作暂停失败:", e);
-  }
-}
+// 屏幕通道暂停/恢复入口住在 HUD 工具栏（用户拍板 2026-08-30：会话内只留
+// 共享开关一个按钮，暂停/终止统一进 HUD——同一命令不同入口）。
 </script>
 
 <template>
@@ -297,17 +284,6 @@ async function toggleScreenPause() {
       </button>
       <!-- 暂停屏幕操作（步骤 3）：通道 On 才出现；暂停中 Play 图标 + 语义 warning -->
       <button
-        v-if="screenChannel.isOn"
-        class="header-btn screen-pause-btn"
-        :class="{ paused: screenChannel.state.paused }"
-        :title="screenPauseTitle"
-        :disabled="screenChannel.busy"
-        @click="toggleScreenPause"
-      >
-        <Play v-if="screenChannel.state.paused" :size="16" />
-        <Pause v-else :size="16" />
-      </button>
-      <button
         class="header-btn pin-btn"
         :class="{ 'pin-hidden': confirming, pinned: chat.activeConversation?.pinned }"
         :title="chat.activeConversation?.pinned ? '取消置顶' : '置顶'"
@@ -390,11 +366,6 @@ async function toggleScreenPause() {
 .screen-btn:hover svg { color: var(--ip-color-text-primary); }
 .screen-btn.active svg { color: var(--ip-primary-500); }
 .screen-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.screen-pause-btn svg { color: var(--ip-color-text-tertiary); }
-.screen-pause-btn:hover svg { color: var(--ip-color-text-primary); }
-.screen-pause-btn.paused svg { color: var(--ip-warning-base); }
-.screen-pause-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
 /* ===== 外置星标（UX #9）：确认条展开时淡出让位（布局不动，条覆盖其上） ===== */
 .pin-btn { transition:opacity var(--ip-duration-fast) var(--ip-ease-out), background-color var(--ip-duration-fast) var(--ip-ease-out), color var(--ip-duration-fast) var(--ip-ease-out); }
 .pin-btn.pin-hidden { opacity:0; pointer-events:none; }

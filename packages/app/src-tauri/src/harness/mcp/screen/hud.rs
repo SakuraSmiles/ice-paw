@@ -21,8 +21,9 @@ use super::channel;
 pub const HUD_LABEL: &str = "screen-hud";
 pub const FRAME_LABEL: &str = "screen-frame";
 
-/// HUD 逻辑尺寸（宽×高，逻辑像素；定位换算按各显示器 scale）。
-const HUD_W: f64 = 440.0;
+/// HUD 逻辑尺寸（宽×高，逻辑像素；定位换算按各显示器 scale）。480 容纳
+/// 最坏排布（长 purpose 120px 截断 + 队列/冲突胶囊齐现 + 右侧控制组）。
+const HUD_W: f64 = 480.0;
 const HUD_H: f64 = 44.0;
 /// HUD 顶部边距（物理像素——紧贴屏幕顶易与系统通知区打架）。
 const HUD_TOP_MARGIN_PX: i32 = 12;
@@ -128,7 +129,9 @@ fn ensure_hud(app: &tauri::AppHandle, monitors: &[tauri::Monitor], index: usize)
         .minimizable(false)
         .shadow(false)
         .inner_size(HUD_W, HUD_H)
-        .position(pos.x as f64, pos.y as f64)
+        // builder 的 position() 收**逻辑**坐标（pos 是物理值）——DPI≠100%
+        // 下不除 scale 会把窗口甩向右下（2026-08-30 真机教训）。
+        .position(pos.x as f64 / scale, pos.y as f64 / scale)
         .focused(false) // 不偷主窗焦点（HUD 是仪表不是对话框）
         .build();
     match built {
