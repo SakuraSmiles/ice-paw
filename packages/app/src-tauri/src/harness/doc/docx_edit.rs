@@ -27,6 +27,7 @@ use serde::Serialize;
 use crate::error::{AppError, AppResult};
 
 use super::docx_model::{self, Block};
+use super::docx_pkg::{self, ImagePayload};
 use super::styles::Stylesheet;
 
 // =========================================================================
@@ -250,6 +251,29 @@ pub enum EditOp {
         header: Option<bool>,
         table_style: Option<String>,
     },
+    /// 在锚块后插入图片（D18 十波）：`image` 由工具壳 load_image 装载（字节/宽高/
+    /// 格式 png|jpeg）；`rid`/`cx_emu`/`cy_emu`/`docpr_id` 由 zip 层编排**注入**
+    /// （扫包 max+1 分配 + 版心宽换算），工具层置零占位、xml 层不消费工具层值。
+    /// width_mm 显式宽（毫米，钳版心）；缺省 min(原生像素宽, 版心)（不放大小图）。
+    /// 图片源是读侧第二路径（同 template 先例：只读不授权 + 格式/大小闸在装载层）。
+    InsertImageAfter {
+        block: usize,
+        expect_prefix: String,
+        image: ImagePayload,
+        width_mm: Option<f64>,
+        /// 注入：关系 Id（如 rId7）——xml 层写 a:blip r:embed
+        rid: String,
+        /// 注入：目标宽/高（EMU）
+        cx_emu: u64,
+        cy_emu: u64,
+        /// 注入：docPr 唯一 id（扫现有 max+1 + 批内序）
+        docpr_id: u32,
+    },
+    /// 在锚块后插入 TOC 域段（D18 十波）：**裸 fldSimple 单段**（非 sdt 包裹——
+    /// walk_blocks 会摊平 sdt 破坏「1 输入块 = 1 产物块」）；cached result 放
+    /// 自愈文案，Word 带 updateFields（zip 层自动置）打开即刷新，WPS 不保证
+    /// （F9 手动刷新兜底）。levels 1-9（目录深度）；hyperlink 目录项超链接。
+    InsertTocAfter { block: usize, expect_prefix: String, levels: u32, hyperlink: bool },
     /// 改表格单元格文本（S3 三波·表格件）：(row, cell) 1-based，口径与
     /// inspect_docx projection=table 所见一致（跨列格占 1 个序号）；保 tcPr +
     /// 首段 pPr + 首 run rPr；\n = 格内多段；纵向合并续格/嵌套表拒绝。
@@ -429,6 +453,11 @@ pub fn apply_edits_to_bytes(bytes: &[u8], ops: &[EditOp]) -> AppResult<(Vec<u8>,
 /// [`apply_edits_to_bytes`] 的带锁版（D15 八波②）：`allowed_blocks = Some((lo, hi))`
 /// 区间锁（1-based 闭区间）——批内任何操作的块地址越界 → 整批拒；clear_body 与
 /// 锁语义冲突拒。范围守护是引擎硬约束（与 expect_prefix 同族），不靠 agent 自觉。
+///
+/// D18 十波包级编排：批内含 insert_image_after / insert_toc_after 时，先扫包
+/// 规划增补（rId/media 名/CT/settings，见 docx_pkg），把分配结果**注入** op 克隆
+/// （xml 层保持纯函数——只消费注入后的 rid/extent/docPr）；产物重打包走多部件
+/// 通道（document.xml + 包级增补件）。纯段落批次零开销早退（不扫包、原路径）。
 pub fn apply_edits_to_bytes_locked(
     bytes: &[u8],
     ops: &[EditOp],
@@ -441,9 +470,77 @@ pub fn apply_edits_to_bytes_locked(
         }
         None => Stylesheet::empty(),
     };
-    let (new_xml, applied) = apply_edits_locked(&xml, &styles, ops, allowed_blocks)?;
-    let out = repack_part(bytes, "word/document.xml", &new_xml)?;
+
+    // ---- 包级增补编排（仅批内有图/TOC 才走；二次解析 document.xml 拿版心宽与
+    // docPr 基号——注入需要，正确性优先）----
+    let has_pkg_image = ops.iter().any(|o| matches!(o, EditOp::InsertImageAfter { .. }));
+    let has_toc = ops.iter().any(|o| matches!(o, EditOp::InsertTocAfter { .. }));
+    let mut additions = docx_pkg::PkgAdditions::default();
+    let prepared: std::borrow::Cow<[EditOp]> = if has_pkg_image || has_toc {
+        let images: Vec<&ImagePayload> = ops
+            .iter()
+            .filter_map(|o| match o {
+                EditOp::InsertImageAfter { image, .. } => Some(image),
+                _ => None,
+            })
+            .collect();
+        let (allocs, plan) = docx_pkg::plan_package_additions(bytes, &images, has_toc)?;
+        additions = plan;
+        let dom = super::xml_dom::parse(&xml)?;
+        let model = docx_model::build_document(&dom);
+        let width_tw = content_width_twips(&model);
+        let docpr_base = docx_pkg::next_docpr_id(&xml);
+        std::borrow::Cow::Owned(inject_package_resolved(ops, &allocs, width_tw, docpr_base))
+    } else {
+        std::borrow::Cow::Borrowed(ops)
+    };
+
+    let (new_xml, applied) = apply_edits_locked(&xml, &styles, &prepared, allowed_blocks)?;
+    let out = if additions.replacements.is_empty() && additions.appends.is_empty() {
+        repack_part(bytes, "word/document.xml", &new_xml)?
+    } else {
+        let mut replacements = vec![("word/document.xml".to_string(), new_xml)];
+        replacements.extend(additions.replacements);
+        docx_pkg::repack_package(bytes, &replacements, &additions.appends)?
+    };
     Ok((out, applied))
+}
+
+/// 把包级分配结果注入 op 克隆：每图拿 allocs[i]（rId/media 对应）+ 版心宽换算的
+/// extent + docPr 基号递增。工具层/测试直调的占位值一律被覆盖（唯一注入点，
+/// 不存在陈旧 rid 路径）；其余 op 原样克隆。
+fn inject_package_resolved(
+    ops: &[EditOp],
+    allocs: &[docx_pkg::ImageAlloc],
+    width_tw: u32,
+    docpr_base: u32,
+) -> Vec<EditOp> {
+    let mut alloc_i = 0usize;
+    let mut pic_i = 0u32;
+    ops.iter()
+        .map(|op| match op {
+            EditOp::InsertImageAfter { block, expect_prefix, image, width_mm, .. } => {
+                let alloc = allocs
+                    .get(alloc_i)
+                    .expect("allocs 与批内图片数一致（plan_package_additions 同源产出）");
+                alloc_i += 1;
+                pic_i += 1;
+                let (cx, cy) =
+                    docx_pkg::compute_extent(image.width_px, image.height_px, *width_mm, width_tw);
+                EditOp::InsertImageAfter {
+                    block: *block,
+                    expect_prefix: expect_prefix.clone(),
+                    image: image.clone(),
+                    width_mm: *width_mm,
+                    rid: alloc.rid.clone(),
+                    cx_emu: cx,
+                    cy_emu: cy,
+                    docpr_id: docpr_base + pic_i - 1,
+                }
+            }
+            other => other.clone(),
+        })
+        .collect()
 }
 
 /// 应用一批操作，返回新 document.xml 与逐操作摘要。**全有或全无**：任一预检
@@ -535,6 +632,8 @@ pub(super) fn apply_edits_locked(
             | EditOp::SetFormat { block, .. }
             | EditOp::SetPprElement { block, .. }
             | EditOp::InsertTableAfter { block, .. }
+            | EditOp::InsertImageAfter { block, .. }
+            | EditOp::InsertTocAfter { block, .. }
             | EditOp::SetCellText { block, .. }
             | EditOp::InsertTableRowAfter { block, .. }
             | EditOp::SetCellFormat { block, .. }
@@ -599,13 +698,18 @@ pub(super) fn apply_edits_locked(
                 if !table_modified.contains(&block) {
                     table_modified.push(block);
                 }
-            } else if matches!(op, EditOp::InsertParagraphAfter { .. }) {
-                // 链式插入（S3 七波）：同锚块多条 insert_paragraph_after 按输入序
+            } else if matches!(
+                op,
+                EditOp::InsertParagraphAfter { .. }
+                    | EditOp::InsertImageAfter { .. }
+                    | EditOp::InsertTocAfter { .. }
+            ) {
+                // 链式插入（S3 七波；D18 扩图/域）：同锚块多条插入类操作按输入序
                 // 连续排列（apply 侧聚合进一个插入 splice）；与其他段落/锚/表格操作仍互斥
                 if used_blocks.contains(&block) || table_modified.contains(&block) {
                     return Err(AppError::Validation(format!(
                         "同一块多操作: 块 {block} 已被段落操作/锚操作/表格操作引用，\
-                         不能再挂 insert_paragraph_after。请拆批。"
+                         不能再挂插入类操作。请拆批。"
                     )));
                 }
                 if !insert_anchors.contains(&block) {
@@ -615,14 +719,15 @@ pub(super) fn apply_edits_locked(
                 if used_blocks.contains(&block) {
                     return Err(AppError::Validation(format!(
                         "同一块多操作: 块 {block} 在本批中被多次引用。每块每批限一个操作\
-                         （例外：同一锚块可挂多条 insert_paragraph_after 按序链式插入；\
-                         表格块可挂多个 set_cell_text / set_cell_format / set_table_element / \
-                         insert_table_row_after）；请拆成多批。"
+                         （例外：同一锚块可挂多条 insert_paragraph_after / insert_image_after / \
+                         insert_toc_after 按序链式插入；表格块可挂多个 set_cell_text / \
+                         set_cell_format / set_table_element / insert_table_row_after）；请拆成多批。"
                     )));
                 }
                 if insert_anchors.contains(&block) {
                     return Err(AppError::Validation(format!(
-                        "同一块多操作: 块 {block} 已挂链式 insert_paragraph_after，\
+                        "同一块多操作: 块 {block} 已挂链式插入类操作\
+                         （insert_paragraph_after / insert_image_after / insert_toc_after），\
                          不能再被其他段落操作/锚操作引用。请拆批。"
                     )));
                 }
@@ -779,6 +884,21 @@ pub(super) fn apply_edits_locked(
                             styles.display_names_joined(20)
                         )));
                     }
+                }
+            }
+            EditOp::InsertImageAfter { .. } => {
+                // 图片字节/格式/大小闸在工具壳 load_image（docx_pkg）；注入字段
+                // （rid/extent/docpr）由编排层统一分配——预检无可校验项。锚块带
+                // 修订不拒绝：插入不触碰锚块内容（与 insert_paragraph_after 同判）
+            }
+            EditOp::InsertTocAfter { levels, .. } => {
+                // 边界显式拒（勿静默 clamp——agent 传 0/10 多半是参数拼错，
+                // 静默修成 1/9 会产出与意图不符的目录深度）。AppError::Validation
+                // Display 全局包「参数校验失败:」前缀，勿手动重复
+                if *levels == 0 || *levels > 9 {
+                    return Err(AppError::Validation(format!(
+                        "levels={levels} 越界（合法 1-9，目录收录的标题深度）。请复核后重试。"
+                    )));
                 }
             }
             EditOp::SetCellText { row, cell, .. } => {
@@ -1260,6 +1380,28 @@ pub(super) fn apply_edits_locked(
         /// 该 splice 的逐操作摘要（同块表格批组合 = 多条；顺序 = 输入序）
         summaries: Vec<AppliedOp>,
     }
+    /// 同锚链式插入聚合（S3 七波 insert_paragraph_after；D18 扩图/域共用）：首条
+    /// 建插入 splice（锚块末尾，区间外），后续条直接追加——整链一个插入 blob，
+    /// 链序 = 输入序。不按「span.end + 累计长度」定位：那会伸进相邻块的 splice
+    /// 区间（块间缝隙可为 0）。
+    fn chain_into_insert_splice(
+        plan: &mut Vec<Splice>,
+        insert_plan_idx: &mut HashMap<usize, usize>,
+        block: usize,
+        anchor_end: usize,
+    ) -> usize {
+        if let Some(&i) = insert_plan_idx.get(&block) {
+            return i;
+        }
+        plan.push(Splice {
+            pos: anchor_end,
+            remove_end: anchor_end,
+            insert: String::new(),
+            summaries: Vec::new(),
+        });
+        insert_plan_idx.insert(block, plan.len() - 1);
+        plan.len() - 1
+    }
     let mut plan: Vec<Splice> = Vec::new();
     // 同表多操作聚合：块号 → plan 索引（共享一个 splice，按序改写 insert 文本）
     let mut table_plan_idx: HashMap<usize, usize> = HashMap::new();
@@ -1292,27 +1434,52 @@ pub(super) fn apply_edits_locked(
                 let span = spans[block - 1];
                 let anchor_has_revision = has_revision(&model.body[block - 1]);
                 let new_block = build_inserted_paragraph(xml, span, &text, style.as_deref(), styles, anchor_has_revision);
-                // 同锚链式（S3 七波）：首条建插入 splice（锚块末尾，区间外），后续
-                // 条追加——整链是一个插入 blob，链序 = 输入序，无 splice 重叠
-                let entry = match insert_plan_idx.get(&block) {
-                    Some(&i) => i,
-                    None => {
-                        plan.push(Splice {
-                            pos: span.end, // 锚块末尾插入（区间外，不与同批其他 splice 重叠）
-                            remove_end: span.end,
-                            insert: String::new(),
-                            summaries: Vec::new(),
-                        });
-                        insert_plan_idx.insert(block, plan.len() - 1);
-                        plan.len() - 1
-                    }
-                };
+                // 同锚链式（S3 七波）：聚合细节见 chain_into_insert_splice
+                let entry = chain_into_insert_splice(&mut plan, &mut insert_plan_idx, block, span.end);
                 plan[entry].insert.push_str(&new_block);
                 plan[entry].summaries.push(AppliedOp {
                     op: "insert_paragraph_after",
                     block,
                     before: projected_of(&model, block),
                     after: truncate(&text, 60),
+                    style: None,
+                    style_unchanged: None,
+                    target: None,
+                });
+            }
+            EditOp::InsertImageAfter { block, rid, cx_emu, cy_emu, docpr_id, .. } => {
+                let span = spans[block - 1];
+                // 图段不继承锚块 pPr/rPr（结构内容非文本，docDefaults 好默认；
+                // 继承会把锚的缩进/字体带进图片段）
+                let new_block = docx_pkg::build_drawing_paragraph(
+                    &rid,
+                    cx_emu,
+                    cy_emu,
+                    docpr_id,
+                    &format!("图片 {docpr_id}"),
+                );
+                let entry = chain_into_insert_splice(&mut plan, &mut insert_plan_idx, block, span.end);
+                plan[entry].insert.push_str(&new_block);
+                plan[entry].summaries.push(AppliedOp {
+                    op: "insert_image_after",
+                    block,
+                    before: projected_of(&model, block),
+                    after: format!("图片 {rid}（{}×{} EMU）", cx_emu, cy_emu),
+                    style: None,
+                    style_unchanged: None,
+                    target: None,
+                });
+            }
+            EditOp::InsertTocAfter { block, levels, hyperlink, .. } => {
+                let span = spans[block - 1];
+                let new_block = docx_pkg::build_toc_paragraph(levels, hyperlink);
+                let entry = chain_into_insert_splice(&mut plan, &mut insert_plan_idx, block, span.end);
+                plan[entry].insert.push_str(&new_block);
+                plan[entry].summaries.push(AppliedOp {
+                    op: "insert_toc_after",
+                    block,
+                    before: projected_of(&model, block),
+                    after: "TOC 域（打开文档自动刷新；WPS 需全选按 F9）".into(),
                     style: None,
                     style_unchanged: None,
                     target: None,
@@ -1749,7 +1916,15 @@ pub(super) fn apply_edits_locked(
     let model2 = docx_model::build_document(&dom2);
     let inserted = ops
         .iter()
-        .filter(|o| matches!(o, EditOp::InsertParagraphAfter { .. } | EditOp::InsertTableAfter { .. }))
+        .filter(|o| {
+            matches!(
+                o,
+                EditOp::InsertParagraphAfter { .. }
+                    | EditOp::InsertTableAfter { .. }
+                    | EditOp::InsertImageAfter { .. }
+                    | EditOp::InsertTocAfter { .. }
+            )
+        })
         .count();
     let deleted = ops.iter().filter(|o| matches!(o, EditOp::DeleteBlock { .. })).count();
     let expect_blocks = if ops.iter().any(|o| matches!(o, EditOp::ClearBody { .. })) {
@@ -1781,6 +1956,8 @@ fn expect_prefix_of(op: &EditOp) -> &str {
         | EditOp::SetFormat { expect_prefix, .. }
         | EditOp::SetPprElement { expect_prefix, .. }
         | EditOp::InsertTableAfter { expect_prefix, .. }
+        | EditOp::InsertImageAfter { expect_prefix, .. }
+        | EditOp::InsertTocAfter { expect_prefix, .. }
         | EditOp::SetCellText { expect_prefix, .. }
         | EditOp::InsertTableRowAfter { expect_prefix, .. }
         | EditOp::SetCellFormat { expect_prefix, .. }
@@ -6208,5 +6385,276 @@ mod tests {
             ],
         ).unwrap_err());
         assert!(err.starts_with("同一块多操作"), "实际: {err}");
+    }
+
+    // =====================================================================
+    // D18 十波引擎 e2e——包级增补全链（apply_edits_to_bytes 直调；内置 report
+    // 模板无 media / 无 settings.xml / document rels 仅 rId1 → 全部走「新建」路径）
+    // =====================================================================
+
+    /// zip 原字节读取（read_entry 是 lossy String，二进制 media 件不适用）
+    fn zip_read(bytes: &[u8], name: &str) -> Option<Vec<u8>> {
+        let mut a = zip::ZipArchive::new(std::io::Cursor::new(bytes)).ok()?;
+        let out = match a.by_name(name) {
+            Ok(mut f) => {
+                let mut buf = Vec::new();
+                f.read_to_end(&mut buf).ok()?;
+                Some(buf)
+            }
+            Err(_) => None,
+        };
+        out
+    }
+
+    fn zip_entry_names(bytes: &[u8]) -> Vec<String> {
+        let a = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        a.file_names().map(str::to_string).collect()
+    }
+
+    /// 图片载荷辅助：引擎不重新探测（probe 在工具壳 load_image），字节任意可
+    fn img_payload(w: u32, h: u32) -> ImagePayload {
+        ImagePayload {
+            bytes: b"\x89PNG\r\n\x1a\n-test-bytes".to_vec(),
+            width_px: w,
+            height_px: h,
+            ext: "png",
+        }
+    }
+
+    /// 占位字段填零的插图 op（rid/extent/docpr 由编排层注入覆盖——唯一写入点）
+    fn image_op(block: usize, expect: &str, w: u32, h: u32) -> EditOp {
+        EditOp::InsertImageAfter {
+            block,
+            expect_prefix: expect.into(),
+            image: img_payload(w, h),
+            width_mm: None,
+            rid: String::new(),
+            cx_emu: 0,
+            cy_emu: 0,
+            docpr_id: 0,
+        }
+    }
+
+    /// 两块测试文档（标题 + 正文）——write_docx 全链产物，块 1 = 标题甲
+    fn two_block_doc() -> Vec<u8> {
+        let tpl = super::super::docx_write::build_builtin_template("report").unwrap();
+        super::super::docx_write::generate_from_template(
+            &tpl,
+            &[
+                super::super::docx_write::WriteBlock::Heading { level: 1, text: "标题甲".into() },
+                super::super::docx_write::WriteBlock::Paragraph { text: "正文乙".into(), style: None },
+            ],
+        )
+        .unwrap()
+        .bytes
+    }
+
+    fn document_xml_of(bytes: &[u8]) -> String {
+        zip_read(bytes, "word/document.xml").unwrap().lossy_utf8()
+    }
+
+    /// Vec<u8> → String（测试辅助；document.xml 是 UTF-8）
+    trait LossyUtf8 {
+        fn lossy_utf8(&self) -> String;
+    }
+    impl LossyUtf8 for Vec<u8> {
+        fn lossy_utf8(&self) -> String {
+            String::from_utf8_lossy(self).into_owned()
+        }
+    }
+
+    #[test]
+    fn engine_insert_image_after_e2e() {
+        let doc = two_block_doc();
+        let before_names = zip_entry_names(&doc);
+        let (out, applied) = apply_edits_to_bytes(
+            &doc,
+            &[image_op(1, "标题甲", 100, 50)],
+        )
+        .unwrap();
+        assert_eq!(applied.len(), 1);
+        assert_eq!(applied[0].op, "insert_image_after");
+
+        // media 新部件：字节与载荷全等
+        let media = zip_read(&out, "word/media/image1.png").expect("media/image1.png 应存在");
+        assert_eq!(media, b"\x89PNG\r\n\x1a\n-test-bytes");
+
+        // rels：原 rId1（styles）条目字节不动 + 新增 image 关系 rId2
+        let rels = zip_read(&out, "word/_rels/document.xml.rels").unwrap().lossy_utf8();
+        assert!(rels.contains(r#"Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml""#));
+        assert!(rels.contains(r#"Id="rId2""#), "新图应分到 rId2: {rels}");
+        assert!(rels.contains(r#"Target="media/image1.png""#));
+
+        // CT：png Default 补上；document.xml：drawing 引用 rId2
+        let ct = zip_read(&out, "[Content_Types].xml").unwrap().lossy_utf8();
+        assert!(ct.contains(r#"<Default Extension="png""#), "CT 应补 png Default: {ct}");
+        let xml = document_xml_of(&out);
+        assert!(xml.contains(r#"r:embed="rId2""#), "a:blip 应引 rId2");
+        // wp:extent 默认宽 = 100px×9525 EMU（原生 < 版心 → 不放大）
+        assert!(xml.contains(r#"<wp:extent cx="952500" cy="476250"/>"#));
+
+        // 块数 +1（引擎自检已断言；此处复核模型投影）
+        let model2 = model_of(&xml);
+        assert_eq!(model2.body.len(), 3);
+        let Block::Paragraph(p2) = &model2.body[1] else { panic!("新块应为段落") };
+        assert_eq!(p2.image_count, 1, "读侧投影应见图");
+        assert_eq!(p2.runs.iter().map(|r| r.text.as_str()).collect::<String>(), "", "图段无文本");
+
+        // untouched entry 逐字节保真（变更白名单外全部原样）
+        let changed = ["word/document.xml", "word/_rels/document.xml.rels", "[Content_Types].xml"];
+        let after_names = zip_entry_names(&out);
+        for name in &before_names {
+            if changed.contains(&name.as_str()) {
+                continue;
+            }
+            assert_eq!(zip_read(&out, name), zip_read(&doc, name), "{name} 应逐字节不变");
+        }
+        assert!(after_names.iter().any(|n| n == "word/media/image1.png"));
+    }
+
+    #[test]
+    fn engine_insert_two_images_rid_increment() {
+        let doc = two_block_doc();
+        let (out, applied) = apply_edits_to_bytes(
+            &doc,
+            &[
+                image_op(1, "标题甲", 80, 60),
+                image_op(1, "标题甲", 200, 100),
+            ],
+        )
+        .unwrap();
+        assert_eq!(applied.len(), 2);
+
+        // media 双部件 + rId 递增不撞
+        assert!(zip_read(&out, "word/media/image1.png").is_some());
+        assert!(zip_read(&out, "word/media/image2.png").is_some());
+        let rels = zip_read(&out, "word/_rels/document.xml.rels").unwrap().lossy_utf8();
+        assert!(rels.contains(r#"Target="media/image1.png""#));
+        assert!(rels.contains(r#"Target="media/image2.png""#));
+        let xml = document_xml_of(&out);
+        assert!(xml.contains(r#"r:embed="rId2""#));
+        assert!(xml.contains(r#"r:embed="rId3""#));
+
+        // docPr id 唯一递增（模板无既有 drawing → 1 / 2）
+        assert!(xml.contains(r#"<wp:docPr id="1""#));
+        assert!(xml.contains(r#"<wp:docPr id="2""#));
+
+        // 同锚链式：两图都在块 1 之后、按输入序（先 80×60 后 200×100）
+        let pos1 = xml.find(r#"r:embed="rId2""#).unwrap();
+        let pos2 = xml.find(r#"r:embed="rId3""#).unwrap();
+        assert!(pos1 < pos2, "链序 = 输入序");
+        let model2 = model_of(&xml);
+        assert_eq!(model2.body.len(), 4);
+    }
+
+    #[test]
+    fn engine_insert_toc_after_e2e() {
+        let doc = two_block_doc();
+        let (out, applied) = apply_edits_to_bytes(
+            &doc,
+            &[EditOp::InsertTocAfter { block: 1, expect_prefix: "标题甲".into(), levels: 3, hyperlink: true }],
+        )
+        .unwrap();
+        assert_eq!(applied.len(), 1);
+        assert_eq!(applied[0].op, "insert_toc_after");
+
+        // 裸 fldSimple 单段 + 指令 + 自愈文案
+        let xml = document_xml_of(&out);
+        assert!(xml.contains("<w:fldSimple"), "TOC 应是 fldSimple 形态");
+        assert!(xml.contains("TOC \\o"), "指令应含 TOC 域开关");
+        assert!(xml.contains("目录将在打开文档时自动生成"), "cached result 放自愈文案");
+
+        // 模板无 settings.xml → 新建最小件 + updateFields + CT Override
+        let settings = zip_read(&out, "word/settings.xml").expect("settings.xml 应新建");
+        let settings = settings.lossy_utf8();
+        assert!(settings.contains(r#"<w:updateFields w:val="true"/>"#), "updateFields 应置位: {settings}");
+        let ct = zip_read(&out, "[Content_Types].xml").unwrap().lossy_utf8();
+        assert!(ct.contains(r#"PartName="/word/settings.xml""#), "CT 应补 settings Override");
+
+        // 读侧：域指令可见 + 块数 +1
+        let model2 = model_of(&xml);
+        assert_eq!(model2.body.len(), 3);
+        let Block::Paragraph(p2) = &model2.body[1] else { panic!() };
+        assert!(p2.field_instrs.iter().any(|i| i.contains("TOC")), "投影应收域指令: {:?}", p2.field_instrs);
+
+        // 再插一次 TOC（第二个会话常见）——settings 幂等（已置位不重写、不重复条目）
+        let (out2, _) = apply_edits_to_bytes(
+            &out,
+            &[EditOp::InsertTocAfter { block: 1, expect_prefix: "标题甲".into(), levels: 2, hyperlink: false }],
+        )
+        .unwrap();
+        let s2 = zip_read(&out2, "word/settings.xml").unwrap().lossy_utf8();
+        assert_eq!(s2.matches("<w:updateFields").count(), 1, "幂等不重复: {s2}");
+    }
+
+    #[test]
+    fn engine_chain_paragraph_toc_image_order() {
+        let doc = two_block_doc();
+        // 同锚三连：段 → TOC → 图，一批按输入序
+        let (out, applied) = apply_edits_to_bytes(
+            &doc,
+            &[
+                EditOp::InsertParagraphAfter { block: 1, expect_prefix: "标题甲".into(), text: "链一".into(), style: None },
+                EditOp::InsertTocAfter { block: 1, expect_prefix: "标题甲".into(), levels: 2, hyperlink: false },
+                image_op(1, "标题甲", 50, 50),
+            ],
+        )
+        .unwrap();
+        assert_eq!(applied.len(), 3);
+        let xml = document_xml_of(&out);
+        let p_pos = xml.find("链一").expect("链一段应存在");
+        let t_pos = xml.find("<w:fldSimple").expect("TOC 段应存在");
+        let i_pos = xml.find("r:embed=").expect("图段应存在");
+        assert!(p_pos < t_pos && t_pos < i_pos, "同锚链序 = 输入序（段→TOC→图）");
+        let model2 = model_of(&xml);
+        assert_eq!(model2.body.len(), 5);
+    }
+
+    #[test]
+    fn engine_toc_levels_out_of_range_rejected() {
+        let doc = two_block_doc();
+        let err = val_msg(apply_edits_to_bytes(
+            &doc,
+            &[EditOp::InsertTocAfter { block: 1, expect_prefix: "标题甲".into(), levels: 0, hyperlink: true }],
+        )
+        .unwrap_err());
+        assert!(err.starts_with("levels=0 越界"), "实际: {err}");
+        let err = val_msg(apply_edits_to_bytes(
+            &doc,
+            &[EditOp::InsertTocAfter { block: 1, expect_prefix: "标题甲".into(), levels: 10, hyperlink: true }],
+        )
+        .unwrap_err());
+        assert!(err.starts_with("levels=10 越界"), "实际: {err}");
+    }
+
+    #[test]
+    fn engine_image_width_mm_clamped_and_ratio_kept() {
+        let doc = two_block_doc();
+        // 版心宽 8306 twips = 5274130 EMU（A4 - 左右 1800×2 页边）。
+        // 显式 200mm = 7,200,000 EMU > 版心 → 钳到版心；高等比 1:2 → 版心/2
+        let (out, _) = apply_edits_to_bytes(
+            &doc,
+            &[EditOp::InsertImageAfter {
+                block: 1,
+                expect_prefix: "标题甲".into(),
+                image: img_payload(1000, 500),
+                width_mm: Some(200.0),
+                rid: String::new(),
+                cx_emu: 0,
+                cy_emu: 0,
+                docpr_id: 0,
+            }],
+        )
+        .unwrap();
+        let xml = document_xml_of(&out);
+        // 版心 = (11906 - 1800 - 1800) twips × 635 = 8306 × 635 = 5274310 EMU
+        assert!(xml.contains(&format!(r#"cx="{}""#, 8306 * 635)), "宽应钳到版心");
+        assert!(xml.contains(&format!(r#"cy="{}""#, 8306 * 635 / 2)), "高等比 1:2");
+
+        // 原生像素宽 100px（952500 EMU）< 版心 → 不放大，width_mm 缺省用原生
+        let (out2, _) = apply_edits_to_bytes(&doc, &[image_op(1, "标题甲", 100, 200)]).unwrap();
+        let xml2 = document_xml_of(&out2);
+        assert!(xml2.contains(r#"cx="952500""#), "小图不放大");
+        assert!(xml2.contains(r#"cy="1905000""#), "高等比 1:2");
     }
 }
