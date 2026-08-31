@@ -1,10 +1,13 @@
-//! `inspect_docx` / `edit_docx` 工具（word-capability-roadmap 步骤 2 / 步骤 3）。
+//! `inspect_docx` / `edit_docx` / `write_docx` 工具（word-capability-roadmap
+//! 步骤 2 / 步骤 3 / 九波 D16）。
 //!
 //! - **inspect_docx**（S0b）：read_file 对 docx 只给线性文本（结构全丢）；本工具
 //!   在结构模型上出三档投影（outline / format / text，见 harness::doc::docx_inspect），
 //!   块号 1-based 混排统一编号——这是 edit_docx 的地址地基。
 //! - **edit_docx**（步骤 3，D3 批量事务）：在块编址上做块级手术，一批操作全有或
 //!   全无；手术引擎在 harness::doc::docx_edit（纯函数）。
+//! - **write_docx**（D16 模板优先生成）：模板清空正文→按块序写入→生成自检→
+//!   落盘，一次调用出整篇；引擎在 harness::doc::docx_write（纯函数）。
 //!
 //! 薄壳职责：读文件 + 扩展名守卫 + 参数解析 + 备份/原子写；全部业务逻辑在
 //! harness::doc 纯函数层，独立单测。错误契约三段式：not-found 挂 did-you-mean；
@@ -18,11 +21,12 @@ use serde::{Deserialize, Serialize};
 use crate::error::{AppError, AppResult};
 use crate::harness::doc::{
     apply_edits_to_bytes_locked, apply_numbering_edits_to_bytes, apply_style_edits_to_bytes,
-    inspect_document, validate_document, AssertSpec, EditOp, InspectProjection, InspectRequest,
-    NumberingEditOp, StyleContainer, StyleEditOp, StyleType, ValidateReport,
+    build_builtin_template, generate_from_template, inspect_document, validate_document,
+    AssertSpec, BUILTIN_TEMPLATES, EditOp, InspectProjection, InspectRequest, MAX_WRITE_BLOCKS,
+    NumberingEditOp, StyleContainer, StyleEditOp, StyleType, ValidateReport, WriteBlock,
 };
 
-use super::client::McpClient;
+use super::client::{McpClient, ToolContext};
 use super::types::AuthorizationLevel;
 
 pub struct InspectDocxTool;
@@ -1107,10 +1111,10 @@ impl McpClient for EditDocxTool {
          text, set_table_element level=cell element=tcW on every cell proportionally \
          (sum ≈ table width); whole-document \
          typography = set_style_element on heading/body styles instead of per-paragraph \
-         set_format. New document from a house template: check the workspace templates/ \
-         directory first (list_directory), copy_file to the target, edit_docx \
-         op=clear_body, then write content — the template's styles/numbering/headers \
-         are preserved verbatim. Every \
+         set_format. Creating a new document: use write_docx (template-first, one call — \
+         built-in template / workspace templates/ / absolute path). The copy_file + \
+         op=clear_body chain remains only for MULTI-SECTION templates that write_docx \
+         rejects. Every \
          operation must carry expect_prefix, the current text prefix of its target block, \
          as a fingerprint guard — if any block no longer matches, the whole batch is \
          rejected and the file is left untouched. Blocks are addressed by inspect_docx \
@@ -1592,6 +1596,327 @@ async fn write_and_rename(tmp: &Path, target: &Path, bytes: &[u8]) -> AppResult<
         .await
         .map_err(|e| AppError::Io(std::io::Error::other(format!("原子替换失败: {e}"))))?;
     Ok(())
+}
+
+// =========================================================================
+// write_docx —— 模板优先生成（word-capability-roadmap 九波 D16）
+// =========================================================================
+
+/// 新建 .docx：模板（内置档位 / 项目 templates/ / 绝对路径三层）清空正文 →
+/// 按块序写入标题/段落/表格 → 生成自检全过才落盘。生成引擎在
+/// harness::doc::docx_write（纯函数）；薄壳职责 = 模板解析 + IO + 备份。
+///
+/// override `execute_with_context`：L2 相对模板路径需要 ctx.workspace 拼接
+/// （search_kb 同款透传链路）。
+pub struct WriteDocxTool;
+
+#[derive(Deserialize)]
+struct WriteDocxArgs {
+    /// 目标 .docx 路径（不存在即新建；父目录缺失自动创建；已存在先备份再覆盖）
+    path: String,
+    /// 模板三层：内置档位名 | 相对路径（workspace templates/ 下）| 绝对路径。
+    /// 缺省 "report"。
+    #[serde(default)]
+    template: Option<String>,
+    /// 内容块序列（heading / paragraph / table）
+    blocks: Vec<WriteBlockSpec>,
+}
+
+/// blocks 元素（LLM 侧形态）。table 的 rows/rows_text 二选一互斥，与
+/// insert_table_after 同一形状（值优先）。
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum WriteBlockSpec {
+    Heading {
+        /// 标题级 1-9；样式按候选链反查模板（中文显示名/规范名/英文/裸 ID）
+        level: u32,
+        text: String,
+    },
+    Paragraph {
+        /// 单段语义：\n 不拆段（多段=多 block，诚实边界）
+        text: String,
+        #[serde(default)]
+        style: Option<String>,
+    },
+    Table {
+        #[serde(default)]
+        rows: Option<Vec<Vec<String>>>,
+        /// 值优先：Markdown 表格或 TSV 纯文本
+        #[serde(default)]
+        rows_text: Option<String>,
+        #[serde(default)]
+        header: Option<bool>,
+        #[serde(default)]
+        style: Option<String>,
+    },
+}
+
+#[derive(Serialize)]
+struct WriteDocxResult {
+    path: String,
+    template: String,
+    /// true = 新建；false = 已存在（旧文件已备份）
+    created: bool,
+    blocks: usize,
+    paragraphs: usize,
+    tables: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    backup: Option<String>,
+    bytes: usize,
+    check: &'static str,
+}
+
+/// 模板三层解析 → 模板字节。
+///
+/// L1 内置档位名（精确命中，档位表见 [`BUILTIN_TEMPLATES`]）；
+/// L2 相对路径 → workspace/templates/ 下；L3 绝对路径直读。
+/// 相对路径但 agent 未设 workspace → 拒（三层规则写进文案）。
+async fn resolve_template(spec: &str, workspace: Option<&str>) -> AppResult<Vec<u8>> {
+    if BUILTIN_TEMPLATES.iter().any(|(name, _)| *name == spec) {
+        return build_builtin_template(spec);
+    }
+    let p = Path::new(spec);
+    let template_path = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        let ws = workspace.ok_or_else(|| {
+            AppError::Validation(format!(
+                "模板无效: 相对模板路径 {:?} 需要 agent workspace（当前未设置）。\
+                 模板三层取法：① 内置档位名（{names}）② 相对路径——workspace \
+                 templates/ 目录下（需 agent 设置了 workspace）③ 任意 .docx 绝对路径。\
+                 请改用档位名或绝对路径。",
+                clip(spec, 40),
+                names = builtin_template_names()
+            ))
+        })?;
+        Path::new(ws).join("templates").join(p)
+    };
+    match tokio::fs::read(&template_path).await {
+        Ok(bytes) => Ok(bytes),
+        // 报错即行为契约：not-found 扫真实文件系统给近似候选
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(AppError::Validation(
+            format!(
+                "模板无效: 模板文件不存在 {}。{}",
+                template_path.display(),
+                super::path_suggest::suggest_for_missing(&template_path)
+            ),
+        )),
+        Err(e) => Err(AppError::Validation(format!(
+            "模板无效: 读取模板失败 {}: {e}。请确认路径与文件权限。",
+            template_path.display()
+        ))),
+    }
+}
+
+/// 内置档位名清单（错误文案展示用，斜杠分隔）。
+fn builtin_template_names() -> String {
+    BUILTIN_TEMPLATES
+        .iter()
+        .map(|(name, _)| *name)
+        .collect::<Vec<_>>()
+        .join(" / ")
+}
+
+#[async_trait]
+impl McpClient for WriteDocxTool {
+    fn name(&self) -> &str {
+        "write_docx"
+    }
+
+    fn description(&self) -> &str {
+        "Create a new .docx document from a template in ONE call — the preferred way to \
+         produce Word files. The template's styles / numbering / page setup are preserved \
+         verbatim, its body is cleared, your blocks are written in order, and a built-in \
+         self-check verifies every block (text and table shape) BEFORE anything is written \
+         to disk. Template resolution, three layers: (1) built-in name — 'report' (Chinese \
+         report style: SimHei headings, SimSun body 12pt with 1.5 line spacing, A4 single \
+         section); (2) relative path — resolved under the agent workspace templates/ \
+         directory (house templates live there; list_directory it to see what exists); \
+         (3) absolute path to any .docx. Omit template for 'report'. House style tweaking: \
+         edit the template file itself, or adjust style definitions in the generated file \
+         with edit_docx set_style_element. blocks is an ordered list written top to bottom; \
+         each block is one of {type:'heading', level 1-9, text} (style resolved via the \
+         template's heading styles), {type:'paragraph', text, style?} (ONE paragraph per \
+         block — \\n does NOT split paragraphs, send multiple blocks; omit style for the \
+         template body default), {type:'table', rows_text | rows, header=true, style?} \
+         (rows_text value-first: a Markdown table or TSV; rows structured, where \\n inside \
+         a cell = multiple paragraphs in that cell). Single-section templates only \
+         (multi-section templates are rejected — for those use copy_file + edit_docx \
+         clear_body). The target's parent directory is created if missing; an existing \
+         file at the target is backed up to .icepaw-backup/ then replaced atomically. \
+         Result reports paragraphs/tables counts and check:'passed' — inspect_docx the \
+         result only if you need structure details."
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Target .docx path to create (parent directories created if missing; existing file backed up then replaced)."
+                },
+                "template": {
+                    "type": "string",
+                    "description": "Template: a built-in name ('report'), a path relative to the agent workspace templates/ directory (e.g. 'memo.docx'), or an absolute path. Omit for 'report'."
+                },
+                "blocks": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 300,
+                    "description": "Ordered content blocks, written top to bottom.",
+                    "items": {
+                        "oneOf": [
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "type": { "const": "heading" },
+                                    "level": { "type": "integer", "minimum": 1, "maximum": 9, "description": "Heading level; resolved against the template's heading styles." },
+                                    "text": { "type": "string", "description": "Heading text (single line)." }
+                                },
+                                "required": ["type", "level", "text"]
+                            },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "type": { "const": "paragraph" },
+                                    "text": { "type": "string", "description": "Paragraph text. ONE paragraph per block — \\n is not split; send multiple blocks for multiple paragraphs." },
+                                    "style": { "type": "string", "description": "Optional style display name or ID from the template; omit for the body default (Normal)." }
+                                },
+                                "required": ["type", "text"]
+                            },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "type": { "const": "table" },
+                                    "rows_text": { "type": "string", "description": "Value-first: Markdown table (| separated, --- separator row skipped) or TSV. Mutually exclusive with rows." },
+                                    "rows": { "type": "array", "items": { "type": "array", "items": { "type": "string" } }, "description": "Structured rows; \\n inside a cell = multiple paragraphs in that cell. Mutually exclusive with rows_text." },
+                                    "header": { "type": "boolean", "description": "true (default) = first row rendered bold as header." },
+                                    "style": { "type": "string", "description": "Optional table style display name or ID from the template; omit for the default grid." }
+                                },
+                                "required": ["type"]
+                            }
+                        ]
+                    }
+                }
+            },
+            "required": ["path", "blocks"]
+        })
+    }
+
+    fn authorization_level(&self) -> AuthorizationLevel {
+        AuthorizationLevel::PathWhitelist
+    }
+
+    async fn execute(&self, _args: &str) -> AppResult<String> {
+        // write_docx 走 execute_with_context（L2 相对模板路径需要 workspace）；
+        // dispatch 已统一调 execute_with_context，这里只是 trait 兜底。
+        Err(AppError::Internal(
+            "write_docx 必须通过 execute_with_context 调用（需要 workspace 上下文）".into(),
+        ))
+    }
+
+    async fn execute_with_context(&self, args: &str, ctx: &ToolContext) -> AppResult<String> {
+        let parsed: WriteDocxArgs = serde_json::from_str(args)
+            .map_err(|e| AppError::Validation(format!("write_docx 参数解析失败: {e}")))?;
+
+        // 目标守卫：.docx 扩展名（目标尚不存在，不 canonicalize——授权层
+        // path_within_workspace 对不存在路径有词法归一回退，0.3.5 已修）
+        let target = Path::new(&parsed.path);
+        let ext = target
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if ext != "docx" {
+            return Err(AppError::Validation(format!(
+                "不是 Word 文档: 目标扩展名 .{ext}。write_docx 只生成 .docx；\
+                 写纯文本请用 write_file。"
+            )));
+        }
+
+        // blocks → 引擎模型（table 走 resolve_table_rows 值优先，与 insert_table_after 同形）
+        if parsed.blocks.is_empty() {
+            return Err(AppError::Validation(
+                "生成块无效: blocks 为空。新建文档至少需要一个内容块（heading / \
+                 paragraph / table）；只想复制模板不改内容请用 copy_file。"
+                    .into(),
+            ));
+        }
+        if parsed.blocks.len() > MAX_WRITE_BLOCKS {
+            return Err(AppError::Validation(format!(
+                "生成块无效: blocks 共 {} 条，超过上限 {}。请拆成 write_docx 建骨架 + \
+                 edit_docx 续写两步。",
+                parsed.blocks.len(),
+                MAX_WRITE_BLOCKS
+            )));
+        }
+        let mut blocks: Vec<WriteBlock> = Vec::with_capacity(parsed.blocks.len());
+        for spec in parsed.blocks {
+            match spec {
+                WriteBlockSpec::Heading { level, text } => {
+                    blocks.push(WriteBlock::Heading { level, text });
+                }
+                WriteBlockSpec::Paragraph { text, style } => {
+                    blocks.push(WriteBlock::Paragraph { text, style });
+                }
+                WriteBlockSpec::Table {
+                    rows,
+                    rows_text,
+                    header,
+                    style,
+                } => {
+                    let rows = resolve_table_rows(rows, rows_text)?;
+                    blocks.push(WriteBlock::Table {
+                        rows,
+                        header,
+                        table_style: style,
+                    });
+                }
+            }
+        }
+
+        // 模板三层 → 内存全链生成（清空→锚→顺序写→自检；自检不过不落盘）
+        let template_spec = parsed.template.clone().unwrap_or_else(|| "report".into());
+        let template = resolve_template(&template_spec, ctx.workspace.as_deref()).await?;
+        let generated = generate_from_template(&template, &blocks)?;
+
+        // 父目录好默认：缺失自动创建（copy_file 同款）
+        if let Some(parent) = target.parent() {
+            if !parent.as_os_str().is_empty() {
+                tokio::fs::create_dir_all(parent).await.map_err(|e| {
+                    AppError::Io(std::io::Error::other(format!("创建目标目录失败: {e}")))
+                })?;
+            }
+        }
+
+        // 已存在 → 备份后覆盖；tmp + rename 原子写（edit_docx 同通道）
+        let backup = super::file_tools::backup_if_exists(target)?;
+        let mut tmp_name = target.file_name().unwrap_or_default().to_os_string();
+        tmp_name.push(".icepaw-tmp");
+        let tmp = target.with_file_name(tmp_name);
+        if let Err(e) = write_and_rename(&tmp, target, &generated.bytes).await {
+            tokio::fs::remove_file(&tmp).await.ok();
+            return Err(AppError::Validation(format!(
+                "write_docx 写入失败: {}: {e}。请确认路径在授权工作区内；备份位于 \
+                 .icepaw-backup/（若有）。",
+                target.display()
+            )));
+        }
+
+        let result = WriteDocxResult {
+            path: parsed.path,
+            template: template_spec,
+            created: backup.is_none(),
+            blocks: blocks.len(),
+            paragraphs: generated.paragraphs,
+            tables: generated.tables,
+            backup,
+            bytes: generated.bytes.len(),
+            check: "passed",
+        };
+        Ok(serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string()))
+    }
 }
 
 // =========================================================================
@@ -2130,5 +2455,257 @@ mod tests {
         assert!(err.contains("解析后为空"), "实际: {err}");
         let err = parse_rows_text("").unwrap_err().to_string();
         assert!(err.contains("解析后为空"), "实际: {err}");
+    }
+
+    // =========================================================================
+    // write_docx 工具壳（D16 九波）：三层模板 / 备份覆盖 / 参数守卫 / 读回
+    // =========================================================================
+
+    /// 造带 workspace 的 ToolContext（write_docx 的 L2 相对模板路径需要它）。
+    async fn write_ctx(workspace: Option<String>) -> ToolContext {
+        ToolContext {
+            conv_id: "c1".into(),
+            agent_id: "a1".into(),
+            project_id: None,
+            workspace,
+            pool: sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap(),
+            api_key: None,
+            app_handle: None,
+            proposal_registry: None,
+            turn_id: None,
+            cancel: None,
+        }
+    }
+
+    /// text 投影读回产物（带块号正文，验内容与块序）。
+    fn read_back_text(bytes: &[u8]) -> String {
+        crate::harness::doc::inspect_document(
+            bytes,
+            &InspectRequest {
+                projection: InspectProjection::Text,
+                start: None,
+                end: None,
+                row: None,
+                cell: None,
+                style: None,
+                num_id: None,
+                level: None,
+            },
+        )
+        .unwrap()
+        .content
+    }
+
+    #[tokio::test]
+    async fn write_docx_builtin_creates_ordered_document() {
+        let dir = std::env::temp_dir().join("icepaw_write_docx_test");
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("报告.docx");
+
+        // L1 缺省模板（= report）+ 混合块序：heading / paragraph / table(rows_text)
+        let args = serde_json::json!({
+            "path": file.to_string_lossy(),
+            "blocks": [
+                { "type": "heading", "level": 1, "text": "季度报告" },
+                { "type": "paragraph", "text": "本季度进展顺利。" },
+                { "type": "table", "rows_text": "| 指标 | 数值 |\n| --- | --- |\n| 交付 | 3 |" },
+                { "type": "heading", "level": 2, "text": "下季度计划" }
+            ]
+        })
+        .to_string();
+        let ctx = write_ctx(None).await;
+        let out = WriteDocxTool
+            .execute_with_context(&args, &ctx)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["created"], true, "{out}");
+        assert_eq!(v["template"], "report", "{out}");
+        assert_eq!(v["paragraphs"], 3, "{out}"); // 两 heading + 一段
+        assert_eq!(v["tables"], 1, "{out}");
+        assert_eq!(v["check"], "passed", "{out}");
+
+        // 读回：四类内容全在且块序正确（text 投影带块号顺序输出）
+        let text = read_back_text(&std::fs::read(&file).unwrap());
+        let pos = |needle: &str| text.find(needle).unwrap_or_else(|| panic!("缺 {needle}: {text}"));
+        assert!(pos("季度报告") < pos("本季度进展顺利。"));
+        assert!(pos("本季度进展顺利。") < pos("交付"));
+        assert!(pos("交付") < pos("下季度计划"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn write_docx_template_three_layers() {
+        let dir = std::env::temp_dir().join("icepaw_write_docx_test2");
+        std::fs::remove_dir_all(&dir).ok();
+        let ws = dir.join("ws");
+        std::fs::create_dir_all(ws.join("templates")).unwrap();
+        // 「家模板」= 内置模板字节落盘占位（真模板用户后续用 Word 造）
+        let house = ws.join("templates").join("memo.docx");
+        std::fs::write(&house, crate::harness::doc::build_builtin_template("report").unwrap())
+            .unwrap();
+
+        let blocks = r#"[{"type":"paragraph","text":"内容"}]"#.to_string();
+        let ctx_ws = write_ctx(Some(ws.to_string_lossy().to_string())).await;
+
+        // L2 相对路径：workspace/templates/ 下命中
+        let file = dir.join("l2.docx");
+        let args = serde_json::json!({
+            "path": file.to_string_lossy(),
+            "template": "memo.docx",
+            "blocks": serde_json::from_str::<serde_json::Value>(&blocks).unwrap()
+        })
+        .to_string();
+        let out = WriteDocxTool
+            .execute_with_context(&args, &ctx_ws)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["template"], "memo.docx", "{out}");
+        assert!(file.exists(), "目标应已生成");
+
+        // L3 绝对路径：任意 docx
+        let file = dir.join("l3.docx");
+        let args = serde_json::json!({
+            "path": file.to_string_lossy(),
+            "template": house.to_string_lossy(),
+            "blocks": serde_json::from_str::<serde_json::Value>(&blocks).unwrap()
+        })
+        .to_string();
+        let out = WriteDocxTool
+            .execute_with_context(&args, &ctx_ws)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["created"], true, "{out}");
+
+        // 相对路径但无 workspace → 拒 + 三层规则文案（含档位名）
+        let ctx_none = write_ctx(None).await;
+        let args = serde_json::json!({
+            "path": dir.join("no.docx").to_string_lossy(),
+            "template": "memo.docx",
+            "blocks": serde_json::from_str::<serde_json::Value>(&blocks).unwrap()
+        })
+        .to_string();
+        let err = WriteDocxTool
+            .execute_with_context(&args, &ctx_none)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("模板无效"), "实际: {err}");
+        assert!(err.contains("report"), "应列内置档位名: {err}");
+
+        // workspace 有但模板文件缺失 → not-found + did-you-mean
+        let args = serde_json::json!({
+            "path": dir.join("no.docx").to_string_lossy(),
+            "template": "memoo.docx",
+            "blocks": serde_json::from_str::<serde_json::Value>(&blocks).unwrap()
+        })
+        .to_string();
+        let err = WriteDocxTool
+            .execute_with_context(&args, &ctx_ws)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("模板无效"), "实际: {err}");
+        assert!(err.contains("不存在"), "实际: {err}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn write_docx_overwrite_existing_backs_up() {
+        let dir = std::env::temp_dir().join("icepaw_write_docx_test3");
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("old.docx");
+        std::fs::write(&file, docx_bytes()).unwrap(); // 旧内容：单段「正文段」
+
+        let args = serde_json::json!({
+            "path": file.to_string_lossy(),
+            "blocks": [ { "type": "heading", "level": 1, "text": "新标题" } ]
+        })
+        .to_string();
+        let ctx = write_ctx(None).await;
+        let out = WriteDocxTool
+            .execute_with_context(&args, &ctx)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["created"], false, "{out}");
+        let backup = v["backup"].as_str().unwrap().to_string();
+        assert!(!backup.is_empty() && Path::new(&backup).exists(), "{out}");
+
+        // 覆盖后 = 新文档（新标题在、旧正文不在）；备份里是旧内容
+        let text = read_back_text(&std::fs::read(&file).unwrap());
+        assert!(text.contains("新标题"), "{text}");
+        assert!(!text.contains("正文段"), "旧内容应已被替换: {text}");
+        let backup_text = read_back_text(&std::fs::read(&backup).unwrap());
+        assert!(backup_text.contains("正文段"), "备份应是旧文件: {backup_text}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn write_docx_rejects_bad_input() {
+        let dir = std::env::temp_dir().join("icepaw_write_docx_test4");
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let ctx = write_ctx(None).await;
+
+        // blocks 空 → 生成块无效
+        let args = serde_json::json!({
+            "path": dir.join("a.docx").to_string_lossy(),
+            "blocks": []
+        })
+        .to_string();
+        let err = WriteDocxTool
+            .execute_with_context(&args, &ctx)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("生成块无效"), "实际: {err}");
+
+        // blocks 超上限（MAX_WRITE_BLOCKS=300）→ 生成块无效
+        let overflow: Vec<serde_json::Value> = (0..=300)
+            .map(|i| serde_json::json!({ "type": "paragraph", "text": format!("段{i}") }))
+            .collect();
+        let args = serde_json::json!({
+            "path": dir.join("b.docx").to_string_lossy(),
+            "blocks": overflow
+        })
+        .to_string();
+        let err = WriteDocxTool
+            .execute_with_context(&args, &ctx)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("超过上限"), "实际: {err}");
+
+        // 目标非 .docx → 指路 write_file
+        let args = serde_json::json!({
+            "path": dir.join("c.txt").to_string_lossy(),
+            "blocks": [ { "type": "paragraph", "text": "x" } ]
+        })
+        .to_string();
+        let err = WriteDocxTool
+            .execute_with_context(&args, &ctx)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("write_file"), "实际: {err}");
+
+        // 未知块型（serde tag 拒）→ 参数解析失败
+        let args = serde_json::json!({
+            "path": dir.join("d.docx").to_string_lossy(),
+            "blocks": [ { "type": "image", "text": "x" } ]
+        })
+        .to_string();
+        let err = WriteDocxTool
+            .execute_with_context(&args, &ctx)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("参数解析失败"), "实际: {err}");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
