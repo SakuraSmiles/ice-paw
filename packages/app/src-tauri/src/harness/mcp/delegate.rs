@@ -15,7 +15,9 @@
 //! 4. 专家跑完整 loop，inline await 完成信号（[`TurnSummary`]，数据源=turn_ended
 //!    事件 + 最终正文——「真相在产物」）；壁钟护栏 15min 只兜「永不回来」的异常，
 //!    正常终止器是子 loop 自己的 budget/stuck；
-//! 5. tool_result 回传 child_conversation_id + 终态摘要（主 LLM 可引用/续派）。
+//! 5. tool_result 回传 child_conversation_id + 终态摘要（主 LLM 可引用/续派）；
+//!    另附 `progress` 机器事实报告（子会话 session_events 提取的成功工具计数 /
+//!    最后失败 / 涉及文件）——正常完成也带，模型自述 ≠ 事实，验收/核对由此起。
 //!
 //! ## 授权与深度护栏
 //!
@@ -91,6 +93,83 @@ fn validate_args(parsed: &DelegateArgs) -> AppResult<()> {
 /// 可能为空或不完整，须附 note 提醒委派方。
 fn is_normal_completion(reason: &str) -> bool {
     matches!(reason, "stop" | "end_turn")
+}
+
+// =========================================================================
+// 进度报告（D15 八波④）——子会话 session_events 的机器事实提取
+// =========================================================================
+
+/// 进度报告的文件清单上限（防大会话膨胀；超出截断 + 计数披露）。
+const PROGRESS_MAX_FILES: usize = 8;
+
+/// 子会话进度报告：成功工具调用聚合计数 + 最后一次失败 + 涉及文件。
+///
+/// **机器事实，不是模型自述**——正常完成也带（弱模型常「自认为完成」漏报
+/// 样式/漏表，跨核对靠事件流）；子会话被预算掐死时统筹者也能看到做到哪了。
+/// 纯 SELECT 无广播副作用；DB 读失败降级为零值报告（进度是增补信息，
+/// 不让诊断噪声挡住主结果回传）。
+async fn collect_progress(pool: &sqlx::SqlitePool, conv_id: &str) -> serde_json::Value {
+    let mut counts: std::collections::BTreeMap<String, usize> = Default::default();
+    let mut total: usize = 0;
+    let mut files: Vec<String> = Vec::new();
+    if let Ok(calls) = repo::session_event::list_successful_tool_calls(pool, conv_id).await {
+        for (tool, args) in &calls {
+            *counts.entry(tool.clone()).or_default() += 1;
+            total += 1;
+            if let Some(p) = crate::harness::references::artifact_path(tool, args) {
+                if !files.contains(&p) {
+                    files.push(p);
+                }
+            }
+        }
+    }
+    let last_error = repo::session_event::list_failed_tool_calls(pool, conv_id)
+        .await
+        .ok()
+        .and_then(|fails| fails.into_iter().next_back())
+        .map(|(tool, msg)| {
+            serde_json::json!({
+                "tool": tool,
+                "message": crate::infra::strings::truncate_to_byte_boundary(&msg, 200, Some("…")),
+            })
+        });
+    let truncated_files = files.len() > PROGRESS_MAX_FILES;
+    serde_json::json!({
+        "total_successful_tool_calls": total,
+        "successful_tool_calls": counts,
+        "last_error": last_error,
+        "files_touched": {
+            "paths": files.iter().take(PROGRESS_MAX_FILES).cloned().collect::<Vec<_>>(),
+            "more": if truncated_files { Some(files.len() - PROGRESS_MAX_FILES) } else { None },
+        }
+    })
+}
+
+/// Err 路径（壁钟超时 / 子循环异常退出）附带的紧凑进度行——AppError 只带
+/// 文本，塞不进 JSON 结构，退而求其次给一行可读摘要。
+async fn progress_summary_line(pool: &sqlx::SqlitePool, conv_id: &str) -> String {
+    let v = collect_progress(pool, conv_id).await;
+    let total = v["total_successful_tool_calls"].as_u64().unwrap_or(0);
+    if total == 0 {
+        return "子会话无成功工具调用记录（可能死于起步阶段）。".into();
+    }
+    let counts = v["successful_tool_calls"]
+        .as_object()
+        .map(|m| {
+            m.iter()
+                .map(|(k, n)| format!("{k}×{}", n.as_u64().unwrap_or(0)))
+                .collect::<Vec<_>>()
+                .join("、")
+        })
+        .unwrap_or_default();
+    let mut line = format!("子会话机器事实：成功工具调用 {total} 次（{counts}）");
+    if let Some(err) = v["last_error"].as_object() {
+        let tool = err.get("tool").and_then(|t| t.as_str()).unwrap_or("?");
+        let msg = err.get("message").and_then(|m| m.as_str()).unwrap_or("");
+        line.push_str(&format!("；最后失败：{tool}（{msg}）"));
+    }
+    line.push('。');
+    line
 }
 
 /// 解析可调度集合（§4.3.1 回退规则）。
@@ -182,7 +261,10 @@ impl McpClient for DelegateTool {
          final answer. Use it when a sub-task needs another agent's specialty (different \
          model, tools or knowledge). The `task` text is all the target agent sees - include \
          all necessary context in it. The target cannot delegate further; for multiple \
-         opinions, delegate to each agent separately."
+         opinions, delegate to each agent separately. The result JSON always includes a \
+         `progress` object of machine facts from the child session (successful tool call \
+         counts, last failed tool, files touched) - use it to verify the target's \
+         self-report instead of trusting the final text alone."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -370,21 +452,23 @@ impl McpClient for DelegateTool {
         let summary =
             match tokio::time::timeout(Duration::from_secs(WALL_CLOCK_GUARD_SECS), done_rx).await {
                 Ok(Ok(summary)) => summary,
-                // 超时：先 cancel 子会话（其 loop 会走 finalize_cancel 自清）再回 Err
+                // 超时：先 cancel 子会话（其 loop 会走 finalize_cancel 自清）再回 Err；
+                // 附机器事实进度行——统筹者拿到「做到哪了」而非只有一句超时
                 Err(_) => {
                     chat_state.stop(&child_conv_id);
+                    let prog = progress_summary_line(&ctx.pool, &child_conv_id).await;
                     return Err(AppError::Internal(format!(
                         "委派超时（{} 分钟壁钟护栏）——子会话 {child_conv_id} 已被取消，\
-                     请缩小任务范围或换一个 agent",
+                     请缩小任务范围或换一个 agent。{prog}",
                         WALL_CLOCK_GUARD_SECS / 60
                     )));
                 }
                 // RecvError：spawn 任务在发送完成信号前消失（panic / runtime 关闭）
                 Ok(Err(_)) => {
+                    let prog = progress_summary_line(&ctx.pool, &child_conv_id).await;
                     return Err(AppError::Internal(
-                        "子会话流式循环异常退出（未产出完成信号）——请如实告知用户该委派失败，\
-                     可在轨迹页查看子会话已落库的部分"
-                            .into(),
+                        format!("子会话流式循环异常退出（未产出完成信号）——请如实告知用户该委派失败，\
+                     可在轨迹页查看子会话已落库的部分。{prog}"),
                     ));
                 }
             };
@@ -420,6 +504,8 @@ impl McpClient for DelegateTool {
                 summary.finish_reason
             ));
         }
+        // 机器事实进度报告（正常完成也带——模型自述≠事实，跨核对由此起）
+        result["progress"] = collect_progress(&ctx.pool, &child_conv_id).await;
         Ok(result.to_string())
     }
 }
@@ -522,5 +608,138 @@ mod tests {
         ] {
             assert!(!is_normal_completion(r), "{r} 须附「可能不完整」note");
         }
+    }
+
+    // ------------------------------------------------------------------
+    // 进度报告（D15 八波④）——in-memory sqlite + typed emitter 种子法
+    //（session_events 无 FK，直接对任意 session_id 写事件即可）
+    // ------------------------------------------------------------------
+
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use sqlx::SqlitePool;
+    use std::str::FromStr;
+
+    async fn progress_pool() -> SqlitePool {
+        let opts = SqliteConnectOptions::from_str("sqlite::memory:")
+            .expect("valid sqlite url")
+            .create_if_missing(true)
+            .foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .expect("connect in-memory sqlite");
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
+        // session_events.session_id 有 FK → conversations，须先落最小会话行
+        sqlx::query(
+            "INSERT INTO agents (id, name, provider, model, system_prompt, api_key_ref, temperature, max_tokens, extra_params, sort_order, cache_prompt)
+             VALUES ('agent-1', 't', 'anthropic', 'claude-test', '', '', 0.7, 1024, '{}', 0, 0)",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed agent");
+        sqlx::query(
+            "INSERT INTO conversations (id, agent_id, title) VALUES ('conv-child', 'agent-1', 't')",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed conversation");
+        pool
+    }
+
+    async fn seed_tool_call(
+        pool: &SqlitePool,
+        ctx: &crate::harness::event_log::EventCtx,
+        n: usize,
+        tool: &str,
+        path: &str,
+        is_error: bool,
+    ) {
+        let args = serde_json::json!({ "path": path, "op": "demo" }).to_string();
+        crate::harness::event_log::log_tool_execution(
+            pool,
+            ctx,
+            &format!("msg-{n}"),
+            &format!("tc-{n}"),
+            None,
+            tool,
+            &args,
+            Some(if is_error { "失败示例：断言未过" } else { "ok" }),
+            is_error,
+            10,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn collect_progress_reports_counts_files_and_last_error() {
+        let pool = progress_pool().await;
+        let ctx = crate::harness::event_log::EventCtx::new("conv-child", "turn-1", "agent-1");
+        // 2× edit_docx 同一文件（去重）+ 1× inspect_docx 另一文件 + 末位失败
+        seed_tool_call(&pool, &ctx, 1, "edit_docx", "D:/doc/a.docx", false).await;
+        seed_tool_call(&pool, &ctx, 2, "edit_docx", "D:/doc/a.docx", false).await;
+        seed_tool_call(&pool, &ctx, 3, "inspect_docx", "D:/doc/b.docx", false).await;
+        seed_tool_call(&pool, &ctx, 4, "edit_docx", "D:/doc/a.docx", true).await;
+
+        let v = collect_progress(&pool, "conv-child").await;
+        assert_eq!(v["total_successful_tool_calls"], 3, "失败不计入成功计数");
+        assert_eq!(v["successful_tool_calls"]["edit_docx"], 2);
+        assert_eq!(v["successful_tool_calls"]["inspect_docx"], 1);
+        let paths = v["files_touched"]["paths"].as_array().unwrap();
+        assert_eq!(paths.len(), 2, "同文件去重，异文件各自计入");
+        assert!(v["files_touched"]["more"].is_null());
+        let last = v["last_error"].as_object().expect("末位失败须上报");
+        assert_eq!(last["tool"], "edit_docx");
+        assert!(last["message"].as_str().unwrap().contains("断言未过"));
+    }
+
+    #[tokio::test]
+    async fn collect_progress_empty_session_is_zero_report() {
+        let pool = progress_pool().await;
+        let v = collect_progress(&pool, "conv-empty").await;
+        assert_eq!(v["total_successful_tool_calls"], 0);
+        assert!(v["successful_tool_calls"].as_object().unwrap().is_empty());
+        assert!(v["last_error"].is_null());
+        assert!(v["files_touched"]["paths"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            progress_summary_line(&pool, "conv-empty").await,
+            "子会话无成功工具调用记录（可能死于起步阶段）。"
+        );
+    }
+
+    #[tokio::test]
+    async fn progress_summary_line_renders_machine_facts() {
+        let pool = progress_pool().await;
+        let ctx = crate::harness::event_log::EventCtx::new("conv-child", "turn-1", "agent-1");
+        seed_tool_call(&pool, &ctx, 1, "edit_docx", "D:/doc/a.docx", false).await;
+        seed_tool_call(&pool, &ctx, 2, "validate_docx", "D:/doc/a.docx", false).await;
+        seed_tool_call(&pool, &ctx, 3, "edit_docx", "D:/doc/a.docx", true).await;
+
+        let line = progress_summary_line(&pool, "conv-child").await;
+        assert!(line.contains("成功工具调用 2 次"), "{line}");
+        assert!(line.contains("edit_docx×1"), "BTreeMap 名序聚合计数：{line}");
+        assert!(line.contains("validate_docx×1"), "{line}");
+        assert!(line.contains("最后失败：edit_docx"), "{line}");
+        assert!(line.ends_with('。'), "{line}");
+    }
+
+    #[tokio::test]
+    async fn collect_progress_caps_file_list_at_eight() {
+        let pool = progress_pool().await;
+        let ctx = crate::harness::event_log::EventCtx::new("conv-child", "turn-1", "agent-1");
+        for i in 0..10 {
+            seed_tool_call(&pool, &ctx, i, "write_file", &format!("D:/doc/f{i}.md"), false).await;
+        }
+        let v = collect_progress(&pool, "conv-child").await;
+        let paths = v["files_touched"]["paths"].as_array().unwrap();
+        assert_eq!(paths.len(), PROGRESS_MAX_FILES, "清单截到上限");
+        assert_eq!(v["files_touched"]["more"], 10 - PROGRESS_MAX_FILES, "截断计数披露");
+        assert_eq!(v["total_successful_tool_calls"], 10, "计数不截断");
     }
 }

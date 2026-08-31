@@ -136,6 +136,32 @@ impl McpClient for EchoTool {
     }
 }
 
+/// 内存恒败工具（doom_loop e2e 用）：每次执行都失败，且错误首行是稳定
+/// 家族前缀（「always_fail 恒败」）——同签名连败正是 doom_detect 的靶形态。
+struct AlwaysFailTool;
+
+#[async_trait]
+impl McpClient for AlwaysFailTool {
+    fn name(&self) -> &str {
+        "always_fail"
+    }
+    fn description(&self) -> &str {
+        "恒败工具（e2e 测试工具，doom_loop 场景）"
+    }
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {"x": {"type": "integer"}},
+            "required": ["x"]
+        })
+    }
+    async fn execute(&self, _args: &str) -> AppResult<String> {
+        Err(crate::error::AppError::Validation(
+            "always_fail 恒败: e2e 固定错误（模拟弱模型反复撞同一失败）".into(),
+        ))
+    }
+}
+
 /// 一次 e2e 回合的驱动器：env + 输入 + 完成信号。
 struct TurnFixture {
     pool: SqlitePool,
@@ -155,6 +181,19 @@ async fn run_turn(scenario: MockScenario, tools: bool, extra_params: &str) -> Tu
 /// 在**已有库**上跑一个完整回合（调用方先注入自定义形态——如零事件旧行——
 /// 再驱动回合，验证读路径对存量数据的反应）。
 async fn run_turn_on(pool: SqlitePool, scenario: MockScenario, tools: bool) -> TurnFixture {
+    let mut map = std::collections::HashMap::new();
+    if tools {
+        map.insert("echo".to_string(), Arc::new(EchoTool) as Arc<dyn McpClient>);
+    }
+    run_turn_with_map(pool, scenario, map).await
+}
+
+/// 带自定义工具集跑一个完整回合（doom_loop 等场景注册恒败工具用）。
+async fn run_turn_with_map(
+    pool: SqlitePool,
+    scenario: MockScenario,
+    map: std::collections::HashMap<String, Arc<dyn McpClient>>,
+) -> TurnFixture {
     let emitter = CollectEmitter::default();
     let cancel = CancellationToken::new();
 
@@ -165,10 +204,7 @@ async fn run_turn_on(pool: SqlitePool, scenario: MockScenario, tools: bool) -> T
         .await
         .expect("seed agent");
 
-    let mut map = std::collections::HashMap::new();
-    if tools {
-        map.insert("echo".to_string(), Arc::new(EchoTool) as Arc<dyn McpClient>);
-    }
+    let tools = !map.is_empty();
     let global_registry = Arc::new(McpRegistry::from_map(map));
 
     let mock = Arc::new(MockProvider::new("mock-model", scenario));
@@ -606,6 +642,116 @@ async fn tool_round_pairs_use_execution_result() {
             "UI 事件应含 {expected}: {names:?}"
         );
     }
+    assert!(
+        names.contains(&"chat:done".to_string()),
+        "应含终态 chat:done: {names:?}"
+    );
+}
+
+// =========================================================================
+// 场景 6b：doom_loop 恒败连击 —— D15 八波⑤ nudge 逐次注入（3/4/5）+ 终止
+//
+// 形态：模型无视失败连续调同一工具（ToolCallRepeat）× 恒败工具。
+// 预期：streak 3/4/5 各注入一次 nudge（3 次，其中 4/5 带升级段——`>=` 修复前
+// 只有 streak 3 的一次）；streak 6 触发 TERMINATE_AT → finish_reason=doom_loop，
+// 第 7 次调用永不发生。
+// =========================================================================
+
+#[tokio::test]
+async fn doom_loop_constant_failure_nudges_each_time_then_terminates() {
+    let pool = seeded_pool("{}").await;
+    let mut map = std::collections::HashMap::new();
+    map.insert(
+        "always_fail".to_string(),
+        Arc::new(AlwaysFailTool) as Arc<dyn McpClient>,
+    );
+    let mut fx = run_turn_with_map(
+        pool,
+        MockScenario::ToolCallRepeat {
+            tool_name: "always_fail".into(),
+            // {round} 占位：每轮参数不同（stuck 轮指纹随之变化，抢不走
+            // doom_loop 的戏——这正是 doom_detect 相对 stuck_detect 的靶形态）
+            arguments: r#"{"x":{round}}"#.into(),
+            times: 7,
+        },
+        map,
+    )
+    .await;
+    let summary = finish(&mut fx).await;
+
+    assert_eq!(summary.finish_reason, "doom_loop", "连败 6 次须终止回合");
+    assert_eq!(
+        fx.mock.call_count(),
+        6,
+        "TERMINATE_AT=6：第 7 次调用在终止后才不会发生"
+    );
+
+    let events = event_rows(&fx.pool).await;
+    // 恒败执行审计：6 条全部 is_error
+    let fail_execs: Vec<&crate::db::models::SessionEventRow> = events
+        .iter()
+        .filter(|r| r.kind == "tool_execution")
+        .collect();
+    assert_eq!(fail_execs.len(), 6, "6 轮恒败各留一条 tool_execution 审计");
+    for e in &fail_execs {
+        let p: serde_json::Value = serde_json::from_str(&e.payload).expect("payload");
+        assert_eq!(p["is_error"], true, "恒败工具的审计行全部 is_error");
+        assert_eq!(p["tool_name"], "always_fail");
+    }
+
+    // nudge 注入审计：hook_injected(point=doom_loop_nudge) 恰 3 次（streak 3/4/5）
+    let nudges: Vec<&crate::db::models::SessionEventRow> = events
+        .iter()
+        .filter(|r| r.kind == "hook_injected")
+        .collect();
+    assert_eq!(
+        nudges.len(),
+        3,
+        "`>=` 升级（D15 前 `==` 只注入 1 次）：连败 3/4/5 各一次"
+    );
+    for (i, e) in nudges.iter().enumerate() {
+        let p: serde_json::Value = serde_json::from_str(&e.payload).expect("payload");
+        assert_eq!(p["point"], "doom_loop_nudge", "注入点不变（skip 事件零迁移）");
+        let streak = 3 + i;
+        let prompt = p["prompt"].as_str().expect("prompt 文本");
+        assert!(
+            prompt.contains(&format!("已连续 {streak} 次以同类方式失败")),
+            "第 {i} 条 nudge 须报实际连败数 {streak}: {prompt}"
+        );
+        let escalated = streak > 3;
+        assert_eq!(
+            prompt.contains("[升级指令]"),
+            escalated,
+            "streak={streak} {}升级段",
+            if escalated { "须带" } else { "不带" }
+        );
+    }
+
+    // 落库的 tool_result 行：nudge 文案进了模型可见内容（下轮历史）——
+    // [System] 出现 3 次、其中带升级段的 2 次（streak 6 走终止分支无 nudge）
+    let rows = message_rows(&fx.pool).await;
+    let mut system_nudges = 0;
+    let mut escalated = 0;
+    for row in &rows {
+        for block in blocks_of(row) {
+            if let ContentBlock::ToolResult { content, .. } = block {
+                if content.contains("[System]") {
+                    system_nudges += 1;
+                    if content.contains("[升级指令]") {
+                        escalated += 1;
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(
+        system_nudges, 3,
+        "三轮 nudge 追加进 tool_result 内容（模型下一轮可见）"
+    );
+    assert_eq!(escalated, 2, "streak 4/5 两轮带升级段");
+
+    assert_event_invariants(&events, &fx.user_msg_id);
+    let names = fx.emitter.names();
     assert!(
         names.contains(&"chat:done".to_string()),
         "应含终态 chat:done: {names:?}"

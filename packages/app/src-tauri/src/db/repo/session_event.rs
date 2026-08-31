@@ -138,6 +138,26 @@ pub async fn list_successful_tool_calls(
     Ok(rows)
 }
 
+/// 委派进度报告（D15 八波④）：全部**失败**工具调用的 `(tool_name, result)`，
+/// seq 正序——调用方取末条即「最后一次失败」。与
+/// [`list_successful_tool_calls`] 对称（json_extract 侧取两字段不拉全 payload）。
+pub async fn list_failed_tool_calls(
+    pool: &SqlitePool,
+    session_id: &str,
+) -> AppResult<Vec<(String, String)>> {
+    let rows = sqlx::query_as::<_, (String, String)>(
+        "SELECT json_extract(payload, '$.tool_name'), COALESCE(json_extract(payload, '$.result'), '')
+           FROM session_events
+          WHERE session_id = ? AND kind = 'tool_execution'
+            AND COALESCE(json_extract(payload, '$.is_error'), 0) = 1
+          ORDER BY seq ASC",
+    )
+    .bind(session_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 /// 崩溃自愈扫尾的输入：全部「已开始但未闭合」的 turn——有 `turn_context`
 /// 但无同 turn_id 的 `turn_ended`（进程死亡绕过了所有退出路径）。
 ///

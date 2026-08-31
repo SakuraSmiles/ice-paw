@@ -6,8 +6,9 @@
 //!
 //! 方案：在 tool_result 出口（loop_engine 阶段 E 之后）按「工具名 + [`error_kind`]」
 //! 统计连续失败：
-//! - 连败 [`NUDGE_AT`] 次 → 在该条 tool_result 尾部追加纠正指令（不终止——给模型
-//!   一次按恢复阶梯自救的机会；错误信息本身已是行为契约，指令只负责「停止再猜」）；
+//! - 连败 [`NUDGE_AT`] 次起**逐次**在该条 tool_result 尾部追加纠正指令（不终止——
+//!   给模型按恢复阶梯自救的机会；错误信息本身已是行为契约，指令只负责「停止再猜」；
+//!   D15 前是 `==` 只提醒一次，弱模型连吃 3 次同类失败仍只被纠正一次）；
 //! - 连败 [`TERMINATE_AT`] 次 → 终止回合（finish_reason="doom_loop"，对称清场剔除
 //!   本轮 tool_use），防止无视指令的循环纯烧 token。
 //!
@@ -40,12 +41,25 @@ pub(crate) fn error_kind(err: &str) -> &str {
 ///
 /// 不复述错误本身（tool_result 已含全文），只给行为指令：停 → 按指引修正 → 只调
 /// 一次 → 前提有误就核实或求助。控制在 4 行内（Codex A1 简洁默认）。
+///
+/// D15 八波⑤升级：连败超过 [`NUDGE_AT`]（loop_engine 按 `>=` 逐次注入）时追加
+/// 升级段——停止一切重试、改为结构化报告。委派子会话的最终回复经 TurnSummary
+/// 回传统筹者，同一措辞对人类/委派两语境通用。
 pub(crate) fn nudge_text(tool: &str, streak: u32) -> String {
-    format!(
+    let base = format!(
         "\n\n[System] {tool} 已连续 {streak} 次以同类方式失败。停止用同样方式重试：\
 1) 重读上方错误信息，按其中的恢复指引修正参数；2) 修正后只调用一次并检查结果；\
 3) 若错误反复指向同一前提（如路径不存在、依赖缺失），先用只读工具核实，或向用户说明障碍后再继续。"
-    )
+    );
+    if streak > NUDGE_AT {
+        format!(
+            "{base}\n[升级指令] 已连续 {streak} 次失败，超过提醒线。若这一轮修正后仍失败：\
+停止用任何方式重试，直接在回复中报告 ①已完成什么 ②反复失败的工具与完整错误 ③剩余部分，\
+由用户或委派方决定下一步。"
+        )
+    } else {
+        base
+    }
 }
 
 /// 连续失败跟踪器（每回合一个实例，跨工具轮存活）。
@@ -141,5 +155,21 @@ mod tests {
         assert!(s.contains("write_file"));
         assert!(s.contains("3 次"));
         assert!(s.contains("停止用同样方式重试"));
+        // 恰在提醒线：无升级段
+        assert!(!s.contains("[升级指令]"), "streak==NUDGE_AT 是首轮提醒：{s}");
+    }
+
+    /// D15 八波⑤：连败超线后 nudge 带升级段（停止一切重试 + 结构化报告三件套）
+    #[test]
+    fn nudge_text_escalates_beyond_reminder_line() {
+        for streak in [NUDGE_AT + 1, NUDGE_AT + 2, TERMINATE_AT - 1] {
+            let s = nudge_text("edit_docx", streak);
+            assert!(s.contains(&format!("{streak} 次以同类方式失败")), "{s}");
+            assert!(s.contains("[升级指令]"), "streak={streak} 须带升级段：{s}");
+            assert!(s.contains("停止用任何方式重试"), "{s}");
+            assert!(s.contains("①已完成什么"), "结构化报告三件套：{s}");
+            assert!(s.contains("②反复失败的工具与完整错误"), "{s}");
+            assert!(s.contains("③剩余部分"), "{s}");
+        }
     }
 }

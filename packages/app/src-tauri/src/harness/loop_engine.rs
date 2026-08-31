@@ -1029,7 +1029,7 @@ async fn stream_loop_inner(
                 let streak = doom.record_failure(tc_name, content);
                 if streak >= doom_detect::TERMINATE_AT {
                     doom_terminate = true;
-                } else if streak == doom_detect::NUDGE_AT {
+                } else if streak >= doom_detect::NUDGE_AT {
                     let nudge = doom_detect::nudge_text(tc_name, streak);
                     tracing::warn!(
                         target: "ice_paw.loop",
