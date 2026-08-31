@@ -1,6 +1,6 @@
 ---
 title: agent.yaml 进阶配置
-summary: agent.yaml 所有字段详解：人设、温度、token 预算、历史窗口、工具轮数上限、工具白名单、hooks 生命周期钩子，以及 Word 文档样式偏好（word_style_profile + templates/ 模板目录）。
+summary: agent.yaml 所有字段详解：人设、温度、token 预算、历史窗口、工具轮数上限、工具白名单、hooks 生命周期钩子，以及 Word 文档样式偏好（word_style_profile + 模板目录：workspace templates/ 与软件共享模板目录）。
 tags: [agent.yaml, 配置, system_prompt, temperature, max_tokens, hooks, 钩子, 预算, tool_max_rounds, max_total_tokens, word_style_profile, Word, 样式, 模板, 进阶]
 ---
 
@@ -93,7 +93,7 @@ word_style_profile: |
 
 **配套：templates/ 模板目录**
 
-如果偏好复杂到文字描述不清（整套样式定义、页眉页脚、封面），把模板 docx 放进 workspace 的 `templates/` 目录。agent 建新文档时用 `write_docx` 一次调用完成：`template` 参数直接填目录里的模板文件名（相对路径，如 `memo.docx`），模板的样式/编号/页面设置原样继承，正文按块序写入并自检后才落盘——这是「继承整套模板」的正路（应用未配模板时可先用内置档位 `report` 起步）。`word_style_profile` 管的是「每次写内容时的格式纪律」，两条轨道互补。
+如果偏好复杂到文字描述不清（整套样式定义、页眉页脚、封面），走模板轨道，模板放两处之一：① workspace 的 `templates/` 目录——项目自用，把模板 docx 放进去即可；② 软件共享模板目录——应用数据目录下的 `templates/`，安装包自带 `formal-report.docx` 正式报告模板（标题四级、表格与列表样式、密级页眉、页码页脚），可直接改它的样式或放自己的模板，全部 agent 共享。agent 建新文档用 `write_docx` 一次调用完成：`template` 参数填模板文件名（如 `formal-report.docx`），依次查 workspace templates/ → 共享目录，都没有再回落内置档位 `report`（同名文件优先于内置）；模板的样式/编号/页面设置原样继承，正文按块序写入并自检后才落盘——这是「继承整套模板」的正路。`word_style_profile` 管的是「每次写内容时的格式纪律」，两条轨道互补。
 
 ## 相关
 

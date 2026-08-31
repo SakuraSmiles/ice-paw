@@ -1112,7 +1112,8 @@ impl McpClient for EditDocxTool {
          (sum ≈ table width); whole-document \
          typography = set_style_element on heading/body styles instead of per-paragraph \
          set_format. Creating a new document: use write_docx (template-first, one call — \
-         built-in template / workspace templates/ / absolute path). The copy_file + \
+         workspace templates/ / shared templates folder ('formal-report.docx') / built-in \
+         'report' / absolute path). The copy_file + \
          op=clear_body chain remains only for MULTI-SECTION templates that write_docx \
          rejects. Every \
          operation must carry expect_prefix, the current text prefix of its target block, \
@@ -1602,20 +1603,21 @@ async fn write_and_rename(tmp: &Path, target: &Path, bytes: &[u8]) -> AppResult<
 // write_docx —— 模板优先生成（word-capability-roadmap 九波 D16）
 // =========================================================================
 
-/// 新建 .docx：模板（内置档位 / 项目 templates/ / 绝对路径三层）清空正文 →
-/// 按块序写入标题/段落/表格 → 生成自检全过才落盘。生成引擎在
-/// harness::doc::docx_write（纯函数）；薄壳职责 = 模板解析 + IO + 备份。
+/// 新建 .docx：模板（相对名依次查 workspace templates/ → 软件共享目录 →
+/// 内置档位兜底，或绝对路径直读）清空正文 → 按块序写入标题/段落/表格 →
+/// 生成自检全过才落盘。生成引擎在 harness::doc::docx_write（纯函数）；
+/// 薄壳职责 = 模板解析 + IO + 备份。
 ///
-/// override `execute_with_context`：L2 相对模板路径需要 ctx.workspace 拼接
-/// （search_kb 同款透传链路）。
+/// override `execute_with_context`：相对模板名需要 ctx.workspace 拼接、
+/// 共享目录需要 ctx.app_handle 推导（search_kb 同款透传链路）。
 pub struct WriteDocxTool;
 
 #[derive(Deserialize)]
 struct WriteDocxArgs {
     /// 目标 .docx 路径（不存在即新建；父目录缺失自动创建；已存在先备份再覆盖）
     path: String,
-    /// 模板三层：内置档位名 | 相对路径（workspace templates/ 下）| 绝对路径。
-    /// 缺省 "report"。
+    /// 模板：相对名（依次查 workspace templates/ → 共享模板目录 → 内置档位兜底，
+    /// 同名文件优先于内置档位）| 任意 .docx 绝对路径。缺省 "report"。
     #[serde(default)]
     template: Option<String>,
     /// 内容块序列（heading / paragraph / table）
@@ -1666,46 +1668,113 @@ struct WriteDocxResult {
     check: &'static str,
 }
 
-/// 模板三层解析 → 模板字节。
+/// 模板解析 → 模板字节（相对名四层链）。
 ///
-/// L1 内置档位名（精确命中，档位表见 [`BUILTIN_TEMPLATES`]）；
-/// L2 相对路径 → workspace/templates/ 下；L3 绝对路径直读。
-/// 相对路径但 agent 未设 workspace → 拒（三层规则写进文案）。
-async fn resolve_template(spec: &str, workspace: Option<&str>) -> AppResult<Vec<u8>> {
-    if BUILTIN_TEMPLATES.iter().any(|(name, _)| *name == spec) {
+/// 绝对路径直读；相对名依次查 ① workspace `templates/`（更具体者优先）
+/// ② 软件共享目录 `<app_data_dir>/templates/`（安装包模板落盘处，全 agent
+/// 共享、用户可自行放模板）③ 内置档位名兜底（[`BUILTIN_TEMPLATES`]——
+/// 同名文件可覆盖内置）。全 miss 报错列出两处目录现有模板 + 内置档位
+/// （报错即行为契约）。
+async fn resolve_template(
+    spec: &str,
+    workspace: Option<&str>,
+    shared_dir: Option<&Path>,
+) -> AppResult<Vec<u8>> {
+    let p = Path::new(spec);
+    let candidates: Vec<std::path::PathBuf> = if p.is_absolute() {
+        vec![p.to_path_buf()]
+    } else {
+        // 无扩展名的相对名（如内置档位名形态的 "report"）补试 .docx 变体——
+        // 「同名文件覆盖内置档位」的落地面（文件叫 report.docx，spec 写 report）。
+        let variants: Vec<String> = if p.extension().is_none() {
+            vec![spec.to_string(), format!("{spec}.docx")]
+        } else {
+            vec![spec.to_string()]
+        };
+        let mut v = Vec::new();
+        for name in &variants {
+            if let Some(ws) = workspace {
+                v.push(Path::new(ws).join("templates").join(name));
+            }
+        }
+        for name in &variants {
+            if let Some(sd) = shared_dir {
+                v.push(sd.join(name));
+            }
+        }
+        v
+    };
+    for path in &candidates {
+        match tokio::fs::read(path).await {
+            Ok(bytes) => return Ok(bytes),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                return Err(AppError::Validation(format!(
+                    "模板无效: 读取模板失败 {}: {e}。请确认路径与文件权限。",
+                    path.display()
+                )));
+            }
+        }
+    }
+    // 相对名文件全 miss → 内置档位兜底（绝对路径不兜底——路径是明确意图）
+    if !p.is_absolute() && BUILTIN_TEMPLATES.iter().any(|(name, _)| *name == spec) {
         return build_builtin_template(spec);
     }
-    let p = Path::new(spec);
-    let template_path = if p.is_absolute() {
-        p.to_path_buf()
-    } else {
-        let ws = workspace.ok_or_else(|| {
-            AppError::Validation(format!(
-                "模板无效: 相对模板路径 {:?} 需要 agent workspace（当前未设置）。\
-                 模板三层取法：① 内置档位名（{names}）② 相对路径——workspace \
-                 templates/ 目录下（需 agent 设置了 workspace）③ 任意 .docx 绝对路径。\
-                 请改用档位名或绝对路径。",
-                clip(spec, 40),
-                names = builtin_template_names()
-            ))
-        })?;
-        Path::new(ws).join("templates").join(p)
-    };
-    match tokio::fs::read(&template_path).await {
-        Ok(bytes) => Ok(bytes),
-        // 报错即行为契约：not-found 扫真实文件系统给近似候选
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(AppError::Validation(
-            format!(
-                "模板无效: 模板文件不存在 {}。{}",
-                template_path.display(),
-                super::path_suggest::suggest_for_missing(&template_path)
-            ),
-        )),
-        Err(e) => Err(AppError::Validation(format!(
-            "模板无效: 读取模板失败 {}: {e}。请确认路径与文件权限。",
-            template_path.display()
-        ))),
+    if candidates.is_empty() {
+        return Err(AppError::Validation(format!(
+            "模板无效: 相对模板名 {:?} 无处可查（agent 未设 workspace，共享模板目录\
+             也不可用）。{}",
+            clip(spec, 40),
+            available_templates_hint(workspace, shared_dir)
+        )));
     }
+    if p.is_absolute() {
+        // 报错即行为契约：not-found 扫真实文件系统给近似候选
+        return Err(AppError::Validation(format!(
+            "模板无效: 模板文件不存在 {}。{}",
+            p.display(),
+            super::path_suggest::suggest_for_missing(p)
+        )));
+    }
+    Err(AppError::Validation(format!(
+        "模板无效: {:?} 不存在（已查 workspace templates/ 与共享模板目录）。{}",
+        clip(spec, 40),
+        available_templates_hint(workspace, shared_dir)
+    )))
+}
+
+/// 模板 miss 时的可用清单：两处目录现有 .docx + 内置档位（错误文案展示用）。
+fn available_templates_hint(workspace: Option<&str>, shared_dir: Option<&Path>) -> String {
+    fn dir_section(label: &str, dir: &Path) -> String {
+        let names: Vec<String> = std::fs::read_dir(dir)
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .filter(|n| n.to_ascii_lowercase().ends_with(".docx"))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let list = if names.is_empty() {
+            "（空）".to_string()
+        } else {
+            names.join(" / ")
+        };
+        format!("{label} {}: {list}", dir.display())
+    }
+    let mut sections: Vec<String> = Vec::new();
+    if let Some(ws) = workspace {
+        sections.push(dir_section("workspace templates/", &Path::new(ws).join("templates")));
+    }
+    if let Some(sd) = shared_dir {
+        sections.push(dir_section("共享模板目录", sd));
+    }
+    sections.push(format!("内置档位: {}", builtin_template_names()));
+    format!(
+        "可用模板——{}。取法：相对名依次查 workspace templates/ 与共享目录（同名\
+         文件优先于内置档位），或任意 .docx 绝对路径。",
+        sections.join("；")
+    )
 }
 
 /// 内置档位名清单（错误文案展示用，斜杠分隔）。
@@ -1728,24 +1797,28 @@ impl McpClient for WriteDocxTool {
          produce Word files. The template's styles / numbering / page setup are preserved \
          verbatim, its body is cleared, your blocks are written in order, and a built-in \
          self-check verifies every block (text and table shape) BEFORE anything is written \
-         to disk. Template resolution, three layers: (1) built-in name — 'report' (Chinese \
-         report style: SimHei headings, SimSun body 12pt with 1.5 line spacing, A4 single \
-         section); (2) relative path — resolved under the agent workspace templates/ \
-         directory (house templates live there; list_directory it to see what exists); \
-         (3) absolute path to any .docx. Omit template for 'report'. House style tweaking: \
-         edit the template file itself, or adjust style definitions in the generated file \
-         with edit_docx set_style_element. blocks is an ordered list written top to bottom; \
-         each block is one of {type:'heading', level 1-9, text} (style resolved via the \
-         template's heading styles), {type:'paragraph', text, style?} (ONE paragraph per \
-         block — \\n does NOT split paragraphs, send multiple blocks; omit style for the \
-         template body default), {type:'table', rows_text | rows, header=true, style?} \
-         (rows_text value-first: a Markdown table or TSV; rows structured, where \\n inside \
-         a cell = multiple paragraphs in that cell). Single-section templates only \
-         (multi-section templates are rejected — for those use copy_file + edit_docx \
-         clear_body). The target's parent directory is created if missing; an existing \
-         file at the target is backed up to .icepaw-backup/ then replaced atomically. \
-         Result reports paragraphs/tables counts and check:'passed' — inspect_docx the \
-         result only if you need structure details."
+         to disk. Template resolution: a relative name is looked up first under the agent \
+         workspace templates/ directory (house templates), then in the app's SHARED \
+         templates folder (ships with 'formal-report.docx' — formal report styles: \
+         4-level headings, table/list styles, classified-mark header + page-number \
+         footer; editable by the user, shared by all agents), then falls back to the \
+         built-in name 'report' (Chinese report style: SimHei headings, SimSun body 12pt \
+         with 1.5 line spacing, A4 single section) — a file with the same name overrides \
+         the built-in. An absolute path to any .docx also works. Omit template for \
+         'report'. House style tweaking: edit the template file itself, or adjust style \
+         definitions in the generated file with edit_docx set_style_element. blocks is an \
+         ordered list written top to bottom; each block is one of {type:'heading', level \
+         1-9, text} (style resolved via the template's heading styles), \
+         {type:'paragraph', text, style?} (ONE paragraph per block — \\n does NOT split \
+         paragraphs, send multiple blocks; omit style for the template body default), \
+         {type:'table', rows_text | rows, header=true, style?} (rows_text value-first: a \
+         Markdown table or TSV; rows structured, where \\n inside a cell = multiple \
+         paragraphs in that cell). Single-section templates only (multi-section templates \
+         are rejected — for those use copy_file + edit_docx clear_body). The target's \
+         parent directory is created if missing; an existing file at the target is backed \
+         up to .icepaw-backup/ then replaced atomically. Result reports paragraphs/tables \
+         counts and check:'passed' — inspect_docx the result only if you need structure \
+         details."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -1758,7 +1831,7 @@ impl McpClient for WriteDocxTool {
                 },
                 "template": {
                     "type": "string",
-                    "description": "Template: a built-in name ('report'), a path relative to the agent workspace templates/ directory (e.g. 'memo.docx'), or an absolute path. Omit for 'report'."
+                    "description": "Template: a file name looked up in the agent workspace templates/ directory first, then the app shared templates folder ('formal-report.docx' lives there — formal report styles), then a built-in name ('report'); a same-named file overrides the built-in. An absolute .docx path also works. Omit for 'report'."
                 },
                 "blocks": {
                     "type": "array",
@@ -1876,9 +1949,20 @@ impl McpClient for WriteDocxTool {
             }
         }
 
-        // 模板三层 → 内存全链生成（清空→锚→顺序写→自检；自检不过不落盘）
+        // 模板解析（相对名四层链）→ 内存全链生成（清空→锚→顺序写→自检；自检不过不落盘）
         let template_spec = parsed.template.clone().unwrap_or_else(|| "report".into());
-        let template = resolve_template(&template_spec, ctx.workspace.as_deref()).await?;
+        // 共享模板目录从 AppHandle 推导（app_data_dir/templates/，boot 已 ensure
+        // 落盘）；无 AppHandle（单测/无头环境）→ 仅 workspace + 内置档位两层。
+        let shared_dir = ctx
+            .app_handle
+            .as_ref()
+            .and_then(|h| crate::logging::data_dir(h).ok().map(|d| d.join("templates")));
+        let template = resolve_template(
+            &template_spec,
+            ctx.workspace.as_deref(),
+            shared_dir.as_deref(),
+        )
+        .await?;
         let generated = generate_from_template(&template, &blocks)?;
 
         // 父目录好默认：缺失自动创建（copy_file 同款）
@@ -2610,6 +2694,59 @@ mod tests {
             .to_string();
         assert!(err.contains("模板无效"), "实际: {err}");
         assert!(err.contains("不存在"), "实际: {err}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // =========================================================================
+    // 模板四层解析（D17 共享模板目录）——顺序 / 内置兜底 / 可用清单提示
+    // =========================================================================
+
+    #[tokio::test]
+    async fn resolve_template_shared_dir_fallback_and_order() {
+        let dir = std::env::temp_dir().join("icepaw_resolve_tpl_test");
+        std::fs::remove_dir_all(&dir).ok();
+        let ws = dir.join("ws");
+        let shared = dir.join("shared");
+        std::fs::create_dir_all(ws.join("templates")).unwrap();
+        std::fs::create_dir_all(&shared).unwrap();
+        let (seed_name, seed_bytes) = crate::harness::doc::shared_templates::SHARED_TEMPLATE_SEEDS[0];
+
+        // 共享目录命中：无 workspace 也能用（共享目录不依赖 workspace）
+        std::fs::write(shared.join(seed_name), seed_bytes).unwrap();
+        let bytes = resolve_template(seed_name, None, Some(&shared)).await.unwrap();
+        assert_eq!(bytes, seed_bytes.to_vec());
+
+        // workspace 优先于共享目录（更具体者赢）：同名时取 workspace 字节。
+        // 合成 docx 只取一次样——docx_rs 每次打包带时间戳，两次调用字节必异。
+        let synthetic = docx_bytes();
+        std::fs::write(ws.join("templates").join(seed_name), &synthetic).unwrap();
+        let bytes = resolve_template(seed_name, Some(ws.to_str().unwrap()), Some(&shared))
+            .await
+            .unwrap();
+        assert_eq!(bytes, synthetic);
+
+        // 内置档位兜底：两处目录都无该文件时回落 BUILTIN_TEMPLATES
+        let bytes = resolve_template("report", Some(ws.to_str().unwrap()), Some(&shared))
+            .await
+            .unwrap();
+        assert!(!bytes.is_empty(), "内置档位应兜底");
+
+        // 同名文件可覆盖内置档位：workspace 放 report.docx → 取文件
+        std::fs::write(ws.join("templates").join("report.docx"), &synthetic).unwrap();
+        let bytes = resolve_template("report", Some(ws.to_str().unwrap()), Some(&shared))
+            .await
+            .unwrap();
+        assert_eq!(bytes, synthetic);
+
+        // miss 报错即行为契约：列两处目录清单 + 内置档位
+        let err = resolve_template("zzz.docx", Some(ws.to_str().unwrap()), Some(&shared))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("模板无效"), "实际: {err}");
+        assert!(err.contains("共享模板目录"), "应列共享目录: {err}");
+        assert!(err.contains(seed_name), "应列共享目录现有模板: {err}");
+        assert!(err.contains("report"), "应列内置档位: {err}");
         std::fs::remove_dir_all(&dir).ok();
     }
 

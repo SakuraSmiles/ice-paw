@@ -22,6 +22,7 @@ mod docx_inspect;
 mod docx_model;
 mod docx_validate;
 mod docx_write;
+pub mod shared_templates;
 mod numbering;
 mod pdf;
 mod pdf_render;
