@@ -400,6 +400,22 @@ pub fn run() {
                 tracing::info!(target: "ice_paw.kb", "KB watcher 管理器启动完成");
             });
 
+            // 共享模板目录（D17）：安装包模板资产落盘 <app_data_dir>/templates/。
+            // 幂等、不覆盖用户改动；write_docx 解析链 = workspace templates/ →
+            // 此目录 → 内置档位（失败仅 warn，内置档位仍可用）。
+            if let Ok(data_dir) = crate::logging::data_dir(&handle) {
+                let tpl_dir = data_dir.join("templates");
+                match harness::doc::shared_templates::ensure_shared_templates(&tpl_dir) {
+                    Ok(0) => {}
+                    Ok(n) => {
+                        tracing::info!(target: "ice_paw.doc", "共享模板落盘 {n} 份: {}", tpl_dir.display());
+                    }
+                    Err(e) => {
+                        tracing::warn!(target: "ice_paw.doc", "共享模板落盘失败（内置档位仍可用）: {e}");
+                    }
+                }
+            }
+
             let _ = pool;
             Ok(())
         })
