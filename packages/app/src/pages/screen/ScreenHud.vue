@@ -27,8 +27,10 @@ const expanded = computed(() => !collapsed.value && !state.value.writing);
 /** mini 形态下的点击穿透：仅写避让（自动收缩几秒后自愈）；手动收起必须可点回 */
 const passthrough = computed(() => state.value.writing);
 
+/** mini 形态意图 = 未展开（手动收起或写避让收缩） */
+const miniForm = computed(() => !expanded.value);
 // 形态切换是 Rust 侧窗口操作（resize + 穿透），前端只声明意图
-watch([expanded, passthrough], ([mini, pt]) => {
+watch([miniForm, passthrough], ([mini, pt]) => {
   bridge.screen.setHudForm(mini, pt).catch(() => {});
 }, { immediate: true });
 
@@ -189,12 +191,12 @@ onUnmounted(() => {
 
 .hud-full {
   gap: var(--ip-spacing-2);
-  padding: 0 var(--ip-spacing-2-5);
+  padding: 0 var(--ip-spacing-3);
 }
 
 .hud-mini {
   gap: var(--ip-spacing-1);
-  padding: 0 var(--ip-spacing-1-5, 6px);
+  padding: 0 var(--ip-spacing-2);
   font-size: var(--ip-text-micro-size);
 }
 
@@ -223,7 +225,7 @@ onUnmounted(() => {
 .holder {
   display: inline-flex;
   align-items: baseline;
-  gap: var(--ip-spacing-1-5, 6px);
+  gap: var(--ip-spacing-1);
   min-width: 0;
   overflow: hidden;
 }
@@ -249,8 +251,8 @@ onUnmounted(() => {
 .chip {
   display: inline-flex;
   align-items: center;
-  gap: var(--ip-spacing-0-5);
-  padding: 1px var(--ip-spacing-1-5, 6px);
+  gap: var(--ip-spacing-1);
+  padding: 2px var(--ip-spacing-2);
   border-radius: 999px;
   font-size: var(--ip-text-micro-size);
   white-space: nowrap;
@@ -305,6 +307,7 @@ onUnmounted(() => {
   background: var(--ip-color-bg-tertiary);
   color: var(--ip-color-text-primary);
 }
+.icon-btn.stop { color: var(--ip-danger-base); }
 .icon-btn.stop:hover {
   background: var(--ip-danger-bg);
   color: var(--ip-danger-text);
