@@ -348,4 +348,30 @@ mod tests {
             .expect("update clear");
         assert_eq!(row.avatar, None);
     }
+
+    /// 2026-08-31 生产实案回归：set_agent_enabled_tools 写 yaml 后镜像 DB 列依赖
+    /// 本双层语义——只摘 yaml 不清 DB，旧白名单会在下次加载复活（工具静默缺失）。
+    /// 摘除 → Some(None)=NULL（组装 filter 见 None 走全量）；收窄 → Some(Some)=同值 JSON。
+    #[tokio::test]
+    async fn enabled_tools_update_double_option_semantics() {
+        let pool = test_pool().await;
+        create(&pool, &new_agent(None), "a1", "a1").await.expect("create");
+        let row = get_by_id(&pool, "a1").await.expect("get");
+        assert_eq!(row.enabled_tools, None);
+
+        // Some(Some) = 设定白名单（收窄镜像路径）
+        let list = vec!["read_file".to_string(), "edit_docx".to_string()];
+        let row = update(&pool, "a1", None, None, None, None, None, None, None, None, None,
+            None, None, None, Some(Some(list)), None, None, None)
+            .await
+            .expect("update set");
+        assert_eq!(row.enabled_tools.as_deref(), Some(r#"["read_file","edit_docx"]"#));
+
+        // Some(None) = 清空即全部启用（摘除镜像路径）
+        let row = update(&pool, "a1", None, None, None, None, None, None, None, None, None,
+            None, None, None, Some(None), None, None, None)
+            .await
+            .expect("update clear");
+        assert_eq!(row.enabled_tools, None);
+    }
 }

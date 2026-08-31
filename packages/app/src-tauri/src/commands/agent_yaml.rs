@@ -20,10 +20,12 @@
 
 use std::sync::Arc;
 
+use sqlx::SqlitePool;
 use tauri::State;
 
 use super::agent_cmd::AgentCmd;
 use crate::db::models::AgentFileConfig;
+use crate::db::repo;
 use crate::error::{AppError, AppResult};
 
 /// 可改写键白名单（新增键须同步 `validate_patched` 的回读分支）
@@ -577,9 +579,16 @@ fn validate_enabled_tools_patched(
 /// `tools = Some(非空 list)`：收窄到名单；`None` **或空列表**：摘除键行 + 块体
 /// （恢复全量工具）——空列表按系统既有约定 ≡ 全开（提案 guard / 出生模板同款
 /// 判定），落一行 `enabled_tools: []` 只会误导排障。
+///
+/// **DB 列镜像（2026-08-31 生产实案补丁）**：工具组装期收窄读的是 DB 行，
+/// yaml 只在加载时经 `apply_to_row` 遮蔽（字段 Some 才覆盖）——只摘 yaml 不
+/// 清 DB，旧白名单会在下次加载复活（工具静默缺失）。故本命令写完 yaml 后
+/// 同步镜像 DB 列：摘除 → NULL、收窄 → 同值 JSON。yaml 是权威，DB 是供组装
+/// 读行的镜像。
 #[tauri::command]
 pub async fn set_agent_enabled_tools(
     cmd: State<'_, Arc<dyn AgentCmd>>,
+    pool: State<'_, SqlitePool>,
     agent_id: String,
     tools: Option<Vec<String>>,
 ) -> AppResult<AgentYamlFields> {
@@ -621,6 +630,22 @@ pub async fn set_agent_enabled_tools(
         tools.as_ref().map_or(0, Vec::len),
         yaml_path.display()
     );
+
+    // DB 列镜像（见函数文档）：摘除 → Some(None)=清 NULL；收窄 → Some(Some)=同值。
+    // yaml 已落盘（权威），镜像失败必须报错——静默跳过 = 摘除场景旧值复活。
+    repo::agent::update(
+        pool.inner(),
+        &agent_id,
+        None, None, None, None, None, None, None, None, None, None, None, None,
+        Some(tools.clone()),
+        None, None, None,
+    )
+    .await
+    .map_err(|e| {
+        AppError::Io(std::io::Error::other(format!(
+            "agent.yaml 已改写但 DB 镜像同步失败（重试本操作即可，yaml 不会被重复改坏）: {e}"
+        )))
+    })?;
     Ok(fields)
 }
 
