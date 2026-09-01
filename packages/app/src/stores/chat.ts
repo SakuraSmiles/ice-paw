@@ -86,9 +86,11 @@ export const useChatStore = defineStore("chat", () => {
 
   function selectConversation(id: string) {
     const oldId = activeConvId.value;
-    // 离开「正在流式」的会话：把当前流式文本快照到 bgStreams，切回时可恢复
+    // 离开「正在流式」的会话：把当前流式文本快照到 bgStreams，切回时可恢复。
+    // 原地 set（勿整替 Map）：整替会触发 streamingConvIds 的 keys 迭代依赖，
+    // Sidebar/项目列表/任务台账等全部消费方无谓重算；set 已有键不触迭代依赖。
     if (oldId && sending.value) {
-      bgStreams.value = new Map(bgStreams.value).set(oldId, {
+      bgStreams.value.set(oldId, {
         text: streamingText.value,
         thinking: streamingThinking.value,
       });
@@ -107,7 +109,7 @@ export const useChatStore = defineStore("chat", () => {
       sending.value = true;
       streamingText.value = bg.text;
       streamingThinking.value = bg.thinking;
-      bgStreams.value = new Map([...bgStreams.value].filter(([k]) => k !== id));
+      bgStreams.value.delete(id);
     } else {
       sending.value = false;
     }

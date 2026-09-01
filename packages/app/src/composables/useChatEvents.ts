@@ -127,12 +127,14 @@ export async function useChatEvents(): Promise<() => void> {
   await subscribe<ChatChunkPayload>("chat:chunk", (e) => {
     const cid = e.payload.conversation_id;
     if (cid !== chat.activeConvId) {
-      // 后台会话：累积文本到快照，切回时恢复（不触活跃 UI / messages）
-      const m = new Map(chat.bgStreams);
-      const cur = m.get(cid) ?? { text: "", thinking: "" };
-      cur.text += e.payload.delta;
-      m.set(cid, cur);
-      chat.bgStreams = m;
+      // 后台会话：累积文本到快照，切回时恢复（不触活跃 UI / messages）。
+      // 原地 mutate（勿整替 Map）：streamingConvIds 遍历 bgStreams.keys()，
+      // 整替会让 Sidebar/项目列表/任务台账等全部消费方在委派生成的每个
+      // 40ms tick 重算重渲染；已有键的 text 变化不触 keys 迭代依赖，新键
+      // set 照常触发（新后台流出现，streamingConvIds 本就该醒）。
+      const cur = chat.bgStreams.get(cid);
+      if (cur) cur.text += e.payload.delta;
+      else chat.bgStreams.set(cid, { text: e.payload.delta, thinking: "" });
       return;
     }
     chat.resetSendTimeout();
@@ -197,11 +199,10 @@ export async function useChatEvents(): Promise<() => void> {
   await subscribe<ChatThinkingPayload>("chat:thinking", (e) => {
     const cid = e.payload.conversation_id;
     if (cid !== chat.activeConvId) {
-      const m = new Map(chat.bgStreams);
-      const cur = m.get(cid) ?? { text: "", thinking: "" };
-      cur.thinking += e.payload.content;
-      m.set(cid, cur);
-      chat.bgStreams = m;
+      // 同 chat:chunk 后台路径：原地 mutate，勿整替 Map（见该处注释）
+      const cur = chat.bgStreams.get(cid);
+      if (cur) cur.thinking += e.payload.content;
+      else chat.bgStreams.set(cid, { text: "", thinking: e.payload.content });
       return;
     }
     chat.resetSendTimeout();
@@ -215,9 +216,7 @@ export async function useChatEvents(): Promise<() => void> {
     const cid = e.payload.conversation_id;
     if (cid !== chat.activeConvId) {
       // 后台会话完成：后端已把最终态落库，清掉快照即可（不触活跃 UI，无需前端 freeze）
-      const m = new Map(chat.bgStreams);
-      m.delete(cid);
-      chat.bgStreams = m;
+      chat.bgStreams.delete(cid);
       recentErrorConvs.delete(cid);
       return;
     }
@@ -284,9 +283,7 @@ export async function useChatEvents(): Promise<() => void> {
     recentErrorConvs.add(cid);
     if (cid !== chat.activeConvId) {
       // 后台会话出错：清掉快照（用户切回时走 DB 加载，看到错误态）
-      const m = new Map(chat.bgStreams);
-      m.delete(cid);
-      chat.bgStreams = m;
+      chat.bgStreams.delete(cid);
       return;
     }
     chat.clearSendTimeout();
