@@ -5,6 +5,7 @@
 // 开关态（isOpen）与快速新建表单态内部自持；select / create / manage / open
 // 通过 emit 上交 Sidebar 处理。
 import { ref, computed, nextTick } from "vue";
+import { Folder, FolderPlus, List } from "@lucide/vue";
 import type { Project } from "../../types";
 
 const props = defineProps<{
@@ -12,6 +13,8 @@ const props = defineProps<{
   /** 当前选中的项目空间（null = 散落会话）；用于高亮菜单中的当前项 */
   scopeProjectId: string | null;
   projects: Project[];
+  /** 侧栏收起态变体：胶囊整行换成单图标钮，切换菜单改为向右弹（rail 模式） */
+  collapsed?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -27,11 +30,13 @@ const isScoped = computed(() => props.scopeProjectId !== null);
 
 function onSelect(id: string | null) {
   isOpen.value = false;
+  creating.value = false; // 菜单内表单开着时点列表项 = 放弃输入，防下次开菜单残留表单
   emit("select", id);
 }
 
 function onManage() {
   isOpen.value = false;
+  creating.value = false;
   emit("manage");
 }
 
@@ -54,6 +59,15 @@ async function startCreate() {
   await nextTick();
   nameInput.value?.focus();
 }
+/** 收起态菜单内快速新建（2026-09-01 菜单头部入口）：不关菜单——表单在头部
+ *  下方原地展开，列表照常可见可点；与 startCreate（关菜单、胶囊整行换表单）
+ *  是同一动作的两个入口形态，共用 creating/newName/nameInput 状态 */
+async function startCreateInMenu() {
+  creating.value = true;
+  newName.value = "";
+  await nextTick();
+  nameInput.value?.focus();
+}
 function cancelCreate() {
   creating.value = false;
   newName.value = "";
@@ -63,15 +77,18 @@ function confirmCreate() {
   if (!name) return;
   creating.value = false;
   newName.value = "";
+  // 收起态表单在菜单内：确认即收场（创建方会切空间回首页，菜单留着遮视野）
+  if (props.collapsed) isOpen.value = false;
   emit("create", name);
 }
 </script>
 
 <template>
-  <!-- 项目空间胶囊（position:relative 是切换菜单向下弹出的锚点） -->
-  <div class="project-capsule">
-    <!-- 快速新建：整行原地替换为迷你表单（纯名字，Enter 确认 / Esc 取消） -->
-    <div v-if="creating" class="switcher-create">
+  <!-- 项目空间胶囊（position:relative 是切换菜单向下/向右弹出的锚点） -->
+  <div class="project-capsule" :class="{ collapsed }">
+    <!-- 快速新建：整行原地替换为迷你表单（纯名字，Enter 确认 / Esc 取消）。
+         收起态不在此渲染（胶囊只剩单图标钮）——表单收进菜单头部下方（见 nav 内） -->
+    <div v-if="creating && !collapsed" class="switcher-create">
       <input
         ref="nameInput"
         v-model="newName"
@@ -93,47 +110,64 @@ function confirmCreate() {
     </div>
 
     <template v-else>
-      <!-- 左侧：当前空间名纯展示——scoped 点击直达项目详情页（轨迹/台账/
-           设置），散落态置灰不可点。「看项目」与「切空间」是两个动作，不混一个入口 -->
-      <button
-        class="proj-name"
-        :class="{ scoped: isScoped }"
-        :disabled="!isScoped"
-        :title="isScoped ? `${currentProjectName}——点击查看项目详情` : '散落会话：不属于任何项目的会话'"
-        @click="onOpenDetail"
-      >
-        <!-- 圆点（scoped=主色，散落=灰点；头像/主题色功能已移除，纯状态标记） -->
-        <span class="item-dot" :class="{ muted: !isScoped }" />
-        <span class="switcher-name">{{ currentProjectName }}</span>
-      </button>
-
-      <!-- 右侧：动作钮（⇄ 切换空间 / 快速新建 / 管理）——对集合的操作外置，不藏进菜单 -->
-      <div class="capsule-actions">
+      <template v-if="!collapsed">
+        <!-- 左侧：当前空间名纯展示——scoped 点击直达项目详情页（轨迹/台账/
+             设置），散落态置灰不可点。「看项目」与「切空间」是两个动作，不混一个入口 -->
         <button
-          class="capsule-btn"
-          :class="{ 'switcher-open': isOpen }"
-          title="切换项目空间"
-          @click="isOpen = !isOpen"
+          class="proj-name"
+          :class="{ scoped: isScoped }"
+          :disabled="!isScoped"
+          :title="isScoped ? `${currentProjectName}——点击查看项目详情` : '散落会话：不属于任何项目的会话'"
+          @click="onOpenDetail"
         >
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="17 1 21 5 17 9" />
-            <path d="M3 11V9a4 4 0 0 1 4-4h14" />
-            <polyline points="7 23 3 19 7 15" />
-            <path d="M21 13v2a4 4 0 0 1-4 4H3" />
-          </svg>
+          <!-- 圆点（scoped=主色，散落=灰点；头像/主题色功能已移除，纯状态标记） -->
+          <span class="item-dot" :class="{ muted: !isScoped }" />
+          <span class="switcher-name">{{ currentProjectName }}</span>
         </button>
-        <button class="capsule-btn" title="快速新建项目" @click="startCreate">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
-          </svg>
-        </button>
-        <button class="capsule-btn" title="管理项目" @click="onManage">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" /><line x1="8" y1="18" x2="21" y2="18" />
-            <line x1="3" y1="6" x2="3.01" y2="6" /><line x1="3" y1="12" x2="3.01" y2="12" /><line x1="3" y1="18" x2="3.01" y2="18" />
-          </svg>
-        </button>
-      </div>
+
+        <!-- 右侧：动作钮（⇄ 切换空间 / 快速新建 / 管理）——对集合的操作外置，不藏进菜单 -->
+        <div class="capsule-actions">
+          <button
+            class="capsule-btn"
+            :class="{ 'switcher-open': isOpen }"
+            title="切换项目空间"
+            @click="isOpen = !isOpen"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="17 1 21 5 17 9" />
+              <path d="M3 11V9a4 4 0 0 1 4-4h14" />
+              <polyline points="7 23 3 19 7 15" />
+              <path d="M21 13v2a4 4 0 0 1-4 4H3" />
+            </svg>
+          </button>
+          <button class="capsule-btn" title="快速新建项目" @click="startCreate">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+          </button>
+          <button class="capsule-btn" title="管理项目" @click="onManage">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" /><line x1="8" y1="18" x2="21" y2="18" />
+              <line x1="3" y1="6" x2="3.01" y2="6" /><line x1="3" y1="12" x2="3.01" y2="12" /><line x1="3" y1="18" x2="3.01" y2="18" />
+            </svg>
+          </button>
+        </div>
+      </template>
+
+      <!-- 收起态：单图标钮（Folder），切换菜单改为向右弹（.switcher-menu.collapsed
+           变体）。快速新建/管理在收起态不可达（已知边界，后续迭代再补菜单项）；
+           「看项目详情」同样收进菜单流（选空间后从别处进详情） -->
+      <button
+        v-else
+        class="switcher-rail-btn"
+        :class="{ 'switcher-open': isOpen }"
+        :title="`项目空间：${currentProjectName}——点击切换`"
+        aria-haspopup="menu"
+        :aria-expanded="isOpen"
+        @click="isOpen = !isOpen"
+      >
+        <Folder :size="18" />
+      </button>
     </template>
 
     <!-- 切换菜单（向下弹出）与遮罩必须在 .project-capsule 内部：
@@ -142,7 +176,45 @@ function confirmCreate() {
          菜单弹到视口外——「点了没反应」的真正根因）。开合用 class 驱动（open）
          + CSS transition，不走 <Transition>+v-if 插拔（首开不挂载，见前 commit） -->
     <div class="switcher-overlay" :class="{ open: isOpen }" @click="isOpen = false" />
-    <nav class="switcher-menu" :class="{ open: isOpen }" :aria-hidden="!isOpen || undefined">
+    <nav class="switcher-menu" :class="{ open: isOpen, collapsed }" :aria-hidden="!isOpen || undefined">
+      <!-- 收起态头部：把展开态胶囊上的「快速新建 / 项目列表」两入口收进来
+           （用户拍板 2026-09-01——收起态胶囊只剩单图标钮，对集合的操作回归
+           菜单头部）。sticky：列表滚长时头部吸附在菜单顶 -->
+      <div v-if="collapsed" class="switcher-menu-header">
+        <span class="menu-header-label">项目空间</span>
+        <div class="menu-header-actions">
+          <button class="menu-action-btn" title="快速新建项目" @click="startCreateInMenu">
+            <FolderPlus :size="15" />
+          </button>
+          <button class="menu-action-btn" title="项目列表" @click="onManage">
+            <List :size="15" />
+          </button>
+        </div>
+      </div>
+
+      <!-- 菜单内迷你表单（与胶囊表单同款 markup/class，二选一渲染共用 nameInput
+           ref；表单展开时列表照常可见可点，点列表项即放弃输入） -->
+      <div v-if="collapsed && creating" class="switcher-create menu-create-row">
+        <input
+          ref="nameInput"
+          v-model="newName"
+          class="create-input"
+          type="text"
+          placeholder="项目名称"
+          maxlength="60"
+          @keydown.enter.prevent="confirmCreate"
+          @keydown.esc.prevent="cancelCreate"
+        />
+        <div class="create-actions">
+          <button class="create-btn" :disabled="!newName.trim()" title="创建" @click="confirmCreate">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+          </button>
+          <button class="create-btn" title="取消" @click="cancelCreate">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+          </button>
+        </div>
+      </div>
+
       <div class="switcher-list">
         <button class="switcher-item" :class="{ active: !isScoped }" @click="onSelect(null)">
           <span class="item-mark"><span class="item-dot muted" /></span>
@@ -264,6 +336,40 @@ function confirmCreate() {
   color: var(--ip-primary-600);
 }
 
+/* ===== 收起态（rail）：胶囊整行换成单图标钮 =====
+   样式自持（与 Sidebar .btn-icon 同规格 36px，但不依赖父级 scoped CSS——
+   组件内部元素吃不到父级 scoped 选择器）；capsule 撑满 rail 内容宽并居中，
+   让菜单锚（capsule 右缘 + 8px）整好跨出 56px 侧栏右缘 */
+.project-capsule.collapsed {
+  align-self: stretch;
+  justify-content: center;
+}
+
+.switcher-rail-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: var(--ip-radius-md);
+  background: none;
+  cursor: pointer;
+  color: var(--ip-color-text-secondary);
+  transition: background-color var(--ip-duration-fast) var(--ip-ease-out),
+    color var(--ip-duration-fast) var(--ip-ease-out);
+}
+.switcher-rail-btn:hover {
+  background-color: var(--ip-color-bg-sidebar-item-hover);
+  color: var(--ip-primary-600);
+}
+/* 展开态 = 选中底色（与 ⇄ 钮开关态同款），表明菜单处于打开 */
+.switcher-rail-btn.switcher-open {
+  background-color: var(--ip-color-bg-sidebar-item-active);
+  color: var(--ip-color-text-primary);
+}
+
 /* ===== 快速新建内联表单（UX #1）：替换胶囊整行 ===== */
 .switcher-create {
   display: flex;
@@ -352,6 +458,62 @@ function confirmCreate() {
   visibility: visible;
   pointer-events: auto;
   transform: none;
+}
+/* 收起态变体：菜单改从胶囊右侧弹出（rail 模式无下方空间），定宽不随胶囊拉伸 */
+.switcher-menu.collapsed {
+  top: 0;
+  left: calc(100% + var(--ip-spacing-2));
+  right: auto;
+  width: 240px;
+}
+
+/* ===== 收起态菜单头部：快速新建 / 项目列表两入口（展开态胶囊动作的菜单内形态）。
+   sticky 吸附菜单顶（列表滚长时入口恒可达）；padding 左 16px 对齐列表项文字
+   起点（list 容器 6px + 项内 10px）；bg 实底防列表从头部底下透出 */
+.switcher-menu-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px 6px;
+  background-color: var(--ip-color-bg-elevated);
+  border-bottom: 1px solid var(--ip-color-border-default);
+}
+
+.menu-header-label {
+  font-size: var(--ip-text-micro-size);
+  color: var(--ip-color-text-tertiary);
+}
+
+.menu-header-actions {
+  display: flex;
+  gap: 2px;
+}
+
+.menu-action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--ip-radius-md);
+  background: none;
+  cursor: pointer;
+  color: var(--ip-color-text-tertiary);
+  transition: background-color var(--ip-duration-fast) var(--ip-ease-out),
+    color var(--ip-duration-fast) var(--ip-ease-out);
+}
+.menu-action-btn:hover {
+  background-color: var(--ip-color-bg-sidebar-item-hover);
+  color: var(--ip-primary-600);
+}
+
+/* 菜单内迷你表单行：内部控件复用 .switcher-create 同款，外沿对齐列表容器 */
+.menu-create-row {
+  margin: 6px 6px 0;
 }
 
 .switcher-item {
