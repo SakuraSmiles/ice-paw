@@ -1161,9 +1161,33 @@ const RESUMABLE_REASONS = new Set([
   --msg-rail-right: calc(6px + (var(--msg-col-right) - 22px) / 2);
 }
 /* scrollbar-gutter:stable 恒定预留滚动条位——带内悬浮件（导航条/兜底按钮）
-   不随滚动条出现/消失漂移，内容列也不再横向抖 6px */
-.messages-area { flex:1; overflow-y:auto; scrollbar-gutter:stable; padding:24px 0; position:relative; }
+   不随滚动条出现/消失漂移，内容列也不再横向抖 6px。
+   底 padding 32px：贴底静息时末条消息尾部只落在渐隐带中段（见 ::after 注释） */
+.messages-area { flex:1; overflow-y:auto; scrollbar-gutter:stable; padding:24px 0 32px; position:relative; }
 .messages-container { display:flex; flex-direction:column; gap: var(--ip-spacing-4); padding:0 var(--msg-col-right) 0 48px; }
+
+/* ===== 底缘渐隐（2026-09-01 用户拍板，替代输入区上边线的分区方式）=====
+   内容贴近输入框逐渐变淡：72px 带内从透明到页面底色，ease 型三停
+   （0% → 32%@48% → 74%@78% → 纯底色）——起步缓收尾快，「渐变」感知
+   比线性更自然；终点纯底色与输入区（透明底同 --ip-color-bg-secondary）无缝。
+   - 渐变蒙层而非 mask-image：全屏图片预览/附件详情渲染在 .messages-area
+     内（fixed 定位），mask 会连它们的底缘一起淡掉；盖底色渐变无此问题。
+   - color-mix 产半透明底色（WebView2 = Chromium 111+ 支持）。
+   - z-index:1 = 盖过 z-auto 滚动内容；低于 TurnRail(3)/兜底按钮(5)/
+     toast/模态层，带内悬浮件保持清晰。pointer-events:none 不挡点击。 */
+.messages-wrap::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 72px;
+  background: linear-gradient(to bottom,
+    transparent,
+    color-mix(in srgb, var(--ip-color-bg-secondary) 32%, transparent) 48%,
+    color-mix(in srgb, var(--ip-color-bg-secondary) 74%, transparent) 78%,
+    var(--ip-color-bg-secondary));
+  pointer-events: none;
+  z-index: 1;
+}
 
 /* ===== 分页指示 ===== */
 .load-more-hint { text-align:center; font-size:var(--ip-text-caption-size); color:var(--ip-color-text-tertiary); padding:8px var(--msg-col-right) 8px 48px; }

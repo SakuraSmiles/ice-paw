@@ -434,6 +434,22 @@ onBeforeUnmount(() => {
 
 .traj-main { flex: 1; display: flex; min-height: 0; }
 .traj-table-wrap { flex: 1; display: flex; position: relative; min-width: 0; min-height: 0; }
+/* 底缘渐隐：与对话页同款（输入区上边线已撤，分区由内容渐隐承担——见
+   ChatMessages .messages-wrap::after）。只蒙事件表列：右侧检查器是带边框
+   的自有面板，不吃渐隐。 */
+.traj-table-wrap::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 72px;
+  background: linear-gradient(to bottom,
+    transparent,
+    color-mix(in srgb, var(--ip-color-bg-secondary) 32%, transparent) 48%,
+    color-mix(in srgb, var(--ip-color-bg-secondary) 74%, transparent) 78%,
+    var(--ip-color-bg-secondary));
+  pointer-events: none;
+  z-index: 1;
+}
 .trajectory-view:focus { outline: none; }
 
 .traj-nohit {
