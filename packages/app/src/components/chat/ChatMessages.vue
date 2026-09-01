@@ -727,7 +727,9 @@ const RESUMABLE_REASONS = new Set([
 <template>
   <!-- wrap：相对定位包裹层——承载「跳到最新」右侧轨道按钮（独立于滚动容器，
        绝对定位子元素若挂在滚动容器内会随内容滚动，位置漂移） -->
-  <div class="messages-wrap">
+  <!-- fade-off：贴底跟随（autoFollow）时撤底缘渐隐——正在生成的消息尾部
+       不再压在半透明带下；滚上读历史时渐隐回归「下面还有内容」示向 -->
+  <div class="messages-wrap" :class="{ 'fade-off': autoFollow }">
     <div ref="listRef" class="messages-area">
     <!-- 错误提示（UI-2 批次三：ErrorBanner 化——有失败发送可重发，否则仅关闭；
          配置类错误附「去检查配置」直达 agent 设置，怎么办不再只有一句话） -->
@@ -1162,14 +1164,22 @@ const RESUMABLE_REASONS = new Set([
 }
 /* scrollbar-gutter:stable 恒定预留滚动条位——带内悬浮件（导航条/兜底按钮）
    不随滚动条出现/消失漂移，内容列也不再横向抖 6px。
-   底 padding 32px：贴底静息时末条消息尾部只落在渐隐带中段（见 ::after 注释） */
-.messages-area { flex:1; overflow-y:auto; scrollbar-gutter:stable; padding:24px 0 32px; position:relative; }
+   底 padding 16px：贴底静息的呼吸位（旧值 32px 是为「常驻渐隐让尾部落带中段」
+   设计的，渐隐改随 autoFollow 联动后贴底无蒙层，理由死掉回归紧凑值） */
+.messages-area { flex:1; overflow-y:auto; scrollbar-gutter:stable; padding:24px 0 16px; position:relative; }
 .messages-container { display:flex; flex-direction:column; gap: var(--ip-spacing-4); padding:0 var(--msg-col-right) 0 48px; }
 
-/* ===== 底缘渐隐（2026-09-01 用户拍板，替代输入区上边线的分区方式）=====
-   内容贴近输入框逐渐变淡：72px 带内从透明到页面底色，ease 型三停
-   （0% → 32%@48% → 74%@78% → 纯底色）——起步缓收尾快，「渐变」感知
-   比线性更自然；终点纯底色与输入区（透明底同 --ip-color-bg-secondary）无缝。
+/* ===== 底缘渐隐（2026-09-01 联动改版：随贴底状态显隐 + 96px）=====
+   非贴底（autoFollow=false，读历史/中途滚离）时内容贴近输入框逐渐变淡：
+   96px 带内从透明到页面底色，ease 型三停（0% → 32%@48% → 74%@78% → 纯底色）
+   ——起步缓收尾快；终点纯底色与输入区（透明底同 --ip-color-bg-secondary）无缝。
+   - 贴底（fade-off）时整层 opacity:0：正在生成的消息尾部不再压在半透明带下
+     （贴底静息/短会话不满屏也不挂空渐变带）。autoFollow 判定距底 ≤120px，
+     比「绝对贴底」更稳——图片加载/流式增高的 1-2px 抖动不会引发闪烁。
+   - 显隐走 class 切换 + opacity 过渡：阈值跨越是离散事件非每帧，opacity 只
+     重绘本蒙层（合成器友好）；勿改成 scroll 事件按距底连续写 style（每帧
+     reactive 写入，generation-lag 教训）。reduced-motion 由 global.css 全局
+     归零覆盖 *::after。
    - 渐变蒙层而非 mask-image：全屏图片预览/附件详情渲染在 .messages-area
      内（fixed 定位），mask 会连它们的底缘一起淡掉；盖底色渐变无此问题。
    - color-mix 产半透明底色（WebView2 = Chromium 111+ 支持）。
@@ -1179,7 +1189,7 @@ const RESUMABLE_REASONS = new Set([
   content: '';
   position: absolute;
   left: 0; right: 0; bottom: 0;
-  height: 72px;
+  height: 96px;
   background: linear-gradient(to bottom,
     transparent,
     color-mix(in srgb, var(--ip-color-bg-secondary) 32%, transparent) 48%,
@@ -1187,7 +1197,9 @@ const RESUMABLE_REASONS = new Set([
     var(--ip-color-bg-secondary));
   pointer-events: none;
   z-index: 1;
+  transition: opacity var(--ip-duration-fast) var(--ip-ease-out);
 }
+.messages-wrap.fade-off::after { opacity: 0; }
 
 /* ===== 分页指示 ===== */
 .load-more-hint { text-align:center; font-size:var(--ip-text-caption-size); color:var(--ip-color-text-tertiary); padding:8px var(--msg-col-right) 8px 48px; }

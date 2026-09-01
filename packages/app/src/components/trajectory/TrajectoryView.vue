@@ -380,7 +380,10 @@ onBeforeUnmount(() => {
     />
 
     <div class="traj-main">
-      <div class="traj-table-wrap">
+      <!-- fade-off：贴底（TrajectoryTable pinned，阈值 80px）时撤底缘渐隐——
+           看最新事件流尾部清晰；翻历史/搜索定位时渐隐回归「下面还有内容」示向。
+           表格未挂载（加载/空态）时 tableRef 为 null → 默认 fade-off 不挂渐隐带 -->
+      <div class="traj-table-wrap" :class="{ 'fade-off': tableRef?.pinned ?? true }">
         <div v-if="loading" class="traj-empty">加载中…</div>
         <div v-else-if="error" class="traj-empty traj-error">加载失败：{{ error }}</div>
         <div v-else-if="legacy" class="traj-empty">此会话无事件日志（早于事件纪元），无法回放轨迹。</div>
@@ -434,14 +437,17 @@ onBeforeUnmount(() => {
 
 .traj-main { flex: 1; display: flex; min-height: 0; }
 .traj-table-wrap { flex: 1; display: flex; position: relative; min-width: 0; min-height: 0; }
-/* 底缘渐隐：与对话页同款（输入区上边线已撤，分区由内容渐隐承担——见
-   ChatMessages .messages-wrap::after）。只蒙事件表列：右侧检查器是带边框
-   的自有面板，不吃渐隐。 */
+/* 底缘渐隐（2026-09-01 联动改版：随贴底状态显隐 + 96px）：与对话页同款
+   （见 ChatMessages .messages-wrap::after）。非贴底（pinned=false，翻历史/
+   搜索定位）时内容贴近底缘逐渐变淡；贴底（fade-off）整层 opacity:0——
+   live 台账看最新事件流尾部不压半透明带。显隐走 class + opacity 过渡
+   （阈值跨越离散事件，非每帧）。只蒙事件表列：右侧检查器是带边框的
+   自有面板，不吃渐隐。 */
 .traj-table-wrap::after {
   content: '';
   position: absolute;
   left: 0; right: 0; bottom: 0;
-  height: 72px;
+  height: 96px;
   background: linear-gradient(to bottom,
     transparent,
     color-mix(in srgb, var(--ip-color-bg-secondary) 32%, transparent) 48%,
@@ -449,7 +455,9 @@ onBeforeUnmount(() => {
     var(--ip-color-bg-secondary));
   pointer-events: none;
   z-index: 1;
+  transition: opacity var(--ip-duration-fast) var(--ip-ease-out);
 }
+.traj-table-wrap.fade-off::after { opacity: 0; }
 .trajectory-view:focus { outline: none; }
 
 .traj-nohit {

@@ -179,7 +179,9 @@ watch(
     if (dh > 0) scroller.value.scrollTop += dh;
   },
 );
-defineExpose({ scrollToSeq, scrollToTurn, scrollToKey, scrollToBottom, smoothScrollToBottom, isNearBottom, isPinned, beginPrepend });
+/** pinned 响应式暴露（父层贴底联动 UI——底缘渐隐显隐；exposed 代理自动解包 ref，
+ *  模板读 tableRef.pinned 即建响应依赖）；isPinned() 保留供命令式快照读 */
+defineExpose({ scrollToSeq, scrollToTurn, scrollToKey, scrollToBottom, smoothScrollToBottom, isNearBottom, isPinned, pinned, beginPrepend });
 
 // 终止原因文案：单一真相源在 utils/termLabels（词表外裸透原值）
 
