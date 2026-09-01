@@ -471,7 +471,9 @@ struct EditDocxArgs {
     /// insert_table_row_after / set_cell_format / set_table_element）可同块多条
     /// 按序组合，且**跨表格块也可同批**（一次给多张表挂同一属性）——同格内
     /// set_table_element 按元素去重（不同元素可组合），内容/格式手术每格限一条；
-    /// merge_cells / split_cell / delete_table_row 须独占该表）。
+    /// 结构重构（merge_cells / split_cell / delete_table_row）作用于**互不相交的
+    /// 行区间**时可同批多条（如整列逐行横并一次发完；足迹相交或与内容操作同块
+    /// 则拒，拆批）。
     /// 正文操作与定义操作（create_style / set_style_element /
     /// set_numbering_element / clear_body）不可混批（部件互斥），拆两批先后发
     operations: Vec<OperationSpec>,
@@ -559,10 +561,12 @@ enum OperationSpec {
         hyperlink: Option<bool>,
     },
     /// 改单元格文本：(row, cell) 双 1-based，与 projection=table 网格同口径；
-    /// 保 tcPr / 首段 pPr / 首 run rPr；\n = 格内多段
+    /// 保 tcPr；\n = 格内多段。格式保真：新段落数与原格相等 → 逐段按位继承
+    /// 原各段格式；不等 → 回落首段格式（摘要会标注）
     SetCellText { block: usize, expect_prefix: String, row: usize, cell: usize, text: String },
     /// 克隆模板行增行（after_row 缺省 = 末行）：整结构克隆（tcPr/gridSpan/vMerge
-    /// 原样），格文本替换为 cells（缺省全空）——合并格表格唯一正确增行方式
+    /// 原样），格文本替换为 cells（缺省全空；填充段与模板格段数相等时逐段
+    /// 继承格式）——合并格表格唯一正确增行方式
     InsertTableRowAfter {
         block: usize,
         expect_prefix: String,
@@ -602,11 +606,12 @@ enum OperationSpec {
         #[serde(default)]
         xml: Option<String>,
     },
-    /// 合并单元格（Word 原生语义）：horizontal=同行 span 格并 1 格（gridSpan 求和、
-    /// 内容按序拼接）；vertical=同列 span 行纵并（vMerge 头 restart 续 continue、
-    /// 内容留原格，split_cell 即恢复）。矩形区=direction/span 不传、改传
-    /// end_row+end_cell（区域右下角），(row,cell) 至 (end_row,end_cell) 一次合并。
-    /// 结构重构须独占该表
+    /// 合并单元格（内容语义）：horizontal=同行 span 格并 1 格（gridSpan 求和、
+    /// 内容按序拼接——**空段是结构占位不搬运**，段落数不膨胀，剔除数进摘要）；
+    /// vertical=同列 span 行纵并（vMerge 头 restart 续 continue、内容留原格，
+    /// split_cell 即恢复）。矩形区=direction/span 不传、改传 end_row+end_cell
+    ///（区域右下角），(row,cell) 至 (end_row,end_cell) 一次合并。
+    /// 结构重构：同表多条须作用于互不相交的行（如整列逐行横并可一批发完）
     MergeCells {
         block: usize,
         expect_prefix: String,
@@ -632,8 +637,9 @@ enum OperationSpec {
         cell: usize,
     },
     /// 删除表格一行（S3 七波·生产反馈 P0）：row 1-based 与 projection=table 同
-    /// 口径。结构重构（行号重排）须独占该表；行内含纵向合并头且下方有续格 → 拒
-    /// （指路先 split_cell）；仅剩 1 行 → 拒（指路 delete_block 删整表）
+    /// 口径。结构重构（该行下方行号整体前移，与同表其他操作的行区间相交即拒）；
+    /// 行内含纵向合并头且下方有续格 → 拒（指路先 split_cell）；仅剩 1 行 → 拒
+    ///（指路 delete_block 删整表）
     DeleteTableRow { block: usize, expect_prefix: String, row: usize },
     /// 清空正文（模板复用终件，D12）：删全部 body 块（含 sectPr 的块跳过——分节/
     /// 页面/页眉页脚结构保留）；expect_blocks = 当前块数指纹（防错删别人的文档）。
@@ -1136,8 +1142,11 @@ impl McpClient for EditDocxTool {
          building nested JSON arrays is error-prone; one paragraph per cell); \
          op=set_cell_text rewrites one \
          cell's text by (row, cell) address — the exact grid shown by inspect_docx \
-         projection=table, keeping the cell's structure properties and the first \
-         paragraph's formatting; op=insert_table_row_after appends a row by cloning a \
+         projection=table, keeping the cell's structure properties; when the new text \
+         splits into as many paragraphs as the cell already has, each new paragraph \
+         positionally inherits its counterpart's formatting, otherwise formatting \
+         falls back to the first paragraph's (disclosed in the result summary); \
+         op=insert_table_row_after appends a row by cloning a \
          template row (default: the last one) so merged cells keep working. Table ops \
          (set_cell_text / insert_table_row_after / set_cell_format / set_table_element) \
          compose freely within one batch: several ops on the same table in order, AND \
@@ -1163,14 +1172,21 @@ impl McpClient for EditDocxTool {
          as projection=table; refuses when the row holds a vertical-merge head whose \
          chain continues below — split_cell vertical first — and when it is the table's \
          only row — delete_block the whole table instead). op=merge_cells merges cells \
-         with Word-native semantics — \
+         with content semantics — \
          horizontal merges span adjacent cells in one row (gridSpan sums, content \
-         concatenates into the first cell); vertical merges cells across rows at the \
+         concatenates into the first cell; empty placeholder paragraphs are structural \
+         padding, not content — they are dropped instead of concatenating, so paragraph \
+         counts do not balloon, and the count is disclosed in the result summary); \
+         vertical merges cells across rows at the \
          same grid columns (vMerge head restarts, content stays in place — split_cell \
          restores it). op=split_cell is the inverse — vertical splits the whole merge \
          chain, horizontal splits a spanning cell back into unit cells (content stays \
          in the first). merge_cells / split_cell / delete_table_row renumber row/cell \
-         addresses, so each must be the only op on its table block in a batch (finish \
+         addresses, so structural ops follow a footprint rule: several of them on the \
+         same table compose in one batch as long as their ROW RANGES are disjoint \
+         (e.g. one horizontal merge per row down a whole column = one batch); \
+         overlapping footprints reject with the conflicting pair — split the batch. \
+         They still cannot mix with content/paragraph ops on the same table (finish \
          structure first, then re-inspect projection=table to address content). \
          Definition ops (styles.xml / numbering.xml — 'define once, reference \
          everywhere'): op=create_style creates a new style (minimal birth: \
@@ -1230,8 +1246,10 @@ impl McpClient for EditDocxTool {
                      Composition: table ops on different table blocks share one batch; \
                      several insert_paragraph_after / insert_image_after / \
                      insert_toc_after ops on the same anchor chain in input order; \
-                     merge_cells / split_cell / delete_table_row must each be the only op \
-                     on its table block.",
+                     structural ops (merge_cells / split_cell / delete_table_row) compose \
+                     on one table when their row ranges are disjoint (e.g. one horizontal \
+                     merge per row down a column = one batch), but cannot mix with \
+                     content/paragraph ops on the same table.",
                     "items": {
                         "oneOf": [
                             {
@@ -1383,7 +1401,7 @@ impl McpClient for EditDocxTool {
                                     "expect_prefix": { "type": "string", "description": "Current text prefix of the table block (fingerprint guard; any cell text works)." },
                                     "row": { "type": "integer", "description": "Row number r (1-based) — same as the rN lines of inspect_docx projection=table." },
                                     "cell": { "type": "integer", "description": "Cell number c within the row (1-based; a merged/spanning cell counts as one)." },
-                                    "text": { "type": "string", "description": "New cell text. \\n = multiple paragraphs inside the cell; empty string = clear. Formatting of the cell's first paragraph is preserved." }
+                                    "text": { "type": "string", "description": "New cell text. \\n = multiple paragraphs inside the cell; empty string = clear. Format fidelity: when paragraph count matches the cell's existing paragraphs, each new paragraph inherits its counterpart's formatting (positional); otherwise all fall back to the first paragraph's formatting." }
                                 },
                                 "required": ["op", "block", "expect_prefix", "row", "cell", "text"],
                                 "description": "Rewrite one table cell's text. Cells marked (续) in projection=table are vertical-merge continuations and cannot be edited — edit their (合并头) cell instead."
@@ -1466,7 +1484,7 @@ impl McpClient for EditDocxTool {
                                 "type": "object",
                                 "properties": {
                                     "op": { "const": "merge_cells" },
-                                    "block": { "type": "integer", "description": "Target table block (1-based). Must be the only op on this table in the batch." },
+                                    "block": { "type": "integer", "description": "Target table block (1-based). Structural op: composes with other structural ops on this table when their row ranges are disjoint." },
                                     "expect_prefix": { "type": "string", "description": "Current text prefix of the table block (fingerprint guard)." },
                                     "direction": { "type": "string", "enum": ["horizontal", "vertical"], "description": "Simple line merge; omit when using end_row+end_cell (rectangle region)." },
                                     "row": { "type": "integer", "description": "Row of the head (top-left) cell of the merged region (1-based)." },
@@ -1476,13 +1494,13 @@ impl McpClient for EditDocxTool {
                                     "end_cell": { "type": "integer", "description": "Rectangle mode: rightmost cell of the bottom row (1-based)." }
                                 },
                                 "required": ["op", "block", "expect_prefix", "row", "cell"],
-                                "description": "Merge cells with Word-native semantics. Horizontal: merges span adjacent cells in one row — their texts concatenate into the head cell. Vertical: merges cells across rows at the same grid columns — content stays in each cell, split_cell later restores independent display. Rectangle mode: omit direction/span, give end_row+end_cell — the whole (row,cell)..(end_row,end_cell) region merges in one op (row-wise horizontal merges, then the resulting column merges vertically)."
+                                "description": "Merge cells with content semantics. Horizontal: merges span adjacent cells in one row — their texts concatenate into the head cell; empty placeholder paragraphs are structural padding, not content — they are dropped (paragraph counts do not balloon; drop count disclosed in the result). Vertical: merges cells across rows at the same grid columns — content stays in each cell, split_cell later restores independent display. Rectangle mode: omit direction/span, give end_row+end_cell — the whole (row,cell)..(end_row,end_cell) region merges in one op (row-wise horizontal merges, then the resulting column merges vertically)."
                             },
                             {
                                 "type": "object",
                                 "properties": {
                                     "op": { "const": "split_cell" },
-                                    "block": { "type": "integer", "description": "Target table block (1-based). Must be the only op on this table in the batch." },
+                                    "block": { "type": "integer", "description": "Target table block (1-based). Structural op: composes with other structural ops on this table when their row ranges are disjoint." },
                                     "expect_prefix": { "type": "string", "description": "Current text prefix of the table block (fingerprint guard)." },
                                     "direction": { "type": "string", "enum": ["horizontal", "vertical"] },
                                     "row": { "type": "integer", "description": "Row of the cell to split (1-based)." },
@@ -1495,12 +1513,12 @@ impl McpClient for EditDocxTool {
                                 "type": "object",
                                 "properties": {
                                     "op": { "const": "delete_table_row" },
-                                    "block": { "type": "integer", "description": "Target table block (1-based). Must be the only op on this table in the batch." },
+                                    "block": { "type": "integer", "description": "Target table block (1-based). Structural op: claims this row through the table's last row (everything below shifts up)." },
                                     "expect_prefix": { "type": "string", "description": "Current text prefix of the table block (fingerprint guard)." },
                                     "row": { "type": "integer", "description": "Row to delete (1-based, same numbering as inspect_docx projection=table)." }
                                 },
                                 "required": ["op", "block", "expect_prefix", "row"],
-                                "description": "Delete one table row. Refuses when the row holds a vertical-merge HEAD whose chain continues below (split_cell vertical first, then delete), and when it is the table's only row (delete_block the whole table instead). Renumbers row addresses, so it must be the only op on its table block in the batch."
+                                "description": "Delete one table row. Refuses when the row holds a vertical-merge HEAD whose chain continues below (split_cell vertical first, then delete), and when it is the table's only row (delete_block the whole table instead). Renumbers row addresses: rows below shift up, so its footprint runs to the table's last row — structural ops composing in one batch must not touch those rows."
                             },
                             {
                                 "type": "object",
