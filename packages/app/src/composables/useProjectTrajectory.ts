@@ -9,7 +9,7 @@
 //    无全局轮序，轮号弱化为段序号，调用方注释写明）
 // 3. live 过滤带「项目会话集」：事件通知按 conversation_id 过滤，本 composable
 //    不知道项目会话集（chat store 才知道），由调用方传 isProjectConv 谓词
-import { ref, onMounted, onBeforeUnmount, toValue } from "vue";
+import { ref, onMounted, onBeforeUnmount, onActivated, onDeactivated, toValue } from "vue";
 import type { MaybeRefOrGetter } from "vue";
 import { listen } from "@tauri-apps/api/event";
 import { bridge } from "../api/bridge";
@@ -121,10 +121,34 @@ export function useProjectTrajectory(
   // 会话级过滤 = 已载会话集 ∪ 项目会话集（谓词）。新委派子会话两边都不在 →
   // chat:delegation-started 无条件补一轮（payload 无项目字段，宁多拉不漏拉——
   // after_id 查询本身项目域过滤，多拉只是幂等空返）。
+  //
+  // ⚠️ keep-alive 生命周期（2026-08-31 生产卡顿修复）：项目详情页被 AppLayout
+  // 的路由级 keep-alive 缓存——onBeforeUnmount 在离开路由时**不触发**，监听器
+  // 会挂满整个应用生命周期：此后任何页面上的事件落库（生成期的工具轮/回合
+  // 事件高频）都会驱动 refreshLatest（invoke + 尾页 SQL + buildRows 重派生），
+  // 在已离开的页面上空转。onDeactivated 暂停、onActivated 恢复（错过的增量由
+  // 页面层 onActivated 补拉兜底，本层不重复拉）。非 keep-alive 环境两钩子不
+  // 触发、flag 恒 true，行为与旧版一致。
   const loadedConvIds = () => new Set(events.value.map((e) => e.session_id));
-  async function onEventAppended(payload: { conversation_id: string; kind: string }) {
+  let listenerLive = true;
+  function onEventAppended(payload: { conversation_id: string; kind: string }) {
+    if (!listenerLive) return;
     if (!loadedConvIds().has(payload.conversation_id) && !isProjectConv(payload.conversation_id)) return;
-    await refreshLatest();
+    scheduleRefresh();
+  }
+
+  // live 通知 300ms 去抖（首呼锚定，非滑动窗口）：生成期事件密集（一轮工具
+  // 连发多条），逐条触发 = 每 event 一次 invoke+重拼；合并后稳态最多 ~3 次/秒，
+  // 轨迹页可视时的实时性无感损失。页面层 onActivated 的补拉走 refreshLatest
+  // 直调（立即，不过去抖）。
+  const REFRESH_DEBOUNCE_MS = 300;
+  let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+  function scheduleRefresh() {
+    if (refreshTimer != null) return;
+    refreshTimer = setTimeout(() => {
+      refreshTimer = null;
+      void refreshLatest();
+    }, REFRESH_DEBOUNCE_MS);
   }
 
   const unlisteners: Array<() => void> = [];
@@ -132,12 +156,20 @@ export function useProjectTrajectory(
     // 初始 load 由视图层驱动（首载后要贴底，与 useTrajectory/TrajectoryView 同分工）
     unlisteners.push(
       await listen<{ conversation_id: string; kind: string }>("session:event-appended", (e) => {
-        void onEventAppended(e.payload);
+        onEventAppended(e.payload);
       }),
     );
-    unlisteners.push(await listen("chat:delegation-started", () => { void refreshLatest(); }));
+    unlisteners.push(await listen("chat:delegation-started", () => {
+      if (listenerLive) scheduleRefresh();
+    }));
   });
+  onDeactivated(() => { listenerLive = false; });
+  onActivated(() => { listenerLive = true; });
   onBeforeUnmount(() => {
+    if (refreshTimer != null) {
+      clearTimeout(refreshTimer);
+      refreshTimer = null;
+    }
     unlisteners.forEach((u) => u());
     unlisteners.length = 0;
   });

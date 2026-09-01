@@ -87,10 +87,17 @@ const PROJECT_EVENT_COLS: &str = "e.id, e.session_id, e.seq, e.kind, e.actor, e.
                                   e.message_id, e.payload, e.created_at, \
                                   c.title AS session_title, c.kind AS session_kind";
 
-/// 项目轨迹尾部优先分页（与 [`super::session_event::list_tail`] 同构，游标换成全局 id）。
+/// 项目轨迹尾部优先分页（游标 = 全局 id；`after` 增量见下方 [`list_project_events_after`]）。
 ///
 /// 取 id 严格小于 `before_id`（`None` = 从最新开始）的最大 `limit` 条，返回前
 /// 反转为全局 id 正序。「加载更早」= 用当前已载最小 id 作下一页 `before_id`。
+///
+/// 先子查询物化一页 id 再回表取 payload：单层 JOIN 版优化器以 conversations 为
+/// 外圈、对**全部**项目事件（含 payload 行）做 TEMP B-TREE 排序后才 LIMIT——
+/// 生产库 2598 事件实测 33ms，随项目事件量线性劣化；子查询版只对 id 排序、
+/// payload 由 rowid 回表逐行取，同库实测 12ms，逐行结果等价（2026-08-31 验证）。
+/// [`list_project_events_after`] 不改：`after_id` 锚定下同款计划实测 0.5ms
+///（空页 0.1ms），无排序压力。
 pub async fn list_project_events_tail(
     pool: &SqlitePool,
     project_id: &str,
@@ -99,10 +106,14 @@ pub async fn list_project_events_tail(
 ) -> AppResult<Vec<ProjectEventRow>> {
     let mut rows = sqlx::query_as::<_, ProjectEventRow>(&format!(
         "SELECT {PROJECT_EVENT_COLS}
-           FROM session_events e JOIN conversations c ON c.id = e.session_id
-          WHERE c.project_id = ? AND e.id < COALESCE(?, 9223372036854775807)
-          ORDER BY e.id DESC
-          LIMIT ?"
+           FROM (SELECT e2.id AS page_id
+                   FROM session_events e2 JOIN conversations c2 ON c2.id = e2.session_id
+                  WHERE c2.project_id = ? AND e2.id < COALESCE(?, 9223372036854775807)
+                  ORDER BY e2.id DESC
+                  LIMIT ?) page
+           JOIN session_events e ON e.id = page.page_id
+           JOIN conversations c ON c.id = e.session_id
+          ORDER BY page.page_id DESC"
     ))
     .bind(project_id)
     .bind(before_id)

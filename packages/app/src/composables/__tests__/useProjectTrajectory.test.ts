@@ -1,8 +1,9 @@
 // useProjectTrajectory.test.ts — 项目轴轨迹数据源锁定：全局 id 游标分页边界 /
 // 增量拼接 + 并发防御（同源增量不双拼）/ live 过滤（已载会话集 ∪ 项目会话集，
-// delegation-started 宁多拉）/ scopeTurnKeys 跨会话桶键隔离。
+// delegation-started 宁多拉）/ live 去抖 300ms 合并 / keep-alive 停用暂停·激活
+// 恢复（路由级缓存监听器泄漏修复）/ scopeTurnKeys 跨会话桶键隔离。
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { defineComponent, h } from "vue";
+import { defineComponent, h, KeepAlive, nextTick, ref } from "vue";
 import { mount, flushPromises } from "@vue/test-utils";
 import { listen } from "@tauri-apps/api/event";
 import { PROJECT_TRAJECTORY_PAGE_SIZE, scopeTurnKeys, useProjectTrajectory } from "../useProjectTrajectory";
@@ -44,16 +45,25 @@ function pev(session: string, seq: number, opts: { turnId?: string | null } = {}
   };
 }
 
-/** 宿主组件（composable 的 onMounted/onBeforeUnmount 需组件上下文） */
-function mountHost(pid = () => "p1", isProjectConv: (id: string) => boolean = () => false) {
-  let api!: ReturnType<typeof useProjectTrajectory>;
-  const Host = defineComponent({
+/** 宿主组件工厂（composable 的 onMounted/onBeforeUnmount/keep-alive 钩子需组件
+ *  上下文）。全文件唯一 defineComponent——vue/one-component-per-file。 */
+function makeHost(
+  pid: () => string,
+  isProjectConv: (id: string) => boolean,
+  onApi: (api: ReturnType<typeof useProjectTrajectory>) => void,
+) {
+  return defineComponent({
     setup() {
-      api = useProjectTrajectory(pid, isProjectConv);
+      onApi(useProjectTrajectory(pid, isProjectConv));
       return () => h("div");
     },
   });
-  mount(Host);
+}
+
+/** 直接挂载宿主并同步取回 api */
+function mountHost(pid = () => "p1", isProjectConv: (id: string) => boolean = () => false) {
+  let api!: ReturnType<typeof useProjectTrajectory>;
+  mount(makeHost(pid, isProjectConv, (a) => { api = a; }));
   return api;
 }
 
@@ -111,35 +121,97 @@ describe("useProjectTrajectory 项目轴数据源", () => {
   });
 
   it("live 过滤：已载会话集 ∪ 项目会话集命中才拉增量，其他项目零动作", async () => {
-    const handlers = captureHandlers();
-    const api = mountHost(() => "p1", (id) => id === "proj-conv");
-    await flushPromises();
+    vi.useFakeTimers();
+    try {
+      const handlers = captureHandlers();
+      const api = mountHost(() => "p1", (id) => id === "proj-conv");
+      await flushPromises();
 
-    const inLoaded = pev("s1", 1);
-    mockListEvents.mockResolvedValueOnce([inLoaded]);
-    await api.load();
-    mockListEvents.mockClear();
+      const inLoaded = pev("s1", 1);
+      mockListEvents.mockResolvedValueOnce([inLoaded]);
+      await api.load();
+      mockListEvents.mockClear();
 
-    // 噪声：他项目会话（不在已载集，谓词也不认）
-    handlers.get("session:event-appended")!({ payload: { kind: "assistant_message", conversation_id: "other-project" } });
-    await flushPromises();
-    expect(mockListEvents).not.toHaveBeenCalled();
+      // 噪声：他项目会话（不在已载集，谓词也不认）——去抖窗口到期后也零动作
+      handlers.get("session:event-appended")!({ payload: { kind: "assistant_message", conversation_id: "other-project" } });
+      await vi.advanceTimersByTimeAsync(300);
+      expect(mockListEvents).not.toHaveBeenCalled();
 
-    // 命中：已载会话集
-    handlers.get("session:event-appended")!({ payload: { kind: "tool_execution", conversation_id: "s1" } });
-    await flushPromises();
-    expect(mockListEvents).toHaveBeenCalledTimes(1);
+      // 命中：已载会话集
+      handlers.get("session:event-appended")!({ payload: { kind: "tool_execution", conversation_id: "s1" } });
+      await vi.advanceTimersByTimeAsync(300);
+      expect(mockListEvents).toHaveBeenCalledTimes(1);
 
-    // 命中：项目会话集（事件未载但谓词认识——新委派子会话首事件）
-    handlers.get("session:event-appended")!({ payload: { kind: "turn_context", conversation_id: "proj-conv" } });
-    await flushPromises();
-    expect(mockListEvents).toHaveBeenCalledTimes(2);
+      // 命中：项目会话集（事件未载但谓词认识——新委派子会话首事件）
+      handlers.get("session:event-appended")!({ payload: { kind: "turn_context", conversation_id: "proj-conv" } });
+      await vi.advanceTimersByTimeAsync(300);
+      expect(mockListEvents).toHaveBeenCalledTimes(2);
 
-    // 命中：delegation-started 无项目字段，无条件补拉（宁多拉不漏拉）
-    mockListEvents.mockClear();
-    handlers.get("chat:delegation-started")!({ payload: { conversation_id: "别处" } });
-    await flushPromises();
-    expect(mockListEvents).toHaveBeenCalledTimes(1);
+      // 命中：delegation-started 无项目字段，无条件补拉（宁多拉不漏拉）
+      mockListEvents.mockClear();
+      handlers.get("chat:delegation-started")!({ payload: { conversation_id: "别处" } });
+      await vi.advanceTimersByTimeAsync(300);
+      expect(mockListEvents).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("live 去抖：密集通知按 300ms 首呼锚定合并（5 连发 → 两拨拉取，非 5 拨）", async () => {
+    vi.useFakeTimers();
+    try {
+      const handlers = captureHandlers();
+      const api = mountHost();
+      await flushPromises();
+      mockListEvents.mockResolvedValueOnce([pev("s1", 1)]);
+      await api.load();
+      mockListEvents.mockClear();
+
+      for (let i = 0; i < 5; i++) {
+        handlers.get("session:event-appended")!({ payload: { kind: "tool_execution", conversation_id: "s1" } });
+        await vi.advanceTimersByTimeAsync(100); // 模拟生成期事件连发的节奏
+      }
+      // t=500：t=300 首拨已拉、t=600 次拨未到期 → 恰 1 次
+      expect(mockListEvents).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(300);
+      expect(mockListEvents).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keep-alive 停用期间暂停 live 拉取，激活后恢复（路由级缓存监听器泄漏修复）", async () => {
+    vi.useFakeTimers();
+    try {
+      const handlers = captureHandlers();
+      let api!: ReturnType<typeof useProjectTrajectory>;
+      const Host = makeHost(() => "p1", () => false, (a) => { api = a; });
+      const on = ref(true);
+      // 外层用函数式组件（文件内保持唯一 defineComponent）：KeepAlive 对
+      // Host↔null 切换触发 onDeactivated/onActivated
+      mount(() => h(KeepAlive, null, { default: () => (on.value ? h(Host) : null) }));
+      await flushPromises();
+
+      mockListEvents.mockResolvedValueOnce([pev("s1", 1)]);
+      await api.load();
+      mockListEvents.mockClear();
+
+      // 离开项目详情页（keep-alive 缓存不卸载）：此后任何页面上落库的事件不再驱动本视图
+      on.value = false;
+      await nextTick();
+      handlers.get("session:event-appended")!({ payload: { kind: "tool_execution", conversation_id: "s1" } });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(mockListEvents).not.toHaveBeenCalled();
+
+      // 回到项目详情页：监听恢复（错过的增量由页面层 onActivated 补拉，本层不重复拉）
+      on.value = true;
+      await nextTick();
+      handlers.get("session:event-appended")!({ payload: { kind: "tool_execution", conversation_id: "s1" } });
+      await vi.advanceTimersByTimeAsync(300);
+      expect(mockListEvents).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
