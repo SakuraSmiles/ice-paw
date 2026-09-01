@@ -583,7 +583,9 @@ function handleKeydown(e: KeyboardEvent) {
 </template>
 
 <style scoped>
-.input-area { flex-shrink:0; padding:16px 24px 24px; border-top:1px solid var(--ip-color-border-default); }
+/* 无上边线（2026-09-01 用户拍板）：与消息区的分隔改由内容底缘渐隐承担
+   （见 ChatMessages .messages-wrap::after），比横线柔和 */
+.input-area { flex-shrink:0; padding:16px 24px 24px; }
 .input-container { max-width:800px; margin:0 auto; display:flex; flex-direction:column; gap: var(--ip-spacing-2); }
 
 /* ===== 图片预览条 ===== */
