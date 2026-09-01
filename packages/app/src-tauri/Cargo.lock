@@ -2515,7 +2515,7 @@ dependencies = [
 
 [[package]]
 name = "ice-paw"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
