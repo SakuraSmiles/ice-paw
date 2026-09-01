@@ -2,7 +2,7 @@
 
 ## 项目概述
 IcePaw — 本地优先的 LLM 对话工作站。Tauri v2 (Rust) + Vue 3 (TypeScript) 桌面应用。
-当前版本：`0.6.2`。
+当前版本：`0.6.3`。
 
 ## 设计规则（用户拍板，勿翻案）
 
@@ -194,7 +194,8 @@ agent 调用 `propose_config_change` 工具提出创建/修改 agent 提案 → 
 - **Phase 2B 阶段 3 Image 双份存储治理（2026-08-17，3a 读侧 + 3b 写侧）**：消息类 payload 的 blocks 用 `PayloadBlock` untagged 双形态——`Full(ContentBlock)`（v1 内联，旧事件零迁移可读）/ `ImageRef{message_id, block_index}`（v2，字节只在 messages 行）。写侧唯一入口 `refify_blocks`（emitter 字段式签名内部做，调用方传与落库同值的 blocks）；读侧三路水合：derive `hydrate_image_refs`（纯同步 resolver 注入；未命中/越界/非 Image 降级 `Text("[图片内容已不可恢复]")`）+ `to_content_blocks` 防泄漏最后闸 + conversation_cmd JSON 级水合（list_session_events/export，前端零改动）。BACKFILL_VERSION=2（纯 backfill 会话删旧重写自愈，冻结会话保留 v1 照读）。**⚠️ 不变式：session_events 消息类 payload 禁止内联 Image base64——新增 message-kind emitter 必须经 `refify_blocks`，读侧必须经 `hydrate_image_refs` 水合后才能进对账/LLM 视图（ref 形态不得以非 Text 形态流出）**。
 
 ## 当前状态（2026-09-01）
-- 版本 **0.6.2 已发版 push**（= 0.6.1 + **enabled_tools 旧白名单复活根治**[0.6.1 生产实案修复：镜像同步 DB 列 + 组装收窄披露日志，80bba3d] + **Word 十波 D18 TOC+图片插入**[write_docx toc/image 块 + edit_docx insert_toc_after/insert_image_after + validate block_image/block_field + inspect 段尾标记 + 包级只增补通道] + **十一波 D19 生产坑三件抽象化**[占位段不是内容/重写按位继承/表内地址模拟器] + **生成期切项目详情卡顿三修**[bgStreams 原地 mutate/轨迹监听 keep-alive 生命周期/尾页 SQL 先 id 后回表，4ad70ef] + 输入区底缘渐隐；cargo 1317 / vitest 330）
+- 版本 **0.6.3 已发版 push**（= 0.6.2 + **侧边栏收起 rail 模式**[56px 单列行动栏 + 会话/项目 flyout + 主题钮迁 footer 恒 ≤1 实例 + ProjectSwitcher collapsed 变体菜单头部两入口，c4eb90d] + **底缘渐隐置底联动**[对话/轨迹两 tab 置底不透明，6cccabf] + CLAUDE.md 图标包名勘误[@lucide/vue]；vitest 341）
+- 上一版 **0.6.2 已发版 push**（= 0.6.1 + **enabled_tools 旧白名单复活根治**[0.6.1 生产实案修复：镜像同步 DB 列 + 组装收窄披露日志，80bba3d] + **Word 十波 D18 TOC+图片插入**[write_docx toc/image 块 + edit_docx insert_toc_after/insert_image_after + validate block_image/block_field + inspect 段尾标记 + 包级只增补通道] + **十一波 D19 生产坑三件抽象化**[占位段不是内容/重写按位继承/表内地址模拟器] + **生成期切项目详情卡顿三修**[bgStreams 原地 mutate/轨迹监听 keep-alive 生命周期/尾页 SQL 先 id 后回表，4ad70ef] + 输入区底缘渐隐；cargo 1317 / vitest 330）
 - 上一版 **0.6.1 已打包未 tag**（= 0.6.0 + Word 八波验收五件 + 九波 write_docx 模板优先生成 + D17 共享模板目录；生产机已装机——enabled_tools 实案即出自此机，修复随 0.6.2）
 - 上一版 **0.6.0 已打包已 push**（tag v0.6.0 + GitHub Release 带 NSIS exe——首次正规 tag/Release 流；= 0.5.5 + **Computer Use 全线**[看屏三件+操作七件+act-and-look+屏幕共享通道治理五步，见「屏幕读写」节] + **视觉读取两档制重构** + **Agent 配置一致性两批** + 新模型跟进[GLM-5.3 系/DS 视觉] + 首用引导批① + 通用设置卡片分组重设计；cargo 1232 / vitest 328；main 与 origin 推平）
 - 上一版 **0.5.5**（= 0.5.4 + **换厂商配置分裂根治 + 智谱 Coding 端点显式切换**，两条专段见下；cargo 1138 / vitest 328）
