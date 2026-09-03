@@ -56,6 +56,10 @@ describe("审批系统通知：恰一次语义", () => {
     mockSend.mockClear();
     hasFocusSpy = vi.spyOn(document, "hasFocus").mockReturnValue(false);
     cleanup = await useChatEvents();
+    // dev 通路自检通知（useChatEvents 内 DEV 分支）落地后再清计数，
+    // 不让它污染各用例的「恰一次」断言
+    await new Promise((r) => setTimeout(r, 0));
+    mockSend.mockClear();
   });
   afterEach(() => {
     cleanup();
