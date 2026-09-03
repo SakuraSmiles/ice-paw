@@ -289,19 +289,48 @@ pub async fn respond_config_proposal(
 }
 
 /// 前端工具授权结果 → 唤醒后端 wait_for_auth_response 的 oneshot 等待者。
+///
+/// 走 `respond_tool_auth_and_emit` 单一入口（与系统 toast 按钮路径共用）：
+/// 应答成功后 emit `chat:tool-auth-responded`——前端 invoke 路径已有乐观删，
+/// 事件幂等双保险；toast 路径全靠此事件删条目。
 #[tauri::command]
 pub async fn respond_tool_auth(
+    app: AppHandle,
     auth_registry: State<'_, crate::harness::tool_executor::ToolAuthRegistry>,
     input: ToolAuthResponse,
 ) -> AppResult<()> {
-    let handled = auth_registry.respond(input).await;
-    if !handled {
-        tracing::warn!(
-            target: "ice_paw.tool_auth",
-            "授权 respond：未找到匹配的 request_id（可能已超时/取消）"
-        );
-    }
+    crate::harness::approval_toast::respond_tool_auth_and_emit(&app, auth_registry.inner(), input)
+        .await;
     Ok(())
+}
+
+/// 前端审批系统通知（utils/systemNotify → bridge.notify.approval）。
+///
+/// `request_id` 有值 = 工具授权（Windows toast 带批准/拒绝按钮）；无值 =
+/// 配置提案/dev 自检（纯提醒）。触发决策（失焦判定 + 恰一次簿记）全在前端，
+/// 本命令幂等发送。
+#[tauri::command]
+pub fn notify_approval(
+    app: AppHandle,
+    input: ApprovalNotifyInput,
+) -> AppResult<()> {
+    crate::harness::approval_toast::show_approval_toast(
+        &app,
+        &input.title,
+        &input.body,
+        input.request_id.as_deref(),
+    );
+    Ok(())
+}
+
+/// 审批系统通知入参（bridge.notify.approval）。
+#[derive(serde::Deserialize)]
+pub struct ApprovalNotifyInput {
+    pub title: String,
+    pub body: String,
+    /// 工具授权传 Some（toast 带按钮）；提案/自检传 None
+    #[serde(default)]
+    pub request_id: Option<String>,
 }
 
 /// 前端审批响应的扁平入参（decision 为字符串，匹配前端类型）。

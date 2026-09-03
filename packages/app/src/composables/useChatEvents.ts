@@ -337,15 +337,18 @@ export async function useChatEvents(): Promise<() => void> {
       live.add(payload.request_id);
       if (notifiedApprovalIds.has(payload.request_id)) continue;
       notifiedApprovalIds.add(payload.request_id);
+      // 传 request_id：Windows toast 带批准/拒绝按钮（点击直接应答，scope=once）
       void notifyApprovalNeeded(
         "IcePaw · 等待你的批准",
         payload.reason ? `${payload.tool_name}：${payload.reason}` : payload.tool_name,
+        payload.request_id,
       );
     }
     for (const p of chat.pendingProposals.values()) {
       live.add(p.request_id);
       if (notifiedApprovalIds.has(p.request_id)) continue;
       notifiedApprovalIds.add(p.request_id);
+      // 提案不传 request_id：批准需应用内看 diff / 填 key，toast 保持纯提醒
       void notifyApprovalNeeded("IcePaw · 收到配置提案", p.summary);
     }
     // 瘦身：清掉已不在挂起集合的 id（审批已处理/超时），防长会话 Set 无界增长
@@ -365,15 +368,24 @@ export async function useChatEvents(): Promise<() => void> {
     chat.pendingAuthRequests = m;
     maybeNotifyPendingApprovals(); // 失焦才真发（内部守卫），fire-and-forget
   });
+  /** 按 request_id 从 pendingAuthRequests 删条目（单会话单活请求，Map 按 convId 键） */
+  function dropAuthEntry(requestId: string) {
+    const m = new Map(chat.pendingAuthRequests);
+    for (const [cid, entry] of m) {
+      if (entry.payload.request_id === requestId) { m.delete(cid); break; }
+    }
+    chat.pendingAuthRequests = m;
+  }
   await subscribe<{ request_id: string; conversation_id: string; reason: string }>(
     "chat:tool-auth-request-cancel",
-    (e) => {
-      const m = new Map(chat.pendingAuthRequests);
-      for (const [cid, entry] of m) {
-        if (entry.payload.request_id === e.payload.request_id) { m.delete(cid); break; }
-      }
-      chat.pendingAuthRequests = m;
-    },
+    (e) => dropAuthEntry(e.payload.request_id),
+  );
+  // 应答已发生（前端卡片或系统 toast 按钮任一路径，单一 emit 入口在 Rust
+  // approval_toast）——toast 按钮路径前端无乐观删，全靠此事件清条目，
+  // 否则卡片残留到 120s 超时。invoke 路径 store 已乐观删，此处幂等双保险。
+  await subscribe<{ request_id: string; allowed: boolean }>(
+    "chat:tool-auth-responded",
+    (e) => dropAuthEntry(e.payload.request_id),
   );
 
   // ---- 配置提案请求 ----（始终按 convId 存，不丢后台会话；cancel 时按 request_id 清）

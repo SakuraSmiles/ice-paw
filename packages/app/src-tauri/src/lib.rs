@@ -42,7 +42,16 @@ use harness::mcp::McpRegistry;
 /// 应用入口
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+    // 单实例：点审批 toast / 双击 exe 拉起第二进程时拦截并前置主实例（防双开）。
+    // 必须最先注册——晚注册则第二实例可能在拦截生效前已起窗。
+    #[cfg(desktop)]
+    {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            harness::approval_toast::focus_main_window(app);
+        }));
+    }
+    builder
         // 仅保留 opener 业务插件
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -113,6 +122,7 @@ pub fn run() {
             commands::chat_cmd::is_conversation_streaming,
             commands::chat_cmd::respond_config_proposal,
             commands::chat_cmd::respond_tool_auth,
+            commands::chat_cmd::notify_approval,
             commands::preferences_cmd::get_preferences,
             commands::preferences_cmd::set_preference,
             commands::preferences_cmd::test_vision_config,

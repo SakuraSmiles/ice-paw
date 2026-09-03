@@ -4,22 +4,23 @@
 // 出来再切后台，旧「到达瞬间失焦才发」一条通知都没有。
 // 同一 request_id 多触发源（事件到达 + blur + visibilitychange）不重发；
 // destroy 卸载 DOM 监听。
+// 发送链路 = bridge.chat.notifyApproval（Rust 命令 harness/approval_toast：
+// Windows toast 带批准/拒绝按钮）；工具授权透传 request_id（按钮语义），
+// 提案不传（纯提醒）。
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { listen } from "@tauri-apps/api/event";
-import { sendNotification } from "@tauri-apps/plugin-notification";
+import { bridge } from "../../api/bridge";
 import type { MockInstance } from "vitest";
 import { useChatEvents } from "../useChatEvents";
 import { useChatStore } from "../../stores/chat";
 import type { ToolAuthRequestPayload } from "../../types";
 
-vi.mock("@tauri-apps/plugin-notification", () => ({
-  isPermissionGranted: vi.fn().mockResolvedValue(true),
-  requestPermission: vi.fn().mockResolvedValue("granted"),
-  sendNotification: vi.fn(),
+vi.mock("../../api/bridge", () => ({
+  bridge: { chat: { notifyApproval: vi.fn().mockResolvedValue(undefined) } },
 }));
 
-const mockSend = vi.mocked(sendNotification);
+const mockNotify = vi.mocked(bridge.chat.notifyApproval);
 
 /** 捕获 useChatEvents 注册的事件 handler（setup.ts 的 listen mock 被 override） */
 type ListenFn = typeof listen;
@@ -53,13 +54,13 @@ describe("审批系统通知：恰一次语义", () => {
   beforeEach(async () => {
     setActivePinia(createPinia());
     handlers.clear();
-    mockSend.mockClear();
+    mockNotify.mockClear().mockResolvedValue(undefined);
     hasFocusSpy = vi.spyOn(document, "hasFocus").mockReturnValue(false);
     cleanup = await useChatEvents();
     // dev 通路自检通知（useChatEvents 内 DEV 分支）落地后再清计数，
     // 不让它污染各用例的「恰一次」断言
     await new Promise((r) => setTimeout(r, 0));
-    mockSend.mockClear();
+    mockNotify.mockClear();
   });
   afterEach(() => {
     cleanup();
@@ -69,53 +70,54 @@ describe("审批系统通知：恰一次语义", () => {
   it("到达时已失焦 → 立即一条；再 blur 不重发", async () => {
     handlers.get("chat:tool-auth-request")!({ payload: authPayload("r1") });
     await Promise.resolve();
-    expect(mockSend).toHaveBeenCalledTimes(1);
-    expect(mockSend).toHaveBeenCalledWith({
+    expect(mockNotify).toHaveBeenCalledTimes(1);
+    expect(mockNotify).toHaveBeenCalledWith({
       title: "IcePaw · 等待你的批准",
       body: "write_file：写入应用配置",
+      request_id: "r1",
     });
 
     window.dispatchEvent(new Event("blur"));
     await Promise.resolve();
-    expect(mockSend).toHaveBeenCalledTimes(1); // 恰一次
+    expect(mockNotify).toHaveBeenCalledTimes(1); // 恰一次
   });
 
   it("到达时聚焦不发；随后切走（blur）补发一条——生产实案路径", async () => {
     hasFocusSpy.mockReturnValue(true); // 用户正盯着应用，卡片刚出来
     handlers.get("chat:tool-auth-request")!({ payload: authPayload("r1") });
     await Promise.resolve();
-    expect(mockSend).not.toHaveBeenCalled();
+    expect(mockNotify).not.toHaveBeenCalled();
 
     hasFocusSpy.mockReturnValue(false); // 切后台
     window.dispatchEvent(new Event("blur"));
     await Promise.resolve();
-    expect(mockSend).toHaveBeenCalledTimes(1);
+    expect(mockNotify).toHaveBeenCalledTimes(1);
   });
 
   it("新请求（新 request_id）在挂起期间到达 → blur 时各发各的", async () => {
     handlers.get("chat:tool-auth-request")!({ payload: authPayload("r1") });
     window.dispatchEvent(new Event("blur"));
     await Promise.resolve();
-    expect(mockSend).toHaveBeenCalledTimes(1); // r1 已通知，不重发
+    expect(mockNotify).toHaveBeenCalledTimes(1); // r1 已通知，不重发
 
     handlers.get("chat:tool-auth-request")!({ payload: authPayload("r2") });
     window.dispatchEvent(new Event("blur"));
     await Promise.resolve();
-    expect(mockSend).toHaveBeenCalledTimes(2); // r2 首次
+    expect(mockNotify).toHaveBeenCalledTimes(2); // r2 首次
   });
 
   it("最小化（visibilitychange hidden）同样触发补发", async () => {
     hasFocusSpy.mockReturnValue(true);
     handlers.get("chat:tool-auth-request")!({ payload: authPayload("r1") });
     await Promise.resolve();
-    expect(mockSend).not.toHaveBeenCalled();
+    expect(mockNotify).not.toHaveBeenCalled();
 
     hasFocusSpy.mockReturnValue(false);
     // happy-dom 手动驱动 visibilitychange
     Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
     document.dispatchEvent(new Event("visibilitychange"));
     await Promise.resolve();
-    expect(mockSend).toHaveBeenCalledTimes(1);
+    expect(mockNotify).toHaveBeenCalledTimes(1);
     Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
   });
 
@@ -128,6 +130,18 @@ describe("审批系统通知：恰一次语义", () => {
     chat.pendingAuthRequests = m;
     window.dispatchEvent(new Event("blur"));
     await Promise.resolve();
-    expect(mockSend).not.toHaveBeenCalled();
+    expect(mockNotify).not.toHaveBeenCalled();
+  });
+
+  it("toast 按钮应答（chat:tool-auth-responded）→ 前端条目同步清除", async () => {
+    handlers.get("chat:tool-auth-request")!({ payload: authPayload("r1") });
+    const chat = useChatStore();
+    expect(chat.pendingAuthRequests.size).toBe(1);
+
+    // Rust 侧 approval_toast::respond_tool_auth_and_emit 广播（toast 按钮路径
+    // 前端无乐观删，全靠此事件——无它则卡片残留到 120s 超时）
+    handlers.get("chat:tool-auth-responded")!({ payload: { request_id: "r1", allowed: true } });
+    await Promise.resolve();
+    expect(chat.pendingAuthRequests.size).toBe(0);
   });
 });
