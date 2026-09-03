@@ -27,7 +27,7 @@
 
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::infra::protocol::{AuthScope, ToolAuthResponse, ToolAuthRespondedPayload};
+use crate::infra::protocol::{ToolAuthResponse, ToolAuthRespondedPayload};
 
 /// 主窗 label（tauri.conf.json `app.windows[0].label`）
 const MAIN_WINDOW: &str = "main";
@@ -54,6 +54,9 @@ pub fn show_approval_toast(app: &AppHandle, title: &str, body: &str, request_id:
     }
     #[cfg(not(windows))]
     {
+        // 按钮/回调是 Windows toast 专属——非 Windows 纯提醒不吃 request_id
+        //（显式消化，防 cfg 组合下 unused variable；CI 在 Linux 跑 clippy -D warnings）
+        let _ = request_id;
         use tauri_plugin_notification::NotificationExt;
         if let Err(e) = app.notification().builder().title(title).body(body).show() {
             tracing::warn!(target: "ice_paw.mgmt", "审批通知发送失败: {e}");
@@ -111,6 +114,8 @@ fn route_action(app: AppHandle, request_id: String, action: Option<String>) {
 /// tauri runtime spawn，勿在回调线程里 await。
 #[cfg(windows)]
 fn spawn_respond(app: AppHandle, request_id: String, allowed: bool) {
+    use crate::infra::protocol::AuthScope;
+
     tauri::async_runtime::spawn(async move {
         let registry = app.state::<crate::harness::tool_executor::ToolAuthRegistry>();
         let handled = respond_tool_auth_and_emit(
