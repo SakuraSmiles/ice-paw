@@ -878,7 +878,12 @@ const RESUMABLE_REASONS = new Set([
                 <span class="think-dot" /><span class="think-dot" /><span class="think-dot" />
               </div>
 
-              <template v-if="item.msg.content || !chat.sending || chat.streamingThinking || toolCallList.length > 0">
+              <!-- 骨架隐藏（think-dots 之外的空占位不渲染内部模板）只属于当前流式 item：
+                   用 item 级 isLiveAssistant 判定，勿用全局 chat.sending——多轮工具回合里
+                   已冻结轮（如纯工具轮：无文本无思考，工具卡全在 content_blocks）在下一轮
+                   TTFT/纯文本流式期间会被整块藏掉，直到下一轮首个 tool-call-start/thinking
+                   才救回（生产实案 2026-09-03：上轮工具记录间歇性消失、done 后全恢复）。 -->
+              <template v-if="item.msg.content || !isLiveAssistant(item) || chat.streamingThinking || toolCallList.length > 0">
                 <!-- 思考过程（历史消息）；末条且 done 块显示时跳过避免重复 -->
                 <template v-for="(think, ti) in parseThinkingBlocks(item.msg.content_blocks)" :key="'think-' + item.msg.id + '-' + ti">
                   <div v-if="!(isLastAssistant(item) && chat.thinkingDuration && chat.lastThinkingContent)" class="think-block">
