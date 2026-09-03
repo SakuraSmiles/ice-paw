@@ -408,6 +408,17 @@ pub struct PendingRequestCancelPayload {
     pub reason: String,
 }
 
+/// `chat:tool-auth-responded` 事件 payload（Rust → Frontend）
+///
+/// 工具授权请求已被应答（前端卡片或系统 toast 按钮任一路径）。前端按
+/// `request_id` 清除 pendingAuthRequests 条目——toast 按钮路径前端无乐观删，
+/// 无此事件则条目残留到 120s 超时（emit 单一入口 harness/approval_toast.rs）。
+#[derive(Clone, Serialize)]
+pub struct ToolAuthRespondedPayload {
+    pub request_id: String,
+    pub allowed: bool,
+}
+
 // =========================================================================
 // 单元测试
 // =========================================================================

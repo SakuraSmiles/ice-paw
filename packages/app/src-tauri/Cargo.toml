@@ -23,8 +23,12 @@ tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-stronghold = "2"
 # 系统级通知：审批请求（工具授权/配置提案）在应用后台/失焦时错过 120s 倒计时
-# ——切后台时用 OS 通知拉回（Windows Toast / macOS 通知中心；前台聚焦不发）。
+# ——切后台时用 OS 通知拉回（发送侧 harness/approval_toast.rs：Windows 带
+# 批准/拒绝按钮 + 点主体前置主窗；其他平台走本插件 builder 纯提醒）。
 tauri-plugin-notification = "2"
+# 单实例：点 toast / 双击 exe 拉起第二进程时拦截并前置主实例（防双开）。
+# 必须最先注册（晚注册则第二实例可能在拦截前已起窗）。
+tauri-plugin-single-instance = "2"
 # 直接依赖以拿到 `ClientError` 做强类型匹配 —— 启动恢复 `load_client`
 # 时区分 "snapshot 里没有该 client" vs "snapshot 损坏/解密失败"。
 # 版本对齐 transitive（tauri-plugin-stronghold 2.3.1 → iota_stronghold 2.1.0）。
@@ -122,6 +126,11 @@ tauri-plugin-window-state = "2.4.1"
 # 仅 Windows target 引入，decode.rs 用它按「系统当前 ANSI 代码页」解码子进程
 # 输出，自动适配任意语言版本的 Windows（中文=GBK、英文=1252、日文=Shift-JIS…）。
 [target.'cfg(windows)'.dependencies]
+# 审批 toast 直操作（harness/approval_toast.rs）：add_button + on_activated 进程内
+# 回调（应用运行中即可收——审批请求来自应用内生成流程，那一刻应用必然在跑，无需
+# COM activator）。已在 Cargo.lock 作 notify-rust 传递依赖（tauri-plugin-notification
+# 链路），加直依赖零新增编译树。crate 本身非 target-gated，必须声明在本段。
+tauri-winrt-notification = "0.7"
 windows-sys = { version = "0.59", features = [
     "Win32_Globalization",
     "Win32_Graphics_Gdi",
