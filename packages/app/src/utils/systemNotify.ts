@@ -31,3 +31,20 @@ export async function notifyApprovalNeeded(title: string, body: string): Promise
     console.error("审批系统通知发送失败:", e);
   }
 }
+
+/** dev 通路自检：跳过焦点判定直发一条（生产构建自动消失）。
+ *  启动即弹 = JS→invoke→Rust→系统 toast 全链路通，通知缺失问题只在触发
+ *  逻辑（hasFocus/blur）；不弹 = 链路断，看 console 报错。 */
+export async function notifySelfCheck(): Promise<void> {
+  try {
+    let granted = await isPermissionGranted();
+    if (!granted) granted = (await requestPermission()) === "granted";
+    if (!granted) {
+      console.error("[通知自检] 通知权限未授予——所有系统通知都不会发出");
+      return;
+    }
+    sendNotification({ title: "IcePaw 通知自检", body: "看到这条 = 系统通知链路正常（仅 dev）" });
+  } catch (e) {
+    console.error("[通知自检] 发送失败:", e);
+  }
+}

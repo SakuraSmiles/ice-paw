@@ -14,7 +14,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { useChatStore } from "../stores/chat";
 import { friendlyError } from "../utils/errors";
-import { notifyApprovalNeeded } from "../utils/systemNotify";
+import { notifyApprovalNeeded, notifySelfCheck } from "../utils/systemNotify";
 import type {
   ChatStartPayload,
   ChatAssistantStartPayload,
@@ -36,6 +36,10 @@ import type {
 export async function useChatEvents(): Promise<() => void> {
   const chat = useChatStore();
   const unlisteners: Array<() => void> = [];
+
+  // dev 通路自检（生产构建 import.meta.env.DEV=false 自动消失）：启动即直发
+  // 一条系统通知，一眼分流「链路断」vs「触发逻辑问题」（hasFocus/blur）
+  if (import.meta.env.DEV) void notifySelfCheck();
   /** 刚收到 chat:error、等待配套 chat:done(abort) 的会话集合。后端在 chat:error 后会
    *  再 emit 一次 chat:done(abort) 做收尾，据此跳过 freeze（不覆盖错误文案）+
    *  不设 lastFinishReason（避免误显「已手动停止」）——错误以 chat:error 文案为准。*/
@@ -319,6 +323,14 @@ export async function useChatEvents(): Promise<() => void> {
   // 恰好一条、多触发源不重发。
   const notifiedApprovalIds = new Set<string>();
   function maybeNotifyPendingApprovals() {
+    if (import.meta.env.DEV) {
+      console.info(
+        "[审批通知] 触发检查: hasFocus=", document.hasFocus(),
+        " auth挂起=", chat.pendingAuthRequests.size,
+        " proposal挂起=", chat.pendingProposals.size,
+        " 已通知=", notifiedApprovalIds.size,
+      );
+    }
     if (document.hasFocus()) return;
     const live = new Set<string>();
     for (const { payload } of chat.pendingAuthRequests.values()) {
