@@ -25,7 +25,9 @@ export async function notifyApprovalNeeded(title: string, body: string): Promise
     }
     if (!granted) return;
     sendNotification({ title, body });
-  } catch {
-    // 通知链路异常（插件未就绪 / 权限 API 缺失）不进用户视野，也不影响审批弹窗
+  } catch (e) {
+    // 通知链路异常（插件未就绪 / 权限 API 缺失）不影响审批弹窗，但要留痕——
+    // 静默吞会让「没收到通知」无从排查（2026-09-03 dev 实测排查时是盲区）
+    console.error("审批系统通知发送失败:", e);
   }
 }

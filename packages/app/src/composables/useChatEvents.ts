@@ -311,17 +311,47 @@ export async function useChatEvents(): Promise<() => void> {
     });
   });
 
+  // ---- 审批系统通知（恰一次语义）----
+  // 触发条件 = 请求存活期间应用失焦：到达时已失焦 → 立即发；到达时聚焦 →
+  // 首次 blur 补发。只判「到达瞬间」会漏掉「盯着卡片出现再切走」的时序
+  //（生产实案 2026-09-03：dev 实测盯着审批卡片出来后切后台，一条通知都没有）。
+  // blur 覆盖切应用/点任务栏，visibilitychange 兜最小化；request_id 簿记保证
+  // 恰好一条、多触发源不重发。
+  const notifiedApprovalIds = new Set<string>();
+  function maybeNotifyPendingApprovals() {
+    if (document.hasFocus()) return;
+    const live = new Set<string>();
+    for (const { payload } of chat.pendingAuthRequests.values()) {
+      live.add(payload.request_id);
+      if (notifiedApprovalIds.has(payload.request_id)) continue;
+      notifiedApprovalIds.add(payload.request_id);
+      void notifyApprovalNeeded(
+        "IcePaw · 等待你的批准",
+        payload.reason ? `${payload.tool_name}：${payload.reason}` : payload.tool_name,
+      );
+    }
+    for (const p of chat.pendingProposals.values()) {
+      live.add(p.request_id);
+      if (notifiedApprovalIds.has(p.request_id)) continue;
+      notifiedApprovalIds.add(p.request_id);
+      void notifyApprovalNeeded("IcePaw · 收到配置提案", p.summary);
+    }
+    // 瘦身：清掉已不在挂起集合的 id（审批已处理/超时），防长会话 Set 无界增长
+    for (const id of notifiedApprovalIds) if (!live.has(id)) notifiedApprovalIds.delete(id);
+  }
+  window.addEventListener("blur", maybeNotifyPendingApprovals);
+  function onVisibilityHidden() {
+    if (document.visibilityState === "hidden") maybeNotifyPendingApprovals();
+  }
+  document.addEventListener("visibilitychange", onVisibilityHidden);
+
   // ---- 工具授权请求 ----（始终按 convId 存，不丢后台会话；cancel 时按 request_id 清）
   await subscribe<ToolAuthRequestPayload>("chat:tool-auth-request", (e) => {
     const m = new Map(chat.pendingAuthRequests);
     // receivedAt 驱动 120s 倒计时渲染（与后端 TIMEOUT 同步到期自动消失）
     m.set(e.payload.conversation_id, { payload: e.payload, receivedAt: Date.now() });
     chat.pendingAuthRequests = m;
-    // 后台/失焦时系统通知拉回（前台聚焦不发；fire-and-forget 不阻塞弹窗主路径）
-    void notifyApprovalNeeded(
-      "IcePaw · 等待你的批准",
-      e.payload.reason ? `${e.payload.tool_name}：${e.payload.reason}` : e.payload.tool_name,
-    );
+    maybeNotifyPendingApprovals(); // 失焦才真发（内部守卫），fire-and-forget
   });
   await subscribe<{ request_id: string; conversation_id: string; reason: string }>(
     "chat:tool-auth-request-cancel",
@@ -339,8 +369,7 @@ export async function useChatEvents(): Promise<() => void> {
     const m = new Map(chat.pendingProposals);
     m.set(e.payload.conversation_id, e.payload);
     chat.pendingProposals = m;
-    // 同工具授权：后台/失焦时系统通知（summary 是后端成型的提案摘要）
-    void notifyApprovalNeeded("IcePaw · 收到配置提案", e.payload.summary);
+    maybeNotifyPendingApprovals();
   });
   await subscribe<{ request_id: string; conversation_id: string; reason: string }>(
     "chat:config-proposal-cancel",
@@ -357,10 +386,13 @@ export async function useChatEvents(): Promise<() => void> {
     },
   );
 
-  /** 拆卸所有已注册的 Tauri 事件监听器 + 清发送超时（幂等，可重复调用） */
+  /** 拆卸所有已注册的 Tauri 事件监听器 + 审批通知 DOM 监听 + 发送超时（幂等，可重复调用） */
   function destroyEvents() {
     for (const u of unlisteners) u();
     unlisteners.length = 0;
+    window.removeEventListener("blur", maybeNotifyPendingApprovals);
+    document.removeEventListener("visibilitychange", onVisibilityHidden);
+    notifiedApprovalIds.clear();
     chat.clearSendTimeout();
   }
 
