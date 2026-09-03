@@ -47,6 +47,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        // 系统通知：审批请求后台提醒（发送侧在前端事件层 utils/systemNotify，按失焦判定）
+        .plugin(tauri_plugin_notification::init())
         // 窗口状态记忆（尺寸/位置/最大化跨启动保持）：restore 发生在插件加载阶段，
         // 早于 setup —— setup 里的「首启动态默认尺寸」只在无保存状态时生效。
         .plugin(tauri_plugin_window_state::Builder::default().build())

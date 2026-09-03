@@ -22,6 +22,9 @@ tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-stronghold = "2"
+# 系统级通知：审批请求（工具授权/配置提案）在应用后台/失焦时错过 120s 倒计时
+# ——切后台时用 OS 通知拉回（Windows Toast / macOS 通知中心；前台聚焦不发）。
+tauri-plugin-notification = "2"
 # 直接依赖以拿到 `ClientError` 做强类型匹配 —— 启动恢复 `load_client`
 # 时区分 "snapshot 里没有该 client" vs "snapshot 损坏/解密失败"。
 # 版本对齐 transitive（tauri-plugin-stronghold 2.3.1 → iota_stronghold 2.1.0）。

@@ -14,6 +14,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { useChatStore } from "../stores/chat";
 import { friendlyError } from "../utils/errors";
+import { notifyApprovalNeeded } from "../utils/systemNotify";
 import type {
   ChatStartPayload,
   ChatAssistantStartPayload,
@@ -316,6 +317,11 @@ export async function useChatEvents(): Promise<() => void> {
     // receivedAt 驱动 120s 倒计时渲染（与后端 TIMEOUT 同步到期自动消失）
     m.set(e.payload.conversation_id, { payload: e.payload, receivedAt: Date.now() });
     chat.pendingAuthRequests = m;
+    // 后台/失焦时系统通知拉回（前台聚焦不发；fire-and-forget 不阻塞弹窗主路径）
+    void notifyApprovalNeeded(
+      "IcePaw · 等待你的批准",
+      e.payload.reason ? `${e.payload.tool_name}：${e.payload.reason}` : e.payload.tool_name,
+    );
   });
   await subscribe<{ request_id: string; conversation_id: string; reason: string }>(
     "chat:tool-auth-request-cancel",
@@ -333,6 +339,8 @@ export async function useChatEvents(): Promise<() => void> {
     const m = new Map(chat.pendingProposals);
     m.set(e.payload.conversation_id, e.payload);
     chat.pendingProposals = m;
+    // 同工具授权：后台/失焦时系统通知（summary 是后端成型的提案摘要）
+    void notifyApprovalNeeded("IcePaw · 收到配置提案", e.payload.summary);
   });
   await subscribe<{ request_id: string; conversation_id: string; reason: string }>(
     "chat:config-proposal-cancel",
