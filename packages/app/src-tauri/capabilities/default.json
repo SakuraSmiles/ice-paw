@@ -11,6 +11,7 @@
     "dialog:default",
     "core:window:allow-set-theme",
     "core:event:default",
-    "core:window:allow-set-title"
+    "core:window:allow-set-title",
+    "notification:default"
   ]
 }
