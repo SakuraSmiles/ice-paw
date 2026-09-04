@@ -197,7 +197,7 @@ impl ReadRouteRegistry {
                     target: "ice_paw.read_route",
                     conv = conversation_id,
                     diffs = report.diffs.len(),
-                    "会话对账存在差异 → 回退 legacy 读路径（差异即 bug 嫌疑，见 reconcile_session）"
+                    "会话对账存在差异（差异即 bug 嫌疑，见 reconcile_session）——Phase 2B 起恒走派生不回退 legacy，历史可能缺行"
                 );
             }
             d
@@ -252,7 +252,8 @@ fn classify(report: &ReconcileReport) -> RouteDecision {
 /// 对称往返）→ tail-limit 到 [`HISTORY_LOAD_LIMIT`](repo::message::HISTORY_LOAD_LIMIT)
 /// （与 legacy `list_by_conversation` 的窗口严格一致）。
 ///
-/// 仅对路由判为 Derive 的会话调用（调用方负责）；其余走 legacy。
+/// 仅对路由判为 Derive 的会话调用（调用方负责）；Phase 2B 起 session_runner 恒派生
+///（非绿路由仅记 error 日志照常派生，resolve 已降级健康监控）。
 pub async fn load_history_from_events(
     pool: &SqlitePool,
     conversation_id: &str,

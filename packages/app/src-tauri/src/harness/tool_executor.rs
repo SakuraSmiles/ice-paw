@@ -135,15 +135,30 @@ pub(crate) async fn execute_tool_round(
     for (tc_id, tc_name, tc_args) in completed_calls {
         let tool_start = std::time::Instant::now();
         let started_at = now_sql();
-        // 1. 解析授权级别 + 路径（+ 路径字段名——「允许此目录」档判定 dir 本身 vs 父目录用）
-        let (level, file_path, path_key) = inspect_tool_for_auth(registry, tc_name, tc_args).await;
+        // 1. 解析授权级别 + 路径（+ 路径字段名——「允许此目录」档判定 dir 本身 vs 父目录用；
+        //    双路径工具（move/copy）提取全部路径）
+        let (level, mut file_path, path_key, all_paths) =
+            inspect_tool_for_auth(registry, tc_name, tc_args).await;
 
+        // workspace 快速路径：PathWhitelist 且**全部**路径都在 workspace 内才免授权
+        // （2026-09-04 质检 Q1：只查 source 时 destination 是旁路面——source 在 ws 内
+        // 即可零审批写 ws 外任意路径，与 write_file 越界必弹 Confirm 不一致）。任一路径
+        // 越界 → 展示首个越界路径走审批/会话授权（审批卡所见即所批）。
         let decision = if matches!(level, AuthorizationLevel::PathWhitelist)
-            && path_within_workspace(&file_path, &workspace)
+            && !all_paths.is_empty()
+            && all_paths
+                .iter()
+                .all(|p| path_within_workspace(p, &workspace))
         {
             // workspace 内 + PathWhitelist 级别（如 read_file）→ 免授权放行
             AuthorizationDecision::Allow
         } else {
+            if let Some(outside) = all_paths
+                .iter()
+                .find(|p| !path_within_workspace(p, &workspace))
+            {
+                file_path = outside.clone();
+            }
             check_authorization_with_session(
                 level, &file_path, whitelist, tc_name, tc_args, session,
             )
@@ -611,28 +626,34 @@ fn now_sql() -> String {
     chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
-/// 从工具实例提取 `AuthorizationLevel` + 待访问路径 + 路径字段名。
+/// 从工具实例提取 `AuthorizationLevel` + 代表路径 + 路径字段名 + **全部**路径。
 ///
 /// - `level` 直接调 `tool.authorization_level()`
-/// - `file_path` 从参数 JSON 中提取（见 [`extract_path_from_args`]），
-///   找不到则用空字符串（`Always` 工具不需要路径）
-/// - `path_key` 命中的字段名（"path"/"dir"/…），「允许此目录」档判定
+/// - `file_path` 路径列表首元素（见 [`extract_paths_from_args`]），找不到则空字符串
+///   （`Always` 工具不需要路径）
+/// - `path_key` 首元素命中的字段名（"path"/"dir"/…），「允许此目录」档判定
 ///   目录参数本身 vs 文件参数的父目录用
+/// - `all_paths` 全部路径（双路径工具 source+destination 都在），workspace
+///   免授权快速路径的 all-match 判定用（Q1）
 async fn inspect_tool_for_auth(
     registry: &McpRegistry,
     tool_name: &str,
     args: &str,
-) -> (AuthorizationLevel, String, String) {
+) -> (AuthorizationLevel, String, String, Vec<String>) {
     let default_level = AuthorizationLevel::Always;
 
     let Some(tool) = registry.get(tool_name).await else {
-        return (default_level, String::new(), String::new());
+        return (default_level, String::new(), String::new(), Vec::new());
     };
 
     let level = tool.authorization_level();
-    let (path_key, path) =
-        extract_path_from_args(args).unwrap_or_else(|| (String::new(), String::new()));
-    (level, path, path_key)
+    let paths = extract_paths_from_args(args);
+    let (path_key, path) = paths
+        .first()
+        .cloned()
+        .unwrap_or_else(|| (String::new(), String::new()));
+    let all_paths = paths.into_iter().map(|(_, p)| p).collect();
+    (level, path, path_key, all_paths)
 }
 
 /// 解析 agent 的 workspace 根路径（canonicalize，用于 workspace 内免授权判断）。
@@ -704,20 +725,29 @@ fn path_within_workspace(file_path: &str, workspace: &Option<PathBuf>) -> bool {
     crate::infra::path_norm::path_within(&target, ws)
 }
 
-/// 从工具参数 JSON 提取路径字段（`path` / `file_path` / `dir` / `source` / `destination`），
-/// 返回 `(字段名, 路径)`。
+/// 从工具参数 JSON 提取**全部**路径字段（`path` / `file_path` / `dir` / `source` /
+/// `destination`），按该优先级排序返回 `(字段名, 路径)` 列表；首元素为「代表路径」
+/// （授权弹窗展示与「允许此目录」档入账用）。
 ///
-/// `source`/`destination` 供 `move_file`/`copy_file`：tool_executor 只提取单个路径做白名单
-/// 校验，故以 source 为代表路径（destination 由工具内 `reject_sensitive` 兜底）。
-/// 多路径工具（如 `read_multiple_files` 的 paths 数组）无法提取，会回退到弹窗确认。
-fn extract_path_from_args(args: &str) -> Option<(String, String)> {
-    let parsed: Value = serde_json::from_str(args).ok()?;
-    for key in ["path", "file_path", "dir", "source", "destination"] {
-        if let Some(s) = parsed.get(key).and_then(|v| v.as_str()) {
-            return Some((key.to_string(), s.to_string()));
-        }
-    }
-    None
+/// 双路径工具（`move_file`/`copy_file` 的 source+destination）全部入列：workspace
+/// 免授权快速路径要求**所有**路径都在 workspace 内，任一越界即走审批——copy/move
+/// 与 write_file 同受工作区边界约束，destination 不得成为旁路面（2026-09-04 质检
+/// Q1）。工具内的 `reject_sensitive` 是敏感路径防御（/proc 等 + agent.yaml），不含
+/// workspace 边界，两层职责互补不互代。多路径数组（`read_multiple_files` 的 paths）
+/// 无法逐字段提取，不入列——回退到弹窗确认。
+fn extract_paths_from_args(args: &str) -> Vec<(String, String)> {
+    let Ok(parsed) = serde_json::from_str::<Value>(args) else {
+        return Vec::new();
+    };
+    ["path", "file_path", "dir", "source", "destination"]
+        .iter()
+        .filter_map(|key| {
+            parsed
+                .get(key)
+                .and_then(|v| v.as_str())
+                .map(|s| (key.to_string(), s.to_string()))
+        })
+        .collect()
 }
 
 /// 「允许此目录」档的入账目标（#11）。
@@ -749,47 +779,53 @@ mod tests {
     use super::*;
 
     #[test]
-    fn extract_path_from_args_with_path() {
+    fn extract_paths_from_args_with_path() {
         assert_eq!(
-            extract_path_from_args(r#"{"path":"/etc/passwd"}"#),
-            Some(("path".into(), "/etc/passwd".into()))
+            extract_paths_from_args(r#"{"path":"/etc/passwd"}"#),
+            vec![("path".into(), "/etc/passwd".into())]
         );
     }
 
     #[test]
-    fn extract_path_from_args_with_file_path() {
+    fn extract_paths_from_args_with_file_path() {
         assert_eq!(
-            extract_path_from_args(r#"{"file_path":"/home/x.txt"}"#),
-            Some(("file_path".into(), "/home/x.txt".into()))
+            extract_paths_from_args(r#"{"file_path":"/home/x.txt"}"#),
+            vec![("file_path".into(), "/home/x.txt".into())]
         );
     }
 
     #[test]
-    fn extract_path_from_args_with_dir() {
+    fn extract_paths_from_args_with_dir() {
         assert_eq!(
-            extract_path_from_args(r#"{"dir":"/var"}"#),
-            Some(("dir".into(), "/var".into()))
+            extract_paths_from_args(r#"{"dir":"/var"}"#),
+            vec![("dir".into(), "/var".into())]
         );
     }
 
     #[test]
-    fn extract_path_from_args_with_source() {
-        // move_file 用 source/destination；source 排在 destination 前，故提取 source
-        // 作为代表路径用于白名单授权
+    fn extract_paths_from_args_dual_path_both_extracted() {
+        // Q1：move_file/copy_file 的 source+destination 全部入列（all-match 判定用），
+        // source 仍居首作为代表路径（展示与「此目录」入账）
         assert_eq!(
-            extract_path_from_args(r#"{"source":"/a/b.txt","destination":"/c/b.txt"}"#),
-            Some(("source".into(), "/a/b.txt".into()))
+            extract_paths_from_args(r#"{"source":"/a/b.txt","destination":"/c/b.txt"}"#),
+            vec![
+                ("source".into(), "/a/b.txt".into()),
+                ("destination".into(), "/c/b.txt".into()),
+            ]
         );
     }
 
     #[test]
-    fn extract_path_from_args_missing() {
-        assert_eq!(extract_path_from_args(r#"{"other":"x"}"#), None);
+    fn extract_paths_from_args_missing() {
+        assert_eq!(extract_paths_from_args(r#"{"other":"x"}"#), Vec::<(String, String)>::new());
     }
 
     #[test]
-    fn extract_path_from_args_invalid_json() {
-        assert_eq!(extract_path_from_args("not json"), None);
+    fn extract_paths_from_args_invalid_json() {
+        assert_eq!(
+            extract_paths_from_args("not json"),
+            Vec::<(String, String)>::new()
+        );
     }
 
     // ===== #11「允许此目录」档入账目标推导 =====

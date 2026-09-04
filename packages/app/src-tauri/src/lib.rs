@@ -319,8 +319,24 @@ pub fn run() {
                 let mut rx = harness::event_log::event_bus().subscribe();
                 let emit_handle = handle.clone();
                 tauri::async_runtime::spawn(async move {
-                    while let Ok(note) = rx.recv().await {
-                        let _ = emit_handle.emit("session:event-appended", note);
+                    loop {
+                        // Lagged（容量 256 内消费不过来丢帧）不算致命：跳过继续收，
+                        // 只有 Closed（全部发送端放下）才退出。旧写法 while let Ok
+                        // 把 Lagged 当 Err 永久退出循环，session:event-appended 全局
+                        // 停发到重启（2026-09-04 质检 Q4；前端有 5s 轮询兜底但 live
+                        // 增量退化为轮询）。
+                        match rx.recv().await {
+                            Ok(note) => {
+                                let _ = emit_handle.emit("session:event-appended", note);
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                                tracing::warn!(
+                                    target: "ice_paw.event_bus",
+                                    "事件通知转发落后丢帧（live 增量由前端 5s 轮询兜底），继续接收"
+                                );
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        }
                     }
                 });
             }
