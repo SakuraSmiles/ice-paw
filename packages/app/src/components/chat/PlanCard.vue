@@ -3,11 +3,14 @@
 //
 // 与 DelegationCard 同族：取代该工具调用的通用工具行渲染。展示该次调用
 // 声明的**全量快照**（后端语义：每次调用整体覆写，非增量打勾）。
-// - 条目状态：○ pending / ● in_progress（呼吸）/ ✓ done（划线弱化）
+// - 条目状态走 StatusGlyph 语系（2026-09-04 统一）：pending=中性空心环 /
+//   in_progress=像素格（主色）/ done=环+Check（划线弱化）——与 TaskPanel 计划列同语言
 // - task_conversation_id 存在的条目可跳对应任务（委派子会话，引用边）
 // - 「N/M」进度 = done 数 / 总数；M=0（清空计划）时后端返回空清单，
 //   此卡片仍渲染但显示「已清空」（诚实于历史调用记录）
 // 展开看原始参数/结果走原工具行（本卡片不重复承载）。
+import { ClipboardCheck, ArrowRight } from "@lucide/vue";
+import StatusGlyph from "./StatusGlyph.vue";
 import type { PlanItem } from "../../types";
 
 const props = defineProps<{
@@ -19,6 +22,13 @@ const emit = defineEmits<{ (e: "open-task", conversationId: string): void }>();
 
 const doneCount = () => props.items.filter((it) => it.status === "done").length;
 
+/** 条目 status → 状态图标语系（与 TaskPanel.planGlyph 同映射） */
+function planGlyph(status: string): "running" | "done" | "pending" {
+  if (status === "in_progress") return "running";
+  if (status === "done") return "done";
+  return "pending";
+}
+
 function openTask(it: PlanItem) {
   if (it.task_conversation_id) emit("open-task", it.task_conversation_id);
 }
@@ -27,7 +37,7 @@ function openTask(it: PlanItem) {
 <template>
   <div class="plan-card">
     <div class="plan-head">
-      <svg class="plan-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+      <ClipboardCheck :size="14" class="plan-icon" aria-hidden="true" />
       <span class="plan-title">计划</span>
       <span class="plan-progress">{{ doneCount() }}/{{ items.length }}</span>
     </div>
@@ -40,9 +50,9 @@ function openTask(it: PlanItem) {
         :title="it.task_conversation_id ? '此步骤挂有委派任务，点击打开' : it.text"
         @click="openTask(it)"
       >
-        <span :class="['plan-mark', `plan-mark-${it.status}`]" />
+        <StatusGlyph :class="`plan-mark-${it.status}`" :status="planGlyph(it.status)" />
         <span class="plan-text">{{ it.text }}</span>
-        <svg v-if="it.task_conversation_id" class="plan-arrow" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        <ArrowRight v-if="it.task_conversation_id" :size="12" class="plan-arrow" aria-hidden="true" />
       </li>
     </ul>
   </div>
@@ -73,12 +83,8 @@ function openTask(it: PlanItem) {
 .plan-item-link { cursor: pointer; border-radius: var(--ip-radius-sm); padding: 1px 4px; margin: 0 -4px; }
 .plan-item-link:hover { background: var(--ip-color-bg-tertiary, rgba(0, 0, 0, 0.05)); }
 
-.plan-mark { width: 9px; height: 9px; flex-shrink: 0; border-radius: 50%; border: 1.5px solid var(--ip-color-text-tertiary); }
-.plan-mark-pending { border-color: var(--ip-color-text-tertiary); }
-.plan-mark-in_progress { border-color: var(--ip-warning-base); background: var(--ip-warning-base); animation: plan-pulse 1.2s ease-in-out infinite; }
-.plan-mark-done { border-color: var(--ip-success-base); background: var(--ip-success-base); }
-@keyframes plan-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
-
+/* 状态标记已换 StatusGlyph（plan-mark-{status} class 透传到 glyph 根 span，
+   仅承载 done 划线兄弟选择器；视觉形态在组件内） */
 .plan-item .plan-mark-done + .plan-text { text-decoration: line-through; color: var(--ip-color-text-tertiary); }
 .plan-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .plan-arrow { color: var(--ip-primary-500); flex-shrink: 0; }

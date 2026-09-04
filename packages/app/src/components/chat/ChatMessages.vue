@@ -889,9 +889,9 @@ const RESUMABLE_REASONS = new Set([
                 <template v-for="(think, ti) in parseThinkingBlocks(item.msg.content_blocks)" :key="'think-' + item.msg.id + '-' + ti">
                   <div v-if="!(isLastAssistant(item) && chat.thinkingDuration && chat.lastThinkingContent)" class="think-block">
                     <div class="think-toggle" @click="toggleThinking(item.msg.id + '-h' + ti)">
-                      <span class="think-chevron">{{ expandedThinking.has(item.msg.id + '-h' + ti) ? '▾' : '▸' }}</span>
-                      <span class="think-label">{{ chat.thinkingDurations.has(item.msg.id) ? '思考 · ' + chat.thinkingDurations.get(item.msg.id) : '思考' }}</span>
                       <StatusGlyph status="done" class="think-glyph" />
+                      <span class="think-label">{{ chat.thinkingDurations.has(item.msg.id) ? '思考 · ' + chat.thinkingDurations.get(item.msg.id) : '思考' }}</span>
+                      <span class="think-chevron">{{ expandedThinking.has(item.msg.id + '-h' + ti) ? '▾' : '▸' }}</span>
                     </div>
                     <Transition name="think-fade">
                       <div v-if="expandedThinking.has(item.msg.id + '-h' + ti)" class="think-body">
@@ -905,10 +905,10 @@ const RESUMABLE_REASONS = new Set([
                 <Transition name="think-swap" mode="out-in">
                   <div v-if="isLiveAssistant(item) && chat.streamingThinking" key="live" class="think-block">
                     <div class="think-toggle" @click="toggleThinking('streaming')">
-                      <span class="think-chevron">{{ expandedThinking.has('streaming') ? '▾' : '▸' }}</span>
+                      <StatusGlyph status="running" class="think-glyph" />
                       <span class="think-label">思考</span>
                       <span class="think-status">进行中… {{ thinkingElapsed }}</span>
-                      <StatusGlyph status="running" class="think-glyph" />
+                      <span class="think-chevron">{{ expandedThinking.has('streaming') ? '▾' : '▸' }}</span>
                     </div>
                     <Transition name="think-fade">
                       <div v-if="expandedThinking.has('streaming')" class="think-body">
@@ -918,9 +918,9 @@ const RESUMABLE_REASONS = new Set([
                   </div>
                   <div v-else-if="isLastAssistant(item) && chat.thinkingDuration && chat.lastThinkingContent" key="done" class="think-block">
                     <div class="think-toggle" @click="toggleThinking('done')">
-                      <span class="think-chevron">{{ expandedThinking.has('done') ? '▾' : '▸' }}</span>
-                      <span class="think-label">思考 · {{ chat.thinkingDuration }}</span>
                       <StatusGlyph status="done" class="think-glyph" />
+                      <span class="think-label">思考 · {{ chat.thinkingDuration }}</span>
+                      <span class="think-chevron">{{ expandedThinking.has('done') ? '▾' : '▸' }}</span>
                     </div>
                     <Transition name="think-fade">
                       <div v-if="expandedThinking.has('done')" class="think-body">
@@ -953,10 +953,10 @@ const RESUMABLE_REASONS = new Set([
                         />
                         <template v-if="d.hasError">
                           <div class="tool-toggle" @click="toggleToolCall(tu.id)">
-                            <span class="tool-chevron">{{ expandedToolCalls.has(tu.id) ? '▾' : '▸' }}</span>
+                            <StatusGlyph status="error" />
                             <span class="tool-name">{{ tu.name }}</span>
                             <span class="tool-preview">调用失败</span>
-                            <StatusGlyph status="error" />
+                            <span class="tool-chevron">{{ expandedToolCalls.has(tu.id) ? '▾' : '▸' }}</span>
                           </div>
                           <Transition name="tool-slide">
                             <div v-if="expandedToolCalls.has(tu.id)" class="tool-expand">
@@ -980,10 +980,10 @@ const RESUMABLE_REASONS = new Set([
                           <PlanCard v-if="p" :items="p" @open-task="openChildConv" />
                           <template v-else>
                             <div class="tool-toggle" @click="toggleToolCall(tu.id)">
-                              <span class="tool-chevron">{{ expandedToolCalls.has(tu.id) ? '▾' : '▸' }}</span>
+                              <StatusGlyph :status="getToolHasError(tu.id) ? 'error' : 'done'" />
                               <span class="tool-name">{{ tu.name }}</span>
                               <span class="tool-preview">{{ truncateJson(tu.input) }}</span>
-                              <StatusGlyph :status="getToolHasError(tu.id) ? 'error' : 'done'" />
+                              <span class="tool-chevron">{{ expandedToolCalls.has(tu.id) ? '▾' : '▸' }}</span>
                             </div>
                             <Transition name="tool-slide">
                               <div v-if="expandedToolCalls.has(tu.id)" class="tool-expand">
@@ -1028,16 +1028,16 @@ const RESUMABLE_REASONS = new Set([
                           <PlanCard v-if="p" :items="p" @open-task="openChildConv" />
                           <template v-else>
                             <div class="tool-toggle" @click="toggleToolCall(call.id)">
-                              <span class="tool-chevron">{{ expandedToolCalls.has(call.id) ? '▾' : '▸' }}</span>
-                              <span class="tool-name">{{ call.name }}</span>
-                              <span v-if="call.result?.durationMs" class="tool-duration">{{ formatDuration(call.result.durationMs) }}</span>
-                              <span class="tool-preview">{{ truncateJson(call.arguments || '') }}</span>
                               <StatusGlyph
                                 v-if="call.ended && call.result"
                                 :status="call.result.isError ? 'error' : 'done'"
                               />
                               <StatusGlyph v-else-if="call.ended" status="wait" />
                               <StatusGlyph v-else status="running" />
+                              <span class="tool-name">{{ call.name }}</span>
+                              <span v-if="call.result?.durationMs" class="tool-duration">{{ formatDuration(call.result.durationMs) }}</span>
+                              <span class="tool-preview">{{ truncateJson(call.arguments || '') }}</span>
+                              <span class="tool-chevron">{{ expandedToolCalls.has(call.id) ? '▾' : '▸' }}</span>
                             </div>
                             <Transition name="tool-slide">
                               <div v-if="expandedToolCalls.has(call.id)" class="tool-expand">
@@ -1111,7 +1111,7 @@ const RESUMABLE_REASONS = new Set([
 
     <div v-if="chat.sending && chat.messages.length > 0" class="cursor-bar">
       <div class="cursor-track">
-        <div class="cursor-glow" /><span class="cursor-label">正在生成…</span>
+        <StatusGlyph status="running" /><span class="cursor-label">正在生成…</span>
       </div>
     </div>
 
@@ -1387,13 +1387,12 @@ const RESUMABLE_REASONS = new Set([
 /* ===== 流式光标 ===== */
 .cursor-bar { display:flex; justify-content:flex-start; align-items:center; gap: var(--ip-spacing-2_5); padding:4px 48px 0; }
 .cursor-track { display:flex; align-items:center; gap: var(--ip-spacing-2); padding:4px 0; }
-.cursor-glow { width:8px; height:8px; border-radius:50%; background-color:var(--ip-primary-500); animation:cursor-pulse 1.2s ease-in-out infinite; }
 .cursor-label { font-size:var(--ip-text-caption-size); color:var(--ip-color-text-tertiary); }
-@keyframes cursor-pulse { 0%,100% { opacity:1; transform:scale(1); } 50% { opacity:0.4; transform:scale(0.75); } }
+/* 生成指示的脉冲点已由 StatusGlyph running 像素格取代（2026-09-04 语系统一）；
+   .state-dot 死样式（模板零引用）与 cursor-pulse 一并清除 */
 
 /* ===== 状态 ===== */
 .state-hint { height:100%; display:flex; align-items:center; justify-content:center; gap: var(--ip-spacing-2); color:var(--ip-color-text-tertiary); font-size:var(--ip-text-body-sm-size); }
-.state-dot { width:6px; height:6px; border-radius:50%; background-color:var(--ip-primary-500); animation:cursor-pulse 1.2s ease-in-out infinite; }
 
 /* 骨架屏：消息列表加载中 */
 .msg-skeleton { display:flex; flex-direction:column; gap:24px; padding: var(--ip-spacing-6); }
@@ -1428,7 +1427,8 @@ const RESUMABLE_REASONS = new Set([
 .think-block { margin:0; }
 .think-toggle { display:flex; align-items:center; gap:6px; padding:2px 6px; cursor:pointer; user-select:none; border-radius:var(--ip-radius-sm); transition:all var(--ip-duration-fast) var(--ip-ease-out); width:100%; }
 .think-toggle:hover { background:var(--ip-color-bg-tertiary); }
-.think-chevron { font-size: var(--ip-text-micro-size); color:var(--ip-color-text-disabled); line-height:1; width:10px; flex-shrink:0; transition:transform var(--ip-duration-fast) var(--ip-ease-out); }
+/* chevron 右移行尾（2026-09-04 拍板：状态 glyph 前置行首，展开操作在行尾） */
+.think-chevron { margin-left:auto; font-size: var(--ip-text-micro-size); color:var(--ip-color-text-disabled); line-height:1; width:10px; flex-shrink:0; transition:transform var(--ip-duration-fast) var(--ip-ease-out); }
 .think-label { font-size:var(--ip-text-caption-size); font-weight:var(--ip-font-weight-medium); color:var(--ip-color-text-tertiary); letter-spacing:0.3px; text-transform:uppercase; }
 .think-status { margin-left:8px; font-size:var(--ip-text-caption-size); color:var(--ip-color-text-disabled); }
 .think-body { margin:4px 0 4px 22px; padding:6px 0 6px 14px; border-left:2px solid var(--ip-primary-200); font-size:var(--ip-text-body-sm-size); color:var(--ip-color-text-secondary); line-height:1.7; white-space:pre-wrap; word-break:break-word; }
@@ -1455,6 +1455,7 @@ const RESUMABLE_REASONS = new Set([
 .tools-strip { display:flex; flex-direction:column; gap:1px; margin:0; }
 .tool-toggle { display:flex; align-items:center; gap:6px; padding:2px 6px; cursor:pointer; user-select:none; border-radius:var(--ip-radius-sm); transition:background var(--ip-duration-fast) var(--ip-ease-out); width:100%; }
 .tool-toggle:hover { background:var(--ip-color-bg-tertiary); }
+/* chevron 行尾（glyph 前置后；preview 的 margin-left:auto 已把尾部让出） */
 .tool-chevron { font-size: var(--ip-text-micro-size); color:var(--ip-color-text-disabled); line-height:1; width:10px; flex-shrink:0; }
 .tool-name { font-size:var(--ip-text-caption-size); font-weight:var(--ip-font-weight-medium); color:var(--ip-color-text-tertiary); white-space:nowrap; }
 .tool-duration { font-size: var(--ip-text-micro-size); color:var(--ip-color-text-disabled); font-family:var(--ip-font-mono, monospace); white-space:nowrap; flex-shrink:0; }

@@ -20,6 +20,7 @@ import { useAgentStore } from "../../stores/agent";
 import { useScreenChannelStore } from "../../stores/screenChannel";
 import { bridge } from "../../api/bridge";
 import EntityAvatar from "../common/EntityAvatar.vue";
+import StatusGlyph from "./StatusGlyph.vue";
 
 // hasTabbar：标题下方有标签条（会话态）→ 去掉底边线，与标签条视觉连成一体
 //（ChatPage 传入；欢迎态无标签条，保留分割线区分标题与欢迎内容）
@@ -240,14 +241,18 @@ async function toggleScreenShare() {
           </button>
           <span v-if="delegation?.parentId" class="crumb-sep">/</span>
           <span class="header-title-text">{{ chat.activeConversation?.title || "新对话" }}</span>
-          <!-- MA-1 任务详情 v1：徽章升级为「委派任务」+ 状态点（进行中脉冲/已结束中性；
+          <!-- MA-1 任务详情 v1：徽章升级为「委派任务」+ 状态 glyph（进行中像素格/已结束中性环；
                done/failed 精确终态是 MA-2 台账，不伪造） -->
           <span
             v-if="delegation"
             class="header-kind-badge"
             :title="delegation.running ? 'agent 委派的任务 · 执行中' : 'agent 委派的任务 · 已结束'"
           >
-            <span class="hdr-dot" :class="{ running: delegation.running }" />
+            <StatusGlyph
+              :size="12"
+              :status="delegation.running ? 'running' : 'pending'"
+              :label="delegation.running ? undefined : '已结束'"
+            />
             委派任务
           </span>
         </h1>
@@ -339,10 +344,9 @@ async function toggleScreenShare() {
 .crumb-parent svg { flex-shrink:0; }
 .crumb-label { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
 .crumb-sep { margin:0 6px 0 2px; font-size:var(--ip-text-caption-size); color:var(--ip-color-text-disabled); vertical-align:1px; }
-/* 任务状态点：与 DelegationCard/任务胶囊同语义（进行中脉冲=warning，结束=中性） */
-.hdr-dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; display:inline-block; margin-right:2px; background:var(--ip-color-text-tertiary); }
-.hdr-dot.running { background:var(--ip-warning-base); animation:hdr-pulse 1.2s ease-in-out infinite; }
-@keyframes hdr-pulse { 0%, 100% { opacity:1; } 50% { opacity:0.35; } }
+/* 任务状态指示已换 StatusGlyph（与 DelegationCard/任务胶囊同语义：进行中=像素格主色，
+   结束=中性环；2026-09-04 语系统一），胶囊内 12px 与文字同高 */
+.header-kind-badge .status-glyph { flex-shrink:0; margin-right:2px; vertical-align:-2px; }
 .header-title { font-size:var(--ip-text-body-size); font-weight:var(--ip-font-weight-semibold); color:var(--ip-color-text-primary); margin:0; line-height:1.4; cursor:default; }
 .header-kind-badge { margin-left:8px; font-size:var(--ip-text-caption-size); font-weight:var(--ip-font-weight-medium); color:var(--ip-primary-600); background:var(--ip-primary-soft-bg, rgba(var(--ip-primary-500-rgb), 0.08)); border:1px solid var(--ip-primary-soft-border, rgba(var(--ip-primary-500-rgb), 0.25)); border-radius:var(--ip-radius-full, 999px); padding:1px 8px; vertical-align:1px; }
 .header-title-text { padding-bottom:1px; border-bottom:1px solid transparent; transition:border-color var(--ip-duration-fast) var(--ip-ease-out); }
