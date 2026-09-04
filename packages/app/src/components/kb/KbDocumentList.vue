@@ -2,6 +2,7 @@
 // KbDocumentList.vue — 知识库文档列表（统一组件，global / agent 复用）
 // 传入 scope（+ agent 的 ownerId），组件自行解析对应 KB 并展示其文档。
 import { ref, computed, onMounted } from "vue";
+import { Check, X } from "@lucide/vue";
 import { bridge } from "../../api/bridge";
 import type { Kb, KbDocument, IndexStats, KbStats, UserPreferences } from "../../types";
 
@@ -112,11 +113,11 @@ const directoryShort = computed(() => {
         <span>{{ documents.length }} 篇</span>
         <template v-if="embeddingEnabled">
           <span class="kb-sep">·</span>
-          <span class="kb-embed-on" :title="`语义检索已启用：${embeddingPrefs?.embedding_model ?? ''}`">语义检索 ✓</span>
+          <span class="kb-embed-on" :title="`语义检索已启用：${embeddingPrefs?.embedding_model ?? ''}`"><Check :size="13" aria-hidden="true" /> 语义检索</span>
         </template>
         <template v-else>
           <span class="kb-sep">·</span>
-          <router-link to="/settings/general" class="kb-embed-off">语义检索 ✗ 未配置</router-link>
+          <router-link to="/settings/general" class="kb-embed-off"><X :size="13" aria-hidden="true" /> 语义检索 未配置</router-link>
         </template>
         <template v-if="chunkStats && chunkStats.total_chunks > 0">
           <span class="kb-sep">·</span>
@@ -210,10 +211,16 @@ const directoryShort = computed(() => {
   margin: 0 2px;
 }
 .kb-embed-on {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   color: var(--ip-success-text);
   white-space: nowrap;
 }
 .kb-embed-off {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   color: var(--ip-color-text-tertiary);
   text-decoration: underline;
   text-underline-offset: 2px;

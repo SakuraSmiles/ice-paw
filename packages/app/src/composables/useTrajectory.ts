@@ -65,7 +65,7 @@ export interface TurnHeaderRow {
   matchCount: number;
   roundCount: number;
   toolCount: number;
-  /** 本 turn message_error 计数（>0 时头右侧 ⚠ 徽章，扫读定位异常轮） */
+  /** 本 turn message_error 计数（>0 时头右侧错误徽章，扫读定位异常轮） */
   errorCount: number;
   /** 墙钟耗时（首→末事件，ms；时间不可解析为 null） */
   turnMs: number | null;
@@ -90,6 +90,10 @@ export interface EventRow {
   isError: boolean;
   /** assistant 无正文、摘要取自思考内容（行渲染为斜体弱化：内心活动非发言） */
   thinkingDerived: boolean;
+  /** 行内容含思考块（正文与思考共存 / 思考即摘要两形态）→ 渲染层出 Brain 图标 */
+  isThinking: boolean;
+  /** assistant 自动续写（supersede 后最后一条）→ 渲染层出 RotateCw 图标 */
+  isContinuation: boolean;
   /** tool 行的执行耗时 / assistant 行的生成耗时；其余 null */
   durationMs: number | null;
   /** assistant 行的 token 计数；其余 null */
@@ -147,7 +151,7 @@ function compactJson(s: string, max = 80): string {
   return t.length > max ? `${t.slice(0, max)}…` : t;
 }
 
-function summarizeEvent(ev: SessionEvent): { kind: RowKind; summary: string; isError: boolean; durationMs: number | null; tokens: number | null; thinkingDerived: boolean } | null {
+function summarizeEvent(ev: SessionEvent): { kind: RowKind; summary: string; isError: boolean; durationMs: number | null; tokens: number | null; thinkingDerived: boolean; isThinking: boolean; isContinuation: boolean } | null {
   switch (ev.kind) {
     case "user_message": {
       const p = ev.payload as UserMessagePayload;
@@ -163,7 +167,7 @@ function summarizeEvent(ev: SessionEvent): { kind: RowKind; summary: string; isE
       const tag = tags.length ? ` [${tags.join(" · ")}]` : "";
       const text = firstLine(p.content, 80);
       const summary = `${text}${tag}`.trim() || "(空消息)";
-      return { kind: "user", summary, isError: false, durationMs: null, tokens: null, thinkingDerived: false };
+      return { kind: "user", summary, isError: false, durationMs: null, tokens: null, thinkingDerived: false, isThinking: false, isContinuation: false };
     }
     case "assistant_message": {
       const p = ev.payload as AssistantMessagePayload;
@@ -174,19 +178,23 @@ function summarizeEvent(ev: SessionEvent): { kind: RowKind; summary: string; isE
       const hasToolUse = !!p.blocks?.some((b) => b.type === "tool_use");
       // thinking 与正文可共存（extended thinking：[thinking..., text...]）。
       // 无正文的常见形态：思考完直接调工具 / 流式中途冻结。
+      // 思考/续写前缀符号（💭/↻）已退役（系统级零 emoji）：标记走结构化字段
+      // isThinking / isContinuation，渲染层（TrajectoryTable）按标记出 Lucide 图标。
       let summary: string;
       let thinkingDerived = false;
+      let isThinking = false;
       if (text) {
-        summary = hasThinking ? `💭 ${text}` : text;
+        summary = text;
+        isThinking = hasThinking;
       } else if (thinkText) {
-        summary = `💭 ${thinkText}`; // 思考即摘要——它就是本行最有信息量的内容
+        summary = thinkText; // 思考即摘要——它就是本行最有信息量的内容
         thinkingDerived = true;
+        isThinking = true;
       } else if (hasToolUse) {
         summary = "(仅工具调用)";
       } else {
         summary = "(无文本输出)";
       }
-      if (p.continuation) summary = `↻ ${summary}`;
       return {
         kind: "assistant",
         summary,
@@ -194,6 +202,8 @@ function summarizeEvent(ev: SessionEvent): { kind: RowKind; summary: string; isE
         durationMs: p.duration_ms ?? null,
         tokens: p.token_count ?? null,
         thinkingDerived,
+        isThinking,
+        isContinuation: !!p.continuation,
       };
     }
     case "tool_execution": {
@@ -206,12 +216,14 @@ function summarizeEvent(ev: SessionEvent): { kind: RowKind; summary: string; isE
         durationMs: p.duration_ms,
         tokens: null,
         thinkingDerived: false,
+        isThinking: false,
+        isContinuation: false,
       };
     }
     case "summary_created":
     case "summary_updated": {
       const p = ev.payload as SummaryPayload;
-      return { kind: "summary", summary: firstLine(p.content), isError: false, durationMs: null, tokens: null, thinkingDerived: false };
+      return { kind: "summary", summary: firstLine(p.content), isError: false, durationMs: null, tokens: null, thinkingDerived: false, isThinking: false, isContinuation: false };
     }
     case "plan_updated": {
       const p = ev.payload as PlanUpdatedPayload;
@@ -221,28 +233,28 @@ function summarizeEvent(ev: SessionEvent): { kind: RowKind; summary: string; isE
       const summary = p.items.length === 0
         ? "已清空计划"
         : `${done}/${p.items.length}${first ? ` · ${first}` : ""}`;
-      return { kind: "plan", summary, isError: false, durationMs: null, tokens: null, thinkingDerived: false };
+      return { kind: "plan", summary, isError: false, durationMs: null, tokens: null, thinkingDerived: false, isThinking: false, isContinuation: false };
     }
     case "message_error": {
       const p = ev.payload as MessageErrorPayload;
-      return { kind: "error", summary: `${p.kind}: ${firstLine(p.error, 160)}`, isError: true, durationMs: null, tokens: null, thinkingDerived: false };
+      return { kind: "error", summary: `${p.kind}: ${firstLine(p.error, 160)}`, isError: true, durationMs: null, tokens: null, thinkingDerived: false, isThinking: false, isContinuation: false };
     }
     case "message_discarded": {
       const p = ev.payload as MessageDiscardedPayload;
-      return { kind: "discarded", summary: firstLine(p.reason, 160), isError: false, durationMs: null, tokens: null, thinkingDerived: false };
+      return { kind: "discarded", summary: firstLine(p.reason, 160), isError: false, durationMs: null, tokens: null, thinkingDerived: false, isThinking: false, isContinuation: false };
     }
     case "modal_adapted": {
       const p = ev.payload as ModalAdaptedPayload;
-      return { kind: "aux", summary: `视觉适配 ${p.stage}/${p.mode} ×${p.items?.length ?? 0}`, isError: false, durationMs: null, tokens: null, thinkingDerived: false };
+      return { kind: "aux", summary: `视觉适配 ${p.stage}/${p.mode} ×${p.items?.length ?? 0}`, isError: false, durationMs: null, tokens: null, thinkingDerived: false, isThinking: false, isContinuation: false };
     }
     case "hook_injected": {
       const p = ev.payload as HookInjectedPayload;
-      return { kind: "aux", summary: `钩子注入 ${p.point}`, isError: false, durationMs: null, tokens: null, thinkingDerived: false };
+      return { kind: "aux", summary: `钩子注入 ${p.point}`, isError: false, durationMs: null, tokens: null, thinkingDerived: false, isThinking: false, isContinuation: false };
     }
     case "attachment_stored": {
       const items = (ev.payload as { items?: unknown[] }).items;
       const n = Array.isArray(items) ? items.length : 0;
-      return { kind: "aux", summary: `附件落库 ×${n}`, isError: false, durationMs: null, tokens: null, thinkingDerived: false };
+      return { kind: "aux", summary: `附件落库 ×${n}`, isError: false, durationMs: null, tokens: null, thinkingDerived: false, isThinking: false, isContinuation: false };
     }
     default:
       // turn_context / turn_ended 折进头；tool_result_message 是结果行镜像（工具行已含结果）
@@ -377,6 +389,8 @@ export function buildRows(events: SessionEvent[], opts: BuildRowsOptions): Traje
       summary: s.summary,
       isError: s.isError,
       thinkingDerived: s.thinkingDerived,
+      isThinking: s.isThinking,
+      isContinuation: s.isContinuation,
       durationMs: s.durationMs,
       tokens: s.tokens,
       match,

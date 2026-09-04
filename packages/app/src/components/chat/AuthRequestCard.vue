@@ -14,6 +14,7 @@
 // L2 任务摘要（title 全文 + 折叠展开）、L3 预授权档单选（逐次审批 / 命令免问），
 // 后端忽略 scope 只看 delegation_grant。
 import { ref, computed, watch, onMounted, onBeforeUnmount } from "vue";
+import { Lock } from "@lucide/vue";
 import { useChatStore, TOOL_AUTH_TIMEOUT_MS } from "../../stores/chat";
 import { formatJson } from "../../utils/format";
 import type { AuthScope } from "../../types";
@@ -104,7 +105,7 @@ function deny() {
       <div class="auth-main">
         <!-- L1 工具/委派目标 + 倒计时（锁图标替代标题——上下文已在输入框上方） -->
         <div class="auth-line1">
-          <svg class="auth-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          <Lock :size="14" class="auth-icon" aria-hidden="true" />
           <span v-if="toolReq" class="auth-tool-name">{{ toolReq.tool_name }}</span>
           <span v-else-if="delegationReq" class="auth-tool-name">委派给 {{ delegationReq.agent_name }}</span>
           <span class="auth-countdown" :class="{ urgent, expired }">
@@ -220,10 +221,10 @@ function deny() {
 
 /* 紧凑三行布局（手测反馈：原竖排五行太高，输入框上方压迫感强） */
 .auth-main {
-  padding: 8px 12px 10px;
+  padding: var(--ip-spacing-2) var(--ip-spacing-3) var(--ip-spacing-2_5);
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--ip-spacing-1_5);
 }
 
 /* L1：锁图标 + 工具名（主信息）+ 倒计时（右缘） */

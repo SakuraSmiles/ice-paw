@@ -4,7 +4,7 @@
   行体系（固定行高，手写窗口化，天然扛几千轮）：
   - 列头 32px（吸顶）：类型 | 内容 | token·耗时
   - turn-header 40px：整行带（浅底、去 rail 去圆角；左缘内缩 8px，比子项贴边——
-    分组容器语义；第 N 轮 · 日期·时间 · 终止 | ⚠错误 · 统计 · 耗时 · 用量），
+    分组容器语义；第 N 轮 · 日期·时间 · 终止 | 错误 · 统计 · 耗时 · 用量），
     点击折叠/展开；折叠态 = 只留头
   - event      36px：比 turn 头再内缩一层（左 16px）；[KIND 徽章][单行摘要
     ellipsis][token/耗时]，点击选中 → 检查器；hover/选中 = 圆角底色填充
@@ -15,6 +15,7 @@
 -->
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
+import { Brain, RotateCw, TriangleAlert } from "@lucide/vue";
 import type { TrajectoryRow } from "../../composables/useTrajectory";
 import { isWarnTermination, termLabel } from "../../utils/termLabels";
 
@@ -281,7 +282,7 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
           >{{ termLabel(item.row.ended.termination) }}</span>
           <span v-else class="th-term th-term-pending">进行中</span>
           <span class="th-right">
-            <span v-if="item.row.errorCount" class="th-err" title="本轮错误事件数">⚠ {{ item.row.errorCount }}</span>
+            <span v-if="item.row.errorCount" class="th-err" title="本轮错误事件数"><TriangleAlert :size="12" aria-hidden="true" /> {{ item.row.errorCount }}</span>
             <span v-if="item.row.matchCount" class="th-match">{{ item.row.matchCount }} 命中</span>
             <span class="th-stats">{{ item.row.roundCount }} 条回复 · {{ item.row.toolCount }} 次工具</span>
             <span v-if="item.row.turnMs != null" class="th-usage">{{ fmtDuration(item.row.turnMs) }}</span>
@@ -306,6 +307,9 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
             <span v-if="item.row.streaming" class="ev-pulse" />{{ item.row.label }}
           </span>
           <span class="ev-text" :class="{ 'ev-err-text': item.row.isError, 'ev-think-text': item.row.thinkingDerived }" :title="item.row.summary">
+            <!-- 行首语义图标（结构化标记驱动，替代旧字符串内嵌 💭/↻ 前缀）：思考 Brain / 续写 RotateCw -->
+            <Brain v-if="item.row.isThinking" :size="14" class="ev-mark" aria-hidden="true" />
+            <RotateCw v-if="item.row.isContinuation" :size="14" class="ev-mark" aria-hidden="true" />
             <template v-for="(seg, si) in splitHighlight(item.row.summary)" :key="si">
               <mark v-if="seg.hit" class="ev-hit">{{ seg.text }}</mark>
               <template v-else>{{ seg.text }}</template>
@@ -411,7 +415,7 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
 .trow-turn-header:active { background: var(--ip-color-bg-secondary); }
 /* 轮次头选中（检查器展示中）：底色与事件行选中态同语言 */
 .trow-turn-header.turn-selected { background: var(--ip-color-bg-sidebar-item-active); }
-/* 含错误轮次：淡红底扫读锚点（比 ⚠ 计数徽章更醒目）；hover 仍可辨 */
+/* 含错误轮次：淡红底扫读锚点（比错误计数徽章更醒目）；hover 仍可辨 */
 .trow-turn-header.turn-errored { background: var(--ip-danger-bg); }
 .trow-turn-header.turn-errored:hover { background: var(--ip-danger-bg); filter: brightness(0.97); }
 .trow-turn-header.turn-errored.turn-selected { background: var(--ip-color-bg-sidebar-item-active); }
@@ -477,6 +481,9 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
 .th-info:hover { background: var(--ip-color-bg-elevated); color: var(--ip-primary-600); }
 .th-stats { color: var(--ip-color-text-tertiary); }
 .th-err {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   color: var(--ip-danger-text);
   background: var(--ip-danger-bg);
   padding: 1px 8px;
@@ -565,6 +572,13 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
   min-width: 0;
 }
 .ev-err-text { color: var(--ip-danger-base); }
+/* 行首语义图标（思考 Brain / 续写 RotateCw）：行内基线对齐，弱色不抢正文 */
+.ev-mark {
+  flex-shrink: 0;
+  margin-right: 3px;
+  vertical-align: -2px;
+  color: var(--ip-color-text-tertiary);
+}
 /* 搜索命中片段：轻底高亮（mark 语义标签，默认黄底样式全覆写为主题语言） */
 .ev-hit {
   background: var(--ip-color-primary-soft-bg, var(--ip-primary-50));

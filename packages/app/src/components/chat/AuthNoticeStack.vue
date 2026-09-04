@@ -8,6 +8,7 @@
 // modal」混淆源。挂载在 AppLayout（全局，所有页面可见）。
 import { ref, onMounted, onBeforeUnmount } from "vue";
 import { useRouter } from "vue-router";
+import { Lock } from "@lucide/vue";
 import { useChatStore, TOOL_AUTH_TIMEOUT_MS } from "../../stores/chat";
 import type {
   DelegationAuthRequestPayload,
@@ -69,7 +70,7 @@ function isDelegation(
         role="alert"
       >
         <div class="notice-head">
-          <svg class="notice-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          <Lock :size="14" class="notice-icon" aria-hidden="true" />
           <span class="notice-conv" :title="convTitle(convId)">{{ convTitle(convId) }}</span>
           <span class="notice-countdown" :class="{ urgent: urgent(entry.receivedAt) }">
             {{ remainingLabel(entry.receivedAt) }}
@@ -121,8 +122,8 @@ function isDelegation(
 .notice-head {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px 12px 6px;
+  gap: var(--ip-spacing-1_5);
+  padding: var(--ip-spacing-2) var(--ip-spacing-3) var(--ip-spacing-1_5);
 }
 .notice-icon { color: var(--ip-primary-600); flex-shrink: 0; }
 .notice-conv {
@@ -178,8 +179,8 @@ function isDelegation(
 
 .notice-actions {
   display: flex;
-  gap: 6px;
-  padding: 0 12px 10px;
+  gap: var(--ip-spacing-1_5);
+  padding: 0 var(--ip-spacing-3) var(--ip-spacing-2_5);
 }
 .notice-btn {
   flex: 1;
