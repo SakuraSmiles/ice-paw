@@ -547,15 +547,27 @@ export interface ToolAuthRequestPayload {
   request_id: string; tool_use_id: string; tool_name: string; file_path: string;
   arguments: string; conversation_id: string; message_id: string; reason: string;
 }
+/** 委派授权请求（chat:delegation-auth-request）：delegate_to_agent 建子会话前
+ *  弹卡——目标 agent + 任务全文 + 预授权档。与工具授权共用 oneshot 应答通道
+ *  （respond_tool_auth / ToolAuthResponse）。判别：payload 有 agent_name 字段。*/
+export interface DelegationAuthRequestPayload {
+  request_id: string; conversation_id: string; message_id: string;
+  agent_name: string; agent_id: string; task: string;
+}
 /** #11 分层授权范围：once=仅本次（默认）/ this_dir=此目录含子目录（会话内）/
  *  this_tool=此工具（会话内，Confirm 级工具唯一扩围档）。与后端 AuthScope 对齐。*/
 export type AuthScope = "once" | "this_dir" | "this_tool";
+/** 委派预授权档（两档拍板 2026-09-03）：commands=命令免问（预授子会话
+ *  run_command 工具档）；缺省/undefined = 逐次审批。与后端 DelegationGrant 对齐。*/
+export type DelegationGrant = "commands";
 export interface ToolAuthResponse {
   request_id: string; allowed: boolean; scope?: AuthScope;
+  delegation_grant?: DelegationGrant;
 }
-/** store 侧待处理授权条目：payload + 前端收到时刻（120s 倒计时显示用）*/
+/** store 侧待处理授权条目：payload + 前端收到时刻（120s 倒计时显示用）。
+ *  payload 联合：工具授权 | 委派授权（判别用 "agent_name" in payload）。*/
 export interface PendingAuthEntry {
-  payload: ToolAuthRequestPayload;
+  payload: ToolAuthRequestPayload | DelegationAuthRequestPayload;
   receivedAt: number;
 }
 

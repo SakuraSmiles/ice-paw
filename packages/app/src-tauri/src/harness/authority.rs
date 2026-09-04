@@ -4,12 +4,13 @@
 //!
 //! 设计要点：
 //! - `PathWhitelistConfig` 定义路径白名单配置
-//! - `PathAuthSession` 跟踪「本次会话已授权的路径」
+//! - `PathAuthSession` 跟踪「本会话已授权的路径/目录/工具」（跨轮持久，
+//!   由 `AuthSessionRegistry` 按 conversation 管理）
 //! - `AuthorizationDecision` 表达「直接放行 / 需要用户确认 / 拒绝」三态
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -92,12 +93,14 @@ impl AuthorizationDecision {
 // PathAuthSession — 会话级分层授权记忆
 // =========================================================================
 
-/// 会话级分层授权记忆（#11）
+/// 会话级分层授权记忆（#11；2026-09-03 起跨轮持久）
 ///
-/// 跟踪「本次 LLM 流式循环中已被用户 `Allow`」的授权，三档 grant：
+/// 跟踪「本会话运行期内已被用户 `Allow`」的授权，三档 grant：
 /// 精确路径 / 目录（含子目录）/ 工具，判定序 **tool > dir > path**。
-/// 会话结束 / 流式取消时由上层调 `clear()` 清空——**永不跨会话持久**，
-/// 跨会话的持久授权属于 agent 配置域（配置提案系统），审批通道不得升级。
+/// 生命周期由 [`AuthSessionRegistry`] 按 conversation 管理：同一会话的
+/// 多次回合共享同表（「允许此工具」跨轮兑现），会话删除时清、app 重启
+/// 即清——**永不落盘、按会话隔离**；跨会话（跨 conversation / 跨重启）的
+/// 持久授权属于 agent 配置域（配置提案系统），审批通道不得升级。
 #[derive(Debug, Clone, Default)]
 pub struct PathAuthSession {
     inner: Arc<Mutex<AuthGrants>>,
@@ -175,7 +178,7 @@ impl PathAuthSession {
         grants.tools.insert(tool.to_string());
     }
 
-    /// 清空会话授权（流式结束 / 取消时调用）
+    /// 清空本表全部授权（显式重置场景；会话级移除由 registry 丢弃整表完成）
     pub async fn clear(&self) {
         let mut grants = self.inner.lock().await;
         *grants = AuthGrants::default();
@@ -192,6 +195,62 @@ impl PathAuthSession {
     #[cfg(test)]
     pub async fn is_empty(&self) -> bool {
         self.len().await == 0
+    }
+}
+
+// =========================================================================
+// AuthSessionRegistry — 会话级授权记忆注册表（conv_id → PathAuthSession）
+// =========================================================================
+
+/// 会话级授权记忆注册表（Tauri managed state，生命周期 = app 进程内）。
+///
+/// `run_agent_turn` 经 [`Self::session_for`] 取该会话的授权记忆——同一
+/// conversation 的多次回合共享同表，用户批过的「此工具/此目录」跨轮兑现。
+/// 会话删除时 `remove`，app 重启即清（纯内存，永不落盘）。委派预授权
+/// （delegate 工具）也经此处 seed 子会话的初始授权。
+/// 模式仿 `ChatState`：std Mutex 短临界区 + 手写 Clone 同柄共享。
+#[derive(Debug, Default)]
+pub struct AuthSessionRegistry {
+    inner: Arc<StdMutex<HashMap<String, PathAuthSession>>>,
+}
+
+impl AuthSessionRegistry {
+    /// 创建空注册表
+    pub fn new() -> Self {
+        Self {
+            inner: Arc::new(StdMutex::new(HashMap::new())),
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, PathAuthSession>> {
+        // 毒化恢复（同 ChatState）：全局状态不该因单次 panic 不可用
+        self.inner.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// 取或建该会话的授权记忆。
+    ///
+    /// `PathAuthSession` 本身是 `Arc<Mutex>` 句柄——返回 clone 与 map 内
+    /// 共享同表，调用方无需回存。同会话并发单流由 `ChatState.start` 保证，
+    /// 此处不存在并发写竞争窗口的放大。
+    pub fn session_for(&self, conv_id: &str) -> PathAuthSession {
+        self.lock()
+            .entry(conv_id.to_string())
+            .or_default()
+            .clone()
+    }
+
+    /// 移除该会话的授权记忆（会话删除时调用；内存卫生——单会话 grants
+    /// 是小集合，不清理也无泄漏之虞，但删除语义应彻底）
+    pub fn remove(&self, conv_id: &str) {
+        self.lock().remove(conv_id);
+    }
+}
+
+impl Clone for AuthSessionRegistry {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
     }
 }
 
@@ -564,6 +623,43 @@ mod tests {
         let session2 = session1.clone();
         session1.mark_authorized("/shared").await;
         assert!(session2.is_authorized("/shared", "read_file").await);
+    }
+
+    // ----- AuthSessionRegistry：会话级记忆跨轮持久 + 会话隔离 + 删除清理 -----
+
+    #[tokio::test]
+    async fn registry_same_conv_shares_grants_across_turns() {
+        // 两次 session_for（= 两个回合）拿到同表：第一回合批的工具档第二回合仍免问
+        let registry = AuthSessionRegistry::new();
+        registry
+            .session_for("conv-1")
+            .mark_tool_authorized("run_command")
+            .await;
+        let turn2 = registry.session_for("conv-1");
+        assert!(turn2.is_tool_authorized("run_command").await);
+    }
+
+    #[tokio::test]
+    async fn registry_isolates_conversations() {
+        // A 会话的授权不进 B 会话（跨会话持久授权属配置提案域，审批通道不得升级）
+        let registry = AuthSessionRegistry::new();
+        registry
+            .session_for("conv-a")
+            .mark_tool_authorized("run_command")
+            .await;
+        assert!(!registry.session_for("conv-b").is_tool_authorized("run_command").await);
+    }
+
+    #[tokio::test]
+    async fn registry_remove_resets_session() {
+        // 会话删除 → 记忆清零（重新 session_for 得全新空表）
+        let registry = AuthSessionRegistry::new();
+        registry
+            .session_for("conv-1")
+            .mark_dir_authorized("/ws")
+            .await;
+        registry.remove("conv-1");
+        assert!(!registry.session_for("conv-1").is_authorized("/ws/a.txt", "write_file").await);
     }
 
     // ----- #11 分层授权记忆：三档 grant + 判定序 -----

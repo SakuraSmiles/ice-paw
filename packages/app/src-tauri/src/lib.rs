@@ -296,6 +296,10 @@ pub fn run() {
             );
             handle.manage(auth_registry);
 
+            // 3a) L0: 会话级授权记忆注册表（conv_id → PathAuthSession，跨轮持久，
+            //      app 进程内生命周期；委派预授权 seed 也走此处）
+            handle.manage(harness::authority::AuthSessionRegistry::new());
+
             // 3b) 安装配置提案响应全局监听器（前端 chat:config-proposal-response）
             let proposal_registry = harness::proposal_registry::ProposalRegistry::new();
             proposal_registry.install_listener(

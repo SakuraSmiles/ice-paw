@@ -15,6 +15,7 @@ import { formatTokenCount } from "../utils/format";
 import type { Conversation, Message } from "../types";
 import type {
   AuthScope,
+  DelegationGrant,
   PendingAuthEntry,
   ConfigProposalPayload,
   ConfigProposalResponse,
@@ -471,17 +472,27 @@ export const useChatStore = defineStore("chat", () => {
     } catch { /* 静默忽略 */ }
   }
 
-  /** 发送授权响应（#11 带 scope 范围档）。按 request_id 定位——通知栈里的
-   *  条目不属于激活会话，不能再走「当前条目」语义。先删后 invoke：乐观移除
-   *  防重复点击双发响应。*/
-  async function respondToAuth(requestId: string, allowed: boolean, scope: AuthScope = "once") {
+  /** 发送授权响应（#11 带 scope 范围档；委派授权带 delegationGrant 预授权档）。
+   *  按 request_id 定位——通知栈里的条目不属于激活会话，不能再走「当前条目」
+   *  语义。先删后 invoke：乐观移除防重复点击双发响应。*/
+  async function respondToAuth(
+    requestId: string,
+    allowed: boolean,
+    scope: AuthScope = "once",
+    delegationGrant?: DelegationGrant,
+  ) {
     const m = new Map(pendingAuthRequests.value);
     for (const [cid, entry] of m) {
       if (entry.payload.request_id === requestId) { m.delete(cid); break; }
     }
     pendingAuthRequests.value = m;
     // invoke 直达后端（原 emit 通道因 Tauri v2 事件作用域不匹配而失效）
-    await bridge.chat.respondAuth({ request_id: requestId, allowed, scope });
+    await bridge.chat.respondAuth({
+      request_id: requestId,
+      allowed,
+      scope,
+      delegation_grant: delegationGrant,
+    });
   }
 
   /** 发送配置提案响应回 Rust */

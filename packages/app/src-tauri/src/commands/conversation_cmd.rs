@@ -130,9 +130,16 @@ pub async fn pin_conversation(
     repo::conversation::set_pinned(state.inner(), &id, pinned).await
 }
 
-/// 删除会话（级联清理 messages）
+/// 删除会话（级联清理 messages + 会话级授权记忆）
 #[tauri::command]
-pub async fn delete_conversation(state: State<'_, SqlitePool>, id: String) -> AppResult<()> {
+pub async fn delete_conversation(
+    state: State<'_, SqlitePool>,
+    auth_sessions: State<'_, crate::harness::authority::AuthSessionRegistry>,
+    id: String,
+) -> AppResult<()> {
+    // L0：授权记忆按 conversation 跨轮持久，会话删除即彻底清除（内存卫生，
+    // 也让「删除重建同 id」语义干净——虽然新会话实际是新 uuid）
+    auth_sessions.remove(&id);
     repo::conversation::delete(state.inner(), &id).await
 }
 

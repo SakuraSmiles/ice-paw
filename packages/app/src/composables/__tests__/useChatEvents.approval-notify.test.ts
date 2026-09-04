@@ -47,6 +47,18 @@ function authPayload(requestId: string): ToolAuthRequestPayload {
   };
 }
 
+/** 委派授权 payload（chat:delegation-auth-request；agent_name 字段为判别键） */
+function delegationPayload(requestId: string) {
+  return {
+    request_id: requestId,
+    conversation_id: "c1",
+    message_id: "m1",
+    agent_name: "wenshu",
+    agent_id: "a-wenshu",
+    task: "整理需求文档并生成报告",
+  };
+}
+
 describe("审批系统通知：恰一次语义", () => {
   let hasFocusSpy: MockInstance;
   let cleanup: () => void;
@@ -141,6 +153,47 @@ describe("审批系统通知：恰一次语义", () => {
     // Rust 侧 approval_toast::respond_tool_auth_and_emit 广播（toast 按钮路径
     // 前端无乐观删，全靠此事件——无它则卡片残留到 120s 超时）
     handlers.get("chat:tool-auth-responded")!({ payload: { request_id: "r1", allowed: true } });
+    await Promise.resolve();
+    expect(chat.pendingAuthRequests.size).toBe(0);
+  });
+
+  // ---- 委派授权（chat:delegation-auth-request，2026-09-03 委托时预授权）----
+  // 与工具授权共用 pendingAuthRequests 栈：进栈 / 失焦通知（文案带目标
+  // agent）/ responded 清除 / cancel 清除全部机制继承
+
+  it("委派授权请求 → 进同一挂起栈，失焦通知文案带「委派给」与任务摘要", async () => {
+    handlers.get("chat:delegation-auth-request")!({ payload: delegationPayload("d1") });
+    await Promise.resolve();
+    const chat = useChatStore();
+    expect(chat.pendingAuthRequests.size).toBe(1);
+
+    await new Promise((r) => setTimeout(r, 0)); // fire-and-forget 通知落定
+    expect(mockNotify).toHaveBeenCalledTimes(1);
+    expect(mockNotify).toHaveBeenCalledWith({
+      title: "IcePaw · 等待你的批准",
+      body: "委派给 wenshu：整理需求文档并生成报告",
+      request_id: "d1",
+    });
+  });
+
+  it("委派条目同样被 tool-auth-responded 清除（toast 批准路径）", async () => {
+    handlers.get("chat:delegation-auth-request")!({ payload: delegationPayload("d2") });
+    await Promise.resolve();
+    const chat = useChatStore();
+    expect(chat.pendingAuthRequests.size).toBe(1);
+
+    handlers.get("chat:tool-auth-responded")!({ payload: { request_id: "d2", allowed: true } });
+    await Promise.resolve();
+    expect(chat.pendingAuthRequests.size).toBe(0);
+  });
+
+  it("委派条目被 tool-auth-request-cancel 清除（后端 120s 超时路径）", async () => {
+    handlers.get("chat:delegation-auth-request")!({ payload: delegationPayload("d3") });
+    await Promise.resolve();
+    const chat = useChatStore();
+    expect(chat.pendingAuthRequests.size).toBe(1);
+
+    handlers.get("chat:tool-auth-request-cancel")!({ payload: { request_id: "d3" } });
     await Promise.resolve();
     expect(chat.pendingAuthRequests.size).toBe(0);
   });

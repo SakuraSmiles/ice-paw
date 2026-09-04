@@ -10,7 +10,7 @@
 use sqlx::SqlitePool;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
 
 use crate::commands::agent_cmd::AgentCmd;
@@ -185,6 +185,10 @@ pub async fn send_message(
             global_registry: Arc::clone(global_registry.inner()),
             mcp_manager: Arc::clone(mcp_manager.inner()),
             auth_registry: auth_registry.inner().clone(),
+            auth_sessions: app
+                .state::<crate::harness::authority::AuthSessionRegistry>()
+                .inner()
+                .clone(),
         },
         session_runner::AgentTurnInput {
             conv,

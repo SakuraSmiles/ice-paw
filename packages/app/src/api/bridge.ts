@@ -4,6 +4,7 @@ import type {
   Agent,
   AgentYamlFields,
   AuthScope,
+  DelegationGrant,
   AgentUpdate,
   Conversation,
   IndexStats,
@@ -293,11 +294,13 @@ const chat = {
     try { await invoke<void>("respond_config_proposal", { input }); }
     catch (err) { throw wrapInvokeError("chat.respondProposal", err); }
   },
-  /** 工具授权响应（invoke：同上，双通道一起修复）。scope=#11 授权范围档 */
+  /** 工具授权响应（invoke：同上，双通道一起修复）。scope=#11 授权范围档；
+   *  delegation_grant=委派预授权档（仅委派授权请求有意义，缺省=逐次审批） */
   async respondAuth(input: {
     request_id: string;
     allowed: boolean;
     scope?: AuthScope;
+    delegation_grant?: DelegationGrant;
   }): Promise<void> {
     try { await invoke<void>("respond_tool_auth", { input }); }
     catch (err) { throw wrapInvokeError("chat.respondAuth", err); }

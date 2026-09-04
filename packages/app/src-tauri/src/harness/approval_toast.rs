@@ -125,6 +125,9 @@ fn spawn_respond(app: AppHandle, request_id: String, allowed: bool) {
                 request_id,
                 allowed,
                 scope: AuthScope::Once,
+                // 通知上不猜意图：委派授权 toast 批准 = 逐次审批档（结构化
+                // 档位选择只在应用内卡片，不变式 5）
+                delegation_grant: None,
             },
         )
         .await;

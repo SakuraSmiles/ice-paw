@@ -256,7 +256,7 @@ pub struct ToolAuthRequestPayload {
 
 /// 授权范围（#11 分层授权记忆）：用户在审批卡上选择的「允许」生效档位。
 /// 默认 `Once`（仅本次）；`ThisDir`/`ThisTool` 记入会话级授权记忆，
-/// 本会话内同范围不再询问（流结束即清，不跨会话持久）。
+/// 本会话内同范围不再询问（L0 起跨轮持久，app 重启即清、不落盘）。
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthScope {
@@ -267,6 +267,40 @@ pub enum AuthScope {
     ThisDir,
     /// 此工具会话内免问（Confirm 级工具唯一可用的扩围档）
     ThisTool,
+}
+
+/// 委派预授权档（委托时刻前置的信任决策，2026-09-03 两档拍板）。
+///
+/// 搭载在 [`ToolAuthResponse::delegation_grant`] 上，仅对委派授权请求
+/// （`chat:delegation-auth-request`）有意义——通用工具授权忽略此字段。
+/// 枚举可扩展（未来加档不伤协议：旧前端不传 → None → 逐次档）。
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DelegationGrant {
+    /// 命令免问：预授子会话 `run_command` 工具档（Confirm 级打断的主源）
+    Commands,
+}
+
+/// `chat:delegation-auth-request` 事件 payload (Rust → Frontend)
+///
+/// delegate_to_agent 在创建子会话前发出——委派是「子 agent 将以自己的
+/// 模型/工具跑完整子会话」的高信任动作，信任决策前置到委托时刻。
+/// 前端渲染委派审批卡（目标 agent + 任务全文 + 预授权档），响应用与
+/// 工具授权同一 oneshot 通道（`respond_tool_auth` 命令 / `ToolAuthResponse`）。
+#[derive(Clone, Serialize)]
+pub struct DelegationAuthRequestPayload {
+    /// 唯一请求 ID（与 ToolAuthRequest 同一 oneshot registry 命名空间）
+    pub request_id: String,
+    /// 父会话 id（前端按会话路由内联卡 / 后台栈）
+    pub conversation_id: String,
+    /// 父会话当前 assistant 消息 id
+    pub message_id: String,
+    /// 目标专家名（前端直显，免解析工具参数）
+    pub agent_name: String,
+    /// 目标专家 id
+    pub agent_id: String,
+    /// 任务全文（委派卡主体展示）
+    pub task: String,
 }
 
 /// `chat:tool-auth-response` 事件 payload (Frontend → Rust)
@@ -281,6 +315,11 @@ pub struct ToolAuthResponse {
     /// 允许的生效范围（拒绝时忽略）；`#[serde(default)]` 兼容旧前端
     #[serde(default)]
     pub scope: AuthScope,
+    /// 委派预授权档（仅委派授权请求有意义；`#[serde(default)]` 兼容旧前端——
+    /// 不传 = 逐次审批档。通知路径（toast 按钮/后台栈「允许」）恒 None。
+    /// None 序列化省略（skip_serializing_if），既有 JSON 形状零扰动）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegation_grant: Option<DelegationGrant>,
 }
 
 // === 配置提案事件 ===
@@ -457,8 +496,10 @@ mod tests {
             request_id: "req-2".into(),
             allowed: true,
             scope: AuthScope::ThisDir,
+            delegation_grant: None,
         };
         let json = serde_json::to_string(&r).unwrap();
+        // delegation_grant=None 序列化省略——既有 JSON 形状零扰动
         assert_eq!(
             json,
             r#"{"request_id":"req-2","allowed":true,"scope":"this_dir"}"#
@@ -473,16 +514,42 @@ mod tests {
         let legacy: ToolAuthResponse =
             serde_json::from_str(r#"{"request_id":"req-x","allowed":true}"#).unwrap();
         assert_eq!(legacy.scope, AuthScope::Once);
+        assert_eq!(legacy.delegation_grant, None);
 
         // false 路径
         let r2 = ToolAuthResponse {
             request_id: "req-3".into(),
             allowed: false,
             scope: AuthScope::Once,
+            delegation_grant: None,
         };
         let json2 = serde_json::to_string(&r2).unwrap();
         let back2: ToolAuthResponse = serde_json::from_str(&json2).unwrap();
         assert!(!back2.allowed);
+    }
+
+    #[test]
+    fn delegation_grant_serde_roundtrip() {
+        // 带 grant 的响应（委派卡选「命令免问」批准）
+        let r = ToolAuthResponse {
+            request_id: "req-d1".into(),
+            allowed: true,
+            scope: AuthScope::Once, // 委派路径忽略 scope，但字段照带
+            delegation_grant: Some(DelegationGrant::Commands),
+        };
+        let json = serde_json::to_string(&r).unwrap();
+        assert_eq!(
+            json,
+            r#"{"request_id":"req-d1","allowed":true,"scope":"once","delegation_grant":"commands"}"#
+        );
+        let back: ToolAuthResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.delegation_grant, Some(DelegationGrant::Commands));
+
+        // 旧前端不传 delegation_grant → None（= 委派逐次审批档）
+        let legacy: ToolAuthResponse =
+            serde_json::from_str(r#"{"request_id":"req-d2","allowed":true,"scope":"once"}"#)
+                .unwrap();
+        assert_eq!(legacy.delegation_grant, None);
     }
 
     #[test]

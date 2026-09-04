@@ -219,6 +219,7 @@ async fn run_turn_with_map(
         global_registry,
         mcp_manager: Arc::new(McpServerManager::new()),
         auth_registry: ToolAuthRegistry::new(),
+        auth_sessions: crate::harness::authority::AuthSessionRegistry::new(),
     };
     let input = AgentTurnInput {
         conv,
