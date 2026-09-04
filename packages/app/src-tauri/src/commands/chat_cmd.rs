@@ -116,14 +116,26 @@ pub async fn send_message(
     // user_msg_id 预生成（仅 UUID 字符串，无 IO）：materialize 需把它嵌进大文件首页的
     // read_attachment_page 工具提示里；真正落库时复用同一 id。
     let user_msg_id = Uuid::new_v4().to_string();
-    let (final_blocks, attach_db_inputs, attach_file_inputs) =
-        match input.files.as_ref().filter(|v| !v.is_empty()) {
-            Some(files) => {
-                validate_files(files)?;
-                materialize_file_blocks(&user_msg_id, final_blocks, files)?
-            }
-            None => (final_blocks, Vec::new(), Vec::new()),
-        };
+    // has_files 先行算出（L206 emit_user_blocks 复用）——files 将 move 进
+    // spawn_blocking，之后再读 input.files 就拿不到了；clone 整个附件列表
+    //（含 base64 大载荷）不可取。
+    let has_files = input.files.as_ref().map(|v| !v.is_empty()).unwrap_or(false);
+    let (final_blocks, attach_db_inputs, attach_file_inputs) = match input.files {
+        Some(files) if !files.is_empty() => {
+            validate_files(&files)?;
+            // 物化是同步重活（base64 解码 + docx zip/pdf 渲染逐附件提取），包进
+            // spawn_blocking 离开 async worker（Q6）；纯函数不写 DB 的性质不变。
+            let mid = user_msg_id.clone();
+            tokio::task::spawn_blocking(move || {
+                materialize_file_blocks(&mid, final_blocks, &files)
+            })
+            .await
+            .map_err(|e| {
+                crate::error::AppError::Internal(format!("附件处理任务失败: {e}"))
+            })??
+        }
+        _ => (final_blocks, Vec::new(), Vec::new()),
+    };
 
     // @ 引用展开（Reference 块 → 快照 Text 块）：在 persist_blocks 落库快照
     // clone **之前**，落库消息 = 引用卡 + 展开快照（回放保真，session_events
@@ -203,7 +215,7 @@ pub async fn send_message(
             persist_blocks,
             attach_db_inputs,
             attach_file_inputs,
-            emit_user_blocks: input.files.as_ref().map(|v| !v.is_empty()).unwrap_or(false),
+            emit_user_blocks: has_files,
             tools_enabled,
             model_override,
             cancel_token,

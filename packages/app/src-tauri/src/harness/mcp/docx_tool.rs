@@ -1692,17 +1692,26 @@ impl EditDocxTool {
             ));
         }
 
-        // 全有或全无：手术在内存完成（含整批预检 + 产物再解析校验），通过才落盘
-        let (new_bytes, applied) = if !doc_ops.is_empty() {
-            apply_edits_to_bytes_locked(&bytes, &doc_ops, parsed.allowed_blocks)?
-        } else if !style_ops.is_empty() {
-            apply_style_edits_to_bytes(&bytes, &style_ops)?
-        } else {
-            apply_numbering_edits_to_bytes(&bytes, &numbering_ops)?
-        };
-
-        // 修改前备份（与 write_file 同一通道）；tmp + rename 原子替换（崩溃不损坏原文件）
-        let backup = super::file_tools::backup_if_exists(&canonical)?;
+        // 全有或全无：手术在内存完成（含整批预检 + 产物再解析校验 + 备份），通过才落盘。
+        // 中段是同步重活（zip 解包/重打包 + 图片源读取），spawn_blocking 离开 async
+        // worker（Q6）；文件读写两端（tokio::fs::read / write_and_rename）保持在 async 侧。
+        let canonical_for_blocking = canonical.clone();
+        let allowed_blocks = parsed.allowed_blocks;
+        let (new_bytes, applied, backup) = tokio::task::spawn_blocking(move || {
+            // 全有或全无：手术在内存完成（含整批预检 + 产物再解析校验），通过才落盘
+            let (new_bytes, applied) = if !doc_ops.is_empty() {
+                apply_edits_to_bytes_locked(&bytes, &doc_ops, allowed_blocks)?
+            } else if !style_ops.is_empty() {
+                apply_style_edits_to_bytes(&bytes, &style_ops)?
+            } else {
+                apply_numbering_edits_to_bytes(&bytes, &numbering_ops)?
+            };
+            // 修改前备份（与 write_file 同一通道）；tmp + rename 原子替换（崩溃不损坏原文件）
+            let backup = super::file_tools::backup_if_exists(&canonical_for_blocking)?;
+            Ok::<_, AppError>((new_bytes, applied, backup))
+        })
+        .await
+        .map_err(|e| AppError::Internal(format!("edit_docx 手术任务失败: {e}")))??;
         let mut tmp_name = canonical
             .file_name()
             .unwrap_or_default()
@@ -2106,42 +2115,54 @@ impl McpClient for WriteDocxTool {
                 MAX_WRITE_BLOCKS
             )));
         }
-        let mut blocks: Vec<WriteBlock> = Vec::with_capacity(parsed.blocks.len());
-        for spec in parsed.blocks {
-            match spec {
-                WriteBlockSpec::Heading { level, text } => {
-                    blocks.push(WriteBlock::Heading { level, text });
-                }
-                WriteBlockSpec::Paragraph { text, style } => {
-                    blocks.push(WriteBlock::Paragraph { text, style });
-                }
-                WriteBlockSpec::Table {
-                    rows,
-                    rows_text,
-                    header,
-                    style,
-                } => {
-                    let rows = resolve_table_rows(rows, rows_text)?;
-                    blocks.push(WriteBlock::Table {
+        // 块模型构建（含 load_image 同步读 + 表格行解析）与生成段同属同步重活，
+        // 各包 spawn_blocking 离开 async worker（Q6）。错误先后序保持原状：
+        // 块构建错先于模板解析错（原代码块循环在前）。
+        let specs = parsed.blocks;
+        let workspace = ctx.workspace.clone();
+        let blocks_spawned = tokio::task::spawn_blocking(move || {
+            let mut blocks: Vec<WriteBlock> = Vec::with_capacity(specs.len());
+            for spec in specs {
+                match spec {
+                    WriteBlockSpec::Heading { level, text } => {
+                        blocks.push(WriteBlock::Heading { level, text });
+                    }
+                    WriteBlockSpec::Paragraph { text, style } => {
+                        blocks.push(WriteBlock::Paragraph { text, style });
+                    }
+                    WriteBlockSpec::Table {
                         rows,
+                        rows_text,
                         header,
-                        table_style: style,
-                    });
-                }
-                WriteBlockSpec::Toc { levels, hyperlink } => {
-                    blocks.push(WriteBlock::Toc {
-                        levels: levels.unwrap_or(3),
-                        hyperlink: hyperlink.unwrap_or(true),
-                    });
-                }
-                WriteBlockSpec::Image { path, width_mm } => {
-                    // 图片装载（读侧第二路径：同 template 先例只读不授权；
-                    // 相对路径挂 ctx.workspace——run 侧与模板解析同锚）
-                    let image = load_image(&path, ctx.workspace.as_deref())?;
-                    blocks.push(WriteBlock::Image { image, width_mm });
+                        style,
+                    } => {
+                        let rows = resolve_table_rows(rows, rows_text)?;
+                        blocks.push(WriteBlock::Table {
+                            rows,
+                            header,
+                            table_style: style,
+                        });
+                    }
+                    WriteBlockSpec::Toc { levels, hyperlink } => {
+                        blocks.push(WriteBlock::Toc {
+                            levels: levels.unwrap_or(3),
+                            hyperlink: hyperlink.unwrap_or(true),
+                        });
+                    }
+                    WriteBlockSpec::Image { path, width_mm } => {
+                        // 图片装载（读侧第二路径：同 template 先例只读不授权；
+                        // 相对路径挂 workspace——run 侧与模板解析同锚）
+                        let image = load_image(&path, workspace.as_deref())?;
+                        blocks.push(WriteBlock::Image { image, width_mm });
+                    }
                 }
             }
-        }
+            Ok::<_, AppError>(blocks)
+        });
+        let blocks = blocks_spawned
+            .await
+            .map_err(|e| AppError::Internal(format!("write_docx 块构建任务失败: {e}")))??;
+        let block_count = blocks.len();
 
         // 模板解析（相对名四层链）→ 内存全链生成（清空→锚→顺序写→自检；自检不过不落盘）
         let template_spec = parsed.template.clone().unwrap_or_else(|| "report".into());
@@ -2157,7 +2178,10 @@ impl McpClient for WriteDocxTool {
             shared_dir.as_deref(),
         )
         .await?;
-        let generated = generate_from_template(&template, &blocks)?;
+        // 生成 = clear_body→锚→顺序写→validate 自检（zip 手术 + 整文档再解析），同步重活
+        let generated = tokio::task::spawn_blocking(move || generate_from_template(&template, &blocks))
+            .await
+            .map_err(|e| AppError::Internal(format!("write_docx 生成任务失败: {e}")))??;
 
         // 父目录好默认：缺失自动创建（copy_file 同款）
         if let Some(parent) = target.parent() {
@@ -2186,7 +2210,7 @@ impl McpClient for WriteDocxTool {
             path: parsed.path,
             template: template_spec,
             created: backup.is_none(),
-            blocks: blocks.len(),
+            blocks: block_count,
             paragraphs: generated.paragraphs,
             tables: generated.tables,
             images: generated.images,

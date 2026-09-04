@@ -12,4 +12,5 @@ pub mod embedding;
 pub mod ensure;
 pub mod indexer;
 pub mod parser;
+pub mod vector_cache;
 pub mod watcher_manager;
