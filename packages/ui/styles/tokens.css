@@ -184,6 +184,7 @@
   --ip-duration-skeleton:  1800ms;
   --ip-duration-cursor:    1000ms;
   --ip-duration-spinner:   720ms;
+  --ip-duration-pixel:     1200ms;
   --ip-duration-shake:     400ms;
   --ip-duration-modal-out: 200ms;
   --ip-duration-toast-collapse: 200ms;

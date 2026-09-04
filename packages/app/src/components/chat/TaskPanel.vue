@@ -12,8 +12,9 @@
 // 天然有限（深度=1、串行）。规模治理（二轮拍板 2026-08-17）：弹窗高度挂
 // 58vh，计划列全量平铺 + 列内滚动；任务列按高度预算截断（放不下才收
 // 「还有 N 个」计数行，running 恒优先），全显是常态。
-// 状态两态：进行中（脉冲）/已结束（中性点）——done/failed 精确终态是 MA-2
-// 台账（turn_ended 派生状态机）的事，此处不伪造。计划勾选同理恒为 agent 判断。
+// 状态两态：进行中（像素格 StatusGlyph·主色）/已结束（中性空心环）——done/failed
+// 精确终态是 MA-2 台账（turn_ended 派生状态机）的事，此处不伪造（已结束不上对勾）。
+// 计划勾选同理恒为 agent 判断。
 import { computed, ref, watch, onMounted, onBeforeUnmount, nextTick } from "vue";
 import { listen } from "@tauri-apps/api/event";
 import { useChatStore } from "../../stores/chat";
@@ -22,6 +23,7 @@ import { formatTime, parseDbTime } from "../../utils/time";
 import { bridge } from "../../api/bridge";
 import type { PlanSnapshot } from "../../types";
 import { budgetDoneRows } from "./taskBudget";
+import StatusGlyph from "./StatusGlyph.vue";
 
 const chat = useChatStore();
 const agentStore = useAgentStore();
@@ -29,6 +31,13 @@ const agentStore = useAgentStore();
 /** 旧数据「委派: 」前缀展示侧归一剥离（UX #4：新生成标题已无前缀，零 migration）*/
 function delegationTitle(raw: string): string {
   return raw.replace(/^委派:\s*/, "") || "委派任务";
+}
+
+/** 计划条目 status → 状态图标语系（StatusGlyph 五态映射） */
+function planGlyph(status: string): "running" | "done" | "pending" {
+  if (status === "in_progress") return "running";
+  if (status === "done") return "done";
+  return "pending";
 }
 
 interface TaskRow {
@@ -280,7 +289,7 @@ function openTask(id: string) {
                   :class="['task-row', { 'just-changed': flashKeys.has(t.id) }]"
                   @click="openTask(t.id)"
                 >
-                  <span class="task-dot" :class="{ running: t.running }" />
+                  <StatusGlyph :status="t.running ? 'running' : 'pending'" :label="t.running ? undefined : '已结束'" />
                   <span class="task-row-title" :title="t.title">{{ t.title }}</span>
                   <span v-if="t.agentName" class="task-row-agent">{{ t.agentName }}</span>
                   <span class="task-row-time">{{ formatTime(new Date(t.updatedAt).toISOString()) }}</span>
@@ -308,7 +317,7 @@ function openTask(id: string) {
                 :title="it.task_conversation_id ? '此步骤挂有委派任务，点击打开' : it.text"
                 @click="it.task_conversation_id && openTask(it.task_conversation_id)"
               >
-                <span :class="['plan-mark', `plan-mark-${it.status}`]" />
+                <StatusGlyph :class="`plan-mark-${it.status}`" :status="planGlyph(it.status)" />
                 <span class="task-row-title">{{ it.text }}</span>
                 <span v-if="it.task_conversation_id" class="plan-jump" title="打开对应任务">↗</span>
               </div>
@@ -336,7 +345,8 @@ function openTask(id: string) {
 .task-pill:hover { color: var(--ip-color-text-primary); border-color: var(--ip-primary-400); }
 .task-pill.open { color: var(--ip-primary-600); border-color: var(--ip-primary-400); background: var(--ip-primary-soft-bg, rgba(var(--ip-primary-500-rgb), 0.08)); }
 .task-pill-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: var(--ip-color-text-tertiary); }
-.task-pill-dot.running { background: var(--ip-warning-base); animation: task-pulse 1.2s ease-in-out infinite; }
+/* 进行中=主色（信息态非警告态，2026-09-04 语系统一——与气泡工具行像素格同色锚） */
+.task-pill-dot.running { background: var(--ip-primary-500); animation: task-pulse 1.2s ease-in-out infinite; }
 .task-pill-label { font-weight: var(--ip-font-weight-medium); }
 @keyframes task-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
@@ -392,8 +402,6 @@ function openTask(id: string) {
   transition: background var(--ip-duration-fast) var(--ip-ease-out);
 }
 .task-row:hover { background: var(--ip-color-bg-tertiary); }
-.task-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: var(--ip-color-text-tertiary); }
-.task-dot.running { background: var(--ip-warning-base); animation: task-pulse 1.2s ease-in-out infinite; }
 .task-row-title {
   flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
   font-size: var(--ip-text-body-sm-size); color: var(--ip-color-text-primary);
@@ -417,15 +425,8 @@ function openTask(id: string) {
 .task-plan-link { cursor: pointer; }
 .task-plan-link:hover { background: var(--ip-color-bg-tertiary); }
 
-/* done 折叠行样式已删（2026-08-17 二轮规模治理）：计划全量平铺，done 行
-   由 .plan-mark-done 划线区分（见下行规则），溢出走列内滚动 */
-.plan-mark {
-  width: 8px; height: 8px; flex-shrink: 0; border-radius: 50%;
-  border: 1.5px solid var(--ip-color-text-tertiary);
-  transition: background-color 0.25s var(--ip-ease-out), border-color 0.25s var(--ip-ease-out);
-}
-.plan-mark-in_progress { border-color: var(--ip-warning-base); background: var(--ip-warning-base); animation: task-pulse 1.2s ease-in-out infinite; }
-.plan-mark-done { border-color: var(--ip-success-base); background: var(--ip-success-base); }
+/* 状态图标（StatusGlyph，2026-09-04 语系统一）：plan-mark-{status} class 透传到
+   glyph 根 span，仅承载 done 划线兄弟选择器；视觉形态在组件内 */
 .task-plan-row .plan-mark-done + .task-row-title { text-decoration: line-through; color: var(--ip-color-text-tertiary); }
 .plan-jump { flex-shrink: 0; font-size: var(--ip-text-caption-size); color: var(--ip-primary-500); }
 
