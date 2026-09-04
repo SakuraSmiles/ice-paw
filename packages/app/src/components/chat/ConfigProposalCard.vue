@@ -310,7 +310,8 @@ async function reject() {
   border-radius: var(--ip-radius-full);
 }
 
-/* 语义色圆点（DelegationCard .dlg-dot 同款 idiom）：档位三色由外层 sensitivity 类驱动 */
+/* 语义色圆点（guardrail 档位三色由外层 sensitivity 类驱动；非执行状态族，
+   不参与 StatusGlyph 语系——2026-09-04 盘点拍板保留） */
 .badge-dot {
   width: 6px;
   height: 6px;

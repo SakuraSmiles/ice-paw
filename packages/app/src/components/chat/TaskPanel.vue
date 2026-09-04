@@ -265,7 +265,7 @@ function openTask(id: string) {
       :title="anyActive ? '本会话的任务与计划（有进行中）' : '本会话的任务与计划'"
       @click.stop="open = !open"
     >
-      <span class="task-pill-dot" :class="{ running: anyActive }" />
+      <StatusGlyph :size="12" :status="anyActive ? 'running' : 'pending'" :label="anyActive ? undefined : '无进行中'" />
       <span v-if="pillLabel" class="task-pill-label">{{ pillLabel }}</span>
     </button>
 
@@ -344,11 +344,9 @@ function openTask(id: string) {
 }
 .task-pill:hover { color: var(--ip-color-text-primary); border-color: var(--ip-primary-400); }
 .task-pill.open { color: var(--ip-primary-600); border-color: var(--ip-primary-400); background: var(--ip-primary-soft-bg, rgba(var(--ip-primary-500-rgb), 0.08)); }
-.task-pill-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: var(--ip-color-text-tertiary); }
-/* 进行中=主色（信息态非警告态，2026-09-04 语系统一——与气泡工具行像素格同色锚） */
-.task-pill-dot.running { background: var(--ip-primary-500); animation: task-pulse 1.2s ease-in-out infinite; }
+/* 胶囊状态点已换 StatusGlyph 像素格（进行中=主色像素格/无进行中=中性环，
+   2026-09-04 语系统一——与气泡工具行同语系；7px 彩点+task-pulse 一并退役） */
 .task-pill-label { font-weight: var(--ip-font-weight-medium); }
-@keyframes task-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
 /* popover：胶囊正下展开；高度治理（用户拍板 2026-08-17）——max-height 58vh
    挂应用窗口（底部恒留 42%+），flex 链把高度预算分到列身：并排时两列

@@ -3,13 +3,15 @@
 //
 // 取代该工具调用的通用工具行渲染：目标 agent / 状态 / 跳转子会话轨迹。
 // 形态不锁设计（评审拍板：实现期用户看着效果边看边调），本轮只保骨架：
-// - 进行中：任务摘要 + 呼吸点；chat:delegation-started 推送后子会话创建即
-//   可达（运行中也可跳——childConvId 由 ChatMessages 取数层从 store 补齐）
+// - 进行中：任务摘要 + 像素格 StatusGlyph（主色，2026-09-04 语系统一）；
+//   chat:delegation-started 推送后子会话创建即可达（运行中也可跳——childConvId
+//   由 ChatMessages 取数层从 store 补齐）
 // - 完成/失败：专家名 + 轮数 + finish_reason 徽章 + 「打开任务」入口
 // 展开看原始参数/结果走原工具行（本卡片不重复承载，减少双份维护）。
 import { computed } from "vue";
 import { useAgentStore } from "../../stores/agent";
 import EntityAvatar from "../common/EntityAvatar.vue";
+import StatusGlyph from "./StatusGlyph.vue";
 
 const props = defineProps<{
   /** 目标 agent 显示名（参数里的 agent_id 原样兜底） */
@@ -64,7 +66,7 @@ const FINISH_LABEL: Record<string, string> = {
       />
       <span class="dlg-title">委派给 {{ agentName }}</span>
       <span class="dlg-status">
-        <span class="dlg-dot" :data-status="status" />
+        <StatusGlyph :status="status" />
         {{ STATUS_TEXT[status] }}
       </span>
     </div>
@@ -105,19 +107,14 @@ const FINISH_LABEL: Record<string, string> = {
   max-width: 560px;
 }
 .dlg-card[data-status="error"] { border-left-color: var(--ip-danger-base); }
-.dlg-card[data-status="running"] { border-left-color: var(--ip-warning-base); }
+.dlg-card[data-status="running"] { border-left-color: var(--ip-primary-400); }
 
 .dlg-head { display: flex; align-items: center; gap: var(--ip-spacing-1_5); }
 /* 目标 agent 头像（sm=20px，EntityAvatar 三级链；取代旧交换箭头图标） */
 .dlg-avatar { flex-shrink: 0; }
 .dlg-title { font-size: var(--ip-text-body-sm-size); font-weight: var(--ip-font-weight-semibold); color: var(--ip-color-text-primary); }
 .dlg-status { margin-left: auto; display: flex; align-items: center; gap: 5px; font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
-
-.dlg-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
-.dlg-dot[data-status="running"] { background: var(--ip-warning-base); animation: dlg-pulse 1.2s ease-in-out infinite; }
-.dlg-dot[data-status="done"] { background: var(--ip-success-base); }
-.dlg-dot[data-status="error"] { background: var(--ip-danger-base); }
-@keyframes dlg-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+/* 状态指示已换 StatusGlyph（像素格/环形对勾/环形叉）；running 左边线随语系统一主色 */
 
 .dlg-task {
   font-size: var(--ip-text-caption-size);
