@@ -19,6 +19,7 @@ import MarkdownRenderer from "./MarkdownRenderer.vue";
 import ConfigProposalCard from "./ConfigProposalCard.vue";
 import DelegationCard from "./DelegationCard.vue";
 import PlanCard from "./PlanCard.vue";
+import StatusGlyph from "./StatusGlyph.vue";
 import ImagePreview from "./ImagePreview.vue";
 import AttachmentDetail from "./AttachmentDetail.vue";
 import TurnRail from "./TurnRail.vue";
@@ -890,6 +891,7 @@ const RESUMABLE_REASONS = new Set([
                     <div class="think-toggle" @click="toggleThinking(item.msg.id + '-h' + ti)">
                       <span class="think-chevron">{{ expandedThinking.has(item.msg.id + '-h' + ti) ? '▾' : '▸' }}</span>
                       <span class="think-label">{{ chat.thinkingDurations.has(item.msg.id) ? '思考 · ' + chat.thinkingDurations.get(item.msg.id) : '思考' }}</span>
+                      <StatusGlyph status="done" class="think-glyph" />
                     </div>
                     <Transition name="think-fade">
                       <div v-if="expandedThinking.has(item.msg.id + '-h' + ti)" class="think-body">
@@ -906,6 +908,7 @@ const RESUMABLE_REASONS = new Set([
                       <span class="think-chevron">{{ expandedThinking.has('streaming') ? '▾' : '▸' }}</span>
                       <span class="think-label">思考</span>
                       <span class="think-status">进行中… {{ thinkingElapsed }}</span>
+                      <StatusGlyph status="running" class="think-glyph" />
                     </div>
                     <Transition name="think-fade">
                       <div v-if="expandedThinking.has('streaming')" class="think-body">
@@ -917,6 +920,7 @@ const RESUMABLE_REASONS = new Set([
                     <div class="think-toggle" @click="toggleThinking('done')">
                       <span class="think-chevron">{{ expandedThinking.has('done') ? '▾' : '▸' }}</span>
                       <span class="think-label">思考 · {{ chat.thinkingDuration }}</span>
+                      <StatusGlyph status="done" class="think-glyph" />
                     </div>
                     <Transition name="think-fade">
                       <div v-if="expandedThinking.has('done')" class="think-body">
@@ -952,7 +956,7 @@ const RESUMABLE_REASONS = new Set([
                             <span class="tool-chevron">{{ expandedToolCalls.has(tu.id) ? '▾' : '▸' }}</span>
                             <span class="tool-name">{{ tu.name }}</span>
                             <span class="tool-preview">调用失败</span>
-                            <span class="tool-dot tool-dot-err"></span>
+                            <StatusGlyph status="error" />
                           </div>
                           <Transition name="tool-slide">
                             <div v-if="expandedToolCalls.has(tu.id)" class="tool-expand">
@@ -979,7 +983,7 @@ const RESUMABLE_REASONS = new Set([
                               <span class="tool-chevron">{{ expandedToolCalls.has(tu.id) ? '▾' : '▸' }}</span>
                               <span class="tool-name">{{ tu.name }}</span>
                               <span class="tool-preview">{{ truncateJson(tu.input) }}</span>
-                              <span :class="['tool-dot', getToolHasError(tu.id) ? 'tool-dot-err' : 'tool-dot-ok']"></span>
+                              <StatusGlyph :status="getToolHasError(tu.id) ? 'error' : 'done'" />
                             </div>
                             <Transition name="tool-slide">
                               <div v-if="expandedToolCalls.has(tu.id)" class="tool-expand">
@@ -1028,9 +1032,12 @@ const RESUMABLE_REASONS = new Set([
                               <span class="tool-name">{{ call.name }}</span>
                               <span v-if="call.result?.durationMs" class="tool-duration">{{ formatDuration(call.result.durationMs) }}</span>
                               <span class="tool-preview">{{ truncateJson(call.arguments || '') }}</span>
-                              <span v-if="call.ended && call.result" :class="['tool-dot', call.result.isError ? 'tool-dot-err' : 'tool-dot-ok']"></span>
-                              <span v-else-if="call.ended" class="tool-dot tool-dot-wait"></span>
-                              <span v-else class="tool-dot tool-dot-busy"></span>
+                              <StatusGlyph
+                                v-if="call.ended && call.result"
+                                :status="call.result.isError ? 'error' : 'done'"
+                              />
+                              <StatusGlyph v-else-if="call.ended" status="wait" />
+                              <StatusGlyph v-else status="running" />
                             </div>
                             <Transition name="tool-slide">
                               <div v-if="expandedToolCalls.has(call.id)" class="tool-expand">
@@ -1453,13 +1460,8 @@ const RESUMABLE_REASONS = new Set([
 .tool-duration { font-size: var(--ip-text-micro-size); color:var(--ip-color-text-disabled); font-family:var(--ip-font-mono, monospace); white-space:nowrap; flex-shrink:0; }
 .tool-preview { font-size:var(--ip-text-caption-size); color:var(--ip-color-text-disabled); margin-left:auto; margin-right:6px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:right; flex-shrink:1; }
 
-/* 状态圆点 */
-.tool-dot { width:6px; height:6px; border-radius:50%; flex-shrink:0; }
-.tool-dot-ok { background:var(--ip-success-base); }
-.tool-dot-err { background:var(--ip-danger-base); }
-.tool-dot-wait { background:var(--ip-warning-base); }
-.tool-dot-busy { background:var(--ip-primary-500); animation:tool-dot-pulse 1.2s ease-in-out infinite; }
-@keyframes tool-dot-pulse { 0%,100% { opacity:1; } 50% { opacity:0.35; } }
+/* 状态图标（StatusGlyph：环形对勾/3×3 像素格/环形叉，2026-09-04 语系统一）。
+   行内紧凑节奏保持：glyph 14px 与 caption 字号同高，flex 自然居中。 */
 
 /* 展开详情（左绿线 + 缩进，与思考 body 统一） */
 .tool-expand { margin:2px 0 2px 22px; padding:4px 0 6px 14px; border-left:2px solid var(--ip-primary-200); max-height:400px; overflow-y:auto; }
