@@ -1,6 +1,6 @@
 # 技术债清扫台账
 
-> **2026-08-16 合并分诊建立。单一真相源**：两轮自查（07-31 / 08-06）+ 各功能记忆「未手测」标记 + 已知架构尾巴。
+> **2026-08-16 合并分诊建立。单一真相源**：三轮自查（07-31 / 08-06 / 09-04）+ 各功能记忆「未手测」标记 + 已知架构尾巴。
 > 此后新债直接进本表；每条清偿后更新状态，不删除（划掉区防复活）。全部清零后本表降级为「清扫惯例」页。
 >
 > 图例：🔴 排期中 ｜ 📋 待办 ｜ ❓ 待验证 ｜ 👁 观察池（默认不做，撞上再修）｜ 🗑 已划掉（含原因）
@@ -65,6 +65,32 @@
 | P10 | 借鉴小项合集 | ① Edit 失败恢复阶梯写进工具 description（唯一匹配失败→扩宽上下文→replace_all 引导，极小）✅ **已被质量拍超越**（2026-08-23）：恢复阶梯直接落进 edit_file 错误文案本体（`edit_mismatch_hint` 三档诊断：报行号/指认空白差异/指认凭记忆拼串），比写 description 更贴模型 ② 辅助任务（摘要/图片代读）默认走 provider 最便宜档，复用 preferences 的 embedding/vision 独立槽位模式（L1 默认，不配不操心）③ 慢工具 5s 进度行阈值 + 进度草稿上限（maxLines=8 / 120 字符行截断）——openclaw 成熟参数包（03 笔记），前端打磨顺手做 ④ doom_loop 同参重复检测 ✅ 2026-08-23 已落地（Agent 质量拍）——`loop/doom_detect.rs` 按「工具名+错误签名（首行冒号前）」跟踪连败：3 次 nudge（tool_result 尾部注入纠正指令 + hook_injected 入事件日志）、6 次终止（finish_reason=doom_loop，finalize_guard 对称清场）；同工具成功即清零。**比原设计更准**：stuck_detect 漏掉的正是一类（换文件名重试同类失败，轮指纹恒变），故按错误家族而非相同输入计数（生产 8 连败案例：8 个不同文件名同一 os error） |
 | P11 | **轮次导航条不稳**（用户 2026-08-17 真机报）✅ 2026-08-17 手测通过收官（e345879 + f4753a4 + 376262c + 60a08e8） | 症状三连：①数字不准 ②定位失误 ③不更新。**C1/C2（e345879）**：跳转落点对齐阅读位 + scrollend 漂移纠正 + 删 guard 60 页上限 + 锚点 SQL 改「content 空 ∧ blocks 含 tool_result」合取（Rust 用例钉死三形态）。**视位语义重设计（用户 2026-08-17 拍板，①残留主犯）**：顶线规则「最小相交轮过线→该轮否则-1」系统性少报一——贴底跟随短轮显示 N-1（最高频面孔）、居中阅读显示不在屏上的前一轮。重设计为**底线语义**：输入框上方 24px 一根判定线（`LINE_FROM_BOTTOM_PX`），线落在哪个轮的区域（[锚i, 锚i+1)）就是哪轮，事件无关（IO 相交集实测 gBCR 重算，跳转/翻页/图片加载零逐事件补丁）；**跳转钉子**——点 tick N 落点在视口顶而线在 N+k 区域，纯线判定跳转显得没到位，钉住 N（`pin/clearPin`），用户亲手滚动（滚轮/触摸/滚动键/跳到最新）解钉交还线判定，锚点重载（切会话/新轮）失效。固有限制：多轮同屏读屏顶轮时显示线下轮（单线规则数学下限，方向恒定）。pickActiveTurn 换签名 (intersecting, lineY) 底线判定 + 钉子接线 5 用例。**切会话贴底横杠/错号两轮收口**：长尾轮会话贴底时末轮锚点滚出视口顶 → IO 集空 + 切会话已重置 null →「保持」永远 null = 横杠；376262c 治三件（`root.contains` 剔除换血元素/锚点重载即失忆/空集 bootstrap）。用户复测仍错 → **60a08e8 贴底确定性**收口真根因：完整竞态链=渲染期 scrollTop=0 顶部锚点先进集合定下小轮号 → restore 瞬移贴底 → IO 迟到一拍旧集合 gBCR 现读全在视口上方=线判定错号 → 集空「保持」锁死中毒值（bootstrap 只救 null 不救中毒）。治本：贴底=内容底对齐视口底，线必然在末轮区域——recompute 在集合/上次值之前检查 `scrollTop+clientHeight ≥ scrollHeight-4` 直接末轮，竞态无从产生；bootstrap 只留比例粗估。测试坑：jsdom 全 0 几何下贴底恒真会劫持全部线判定用例，fixture 必须桩 scrollHeight。14 用例。**2026-08-17 用户真机复测通过（切会话多种情况正常）** |
 | P12 | **任务胶囊 + 计划面板重设计**（用户 2026-08-17 提出）✅ 2026-08-17 手测通过收官（437a09b + 一轮 8d179fa + 二轮 2145055 + 对齐 df780f5） | 落地：popover 双栏（左任务/右计划）显式定宽；胶囊文案组合化「任务 N · 计划 D/M」+ dot 脉冲扩为任务在跑或计划推进中；状态翻转行背景轻闪 ~1.1s + plan-mark 平滑过渡。**规模治理二轮定稿（用户实测推翻一轮截断+折叠，拍板 880px/58vh）**：平铺优先——弹窗 `max-height:58vh` 挂窗口高（底部恒留 42%+）经 flex 链分到列身；计划列全量平铺（含 done 划线）列内滚动，不折叠（计划协议已封 30，plan_tool MAX_ITEMS）；任务列按高度预算动态截断——预算 = 开面板实测列身高÷行高，超出才收「还有 N 个」计数行（一行让位），running 恒优先；测不到布局平铺兜底（`budgetDoneRows` 纯函数 + prototype 桩单测）。宽度 has-plan 880 / 单列 420（窄窗 wrap 堆叠 + 堆叠态 columns 整体滚动）。胶囊右移对齐用户气泡右缘（`--msg-col-right` 令牌上提 ChatPage 单一真相源），展开不遮轮次导航条。MA-2 台账仍独立页面，胶囊保持轻量索引定位 |
+
+## 批次 Q — 2026-09-04 质量检查（第三轮自查，六路并行扫描）
+
+> 距 08-06 自查近一月、0.5.0→0.6.3 五版功能堆积后的系统性对码。六维：不变式 / panic 面 / 并发生命周期 / 性能+数据完整性 / 视觉规范 / 安全+测试文档。
+>
+> **干净面结论**：10 条后端系统不变式全成立（enabled_tools 双写 / Image 四门 / 事件日志纪律 / 错误家族前缀 / 工具列表名序 / usage 归一 / 委派三件 / chcp / 屏幕通道 / 旋钮通道）；dispatch_catch_panic 覆盖全部工具执行入口无绕过；数据完整性全绿（migration 不可变 / append-only / 恒 Derive / 三路水合 / backfill 冻结 / messages 双写底座）；密钥卫生 / D7 禁令 / 路径穿越守卫 / 委派预授权边界干净；panic 前提修正（release=unwind，panic≠闪退=task 死亡）；字体本地化 / 品牌色真相源 / Lucide 包名干净；CI d6c8ff0 绿。
+>
+> **分诊（2026-09-04 用户拍板：Q1-Q9 四组全随 0.6.4 搭车）**：
+
+| # | 项 | 严重度 | 状态 |
+|---|---|---|---|
+| Q1 | **copy/move destination 越过授权面**：`extract_path_from_args` 只取 source 做白名单，destination 仅靠 reject_sensitive（不含 workspace 边界）——source 在 ws 内即静默 Allow，可零审批写工作区外任意路径（自启动目录等），与 write_file 越界必 Confirm 不一致。修=双路径 Allow 改 all-match（tool_executor.rs:707/141） | 高 | ✅ 7e374e6 |
+| Q2 | **doom 错误签名被 AppError 变体前缀稀释**：Validation Display「参数校验失败:」把同变体所有家族折叠成一签名（混家族 6 连败误终止、nudge 指认失真）。修=error_kind 先剥已知变体前缀再截家族（doom_detect.rs:32 + error.rs Display 层） | 中 | ✅ 7e374e6 |
+| Q3 | 外部 MCP `send_request` 超时不清 pending 表（挂死 server 上无界小泄漏，external.rs:369+） | 中 | ✅ 7e374e6 |
+| Q4 | event_bus 转发任务遇 broadcast Lagged 永久退出（`session:event-appended` 全局停发到重启；有 5s 轮询兜底故降级不断流，lib.rs:321） | 中低 | ✅ 7e374e6 |
+| Q5 | TrajectoryView keep-alive 无 onDeactivated/onActivated 成对（缓存态生成期 5s 轮询+监听空转——4ad70ef 同类，useProjectTrajectory 有正确样板） | 中低 | ✅ 40b164e |
+| Q6 | **性能家族「同步重活在 async worker」三件**：Word docx zip 读写/重打包（docx_pkg:62 + docx_tool execute）/ 附件物化 base64 解码+PDF·docx 解析（attachments.rs:98-116，发生在 chat:start 前）/ KB indexer 逐文件同步解析（kb/indexer.rs:89+）。对照样板：pdf_render/screen/mcp_cmd 均已 spawn_blocking。0.6.2 卡顿三修的同病灶扩展面。**已修 8f7d0b7**：attachments/indexer/docx 三处包裹；范围披露=inspect_docx/validate_docx 读侧不包裹（审计未点名，读路径无 base64 解码重活） | 中 | ✅ 8f7d0b7 |
+| Q7 | **KB 语义检索每次全量加载 KB 全部 chunk**（content+summary+embedding BLOB 无 LIMIT）+ 逐 chunk 解码余弦在 async 线程（kb.rs:378 + kb_tool.rs:210-238）。修=按 kb_id 缓存已解码向量 + indexer 写入失效 + 检索段 spawn_blocking。**已修 8f7d0b7**：失效实装为**四标量签名**（COUNT(\*)/COUNT(embedding)/MAX(rowid)/SUM(LENGTH(content))，一条 GROUP BY 取全）——原设想的「indexer 写入失效」弃用（写点分散漏一处即脏缓存，签名失效漏不掉）；第四标量治 rowid 回收陷阱（SQLite DELETE 后回收 rowid + indexer 预生成回填 → 三标量全复原，单测实测踩中） | 中 | ✅ 8f7d0b7 |
+| Q8 | **视觉规范批**：ConfigProposalCard 🟢🟡🔴 敏感度档（规则点名的原型模式）/ 轨迹 💭·↻ 与 KB ✓·✗ 与错误徽章 ⚠（UI 可见 emoji）/ AuthRequestCard·AuthNoticeStack 手写 lock SVG、rail flyout 复制手写 star SVG（新代码应 import @lucide/vue）/ tokens.css prefers 自动暗区镜像不完整（success·warning·danger·info bg/text/border 全族 + accent-agent + primary-rgb，被 useTheme 恒设 data-theme 掩蔽）/ 审批卡三件 spacing 裸 px | 中 | ✅ 40b164e |
+| Q9 | 文档勘误三处：CLAUDE.md 计数漂移（cargo 1317→实际 1321、vitest 341→362、「五处 SECURITY」实为 4 处 screen/mod.rs:130/695/737/819）/ computer-use-roadmap「未 push 未手测」标记滞后（已随 0.6.0 push）/ read_route.rs:200 遗留 warn「回退 legacy」与恒派生行为不符（误导排障） | 中低 | ✅ 7e374e6 + docs 批 |
+| Q10 | run_command 间接写 agent.yaml × 委派「命令免问」叠加（Confirm 逐次是唯一防线）。**拍板 2026-09-04：接受现状**——run_command 本就是全能力工具、Confirm 是设计防线、免问档是用户自选信任档，不加脆弱命令串嗅探 | 中（设计） | 👁 |
+| Q11 | git 工具 extra-args 无敏感路径守卫（Always 级，`git show --output=<任意路径>` 可写文件——内容非受控 YAML 实际影响低） | 中 | 📋 |
+| Q12 | update_agent 命令面未物理封死：AgentUpdate 仍含 system_prompt/temperature/max_tokens/enabled_tools，「只管出生证」靠前端调用侧自律——新调用方可绕 yaml 通道重建双真相（repo 层复用必要，仅命令面开放） | 低 | 📋 |
+| Q13 | 测试盲区补课：delegate.rs 授权子流程（grant seed/拒绝/超时分支零断言——刚落地的授权面，优先）/ hud.rs（204 行零测试）/ approval_toast.rs（Rust 侧零测试）/ screen/session.rs 仅 1 测试 | 低 | 📋 |
+| Q14 | z-index 局部 1-10 裸数字 ~22 处（ChatHeader/ChatMessages/Trajectory* 等）——令牌阶梯无局部堆叠档属规则与阶梯缺口，建议补 `--ip-z-local` 档后批量收编 | 低 | 📋 |
+| Q15 | 杂项低危（观察池，撞上再修）：删会话不脱屏幕通道附着（幽灵 HUD 条目）/ deleteConversation 不清 bgStreams·pendingAuth（后端 panic 无终态事件时残留）/ AuthRequestCard 250ms 倒计时 interval 常开 / thinkingDurations 只增不清 / SSE 消费端消失不早退 / gate 取消臂摘排队位后无 bump（HUD 滞后一拍）/ edit_file 写失败裸 Io 少恢复指引（对照 write_file 三段式）/ 11.5px·12.5px 幽灵档 / ✕✓✦ 文本字形 / 动效时长散点硬编码 / MockAgentCmd lock().unwrap() 风格债 / migration 编号跳号（10 从未存在；47 dev 期建删未发布，heal_dropped_migrations 已锁）/ corpus_tests.rs 硬编码语料修订计数（D7 精神边缘）/ 根 package.json 0.3.0 陈旧 / attachments.rs:304·cleanup.rs:151 expect 谓词分离隐性耦合 / docx unreachable·expect 理论面（工具路径内 catch_panic 兜住）/ channel.rs:198 注释漂移 | 低 | 👁 |
 
 ## 安全项
 
