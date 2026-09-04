@@ -35,9 +35,9 @@ const action = computed(() =>
 
 const sensitivityLabel = computed(() => {
   switch (props.proposal.sensitivity) {
-    case "low": return "🟢 非敏感";
-    case "medium": return "🟡 敏感";
-    default: return "🔴 红线";
+    case "low": return "非敏感";
+    case "medium": return "敏感";
+    default: return "红线";
   }
 });
 
@@ -222,7 +222,7 @@ async function reject() {
   <div :class="['proposal-card', sensitivityClass]">
     <!-- 头部 -->
     <div class="proposal-header">
-      <span class="proposal-badge">{{ sensitivityLabel }}</span>
+      <span class="proposal-badge"><span class="badge-dot" />{{ sensitivityLabel }}</span>
       <span class="proposal-title">{{ isCreate ? '创建 Agent' : '更新 Agent' }}</span>
     </div>
 
@@ -301,10 +301,21 @@ async function reject() {
 }
 
 .proposal-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ip-spacing-1);
   font-size: var(--ip-text-micro-size);
   font-weight: var(--ip-font-weight-semibold);
   padding: 1px 8px;
   border-radius: var(--ip-radius-full);
+}
+
+/* 语义色圆点（DelegationCard .dlg-dot 同款 idiom）：档位三色由外层 sensitivity 类驱动 */
+.badge-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--ip-radius-full);
+  flex-shrink: 0;
 }
 
 .sensitivity-low .proposal-badge {
@@ -312,15 +323,21 @@ async function reject() {
   color: var(--ip-success-tint-text);
 }
 
+.sensitivity-low .badge-dot { background: var(--ip-success-base); }
+
 .sensitivity-medium .proposal-badge {
   background: var(--ip-warning-soft-bg);
   color: var(--ip-warning-tint-text);
 }
 
+.sensitivity-medium .badge-dot { background: var(--ip-warning-base); }
+
 .sensitivity-redline .proposal-badge {
   background: var(--ip-danger-soft-bg);
   color: var(--ip-danger-tint-text);
 }
+
+.sensitivity-redline .badge-dot { background: var(--ip-danger-base); }
 
 .proposal-title {
   font-size: var(--ip-text-body-sm-size);

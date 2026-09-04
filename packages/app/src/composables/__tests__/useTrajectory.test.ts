@@ -88,12 +88,14 @@ describe("buildRows 行模型", () => {
     const r1 = evRows(thinkingOnly).events()[0];
     expect(r1.summary).toContain("先分析用户意图");
     expect(r1.thinkingDerived).toBe(true); // 表格行渲染斜体弱化
+    expect(r1.isThinking).toBe(true); // 表格行渲染 Brain 图标
 
     const both = [
       ev("assistant_message", { content: "正文回复", blocks: [{ type: "thinking", thinking: "内心活动" }], round: 0, continuation: false }, { messageId: "m2" }),
     ];
     const r2 = evRows(both).events()[0];
-    expect(r2.summary).toContain("💭 正文回复");
+    expect(r2.summary).toBe("正文回复"); // 摘要不再内嵌符号前缀
+    expect(r2.isThinking).toBe(true); // 思考标记走结构化字段（Brain 图标渲染位）
     expect(r2.thinkingDerived).toBe(false);
 
     const toolOnly = [
@@ -111,7 +113,7 @@ describe("buildRows 行模型", () => {
     ];
     const { events: evs, headers } = evRows(events);
     expect(evs()).toHaveLength(1);
-    expect(evs()[0].summary).toContain("↻"); // 续写标记
+    expect(evs()[0].isContinuation).toBe(true); // 续写标记走结构化字段（RotateCw 图标渲染位）
     expect(headers()[0].roundCount).toBe(1); // 轮数不虚增
   });
 

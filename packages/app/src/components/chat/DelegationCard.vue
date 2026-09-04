@@ -97,16 +97,17 @@ const FINISH_LABEL: Record<string, string> = {
   border-left: 3px solid var(--ip-primary-400);
   border-radius: var(--ip-radius-md);
   background: var(--ip-primary-soft-bg, var(--ip-color-bg-secondary));
-  padding: 8px 12px;
+  padding: var(--ip-spacing-2) var(--ip-spacing-3);
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  /* 5px 无等值令牌，就近映射 1_5=6px（与 .dlg-head 行距同值，节奏一致） */
+  gap: var(--ip-spacing-1_5);
   max-width: 560px;
 }
 .dlg-card[data-status="error"] { border-left-color: var(--ip-danger-base); }
 .dlg-card[data-status="running"] { border-left-color: var(--ip-warning-base); }
 
-.dlg-head { display: flex; align-items: center; gap: 6px; }
+.dlg-head { display: flex; align-items: center; gap: var(--ip-spacing-1_5); }
 /* 目标 agent 头像（sm=20px，EntityAvatar 三级链；取代旧交换箭头图标） */
 .dlg-avatar { flex-shrink: 0; }
 .dlg-title { font-size: var(--ip-text-body-sm-size); font-weight: var(--ip-font-weight-semibold); color: var(--ip-color-text-primary); }

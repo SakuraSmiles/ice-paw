@@ -10,7 +10,7 @@
   行模型 buildRows 纯函数派生（折叠/搜索/辅助开关是视图状态）。
 -->
 <script setup lang="ts">
-import { computed, nextTick, ref, watch, onMounted, onBeforeUnmount } from "vue";
+import { computed, nextTick, ref, watch, onMounted, onBeforeUnmount, onActivated, onDeactivated } from "vue";
 import { listen } from "@tauri-apps/api/event";
 import { buildRows, useTrajectory, type TrajectoryRow, type EventRow } from "../../composables/useTrajectory";
 import { useResizablePanel } from "../../composables/useResizablePanel";
@@ -65,6 +65,8 @@ const streamingRows = computed<TrajectoryRow[]>(() => {
     summary,
     isError: false,
     thinkingDerived: false,
+    isThinking: false,
+    isContinuation: false,
     durationMs: null,
     tokens: null,
     match: true,
@@ -298,6 +300,13 @@ let pollTimer: ReturnType<typeof setTimeout> | null = null;
 let polling = false;
 let unlistenAppended: (() => void) | null = null;
 
+// ⚠️ keep-alive 生命周期（useProjectTrajectory listenerLive 同款）：ChatPage 在
+// AppLayout 路由级 keep-alive 缓存下——离开聊天页 onBeforeUnmount **不触发**，
+// 5s 兜底轮询与事件监听会挂满应用生命周期空转（每 tick 一次 invoke + rows 重派生）。
+// onDeactivated 暂停（gate 关 + 停轮询），onActivated 恢复（补拉离场期间增量 +
+// sending 期重启轮询）。非 keep-alive 环境两钩子不触发、flag 恒 true，行为与旧版一致。
+let listenerLive = true;
+
 const timelineRef = ref<InstanceType<typeof TrajectoryTimeline> | null>(null);
 
 async function pollOnce() {
@@ -328,11 +337,12 @@ function stopPolling() {
 }
 
 /** sending 结束后再补一轮（终态事件 turn_ended 与最后一条 assistant 落库时序贴近）。
- *  sending 起始 = 用户刚发消息 → 强制贴底进入跟随态（意图明确）。 */
+ *  sending 起始 = 用户刚发消息 → 强制贴底进入跟随态（意图明确）。
+ *  离场期（listenerLive=false）不起轮询——onActivated 检测 sending 补启。 */
 watch(() => chat.sending, (sending) => {
   if (sending) {
     tableRef.value?.scrollToBottom();
-    startPolling();
+    if (listenerLive) startPolling();
   } else {
     stopPolling();
     void pollOnce();
@@ -341,10 +351,21 @@ watch(() => chat.sending, (sending) => {
 
 // 事件通知监听（挂载期常开）：本会话有新事件落库 → 即时拉增量。sending 期之外
 // 也监听——为将来多 agent 后台事件铺路（现在等价覆盖：事件只在 sending 期产生）。
+// 回调入口 gate（listenerLive）：keep-alive 缓存期不驱动任何拉取。
 onMounted(() => {
   void listen<{ conversation_id: string; kind: string }>("session:event-appended", (e) => {
+    if (!listenerLive) return;
     if (e.payload.conversation_id === props.conversationId) void pollOnce();
   }).then((u) => { unlistenAppended = u; });
+});
+onDeactivated(() => {
+  listenerLive = false;
+  stopPolling();
+});
+onActivated(() => {
+  listenerLive = true;
+  void pollOnce(); // 补拉离场期间增量（幂等，追平返 0）
+  if (chat.sending) startPolling(); // 生成中回到本页：恢复兜底轮询
 });
 onBeforeUnmount(() => {
   stopPolling();

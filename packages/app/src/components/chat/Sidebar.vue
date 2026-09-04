@@ -11,7 +11,7 @@ import { useResizablePanel } from "../../composables/useResizablePanel";
 import PanelResizeHandle from "../common/PanelResizeHandle.vue";
 import EntityAvatar from "../common/EntityAvatar.vue";
 import ProjectSwitcher from "./ProjectSwitcher.vue";
-import { PanelLeftClose, PanelLeftOpen, MessageSquarePlus, MessagesSquare, Settings, Search } from "@lucide/vue";
+import { PanelLeftClose, PanelLeftOpen, MessageSquarePlus, MessagesSquare, Settings, Search, Star } from "@lucide/vue";
 import { useEscapeStack } from "../../composables/useEscapeStack";
 
 const router = useRouter();
@@ -342,7 +342,8 @@ function timeAgoLabel(dateStr: string): string {
         <div class="conv-item-title">
           <span class="conv-name">{{ conv.title || "新对话" }}</span>
           <span v-if="conv.pinned" class="pin-icon-right" title="已置顶">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2z" /></svg>
+            <!-- 置顶星（填充形态，与 rail flyout 内同款两处同步改） -->
+            <Star :size="11" fill="currentColor" stroke="none" aria-hidden="true" />
           </span>
         </div>
         <div class="conv-meta">
@@ -465,7 +466,8 @@ function timeAgoLabel(dateStr: string): string {
                 <div class="conv-item-title">
                   <span class="conv-name">{{ conv.title || "新对话" }}</span>
                   <span v-if="conv.pinned" class="pin-icon-right" title="已置顶">
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2z" /></svg>
+                    <!-- 置顶星（填充形态，与展开列表同款两处同步改） -->
+                    <Star :size="11" fill="currentColor" stroke="none" aria-hidden="true" />
                   </span>
                 </div>
                 <div class="conv-meta">

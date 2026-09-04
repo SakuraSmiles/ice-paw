@@ -334,7 +334,9 @@
   /* 通用 placeholder 文字色（P0 新增） */
   --ip-color-text-placeholder:       var(--ip-gray-400);
 
-  /* 间距补齐（P0 新增：1_5=6px） */
+  /* 间距补齐（P0 新增：1_5=6px）——注释先于值存在，定义在此补齐（2026-09-04），
+     与 _5 后缀约定一致（0_5=2px、2_5=10px：整数档 +2px） */
+  --ip-spacing-1_5: 6px;
 
   /* 图标尺寸通用 token（P0 新增） */
   --ip-icon-sm:                      14px;
@@ -564,6 +566,9 @@
     --ip-primary-800: #C3D7EA;
     --ip-primary-900: #E2ECF5;
     --ip-primary-950: #F2F6FA;
+    /* rgb 三元组镜像（三区同步补齐 2026-09-04：值与 [data-theme='dark'] 区一致） */
+    --ip-primary-500-rgb: 62, 111, 168;  /* 镜像档 #3E6FA8 */
+    --ip-primary-400-rgb: 78, 128, 192;
     --ip-color-bg-user-bubble:        var(--ip-primary-500);   /* v2.0 藏青镜像档 */
     --ip-color-bg-user-bubble-hover:  var(--ip-primary-400);   /* v2.0 hover 提亮 */
     --ip-color-text-on-user-bubble:   var(--ip-white);
@@ -602,12 +607,47 @@
     --ip-danger-base:     #D46B6B;
     --ip-info-base:       #4E80C0;  /* v2.0：info=主色深锚 */
 
+    /* 全族镜像补齐（2026-09-04 三区同步）：此前本区只有 base，bg/text/border 落回
+       light 值（暗底上浅色 tint 背景 = 单区静默失败有前科）；值严格抄 [data-theme='dark'] 区 */
+    --ip-success-hover:   #2D8B66;
+    --ip-success-active:  #237A58;
+    --ip-success-bg:      #0A2418;
+    --ip-success-text:    #A3D9C4;
+    --ip-success-border:  #1A5D42;
+
+    --ip-warning-hover:   #B8862A;
+    --ip-warning-active:  #9E6F1E;
+    --ip-warning-bg:      #2B1F0A;
+    --ip-warning-text:    #E5C887;
+    --ip-warning-border:  #7D5614;
+
+    --ip-danger-hover:    #B83D3D;
+    --ip-danger-active:   #9E2F2F;
+    --ip-danger-bg:       #2B0F0F;
+    --ip-danger-text:     #E0B0B0;
+    --ip-danger-border:   #7D2323;
+
+    --ip-info-hover:      var(--ip-primary-600);
+    --ip-info-active:     var(--ip-primary-500);
+    --ip-info-bg:         var(--ip-primary-950);
+    --ip-info-text:       var(--ip-primary-700);
+    --ip-info-border:     var(--ip-primary-500);
+
+    /* 身份层点缀色（v2.0）：agent 引用紫——值抄 [data-theme='dark'] 区 */
+    --ip-accent-agent:       #7C6BD6;
+    --ip-accent-agent-text:  #5B4BBD;
+    --ip-accent-agent-bg:    #ECE9FB;
+
     --ip-shadow-focus:    0 0 0 3px var(--ip-focus-ring-dark);
 
     /* P0 暗色模式覆盖（system-prefers） */
     --ip-avatar-ring:                 inset 0 0 0 1px rgba(240, 246, 252, 0.14);
     --ip-avatar-elev:                 0 1px 2px rgba(0, 0, 0, 0.35), 0 2px 6px rgba(0, 0, 0, 0.22);
     --ip-color-text-placeholder:      var(--ip-gray-500);
+
+    /* Avatar overlay 暗色模式切换（镜像补齐 2026-09-04，值抄 [data-theme='dark'] 区） */
+    --ip-avatar-overlay-light:        var(--ip-avatar-overlay-dark);
+    --ip-avatar-overlay-light-active: var(--ip-avatar-overlay-dark-active);
 
     color-scheme: dark;
   }
