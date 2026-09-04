@@ -28,6 +28,7 @@ import type {
   ChatThinkingPayload,
   ChatProcessingPayload,
   ToolAuthRequestPayload,
+  DelegationAuthRequestPayload,
   ConfigProposalPayload,
   DelegationStartedPayload,
   ChatBudgetPayload,
@@ -337,12 +338,13 @@ export async function useChatEvents(): Promise<() => void> {
       live.add(payload.request_id);
       if (notifiedApprovalIds.has(payload.request_id)) continue;
       notifiedApprovalIds.add(payload.request_id);
-      // 传 request_id：Windows toast 带批准/拒绝按钮（点击直接应答，scope=once）
-      void notifyApprovalNeeded(
-        "IcePaw · 等待你的批准",
-        payload.reason ? `${payload.tool_name}：${payload.reason}` : payload.tool_name,
-        payload.request_id,
-      );
+      // 委派授权条目（判别 = agent_name 字段）文案带目标 agent + 任务摘要；
+      // 传 request_id：Windows toast 带批准/拒绝按钮（点击直接应答，scope=once
+      // + 无预授权档 = 逐次审批——结构化档位选择只在应用内卡片）
+      const body = "agent_name" in payload
+        ? `委派给 ${payload.agent_name}：${payload.task.slice(0, 60)}`
+        : payload.reason ? `${payload.tool_name}：${payload.reason}` : payload.tool_name;
+      void notifyApprovalNeeded("IcePaw · 等待你的批准", body, payload.request_id);
     }
     for (const p of chat.pendingProposals.values()) {
       live.add(p.request_id);
@@ -367,6 +369,16 @@ export async function useChatEvents(): Promise<() => void> {
     m.set(e.payload.conversation_id, { payload: e.payload, receivedAt: Date.now() });
     chat.pendingAuthRequests = m;
     maybeNotifyPendingApprovals(); // 失焦才真发（内部守卫），fire-and-forget
+  });
+  // ---- 委派授权请求 ----（delegate_to_agent 建子会话前的信任决策点）----
+  // 与工具授权共用 pendingAuthRequests 栈与 oneshot 应答通道：120s 倒计时 /
+  // cancel 清 / responded 清 / 失焦恰一次通知全部机制自动继承；卡片按
+  // payload 形状（agent_name 字段）渲染委派变体（目标 agent + 任务 + 预授权档）
+  await subscribe<DelegationAuthRequestPayload>("chat:delegation-auth-request", (e) => {
+    const m = new Map(chat.pendingAuthRequests);
+    m.set(e.payload.conversation_id, { payload: e.payload, receivedAt: Date.now() });
+    chat.pendingAuthRequests = m;
+    maybeNotifyPendingApprovals();
   });
   /** 按 request_id 从 pendingAuthRequests 删条目（单会话单活请求，Map 按 convId 键） */
   function dropAuthEntry(requestId: string) {

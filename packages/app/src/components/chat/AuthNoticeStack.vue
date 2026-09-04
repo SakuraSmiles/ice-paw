@@ -9,6 +9,10 @@
 import { ref, onMounted, onBeforeUnmount } from "vue";
 import { useRouter } from "vue-router";
 import { useChatStore, TOOL_AUTH_TIMEOUT_MS } from "../../stores/chat";
+import type {
+  DelegationAuthRequestPayload,
+  ToolAuthRequestPayload,
+} from "../../types";
 
 const chat = useChatStore();
 const router = useRouter();
@@ -35,15 +39,23 @@ function urgent(receivedAt: number): boolean {
 }
 
 function allowOnce(requestId: string) {
+  // 通知上不猜意图：委派授权的「允许」= 逐次审批档（结构化预授权档选择
+  // 只在应用内卡片——与系统 toast 批准按钮同语义）
   void chat.respondToAuth(requestId, true, "once");
 }
 function deny(requestId: string) {
   void chat.respondToAuth(requestId, false);
 }
-/** 点击通知主体 → 跳回该会话（切 activeConv 后请求转入内联卡，可选目录/工具档）*/
+/** 点击通知主体 → 跳回该会话（切 activeConv 后请求转入内联卡，可选完整档）*/
 function jumpTo(convId: string) {
   void router.push({ name: "Home" });
   chat.selectConversation(convId);
+}
+/** union 判别（类型守卫，模板 v-if 窄化用）：payload 带 agent_name = 委派授权 */
+function isDelegation(
+  payload: ToolAuthRequestPayload | DelegationAuthRequestPayload,
+): payload is DelegationAuthRequestPayload {
+  return "agent_name" in payload;
 }
 </script>
 
@@ -64,8 +76,15 @@ function jumpTo(convId: string) {
           </span>
         </div>
         <button class="notice-body" type="button" @click="jumpTo(convId)">
-          <div class="notice-tool">{{ entry.payload.tool_name }} 请求授权</div>
-          <div v-if="entry.payload.file_path" class="notice-path">{{ entry.payload.file_path }}</div>
+          <!-- 委派授权条目（agent_name 判别）标题带目标 agent；工具授权显示工具名 -->
+          <div v-if="isDelegation(entry.payload)" class="notice-tool">
+            委派给 {{ entry.payload.agent_name }}
+          </div>
+          <div v-else class="notice-tool">{{ entry.payload.tool_name }} 请求授权</div>
+          <div
+            v-if="!isDelegation(entry.payload) && entry.payload.file_path"
+            class="notice-path"
+          >{{ entry.payload.file_path }}</div>
           <div class="notice-hint">点击查看详情 · 跳转会话</div>
         </button>
         <div class="notice-actions">

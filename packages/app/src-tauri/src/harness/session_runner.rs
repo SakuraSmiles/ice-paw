@@ -75,6 +75,9 @@ pub(crate) struct TurnEnv<'a> {
     pub mcp_manager: Arc<McpServerManager>,
     /// 工具授权注册表（与 lib.rs install_listener 同一实例）
     pub auth_registry: ToolAuthRegistry,
+    /// 会话级授权记忆注册表（L0：conv_id → PathAuthSession 跨轮持久；
+    /// 同一 conversation 的多次回合共享授权表，委派预授权 seed 也走此处）
+    pub auth_sessions: crate::harness::authority::AuthSessionRegistry,
 }
 
 /// 一回合的输入（调用方完成输入预处理后打包传入）。
@@ -605,6 +608,8 @@ pub(crate) async fn run_agent_turn(
         budget_max_tokens,
         budget_renewals,
         auth_registry: env.auth_registry.clone(),
+        // conv_id 已 move 进上方字段，这里用 conv.id（同一值）取会话记忆
+        auth_session: env.auth_sessions.session_for(&conv.id),
         tool_registry,
         agent_id: conv.agent_id.clone(),
         project_id: conv.project_id.clone(),
@@ -707,6 +712,9 @@ pub(crate) struct StreamLoopInput {
     pub budget_max_tokens: usize,
     pub budget_renewals: u32,
     pub auth_registry: ToolAuthRegistry,
+    /// L0：本会话的授权记忆（run_agent_turn 从 AuthSessionRegistry 取好传入——
+    /// 同一 conversation 跨回合共享同表）
+    pub auth_session: crate::harness::authority::PathAuthSession,
     pub tool_registry: McpRegistry,
     pub agent_id: String,
     pub project_id: Option<String>,
@@ -743,6 +751,7 @@ pub(crate) fn spawn_stream_loop(input: StreamLoopInput) {
         budget_max_tokens,
         budget_renewals,
         auth_registry,
+        auth_session,
         tool_registry,
         agent_id,
         project_id,
@@ -780,8 +789,11 @@ pub(crate) fn spawn_stream_loop(input: StreamLoopInput) {
         // A2-3: 使用共享的工具授权注册表（与 lib.rs install_listener 同一个实例）
         // 这样前端 chat:tool-auth-response 事件能匹配到正确的 oneshot sender。
         let auth_registry = auth_registry;
-        // A2-3: 本次会话级已授权路径表
-        let auth_session = crate::harness::authority::PathAuthSession::new();
+        // L0（2026-09-03）：会话级授权记忆从「每轮新建」升为按 conversation 持久——
+        // 用户批过的「此工具/此目录」跨轮兑现，app 重启即清（AuthSessionRegistry
+        // 管理生命周期；委派预授权 seed 也落在同一张表）。session 句柄由
+        // run_agent_turn 从 registry 取好经 StreamLoopInput 传入（跨回合共享同表）。
+        let auth_session = auth_session;
         // A2-3: 路径白名单配置（当前为空 → 全部走 Confirm 流程）
         let whitelist = crate::harness::authority::PathWhitelistConfig::default();
 

@@ -527,7 +527,9 @@ pub(crate) async fn execute_tool_round(
 ///
 /// 失效分支（取消/超时/通道关闭）会 emit `chat:tool-auth-request-cancel`，
 /// 让前端按 `request_id` 清除对应授权弹窗，避免残留导致用户对已失效请求操作。
-async fn wait_for_auth_response(
+/// 等待授权响应（带取消支持 + 2 分钟超时）——tool_executor 通用授权与
+/// delegate 委派授权（2026-09-03）共用，单一实现勿复制。
+pub(crate) async fn wait_for_auth_response(
     rx: oneshot::Receiver<ToolAuthResponse>,
     cancel: &crate::harness::chat_state::CancellationToken,
     request_id: &str,
@@ -844,6 +846,7 @@ mod tests {
                 request_id: req_id.clone(),
                 allowed: true,
                 scope: AuthScope::ThisDir,
+                delegation_grant: None,
             })
             .await;
         });
@@ -863,6 +866,7 @@ mod tests {
                 request_id: "nope".into(),
                 allowed: false,
                 scope: AuthScope::Once,
+                delegation_grant: None,
             })
             .await;
         assert!(!handled);

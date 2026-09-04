@@ -70,6 +70,47 @@ describe("chatStore", () => {
       expect(store.conversations[0].title).toBe("测试对话");
     });
 
+    describe("respondToAuth（委派预授权档透传，2026-09-03）", () => {
+      it("delegationGrant 透传 delegation_grant + 乐观删条目", async () => {
+        mockInvoke.mockResolvedValue(undefined);
+        const store = useChatStore();
+        const m = new Map(store.pendingAuthRequests);
+        m.set("c1", {
+          payload: {
+            request_id: "d1", conversation_id: "c1", message_id: "m1",
+            agent_name: "wenshu", agent_id: "a1", task: "整理文档",
+          },
+          receivedAt: Date.now(),
+        });
+        store.pendingAuthRequests = m;
+
+        await store.respondToAuth("d1", true, "once", "commands");
+
+        expect(store.pendingAuthRequests.size).toBe(0);
+        expect(mockInvoke).toHaveBeenCalledWith("respond_tool_auth", {
+          input: {
+            request_id: "d1",
+            allowed: true,
+            scope: "once",
+            delegation_grant: "commands",
+          },
+        });
+      });
+
+      it("工具授权不产生 delegation_grant 键（undefined 序列化省略）", async () => {
+        mockInvoke.mockResolvedValue(undefined);
+        const store = useChatStore();
+
+        await store.respondToAuth("r1", false);
+
+        const arg = mockInvoke.mock.calls[mockInvoke.mock.calls.length - 1];
+        expect(arg[0]).toBe("respond_tool_auth");
+        expect(arg[1]).toEqual({
+          input: { request_id: "r1", allowed: false, scope: "once", delegation_grant: undefined },
+        });
+      });
+    });
+
     it("createConversation calls bridge and adds to list", async () => {
       const newConv = fakeConv("new-c1");
       mockInvoke.mockResolvedValueOnce(newConv);

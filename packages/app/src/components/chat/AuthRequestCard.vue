@@ -8,6 +8,11 @@
 // #11 分层授权：允许前选范围档（仅此一次 / 此目录含子目录 / 此工具·本会话），
 // 默认最小档；120s 倒计时与后端 wait_for_auth_response 的 TIMEOUT 同步，
 // 到点后端自动取消并发 cancel 事件清条目（卡片随 v-if 消失）。
+//
+// 委派变体（2026-09-03 委托时预授权）：payload 带 agent_name 字段即委派授权
+// （delegate_to_agent 建子会话前的信任决策点）——L1 显示「委派给 {agent}」、
+// L2 任务摘要（title 全文 + 折叠展开）、L3 预授权档单选（逐次审批 / 命令免问），
+// 后端忽略 scope 只看 delegation_grant。
 import { ref, computed, watch, onMounted, onBeforeUnmount } from "vue";
 import { useChatStore, TOOL_AUTH_TIMEOUT_MS } from "../../stores/chat";
 import { formatJson } from "../../utils/format";
@@ -17,17 +22,29 @@ const chat = useChatStore();
 
 const entry = computed(() => chat.activeConvAuthRequest);
 const req = computed(() => entry.value?.payload ?? null);
-const hasPath = computed(() => !!req.value?.file_path);
+// union 判别（模板访问字段各自 narrowed，vue-tsc 不吃跨表达式窄化）：
+// 工具授权（file_path/arguments 形状）| 委派授权（agent_name 形状）
+const toolReq = computed(() => {
+  const p = req.value;
+  return p && !("agent_name" in p) ? p : null;
+});
+const delegationReq = computed(() => {
+  const p = req.value;
+  return p && "agent_name" in p ? p : null;
+});
+const hasPath = computed(() => !!toolReq.value?.file_path);
 
 // 批次④ 步骤 1：request_screen_session 特判为二键卡——批准即开屏幕共享通道，
 // scope 档（仅此一次/此目录/此工具）对它无意义（后端忽略，once 兜底无害）。
-const isChannelRequest = computed(() => req.value?.tool_name === "request_screen_session");
+const isChannelRequest = computed(() => toolReq.value?.tool_name === "request_screen_session");
 
-// ---- 范围档选择（新请求到达时重置回最小档）----
+// ---- 范围档选择（新请求到达时重置回最小档）+ 委派预授权档（逐次审批=默认；
+// 命令免问=预授子会话 run_command 工具档）----
 const scope = ref<AuthScope>("once");
+const delegationGrant = ref<"none" | "commands">("none");
 watch(
   () => req.value?.request_id,
-  () => { scope.value = "once"; },
+  () => { scope.value = "once"; delegationGrant.value = "none"; },
 );
 
 // ---- 120s 倒计时（250ms 粒度驱动秒数 + 进度条）----
@@ -63,7 +80,12 @@ const scopeOptions = computed(() =>
 
 function allow() {
   if (!req.value || expired.value) return;
-  void chat.respondToAuth(req.value.request_id, true, scope.value);
+  // 委派授权：预授权档经 delegation_grant 透传（后端忽略 scope）；工具授权
+  // 不产生 grant 字段
+  const grant = delegationReq.value && delegationGrant.value === "commands"
+    ? ("commands" as const)
+    : undefined;
+  void chat.respondToAuth(req.value.request_id, true, scope.value, grant);
 }
 function deny() {
   if (!req.value || expired.value) return;
@@ -80,30 +102,69 @@ function deny() {
       </div>
 
       <div class="auth-main">
-        <!-- L1 工具 + 倒计时（锁图标替代「工具授权请求」标题——上下文已在输入框上方） -->
+        <!-- L1 工具/委派目标 + 倒计时（锁图标替代标题——上下文已在输入框上方） -->
         <div class="auth-line1">
           <svg class="auth-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-          <span class="auth-tool-name">{{ req.tool_name }}</span>
+          <span v-if="toolReq" class="auth-tool-name">{{ toolReq.tool_name }}</span>
+          <span v-else-if="delegationReq" class="auth-tool-name">委派给 {{ delegationReq.agent_name }}</span>
           <span class="auth-countdown" :class="{ urgent, expired }">
             {{ expired ? "已超时" : remainingLabel }}
           </span>
         </div>
 
-        <!-- L2 路径 + 原因（单行省略，完整内容走 title 提示）+ 参数折叠 -->
-        <div class="auth-line2">
-          <span v-if="hasPath" class="auth-path" :title="req.file_path">{{ req.file_path }}</span>
-          <span v-if="hasPath && req.reason" class="auth-dot">·</span>
-          <span v-if="req.reason" class="auth-reason" :title="req.reason">{{ req.reason }}</span>
+        <!-- L2 工具授权：路径 + 原因（单行省略，全文走 title）+ 参数折叠；
+             委派授权：任务摘要 + 全文折叠 -->
+        <div v-if="toolReq" class="auth-line2">
+          <span v-if="hasPath" class="auth-path" :title="toolReq.file_path">{{ toolReq.file_path }}</span>
+          <span v-if="hasPath && toolReq.reason" class="auth-dot">·</span>
+          <span v-if="toolReq.reason" class="auth-reason" :title="toolReq.reason">{{ toolReq.reason }}</span>
           <details class="auth-args">
             <summary>参数</summary>
-            <pre class="auth-json">{{ formatJson(req.arguments) }}</pre>
+            <pre class="auth-json">{{ formatJson(toolReq.arguments) }}</pre>
+          </details>
+        </div>
+        <div v-else-if="delegationReq" class="auth-line2">
+          <span class="auth-reason delegation-task" :title="delegationReq.task">{{ delegationReq.task }}</span>
+          <details class="auth-args">
+            <summary>任务全文</summary>
+            <pre class="auth-json">{{ delegationReq.task }}</pre>
           </details>
         </div>
 
         <!-- L3 范围档（选择作用于「允许」）+ 拒绝/允许，一行收束。
-             通道请求卡无范围概念（批准 = 开通道），隐藏单选组、按钮改语义文案 -->
+             通道请求卡无范围概念（批准 = 开通道）隐藏单选组、按钮改语义文案；
+             委派卡换预授权档单选（后端忽略 scope 只看 delegation_grant） -->
         <div class="auth-line3">
-          <div v-if="!isChannelRequest" class="auth-scope-options" role="radiogroup" aria-label="允许范围">
+          <div
+            v-if="delegationReq"
+            class="auth-scope-options"
+            role="radiogroup"
+            aria-label="子任务授权"
+          >
+            <button
+              type="button"
+              class="auth-scope-opt"
+              :class="{ active: delegationGrant === 'none' }"
+              role="radio"
+              :aria-checked="delegationGrant === 'none'"
+              :disabled="expired"
+              @click="delegationGrant = 'none'"
+            >
+              逐次审批
+            </button>
+            <button
+              type="button"
+              class="auth-scope-opt"
+              :class="{ active: delegationGrant === 'commands' }"
+              role="radio"
+              :aria-checked="delegationGrant === 'commands'"
+              :disabled="expired"
+              @click="delegationGrant = 'commands'"
+            >
+              命令免问
+            </button>
+          </div>
+          <div v-else-if="!isChannelRequest" class="auth-scope-options" role="radiogroup" aria-label="允许范围">
             <button
               v-for="opt in scopeOptions"
               :key="opt.value"
@@ -121,7 +182,7 @@ function deny() {
           <div class="auth-actions">
             <button class="auth-btn auth-btn-deny" :disabled="expired" @click="deny">拒绝</button>
             <button class="auth-btn auth-btn-allow" :disabled="expired" @click="allow">
-              {{ isChannelRequest ? "开启屏幕共享" : "允许" }}
+              {{ delegationReq ? "批准委派" : isChannelRequest ? "开启屏幕共享" : "允许" }}
             </button>
           </div>
         </div>
@@ -222,6 +283,8 @@ function deny() {
   text-overflow: ellipsis;
   color: var(--ip-color-text-secondary);
 }
+/* 委派任务摘要行：独占 L2（无路径并列），复用 auth-reason 视觉 */
+.delegation-task { flex: 1; }
 .auth-args {
   flex-shrink: 0;
   margin-left: auto;

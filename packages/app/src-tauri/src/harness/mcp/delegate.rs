@@ -21,9 +21,13 @@
 //!
 //! ## 授权与深度护栏
 //!
-//! - 授权：项目组内免弹窗（`AuthorizationLevel::Always`；设计稿称 Silent）。
-//!   边界是可调度集合校验，不是弹窗。子会话内部工具授权不变（独立
-//!   PathAuthSession，敏感操作仍过用户手）。
+//! - 授权：委派本身需用户批准（2026-09-03 信任决策前置到委托时刻——
+//!   `chat:delegation-auth-request` 弹卡，「逐次审批（默认）/ 命令免问」
+//!   两档，见 execute_with_context 步骤 2.5）。工具保持
+//!   `AuthorizationLevel::Always`（通用授权层不弹），决策点是工具内部
+//!   治理层（屏幕共享通道同款先例）。子会话内部工具授权不变（独立授权
+//!   记忆，敏感操作仍过用户手）；「命令免问」档 = 预授 seed 写子会话
+//!   授权记忆的 run_command 工具档（父会话零污染）。
 //! - 委派深度 = 1：工具注册按会话 kind 判定（`session_runner` 组装期仅对
 //!   kind='chat' 注入本工具），delegation 子会话拿不到它——「A委派B、B委派回A」
 //!   的乒乓球在结构上不可能。
@@ -49,7 +53,9 @@ use crate::harness::chat_state::ChatState;
 use crate::harness::provider;
 use crate::harness::read_route::ReadRouteRegistry;
 use crate::harness::session_runner::{self, AgentTurnInput, TurnEnv};
-use crate::infra::protocol::{ContentBlock, DelegationStartedPayload};
+use crate::infra::protocol::{
+    ContentBlock, DelegationAuthRequestPayload, DelegationGrant, DelegationStartedPayload,
+};
 
 use super::client::{McpClient, ToolContext};
 use super::manager::McpServerManager;
@@ -284,8 +290,10 @@ impl McpClient for DelegateTool {
         })
     }
 
-    /// 项目组内免弹窗（设计稿称 Silent；现有枚举的 Always 即免授权）。
-    /// 边界是可调度集合校验（execute_with_context 内），不是弹窗。
+    /// 工具本身恒 Allow（通用授权层不弹窗）——委派授权是工具内部决策点
+    /// （execute_with_context 步骤 2.5 自弹 `chat:delegation-auth-request`，
+    /// 屏幕共享通道同款先例），不与通用 Confirm 通道纠缠（scope 三档语义
+    /// 错位、grant 传递只能靠跨函数暂存）。
     fn authorization_level(&self) -> AuthorizationLevel {
         AuthorizationLevel::Always
     }
@@ -352,6 +360,84 @@ impl McpClient for DelegateTool {
             ))
         })?;
 
+        // --- 2.5 委派授权：信任决策前置到委托时刻（2026-09-03 两档拍板）---
+        // 委派是「子 agent 将以自己的模型/工具跑完整子会话」的高信任动作——用户
+        // 在此决定放行与否，并可选「命令免问」预授权（子会话 run_command 工具
+        // 档）。工具本身保持 Always 级（通用授权层零改动），决策点是工具内部
+        // 治理层（屏幕共享通道同款先例）；应答与工具授权共用同一 oneshot
+        // registry + respond_tool_auth 命令，前端审批卡/后台栈/toast 全复用。
+        let parent_cancel = ctx
+            .cancel
+            .clone()
+            .ok_or_else(|| AppError::Internal("delegate_to_agent 缺少父会话取消令牌".into()))?;
+        let auth_registry = app
+            .state::<crate::harness::tool_executor::ToolAuthRegistry>()
+            .inner()
+            .clone();
+        let auth_request_id = Uuid::new_v4().to_string();
+        let rx = auth_registry.register(auth_request_id.clone()).await;
+        let auth_payload = DelegationAuthRequestPayload {
+            request_id: auth_request_id.clone(),
+            conversation_id: ctx.conv_id.clone(),
+            message_id: ctx.turn_id.clone().unwrap_or_default(),
+            agent_name: target.name.clone(),
+            agent_id: target.id.clone(),
+            task: parsed.task.clone(),
+        };
+        if let Err(e) = app.emit("chat:delegation-auth-request", &auth_payload) {
+            let _ = auth_registry.take(&auth_request_id).await;
+            return Err(AppError::Internal(format!("无法通知前端委派授权请求: {e}")));
+        }
+        tracing::info!(
+            target: "ice_paw.delegate",
+            parent_conv = %ctx.conv_id,
+            to_agent = %target.id,
+            request_id = %auth_request_id,
+            "等待用户委派授权（120s 超时）"
+        );
+        let auth_emitter =
+            crate::harness::r#loop::emitter::tauri_emitter(app.clone(), ctx.conv_id.clone());
+        let grant = match crate::harness::tool_executor::wait_for_auth_response(
+            rx,
+            &parent_cancel,
+            &auth_request_id,
+            &auth_registry,
+            auth_emitter.as_ref(),
+            &ctx.conv_id,
+        )
+        .await
+        {
+            Some(resp) if resp.allowed => resp.delegation_grant,
+            Some(_) => {
+                tracing::info!(
+                    target: "ice_paw.delegate",
+                    to_agent = %target.id,
+                    "用户拒绝了委派"
+                );
+                return Err(AppError::AuthorizationRequired {
+                    tool: "delegate_to_agent".into(),
+                    reason: format!(
+                        "用户拒绝了这次委派（目标 {}，任务：{}…）——请与用户确认意图\
+                         后再试，或改为在当前会话直接完成",
+                        target.name,
+                        crate::infra::strings::truncate_to_byte_boundary(
+                            parsed.task.trim(),
+                            40,
+                            Some("…")
+                        )
+                    ),
+                });
+            }
+            // 取消/超时与 wait_for_auth_response 通用语义一致（其内部已清
+            // registry + emit cancel 事件），委派未发生、零残留
+            None => {
+                return Err(AppError::AuthorizationRequired {
+                    tool: "delegate_to_agent".into(),
+                    reason: "委派授权被取消或超时（120 秒内未获用户批准）".into(),
+                });
+            }
+        };
+
         // --- 3. 建子会话（kind='delegation'，继承项目，挂父边） ---
         // 标题 = 裸 task 文本（UX #4：「委派: 」前缀与正文冗余——上下文里
         // kind/父边/agent 已各自可见，标题只负责可读的任务摘要）。旧数据的
@@ -374,10 +460,6 @@ impl McpClient for DelegateTool {
         .await?;
 
         // --- 4. cancel 级联 + ChatState 注册（早退路径 RAII 兜底注销） ---
-        let parent_cancel = ctx
-            .cancel
-            .clone()
-            .ok_or_else(|| AppError::Internal("delegate_to_agent 缺少父会话取消令牌".into()))?;
         let child_cancel = parent_cancel.child_token();
         let chat_state = app.state::<ChatState>().inner().clone();
         chat_state.register(&child_conv_id, child_cancel.clone());
@@ -406,6 +488,24 @@ impl McpClient for DelegateTool {
             "委派开始：专家跑完整子会话"
         );
 
+        // --- 4.5 委派预授权 seed：命令免问档 → 子会话授权记忆的 run_command 工具档 ---
+        // 必须在 run_agent_turn spawn 前完成（子 loop 启动即可能执行命令）；
+        // 只写子会话的表（父会话零污染），生效路径 = Confirm 级判定的
+        // is_tool_authorized 分支（run_command 免弹）。屏幕家族走通道治理，
+        // 不进预授权（不变式 3）。
+        if grant == Some(DelegationGrant::Commands) {
+            app.state::<crate::harness::authority::AuthSessionRegistry>()
+                .inner()
+                .session_for(&child_conv_id)
+                .mark_tool_authorized("run_command")
+                .await;
+            tracing::info!(
+                target: "ice_paw.delegate",
+                child_conv = %child_conv_id,
+                "委派预授权: commands 档（子会话 run_command 免问）"
+            );
+        }
+
         // --- 5. 专家跑完整回合 + inline await 完成信号 ---
         let task_text = parsed.task.clone();
         let done_rx = session_runner::run_agent_turn(
@@ -421,6 +521,10 @@ impl McpClient for DelegateTool {
                 mcp_manager: Arc::clone(app.state::<Arc<McpServerManager>>().inner()),
                 auth_registry: app
                     .state::<crate::harness::tool_executor::ToolAuthRegistry>()
+                    .inner()
+                    .clone(),
+                auth_sessions: app
+                    .state::<crate::harness::authority::AuthSessionRegistry>()
                     .inner()
                     .clone(),
             },

@@ -127,8 +127,9 @@ fn budget_exceeded_fallback(cumulative: usize, cap: usize, max_renewals: u32) ->
 /// W6.2: 13 个输入参数已封装到 [`LoopContext`]，仅保留
 /// `observable`（输出遥测状态）作为单独的 `&mut RoundState` 入参。
 ///
-/// A2-3: 外层 wrapper 负责在任意退出路径清空会话级授权表；
-///       `stream_loop_inner` 才是真正的循环主体。
+/// A2-3→L0: 会话级授权记忆已升为按 conversation 跨轮持久（AuthSessionRegistry
+///       管理，流结束不清空——见 stream_loop 尾注释）；`stream_loop_inner`
+///       才是真正的循环主体。
 ///
 /// REQ-XC-004: 外层 wrapper 同时负责关闭 BatchWriter，
 ///       确保所有路径（成功 / 取消 / 错误 / 超时）都能 final flush。
@@ -143,8 +144,8 @@ pub(crate) async fn stream_loop(ctx: &mut LoopContext, observable: &mut RoundSta
     // REQ-XC-004: 不论退出路径，都关闭 BatchWriter 触发 final flush
     writer.shutdown().await;
     let _ = handle.await;
-    // A2-3: 不论正常结束 / 取消 / 错误，都清空会话级授权表
-    ctx.auth_session.clear().await;
+    // L0（2026-09-03）：会话级授权记忆不再随流清空——「允许此工具/此目录」跨轮
+    // 兑现。生命周期由 AuthSessionRegistry 管理：app 重启即清、会话删除时清。
 
     // === 钩子：ConversationEnd（对话结束，所有退出路径——成功/取消/错误——都触发一次）===
     // 放在 stream_loop_inner 返回后（其内部 finalize_* 已 emit chat:done + 注销 token），
