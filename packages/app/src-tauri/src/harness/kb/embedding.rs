@@ -107,6 +107,7 @@ mod tests {
         ChunkWithEmbedding {
             id: id.into(),
             doc_id: "d".into(),
+            kb_id: "k".into(),
             title: "".into(),
             file_path: "".into(),
             summary: "".into(),

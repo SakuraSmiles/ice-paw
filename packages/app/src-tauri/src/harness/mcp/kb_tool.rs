@@ -180,17 +180,20 @@ fn rrf_fuse(kw: Vec<SearchHitOut>, sem: Vec<SearchHitOut>, limit: usize) -> Vec<
 /// embedding 预生成在 indexer 入库时已做（见 [`crate::harness::kb::indexer`]），
 /// 这里只对预生成漏掉/失败的 chunk 懒生成兜底。配置解析 + 批量生成收敛在
 /// [`crate::harness::kb::embedding`] 模块复用。
+///
+/// 2026-09-04 质检 Q7：per-KB 已解码向量缓存（[`vector_cache`]）——签名一致时
+/// 暖路径完全跳过 chunk 表 load（content 大列 + embedding BLOB 物化）与逐 chunk
+/// 解码；冷路径的解码/召回整体进 spawn_blocking（async worker 不背同步重活）。
+/// 检索语义与缓存前逐行一致（候选面/去重/兜底阈值均未动）。
 async fn try_semantic_search(
     pool: &sqlx::SqlitePool,
     query: &str,
     kb_ids: &[String],
     limit: usize,
 ) -> Option<Vec<SearchHitOut>> {
-    use crate::db::repo::kb::{bytes_to_embedding, load_chunks_for_vector_search};
     use crate::harness::kb::embedding::{ensure_chunks_embedded, resolve_embedding_config};
-    use crate::harness::provider::embedding::{
-        top_k_recall, EmbeddingBackend, OpenAiEmbeddingBackend,
-    };
+    use crate::harness::kb::vector_cache;
+    use crate::harness::provider::embedding::{EmbeddingBackend, OpenAiEmbeddingBackend};
 
     // 1. 配置（必须走 get_all 反序列化，见 harness::kb::embedding 模块文档 / v2 阻断①）
     let prefs = repo::preferences::get_all(pool).await.ok()?;
@@ -206,45 +209,85 @@ async fn try_semantic_search(
     };
     let backend = OpenAiEmbeddingBackend::new(model, url).ok()?;
 
-    // 2. 一次加载所有 chunk（ensure 回填内存，省掉原先的第二次 load）
-    let mut chunks = load_chunks_for_vector_search(pool, kb_ids).await.ok()?;
+    // 2. query 先转向量：暖路径自此不再碰 chunk 表（embed 与候选加载本无依赖，
+    //    先后对调只为让缓存命中路径零 DB 行加载）
+    let query_vec: Vec<f32> = backend
+        .embed(vec![query], &api_key)
+        .await
+        .ok()?
+        .into_iter()
+        .next()?;
 
-    // 3. 兜底：对缺向量的 chunk 懒生成 + 回填（预生成失败/漏掉的）
+    // 3. 暖路径：签名一致 → 读锁内直接召回（全量 load/解码已在缓存入账时完成）
+    let db_sigs = repo::kb::chunk_signatures(pool, kb_ids).await.ok()?;
+    let cache = crate::harness::kb::vector_cache::KbVectorCache::global();
+    if let Some(results) = cache.with_matches(kb_ids, &db_sigs, |flat| {
+        semantic_hits(flat, &query_vec, limit)
+    }) {
+        tracing::debug!(
+            target: "ice_paw.kb",
+            kbs = kb_ids.len(),
+            "语义检索暖路径命中（向量缓存，跳过全量加载）"
+        );
+        return non_empty(results);
+    }
+
+    // 4. 冷路径：全量 load + 懒生成 + 解码/召回离线程 + 入账缓存
+    let mut chunks = repo::kb::load_chunks_for_vector_search(pool, kb_ids).await.ok()?;
+    // 兜底：对缺向量的 chunk 懒生成 + 回填（预生成失败/漏掉的）
     if let Err(e) = ensure_chunks_embedded(pool, &mut chunks, &backend, &api_key).await {
         tracing::warn!(target: "ice_paw.kb", "懒生成 embedding 失败，仅用已有向量检索: {e}");
     }
 
-    // 4. query 转向量
-    let query_emb = backend.embed(vec![query], &api_key).await.ok()?;
-    if query_emb.is_empty() {
-        return None;
+    // 解码（BLOB→f32，千 chunk 级数 MB 物化）+ 全量余弦是同步重活，spawn_blocking
+    // 离开 async worker。entries 同批构建，回来后以 db_sigs 入账——db_sigs 取自
+    // load **之前**的查询（顺序不变式见 vector_cache 模块头）。
+    let spawned = tokio::task::spawn_blocking(move || {
+        let decoded = vector_cache::decode_cold(&chunks);
+        let refs: Vec<&vector_cache::CachedChunk> = decoded.flat.iter().collect();
+        let results = semantic_hits(&refs, &query_vec, limit);
+        let (entries, skipped_kbs) = vector_cache::group_complete(decoded);
+        (entries, skipped_kbs, results)
+    })
+    .await
+    .ok(); // JoinError（panic 等）→ 放弃语义路，回退关键词
+    let (entries, skipped_kbs, results) = spawned?;
+    if !skipped_kbs.is_empty() {
+        tracing::warn!(
+            target: "ice_paw.kb",
+            kbs = ?skipped_kbs,
+            "向量未齐的 KB 本次不入缓存（下次搜索重试懒生成），已嵌入 chunk 仍参与本次召回"
+        );
     }
-    let query_vec = &query_emb[0];
+    cache.store(kb_ids, &db_sigs, entries);
 
-    // 5. 构建候选（有 embedding 的）
-    let candidates: Vec<(String, Vec<f32>)> = chunks
+    non_empty(results)
+}
+
+/// top-K 召回 + 映射回 SearchHitOut（按 file_path 去重）——暖/冷两路共用的纯函数。
+fn semantic_hits(
+    flat: &[&crate::harness::kb::vector_cache::CachedChunk],
+    query_vec: &[f32],
+    limit: usize,
+) -> Vec<SearchHitOut> {
+    use crate::harness::provider::embedding::top_k_recall_refs;
+
+    let candidates: Vec<(&str, &[f32])> = flat
         .iter()
-        .filter_map(|c| {
-            c.embedding
-                .as_ref()
-                .map(|bytes| (c.id.clone(), bytes_to_embedding(bytes)))
-        })
+        .map(|c| (c.id.as_str(), c.vec.as_slice()))
         .collect();
     if candidates.is_empty() {
-        return None;
+        return Vec::new();
     }
+    let top_ids = top_k_recall_refs(query_vec, &candidates);
 
-    // 6. top-K 语义检索
-    let top_ids = top_k_recall(query_vec, &candidates);
-
-    // 7. 映射回 SearchHitOut（按 file_path 去重）
     let mut results = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for id in &top_ids {
         if results.len() >= limit {
             break;
         }
-        if let Some(chunk) = chunks.iter().find(|c| &c.id == id) {
+        if let Some(chunk) = flat.iter().find(|c| &c.id == id) {
             if seen.insert(chunk.file_path.clone()) {
                 results.push(SearchHitOut {
                     kb_name: "语义检索".into(),
@@ -255,12 +298,11 @@ async fn try_semantic_search(
             }
         }
     }
+    results
+}
 
-    if results.is_empty() {
-        None
-    } else {
-        Some(results)
-    }
+fn non_empty(v: Vec<SearchHitOut>) -> Option<Vec<SearchHitOut>> {
+    (!v.is_empty()).then_some(v)
 }
 
 // =========================================================================

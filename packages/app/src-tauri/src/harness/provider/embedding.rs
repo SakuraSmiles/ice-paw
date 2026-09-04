@@ -400,6 +400,17 @@ impl EmbeddingBackend for OpenAiEmbeddingBackend {
 /// - 所有候选维度都不匹配 → 返回 `Vec::new()`
 /// - 所有候选相似度都低于兜底阈值 → 返回 `Vec::new()`
 pub fn top_k_recall(query: &[f32], candidates: &[(String, Vec<f32>)]) -> Vec<String> {
+    let borrowed: Vec<(&str, &[f32])> = candidates
+        .iter()
+        .map(|(content, emb)| (content.as_str(), emb.as_slice()))
+        .collect();
+    top_k_recall_refs(query, &borrowed)
+}
+
+/// [`top_k_recall`] 的借用形态（2026-09-04 质检 Q7）：KB 向量缓存暖路径持有已解码
+/// 向量做余弦，逐条 clone `Vec<f32>`（1536 维 ≈ 6 KB/chunk）会吃掉缓存大半收益。
+/// 排序 / 兜底阈值 / 维度跳过语义与 owned 版逐行一致（owned 版是本函数的薄壳）。
+pub fn top_k_recall_refs(query: &[f32], candidates: &[(&str, &[f32])]) -> Vec<String> {
     if query.is_empty() || candidates.is_empty() {
         return Vec::new();
     }
@@ -418,7 +429,7 @@ pub fn top_k_recall(query: &[f32], candidates: &[(String, Vec<f32>)]) -> Vec<Str
                 return None;
             }
             let sim = crate::db::repo::memory_embedding::cosine_similarity(query, emb);
-            Some((sim, content.as_str())) // 不过滤，统一排序后再取舍
+            Some((sim, *content)) // 不过滤，统一排序后再取舍
         })
         .collect();
 

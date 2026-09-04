@@ -47,7 +47,11 @@ pub async fn update_kb(pool: State<'_, SqlitePool>, input: UpdateKb) -> AppResul
 /// 删除知识库（kb_document 随之外键 CASCADE 删除）
 #[tauri::command]
 pub async fn delete_kb(pool: State<'_, SqlitePool>, id: String) -> AppResult<()> {
-    repo::kb::delete(pool.inner(), &id).await
+    repo::kb::delete(pool.inner(), &id).await?;
+    // 向量缓存内存卫生（Q7）：签名失效本已兜底（行没了 → COUNT 变 → miss），
+    // 此处清条目防已删 KB 的向量白驻内存
+    crate::harness::kb::vector_cache::KbVectorCache::global().remove(&id);
+    Ok(())
 }
 
 /// 重建某知识库的索引（手动触发全量增量扫描，返回本次统计）
@@ -135,6 +139,8 @@ pub async fn rebuild_all_embeddings(pool: State<'_, SqlitePool>) -> AppResult<Re
 
     // 1. 清空所有旧维度向量（index_directory 预生成见 embedding=NULL → 全部重新生成）
     repo::kb::clear_all_kb_embeddings(pool.inner()).await?;
+    // 向量缓存整体失效（Q7）：COUNT(embedding) 变化已会触发签名失效，此为卫生清理
+    crate::harness::kb::vector_cache::KbVectorCache::global().clear();
 
     // 2. 全量重建：遍历所有 KB，index_directory 含阶段1 预生成
     let kbs = repo::kb::list_all(pool.inner()).await?;

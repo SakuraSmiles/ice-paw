@@ -8,8 +8,9 @@
 //! 4. hash 变化 → 解析 + `upsert_document`
 //! 5. 已索引但磁盘不存在 → `delete_document`（源文件被删/移动）
 //!
-//! 文件 IO 用同步 `std::fs`：索引是低频操作（启动 + 文件变更触发），文档量小，
-//! 阻塞开销可忽略；watcher 触发路径在独立 `tokio::spawn` 里，不阻塞主循环。
+//! 文件读取用 `tokio::fs`、解析段（docx zip / pdf 渲染）包 `spawn_blocking`：
+//! 解析是同步 CPU+IO 重活，直跑 async worker 会卡同线程的其他任务（2026-09-04
+//! 质检 Q6；索引低频但单文件可达百 ms 级，watcher 触发路径与主循环共线程池）。
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -20,11 +21,19 @@ use sqlx::SqlitePool;
 use crate::db::models::KbDocumentRow;
 use crate::db::repo;
 use crate::db::repo::kb::ChunkWithEmbedding;
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::harness::kb::embedding::{ensure_chunks_embedded, resolve_embedding_config};
 use crate::harness::provider::embedding::OpenAiEmbeddingBackend;
 
 use super::parser::{content_hash, first_paragraph, parse_markdown, split_into_chunks, ParsedDoc};
+
+/// 解析段 spawn_blocking 的回传形态：成功（office 或 md 兜底两路都产出
+/// `(full_text, ParsedDoc)`）或失败（office 解析 Err——warn + 跳过该文件）。
+/// content 已 move 进闭包，md 兜底转换只能在闭包内做，故用枚举而非裸 Result 嵌套。
+enum ExtractOutcome {
+    Text((String, ParsedDoc)),
+    Failed(AppError),
+}
 
 /// 单次索引的统计（日志 / 返回调用方观察）。
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
@@ -85,8 +94,8 @@ pub async fn index_directory(
             }
         }
 
-        // 3. 读内容
-        let content = match std::fs::read(abs_path) {
+        // 3. 读内容（tokio::fs：索引跑在 async 语境，watcher/重建复用同函数）
+        let content = match tokio::fs::read(abs_path).await {
             Ok(c) => c,
             Err(e) => {
                 tracing::warn!(
@@ -108,24 +117,46 @@ pub async fn index_directory(
             }
         }
 
-        // 4. 解析：office/pdf 走 doc::try_extract，markdown/文本走 parse_markdown。
-        //    full_text 复用给 chunk 切分；office 解析失败 → warn + 跳过（不退回乱码）。
+        // 4. 解析：office/pdf 走 doc::try_extract（docx zip / pdf 渲染是 CPU+IO 同步
+        //    重活），markdown/文本走 parse_markdown。整段 spawn_blocking 离开 async
+        //    worker（Q6）；md 兜底分支一并入内——content 已 move，lossy 转换留在外
+        //    面会拿不到字节。office 解析失败 → warn + 跳过（不退回乱码）。
         let ext = abs_path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        let (full_text, parsed) = match crate::harness::doc::try_extract(&content, ext) {
-            Ok(Some(d)) => {
-                let p = ParsedDoc {
-                    title: d.title.unwrap_or_default(),
-                    summary: first_paragraph(&d.text),
-                    tags: "[]".into(),
-                };
-                (d.text, p)
+        let ext_owned = ext.to_string();
+        let outcome = match tokio::task::spawn_blocking(move || {
+            match crate::harness::doc::try_extract(&content, &ext_owned) {
+                Ok(Some(d)) => {
+                    let p = ParsedDoc {
+                        title: d.title.unwrap_or_default(),
+                        summary: first_paragraph(&d.text),
+                        tags: "[]".into(),
+                    };
+                    ExtractOutcome::Text((d.text, p))
+                }
+                Ok(None) => {
+                    // md/文本兜底：无 office/pdf 识别结果 → 按 markdown 解析
+                    let s = String::from_utf8_lossy(&content).into_owned();
+                    let p = parse_markdown(&s);
+                    ExtractOutcome::Text((s, p))
+                }
+                Err(e) => ExtractOutcome::Failed(e),
             }
-            Ok(None) => {
-                let s = String::from_utf8_lossy(&content).into_owned();
-                let p = parse_markdown(&s);
-                (s, p)
-            }
+        })
+        .await
+        {
+            Ok(o) => o,
             Err(e) => {
+                tracing::warn!(
+                    target: "ice_paw.kb",
+                    "索引跳过：文档解析任务失败 kb={} path={} err={}",
+                    kb_id, rel_path, e
+                );
+                continue;
+            }
+        };
+        let (full_text, parsed) = match outcome {
+            ExtractOutcome::Text(tp) => tp,
+            ExtractOutcome::Failed(e) => {
                 tracing::warn!(
                     target: "ice_paw.kb",
                     "索引跳过：office 文档解析失败 kb={} path={} err={}",
@@ -164,6 +195,7 @@ pub async fn index_directory(
                             .map(|(id, content)| ChunkWithEmbedding {
                                 id: id.clone(),
                                 doc_id: doc_id.clone(),
+                                kb_id: kb_id.to_string(),
                                 title: title.clone(),
                                 file_path: rel_path.to_string(),
                                 summary: parsed.summary.clone(),

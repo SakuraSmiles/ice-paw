@@ -3,6 +3,8 @@
 //! 三级归属：scope='agent'(owner_id=agent_id) / 'project'(owner_id=project_id) / 'global'(owner_id=NULL)。
 //! v1 不含向量/切块，文档级关键词检索。
 
+use std::collections::HashMap;
+
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
@@ -363,11 +365,14 @@ pub fn bytes_to_embedding(bytes: &[u8]) -> Vec<f32> {
 }
 
 /// 加载指定 KB 范围内所有 chunk（含 embedding 向量），供向量检索用。
-/// 返回 (chunk_id, doc_id, title, file_path, content, embedding_bytes)
+/// 返回 (chunk_id, doc_id, kb_id, title, file_path, content, embedding_bytes)
+///
+/// `kb_id` 供 KB 向量缓存（vector_cache）按 KB 分组（2026-09-04 质检 Q7）。
 #[derive(sqlx::FromRow)]
 pub struct ChunkWithEmbedding {
     pub id: String,
     pub doc_id: String,
+    pub kb_id: String,
     pub title: String,
     pub file_path: String,
     pub summary: String,
@@ -384,7 +389,7 @@ pub async fn load_chunks_for_vector_search(
     }
     let placeholders = kb_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
     let sql = format!(
-        "SELECT c.id, c.doc_id, d.title, d.file_path, d.summary, c.content, c.embedding
+        "SELECT c.id, c.doc_id, d.kb_id, d.title, d.file_path, d.summary, c.content, c.embedding
          FROM kb_document_chunk c
          JOIN kb_document d ON c.doc_id = d.id
          WHERE d.kb_id IN ({placeholders})"
@@ -394,6 +399,53 @@ pub async fn load_chunks_for_vector_search(
         q = q.bind(id);
     }
     q.fetch_all(pool).await.map_err(Into::into)
+}
+
+/// 一次 GROUP BY 查询返回每个 KB 的向量缓存签名（2026-09-04 质检 Q7）。
+///
+/// 签名 = `(COUNT(*), COUNT(embedding), MAX(rowid), SUM(LENGTH(content)))`：
+/// - `COUNT(*)` 变化 → chunk 增删（文档重索引 / 增量 upsert 的 DELETE+INSERT）
+/// - `COUNT(embedding)` 变化 → 向量补齐（懒生成 backfill）或清空（切换模型）
+/// - `MAX(rowid)` 变化 → 同数量下的行替换兜底（增量 upsert 删旧插新）
+/// - `SUM(LENGTH(content))` 变化 → **内容变化**——rowid 兜底不够：SQLite 在
+///   DELETE 后回收 rowid（删最高行再插同数量，MAX 不变；单测实测踩中），且
+///   变更 chunk 的向量会被 indexer 预生成立即回填，前三维全数复原 → 唯有
+///   内容长度和能区分「换过内容的同构表」。LENGTH 只做字符计数不物化到
+///   Rust，GROUP BY 扫行本就触页，无额外 IO。
+///
+/// 已知盲区（信任边界）：同维度向量**原地重写**（update_chunk_embedding 对
+/// 非 NULL 行直接覆盖）不改变任何一维——仓内无此路径（ensure 只填 NULL、
+/// 换模型走 clear 全清），仅直改 DB 可触发，与 read_route 指纹缓存同级信任。
+///
+/// 查询 KB 无 chunk → 不在返回 map 中（调用方以「缺项 = 未缓存/失效」处理；
+/// 空 KB 的零签条目由缓存层显式存入）。
+pub type KbSig = (i64, i64, i64, i64);
+
+pub async fn chunk_signatures(
+    pool: &SqlitePool,
+    kb_ids: &[String],
+) -> AppResult<HashMap<String, KbSig>> {
+    let mut out = HashMap::new();
+    if kb_ids.is_empty() {
+        return Ok(out);
+    }
+    let placeholders = kb_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!(
+        "SELECT d.kb_id, COUNT(*), COUNT(c.embedding), COALESCE(MAX(c.rowid), 0), \
+                COALESCE(SUM(LENGTH(c.content)), 0)
+         FROM kb_document_chunk c
+         JOIN kb_document d ON c.doc_id = d.id
+         WHERE d.kb_id IN ({placeholders})
+         GROUP BY d.kb_id"
+    );
+    let mut q = sqlx::query_as::<_, (String, i64, i64, i64, i64)>(&sql);
+    for id in kb_ids {
+        q = q.bind(id);
+    }
+    for (kb_id, total, embedded, max_rowid, content_len) in q.fetch_all(pool).await? {
+        out.insert(kb_id, (total, embedded, max_rowid, content_len));
+    }
+    Ok(out)
 }
 
 /// 更新 chunk 的 embedding 向量
@@ -609,6 +661,72 @@ mod tests {
         let (total, embedded) = kb_chunk_stats(&pool, "k1").await.unwrap();
         assert_eq!(total, 3, "3 个 chunk");
         assert_eq!(embedded, 2, "前 2 个有向量");
+    }
+
+    /// chunk_signatures：per-KB 四标量签名（Q7 向量缓存的失效判据）。
+    /// 覆盖：缺项（无 chunk 的 KB 不在 map）/ 数量与向量数 / 向量补齐改变
+    /// COUNT(embedding) / **rowid 回收陷阱**（同数量行替换、MAX(rowid) 都不变，
+    /// 唯 SUM(LENGTH(content)) 能区分——单测实测踩中）/ kb_id 字段回读。
+    #[tokio::test]
+    async fn chunk_signatures_track_kb_state() {
+        let pool = fresh_pool().await;
+        create(&pool, &new_kb("k1", "t")).await.unwrap();
+        create(&pool, &new_kb("k2", "t2")).await.unwrap();
+        let doc1 = upsert_document(&pool, "k1", "a.md", "T", "s", "[]", Some("h"), None)
+            .await
+            .unwrap();
+
+        // k2 无 chunk → 不在 map
+        let sigs = chunk_signatures(&pool, &["k1".into(), "k2".into()])
+            .await
+            .unwrap();
+        assert!(!sigs.contains_key("k2"), "无 chunk 的 KB 不在签名 map: {sigs:?}");
+
+        let need = upsert_chunks_incremental(&pool, &doc1, &["x".into(), "yy".into()])
+            .await
+            .unwrap();
+        let sigs = chunk_signatures(&pool, &["k1".into()]).await.unwrap();
+        let (total, embedded, _, _) = sigs["k1"];
+        assert_eq!((total, embedded), (2, 0), "2 chunk，0 向量");
+
+        // 补向量 → COUNT(embedding) 变
+        update_chunk_embedding(&pool, &need[0].0, &embedding_to_bytes(&[0.1]))
+            .await
+            .unwrap();
+        update_chunk_embedding(&pool, &need[1].0, &embedding_to_bytes(&[0.2]))
+            .await
+            .unwrap();
+        let sigs = chunk_signatures(&pool, &["k1".into()]).await.unwrap();
+        assert_eq!(sigs["k1"].1, 2, "补满向量");
+
+        // rowid 回收陷阱（生产场景同构）：此 doc 的行就是全表最高行，DELETE 后
+        // 新行回收同号 rowid，MAX(rowid) 不变；向量被 indexer 预生成回填后
+        // COUNT(embedding) 也复原——前三维全数相同，签名只能靠内容长度和区分
+        let sig_before = sigs["k1"];
+        assert_eq!(sig_before.2, 2, "前置：本 doc 行即全表最高 rowid");
+        upsert_chunks_incremental(&pool, &doc1, &["zzz".into(), "yy".into()])
+            .await
+            .unwrap();
+        let sigs_after = chunk_signatures(&pool, &["k1".into()]).await.unwrap();
+        assert_eq!(sigs_after["k1"].0, 2, "仍 2 chunk");
+        assert_eq!(
+            sigs_after["k1"].2, sig_before.2,
+            "rowid 回收：MAX 不变（正是陷阱所在）"
+        );
+        assert_ne!(
+            sigs_after["k1"].3, sig_before.3,
+            "内容长度和必须区分换过内容的同构表"
+        );
+
+        // load_chunks_for_vector_search 回读 kb_id（缓存按 KB 分组依赖）
+        let chunks = load_chunks_for_vector_search(&pool, &["k1".into()])
+            .await
+            .unwrap();
+        assert!(
+            chunks.iter().all(|c| c.kb_id == "k1"),
+            "kb_id 应随行回读: {:?}",
+            chunks.iter().map(|c| c.kb_id.clone()).collect::<Vec<_>>()
+        );
     }
 
     /// clear_all_kb_embeddings：清空所有 chunk 的 embedding
