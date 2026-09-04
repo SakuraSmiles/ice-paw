@@ -24,16 +24,37 @@ pub(crate) const TERMINATE_AT: u32 = 6;
 /// 编译期锁定不变式：先 nudge 后终止（改阈值漏改语义时直接编译失败）
 const _: () = assert!(TERMINATE_AT > NUDGE_AT);
 
+/// AppError 变体 Display 壳前缀（error.rs `#[error]` 模板首段）。工具错误经
+/// `e.to_string()` 落 tool_result 时带这层壳，剥掉后才露工具层的真家族前缀。
+const VARIANT_SHELL_PREFIXES: &[&str] = &[
+    "参数校验失败: ",
+    "内部错误: ",
+    "IO 错误: ",
+    "Stronghold 错误: ",
+    "Tauri 错误: ",
+    "JSON 错误: ",
+    "数据库错误: ",
+    "数据库迁移错误: ",
+];
+
 /// 错误签名：首行截到首个冒号（含中文全角）为止。
 ///
 /// 工具错误文案的稳定前缀（如「文件不存在」「write_file 写入失败」）即错误家族；
 /// 其后的路径/原因各不相同——正好把「换文件名的同类失败」折叠成同一签名。裸 io
 /// 错误（如「系统找不到指定的路径。 (os error 3)」）无冒号则取整行，同样稳定。
+///
+/// 2026-09-04 质检 Q2：先剥一层 AppError 变体壳再截家族——不剥则同变体全族折叠
+/// 成同一签名（Validation 壳把「move_file 参数解析失败」「路径不存在」「按键无效」
+/// 全折成「参数校验失败」），混家族连败计数失真：提前误终止 + nudge 指认的家族错位。
 pub(crate) fn error_kind(err: &str) -> &str {
     let first_line = err.lines().next().unwrap_or("");
-    match first_line.find([':', '：']) {
-        Some(i) => first_line[..i].trim(),
-        None => first_line.trim(),
+    let stripped = VARIANT_SHELL_PREFIXES
+        .iter()
+        .find_map(|p| first_line.strip_prefix(p))
+        .unwrap_or(first_line);
+    match stripped.find([':', '：']) {
+        Some(i) => stripped[..i].trim(),
+        None => stripped.trim(),
     }
 }
 
@@ -113,6 +134,36 @@ mod tests {
 
         // 多行错误只看首行
         assert_eq!(error_kind("第一行: x\n第二行"), "第一行");
+    }
+
+    #[test]
+    fn error_kind_strips_apperror_variant_shell() {
+        // Q2（2026-09-04）：工具错误经 e.to_string() 带 AppError 变体壳——不剥则
+        // 同变体全族折叠成一签名（Validation 壳把 move_file 参数解析失败/文件不存在
+        // 全折成「参数校验失败」，混家族连败误终止）
+        assert_eq!(
+            error_kind("参数校验失败: move_file 参数解析失败: 缺少字段"),
+            "move_file 参数解析失败"
+        );
+        assert_eq!(
+            error_kind("参数校验失败: 按键无效: 不支持的组合"),
+            "按键无效"
+        );
+        assert_eq!(
+            error_kind("IO 错误: 读取文件失败: D:/x/a.md: 拒绝访问"),
+            "读取文件失败"
+        );
+        assert_eq!(
+            error_kind("内部错误: 模板无效: bad.docx 缺少部件"),
+            "模板无效"
+        );
+        // 剥壳后裸 io 无冒号 → 取整行（家族=os 错误级，比「IO 错误」变体级更准）
+        assert_eq!(
+            error_kind("IO 错误: 系统找不到指定的路径。 (os error 3)"),
+            "系统找不到指定的路径。 (os error 3)"
+        );
+        // 无壳形态不受影响（回归：裸家族串原样截取）
+        assert_eq!(error_kind("文件不存在: x.rs"), "文件不存在");
     }
 
     #[test]

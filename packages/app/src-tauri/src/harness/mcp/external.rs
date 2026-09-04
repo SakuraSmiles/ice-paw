@@ -380,15 +380,19 @@ impl ExternalMcpServer {
 
         Self::write_line(&self.writer, req).await?;
 
-        tokio::time::timeout(Duration::from_secs(timeout_secs), rx)
-            .await
-            .map_err(|_| {
-                AppError::Internal(format!(
+        match tokio::time::timeout(Duration::from_secs(timeout_secs), rx).await {
+            Ok(res) => res.map_err(|_| AppError::Internal("MCP Server 通道关闭".into())),
+            Err(_) => {
+                // 超时兜底：从 pending 表摘除本条，防挂死 server 上连续超时无界累积
+                // stale sender（2026-09-04 质检 Q3）。server 迟到回应同 id 时
+                // read_loop 取不到条目只会跳过，无副作用。
+                self.pending.lock().await.remove(req_id);
+                Err(AppError::Internal(format!(
                     "MCP Server '{}' 请求超时（{}s）: {}",
                     self.name, timeout_secs, req.method
-                ))
-            })?
-            .map_err(|_| AppError::Internal("MCP Server 通道关闭".into()))
+                )))
+            }
+        }
     }
 
     async fn write_line<T: serde::Serialize>(
