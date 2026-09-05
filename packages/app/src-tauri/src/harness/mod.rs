@@ -32,6 +32,8 @@ pub mod proposal_guard;
 pub mod proposal_registry;
 pub mod provider;
 pub mod read_route;
+#[cfg(test)]
+mod read_path_bench;
 pub mod reconcile;
 pub mod references;
 pub mod retry;

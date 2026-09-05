@@ -517,6 +517,7 @@ impl McpClient for DelegateTool {
                 tool_app: Some(app.clone()),
                 pool: ctx.pool.clone(),
                 route_registry: app.state::<ReadRouteRegistry>().inner(),
+                chat_state: chat_state.clone(),
                 global_registry: Arc::clone(app.state::<Arc<McpRegistry>>().inner()),
                 mcp_manager: Arc::clone(app.state::<Arc<McpServerManager>>().inner()),
                 auth_registry: app

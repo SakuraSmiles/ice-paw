@@ -19,6 +19,8 @@
 //! 消费前必须经 [`hydrate_image_refs`] 还原（字节只在 messages 行）或
 //! [`DerivedMessage::to_content_blocks`] 降级——ref 形态不得直接进 LLM / 对账平面。
 
+use std::collections::HashMap;
+
 use crate::db::models::SessionEventRow;
 use crate::harness::event_log::{
     AssistantMessagePayload, PayloadBlock, ToolResultMessagePayload, UserMessagePayload,
@@ -123,6 +125,11 @@ pub struct DeriveResult {
 /// 回放入口。输入须按 `seq` 升序（`repo::session_event::list_by_session` 即此序）。
 pub fn derive_history(events: &[SessionEventRow]) -> DeriveResult {
     let mut result = DeriveResult::default();
+    // message_id → messages 下标。supersede 定位 O(1)（旧线性 find 在长会话是
+    // O(事件×消息)）。登记**全部**消息类（user/tool_result 也进表）——与旧
+    // `find` 搜全表语义一致；`or_insert` 保首现下标，重复 id 的病理数据同样
+    // 原位覆写首个。
+    let mut index: HashMap<String, usize> = HashMap::new();
     for ev in events {
         let seq = ev.seq;
         match ev.kind.as_str() {
@@ -131,6 +138,7 @@ pub fn derive_history(events: &[SessionEventRow]) -> DeriveResult {
                     let mid = require_message_id(ev, &mut result);
                     push_message(
                         &mut result,
+                        &mut index,
                         DerivedMessage {
                             message_id: mid,
                             role: "user".into(),
@@ -153,6 +161,7 @@ pub fn derive_history(events: &[SessionEventRow]) -> DeriveResult {
                     let mid = require_message_id(ev, &mut result);
                     push_message(
                         &mut result,
+                        &mut index,
                         DerivedMessage {
                             message_id: mid,
                             role: "user".into(),
@@ -176,15 +185,15 @@ pub fn derive_history(events: &[SessionEventRow]) -> DeriveResult {
                     Ok(p) => {
                         let mid = require_message_id(ev, &mut result);
                         // supersede：同 message_id 已存在 → 原位覆写内容（位置取首现）
-                        if let Some(existing) =
-                            result.messages.iter_mut().find(|m| m.message_id == mid)
-                        {
+                        if let Some(&i) = index.get(&mid) {
+                            let existing = &mut result.messages[i];
                             existing.content = p.content;
                             existing.blocks = p.blocks;
                             existing.last_seq = seq;
                         } else {
                             push_message(
                                 &mut result,
+                                &mut index,
                                 DerivedMessage {
                                     message_id: mid,
                                     role: "assistant".into(),
@@ -240,7 +249,11 @@ fn require_message_id(ev: &SessionEventRow, result: &mut DeriveResult) -> String
     }
 }
 
-fn push_message(result: &mut DeriveResult, mut msg: DerivedMessage) {
+fn push_message(
+    result: &mut DeriveResult,
+    index: &mut HashMap<String, usize>,
+    mut msg: DerivedMessage,
+) {
     // 与 legacy 提取器同构的空回退：blocks 空 → [Text(content)]（空内容则为 [Text("")]，
     // 与行「content=''+blocks='[]'」的提取结果一致，差异不会被回退规则抹掉）。
     if msg.blocks.is_empty() {
@@ -248,6 +261,9 @@ fn push_message(result: &mut DeriveResult, mut msg: DerivedMessage) {
             text: msg.content.clone(),
         })];
     }
+    index
+        .entry(msg.message_id.clone())
+        .or_insert(result.messages.len());
     result.messages.push(msg);
 }
 

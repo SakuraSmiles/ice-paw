@@ -216,6 +216,7 @@ async fn run_turn_with_map(
         tool_app: None,
         pool: pool.clone(),
         route_registry: &route_registry,
+        chat_state: crate::harness::chat_state::ChatState::new(),
         global_registry,
         mcp_manager: Arc::new(McpServerManager::new()),
         auth_registry: ToolAuthRegistry::new(),

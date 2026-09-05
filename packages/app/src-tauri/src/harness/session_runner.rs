@@ -70,6 +70,9 @@ pub(crate) struct TurnEnv<'a> {
     pub pool: SqlitePool,
     /// 读路径路由缓存（全局共享实例的引用）
     pub route_registry: &'a ReadRouteRegistry,
+    /// 在途会话注册表（P1：resolve_for_turn 的后台刷新等会话静默用；
+    /// Clone = Arc 共享，与 chat_cmd 持有的是同一实例）
+    pub chat_state: crate::harness::chat_state::ChatState,
     /// 全局 MCP 注册表（工具组装快照来源）
     pub global_registry: Arc<McpRegistry>,
     pub mcp_manager: Arc<McpServerManager>,
@@ -152,7 +155,11 @@ pub(crate) async fn run_agent_turn(
     // 对账 diff / 混合纪元 / 零事件残留，error 后**照常派生**（历史可能缺行，
     // 不再静默回退）。排查走 reconcile_session / get_read_route_status；
     // 回滚 = revert 阶段 1 commit（messages 表双写持续，Legacy 可整体恢复）。
-    let route = env.route_registry.resolve(pool, &conv_id).await?;
+    // P1：走热路径变体（指纹过期先返回旧决策 + 后台刷新），发送不同步等全量对账。
+    let route = env
+        .route_registry
+        .resolve_for_turn(pool, &conv_id, &env.chat_state)
+        .await?;
     if route.route != crate::harness::read_route::ReadRoute::Derive {
         // no_events_empty = 新建未发消息的空会话（零事件零行）——正常形态，
         // 不值得 error 级告警；其余非绿（有行零事件 / 对账 diff / 混合纪元）

@@ -194,6 +194,7 @@ pub async fn send_message(
             tool_app: Some(app.clone()),
             pool: pool.inner().clone(),
             route_registry: route_registry.inner(),
+            chat_state: chat_state.inner().clone(),
             global_registry: Arc::clone(global_registry.inner()),
             mcp_manager: Arc::clone(mcp_manager.inner()),
             auth_registry: auth_registry.inner().clone(),

@@ -21,17 +21,29 @@
 //! 都会触发重对账。原地篡改行内容（无新行/新事件，仅 buggy 写路径所为）不被指纹察觉，
 //! 但活跃会话下一轮即刷新；休眠会话不被读取故无影响。**始终新鲜**的 ground truth 用
 //! `reconcile_session` 命令（不受缓存影响，每次全量对账）。
+//!
+//! ## P1 优化：对账下热路径（resolve_for_turn）
+//!
+//! Phase 2B 后 resolve 的决策在发送路径上只剩日志用途，但活跃会话指纹每轮必变
+//! → 每轮发送同步付一次全量对账（千轮会话实测 ~0.75s/debug）。发送路径改走
+//! [`ReadRouteRegistry::resolve_for_turn`]：指纹过期时**返回上次决策 + spawn
+//! 后台刷新**（等会话静默再对账，写回缓存）——对账频率不变，只是不在发送前
+//! 同步等它；非绿检测延迟最多 1 turn。诊断命令 `get_read_route_status` 仍走
+//! [`ReadRouteRegistry::resolve`]（恒新鲜）。
 
 use std::collections::{HashMap, HashSet};
-use std::sync::RwLock;
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::Duration;
 
 use serde::Serialize;
 use sqlx::SqlitePool;
+use tokio::time::sleep;
 
 use crate::context::history::parse_content_blocks;
 use crate::db::models::MessageRow;
 use crate::db::repo;
 use crate::error::AppResult;
+use crate::harness::chat_state::ChatState;
 use crate::harness::derive::{derive_history, hydrate_image_refs, DerivedMessage};
 use crate::harness::event_log::PayloadBlock;
 use crate::harness::reconcile::{reconcile_session, ReconcileReport};
@@ -109,9 +121,13 @@ pub struct ReadRouteStatus {
 /// 全局读路径路由缓存（注入 Tauri State）。
 ///
 /// 无并发 await 持锁（缓存读写是纯内存瞬态操作），故用 `std::sync::RwLock`。
+/// cache/inflight 裸字段再包一层 `Arc` 是为了给后台刷新任务（`spawn_refresh`）
+/// 一个廉价句柄——不 Arc 整个 registry（Tauri State 不可克隆）。
 #[derive(Default)]
 pub struct ReadRouteRegistry {
-    cache: RwLock<HashMap<String, CacheEntry>>,
+    cache: Arc<RwLock<HashMap<String, CacheEntry>>>,
+    /// 后台刷新单飞标记（同一会话同时至多一个刷新任务在途）。
+    inflight: Arc<Mutex<HashSet<String>>>,
 }
 
 impl ReadRouteRegistry {
@@ -141,6 +157,12 @@ impl ReadRouteRegistry {
                 },
             );
         }
+    }
+
+    /// 最近一次决策（不校验指纹——给「过期先返回旧值」的热路径用）。
+    fn last_decision(&self, conv_id: &str) -> Option<RouteDecision> {
+        let cache = self.cache.read().ok()?;
+        cache.get(conv_id).map(|e| e.decision.clone())
     }
 
     /// 诊断出口：克隆当前所有缓存条目（路由器看过哪些会话、各走哪条路径、原因）。
@@ -179,42 +201,158 @@ impl ReadRouteRegistry {
             return Ok(d);
         }
 
-        let decision = if max_seq == 0 {
-            // 零事件：pre-Phase-0 旧会话，无事件可派生。
-            // 细分（降噪）：零事件**且零行** = 新建未发消息的空会话——正常形态，
-            // 监控侧按 debug 报（no_events_empty）；**有行零事件**才是异常
-            // （backfill 漏网残留 / 写路径漏发事件），保持 no_events + error 告警。
-            if max_rowid == 0 {
-                RouteDecision::legacy("no_events_empty", 0, 0)
-            } else {
-                RouteDecision::legacy("no_events", 0, 0)
-            }
-        } else {
-            let report = reconcile_session(pool, conversation_id).await?;
-            let d = classify(&report);
-            if !report.diffs.is_empty() {
-                tracing::warn!(
-                    target: "ice_paw.read_route",
-                    conv = conversation_id,
-                    diffs = report.diffs.len(),
-                    "会话对账存在差异（差异即 bug 嫌疑，见 reconcile_session）——Phase 2B 起恒走派生不回退 legacy，历史可能缺行"
-                );
-            }
-            d
-        };
-
-        tracing::info!(
-            target: "ice_paw.read_route",
-            conv = conversation_id,
-            route = ?decision.route,
-            reason = %decision.reason,
-            events = decision.events_total,
-            diffs = decision.diffs,
-            "读路径路由决策"
-        );
+        let decision = classify_session(pool, conversation_id, max_seq, max_rowid).await?;
         self.put(conversation_id, max_seq, max_rowid, decision.clone());
         Ok(decision)
     }
+
+    /// **发送热路径变体**（P1 优化）：指纹过期时返回上次决策 + spawn 后台刷新，
+    /// 不在本轮发送前同步等全量对账（千轮会话对账 ~0.75s/debug）。
+    ///
+    /// 行为契约：
+    /// - 指纹命中 → 缓存决策（与 `resolve` 相同的快路径）。
+    /// - 零事件快捷分支（`max_seq == 0`）：分类只依赖两个已查好的标量、无对账，
+    ///   同步算完即缓存（与 `resolve` 零差异）。
+    /// - 有旧决策 + 指纹过期 → 返回旧决策 + [`Self::spawn_refresh`]（等会话静默
+    ///   后对账写回）。非绿检测延迟最多 1 turn；决策在 Phase 2B 后只剩监控用途，
+    ///   延迟不改变读路径（恒派生）。
+    /// - 首见（无缓存）→ 退化为同步 [`Self::resolve`]：一次性成本与旧路径相同，
+    ///   诊断语义完整（app 重启后每会话第一次发送各付一次）。
+    pub async fn resolve_for_turn(
+        &self,
+        pool: &SqlitePool,
+        conversation_id: &str,
+        chat_state: &ChatState,
+    ) -> AppResult<RouteDecision> {
+        let max_seq = repo::session_event::max_seq(pool, conversation_id).await?;
+        let max_rowid = repo::message::max_rowid(pool, conversation_id).await?;
+
+        if let Some(d) = self.cached(conversation_id, max_seq, max_rowid) {
+            return Ok(d);
+        }
+        if max_seq == 0 {
+            let decision = classify_session(pool, conversation_id, max_seq, max_rowid).await?;
+            self.put(conversation_id, max_seq, max_rowid, decision.clone());
+            return Ok(decision);
+        }
+        match self.last_decision(conversation_id) {
+            Some(d) => {
+                self.spawn_refresh(pool.clone(), conversation_id.to_string(), chat_state.clone());
+                Ok(d)
+            }
+            None => self.resolve(pool, conversation_id).await,
+        }
+    }
+
+    /// 单飞后台刷新：等会话静默（本轮结束）→ 重读指纹 → 仍未被追平则全量对账
+    /// 写回缓存。
+    ///
+    /// 等静默的原因：发送途中读库会撞上「行已落、事件未落」的轮中间态，产生
+    /// 假 MISSING_IN_DERIVED 噪音（对账的 incomplete_turn 容忍项只覆盖无
+    /// turn_ended 的**整轮**，覆盖不了轮内瞬态）。单飞防同会话刷新任务堆积；
+    /// in-flight 任务收尾时重读最新指纹，故排队丢失的刷新由在途者代劳。
+    fn spawn_refresh(&self, pool: SqlitePool, conv_id: String, chat_state: ChatState) {
+        {
+            let mut inflight = self.inflight.lock().unwrap_or_else(|e| e.into_inner());
+            if inflight.contains(&conv_id) {
+                return;
+            }
+            inflight.insert(conv_id.clone());
+        }
+        let cache = Arc::clone(&self.cache);
+        let inflight = Arc::clone(&self.inflight);
+        let key = conv_id.clone();
+        tokio::spawn(async move {
+            // RAII：任何退出路径（含 panic）都释放单飞标记，防会话刷新永久卡死
+            let _release = scopeguard::guard((), |_| {
+                inflight.lock().unwrap_or_else(|e| e.into_inner()).remove(&key);
+            });
+            // 等会话静默：2s 一查，上限 10 分钟（超时照跑——对账只读，
+            // incomplete_turn 容忍项兜住未闭合轮；活着的长回合不值得等更久）
+            for _ in 0..300 {
+                if !chat_state.is_streaming(&conv_id) {
+                    break;
+                }
+                sleep(Duration::from_secs(2)).await;
+            }
+            let max_seq = match repo::session_event::max_seq(&pool, &conv_id).await {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(target: "ice_paw.read_route", conv = %conv_id, "后台对账指纹查询失败: {e}");
+                    return;
+                }
+            };
+            let max_rowid = match repo::message::max_rowid(&pool, &conv_id).await {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(target: "ice_paw.read_route", conv = %conv_id, "后台对账指纹查询失败: {e}");
+                    return;
+                }
+            };
+            // 等待期间缓存已被追平（同步 resolve 或前一个任务先到）→ 无事可做
+            if let Ok(c) = cache.read() {
+                if let Some(e) = c.get(&conv_id) {
+                    if e.max_seq == max_seq && e.max_rowid == max_rowid {
+                        return;
+                    }
+                }
+            }
+            match classify_session(&pool, &conv_id, max_seq, max_rowid).await {
+                Ok(decision) => {
+                    if let Ok(mut w) = cache.write() {
+                        w.insert(conv_id.clone(), CacheEntry { max_seq, max_rowid, decision });
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(target: "ice_paw.read_route", conv = %conv_id, "后台对账失败: {e}")
+                }
+            }
+        });
+    }
+}
+
+/// 指纹过期时的决策计算（`resolve` 与后台刷新共用）：零事件快捷分类或
+/// 全量对账 + 分类 + 决策日志。
+async fn classify_session(
+    pool: &SqlitePool,
+    conversation_id: &str,
+    max_seq: i64,
+    max_rowid: i64,
+) -> AppResult<RouteDecision> {
+    let decision = if max_seq == 0 {
+        // 零事件：pre-Phase-0 旧会话，无事件可派生。
+        // 细分（降噪）：零事件**且零行** = 新建未发消息的空会话——正常形态，
+        // 监控侧按 debug 报（no_events_empty）；**有行零事件**才是异常
+        // （backfill 漏网残留 / 写路径漏发事件），保持 no_events + error 告警。
+        if max_rowid == 0 {
+            RouteDecision::legacy("no_events_empty", 0, 0)
+        } else {
+            RouteDecision::legacy("no_events", 0, 0)
+        }
+    } else {
+        let report = reconcile_session(pool, conversation_id).await?;
+        let d = classify(&report);
+        if !report.diffs.is_empty() {
+            tracing::warn!(
+                target: "ice_paw.read_route",
+                conv = conversation_id,
+                diffs = report.diffs.len(),
+                "会话对账存在差异（差异即 bug 嫌疑，见 reconcile_session）——Phase 2B 起恒走派生不回退 legacy，历史可能缺行"
+            );
+        }
+        d
+    };
+
+    tracing::info!(
+        target: "ice_paw.read_route",
+        conv = conversation_id,
+        route = ?decision.route,
+        reason = %decision.reason,
+        events = decision.events_total,
+        diffs = decision.diffs,
+        "读路径路由决策"
+    );
+    Ok(decision)
 }
 
 /// 把对账报告分类为路由决策（纯函数，便于单测）。
@@ -247,10 +385,12 @@ fn classify(report: &ReconcileReport) -> RouteDecision {
 /// 从事件回放派生 [`HistoryStage`](crate::context::stages::HistoryStage) 所需的
 /// `Vec<MessageRow>`（Phase 2A 派生读路径）。
 ///
-/// 流程：全量读事件 → `derive_history` 回放 → `id_rowid_map` 锚回真 rowid →
-/// 转为 `MessageRow`（`content_blocks` 序列化，与 legacy 行 `parse_content_blocks`
-/// 对称往返）→ tail-limit 到 [`HISTORY_LOAD_LIMIT`](repo::message::HISTORY_LOAD_LIMIT)
-/// （与 legacy `list_by_conversation` 的窗口严格一致）。
+/// 流程：全量读事件 → `derive_history` 回放 → tail-limit 截到
+/// [`HISTORY_LOAD_LIMIT`](repo::message::HISTORY_LOAD_LIMIT)（与 legacy
+/// `list_by_conversation` 的窗口严格一致；**前置**到水合/序列化之前，省窗口外
+/// 消息的无谓开销）→ Image 引用水合 → `id_rowid_map` 锚回真 rowid → 转为
+/// `MessageRow`（`content_blocks` 序列化，与 legacy 行 `parse_content_blocks`
+/// 对称往返）。
 ///
 /// 仅对路由判为 Derive 的会话调用（调用方负责）；Phase 2B 起 session_runner 恒派生
 ///（非绿路由仅记 error 日志照常派生，resolve 已降级健康监控）。
@@ -258,6 +398,7 @@ pub async fn load_history_from_events(
     pool: &SqlitePool,
     conversation_id: &str,
 ) -> AppResult<Vec<MessageRow>> {
+    let started = std::time::Instant::now();
     let events = repo::session_event::list_by_session(pool, conversation_id, None).await?;
     let mut derived = derive_history(&events);
     // 回放 issues：路由阶段已保证 Derive 会话零 diff（issues 进 DERIVE_ISSUE diff），
@@ -270,6 +411,16 @@ pub async fn load_history_from_events(
             "派生读路径遇到回放 issue（路由缓存可能已过期）；首个: {:?}",
             derived.issues.first()
         );
+    }
+
+    // tail-limit 前置（P1）：先截派生消息再水合/序列化——长会话窗口外 ~95%
+    // 消息的 ref 查行与 blocks 序列化全是白干。输出与「转换后 drain」逐条相等：
+    // 水合/转换逐消息独立，drain 恒去前缀；被丢弃消息的 ref 从此不被观测，
+    // 水合未命中计数也随之窗口化（更贴近下游实际可见面）。
+    let limit = repo::message::HISTORY_LOAD_LIMIT as usize;
+    let total_messages = derived.messages.len();
+    if total_messages > limit {
+        derived.messages.drain(0..total_messages - limit);
     }
 
     // Image 引用水合（S1 阶段 3）：事件 payload 的 image_ref → 行 content_blocks
@@ -320,18 +471,22 @@ pub async fn load_history_from_events(
         }
     }
 
-    let mut rows: Vec<MessageRow> = derived
+    let rows: Vec<MessageRow> = derived
         .messages
         .iter()
         .map(|m| to_message_row(m, conversation_id, &rowid_map, &created_map))
         .collect();
-
-    // tail-limit 与 legacy 对齐（最近 HISTORY_LOAD_LIMIT 条）。
-    let limit = repo::message::HISTORY_LOAD_LIMIT as usize;
-    if rows.len() > limit {
-        let drop = rows.len() - limit;
-        rows.drain(0..drop);
-    }
+    // P1 遥测（debug 级）：发送路径每轮此函数的成本 = O(事件总量)；
+    // 长会话上若 elapsed 异常增长，看 read_path_bench 的分段归因。
+    tracing::debug!(
+        target: "ice_paw.read_route",
+        conv = conversation_id,
+        events = events.len(),
+        derived_messages = total_messages,
+        window = rows.len(),
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "派生历史加载完成"
+    );
     Ok(rows)
 }
 
@@ -446,6 +601,77 @@ mod tests {
         assert!(reg.cached("c1", 6, 100).is_none(), "max_seq 变应 miss");
         assert!(reg.cached("c1", 5, 101).is_none(), "max_rowid 变应 miss");
         assert!(reg.cached("c2", 5, 100).is_none(), "其他会话 miss");
+    }
+
+    /// 热路径变体：指纹过期 → **立即返回上次决策**（green 快照），后台任务等
+    /// 静默后对账写回（最终非绿）。ChatState 空表 = 恒静默，任务立即跑。
+    /// 「d2 仍 green 而库中已有 rogue 行」本身就证明它没同步等对账——同步等
+    /// 会得到非绿。
+    #[tokio::test]
+    async fn resolve_for_turn_returns_stale_then_background_refresh_writes_back() {
+        let pool = seeded_pool().await;
+        let reg = ReadRouteRegistry::new();
+        let chat_state = ChatState::new();
+        script(&pool).await;
+
+        let d1 = reg.resolve(&pool, "c1").await.unwrap(); // 首见同步：green
+        assert_eq!(d1.route, ReadRoute::Derive);
+
+        // 分叉：写一条无事件行 → 指纹过期
+        write_row(
+            &pool,
+            "rogue-msg",
+            "assistant",
+            "幽灵回复",
+            &[ContentBlock::text("幽灵回复")],
+        )
+        .await;
+
+        // 热路径：立即返回缓存决策（旧快照 = green），不等全量对账
+        let d2 = reg.resolve_for_turn(&pool, "c1", &chat_state).await.unwrap();
+        assert_eq!(
+            d2.route,
+            ReadRoute::Derive,
+            "指纹过期先返回上次决策（后台刷新接管）"
+        );
+
+        // 后台任务（空 ChatState 恒静默）最终把非绿写回——轮询等待
+        let mut refreshed = None;
+        for _ in 0..250 {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            if let Some(d) = reg.last_decision("c1") {
+                if d.reason.starts_with("reconcile_diffs") {
+                    refreshed = Some(d);
+                    break;
+                }
+            }
+        }
+        let d3 = refreshed.expect("后台刷新应最终写回非绿决策");
+        assert_eq!(d3.route, ReadRoute::Legacy);
+        // 写回后指纹命中——再次热路径拿到新决策
+        let d4 = reg.resolve_for_turn(&pool, "c1", &chat_state).await.unwrap();
+        assert_eq!(d4.route, ReadRoute::Legacy);
+    }
+
+    /// 热路径变体首见（无缓存）→ 退化为同步 resolve（诊断语义完整、决策新鲜）。
+    #[tokio::test]
+    async fn resolve_for_turn_first_seen_falls_back_to_sync() {
+        let pool = seeded_pool().await;
+        let reg = ReadRouteRegistry::new();
+        script(&pool).await;
+
+        let d = reg
+            .resolve_for_turn(&pool, "c1", &ChatState::new())
+            .await
+            .unwrap();
+        assert_eq!(d.route, ReadRoute::Derive);
+        assert_eq!(d.reason, "green");
+        // 已缓存：后续热路径指纹命中
+        let d2 = reg
+            .resolve_for_turn(&pool, "c1", &ChatState::new())
+            .await
+            .unwrap();
+        assert_eq!(d2.reason, "green");
     }
 
     #[test]
