@@ -42,6 +42,14 @@ use harness::mcp::McpRegistry;
 /// 应用入口
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // boot 时刻（UTC，与 session_events.created_at 的 datetime('now') 同格式同语义）：
+    // sweep 后台化后的「进程边界」——只补记本进程启动前遗留的未闭合 turn，结构上
+    // 排除误杀刚开的新 turn（见 setup 2b）。取于进程最早期，本进程内新事件必然晚于它。
+    let boot_at = chrono::Utc::now()
+        .naive_utc()
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string();
+
     let mut builder = tauri::Builder::default();
     // 单实例：点审批 toast / 双击 exe 拉起第二进程时拦截并前置主实例（防双开）。
     // 必须最先注册——晚注册则第二实例可能在拦截生效前已起窗。
@@ -254,36 +262,42 @@ pub fn run() {
                 pool.size()
             );
 
-            // 2b) 崩溃自愈扫尾（幂等）：上次进程死亡（崩溃/kill/断电/关窗时在途）
-            //     绕过所有退出路径，未闭合的 turn 会永远「进行中」并毒害
-            //     turn_ended 派生状态机（MA-2 台账）。本地单进程 → 启动时任何
-            //     未闭合 turn 定义上已死，补记 truthful 终态 interrupted。
-            let swept =
-                tauri::async_runtime::block_on(harness::event_log::sweep_interrupted_turns(&pool));
-            if swept > 0 {
-                tracing::info!(
-                    target: "ice_paw",
-                    "崩溃自愈：补记 {swept} 个中断 turn 的 turn_ended(interrupted)"
-                );
-            }
+            // 2b) + 2b-2) boot 自愈两件（崩溃扫尾 + 旧会话 backfill）——后台化：
+            //      纯增量幂等扫尾，不阻塞首屏任何读路径（晚 1-2 秒完成无感）。
+            //      曾在主线程 block_on 跑，大库上把 setup 拖长 → 窗口已显示而
+            //      主线程冻结卡住 WebView 渲染 = 冷启动长时间白屏（2026-09-07
+            //      生产反馈根治批；MCP boot / KB watcher 已是 spawn 先例）。
+            //      sweep 带 boot_at 时间上界：与「用户立刻发消息开新 turn」并发
+            //      时结构排除误杀（find_open_turns 只扫 created_at < boot_at）。
+            {
+                let sweep_pool = pool.clone();
+                tauri::async_runtime::spawn(async move {
+                    let swept =
+                        harness::event_log::sweep_interrupted_turns(&sweep_pool, &boot_at).await;
+                    if swept > 0 {
+                        tracing::info!(
+                            target: "ice_paw",
+                            "崩溃自愈：补记 {swept} 个中断 turn 的 turn_ended(interrupted)"
+                        );
+                    }
 
-            // 2b-2) 旧会话事件 backfill（Phase 2B 前置，幂等、纯增量）：零事件
-            //        旧会话反向合成 session_events → 对账零 diff → read_route
-            //        自动路由 Derive。不碰 messages 行、不碰真实事件；就算合成
-            //        有错 → reconcile diff → 自动回退 Legacy（安全网）。
-            let bf = tauri::async_runtime::block_on(harness::backfill::backfill_legacy_sessions(
-                &pool,
-            ));
-            if bf.backfilled > 0 || bf.failed > 0 {
-                tracing::info!(
-                    target: "ice_paw.backfill",
-                    sessions = bf.backfilled,
-                    events = bf.events_written,
-                    bytes = bf.payload_bytes,
-                    failed = bf.failed,
-                    epoch_rows = bf.epoch_rows,
-                    "旧会话事件 backfill 完成"
-                );
+                    // 旧会话事件 backfill（Phase 2B 前置，幂等、纯增量）：零事件
+                    // 旧会话反向合成 session_events → 对账零 diff → read_route
+                    // 自动路由 Derive。不碰 messages 行、不碰真实事件；就算合成
+                    // 有错 → reconcile diff → 自动回退 Legacy（安全网）。
+                    let bf = harness::backfill::backfill_legacy_sessions(&sweep_pool).await;
+                    if bf.backfilled > 0 || bf.failed > 0 {
+                        tracing::info!(
+                            target: "ice_paw.backfill",
+                            sessions = bf.backfilled,
+                            events = bf.events_written,
+                            bytes = bf.payload_bytes,
+                            failed = bf.failed,
+                            epoch_rows = bf.epoch_rows,
+                            "旧会话事件 backfill 完成"
+                        );
+                    }
+                });
             }
 
             // 3) A2-3: 安装工具授权响应全局监听器（前端 chat:tool-auth-response）

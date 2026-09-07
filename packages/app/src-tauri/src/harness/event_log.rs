@@ -679,10 +679,14 @@ pub async fn log_turn_ended(
 /// （进程中断时的 turn 确实中断了），非伪造；不违反 append-only（只新增）。
 /// derive/reconcile 零影响：turn_ended 是 skip 事件不产生行。
 ///
+/// `boot_at`（UTC，`datetime('now')` 同格式）：只补记本进程启动前遗留的
+/// turn（`find_open_turns` 的时间上界）——本函数已后台化（2026-09-07 白屏
+/// 根治批），与「用户立刻发消息开新 turn」并发时靠它结构排除误杀。
+///
 /// 返回补记条数（0 = 干净启动，零写入）。查询失败仅 warn 不阻断启动——
 /// 与 heal_checksum_drift / fix_orphan_tool_results 同款 boot 自愈定位。
-pub async fn sweep_interrupted_turns(pool: &SqlitePool) -> usize {
-    let open = match repo::session_event::find_open_turns(pool).await {
+pub async fn sweep_interrupted_turns(pool: &SqlitePool, boot_at: &str) -> usize {
+    let open = match repo::session_event::find_open_turns(pool, boot_at).await {
         Ok(o) => o,
         Err(e) => {
             tracing::warn!(target: "ice_paw.event_log", "崩溃自愈扫尾查询失败（不影响启动）: {e}");
@@ -1059,8 +1063,11 @@ mod tests {
         )
         .await;
 
-        // 扫尾：只补 conv-1 的未闭合 turn
-        assert_eq!(sweep_interrupted_turns(&pool).await, 1);
+        // 扫尾：只补 conv-1 的未闭合 turn（before 传远未来 = 全量命中，等价旧行为）
+        assert_eq!(
+            sweep_interrupted_turns(&pool, "9999-12-31 23:59:59").await,
+            1
+        );
         let rows = session_event::list_by_session(&pool, "conv-1", None)
             .await
             .unwrap();
@@ -1085,7 +1092,10 @@ mod tests {
         );
 
         // 幂等：再扫零补记、零写入
-        assert_eq!(sweep_interrupted_turns(&pool).await, 0);
+        assert_eq!(
+            sweep_interrupted_turns(&pool, "9999-12-31 23:59:59").await,
+            0
+        );
         assert_eq!(
             session_event::list_by_session(&pool, "conv-1", None)
                 .await
@@ -1093,6 +1103,43 @@ mod tests {
                 .len(),
             3
         );
+    }
+
+    #[tokio::test]
+    async fn sweep_respects_boot_at_boundary() {
+        // sweep 后台化后的进程边界：只补记 boot_at 之前遗留的未闭合 turn，
+        // 结构上排除误杀本进程刚开的新 turn（显式 created_at 造早/晚两条）
+        let pool = fresh_pool().await;
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
+        seed(&pool).await;
+        // 上一进程遗留（早于 boot_at）
+        sqlx::query(
+            "INSERT INTO session_events (session_id, seq, kind, actor, turn_id, payload, created_at)
+             VALUES ('conv-1', 1, 'turn_context', 'agent:agent-1', 'turn-old', '{}', '2026-01-01 00:00:00')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        // 本进程刚开的新 turn（晚于 boot_at，进行中）
+        sqlx::query(
+            "INSERT INTO session_events (session_id, seq, kind, actor, turn_id, payload, created_at)
+             VALUES ('conv-1', 2, 'turn_context', 'agent:agent-1', 'turn-new', '{}', '2026-06-01 00:00:00')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(sweep_interrupted_turns(&pool, "2026-03-01 00:00:00").await, 1);
+        // turn-old 补记 closed；turn-new 保持 open（无 turn_ended）
+        let rows = session_event::list_by_session(&pool, "conv-1", None)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 3, "只补记 turn-old 一条");
+        assert_eq!(rows[2].turn_id.as_deref(), Some("turn-old"));
+        assert_eq!(rows[2].kind, kind::TURN_ENDED);
     }
 
     #[tokio::test]

@@ -161,11 +161,19 @@ pub async fn list_failed_tool_calls(
 /// 崩溃自愈扫尾的输入：全部「已开始但未闭合」的 turn——有 `turn_context`
 /// 但无同 turn_id 的 `turn_ended`（进程死亡绕过了所有退出路径）。
 ///
+/// `before`（UTC，`datetime('now')` 同格式）：只扫 `created_at` 早于它的
+/// turn_context——sweep 后台化后（2026-09-07 白屏根治批）失去「setup 同步段
+/// 内前端未加载=物理不可能有新 turn」的隐式保证，用进程启动时刻作显式边界，
+/// 结构上排除误杀本进程刚开的新 turn。
+///
 /// 本地单进程应用在启动时刻可确定性判定这些 turn 已死（不可能还有进程在
 /// 生成）。返回 `(session_id, turn_id, actor, rounds)`；rounds 取该 turn 已落
 /// 的 assistant_message 事件数（每条对应一个 finalize 点，续写 supersede 场景
 /// 为近似值——终态 payload 的 rounds 仅作展示，不参与任何判定）。
-pub async fn find_open_turns(pool: &SqlitePool) -> AppResult<Vec<(String, String, String, i64)>> {
+pub async fn find_open_turns(
+    pool: &SqlitePool,
+    before: &str,
+) -> AppResult<Vec<(String, String, String, i64)>> {
     let rows = sqlx::query_as::<_, (String, String, String, i64)>(
         "SELECT e.session_id, e.turn_id, e.actor,
                 (SELECT COUNT(*) FROM session_events a
@@ -173,12 +181,14 @@ pub async fn find_open_turns(pool: &SqlitePool) -> AppResult<Vec<(String, String
                     AND a.kind = 'assistant_message') AS rounds
            FROM session_events e
           WHERE e.kind = 'turn_context' AND e.turn_id IS NOT NULL
+            AND e.created_at < ?
             AND NOT EXISTS (
                 SELECT 1 FROM session_events t
                  WHERE t.session_id = e.session_id AND t.turn_id = e.turn_id
                    AND t.kind = 'turn_ended')
           ORDER BY e.id ASC",
     )
+    .bind(before)
     .fetch_all(pool)
     .await?;
     Ok(rows)

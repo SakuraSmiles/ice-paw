@@ -5,15 +5,19 @@
 //! tool_result 必须在 user 消息里）。`fix_orphan_tool_results` 在 `init_pool`
 //! 跑完 sqlx 迁移后幂等地把 tool_result 拆成独立 user 消息。
 //!
-//! 迁移策略（幂等）：
+//! 迁移策略（幂等 + 终态标记）：
 //! 1. 扫描所有 `content_blocks` 含 `tool_result` 的 assistant 消息
 //! 2. 对每条：partition 出 ToolResult 块 → 新建 role=user 消息存放（`created_at`
 //!    沿用原 assistant，靠 rowid tie-break 排在其后）→ 原 assistant 去掉 ToolResult
 //! 3. 再跑时 assistant 已无 ToolResult → no-op
 //!
-//! 排序说明：消息列表按 `(created_at ASC, rowid ASC)` 输出。新 user 消息 rowid
-//! 大于原 assistant、created_at 相同，因此排在原 assistant 之后；下一条 assistant
-//! 通常 created_at 更晚（多轮 LLM 生成耗时 > 1s），故 user 排在它之前 —— 顺序正确。
+//! 终态标记（2026-09-07 白屏根治批）：LIKE 命中 ≠ 真孤儿——assistant 正文含
+//! 「tool_result」字样的对话（如讨论 MCP 开发的会话）永久命中 LIKE 却无可修复
+//! 块，曾导致每次冷启动 WAL checkpoint + 全量复制整个 DB（本机 203MB × 每次
+//! 启动，修复恒 0 条，日志 8/31→9/07 全量实锤）。现在：解析 partition 前置，
+//! 全部为误匹配 → 零备份直接写 `orphan_tool_result_swept` 标记；此后每次启动
+//! 零扫描跳过。逃生门 = 删 user_preferences 该行即重扫（BACKFILL_VERSION 同款
+//! 哲学）。解析失败行不写标记（无法判定终态，保留下次重扫语义）。
 
 use std::path::Path;
 
@@ -22,13 +26,48 @@ use sqlx::SqlitePool;
 use tracing::{info, warn};
 use uuid::Uuid;
 
+use crate::db::repo;
 use crate::error::AppResult;
 use crate::infra::protocol::ContentBlock;
+
+/// 终态标记 key：一轮扫描确认无可修复孤儿（或全部修复成功）后写入。
+/// 不进 `KNOWN_KEYS`（设置页导出过滤不受影响，backfill 版本标记同款先例）。
+const SWEPT_PREF_KEY: &str = "orphan_tool_result_swept";
+
+/// 一条确认真孤儿的候选（partition 已完成，误匹配已在扫描后前置滤除）。
+struct RealOrphan {
+    msg_id: String,
+    conv_id: String,
+    asst_blocks: Vec<ContentBlock>,
+    result_blocks: Vec<ContentBlock>,
+    created_at: String,
+}
+
+/// 写终态标记（失败仅 warn——下次 boot 重扫，幂等无害）。
+async fn write_swept_marker(pool: &SqlitePool) {
+    if let Err(e) = repo::preferences::set(pool, SWEPT_PREF_KEY, "1").await {
+        warn!(
+            target: "ice_paw.migrate",
+            "终态标记写入失败（下次 boot 重扫，无害）: {e}"
+        );
+    }
+}
 
 /// 启动时幂等迁移：把 assistant 消息里混入的 tool_result 拆成独立 user 消息。
 ///
 /// 见模块级文档。`db_path` 用于在确有孤儿时先备份 DB（WAL checkpoint 后复制）。
 pub async fn fix_orphan_tool_results(pool: &SqlitePool, db_path: &Path) -> AppResult<()> {
+    // 0) 终态闸：标记在 → 零扫描零备份直接过（boot 关键路径上的常客）
+    if repo::preferences::get(pool, SWEPT_PREF_KEY)
+        .await
+        .ok()
+        .flatten()
+        .as_deref()
+        == Some("1")
+    {
+        return Ok(());
+    }
+
     // LIKE 快速过滤；JSON 里 ToolResult 的 type 字段是 "tool_result"
     let orphans: Vec<(String, String, String, String)> = sqlx::query_as(
         "SELECT id, conversation_id, content_blocks, created_at
@@ -40,7 +79,57 @@ pub async fn fix_orphan_tool_results(pool: &SqlitePool, db_path: &Path) -> AppRe
     .await?;
 
     if orphans.is_empty() {
-        info!(target: "ice_paw.migrate", "无需迁移：未发现 tool_result 孤儿");
+        write_swept_marker(pool).await;
+        info!(
+            target: "ice_paw.migrate",
+            "无需迁移：未发现 tool_result 孤儿（终态标记已写，后续启动零扫描）"
+        );
+        return Ok(());
+    }
+
+    // 解析 partition 前置：把 LIKE 命中分成真孤儿与误匹配——误匹配（文本含
+    // "tool_result" 字样但无 ToolResult 块）不该触发备份（本批根治的空转源）。
+    // 解析失败行跳过且**不写终态标记**（无法判定，保留下次重扫语义）。
+    let mut parse_failed = false;
+    let mut false_matches = 0usize;
+    let mut real: Vec<RealOrphan> = Vec::new();
+    for (msg_id, conv_id, blocks_json, created_at) in orphans {
+        let Ok(blocks) = serde_json::from_str::<Vec<ContentBlock>>(&blocks_json) else {
+            warn!(
+                target: "ice_paw.migrate",
+                "解析 content_blocks 失败，跳过: msg_id={}",
+                msg_id
+            );
+            parse_failed = true;
+            continue;
+        };
+        let (asst_blocks, result_blocks): (Vec<ContentBlock>, Vec<ContentBlock>) = blocks
+            .into_iter()
+            .partition(|b| !matches!(b, ContentBlock::ToolResult { .. }));
+        if result_blocks.is_empty() {
+            // LIKE 误匹配（如文本内容含 "tool_result" 字样）→ 跳过
+            false_matches += 1;
+            continue;
+        }
+        real.push(RealOrphan {
+            msg_id,
+            conv_id,
+            asst_blocks,
+            result_blocks,
+            created_at,
+        });
+    }
+
+    if real.is_empty() {
+        if !parse_failed {
+            write_swept_marker(pool).await;
+        }
+        info!(
+            target: "ice_paw.migrate",
+            "无可修复孤儿（{} 条 LIKE 误匹配{}），零备份跳过",
+            false_matches,
+            if parse_failed { "，存在解析失败行未写终态标记" } else { "，终态标记已写" }
+        );
         return Ok(());
     }
 
@@ -67,22 +156,15 @@ pub async fn fix_orphan_tool_results(pool: &SqlitePool, db_path: &Path) -> AppRe
     }
 
     let mut fixed = 0usize;
-    for (msg_id, conv_id, blocks_json, created_at) in orphans {
-        let Ok(blocks) = serde_json::from_str::<Vec<ContentBlock>>(&blocks_json) else {
-            warn!(
-                target: "ice_paw.migrate",
-                "解析 content_blocks 失败，跳过: msg_id={}",
-                msg_id
-            );
-            continue;
-        };
-        let (asst_blocks, result_blocks): (Vec<ContentBlock>, Vec<ContentBlock>) = blocks
-            .into_iter()
-            .partition(|b| !matches!(b, ContentBlock::ToolResult { .. }));
-        if result_blocks.is_empty() {
-            // LIKE 误匹配（如文本内容含 "tool_result" 字样）→ 跳过
-            continue;
-        }
+    let mut tx_failures = 0usize;
+    for orphan in real {
+        let RealOrphan {
+            msg_id,
+            conv_id,
+            asst_blocks,
+            result_blocks,
+            created_at,
+        } = orphan;
 
         // 原子化：INSERT user(tool_result) + UPDATE assistant 去 tool_result 包进一个事务，
         // 避免崩溃在两步之间 → 下次启动 LIKE 仍命中 assistant → 重复插 user 行。
@@ -118,6 +200,7 @@ pub async fn fix_orphan_tool_results(pool: &SqlitePool, db_path: &Path) -> AppRe
                 msg_id,
                 e
             );
+            tx_failures += 1;
             continue;
         }
         fixed += 1;
@@ -128,6 +211,17 @@ pub async fn fix_orphan_tool_results(pool: &SqlitePool, db_path: &Path) -> AppRe
         "tool_result 孤儿迁移完成：修复 {} 条 assistant 消息",
         fixed
     );
+    // 全部事务成功才写终态（有失败保留旧状态 → 下次 boot 重试；
+    // backfill「全部成功才写版本」同款哲学）
+    if tx_failures == 0 {
+        write_swept_marker(pool).await;
+    } else {
+        warn!(
+            target: "ice_paw.migrate",
+            failed = tx_failures,
+            "存在迁移事务失败，终态标记未写（下次 boot 重试）"
+        );
+    }
     Ok(())
 }
 
@@ -405,6 +499,139 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count.0, 0, "无孤儿时不应创建任何 user 消息");
+    }
+
+    /// 读终态标记行（None = 未写）。
+    async fn swept_marker(pool: &SqlitePool) -> Option<String> {
+        sqlx::query_as::<_, (String,)>(
+            "SELECT value FROM user_preferences WHERE key = 'orphan_tool_result_swept'",
+        )
+        .fetch_optional(pool)
+        .await
+        .unwrap()
+        .map(|(v,)| v)
+    }
+
+    /// 误匹配行（文本含 "tool_result" 字样但无 ToolResult 块）：零备份零写入，
+    /// 终态标记落库——本批根治的空转场景（LIKE 恒命中 + 修复恒 0 条死循环）。
+    #[tokio::test]
+    async fn false_match_skips_backup_and_writes_marker() {
+        let pool = fresh_pool().await;
+        seed_conv(&pool).await;
+        // 正文讨论 tool_result 的对话（如 MCP 开发），LIKE 命中但无可拆块
+        insert_asst(
+            &pool,
+            "m1",
+            r#"[{"type":"text","text":"我们聊了 tool_result 持久化的设计"}]"#,
+        )
+        .await;
+
+        // 真实临时路径：若逻辑回退到「先备份再判定」，bak 会出现 → 断言抓现行
+        let dir = std::env::temp_dir().join(format!("icepaw-migrate-test-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("ice-paw.db");
+        std::fs::write(&db_path, b"dummy").unwrap();
+        let bak = dir.join("ice-paw.db.pre-tool-result-migration.bak");
+
+        fix_orphan_tool_results(&pool, &db_path).await.unwrap();
+
+        assert!(!bak.exists(), "误匹配不得触发 DB 备份");
+        assert_eq!(swept_marker(&pool).await.as_deref(), Some("1"));
+        let users: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM messages WHERE role='user'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(users.0, 0, "误匹配不产生任何 user 行");
+
+        // 标记在 → 二次调用零扫描（闸语义：连 LIKE 都不跑）
+        fix_orphan_tool_results(&pool, &db_path).await.unwrap();
+        let users: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM messages WHERE role='user'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(users.0, 0);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 标记存在 → 插入真孤儿也不修（闸优先于一切判定）。
+    #[tokio::test]
+    async fn marker_gate_blocks_real_orphan() {
+        let pool = fresh_pool().await;
+        seed_conv(&pool).await;
+        insert_asst(
+            &pool,
+            "m1",
+            r#"[{"type":"tool_use","id":"tu1","name":"read","input":"{}"},
+               {"type":"tool_result","tool_use_id":"tu1","content":"ok","is_error":false}]"#,
+        )
+        .await;
+        sqlx::query(
+            "INSERT INTO user_preferences (key, value, updated_at)
+             VALUES ('orphan_tool_result_swept', '1', datetime('now'))",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        fix_orphan_tool_results(&pool, Path::new("/tmp/nonexistent.db"))
+            .await
+            .unwrap();
+
+        // assistant 原样保留（未被拆），零 user 行
+        let asst = fetch_blocks(&pool, "m1").await;
+        assert_eq!(asst.len(), 2, "闸在 → 真孤儿不动");
+        let users: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM messages WHERE role='user'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(users.0, 0);
+    }
+
+    /// 逃生门：删标记行 → 重扫并修复真孤儿（BACKFILL_VERSION 同款哲学）。
+    #[tokio::test]
+    async fn deleting_marker_reenables_sweep_and_fixes() {
+        let pool = fresh_pool().await;
+        seed_conv(&pool).await;
+        insert_asst(
+            &pool,
+            "m1",
+            r#"[{"type":"tool_use","id":"tu1","name":"read","input":"{}"},
+               {"type":"tool_result","tool_use_id":"tu1","content":"ok","is_error":false}]"#,
+        )
+        .await;
+        sqlx::query(
+            "INSERT INTO user_preferences (key, value, updated_at)
+             VALUES ('orphan_tool_result_swept', '1', datetime('now'))",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // 闸先挡一次（上面 marker_gate 已单独验证，这里完整走逃生门流程）
+        fix_orphan_tool_results(&pool, Path::new("/tmp/nonexistent.db"))
+            .await
+            .unwrap();
+
+        // 逃生门：删标记 → 重扫 → 修复 + 标记回写
+        sqlx::query("DELETE FROM user_preferences WHERE key = 'orphan_tool_result_swept'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        fix_orphan_tool_results(&pool, Path::new("/tmp/nonexistent.db"))
+            .await
+            .unwrap();
+
+        let asst = fetch_blocks(&pool, "m1").await;
+        assert_eq!(asst.len(), 1, "删标记后重扫应拆出 tool_result");
+        let users: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM messages WHERE role='user' AND content_blocks LIKE '%tool_result%'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(users.0, 1, "tool_result 落到 user 行");
+        assert_eq!(swept_marker(&pool).await.as_deref(), Some("1"), "修复后标记回写");
     }
 
     #[tokio::test]

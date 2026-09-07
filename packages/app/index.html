@@ -5,10 +5,72 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>IcePaw</title>
+    <!--
+      首帧启动骨架（2026-09-07 白屏根治批）：WebView 加载 HTML → JS bundle 执行完
+      → Vue mount 之间存在纯白窗口（低配机 1-2s）。此段内联样式 + 字标让首帧即有
+      内容，Vue mount("#app") 替换容器内容后骨架自然消失，零 JS 协作、零外部资源。
+
+      ⚠️ 全应用唯一硬编码颜色/系统字体栈例外位：令牌体系（tokens.css / --ip-* /
+      @fontsource 字体）全部打进 JS bundle，首帧必然不可用。色值抄 tokens.css：
+      浅区 --ip-color-bg-primary #FAFBFC / --ip-primary-600 #173D66 / gray-200 #E6EAEF；
+      暗区 [data-theme='dark'] 同名令牌 #14181F / #5B8FCC / gray-850 #1C222B。
+      首帧只能跟系统 prefers-color-scheme 走（app 自身主题在 JS 加载后接管，
+      有一帧切换可接受）；reduced-motion 静态降级与全局规范一致。
+    -->
+    <style>
+      .boot-splash {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 18px;
+        background: #fafbfc;
+        color: #173d66;
+      }
+      .boot-logo {
+        font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+        font-size: 22px;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+      }
+      .boot-bar {
+        width: 128px;
+        height: 3px;
+        border-radius: 999px;
+        overflow: hidden;
+        background: #e6eaef;
+      }
+      .boot-bar-fill {
+        width: 40%;
+        height: 100%;
+        border-radius: 999px;
+        background: #173d66;
+        animation: boot-slide 1.4s ease-in-out infinite;
+      }
+      @keyframes boot-slide {
+        0% { transform: translateX(-100%); }
+        100% { transform: translateX(350%); }
+      }
+      @media (prefers-color-scheme: dark) {
+        .boot-splash { background: #14181f; color: #5b8fcc; }
+        .boot-bar { background: #1c222b; }
+        .boot-bar-fill { background: #5b8fcc; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .boot-bar-fill { animation: none; transform: translateX(100%); }
+      }
+    </style>
   </head>
 
   <body>
-    <div id="app"></div>
+    <div id="app">
+      <div class="boot-splash" aria-label="正在启动 IcePaw">
+        <div class="boot-logo">IcePaw</div>
+        <div class="boot-bar"><div class="boot-bar-fill"></div></div>
+      </div>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
