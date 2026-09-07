@@ -34,6 +34,9 @@ impl McpClient for GitTool {
 
     fn description(&self) -> &str {
         "Run read-only git operations (status/diff/log/show) in the agent workspace. \
+Output beyond 20KB is truncated (marked in output) — narrow with args (e.g. a path \
+or '-n 20') if you need the rest. exit_code is in the result; non-zero usually \
+means git errored (not a repo, bad args) unless you passed --exit-code yourself. \
 For write operations (commit/add/push), use run_command instead."
     }
 
@@ -41,8 +44,8 @@ For write operations (commit/add/push), use run_command instead."
         serde_json::json!({
             "type": "object",
             "properties": {
-                "operation": { "type": "string", "enum": ["status", "diff", "log", "show"] },
-                "args": { "type": "string", "description": "Optional extra args, e.g. '-n 20' for log or a commit hash for show." }
+                "operation": { "type": "string", "enum": ["status", "diff", "log", "show"], "description": "Which read-only git subcommand to run." },
+                "args": { "type": "string", "description": "Optional extra args passed to git, split by whitespace, e.g. '-n 20' for log or a commit hash for show." }
             },
             "required": ["operation"]
         })
@@ -127,6 +130,7 @@ mod tests {
     async fn test_ctx() -> ToolContext {
         let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
         ToolContext {
+            tool_use_id: None,
             conv_id: "test".into(),
             agent_id: "test-agent".into(),
             project_id: None,

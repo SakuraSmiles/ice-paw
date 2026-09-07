@@ -119,22 +119,30 @@ impl McpClient for SearchKbTool {
                 })
                 .collect();
 
-        // 4. 语义检索（全局 embedding 配置，独立于聊天 Agent；未启用/失败 → 空）
-        let sem_hits =
-            try_semantic_search(&ctx.pool, &parsed.query, &kb_ids, parsed.limit as usize)
-                .await
-                .unwrap_or_default();
+        // 4. 语义检索（全局 embedding 配置，独立于聊天 Agent；未启用/失败 → None）
+        //    降级不遮掩（治看不见）：None 时结果附 note 披露本次为纯关键词检索——
+        //    否则 agent 把「语义近义没召回」当「库里真没有」就提前放弃
+        let sem_result =
+            try_semantic_search(&ctx.pool, &parsed.query, &kb_ids, parsed.limit as usize).await;
+        let semantic_note: Option<&str> = sem_result.is_none().then_some(
+            "语义检索不可用（embedding 未配置或调用失败），本次为纯关键词检索——\
+             同义改写可能漏召回，可换关键词重试或用 read_kb_document 直读",
+        );
+        let sem_hits = sem_result.unwrap_or_default();
 
         // 5. RRF 融合两路排名（关键词 + 语义），按融合分数排序
         let results = rrf_fuse(kw_hits, sem_hits, parsed.limit as usize);
 
         let count = results.len();
-        Ok(serde_json::json!({
+        let mut payload = serde_json::json!({
             "query": parsed.query,
             "count": count,
             "results": results,
-        })
-        .to_string())
+        });
+        if let Some(note) = semantic_note {
+            payload["note"] = serde_json::Value::String(note.to_string());
+        }
+        Ok(payload.to_string())
     }
 }
 
@@ -568,7 +576,12 @@ impl McpClient for ReadKbDocumentTool {
                             "读取 KB 文档失败: {}/{} err={}",
                             kb.directory, parsed.file_path, e
                         );
-                        return Err(AppError::Io(e));
+                        return Err(AppError::Io(std::io::Error::other(format!(
+                            "读取知识库文档失败: {}。索引里有这条记录但磁盘读失败——\
+                             常见原因：文件被移动/删除后索引未更新（watcher 稍后自愈），\
+                             或无读取权限；可稍后重试或换用 search_kb 找其他文档",
+                            abs.display()
+                        ))));
                     }
                 };
                 tracing::info!(
@@ -700,6 +713,7 @@ mod tests {
 
         let tool = SearchKbTool;
         let ctx = ToolContext {
+            tool_use_id: None,
             conv_id: "c1".into(),
             agent_id: "agent-a".into(),
             project_id: None,
@@ -739,6 +753,7 @@ mod tests {
         let pool = fresh_pool().await;
         let tool = SearchKbTool;
         let ctx = ToolContext {
+            tool_use_id: None,
             conv_id: "c1".into(),
             agent_id: "lonely-agent".into(),
             project_id: None,
@@ -827,6 +842,7 @@ mod tests {
 
         let tool = ReadKbDocumentTool;
         let ctx = ToolContext {
+            tool_use_id: None,
             conv_id: "c".into(),
             agent_id: "a".into(),
             project_id: None,
@@ -855,6 +871,7 @@ mod tests {
         let pool = fresh_pool().await;
         let tool = ReadKbDocumentTool;
         let ctx = ToolContext {
+            tool_use_id: None,
             conv_id: "c".into(),
             agent_id: "a".into(),
             project_id: None,
@@ -1014,6 +1031,7 @@ mod tests {
         // 触发 search_kb：语义检索路径会懒生成 embedding
         let tool = SearchKbTool;
         let ctx = ToolContext {
+            tool_use_id: None,
             conv_id: "c1".into(),
             agent_id: "any".into(),
             project_id: None,

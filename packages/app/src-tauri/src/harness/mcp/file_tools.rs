@@ -163,7 +163,9 @@ impl McpClient for WriteFileTool {
 
     fn description(&self) -> &str {
         "Write text content to a local file (overwrites if it exists). Missing parent \
-directories are created automatically (default create_dirs=true)."
+directories are created automatically (default create_dirs=true). The previous version \
+is backed up to .icepaw-backup/ before overwriting. Writing agent.yaml (agent config) \
+is rejected — agent config changes must go through the propose_config_change tool."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -294,8 +296,11 @@ impl McpClient for EditFileTool {
     }
 
     fn description(&self) -> &str {
-        "Replace a unique string in a file. old_string must match exactly (including \
-whitespace) and be unique unless replace_all=true. Fails if old_string is not found or not unique."
+        "Replace an exact string in a file. old_string must match exactly (including \
+whitespace) and be unique unless replace_all=true. Fails if old_string is not found \
+or not unique — always read_file the current content first and copy old_string from \
+what is actually there; strings recalled from memory rarely match. The previous \
+version is backed up before editing."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -433,11 +438,29 @@ impl McpClient for DeleteFileTool {
             None
         };
 
-        let meta = tokio::fs::metadata(path).await.map_err(AppError::Io)?;
+        let meta = tokio::fs::metadata(path).await.map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                AppError::Validation(format!(
+                    "文件不存在: {}。{}",
+                    parsed.path,
+                    super::path_suggest::suggest_for_missing(path)
+                ))
+            } else {
+                AppError::Io(std::io::Error::other(format!(
+                    "delete_file 读取待删路径元数据失败: {e}。请核对路径与进程权限"
+                )))
+            }
+        })?;
+        let remove_err = |e: std::io::Error| {
+            AppError::Io(std::io::Error::other(format!(
+                "delete_file 删除失败: {e}。常见原因：文件被其他程序占用（Windows \
+                 常见）、无权限、或目录非空；请先确认占用解除，删目录需先清空"
+            )))
+        };
         if meta.is_dir() {
-            tokio::fs::remove_dir(path).await.map_err(AppError::Io)?;
+            tokio::fs::remove_dir(path).await.map_err(remove_err)?;
         } else {
-            tokio::fs::remove_file(path).await.map_err(AppError::Io)?;
+            tokio::fs::remove_file(path).await.map_err(remove_err)?;
         }
 
         Ok(serde_json::json!({
@@ -523,8 +546,9 @@ falls back to copy+delete. The source file is backed up before moving."
 
         if !src.exists() {
             return Err(AppError::Validation(format!(
-                "move_file: 源路径不存在: {}",
-                parsed.source
+                "move_file: 源路径不存在: {}。{}",
+                parsed.source,
+                super::path_suggest::suggest_for_missing(src)
             )));
         }
 
@@ -619,8 +643,9 @@ If the destination file already exists it is backed up before being overwritten.
 
         if !src.exists() {
             return Err(AppError::Validation(format!(
-                "copy_file: 源路径不存在: {}",
-                parsed.source
+                "copy_file: 源路径不存在: {}。{}",
+                parsed.source,
+                super::path_suggest::suggest_for_missing(src)
             )));
         }
 

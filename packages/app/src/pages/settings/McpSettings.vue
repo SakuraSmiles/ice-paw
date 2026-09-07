@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // McpSettings.vue — MCP Server 设置（状态机驱动，单一数据源）
-import { ref, onMounted, onActivated, onDeactivated, onBeforeUnmount } from "vue";
+import { ref, computed, onMounted, onActivated, onDeactivated, onBeforeUnmount } from "vue";
 import McpForm from "../../components/mcp/McpForm.vue";
 import Switch from "../../components/common/Switch.vue";
 import ErrorBanner from "../../components/common/ErrorBanner.vue";
@@ -23,10 +23,17 @@ async function reload() {
       bridge.mcp.listBuiltinTools(),
     ]);
     servers.value = serverList;
-    builtinTools.value = builtins.map(t => ({
-      name: t.name,
-      desc: builtinDescZh[t.name] ?? t.description,
-    }));
+    builtinTools.value = builtins
+      .map(t => {
+        const meta = BUILTIN_TOOL_META[t.name];
+        return {
+          name: t.name,
+          desc: meta?.zh ?? t.description,
+          orig: t.description,
+          category: meta?.category ?? "other",
+        };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
     lastLoadTime.value = Date.now();
   } catch (e) {
     console.error("加载 MCP Server 列表失败:", e);
@@ -180,32 +187,101 @@ function glmStatusCls(t: GlmMcpTemplate): string {
 
 // 内置工具集——动态从后端拉取（register_builtin 为单一事实来源，前端不再手抄）
 const builtinExpanded = ref(false);
-const builtinTools = ref<{ name: string; desc: string }[]>([]);
+const builtinSearch = ref("");
+const builtinTools = ref<BuiltinToolRow[]>([]);
 
-// 中文友好描述（本地化文案层）：仅用于卡片展示优化，缺失时回退后端原始描述。
-// 工具清单与计数始终来自后端，这里只决定某工具显示中文短描述还是后端原文；
-// 新增工具忘了补这里，工具照样显示（只是描述用后端原文），不会出现数量错 / 漏工具。
-const builtinDescZh: Record<string, string> = {
-  read_file: "读取本地文件内容",
-  list_directory: "列出目录内容",
-  directory_tree: "递归目录树（跳噪音目录）",
-  get_file_info: "文件元信息（大小/类型/时间）",
-  read_multiple_files: "批量读多个文件（≤20）",
-  write_file: "写入文件（覆盖）",
-  edit_file: "精准字符串替换",
-  delete_file: "删除文件或空目录",
-  move_file: "移动 / 重命名（跨盘自动复制）",
-  create_directory: "建目录含父目录（幂等）",
-  search_files: "正则内容搜索（grep）",
-  run_command: "执行 shell 命令（需授权）",
-  git: "git 只读操作（status/diff/log/show）",
-  web_fetch: "抓取 URL 正文",
-  read_agent_config: "读取自己的 agent.yaml 配置",
-  search_kb: "检索知识库（agent 自动调用）",
-  read_kb_document: "读取知识库文档全文",
-  save_to_kb: "保存资料到知识库（agent 自动调用）",
-  propose_config_change: "提出 agent 配置提案（agent 自动调用）",
+interface BuiltinToolRow {
+  name: string;
+  /** 展示描述：中文覆盖优先，缺失回退后端原文 */
+  desc: string;
+  /** 后端原始（英文）描述——搜索匹配 + 悬浮全文用 */
+  orig: string;
+  category: string;
+}
+
+// 工具分组顺序（「其他」兜底在末位：新增工具忘了补 meta 也能显示，不会漏）
+const BUILTIN_CATEGORIES: { key: string; label: string }[] = [
+  { key: "files", label: "文件与命令" },
+  { key: "web", label: "网络获取" },
+  { key: "kb", label: "知识库" },
+  { key: "attach", label: "附件与引用" },
+  { key: "docx", label: "Word 文档" },
+  { key: "config", label: "配置与计划" },
+  { key: "screen", label: "屏幕操作" },
+  { key: "other", label: "其他" },
+];
+
+// 中文友好描述 + 分组（本地化文案层）：仅用于设置页展示，缺失时回退后端原始描述
+// 并落「其他」组。工具清单与计数始终来自后端，这里只决定某工具显示中文短描述
+// 还是后端原文——新增工具忘了补这里，工具照样显示（只是英文原文 + 其他组）。
+const BUILTIN_TOOL_META: Record<string, { zh: string; category: string }> = {
+  // 文件与命令
+  read_file: { zh: "读取文件内容（office/PDF 提取，大文件分页）", category: "files" },
+  list_directory: { zh: "列出目录内容（非递归，目录优先排序）", category: "files" },
+  directory_tree: { zh: "递归目录树（跳噪音目录，限深 8）", category: "files" },
+  get_file_info: { zh: "文件元信息（大小/类型/时间戳）", category: "files" },
+  read_multiple_files: { zh: "批量读多个文件（≤20）", category: "files" },
+  write_file: { zh: "写入文件（覆盖，改前自动备份）", category: "files" },
+  edit_file: { zh: "精准字符串替换（先读后改）", category: "files" },
+  delete_file: { zh: "删除文件或空目录（文件先备份）", category: "files" },
+  move_file: { zh: "移动 / 重命名（跨盘自动复制）", category: "files" },
+  copy_file: { zh: "复制文件或目录（源保留）", category: "files" },
+  create_directory: { zh: "建目录含父目录（幂等）", category: "files" },
+  search_files: { zh: "正则内容搜索（grep 语义）", category: "files" },
+  run_command: { zh: "执行 shell 命令（需确认授权）", category: "files" },
+  git: { zh: "git 只读操作（status/diff/log/show）", category: "files" },
+  // 网络获取
+  web_fetch: { zh: "抓取 URL 正文（原文返回，自看状态码）", category: "web" },
+  // 知识库
+  search_kb: { zh: "检索知识库（关键词+语义融合）", category: "kb" },
+  read_kb_document: { zh: "读取知识库文档全文", category: "kb" },
+  save_to_kb: { zh: "保存资料到知识库（Markdown）", category: "kb" },
+  // 附件与引用
+  read_attachment_page: { zh: "按页读取聊天大附件", category: "attach" },
+  view_attachment_image: { zh: "视觉读取图片型附件（扫描件等）", category: "attach" },
+  read_reference: { zh: "读取 @引用 会话的快照全文", category: "attach" },
+  // Word 文档
+  inspect_docx: { zh: "读 Word 结构投影（五档下钻）", category: "docx" },
+  edit_docx: { zh: "编辑 Word（批量事务 + 自动备份）", category: "docx" },
+  validate_docx: { zh: "Word 断言验收（失败是数据非错误）", category: "docx" },
+  write_docx: { zh: "从模板生成整篇 Word 文档", category: "docx" },
+  // 配置与计划
+  read_agent_config: { zh: "读取自己的 agent.yaml 配置", category: "config" },
+  propose_config_change: { zh: "提出 agent 配置变更提案（待审批）", category: "config" },
+  update_plan: { zh: "维护任务计划（待办清单）", category: "config" },
+  // 屏幕操作
+  capture_screen: { zh: "截取整个屏幕画面", category: "screen" },
+  list_windows: { zh: "列出当前打开的窗口", category: "screen" },
+  capture_window: { zh: "截取指定窗口画面", category: "screen" },
+  mouse_move: { zh: "移动鼠标指针（需屏幕共享）", category: "screen" },
+  mouse_click: { zh: "点击鼠标（需屏幕共享）", category: "screen" },
+  mouse_drag: { zh: "拖拽鼠标（需屏幕共享）", category: "screen" },
+  mouse_scroll: { zh: "滚动鼠标滚轮（需屏幕共享）", category: "screen" },
+  type_text: { zh: "输入文字（需屏幕共享）", category: "screen" },
+  press_key: { zh: "按键 / 组合键（需屏幕共享）", category: "screen" },
+  wait: { zh: "等待指定秒数（屏幕操作节奏）", category: "screen" },
+  request_screen_session: { zh: "请求开启屏幕共享会话", category: "screen" },
 };
+
+// 搜索 + 分组视图：按工具名 / 中文描述 / 后端原文过滤；空分组隐藏（无搜索词 = 全部分组）
+const filteredBuiltinGroups = computed(() => {
+  const q = builtinSearch.value.trim().toLowerCase();
+  const matched = builtinTools.value.filter(
+    t => !q
+      || t.name.toLowerCase().includes(q)
+      || t.desc.toLowerCase().includes(q)
+      || t.orig.toLowerCase().includes(q),
+  );
+  const byCat = new Map<string, BuiltinToolRow[]>();
+  for (const t of matched) {
+    const list = byCat.get(t.category) ?? [];
+    list.push(t);
+    byCat.set(t.category, list);
+  }
+  return BUILTIN_CATEGORIES
+    .map(c => ({ ...c, tools: byCat.get(c.key) ?? [] }))
+    .filter(g => g.tools.length > 0);
+});
 </script>
 
 <template>
@@ -311,10 +387,23 @@ const builtinDescZh: Record<string, string> = {
         </div>
         <div v-if="builtinExpanded" class="expand-panel" @click.stop>
           <div class="builtin-tools">
-            <div v-for="tool in builtinTools" :key="tool.name" class="builtin-tool">
-              <span class="builtin-tool-name">{{ tool.name }}</span>
-              <span class="builtin-tool-desc">{{ tool.desc }}</span>
-            </div>
+            <input
+              v-model="builtinSearch"
+              type="text"
+              class="input builtin-search"
+              placeholder="搜索工具名或描述…"
+            />
+            <template v-for="group in filteredBuiltinGroups" :key="group.key">
+              <div class="builtin-group-head">
+                <span class="builtin-group-title">{{ group.label }}</span>
+                <span class="builtin-group-count">{{ group.tools.length }}</span>
+              </div>
+              <div v-for="tool in group.tools" :key="tool.name" class="builtin-tool">
+                <span class="builtin-tool-name">{{ tool.name }}</span>
+                <span class="builtin-tool-desc" :title="tool.orig">{{ tool.desc }}</span>
+              </div>
+            </template>
+            <div v-if="!filteredBuiltinGroups.length" class="builtin-empty">没有匹配的工具</div>
           </div>
         </div>
       </div>
@@ -434,10 +523,15 @@ const builtinDescZh: Record<string, string> = {
   color: var(--ip-color-primary-tint-text); background: var(--ip-color-primary-tint-bg); border-radius: var(--ip-radius-full);
 }
 .builtin-count { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); flex-shrink: 0; }
-.builtin-tools { display: flex; flex-direction: column; gap: var(--ip-spacing-2_5); }
+.builtin-tools { display: flex; flex-direction: column; gap: var(--ip-spacing-2); }
+.builtin-search { height: 30px; margin-bottom: var(--ip-spacing-2); }
+.builtin-group-head { display: flex; align-items: baseline; gap: var(--ip-spacing-2); margin-top: var(--ip-spacing-2); }
+.builtin-group-title { font-size: var(--ip-text-micro-size); font-weight: var(--ip-font-weight-semibold); color: var(--ip-color-text-secondary); letter-spacing: 0.02em; }
+.builtin-group-count { font-size: var(--ip-text-micro-size); color: var(--ip-color-text-disabled); }
 .builtin-tool { display: flex; align-items: baseline; gap: var(--ip-spacing-3); }
 .builtin-tool-name { flex-shrink: 0; min-width: 120px; font-family: var(--ip-font-mono); font-size: var(--ip-text-caption-size); color: var(--ip-color-text-primary); }
-.builtin-tool-desc { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
+.builtin-tool-desc { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.builtin-empty { padding: var(--ip-spacing-2) 0; font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
 
 .list-divider { height: 1px; background-color: var(--ip-color-border-default); margin: 2px 4px; }
 

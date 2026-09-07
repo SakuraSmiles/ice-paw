@@ -87,6 +87,11 @@ impl McpClient for ReadFileTool {
                     "type": "string",
                     "description": "Absolute or relative path to the file to read."
                 },
+                "max_bytes": {
+                    "type": "integer",
+                    "description": "Hard cap on file size in bytes (default 1MB). Files larger than this are rejected — raise it explicitly if you really need the whole file.",
+                    "default": 1048576
+                },
                 "offset": {
                     "type": "integer",
                     "description": "Line number to start reading from (0-based). Use for paginating large files.",
@@ -156,12 +161,18 @@ impl McpClient for ReadFileTool {
         let file_size = metadata.len() as usize;
         if file_size > parsed.max_bytes {
             return Err(AppError::Validation(format!(
-                "文件过大: {} bytes > {} bytes 上限",
+                "文件过大: {} bytes > {} bytes 上限。如确认需要读取，请在请求中提高 \
+                 max_bytes 参数后重试（读取后大文件仍会按行分页返回）",
                 file_size, parsed.max_bytes
             )));
         }
 
-        let bytes = tokio::fs::read(&canonical).await.map_err(AppError::Io)?;
+        let bytes = tokio::fs::read(&canonical).await.map_err(|e| {
+            AppError::Io(std::io::Error::other(format!(
+                "读取文件内容失败: {e}。常见原因：无权限访问该文件，或被其他程序\
+                 独占锁定；请确认进程有读取权限后重试"
+            )))
+        })?;
 
         // office/pdf 走文档提取（docx/xlsx/xls/xlsb/ods/pdf），其余走文本解码。
         // office 解析失败显式 Err（不退回乱码）。
@@ -252,7 +263,10 @@ impl McpClient for ListDirectoryTool {
     }
 
     fn description(&self) -> &str {
-        "List the contents of a local directory. Returns a list of files and subdirectories."
+        "List the contents of a local directory (non-recursive). Returns a JSON array of \
+entries: name, is_dir, size (null for directories). Sorted directories-first, then \
+alphabetically. An empty directory returns []. For a recursive overview of nested \
+subdirectories use directory_tree instead."
     }
 
     fn authorization_level(&self) -> AuthorizationLevel {
@@ -452,7 +466,11 @@ Skips .git/node_modules/target/dist and hidden dirs. Caps depth (8) and node cou
 
         let path = Path::new(&parsed.path);
         if !path.exists() {
-            return Err(AppError::Validation(format!("路径不存在: {}", parsed.path)));
+            return Err(AppError::Validation(format!(
+                "路径不存在: {}。{}",
+                parsed.path,
+                super::path_suggest::suggest_for_missing(path)
+            )));
         }
 
         let mut node_count = 0usize;
@@ -508,7 +526,9 @@ impl McpClient for GetFileInfoTool {
 
     fn description(&self) -> &str {
         "Return metadata for a file or directory: size, type (file/dir/symlink), \
-readonly flag, and modified/created/accessed timestamps (RFC3339, UTC)."
+readonly flag, and modified/created/accessed timestamps (RFC3339, UTC). Cheaper than \
+reading a file — use it to check existence/size before deciding to read, or to \
+inspect a path without triggering file-reading authorization."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -534,9 +554,21 @@ readonly flag, and modified/created/accessed timestamps (RFC3339, UTC)."
 
         let path = Path::new(&parsed.path);
         // symlink_metadata：不跟随符号链接，能识别链接本身
-        let meta = tokio::fs::symlink_metadata(path)
-            .await
-            .map_err(AppError::Io)?;
+        let meta = tokio::fs::symlink_metadata(path).await.map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                // not-found 挂近似候选（did-you-mean），与其余文件工具契约一致
+                AppError::Validation(format!(
+                    "路径不存在: {}。{}",
+                    parsed.path,
+                    super::path_suggest::suggest_for_missing(path)
+                ))
+            } else {
+                AppError::Io(std::io::Error::other(format!(
+                    "读取文件元数据失败: {e}。常见原因：无权限访问路径上的某个\
+                     目录；请核对路径或确认进程权限"
+                )))
+            }
+        })?;
 
         let is_symlink = meta.file_type().is_symlink();
         // 符号链接的 dir/file 判定需跟随目标
