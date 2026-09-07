@@ -3,8 +3,11 @@
 //! 「测试连接」与「拉取模型」共用一次 GET /models 往返（`test_provider_connection`
 //! 命令的数据层）。与聊天 Adapter 的关键差异：
 //!
-//! - **短超时**（connect 5s / 总 15s）：探测要快速反馈，不能套用 Adapter 的
-//!   300s 总超时（长 prompt 视觉调用可到分钟级，但那是聊天路径的事）。
+//! - **短超时**（connect 10s / 总 20s）：探测要快速反馈，不能套用 Adapter 的
+//!   300s 总超时（长 prompt 视觉调用可到分钟级，但那是聊天路径的事）。connect
+//!   对齐聊天 client 的 10s；总预算 20s 是弱网容忍下限——探测比对话先死的
+//!   超时差会让用户把「网络慢」误判成「配置错」（生产实案 2026-09-07：探测
+//!   15s 报无法连接、同配置对话正常），多端点串行最坏 2×20s 仍是可等量级。
 //! - **错误即结果**：调用方（provider_cmd）把 `Err` 转成 `ok:false + error`
 //!   结构化返回，不向上抛——前端要展示具体失败原因而非通用错误弹窗。
 //!
@@ -20,11 +23,11 @@ use super::openai;
 use super::ProviderProtocol;
 use crate::error::{AppError, AppResult};
 
-/// 探测专用 HTTP 客户端：短超时（connect 5s / 总 15s）。
+/// 探测专用 HTTP 客户端：短超时（connect 10s / 总 20s，见模块头）。
 fn probe_client() -> AppResult<reqwest::Client> {
     reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(5))
-        .timeout(Duration::from_secs(15))
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(20))
         .build()
         .map_err(|e| AppError::Internal(format!("构建探测 HTTP 客户端失败: {e}")))
 }
@@ -54,10 +57,17 @@ pub async fn probe_models(
             .header("anthropic-version", anthropic::ANTHROPIC_VERSION),
     };
 
-    let response = request
-        .send()
-        .await
-        .map_err(|e| AppError::Llm(format!("无法连接到 {}: {e}", base_url)))?;
+    let response = request.send().await.map_err(|e| {
+        // 网络层失败（超时/DNS/连接拒绝）≠ 配置错误：探测的超时预算比聊天通道
+        // 紧得多（20s vs 300s），弱网/代理下可能「探测挂而对话通」。给「先保存
+        // 直接试」的指引，别让用户把红字当成配置失败的证据（生产实案：表单
+        // 「测试连接」失败劝退用户，同配置经无探测环节的审批卡路径对话成功）。
+        // 只挂网络层错误——HTTP 状态码错误（401/404）是确定性失败，保存了也没用。
+        AppError::Llm(format!(
+            "无法连接到 {base_url}（{e}）。弱网或代理环境下探测可能超时，而聊天通道\
+             超时预算更长——可先保存配置，在会话中直接发送消息试用"
+        ))
+    })?;
 
     let status = response.status();
     if !status.is_success() {

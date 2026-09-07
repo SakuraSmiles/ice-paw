@@ -432,6 +432,9 @@ pub struct AgentUpdate {
     pub model: Option<String>,
     pub system_prompt: Option<String>,
     /// 双层 Option：外层 Some 表示调用方传了该字段，内层 None 表示清空
+    /// （JSON null 须 deserialize_double_option 与字段缺席区分——resolve_base_url_arg
+    /// 的显式设/清语义依赖它；曾长期缺失致 null 与缺席同为「不改」）
+    #[serde(default, deserialize_with = "deserialize_double_option")]
     pub base_url: Option<Option<String>>,
     pub temperature: Option<f64>,
     pub max_tokens: Option<i32>,

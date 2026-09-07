@@ -983,6 +983,29 @@ mod tests {
     }
 
     #[test]
+    fn agent_update_base_url_double_option_serde() {
+        // 双层 Option 的 JSON 三形态（2026-09-07 补齐：base_url 曾缺
+        // deserialize_double_option，null 与缺席同为「不改」，显式清空不可达——
+        // resolve_base_url_arg 的 Some(None)=清空语义靠它才可达）：
+        // 字段缺席 → None（不改）
+        let absent: AgentUpdate = serde_json::from_str(r#"{"id":"a1"}"#).unwrap();
+        assert_eq!(absent.base_url, None);
+        // JSON null → Some(None)（清空）
+        let nulled: AgentUpdate =
+            serde_json::from_str(r#"{"id":"a1","base_url":null}"#).unwrap();
+        assert_eq!(nulled.base_url, Some(None));
+        // 值 → Some(Some(v))（设定）
+        let valued: AgentUpdate = serde_json::from_str(
+            r#"{"id":"a1","base_url":"https://api.deepseek.com"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            valued.base_url,
+            Some(Some("https://api.deepseek.com".to_string()))
+        );
+    }
+
+    #[test]
     fn validate_allows_empty_key_for_ollama_and_custom() {
         // 免鉴权 provider：空 key 合法（空串仍会存 Stronghold 占位记录）
         assert!(validate_new_agent(&new_agent("ollama", "")).is_ok());
