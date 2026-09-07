@@ -991,12 +991,10 @@ const hasFilterResults = computed(() => {
   font-size: var(--ip-text-body-sm-size);
 }
 
-/* ===== 卡片列表（滚动容器 + 限宽，兄弟设置页同款惯例） ===== */
+/* ===== 卡片列表（滚动容器；限宽居中由 SettingsLayout 内容列统一控制） ===== */
 .settings-list {
   flex: 1;
   width: 100%;
-  max-width: 780px;
-  margin: 0 auto;
   padding: 8px 28px 24px;
   display: flex;
   flex-direction: column;

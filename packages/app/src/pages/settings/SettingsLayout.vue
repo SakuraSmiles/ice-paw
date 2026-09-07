@@ -193,5 +193,11 @@ function navigate(key: string) {
   min-width: 0;
   min-height: 0;
   align-self: stretch;
+  /* 内容列统一限宽居中（GitHub/Linear settings 先例，与项目设置 tab 的 960px
+     同值）：五个二级页同宽，消除「通用 780px 收窄 vs 其余全宽」切页时的宽度
+     跳变割裂感；flex 剩余空间由 auto margin 吸收实现居中 */
+  width: 100%;
+  max-width: 960px;
+  margin: 0 auto;
 }
 </style>
