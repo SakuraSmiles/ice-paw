@@ -7,6 +7,7 @@ import ErrorBanner from "../../components/common/ErrorBanner.vue";
 import type { McpServer, McpServerSnapshot } from "../../types";
 import { bridge } from "../../api/bridge";
 import { GLM_MCP_TEMPLATES, type GlmMcpTemplate } from "../../data/glmMcpTemplates";
+import { toolDisplayName } from "../../utils/toolLabels";
 
 const servers = ref<McpServerSnapshot[]>([]);
 const loading = ref(true);
@@ -399,7 +400,8 @@ const filteredBuiltinGroups = computed(() => {
                 <span class="builtin-group-count">{{ group.tools.length }}</span>
               </div>
               <div v-for="tool in group.tools" :key="tool.name" class="builtin-tool">
-                <span class="builtin-tool-name">{{ tool.name }}</span>
+                <span class="builtin-tool-name">{{ toolDisplayName(tool.name) }}</span>
+                <span class="builtin-tool-id" :title="tool.name">{{ tool.name }}</span>
                 <span class="builtin-tool-desc" :title="tool.orig">{{ tool.desc }}</span>
               </div>
             </template>
@@ -528,8 +530,11 @@ const filteredBuiltinGroups = computed(() => {
 .builtin-group-head { display: flex; align-items: baseline; gap: var(--ip-spacing-2); margin-top: var(--ip-spacing-2); }
 .builtin-group-title { font-size: var(--ip-text-micro-size); font-weight: var(--ip-font-weight-semibold); color: var(--ip-color-text-secondary); letter-spacing: 0.02em; }
 .builtin-group-count { font-size: var(--ip-text-micro-size); color: var(--ip-color-text-disabled); }
-.builtin-tool { display: flex; align-items: baseline; gap: var(--ip-spacing-3); }
-.builtin-tool-name { flex-shrink: 0; min-width: 120px; font-family: var(--ip-font-mono); font-size: var(--ip-text-caption-size); color: var(--ip-color-text-primary); }
+.builtin-tool { display: flex; align-items: baseline; gap: var(--ip-spacing-2_5); }
+/* 主名=中文展示名（toolLabels 单一真相源，与聊天气泡工具行同源）；原名降次位
+   mono 灰——enabled_tools 等配置引用的是英文名，保留可见映射 */
+.builtin-tool-name { flex-shrink: 0; min-width: 104px; font-size: var(--ip-text-body-sm-size); font-weight: var(--ip-font-weight-medium); color: var(--ip-color-text-primary); }
+.builtin-tool-id { flex-shrink: 0; font-family: var(--ip-font-mono); font-size: var(--ip-text-micro-size); color: var(--ip-color-text-disabled); }
 .builtin-tool-desc { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .builtin-empty { padding: var(--ip-spacing-2) 0; font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
 

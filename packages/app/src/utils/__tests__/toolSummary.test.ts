@@ -23,9 +23,9 @@ describe("basenameOf / dirnameOf", () => {
 });
 
 describe("展示名词表", () => {
-  it("结构不变式：11 项、值非空、值唯一（仿 stylePresets 结构测试范式）", () => {
+  it("结构不变式：40 项、值非空、值唯一（仿 stylePresets 结构测试范式）", () => {
     const entries = Object.entries(TOOL_LABELS);
-    expect(entries.length).toBe(11);
+    expect(entries.length).toBe(40);
     for (const [, label] of entries) {
       expect(label.trim().length).toBeGreaterThan(0);
     }
@@ -34,9 +34,10 @@ describe("展示名词表", () => {
   });
 
   it("词表外裸透英文原值（降级不猜）", () => {
-    expect(toolDisplayName("search_kb")).toBe("search_kb");
-    expect(toolDisplayName("run_command")).toBe("run_command");
+    expect(toolDisplayName("some_external_tool")).toBe("some_external_tool");
+    expect(toolDisplayName("t99_custom")).toBe("t99_custom");
     expect(toolDisplayName("write_file")).toBe("写入文件");
+    expect(toolDisplayName("request_screen_session")).toBe("请求屏幕共享");
   });
 });
 
