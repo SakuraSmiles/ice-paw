@@ -572,8 +572,12 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
   min-width: 0;
 }
 .ev-err-text { color: var(--ip-danger-base); }
-/* 行首语义图标（思考 Brain / 续写 RotateCw）：行内基线对齐，弱色不抢正文 */
+/* 行首语义图标（思考 Brain / 续写 RotateCw）：行内基线对齐，弱色不抢正文。
+   ⚠️ display:inline-block 必须显式写——base.css 全局 reset svg{display:block}
+   会把文本流里的图标打成块级独占一行（图标行+正文行的双行实案 2026-09-07）；
+   lucide 图标要进文本流一律显式 inline-block，进 flex 容器则不受影响 */
 .ev-mark {
+  display: inline-block;
   flex-shrink: 0;
   margin-right: 3px;
   vertical-align: -2px;
