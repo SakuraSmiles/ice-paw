@@ -946,7 +946,7 @@ const RESUMABLE_REASONS = new Set([
                 <Transition name="think-swap" mode="out-in">
                   <div v-if="isLiveAssistant(item) && chat.streamingThinking" key="live" class="think-block">
                     <div class="think-toggle" @click="toggleThinking('streaming')">
-                      <StatusGlyph status="running" variant="spinner" class="think-glyph" />
+                      <StatusGlyph status="running" class="think-glyph" />
                       <span class="think-label">思考</span>
                       <span class="think-status">进行中… {{ thinkingElapsed }}</span>
                       <span class="think-chevron">{{ expandedThinking.has('streaming') ? '▾' : '▸' }}</span>
@@ -1070,7 +1070,7 @@ const RESUMABLE_REASONS = new Set([
                                   :status="call.result.isError ? 'error' : 'done'"
                                 />
                                 <StatusGlyph v-else-if="call.ended" status="wait" />
-                                <StatusGlyph v-else status="running" variant="spinner" />
+                                <StatusGlyph v-else status="running" />
                                 <span class="tool-name">{{ s.display }}</span>
                                 <span v-if="call.result?.durationMs" class="tool-duration">{{ formatDuration(call.result.durationMs) }}</span>
                                 <span v-if="s.secondary" class="tool-secondary">{{ s.secondary }}</span>
@@ -1083,7 +1083,7 @@ const RESUMABLE_REASONS = new Set([
                                   :status="call.result.isError ? 'error' : 'done'"
                                 />
                                 <StatusGlyph v-else-if="call.ended" status="wait" />
-                                <StatusGlyph v-else status="running" variant="spinner" />
+                                <StatusGlyph v-else status="running" />
                                 <span class="tool-name">{{ toolDisplayName(call.name) }}</span>
                                 <span v-if="call.result?.durationMs" class="tool-duration">{{ formatDuration(call.result.durationMs) }}</span>
                                 <span class="tool-preview">{{ truncateJson(call.arguments || '') }}</span>
@@ -1151,7 +1151,7 @@ const RESUMABLE_REASONS = new Set([
 
     <div v-if="chat.sending && chat.messages.length > 0" class="cursor-bar">
       <div class="cursor-track">
-        <StatusGlyph status="running" variant="spinner" /><span class="cursor-label">正在生成…</span>
+        <StatusGlyph status="running" /><span class="cursor-label">正在生成…</span>
       </div>
     </div>
 

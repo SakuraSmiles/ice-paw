@@ -2,9 +2,9 @@
   StatusGlyph — 状态图标语系（2026-09-04，动效参考视频档1）
 
   五态（色走语义层 + 主色，勿再加新色）：
-  - running：variant="pixel"（默认）= 3×3 像素格顺时针点亮循环（视频签名元素）；
-             variant="spinner" = 单线渐变环旋转（聊天气泡内进行中——用户拍板
-             2026-09-05：气泡内转圈、其余位置保持像素格）。主色，进行中是信息态非警告态
+  - running：3×3 像素格顺时针点亮循环（视频签名元素），全场景统一。主色，
+    进行中是信息态非警告态。（2026-09-07：150fefa 曾引入气泡内 spinner variant，
+    实机反馈「怎么又是转圈圈」后撤除——勿再分岔 running 形态）
   - done：环形 + Lucide Check —— success
   - error：环形 + Lucide X —— danger（X 绝对定位居中 + 缩一号，防贴环错位感）
   - wait：空心环 —— warning（等待执行结果/授权）
@@ -15,7 +15,7 @@
   1. 像素格基准态 opacity 0.35 全格可见——prefers-reduced-motion 全局归零（tokens §12）
      会把循环打成 0.01ms + iteration 1 落在 100% 帧，基准态即降级后的静止帧，必须可读。
   2. 全动画纯 transform/opacity（合成器友好；ChatMessages 是 content-visibility 热路径）。
-  3. 循环时长唯一来源 --ip-duration-pixel / --ip-duration-spinner（tokens.css），勿散点硬编码。
+  3. 循环时长唯一来源 --ip-duration-pixel（tokens.css），勿散点硬编码。
   4. 状态切换重播：v-if/v-else-if 分支切换天然重挂载（mount 动画自动重放），勿改成
      单元素 class 切换。
   5. 气泡内 glyph 都在 flex 居中行（tool-toggle/think-toggle）——StatusGlyph 根是
@@ -32,11 +32,8 @@ withDefaults(
     size?: number;
     /** 覆盖默认 aria 文案（如 TaskPanel 已结束任务的「已结束」） */
     label?: string;
-    /** running 形态：pixel=九宫格（默认，TaskPanel/委派卡/会话头）；spinner=单线
-     *  渐变环旋转（聊天气泡内的思考/工具/生成指示）。非 running 态无差。 */
-    variant?: "pixel" | "spinner";
   }>(),
-  { size: 14, label: undefined, variant: "pixel" },
+  { size: 14, label: undefined },
 );
 
 // 点亮序（视频：围绕边框 顺时针，最后中心）：DOM 行优先 1..9 → 点亮序 1,2,3,6,9,8,7,4,5。
@@ -55,7 +52,7 @@ const DEFAULT_LABELS: Record<string, string> = {
 <template>
   <span class="status-glyph" :style="{ '--glyph-size': size + 'px' }" role="img" :aria-label="label ?? DEFAULT_LABELS[status]">
     <span
-      v-if="status === 'running' && variant === 'pixel'"
+      v-if="status === 'running'"
       class="glyph-grid"
       aria-hidden="true"
     >
@@ -66,11 +63,6 @@ const DEFAULT_LABELS: Record<string, string> = {
         :style="{ animationDelay: d + 'ms' }"
       />
     </span>
-    <span
-      v-else-if="status === 'running'"
-      class="glyph-spinner"
-      aria-hidden="true"
-    />
     <span v-else-if="status === 'done'" class="glyph-ring glyph-done" aria-hidden="true">
       <Check :size="size - 5" :stroke-width="3" />
     </span>
@@ -116,36 +108,6 @@ const DEFAULT_LABELS: Record<string, string> = {
   15% { opacity: 1; transform: scale(1); }
   55% { opacity: 1; }
   100% { opacity: 0.35; transform: scale(0.85); }
-}
-
-/* ----- running · spinner：单线渐变环旋转（聊天气泡内） -----
-   conic 渐变尾透明头实色 → mask 挖空中心只留 ~1.5px 环 → 旋转即「渐变追尾」。
-   环色走 --ip-primary-500 自动跟随主题。reduced-motion 归零后停在起始帧，
-   仍是一段可见渐变弧（缺口即「动态中」的静止暗示）。纯 transform 动画。 */
-.glyph-spinner {
-  width: 100%;
-  height: 100%;
-  border-radius: 50%;
-  background: conic-gradient(
-    from 0deg,
-    transparent 0%,
-    var(--ip-primary-500) 90%,
-    var(--ip-primary-600) 100%
-  );
-  -webkit-mask: radial-gradient(
-    farthest-side,
-    transparent calc(100% - 2px),
-    #000 calc(100% - 1.5px)
-  );
-  mask: radial-gradient(
-    farthest-side,
-    transparent calc(100% - 2px),
-    #000 calc(100% - 1.5px)
-  );
-  animation: glyph-spin var(--ip-duration-spinner, 0.72s) linear infinite;
-}
-@keyframes glyph-spin {
-  to { transform: rotate(360deg); }
 }
 
 /* ----- done / error：环形 + Lucide 图标，mount 时轻 pop ----- */
