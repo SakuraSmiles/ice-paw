@@ -1070,7 +1070,7 @@ const RESUMABLE_REASONS = new Set([
                                   :status="call.result.isError ? 'error' : 'done'"
                                 />
                                 <StatusGlyph v-else-if="call.ended" status="wait" />
-                                <StatusGlyph v-else status="running" />
+                                <StatusGlyph v-else status="running" variant="spinner" />
                                 <span class="tool-name">{{ s.display }}</span>
                                 <span v-if="call.result?.durationMs" class="tool-duration">{{ formatDuration(call.result.durationMs) }}</span>
                                 <span v-if="s.secondary" class="tool-secondary">{{ s.secondary }}</span>
@@ -1083,7 +1083,7 @@ const RESUMABLE_REASONS = new Set([
                                   :status="call.result.isError ? 'error' : 'done'"
                                 />
                                 <StatusGlyph v-else-if="call.ended" status="wait" />
-                                <StatusGlyph v-else status="running" />
+                                <StatusGlyph v-else status="running" variant="spinner" />
                                 <span class="tool-name">{{ toolDisplayName(call.name) }}</span>
                                 <span v-if="call.result?.durationMs" class="tool-duration">{{ formatDuration(call.result.durationMs) }}</span>
                                 <span class="tool-preview">{{ truncateJson(call.arguments || '') }}</span>

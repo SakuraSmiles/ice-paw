@@ -54,6 +54,21 @@ describe("StatusGlyph 五态形态", () => {
     expect(w.find(".status-glyph.plan-mark-done").exists()).toBe(true);
   });
 
+  it("variant=spinner：running 渐变环（仅工具调用行使用）；非 running 态不受 variant 影响", () => {
+    const spinner = mount(StatusGlyph, { props: { status: "running", variant: "spinner" } });
+    expect(spinner.find(".glyph-spinner").exists()).toBe(true);
+    expect(spinner.find(".px-cell").exists()).toBe(false);
+
+    // 默认 pixel：思考行/生成指示/TaskPanel/委派卡/会话头全九宫格
+    const pixel = mount(StatusGlyph, { props: { status: "running" } });
+    expect(pixel.find(".glyph-grid").exists()).toBe(true);
+    expect(pixel.find(".glyph-spinner").exists()).toBe(false);
+
+    // spinner 对终态无差：done 仍是对勾环
+    const done = mount(StatusGlyph, { props: { status: "done", variant: "spinner" } });
+    expect(done.find(".glyph-done").exists()).toBe(true);
+  });
+
   it("size 驱动 CSS 变量（默认 14）", () => {
     const def = mount(StatusGlyph, { props: { status: "done" } });
     expect(def.attributes("style")).toContain("--glyph-size: 14px");
