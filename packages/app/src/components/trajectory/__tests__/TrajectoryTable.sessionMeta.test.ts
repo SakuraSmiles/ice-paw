@@ -4,7 +4,7 @@
 import { describe, it, expect } from "vitest";
 import { mount } from "@vue/test-utils";
 import TrajectoryTable from "../TrajectoryTable.vue";
-import { buildRows } from "../../../composables/useTrajectory";
+import { buildRows, DEFAULT_HIDDEN } from "../../../composables/useTrajectory";
 import { scopeTurnKeys } from "../../../composables/useProjectTrajectory";
 import type { ProjectEvent } from "../../../types";
 
@@ -39,7 +39,7 @@ function mountTable(props: Record<string, unknown> = {}) {
   const events = mergedEvents();
   const rows = buildRows(scopeTurnKeys(events), {
     collapsedTurns: new Set(),
-    showAux: false,
+    hiddenKinds: new Set(DEFAULT_HIDDEN),
     query: "",
     turnOffset: 0,
   });
@@ -80,7 +80,7 @@ describe("TrajectoryTable 跨会话扩展（可选 prop 回归）", () => {
 
   it("selectedKey 精确高亮：跨会话同 seq 只亮目标行（s1 头在前，事件序 s1→s2）", async () => {
     const events = mergedEvents();
-    const rows = buildRows(scopeTurnKeys(events), { collapsedTurns: new Set(), showAux: false, query: "", turnOffset: 0 });
+    const rows = buildRows(scopeTurnKeys(events), { collapsedTurns: new Set(), hiddenKinds: new Set(DEFAULT_HIDDEN), query: "", turnOffset: 0 });
     // s2 的 assistant 行：seq=2 与 s1 的 assistant 行相同——只有 key 能区分
     const target = rows.find((r) => r.type === "event" && r.key === "s2::t1-assistant_message-2")!;
     expect(target).toBeTruthy();

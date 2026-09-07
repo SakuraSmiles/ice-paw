@@ -13,7 +13,8 @@
 // - tool_execution 事件自含 arguments/result/duration_ms/is_error，单源无需跨查
 // - tool_result_message 是 DB 结果行侧的镜像（tool_execution 已含结果）→ 不生成行
 // - turn_context / turn_ended 折进 turn 分割头（配置与终止摘要常驻可见，全量进检查器）
-// - attachment_stored / modal_adapted / hook_injected = 辅助事件（低频审计信息）→ 默认隐藏，开关显示
+// - 类型筛选：hiddenKinds 细筛键集合（默认藏三类辅助事件；「仅对话」预设与「类型」
+//   多选下拉操纵同一状态，见 FILTER_GROUPS / DEFAULT_HIDDEN）
 import { ref } from "vue";
 import { bridge } from "../api/bridge";
 import type {
@@ -49,6 +50,100 @@ export const ROW_KIND_LABELS: Record<RowKind, string> = {
   discarded: "DISCARD",
   aux: "AUX",
 };
+
+// =========================================================================
+// 类型筛选模型（「仅对话」预设 + 「类型」多选下拉 = 同一 hiddenKinds 状态的两个视图）
+// =========================================================================
+
+/** 细筛键：RowKind 的展开——aux 折叠的三类（附件落库/视觉适配/钩子注入）各归各键 */
+export type FilterKey =
+  | "user"
+  | "assistant"
+  | "tool"
+  | "error"
+  | "summary"
+  | "plan"
+  | "discarded"
+  | "attachment_stored"
+  | "modal_adapted"
+  | "hook_injected";
+
+/** 默认隐藏集：三类辅助事件（低频审计信息；与旧 showAux=false 行为等价） */
+export const DEFAULT_HIDDEN: FilterKey[] = ["attachment_stored", "modal_adapted", "hook_injected"];
+
+/** 「类型」下拉的分组与中文文案（4 组 10 键；TrajectoryToolbar 与 ProjectTimeline 共用） */
+export const FILTER_GROUPS: { label: string; items: { key: FilterKey; label: string }[] }[] = [
+  { label: "对话", items: [{ key: "user", label: "用户消息" }, { key: "assistant", label: "回复消息" }] },
+  { label: "过程", items: [{ key: "tool", label: "工具调用" }, { key: "error", label: "错误" }] },
+  { label: "记录", items: [{ key: "summary", label: "摘要" }, { key: "plan", label: "计划" }, { key: "discarded", label: "废弃轮" }] },
+  { label: "辅助", items: [{ key: "attachment_stored", label: "附件落库" }, { key: "modal_adapted", label: "视觉适配" }, { key: "hook_injected", label: "钩子注入" }] },
+];
+
+/** 扁平键序（「仅对话」预设等全量计算用） */
+export const FILTER_KEYS: FilterKey[] = FILTER_GROUPS.flatMap((g) => g.items.map((it) => it.key));
+
+/** 事件 kind → 细筛键。无键 = 折进头/镜像 kind（与 summarizeEvent 返回 null 的集合一致）。
+ *  ⚠️ 新增生成行的事件 kind 时与 summarizeEvent 的 case 两边一起补（测试有结构锁）。 */
+const EV_KIND_TO_FILTER: Record<string, FilterKey> = {
+  user_message: "user",
+  assistant_message: "assistant",
+  tool_execution: "tool",
+  summary_created: "summary",
+  summary_updated: "summary",
+  plan_updated: "plan",
+  message_error: "error",
+  message_discarded: "discarded",
+  attachment_stored: "attachment_stored",
+  modal_adapted: "modal_adapted",
+  hook_injected: "hook_injected",
+};
+
+/** 「仅对话」预设：只留 用户消息 + 回复消息（turn 头骨架保留——统计/终止/⚠ 计数仍在） */
+export function chatOnlyHidden(): Set<FilterKey> {
+  return new Set(FILTER_KEYS.filter((k) => k !== "user" && k !== "assistant"));
+}
+
+/** 当前筛选是否恰为「仅对话」态（仅对话药丸亮态的派生判据——无第二状态源，
+ *  用户在下拉里任何偏离预设的改动都会让药丸自动熄灭） */
+export function isChatOnly(hidden: ReadonlySet<FilterKey>): boolean {
+  return !hidden.has("user") && !hidden.has("assistant") && hidden.size === FILTER_KEYS.length - 2;
+}
+
+/** 加载窗口内各类型事件计数（「类型」下拉的信息气味；单遍，无字符串重活。
+ *  supersede 的历史 assistant 会略抬高计数——气味数字，可接受） */
+export function countByFilterKey(events: SessionEvent[]): Partial<Record<FilterKey, number>> {
+  const out: Partial<Record<FilterKey, number>> = {};
+  for (const ev of events) {
+    const k = EV_KIND_TO_FILTER[ev.kind];
+    if (k) out[k] = (out[k] ?? 0) + 1;
+  }
+  return out;
+}
+
+/** 筛选持久化（循 durationMode 先例；TrajectoryView 与 ProjectTimeline 共用同一 key，
+ *  跨页同一心智模型） */
+const HIDDEN_KINDS_KEY = "icepaw-traj-hidden-kinds";
+
+export function loadHiddenKinds(): Set<FilterKey> {
+  try {
+    const raw = localStorage.getItem(HIDDEN_KINDS_KEY);
+    if (raw == null) return new Set(DEFAULT_HIDDEN);
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return new Set(DEFAULT_HIDDEN);
+    // 清洗：只认已知键（键词表演化后旧值自动剔除）；空数组是合法态（全显，区分于未存过）
+    return new Set(arr.filter((k): k is FilterKey => FILTER_KEYS.includes(k)));
+  } catch {
+    return new Set(DEFAULT_HIDDEN);
+  }
+}
+
+export function saveHiddenKinds(hidden: ReadonlySet<FilterKey>): void {
+  try {
+    localStorage.setItem(HIDDEN_KINDS_KEY, JSON.stringify([...hidden]));
+  } catch {
+    /* 隐私模式等写入失败静默——筛选退化为本次会话内生效 */
+  }
+}
 
 /** turn 分割头（较粗分割线 + 摘要：轮次号 · 终止原因 · 耗时 · 用量；点击折叠/展开） */
 export interface TurnHeaderRow {
@@ -113,8 +208,8 @@ export type TrajectoryRow = TurnHeaderRow | EventRow;
 export interface BuildRowsOptions {
   /** 已折叠的 turn key 集合（搜索时忽略——强制展开以呈现命中） */
   collapsedTurns: Set<string>;
-  /** 显示辅助事件（attachment_stored / modal_adapted / hook_injected） */
-  showAux: boolean;
+  /** 隐藏的事件类型（细筛键集合；默认集 = 三类辅助事件，见 DEFAULT_HIDDEN） */
+  hiddenKinds: ReadonlySet<FilterKey>;
   /** 搜索词（大小写不敏感子串；命中 summary 或 payload 序列化文本） */
   query: string;
   /** 窗口前（seq 更早一侧）的全局轮次数（M3：尾部优先分页下首屏轮号不从 1 起） */
@@ -360,9 +455,13 @@ export function buildRows(events: SessionEvent[], opts: BuildRowsOptions): Traje
       rows.push(currentHeader);
     }
 
+    // 类型筛选在 summarize 之前跳过（省隐藏类的摘要构造）；无键 = 折进头/镜像 kind，
+    // 与 summarizeEvent 的 null 分支同集（结构测试锁两边同步）。turn 头统计在预扫
+    // 已覆盖全部事件，不受筛选影响——骨架信息不丢失。
+    const fk = EV_KIND_TO_FILTER[ev.kind];
+    if (fk === undefined || opts.hiddenKinds.has(fk)) continue;
     const s = summarizeEvent(ev);
     if (!s) continue; // 折进头/镜像 kind 不生成行
-    if (s.kind === "aux" && !opts.showAux) continue;
     if (ev.kind === "assistant_message" && lastIndexOf.get(`${tk}|${ev.message_id ?? `__seq${ev.seq}`}`) !== i) {
       continue; // supersede：已被续写覆盖
     }

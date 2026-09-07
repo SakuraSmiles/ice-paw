@@ -3,17 +3,25 @@
 
   控件：搜索框（实时，未命中行降透明度；Esc 清空；/ 全局聚焦）·
   展开/收起合一按钮（anyCollapsed 驱动的智能切换：有折叠 → 展开全部，否则收起全部）·
-  耗时开关（时间轴投影：序号等宽 ↔ 真实耗时+空闲压缩）·
-  辅助事件药丸开关（默认隐藏低频事件）· 导出 JSONL。
+  仅对话药丸（高频预设：只留用户消息+回复，工具调用等隐藏；轮次骨架保留）·
+  类型多选下拉（低频细筛：hiddenKinds 状态的编辑器，与仅对话同源）·
+  耗时开关（时间轴投影：序号等宽 ↔ 真实耗时+空闲压缩）· 导出 JSONL。
   全部状态在父级 TrajectoryView，本组件纯受控；focusSearch 供键盘导航 / 键调用。
   图标全 SVG（跨平台渲染一致，无 emoji 字体差异）。
 -->
 <script setup lang="ts">
 import { ref } from "vue";
+import TrajectoryKindFilter from "./TrajectoryKindFilter.vue";
+import type { FilterKey } from "../../composables/useTrajectory";
 
 defineProps<{
   query: string;
-  showAux: boolean;
+  /** 隐藏的事件类型（「类型」下拉与「仅对话」预设操纵的同一状态） */
+  hidden: FilterKey[];
+  /** 恰为「仅对话」态（派生判据 isChatOnly；药丸亮态） */
+  chatOnly: boolean;
+  /** 加载窗口内各类型事件计数（透传给类型下拉做信息气味） */
+  counts?: Partial<Record<FilterKey, number>>;
   /** 时间轴投影：false = 序号等宽（默认）；true = 真实耗时 + 空闲压缩 */
   durationMode: boolean;
   /** 有任一轮处于折叠态（驱动展开/收起按钮的形态与文案） */
@@ -25,7 +33,8 @@ defineProps<{
 
 const emit = defineEmits<{
   "update:query": [v: string];
-  "update:showAux": [v: boolean];
+  "update:hidden": [v: FilterKey[]];
+  "update:chatOnly": [v: boolean];
   "update:durationMode": [v: boolean];
   "toggle-turns": [];
   /** Enter/Shift+Enter 在命中行间循环跳转（dir = 前进/后退） */
@@ -68,6 +77,24 @@ defineExpose({ focusSearch });
       {{ anyCollapsed ? "展开全部" : "收起全部" }}
     </button>
 
+    <label
+      class="tbar-toggle"
+      title="只看用户消息与回复（工具调用等隐藏；轮次骨架与统计保留）"
+    >
+      <input
+        type="checkbox"
+        :checked="chatOnly"
+        @change="emit('update:chatOnly', ($event.target as HTMLInputElement).checked)"
+      />
+      <span class="tbar-pill">仅对话</span>
+    </label>
+
+    <TrajectoryKindFilter
+      :hidden="hidden"
+      :counts="counts"
+      @update:hidden="emit('update:hidden', $event)"
+    />
+
     <label class="tbar-toggle" title="时间轴按真实耗时投影并压缩空闲（默认：事件序号等宽）">
       <input
         type="checkbox"
@@ -75,15 +102,6 @@ defineExpose({ focusSearch });
         @change="emit('update:durationMode', ($event.target as HTMLInputElement).checked)"
       />
       <span class="tbar-pill">耗时</span>
-    </label>
-
-    <label class="tbar-toggle" title="附件落库 / 视觉适配 / 钩子注入等低频事件">
-      <input
-        type="checkbox"
-        :checked="showAux"
-        @change="emit('update:showAux', ($event.target as HTMLInputElement).checked)"
-      />
-      <span class="tbar-pill">辅助事件</span>
     </label>
 
     <div class="tbar-spacer" />

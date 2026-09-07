@@ -1,6 +1,18 @@
 // buildRows 行模型单测（轨迹表格数据内核）
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { buildRows, useTrajectory, type EventRow, type TurnHeaderRow } from "../useTrajectory";
+import {
+  buildRows,
+  useTrajectory,
+  chatOnlyHidden,
+  countByFilterKey,
+  isChatOnly,
+  loadHiddenKinds,
+  saveHiddenKinds,
+  DEFAULT_HIDDEN,
+  FILTER_KEYS,
+  type EventRow,
+  type TurnHeaderRow,
+} from "../useTrajectory";
 import type { SessionEvent } from "../../types";
 import { bridge } from "../../api/bridge";
 
@@ -34,7 +46,7 @@ function ended(termination = "stop") {
 }
 
 function evRows(events: SessionEvent[], opts?: Partial<Parameters<typeof buildRows>[1]>) {
-  const rows = buildRows(events, { collapsedTurns: new Set(), showAux: false, query: "", turnOffset: 0, ...opts });
+  const rows = buildRows(events, { collapsedTurns: new Set(), hiddenKinds: new Set(DEFAULT_HIDDEN), query: "", turnOffset: 0, ...opts });
   return {
     rows,
     events: () => rows.filter((r): r is EventRow => r.type === "event"),
@@ -123,7 +135,7 @@ describe("buildRows 行模型", () => {
       ev("assistant_message", { content: "a", blocks: [], round: 0, continuation: false }, { messageId: "m1" }),
       ev("tool_execution", { tool_call_id: "c", tool_name: "t", arguments: "{}", is_error: false, duration_ms: 1 }, { messageId: "m1" }),
     ];
-    const rows = buildRows(events, { collapsedTurns: new Set(["t1"]), showAux: false, query: "", turnOffset: 0 });
+    const rows = buildRows(events, { collapsedTurns: new Set(["t1"]), hiddenKinds: new Set(DEFAULT_HIDDEN), query: "", turnOffset: 0 });
     expect(rows.map((r) => r.type)).toEqual(["turn-header"]);
     const h = rows[0];
     expect(h.type === "turn-header" && h.roundCount === 1 && h.toolCount === 1).toBe(true);
@@ -139,7 +151,7 @@ describe("buildRows 行模型", () => {
       ev("tool_execution", { tool_call_id: "c", tool_name: "zzz", arguments: "{\"hidden\":\"needle\"}", is_error: false, duration_ms: 1 }, { turnId: "t2", messageId: "m2" }),
     ];
     // 两 turn 都折叠 → 搜索应无视折叠（事件行照常出现）
-    const rows = buildRows(events, { collapsedTurns: new Set(["t1", "t2"]), showAux: false, query: "needle", turnOffset: 0 });
+    const rows = buildRows(events, { collapsedTurns: new Set(["t1", "t2"]), hiddenKinds: new Set(DEFAULT_HIDDEN), query: "needle", turnOffset: 0 });
     const evRowsAll = rows.filter((r): r is EventRow => r.type === "event");
     expect(evRowsAll.length).toBeGreaterThan(0);
     const hit = evRowsAll.find((r) => r.summary.includes("zzz"));
@@ -150,14 +162,35 @@ describe("buildRows 行模型", () => {
     expect(h2?.type === "turn-header" && h2.matchCount === 1).toBe(true);
   });
 
-  it("辅助事件默认隐藏，showAux 打开", () => {
+  it("类型筛选：默认藏三类辅助事件；细筛键逐类可控（旧 showAux 布尔细分）", () => {
     const aux = [
       ev("modal_adapted", { stage: "user_image", mode: "ocr_substitute", items: [{ index: 0, outcome: "ocr" }] }),
       ev("hook_injected", { point: "before_llm", prompt: "p" }),
       ev("attachment_stored", { kind: "page", items: [{ idx: 0, name: "a", kind: "pdf", label: "l", token_est: 1 }] }),
     ];
+    // 默认（DEFAULT_HIDDEN）：三类全藏
     expect(evRows(aux).events()).toHaveLength(0);
-    expect(evRows(aux, { showAux: true }).events().map((r) => r.kind)).toEqual(["aux", "aux", "aux"]);
+    // 空集 = 全显（含三类辅助）
+    expect(evRows(aux, { hiddenKinds: new Set() }).events().map((r) => r.kind)).toEqual(["aux", "aux", "aux"]);
+    // 细分：只藏视觉适配 → 钩子注入/附件落库照常
+    expect(evRows(aux, { hiddenKinds: new Set(["modal_adapted"]) }).events().map((r) => r.summary))
+      .toEqual(["钩子注入 before_llm", "附件落库 ×1"]);
+  });
+
+  it("类型筛选：藏非辅助类（工具/错误），turn 头骨架与统计不受影响", () => {
+    const events = [
+      ev("turn_context", ctx()),
+      ev("user_message", { content: "q", blocks: [] }),
+      ev("assistant_message", { content: "a", blocks: [], round: 0, continuation: false }, { messageId: "m1" }),
+      ev("tool_execution", { tool_call_id: "c1", tool_name: "bash", arguments: "{}", is_error: false, duration_ms: 1 }, { messageId: "m1" }),
+      ev("message_error", { kind: "llm", error: "boom" }),
+    ];
+    const { events: evs, headers } = evRows(events, { hiddenKinds: new Set(["tool", "error", ...DEFAULT_HIDDEN]) });
+    expect(evs().map((r) => r.kind)).toEqual(["user", "assistant"]);
+    // 头骨架信息不丢（「仅对话」的心智：统计/错误计数仍在）
+    expect(headers()).toHaveLength(1);
+    expect(headers()[0].toolCount).toBe(1);
+    expect(headers()[0].errorCount).toBe(1);
   });
 
   it("tool_result_message 不生成行（工具行已含结果，它是 DB 行侧镜像）", () => {
@@ -226,7 +259,7 @@ describe("buildRows 行模型", () => {
     ];
     // 同一批事件对象多次调用（模拟折叠/开关切换重算）：payload 深处命中结果稳定
     for (let i = 0; i < 3; i++) {
-      const rows = buildRows(events, { collapsedTurns: new Set(), showAux: false, query: "cached-needle", turnOffset: 0 });
+      const rows = buildRows(events, { collapsedTurns: new Set(), hiddenKinds: new Set(DEFAULT_HIDDEN), query: "cached-needle", turnOffset: 0 });
       const evs = rows.filter((r): r is EventRow => r.type === "event");
       expect(evs.find((r) => r.summary === "第一问")?.match).toBe(false);
       expect(evs.find((r) => r.kind === "tool")?.match).toBe(true);
@@ -250,6 +283,84 @@ describe("buildRows 行模型", () => {
   it("未结束 turn：头 ended=null（进行中/崩溃）", () => {
     const events = [ev("user_message", { content: "q", blocks: [] })];
     expect(evRows(events).headers()[0].ended).toBeNull();
+  });
+});
+
+describe("类型筛选模型（FilterKey / 预设 / 计数 / 持久化）", () => {
+  it("结构：FILTER_KEYS 10 键唯一，DEFAULT_HIDDEN 是其子集（结构锁范式）", () => {
+    expect(FILTER_KEYS).toHaveLength(10);
+    expect(new Set(FILTER_KEYS).size).toBe(10);
+    for (const k of DEFAULT_HIDDEN) expect(FILTER_KEYS).toContain(k);
+  });
+
+  it("行为锁：每个生成行的事件 kind 空隐藏集下恰出一行（防映射漏键静默吞行）", () => {
+    // 与 summarizeEvent 的产出 kind 集合保持同步——新增生成行的事件 kind 两边一起补
+    const fixtures: [SessionEvent["kind"], unknown][] = [
+      ["user_message", { content: "q", blocks: [] }],
+      ["assistant_message", { content: "a", blocks: [], round: 0, continuation: false }],
+      ["tool_execution", { tool_call_id: "c", tool_name: "t", arguments: "{}", is_error: false, duration_ms: 1 }],
+      ["summary_created", { summary_message_id: "sm", content: "s", covered_until_rowid: 1 }],
+      ["summary_updated", { summary_message_id: "sm", content: "s", covered_until_seq: 1 }],
+      ["plan_updated", { items: [{ text: "x", status: "todo" }] }],
+      ["message_error", { kind: "llm", error: "e" }],
+      ["message_discarded", { reason: "r" }],
+      ["modal_adapted", { stage: "s", mode: "m", items: [] }],
+      ["hook_injected", { point: "p", prompt: "x" }],
+      ["attachment_stored", { kind: "page", items: [] }],
+    ];
+    for (const [kind, payload] of fixtures) {
+      expect(evRows([ev(kind, payload)], { hiddenKinds: new Set() }).events()).toHaveLength(1);
+    }
+  });
+
+  it("「仅对话」预设：只留用户/回复；isChatOnly 派生判据（无第二状态源）", () => {
+    const h = chatOnlyHidden();
+    expect(isChatOnly(h)).toBe(true);
+    // 默认态/全显态/半吊子态都不是「仅对话」
+    expect(isChatOnly(new Set(DEFAULT_HIDDEN))).toBe(false);
+    expect(isChatOnly(new Set())).toBe(false);
+    const partial = new Set(h);
+    partial.delete("tool");
+    expect(isChatOnly(partial)).toBe(false);
+
+    const events = [
+      ev("user_message", { content: "q", blocks: [] }),
+      ev("assistant_message", { content: "a", blocks: [], round: 0, continuation: false }, { messageId: "m1" }),
+      ev("tool_execution", { tool_call_id: "c", tool_name: "t", arguments: "{}", is_error: false, duration_ms: 1 }, { messageId: "m1" }),
+      ev("summary_created", { summary_message_id: "sm", content: "s", covered_until_rowid: 1 }),
+    ];
+    expect(evRows(events, { hiddenKinds: h }).events().map((r) => r.kind)).toEqual(["user", "assistant"]);
+  });
+
+  it("countByFilterKey：单遍计数，折进头/镜像 kind 不计", () => {
+    const c = countByFilterKey([
+      ev("user_message", { content: "q", blocks: [] }),
+      ev("turn_context", ctx()),
+      ev("tool_execution", { tool_call_id: "c1", tool_name: "t", arguments: "{}", is_error: false, duration_ms: 1 }),
+      ev("tool_execution", { tool_call_id: "c2", tool_name: "t", arguments: "{}", is_error: false, duration_ms: 1 }),
+      ev("attachment_stored", { kind: "page", items: [] }),
+    ]);
+    expect(c.user).toBe(1);
+    expect(c.tool).toBe(2);
+    expect(c.attachment_stored).toBe(1);
+    expect(Object.keys(c).sort()).toEqual(["attachment_stored", "tool", "user"]);
+  });
+
+  it("持久化：save→load 往返；坏值/未知键清洗回默认；空数组是合法全显态", () => {
+    localStorage.clear();
+    expect([...loadHiddenKinds()].sort()).toEqual([...DEFAULT_HIDDEN].sort()); // 未存过 → 默认
+
+    saveHiddenKinds(new Set(["tool", "modal_adapted"]));
+    expect([...loadHiddenKinds()].sort()).toEqual(["modal_adapted", "tool"]);
+
+    saveHiddenKinds(new Set()); // 显式全显
+    expect(loadHiddenKinds().size).toBe(0);
+
+    localStorage.setItem("icepaw-traj-hidden-kinds", "{oops"); // 坏 JSON
+    expect([...loadHiddenKinds()].sort()).toEqual([...DEFAULT_HIDDEN].sort());
+
+    localStorage.setItem("icepaw-traj-hidden-kinds", JSON.stringify(["tool", "legacy_kind_x"])); // 未知键剔除
+    expect([...loadHiddenKinds()]).toEqual(["tool"]);
   });
 });
 

@@ -106,6 +106,10 @@ function onScroll() {
 }
 /** 底部吸附阈值：内容增长把视口推离底部 ≤2 行内仍视为贴底（36px 行高） */
 const FOLLOW_THRESHOLD = 80;
+/** 「加载更早」顶部门控阈值（与 FOLLOW_THRESHOLD 对称）：滚到已载窗口顶部才显示。
+ *  旧实现 sticky 恒浮在列头下——未滚到顶也出现。加载中强制显示（点击反馈不消失）。 */
+const EARLIER_TOP_THRESHOLD = 80;
+const earlierOn = computed(() => props.loadingEarlier || scrollTop.value <= EARLIER_TOP_THRESHOLD);
 const pinned = ref(true);
 let programmatic = false;
 function scrollToBottom() {
@@ -242,7 +246,7 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
       <span class="tc-sum">内容</span>
       <span class="tc-metric">token · 耗时</span>
     </div>
-    <div v-if="hasMore" class="ttab-earlier">
+    <div v-if="hasMore" class="ttab-earlier" :class="{ on: earlierOn }">
       <button class="ttab-earlier-btn" :disabled="loadingEarlier" @click="emit('load-earlier')">
         {{ loadingEarlier ? "加载中…" : "加载更早的事件" }}
       </button>
@@ -365,6 +369,10 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
 .tc-sum { flex: 1; min-width: 0; }
 .tc-metric { flex-shrink: 0; }
 
+/* 「加载更早」：sticky 吸顶在列头下，但仅在滚到已载窗口顶部（≤EARLIER_TOP_THRESHOLD）
+   或加载中时可见。常驻 DOM + opacity/visibility 开合（非 v-if/v-show）——容器在流内
+   占位，显隐切换走视觉层不让内容在指针下跳 ~48px；隐藏态保留占位（滚过即无视）。
+   prepend 高度差补偿后 scrollTop 增大 → 自动淡出（再往上滚才需要更早）。 */
 .ttab-earlier {
   position: sticky;
   top: 32px;
@@ -372,6 +380,15 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
   display: flex;
   justify-content: center;
   padding: 10px 0;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity var(--ip-duration-fast) var(--ip-ease-out), visibility var(--ip-duration-fast) var(--ip-ease-out);
+}
+.ttab-earlier.on {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
 }
 .ttab-earlier-btn {
   font-size: var(--ip-text-caption-size);

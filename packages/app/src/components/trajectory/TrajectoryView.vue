@@ -2,17 +2,29 @@
   TrajectoryView — 轨迹回放主视图（会话「轨迹」标签页内容）
 
   dsh inspection-ledger 架构（Chrome DevTools 风）：
-    [Toolbar 40px] 搜索 / 展开收起合一 / 辅助事件开关 / 导出 JSONL
+    [Toolbar 40px] 搜索 / 展开收起合一 / 仅对话·类型筛选 / 耗时 / 导出 JSONL
     [Timeline 72px] canvas 瀑布图（点击联动表格行）
     [Table 虚拟行] 紧凑事件表 + [Inspector] 按需展现的局部检查器（选中行才渲染）
 
   数据：useTrajectory 尾部优先分页（最新 1000 条，「加载更早」向前翻）；
-  行模型 buildRows 纯函数派生（折叠/搜索/辅助开关是视图状态）。
+  行模型 buildRows 纯函数派生（折叠/搜索/类型筛选是视图状态）。
 -->
 <script setup lang="ts">
 import { computed, nextTick, ref, watch, onMounted, onBeforeUnmount, onActivated, onDeactivated } from "vue";
 import { listen } from "@tauri-apps/api/event";
-import { buildRows, useTrajectory, type TrajectoryRow, type EventRow } from "../../composables/useTrajectory";
+import {
+  buildRows,
+  useTrajectory,
+  chatOnlyHidden,
+  countByFilterKey,
+  isChatOnly,
+  loadHiddenKinds,
+  saveHiddenKinds,
+  DEFAULT_HIDDEN,
+  type FilterKey,
+  type TrajectoryRow,
+  type EventRow,
+} from "../../composables/useTrajectory";
 import { useResizablePanel } from "../../composables/useResizablePanel";
 import type { SessionEvent } from "../../types";
 import { bridge } from "../../api/bridge";
@@ -33,7 +45,23 @@ const { events, loading, loadingEarlier, error, legacy, hasMore, turnOffset, loa
 
 // ---- 视图状态（行模型的派生输入） ----
 const query = ref("");
-const showAux = ref(false);
+/** 类型筛选（「仅对话」预设与「类型」多选下拉操纵同一状态，见 useTrajectory 筛选模型）。
+ *  循 durationMode 先例持久化；切会话**不**重置——它是视图偏好非会话状态。 */
+const hiddenKinds = ref<Set<FilterKey>>(loadHiddenKinds());
+watch(hiddenKinds, (s) => saveHiddenKinds(s));
+/** 工具栏 v-model 适配层：数组进出、Set 内部（buildRows 判据） */
+const hiddenModel = computed({
+  get: () => [...hiddenKinds.value],
+  set: (v: FilterKey[]) => { hiddenKinds.value = new Set(v); },
+});
+/** 仅对话开关（可写 computed）：开 = 只留用户/回复；关 = 恢复默认（不记忆上个自定义
+ *  组合——不可预测，且自定义本就可达于下拉）。亮态是派生判据，无第二状态源。 */
+const chatOnlyModel = computed({
+  get: () => isChatOnly(hiddenKinds.value),
+  set: (v: boolean) => { hiddenKinds.value = v ? chatOnlyHidden() : new Set(DEFAULT_HIDDEN); },
+});
+/** 加载窗口内各类型事件计数（类型下拉的信息气味，单遍） */
+const kindCounts = computed(() => countByFilterKey(events.value));
 /** 时间轴投影：序号等宽（默认）/ 真实耗时 + 空闲压缩（dsh Duration 开关，同款持久化约定） */
 const DURATION_KEY = "icepaw-traj-duration";
 const durationMode = ref(localStorage.getItem(DURATION_KEY) === "1");
@@ -100,11 +128,12 @@ const streamingRows = computed<TrajectoryRow[]>(() => {
   return out;
 });
 
-const rows = computed(() =>
-  streamingRows.value.length
-    ? [...buildRows(events.value, { collapsedTurns: collapsedTurns.value, showAux: showAux.value, query: query.value, turnOffset: turnOffset.value }), ...streamingRows.value]
-    : buildRows(events.value, { collapsedTurns: collapsedTurns.value, showAux: showAux.value, query: query.value, turnOffset: turnOffset.value }),
-);
+const rows = computed(() => {
+  const built = buildRows(events.value, { collapsedTurns: collapsedTurns.value, hiddenKinds: hiddenKinds.value, query: query.value, turnOffset: turnOffset.value });
+  // 直播 ephemeral 行同样尊重类型筛选（kind 只会是 assistant/tool，防隐藏类型穿帮）
+  const live = streamingRows.value.filter((r) => r.type !== "event" || !hiddenKinds.value.has(r.kind as FilterKey));
+  return live.length ? [...built, ...live] : built;
+});
 
 /** 会话级汇总（工具栏 chip）：轮数含窗口前偏移（全局值）；事件/工具为已载窗口内计数 */
 const stats = computed(() => {
@@ -258,7 +287,7 @@ async function exportJsonl() {
 // ---- 加载（v-show 保持挂载，靠 watch conversationId 驱动刷新） ----
 function resetViewState() {
   query.value = "";
-  showAux.value = false;
+  // hiddenKinds 不重置：视图偏好（持久化），非会话状态
   collapsedTurns.value = new Set();
   selectedRow.value = null;
 }
@@ -379,8 +408,10 @@ onBeforeUnmount(() => {
     <TrajectoryToolbar
       ref="toolbarRef"
       v-model:query="query"
-      v-model:show-aux="showAux"
+      v-model:hidden="hiddenModel"
+      v-model:chat-only="chatOnlyModel"
       v-model:duration-mode="durationMode"
+      :counts="kindCounts"
       :any-collapsed="anyCollapsed"
       :stats="stats"
       :exporting="exporting"

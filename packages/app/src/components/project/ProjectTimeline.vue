@@ -2,21 +2,32 @@
   ProjectTimeline — 项目轨迹视图（MA-2）：项目内全部会话的事件按全局 id 合并成
   一条因果流（跨会话可比的只有 session_events 全局自增 id；seq 是 per-conv 的）。
 
-  复用面（D7）：TrajectoryTable（虚拟行）+ TrajectoryInspector 原样复用；
-  buildRows 零改动，调用前 scopeTurnKeys 纯适配（turn_id 加 session 前缀，
-  防跨会话错误合桶）。不复用 TrajectoryToolbar/Timeline——会话域语义
-  （导出/瀑布图是单会话的），本项目自带 slim 控件。
+  复用面（D7）：TrajectoryTable（虚拟行）+ TrajectoryInspector + TrajectoryKindFilter
+  （类型筛选下拉）原样复用；buildRows 零改动，调用前 scopeTurnKeys 纯适配
+  （turn_id 加 session 前缀，防跨会话错误合桶）。不复用 TrajectoryToolbar/Timeline
+  ——会话域语义（导出/瀑布图是单会话的），本项目自带 slim 控件。
 
   v1 边缘（接受并记录）：两会话并发流式时同一轮被切成多个头（全局 id 交错），
   头统计是全量预扫信息不丢，只是分段展示；瀑布图/per-agent 泳道待独立设计。
 -->
 <script setup lang="ts">
 import { computed, nextTick, onActivated, onMounted, ref, watch } from "vue";
-import { buildRows, type TrajectoryRow } from "../../composables/useTrajectory";
+import {
+  buildRows,
+  chatOnlyHidden,
+  countByFilterKey,
+  isChatOnly,
+  loadHiddenKinds,
+  saveHiddenKinds,
+  DEFAULT_HIDDEN,
+  type FilterKey,
+  type TrajectoryRow,
+} from "../../composables/useTrajectory";
 import { scopeTurnKeys, useProjectTrajectory } from "../../composables/useProjectTrajectory";
 import { useResizablePanel } from "../../composables/useResizablePanel";
 import { useChatStore } from "../../stores/chat";
 import TrajectoryTable from "../trajectory/TrajectoryTable.vue";
+import TrajectoryKindFilter from "../trajectory/TrajectoryKindFilter.vue";
 import TrajectoryInspector from "../trajectory/TrajectoryInspector.vue";
 import PanelResizeHandle from "../common/PanelResizeHandle.vue";
 
@@ -34,7 +45,19 @@ const { events, loading, loadingEarlier, error, hasMore, load, loadEarlier, refr
 
 // ---- 视图状态（行模型的派生输入；与 TrajectoryView 同款语义） ----
 const query = ref("");
-const showAux = ref(false);
+/** 类型筛选：与单会话轨迹视图共用同一持久化 key（跨页同一心智模型）。
+ *  旧「辅助事件」布尔开关由此细分取代（双维护同告终）。 */
+const hiddenKinds = ref<Set<FilterKey>>(loadHiddenKinds());
+watch(hiddenKinds, (s) => saveHiddenKinds(s));
+const hiddenModel = computed({
+  get: () => [...hiddenKinds.value],
+  set: (v: FilterKey[]) => { hiddenKinds.value = new Set(v); },
+});
+const chatOnlyModel = computed({
+  get: () => isChatOnly(hiddenKinds.value),
+  set: (v: boolean) => { hiddenKinds.value = v ? chatOnlyHidden() : new Set(DEFAULT_HIDDEN); },
+});
+const kindCounts = computed(() => countByFilterKey(events.value));
 const collapsedTurns = ref<Set<string>>(new Set());
 const selectedRow = ref<TrajectoryRow | null>(null);
 const searching = computed(() => query.value.trim() !== "");
@@ -45,7 +68,7 @@ const searching = computed(() => query.value.trim() !== "");
 const rows = computed(() =>
   buildRows(scopeTurnKeys(events.value), {
     collapsedTurns: collapsedTurns.value,
-    showAux: showAux.value,
+    hiddenKinds: hiddenKinds.value,
     query: query.value,
     turnOffset: 0,
   }),
@@ -181,7 +204,7 @@ onActivated(async () => {
 
 <template>
   <div class="ptimeline" tabindex="-1" @keydown="onKeydown">
-    <!-- slim 控件：搜索 / 展开收起 / 辅助事件（会话域的导出·耗时开关不搬） -->
+    <!-- slim 控件：搜索 / 展开收起 / 仅对话·类型筛选（会话域的导出·耗时开关不搬） -->
     <div class="pt-bar">
       <div class="pt-search" title="按 / 快速聚焦；Enter/Shift+Enter 在命中行间跳转">
         <svg class="pt-search-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7" /><line x1="21" y1="21" x2="16.5" y2="16.5" /></svg>
@@ -201,10 +224,16 @@ onActivated(async () => {
         {{ anyCollapsed ? "展开全部" : "收起全部" }}
       </button>
 
-      <label class="pt-toggle" title="附件落库 / 视觉适配 / 钩子注入等低频事件">
-        <input type="checkbox" :checked="showAux" @change="showAux = ($event.target as HTMLInputElement).checked" />
-        <span class="pt-pill">辅助事件</span>
+      <label class="pt-toggle" title="只看用户消息与回复（工具调用等隐藏；轮次骨架与统计保留）">
+        <input
+          type="checkbox"
+          :checked="chatOnlyModel"
+          @change="chatOnlyModel = ($event.target as HTMLInputElement).checked"
+        />
+        <span class="pt-pill">仅对话</span>
       </label>
+
+      <TrajectoryKindFilter v-model:hidden="hiddenModel" :counts="kindCounts" />
 
       <div class="pt-spacer" />
       <span class="pt-hint">项目内 {{ sessionMeta.size }} 个会话按事件时序合并</span>
