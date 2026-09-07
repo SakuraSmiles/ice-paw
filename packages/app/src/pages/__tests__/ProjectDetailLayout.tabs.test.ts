@@ -55,12 +55,12 @@ describe("ProjectDetailLayout tab 导航", () => {
     mounts.ov = 0;
     mounts.tl = 0;
     mockInvoke.mockReset().mockImplementation((async (cmd: string) => {
-      if (cmd === "list_projects") return [{
-        id: "p1", name: "Alpha", description: "", icon: "folder", sort_order: 0,
+      if (cmd === "list_projects") return ["p1", "p2"].map((id) => ({
+        id, name: id === "p1" ? "Alpha" : "Beta", description: "", icon: "folder", sort_order: 0,
         workspace_path: null, theme_color: null, archived: false,
         created_at: "2026-08-18 00:00:00", updated_at: "2026-08-18 00:00:00",
         agents: [],
-      }];
+      }));
       if (cmd === "list_agents") return [];
       return undefined;
     }) as never);

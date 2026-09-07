@@ -8,7 +8,7 @@
 // 嫁接——URL 变了视图冻结（真机踩坑）。route.path 同时含项目 id + tab，
 // 跨项目不串数据、tab 间各留缓存。
 // 进入详情页不改变侧栏 scope：「看项目」与「切空间工作」是两个动作。
-import { computed, onMounted, ref } from "vue";
+import { computed, onActivated, onMounted, ref, watch } from "vue";
 import { useTablist } from "../../composables/useTablist";
 import { useRoute, useRouter } from "vue-router";
 import { useProjectStore } from "../../stores/project";
@@ -42,16 +42,32 @@ function navigate(key: string) {
   router.push(`/projects/${projectId.value}/${key}`);
 }
 
-onMounted(async () => {
-  // 直链进入时 store 可能未加载（刷新/外部跳转）
-  if (!current.value) {
-    try {
-      await project.load(true);
-      if (!current.value) loadError.value = true;
-    } catch {
-      loadError.value = true;
-    }
+// 直链进入时 store 可能未加载（刷新/外部跳转/启动恢复）。ensureLoaded 幂等：
+// current 有值直接返回；load(true) 走 store 的 inflight 共享，loading 中不会
+// 误判「项目不存在」（见 project store 注释）。除 onMounted 外再接两处——
+// onActivated：AppLayout 的 keep-alive 以组件类型缓存，同会话内重进详情页时
+// 实例复活、onMounted 不再跑，兜底必须跟着复活重跑（真机实案 2026-09-07：
+// 项目被永久删除后重进详情页，current=null 且 loadError 恒 false，页面永久
+// 停在「加载中…」+ 内层缓存的「项目不存在或已删除。」死文案）；
+// watch：同类型复用实例跨项目导航（/projects/A → /projects/B 不重挂载）时
+// 重置错误态重判；挂载后项目被删（store list 移除 → current 翻 null）同跑。
+async function ensureLoaded() {
+  if (current.value) return;
+  try {
+    await project.load(true);
+    if (!current.value) loadError.value = true;
+  } catch {
+    loadError.value = true;
   }
+}
+onMounted(ensureLoaded);
+onActivated(ensureLoaded);
+watch(projectId, () => {
+  loadError.value = false; // 跨项目复用实例：上一项目的错误态不残留
+  void ensureLoaded();
+});
+watch(current, (cur) => {
+  if (!cur) void ensureLoaded();
 });
 </script>
 

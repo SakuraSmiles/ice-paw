@@ -10,8 +10,8 @@
 // - 持久化会话失效（被删 / 项目归档 / delegation 子会话）且并非明确欢迎态 →
 //   回退「最近一条有效会话」（原打开软件行为），scope 跟随回退会话所属项目；
 // - 上次明确停在欢迎态（convId=null）→ 保持欢迎态，不硬跳最近会话；
-// - scope 指向已归档项目 → 降级散落；route 原样返回，非法路径由路由表通配
-//   兜底回首页。
+// - scope 指向已归档项目 → 降级散落；route 指向已永久删除的项目页 → 降级
+//   null 留在首页（归档项目仍可直链），非法路径由路由表通配兜底回首页。
 
 import { parseDbTime } from "./time";
 
@@ -72,12 +72,14 @@ export interface RestoreConvLike {
 
 /**
  * 恢复决策。convs 传侧栏可见会话（调用方已过滤 delegation），这里再按
- * 「所属项目未归档」过滤一遍（activeProjectIds = 未归档项目 id 集）。
+ * 「所属项目未归档」过滤一遍（activeProjectIds = 未归档项目 id 集）；
+ * allProjectIds = 全量项目 id 集（含归档）——route 守卫判「已永久删除」用。
  */
 export function planRestore(
   saved: LastSessionState | null,
   convs: RestoreConvLike[],
   activeProjectIds: ReadonlySet<string>,
+  allProjectIds: ReadonlySet<string>,
 ): RestorePlan {
   const valid = (c: RestoreConvLike) => !c.project_id || activeProjectIds.has(c.project_id);
 
@@ -92,21 +94,21 @@ export function planRestore(
       return {
         convId: hit.id,
         projectId: scopeOrNull(saved.projectId, activeProjectIds),
-        route: restoreRoute(saved.route),
+        route: safeRoute(saved.route, allProjectIds),
       };
     }
     // 失效 → 回退最近一条有效会话（与「打开软件」原行为一致）
     const latest = latestValid(convs, valid);
     if (latest) {
-      return { convId: latest.id, projectId: latest.project_id ?? null, route: restoreRoute(saved.route) };
+      return { convId: latest.id, projectId: latest.project_id ?? null, route: safeRoute(saved.route, allProjectIds) };
     }
     // 连回退都没有（零有效会话）→ 欢迎态 + scope 降级
-    return { convId: null, projectId: scopeOrNull(saved.projectId, activeProjectIds), route: restoreRoute(saved.route) };
+    return { convId: null, projectId: scopeOrNull(saved.projectId, activeProjectIds), route: safeRoute(saved.route, allProjectIds) };
   }
 
   // 2) 上次明确欢迎态（有记忆但无会话）→ 尊重，不硬跳最近
   if (saved) {
-    return { convId: null, projectId: scopeOrNull(saved.projectId, activeProjectIds), route: restoreRoute(saved.route) };
+    return { convId: null, projectId: scopeOrNull(saved.projectId, activeProjectIds), route: safeRoute(saved.route, allProjectIds) };
   }
 
   // 3) 无记忆（首启 / localStorage 清空）→ 原行为：最近一条有效会话
@@ -143,6 +145,18 @@ function scopeOrNull(pid: string | null, activeProjectIds: ReadonlySet<string>):
 }
 
 /** 首页无需跳转；其余原样返回（非法路径由路由表通配兜底回首页） */
-function restoreRoute(route: string): string | null {
+function restoreRoute(route: string | null): string | null {
   return route === "/" ? null : route;
+}
+
+/** route 守卫：指向已永久删除的项目页（/projects/{id}/...）时降级 null（留在
+ *  首页）。归档项目不在此列——详情页对归档项目仍可直链访问（后端 list 含归档）。
+ *  真机实案 2026-09-07：route 裸放行 + 详情布局 keep-alive 缓存复活 → 每次
+ *  启动都恢复进死项目页，「项目不存在或已删除。」常驻。 */
+function safeRoute(route: string | null, allProjectIds: ReadonlySet<string>): string | null {
+  const r = restoreRoute(route);
+  if (!r) return null;
+  const m = /^\/projects\/([^/]+)/.exec(r);
+  if (m && !allProjectIds.has(decodeURIComponent(m[1]))) return null;
+  return r;
 }

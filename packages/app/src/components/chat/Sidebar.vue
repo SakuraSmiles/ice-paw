@@ -218,6 +218,7 @@ onMounted(async () => {
       loadLastSession(),
       visibleConversations.value,
       new Set(project.activeProjects.map((p) => p.id)),
+      new Set(project.list.map((p) => p.id)), // 全量（含归档）——route 守卫判「已永久删除」
     );
     project.setActiveProject(plan.projectId);
     if (plan.convId) {

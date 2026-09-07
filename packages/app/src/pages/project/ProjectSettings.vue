@@ -159,7 +159,11 @@ async function archive() {
       </div>
     </Transition>
   </div>
-  <div v-else class="load-error">项目不存在或已删除。</div>
+  <!-- 死端兜底（正常不可达：外层布局的 loadError 已先接管；此处防内层缓存
+       实例先于外层判定的窗口）——补返回路径，不留只能刷新逃脱的死胡同 -->
+  <div v-else class="load-error">
+    项目不存在或已删除。<button class="btn-link" @click="router.push('/projects')">返回项目列表</button>
+  </div>
 </template>
 
 <style scoped>
