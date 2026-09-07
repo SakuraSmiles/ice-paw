@@ -14,6 +14,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { useChatStore } from "../stores/chat";
 import { friendlyError } from "../utils/errors";
+import { formatThinkingMs } from "../utils/format";
 import { notifyApprovalNeeded, notifySelfCheck } from "../utils/systemNotify";
 import type {
   ChatStartPayload,
@@ -96,7 +97,13 @@ export async function useChatEvents(): Promise<() => void> {
   // MA-1 UX：委派子会话创建成功即通知——刷新会话列表让子会话行立刻可见
   //（任务胶囊有数据、运行中委派卡片可跳）。child_conversation_id 此刻起即可达，
   // 不必等完成时的 tool_result 回传。
-  await subscribe<DelegationStartedPayload>("chat:delegation-started", () => {
+  // tool_use_id 同时登记进 store 映射：同轮多卡并行委派时，每张 running 卡
+  // 按自己的 tool_use id 精确跳转（旧行为所有卡都跳会话级唯一的 streaming 子会话）。
+  await subscribe<DelegationStartedPayload>("chat:delegation-started", (e) => {
+    const { tool_use_id, child_conversation_id } = e.payload;
+    if (tool_use_id && child_conversation_id) {
+      chat.bindDelegationChild(tool_use_id, child_conversation_id);
+    }
     void chat.loadConversations();
   });
 
@@ -240,10 +247,10 @@ export async function useChatEvents(): Promise<() => void> {
     chat.clearTurnAnchors(); // 回合结束：streaming 视图（代码块折叠）一次性沉淀
     chat.lastFailedSend = null; // 成功完成 → 失败重发依据失效
 
-    // 记录思考耗时与内容
+    // 记录思考耗时与内容（formatThinkingMs 与 freezeCurrentAssistant 共用同一
+    // 格式化真相源；freeze 里也 set 过同 id——此处按后端权威 message_id 双写，幂等）
     if (chat.thinkingStartTime) {
-      const elapsed = Math.floor((Date.now() - chat.thinkingStartTime) / 1000);
-      const dur = elapsed < 60 ? `${elapsed}s` : `${Math.floor(elapsed / 60)}m ${elapsed % 60}s`;
+      const dur = formatThinkingMs(Date.now() - chat.thinkingStartTime);
       chat.thinkingDuration = dur;
       chat.lastThinkingContent = chat.streamingThinking || null;
       const asstMsgId = e.payload.message_id;

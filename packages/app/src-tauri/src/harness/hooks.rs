@@ -91,6 +91,7 @@ mod tests {
     /// 构造一个最小 ToolContext（仅 CallTool 路径会用，InjectPrompt/Log 不触碰其字段）
     async fn mk_ctx() -> ToolContext {
         ToolContext {
+            tool_use_id: None,
             conv_id: "c1".into(),
             agent_id: "a1".into(),
             project_id: None,

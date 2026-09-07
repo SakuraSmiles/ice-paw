@@ -51,6 +51,13 @@ pub enum ContentBlock {
         /// 签名（Anthropic 用于验证）
         #[serde(skip_serializing_if = "Option::is_none")]
         signature: Option<String>,
+        /// 思考段耗时（ms，首个 thinking delta → 首个非 thinking 内容 delta）。
+        /// **纯 UI 展示用**（与 Attachment 同模式）：落库+事件日志里携带，前端
+        /// 「思考 · 30s」持久显示；绝不发给 LLM——provider 适配层对 Thinking
+        /// 整块跳过（filter_map 返回 None），字段加在序列化形态上无 API 风险。
+        /// `default` 兼容旧事件/旧行（缺字段 = 无耗时，前端只显示「思考」）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration_ms: Option<u64>,
     },
     /// 附件元信息块（Phase 3 办公文档附件）
     ///
@@ -290,6 +297,43 @@ mod tests {
                 assert_eq!(media_type, "image/png");
             }
             _ => panic!("反序列化后类型不对：{:?}", back),
+        }
+    }
+
+    #[test]
+    fn thinking_block_duration_ms_serde() {
+        // 带 duration_ms：序列化含字段、往返保值
+        let block = ContentBlock::Thinking {
+            thinking: "推理中…".into(),
+            signature: None,
+            duration_ms: Some(30_000),
+        };
+        let json = serde_json::to_string(&block).unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"thinking","thinking":"推理中…","duration_ms":30000}"#
+        );
+        let back: ContentBlock = serde_json::from_str(&json).unwrap();
+        match back {
+            ContentBlock::Thinking { duration_ms, .. } => assert_eq!(duration_ms, Some(30_000)),
+            _ => panic!("反序列化后类型不对：{:?}", back),
+        }
+
+        // 无 duration_ms：序列化不产 null（skip_serializing_if）
+        let no_dur = ContentBlock::Thinking {
+            thinking: "x".into(),
+            signature: None,
+            duration_ms: None,
+        };
+        let json2 = serde_json::to_string(&no_dur).unwrap();
+        assert_eq!(json2, r#"{"type":"thinking","thinking":"x"}"#);
+
+        // 旧事件/旧行（落库时还没有该字段）反序列化 → None，零迁移可读
+        let legacy: ContentBlock =
+            serde_json::from_str(r#"{"type":"thinking","thinking":"旧数据"}"#).unwrap();
+        match legacy {
+            ContentBlock::Thinking { duration_ms, .. } => assert_eq!(duration_ms, None),
+            _ => panic!("反序列化后类型不对：{:?}", legacy),
         }
     }
 

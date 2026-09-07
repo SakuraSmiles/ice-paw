@@ -70,6 +70,9 @@ pub struct ToolContext {
     /// 对话取消令牌（propose_config_change 等需在「停止生成」时提前返回的工具用；
     /// 由 execute_tool_round 的 enriched_ctx 注入；None = 无取消监听，回退纯超时）
     pub cancel: Option<CancellationToken>,
+    /// 本次工具调用的 tool_use id（多卡并行委派时前端按此把子会话绑回具体卡片；
+    /// 由 execute_tool_round 每轮注入）。None = 非 LLM 工具调用语境（hooks 等）。
+    pub tool_use_id: Option<String>,
 }
 
 // =========================================================================
@@ -573,6 +576,7 @@ mod tests {
     async fn registry_dispatch_nonexistent() {
         let registry = McpRegistry::with_builtin();
         let ctx = ToolContext {
+            tool_use_id: None,
             conv_id: "c1".into(),
             agent_id: "a1".into(),
             project_id: None,
@@ -594,6 +598,7 @@ mod tests {
     async fn dispatch_with_context_runs_legacy_tool() {
         let registry = McpRegistry::with_builtin();
         let ctx = ToolContext {
+            tool_use_id: None,
             conv_id: "c1".into(),
             agent_id: "a1".into(),
             project_id: None,

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatTokenCompact, formatTokenCount } from "../format";
+import { formatTokenCompact, formatTokenCount, formatThinkingMs } from "../format";
 
 describe("formatTokenCompact", () => {
   it("三档：原数 / K / M（图表语境，不走万进制）", () => {
@@ -39,5 +39,20 @@ describe("formatTokenCount", () => {
   it("非有限数与负数原样返回字符串", () => {
     expect(formatTokenCount(-5)).toBe("-5");
     expect(formatTokenCount(Number.NaN)).toBe("NaN");
+  });
+});
+
+describe("formatThinkingMs", () => {
+  it("秒档：整数秒（floor），与流式计时显示同一形态", () => {
+    expect(formatThinkingMs(0)).toBe("0s");
+    expect(formatThinkingMs(999)).toBe("0s");
+    expect(formatThinkingMs(30_000)).toBe("30s");
+    expect(formatThinkingMs(59_999)).toBe("59s");
+  });
+
+  it("分级：分 + 余秒", () => {
+    expect(formatThinkingMs(60_000)).toBe("1m 0s");
+    expect(formatThinkingMs(90_000)).toBe("1m 30s");
+    expect(formatThinkingMs(125_400)).toBe("2m 5s");
   });
 });

@@ -11,12 +11,16 @@
  *   - 表格、引用、列表层级清晰
  * ============================================================ */
 
-/* ------------------- 根容器（基础排版） ------------------- */
+/* ------------------- 根容器（基础排版） -------------------
+   2026-09-05 排版批二轮：行高 1.5（loose3）——一轮 1.6 被用户判「仍偏松」；
+   15px CJK 正文 1.5=22.5px/行是聊天扫读场景的平衡点（比 relaxed 1.33 舒适、
+   比 loose 1.6 紧一档），与气泡纯文本同值统一。块间距 8px（spacing-2）是
+   段落分节的健康下限——再压分节感丢失，勿随「更紧凑」诉求继续收块距。 */
 
 .markdown-body {
   font-family: var(--ip-font-sans);
   font-size: var(--ip-text-body-size, 15px);
-  line-height: var(--ip-line-height-relaxed, 1.55);
+  line-height: var(--ip-line-height-loose3, 1.5);
   color: var(--ip-color-text-body, var(--ip-gray-700));
 }
 
@@ -35,7 +39,7 @@
   font-size: var(--ip-text-h1-size, 28px);
   line-height: var(--ip-text-h1-lh, 34px);
   font-weight: var(--ip-font-weight-semibold, 600);
-  margin: var(--ip-spacing-6, 24px) 0 var(--ip-spacing-3, 12px);
+  margin: var(--ip-spacing-4, 16px) 0 var(--ip-spacing-2, 8px);
   color: var(--ip-color-text-primary, var(--ip-gray-900));
 }
 
@@ -44,7 +48,7 @@
   font-size: var(--ip-text-h2-size, 22px);
   line-height: var(--ip-text-h2-lh, 28px);
   font-weight: var(--ip-font-weight-semibold, 600);
-  margin: var(--ip-spacing-5, 20px) 0 var(--ip-spacing-3, 12px);
+  margin: var(--ip-spacing-4, 16px) 0 var(--ip-spacing-2, 8px);
   padding-bottom: var(--ip-spacing-2, 8px);
   border-bottom: 1px solid var(--ip-color-border-default);
   color: var(--ip-color-text-primary, var(--ip-gray-900));
@@ -55,7 +59,7 @@
   font-size: var(--ip-text-h3-size, 18px);
   line-height: var(--ip-text-h3-lh, 24px);
   font-weight: var(--ip-font-weight-semibold, 600);
-  margin: var(--ip-spacing-5, 20px) 0 var(--ip-spacing-2, 8px);
+  margin: var(--ip-spacing-3, 12px) 0 var(--ip-spacing-2_5, 6px);
   color: var(--ip-color-text-primary, var(--ip-gray-900));
 }
 
@@ -68,7 +72,7 @@
   font-size: var(--ip-text-body-lg-size, 17px);
   line-height: var(--ip-text-body-lg-lh, 28px);
   font-weight: var(--ip-font-weight-semibold, 600);
-  margin: var(--ip-spacing-4, 16px) 0 var(--ip-spacing-2, 8px);
+  margin: var(--ip-spacing-3, 12px) 0 var(--ip-spacing-1, 4px);
   color: var(--ip-color-text-primary, var(--ip-gray-900));
 }
 
@@ -76,7 +80,7 @@
 
 .markdown-body-p,
 .markdown-body p {
-  margin: 0 0 var(--ip-spacing-3, 12px);
+  margin: 0 0 var(--ip-spacing-2, 8px);
   color: var(--ip-color-text-body, var(--ip-gray-700));
 }
 
@@ -135,15 +139,16 @@
 .markdown-body ul,
 .markdown-body-ol,
 .markdown-body ol {
-  margin: 0 0 var(--ip-spacing-3, 12px);
+  margin: 0 0 var(--ip-spacing-2, 8px);
   padding-left: var(--ip-spacing-7, 28px);
   list-style: decimal;
 }
 
+/* li 零间距：行高 1.5 自带呼吸，条目间隔=行距均匀紧凑（二轮 2px→0） */
 .markdown-body-li,
 .markdown-body li {
-  margin: var(--ip-spacing-1, 4px) 0;
-  line-height: var(--ip-line-height-relaxed, 1.55);
+  margin: 0;
+  line-height: var(--ip-line-height-loose3, 1.5);
 }
 
 .markdown-body-ul,
@@ -159,7 +164,7 @@
 /* 嵌套列表缩进 */
 .markdown-body li > ul,
 .markdown-body li > ol {
-  margin: var(--ip-spacing-1, 4px) 0;
+  margin: 0;
   padding-left: var(--ip-spacing-5, 20px);
 }
 
@@ -174,7 +179,7 @@
 
 .markdown-body-blockquote,
 .markdown-body blockquote {
-  margin: var(--ip-spacing-3, 12px) 0;
+  margin: var(--ip-spacing-2, 8px) 0;
   padding: var(--ip-spacing-2, 8px) var(--ip-spacing-4, 16px);
   border-left: 4px solid var(--ip-color-border-default);
   background: var(--ip-color-bg-tertiary, var(--ip-gray-100));
@@ -299,7 +304,7 @@
   font-family: var(--ip-font-mono);
   font-size: var(--ip-text-code-size, 14px);
   line-height: var(--ip-line-height-monospace, 1.57);
-  margin: var(--ip-spacing-3, 12px) 0;
+  margin: var(--ip-spacing-2, 8px) 0;
   padding: var(--ip-spacing-3, 12px) var(--ip-spacing-4, 16px);
   background: var(--ip-code-bg); /* 跟随主题：浅底深字 / 深底浅字 */
   color: var(--ip-code-text);
@@ -350,7 +355,7 @@
 
 .markdown-body .md-code-block {
   position: relative;
-  margin: var(--ip-spacing-3, 12px) 0;
+  margin: var(--ip-spacing-2, 8px) 0;
   border-radius: var(--ip-radius-md, 6px);
   overflow: hidden;
   background: var(--ip-code-bg); /* 与 pre 同底——头部条/折叠遮罩衔接连续 */
@@ -497,13 +502,15 @@
   border-collapse: collapse;
   border-spacing: 0;
   font-size: var(--ip-text-body-sm-size, 13px);
+  /* 表格行距略紧于正文（网格线已承担分隔，1.6 会让数据行虚高） */
+  line-height: var(--ip-line-height-loose3, 1.5);
 }
 
 /* 表格滚动容器：包在 wrapper 里支持水平滚动——避免给 table 设 display:block
    （会拆散 thead/tbody、列宽错位）。margin 也移到 wrapper。 */
 .markdown-table-wrap {
   overflow-x: auto;
-  margin: var(--ip-spacing-3, 12px) 0;
+  margin: var(--ip-spacing-2, 8px) 0;
 }
 
 .markdown-body-thead,
@@ -537,7 +544,7 @@
   border: 0;
   height: 1px;
   background: var(--ip-color-border-default);
-  margin: var(--ip-spacing-6, 24px) 0;
+  margin: var(--ip-spacing-4, 16px) 0;
 }
 
 /* ------------------- 图片 ------------------- */

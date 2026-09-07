@@ -27,9 +27,19 @@ use futures::Stream;
 pub struct StreamResult {
     pub text: String,
     pub think: String,
+    /// 思考段耗时（ms）：首个 Thinking delta → 首个非 thinking 内容 delta
+    /// （文本/工具调用）或流尾。落进 `ContentBlock::Thinking::duration_ms`
+    /// 供前端持久显示——非整轮流时长（那含工具执行与文本生成）。
+    pub think_ms: Option<u64>,
     pub finish_reason: String,
     pub tool_calls: HashMap<String, CollectedToolCall>,
     pub usage: Option<TokenUsage>,
+}
+
+/// 思考耗时收口：有起点才有值；终点未到（思考进行到流尾/取消）用当下时刻。
+/// 三个 StreamResult 构造点（cancel / Done / 自然尾）共用，勿在某处内联另一套。
+fn close_thinking_ms(started: Option<Instant>, ended: Option<Instant>) -> Option<u64> {
+    started.map(|s| ended.unwrap_or_else(Instant::now).duration_since(s).as_millis() as u64)
 }
 
 /// 一轮流式消费中收集到的工具调用信息
@@ -183,6 +193,11 @@ pub(crate) async fn consume_stream(
     let mut finish_reason = "stop".to_string();
     let mut tool_calls: HashMap<String, CollectedToolCall> = HashMap::new();
     let mut last_usage: Option<TokenUsage> = None;
+    // 思考段计时：首个 Thinking delta 起算；首个非 thinking 内容 delta（文本/
+    // 工具调用）收口。ended 后续 thinking 复入（interleaved reasoning）不重开
+    // ——记的是首段起止，跨段精确分摊不做（UI 只需一个可信赖的量级）。
+    let mut thinking_started: Option<Instant> = None;
+    let mut thinking_ended: Option<Instant> = None;
     let mut agg = DeltaAggregator::new(emitter, conv_id, asst_msg_id, Instant::now());
 
     while let Some(item) = stream.next().await {
@@ -191,6 +206,7 @@ pub(crate) async fn consume_stream(
             return Ok(StreamResult {
                 text,
                 think,
+                think_ms: close_thinking_ms(thinking_started, thinking_ended),
                 finish_reason,
                 tool_calls,
                 usage: last_usage,
@@ -199,10 +215,18 @@ pub(crate) async fn consume_stream(
 
         match item {
             Ok(ChatDelta::Delta { content: delta }) => {
+                // 文本开始 = 思考段结束（provider 流序：thinking 先于正文）
+                if thinking_started.is_some() && thinking_ended.is_none() {
+                    thinking_ended = Some(Instant::now());
+                }
                 text.push_str(&delta);
                 agg.push_text(&delta, Instant::now());
             }
             Ok(ChatDelta::ToolCallStart { id, name }) => {
+                // 工具调用开始 = 思考段结束（同 Delta 分支的收口语义）
+                if thinking_started.is_some() && thinking_ended.is_none() {
+                    thinking_ended = Some(Instant::now());
+                }
                 // 低频事件前排空聚合缓冲：前端先收齐此前的文本，再建 tool 卡条目
                 agg.flush();
                 tool_calls.insert(
@@ -254,6 +278,9 @@ pub(crate) async fn consume_stream(
             Ok(ChatDelta::Thinking {
                 content: think_content,
             }) => {
+                if thinking_started.is_none() {
+                    thinking_started = Some(Instant::now());
+                }
                 think.push_str(&think_content);
                 agg.push_thinking(&think_content, Instant::now());
             }
@@ -300,6 +327,7 @@ pub(crate) async fn consume_stream(
                 return Ok(StreamResult {
                     text,
                     think,
+                    think_ms: close_thinking_ms(thinking_started, thinking_ended),
                     finish_reason,
                     tool_calls,
                     usage: last_usage,
@@ -319,6 +347,7 @@ pub(crate) async fn consume_stream(
     Ok(StreamResult {
         text,
         think,
+        think_ms: close_thinking_ms(thinking_started, thinking_ended),
         finish_reason,
         tool_calls,
         usage: last_usage,
@@ -346,6 +375,7 @@ mod tests {
         let r = StreamResult {
             text: "hello world".to_string(),
             think: "thinking...".to_string(),
+            think_ms: Some(1200),
             finish_reason: "stop".to_string(),
             tool_calls: HashMap::new(),
             usage: Some(make_usage()),
@@ -353,6 +383,7 @@ mod tests {
         assert_eq!(r.text, "hello world");
         assert_eq!(r.finish_reason, "stop");
         assert!(r.tool_calls.is_empty());
+        assert_eq!(r.think_ms, Some(1200));
         let u = r.usage.unwrap();
         assert_eq!(u.prompt_tokens, 100);
         assert_eq!(u.completion_tokens, 50);
@@ -386,6 +417,7 @@ mod tests {
         let r = StreamResult {
             text: "".to_string(),
             think: "".to_string(),
+            think_ms: None,
             finish_reason: "stop".to_string(),
             tool_calls: tc_map,
             usage: None,
@@ -604,5 +636,74 @@ mod tests {
             .expect("cancel 走 Ok 返回");
         assert_eq!(sr.text, "");
         assert!(sink.take().is_empty(), "首个 delta 前取消：无任何事件");
+    }
+
+    // ---- 思考段计时（think_ms）：时间无关断言——有思考 Some / 无思考 None，
+    //      不锁具体毫秒（CI 慢机 flaky） ----
+
+    #[tokio::test]
+    async fn think_ms_present_when_thinking_precedes_content() {
+        let sink = SinkEmitter::default();
+        let cancel = CancellationToken::new();
+        let mut rs = round_state();
+        let mut stream = boxed_stream(vec![
+            Ok(ChatDelta::Thinking { content: "想".into() }),
+            Ok(ChatDelta::Thinking { content: "想2".into() }),
+            Ok(ChatDelta::Delta { content: "答".into() }),
+            Ok(ChatDelta::Done { finish_reason: Some("stop".into()) }),
+        ]);
+        let sr = consume_stream(&mut stream, &sink, &cancel, &mut rs, "c1", "m1")
+            .await
+            .expect("consume ok");
+        assert_eq!(sr.think, "想想2");
+        assert!(sr.think_ms.is_some(), "首个 thinking 起算 → 首个文本收口");
+    }
+
+    #[tokio::test]
+    async fn think_ms_closes_on_tool_call_start() {
+        let sink = SinkEmitter::default();
+        let cancel = CancellationToken::new();
+        let mut rs = round_state();
+        let mut stream = boxed_stream(vec![
+            Ok(ChatDelta::Thinking { content: "想".into() }),
+            Ok(ChatDelta::ToolCallStart { id: "t1".into(), name: "read_file".into() }),
+            Ok(ChatDelta::ToolCallEnd { id: "t1".into() }),
+            Ok(ChatDelta::Done { finish_reason: Some("tool_use".into()) }),
+        ]);
+        let sr = consume_stream(&mut stream, &sink, &cancel, &mut rs, "c1", "m1")
+            .await
+            .expect("consume ok");
+        assert!(sr.think_ms.is_some(), "工具调用开始同样收口思考段");
+    }
+
+    #[tokio::test]
+    async fn think_ms_present_when_thinking_runs_to_stream_end() {
+        let sink = SinkEmitter::default();
+        let cancel = CancellationToken::new();
+        let mut rs = round_state();
+        // 思考直达 Done（无正文无工具）：流尾收口（unwrap_or(now)）
+        let mut stream = boxed_stream(vec![
+            Ok(ChatDelta::Thinking { content: "纯思考".into() }),
+            Ok(ChatDelta::Done { finish_reason: Some("stop".into()) }),
+        ]);
+        let sr = consume_stream(&mut stream, &sink, &cancel, &mut rs, "c1", "m1")
+            .await
+            .expect("consume ok");
+        assert!(sr.think_ms.is_some(), "思考进行到流尾：Done 时收口");
+    }
+
+    #[tokio::test]
+    async fn think_ms_none_without_thinking() {
+        let sink = SinkEmitter::default();
+        let cancel = CancellationToken::new();
+        let mut rs = round_state();
+        let mut stream = boxed_stream(vec![
+            Ok(ChatDelta::Delta { content: "直接回答".into() }),
+            Ok(ChatDelta::Done { finish_reason: Some("stop".into()) }),
+        ]);
+        let sr = consume_stream(&mut stream, &sink, &cancel, &mut rs, "c1", "m1")
+            .await
+            .expect("consume ok");
+        assert!(sr.think_ms.is_none(), "无 thinking delta：无耗时");
     }
 }

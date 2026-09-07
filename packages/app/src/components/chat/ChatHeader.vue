@@ -346,9 +346,14 @@ async function toggleScreenShare() {
 .crumb-sep { margin:0 6px 0 2px; font-size:var(--ip-text-caption-size); color:var(--ip-color-text-disabled); vertical-align:1px; }
 /* 任务状态指示已换 StatusGlyph（与 DelegationCard/任务胶囊同语义：进行中=像素格主色，
    结束=中性环；2026-09-04 语系统一），胶囊内 12px 与文字同高 */
-.header-kind-badge .status-glyph { flex-shrink:0; margin-right:2px; vertical-align:-2px; }
+/* gap 已接管 glyph 与文字间距；flex 容器内 baseline 规则不再生效 */
+.header-kind-badge .status-glyph { flex-shrink:0; }
 .header-title { font-size:var(--ip-text-body-size); font-weight:var(--ip-font-weight-semibold); color:var(--ip-color-text-primary); margin:0; line-height:1.4; cursor:default; }
-.header-kind-badge { margin-left:8px; font-size:var(--ip-text-caption-size); font-weight:var(--ip-font-weight-medium); color:var(--ip-primary-600); background:var(--ip-primary-soft-bg, rgba(var(--ip-primary-500-rgb), 0.08)); border:1px solid var(--ip-primary-soft-border, rgba(var(--ip-primary-500-rgb), 0.25)); border-radius:var(--ip-radius-full, 999px); padding:1px 8px; vertical-align:1px; }
+/* inline-flex 结构居中（2026-09-05 修正）：badge 内 StatusGlyph 是无文本的
+   inline-flex，inline 流里 baseline=底边——像素格整个坠到文字下方。改 flex 容器
+   后 glyph 与文字按中心线对齐；与 h1 标题的对齐用 middle（徽章高度 ≈ 行高，
+   居中误差可忽略）。glyph 间距由 gap 接管（原 margin-right/vertical-align 作废）。 */
+.header-kind-badge { display:inline-flex; align-items:center; gap:3px; margin-left:8px; font-size:var(--ip-text-caption-size); font-weight:var(--ip-font-weight-medium); color:var(--ip-primary-600); background:var(--ip-primary-soft-bg, rgba(var(--ip-primary-500-rgb), 0.08)); border:1px solid var(--ip-primary-soft-border, rgba(var(--ip-primary-500-rgb), 0.25)); border-radius:var(--ip-radius-full, 999px); padding:1px 8px; vertical-align:middle; }
 .header-title-text { padding-bottom:1px; border-bottom:1px solid transparent; transition:border-color var(--ip-duration-fast) var(--ip-ease-out); }
 .header-title:hover .header-title-text { border-bottom-color:var(--ip-color-text-tertiary); }
 .header-edit-input { font-size:var(--ip-text-body-size); font-weight:var(--ip-font-weight-semibold); color:var(--ip-color-text-primary); background:var(--ip-color-bg-input); border:1px solid var(--ip-color-border-focus); border-radius:var(--ip-radius-md); padding:2px 8px; outline:none; width:100%; min-width:200px; font-family:inherit; box-shadow:0 0 0 3px rgba(var(--ip-primary-500-rgb), 0.12); }

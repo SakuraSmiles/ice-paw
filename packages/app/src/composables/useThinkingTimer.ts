@@ -7,6 +7,7 @@
 
 import { ref, computed, watch, onActivated, onDeactivated, onUnmounted } from "vue";
 import { useChatStore } from "../stores/chat";
+import { formatThinkingMs } from "../utils/format";
 
 export function useThinkingTimer() {
   const chat = useChatStore();
@@ -25,11 +26,8 @@ export function useThinkingTimer() {
   const thinkingElapsed = computed(() => {
     const start = chat.thinkingStartTime;
     if (!start) return '';
-    const elapsed = Math.floor((thinkingNow.value - start) / 1000);
-    if (elapsed < 60) return `${elapsed}s`;
-    const m = Math.floor(elapsed / 60);
-    const s = elapsed % 60;
-    return `${m}m ${s}s`;
+    // 与 freeze/历史兜底显示共用同一格式化真相源（utils/format），口径不漂移
+    return formatThinkingMs(thinkingNow.value - start);
   });
 
   // KeepAlive：切走停表，切回且仍在思考则恢复

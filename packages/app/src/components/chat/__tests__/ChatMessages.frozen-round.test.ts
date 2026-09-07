@@ -120,13 +120,13 @@ describe("多轮工具回合：已冻结轮不被骨架门控隐藏", () => {
     const w = await mountStreaming();
     const toggles = w.findAll(".tool-toggle");
     expect(toggles.length).toBe(1);
-    expect(toggles[0].text()).toContain("read_file");
+    expect(toggles[0].text()).toContain("读取文件");
   });
 
   it("下一轮纯文本流式期（无 thinking / tool-call-start）工具卡仍可见——生产消失窗口", async () => {
     const w = await mountStreaming("接下来我把第二章也整理进来");
     expect(w.findAll(".tool-toggle").length).toBe(1);
-    expect(w.findAll(".tool-toggle")[0].text()).toContain("read_file");
+    expect(w.findAll(".tool-toggle")[0].text()).toContain("读取文件");
     // 轮 2 的流式文本同屏在渲染（两轮内容并存，不是二选一）
     const bubbles = w.findAll(".message-bubble");
     expect(bubbles.some((b) => b.text().includes("第二章"))).toBe(true);

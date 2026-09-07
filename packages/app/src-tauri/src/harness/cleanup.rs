@@ -355,6 +355,7 @@ mod tests {
         ContentBlock::Thinking {
             thinking: t.into(),
             signature: None,
+            duration_ms: None,
         }
     }
     fn tool_use() -> ContentBlock {

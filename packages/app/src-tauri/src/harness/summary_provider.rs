@@ -826,6 +826,7 @@ mod tests {
                 ContentBlock::Thinking {
                     thinking: "internal reasoning".into(),
                     signature: None,
+                    duration_ms: None,
                 },
                 ContentBlock::text("实际回复"),
             ],

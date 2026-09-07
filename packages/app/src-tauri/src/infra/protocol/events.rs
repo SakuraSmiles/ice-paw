@@ -54,6 +54,9 @@ pub struct DelegationStartedPayload {
     pub agent_name: String,
     /// 子会话标题（task 截断文本，UX #4 已去「委派: 」前缀）
     pub title: String,
+    /// 触发本次委派的 tool_use id（前端把子会话绑回具体委派卡——同轮多卡并行
+    /// 时按卡跳转的唯一精确键；旧版本/非工具语境为 None，前端回退会话级推断）
+    pub tool_use_id: Option<String>,
 }
 
 /// `chat:chunk` 事件 payload

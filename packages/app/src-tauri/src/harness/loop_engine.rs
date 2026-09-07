@@ -407,6 +407,7 @@ async fn stream_loop_inner(
         // 故无需初始化——编译器可证明到达后续使用前必然已赋值。
         let round_text: String;
         let round_think: String;
+        let round_think_ms: Option<u64>;
         let round_finish_reason: String;
         let tool_calls_map: HashMap<String, CollectedToolCall>;
         // 本轮 provider 返回的 completion_tokens（用于即时落盘该 assistant 的 token_count）
@@ -513,6 +514,7 @@ async fn stream_loop_inner(
             RoundStreamResult::Ok(sr) => {
                 round_text = sr.text;
                 round_think = sr.think;
+                round_think_ms = sr.think_ms;
                 round_finish_reason = sr.finish_reason;
                 tool_calls_map = sr.tool_calls;
                 if let Some(u) = sr.usage {
@@ -627,6 +629,8 @@ async fn stream_loop_inner(
             round_blocks.push(ContentBlock::Thinking {
                 thinking: round_think.clone(),
                 signature: None,
+                // 思考段耗时（UI 持久显示「思考 · 30s」）；随 blocks 落库+事件日志
+                duration_ms: round_think_ms,
             });
         }
         if !msg_text.is_empty() {

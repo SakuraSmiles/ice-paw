@@ -475,6 +475,7 @@ impl McpClient for DelegateTool {
                 child_conversation_id: child_conv_id.clone(),
                 agent_name: target.name.clone(),
                 title: title.clone(),
+                tool_use_id: ctx.tool_use_id.clone(),
             },
         );
 

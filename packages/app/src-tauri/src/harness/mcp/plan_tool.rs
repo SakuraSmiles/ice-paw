@@ -248,6 +248,7 @@ mod tests {
     #[tokio::test]
     async fn execute_requires_turn_id_context() {
         let ctx = ToolContext {
+            tool_use_id: None,
             conv_id: "c1".into(),
             agent_id: "a1".into(),
             project_id: None,

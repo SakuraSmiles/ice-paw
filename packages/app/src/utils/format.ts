@@ -55,3 +55,26 @@ export function formatTokenCompact(n: number): string {
   // 1.2M / 23.5M
   return `${Number.isInteger(m) ? m : m.toFixed(1)}M`;
 }
+
+/**
+ * 思考耗时格式化（ms → 「30s」/「1m 30s」）。
+ *
+ * 单一真相源：流式计时显示（useThinkingTimer）、冻结时写入
+ * thinkingDurations、历史思考块的 duration_ms 兜底显示共用——
+ * 勿在组件/store 里再写一份秒/分换算（口径漂移会让同一思考块
+ * 流式结束与历史回看显示不一致）。
+ */
+export function formatThinkingMs(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
+}
+
+/**
+ * 字节数 → 人类可读（如 "1.2 MB"）。附件卡与工具行摘要共用
+ * （自 ChatMessages 局部函数上移，单一真相源）。
+ */
+export function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}

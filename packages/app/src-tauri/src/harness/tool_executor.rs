@@ -125,7 +125,6 @@ pub(crate) async fn execute_tool_round(
                 },
             )
     });
-    let tool_ctx = &enriched_ctx;
 
     // agent workspace 内的文件免授权（workspace 是 agent 的信任领地，
     // agent 读写自己 workspace 内的文件不需弹窗确认）。workspace 由 loop_engine
@@ -133,6 +132,10 @@ pub(crate) async fn execute_tool_round(
     let workspace = tool_ctx.workspace.as_ref().map(PathBuf::from);
 
     for (tc_id, tc_name, tc_args) in completed_calls {
+        // 每轮注入本轮 tool_use id（delegate 的 delegation-started 事件携带，
+        // 前端按卡绑定子会话——多卡并行时精确跳转）。借用随轮重建。
+        enriched_ctx.tool_use_id = Some(tc_id.clone());
+        let tool_ctx = &enriched_ctx;
         let tool_start = std::time::Instant::now();
         let started_at = now_sql();
         // 1. 解析授权级别 + 路径（+ 路径字段名——「允许此目录」档判定 dir 本身 vs 父目录用；
@@ -691,6 +694,7 @@ pub(crate) async fn build_tool_ctx(
         .await
         .map(|p| p.to_string_lossy().to_string());
     ToolContext {
+        tool_use_id: None,
         conv_id,
         agent_id,
         project_id,

@@ -304,6 +304,8 @@ export interface DelegationStartedPayload {
   child_conversation_id: string;
   agent_name: string;
   title: string;
+  /** 触发委派的 tool_use id（按卡绑定子会话的精确键；旧后端为 null） */
+  tool_use_id?: string | null;
 }
 
 export interface ChatChunkPayload {
@@ -361,7 +363,7 @@ export type ContentBlock =
   | { type: "image"; data: string; media_type: string }
   | { type: "tool_use"; id: string; name: string; input: string }
   | { type: "tool_result"; tool_use_id: string; content: string; is_error?: boolean }
-  | { type: "thinking"; thinking: string; signature?: string }
+  | { type: "thinking"; thinking: string; signature?: string; duration_ms?: number }
   | { type: "attachment"; name: string; kind: string; size: number }
   /** @ 引用卡（纯 UI；LLM 读后端 materialize 展开的 text 块） */
   | { type: "reference"; ref_kind: "conversation" | "agent" | "message"; target_id: string; display: string };

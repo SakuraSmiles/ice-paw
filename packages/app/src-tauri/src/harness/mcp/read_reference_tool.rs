@@ -276,6 +276,7 @@ mod tests {
 
     fn ctx(pool: &SqlitePool, conv_id: &str) -> ToolContext {
         ToolContext {
+            tool_use_id: None,
             conv_id: conv_id.into(),
             agent_id: "a1".into(),
             project_id: None,

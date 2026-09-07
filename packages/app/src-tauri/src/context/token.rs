@@ -238,6 +238,7 @@ mod tests {
         let b = ContentBlock::Thinking {
             thinking: "test".into(),
             signature: None,
+            duration_ms: None,
         };
         assert_eq!(estimate_block_tokens(&b), 1);
     }

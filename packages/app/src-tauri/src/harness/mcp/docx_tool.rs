@@ -2768,6 +2768,7 @@ mod tests {
     /// 造带 workspace 的 ToolContext（write_docx 的 L2 相对模板路径需要它）。
     async fn write_ctx(workspace: Option<String>) -> ToolContext {
         ToolContext {
+            tool_use_id: None,
             conv_id: "c1".into(),
             agent_id: "a1".into(),
             project_id: None,

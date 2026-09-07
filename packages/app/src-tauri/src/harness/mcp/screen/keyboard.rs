@@ -581,6 +581,7 @@ mod tests {
 
     async fn make_ctx(conv: &str) -> ToolContext {
         ToolContext {
+            tool_use_id: None,
             conv_id: conv.into(),
             agent_id: "a1".into(),
             project_id: None,

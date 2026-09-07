@@ -28,10 +28,14 @@ import { useThinkingTimer } from "../../composables/useThinkingTimer";
 import { useScrollFollow } from "../../composables/useScrollFollow";
 import { useTurnRail } from "../../composables/useTurnRail";
 import { useActiveTurn, THRESHOLD_PX } from "../../composables/useActiveTurn";
-import { formatTokenCount } from "../../utils/format";
+import { formatTokenCount, formatThinkingMs, formatFileSize } from "../../utils/format";
 import { shortCode, parseReferenceBlocks, resolveGroupMid } from "../../utils/refs";
 import type { ParsedRef } from "../../utils/refs";
 import { memoized } from "../../utils/blockMemo";
+import { summarizeToolCall, dirnameOf, type ToolLineSummary } from "../../utils/toolSummary";
+import { toolDisplayName } from "../../utils/toolLabels";
+import { revealItemInDir, openPath } from "@tauri-apps/plugin-opener";
+import ToolExpandDetail from "./ToolExpandDetail.vue";
 import type { Message, MessageRole, PlanItem } from "../../types";
 
 const chat = useChatStore();
@@ -169,7 +173,7 @@ function toggleThinking(msgId: string) {
   expandedThinking.value = set;
 }
 
-import { formatJson, truncateJson } from "../../utils/format";
+import { truncateJson } from "../../utils/format";
 
 function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
@@ -311,12 +315,7 @@ const parseAttachmentBlocks = memoized((contentBlocks: string): { name: string; 
   } catch { return []; }
 });
 
-/** 字节数 → 人类可读（如 "1.2 MB"） */
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
+/** 字节数格式化已上移 utils/format（附件卡与工具行摘要共用单一真相源） */
 
 /** 扩展名 → 展示标签（卡片上的类型名） */
 const KIND_LABELS: Record<string, string> = {
@@ -413,14 +412,15 @@ const parseToolResultBlocks = memoized((contentBlocks: string): { toolUseId: str
   } catch { return []; }
 });
 
-/** 解析 thinking 块。memo 化同上。 */
-const parseThinkingBlocks = memoized((contentBlocks: string): string[] => {
+/** 解析 thinking 块。memo 化同上。durationMs = 后端落库的思考段耗时
+ *  （旧消息无此字段 → null，label 只显示「思考」）。 */
+const parseThinkingBlocks = memoized((contentBlocks: string): { thinking: string; durationMs: number | null }[] => {
   try {
     const blocks: unknown[] = JSON.parse(contentBlocks);
     if (!Array.isArray(blocks)) return [];
-    return blocks.filter((b): b is { thinking: string; type: string } =>
+    return blocks.filter((b): b is { thinking: string; duration_ms?: number; type: string } =>
       typeof b === 'object' && b !== null && (b as Record<string, unknown>).type === 'thinking'
-    ).map((b) => b.thinking);
+    ).map((b) => ({ thinking: b.thinking, durationMs: typeof b.duration_ms === 'number' ? b.duration_ms : null }));
   } catch { return []; }
 });
 
@@ -448,6 +448,37 @@ function findToolResult(
 /** 查询某个 tool_use_id 对应的 tool_result 是否有 isError（跨消息配对）*/
 function getToolHasError(toolUseId: string): boolean {
   return findToolResult(toolUseId)?.isError ?? false;
+}
+
+// ===== 工具行展示（2026-09-07 拍板）：展示名 + 次级信息左置 + 文件名右锚可点 =====
+
+/** 历史工具行摘要：memo 化（模板热路径每渲染每工具调用；findToolResult 每次
+ *  computed 重建新对象，memo 键取内容值拼串——与 parseToolUseBlocks 同款模式，
+ *  返回同引用勿 mutate）。流式行走直调（参数逐字变化，memo 无益）。 */
+const summarizeCached = memoized((key: string): ToolLineSummary | null => {
+  const [name, input, content, isError] = JSON.parse(key) as [
+    string, string, string | null, boolean | null,
+  ];
+  return content != null
+    ? summarizeToolCall(name, input, { content, isError: isError === true })
+    : summarizeToolCall(name, input, null);
+});
+
+function summaryFor(tu: { id: string; name: string; input: string }): ToolLineSummary | null {
+  const tr = findToolResult(tu.id);
+  return summarizeCached(JSON.stringify([tu.name, tu.input, tr?.content ?? null, tr?.isError ?? null]));
+}
+
+/** 文件名点击：资源管理器中定位该文件（revealItemInDir 选中）；失败（文件已
+ *  删/被移走）降级打开父目录，再失败仅 console 披露——fire-and-forget，
+ *  AgentForm.openInExplorer 先例。 */
+function revealFile(path: string) {
+  revealItemInDir(path).catch(() => {
+    const dir = dirnameOf(path);
+    if (dir) {
+      openPath(dir).catch((e) => console.warn("[ChatMessages] reveal 失败", path, e));
+    }
+  });
 }
 
 // ===== MA-1：delegate_to_agent 委派卡片（DelegationCard 的取数层）=====
@@ -482,10 +513,10 @@ function parseDelegateResult(content: string): {
   return null;
 }
 
-/** 本会话当前运行中的委派子会话 id（运行中卡片跳转用）。
- *  child_conversation_id 在完成时的 tool_result 才回传，但后端在子会话创建成功
- *  即 emit chat:delegation-started（store 刷新列表）→ 运行中也能跳。
- *  v1 串行执行（execute_tool_round 顺序跑工具）保证同父同时至多一个运行中委派。 */
+/** 本会话当前运行中的委派子会话 id（**降级兜底**，仅旧后端/映射缺失时用）。
+ *  精确路径是 store 的 delegationChildByToolUse（delegation-started 事件带
+ *  tool_use_id 登记）——同轮多卡并行委派时每张卡查自己的键；本 computed 只剩
+ *  「事件缺 tool_use_id（旧后端）+ 会话级唯一 streaming」的兜底语义。 */
 const runningDelegationChildId = computed(() => {
   const pid = chat.activeConvId;
   if (!pid) return null;
@@ -512,16 +543,21 @@ function delegateCardFor(
     agentId: input?.agentId ?? null,
     task: input?.task ?? "",
     status,
-    childConvId: dr?.childConvId ?? (status === "running" ? runningDelegationChildId.value : null),
+    childConvId: dr?.childConvId
+      ?? (status === "running"
+        ? (chat.delegationChildByToolUse.get(tu.id) ?? runningDelegationChildId.value)
+        : null),
     finishReason: dr?.finishReason ?? null,
     rounds: dr?.rounds ?? null,
     hasError: tr?.isError ?? false,
   };
 }
 
-/** 流式中的委派卡片取数：call.arguments 逐字到达，call.result 到达即完成。 */
+/** 流式中的委派卡片取数：call.arguments 逐字到达，call.result 到达即完成。
+ *  running 跳转先查 store 的 tool_use 映射（delegation-started 登记），降级走
+ *  会话级兜底（见 runningDelegationChildId 注释）。 */
 function delegateStreamCard(call: {
-  name: string; arguments: string; ended: boolean;
+  id: string; name: string; arguments: string; ended: boolean;
   result?: { content: string; isError: boolean } | null;
 }): {
   agentName: string; agentId: string | null; task: string; status: "running" | "done" | "error";
@@ -536,7 +572,10 @@ function delegateStreamCard(call: {
     agentId: input?.agentId ?? null,
     task: input?.task ?? (call.ended ? "" : "正在接收参数…"),
     status,
-    childConvId: dr?.childConvId ?? (status === "running" ? runningDelegationChildId.value : null),
+    childConvId: dr?.childConvId
+      ?? (status === "running"
+        ? (chat.delegationChildByToolUse.get(call.id) ?? runningDelegationChildId.value)
+        : null),
     finishReason: dr?.finishReason ?? null,
     rounds: dr?.rounds ?? null,
   };
@@ -890,12 +929,14 @@ const RESUMABLE_REASONS = new Set([
                   <div v-if="!(isLastAssistant(item) && chat.thinkingDuration && chat.lastThinkingContent)" class="think-block">
                     <div class="think-toggle" @click="toggleThinking(item.msg.id + '-h' + ti)">
                       <StatusGlyph status="done" class="think-glyph" />
-                      <span class="think-label">{{ chat.thinkingDurations.has(item.msg.id) ? '思考 · ' + chat.thinkingDurations.get(item.msg.id) : '思考' }}</span>
+                      <!-- 耗时两级来源：内存 thinkingDurations（本轮会话，含多轮中间轮）
+                           → 块内 duration_ms（后端落库，重启后兜底）→ 无则只显示「思考」 -->
+                      <span class="think-label">{{ chat.thinkingDurations.has(item.msg.id) ? '思考 · ' + chat.thinkingDurations.get(item.msg.id) : think.durationMs != null ? '思考 · ' + formatThinkingMs(think.durationMs) : '思考' }}</span>
                       <span class="think-chevron">{{ expandedThinking.has(item.msg.id + '-h' + ti) ? '▾' : '▸' }}</span>
                     </div>
                     <Transition name="think-fade">
                       <div v-if="expandedThinking.has(item.msg.id + '-h' + ti)" class="think-body">
-                        <MarkdownRenderer :content="think" />
+                        <MarkdownRenderer :content="think.thinking" />
                       </div>
                     </Transition>
                   </div>
@@ -905,7 +946,7 @@ const RESUMABLE_REASONS = new Set([
                 <Transition name="think-swap" mode="out-in">
                   <div v-if="isLiveAssistant(item) && chat.streamingThinking" key="live" class="think-block">
                     <div class="think-toggle" @click="toggleThinking('streaming')">
-                      <StatusGlyph status="running" class="think-glyph" />
+                      <StatusGlyph status="running" variant="spinner" class="think-glyph" />
                       <span class="think-label">思考</span>
                       <span class="think-status">进行中… {{ thinkingElapsed }}</span>
                       <span class="think-chevron">{{ expandedThinking.has('streaming') ? '▾' : '▸' }}</span>
@@ -954,22 +995,13 @@ const RESUMABLE_REASONS = new Set([
                         <template v-if="d.hasError">
                           <div class="tool-toggle" @click="toggleToolCall(tu.id)">
                             <StatusGlyph status="error" />
-                            <span class="tool-name">{{ tu.name }}</span>
+                            <span class="tool-name">{{ toolDisplayName(tu.name) }}</span>
                             <span class="tool-preview">调用失败</span>
                             <span class="tool-chevron">{{ expandedToolCalls.has(tu.id) ? '▾' : '▸' }}</span>
                           </div>
                           <Transition name="tool-slide">
                             <div v-if="expandedToolCalls.has(tu.id)" class="tool-expand">
-                              <div class="tool-expand-group">
-                                <div class="tool-expand-hdr">参数</div>
-                                <pre class="tool-expand-code">{{ formatJson(tu.input) }}</pre>
-                              </div>
-                              <template v-for="tr in [findToolResult(tu.id)]" :key="tr ? 'has-result' : 'no-result'">
-                                <div v-if="tr" class="tool-expand-group">
-                                  <div class="tool-expand-hdr hdr-err">错误</div>
-                                  <pre class="tool-expand-code code-err">{{ tr.content }}</pre>
-                                </div>
-                              </template>
+                              <ToolExpandDetail :name="tu.name" :args-json="tu.input" :result="findToolResult(tu.id)" />
                             </div>
                           </Transition>
                         </template>
@@ -979,26 +1011,28 @@ const RESUMABLE_REASONS = new Set([
                         <template v-for="p in [planCardFor(tu)]" :key="p ? 'plan-card' : 'plan-none'">
                           <PlanCard v-if="p" :items="p" @open-task="openChildConv" />
                           <template v-else>
-                            <div class="tool-toggle" @click="toggleToolCall(tu.id)">
-                              <StatusGlyph :status="getToolHasError(tu.id) ? 'error' : 'done'" />
-                              <span class="tool-name">{{ tu.name }}</span>
-                              <span class="tool-preview">{{ truncateJson(tu.input) }}</span>
-                              <span class="tool-chevron">{{ expandedToolCalls.has(tu.id) ? '▾' : '▸' }}</span>
-                            </div>
-                            <Transition name="tool-slide">
-                              <div v-if="expandedToolCalls.has(tu.id)" class="tool-expand">
-                                <div class="tool-expand-group">
-                                  <div class="tool-expand-hdr">参数</div>
-                                  <pre class="tool-expand-code">{{ formatJson(tu.input) }}</pre>
-                                </div>
-                                <template v-for="tr in [findToolResult(tu.id)]" :key="tr ? 'has-result' : 'no-result'">
-                                  <div v-if="tr" class="tool-expand-group">
-                                    <div :class="['tool-expand-hdr', tr.isError ? 'hdr-err' : '']">{{ tr.isError ? '错误' : '结果' }}</div>
-                                    <pre :class="['tool-expand-code', tr.isError ? 'code-err' : '']">{{ tr.content }}</pre>
-                                  </div>
-                                </template>
+                            <!-- 工具行摘要（P1 工具）：展示名 + 次级信息左置 + 文件名右锚可点；
+                                 非 P1 / 参数畸形 → 通用行（展示名词表降级英文原值） -->
+                            <template v-for="s in [summaryFor(tu)]" :key="s ? 'sum' : 'sum-none'">
+                              <div v-if="s" class="tool-toggle" @click="toggleToolCall(tu.id)">
+                                <StatusGlyph :status="getToolHasError(tu.id) ? 'error' : 'done'" />
+                                <span class="tool-name">{{ s.display }}</span>
+                                <span v-if="s.secondary" class="tool-secondary">{{ s.secondary }}</span>
+                                <span class="tool-file" title="在资源管理器中显示" @click.stop="revealFile(s.revealPath)">{{ s.fileLabel }}</span>
+                                <span class="tool-chevron">{{ expandedToolCalls.has(tu.id) ? '▾' : '▸' }}</span>
                               </div>
-                            </Transition>
+                              <div v-else class="tool-toggle" @click="toggleToolCall(tu.id)">
+                                <StatusGlyph :status="getToolHasError(tu.id) ? 'error' : 'done'" />
+                                <span class="tool-name">{{ toolDisplayName(tu.name) }}</span>
+                                <span class="tool-preview">{{ truncateJson(tu.input) }}</span>
+                                <span class="tool-chevron">{{ expandedToolCalls.has(tu.id) ? '▾' : '▸' }}</span>
+                              </div>
+                              <Transition name="tool-slide">
+                                <div v-if="expandedToolCalls.has(tu.id)" class="tool-expand">
+                                  <ToolExpandDetail :name="tu.name" :args-json="tu.input" :result="findToolResult(tu.id)" />
+                                </div>
+                              </Transition>
+                            </template>
                           </template>
                         </template>
                       </template>
@@ -1027,34 +1061,40 @@ const RESUMABLE_REASONS = new Set([
                         <template v-for="p in [planStreamCard(call)]" :key="p ? 'plan-live' : 'plan-none'">
                           <PlanCard v-if="p" :items="p" @open-task="openChildConv" />
                           <template v-else>
-                            <div class="tool-toggle" @click="toggleToolCall(call.id)">
-                              <StatusGlyph
-                                v-if="call.ended && call.result"
-                                :status="call.result.isError ? 'error' : 'done'"
-                              />
-                              <StatusGlyph v-else-if="call.ended" status="wait" />
-                              <StatusGlyph v-else status="running" />
-                              <span class="tool-name">{{ call.name }}</span>
-                              <span v-if="call.result?.durationMs" class="tool-duration">{{ formatDuration(call.result.durationMs) }}</span>
-                              <span class="tool-preview">{{ truncateJson(call.arguments || '') }}</span>
-                              <span class="tool-chevron">{{ expandedToolCalls.has(call.id) ? '▾' : '▸' }}</span>
-                            </div>
-                            <Transition name="tool-slide">
-                              <div v-if="expandedToolCalls.has(call.id)" class="tool-expand">
-                                <div class="tool-expand-group">
-                                  <div class="tool-expand-hdr">参数</div>
-                                  <pre class="tool-expand-code">{{ formatJson(call.arguments) }}</pre>
-                                </div>
-                                <div v-if="call.result" class="tool-expand-group">
-                                  <div :class="['tool-expand-hdr', call.result.isError ? 'hdr-err' : '']">{{ call.result.isError ? '错误' : '结果' }}</div>
-                                  <pre :class="['tool-expand-code', call.result.isError ? 'code-err' : '']">{{ call.result.content }}</pre>
-                                </div>
-                                <div v-else class="tool-expand-group">
-                                  <div class="tool-expand-hdr">结果</div>
-                                  <div class="tool-expand-pending">{{ call.ended ? '等待执行结果…' : '正在接收参数…' }}</div>
-                                </div>
+                            <!-- 流式工具行摘要：直调（参数逐字变化，memo 无益）；参数到齐瞬间
+                                 从通用行切结构行（delegate 卡同款切换形态） -->
+                            <template v-for="s in [summarizeToolCall(call.name, call.arguments || '{}', call.result ?? null)]" :key="s ? 'sum' : 'sum-none'">
+                              <div v-if="s" class="tool-toggle" @click="toggleToolCall(call.id)">
+                                <StatusGlyph
+                                  v-if="call.ended && call.result"
+                                  :status="call.result.isError ? 'error' : 'done'"
+                                />
+                                <StatusGlyph v-else-if="call.ended" status="wait" />
+                                <StatusGlyph v-else status="running" variant="spinner" />
+                                <span class="tool-name">{{ s.display }}</span>
+                                <span v-if="call.result?.durationMs" class="tool-duration">{{ formatDuration(call.result.durationMs) }}</span>
+                                <span v-if="s.secondary" class="tool-secondary">{{ s.secondary }}</span>
+                                <span class="tool-file" title="在资源管理器中显示" @click.stop="revealFile(s.revealPath)">{{ s.fileLabel }}</span>
+                                <span class="tool-chevron">{{ expandedToolCalls.has(call.id) ? '▾' : '▸' }}</span>
                               </div>
-                            </Transition>
+                              <div v-else class="tool-toggle" @click="toggleToolCall(call.id)">
+                                <StatusGlyph
+                                  v-if="call.ended && call.result"
+                                  :status="call.result.isError ? 'error' : 'done'"
+                                />
+                                <StatusGlyph v-else-if="call.ended" status="wait" />
+                                <StatusGlyph v-else status="running" variant="spinner" />
+                                <span class="tool-name">{{ toolDisplayName(call.name) }}</span>
+                                <span v-if="call.result?.durationMs" class="tool-duration">{{ formatDuration(call.result.durationMs) }}</span>
+                                <span class="tool-preview">{{ truncateJson(call.arguments || '') }}</span>
+                                <span class="tool-chevron">{{ expandedToolCalls.has(call.id) ? '▾' : '▸' }}</span>
+                              </div>
+                              <Transition name="tool-slide">
+                                <div v-if="expandedToolCalls.has(call.id)" class="tool-expand">
+                                  <ToolExpandDetail :name="call.name" :args-json="call.arguments || '{}'" :result="call.result ?? null" />
+                                </div>
+                              </Transition>
+                            </template>
                           </template>
                         </template>
                       </template>
@@ -1111,7 +1151,7 @@ const RESUMABLE_REASONS = new Set([
 
     <div v-if="chat.sending && chat.messages.length > 0" class="cursor-bar">
       <div class="cursor-track">
-        <StatusGlyph status="running" /><span class="cursor-label">正在生成…</span>
+        <StatusGlyph status="running" variant="spinner" /><span class="cursor-label">正在生成…</span>
       </div>
     </div>
 
@@ -1271,18 +1311,22 @@ const RESUMABLE_REASONS = new Set([
 .message-content { display:flex; flex-direction:column; gap:4px; min-width:0; }
 .message-group.user .message-content { align-items:flex-end; }
 
-/* 组内多条 assistant item：item 内子项适度间距，轮次之间留白区分（呼吸感）*/
+/* 组内多条 assistant item：item 内子项适度间距，轮次之间留白区分（呼吸感；
+   2026-09-05 排版批 16→12——组内轮次是同一回答的连续段落，12px 足够分节，
+   组间 gap 16px 保持承担「不同回答」的更大分隔） */
 .message-group.assistant .message-item { display:flex; flex-direction:column; gap:6px; }
-.message-group.assistant .message-item + .message-item { margin-top:16px; }
+.message-group.assistant .message-item + .message-item { margin-top: var(--ip-spacing-3, 12px); }
 
 /* ===== 用户消息气泡 ===== */
 /* flex column + 统一 gap：正文 / 引用卡 / 附件卡（含堆叠）/ 图片（含堆叠）纵向
    排布的唯一间距来源——旧实现靠各元素零散 margin-top（6/4/0px 不一，单图单卡
    贴正文），多元素混排时参差；卡片的独立 margin 已移除，调间距只改 gap。 */
-.message-group.user .message-bubble { display:flex; flex-direction:column; gap: var(--ip-spacing-2); padding:10px 16px; border-radius:12px; font-size:var(--ip-text-body-size); line-height:1.6; white-space:pre-wrap; word-break:break-word; background-color:var(--ip-color-bg-user-bubble); color:var(--ip-color-text-on-user-bubble); border-bottom-right-radius:4px; }
+.message-group.user .message-bubble { display:flex; flex-direction:column; gap: var(--ip-spacing-2); padding:10px 16px; border-radius:12px; font-size:var(--ip-text-body-size); line-height:var(--ip-line-height-loose3, 1.5); white-space:pre-wrap; word-break:break-word; background-color:var(--ip-color-bg-user-bubble); color:var(--ip-color-text-on-user-bubble); border-bottom-right-radius:4px; }
 
-/* ===== 助手消息文字（无自带背景，由组容器承载气泡块）===== */
-.message-group.assistant .message-bubble { padding:0; border-radius:0; font-size:var(--ip-text-body-size); line-height:1.6; white-space:pre-wrap; word-break:break-word; background:transparent; }
+/* ===== 助手消息文字（无自带背景，由组容器承载气泡块）=====
+   行高走 loose3（1.5）与用户气泡/ markdown-body 同值——2026-09-05 排版批二轮，
+   勿回退字面量（同屏 MD 与纯文本行距不齐的根源）。 */
+.message-group.assistant .message-bubble { padding:0; border-radius:0; font-size:var(--ip-text-body-size); line-height:var(--ip-line-height-loose3, 1.5); white-space:pre-wrap; word-break:break-word; background:transparent; }
 
 /* ===== 用户消息内容（含图片） ===== */
 .user-content { display:flex; flex-direction:column; gap:4px; }
@@ -1431,7 +1475,7 @@ const RESUMABLE_REASONS = new Set([
 .think-chevron { margin-left:auto; font-size: var(--ip-text-micro-size); color:var(--ip-color-text-disabled); line-height:1; width:10px; flex-shrink:0; transition:transform var(--ip-duration-fast) var(--ip-ease-out); }
 .think-label { font-size:var(--ip-text-caption-size); font-weight:var(--ip-font-weight-medium); color:var(--ip-color-text-tertiary); letter-spacing:0.3px; text-transform:uppercase; }
 .think-status { margin-left:8px; font-size:var(--ip-text-caption-size); color:var(--ip-color-text-disabled); }
-.think-body { margin:4px 0 4px 22px; padding:6px 0 6px 14px; border-left:2px solid var(--ip-primary-200); font-size:var(--ip-text-body-sm-size); color:var(--ip-color-text-secondary); line-height:1.7; white-space:pre-wrap; word-break:break-word; }
+.think-body { margin:4px 0 4px 22px; padding:6px 0 6px 14px; border-left:2px solid var(--ip-primary-200); font-size:var(--ip-text-body-sm-size); color:var(--ip-color-text-secondary); line-height:1.6; white-space:pre-wrap; word-break:break-word; }
 /* 思考内容的 Markdown 继承 13px 字号 */
 .think-body .markdown-body { font-size:inherit; color:inherit; line-height:inherit; }
 
@@ -1459,6 +1503,10 @@ const RESUMABLE_REASONS = new Set([
 .tool-chevron { font-size: var(--ip-text-micro-size); color:var(--ip-color-text-disabled); line-height:1; width:10px; flex-shrink:0; }
 .tool-name { font-size:var(--ip-text-caption-size); font-weight:var(--ip-font-weight-medium); color:var(--ip-color-text-tertiary); white-space:nowrap; }
 .tool-duration { font-size: var(--ip-text-micro-size); color:var(--ip-color-text-disabled); font-family:var(--ip-font-mono, monospace); white-space:nowrap; flex-shrink:0; }
+/* 次级信息（左置，紧跟展示名）与文件名位（右锚可点 reveal，2026-09-07 布局拍板） */
+.tool-secondary { font-size:var(--ip-text-caption-size); color:var(--ip-color-text-disabled); white-space:nowrap; }
+.tool-file { margin-left:auto; margin-right:6px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:right; flex-shrink:1; font-size:var(--ip-text-caption-size); color:var(--ip-color-text-secondary); cursor:pointer; }
+.tool-file:hover { color:var(--ip-primary-600); text-decoration:underline; }
 .tool-preview { font-size:var(--ip-text-caption-size); color:var(--ip-color-text-disabled); margin-left:auto; margin-right:6px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:right; flex-shrink:1; }
 
 /* 状态图标（StatusGlyph：环形对勾/3×3 像素格/环形叉，2026-09-04 语系统一）。

@@ -892,6 +892,7 @@ mod tests {
                     ContentBlock::Thinking {
                         thinking: "let me try...".into(),
                         signature: None,
+                        duration_ms: None,
                     },
                     tu("orphan"),
                 ],
@@ -928,6 +929,7 @@ mod tests {
                     ContentBlock::Thinking {
                         thinking: "h".into(),
                         signature: None,
+                        duration_ms: None,
                     },
                     text_blk("answer"),
                 ],
@@ -956,6 +958,7 @@ mod tests {
                     ContentBlock::Thinking {
                         thinking: "h".into(),
                         signature: None,
+                        duration_ms: None,
                     },
                     tu("A"),
                 ],

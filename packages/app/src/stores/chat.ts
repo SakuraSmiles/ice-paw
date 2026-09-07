@@ -11,7 +11,7 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { parseDbTime } from "../utils/time";
-import { formatTokenCount } from "../utils/format";
+import { formatTokenCount, formatThinkingMs } from "../utils/format";
 import type { Conversation, Message } from "../types";
 import type {
   AuthScope,
@@ -65,6 +65,16 @@ export const useChatStore = defineStore("chat", () => {
   const activeConversation = computed(() =>
     conversations.value.find((c) => c.id === activeConvId.value) ?? null,
   );
+
+  // ===== 委派卡按 tool_use 绑定子会话（MA-1 修正） =====
+  // delegation-started 事件到达时登记：tool_use_id → child_conv_id。同轮多卡
+  // 并行委派时，每张 running 卡的「打开任务」按自己的 tool_use id 查表精确跳转
+  //（旧行为回退「会话级唯一 streaming 子会话」会把所有卡都跳到同一张）。
+  // tool_use id 全局唯一，无需随会话切换清理；量级 = 委派次数，session 内存可承受。
+  const delegationChildByToolUse = ref<Map<string, string>>(new Map());
+  function bindDelegationChild(toolUseId: string, childConvId: string) {
+    delegationChildByToolUse.value.set(toolUseId, childConvId);
+  }
 
   /** 流式态复位（轮末/会话切换共用的单一切入点）。
    *  防逐字段漂移：曾因切换的 bg 恢复分支漏清 streamingToolCalls，把上一会话的
@@ -609,14 +619,31 @@ export const useChatStore = defineStore("chat", () => {
    *  - 末条 assistant 写入 content + content_blocks（thinking / text / tool_use，不含 result）
    *  - tool_result 组装成独立 user 消息插入末条之后（符合 Anthropic 协议：
    *    tool_result 必须在 user 消息里）
-   *  调用方负责在之后重置 streaming 状态。*/
+   *  调用方负责在之后重置 streaming 状态。
+   *  多轮工具回合每轮 freeze 一次：thinking 耗时随轮落 thinkingDurations
+   *  （中间轮即时显示）+ duration_ms 进 blocks（与后端落库同形态，重载前也有值）。*/
   function freezeCurrentAssistant() {
     const lastIdx = messages.value.length - 1;
     if (lastIdx < 0 || messages.value[lastIdx].role !== "assistant") return;
 
     const blocks: { type: string; [key: string]: unknown }[] = [];
     if (streamingThinking.value) {
-      blocks.push({ type: "thinking", thinking: streamingThinking.value });
+      const durationMs =
+        thinkingStartTime.value != null ? Date.now() - thinkingStartTime.value : null;
+      blocks.push({
+        type: "thinking",
+        thinking: streamingThinking.value,
+        ...(durationMs != null ? { duration_ms: durationMs } : {}),
+      });
+      // 本轮思考耗时登记（历史思考块 label 的第一优先数据源；重启后由
+      // content_blocks 的 duration_ms 兜底）。thinkingStartTime 在 freeze 时
+      // 尚未被 resetRoundStreaming 清掉——时序即此设计所依赖。
+      if (durationMs != null) {
+        const dur = formatThinkingMs(durationMs);
+        const map = new Map(thinkingDurations.value);
+        map.set(messages.value[lastIdx].id, dur);
+        thinkingDurations.value = map;
+      }
     }
     if (streamingText.value) {
       blocks.push({ type: "text", text: streamingText.value });
@@ -754,5 +781,6 @@ export const useChatStore = defineStore("chat", () => {
     resetSendTimeout, clearSendTimeout, freezeCurrentAssistant, resetRoundStreaming, clearTurnAnchors,
     createConversation, clearActiveConversation, reset, addPendingRef,
     openTrajectoryNext, openConversationAtTrajectory,
+    delegationChildByToolUse, bindDelegationChild,
   };
 });
