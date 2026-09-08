@@ -636,9 +636,10 @@ pub async fn set_agent_enabled_tools(
     repo::agent::update(
         pool.inner(),
         &agent_id,
-        None, None, None, None, None, None, None, None, None, None, None, None,
-        Some(tools.clone()),
-        None, None, None,
+        &repo::agent::AgentRepoUpdate {
+            enabled_tools: Some(tools.clone()),
+            ..Default::default()
+        },
     )
     .await
     .map_err(|e| {

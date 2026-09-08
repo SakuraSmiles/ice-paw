@@ -20,8 +20,10 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { Agent, NewAgent, AgentUpdate, ProviderConnectionResult, ProviderInfo } from "../../types";
 import { bridge } from "../../api/bridge";
 import { loadProviders } from "../../composables/useProviders";
+import { useModelProfiles, profileById } from "../../composables/useModelProfiles";
 import GroupedSelect from "../common/GroupedSelect.vue";
 import ProviderIcon from "../common/ProviderIcon.vue";
+import Combobox from "../common/Combobox.vue";
 import type { ComboboxGroup, ComboboxItem } from "../common/Combobox.vue";
 import MoreMenu from "../common/MoreMenu.vue";
 import StylePresetPicker from "./StylePresetPicker.vue";
@@ -57,6 +59,46 @@ const form = ref({
   avatar: (props.agent?.avatar as string | null) ?? null,
 });
 
+// ---- 模型来源两形态（ModelProfile Phase 2 批 1）----
+// manual = 厂商/模型/Key/URL 本表单配置（legacy 形态）；reference = 引用
+// 「设置-模型」的模型配置实体（ModelProfile）——Key 与端点在那边统一维护，
+// 一处改动对所有引用它的 Agent 生效（后端每轮对话解析，快照列仅显示用）。
+// 编辑态按行引用列初始化；新建默认手动（既有用户心智：模型就在这张表单配）。
+const mode = ref<"manual" | "reference">(
+  props.agent?.model_profile_id ? "reference" : "manual",
+);
+
+// 引用选择器数据源（模块级共享缓存，与设置-模型页同表）
+const { profiles, loadModelProfiles } = useModelProfiles();
+/** 引用的模型配置 id（悬空 id 保留展示降级提示，不静默清掉） */
+const profileId = ref(props.agent?.model_profile_id ?? "");
+const selectedProfile = computed(() => profileById(profiles.value, profileId.value));
+
+/** 引用选择器条目（label 含厂商/模型，别名重复时也可辨认；GeneralSettings 同款） */
+const profileItems = computed<ComboboxItem[]>(() =>
+  profiles.value.map((p) => ({
+    label: `${p.alias}（${providerLabelOf(p.provider)} · ${p.model}）`,
+    value: p.id,
+  })),
+);
+
+/** 健康点词表（slug 对齐后端 ProfileHealth 契约；语义色圆点 + 文字） */
+const PROFILE_HEALTH_META: Record<string, { tone: string; label: string }> = {
+  ok: { tone: "success", label: "正常" },
+  quota: { tone: "danger", label: "额度耗尽" },
+  auth: { tone: "danger", label: "Key 无效" },
+  model_not_found: { tone: "danger", label: "模型不存在" },
+  unknown: { tone: "danger", label: "调用异常" },
+  rate_limited: { tone: "warning", label: "限流中" },
+  network: { tone: "warning", label: "端点不可达" },
+};
+/** 所选 profile 健康态（null = 未调用过，不冒充正常） */
+const profileHealth = computed(() => {
+  const slug = selectedProfile.value?.last_health;
+  if (!slug) return null;
+  return PROFILE_HEALTH_META[slug] ?? { tone: "neutral", label: slug };
+});
+
 // ---- 头像行 ----
 
 
@@ -64,6 +106,8 @@ const form = ref({
 
 onMounted(async () => {
   providerList.value = await loadProviders();
+  // 引用选择器数据源（失败降级空表——useModelProfiles 内已兜底，不卡表单）
+  void loadModelProfiles();
   // URL 初值：编辑态存量原样；预设厂商为空时显示注册表默认（字段只读但值=实际生效地址）
   if (!form.value.base_url && !isCustomModel.value && currentProvider.value) {
     form.value.base_url = currentProvider.value.default_url;
@@ -90,6 +134,10 @@ watch(() => form.value.id, (newId) => {
 const currentProvider = computed(
   () => providerList.value.find((p) => p.name === form.value.provider) ?? null,
 );
+/** 注册名 → 展示名（引用摘要/选择器条目用；目录未加载时回退注册名） */
+function providerLabelOf(name: string): string {
+  return providerList.value.find((p) => p.name === name)?.label ?? name;
+}
 const requiresKey = computed(() => currentProvider.value?.requires_key ?? true);
 /** Key 申请页直达（注册表 key_url 单一真相源；免 key 厂商无此链接） */
 const keyApplyUrl = computed(() => currentProvider.value?.key_url ?? "");
@@ -348,6 +396,16 @@ const error = ref("");
 function validate(): boolean {
   if (!form.value.id.trim()) { error.value = "ID 不能为空"; return false; }
   if (!form.value.name.trim()) { error.value = "名称不能为空"; return false; }
+  // 引用模式：模型身份来自 profile——厂商/模型/Key/URL 校验全部豁免
+  // （快照列族由后端解析产生，本表单不再持有；换厂商 Key 闸天然不适用）
+  if (mode.value === "reference") {
+    if (!profileId.value.trim()) {
+      error.value = "请选择要引用的模型配置（在「设置-模型」维护）";
+      return false;
+    }
+    error.value = "";
+    return true;
+  }
   if (!form.value.model.trim()) { error.value = "模型不能为空"; return false; }
   // Key 必填/格式校验只对「需要 key 的 provider」生效（ollama/custom 本地免鉴权）
   if (requiresKey.value && !isEdit.value && !form.value.api_key.trim()) {
@@ -383,30 +441,48 @@ async function save() {
   try {
     const currentAgent = props.agent;
     if (isEdit.value && currentAgent) {
-      const update: AgentUpdate = {
-        id: currentAgent.id,
-        name: form.value.name,
-        provider: form.value.provider,
-        model: form.value.model,
-        // 空 → 不传（后端「保持不改」；显式清空端点不设路径——预设厂商地址系统管理）
-        base_url: form.value.base_url || undefined,
-        workspace_path: form.value.workspace_path || null,
-        // 头像双层 Option：null=清空 / string=设定（表单态即真值，无「不改」分支）
-        avatar: form.value.avatar,
-      };
-      const updated = await bridge.agents.update(update);
+      if (mode.value === "reference") {
+        // 引用模式：只发出生证 + 引用 id——provider/model/base_url 属快照列族，
+        // 与设引用同批会被后端冲突校验拒；Key 在 profile 侧维护，无 rotateKey
+        const updated = await bridge.agents.update({
+          id: currentAgent.id,
+          name: form.value.name,
+          workspace_path: form.value.workspace_path || null,
+          avatar: form.value.avatar,
+          model_profile_id: profileId.value || null,
+        });
+        const fresh = await bridge.agents.list();
+        const real = fresh.find((a) => a.id === currentAgent.id);
+        emit("saved", real ?? updated);
+      } else {
+        const update: AgentUpdate = {
+          id: currentAgent.id,
+          name: form.value.name,
+          provider: form.value.provider,
+          model: form.value.model,
+          // 空 → 不传（后端「保持不改」；显式清空端点不设路径——预设厂商地址系统管理）
+          base_url: form.value.base_url || undefined,
+          workspace_path: form.value.workspace_path || null,
+          // 头像双层 Option：null=清空 / string=设定（表单态即真值，无「不改」分支）
+          avatar: form.value.avatar,
+          // 手动模式显式解除引用（null）：引用 agent 切回手动一并完成，
+          // 快照列（后端保持新鲜）升为权威
+          model_profile_id: null,
+        };
+        const updated = await bridge.agents.update(update);
 
-      if (form.value.api_key) {
-        await bridge.agents.rotateKey(
-          currentAgent.id,
-          form.value.api_key,
-          form.value.base_url || undefined,
-        );
+        if (form.value.api_key) {
+          await bridge.agents.rotateKey(
+            currentAgent.id,
+            form.value.api_key,
+            form.value.base_url || undefined,
+          );
+        }
+
+        const fresh = await bridge.agents.list();
+        const real = fresh.find((a) => a.id === currentAgent.id);
+        emit("saved", real ?? updated);
       }
-
-      const fresh = await bridge.agents.list();
-      const real = fresh.find((a) => a.id === currentAgent.id);
-      emit("saved", real ?? updated);
     } else {
       const input: NewAgent = {
         id: form.value.id,
@@ -423,6 +499,11 @@ async function save() {
           ? fillPresetName(selectedPreset.value.text, form.value.name)
           : undefined,
       };
+      // 引用模式：模型身份来自 profile（后端 create 解析快照 + 跳过手动必填；
+      // provider/model 照传占位，被解析值覆盖）
+      if (mode.value === "reference" && profileId.value) {
+        input.model_profile_id = profileId.value;
+      }
       const created = await bridge.agents.create(input);
       emit("saved", created);
     }
@@ -490,10 +571,21 @@ function confirmDelete() {
             </div>
           </div>
 
-          <!-- 模型（可选可输分组选择器：选预设即隐式确定厂商；手输目录外名字落自定义） -->
+          <!-- 模型：手动/引用两形态（ModelProfile Phase 2）——label 行右侧模式切换 -->
           <div class="field">
-            <label class="field-label">模型 <span class="req">*</span></label>
+            <div class="label-row">
+              <label class="field-label">模型 <span class="req">*</span></label>
+              <span
+                class="mode-switch"
+                title="手动：厂商/模型/Key/URL 在本表单配置。引用：绑定「设置-模型」的模型配置——Key 与端点在那边统一维护，一处改动对所有引用它的 Agent 生效"
+              >
+                <button type="button" class="mode-opt" :class="{ active: mode === 'manual' }" @click="mode = 'manual'">手动配置</button>
+                <button type="button" class="mode-opt" :class="{ active: mode === 'reference' }" @click="mode = 'reference'">引用模型配置</button>
+              </span>
+            </div>
+            <!-- 手动：可选可输分组选择器（选预设即隐式确定厂商；手输目录外名字落自定义） -->
             <GroupedSelect
+              v-if="mode === 'manual'"
               :model-value="modelValue"
               :groups="modelGroups"
               allow-custom
@@ -510,11 +602,33 @@ function confirmDelete() {
                 <ProviderIcon :name="group.id ?? ''" :size="13" />
               </template>
             </GroupedSelect>
+            <!-- 引用：选择模型配置实体（Key/端点在「设置-模型」维护，此处只绑定） -->
+            <template v-else>
+              <Combobox
+                :model-value="profileId"
+                :items="profileItems"
+                placeholder="选择模型配置（在「设置-模型」维护）"
+                @update:model-value="profileId = $event"
+              />
+              <!-- 所选摘要：状态上屏（厂商/模型/Key 态/健康点），不可编辑 -->
+              <p v-if="selectedProfile" class="field-hint profile-summary">
+                <ProviderIcon :name="selectedProfile.provider" :size="13" />
+                <span>{{ providerLabelOf(selectedProfile.provider) }} · {{ selectedProfile.model }}</span>
+                <span v-if="!selectedProfile.has_api_key" class="profile-key-miss">Key 未配置</span>
+                <span v-if="profileHealth" class="profile-health">
+                  <span class="profile-dot" :class="`profile-dot--${profileHealth.tone}`" aria-hidden="true"></span>{{ profileHealth.label }}
+                </span>
+              </p>
+              <!-- 悬空引用（profile 已删；删除守卫正常会拦，异常路径兜底提示） -->
+              <p v-else-if="profileId" class="field-hint profile-dangling">该模型配置已不存在——保存后沿用行内快照继续可用，建议重新选择</p>
+              <p v-else class="field-hint">引用「设置-模型」里的模型配置：Key 与端点在那边统一维护，改动对所有引用它的 Agent 生效</p>
+            </template>
           </div>
 
-          <!-- API Key + API URL（两列）。Key：状态徽标内嵌输入框右缘；
+          <!-- API Key + API URL（两列；手动形态专属——引用模式 Key/端点在 profile 侧维护）。
+               Key：状态徽标内嵌输入框右缘；
                URL：label 行内联「测试连接」+ 行内结果（2026-08-22 拍板，替代原提示文字） -->
-          <div class="field-row">
+          <div v-if="mode === 'manual'" class="field-row">
             <div class="field">
               <label class="field-label">
                 API Key
@@ -681,7 +795,9 @@ function confirmDelete() {
    * 行1 名称/ID   label18 + gap4 + input32 = 54
    * 行2 模型       label18 + gap4 + select30 = 52（hint 已删 2026-08-22）
    * 行3 Key/URL   label行20（含20px测试按钮） + gap4 + input32 = 56（测试行上移进 label）
-   * 行间距 spacing-2_5×2 = 20 → 右列总高 182 − 头像自身 label 行 18+4 = 160 */
+   * 行间距 spacing-2_5×2 = 20 → 右列总高 182 − 头像自身 label 行 18+4 = 160
+   * 引用模式（ModelProfile Phase 2）行3 不渲染、行2 换 Combobox + 摘要行——
+   * 右列更矮，头像随 stretch 缩短、宽度不动（宽度只按手动形态名义值锚定） */
   width: 160px;
 }
 .identity-avatar :deep(.avatar-field) {
@@ -802,6 +918,62 @@ function confirmDelete() {
   background-color: var(--ip-color-primary-soft-bg);
   border-color: transparent;
   font-weight: var(--ip-font-weight-medium);
+}
+
+/* 模型来源切换（手动配置/引用模型配置）：模型 label 行尾分段胶囊（endpoint-opt 同族） */
+.mode-switch {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: auto;
+}
+.mode-opt {
+  padding: 0 10px;
+  font-size: var(--ip-text-micro-size);
+  line-height: 20px;
+  color: var(--ip-color-text-secondary);
+  background-color: var(--ip-color-bg-tertiary);
+  border: 1px solid var(--ip-color-border-default);
+  border-radius: var(--ip-radius-full);
+  cursor: pointer;
+  transition: all var(--ip-duration-fast) var(--ip-ease-out);
+}
+.mode-opt:hover {
+  border-color: var(--ip-color-border-focus);
+  color: var(--ip-color-text-primary);
+}
+.mode-opt.active {
+  color: var(--ip-primary-600);
+  background-color: var(--ip-color-primary-soft-bg);
+  border-color: transparent;
+  font-weight: var(--ip-font-weight-medium);
+}
+
+/* 引用摘要行：厂商图标 + 厂商/模型 + Key 态 + 健康点（语义色圆点 + 文字） */
+.profile-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.profile-key-miss {
+  color: var(--ip-warning-text);
+}
+.profile-health {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.profile-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--ip-radius-full);
+}
+.profile-dot--success { background-color: var(--ip-success-base); }
+.profile-dot--warning { background-color: var(--ip-warning-base); }
+.profile-dot--danger { background-color: var(--ip-danger-base); }
+.profile-dot--neutral { background-color: var(--ip-color-text-tertiary); }
+.profile-dangling {
+  color: var(--ip-warning-text);
 }
 
 /* 连接测试行：小号文字按钮 + 行内结果（绿/红），失败原因可 hover 看全；

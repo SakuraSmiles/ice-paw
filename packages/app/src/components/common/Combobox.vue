@@ -70,6 +70,12 @@ watch(() => props.modelValue, (v) => {
   filter.value = "";
 });
 
+// items 异步到位（先挂载后加载，如 profile 列表晚于表单挂载）：重查回显
+// label——否则初始 labelOf 落空回显 value 原文（内部 id 长期裸露）
+watch(() => props.items, () => {
+  displayValue.value = labelOf(props.modelValue);
+});
+
 // 高亮基准用 modelValue（items 形态 displayValue 是 label，比对会恒 false）
 const isActive = (key: string) => key === props.modelValue;
 

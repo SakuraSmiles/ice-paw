@@ -93,6 +93,9 @@ pub fn validate_proposal(
                     "跨 agent 修改被禁止：提案目标 agent_id='{agent_id}'，当前对话 agent_id='{caller_agent_id}'。只能修改当前对话所属的 agent。"
                 )));
             }
+            // ⚠️ 前瞻备忘（ModelProfile Phase 2 起）：上方 `..` rest pattern 会把
+            // 未来新增的字段（如 model_profile_id）静默放行为 🟢 Low——模型身份
+            // 属敏感旋钮，届时须显式加 🟡 Medium 分支并给 warning。
 
             // --- 敏感度分级 ---
             let changing_tools = enabled_tools.is_some();

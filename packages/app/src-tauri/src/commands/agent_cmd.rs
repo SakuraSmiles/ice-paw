@@ -59,12 +59,26 @@ use crate::harness::provider::{provider_default_url, provider_requires_key};
 /// `crypto::store_api_key` 存一条空记录**（Stronghold 无记录时
 /// `fetch_api_key` 返回 NotFound，聊天链路 `get_with_credentials` 会报错，
 /// 所以必须占位）；OpenAI adapter 发空 Bearer，本地服务忽略。
+///
+/// ModelProfile Phase 2：引用模式（`model_profile_id` 非空）跳过 provider/
+/// model/api_key 必填——模型身份来自 profile，api_key 空串占位（agent 自身
+/// 槽位不再被引用路径读取）；降级链非空时要求主档存在。
 fn validate_new_agent(input: &NewAgent) -> AppResult<()> {
     if input.id.trim().is_empty() {
         return Err(AppError::Validation("ID 不能为空".into()));
     }
     if input.name.trim().is_empty() {
         return Err(AppError::Validation("name 不能为空".into()));
+    }
+    if input.model_profile_id.as_deref().is_some_and(|v| !v.trim().is_empty()) {
+        validate_fallback_has_primary(
+            true,
+            input
+                .fallback_profile_ids
+                .as_ref()
+                .is_some_and(|v| !v.is_empty()),
+        )?;
+        return Ok(());
     }
     if input.provider.trim().is_empty() {
         return Err(AppError::Validation("provider 不能为空".into()));
@@ -75,6 +89,51 @@ fn validate_new_agent(input: &NewAgent) -> AppResult<()> {
     if provider_requires_key(input.provider.trim()) && input.api_key.trim().is_empty() {
         return Err(AppError::Validation("api_key 不能为空".into()));
     }
+    Ok(())
+}
+
+/// 降级链依赖主档：非空链必须搭配主档引用（链的起点是主 profile，legacy
+/// agent 无主档链无处生效）。纯函数，create/update 共用（两处入参形态不同，
+/// 链是否非空由调用方算好传入）。
+fn validate_fallback_has_primary(has_primary: bool, chain_nonempty: bool) -> AppResult<()> {
+    if chain_nonempty && !has_primary {
+        return Err(AppError::Validation(
+            "降级链需要先选择主模型（引用的模型配置）".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// AgentUpdate 冲突校验（纯函数，便于测试回归）。
+///
+/// 设引用（Some(Some)）与 provider/model/base_url 同批 → 拒：快照列族由
+/// profile 解析产生，同批手填会被下一轮解析覆盖，形成「看似改了实则没改」
+/// 的假象。解除引用（Some(None)）与手填同批**合法**——切回手动模式一并完成
+/// （AgentForm 手动模式提交正是这个形状）。降级链检查走
+/// [`validate_fallback_has_primary`]（目标态 = input 显式值优先、否则旧行值）。
+fn validate_update_model_fields_conflict(
+    input: &AgentUpdate,
+    old_has_primary: bool,
+) -> AppResult<()> {
+    if matches!(input.model_profile_id, Some(Some(_)))
+        && (input.provider.is_some()
+            || input.model.is_some()
+            || input.base_url.is_some())
+    {
+        return Err(AppError::Validation(
+            "设模型引用时不能同时修改厂商/模型/端点——请先保存引用，再单独调整".into(),
+        ));
+    }
+    // 目标态主档：显式传了以传值为准（Some(None)=解除 → 无主档），否则沿用旧行
+    let target_has_primary = match &input.model_profile_id {
+        Some(opt) => opt.as_deref().is_some_and(|v| !v.trim().is_empty()),
+        None => old_has_primary,
+    };
+    let chain_nonempty = matches!(
+        &input.fallback_profile_ids,
+        Some(Some(v)) if !v.is_empty()
+    );
+    validate_fallback_has_primary(target_has_primary, chain_nonempty)?;
     Ok(())
 }
 
@@ -334,6 +393,20 @@ impl SqlAgentCmd {
         agent.has_api_key = has_api_key;
         agent
     }
+
+    /// legacy 路径凭据（agent 行 api_key_ref 槽位 + 行 base_url/vault 兜底）。
+    /// 引用模式的悬空降级与无引用的 agent 共用。
+    async fn legacy_credentials(&self, agent: &AgentRow) -> AppResult<(String, Option<String>)> {
+        let (api_key, vault_base_url) = crypto::fetch_api_key(&self.app, &agent.api_key_ref)?;
+        // base_url：agent 配置优先（如果有），否则回退到 vault 里存的 base_url
+        let base_url = agent
+            .base_url
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .or(vault_base_url.as_deref())
+            .map(|s| s.to_string());
+        Ok((api_key, base_url))
+    }
 }
 
 #[async_trait]
@@ -368,14 +441,46 @@ impl AgentCmd for SqlAgentCmd {
                 }
                 None => (HookConfig::default(), None),
             };
-        let (api_key, vault_base_url) = crypto::fetch_api_key(&self.app, &agent.api_key_ref)?;
-        // base_url：agent 配置优先（如果有），否则回退到 vault 里存的 base_url
-        let base_url = agent
-            .base_url
+        // ModelProfile Phase 2：引用模式解析——profile 是模型身份唯一权威
+        // （provider/model/base_url/api_key 四值），快照列仅显示用。值变才回写
+        // 快照（trg_agents_upd 无 WHEN，同值零写入不刷 updated_at）。悬空引用
+        // （profile 已删）降级 legacy 快照列继续可用 + warn 披露。
+        let (api_key, base_url) = if let Some(pid) = agent
+            .model_profile_id
             .as_deref()
-            .filter(|s| !s.is_empty())
-            .or(vault_base_url.as_deref())
-            .map(|s| s.to_string());
+            .filter(|p| !p.trim().is_empty())
+        {
+            match super::model_profile_cmd::resolve_profile_credentials(
+                &self.app,
+                &self.pool,
+                pid,
+            )
+            .await
+            {
+                Ok(cred) => {
+                    let _ = repo::agent::update_model_snapshot(
+                        &self.pool,
+                        &agent.id,
+                        &cred.profile.provider,
+                        &cred.profile.model,
+                        cred.base_url.as_deref(),
+                    )
+                    .await;
+                    agent.provider = cred.profile.provider.clone();
+                    agent.model = cred.profile.model.clone();
+                    (cred.api_key, cred.base_url)
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        target: "ice_paw.agent",
+                        "agent {agent_id} 引用的模型配置 {pid} 解析失败（{e}），降级用行内快照继续"
+                    );
+                    self.legacy_credentials(&agent).await?
+                }
+            }
+        } else {
+            self.legacy_credentials(&agent).await?
+        };
         Ok(AgentWithCredentials {
             agent,
             api_key,
@@ -394,6 +499,25 @@ impl AgentCmd for SqlAgentCmd {
         if repo::agent::get_by_id(&self.pool, &id).await.is_ok() {
             return Err(AppError::Validation(format!("ID '{}' 已被使用", id)));
         }
+
+        // ModelProfile Phase 2：引用模式解析 profile 写快照列——provider/model/
+        // base_url 一次写对（validate 已跳过必填，这三列不能落空串）。profile
+        // 不存在在此拦下（槽位/行都还没写，无残局可清）。
+        let profile_snapshot = match input.model_profile_id.as_deref() {
+            Some(pid) if !pid.trim().is_empty() => {
+                let cred = super::model_profile_cmd::resolve_profile_credentials(
+                    &self.app,
+                    &self.pool,
+                    pid,
+                )
+                .await
+                .map_err(|e| {
+                    AppError::Validation(format!("引用的模型配置不可用（{pid}）：{e}"))
+                })?;
+                Some((cred.profile.provider, cred.profile.model, cred.base_url))
+            }
+            _ => None,
+        };
 
         crypto::store_api_key(&self.app, &id, &input.api_key, input.base_url.as_deref())?;
 
@@ -419,6 +543,11 @@ impl AgentCmd for SqlAgentCmd {
 
         let mut new_agent = input;
         new_agent.workspace_path = workspace_path;
+        if let Some((provider, model, base_url)) = profile_snapshot {
+            new_agent.provider = provider;
+            new_agent.model = model;
+            new_agent.base_url = base_url;
+        }
 
         let row: AgentRow = repo::agent::create(&self.pool, &new_agent, &id, &id).await?;
 
@@ -468,6 +597,11 @@ impl AgentCmd for SqlAgentCmd {
     async fn update(&self, input: AgentUpdate) -> AppResult<Agent> {
         // 记录旧行，用于检测 workspace / provider 变更（watcher 重绑定 + 端点跟随）。
         let old_row = repo::agent::get_by_id(&self.pool, &input.id).await.ok();
+        let old_has_primary = old_row
+            .as_ref()
+            .and_then(|r| r.model_profile_id.as_deref())
+            .is_some_and(|v| !v.trim().is_empty());
+        validate_update_model_fields_conflict(&input, old_has_primary)?;
         let old_workspace = old_row.as_ref().and_then(|r| r.workspace_path.clone());
         // B（2026-08-26 生产反馈根治）：换厂商而未显式提供 base_url → 重置为新
         // 厂商注册表默认地址。否则 DB 残留旧厂商 URL，新 provider 客户端会打到
@@ -484,27 +618,64 @@ impl AgentCmd for SqlAgentCmd {
             input.base_url.as_ref().map(|o| o.as_deref()),
             switch_url.as_deref(),
         );
+        // ModelProfile Phase 2：设引用时解析 profile——存在性在此拦 + 快照即时
+        // 写对（前端显示与 yaml 镜像都拿到解析后的值）。冲突校验已保证此时
+        // provider/model/base_url 不在同批，快照覆盖不会吞用户输入。
+        let profile_snapshot = match input.model_profile_id.as_ref() {
+            Some(Some(pid)) if !pid.trim().is_empty() => {
+                let cred = super::model_profile_cmd::resolve_profile_credentials(
+                    &self.app,
+                    &self.pool,
+                    pid,
+                )
+                .await
+                .map_err(|e| {
+                    AppError::Validation(format!("引用的模型配置不可用（{pid}）：{e}"))
+                })?;
+                Some((cred.profile.provider, cred.profile.model, cred.base_url))
+            }
+            _ => None,
+        };
         let row = repo::agent::update(
             &self.pool,
             &input.id,
-            input.name.as_deref(),
-            input.provider.as_deref(),
-            input.model.as_deref(),
-            input.system_prompt.as_deref(),
-            base_url_arg,
-            input.temperature,
-            input.max_tokens,
-            input.extra_params.as_ref(),
-            input.sort_order,
-            input.cache_prompt,
-            input.max_history_messages,
-            input.context_window,
-            input.enabled_tools,
-            input.supports_vision,
-            input.workspace_path.as_ref().map(|opt| opt.as_deref()),
-            input.avatar.as_ref().map(|opt| opt.as_deref()),
+            &repo::agent::AgentRepoUpdate {
+                name: input.name.clone(),
+                provider: input.provider.clone(),
+                model: input.model.clone(),
+                system_prompt: input.system_prompt.clone(),
+                base_url: base_url_arg.map(|o| o.map(String::from)),
+                temperature: input.temperature,
+                max_tokens: input.max_tokens,
+                extra_params: input.extra_params.clone(),
+                sort_order: input.sort_order,
+                cache_prompt: input.cache_prompt,
+                max_history_messages: input.max_history_messages,
+                context_window: input.context_window,
+                enabled_tools: input.enabled_tools.clone(),
+                supports_vision: input.supports_vision,
+                workspace_path: input.workspace_path.clone(),
+                avatar: input.avatar.clone(),
+                model_profile_id: input.model_profile_id.clone(),
+                fallback_profile_ids: input.fallback_profile_ids.clone(),
+            },
         )
         .await?;
+        // 引用快照回写：repo update 落引用列后紧跟写快照三列（值变才写），再取
+        // 新行让下游（yaml 镜像 / DTO 返回）都拿到解析后的模型身份
+        let row = if let Some((provider, model, base_url)) = profile_snapshot {
+            let _ = repo::agent::update_model_snapshot(
+                &self.pool,
+                &input.id,
+                &provider,
+                &model,
+                base_url.as_deref(),
+            )
+            .await;
+            repo::agent::get_by_id(&self.pool, &input.id).await?
+        } else {
+            row
+        };
         if provider_changed && switch_url.is_some() && input.base_url.is_none() {
             tracing::info!(
                 target: "ice_paw.agent",
@@ -746,6 +917,11 @@ impl AgentCmd for MockAgentCmd {
             description: String::new(),
             avatar: None,
             workspace_path: input.workspace_path.clone(),
+            model_profile_id: input.model_profile_id.clone(),
+            fallback_profile_ids: input
+                .fallback_profile_ids
+                .as_ref()
+                .map(|v| serde_json::to_string(v).unwrap_or_default()),
             created_at: "2024-01-01 00:00:00".to_string(),
             updated_at: "2024-01-01 00:00:00".to_string(),
         };
@@ -816,6 +992,15 @@ impl AgentCmd for MockAgentCmd {
         }
         if let Some(v) = input.avatar {
             entry.0.avatar = v;
+        }
+        // ModelProfile Phase 2：双层 Option 与 Sql 版语义对齐
+        // （Some(None)=解除/清链、Some(Some)=设定；None=不动）
+        if let Some(v) = input.model_profile_id {
+            entry.0.model_profile_id = v;
+        }
+        if let Some(v) = input.fallback_profile_ids {
+            entry.0.fallback_profile_ids =
+                v.map(|ids| serde_json::to_string(&ids).unwrap_or_default());
         }
         entry.0.updated_at = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
         Ok(Agent::from(entry.0.clone()))
@@ -916,6 +1101,8 @@ mod tests {
             description: String::new(),
             avatar: None,
             workspace_path: None,
+            model_profile_id: None,
+            fallback_profile_ids: None,
             created_at: "2024-01-01 00:00:00".to_string(),
             updated_at: "2024-01-01 00:00:00".to_string(),
         }
@@ -942,6 +1129,8 @@ mod tests {
             supports_vision: false,
             workspace_path: None,
             avatar: None,
+            model_profile_id: None,
+            fallback_profile_ids: None,
         }
     }
 
@@ -1142,6 +1331,8 @@ mod tests {
             supports_vision: false,
             workspace_path: None,
             avatar: None,
+            model_profile_id: None,
+            fallback_profile_ids: None,
         };
 
         let a = mock.create(new).await.unwrap();
@@ -1172,6 +1363,8 @@ mod tests {
             supports_vision: None,
             workspace_path: None,
             avatar: None,
+            model_profile_id: None,
+            fallback_profile_ids: None,
         };
 
         let a = mock.update(input).await.unwrap();
@@ -1274,5 +1467,153 @@ mod tests {
         assert!(content.contains("model: glm-5.2"));
         assert!(content.contains("max_tokens: 4096"));
         assert!(content.contains("- read_file"));
+    }
+
+    /// ModelProfile Phase 2：AgentUpdate.model_profile_id / fallback_profile_ids
+    /// 双层 Option JSON 三形态（base_url 惯例）。
+    #[test]
+    fn agent_update_model_profile_serde_three_forms() {
+        // 字段缺席 → None（不改）
+        let absent: AgentUpdate = serde_json::from_str(r#"{"id":"a1"}"#).unwrap();
+        assert_eq!(absent.model_profile_id, None);
+        assert_eq!(absent.fallback_profile_ids, None);
+
+        // JSON null → Some(None)（解除引用 / 清链）
+        let nulled: AgentUpdate =
+            serde_json::from_str(r#"{"id":"a1","model_profile_id":null,"fallback_profile_ids":null}"#)
+                .unwrap();
+        assert_eq!(nulled.model_profile_id, Some(None));
+        assert_eq!(nulled.fallback_profile_ids, Some(None));
+
+        // 值 → Some(Some(v))（设引用 / 设链）
+        let valued: AgentUpdate = serde_json::from_str(
+            r#"{"id":"a1","model_profile_id":"mp-1","fallback_profile_ids":["mp-2"]}"#,
+        )
+        .unwrap();
+        assert_eq!(valued.model_profile_id, Some(Some("mp-1".into())));
+        assert_eq!(
+            valued.fallback_profile_ids,
+            Some(Some(vec!["mp-2".to_string()]))
+        );
+    }
+
+    /// 设引用与快照列族手填同批拒；解除引用与手填同批合法；链依赖主档。
+    #[test]
+    fn update_conflicts_profile_and_manual_fields_rejected() {
+        let base = || AgentUpdate {
+            id: "a1".into(),
+            name: None,
+            provider: None,
+            model: None,
+            system_prompt: None,
+            base_url: None,
+            temperature: None,
+            max_tokens: None,
+            extra_params: None,
+            sort_order: None,
+            cache_prompt: None,
+            max_history_messages: None,
+            context_window: None,
+            enabled_tools: None,
+            supports_vision: None,
+            workspace_path: None,
+            avatar: None,
+            model_profile_id: None,
+            fallback_profile_ids: None,
+        };
+
+        // 设引用 + provider 同批 → 拒
+        let mut u = base();
+        u.model_profile_id = Some(Some("mp-1".into()));
+        u.provider = Some("glm".into());
+        assert!(validate_update_model_fields_conflict(&u, false).is_err());
+
+        // 设引用 + base_url 同批 → 拒（快照列族完整性）
+        let mut u = base();
+        u.model_profile_id = Some(Some("mp-1".into()));
+        u.base_url = Some(Some("https://x.example".into()));
+        assert!(validate_update_model_fields_conflict(&u, false).is_err());
+
+        // 解除引用 + provider 同批 → 过（切回手动模式一并完成）
+        let mut u = base();
+        u.model_profile_id = Some(None);
+        u.provider = Some("glm".into());
+        u.model = Some("glm-5.3".into());
+        assert!(validate_update_model_fields_conflict(&u, true).is_ok());
+
+        // legacy 行（无主档）设非空链 → 拒
+        let mut u = base();
+        u.fallback_profile_ids = Some(Some(vec!["mp-2".into()]));
+        assert!(validate_update_model_fields_conflict(&u, false).is_err());
+
+        // 同批设主档 + 链 → 过
+        let mut u = base();
+        u.model_profile_id = Some(Some("mp-1".into()));
+        u.fallback_profile_ids = Some(Some(vec!["mp-2".into()]));
+        assert!(validate_update_model_fields_conflict(&u, false).is_ok());
+
+        // 已有主档的行只设链 → 过（沿用旧行主档）
+        let mut u = base();
+        u.fallback_profile_ids = Some(Some(vec!["mp-2".into()]));
+        assert!(validate_update_model_fields_conflict(&u, true).is_ok());
+
+        // 解除引用 + 留非空链 → 拒（目标态无主档）
+        let mut u = base();
+        u.model_profile_id = Some(None);
+        u.fallback_profile_ids = Some(Some(vec!["mp-2".into()]));
+        assert!(validate_update_model_fields_conflict(&u, true).is_err());
+
+        // 清链 + 解除引用 → 过
+        let mut u = base();
+        u.model_profile_id = Some(None);
+        u.fallback_profile_ids = Some(None);
+        assert!(validate_update_model_fields_conflict(&u, true).is_ok());
+    }
+
+    /// 引用模式新建：跳过 provider/model/api_key 必填；链依赖主档。
+    #[test]
+    fn validate_new_agent_profile_mode_skips_manual_required() {
+        let mut a = new_agent("", "");
+        a.provider = String::new();
+        a.model = String::new();
+        a.api_key = String::new();
+        // legacy 路径：空 provider 应拒
+        assert!(validate_new_agent(&a).is_err());
+
+        // 引用模式：同一入参全空合法（模型身份来自 profile）
+        a.model_profile_id = Some("mp-1".into());
+        assert!(validate_new_agent(&a).is_ok());
+
+        // 引用模式但链无主档 → 拒
+        let mut b = new_agent("", "");
+        b.model_profile_id = None;
+        b.fallback_profile_ids = Some(vec!["mp-2".into()]);
+        assert!(validate_new_agent(&b).is_err());
+    }
+
+    /// Mock 双层 Option 语义：create 落引用列 / update 设与清。
+    #[tokio::test]
+    async fn mock_create_update_model_profile_fields() {
+        let mock = MockAgentCmd::new();
+        let mut new = new_agent("anthropic", "sk-xxx");
+        new.model_profile_id = Some("mp-1".into());
+        new.fallback_profile_ids = Some(vec!["mp-2".to_string(), "mp-3".to_string()]);
+        let a = mock.create(new).await.unwrap();
+        assert_eq!(a.model_profile_id.as_deref(), Some("mp-1"));
+        assert_eq!(
+            a.fallback_profile_ids,
+            Some(vec!["mp-2".to_string(), "mp-3".to_string()])
+        );
+
+        // update：解除引用 + 清链
+        let u = AgentUpdate {
+            id: "test-agent".into(),
+            model_profile_id: Some(None),
+            fallback_profile_ids: Some(None),
+            ..serde_json::from_str::<AgentUpdate>(r#"{"id":"test-agent"}"#).unwrap()
+        };
+        let a = mock.update(u).await.unwrap();
+        assert_eq!(a.model_profile_id, None);
+        assert_eq!(a.fallback_profile_ids, None);
     }
 }

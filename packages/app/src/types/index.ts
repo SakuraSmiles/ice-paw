@@ -23,6 +23,10 @@ export interface Agent {
   description?: string;
   avatar?: string | null;
   workspace_path?: string | null;
+  /** 引用的模型配置 id（null = 手动模式，provider/model 等四字段即权威） */
+  model_profile_id?: string | null;
+  /** 降级链 profile id（null = 无链；后端批 2 消费） */
+  fallback_profile_ids?: string[] | null;
   config_from_file?: boolean;
   created_at: string;
   updated_at: string;
@@ -54,6 +58,9 @@ export interface NewAgent {
   supports_vision?: boolean;
   workspace_path?: string;
   avatar?: string;
+  /** 引用的模型配置 id（引用模式跳过 provider/model/api_key 必填） */
+  model_profile_id?: string;
+  fallback_profile_ids?: string[];
 }
 
 export interface AgentUpdate {
@@ -74,6 +81,10 @@ export interface AgentUpdate {
   workspace_path?: string | null;
   /** 头像：undefined=不改 / null=清空 / string=设定（双层 Option 语义） */
   avatar?: string | null;
+  /** 模型引用：undefined=不改 / null=解除引用回手动 / string=设引用 */
+  model_profile_id?: string | null;
+  /** 降级链：undefined=不改 / null=清链 / 数组=设链 */
+  fallback_profile_ids?: string[] | null;
 }
 
 // ============================================================================

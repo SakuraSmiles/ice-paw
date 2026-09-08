@@ -47,6 +47,11 @@ pub struct AgentRow {
     pub avatar: Option<String>,
     /// Phase 3: 工作区目录路径（存放 agent.yaml 的本地目录）
     pub workspace_path: Option<String>,
+    /// ModelProfile Phase 2: 引用的模型配置（NULL = legacy 路径，provider/model 等
+    /// 四列即权威；非 NULL = 四列作解析快照，get_with_credentials 每轮解析回写）
+    pub model_profile_id: Option<String>,
+    /// ModelProfile Phase 2: 降级链（JSON 数组串，批 2 消费；NULL = 无降级链）
+    pub fallback_profile_ids: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -289,6 +294,12 @@ pub struct Agent {
     /// Phase 3: 工作区目录路径
     #[serde(default)]
     pub workspace_path: Option<String>,
+    /// ModelProfile Phase 2: 引用的模型配置（None = legacy 路径，模型区四字段即权威）
+    #[serde(default)]
+    pub model_profile_id: Option<String>,
+    /// ModelProfile Phase 2: 降级链 profile id（None = 无降级链；批 2 消费）
+    #[serde(default)]
+    pub fallback_profile_ids: Option<Vec<String>>,
     /// Phase 3: 是否从 agent.yaml 读取了部分配置
     #[serde(default)]
     pub config_from_file: bool,
@@ -347,6 +358,11 @@ impl From<AgentRow> for Agent {
                 .as_deref()
                 .map(|s| serde_json::from_str::<Vec<String>>(s).unwrap_or_default()),
             supports_vision: row.supports_vision != 0,
+            model_profile_id: row.model_profile_id.clone(),
+            fallback_profile_ids: row
+                .fallback_profile_ids
+                .as_deref()
+                .map(|s| serde_json::from_str::<Vec<String>>(s).unwrap_or_default()),
             created_at: row.created_at,
             updated_at: row.updated_at,
             has_api_key,
@@ -399,6 +415,14 @@ pub struct NewAgent {
     /// M2-1: 头像图片（base64 dataURL，前端 canvas 压缩）
     #[serde(default)]
     pub avatar: Option<String>,
+    /// ModelProfile Phase 2: 引用的模型配置（None = legacy 手动模式，provider/model
+    /// 等四字段即权威）。引用模式下 provider/model/api_key/base_url 四字段被忽略
+    /// （出生证语义只有 name/id/workspace/avatar），快照列由命令层解析 profile 写入。
+    #[serde(default)]
+    pub model_profile_id: Option<String>,
+    /// ModelProfile Phase 2: 降级链（批 2 消费；仅引用模式有意义）。
+    #[serde(default)]
+    pub fallback_profile_ids: Option<Vec<String>>,
 }
 
 fn default_temperature() -> f64 {
@@ -468,6 +492,16 @@ pub struct AgentUpdate {
     /// - Some(Some(v)) = 设定
     #[serde(default, deserialize_with = "deserialize_double_option")]
     pub avatar: Option<Option<String>>,
+    /// ModelProfile Phase 2: 引用的模型配置。双层 Option（None=不改 /
+    /// Some(None)=解除引用回 legacy / Some(Some)=设引用）。
+    /// 设引用与 provider/model/base_url 同批 → Validation 拒（快照列族由解析产生，
+    /// 手填会打架）；解除引用与手填同批合法（切回手动模式一并完成）。
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub model_profile_id: Option<Option<String>>,
+    /// ModelProfile Phase 2: 降级链（批 2 消费）。双层 Option（None=不改 /
+    /// Some(None)=清链 / Some(Some)=设链）。非空链要求（目标态）有主档引用。
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub fallback_profile_ids: Option<Option<Vec<String>>>,
 }
 
 /// 轮换 API Key 入参

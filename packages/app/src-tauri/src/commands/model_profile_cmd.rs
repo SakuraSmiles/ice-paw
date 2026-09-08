@@ -150,6 +150,34 @@ pub struct ModelProfileWithCredentials {
 }
 
 // ============================================================================
+// 解析内核（agent 引用路径共用）
+// ============================================================================
+
+/// 解析 profile 出可用凭据（自由函数——`SqlAgentCmd` 的 agent 引用解析直接
+/// 调它，不注入 `Arc<dyn ModelProfileCmd>`，模块耦合面不扩大）。
+///
+/// base_url 解析规则与 agent 汇聚点一致：DB 行非空优先，vault 记录兜底。
+pub(crate) async fn resolve_profile_credentials(
+    app: &AppHandle,
+    pool: &SqlitePool,
+    profile_id: &str,
+) -> AppResult<ModelProfileWithCredentials> {
+    let row = repo::model_profile::get_by_id(pool, profile_id).await?;
+    let (api_key, vault_base_url) = crypto::fetch_api_key(app, &row.api_key_ref)?;
+    let base_url = row
+        .base_url
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .or(vault_base_url.as_deref())
+        .map(String::from);
+    Ok(ModelProfileWithCredentials {
+        profile: row,
+        api_key,
+        base_url,
+    })
+}
+
+// ============================================================================
 // trait ModelProfileCmd
 // ============================================================================
 
@@ -365,6 +393,17 @@ impl ModelProfileCmd for SqlModelProfileCmd {
                 "该模型配置正在被「{where_used}」引用，无法删除。请先到「设置 → 模型」解除引用，再回来删除"
             )));
         }
+        // agent 腿（Phase 2）：主档引用或降级链任一命中即拦——悬空引用虽读侧
+        // 降级 legacy 快照继续可用，但「删除成功后 agent 悄悄用旧快照」对用户
+        // 不可见，宁拦勿悬
+        let agents = repo::model_profile::agents_referencing(&self.pool, profile_id).await?;
+        if !agents.is_empty() {
+            let names: Vec<&str> = agents.iter().map(|(_, name)| name.as_str()).collect();
+            return Err(AppError::Validation(format!(
+                "该模型配置正在被 Agent「{}」引用，无法删除。请先在 Agent 设置里解除引用或调整降级链，再回来删除",
+                names.join("、")
+            )));
+        }
         let row = repo::model_profile::get_by_id(&self.pool, profile_id).await?;
         // 先清 Stronghold 槽位（容错：失败仅 warn，不阻断删除）
         if let Err(e) = crypto::delete_api_key(&self.app, &row.api_key_ref) {
@@ -377,20 +416,7 @@ impl ModelProfileCmd for SqlModelProfileCmd {
         &self,
         profile_id: &str,
     ) -> AppResult<ModelProfileWithCredentials> {
-        let row = repo::model_profile::get_by_id(&self.pool, profile_id).await?;
-        let (api_key, vault_base_url) = crypto::fetch_api_key(&self.app, &row.api_key_ref)?;
-        // base_url：DB 行非空优先，vault 记录兜底（同 agent 汇聚点规则）
-        let base_url = row
-            .base_url
-            .as_deref()
-            .filter(|s| !s.is_empty())
-            .or(vault_base_url.as_deref())
-            .map(String::from);
-        Ok(ModelProfileWithCredentials {
-            profile: row,
-            api_key,
-            base_url,
-        })
+        resolve_profile_credentials(&self.app, &self.pool, profile_id).await
     }
 
     async fn record_health(&self, profile_id: &str, health: &str, detail: Option<&str>) {

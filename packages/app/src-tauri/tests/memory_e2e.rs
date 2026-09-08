@@ -107,6 +107,8 @@ async fn make_ctx(
         workspace_path: None,
         description: String::new(),
         supports_vision: 0,
+        model_profile_id: None,
+        fallback_profile_ids: None,
         created_at: "2026-01-01T00:00:00Z".into(),
         updated_at: "2026-01-01T00:00:00Z".into(),
     };

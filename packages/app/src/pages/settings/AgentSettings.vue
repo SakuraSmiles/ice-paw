@@ -8,6 +8,7 @@ import KbDocumentList from "../../components/kb/KbDocumentList.vue";
 import type { Agent, ProviderInfo } from "../../types";
 import { bridge } from "../../api/bridge";
 import { loadProviders, providerLabelOf } from "../../composables/useProviders";
+import { useModelProfiles, profileById } from "../../composables/useModelProfiles";
 import { useAgentStore } from "../../stores/agent";
 
 const store = useAgentStore();
@@ -36,6 +37,7 @@ async function loadAgents() {
 
 onMounted(loadAgents);
 onMounted(async () => { providerList.value = await loadProviders(); });
+onMounted(() => { void loadModelProfiles(); });
 
 function toggleEdit(agent: Agent) {
   isCreating.value = false; // 编辑时收起新建
@@ -79,6 +81,17 @@ async function onDelete(agent: Agent) {
 // Provider 显示名走目录（单一真相源；未收录名回退原文）。与 AgentForm 共享缓存。
 const providerList = ref<ProviderInfo[]>([]);
 const providerLabel = (name: string) => providerLabelOf(providerList.value, name);
+
+// 模型配置实体（ModelProfile Phase 2 批 1）：引用徽标解析别名用，与设置-模型页共享缓存
+const { profiles, loadModelProfiles } = useModelProfiles();
+
+/** 引用徽标文案：引用的模型配置别名；悬空（已删，删除守卫正常会拦）如实标注 */
+function refBadgeOf(agent: Agent): string {
+  const p = agent.model_profile_id
+    ? profileById(profiles.value, agent.model_profile_id)
+    : undefined;
+  return p ? `引用 · ${p.alias}` : "引用 · 配置已删";
+}
 </script>
 
 <template>
@@ -135,6 +148,7 @@ const providerLabel = (name: string) => providerLabelOf(providerList.value, name
             <div class="card-meta-row">
               <span class="provider-badge" :class="'provider-' + agent.provider">{{ providerLabel(agent.provider) }}</span>
               <span class="card-model">{{ agent.model }}</span>
+              <span v-if="agent.model_profile_id" class="card-tag card-tag-ref">{{ refBadgeOf(agent) }}</span>
               <span v-if="!agent.has_api_key" class="card-tag card-tag-warn">未配置 Key</span>
             </div>
             <ErrorBanner
@@ -307,6 +321,11 @@ const providerLabel = (name: string) => providerLabelOf(providerList.value, name
   border-radius: var(--ip-radius-full);
 }
 .card-tag-warn { color: var(--ip-warning-text); background: var(--ip-warning-bg); }
+/* 引用徽标（模型配置实体绑定）：主色 tint 系（勿直接 primary-50/100/700） */
+.card-tag-ref {
+  color: var(--ip-color-primary-tint-text);
+  background-color: var(--ip-color-primary-tint-bg);
+}
 
 .card-chevron {
   flex-shrink: 0;

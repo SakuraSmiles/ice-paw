@@ -139,6 +139,27 @@ pub async fn delete(pool: &SqlitePool, id: &str) -> AppResult<()> {
     Ok(())
 }
 
+/// 引用该 profile 的 agent（ModelProfile Phase 2 删除守卫 agent 腿）。
+///
+/// 主档引用（`model_profile_id = ?`）精确匹配；降级链（`fallback_profile_ids`
+/// JSON 数组串）用 LIKE `"id"` 带引号匹配防前缀碰撞（`"mp-1"` 不会撞 `"mp-10"`）。
+/// 返回 (id, name) 供守卫文案点名。
+pub async fn agents_referencing(
+    pool: &SqlitePool,
+    profile_id: &str,
+) -> AppResult<Vec<(String, String)>> {
+    let rows = sqlx::query_as::<_, (String, String)>(
+        "SELECT id, name FROM agents
+          WHERE model_profile_id = ?
+             OR (fallback_profile_ids IS NOT NULL AND fallback_profile_ids LIKE ?)",
+    )
+    .bind(profile_id)
+    .bind(format!("%\"{profile_id}\"%"))
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 /// 记录健康状态（状态监控）：slug 见 `harness::profile_health::ProfileHealth`。
 ///
 /// 行不存在（记录瞬间 profile 已删的竞态）静默 Ok——状态是旁路数据不构成错误。
@@ -314,6 +335,40 @@ mod tests {
         record_health(&pool, "ghost", "ok", None).await.expect("ghost no-op");
     }
 
+    /// 删除守卫 agent 腿（Phase 2）：主档引用 / 降级链命中 + 前缀不碰撞。
+    #[tokio::test]
+    async fn agents_referencing_covers_primary_and_fallback() {
+        let pool = test_pool().await;
+        // 最小 agents 行（守卫查询只读 id/name/两引用列）
+        async fn seed(pool: &SqlitePool, id: &str, name: &str, primary: Option<&str>, fb: Option<&str>) {
+            let q = format!(
+                "INSERT INTO agents (id, name, provider, model, api_key_ref, model_profile_id, fallback_profile_ids)
+                 VALUES ('{id}', '{name}', 'glm', 'm', 'x', {primary}, {fb})",
+                primary = primary.map(|p| format!("'{p}'")).unwrap_or_else(|| "NULL".into()),
+                fb = fb.map(|f| format!("'{f}'")).unwrap_or_else(|| "NULL".into()),
+            );
+            sqlx::query(&q).execute(pool).await.unwrap();
+        }
+        seed(&pool, "a1", "主档引用", Some("mp1"), None).await;
+        seed(&pool, "a2", "链中引用", None, Some(r#"["mp9","mp1"]"#)).await;
+        seed(&pool, "a3", "无关行", Some("mp10"), Some(r#"["mp10","mp11"]"#)).await;
+        seed(&pool, "a4", "legacy", None, None).await;
+
+        let hits = agents_referencing(&pool, "mp1").await.expect("query");
+        let mut names: Vec<&str> = hits.iter().map(|(_, n)| n.as_str()).collect();
+        names.sort();
+        // 前缀不碰撞：mp10/mp11 的行（a3）不得命中 mp1
+        assert_eq!(names, vec!["主档引用", "链中引用"]);
+
+        // 查 mp10 → 只命中 a3
+        let hits = agents_referencing(&pool, "mp10").await.expect("query");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].1, "无关行");
+
+        // 无引用 → 空
+        assert!(agents_referencing(&pool, "mp-nope").await.unwrap().is_empty());
+    }
+
     /// 升级路径锁定（2026-09-08 实案）：dev 真机库已应用**旧版 49**（无健康
     /// 三列、无 WHEN 触发器，boot 迁移已落存量数据），健康三列后置进 50——
     /// 模拟旧库经 boot 同款次序（heal → run）升级后的终态：三列出现、存量行
@@ -341,6 +396,28 @@ mod tests {
               model TEXT NOT NULL,
               api_key_ref TEXT NOT NULL,
               base_url TEXT,
+              sort_order INTEGER NOT NULL DEFAULT 0,
+              created_at TEXT NOT NULL DEFAULT (datetime('now')),
+              updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        // agents 表（01_init 摘录，49 前的形状）：migration 51 起 ALTER agents，
+        // 伪造库须有此表升级路径才跑得通（run 只看登记不看 schema，但 51 真执行）。
+        sqlx::query(
+            "CREATE TABLE agents (
+              id TEXT PRIMARY KEY,
+              name TEXT NOT NULL,
+              provider TEXT NOT NULL,
+              model TEXT NOT NULL,
+              system_prompt TEXT NOT NULL DEFAULT '',
+              api_key_ref TEXT NOT NULL,
+              base_url TEXT,
+              temperature REAL NOT NULL DEFAULT 0.7,
+              max_tokens INTEGER NOT NULL DEFAULT 4096,
+              extra_params TEXT NOT NULL DEFAULT '{}',
               sort_order INTEGER NOT NULL DEFAULT 0,
               created_at TEXT NOT NULL DEFAULT (datetime('now')),
               updated_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -413,6 +490,15 @@ mod tests {
         assert_eq!(row.alias, "视觉主模型");
         assert_eq!(row.last_health, None, "升级不虚构健康状态");
         assert_eq!(row.updated_at, "2026-09-08 03:22:12");
+
+        // 51（agent 引用两列）同轮生效——查询成功本身即证明两列已在
+        let n: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM agents WHERE model_profile_id IS NOT NULL OR fallback_profile_ids IS NOT NULL",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(n.0, 0, "空表无引用行；查询成功即证明 51 两列已升级");
 
         // 触发器已换 WHEN 门控版：健康写入落三列但不刷 updated_at
         record_health(&pool, "mp-vision-0", "ok", None).await.unwrap();

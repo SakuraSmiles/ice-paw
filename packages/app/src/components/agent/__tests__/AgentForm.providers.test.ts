@@ -32,6 +32,8 @@ vi.mock("../../../api/bridge", () => ({
       rotateKey: (...a: unknown[]) => rotateKeyMock(...a),
       list: async () => [],
     },
+    // AgentForm 挂载即拉模型配置列表（引用选择器数据源）——空表：手动用例不碰引用区
+    modelProfiles: { list: async () => [] },
   },
 }));
 

@@ -232,6 +232,8 @@ mod tests {
                 enabled_tools: None,
                 workspace_path: None,
                 avatar: None,
+                model_profile_id: None,
+                fallback_profile_ids: None,
             },
             "a1",
             "slot",
