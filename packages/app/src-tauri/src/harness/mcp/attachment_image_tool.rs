@@ -214,10 +214,15 @@ impl McpClient for ViewAttachmentImageTool {
         }
 
         // === Arch B：agent 无视觉 → 平台视觉配置链代读（两档制第二档）===
-        // 候选 = 设置-通用-视觉读取的条目链（主模型 → 降级① → …）。
+        // 候选 = 设置-模型-视觉读取的引用链（主模型 → 降级① → …；profile 引用链
+        // 经 ToolContext.app_handle 解 Stronghold key）。
         // 每条失败不阻塞，全失败如实告知（不中断整轮工具）。
         let candidates: Vec<vision::VisionCredential> =
-            crate::harness::modal::gather_vision_candidates(&ctx.pool).await;
+            crate::harness::modal::gather_vision_candidates(
+                ctx.app_handle.as_ref(),
+                &ctx.pool,
+            )
+            .await;
 
         if candidates.is_empty() {
             // 既无 agent 视觉、又未配置平台视觉读取：如实告知，不伪造。

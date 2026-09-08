@@ -4,6 +4,7 @@
 import { ref, computed, onMounted } from "vue";
 import { Check, X } from "@lucide/vue";
 import { bridge } from "../../api/bridge";
+import { useModelProfiles } from "../../composables/useModelProfiles";
 import type { Kb, KbDocument, IndexStats, KbStats, UserPreferences } from "../../types";
 
 const props = defineProps<{
@@ -18,15 +19,29 @@ const kb = ref<Kb | null>(null);
 const documents = ref<KbDocument[]>([]);
 const chunkStats = ref<KbStats | null>(null);
 const embeddingPrefs = ref<UserPreferences | null>(null);
+const { profiles, loadModelProfiles } = useModelProfiles();
 const loading = ref(true);
 const loadError = ref<string | null>(null);
 const reindexing = ref(false);
 const reindexResult = ref<string | null>(null);
 
-/** 语义检索是否已启用（provider+model+key 三字段齐全，与后端 resolve_embedding_config 判定一致） */
+/** 语义检索是否已启用：新格式 profile 引用（Some=权威）优先，回落旧四键三字段
+ *  （与后端 resolve_embedding_backend 双路径判定一致，ModelProfile Phase 1） */
 const embeddingEnabled = computed(() => {
   const p = embeddingPrefs.value;
-  return !!(p && p.embedding_provider && p.embedding_model && p.embedding_api_key);
+  if (!p) return false;
+  if (p.embedding_profile_id != null) return p.embedding_profile_id !== "";
+  return !!(p.embedding_provider && p.embedding_model && p.embedding_api_key);
+});
+
+/** 徽标悬浮的模型名：profile 引用经 useModelProfiles 查实体，旧四键直读 */
+const embeddingModelLabel = computed(() => {
+  const p = embeddingPrefs.value;
+  if (!p) return "";
+  if (p.embedding_profile_id) {
+    return profiles.value.find((m) => m.id === p.embedding_profile_id)?.model ?? "";
+  }
+  return p.embedding_model ?? "";
 });
 
 const matched = (k: Kb) =>
@@ -36,7 +51,11 @@ async function load() {
   loadError.value = null;
   loading.value = true;
   try {
-    const [all, prefs] = await Promise.all([bridge.kb.list(), bridge.preferences.get()]);
+    const [all, prefs] = await Promise.all([
+      bridge.kb.list(),
+      bridge.preferences.get(),
+      loadModelProfiles(), // 徽标模型名解析（profile 引用形态）
+    ]);
     embeddingPrefs.value = prefs;
     kb.value = all.find((k) => k.scope === props.scope && matched(k)) ?? null;
     if (kb.value) {
@@ -113,11 +132,11 @@ const directoryShort = computed(() => {
         <span>{{ documents.length }} 篇</span>
         <template v-if="embeddingEnabled">
           <span class="kb-sep">·</span>
-          <span class="kb-embed-on" :title="`语义检索已启用：${embeddingPrefs?.embedding_model ?? ''}`"><Check :size="13" aria-hidden="true" /> 语义检索</span>
+          <span class="kb-embed-on" :title="`语义检索已启用：${embeddingModelLabel}`"><Check :size="13" aria-hidden="true" /> 语义检索</span>
         </template>
         <template v-else>
           <span class="kb-sep">·</span>
-          <router-link to="/settings/general" class="kb-embed-off"><X :size="13" aria-hidden="true" /> 语义检索 未配置</router-link>
+          <router-link to="/settings/models" class="kb-embed-off"><X :size="13" aria-hidden="true" /> 语义检索 未配置</router-link>
         </template>
         <template v-if="chunkStats && chunkStats.total_chunks > 0">
           <span class="kb-sep">·</span>

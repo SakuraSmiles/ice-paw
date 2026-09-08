@@ -102,6 +102,9 @@ export interface ProviderInfo {
   requires_base_url: boolean;
   /** API Key 申请页地址（免 key 厂商为 null）——表单「去申请」直达 */
   key_url: string | null;
+  /** OpenAI 兼容端点（视觉代读 / embedding 用；与 default_url 刻意分列——
+   *  MiniMax 聊天走 /anthropic、视觉/嵌入走 /v1。null = 该厂商不提供） */
+  openai_url: string | null;
   /** 隐藏条目：不进前端下拉（旧入口/已下线），存量 agent 编辑仍可解析 */
   hidden: boolean;
   /** 静态模型目录（起点参考；「拉取」拿实时列表，手输永远保留） */
@@ -689,6 +692,10 @@ export interface UserPreferences {
   vision_base_url?: string;
   /** 视觉读取条目链（两档制）：Some=新格式权威（[] = 显式清空）；null/undefined=回落旧四键 */
   vision_config?: VisionConfigEntry[] | null;
+  /** 视觉引用链（ModelProfile Phase 1）：Some=权威（[] = 显式清空）；null/undefined=回落 vision_config/旧四键 */
+  vision_profile_ids?: string[] | null;
+  /** 语义检索引用（ModelProfile Phase 1）：Some=权威；null/undefined=回落 embedding 四键 */
+  embedding_profile_id?: string | null;
 }
 
 /** 视觉读取配置的一个条目（主模型或降级模型，按序尝试、首个成功即用） */
@@ -697,6 +704,60 @@ export interface VisionConfigEntry {
   model: string;
   api_key: string;
   /** 自定义端点（可选；空=按 provider 推导官方 OpenAI 兼容端点） */
+  base_url?: string | null;
+}
+
+// ============================================================================
+// ModelProfile（模型配置实体，Phase 1）
+// ============================================================================
+
+/** 模型配置（前端 DTO；永不含 key 明文——key 在 Stronghold 槽位 profile:{id}） */
+export interface ModelProfile {
+  id: string;
+  alias: string;
+  provider: string;
+  model: string;
+  /** 空 = 按注册表推导端点 */
+  base_url?: string | null;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+  /** 是否已配置 API Key（免 key 厂商恒 true） */
+  has_api_key: boolean;
+  /** 健康状态 slug（ProfileHealth 契约：ok/quota/auth/rate_limited/network/
+   *  model_not_found/unknown）；null = 从未真实调用过（不冒充正常） */
+  last_health?: string | null;
+  /** 最后一次调用的失败原文（截断 300 字符；成功 = null）——hover 诊断用 */
+  last_health_detail?: string | null;
+  /** 最后一次调用时间（DB UTC 串） */
+  last_health_at?: string | null;
+}
+
+/** 创建入参（id 由后端生成） */
+export interface NewModelProfile {
+  alias: string;
+  provider: string;
+  model: string;
+  api_key: string;
+  base_url?: string | null;
+}
+
+/** 部分更新入参。base_url 三态（与 AgentUpdate 对齐）：
+ *  null/缺省=不改 / JSON null=清空 / 值=设定 */
+export interface ModelProfileUpdate {
+  id: string;
+  alias?: string;
+  provider?: string;
+  model?: string;
+  api_key?: string;
+  base_url?: string | null;
+  sort_order?: number;
+}
+
+/** 轮换 key 入参 */
+export interface RotateProfileKey {
+  profile_id: string;
+  api_key: string;
   base_url?: string | null;
 }
 

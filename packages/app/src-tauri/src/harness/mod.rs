@@ -22,6 +22,7 @@ pub mod error_mapping;
 pub mod event_log;
 pub mod hooks;
 pub mod kb;
+pub mod legacy_model_migration;
 pub mod r#loop;
 pub mod loop_engine;
 pub mod mcp;
@@ -30,6 +31,7 @@ pub mod observable;
 pub mod oneshot_registry;
 pub mod proposal_guard;
 pub mod proposal_registry;
+pub mod profile_health;
 pub mod provider;
 pub mod read_route;
 #[cfg(test)]

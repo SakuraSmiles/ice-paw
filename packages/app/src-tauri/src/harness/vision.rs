@@ -26,21 +26,11 @@ const VISION_OCR_PROMPT: &str = "\
 
 /// provider 的默认视觉端点（OpenAI 兼容，`describe_image` 走 image_url 格式）。
 ///
-/// 注意与聊天注册表（PROVIDERS default_url）**不是同一张表**：MiniMax 聊天走
-/// Anthropic 协议端点、视觉走 OpenAI 兼容 `/v1`，故视觉端点在本模块单独成表。
+/// 端点表收敛进 PROVIDERS 注册表的 `openai_url` 档（ModelProfile Phase 1）：
+/// MiniMax 聊天走 Anthropic 协议（/anthropic）、视觉走 OpenAI 兼容（/v1），
+/// 故不能复用 `default_url`，注册表单独一档维护；此函数保留为薄查询别名。
 fn default_vision_base_url(provider: &str) -> Option<&'static str> {
-    match provider {
-        "openai" => Some("https://api.openai.com"),
-        "glm" => Some("https://open.bigmodel.cn/api/paas/v4"),
-        // Coding 套餐 key 只在 Coding 端点生效（打标准端点必 1113「无可用资源包」），
-        // 端点成对原则——与聊天注册表 glm-coding 同语义（实测同坑）
-        "glm-coding" => Some("https://open.bigmodel.cn/api/coding/paas/v4"),
-        "deepseek" => Some("https://api.deepseek.com"),
-        // MiniMax 聊天走 Anthropic 协议（/anthropic），但视觉走 OpenAI 兼容端点（/v1），
-        // 因为 describe_image 用 image_url 格式（OpenAI 协议）。同一 API key 两端点通用。
-        "minimax" | "minimax-cn" => Some("https://api.minimaxi.com/v1"),
-        _ => None,
-    }
+    crate::harness::provider::provider_openai_url(provider)
 }
 
 /// 把一个配置条目解析成可用凭据；无效条目（provider 未知 / model 或 key 空）→ None。
@@ -64,6 +54,8 @@ pub fn entry_to_credential(entry: &VisionConfigEntry, index: usize) -> Option<Vi
         base_url,
         api_key: api_key.to_string(),
         source: format!("视觉配置#{index}"),
+        // 旧格式条目无 profile 实体——代读成败无处归因，状态监控跳过
+        profile_id: None,
     })
 }
 
@@ -259,6 +251,9 @@ pub struct VisionCredential {
     pub api_key: String,
     /// 来源标签（日志诊断用，如「视觉配置#1」）
     pub source: String,
+    /// profile 归因（状态监控用）：profile 引用链 = Some(id)——代读成败回写
+    /// model_profiles 健康三列；旧格式条目 = None（无实体可记，跳过）。
+    pub profile_id: Option<String>,
 }
 
 impl VisionCredential {

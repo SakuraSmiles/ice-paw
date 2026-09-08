@@ -66,6 +66,13 @@ const routes: RouteRecordRaw[] = [
             meta: { title: "通用设置" },
           },
           {
+            // 模型配置（ModelProfile Phase 1）：实体列表 + 视觉/语义检索引用
+            path: "models",
+            name: "SettingsModels",
+            component: () => import("../pages/settings/ModelSettings.vue"),
+            meta: { title: "模型" },
+          },
+          {
             path: "agents",
             name: "SettingsAgents",
             component: () => import("../pages/settings/AgentSettings.vue"),

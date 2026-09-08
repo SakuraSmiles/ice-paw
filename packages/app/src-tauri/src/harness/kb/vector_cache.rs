@@ -71,6 +71,11 @@ pub struct CachedChunk {
 #[derive(Debug)]
 struct CacheEntry {
     sig: KbSig,
+    /// 入账时的 embedding 模型名（ModelProfile Phase 1 兜底维）：缓存向量只对
+    /// **同模型**的 query 有意义——换模型（改引用/编辑 profile）后旧条目即使签名
+    /// 仍合也失效（with_matches 不匹配 → None 走冷路径）。重建流的主闸仍是
+    /// 前端 overlay（test → save → rebuild 三步），此处只兜「改了不重建」的窗口。
+    model: String,
     chunks: Vec<CachedChunk>,
 }
 
@@ -91,9 +96,9 @@ impl KbVectorCache {
         GLOBAL.get_or_init(KbVectorCache::default)
     }
 
-    /// 暖路径：范围内**所有** KB 都已缓存且签名与 DB 一致 → 在读锁内以扁平
-    /// chunk 列表回调 `f`，返回 `Some(f(...))`；任一 KB 未缓存/签名失配 →
-    /// `None`（调用方走冷路径全量重载）。
+    /// 暖路径：范围内**所有** KB 都已缓存且签名与 DB 一致、入账模型与 `model`
+    /// 相同 → 在读锁内以扁平 chunk 列表回调 `f`，返回 `Some(f(...))`；任一 KB
+    /// 未缓存/签名失配/模型不同 → `None`（调用方走冷路径全量重载）。
     ///
     /// all-or-nothing（不做 per-KB 部分命中）：冷路径的 load 本就是一条
     /// IN 查询全量加载，部分命中省不掉那次查询，只会增加混合态复杂度。
@@ -104,6 +109,7 @@ impl KbVectorCache {
         &self,
         kb_ids: &[String],
         sigs: &HashMap<String, KbSig>,
+        model: &str,
         f: impl FnOnce(&[&CachedChunk]) -> R,
     ) -> Option<R> {
         if kb_ids.is_empty() {
@@ -114,7 +120,7 @@ impl KbVectorCache {
         for id in kb_ids {
             let db_sig = sigs.get(id).copied().unwrap_or(EMPTY_KB_SIG);
             let entry = guard.get(id)?;
-            if entry.sig != db_sig {
+            if entry.sig != db_sig || entry.model != model {
                 return None;
             }
             flat.extend(entry.chunks.iter());
@@ -122,8 +128,9 @@ impl KbVectorCache {
         Some(f(&flat))
     }
 
-    /// 冷路径收尾：把刚解码的完整 KB 条目入账（以 `sigs` 的当前签名；顺序
-    /// 不变式见模块头——sigs 必须取自 load **之前**的查询）。
+    /// 冷路径收尾：把刚解码的完整 KB 条目入账（以 `sigs` 的当前签名 + `model`
+    /// 当前解析的 embedding 模型名；顺序不变式见模块头——sigs 必须取自 load
+    /// **之前**的查询）。
     ///
     /// kb_ids 中既无 DB 条目也无 entries 输入的 KB（空 KB）写零 chunk 空条目，
     /// 使下次搜索暖命中空集而非恒 miss。
@@ -131,6 +138,7 @@ impl KbVectorCache {
         &self,
         kb_ids: &[String],
         sigs: &HashMap<String, KbSig>,
+        model: &str,
         entries: HashMap<String, Vec<CachedChunk>>,
     ) {
         let Ok(mut guard) = self.inner.write() else {
@@ -139,7 +147,11 @@ impl KbVectorCache {
         for id in kb_ids {
             let sig = sigs.get(id).copied().unwrap_or(EMPTY_KB_SIG);
             let chunks = entries.get(id).cloned().unwrap_or_default();
-            guard.insert(id.clone(), CacheEntry { sig, chunks });
+            guard.insert(id.clone(), CacheEntry {
+                sig,
+                model: model.to_string(),
+                chunks,
+            });
         }
     }
 
@@ -270,16 +282,41 @@ mod tests {
         entries.insert(kb.clone(), vec![cached("c1", "a.md"), cached("c2", "b.md")]);
         let mut sigs = HashMap::new();
         sigs.insert(kb.clone(), (2, 2, 7, 12));
-        cache.store(std::slice::from_ref(&kb), &sigs, entries);
+        cache.store(std::slice::from_ref(&kb), &sigs, "embedding-3", entries);
 
-        let out = cache.with_matches(std::slice::from_ref(&kb), &sigs, |flat| {
+        let out = cache.with_matches(std::slice::from_ref(&kb), &sigs, "embedding-3", |flat| {
             assert_eq!(flat.len(), 2);
             flat.iter().map(|c| c.id.clone()).collect::<Vec<_>>()
         });
         assert_eq!(
             out,
             Some(vec!["c1".to_string(), "c2".to_string()]),
-            "同签名应暖命中"
+            "同签名同模型应暖命中"
+        );
+    }
+
+    #[test]
+    fn model_change_is_miss() {
+        // 兜底维（ModelProfile Phase 1）：签名仍合但 embedding 模型换了 → miss
+        // 走冷路径（改引用/编辑 profile 不重建的窗口期，旧向量对新 query 无意义）
+        let cache = KbVectorCache::default();
+        let kb = "k1".to_string();
+        let mut entries = HashMap::new();
+        entries.insert(kb.clone(), vec![cached("c1", "a.md")]);
+        let sigs = HashMap::from([(kb.clone(), (1, 1, 3, 5))]);
+        cache.store(std::slice::from_ref(&kb), &sigs, "embedding-3", entries);
+
+        assert!(
+            cache
+                .with_matches(std::slice::from_ref(&kb), &sigs, "embedding-4", |_| ())
+                .is_none(),
+            "模型不同应 miss"
+        );
+        // 同模型恢复命中
+        assert!(
+            cache
+                .with_matches(std::slice::from_ref(&kb), &sigs, "embedding-3", |_| ())
+                .is_some()
         );
     }
 
@@ -291,19 +328,25 @@ mod tests {
         entries.insert(kb.clone(), vec![cached("c1", "a.md")]);
         let mut sigs = HashMap::new();
         sigs.insert(kb.clone(), (1, 1, 3, 5));
-        cache.store(std::slice::from_ref(&kb), &sigs, entries);
+        cache.store(std::slice::from_ref(&kb), &sigs, "embedding-3", entries);
 
         // 任一标量变 → miss（四维各 bump 一档）
         for bumped in [(2, 1, 3, 5), (1, 2, 3, 5), (1, 1, 4, 5), (1, 1, 3, 6)] {
             let mut s2 = HashMap::new();
             s2.insert(kb.clone(), bumped);
             assert!(
-                cache.with_matches(std::slice::from_ref(&kb), &s2, |_| ()).is_none(),
+                cache
+                    .with_matches(std::slice::from_ref(&kb), &s2, "embedding-3", |_| ())
+                    .is_none(),
                 "{bumped:?} 应 miss"
             );
         }
         // 签名回旧值 → 命中（比较纯按值）
-        assert!(cache.with_matches(std::slice::from_ref(&kb), &sigs, |_| ()).is_some());
+        assert!(
+            cache
+                .with_matches(std::slice::from_ref(&kb), &sigs, "embedding-3", |_| ())
+                .is_some()
+        );
     }
 
     #[test]
@@ -314,13 +357,13 @@ mod tests {
         let mut entries = HashMap::new();
         entries.insert(k1.clone(), vec![cached("c1", "a.md")]);
         let sigs = HashMap::from([(k1.clone(), (1, 1, 1, 1))]);
-        cache.store(std::slice::from_ref(&k1), &sigs, entries);
+        cache.store(std::slice::from_ref(&k1), &sigs, "embedding-3", entries);
 
         // k2 从未缓存 → all-or-nothing miss（即使 k1 签名仍匹配）
         let sigs2 = HashMap::from([(k1.clone(), (1, 1, 1, 1)), (k2.clone(), (1, 1, 1, 1))]);
         assert!(
             cache
-                .with_matches(&[k1.clone(), k2.clone()], &sigs2, |_| ())
+                .with_matches(&[k1.clone(), k2.clone()], &sigs2, "embedding-3", |_| ())
                 .is_none()
         );
     }
@@ -334,17 +377,19 @@ mod tests {
         entries.insert(k1.clone(), vec![cached("c1", "a.md")]);
         let sigs = HashMap::from([(k1.clone(), (1, 1, 1, 1))]);
         // store 范围含空 KB k2 → 写零条目
-        cache.store(&[k1.clone(), k2.clone()], &sigs, entries);
+        cache.store(&[k1.clone(), k2.clone()], &sigs, "embedding-3", entries);
 
         // k2 无 DB 签名条目 → EMPTY_KB_SIG 语义 → 暖命中空集
-        let out = cache.with_matches(&[k1.clone(), k2.clone()], &sigs, |flat| flat.len());
+        let out = cache.with_matches(&[k1.clone(), k2.clone()], &sigs, "embedding-3", |flat| {
+            flat.len()
+        });
         assert_eq!(out, Some(1), "k1 的 1 chunk + k2 空集，flat 应为 1");
 
         // k2 后来进 chunk → DB 签名出现 → miss（失效正确）
         let sigs2 = HashMap::from([(k1.clone(), (1, 1, 1, 1)), (k2.clone(), (1, 0, 9, 4))]);
         assert!(
             cache
-                .with_matches(&[k1.clone(), k2.clone()], &sigs2, |_| ())
+                .with_matches(&[k1.clone(), k2.clone()], &sigs2, "embedding-3", |_| ())
                 .is_none()
         );
     }
@@ -400,7 +445,7 @@ mod tests {
         let mut entries = HashMap::new();
         entries.insert(k1.clone(), vec![cached("c1", "a.md")]);
         let sigs = HashMap::from([(k1.clone(), (1, 1, 1, 1))]);
-        cache.store(std::slice::from_ref(&k1), &sigs, entries);
+        cache.store(std::slice::from_ref(&k1), &sigs, "embedding-3", entries);
         assert_eq!(cache.stats(), (1, 1));
 
         cache.remove(&k1);
@@ -408,7 +453,7 @@ mod tests {
 
         let mut entries = HashMap::new();
         entries.insert(k1.clone(), vec![cached("c1", "a.md")]);
-        cache.store(std::slice::from_ref(&k1), &sigs, entries);
+        cache.store(std::slice::from_ref(&k1), &sigs, "embedding-3", entries);
         cache.clear();
         assert_eq!(cache.stats(), (0, 0));
     }

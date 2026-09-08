@@ -428,6 +428,7 @@ impl AgentCmd for SqlAgentCmd {
             .ok()
             .and_then(|p| p.default_workspace_path);
         ensure::ensure_agent_kb(
+            Some(&self.app),
             &self.pool,
             &row.id,
             &row.name,

@@ -240,6 +240,12 @@ pub(crate) async fn run_agent_turn(
     // 空 key 也允许（agent 可能用 base_url 免 key）。
     pipeline_ctx.api_key = Some(api_key.clone());
 
+    // 视觉凭据链注入（ModelProfile Phase 1）：profile 引用链要 AppHandle 解
+    // Stronghold key，Pipeline 保持 Tauri-free → 此处一次解析注入（api_key 同款
+    // 先例）。tool_app 缺失（测试）→ None → gather 走旧格式回落。
+    pipeline_ctx.vision_candidates =
+        crate::harness::modal::gather_vision_candidates(env.tool_app.as_ref(), pool).await;
+
     // MA-1：可调度清单注入——主 agent 感知「能调度谁」（项目成员优先，否则全部
     // agent，见 delegate::resolve_dispatchable）。仅用户会话：delegation 子会话没有
     // delegate 工具（下方组装期按 kind 注册），注入清单只会误导。解析失败降级为

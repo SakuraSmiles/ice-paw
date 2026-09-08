@@ -56,9 +56,13 @@ pub async fn delete_kb(pool: State<'_, SqlitePool>, id: String) -> AppResult<()>
 
 /// 重建某知识库的索引（手动触发全量增量扫描，返回本次统计）
 #[tauri::command]
-pub async fn reindex_kb(pool: State<'_, SqlitePool>, id: String) -> AppResult<IndexStats> {
+pub async fn reindex_kb(
+    app: tauri::AppHandle,
+    pool: State<'_, SqlitePool>,
+    id: String,
+) -> AppResult<IndexStats> {
     let kb = repo::kb::get_by_id(pool.inner(), &id).await?;
-    index_directory(pool.inner(), &kb.id, Path::new(&kb.directory)).await
+    index_directory(Some(&app), pool.inner(), &kb.id, Path::new(&kb.directory)).await
 }
 
 /// 列出某知识库的文档索引
@@ -92,30 +96,72 @@ pub async fn get_kb_stats(pool: State<'_, SqlitePool>, kb_id: String) -> AppResu
 
 /// 切换 embedding 模型前的健康检查：用**传入的新配置**（非 preferences，测的是未存的新配置）
 /// embed 一条测试文本，验证 provider/model/key/base_url 有效。失败返回 Err。
+///
+/// `profile_id`（可选）：改测**已保存的模型配置**——服务端取存量凭据（key 密文
+/// 永不回显前端），与 `test_provider_connection` 的 `agent_id` 存量回退同构
+/// （ModelProfile Phase 1，语义检索卡改引用实体后走这条腿）。
 #[tauri::command]
 pub async fn test_embedding_config(
+    profiles: State<'_, std::sync::Arc<dyn crate::commands::model_profile_cmd::ModelProfileCmd>>,
     provider: String,
     model: String,
     api_key: String,
     base_url: Option<String>,
+    profile_id: Option<String>,
 ) -> AppResult<()> {
     use crate::harness::provider::embedding::{EmbeddingBackend, OpenAiEmbeddingBackend};
+    let (provider, model, api_key, base_url) =
+        match profile_id.as_deref().filter(|s| !s.is_empty()) {
+            Some(pid) => {
+                let cred = profiles.inner().get_with_credentials(pid).await?;
+                (
+                    cred.profile.provider,
+                    cred.profile.model,
+                    cred.api_key,
+                    // get_with_credentials 已归一（行显式 > vault 兜底）；空串视同未设
+                    cred.base_url.filter(|s| !s.is_empty()),
+                )
+            }
+            None => (provider, model, api_key, base_url),
+        };
     let url = match base_url.filter(|s| !s.is_empty()) {
         Some(u) => u,
-        None => match provider.as_str() {
-            "openai" => "https://api.openai.com".into(),
-            "glm" => "https://open.bigmodel.cn/api/paas/v4".into(),
-            "deepseek" => "https://api.deepseek.com".into(),
-            _ => {
-                return Err(AppError::Validation(format!(
-                    "未知 embedding provider: {provider}"
-                )))
-            }
-        },
+        // 端点表收敛进 PROVIDERS 注册表 openai_url 档（ModelProfile Phase 1）：
+        // minimax 自此成为合法 embedding 候选，模型名有效性交本测试验证
+        None => crate::harness::provider::provider_openai_url(provider.as_str())
+            .ok_or_else(|| {
+                AppError::Validation(format!(
+                    "未知 embedding provider: {provider}（无 OpenAI 兼容端点）"
+                ))
+            })?
+            .to_string(),
     };
     let backend = OpenAiEmbeddingBackend::new(model, url)?;
-    backend.embed(vec!["health check"], &api_key).await?;
-    Ok(())
+    // 状态监控归因（warn-only 旁路）：仅 profile 腿（测已保存的模型配置）记录——
+    // 探针是真实调用，结果沉淀为该 profile 的最新健康状态；draft 四参腿测的是
+    // 未保存的新配置，无实体可归因
+    let tracked_profile = profile_id
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    let result = backend.embed(vec!["health check"], &api_key).await;
+    if let Some(pid) = &tracked_profile {
+        match &result {
+            Ok(_) => profiles.inner().record_health(pid, "ok", None).await,
+            Err(e) => {
+                use crate::harness::profile_health::{clip_detail, health_from_error};
+                profiles
+                    .inner()
+                    .record_health(
+                        pid,
+                        health_from_error(&e.to_string()).as_str(),
+                        Some(&clip_detail(&e.to_string())),
+                    )
+                    .await;
+            }
+        }
+    }
+    result.map(|_| ())
 }
 
 /// 切换 embedding 模型后的全量重建：清空所有旧维度向量 + 遍历所有 KB 重新生成。
@@ -129,12 +175,16 @@ pub struct RebuildStats {
 }
 
 #[tauri::command]
-pub async fn rebuild_all_embeddings(pool: State<'_, SqlitePool>) -> AppResult<RebuildStats> {
-    use crate::harness::kb::embedding::resolve_embedding_config;
+pub async fn rebuild_all_embeddings(
+    app: tauri::AppHandle,
+    pool: State<'_, SqlitePool>,
+) -> AppResult<RebuildStats> {
+    use crate::harness::kb::embedding::resolve_embedding_backend;
 
-    // 新配置必须就绪（前端已 test 通过 + saveEmbedding）
-    let prefs = repo::preferences::get_all(pool.inner()).await?;
-    resolve_embedding_config(&prefs)
+    // 新配置必须就绪（前端已 test 通过 + saveEmbedding；profile 引用 / 旧四键
+    // 双路径归一——profile 腿经 app 解 Stronghold key）
+    resolve_embedding_backend(Some(&app), pool.inner())
+        .await
         .ok_or_else(|| AppError::Validation("embedding 配置缺失，无法重建".into()))?;
 
     // 1. 清空所有旧维度向量（index_directory 预生成见 embedding=NULL → 全部重新生成）
@@ -148,7 +198,8 @@ pub async fn rebuild_all_embeddings(pool: State<'_, SqlitePool>) -> AppResult<Re
     for kb in &kbs {
         let dir = std::path::Path::new(&kb.directory);
         if let Err(e) =
-            crate::harness::kb::indexer::index_directory(pool.inner(), &kb.id, dir).await
+            crate::harness::kb::indexer::index_directory(Some(&app), pool.inner(), &kb.id, dir)
+                .await
         {
             tracing::warn!(target: "ice_paw.kb", "重建索引失败 kb={} err={}", kb.id, e);
         }

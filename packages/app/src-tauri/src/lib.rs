@@ -134,6 +134,12 @@ pub fn run() {
             commands::preferences_cmd::get_preferences,
             commands::preferences_cmd::set_preference,
             commands::preferences_cmd::test_vision_config,
+            commands::model_profile_cmd::list_model_profiles,
+            commands::model_profile_cmd::create_model_profile,
+            commands::model_profile_cmd::update_model_profile,
+            commands::model_profile_cmd::rotate_model_profile_key,
+            commands::model_profile_cmd::delete_model_profile,
+            commands::model_profile_cmd::test_model_profile_vision,
             commands::mcp_cmd::list_mcp_servers,
             commands::mcp_cmd::create_mcp_server,
             commands::mcp_cmd::update_mcp_server,
@@ -364,6 +370,16 @@ pub fn run() {
                 ));
             handle.manage(sql_agent_cmd);
 
+            // 4b) ModelProfile（模型配置实体，Phase 1）：注入 trait object。
+            // 视觉读取/语义检索经它取凭据；agent 链路 Phase 2 接入。
+            let sql_model_profile_cmd: std::sync::Arc<
+                dyn commands::model_profile_cmd::ModelProfileCmd,
+            > = std::sync::Arc::new(commands::model_profile_cmd::SqlModelProfileCmd::new(
+                handle.clone(),
+                pool.clone(),
+            ));
+            handle.manage(sql_model_profile_cmd);
+
             // 5) Phase 2: 种子默认 MCP Server + 启动已启用的外部 MCP Server
             // 注入 McpServerManager（携带 AppHandle —— bundled 运行时解析 resource_dir 需要）。
             handle.manage(Arc::new(harness::mcp::McpServerManager::new_with_handle(handle.clone())));
@@ -412,6 +428,14 @@ pub fn run() {
                 tracing::info!(target: "ice_paw.mcp", "所有 MCP Server 启动完成");
             });
 
+            // 5b) 旧模型配置 → ModelProfile 实体迁移（ModelProfile Phase 1，幂等）。
+            //     轻（1 读 + ≤5 行写 + Stronghold 槽位），同步跑保证「迁移完成」
+            //     先于 KB watcher 首扫（watcher 即消费 embedding 引用配置）；
+            //     失败 warn 不阻塞（读侧回落旧格式，下次启动重放）。
+            tauri::async_runtime::block_on(async {
+                harness::legacy_model_migration::migrate_legacy_model_prefs(&handle, &pool).await;
+            });
+
             // 6) RAG: 启动知识库 watcher 管理器（运行时可增删监听 + 首次全量索引）。
             //    KbWatcherManager 注入 Tauri State，供 agent_cmd 在 create/update/delete
             //    时对账（运行期新建 agent 的 KB 目录不再需要重启即可被监听）。
@@ -419,7 +443,13 @@ pub fn run() {
             let pool_for_kb = pool.clone();
             let handle_for_kb = handle.clone();
             tauri::async_runtime::spawn(async move {
-                let wm = match harness::kb::watcher_manager::KbWatcherManager::new(pool_for_kb.clone())
+                let wm = match harness::kb::watcher_manager::KbWatcherManager::new(
+                    pool_for_kb.clone(),
+                    // AppHandle 通道：embedding 引用链（ModelProfile Phase 1）解
+                    // Stronghold key 用——须在 migrate_legacy_model_prefs 落引用键
+                    // 之后启动（首扫即消费新配置）。
+                    Some(handle_for_kb.clone()),
+                )
                 {
                     Ok(w) => Arc::new(w),
                     Err(e) => {

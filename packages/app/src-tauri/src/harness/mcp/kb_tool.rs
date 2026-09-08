@@ -122,8 +122,14 @@ impl McpClient for SearchKbTool {
         // 4. 语义检索（全局 embedding 配置，独立于聊天 Agent；未启用/失败 → None）
         //    降级不遮掩（治看不见）：None 时结果附 note 披露本次为纯关键词检索——
         //    否则 agent 把「语义近义没召回」当「库里真没有」就提前放弃
-        let sem_result =
-            try_semantic_search(&ctx.pool, &parsed.query, &kb_ids, parsed.limit as usize).await;
+        let sem_result = try_semantic_search(
+            ctx.app_handle.as_ref(),
+            &ctx.pool,
+            &parsed.query,
+            &kb_ids,
+            parsed.limit as usize,
+        )
+        .await;
         let semantic_note: Option<&str> = sem_result.is_none().then_some(
             "语义检索不可用（embedding 未配置或调用失败），本次为纯关键词检索——\
              同义改写可能漏召回，可换关键词重试或用 read_kb_document 直读",
@@ -194,42 +200,64 @@ fn rrf_fuse(kw: Vec<SearchHitOut>, sem: Vec<SearchHitOut>, limit: usize) -> Vec<
 /// 解码；冷路径的解码/召回整体进 spawn_blocking（async worker 不背同步重活）。
 /// 检索语义与缓存前逐行一致（候选面/去重/兜底阈值均未动）。
 async fn try_semantic_search(
+    app: Option<&tauri::AppHandle>,
     pool: &sqlx::SqlitePool,
     query: &str,
     kb_ids: &[String],
     limit: usize,
 ) -> Option<Vec<SearchHitOut>> {
-    use crate::harness::kb::embedding::{ensure_chunks_embedded, resolve_embedding_config};
+    use crate::harness::kb::embedding::{ensure_chunks_embedded, resolve_embedding_backend};
     use crate::harness::kb::vector_cache;
     use crate::harness::provider::embedding::{EmbeddingBackend, OpenAiEmbeddingBackend};
 
-    // 1. 配置（必须走 get_all 反序列化，见 harness::kb::embedding 模块文档 / v2 阻断①）
-    let prefs = repo::preferences::get_all(pool).await.ok()?;
-    let (model, url, api_key) = match resolve_embedding_config(&prefs) {
-        Some(cfg) => cfg,
+    // 1. 配置双路径（必须走 get_all 反序列化，见 harness::kb::embedding 模块文档 /
+    //    v2 阻断①）：profile 引用链（经 app 解 Stronghold）→ 旧四键回落。
+    let resolved = match resolve_embedding_backend(app, pool).await {
+        Some(r) => r,
         None => {
             tracing::debug!(
                 target: "ice_paw.kb",
-                "语义检索未启用（embedding provider/model/key 未齐全），回退关键词检索"
+                "语义检索未启用（embedding 未配置或引用的模型配置不可用），回退关键词检索"
             );
             return None;
         }
     };
-    let backend = OpenAiEmbeddingBackend::new(model, url).ok()?;
+    // model 名先留副本（缓存入账/比对维用），值本体 move 进 backend 构造；
+    // profile_id 同理留副本（状态监控归因，两处记录点共用）
+    let model_name = resolved.model.clone();
+    let profile_id = resolved.profile_id.clone();
+    let backend = OpenAiEmbeddingBackend::new(resolved.model, resolved.base_url).ok()?;
+    let api_key = resolved.api_key;
 
     // 2. query 先转向量：暖路径自此不再碰 chunk 表（embed 与候选加载本无依赖，
-    //    先后对调只为让缓存命中路径零 DB 行加载）
-    let query_vec: Vec<f32> = backend
-        .embed(vec![query], &api_key)
-        .await
-        .ok()?
-        .into_iter()
-        .next()?;
+    //    先后对调只为让缓存命中路径零 DB 行加载）。失败显式 match——状态监控
+    //    沉淀「该 profile 最后一次调用」的结果后再回退关键词检索（原 .ok()? 静默吞）
+    let query_vec: Vec<f32> = match backend.embed(vec![query], &api_key).await {
+        Ok(mut vec) => {
+            crate::harness::profile_health::record_ok(Some(pool), profile_id.as_deref()).await;
+            match vec.pop() {
+                Some(v) => v,
+                None => return None,
+            }
+        }
+        Err(e) => {
+            tracing::warn!(target: "ice_paw.kb", "query 向量化失败，回退关键词检索: {e}");
+            crate::harness::profile_health::record_error(
+                Some(pool),
+                profile_id.as_deref(),
+                &e.to_string(),
+            )
+            .await;
+            return None;
+        }
+    };
 
-    // 3. 暖路径：签名一致 → 读锁内直接召回（全量 load/解码已在缓存入账时完成）
+    // 3. 暖路径：签名一致 + 入账模型未变 → 读锁内直接召回（全量 load/解码已在
+    //    缓存入账时完成）；模型维（ModelProfile Phase 1 兜底）：改引用/编辑
+    //    profile 不重建的窗口期，旧向量对新 query 无意义 → miss 走冷路径
     let db_sigs = repo::kb::chunk_signatures(pool, kb_ids).await.ok()?;
     let cache = crate::harness::kb::vector_cache::KbVectorCache::global();
-    if let Some(results) = cache.with_matches(kb_ids, &db_sigs, |flat| {
+    if let Some(results) = cache.with_matches(kb_ids, &db_sigs, &model_name, |flat| {
         semantic_hits(flat, &query_vec, limit)
     }) {
         tracing::debug!(
@@ -242,9 +270,16 @@ async fn try_semantic_search(
 
     // 4. 冷路径：全量 load + 懒生成 + 解码/召回离线程 + 入账缓存
     let mut chunks = repo::kb::load_chunks_for_vector_search(pool, kb_ids).await.ok()?;
-    // 兜底：对缺向量的 chunk 懒生成 + 回填（预生成失败/漏掉的）
+    // 兜底：对缺向量的 chunk 懒生成 + 回填（预生成失败/漏掉的）。失败同样沉淀
+    // 健康状态（时序在 query ok 之后，覆盖即「最后一次调用」语义）；成功不重复记
     if let Err(e) = ensure_chunks_embedded(pool, &mut chunks, &backend, &api_key).await {
         tracing::warn!(target: "ice_paw.kb", "懒生成 embedding 失败，仅用已有向量检索: {e}");
+        crate::harness::profile_health::record_error(
+            Some(pool),
+            profile_id.as_deref(),
+            &e.to_string(),
+        )
+        .await;
     }
 
     // 解码（BLOB→f32，千 chunk 级数 MB 物化）+ 全量余弦是同步重活，spawn_blocking
@@ -267,7 +302,7 @@ async fn try_semantic_search(
             "向量未齐的 KB 本次不入缓存（下次搜索重试懒生成），已嵌入 chunk 仍参与本次召回"
         );
     }
-    cache.store(kb_ids, &db_sigs, entries);
+    cache.store(kb_ids, &db_sigs, &model_name, entries);
 
     non_empty(results)
 }
@@ -279,6 +314,23 @@ fn semantic_hits(
     limit: usize,
 ) -> Vec<SearchHitOut> {
     use crate::harness::provider::embedding::top_k_recall_refs;
+
+    // 维度错配兜底（ModelProfile Phase 1）：换 embedding 模型未重建时，库内旧
+    // 向量与新 query 维度可能不同（recall 层按维度跳过、静默不召回）。错配 >0
+    // → warn 引导重建——主闸是设置页切换重建 overlay，此处治「看不见」。
+    let mismatched = flat
+        .iter()
+        .filter(|c| c.vec.len() != query_vec.len())
+        .count();
+    if mismatched > 0 {
+        tracing::warn!(
+            target: "ice_paw.kb",
+            mismatched,
+            total = flat.len(),
+            "向量维度与当前 embedding 模型不一致（换模型后未重建？）——\
+             请到「设置-模型」语义检索卡触发重建"
+        );
+    }
 
     let candidates: Vec<(&str, &[f32])> = flat
         .iter()
@@ -415,7 +467,13 @@ impl McpClient for SaveToKbTool {
         let kbs = repo::kb::list_by_scope(&ctx.pool, &parsed.scope, owner).await?;
         let mut indexed_msg = "已索引，立即可用 search_kb 检索。";
         if let Some(kb) = kbs.first() {
-            match crate::harness::kb::indexer::index_directory(&ctx.pool, &kb.id, &directory).await
+            match crate::harness::kb::indexer::index_directory(
+                ctx.app_handle.as_ref(),
+                &ctx.pool,
+                &kb.id,
+                &directory,
+            )
+            .await
             {
                 Ok(stats) => tracing::info!(
                     target: "ice_paw.kb",

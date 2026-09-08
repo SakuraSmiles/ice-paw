@@ -8,6 +8,7 @@ pub mod conversation;
 pub mod kb;
 pub mod mcp_server;
 pub mod memory_embedding;
+pub mod model_profile;
 pub mod memory_store;
 pub mod message;
 pub mod message_attachment;

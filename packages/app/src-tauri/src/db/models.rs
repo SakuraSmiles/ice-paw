@@ -960,6 +960,12 @@ pub struct UserPreferences {
     /// Vision 条目链（两档制）：`Some` = 新格式权威（`Some(vec![])` = 用户显式清空，
     /// 不再回落旧键）；`None` = 未用新格式，读侧回落旧四键单条目。
     pub vision_config: Option<Vec<VisionConfigEntry>>,
+    /// 视觉读取引用链（ModelProfile id 有序数组，主模型在前）。`Some` = 新格式权威
+    /// （含 `Some(vec![])` = 显式清空，不回落）；`None` = 未用新格式，读侧回落
+    /// `vision_config` / 旧四键（软迁移语义与 vision_config 逐字对齐）。
+    pub vision_profile_ids: Option<Vec<String>>,
+    /// 语义检索引用（ModelProfile id）。`Some` = 权威；`None` = 回落 embedding 四键。
+    pub embedding_profile_id: Option<String>,
 }
 
 /// 视觉读取配置的一个条目（主模型或降级模型）。见 `vision.rs` 的解析与顺序重试。
@@ -972,6 +978,114 @@ pub struct VisionConfigEntry {
     pub api_key: String,
     /// 自定义端点（可选；空 = 按 provider 推导官方 OpenAI 兼容端点）
     #[serde(default)]
+    pub base_url: Option<String>,
+}
+
+// =========================================================================
+// ModelProfile（模型配置实体）— migration 49
+// 一条 = provider + model + key 引用 + base_url + 别名；视觉读取/语义检索
+// 引用它，agent 链路 Phase 2 接入。key 密文在 Stronghold 槽位 profile:{id}。
+// =========================================================================
+
+/// 数据库行版本：包含全部字段（含敏感引用 api_key_ref）
+#[derive(Debug, Clone, FromRow)]
+pub struct ModelProfileRow {
+    pub id: String,
+    /// 用户可读别名（如「智谱主力」「智谱 Coding」）；不设唯一约束，
+    /// 同 provider+model+key 允许多条（主/备 key 场景）
+    pub alias: String,
+    pub provider: String,
+    pub model: String,
+    /// Stronghold 槽位引用（建行时恒等填入 `profile:{id}`）
+    pub api_key_ref: String,
+    /// 可选显式端点；空 = 按 PROVIDERS 注册表推导
+    pub base_url: Option<String>,
+    pub sort_order: i32,
+    pub created_at: String,
+    pub updated_at: String,
+    /// 最后一次真实调用的健康分类 slug（ok/quota/auth/...，见 harness::profile_health）
+    pub last_health: Option<String>,
+    /// 失败原文（截断），hover 诊断用；成功为 NULL
+    pub last_health_detail: Option<String>,
+    /// 最后一次调用发生时间（UTC，datetime('now') 格式）；NULL = 从未调用
+    pub last_health_at: Option<String>,
+}
+
+/// 前端 DTO：永不携带 key 明文与 api_key_ref（同 `Agent` 惯例）
+#[derive(Debug, Clone, Serialize)]
+pub struct ModelProfile {
+    pub id: String,
+    pub alias: String,
+    pub provider: String,
+    pub model: String,
+    pub base_url: Option<String>,
+    pub sort_order: i32,
+    pub created_at: String,
+    pub updated_at: String,
+    /// 是否已配置 API Key（真相规则同 agent：免 key 厂商恒 true，否则实查 Stronghold）
+    pub has_api_key: bool,
+    /// 健康三列同形下发（NULL 健康 = 从未调用，前端「未调用」态非「正常」）
+    pub last_health: Option<String>,
+    pub last_health_detail: Option<String>,
+    pub last_health_at: Option<String>,
+}
+
+impl From<ModelProfileRow> for ModelProfile {
+    fn from(row: ModelProfileRow) -> Self {
+        ModelProfile {
+            id: row.id,
+            alias: row.alias,
+            provider: row.provider,
+            model: row.model,
+            base_url: row.base_url,
+            sort_order: row.sort_order,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            // 占位：命令层 agent_dto 同款实查覆盖（repo 层无 AppHandle）
+            has_api_key: !row.api_key_ref.is_empty(),
+            last_health: row.last_health,
+            last_health_detail: row.last_health_detail,
+            last_health_at: row.last_health_at,
+        }
+    }
+}
+
+/// 创建入参（前端 → Rust）。id 由命令层 uuid 生成（CreateKbInput 先例）。
+#[derive(Debug, Deserialize)]
+pub struct NewModelProfile {
+    pub alias: String,
+    pub provider: String,
+    pub model: String,
+    /// 明文 key，仅创建瞬间过内存（同 NewAgent）
+    pub api_key: String,
+    #[serde(default)]
+    pub base_url: Option<String>,
+}
+
+/// 部分更新入参。base_url 双层 Option：None = 不改 / Some(None) = 清空 /
+/// Some(Some(v)) = 设定（与 AgentUpdate.base_url 语义逐字对齐）。
+///
+/// `api_key`：None = 不改（沿用 Stronghold 槽位现值）；Some = 顺带换 Key
+/// （provider 变更换厂商时**必填**——旧 key 属于旧厂商，换厂商闸要求 key 与
+/// 厂商同批到达，见 `model_profile_cmd::update`）。
+#[derive(Debug, Deserialize)]
+pub struct ModelProfileUpdate {
+    pub id: String,
+    pub alias: Option<String>,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub base_url: Option<Option<String>>,
+    pub sort_order: Option<i32>,
+}
+
+/// 轮换 key 入参（镜像 RotateAgentKey）
+#[derive(Debug, Deserialize)]
+pub struct RotateProfileKey {
+    pub profile_id: String,
+    pub api_key: String,
     pub base_url: Option<String>,
 }
 

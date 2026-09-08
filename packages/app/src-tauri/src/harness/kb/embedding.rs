@@ -11,14 +11,17 @@
 use sqlx::SqlitePool;
 
 use crate::db::models::UserPreferences;
+use crate::db::repo;
 use crate::db::repo::kb::{embedding_to_bytes, update_chunk_embedding, ChunkWithEmbedding};
 use crate::error::AppResult;
 use crate::harness::provider::embedding::EmbeddingBackend;
 
 /// 从 [`UserPreferences`] 解析 embedding 后端配置 `(model, base_url, api_key)`。
 ///
-/// `base_url` 缺省时按 `provider` 推导（openai / glm / deepseek）。`model`、`api_key`
-/// 任一缺失或 provider 未知 → `None`（调用方回退关键词检索 / 跳过预生成）。
+/// `base_url` 缺省时按 `provider` 查 PROVIDERS 注册表 `openai_url` 档推导
+///（表收敛 ModelProfile Phase 1：minimax 自此成为合法候选）。`model`、
+/// `api_key` 任一缺失或 provider 无 OpenAI 兼容端点 → `None`（调用方回退
+/// 关键词检索 / 跳过预生成）。
 ///
 /// 抽成纯函数，便于单测「前端 JSON 存储能否被正确解析为 backend 配置」。
 pub fn resolve_embedding_config(prefs: &UserPreferences) -> Option<(String, String, String)> {
@@ -31,14 +34,139 @@ pub fn resolve_embedding_config(prefs: &UserPreferences) -> Option<(String, Stri
         .filter(|s| !s.is_empty())
     {
         Some(u) => u.to_string(),
-        None => match provider {
-            "openai" => "https://api.openai.com".into(),
-            "glm" => "https://open.bigmodel.cn/api/paas/v4".into(),
-            "deepseek" => "https://api.deepseek.com".into(),
-            _ => return None,
-        },
+        None => crate::harness::provider::provider_openai_url(provider)?.to_string(),
     };
     Some((model, url, api_key))
+}
+
+/// 解析后的 embedding 后端配置（双路径归一，含归因标签）。
+#[derive(Debug, Clone)]
+pub struct ResolvedEmbedding {
+    pub model: String,
+    pub base_url: String,
+    pub api_key: String,
+    /// 归因标签（日志用）：profile 路径 = 「模型配置「别名」」；旧格式 = 「旧配置」。
+    pub source: String,
+    /// profile 归因（状态监控用）：profile 引用 = Some(id)——embedding 成败回写
+    /// 健康三列；旧格式 = None（无实体可记，跳过）。
+    pub profile_id: Option<String>,
+}
+
+/// 组合层解析（ModelProfile Phase 1）：`embedding_profile_id = Some` → **profile
+/// 引用**（查 model_profiles 行 + Stronghold 解 key；端点三层 = 行显式 > vault
+/// 副本 > 注册表 `openai_url`）；`None` → **旧四键回落**（[`resolve_embedding_config`]
+/// 原样，存量测试零改动）。
+///
+/// profile 路径需要 `app`（Stronghold 解密）；`app=None`（测试 / 早期启动）时该
+/// 路径降级 `None`（warn）——既有「配置缺失跳过预生成 / 回退关键词检索」语义的
+/// 延伸。无效引用（行没了 / key 缺 / 厂商无 OpenAI 兼容端点）warn + None 指路
+/// 设置-模型。**刻意不加缓存**（与 [`crate::harness::modal::gather_vision_candidates`]
+/// 同理）：换 Key / 换模型立即生效是实体化的核心卖点。
+pub async fn resolve_embedding_backend(
+    app: Option<&tauri::AppHandle>,
+    pool: &SqlitePool,
+) -> Option<ResolvedEmbedding> {
+    let prefs = match repo::preferences::get_all(pool).await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(target: "ice_paw.kb", err = %e, "读取 preferences 失败，embedding 配置不可用");
+            return None;
+        }
+    };
+    match prefs
+        .embedding_profile_id
+        .as_deref()
+        .filter(|s| !s.is_empty())
+    {
+        Some(pid) => match app {
+            Some(app) => resolve_embedding_from_profile(app, pool, pid).await,
+            None => {
+                tracing::warn!(
+                    target: "ice_paw.kb",
+                    "语义检索已引用模型配置（{pid}）但无 AppHandle 可解 Stronghold，跳过 embedding"
+                );
+                None
+            }
+        },
+        None => resolve_embedding_config(&prefs).map(|(model, base_url, api_key)| {
+            ResolvedEmbedding {
+                model,
+                base_url,
+                api_key,
+                source: "旧配置".into(),
+                profile_id: None,
+            }
+        }),
+    }
+}
+
+/// 单条 profile → embedding 配置。无效（行没了 / key 缺失 / 厂商无 OpenAI 兼容
+/// 端点）返回 None + warn——与视觉链 `resolve_profile_credential` 同构。
+async fn resolve_embedding_from_profile(
+    app: &tauri::AppHandle,
+    pool: &SqlitePool,
+    profile_id: &str,
+) -> Option<ResolvedEmbedding> {
+    let row = match repo::model_profile::get_by_id(pool, profile_id).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(
+                target: "ice_paw.kb",
+                err = %e,
+                "语义检索引用的模型配置 {profile_id} 不存在（已删？）——请到「设置-模型」重新选择"
+            );
+            return None;
+        }
+    };
+    let (api_key, vault_url) = match crate::crypto::fetch_api_key(app, &row.api_key_ref) {
+        Ok(pair) => pair,
+        Err(e) => {
+            tracing::warn!(
+                target: "ice_paw.kb",
+                err = %e,
+                alias = %row.alias,
+                "语义检索引用的模型配置「{}」Key 缺失——请到「设置-模型」补 Key",
+                row.alias
+            );
+            return None;
+        }
+    };
+    // 端点三层：行显式 > vault 副本 > 注册表 openai_url（端点成对原则，不猜第三方）
+    let explicit = row
+        .base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    let base_url = explicit
+        .or_else(|| {
+            vault_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+        })
+        .or_else(|| {
+            crate::harness::provider::provider_openai_url(&row.provider).map(String::from)
+        });
+    let Some(base_url) = base_url else {
+        tracing::warn!(
+            target: "ice_paw.kb",
+            provider = %row.provider,
+            alias = %row.alias,
+            "语义检索引用的模型配置「{}」厂商无 OpenAI 兼容端点",
+            row.alias
+        );
+        return None;
+    };
+    Some(ResolvedEmbedding {
+        model: row.model,
+        base_url,
+        api_key,
+        source: format!("模型配置「{}」", row.alias),
+        // 状态监控归因：embedding 成败回写该 profile 的健康三列
+        profile_id: Some(profile_id.to_string()),
+    })
 }
 
 /// 批量确保 `chunks` 中 `embedding=None` 的 chunk 生成向量并持久化。
@@ -152,5 +280,61 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(n, 0, "空切片 → 0");
+    }
+
+    // ===== resolve_embedding_backend 双路径路由（ModelProfile Phase 1）=====
+    // profile 腿的 Stronghold 解 key 需要真 AppHandle（测试不可得），此处覆盖
+    // 路由层三态：旧四键回落 / 引用键 + app=None 降级 / 全空 None。
+
+    #[tokio::test]
+    async fn resolve_backend_falls_back_to_legacy_four_keys() {
+        let pool = fresh_pool().await;
+        // 模拟前端 JSON.stringify 存储（bridge.preferences.set 惯例，值带引号）
+        repo::preferences::set(&pool, "embedding_provider", "\"glm\"")
+            .await
+            .unwrap();
+        repo::preferences::set(&pool, "embedding_model", "\"embedding-3\"")
+            .await
+            .unwrap();
+        repo::preferences::set(&pool, "embedding_api_key", "\"sk-test-xxx\"")
+            .await
+            .unwrap();
+
+        let r = resolve_embedding_backend(None, &pool)
+            .await
+            .expect("无引用键 → 旧四键回落应解析成功");
+        assert_eq!(r.model, "embedding-3");
+        assert_eq!(r.base_url, "https://open.bigmodel.cn/api/paas/v4");
+        assert_eq!(r.api_key, "sk-test-xxx");
+        assert_eq!(r.source, "旧配置");
+    }
+
+    #[tokio::test]
+    async fn resolve_backend_profile_ref_without_app_degrades_to_none() {
+        let pool = fresh_pool().await;
+        // 引用键已落（Some=权威）但无 AppHandle → 降级 None，不回落旧四键
+        repo::preferences::set(&pool, "embedding_profile_id", "\"mp-embed\"")
+            .await
+            .unwrap();
+        repo::preferences::set(&pool, "embedding_provider", "\"glm\"")
+            .await
+            .unwrap();
+        repo::preferences::set(&pool, "embedding_model", "\"embedding-3\"")
+            .await
+            .unwrap();
+        repo::preferences::set(&pool, "embedding_api_key", "\"sk-test-xxx\"")
+            .await
+            .unwrap();
+
+        assert!(
+            resolve_embedding_backend(None, &pool).await.is_none(),
+            "引用键 Some = 权威，app=None 应降级 None 而非回落旧四键"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_backend_none_when_unconfigured() {
+        let pool = fresh_pool().await;
+        assert!(resolve_embedding_backend(None, &pool).await.is_none());
     }
 }

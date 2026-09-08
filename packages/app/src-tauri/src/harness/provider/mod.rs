@@ -102,6 +102,14 @@ struct ProviderDesc {
     name: &'static str,
     protocol: ProviderProtocol,
     default_url: &'static str,
+    /// OpenAI 兼容端点（视觉代读 / embedding 用，`describe_image` 走 image_url 格式、
+    /// embedding 走 /embeddings，都只认 OpenAI 协议）。与 `default_url` **刻意分列**：
+    /// MiniMax 聊天走 Anthropic 协议端点（/anthropic）、视觉/嵌入走 OpenAI 兼容
+    /// （/v1），同一 key 两端点通用。None = 该厂商没有 OpenAI 兼容端点
+    /// （anthropic / ollama* / custom——custom 的端点由用户显式填）。
+    /// 单一真相源在此；视觉链（vision.rs）、embedding 链（kb/embedding.rs、
+    /// kb_cmd）与此表查询，勿再各自维护端点 match。
+    openai_url: Option<&'static str>,
     /// 备选探测端点（标签, 地址）：未显式填地址时按 [默认, ...备选] 顺序探测，
     /// 走通的地址回传前端存进 agent——智谱标准/Coding 双端点 key 不通用，
     /// 让「测试连接」自动匹配，下拉里只保留一个厂商选项
@@ -143,6 +151,7 @@ pub enum ProviderProtocol {
 const PROVIDERS: &[ProviderDesc] = &[
     ProviderDesc {
         name: "openai", protocol: ProviderProtocol::OpenAI, default_url: "https://api.openai.com",
+        openai_url: Some("https://api.openai.com"),
         alt_urls: &[], label: "OpenAI", note: None, requires_key: true, requires_base_url: false,
         key_url: Some("https://platform.openai.com/api-keys"),
         hidden: false,
@@ -150,6 +159,7 @@ const PROVIDERS: &[ProviderDesc] = &[
     },
     ProviderDesc {
         name: "glm", protocol: ProviderProtocol::OpenAI, default_url: "https://open.bigmodel.cn/api/paas/v4",
+        openai_url: Some("https://open.bigmodel.cn/api/paas/v4"),
         alt_urls: &[("Coding 端点", "https://open.bigmodel.cn/api/coding/paas/v4")],
         label: "智谱", note: Some("GLM 系列；标准/Coding 端点可切换，Coding 套餐请选 Coding 端点；5.3 系思考常开不可关"),
         requires_key: true, requires_base_url: false,
@@ -159,6 +169,7 @@ const PROVIDERS: &[ProviderDesc] = &[
     },
     ProviderDesc {
         name: "glm-coding", protocol: ProviderProtocol::OpenAI, default_url: "https://open.bigmodel.cn/api/coding/paas/v4",
+        openai_url: Some("https://open.bigmodel.cn/api/coding/paas/v4"),
         alt_urls: &[], label: "智谱 GLM Coding",
         note: Some("旧入口：新配置请选「智谱」，测试连接会自动匹配端点"),
         requires_key: true, requires_base_url: false,
@@ -168,6 +179,7 @@ const PROVIDERS: &[ProviderDesc] = &[
     },
     ProviderDesc {
         name: "deepseek", protocol: ProviderProtocol::OpenAI, default_url: "https://api.deepseek.com",
+        openai_url: Some("https://api.deepseek.com"),
         alt_urls: &[], label: "DeepSeek", note: Some("V4 系 1M 窗口；vision-exp 为视觉实验模型；chat/reasoner 旧名已于 2026-07 弃用"),
         requires_key: true, requires_base_url: false,
         key_url: Some("https://platform.deepseek.com/api_keys"),
@@ -176,6 +188,7 @@ const PROVIDERS: &[ProviderDesc] = &[
     },
     ProviderDesc {
         name: "anthropic", protocol: ProviderProtocol::Anthropic, default_url: "https://api.anthropic.com",
+        openai_url: None,
         alt_urls: &[], label: "Anthropic", note: None, requires_key: true, requires_base_url: false,
         key_url: Some("https://console.anthropic.com/settings/keys"),
         hidden: false,
@@ -191,6 +204,8 @@ const PROVIDERS: &[ProviderDesc] = &[
     },
     ProviderDesc {
         name: "minimax", protocol: ProviderProtocol::Anthropic, default_url: "https://api.minimaxi.com/anthropic",
+        // 聊天走 Anthropic 协议端点，视觉/嵌入走 OpenAI 兼容 /v1（同一 key 通用）
+        openai_url: Some("https://api.minimaxi.com/v1"),
         alt_urls: &[], label: "MiniMax", note: Some("国内站"), requires_key: true, requires_base_url: false,
         key_url: Some("https://platform.minimaxi.com/user-center/basic-information/interface-key"),
         hidden: false,
@@ -198,6 +213,7 @@ const PROVIDERS: &[ProviderDesc] = &[
     },
     ProviderDesc {
         name: "minimax-cn", protocol: ProviderProtocol::Anthropic, default_url: "https://api.minimaxi.com/anthropic",
+        openai_url: Some("https://api.minimaxi.com/v1"),
         alt_urls: &[], label: "MiniMax（国内站·旧）",
         note: Some("旧入口：与 MiniMax 同端点"),
         requires_key: true, requires_base_url: false,
@@ -207,6 +223,7 @@ const PROVIDERS: &[ProviderDesc] = &[
     },
     ProviderDesc {
         name: "ollama", protocol: ProviderProtocol::OpenAI, default_url: "http://localhost:11434/v1",
+        openai_url: None,
         alt_urls: &[], label: "Ollama 本地",
         note: Some("已下线：新配置请在模型框手输模型名 + API URL 填本机地址（默认 http://localhost:11434/v1），无需 Key"),
         requires_key: false, requires_base_url: false, key_url: None, hidden: true,
@@ -214,6 +231,7 @@ const PROVIDERS: &[ProviderDesc] = &[
     },
     ProviderDesc {
         name: "custom", protocol: ProviderProtocol::OpenAI, default_url: "",
+        openai_url: None,
         alt_urls: &[], label: "自定义（OpenAI 兼容）",
         note: Some("模型框手输目录外名字即落此处；必填 API URL（Ollama 等本机服务如 http://localhost:11434/v1），无需鉴权可留空 Key"),
         requires_key: false, requires_base_url: true, key_url: None, hidden: true,
@@ -294,6 +312,12 @@ fn default_base_url(provider: &str) -> String {
         .to_string()
 }
 
+/// 该 provider 的 OpenAI 兼容端点（视觉代读 / embedding 用）。None = 无此端点
+/// （anthropic / ollama / custom / 未知）。单一真相源，勿在消费方复制端点表。
+pub fn provider_openai_url(name: &str) -> Option<&'static str> {
+    find_provider(name).and_then(|d| d.openai_url)
+}
+
 // =========================================================================
 // Provider 目录下发（list_providers 命令的数据源）
 // =========================================================================
@@ -306,6 +330,8 @@ pub struct ProviderInfo {
     pub name: String,
     pub protocol: ProviderProtocol,
     pub default_url: String,
+    /// OpenAI 兼容端点（视觉代读 / embedding 推导用）；None = 无此端点
+    pub openai_url: Option<String>,
     /// 备选探测端点 [标签, 地址]（serde 元组序列化为数组）
     pub alt_urls: Vec<(String, String)>,
     pub label: String,
@@ -325,6 +351,7 @@ pub fn list_provider_infos() -> Vec<ProviderInfo> {
             name: d.name.to_string(),
             protocol: d.protocol,
             default_url: d.default_url.to_string(),
+            openai_url: d.openai_url.map(|s| s.to_string()),
             alt_urls: d
                 .alt_urls
                 .iter()
@@ -535,6 +562,7 @@ mod tests {
             assert_eq!(info.name, desc.name);
             assert_eq!(info.protocol, desc.protocol);
             assert_eq!(info.default_url, desc.default_url);
+            assert_eq!(info.openai_url.as_deref(), desc.openai_url);
             assert_eq!(
                 info.alt_urls,
                 desc.alt_urls
@@ -554,6 +582,34 @@ mod tests {
                     .map(|s| s.to_string())
                     .collect::<Vec<_>>()
             );
+        }
+    }
+
+    /// OpenAI 兼容端点表：五厂商有值（MiniMax 视觉/嵌入走 /v1 非聊天 /anthropic），
+    /// anthropic/ollama/custom/未知 = None
+    #[test]
+    fn openai_url_registry() {
+        assert_eq!(
+            provider_openai_url("openai"),
+            Some("https://api.openai.com")
+        );
+        assert_eq!(
+            provider_openai_url("glm"),
+            Some("https://open.bigmodel.cn/api/paas/v4")
+        );
+        assert_eq!(
+            provider_openai_url("glm-coding"),
+            Some("https://open.bigmodel.cn/api/coding/paas/v4")
+        );
+        assert_eq!(
+            provider_openai_url("deepseek"),
+            Some("https://api.deepseek.com")
+        );
+        for p in ["minimax", "minimax-cn"] {
+            assert_eq!(provider_openai_url(p), Some("https://api.minimaxi.com/v1"), "{p}");
+        }
+        for p in ["anthropic", "ollama", "custom", "totally-unknown"] {
+            assert_eq!(provider_openai_url(p), None, "{p} 应无 OpenAI 兼容端点");
         }
     }
 }

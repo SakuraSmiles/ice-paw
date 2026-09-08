@@ -202,6 +202,7 @@ pub fn agent_workspace_root(
 /// 里已有的文件（迁移/手动放入/之前 save_to_kb 写入的）立即进 `kb_document` 表、
 /// UI 列表与 search_kb 可见。后续若用户继续用 save_to_kb 写入，工具内部也会内联索引。
 pub(crate) async fn ensure_agent_kb(
+    app: Option<&tauri::AppHandle>,
     pool: &SqlitePool,
     agent_id: &str,
     agent_name: &str,
@@ -225,10 +226,11 @@ pub(crate) async fn ensure_agent_kb(
         .and_then(|v| v.into_iter().next())
     {
         let pool = pool.clone();
+        let app = app.cloned();
         let kb_id = kb.id.clone();
         let dir = dir.clone();
         tokio::spawn(async move {
-            match super::indexer::index_directory(&pool, &kb_id, &dir).await {
+            match super::indexer::index_directory(app.as_ref(), &pool, &kb_id, &dir).await {
                 Ok(stats) => tracing::info!(
                     target: "ice_paw.kb",
                     "新建 agent KB 初始索引完成 kb={} indexed={} skipped={}",

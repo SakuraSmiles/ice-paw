@@ -46,6 +46,9 @@ pub struct KbWatcherManager {
     debouncer: Arc<std::sync::Mutex<KbDebouncer>>,
     dir_map: Arc<std::sync::Mutex<HashMap<PathBuf, String>>>,
     pool: SqlitePool,
+    /// AppHandle 通道：index_directory 的 embedding 引用链解 Stronghold key 用
+    /// （ModelProfile Phase 1）。测试构造传 None → 跳过向量预生成。
+    app: Option<tauri::AppHandle>,
 }
 
 impl KbWatcherManager {
@@ -53,7 +56,7 @@ impl KbWatcherManager {
     ///
     /// 必须在 tokio runtime 内调用（消费线程用 `Handle::current()` 把 async 的
     /// `index_directory` 投回 runtime）。失败仅因 `new_debouncer` 出错。
-    pub fn new(pool: SqlitePool) -> AppResult<Self> {
+    pub fn new(pool: SqlitePool, app: Option<tauri::AppHandle>) -> AppResult<Self> {
         let (tx, rx) = std::sync::mpsc::channel::<DebounceEventResult>();
         let debouncer = match new_debouncer(DEBOUNCE_WINDOW, None, tx) {
             Ok(d) => d,
@@ -65,14 +68,16 @@ impl KbWatcherManager {
 
         let dir_map_for_consumer = Arc::clone(&dir_map);
         let pool_for_consumer = pool.clone();
+        let app_for_consumer = app.clone();
         tokio::task::spawn_blocking(move || {
-            run_consumer(rx, pool_for_consumer, dir_map_for_consumer, handle);
+            run_consumer(rx, pool_for_consumer, dir_map_for_consumer, app_for_consumer, handle);
         });
 
         Ok(Self {
             debouncer,
             dir_map,
             pool,
+            app,
         })
     }
 
@@ -103,10 +108,11 @@ impl KbWatcherManager {
 
         // 初始全量索引（后台，与磁盘同步）。幂等：已索引文件按 content_hash 跳过。
         let pool = self.pool.clone();
+        let app = self.app.clone();
         let kb_id = kb_id.clone();
         let dir = dir.clone();
         tokio::spawn(async move {
-            if let Err(e) = index_directory(&pool, &kb_id, &dir).await {
+            if let Err(e) = index_directory(app.as_ref(), &pool, &kb_id, &dir).await {
                 tracing::warn!(
                     target: "ice_paw.kb",
                     "add_watch 初始索引失败 kb={} err={}",
@@ -157,6 +163,7 @@ fn run_consumer(
     rx: std::sync::mpsc::Receiver<DebounceEventResult>,
     pool: SqlitePool,
     dir_map: Arc<std::sync::Mutex<HashMap<PathBuf, String>>>,
+    app: Option<tauri::AppHandle>,
     handle: tokio::runtime::Handle,
 ) {
     for result in rx {
@@ -184,6 +191,7 @@ fn run_consumer(
                         continue;
                     };
                     let pool = pool.clone();
+                    let app = app.clone();
                     let handle = handle.clone();
                     handle.spawn(async move {
                         tracing::debug!(
@@ -191,7 +199,7 @@ fn run_consumer(
                             "文件变更触发增量索引 KB={}",
                             kb_id
                         );
-                        if let Err(e) = index_directory(&pool, &kb_id, &dir).await {
+                        if let Err(e) = index_directory(app.as_ref(), &pool, &kb_id, &dir).await {
                             tracing::warn!(
                                 target: "ice_paw.kb",
                                 "增量索引失败 KB={} err={}",

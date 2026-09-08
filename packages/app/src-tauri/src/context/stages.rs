@@ -366,7 +366,14 @@ impl PipelineStage for ModalCapabilityStage {
         }
 
         // 非视觉：读平台视觉配置链（两档制第二档：主模型 + 可选降级，按序尝试）。
-        let candidates = crate::harness::modal::gather_vision_candidates(&ctx.pool).await;
+        // 优先消费 session_runner 注入的凭据链（profile 引用链要 AppHandle 解
+        // Stronghold，Pipeline 保持 Tauri-free）；未注入（测试 / 散落构造）回落
+        // 按旧格式从 prefs 解析（app=None：profile 格式解不了 key，warn 空链）。
+        let candidates = if ctx.vision_candidates.is_empty() {
+            crate::harness::modal::gather_vision_candidates(None, &ctx.pool).await
+        } else {
+            ctx.vision_candidates.clone()
+        };
 
         // 门① 当前用户消息：完整适配（OCR 成功→Text；失败/无凭据→剥离+诚实提示）。
         // chat:processing 心跳：OCR 每张图完成时回调一次（撑住前端 60s 静默超时窗口，
@@ -421,6 +428,7 @@ impl PipelineStage for ModalCapabilityStage {
             false,
             &candidates,
             on_progress,
+            Some(&ctx.pool),
         )
         .await;
         if outcome.changed() {

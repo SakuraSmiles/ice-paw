@@ -17,8 +17,11 @@ import type {
   McpServerSnapshot,
   McpServerUpdate,
   McpToolDef,
+  ModelProfile,
+  ModelProfileUpdate,
   NewAgent,
   NewMcpServer,
+  NewModelProfile,
   NewProject,
   PlanSnapshot,
   Project,
@@ -101,12 +104,14 @@ const providers = {
     try { return await invoke<ProviderInfo[]>("list_providers"); }
     catch (err) { throw wrapInvokeError("providers.list", err); }
   },
-  /** 测试连通性并拉取模型列表（一次 GET /models，「测试连接」「拉取」两按钮共用） */
+  /** 测试连通性并拉取模型列表（一次 GET /models，「测试连接」「拉取」两按钮共用）。
+   *  agentId / profileId：编辑态用存量凭据探测（key 密文不回显前端） */
   async testConnection(
     providerName: string,
     baseUrl?: string,
     apiKey?: string,
     agentId?: string,
+    profileId?: string,
   ): Promise<ProviderConnectionResult> {
     try {
       return await invoke<ProviderConnectionResult>("test_provider_connection", {
@@ -114,8 +119,38 @@ const providers = {
         baseUrl: baseUrl || null,
         apiKey: apiKey || null,
         agentId: agentId || null,
+        profileId: profileId || null,
       });
     } catch (err) { throw wrapInvokeError("providers.testConnection", err); }
+  },
+};
+
+const modelProfiles = {
+  /** 列出全部模型配置（按 sort_order 排序） */
+  async list(): Promise<ModelProfile[]> {
+    try { return await invoke<ModelProfile[]>("list_model_profiles"); }
+    catch (err) { throw wrapInvokeError("modelProfiles.list", err); }
+  },
+  async create(input: NewModelProfile): Promise<ModelProfile> {
+    try { return await invoke<ModelProfile>("create_model_profile", { input }); }
+    catch (err) { throw wrapInvokeError("modelProfiles.create", err); }
+  },
+  async update(input: ModelProfileUpdate): Promise<ModelProfile> {
+    try { return await invoke<ModelProfile>("update_model_profile", { input }); }
+    catch (err) { throw wrapInvokeError("modelProfiles.update", err); }
+  },
+  async rotateKey(profileId: string, apiKey: string, baseUrl?: string): Promise<void> {
+    try { await invoke<void>("rotate_model_profile_key", { input: { profile_id: profileId, api_key: apiKey, base_url: baseUrl ?? null } }); }
+    catch (err) { throw wrapInvokeError("modelProfiles.rotateKey", err); }
+  },
+  async delete(id: string): Promise<void> {
+    try { await invoke<void>("delete_model_profile", { id }); }
+    catch (err) { throw wrapInvokeError("modelProfiles.delete", err); }
+  },
+  /** 视觉链健康检查：用已保存的模型配置代读 1×1 探针图（视觉引用卡逐条测试） */
+  async testVision(profileId: string): Promise<{ latency_ms: number; sample: string }> {
+    try { return await invoke<{ latency_ms: number; sample: string }>("test_model_profile_vision", { profileId }); }
+    catch (err) { throw wrapInvokeError("modelProfiles.testVision", err); }
   },
 };
 
@@ -403,8 +438,10 @@ const kb = {
     try { return await invoke<KbStats>("get_kb_stats", { kbId }); }
     catch (err) { throw wrapInvokeError("kb.getStats", err); }
   },
-  async testEmbeddingConfig(provider: string, model: string, apiKey: string, baseUrl?: string): Promise<void> {
-    try { await invoke<void>("test_embedding_config", { provider, model, apiKey, baseUrl: baseUrl ?? null }); }
+  /** embedding 健康检查。profileId 给定时测已保存的模型配置（key 密文不回显前端），
+   *  四参形态测表单未保存的新值（旧四键路径） */
+  async testEmbeddingConfig(provider: string, model: string, apiKey: string, baseUrl?: string, profileId?: string): Promise<void> {
+    try { await invoke<void>("test_embedding_config", { provider, model, apiKey, baseUrl: baseUrl ?? null, profileId: profileId || null }); }
     catch (err) { throw wrapInvokeError("kb.testEmbeddingConfig", err); }
   },
   async rebuildAllEmbeddings(): Promise<RebuildStats> {
@@ -517,5 +554,5 @@ const screen = {
   },
 };
 
-export const bridge = { agents, providers, conversations, projects, messages, chat, preferences, mcp, kb, logs, trajectory, screen };
+export const bridge = { agents, providers, modelProfiles, conversations, projects, messages, chat, preferences, mcp, kb, logs, trajectory, screen };
 export default bridge;

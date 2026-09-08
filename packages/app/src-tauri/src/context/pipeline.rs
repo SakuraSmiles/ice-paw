@@ -100,6 +100,11 @@ pub struct PipelineContext {
     /// 供 LLM 调用使用；视觉代读已不消费它（两档制：非视觉 agent 走平台视觉配置链，
     /// 见 `modal::gather_vision_candidates`）。
     pub api_key: Option<String>,
+    /// 视觉凭据链（ModelProfile Phase 1）：session_runner 注入——profile 引用链
+    /// 要 AppHandle 解 Stronghold key，Pipeline 保持 Tauri-free（`api_key` 同款
+    /// 先例）。空 = 未注入（测试 / 散落构造），ModalCapabilityStage 回落按旧格式
+    /// 从 prefs 解析。
+    pub vision_candidates: Vec<crate::harness::vision::VisionCredential>,
     /// chat:processing 心跳发射器——可选注入，让 ModalCapabilityStage 在 OCR 每张
     /// 图完成后 emit 一次 `chat:processing(stage="ocr", progress=(i,N))`，让前端
     /// 60s 静默超时窗口能反映后端真实活动（OCR 串行易超 60s，否则前端会误判已死）。
@@ -182,6 +187,7 @@ impl PipelineContext {
             project_workspace: None,
             project_context_dir: None,
             api_key: None,
+            vision_candidates: Vec::new(),
             emitter: None,
             delegation_hint: None,
             word_style_profile: None,

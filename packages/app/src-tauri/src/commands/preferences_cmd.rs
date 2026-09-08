@@ -74,21 +74,28 @@ pub async fn test_vision_config(
         ))
     })?;
 
+    probe_describe_image(&cred.provider, &cred.model, &cred.base_url, &cred.api_key).await
+}
+
+/// 探针代读公共体：解码 1×1 PNG + 计时 + `describe_image` + 截样。
+/// `test_vision_config`（表单新值）与 `test_model_profile_vision`（存量实体，
+/// ModelProfile Phase 1）共用——测过 = 同参数正式链路可用。
+pub(crate) async fn probe_describe_image(
+    provider: &str,
+    model: &str,
+    base_url: &str,
+    api_key: &str,
+) -> AppResult<VisionTestResult> {
+    use crate::harness::vision;
     use base64::Engine as _;
+
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(TINY_PNG_B64)
         .map_err(|e| crate::error::AppError::Internal(format!("探针图 base64 损坏: {e}")))?;
 
     let started = std::time::Instant::now();
-    let sample = vision::describe_image(
-        &cred.provider,
-        &cred.model,
-        &cred.base_url,
-        &cred.api_key,
-        "image/png",
-        &bytes,
-    )
-    .await?;
+    let sample =
+        vision::describe_image(provider, model, base_url, api_key, "image/png", &bytes).await?;
     Ok(VisionTestResult {
         latency_ms: started.elapsed().as_millis() as u64,
         sample: sample.chars().take(120).collect(),

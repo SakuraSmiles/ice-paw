@@ -22,7 +22,7 @@ use crate::db::models::KbDocumentRow;
 use crate::db::repo;
 use crate::db::repo::kb::ChunkWithEmbedding;
 use crate::error::{AppError, AppResult};
-use crate::harness::kb::embedding::{ensure_chunks_embedded, resolve_embedding_config};
+use crate::harness::kb::embedding::{ensure_chunks_embedded, resolve_embedding_backend};
 use crate::harness::provider::embedding::OpenAiEmbeddingBackend;
 
 use super::parser::{content_hash, first_paragraph, parse_markdown, split_into_chunks, ParsedDoc};
@@ -48,12 +48,16 @@ pub struct IndexStats {
 
 /// 对一个 KB 目录做全量增量索引。
 ///
+/// - `app`：AppHandle 通道——embedding 引用链（`embedding_profile_id`）解
+///   Stronghold key 用（ModelProfile Phase 1）；`None`（测试）且走 profile 路径
+///   → 跳过预生成（既有「配置缺失跳过」语义延伸，search_kb 懒生成兜底）。
 /// - `kb_id`：目标 KB 的 id（写入 `kb_document.kb_id`）
 /// - `directory`：KB 根目录绝对路径；`file_path` 以相对它的路径存储（正斜杠分隔）
 ///
 /// 幂等：可安全重复调用（watcher 触发 / 启动全量扫描都走这里）。
 /// 单个文件读失败/解析失败仅记 warn 并跳过，不中断整体索引。
 pub async fn index_directory(
+    app: Option<&tauri::AppHandle>,
     pool: &SqlitePool,
     kb_id: &str,
     directory: &Path,
@@ -72,13 +76,17 @@ pub async fn index_directory(
 
     let mut seen: HashSet<String> = HashSet::new();
 
-    // embedding 预生成配置：循环外读一次 preferences + 构造一次 backend。
-    // 未配置 → None（跳过预生成，search_kb 时懒生成兜底）。
-    let backend_and_key = repo::preferences::get_all(pool)
+    // embedding 预生成配置：循环外解析一次 + 构造一次 backend（双路径：profile
+    // 引用链 → 旧四键回落）。未配置 / 引用无效 → None（跳过预生成，search_kb
+    // 时懒生成兜底）。profile_id 供状态监控归因（旧格式 None 自动跳过记录）。
+    let backend_and_key = resolve_embedding_backend(app, pool)
         .await
-        .ok()
-        .and_then(|p| resolve_embedding_config(&p))
-        .and_then(|(m, u, k)| OpenAiEmbeddingBackend::new(m, u).ok().map(|be| (be, k)));
+        .and_then(|r| {
+            let pid = r.profile_id;
+            OpenAiEmbeddingBackend::new(r.model, r.base_url)
+                .ok()
+                .map(|be| (be, r.api_key, pid))
+        });
 
     for (rel_path, abs_path) in &disk_files {
         seen.insert(rel_path.clone());
@@ -188,7 +196,7 @@ pub async fn index_directory(
         match repo::kb::upsert_chunks_incremental(pool, &doc_id, &chunks).await {
             Ok(need) => {
                 // 入库同步预生成 embedding（未配置则跳过；失败 warn，search 时懒生成兜底）
-                if let Some((backend, key)) = &backend_and_key {
+                if let Some((backend, key, profile_id)) = &backend_and_key {
                     if !need.is_empty() {
                         let mut to_embed: Vec<ChunkWithEmbedding> = need
                             .iter()
@@ -204,14 +212,30 @@ pub async fn index_directory(
                             })
                             .collect();
                         match ensure_chunks_embedded(pool, &mut to_embed, backend, key).await {
-                            Ok(n) => tracing::info!(
-                                target: "ice_paw.kb",
-                                "为 {n} 个 chunk 预生成了 embedding doc={}", doc_id
-                            ),
-                            Err(e) => tracing::warn!(
-                                target: "ice_paw.kb",
-                                "预生成 embedding 失败 doc={} err={}（搜索时将懒生成兜底）", doc_id, e
-                            ),
+                            Ok(n) => {
+                                tracing::info!(
+                                    target: "ice_paw.kb",
+                                    "为 {n} 个 chunk 预生成了 embedding doc={}", doc_id
+                                );
+                                // 状态监控：真实 embedding 调用成功
+                                crate::harness::profile_health::record_ok(
+                                    Some(pool),
+                                    profile_id.as_deref(),
+                                )
+                                .await;
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    target: "ice_paw.kb",
+                                    "预生成 embedding 失败 doc={} err={}（搜索时将懒生成兜底）", doc_id, e
+                                );
+                                crate::harness::profile_health::record_error(
+                                    Some(pool),
+                                    profile_id.as_deref(),
+                                    &e.to_string(),
+                                )
+                                .await;
+                            }
                         }
                     }
                 }

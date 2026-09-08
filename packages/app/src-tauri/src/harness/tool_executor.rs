@@ -436,7 +436,12 @@ pub(crate) async fn execute_tool_round(
                         );
                     } else {
                         // 非视觉：复用统一适配（两档制第二档——平台视觉配置链代读）。
-                        let candidates = crate::harness::modal::gather_vision_candidates(&tool_ctx.pool)
+                        // app_handle 经 ToolContext 通道（profile 引用链解 Stronghold 用）。
+                        let candidates =
+                            crate::harness::modal::gather_vision_candidates(
+                                tool_ctx.app_handle.as_ref(),
+                                &tool_ctx.pool,
+                            )
                             .await;
                         let data = base64::engine::general_purpose::STANDARD.encode(&png);
                         let tmp = vec![ContentBlock::image(data, "image/png")];
@@ -445,6 +450,7 @@ pub(crate) async fn execute_tool_round(
                             false,
                             &candidates,
                             None,
+                            Some(&tool_ctx.pool),
                         )
                         .await;
                         // session-events：工具返图的投影期适配入日志（stage=tool_image，

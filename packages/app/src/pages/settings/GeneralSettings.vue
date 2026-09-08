@@ -1,27 +1,32 @@
 <!--
   GeneralSettings — 通用设置页（卡片分组式，2026-08-28 重设计）
 
-  三卡信息架构（ProjectSettings 同款 settings-card 惯例）：
-  1. 本地环境   工作空间（选定即存）/ 时区 / 数据目录（只读）
-  2. 语义检索   KB 嵌入配置（厂商/模型/Key + 逐项测试）+ 切换重建 overlay
-  3. 视觉读取   两档制平台代读链（主模型 + 可选降级条目，逐条测试）
+  三卡：本地环境 / 视觉读取 / 语义检索。视觉与语义检索引用「设置-模型」里的
+  模型配置实体（ModelProfile Phase 1：Key 一处换全局生效，实体在模型页维护，
+  本页管用哪个）；旧版明文配置仍在生效时展示 legacy 提示行（读侧回落，
+  boot 迁移失败下次重试）。
 
   约定：
   - 全字段即时保存（工作空间 = 目录选定即存）；成功 = 卡片头「已保存」2s 淡出，
     失败 = 字段级 ErrorBanner inline + retry（saveErrors 单一错误通道）
-  - 瞬态清理：onActivated 清测试态（KeepAlive 缓存下防「测试提示残留」误导持久化判断）
+  - 语义检索切换引用 / 模型身份变更 = 重建确认浮层（test → save → rebuild
+    三步流；与模型页被引用编辑共用 EmbedSwitchOverlay 组件）
   - 图标一律 @lucide/vue（HelpCircle/Folder/FolderOpen/LocateFixed/ChevronDown...）
 -->
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, onActivated, watch } from "vue";
+import { ref, computed, onMounted, onUnmounted, onActivated } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
 import { bridge } from "../../api/bridge";
 import { setTimezone } from "../../utils/time";
 import ErrorBanner from "../../components/common/ErrorBanner.vue";
 import Combobox from "../../components/common/Combobox.vue";
+import EmbedSwitchOverlay from "../../components/common/EmbedSwitchOverlay.vue";
+import type { ComboboxItem } from "../../components/common/Combobox.vue";
+import { useProviders } from "../../composables/useProviders";
+import { useModelProfiles, profileById } from "../../composables/useModelProfiles";
 import {
-  Plus, Trash2, FlaskConical, Loader2, Check, X,
   HelpCircle, Folder, FolderOpen, LocateFixed, ChevronDown,
+  Plus, Trash2, FlaskConical, Loader2, Check, X, ChevronUp,
 } from "@lucide/vue";
 import type { UserPreferences } from "../../types";
 
@@ -29,9 +34,9 @@ const prefs = ref<UserPreferences>({});
 const loading = ref(true);
 // 页级数据源失败（UI-2 banner 形态）：prefs 不可信时全页表态，防照空表单误配置
 const loadError = ref<string | null>(null);
-// 字段/动作级 inline 错误位（单一错误通道）：key = 'workspace'|'datadir'|'timezone'|'embedding'|'vision'
+// 字段/动作级 inline 错误位（单一错误通道）：key = 'workspace'|'datadir'|'timezone'
 const saveErrors = ref<Record<string, { msg: string; retry: () => void }>>({});
-/** 保存成功提示（键 = 卡片：local/embedding/vision），2s 淡出——状态上屏，不做保存按钮 */
+/** 保存成功提示（键 = 卡片：local），2s 淡出——状态上屏，不做保存按钮 */
 const savedTip = ref<Record<string, boolean>>({});
 
 function flashSaved(key: string) {
@@ -39,23 +44,22 @@ function flashSaved(key: string) {
   setTimeout(() => { savedTip.value[key] = false; }, 2000);
 }
 
-/** 错误文案剥掉 invoke 层包装前缀（[op/kind] 内部错误: ），只留正文 */
-function stripInvokePrefix(msg: string): string {
-  return msg.replace(/^\[[^\]]*\]\s*(?:内部错误:\s*)?/, "");
-}
-
 async function load() {
   loading.value = true;
   loadError.value = null;
   try {
-    const raw = await bridge.preferences.get();
+    const [raw] = await Promise.all([
+      bridge.preferences.get(),
+      loadProviders(),
+      sharedLoad(),
+    ]);
     // 统一为 / 分隔符（后端 Windows 返回 \）
     if (raw.default_workspace_path) {
       raw.default_workspace_path = raw.default_workspace_path.replace(/\\/g, "/");
     }
     prefs.value = raw;
-    oldEmbedding.value = { provider: raw.embedding_provider ?? "", model: raw.embedding_model ?? "" };
-    initVisionEntries(raw);
+    visionIds.value = raw.vision_profile_ids ? [...raw.vision_profile_ids] : [];
+    embeddingProfileId.value = raw.embedding_profile_id ?? "";
   } catch (e) {
     console.error("加载设置失败:", e);
     loadError.value = e instanceof Error ? e.message : String(e);
@@ -124,297 +128,222 @@ async function openDataDir() {
 onMounted(load);
 onMounted(loadDataDir);
 
-// KeepAlive 瞬态清理：测试态是「刚操作过」的即时反馈，回到本页时已过期——
-// 残留会误导用户分不清「缓存还在」还是「配置持久化」（2026-08-28 实测反馈）
+// KeepAlive 瞬态清理：测试态/成功提示是「刚操作过」的即时反馈，回到本页时已过期
 onActivated(() => {
   visionTests.value = {};
   embedTest.value = { status: "idle" };
 });
 
 // =========================================================================
-// 语义检索卡：KB 嵌入配置（provider/model/key + 测试）+ 切换重建 overlay
+// 模型引用目录（实体在「设置-模型」维护；本页管用哪个）
 // =========================================================================
-const embeddingProviders = ["智谱 GLM", "OpenAI", "DeepSeek"];
-const embeddingModelMap: Record<string, { provider: string; models: string[]; keyUrl: string }> = {
-  "智谱 GLM": { provider: "glm", models: ["embedding-3"], keyUrl: "https://open.bigmodel.cn/usercenter/proj-mgmt/apikeys" },
-  "OpenAI": { provider: "openai", models: ["text-embedding-3-small", "text-embedding-3-large"], keyUrl: "https://platform.openai.com/api-keys" },
-  "DeepSeek": { provider: "deepseek", models: [], keyUrl: "https://platform.deepseek.com/api_keys" },
-};
-/** Combobox 展示用的 provider 名（智谱 GLM / OpenAI / DeepSeek），反向映射回内部 provider key */
-const embeddingProviderDisplay = computed(() => {
-  const p = prefs.value.embedding_provider || "";
-  return Object.entries(embeddingModelMap).find(([, v]) => v.provider === p)?.[0] ?? "";
-});
-const embeddingModelSuggestions = computed(() => {
-  return embeddingModelMap[embeddingProviderDisplay.value]?.models ?? [];
-});
-const embeddingKeyUrl = computed(() => embeddingModelMap[embeddingProviderDisplay.value]?.keyUrl ?? "");
+const { providers: providerList, loadProviders } = useProviders();
+const { profiles, loadModelProfiles: sharedLoad } = useModelProfiles();
 
-watch(() => prefs.value.embedding_provider, (newProvider) => {
-  // Provider 变化时自动推荐默认模型
-  const display = Object.entries(embeddingModelMap).find(([, v]) => v.provider === newProvider)?.[0] ?? "";
-  const models = embeddingModelMap[display]?.models ?? [];
-  if (models.length > 0 && !prefs.value.embedding_model) {
-    prefs.value.embedding_model = models[0];
-    saveEmbedding();
-  }
-});
-
-/** 上次成功保存的 embedding 配置（检测"切换"：provider/model 变化才需重建） */
-const oldEmbedding = ref({ provider: "", model: "" });
-const pendingSwitch = ref<{ provider: string; model: string } | null>(null);
-const rebuilding = ref(false);
-const switchError = ref<string | null>(null);
-const switchInfo = ref<string | null>(null);
-
-/** 旧配置是否正在用（provider+model+key 齐全） */
-function isEmbeddingActive(): boolean {
-  const o = oldEmbedding.value;
-  return !!(o.provider && o.model && prefs.value.embedding_api_key);
+function providerLabelOf(name: string): string {
+  return providerList.value.find((p) => p.name === name)?.label ?? name;
 }
 
-/** provider 内部 key → 显示名（智谱 GLM/OpenAI/...），供 overlay 展示 */
-function providerDisplayName(providerKey: string): string {
-  return Object.entries(embeddingModelMap).find(([, v]) => v.provider === providerKey)?.[0] ?? providerKey;
-}
+/** 引用选择器条目（label 含厂商/模型，别名重复时也可辨认） */
+const profileItems = computed<ComboboxItem[]>(() =>
+  profiles.value.map((p) => ({
+    label: `${p.alias}（${providerLabelOf(p.provider)} · ${p.model}）`,
+    value: p.id,
+  })),
+);
 
-function onEmbeddingProviderChange(displayName: string) {
-  const mapping = embeddingModelMap[displayName];
-  const newProvider = mapping?.provider ?? "";
-  const newModel = mapping?.models[0] ?? "";
-  // 旧配置在用 + provider 变 → 二次确认（防维度不匹配静默失效）
-  if (isEmbeddingActive() && newProvider !== oldEmbedding.value.provider) {
-    pendingSwitch.value = { provider: newProvider, model: newModel };
-    switchError.value = null;
-  } else {
-    prefs.value.embedding_provider = newProvider;
-    prefs.value.embedding_model = newModel;
-    saveEmbedding();
-    oldEmbedding.value = { provider: newProvider, model: newModel };
-  }
-}
-
-function onEmbeddingModelChange(newModel: string) {
-  if (isEmbeddingActive() && newModel !== oldEmbedding.value.model) {
-    pendingSwitch.value = { provider: prefs.value.embedding_provider ?? "", model: newModel };
-    switchError.value = null;
-  } else {
-    prefs.value.embedding_model = newModel;
-    saveEmbedding();
-    oldEmbedding.value = { provider: prefs.value.embedding_provider ?? "", model: newModel };
-  }
-}
-
-/** 确认切换：健康检查新配置（先于清旧）→ 存 → 全量重建 */
-async function confirmSwitch() {
-  if (!pendingSwitch.value) return;
-  const { provider, model } = pendingSwitch.value;
-  rebuilding.value = true;
-  switchError.value = null;
-  try {
-    // 1. 健康检查新配置（先于清旧，防切到无效 + 旧向量已清的双重失效）
-    await bridge.kb.testEmbeddingConfig(
-      provider, model,
-      prefs.value.embedding_api_key ?? "",
-      prefs.value.embedding_base_url ?? undefined,
-    );
-    // 2. 存新配置
-    prefs.value.embedding_provider = provider;
-    prefs.value.embedding_model = model;
-    await saveEmbedding();
-    // 3. 全量重建（清旧维度向量 + 重新生成）
-    const stats = await bridge.kb.rebuildAllEmbeddings();
-    oldEmbedding.value = { provider, model };
-    pendingSwitch.value = null;
-    switchInfo.value = `已切换并重建 ${stats.chunks} 个向量（${stats.kbs} 个知识库）`;
-    setTimeout(() => { switchInfo.value = null; }, 4000);
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    switchError.value = `切换失败：${msg}（未切换，原配置保留）`;
-  } finally {
-    rebuilding.value = false;
-  }
-}
-
-function cancelSwitch() {
-  pendingSwitch.value = null;
-  switchError.value = null;
-}
-
-async function saveEmbedding() {
-  delete saveErrors.value.embedding;
-  embedTest.value = { status: "idle" };
-  try {
-    await Promise.all([
-      bridge.preferences.set("embedding_provider", prefs.value.embedding_provider ?? ""),
-      bridge.preferences.set("embedding_model", prefs.value.embedding_model ?? ""),
-      bridge.preferences.set("embedding_api_key", prefs.value.embedding_api_key ?? ""),
-    ]);
-    flashSaved("embedding");
-  } catch (e) {
-    console.error("保存 embedding 配置失败:", e);
-    saveErrors.value.embedding = { msg: e instanceof Error ? e.message : String(e), retry: () => void saveEmbedding() };
-  }
-}
-
-/** 逐项测试（与视觉读取对称）：健康检查当前 provider/model/key 三合一 */
-async function testEmbedding() {
-  embedTest.value = { status: "testing" };
-  try {
-    await bridge.kb.testEmbeddingConfig(
-      prefs.value.embedding_provider ?? "",
-      prefs.value.embedding_model ?? "",
-      prefs.value.embedding_api_key ?? "",
-      prefs.value.embedding_base_url ?? undefined,
-    );
-    embedTest.value = { status: "ok", msg: "连接正常" };
-  } catch (err) {
-    embedTest.value = { status: "fail", msg: err instanceof Error ? err.message : String(err) };
-  }
-}
-
-// =========================================================================
-// 视觉读取卡（两档制：agent 无视觉时由平台配置链代读）
-// =========================================================================
-// 条目链：主模型 + 可选降级（按序尝试、首个成功即用；marker 标注实际读图模型）。
-// 旧三环（agent 借凭据 / GLM 视觉 MCP env）已删——链的组装权交还显式配置。
-// 仅列真正提供视觉模型的 provider；MiniMax 仅 M3 支持图片输入（M2.x 不支持）。
-interface VisionEntryUI {
-  provider: string;
-  model: string;
-  apiKey: string;
-  baseUrl: string;
-}
 type TestState =
   | { status: "idle" }
   | { status: "testing" }
   | { status: "ok"; msg: string }
   | { status: "fail"; msg: string };
 
-const visionProviders = ["智谱 GLM", "智谱 Coding", "DeepSeek", "OpenAI", "MiniMax"];
-const visionModelMap: Record<string, { provider: string; models: string[]; keyUrl: string }> = {
-  "智谱 GLM": { provider: "glm", models: ["glm-5.3-flash", "glm-5v-turbo", "glm-4v-plus", "glm-4.5v", "glm-4v"], keyUrl: "https://open.bigmodel.cn/usercenter/proj-mgmt/apikeys" },
-  // Coding 套餐 key 只认 Coding 端点（标准端点必 1113），独立成档而非手填端点——与聊天侧端点胶囊同语义
-  "智谱 Coding": { provider: "glm-coding", models: ["glm-5.3-flash", "glm-5v-turbo", "glm-4v-plus", "glm-4.5v", "glm-4v"], keyUrl: "https://open.bigmodel.cn/usercenter/proj-mgmt/apikeys" },
-  "DeepSeek": { provider: "deepseek", models: ["deepseek-v4-flash-vision-exp"], keyUrl: "https://platform.deepseek.com/api_keys" },
-  "OpenAI": { provider: "openai", models: ["gpt-4o", "gpt-4o-mini"], keyUrl: "https://platform.openai.com/api-keys" },
-  "MiniMax": { provider: "minimax", models: ["MiniMax-M3"], keyUrl: "https://platform.minimaxi.com/" },
-};
-const visionEntries = ref<VisionEntryUI[]>([]);
-/** 逐条测试状态（键 = 条目下标）；保存/编辑重置为 idle */
+function msgOf(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+/** 错误文案剥掉 invoke 层包装前缀（[op/kind] 内部错误: ），只留正文 */
+function stripInvokePrefix(msg: string): string {
+  return msg.replace(/^\[[^\]]*\]\s*(?:内部错误:\s*)?/, "");
+}
+
+function okFailMsg(t: TestState): string {
+  return t.status === "ok" || t.status === "fail" ? stripInvokePrefix(t.msg) : "";
+}
+
+// =========================================================================
+// 卡 2：视觉读取（profile 引用链——主模型 + 降级 N）
+// =========================================================================
+const visionIds = ref<string[]>([]);
 const visionTests = ref<Record<number, TestState>>({});
-/** 语义检索的测试态（视觉区同形状） */
-const embedTest = ref<TestState>({ status: "idle" });
 
-/** prefs → 条目 UI：新格式权威；缺失回落旧四键单条目（存量兼容，首存即转新格式） */
-function initVisionEntries(raw: UserPreferences) {
-  if (raw.vision_config) {
-    visionEntries.value = raw.vision_config.map((e) => ({
-      provider: e.provider,
-      model: e.model,
-      apiKey: e.api_key,
-      baseUrl: e.base_url ?? "",
-    }));
-  } else if (raw.vision_provider) {
-    visionEntries.value = [{
-      provider: raw.vision_provider,
-      model: raw.vision_model ?? "",
-      apiKey: raw.vision_api_key ?? "",
-      baseUrl: raw.vision_base_url ?? "",
-    }];
-  } else {
-    visionEntries.value = [];
-  }
-  visionTests.value = {};
-}
+/** 旧版视觉配置仍在生效（vision_profile_ids 未落且旧字段有值）——读侧回落中 */
+const legacyVisionActive = computed(() => {
+  const p = prefs.value;
+  return p.vision_profile_ids == null && !!(p.vision_config?.length || p.vision_provider);
+});
 
-function visionProviderDisplayOf(entry: VisionEntryUI): string {
-  return Object.entries(visionModelMap).find(([, v]) => v.provider === entry.provider)?.[0] ?? "";
-}
-function visionModelSuggestionsOf(entry: VisionEntryUI): string[] {
-  return visionModelMap[visionProviderDisplayOf(entry)]?.models ?? [];
-}
-function visionKeyUrlOf(entry: VisionEntryUI): string {
-  return visionModelMap[visionProviderDisplayOf(entry)]?.keyUrl ?? "";
-}
-function visionTagOf(i: number): string {
-  return i === 0 ? "主模型" : `降级 ${i}`;
-}
-
-function onVisionProviderChange(i: number, displayName: string) {
-  const mapping = visionModelMap[displayName];
-  const e = visionEntries.value[i];
-  if (!e) return;
-  e.provider = mapping?.provider ?? "";
-  e.model = mapping?.models[0] ?? "";
-  saveVision();
-}
-function onVisionModelChange(i: number, newModel: string) {
-  const e = visionEntries.value[i];
-  if (!e) return;
-  e.model = newModel;
-  saveVision();
-}
-function addVisionEntry() {
-  visionEntries.value.push({ provider: "", model: "", apiKey: "", baseUrl: "" });
-  // 立即落库：空条目后端解析时跳过（无害），但不落库则「加了没填就刷新」会整行蒸发
-  saveVision();
-}
-function removeVisionEntry(i: number) {
-  visionEntries.value.splice(i, 1);
-  saveVision();
-}
-
-async function saveVision() {
+async function saveVisionChain() {
   delete saveErrors.value.vision;
   visionTests.value = {};
   try {
-    // 存量单配置在此转新格式（后端读侧：Some=权威，旧四键从此不再被读）
-    await bridge.preferences.set(
-      "vision_config",
-      visionEntries.value.map((e) => ({
-        provider: e.provider,
-        model: e.model,
-        api_key: e.apiKey,
-        base_url: e.baseUrl || null,
-      })),
-    );
+    // Some=权威（含 [] = 显式清空）；本地空占位行（""）过滤后再存
+    await bridge.preferences.set("vision_profile_ids", visionIds.value.filter((id) => id !== ""));
     flashSaved("vision");
   } catch (e) {
-    console.error("保存 vision 配置失败:", e);
-    saveErrors.value.vision = { msg: e instanceof Error ? e.message : String(e), retry: () => void saveVision() };
+    saveErrors.value.vision = { msg: stripInvokePrefix(msgOf(e)), retry: () => void saveVisionChain() };
   }
 }
 
-/** 逐条健康检查：1×1 探针图走完整代读链路（端点+key+模型三合一验证） */
-async function testVisionEntry(i: number) {
-  const e = visionEntries.value[i];
-  if (!e) return;
+function onChainPick(i: number, v: string) {
+  if (!profiles.value.some((p) => p.id === v)) return; // 手输不匹配 → 忽略
+  visionIds.value[i] = v;
+  saveVisionChain();
+}
+
+function moveChain(i: number, delta: -1 | 1) {
+  const j = i + delta;
+  if (j < 0 || j >= visionIds.value.length) return;
+  const ids = [...visionIds.value];
+  [ids[i], ids[j]] = [ids[j], ids[i]];
+  visionIds.value = ids;
+  saveVisionChain();
+}
+
+function removeChain(i: number) {
+  visionIds.value.splice(i, 1);
+  saveVisionChain();
+}
+
+function addChainEntry() {
+  // 本地空占位行：选择后才落库（空引用无信息量，刷新蒸发无害）
+  visionIds.value.push("");
+}
+
+async function testVisionAt(i: number) {
+  const id = visionIds.value[i];
+  if (!id) return;
   visionTests.value[i] = { status: "testing" };
   try {
-    const r = await bridge.preferences.testVisionConfig({
-      provider: e.provider,
-      model: e.model,
-      api_key: e.apiKey,
-      base_url: e.baseUrl || undefined,
-    });
+    const r = await bridge.modelProfiles.testVision(id);
     visionTests.value[i] = { status: "ok", msg: `${r.latency_ms} ms · ${r.sample || "（空回复）"}` };
-  } catch (err) {
-    visionTests.value[i] = { status: "fail", msg: err instanceof Error ? err.message : String(err) };
+  } catch (e) {
+    visionTests.value[i] = { status: "fail", msg: msgOf(e) };
   }
 }
+
 function visionTestOf(i: number): TestState {
   return visionTests.value[i] ?? { status: "idle" };
 }
-
-/** ok/fail 的结果文案（模板插值无法跨调用收窄联合类型，收口在此） */
-function embedTestMsgOf(): string {
-  const t = embedTest.value;
-  return t.status === "ok" || t.status === "fail" ? stripInvokePrefix(t.msg) : "";
-}
 function visionTestMsgOf(i: number): string {
-  const t = visionTestOf(i);
-  return t.status === "ok" || t.status === "fail" ? stripInvokePrefix(t.msg) : "";
+  return okFailMsg(visionTestOf(i));
+}
+
+// =========================================================================
+// 卡 3：语义检索（单 profile 引用 + 切换重建 overlay）
+// =========================================================================
+const embeddingProfileId = ref("");
+const embedTest = ref<TestState>({ status: "idle" });
+
+/** 旧版语义检索配置仍在生效（embedding_profile_id 未落且旧四键齐全） */
+const legacyEmbeddingActive = computed(() => {
+  const p = prefs.value;
+  return p.embedding_profile_id == null && !!(p.embedding_provider && p.embedding_model && p.embedding_api_key);
+});
+
+/** 当前引用是否活着（id 有值且实体存在——被删的悬空引用视同未启用） */
+const embeddingActive = computed(() =>
+  !!embeddingProfileId.value && !!profileById(profiles.value, embeddingProfileId.value),
+);
+
+function embeddingLabelOf(id: string): string {
+  const p = profileById(profiles.value, id);
+  return p ? `${p.alias}（${providerLabelOf(p.provider)} · ${p.model}）` : "（配置已删除）";
+}
+
+async function saveEmbeddingRef() {
+  delete saveErrors.value.embedding;
+  embedTest.value = { status: "idle" };
+  try {
+    // "" = 显式清空（Some 权威语义，旧四键从此不被读）
+    await bridge.preferences.set("embedding_profile_id", embeddingProfileId.value || "");
+    flashSaved("embedding");
+  } catch (e) {
+    saveErrors.value.embedding = { msg: stripInvokePrefix(msgOf(e)), retry: () => void saveEmbeddingRef() };
+  }
+}
+
+function onEmbeddingPick(v: string) {
+  if (!profiles.value.some((p) => p.id === v)) return; // 手输不匹配 → 忽略
+  if (v === embeddingProfileId.value) return;
+  if (embeddingActive.value) {
+    // 旧引用在用 → 二次确认（防维度不匹配静默失效）
+    pendingSwitch.value = { toId: v };
+    switchError.value = null;
+    return;
+  }
+  // 未启用 → 直接启用（无旧向量，无需重建）
+  embeddingProfileId.value = v;
+  saveEmbeddingRef();
+}
+
+function disableEmbedding() {
+  if (!embeddingProfileId.value) return;
+  embeddingProfileId.value = "";
+  saveEmbeddingRef();
+}
+
+async function testEmbedding() {
+  const id = embeddingProfileId.value;
+  if (!id) return;
+  embedTest.value = { status: "testing" };
+  try {
+    // profileId 腿：服务端取存量凭据（四参留空不参与）
+    await bridge.kb.testEmbeddingConfig("", "", "", undefined, id);
+    embedTest.value = { status: "ok", msg: "连接正常" };
+  } catch (e) {
+    embedTest.value = { status: "fail", msg: msgOf(e) };
+  }
+}
+
+// ---- 切换重建 overlay（本页触发源 = 卡 3 换引用；模型页编辑被引用实体共用组件）----
+const pendingSwitch = ref<{ toId: string } | null>(null);
+const rebuilding = ref(false);
+const switchError = ref<string | null>(null);
+const switchInfo = ref<string | null>(null);
+
+function cancelPending() {
+  pendingSwitch.value = null;
+  switchError.value = null;
+}
+
+/** 先测新（未清旧）→ 存引用 → 全量重建 */
+async function confirmEmbeddingSwitch() {
+  const ps = pendingSwitch.value;
+  if (!ps) return;
+  rebuilding.value = true;
+  switchError.value = null;
+  try {
+    await bridge.kb.testEmbeddingConfig("", "", "", undefined, ps.toId);
+  } catch (e) {
+    switchError.value = `切换失败：${stripInvokePrefix(msgOf(e))}（未切换，原配置保留）`;
+    rebuilding.value = false;
+    return;
+  }
+  try {
+    embeddingProfileId.value = ps.toId;
+    await saveEmbeddingRef();
+    const stats = await bridge.kb.rebuildAllEmbeddings();
+    pendingSwitch.value = null;
+    switchInfo.value = `已切换并重建 ${stats.chunks} 个向量（${stats.kbs} 个知识库）`;
+    setTimeout(() => { switchInfo.value = null; }, 4000);
+  } catch (e) {
+    // 引用已切、重建失败：诚实区分（不是「未切换」）——overlay 关闭，错误留卡内
+    pendingSwitch.value = null;
+    switchError.value = `已切换到新配置，但向量重建失败：${stripInvokePrefix(msgOf(e))}——可修正配置后重新测试；索引将在下次文档变更时按新配置生成`;
+  } finally {
+    rebuilding.value = false;
+  }
 }
 
 // =========================================================================
@@ -801,7 +730,81 @@ const hasFilterResults = computed(() => {
         </div>
       </section>
 
-      <!-- ===== 卡 2：语义检索 ===== -->
+      <!-- ===== 卡 2：视觉读取（引用链）===== -->
+      <section class="settings-card">
+        <div class="card-head">
+          <div class="card-head-text">
+            <h3 class="card-title">
+              视觉读取 · 图片代读
+              <span class="tip-icon" data-tip="Agent 模型无视觉能力时，图片/扫描件由这里的配置链代读成文字。&#10;· Agent 自带视觉 → 直接用自己的模型读图，不经此链。&#10;· 按条目顺序尝试，首个成功即用；代读文本会标注实际读图模型。&#10;· 模型本体（含 Key）在「设置-模型」里维护。&#10;· 未配置 → 图片仅保留占位提示，无法代读。">
+                <HelpCircle :size="14" />
+              </span>
+            </h3>
+            <p class="card-hint">无视觉能力的 Agent 发图时，按此链把图代读成文字（主模型 + 降级，逐个尝试）</p>
+          </div>
+          <span v-if="savedTip.vision" class="save-tip">已保存</span>
+        </div>
+
+        <div v-if="legacyVisionActive" class="legacy-note">
+          旧版视觉配置仍在生效——下次启动将自动迁移为模型配置引用；在此处添加引用并保存后改用新引用链。
+        </div>
+
+        <div v-if="visionIds.length === 0" class="vision-empty">
+          <span v-if="legacyVisionActive">未配置引用链——旧版配置迁移前，代读继续走旧配置。</span>
+          <span v-else>未配置——无视觉能力的 Agent 发图或扫描件将无法代读。先在「设置-模型」创建模型配置，再在此引用。</span>
+        </div>
+        <template v-else>
+          <div v-for="(id, i) in visionIds" :key="i" class="vision-entry">
+            <div class="vision-entry-head">
+              <span class="vision-tag" :class="{ 'vision-tag--primary': i === 0 }">{{ i === 0 ? "主模型" : `降级 ${i}` }}</span>
+              <div class="chain-ops">
+                <button class="vision-icon-btn" :disabled="i === 0" title="上移" @click="moveChain(i, -1)">
+                  <ChevronUp :size="14" />
+                </button>
+                <button class="vision-icon-btn" :disabled="i === visionIds.length - 1" title="下移" @click="moveChain(i, 1)">
+                  <ChevronDown :size="14" />
+                </button>
+                <button class="vision-icon-btn" title="移除此引用" @click="removeChain(i)">
+                  <Trash2 :size="14" />
+                </button>
+              </div>
+            </div>
+            <div class="input-group">
+              <Combobox
+                :model-value="id"
+                :items="profileItems"
+                placeholder="选择模型配置"
+                @update:model-value="(v: string) => onChainPick(i, v)"
+              />
+              <button
+                class="btn"
+                :disabled="visionTestOf(i).status === 'testing' || !id"
+                title="用此配置代读 1×1 探针图（端点 + Key + 模型三合一验证）"
+                @click="testVisionAt(i)"
+              >
+                <Loader2 v-if="visionTestOf(i).status === 'testing'" :size="14" class="spin" />
+                <FlaskConical v-else :size="14" />
+                {{ visionTestOf(i).status === "testing" ? "测试中…" : "测试" }}
+              </button>
+            </div>
+            <div v-if="id && !profileById(profiles, id)" class="test-result">
+              <X :size="14" class="test-fail-icon" />
+              <span class="test-fail-text">该配置已被删除——请重新选择，或移除本条</span>
+            </div>
+            <div v-else-if="visionTestOf(i).status === 'ok' || visionTestOf(i).status === 'fail'" class="test-result">
+              <Check v-if="visionTestOf(i).status === 'ok'" :size="14" class="test-ok-icon" />
+              <X v-else :size="14" class="test-fail-icon" />
+              <span :class="visionTestOf(i).status === 'ok' ? 'test-ok-text' : 'test-fail-text'" :title="visionTestMsgOf(i)">{{ visionTestMsgOf(i) }}</span>
+            </div>
+          </div>
+          <button class="btn vision-add-fallback" @click="addChainEntry">
+            <Plus :size="14" />添加降级模型
+          </button>
+        </template>
+        <ErrorBanner v-if="saveErrors.vision" variant="inline" title="保存失败" :detail="saveErrors.vision.msg" @retry="saveErrors.vision?.retry()" />
+      </section>
+
+      <!-- ===== 卡 3：语义检索（单引用 + 切换重建）===== -->
       <section class="settings-card">
         <div class="card-head">
           <div class="card-head-text">
@@ -811,147 +814,62 @@ const hasFilterResults = computed(() => {
           <span v-if="savedTip.embedding" class="save-tip">已保存</span>
         </div>
 
-        <div class="pair-grid" :class="{ single: !prefs.embedding_provider }">
-          <div class="field">
-            <div class="field-label">厂商</div>
-            <Combobox
-              :model-value="embeddingProviderDisplay"
-              :options="embeddingProviders"
-              placeholder="未启用"
-              @update:model-value="onEmbeddingProviderChange"
-            />
-          </div>
-          <div v-if="prefs.embedding_provider" class="field">
-            <div class="field-label">模型</div>
-            <Combobox
-              v-if="embeddingModelSuggestions.length > 0"
-              :model-value="prefs.embedding_model || ''"
-              :options="embeddingModelSuggestions"
-              placeholder="选择或输入模型名"
-              @update:model-value="onEmbeddingModelChange"
-            />
-            <input v-else v-model="prefs.embedding_model" class="form-input" placeholder="输入模型名" @blur="saveEmbedding" />
-          </div>
+        <div v-if="legacyEmbeddingActive" class="legacy-note">
+          旧版语义检索配置仍在生效——下次启动将自动迁移为模型配置引用。
         </div>
-        <div v-if="prefs.embedding_provider" class="field">
-          <div class="field-label">API Key</div>
-          <div class="input-group">
-            <input v-model="prefs.embedding_api_key" type="password" class="form-input" placeholder="粘贴 API Key" @blur="saveEmbedding" />
-            <button
-              class="btn"
-              :disabled="embedTest.status === 'testing' || !prefs.embedding_provider || !prefs.embedding_model || !prefs.embedding_api_key"
-              @click="testEmbedding"
-            >
-              <Loader2 v-if="embedTest.status === 'testing'" :size="14" class="spin" />
-              <FlaskConical v-else :size="14" />
-              {{ embedTest.status === "testing" ? "测试中…" : "测试" }}
-            </button>
-          </div>
-          <a v-if="embeddingKeyUrl" :href="embeddingKeyUrl" target="_blank" class="embed-key-link">申请 Key →</a>
-          <div v-if="embedTest.status === 'ok' || embedTest.status === 'fail'" class="test-result">
-            <Check v-if="embedTest.status === 'ok'" :size="14" class="test-ok-icon" />
-            <X v-else :size="14" class="test-fail-icon" />
-            <span :class="embedTest.status === 'ok' ? 'test-ok-text' : 'test-fail-text'" :title="embedTestMsgOf()">{{ embedTestMsgOf() }}</span>
-          </div>
+
+        <div class="input-group">
+          <Combobox
+            :model-value="embeddingProfileId"
+            :items="profileItems"
+            placeholder="未启用——选择模型配置"
+            @update:model-value="onEmbeddingPick"
+          />
+          <button v-if="embeddingProfileId" class="btn" title="停用语义检索（保留已生成的向量，关键词检索不受影响）" @click="disableEmbedding">停用</button>
+          <button
+            class="btn"
+            :disabled="embedTest.status === 'testing' || !embeddingActive"
+            title="用当前配置 embed 一条测试文本（端点 + Key + 模型三合一验证）"
+            @click="testEmbedding"
+          >
+            <Loader2 v-if="embedTest.status === 'testing'" :size="14" class="spin" />
+            <FlaskConical v-else :size="14" />
+            {{ embedTest.status === "testing" ? "测试中…" : "测试" }}
+          </button>
+        </div>
+        <div v-if="embedTest.status === 'ok' || embedTest.status === 'fail'" class="test-result">
+          <Check v-if="embedTest.status === 'ok'" :size="14" class="test-ok-icon" />
+          <X v-else :size="14" class="test-fail-icon" />
+          <span :class="embedTest.status === 'ok' ? 'test-ok-text' : 'test-fail-text'" :title="okFailMsg(embedTest)">{{ okFailMsg(embedTest) }}</span>
+        </div>
+        <!-- 切换重建结果（overlay 关闭后留屏 4s——成功信息不随 overlay 蒸发） -->
+        <div v-if="switchInfo" class="test-result">
+          <Check :size="14" class="test-ok-icon" />
+          <span class="test-ok-text">{{ switchInfo }}</span>
+        </div>
+        <div v-if="embeddingProfileId && !profileById(profiles, embeddingProfileId)" class="test-result">
+          <X :size="14" class="test-fail-icon" />
+          <span class="test-fail-text">引用的配置已被删除——语义检索处于未启用状态，请重新选择</span>
         </div>
         <ErrorBanner v-if="saveErrors.embedding" variant="inline" title="保存失败" :detail="saveErrors.embedding.msg" @retry="saveErrors.embedding?.retry()" />
       </section>
 
-      <!-- 切换 embedding 模型确认 overlay -->
-      <Transition name="overlay">
-        <div v-if="pendingSwitch" class="embed-switch-overlay" @click.self="cancelSwitch">
-          <div class="embed-switch-panel" @click.stop>
-            <h3>切换语义检索模型？</h3>
-            <p class="embed-switch-row">当前：<b>{{ providerDisplayName(oldEmbedding.provider) }} / {{ oldEmbedding.model }}</b></p>
-            <p class="embed-switch-row">切换到：<b>{{ providerDisplayName(pendingSwitch.provider) }} / {{ pendingSwitch.model }}</b></p>
-            <p class="embed-switch-warn">切换后知识库向量将失效并自动重建（可能需几十秒）。</p>
-            <div v-if="switchError" class="embed-switch-error">{{ switchError }}</div>
-            <div v-if="switchInfo" class="embed-switch-info">{{ switchInfo }}</div>
-            <div class="embed-switch-actions">
-              <button class="btn" :disabled="rebuilding" @click="cancelSwitch">取消</button>
-              <button class="btn btn-primary" :disabled="rebuilding" @click="confirmSwitch">
-                {{ rebuilding ? "重建中…" : "确认切换并重建" }}
-              </button>
-            </div>
-          </div>
-        </div>
-      </Transition>
-
-      <!-- ===== 卡 3：视觉读取（两档制：agent 无视觉时由平台配置链代读）===== -->
-      <section class="settings-card">
-        <div class="card-head">
-          <div class="card-head-text">
-            <h3 class="card-title">
-              视觉读取 · 图片代读
-              <span class="tip-icon" data-tip="Agent 模型无视觉能力时，图片/扫描件由这里的配置链代读成文字。&#10;· Agent 自带视觉 → 直接用自己的模型读图，不经此链。&#10;· 按条目顺序尝试，首个成功即用；代读文本会标注实际读图模型。&#10;· 智谱 Coding 套餐请选「智谱 Coding」档（标准端点不认 Coding 额度）。&#10;· 未配置 → 图片仅保留占位提示，无法代读。">
-                <HelpCircle :size="14" />
-              </span>
-            </h3>
-            <p class="card-hint">无视觉能力的 Agent 发图时，由这条模型链把图代读成文字</p>
-          </div>
-          <span v-if="savedTip.vision" class="save-tip">已保存</span>
-        </div>
-
-        <!-- 空态即引导：说明后果 + 直达下一步 -->
-        <div v-if="visionEntries.length === 0" class="vision-empty">
-          <span>未配置——无视觉能力的 Agent 发图或扫描件将无法代读。</span>
-          <button class="btn" @click="addVisionEntry">
-            <Plus :size="14" />配置主模型
-          </button>
-        </div>
-        <template v-else>
-          <div v-for="(e, i) in visionEntries" :key="i" class="vision-entry">
-            <div class="vision-entry-head">
-              <span class="vision-tag" :class="{ 'vision-tag--primary': i === 0 }">{{ visionTagOf(i) }}</span>
-              <button
-                class="vision-icon-btn"
-                :title="i === 0 ? (visionEntries.length > 1 ? '删除主模型（降级条目将上移）' : '删除（清空视觉读取配置）') : '删除此降级条目'"
-                @click="removeVisionEntry(i)"
-              >
-                <Trash2 :size="14" />
-              </button>
-            </div>
-            <div v-if="visionTestOf(i).status === 'ok' || visionTestOf(i).status === 'fail'" class="test-result">
-              <Check v-if="visionTestOf(i).status === 'ok'" :size="14" class="test-ok-icon" />
-              <X v-else :size="14" class="test-fail-icon" />
-              <span :class="visionTestOf(i).status === 'ok' ? 'test-ok-text' : 'test-fail-text'" :title="visionTestMsgOf(i)">{{ visionTestMsgOf(i) }}</span>
-            </div>
-            <div class="pair-grid">
-              <Combobox
-                :model-value="visionProviderDisplayOf(e)"
-                :options="visionProviders"
-                placeholder="厂商"
-                @update:model-value="(v: string) => onVisionProviderChange(i, v)"
-              />
-              <Combobox
-                v-if="visionModelSuggestionsOf(e).length > 0"
-                :model-value="e.model"
-                :options="visionModelSuggestionsOf(e)"
-                placeholder="模型"
-                @update:model-value="(v: string) => onVisionModelChange(i, v)"
-              />
-              <input v-else v-model="e.model" class="form-input" placeholder="模型名" @blur="saveVision" />
-            </div>
-            <div class="input-group">
-              <input v-model="e.apiKey" type="password" class="form-input" placeholder="API Key" @blur="saveVision" />
-              <button class="btn" :disabled="visionTestOf(i).status === 'testing' || !e.model || !e.apiKey" @click="testVisionEntry(i)">
-                <Loader2 v-if="visionTestOf(i).status === 'testing'" :size="14" class="spin" />
-                <FlaskConical v-else :size="14" />
-                {{ visionTestOf(i).status === "testing" ? "测试中…" : "测试" }}
-              </button>
-            </div>
-            <a v-if="visionKeyUrlOf(e)" :href="visionKeyUrlOf(e)" target="_blank" class="embed-key-link">申请 Key →</a>
-            <input v-model="e.baseUrl" class="form-input vision-url-input" placeholder="端点 URL（可选，默认按厂商官方端点）" @blur="saveVision" />
-          </div>
-          <button class="btn vision-add-fallback" @click="addVisionEntry">
-            <Plus :size="14" />添加降级模型
-          </button>
-        </template>
-        <ErrorBanner v-if="saveErrors.vision" variant="inline" title="保存失败" :detail="saveErrors.vision.msg" @retry="saveErrors.vision?.retry()" />
-      </section>
-
       </div>
     </template>
+
+    <!-- 切换语义检索模型：重建确认（与模型页被引用编辑共用 EmbedSwitchOverlay） -->
+    <EmbedSwitchOverlay
+      v-if="pendingSwitch"
+      title="切换语义检索模型？"
+      :rows="[
+        { label: '当前', value: embeddingLabelOf(embeddingProfileId) },
+        { label: '切换到', value: embeddingLabelOf(pendingSwitch.toId) },
+      ]"
+      :error="switchError"
+      :rebuilding="rebuilding"
+      @cancel="cancelPending"
+      @confirm="confirmEmbeddingSwitch"
+    />
   </div>
 </template>
 
@@ -1125,7 +1043,7 @@ const hasFilterResults = computed(() => {
   color: var(--ip-primary-600);
 }
 
-/* ===== 按钮 ===== */
+/* ===== 通用按钮（视觉/语义卡的测试/停用/添加） ===== */
 .btn {
   display: inline-flex;
   align-items: center;
@@ -1148,36 +1066,9 @@ const hasFilterResults = computed(() => {
   border-color: var(--ip-color-border-focus);
   color: var(--ip-primary-600);
 }
-.btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-.btn-primary {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  height: var(--ip-input-h-sm);
-  padding: 0 12px;
-  font-size: var(--ip-text-body-sm-size);
-  font-weight: var(--ip-font-weight-medium);
-  color: white;
-  background-color: var(--ip-primary-600);
-  border: none;
-  border-radius: var(--ip-radius-md);
-  cursor: pointer;
-  white-space: nowrap;
-  transition: background-color var(--ip-duration-fast) var(--ip-ease-out);
-}
-.btn-primary:hover {
-  background-color: var(--ip-primary-700);
-}
-.btn-primary:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
+.btn:disabled { opacity: 0.6; cursor: not-allowed; }
 
-/* ===== 测试结果块（语义检索/视觉条目共用）：长错误文案（含 provider JSON 片段）可换行 */
+/* ===== 测试结果块 ===== */
 .test-result {
   display: flex;
   align-items: flex-start;
@@ -1193,80 +1084,21 @@ const hasFilterResults = computed(() => {
 .test-fail-icon { color: var(--ip-danger-text); flex-shrink: 0; margin-top: 1px; }
 .test-fail-text { color: var(--ip-danger-text); word-break: break-all; }
 
-/* Embedding: Combobox 高度统一到 32px（和 form-input 一致） */
+/* Combobox 高度统一（和 form-input 一致） */
 :deep(.combobox-input-wrap) {
   height: var(--ip-input-h-sm);
 }
-.embed-key-link {
-  font-size: var(--ip-text-caption-size);
-  color: var(--ip-primary-600);
-  text-decoration: none;
-  white-space: nowrap;
-}
-.embed-key-link:hover { text-decoration: underline; }
 
-/* ===== 切换 embedding 模型确认 overlay ===== */
-.embed-switch-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.4);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: var(--ip-z-dropdown);
+.spin { animation: rotate-cw 1s linear infinite; }
+@keyframes rotate-cw {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
-.embed-switch-panel {
-  width: 380px;
-  max-width: 90vw;
-  padding: 20px 22px;
-  background: var(--ip-color-bg-primary);
-  border: 1px solid var(--ip-color-border-default);
-  border-radius: 12px;
-  box-shadow: var(--ip-shadow-lg);
-  display: flex;
-  flex-direction: column;
-  gap: var(--ip-spacing-2);
-}
-.embed-switch-panel h3 {
-  margin: 0 0 4px;
-  font-size: var(--ip-text-body-size);
-  font-weight: var(--ip-font-weight-semibold);
-  color: var(--ip-color-text-primary);
-}
-.embed-switch-row {
-  margin: 0;
-  font-size: var(--ip-text-body-sm-size);
-  color: var(--ip-color-text-secondary);
-}
-.embed-switch-warn {
-  margin: 0;
-  font-size: var(--ip-text-caption-size);
-  color: var(--ip-color-text-tertiary);
-  line-height: 1.5;
-}
-.embed-switch-error {
-  font-size: var(--ip-text-caption-size);
-  color: var(--ip-danger-text);
-  line-height: 1.5;
-}
-.embed-switch-info {
-  font-size: var(--ip-text-caption-size);
-  color: var(--ip-success-text);
-}
-.embed-switch-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--ip-spacing-2);
-  margin-top: 6px;
-}
-.overlay-enter-active, .overlay-leave-active {
-  transition: opacity var(--ip-duration-fast) var(--ip-ease-out);
-}
-.overlay-enter-from, .overlay-leave-to {
-  opacity: 0;
+@media (prefers-reduced-motion: reduce) {
+  .spin { animation: none; }
 }
 
-/* ===== 视觉读取条目编辑器 ===== */
+/* ===== 视觉引用链条目 ===== */
 .vision-empty {
   display: flex;
   align-items: center;
@@ -1275,7 +1107,6 @@ const hasFilterResults = computed(() => {
   color: var(--ip-color-text-tertiary);
   line-height: 1.5;
 }
-.vision-empty .btn { flex-shrink: 0; }
 
 .vision-entry {
   display: flex;
@@ -1289,7 +1120,7 @@ const hasFilterResults = computed(() => {
 .vision-entry-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: var(--ip-spacing-2);
   min-height: 22px;
 }
 .vision-tag {
@@ -1306,6 +1137,12 @@ const hasFilterResults = computed(() => {
   background: var(--ip-primary-600);
   border-color: var(--ip-primary-600);
 }
+.chain-ops {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
 .vision-icon-btn {
   display: inline-flex;
   align-items: center;
@@ -1320,31 +1157,19 @@ const hasFilterResults = computed(() => {
   cursor: pointer;
   transition: color var(--ip-duration-fast) var(--ip-ease-out), background var(--ip-duration-fast) var(--ip-ease-out);
 }
-.vision-icon-btn:hover { color: var(--ip-danger-text); background: var(--ip-color-bg-tertiary); }
-
-/* 厂商|模型 双列（语义检索/视觉条目共用语言）；.single=未启用时厂商满宽 */
-.pair-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
-  gap: var(--ip-spacing-2);
-  align-items: start;
-}
-.pair-grid.single {
-  grid-template-columns: minmax(0, 1fr);
-}
-/* 独占一行的 form-input（vision-entry 是 column flex，.form-input 的 flex:1 会把
-   flex-basis 压成 0% 塌掉 height）——flex:none 让 height 令牌生效 */
-.vision-url-input { flex: none; }
-
+.vision-icon-btn:hover:not(:disabled) { color: var(--ip-danger-text); background: var(--ip-color-bg-tertiary); }
+.vision-icon-btn:disabled { opacity: 0.35; cursor: default; }
+.vision-icon-btn:first-child:hover:not(:disabled) { color: var(--ip-primary-600); }
 .vision-add-fallback { align-self: flex-start; }
 
-.spin { animation: rotate-cw 1s linear infinite; }
-@keyframes rotate-cw {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .spin { animation: none; }
+/* legacy 提示行（旧配置仍在生效——读侧回落，等待 boot 迁移） */
+.legacy-note {
+  padding: var(--ip-spacing-2) var(--ip-spacing-3);
+  border-radius: var(--ip-radius-sm);
+  background: var(--ip-warning-bg);
+  font-size: var(--ip-text-caption-size);
+  color: var(--ip-warning-text);
+  line-height: 1.5;
 }
 
 /* ===== 问号提示图标 ===== */

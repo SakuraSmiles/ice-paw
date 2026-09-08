@@ -75,21 +75,119 @@ impl AdaptOutcome {
 
 /// 从 DB 读平台视觉配置，解析成**有序凭据链**（两档制的第二档）。
 ///
-/// 候选 = 设置-通用-视觉读取的条目链（主模型 → 降级① → …，见
-/// [`vision::resolve_vision_entries`]；旧四键单配置自动回落兼容）。
-/// 非视觉 agent 的图按此顺序逐条尝试代读。DB 读取失败仅 warn 返回空链
-/// （走诚实剥离，不阻塞主流程）。
-pub async fn gather_vision_candidates(pool: &SqlitePool) -> Vec<VisionCredential> {
-    match repo::preferences::get_all(pool).await {
-        Ok(prefs) => vision::resolve_vision_entries(&prefs),
+/// 双路径（ModelProfile Phase 1）：
+/// - `vision_profile_ids = Some(ids)` → **profile 引用链**：逐 id 查 model_profiles
+///   行 + Stronghold 解 key，`source` = 别名（日志归因升级）。无效条目 warn 跳过
+///   不阻塞（行没了 / key 缺 / 厂商无 OpenAI 兼容端点）。
+/// - `None` → 旧格式回落：[`vision::resolve_vision_entries`]（vision_config 条目链 /
+///   旧四键单条目），纯 DB 数据自足、不需要 AppHandle。
+///
+/// profile 路径需要 `app`（Stronghold 解密）；`None`（测试 / 早期启动）时该路径
+/// 降级为空链（warn）——降级不阻塞，图片走诚实剥离。DB 读取失败同款 warn 空链。
+/// **刻意不加缓存**：每次全量读（1 SELECT + N 条 PK 查 + N 次内存 Stronghold get），
+/// 换来「换 Key / 换模型立即生效」——缓存失效链会把这个核心卖点变成「过期后生效」。
+pub async fn gather_vision_candidates(
+    app: Option<&tauri::AppHandle>,
+    pool: &SqlitePool,
+) -> Vec<VisionCredential> {
+    let prefs = match repo::preferences::get_all(pool).await {
+        Ok(p) => p,
         Err(e) => {
             tracing::warn!(
                 target: "ice_paw.modal",
                 err = %e, "读取 preferences 失败，无视觉凭据可用"
             );
-            Vec::new()
+            return Vec::new();
+        }
+    };
+    let Some(ids) = prefs.vision_profile_ids.as_ref() else {
+        return vision::resolve_vision_entries(&prefs);
+    };
+    let Some(app) = app else {
+        tracing::warn!(
+            target: "ice_paw.modal",
+            "视觉引用链（vision_profile_ids）已配置但无 AppHandle 可解 Stronghold，本次降级为空链"
+        );
+        return Vec::new();
+    };
+    let mut out = Vec::with_capacity(ids.len());
+    for id in ids {
+        if let Some(cred) = resolve_profile_credential(app, pool, id).await {
+            out.push(cred);
         }
     }
+    out
+}
+
+/// 单条 profile → 视觉凭据。无效（行没了 / key 缺失 / 厂商无 OpenAI 兼容端点）
+/// 返回 None + warn——链上其余条目照常，主流程不阻塞。
+async fn resolve_profile_credential(
+    app: &tauri::AppHandle,
+    pool: &SqlitePool,
+    id: &str,
+) -> Option<VisionCredential> {
+    let row = match repo::model_profile::get_by_id(pool, id).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(
+                target: "ice_paw.modal",
+                err = %e,
+                "视觉引用链中的模型配置 {id} 不存在（已删？），跳过——请到「设置-模型」修链"
+            );
+            return None;
+        }
+    };
+    let (api_key, vault_url) = match crate::crypto::fetch_api_key(app, &row.api_key_ref) {
+        Ok(pair) => pair,
+        Err(e) => {
+            tracing::warn!(
+                target: "ice_paw.modal",
+                err = %e,
+                alias = %row.alias,
+                "视觉引用链中的模型配置「{}」Key 缺失，跳过——请到「设置-模型」补 Key",
+                row.alias
+            );
+            return None;
+        }
+    };
+    // 端点三层：行显式 > vault 副本 > 注册表 openai_url（端点成对原则，不猜第三方）
+    let explicit = row
+        .base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    let base_url = explicit
+        .or_else(|| {
+            vault_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+        })
+        .or_else(|| {
+            crate::harness::provider::provider_openai_url(&row.provider).map(String::from)
+        });
+    let Some(base_url) = base_url else {
+        tracing::warn!(
+            target: "ice_paw.modal",
+            provider = %row.provider,
+            alias = %row.alias,
+            "视觉引用链中的模型配置「{}」厂商无 OpenAI 兼容端点，跳过",
+            row.alias
+        );
+        return None;
+    };
+    Some(VisionCredential {
+        provider: row.provider,
+        model: row.model,
+        base_url,
+        api_key,
+        // 日志归因：别名直接可读（旧格式是「视觉配置#N」序号，无语义）
+        source: format!("模型配置「{}」", row.alias),
+        // 状态监控归因：代读成败回写该 profile 的健康三列
+        profile_id: Some(id.to_string()),
+    })
 }
 
 /// 按"目标模型是否支持视觉"统一适配 blocks（4 个图片入口共用）。
@@ -104,11 +202,15 @@ pub async fn gather_vision_candidates(pool: &SqlitePool) -> Vec<VisionCredential
 /// 语义的代价；如需避免重复提示，未来可在 DB 侧缓存代读结果（当前 YAGNI）。
 ///
 /// 网络错误被内部吸收（计入 dropped），**绝不向上抛**——视觉适配失败不应中断主对话循环。
+///
+/// `pool`（可选）：透传 [`ocr_image`] 的状态监控记录通道——profile 凭据成败回写
+/// 健康三列；None（测试 / 无 DB 语境）零记录。
 pub async fn adapt_blocks_for_vision(
     blocks: &[ContentBlock],
     effective_vision: bool,
     candidates: &[VisionCredential],
     on_progress: Option<ProgressCb<'_>>,
+    pool: Option<&SqlitePool>,
 ) -> AdaptOutcome {
     // 视觉模型：原样过（绝大多数 agent 走这条，零开销）。
     if effective_vision {
@@ -137,7 +239,7 @@ pub async fn adapt_blocks_for_vision(
 
     for (index, b) in blocks.iter().enumerate() {
         if let ContentBlock::Image { data, media_type } = b {
-            let result = ocr_image(data, media_type, candidates).await;
+            let result = ocr_image(data, media_type, candidates, pool).await;
             match result {
                 Ok(hit) => {
                     ocr_replaced += 1;
@@ -277,10 +379,14 @@ struct OcrHit {
 ///   优先于凭据级瞬态错误；否则取首个），驱动诚实提示文案分支。
 ///
 /// 网络/凭据错误不向上抛——调用方计入 `dropped` 走诚实剥离，绝不中断主对话。
+///
+/// `pool`（可选）：状态监控记录通道——profile 凭据（`profile_id = Some`）的成败
+/// 逐条回写健康三列（成功记 ok、失败记分类 + 原文）；None（测试）跳过记录。
 async fn ocr_image(
     data_base64: &str,
     media_type: &str,
     candidates: &[VisionCredential],
+    pool: Option<&SqlitePool>,
 ) -> Result<OcrHit, Option<LlmErrorKind>> {
     use base64::Engine as _;
 
@@ -309,6 +415,8 @@ async fn ocr_image(
                     chars = text.len(),
                     "视觉凭据代读图片成功"
                 );
+                // 状态监控：真实调用成功（旧格式凭据 profile_id=None 自动跳过）
+                crate::harness::profile_health::record_ok(pool, cred.profile_id.as_deref()).await;
                 return Ok(OcrHit {
                     text,
                     reader: cred.model.clone(),
@@ -326,6 +434,9 @@ async fn ocr_image(
                     kind = ?kind,
                     "视觉凭据代读失败，尝试下一级"
                 );
+                // 状态监控：失败同样沉淀（链上后续凭据成功是它自己的 ok，互不覆盖错位）
+                crate::harness::profile_health::record_error(pool, cred.profile_id.as_deref(), &msg)
+                    .await;
                 // prefer：Sensitive（输入判定：图本身违规）优先于凭据级瞬态错误，
                 // 否则取首个。旧实现 `= Some(kind)` 只留最后一个 → 把首选凭据正确给出
                 // 的 Sensitive 丢成末位凭据的限流/余额，掩盖真正原因。
@@ -364,7 +475,7 @@ mod tests {
             img("BBBB", "image/jpeg"),
         ];
         // 视觉模型 + 空凭据清单：仍原样过（不触发代读）。
-        let out = adapt_blocks_for_vision(&blocks, true, &[], None).await;
+        let out = adapt_blocks_for_vision(&blocks, true, &[], None, None).await;
         assert_eq!(out.blocks.len(), 3, "passthrough 应保持块数");
         // 两张图原样保留（ContentBlock 无 PartialEq，按位置/类型断言）
         assert!(out.blocks[1].is_image());
@@ -383,7 +494,7 @@ mod tests {
             img("AAAA", "image/png"),
             img("BBBB", "image/jpeg"),
         ];
-        let out = adapt_blocks_for_vision(&blocks, false, &[], None).await;
+        let out = adapt_blocks_for_vision(&blocks, false, &[], None, None).await;
         // 两张图都被剥离
         assert_eq!(out.dropped, 2);
         assert_eq!(out.ocr_replaced, 0);
@@ -403,7 +514,7 @@ mod tests {
     #[tokio::test]
     async fn non_vision_single_image_dropped_hint_count_is_one() {
         let blocks = vec![img("AAAA", "image/png")];
-        let out = adapt_blocks_for_vision(&blocks, false, &[], None).await;
+        let out = adapt_blocks_for_vision(&blocks, false, &[], None, None).await;
         assert_eq!(out.dropped, 1);
         let hint = out.blocks.last().unwrap().as_text().unwrap();
         assert!(
@@ -421,7 +532,7 @@ mod tests {
             img("AAAA", "image/png"),
             ContentBlock::text("第二段"),
         ];
-        let out = adapt_blocks_for_vision(&blocks, false, &[], None).await;
+        let out = adapt_blocks_for_vision(&blocks, false, &[], None, None).await;
         // 两个文本块顺序保留，中间图被剥，末尾加提示
         assert_eq!(out.blocks[0].as_text(), Some("第一段"));
         assert_eq!(out.blocks[1].as_text(), Some("第二段"));
@@ -441,7 +552,7 @@ mod tests {
     #[tokio::test]
     async fn non_vision_no_images_no_hint_injected() {
         let blocks = vec![ContentBlock::text("纯文本消息")];
-        let out = adapt_blocks_for_vision(&blocks, false, &[], None).await;
+        let out = adapt_blocks_for_vision(&blocks, false, &[], None, None).await;
         assert_eq!(out.blocks.len(), 1);
         assert_eq!(out.blocks[0].as_text(), Some("纯文本消息"));
         assert_eq!(out.dropped, 0);
@@ -456,7 +567,7 @@ mod tests {
         let blocks = vec![img("@@@不是合法base64@@@", "image/png")];
         // 即使有候选（空清单里没法验，但解码在 describe 之前发生）：
         // 这里用空候选先验 dropped 计数路径。
-        let out = adapt_blocks_for_vision(&blocks, false, &[], None).await;
+        let out = adapt_blocks_for_vision(&blocks, false, &[], None, None).await;
         assert_eq!(out.dropped, 1);
         assert!(out
             .blocks
@@ -590,7 +701,7 @@ mod tests {
             count.fetch_add(1, Ordering::SeqCst);
         };
         let blocks = vec![ContentBlock::text("纯文本消息"), ContentBlock::text("第二条")];
-        let _ = adapt_blocks_for_vision(&blocks, false, &[], Some(cb)).await;
+        let _ = adapt_blocks_for_vision(&blocks, false, &[], Some(cb), None).await;
         assert_eq!(count.load(Ordering::SeqCst), 0, "无图不应触发回调");
     }
 
@@ -603,7 +714,7 @@ mod tests {
             count.fetch_add(1, Ordering::SeqCst);
         };
         let blocks = vec![img("AA", "image/png"), img("BB", "image/jpeg")];
-        let _ = adapt_blocks_for_vision(&blocks, true, &[], Some(cb)).await;
+        let _ = adapt_blocks_for_vision(&blocks, true, &[], Some(cb), None).await;
         assert_eq!(count.load(Ordering::SeqCst), 0, "视觉直通不应触发回调");
     }
 
@@ -625,7 +736,7 @@ mod tests {
             img("BB", "image/jpeg"),
             img("CC", "image/gif"),
         ];
-        let _ = adapt_blocks_for_vision(&blocks, false, &[], Some(cb)).await;
+        let _ = adapt_blocks_for_vision(&blocks, false, &[], Some(cb), None).await;
         let got = *last_total.lock().unwrap();
         assert_eq!(got, Some(3), "total 应为 Image 块数 3（Text 不计入）");
     }

@@ -12,7 +12,8 @@ use tauri::State;
 use crate::error::{AppError, AppResult};
 use crate::harness::provider::{list_provider_infos, probe, ProviderInfo};
 
-use super::agent_cmd::{AgentCmd, AgentWithCredentials};
+use super::agent_cmd::AgentCmd;
+use super::model_profile_cmd::ModelProfileCmd;
 
 /// Provider 目录（注册表快照，前端下拉框数据源）
 #[tauri::command]
@@ -47,10 +48,20 @@ impl ProviderConnectionResult {
     }
 }
 
+/// 存量凭据三元组（agent / model profile 两个编辑态来源归一；key 密文不回显
+/// 前端，命令层代取后传此处）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredCreds {
+    pub provider: String,
+    pub api_key: String,
+    /// 已固化的显式端点（agent 行 / profile 行或其 vault 副本；None = 走注册表推导）
+    pub base_url: Option<String>,
+}
+
 /// 探测目标解析结果（纯函数产物，见 `resolve_probe_target`）
 #[derive(Debug, PartialEq, Eq)]
 pub enum ProbeTarget {
-    /// `explicit_base_url`：表单入参或 agent 存量里的显式地址（None = 未显式
+    /// `explicit_base_url`：表单入参或存量里的显式地址（None = 未显式
     /// 指定，探测时按注册表 [默认, ...备选] 顺序回退）
     Ready {
         explicit_base_url: Option<String>,
@@ -63,17 +74,17 @@ pub enum ProbeTarget {
 
 /// 解析探测目标（纯函数，可单测）。规则：
 ///
-/// - base_url：表单入参 > agent 存量（作为「显式指定」透传，探测只测它）；
+/// - base_url：表单入参 > 存量（作为「显式指定」透传，探测只测它）；
 ///   都没有 → 用注册表候选序列（默认 + 备选）。custom 等必填项为空 → Validation
-/// - key：表单入参 > agent 存量（**仅当存量 agent 的 provider 与被测 provider
-///   同名**——各家 key 互不通用的居多，GLM 标准/Coding 尤甚，拿旧 key 打新
-///   端点只会报一个误导性的 401）> 空
+/// - key：表单入参 > 存量（**仅当存量的 provider 与被测 provider 同名**——
+///   各家 key 互不通用的居多，GLM 标准/Coding 尤甚，拿旧 key 打新端点只会
+///   报一个误导性的 401）> 空
 /// - requires_key 且最终 key 为空 → `MissingKey`（调用方短路，不发请求）
 pub fn resolve_probe_target(
     info: &ProviderInfo,
     base_url_input: Option<&str>,
     api_key_input: Option<&str>,
-    stored: Option<&AgentWithCredentials>,
+    stored: Option<&StoredCreds>,
 ) -> AppResult<ProbeTarget> {
     // 显式地址：入参 > agent 存量（两者都是用户/系统明确选定的，探测只测它）
     let explicit_base_url = base_url_input
@@ -92,7 +103,7 @@ pub fn resolve_probe_target(
     }
 
     // key 解析：入参 > 同 provider 的存量（跨 provider 的存量 key 不混用）
-    let same_provider = stored.map(|c| c.agent.provider.as_str()) == Some(info.name.as_str());
+    let same_provider = stored.map(|c| c.provider.as_str()) == Some(info.name.as_str());
     let api_key = api_key_input
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
@@ -142,24 +153,58 @@ pub fn aggregate_probe_error(candidates: &[(String, String)], errors: &[String])
 /// 测试 provider 连通性并拉取模型列表。
 ///
 /// - `provider_name`：注册表内的 provider 名（未知 → Validation）
-/// - `base_url` / `api_key`：表单当前值，缺省时回退 agent 存量/注册表默认
-/// - `agent_id`：编辑态传入——用存量 key 探测（key 密文永不回显给前端）
+/// - `base_url` / `api_key`：表单当前值，缺省时回退存量/注册表默认
+/// - `agent_id`：Agent 表单编辑态——用存量 agent 凭据探测（key 密文不回显前端）
+/// - `profile_id`：模型配置卡编辑态——用存量 ModelProfile 凭据探测（同构语义，
+///   ModelProfile Phase 1）；与 `agent_id` 同时传时 profile 优先（前端不会同传）
 #[tauri::command]
 pub async fn test_provider_connection(
     cmd: State<'_, std::sync::Arc<dyn AgentCmd>>,
+    profiles: State<'_, std::sync::Arc<dyn ModelProfileCmd>>,
     provider_name: String,
     base_url: Option<String>,
     api_key: Option<String>,
     agent_id: Option<String>,
+    profile_id: Option<String>,
 ) -> AppResult<ProviderConnectionResult> {
     let info = list_provider_infos()
         .into_iter()
         .find(|p| p.name == provider_name)
         .ok_or_else(|| AppError::Validation(format!("未知的 Provider: {}", provider_name)))?;
 
-    // 编辑态：取存量 agent（key + 曾用 base_url）
-    let stored = match agent_id.as_deref() {
-        Some(id) if !id.is_empty() => Some(cmd.inner().get_with_credentials(id).await?),
+    // 编辑态：取存量凭据（key + 曾用 base_url，后端代取）归一为三元组
+    let stored = match (
+        profile_id.as_deref().filter(|s| !s.is_empty()),
+        agent_id.as_deref().filter(|s| !s.is_empty()),
+    ) {
+        (Some(pid), _) => {
+            let c = profiles.inner().get_with_credentials(pid).await?;
+            Some(StoredCreds {
+                provider: c.profile.provider,
+                api_key: c.api_key,
+                base_url: c.base_url,
+            })
+        }
+        (None, Some(aid)) => {
+            let c = cmd.inner().get_with_credentials(aid).await?;
+            Some(StoredCreds {
+                provider: c.agent.provider,
+                api_key: c.api_key,
+                base_url: c.base_url,
+            })
+        }
+        (None, None) => None,
+    };
+
+    // 状态监控归因（warn-only 旁路）：仅「纯存量测试」才记——profile 腿且表单
+    // 未传任何覆盖值（base_url / api_key 都 absent）。草稿测试测的是未保存的
+    // 新值，结果不代表存量配置状态，不冒充。
+    let tracked_profile = match (
+        profile_id.as_deref().filter(|s| !s.is_empty()),
+        base_url.is_none(),
+        api_key.is_none(),
+    ) {
+        (Some(pid), true, true) => Some(pid.to_string()),
         _ => None,
     };
 
@@ -202,6 +247,9 @@ pub async fn test_provider_connection(
     for (_, url) in &candidates {
         match probe::probe_models(info.protocol, url, &api_key).await {
             Ok(models) => {
+                if let Some(pid) = &tracked_profile {
+                    profiles.inner().record_health(pid, "ok", None).await;
+                }
                 return Ok(ProviderConnectionResult {
                     ok: true,
                     model_count: models.len(),
@@ -213,10 +261,19 @@ pub async fn test_provider_connection(
             Err(e) => errors.push(e.to_string()),
         }
     }
-    Ok(ProviderConnectionResult::failed(aggregate_probe_error(
-        &candidates,
-        &errors,
-    )))
+    let aggregated = aggregate_probe_error(&candidates, &errors);
+    if let Some(pid) = &tracked_profile {
+        use crate::harness::profile_health::{clip_detail, health_from_error};
+        profiles
+            .inner()
+            .record_health(
+                pid,
+                health_from_error(&aggregated).as_str(),
+                Some(&clip_detail(&aggregated)),
+            )
+            .await;
+    }
+    Ok(ProviderConnectionResult::failed(aggregated))
 }
 
 #[cfg(test)]
@@ -231,37 +288,13 @@ mod tests {
             .unwrap_or_else(|| panic!("注册表缺少 {}", name))
     }
 
-    /// 生产 `get_with_credentials` 返回的形态：外层 base_url = agent 行优先、
-    /// vault 回退后的解析值（`resolve_probe_target` 读外层字段），fixture 同构
-    fn stored_creds(provider: &str, api_key: &str, base_url: Option<&str>) -> AgentWithCredentials {
-        AgentWithCredentials {
-            agent: crate::db::models::AgentRow {
-                id: "ag-1".into(),
-                name: "n".into(),
-                provider: provider.into(),
-                model: "m".into(),
-                system_prompt: String::new(),
-                api_key_ref: "ref".into(),
-                base_url: base_url.map(|s| s.into()),
-                temperature: 0.7,
-                max_tokens: 1024,
-                extra_params: String::new(),
-                sort_order: 0,
-                cache_prompt: 1,
-                max_history_messages: None,
-                context_window: None,
-                enabled_tools: None,
-                supports_vision: 0,
-                description: String::new(),
-                avatar: None,
-                workspace_path: None,
-                created_at: String::new(),
-                updated_at: String::new(),
-            },
+    /// 存量凭据三元组（命令层从 agent / model profile 两个来源归一后的形态，
+    /// `resolve_probe_target` 消费它）
+    fn stored_creds(provider: &str, api_key: &str, base_url: Option<&str>) -> StoredCreds {
+        StoredCreds {
+            provider: provider.into(),
             api_key: api_key.into(),
             base_url: base_url.map(|s| s.into()),
-            hooks: Default::default(),
-            word_style_profile: None,
         }
     }
 

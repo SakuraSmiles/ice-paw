@@ -31,6 +31,8 @@ const KNOWN_KEYS: &[&str] = &[
     "vision_api_key",
     "vision_base_url",
     "vision_config",
+    "vision_profile_ids",
+    "embedding_profile_id",
 ];
 
 /// 系统默认工作空间根路径（安装即用，自动创建）
@@ -116,5 +118,14 @@ pub async fn set(pool: &SqlitePool, key: &str, value: &str) -> AppResult<()> {
     .bind(value)
     .execute(pool)
     .await?;
+    Ok(())
+}
+
+/// 删除单个偏好项（key 不存在时静默成功——迁移清旧键用，幂等）
+pub async fn delete(pool: &SqlitePool, key: &str) -> AppResult<()> {
+    sqlx::query("DELETE FROM user_preferences WHERE key = ?")
+        .bind(key)
+        .execute(pool)
+        .await?;
     Ok(())
 }
