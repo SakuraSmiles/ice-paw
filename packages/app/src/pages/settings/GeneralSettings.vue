@@ -7,10 +7,11 @@
   boot 迁移失败下次重试）。
 
   约定：
-  - 全字段即时保存（工作空间 = 目录选定即存）；成功 = 卡片头「已保存」2s 淡出，
-    失败 = 字段级 ErrorBanner inline + retry（saveErrors 单一错误通道）
-  - 语义检索切换引用 / 模型身份变更 = 重建确认浮层（test → save → rebuild
-    三步流；与模型页被引用编辑共用 EmbedSwitchOverlay 组件）
+  - 全系统编辑交互统一契约（2026-09-08 拍板）：显式保存——改动只进草稿，
+    点「保存」整卡提交（无变更禁用）/「取消」回滚到服务端快照（server ref）；
+    成功 = 卡片头「已保存」2s 淡出，失败 = 卡级 ErrorBanner inline + retry
+  - 语义检索活引用换绑 / 模型身份变更 = 保存时弹重建确认浮层（test → save →
+    rebuild 三步流；与模型页被引用编辑共用 EmbedSwitchOverlay 组件）
   - 图标一律 @lucide/vue（HelpCircle/Folder/FolderOpen/LocateFixed/ChevronDown...）
 -->
 <script setup lang="ts">
@@ -34,14 +35,42 @@ const prefs = ref<UserPreferences>({});
 const loading = ref(true);
 // 页级数据源失败（UI-2 banner 形态）：prefs 不可信时全页表态，防照空表单误配置
 const loadError = ref<string | null>(null);
-// 字段/动作级 inline 错误位（单一错误通道）：key = 'workspace'|'datadir'|'timezone'
-const saveErrors = ref<Record<string, { msg: string; retry: () => void }>>({});
-/** 保存成功提示（键 = 卡片：local），2s 淡出——状态上屏，不做保存按钮 */
+// 卡级 inline 错误位（保存/动作失败）：key = 'local'|'vision'|'embedding'|'datadir'
+const saveErrors = ref<Record<string, { msg: string; retry?: () => void }>>({});
+/** 保存成功提示（键 = 卡片），2s 淡出（状态上屏；显式保存模式下表示「刚保存成功」） */
 const savedTip = ref<Record<string, boolean>>({});
 
 function flashSaved(key: string) {
   savedTip.value[key] = true;
   setTimeout(() => { savedTip.value[key] = false; }, 2000);
+}
+
+// ---- 服务端快照（保存成功后更新；「取消」的回滚基准）----
+const server = ref({
+  workspace: "",
+  timezone: "",
+  visionIds: [] as string[],
+  embeddingId: "",
+});
+
+// ---- 三卡草稿（显式保存：改动只进草稿，点「保存」整卡提交）----
+const localDraft = ref({ workspace: "", timezone: "" });
+const visionDraft = ref<string[]>([]);
+const embedDraft = ref("");
+
+/** prefs 回填快照；草稿保持不动（编辑中的用户草稿不因刷新丢失） */
+function applyPrefs(raw: UserPreferences) {
+  // 统一为 / 分隔符（后端 Windows 返回 \）
+  if (raw.default_workspace_path) {
+    raw.default_workspace_path = raw.default_workspace_path.replace(/\\/g, "/");
+  }
+  prefs.value = raw;
+  server.value = {
+    workspace: raw.default_workspace_path ?? "",
+    timezone: raw.timezone ?? "",
+    visionIds: raw.vision_profile_ids ? [...raw.vision_profile_ids] : [],
+    embeddingId: raw.embedding_profile_id ?? "",
+  };
 }
 
 async function load() {
@@ -53,13 +82,11 @@ async function load() {
       loadProviders(),
       sharedLoad(),
     ]);
-    // 统一为 / 分隔符（后端 Windows 返回 \）
-    if (raw.default_workspace_path) {
-      raw.default_workspace_path = raw.default_workspace_path.replace(/\\/g, "/");
-    }
-    prefs.value = raw;
-    visionIds.value = raw.vision_profile_ids ? [...raw.vision_profile_ids] : [];
-    embeddingProfileId.value = raw.embedding_profile_id ?? "";
+    applyPrefs(raw);
+    // 首载 = 草稿对齐快照；后续 onActivated 刷新只更新快照（保用户草稿）
+    localDraft.value = { workspace: server.value.workspace, timezone: server.value.timezone };
+    visionDraft.value = [...server.value.visionIds];
+    embedDraft.value = server.value.embeddingId;
   } catch (e) {
     console.error("加载设置失败:", e);
     loadError.value = e instanceof Error ? e.message : String(e);
@@ -69,38 +96,51 @@ async function load() {
 }
 
 // =========================================================================
-// 本地环境卡：工作空间（选定即存）/ 时区 / 数据目录（只读）
+// 本地环境卡：工作空间 / 时区（草稿 + 保存）/ 数据目录（只读）
 // =========================================================================
-const savingWorkspace = ref(false);
+const localSaving = ref(false);
+const localDirty = computed(() =>
+  localDraft.value.workspace !== server.value.workspace
+  || localDraft.value.timezone !== server.value.timezone);
 
 async function pickDirectory() {
   const selected = await open({
     directory: true,
     multiple: false,
     title: "选择默认工作空间目录",
-    defaultPath: prefs.value.default_workspace_path || undefined,
+    defaultPath: localDraft.value.workspace || undefined,
   });
   if (selected) {
-    prefs.value.default_workspace_path = selected.replace(/\\/g, "/");
-    await saveWorkspacePath();
+    localDraft.value.workspace = selected.replace(/\\/g, "/");
   }
 }
 
-async function saveWorkspacePath() {
-  savingWorkspace.value = true;
-  delete saveErrors.value.workspace;
+/** 整卡保存：工作空间 + 时区各自条件提交（无变化跳过），失败中断记卡级错误 */
+async function saveLocalCard() {
+  localSaving.value = true;
+  delete saveErrors.value.local;
   try {
-    await bridge.preferences.set(
-      "default_workspace_path",
-      prefs.value.default_workspace_path ?? "",
-    );
+    if (localDraft.value.workspace !== server.value.workspace) {
+      await bridge.preferences.set("default_workspace_path", localDraft.value.workspace);
+      server.value.workspace = localDraft.value.workspace;
+    }
+    if (localDraft.value.timezone !== server.value.timezone) {
+      await bridge.preferences.set("timezone", localDraft.value.timezone);
+      setTimezone(localDraft.value.timezone); // 同步全局时区状态，所有时间显示即时刷新
+      server.value.timezone = localDraft.value.timezone;
+    }
     flashSaved("local");
   } catch (e) {
     console.error("保存失败:", e);
-    saveErrors.value.workspace = { msg: e instanceof Error ? e.message : String(e), retry: () => void saveWorkspacePath() };
+    saveErrors.value.local = { msg: e instanceof Error ? e.message : String(e), retry: () => void saveLocalCard() };
   } finally {
-    savingWorkspace.value = false;
+    localSaving.value = false;
   }
+}
+
+function cancelLocal() {
+  localDraft.value = { workspace: server.value.workspace, timezone: server.value.timezone };
+  delete saveErrors.value.local;
 }
 
 const dataDir = ref("");
@@ -128,10 +168,17 @@ async function openDataDir() {
 onMounted(load);
 onMounted(loadDataDir);
 
-// KeepAlive 瞬态清理：测试态/成功提示是「刚操作过」的即时反馈，回到本页时已过期
-onActivated(() => {
+// KeepAlive 瞬态清理：测试态是「刚操作过」的即时反馈，回到本页时已过期。
+// 同时刷新 prefs 快照（legacy 迁移状态/引用实体可能在其他页变化——模型页增删
+// profile 等），草稿保留（模型页 rebuildRows 同语义）。
+onActivated(async () => {
   visionTests.value = {};
   embedTest.value = { status: "idle" };
+  try {
+    applyPrefs(await bridge.preferences.get());
+  } catch {
+    // 刷新失败保留旧快照（页面已可用，不整页报错）
+  }
 });
 
 // =========================================================================
@@ -172,10 +219,10 @@ function okFailMsg(t: TestState): string {
 }
 
 // =========================================================================
-// 卡 2：视觉读取（profile 引用链——主模型 + 降级 N）
+// 卡 2：视觉读取（profile 引用链——主模型 + 降级 N；草稿 + 保存）
 // =========================================================================
-const visionIds = ref<string[]>([]);
 const visionTests = ref<Record<number, TestState>>({});
+const visionSaving = ref(false);
 
 /** 旧版视觉配置仍在生效（vision_profile_ids 未落且旧字段有值）——读侧回落中 */
 const legacyVisionActive = computed(() => {
@@ -183,45 +230,60 @@ const legacyVisionActive = computed(() => {
   return p.vision_profile_ids == null && !!(p.vision_config?.length || p.vision_provider);
 });
 
-async function saveVisionChain() {
+/** 草稿相对快照有无变更（空占位行不算；顺序敏感——上移下移也是变更） */
+const visionDirty = computed(() => {
+  const a = visionDraft.value.filter((id) => id !== "");
+  const b = server.value.visionIds;
+  return a.length !== b.length || a.some((id, i) => id !== b[i]);
+});
+
+async function saveVisionCard() {
+  visionSaving.value = true;
   delete saveErrors.value.vision;
-  visionTests.value = {};
   try {
     // Some=权威（含 [] = 显式清空）；本地空占位行（""）过滤后再存
-    await bridge.preferences.set("vision_profile_ids", visionIds.value.filter((id) => id !== ""));
+    const ids = visionDraft.value.filter((id) => id !== "");
+    await bridge.preferences.set("vision_profile_ids", ids);
+    server.value.visionIds = ids;
+    visionDraft.value = [...ids]; // 占位行随保存消解
     flashSaved("vision");
   } catch (e) {
-    saveErrors.value.vision = { msg: stripInvokePrefix(msgOf(e)), retry: () => void saveVisionChain() };
+    saveErrors.value.vision = { msg: stripInvokePrefix(msgOf(e)), retry: () => void saveVisionCard() };
+  } finally {
+    visionSaving.value = false;
   }
+}
+
+function cancelVision() {
+  visionDraft.value = [...server.value.visionIds];
+  visionTests.value = {}; // 测试结果对应被回滚的选择
+  delete saveErrors.value.vision;
 }
 
 function onChainPick(i: number, v: string) {
   if (!profiles.value.some((p) => p.id === v)) return; // 手输不匹配 → 忽略
-  visionIds.value[i] = v;
-  saveVisionChain();
+  visionDraft.value[i] = v;
 }
 
 function moveChain(i: number, delta: -1 | 1) {
   const j = i + delta;
-  if (j < 0 || j >= visionIds.value.length) return;
-  const ids = [...visionIds.value];
+  if (j < 0 || j >= visionDraft.value.length) return;
+  const ids = [...visionDraft.value];
   [ids[i], ids[j]] = [ids[j], ids[i]];
-  visionIds.value = ids;
-  saveVisionChain();
+  visionDraft.value = ids;
 }
 
 function removeChain(i: number) {
-  visionIds.value.splice(i, 1);
-  saveVisionChain();
+  visionDraft.value.splice(i, 1);
 }
 
 function addChainEntry() {
-  // 本地空占位行：选择后才落库（空引用无信息量，刷新蒸发无害）
-  visionIds.value.push("");
+  // 本地空占位行：点「保存」时过滤（空引用无信息量，取消/保存即消解）
+  visionDraft.value.push("");
 }
 
 async function testVisionAt(i: number) {
-  const id = visionIds.value[i];
+  const id = visionDraft.value[i];
   if (!id) return;
   visionTests.value[i] = { status: "testing" };
   try {
@@ -240,10 +302,10 @@ function visionTestMsgOf(i: number): string {
 }
 
 // =========================================================================
-// 卡 3：语义检索（单 profile 引用 + 切换重建 overlay）
+// 卡 3：语义检索（单 profile 引用 + 切换重建 overlay；草稿 + 保存）
 // =========================================================================
-const embeddingProfileId = ref("");
 const embedTest = ref<TestState>({ status: "idle" });
+const embedSaving = ref(false);
 
 /** 旧版语义检索配置仍在生效（embedding_profile_id 未落且旧四键齐全） */
 const legacyEmbeddingActive = computed(() => {
@@ -251,50 +313,65 @@ const legacyEmbeddingActive = computed(() => {
   return p.embedding_profile_id == null && !!(p.embedding_provider && p.embedding_model && p.embedding_api_key);
 });
 
-/** 当前引用是否活着（id 有值且实体存在——被删的悬空引用视同未启用） */
-const embeddingActive = computed(() =>
-  !!embeddingProfileId.value && !!profileById(profiles.value, embeddingProfileId.value),
+/** 快照引用是否活着（id 有值且实体存在——被删的悬空引用视同未启用） */
+const embedServerActive = computed(() =>
+  !!server.value.embeddingId && !!profileById(profiles.value, server.value.embeddingId),
 );
+
+/** 草稿引用是否活着（测试按钮判据） */
+const embedDraftActive = computed(() =>
+  !!embedDraft.value && !!profileById(profiles.value, embedDraft.value),
+);
+
+const embedDirty = computed(() => embedDraft.value !== server.value.embeddingId);
 
 function embeddingLabelOf(id: string): string {
   const p = profileById(profiles.value, id);
   return p ? `${p.alias}（${providerLabelOf(p.provider)} · ${p.model}）` : "（配置已删除）";
 }
 
-async function saveEmbeddingRef() {
+/** 保存：活引用换绑 → 重建确认浮层；首次启用 / 停用 → 直接提交（停用保留向量） */
+function saveEmbedCard() {
+  const to = embedDraft.value;
+  if (embedServerActive.value && to && to !== server.value.embeddingId) {
+    // 旧引用在用 → 二次确认（防维度不匹配静默失效）
+    pendingSwitch.value = { toId: to };
+    switchError.value = null;
+    return;
+  }
+  void commitEmbedding(to);
+}
+
+/** 提交引用（"" = 显式清空，Some 权威语义，旧四键从此不被读） */
+async function commitEmbedding(to: string) {
+  embedSaving.value = true;
   delete saveErrors.value.embedding;
   embedTest.value = { status: "idle" };
   try {
-    // "" = 显式清空（Some 权威语义，旧四键从此不被读）
-    await bridge.preferences.set("embedding_profile_id", embeddingProfileId.value || "");
+    await bridge.preferences.set("embedding_profile_id", to);
+    server.value.embeddingId = to;
+    embedDraft.value = to;
     flashSaved("embedding");
   } catch (e) {
-    saveErrors.value.embedding = { msg: stripInvokePrefix(msgOf(e)), retry: () => void saveEmbeddingRef() };
+    saveErrors.value.embedding = { msg: stripInvokePrefix(msgOf(e)), retry: () => void commitEmbedding(to) };
+  } finally {
+    embedSaving.value = false;
   }
+}
+
+function cancelEmbed() {
+  embedDraft.value = server.value.embeddingId;
+  embedTest.value = { status: "idle" };
+  delete saveErrors.value.embedding;
 }
 
 function onEmbeddingPick(v: string) {
   if (!profiles.value.some((p) => p.id === v)) return; // 手输不匹配 → 忽略
-  if (v === embeddingProfileId.value) return;
-  if (embeddingActive.value) {
-    // 旧引用在用 → 二次确认（防维度不匹配静默失效）
-    pendingSwitch.value = { toId: v };
-    switchError.value = null;
-    return;
-  }
-  // 未启用 → 直接启用（无旧向量，无需重建）
-  embeddingProfileId.value = v;
-  saveEmbeddingRef();
-}
-
-function disableEmbedding() {
-  if (!embeddingProfileId.value) return;
-  embeddingProfileId.value = "";
-  saveEmbeddingRef();
+  embedDraft.value = v;
 }
 
 async function testEmbedding() {
-  const id = embeddingProfileId.value;
+  const id = embedDraft.value;
   if (!id) return;
   embedTest.value = { status: "testing" };
   try {
@@ -306,7 +383,7 @@ async function testEmbedding() {
   }
 }
 
-// ---- 切换重建 overlay（本页触发源 = 卡 3 换引用；模型页编辑被引用实体共用组件）----
+// ---- 切换重建 overlay（本页触发源 = 卡 3 保存时换绑；模型页编辑被引用实体共用组件）----
 const pendingSwitch = ref<{ toId: string } | null>(null);
 const rebuilding = ref(false);
 const switchError = ref<string | null>(null);
@@ -331,8 +408,9 @@ async function confirmEmbeddingSwitch() {
     return;
   }
   try {
-    embeddingProfileId.value = ps.toId;
-    await saveEmbeddingRef();
+    await bridge.preferences.set("embedding_profile_id", ps.toId);
+    server.value.embeddingId = ps.toId;
+    embedDraft.value = ps.toId;
     const stats = await bridge.kb.rebuildAllEmbeddings();
     pendingSwitch.value = null;
     switchInfo.value = `已切换并重建 ${stats.chunks} 个向量（${stats.kbs} 个知识库）`;
@@ -368,7 +446,6 @@ const tzInputRef = ref<HTMLInputElement | null>(null);
 const tzDropdownRef = ref<HTMLElement | null>(null);
 const tzWrapRef = ref<HTMLElement | null>(null);
 const detecting = ref(false);
-const tzSelectedLabel = ref(""); // 选中后显示的标签文本
 
 /** 计算某个 IANA 时区的当前 UTC 偏移 */
 function getTzOffset(tz: string): string {
@@ -465,28 +542,25 @@ function groupedTimezones(search: string): Map<string, string[]> {
 /** 当前过滤后的时区列表（grouped） */
 const filteredGroups = computed(() => groupedTimezones(tzFilterText.value));
 
-/** 是否在选择器中（有值或打开状态） */
-const hasTimezone = computed(() => !!prefs.value.timezone);
+/** 是否在选择器中（有值或打开状态）——读草稿（编辑期所见 = 草稿值） */
+const hasTimezone = computed(() => !!localDraft.value.timezone);
 
 /** 格式化的当前时区显示名 */
 const currentTzDisplay = computed(() => {
-  const tz = prefs.value.timezone;
+  const tz = localDraft.value.timezone;
   if (!tz) return "";
   const offset = getTzOffset(tz);
   const name = tzDisplayName(tz);
   return offset ? `${name} (${offset})` : name;
 });
 
-/** 自动检测时区 */
+/** 自动检测时区（只填草稿；点「保存」才落库 + 同步全局） */
 async function detectTimezone() {
   detecting.value = true;
   try {
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
     if (tz) {
-      prefs.value.timezone = tz;
-      await bridge.preferences.set("timezone", tz);
-      setTimezone(tz); // 同步全局时区状态
-      tzSelectedLabel.value = currentTzDisplay.value;
+      localDraft.value.timezone = tz;
     }
   } catch (e) {
     console.error("detect tz failed:", e);
@@ -495,26 +569,11 @@ async function detectTimezone() {
   }
 }
 
-/** 保存时区到后端 */
-async function saveTimezone() {
-  delete saveErrors.value.timezone;
-  try {
-    await bridge.preferences.set("timezone", prefs.value.timezone ?? "");
-    setTimezone(prefs.value.timezone ?? ""); // 同步全局时区状态，所有时间显示即时刷新
-    flashSaved("local");
-  } catch (e) {
-    console.error("save tz failed:", e);
-    saveErrors.value.timezone = { msg: e instanceof Error ? e.message : String(e), retry: () => void saveTimezone() };
-  }
-}
-
-/** 选中某个时区 */
+/** 选中某个时区（只填草稿；点「保存」才落库） */
 function selectTimezone(tz: string) {
-  prefs.value.timezone = tz;
+  localDraft.value.timezone = tz;
   tzFilterText.value = "";
   tzInputOpen.value = false;
-  tzSelectedLabel.value = currentTzDisplay.value;
-  saveTimezone();
 }
 
 /** 输入事件 */
@@ -596,14 +655,14 @@ const hasFilterResults = computed(() => {
       />
       <div class="settings-list" :class="{ 'list-untrusted': !!loadError }">
 
-      <!-- ===== 卡 1：本地环境 ===== -->
+      <!-- ===== 卡 1：本地环境（草稿 + 保存/取消）===== -->
       <section class="settings-card">
         <div class="card-head">
           <div class="card-head-text">
             <h3 class="card-title">本地环境</h3>
             <p class="card-hint">数据位置与区域偏好</p>
           </div>
-          <span v-if="savingWorkspace" class="save-pending">保存中…</span>
+          <span v-if="localSaving" class="save-pending">保存中…</span>
           <span v-else-if="savedTip.local" class="save-tip">已保存</span>
         </div>
 
@@ -616,7 +675,7 @@ const hasFilterResults = computed(() => {
           </div>
           <div class="input-group">
             <input
-              v-model="prefs.default_workspace_path"
+              v-model="localDraft.workspace"
               type="text"
               class="form-input is-pick"
               placeholder="点击选择目录"
@@ -627,7 +686,6 @@ const hasFilterResults = computed(() => {
               <Folder :size="16" />
             </button>
           </div>
-          <ErrorBanner v-if="saveErrors.workspace" variant="inline" title="保存失败" :detail="saveErrors.workspace.msg" @retry="saveErrors.workspace?.retry()" />
         </div>
 
         <div class="field">
@@ -653,7 +711,7 @@ const hasFilterResults = computed(() => {
             <div class="tz-combobox" :class="{ 'tz-open': tzInputOpen }">
               <input
                 ref="tzInputRef"
-                :value="tzInputOpen ? tzFilterText : (prefs.timezone ? tzDisplayName(prefs.timezone) : '')"
+                :value="tzInputOpen ? tzFilterText : (localDraft.timezone ? tzDisplayName(localDraft.timezone) : '')"
                 type="text"
                 class="tz-input"
                 :placeholder="tzInputOpen ? '搜索时区...' : '选择时区'"
@@ -681,7 +739,7 @@ const hasFilterResults = computed(() => {
                       <div class="tz-group-label">{{ region }}</div>
                       <button
                         v-for="tz in tzs" :key="tz" type="button"
-                        :class="['tz-option', { active: prefs.timezone === tz }]"
+                        :class="['tz-option', { active: localDraft.timezone === tz }]"
                         @click="selectTimezone(tz)"
                       >
                         <span class="tz-opt-name">{{ tzDisplayName(tz) }}</span>
@@ -702,7 +760,6 @@ const hasFilterResults = computed(() => {
           <div v-else class="tz-status off">
             未设置
           </div>
-          <ErrorBanner v-if="saveErrors.timezone" variant="inline" title="保存失败" :detail="saveErrors.timezone.msg" @retry="saveErrors.timezone?.retry()" />
         </div>
 
         <div class="field">
@@ -726,11 +783,27 @@ const hasFilterResults = computed(() => {
               <FolderOpen :size="16" />
             </button>
           </div>
-          <ErrorBanner v-if="saveErrors.datadir" variant="inline" title="打开失败" :detail="saveErrors.datadir.msg" @retry="saveErrors.datadir?.retry()" />
+          <ErrorBanner v-if="saveErrors.datadir" variant="inline" title="打开失败" :detail="saveErrors.datadir.msg" :retry-label="saveErrors.datadir.retry ? '重试' : null" @retry="saveErrors.datadir?.retry?.()" />
+        </div>
+
+        <ErrorBanner
+          v-if="saveErrors.local"
+          variant="inline"
+          title="保存失败"
+          :detail="saveErrors.local.msg"
+          :retry-label="saveErrors.local.retry ? '重试' : null"
+          @retry="saveErrors.local?.retry?.()"
+        />
+        <div class="card-actions">
+          <button class="btn" :disabled="localSaving" @click="cancelLocal">取消</button>
+          <button class="btn-primary" :disabled="localSaving || !localDirty" @click="saveLocalCard">
+            <Loader2 v-if="localSaving" :size="14" class="spin" />
+            {{ localSaving ? "保存中…" : "保存" }}
+          </button>
         </div>
       </section>
 
-      <!-- ===== 卡 2：视觉读取（引用链）===== -->
+      <!-- ===== 卡 2：视觉读取（引用链；草稿 + 保存/取消）===== -->
       <section class="settings-card">
         <div class="card-head">
           <div class="card-head-text">
@@ -742,26 +815,27 @@ const hasFilterResults = computed(() => {
             </h3>
             <p class="card-hint">无视觉能力的 Agent 发图时，按此链把图代读成文字（主模型 + 降级，逐个尝试）</p>
           </div>
-          <span v-if="savedTip.vision" class="save-tip">已保存</span>
+          <span v-if="visionSaving" class="save-pending">保存中…</span>
+          <span v-else-if="savedTip.vision" class="save-tip">已保存</span>
         </div>
 
         <div v-if="legacyVisionActive" class="legacy-note">
           旧版视觉配置仍在生效——下次启动将自动迁移为模型配置引用；在此处添加引用并保存后改用新引用链。
         </div>
 
-        <div v-if="visionIds.length === 0" class="vision-empty">
+        <div v-if="visionDraft.length === 0" class="vision-empty">
           <span v-if="legacyVisionActive">未配置引用链——旧版配置迁移前，代读继续走旧配置。</span>
           <span v-else>未配置——无视觉能力的 Agent 发图或扫描件将无法代读。先在「设置-模型」创建模型配置，再在此引用。</span>
         </div>
         <template v-else>
-          <div v-for="(id, i) in visionIds" :key="i" class="vision-entry">
+          <div v-for="(id, i) in visionDraft" :key="i" class="vision-entry">
             <div class="vision-entry-head">
               <span class="vision-tag" :class="{ 'vision-tag--primary': i === 0 }">{{ i === 0 ? "主模型" : `降级 ${i}` }}</span>
               <div class="chain-ops">
                 <button class="vision-icon-btn" :disabled="i === 0" title="上移" @click="moveChain(i, -1)">
                   <ChevronUp :size="14" />
                 </button>
-                <button class="vision-icon-btn" :disabled="i === visionIds.length - 1" title="下移" @click="moveChain(i, 1)">
+                <button class="vision-icon-btn" :disabled="i === visionDraft.length - 1" title="下移" @click="moveChain(i, 1)">
                   <ChevronDown :size="14" />
                 </button>
                 <button class="vision-icon-btn" title="移除此引用" @click="removeChain(i)">
@@ -797,21 +871,37 @@ const hasFilterResults = computed(() => {
               <span :class="visionTestOf(i).status === 'ok' ? 'test-ok-text' : 'test-fail-text'" :title="visionTestMsgOf(i)">{{ visionTestMsgOf(i) }}</span>
             </div>
           </div>
-          <button class="btn vision-add-fallback" @click="addChainEntry">
-            <Plus :size="14" />添加降级模型
-          </button>
         </template>
-        <ErrorBanner v-if="saveErrors.vision" variant="inline" title="保存失败" :detail="saveErrors.vision.msg" @retry="saveErrors.vision?.retry()" />
+        <!-- 添加入口恒在（空链时第一条 = 主模型；此前空链无入口，全新安装用户卡死） -->
+        <button class="btn vision-add-fallback" @click="addChainEntry">
+          <Plus :size="14" />{{ visionDraft.length === 0 ? "添加视觉模型" : "添加降级模型" }}
+        </button>
+        <ErrorBanner
+          v-if="saveErrors.vision"
+          variant="inline"
+          title="保存失败"
+          :detail="saveErrors.vision.msg"
+          :retry-label="saveErrors.vision.retry ? '重试' : null"
+          @retry="saveErrors.vision?.retry?.()"
+        />
+        <div class="card-actions">
+          <button class="btn" :disabled="visionSaving" @click="cancelVision">取消</button>
+          <button class="btn-primary" :disabled="visionSaving || !visionDirty" @click="saveVisionCard">
+            <Loader2 v-if="visionSaving" :size="14" class="spin" />
+            {{ visionSaving ? "保存中…" : "保存" }}
+          </button>
+        </div>
       </section>
 
-      <!-- ===== 卡 3：语义检索（单引用 + 切换重建）===== -->
+      <!-- ===== 卡 3：语义检索（单引用 + 切换重建；草稿 + 保存/取消）===== -->
       <section class="settings-card">
         <div class="card-head">
           <div class="card-head-text">
             <h3 class="card-title">语义检索 · 知识库索引</h3>
             <p class="card-hint">配置后知识库支持语义匹配（向量检索），比关键词更精准；独立于聊天 Agent</p>
           </div>
-          <span v-if="savedTip.embedding" class="save-tip">已保存</span>
+          <span v-if="embedSaving" class="save-pending">保存中…</span>
+          <span v-else-if="savedTip.embedding" class="save-tip">已保存</span>
         </div>
 
         <div v-if="legacyEmbeddingActive" class="legacy-note">
@@ -820,15 +910,15 @@ const hasFilterResults = computed(() => {
 
         <div class="input-group">
           <Combobox
-            :model-value="embeddingProfileId"
+            :model-value="embedDraft"
             :items="profileItems"
             placeholder="未启用——选择模型配置"
             @update:model-value="onEmbeddingPick"
           />
-          <button v-if="embeddingProfileId" class="btn" title="停用语义检索（保留已生成的向量，关键词检索不受影响）" @click="disableEmbedding">停用</button>
+          <button v-if="embedDraft" class="btn" title="停用语义检索（保留已生成的向量，关键词检索不受影响）" @click="embedDraft = ''">停用</button>
           <button
             class="btn"
-            :disabled="embedTest.status === 'testing' || !embeddingActive"
+            :disabled="embedTest.status === 'testing' || !embedDraftActive"
             title="用当前配置 embed 一条测试文本（端点 + Key + 模型三合一验证）"
             @click="testEmbedding"
           >
@@ -847,11 +937,25 @@ const hasFilterResults = computed(() => {
           <Check :size="14" class="test-ok-icon" />
           <span class="test-ok-text">{{ switchInfo }}</span>
         </div>
-        <div v-if="embeddingProfileId && !profileById(profiles, embeddingProfileId)" class="test-result">
+        <div v-if="embedDraft && !profileById(profiles, embedDraft)" class="test-result">
           <X :size="14" class="test-fail-icon" />
           <span class="test-fail-text">引用的配置已被删除——语义检索处于未启用状态，请重新选择</span>
         </div>
-        <ErrorBanner v-if="saveErrors.embedding" variant="inline" title="保存失败" :detail="saveErrors.embedding.msg" @retry="saveErrors.embedding?.retry()" />
+        <ErrorBanner
+          v-if="saveErrors.embedding"
+          variant="inline"
+          title="保存失败"
+          :detail="saveErrors.embedding.msg"
+          :retry-label="saveErrors.embedding.retry ? '重试' : null"
+          @retry="saveErrors.embedding?.retry?.()"
+        />
+        <div class="card-actions">
+          <button class="btn" :disabled="embedSaving" @click="cancelEmbed">取消</button>
+          <button class="btn-primary" :disabled="embedSaving || !embedDirty" @click="saveEmbedCard">
+            <Loader2 v-if="embedSaving" :size="14" class="spin" />
+            {{ embedSaving ? "保存中…" : "保存" }}
+          </button>
+        </div>
       </section>
 
       </div>
@@ -862,7 +966,7 @@ const hasFilterResults = computed(() => {
       v-if="pendingSwitch"
       title="切换语义检索模型？"
       :rows="[
-        { label: '当前', value: embeddingLabelOf(embeddingProfileId) },
+        { label: '当前', value: embeddingLabelOf(server.embeddingId) },
         { label: '切换到', value: embeddingLabelOf(pendingSwitch.toId) },
       ]"
       :error="switchError"
@@ -986,9 +1090,10 @@ const hasFilterResults = computed(() => {
   align-items: center;
 }
 
+/* 基础形态 = 独占一行：width 撑满、高度走令牌——勿写 flex:1，列向
+   flex-basis 0% 会压过 height 把输入框压塌（模型页别名框实案同病根） */
 .form-input {
-  flex: 1;
-  min-width: 0;
+  width: 100%;
   height: var(--ip-input-h-sm);
   padding: 0 10px;
   font-size: var(--ip-text-body-sm-size);
@@ -1006,6 +1111,12 @@ const hasFilterResults = computed(() => {
 }
 .form-input::placeholder {
   color: var(--ip-color-text-placeholder);
+}
+/* 行内组合（目录框 + 按钮）：input 占满剩余宽度 */
+.input-group > .form-input {
+  flex: 1;
+  min-width: 0;
+  width: auto;
 }
 
 /* 点选型只读框（工作空间=点击弹目录选择器）：手型光标暗示可交互 */
@@ -1067,6 +1178,32 @@ const hasFilterResults = computed(() => {
   color: var(--ip-primary-600);
 }
 .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* ===== 卡尾操作行（显式保存：取消 / 保存右锚定；无变更保存禁用） ===== */
+.card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: var(--ip-input-h-sm);
+  padding: 0 12px;
+  font-size: var(--ip-text-body-sm-size);
+  font-weight: var(--ip-font-weight-medium);
+  color: white;
+  background-color: var(--ip-primary-600);
+  border: none;
+  border-radius: var(--ip-radius-md);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color var(--ip-duration-fast) var(--ip-ease-out);
+}
+.btn-primary:hover { background-color: var(--ip-primary-700); }
+.btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
 
 /* ===== 测试结果块 ===== */
 .test-result {
