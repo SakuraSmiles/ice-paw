@@ -436,6 +436,14 @@ pub fn run() {
                 harness::legacy_model_migration::migrate_legacy_model_prefs(&handle, &pool).await;
             });
 
+            // 5c) 存量 agent 模型配置 → ModelProfile 实体（Phase 2 存量抽离，
+            //     一次性）。同配置（厂商+模型+端点+Key）合并为一个实体多 agent
+            //     共引；幂等标记跑过即不再扫（未来手动新建的 agent 保持手动形态）；
+            //     失败 warn 下次重放收敛（agent 手动形态照常可用）。
+            tauri::async_runtime::block_on(async {
+                harness::agent_profile_migration::migrate_agent_models(&handle, &pool).await;
+            });
+
             // 6) RAG: 启动知识库 watcher 管理器（运行时可增删监听 + 首次全量索引）。
             //    KbWatcherManager 注入 Tauri State，供 agent_cmd 在 create/update/delete
             //    时对账（运行期新建 agent 的 KB 目录不再需要重启即可被监听）。

@@ -302,6 +302,29 @@ pub async fn rotate_key_ref(
     Ok(())
 }
 
+/// 只更新 model_profile_id 引用列（boot 存量抽离迁移用窄写，update_model_snapshot
+/// 同族——不碰快照列族）。触发器照常刷 updated_at：模型身份切换为引用形态确属
+/// 一次实质变更，诚实语义。
+pub async fn set_model_profile_reference(
+    pool: &SqlitePool,
+    id: &str,
+    profile_id: Option<&str>,
+) -> AppResult<()> {
+    let affected = sqlx::query("UPDATE agents SET model_profile_id = ? WHERE id = ?")
+        .bind(profile_id)
+        .bind(id)
+        .execute(pool)
+        .await?
+        .rows_affected();
+    if affected == 0 {
+        return Err(AppError::NotFound {
+            resource: "agent",
+            id: id.to_string(),
+        });
+    }
+    Ok(())
+}
+
 /// 删除 agent（依赖外键 CASCADE 自动清理 conversations / messages）
 pub async fn delete(pool: &SqlitePool, id: &str) -> AppResult<()> {
     let affected = sqlx::query("DELETE FROM agents WHERE id = ?")
