@@ -548,6 +548,13 @@ impl McpClient for DelegateTool {
                 tools_enabled: true,
                 model_override: None,
                 cancel_token: child_cancel,
+                // 降级链（B2-S2）：专家 agent 自己的链（creds.agent 行）——委派子会话
+                // 与用户回合同权降级，链尽走原终态
+                fallback: crate::commands::model_profile_cmd::production_fallback_plan(
+                    &app,
+                    &ctx.pool,
+                    &creds.agent,
+                ),
             },
         )
         .await?;

@@ -141,6 +141,28 @@ pub struct ChatRetryingPayload {
     pub reason: String,
 }
 
+/// `chat:model-switched` 事件 payload — 降级链换档成功的瞬态通知（前端 toast）。
+///
+/// 对齐 `chat:budget` 的 renewed 先例：可回放事实走 session-event-log 的
+/// `model_switch` 事件（from/to/reason/attempt 全量），本 payload 只负责让用户
+/// **看见**正在换档——「模型已切换」不弹会让人以为回复来自原模型。
+/// 不入 session-event-log（瞬态 UI 事件）。
+#[derive(Clone, Serialize)]
+pub struct ChatModelSwitchedPayload {
+    pub conversation_id: String,
+    /// 当前流式回合的 assistant 占位消息 id（与 chat:retrying 的 message_id 同源）
+    pub message_id: String,
+    /// 换出模型名（换档前的 ctx.model）
+    pub from_model: String,
+    /// 换入档位别名（用户起的名，如「智谱主力」——比 profile id 可读）
+    pub to_alias: String,
+    /// 换入模型名
+    pub to_model: String,
+    /// 换档触发原因 slug：`quota`（余额/资源包）/ `rate_limited`（限流耗尽）/
+    /// `network`（网络错误耗尽）——前端 toast 文案按此翻译
+    pub reason: String,
+}
+
 /// `chat:processing` 事件 payload — send_message 重处理阶段心跳
 ///
 /// **不变式（CLAUDE.md 同步）**：60s 静默超时计时器假定「后端必有活动事件回报」，

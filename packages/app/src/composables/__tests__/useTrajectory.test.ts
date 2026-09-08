@@ -287,9 +287,9 @@ describe("buildRows 行模型", () => {
 });
 
 describe("类型筛选模型（FilterKey / 预设 / 计数 / 持久化）", () => {
-  it("结构：FILTER_KEYS 10 键唯一，DEFAULT_HIDDEN 是其子集（结构锁范式）", () => {
-    expect(FILTER_KEYS).toHaveLength(10);
-    expect(new Set(FILTER_KEYS).size).toBe(10);
+  it("结构：FILTER_KEYS 11 键唯一，DEFAULT_HIDDEN 是其子集（结构锁范式）", () => {
+    expect(FILTER_KEYS).toHaveLength(11);
+    expect(new Set(FILTER_KEYS).size).toBe(11);
     for (const k of DEFAULT_HIDDEN) expect(FILTER_KEYS).toContain(k);
   });
 
@@ -304,6 +304,7 @@ describe("类型筛选模型（FilterKey / 预设 / 计数 / 持久化）", () =
       ["plan_updated", { items: [{ text: "x", status: "todo" }] }],
       ["message_error", { kind: "llm", error: "e" }],
       ["message_discarded", { reason: "r" }],
+      ["model_switch", { from_model: "", to_profile_id: "mp-b", to_alias: "备用档", to_model: "glm-backup", reason: "quota", attempt: 1 }],
       ["modal_adapted", { stage: "s", mode: "m", items: [] }],
       ["hook_injected", { point: "p", prompt: "x" }],
       ["attachment_stored", { kind: "page", items: [] }],
@@ -311,6 +312,21 @@ describe("类型筛选模型（FilterKey / 预设 / 计数 / 持久化）", () =
     for (const [kind, payload] of fixtures) {
       expect(evRows([ev(kind, payload)], { hiddenKinds: new Set() }).events()).toHaveLength(1);
     }
+  });
+
+  it("model_switch：SWITCH 行 + 中文原因摘要（quota → 额度耗尽）；默认不隐藏（可见的过程事实）", () => {
+    const rows = evRows([
+      ev("model_switch", { from_model: "glm-5.3", from_profile_id: "mp-main", to_profile_id: "mp-b", to_alias: "备用档", to_model: "glm-backup", reason: "quota", attempt: 1 }),
+    ]);
+    const r = rows.events()[0];
+    expect(r.kind).toBe("switch");
+    expect(r.label).toBe("SWITCH");
+    expect(r.summary).toContain("备用档");
+    expect(r.summary).toContain("glm-backup");
+    expect(r.summary).toContain("额度耗尽");
+    expect(r.isError).toBe(false);
+    // 默认隐藏集不含 model_switch（三类辅助事件才默认藏）
+    expect(DEFAULT_HIDDEN).not.toContain("model_switch");
   });
 
   it("「仅对话」预设：只留用户/回复；isChatOnly 派生判据（无第二状态源）", () => {

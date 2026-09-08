@@ -20,6 +20,7 @@ import type {
   ConfigProposalPayload,
   ConfigProposalResponse,
   ChatBudgetPayload,
+  ChatModelSwitchedPayload,
 } from "../types";
 import { bridge } from "../api/bridge";
 import { useAgentStore } from "./agent";
@@ -237,6 +238,32 @@ export const useChatStore = defineStore("chat", () => {
     budget.value = null;
     renewalNotice.value = null;
     if (renewalTimer) { clearTimeout(renewalTimer); renewalTimer = null; }
+    // 换档 toast 同生命周期（回合级瞬态通知）：切会话/新回合即清，不跨回合残留
+    modelSwitchNotice.value = null;
+    if (modelSwitchTimer) { clearTimeout(modelSwitchTimer); modelSwitchTimer = null; }
+  }
+
+  // ===== 降级换档 toast（chat:model-switched 事件驱动；预算续期 toast 同款） =====
+  // 与 renewalNotice 同为回合级瞬态通知：5s 自动消失，事件层按 convId 过滤后调用
+  const modelSwitchNotice = ref<string | null>(null);
+  let modelSwitchTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** 换档原因 slug → 中文（与后端 fallback_trigger 分类表对齐） */
+  const SWITCH_REASON_LABELS: Record<string, string> = {
+    quota: "额度耗尽",
+    rate_limited: "限流重试耗尽",
+    network: "端点不可达",
+  };
+
+  function updateModelSwitched(p: ChatModelSwitchedPayload) {
+    const reason = SWITCH_REASON_LABELS[p.reason] ?? p.reason;
+    modelSwitchNotice.value =
+      `模型已切换：${p.to_alias}（${p.to_model}）——主模型${reason}，继续生成`;
+    if (modelSwitchTimer) clearTimeout(modelSwitchTimer);
+    modelSwitchTimer = setTimeout(() => {
+      modelSwitchNotice.value = null;
+      modelSwitchTimer = null;
+    }, 5000);
   }
 
   // ===== 流式工具调用/思考状态 =====
@@ -766,7 +793,7 @@ export const useChatStore = defineStore("chat", () => {
     activeConvId, activeConversation,
     messages, msgLoading, hasMore, loadingMore,
     sending, streamingText, draftText, pendingImages, pendingFiles, pendingRefs, lastFinishReason, currentModel,
-    budget, renewalNotice, updateBudget,
+    budget, renewalNotice, updateBudget, modelSwitchNotice, updateModelSwitched,
     streamingToolCalls, streamingThinking, thinkingStartTime, thinkingDuration, lastThinkingContent, thinkingDurations,
     turnFirstIdx,
     // 事件层（useChatEvents）直接读写的内部 Map——暴露供其 mutate；对外读取走下方 computed

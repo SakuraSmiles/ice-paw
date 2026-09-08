@@ -424,7 +424,8 @@ export type SessionEvent =
   | (SessionEventBase & { kind: "turn_ended"; payload: TurnEndedPayload })
   | (SessionEventBase & { kind: "modal_adapted"; payload: ModalAdaptedPayload })
   | (SessionEventBase & { kind: "hook_injected"; payload: HookInjectedPayload })
-  | (SessionEventBase & { kind: "plan_updated"; payload: PlanUpdatedPayload });
+  | (SessionEventBase & { kind: "plan_updated"; payload: PlanUpdatedPayload })
+  | (SessionEventBase & { kind: "model_switch"; payload: ModelSwitchPayload });
 
 export interface TurnContextPayload {
   v?: number;
@@ -460,6 +461,32 @@ export interface ChatBudgetPayload {
   renewed: boolean;
   /** 当前工具轮数（0 起） */
   round: number;
+}
+/** `chat:model-switched` 事件 payload — 降级换档 toast（对齐 chat:budget renewed 先例） */
+export interface ChatModelSwitchedPayload {
+  conversation_id: string;
+  message_id: string;
+  /** 换出档位模型名（legacy 手动主档无快照时为空串） */
+  from_model: string;
+  to_alias: string;
+  to_model: string;
+  /** 换档触发原因 slug（quota / rate_limited / network） */
+  reason: string;
+}
+/** `model_switch` 事件 payload — 降级链换档记录（harness::event_log::ModelSwitchPayload） */
+export interface ModelSwitchPayload {
+  v?: number;
+  from_profile_id?: string | null;
+  from_model: string;
+  to_profile_id: string;
+  to_alias: string;
+  to_model: string;
+  /** 触发原因 slug（quota / rate_limited / network） */
+  reason: string;
+  /** 本回合第几次换档（1 起） */
+  attempt: number;
+  /** 触发换档的错误原文（截断；换档路径不落 message_error，这里留诊断线） */
+  error?: string | null;
 }
 export interface UserMessagePayload { v?: number; content: string; blocks: ContentBlock[]; }
 export interface AssistantMessagePayload {

@@ -1,9 +1,10 @@
-// AgentForm.profile.test.ts — 模型来源三态（ModelProfile Phase 2 批 1）：
+// AgentForm.profile.test.ts — 模型来源三态（ModelProfile Phase 2 批 1 + 批 2 降级链）：
 // 编辑按行引用列初始化引用模式；引用区 = Combobox 选实体 + 摘要（厂商/
 // 模型/Key 态/健康点）+ 悬空引用降级提示；模型选择器与 Key/URL 行只在
 // 手动形态渲染（换厂商 Key 闸引用模式天然消失）；保存分叉——引用只发
 // model_profile_id（不发 provider/model/base_url，后端冲突校验拦同批）、
-// 手动显式发 null 解除引用。
+// 手动显式发 null 解除引用。批 2：降级链有序多选（候选排除主档去重）、
+// 随批提交 / 手动切换同步清空 / 链内档升任主档剔出链。
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mount, flushPromises, type VueWrapper } from "@vue/test-utils";
 import type { Agent, ModelProfile, ProviderInfo } from "../../../types";
@@ -211,5 +212,63 @@ describe("AgentForm 模型来源三态（引用/手动）", () => {
     const input = createMock.mock.calls[0][0] as Record<string, unknown>;
     expect(input.model_profile_id).toBe("mp-2");
     expect(input.api_key).toBe("");
+  });
+});
+
+describe("AgentForm 降级链（引用模式有序多选）", () => {
+  it("编辑回显有序条目；保存随批提交 fallback_profile_ids（[] = 显式清空语义）", async () => {
+    const w = await mountForm(editAgent({ model_profile_id: "mp-1", fallback_profile_ids: ["mp-2"] }));
+    const entries = w.findAll(".fallback-entry");
+    expect(entries).toHaveLength(1);
+    expect(entries[0].text()).toContain("本地 Qwen");
+    await save(w);
+    const input = updateMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(input.fallback_profile_ids).toEqual(["mp-2"]);
+  });
+
+  it("添加框候选排除主档；选中即追加进链并随批提交", async () => {
+    const w = await mountForm(editAgent({ model_profile_id: "mp-1" }));
+    // 添加框 = 页面上第二个 combobox（第一个是主档选择器）
+    const addBox = w.findAll(".combobox-input")[1];
+    await addBox.trigger("focus");
+    await flushPromises();
+    const opts = w.findAll(".combobox-option");
+    expect(opts.length).toBeGreaterThan(0);
+    // 主档 mp-1 不出现在候选（主/降级互斥）
+    expect(opts.some((o) => o.text().includes("智谱主力"))).toBe(false);
+    const opt = opts.find((o) => o.text().includes("本地 Qwen"));
+    expect(opt, "候选应含「本地 Qwen」").toBeTruthy();
+    await opt!.trigger("click");
+    await flushPromises();
+    expect(w.findAll(".fallback-entry")).toHaveLength(1);
+    await save(w);
+    const input = updateMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(input.fallback_profile_ids).toEqual(["mp-2"]);
+  });
+
+  it("切回手动保存：降级链同步清空（手动形态无链入口，不留不可见的换档行为）", async () => {
+    const w = await mountForm(editAgent({ model_profile_id: "mp-1", fallback_profile_ids: ["mp-2"] }));
+    await modeOpts(w)[0].trigger("click");
+    await flushPromises();
+    await save(w);
+    const input = updateMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(input.model_profile_id).toBeNull();
+    expect(input.fallback_profile_ids).toEqual([]);
+  });
+
+  it("链内档升任主档 → 自动剔出链（主/降级互斥）", async () => {
+    const w = await mountForm(editAgent({ model_profile_id: "mp-1", fallback_profile_ids: ["mp-2"] }));
+    // 主选择器切到链内档 mp-2
+    await w.find(".combobox-input").trigger("focus");
+    await flushPromises();
+    const opt = w.findAll(".combobox-option").find((o) => o.text().includes("本地 Qwen"));
+    expect(opt).toBeTruthy();
+    await opt!.trigger("click");
+    await flushPromises();
+    expect(w.findAll(".fallback-entry")).toHaveLength(0);
+    await save(w);
+    const input = updateMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(input.model_profile_id).toBe("mp-2");
+    expect(input.fallback_profile_ids).toEqual([]);
   });
 });

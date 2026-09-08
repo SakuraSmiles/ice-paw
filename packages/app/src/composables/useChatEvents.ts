@@ -33,6 +33,7 @@ import type {
   ConfigProposalPayload,
   DelegationStartedPayload,
   ChatBudgetPayload,
+  ChatModelSwitchedPayload,
 } from "../types";
 
 export async function useChatEvents(): Promise<() => void> {
@@ -112,6 +113,13 @@ export async function useChatEvents(): Promise<() => void> {
   await subscribe<ChatBudgetPayload>("chat:budget", (e) => {
     if (e.payload.conversation_id !== chat.activeConvId) return;
     chat.updateBudget(e.payload);
+  });
+
+  // 降级换档 toast（B2-S3）：主模型失败换备用档时告知用户「谁在继续生成」。
+  // 与 chat:budget renewed 同款——按激活会话过滤 + 5s 自动消失（store 内计时）。
+  await subscribe<ChatModelSwitchedPayload>("chat:model-switched", (e) => {
+    if (e.payload.conversation_id !== chat.activeConvId) return;
+    chat.updateModelSwitched(e.payload);
   });
 
   // 多轮工具调用：每轮工具执行完毕后，后端创建下一轮 assistant 占位并 emit。  // 前端据此冻结上一条 assistant（写入 tool_use/text/thinking）+ 插入 user(tool_result)

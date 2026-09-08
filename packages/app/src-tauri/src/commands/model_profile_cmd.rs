@@ -178,6 +178,82 @@ pub(crate) async fn resolve_profile_credentials(
 }
 
 // ============================================================================
+// 降级链生产 resolver（B2-S2）——纯定义在 harness::loop::fallback，此处是
+// Stronghold + create_provider 的生产装配（loop 链 Tauri-free 纪律）
+// ============================================================================
+
+/// 生产档位解析器：profile → 完整可换入档位。
+///
+/// 适配器恒重建（`create_provider` 按新 provider/model 组装，构造成本可忽略）；
+/// max_tokens 按 `effective_output_cap` 公式以新模型重算。resolve 的 Err 由
+/// 调用方按「跳过该档」处理（对齐视觉链逐候选语义）。
+pub struct ProfileFallbackResolver {
+    app: AppHandle,
+    pool: SqlitePool,
+}
+
+impl ProfileFallbackResolver {
+    pub fn new(app: AppHandle, pool: SqlitePool) -> Self {
+        Self { app, pool }
+    }
+}
+
+#[async_trait]
+impl crate::harness::r#loop::fallback::FallbackResolver for ProfileFallbackResolver {
+    async fn resolve(
+        &self,
+        profile_id: &str,
+        agent_max_tokens: i32,
+        cache_prompt: bool,
+    ) -> AppResult<crate::harness::r#loop::fallback::ResolvedModel> {
+        use crate::harness::r#loop::fallback::{effective_output_cap, ResolvedModel};
+        let cred = resolve_profile_credentials(&self.app, &self.pool, profile_id).await?;
+        let provider = crate::harness::provider::create_provider(
+            &cred.profile.provider,
+            &cred.profile.model,
+            cred.base_url.as_deref(),
+            cache_prompt,
+        )?;
+        Ok(ResolvedModel {
+            profile_id: profile_id.to_string(),
+            alias: cred.profile.alias.clone(),
+            provider,
+            api_key: cred.api_key,
+            model: cred.profile.model.clone(),
+            max_tokens: effective_output_cap(
+                agent_max_tokens,
+                &cred.profile.provider,
+                &cred.profile.model,
+            ),
+        })
+    }
+}
+
+/// 生产降级链组装（chat_cmd / delegate 两调用方共用）：
+/// agent 行 `fallback_profile_ids` 解析链 + ProfileFallbackResolver。
+/// 空链 → `FallbackPlan::empty()`（不建 resolver，行为与 legacy 逐字节等价）。
+pub(crate) fn production_fallback_plan(
+    app: &AppHandle,
+    pool: &SqlitePool,
+    agent: &crate::db::models::AgentRow,
+) -> crate::harness::r#loop::fallback::FallbackPlan {
+    use crate::harness::r#loop::fallback::{parse_fallback_ids, FallbackPlan};
+    let chain = parse_fallback_ids(agent.fallback_profile_ids.as_deref());
+    if chain.is_empty() {
+        return FallbackPlan::empty();
+    }
+    FallbackPlan::new(
+        chain,
+        Arc::new(ProfileFallbackResolver::new(app.clone(), pool.clone())),
+        agent.model_profile_id.clone(),
+        // resolve 参数：agent 行 max_tokens **原值**（非主档策展抬升后的有效值）
+        // + 主档 cache_prompt——见 FallbackPlan 字段注释
+        agent.max_tokens,
+        agent.cache_prompt != 0,
+    )
+}
+
+// ============================================================================
 // trait ModelProfileCmd
 // ============================================================================
 

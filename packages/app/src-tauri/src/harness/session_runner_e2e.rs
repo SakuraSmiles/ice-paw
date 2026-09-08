@@ -29,11 +29,14 @@ use sqlx::SqlitePool;
 
 use crate::db::models::{ConversationRow, HookConfig};
 use crate::db::repo;
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::harness::chat_state::CancellationToken;
 use crate::harness::mcp::client::McpClient;
 use crate::harness::mcp::{McpRegistry, McpServerManager};
 use crate::harness::provider::mock::{MockProvider, MockScenario};
+use crate::harness::r#loop::fallback::{
+    effective_output_cap, FallbackPlan, FallbackResolver, ResolvedModel,
+};
 use crate::harness::r#loop::emitter::LoopEmitter;
 use crate::harness::read_route::ReadRouteRegistry;
 use crate::harness::session_runner::{run_agent_turn, AgentTurnInput, TurnEnv};
@@ -194,6 +197,23 @@ async fn run_turn_with_map(
     scenario: MockScenario,
     map: std::collections::HashMap<String, Arc<dyn McpClient>>,
 ) -> TurnFixture {
+    run_turn_core(
+        pool,
+        Arc::new(MockProvider::new("mock-model", scenario)),
+        map,
+        FallbackPlan::empty(),
+    )
+    .await
+}
+
+/// 任意主 provider + 降级链跑一个完整回合（B2-S4 换档 e2e）：主 mock 与链由
+/// 调用方组装——对主/备用 provider 的 Arc 克隆共享调用计数，断言无需经 fixture。
+async fn run_turn_core(
+    pool: SqlitePool,
+    mock: Arc<MockProvider>,
+    map: std::collections::HashMap<String, Arc<dyn McpClient>>,
+    fallback: FallbackPlan,
+) -> TurnFixture {
     let emitter = CollectEmitter::default();
     let cancel = CancellationToken::new();
 
@@ -207,7 +227,6 @@ async fn run_turn_with_map(
     let tools = !map.is_empty();
     let global_registry = Arc::new(McpRegistry::from_map(map));
 
-    let mock = Arc::new(MockProvider::new("mock-model", scenario));
     let user_msg_id = uuid::Uuid::new_v4().to_string();
 
     let route_registry = ReadRouteRegistry::new();
@@ -239,6 +258,7 @@ async fn run_turn_with_map(
         tools_enabled: tools,
         model_override: None,
         cancel_token: cancel.clone(),
+        fallback,
     };
     let rx = run_agent_turn(&env, input).await.expect("turn spawn 失败");
     TurnFixture {
@@ -836,4 +856,386 @@ async fn legacy_rows_without_events_yield_empty_history_but_turn_completes() {
         ]
     );
     assert_event_invariants(&events, &fx.user_msg_id);
+}
+
+// =========================================================================
+// 场景 8：降级链换档（B2-S4）—— Quota 即时换 / 限流耗尽换 / 链尽终态 / 无链回归锁
+//
+// 生产 resolver（Stronghold 取 key + create_provider 重建适配器）在这里换成
+// 内存 MapResolver：profile id → 备用 MockProvider。主 provider 同样由用例
+// 组装（FailNTimesThenNormal 扮演挂掉的主模型 / RateLimited 扮演限流中），
+// 对两份 Arc<MockProvider> 克隆共享调用计数——「谁产出、谁没被再调」即换档
+// 是否发生的最硬证据。
+// =========================================================================
+
+/// 内存降级链 resolver（e2e 注入件）：profile id → (别名, 备用 provider)。
+/// 未命中 = NotFound（生产侧 profile 已删的同构形态——try_switch_model 按跳档处理）。
+struct MapResolver {
+    entries: std::collections::HashMap<String, (String, Arc<MockProvider>)>,
+}
+
+#[async_trait]
+impl FallbackResolver for MapResolver {
+    async fn resolve(
+        &self,
+        profile_id: &str,
+        agent_max_tokens: i32,
+        _cache_prompt: bool,
+    ) -> AppResult<ResolvedModel> {
+        let (alias, provider) = self
+            .entries
+            .get(profile_id)
+            .cloned()
+            .ok_or_else(|| AppError::NotFound {
+                resource: "model_profile",
+                id: profile_id.to_string(),
+            })?;
+        let model = provider.model.clone();
+        Ok(ResolvedModel {
+            profile_id: profile_id.to_string(),
+            alias,
+            provider,
+            api_key: "fb-key".into(),
+            model: model.clone(),
+            max_tokens: effective_output_cap(agent_max_tokens, "mock", &model),
+        })
+    }
+}
+
+/// 种子一行 model_profiles（五必列即可——sort/created/updated 有默认值，
+/// 健康三列可空：record_error/record_ok 是 UPDATE，行在即落、无行静默）。
+async fn seed_profile(pool: &SqlitePool, id: &str) {
+    sqlx::query(
+        "INSERT INTO model_profiles (id, alias, provider, model, api_key_ref)
+         VALUES (?, ?, 'glm', ?, ?)",
+    )
+    .bind(id)
+    .bind(format!("别名-{id}"))
+    .bind(format!("model-{id}"))
+    .bind(format!("profile:{id}"))
+    .execute(pool)
+    .await
+    .expect("seed model_profile");
+}
+
+/// 读 profile 健康状态 slug（None = 行不存在；Some(None) 不会出现——行在即记）。
+async fn profile_health(pool: &SqlitePool, id: &str) -> Option<String> {
+    sqlx::query_scalar("SELECT last_health FROM model_profiles WHERE id = ?")
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .expect("query profile health")
+}
+
+/// 用例 A：Quota 族（智谱 1113 → GlmResourcePack）确定性失败——不可重试分支
+/// **即时**拦截换档（零退避、零错误终态），备用档接手产出终稿。
+#[tokio::test]
+async fn quota_first_attempt_switches_and_completes() {
+    let pool = seeded_pool("{}").await;
+    seed_profile(&pool, "mp-main").await;
+    seed_profile(&pool, "mp-b").await;
+
+    let main = Arc::new(MockProvider::new(
+        "glm-main",
+        MockScenario::FailNTimesThenNormal {
+            // 智谱 1113 措辞 → GlmResourcePack（Quota 族、不可重试）；
+            // times 给大保证主模型本回合永不自愈——回合成功即换档实证
+            error_message:
+                "HTTP 429: {\"code\":1113,\"message\":\"余额不足或无可用资源包\"}（mock）"
+                    .into(),
+            times: 5,
+        },
+    ));
+    // 备用档：times=0 的 FailNTimesThenNormal = 纯计数正常流（NormalReply 场景
+    // 不递增 call_index——MockProvider 只有三个计数场景，断言 call_count 用此形态）
+    let backup = Arc::new(MockProvider::new(
+        "glm-backup",
+        MockScenario::FailNTimesThenNormal {
+            error_message: "不可达（备用档 times=0）".into(),
+            times: 0,
+        },
+    ));
+    let mut entries = std::collections::HashMap::new();
+    entries.insert("mp-b".to_string(), ("备用档".to_string(), backup.clone()));
+
+    let mut fx = run_turn_core(
+        pool,
+        main.clone(),
+        std::collections::HashMap::new(),
+        FallbackPlan::new(
+            vec!["mp-b".into()],
+            Arc::new(MapResolver { entries }),
+            Some("mp-main".into()),
+            1024,
+            false,
+        ),
+    )
+    .await;
+    let summary = finish(&mut fx).await;
+
+    // 换档后回合正常完成（备用档 NormalReply 终稿）
+    assert_eq!(summary.finish_reason, "stop");
+    assert_eq!(summary.final_text, "Hello from MockProvider");
+    assert_eq!(main.call_count(), 1, "Quota 即时换档：主模型失败一次即换");
+    assert_eq!(backup.call_count(), 1, "备用档接手恰一次调用");
+
+    // 事件序：model_switch 独立 kind（决策 9），落在 turn_context 与 assistant_message 之间
+    let events = event_rows(&fx.pool).await;
+    assert_eq!(
+        kinds(&events),
+        vec![
+            "user_message",
+            "turn_context",
+            "model_switch",
+            "assistant_message",
+            "turn_ended",
+        ],
+        "换档回合的事件 kind 序"
+    );
+    assert_event_invariants(&events, &fx.user_msg_id);
+    let sw: crate::harness::event_log::ModelSwitchPayload =
+        serde_json::from_str(&events[2].payload).expect("model_switch payload");
+    assert_eq!(sw.from_profile_id.as_deref(), Some("mp-main"));
+    assert_eq!(sw.to_profile_id, "mp-b");
+    assert_eq!(sw.to_alias, "备用档");
+    assert_eq!(sw.to_model, "glm-backup");
+    assert_eq!(sw.reason, "quota");
+    assert_eq!(sw.attempt, 1);
+    // from_model 不断言：e2e 无 model_override → 换出档位模型名为空串（生产路径
+    // 来自 ctx.model 快照，此处仅保证字段存在不 panic）
+
+    // UI：换档 toast 事件在；全程零 chat:error / chat:retrying（零退避）
+    let names = fx.emitter.names();
+    assert!(
+        names.contains(&"chat:model-switched".to_string()),
+        "应含换档 toast 事件: {names:?}"
+    );
+    assert!(
+        !names.contains(&"chat:error".to_string()),
+        "换档成功不应有错误终态: {names:?}"
+    );
+    assert!(
+        !names.contains(&"chat:retrying".to_string()),
+        "Quota 族不退避白等: {names:?}"
+    );
+
+    // 健康记录：主档 quota（record_error 先于链游走）、备用档 ok（Ok 返回处 record_ok）
+    assert_eq!(
+        profile_health(&fx.pool, "mp-main").await.as_deref(),
+        Some("quota")
+    );
+    assert_eq!(
+        profile_health(&fx.pool, "mp-b").await.as_deref(),
+        Some("ok")
+    );
+}
+
+/// 用例 B：限流退避耗尽后换档（拦截点③）——4 次尝试（MAX_ATTEMPTS=4）+
+/// 1+2+4=7s 退避后链接手；期间 chat:retrying 逐次可见（真等 7s smoke，
+/// finish 30s 护栏内）。
+#[tokio::test]
+async fn rate_limited_exhausts_then_switches() {
+    let pool = seeded_pool("{}").await;
+    seed_profile(&pool, "mp-main").await;
+    seed_profile(&pool, "mp-b").await;
+
+    // 主模型：429 文案的计数形态（RateLimited 场景同样不递增 call_index，
+    // 见用例 A 注释）；times 给大保证退避期间永不自愈——换档实证才干净
+    let main = Arc::new(MockProvider::new(
+        "glm-main",
+        MockScenario::FailNTimesThenNormal {
+            error_message: "HTTP 429: rate limit exceeded (mock)".into(),
+            times: 5,
+        },
+    ));
+    // 备用档用计数形态（同上）
+    let backup = Arc::new(MockProvider::new(
+        "glm-backup",
+        MockScenario::FailNTimesThenNormal {
+            error_message: "不可达（备用档 times=0）".into(),
+            times: 0,
+        },
+    ));
+    let mut entries = std::collections::HashMap::new();
+    entries.insert("mp-b".to_string(), ("备用档".to_string(), backup.clone()));
+
+    let mut fx = run_turn_core(
+        pool,
+        main.clone(),
+        std::collections::HashMap::new(),
+        FallbackPlan::new(
+            vec!["mp-b".into()],
+            Arc::new(MapResolver { entries }),
+            Some("mp-main".into()),
+            1024,
+            false,
+        ),
+    )
+    .await;
+    let summary = finish(&mut fx).await;
+
+    assert_eq!(summary.finish_reason, "stop");
+    assert_eq!(summary.final_text, "Hello from MockProvider");
+    assert_eq!(
+        main.call_count(),
+        4,
+        "退避重试打满 MAX_ATTEMPTS=4 后才轮到链（先自愈后换档）"
+    );
+    assert_eq!(backup.call_count(), 1);
+
+    let events = event_rows(&fx.pool).await;
+    assert_eq!(
+        kinds(&events),
+        vec![
+            "user_message",
+            "turn_context",
+            "model_switch",
+            "assistant_message",
+            "turn_ended",
+        ],
+        "限流耗尽换档的事件 kind 序（与用例 A 同形）"
+    );
+    assert_event_invariants(&events, &fx.user_msg_id);
+    let sw: crate::harness::event_log::ModelSwitchPayload =
+        serde_json::from_str(&events[2].payload).expect("model_switch payload");
+    assert_eq!(sw.reason, "rate_limited");
+    assert_eq!(sw.to_profile_id, "mp-b");
+    assert_eq!(sw.attempt, 1);
+
+    // 退避期间 chat:retrying 逐次可见（3 次：等待 1s/2s/4s 各一次）
+    let names = fx.emitter.names();
+    let retrying = names
+        .iter()
+        .filter(|n| n.as_str() == "chat:retrying")
+        .count();
+    assert_eq!(retrying, 3, "3 次退避各 emit 一次: {names:?}");
+    assert!(
+        names.contains(&"chat:model-switched".to_string()),
+        "应含换档 toast 事件: {names:?}"
+    );
+    assert!(
+        !names.contains(&"chat:error".to_string()),
+        "换档成功不应有错误终态: {names:?}"
+    );
+
+    // 健康记录：主档限流 + 备用档成功
+    assert_eq!(
+        profile_health(&fx.pool, "mp-main").await.as_deref(),
+        Some("rate_limited")
+    );
+    assert_eq!(
+        profile_health(&fx.pool, "mp-b").await.as_deref(),
+        Some("ok")
+    );
+}
+
+/// 用例 C：链尽终态——chain 指向不存在的 profile（MapResolver 未命中 = 生产侧
+/// profile 已删的同构形态），跳档后链尽走原终态：message_error + abort 收尾。
+#[tokio::test]
+async fn chain_exhausted_fails_round() {
+    let pool = seeded_pool("{}").await;
+    seed_profile(&pool, "mp-main").await;
+    // mp-ghost 刻意不进 MapResolver——resolve NotFound → 跳档 → 链尽
+
+    let main = Arc::new(MockProvider::new(
+        "glm-main",
+        MockScenario::FailNTimesThenNormal {
+            error_message:
+                "HTTP 429: {\"code\":1113,\"message\":\"余额不足或无可用资源包\"}（mock）"
+                    .into(),
+            times: 5,
+        },
+    ));
+    let mut fx = run_turn_core(
+        pool,
+        main.clone(),
+        std::collections::HashMap::new(),
+        FallbackPlan::new(
+            vec!["mp-ghost".into()],
+            Arc::new(MapResolver {
+                entries: std::collections::HashMap::new(),
+            }),
+            Some("mp-main".into()),
+            1024,
+            false,
+        ),
+    )
+    .await;
+    let summary = finish(&mut fx).await;
+
+    assert_eq!(summary.finish_reason, "abort");
+    assert_eq!(main.call_count(), 1, "Quota 即时拦截（链尽不再退避重试）");
+
+    // 事件序：链尽不落 model_switch（换档不发生），走 message_error 终态——
+    // 与「换档路径不落 message_error」互为镜像
+    let events = event_rows(&fx.pool).await;
+    assert_eq!(
+        kinds(&events),
+        vec!["user_message", "turn_context", "message_error", "turn_ended"],
+        "链尽终态的事件 kind 序"
+    );
+    assert_event_invariants(&events, &fx.user_msg_id);
+    let ended: crate::harness::event_log::TurnEndedPayload =
+        serde_json::from_str(&events[3].payload).expect("turn_ended payload");
+    assert_eq!(ended.termination, "abort");
+
+    // UI：chat:error 终态在、无换档 toast
+    let names = fx.emitter.names();
+    assert!(
+        names.contains(&"chat:error".to_string()),
+        "链尽应有错误终态: {names:?}"
+    );
+    assert!(
+        !names.contains(&"chat:model-switched".to_string()),
+        "链尽不 emit 换档事件: {names:?}"
+    );
+
+    // 健康记录：record_error 先于链游走——链尽也留主档失败痕
+    assert_eq!(
+        profile_health(&fx.pool, "mp-main").await.as_deref(),
+        Some("quota")
+    );
+}
+
+/// 用例 D：无链回归锁——empty() FallbackPlan（resolver None）下不可重试失败的
+/// 终态与 legacy 逐字节一致（三拦截点全部 no-op）。
+#[tokio::test]
+async fn no_fallback_keeps_legacy_behavior() {
+    let pool = seeded_pool("{}").await;
+
+    let main = Arc::new(MockProvider::new(
+        "glm-main",
+        MockScenario::FailNTimesThenNormal {
+            error_message:
+                "HTTP 429: {\"code\":1113,\"message\":\"余额不足或无可用资源包\"}（mock）"
+                    .into(),
+            times: 5,
+        },
+    ));
+    let mut fx = run_turn_core(
+        pool,
+        main.clone(),
+        std::collections::HashMap::new(),
+        FallbackPlan::empty(),
+    )
+    .await;
+    let summary = finish(&mut fx).await;
+
+    assert_eq!(summary.finish_reason, "abort");
+    assert_eq!(main.call_count(), 1);
+
+    // 与用例 C 同形（无链 = 零跳档零换档的链尽）；不 seed 任何 profile——
+    // record_error 对 active=None 是 no-op，无行可记也不报错
+    let events = event_rows(&fx.pool).await;
+    assert_eq!(
+        kinds(&events),
+        vec!["user_message", "turn_context", "message_error", "turn_ended"],
+        "无链 legacy 终态的事件 kind 序"
+    );
+    assert_event_invariants(&events, &fx.user_msg_id);
+
+    let names = fx.emitter.names();
+    assert!(names.contains(&"chat:error".to_string()));
+    assert!(!names.contains(&"chat:model-switched".to_string()));
+    assert!(!names.contains(&"chat:retrying".to_string()));
 }

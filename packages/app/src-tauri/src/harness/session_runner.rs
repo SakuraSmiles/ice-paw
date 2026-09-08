@@ -117,6 +117,10 @@ pub(crate) struct AgentTurnInput {
     pub model_override: Option<String>,
     /// 已注册到 ChatState 的取消令牌（用户=新建；委派=父 token 的子链）
     pub cancel_token: CancellationToken,
+    /// 降级链（B2-S2）：agent 行 fallback_profile_ids 解析产物 + resolver。
+    /// 调用方组装（生产 ProfileFallbackResolver；e2e 注入 MapResolver）；
+    /// 空链 = legacy 行为逐字节等价。
+    pub fallback: crate::harness::r#loop::fallback::FallbackPlan,
 }
 
 /// 运行一次完整 agent 回合（不阻塞等待循环完成）。
@@ -145,6 +149,7 @@ pub(crate) async fn run_agent_turn(
         tools_enabled,
         model_override,
         cancel_token,
+        fallback,
     } = input;
 
     let conv_id = conv.id.clone();
@@ -454,8 +459,11 @@ pub(crate) async fn run_agent_turn(
     };
 
     // 单轮输出上限：agent.max_tokens 与模型策展表取 max（只抬不降）。
-    let effective_max_tokens = agent.max_tokens.max(
-        provider::default_max_output_tokens(&agent.provider, &agent.model).unwrap_or(16_384) as i32,
+    // 公式抽至 loop::fallback::effective_output_cap 共用（降级链换档后按新模型重算）。
+    let effective_max_tokens = crate::harness::r#loop::fallback::effective_output_cap(
+        agent.max_tokens,
+        &agent.provider,
+        &agent.model,
     );
 
     // --- 工具组装：全局注册表快照（boot 时已启动全部 server） ---
@@ -627,6 +635,7 @@ pub(crate) async fn run_agent_turn(
         agent_id: conv.agent_id.clone(),
         project_id: conv.project_id.clone(),
         hooks,
+        fallback,
         done_tx: Some(done_tx),
     });
     Ok(done_rx)
@@ -732,6 +741,8 @@ pub(crate) struct StreamLoopInput {
     pub agent_id: String,
     pub project_id: Option<String>,
     pub hooks: HookConfig,
+    /// 降级链（B2-S2）：透传进 LoopContext，换档发生在 stream_with_retry 重试现场
+    pub fallback: crate::harness::r#loop::fallback::FallbackPlan,
     pub done_tx: Option<tokio::sync::oneshot::Sender<TurnSummary>>,
 }
 
@@ -769,6 +780,7 @@ pub(crate) fn spawn_stream_loop(input: StreamLoopInput) {
         agent_id,
         project_id,
         hooks,
+        fallback,
         done_tx,
     } = input;
     tokio::spawn(async move {
@@ -811,6 +823,14 @@ pub(crate) fn spawn_stream_loop(input: StreamLoopInput) {
         let whitelist = crate::harness::authority::PathWhitelistConfig::default();
 
         // A6/S4: LoopConfig(不可变配置) + LoopContext(配置 + 可变运行时件 + 可变消息缓冲)
+        // B2-S1: 模型档位五字段单独成 RuntimeModel（降级链换档时可变），经 new 平铺进 LoopContext
+        let runtime_model = crate::harness::loop_engine::RuntimeModel {
+            provider,
+            api_key,
+            model: model_override,
+            asst_model,
+            max_tokens,
+        };
         let config = crate::harness::loop_engine::LoopConfig {
             conv_id: conv_id.clone(),
             asst_msg_id,
@@ -820,10 +840,7 @@ pub(crate) fn spawn_stream_loop(input: StreamLoopInput) {
             emitter,
             tool_app,
             pool,
-            provider,
-            api_key,
             temperature,
-            max_tokens,
             tool_registry,
             tools_enabled,
             whitelist,
@@ -831,15 +848,15 @@ pub(crate) fn spawn_stream_loop(input: StreamLoopInput) {
             budget,
             query,
             call_history,
-            model: model_override,
-            asst_model,
             hooks,
         };
         let mut ctx = crate::harness::loop_engine::LoopContext::new(
             config,
+            runtime_model,
             auth_registry,
             auth_session,
             messages,
+            fallback,
         );
         crate::harness::loop_engine::stream_loop(&mut ctx, &mut observable).await;
         // W2.4: emit final round-state after stream_loop completes（S6 起经 LoopEmitter，

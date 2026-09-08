@@ -24,6 +24,7 @@ import type {
   MessageErrorPayload,
   ModalAdaptedPayload,
   HookInjectedPayload,
+  ModelSwitchPayload,
   SessionEvent,
   SummaryPayload,
   ToolExecutionPayload,
@@ -37,8 +38,8 @@ import type {
 // 行模型
 // =========================================================================
 
-/** 行 kind：14 种日志 kind 的 UI 投影（徽章文案 + 颜色语义） */
-export type RowKind = "user" | "assistant" | "tool" | "summary" | "plan" | "error" | "discarded" | "aux";
+/** 行 kind：日志 kind 的 UI 投影（徽章文案 + 颜色语义） */
+export type RowKind = "user" | "assistant" | "tool" | "summary" | "plan" | "error" | "discarded" | "switch" | "aux";
 
 export const ROW_KIND_LABELS: Record<RowKind, string> = {
   user: "USER",
@@ -48,6 +49,7 @@ export const ROW_KIND_LABELS: Record<RowKind, string> = {
   plan: "PLAN",
   error: "ERROR",
   discarded: "DISCARD",
+  switch: "SWITCH",
   aux: "AUX",
 };
 
@@ -64,6 +66,7 @@ export type FilterKey =
   | "summary"
   | "plan"
   | "discarded"
+  | "model_switch"
   | "attachment_stored"
   | "modal_adapted"
   | "hook_injected";
@@ -71,11 +74,11 @@ export type FilterKey =
 /** 默认隐藏集：三类辅助事件（低频审计信息；与旧 showAux=false 行为等价） */
 export const DEFAULT_HIDDEN: FilterKey[] = ["attachment_stored", "modal_adapted", "hook_injected"];
 
-/** 「类型」下拉的分组与中文文案（4 组 10 键；TrajectoryToolbar 与 ProjectTimeline 共用） */
+/** 「类型」下拉的分组与中文文案（4 组 11 键；TrajectoryToolbar 与 ProjectTimeline 共用） */
 export const FILTER_GROUPS: { label: string; items: { key: FilterKey; label: string }[] }[] = [
   { label: "对话", items: [{ key: "user", label: "用户消息" }, { key: "assistant", label: "回复消息" }] },
   { label: "过程", items: [{ key: "tool", label: "工具调用" }, { key: "error", label: "错误" }] },
-  { label: "记录", items: [{ key: "summary", label: "摘要" }, { key: "plan", label: "计划" }, { key: "discarded", label: "废弃轮" }] },
+  { label: "记录", items: [{ key: "summary", label: "摘要" }, { key: "plan", label: "计划" }, { key: "discarded", label: "废弃轮" }, { key: "model_switch", label: "模型切换" }] },
   { label: "辅助", items: [{ key: "attachment_stored", label: "附件落库" }, { key: "modal_adapted", label: "视觉适配" }, { key: "hook_injected", label: "钩子注入" }] },
 ];
 
@@ -93,6 +96,7 @@ const EV_KIND_TO_FILTER: Record<string, FilterKey> = {
   plan_updated: "plan",
   message_error: "error",
   message_discarded: "discarded",
+  model_switch: "model_switch",
   attachment_stored: "attachment_stored",
   modal_adapted: "modal_adapted",
   hook_injected: "hook_injected",
@@ -246,6 +250,13 @@ function compactJson(s: string, max = 80): string {
   return t.length > max ? `${t.slice(0, max)}…` : t;
 }
 
+/** 换档原因 slug → 中文（与后端 fallback_trigger 分类表对齐；未知 slug 原样透出） */
+const SWITCH_REASON_LABELS: Record<string, string> = {
+  quota: "额度耗尽",
+  rate_limited: "限流重试耗尽",
+  network: "端点不可达",
+};
+
 function summarizeEvent(ev: SessionEvent): { kind: RowKind; summary: string; isError: boolean; durationMs: number | null; tokens: number | null; thinkingDerived: boolean; isThinking: boolean; isContinuation: boolean } | null {
   switch (ev.kind) {
     case "user_message": {
@@ -337,6 +348,20 @@ function summarizeEvent(ev: SessionEvent): { kind: RowKind; summary: string; isE
     case "message_discarded": {
       const p = ev.payload as MessageDiscardedPayload;
       return { kind: "discarded", summary: firstLine(p.reason, 160), isError: false, durationMs: null, tokens: null, thinkingDerived: false, isThinking: false, isContinuation: false };
+    }
+    case "model_switch": {
+      const p = ev.payload as ModelSwitchPayload;
+      const reason = SWITCH_REASON_LABELS[p.reason] ?? p.reason;
+      return {
+        kind: "switch",
+        summary: `切换 → ${p.to_alias}（${p.to_model}）· ${reason}`,
+        isError: false,
+        durationMs: null,
+        tokens: null,
+        thinkingDerived: false,
+        isThinking: false,
+        isContinuation: false,
+      };
     }
     case "modal_adapted": {
       const p = ev.payload as ModalAdaptedPayload;

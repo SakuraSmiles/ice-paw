@@ -13,7 +13,7 @@
 // Key/URL 字段的规则（requires_key / requires_base_url）由推导出的 provider
 // 驱动，与后端校验一致；「测试连接」一次往返两用——验证配置 + 拉取模型并入下拉。
 import AvatarField from "../common/AvatarField.vue";
-import { ExternalLink } from "@lucide/vue";
+import { ExternalLink, ChevronUp, ChevronDown, Trash2 } from "@lucide/vue";
 import { ref, computed, onMounted, watch } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -97,6 +97,48 @@ const profileHealth = computed(() => {
   const slug = selectedProfile.value?.last_health;
   if (!slug) return null;
   return PROFILE_HEALTH_META[slug] ?? { tone: "neutral", label: slug };
+});
+
+// ---- 降级链（引用模式专属；ModelProfile Phase 2 批 2）----
+// 有序 profile id 链：主模型失败（额度耗尽 / 限流重试耗尽 / 端点不可达）时按序
+// 换档，链尽走原错误终态。去重/排除主档在写入侧（本表单）保证——后端按行存原文。
+// ⚠️ 换档 × N 档最长退避 = 档数 × 7s，链长建议 ≤3（视觉读取链同款提醒见设置页）。
+const fallbackIds = ref<string[]>(props.agent?.fallback_profile_ids ?? []);
+const fallbackPick = ref("");
+/** 可加入链的候选：排除主档与已在链中的档（选一少一，天然去重） */
+const fallbackCandidates = computed<ComboboxItem[]>(() =>
+  profiles.value
+    .filter((p) => p.id !== profileId.value && !fallbackIds.value.includes(p.id))
+    .map((p) => ({
+      label: `${p.alias}（${providerLabelOf(p.provider)} · ${p.model}）`,
+      value: p.id,
+    })),
+);
+/** 链内条目展示名（悬空 id = profile 已删的罕见态——删除守卫正常会拦，兜底诚实标注） */
+function fallbackLabelOf(id: string): string {
+  const p = profileById(profiles.value, id);
+  return p ? `${p.alias}（${providerLabelOf(p.provider)} · ${p.model}）` : "（配置已删除）";
+}
+function onFallbackAdd(v: string) {
+  if (!fallbackCandidates.value.some((c) => c.value === v)) return;
+  fallbackIds.value.push(v);
+  fallbackPick.value = ""; // 添加框回空：连续添加不残留
+}
+function moveFallback(i: number, delta: -1 | 1) {
+  const j = i + delta;
+  if (j < 0 || j >= fallbackIds.value.length) return;
+  const ids = [...fallbackIds.value];
+  [ids[i], ids[j]] = [ids[j], ids[i]];
+  fallbackIds.value = ids;
+}
+function removeFallback(i: number) {
+  fallbackIds.value.splice(i, 1);
+}
+// 链内档升任主档 → 剔出链（主/降级互斥；新主档不可能已在链中——候选已排除）
+watch(profileId, (id) => {
+  if (id && fallbackIds.value.includes(id)) {
+    fallbackIds.value = fallbackIds.value.filter((x) => x !== id);
+  }
 });
 
 // ---- 头像行 ----
@@ -450,6 +492,8 @@ async function save() {
           workspace_path: form.value.workspace_path || null,
           avatar: form.value.avatar,
           model_profile_id: profileId.value || null,
+          // 降级链随批提交（Some 权威语义：[] = 显式清空）
+          fallback_profile_ids: fallbackIds.value,
         });
         const fresh = await bridge.agents.list();
         const real = fresh.find((a) => a.id === currentAgent.id);
@@ -468,6 +512,8 @@ async function save() {
           // 手动模式显式解除引用（null）：引用 agent 切回手动一并完成，
           // 快照列（后端保持新鲜）升为权威
           model_profile_id: null,
+          // 降级链同步清空：手动形态无链编辑入口，留链 = 不可见的换档行为
+          fallback_profile_ids: [],
         };
         const updated = await bridge.agents.update(update);
 
@@ -503,6 +549,7 @@ async function save() {
       // provider/model 照传占位，被解析值覆盖）
       if (mode.value === "reference" && profileId.value) {
         input.model_profile_id = profileId.value;
+        if (fallbackIds.value.length) input.fallback_profile_ids = fallbackIds.value;
       }
       const created = await bridge.agents.create(input);
       emit("saved", created);
@@ -622,6 +669,31 @@ function confirmDelete() {
               <!-- 悬空引用（profile 已删；删除守卫正常会拦，异常路径兜底提示） -->
               <p v-else-if="profileId" class="field-hint profile-dangling">该模型配置已不存在——保存后沿用行内快照继续可用，建议重新选择</p>
               <p v-else class="field-hint">引用「设置-模型」里的模型配置：Key 与端点在那边统一维护，改动对所有引用它的 Agent 生效</p>
+
+              <!-- 降级链（引用模式专属）：主模型失败按序换档；顺序敏感（上移/下移） -->
+              <div class="fallback-block">
+                <div class="fallback-head">
+                  <span class="fallback-label">降级模型</span>
+                  <span class="fallback-hint">主模型失败时按序尝试（额度耗尽 / 限流 / 端点不可达），链尽则报错终止</span>
+                </div>
+                <div v-for="(id, i) in fallbackIds" :key="id" class="fallback-entry">
+                  <span class="fallback-order">{{ i + 1 }}</span>
+                  <span class="fallback-name" :class="{ 'fallback-name--gone': !profileById(profiles, id) }">{{ fallbackLabelOf(id) }}</span>
+                  <span class="fallback-ops">
+                    <button type="button" class="fallback-btn" :disabled="i === 0" title="上移" @click="moveFallback(i, -1)"><ChevronUp :size="12" /></button>
+                    <button type="button" class="fallback-btn" :disabled="i === fallbackIds.length - 1" title="下移" @click="moveFallback(i, 1)"><ChevronDown :size="12" /></button>
+                    <button type="button" class="fallback-btn" title="移除" @click="removeFallback(i)"><Trash2 :size="12" /></button>
+                  </span>
+                </div>
+                <Combobox
+                  v-if="fallbackCandidates.length"
+                  :model-value="fallbackPick"
+                  :items="fallbackCandidates"
+                  placeholder="添加降级模型（建议 ≤3 档）"
+                  @update:model-value="onFallbackAdd"
+                />
+                <p v-else-if="fallbackIds.length" class="field-hint">全部模型配置都已在链中</p>
+              </div>
             </template>
           </div>
 
@@ -974,6 +1046,79 @@ function confirmDelete() {
 .profile-dot--neutral { background-color: var(--ip-color-text-tertiary); }
 .profile-dangling {
   color: var(--ip-warning-text);
+}
+
+/* 降级链条目（引用模式）：序号 + 展示名 + 上移/下移/移除；添加走 Combobox */
+.fallback-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ip-spacing-1);
+  margin-top: var(--ip-spacing-1);
+}
+.fallback-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.fallback-label {
+  font-size: var(--ip-text-caption-size);
+  font-weight: var(--ip-font-weight-medium);
+  color: var(--ip-color-text-secondary);
+}
+.fallback-hint {
+  font-size: var(--ip-text-micro-size);
+  color: var(--ip-color-text-tertiary);
+}
+.fallback-entry {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px;
+  border-radius: var(--ip-radius-sm);
+  background: var(--ip-color-bg-tertiary);
+}
+.fallback-order {
+  flex-shrink: 0;
+  min-width: 14px;
+  text-align: center;
+  font-size: var(--ip-text-micro-size);
+  color: var(--ip-color-text-tertiary);
+}
+.fallback-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--ip-text-caption-size);
+  color: var(--ip-color-text-body);
+}
+.fallback-name--gone {
+  color: var(--ip-warning-text);
+}
+.fallback-ops {
+  display: inline-flex;
+  gap: 2px;
+}
+.fallback-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: var(--ip-radius-sm);
+  background: transparent;
+  color: var(--ip-color-text-tertiary);
+  cursor: pointer;
+}
+.fallback-btn:hover:not(:disabled) {
+  background: var(--ip-color-bg-elevated);
+  color: var(--ip-color-text-body);
+}
+.fallback-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
 }
 
 /* 连接测试行：小号文字按钮 + 行内结果（绿/红），失败原因可 hover 看全；

@@ -31,8 +31,9 @@ use crate::infra::protocol::{ChatMessage, LlmProvider};
 /// 对话循环的不可变配置（从 LoopContext 拆分，消除 24 参数构造器）。
 ///
 /// 创建后不被循环修改（S4：auth_registry / auth_session 两个**运行时可变**件
-/// 已挪到 [`LoopContext`]，本结构体的不可变声明现在为真）。通过 `LoopContext`
-/// 的 `Deref` 透明访问。
+/// 已挪到 [`LoopContext`]；B2-S1：模型档位五字段（provider/api_key/model/
+/// asst_model/max_tokens）同因可变挪出为 [`RuntimeModel`]——本结构体的不可变
+/// 声明现在为真）。通过 `LoopContext` 的 `Deref` 透明访问。
 pub(crate) struct LoopConfig {
     // ---- 标识与会话 ----
     pub conv_id: String,
@@ -54,11 +55,8 @@ pub(crate) struct LoopConfig {
     pub tool_app: Option<AppHandle>,
     pub pool: SqlitePool,
 
-    // ---- LLM Provider ----
-    pub provider: Arc<dyn LlmProvider>,
-    pub api_key: String,
+    // ---- LLM 生成参数（档位无关——降级链换档不变，见 RuntimeModel） ----
     pub temperature: f64,
-    pub max_tokens: i32,
 
     // ---- 工具 ----
     pub tool_registry: McpRegistry,
@@ -73,27 +71,46 @@ pub(crate) struct LoopConfig {
     pub query: Option<String>,
     pub call_history: Vec<String>,
 
-    // ---- P0-3: 会话级 model override ----
-    pub model: Option<String>,
-    pub asst_model: Option<String>,
-
     // ---- 对话钩子 ----
     pub hooks: HookConfig,
+}
+
+/// 运行时模型档位（B2-S1 拆出）：provider 适配器 + 凭据 + 模型名 + 输出上限。
+///
+/// 一轮对话内**可变**——降级链（B2-S3）失败换档时整体替换——故不进不可变的
+/// [`LoopConfig`]，而是经 [`LoopContext::new`] 解构平铺为 LoopContext 自有字段
+/// （auth_registry 遮蔽 Deref 同款先例，历史 `ctx.provider` 等访问点零改动）。
+pub(crate) struct RuntimeModel {
+    pub provider: Arc<dyn LlmProvider>,
+    pub api_key: String,
+    pub model: Option<String>,
+    pub asst_model: Option<String>,
+    pub max_tokens: i32,
 }
 
 /// 对话循环上下文：不可变配置 + 可变运行时件 + 可变消息缓冲。
 ///
 /// 通过 `Deref<Target = LoopConfig>` 透明访问配置字段（`ctx.pool`、
-/// `ctx.app` 等）；`auth_registry` / `auth_session` / `messages` 是循环中
-/// 实际变异的运行时状态，直接挂在本结构体上（自有字段优先于 Deref，历史
-/// 访问点 `ctx.auth_registry` 等无需改动）。构造时传入 `LoopConfig`。
+/// `ctx.app` 等）；`auth_registry` / `auth_session` / `messages` 及五个模型档位
+/// 字段（B2-S1，见 [`RuntimeModel`]）是循环中实际变异的运行时状态，直接挂在
+/// 本结构体上（自有字段优先于 Deref，历史访问点 `ctx.auth_registry` /
+/// `ctx.provider` 等无需改动）。构造时传入 `LoopConfig` + `RuntimeModel`。
 pub(crate) struct LoopContext {
     pub config: LoopConfig,
+    // ---- 运行时模型档位（B2-S1）：降级链换档时逐字段替换 ----
+    pub provider: Arc<dyn LlmProvider>,
+    pub api_key: String,
+    pub model: Option<String>,
+    pub asst_model: Option<String>,
+    pub max_tokens: i32,
     /// 工具授权 oneshot 注册表（A2-3）：循环中 register/take 配对使用（运行时变异）。
     pub auth_registry: ToolAuthRegistry,
     /// 会话级已授权路径表（A2-3）：工具授权流程累积写入，循环收尾 clear（运行时变异）。
     pub auth_session: PathAuthSession,
     pub messages: Vec<ChatMessage>,
+    /// 降级链状态（B2-S2）：cursor 单调前进 / 激活档位更新发生在换档时
+    /// （B2-S3）。空链 = 无降级（legacy 行为，换档尝试天然 no-op）。
+    pub fallback: crate::harness::r#loop::fallback::FallbackPlan,
 }
 
 impl std::ops::Deref for LoopContext {
@@ -106,15 +123,30 @@ impl std::ops::Deref for LoopContext {
 impl LoopContext {
     pub(crate) fn new(
         config: LoopConfig,
+        model: RuntimeModel,
         auth_registry: ToolAuthRegistry,
         auth_session: PathAuthSession,
         messages: Vec<ChatMessage>,
+        fallback: crate::harness::r#loop::fallback::FallbackPlan,
     ) -> Self {
+        let RuntimeModel {
+            provider,
+            api_key,
+            model,
+            asst_model,
+            max_tokens,
+        } = model;
         Self {
             config,
+            provider,
+            api_key,
+            model,
+            asst_model,
+            max_tokens,
             auth_registry,
             auth_session,
             messages,
+            fallback,
         }
     }
 }

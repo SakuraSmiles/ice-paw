@@ -97,6 +97,7 @@ pub mod kind {
     pub const MODAL_ADAPTED: &str = "modal_adapted";
     pub const HOOK_INJECTED: &str = "hook_injected";
     pub const PLAN_UPDATED: &str = "plan_updated";
+    pub const MODEL_SWITCH: &str = "model_switch";
 }
 
 // =========================================================================
@@ -381,6 +382,34 @@ pub struct PlanItem {
     /// 条目挂的委派子会话 id（跳转用；None = agent 自己做/未挂接）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_conversation_id: Option<String>,
+}
+
+/// 降级链换档（B2-S3，`stream_with_retry` 内三拦截点触发）。
+///
+/// 独立 kind（决策 9）：换档是**回合内模型身份变更**，不属于 turn_context 快照
+/// 的追加修正；轨迹页按本事件还原「这轮回复实际由谁产出」。legacy 手动主档
+/// 的 `from_profile_id` 为 None（快照列族完整性只对引用 agent 成立）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelSwitchPayload {
+    #[serde(default = "version_one")]
+    pub v: u8,
+    /// 换出档位 profile id（None = legacy 手动主档，无实体可指）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_profile_id: Option<String>,
+    /// 换出模型名（换档前的运行时 model）
+    pub from_model: String,
+    pub to_profile_id: String,
+    /// 换入档位别名（用户起的名，轨迹展示用）
+    pub to_alias: String,
+    pub to_model: String,
+    /// 触发原因 slug：quota（余额/资源包）/ rate_limited（限流退避耗尽）/
+    /// network（网络错误退避耗尽）
+    pub reason: String,
+    /// 本回合第几次换档（1 起——链尽与多次换档的轨迹可分辨）
+    pub attempt: u32,
+    /// 触发换档的错误原文（截断；换档路径不落 message_error，这里留诊断线）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 // =========================================================================
@@ -746,6 +775,20 @@ pub async fn log_plan_updated(pool: &SqlitePool, ctx: &EventCtx, payload: &PlanU
         pool,
         ctx,
         kind::PLAN_UPDATED,
+        &ctx.agent_actor(),
+        None,
+        payload,
+    )
+    .await;
+}
+
+/// 降级链换档成功（message_id=None：换档发生在轮内流式起点，关联当前轮
+/// assistant_message 即可，无需独立占位）。
+pub async fn log_model_switch(pool: &SqlitePool, ctx: &EventCtx, payload: &ModelSwitchPayload) {
+    append_event(
+        pool,
+        ctx,
+        kind::MODEL_SWITCH,
         &ctx.agent_actor(),
         None,
         payload,

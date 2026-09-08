@@ -41,3 +41,33 @@ pub(crate) fn classify_retry_reason(e: &AppError) -> String {
         "unknown_error".into()
     }
 }
+
+/// retry reason slug → 用户可读中文标签（B2-S1：RetryExhausted 终态文案用；
+/// 与 `classify_retry_reason` 的五档词表成对维护，未收录 slug 原样透传）。
+pub(crate) fn retry_reason_label(slug: &str) -> &str {
+    match slug {
+        "timeout" => "请求超时",
+        "rate_limited" => "触发限流",
+        "server_error_5xx" => "服务端错误",
+        "network_error" => "网络错误",
+        "unknown_error" => "未知错误",
+        other => other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::retry_reason_label;
+
+    #[test]
+    fn retry_reason_label_covers_known_slugs_and_passes_through_unknown() {
+        // classify_retry_reason 的五档词表全收录（成对维护——新增档位两边一起补）
+        assert_eq!(retry_reason_label("timeout"), "请求超时");
+        assert_eq!(retry_reason_label("rate_limited"), "触发限流");
+        assert_eq!(retry_reason_label("server_error_5xx"), "服务端错误");
+        assert_eq!(retry_reason_label("network_error"), "网络错误");
+        assert_eq!(retry_reason_label("unknown_error"), "未知错误");
+        // 未收录 slug 原样透传（不吞不编）
+        assert_eq!(retry_reason_label("some_new_slug"), "some_new_slug");
+    }
+}

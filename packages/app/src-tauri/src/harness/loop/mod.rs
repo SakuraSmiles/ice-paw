@@ -14,6 +14,12 @@
 //!   - `classify_retry_reason()` — 将 AppError 映射为 retry reason 字符串
 //! - `retry_round`：单轮流式 + 退避重试
 //!   - `stream_with_retry()` — 带重试地拉取一轮 LLM 流，结果归类为 `RoundStreamResult`
+//!     （B2-S3 起含降级链三拦截点，见其模块注释）
+//! - `fallback`：降级链（B2）
+//!   - `FallbackPlan` / `FallbackResolver` / `parse_fallback_ids()` — 链状态 +
+//!     档位解析 trait + 行列解析（生产 resolver 在 commands::model_profile_cmd）
+//!   - `fallback_trigger()` / `try_switch_model()` — 失败分类表 + 换档编排
+//!     （跳档 / swap 五字段 / model_switch 事件 + chat:model-switched toast）
 //! - `events`：loop 事件发射
 //!   - `emit_intermediate_round_state()` — 发射中间 round-state 事件
 //!
@@ -23,6 +29,7 @@ pub(crate) mod context;
 pub(crate) mod doom_detect;
 pub(crate) mod emitter;
 pub(crate) mod events;
+pub(crate) mod fallback;
 pub(crate) mod reason;
 pub(crate) mod retry_round;
 pub(crate) mod stuck_detect;

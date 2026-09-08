@@ -134,6 +134,22 @@ pub enum MockScenario {
         /// 产出 tool_use 的调用次数（之后转文本收尾）
         times: u32,
     },
+
+    /// 降级链场景（B2-S4）：前 `times` 次 `stream_chat` 立即返回 `Err`
+    /// （错误文本由调用方给——含「无可用资源包」即 Quota 族、含 429 即限流族，
+    /// 分类交给 `classify_llm_error`），之后转 [`MockScenario::NormalReply`]
+    /// 同形正常流。
+    ///
+    /// e2e 用它扮演「挂掉的主模型」：配 FallbackResolver 注入的备用
+    /// MockProvider，驱动三拦截点换档全链路（quota 即时换 / 限流退避耗尽换 /
+    /// 链尽终态）。`times` 给大（如 5）可保证主模型本回合永不自愈——
+    /// 回合成功即证明换档真的发生了。
+    FailNTimesThenNormal {
+        /// 错误文本（原样进 AppError::Llm）
+        error_message: String,
+        /// 失败次数（之后转正常流）
+        times: u32,
+    },
 }
 
 impl MockScenario {
@@ -149,6 +165,7 @@ impl MockScenario {
             MockScenario::CustomText(_) => "CustomText",
             MockScenario::ToolCallThenText { .. } => "ToolCallThenText",
             MockScenario::ToolCallRepeat { .. } => "ToolCallRepeat",
+            MockScenario::FailNTimesThenNormal { .. } => "FailNTimesThenNormal",
         }
     }
 }
@@ -267,10 +284,13 @@ impl LlmProvider for MockProvider {
             messages.len(),
         );
 
-        // ToolCallThenText 的轮次区分：首次调用 = 工具轮，之后 = 文本轮；
-        // ToolCallRepeat 同一计数器：0..times = 工具轮，之后 = 文本轮。
-        let tool_then_text_round = match &self.scenario {
-            MockScenario::ToolCallThenText { .. } | MockScenario::ToolCallRepeat { .. } => Some(
+        // 按调用计数区分轮次的场景：ToolCallThenText（0=工具轮 ≥1=文本轮）、
+        // ToolCallRepeat（<times=工具轮）、FailNTimesThenNormal（<times=Err）。
+        // 同一计数器共享（多克隆计数连续，见 call_index 字段注释）。
+        let counted_round = match &self.scenario {
+            MockScenario::ToolCallThenText { .. }
+            | MockScenario::ToolCallRepeat { .. }
+            | MockScenario::FailNTimesThenNormal { .. } => Some(
                 self.call_index
                     .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
             ),
@@ -289,6 +309,14 @@ impl LlmProvider for MockProvider {
                     "HTTP 503: service unavailable (mock)".to_string(),
                 ));
             }
+            // FailNTimesThenNormal 的失败窗口（计数 < times）：
+            // 错误文本原样透传——Quota/限流/鉴权各族由 classify_llm_error 判定
+            MockScenario::FailNTimesThenNormal {
+                error_message,
+                times,
+            } if counted_round.is_some_and(|r| r < *times) => {
+                return Err(AppError::Llm(error_message.clone()));
+            }
             _ => {}
         }
 
@@ -297,7 +325,12 @@ impl LlmProvider for MockProvider {
         // 选 channel 是因为 Timeout 场景需要在 spawn 的任务里死循环检查 cancel，
         // 而正常/自定义场景一次性 yield 完所有 chunk 即可。
         let (tx, rx) = tokio::sync::mpsc::channel::<AppResult<ChatDelta>>(64);
-        let scenario = self.scenario.clone();
+        // FailNTimesThenNormal 计数耗尽后落回 NormalReply 同形流（失败分支
+        // 已在上方 Err 返回，到这里只剩正常轮）
+        let scenario = match self.scenario.clone() {
+            MockScenario::FailNTimesThenNormal { .. } => MockScenario::NormalReply,
+            s => s,
+        };
         let effective_model_owned = effective_model.to_string();
 
         tokio::spawn(async move {
@@ -314,6 +347,16 @@ impl LlmProvider for MockProvider {
             match scenario {
                 MockScenario::RateLimited | MockScenario::ServiceUnavailable => {
                     // 已在上面 Err 返回，这里走不到；防御性再 yield Done
+                    let _ = tx
+                        .send(Ok(ChatDelta::Done {
+                            finish_reason: Some("error".to_string()),
+                        }))
+                        .await;
+                }
+
+                // FailNTimesThenNormal 已在上方归一化为 NormalReply，这里同样
+                // 走不到；补全 match 以防未来归一化被改掉时静默漏分支
+                MockScenario::FailNTimesThenNormal { .. } => {
                     let _ = tx
                         .send(Ok(ChatDelta::Done {
                             finish_reason: Some("error".to_string()),
@@ -398,7 +441,7 @@ impl LlmProvider for MockProvider {
                     tool_name,
                     arguments,
                 } => {
-                    if tool_then_text_round == Some(0) {
+                    if counted_round == Some(0) {
                         // 第 1 轮：一条完整 tool_use 流（参数分 2 个 Delta 模拟增量）
                         let id = "mock_tool_call_1".to_string();
                         let _ = tx
@@ -465,7 +508,7 @@ impl LlmProvider for MockProvider {
                     arguments,
                     times,
                 } => {
-                    let round = tool_then_text_round.unwrap_or(0);
+                    let round = counted_round.unwrap_or(0);
                     if round < times {
                         // 工具轮：完整 tool_use 流（id 按调用序递增——
                         // 同 id 会被 loop 当作同一次调用去重，连败序列就断了）
@@ -1092,6 +1135,68 @@ mod tests {
         assert!(matches!(&chunks[0], ChatDelta::Delta { content } if content.contains("Final answer")));
         assert!(matches!(&chunks.last(), Some(ChatDelta::Done { finish_reason: Some(ref r) }) if r == "stop"));
         assert_eq!(provider.call_count(), 4);
+    }
+
+    // -----------------------------------------------------------------
+    // FailNTimesThenNormal（B2-S4）：失败窗口 Err（错误文本透传）→ 计数耗尽转正常流
+    // -----------------------------------------------------------------
+    #[tokio::test]
+    async fn fail_n_times_then_normal_errs_then_streams() {
+        let provider = MockProvider::new(
+            "mock",
+            MockScenario::FailNTimesThenNormal {
+                // 智谱 1113 措辞（含「无可用资源包」）→ classify_llm_error 判
+                // GlmResourcePack（Quota 族、不可重试）——降级链 e2e 的靶形态
+                error_message: "HTTP 429: {\"code\":1113,\"message\":\"余额不足或无可用资源包\"}（mock）".into(),
+                times: 2,
+            },
+        );
+        let cancel = CancellationToken::new();
+
+        // 前 2 次：Err + 不可重试（Quota 族确定性失败）
+        for _ in 0..2 {
+            let err = provider
+                .stream_chat(
+                    "k",
+                    MockProvider::sample_messages(),
+                    None,
+                    0.7,
+                    100,
+                    None,
+                    cancel.clone(),
+                )
+                .await
+                .err()
+                .expect("失败窗口内应返回 Err");
+            assert!(
+                err.to_string().contains("无可用资源包"),
+                "错误文本应原样透传: {}",
+                err
+            );
+            assert!(!err.is_retryable(), "Quota 族是确定性失败");
+        }
+
+        // 第 3 次：NormalReply 同形正常流
+        let stream = provider
+            .stream_chat(
+                "k",
+                MockProvider::sample_messages(),
+                None,
+                0.7,
+                100,
+                None,
+                cancel,
+            )
+            .await
+            .expect("计数耗尽后应正常构造 stream");
+        let chunks = drain(stream).await;
+        assert_eq!(chunks.len(), 3, "文本 + Usage + Done");
+        assert!(matches!(
+            &chunks[0],
+            ChatDelta::Delta { content } if content == "Hello from MockProvider"
+        ));
+        assert!(matches!(&chunks[2], ChatDelta::Done { finish_reason: Some(ref r) } if r == "stop"));
+        assert_eq!(provider.call_count(), 3);
     }
 
     // -----------------------------------------------------------------

@@ -1179,6 +1179,13 @@ const RESUMABLE_REASONS = new Set([
       </div>
     </Transition>
 
+    <!-- 降级换档 toast（非阻塞，5s 自动消失；预算续期 toast 同款定位与视觉） -->
+    <Transition name="budget-toast">
+      <div v-if="chat.modelSwitchNotice" class="budget-renewal-toast">
+        <span class="budget-renewal-text">{{ chat.modelSwitchNotice }}</span>
+      </div>
+    </Transition>
+
     <!-- 轮次导航条（UX #5 v2）：定容滑动窗口（当前轮居中）+ 视位高亮 +
          位置徽标 + 边缘省略号/滚轮调窗 + 底部「跳到最新」；
          ≥2 轮才出现，短会话由下方兜底按钮接住跳最新 -->

@@ -83,6 +83,7 @@ use super::stream_consumer::CollectedToolCall;
 use super::tool_executor::{build_tool_ctx, execute_tool_round};
 
 // stream_with_retry（含 classify_retry_reason）已迁移到 crate::harness::r#loop::retry_round
+use crate::harness::r#loop::reason::retry_reason_label;
 use crate::harness::r#loop::retry_round::{stream_with_retry, RoundStreamResult};
 
 // emit_intermediate_round_state 已迁移到 crate::harness::r#loop::events
@@ -92,7 +93,7 @@ use crate::harness::r#loop::events::{emit_budget_state, emit_intermediate_round_
 // W6.2: LoopConfig / LoopContext 已迁移到 crate::harness::r#loop::context
 // 此处 re-export 保持调用方（chat_cmd.rs）的 import 路径不变。
 // ==========================================================================
-pub(crate) use crate::harness::r#loop::context::{LoopConfig, LoopContext};
+pub(crate) use crate::harness::r#loop::context::{LoopConfig, LoopContext, RuntimeModel};
 
 // synthesize_usage 已迁移到 crate::harness::r#loop::token_usage
 use crate::harness::r#loop::token_usage::synthesize_usage;
@@ -548,9 +549,14 @@ async fn stream_loop_inner(
                 // batch_writer.set_tokens：避免与 finalize 的 spawn 写竞态、
                 // 也避免跨轮累加值（total_completion_tokens）脏写到新消息。
             }
-            RoundStreamResult::RetryExhausted => {
+            RoundStreamResult::RetryExhausted { last_reason } => {
                 // consume_stream 始终失败，round_text 仍是初始空串，故无部分内容可回写。
-                let err_msg = format!("连接重试已耗尽（共 {} 次）", ctx.budget.max_attempts);
+                // B2-S1: 终态文案带最后一次失败原因（真实原因取代写死的次数文案，排障免翻日志）
+                let err_msg = format!(
+                    "连接重试已耗尽（共 {} 次，最后原因：{}）",
+                    ctx.budget.max_attempts,
+                    retry_reason_label(&last_reason)
+                );
                 return fail_round_and_cancel(
                     ctx.emitter.as_ref(),
                     &ctx.pool,

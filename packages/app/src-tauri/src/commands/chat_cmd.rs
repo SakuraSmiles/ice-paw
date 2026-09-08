@@ -183,6 +183,13 @@ pub async fn send_message(
     let conv_id_guard = conv_id.clone();
     let cancel_guard = scopeguard::guard((), |_| chat_state.unregister(&conv_id_guard));
 
+    // 降级链（B2-S2）：先于 AgentTurnInput 字面量组装（agent 字段简写会 move 行值）
+    let fallback = crate::commands::model_profile_cmd::production_fallback_plan(
+        &app,
+        pool.inner(),
+        &agent,
+    );
+
     // --- 4. 委派 session_runner：历史解析 → Pipeline → 落库 → spawn 流式循环 ---
     // MA-1 抽取：send_message 保留输入预处理（校验/附件物化/视觉提示），「一次完整
     // agent 回合」的编排内核复用 session_runner::run_agent_turn（agent 委派走同一
@@ -220,6 +227,8 @@ pub async fn send_message(
             tools_enabled,
             model_override,
             cancel_token,
+            // 降级链（B2-S2）：agent 行链 + 生产 resolver；空链 = legacy 行为
+            fallback,
         },
     )
     .await?;

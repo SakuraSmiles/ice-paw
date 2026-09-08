@@ -20,13 +20,13 @@ function rowOf(w: ReturnType<typeof mountFilter>, label: string) {
 }
 
 describe("TrajectoryKindFilter（类型多选下拉）", () => {
-  it("打开后渲染 4 组全部 10 键（与 FILTER_GROUPS 同源）；默认隐藏集无恢复按钮", async () => {
+  it("打开后渲染 4 组全部 11 键（与 FILTER_GROUPS 同源）；默认隐藏集无恢复按钮", async () => {
     const w = mountFilter();
     expect(w.find(".tkf-pop").exists()).toBe(false); // 默认关
     await w.find(".tkf-btn").trigger("click");
     expect(w.find(".tkf-pop").exists()).toBe(true);
     expect(w.findAll(".tkf-group").map((g) => g.text())).toEqual(FILTER_GROUPS.map((g) => g.label));
-    expect(w.findAll(".tkf-row")).toHaveLength(10);
+    expect(w.findAll(".tkf-row")).toHaveLength(11);
     expect(w.find(".tkf-reset").exists()).toBe(false); // isDefault 态不显示恢复入口
     w.unmount();
   });
