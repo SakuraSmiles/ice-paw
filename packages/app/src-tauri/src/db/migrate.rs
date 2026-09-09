@@ -273,12 +273,22 @@ pub async fn heal_checksum_drift(pool: &SqlitePool, migrator: &Migrator) {
             "migration {} checksum 漂移（历史包污染），自愈同步为 commit 正版",
             m.version
         );
-        let _ = sqlx::query("UPDATE _sqlx_migrations SET checksum = ? WHERE version = ?")
+        // 只在 UPDATE 真正成功时计数——失败仍报「自愈完成」是虚报，会让后续
+        // run() 的 checksum 报错显得毫无来由。失败仅 warn 不中断启动（保持
+        // 容错语义，残留漂移由 run() 给出明确报错）
+        match sqlx::query("UPDATE _sqlx_migrations SET checksum = ? WHERE version = ?")
             .bind(m.checksum.as_ref())
             .bind(m.version)
             .execute(pool)
-            .await;
-        healed += 1;
+            .await
+        {
+            Ok(_) => healed += 1,
+            Err(e) => warn!(
+                target: "ice_paw.migrate",
+                "migration {} checksum 自愈 UPDATE 失败（残留漂移由后续 migrate run 报错）: {e}",
+                m.version
+            ),
+        }
     }
     if healed > 0 {
         info!(
@@ -332,23 +342,37 @@ pub async fn heal_dropped_migrations(pool: &SqlitePool, migrator: &Migrator) {
     if dropped.is_empty() {
         return;
     }
+    // 只统计真正清除成功的版本——失败仍报「清除完成」是虚报，且会把未清掉的
+    // 版本号一并写进 info 日志误导对账。失败仅 warn 不中断启动（残留登记由
+    // run() 报 "missing in the resolved migrations"）
+    let mut cleared: Vec<i64> = Vec::new();
     for v in &dropped {
         warn!(
             target: "ice_paw.migrate",
             "migration {} 已 apply 但二进制解析集缺席（未发布 migration 被删），清除登记记录（schema 残留惰性无害）",
             v
         );
-        let _ = sqlx::query("DELETE FROM _sqlx_migrations WHERE version = ?")
+        match sqlx::query("DELETE FROM _sqlx_migrations WHERE version = ?")
             .bind(v)
             .execute(pool)
-            .await;
+            .await
+        {
+            Ok(_) => cleared.push(*v),
+            Err(e) => warn!(
+                target: "ice_paw.migrate",
+                "migration {} 登记记录清除失败（残留登记由后续 migrate run 报错）: {e}",
+                v
+            ),
+        }
     }
-    info!(
-        target: "ice_paw.migrate",
-        "缺席 migration 自愈完成：清除 {} 个登记记录（{:?}）",
-        dropped.len(),
-        dropped
-    );
+    if !cleared.is_empty() {
+        info!(
+            target: "ice_paw.migrate",
+            "缺席 migration 自愈完成：清除 {} 个登记记录（{:?}）",
+            cleared.len(),
+            cleared
+        );
+    }
 }
 
 // =========================================================================

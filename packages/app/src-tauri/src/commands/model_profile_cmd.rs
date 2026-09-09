@@ -25,6 +25,7 @@
 //!    分裂的 profile 版根治，语义同 AgentForm 前端闸）
 //! 3. 删除引用守卫：被 `vision_profile_ids` / `embedding_profile_id` 引用 → 拒
 
+#[cfg(test)]
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -151,17 +152,62 @@ pub struct ModelProfileWithCredentials {
 // 解析内核（agent 引用路径共用）
 // ============================================================================
 
+/// profile 凭据解析失败的两种语义（调用方分流处置的依据）：
+///
+/// - [`ResolveProfileError::NotFound`]：**行已删**——引用悬空是已知终态，
+///   守卫兜底下降级（agent 行内快照）/ 跳档（链路测试 Skipped）合理；
+/// - [`ResolveProfileError::Corrupted`]：**行在但凭据读不出**（Stronghold 槽位
+///   缺失/JSON 损坏/DB 故障）——数据坏了是真实故障：静默换旧 Key 照跑会掩盖
+///   问题、健康归因记错主档，调用方须诚实上抛或记健康 Failed。
+///
+/// 注意 `crypto::fetch_api_key` 对「槽位无记录」也返回 `AppError::NotFound`
+/// （资源是 api_key 槽位）——能走到那一步说明行已查到，故统一归 Corrupted，
+/// 只有 `get_by_id` 的 NotFound 才是行缺。
+pub(crate) enum ResolveProfileError {
+    NotFound { id: String },
+    Corrupted(AppError),
+}
+
+impl std::fmt::Display for ResolveProfileError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotFound { id } => write!(f, "模型配置行不存在: {id}"),
+            Self::Corrupted(e) => write!(f, "模型配置凭据不可读: {e}"),
+        }
+    }
+}
+
+impl From<ResolveProfileError> for AppError {
+    fn from(e: ResolveProfileError) -> Self {
+        match e {
+            ResolveProfileError::NotFound { id } => AppError::NotFound {
+                resource: "model_profile",
+                id,
+            },
+            // Corrupted 保留原始错误（Stronghold/Json/Database…），不糊成 Internal
+            ResolveProfileError::Corrupted(e) => e,
+        }
+    }
+}
+
 /// 解析 profile 出可用凭据（自由函数——`SqlAgentCmd` 的 agent 引用解析直接
 /// 调它，不注入 `Arc<dyn ModelProfileCmd>`，模块耦合面不扩大）。
 ///
 /// base_url 解析规则与 agent 汇聚点一致：DB 行非空优先，vault 记录兜底。
+/// 失败语义二分见 [`ResolveProfileError`]。
 pub(crate) async fn resolve_profile_credentials(
     app: &AppHandle,
     pool: &SqlitePool,
     profile_id: &str,
-) -> AppResult<ModelProfileWithCredentials> {
-    let row = repo::model_profile::get_by_id(pool, profile_id).await?;
-    let (api_key, vault_base_url) = crypto::fetch_api_key(app, &row.api_key_ref)?;
+) -> Result<ModelProfileWithCredentials, ResolveProfileError> {
+    let row = repo::model_profile::get_by_id(pool, profile_id)
+        .await
+        .map_err(|e| match e {
+            AppError::NotFound { id, .. } => ResolveProfileError::NotFound { id },
+            other => ResolveProfileError::Corrupted(other),
+        })?;
+    let (api_key, vault_base_url) = crypto::fetch_api_key(app, &row.api_key_ref)
+        .map_err(ResolveProfileError::Corrupted)?;
     let base_url = row
         .base_url
         .as_deref()
@@ -492,7 +538,11 @@ impl ModelProfileCmd for SqlModelProfileCmd {
         &self,
         profile_id: &str,
     ) -> AppResult<ModelProfileWithCredentials> {
-        resolve_profile_credentials(&self.app, &self.pool, profile_id).await
+        // NotFound 转回 AppError::NotFound（消费方如 probe_chat_slot 按它区分
+        // 「行已删→跳档」与「凭据损坏→Failed」）；Corrupted 保留原始错误
+        resolve_profile_credentials(&self.app, &self.pool, profile_id)
+            .await
+            .map_err(AppError::from)
     }
 
     async fn record_health(&self, profile_id: &str, health: &str, detail: Option<&str>) {
@@ -512,13 +562,17 @@ impl ModelProfileCmd for SqlModelProfileCmd {
 
 /// 测试用 ModelProfileCmd 实现：内存 HashMap 存储 profile 行 + 凭据 +
 /// 调用日志（照搬 MockAgentCmd 形态）。
+#[cfg(test)]
 type MockEntry = (ModelProfileRow, String, Option<String>);
+#[cfg(test)]
 type MockStore = HashMap<String, MockEntry>;
+#[cfg(test)]
 pub struct MockModelProfileCmd {
     inner: std::sync::Mutex<MockStore>,
     calls: std::sync::Mutex<Vec<String>>,
 }
 
+#[cfg(test)]
 impl MockModelProfileCmd {
     pub fn new() -> Self {
         Self {
@@ -545,12 +599,14 @@ impl MockModelProfileCmd {
     }
 }
 
+#[cfg(test)]
 impl Default for MockModelProfileCmd {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[cfg(test)]
 #[async_trait]
 impl ModelProfileCmd for MockModelProfileCmd {
     async fn list(&self) -> AppResult<Vec<ModelProfile>> {

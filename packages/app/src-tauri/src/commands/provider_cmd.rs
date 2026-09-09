@@ -420,8 +420,16 @@ async fn probe_chat_slot(
 
     let cred = match profiles.get_with_credentials(&pid).await {
         Ok(c) => c,
-        Err(_) => {
-            return SlotOutcome::Skipped("无法解析（配置已删除或凭据不可读），已跳过该档".into());
+        // 行已删（引用悬空）→ 跳档推进（与运行时 resolve Err 跳档同语义）
+        Err(AppError::NotFound { .. }) => {
+            return SlotOutcome::Skipped("模型配置已删除，跳过该档".into());
+        }
+        // 行在但凭据读不出（Stronghold 槽位缺失/JSON 损坏等）→ 真实故障不是
+        // 跳档：记健康 Failed（数据坏了该归因到主档），错误进链路测试结果
+        Err(e) => {
+            let raw = e.to_string();
+            record_health_from_error(profiles, &pid, &raw).await;
+            return SlotOutcome::Failed(format!("凭据不可读：{raw}"));
         }
     };
     let alias = cred.profile.alias.clone();
@@ -807,5 +815,81 @@ mod tests {
         .await;
         assert!(!r.ok);
         assert!(r.error.unwrap().contains("全部不可用"));
+    }
+
+    /// 语义分叉（resolve_profile_credentials 错误二分的消费侧）：行已删
+    /// （NotFound）→ Skipped 跳档推进；行在但凭据损坏（非 NotFound）→
+    /// Failed + 记健康——数据坏了是真实故障不是跳档，归因到主档而非静默掠过。
+    #[tokio::test]
+    async fn probe_chat_slot_splits_missing_row_and_corrupted_credentials() {
+        use crate::commands::model_profile_cmd::MockModelProfileCmd;
+
+        // 行已删：Mock 未 seed → get_with_credentials 返回 NotFound → Skipped
+        let missing: std::sync::Arc<dyn ModelProfileCmd> =
+            std::sync::Arc::new(MockModelProfileCmd::new());
+        match probe_chat_slot(&missing, "mp-gone".into()).await {
+            SlotOutcome::Skipped(msg) => assert!(msg.contains("已删除"), "跳档文案: {msg}"),
+            SlotOutcome::Ok { .. } | SlotOutcome::Failed(_) => {
+                panic!("行缺应 Skipped（跳档推进），不应 Ok/Failed")
+            }
+        }
+
+        // 凭据损坏：get_with_credentials 返回非 NotFound（Stronghold 槽位读失败）
+        struct CorruptedSlot {
+            health: std::sync::Mutex<Vec<String>>,
+        }
+        #[async_trait::async_trait]
+        impl ModelProfileCmd for CorruptedSlot {
+            async fn list(&self) -> AppResult<Vec<crate::db::models::ModelProfile>> {
+                unimplemented!("本测试只走 get_with_credentials / record_health")
+            }
+            async fn get(&self, _profile_id: &str) -> AppResult<crate::db::models::ModelProfile> {
+                unimplemented!()
+            }
+            async fn create(
+                &self,
+                _input: crate::db::models::NewModelProfile,
+            ) -> AppResult<crate::db::models::ModelProfile> {
+                unimplemented!()
+            }
+            async fn update(
+                &self,
+                _input: crate::db::models::ModelProfileUpdate,
+            ) -> AppResult<crate::db::models::ModelProfile> {
+                unimplemented!()
+            }
+            async fn rotate_key(
+                &self,
+                _input: crate::db::models::RotateProfileKey,
+            ) -> AppResult<crate::db::models::ModelProfile> {
+                unimplemented!()
+            }
+            async fn delete(&self, _profile_id: &str) -> AppResult<()> {
+                unimplemented!()
+            }
+            async fn get_with_credentials(
+                &self,
+                _profile_id: &str,
+            ) -> AppResult<crate::commands::model_profile_cmd::ModelProfileWithCredentials> {
+                Err(AppError::Stronghold("store.get: boom".into()))
+            }
+            async fn record_health(&self, _profile_id: &str, health: &str, _detail: Option<&str>) {
+                self.health.lock().unwrap().push(health.into());
+            }
+        }
+        let corrupted = std::sync::Arc::new(CorruptedSlot {
+            health: std::sync::Mutex::new(Vec::new()),
+        });
+        let as_trait: std::sync::Arc<dyn ModelProfileCmd> = corrupted.clone();
+        match probe_chat_slot(&as_trait, "mp-bad".into()).await {
+            SlotOutcome::Failed(msg) => assert!(msg.contains("凭据不可读"), "失败文案: {msg}"),
+            SlotOutcome::Skipped(_) | SlotOutcome::Ok { .. } => {
+                panic!("凭据损坏应 Failed（真实故障），不应 Skipped/Ok")
+            }
+        }
+        assert!(
+            !corrupted.health.lock().unwrap().is_empty(),
+            "凭据损坏应记健康（归因到主档，不静默掠过）"
+        );
     }
 }

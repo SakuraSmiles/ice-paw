@@ -155,8 +155,9 @@ pub async fn set_mcp_enabled(
     enabled: bool,
 ) -> AppResult<()> {
     manager.set_enabled(&id, enabled, &registry).await?;
-    // 同步 DB
-    let _ = repo::mcp_server::update(
+    // 同步 DB（失败上抛：内存态已翻转而持久化失败若被吞，命令返回成功但重启后
+    // 状态回跳——用户以为改了实际没存）
+    repo::mcp_server::update(
         pool.inner(),
         &UpdateMcpServer {
             id,
@@ -174,7 +175,7 @@ pub async fn set_mcp_enabled(
             headers: None,
         },
     )
-    .await;
+    .await?;
     Ok(())
 }
 

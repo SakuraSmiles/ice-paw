@@ -219,28 +219,41 @@ pub(crate) async fn ensure_agent_kb(
         return;
     }
 
-    // 触发一次初始索引（后台，不阻塞 agent 创建流程）。
-    if let Some(kb) = repo::kb::list_by_scope(pool, "agent", Some(agent_id))
-        .await
-        .ok()
-        .and_then(|v| v.into_iter().next())
-    {
-        let pool = pool.clone();
-        let app = app.cloned();
-        let kb_id = kb.id.clone();
-        let dir = dir.clone();
-        tokio::spawn(async move {
-            match super::indexer::index_directory(app.as_ref(), &pool, &kb_id, &dir).await {
-                Ok(stats) => tracing::info!(
+    // 触发一次初始索引（后台，不阻塞 agent 创建流程）。查行失败/查不到都
+    // warn 披露——静默跳过会让「建了 agent 但 KB 目录里的存量文件搜不到」
+    // 无迹可循（ensure_kb_row 刚跑完还查不到行本身就是异常信号）。
+    match repo::kb::list_by_scope(pool, "agent", Some(agent_id)).await {
+        Ok(kbs) => {
+            if let Some(kb) = kbs.into_iter().next() {
+                let pool = pool.clone();
+                let app = app.cloned();
+                let kb_id = kb.id.clone();
+                let dir = dir.clone();
+                tokio::spawn(async move {
+                    match super::indexer::index_directory(app.as_ref(), &pool, &kb_id, &dir).await {
+                        Ok(stats) => tracing::info!(
+                            target: "ice_paw.kb",
+                            "新建 agent KB 初始索引完成 kb={} indexed={} skipped={}",
+                            kb_id, stats.indexed, stats.skipped
+                        ),
+                        Err(e) => {
+                            tracing::warn!(target: "ice_paw.kb", "新建 agent KB 初始索引失败 kb={}: {e}", kb_id)
+                        }
+                    }
+                });
+            } else {
+                tracing::warn!(
                     target: "ice_paw.kb",
-                    "新建 agent KB 初始索引完成 kb={} indexed={} skipped={}",
-                    kb_id, stats.indexed, stats.skipped
-                ),
-                Err(e) => {
-                    tracing::warn!(target: "ice_paw.kb", "新建 agent KB 初始索引失败 kb={}: {e}", kb_id)
-                }
+                    "agent {agent_id} 约定 KB 行查询为空——初始索引未触发，请排查 ensure_kb_row 是否生效"
+                );
             }
-        });
+        }
+        Err(e) => {
+            tracing::warn!(
+                target: "ice_paw.kb",
+                "agent {agent_id} 约定 KB 行查询失败——初始索引未触发: {e}"
+            );
+        }
     }
 }
 

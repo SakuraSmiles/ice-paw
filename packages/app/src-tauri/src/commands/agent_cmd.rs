@@ -37,6 +37,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use tauri::{AppHandle, Manager, State};
+#[cfg(test)]
 use uuid::Uuid;
 
 use sqlx::SqlitePool;
@@ -138,6 +139,12 @@ fn manual_materializable(input: &NewAgent) -> bool {
 /// 的假象。解除引用（Some(None)）与手填同批**合法**——切回手动模式一并完成
 /// （AgentForm 手动模式提交正是这个形状）。降级链检查走
 /// [`validate_fallback_has_primary`]（目标态 = input 显式值优先、否则旧行值）。
+///
+/// 引用态行（旧行 model_profile_id 非空）未显式解除引用（字段缺席 = 引用
+/// 保持）+ 手填快照族 → 同理拒：行仍挂在引用上，快照列入库后下轮解析即覆盖
+/// 回实体值，用户批准的换模型静默失效，agent.yaml 镜像还会把永不生效的值写
+/// 进文件（审查实案：提案卡批准 update_agent 直传快照族、不带
+/// model_profile_id——绕过前端表单的引用态锁定）。
 fn validate_update_model_fields_conflict(
     input: &AgentUpdate,
     old_has_primary: bool,
@@ -147,6 +154,16 @@ fn validate_update_model_fields_conflict(
     {
         return Err(AppError::Validation(
             "设模型引用时不能同时修改厂商/模型/端点——请先保存引用，再单独调整".into(),
+        ));
+    }
+    // 引用态行 + 引用字段缺席 + 手填快照族 → 拒。Some(None)（显式解除回
+    // legacy）+ 手填 = 合法（切回手动模式一并完成），不进本分支。
+    if old_has_primary
+        && input.model_profile_id.is_none()
+        && (input.provider.is_some() || input.model.is_some() || input.base_url.is_some())
+    {
+        return Err(AppError::Validation(
+            "该 Agent 挂着模型配置引用，厂商/模型/端点由所引用的模型配置决定，本次修改不会生效——这些列会在下轮对话被实体值覆盖。请到「设置 → 模型」修改对应模型配置，或先解除引用改回手动模式后再修改".into(),
         ));
     }
     // 目标态主档：显式传了以传值为准（Some(None)=解除 → 无主档），否则沿用旧行
@@ -495,7 +512,9 @@ impl AgentCmd for SqlAgentCmd {
         // ModelProfile Phase 2：引用模式解析——profile 是模型身份唯一权威
         // （provider/model/base_url/api_key 四值），快照列仅显示用。值变才回写
         // 快照（trg_agents_upd 无 WHEN，同值零写入不刷 updated_at）。悬空引用
-        // （profile 已删）降级 legacy 快照列继续可用 + warn 披露。
+        // （profile 已删 = NotFound）降级 legacy 快照列继续可用 + warn 披露；
+        // 行在但凭据损坏（Corrupted：槽位缺失/JSON 坏）是数据故障——静默换旧
+        // Key 照跑会掩盖问题 + 归因记错主档，诚实上抛让发送失败可见。
         let (api_key, base_url) = if let Some(pid) = agent
             .model_profile_id
             .as_deref()
@@ -517,12 +536,19 @@ impl AgentCmd for SqlAgentCmd {
                     agent.model = cred.profile.model.clone();
                     (cred.api_key, cred.base_url)
                 }
-                Err(e) => {
+                Err(super::model_profile_cmd::ResolveProfileError::NotFound { .. }) => {
                     tracing::warn!(
                         target: "ice_paw.agent",
-                        "agent {agent_id} 引用的模型配置 {pid} 解析失败（{e}），降级用行内快照继续"
+                        "agent {agent_id} 引用的模型配置 {pid} 已删除，降级用行内快照继续"
                     );
                     self.legacy_credentials(&agent).await?
+                }
+                Err(e) => {
+                    tracing::error!(
+                        target: "ice_paw.agent",
+                        "agent {agent_id} 引用的模型配置 {pid} 凭据损坏，拒绝降级: {e}"
+                    );
+                    return Err(e.into());
                 }
             }
         } else {
@@ -886,10 +912,12 @@ impl AgentCmd for SqlAgentCmd {
 /// mock.seed(agent_row, api_key, base_url);
 /// // ... 用 mock 替换真实 SqlAgentCmd 跑业务逻辑测试
 /// ```
+#[cfg(test)]
 pub struct MockAgentCmd {
     inner: std::sync::Mutex<MockAgentCmdInner>,
 }
 
+#[cfg(test)]
 struct MockAgentCmdInner {
     /// agent_id → (AgentRow, api_key, base_url)
     agents: std::collections::HashMap<String, (AgentRow, String, Option<String>)>,
@@ -897,6 +925,7 @@ struct MockAgentCmdInner {
     call_log: Vec<String>,
 }
 
+#[cfg(test)]
 impl MockAgentCmd {
     pub fn new() -> Self {
         Self {
@@ -925,12 +954,14 @@ impl MockAgentCmd {
     }
 }
 
+#[cfg(test)]
 impl Default for MockAgentCmd {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[cfg(test)]
 #[async_trait]
 impl AgentCmd for MockAgentCmd {
     async fn list(&self) -> AppResult<Vec<Agent>> {
@@ -1654,6 +1685,23 @@ mod tests {
         u.provider = Some("glm".into());
         u.model = Some("glm-5.3".into());
         assert!(validate_update_model_fields_conflict(&u, true).is_ok());
+
+        // 引用态行 + 引用字段缺席（不改）+ 手填 model → 拒（提案卡批准
+        // update_agent 直传快照族的形状——下轮解析覆盖回实体值，改了白改）
+        let mut u = base();
+        u.model = Some("glm-5.3".into());
+        assert!(validate_update_model_fields_conflict(&u, true).is_err());
+
+        // 同上但显式解除引用（Some(None)）→ 过（解除并改模型一次完成）
+        let mut u = base();
+        u.model_profile_id = Some(None);
+        u.model = Some("glm-5.3".into());
+        assert!(validate_update_model_fields_conflict(&u, true).is_ok());
+
+        // legacy 行（无主档）手填 → 过（现状不变，非引用态无覆盖问题）
+        let mut u = base();
+        u.model = Some("glm-5.3".into());
+        assert!(validate_update_model_fields_conflict(&u, false).is_ok());
 
         // legacy 行（无主档）设非空链 → 拒
         let mut u = base();
