@@ -1414,7 +1414,7 @@ onActivated(async () => {
   transform: translateX(-50%);
   max-width: 260px;
   width: max-content;
-  padding: 5px 10px;
+  padding: var(--ip-spacing-1) var(--ip-spacing-2_5);
   font-size: var(--ip-text-caption-size);
   font-weight: var(--ip-font-weight-regular);
   color: var(--ip-color-text-on-primary);
@@ -1424,7 +1424,7 @@ onActivated(async () => {
   pointer-events: none;
   opacity: 0;
   transition: opacity var(--ip-duration-fast) var(--ip-ease-out);
-  z-index: 10;
+  z-index: var(--ip-z-badge);
   line-height: 1.5;
   text-align: center;
   white-space: pre-line;

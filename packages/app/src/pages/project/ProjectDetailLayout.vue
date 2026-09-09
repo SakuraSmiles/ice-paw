@@ -128,7 +128,7 @@ watch(current, (cur) => {
 .detail-header {
   display: flex;
   align-items: center;
-  padding: 14px 24px;
+  padding: var(--ip-spacing-3) var(--ip-spacing-6);
   min-height: 68px;
   border-bottom: 1px solid var(--ip-color-border-default);
   background-color: var(--ip-color-bg-chat-header);

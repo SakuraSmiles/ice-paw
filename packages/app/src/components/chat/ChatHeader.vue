@@ -340,7 +340,12 @@ async function toggleScreenShare() {
 </template>
 
 <style scoped>
-.chat-header { display:flex; align-items:center; justify-content:space-between; padding:14px 24px; min-height:68px; border-bottom:1px solid var(--ip-color-border-default); background-color:var(--ip-color-bg-chat-header); backdrop-filter:blur(8px); flex-shrink:0; position:relative; z-index:1; }
+/* z 走 badge 档而非 base：.chat-render 双 pane 是 position:absolute（绘制在
+   非定位元素之上，见 ChatPage .chat-tabbar 注释），header 必须留在正档位才能
+   压过它们；badge(10) 仍低于 tabbar(raised)，与旧值 1 的相对层级完全一致。
+   padding 垂直 14→12：间距令牌无 14 档就近收编（min-height:68 兜底，无头像
+   态高度不变；有 xl 头像态 72→68） */
+.chat-header { display:flex; align-items:center; justify-content:space-between; padding:var(--ip-spacing-3) var(--ip-spacing-6); min-height:68px; border-bottom:1px solid var(--ip-color-border-default); background-color:var(--ip-color-bg-chat-header); backdrop-filter:blur(8px); flex-shrink:0; position:relative; z-index:var(--ip-z-badge); }
 /* 标签条在场（会话态）：去底边线，标题与标签条视觉一体（同底色无分割） */
 .chat-header.has-tabbar { border-bottom:none; }
 .header-left { display:flex; align-items:center; gap: var(--ip-spacing-3); min-width:0; }
@@ -414,7 +419,9 @@ async function toggleScreenShare() {
   background:var(--ip-danger-bg, rgba(220,38,38,0.08));
   border:1px solid var(--ip-danger-border, rgba(220,38,38,0.3));
   border-radius:var(--ip-radius-md);
-  z-index:2;
+  /* base 档即可：confirm-bar 活动在 header 自身层叠上下文内，只需盖过
+     header 内非定位按钮（定位元素恒在非定位内容之上），无跨层竞争者 */
+  z-index:var(--ip-z-base);
 }
 .confirm-text { font-size:var(--ip-text-body-sm-size); color:var(--ip-color-text-secondary); }
 .confirm-btn {
@@ -441,7 +448,7 @@ async function toggleScreenShare() {
   border: 1px solid var(--ip-color-border-default);
   border-radius: var(--ip-radius-md);
   box-shadow: var(--ip-shadow-md);
-  position: absolute; top: 72px; right: 24px; z-index: 10;
+  position: absolute; top: 72px; right: 24px; z-index: var(--ip-z-badge);
 }
 .undo-toast-text { font-size: var(--ip-text-body-sm-size); color: var(--ip-color-text-secondary); }
 .undo-toast-btn {

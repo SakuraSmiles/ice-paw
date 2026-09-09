@@ -1235,7 +1235,7 @@ const RESUMABLE_REASONS = new Set([
    不随滚动条出现/消失漂移，内容列也不再横向抖 6px。
    底 padding 16px：贴底静息的呼吸位（旧值 32px 是为「常驻渐隐让尾部落带中段」
    设计的，渐隐改随 autoFollow 联动后贴底无蒙层，理由死掉回归紧凑值） */
-.messages-area { flex:1; overflow-y:auto; scrollbar-gutter:stable; padding:24px 0 16px; position:relative; }
+.messages-area { flex:1; overflow-y:auto; scrollbar-gutter:stable; padding:var(--ip-spacing-6) 0 var(--ip-spacing-4); position:relative; }
 .messages-container { display:flex; flex-direction:column; gap: var(--ip-spacing-4); padding:0 var(--msg-col-right) 0 48px; }
 
 /* ===== 底缘渐隐（2026-09-01 联动改版：随贴底状态显隐 + 96px）=====
@@ -1252,8 +1252,9 @@ const RESUMABLE_REASONS = new Set([
    - 渐变蒙层而非 mask-image：全屏图片预览/附件详情渲染在 .messages-area
      内（fixed 定位），mask 会连它们的底缘一起淡掉；盖底色渐变无此问题。
    - color-mix 产半透明底色（WebView2 = Chromium 111+ 支持）。
-   - z-index:1 = 盖过 z-auto 滚动内容；低于 TurnRail(3)/兜底按钮(5)/
-     toast/模态层，带内悬浮件保持清晰。pointer-events:none 不挡点击。 */
+   - z-index 走 base 档（0）= 盖过 z-auto 滚动内容（::after 是 wrap 末位伪元素，
+     与定位内容同在 0/auto 档时按树序仍压过滚动区）；低于 TurnRail(3)/
+     兜底按钮(raised)/toast/模态层，带内悬浮件保持清晰。pointer-events:none 不挡点击。 */
 .messages-wrap::after {
   content: '';
   position: absolute;
@@ -1265,7 +1266,7 @@ const RESUMABLE_REASONS = new Set([
     color-mix(in srgb, var(--ip-color-bg-secondary) 74%, transparent) 78%,
     var(--ip-color-bg-secondary));
   pointer-events: none;
-  z-index: 1;
+  z-index: var(--ip-z-base);
   transition: opacity var(--ip-duration-fast) var(--ip-ease-out);
 }
 .messages-wrap.fade-off::after { opacity: 0; }
@@ -1322,7 +1323,7 @@ const RESUMABLE_REASONS = new Set([
 .message-group.assistant {
   align-self:flex-start; max-width:85%;
   background-color:var(--ip-color-bg-message-ai); color:var(--ip-color-text-message-ai);
-  border-radius:12px; border-bottom-left-radius:4px; padding:14px 16px;
+  border-radius:12px; border-bottom-left-radius:4px; padding:var(--ip-spacing-3) var(--ip-spacing-4); /* 垂直 14→12：间距令牌无 14 档，就近收编 */
 }
 .message-group.user { align-self:flex-end; max-width:70%; }
 .message-content { display:flex; flex-direction:column; gap:4px; min-width:0; }
@@ -1352,16 +1353,19 @@ const RESUMABLE_REASONS = new Set([
 .user-image { max-width:200px; max-height:200px; border-radius:var(--ip-radius-lg); object-fit:cover; border:1px solid var(--ip-color-border-default); }
 
 /* 用户附件卡片（office/pdf）—— 不透明白实体卡片：深绿气泡上的清晰层次，
-   堆叠时不透明避免半透明叠加发灰/透字（半透明玻璃在重叠场景不可扩展） */
+   堆叠时不透明避免半透明叠加发灰/透字（半透明玻璃在重叠场景不可扩展）。
+   表面/文字走语义令牌（暗色主题修复）：卡底选 secondary 而非 elevated——
+   hover 档 tertiary 在暗色下恰等于 elevated（同为 gray-800）会吞掉 hover 反馈，
+   secondary(850)→tertiary(800) 明暗两主题都有可见变化；明色下两档同白，观感不变 */
 .user-attachments { display:flex; flex-direction:column; gap:4px; margin-top:6px; }
 .user-attachment-card {
   display:flex; align-items:center; gap: var(--ip-spacing-2);
   padding:6px 10px; border-radius:8px;
-  background:#ffffff;
+  background:var(--ip-color-bg-secondary);
   border:1px solid rgba(0,0,0,0.08);
   box-shadow:0 1px 2px rgba(0,0,0,0.06);
   max-width:260px;
-  color:#1f2937;
+  color:var(--ip-color-text-primary);
 }
 .att-icon {
   flex:none; width:26px; height:26px; border-radius:6px;
@@ -1372,28 +1376,30 @@ const RESUMABLE_REASONS = new Set([
 .att-icon[data-kind="docx"] { background:rgba(37,99,235,0.9); }
 .att-icon[data-kind="xlsx"], .att-icon[data-kind="xls"] { background:rgba(22,163,74,0.9); }
 .att-info { display:flex; flex-direction:column; min-width:0; line-height:1.35; }
-.att-name { font-size:13px; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.att-meta { font-size: var(--ip-text-micro-size); color:#6b7280; }
+.att-name { font-size:var(--ip-text-body-sm-size); font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.att-meta { font-size: var(--ip-text-micro-size); color:var(--ip-color-text-tertiary); }
 
 /* 单个卡片/图片可点（hover 提示） */
 .user-attachment-card.clickable { cursor:pointer; transition:background var(--ip-duration-fast) var(--ip-ease-out); }
-.user-attachment-card.clickable:hover { background:#f3f4f6; }
+.user-attachment-card.clickable:hover { background:var(--ip-color-bg-tertiary); }
 .user-image.clickable { cursor:zoom-in; transition:transform var(--ip-duration-fast) var(--ip-ease-out); }
 .user-image.clickable:hover { transform:scale(1.02); }
 
-/* @ 引用卡片（用户气泡内）：轻量内联卡——图标按 ref_kind 着色，agent 无跳转 */
+/* @ 引用卡片（用户气泡内）：轻量内联卡——图标按 ref_kind 着色，agent 无跳转。
+   表面/文字同附件卡走语义令牌（secondary 卡底 + tertiary hover，暗色主题修复）；
+   字号 12.5→caption(12px) 就近收编档位 */
 .user-ref-card {
   display:flex; align-items:center; gap:6px;
   max-width:260px; padding:5px 10px; border-radius:8px;
-  background:#ffffff; border:1px solid rgba(0,0,0,0.08);
+  background:var(--ip-color-bg-secondary); border:1px solid rgba(0,0,0,0.08);
   box-shadow:0 1px 2px rgba(0,0,0,0.06);
   cursor:pointer; transition:background var(--ip-duration-fast) var(--ip-ease-out);
-  color:#1f2937; font-size:12.5px;
+  color:var(--ip-color-text-primary); font-size:var(--ip-text-caption-size);
 }
-.user-ref-card:hover { background:#f3f4f6; }
+.user-ref-card:hover { background:var(--ip-color-bg-tertiary); }
 .user-ref-card .ref-icon { flex:none; color:var(--ip-primary-600, var(--ip-primary-600)); }
 .user-ref-card[data-ref-kind="agent"] .ref-icon { color:var(--ip-accent-agent); }
-.user-ref-card[data-ref-kind="message"] .ref-icon { color:#6b7280; }
+.user-ref-card[data-ref-kind="message"] .ref-icon { color:var(--ip-color-icon-muted); }
 .user-ref-card[data-ref-kind="agent"] { cursor:default; }
 .user-ref-card .ref-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
@@ -1401,7 +1407,9 @@ const RESUMABLE_REASONS = new Set([
    堆叠态加重投影，让"一摞卡片"的层次可见 */
 .doc-stack { position:relative; max-width:260px; cursor:pointer; }
 .doc-stack .user-attachment-card { position:relative; box-shadow:0 3px 10px rgba(0,0,0,0.18); }
-.doc-stack .user-attachment-card:hover { background:#fafafa; }
+/* 堆叠卡 hover 与单卡统一 tertiary 档（原 #fafafa/#f3f4f6 的两档微差收编；
+   暗色下原浅灰裸值会变成亮块） */
+.doc-stack .user-attachment-card:hover { background:var(--ip-color-bg-tertiary); }
 
 /* 多图重叠堆叠：固定方形容器，子图绝对定位错位 */
 .image-stack {
@@ -1477,7 +1485,7 @@ const RESUMABLE_REASONS = new Set([
 /* 「跳到最新」右侧轨道位：垂直居中（top 用 calc 而非 transform 居中——
    fade-up 进出场动画要占用 transform，二者会互相覆盖）。与 TurnRail 同带
    中心对齐（带中心 46px，按钮 36px 宽 → 右距 = 6 + (80-36)/2 = 28px）。 */
-.scroll-bottom-btn { position:absolute; top:calc(50% - 18px); right:calc(6px + (var(--msg-col-right) - 36px) / 2); z-index:5; width:36px; height:36px; border-radius:var(--ip-radius-lg); border:1px solid var(--ip-color-border-default); background-color:var(--ip-color-bg-elevated); color:var(--ip-color-text-secondary); box-shadow:var(--ip-shadow-sm); cursor:pointer; display:flex; align-items:center; justify-content:center; transition:all var(--ip-duration-fast) var(--ip-ease-out); }
+.scroll-bottom-btn { position:absolute; top:calc(50% - 18px); right:calc(6px + (var(--msg-col-right) - 36px) / 2); z-index:var(--ip-z-raised); width:36px; height:36px; border-radius:var(--ip-radius-lg); border:1px solid var(--ip-color-border-default); background-color:var(--ip-color-bg-elevated); color:var(--ip-color-text-secondary); box-shadow:var(--ip-shadow-sm); cursor:pointer; display:flex; align-items:center; justify-content:center; transition:all var(--ip-duration-fast) var(--ip-ease-out); }
 .scroll-bottom-btn:hover { background-color:var(--ip-color-bg-secondary); color:var(--ip-color-text-primary); border-color:var(--ip-color-border-strong); box-shadow:var(--ip-shadow-md); }
 
 .fade-up-enter-active { animation:fade-up-in 0.2s ease-out; }
@@ -1562,7 +1570,8 @@ const RESUMABLE_REASONS = new Set([
 .tool-detail-code.code-err { color:var(--ip-danger-base); }
 .tool-detail-pending { font-size:var(--ip-text-caption-size); color:var(--ip-color-text-disabled); font-style:italic; }
 .proposal-wrapper { padding: 0 48px; }
-.chat-error-banner { display:flex; align-items:flex-start; gap: var(--ip-spacing-2); margin:8px 16px; padding:10px 14px; background:#fef2f2; border:1px solid #fecaca; border-radius:var(--ip-radius-md); font-size:var(--ip-text-body-sm-size); }
-.chat-error-icon { display:flex; align-items:center; justify-content:center; width:20px; height:20px; border-radius:50%; background:#ef4444; color:#fff; font-size:12px; font-weight:700; flex-shrink:0; }
-.chat-error-text { color:#991b1b; line-height:1.5; word-break:break-word; }
+/* 定位/排版微调层：底色与边框走 danger 语义令牌（明暗自适应，与 ErrorBanner
+   自身 .eb-banner 同值——此前裸 hex 覆盖组件令牌，暗色主题下整条横幅发亮）；
+   文字色由 .eb-banner 的 --ip-danger-text 提供，此处不重复声明 */
+.chat-error-banner { display:flex; align-items:flex-start; gap: var(--ip-spacing-2); margin:8px 16px; padding:10px 14px; background:var(--ip-danger-bg); border:1px solid var(--ip-danger-border); border-radius:var(--ip-radius-md); font-size:var(--ip-text-body-sm-size); }
 </style>
