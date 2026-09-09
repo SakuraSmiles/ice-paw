@@ -15,3 +15,11 @@ const app = createApp(App);
 app.use(pinia);
 app.use(router);
 app.mount("#app");
+
+// 主窗 visible:false（tauri.conf，消灭冷启动「白屏窗口悬着未响应」——窗口迟到
+// 但出现即完整界面）。前端挂载完成 = 首帧可渲染，此处主动 show。后端另有 10s
+// 兜底 show（前端 JS 挂死时窗口仍会出现，问题可见而非「打不开」）。
+import { getCurrentWindow } from "@tauri-apps/api/window";
+requestAnimationFrame(() => {
+  getCurrentWindow().show();
+});

@@ -42,6 +42,12 @@ use harness::mcp::McpRegistry;
 /// 应用入口
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // boot 计时锚点（治看不见）：setup 段各节点有日志时间戳可查，但 exe 加载 →
+    // 插件初始化 → WebView2 环境创建（冷启动白屏的真凶段）发生在日志第一行
+    // 之前完全不可见。此 Instant 从进程最早点起算，setup 开始/结束各打一次
+    // 总耗时，下次启动慢日志直接指出是哪一段。
+    let boot_start = std::time::Instant::now();
+
     // boot 时刻（UTC，与 session_events.created_at 的 datetime('now') 同格式同语义）：
     // sweep 后台化后的「进程边界」——只补记本进程启动前遗留的未闭合 turn，结构上
     // 排除误杀刚开的新 turn（见 setup 2b）。取于进程最早期，本进程内新事件必然晚于它。
@@ -49,6 +55,15 @@ pub fn run() {
         .naive_utc()
         .format("%Y-%m-%d %H:%M:%S")
         .to_string();
+
+    // WebView2 磁盘缓存瘦身（2026-09-09 生产实案：EBWebView 膨胀到 606MB——Cache
+    // 343MB + Code Cache 199MB，Chromium 磁盘缓存默认上限 ≈ 磁盘容量 1/3，大盘上
+    // 几百 MB 且淘汰懒散；WebView2 初始化加载巨型 profile = 冷启动白屏「未响应」
+    // 的真凶，且发生在 index.html 骨架之前、骨架结构上覆盖不到）。必须跑在
+    // WebView2 启动**之前**——启动后 Cache 文件被 msedgewebview2 进程持有锁死。
+    let context = tauri::generate_context!();
+    #[cfg(windows)]
+    prune_webview_cache_on_version_change(&context);
 
     let mut builder = tauri::Builder::default();
     // 单实例：点审批 toast / 双击 exe 拉起第二进程时拦截并前置主实例（防双开）。
@@ -162,6 +177,7 @@ pub fn run() {
             commands::log_cmd::open_data_dir,
             commands::provider_cmd::list_providers,
             commands::provider_cmd::test_provider_connection,
+            commands::provider_cmd::test_agent_model_chain,
             // 屏幕共享通道（批次④ 步骤 1：开/关 + 状态拉取）
             commands::screen_cmd::screen_channel_open,
             commands::screen_cmd::screen_channel_stop,
@@ -194,8 +210,8 @@ pub fn run() {
             commands::project_cmd::list_project_events,
             commands::project_cmd::get_project_overview,
         ])
-        // 启动逻辑
-        .setup(|app| {
+        // 启动逻辑（move：闭包捕获 boot_at/boot_start，非 move 借用不满足 'static）
+        .setup(move |app| {
             let handle = app.handle().clone();
 
             // 批次④ 步骤 2：屏幕通道状态广播器——gate 路径的令牌/队列变化
@@ -209,6 +225,29 @@ pub fn run() {
                     handle.manage(guard);
                 }
                 Err(e) => eprintln!("[ice_paw] logging init failed: {e}"),
+            }
+
+            // boot 锚点 1：setup 前段 = exe 加载 + 插件初始化 + WebView2 环境创建
+            // （窗口已可见但 index.html 未加载 = 白屏段）。这段慢 = WebView2/profile
+            // 层问题（缓存膨胀/杀毒扫描/冷盘），与 setup 内逻辑无关。
+            tracing::info!(
+                target: "ice_paw",
+                "boot 锚点：setup 前段（exe + 插件 + WebView2 初始化）耗时 {}ms",
+                boot_start.elapsed().as_millis()
+            );
+
+            // 窗口兜底显示：主窗 visible=false（消灭冷启动白屏窗口），常路径 =
+            // 前端 main.ts 挂载完成即 show。前端 JS 异常（死循环/白屏）时窗口会
+            // 永不可见 = 应用「打不开」——10s 后强制 show，恢复「有窗可见、问题
+            // 可见」的诚实状态（show 幂等，正常路径已可见时无感）。
+            {
+                let win_handle = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                    if let Some(win) = win_handle.get_webview_window("main") {
+                        let _ = win.show();
+                    }
+                });
             }
 
             // 0b) 首启动态默认窗口尺寸：固定 1200×800 在 1440p 上只占工作区
@@ -501,8 +540,133 @@ pub fn run() {
             }
 
             let _ = pool;
+
+            // boot 锚点 2：setup 全链完成。锚点 1 → 2 之差 = setup 内逻辑耗时
+            // （Stronghold/迁移/注册表等），与 WebView2 层问题二分定位。
+            tracing::info!(
+                target: "ice_paw",
+                "boot 锚点：setup 完成，进程 boot 总耗时 {}ms",
+                boot_start.elapsed().as_millis()
+            );
             Ok(())
         })
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running tauri application");
+}
+
+// =========================================================================
+// WebView2 磁盘缓存瘦身（版本升级时一次性，run() 最早期执行）
+// =========================================================================
+
+/// 版本变化 → 删除 WebView2 的 HTTP 磁盘缓存（Default/Cache）与 V8 代码缓存
+/// （Default/Code Cache）。这两目录是纯派生缓存（不含 Cookies/登录态/Local
+/// Storage 等用户数据，那些不碰），删了由 WebView2 按需重建。
+///
+/// 为什么按「版本变化」触发：发版后前端资产 hash 全变，旧缓存条目整体变垃圾；
+/// 而版本不变时缓存仍有命中价值（同一资产二次加载免读盘）——只在升级后首启清
+/// 一次，日常启动零开销（一次读小标记文件）。
+///
+/// 增长上限另由 tauri.conf `additionalBrowserArgs --disk-cache-size=50MB` 封顶
+/// （Chromium 默认 ≈ 磁盘 1/3，大盘上几百 MB 淘汰懒散 = 本实案 606MB 的成因）。
+#[cfg(windows)]
+fn prune_webview_cache_on_version_change(context: &tauri::Context) {
+    use std::path::PathBuf;
+
+    let Some(version) = context.config().version.as_ref() else {
+        return;
+    };
+    let version = version.to_string();
+    let Ok(local_app) = std::env::var("LOCALAPPDATA") else {
+        return;
+    };
+    let root: PathBuf = PathBuf::from(local_app)
+        .join(&context.config().identifier)
+        .join("EBWebView");
+    prune_impl(&root, &version);
+}
+
+/// 内核与路径解耦：`root` = EBWebView 目录（测试注入 tmp 目录缩样布局）。
+#[cfg(windows)]
+fn prune_impl(root: &std::path::Path, version: &str) {
+    let marker = root.join(".webview-cache-gen");
+
+    // 同版本快路径：不动（一次读小标记文件，<1ms）
+    if std::fs::read_to_string(&marker).ok().as_deref() == Some(version) {
+        return;
+    }
+
+    let profile = root.join("Default");
+    let mut freed: u64 = 0;
+    let mut failed = false;
+    for sub in ["Cache", "Code Cache"] {
+        let dir = profile.join(sub);
+        if !dir.is_dir() {
+            continue;
+        }
+        let size: u64 = std::fs::read_dir(&dir)
+            .map(|rd| {
+                rd.flatten()
+                    .filter_map(|e| e.metadata().ok())
+                    .map(|m| m.len())
+                    .sum()
+            })
+            .unwrap_or(0);
+        match std::fs::remove_dir_all(&dir) {
+            Ok(()) => freed += size,
+            Err(e) => {
+                failed = true;
+                eprintln!("[ice_paw] WebView2 缓存清理失败（{sub}）: {e}");
+            }
+        }
+    }
+    if freed > 0 || !failed {
+        eprintln!(
+            "[ice_paw] 版本变化（{version}），清理 WebView2 缓存 {} 字节",
+            freed
+        );
+    }
+    // 尽力而为语义：无论成败都落标记（失败常为暂时性文件占用，但每次启动重删
+    // 几百 MB 同样拖启动；真删不掉由 disk-cache-size 上限兜住增长）
+    let _ = std::fs::write(&marker, version);
+}
+
+#[cfg(test)]
+mod tests {
+    // prune 的目录副作用在 tmp 目录验证（真实 EBWebView 布局缩样）
+    #[cfg(windows)]
+    #[test]
+    fn prune_clears_caches_on_version_change_and_skips_same_version() {
+        use std::fs;
+        let root = std::env::temp_dir().join(format!("icepaw_prune_{}", uuid::Uuid::new_v4()));
+        // prune_impl 的 root 语义 = EBWebView 目录本身；tmp 下缩样真实布局
+        let webview = root.join("EBWebView");
+        let profile = webview.join("Default");
+        fs::create_dir_all(profile.join("Cache/Cache_Data")).unwrap();
+        fs::create_dir_all(profile.join("Code Cache/Code Cache")).unwrap();
+        fs::write(profile.join("Cache/Cache_Data/f_000001"), vec![0u8; 1024]).unwrap();
+        fs::write(profile.join("Code Cache/Code Cache/abc"), vec![0u8; 512]).unwrap();
+        // 用户数据目录（Cookies 等）必须不碰
+        fs::write(profile.join("Cookies"), b"user-data").unwrap();
+
+        let marker = webview.join(".webview-cache-gen");
+        // 版本 v1 → 清两缓存 + 落标记
+        super::prune_impl(&webview, "1.0.0");
+        assert!(!profile.join("Cache").exists());
+        assert!(!profile.join("Code Cache").exists());
+        assert!(profile.join("Cookies").exists(), "用户数据不得被清");
+        assert_eq!(fs::read_to_string(&marker).unwrap(), "1.0.0");
+
+        // 重建缓存后同版本再跑 → 快路径不删（缓存条目保留）
+        fs::create_dir_all(profile.join("Cache")).unwrap();
+        fs::write(profile.join("Cache/keep"), b"x").unwrap();
+        super::prune_impl(&webview, "1.0.0");
+        assert!(profile.join("Cache/keep").exists(), "同版本不得重删");
+
+        // 版本 v2 → 再清
+        super::prune_impl(&webview, "2.0.0");
+        assert!(!profile.join("Cache").exists());
+        assert_eq!(fs::read_to_string(&marker).unwrap(), "2.0.0");
+
+        let _ = fs::remove_dir_all(&root);
+    }
 }
