@@ -15,13 +15,15 @@ import { ref, computed, watch, nextTick, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { useEscapeStack } from "../../composables/useEscapeStack";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ScreenShare } from "@lucide/vue";
+import { Inbox, ScreenShare } from "@lucide/vue";
 import { useChatStore }from "../../stores/chat";
 import { useAgentStore } from "../../stores/agent";
 import { useScreenChannelStore } from "../../stores/screenChannel";
+import { useInbox } from "../../composables/useInbox";
 import { bridge } from "../../api/bridge";
 import EntityAvatar from "../common/EntityAvatar.vue";
 import StatusGlyph from "./StatusGlyph.vue";
+import InboxPopover from "./InboxPopover.vue";
 
 // hasTabbar：标题下方有标签条（会话态）→ 去掉底边线，与标签条视觉连成一体
 //（ChatPage 传入；欢迎态无标签条，保留分割线区分标题与欢迎内容）
@@ -30,6 +32,24 @@ defineProps<{ hasTabbar?: boolean }>();
 const chat = useChatStore();
 const agent = useAgentStore();
 const screenChannel = useScreenChannelStore();
+const { pendingOf } = useInbox();
+
+// ===== MA-3 收件箱入口（hold 扣件的批准出口 + 收件政策切换）=====
+const inboxOpen = ref(false);
+const inboxZoneRef = ref<HTMLElement | null>(null);
+const inboxPending = computed(() => (chat.activeConversation ? pendingOf(chat.activeConversation.id) : 0));
+
+function onInboxDocClick(e: MouseEvent) {
+  if (inboxOpen.value && inboxZoneRef.value && !inboxZoneRef.value.contains(e.target as Node)) {
+    inboxOpen.value = false;
+  }
+}
+watch(inboxOpen, (open) => {
+  if (open) document.addEventListener("click", onInboxDocClick);
+  else document.removeEventListener("click", onInboxDocClick);
+});
+// Esc 关闭与删除确认条共用全局栈（互斥：只关栈顶）
+useEscapeStack(() => { inboxOpen.value = false; });
 
 const editing = ref(false);
 const editValue = ref("");
@@ -57,6 +77,7 @@ watch(confirming, (open) => {
 });
 onUnmounted(() => {
   document.removeEventListener("click", onDocClick);
+  document.removeEventListener("click", onInboxDocClick);
 });
 
 // UI-E2 窗口标题随会话联动：桌面惯例（dock/窗口列表可辨当前会话），空回退产品名。
@@ -292,6 +313,24 @@ async function toggleScreenShare() {
     <!-- 外置操作（UX #9）：屏幕共享开关 + 星标（左）+ 删除（右，占原「更多」位置）。
          删除确认 = 右锚定、向左横向扩展的确认条（覆盖星标，布局零位移） -->
     <div v-if="chat.activeConversation" class="header-right">
+      <!-- MA-3 收件箱入口：来件 badge（hold 扣件批准出口 + 收件政策切换）。
+           仅普通会话——委派子会话不是跨会话通讯单位（工具注册同款 kind 判定） -->
+      <div v-if="chat.activeConversation.kind !== 'delegation'" ref="inboxZoneRef" class="inbox-zone">
+        <button
+          class="header-btn inbox-btn"
+          :class="{ active: inboxOpen }"
+          :title="inboxPending > 0 ? `收件箱：${inboxPending} 条待处理来件` : '收件箱：跨会话消息与收件政策'"
+          :aria-expanded="inboxOpen"
+          aria-haspopup="dialog"
+          @click.stop="inboxOpen = !inboxOpen"
+        >
+          <Inbox :size="16" />
+          <span v-if="inboxPending > 0" class="inbox-badge">{{ inboxPending > 9 ? "9+" : inboxPending }}</span>
+        </button>
+        <Transition name="overlay">
+          <InboxPopover v-if="inboxOpen" :conv-id="chat.activeConversation.id" @close="inboxOpen = false" />
+        </Transition>
+      </div>
       <!-- 屏幕共享通道开关（批次④ 步骤 1）：附着态图标常显主色（状态可见） -->
       <button
         class="header-btn screen-btn"
@@ -395,6 +434,20 @@ async function toggleScreenShare() {
 .header-right { display:flex; align-items:center; gap:4px; position:relative; }
 .header-btn { display:flex; align-items:center; justify-content:center; width:32px; height:32px; border-radius:var(--ip-radius-md); color:var(--ip-color-text-secondary); border:none; cursor:pointer; background:transparent; transition:all var(--ip-duration-fast) var(--ip-ease-out); }
 .header-btn:hover { background-color:var(--ip-color-bg-tertiary); color:var(--ip-color-text-primary); }
+
+/* ===== MA-3 收件箱入口（badge 悬浮右上角；popover 右对齐下挂）===== */
+.inbox-zone { position: relative; display: flex; align-items: center; }
+.inbox-btn { position: relative; }
+.inbox-btn.active { background-color: var(--ip-color-bg-tertiary); color: var(--ip-color-text-primary); }
+.inbox-badge {
+  position: absolute; top: 2px; right: 2px;
+  min-width: 14px; height: 14px; padding: 0 3px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: var(--ip-radius-full, 999px);
+  background: var(--ip-primary-500); color: #fff;
+  font-size: var(--ip-text-micro-size); font-weight: var(--ip-font-weight-semibold);
+  line-height: 1; pointer-events: none;
+}
 
 /* ===== 屏幕共享通道开关（批次④）：本会话附着 = 授权免卡生效，图标常显主色 ===== */
 .screen-btn svg { color: var(--ip-color-text-tertiary); }

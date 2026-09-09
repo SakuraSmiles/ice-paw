@@ -577,6 +577,8 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
 .ev-switch { color: var(--ip-color-text-secondary); background: var(--ip-color-bg-tertiary); }
 /* PLAN（计划快照）：成功色系——勾选清单的直觉语义 */
 .ev-plan { color: var(--ip-success-text); background: var(--ip-success-bg); }
+/* CROSS（MA-3 跨会话来件/终态）：主色系——入站协作事实（user 消息的远亲） */
+.ev-cross { color: var(--ip-primary-600); background: var(--ip-primary-soft-bg, rgba(var(--ip-primary-500-rgb), 0.08)); }
 .ev-err { color: var(--ip-danger-text) !important; background: var(--ip-danger-bg) !important; }
 
 /* 摘要文本列（勿名 ev-summary：那是 SUMMARY kind 徽章类）。

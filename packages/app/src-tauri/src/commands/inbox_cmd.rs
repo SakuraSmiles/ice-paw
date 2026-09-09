@@ -73,6 +73,15 @@ pub async fn list_inbox(pool: State<'_, SqlitePool>, conversation_id: String) ->
     })
 }
 
+/// 全部会话的 pending 来件计数（boot 批量拉取——侧栏 badge 数据源）。
+///
+/// 返回 `(conversation_id, count)` 对；只含有来件的会话（零计数的会话不在
+/// 返回里，前端 Map 查不到 = 0）。
+#[tauri::command]
+pub async fn list_inbox_counts(pool: State<'_, SqlitePool>) -> AppResult<Vec<(String, i64)>> {
+    session_event::count_pending_inbox_all(pool.inner()).await
+}
+
 /// 切换收件政策（accept / hold / refuse）。
 #[tauri::command]
 pub async fn set_inbox_policy(

@@ -8,6 +8,7 @@ import { loadLastSession, planRestore } from "../../utils/sessionRestore";
 import { useNewConversation } from "../../composables/useNewConversation";
 import { useTheme } from "../../composables/useTheme";
 import { useResizablePanel } from "../../composables/useResizablePanel";
+import { useInbox } from "../../composables/useInbox";
 import PanelResizeHandle from "../common/PanelResizeHandle.vue";
 import EntityAvatar from "../common/EntityAvatar.vue";
 import ProjectSwitcher from "./ProjectSwitcher.vue";
@@ -16,6 +17,9 @@ import { useEscapeStack } from "../../composables/useEscapeStack";
 
 const router = useRouter();
 const project = useProjectStore();
+// MA-3 收件箱计数（会话行 badge；hold/accept 来件都计——hold 待批准是主场景，
+// accept 排队中也值得看见「有几件在等」）
+const { pendingOf } = useInbox();
 const isSettingsPage = computed(() => router.currentRoute.value.path.startsWith("/settings"));
 // 会话选中高亮 = 「内容区正在看该会话」——非会话内容页（项目/设置）不高亮，
 // 与底部设置按钮 isSettingsPage 同一语义。activeConvId 在 store 保留，
@@ -342,6 +346,10 @@ function timeAgoLabel(dateStr: string): string {
       >
         <div class="conv-item-title">
           <span class="conv-name">{{ conv.title || "新对话" }}</span>
+          <!-- MA-3 来件 badge（主色圆点+计数；与 rail flyout 内同款两处同步改） -->
+          <span v-if="pendingOf(conv.id) > 0" class="conv-inbox-badge" :title="`收件箱：${pendingOf(conv.id)} 条待处理来件`">
+            {{ pendingOf(conv.id) > 9 ? "9+" : pendingOf(conv.id) }}
+          </span>
           <span v-if="conv.pinned" class="pin-icon-right" title="已置顶">
             <!-- 置顶星（填充形态，与 rail flyout 内同款两处同步改） -->
             <Star :size="11" fill="currentColor" stroke="none" aria-hidden="true" />
@@ -466,6 +474,10 @@ function timeAgoLabel(dateStr: string): string {
               >
                 <div class="conv-item-title">
                   <span class="conv-name">{{ conv.title || "新对话" }}</span>
+                  <!-- MA-3 来件 badge（与展开列表同款两处同步改） -->
+                  <span v-if="pendingOf(conv.id) > 0" class="conv-inbox-badge" :title="`收件箱：${pendingOf(conv.id)} 条待处理来件`">
+                    {{ pendingOf(conv.id) > 9 ? "9+" : pendingOf(conv.id) }}
+                  </span>
                   <span v-if="conv.pinned" class="pin-icon-right" title="已置顶">
                     <!-- 置顶星（填充形态，与展开列表同款两处同步改） -->
                     <Star :size="11" fill="currentColor" stroke="none" aria-hidden="true" />
@@ -752,6 +764,26 @@ function timeAgoLabel(dateStr: string): string {
   color: var(--ip-color-text-tertiary);
   margin-left: auto;
 }
+/* MA-3 来件 badge：主色圆点胶囊（margin-left auto 推到行尾；与置顶星并存时
+   badge 在前星在后——待办数字比置顶态更 actionable） */
+.conv-inbox-badge {
+  flex-shrink: 0;
+  margin-left: auto;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--ip-radius-full, 999px);
+  background: var(--ip-primary-500);
+  color: #fff;
+  font-size: var(--ip-text-micro-size);
+  font-weight: var(--ip-font-weight-semibold);
+  line-height: 1;
+}
+/* badge 在场时置顶星不再单独推尾（badge 已 margin-left:auto） */
+.conv-item-title:has(.conv-inbox-badge) .pin-icon-right { margin-left: 2px; }
 
 .conv-name {
   font-size: var(--ip-text-body-sm-size);

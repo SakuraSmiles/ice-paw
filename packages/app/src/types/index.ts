@@ -161,6 +161,8 @@ export interface Conversation {
   kind?: string;
   /** 委派子会话的父会话 id（kind='delegation' 时必有；后端深度=1 护栏保证父为 chat 会话） */
   parent_conversation_id?: string | null;
+  /** 收件政策（MA-3，migration 52）：'accept'=自动消费 · 'hold'=扣住待批准（默认）· 'refuse'=拒收 */
+  inbox_policy?: string;
 }
 
 export interface NewConversation {
@@ -436,7 +438,54 @@ export type SessionEvent =
   | (SessionEventBase & { kind: "modal_adapted"; payload: ModalAdaptedPayload })
   | (SessionEventBase & { kind: "hook_injected"; payload: HookInjectedPayload })
   | (SessionEventBase & { kind: "plan_updated"; payload: PlanUpdatedPayload })
-  | (SessionEventBase & { kind: "model_switch"; payload: ModelSwitchPayload });
+  | (SessionEventBase & { kind: "model_switch"; payload: ModelSwitchPayload })
+  | (SessionEventBase & { kind: "cross_session_message"; payload: CrossSessionMessagePayload })
+  | (SessionEventBase & { kind: "cross_session_message_settled"; payload: CrossSessionMessageSettledPayload });
+
+// ============================================================================
+// MA-3 跨会话通讯（与后端 harness::event_log 两 payload / commands::inbox_cmd 对齐）
+// ============================================================================
+
+/** `cross_session_message` 投递事实——pending 来件（有投递无同 message_id 的
+ *  settled 即 pending；标题/agent 名是投递时刻快照，源会话改名不追溯） */
+export interface CrossSessionMessagePayload {
+  v?: number;
+  message_id: string;
+  source_conversation_id: string;
+  source_conversation_title: string;
+  source_agent_id: string;
+  source_agent_name: string;
+  content: string;
+  expect_reply: boolean;
+  delivered_at_unix: number;
+}
+
+/** `cross_session_message_settled` 终态——consumed（消费回合已发起）/ refused（拒绝） */
+export interface CrossSessionMessageSettledPayload {
+  v?: number;
+  message_id: string;
+  action: "consumed" | "refused";
+  /** auto（投递即时/回合结束排空）· user-approval（收件箱批准）· user-refused（收件箱拒绝） */
+  by: string;
+}
+
+/** 收件箱单条 pending 投影（list_inbox 返回元素） */
+export interface InboxItem {
+  message_id: string;
+  source_conversation_id: string;
+  source_conversation_title: string;
+  source_agent_id: string;
+  source_agent_name: string;
+  content: string;
+  expect_reply: boolean;
+  delivered_at_unix: number;
+}
+
+/** 收件箱视图（list_inbox 返回）：pending 列表（投递序）+ 当前收件政策 */
+export interface InboxView {
+  policy: string;
+  items: InboxItem[];
+}
 
 export interface TurnContextPayload {
   v?: number;

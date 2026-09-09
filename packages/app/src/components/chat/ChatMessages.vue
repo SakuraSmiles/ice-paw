@@ -13,6 +13,7 @@
 <script setup lang="ts">
 import { watch, nextTick, ref, computed, onActivated } from "vue";
 import { useRouter } from "vue-router";
+import { ArrowLeftRight } from "@lucide/vue";
 import { useChatStore } from "../../stores/chat";
 import { formatTime, formatDateLabel } from "../../utils/time";
 import MarkdownRenderer from "./MarkdownRenderer.vue";
@@ -31,6 +32,7 @@ import { useActiveTurn, THRESHOLD_PX } from "../../composables/useActiveTurn";
 import { formatTokenCount, formatThinkingMs, formatFileSize } from "../../utils/format";
 import { shortCode, parseReferenceBlocks, resolveGroupMid } from "../../utils/refs";
 import type { ParsedRef } from "../../utils/refs";
+import { parseIncomingText, type IncomingInfo } from "../../utils/crossSession";
 import { memoized } from "../../utils/blockMemo";
 import { summarizeToolCall, dirnameOf, type ToolLineSummary } from "../../utils/toolSummary";
 import { toolDisplayName } from "../../utils/toolLabels";
@@ -336,6 +338,27 @@ function hasUserMedia(msg: { content_blocks?: string }): boolean {
 function cleanUserContent(text: string | null | undefined): string {
   if (!text) return '';
   return text.replace(/\[附件[^\]]*\]/g, '').trim();
+}
+
+// ===== MA-3 跨会话来件（incoming 卡）=====
+// 消费回合物化的 user 消息带来源标注头（后端 compose_incoming_text）；此处
+// 解析出 来源会话/agent/正文，头部可点跳源会话（同 openReference 会话分支）。
+/** 来件解析（memo 化：模板热路径每渲染每消息调用；字符串参数即缓存键） */
+const incomingOf = memoized((content: string): IncomingInfo | null => parseIncomingText(content));
+
+/** 源会话是否可达（已删则头部纯展示，不可点） */
+function sourceConvExists(convId: string): boolean {
+  return chat.conversations.some((c) => c.id === convId);
+}
+
+function openIncomingSource(convId: string) {
+  if (sourceConvExists(convId)) chat.selectConversation(convId);
+}
+
+/** 气泡正文：来件剥标注头显正文，普通消息走 cleanUserContent */
+function userBubbleText(content: string | null | undefined): string {
+  const inc = incomingOf(content ?? "");
+  return inc ? inc.body : cleanUserContent(content);
 }
 
 /**
@@ -809,7 +832,20 @@ const RESUMABLE_REASONS = new Set([
           <template v-if="group.role === 'user'">
             <div class="message-content user">
               <div v-if="cleanUserContent(group.items[0].msg.content) || hasUserMedia(group.items[0].msg) || parseReferenceBlocks(group.items[0].msg.content_blocks).length > 0" class="message-bubble">
-                <span v-if="cleanUserContent(group.items[0].msg.content)" class="user-text">{{ cleanUserContent(group.items[0].msg.content) }}</span>
+                <!-- MA-3 跨会话来件：来源标注头（点击跳源会话；源已删纯展示）。
+                     检测锚 = [来自会话「 前缀（与后端 compose_incoming_text 逐字一致） -->
+                <div
+                  v-if="incomingOf(group.items[0].msg.content ?? '')"
+                  class="user-incoming-head"
+                  :class="{ clickable: sourceConvExists(incomingOf(group.items[0].msg.content ?? '')!.sourceConvId) }"
+                  :title="sourceConvExists(incomingOf(group.items[0].msg.content ?? '')!.sourceConvId) ? '打开源会话' : '源会话已删除'"
+                  @click="openIncomingSource(incomingOf(group.items[0].msg.content ?? '')!.sourceConvId)"
+                >
+                  <ArrowLeftRight :size="13" class="incoming-icon" aria-hidden="true" />
+                  <span class="incoming-src">来自「{{ incomingOf(group.items[0].msg.content ?? '')!.sourceTitle }}」的 agent {{ incomingOf(group.items[0].msg.content ?? '')!.agentName }}</span>
+                  <span class="incoming-pill">跨会话消息</span>
+                </div>
+                <span v-if="userBubbleText(group.items[0].msg.content)" class="user-text">{{ userBubbleText(group.items[0].msg.content) }}</span>
 
                 <!-- @ 引用卡片（快照存在消息里；点击跳转：会话切换 / 消息定位） -->
                 <div
@@ -1340,6 +1376,13 @@ const RESUMABLE_REASONS = new Set([
    排布的唯一间距来源——旧实现靠各元素零散 margin-top（6/4/0px 不一，单图单卡
    贴正文），多元素混排时参差；卡片的独立 margin 已移除，调间距只改 gap。 */
 .message-group.user .message-bubble { display:flex; flex-direction:column; gap: var(--ip-spacing-2); padding:10px 16px; border-radius:12px; font-size:var(--ip-text-body-size); line-height:var(--ip-line-height-loose3, 1.5); white-space:pre-wrap; word-break:break-word; background-color:var(--ip-color-bg-user-bubble); color:var(--ip-color-text-on-user-bubble); border-bottom-right-radius:4px; }
+
+/* ===== MA-3 跨会话来件来源标注头（气泡内首行；气泡底色深→文字用 on-bubble 色）===== */
+.user-incoming-head { display:flex; align-items:center; gap:6px; min-width:0; padding-bottom:6px; border-bottom:1px solid rgba(255,255,255,0.18); }
+.user-incoming-head.clickable { cursor:pointer; }
+.incoming-icon { flex-shrink:0; color:var(--ip-color-text-on-user-bubble); opacity:0.8; display:inline-block; }
+.incoming-src { flex:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; font-size:var(--ip-text-caption-size); font-weight:var(--ip-font-weight-medium); }
+.incoming-pill { flex-shrink:0; font-size:var(--ip-text-micro-size); line-height:1; padding:3px 8px; border-radius:var(--ip-radius-full, 999px); background:rgba(255,255,255,0.16); }
 
 /* ===== 助手消息文字（无自带背景，由组容器承载气泡块）=====
    行高走 loose3（1.5）与用户气泡/ markdown-body 同值——2026-09-05 排版批二轮，

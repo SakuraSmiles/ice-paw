@@ -287,9 +287,9 @@ describe("buildRows 行模型", () => {
 });
 
 describe("类型筛选模型（FilterKey / 预设 / 计数 / 持久化）", () => {
-  it("结构：FILTER_KEYS 11 键唯一，DEFAULT_HIDDEN 是其子集（结构锁范式）", () => {
-    expect(FILTER_KEYS).toHaveLength(11);
-    expect(new Set(FILTER_KEYS).size).toBe(11);
+  it("结构：FILTER_KEYS 12 键唯一，DEFAULT_HIDDEN 是其子集（结构锁范式）", () => {
+    expect(FILTER_KEYS).toHaveLength(12);
+    expect(new Set(FILTER_KEYS).size).toBe(12);
     for (const k of DEFAULT_HIDDEN) expect(FILTER_KEYS).toContain(k);
   });
 
@@ -305,6 +305,8 @@ describe("类型筛选模型（FilterKey / 预设 / 计数 / 持久化）", () =
       ["message_error", { kind: "llm", error: "e" }],
       ["message_discarded", { reason: "r" }],
       ["model_switch", { from_model: "", to_profile_id: "mp-b", to_alias: "备用档", to_model: "glm-backup", reason: "quota", attempt: 1 }],
+      ["cross_session_message", { message_id: "x1", source_conversation_id: "c-src", source_conversation_title: "主控", source_agent_id: "a1", source_agent_name: "甲", content: "材质定稿了吗", expect_reply: true, delivered_at_unix: 1 }],
+      ["cross_session_message_settled", { message_id: "x1", action: "consumed", by: "user-approval" }],
       ["modal_adapted", { stage: "s", mode: "m", items: [] }],
       ["hook_injected", { point: "p", prompt: "x" }],
       ["attachment_stored", { kind: "page", items: [] }],
@@ -312,6 +314,22 @@ describe("类型筛选模型（FilterKey / 预设 / 计数 / 持久化）", () =
     for (const [kind, payload] of fixtures) {
       expect(evRows([ev(kind, payload)], { hiddenKinds: new Set() }).events()).toHaveLength(1);
     }
+  });
+
+  it("跨会话来件（MA-3）：CROSS 行 + 来源摘要；settled 中文 by 标注；默认不隐藏（待办事实）", () => {
+    const rows = evRows([
+      ev("cross_session_message", { message_id: "x1", source_conversation_id: "c-src", source_conversation_title: "主控", source_agent_id: "a1", source_agent_name: "甲", content: "材质定稿了吗", expect_reply: true, delivered_at_unix: 1 }),
+      ev("cross_session_message_settled", { message_id: "x1", action: "consumed", by: "user-approval" }),
+    ]);
+    const [msg, settled] = rows.events();
+    expect(msg.kind).toBe("cross");
+    expect(msg.label).toBe("CROSS");
+    expect(msg.summary).toContain("主控");
+    expect(msg.summary).toContain("甲");
+    expect(msg.summary).toContain("期待回复");
+    expect(msg.summary).toContain("材质定稿了吗");
+    expect(settled.summary).toBe("已消费（用户批准）");
+    expect(DEFAULT_HIDDEN).not.toContain("cross_session");
   });
 
   it("model_switch：SWITCH 行 + 中文原因摘要（quota → 额度耗尽）；默认不隐藏（可见的过程事实）", () => {

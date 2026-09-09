@@ -20,6 +20,8 @@ import { bridge } from "../api/bridge";
 import type {
   AssistantMessagePayload,
   ContentBlock,
+  CrossSessionMessagePayload,
+  CrossSessionMessageSettledPayload,
   MessageDiscardedPayload,
   MessageErrorPayload,
   ModalAdaptedPayload,
@@ -39,7 +41,7 @@ import type {
 // =========================================================================
 
 /** 行 kind：日志 kind 的 UI 投影（徽章文案 + 颜色语义） */
-export type RowKind = "user" | "assistant" | "tool" | "summary" | "plan" | "error" | "discarded" | "switch" | "aux";
+export type RowKind = "user" | "assistant" | "tool" | "summary" | "plan" | "error" | "discarded" | "switch" | "cross" | "aux";
 
 export const ROW_KIND_LABELS: Record<RowKind, string> = {
   user: "USER",
@@ -50,6 +52,7 @@ export const ROW_KIND_LABELS: Record<RowKind, string> = {
   error: "ERROR",
   discarded: "DISCARD",
   switch: "SWITCH",
+  cross: "CROSS",
   aux: "AUX",
 };
 
@@ -67,6 +70,7 @@ export type FilterKey =
   | "plan"
   | "discarded"
   | "model_switch"
+  | "cross_session"
   | "attachment_stored"
   | "modal_adapted"
   | "hook_injected";
@@ -74,11 +78,11 @@ export type FilterKey =
 /** 默认隐藏集：三类辅助事件（低频审计信息；与旧 showAux=false 行为等价） */
 export const DEFAULT_HIDDEN: FilterKey[] = ["attachment_stored", "modal_adapted", "hook_injected"];
 
-/** 「类型」下拉的分组与中文文案（4 组 11 键；TrajectoryToolbar 与 ProjectTimeline 共用） */
+/** 「类型」下拉的分组与中文文案（4 组 12 键；TrajectoryToolbar 与 ProjectTimeline 共用） */
 export const FILTER_GROUPS: { label: string; items: { key: FilterKey; label: string }[] }[] = [
   { label: "对话", items: [{ key: "user", label: "用户消息" }, { key: "assistant", label: "回复消息" }] },
   { label: "过程", items: [{ key: "tool", label: "工具调用" }, { key: "error", label: "错误" }] },
-  { label: "记录", items: [{ key: "summary", label: "摘要" }, { key: "plan", label: "计划" }, { key: "discarded", label: "废弃轮" }, { key: "model_switch", label: "模型切换" }] },
+  { label: "记录", items: [{ key: "summary", label: "摘要" }, { key: "plan", label: "计划" }, { key: "discarded", label: "废弃轮" }, { key: "model_switch", label: "模型切换" }, { key: "cross_session", label: "跨会话来件" }] },
   { label: "辅助", items: [{ key: "attachment_stored", label: "附件落库" }, { key: "modal_adapted", label: "视觉适配" }, { key: "hook_injected", label: "钩子注入" }] },
 ];
 
@@ -97,6 +101,8 @@ const EV_KIND_TO_FILTER: Record<string, FilterKey> = {
   message_error: "error",
   message_discarded: "discarded",
   model_switch: "model_switch",
+  cross_session_message: "cross_session",
+  cross_session_message_settled: "cross_session",
   attachment_stored: "attachment_stored",
   modal_adapted: "modal_adapted",
   hook_injected: "hook_injected",
@@ -355,6 +361,40 @@ function summarizeEvent(ev: SessionEvent): { kind: RowKind; summary: string; isE
       return {
         kind: "switch",
         summary: `切换 → ${p.to_alias}（${p.to_model}）· ${reason}`,
+        isError: false,
+        durationMs: null,
+        tokens: null,
+        thinkingDerived: false,
+        isThinking: false,
+        isContinuation: false,
+      };
+    }
+    case "cross_session_message": {
+      const p = ev.payload as CrossSessionMessagePayload;
+      const reply = p.expect_reply ? " · 期待回复" : "";
+      return {
+        kind: "cross",
+        summary: `来自「${p.source_conversation_title}」agent ${p.source_agent_name}${reply} · ${firstLine(p.content, 80)}`,
+        isError: false,
+        durationMs: null,
+        tokens: null,
+        thinkingDerived: false,
+        isThinking: false,
+        isContinuation: false,
+      };
+    }
+    case "cross_session_message_settled": {
+      const p = ev.payload as CrossSessionMessageSettledPayload;
+      // by 词表：auto=投递即时/回合结束排空 · user-approval=收件箱批准 · user-refused=收件箱拒绝
+      const BY_LABELS: Record<string, string> = {
+        auto: "自动",
+        "user-approval": "用户批准",
+        "user-refused": "用户拒绝",
+      };
+      const by = BY_LABELS[p.by] ?? p.by;
+      return {
+        kind: "cross",
+        summary: p.action === "consumed" ? `已消费（${by}）` : `已拒绝（${by}）`,
         isError: false,
         durationMs: null,
         tokens: null,

@@ -475,6 +475,29 @@ const logs = {
   },
 };
 
+const inbox = {
+  /** 收件箱视图（pending 来件 + 当前收件政策；打开 popover 时权威刷新） */
+  async list(conversationId: string): Promise<import("../types").InboxView> {
+    try { return await invoke<import("../types").InboxView>("list_inbox", { conversationId }); }
+    catch (err) { throw wrapInvokeError("inbox.list", err); }
+  },
+  /** 全部会话 pending 计数（boot 批量拉取——侧栏 badge 数据源；零计数会话不在返回里） */
+  async counts(): Promise<[string, number][]> {
+    try { return await invoke<[string, number][]>("list_inbox_counts"); }
+    catch (err) { throw wrapInvokeError("inbox.counts", err); }
+  },
+  /** 切换收件政策（accept / hold / refuse） */
+  async setPolicy(conversationId: string, policy: string): Promise<void> {
+    try { await invoke<void>("set_inbox_policy", { conversationId, policy }); }
+    catch (err) { throw wrapInvokeError("inbox.setPolicy", err); }
+  },
+  /** 处置一条 pending：allow=true 批准消费回合（会话忙时后端 Err、消息留队）；false 拒绝 */
+  async respond(conversationId: string, messageId: string, allow: boolean): Promise<void> {
+    try { await invoke<void>("respond_inbox_item", { conversationId, messageId, allow }); }
+    catch (err) { throw wrapInvokeError("inbox.respond", err); }
+  },
+};
+
 const trajectory = {
   /** 读取会话事件流（seq 正序，payload 已 parse）；供「轨迹回放」视图消费。
    *  三形态：无参=全量 / limit+beforeSeq=尾部优先向前翻页 / limit+afterSeq=正向增量（live 追加轮询） */
@@ -561,5 +584,5 @@ const screen = {
   },
 };
 
-export const bridge = { agents, providers, modelProfiles, conversations, projects, messages, chat, preferences, mcp, kb, logs, trajectory, screen };
+export const bridge = { agents, providers, modelProfiles, conversations, projects, messages, chat, preferences, mcp, kb, logs, inbox, trajectory, screen };
 export default bridge;
