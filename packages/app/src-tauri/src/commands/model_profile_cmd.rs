@@ -281,8 +281,21 @@ pub(crate) fn production_fallback_plan(
     pool: &SqlitePool,
     agent: &crate::db::models::AgentRow,
 ) -> crate::harness::r#loop::fallback::FallbackPlan {
-    use crate::harness::r#loop::fallback::{parse_fallback_ids, FallbackPlan};
+    use crate::harness::r#loop::fallback::parse_fallback_ids;
     let chain = parse_fallback_ids(agent.fallback_profile_ids.as_deref());
+    fallback_plan_from_chain(app, pool, chain, agent)
+}
+
+/// 链 → FallbackPlan 的组装内核（production / 委派继承共用）。
+/// resolve 参数恒取**运行 agent**（child）的行值——max_tokens 原值与
+/// cache_prompt 是 agent 级偏好，不随链来自谁而变。
+fn fallback_plan_from_chain(
+    app: &AppHandle,
+    pool: &SqlitePool,
+    chain: Vec<String>,
+    agent: &crate::db::models::AgentRow,
+) -> crate::harness::r#loop::fallback::FallbackPlan {
+    use crate::harness::r#loop::fallback::FallbackPlan;
     if chain.is_empty() {
         return FallbackPlan::empty();
     }
@@ -290,11 +303,61 @@ pub(crate) fn production_fallback_plan(
         chain,
         Arc::new(ProfileFallbackResolver::new(app.clone(), pool.clone())),
         agent.model_profile_id.clone(),
-        // resolve 参数：agent 行 max_tokens **原值**（非主档策展抬升后的有效值）
-        // + 主档 cache_prompt——见 FallbackPlan 字段注释
         agent.max_tokens,
         agent.cache_prompt != 0,
     )
+}
+
+/// 委派子会话的降级链决策（纯函数，0.7 批 A）：
+/// - 子 agent 显式配链 → 原样用自己的（自己的韧性选择不被覆盖）；
+/// - 无链 → **继承父 agent 的降级链**，并摘除与子 agent 主档同 id 的档
+///   （换到与当前主档相同的 profile = 重试一次已知失败，纯浪费）。
+///
+/// 语义边界：继承的是父的**配置链**（静态），非父会话换档后的剩余链——
+/// 已知失败档由换档机制自行跳过（Quota 类即时换档只多一次循环），
+/// 子会话 cursor=0 重新起跑（父的换档进度是父回合的运行时事实）。
+fn delegation_fallback_chain(
+    child: &crate::db::models::AgentRow,
+    parent: Option<&crate::db::models::AgentRow>,
+) -> Vec<String> {
+    use crate::harness::r#loop::fallback::parse_fallback_ids;
+    let own = parse_fallback_ids(child.fallback_profile_ids.as_deref());
+    if !own.is_empty() {
+        return own;
+    }
+    let Some(parent) = parent else {
+        return Vec::new();
+    };
+    let mut chain = parse_fallback_ids(parent.fallback_profile_ids.as_deref());
+    if let Some(child_primary) = child.model_profile_id.as_deref() {
+        chain.retain(|id| id != child_primary);
+    }
+    chain
+}
+
+/// 委派路径的降级链组装（delegate.rs 调用）：子 agent 无链时回退读父 agent
+/// 行继承。父行读取失败**降级为无链**（warn 留痕）——链是韧性增强不是委派
+/// 前提，绝不让继承失败阻塞委派本身。
+pub(crate) async fn delegation_fallback_plan(
+    app: &AppHandle,
+    pool: &SqlitePool,
+    child: &crate::db::models::AgentRow,
+    parent_agent_id: &str,
+) -> crate::harness::r#loop::fallback::FallbackPlan {
+    use crate::harness::r#loop::fallback::parse_fallback_ids;
+    if !parse_fallback_ids(child.fallback_profile_ids.as_deref()).is_empty() {
+        return production_fallback_plan(app, pool, child);
+    }
+    let parent = repo::agent::get_by_id(pool, parent_agent_id).await.ok();
+    if parent.is_none() {
+        tracing::warn!(
+            target: "ice_paw.fallback",
+            parent = parent_agent_id,
+            "父 agent 行读取失败，委派子会话降级为无链（不阻塞委派）"
+        );
+    }
+    let chain = delegation_fallback_chain(child, parent.as_ref());
+    fallback_plan_from_chain(app, pool, chain, child)
 }
 
 // ============================================================================
@@ -884,6 +947,89 @@ mod tests {
             api_key: api_key.into(),
             base_url: None,
         }
+    }
+
+    /// 委派降级链测试夹具：只关心 model_profile_id / fallback_profile_ids 两列
+    fn deleg_agent_row(
+        model_profile_id: Option<&str>,
+        fallback_ids: Option<&str>,
+    ) -> crate::db::models::AgentRow {
+        crate::db::models::AgentRow {
+            id: "a1".into(),
+            name: "n".into(),
+            provider: "glm".into(),
+            model: "glm-5.3-flash".into(),
+            system_prompt: String::new(),
+            api_key_ref: String::new(),
+            base_url: None,
+            temperature: 0.7,
+            max_tokens: 4096,
+            extra_params: String::new(),
+            sort_order: 0,
+            cache_prompt: 0,
+            max_history_messages: None,
+            context_window: None,
+            enabled_tools: None,
+            supports_vision: 0,
+            description: String::new(),
+            avatar: None,
+            workspace_path: None,
+            model_profile_id: model_profile_id.map(Into::into),
+            fallback_profile_ids: fallback_ids.map(Into::into),
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
+    // ---------------- 委派降级链继承（0.7 批 A） ----------------
+
+    #[test]
+    fn delegation_chain_child_own_wins_over_parent() {
+        // 子 agent 显式配链 → 原样用自己的，父链不参与
+        let child = deleg_agent_row(Some("mp-child"), Some(r#"["mp-a","mp-b"]"#));
+        let parent = deleg_agent_row(Some("mp-parent"), Some(r#"["mp-x"]"#));
+        let chain = delegation_fallback_chain(&child, Some(&parent));
+        assert_eq!(chain, vec!["mp-a".to_string(), "mp-b".to_string()]);
+    }
+
+    #[test]
+    fn delegation_chain_inherits_parent_when_child_empty() {
+        let child = deleg_agent_row(Some("mp-child"), None);
+        let parent = deleg_agent_row(Some("mp-parent"), Some(r#"["mp-x","mp-y"]"#));
+        let chain = delegation_fallback_chain(&child, Some(&parent));
+        assert_eq!(chain, vec!["mp-x".to_string(), "mp-y".to_string()]);
+    }
+
+    #[test]
+    fn delegation_chain_inheritance_drops_child_primary() {
+        // 父链含子主档 → 摘除（换到当前主档 = 重试一次已知失败）
+        let child = deleg_agent_row(Some("mp-a"), None);
+        let parent = deleg_agent_row(None, Some(r#"["mp-a","mp-b","mp-a"]"#));
+        let chain = delegation_fallback_chain(&child, Some(&parent));
+        assert_eq!(chain, vec!["mp-b".to_string()]);
+    }
+
+    #[test]
+    fn delegation_chain_parent_missing_or_chain_drained() {
+        let child = deleg_agent_row(Some("mp-a"), None);
+        // 父行读不到（None）→ 无链
+        assert!(delegation_fallback_chain(&child, None).is_empty());
+        // 父也无链 → 无链
+        let no_chain_parent = deleg_agent_row(None, None);
+        assert!(delegation_fallback_chain(&child, Some(&no_chain_parent)).is_empty());
+        // 摘除后空链（父链只有子的主档）
+        let only_primary = deleg_agent_row(None, Some(r#"["mp-a"]"#));
+        assert!(delegation_fallback_chain(&child, Some(&only_primary)).is_empty());
+    }
+
+    #[test]
+    fn delegation_chain_legacy_child_inherits_too() {
+        // legacy 子 agent（手动主档、model_profile_id NULL）同样继承——
+        // 换档机制对 legacy 主档 + 链 profile 的组合本就成立
+        let child = deleg_agent_row(None, None);
+        let parent = deleg_agent_row(None, Some(r#"["mp-x"]"#));
+        let chain = delegation_fallback_chain(&child, Some(&parent));
+        assert_eq!(chain, vec!["mp-x".to_string()]);
     }
 
     // ---------------- validate_new_profile ----------------
