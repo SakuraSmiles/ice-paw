@@ -46,7 +46,9 @@ use crate::db::models::{Agent, AgentRow, AgentUpdate, HookConfig, NewAgent, Rota
 use crate::db::repo;
 use crate::error::{AppError, AppResult};
 use crate::harness::kb::{ensure, watcher_manager::KbWatcherManager};
-use crate::harness::provider::{provider_default_url, provider_requires_key};
+use crate::harness::provider::{
+    provider_default_url, provider_requires_base_url, provider_requires_key,
+};
 
 // ============================================================================
 // 入参校验
@@ -70,7 +72,11 @@ fn validate_new_agent(input: &NewAgent) -> AppResult<()> {
     if input.name.trim().is_empty() {
         return Err(AppError::Validation("name 不能为空".into()));
     }
-    if input.model_profile_id.as_deref().is_some_and(|v| !v.trim().is_empty()) {
+    if input
+        .model_profile_id
+        .as_deref()
+        .is_some_and(|v| !v.trim().is_empty())
+    {
         validate_fallback_has_primary(
             true,
             input
@@ -104,6 +110,27 @@ fn validate_fallback_has_primary(has_primary: bool, chain_nonempty: bool) -> App
     Ok(())
 }
 
+/// 手动新建字段能否物化为 ModelProfile 实体（Phase 3，2026-09-08 拍板：新建
+/// 表单保留手写配置、保存时自动转实体）。UI 路径经 `validate_new_agent` 后
+/// 恒真；旁路（提案 CreateAgent 等）凭据不齐时为 false → legacy 行照常可用
+/// （不硬造 keyless 实体），编辑时选实体即转正。判定与 boot 存量抽离
+/// （agent_profile_migration）的跳过条件同构。
+fn manual_materializable(input: &NewAgent) -> bool {
+    let provider = input.provider.trim();
+    if provider.is_empty() || input.model.trim().is_empty() {
+        return false;
+    }
+    if provider_requires_key(provider) && input.api_key.trim().is_empty() {
+        return false;
+    }
+    let explicit_url = input
+        .base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    !provider_requires_base_url(provider) || explicit_url.is_some()
+}
+
 /// AgentUpdate 冲突校验（纯函数，便于测试回归）。
 ///
 /// 设引用（Some(Some)）与 provider/model/base_url 同批 → 拒：快照列族由
@@ -116,9 +143,7 @@ fn validate_update_model_fields_conflict(
     old_has_primary: bool,
 ) -> AppResult<()> {
     if matches!(input.model_profile_id, Some(Some(_)))
-        && (input.provider.is_some()
-            || input.model.is_some()
-            || input.base_url.is_some())
+        && (input.provider.is_some() || input.model.is_some() || input.base_url.is_some())
     {
         return Err(AppError::Validation(
             "设模型引用时不能同时修改厂商/模型/端点——请先保存引用，再单独调整".into(),
@@ -330,7 +355,10 @@ fn build_default_agent_yaml_content(
 
 /// B：换厂商时未显式提供 base_url → 新厂商注册表默认地址（端点跟随厂商）。
 /// 纯函数便于测试；custom/未知 provider 无默认（空串）→ None（保持不改）。
-fn default_url_on_provider_switch(provider_changed: bool, new_provider: Option<&str>) -> Option<String> {
+fn default_url_on_provider_switch(
+    provider_changed: bool,
+    new_provider: Option<&str>,
+) -> Option<String> {
     if !provider_changed {
         return None;
     }
@@ -386,9 +414,28 @@ impl SqlAgentCmd {
     /// agent id），「未配置 Key」徽标形同虚设。真相 = 免 key 厂商（ollama/custom）
     /// 恒 true；要求 key 的厂商查 stronghold 记录存在（空占位记录只会出现在免 key
     /// 厂商，create/rotate 的必填校验保证）。
-    fn agent_dto(&self, row: AgentRow) -> Agent {
-        let has_api_key = !provider_requires_key(&row.provider)
-            || crypto::has_api_key(&self.app, &row.api_key_ref).unwrap_or(false);
+    ///
+    /// Phase 3（2026-09-08）：**引用形态查 profile 槽位**——新建表单保存即物化
+    /// 后 agent 槽位不再写 Key（只落 profile 槽位），旧判据会让每个新 agent 误报
+    /// 「未配置 Key」。悬空引用（profile 已删）诚实显示未配置（Key 无处可取）。
+    /// 每行一次小查询（agent 数量级小，接受 N+1）。
+    async fn agent_dto(&self, row: AgentRow) -> Agent {
+        let has_api_key = if let Some(pid) = row
+            .model_profile_id
+            .as_deref()
+            .filter(|p| !p.trim().is_empty())
+        {
+            repo::model_profile::get_by_id(&self.pool, pid)
+                .await
+                .map(|p| {
+                    !provider_requires_key(&p.provider)
+                        || crypto::has_api_key(&self.app, &p.api_key_ref).unwrap_or(false)
+                })
+                .unwrap_or(false)
+        } else {
+            !provider_requires_key(&row.provider)
+                || crypto::has_api_key(&self.app, &row.api_key_ref).unwrap_or(false)
+        };
         let mut agent = Agent::from_row_with_file_config(row);
         agent.has_api_key = has_api_key;
         agent
@@ -413,7 +460,11 @@ impl SqlAgentCmd {
 impl AgentCmd for SqlAgentCmd {
     async fn list(&self) -> AppResult<Vec<Agent>> {
         let rows = repo::agent::list(&self.pool).await?;
-        Ok(rows.into_iter().map(|row| self.agent_dto(row)).collect())
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            out.push(self.agent_dto(row).await);
+        }
+        Ok(out)
     }
 
     async fn get(&self, agent_id: &str) -> AppResult<AgentRow> {
@@ -450,12 +501,8 @@ impl AgentCmd for SqlAgentCmd {
             .as_deref()
             .filter(|p| !p.trim().is_empty())
         {
-            match super::model_profile_cmd::resolve_profile_credentials(
-                &self.app,
-                &self.pool,
-                pid,
-            )
-            .await
+            match super::model_profile_cmd::resolve_profile_credentials(&self.app, &self.pool, pid)
+                .await
             {
                 Ok(cred) => {
                     let _ = repo::agent::update_model_snapshot(
@@ -500,26 +547,70 @@ impl AgentCmd for SqlAgentCmd {
             return Err(AppError::Validation(format!("ID '{}' 已被使用", id)));
         }
 
-        // ModelProfile Phase 2：引用模式解析 profile 写快照列——provider/model/
-        // base_url 一次写对（validate 已跳过必填，这三列不能落空串）。profile
-        // 不存在在此拦下（槽位/行都还没写，无残局可清）。
-        let profile_snapshot = match input.model_profile_id.as_deref() {
-            Some(pid) if !pid.trim().is_empty() => {
+        // 模型身份三路（Phase 3，2026-09-08 拍板——数据从出生就是「实体+引用」）：
+        // a) 引用直传（Phase 2 既有）：解析 profile 写快照列——provider/model/
+        //    base_url 一次写对；profile 不存在在此拦下（槽位/行都还没写，无残局可清）；
+        // b) 手动字段自动物化（新建表单）：保存即转 ModelProfile 实体 + 引用——
+        //    匹配键与 boot 存量抽离同源（profile_match），同配置（厂商+模型+端点+
+        //    Key）复用既有实体不重复建；Key 只落 profile 槽位（agent 槽位不写：
+        //    重复密文 + rotate 后陈旧副本两头害，`agent_dto` 的 has_api_key 真相
+        //    也跟着 profile 走）；
+        // c) 凭据不齐的旁路（如提案 CreateAgent 缺 Key / custom 缺端点）：不硬造
+        //    keyless 实体，legacy 行照常可用，编辑时选实体即转正。
+        let mut resolved_profile: Option<String> = None;
+        let mut profile_snapshot: Option<(String, String, Option<String>)> = None;
+        match input
+            .model_profile_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            Some(pid) => {
+                let pid = pid.to_string();
+                let cred = super::model_profile_cmd::resolve_profile_credentials(
+                    &self.app, &self.pool, &pid,
+                )
+                .await
+                .map_err(|e| AppError::Validation(format!("引用的模型配置不可用（{pid}）：{e}")))?;
+                profile_snapshot = Some((cred.profile.provider, cred.profile.model, cred.base_url));
+                resolved_profile = Some(pid);
+            }
+            None if manual_materializable(&input) => {
+                let m = crate::harness::profile_materialize::materialize_from_manual(
+                    &self.pool,
+                    &input.provider,
+                    &input.model,
+                    &input.api_key,
+                    input.base_url.as_deref(),
+                    |slot| crypto::fetch_api_key(&self.app, slot).ok(),
+                    |slot, key, url| crypto::store_api_key(&self.app, slot, key, url),
+                    |slot| crypto::delete_api_key(&self.app, slot),
+                )
+                .await?;
+                // 解析回读拿规范快照值（刚建的行，同时校验落库成功）
                 let cred = super::model_profile_cmd::resolve_profile_credentials(
                     &self.app,
                     &self.pool,
-                    pid,
+                    &m.profile_id,
                 )
-                .await
-                .map_err(|e| {
-                    AppError::Validation(format!("引用的模型配置不可用（{pid}）：{e}"))
-                })?;
-                Some((cred.profile.provider, cred.profile.model, cred.base_url))
+                .await?;
+                profile_snapshot = Some((cred.profile.provider, cred.profile.model, cred.base_url));
+                resolved_profile = Some(m.profile_id.clone());
+                tracing::info!(
+                    target: "ice_paw.agent",
+                    profile = %m.profile_id,
+                    created = m.created,
+                    "新建 agent 的手动模型配置已物化为模型配置实体（同配置复用既有实体）"
+                );
             }
-            _ => None,
-        };
+            None => {}
+        }
 
-        crypto::store_api_key(&self.app, &id, &input.api_key, input.base_url.as_deref())?;
+        // Key 槽位：legacy 路径照旧落 agent 槽位（含空串占位）；引用/物化路径
+        // Key 只在 profile 槽位（见上）
+        if resolved_profile.is_none() {
+            crypto::store_api_key(&self.app, &id, &input.api_key, input.base_url.as_deref())?;
+        }
 
         // 工作区路径：用户没填时自动计算 {default}/agents/{id}
         let workspace_path = if input.workspace_path.as_ref().is_some_and(|p| !p.is_empty()) {
@@ -543,6 +634,9 @@ impl AgentCmd for SqlAgentCmd {
 
         let mut new_agent = input;
         new_agent.workspace_path = workspace_path;
+        if let Some(pid) = resolved_profile {
+            new_agent.model_profile_id = Some(pid);
+        }
         if let Some((provider, model, base_url)) = profile_snapshot {
             new_agent.provider = provider;
             new_agent.model = model;
@@ -591,7 +685,7 @@ impl AgentCmd for SqlAgentCmd {
             );
         }
 
-        Ok(self.agent_dto(row))
+        Ok(self.agent_dto(row).await)
     }
 
     async fn update(&self, input: AgentUpdate) -> AppResult<Agent> {
@@ -613,7 +707,8 @@ impl AgentCmd for SqlAgentCmd {
             .as_deref()
             .zip(old_row.as_ref().map(|r| r.provider.as_str()))
             .is_some_and(|(new, old)| new != old);
-        let switch_url = default_url_on_provider_switch(provider_changed, input.provider.as_deref());
+        let switch_url =
+            default_url_on_provider_switch(provider_changed, input.provider.as_deref());
         let base_url_arg = resolve_base_url_arg(
             input.base_url.as_ref().map(|o| o.as_deref()),
             switch_url.as_deref(),
@@ -624,14 +719,10 @@ impl AgentCmd for SqlAgentCmd {
         let profile_snapshot = match input.model_profile_id.as_ref() {
             Some(Some(pid)) if !pid.trim().is_empty() => {
                 let cred = super::model_profile_cmd::resolve_profile_credentials(
-                    &self.app,
-                    &self.pool,
-                    pid,
+                    &self.app, &self.pool, pid,
                 )
                 .await
-                .map_err(|e| {
-                    AppError::Validation(format!("引用的模型配置不可用（{pid}）：{e}"))
-                })?;
+                .map_err(|e| AppError::Validation(format!("引用的模型配置不可用（{pid}）：{e}")))?;
                 Some((cred.profile.provider, cred.profile.model, cred.base_url))
             }
             _ => None,
@@ -734,7 +825,7 @@ impl AgentCmd for SqlAgentCmd {
             }
         }
 
-        Ok(self.agent_dto(row))
+        Ok(self.agent_dto(row).await)
     }
 
     async fn rotate_key(&self, input: RotateAgentKey) -> AppResult<Agent> {
@@ -1181,14 +1272,11 @@ mod tests {
         let absent: AgentUpdate = serde_json::from_str(r#"{"id":"a1"}"#).unwrap();
         assert_eq!(absent.base_url, None);
         // JSON null → Some(None)（清空）
-        let nulled: AgentUpdate =
-            serde_json::from_str(r#"{"id":"a1","base_url":null}"#).unwrap();
+        let nulled: AgentUpdate = serde_json::from_str(r#"{"id":"a1","base_url":null}"#).unwrap();
         assert_eq!(nulled.base_url, Some(None));
         // 值 → Some(Some(v))（设定）
-        let valued: AgentUpdate = serde_json::from_str(
-            r#"{"id":"a1","base_url":"https://api.deepseek.com"}"#,
-        )
-        .unwrap();
+        let valued: AgentUpdate =
+            serde_json::from_str(r#"{"id":"a1","base_url":"https://api.deepseek.com"}"#).unwrap();
         assert_eq!(
             valued.base_url,
             Some(Some("https://api.deepseek.com".to_string()))
@@ -1255,6 +1343,31 @@ mod tests {
             validate_new_agent(&b),
             Err(AppError::Validation(_))
         ));
+    }
+
+    /// 物化闸：UI 完整输入可物化；旁路形态（需 Key 无 Key / custom 缺端点 /
+    /// 字段不齐）保持 legacy 不硬造 keyless 实体
+    #[test]
+    fn manual_materializable_gate() {
+        // UI 路径：完整手动字段（keyed 厂商带 Key）
+        assert!(manual_materializable(&new_agent("glm", "sk-1")));
+        // 需 Key 厂商无 Key（提案旁路）→ 不物化
+        assert!(!manual_materializable(&new_agent("glm", "  ")));
+        // custom 缺端点 → 不物化；补端点 → 可
+        let mut c = new_agent("custom", "");
+        c.base_url = None;
+        assert!(!manual_materializable(&c));
+        c.base_url = Some("http://localhost:11434/v1".into());
+        assert!(manual_materializable(&c));
+        // ollama 免 Key 且有注册表默认端点 → 可
+        assert!(manual_materializable(&new_agent("ollama", "")));
+        // 字段不齐 → 不物化
+        let mut p = new_agent("glm", "sk-1");
+        p.provider = " ".into();
+        assert!(!manual_materializable(&p));
+        let mut m = new_agent("glm", "sk-1");
+        m.model = "".into();
+        assert!(!manual_materializable(&m));
     }
 
     #[tokio::test]
@@ -1479,9 +1592,10 @@ mod tests {
         assert_eq!(absent.fallback_profile_ids, None);
 
         // JSON null → Some(None)（解除引用 / 清链）
-        let nulled: AgentUpdate =
-            serde_json::from_str(r#"{"id":"a1","model_profile_id":null,"fallback_profile_ids":null}"#)
-                .unwrap();
+        let nulled: AgentUpdate = serde_json::from_str(
+            r#"{"id":"a1","model_profile_id":null,"fallback_profile_ids":null}"#,
+        )
+        .unwrap();
         assert_eq!(nulled.model_profile_id, Some(None));
         assert_eq!(nulled.fallback_profile_ids, Some(None));
 

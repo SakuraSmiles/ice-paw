@@ -1,12 +1,12 @@
-// AgentForm.providers.test.ts — 可选可输分组模型选择器行为锁：
+// AgentForm.providers.test.ts — 可选可输分组模型选择器行为锁（新建态专属——
+// Phase 3 起编辑态换配置链选择器，编辑态手输用例已退役）：
 // 下拉只含可见厂商（Ollama/custom/旧入口 hidden 不进）、选预设条目 URL 锁定
 // 注册表地址、手输目录外名字落 custom（URL 必填可编辑、可免 Key）、测试连接
 // 走通地址回填固化（智谱 Coding 备选端点）+ 探测传参规则（值==默认传
-// undefined 走多端点回退）、失败红字、编辑态 hidden 旧入口合成兜底组且
-// URL 可编辑（存量 Ollama 改端口场景）。
+// undefined 走多端点回退）、失败红字。
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mount, flushPromises, type VueWrapper } from "@vue/test-utils";
-import type { Agent, ProviderInfo } from "../../../types";
+import type { ProviderInfo } from "../../../types";
 
 // AgentForm 顶层 import 了两个 Tauri 插件（选目录/文件管理器），全局 setup 未覆盖，须先 mock
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
@@ -51,34 +51,12 @@ const PROVIDERS: ProviderInfo[] = [
   { name: "custom", protocol: "openai", default_url: "", alt_urls: [], label: "自定义（OpenAI 兼容）", note: null, requires_key: false, requires_base_url: true, key_url: null, openai_url: null, hidden: true, models: [] },
 ];
 
-function editAgent(overrides?: Partial<Agent>): Agent {
-  return {
-    id: "ag-1",
-    name: "助手",
-    provider: "openai",
-    model: "gpt-4o",
-    system_prompt: "",
-    base_url: null,
-    temperature: 0.7,
-    max_tokens: 16384,
-    extra_params: {},
-    sort_order: 0,
-    cache_prompt: true,
-    workspace_path: null,
-    config_from_file: false,
-    created_at: "2026-08-15 00:00:00",
-    updated_at: "2026-08-15 00:00:00",
-    has_api_key: true,
-    ...overrides,
-  };
-}
-
 const wrappers: VueWrapper[] = [];
 
 /** useProviders 是模块级单例缓存——resetModules + 动态 import 保证每个用例拿到干净目录 */
-async function mountForm(agent: Agent | null = null) {
+async function mountForm() {
   const { default: AgentForm } = await import("../AgentForm.vue");
-  const w = mount(AgentForm, { props: { agent }, attachTo: document.body });
+  const w = mount(AgentForm, { props: { agent: null }, attachTo: document.body });
   wrappers.push(w);
   await flushPromises();
   return w;
@@ -275,14 +253,6 @@ describe("AgentForm 可选可输分组模型选择器", () => {
     expect(input.base_url).toBe(GLM_CODING_URL);
     w.unmount();
 
-    // 编辑态存量 Coding 地址：高亮 Coding 不误显标准；可切回标准（URL 归位默认）
-    const w2 = await mountForm(editAgent({ provider: "glm", model: "glm-5.2", base_url: GLM_CODING_URL }));
-    const opts2 = w2.findAll(".endpoint-opt");
-    expect(opts2[1].classes()).toContain("active");
-    await opts2[0].trigger("click");
-    expect(baseUrlValue(w2)).toBe(GLM_STD_URL);
-    w2.unmount();
-
     // 无备选端点厂商（deepseek）不渲染切换行
     const w3 = await mountForm();
     await openDropdown(w3);
@@ -324,60 +294,5 @@ describe("AgentForm 可选可输分组模型选择器", () => {
     const err = w.find(".conn-err");
     expect(err.exists()).toBe(true);
     expect(err.text()).toContain("全部端点未通过");
-  });
-
-  it("编辑态换厂商必须带新 Key：空 Key 保存被拦（提示厂商名），填后 update+rotateKey 同批生效；同厂商换模型不受限", async () => {
-    // 存量 openai agent → 点选智谱模型（provider 随模型切）
-    const w = await mountForm(editAgent({ provider: "openai", model: "gpt-4o" }));
-    await openDropdown(w);
-    await clickOption(w, "glm-5-turbo");
-    await save(w);
-    // 空 key → 拦 + 提示含新厂商名与 Key 指引
-    const errText = w.find(".form-error").text();
-    expect(errText).toContain("智谱");
-    expect(errText).toContain("API Key");
-    expect(updateMock).not.toHaveBeenCalled();
-    // 填新 key → 放行：update 与 rotateKey（新 key + 切换后的厂商地址）都被调
-    await textInputs(w)[2].setValue("sk-glm-new-key");
-    await save(w);
-    expect(w.find(".form-error").exists()).toBe(false);
-    expect(updateMock).toHaveBeenCalledWith(expect.objectContaining({ provider: "glm", model: "glm-5-turbo" }));
-    expect(rotateKeyMock).toHaveBeenCalledWith("ag-1", "sk-glm-new-key", GLM_STD_URL);
-    w.unmount();
-
-    // 同厂商换模型：key 留空（=不改）照常保存，不被新闸误伤
-    updateMock.mockClear();
-    rotateKeyMock.mockClear();
-    const w2 = await mountForm(editAgent({ provider: "openai", model: "gpt-4o" }));
-    await openDropdown(w2);
-    await clickOption(w2, "gpt-4o-mini");
-    await save(w2);
-    expect(w2.find(".form-error").exists()).toBe(false);
-    expect(updateMock).toHaveBeenCalledWith(expect.objectContaining({ model: "gpt-4o-mini" }));
-    expect(rotateKeyMock).not.toHaveBeenCalled();
-  });
-
-  it("编辑态：可见厂商存量目录外模型插回所属组；hidden 旧入口（glm-coding）合成兜底组且 URL 可编辑", async () => {
-    testConnectionMock.mockResolvedValue({ ok: true, model_count: 0, models: [], error: null, matched_url: null });
-    // 可见厂商 + 目录外模型 → 插回智谱组（编辑态 URL 锁定 + 存量地址原样）
-    const w = await mountForm(editAgent({ provider: "glm", model: "glm-x-private", base_url: GLM_CODING_URL }));
-    expect((modelInput(w).element as HTMLInputElement).value).toBe("glm-x-private");
-    expect(baseUrlValue(w)).toBe(GLM_CODING_URL); // 存量固化地址原样（≠默认也直接显示）
-    await openDropdown(w);
-    expect(w.findAll(".gs-option").some((o) => o.text().includes("glm-x-private"))).toBe(true);
-    // 探测：存量地址≠默认 → 显式传（只测它，不回退）
-    await w.find(".conn-btn").trigger("click");
-    await flushPromises();
-    expect(testConnectionMock).toHaveBeenCalledWith("glm", GLM_CODING_URL, undefined, "ag-1");
-    w.unmount();
-
-    // hidden 旧入口（glm-coding）→ 合成兜底组显示；URL 可编辑（hidden 不锁）
-    const w2 = await mountForm(editAgent({ provider: "ollama", model: "qwen3:8b", base_url: "http://192.168.1.10:11434/v1" }));
-    expect((modelInput(w2).element as HTMLInputElement).value).toBe("qwen3:8b");
-    expect(baseUrlLocked(w2)).toBe(false); // 存量 Ollama 改端口/换机器地址仍可编辑
-    expect(baseUrlValue(w2)).toBe("http://192.168.1.10:11434/v1");
-    await openDropdown(w2);
-    const labels = w2.findAll(".gs-group-label").map((l) => l.text());
-    expect(labels.some((l) => l.includes("Ollama"))).toBe(true); // 合成兜底组
   });
 });

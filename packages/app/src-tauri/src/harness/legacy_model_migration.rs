@@ -88,9 +88,7 @@ const LEGACY_EMBEDDING_KEYS: &[&str] = &[
 /// `vision::entry_to_credential` 的字段门一致；端点可推导性交读侧三层解析
 /// （不可推导 = warn 跳过，与旧链行为等价且在设置页可见可修）。
 fn vision_entry_fields_valid(e: &crate::db::models::VisionConfigEntry) -> bool {
-    !e.provider.trim().is_empty()
-        && !e.model.trim().is_empty()
-        && !e.api_key.trim().is_empty()
+    !e.provider.trim().is_empty() && !e.model.trim().is_empty() && !e.api_key.trim().is_empty()
 }
 
 /// 纯函数：从当前 preferences 推导迁移计划（单测全覆盖；不碰 DB / Stronghold）。
@@ -227,12 +225,8 @@ where
         repo::preferences::set(pool, "vision_profile_ids", &serde_json::to_string(&ids)?).await?;
     }
     if let Some(e) = &plan.embedding {
-        repo::preferences::set(
-            pool,
-            "embedding_profile_id",
-            &serde_json::to_string(&e.id)?,
-        )
-        .await?;
+        repo::preferences::set(pool, "embedding_profile_id", &serde_json::to_string(&e.id)?)
+            .await?;
     }
     // 4. 清旧键（各自仅当该腿跑了；delete 幂等）
     if plan.vision.is_some() {
@@ -323,7 +317,10 @@ mod tests {
         assert_eq!(vision.len(), 2);
         assert_eq!(vision[0].id, "mp-vision-0");
         assert_eq!(vision[0].alias, "视觉主模型");
-        assert_eq!(vision[0].base_url.as_deref(), Some("https://custom.example/v1"));
+        assert_eq!(
+            vision[0].base_url.as_deref(),
+            Some("https://custom.example/v1")
+        );
         assert_eq!(vision[1].id, "mp-vision-1");
         assert_eq!(vision[1].alias, "视觉降级1");
         assert_eq!(vision[1].base_url, None, "未显式填端点 → None 走运行时推导");
@@ -441,7 +438,9 @@ mod tests {
         // 显式 URL 的自定义厂商 → 可搬且保留显式值
         let mut custom = no_url;
         custom.embedding_base_url = Some("https://my-proxy.example/v1".into());
-        let e2 = plan_legacy_migration(&custom).embedding.expect("显式 URL → 可搬");
+        let e2 = plan_legacy_migration(&custom)
+            .embedding
+            .expect("显式 URL → 可搬");
         assert_eq!(e2.base_url.as_deref(), Some("https://my-proxy.example/v1"));
 
         // 已迁移 → 腿跳过
@@ -473,7 +472,10 @@ mod tests {
 
     /// seed 完整 legacy 形态：vision_config 2 条 + embedding 四键（JSON.stringify 形态）
     async fn seed_legacy(pool: &SqlitePool) {
-        let entries = vec![entry("glm", "glm-5.3-flash", "sk-a"), entry("deepseek", "ds-v", "sk-b")];
+        let entries = vec![
+            entry("glm", "glm-5.3-flash", "sk-a"),
+            entry("deepseek", "ds-v", "sk-b"),
+        ];
         repo::preferences::set(
             pool,
             "vision_config",
@@ -506,15 +508,15 @@ mod tests {
         assert_eq!(plan.vision.as_ref().unwrap().len(), 2);
         assert!(plan.embedding.is_some());
 
-        let n = execute_migration(&pool, &plan, |_| Ok(()))
-            .await
-            .unwrap();
+        let n = execute_migration(&pool, &plan, |_| Ok(())).await.unwrap();
         assert_eq!(n, 3, "vision 2 + embedding 1");
 
         // DB 行落位（含 api_key_ref 惯例）
         let rows = repo::model_profile::list(&pool).await.unwrap();
         assert_eq!(rows.len(), 3);
-        assert!(rows.iter().all(|r| r.api_key_ref == format!("profile:{}", r.id)));
+        assert!(rows
+            .iter()
+            .all(|r| r.api_key_ref == format!("profile:{}", r.id)));
 
         // 引用键落位 + 旧键全清
         let after = repo::preferences::get_all(&pool).await.unwrap();
@@ -532,9 +534,7 @@ mod tests {
 
         // 重放（模拟下次 boot 再跑同形态——实际会因引用键 Some 而 plan 为空，
         // 此处直接重执行同 plan 验证 INSERT OR IGNORE 不重复不炸）
-        execute_migration(&pool, &plan, |_| Ok(()))
-            .await
-            .unwrap();
+        execute_migration(&pool, &plan, |_| Ok(())).await.unwrap();
         assert_eq!(repo::model_profile::list(&pool).await.unwrap().len(), 3);
     }
 

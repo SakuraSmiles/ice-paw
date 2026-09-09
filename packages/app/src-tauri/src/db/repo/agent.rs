@@ -395,9 +395,14 @@ mod tests {
     async fn avatar_roundtrip() {
         let pool = test_pool().await;
         // create 带头像（migration 20 列）
-        create(&pool, &new_agent(Some("data:image/png;base64,xxx")), "a1", "a1")
-            .await
-            .expect("create");
+        create(
+            &pool,
+            &new_agent(Some("data:image/png;base64,xxx")),
+            "a1",
+            "a1",
+        )
+        .await
+        .expect("create");
         let row = get_by_id(&pool, "a1").await.expect("get");
         assert_eq!(row.avatar.as_deref(), Some("data:image/png;base64,xxx"));
 
@@ -455,7 +460,9 @@ mod tests {
     #[tokio::test]
     async fn enabled_tools_update_double_option_semantics() {
         let pool = test_pool().await;
-        create(&pool, &new_agent(None), "a1", "a1").await.expect("create");
+        create(&pool, &new_agent(None), "a1", "a1")
+            .await
+            .expect("create");
         let row = get_by_id(&pool, "a1").await.expect("get");
         assert_eq!(row.enabled_tools, None);
 
@@ -471,7 +478,10 @@ mod tests {
         )
         .await
         .expect("update set");
-        assert_eq!(row.enabled_tools.as_deref(), Some(r#"["read_file","edit_docx"]"#));
+        assert_eq!(
+            row.enabled_tools.as_deref(),
+            Some(r#"["read_file","edit_docx"]"#)
+        );
 
         // Some(None) = 清空即全部启用（摘除镜像路径）
         let row = update(
@@ -546,7 +556,10 @@ mod tests {
             .expect("snapshot no-op");
         assert_eq!(n, 0, "值相同 → 零行更新");
         let after_noop = get_by_id(&pool, "a1").await.expect("get").updated_at;
-        assert_eq!(before, after_noop, "零写入不刷 updated_at（trg_agents_upd 无 WHEN）");
+        assert_eq!(
+            before, after_noop,
+            "零写入不刷 updated_at（trg_agents_upd 无 WHEN）"
+        );
 
         // 值变 → 1 行更新（updated_at 是否刷新交由触发器语义，datetime('now') 秒级
         // 精度下同秒断言会假失败，不在此断言）

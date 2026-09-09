@@ -71,9 +71,7 @@ fn validate_new_profile(input: &NewModelProfile) -> AppResult<()> {
     if provider_requires_base_url(input.provider.trim())
         && input.base_url.as_deref().unwrap_or("").trim().is_empty()
     {
-        return Err(AppError::Validation(
-            "custom 厂商必须填写端点 URL".into(),
-        ));
+        return Err(AppError::Validation("custom 厂商必须填写端点 URL".into()));
     }
     Ok(())
 }
@@ -278,8 +276,10 @@ pub trait ModelProfileCmd: Send + Sync {
     async fn delete(&self, profile_id: &str) -> AppResult<()>;
 
     /// 取 profile + 解密后的凭据（测试命令 / 视觉链解析专用）
-    async fn get_with_credentials(&self, profile_id: &str)
-        -> AppResult<ModelProfileWithCredentials>;
+    async fn get_with_credentials(
+        &self,
+        profile_id: &str,
+    ) -> AppResult<ModelProfileWithCredentials>;
 
     /// 记录健康状态（状态监控，warn-only 旁路——测试命令结果回写用；slug 见
     /// `harness::profile_health::ProfileHealth::as_str`）。绝不返回 Err。
@@ -395,17 +395,17 @@ impl ModelProfileCmd for SqlModelProfileCmd {
         );
 
         // 顺带换 Key（可选）：vault 的 base_url 副本跟随最终 DB 值，保持兜底可用
-        if let Some(key) = input.api_key.as_deref().map(str::trim).filter(|k| !k.is_empty()) {
+        if let Some(key) = input
+            .api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|k| !k.is_empty())
+        {
             let final_base_url = match &base_url_arg {
                 Some(opt) => opt.map(String::from),
                 None => old.base_url.clone(),
             };
-            crypto::store_api_key(
-                &self.app,
-                &old.api_key_ref,
-                key,
-                final_base_url.as_deref(),
-            )?;
+            crypto::store_api_key(&self.app, &old.api_key_ref, key, final_base_url.as_deref())?;
         }
 
         let row = repo::model_profile::update(
@@ -613,12 +613,10 @@ impl ModelProfileCmd for MockModelProfileCmd {
     async fn update(&self, input: ModelProfileUpdate) -> AppResult<ModelProfile> {
         self.log(format!("update({})", input.id));
         let mut g = self.inner.lock().unwrap();
-        let (row, key, base_url) = g
-            .get_mut(&input.id)
-            .ok_or_else(|| AppError::NotFound {
-                resource: "model_profile",
-                id: input.id.clone(),
-            })?;
+        let (row, key, base_url) = g.get_mut(&input.id).ok_or_else(|| AppError::NotFound {
+            resource: "model_profile",
+            id: input.id.clone(),
+        })?;
         if let Some(v) = input.alias {
             row.alias = v.trim().to_string();
         }
@@ -646,12 +644,12 @@ impl ModelProfileCmd for MockModelProfileCmd {
     async fn rotate_key(&self, input: RotateProfileKey) -> AppResult<ModelProfile> {
         self.log(format!("rotate_key({})", input.profile_id));
         let mut g = self.inner.lock().unwrap();
-        let (row, key, base_url) = g
-            .get_mut(&input.profile_id)
-            .ok_or_else(|| AppError::NotFound {
-                resource: "model_profile",
-                id: input.profile_id.clone(),
-            })?;
+        let (row, key, base_url) =
+            g.get_mut(&input.profile_id)
+                .ok_or_else(|| AppError::NotFound {
+                    resource: "model_profile",
+                    id: input.profile_id.clone(),
+                })?;
         *key = input.api_key.clone();
         if let Some(bu) = input.base_url.clone() {
             *base_url = Some(bu);
@@ -852,7 +850,14 @@ mod tests {
 
     #[test]
     fn validate_rejects_empty_key_for_keyed_providers() {
-        for p in ["openai", "glm", "glm-coding", "deepseek", "anthropic", "minimax"] {
+        for p in [
+            "openai",
+            "glm",
+            "glm-coding",
+            "deepseek",
+            "anthropic",
+            "minimax",
+        ] {
             let err = validate_new_profile(&new_profile(p, "  ")).unwrap_err();
             assert!(matches!(err, AppError::Validation(_)), "{p} 空 key 应被拒");
         }
@@ -864,13 +869,22 @@ mod tests {
     fn validate_rejects_empty_fields() {
         let mut a = new_profile("ollama", "");
         a.alias = "  ".into();
-        assert!(matches!(validate_new_profile(&a), Err(AppError::Validation(_))));
+        assert!(matches!(
+            validate_new_profile(&a),
+            Err(AppError::Validation(_))
+        ));
         let mut b = new_profile("ollama", "");
         b.provider = "".into();
-        assert!(matches!(validate_new_profile(&b), Err(AppError::Validation(_))));
+        assert!(matches!(
+            validate_new_profile(&b),
+            Err(AppError::Validation(_))
+        ));
         let mut c = new_profile("ollama", "");
         c.model = "".into();
-        assert!(matches!(validate_new_profile(&c), Err(AppError::Validation(_))));
+        assert!(matches!(
+            validate_new_profile(&c),
+            Err(AppError::Validation(_))
+        ));
     }
 
     // ---------------- 换厂商闸 + 端点跟随 ----------------
@@ -987,7 +1001,10 @@ mod tests {
         })
         .await
         .unwrap();
-        assert_eq!(mock.get_with_credentials("mp1").await.unwrap().api_key, "new");
+        assert_eq!(
+            mock.get_with_credentials("mp1").await.unwrap().api_key,
+            "new"
+        );
 
         mock.delete("mp1").await.unwrap();
         assert!(mock.get("mp1").await.is_err());

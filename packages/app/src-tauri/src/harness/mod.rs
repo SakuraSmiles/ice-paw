@@ -30,13 +30,15 @@ pub mod mcp;
 pub mod modal;
 pub mod observable;
 pub mod oneshot_registry;
+pub mod profile_health;
+pub mod profile_match;
+pub mod profile_materialize;
 pub mod proposal_guard;
 pub mod proposal_registry;
-pub mod profile_health;
 pub mod provider;
-pub mod read_route;
 #[cfg(test)]
 mod read_path_bench;
+pub mod read_route;
 pub mod reconcile;
 pub mod references;
 pub mod retry;

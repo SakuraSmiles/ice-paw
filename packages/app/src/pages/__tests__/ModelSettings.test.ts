@@ -3,15 +3,15 @@
 // + 换厂商 key 闸（保存时校验拦截）+ 被语义检索引用 profile 的编辑旁路
 // （pendingEdit 重建确认）+ 创建校验 + 删除两步确认与守卫 inline。
 // 视觉/语义引用选择已迁回设置-通用（GeneralSettings.test 覆盖）。
-// Combobox 交互按仓内惯例从组件 emit 驱动（AgentForm.providers 同款）。
+// GroupedSelect 交互按仓内惯例从组件 emit 驱动（select 事件携条目 payload）。
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 import { invoke } from "@tauri-apps/api/core";
 import ModelSettings from "../settings/ModelSettings.vue";
-import Combobox from "../../components/common/Combobox.vue";
+import GroupedSelect from "../../components/common/GroupedSelect.vue";
 import EmbedSwitchOverlay from "../../components/common/EmbedSwitchOverlay.vue";
 import { loadModelProfiles } from "../../composables/useModelProfiles";
-import type { ModelProfile, ProviderInfo, UserPreferences } from "../../types";
+import type { Agent, ModelProfile, ProviderInfo, UserPreferences } from "../../types";
 
 const mockInvoke = vi.mocked(invoke);
 
@@ -47,8 +47,15 @@ const PROFILES: ModelProfile[] = [
   profile("mp-3", { alias: "备用" }),
 ];
 
+/** agent 引用快照（引用计数只读 model_profile_id / fallback_profile_ids 两列） */
+function agentRef(id: string, model_profile_id: string | null, fallback: string[] = []): Agent {
+  return { id, model_profile_id, fallback_profile_ids: fallback } as Agent;
+}
+/** 默认 agent 只引用 mp-3（既有断言的 a=2 处 / b=未引用 基线不被扰动） */
+const AGENTS: Agent[] = [agentRef("ag-1", "mp-3")];
+
 /** 可变后端状态（update_model_profile 合并写回，模拟真实行） */
-const db = { profiles: [...PROFILES] };
+const db = { profiles: [...PROFILES], agents: [...AGENTS] };
 let prefs: UserPreferences = {};
 
 function mockBackend() {
@@ -57,6 +64,7 @@ function mockBackend() {
       case "get_preferences": return { ...prefs };
       case "list_providers": return PROVIDERS;
       case "list_model_profiles": return db.profiles.map((p) => ({ ...p }));
+      case "list_agents": return db.agents.map((a) => ({ ...a }));
       case "update_model_profile": {
         const input = args!.input as ModelProfile & Record<string, unknown>;
         const hit = db.profiles.find((p) => p.id === input.id);
@@ -66,6 +74,7 @@ function mockBackend() {
       }
       case "set_preference": return undefined;
       case "test_embedding_config": return undefined;
+      case "test_provider_connection": return { ok: true, model_count: 3, models: [], error: null, matched_url: null };
       case "rebuild_all_embeddings": return { kbs: 1, chunks: 5 };
       case "delete_model_profile": {
         const id = args!.id as string;
@@ -99,6 +108,7 @@ describe("ModelSettings 设置·模型页（实体库）", () => {
   beforeEach(async () => {
     mockInvoke.mockReset();
     db.profiles = PROFILES.map((p) => ({ ...p }));
+    db.agents = AGENTS.map((a) => ({ ...a }));
     prefs = {};
     mockBackend();
     // 模块级缓存与 db 同步重置（前测的 update/reload 会污染缓存——如模型名已改）
@@ -122,10 +132,11 @@ describe("ModelSettings 设置·模型页（实体库）", () => {
     expect(aTitle.find(".ref-count").classes()).not.toContain("ref-count--none");
     expect(aTitle.find(".provider-badge").exists()).toBe(false);
 
-    // 次行：厂商 tag 前置 + 模型名 + 健康胶囊（ok = 绿 + 相对时；端点/Key 徽标折叠态不上屏）
+    // 次行：模型 tag（厂商 glyph + 模型名 mono；hover title = 厂商显示名）+ 健康胶囊
     const aSub = a.find(".row-sub");
-    expect(aSub.find(".provider-badge").text()).toBe("智谱 GLM");
-    expect(aSub.text()).toContain("glm-5.3-flash");
+    const aTag = aSub.find(".card-model");
+    expect(aTag.attributes("title")).toBe("智谱 GLM");
+    expect(aTag.find(".card-model-name").text()).toBe("glm-5.3-flash");
     const aHealth = aSub.find(".health-chip");
     expect(aHealth.text()).toContain("正常");
     expect(aHealth.text()).toMatch(/刚刚|\d+分钟前/);
@@ -152,6 +163,21 @@ describe("ModelSettings 设置·模型页（实体库）", () => {
     expect(cHealth.text()).not.toMatch(/分钟前|小时前/);
   });
 
+  it("引用计数纳入 agent 主档与降级链（2026-09-09 补腿：通用页引用 + agent 引用两处合计）", async () => {
+    prefs = { vision_profile_ids: ["mp-1"] };
+    db.agents = [
+      agentRef("ag-main", "mp-1"),
+      agentRef("ag-fb", "mp-2", ["mp-1", "mp-3"]),
+    ];
+    const w = await mountPage();
+    const [a, , c] = entityCards(w);
+    // mp-1：视觉 1 + agent 主档 1 + agent 降级链 1 = 3 处
+    expect(a.find(".ref-count").text()).toBe("3 处引用");
+    expect(a.find(".ref-count").attributes("title")).toContain("Agent");
+    // mp-3：仅 agent 降级链 1 处
+    expect(c.find(".ref-count").text()).toBe("1 处引用");
+  });
+
   it("点击展开：编辑字段出现（别名/厂商/模型/Key/端点），再点收起", async () => {
     const w = await mountPage();
     await expandCard(w, 0);
@@ -159,7 +185,9 @@ describe("ModelSettings 设置·模型页（实体库）", () => {
     expect(card.find("input").exists()).toBe(true);
     expect((card.findAll('input[type="text"]')[0].element as HTMLInputElement).value).toBe("智谱主力");
     expect(card.find(".key-input").exists()).toBe(true);
-    expect(card.findComponent(Combobox).exists()).toBe(true);
+    // 厂商+模型合并档（2026-09-09）：分组选择器替换原两字段 Combobox
+    expect(card.findComponent(GroupedSelect).exists()).toBe(true);
+    expect(card.find(".gs-input").exists()).toBe(true);
 
     await card.trigger("click");
     await flushPromises();
@@ -235,7 +263,9 @@ describe("ModelSettings 设置·模型页（实体库）", () => {
     mockInvoke.mockClear();
 
     // 切到 OpenAI（requires_key）且 Key 草稿空 → 点保存被拦截，零写入
-    card.findAllComponents(Combobox)[0].vm.$emit("update:modelValue", "OpenAI");
+    card.findComponent(GroupedSelect).vm.$emit("select", {
+      label: "gpt-4o", value: "openai::gpt-4o", data: { provider: "openai", model: "gpt-4o" },
+    });
     await flushPromises();
     await card.findAll("button").find((b) => b.text() === "保存")!.trigger("click");
     await flushPromises();
@@ -259,8 +289,10 @@ describe("ModelSettings 设置·模型页（实体库）", () => {
     const card = entityCards(w)[0];
     mockInvoke.mockClear();
 
-    // 模型 Combobox 改草稿 + 点保存 → 身份变化触发重建确认（update 未落）
-    card.findAllComponents(Combobox)[1].vm.$emit("update:modelValue", "glm-4.5v");
+    // 模型改草稿（同厂商换模型）+ 点保存 → 身份变化触发重建确认（update 未落）
+    card.findComponent(GroupedSelect).vm.$emit("select", {
+      label: "glm-4.5v", value: "glm::glm-4.5v", data: { provider: "glm", model: "glm-4.5v" },
+    });
     await flushPromises();
     await card.findAll("button").find((b) => b.text() === "保存")!.trigger("click");
     await flushPromises();
@@ -284,7 +316,9 @@ describe("ModelSettings 设置·模型页（实体库）", () => {
     prefs = { embedding_profile_id: "mp-1" };
     const w = await mountPage();
     await expandCard(w, 0);
-    entityCards(w)[0].findAllComponents(Combobox)[1].vm.$emit("update:modelValue", "glm-4.5v");
+    entityCards(w)[0].findComponent(GroupedSelect).vm.$emit("select", {
+      label: "glm-4.5v", value: "glm::glm-4.5v", data: { provider: "glm", model: "glm-4.5v" },
+    });
     await flushPromises();
     await entityCards(w)[0].findAll("button").find((b) => b.text() === "保存")!.trigger("click");
     await flushPromises();
@@ -318,6 +352,66 @@ describe("ModelSettings 设置·模型页（实体库）", () => {
     await flushPromises();
     expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "create_model_profile")).toBe(false);
     expect(w.find(".test-fail-text").text()).toContain("别名必填");
+  });
+
+  it("创建表单测试连接：草稿值探测（无 profileId）+ URL 占位真实展示所选厂商默认端点", async () => {
+    const w = await mountPage();
+    await w.findAll(".profile-card")[0].trigger("click"); // 新建卡（默认厂商 glm）
+    await flushPromises();
+    mockInvoke.mockClear();
+
+    // URL 占位 = 注册表真实默认端点（2026-09-09 拍板：不做固定文案）
+    const urlInput = w.findAll('input[type="text"]')
+      .find((i) => (i.element as HTMLInputElement).placeholder.includes("bigmodel"));
+    expect(urlInput, "URL 占位应含 glm 默认端点").toBeTruthy();
+
+    // 填 Key → 点测试：草稿值探测，profileId 不传（实体未建，不沉淀健康）
+    await w.find('input[type="password"]').setValue("sk-draft");
+    await w.findAll("button").find((b) => b.text() === "测试")!.trigger("click");
+    await flushPromises();
+    expect(mockInvoke).toHaveBeenCalledWith("test_provider_connection", {
+      providerName: "glm",
+      baseUrl: null,
+      apiKey: "sk-draft",
+      agentId: null,
+      profileId: null,
+    });
+    expect(w.find(".test-ok-text").text()).toContain("连接正常");
+  });
+
+  it("实体卡测试连接载荷：未改动草稿走存量腿（profileId 随行）；厂商切换草稿不挂 profileId", async () => {
+    const w = await mountPage();
+    await expandCard(w, 1); // mp-2 本地（ollama + 存量端点）
+    const card = entityCards(w)[1];
+    mockInvoke.mockClear();
+
+    // 草稿 = 服务端快照（未改）：存量测试——端点回显值随行 + profileId（后端按
+    // 等值降级记健康三列，2026-09-09 生产实案修复路径）
+    await card.findAll("button").find((b) => b.text() === "测试")!.trigger("click");
+    await flushPromises();
+    expect(mockInvoke).toHaveBeenCalledWith("test_provider_connection", {
+      providerName: "ollama",
+      baseUrl: "http://localhost:11434/v1",
+      apiKey: null,
+      agentId: null,
+      profileId: "mp-2",
+    });
+
+    // 厂商切换草稿（未保存）：存量凭据属于旧厂商——profileId 不传，纯草稿探测
+    card.findComponent(GroupedSelect).vm.$emit("select", {
+      label: "glm-5.3-flash", value: "glm::glm-5.3-flash", data: { provider: "glm", model: "glm-5.3-flash" },
+    });
+    await flushPromises();
+    mockInvoke.mockClear();
+    await card.findAll("button").find((b) => b.text() === "测试")!.trigger("click");
+    await flushPromises();
+    expect(mockInvoke).toHaveBeenCalledWith("test_provider_connection", {
+      providerName: "glm",
+      baseUrl: null, // 切厂商清端点草稿
+      apiKey: null,
+      agentId: null,
+      profileId: null,
+    });
   });
 
   it("删除两步确认：第一次点击武装成确认键，第二次执行；被引用时守卫拒绝 inline", async () => {
@@ -354,6 +448,7 @@ async function mockBackendInvoke(cmd: string): Promise<unknown> {
     case "get_preferences": return { ...prefs };
     case "list_providers": return PROVIDERS;
     case "list_model_profiles": return db.profiles.map((p) => ({ ...p }));
+    case "list_agents": return db.agents.map((a) => ({ ...a }));
     case "set_preference": return undefined;
     case "rebuild_all_embeddings": return { kbs: 1, chunks: 5 };
     default: return undefined;

@@ -1,9 +1,11 @@
 <script setup lang="ts">
 // AgentSettings.vue — 智能体设置（卡片展开内联编辑 + 顶部特殊新建卡片）
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, onActivated, nextTick } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import AgentForm from "../../components/agent/AgentForm.vue";
 import ErrorBanner from "../../components/common/ErrorBanner.vue";
 import EntityAvatar from "../../components/common/EntityAvatar.vue";
+import ProviderIcon from "../../components/common/ProviderIcon.vue";
 import KbDocumentList from "../../components/kb/KbDocumentList.vue";
 import type { Agent, ProviderInfo } from "../../types";
 import { bridge } from "../../api/bridge";
@@ -27,6 +29,7 @@ async function loadAgents() {
   loading.value = true;
   try {
     await store.load(true);
+    await applyDeepLinkEdit();
   } catch (e) {
     console.error("加载 Agent 列表失败:", e);
     loadError.value = e instanceof Error ? e.message : String(e);
@@ -34,6 +37,24 @@ async function loadAgents() {
     loading.value = false;
   }
 }
+
+// ---- 深链点转（ChatHeader agent 名 → /settings/agents?edit=<id>）----
+// 展开对应编辑卡并滚入视野。SettingsLayout 的 router-view 带 keep-alive：
+// 首访走 onMounted→loadAgents 完成后消费；二次进入（组件已缓存）走 onActivated。
+// query 一次性消费（replace 抹掉），停留本页再切走不会反复展开。
+const route = useRoute();
+const router = useRouter();
+async function applyDeepLinkEdit() {
+  const editId = route.query.edit;
+  if (typeof editId !== "string" || !editId) return;
+  router.replace({ query: { ...route.query, edit: undefined } });
+  expandedEditId.value = editId;
+  await nextTick();
+  document
+    .querySelector(`[data-agent-card="${CSS.escape(editId)}"]`)
+    ?.scrollIntoView({ block: "center", behavior: "smooth" });
+}
+onActivated(() => { void applyDeepLinkEdit(); });
 
 onMounted(loadAgents);
 onMounted(async () => { providerList.value = await loadProviders(); });
@@ -82,15 +103,19 @@ async function onDelete(agent: Agent) {
 const providerList = ref<ProviderInfo[]>([]);
 const providerLabel = (name: string) => providerLabelOf(providerList.value, name);
 
-// 模型配置实体（ModelProfile Phase 2 批 1）：引用徽标解析别名用，与设置-模型页共享缓存
+// 模型配置实体（ModelProfile Phase 2 批 1）：身份胶囊解析别名用，与设置-模型页共享缓存
 const { profiles, loadModelProfiles } = useModelProfiles();
 
-/** 引用徽标文案：引用的模型配置别名；悬空（已删，删除守卫正常会拦）如实标注 */
-function refBadgeOf(agent: Agent): string {
-  const p = agent.model_profile_id
-    ? profileById(profiles.value, agent.model_profile_id)
-    : undefined;
-  return p ? `引用 · ${p.alias}` : "引用 · 配置已删";
+/** 身份胶囊首段（2026-09-09 拍板：别名 + logo+模型名，厂商文字名退役）：
+ *  引用 → 实体别名；legacy 行 → 厂商显示名（无别名可显，老形态降级） */
+function aliasOf(agent: Agent): string {
+  if (!agent.model_profile_id) return providerLabel(agent.provider);
+  return profileById(profiles.value, agent.model_profile_id)?.alias ?? "配置已删";
+}
+/** 悬空引用（profile 已删，删除守卫正常会拦——兜底诚实标注，danger 色） */
+function aliasDangling(agent: Agent): boolean {
+  return !!agent.model_profile_id
+    && !profileById(profiles.value, agent.model_profile_id);
 }
 </script>
 
@@ -133,6 +158,7 @@ function refBadgeOf(agent: Agent): string {
         :key="agent.id"
         class="agent-card"
         :class="{ expanded: expandedEditId === agent.id }"
+        :data-agent-card="agent.id"
         @click="toggleEdit(agent)"
       >
         <div class="card-top">
@@ -143,12 +169,16 @@ function refBadgeOf(agent: Agent): string {
           <div class="card-body">
             <div class="card-name-row">
               <span class="card-name">{{ agent.name }}</span>
-              <span v-if="agent.config_from_file" class="card-file-badge">agent.yaml</span>
             </div>
             <div class="card-meta-row">
-              <span class="provider-badge" :class="'provider-' + agent.provider">{{ providerLabel(agent.provider) }}</span>
-              <span class="card-model">{{ agent.model }}</span>
-              <span v-if="agent.model_profile_id" class="card-tag card-tag-ref">{{ refBadgeOf(agent) }}</span>
+              <!-- 身份胶囊（2026-09-09）：别名（实体人话名 / legacy 行降级显厂商名，
+                   纯文本）+ 模型 tag（厂商 glyph + 模型名 mono）；悬空引用 danger
+                   如实标注；agent.yaml 徽章已撤（编辑表单工作区行仍有兜底展示） -->
+              <span class="card-alias" :class="{ 'card-alias--dangling': aliasDangling(agent) }">{{ aliasOf(agent) }}</span>
+              <span class="card-model">
+                <ProviderIcon :name="agent.provider" :size="12" />
+                <span class="card-model-name">{{ agent.model || "未设模型" }}</span>
+              </span>
               <span v-if="!agent.has_api_key" class="card-tag card-tag-warn">未配置 Key</span>
             </div>
             <ErrorBanner
@@ -277,41 +307,43 @@ function refBadgeOf(agent: Agent): string {
 .new-name { color: var(--ip-color-primary-tint-text); }
 .new-hint { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); padding-left: 22px; }
 
-.card-file-badge {
-  display: inline-flex; align-items: center;
-  height: 18px; padding: 0 6px;
-  font-size: var(--ip-text-micro-size); font-weight: var(--ip-font-weight-semibold);
-  color: var(--ip-color-primary-tint-text);
-  background-color: var(--ip-color-primary-tint-bg);
-  border-radius: var(--ip-radius-full);
-  font-family: var(--ip-font-mono);
-}
-
 .card-meta-row {
   display: flex; align-items: center; gap: 6px;
   font-size: var(--ip-text-caption-size);
+  /* 行高锚定 18px = tag 高：别名文本行盒与固定高 tag 严格同盒居中。
+     勿删——全局行高 1.6（≈19.2px 分数高）与固定高 tag 混排会产生半像素错位 */
+  line-height: 18px;
   color: var(--ip-color-text-secondary);
 }
 
-.provider-badge {
-  display: inline-block; padding: 0 6px; line-height: 18px;
-  font-size: var(--ip-text-micro-size); font-weight: var(--ip-font-weight-medium);
+/* 身份胶囊首段：别名（实体人话名，legacy 行降级显厂商名）；悬空引用 danger */
+.card-alias {
+  flex-shrink: 0;
+  max-width: 200px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-weight: var(--ip-font-weight-medium);
+  color: var(--ip-color-text-secondary);
+}
+.card-alias--dangling { color: var(--ip-danger-text); }
+
+/* 次段：模型 tag（厂商 glyph + 模型名 mono）——胶囊形态与 card-tag 同族同高，
+   与别名文本行垂直居中对齐；窄屏让位省略（内层 min-width:0 吃收缩） */
+.card-model {
+  display: inline-flex; align-items: center; gap: 4px;
+  min-width: 0; flex-shrink: 1;
+  height: 18px; padding: 0 7px 0 6px;
   border-radius: var(--ip-radius-full);
   background-color: var(--ip-color-bg-tertiary);
-  color: var(--ip-color-text-secondary);
-  flex-shrink: 0;
+  color: var(--ip-color-text-tertiary);
 }
-.provider-badge.provider-openai { background: #E8F0F8; color: #2A4F85; }
-.provider-badge.provider-anthropic { background: #EDE8F4; color: #5B3D8A; }
-.provider-badge.provider-deepseek { background: #F4E8E8; color: #8A3D3D; }
-.provider-badge.provider-glm { background: #E8EEF4; color: #3D5B8A; }
-/* 厂商徽章 = 数据身份色（不随主题镜像）：暗色下底色加深、字色提亮，保持可辨 */
-[data-theme='dark'] .provider-badge.provider-openai { background: #1A2A3D; color: #9BC2E6; }
-[data-theme='dark'] .provider-badge.provider-anthropic { background: #251F3D; color: #B0A4EE; }
-[data-theme='dark'] .provider-badge.provider-deepseek { background: #3D1F1F; color: #E0A8A8; }
-[data-theme='dark'] .provider-badge.provider-glm { background: #1F2C3D; color: #A8C4E0; }
-
-.card-model { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-model-name {
+  min-width: 0;
+  /* 行高压平（文字盒=字号）：继承的 1.6 行高会把 flex 居中顶偏，压平后才是真居中 */
+  line-height: 1;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--ip-font-mono);
+  font-size: var(--ip-text-micro-size);
+}
 
 .card-tag {
   flex-shrink: 0;
@@ -321,11 +353,6 @@ function refBadgeOf(agent: Agent): string {
   border-radius: var(--ip-radius-full);
 }
 .card-tag-warn { color: var(--ip-warning-text); background: var(--ip-warning-bg); }
-/* 引用徽标（模型配置实体绑定）：主色 tint 系（勿直接 primary-50/100/700） */
-.card-tag-ref {
-  color: var(--ip-color-primary-tint-text);
-  background-color: var(--ip-color-primary-tint-bg);
-}
 
 .card-chevron {
   flex-shrink: 0;

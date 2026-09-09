@@ -11,6 +11,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ revealItemInDir: vi.fn() }));
 
 const providersListMock = vi.fn();
+const profilesListMock = vi.fn();
 const createMock = vi.fn();
 const updateMock = vi.fn();
 const rotateKeyMock = vi.fn();
@@ -28,6 +29,8 @@ vi.mock("../../../api/bridge", () => ({
       rotateKey: (...a: unknown[]) => rotateKeyMock(...a),
       list: vi.fn(async () => []),
     },
+    // 编辑态配置链数据源（Phase 3：模型身份 = 引用链，保存要求 ≥1 档）
+    modelProfiles: { list: (...a: unknown[]) => profilesListMock(...a) },
   },
 }));
 
@@ -49,6 +52,8 @@ function editAgent(overrides?: Partial<Agent>): Agent {
     created_at: "2026-08-15 00:00:00",
     updated_at: "2026-08-15 00:00:00",
     has_api_key: true,
+    // Phase 3：编辑态模型身份 = 配置链引用（保存要求 ≥1 档，头像用例不关心模型）
+    model_profile_id: "mp-1",
     ...overrides,
   } as Agent;
 }
@@ -58,6 +63,14 @@ const wrappers: VueWrapper[] = [];
 async function mountForm(agent: Agent | null = null) {
   providersListMock.mockResolvedValue([
     { name: "openai", protocol: "openai", default_url: "https://api.openai.com", alt_urls: [], label: "OpenAI", note: null, requires_key: true, requires_base_url: false, key_url: null, hidden: false, models: ["gpt-4o"] },
+  ]);
+  profilesListMock.mockResolvedValue([
+    {
+      id: "mp-1", alias: "OpenAI 主力", provider: "openai", model: "gpt-4o",
+      base_url: null, sort_order: 0,
+      created_at: "2026-09-08 00:00:00", updated_at: "2026-09-08 00:00:00",
+      has_api_key: true, last_health: null, last_health_detail: null, last_health_at: null,
+    },
   ]);
   const { default: AgentForm } = await import("../AgentForm.vue");
   const w = mount(AgentForm, { props: { agent }, attachTo: document.body });
@@ -121,6 +134,9 @@ describe("AgentForm 头像字段", () => {
   it("新建：未选头像 create input 透传 avatar undefined", async () => {
     createMock.mockResolvedValue(editAgent());
     const w = await mountForm(null);
+    // 双入口默认「引用已有」（profiles 非空自动翻档）——本例走手写表单，先切手动档
+    await w.findAll(".mode-pill")[1].trigger("click");
+    await flushPromises();
     const nameInput = w.findAll("input.input")[0];
     await nameInput.setValue("新助手");
     const idInput = w.findAll("input.input")[1];

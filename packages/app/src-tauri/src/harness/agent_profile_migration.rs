@@ -10,6 +10,10 @@
 //! 「设置-模型」里的实体，agent 转为引用。同配置（厂商+模型+端点+Key）只建
 //! 一个实体、多个 agent 引用同一个；与既有实体同配置时复用既有实体不重复建。
 //!
+//! 匹配原语（去重键/端点归一/别名/既有扫描）抽在 [`profile_match`]——与运行
+//! 期物化（`profile_materialize`，新建 agent 手动配置保存时自动转实体）共享
+//! 同一判定，语义分叉 = 同配置两处结论不一致、复用失效重复建实体。
+//!
 //! 次序铁律（Phase 1 同款，`?` 短路整体中止）：
 //! 1. Stronghold 槽位全落（`profile:{id}`）→ 2. DB 行（INSERT OR IGNORE）→
 //! 3. agents 引用列（窄 UPDATE 只 SET model_profile_id，快照列不动——值本就
@@ -24,12 +28,15 @@
 //! 不齐 / 需 Key 的厂商但 Key 读不到 / custom 缺端点。agent 旧 key 槽位留着
 //! 不读（批 1 惯例：引用 agent 的 Key 从 profile 槽位取）。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use sqlx::SqlitePool;
 
 use crate::db::repo;
 use crate::error::AppResult;
+use crate::harness::profile_match::{
+    first_non_empty, group_key, normalize_url, scan_existing, unique_alias, GroupKey,
+};
 use crate::harness::provider;
 
 /// 幂等标记（preferences 内部标记类键，backfill 版本号先例；跑过即不再扫）。
@@ -58,16 +65,6 @@ impl PlannedProfile {
     }
 }
 
-/// 去重键：同 (厂商, 模型, 生效端点, Key) = 同一配置 = 同一个实体。
-/// 端点归一（显式与注册表默认等价 / 末尾斜杠）；Key 两侧都 trim。
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct GroupKey {
-    provider: String,
-    model: String,
-    effective_url: String,
-    api_key: String,
-}
-
 /// 迁移结果（boot 日志用）。
 #[derive(Debug, Default)]
 pub struct MigrationOutcome {
@@ -84,30 +81,6 @@ pub struct MigrationOutcome {
 // 纯函数
 // =========================================================================
 
-fn trim_non_empty(s: Option<&str>) -> Option<&str> {
-    s.map(str::trim).filter(|v| !v.is_empty())
-}
-
-/// 首个非空（trim 后）；行值与 vault 副本的取值序。
-fn first_non_empty(a: Option<&str>, b: Option<&str>) -> Option<String> {
-    trim_non_empty(a)
-        .map(str::to_string)
-        .or_else(|| trim_non_empty(b).map(str::to_string))
-}
-
-/// 端点比较形态（trim + 去末尾斜杠——`x/v1` 与 `x/v1/` 同端点）。
-fn normalize_url(u: &str) -> String {
-    u.trim().trim_end_matches('/').to_string()
-}
-
-/// 实际生效端点：显式值 > 注册表默认（未知厂商默认为空串）。
-fn effective_url(provider: &str, explicit: Option<&str>) -> String {
-    let raw = trim_non_empty(explicit)
-        .map(str::to_string)
-        .unwrap_or_else(|| provider::provider_default_url(provider));
-    normalize_url(&raw)
-}
-
 /// FNV-1a 64 → 12 hex。手写不依赖 std Hasher 的稳定性（跨版本重放同 id）。
 fn content_hash(k: &GroupKey) -> String {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
@@ -121,21 +94,6 @@ fn content_hash(k: &GroupKey) -> String {
         h = h.wrapping_mul(0x0100_0000_01b3);
     }
     format!("{h:012x}")
-}
-
-/// 别名 = `{厂商展示名} {model}`；重名追加序号（同模型多 Key 场景可辨认）。
-fn unique_alias(used: &mut HashSet<String>, label: &str, model: &str) -> String {
-    let base = format!("{label} {model}");
-    if used.insert(base.clone()) {
-        return base;
-    }
-    for n in 2.. {
-        let candidate = format!("{base} {n}");
-        if used.insert(candidate.clone()) {
-            return candidate;
-        }
-    }
-    unreachable!()
 }
 
 // =========================================================================
@@ -153,7 +111,10 @@ where
     G: Fn(&PlannedProfile) -> AppResult<()>,
 {
     // 0) 幂等标记：跑过即不再扫（手动形态是用户刻意选择，误收编 = 静默翻转）
-    if repo::preferences::get(pool, MIGRATION_MARKER).await?.is_some() {
+    if repo::preferences::get(pool, MIGRATION_MARKER)
+        .await?
+        .is_some()
+    {
         return Ok(MigrationOutcome {
             done_before: true,
             ..MigrationOutcome::default()
@@ -161,11 +122,10 @@ where
     }
 
     // 厂商目录：label（别名用）+ default_url（端点归一用）
-    let provider_catalog: HashMap<String, (String, String)> =
-        provider::list_provider_infos()
-            .into_iter()
-            .map(|p| (p.name, (p.label, p.default_url)))
-            .collect();
+    let provider_catalog: HashMap<String, (String, String)> = provider::list_provider_infos()
+        .into_iter()
+        .map(|p| (p.name, (p.label, p.default_url)))
+        .collect();
 
     // 1) 逐 agent 判定资格（跳过条件就地记录；fetch 失败 = 无 Key 记录）
     let agents = repo::agent::list(pool).await?;
@@ -178,12 +138,13 @@ where
         let (key, vault_url) = fetch_key(&a.api_key_ref).unwrap_or_default();
         let key = key.trim().to_string();
         let explicit = first_non_empty(a.base_url.as_deref(), vault_url.as_deref());
-        let eff_url = effective_url(&a.provider, explicit.as_deref());
-        let reason = if a.provider.trim().is_empty() || a.model.trim().is_empty() {
+        let gk = group_key(&a.provider, &a.model, explicit.as_deref(), &key);
+        let reason = if gk.provider.is_empty() || gk.model.is_empty() {
             Some("provider/model 字段不齐".to_string())
-        } else if provider::provider_requires_key(&a.provider) && key.is_empty() {
+        } else if provider::provider_requires_key(&gk.provider) && gk.api_key.is_empty() {
             Some("需要 Key 的厂商但 Key 未配置".to_string())
-        } else if provider::provider_requires_base_url(&a.provider) && eff_url.is_empty() {
+        } else if provider::provider_requires_base_url(&gk.provider) && gk.effective_url.is_empty()
+        {
             Some("自定义端点缺 base_url".to_string())
         } else {
             None
@@ -193,39 +154,15 @@ where
                 outcome.agents_skipped += 1;
                 outcome.skip_reasons.push(format!("{}: {r}", a.id));
             }
-            None => eligible.push((
-                a.id.clone(),
-                GroupKey {
-                    provider: a.provider.trim().to_string(),
-                    model: a.model.trim().to_string(),
-                    effective_url: eff_url,
-                    api_key: key,
-                },
-                explicit,
-            )),
+            None => eligible.push((a.id.clone(), gk, explicit)),
         }
     }
 
-    // 2) 既有实体：同键复用映射 + 别名占用集 + sort_order 起点
+    // 2) 既有实体：同键复用映射 + 别名占用集 + sort_order 起点（共享原语
+    //    profile_match——与运行期物化 profile_materialize 同一判定）
     let existing = repo::model_profile::list(pool).await?;
-    let mut existing_by_key: HashMap<GroupKey, String> = HashMap::new();
-    let mut used_aliases: HashSet<String> = HashSet::new();
-    let mut next_sort = existing.iter().map(|p| p.sort_order).max().unwrap_or(-1) + 1;
-    for p in &existing {
-        used_aliases.insert(p.alias.clone());
-        // key 读不到无法比对——不复用（该组新实体照建，不阻塞迁移）
-        let Ok((key, vault_url)) = fetch_key(&p.api_key_ref) else {
-            continue;
-        };
-        let explicit = first_non_empty(p.base_url.as_deref(), vault_url.as_deref());
-        let gk = GroupKey {
-            provider: p.provider.clone(),
-            model: p.model.clone(),
-            effective_url: effective_url(&p.provider, explicit.as_deref()),
-            api_key: key.trim().to_string(),
-        };
-        existing_by_key.entry(gk).or_insert_with(|| p.id.clone());
-    }
+    let (existing_by_key, mut used_aliases, mut next_sort) =
+        scan_existing(&existing, |slot| fetch_key(slot).ok());
 
     // 3) 分组（首遇序 = list 的确定性序）与规划
     let mut groups: Vec<(GroupKey, Vec<String>, Option<String>)> = vec![];
@@ -315,9 +252,7 @@ pub async fn migrate_agent_models(app: &tauri::AppHandle, pool: &SqlitePool) {
     let result = run_migration(
         pool,
         |slot| crate::crypto::fetch_api_key(app, slot),
-        |p| {
-            crate::crypto::store_api_key(app, &p.api_key_ref(), &p.api_key, p.base_url.as_deref())
-        },
+        |p| crate::crypto::store_api_key(app, &p.api_key_ref(), &p.api_key, p.base_url.as_deref()),
     )
     .await;
     match result {
@@ -399,7 +334,13 @@ mod tests {
         }
     }
 
-    async fn seed_agent(pool: &SqlitePool, id: &str, provider: &str, model: &str, base_url: Option<&str>) {
+    async fn seed_agent(
+        pool: &SqlitePool,
+        id: &str,
+        provider: &str,
+        model: &str,
+        base_url: Option<&str>,
+    ) {
         let na = NewAgent {
             id: id.into(),
             name: id.into(),
@@ -422,7 +363,9 @@ mod tests {
             model_profile_id: None,
             fallback_profile_ids: None,
         };
-        repo::agent::create(pool, &na, id, id).await.expect("seed agent");
+        repo::agent::create(pool, &na, id, id)
+            .await
+            .expect("seed agent");
     }
 
     /// 同配置（同厂商/模型/Key/默认端点）两个 agent → 只建一个实体、共同引用
@@ -454,7 +397,11 @@ mod tests {
 
         for aid in ["a1", "a2"] {
             assert_eq!(
-                repo::agent::get_by_id(&pool, aid).await.unwrap().model_profile_id.as_deref(),
+                repo::agent::get_by_id(&pool, aid)
+                    .await
+                    .unwrap()
+                    .model_profile_id
+                    .as_deref(),
                 Some(p.id.as_str())
             );
         }
@@ -489,16 +436,28 @@ mod tests {
         let id_of = |key: &str| {
             profiles
                 .iter()
-                .find(|p| vault.borrow().get(p.api_key_ref.as_str()).map(|(k, _)| k.as_str()) == Some(key))
+                .find(|p| {
+                    vault
+                        .borrow()
+                        .get(p.api_key_ref.as_str())
+                        .map(|(k, _)| k.as_str())
+                        == Some(key)
+                })
                 .map(|p| p.id.clone())
                 .unwrap()
         };
         assert_eq!(
-            repo::agent::get_by_id(&pool, "a1").await.unwrap().model_profile_id,
+            repo::agent::get_by_id(&pool, "a1")
+                .await
+                .unwrap()
+                .model_profile_id,
             Some(id_of("sk-1"))
         );
         assert_eq!(
-            repo::agent::get_by_id(&pool, "a2").await.unwrap().model_profile_id,
+            repo::agent::get_by_id(&pool, "a2")
+                .await
+                .unwrap()
+                .model_profile_id,
             Some(id_of("sk-2"))
         );
     }
@@ -539,7 +498,11 @@ mod tests {
             "不应新建实体"
         );
         assert_eq!(
-            repo::agent::get_by_id(&pool, "a1").await.unwrap().model_profile_id.as_deref(),
+            repo::agent::get_by_id(&pool, "a1")
+                .await
+                .unwrap()
+                .model_profile_id
+                .as_deref(),
             Some("mp-x")
         );
     }
@@ -567,7 +530,14 @@ mod tests {
     #[tokio::test]
     async fn custom_local_endpoint_migrates_with_url() {
         let pool = test_pool().await;
-        seed_agent(&pool, "a1", "custom", "qwen3:8b", Some("http://localhost:11434/v1")).await;
+        seed_agent(
+            &pool,
+            "a1",
+            "custom",
+            "qwen3:8b",
+            Some("http://localhost:11434/v1"),
+        )
+        .await;
         // custom 免鉴权：vault 无 key 槽位（fetch NotFound → 空 Key，合法）
         let vault = new_vault();
 
@@ -577,10 +547,16 @@ mod tests {
         assert_eq!(out.profiles_created, 1);
         assert_eq!(out.agents_migrated, 1);
         let profiles = repo::model_profile::list(&pool).await.unwrap();
-        assert_eq!(profiles[0].base_url.as_deref(), Some("http://localhost:11434/v1"));
+        assert_eq!(
+            profiles[0].base_url.as_deref(),
+            Some("http://localhost:11434/v1")
+        );
         assert_eq!(
             vault.borrow().get(&profiles[0].api_key_ref),
-            Some(&("".to_string(), Some("http://localhost:11434/v1".to_string()))),
+            Some(&(
+                "".to_string(),
+                Some("http://localhost:11434/v1".to_string())
+            )),
             "空 Key 占位 + URL 副本入槽位"
         );
     }
@@ -600,9 +576,16 @@ mod tests {
         assert!(out.skip_reasons[0].contains("Key"));
         assert_eq!(out.agents_migrated, 0);
         assert!(repo::model_profile::list(&pool).await.unwrap().is_empty());
-        assert!(repo::agent::get_by_id(&pool, "a1").await.unwrap().model_profile_id.is_none());
+        assert!(repo::agent::get_by_id(&pool, "a1")
+            .await
+            .unwrap()
+            .model_profile_id
+            .is_none());
         // 跳过是终局决定：标记照落，不会下轮再扫
-        assert!(repo::preferences::get(&pool, MIGRATION_MARKER).await.unwrap().is_some());
+        assert!(repo::preferences::get(&pool, MIGRATION_MARKER)
+            .await
+            .unwrap()
+            .is_some());
     }
 
     /// 标记在 → 第二轮零扫描零变化（空 vault 也无害——根本不读 Key）
@@ -617,7 +600,9 @@ mod tests {
         run_migration(&pool, fetch_fn(vault.clone()), store_fn(vault.clone()))
             .await
             .unwrap();
-        let pid = repo::model_profile::list(&pool).await.unwrap()[0].id.clone();
+        let pid = repo::model_profile::list(&pool).await.unwrap()[0]
+            .id
+            .clone();
 
         let out = run_migration(&pool, fetch_fn(new_vault()), store_fn(new_vault()))
             .await
@@ -626,7 +611,10 @@ mod tests {
         assert_eq!(out.profiles_created, 0);
         assert_eq!(repo::model_profile::list(&pool).await.unwrap().len(), 1);
         assert_eq!(
-            repo::agent::get_by_id(&pool, "a1").await.unwrap().model_profile_id,
+            repo::agent::get_by_id(&pool, "a1")
+                .await
+                .unwrap()
+                .model_profile_id,
             Some(pid)
         );
     }
@@ -641,17 +629,25 @@ mod tests {
         put_key(&vault, "a1", "sk-1", None);
         put_key(&vault, "a2", "sk-1", None);
 
-        let err = run_migration(
-            &pool,
-            fetch_fn(vault.clone()),
-            |_| Err(AppError::Stronghold("模拟失败".into())),
-        )
+        let err = run_migration(&pool, fetch_fn(vault.clone()), |_| {
+            Err(AppError::Stronghold("模拟失败".into()))
+        })
         .await;
         assert!(err.is_err());
-        assert!(repo::model_profile::list(&pool).await.unwrap().is_empty(), "DB 行不应先于 Stronghold 落");
-        assert!(repo::agent::get_by_id(&pool, "a1").await.unwrap().model_profile_id.is_none());
         assert!(
-            repo::preferences::get(&pool, MIGRATION_MARKER).await.unwrap().is_none(),
+            repo::model_profile::list(&pool).await.unwrap().is_empty(),
+            "DB 行不应先于 Stronghold 落"
+        );
+        assert!(repo::agent::get_by_id(&pool, "a1")
+            .await
+            .unwrap()
+            .model_profile_id
+            .is_none());
+        assert!(
+            repo::preferences::get(&pool, MIGRATION_MARKER)
+                .await
+                .unwrap()
+                .is_none(),
             "失败不落标记（下次重放）"
         );
 
@@ -664,7 +660,11 @@ mod tests {
         assert_eq!(profiles.len(), 1);
         for aid in ["a1", "a2"] {
             assert_eq!(
-                repo::agent::get_by_id(&pool, aid).await.unwrap().model_profile_id.as_deref(),
+                repo::agent::get_by_id(&pool, aid)
+                    .await
+                    .unwrap()
+                    .model_profile_id
+                    .as_deref(),
                 Some(profiles[0].id.as_str())
             );
         }
@@ -680,12 +680,23 @@ mod tests {
             api_key: "sk-1".into(),
         };
         let k2 = k1.clone();
-        let k3 = GroupKey { api_key: "sk-2".into(), ..k1.clone() };
+        let k3 = GroupKey {
+            api_key: "sk-2".into(),
+            ..k1.clone()
+        };
         assert_eq!(content_hash(&k1), content_hash(&k2));
         assert_ne!(content_hash(&k1), content_hash(&k3));
         // 字段边界歧义防线：("ab","c") vs ("a","bc") 不同哈希
-        let ka = GroupKey { provider: "ab".into(), model: "c".into(), ..k1.clone() };
-        let kb = GroupKey { provider: "a".into(), model: "bc".into(), ..k1.clone() };
+        let ka = GroupKey {
+            provider: "ab".into(),
+            model: "c".into(),
+            ..k1.clone()
+        };
+        let kb = GroupKey {
+            provider: "a".into(),
+            model: "bc".into(),
+            ..k1.clone()
+        };
         assert_ne!(content_hash(&ka), content_hash(&kb));
     }
 }

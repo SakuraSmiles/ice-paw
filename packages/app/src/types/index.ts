@@ -132,6 +132,17 @@ export interface ProviderConnectionResult {
   matched_url: string | null;
 }
 
+/** test_agent_model_chain 结果：模拟 agent 发送路径（主模型起按序仿真换档）。
+ *  ok=true 时 profile_id/alias/model = 命中档位（非首档即降级命中）；ok=false =
+ *  全链不可用，error 为最后失败原文（三段式） */
+export interface ModelChainTestResult {
+  ok: boolean;
+  profile_id: string | null;
+  alias: string | null;
+  model: string | null;
+  error: string | null;
+}
+
 // ============================================================================
 // Conversation
 // ============================================================================

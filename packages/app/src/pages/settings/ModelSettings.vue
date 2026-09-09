@@ -23,12 +23,14 @@ import {
 } from "@lucide/vue";
 import { bridge } from "../../api/bridge";
 import ErrorBanner from "../../components/common/ErrorBanner.vue";
-import Combobox from "../../components/common/Combobox.vue";
+import GroupedSelect from "../../components/common/GroupedSelect.vue";
+import ProviderIcon from "../../components/common/ProviderIcon.vue";
+import type { ComboboxGroup, ComboboxItem } from "../../components/common/Combobox.vue";
 import EmbedSwitchOverlay from "../../components/common/EmbedSwitchOverlay.vue";
 import { useProviders } from "../../composables/useProviders";
 import { useModelProfiles, profileById } from "../../composables/useModelProfiles";
 import { timeAgo, formatDate, formatTime } from "../../utils/time";
-import type { ModelProfile, ModelProfileUpdate, ProviderInfo, UserPreferences } from "../../types";
+import type { Agent, ModelProfile, ModelProfileUpdate, ProviderInfo, UserPreferences } from "../../types";
 
 // =========================================================================
 // 公共状态
@@ -65,6 +67,9 @@ function okFailMsg(t: TestState): string {
 
 const { providers: providerList, loadProviders } = useProviders();
 const { profiles, loadModelProfiles: sharedLoad } = useModelProfiles();
+/** agent 列表快照（引用计数用——只读，编辑入口在智能体页）。后端删除守卫同源
+ *  （agents_referencing），前端计数与其对齐防「计数说可删、删除被拒」的矛盾 */
+const agents = ref<Agent[]>([]);
 
 // =========================================================================
 // profile 行（收起摘要 + 展开编辑同对象）
@@ -254,38 +259,65 @@ function toggleNew() {
       baseUrl: "",
     };
     createError.value = null;
+    createTest.value = { status: "idle" };
   }
   isCreating.value = !isCreating.value;
 }
 
 // ---- Provider 目录派生 ----
-const providerOptions = computed(() =>
-  providerList.value.filter((p) => !p.hidden).map((p) => p.label),
-);
 function providerInfoOf(name: string): ProviderInfo | null {
   return providerList.value.find((p) => p.name === name) ?? null;
 }
 function providerLabelOf(name: string): string {
   return providerInfoOf(name)?.label ?? name;
 }
-function modelOptionsOf(row: ProfileRowUI): string[] {
-  return providerInfoOf(row.provider)?.models ?? [];
-}
 function keyUrlOf(row: ProfileRowUI): string {
   return providerInfoOf(row.provider)?.key_url ?? "";
 }
 
-/** 被引用次数（视觉链出现次数 + 语义检索 1 次；引用键在通用页维护，此处只读） */
+// ---- 分组模型目录（2026-09-09 拍板：厂商+模型两字段合并回旧版下拉框——
+// GroupedSelect 可选可输，手输目录外名字落「自定义」逃生口；与 AgentForm 手动
+// 形态同组件同交互，行为零再学习）----
+const modelEntry = (provider: string, model: string): ComboboxItem => ({
+  label: model,
+  value: `${provider}::${model}`,
+  data: { provider, model },
+});
+
+// 组头只展示品牌名单行（2026-09-09 拍板：注册表 note 提示文字在窄屏会换行，全撤）
+const modelGroups = computed<ComboboxGroup[]>(() =>
+  providerList.value
+    .filter((p) => !p.hidden)
+    .map((p) => ({
+      id: p.name,
+      label: p.label,
+      items: p.models.map((m) => modelEntry(p.name, m)),
+    })),
+);
+
+/** GroupedSelect 受控值：条目命中传 key（显 label/高亮）；否则空串
+ *  （unmatchedLabel 回显行内已有模型名——目录外/自定义模型照常可编辑） */
+function modelValueOf(provider: string, model: string): string {
+  const key = `${provider}::${model}`;
+  return modelGroups.value.some((g) => g.items.some((it) => it.value === key)) ? key : "";
+}
+
+/** 被引用次数（agent 主档/降级链 + 视觉链 + 语义检索；引用键在智能体页与
+ *  通用页维护，此处只读——2026-09-09 补 agent 腿：删除守卫早就有它，计数漏算
+ *  会出现「显示未引用、删除被拒」的矛盾） */
 function referenceCountOf(row: ProfileRowUI): number {
   const inVision = (prefs.value.vision_profile_ids ?? []).filter((id) => id === row.id).length;
   const inEmbedding = prefs.value.embedding_profile_id === row.id ? 1 : 0;
-  return inVision + inEmbedding;
+  const inAgents = agents.value.filter(
+    (a) => a.model_profile_id === row.id || (a.fallback_profile_ids ?? []).includes(row.id),
+  ).length;
+  return inVision + inEmbedding + inAgents;
 }
 
 function refTitleOf(row: ProfileRowUI): string {
   const n = referenceCountOf(row);
-  if (n === 0) return "未被视觉读取 / 语义检索引用——可安全删除";
-  return `被视觉读取 / 语义检索共引用 ${n} 处——删除前需先在「设置-通用」解除引用`;
+  if (n === 0) return "未被任何地方引用——可安全删除";
+  return `被 Agent / 视觉读取 / 语义检索共引用 ${n} 处——删除前需先在「智能体」或「设置-通用」解除引用`;
 }
 
 // ---- 健康状态（按最后一次真实调用的结果；slug 契约 = 后端 ProfileHealth）----
@@ -316,25 +348,35 @@ function healthTitleOf(row: ProfileRowUI): string {
   if (row.server.last_health_detail) lines.push(`详情：${row.server.last_health_detail}`);
   return lines.join("\n");
 }
-/** 端点占位 = 空 base_url 实际生效的推导值（openai_url 优先，custom 必填提示） */
-function urlPlaceholderOf(row: ProfileRowUI): string {
-  const info = providerInfoOf(row.provider);
+/** 端点占位 = 空 base_url 实际生效的推导值（openai_url 优先，custom 必填提示）——
+ *  真实展示所选厂商的注册表默认端点，不做固定文案（2026-09-09 拍板） */
+function urlPlaceholder(provider: string): string {
+  const info = providerInfoOf(provider);
   if (info?.requires_base_url) return "必填，如 http://localhost:11434/v1";
   return info?.openai_url || info?.default_url || "留空用厂商官方端点";
 }
 
 // ---- 字段草稿（显式保存：改动只进草稿，点「保存」整批提交）----
-/** 换厂商：模型跟随新厂商默认、端点清空重推导（custom 需手填，保存时校验拦截） */
-function onRowProviderChange(row: ProfileRowUI, label: string) {
-  const info = providerList.value.find((p) => p.label === label) ?? null;
-  const next = info?.name ?? "";
-  // 手输未知厂商名 → 忽略（防误存目录外名字）；同厂商重选 → 无操作
-  if (!next || next === row.provider) return;
-  row.provider = next;
-  row.model = info?.models[0] ?? "";
-  row.baseUrl = "";
-  row.test = { status: "idle" };
-  row.deleteConfirm = false;
+/** 行内选档（厂商+模型一并落）：切厂商端点清空重推导 + 复位测试结论（原厂商
+ *  切换行为对齐）；同厂商换模型不动端点。自定义条目 → custom + 端点交用户填
+ *  （必填，保存时校验拦截） */
+function onRowModelSelect(row: ProfileRowUI, item: ComboboxItem) {
+  const data = item.data as { provider?: string; model?: string; custom?: boolean } | undefined;
+  if (data?.custom) {
+    row.provider = "custom";
+    row.model = data.model ?? item.label;
+    row.baseUrl = "";
+    row.test = { status: "idle" };
+    return;
+  }
+  const next = data?.provider ?? row.provider;
+  if (next !== row.provider) {
+    row.baseUrl = "";
+    row.test = { status: "idle" };
+    row.deleteConfirm = false;
+    row.provider = next;
+  }
+  row.model = data?.model ?? item.label;
 }
 
 // ---- Key 框三态（掩码 / 编辑草稿）----
@@ -368,13 +410,16 @@ async function testRow(row: ProfileRowUI) {
   if (row.test.status === "testing") return;
   row.test = { status: "testing" };
   try {
-    // profileId 腿：服务端取存量凭据；keyDraft 已填则入参优先（测未保存的新 Key）
+    // profileId 腿：服务端取存量凭据；keyDraft 已填则入参优先（测未保存的新 Key）。
+    // 与存量一致的 URL 入参由后端降级为「未覆盖」——健康归因恢复存量测试
+    // （2026-09-09 生产实案：存了端点的档位恒走覆盖路径，状态点恒不动）。
+    // 厂商切换草稿不传 profileId：存量凭据属于旧厂商，拿它兜底只会测出误导结果。
     const res = await bridge.providers.testConnection(
       row.provider,
       row.baseUrl.trim() || undefined,
       row.keyDraft.trim() || undefined,
       undefined,
-      row.id,
+      row.provider === row.server.provider ? row.id : undefined,
     );
     row.test = res.ok
       ? { status: "ok", msg: `连接正常 · ${res.model_count} 个模型` }
@@ -415,17 +460,48 @@ async function deleteRow(row: ProfileRowUI) {
 const creatingBusy = ref(false);
 const createError = ref<string | null>(null);
 const createDraft = ref({ alias: "", provider: "", model: "", key: "", baseUrl: "" });
+/** 创建表单草稿测试态（与行内 testRow 同形态；toggleNew 重置） */
+const createTest = ref<TestState>({ status: "idle" });
 
-const createModelOptions = computed(() =>
-  providerInfoOf(createDraft.value.provider)?.models ?? [],
-);
+/** 新建草稿测试：无 profileId（实体还不存在）——后端按表单值探测，结果不沉淀
+ *  健康三列（没有存量可记，不冒充）；需 Key 厂商未填 Key 由后端短路给引导文案 */
+async function testCreate() {
+  if (createTest.value.status === "testing") return;
+  const d = createDraft.value;
+  if (!d.provider || !d.model.trim()) {
+    createTest.value = { status: "fail", msg: "请先选择厂商与模型再测试" };
+    return;
+  }
+  createTest.value = { status: "testing" };
+  try {
+    const res = await bridge.providers.testConnection(
+      d.provider,
+      d.baseUrl.trim() || undefined,
+      d.key.trim() || undefined,
+    );
+    createTest.value = res.ok
+      ? { status: "ok", msg: `连接正常 · ${res.model_count} 个模型` }
+      : { status: "fail", msg: res.error ?? "探测失败" };
+  } catch (e) {
+    createTest.value = { status: "fail", msg: msgOf(e) };
+  }
+}
 
-function onCreateProviderChange(label: string) {
-  const info = providerList.value.find((p) => p.label === label) ?? null;
-  if (!info) return;
-  createDraft.value.provider = info.name;
-  createDraft.value.model = info.models[0] ?? "";
-  createDraft.value.baseUrl = "";
+/** 新建表单选档（同 onRowModelSelect 语义；无测试态/删除态字段） */
+function onCreateModelSelect(item: ComboboxItem) {
+  const data = item.data as { provider?: string; model?: string; custom?: boolean } | undefined;
+  if (data?.custom) {
+    createDraft.value.provider = "custom";
+    createDraft.value.model = data.model ?? item.label;
+    createDraft.value.baseUrl = "";
+    return;
+  }
+  const next = data?.provider ?? createDraft.value.provider;
+  if (next !== createDraft.value.provider) {
+    createDraft.value.baseUrl = "";
+    createDraft.value.provider = next;
+  }
+  createDraft.value.model = data?.model ?? item.label;
 }
 
 async function submitCreate() {
@@ -562,12 +638,15 @@ async function load() {
   loading.value = true;
   loadError.value = null;
   try {
-    const [raw] = await Promise.all([
+    // 解构位 = 数组位（曾被 4 项 Promise.all 两名解构错拿 loadProviders 结果——
+    // agents 全空、计数静默漏算，测试 DEBUG 实锤）；要解构的放同一组
+    const [raw, agentList] = await Promise.all([
       bridge.preferences.get(),
-      loadProviders(),
-      sharedLoad(),
+      bridge.agents.list(),
     ]);
+    await Promise.all([loadProviders(), sharedLoad()]);
     prefs.value = raw;
+    agents.value = agentList;
     rebuildRows();
   } catch (e) {
     console.error("加载模型配置失败:", e);
@@ -587,8 +666,13 @@ onMounted(load);
 onActivated(async () => {
   rows.value.forEach((r) => { r.test = { status: "idle" }; });
   try {
-    const [raw] = await Promise.all([bridge.preferences.get(), sharedLoad(true)]);
+    const [raw, agentList] = await Promise.all([
+      bridge.preferences.get(),
+      bridge.agents.list(),
+    ]);
+    await sharedLoad(true);
     prefs.value = raw;
+    agents.value = agentList;
     rebuildRows();
   } catch {
     // 刷新失败保留旧快照（不置 loadError——页面已可用，别整页报错）
@@ -632,35 +716,48 @@ onActivated(async () => {
                 <input v-model="createDraft.alias" type="text" class="form-input" placeholder="如「智谱主力」「OpenAI 备用」" />
               </div>
               <div class="field">
-                <div class="field-label">厂商</div>
-                <Combobox
-                  :model-value="providerLabelOf(createDraft.provider)"
-                  :options="providerOptions"
-                  placeholder="选择厂商"
-                  @update:model-value="onCreateProviderChange"
-                />
+                <div class="field-label">厂商 / 模型</div>
+                <GroupedSelect
+                  :model-value="modelValueOf(createDraft.provider, createDraft.model)"
+                  :groups="modelGroups"
+                  allow-custom
+                  :unmatched-label="createDraft.model"
+                  placeholder="选择或输入模型名"
+                  @select="onCreateModelSelect"
+                >
+                  <!-- 关闭态控件前缀：当前归属厂商的图标 -->
+                  <template #control-icon>
+                    <ProviderIcon v-if="createDraft.model" :name="createDraft.provider" />
+                  </template>
+                  <!-- 组头：厂商品牌图标（未知 provider 渲染为空，不破版式） -->
+                  <template #group-icon="{ group }">
+                    <ProviderIcon :name="group.id ?? ''" :size="13" />
+                  </template>
+                </GroupedSelect>
               </div>
-            </div>
-            <div class="field">
-              <div class="field-label">模型</div>
-              <Combobox
-                v-if="createModelOptions.length > 0"
-                v-model="createDraft.model"
-                :options="createModelOptions"
-                placeholder="选择或输入模型名"
-              />
-              <input v-else v-model="createDraft.model" type="text" class="form-input" placeholder="输入模型名" />
             </div>
             <div class="field">
               <div class="field-label">
                 API Key
                 <a v-if="providerInfoOf(createDraft.provider)?.key_url" :href="providerInfoOf(createDraft.provider)!.key_url!" target="_blank" class="embed-key-link">申请 Key →</a>
               </div>
-              <input v-model="createDraft.key" type="password" class="form-input" :placeholder="providerInfoOf(createDraft.provider)?.requires_key ? '粘贴 API Key' : '免 Key 厂商可留空'" />
+              <div class="input-group">
+                <input v-model="createDraft.key" type="password" class="form-input" :placeholder="providerInfoOf(createDraft.provider)?.requires_key ? '粘贴 API Key' : '免 Key 厂商可留空'" />
+                <button class="btn" :disabled="createTest.status === 'testing'" @click="testCreate">
+                  <Loader2 v-if="createTest.status === 'testing'" :size="14" class="spin" />
+                  <FlaskConical v-else :size="14" />
+                  {{ createTest.status === "testing" ? "测试中…" : "测试" }}
+                </button>
+              </div>
+              <div v-if="createTest.status === 'ok' || createTest.status === 'fail'" class="test-result">
+                <Check v-if="createTest.status === 'ok'" :size="14" class="test-ok-icon" />
+                <X v-else :size="14" class="test-fail-icon" />
+                <span :class="createTest.status === 'ok' ? 'test-ok-text' : 'test-fail-text'" :title="okFailMsg(createTest)">{{ okFailMsg(createTest) }}</span>
+              </div>
             </div>
             <div class="field">
               <div class="field-label">端点 URL</div>
-              <input v-model="createDraft.baseUrl" type="text" class="form-input" :placeholder="providerInfoOf(createDraft.provider)?.requires_base_url ? '必填，如 http://localhost:11434/v1' : '留空用厂商官方端点'" />
+              <input v-model="createDraft.baseUrl" type="text" class="form-input" :placeholder="urlPlaceholder(createDraft.provider)" />
             </div>
             <div v-if="createError" class="test-result">
               <X :size="14" class="test-fail-icon" />
@@ -697,10 +794,12 @@ onActivated(async () => {
                   :title="refTitleOf(row)"
                 >{{ referenceCountOf(row) > 0 ? `${referenceCountOf(row)} 处引用` : "未引用" }}</span>
               </div>
-              <!-- 次行：厂商 tag 前置 + 模型名 + 健康状态（右锚定，按最后一次真实调用） -->
+              <!-- 次行：模型 tag（厂商 glyph + 模型名，AgentSettings 同款）+ 健康状态（右锚定） -->
               <div class="row-sub">
-                <span class="provider-badge">{{ providerLabelOf(row.provider) }}</span>
-                <span class="card-model">{{ row.model || "未设模型" }}</span>
+                <span class="card-model" :title="providerLabelOf(row.provider)">
+                  <ProviderIcon :name="row.provider" :size="12" />
+                  <span class="card-model-name">{{ row.model || "未设模型" }}</span>
+                </span>
                 <span class="health-chip" :class="`health-chip--${healthOf(row).tone}`" :title="healthTitleOf(row)">
                   <span class="health-dot" aria-hidden="true"></span>{{ healthOf(row).label }}<template v-if="row.server.last_health_at"> · {{ timeAgo(row.server.last_health_at) }}</template>
                 </span>
@@ -725,13 +824,24 @@ onActivated(async () => {
                 <input v-model="row.alias" type="text" class="form-input" placeholder="如「智谱主力」" />
               </div>
               <div class="field">
-                <div class="field-label">厂商</div>
-                <Combobox
-                  :model-value="providerLabelOf(row.provider)"
-                  :options="providerOptions"
-                  placeholder="选择厂商"
-                  @update:model-value="(v: string) => onRowProviderChange(row, v)"
-                />
+                <div class="field-label">厂商 / 模型</div>
+                <GroupedSelect
+                  :model-value="modelValueOf(row.provider, row.model)"
+                  :groups="modelGroups"
+                  allow-custom
+                  :unmatched-label="row.model"
+                  placeholder="选择或输入模型名"
+                  @select="(it: ComboboxItem) => onRowModelSelect(row, it)"
+                >
+                  <!-- 关闭态控件前缀：当前归属厂商的图标 -->
+                  <template #control-icon>
+                    <ProviderIcon v-if="row.model" :name="row.provider" />
+                  </template>
+                  <!-- 组头：厂商品牌图标（未知 provider 渲染为空，不破版式） -->
+                  <template #group-icon="{ group }">
+                    <ProviderIcon :name="group.id ?? ''" :size="13" />
+                  </template>
+                </GroupedSelect>
               </div>
               <!-- 删除两步确认：第一次点击武装成红色确认键，第二次执行；blur 解除 -->
               <button
@@ -751,17 +861,6 @@ onActivated(async () => {
               >
                 确认删除？
               </button>
-            </div>
-
-            <div class="field">
-              <div class="field-label">模型</div>
-              <Combobox
-                v-if="modelOptionsOf(row).length > 0"
-                v-model="row.model"
-                :options="modelOptionsOf(row)"
-                placeholder="选择或输入模型名"
-              />
-              <input v-else v-model="row.model" type="text" class="form-input" placeholder="输入模型名" />
             </div>
 
             <div class="field">
@@ -817,7 +916,7 @@ onActivated(async () => {
                   <HelpCircle :size="14" />
                 </span>
               </div>
-              <input v-model="row.baseUrl" type="text" class="form-input" :placeholder="urlPlaceholderOf(row)" />
+              <input v-model="row.baseUrl" type="text" class="form-input" :placeholder="urlPlaceholder(row.provider)" />
             </div>
 
             <!-- 操作行：显式保存 / 取消（全系统编辑交互统一契约） -->
@@ -1002,33 +1101,40 @@ onActivated(async () => {
   background-color: transparent;
 }
 
-/* 次行：厂商 tag 前置 + 模型名 + 健康状态（窄屏模型名让位） */
+/* 次行：模型 tag（厂商 glyph + 模型名 mono）+ 健康状态（窄屏 tag 让位省略） */
 .row-sub {
   display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
   font-size: var(--ip-text-caption-size);
+  /* 行高锚定 18px = tag 高（AgentSettings 同款：全局行高 1.6 的分数行盒与
+     固定高 tag 混排会产生半像素错位） */
+  line-height: 18px;
   color: var(--ip-color-text-secondary);
 }
-.provider-badge {
-  display: inline-block;
-  padding: 0 6px;
-  line-height: 18px;
-  font-size: var(--ip-text-micro-size);
-  font-weight: var(--ip-font-weight-medium);
+/* 模型 tag：AgentSettings .card-model 同形态（hover title = 厂商显示名） */
+.card-model {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  flex-shrink: 1;
+  height: 18px;
+  padding: 0 7px 0 6px;
   border-radius: var(--ip-radius-full);
   background-color: var(--ip-color-bg-tertiary);
-  color: var(--ip-color-text-secondary);
-  flex-shrink: 0;
+  color: var(--ip-color-text-tertiary);
 }
-.card-model {
+.card-model-name {
+  min-width: 0;
+  /* 行高压平（文字盒=字号）：继承的 1.6 行高会把 flex 居中顶偏，压平后才是真居中 */
+  line-height: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: var(--ip-font-mono);
   font-size: var(--ip-text-micro-size);
-  flex-shrink: 1;
 }
 
 /* 健康状态胶囊（次行右锚定）：语义色圆点 + 文案 + 相对时——按最后一次真实
@@ -1075,10 +1181,10 @@ onActivated(async () => {
   gap: var(--ip-spacing-2);
   cursor: default;
 }
-/* 身份行：别名 + 厂商 + 删除按钮（end 对齐——按钮贴输入框底线） */
+/* 身份行：别名 + 分组选择器（厂商+模型合并档）+ 删除按钮（end 对齐——按钮贴输入框底线） */
 .row-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.3fr) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.7fr) auto;
   gap: var(--ip-spacing-2);
   align-items: end;
 }
@@ -1254,8 +1360,8 @@ onActivated(async () => {
 .test-fail-icon { color: var(--ip-danger-text); flex-shrink: 0; margin-top: 1px; }
 .test-fail-text { color: var(--ip-danger-text); word-break: break-all; }
 
-/* Combobox 高度统一（和 form-input 一致） */
-:deep(.combobox-input-wrap) {
+/* GroupedSelect 高度统一（和 form-input 一致） */
+:deep(.gs-control) {
   height: var(--ip-input-h-sm);
 }
 .embed-key-link {

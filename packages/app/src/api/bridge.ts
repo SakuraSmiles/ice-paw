@@ -30,6 +30,7 @@ import type {
   ProjectOverview,
   ProjectTask,
   ProviderConnectionResult,
+  ModelChainTestResult,
   ProviderInfo,
   ScreenChannelState,
   SessionEvent,
@@ -122,6 +123,12 @@ const providers = {
         profileId: profileId || null,
       });
     } catch (err) { throw wrapInvokeError("providers.testConnection", err); }
+  },
+  /** 链路测试（agent 引用态）：模拟 agent 发送路径——主模型起按序真发摘要请求
+   *  仿真换档，报告链上首个可用档位（换档判据与运行时降级链同一张分类表） */
+  async testModelChain(chain: string[]): Promise<ModelChainTestResult> {
+    try { return await invoke<ModelChainTestResult>("test_agent_model_chain", { chain }); }
+    catch (err) { throw wrapInvokeError("providers.testModelChain", err); }
   },
 };
 

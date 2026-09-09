@@ -61,9 +61,7 @@ impl ProfileHealth {
 /// 错误文本 → 配置健康分类（`classify_llm_error` 的收窄映射 + 404 补扫）。
 pub fn health_from_error(msg: &str) -> ProfileHealth {
     match classify_llm_error(msg) {
-        LlmErrorKind::InsufficientBalance | LlmErrorKind::GlmResourcePack => {
-            ProfileHealth::Quota
-        }
+        LlmErrorKind::InsufficientBalance | LlmErrorKind::GlmResourcePack => ProfileHealth::Quota,
         LlmErrorKind::Auth | LlmErrorKind::Forbidden => ProfileHealth::Auth,
         LlmErrorKind::RateLimited => ProfileHealth::RateLimited,
         LlmErrorKind::Network => ProfileHealth::Network,
@@ -142,13 +140,28 @@ mod tests {
             health_from_error("code:1113 无可用资源包"),
             ProfileHealth::Quota
         );
-        assert_eq!(health_from_error("insufficient_quota"), ProfileHealth::Quota);
+        assert_eq!(
+            health_from_error("insufficient_quota"),
+            ProfileHealth::Quota
+        );
         // 鉴权族 → Auth
-        assert_eq!(health_from_error("HTTP 401: invalid api key"), ProfileHealth::Auth);
-        assert_eq!(health_from_error("403 permission denied"), ProfileHealth::Auth);
+        assert_eq!(
+            health_from_error("HTTP 401: invalid api key"),
+            ProfileHealth::Auth
+        );
+        assert_eq!(
+            health_from_error("403 permission denied"),
+            ProfileHealth::Auth
+        );
         // 限流 / 网络
-        assert_eq!(health_from_error("HTTP 429: too many requests"), ProfileHealth::RateLimited);
-        assert_eq!(health_from_error("vision 请求失败 (glm): timeout"), ProfileHealth::Network);
+        assert_eq!(
+            health_from_error("HTTP 429: too many requests"),
+            ProfileHealth::RateLimited
+        );
+        assert_eq!(
+            health_from_error("vision 请求失败 (glm): timeout"),
+            ProfileHealth::Network
+        );
         assert_eq!(health_from_error("502 bad gateway"), ProfileHealth::Network);
     }
 
@@ -163,16 +176,28 @@ mod tests {
             health_from_error("vision glm 返回 404 Not Found: Model Not Found"),
             ProfileHealth::ModelNotFound
         );
-        assert_eq!(health_from_error("模型不存在或无权限"), ProfileHealth::ModelNotFound);
+        assert_eq!(
+            health_from_error("模型不存在或无权限"),
+            ProfileHealth::ModelNotFound
+        );
         // 裸「不存在」不收（防误吞无关文案）
-        assert_eq!(health_from_error("引用的模型配置不存在"), ProfileHealth::Unknown);
+        assert_eq!(
+            health_from_error("引用的模型配置不存在"),
+            ProfileHealth::Unknown
+        );
     }
 
     #[test]
     fn sensitive_and_context_are_unknown_not_ok() {
         // 端点与鉴权都通但本次调用未成功——诚实归 Unknown，不冒充 Ok
-        assert_eq!(health_from_error("图片内容未通过安全审核"), ProfileHealth::Unknown);
-        assert_eq!(health_from_error("context_length_exceeded"), ProfileHealth::Unknown);
+        assert_eq!(
+            health_from_error("图片内容未通过安全审核"),
+            ProfileHealth::Unknown
+        );
+        assert_eq!(
+            health_from_error("context_length_exceeded"),
+            ProfileHealth::Unknown
+        );
         assert_eq!(health_from_error("随便什么别的错"), ProfileHealth::Unknown);
     }
 

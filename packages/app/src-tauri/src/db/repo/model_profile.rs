@@ -43,11 +43,7 @@ pub async fn get_by_id(pool: &SqlitePool, id: &str) -> AppResult<ModelProfileRow
 
 /// 创建 profile。id 与 api_key_ref 由调用方生成（api_key_ref 恒 = `profile:{id}`）。
 /// `insert_ignore`：id 冲突时静默跳过（boot 迁移幂等基石——确定性 id 重写无害）。
-pub async fn create(
-    pool: &SqlitePool,
-    row: &NewProfileRow,
-    insert_ignore: bool,
-) -> AppResult<()> {
+pub async fn create(pool: &SqlitePool, row: &NewProfileRow, insert_ignore: bool) -> AppResult<()> {
     let sql = if insert_ignore {
         "INSERT OR IGNORE INTO model_profiles
            (id, alias, provider, model, api_key_ref, base_url, sort_order)
@@ -223,7 +219,9 @@ mod tests {
     #[tokio::test]
     async fn crud_roundtrip() {
         let pool = test_pool().await;
-        create(&pool, &row("mp1", "智谱主力"), false).await.expect("create");
+        create(&pool, &row("mp1", "智谱主力"), false)
+            .await
+            .expect("create");
         let got = get_by_id(&pool, "mp1").await.expect("get");
         assert_eq!(got.alias, "智谱主力");
         assert_eq!(got.api_key_ref, "profile:mp1");
@@ -262,12 +260,22 @@ mod tests {
     #[tokio::test]
     async fn base_url_double_option_semantics() {
         let pool = test_pool().await;
-        create(&pool, &row("mp1", "a"), false).await.expect("create");
+        create(&pool, &row("mp1", "a"), false)
+            .await
+            .expect("create");
 
         // Some(Some) = 设定
-        let r = update(&pool, "mp1", None, None, None, Some(Some("https://x.example")), None)
-            .await
-            .expect("set");
+        let r = update(
+            &pool,
+            "mp1",
+            None,
+            None,
+            None,
+            Some(Some("https://x.example")),
+            None,
+        )
+        .await
+        .expect("set");
         assert_eq!(r.base_url.as_deref(), Some("https://x.example"));
 
         // None = 不改
@@ -301,7 +309,9 @@ mod tests {
     #[tokio::test]
     async fn record_health_updates_columns_without_touching_updated_at() {
         let pool = test_pool().await;
-        create(&pool, &row("mp1", "智谱主力"), false).await.expect("create");
+        create(&pool, &row("mp1", "智谱主力"), false)
+            .await
+            .expect("create");
         let before = get_by_id(&pool, "mp1").await.expect("get");
         assert_eq!(before.last_health, None, "新行未调用态 = NULL");
 
@@ -328,11 +338,20 @@ mod tests {
             .await
             .expect("rename");
         let renamed = get_by_id(&pool, "mp1").await.expect("get renamed");
-        assert_ne!(renamed.updated_at, after.updated_at, "配置更新应刷 updated_at");
-        assert_eq!(renamed.last_health.as_deref(), Some("quota"), "配置更新不碰健康列");
+        assert_ne!(
+            renamed.updated_at, after.updated_at,
+            "配置更新应刷 updated_at"
+        );
+        assert_eq!(
+            renamed.last_health.as_deref(),
+            Some("quota"),
+            "配置更新不碰健康列"
+        );
 
         // 行不存在（已删竞态）静默 Ok
-        record_health(&pool, "ghost", "ok", None).await.expect("ghost no-op");
+        record_health(&pool, "ghost", "ok", None)
+            .await
+            .expect("ghost no-op");
     }
 
     /// 删除守卫 agent 腿（Phase 2）：主档引用 / 降级链命中 + 前缀不碰撞。
@@ -340,7 +359,13 @@ mod tests {
     async fn agents_referencing_covers_primary_and_fallback() {
         let pool = test_pool().await;
         // 最小 agents 行（守卫查询只读 id/name/两引用列）
-        async fn seed(pool: &SqlitePool, id: &str, name: &str, primary: Option<&str>, fb: Option<&str>) {
+        async fn seed(
+            pool: &SqlitePool,
+            id: &str,
+            name: &str,
+            primary: Option<&str>,
+            fb: Option<&str>,
+        ) {
             let q = format!(
                 "INSERT INTO agents (id, name, provider, model, api_key_ref, model_profile_id, fallback_profile_ids)
                  VALUES ('{id}', '{name}', 'glm', 'm', 'x', {primary}, {fb})",
@@ -351,7 +376,14 @@ mod tests {
         }
         seed(&pool, "a1", "主档引用", Some("mp1"), None).await;
         seed(&pool, "a2", "链中引用", None, Some(r#"["mp9","mp1"]"#)).await;
-        seed(&pool, "a3", "无关行", Some("mp10"), Some(r#"["mp10","mp11"]"#)).await;
+        seed(
+            &pool,
+            "a3",
+            "无关行",
+            Some("mp10"),
+            Some(r#"["mp10","mp11"]"#),
+        )
+        .await;
         seed(&pool, "a4", "legacy", None, None).await;
 
         let hits = agents_referencing(&pool, "mp1").await.expect("query");
@@ -366,7 +398,10 @@ mod tests {
         assert_eq!(hits[0].1, "无关行");
 
         // 无引用 → 空
-        assert!(agents_referencing(&pool, "mp-nope").await.unwrap().is_empty());
+        assert!(agents_referencing(&pool, "mp-nope")
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     /// 升级路径锁定（2026-09-08 实案）：dev 真机库已应用**旧版 49**（无健康
@@ -483,7 +518,10 @@ mod tests {
         let migrator = sqlx::migrate!("./src/db/migrations");
         crate::db::migrate::heal_checksum_drift(&pool, &migrator).await;
         crate::db::migrate::heal_dropped_migrations(&pool, &migrator).await;
-        migrator.run(&pool).await.expect("旧 49 库升级应通过（50 加三列）");
+        migrator
+            .run(&pool)
+            .await
+            .expect("旧 49 库升级应通过（50 加三列）");
 
         // 终态：三列出现 + 存量行原样（未调用 NULL 态 + 时间戳不动）
         let row = get_by_id(&pool, "mp-vision-0").await.unwrap();
@@ -501,7 +539,9 @@ mod tests {
         assert_eq!(n.0, 0, "空表无引用行；查询成功即证明 51 两列已升级");
 
         // 触发器已换 WHEN 门控版：健康写入落三列但不刷 updated_at
-        record_health(&pool, "mp-vision-0", "ok", None).await.unwrap();
+        record_health(&pool, "mp-vision-0", "ok", None)
+            .await
+            .unwrap();
         let after = get_by_id(&pool, "mp-vision-0").await.unwrap();
         assert_eq!(after.last_health.as_deref(), Some("ok"));
         assert!(after.last_health_at.is_some());
