@@ -20,6 +20,7 @@ import { bridge } from "../api/bridge";
 import type {
   AssistantMessagePayload,
   ContentBlock,
+  ContextBreakdownPayload,
   CrossSessionMessagePayload,
   CrossSessionMessageSettledPayload,
   MessageDiscardedPayload,
@@ -178,6 +179,9 @@ export interface TurnHeaderRow {
   dateLabel: string | null;
   ended: TurnEndedPayload | null;
   context: TurnContextPayload | null;
+  /** 上下文组成（③ 可观测化 context_breakdown 折头；null = 该回合无 usage
+   *  （provider 间歇不回）或 0.7 批③前的旧回合——检查器对缺失不渲染该区） */
+  breakdown: ContextBreakdownPayload | null;
 }
 
 /** 单行事件（30px 固定高：kind 徽章 + 单行摘要 + 尾随 token/耗时） */
@@ -417,7 +421,7 @@ function summarizeEvent(ev: SessionEvent): { kind: RowKind; summary: string; isE
       return { kind: "aux", summary: `附件落库 ×${n}`, isError: false, durationMs: null, tokens: null, thinkingDerived: false, isThinking: false, isContinuation: false };
     }
     default:
-      // turn_context / turn_ended 折进头；tool_result_message 是结果行镜像（工具行已含结果）
+      // turn_context / turn_ended / context_breakdown 折进头；tool_result_message 是结果行镜像（工具行已含结果）
       return null;
   }
 }
@@ -440,6 +444,7 @@ export function buildRows(events: SessionEvent[], opts: BuildRowsOptions): Traje
       errorCount: number;
       ended: TurnEndedPayload | null;
       context: TurnContextPayload | null;
+      breakdown: ContextBreakdownPayload | null;
       firstSeq: number;
       createdAt: string;
       firstAtMs: number;
@@ -454,7 +459,7 @@ export function buildRows(events: SessionEvent[], opts: BuildRowsOptions): Traje
     }
     let st = turnStats.get(tk);
     if (!st) {
-      st = { roundIds: new Set(), toolCount: 0, errorCount: 0, ended: null, context: null, firstSeq: ev.seq, createdAt: ev.created_at, firstAtMs: Number.NaN, lastAtMs: Number.NaN };
+      st = { roundIds: new Set(), toolCount: 0, errorCount: 0, ended: null, context: null, breakdown: null, firstSeq: ev.seq, createdAt: ev.created_at, firstAtMs: Number.NaN, lastAtMs: Number.NaN };
       turnStats.set(tk, st);
     }
     const tMs = Date.parse(ev.created_at);
@@ -467,6 +472,7 @@ export function buildRows(events: SessionEvent[], opts: BuildRowsOptions): Traje
     else if (ev.kind === "message_error") st.errorCount += 1;
     else if (ev.kind === "turn_ended") st.ended = ev.payload as TurnEndedPayload;
     else if (ev.kind === "turn_context") st.context = ev.payload as TurnContextPayload;
+    else if (ev.kind === "context_breakdown") st.breakdown = ev.payload as ContextBreakdownPayload;
   }
 
   const rows: TrajectoryRow[] = [];
@@ -516,6 +522,7 @@ export function buildRows(events: SessionEvent[], opts: BuildRowsOptions): Traje
         dateLabel,
         ended: st.ended,
         context: st.context,
+        breakdown: st.breakdown,
       };
       rows.push(currentHeader);
     }

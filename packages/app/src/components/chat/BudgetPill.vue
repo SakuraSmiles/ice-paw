@@ -11,6 +11,7 @@
 import { computed } from "vue";
 import type { ChatBudgetPayload } from "../../types";
 import { formatTokenCount } from "../../utils/format";
+import { missHintTitle, shortMissHint } from "../../utils/missHint";
 
 const props = defineProps<{ budget: ChatBudgetPayload }>();
 
@@ -33,6 +34,10 @@ const cacheHitPct = computed(() => {
     ? Math.round((props.budget.cumulative_cached_tokens / p) * 100)
     : null;
 });
+/** miss 归因 chip（③ 可观测化）：本轮全 miss 时常驻短标签（首个非 first_request
+ *  因；首次请求是正常态弱展示），hover title 带全因机理 + 推断披露 */
+const missChip = computed(() => shortMissHint(props.budget.miss_hint));
+const missTitle = computed(() => missHintTitle(props.budget.miss_hint));
 const title = computed(() => {
   const base = `本回合累计 token（计费口径）：${props.budget.cumulative_tokens} / 上限 ${props.budget.effective_cap}（未命中全价 + 命中 1/10 + 输出全价）`;
   return props.budget.max_renewals === 0
@@ -61,6 +66,7 @@ const title = computed(() => {
     <span v-if="cacheHitPct !== null" class="cached">
       缓存命中 {{ cacheHitPct }}%
     </span>
+    <span v-if="missChip" class="miss" :title="missTitle">{{ missChip }}</span>
     <span v-if="props.budget.renewal_index > 0" class="renewed">
       （已续期 {{ props.budget.renewal_index }}/{{ props.budget.max_renewals }}）
     </span>
@@ -105,8 +111,12 @@ const title = computed(() => {
 /* 80% 水位：芯环加深 + 字重提醒（仍非错误——续期/继续都可恢复） */
 .budget-pill.warn { font-weight: 600; }
 .budget-pill.warn .ring-fill { stroke: var(--ip-color-primary-tint-text); }
-/* 命中率与续期计数同为次级信息，弱化视觉 */
+/* 命中率与续期计数同为次级信息，弱化视觉；miss chip 同视觉级（归因是解释性
+   信息，非错误态——不用 danger 色） */
 .cached {
+  opacity: 0.85;
+}
+.miss {
   opacity: 0.85;
 }
 .renewed {

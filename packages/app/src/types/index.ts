@@ -440,7 +440,8 @@ export type SessionEvent =
   | (SessionEventBase & { kind: "plan_updated"; payload: PlanUpdatedPayload })
   | (SessionEventBase & { kind: "model_switch"; payload: ModelSwitchPayload })
   | (SessionEventBase & { kind: "cross_session_message"; payload: CrossSessionMessagePayload })
-  | (SessionEventBase & { kind: "cross_session_message_settled"; payload: CrossSessionMessageSettledPayload });
+  | (SessionEventBase & { kind: "cross_session_message_settled"; payload: CrossSessionMessageSettledPayload })
+  | (SessionEventBase & { kind: "context_breakdown"; payload: ContextBreakdownPayload });
 
 // ============================================================================
 // MA-3 跨会话通讯（与后端 harness::event_log 两 payload / commands::inbox_cmd 对齐）
@@ -500,6 +501,55 @@ export interface TurnContextPayload {
   budget_max_tokens?: number | null;
   context_window?: number | null;
 }
+// ============================================================================
+// 上下文开销可观测化（③，与后端 harness::event_log ContextBreakdown* 对齐）
+// ============================================================================
+
+/** `context_breakdown` 段级组成：label 词表见后端 context::anatomy
+ *  （system_persona/system_tool_hint/system_os_context/system_delegation_hint/
+ *   system_word_style/tool_defs/summary/history/user_message/user_images） */
+export interface ContextBreakdownSegment {
+  label: string;
+  /** 本地估算 token（CJK 1/字、其余约 4 字符/token；工具 JSON 偏低估） */
+  est: number;
+  /** 可选计数（工具数/历史消息数/图片数） */
+  count?: number;
+}
+
+/** 请求体稳定指纹三元组（12 hex FNV）——跨回合缓存 miss 归因的比对基线 */
+export interface ContextBreakdownFingerprint {
+  tools: string;
+  /** system 稳定段（persona+tool_hint+delegation+word_style，不含 os） */
+  system_stable: string;
+  /** os_context 稳定核（时间行冻结后——工作目录/时区/project.md 变才变） */
+  os_stable: string;
+}
+
+/** 逐轮请求序列（每个 LLM 请求一条） */
+export interface ContextBreakdownRound {
+  /** 本轮请求 prompt_tokens 真值（provider 回传 usage） */
+  prompt: number;
+  /** 其中缓存命中部分（0 = 全 miss） */
+  cached: number;
+  /** 本轮实际发送的工具列表指纹 */
+  tools_hash: string;
+  /** 本轮请求前是否有注入（BeforeLlm 钩子 / 预算提醒） */
+  injected: boolean;
+  /** 本轮是否发生过降级链换档（缓存命名空间切换） */
+  model_switched: boolean;
+}
+
+/** `context_breakdown`——一条事件装整回合的上下文组成 + 指纹 + 逐轮 usage 序列 */
+export interface ContextBreakdownPayload {
+  v?: number;
+  segments: ContextBreakdownSegment[];
+  /** 各段估算之和 */
+  est_total: number;
+  /** provider 回传的回合首轮 prompt 真值（缺 = 无 usage 的回合） */
+  actual_prompt_tokens?: number;
+  fingerprint: ContextBreakdownFingerprint;
+  rounds: ContextBreakdownRound[];
+}
 /** `chat:budget` 事件 payload — 会话级 token 预算状态（HUD / 续期 toast） */
 export interface ChatBudgetPayload {
   conversation_id: string;
@@ -521,6 +571,9 @@ export interface ChatBudgetPayload {
   renewed: boolean;
   /** 当前工具轮数（0 起） */
   round: number;
+  /** 本轮全 miss 的本地归因 slug 数组（③ 可观测化；词表见 utils/missHint，
+   *  与后端 turn_cost::miss_slug 镜像。null = 本轮非全 miss / provider 未回 usage */
+  miss_hint?: string[];
 }
 /** `chat:model-switched` 事件 payload — 降级换档 toast（对齐 chat:budget renewed 先例） */
 export interface ChatModelSwitchedPayload {

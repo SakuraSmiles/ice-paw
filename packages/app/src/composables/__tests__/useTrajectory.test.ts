@@ -284,6 +284,43 @@ describe("buildRows 行模型", () => {
     const events = [ev("user_message", { content: "q", blocks: [] })];
     expect(evRows(events).headers()[0].ended).toBeNull();
   });
+
+  // ---- context_breakdown 折头（③ 可观测化；同 turn_context 先例不生成行） ----
+
+  const breakdownPayload = {
+    v: 1,
+    segments: [
+      { label: "system_persona", est: 300 },
+      { label: "tool_defs", est: 2400, count: 24 },
+      { label: "history", est: 900, count: 4 },
+    ],
+    est_total: 3600,
+    actual_prompt_tokens: 4000,
+    fingerprint: { tools: "aaa", system_stable: "bbb", os_stable: "ccc" },
+    rounds: [{ prompt: 4000, cached: 0, tools_hash: "aaa", injected: false, model_switched: false }],
+  };
+
+  it("context_breakdown 折进头（header.breakdown），不生成事件行", () => {
+    const events = [
+      ev("turn_context", ctx()),
+      ev("user_message", { content: "q", blocks: [] }),
+      ev("assistant_message", { content: "a", blocks: [], round: 0, continuation: false }, { messageId: "m1" }),
+      ev("turn_ended", ended()),
+      ev("context_breakdown", breakdownPayload),
+    ];
+    const { events: evs, headers } = evRows(events);
+    const h = headers()[0];
+    expect(h.breakdown).not.toBeNull();
+    expect(h.breakdown?.est_total).toBe(3600);
+    expect(h.breakdown?.rounds).toHaveLength(1);
+    // 不生成行：事件行仍是 user + assistant 两行
+    expect(evs().map((r) => r.kind)).toEqual(["user", "assistant"]);
+  });
+
+  it("无 breakdown 的 turn 头 breakdown=null（无 usage 回合/旧回合）", () => {
+    const events = [ev("user_message", { content: "q", blocks: [] })];
+    expect(evRows(events).headers()[0].breakdown).toBeNull();
+  });
 });
 
 describe("类型筛选模型（FilterKey / 预设 / 计数 / 持久化）", () => {

@@ -26,6 +26,7 @@ import type { TrajectoryRow } from "../../composables/useTrajectory";
 import MarkdownRenderer from "../chat/MarkdownRenderer.vue";
 import ImagePreview from "../chat/ImagePreview.vue";
 import { termLabel } from "../../utils/termLabels";
+import { formatTokenCount } from "../../utils/format";
 
 const props = defineProps<{ row: TrajectoryRow }>();
 const emit = defineEmits<{ close: [] }>();
@@ -52,6 +53,43 @@ const attachP = computed(() =>
     ? (ev.value.event.payload as { kind?: string; items?: { idx: number; name: string; kind: string; label?: string; token_est?: number }[] })
     : null,
 );
+
+// ---- 上下文组成（③ 可观测化：turn 头折进的 context_breakdown） ----
+/** 段 label → 中文（词表与后端 context::anatomy 镜像；未知 label 原样透出） */
+const SEGMENT_LABELS: Record<string, string> = {
+  system_persona: "人设",
+  system_tool_hint: "工具提示",
+  system_os_context: "运行环境",
+  system_delegation_hint: "委派清单",
+  system_word_style: "样式档案",
+  tool_defs: "工具定义",
+  summary: "摘要",
+  history: "历史消息",
+  user_message: "用户消息",
+  user_images: "用户图片",
+};
+
+const breakdown = computed(() => header.value?.breakdown ?? null);
+/** 段条宽（% of est_total；最小 1% 防过窄消失，除零守卫） */
+function segWidth(est: number): string {
+  const total = breakdown.value?.est_total ?? 0;
+  return total > 0 ? `${Math.max(1, (est / total) * 100)}%` : "0%";
+}
+/** 估算合计 vs 首轮实际输入的偏差措辞（actual 缺失 → null 只显估算） */
+const deviationText = computed<string | null>(() => {
+  const b = breakdown.value;
+  const actual = b?.actual_prompt_tokens;
+  if (!b || actual == null || actual <= 0) return null;
+  if (actual === b.est_total) return "与实际一致";
+  const diff = actual - b.est_total;
+  const pct = Math.round((Math.abs(diff) / actual) * 100);
+  return diff > 0 ? `估算偏低约 ${pct}%` : `估算偏高约 ${pct}%`;
+});
+/** 轮内工具列表与上一轮不同（相关性裁剪抖动 = miss 真实来源）；轮 0 无前轮可比 */
+function roundToolsChanged(i: number): boolean {
+  const rs = breakdown.value?.rounds ?? [];
+  return i > 0 && i < rs.length && rs[i].tools_hash !== rs[i - 1].tools_hash;
+}
 
 type ThinkingBlock = Extract<ContentBlock, { type: "thinking" }>;
 type ImageBlock = Extract<ContentBlock, { type: "image" }>;
@@ -283,6 +321,31 @@ async function copyPayload() {
             <div v-if="header.ended?.user_token_count != null" class="ikv"><span>用户消息 token</span><b>{{ header.ended.user_token_count }}</b></div>
             <div class="ikv"><span>轮次统计</span><b>{{ header.roundCount }} 条回复 · {{ header.toolCount }} 次工具<template v-if="header.errorCount"> · 错误 {{ header.errorCount }}</template></b></div>
             <div v-if="header.turnMs != null" class="ikv"><span>墙钟耗时</span><b>{{ (header.turnMs / 1000).toFixed(1) }}s</b></div>
+          </section>
+          <!-- ③ 可观测化：本回合 prompt 组成分解 + 逐轮命中（无数据回合不渲染） -->
+          <section v-if="header.breakdown" class="isec">
+            <h4 class="isec-title">上下文组成</h4>
+            <div v-for="seg in header.breakdown.segments" :key="seg.label" class="ibd-seg">
+              <span class="ibd-label">{{ SEGMENT_LABELS[seg.label] ?? seg.label }}</span>
+              <span class="ibd-bar"><span class="ibd-fill" :style="{ width: segWidth(seg.est) }" /></span>
+              <span class="ibd-num">
+                {{ formatTokenCount(seg.est) }} tok<template v-if="seg.count != null"> · {{ seg.count }}</template>
+              </span>
+            </div>
+            <div class="ikv">
+              <span>合计</span>
+              <b>估算 {{ formatTokenCount(header.breakdown.est_total) }} tok<template v-if="header.breakdown.actual_prompt_tokens != null"> · 实际首轮输入 {{ formatTokenCount(header.breakdown.actual_prompt_tokens) }} tok<template v-if="deviationText">（{{ deviationText }}）</template></template></b>
+            </div>
+            <div v-if="header.breakdown.rounds.length" class="isub">逐轮命中</div>
+            <div v-for="(r, i) in header.breakdown.rounds" :key="`bd-r${i}`" class="ibd-round">
+              <span class="ibd-rlabel">轮 {{ i + 1 }}</span>
+              <span class="ibd-meter"><span class="ibd-mfill" :style="{ width: r.prompt > 0 ? `${Math.min(100, (r.cached / r.prompt) * 100)}%` : '0%' }" /></span>
+              <span class="ibd-num">输入 {{ formatTokenCount(r.prompt) }} · 命中 {{ formatTokenCount(r.cached) }}<template v-if="r.prompt > 0">（{{ Math.round((r.cached / r.prompt) * 100) }}%）</template></span>
+              <span v-if="r.cached === 0 && r.prompt > 0" class="ibd-badge">全未命中</span>
+              <span v-if="roundToolsChanged(i)" class="ibd-badge">工具列表变化</span>
+              <span v-if="r.model_switched" class="ibd-badge">换档</span>
+            </div>
+            <div class="ibd-foot">token 为本地估算（含附件/引用展开，不细分），与 provider 计数存在偏差；逐轮命中为 provider 回传 usage；预算归因为本地推断，非 provider 报告</div>
           </section>
         </template>
 
@@ -755,4 +818,20 @@ async function copyPayload() {
 .isec-sub { margin: 4px 0; font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
 .isec-sub summary { cursor: pointer; padding: 2px 0; }
 .insp-muted { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-disabled); font-style: italic; }
+
+/* ---- 上下文组成（③ 可观测化）：主色单色条形——身份由行标签承载，不搞多色分类 ---- */
+.ibd-seg, .ibd-round { display: flex; align-items: center; gap: var(--ip-spacing-2_5); padding: 3px 0; }
+.ibd-label { flex-shrink: 0; width: 64px; font-size: var(--ip-text-micro-size); color: var(--ip-color-text-secondary); }
+.ibd-rlabel { flex-shrink: 0; width: 34px; font-size: var(--ip-text-micro-size); color: var(--ip-color-text-tertiary); }
+.ibd-bar { flex: 1; height: 6px; border-radius: var(--ip-radius-full); background: var(--ip-color-bg-tertiary); overflow: hidden; }
+.ibd-fill { display: block; height: 100%; border-radius: var(--ip-radius-full); background: var(--ip-primary-500); }
+.ibd-meter { flex-shrink: 0; width: 56px; height: 6px; border-radius: var(--ip-radius-full); background: var(--ip-color-bg-tertiary); overflow: hidden; }
+.ibd-mfill { display: block; height: 100%; border-radius: var(--ip-radius-full); background: var(--ip-primary-500); }
+.ibd-num { flex-shrink: 0; font-size: var(--ip-text-micro-size); color: var(--ip-color-text-tertiary); font-variant-numeric: tabular-nums; }
+.ibd-badge {
+  flex-shrink: 0; font-size: var(--ip-text-micro-size); line-height: 1;
+  padding: 2px 7px; border-radius: var(--ip-radius-full);
+  background: var(--ip-color-bg-tertiary); color: var(--ip-color-text-secondary);
+}
+.ibd-foot { margin-top: 8px; font-size: var(--ip-text-micro-size); color: var(--ip-color-text-tertiary); line-height: 1.5; }
 </style>

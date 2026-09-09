@@ -91,4 +91,40 @@ describe("BudgetPill", () => {
     const soft = mount(BudgetPill, { props: { budget: budget() } });
     expect(soft.attributes("title")).toContain("自动续期 2 次");
   });
+
+  // ---- miss 归因 chip（③ 可观测化） ----
+
+  it("miss_hint 有非 first_request 因：渲染短标签 chip，title 带机理与披露", () => {
+    const w = mount(BudgetPill, {
+      props: {
+        budget: budget({
+          miss_hint: ["no_detectable_change"],
+          cumulative_cached_tokens: 0,
+        }),
+      },
+    });
+    expect(w.find(".miss").text()).toContain("疑缓存过期");
+    const title = w.find(".miss").attributes("title");
+    expect(title).toContain("TTL 过期");
+    expect(title).toContain("本地推断");
+  });
+
+  it("miss_hint 多因：chip 取首个，title 全因并列", () => {
+    const w = mount(BudgetPill, {
+      props: { budget: budget({ miss_hint: ["tools_changed", "injection_changed"] }) },
+    });
+    expect(w.find(".miss").text()).toContain("工具列表变化");
+    const title = w.find(".miss").attributes("title");
+    expect(title).toContain("工具列表变化");
+    expect(title).toContain("注入变化");
+  });
+
+  it("miss_hint 仅 first_request / 缺席：不渲染 chip（首次请求是正常态，弱展示）", () => {
+    const firstOnly = mount(BudgetPill, {
+      props: { budget: budget({ miss_hint: ["first_request"] }) },
+    });
+    expect(firstOnly.find(".miss").exists()).toBe(false);
+    const none = mount(BudgetPill, { props: { budget: budget() } });
+    expect(none.find(".miss").exists()).toBe(false);
+  });
 });
