@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
+import { flushPromises } from "@vue/test-utils";
 import { useChatStore } from "../chat";
 import { useChatEvents } from "../../composables/useChatEvents";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import type { Message } from "../../types";
 
 const mockInvoke = vi.mocked(invoke);
 const mockListen = vi.mocked(listen);
@@ -31,6 +33,22 @@ function fakeConv(id: string, overrides?: Partial<ReturnType<typeof useChatStore
     updated_at: "2024-01-01T00:00:00Z",
     project_id: null,
     ...overrides,
+  };
+}
+
+/** 工具函数：构造最小 Message */
+function fakeMsg(id: string, convId: string): Message {
+  return {
+    id,
+    conversation_id: convId,
+    role: "user",
+    content: id,
+    content_blocks: "[]",
+    token_count: null,
+    error: null,
+    created_at: "2024-01-01T00:00:00Z",
+    rowid: 1,
+    model: null,
   };
 }
 
@@ -412,6 +430,94 @@ describe("chatStore", () => {
       expect(store.streamingToolCalls.size).toBe(0);
       expect(store.lastError).toBeNull();
       expect(mockInvoke).toHaveBeenCalled();
+    });
+  });
+
+  describe("加载竞态守卫（快速切换会话）", () => {
+    it("loadMessages：A 的晚到响应被丢弃——不整替 B 的 messages、不污染 hasMore", async () => {
+      // 旧会话 c1 的 list 调用挂起（慢网络），新会话 c2 的调用立即返回
+      let resolveA!: (v: Message[]) => void;
+      const pendingA = new Promise<Message[]>((res) => { resolveA = res; });
+      mockInvoke.mockImplementationOnce(() => pendingA);
+      mockInvoke.mockResolvedValueOnce([fakeMsg("m-b1", "c2")]);
+
+      const store = useChatStore();
+      store.conversations = [fakeConv("c1"), fakeConv("c2")];
+      store.selectConversation("c1"); // 触发 loadMessages(c1)（在途）
+      store.selectConversation("c2"); // 立刻切到 c2（首屏先回）
+
+      await flushPromises();
+      expect(store.messages.map((m) => m.id)).toEqual(["m-b1"]);
+      expect(store.msgLoading).toBe(false);
+
+      // c1 的响应此刻才到（满页 50 条）：过期响应必须整段丢弃
+      resolveA(Array.from({ length: 50 }, (_, i) => fakeMsg(`m-a${i}`, "c1")));
+      await flushPromises();
+      expect(store.messages.map((m) => m.id)).toEqual(["m-b1"]); // 未被 A 污染
+      expect(store.hasMore).toBe(false); // c2 不足 50 条——A 的满页没有污染 hasMore
+      expect(store.msgLoading).toBe(false);
+    });
+
+    it("loadMoreMessages：切会话后返回的旧会话 older 消息不前插进新会话列表", async () => {
+      const store = useChatStore();
+      store.conversations = [fakeConv("c1"), fakeConv("c2")];
+      store.activeConvId = "c1";
+      store.messages = [fakeMsg("m-a2", "c1"), fakeMsg("m-a1", "c1")];
+      store.hasMore = true;
+
+      let resolveOlder!: (v: Message[]) => void;
+      const pendingOlder = new Promise<Message[]>((res) => { resolveOlder = res; });
+      mockInvoke.mockImplementationOnce(() => pendingOlder); // c1 的 loadMore（在途）
+      mockInvoke.mockResolvedValueOnce([fakeMsg("m-b1", "c2")]); // 切到 c2 的首屏
+
+      const loading = store.loadMoreMessages(); // c1 分页在途
+      store.selectConversation("c2"); // 切走（首屏立即返回）
+      await flushPromises();
+      expect(store.messages.map((m) => m.id)).toEqual(["m-b1"]);
+
+      resolveOlder([fakeMsg("m-a0", "c1")]); // c1 的 older 晚到
+      await loading;
+      await flushPromises();
+      expect(store.messages.map((m) => m.id)).toEqual(["m-b1"]); // 未前插
+      expect(store.loadingMore).toBe(false);
+    });
+  });
+
+  describe("sendMessage 失败回滚（以发起回合的会话为键）", () => {
+    it("发送在途切走后失败：横幅写回发起会话、bgStreams 快照清理（切回无幽灵「生成中」）", async () => {
+      let rejectSend!: (reason?: unknown) => void;
+      mockInvoke.mockImplementationOnce(() => new Promise<never>((_res, rej) => { rejectSend = rej; }));
+      // 切到 c2 / 切回 c1 的首屏加载走 beforeEach 的默认空返
+
+      const store = useChatStore();
+      store.conversations = [fakeConv("c1"), fakeConv("c2")];
+      store.activeConvId = "c1";
+
+      const sent = store.sendMessage("hello");
+      expect(store.sending).toBe(true);
+
+      // 发送在途时切到 c2：c1 的流式态快照进 bgStreams、sending 复位
+      store.selectConversation("c2");
+      await flushPromises();
+      expect(store.activeConvId).toBe("c2");
+      expect(store.bgStreams.has("c1")).toBe(true);
+
+      // c1 的 send 此刻被后端拒绝
+      rejectSend(new Error("boom"));
+      await sent;
+      await flushPromises();
+
+      // 横幅挂在发起会话 c1 头上（当前在 c2——lastError 取值为 null）
+      expect(store.lastError).toBeNull();
+      expect(store.lastErrors.has("c2")).toBe(false);
+      expect(store.lastErrors.has("c1")).toBe(true);
+      // bgStreams 快照已清：切回 c1 不会恢复出幽灵「生成中」
+      expect(store.bgStreams.has("c1")).toBe(false);
+
+      store.selectConversation("c1");
+      await flushPromises();
+      expect(store.sending).toBe(false); // ← 幽灵锁死回归点（修复前 bg 恢复 sending=true）
+      expect(store.lastError).toContain("请求没有送达"); // 横幅随发起会话可见
     });
   });
 

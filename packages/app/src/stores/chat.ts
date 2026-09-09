@@ -144,12 +144,17 @@ export const useChatStore = defineStore("chat", () => {
     hasMore.value = true;
     loadingMore.value = false;
     try {
-      messages.value = await bridge.messages.list(convId, { limit: 50 });
+      const page = await bridge.messages.list(convId, { limit: 50 });
+      // 竞态守卫（useProjectTrajectory 的 currentId !== pid 同款）：await 期间用户
+      // 可能已切到别的会话——A→B 快速切换时 A 的晚到响应会整替 B 的 messages、
+      // 同步污染 hasMore。过期响应直接丢弃。
+      if (convId !== activeConvId.value) return;
+      messages.value = page;
       // 如果返回不足 50 条，说明没有更多了
-      hasMore.value = messages.value.length >= 50;
+      hasMore.value = page.length >= 50;
       // 切回正在流式的会话时，把恢复的 streamingText 同步到末条 assistant，
       // 否则 DB 占位为空、要等下一个 chunk 才显示
-      if (sending.value && streamingText.value && convId === activeConvId.value) {
+      if (sending.value && streamingText.value) {
         const idx = messages.value.length - 1;
         if (idx >= 0 && messages.value[idx].role === "assistant") {
           messages.value[idx] = { ...messages.value[idx], content: streamingText.value };
@@ -158,7 +163,9 @@ export const useChatStore = defineStore("chat", () => {
     } catch (e) {
       console.error("加载消息列表失败:", e);
     } finally {
-      msgLoading.value = false;
+      // 只有仍是激活会话的加载才复位加载态：过期请求清 flag 会把新会话的
+      // 「加载中」提前翻成完成（ChatMessages 的滚动恢复 watcher 盯 msgLoading 边沿）。
+      if (convId === activeConvId.value) msgLoading.value = false;
     }
   }
 
@@ -166,18 +173,23 @@ export const useChatStore = defineStore("chat", () => {
     if (loadingMore.value || !hasMore.value || messages.value.length === 0) return;
     if (!activeConvId.value) return;
     loadingMore.value = true;
+    // 发起时记下会话：await 期间切走的话，旧会话的 older 消息不得前插进新会话列表
+    const convId = activeConvId.value;
     const oldest = messages.value[0];
     try {
-      const older = await bridge.messages.list(activeConvId.value, {
+      const older = await bridge.messages.list(convId, {
         limit: 50,
         before: [oldest.created_at, oldest.rowid],
       });
+      // 竞态守卫：切会话瞬间返回的旧会话分页直接丢弃（前插必须在守卫之后）
+      if (convId !== activeConvId.value) return;
       if (older.length < 50) hasMore.value = false;
       messages.value = [...older, ...messages.value];
     } catch (e) {
       console.error("加载更早消息失败:", e);
     } finally {
-      loadingMore.value = false;
+      // 过期请求不清 loadingMore：清了会放行新会话的重复 loadMore（双拉双前插）
+      if (convId === activeConvId.value) loadingMore.value = false;
     }
   }
 
@@ -464,7 +476,10 @@ export const useChatStore = defineStore("chat", () => {
     messages.value = [...messages.value, userMsg];
     // 回合锚点：本轮所有消息的下标基线（streaming 视图判定 + 超时确认的会话归属）
     turnFirstIdx.value = messages.value.length - 1;
-    sendingConvId.value = activeConvId.value;
+    // 本回合会话的闭包快照：失败回滚一律以此为键（await 在途期间用户可能已切走，
+    // activeConvId 会漂移；后续回合也可能占用 sendingConvId——本地快照不漂移）
+    const roundConvId = activeConvId.value;
+    sendingConvId.value = roundConvId;
 
     // 侧栏卡片：把该会话标记为「刚交互」（更新时间 + 置顶到列表上方）
     if (activeConvId.value) touchConversation(activeConvId.value);
@@ -483,15 +498,25 @@ export const useChatStore = defineStore("chat", () => {
       const detail = raw.includes("在途生成任务")
         ? "上一条消息仍在处理中，这条没有发出。等上一条完成或先停止生成，再点重试。"
         : `请求没有送达（${raw}）。这条消息未发出，可点重试。`;
-      if (activeConvId.value) {
-        setConvError(activeConvId.value, detail, "send_failed");
+      // 回滚与报错一律以发起回合的会话（roundConvId）为键，勿用失败时刻的
+      // activeConvId：发送在途时切到 B，横幅会挂到 B 头上；bgStreams 的快照不清
+      // 则切回 A 时恢复出无机制翻转的幽灵「生成中」（本 catch 已清超时保护），
+      // 输入被锁死、只能手点停止。
+      setConvError(roundConvId, detail, "send_failed");
+      bgStreams.value.delete(roundConvId);
+      // 回滚乐观插入的用户气泡（后端已拒，这行从未落库，留着会在切回时凭空消失；
+      // 已切走时 messages 是新会话列表，跳过整替避免无谓重渲）
+      if (roundConvId === activeConvId.value) {
+        messages.value = messages.value.filter((msg) => msg.id !== userMsg.id);
       }
-      // 回滚乐观插入的用户气泡（后端已拒，这行从未落库，留着会在切回时凭空消失）
-      messages.value = messages.value.filter((msg) => msg.id !== userMsg.id);
-      sending.value = false;
-      sendingConvId.value = null;
-      clearSendTimeout();
-      streamingText.value = "";
+      // 回合锚点仍归属本回合才收尾：在途期间用户可能在别的会话发起了新回合
+      //（sendingConvId 已易主）——不得误杀新回合的 sending/超时保护。
+      if (sendingConvId.value === roundConvId) {
+        sending.value = false;
+        clearTurnAnchors(); // 回合终结统一收尾（sendingConvId + turnFirstIdx）
+        clearSendTimeout();
+        streamingText.value = "";
+      }
     }
   }
 

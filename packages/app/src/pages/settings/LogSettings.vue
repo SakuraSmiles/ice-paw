@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // LogSettings.vue — 运行日志（设置→日志）
 // 读取磁盘日志文件末尾若干行，按级别高亮展示；支持手动刷新 / 自动刷新。
-import { ref, computed, onMounted, onUnmounted, nextTick } from "vue";
+import { ref, computed, onMounted, onUnmounted, onActivated, onDeactivated, nextTick } from "vue";
 import { bridge } from "../../api/bridge";
 import { formatTime } from "../../utils/time";
 import Switch from "../../components/common/Switch.vue";
@@ -110,6 +110,18 @@ function onAutoChange(on: boolean) {
 }
 
 onMounted(load);
+// keep-alive 生命周期（设置页挂在路由级 keep-alive 下，离开只触发 deactivated，
+// onUnmounted 不会跑）：自动刷新定时器若不在停用时清掉，会挂满整个应用生命
+// 周期——隐藏页每 5s 一次 invoke + 全量重渲，永不停止。停用即停、回页按
+// 开关状态重启；onUnmounted 仅作非缓存卸载的兜底。
+onDeactivated(() => {
+  if (autoTimer) { clearInterval(autoTimer); autoTimer = null; }
+});
+onActivated(() => {
+  if (autoRefresh.value && !autoTimer) {
+    autoTimer = window.setInterval(load, AUTO_INTERVAL_MS);
+  }
+});
 onUnmounted(() => {
   if (autoTimer) clearInterval(autoTimer);
 });

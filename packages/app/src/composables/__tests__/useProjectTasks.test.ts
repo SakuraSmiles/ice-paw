@@ -1,9 +1,10 @@
 // useProjectTasks.test.ts — 台账数据源 live 更新过滤锁定：
 // turn_ended 只认任务集内会话（流式 chunk 噪声被 kind 过滤零动作）、
-// delegation-started 无项目字段宁多刷、去抖 300ms 合并连发。
+// delegation-started 无项目字段宁多刷、去抖 300ms 合并连发、
+// keep-alive 停用暂停·激活恢复（路由级缓存监听器门控）。
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
-import { defineComponent, h } from "vue";
+import { defineComponent, h, KeepAlive, nextTick, ref } from "vue";
 import { mount, flushPromises } from "@vue/test-utils";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -31,16 +32,21 @@ function task(conv_id: string): ProjectTask {
   };
 }
 
-/** 宿主组件（composable 的 onMounted/onBeforeUnmount 需组件上下文） */
-function mountHost(pid = () => "p1") {
-  let api!: ReturnType<typeof useProjectTasks>;
-  const Host = defineComponent({
+/** 宿主组件工厂（composable 的 onMounted/onBeforeUnmount/keep-alive 钩子需组件
+ *  上下文）。全文件唯一 defineComponent——vue/one-component-per-file。 */
+function makeHost(pid: () => string, onApi: (api: ReturnType<typeof useProjectTasks>) => void) {
+  return defineComponent({
     setup() {
-      api = useProjectTasks(pid);
+      onApi(useProjectTasks(pid));
       return () => h("div");
     },
   });
-  mount(Host);
+}
+
+/** 直接挂载宿主并同步取回 api */
+function mountHost(pid = () => "p1") {
+  let api!: ReturnType<typeof useProjectTasks>;
+  mount(makeHost(pid, (a) => { api = a; }));
   return api;
 }
 
@@ -104,5 +110,33 @@ describe("useProjectTasks live 更新", () => {
     handlers.get("chat:delegation-started")!({ payload: { conversation_id: "他项目父会话" } });
     await vi.advanceTimersByTimeAsync(400);
     expect(mockInvoke).toHaveBeenCalledTimes(1);
+  });
+
+  it("keep-alive 停用期间事件不触发拉取，激活后恢复（路由级缓存监听器门控）", async () => {
+    const handlers = captureHandlers();
+    let api!: ReturnType<typeof useProjectTasks>;
+    const Host = makeHost(() => "p1", (a) => { api = a; });
+    const on = ref(true);
+    // 外层用函数式组件（文件内保持唯一 defineComponent）：KeepAlive 对
+    // Host↔null 切换触发 onDeactivated/onActivated
+    mount(() => h(KeepAlive, null, { default: () => (on.value ? h(Host) : null) }));
+    await flushPromises();
+    mockInvoke.mockClear();
+
+    // 离开项目详情页（keep-alive 缓存不卸载）：此后的回合结束/新委派零动作
+    on.value = false;
+    await nextTick();
+    handlers.get("session:event-appended")!({ payload: { kind: "turn_ended", conversation_id: "child-1" } });
+    handlers.get("chat:delegation-started")!({ payload: { conversation_id: "别处" } });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(mockInvoke).not.toHaveBeenCalled();
+
+    // 回到项目详情页：监听恢复（错过的终态翻转由页面层 onActivated 补拉兜底）
+    on.value = true;
+    await nextTick();
+    handlers.get("session:event-appended")!({ payload: { kind: "turn_ended", conversation_id: "child-1" } });
+    await vi.advanceTimersByTimeAsync(400);
+    expect(mockInvoke).toHaveBeenCalledTimes(1);
+    expect(api.tasks.value).toHaveLength(1);
   });
 });
