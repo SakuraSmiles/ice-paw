@@ -25,9 +25,7 @@ use sqlx::SqlitePool;
 use crate::context::history::{
     fold_repeated_tool_failures, load_history_with_window, sanitize_history,
 };
-use crate::context::os_context::build_os_context;
 use crate::context::pipeline::{PipelineContext, PipelineStage};
-use crate::context::system_prompt::build_system_prompt;
 use crate::context::template::render_template;
 use crate::context::token::{estimate_block_tokens, estimate_tokens, trim_history_to_budget};
 use crate::db::repo;
@@ -113,38 +111,57 @@ impl PipelineStage for OsContextStage {
                 .await
                 .ok()
                 .flatten();
-        ctx.os_context = build_os_context(
-            tz.as_deref(),
-            ctx.agent.workspace_path.as_deref(),
-            ctx.project_workspace.as_deref(),
-        );
 
-        // 读取项目级上下文（从 IcePaw 管理的 {workspace}/projects/{id}/ 目录，
+        // 项目级上下文两段（从 IcePaw 管理的 {workspace}/projects/{id}/ 目录，
         // 不从项目源码目录读——避免泄露、误删、污染用户项目）
-        if let Some(ref ctx_dir) = ctx.project_context_dir {
-            let dir_path = std::path::Path::new(ctx_dir);
+        let (project_md, conventions_md) = read_project_ctx(ctx.project_context_dir.as_ref()).await;
 
-            // project.md — 项目说明（技术栈、架构、业务背景）
-            let project_md = dir_path.join("project.md");
-            if let Ok(content) = tokio::fs::read_to_string(&project_md).await {
-                if !content.trim().is_empty() {
-                    ctx.os_context
-                        .push_str(&format!("\n\n## 项目说明\n{}", content.trim()));
-                }
+        // 先取出 owned 值再进闭包（闭包捕获 &ctx 会与下方的字段赋值借用冲突）
+        let agent_ws = ctx.agent.workspace_path.clone();
+        let project_ws = ctx.project_workspace.clone();
+        let build = move |now: chrono::DateTime<chrono::Utc>| {
+            let mut s = crate::context::os_context::build_os_context_at(
+                tz.as_deref(),
+                agent_ws.as_deref(),
+                project_ws.as_deref(),
+                now,
+            );
+            if let Some(md) = &project_md {
+                s.push_str(&format!("\n\n## 项目说明\n{md}"));
             }
+            if let Some(conv) = &conventions_md {
+                s.push_str(&format!("\n\n## 编码规范\n{conv}"));
+            }
+            s
+        };
 
-            // conventions.md — 编码规范（命名、格式、最佳实践）
-            let conv_md = dir_path.join("conventions.md");
-            if let Ok(content) = tokio::fs::read_to_string(&conv_md).await {
-                if !content.trim().is_empty() {
-                    ctx.os_context
-                        .push_str(&format!("\n\n## 编码规范\n{}", content.trim()));
-                }
-            }
-        }
+        // 生产版本：真实当前时间（秒级易变——每回合必变，是 system 前缀缓存的
+        // 已知第一块 miss 来源，OpenAI 系按 1024 token 块对齐只 miss 首块）。
+        ctx.os_context = build(chrono::Utc::now());
+
+        // ③ 可观测化稳定核：时间行冻结为 EPOCH 后哈希——工作目录/时区/
+        // project.md/conventions.md 任一真实环境段变化才变（miss 归因比对用）。
+        let stable = build(crate::context::os_context::OS_HASH_EPOCH);
+        ctx.os_stable_hash = Some(crate::context::anatomy::fnv1a_12hex(&[&stable]));
 
         Ok(())
     }
+}
+
+/// 读取项目上下文两段（project.md / conventions.md，trim 非空才 Some）。
+async fn read_project_ctx(ctx_dir: Option<&String>) -> (Option<String>, Option<String>) {
+    let Some(ctx_dir) = ctx_dir else {
+        return (None, None);
+    };
+    let dir_path = std::path::Path::new(ctx_dir);
+    async fn read_nonempty(dir: &std::path::Path, name: &str) -> Option<String> {
+        let content = tokio::fs::read_to_string(dir.join(name)).await.ok()?;
+        (!content.trim().is_empty()).then(|| content.trim().to_string())
+    }
+    (
+        read_nonempty(dir_path, "project.md").await,
+        read_nonempty(dir_path, "conventions.md").await,
+    )
 }
 
 // =========================================================================
@@ -170,20 +187,18 @@ impl PipelineStage for SystemPromptStage {
     }
 
     async fn execute(&self, ctx: &mut PipelineContext) -> AppResult<()> {
-        ctx.system_prompt = build_system_prompt(
+        // ③ 可观测化：段化构造（joined() 与历史拼接路径字节等价——
+        // system_prompt.rs 测试锁矩阵）。delegation/word_style 移入段结构，
+        // 追加序不变（os_context 之后 = 历史行为）。
+        let mut parts = crate::context::system_prompt::SystemPromptParts::build(
             ctx.rendered_system_prompt.as_deref(),
             &ctx.agent.system_prompt,
             ctx.tools_enabled,
             &ctx.os_context,
         );
         // MA-1：可调度 agent 清单注入（仅 kind='chat' 会话由 runner 填充；顺位在
-        // 工具提示之后、os_context 之前的语义由调用方文本保证——此处只做追加）。
-        if let Some(hint) = ctx.delegation_hint.take() {
-            ctx.system_prompt = Some(match ctx.system_prompt.take() {
-                Some(s) => format!("{s}\n\n{hint}"),
-                None => hint,
-            });
-        }
+        // 工具提示之后、os_context 之前/之后的语义由调用方文本保证——此处进段结构）。
+        parts.delegation_hint = ctx.delegation_hint.take();
         // D12：Word 文档样式偏好注入（agent.yaml `word_style_profile` 自由文字块）。
         // 原文进独立小节，不解析不校验——agent 写 docx 时据此选字体/字号/配色/
         // 表格样式（具体格式由工具层 edit_docx/set_table_element 等落地）。
@@ -192,12 +207,10 @@ impl PipelineStage for SystemPromptStage {
             .take()
             .filter(|s| !s.trim().is_empty())
         {
-            let section = format!("## Word 文档样式偏好\n\n{profile}");
-            ctx.system_prompt = Some(match ctx.system_prompt.take() {
-                Some(s) => format!("{s}\n\n{section}"),
-                None => section,
-            });
+            parts.word_style = Some(format!("## Word 文档样式偏好\n\n{profile}"));
         }
+        ctx.system_prompt = parts.joined();
+        ctx.system_parts = Some(parts);
         Ok(())
     }
 }

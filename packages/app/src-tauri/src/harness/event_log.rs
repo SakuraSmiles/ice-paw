@@ -100,6 +100,7 @@ pub mod kind {
     pub const MODEL_SWITCH: &str = "model_switch";
     pub const CROSS_SESSION_MESSAGE: &str = "cross_session_message";
     pub const CROSS_SESSION_MESSAGE_SETTLED: &str = "cross_session_message_settled";
+    pub const CONTEXT_BREAKDOWN: &str = "context_breakdown";
 }
 
 // =========================================================================
@@ -459,6 +460,66 @@ pub struct CrossSessionMessageSettledPayload {
     pub by: String,
 }
 
+/// 上下文组成清单（③ 可观测化）——一条事件装整回合，构建期快照落库
+/// （turn_context 同类：非消息行事实，derive skip）。
+///
+/// `segments` 是 **Model-visible 口径**：Memory 折叠 / TokenWindow 裁剪 /
+/// ModalCapability 剥图之后的终值（context/anatomy.rs 事后聚合）。est 全部
+/// 是本地估算（CJK 1/字、其余 ÷4，JSON 偏低估）——与 `actual_prompt_tokens`
+/// 的偏差是已知估算债，展示侧必须披露，勿当 provider 计数用。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextBreakdownPayload {
+    #[serde(default = "version_one")]
+    pub v: u8,
+    pub segments: Vec<ContextBreakdownSegment>,
+    /// 各段估算之和
+    pub est_total: u64,
+    /// provider 回传的回合**首轮** prompt_tokens 真值（None = 无 usage /
+    /// 中途失败；后续轮 prompt 单看 `rounds`）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actual_prompt_tokens: Option<u64>,
+    pub fingerprint: ContextBreakdownFingerprint,
+    /// 逐轮请求序列（每个 LLM 请求一条）
+    pub rounds: Vec<ContextBreakdownRound>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextBreakdownSegment {
+    /// 段 label（词表见 context::anatomy：system_* 五段 / tool_defs / summary /
+    /// history / user_message / user_images）
+    pub label: String,
+    pub est: u64,
+    /// 可选计数（工具数/历史消息数/图片数）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub count: Option<u32>,
+}
+
+/// 请求体稳定指纹三元组（各 12 hex，anatomy::fnv1a_12hex）。跨回合 miss
+/// 归因的比对基线：下回合轮 0 与本条比对，谁变了归谁。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextBreakdownFingerprint {
+    /// 工具列表（轮 0 出口序；逐轮子集抖动看 rounds[i].tools_hash）
+    pub tools: String,
+    /// system 稳定段（persona+tool_hint+delegation+word_style，不含 os）
+    pub system_stable: String,
+    /// os_context 稳定核（时间行冻结 EPOCH 后——工作目录/时区/project.md 变才变）
+    pub os_stable: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextBreakdownRound {
+    /// 本轮请求 prompt_tokens 真值（provider 回传 usage）
+    pub prompt: u64,
+    /// 其中缓存命中部分（0 = 全 miss）
+    pub cached: u64,
+    /// 本轮实际发送的工具列表指纹（12 hex）
+    pub tools_hash: String,
+    /// 本轮请求前是否有注入（BeforeLlm 钩子 / 预算提醒——前缀外变更源）
+    pub injected: bool,
+    /// 本轮是否发生过降级链换档（缓存命名空间切换）
+    pub model_switched: bool,
+}
+
 // =========================================================================
 // Emitters（全部 warn-only；inline await，禁止 spawn）
 // =========================================================================
@@ -510,6 +571,25 @@ pub async fn log_turn_context(pool: &SqlitePool, ctx: &EventCtx, payload: &TurnC
         pool,
         ctx,
         kind::TURN_CONTEXT,
+        &ctx.agent_actor(),
+        None,
+        payload,
+    )
+    .await;
+}
+
+/// 上下文组成清单（actor=agent，message_id=None：回合级事实不挂单条消息）。
+/// emit 单点在 stream_loop wrapper（loop_engine）——19 个 finalize 调用点的
+/// 公共唯一下游，零签名扰动；turn_ended 已在 inner finalize 内先落库。
+pub async fn log_context_breakdown(
+    pool: &SqlitePool,
+    ctx: &EventCtx,
+    payload: &ContextBreakdownPayload,
+) {
+    append_event(
+        pool,
+        ctx,
+        kind::CONTEXT_BREAKDOWN,
         &ctx.agent_actor(),
         None,
         payload,
@@ -1405,6 +1485,83 @@ mod tests {
             Some("conv-child-1")
         );
         assert_eq!(last.items[1].task_conversation_id, None);
+    }
+
+    #[tokio::test]
+    async fn context_breakdown_round_trip() {
+        let pool = fresh_pool().await;
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
+        seed(&pool).await;
+
+        log_context_breakdown(
+            &pool,
+            &ctx(),
+            &ContextBreakdownPayload {
+                v: 1,
+                segments: vec![
+                    ContextBreakdownSegment {
+                        label: "system_persona".into(),
+                        est: 120,
+                        count: None,
+                    },
+                    ContextBreakdownSegment {
+                        label: "tool_defs".into(),
+                        est: 3_400,
+                        count: Some(18),
+                    },
+                ],
+                est_total: 3_520,
+                actual_prompt_tokens: Some(4_096),
+                fingerprint: ContextBreakdownFingerprint {
+                    tools: "aaaabbbbcccc".into(),
+                    system_stable: "ddddddddeeee".into(),
+                    os_stable: "ffff00001111".into(),
+                },
+                rounds: vec![
+                    ContextBreakdownRound {
+                        prompt: 4_096,
+                        cached: 0,
+                        tools_hash: "aaaabbbbcccc".into(),
+                        injected: false,
+                        model_switched: false,
+                    },
+                    ContextBreakdownRound {
+                        prompt: 6_100,
+                        cached: 4_096,
+                        tools_hash: "aaaabbbbcccd".into(),
+                        injected: true,
+                        model_switched: true,
+                    },
+                ],
+            },
+        )
+        .await;
+
+        let back: ContextBreakdownPayload = sole_event_payload(&pool).await;
+        assert_eq!(back.v, 1);
+        assert_eq!(back.segments.len(), 2);
+        assert_eq!(back.segments[1].count, Some(18));
+        assert_eq!(back.est_total, 3_520);
+        assert_eq!(back.actual_prompt_tokens, Some(4_096));
+        assert_eq!(back.fingerprint.tools, "aaaabbbbcccc");
+        assert_eq!(back.rounds.len(), 2);
+        assert_eq!(back.rounds[1].cached, 4_096);
+        assert!(back.rounds[1].model_switched);
+
+        // 旧 / 局部 JSON：缺 v、actual_prompt_tokens、count 仍可解析（可选字段
+        // serde default —— 前端旧轮次与降级路径不炸）
+        let minimal: ContextBreakdownPayload = serde_json::from_str(
+            r#"{"segments":[{"label":"history","est":900}],"est_total":900,
+                "fingerprint":{"tools":"a","system_stable":"b","os_stable":"c"},
+                "rounds":[{"prompt":900,"cached":900,"tools_hash":"a","injected":false,"model_switched":false}]}"#,
+        )
+        .unwrap();
+        assert_eq!(minimal.v, 1, "缺 v 默认 1");
+        assert_eq!(minimal.actual_prompt_tokens, None);
+        assert_eq!(minimal.segments[0].count, None);
     }
 
     #[tokio::test]

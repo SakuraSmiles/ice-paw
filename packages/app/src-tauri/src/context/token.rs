@@ -109,6 +109,16 @@ pub fn estimate_message_tokens(m: &ChatMessage) -> usize {
     m.content.iter().map(estimate_block_tokens).sum::<usize>() + MESSAGE_OVERHEAD
 }
 
+/// 估算单个工具定义（ToolDef）的 token 数（③ 可观测化——历史盲区首次补上）。
+///
+/// name + description + parameters JSON 序列化文本之和 + 结构开销。工具定义
+/// 每轮全量随请求发送但从未进入任何估算（TokenWindowStage 注释承认的缺口，
+/// 工具密集 agent 可达数 K token）——上下文体检的 `tool_defs` 段用。
+/// ⚠️ JSON schema 估算按普通文本走（低估已知，展示侧带偏差披露）。
+pub fn estimate_tool_def_tokens(def: &crate::infra::protocol::ToolDef) -> usize {
+    estimate_tokens(&def.name) + estimate_tokens(&def.description) + estimate_tokens(&def.parameters.to_string()) + TOOL_BLOCK_OVERHEAD
+}
+
 /// 估算一组 `ChatMessage` 的总 token 数（block 级，覆盖工具 / 图片 / 思考块）。
 ///
 /// `messages` 为空时返回 0。空数组属于「正常」输入，不需要返回错误。
@@ -360,5 +370,35 @@ mod tests {
         assert_eq!(b.fold_target_tokens(), 4_000); // 40%
                                                    // trigger 必须 > target，否则折叠逻辑无意义
         assert!(b.fold_trigger_tokens() > b.fold_target_tokens());
+    }
+
+    // ---- ③ 可观测化：工具定义估算 ----
+
+    #[test]
+    fn estimate_tool_def_tokens_sane_bounds() {
+        use crate::infra::protocol::ToolDef;
+        let minimal = ToolDef {
+            name: "f".into(),
+            description: "d".into(),
+            parameters: serde_json::json!({}),
+        };
+        // 下限：正文非零 + 8 结构开销
+        assert!(estimate_tool_def_tokens(&minimal) >= 8 + 2);
+        // 长 description 单调增加
+        let verbose = ToolDef {
+            description: "d".repeat(400),
+            ..minimal.clone()
+        };
+        assert!(estimate_tool_def_tokens(&verbose) > estimate_tool_def_tokens(&minimal));
+        // schema 越复杂越大（JSON 序列化文本参与估算）
+        let schemafull = ToolDef {
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": { "path": {"type": "string", "description": "目标文件路径"}, "content": {"type": "string"} },
+                "required": ["path", "content"]
+            }),
+            ..minimal.clone()
+        };
+        assert!(estimate_tool_def_tokens(&schemafull) > estimate_tool_def_tokens(&minimal));
     }
 }

@@ -26,6 +26,7 @@ pub(crate) fn emit_intermediate_round_state(
 
 /// `chat:budget` 事件发射 — 会话级预算状态（前端 HUD / 续期 toast）。
 /// 同 round-state 模式：同步 emit、失败仅 warn、无 spawn（事件 inline 纪律）。
+/// `miss_hint`：本轮全 miss 归因 slug（仅常规更新轮带；续期/终态轮传 None）。
 #[allow(clippy::too_many_arguments)] // 与 payload 字段一一对应，聚合反而多一层搬运
 pub(crate) fn emit_budget_state(
     emitter: &dyn crate::harness::r#loop::emitter::LoopEmitter,
@@ -39,6 +40,7 @@ pub(crate) fn emit_budget_state(
     renewal_index: u32,
     max_renewals: u32,
     renewed: bool,
+    miss_hint: Option<&[String]>,
 ) {
     let payload = ChatBudgetPayload {
         conversation_id: conv_id.to_string(),
@@ -51,6 +53,9 @@ pub(crate) fn emit_budget_state(
         max_renewals,
         renewed,
         round,
+        miss_hint: miss_hint
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_vec()),
     };
     crate::harness::r#loop::emitter::emit_ser(emitter, "chat:budget", &payload);
 }

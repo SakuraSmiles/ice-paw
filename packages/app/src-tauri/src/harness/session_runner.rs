@@ -310,6 +310,29 @@ pub(crate) async fn run_agent_turn(
         },
     );
 
+    // --- ③ 可观测化：上下文组成聚合 + 跨回合 miss 归因基线 ---
+    // anatomy 取 Pipeline 终态（Model-visible 口径——Memory/TokenWindow/Modal
+    // 裁剪后终值）；基线查上一回合 context_breakdown（此刻本回合事件尚未落库，
+    // last-wins 必是上回合），warn-only：查不到/坏 JSON 降级无基线（归因走
+    // first_request，诚实降级不阻塞对话）。
+    let prev_baseline = match repo::session_event::last_breakdown_payload(pool, &conv_id).await {
+        Ok(Some(json)) => {
+            crate::harness::r#loop::turn_cost::PrevBaseline::from_payload(&json)
+        }
+        Ok(None) => None,
+        Err(e) => {
+            tracing::warn!(
+                target: "ice_paw.chat",
+                "读取上回合 context_breakdown 基线失败（降级无基线）: {e}"
+            );
+            None
+        }
+    };
+    let context_anatomy = crate::harness::r#loop::turn_cost::ContextAnatomyInput::from_anatomy(
+        crate::context::anatomy::build_anatomy(&pipeline_ctx),
+        prev_baseline,
+    );
+
     // 摘要注入事件（前端暂未 listen，保留面向未来）
     if let Some(event) = pipeline_ctx.summary_event {
         crate::harness::r#loop::emitter::emit_ser(
@@ -646,6 +669,7 @@ pub(crate) async fn run_agent_turn(
         project_id: conv.project_id.clone(),
         hooks,
         fallback,
+        context_anatomy,
         done_tx: Some(done_tx),
     });
     Ok(done_rx)
@@ -753,6 +777,8 @@ pub(crate) struct StreamLoopInput {
     pub hooks: HookConfig,
     /// 降级链（B2-S2）：透传进 LoopContext，换档发生在 stream_with_retry 重试现场
     pub fallback: crate::harness::r#loop::fallback::FallbackPlan,
+    /// ③ 可观测化：Pipeline 终态 anatomy + 跨回合基线（进 LoopConfig → turn_cost）
+    pub context_anatomy: crate::harness::r#loop::turn_cost::ContextAnatomyInput,
     pub done_tx: Option<tokio::sync::oneshot::Sender<TurnSummary>>,
 }
 
@@ -791,6 +817,7 @@ pub(crate) fn spawn_stream_loop(input: StreamLoopInput) {
         project_id,
         hooks,
         fallback,
+        context_anatomy,
         done_tx,
     } = input;
     tokio::spawn(async move {
@@ -859,6 +886,7 @@ pub(crate) fn spawn_stream_loop(input: StreamLoopInput) {
             query,
             call_history,
             hooks,
+            context_anatomy,
         };
         let mut ctx = crate::harness::loop_engine::LoopContext::new(
             config,

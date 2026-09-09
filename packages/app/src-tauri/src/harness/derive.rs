@@ -11,7 +11,8 @@
 //!   （自动续写全文覆写）内容取最后一条、位置取首现
 //! - `message_error` / `message_discarded`：错误行空内容 / 占位已删，均不进回放
 //! - `turn_context` / `turn_ended` / `modal_adapted` / `hook_injected` /
-//!   `attachment_stored` / `summary_*`：非消息行事实，不进回放
+//!   `attachment_stored` / `summary_*` / `context_breakdown`（③ 上下文组成
+//!   快照）：非消息行事实，不进回放
 //! - 未知 kind（未来词表扩展）与 payload 解析失败：跳过并记入 `issues`
 //!   （对账侧作为差异上报，不静默吞）
 //!
@@ -216,14 +217,16 @@ pub fn derive_history(events: &[SessionEventRow]) -> DeriveResult {
             // 错误行（空内容双方不可见）/ 已删占位 → 不进回放。
             // 其余 kind 均非消息行事实。plan_updated（计划快照）/ model_switch
             // （换档事实）/ cross_session_message 族（MA-3 来件排队——消费时另有
-            // user_message）同为非消息行——不容忍会记 DeriveIssue → reconcile 出
-            // DERIVE_ISSUE → 永久污染对账报告。
+            // user_message）/ context_breakdown（③ 可观测化：构建期快照，
+            // turn_context 同类）同为非消息行——不容忍会记 DeriveIssue →
+            // reconcile 出 DERIVE_ISSUE → 永久污染对账报告。
             // （model_switch 曾长期缺席此臂：生产事件已写入却恒产 DERIVE_ISSUE，
             // 2026-09-09 MA-3 探查实锤，随本批修复。）
             "message_error" | "message_discarded" | "turn_context" | "turn_ended"
             | "modal_adapted" | "hook_injected" | "attachment_stored" | "summary_created"
             | "summary_updated" | "tool_execution" | "plan_updated" | "model_switch"
-            | "cross_session_message" | "cross_session_message_settled" => {}
+            | "cross_session_message" | "cross_session_message_settled"
+            | "context_breakdown" => {}
             other => result.issues.push(DeriveIssue {
                 seq,
                 kind: other.to_string(),
@@ -645,6 +648,24 @@ mod tests {
         ];
         let out = derive_history(&events);
         assert!(out.messages.is_empty());
+        assert!(out.issues.is_empty(), "issues: {:?}", out.issues);
+    }
+
+    /// context_breakdown（③ 上下文组成快照）是构建期元数据：非消息行事实，
+    /// 回放器静默跳过（turn_context 同类）。
+    #[test]
+    fn derive_context_breakdown_ignored() {
+        let events = vec![
+            row(1, "user_message", Some("m-u1"), r#"{"v":1,"content":"q","blocks":[]}"#.into()),
+            row(
+                2,
+                "context_breakdown",
+                None,
+                r#"{"v":1,"segments":[{"label":"history","est":900,"count":4}],"est_total":900,"fingerprint":{"tools":"a","system_stable":"b","os_stable":"c"},"rounds":[{"prompt":900,"cached":0,"tools_hash":"a","injected":false,"model_switched":false}]}"#.into(),
+            ),
+        ];
+        let out = derive_history(&events);
+        assert_eq!(out.messages.len(), 1, "只有 user 行");
         assert!(out.issues.is_empty(), "issues: {:?}", out.issues);
     }
 }

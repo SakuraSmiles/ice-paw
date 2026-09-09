@@ -142,6 +142,14 @@ pub(crate) async fn stream_loop(ctx: &mut LoopContext, observable: &mut RoundSta
     );
     let writer_for_inner = writer.clone();
     stream_loop_inner(ctx, observable, writer_for_inner).await;
+    // === ③ 可观测化：回合级 context_breakdown 单点落库 ===
+    // 放 inner 返回后（其内部各 finalize 已 emit turn_ended——事件先于本条落库，
+    // 「turn_ended 必须先于 cleanup unregister」硬规则不破）；零请求回合
+    // （provider 未回任何 usage）take_payload 返回 None 安静跳过。
+    if let Some(payload) = ctx.turn_cost.take_payload() {
+        let ev = EventCtx::new(&ctx.conv_id, &ctx.user_msg_id, &ctx.agent_id);
+        event_log::log_context_breakdown(&ctx.pool, &ev, &payload).await;
+    }
     // REQ-XC-004: 不论退出路径，都关闭 BatchWriter 触发 final flush
     writer.shutdown().await;
     let _ = handle.await;
@@ -404,6 +412,10 @@ async fn stream_loop_inner(
             None
         };
 
+        // ③ 可观测化：逐轮工具指纹（轮 0 兼记 tool_defs 段估算——相关性子集
+        // 逐轮抖动是缓存 miss 的真实来源，指纹比对自会归因）。
+        ctx.turn_cost.begin_round(tools.as_deref());
+
         // round_* 在下方 stream_with_retry 的 Ok 分支赋值（其余分支均 return），
         // 故无需初始化——编译器可证明到达后续使用前必然已赋值。
         let round_text: String;
@@ -413,6 +425,8 @@ async fn stream_loop_inner(
         let tool_calls_map: HashMap<String, CollectedToolCall>;
         // 本轮 provider 返回的 completion_tokens（用于即时落盘该 assistant 的 token_count）
         let mut round_completion_tokens: Option<u32> = None;
+        // ③ 可观测化：本轮 miss 归因 slug（sr.usage 分支填；随下方 emit_budget_state 推前端）
+        let mut round_miss_hint: Option<Vec<String>> = None;
 
         // 第 2 轮起，在消息中注入剩余轮次信息（帮助 LLM 决定是否继续调工具）。
         // 仅当上一轮真的有工具调用时注入——续写链（前一轮纯文本截断）下不注入，
@@ -502,6 +516,9 @@ async fn stream_loop_inner(
             .await;
         }
 
+        // ③ 可观测化：注入标志在 move 前捕获（stream_with_retry 吃走 Option<String>）。
+        let round_injected_flag = round_injected.is_some();
+
         // === RetryState 驱动的重试循环（已抽到 stream_with_retry）===
         match stream_with_retry(
             ctx,
@@ -542,6 +559,13 @@ async fn stream_loop_inner(
                         cumulative_cached_tokens.saturating_add(u.cached_tokens as usize);
                     cumulative_prompt_tokens =
                         cumulative_prompt_tokens.saturating_add(u.prompt_tokens as usize);
+                    // ③ 可观测化：逐轮序列 + 全 miss 归因（门槛 prompt≥1024 且
+                    // cached==0；slug 词表见 turn_cost 模块）
+                    round_miss_hint = ctx.turn_cost.record_usage(
+                        u.prompt_tokens as u64,
+                        u.cached_tokens as u64,
+                        round_injected_flag,
+                    );
                     collected_usage = Some(u);
                 }
                 // 【彻底重构】token_count 由本轮 finalize_assistant_message 即时写入
@@ -586,7 +610,8 @@ async fn stream_loop_inner(
         let round_gen_ms = round_timer.elapsed_ms();
         observable.elapsed_ms = round_gen_ms;
         emit_intermediate_round_state(ctx.emitter.as_ref(), &ctx.conv_id, observable);
-        // 预算 HUD 数据源：本轮 usage 累计后的会话级状态（renewed=false 常规更新）
+        // 预算 HUD 数据源：本轮 usage 累计后的会话级状态（renewed=false 常规更新）；
+        // ③ 可观测化：常规轮携带 miss 归因（前端 BudgetPill chip）
         emit_budget_state(
             ctx.emitter.as_ref(),
             &ctx.conv_id,
@@ -599,6 +624,7 @@ async fn stream_loop_inner(
             budget_renewals,
             ctx.budget.max_budget_renewals,
             false,
+            round_miss_hint.as_deref(),
         );
         // 【改】progress_text 跨轮累积，仅供停滞检测（不持久化）
         progress_text.push_str(&round_text);
@@ -716,6 +742,7 @@ async fn stream_loop_inner(
                     budget_renewals,
                     ctx.budget.max_budget_renewals,
                     true,
+                    None,
                 );
             } else if !budget_wrapup_used {
                 // S8-4 触顶文本收尾（OpenCode 输入）：续期用尽时不硬停——抬一次
@@ -751,6 +778,7 @@ async fn stream_loop_inner(
                     budget_renewals,
                     ctx.budget.max_budget_renewals,
                     false,
+                    None,
                 );
                 finalize_guard_logged(
                     &ctx.pool,

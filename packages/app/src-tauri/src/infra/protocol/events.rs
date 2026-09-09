@@ -128,6 +128,12 @@ pub struct ChatBudgetPayload {
     pub renewed: bool,
     /// 当前工具轮数（0 起，与 round-state 对齐）
     pub round: u32,
+    /// 本轮缓存全 miss 的归因 slug 数组（③ 可观测化；None/空 = 本轮非全 miss
+    /// 或未归因，不出 chip）。**本地推断非 provider 报告**——词表与判定表在
+    /// `harness/loop/turn_cost.rs::attribute_miss`，前端文案住 missHint.ts。
+    /// 瞬态信号（随 chat:budget 推送，不入库）；落库事实走 context_breakdown 事件。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub miss_hint: Option<Vec<String>>,
 }
 
 /// `chat:retrying` 事件 payload — 通知前端正在重试

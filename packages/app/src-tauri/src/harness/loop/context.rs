@@ -73,6 +73,12 @@ pub(crate) struct LoopConfig {
 
     // ---- 对话钩子 ----
     pub hooks: HookConfig,
+
+    // ---- ③ 可观测化：上下文组成 + miss 归因 ----
+    /// Pipeline 后 `build_anatomy` 的段级产物 + 跨回合基线（session_runner
+    /// 组装；Default 空 = 散落构造，归因诚实降级）。经 [`LoopContext::new`]
+    /// 转入 `turn_cost` 记录器。
+    pub context_anatomy: crate::harness::r#loop::turn_cost::ContextAnatomyInput,
 }
 
 /// 运行时模型档位（B2-S1 拆出）：provider 适配器 + 凭据 + 模型名 + 输出上限。
@@ -111,6 +117,10 @@ pub(crate) struct LoopContext {
     /// 降级链状态（B2-S2）：cursor 单调前进 / 激活档位更新发生在换档时
     /// （B2-S3）。空链 = 无降级（legacy 行为，换档尝试天然 no-op）。
     pub fallback: crate::harness::r#loop::fallback::FallbackPlan,
+    /// ③ 可观测化：回合级开销记录器（工具指纹逐轮 / usage 逐轮 / miss 归因 /
+    /// context_breakdown 组装）。从 `config.context_anatomy` 构造；emit 单点在
+    /// `stream_loop` wrapper（inner 返回后 `into_payload` → `log_context_breakdown`）。
+    pub turn_cost: crate::harness::r#loop::turn_cost::TurnCostRecorder,
 }
 
 impl std::ops::Deref for LoopContext {
@@ -129,6 +139,7 @@ impl LoopContext {
         messages: Vec<ChatMessage>,
         fallback: crate::harness::r#loop::fallback::FallbackPlan,
     ) -> Self {
+        let mut config = config;
         let RuntimeModel {
             provider,
             api_key,
@@ -136,6 +147,11 @@ impl LoopContext {
             asst_model,
             max_tokens,
         } = model;
+        // anatomy 从 config 搬出（非 clone：segments/基线只此一份，记录器独占）
+        // config 此后只进 Deref 不可变面——take 不破坏其「构造后不可变」约定。
+        let turn_cost = crate::harness::r#loop::turn_cost::TurnCostRecorder::new(std::mem::take(
+            &mut config.context_anatomy,
+        ));
         Self {
             config,
             provider,
@@ -147,6 +163,7 @@ impl LoopContext {
             auth_session,
             messages,
             fallback,
+            turn_cost,
         }
     }
 }

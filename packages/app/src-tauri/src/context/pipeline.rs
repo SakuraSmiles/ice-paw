@@ -129,9 +129,16 @@ pub struct PipelineContext {
 
     // ---- Stage 2: OS 上下文 ----
     pub os_context: String,
+    /// ③ 可观测化：os_context 的**稳定核**指纹（时间行冻结为 EPOCH 后哈希；
+    /// 工作目录/时区/project.md 等真实环境段变化才变）。OsContextStage 填充，
+    /// `build_anatomy`（context/anatomy.rs）消费——缓存 miss 归因比对用。
+    pub os_stable_hash: Option<String>,
 
     // ---- Stage 3: System prompt 构造结果 ----
     pub system_prompt: Option<String>,
+    /// ③ 可观测化：SystemPromptStage 的段级产物（五段组成 + 稳定段哈希），
+    /// `build_anatomy` 消费。joined() = `system_prompt`（字节等价，测试锁）。
+    pub system_parts: Option<crate::context::system_prompt::SystemPromptParts>,
 
     // ---- Stage 4: History 转换结果 ----
     pub history_messages: Vec<ChatMessage>,
@@ -194,7 +201,9 @@ impl PipelineContext {
             rendered_system_prompt: None,
             rendered_user_prefix: String::new(),
             os_context: String::new(),
+            os_stable_hash: None,
             system_prompt: None,
+            system_parts: None,
             history_messages: Vec::new(),
             summary: None,
             summary_event: None,

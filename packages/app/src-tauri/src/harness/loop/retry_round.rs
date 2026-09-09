@@ -66,6 +66,9 @@ async fn switch_and_reset(
     }
     *retry_state = RetryState::new();
     last_retry_reason.clear();
+    // ③ 可观测化：换档 = 缓存命名空间切换，标记进下一个 usage 记录
+    //（context_breakdown 逐轮 model_switched 位 + miss 归因 slug）。
+    ctx.turn_cost.mark_model_switched();
     true
 }
 

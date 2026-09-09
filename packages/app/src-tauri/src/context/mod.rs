@@ -11,7 +11,9 @@
 //! - `pipeline_tests` — Pipeline 单元测试（M2.2 拆分自 pipeline.rs）
 //! - `memory`         — MemoryStage（B04，独立维护）
 //! - `token`          — 上下文预算 / token 估算
+//! - `anatomy`        — 上下文组成清单（③ 可观测化：体检 + miss 归因指纹）
 
+pub(crate) mod anatomy;
 pub(crate) mod history;
 pub(crate) mod memory;
 pub(crate) mod os_context;

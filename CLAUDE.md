@@ -211,7 +211,7 @@ agent 调用 `propose_config_change` 工具提出创建/修改 agent 提案 → 
 ### 会话事件日志（Phase 0+1+2A 已发布；Phase 2B 退役三件套已落地 2026-08-17）
 单一 append-only 事件日志基石（锁定愿景：统一 session / 多 agent 图协作 / 轨迹可还原）。
 - **表**：migration 44 `session_events`（seq INSERT 子查询原子 + UNIQUE 兜底；message_id 故意无 FK——事件须活得比被删占位行久）
-- **词表 13 kind** + typed emitters：`harness/event_log.rs`（EventCtx + warn-only 影子定位）
+- **词表 14 kind** + typed emitters：`harness/event_log.rs`（EventCtx + warn-only 影子定位；14th = `context_breakdown` ③ 可观测化——一条事件装整回合的段级组成+指纹+逐轮 usage 序列，emit 单点在 stream_loop wrapper（inner 返回后，恒落 turn_ended 之后），derive skip 臂同 turn_context 构建期元数据）
 - **接线全退出路径**：chat_cmd/memory/loop_engine/cleanup(PersistOutcome)/retry_round/tool_executor/stages；**硬规则：事件 inline `.await` 禁 spawn，turn_ended 必须先于 cleanup() unregister 落库**
 - **supersede**：自动续写同 message_id 多条 assistant_message，回放 last-wins
 - **导出**：`export_session_trajectory` 命令 → JSONL（docs/backend-api-reference.md）

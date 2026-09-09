@@ -33,4 +33,5 @@ pub(crate) mod fallback;
 pub(crate) mod reason;
 pub(crate) mod retry_round;
 pub(crate) mod stuck_detect;
+pub(crate) mod turn_cost;
 pub(crate) mod token_usage;

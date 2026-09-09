@@ -117,6 +117,26 @@ pub async fn last_plan_payload(pool: &SqlitePool, session_id: &str) -> AppResult
     Ok(row.map(|(p,)| p))
 }
 
+/// ③ 可观测化：最后一次 `context_breakdown` 的 payload（跨回合 miss 归因基线）。
+///
+/// 每回合一条（stream_loop wrapper 落库）→ last-wins 取最新。调用方
+/// warn-only 消费：JSON 解析失败按无基线降级（归因走 first_request，
+/// 诚实降级不污染）。
+pub async fn last_breakdown_payload(
+    pool: &SqlitePool,
+    session_id: &str,
+) -> AppResult<Option<String>> {
+    let row: Option<(String,)> = sqlx::query_as(
+        "SELECT payload FROM session_events
+          WHERE session_id = ? AND kind = 'context_breakdown'
+          ORDER BY seq DESC LIMIT 1",
+    )
+    .bind(session_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(p,)| p))
+}
+
 /// @引用「会话名片」投影：全部成功工具调用的 `(tool_name, arguments)`。
 ///
 /// json_extract 在 SQL 侧只取两字段——不拉 `$.result` 正文（大会话的工具
@@ -746,6 +766,75 @@ mod tests {
         .execute(&pool)
         .await;
         assert!(err.is_err(), "重复 seq 必须被 UNIQUE 索引拒绝");
+    }
+
+    /// ③ 可观测化：last_breakdown_payload 取最新一条（last-wins）且不串会话、
+    /// 不混其他 kind。
+    #[tokio::test]
+    async fn last_breakdown_payload_is_last_wins_and_scoped() {
+        let pool = fresh_pool().await;
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
+        seed_agent(&pool).await;
+        seed_conversation(&pool, "conv-1").await;
+        seed_conversation(&pool, "conv-2").await;
+
+        append(&pool, "conv-1", "turn_context", "agent:agent-1", None, None, "{}")
+            .await
+            .unwrap();
+        append(
+            &pool,
+            "conv-1",
+            "context_breakdown",
+            "agent:agent-1",
+            None,
+            None,
+            r#"{"v":1,"first":true}"#,
+        )
+        .await
+        .unwrap();
+        append(
+            &pool,
+            "conv-1",
+            "context_breakdown",
+            "agent:agent-1",
+            None,
+            None,
+            r#"{"v":1,"first":false}"#,
+        )
+        .await
+        .unwrap();
+        // 另一会话的同 kind 事件不得污染 conv-1 的基线
+        append(
+            &pool,
+            "conv-2",
+            "context_breakdown",
+            "agent:agent-1",
+            None,
+            None,
+            r#"{"v":1,"first":"other-conv"}"#,
+        )
+        .await
+        .unwrap();
+
+        let p = last_breakdown_payload(&pool, "conv-1").await.unwrap();
+        assert_eq!(p.as_deref(), Some(r#"{"v":1,"first":false}"#), "取最新一条");
+        // 无 breakdown 会话（只有其他 kind）返回 None，不报错
+        seed_conversation(&pool, "conv-3").await;
+        append(&pool, "conv-3", "turn_context", "agent:agent-1", None, None, "{}")
+            .await
+            .unwrap();
+        assert_eq!(
+            last_breakdown_payload(&pool, "conv-3").await.unwrap(),
+            None,
+            "无 breakdown 事件 → None"
+        );
+        assert_eq!(
+            last_breakdown_payload(&pool, "conv-none").await.unwrap(),
+            None
+        );
     }
 
     fn backfill_ev(kind: &str, turn: &str, mid: Option<&str>, created_at: &str) -> BackfillEvent {

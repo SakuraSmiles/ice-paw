@@ -348,6 +348,7 @@ async fn normal_round_persists_and_signals() {
     assert_eq!(rows[1].content, "Hello from MockProvider");
 
     // 事件序：user_message → turn_context → assistant_message → turn_ended
+    // → context_breakdown（③ 可观测化：wrapper 在 inner 返回后落库，故恒在末位）
     let events = event_rows(&fx.pool).await;
     assert_eq!(
         kinds(&events),
@@ -355,7 +356,8 @@ async fn normal_round_persists_and_signals() {
             "user_message",
             "turn_context",
             "assistant_message",
-            "turn_ended"
+            "turn_ended",
+            "context_breakdown",
         ],
         "正常回合的事件 kind 序"
     );
@@ -506,7 +508,8 @@ async fn explicit_budget_cap_terminates_with_guidance() {
             "user_message",
             "turn_context",
             "assistant_message",
-            "turn_ended"
+            "turn_ended",
+            "context_breakdown",
         ],
         "预算触顶的事件 kind 序"
     );
@@ -639,6 +642,7 @@ async fn tool_round_pairs_use_execution_result() {
             "tool_result_message",
             "assistant_message",
             "turn_ended",
+            "context_breakdown",
         ],
         "工具轮的事件 kind 序"
     );
@@ -860,7 +864,8 @@ async fn legacy_rows_without_events_yield_empty_history_but_turn_completes() {
             "user_message",
             "turn_context",
             "assistant_message",
-            "turn_ended"
+            "turn_ended",
+            "context_breakdown",
         ]
     );
     assert_event_invariants(&events, &fx.user_msg_id);
@@ -996,6 +1001,7 @@ async fn quota_first_attempt_switches_and_completes() {
             "model_switch",
             "assistant_message",
             "turn_ended",
+            "context_breakdown",
         ],
         "换档回合的事件 kind 序"
     );
@@ -1099,6 +1105,7 @@ async fn rate_limited_exhausts_then_switches() {
             "model_switch",
             "assistant_message",
             "turn_ended",
+            "context_breakdown",
         ],
         "限流耗尽换档的事件 kind 序（与用例 A 同形）"
     );
