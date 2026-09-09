@@ -316,7 +316,9 @@ impl ScreenChannel {
     /// 暂停（读写全部挂起；通道/授权/附着保持——播放器语义 §4.4）。
     pub fn pause(&self) {
         let mut g = self.lock();
-        let changed = g.as_mut().is_some_and(|a| !std::mem::replace(&mut a.paused, true));
+        let changed = g
+            .as_mut()
+            .is_some_and(|a| !std::mem::replace(&mut a.paused, true));
         drop(g);
         if changed {
             self.bump();
@@ -326,7 +328,9 @@ impl ScreenChannel {
     /// 恢复（park 中的读写 gate 被唤醒继续）。
     pub fn resume(&self) {
         let mut g = self.lock();
-        let changed = g.as_mut().is_some_and(|a| std::mem::replace(&mut a.paused, false));
+        let changed = g
+            .as_mut()
+            .is_some_and(|a| std::mem::replace(&mut a.paused, false));
         drop(g);
         if changed {
             self.bump();
@@ -581,7 +585,8 @@ impl ScreenChannel {
     pub fn detach(&self, conv_id: &str) {
         let was_attached = {
             let mut g = self.lock();
-            g.as_mut().is_some_and(|a| a.attached.remove(conv_id).is_some())
+            g.as_mut()
+                .is_some_and(|a| a.attached.remove(conv_id).is_some())
         };
         if was_attached {
             tracing::info!(target: "ice_paw.screen_channel", conv = %conv_id, "会话脱离通道");
@@ -692,7 +697,9 @@ async fn wait_cancel_safe(cancel: Option<&CancellationToken>) {
 
 /// 进程级共享实例（tool_executor 短路 / 命令层 / request_screen_session 共用）。
 pub fn global() -> Arc<ScreenChannel> {
-    GLOBAL.get_or_init(|| Arc::new(ScreenChannel::new())).clone()
+    GLOBAL
+        .get_or_init(|| Arc::new(ScreenChannel::new()))
+        .clone()
 }
 
 /// 生产便捷形态：读全局单例做短路（tool_executor 调用点）。
@@ -715,7 +722,10 @@ pub fn emit_state(app: &tauri::AppHandle) {
 /// 广播 `screen:channel-closed`（终止归因；§4.9）。
 pub fn emit_closed(app: &tauri::AppHandle, reason: &str) {
     use tauri::Emitter as _;
-    let _ = app.emit("screen:channel-closed", serde_json::json!({ "reason": reason }));
+    let _ = app.emit(
+        "screen:channel-closed",
+        serde_json::json!({ "reason": reason }),
+    );
 }
 
 /// 附着信息 best-effort 查库（查不到给诚实占位，不阻塞通道动作）。
@@ -724,12 +734,12 @@ pub async fn attach_info_from_db(
     agent_id: &str,
     conv_id: &str,
 ) -> AttachInfo {
-    let conv = crate::db::repo::conversation::get_by_id(pool, conv_id).await.ok();
+    let conv = crate::db::repo::conversation::get_by_id(pool, conv_id)
+        .await
+        .ok();
     let agent = crate::db::repo::agent::get_by_id(pool, agent_id).await.ok();
     AttachInfo {
-        agent_name: agent
-            .map(|a| a.name)
-            .unwrap_or_else(|| "未知 agent".into()),
+        agent_name: agent.map(|a| a.name).unwrap_or_else(|| "未知 agent".into()),
         conv_title: conv.map(|c| c.title).unwrap_or_default(),
         purpose: String::new(),
     }
@@ -954,7 +964,9 @@ mod tests {
         let ch = ScreenChannel::new();
         // Off 首入 = 向后兼容路径（§4.1 入口 3）：不进通道域，授权回落逐次 Confirm
         ch.gate_read(None).await.expect("Off 首入读应过（兼容）");
-        ch.gate_write("c1", None).await.expect("Off 首入写应过（兼容）");
+        ch.gate_write("c1", None)
+            .await
+            .expect("Off 首入写应过（兼容）");
         // 不产生任何通道状态（无令牌、无排队）
         let s = ch.snapshot();
         assert_eq!(s.status, "off");
@@ -999,7 +1011,10 @@ mod tests {
         // 归还：队头 c2 得令牌并出队（holder ∉ queue 不变式）
         ch.release_write("c1");
         h2.await.expect("c2 任务未 panic").expect("c2 应获授予");
-        until(&ch, |s| s.holder.as_deref() == Some("c2") && s.queue == vec!["c3".to_string()]).await;
+        until(&ch, |s| {
+            s.holder.as_deref() == Some("c2") && s.queue == vec!["c3".to_string()]
+        })
+        .await;
 
         ch.release_write("c2");
         h3.await.expect("c3 任务未 panic").expect("c3 应获授予");
@@ -1026,8 +1041,14 @@ mod tests {
         until(&ch, |s| s.queue.contains(&"c2".to_string())).await;
 
         token.cancel();
-        let err = h.await.expect("c2 任务未 panic").expect_err("取消应中断 park");
-        assert!(err_text(err).starts_with("screen 操作取消"), "取消错误家族前缀漂移");
+        let err = h
+            .await
+            .expect("c2 任务未 panic")
+            .expect_err("取消应中断 park");
+        assert!(
+            err_text(err).starts_with("screen 操作取消"),
+            "取消错误家族前缀漂移"
+        );
         // 摘除自己的排队位，不惊动持有者
         until(&ch, |s| !s.queue.contains(&"c2".to_string())).await;
         assert_eq!(ch.snapshot().holder.as_deref(), Some("c1"));
@@ -1047,8 +1068,14 @@ mod tests {
         until(&ch, |s| s.queue.contains(&"c2".to_string())).await;
 
         ch.stop();
-        let err = h.await.expect("c2 任务未 panic").expect_err("stop 应唤醒 park 并 Err");
-        assert!(err_text(err).starts_with("screen 通道已关闭"), "关闭错误家族前缀漂移");
+        let err = h
+            .await
+            .expect("c2 任务未 panic")
+            .expect_err("stop 应唤醒 park 并 Err");
+        assert!(
+            err_text(err).starts_with("screen 通道已关闭"),
+            "关闭错误家族前缀漂移"
+        );
     }
 
     #[tokio::test]
@@ -1073,7 +1100,10 @@ mod tests {
 
         ch.resume();
         h_read.await.expect("读任务未 panic").expect("恢复后读应过");
-        h_write.await.expect("写任务未 panic").expect("恢复后写应过");
+        h_write
+            .await
+            .expect("写任务未 panic")
+            .expect("恢复后写应过");
         assert!(!ch.snapshot().paused);
     }
 
@@ -1093,8 +1123,13 @@ mod tests {
 
         // 用户手动切给 c3：c3 立即持有，原持有者 c1 入队尾（评审 B9——不入队即丢唤醒）
         ch.grant("c3");
-        h3.await.expect("c3 任务未 panic").expect("手动授予应放行 c3");
-        until(&ch, |s| s.holder.as_deref() == Some("c3") && s.queue == vec!["c1".to_string()]).await;
+        h3.await
+            .expect("c3 任务未 panic")
+            .expect("手动授予应放行 c3");
+        until(&ch, |s| {
+            s.holder.as_deref() == Some("c3") && s.queue == vec!["c1".to_string()]
+        })
+        .await;
 
         // 已是持有者再 grant 幂等
         ch.grant("c3");
@@ -1102,7 +1137,10 @@ mod tests {
 
         // c1 重新获得（c3 归还 → 队头 c1）
         ch.release_write("c3");
-        until(&ch, |s| s.holder.as_deref() == Some("c1") && s.queue.is_empty()).await;
+        until(&ch, |s| {
+            s.holder.as_deref() == Some("c1") && s.queue.is_empty()
+        })
+        .await;
     }
 
     #[tokio::test]
@@ -1220,7 +1258,9 @@ mod tests {
 
         // 用户停止操作（窗口内无新输入）→ 心跳臂 ≤ 去抖窗口自醒重查
         super::super::human::test_support::set_fake_active(Some(false));
-        h.await.expect("任务未 panic").expect("用户闲置后写 gate 应恢复");
+        h.await
+            .expect("任务未 panic")
+            .expect("用户闲置后写 gate 应恢复");
         super::super::human::test_support::set_fake_active(None);
     }
 
@@ -1231,7 +1271,10 @@ mod tests {
         let ch = ScreenChannel::new();
         ch.open("c1", info("a"));
         ch.gate_read(None).await.expect("读 gate 不受人类在场影响");
-        assert!(ch.snapshot().human_active, "snapshot 应如实上报 human_active");
+        assert!(
+            ch.snapshot().human_active,
+            "snapshot 应如实上报 human_active"
+        );
         super::super::human::test_support::set_fake_active(None);
     }
 
@@ -1250,11 +1293,20 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(4)).await;
 
         token.cancel();
-        let err = h.await.expect("任务未 panic").expect_err("取消应中断 human park");
+        let err = h
+            .await
+            .expect("任务未 panic")
+            .expect_err("取消应中断 human park");
         super::super::human::test_support::set_fake_active(None);
         let msg = err_text(err);
-        assert!(msg.starts_with("screen 操作取消"), "取消家族前缀漂移: {msg}");
-        assert!(msg.contains("等待用户停止使用鼠标/键盘"), "应分派人类原因: {msg}");
+        assert!(
+            msg.starts_with("screen 操作取消"),
+            "取消家族前缀漂移: {msg}"
+        );
+        assert!(
+            msg.contains("等待用户停止使用鼠标/键盘"),
+            "应分派人类原因: {msg}"
+        );
     }
 
     /// 检查点谓词仅通道 Active 时生效——Off 兼容路径的逐次 Confirm 是那次操作的

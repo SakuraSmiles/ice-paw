@@ -221,7 +221,10 @@ mod tests {
         let cached = 380_000; // 命中 95%
         let completion = 5_000;
         // 未命中 20k 全价 + 命中 38k（1/10） + 输出 5k
-        assert_eq!(billed_tokens(prompt, cached, completion), 20_000 + 38_000 + 5_000);
+        assert_eq!(
+            billed_tokens(prompt, cached, completion),
+            20_000 + 38_000 + 5_000
+        );
     }
 
     /// billed_tokens：cached > prompt 钳制（脏数据末道防御，宁可全价不可下溢）
@@ -290,9 +293,6 @@ mod tests {
         for _ in 0..budget.max_round_renewals {
             effective = effective.saturating_add(budget.max_tool_rounds);
         }
-        assert_eq!(
-            effective,
-            MAX_TOOL_ROUNDS * (1 + DEFAULT_AUTO_RENEWALS)
-        );
+        assert_eq!(effective, MAX_TOOL_ROUNDS * (1 + DEFAULT_AUTO_RENEWALS));
     }
 }

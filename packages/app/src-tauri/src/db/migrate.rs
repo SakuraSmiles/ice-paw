@@ -631,7 +631,11 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(users.0, 1, "tool_result 落到 user 行");
-        assert_eq!(swept_marker(&pool).await.as_deref(), Some("1"), "修复后标记回写");
+        assert_eq!(
+            swept_marker(&pool).await.as_deref(),
+            Some("1"),
+            "修复后标记回写"
+        );
     }
 
     #[tokio::test]
@@ -696,10 +700,11 @@ mod tests {
 
         heal_dropped_migrations(&pool, &migrator).await;
 
-        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM _sqlx_migrations WHERE version = 47")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM _sqlx_migrations WHERE version = 47")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(count.0, 0, "缺席版本的登记记录应被清除");
         // 自愈后 run() 不再报 missing（这是 boot 不闪退的行为锁）
         migrator.run(&pool).await.expect("自愈后 run 应通过");

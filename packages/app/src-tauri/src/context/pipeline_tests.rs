@@ -10,8 +10,8 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::SqlitePool;
 use std::str::FromStr;
 
-use crate::context::pipeline::{PipelineContext, PipelineRunner, PipelineStage};
 use crate::context::memory::MemoryStage;
+use crate::context::pipeline::{PipelineContext, PipelineRunner, PipelineStage};
 use crate::context::stages::{FinalAssembleStage, HistoryStage, OsContextStage, SystemPromptStage};
 use crate::db::models::{AgentRow, MessageRow};
 use crate::error::AppResult;
@@ -191,7 +191,10 @@ async fn system_prompt_stage_word_profile_appends_section() {
     SystemPromptStage.execute(&mut ctx).await.unwrap();
     let s = ctx.system_prompt.unwrap();
     assert!(s.contains("## Word 文档样式偏好"), "应注入小节标题: {s}");
-    assert!(s.contains("正文宋体小四，表头深蓝底白字。"), "应注入用户原文: {s}");
+    assert!(
+        s.contains("正文宋体小四，表头深蓝底白字。"),
+        "应注入用户原文: {s}"
+    );
     assert!(s.contains("你是助手"), "agent prompt 仍应作为基础: {s}");
 }
 
@@ -549,11 +552,15 @@ async fn s8_deterministic_fold_on_summary_failure() {
     // 压低预算强制触发折叠
     ctx.context_budget.max_input_tokens = 4000;
 
-    let failing: Box<dyn crate::context::memory::SummaryProvider> = Box::new(FailingSummaryProvider);
-    PipelineRunner::new(vec![Box::new(HistoryStage), Box::new(MemoryStage::new(failing))])
-        .run(&mut ctx)
-        .await
-        .unwrap();
+    let failing: Box<dyn crate::context::memory::SummaryProvider> =
+        Box::new(FailingSummaryProvider);
+    PipelineRunner::new(vec![
+        Box::new(HistoryStage),
+        Box::new(MemoryStage::new(failing)),
+    ])
+    .run(&mut ctx)
+    .await
+    .unwrap();
 
     // 骨架化而非清空：历史仍有大量消息（裸截断会把中段整段丢掉）
     assert!(
@@ -562,12 +569,11 @@ async fn s8_deterministic_fold_on_summary_failure() {
         ctx.history_messages.len()
     );
     // 骨架消息含折叠标记（证明走的是 skeleton 而非原样保留）
-    let has_marker = ctx
-        .history_messages
-        .iter()
-        .any(|m| {
-            m.content.iter().any(|b| matches!(b, ContentBlock::Text { text } if text.contains("已折叠")))
-        });
+    let has_marker = ctx.history_messages.iter().any(|m| {
+        m.content
+            .iter()
+            .any(|b| matches!(b, ContentBlock::Text { text } if text.contains("已折叠")))
+    });
     assert!(has_marker, "应存在骨架折叠标记");
 }
 
@@ -608,10 +614,13 @@ async fn s8_deterministic_fold_on_empty_summary() {
     ctx.context_budget.max_input_tokens = 3000;
 
     let empty: Box<dyn crate::context::memory::SummaryProvider> = Box::new(EmptySummaryProvider);
-    PipelineRunner::new(vec![Box::new(HistoryStage), Box::new(MemoryStage::new(empty))])
-        .run(&mut ctx)
-        .await
-        .unwrap();
+    PipelineRunner::new(vec![
+        Box::new(HistoryStage),
+        Box::new(MemoryStage::new(empty)),
+    ])
+    .run(&mut ctx)
+    .await
+    .unwrap();
 
     assert!(
         ctx.history_messages.len() > 8,

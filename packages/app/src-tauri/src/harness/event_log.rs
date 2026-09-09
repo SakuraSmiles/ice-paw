@@ -1175,7 +1175,10 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(sweep_interrupted_turns(&pool, "2026-03-01 00:00:00").await, 1);
+        assert_eq!(
+            sweep_interrupted_turns(&pool, "2026-03-01 00:00:00").await,
+            1
+        );
         // turn-old 补记 closed；turn-new 保持 open（无 turn_ended）
         let rows = session_event::list_by_session(&pool, "conv-1", None)
             .await

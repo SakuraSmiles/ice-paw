@@ -269,7 +269,9 @@ async fn try_semantic_search(
     }
 
     // 4. 冷路径：全量 load + 懒生成 + 解码/召回离线程 + 入账缓存
-    let mut chunks = repo::kb::load_chunks_for_vector_search(pool, kb_ids).await.ok()?;
+    let mut chunks = repo::kb::load_chunks_for_vector_search(pool, kb_ids)
+        .await
+        .ok()?;
     // 兜底：对缺向量的 chunk 懒生成 + 回填（预生成失败/漏掉的）。失败同样沉淀
     // 健康状态（时序在 query ok 之后，覆盖即「最后一次调用」语义）；成功不重复记
     if let Err(e) = ensure_chunks_embedded(pool, &mut chunks, &backend, &api_key).await {

@@ -170,9 +170,18 @@ mod tests {
     fn streak_accumulates_across_varying_paths() {
         let mut t = DoomLoopTracker::new();
         // 同工具同家族、不同路径：计数应连续累积（stuck_detect 正是漏掉这种形态）
-        assert_eq!(t.record_failure("write_file", "写入失败: a.svg: os error 3"), 1);
-        assert_eq!(t.record_failure("write_file", "写入失败: b.svg: os error 3"), 2);
-        assert_eq!(t.record_failure("write_file", "写入失败: c.svg: os error 3"), 3);
+        assert_eq!(
+            t.record_failure("write_file", "写入失败: a.svg: os error 3"),
+            1
+        );
+        assert_eq!(
+            t.record_failure("write_file", "写入失败: b.svg: os error 3"),
+            2
+        );
+        assert_eq!(
+            t.record_failure("write_file", "写入失败: c.svg: os error 3"),
+            3
+        );
     }
 
     #[test]
@@ -186,7 +195,10 @@ mod tests {
     fn different_tools_count_independently() {
         let mut t = DoomLoopTracker::new();
         t.record_failure("write_file", "写入失败: a.svg: os error 3");
-        assert_eq!(t.record_failure("edit_file", "写入失败: a.svg: os error 3"), 1);
+        assert_eq!(
+            t.record_failure("edit_file", "写入失败: a.svg: os error 3"),
+            1
+        );
     }
 
     #[test]
@@ -207,7 +219,10 @@ mod tests {
         assert!(s.contains("3 次"));
         assert!(s.contains("停止用同样方式重试"));
         // 恰在提醒线：无升级段
-        assert!(!s.contains("[升级指令]"), "streak==NUDGE_AT 是首轮提醒：{s}");
+        assert!(
+            !s.contains("[升级指令]"),
+            "streak==NUDGE_AT 是首轮提醒：{s}"
+        );
     }
 
     /// D15 八波⑤：连败超线后 nudge 带升级段（停止一切重试 + 结构化报告三件套）

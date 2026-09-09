@@ -243,7 +243,9 @@ pub(crate) async fn try_switch_model(
                         reason: trigger.to_string(),
                         attempt: switch_attempt,
                         error: Some(crate::infra::strings::truncate_to_byte_boundary(
-                            error_text, 200, Some("…"),
+                            error_text,
+                            200,
+                            Some("…"),
                         )),
                     },
                 )

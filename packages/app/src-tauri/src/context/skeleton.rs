@@ -30,11 +30,7 @@ pub(crate) fn skeletonize_messages(messages: &[ChatMessage]) -> Vec<ChatMessage>
 
 fn skeletonize_one(m: &ChatMessage) -> ChatMessage {
     let mut out = m.clone();
-    out.content = m
-        .content
-        .iter()
-        .map(skeletonize_block)
-        .collect::<Vec<_>>();
+    out.content = m.content.iter().map(skeletonize_block).collect::<Vec<_>>();
     out
 }
 
@@ -63,7 +59,11 @@ fn skeletonize_block(b: &ContentBlock) -> ContentBlock {
             tool_use_id: tool_use_id.clone(),
             content: format!(
                 "{}{}",
-                if is_error.unwrap_or(false) { "[失败] " } else { "" },
+                if is_error.unwrap_or(false) {
+                    "[失败] "
+                } else {
+                    ""
+                },
                 truncate_chars(content, TOOL_RESULT_KEEP_CHARS)
             ),
             is_error: *is_error,
@@ -96,7 +96,11 @@ pub(crate) fn skeleton_ratio(before: &[ChatMessage], after: &[ChatMessage]) -> f
     use crate::context::token::estimate_message_tokens;
     let b: usize = before.iter().map(estimate_message_tokens).sum();
     let a: usize = after.iter().map(estimate_message_tokens).sum();
-    if b == 0 { 0.0 } else { a as f64 / b as f64 }
+    if b == 0 {
+        0.0
+    } else {
+        a as f64 / b as f64
+    }
 }
 
 // =========================================================================
@@ -119,10 +123,7 @@ mod tests {
     #[test]
     fn 长文本截断带省略标记() {
         let long = "字".repeat(500);
-        let m = msg(
-            "assistant",
-            vec![ContentBlock::Text { text: long.clone() }],
-        );
+        let m = msg("assistant", vec![ContentBlock::Text { text: long.clone() }]);
         let out = skeletonize_messages(&[m]);
         let text = match &out[0].content[0] {
             ContentBlock::Text { text } => text.clone(),
@@ -134,7 +135,12 @@ mod tests {
 
     #[test]
     fn 短消息原样保留() {
-        let m = msg("user", vec![ContentBlock::Text { text: "你好".into() }]);
+        let m = msg(
+            "user",
+            vec![ContentBlock::Text {
+                text: "你好".into(),
+            }],
+        );
         let out = skeletonize_messages(&[m]);
         assert_eq!(
             match &out[0].content[0] {
@@ -177,7 +183,9 @@ mod tests {
         );
         let out = skeletonize_messages(&[m]);
         match &out[0].content[0] {
-            ContentBlock::ToolResult { content, is_error, .. } => {
+            ContentBlock::ToolResult {
+                content, is_error, ..
+            } => {
                 assert!(content.starts_with("[失败] "));
                 assert_eq!(*is_error, Some(true));
             }
@@ -189,7 +197,9 @@ mod tests {
     fn 骨架化显著缩减token() {
         let big = msg(
             "assistant",
-            vec![ContentBlock::Text { text: "字".repeat(4000) }],
+            vec![ContentBlock::Text {
+                text: "字".repeat(4000),
+            }],
         );
         let sk = skeletonize_messages(std::slice::from_ref(&big));
         assert!(skeleton_ratio(&[big], &sk) < 0.1, "骨架应缩减 90%+");

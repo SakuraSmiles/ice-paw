@@ -112,7 +112,8 @@ fn parse_combo(combo: &str) -> AppResult<(Vec<u16>, u16)> {
     if parts.iter().any(|p| p.is_empty()) {
         return Err(AppError::Validation(
             "screen 按键无效: 组合键里有空段（形如 \"ctrl+\"）——\
-             格式为 \"ctrl+shift+t\"，修饰键在前、主键在末尾".into(),
+             格式为 \"ctrl+shift+t\"，修饰键在前、主键在末尾"
+                .into(),
         ));
     }
     let mut vks = Vec::with_capacity(parts.len());
@@ -226,14 +227,14 @@ impl McpClient for TypeTextTool {
 
     async fn execute(&self, _args: &str) -> AppResult<String> {
         Err(AppError::Internal(
-            "type_text 必须通过 execute_with_output 调用（需要 conv_id 记录输入日志 + 回传附图）".into(),
+            "type_text 必须通过 execute_with_output 调用（需要 conv_id 记录输入日志 + 回传附图）"
+                .into(),
         ))
     }
 
     async fn execute_with_output(&self, args: &str, ctx: &ToolContext) -> AppResult<ToolOutput> {
-        let p: TypeTextArgs =
-            serde_json::from_str(args)
-                .map_err(|e| AppError::Validation(format!("type_text 参数解析失败: {e}")))?;
+        let p: TypeTextArgs = serde_json::from_str(args)
+            .map_err(|e| AppError::Validation(format!("type_text 参数解析失败: {e}")))?;
         // 写 gate（§4.3 单写者令牌）：逐字符注入 = 一个原子步。
         super::channel::global()
             .gate_write(&ctx.conv_id, ctx.cancel.as_ref())
@@ -242,7 +243,8 @@ impl McpClient for TypeTextTool {
         if chars == 0 {
             return Err(AppError::Validation(
                 "screen 输入参数无效: text 为空——省略输入内容没有意义；\
-                 若想清空输入框，用 press_key 组合 ctrl+a 后 delete".into(),
+                 若想清空输入框，用 press_key 组合 ctrl+a 后 delete"
+                    .into(),
             ));
         }
         if chars > MAX_TYPE_CHARS {
@@ -333,14 +335,14 @@ impl McpClient for PressKeyTool {
 
     async fn execute(&self, _args: &str) -> AppResult<String> {
         Err(AppError::Internal(
-            "press_key 必须通过 execute_with_output 调用（需要 conv_id 记录输入日志 + 回传附图）".into(),
+            "press_key 必须通过 execute_with_output 调用（需要 conv_id 记录输入日志 + 回传附图）"
+                .into(),
         ))
     }
 
     async fn execute_with_output(&self, args: &str, ctx: &ToolContext) -> AppResult<ToolOutput> {
-        let p: PressKeyArgs =
-            serde_json::from_str(args)
-                .map_err(|e| AppError::Validation(format!("press_key 参数解析失败: {e}")))?;
+        let p: PressKeyArgs = serde_json::from_str(args)
+            .map_err(|e| AppError::Validation(format!("press_key 参数解析失败: {e}")))?;
         // 写 gate（§4.3 单写者令牌）：组合键全程 = 一个原子步（按下→点按→逆序释放不拆）。
         super::channel::global()
             .gate_write(&ctx.conv_id, ctx.cancel.as_ref())
@@ -440,9 +442,8 @@ impl McpClient for WaitTool {
     }
 
     async fn execute_with_context(&self, args: &str, ctx: &ToolContext) -> AppResult<String> {
-        let p: WaitArgs =
-            serde_json::from_str(args)
-                .map_err(|e| AppError::Validation(format!("wait 参数解析失败: {e}")))?;
+        let p: WaitArgs = serde_json::from_str(args)
+            .map_err(|e| AppError::Validation(format!("wait 参数解析失败: {e}")))?;
         let requested = p.ms;
         let actual = clamp_wait(requested);
         let slept = tokio::time::sleep(Duration::from_millis(actual));
@@ -620,8 +621,14 @@ mod tests {
         assert!(v["note"].as_str().unwrap().contains("most recent image"));
 
         // 空文本 → 家族错误（指路 ctrl+a+delete 而非傻输入）
-        let err = tool.execute_with_output(r#"{"text":""}"#, &ctx).await.unwrap_err();
-        assert!(err.to_string().contains("screen 输入参数无效"), "实际: {err}");
+        let err = tool
+            .execute_with_output(r#"{"text":""}"#, &ctx)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("screen 输入参数无效"),
+            "实际: {err}"
+        );
     }
 
     #[tokio::test]
@@ -648,14 +655,18 @@ mod tests {
 
         // 单键 + 别名 + 大小写不敏感
         backend.vks.lock().unwrap().clear();
-        tool.execute_with_output(r#"{"combo":"ENTER"}"#, &ctx).await.unwrap();
+        tool.execute_with_output(r#"{"combo":"ENTER"}"#, &ctx)
+            .await
+            .unwrap();
         assert_eq!(
             backend.vks.lock().unwrap().clone(),
             vec![(0x0D, true), (0x0D, false)]
         );
 
         backend.vks.lock().unwrap().clear();
-        tool.execute_with_output(r#"{"combo":"F5"}"#, &ctx).await.unwrap();
+        tool.execute_with_output(r#"{"combo":"F5"}"#, &ctx)
+            .await
+            .unwrap();
         assert_eq!(
             backend.vks.lock().unwrap().clone(),
             vec![(0x74, true), (0x74, false)]
@@ -677,7 +688,9 @@ mod tests {
     async fn type_text_aborts_on_human_preempt_reports_progress() {
         let backend = Arc::new(FakeKeyboardBackend::new());
         // "hello" 每字符 down+up 两事件；输完 2 字符（4 事件）后翻转 → 第 3 字符边界中止
-        backend.flip_preempt_after_key_events.store(4, Ordering::SeqCst);
+        backend
+            .flip_preempt_after_key_events
+            .store(4, Ordering::SeqCst);
         let tool = TypeTextTool::new(backend.clone(), Arc::new(ScreenState::new()));
         let ctx = make_ctx("t2").await;
 
@@ -688,7 +701,10 @@ mod tests {
         super::super::human::test_support::set_fake_preempt(None);
         let msg = err.to_string();
         assert!(msg.contains("screen 用户抢占"), "家族前缀漂移: {msg}");
-        assert!(msg.contains("已输入 2 个 UTF-16 单元"), "应如实报进度: {msg}");
+        assert!(
+            msg.contains("已输入 2 个 UTF-16 单元"),
+            "应如实报进度: {msg}"
+        );
         // 恰好输入 2 字符（4 事件），第 3 字符未发出
         assert_eq!(backend.units.lock().unwrap().len(), 4);
     }
@@ -698,7 +714,9 @@ mod tests {
     async fn press_key_aborts_at_iteration_boundary_on_human_preempt() {
         let backend = Arc::new(FakeKeyboardBackend::new());
         // ctrl+a 一轮 = 4 事件；第 1 轮完成后翻转 → 第 2 轮边界中止
-        backend.flip_preempt_after_key_events.store(4, Ordering::SeqCst);
+        backend
+            .flip_preempt_after_key_events
+            .store(4, Ordering::SeqCst);
         let tool = PressKeyTool::new(backend.clone(), Arc::new(ScreenState::new()));
         let ctx = make_ctx("k3").await;
 
@@ -731,11 +749,17 @@ mod tests {
         assert!(msg.contains("nonsense"), "应点名坏键名: {msg}");
 
         // 空段（"ctrl+"）
-        let err = tool.execute_with_output(r#"{"combo":"ctrl+"}"#, &ctx).await.unwrap_err();
+        let err = tool
+            .execute_with_output(r#"{"combo":"ctrl+"}"#, &ctx)
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("空段"), "实际: {err}");
 
         // f13 越界不认
-        let err = tool.execute_with_output(r#"{"combo":"f13"}"#, &ctx).await.unwrap_err();
+        let err = tool
+            .execute_with_output(r#"{"combo":"f13"}"#, &ctx)
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("screen 按键无效"), "实际: {err}");
     }
 
@@ -775,7 +799,10 @@ mod tests {
             .execute_with_context(r#"{"ms":10000}"#, &ctx)
             .await
             .unwrap();
-        assert!(start.elapsed() < Duration::from_millis(1000), "取消应立即中断");
+        assert!(
+            start.elapsed() < Duration::from_millis(1000),
+            "取消应立即中断"
+        );
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["status"], "cancelled");
     }

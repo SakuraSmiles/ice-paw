@@ -473,12 +473,10 @@ mod tests {
         let mut out = derive_history(&events);
 
         // resolver：m-gone 无行（None）；m-bad 行存在但下标 3 是 Text 非 Image
-        let missed = hydrate_image_refs(&mut out.messages, &|mid, _| {
-            match mid {
-                "m-gone" => None,
-                "m-bad" => Some(text_block("不是图片")),
-                _ => unreachable!(),
-            }
+        let missed = hydrate_image_refs(&mut out.messages, &|mid, _| match mid {
+            "m-gone" => None,
+            "m-bad" => Some(text_block("不是图片")),
+            _ => unreachable!(),
         });
         assert_eq!(missed, 2, "两种未命中形态都应计数");
         assert_eq!(

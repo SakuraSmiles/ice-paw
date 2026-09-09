@@ -608,7 +608,10 @@ mod tests {
         );
         // 文案指路端点切换（不是只叫人充值），且同样不可重试
         let text = LlmErrorKind::GlmResourcePack.friendly_text();
-        assert!(text.contains("Coding 端点"), "应指路 Coding 端点切换: {text}");
+        assert!(
+            text.contains("Coding 端点"),
+            "应指路 Coding 端点切换: {text}"
+        );
         assert!(!LlmErrorKind::GlmResourcePack.is_retryable());
     }
 

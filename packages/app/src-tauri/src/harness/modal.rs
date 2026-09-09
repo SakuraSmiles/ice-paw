@@ -165,9 +165,7 @@ async fn resolve_profile_credential(
                 .filter(|s| !s.is_empty())
                 .map(String::from)
         })
-        .or_else(|| {
-            crate::harness::provider::provider_openai_url(&row.provider).map(String::from)
-        });
+        .or_else(|| crate::harness::provider::provider_openai_url(&row.provider).map(String::from));
     let Some(base_url) = base_url else {
         tracing::warn!(
             target: "ice_paw.modal",
@@ -435,8 +433,12 @@ async fn ocr_image(
                     "视觉凭据代读失败，尝试下一级"
                 );
                 // 状态监控：失败同样沉淀（链上后续凭据成功是它自己的 ok，互不覆盖错位）
-                crate::harness::profile_health::record_error(pool, cred.profile_id.as_deref(), &msg)
-                    .await;
+                crate::harness::profile_health::record_error(
+                    pool,
+                    cred.profile_id.as_deref(),
+                    &msg,
+                )
+                .await;
                 // prefer：Sensitive（输入判定：图本身违规）优先于凭据级瞬态错误，
                 // 否则取首个。旧实现 `= Some(kind)` 只留最后一个 → 把首选凭据正确给出
                 // 的 Sensitive 丢成末位凭据的限流/余额，掩盖真正原因。
@@ -700,7 +702,10 @@ mod tests {
         let cb: ProgressCb<'_> = &|_done, _total| {
             count.fetch_add(1, Ordering::SeqCst);
         };
-        let blocks = vec![ContentBlock::text("纯文本消息"), ContentBlock::text("第二条")];
+        let blocks = vec![
+            ContentBlock::text("纯文本消息"),
+            ContentBlock::text("第二条"),
+        ];
         let _ = adapt_blocks_for_vision(&blocks, false, &[], Some(cb), None).await;
         assert_eq!(count.load(Ordering::SeqCst), 0, "无图不应触发回调");
     }

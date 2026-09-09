@@ -70,7 +70,13 @@ async fn seeded_pool() -> SqlitePool {
     pool
 }
 
-async fn write_row(pool: &SqlitePool, id: &str, role: &str, content: &str, blocks: &[ContentBlock]) {
+async fn write_row(
+    pool: &SqlitePool,
+    id: &str,
+    role: &str,
+    content: &str,
+    blocks: &[ContentBlock],
+) {
     repo::message::create(
         pool,
         id,
@@ -150,16 +156,32 @@ async fn synth_turn(pool: &SqlitePool, ctx: &EventCtx, turn: usize) {
         ];
         write_row(pool, &a_id, "assistant", &a_content, &a_blocks).await;
         log_assistant_message(
-            pool, ctx, &a_id, Some("glm-5.2"), &a_content, &a_blocks, Some(600), Some(3_000),
-            r as u32, false,
+            pool,
+            ctx,
+            &a_id,
+            Some("glm-5.2"),
+            &a_content,
+            &a_blocks,
+            Some(600),
+            Some(3_000),
+            r as u32,
+            false,
         )
         .await;
 
         // 工具审计（arguments 小 / result 5KB → 走 4KB 截断，对齐生产上限）
         let result = filler("工具输出", 5_000);
         log_tool_execution(
-            pool, ctx, &a_id, &format!("tc-{turn}-{r}"), Some(&format!("tu-{turn}-{r}")),
-            "read_file", "{\"path\":\"README.md\"}", Some(&result), false, 120,
+            pool,
+            ctx,
+            &a_id,
+            &format!("tc-{turn}-{r}"),
+            Some(&format!("tu-{turn}-{r}")),
+            "read_file",
+            "{\"path\":\"README.md\"}",
+            Some(&result),
+            false,
+            120,
         )
         .await;
 
@@ -180,8 +202,16 @@ async fn synth_turn(pool: &SqlitePool, ctx: &EventCtx, turn: usize) {
     let af_blocks = vec![ContentBlock::text(af_content.clone())];
     write_row(pool, &af_id, "assistant", &af_content, &af_blocks).await;
     log_assistant_message(
-        pool, ctx, &af_id, Some("glm-5.2"), &af_content, &af_blocks, Some(900), Some(8_000),
-        TOOL_ROUNDS as u32, false,
+        pool,
+        ctx,
+        &af_id,
+        Some("glm-5.2"),
+        &af_content,
+        &af_blocks,
+        Some(900),
+        Some(8_000),
+        TOOL_ROUNDS as u32,
+        false,
     )
     .await;
 
@@ -197,8 +227,16 @@ async fn synth_turn(pool: &SqlitePool, ctx: &EventCtx, turn: usize) {
             .await
             .unwrap();
         log_assistant_message(
-            pool, ctx, &af_id, Some("glm-5.2"), &sup_content, &sup_blocks, Some(1_100),
-            Some(9_000), TOOL_ROUNDS as u32, true,
+            pool,
+            ctx,
+            &af_id,
+            Some("glm-5.2"),
+            &sup_content,
+            &sup_blocks,
+            Some(1_100),
+            Some(9_000),
+            TOOL_ROUNDS as u32,
+            true,
         )
         .await;
     }
@@ -271,13 +309,21 @@ async fn bench_read_path_large_session() {
         turns * (2 + TOOL_ROUNDS * 2),
     );
     println!("① 事件全量读  {read_ms}ms");
-    println!("② derive 回放 {derive_ms}ms   派生消息 {} 条 / issues {} 条",
-        derived.messages.len(), derived.issues.len());
-    println!("③ 历史加载    {load_ms}ms   窗口保留 {} 条（tail-limit {}）",
-        rows.len(), repo::message::HISTORY_LOAD_LIMIT);
-    println!("④ 全量对账    {reconcile_ms}ms   diffs {} / skipped {:?}",
+    println!(
+        "② derive 回放 {derive_ms}ms   派生消息 {} 条 / issues {} 条",
+        derived.messages.len(),
+        derived.issues.len()
+    );
+    println!(
+        "③ 历史加载    {load_ms}ms   窗口保留 {} 条（tail-limit {}）",
+        rows.len(),
+        repo::message::HISTORY_LOAD_LIMIT
+    );
+    println!(
+        "④ 全量对账    {reconcile_ms}ms   diffs {} / skipped {:?}",
         report.diffs.len(),
-        report.skipped.iter().map(|s| s.reason).collect::<Vec<_>>());
+        report.skipped.iter().map(|s| s.reason).collect::<Vec<_>>()
+    );
     println!(
         "（每轮发送现付 ③ ≈ {load_ms}ms + 两个标量查询；④ 已后台化（resolve_for_turn），每 turn 静默期跑一次；in-memory 偏乐观，看量级）"
     );
@@ -288,6 +334,13 @@ async fn bench_read_path_large_session() {
         "合成会话对账不应有 diff：{:?}",
         report.diffs.first()
     );
-    assert!(derived.issues.is_empty(), "回放不应有 issue：{:?}", derived.issues.first());
-    assert_eq!(rows.len(), (turns * (2 + TOOL_ROUNDS * 2)).min(repo::message::HISTORY_LOAD_LIMIT as usize));
+    assert!(
+        derived.issues.is_empty(),
+        "回放不应有 issue：{:?}",
+        derived.issues.first()
+    );
+    assert_eq!(
+        rows.len(),
+        (turns * (2 + TOOL_ROUNDS * 2)).min(repo::message::HISTORY_LOAD_LIMIT as usize)
+    );
 }

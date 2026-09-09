@@ -81,7 +81,12 @@ pub enum AssertSpec {
         starts_with: Option<String>,
     },
     /// 格内段落数断言（嵌套表块不计段）
-    CellParagraphCount { block: usize, row: usize, cell: usize, equals: usize },
+    CellParagraphCount {
+        block: usize,
+        row: usize,
+        cell: usize,
+        equals: usize,
+    },
     /// 段内图片数断言（D18 十波；w:drawing/w:pict 计数）；表格块 → 该条 fail。
     /// count 缺省 = 存在性断言（≥1）
     BlockImage {
@@ -91,7 +96,10 @@ pub enum AssertSpec {
     },
     /// 段内域指令断言（D18 十波）：任一域指令（fldSimple w:instr / instrText）
     /// 包含 instr_contains 子串（如 "TOC" / "PAGE"）；表格块 → 该条 fail
-    BlockField { block: usize, instr_contains: String },
+    BlockField {
+        block: usize,
+        instr_contains: String,
+    },
 }
 
 /// 单条失败。
@@ -140,12 +148,25 @@ pub fn check_asserts(asserts: &[AssertSpec]) -> AppResult<()> {
     }
     for a in asserts {
         let (equals, contains, starts_with, target) = match a {
-            AssertSpec::BlockText { block, equals, contains, starts_with } => {
-                (equals, contains, starts_with, format!("块{block}"))
-            }
-            AssertSpec::CellText { block, row, cell, equals, contains, starts_with } => {
-                (equals, contains, starts_with, format!("块{block} r{row}c{cell}"))
-            }
+            AssertSpec::BlockText {
+                block,
+                equals,
+                contains,
+                starts_with,
+            } => (equals, contains, starts_with, format!("块{block}")),
+            AssertSpec::CellText {
+                block,
+                row,
+                cell,
+                equals,
+                contains,
+                starts_with,
+            } => (
+                equals,
+                contains,
+                starts_with,
+                format!("块{block} r{row}c{cell}"),
+            ),
             _ => continue,
         };
         let given = equals.is_some() as u8 + contains.is_some() as u8 + starts_with.is_some() as u8;
@@ -180,7 +201,11 @@ pub fn validate_document(bytes: &[u8], asserts: &[AssertSpec]) -> AppResult<Vali
 }
 
 /// 对已构建的模型体跑断言批（全部独立评估不短路）。
-fn validate_body(body: &[Block], stylesheet: &Stylesheet, asserts: &[AssertSpec]) -> ValidateReport {
+fn validate_body(
+    body: &[Block],
+    stylesheet: &Stylesheet,
+    asserts: &[AssertSpec],
+) -> ValidateReport {
     let mut failures: Vec<AssertFailure> = Vec::new();
     let mut passed_order: Vec<&'static str> = Vec::new();
     for a in asserts {
@@ -231,7 +256,12 @@ fn eval_assert(
                 })
             }
         }
-        AssertSpec::TableShape { block, rows, cols, style } => {
+        AssertSpec::TableShape {
+            block,
+            rows,
+            cols,
+            style,
+        } => {
             let block_ref = block_or_fail(body, *block, "table_shape")?;
             let Block::Table(t) = block_ref else {
                 return Err(AssertFailure {
@@ -255,7 +285,9 @@ fn eval_assert(
                     return Err(AssertFailure {
                         kind: "table_shape",
                         target: format!("块{block}"),
-                        detail: format!("期望 {want} 列，实际 {actual} 列（口径 = 任一行 gridSpan 求和最大值）"),
+                        detail: format!(
+                            "期望 {want} 列，实际 {actual} 列（口径 = 任一行 gridSpan 求和最大值）"
+                        ),
                     });
                 }
             }
@@ -265,8 +297,7 @@ fn eval_assert(
                     None => "无样式".to_string(),
                 };
                 // 显示名或原始 ID 都认（与 set_table_element 的 style 参数同口径）
-                let raw_id_matches =
-                    t.style_id.as_deref().is_some_and(|id| id == want.as_str());
+                let raw_id_matches = t.style_id.as_deref().is_some_and(|id| id == want.as_str());
                 if !raw_id_matches && actual != *want {
                     return Err(AssertFailure {
                         kind: "table_shape",
@@ -277,20 +308,31 @@ fn eval_assert(
             }
             Ok("table_shape")
         }
-        AssertSpec::BlockText { block, equals, contains, starts_with } => {
+        AssertSpec::BlockText {
+            block,
+            equals,
+            contains,
+            starts_with,
+        } => {
             let block_ref = block_or_fail(body, *block, "block_text")?;
             let Block::Paragraph(_) = block_ref else {
                 return Err(AssertFailure {
                     kind: "block_text",
                     target: format!("块{block}"),
-                    detail: "是表格块，block_text 只断言段落。表格内容用 cell_text，形状用 table_shape".into(),
+                    detail:
+                        "是表格块，block_text 只断言段落。表格内容用 cell_text，形状用 table_shape"
+                            .into(),
                 });
             };
             let mut text = String::new();
             blocks_text(std::slice::from_ref(block_ref), &mut text);
             let text = text.trim_end_matches('\n');
             match eval_text_match(equals, contains, starts_with, text) {
-                Some(detail) => Err(AssertFailure { kind: "block_text", target: format!("块{block}"), detail }),
+                Some(detail) => Err(AssertFailure {
+                    kind: "block_text",
+                    target: format!("块{block}"),
+                    detail,
+                }),
                 None => Ok("block_text"),
             }
         }
@@ -300,7 +342,9 @@ fn eval_assert(
                 return Err(AssertFailure {
                     kind: "block_style",
                     target: format!("块{block}"),
-                    detail: "是表格块，block_style 只断言段落样式。表样式用 table_shape 的 style 参数".into(),
+                    detail:
+                        "是表格块，block_style 只断言段落样式。表样式用 table_shape 的 style 参数"
+                            .into(),
                 });
             };
             let actual = match &p.props.style {
@@ -316,7 +360,14 @@ fn eval_assert(
             }
             Ok("block_style")
         }
-        AssertSpec::CellText { block, row, cell, equals, contains, starts_with } => {
+        AssertSpec::CellText {
+            block,
+            row,
+            cell,
+            equals,
+            contains,
+            starts_with,
+        } => {
             let cell_ref = cell_or_fail(body, *block, *row, *cell, "cell_text")?;
             let mut text = String::new();
             blocks_text(&cell_ref.blocks, &mut text);
@@ -330,7 +381,12 @@ fn eval_assert(
                 None => Ok("cell_text"),
             }
         }
-        AssertSpec::CellParagraphCount { block, row, cell, equals } => {
+        AssertSpec::CellParagraphCount {
+            block,
+            row,
+            cell,
+            equals,
+        } => {
             let cell_ref = cell_or_fail(body, *block, *row, *cell, "cell_paragraph_count")?;
             let actual = cell_ref
                 .blocks
@@ -353,7 +409,8 @@ fn eval_assert(
                 return Err(AssertFailure {
                     kind: "block_image",
                     target: format!("块{block}"),
-                    detail: "是表格块，block_image 只断言段落。格内图片暂不覆盖（嵌套内容块）".into(),
+                    detail: "是表格块，block_image 只断言段落。格内图片暂不覆盖（嵌套内容块）"
+                        .into(),
                 });
             };
             let actual = p.image_count as usize;
@@ -374,7 +431,10 @@ fn eval_assert(
                 })
             }
         }
-        AssertSpec::BlockField { block, instr_contains } => {
+        AssertSpec::BlockField {
+            block,
+            instr_contains,
+        } => {
             let block_ref = block_or_fail(body, *block, "block_field")?;
             let Block::Paragraph(p) = block_ref else {
                 return Err(AssertFailure {
@@ -383,7 +443,10 @@ fn eval_assert(
                     detail: "是表格块，block_field 只断言段落。格内域暂不覆盖（嵌套内容块）".into(),
                 });
             };
-            if p.field_instrs.iter().any(|i| i.contains(instr_contains.as_str())) {
+            if p.field_instrs
+                .iter()
+                .any(|i| i.contains(instr_contains.as_str()))
+            {
                 Ok("block_field")
             } else {
                 Err(AssertFailure {
@@ -407,7 +470,12 @@ fn eval_assert(
 fn grid_cols(t: &Table) -> usize {
     t.rows
         .iter()
-        .map(|r| r.cells.iter().map(|c| c.grid_span.unwrap_or(1) as usize).sum::<usize>())
+        .map(|r| {
+            r.cells
+                .iter()
+                .map(|c| c.grid_span.unwrap_or(1) as usize)
+                .sum::<usize>()
+        })
         .max()
         .unwrap_or(0)
 }
@@ -422,7 +490,10 @@ fn block_or_fail<'a>(
         Err(AssertFailure {
             kind,
             target: format!("块{block}"),
-            detail: format!("块号超出范围（文档共 {} 块）——先 inspect_docx 确认最新块号", body.len()),
+            detail: format!(
+                "块号超出范围（文档共 {} 块）——先 inspect_docx 确认最新块号",
+                body.len()
+            ),
         })
     } else {
         Ok(&body[block - 1])
@@ -446,16 +517,27 @@ fn cell_or_fail<'a>(
             detail: "是段落不是表格，格级断言只作用于表格块。段落用 block_text".into(),
         });
     };
-    let fail = |detail: String| AssertFailure { kind, target: format!("块{block} r{row}c{cell}"), detail };
+    let fail = |detail: String| AssertFailure {
+        kind,
+        target: format!("块{block} r{row}c{cell}"),
+        detail,
+    };
     let row_ref = t.rows.get(row.wrapping_sub(1)).ok_or_else(|| {
-        fail(format!("行号超出范围（表共 {} 行）——地址与 projection=table 的 rN 同口径", t.rows.len()))
+        fail(format!(
+            "行号超出范围（表共 {} 行）——地址与 projection=table 的 rN 同口径",
+            t.rows.len()
+        ))
     })?;
     let cell_ref = row_ref.cells.get(cell.wrapping_sub(1)).ok_or_else(|| {
-        fail(format!("格号超出范围（r{row} 共 {} 格）——地址与 projection=table 的 cN 同口径", row_ref.cells.len()))
+        fail(format!(
+            "格号超出范围（r{row} 共 {} 格）——地址与 projection=table 的 cN 同口径",
+            row_ref.cells.len()
+        ))
     })?;
     if cell_ref.v_merge.as_deref() == Some("continue") {
         return Err(fail(
-            "是纵向合并续格，内容在合并头格——断言头格地址（projection=table 里标 (合并头) 的格）".into(),
+            "是纵向合并续格，内容在合并头格——断言头格地址（projection=table 里标 (合并头) 的格）"
+                .into(),
         ));
     }
     Ok(cell_ref)
@@ -473,19 +555,31 @@ fn eval_text_match(
         if actual == want.as_str() {
             None
         } else {
-            Some(format!("期望等于「{}」，实际「{}」", clip(want), clip(actual)))
+            Some(format!(
+                "期望等于「{}」，实际「{}」",
+                clip(want),
+                clip(actual)
+            ))
         }
     } else if let Some(want) = contains {
         if actual.contains(want.as_str()) {
             None
         } else {
-            Some(format!("期望包含「{}」，实际「{}」", clip(want), clip(actual)))
+            Some(format!(
+                "期望包含「{}」，实际「{}」",
+                clip(want),
+                clip(actual)
+            ))
         }
     } else if let Some(want) = starts_with {
         if actual.starts_with(want.as_str()) {
             None
         } else {
-            Some(format!("期望以「{}」开头，实际「{}」", clip(want), clip(actual)))
+            Some(format!(
+                "期望以「{}」开头，实际「{}」",
+                clip(want),
+                clip(actual)
+            ))
         }
     } else {
         // check_asserts 已拦，纯防御
@@ -544,7 +638,12 @@ mod tests {
             &body,
             &[
                 bc(3),
-                AssertSpec::TableShape { block: 3, rows: Some(2), cols: Some(3), style: None },
+                AssertSpec::TableShape {
+                    block: 3,
+                    rows: Some(2),
+                    cols: Some(3),
+                    style: None,
+                },
                 AssertSpec::CellText {
                     block: 3,
                     row: 2,
@@ -553,7 +652,12 @@ mod tests {
                     contains: None,
                     starts_with: None,
                 },
-                AssertSpec::CellParagraphCount { block: 3, row: 1, cell: 1, equals: 1 },
+                AssertSpec::CellParagraphCount {
+                    block: 3,
+                    row: 1,
+                    cell: 1,
+                    equals: 1,
+                },
                 AssertSpec::BlockText {
                     block: 2,
                     equals: Some("正文".into()),
@@ -619,7 +723,12 @@ mod tests {
         let body = doc_with_table();
         let r = report(
             &body,
-            &[AssertSpec::TableShape { block: 1, rows: Some(2), cols: None, style: None }],
+            &[AssertSpec::TableShape {
+                block: 1,
+                rows: Some(2),
+                cols: None,
+                style: None,
+            }],
         );
         assert!(!r.passed);
         assert!(r.failures[0].detail.contains("是段落不是表格"));
@@ -630,13 +739,23 @@ mod tests {
         let body = doc_with_table();
         let r = report(
             &body,
-            &[AssertSpec::TableShape { block: 3, rows: Some(3), cols: Some(4), style: None }],
+            &[AssertSpec::TableShape {
+                block: 3,
+                rows: Some(3),
+                cols: Some(4),
+                style: None,
+            }],
         );
         // rows 先报（评估顺序即报告顺序）
         assert!(r.failures[0].detail.contains("期望 3 行，实际 2 行"));
         let r = report(
             &body,
-            &[AssertSpec::TableShape { block: 3, rows: Some(2), cols: Some(4), style: None }],
+            &[AssertSpec::TableShape {
+                block: 3,
+                rows: Some(2),
+                cols: Some(4),
+                style: None,
+            }],
         );
         // cols 口径 = gridSpan 求和（r1 = 2+1 = 3，非格数 2）
         assert!(r.failures[0].detail.contains("期望 4 列，实际 3 列"));
@@ -661,9 +780,21 @@ mod tests {
     fn block_style_falls_back_to_raw_id_without_styles() {
         let body = doc_with_table();
         // styles.xml 缺失 → 空表 → 显示名退化为原始 ID（与 outline 口径一致）
-        let r = report(&body, &[AssertSpec::BlockStyle { block: 1, equals: "2".into() }]);
+        let r = report(
+            &body,
+            &[AssertSpec::BlockStyle {
+                block: 1,
+                equals: "2".into(),
+            }],
+        );
         assert!(r.passed);
-        let r = report(&body, &[AssertSpec::BlockStyle { block: 2, equals: "2".into() }]);
+        let r = report(
+            &body,
+            &[AssertSpec::BlockStyle {
+                block: 2,
+                equals: "2".into(),
+            }],
+        );
         assert!(r.failures[0].detail.contains("(无样式)"));
     }
 
@@ -760,7 +891,12 @@ mod tests {
                     contains: None,
                     starts_with: None,
                 },
-                AssertSpec::CellParagraphCount { block: 1, row: 1, cell: 1, equals: 2 },
+                AssertSpec::CellParagraphCount {
+                    block: 1,
+                    row: 1,
+                    cell: 1,
+                    equals: 2,
+                },
             ],
         );
         assert!(r.passed, "failures: {:?}", r.failures);

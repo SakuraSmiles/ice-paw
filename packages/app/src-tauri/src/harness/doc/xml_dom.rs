@@ -136,7 +136,10 @@ pub(super) fn parse(xml: &str) -> AppResult<Element> {
 }
 
 /// 从 Start/Empty 事件构造 Element（属性值做标准 XML 反转义）。
-fn element_from_event(e: &quick_xml::events::BytesStart<'_>, decoder: quick_xml::Decoder) -> Element {
+fn element_from_event(
+    e: &quick_xml::events::BytesStart<'_>,
+    decoder: quick_xml::Decoder,
+) -> Element {
     let name = String::from_utf8_lossy(e.name().as_ref()).into_owned();
     let mut attrs = Vec::new();
     for attr in e.attributes().with_checks(false) {

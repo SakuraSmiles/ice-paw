@@ -171,12 +171,11 @@ pub(crate) async fn execute_tool_round(
         // Confirm 级工具若声明了 auth_reason（如截屏「画面将发送给模型服务商」），
         // 替换通用 reason 展示在审批卡上——用户点「允许」前必须知道数据去向。
         let mut decision = decision;
-        if let AuthorizationDecision::Confirm { reason, tool_name, .. } = &mut decision {
-            if let Some(custom) = registry
-                .get(tool_name)
-                .await
-                .and_then(|t| t.auth_reason())
-            {
+        if let AuthorizationDecision::Confirm {
+            reason, tool_name, ..
+        } = &mut decision
+        {
+            if let Some(custom) = registry.get(tool_name).await.and_then(|t| t.auth_reason()) {
                 *reason = custom;
             }
         }
@@ -437,12 +436,11 @@ pub(crate) async fn execute_tool_round(
                     } else {
                         // 非视觉：复用统一适配（两档制第二档——平台视觉配置链代读）。
                         // app_handle 经 ToolContext 通道（profile 引用链解 Stronghold 用）。
-                        let candidates =
-                            crate::harness::modal::gather_vision_candidates(
-                                tool_ctx.app_handle.as_ref(),
-                                &tool_ctx.pool,
-                            )
-                            .await;
+                        let candidates = crate::harness::modal::gather_vision_candidates(
+                            tool_ctx.app_handle.as_ref(),
+                            &tool_ctx.pool,
+                        )
+                        .await;
                         let data = base64::engine::general_purpose::STANDARD.encode(&png);
                         let tmp = vec![ContentBlock::image(data, "image/png")];
                         let outcome = crate::harness::modal::adapt_blocks_for_vision(
@@ -827,7 +825,10 @@ mod tests {
 
     #[test]
     fn extract_paths_from_args_missing() {
-        assert_eq!(extract_paths_from_args(r#"{"other":"x"}"#), Vec::<(String, String)>::new());
+        assert_eq!(
+            extract_paths_from_args(r#"{"other":"x"}"#),
+            Vec::<(String, String)>::new()
+        );
     }
 
     #[test]

@@ -43,7 +43,8 @@ fn similarity(missing_stem: &str, entry_stem: &str) -> u32 {
 /// 父目录存在时扫其条目取 top-3 近似候选（目录带 `/` 后缀标示）；父目录不存在或
 /// 无相近候选时给「先看目录结构」的通用指引。
 pub(crate) fn suggest_for_missing(path: &Path) -> String {
-    let fallback = "请核对实际路径；不确定目录结构时，先对父目录调用 list_directory 或 directory_tree 查看。";
+    let fallback =
+        "请核对实际路径；不确定目录结构时，先对父目录调用 list_directory 或 directory_tree 查看。";
     let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
         return fallback.to_string();
     };
@@ -66,7 +67,11 @@ pub(crate) fn suggest_for_missing(path: &Path) -> String {
                 continue; // 同名（大小写差异等）与隐藏条目不值得报
             }
             let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
-            let estem = ename.split('.').next().unwrap_or(&ename).to_ascii_lowercase();
+            let estem = ename
+                .split('.')
+                .next()
+                .unwrap_or(&ename)
+                .to_ascii_lowercase();
             let score = similarity(&stem, &estem);
             if score > 0 {
                 let display = if is_dir { format!("{ename}/") } else { ename };
@@ -132,7 +137,10 @@ mod tests {
     fn no_candidates_falls_back_to_guidance() {
         let dir = tempdir_with("empty", &[]);
         let hint = suggest_for_missing(&dir.join("zzz_unrelated.md"));
-        assert!(hint.contains("list_directory"), "无候选时给通用指引: {hint}");
+        assert!(
+            hint.contains("list_directory"),
+            "无候选时给通用指引: {hint}"
+        );
     }
 
     #[test]
@@ -144,10 +152,7 @@ mod tests {
 
     #[test]
     fn ranks_exact_over_prefix() {
-        let dir = tempdir_with(
-            "rank",
-            &["summarize.rs", "summary/", "summary_old.rs"],
-        );
+        let dir = tempdir_with("rank", &["summarize.rs", "summary/", "summary_old.rs"]);
         let hint = suggest_for_missing(&dir.join("summary.rs"));
         // 同名目录（3 分）应排在前缀相似（1 分）之前
         let summary_pos = hint.find("summary/").expect("应含 summary/ 候选");

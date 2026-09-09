@@ -26,7 +26,12 @@ pub(crate) fn slim_tool_results(messages: &mut [ChatMessage]) -> bool {
     let mut any = false;
     for m in messages.iter_mut() {
         for b in m.content.iter_mut() {
-            if let ContentBlock::ToolResult { content, tool_use_id, .. } = b {
+            if let ContentBlock::ToolResult {
+                content,
+                tool_use_id,
+                ..
+            } = b
+            {
                 let total = content.chars().count();
                 if total > SLIM_THRESHOLD_CHARS {
                     let head: String = content.chars().take(SLIM_KEEP_HEAD).collect();

@@ -53,7 +53,15 @@ async fn switch_and_reset(
         return false;
     };
     *switch_attempt += 1;
-    if !try_switch_model(ctx, current_asst_msg_id, trigger, error_text, *switch_attempt).await {
+    if !try_switch_model(
+        ctx,
+        current_asst_msg_id,
+        trigger,
+        error_text,
+        *switch_attempt,
+    )
+    .await
+    {
         return false;
     }
     *retry_state = RetryState::new();

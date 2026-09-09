@@ -88,15 +88,15 @@ pub async fn resolve_embedding_backend(
                 None
             }
         },
-        None => resolve_embedding_config(&prefs).map(|(model, base_url, api_key)| {
-            ResolvedEmbedding {
+        None => {
+            resolve_embedding_config(&prefs).map(|(model, base_url, api_key)| ResolvedEmbedding {
                 model,
                 base_url,
                 api_key,
                 source: "旧配置".into(),
                 profile_id: None,
-            }
-        }),
+            })
+        }
     }
 }
 
@@ -146,9 +146,7 @@ async fn resolve_embedding_from_profile(
                 .filter(|s| !s.is_empty())
                 .map(String::from)
         })
-        .or_else(|| {
-            crate::harness::provider::provider_openai_url(&row.provider).map(String::from)
-        });
+        .or_else(|| crate::harness::provider::provider_openai_url(&row.provider).map(String::from));
     let Some(base_url) = base_url else {
         tracing::warn!(
             target: "ice_paw.kb",

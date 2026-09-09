@@ -20,8 +20,10 @@ use crate::error::{AppError, AppResult};
 /// formal-report：正式报告模板（标题 1-4 级/正文/表格/列表样式、密级页眉 +
 /// 编号占位行、页码页脚，A4 单节空壳）。源自真机 Word 产物的手术净化品，
 /// 业务词表终验 0 命中（D7 净化豁免经用户拍板 2026-08-31）。
-pub const SHARED_TEMPLATE_SEEDS: &[(&str, &[u8])] =
-    &[("formal-report.docx", include_bytes!("assets/formal-report.docx"))];
+pub const SHARED_TEMPLATE_SEEDS: &[(&str, &[u8])] = &[(
+    "formal-report.docx",
+    include_bytes!("assets/formal-report.docx"),
+)];
 
 /// 把种子模板落盘到共享目录（幂等）：目录缺失创建；文件缺失写入、存在不动。
 /// 返回本次实际写入的份数（0 = 全部已存在，boot 日志静默）。
@@ -129,8 +131,15 @@ mod tests {
     #[test]
     fn ensure_writes_missing_then_idempotent() {
         let dir = temp_dir("ensure");
-        assert_eq!(ensure_shared_templates(&dir).unwrap(), SHARED_TEMPLATE_SEEDS.len());
-        assert_eq!(ensure_shared_templates(&dir).unwrap(), 0, "二次运行应零写入");
+        assert_eq!(
+            ensure_shared_templates(&dir).unwrap(),
+            SHARED_TEMPLATE_SEEDS.len()
+        );
+        assert_eq!(
+            ensure_shared_templates(&dir).unwrap(),
+            0,
+            "二次运行应零写入"
+        );
         for (name, bytes) in SHARED_TEMPLATE_SEEDS {
             assert_eq!(&std::fs::read(dir.join(name)).unwrap()[..], *bytes);
         }

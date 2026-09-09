@@ -194,7 +194,10 @@ pub async fn list_project_agent_shares(
 ///
 /// 多条小 SQL 各走现成索引（kind 索引 / idx_messages_conversation），单职责
 /// 可测；messages COUNT 不取 content 大字段。
-pub async fn get_project_overview(pool: &SqlitePool, project_id: &str) -> AppResult<ProjectOverviewRow> {
+pub async fn get_project_overview(
+    pool: &SqlitePool,
+    project_id: &str,
+) -> AppResult<ProjectOverviewRow> {
     let (chat_n, delegation_n): (i64, i64) = sqlx::query_as(
         "SELECT
             COALESCE(SUM(CASE WHEN kind = 'chat' THEN 1 ELSE 0 END), 0),
@@ -213,12 +216,11 @@ pub async fn get_project_overview(pool: &SqlitePool, project_id: &str) -> AppRes
     .fetch_one(pool)
     .await?;
 
-    let last: Option<(Option<String>,)> = sqlx::query_as(
-        "SELECT MAX(updated_at) FROM conversations WHERE project_id = ?",
-    )
-    .bind(project_id)
-    .fetch_optional(pool)
-    .await?;
+    let last: Option<(Option<String>,)> =
+        sqlx::query_as("SELECT MAX(updated_at) FROM conversations WHERE project_id = ?")
+            .bind(project_id)
+            .fetch_optional(pool)
+            .await?;
 
     Ok(ProjectOverviewRow {
         chat_conversations: chat_n,
@@ -334,7 +336,9 @@ mod tests {
     }
 
     fn ended_payload(termination: &str, rounds: u32) -> String {
-        format!(r#"{{"v":1,"termination":"{termination}","rounds":{rounds},"usage":null,"user_token_count":null}}"#)
+        format!(
+            r#"{{"v":1,"termination":"{termination}","rounds":{rounds},"usage":null,"user_token_count":null}}"#
+        )
     }
 
     #[tokio::test]
@@ -342,18 +346,80 @@ mod tests {
         let pool = migrated_pool().await;
 
         // 父会话（chat）+ 两个子任务（delegation）：一个 done、一个进行中
-        seed_conv(&pool, "parent", "chat", Some("p1"), None, None, "2026-08-18 10:00:00").await;
-        seed_conv(&pool, "task-done", "delegation", Some("p1"), Some("agent-1"), Some("parent"), "2026-08-18 12:00:00").await;
-        seed_conv(&pool, "task-running", "delegation", Some("p1"), Some("agent-1"), Some("parent"), "2026-08-18 13:00:00").await;
+        seed_conv(
+            &pool,
+            "parent",
+            "chat",
+            Some("p1"),
+            None,
+            None,
+            "2026-08-18 10:00:00",
+        )
+        .await;
+        seed_conv(
+            &pool,
+            "task-done",
+            "delegation",
+            Some("p1"),
+            Some("agent-1"),
+            Some("parent"),
+            "2026-08-18 12:00:00",
+        )
+        .await;
+        seed_conv(
+            &pool,
+            "task-running",
+            "delegation",
+            Some("p1"),
+            Some("agent-1"),
+            Some("parent"),
+            "2026-08-18 13:00:00",
+        )
+        .await;
         // 混入者：他项目任务 / 本项目 chat / 散落 delegation —— 都不该出现
-        seed_conv(&pool, "other-proj", "delegation", Some("p2"), None, None, "2026-08-18 10:00:00").await;
-        seed_conv(&pool, "chat-conv", "chat", Some("p1"), None, None, "2026-08-18 10:00:00").await;
-        seed_conv(&pool, "loose-task", "delegation", None, None, None, "2026-08-18 10:00:00").await;
+        seed_conv(
+            &pool,
+            "other-proj",
+            "delegation",
+            Some("p2"),
+            None,
+            None,
+            "2026-08-18 10:00:00",
+        )
+        .await;
+        seed_conv(
+            &pool,
+            "chat-conv",
+            "chat",
+            Some("p1"),
+            None,
+            None,
+            "2026-08-18 10:00:00",
+        )
+        .await;
+        seed_conv(
+            &pool,
+            "loose-task",
+            "delegation",
+            None,
+            None,
+            None,
+            "2026-08-18 10:00:00",
+        )
+        .await;
 
         // task-done：两轮 turn_ended（续聊场景）→ 取 seq 更大的最后一条
-        session_event::append(&pool, "task-done", "turn_context", "user", Some("t1"), None, "{}")
-            .await
-            .unwrap();
+        session_event::append(
+            &pool,
+            "task-done",
+            "turn_context",
+            "user",
+            Some("t1"),
+            None,
+            "{}",
+        )
+        .await
+        .unwrap();
         session_event::append(
             &pool,
             "task-done",
@@ -365,9 +431,17 @@ mod tests {
         )
         .await
         .unwrap();
-        session_event::append(&pool, "task-done", "turn_context", "user", Some("t2"), None, "{}")
-            .await
-            .unwrap();
+        session_event::append(
+            &pool,
+            "task-done",
+            "turn_context",
+            "user",
+            Some("t2"),
+            None,
+            "{}",
+        )
+        .await
+        .unwrap();
         session_event::append(
             &pool,
             "task-done",
@@ -380,9 +454,17 @@ mod tests {
         .await
         .unwrap();
         // task-running：有事件但无 turn_ended
-        session_event::append(&pool, "task-running", "turn_context", "user", Some("t1"), None, "{}")
-            .await
-            .unwrap();
+        session_event::append(
+            &pool,
+            "task-running",
+            "turn_context",
+            "user",
+            Some("t1"),
+            None,
+            "{}",
+        )
+        .await
+        .unwrap();
         // 混入者也给事件（证明排除靠 WHERE 不靠缺事件）
         session_event::append(
             &pool,
@@ -401,13 +483,19 @@ mod tests {
         let tasks = list_project_tasks(&pool, "p1").await.unwrap();
         assert_eq!(tasks.len(), 2, "只含本项目 delegation 会话");
         assert_eq!(tasks[0].id, "task-running", "updated_at 倒序");
-        assert!(tasks[0].ended_payload.is_none() && tasks[0].ended_at.is_none(), "进行中双 None");
+        assert!(
+            tasks[0].ended_payload.is_none() && tasks[0].ended_at.is_none(),
+            "进行中双 None"
+        );
         assert_eq!(tasks[0].initiator_agent_id.as_deref(), Some("agent-1"));
         assert_eq!(tasks[0].parent_conversation_id.as_deref(), Some("parent"));
 
         assert_eq!(tasks[1].id, "task-done");
         let payload = tasks[1].ended_payload.as_deref().expect("done 带 payload");
-        assert!(payload.contains(r#""termination":"stop""#), "多 turn 取最后一条");
+        assert!(
+            payload.contains(r#""termination":"stop""#),
+            "多 turn 取最后一条"
+        );
         assert!(tasks[1].ended_at.is_some(), "ended_at 有值");
     }
 
@@ -415,9 +503,36 @@ mod tests {
     async fn list_project_events_tail_and_after_use_global_id_order() {
         let pool = migrated_pool().await;
 
-        seed_conv(&pool, "a", "chat", Some("p1"), None, None, "2026-08-18 10:00:00").await;
-        seed_conv(&pool, "b", "delegation", Some("p1"), Some("agent-1"), Some("a"), "2026-08-18 10:00:00").await;
-        seed_conv(&pool, "c", "chat", Some("p2"), None, None, "2026-08-18 10:00:00").await; // 他项目
+        seed_conv(
+            &pool,
+            "a",
+            "chat",
+            Some("p1"),
+            None,
+            None,
+            "2026-08-18 10:00:00",
+        )
+        .await;
+        seed_conv(
+            &pool,
+            "b",
+            "delegation",
+            Some("p1"),
+            Some("agent-1"),
+            Some("a"),
+            "2026-08-18 10:00:00",
+        )
+        .await;
+        seed_conv(
+            &pool,
+            "c",
+            "chat",
+            Some("p2"),
+            None,
+            None,
+            "2026-08-18 10:00:00",
+        )
+        .await; // 他项目
 
         // 跨会话交错追加：a, b, c, a, b（全局 id 单调即插入序）
         for (conv, marker) in [
@@ -427,18 +542,32 @@ mod tests {
             ("a", "m4"),
             ("b", "m5"),
         ] {
-            session_event::append(&pool, conv, "user_message", "user", Some("t"), Some(marker), "{}")
-                .await
-                .unwrap();
+            session_event::append(
+                &pool,
+                conv,
+                "user_message",
+                "user",
+                Some("t"),
+                Some(marker),
+                "{}",
+            )
+            .await
+            .unwrap();
         }
 
         // 尾部优先：最新 3 条（m3/m4/m5 中属于 p1 的 m4/m5 + 再往前 m2）→ 反转为 id ASC
-        let tail = list_project_events_tail(&pool, "p1", None, 3).await.unwrap();
+        let tail = list_project_events_tail(&pool, "p1", None, 3)
+            .await
+            .unwrap();
         let markers: Vec<&str> = tail
             .iter()
             .map(|r| r.message_id.as_deref().unwrap_or_default())
             .collect();
-        assert_eq!(markers, vec!["m2", "m4", "m5"], "p1 全量仅 3 条且全局 id 正序");
+        assert_eq!(
+            markers,
+            vec!["m2", "m4", "m5"],
+            "p1 全量仅 3 条且全局 id 正序"
+        );
         assert!(
             tail.windows(2).all(|w| w[0].id < w[1].id),
             "返回前已反转为 id ASC"
@@ -451,7 +580,9 @@ mod tests {
 
         // before_id 严格小于边界：p1 事件序是 m1,m2,m4,m5，尾页丢了 m1 → 游标 m2 前恰剩 m1
         let m2_id = tail[0].id;
-        let earlier = list_project_events_tail(&pool, "p1", Some(m2_id), 3).await.unwrap();
+        let earlier = list_project_events_tail(&pool, "p1", Some(m2_id), 3)
+            .await
+            .unwrap();
         assert_eq!(
             earlier
                 .iter()
@@ -461,21 +592,29 @@ mod tests {
             "游标严格小于边界，取回页外更早事件"
         );
         let m1_id = earlier[0].id;
-        let head = list_project_events_tail(&pool, "p1", Some(m1_id), 3).await.unwrap();
+        let head = list_project_events_tail(&pool, "p1", Some(m1_id), 3)
+            .await
+            .unwrap();
         assert!(head.is_empty(), "取穿后返回空");
 
         // 正向增量：after = m4 的 id → 只拿 m5
         let m4_id = tail[1].id;
-        let inc = list_project_events_after(&pool, "p1", Some(m4_id), 10).await.unwrap();
+        let inc = list_project_events_after(&pool, "p1", Some(m4_id), 10)
+            .await
+            .unwrap();
         assert_eq!(inc.len(), 1);
         assert_eq!(inc[0].message_id.as_deref(), Some("m5"));
 
         // 追平返回空
-        let done = list_project_events_after(&pool, "p1", Some(tail[2].id), 10).await.unwrap();
+        let done = list_project_events_after(&pool, "p1", Some(tail[2].id), 10)
+            .await
+            .unwrap();
         assert!(done.is_empty());
 
         // 他项目隔离
-        let p2 = list_project_events_tail(&pool, "p2", None, 10).await.unwrap();
+        let p2 = list_project_events_tail(&pool, "p2", None, 10)
+            .await
+            .unwrap();
         assert_eq!(p2.len(), 1);
         assert_eq!(p2[0].message_id.as_deref(), Some("m3"));
     }
@@ -512,8 +651,26 @@ mod tests {
         .expect("seed agent-2");
 
         // agent-1 名下 2 条（token 100 + NULL 未回填）；t1 划给 agent-2 名下 1 条（token 40）
-        seed_conv(&pool, "c1", "chat", Some("p1"), None, None, "2026-08-18 10:00:00").await;
-        seed_conv(&pool, "t1", "delegation", Some("p1"), Some("agent-1"), Some("c1"), "2026-08-18 10:00:00").await;
+        seed_conv(
+            &pool,
+            "c1",
+            "chat",
+            Some("p1"),
+            None,
+            None,
+            "2026-08-18 10:00:00",
+        )
+        .await;
+        seed_conv(
+            &pool,
+            "t1",
+            "delegation",
+            Some("p1"),
+            Some("agent-1"),
+            Some("c1"),
+            "2026-08-18 10:00:00",
+        )
+        .await;
         // 注意：seed_conv 的 agent_id 固定 agent-1——第二条会话用 agent-2 需 UPDATE
         sqlx::query("UPDATE conversations SET agent_id = 'agent-2' WHERE id = 't1'")
             .execute(&pool)
@@ -523,7 +680,16 @@ mod tests {
         seed_message_tokens(&pool, "m2", "c1", None).await;
         seed_message_tokens(&pool, "m3", "t1", Some(40)).await;
         // 他项目混入（不进任何桶）
-        seed_conv(&pool, "x", "chat", Some("p2"), None, None, "2026-08-18 10:00:00").await;
+        seed_conv(
+            &pool,
+            "x",
+            "chat",
+            Some("p2"),
+            None,
+            None,
+            "2026-08-18 10:00:00",
+        )
+        .await;
         seed_message(&pool, "m4", "x").await;
 
         let shares = list_project_agent_shares(&pool, "p1").await.unwrap();
@@ -544,13 +710,49 @@ mod tests {
     async fn get_project_overview_counts_and_empty_project() {
         let pool = migrated_pool().await;
 
-        seed_conv(&pool, "c1", "chat", Some("p1"), None, None, "2026-08-18 10:00:00").await;
-        seed_conv(&pool, "c2", "chat", Some("p1"), None, None, "2026-08-18 10:00:00").await;
-        seed_conv(&pool, "t1", "delegation", Some("p1"), Some("agent-1"), Some("c1"), "2026-08-18 10:00:00").await;
+        seed_conv(
+            &pool,
+            "c1",
+            "chat",
+            Some("p1"),
+            None,
+            None,
+            "2026-08-18 10:00:00",
+        )
+        .await;
+        seed_conv(
+            &pool,
+            "c2",
+            "chat",
+            Some("p1"),
+            None,
+            None,
+            "2026-08-18 10:00:00",
+        )
+        .await;
+        seed_conv(
+            &pool,
+            "t1",
+            "delegation",
+            Some("p1"),
+            Some("agent-1"),
+            Some("c1"),
+            "2026-08-18 10:00:00",
+        )
+        .await;
         seed_message(&pool, "m1", "c1").await;
         seed_message(&pool, "m2", "t1").await;
         // 他项目混入
-        seed_conv(&pool, "x", "chat", Some("p2"), None, None, "2026-08-18 10:00:00").await;
+        seed_conv(
+            &pool,
+            "x",
+            "chat",
+            Some("p2"),
+            None,
+            None,
+            "2026-08-18 10:00:00",
+        )
+        .await;
         seed_message(&pool, "m3", "x").await;
 
         let ov = get_project_overview(&pool, "p1").await.unwrap();

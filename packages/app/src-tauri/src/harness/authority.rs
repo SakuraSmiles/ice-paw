@@ -233,10 +233,7 @@ impl AuthSessionRegistry {
     /// 共享同表，调用方无需回存。同会话并发单流由 `ChatState.start` 保证，
     /// 此处不存在并发写竞争窗口的放大。
     pub fn session_for(&self, conv_id: &str) -> PathAuthSession {
-        self.lock()
-            .entry(conv_id.to_string())
-            .or_default()
-            .clone()
+        self.lock().entry(conv_id.to_string()).or_default().clone()
     }
 
     /// 移除该会话的授权记忆（会话删除时调用；内存卫生——单会话 grants
@@ -647,7 +644,12 @@ mod tests {
             .session_for("conv-a")
             .mark_tool_authorized("run_command")
             .await;
-        assert!(!registry.session_for("conv-b").is_tool_authorized("run_command").await);
+        assert!(
+            !registry
+                .session_for("conv-b")
+                .is_tool_authorized("run_command")
+                .await
+        );
     }
 
     #[tokio::test]
@@ -659,7 +661,12 @@ mod tests {
             .mark_dir_authorized("/ws")
             .await;
         registry.remove("conv-1");
-        assert!(!registry.session_for("conv-1").is_authorized("/ws/a.txt", "write_file").await);
+        assert!(
+            !registry
+                .session_for("conv-1")
+                .is_authorized("/ws/a.txt", "write_file")
+                .await
+        );
     }
 
     // ----- #11 分层授权记忆：三档 grant + 判定序 -----

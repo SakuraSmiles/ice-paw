@@ -118,6 +118,11 @@ mod gdi {
 
     use windows_sys::Win32::Foundation::{GetLastError, LPARAM, RECT};
     use windows_sys::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
+    use windows_sys::Win32::Graphics::Gdi::{
+        BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
+        EnumDisplayMonitors, GetDC, GetDIBits, ReleaseDC, SelectObject, BITMAPINFO,
+        BITMAPINFOHEADER, CAPTUREBLT, DIB_RGB_COLORS, SRCCOPY,
+    };
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
         SendInput, INPUT, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_KEYUP,
         KEYEVENTF_UNICODE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_HWHEEL, MOUSEEVENTF_LEFTDOWN,
@@ -125,19 +130,14 @@ mod gdi {
         MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL,
         MOUSEINPUT,
     };
-    use windows_sys::Win32::Graphics::Gdi::{
-        BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
-        EnumDisplayMonitors, GetDC, GetDIBits, ReleaseDC, SelectObject, BITMAPINFO,
-        BITMAPINFOHEADER, CAPTUREBLT, DIB_RGB_COLORS, SRCCOPY,
-    };
     // PrintWindow 在 windows-sys 0.59 被归进 Xps 打印路径的 feature（Win32_Storage_Xps）
     use windows_sys::Win32::Storage::Xps::PrintWindow;
     use windows_sys::Win32::System::Threading::GetCurrentProcessId;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetForegroundWindow, GetSystemMetrics, GetWindowLongW, GetWindowRect,
         GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
-        GWL_EXSTYLE, PW_RENDERFULLCONTENT, WS_EX_TOOLWINDOW, SM_CXVIRTUALSCREEN,
-        SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+        GWL_EXSTYLE, PW_RENDERFULLCONTENT, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
+        SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, WS_EX_TOOLWINDOW,
     };
 
     type Hwnd = windows_sys::Win32::Foundation::HWND;
@@ -300,13 +300,15 @@ mod gdi {
                 if IsIconic(hwnd) != 0 {
                     return Err(AppError::Validation(
                         "screen 捕获失败: 目标窗口已最小化，PrintWindow 无法渲染最小化窗口\
-                         ——请让用户还原窗口，或改用 capture_screen 截全屏".into(),
+                         ——请让用户还原窗口，或改用 capture_screen 截全屏"
+                            .into(),
                     ));
                 }
                 let rect = window_rect(hwnd).ok_or_else(|| {
                     AppError::Validation(
                         "screen 捕获失败: 窗口不存在或矩形不可得——句柄可能已失效\
-                         （窗口被关闭），请重新 list_windows".into(),
+                         （窗口被关闭），请重新 list_windows"
+                            .into(),
                     )
                 })?;
                 let (w, h) = (rect.width as i32, rect.height as i32);
@@ -335,7 +337,8 @@ mod gdi {
                     release_capture_objects(hdc_screen, hdc_mem, hbmp, old);
                     return Err(AppError::Validation(
                         "screen 捕获失败: PrintWindow 渲染失败——该窗口可能不允许抓取\
-                         （DRM 保护/特殊渲染管线），可改用 capture_screen 截其所在区域".into(),
+                         （DRM 保护/特殊渲染管线），可改用 capture_screen 截其所在区域"
+                            .into(),
                     ));
                 }
                 let mut bmi: BITMAPINFO = std::mem::zeroed();
@@ -356,7 +359,10 @@ mod gdi {
                 );
                 release_capture_objects(hdc_screen, hdc_mem, hbmp, old);
                 if got == 0 {
-                    return Err(capture_err("GetDIBits 失败", "读取窗口像素位图失败，稍后重试"));
+                    return Err(capture_err(
+                        "GetDIBits 失败",
+                        "读取窗口像素位图失败，稍后重试",
+                    ));
                 }
                 bgra_to_opaque_rgba(&mut buf);
                 Ok((
@@ -477,7 +483,8 @@ mod gdi {
             return Err(AppError::Internal(
                 "screen 输入失败: SendInput 鼠标事件被系统拒绝——\
                  目标可能是提权窗口（UIPI 拦截非同权限输入）或安全软件/反作弊\
-                 拦截了输入模拟；请改用需要用户手动完成的替代方式".into(),
+                 拦截了输入模拟；请改用需要用户手动完成的替代方式"
+                    .into(),
             ));
         }
         Ok(())
@@ -495,7 +502,8 @@ mod gdi {
             return Err(AppError::Internal(
                 "screen 输入失败: SendInput 键盘事件被系统拒绝——\
                  目标可能是提权窗口（UIPI 拦截非同权限输入）或安全软件/反作弊\
-                 拦截了输入模拟；请改用需要用户手动完成的替代方式".into(),
+                 拦截了输入模拟；请改用需要用户手动完成的替代方式"
+                    .into(),
             ));
         }
         Ok(())
@@ -506,7 +514,9 @@ mod gdi {
     fn capture_err(step: &str, hint: &str) -> AppError {
         // SAFETY: GetLastError 是线程槽查询，无副作用。
         let gle = unsafe { GetLastError() };
-        AppError::Internal(format!("screen 捕获失败: {step}（GDI 错误码 {gle}）——{hint}"))
+        AppError::Internal(format!(
+            "screen 捕获失败: {step}（GDI 错误码 {gle}）——{hint}"
+        ))
     }
 
     /// GDI 32bpp DIB 是 BGRA，且 alpha 字节文档未定义（实测 DWM 屏幕路径常 255，
@@ -681,8 +691,8 @@ mod gdi {
     mod gdi_contract_tests {
         use super::bgra_to_opaque_rgba;
         use windows_sys::Win32::Graphics::Gdi::{
-            CreateBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, GetDIBits,
-            ReleaseDC, SelectObject, SetPixel, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
+            CreateBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, GetDIBits, ReleaseDC,
+            SelectObject, SetPixel, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
         };
 
         #[test]
@@ -696,17 +706,24 @@ mod gdi {
                 let hdc_mem = CreateCompatibleDC(hdc_screen);
                 // 直接造 32bpp DDB（不随屏幕色深漂移），SetPixel 写 COLORREF=0x00BBGGRR
                 let hbmp = CreateBitmap(W, H, 1, 32, std::ptr::null());
-                assert!(!hdc_mem.is_null() && !hbmp.is_null(), "内存 DC/位图创建失败");
+                assert!(
+                    !hdc_mem.is_null() && !hbmp.is_null(),
+                    "内存 DC/位图创建失败"
+                );
                 let old = SelectObject(hdc_mem, hbmp);
                 // 顶行区：红(2,2) 绿(4,2) 蓝(6,2)；末行：白(2,5) 黑(4,5)
                 for (x, y, c) in [
-                    (2, 2, 0xFFu32),     // RGB(255,0,0) 纯红
-                    (4, 2, 0xFF_00),     // RGB(0,255,0) 纯绿
-                    (6, 2, 0xFF_0000),   // RGB(0,0,255) 纯蓝
-                    (2, 5, 0xFF_FF_FF),  // 白
-                    (4, 5, 0x00_00_00),  // 黑
+                    (2, 2, 0xFFu32),    // RGB(255,0,0) 纯红
+                    (4, 2, 0xFF_00),    // RGB(0,255,0) 纯绿
+                    (6, 2, 0xFF_0000),  // RGB(0,0,255) 纯蓝
+                    (2, 5, 0xFF_FF_FF), // 白
+                    (4, 5, 0x00_00_00), // 黑
                 ] {
-                    assert_ne!(SetPixel(hdc_mem, x, y, c), u32::MAX, "SetPixel({x},{y}) 失败");
+                    assert_ne!(
+                        SetPixel(hdc_mem, x, y, c),
+                        u32::MAX,
+                        "SetPixel({x},{y}) 失败"
+                    );
                 }
                 // 与生产完全相同的 GetDIBits 形状（负 biHeight = 自上而下）
                 let mut bmi: BITMAPINFO = std::mem::zeroed();
@@ -738,11 +755,19 @@ mod gdi {
                     buf[i..i + 4].try_into().unwrap()
                 };
                 // 通道序：BGRA 换位后 R 在首字节（若漏换位，纯红像素会是 [0,0,255,255]）
-                assert_eq!(px(2, 2), [255, 0, 0, 255], "纯红像素通道序错误（BGRA 未换位？）");
+                assert_eq!(
+                    px(2, 2),
+                    [255, 0, 0, 255],
+                    "纯红像素通道序错误（BGRA 未换位？）"
+                );
                 assert_eq!(px(4, 2), [0, 255, 0, 255], "纯绿像素通道序错误");
                 assert_eq!(px(6, 2), [0, 0, 255, 255], "纯蓝像素通道序错误");
                 // 行序：顶行区的色应在 y=2；若行序翻转，(2,2) 处会是空像素/黑
-                assert_eq!(px(2, 5), [255, 255, 255, 255], "末行白像素错位（行序翻转？）");
+                assert_eq!(
+                    px(2, 5),
+                    [255, 255, 255, 255],
+                    "末行白像素错位（行序翻转？）"
+                );
                 assert_eq!(px(4, 5), [0, 0, 0, 255], "末行黑像素错位（行序翻转？）");
             }
         }
@@ -817,6 +842,7 @@ impl ScreenBackend for UnsupportedBackend {
 fn unsupported() -> AppError {
     AppError::Validation(
         "screen 不支持: computer use 屏幕工具当前仅支持 Windows——\
-         在 macOS/Linux 上请改用其它方式完成任务".into(),
+         在 macOS/Linux 上请改用其它方式完成任务"
+            .into(),
     )
 }

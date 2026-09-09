@@ -106,7 +106,12 @@ pub(super) fn probe_image(bytes: Vec<u8>) -> AppResult<ImagePayload> {
             "图片无效: 图片宽或高为 0，不是可插入的图片。".into(),
         ));
     }
-    Ok(ImagePayload { bytes, width_px: w, height_px: h, ext })
+    Ok(ImagePayload {
+        bytes,
+        width_px: w,
+        height_px: h,
+        ext,
+    })
 }
 
 // =========================================================================
@@ -143,21 +148,24 @@ pub(super) fn plan_package_additions(
         .map_err(|e| AppError::Internal(format!("docx 不是合法 ZIP 容器: {e}")))?;
     let names: Vec<String> = archive.file_names().map(str::to_string).collect();
     // 家族前缀（错误文案用）：有图挂图片族（图片问题优先暴露），纯 TOC 挂 TOC 族
-    let family = if images.is_empty() { "TOC 插入无效" } else { "图片插入无效" };
+    let family = if images.is_empty() {
+        "TOC 插入无效"
+    } else {
+        "图片插入无效"
+    };
 
     let mut allocs = Vec::new();
     let mut additions = PkgAdditions::default();
 
     // ---- rels：登记图片关系（原条目字节不动，新条目插在 </Relationships> 前）----
     if !images.is_empty() {
-        let rels = read_zip_entry(&mut archive, "word/_rels/document.xml.rels")?.ok_or_else(
-            || {
+        let rels =
+            read_zip_entry(&mut archive, "word/_rels/document.xml.rels")?.ok_or_else(|| {
                 AppError::Validation(format!(
                     "{family}: 文档包缺少 word/_rels/document.xml.rels 关系部件，\
                      无法登记图片关系。怎么办：确认目标文件是 Word/WPS 正常保存的 .docx。"
                 ))
-            },
-        )?;
+            })?;
         let dom = xml_dom::parse(&rels).map_err(|e| {
             AppError::Validation(format!(
                 "{family}: 关系部件解析失败（{e}）。怎么办：确认目标文件未损坏。"
@@ -177,7 +185,9 @@ pub(super) fn plan_package_additions(
         // media 文件不参与编号但占名——分配时撞名跳过）
         let mut max_k = 0u32;
         for name in &names {
-            let Some(rest) = name.strip_prefix("word/media/image") else { continue };
+            let Some(rest) = name.strip_prefix("word/media/image") else {
+                continue;
+            };
             let digits_end = rest.find('.').unwrap_or(rest.len());
             if let Ok(n) = rest[..digits_end].parse::<u32>() {
                 max_k = max_k.max(n);
@@ -206,7 +216,9 @@ pub(super) fn plan_package_additions(
                 r#"<Relationship Id="{rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="{}"/>"#,
                 media_name.strip_prefix("word/").unwrap_or(&media_name),
             ));
-            additions.appends.push((media_name.clone(), img.bytes.clone()));
+            additions
+                .appends
+                .push((media_name.clone(), img.bytes.clone()));
             allocs.push(ImageAlloc { rid });
         }
         let extended = append_before_close(&rels, "</Relationships>", &new_rels)?;
@@ -229,7 +241,9 @@ pub(super) fn plan_package_additions(
             } else {
                 // 缺失：**新建 entry 走追加**（替换件必须已在包内——repack 显式
                 // Err「重打包部件缺失」正是为拦这个）
-                additions.appends.push(("word/settings.xml".into(), s.into_bytes()));
+                additions
+                    .appends
+                    .push(("word/settings.xml".into(), s.into_bytes()));
             }
         }
     }
@@ -269,7 +283,9 @@ pub(super) fn plan_package_additions(
         }
         if !insertions.is_empty() {
             let out = append_before_close(&ct, "</Types>", &insertions)?;
-            additions.replacements.push(("[Content_Types].xml".into(), out));
+            additions
+                .replacements
+                .push(("[Content_Types].xml".into(), out));
         }
     }
 
@@ -278,8 +294,8 @@ pub(super) fn plan_package_additions(
 
 /// CT 里已声明的 Default 扩展名集合（小写归一）。
 fn existing_default_exts(ct: &str) -> AppResult<Vec<String>> {
-    let dom = xml_dom::parse(ct)
-        .map_err(|e| AppError::Internal(format!("内容类型部件解析失败: {e}")))?;
+    let dom =
+        xml_dom::parse(ct).map_err(|e| AppError::Internal(format!("内容类型部件解析失败: {e}")))?;
     Ok(dom
         .child_elements()
         .filter(|e| e.name == "Default")
@@ -327,11 +343,25 @@ const MINIMAL_SETTINGS_XML: &str = concat!(
 /// 取文档序最小位置，与 schema 序一致）。m:mathPr 跨前缀、w14/w15 是现代 Word
 /// 尾部扩展——真实文件几乎必含其中之一，全无才退到 `</w:settings>` 前。
 const SETTINGS_LATER_ANCHORS: [&str; 19] = [
-    "<w:hdrShapeDefaults", "<w:footnotePr", "<w:endnotePr", "<w:compat", "<w:docVars",
-    "<w:rsids", "<m:mathPr", "<w:attachedSchema", "<w:themeFontLang", "<w:clrSchemeMapping",
-    "<w:doNotIncludeSubdocsInStats", "<w:doNotAutoCompressPictures", "<w:forceUpgrade",
-    "<w:smartTagType", "<w:shapeDefaults", "<w:decimalSymbol", "<w:listSeparator",
-    "<w14:docId", "<w15:docId",
+    "<w:hdrShapeDefaults",
+    "<w:footnotePr",
+    "<w:endnotePr",
+    "<w:compat",
+    "<w:docVars",
+    "<w:rsids",
+    "<m:mathPr",
+    "<w:attachedSchema",
+    "<w:themeFontLang",
+    "<w:clrSchemeMapping",
+    "<w:doNotIncludeSubdocsInStats",
+    "<w:doNotAutoCompressPictures",
+    "<w:forceUpgrade",
+    "<w:smartTagType",
+    "<w:shapeDefaults",
+    "<w:decimalSymbol",
+    "<w:listSeparator",
+    "<w14:docId",
+    "<w15:docId",
 ];
 
 /// 幂等 upsert `<w:updateFields w:val="true"/>`：已存在（任意 val）→ Ok(None)
@@ -514,8 +544,10 @@ pub(super) fn next_docpr_id(doc_xml: &str) -> u32 {
         let mut from = 0usize;
         while let Some(rel) = doc_xml[from..].find(pat) {
             let start = from + rel + pat.len();
-            let digits: String =
-                doc_xml[start..].chars().take_while(|c| c.is_ascii_digit()).collect();
+            let digits: String = doc_xml[start..]
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect();
             if let Ok(n) = digits.parse::<u32>() {
                 max = max.max(n);
             }
@@ -566,7 +598,8 @@ mod tests {
     fn zip_of(parts: &[(&str, &[u8])]) -> Vec<u8> {
         let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
         for (name, content) in parts {
-            w.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
+            w.start_file(*name, zip::write::SimpleFileOptions::default())
+                .unwrap();
             w.write_all(content).unwrap();
         }
         w.finish().unwrap().into_inner()
@@ -579,8 +612,16 @@ mod tests {
     /// 合成最小 docx 骨架（CT + document + 可选 rels/settings/media）。
     fn fixture_doc(rels: Option<&str>, settings: Option<&str>, media: &[(&str, &[u8])]) -> Vec<u8> {
         let mut parts: Vec<(&str, &[u8])> = vec![
-            ("[Content_Types].xml", s(r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/></Types>"#)),
-            ("word/document.xml", s(r#"<w:document xmlns:w="w"><w:body><w:p/></w:body></w:document>"#)),
+            (
+                "[Content_Types].xml",
+                s(
+                    r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/></Types>"#,
+                ),
+            ),
+            (
+                "word/document.xml",
+                s(r#"<w:document xmlns:w="w"><w:body><w:p/></w:body></w:document>"#),
+            ),
         ];
         if let Some(r) = rels {
             parts.push(("word/_rels/document.xml.rels", s(r)));
@@ -621,7 +662,12 @@ mod tests {
     }
 
     fn png_payload(w: u32, h: u32) -> ImagePayload {
-        ImagePayload { bytes: tiny_png(w, h), width_px: w, height_px: h, ext: "png" }
+        ImagePayload {
+            bytes: tiny_png(w, h),
+            width_px: w,
+            height_px: h,
+            ext: "png",
+        }
     }
 
     /// 借用切片辅助（plan_package_additions 零拷贝签名）。
@@ -676,10 +722,14 @@ mod tests {
         let doc = fixture_doc(
             Some(RELS_R1_R5),
             None,
-            &[("word/media/image1.png", b"old1"), ("word/media/image3.png", b"old3")],
+            &[
+                ("word/media/image1.png", b"old1"),
+                ("word/media/image3.png", b"old3"),
+            ],
         );
         let (allocs, additions) =
-            plan_package_additions(&doc, &refs(&[png_payload(2, 2), png_payload(2, 2)]), false).unwrap();
+            plan_package_additions(&doc, &refs(&[png_payload(2, 2), png_payload(2, 2)]), false)
+                .unwrap();
         assert_eq!(allocs[0].rid, "rId6");
         assert_eq!(allocs[1].rid, "rId7");
         // rels 替换件：原两条 Relationship 原样 + 新两条 image 关系
@@ -712,9 +762,8 @@ mod tests {
     #[test]
     fn rels_missing_rejected_for_images() {
         let doc = fixture_doc(None, None, &[]);
-        let e = val_msg(
-            plan_package_additions(&doc, &refs(&[png_payload(2, 2)]), false).unwrap_err(),
-        );
+        let e =
+            val_msg(plan_package_additions(&doc, &refs(&[png_payload(2, 2)]), false).unwrap_err());
         assert!(e.starts_with("图片插入无效:"), "实际: {e}");
         assert!(e.contains("document.xml.rels"));
     }
@@ -737,18 +786,24 @@ mod tests {
         assert!(ct.ends_with("</Types>"));
 
         // 把上一步产物当新包（已含 png Default）→ 再规划一图：CT 不重写
-        let repacked = repack_package(&doc, &additions.replacements, &additions.appends)
-            .unwrap();
+        let repacked = repack_package(&doc, &additions.replacements, &additions.appends).unwrap();
         let (_, additions2) =
             plan_package_additions(&repacked, &refs(&[png_payload(2, 2)]), false).unwrap();
         assert!(
-            !additions2.replacements.iter().any(|(p, _)| p == "[Content_Types].xml"),
+            !additions2
+                .replacements
+                .iter()
+                .any(|(p, _)| p == "[Content_Types].xml"),
             "CT 已有 png Default 不应重写"
         );
         // jpeg 图仍缺 Default → 补 jpeg 项
-        let jpeg = ImagePayload { bytes: tiny_jpeg(2, 2), width_px: 2, height_px: 2, ext: "jpeg" };
-        let (_, additions3) =
-            plan_package_additions(&repacked, &refs(&[jpeg]), false).unwrap();
+        let jpeg = ImagePayload {
+            bytes: tiny_jpeg(2, 2),
+            width_px: 2,
+            height_px: 2,
+            ext: "jpeg",
+        };
+        let (_, additions3) = plan_package_additions(&repacked, &refs(&[jpeg]), false).unwrap();
         let ct3 = additions3
             .replacements
             .iter()
@@ -772,9 +827,12 @@ mod tests {
         // (b) 无任何锚 → 退到 </w:settings> 前
         let s_b = r#"<w:settings xmlns:w="w"><w:zoom w:percent="100"/></w:settings>"#;
         let out = upsert_update_fields(s_b).unwrap().unwrap();
-        assert!(out.contains(r#"<w:zoom w:percent="100"/><w:updateFields w:val="true"/></w:settings>"#));
+        assert!(
+            out.contains(r#"<w:zoom w:percent="100"/><w:updateFields w:val="true"/></w:settings>"#)
+        );
         // (c) 已有 → Ok(None) 不动
-        let s_c = r#"<w:settings xmlns:w="w"><w:updateFields w:val="true"/><w:compat/></w:settings>"#;
+        let s_c =
+            r#"<w:settings xmlns:w="w"><w:updateFields w:val="true"/><w:compat/></w:settings>"#;
         assert!(upsert_update_fields(s_c).unwrap().is_none());
         // (d) 前缀碰撞防御：<w:compatSetting 撞 <w:compat——无 compat 元素但串里
         // 出现 compatSetting 前缀时不得误插（此处构造 rsids 锚承接）
@@ -793,7 +851,10 @@ mod tests {
         let doc = fixture_doc(Some(RELS_R1_R5), None, &[]);
         let (_, additions) = plan_package_additions(&doc, &[], true).unwrap();
         assert!(
-            !additions.replacements.iter().any(|(p, _)| p == "word/settings.xml"),
+            !additions
+                .replacements
+                .iter()
+                .any(|(p, _)| p == "word/settings.xml"),
             "缺失件不得走替换（repack 会 Err 部件缺失）"
         );
         let settings = additions
@@ -819,7 +880,10 @@ mod tests {
         let doc = fixture_doc(Some(RELS_R1_R5), Some(s), &[]);
         let (_, additions) = plan_package_additions(&doc, &[], true).unwrap();
         assert!(
-            !additions.replacements.iter().any(|(p, _)| p == "word/settings.xml"),
+            !additions
+                .replacements
+                .iter()
+                .any(|(p, _)| p == "word/settings.xml"),
             "已有 updateFields 不应重写"
         );
     }
@@ -829,19 +893,10 @@ mod tests {
     #[test]
     fn repack_rejects_missing_replacement_and_append_collision() {
         let doc = fixture_doc(Some(RELS_R1_R5), None, &[]);
-        let e = repack_package(
-            &doc,
-            &[("word/nope.xml".into(), "<x/>".into())],
-            &[],
-        )
-        .unwrap_err();
+        let e = repack_package(&doc, &[("word/nope.xml".into(), "<x/>".into())], &[]).unwrap_err();
         assert!(e.to_string().contains("重打包部件缺失"), "实际: {e:?}");
-        let e = repack_package(
-            &doc,
-            &[],
-            &[("word/document.xml".into(), b"<x/>".to_vec())],
-        )
-        .unwrap_err();
+        let e = repack_package(&doc, &[], &[("word/document.xml".into(), b"<x/>".to_vec())])
+            .unwrap_err();
         assert!(e.to_string().contains("追加件已存在"), "实际: {e:?}");
     }
 
@@ -851,7 +906,10 @@ mod tests {
         let doc = fixture_doc(
             Some(RELS_R1_R5),
             Some("<w:settings xmlns:w=\"w\"><w:compat/></w:settings>"),
-            &[("word/media/image1.png", &media1), ("word/styles.xml", b"<w:styles/>")],
+            &[
+                ("word/media/image1.png", &media1),
+                ("word/styles.xml", b"<w:styles/>"),
+            ],
         );
         let out = repack_package(
             &doc,
@@ -951,7 +1009,10 @@ mod tests {
         let (cx, cy) = compute_extent(2000, 1000, None, cw);
         assert_eq!((cx, cy), (content_cx, content_cx / 2));
         // 显式 mm（100mm=3,600,000 < 版心）
-        assert_eq!(compute_extent(100, 50, Some(100.0), cw), (3_600_000, 1_800_000));
+        assert_eq!(
+            compute_extent(100, 50, Some(100.0), cw),
+            (3_600_000, 1_800_000)
+        );
         // 超版心 mm 钳到版心
         let (cx, _) = compute_extent(100, 50, Some(300.0), cw);
         assert_eq!(cx, content_cx);
@@ -978,7 +1039,11 @@ mod tests {
         assert_eq!(allocs2[0].rid, "rId7");
         assert_eq!(add2.appends[0].0, "word/media/image2.png");
         let out2 = repack_package(&out1, &add2.replacements, &add2.appends).unwrap();
-        assert_eq!(read_part(&out2, "word/media/image1.png"), bytes1, "第一张图字节不动");
+        assert_eq!(
+            read_part(&out2, "word/media/image1.png"),
+            bytes1,
+            "第一张图字节不动"
+        );
         assert_eq!(read_part(&out2, "word/media/image2.png"), bytes2);
     }
 }

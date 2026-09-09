@@ -56,7 +56,7 @@ enum FrameRole {
 pub(super) fn locate_blocks(xml: &str) -> AppResult<Vec<BlockSpan>> {
     let mut reader = Reader::from_str(xml);
     reader.config_mut().trim_text(false); // 偏移必须与原始字节对齐
-    // 不展开自闭合：Empty(w:p) 自成一块，范围即标签本身
+                                          // 不展开自闭合：Empty(w:p) 自成一块，范围即标签本身
 
     // (角色, 元素名, 块起点（成块帧才 Some）)
     let mut stack: Vec<(FrameRole, String, Option<usize>)> = Vec::new();
@@ -70,9 +70,7 @@ pub(super) fn locate_blocks(xml: &str) -> AppResult<Vec<BlockSpan>> {
         let ev = match reader.read_event() {
             Ok(Event::Eof) => break, // ⚠️ 必须在 Ok(e) 之前——通配臂会吞掉 Eof 致死循环
             Ok(e) => e,
-            Err(e) => {
-                return Err(AppError::Internal(format!("document.xml 扫描失败: {e}")))
-            }
+            Err(e) => return Err(AppError::Internal(format!("document.xml 扫描失败: {e}"))),
         };
         let ev_end = reader.buffer_position() as usize;
 
@@ -212,16 +210,29 @@ impl CharFormat {
 #[derive(Debug, Clone)]
 pub enum EditOp {
     /// 替换段落文本：保留 pPr 与首个 run 的 rPr（周边格式不动）；表格块拒绝。
-    ReplaceText { block: usize, expect_prefix: String, new_text: String },
+    ReplaceText {
+        block: usize,
+        expect_prefix: String,
+        new_text: String,
+    },
     /// 在锚块后插入新段：style（显示名，可选）指定样式；缺省继承锚块段落格式。
     /// 同锚块一批可多条链式（S3 七波：按输入序连续排列——写「标识行+描述行+
     /// 属性行」这类多段条目一批搞定，不再逐段拆批重寻址）。
-    InsertParagraphAfter { block: usize, expect_prefix: String, text: String, style: Option<String> },
+    InsertParagraphAfter {
+        block: usize,
+        expect_prefix: String,
+        text: String,
+        style: Option<String>,
+    },
     /// 删除整块（含段落标记）；块内含 sectPr（节属性载体）拒绝。
     DeleteBlock { block: usize, expect_prefix: String },
     /// 改段落样式（标题升降级等）：只动 pStyle 一个元素，正文 run 字节不动；
     /// 表格块拒绝。style 接受显示名或样式 ID（inspect_docx outline 样式列口径）。
-    SetStyle { block: usize, expect_prefix: String, style: String },
+    SetStyle {
+        block: usize,
+        expect_prefix: String,
+        style: String,
+    },
     /// 改段落/字符格式：pPr 三元素（spacing/ind/jc）属性级合并 + 每个 run 的
     /// rPr（b/i/sz/color/rFonts）；未提及的属性原样保留；表格块拒绝。
     SetFormat {
@@ -273,7 +284,12 @@ pub enum EditOp {
     /// walk_blocks 会摊平 sdt 破坏「1 输入块 = 1 产物块」）；cached result 放
     /// 自愈文案，Word 带 updateFields（zip 层自动置）打开即刷新，WPS 不保证
     /// （F9 手动刷新兜底）。levels 1-9（目录深度）；hyperlink 目录项超链接。
-    InsertTocAfter { block: usize, expect_prefix: String, levels: u32, hyperlink: bool },
+    InsertTocAfter {
+        block: usize,
+        expect_prefix: String,
+        levels: u32,
+        hyperlink: bool,
+    },
     /// 改表格单元格文本（S3 三波·表格件）：(row, cell) 1-based，口径与
     /// inspect_docx projection=table 所见一致（跨列格占 1 个序号）；保 tcPr +
     /// 首段 pPr + 首 run rPr；\n = 格内多段；纵向合并续格/嵌套表拒绝。
@@ -388,33 +404,95 @@ pub enum MergeDirection {
 /// sectPr（分节符载体）/pPrChange（修订记录）受保护不开放，不在本表。
 /// def_edit 的样式 pPr 容器复用本表（pub(super)）。
 pub(super) const PPR_ELEMENTS: [&str; 34] = [
-    "pStyle", "keepNext", "keepLines", "pageBreakBefore", "framePr", "widowControl",
-    "numPr", "suppressLineNumbers", "pBdr", "shd", "tabs", "suppressAutoHyphens",
-    "kinsoku", "wordWrap", "overflowPunct", "topLinePunct", "autoSpaceDE", "autoSpaceDN",
-    "bidi", "adjustRightInd", "snapToGrid", "spacing", "ind", "contextualSpacing",
-    "mirrorIndents", "suppressOverlap", "jc", "textDirection", "textAlignment",
-    "textboxTightWrap", "outlineLvl", "divId", "cnfStyle", "rPr",
+    "pStyle",
+    "keepNext",
+    "keepLines",
+    "pageBreakBefore",
+    "framePr",
+    "widowControl",
+    "numPr",
+    "suppressLineNumbers",
+    "pBdr",
+    "shd",
+    "tabs",
+    "suppressAutoHyphens",
+    "kinsoku",
+    "wordWrap",
+    "overflowPunct",
+    "topLinePunct",
+    "autoSpaceDE",
+    "autoSpaceDN",
+    "bidi",
+    "adjustRightInd",
+    "snapToGrid",
+    "spacing",
+    "ind",
+    "contextualSpacing",
+    "mirrorIndents",
+    "suppressOverlap",
+    "jc",
+    "textDirection",
+    "textAlignment",
+    "textboxTightWrap",
+    "outlineLvl",
+    "divId",
+    "cnfStyle",
+    "rPr",
 ];
 
 /// CT_TblPrBase 法定子元素，ECMA-376 schema 序（set_table_element level=table；
 /// def_edit 的表样式 tblPr 容器复用本表，pub(super)）。
 pub(super) const TBLPR_ELEMENTS: [&str; 17] = [
-    "tblStyle", "tblpPr", "tblOverlap", "bidiVisual", "tblStyleRowBandSize",
-    "tblStyleColBandSize", "tblW", "jc", "tblCellSpacing", "tblInd",
-    "tblBorders", "shd", "tblLayout", "tblCellMar", "tblLook",
-    "tblCaption", "tblDescription",
+    "tblStyle",
+    "tblpPr",
+    "tblOverlap",
+    "bidiVisual",
+    "tblStyleRowBandSize",
+    "tblStyleColBandSize",
+    "tblW",
+    "jc",
+    "tblCellSpacing",
+    "tblInd",
+    "tblBorders",
+    "shd",
+    "tblLayout",
+    "tblCellMar",
+    "tblLook",
+    "tblCaption",
+    "tblDescription",
 ];
 
 /// CT_TrPr 法定子元素（set_table_element level=row）。
 const TRPR_ELEMENTS: [&str; 12] = [
-    "cnfStyle", "divId", "gridBefore", "gridAfter", "wBefore", "wAfter",
-    "cantSplit", "trHeight", "tblHeader", "tblCellSpacing", "jc", "hidden",
+    "cnfStyle",
+    "divId",
+    "gridBefore",
+    "gridAfter",
+    "wBefore",
+    "wAfter",
+    "cantSplit",
+    "trHeight",
+    "tblHeader",
+    "tblCellSpacing",
+    "jc",
+    "hidden",
 ];
 
 /// CT_TcPr 法定子元素（set_table_element level=cell）。
 const TCPR_ELEMENTS: [&str; 13] = [
-    "cnfStyle", "tcW", "gridSpan", "hMerge", "vMerge", "tcBorders", "shd",
-    "noWrap", "tcMar", "textDirection", "tcFitText", "vAlign", "hideMark",
+    "cnfStyle",
+    "tcW",
+    "gridSpan",
+    "hMerge",
+    "vMerge",
+    "tcBorders",
+    "shd",
+    "noWrap",
+    "tcMar",
+    "textDirection",
+    "tcFitText",
+    "vAlign",
+    "hideMark",
 ];
 
 /// tcPr 结构属性（受保护）：改 = 破坏与 tblGrid/相邻行的对齐，Word 报文档
@@ -465,16 +543,18 @@ pub fn apply_edits_to_bytes_locked(
 ) -> AppResult<(Vec<u8>, Vec<AppliedOp>)> {
     let xml = super::docx::read_document_xml(bytes)?;
     let styles = match super::docx::read_entry(bytes, "word/styles.xml")? {
-        Some(s) => {
-            super::styles::parse_styles(&super::xml_dom::parse(&s)?)
-        }
+        Some(s) => super::styles::parse_styles(&super::xml_dom::parse(&s)?),
         None => Stylesheet::empty(),
     };
 
     // ---- 包级增补编排（仅批内有图/TOC 才走；二次解析 document.xml 拿版心宽与
     // docPr 基号——注入需要，正确性优先）----
-    let has_pkg_image = ops.iter().any(|o| matches!(o, EditOp::InsertImageAfter { .. }));
-    let has_toc = ops.iter().any(|o| matches!(o, EditOp::InsertTocAfter { .. }));
+    let has_pkg_image = ops
+        .iter()
+        .any(|o| matches!(o, EditOp::InsertImageAfter { .. }));
+    let has_toc = ops
+        .iter()
+        .any(|o| matches!(o, EditOp::InsertTocAfter { .. }));
     let mut additions = docx_pkg::PkgAdditions::default();
     let prepared: std::borrow::Cow<[EditOp]> = if has_pkg_image || has_toc {
         let images: Vec<&ImagePayload> = ops
@@ -519,7 +599,13 @@ fn inject_package_resolved(
     let mut pic_i = 0u32;
     ops.iter()
         .map(|op| match op {
-            EditOp::InsertImageAfter { block, expect_prefix, image, width_mm, .. } => {
+            EditOp::InsertImageAfter {
+                block,
+                expect_prefix,
+                image,
+                width_mm,
+                ..
+            } => {
                 let alloc = allocs
                     .get(alloc_i)
                     .expect("allocs 与批内图片数一致（plan_package_additions 同源产出）");
@@ -595,7 +681,7 @@ pub(super) fn apply_edits_locked(
     let mut table_modified: Vec<usize> = Vec::new();
     let mut used_cells: Vec<(usize, usize, usize, String)> = Vec::new(); // (block, row, cell, 目标键)
     let mut insert_anchors: Vec<usize> = Vec::new(); // 链式插入锚块（同块多条 insert_paragraph_after）
-    // 表内地址模拟器：block → 已声明足迹（操作序, 行区间, 标签）
+                                                     // 表内地址模拟器：block → 已声明足迹（操作序, 行区间, 标签）
     let mut structural_rows: HashMap<usize, Vec<(usize, std::ops::RangeInclusive<usize>, String)>> =
         HashMap::new();
     // 表格批内虚拟行状态（block → (每行格数, 虚拟行的原模型模板行)）：
@@ -610,14 +696,16 @@ pub(super) fn apply_edits_locked(
                 return Err(AppError::Validation(
                     "区间外块: clear_body 清空全部正文，与 allowed_blocks 区间锁冲突。\
                      带锁批次只允许区间内的块级操作。如确需清空正文，请去掉 \
-                     allowed_blocks 重发。".into(),
+                     allowed_blocks 重发。"
+                        .into(),
                 ));
             }
             if ops.len() != 1 {
                 return Err(AppError::Validation(
                     "同一批多操作: clear_body 须独占一批（清空后一切块号失效，\
                      与其他操作组合必然寻址错乱）。请拆批：先 clear_body，\
-                     再重新 inspect_docx 寻址写入。".into(),
+                     再重新 inspect_docx 寻址写入。"
+                        .into(),
                 ));
             }
             if *expect_blocks != model.body.len() {
@@ -683,7 +771,11 @@ pub(super) fn apply_edits_locked(
             }
             // 表内地址模拟器：声明足迹，与本表已声明足迹求交（相交才拒）
             let (footprint, label) = structural_footprint_of(op, &model.body[block - 1]);
-            for (j, prev, prev_label) in structural_rows.get(&block).map(Vec::as_slice).unwrap_or(&[]) {
+            for (j, prev, prev_label) in structural_rows
+                .get(&block)
+                .map(Vec::as_slice)
+                .unwrap_or(&[])
+            {
                 if ranges_overlap(prev, &footprint) {
                     return Err(AppError::Validation(format!(
                         "结构足迹冲突: 块 {block} 操作 {}（{label}）改写第 {}..={} 行布局，与\
@@ -699,7 +791,10 @@ pub(super) fn apply_edits_locked(
                     )));
                 }
             }
-            structural_rows.entry(block).or_default().push((op_i, footprint, label));
+            structural_rows
+                .entry(block)
+                .or_default()
+                .push((op_i, footprint, label));
         } else if structural_rows.contains_key(&block) {
             return Err(AppError::Validation(format!(
                 "同一块多操作: 块 {block} 已挂 merge_cells / split_cell / delete_table_row\
@@ -841,7 +936,11 @@ pub(super) fn apply_edits_locked(
                 }
                 // sectPr 在 pPr 内被原样保留（手术只动 pStyle 元素），改样式不破坏分节——放行
             }
-            EditOp::SetFormat { paragraph, character, .. } => {
+            EditOp::SetFormat {
+                paragraph,
+                character,
+                ..
+            } => {
                 if has_revision(&model.body[idx]) {
                     return Err(AppError::Validation(format!(
                         "含修订标记: 块 {block} 带插入/删除修订，默认不触碰修订内容。\
@@ -888,7 +987,9 @@ pub(super) fn apply_edits_locked(
                     validate_fragment(element, x, "ppr")?;
                 }
             }
-            EditOp::InsertTableAfter { rows, table_style, .. } => {
+            EditOp::InsertTableAfter {
+                rows, table_style, ..
+            } => {
                 validate_table_rows(rows)?;
                 if let Some(s) = table_style {
                     if styles.table_style_id(s).is_none() {
@@ -933,11 +1034,20 @@ pub(super) fn apply_edits_locked(
                     )));
                 }
                 precheck_cell_target(
-                    &model, idx, block, *row, *cell, "set_cell_text", "",
-                    &mut table_state, &mut used_cells,
+                    &model,
+                    idx,
+                    block,
+                    *row,
+                    *cell,
+                    "set_cell_text",
+                    "",
+                    &mut table_state,
+                    &mut used_cells,
                 )?;
             }
-            EditOp::InsertTableRowAfter { after_row, cells, .. } => {
+            EditOp::InsertTableRowAfter {
+                after_row, cells, ..
+            } => {
                 let Block::Table(t) = &model.body[idx] else {
                     return Err(AppError::Validation(format!(
                         "非表格块: 块 {block} 是段落，insert_table_row_after 只作用于表格块。\
@@ -991,7 +1101,14 @@ pub(super) fn apply_edits_locked(
                 counts.push(tpl.cells.len());
                 tpls.push(Some(real_tpl));
             }
-            EditOp::SetCellFormat { row, cell, paragraph, character, style, .. } => {
+            EditOp::SetCellFormat {
+                row,
+                cell,
+                paragraph,
+                character,
+                style,
+                ..
+            } => {
                 if has_revision(&model.body[idx]) {
                     return Err(AppError::Validation(format!(
                         "含修订标记: 块 {block}（表格）带插入/删除修订，默认不触碰修订内容。\
@@ -1015,13 +1132,32 @@ pub(super) fn apply_edits_locked(
                         )));
                     }
                 }
-                validate_formats(paragraph.as_ref(), character.as_ref(), style.is_some(), "set_cell_format")?;
+                validate_formats(
+                    paragraph.as_ref(),
+                    character.as_ref(),
+                    style.is_some(),
+                    "set_cell_format",
+                )?;
                 precheck_cell_target(
-                    &model, idx, block, *row, *cell, "set_cell_format", "",
-                    &mut table_state, &mut used_cells,
+                    &model,
+                    idx,
+                    block,
+                    *row,
+                    *cell,
+                    "set_cell_format",
+                    "",
+                    &mut table_state,
+                    &mut used_cells,
                 )?;
             }
-            EditOp::SetTableElement { level, row, cell, element, xml, .. } => {
+            EditOp::SetTableElement {
+                level,
+                row,
+                cell,
+                element,
+                xml,
+                ..
+            } => {
                 let Block::Table(t) = &model.body[idx] else {
                     return Err(AppError::Validation(format!(
                         "非表格块: 块 {block} 是段落，set_table_element 只作用于表格块。\
@@ -1082,8 +1218,15 @@ pub(super) fn apply_edits_locked(
                             ));
                         };
                         precheck_cell_target(
-                            &model, idx, block, r, c, "set_table_element", element.as_str(),
-                            &mut table_state, &mut used_cells,
+                            &model,
+                            idx,
+                            block,
+                            r,
+                            c,
+                            "set_table_element",
+                            element.as_str(),
+                            &mut table_state,
+                            &mut used_cells,
                         )?;
                         (&TCPR_ELEMENTS, "tcPr")
                     }
@@ -1098,7 +1241,9 @@ pub(super) fn apply_edits_locked(
                     return Err(AppError::Validation(format!(
                         "非法子元素: {:?} 不在{}法定子元素清单。合法元素（schema 序）: {}。\
                          名称不带 w: 前缀；查现有元素原文用 inspect_docx projection=tblpr。",
-                        element, container, whitelist.join(" ")
+                        element,
+                        container,
+                        whitelist.join(" ")
                     )));
                 }
                 if let Some(x) = xml {
@@ -1107,7 +1252,15 @@ pub(super) fn apply_edits_locked(
             }
             // clear_body 已在上文 continue——本 match 只覆盖寻址类操作
             EditOp::ClearBody { .. } => unreachable!("clear_body 已在上文 continue"),
-            EditOp::MergeCells { direction, row, cell, span, end_row, end_cell, .. } => {
+            EditOp::MergeCells {
+                direction,
+                row,
+                cell,
+                span,
+                end_row,
+                end_cell,
+                ..
+            } => {
                 let Block::Table(t) = &model.body[idx] else {
                     return Err(AppError::Validation(format!(
                         "非表格块: 块 {block} 是段落，merge_cells 只作用于表格块。"
@@ -1125,14 +1278,16 @@ pub(super) fn apply_edits_locked(
                     (true, Some(_), _) | (true, _, Some(_)) => {
                         return Err(AppError::Validation(
                             "参数冲突: 矩形合并（end_row+end_cell）不接受 direction/span。\
-                             简单线并用 direction+span，矩形区用 end_row+end_cell，二选一。".into(),
+                             简单线并用 direction+span，矩形区用 end_row+end_cell，二选一。"
+                                .into(),
                         ));
                     }
                     (true, None, None) => {
                         let (Some(er), Some(ec)) = (*end_row, *end_cell) else {
                             return Err(AppError::Validation(
                                 "参数缺失: 矩形合并须同时给 end_row 与 end_cell（区域右下角，\
-                                 与 (row,cell) 左上角配对）。".into(),
+                                 与 (row,cell) 左上角配对）。"
+                                    .into(),
                             ));
                         };
                         if er < *row || ec < *cell || (er == *row && ec == *cell) {
@@ -1192,13 +1347,15 @@ pub(super) fn apply_edits_locked(
                     (false, None, None) => {
                         return Err(AppError::Validation(
                             "参数缺失: merge_cells 须给 direction（简单线并：horizontal/vertical \
-                             + 可选 span）或 end_row+end_cell（矩形区域），二选一。".into(),
+                             + 可选 span）或 end_row+end_cell（矩形区域），二选一。"
+                                .into(),
                         ));
                     }
                     (false, None, Some(_)) => {
                         return Err(AppError::Validation(
                             "参数冲突: span 须与 direction 同用（简单线并）。矩形区合并\
-                             请改用 end_row+end_cell（不带 span）。".into(),
+                             请改用 end_row+end_cell（不带 span）。"
+                                .into(),
                         ));
                     }
                     (false, Some(dir), sp) => {
@@ -1254,7 +1411,11 @@ pub(super) fn apply_edits_locked(
                                          请对该列上方带「(合并头)」标记的格执行合并。"
                                     )));
                                 }
-                                if head.cells[*cell - 1].blocks.iter().any(|b| matches!(b, Block::Table(_))) {
+                                if head.cells[*cell - 1]
+                                    .blocks
+                                    .iter()
+                                    .any(|b| matches!(b, Block::Table(_)))
+                                {
                                     return Err(AppError::Validation(
                                         "合并结构冲突: 首格含嵌套表，暂不支持。".into(),
                                     ));
@@ -1270,7 +1431,8 @@ pub(super) fn apply_edits_locked(
                                             )));
                                         }
                                         Some(c) => {
-                                            if c.blocks.iter().any(|b| matches!(b, Block::Table(_))) {
+                                            if c.blocks.iter().any(|b| matches!(b, Block::Table(_)))
+                                            {
                                                 return Err(AppError::Validation(format!(
                                                     "合并结构冲突: 第 {r2} 行该列含嵌套表，暂不支持。"
                                                 )));
@@ -1283,7 +1445,12 @@ pub(super) fn apply_edits_locked(
                     }
                 }
             }
-            EditOp::SplitCell { direction, row, cell, .. } => {
+            EditOp::SplitCell {
+                direction,
+                row,
+                cell,
+                ..
+            } => {
                 let Block::Table(t) = &model.body[idx] else {
                     return Err(AppError::Validation(format!(
                         "非表格块: 块 {block} 是段落，split_cell 只作用于表格块。"
@@ -1385,7 +1552,8 @@ pub(super) fn apply_edits_locked(
                 | EditOp::SetStyle { .. }
                 | EditOp::SetFormat { .. }
                 | EditOp::SetPprElement { .. }
-        ) && span.is_table {
+        ) && span.is_table
+        {
             return Err(AppError::Validation(format!(
                 "表格块: 块 {block} 是表格，该操作只支持段落。\
                  表格编辑请用：set_cell_text（改格文本）/ set_cell_format（格内文字格式）/ \
@@ -1458,7 +1626,9 @@ pub(super) fn apply_edits_locked(
     let mut insert_plan_idx: HashMap<usize, usize> = HashMap::new();
     for op in ops {
         match op.clone() {
-            EditOp::ReplaceText { block, new_text, .. } => {
+            EditOp::ReplaceText {
+                block, new_text, ..
+            } => {
                 let span = spans[block - 1];
                 let new_block = rebuild_paragraph(xml, span, Some(&new_text));
                 let after = new_text.clone();
@@ -1477,12 +1647,22 @@ pub(super) fn apply_edits_locked(
                     }],
                 });
             }
-            EditOp::InsertParagraphAfter { block, text, style, .. } => {
+            EditOp::InsertParagraphAfter {
+                block, text, style, ..
+            } => {
                 let span = spans[block - 1];
                 let anchor_has_revision = has_revision(&model.body[block - 1]);
-                let new_block = build_inserted_paragraph(xml, span, &text, style.as_deref(), styles, anchor_has_revision);
+                let new_block = build_inserted_paragraph(
+                    xml,
+                    span,
+                    &text,
+                    style.as_deref(),
+                    styles,
+                    anchor_has_revision,
+                );
                 // 同锚链式（S3 七波）：聚合细节见 chain_into_insert_splice
-                let entry = chain_into_insert_splice(&mut plan, &mut insert_plan_idx, block, span.end);
+                let entry =
+                    chain_into_insert_splice(&mut plan, &mut insert_plan_idx, block, span.end);
                 plan[entry].insert.push_str(&new_block);
                 plan[entry].summaries.push(AppliedOp {
                     op: "insert_paragraph_after",
@@ -1494,7 +1674,14 @@ pub(super) fn apply_edits_locked(
                     target: None,
                 });
             }
-            EditOp::InsertImageAfter { block, rid, cx_emu, cy_emu, docpr_id, .. } => {
+            EditOp::InsertImageAfter {
+                block,
+                rid,
+                cx_emu,
+                cy_emu,
+                docpr_id,
+                ..
+            } => {
                 let span = spans[block - 1];
                 // 图段不继承锚块 pPr/rPr（结构内容非文本，docDefaults 好默认；
                 // 继承会把锚的缩进/字体带进图片段）
@@ -1505,7 +1692,8 @@ pub(super) fn apply_edits_locked(
                     docpr_id,
                     &format!("图片 {docpr_id}"),
                 );
-                let entry = chain_into_insert_splice(&mut plan, &mut insert_plan_idx, block, span.end);
+                let entry =
+                    chain_into_insert_splice(&mut plan, &mut insert_plan_idx, block, span.end);
                 plan[entry].insert.push_str(&new_block);
                 plan[entry].summaries.push(AppliedOp {
                     op: "insert_image_after",
@@ -1517,10 +1705,16 @@ pub(super) fn apply_edits_locked(
                     target: None,
                 });
             }
-            EditOp::InsertTocAfter { block, levels, hyperlink, .. } => {
+            EditOp::InsertTocAfter {
+                block,
+                levels,
+                hyperlink,
+                ..
+            } => {
                 let span = spans[block - 1];
                 let new_block = docx_pkg::build_toc_paragraph(levels, hyperlink);
-                let entry = chain_into_insert_splice(&mut plan, &mut insert_plan_idx, block, span.end);
+                let entry =
+                    chain_into_insert_splice(&mut plan, &mut insert_plan_idx, block, span.end);
                 plan[entry].insert.push_str(&new_block);
                 plan[entry].summaries.push(AppliedOp {
                     op: "insert_toc_after",
@@ -1559,11 +1753,12 @@ pub(super) fn apply_edits_locked(
                     Block::Paragraph(p) => p.props.style.as_deref() == Some(style_id),
                     Block::Table(_) => false, // 预检已拒表格块
                 };
-                let new_block =
-                    restyle_paragraph(&xml[span.start..span.end], style_id)
-                        .ok_or_else(|| AppError::Internal(format!(
+                let new_block = restyle_paragraph(&xml[span.start..span.end], style_id)
+                    .ok_or_else(|| {
+                        AppError::Internal(format!(
                             "段落改样式失败: 块 {block} XML 形态异常（内部 bug，未写盘）"
-                        )))?;
+                        ))
+                    })?;
                 let projected = projected_of(&model, block);
                 plan.push(Splice {
                     pos: span.start,
@@ -1580,20 +1775,27 @@ pub(super) fn apply_edits_locked(
                     }],
                 });
             }
-            EditOp::SetFormat { block, paragraph, character, .. } => {
+            EditOp::SetFormat {
+                block,
+                paragraph,
+                character,
+                ..
+            } => {
                 let span = spans[block - 1];
                 let mut new_block = xml[span.start..span.end].to_string();
                 if let Some(para) = &paragraph {
-                    new_block = reformat_ppr(&new_block, para)
-                        .ok_or_else(|| AppError::Internal(format!(
+                    new_block = reformat_ppr(&new_block, para).ok_or_else(|| {
+                        AppError::Internal(format!(
                             "段落格式手术失败: 块 {block} XML 形态异常（内部 bug，未写盘）"
-                        )))?;
+                        ))
+                    })?;
                 }
                 if let Some(ch) = &character {
-                    new_block = reformat_runs(&new_block, ch)
-                        .ok_or_else(|| AppError::Internal(format!(
+                    new_block = reformat_runs(&new_block, ch).ok_or_else(|| {
+                        AppError::Internal(format!(
                             "字符格式手术失败: 块 {block} XML 形态异常（内部 bug，未写盘）"
-                        )))?;
+                        ))
+                    })?;
                 }
                 let projected = projected_of(&model, block);
                 plan.push(Splice {
@@ -1605,20 +1807,30 @@ pub(super) fn apply_edits_locked(
                         block,
                         before: projected.clone(),
                         // 文本不变；after 携带本次应用的格式摘要（agent 读回验证）
-                        after: truncate(&describe_formats(paragraph.as_ref(), character.as_ref()), 60),
+                        after: truncate(
+                            &describe_formats(paragraph.as_ref(), character.as_ref()),
+                            60,
+                        ),
                         style: None,
                         style_unchanged: None,
                         target: None,
                     }],
                 });
             }
-            EditOp::SetPprElement { block, element, xml: frag, .. } => {
+            EditOp::SetPprElement {
+                block,
+                element,
+                xml: frag,
+                ..
+            } => {
                 let span = spans[block - 1];
                 let (new_block, changed) =
                     set_ppr_element(&xml[span.start..span.end], &element, frag.as_deref())
-                        .ok_or_else(|| AppError::Internal(format!(
-                            "pPr元素手术失败: 块 {block} XML 形态异常（内部 bug，未写盘）"
-                        )))?;
+                        .ok_or_else(|| {
+                            AppError::Internal(format!(
+                                "pPr元素手术失败: 块 {block} XML 形态异常（内部 bug，未写盘）"
+                            ))
+                        })?;
                 // 诚实边界：段级 numPr 移除后，若样式链仍定义编号，Word 会回退显示
                 // 样式编号（直接格式覆盖样式 → 摘除直接格式 = 落回样式定义）——
                 // 显式警告，勿让 agent 以为编号已消失
@@ -1653,10 +1865,18 @@ pub(super) fn apply_edits_locked(
                     }],
                 });
             }
-            EditOp::InsertTableAfter { block, rows, header, table_style, .. } => {
+            EditOp::InsertTableAfter {
+                block,
+                rows,
+                header,
+                table_style,
+                ..
+            } => {
                 let span = spans[block - 1];
                 // 预检已验存在 + 类型；此处取 ID 挂 tblStyle（批内样式表不可变，无 TOCTOU）
-                let style_id = table_style.as_deref().and_then(|s| styles.table_style_id(s));
+                let style_id = table_style
+                    .as_deref()
+                    .and_then(|s| styles.table_style_id(s));
                 let new_tbl = build_table_xml(
                     &rows,
                     header.unwrap_or(true),
@@ -1686,7 +1906,13 @@ pub(super) fn apply_edits_locked(
                     }],
                 });
             }
-            EditOp::SetCellText { block, row, cell, text, .. } => {
+            EditOp::SetCellText {
+                block,
+                row,
+                cell,
+                text,
+                ..
+            } => {
                 let span = spans[block - 1];
                 // 同表聚合：首次触达建 splice（以原块为底），后续操作改写 insert
                 let entry = table_splice_entry(&mut plan, &mut table_plan_idx, block, span, xml);
@@ -1715,20 +1941,33 @@ pub(super) fn apply_edits_locked(
                     target: None,
                 });
             }
-            EditOp::InsertTableRowAfter { block, after_row, cells, .. } => {
+            EditOp::InsertTableRowAfter {
+                block,
+                after_row,
+                cells,
+                ..
+            } => {
                 let span = spans[block - 1];
                 let entry = table_splice_entry(&mut plan, &mut table_plan_idx, block, span, xml);
                 let cur = plan[entry].insert.clone();
-                let (new_xml, any_fallback) = insert_table_row_after(&cur, after_row, cells.as_deref())
-                    .ok_or_else(|| AppError::Internal(format!(
-                        "表格增行失败: 块 {block} XML 形态异常（内部 bug，未写盘）"
-                    )))?;
+                let (new_xml, any_fallback) =
+                    insert_table_row_after(&cur, after_row, cells.as_deref()).ok_or_else(|| {
+                        AppError::Internal(format!(
+                            "表格增行失败: 块 {block} XML 形态异常（内部 bug，未写盘）"
+                        ))
+                    })?;
                 plan[entry].insert = new_xml;
                 let filled = cells.as_ref().map(|c| c.len()).unwrap_or(0);
                 let mut after = format!(
                     "克隆第 {} 行插入（{}）",
-                    after_row.map(|r| r.to_string()).unwrap_or_else(|| "末行".into()),
-                    if filled > 0 { format!("{filled} 格已填") } else { "空行".to_string() }
+                    after_row
+                        .map(|r| r.to_string())
+                        .unwrap_or_else(|| "末行".into()),
+                    if filled > 0 {
+                        format!("{filled} 格已填")
+                    } else {
+                        "空行".to_string()
+                    }
                 );
                 if any_fallback {
                     after.push_str("；部分格段数不对齐，格式回落首段模板");
@@ -1743,14 +1982,22 @@ pub(super) fn apply_edits_locked(
                     target: None,
                 });
             }
-            EditOp::SetCellFormat { block, row, cell, paragraph, character, style, .. } => {
+            EditOp::SetCellFormat {
+                block,
+                row,
+                cell,
+                paragraph,
+                character,
+                style,
+                ..
+            } => {
                 let span = spans[block - 1];
                 let entry = table_splice_entry(&mut plan, &mut table_plan_idx, block, span, xml);
                 let cur = plan[entry].insert.clone();
                 // 预检已校验样式存在；此处重解析拿 ID（批内样式表不可变，无 TOCTOU）
-                let style_id = style.as_deref().map(|name| {
-                    styles.id_of(name).expect("预检已校验样式存在")
-                });
+                let style_id = style
+                    .as_deref()
+                    .map(|name| styles.id_of(name).expect("预检已校验样式存在"));
                 let new_xml =
                     set_cell_format_xml(&cur, row, cell, paragraph.as_ref(), character.as_ref(), style_id)
                         .ok_or_else(|| AppError::Internal(format!(
@@ -1773,15 +2020,25 @@ pub(super) fn apply_edits_locked(
                     target: None,
                 });
             }
-            EditOp::SetTableElement { block, level, row, cell, element, xml: frag, .. } => {
+            EditOp::SetTableElement {
+                block,
+                level,
+                row,
+                cell,
+                element,
+                xml: frag,
+                ..
+            } => {
                 let span = spans[block - 1];
                 let entry = table_splice_entry(&mut plan, &mut table_plan_idx, block, span, xml);
                 let cur = plan[entry].insert.clone();
                 let (new_xml, changed) =
                     set_table_element_xml(&cur, level, row, cell, &element, frag.as_deref())
-                        .ok_or_else(|| AppError::Internal(format!(
-                            "表格属性手术失败: 块 {block} XML 形态异常（内部 bug，未写盘）"
-                        )))?;
+                        .ok_or_else(|| {
+                            AppError::Internal(format!(
+                                "表格属性手术失败: 块 {block} XML 形态异常（内部 bug，未写盘）"
+                            ))
+                        })?;
                 plan[entry].insert = new_xml;
                 let where_at = match (level, row, cell) {
                     (TableLevel::Table, _, _) => "table".to_string(),
@@ -1807,7 +2064,16 @@ pub(super) fn apply_edits_locked(
                     target: None,
                 });
             }
-            EditOp::MergeCells { block, direction, row, cell, span: mspan, end_row, end_cell, .. } => {
+            EditOp::MergeCells {
+                block,
+                direction,
+                row,
+                cell,
+                span: mspan,
+                end_row,
+                end_cell,
+                ..
+            } => {
                 let span = spans[block - 1];
                 // 结构操作链（十一波）：同表多条经预检足迹判定后按输入序改写同一
                 // splice（足迹不相交 ⇒ 互不越界）
@@ -1815,9 +2081,11 @@ pub(super) fn apply_edits_locked(
                 let cur = plan[entry].insert.clone();
                 let (new_xml, summary) =
                     merge_cells_xml(&cur, direction, row, cell, mspan, end_row, end_cell)
-                        .ok_or_else(|| AppError::Internal(format!(
-                            "合并手术失败: 块 {block} XML 形态异常（内部 bug，未写盘）"
-                        )))?;
+                        .ok_or_else(|| {
+                            AppError::Internal(format!(
+                                "合并手术失败: 块 {block} XML 形态异常（内部 bug，未写盘）"
+                            ))
+                        })?;
                 plan[entry].insert = new_xml;
                 plan[entry].summaries.push(AppliedOp {
                     op: "merge_cells",
@@ -1829,14 +2097,22 @@ pub(super) fn apply_edits_locked(
                     target: None,
                 });
             }
-            EditOp::SplitCell { block, direction, row, cell, .. } => {
+            EditOp::SplitCell {
+                block,
+                direction,
+                row,
+                cell,
+                ..
+            } => {
                 let span = spans[block - 1];
                 let entry = table_splice_entry(&mut plan, &mut table_plan_idx, block, span, xml);
                 let cur = plan[entry].insert.clone();
-                let (new_xml, summary) = split_cell_xml(&cur, direction, row, cell)
-                    .ok_or_else(|| AppError::Internal(format!(
-                        "拆分手术失败: 块 {block} XML 形态异常（内部 bug，未写盘）"
-                    )))?;
+                let (new_xml, summary) =
+                    split_cell_xml(&cur, direction, row, cell).ok_or_else(|| {
+                        AppError::Internal(format!(
+                            "拆分手术失败: 块 {block} XML 形态异常（内部 bug，未写盘）"
+                        ))
+                    })?;
                 plan[entry].insert = new_xml;
                 plan[entry].summaries.push(AppliedOp {
                     op: "split_cell",
@@ -1852,10 +2128,11 @@ pub(super) fn apply_edits_locked(
                 let span = spans[block - 1];
                 let entry = table_splice_entry(&mut plan, &mut table_plan_idx, block, span, xml);
                 let cur = plan[entry].insert.clone();
-                let (new_xml, summary) = delete_table_row_xml(&cur, row)
-                    .ok_or_else(|| AppError::Internal(format!(
+                let (new_xml, summary) = delete_table_row_xml(&cur, row).ok_or_else(|| {
+                    AppError::Internal(format!(
                         "删行手术失败: 块 {block} XML 形态异常（内部 bug，未写盘）"
-                    )))?;
+                    ))
+                })?;
                 plan[entry].insert = new_xml;
                 plan[entry].summaries.push(AppliedOp {
                     op: "delete_table_row",
@@ -1930,7 +2207,10 @@ pub(super) fn apply_edits_locked(
             )
         })
         .count();
-    let deleted = ops.iter().filter(|o| matches!(o, EditOp::DeleteBlock { .. })).count();
+    let deleted = ops
+        .iter()
+        .filter(|o| matches!(o, EditOp::DeleteBlock { .. }))
+        .count();
     let expect_blocks = if ops.iter().any(|o| matches!(o, EditOp::ClearBody { .. })) {
         // 独占一批：清空后 = 含 sectPr 的保留块数
         spans
@@ -2050,7 +2330,11 @@ fn precheck_cell_target(
             "同一格多操作: 块 {block} 第 {row} 行第 {cell} 格{}在本批中被多次引用。\
              同格同目标每批限一条；同格多项表格属性用不同 element 的多条 \
              set_table_element 组合（如 vAlign + tcBorders 一批）。",
-            if target_key.is_empty() { String::new() } else { format!("的 {target_key}") }
+            if target_key.is_empty() {
+                String::new()
+            } else {
+                format!("的 {target_key}")
+            }
         )));
     }
     used_cells.push((block, row, cell, target_key.to_string()));
@@ -2113,12 +2397,16 @@ fn ranges_overlap(
 /// 足迹**——足迹不相交 ⇒ 他人不动我读过的行 ⇒ 原模型上的寻址校验在应用期依然
 /// 成立（D14 组合判据机械化：不重叠行结构操作序无关，可同批）。删行足迹覆盖
 /// 该行至末行（下方行号整体前移）；纵拆足迹精确到链尾（与 apply 链走同判据）。
-fn structural_footprint_of(
-    op: &EditOp,
-    node: &Block,
-) -> (std::ops::RangeInclusive<usize>, String) {
+fn structural_footprint_of(op: &EditOp, node: &Block) -> (std::ops::RangeInclusive<usize>, String) {
     match op {
-        EditOp::MergeCells { row, cell, direction, span, end_row, .. } => {
+        EditOp::MergeCells {
+            row,
+            cell,
+            direction,
+            span,
+            end_row,
+            ..
+        } => {
             let (row, cell) = (*row, *cell);
             if let Some(er) = end_row {
                 let last = (*er).max(row);
@@ -2127,22 +2415,38 @@ fn structural_footprint_of(
                 match direction {
                     Some(MergeDirection::Vertical) => {
                         let s = span.unwrap_or(2);
-                        let last = row.checked_add(s).map(|e| e.saturating_sub(1)).unwrap_or(row);
-                        (row..=last.max(row), format!("merge_cells r{row} 起纵并 {s} 行"))
+                        let last = row
+                            .checked_add(s)
+                            .map(|e| e.saturating_sub(1))
+                            .unwrap_or(row);
+                        (
+                            row..=last.max(row),
+                            format!("merge_cells r{row} 起纵并 {s} 行"),
+                        )
                     }
                     _ => (row..=row, format!("merge_cells r{row}c{cell} 横并")),
                 }
             }
         }
-        EditOp::SplitCell { direction, row, cell, .. } => match direction {
+        EditOp::SplitCell {
+            direction,
+            row,
+            cell,
+            ..
+        } => match direction {
             MergeDirection::Vertical => {
                 let chain_last = match node {
                     Block::Table(t) => split_v_chain_last(t, *row, *cell),
                     Block::Paragraph(_) => *row, // 非表格：预检稍后拒，足迹退化本行
                 };
-                (*row..=chain_last, format!("split_cell r{row}c{cell} 纵并链拆分"))
+                (
+                    *row..=chain_last,
+                    format!("split_cell r{row}c{cell} 纵并链拆分"),
+                )
             }
-            MergeDirection::Horizontal => (*row..=*row, format!("split_cell r{row}c{cell} 横并拆分")),
+            MergeDirection::Horizontal => {
+                (*row..=*row, format!("split_cell r{row}c{cell} 横并拆分"))
+            }
         },
         EditOp::DeleteTableRow { row, .. } => {
             let last = match node {
@@ -2189,9 +2493,10 @@ fn has_revision(block: &Block) -> bool {
     }
     match block {
         Block::Paragraph(p) => para_has_revision(&p.runs),
-        Block::Table(t) => t.rows.iter().any(|row| {
-            row.cells.iter().any(|c| c.blocks.iter().any(has_revision))
-        }),
+        Block::Table(t) => t
+            .rows
+            .iter()
+            .any(|row| row.cells.iter().any(|c| c.blocks.iter().any(has_revision))),
     }
 }
 
@@ -2203,7 +2508,9 @@ fn has_revision(block: &Block) -> bool {
 /// `new_text = None` 表示删除整块（返回空串）。
 fn rebuild_paragraph(xml: &str, span: BlockSpan, new_text: Option<&str>) -> String {
     let block_xml = &xml[span.start..span.end];
-    let Some(text) = new_text else { return String::new() };
+    let Some(text) = new_text else {
+        return String::new();
+    };
 
     // 开标签原样（`<w:p>` / 带 w14:paraId 等属性的 `<w:p …>`）；自闭合（`<w:p/>` /
     // `<w:p w14:paraId="X"/>`——Word 空段常态）去掉 "/>" 补 ">"，属性保留
@@ -2280,15 +2587,21 @@ fn validate_formats(
     let empty_para = para.is_none_or(|p| p.is_empty());
     let empty_ch = ch.is_none_or(|c| c.is_empty());
     if empty_para && empty_ch && !style_present {
-        return Err(AppError::Validation(
-            format!(
-                "空格式操作: {op_label} 未提供任何要修改的字段。\
+        return Err(AppError::Validation(format!(
+            "空格式操作: {op_label} 未提供任何要修改的字段。\
                  paragraph（对齐/行距/段前后/缩进）与 character（粗斜/字号/颜色/字体）\
                  至少一项内有字段。"
-            ),
-        ));
+        )));
     }
-    const ALIGNS: [&str; 7] = ["left", "center", "right", "both", "distribute", "start", "end"];
+    const ALIGNS: [&str; 7] = [
+        "left",
+        "center",
+        "right",
+        "both",
+        "distribute",
+        "start",
+        "end",
+    ];
     if let Some(p) = para {
         if let Some(v) = &p.align {
             if !ALIGNS.contains(&v.as_str()) {
@@ -2436,14 +2749,21 @@ pub(super) fn parse_attrs(el: &str) -> Vec<(String, String)> {
     let mut rest = tag;
     while let Some(eq) = rest.find('=') {
         let head = &rest[..eq];
-        let name = head.trim_end().rsplit(char::is_whitespace).next().unwrap_or("").to_string();
+        let name = head
+            .trim_end()
+            .rsplit(char::is_whitespace)
+            .next()
+            .unwrap_or("")
+            .to_string();
         let after = &rest[eq + 1..];
         let quote = after.chars().next();
         if quote != Some('"') {
             rest = &rest[eq + 1..];
             continue;
         }
-        let Some(end_rel) = after[1..].find('"') else { break };
+        let Some(end_rel) = after[1..].find('"') else {
+            break;
+        };
         let value = after[1..1 + end_rel].to_string();
         if !name.is_empty() {
             out.push((name, value));
@@ -2478,7 +2798,13 @@ fn attr_remove(attrs: &mut Vec<(String, String)>, key: &str) {
 /// - 已存在 → 整元素替换为 `new_tag`
 /// - 不存在 → 插到 `later`（schema 序中排在后面的兄弟元素名）最早出现处之前，
 ///   或 `end_marker`（如 `</w:pPr>`）之前
-pub(super) fn upsert_element(parent: &str, name: &str, new_tag: &str, later: &[&str], end_marker: &str) -> String {
+pub(super) fn upsert_element(
+    parent: &str,
+    name: &str,
+    new_tag: &str,
+    later: &[&str],
+    end_marker: &str,
+) -> String {
     if let Some((s, e)) = find_element_span(parent, name) {
         return format!("{}{new_tag}{}", &parent[..s], &parent[e..]);
     }
@@ -2501,21 +2827,39 @@ fn apply_para_formats(ppr_inner: &str, p: &ParaFormat) -> String {
             None => Vec::new(),
         };
         if let Some(v) = p.line_spacing {
-            attr_set(&mut attrs, "w:line", &format!("{}", (v * 240.0).round() as i64));
+            attr_set(
+                &mut attrs,
+                "w:line",
+                &format!("{}", (v * 240.0).round() as i64),
+            );
             attr_set(&mut attrs, "w:lineRule", "auto");
         }
         if let Some(v) = p.space_before_pt {
-            attr_set(&mut attrs, "w:before", &format!("{}", (v * 20.0).round() as i64));
+            attr_set(
+                &mut attrs,
+                "w:before",
+                &format!("{}", (v * 20.0).round() as i64),
+            );
             attr_remove(&mut attrs, "w:beforeLines");
             attr_remove(&mut attrs, "w:beforeAutospacing");
         }
         if let Some(v) = p.space_after_pt {
-            attr_set(&mut attrs, "w:after", &format!("{}", (v * 20.0).round() as i64));
+            attr_set(
+                &mut attrs,
+                "w:after",
+                &format!("{}", (v * 20.0).round() as i64),
+            );
             attr_remove(&mut attrs, "w:afterLines");
             attr_remove(&mut attrs, "w:afterAutospacing");
         }
         let tag = build_tag("spacing", &attrs);
-        out = upsert_element(&out, "spacing", &tag, &["ind", "jc", "rPr", "sectPr", "pPrChange"], "</w:pPr>");
+        out = upsert_element(
+            &out,
+            "spacing",
+            &tag,
+            &["ind", "jc", "rPr", "sectPr", "pPrChange"],
+            "</w:pPr>",
+        );
     }
     // ind（首行/左缩进合并；两变体互斥需清对方）
     if p.indent_first_line_tw.is_some() || p.indent_left_tw.is_some() {
@@ -2546,12 +2890,24 @@ fn apply_para_formats(ppr_inner: &str, p: &ParaFormat) -> String {
             attr_set(&mut attrs, "w:leftChars", "0");
         }
         let tag = build_tag("ind", &attrs);
-        out = upsert_element(&out, "ind", &tag, &["jc", "rPr", "sectPr", "pPrChange"], "</w:pPr>");
+        out = upsert_element(
+            &out,
+            "ind",
+            &tag,
+            &["jc", "rPr", "sectPr", "pPrChange"],
+            "</w:pPr>",
+        );
     }
     // jc（单属性，整元素替换/插入）
     if let Some(v) = &p.align {
         let tag = format!(r#"<w:jc w:val="{v}"/>"#);
-        out = upsert_element(&out, "jc", &tag, &["textDirection", "outlineLvl", "rPr", "sectPr", "pPrChange"], "</w:pPr>");
+        out = upsert_element(
+            &out,
+            "jc",
+            &tag,
+            &["textDirection", "outlineLvl", "rPr", "sectPr", "pPrChange"],
+            "</w:pPr>",
+        );
     }
     out
 }
@@ -2560,15 +2916,31 @@ fn apply_para_formats(ppr_inner: &str, p: &ParaFormat) -> String {
 fn apply_char_formats(rpr_inner: &str, c: &CharFormat) -> String {
     let mut out = rpr_inner.to_string();
     if let Some(v) = c.bold {
-        let tag = if v { "<w:b/>".to_owned() } else { r#"<w:b w:val="0"/>"#.to_owned() };
+        let tag = if v {
+            "<w:b/>".to_owned()
+        } else {
+            r#"<w:b w:val="0"/>"#.to_owned()
+        };
         out = upsert_element(&out, "b", &tag, &["i", "color", "sz", "u"], "</w:rPr>");
-        let tag_cs = if v { "<w:bCs/>".to_owned() } else { r#"<w:bCs w:val="0"/>"#.to_owned() };
+        let tag_cs = if v {
+            "<w:bCs/>".to_owned()
+        } else {
+            r#"<w:bCs w:val="0"/>"#.to_owned()
+        };
         out = upsert_element(&out, "bCs", &tag_cs, &["i", "color", "sz", "u"], "</w:rPr>");
     }
     if let Some(v) = c.italic {
-        let tag = if v { "<w:i/>".to_owned() } else { r#"<w:i w:val="0"/>"#.to_owned() };
+        let tag = if v {
+            "<w:i/>".to_owned()
+        } else {
+            r#"<w:i w:val="0"/>"#.to_owned()
+        };
         out = upsert_element(&out, "i", &tag, &["color", "sz", "u"], "</w:rPr>");
-        let tag_cs = if v { "<w:iCs/>".to_owned() } else { r#"<w:iCs w:val="0"/>"#.to_owned() };
+        let tag_cs = if v {
+            "<w:iCs/>".to_owned()
+        } else {
+            r#"<w:iCs w:val="0"/>"#.to_owned()
+        };
         out = upsert_element(&out, "iCs", &tag_cs, &["color", "sz", "u"], "</w:rPr>");
     }
     if let Some(v) = c.font_size_pt {
@@ -2606,7 +2978,13 @@ fn apply_char_formats(rpr_inner: &str, c: &CharFormat) -> String {
         attr_set(&mut attrs, "w:hAnsi", v);
         attr_set(&mut attrs, "w:eastAsia", v);
         let tag = build_tag("rFonts", &attrs);
-        out = upsert_element(&out, "rFonts", &tag, &["b", "i", "color", "sz", "u"], "</w:rPr>");
+        out = upsert_element(
+            &out,
+            "rFonts",
+            &tag,
+            &["b", "i", "color", "sz", "u"],
+            "</w:rPr>",
+        );
     }
     out
 }
@@ -2616,14 +2994,26 @@ fn fresh_ppr_inner(p: &ParaFormat) -> String {
     let mut inner = String::new();
     let mut attrs: Vec<(String, String)> = Vec::new();
     if let Some(v) = p.line_spacing {
-        attr_set(&mut attrs, "w:line", &format!("{}", (v * 240.0).round() as i64));
+        attr_set(
+            &mut attrs,
+            "w:line",
+            &format!("{}", (v * 240.0).round() as i64),
+        );
         attr_set(&mut attrs, "w:lineRule", "auto");
     }
     if let Some(v) = p.space_before_pt {
-        attr_set(&mut attrs, "w:before", &format!("{}", (v * 20.0).round() as i64));
+        attr_set(
+            &mut attrs,
+            "w:before",
+            &format!("{}", (v * 20.0).round() as i64),
+        );
     }
     if let Some(v) = p.space_after_pt {
-        attr_set(&mut attrs, "w:after", &format!("{}", (v * 20.0).round() as i64));
+        attr_set(
+            &mut attrs,
+            "w:after",
+            &format!("{}", (v * 20.0).round() as i64),
+        );
     }
     if !attrs.is_empty() {
         inner.push_str(&build_tag("spacing", &attrs));
@@ -2671,7 +3061,11 @@ fn reformat_ppr(block_xml: &str, p: &ParaFormat) -> Option<String> {
             let head = &block_xml[..gt - 1];
             return Some(format!("{head}>{new_ppr}</w:p>"));
         }
-        return Some(format!("{}{new_ppr}{}", &block_xml[..gt + 1], &block_xml[gt + 1..]));
+        return Some(format!(
+            "{}{new_ppr}{}",
+            &block_xml[..gt + 1],
+            &block_xml[gt + 1..]
+        ));
     };
     // 有 pPr：内容区间内应用
     let open_end = s + block_xml[s..].find('>')? + 1;
@@ -2831,7 +3225,11 @@ fn set_ppr_element(block_xml: &str, element: &str, xml: Option<&str>) -> Option<
     if block_xml.as_bytes()[open_end - 2] == b'/' {
         // 自闭合空 pPr：整体替换为含片段的完整 pPr
         return Some((
-            format!("{}<w:pPr>{frag}</w:pPr>{}", &block_xml[..s], &block_xml[open_end..]),
+            format!(
+                "{}<w:pPr>{frag}</w:pPr>{}",
+                &block_xml[..s],
+                &block_xml[open_end..]
+            ),
             true,
         ));
     }
@@ -2870,7 +3268,11 @@ fn remove_ppr_element(block_xml: &str, element: &str) -> Option<(String, bool)> 
     if new_inner.trim().is_empty() {
         // 摘空 → pPr 整体移除（Word 自身也这样清理）
         return Some((
-            format!("{}{}", &block_xml[..s], &block_xml[close_at + "</w:pPr>".len()..]),
+            format!(
+                "{}{}",
+                &block_xml[..s],
+                &block_xml[close_at + "</w:pPr>".len()..]
+            ),
             true,
         ));
     }
@@ -2911,8 +3313,12 @@ fn reformat_runs(block_xml: &str, c: &CharFormat) -> Option<String> {
     let mut run_starts: Vec<usize> = Vec::new();
     let mut from = 0usize;
     loop {
-        let rel_a = block_xml[from..].find("<w:r>").map(|p| (from + p, "<w:r>".len()));
-        let rel_b = block_xml[from..].find("<w:r ").map(|p| (from + p, "<w:r ".len()));
+        let rel_a = block_xml[from..]
+            .find("<w:r>")
+            .map(|p| (from + p, "<w:r>".len()));
+        let rel_b = block_xml[from..]
+            .find("<w:r ")
+            .map(|p| (from + p, "<w:r ".len()));
         let hit = match (rel_a, rel_b) {
             (Some(a), Some(b)) => Some(if a.0 < b.0 { a } else { b }),
             (a, b) => a.or(b),
@@ -3114,15 +3520,27 @@ fn content_width_twips(model: &docx_model::DocxDocument) -> u32 {
             margin_r = m;
         }
     }
-    let w = page_w.unwrap_or(12240).saturating_sub(margin_l).saturating_sub(margin_r);
-    if w < 2000 { 9026 } else { w }
+    let w = page_w
+        .unwrap_or(12240)
+        .saturating_sub(margin_l)
+        .saturating_sub(margin_r);
+    if w < 2000 {
+        9026
+    } else {
+        w
+    }
 }
 
 /// 建整表 XML：tblW pct 5000（100% 宽）+ 全边框 single sz=4 + 列宽均分；
 /// header=true 时首行加粗 + tblHeader（跨页重复表头）。style_id 给定时 tblPr
 /// 首位注 `<w:tblStyle>`（CT_TblPrBase schema 首子元素——用户模板表样式优先于
 /// 默认边框，Word 按样式定义渲染条纹带/边框）。
-fn build_table_xml(rows: &[Vec<String>], header: bool, style_id: Option<&str>, width_tw: u32) -> String {
+fn build_table_xml(
+    rows: &[Vec<String>],
+    header: bool,
+    style_id: Option<&str>,
+    width_tw: u32,
+) -> String {
     let cols = rows.first().map(|r| r.len()).unwrap_or(1).max(1);
     let col_w = (width_tw / cols as u32).max(200);
     let mut s = String::with_capacity(64 + rows.len() * cols * 48);
@@ -3340,7 +3758,12 @@ fn insert_table_row_after(
 }
 
 /// (row, cell) 单元格投影文本（前 60 字）——set_cell_text 摘要的 before 值。
-fn cell_projected_of(model: &docx_model::DocxDocument, block: usize, row: usize, cell: usize) -> String {
+fn cell_projected_of(
+    model: &docx_model::DocxDocument,
+    block: usize,
+    row: usize,
+    cell: usize,
+) -> String {
     let mut s = String::new();
     if let Block::Table(t) = &model.body[block - 1] {
         if let Some(r) = t.rows.get(row - 1) {
@@ -3383,7 +3806,10 @@ fn apply_to_cell<T>(
     let (cs, ce) = cell_span_of(row_xml, cell)?;
     let (new_cell, t) = f(&row_xml[cs..ce])?;
     let new_row = format!("{}{new_cell}{}", &row_xml[..cs], &row_xml[ce..]);
-    Some((format!("{}{new_row}{}", &block_xml[..rs], &block_xml[re..]), t))
+    Some((
+        format!("{}{new_row}{}", &block_xml[..rs], &block_xml[re..]),
+        t,
+    ))
 }
 
 /// 属性容器子元素手术（tblPr / trPr / tcPr 通用，set_ppr_element 的容器版）：
@@ -3418,7 +3844,11 @@ fn set_container_element_xml(
         }
         let new_container = format!("<w:{container}>{f}</w:{container}>");
         return Some((
-            format!("{}{new_container}{}", &scope_xml[..gt + 1], &scope_xml[gt + 1..]),
+            format!(
+                "{}{new_container}{}",
+                &scope_xml[..gt + 1],
+                &scope_xml[gt + 1..]
+            ),
             true,
         ));
     };
@@ -3449,12 +3879,21 @@ fn set_container_element_xml(
             if new_inner.trim().is_empty() {
                 // 摘空 → 容器整体移除（Word 自身也这样清理）
                 return Some((
-                    format!("{}{}", &scope_xml[..s], &scope_xml[close_at + close_tag.len()..]),
+                    format!(
+                        "{}{}",
+                        &scope_xml[..s],
+                        &scope_xml[close_at + close_tag.len()..]
+                    ),
                     true,
                 ));
             }
             Some((
-                format!("{}{}{}", &scope_xml[..open_end], new_inner, &scope_xml[close_at..]),
+                format!(
+                    "{}{}{}",
+                    &scope_xml[..open_end],
+                    new_inner,
+                    &scope_xml[close_at..]
+                ),
                 true,
             ))
         }
@@ -3464,7 +3903,11 @@ fn set_container_element_xml(
             let container_el = &scope_xml[s..close_at + close_tag.len()];
             let new_container = upsert_element(container_el, element, f, &later, &close_tag);
             Some((
-                format!("{}{new_container}{}", &scope_xml[..s], &scope_xml[close_at + close_tag.len()..]),
+                format!(
+                    "{}{new_container}{}",
+                    &scope_xml[..s],
+                    &scope_xml[close_at + close_tag.len()..]
+                ),
                 true,
             ))
         }
@@ -3583,11 +4026,7 @@ fn xml_v_merge(cell_xml: &str) -> Option<String> {
 
 /// 行内占据恰好 [g0, g1) 网格列区间的格的字节范围（None = 边界不对齐）。
 /// XML 层对齐判据（纵并用），与模型的 cell_at_grid_range 同语义。
-fn xml_cell_span_at_grid_range(
-    row_xml: &str,
-    g0: u32,
-    g1: u32,
-) -> Option<(usize, usize)> {
+fn xml_cell_span_at_grid_range(row_xml: &str, g0: u32, g1: u32) -> Option<(usize, usize)> {
     let mut start = 0u32;
     for (s, e) in direct_children_spans(row_xml, "tc") {
         let span = xml_grid_span(&row_xml[s..e]);
@@ -3605,7 +4044,12 @@ fn xml_cell_span_at_grid_range(
 ///（fldSimple/instrText/fldChar）、非空白文本任一在场即算内容。
 fn is_placeholder_p(p_xml: &str) -> bool {
     const CONTENT_MARKERS: [&str; 6] = [
-        "<w:drawing", "<w:pict", "<w:object", "<w:fldSimple", "<w:instrText", "w:fldChar",
+        "<w:drawing",
+        "<w:pict",
+        "<w:object",
+        "<w:fldSimple",
+        "<w:instrText",
+        "w:fldChar",
     ];
     if CONTENT_MARKERS.iter().any(|m| p_xml.contains(m)) {
         return false;
@@ -3677,7 +4121,9 @@ fn aggregate_cell_content(inner: &str) -> (String, usize) {
     let mut dropped = 0usize;
     for (s, e) in all_direct_children_spans(inner) {
         out.push_str(&inner[prev_end..s]); // 子节点间文本（空白）
-        let is_p = inner[s..].starts_with("<w:p>") || inner[s..].starts_with("<w:p ") || inner[s..].starts_with("<w:p/>");
+        let is_p = inner[s..].starts_with("<w:p>")
+            || inner[s..].starts_with("<w:p ")
+            || inner[s..].starts_with("<w:p/>");
         if is_p && is_placeholder_p(&inner[s..e]) {
             dropped += 1;
         } else {
@@ -3727,7 +4173,8 @@ fn merge_horizontal_xml(
         let from = find_element_span(cxml, "tcPr")
             .map(|(_, te)| te)
             .unwrap_or(open_end);
-        let (kept, d) = aggregate_cell_content(&cxml[from..cxml.len().saturating_sub("</w:tc>".len())]);
+        let (kept, d) =
+            aggregate_cell_content(&cxml[from..cxml.len().saturating_sub("</w:tc>".len())]);
         dropped += d;
         content.push_str(&kept);
     }
@@ -3841,7 +4288,9 @@ fn merge_cells_xml(
             };
             Some((
                 out,
-                format!("r{row}c{cell}..r{er}c{ec} 矩形合并（{width} 格宽 × {rows_n} 行{drop_note}）"),
+                format!(
+                    "r{row}c{cell}..r{er}c{ec} 矩形合并（{width} 格宽 × {rows_n} 行{drop_note}）"
+                ),
             ))
         }
         _ => {
@@ -3956,8 +4405,7 @@ fn split_cell_xml(
             let from = find_element_span(&no_span_cell, "tcPr")
                 .map(|(_, e)| e)
                 .unwrap_or(open_end);
-            let content =
-                &no_span_cell[from..no_span_cell.len().saturating_sub("</w:tc>".len())];
+            let content = &no_span_cell[from..no_span_cell.len().saturating_sub("</w:tc>".len())];
             let fp = find_element_span(content, "p")?;
             let ppr = slice_ppr(&content[fp.0..fp.1]);
             // N-1 个空格：同开标签 + 同 tcPr（若摘 gridSpan 后仍在）+ 空段
@@ -3971,16 +4419,9 @@ fn split_cell_xml(
                 extras.push_str(&format!("<w:p>{ppr}</w:p>"));
                 extras.push_str("</w:tc>");
             }
-            let new_row = format!(
-                "{}{no_span_cell}{extras}{}",
-                &row_xml[..cs],
-                &row_xml[ce..]
-            );
+            let new_row = format!("{}{no_span_cell}{extras}{}", &row_xml[..cs], &row_xml[ce..]);
             let out = format!("{}{new_row}{}", &block_xml[..rs], &block_xml[re..]);
-            Some((
-                out,
-                format!("r{row}c{cell} 横并拆回 {n} 格（内容留首格）"),
-            ))
+            Some((out, format!("r{row}c{cell} 横并拆回 {n} 格（内容留首格）")))
         }
     }
 }
@@ -4046,9 +4487,7 @@ mod tests {
     use std::io::Read;
 
     fn wrap(body: &str) -> String {
-        format!(
-            r#"<w:document xmlns:w="w" xmlns:r="r"><w:body>{body}</w:body></w:document>"#
-        )
+        format!(r#"<w:document xmlns:w="w" xmlns:r="r"><w:body>{body}</w:body></w:document>"#)
     }
 
     fn model_of(xml: &str) -> docx_model::DocxDocument {
@@ -4070,7 +4509,12 @@ mod tests {
         for (i, span) in spans.iter().enumerate() {
             let piece = &xml[span.start..span.end];
             let piece_model = model_of(piece);
-            assert_eq!(piece_model.body.len(), 1, "块 {} 子串应恰为单块: {piece}", i + 1);
+            assert_eq!(
+                piece_model.body.len(),
+                1,
+                "块 {} 子串应恰为单块: {piece}",
+                i + 1
+            );
             let mut expect = String::new();
             docx_model::blocks_text(&model.body[i..i + 1], &mut expect);
             let mut got = String::new();
@@ -4158,15 +4602,16 @@ mod tests {
         docx_model::blocks_text(&m.body, &mut t);
         assert_eq!(t, "锚段\n插入段\n尾段\n");
         // 继承锚块 pPr + rPr
-        assert!(out.contains(r#"<w:pPr><w:pStyle w:val="body"/></w:pPr><w:r><w:rPr><w:i/></w:rPr>"#));
+        assert!(
+            out.contains(r#"<w:pPr><w:pStyle w:val="body"/></w:pPr><w:r><w:rPr><w:i/></w:rPr>"#)
+        );
     }
 
     #[test]
     fn insert_with_style_name_resolves_id() {
         let styles_xml = r#"<w:styles><w:style w:type="paragraph" w:styleId="h1"><w:name w:val="heading 1"/></w:style></w:styles>"#;
-        let sheet = super::super::styles::parse_styles(
-            &super::super::xml_dom::parse(styles_xml).unwrap(),
-        );
+        let sheet =
+            super::super::styles::parse_styles(&super::super::xml_dom::parse(styles_xml).unwrap());
         let xml = wrap(r#"<w:p><w:r><w:t>正文</w:t></w:r></w:p>"#);
         let (out, _) = apply_edits(
             &xml,
@@ -4179,19 +4624,24 @@ mod tests {
             }],
         )
         .unwrap();
-        assert!(out.contains(r#"<w:pPr><w:pStyle w:val="h1"/></w:pPr>"#), "显示名反查 ID");
+        assert!(
+            out.contains(r#"<w:pPr><w:pStyle w:val="h1"/></w:pPr>"#),
+            "显示名反查 ID"
+        );
         // 未知样式报错
-        let err = val_msg(apply_edits(
-            &xml,
-            &sheet,
-            &[EditOp::InsertParagraphAfter {
-                block: 1,
-                expect_prefix: "正文".into(),
-                text: "x".into(),
-                style: Some("不存在的样式".into()),
-            }],
-        )
-        .unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &sheet,
+                &[EditOp::InsertParagraphAfter {
+                    block: 1,
+                    expect_prefix: "正文".into(),
+                    text: "x".into(),
+                    style: Some("不存在的样式".into()),
+                }],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("未知样式"), "实际: {err}");
     }
 
@@ -4204,7 +4654,10 @@ mod tests {
         let (out, _) = apply_edits(
             &xml,
             &styles,
-            &[EditOp::DeleteBlock { block: 2, expect_prefix: "二".into() }],
+            &[EditOp::DeleteBlock {
+                block: 2,
+                expect_prefix: "二".into(),
+            }],
         )
         .unwrap();
         let m = model_of(&out);
@@ -4229,8 +4682,15 @@ mod tests {
             &xml,
             &styles,
             &[
-                EditOp::DeleteBlock { block: 5, expect_prefix: "第5段".into() },
-                EditOp::ReplaceText { block: 3, expect_prefix: "第3段".into(), new_text: "改后".into() },
+                EditOp::DeleteBlock {
+                    block: 5,
+                    expect_prefix: "第5段".into(),
+                },
+                EditOp::ReplaceText {
+                    block: 3,
+                    expect_prefix: "第3段".into(),
+                    new_text: "改后".into(),
+                },
                 EditOp::InsertParagraphAfter {
                     block: 1,
                     expect_prefix: "第1段".into(),
@@ -4251,14 +4711,18 @@ mod tests {
     fn fingerprint_mismatch_rejects_whole_batch() {
         let xml = wrap(r#"<w:p><w:r><w:t>实际内容</w:t></w:r></w:p>"#);
         let styles = Stylesheet::empty();
-        let err = val_msg(apply_edits(
-            &xml,
-            &styles,
-            &[
-                EditOp::ReplaceText { block: 1, expect_prefix: "别的内容".into(), new_text: "x".into() },
-            ],
-        )
-        .unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &styles,
+                &[EditOp::ReplaceText {
+                    block: 1,
+                    expect_prefix: "别的内容".into(),
+                    new_text: "x".into(),
+                }],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("指纹不符"), "实际: {err}");
         assert!(err.contains("inspect_docx"));
     }
@@ -4268,23 +4732,33 @@ mod tests {
         let styles = Stylesheet::empty();
         // 修订块
         let xml = wrap(r#"<w:p><w:ins><w:r><w:t>修订段</w:t></w:r></w:ins></w:p>"#);
-        let err = val_msg(apply_edits(
-            &xml,
-            &styles,
-            &[EditOp::DeleteBlock { block: 1, expect_prefix: "修订段".into() }],
-        )
-        .unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &styles,
+                &[EditOp::DeleteBlock {
+                    block: 1,
+                    expect_prefix: "修订段".into(),
+                }],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("含修订标记"), "实际: {err}");
         // 节末段
         let xml = wrap(
             r#"<w:p><w:pPr><w:sectPr><w:pgSz w:w="1"/></w:sectPr></w:pPr><w:r><w:t>节末段</w:t></w:r></w:p>"#,
         );
-        let err = val_msg(apply_edits(
-            &xml,
-            &styles,
-            &[EditOp::DeleteBlock { block: 1, expect_prefix: "节末段".into() }],
-        )
-        .unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &styles,
+                &[EditOp::DeleteBlock {
+                    block: 1,
+                    expect_prefix: "节末段".into(),
+                }],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("节属性保护"), "实际: {err}");
     }
 
@@ -4292,36 +4766,57 @@ mod tests {
     fn duplicate_block_and_bounds_rejected() {
         let xml = wrap(r#"<w:p><w:r><w:t>一</w:t></w:r></w:p>"#);
         let styles = Stylesheet::empty();
-        let err = val_msg(apply_edits(
-            &xml,
-            &styles,
-            &[
-                EditOp::ReplaceText { block: 1, expect_prefix: "一".into(), new_text: "x".into() },
-                EditOp::DeleteBlock { block: 1, expect_prefix: "x".into() },
-            ],
-        )
-        .unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &styles,
+                &[
+                    EditOp::ReplaceText {
+                        block: 1,
+                        expect_prefix: "一".into(),
+                        new_text: "x".into(),
+                    },
+                    EditOp::DeleteBlock {
+                        block: 1,
+                        expect_prefix: "x".into(),
+                    },
+                ],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("同一块多操作"), "实际: {err}");
-        let err = val_msg(apply_edits(
-            &xml,
-            &styles,
-            &[EditOp::DeleteBlock { block: 7, expect_prefix: "".into() }],
-        )
-        .unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &styles,
+                &[EditOp::DeleteBlock {
+                    block: 7,
+                    expect_prefix: "".into(),
+                }],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("块号越界"), "实际: {err}");
         assert!(err.contains("1-1"), "应带有效范围: {err}");
     }
 
     #[test]
     fn table_block_replace_rejected() {
-        let xml = wrap(r#"<w:tbl><w:tr><w:tc><w:p><w:r><w:t>表</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#);
+        let xml =
+            wrap(r#"<w:tbl><w:tr><w:tc><w:p><w:r><w:t>表</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#);
         let styles = Stylesheet::empty();
-        let err = val_msg(apply_edits(
-            &xml,
-            &styles,
-            &[EditOp::ReplaceText { block: 1, expect_prefix: "表".into(), new_text: "x".into() }],
-        )
-        .unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &styles,
+                &[EditOp::ReplaceText {
+                    block: 1,
+                    expect_prefix: "表".into(),
+                    new_text: "x".into(),
+                }],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("表格块"), "实际: {err}");
     }
 
@@ -4343,17 +4838,26 @@ mod tests {
         let (out, applied) = apply_edits(
             &xml,
             &heading_styles(),
-            &[EditOp::SetStyle { block: 1, expect_prefix: "正文段".into(), style: "heading 2".into() }],
+            &[EditOp::SetStyle {
+                block: 1,
+                expect_prefix: "正文段".into(),
+                style: "heading 2".into(),
+            }],
         )
         .unwrap();
         assert_eq!(applied[0].op, "set_style");
         assert_eq!(applied[0].style.as_deref(), Some("h2"));
         assert!(out.contains(r#"<w:p w14:paraId="X1">"#), "开标签属性保留");
         assert!(out.contains(r#"<w:pPr><w:pStyle w:val="h2"/><w:jc w:val="center"/></w:pPr>"#));
-        assert!(out.contains(r#"<w:rPr><w:b/></w:rPr><w:t>正文段</w:t></w:r>"#), "run 原样");
+        assert!(
+            out.contains(r#"<w:rPr><w:b/></w:rPr><w:t>正文段</w:t></w:r>"#),
+            "run 原样"
+        );
         // 模型侧：样式生效 + 文本不变
         let m = model_of(&out);
-        let super::docx_model::Block::Paragraph(p) = &m.body[0] else { panic!() };
+        let super::docx_model::Block::Paragraph(p) = &m.body[0] else {
+            panic!()
+        };
         assert_eq!(p.props.style.as_deref(), Some("h2"));
         let mut t = String::new();
         docx_model::blocks_text(&m.body, &mut t);
@@ -4364,11 +4868,17 @@ mod tests {
     fn set_style_noop_reports_style_unchanged() {
         // 目标段 pStyle 已是 h2，再 set 成 heading 2（显示名解析到同一 ID）→ 空转，
         // AppliedOp 显式报 style_unchanged=true；换到不同样式则 None（字段省略）
-        let xml = wrap(r#"<w:p><w:pPr><w:pStyle w:val="h2"/></w:pPr><w:r><w:t>已是标题段</w:t></w:r></w:p>"#);
+        let xml = wrap(
+            r#"<w:p><w:pPr><w:pStyle w:val="h2"/></w:pPr><w:r><w:t>已是标题段</w:t></w:r></w:p>"#,
+        );
         let (_, applied) = apply_edits(
             &xml,
             &heading_styles(),
-            &[EditOp::SetStyle { block: 1, expect_prefix: "已是标题段".into(), style: "heading 2".into() }],
+            &[EditOp::SetStyle {
+                block: 1,
+                expect_prefix: "已是标题段".into(),
+                style: "heading 2".into(),
+            }],
         )
         .unwrap();
         assert_eq!(applied[0].style_unchanged, Some(true));
@@ -4379,13 +4889,23 @@ mod tests {
         let (out, applied) = apply_edits(
             &xml,
             &heading_styles(),
-            &[EditOp::SetStyle { block: 1, expect_prefix: "已是标题段".into(), style: "Normal".into() }],
+            &[EditOp::SetStyle {
+                block: 1,
+                expect_prefix: "已是标题段".into(),
+                style: "Normal".into(),
+            }],
         )
         .unwrap();
         assert_eq!(applied[0].style_unchanged, None);
         let json = serde_json::to_string(&applied[0]).unwrap();
-        assert!(!json.contains("style_unchanged"), "非空转不应带字段: {json}");
-        assert!(out.contains(r#"<w:pStyle w:val="body"/>"#), "真换样式仍生效");
+        assert!(
+            !json.contains("style_unchanged"),
+            "非空转不应带字段: {json}"
+        );
+        assert!(
+            out.contains(r#"<w:pStyle w:val="body"/>"#),
+            "真换样式仍生效"
+        );
     }
 
     // ---- S3 二波（D9）：set_ppr_element 通用 pPr 元素手术 ----
@@ -4409,14 +4929,20 @@ mod tests {
         )
         .unwrap();
         assert_eq!(applied[0].op, "set_ppr_element");
-        assert!(applied[0].after.starts_with("removed numPr"), "实际: {}", applied[0].after);
+        assert!(
+            applied[0].after.starts_with("removed numPr"),
+            "实际: {}",
+            applied[0].after
+        );
         assert!(!out.contains("<w:numPr"), "numPr 应消失");
         assert!(
             out.contains(r#"<w:pPr><w:pStyle w:val="3"/><w:spacing w:before="163"/></w:pPr>"#),
             "兄弟元素原样: {out}"
         );
         let m = model_of(&out);
-        let Block::Paragraph(p) = &m.body[0] else { panic!() };
+        let Block::Paragraph(p) = &m.body[0] else {
+            panic!()
+        };
         assert!(p.props.numbering.is_none(), "模型侧编号引用应消失");
     }
 
@@ -4446,9 +4972,8 @@ mod tests {
     #[test]
     fn ppr_remove_absent_reports_noop() {
         // 段落无 numPr → 空转：文档逐字节不变 + 摘要明示
-        let xml = wrap(
-            r#"<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t>普通段</w:t></w:r></w:p>"#,
-        );
+        let xml =
+            wrap(r#"<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t>普通段</w:t></w:r></w:p>"#);
         let (out, applied) = apply_edits(
             &xml,
             &heading_styles(),
@@ -4460,7 +4985,11 @@ mod tests {
             }],
         )
         .unwrap();
-        assert!(applied[0].after.contains("空转"), "实际: {}", applied[0].after);
+        assert!(
+            applied[0].after.contains("空转"),
+            "实际: {}",
+            applied[0].after
+        );
         assert_eq!(out, xml, "空转输出应与输入逐字节一致");
     }
 
@@ -4512,7 +5041,8 @@ mod tests {
     #[test]
     fn ppr_upsert_replaces_existing_whole_element() {
         // 已存在 jc → 整元素替换（属性值 + 属性集都以片段为准）
-        let xml = wrap(r#"<w:p><w:pPr><w:jc w:val="left"/></w:pPr><w:r><w:t>替换段</w:t></w:r></w:p>"#);
+        let xml =
+            wrap(r#"<w:p><w:pPr><w:jc w:val="left"/></w:pPr><w:r><w:t>替换段</w:t></w:r></w:p>"#);
         let (out, _) = apply_edits(
             &xml,
             &heading_styles(),
@@ -4524,7 +5054,10 @@ mod tests {
             }],
         )
         .unwrap();
-        assert!(out.contains(r#"<w:pPr><w:jc w:val="right"/></w:pPr>"#), "整元素替换: {out}");
+        assert!(
+            out.contains(r#"<w:pPr><w:jc w:val="right"/></w:pPr>"#),
+            "整元素替换: {out}"
+        );
     }
 
     #[test]
@@ -4553,7 +5086,9 @@ mod tests {
             ],
         )
         .unwrap();
-        assert!(out.contains(r#"<w:p><w:pPr><w:keepNext/></w:pPr><w:r><w:t>裸段</w:t></w:r></w:p>"#));
+        assert!(
+            out.contains(r#"<w:p><w:pPr><w:keepNext/></w:pPr><w:r><w:t>裸段</w:t></w:r></w:p>"#)
+        );
         assert!(
             out.contains(r#"<w:p w14:paraId="E"><w:pPr><w:keepLines/></w:pPr></w:p>"#),
             "自闭合段展开: {out}"
@@ -4565,33 +5100,53 @@ mod tests {
         let styles = heading_styles();
         let para = wrap(r#"<w:p><w:r><w:t>一段</w:t></w:r></w:p>"#);
         // 非法元素名（numId 是 numPr 的子元素，不是 pPr 子元素）
-        let err = val_msg(apply_edits(
-            &para,
-            &styles,
-            &[EditOp::SetPprElement { block: 1, expect_prefix: "一段".into(), element: "numId".into(), xml: None }],
-        ).unwrap_err());
-        assert!(err.starts_with("非法pPr子元素"), "实际: {err}");
-        // 受保护：sectPr / pPrChange
-        for protected in ["sectPr", "pPrChange"] {
-            let err = val_msg(apply_edits(
+        let err = val_msg(
+            apply_edits(
                 &para,
                 &styles,
                 &[EditOp::SetPprElement {
                     block: 1,
                     expect_prefix: "一段".into(),
-                    element: protected.into(),
+                    element: "numId".into(),
                     xml: None,
                 }],
-            ).unwrap_err());
+            )
+            .unwrap_err(),
+        );
+        assert!(err.starts_with("非法pPr子元素"), "实际: {err}");
+        // 受保护：sectPr / pPrChange
+        for protected in ["sectPr", "pPrChange"] {
+            let err = val_msg(
+                apply_edits(
+                    &para,
+                    &styles,
+                    &[EditOp::SetPprElement {
+                        block: 1,
+                        expect_prefix: "一段".into(),
+                        element: protected.into(),
+                        xml: None,
+                    }],
+                )
+                .unwrap_err(),
+            );
             assert!(err.starts_with("受保护子元素"), "实际: {err}");
         }
         // 表格块
-        let tbl = wrap(r#"<w:tbl><w:tr><w:tc><w:p><w:r><w:t>表</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#);
-        let err = val_msg(apply_edits(
-            &tbl,
-            &styles,
-            &[EditOp::SetPprElement { block: 1, expect_prefix: "表".into(), element: "keepNext".into(), xml: None }],
-        ).unwrap_err());
+        let tbl =
+            wrap(r#"<w:tbl><w:tr><w:tc><w:p><w:r><w:t>表</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#);
+        let err = val_msg(
+            apply_edits(
+                &tbl,
+                &styles,
+                &[EditOp::SetPprElement {
+                    block: 1,
+                    expect_prefix: "表".into(),
+                    element: "keepNext".into(),
+                    xml: None,
+                }],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("表格块"), "实际: {err}");
     }
 
@@ -4600,16 +5155,19 @@ mod tests {
         let styles = heading_styles();
         let para = wrap(r#"<w:p><w:r><w:t>片段段</w:t></w:r></w:p>"#);
         let run = |xml: Option<&str>| {
-            val_msg(apply_edits(
-                &para,
-                &styles,
-                &[EditOp::SetPprElement {
-                    block: 1,
-                    expect_prefix: "片段".into(),
-                    element: "numPr".into(),
-                    xml: xml.map(str::to_string),
-                }],
-            ).unwrap_err())
+            val_msg(
+                apply_edits(
+                    &para,
+                    &styles,
+                    &[EditOp::SetPprElement {
+                        block: 1,
+                        expect_prefix: "片段".into(),
+                        element: "numPr".into(),
+                        xml: xml.map(str::to_string),
+                    }],
+                )
+                .unwrap_err(),
+            )
         };
         // 根元素名与 element 不一致
         let err = run(Some(r#"<w:jc w:val="center"/>"#));
@@ -4620,7 +5178,10 @@ mod tests {
         assert!(err.starts_with("片段校验失败"), "实际: {err}");
         // xmlns 声明
         let err = run(Some(r#"<w:numPr xmlns:w="http://x"/>"#));
-        assert!(err.starts_with("片段校验失败") && err.contains("xmlns"), "实际: {err}");
+        assert!(
+            err.starts_with("片段校验失败") && err.contains("xmlns"),
+            "实际: {err}"
+        );
         // 夹带受保护元素
         let err = run(Some(r#"<w:numPr><w:sectPr/></w:numPr>"#));
         assert!(err.starts_with("片段校验失败"), "实际: {err}");
@@ -4681,7 +5242,10 @@ mod tests {
             }],
         )
         .unwrap();
-        assert!(!applied[0].after.contains("样式链仍定义编号"), "样式无编号不应警告");
+        assert!(
+            !applied[0].after.contains("样式链仍定义编号"),
+            "样式无编号不应警告"
+        );
     }
 
     #[test]
@@ -4697,9 +5261,21 @@ mod tests {
             &xml,
             &heading_styles(),
             &[
-                EditOp::SetStyle { block: 1, expect_prefix: "列表项".into(), style: "h2".into() },
-                EditOp::SetStyle { block: 2, expect_prefix: "裸段".into(), style: "h2".into() },
-                EditOp::SetStyle { block: 3, expect_prefix: "".into(), style: "body".into() },
+                EditOp::SetStyle {
+                    block: 1,
+                    expect_prefix: "列表项".into(),
+                    style: "h2".into(),
+                },
+                EditOp::SetStyle {
+                    block: 2,
+                    expect_prefix: "裸段".into(),
+                    style: "h2".into(),
+                },
+                EditOp::SetStyle {
+                    block: 3,
+                    expect_prefix: "".into(),
+                    style: "body".into(),
+                },
             ],
         )
         .unwrap();
@@ -4708,8 +5284,12 @@ mod tests {
             out.contains(r#"<w:pPr><w:pStyle w:val="h2"/><w:numPr>"#),
             "pStyle 应插在 pPr 首位: {out}"
         );
-        assert!(out.contains(r#"<w:p><w:pPr><w:pStyle w:val="h2"/></w:pPr><w:r><w:t>裸段</w:t></w:r></w:p>"#));
-        assert!(out.contains(r#"<w:p w14:paraId="E"><w:pPr><w:pStyle w:val="body"/></w:pPr></w:p>"#));
+        assert!(out.contains(
+            r#"<w:p><w:pPr><w:pStyle w:val="h2"/></w:pPr><w:r><w:t>裸段</w:t></w:r></w:p>"#
+        ));
+        assert!(
+            out.contains(r#"<w:p w14:paraId="E"><w:pPr><w:pStyle w:val="body"/></w:pPr></w:p>"#)
+        );
         let m = model_of(&out);
         assert_eq!(m.body.len(), 3, "块数守恒");
     }
@@ -4719,32 +5299,51 @@ mod tests {
         let styles = heading_styles();
         // 未知样式（家族前缀）
         let xml = wrap(r#"<w:p><w:r><w:t>一段</w:t></w:r></w:p>"#);
-        let err = val_msg(apply_edits(
-            &xml,
-            &styles,
-            &[EditOp::SetStyle { block: 1, expect_prefix: "一段".into(), style: "没有这样式".into() }],
-        )
-        .unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &styles,
+                &[EditOp::SetStyle {
+                    block: 1,
+                    expect_prefix: "一段".into(),
+                    style: "没有这样式".into(),
+                }],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("未知样式"), "实际: {err}");
         // 表格块
-        let xml = wrap(r#"<w:tbl><w:tr><w:tc><w:p><w:r><w:t>表</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#);
-        let err = val_msg(apply_edits(
-            &xml,
-            &styles,
-            &[EditOp::SetStyle { block: 1, expect_prefix: "表".into(), style: "h2".into() }],
-        )
-        .unwrap_err());
+        let xml =
+            wrap(r#"<w:tbl><w:tr><w:tc><w:p><w:r><w:t>表</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#);
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &styles,
+                &[EditOp::SetStyle {
+                    block: 1,
+                    expect_prefix: "表".into(),
+                    style: "h2".into(),
+                }],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("表格块"), "实际: {err}");
         // 段落属性修订（pPrChange）——换样式与其语义纠缠，拒
         let xml = wrap(
             r#"<w:p><w:pPr><w:pStyle w:val="body"/><w:pPrChange w:id="1"><w:pPr><w:pStyle w:val="h2"/></w:pPr></w:pPrChange></w:pPr><w:r><w:t>改格段</w:t></w:r></w:p>"#,
         );
-        let err = val_msg(apply_edits(
-            &xml,
-            &styles,
-            &[EditOp::SetStyle { block: 1, expect_prefix: "改格段".into(), style: "h2".into() }],
-        )
-        .unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &styles,
+                &[EditOp::SetStyle {
+                    block: 1,
+                    expect_prefix: "改格段".into(),
+                    style: "h2".into(),
+                }],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("含修订标记"), "实际: {err}");
         assert!(err.contains("pPrChange"));
     }
@@ -4774,10 +5373,16 @@ mod tests {
         )
         .unwrap();
         assert_eq!(applied[0].op, "set_format");
-        assert!(applied[0].after.contains("对齐=center"), "摘要: {}", applied[0].after);
+        assert!(
+            applied[0].after.contains("对齐=center"),
+            "摘要: {}",
+            applied[0].after
+        );
         // 合并断言：before 未提及原样 120；line/lineRule/after 追加进同一 spacing；firstLine 覆盖 720
         assert!(
-            out.contains(r#"<w:spacing w:before="120" w:line="360" w:lineRule="auto" w:after="120"/>"#),
+            out.contains(
+                r#"<w:spacing w:before="120" w:line="360" w:lineRule="auto" w:after="120"/>"#
+            ),
             "spacing 合并: {out}"
         );
         assert!(
@@ -4790,12 +5395,16 @@ mod tests {
         let end = out.find("</w:pPr>").unwrap();
         let seg = &out[ppr..end];
         let pos = |pat: &str| seg.find(pat).unwrap();
-        assert!(pos("<w:pStyle") < pos("<w:spacing")
-            && pos("<w:spacing") < pos("<w:ind")
-            && pos("<w:ind") < pos("<w:jc"));
+        assert!(
+            pos("<w:pStyle") < pos("<w:spacing")
+                && pos("<w:spacing") < pos("<w:ind")
+                && pos("<w:ind") < pos("<w:jc")
+        );
         // 模型读回
         let m = model_of(&out);
-        let super::docx_model::Block::Paragraph(p) = &m.body[0] else { panic!() };
+        let super::docx_model::Block::Paragraph(p) = &m.body[0] else {
+            panic!()
+        };
         assert_eq!(p.props.alignment.as_deref(), Some("center"));
         assert_eq!(p.props.spacing_line, Some(360));
         assert_eq!(p.props.line_rule.as_deref(), Some("auto"));
@@ -4828,16 +5437,28 @@ mod tests {
         )
         .unwrap();
         // run 1：rFonts 原样（本操作未设 font）+ u 保留；b/bCs/color/sz/szCs 按 schema 序插入
-        assert!(out.contains(r#"<w:rFonts w:ascii="Times"/>"#), "rFonts 原样: {out}");
+        assert!(
+            out.contains(r#"<w:rFonts w:ascii="Times"/>"#),
+            "rFonts 原样: {out}"
+        );
         assert!(out.contains("<w:u/>"), "无关子元素保留: {out}");
         assert_eq!(out.matches("<w:b/>").count(), 2, "两个 run 都加粗: {out}");
-        assert_eq!(out.matches(r#"<w:sz w:val="28"/>"#).count(), 2, "14pt = 28 半磅: {out}");
+        assert_eq!(
+            out.matches(r#"<w:sz w:val="28"/>"#).count(),
+            2,
+            "14pt = 28 半磅: {out}"
+        );
         assert_eq!(out.matches(r#"<w:color w:val="FF0000"/>"#).count(), 2);
         // run 2 无 rPr → 新建（rPr 是 w:r 的 schema 首子元素）
-        assert!(out.contains(r#"<w:r><w:rPr>"#), "无 rPr 的 run 新建 rPr: {out}");
+        assert!(
+            out.contains(r#"<w:r><w:rPr>"#),
+            "无 rPr 的 run 新建 rPr: {out}"
+        );
         // 模型读回
         let m = model_of(&out);
-        let super::docx_model::Block::Paragraph(p) = &m.body[0] else { panic!() };
+        let super::docx_model::Block::Paragraph(p) = &m.body[0] else {
+            panic!()
+        };
         for r in &p.runs {
             assert_eq!(r.props.bold, Some(true));
             assert_eq!(r.props.size_half_pt, Some(28));
@@ -4865,30 +5486,45 @@ mod tests {
                         indent_left_tw: Some(-240),
                         ..Default::default()
                     }),
-                    character: Some(CharFormat { bold: Some(true), ..Default::default() }),
+                    character: Some(CharFormat {
+                        bold: Some(true),
+                        ..Default::default()
+                    }),
                 },
                 EditOp::SetFormat {
                     block: 2,
                     expect_prefix: "".into(),
-                    paragraph: Some(ParaFormat { line_spacing: Some(2.0), ..Default::default() }),
+                    paragraph: Some(ParaFormat {
+                        line_spacing: Some(2.0),
+                        ..Default::default()
+                    }),
                     character: None,
                 },
             ],
         )
         .unwrap();
         assert!(
-            out.contains(r#"<w:p><w:pPr><w:spacing w:line="480" w:lineRule="auto"/></w:pPr></w:p>"#),
+            out.contains(
+                r#"<w:p><w:pPr><w:spacing w:line="480" w:lineRule="auto"/></w:pPr></w:p>"#
+            ),
             "块 2 自闭合空段展开并新建 pPr: {out}"
         );
         let m = model_of(&out);
         assert_eq!(m.body.len(), 2);
-        let super::docx_model::Block::Paragraph(p1) = &m.body[0] else { panic!() };
+        let super::docx_model::Block::Paragraph(p1) = &m.body[0] else {
+            panic!()
+        };
         assert_eq!(p1.props.alignment.as_deref(), Some("both"));
         assert_eq!(p1.props.indent_first_line, Some(480));
-        assert_eq!(p1.props.indent_left, None, "负左缩进 i32 → 模型 u32 不收，XML 已写");
+        assert_eq!(
+            p1.props.indent_left, None,
+            "负左缩进 i32 → 模型 u32 不收，XML 已写"
+        );
         assert!(out.contains(r#"w:left="-240""#), "负左缩进写入: {out}");
         assert_eq!(p1.runs[0].props.bold, Some(true));
-        let super::docx_model::Block::Paragraph(p2) = &m.body[1] else { panic!() };
+        let super::docx_model::Block::Paragraph(p2) = &m.body[1] else {
+            panic!()
+        };
         assert_eq!(p2.props.spacing_line, Some(480));
     }
 
@@ -4908,13 +5544,18 @@ mod tests {
             &[EditOp::SetFormat {
                 block: 1,
                 expect_prefix: "甲".into(),
-                paragraph: Some(ParaFormat { indent_first_line_tw: Some(0), ..Default::default() }),
+                paragraph: Some(ParaFormat {
+                    indent_first_line_tw: Some(0),
+                    ..Default::default()
+                }),
                 character: None,
             }],
         )
         .unwrap();
         assert!(
-            out.contains(r#"<w:ind w:firstLine="0" w:firstLineChars="0" w:hanging="0" w:hangingChars="0"/>"#),
+            out.contains(
+                r#"<w:ind w:firstLine="0" w:firstLineChars="0" w:hanging="0" w:hangingChars="0"/>"#
+            ),
             "四变体归零（任意元素内优先序下都渲染无缩进）: {out}"
         );
         // ② 无直接 ind → 新建即四零（压制不依赖直接层已有 ind）
@@ -4925,13 +5566,18 @@ mod tests {
             &[EditOp::SetFormat {
                 block: 1,
                 expect_prefix: "乙".into(),
-                paragraph: Some(ParaFormat { indent_first_line_tw: Some(0), ..Default::default() }),
+                paragraph: Some(ParaFormat {
+                    indent_first_line_tw: Some(0),
+                    ..Default::default()
+                }),
                 character: None,
             }],
         )
         .unwrap();
         assert!(
-            out2.contains(r#"<w:ind w:firstLine="0" w:firstLineChars="0" w:hanging="0" w:hangingChars="0"/>"#),
+            out2.contains(
+                r#"<w:ind w:firstLine="0" w:firstLineChars="0" w:hanging="0" w:hangingChars="0"/>"#
+            ),
             "新建即四零: {out2}"
         );
         // ③ 非零值：chars 压 0、hanging 系移除（写 hanging=0 会反伤——元素内 hanging 优先 firstLine）
@@ -4941,7 +5587,10 @@ mod tests {
             &[EditOp::SetFormat {
                 block: 1,
                 expect_prefix: "甲".into(),
-                paragraph: Some(ParaFormat { indent_first_line_tw: Some(480), ..Default::default() }),
+                paragraph: Some(ParaFormat {
+                    indent_first_line_tw: Some(480),
+                    ..Default::default()
+                }),
                 character: None,
             }],
         )
@@ -4950,7 +5599,10 @@ mod tests {
             out3.contains(r#"<w:ind w:firstLine="480" w:firstLineChars="0"/>"#),
             "非零：chars=0: {out3}"
         );
-        assert!(!out3.contains("w:hanging"), "非零不写 hanging（反伤 firstLine）: {out3}");
+        assert!(
+            !out3.contains("w:hanging"),
+            "非零不写 hanging（反伤 firstLine）: {out3}"
+        );
         // ④ 左缩进同律：leftChars=0 压样式层
         let (out4, _) = apply_edits(
             &xml2,
@@ -4958,12 +5610,18 @@ mod tests {
             &[EditOp::SetFormat {
                 block: 1,
                 expect_prefix: "乙".into(),
-                paragraph: Some(ParaFormat { indent_left_tw: Some(0), ..Default::default() }),
+                paragraph: Some(ParaFormat {
+                    indent_left_tw: Some(0),
+                    ..Default::default()
+                }),
                 character: None,
             }],
         )
         .unwrap();
-        assert!(out4.contains(r#"<w:ind w:left="0" w:leftChars="0"/>"#), "左缩进双零: {out4}");
+        assert!(
+            out4.contains(r#"<w:ind w:left="0" w:leftChars="0"/>"#),
+            "左缩进双零: {out4}"
+        );
     }
 
     #[test]
@@ -4996,18 +5654,37 @@ mod tests {
         )
         .unwrap();
         assert_eq!(applied[0].op, "set_cell_format");
-        assert_eq!(applied[0].style.as_deref(), Some("h2"), "AppliedOp.style 携带解析后 ID");
-        assert!(applied[0].after.contains("样式=heading 2"), "摘要: {}", applied[0].after);
-        assert_eq!(out.matches(r#"<w:pStyle w:val="h2"/>"#).count(), 2, "格内两段都换样式: {out}");
-        assert!(out.contains(r#"<w:ind w:firstLine="480"/>"#), "既有 ind 保留: {out}");
+        assert_eq!(
+            applied[0].style.as_deref(),
+            Some("h2"),
+            "AppliedOp.style 携带解析后 ID"
+        );
+        assert!(
+            applied[0].after.contains("样式=heading 2"),
+            "摘要: {}",
+            applied[0].after
+        );
+        assert_eq!(
+            out.matches(r#"<w:pStyle w:val="h2"/>"#).count(),
+            2,
+            "格内两段都换样式: {out}"
+        );
+        assert!(
+            out.contains(r#"<w:ind w:firstLine="480"/>"#),
+            "既有 ind 保留: {out}"
+        );
         let before_last_close = out.rsplit_once("</w:tc>").unwrap().0;
         let neighbor = &out[before_last_close.rfind("<w:tc>").unwrap()..];
         assert!(!neighbor.contains("w:pStyle"), "邻格未动: {neighbor}");
         // 模型读回：格内两段样式都生效
         let m = model_of(&out);
-        let super::docx_model::Block::Table(t) = &m.body[0] else { panic!() };
+        let super::docx_model::Block::Table(t) = &m.body[0] else {
+            panic!()
+        };
         for b in &t.rows[0].cells[0].blocks {
-            let super::docx_model::Block::Paragraph(p) = b else { continue };
+            let super::docx_model::Block::Paragraph(p) = b else {
+                continue;
+            };
             assert_eq!(p.props.style.as_deref(), Some("h2"));
         }
         // ② 样式 + 直接格式同手：pStyle 首位 + 四零 ind（与缺口 2 修复叠加的生产配方）
@@ -5019,7 +5696,10 @@ mod tests {
                 expect_prefix: "上".into(),
                 row: 1,
                 cell: 1,
-                paragraph: Some(ParaFormat { indent_first_line_tw: Some(0), ..Default::default() }),
+                paragraph: Some(ParaFormat {
+                    indent_first_line_tw: Some(0),
+                    ..Default::default()
+                }),
                 character: None,
                 style: Some("heading 2".into()),
             }],
@@ -5061,10 +5741,16 @@ mod tests {
             character,
         };
         // 空格式
-        let err = val_msg(apply_edits(&xml, &Stylesheet::empty(), &[empty_op(None, None)]).unwrap_err());
+        let err =
+            val_msg(apply_edits(&xml, &Stylesheet::empty(), &[empty_op(None, None)]).unwrap_err());
         assert!(err.starts_with("空格式操作"), "实际: {err}");
         let err = val_msg(
-            apply_edits(&xml, &Stylesheet::empty(), &[empty_op(Some(ParaFormat::default()), None)]).unwrap_err(),
+            apply_edits(
+                &xml,
+                &Stylesheet::empty(),
+                &[empty_op(Some(ParaFormat::default()), None)],
+            )
+            .unwrap_err(),
         );
         assert!(err.starts_with("空格式操作"), "实际: {err}");
         // 对齐白名单
@@ -5073,7 +5759,10 @@ mod tests {
                 &xml,
                 &Stylesheet::empty(),
                 &[empty_op(
-                    Some(ParaFormat { align: Some("middle".into()), ..Default::default() }),
+                    Some(ParaFormat {
+                        align: Some("middle".into()),
+                        ..Default::default()
+                    }),
                     None,
                 )],
             )
@@ -5087,7 +5776,10 @@ mod tests {
                 &Stylesheet::empty(),
                 &[empty_op(
                     None,
-                    Some(CharFormat { color: Some("RED".into()), ..Default::default() }),
+                    Some(CharFormat {
+                        color: Some("RED".into()),
+                        ..Default::default()
+                    }),
                 )],
             )
             .unwrap_err(),
@@ -5100,7 +5792,10 @@ mod tests {
                 &Stylesheet::empty(),
                 &[empty_op(
                     None,
-                    Some(CharFormat { font_size_pt: Some(999.0), ..Default::default() }),
+                    Some(CharFormat {
+                        font_size_pt: Some(999.0),
+                        ..Default::default()
+                    }),
                 )],
             )
             .unwrap_err(),
@@ -5112,7 +5807,10 @@ mod tests {
                 &xml,
                 &Stylesheet::empty(),
                 &[empty_op(
-                    Some(ParaFormat { indent_first_line_tw: Some(-10), ..Default::default() }),
+                    Some(ParaFormat {
+                        indent_first_line_tw: Some(-10),
+                        ..Default::default()
+                    }),
                     None,
                 )],
             )
@@ -5120,7 +5818,8 @@ mod tests {
         );
         assert!(err.starts_with("缩进值无效"), "实际: {err}");
         // 表格块（前缀对准表内文字，确保落在表格拒绝而非指纹不符）
-        let tbl = wrap(r#"<w:tbl><w:tr><w:tc><w:p><w:r><w:t>表</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#);
+        let tbl =
+            wrap(r#"<w:tbl><w:tr><w:tc><w:p><w:r><w:t>表</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#);
         let err = val_msg(
             apply_edits(
                 &tbl,
@@ -5129,7 +5828,10 @@ mod tests {
                     block: 1,
                     expect_prefix: "表".into(),
                     paragraph: None,
-                    character: Some(CharFormat { bold: Some(true), ..Default::default() }),
+                    character: Some(CharFormat {
+                        bold: Some(true),
+                        ..Default::default()
+                    }),
                 }],
             )
             .unwrap_err(),
@@ -5161,12 +5863,16 @@ mod tests {
     #[test]
     fn repack_keeps_untouched_entries_byte_identical() {
         // docx-rs 造真实包 → 重打包（document.xml 原文）→ 逐 entry 内容字节相等
-        use docx_rs::{Docx, Document, Paragraph, Run};
+        use docx_rs::{Document, Docx, Paragraph, Run};
         let document = Document::new()
             .add_paragraph(Paragraph::new().add_run(Run::new().add_text("第一段")))
             .add_paragraph(Paragraph::new().add_run(Run::new().add_text("第二段")));
         let mut cursor = std::io::Cursor::new(Vec::<u8>::new());
-        Docx::new().document(document).build().pack(&mut cursor).unwrap();
+        Docx::new()
+            .document(document)
+            .build()
+            .pack(&mut cursor)
+            .unwrap();
         let original = cursor.into_inner();
 
         let xml = docx::read_document_xml(&original).unwrap();
@@ -5203,7 +5909,10 @@ mod tests {
         assert!(extracted.contains("改后段"));
     }
 
-    fn read_entry_at<R: std::io::Read + std::io::Seek>(zip: &mut zip::ZipArchive<R>, i: usize) -> (String, Vec<u8>) {
+    fn read_entry_at<R: std::io::Read + std::io::Seek>(
+        zip: &mut zip::ZipArchive<R>,
+        i: usize,
+    ) -> (String, Vec<u8>) {
         let mut entry = zip.by_index(i).unwrap();
         let name = entry.name().to_string();
         let mut data = Vec::new();
@@ -5241,7 +5950,10 @@ mod tests {
             &[EditOp::InsertTableAfter {
                 block: 1,
                 expect_prefix: "锚段".into(),
-                rows: vec![vec!["列一".into(), "列二".into()], vec!["1".into(), "2".into()]],
+                rows: vec![
+                    vec!["列一".into(), "列二".into()],
+                    vec!["1".into(), "2".into()],
+                ],
                 header: None,
                 table_style: None,
             }],
@@ -5252,7 +5964,9 @@ mod tests {
         // 块数守恒：1 段 + 1 表
         let m = model_of(&out);
         assert_eq!(m.body.len(), 2);
-        let Block::Table(t) = &m.body[1] else { panic!("块 2 应为表格") };
+        let Block::Table(t) = &m.body[1] else {
+            panic!("块 2 应为表格")
+        };
         assert_eq!(t.rows.len(), 2);
         assert_eq!(t.rows[0].cells.len(), 2);
         // 默认表头：加粗 + 跨页重复 + 全边框 + 100% 宽
@@ -5288,41 +6002,70 @@ mod tests {
         )
         .unwrap();
         assert!(!out3.contains("<w:br/>"), "格内 \\n 不应转 br（设计=分段）");
-        let cell1 = out3.find("一</w:t>").map(|p| out3[..p].matches("<w:p>").count()).unwrap_or(0);
-        assert_eq!(cell1, 2, "首格应含两个段落: {}", &out3[out3.find("<w:tbl>").unwrap()..out3.find("<w:tbl>").unwrap() + 300]);
+        let cell1 = out3
+            .find("一</w:t>")
+            .map(|p| out3[..p].matches("<w:p>").count())
+            .unwrap_or(0);
+        assert_eq!(
+            cell1,
+            2,
+            "首格应含两个段落: {}",
+            &out3[out3.find("<w:tbl>").unwrap()..out3.find("<w:tbl>").unwrap() + 300]
+        );
     }
 
     #[test]
     fn insert_table_after_rejects_bad_rows() {
         let xml = wrap(r#"<w:p><w:r><w:t>锚</w:t></w:r></w:p>"#);
         // 空 rows
-        let err = val_msg(apply_edits(
-            &xml,
-            &Stylesheet::empty(),
-            &[EditOp::InsertTableAfter { block: 1, expect_prefix: "锚".into(), rows: vec![], header: None, table_style: None }],
-        ).unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &Stylesheet::empty(),
+                &[EditOp::InsertTableAfter {
+                    block: 1,
+                    expect_prefix: "锚".into(),
+                    rows: vec![],
+                    header: None,
+                    table_style: None,
+                }],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("表格数据无效"), "实际: {err}");
         // 非矩形
-        let err = val_msg(apply_edits(
-            &xml,
-            &Stylesheet::empty(),
-            &[EditOp::InsertTableAfter {
-                block: 1,
-                expect_prefix: "锚".into(),
-                rows: vec![vec!["a".into(), "b".into()], vec!["c".into()]],
-                header: None,
-                table_style: None,
-            }],
-        ).unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &Stylesheet::empty(),
+                &[EditOp::InsertTableAfter {
+                    block: 1,
+                    expect_prefix: "锚".into(),
+                    rows: vec![vec!["a".into(), "b".into()], vec!["c".into()]],
+                    header: None,
+                    table_style: None,
+                }],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("表格数据无效"), "实际: {err}");
         assert!(err.contains("2 行"), "应指明行号: {err}");
         // 超行数上限
         let big: Vec<Vec<String>> = (0..201).map(|i| vec![i.to_string()]).collect();
-        let err = val_msg(apply_edits(
-            &xml,
-            &Stylesheet::empty(),
-            &[EditOp::InsertTableAfter { block: 1, expect_prefix: "锚".into(), rows: big, header: None, table_style: None }],
-        ).unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &Stylesheet::empty(),
+                &[EditOp::InsertTableAfter {
+                    block: 1,
+                    expect_prefix: "锚".into(),
+                    rows: big,
+                    header: None,
+                    table_style: None,
+                }],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("表格数据无效"), "实际: {err}");
         assert!(err.contains("超上限"), "实际: {err}");
     }
@@ -5352,9 +6095,15 @@ mod tests {
         assert_eq!(applied[0].op, "set_cell_text");
         assert_eq!(applied[0].before, "旧文");
         // 原格 1 段 / 新文 2 段 → 不对齐，回落首段模板（摘要披露，十一波规则二）
-        assert_eq!(applied[0].after, "新文\n二段（段数不对齐，格式回落首段模板）");
+        assert_eq!(
+            applied[0].after,
+            "新文\n二段（段数不对齐，格式回落首段模板）"
+        );
         // tcPr 整体保留（tcW + gridSpan）
-        assert!(out.contains(r#"<w:gridSpan w:val="2"/>"#), "gridSpan 应保留");
+        assert!(
+            out.contains(r#"<w:gridSpan w:val="2"/>"#),
+            "gridSpan 应保留"
+        );
         // 段/字符格式保留 + \n 成两段
         assert!(out.contains(r#"<w:jc w:val="center"/>"#), "段落格式应保留");
         assert!(out.contains("<w:b/>"), "字符格式应保留");
@@ -5363,7 +6112,9 @@ mod tests {
         assert_eq!(out.matches("<w:p>").count(), 2 + 1, "格 1 两段 + 格 2 一段");
         // 产物可回读且结构不变
         let m = model_of(&out);
-        let Block::Table(t) = &m.body[0] else { panic!() };
+        let Block::Table(t) = &m.body[0] else {
+            panic!()
+        };
         assert_eq!(t.rows[0].cells.len(), 2);
         assert_eq!(t.rows[0].cells[0].grid_span, Some(2));
         // 空文本 = 清空（留一个带原格式的空段）
@@ -5379,7 +6130,10 @@ mod tests {
             }],
         )
         .unwrap();
-        assert!(out2.contains(r#"<w:jc w:val="center"/>"#), "清空仍保留段落格式");
+        assert!(
+            out2.contains(r#"<w:jc w:val="center"/>"#),
+            "清空仍保留段落格式"
+        );
         assert!(!out2.contains("旧文"));
     }
 
@@ -5387,25 +6141,52 @@ mod tests {
     fn set_cell_text_error_families() {
         // 非表格块
         let xml = wrap(r#"<w:p><w:r><w:t>段</w:t></w:r></w:p>"#);
-        let err = val_msg(apply_edits(
-            &xml,
-            &Stylesheet::empty(),
-            &[EditOp::SetCellText { block: 1, expect_prefix: "段".into(), row: 1, cell: 1, text: "x".into() }],
-        ).unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &Stylesheet::empty(),
+                &[EditOp::SetCellText {
+                    block: 1,
+                    expect_prefix: "段".into(),
+                    row: 1,
+                    cell: 1,
+                    text: "x".into(),
+                }],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("非表格块"), "实际: {err}");
         // 行越界 / 格越界
         let xml = two_row_table_doc();
-        let err = val_msg(apply_edits(
-            &xml,
-            &Stylesheet::empty(),
-            &[EditOp::SetCellText { block: 1, expect_prefix: "甲".into(), row: 5, cell: 1, text: "x".into() }],
-        ).unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &Stylesheet::empty(),
+                &[EditOp::SetCellText {
+                    block: 1,
+                    expect_prefix: "甲".into(),
+                    row: 5,
+                    cell: 1,
+                    text: "x".into(),
+                }],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("单元格越界"), "实际: {err}");
-        let err = val_msg(apply_edits(
-            &xml,
-            &Stylesheet::empty(),
-            &[EditOp::SetCellText { block: 1, expect_prefix: "甲".into(), row: 1, cell: 3, text: "x".into() }],
-        ).unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &Stylesheet::empty(),
+                &[EditOp::SetCellText {
+                    block: 1,
+                    expect_prefix: "甲".into(),
+                    row: 1,
+                    cell: 3,
+                    text: "x".into(),
+                }],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("单元格越界"), "实际: {err}");
         // 纵向合并续格（bare vMerge = continue）——续格放第 2 行，指纹取首行
         let cont_cell = r#"<w:tc><w:tcPr><w:vMerge/></w:tcPr><w:p/></w:tc>"#;
@@ -5415,33 +6196,69 @@ mod tests {
             row_xml("甲一", "乙一"),
             cont_row
         ));
-        let err = val_msg(apply_edits(
-            &xml,
-            &Stylesheet::empty(),
-            &[EditOp::SetCellText { block: 1, expect_prefix: "甲一".into(), row: 2, cell: 1, text: "x".into() }],
-        ).unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &Stylesheet::empty(),
+                &[EditOp::SetCellText {
+                    block: 1,
+                    expect_prefix: "甲一".into(),
+                    row: 2,
+                    cell: 1,
+                    text: "x".into(),
+                }],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("纵向合并续格"), "实际: {err}");
         assert!(err.contains("合并头"), "应指向合并头: {err}");
         // 同一格多操作
         let xml = two_row_table_doc();
-        let err = val_msg(apply_edits(
-            &xml,
-            &Stylesheet::empty(),
-            &[
-                EditOp::SetCellText { block: 1, expect_prefix: "甲".into(), row: 1, cell: 1, text: "x".into() },
-                EditOp::SetCellText { block: 1, expect_prefix: "甲".into(), row: 1, cell: 1, text: "y".into() },
-            ],
-        ).unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &Stylesheet::empty(),
+                &[
+                    EditOp::SetCellText {
+                        block: 1,
+                        expect_prefix: "甲".into(),
+                        row: 1,
+                        cell: 1,
+                        text: "x".into(),
+                    },
+                    EditOp::SetCellText {
+                        block: 1,
+                        expect_prefix: "甲".into(),
+                        row: 1,
+                        cell: 1,
+                        text: "y".into(),
+                    },
+                ],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("同一格多操作"), "实际: {err}");
         // 段落操作与表格操作同块冲突
-        let err = val_msg(apply_edits(
-            &xml,
-            &Stylesheet::empty(),
-            &[
-                EditOp::SetCellText { block: 1, expect_prefix: "甲".into(), row: 1, cell: 1, text: "x".into() },
-                EditOp::DeleteBlock { block: 1, expect_prefix: "甲".into() },
-            ],
-        ).unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &Stylesheet::empty(),
+                &[
+                    EditOp::SetCellText {
+                        block: 1,
+                        expect_prefix: "甲".into(),
+                        row: 1,
+                        cell: 1,
+                        text: "x".into(),
+                    },
+                    EditOp::DeleteBlock {
+                        block: 1,
+                        expect_prefix: "甲".into(),
+                    },
+                ],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("同一块多操作"), "实际: {err}");
     }
 
@@ -5470,10 +6287,16 @@ mod tests {
         assert_eq!(applied.len(), 1);
         assert_eq!(applied[0].op, "insert_table_row_after");
         let m = model_of(&out);
-        let Block::Table(t) = &m.body[0] else { panic!() };
+        let Block::Table(t) = &m.body[0] else {
+            panic!()
+        };
         assert_eq!(t.rows.len(), 3, "2 行 + 1 克隆");
         // 新行（第 2 行）结构继承：vMerge restart / 格数一致；文本已换
-        assert_eq!(t.rows[1].cells[0].v_merge.as_deref(), Some("restart"), "vMerge 应随克隆保留");
+        assert_eq!(
+            t.rows[1].cells[0].v_merge.as_deref(),
+            Some("restart"),
+            "vMerge 应随克隆保留"
+        );
         assert!(out.contains("新甲"), "cells 文本应写入");
         // 缺省：克隆末行、全空格
         let (out2, _) = apply_edits(
@@ -5488,7 +6311,9 @@ mod tests {
         )
         .unwrap();
         let m2 = model_of(&out2);
-        let Block::Table(t2) = &m2.body[0] else { panic!() };
+        let Block::Table(t2) = &m2.body[0] else {
+            panic!()
+        };
         assert_eq!(t2.rows.len(), 3);
         // 新末行文本为空（甲二/乙二 不重复出现三次）
         assert_eq!(out2.matches("甲二").count(), 1, "克隆行文本应清空");
@@ -5498,41 +6323,50 @@ mod tests {
     fn insert_table_row_after_error_families() {
         let xml = two_row_table_doc();
         // 行号越界
-        let err = val_msg(apply_edits(
-            &xml,
-            &Stylesheet::empty(),
-            &[EditOp::InsertTableRowAfter {
-                block: 1,
-                expect_prefix: "甲".into(),
-                after_row: Some(9),
-                cells: None,
-            }],
-        ).unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &Stylesheet::empty(),
+                &[EditOp::InsertTableRowAfter {
+                    block: 1,
+                    expect_prefix: "甲".into(),
+                    after_row: Some(9),
+                    cells: None,
+                }],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("行号越界"), "实际: {err}");
         // 列数不符
-        let err = val_msg(apply_edits(
-            &xml,
-            &Stylesheet::empty(),
-            &[EditOp::InsertTableRowAfter {
-                block: 1,
-                expect_prefix: "甲".into(),
-                after_row: Some(1),
-                cells: Some(vec!["只给一格".into(), "两格".into(), "三格".into()]),
-            }],
-        ).unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &Stylesheet::empty(),
+                &[EditOp::InsertTableRowAfter {
+                    block: 1,
+                    expect_prefix: "甲".into(),
+                    after_row: Some(1),
+                    cells: Some(vec!["只给一格".into(), "两格".into(), "三格".into()]),
+                }],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("列数不符"), "实际: {err}");
         // 非表格块
         let xml_p = wrap(r#"<w:p><w:r><w:t>段</w:t></w:r></w:p>"#);
-        let err = val_msg(apply_edits(
-            &xml_p,
-            &Stylesheet::empty(),
-            &[EditOp::InsertTableRowAfter {
-                block: 1,
-                expect_prefix: "段".into(),
-                after_row: None,
-                cells: None,
-            }],
-        ).unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml_p,
+                &Stylesheet::empty(),
+                &[EditOp::InsertTableRowAfter {
+                    block: 1,
+                    expect_prefix: "段".into(),
+                    after_row: None,
+                    cells: None,
+                }],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("非表格块"), "实际: {err}");
     }
 
@@ -5569,7 +6403,9 @@ mod tests {
         .unwrap();
         assert_eq!(applied.len(), 3, "三操作同块按序组合");
         let m = model_of(&out);
-        let Block::Table(t) = &m.body[0] else { panic!() };
+        let Block::Table(t) = &m.body[0] else {
+            panic!()
+        };
         assert_eq!(t.rows.len(), 3);
         let mut text = String::new();
         for c in &t.rows[2].cells {
@@ -5588,11 +6424,18 @@ mod tests {
     fn text_op_on_table_points_to_table_ops() {
         // 段落操作命中表格块 → 家族前缀「表格块」+ 指路新三件
         let xml = two_row_table_doc();
-        let err = val_msg(apply_edits(
-            &xml,
-            &Stylesheet::empty(),
-            &[EditOp::ReplaceText { block: 1, expect_prefix: "甲一".into(), new_text: "x".into() }],
-        ).unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &Stylesheet::empty(),
+                &[EditOp::ReplaceText {
+                    block: 1,
+                    expect_prefix: "甲一".into(),
+                    new_text: "x".into(),
+                }],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("表格块"), "实际: {err}");
         assert!(err.contains("set_cell_text"), "应指路 set_cell_text: {err}");
         assert!(err.contains("insert_table_after"), "应指路建表: {err}");
@@ -5629,7 +6472,7 @@ mod tests {
     #[test]
     fn set_table_element_table_level_upsert_remove_noop() {
         let xml = two_row_table_doc(); // tblPr 内已有 tblW
-        // 插入 shd（schema 序在 tblBorders 后、无 tblBorders 则 tblW 后）
+                                       // 插入 shd（schema 序在 tblBorders 后、无 tblBorders 则 tblW 后）
         let (out, applied) = apply_edits(
             &xml,
             &Stylesheet::empty(),
@@ -5646,8 +6489,17 @@ mod tests {
         .unwrap();
         assert_eq!(applied[0].op, "set_table_element");
         assert_eq!(applied[0].after, "set table:shd");
-        let tblpr = out.split("<w:tblPr>").nth(1).unwrap().split("</w:tblPr>").next().unwrap();
-        assert!(tblpr.contains(r#"<w:tblW w:w="0" w:type="auto"/>"#), "tblW 原样保留");
+        let tblpr = out
+            .split("<w:tblPr>")
+            .nth(1)
+            .unwrap()
+            .split("</w:tblPr>")
+            .next()
+            .unwrap();
+        assert!(
+            tblpr.contains(r#"<w:tblW w:w="0" w:type="auto"/>"#),
+            "tblW 原样保留"
+        );
         assert!(tblpr.contains(SHD_FRAG), "shd 已插入");
         assert!(
             tblpr.find("<w:tblW").unwrap() < tblpr.find("<w:shd").unwrap(),
@@ -5703,7 +6555,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(out4, xml, "空转不改字节");
-        assert!(applied4[0].after.contains("不存在"), "空转信号: {}", applied4[0].after);
+        assert!(
+            applied4[0].after.contains("不存在"),
+            "空转信号: {}",
+            applied4[0].after
+        );
     }
 
     #[test]
@@ -5723,11 +6579,16 @@ mod tests {
                 row: None,
                 cell: None,
                 element: "tblBorders".into(),
-                xml: Some(r#"<w:tblBorders><w:insideH w:val="single" w:sz="4"/></w:tblBorders>"#.into()),
+                xml: Some(
+                    r#"<w:tblBorders><w:insideH w:val="single" w:sz="4"/></w:tblBorders>"#.into(),
+                ),
             }],
         )
         .unwrap();
-        assert!(out.contains(r#"<w:tblPr><w:tblBorders>"#), "空容器展开: {out}");
+        assert!(
+            out.contains(r#"<w:tblPr><w:tblBorders>"#),
+            "空容器展开: {out}"
+        );
         // tblPr 完全缺失 → 开标签后新建
         let xml2 = wrap(&format!(
             r#"<w:tbl><w:tblGrid><w:gridCol w:w="4500"/></w:tblGrid><w:tr>{}</w:tr></w:tbl>"#,
@@ -5747,7 +6608,12 @@ mod tests {
             }],
         )
         .unwrap();
-        assert!(out2.contains(r#"<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/></w:tblPr><w:tblGrid>"#), "容器新建于开标签后: {out2}");
+        assert!(
+            out2.contains(
+                r#"<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/></w:tblPr><w:tblGrid>"#
+            ),
+            "容器新建于开标签后: {out2}"
+        );
     }
 
     #[test]
@@ -5771,7 +6637,10 @@ mod tests {
         assert_eq!(applied[0].after, "set r2:trHeight");
         // 第二行（甲二/乙二）带 trPr，第一行不带
         let r2 = out.split("甲二").next().unwrap();
-        assert!(r2.contains(r#"<w:trPr><w:trHeight w:val="400" w:hRule="atLeast"/></w:trPr>"#), "行级容器新建: {out}");
+        assert!(
+            r2.contains(r#"<w:trPr><w:trHeight w:val="400" w:hRule="atLeast"/></w:trPr>"#),
+            "行级容器新建: {out}"
+        );
         // 格级：shd + vAlign
         let (out2, _) = apply_edits(
             &xml,
@@ -5787,10 +6656,15 @@ mod tests {
             }],
         )
         .unwrap();
-        assert!(out2.contains(&format!(r#"<w:tcW w:w="4500" w:type="dxa"/>{SHD_FRAG}"#)), "tcPr 内 schema 位插入");
+        assert!(
+            out2.contains(&format!(r#"<w:tcW w:w="4500" w:type="dxa"/>{SHD_FRAG}"#)),
+            "tcPr 内 schema 位插入"
+        );
         // 模型读回：格特征上屏
         let m = model_of(&out2);
-        let Block::Table(t) = &m.body[0] else { panic!() };
+        let Block::Table(t) = &m.body[0] else {
+            panic!()
+        };
         assert_eq!(t.rows[0].cells[1].shd_fill.as_deref(), Some("DDEEFF"));
         assert_eq!(t.rows[0].cells[0].shd_fill, None, "只动目标格");
     }
@@ -5799,111 +6673,132 @@ mod tests {
     fn set_table_element_error_families() {
         let xml = two_row_table_doc();
         // 受保护结构属性
-        let err = val_msg(apply_edits(
-            &xml,
-            &Stylesheet::empty(),
-            &[EditOp::SetTableElement {
-                block: 1,
-                expect_prefix: "甲一".into(),
-                level: TableLevel::Cell,
-                row: Some(1),
-                cell: Some(1),
-                element: "gridSpan".into(),
-                xml: Some(r#"<w:gridSpan w:val="2"/>"#.into()),
-            }],
-        ).unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &Stylesheet::empty(),
+                &[EditOp::SetTableElement {
+                    block: 1,
+                    expect_prefix: "甲一".into(),
+                    level: TableLevel::Cell,
+                    row: Some(1),
+                    cell: Some(1),
+                    element: "gridSpan".into(),
+                    xml: Some(r#"<w:gridSpan w:val="2"/>"#.into()),
+                }],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("受保护子元素"), "实际: {err}");
         assert!(err.contains("merge_cells"), "应指路 merge_cells: {err}");
         // 白名单外
-        let err = val_msg(apply_edits(
-            &xml,
-            &Stylesheet::empty(),
-            &[EditOp::SetTableElement {
-                block: 1,
-                expect_prefix: "甲一".into(),
-                level: TableLevel::Table,
-                row: None,
-                cell: None,
-                element: "tblGridX".into(),
-                xml: None,
-            }],
-        ).unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &Stylesheet::empty(),
+                &[EditOp::SetTableElement {
+                    block: 1,
+                    expect_prefix: "甲一".into(),
+                    level: TableLevel::Table,
+                    row: None,
+                    cell: None,
+                    element: "tblGridX".into(),
+                    xml: None,
+                }],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("非法子元素"), "实际: {err}");
         assert!(err.contains("tblpr"), "应指路 tblpr 投影: {err}");
         // level 与 row/cell 组合校验
-        let err = val_msg(apply_edits(
-            &xml,
-            &Stylesheet::empty(),
-            &[EditOp::SetTableElement {
-                block: 1,
-                expect_prefix: "甲一".into(),
-                level: TableLevel::Table,
-                row: Some(1),
-                cell: None,
-                element: "shd".into(),
-                xml: Some(SHD_FRAG.into()),
-            }],
-        ).unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &Stylesheet::empty(),
+                &[EditOp::SetTableElement {
+                    block: 1,
+                    expect_prefix: "甲一".into(),
+                    level: TableLevel::Table,
+                    row: Some(1),
+                    cell: None,
+                    element: "shd".into(),
+                    xml: Some(SHD_FRAG.into()),
+                }],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("参数校验失败"), "实际: {err}");
-        let err = val_msg(apply_edits(
-            &xml,
-            &Stylesheet::empty(),
-            &[EditOp::SetTableElement {
-                block: 1,
-                expect_prefix: "甲一".into(),
-                level: TableLevel::Cell,
-                row: Some(1),
-                cell: None,
-                element: "shd".into(),
-                xml: Some(SHD_FRAG.into()),
-            }],
-        ).unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &Stylesheet::empty(),
+                &[EditOp::SetTableElement {
+                    block: 1,
+                    expect_prefix: "甲一".into(),
+                    level: TableLevel::Cell,
+                    row: Some(1),
+                    cell: None,
+                    element: "shd".into(),
+                    xml: Some(SHD_FRAG.into()),
+                }],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("参数校验失败"), "实际: {err}");
         // 行越界
-        let err = val_msg(apply_edits(
-            &xml,
-            &Stylesheet::empty(),
-            &[EditOp::SetTableElement {
-                block: 1,
-                expect_prefix: "甲一".into(),
-                level: TableLevel::Row,
-                row: Some(9),
-                cell: None,
-                element: "trHeight".into(),
-                xml: Some(r#"<w:trHeight w:val="400"/>"#.into()),
-            }],
-        ).unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &Stylesheet::empty(),
+                &[EditOp::SetTableElement {
+                    block: 1,
+                    expect_prefix: "甲一".into(),
+                    level: TableLevel::Row,
+                    row: Some(9),
+                    cell: None,
+                    element: "trHeight".into(),
+                    xml: Some(r#"<w:trHeight w:val="400"/>"#.into()),
+                }],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("行号越界"), "实际: {err}");
         // 片段校验（根名不符）
-        let err = val_msg(apply_edits(
-            &xml,
-            &Stylesheet::empty(),
-            &[EditOp::SetTableElement {
-                block: 1,
-                expect_prefix: "甲一".into(),
-                level: TableLevel::Table,
-                row: None,
-                cell: None,
-                element: "shd".into(),
-                xml: Some(r#"<w:wrong val="1"/>"#.into()),
-            }],
-        ).unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &Stylesheet::empty(),
+                &[EditOp::SetTableElement {
+                    block: 1,
+                    expect_prefix: "甲一".into(),
+                    level: TableLevel::Table,
+                    row: None,
+                    cell: None,
+                    element: "shd".into(),
+                    xml: Some(r#"<w:wrong val="1"/>"#.into()),
+                }],
+            )
+            .unwrap_err(),
+        );
         assert!(err.contains("tblpr"), "片段校验错应指路 tblpr: {err}");
         // 非表格块
         let xml_p = wrap(r#"<w:p><w:r><w:t>段</w:t></w:r></w:p>"#);
-        let err = val_msg(apply_edits(
-            &xml_p,
-            &Stylesheet::empty(),
-            &[EditOp::SetTableElement {
-                block: 1,
-                expect_prefix: "段".into(),
-                level: TableLevel::Table,
-                row: None,
-                cell: None,
-                element: "shd".into(),
-                xml: Some(SHD_FRAG.into()),
-            }],
-        ).unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml_p,
+                &Stylesheet::empty(),
+                &[EditOp::SetTableElement {
+                    block: 1,
+                    expect_prefix: "段".into(),
+                    level: TableLevel::Table,
+                    row: None,
+                    cell: None,
+                    element: "shd".into(),
+                    xml: Some(SHD_FRAG.into()),
+                }],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("非表格块"), "实际: {err}");
     }
 
@@ -5924,20 +6819,37 @@ mod tests {
                 expect_prefix: "上".into(),
                 row: 1,
                 cell: 1,
-                paragraph: Some(ParaFormat { align: Some("center".into()), ..Default::default() }),
-                character: Some(CharFormat { bold: Some(true), ..Default::default() }),
+                paragraph: Some(ParaFormat {
+                    align: Some("center".into()),
+                    ..Default::default()
+                }),
+                character: Some(CharFormat {
+                    bold: Some(true),
+                    ..Default::default()
+                }),
                 style: None,
             }],
         )
         .unwrap();
         assert_eq!(applied[0].op, "set_cell_format");
-        assert_eq!(out.matches(r#"<w:jc w:val="center"/>"#).count(), 2, "两段都居中: {out}");
-        assert_eq!(out.matches("<w:b/>").count(), 2, "两 run 都加粗（邻格不中枪）: {out}");
+        assert_eq!(
+            out.matches(r#"<w:jc w:val="center"/>"#).count(),
+            2,
+            "两段都居中: {out}"
+        );
+        assert_eq!(
+            out.matches("<w:b/>").count(),
+            2,
+            "两 run 都加粗（邻格不中枪）: {out}"
+        );
         // 邻格（最后一个 tc）原样：无 jc 无 b
         let before_last_close = out.rsplit_once("</w:tc>").unwrap().0;
         let neighbor = &out[before_last_close.rfind("<w:tc>").unwrap()..];
         assert!(neighbor.contains("邻"), "提取到的确是邻格: {neighbor}");
-        assert!(!neighbor.contains("w:jc") && !neighbor.contains("<w:b/>"), "邻格未动: {neighbor}");
+        assert!(
+            !neighbor.contains("w:jc") && !neighbor.contains("<w:b/>"),
+            "邻格未动: {neighbor}"
+        );
         // 只给 character（paragraph None）合法
         let (out2, _) = apply_edits(
             &xml,
@@ -5948,42 +6860,58 @@ mod tests {
                 row: 1,
                 cell: 1,
                 paragraph: None,
-                character: Some(CharFormat { font_size_pt: Some(14.0), ..Default::default() }),
+                character: Some(CharFormat {
+                    font_size_pt: Some(14.0),
+                    ..Default::default()
+                }),
                 style: None,
             }],
         )
         .unwrap();
-        assert_eq!(out2.matches(r#"<w:sz w:val="28"/>"#).count(), 2, "14pt → sz=28 半磅");
+        assert_eq!(
+            out2.matches(r#"<w:sz w:val="28"/>"#).count(),
+            2,
+            "14pt → sz=28 半磅"
+        );
         // 两个都 None → 空格式操作（与 set_format 同家族，文案点名 set_cell_format）
-        let err = val_msg(apply_edits(
-            &xml,
-            &Stylesheet::empty(),
-            &[EditOp::SetCellFormat {
-                block: 1,
-                expect_prefix: "上".into(),
-                row: 1,
-                cell: 1,
-                paragraph: None,
-                character: None,
-                style: None,
-            }],
-        ).unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &Stylesheet::empty(),
+                &[EditOp::SetCellFormat {
+                    block: 1,
+                    expect_prefix: "上".into(),
+                    row: 1,
+                    cell: 1,
+                    paragraph: None,
+                    character: None,
+                    style: None,
+                }],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("空格式操作"), "实际: {err}");
         assert!(err.contains("set_cell_format"), "实际: {err}");
         // 越界家族
-        let err = val_msg(apply_edits(
-            &xml,
-            &Stylesheet::empty(),
-            &[EditOp::SetCellFormat {
-                block: 1,
-                expect_prefix: "上".into(),
-                row: 1,
-                cell: 9,
-                paragraph: Some(ParaFormat { align: Some("center".into()), ..Default::default() }),
-                character: None,
-                style: None,
-            }],
-        ).unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &Stylesheet::empty(),
+                &[EditOp::SetCellFormat {
+                    block: 1,
+                    expect_prefix: "上".into(),
+                    row: 1,
+                    cell: 9,
+                    paragraph: Some(ParaFormat {
+                        align: Some("center".into()),
+                        ..Default::default()
+                    }),
+                    character: None,
+                    style: None,
+                }],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("单元格越界"), "实际: {err}");
     }
 
@@ -6023,7 +6951,9 @@ mod tests {
         .unwrap();
         assert_eq!(applied[0].op, "merge_cells");
         let m = model_of(&out);
-        let Block::Table(t) = &m.body[0] else { panic!() };
+        let Block::Table(t) = &m.body[0] else {
+            panic!()
+        };
         assert_eq!(t.rows[0].cells[0].v_merge.as_deref(), Some("restart"));
         assert_eq!(t.rows[1].cells[0].v_merge.as_deref(), Some("continue"));
         assert_eq!(t.rows[2].cells[0].v_merge.as_deref(), Some("continue"));
@@ -6042,20 +6972,23 @@ mod tests {
             row_xml("甲", "乙"),
             span_row
         ));
-        let err = val_msg(apply_edits(
-            &xml,
-            &Stylesheet::empty(),
-            &[EditOp::MergeCells {
-                block: 1,
-                expect_prefix: "甲".into(),
-                direction: Some(MergeDirection::Vertical),
-                row: 1,
-                cell: 1,
-                span: Some(2),
-                end_row: None,
-                end_cell: None,
-            }],
-        ).unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &Stylesheet::empty(),
+                &[EditOp::MergeCells {
+                    block: 1,
+                    expect_prefix: "甲".into(),
+                    direction: Some(MergeDirection::Vertical),
+                    row: 1,
+                    cell: 1,
+                    span: Some(2),
+                    end_row: None,
+                    end_cell: None,
+                }],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("合并结构冲突"), "实际: {err}");
         assert!(err.contains("对齐"), "应解释网格对齐: {err}");
     }
@@ -6080,13 +7013,18 @@ mod tests {
         .unwrap();
         assert_eq!(applied[0].op, "merge_cells");
         let m = model_of(&out);
-        let Block::Table(t) = &m.body[0] else { panic!() };
+        let Block::Table(t) = &m.body[0] else {
+            panic!()
+        };
         assert_eq!(t.rows[0].cells.len(), 1, "两格并一格");
         assert_eq!(t.rows[0].cells[0].grid_span, Some(2), "gridSpan 求和");
         let mut text = String::new();
         docx_model::blocks_text(&t.rows[0].cells[0].blocks, &mut text);
         let joined: String = text.split('\n').collect::<Vec<_>>().join("");
-        assert!(joined.contains("甲一") && joined.contains("乙一"), "内容按序拼接: {joined}");
+        assert!(
+            joined.contains("甲一") && joined.contains("乙一"),
+            "内容按序拼接: {joined}"
+        );
         // 第二行不中枪
         assert_eq!(t.rows[1].cells.len(), 2);
     }
@@ -6165,15 +7103,26 @@ mod tests {
         .unwrap();
         assert_eq!(applied[0].op, "split_cell");
         let m = model_of(&split);
-        let Block::Table(t) = &m.body[0] else { panic!() };
+        let Block::Table(t) = &m.body[0] else {
+            panic!()
+        };
         assert_eq!(t.rows[0].cells.len(), 2, "拆回 2 格");
         assert_eq!(t.rows[0].cells[0].grid_span, None, "首格回单格");
         assert_eq!(t.rows[0].cells[1].grid_span, None, "补格单格");
         // 内容留首格、补格空段（继承首段格式模板；空 ppr 展开为成对标签）
-        assert!(split.contains("甲一") && split.contains("乙一"), "内容留首格");
+        assert!(
+            split.contains("甲一") && split.contains("乙一"),
+            "内容留首格"
+        );
         assert!(split.contains("<w:p></w:p>"), "补格空段: {split}");
         // 补格结构：同开标签 + 空 tcPr 之外无 gridSpan
-        let new_cells = split.split("<w:tr>").nth(1).unwrap().split("</w:tr>").next().unwrap();
+        let new_cells = split
+            .split("<w:tr>")
+            .nth(1)
+            .unwrap()
+            .split("</w:tr>")
+            .next()
+            .unwrap();
         assert_eq!(new_cells.matches("<w:tc>").count(), 2);
     }
 
@@ -6181,20 +7130,23 @@ mod tests {
     fn merge_split_error_families() {
         let xml = vmerged_doc();
         // span < 2
-        let err = val_msg(apply_edits(
-            &xml,
-            &Stylesheet::empty(),
-            &[EditOp::MergeCells {
-                block: 1,
-                expect_prefix: "头".into(),
-                direction: Some(MergeDirection::Vertical),
-                row: 1,
-                cell: 1,
-                span: Some(1),
-                end_row: None,
-                end_cell: None,
-            }],
-        ).unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &Stylesheet::empty(),
+                &[EditOp::MergeCells {
+                    block: 1,
+                    expect_prefix: "头".into(),
+                    direction: Some(MergeDirection::Vertical),
+                    row: 1,
+                    cell: 1,
+                    span: Some(1),
+                    end_row: None,
+                    end_cell: None,
+                }],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("合并跨度无效"), "实际: {err}");
         // 缺省 span=2 合法
         assert!(apply_edits(
@@ -6210,65 +7162,78 @@ mod tests {
                 end_row: None,
                 end_cell: None,
             }],
-        ).is_ok());
+        )
+        .is_ok());
         // 纵并 onto 续格 → 指路合并头
-        let err = val_msg(apply_edits(
-            &xml,
-            &Stylesheet::empty(),
-            &[EditOp::MergeCells {
-                block: 1,
-                expect_prefix: "头".into(),
-                direction: Some(MergeDirection::Vertical),
-                row: 2,
-                cell: 1,
-                span: Some(2),
-                end_row: None,
-                end_cell: None,
-            }],
-        ).unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &Stylesheet::empty(),
+                &[EditOp::MergeCells {
+                    block: 1,
+                    expect_prefix: "头".into(),
+                    direction: Some(MergeDirection::Vertical),
+                    row: 2,
+                    cell: 1,
+                    span: Some(2),
+                    end_row: None,
+                    end_cell: None,
+                }],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("纵向合并续格"), "实际: {err}");
         // split vertical 指到续格 → 专属家族 + 指路合并头（比泛化的非合并格更可行动）
-        let err = val_msg(apply_edits(
-            &xml,
-            &Stylesheet::empty(),
-            &[EditOp::SplitCell {
-                block: 1,
-                expect_prefix: "头".into(),
-                direction: MergeDirection::Vertical,
-                row: 2,
-                cell: 1,
-            }],
-        ).unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &Stylesheet::empty(),
+                &[EditOp::SplitCell {
+                    block: 1,
+                    expect_prefix: "头".into(),
+                    direction: MergeDirection::Vertical,
+                    row: 2,
+                    cell: 1,
+                }],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("纵向合并续格"), "实际: {err}");
         assert!(err.contains("合并头"), "应指路合并头: {err}");
         // split horizontal 单格 → 非合并格
-        let err = val_msg(apply_edits(
-            &xml,
-            &Stylesheet::empty(),
-            &[EditOp::SplitCell {
-                block: 1,
-                expect_prefix: "头".into(),
-                direction: MergeDirection::Horizontal,
-                row: 1,
-                cell: 2,
-            }],
-        ).unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &Stylesheet::empty(),
+                &[EditOp::SplitCell {
+                    block: 1,
+                    expect_prefix: "头".into(),
+                    direction: MergeDirection::Horizontal,
+                    row: 1,
+                    cell: 2,
+                }],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("非合并格"), "实际: {err}");
         // 行越界
-        let err = val_msg(apply_edits(
-            &xml,
-            &Stylesheet::empty(),
-            &[EditOp::MergeCells {
-                block: 1,
-                expect_prefix: "头".into(),
-                direction: Some(MergeDirection::Vertical),
-                row: 9,
-                cell: 1,
-                span: Some(2),
-                end_row: None,
-                end_cell: None,
-            }],
-        ).unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &Stylesheet::empty(),
+                &[EditOp::MergeCells {
+                    block: 1,
+                    expect_prefix: "头".into(),
+                    direction: Some(MergeDirection::Vertical),
+                    row: 9,
+                    cell: 1,
+                    span: Some(2),
+                    end_row: None,
+                    end_cell: None,
+                }],
+            )
+            .unwrap_err(),
+        );
         // 行越界归并进跨度家族（首行前缀稳定 + 报行数事实）
         assert!(err.starts_with("合并跨度无效"), "实际: {err}");
         assert!(err.contains("越界"), "实际: {err}");
@@ -6278,43 +7243,64 @@ mod tests {
     fn merge_split_exclusive_per_batch() {
         let xml = two_row_table_doc();
         // merge 同批挂 set_cell_text → 拒（结构重构独占）
-        let err = val_msg(apply_edits(
-            &xml,
-            &Stylesheet::empty(),
-            &[
-                EditOp::SetCellText { block: 1, expect_prefix: "甲一".into(), row: 1, cell: 1, text: "x".into() },
-                EditOp::MergeCells {
-                    block: 1,
-                    expect_prefix: "甲一".into(),
-                    direction: Some(MergeDirection::Horizontal),
-                    row: 1,
-                    cell: 1,
-                    span: Some(2),
-                    end_row: None,
-                    end_cell: None,
-                },
-            ],
-        ).unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &Stylesheet::empty(),
+                &[
+                    EditOp::SetCellText {
+                        block: 1,
+                        expect_prefix: "甲一".into(),
+                        row: 1,
+                        cell: 1,
+                        text: "x".into(),
+                    },
+                    EditOp::MergeCells {
+                        block: 1,
+                        expect_prefix: "甲一".into(),
+                        direction: Some(MergeDirection::Horizontal),
+                        row: 1,
+                        cell: 1,
+                        span: Some(2),
+                        end_row: None,
+                        end_cell: None,
+                    },
+                ],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("同一块多操作"), "实际: {err}");
-        assert!(err.contains("不能与内容/段落操作同批"), "应解释互斥边界: {err}");
+        assert!(
+            err.contains("不能与内容/段落操作同批"),
+            "应解释互斥边界: {err}"
+        );
         // 反序：merge 在前，后挂表格操作 → 拒
-        let err = val_msg(apply_edits(
-            &xml,
-            &Stylesheet::empty(),
-            &[
-                EditOp::MergeCells {
-                    block: 1,
-                    expect_prefix: "甲一".into(),
-                    direction: Some(MergeDirection::Horizontal),
-                    row: 1,
-                    cell: 1,
-                    span: Some(2),
-                    end_row: None,
-                    end_cell: None,
-                },
-                EditOp::SetCellText { block: 1, expect_prefix: "甲一".into(), row: 1, cell: 1, text: "x".into() },
-            ],
-        ).unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &Stylesheet::empty(),
+                &[
+                    EditOp::MergeCells {
+                        block: 1,
+                        expect_prefix: "甲一".into(),
+                        direction: Some(MergeDirection::Horizontal),
+                        row: 1,
+                        cell: 1,
+                        span: Some(2),
+                        end_row: None,
+                        end_cell: None,
+                    },
+                    EditOp::SetCellText {
+                        block: 1,
+                        expect_prefix: "甲一".into(),
+                        row: 1,
+                        cell: 1,
+                        text: "x".into(),
+                    },
+                ],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("同一块多操作"), "实际: {err}");
         assert!(err.contains("重新 inspect_docx"), "应指路重寻址: {err}");
     }
@@ -6344,12 +7330,26 @@ mod tests {
     fn is_placeholder_p_classifies_content() {
         // 规则：占位段不是内容——无文字/图/域即占位
         assert!(is_placeholder_p("<w:p/>"));
-        assert!(is_placeholder_p(r#"<w:p><w:pPr><w:jc w:val="center"/></w:pPr></w:p>"#));
-        assert!(is_placeholder_p(r#"<w:p><w:r><w:t>  </w:t></w:r></w:p>"#), "纯空白=占位");
-        assert!(is_placeholder_p(r#"<w:p><w:r><w:tab/></w:r></w:p>"#), "tab 前缀碰撞不误判");
+        assert!(is_placeholder_p(
+            r#"<w:p><w:pPr><w:jc w:val="center"/></w:pPr></w:p>"#
+        ));
+        assert!(
+            is_placeholder_p(r#"<w:p><w:r><w:t>  </w:t></w:r></w:p>"#),
+            "纯空白=占位"
+        );
+        assert!(
+            is_placeholder_p(r#"<w:p><w:r><w:tab/></w:r></w:p>"#),
+            "tab 前缀碰撞不误判"
+        );
         assert!(!is_placeholder_p(r#"<w:p><w:r><w:t>字</w:t></w:r></w:p>"#));
-        assert!(!is_placeholder_p(r#"<w:p><w:r><w:drawing/></w:r></w:p>"#), "图=内容");
-        assert!(!is_placeholder_p(r#"<w:p><w:fldSimple w:instr="TOC"/></w:p>"#), "域=内容");
+        assert!(
+            !is_placeholder_p(r#"<w:p><w:r><w:drawing/></w:r></w:p>"#),
+            "图=内容"
+        );
+        assert!(
+            !is_placeholder_p(r#"<w:p><w:fldSimple w:instr="TOC"/></w:p>"#),
+            "域=内容"
+        );
     }
 
     #[test]
@@ -6374,7 +7374,9 @@ mod tests {
         );
         assert!(out.contains("甲一") && out.contains("乙一"));
         let m = model_of(&out);
-        let Block::Table(t) = &m.body[0] else { panic!() };
+        let Block::Table(t) = &m.body[0] else {
+            panic!()
+        };
         assert_eq!(t.rows[0].cells.len(), 1);
         assert_eq!(t.rows[0].cells[0].grid_span, Some(2));
     }
@@ -6387,12 +7389,13 @@ mod tests {
             cell_paras_xml("<w:p/>"),
             cell_paras_xml("<w:p/>")
         )]));
-        let (out, applied) =
-            apply_edits(&xml, &Stylesheet::empty(), &[hmerge_op("", 1)]).unwrap();
+        let (out, applied) = apply_edits(&xml, &Stylesheet::empty(), &[hmerge_op("", 1)]).unwrap();
         assert!(applied[0].after.contains("丢弃 2 个占位段"));
         assert!(out.contains("<w:p/>"), "应补一个占位段");
         let m = model_of(&out);
-        let Block::Table(t) = &m.body[0] else { panic!() };
+        let Block::Table(t) = &m.body[0] else {
+            panic!()
+        };
         assert_eq!(t.rows[0].cells.len(), 1);
     }
 
@@ -6456,7 +7459,10 @@ mod tests {
         .unwrap();
         assert_eq!(applied[0].after, "新A\n新B\n新C（格式按位继承）");
         assert!(out.contains(r#"<w:jc w:val="center"/>"#), "首段格式随位");
-        assert!(out.contains(r#"<w:jc w:val="right"/>"#), "次段格式按位继承（回落模板则丢）");
+        assert!(
+            out.contains(r#"<w:jc w:val="right"/>"#),
+            "次段格式按位继承（回落模板则丢）"
+        );
         assert!(out.contains("新A") && out.contains("新C"));
     }
 
@@ -6487,7 +7493,9 @@ mod tests {
         assert_eq!(applied[0].after, "克隆第 1 行插入（2 格已填）");
         assert!(out.contains(r#"<w:jc w:val="right"/>"#), "克隆段按位继承");
         let m = model_of(&out);
-        let Block::Table(t) = &m.body[0] else { panic!() };
+        let Block::Table(t) = &m.body[0] else {
+            panic!()
+        };
         assert_eq!(t.rows.len(), 2);
         // 不对齐填充（3 段 vs 模板 2 段）→ 回落 + 披露
         let (_, applied2) = apply_edits(
@@ -6502,7 +7510,9 @@ mod tests {
         )
         .unwrap();
         assert!(
-            applied2[0].after.contains("部分格段数不对齐，格式回落首段模板"),
+            applied2[0]
+                .after
+                .contains("部分格段数不对齐，格式回落首段模板"),
             "实际: {}",
             applied2[0].after
         );
@@ -6511,7 +7521,11 @@ mod tests {
     #[test]
     fn structural_ops_disjoint_rows_compose_in_one_batch() {
         // 坑②：13 行逐行横并被迫 13 次调用 → 不同行横并一批发完（足迹不相交）
-        let xml = wrap(&tbl_of(&[row_xml("甲一", "乙一"), row_xml("甲二", "乙二"), row_xml("甲三", "乙三")]));
+        let xml = wrap(&tbl_of(&[
+            row_xml("甲一", "乙一"),
+            row_xml("甲二", "乙二"),
+            row_xml("甲三", "乙三"),
+        ]));
         let (out, applied) = apply_edits(
             &xml,
             &Stylesheet::empty(),
@@ -6521,7 +7535,9 @@ mod tests {
         assert_eq!(applied.len(), 2, "两操作同批生效");
         assert_eq!(applied.iter().filter(|a| a.op == "merge_cells").count(), 2);
         let m = model_of(&out);
-        let Block::Table(t) = &m.body[0] else { panic!() };
+        let Block::Table(t) = &m.body[0] else {
+            panic!()
+        };
         assert_eq!(t.rows.len(), 3);
         assert_eq!(t.rows[0].cells.len(), 1, "r1 已并");
         assert_eq!(t.rows[0].cells[0].grid_span, Some(2));
@@ -6533,39 +7549,52 @@ mod tests {
     fn structural_footprint_overlap_rejects_with_conflict_pair() {
         // 同行两横并 → 足迹相交，点名冲突对
         let xml = two_row_table_doc();
-        let err = val_msg(apply_edits(
-            &xml,
-            &Stylesheet::empty(),
-            &[
-                hmerge_op("甲一", 1),
-                EditOp::MergeCells {
-                    block: 1,
-                    expect_prefix: "甲一".into(),
-                    direction: Some(MergeDirection::Horizontal),
-                    row: 1,
-                    cell: 2,
-                    span: Some(2),
-                    end_row: None,
-                    end_cell: None,
-                },
-            ],
-        )
-        .unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &Stylesheet::empty(),
+                &[
+                    hmerge_op("甲一", 1),
+                    EditOp::MergeCells {
+                        block: 1,
+                        expect_prefix: "甲一".into(),
+                        direction: Some(MergeDirection::Horizontal),
+                        row: 1,
+                        cell: 2,
+                        span: Some(2),
+                        end_row: None,
+                        end_cell: None,
+                    },
+                ],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("结构足迹冲突"), "实际: {err}");
-        assert!(err.contains("操作 1") && err.contains("操作 2"), "点名冲突对: {err}");
+        assert!(
+            err.contains("操作 1") && err.contains("操作 2"),
+            "点名冲突对: {err}"
+        );
     }
 
     #[test]
     fn structural_footprint_delete_row_semantics() {
         // 删行足迹 = 该行..末行（下方行号前移）：上方横并可组合，行内/下方拒
-        let xml = wrap(&tbl_of(&[row_xml("甲一", "乙一"), row_xml("甲二", "乙二"), row_xml("甲三", "乙三")]));
+        let xml = wrap(&tbl_of(&[
+            row_xml("甲一", "乙一"),
+            row_xml("甲二", "乙二"),
+            row_xml("甲三", "乙三"),
+        ]));
         // 上方横并 + 删尾行：足迹 1 与 3..=3 不相交 → 过
         let (out, applied) = apply_edits(
             &xml,
             &Stylesheet::empty(),
             &[
                 hmerge_op("甲一", 1),
-                EditOp::DeleteTableRow { block: 1, expect_prefix: "甲一".into(), row: 3 },
+                EditOp::DeleteTableRow {
+                    block: 1,
+                    expect_prefix: "甲一".into(),
+                    row: 3,
+                },
             ],
         )
         .unwrap();
@@ -6573,15 +7602,21 @@ mod tests {
         assert!(!out.contains("甲三"), "r3 已删");
         assert!(out.contains("甲二"), "r2 不中枪");
         // 删中间行 + 下方横并：足迹 2..=3 与 3 相交 → 拒
-        let err = val_msg(apply_edits(
-            &xml,
-            &Stylesheet::empty(),
-            &[
-                EditOp::DeleteTableRow { block: 1, expect_prefix: "甲一".into(), row: 2 },
-                hmerge_op("甲一", 3),
-            ],
-        )
-        .unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &Stylesheet::empty(),
+                &[
+                    EditOp::DeleteTableRow {
+                        block: 1,
+                        expect_prefix: "甲一".into(),
+                        row: 2,
+                    },
+                    hmerge_op("甲一", 3),
+                ],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("结构足迹冲突"), "实际: {err}");
         assert!(err.contains("delete_table_row"), "点名对方操作: {err}");
     }
@@ -6604,8 +7639,12 @@ mod tests {
             cell: 1,
         };
         // 链外（r3）横并 + 拆链 → 足迹 1..=2 与 3 不相交 → 过
-        let (out, applied) =
-            apply_edits(&xml, &Stylesheet::empty(), &[split.clone(), hmerge_op("头", 3)]).unwrap();
+        let (out, applied) = apply_edits(
+            &xml,
+            &Stylesheet::empty(),
+            &[split.clone(), hmerge_op("头", 3)],
+        )
+        .unwrap();
         assert_eq!(applied.len(), 2);
         assert!(out.contains("藏一"), "续格内容恢复显示");
         // 链内（r2）横并 + 拆链 → 拒
@@ -6639,10 +7678,19 @@ mod tests {
                     row: 1,
                     cell: 1,
                     paragraph: None,
-                    character: Some(CharFormat { bold: Some(true), ..Default::default() }),
+                    character: Some(CharFormat {
+                        bold: Some(true),
+                        ..Default::default()
+                    }),
                     style: None,
                 },
-                EditOp::SetCellText { block: 1, expect_prefix: "甲一".into(), row: 2, cell: 2, text: "新乙二".into() },
+                EditOp::SetCellText {
+                    block: 1,
+                    expect_prefix: "甲一".into(),
+                    row: 2,
+                    cell: 2,
+                    text: "新乙二".into(),
+                },
             ],
         )
         .unwrap();
@@ -6670,22 +7718,36 @@ mod tests {
 
     #[test]
     fn delete_table_row_removes_row_keeps_rest() {
-        let xml = wrap(&tbl_of(&[row_xml("甲一", "乙一"), row_xml("甲二", "乙二"), row_xml("甲三", "乙三")]));
+        let xml = wrap(&tbl_of(&[
+            row_xml("甲一", "乙一"),
+            row_xml("甲二", "乙二"),
+            row_xml("甲三", "乙三"),
+        ]));
         let (out, applied) = apply_edits(
             &xml,
             &Stylesheet::empty(),
-            &[EditOp::DeleteTableRow { block: 1, expect_prefix: "甲一".into(), row: 2 }],
+            &[EditOp::DeleteTableRow {
+                block: 1,
+                expect_prefix: "甲一".into(),
+                row: 2,
+            }],
         )
         .unwrap();
         assert_eq!(applied.len(), 1);
         assert_eq!(applied[0].op, "delete_table_row");
-        assert!(applied[0].after.contains("剩 2 行"), "摘要带剩余行数: {}", applied[0].after);
+        assert!(
+            applied[0].after.contains("剩 2 行"),
+            "摘要带剩余行数: {}",
+            applied[0].after
+        );
         assert!(!out.contains("甲二"), "目标行内容应删除");
         assert!(out.contains("甲一") && out.contains("甲三"), "其余行不中枪");
         // 块数不变（表仍是 1 块）、行数 3→2、tblGrid 原样
         let m = model_of(&out);
         assert_eq!(m.body.len(), 1);
-        let Block::Table(t) = &m.body[0] else { panic!() };
+        let Block::Table(t) = &m.body[0] else {
+            panic!()
+        };
         assert_eq!(t.rows.len(), 2);
         assert_eq!(out.matches("<w:gridCol").count(), 2, "tblGrid 不动");
     }
@@ -6694,20 +7756,34 @@ mod tests {
     fn delete_table_row_guards() {
         // ① 末行保护：单行表删唯一行 → 拒、指路 delete_block
         let one = wrap(&tbl_of(&[row_xml("仅", "一")]));
-        let err = val_msg(apply_edits(
-            &one,
-            &Stylesheet::empty(),
-            &[EditOp::DeleteTableRow { block: 1, expect_prefix: "仅".into(), row: 1 }],
-        ).unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &one,
+                &Stylesheet::empty(),
+                &[EditOp::DeleteTableRow {
+                    block: 1,
+                    expect_prefix: "仅".into(),
+                    row: 1,
+                }],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("空表保护"), "实际: {err}");
         assert!(err.contains("delete_block"), "应指路整表删除: {err}");
 
         // ② 合并头行（下方有续格）→ 拒、指路 split_cell
-        let err = val_msg(apply_edits(
-            &vchain_doc(),
-            &Stylesheet::empty(),
-            &[EditOp::DeleteTableRow { block: 1, expect_prefix: "头".into(), row: 1 }],
-        ).unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &vchain_doc(),
+                &Stylesheet::empty(),
+                &[EditOp::DeleteTableRow {
+                    block: 1,
+                    expect_prefix: "头".into(),
+                    row: 1,
+                }],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("合并结构冲突"), "实际: {err}");
         assert!(err.contains("split_cell"), "应指路先拆纵并: {err}");
 
@@ -6715,34 +7791,67 @@ mod tests {
         let (out, applied) = apply_edits(
             &vchain_doc(),
             &Stylesheet::empty(),
-            &[EditOp::DeleteTableRow { block: 1, expect_prefix: "头".into(), row: 2 }],
+            &[EditOp::DeleteTableRow {
+                block: 1,
+                expect_prefix: "头".into(),
+                row: 2,
+            }],
         )
         .unwrap();
         assert_eq!(applied.len(), 1);
         let m = model_of(&out);
-        let Block::Table(t) = &m.body[0] else { panic!() };
+        let Block::Table(t) = &m.body[0] else {
+            panic!()
+        };
         assert_eq!(t.rows.len(), 2, "删续格行后剩 2 行");
-        assert_eq!(t.rows[0].cells[0].v_merge.as_deref(), Some("restart"), "头保留");
+        assert_eq!(
+            t.rows[0].cells[0].v_merge.as_deref(),
+            Some("restart"),
+            "头保留"
+        );
         assert!(!out.contains("藏一"), "续格内容随行删除");
 
         // ④ 独占一批：同批挂 set_cell_text → 拒
-        let err = val_msg(apply_edits(
-            &two_row_table_doc(),
-            &Stylesheet::empty(),
-            &[
-                EditOp::SetCellText { block: 1, expect_prefix: "甲一".into(), row: 1, cell: 1, text: "x".into() },
-                EditOp::DeleteTableRow { block: 1, expect_prefix: "甲一".into(), row: 2 },
-            ],
-        ).unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &two_row_table_doc(),
+                &Stylesheet::empty(),
+                &[
+                    EditOp::SetCellText {
+                        block: 1,
+                        expect_prefix: "甲一".into(),
+                        row: 1,
+                        cell: 1,
+                        text: "x".into(),
+                    },
+                    EditOp::DeleteTableRow {
+                        block: 1,
+                        expect_prefix: "甲一".into(),
+                        row: 2,
+                    },
+                ],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("同一块多操作"), "实际: {err}");
-        assert!(err.contains("delete_table_row"), "应点名结构重构家族: {err}");
+        assert!(
+            err.contains("delete_table_row"),
+            "应点名结构重构家族: {err}"
+        );
 
         // ⑤ 行号越界
-        let err = val_msg(apply_edits(
-            &two_row_table_doc(),
-            &Stylesheet::empty(),
-            &[EditOp::DeleteTableRow { block: 1, expect_prefix: "甲一".into(), row: 5 }],
-        ).unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &two_row_table_doc(),
+                &Stylesheet::empty(),
+                &[EditOp::DeleteTableRow {
+                    block: 1,
+                    expect_prefix: "甲一".into(),
+                    row: 5,
+                }],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("行号越界"), "实际: {err}");
     }
 
@@ -6750,7 +7859,8 @@ mod tests {
     fn set_table_element_same_cell_different_elements_compose() {
         // 同格不同 element 一批组合（vAlign + tcBorders）——生产反馈「拆两批」修正
         let xml = two_row_table_doc();
-        let borders = r#"<w:tcBorders><w:top w:val="single" w:sz="4" w:color="auto"/></w:tcBorders>"#;
+        let borders =
+            r#"<w:tcBorders><w:top w:val="single" w:sz="4" w:color="auto"/></w:tcBorders>"#;
         let (out, applied) = apply_edits(
             &xml,
             &Stylesheet::empty(),
@@ -6785,26 +7895,39 @@ mod tests {
         assert!(b < v, "schema 序 tcBorders < vAlign");
         // 邻格不中枪
         let m = model_of(&out);
-        let Block::Table(t) = &m.body[0] else { panic!() };
+        let Block::Table(t) = &m.body[0] else {
+            panic!()
+        };
         assert_eq!(t.rows[0].cells[1].v_align, None, "右格不中枪");
 
         // 同元素两条 → 拒「同一格多操作」
-        let err = val_msg(apply_edits(
-            &xml,
-            &Stylesheet::empty(),
-            &[
-                EditOp::SetTableElement {
-                    block: 1, expect_prefix: "甲一".into(), level: TableLevel::Cell,
-                    row: Some(1), cell: Some(1), element: "vAlign".into(),
-                    xml: Some(r#"<w:vAlign w:val="center"/>"#.into()),
-                },
-                EditOp::SetTableElement {
-                    block: 1, expect_prefix: "甲一".into(), level: TableLevel::Cell,
-                    row: Some(1), cell: Some(1), element: "vAlign".into(),
-                    xml: Some(r#"<w:vAlign w:val="bottom"/>"#.into()),
-                },
-            ],
-        ).unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &Stylesheet::empty(),
+                &[
+                    EditOp::SetTableElement {
+                        block: 1,
+                        expect_prefix: "甲一".into(),
+                        level: TableLevel::Cell,
+                        row: Some(1),
+                        cell: Some(1),
+                        element: "vAlign".into(),
+                        xml: Some(r#"<w:vAlign w:val="center"/>"#.into()),
+                    },
+                    EditOp::SetTableElement {
+                        block: 1,
+                        expect_prefix: "甲一".into(),
+                        level: TableLevel::Cell,
+                        row: Some(1),
+                        cell: Some(1),
+                        element: "vAlign".into(),
+                        xml: Some(r#"<w:vAlign w:val="bottom"/>"#.into()),
+                    },
+                ],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("同一格多操作"), "实际: {err}");
         assert!(err.contains("vAlign"), "应点名冲突元素: {err}");
 
@@ -6813,10 +7936,20 @@ mod tests {
             &xml,
             &Stylesheet::empty(),
             &[
-                EditOp::SetCellText { block: 1, expect_prefix: "甲一".into(), row: 1, cell: 1, text: "新甲一".into() },
+                EditOp::SetCellText {
+                    block: 1,
+                    expect_prefix: "甲一".into(),
+                    row: 1,
+                    cell: 1,
+                    text: "新甲一".into(),
+                },
                 EditOp::SetTableElement {
-                    block: 1, expect_prefix: "甲一".into(), level: TableLevel::Cell,
-                    row: Some(1), cell: Some(1), element: "vAlign".into(),
+                    block: 1,
+                    expect_prefix: "甲一".into(),
+                    level: TableLevel::Cell,
+                    row: Some(1),
+                    cell: Some(1),
+                    element: "vAlign".into(),
                     xml: Some(r#"<w:vAlign w:val="center"/>"#.into()),
                 },
             ],
@@ -6825,14 +7958,29 @@ mod tests {
         assert!(out2.contains("新甲一") && out2.contains(r#"<w:vAlign w:val="center"/>"#));
 
         // set_cell_text 同格两条仍拒（重写语义）
-        let err = val_msg(apply_edits(
-            &xml,
-            &Stylesheet::empty(),
-            &[
-                EditOp::SetCellText { block: 1, expect_prefix: "甲一".into(), row: 1, cell: 1, text: "a".into() },
-                EditOp::SetCellText { block: 1, expect_prefix: "甲一".into(), row: 1, cell: 1, text: "b".into() },
-            ],
-        ).unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &Stylesheet::empty(),
+                &[
+                    EditOp::SetCellText {
+                        block: 1,
+                        expect_prefix: "甲一".into(),
+                        row: 1,
+                        cell: 1,
+                        text: "a".into(),
+                    },
+                    EditOp::SetCellText {
+                        block: 1,
+                        expect_prefix: "甲一".into(),
+                        row: 1,
+                        cell: 1,
+                        text: "b".into(),
+                    },
+                ],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("同一格多操作"), "实际: {err}");
     }
 
@@ -6843,9 +7991,24 @@ mod tests {
             &xml,
             &Stylesheet::empty(),
             &[
-                EditOp::InsertParagraphAfter { block: 1, expect_prefix: "锚".into(), text: "一".into(), style: None },
-                EditOp::InsertParagraphAfter { block: 1, expect_prefix: "锚".into(), text: "二".into(), style: None },
-                EditOp::InsertParagraphAfter { block: 1, expect_prefix: "锚".into(), text: "三".into(), style: None },
+                EditOp::InsertParagraphAfter {
+                    block: 1,
+                    expect_prefix: "锚".into(),
+                    text: "一".into(),
+                    style: None,
+                },
+                EditOp::InsertParagraphAfter {
+                    block: 1,
+                    expect_prefix: "锚".into(),
+                    text: "二".into(),
+                    style: None,
+                },
+                EditOp::InsertParagraphAfter {
+                    block: 1,
+                    expect_prefix: "锚".into(),
+                    text: "三".into(),
+                    style: None,
+                },
             ],
         )
         .unwrap();
@@ -6862,14 +8025,29 @@ mod tests {
         assert!(p0 < p1 && p1 < p2 && p2 < p3, "链序应为锚→一→二→三");
 
         // 异块组合仍合法：块 1 链式插 2 段 + 块 2 改文本，一批
-        let xml2 = wrap(r#"<w:p><w:r><w:t>锚</w:t></w:r></w:p><w:p><w:r><w:t>他段</w:t></w:r></w:p>"#);
+        let xml2 =
+            wrap(r#"<w:p><w:r><w:t>锚</w:t></w:r></w:p><w:p><w:r><w:t>他段</w:t></w:r></w:p>"#);
         let (out2, applied2) = apply_edits(
             &xml2,
             &Stylesheet::empty(),
             &[
-                EditOp::InsertParagraphAfter { block: 1, expect_prefix: "锚".into(), text: "甲".into(), style: None },
-                EditOp::InsertParagraphAfter { block: 1, expect_prefix: "锚".into(), text: "乙".into(), style: None },
-                EditOp::ReplaceText { block: 2, expect_prefix: "他段".into(), new_text: "改段".into() },
+                EditOp::InsertParagraphAfter {
+                    block: 1,
+                    expect_prefix: "锚".into(),
+                    text: "甲".into(),
+                    style: None,
+                },
+                EditOp::InsertParagraphAfter {
+                    block: 1,
+                    expect_prefix: "锚".into(),
+                    text: "乙".into(),
+                    style: None,
+                },
+                EditOp::ReplaceText {
+                    block: 2,
+                    expect_prefix: "他段".into(),
+                    new_text: "改段".into(),
+                },
             ],
         )
         .unwrap();
@@ -6879,24 +8057,48 @@ mod tests {
         assert_eq!(m2.body.len(), 4);
 
         // 同锚混其他段落操作仍拒（链式例外只对 insert_paragraph_after 开放）
-        let err = val_msg(apply_edits(
-            &xml,
-            &Stylesheet::empty(),
-            &[
-                EditOp::InsertParagraphAfter { block: 1, expect_prefix: "锚".into(), text: "一".into(), style: None },
-                EditOp::ReplaceText { block: 1, expect_prefix: "锚".into(), new_text: "改".into() },
-            ],
-        ).unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &Stylesheet::empty(),
+                &[
+                    EditOp::InsertParagraphAfter {
+                        block: 1,
+                        expect_prefix: "锚".into(),
+                        text: "一".into(),
+                        style: None,
+                    },
+                    EditOp::ReplaceText {
+                        block: 1,
+                        expect_prefix: "锚".into(),
+                        new_text: "改".into(),
+                    },
+                ],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("同一块多操作"), "实际: {err}");
         // 反序：replace 在前，insert 在后 → 同样拒
-        let err = val_msg(apply_edits(
-            &xml,
-            &Stylesheet::empty(),
-            &[
-                EditOp::ReplaceText { block: 1, expect_prefix: "锚".into(), new_text: "改".into() },
-                EditOp::InsertParagraphAfter { block: 1, expect_prefix: "锚".into(), text: "一".into(), style: None },
-            ],
-        ).unwrap_err());
+        let err = val_msg(
+            apply_edits(
+                &xml,
+                &Stylesheet::empty(),
+                &[
+                    EditOp::ReplaceText {
+                        block: 1,
+                        expect_prefix: "锚".into(),
+                        new_text: "改".into(),
+                    },
+                    EditOp::InsertParagraphAfter {
+                        block: 1,
+                        expect_prefix: "锚".into(),
+                        text: "一".into(),
+                        style: None,
+                    },
+                ],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("同一块多操作"), "实际: {err}");
     }
 
@@ -6954,8 +8156,14 @@ mod tests {
         super::super::docx_write::generate_from_template(
             &tpl,
             &[
-                super::super::docx_write::WriteBlock::Heading { level: 1, text: "标题甲".into() },
-                super::super::docx_write::WriteBlock::Paragraph { text: "正文乙".into(), style: None },
+                super::super::docx_write::WriteBlock::Heading {
+                    level: 1,
+                    text: "标题甲".into(),
+                },
+                super::super::docx_write::WriteBlock::Paragraph {
+                    text: "正文乙".into(),
+                    style: None,
+                },
             ],
         )
         .unwrap()
@@ -6980,11 +8188,7 @@ mod tests {
     fn engine_insert_image_after_e2e() {
         let doc = two_block_doc();
         let before_names = zip_entry_names(&doc);
-        let (out, applied) = apply_edits_to_bytes(
-            &doc,
-            &[image_op(1, "标题甲", 100, 50)],
-        )
-        .unwrap();
+        let (out, applied) = apply_edits_to_bytes(&doc, &[image_op(1, "标题甲", 100, 50)]).unwrap();
         assert_eq!(applied.len(), 1);
         assert_eq!(applied[0].op, "insert_image_after");
 
@@ -6993,14 +8197,19 @@ mod tests {
         assert_eq!(media, b"\x89PNG\r\n\x1a\n-test-bytes");
 
         // rels：原 rId1（styles）条目字节不动 + 新增 image 关系 rId2
-        let rels = zip_read(&out, "word/_rels/document.xml.rels").unwrap().lossy_utf8();
+        let rels = zip_read(&out, "word/_rels/document.xml.rels")
+            .unwrap()
+            .lossy_utf8();
         assert!(rels.contains(r#"Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml""#));
         assert!(rels.contains(r#"Id="rId2""#), "新图应分到 rId2: {rels}");
         assert!(rels.contains(r#"Target="media/image1.png""#));
 
         // CT：png Default 补上；document.xml：drawing 引用 rId2
         let ct = zip_read(&out, "[Content_Types].xml").unwrap().lossy_utf8();
-        assert!(ct.contains(r#"<Default Extension="png""#), "CT 应补 png Default: {ct}");
+        assert!(
+            ct.contains(r#"<Default Extension="png""#),
+            "CT 应补 png Default: {ct}"
+        );
         let xml = document_xml_of(&out);
         assert!(xml.contains(r#"r:embed="rId2""#), "a:blip 应引 rId2");
         // wp:extent 默认宽 = 100px×9525 EMU（原生 < 版心 → 不放大）
@@ -7009,18 +8218,32 @@ mod tests {
         // 块数 +1（引擎自检已断言；此处复核模型投影）
         let model2 = model_of(&xml);
         assert_eq!(model2.body.len(), 3);
-        let Block::Paragraph(p2) = &model2.body[1] else { panic!("新块应为段落") };
+        let Block::Paragraph(p2) = &model2.body[1] else {
+            panic!("新块应为段落")
+        };
         assert_eq!(p2.image_count, 1, "读侧投影应见图");
-        assert_eq!(p2.runs.iter().map(|r| r.text.as_str()).collect::<String>(), "", "图段无文本");
+        assert_eq!(
+            p2.runs.iter().map(|r| r.text.as_str()).collect::<String>(),
+            "",
+            "图段无文本"
+        );
 
         // untouched entry 逐字节保真（变更白名单外全部原样）
-        let changed = ["word/document.xml", "word/_rels/document.xml.rels", "[Content_Types].xml"];
+        let changed = [
+            "word/document.xml",
+            "word/_rels/document.xml.rels",
+            "[Content_Types].xml",
+        ];
         let after_names = zip_entry_names(&out);
         for name in &before_names {
             if changed.contains(&name.as_str()) {
                 continue;
             }
-            assert_eq!(zip_read(&out, name), zip_read(&doc, name), "{name} 应逐字节不变");
+            assert_eq!(
+                zip_read(&out, name),
+                zip_read(&doc, name),
+                "{name} 应逐字节不变"
+            );
         }
         assert!(after_names.iter().any(|n| n == "word/media/image1.png"));
     }
@@ -7041,7 +8264,9 @@ mod tests {
         // media 双部件 + rId 递增不撞
         assert!(zip_read(&out, "word/media/image1.png").is_some());
         assert!(zip_read(&out, "word/media/image2.png").is_some());
-        let rels = zip_read(&out, "word/_rels/document.xml.rels").unwrap().lossy_utf8();
+        let rels = zip_read(&out, "word/_rels/document.xml.rels")
+            .unwrap()
+            .lossy_utf8();
         assert!(rels.contains(r#"Target="media/image1.png""#));
         assert!(rels.contains(r#"Target="media/image2.png""#));
         let xml = document_xml_of(&out);
@@ -7065,7 +8290,12 @@ mod tests {
         let doc = two_block_doc();
         let (out, applied) = apply_edits_to_bytes(
             &doc,
-            &[EditOp::InsertTocAfter { block: 1, expect_prefix: "标题甲".into(), levels: 3, hyperlink: true }],
+            &[EditOp::InsertTocAfter {
+                block: 1,
+                expect_prefix: "标题甲".into(),
+                levels: 3,
+                hyperlink: true,
+            }],
         )
         .unwrap();
         assert_eq!(applied.len(), 1);
@@ -7075,25 +8305,45 @@ mod tests {
         let xml = document_xml_of(&out);
         assert!(xml.contains("<w:fldSimple"), "TOC 应是 fldSimple 形态");
         assert!(xml.contains("TOC \\o"), "指令应含 TOC 域开关");
-        assert!(xml.contains("目录将在打开文档时自动生成"), "cached result 放自愈文案");
+        assert!(
+            xml.contains("目录将在打开文档时自动生成"),
+            "cached result 放自愈文案"
+        );
 
         // 模板无 settings.xml → 新建最小件 + updateFields + CT Override
         let settings = zip_read(&out, "word/settings.xml").expect("settings.xml 应新建");
         let settings = settings.lossy_utf8();
-        assert!(settings.contains(r#"<w:updateFields w:val="true"/>"#), "updateFields 应置位: {settings}");
+        assert!(
+            settings.contains(r#"<w:updateFields w:val="true"/>"#),
+            "updateFields 应置位: {settings}"
+        );
         let ct = zip_read(&out, "[Content_Types].xml").unwrap().lossy_utf8();
-        assert!(ct.contains(r#"PartName="/word/settings.xml""#), "CT 应补 settings Override");
+        assert!(
+            ct.contains(r#"PartName="/word/settings.xml""#),
+            "CT 应补 settings Override"
+        );
 
         // 读侧：域指令可见 + 块数 +1
         let model2 = model_of(&xml);
         assert_eq!(model2.body.len(), 3);
-        let Block::Paragraph(p2) = &model2.body[1] else { panic!() };
-        assert!(p2.field_instrs.iter().any(|i| i.contains("TOC")), "投影应收域指令: {:?}", p2.field_instrs);
+        let Block::Paragraph(p2) = &model2.body[1] else {
+            panic!()
+        };
+        assert!(
+            p2.field_instrs.iter().any(|i| i.contains("TOC")),
+            "投影应收域指令: {:?}",
+            p2.field_instrs
+        );
 
         // 再插一次 TOC（第二个会话常见）——settings 幂等（已置位不重写、不重复条目）
         let (out2, _) = apply_edits_to_bytes(
             &out,
-            &[EditOp::InsertTocAfter { block: 1, expect_prefix: "标题甲".into(), levels: 2, hyperlink: false }],
+            &[EditOp::InsertTocAfter {
+                block: 1,
+                expect_prefix: "标题甲".into(),
+                levels: 2,
+                hyperlink: false,
+            }],
         )
         .unwrap();
         let s2 = zip_read(&out2, "word/settings.xml").unwrap().lossy_utf8();
@@ -7107,8 +8357,18 @@ mod tests {
         let (out, applied) = apply_edits_to_bytes(
             &doc,
             &[
-                EditOp::InsertParagraphAfter { block: 1, expect_prefix: "标题甲".into(), text: "链一".into(), style: None },
-                EditOp::InsertTocAfter { block: 1, expect_prefix: "标题甲".into(), levels: 2, hyperlink: false },
+                EditOp::InsertParagraphAfter {
+                    block: 1,
+                    expect_prefix: "标题甲".into(),
+                    text: "链一".into(),
+                    style: None,
+                },
+                EditOp::InsertTocAfter {
+                    block: 1,
+                    expect_prefix: "标题甲".into(),
+                    levels: 2,
+                    hyperlink: false,
+                },
                 image_op(1, "标题甲", 50, 50),
             ],
         )
@@ -7118,7 +8378,10 @@ mod tests {
         let p_pos = xml.find("链一").expect("链一段应存在");
         let t_pos = xml.find("<w:fldSimple").expect("TOC 段应存在");
         let i_pos = xml.find("r:embed=").expect("图段应存在");
-        assert!(p_pos < t_pos && t_pos < i_pos, "同锚链序 = 输入序（段→TOC→图）");
+        assert!(
+            p_pos < t_pos && t_pos < i_pos,
+            "同锚链序 = 输入序（段→TOC→图）"
+        );
         let model2 = model_of(&xml);
         assert_eq!(model2.body.len(), 5);
     }
@@ -7126,17 +8389,31 @@ mod tests {
     #[test]
     fn engine_toc_levels_out_of_range_rejected() {
         let doc = two_block_doc();
-        let err = val_msg(apply_edits_to_bytes(
-            &doc,
-            &[EditOp::InsertTocAfter { block: 1, expect_prefix: "标题甲".into(), levels: 0, hyperlink: true }],
-        )
-        .unwrap_err());
+        let err = val_msg(
+            apply_edits_to_bytes(
+                &doc,
+                &[EditOp::InsertTocAfter {
+                    block: 1,
+                    expect_prefix: "标题甲".into(),
+                    levels: 0,
+                    hyperlink: true,
+                }],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("levels=0 越界"), "实际: {err}");
-        let err = val_msg(apply_edits_to_bytes(
-            &doc,
-            &[EditOp::InsertTocAfter { block: 1, expect_prefix: "标题甲".into(), levels: 10, hyperlink: true }],
-        )
-        .unwrap_err());
+        let err = val_msg(
+            apply_edits_to_bytes(
+                &doc,
+                &[EditOp::InsertTocAfter {
+                    block: 1,
+                    expect_prefix: "标题甲".into(),
+                    levels: 10,
+                    hyperlink: true,
+                }],
+            )
+            .unwrap_err(),
+        );
         assert!(err.starts_with("levels=10 越界"), "实际: {err}");
     }
 
@@ -7161,8 +8438,14 @@ mod tests {
         .unwrap();
         let xml = document_xml_of(&out);
         // 版心 = (11906 - 1800 - 1800) twips × 635 = 8306 × 635 = 5274310 EMU
-        assert!(xml.contains(&format!(r#"cx="{}""#, 8306 * 635)), "宽应钳到版心");
-        assert!(xml.contains(&format!(r#"cy="{}""#, 8306 * 635 / 2)), "高等比 1:2");
+        assert!(
+            xml.contains(&format!(r#"cx="{}""#, 8306 * 635)),
+            "宽应钳到版心"
+        );
+        assert!(
+            xml.contains(&format!(r#"cy="{}""#, 8306 * 635 / 2)),
+            "高等比 1:2"
+        );
 
         // 原生像素宽 100px（952500 EMU）< 版心 → 不放大，width_mm 缺省用原生
         let (out2, _) = apply_edits_to_bytes(&doc, &[image_op(1, "标题甲", 100, 200)]).unwrap();

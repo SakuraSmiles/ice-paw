@@ -93,8 +93,17 @@ pub(crate) async fn materialize_reference_blocks(
         {
             touched = true;
             Some(
-                expand_one(pool, current_conv_id, ref_kind, target_id, display, query, conv_cap, msg_cap)
-                    .await,
+                expand_one(
+                    pool,
+                    current_conv_id,
+                    ref_kind,
+                    target_id,
+                    display,
+                    query,
+                    conv_cap,
+                    msg_cap,
+                )
+                .await,
             )
         } else {
             None
@@ -114,9 +123,7 @@ pub(crate) async fn materialize_reference_blocks(
 fn refs_of_kind(blocks: &[ContentBlock], kind: &str) -> usize {
     blocks
         .iter()
-        .filter(|b| {
-            matches!(b, ContentBlock::Reference { ref_kind, .. } if ref_kind == kind)
-        })
+        .filter(|b| matches!(b, ContentBlock::Reference { ref_kind, .. } if ref_kind == kind))
         .count()
 }
 
@@ -209,7 +216,11 @@ async fn expand_conversation(
     let residual_start = summary_state
         .as_ref()
         .and_then(|s| s.covered_until_rowid)
-        .map(|anchor| msgs.iter().position(|m| m.rowid > anchor).unwrap_or(msgs.len()));
+        .map(|anchor| {
+            msgs.iter()
+                .position(|m| m.rowid > anchor)
+                .unwrap_or(msgs.len())
+        });
 
     let compressed = if let (Some(state), Some(residual)) = (summary_state.as_ref(), residual_start)
     {
@@ -281,14 +292,20 @@ async fn build_conversation_card(pool: &SqlitePool, conv_id: &str) -> Option<Str
             .count();
         card.push_str(&format!("计划（{done}/{} 完成）：\n", plan_items.len()));
         for it in plan_items.iter().take(CARD_MAX_ITEMS) {
-            let status = it.get("status").and_then(|s| s.as_str()).unwrap_or("pending");
+            let status = it
+                .get("status")
+                .and_then(|s| s.as_str())
+                .unwrap_or("pending");
             let mark = match status {
                 "done" => "✓",
                 "in_progress" => "▶",
                 _ => "○",
             };
             let text = it.get("text").and_then(|t| t.as_str()).unwrap_or("");
-            card.push_str(&format!("  {mark} {}\n", truncate_chars(text, CARD_ITEM_CHARS)));
+            card.push_str(&format!(
+                "  {mark} {}\n",
+                truncate_chars(text, CARD_ITEM_CHARS)
+            ));
         }
         if plan_items.len() > CARD_MAX_ITEMS {
             card.push_str(&format!(
@@ -347,16 +364,18 @@ fn render_summary_view(
     out.push_str("\n―――― 摘要之后的近期内容 ――――\n");
 
     // 近窗尾部轮选择：残余轮数 > 尾轮数时保尾部，中段省略标注
-    let residual_turns: Vec<usize> = turns.iter().copied().filter(|&i| i >= residual_start).collect();
+    let residual_turns: Vec<usize> = turns
+        .iter()
+        .copied()
+        .filter(|&i| i >= residual_start)
+        .collect();
     let tail_start = residual_turns
         .len()
         .checked_sub(CONVERSATION_TAIL_TURNS)
         .filter(|&omit| omit > 0)
         .map(|omit| {
             let start = residual_turns[omit];
-            out.push_str(&format!(
-                "…（摘要之后省略 {omit} 轮，完整内容在源会话）\n"
-            ));
+            out.push_str(&format!("…（摘要之后省略 {omit} 轮，完整内容在源会话）\n"));
             start
         })
         .unwrap_or(residual_start);
@@ -410,7 +429,9 @@ fn render_headtail_view(
 
     // 相关性补选：中段轮按「发送正文 token 在轮文本中命中数」打分（去重 token，
     // CJK bigram 与工具排序同语义），取分最高的 ≤4 轮（同分靠前优先）
-    let tokens: HashSet<String> = crate::harness::scoring::tokenize(query).into_iter().collect();
+    let tokens: HashSet<String> = crate::harness::scoring::tokenize(query)
+        .into_iter()
+        .collect();
     if !tokens.is_empty() {
         let mut scored: Vec<(u32, usize)> = mid_range
             .clone()
@@ -444,9 +465,7 @@ fn render_headtail_view(
             continue;
         }
         if in_omission {
-            out.push_str(&format!(
-                "…（省略 {omitted_run} 轮，完整内容在源会话）\n"
-            ));
+            out.push_str(&format!("…（省略 {omitted_run} 轮，完整内容在源会话）\n"));
             omitted_run = 0;
             in_omission = false;
         }
@@ -511,9 +530,7 @@ async fn expand_message(
     }
 
     let mut out = String::with_capacity(512);
-    out.push_str(&format!(
-        "<referenced_message id=\"{message_id}\">\n"
-    ));
+    out.push_str(&format!("<referenced_message id=\"{message_id}\">\n"));
 
     if m.role == "assistant" {
         // 组语义：该消息起向后连续 assistant 直到 role 变化（窗口 ≤200 条内；
@@ -590,9 +607,7 @@ pub(crate) fn render_message_line(m: &MessageRow) -> String {
             ContentBlock::Attachment { name, kind, .. } => {
                 body.push_str(&format!(" [附件：{name}（{kind}）]"))
             }
-            ContentBlock::ToolUse { name, .. } => {
-                body.push_str(&format!(" [调用工具 {name}]"))
-            }
+            ContentBlock::ToolUse { name, .. } => body.push_str(&format!(" [调用工具 {name}]")),
             ContentBlock::ToolResult { content, .. } => {
                 body.push_str(&format!(" [工具结果：{}]", truncate_chars(content, 200)))
             }
@@ -816,8 +831,22 @@ mod tests {
         seed_conv(&pool, "c1", "设计讨论", "a1").await;
         // 12 轮（> 头2+尾8=10）→ 中段省略
         for t in 1..=12 {
-            seed_msg(&pool, &format!("u{t}"), "c1", "user", &format!("第{t}个问题")).await;
-            seed_msg(&pool, &format!("a{t}"), "c1", "assistant", &format!("第{t}个回答")).await;
+            seed_msg(
+                &pool,
+                &format!("u{t}"),
+                "c1",
+                "user",
+                &format!("第{t}个问题"),
+            )
+            .await;
+            seed_msg(
+                &pool,
+                &format!("a{t}"),
+                "c1",
+                "assistant",
+                &format!("第{t}个回答"),
+            )
+            .await;
         }
         let text = expand_conversation(&pool, "c1", "", 8_000)
             .await
@@ -833,7 +862,9 @@ mod tests {
         assert!(text.contains("省略 2 轮")); // 省略段计数标注
 
         // 不存在的会话 / 空会话 → None
-        assert!(expand_conversation(&pool, "nope", "", 8_000).await.is_none());
+        assert!(expand_conversation(&pool, "nope", "", 8_000)
+            .await
+            .is_none());
         seed_conv(&pool, "c2", "空", "a1").await;
         assert!(expand_conversation(&pool, "c2", "", 8_000).await.is_none());
     }
@@ -845,8 +876,22 @@ mod tests {
         seed_conv(&pool, "c1", "长会话", "a1").await;
         // 14 轮；第 6 轮后插入滚动摘要（锚 = a6 的 rowid，Phase 2 摘要行恒带锚）
         for t in 1..=14 {
-            seed_msg(&pool, &format!("u{t}"), "c1", "user", &format!("第{t}个问题")).await;
-            seed_msg(&pool, &format!("a{t}"), "c1", "assistant", &format!("第{t}个回答")).await;
+            seed_msg(
+                &pool,
+                &format!("u{t}"),
+                "c1",
+                "user",
+                &format!("第{t}个问题"),
+            )
+            .await;
+            seed_msg(
+                &pool,
+                &format!("a{t}"),
+                "c1",
+                "assistant",
+                &format!("第{t}个回答"),
+            )
+            .await;
         }
         let a6_rowid: i64 = sqlx::query_scalar("SELECT rowid FROM messages WHERE id = 'a6'")
             .fetch_one(&pool)
@@ -871,7 +916,7 @@ mod tests {
         assert!(text.contains("摘要之后的近期内容"));
         assert!(text.contains("第7个问题")); // 残余首轮
         assert!(text.contains("第14个回答")); // 残余末轮
-        // 被摘要覆盖的早期轮不再以消息行出现（内容在摘要里，不双份渲染）
+                                              // 被摘要覆盖的早期轮不再以消息行出现（内容在摘要里，不双份渲染）
         assert!(!text.contains("第1个问题"));
         assert!(!text.contains("第3个问题"));
         // system 摘要行不进消息流（受控版本已显式渲染）
@@ -885,9 +930,20 @@ mod tests {
         seed_conv(&pool, "c1", "排障会话", "a1").await;
         // 16 轮，第 5 轮内容与发送正文同主题；query 为空时它本会被头尾省略
         for t in 1..=16 {
-            let q = if t == 5 { "数据库连接池怎么配" } else { &format!("第{t}个问题") };
+            let q = if t == 5 {
+                "数据库连接池怎么配"
+            } else {
+                &format!("第{t}个问题")
+            };
             seed_msg(&pool, &format!("u{t}"), "c1", "user", q).await;
-            seed_msg(&pool, &format!("a{t}"), "c1", "assistant", &format!("第{t}个回答")).await;
+            seed_msg(
+                &pool,
+                &format!("a{t}"),
+                "c1",
+                "assistant",
+                &format!("第{t}个回答"),
+            )
+            .await;
         }
 
         // query 命中 → 第 5 轮被补选进快照（CJK bigram 打分，复用工具排序分词）
@@ -916,12 +972,16 @@ mod tests {
         seed_msg(&pool, "u2", "c1", "user", "再来").await;
 
         // user 单条
-        let text = expand_message(&pool, "c1", "u1", 4_000).await.expect("展开");
+        let text = expand_message(&pool, "c1", "u1", 4_000)
+            .await
+            .expect("展开");
         assert!(text.contains("[user]: 帮我看看"));
         assert!(!text.contains("第一段"));
 
         // assistant 组：从 s1 起连续到 role 变化（s1+s2，不含 u2）
-        let text = expand_message(&pool, "c1", "s1", 4_000).await.expect("展开");
+        let text = expand_message(&pool, "c1", "s1", 4_000)
+            .await
+            .expect("展开");
         assert!(text.contains("[assistant]: 第一段"));
         assert!(text.contains("[assistant]: 第二段"));
         assert!(!text.contains("再来"));
@@ -971,17 +1031,39 @@ mod tests {
         seed_conv(&pool, "c1", "工程会话", "a1").await;
         // 3 轮短会话（≤ 头+尾 → 全量保留，零压缩 → 不该有钻取提示）
         for t in 1..=3 {
-            seed_msg(&pool, &format!("u{t}"), "c1", "user", &format!("第{t}个问题")).await;
-            seed_msg(&pool, &format!("a{t}"), "c1", "assistant", &format!("第{t}个回答")).await;
+            seed_msg(
+                &pool,
+                &format!("u{t}"),
+                "c1",
+                "user",
+                &format!("第{t}个问题"),
+            )
+            .await;
+            seed_msg(
+                &pool,
+                &format!("a{t}"),
+                "c1",
+                "assistant",
+                &format!("第{t}个回答"),
+            )
+            .await;
         }
         // 事件侧：计划终态（全量快照语义）+ 产物工具调用（含失败与非产物工具）
         let ev = |kind: &str, payload: String| {
             let kind = kind.to_string();
             let pool = pool.clone();
             async move {
-                repo::session_event::append(&pool, "c1", &kind, "agent:a1", Some("t1"), None, &payload)
-                    .await
-                    .unwrap();
+                repo::session_event::append(
+                    &pool,
+                    "c1",
+                    &kind,
+                    "agent:a1",
+                    Some("t1"),
+                    None,
+                    &payload,
+                )
+                .await
+                .unwrap();
             }
         };
         ev(
@@ -1009,7 +1091,7 @@ mod tests {
         assert!(text.contains("src/lib.rs"));
         assert!(text.contains("docs/a.md")); // move 取 destination
         assert!(!text.contains("bad.rs")); // 失败调用不算产物
-        // 短会话零压缩 → 无钻取提示（避免噪声）
+                                           // 短会话零压缩 → 无钻取提示（避免噪声）
         assert!(!text.contains("read_reference"));
 
         // 纯聊天会话（无计划无产物）→ 零名片
@@ -1027,8 +1109,22 @@ mod tests {
         seed_conv(&pool, "c1", "长会话", "a1").await;
         // 12 轮（> 头2+尾8）→ 有省略段 → 尾部应带钻取提示
         for t in 1..=12 {
-            seed_msg(&pool, &format!("u{t}"), "c1", "user", &format!("第{t}个问题")).await;
-            seed_msg(&pool, &format!("a{t}"), "c1", "assistant", &format!("第{t}个回答")).await;
+            seed_msg(
+                &pool,
+                &format!("u{t}"),
+                "c1",
+                "user",
+                &format!("第{t}个问题"),
+            )
+            .await;
+            seed_msg(
+                &pool,
+                &format!("a{t}"),
+                "c1",
+                "assistant",
+                &format!("第{t}个回答"),
+            )
+            .await;
         }
         let text = expand_conversation(&pool, "c1", "", 8_000).await.unwrap();
         assert!(text.contains("省略 2 轮"));
@@ -1043,8 +1139,22 @@ mod tests {
         // 40 轮 × 每条 600 字符 ≈ 48K 字符 >> 单引用上限——单引用也会触顶
         let long = "长".repeat(600);
         for t in 1..=40 {
-            seed_msg(&pool, &format!("u{t}"), "c1", "user", &format!("第{t}{long}")).await;
-            seed_msg(&pool, &format!("a{t}"), "c1", "assistant", &format!("答{t}{long}")).await;
+            seed_msg(
+                &pool,
+                &format!("u{t}"),
+                "c1",
+                "user",
+                &format!("第{t}{long}"),
+            )
+            .await;
+            seed_msg(
+                &pool,
+                &format!("a{t}"),
+                "c1",
+                "assistant",
+                &format!("答{t}{long}"),
+            )
+            .await;
         }
 
         // 单引用：8000 上限内

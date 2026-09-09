@@ -680,7 +680,10 @@ mod tests {
         let sigs = chunk_signatures(&pool, &["k1".into(), "k2".into()])
             .await
             .unwrap();
-        assert!(!sigs.contains_key("k2"), "无 chunk 的 KB 不在签名 map: {sigs:?}");
+        assert!(
+            !sigs.contains_key("k2"),
+            "无 chunk 的 KB 不在签名 map: {sigs:?}"
+        );
 
         let need = upsert_chunks_incremental(&pool, &doc1, &["x".into(), "yy".into()])
             .await

@@ -559,7 +559,12 @@ mod tests {
         let chunks: Vec<Result<Bytes, std::io::Error>> = vec![Ok(Bytes::from(raw))];
         let (tx, mut rx) = mpsc::channel::<AppResult<ChatDelta>>(64);
         let cancel = CancellationToken::new();
-        parse_sse_stream(stream::iter(chunks), tx, cancel, "deepseek-v4-flash".to_string());
+        parse_sse_stream(
+            stream::iter(chunks),
+            tx,
+            cancel,
+            "deepseek-v4-flash".to_string(),
+        );
         let mut got: Option<TokenUsage> = None;
         while let Some(item) = rx.recv().await {
             match item {

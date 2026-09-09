@@ -358,7 +358,10 @@ mod tests {
         // echo 命令：输出短（<15）且命令不含 powershell
         assert!(!looks_like_echo("echo hello world", "hello world"));
         // 命令不含 powershell 家族
-        assert!(!looks_like_echo("findstr foo big.txt", "Get-ChildItem -Recurse"));
+        assert!(!looks_like_echo(
+            "findstr foo big.txt",
+            "Get-ChildItem -Recurse"
+        ));
         // 输出非命令子串（正常命令输出）
         assert!(!looks_like_echo(cmd, "Directory: D:\\workspace"));
     }

@@ -34,10 +34,10 @@ use crate::harness::chat_state::CancellationToken;
 use crate::harness::mcp::client::McpClient;
 use crate::harness::mcp::{McpRegistry, McpServerManager};
 use crate::harness::provider::mock::{MockProvider, MockScenario};
+use crate::harness::r#loop::emitter::LoopEmitter;
 use crate::harness::r#loop::fallback::{
     effective_output_cap, FallbackPlan, FallbackResolver, ResolvedModel,
 };
-use crate::harness::r#loop::emitter::LoopEmitter;
 use crate::harness::read_route::ReadRouteRegistry;
 use crate::harness::session_runner::{run_agent_turn, AgentTurnInput, TurnEnv};
 use crate::harness::tool_executor::ToolAuthRegistry;
@@ -733,7 +733,10 @@ async fn doom_loop_constant_failure_nudges_each_time_then_terminates() {
     );
     for (i, e) in nudges.iter().enumerate() {
         let p: serde_json::Value = serde_json::from_str(&e.payload).expect("payload");
-        assert_eq!(p["point"], "doom_loop_nudge", "注入点不变（skip 事件零迁移）");
+        assert_eq!(
+            p["point"], "doom_loop_nudge",
+            "注入点不变（skip 事件零迁移）"
+        );
         let streak = 3 + i;
         let prompt = p["prompt"].as_str().expect("prompt 文本");
         assert!(
@@ -791,7 +794,10 @@ async fn doom_loop_constant_failure_nudges_each_time_then_terminates() {
 
 /// 预置零事件旧行（不经事件日志的裸行——pre-Phase-0 形态）。
 async fn seed_legacy_rows_without_events(pool: &SqlitePool) {
-    for (id, role, text) in [("old-u", "user", "旧问题"), ("old-a", "assistant", "旧回答")] {
+    for (id, role, text) in [
+        ("old-u", "user", "旧问题"),
+        ("old-a", "assistant", "旧回答"),
+    ] {
         repo::message::create(
             pool,
             id,
@@ -830,7 +836,9 @@ async fn legacy_rows_without_events_yield_empty_history_but_turn_completes() {
     assert_eq!(received.len(), 1, "NormalReply 单次调用");
     let texts: Vec<String> = received[0].iter().map(|m| m.content_text()).collect();
     assert!(
-        !texts.iter().any(|t| t.contains("旧问题") || t.contains("旧回答")),
+        !texts
+            .iter()
+            .any(|t| t.contains("旧问题") || t.contains("旧回答")),
         "零事件旧行不应进入 LLM 历史: {texts:?}"
     );
     assert!(
@@ -882,14 +890,14 @@ impl FallbackResolver for MapResolver {
         agent_max_tokens: i32,
         _cache_prompt: bool,
     ) -> AppResult<ResolvedModel> {
-        let (alias, provider) = self
-            .entries
-            .get(profile_id)
-            .cloned()
-            .ok_or_else(|| AppError::NotFound {
-                resource: "model_profile",
-                id: profile_id.to_string(),
-            })?;
+        let (alias, provider) =
+            self.entries
+                .get(profile_id)
+                .cloned()
+                .ok_or_else(|| AppError::NotFound {
+                    resource: "model_profile",
+                    id: profile_id.to_string(),
+                })?;
         let model = provider.model.clone();
         Ok(ResolvedModel {
             profile_id: profile_id.to_string(),
@@ -941,8 +949,7 @@ async fn quota_first_attempt_switches_and_completes() {
             // 智谱 1113 措辞 → GlmResourcePack（Quota 族、不可重试）；
             // times 给大保证主模型本回合永不自愈——回合成功即换档实证
             error_message:
-                "HTTP 429: {\"code\":1113,\"message\":\"余额不足或无可用资源包\"}（mock）"
-                    .into(),
+                "HTTP 429: {\"code\":1113,\"message\":\"余额不足或无可用资源包\"}（mock）".into(),
             times: 5,
         },
     ));
@@ -1141,8 +1148,7 @@ async fn chain_exhausted_fails_round() {
         "glm-main",
         MockScenario::FailNTimesThenNormal {
             error_message:
-                "HTTP 429: {\"code\":1113,\"message\":\"余额不足或无可用资源包\"}（mock）"
-                    .into(),
+                "HTTP 429: {\"code\":1113,\"message\":\"余额不足或无可用资源包\"}（mock）".into(),
             times: 5,
         },
     ));
@@ -1171,7 +1177,12 @@ async fn chain_exhausted_fails_round() {
     let events = event_rows(&fx.pool).await;
     assert_eq!(
         kinds(&events),
-        vec!["user_message", "turn_context", "message_error", "turn_ended"],
+        vec![
+            "user_message",
+            "turn_context",
+            "message_error",
+            "turn_ended"
+        ],
         "链尽终态的事件 kind 序"
     );
     assert_event_invariants(&events, &fx.user_msg_id);
@@ -1207,8 +1218,7 @@ async fn no_fallback_keeps_legacy_behavior() {
         "glm-main",
         MockScenario::FailNTimesThenNormal {
             error_message:
-                "HTTP 429: {\"code\":1113,\"message\":\"余额不足或无可用资源包\"}（mock）"
-                    .into(),
+                "HTTP 429: {\"code\":1113,\"message\":\"余额不足或无可用资源包\"}（mock）".into(),
             times: 5,
         },
     ));
@@ -1229,7 +1239,12 @@ async fn no_fallback_keeps_legacy_behavior() {
     let events = event_rows(&fx.pool).await;
     assert_eq!(
         kinds(&events),
-        vec!["user_message", "turn_context", "message_error", "turn_ended"],
+        vec![
+            "user_message",
+            "turn_context",
+            "message_error",
+            "turn_ended"
+        ],
         "无链 legacy 终态的事件 kind 序"
     );
     assert_event_invariants(&events, &fx.user_msg_id);

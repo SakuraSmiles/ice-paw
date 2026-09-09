@@ -30,8 +30,8 @@
 pub mod backend;
 pub mod channel;
 pub mod coords;
-pub mod human;
 pub mod hud;
+pub mod human;
 pub mod input;
 pub mod keyboard;
 pub mod session;
@@ -41,9 +41,9 @@ pub mod state;
 #[cfg(all(test, windows))]
 mod real_smoke;
 
-pub use backend::{MouseButton, RgbaFrame, ScreenBackend, WindowInfo};
 #[cfg(not(windows))]
 pub use backend::UnsupportedBackend;
+pub use backend::{MouseButton, RgbaFrame, ScreenBackend, WindowInfo};
 pub use coords::{CaptureMeta, PhysRect, VirtualScreenLayout};
 pub use state::ScreenState;
 
@@ -168,9 +168,8 @@ impl McpClient for CaptureScreenTool {
     }
 
     async fn execute_with_output(&self, args: &str, ctx: &ToolContext) -> AppResult<ToolOutput> {
-        let p: CaptureScreenArgs = serde_json::from_str(args).map_err(|e| {
-            AppError::Validation(format!("capture_screen 参数解析失败: {e}"))
-        })?;
+        let p: CaptureScreenArgs = serde_json::from_str(args)
+            .map_err(|e| AppError::Validation(format!("capture_screen 参数解析失败: {e}")))?;
 
         // 读 gate（§4.3 读写分家）：Off 首入兼容直过；暂停 park（取消感知）；
         // 域内被关 → 家族错误。截图彼此自由并发，不取写令牌。
@@ -206,7 +205,9 @@ impl McpClient for CaptureScreenTool {
         let region = phys_region;
         let frame = tokio::task::spawn_blocking(move || backend.capture(region))
             .await
-            .map_err(|e| AppError::Internal(format!("screen 捕获失败: 捕获线程 join 失败: {e}")))??;
+            .map_err(|e| {
+                AppError::Internal(format!("screen 捕获失败: 捕获线程 join 失败: {e}"))
+            })??;
 
         // 步骤 5a 全屏识别：纯色连击/近纯色提示只对整屏捕获生效（region 裁剪
         // 纯色区是正常操作——放大看细节）；前台铺满提示帮模型理解「整屏=一个应用」。
@@ -265,7 +266,8 @@ impl CaptureScreenTool {
             AppError::Validation(
                 "screen 坐标基准缺失: 本会话还没有截图，region 坐标无从换算——\
                  先调用一次不带 region 的 capture_screen 建立坐标基准，\
-                 再按返回图中的位置裁剪".into(),
+                 再按返回图中的位置裁剪"
+                    .into(),
             )
         })?;
         let (px, py) = prev.img_to_phys(x, y);
@@ -334,17 +336,13 @@ fn encode_png_ladder_with(
         let mut buf = Vec::with_capacity(256 * 1024);
         DynamicImage::ImageRgba8(current.clone())
             .write_to(&mut Cursor::new(&mut buf), ImageFormat::Png)
-            .map_err(|e| {
-                AppError::Internal(format!("screen 捕获失败: PNG 编码失败: {e}"))
-            })?;
+            .map_err(|e| AppError::Internal(format!("screen 捕获失败: PNG 编码失败: {e}")))?;
         if buf.len() <= max_bytes {
             return Ok((buf, w, h));
         }
         last = Some((buf, w, h));
     }
-    last.ok_or_else(|| {
-        AppError::Internal("screen 捕获失败: PNG 编码阶梯为空（内部错误）".into())
-    })
+    last.ok_or_else(|| AppError::Internal("screen 捕获失败: PNG 编码阶梯为空（内部错误）".into()))
 }
 
 // =========================================================================
@@ -499,7 +497,10 @@ fn finish_action_output(
                 "image_size".into(),
                 serde_json::json!({ "width": meta.sent_width, "height": meta.sent_height }),
             );
-            echo.insert("pixel_scale".into(), serde_json::json!({ "x": sx, "y": sy }));
+            echo.insert(
+                "pixel_scale".into(),
+                serde_json::json!({ "x": sx, "y": sy }),
+            );
             let note = if stable {
                 "Done. A screenshot taken right after this action is attached and is NOW the most \
                  recent image — use ITS pixel space (image_size) for your next coordinates. Judge \
@@ -516,10 +517,13 @@ fn finish_action_output(
             ToolOutput::with_image(serde_json::Value::Object(echo).to_string(), png)
         }
         None => {
-            echo.insert("note".into(), serde_json::json!(
+            echo.insert(
+                "note".into(),
+                serde_json::json!(
                 "Done, but the automatic follow-up screenshot failed — call capture_screen to see \
                  the result before deciding the next step."
-            ));
+            ),
+            );
             ToolOutput::text(serde_json::Value::Object(echo).to_string())
         }
     }
@@ -578,9 +582,8 @@ fn sampled_unique_colors(frame: &RgbaFrame) -> usize {
 
 /// 整屏纯色连击（per-conv）：仅整屏捕获参与计数——region 裁剪/窗口捕获不碰
 /// （裁剪纯色区、窗口本体纯色都可能正常）。
-static MONO_STREAKS: std::sync::OnceLock<
-    std::sync::Mutex<std::collections::HashMap<String, u32>>,
-> = std::sync::OnceLock::new();
+static MONO_STREAKS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, u32>>> =
+    std::sync::OnceLock::new();
 
 fn mono_streaks() -> &'static std::sync::Mutex<std::collections::HashMap<String, u32>> {
     MONO_STREAKS.get_or_init(Default::default)
@@ -609,7 +612,8 @@ fn classify_full_capture(conv: &str, frame: &RgbaFrame) -> AppResult<Option<Stri
                 "screen 捕获失败: 连续 2 次整屏捕获画面为纯黑/纯色——目标可能处于全屏\
                  独占（游戏）或受 DRM 保护的内容（视频站点），GDI 桌面捕获拿不到真实\
                  画面。请改用 capture_window 按窗口捕获重试；若仍为纯色，说明内容确实\
-                 受保护，请告知用户换窗口或放弃此目标，勿继续反复截屏".into(),
+                 受保护，请告知用户换窗口或放弃此目标，勿继续反复截屏"
+                    .into(),
             ));
         }
     }
@@ -851,9 +855,8 @@ impl McpClient for CaptureWindowTool {
     }
 
     async fn execute_with_output(&self, args: &str, ctx: &ToolContext) -> AppResult<ToolOutput> {
-        let p: CaptureWindowArgs = serde_json::from_str(args).map_err(|e| {
-            AppError::Validation(format!("capture_window 参数解析失败: {e}"))
-        })?;
+        let p: CaptureWindowArgs = serde_json::from_str(args)
+            .map_err(|e| AppError::Validation(format!("capture_window 参数解析失败: {e}")))?;
 
         // 读 gate（同 capture_screen：Off 首入兼容直过 / 暂停 park / 域内被关家族错误）
         channel::global().gate_read(ctx.cancel.as_ref()).await?;
@@ -882,7 +885,8 @@ impl McpClient for CaptureWindowTool {
                         let h = self.backend.foreground_window().ok_or_else(|| {
                             AppError::Internal(
                                 "screen 捕获失败: 当前无前台窗口（可能锁屏/无交互会话）——\
-                                 请改用 list_windows 按标题指定窗口".into(),
+                                 请改用 list_windows 按标题指定窗口"
+                                    .into(),
                             )
                         })?;
                         (h, None)
@@ -895,7 +899,9 @@ impl McpClient for CaptureWindowTool {
         let (backend, h) = (self.backend.clone(), hwnd);
         let (frame, rect) = tokio::task::spawn_blocking(move || backend.capture_window(h))
             .await
-            .map_err(|e| AppError::Internal(format!("screen 捕获失败: 捕获线程 join 失败: {e}")))??;
+            .map_err(|e| {
+                AppError::Internal(format!("screen 捕获失败: 捕获线程 join 失败: {e}"))
+            })??;
 
         let (png, sent_w, sent_h) = encode_png_ladder(frame)?;
         let meta = CaptureMeta {
@@ -947,8 +953,8 @@ fn window_titles_hint(windows: &[WindowInfo]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+    use std::sync::Mutex;
 
     /// 可编程假后端：固定布局/显示器表，capture 返回可编程帧（默认纯色）并
     /// 记录最近请求的区域；窗口表/前台可运行期注入。
@@ -1135,7 +1141,10 @@ mod tests {
 
         let out = tool.execute_with_output("{}", &ctx).await.unwrap();
         // PNG 魔数 + 体积声明一致
-        assert_eq!(&out.image_png.as_ref().unwrap()[..4], &[0x89, b'P', b'N', b'G']);
+        assert_eq!(
+            &out.image_png.as_ref().unwrap()[..4],
+            &[0x89, b'P', b'N', b'G']
+        );
         let v: serde_json::Value = serde_json::from_str(&out.text).unwrap();
         assert_eq!(
             v["image_size"]["width"].as_u64().unwrap(),
@@ -1268,8 +1277,7 @@ mod tests {
     #[test]
     fn ladder_oversize_falls_back_to_last_rung() {
         // 噪声 256×256：ladder [128, 64]，限额 1KB——两档都超，兜底返回最后一档
-        let (png, w, h) =
-            encode_png_ladder_with(noise_frame(256, 256), &[128, 64], 1024).unwrap();
+        let (png, w, h) = encode_png_ladder_with(noise_frame(256, 256), &[128, 64], 1024).unwrap();
         assert_eq!((w, h), (64, 64));
         assert!(png.len() > 1024, "噪声兜底档不伪装达标");
     }
@@ -1313,8 +1321,14 @@ mod tests {
         let tool = CaptureWindowTool::new(backend.clone(), state.clone());
         let ctx = make_ctx("cw1").await;
 
-        let out = tool.execute_with_output(r#"{"hwnd":101}"#, &ctx).await.unwrap();
-        assert_eq!(&out.image_png.as_ref().unwrap()[..4], &[0x89, b'P', b'N', b'G']);
+        let out = tool
+            .execute_with_output(r#"{"hwnd":101}"#, &ctx)
+            .await
+            .unwrap();
+        assert_eq!(
+            &out.image_png.as_ref().unwrap()[..4],
+            &[0x89, b'P', b'N', b'G']
+        );
         assert_eq!(*backend.last_window_capture.lock().unwrap(), Some(101));
         // 坐标基准锚定窗口矩形（1200×800 ≤1600 → 原尺寸直出）
         let meta = state.get("cw1").unwrap();

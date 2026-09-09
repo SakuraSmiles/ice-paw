@@ -136,7 +136,9 @@ fn ensure_hud(app: &tauri::AppHandle, monitors: &[tauri::Monitor], index: usize)
         .build();
     match built {
         Ok(_) => tracing::info!(target: "ice_paw.screen_channel", index, "HUD 工具栏窗已创建"),
-        Err(e) => tracing::warn!(target: "ice_paw.screen_channel", error = %e, "HUD 工具栏窗创建失败"),
+        Err(e) => {
+            tracing::warn!(target: "ice_paw.screen_channel", error = %e, "HUD 工具栏窗创建失败")
+        }
     }
 }
 
@@ -171,25 +173,21 @@ fn ensure_frame(app: &tauri::AppHandle, monitors: &[tauri::Monitor]) {
         .flatten()
         .map(|m| m.scale_factor())
         .unwrap_or(1.0);
-    let built = WebviewWindowBuilder::new(
-        app,
-        FRAME_LABEL,
-        WebviewUrl::App("screen-frame".into()),
-    )
-    .title("IcePaw 屏幕共享边框")
-    .decorations(false)
-    .transparent(true)
-    .always_on_top(true)
-    .skip_taskbar(true)
-    .resizable(false)
-    .maximizable(false)
-    .minimizable(false)
-    .closable(false)
-    .shadow(false)
-    .inner_size(phys_w as f64 / scale, phys_h as f64 / scale)
-    .position(x0 as f64 / scale, y0 as f64 / scale)
-    .focused(false)
-    .build();
+    let built = WebviewWindowBuilder::new(app, FRAME_LABEL, WebviewUrl::App("screen-frame".into()))
+        .title("IcePaw 屏幕共享边框")
+        .decorations(false)
+        .transparent(true)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .resizable(false)
+        .maximizable(false)
+        .minimizable(false)
+        .closable(false)
+        .shadow(false)
+        .inner_size(phys_w as f64 / scale, phys_h as f64 / scale)
+        .position(x0 as f64 / scale, y0 as f64 / scale)
+        .focused(false)
+        .build();
     let win = match built {
         Ok(win) => win,
         Err(e) => {

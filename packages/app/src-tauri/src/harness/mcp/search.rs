@@ -231,7 +231,10 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("目录不存在"), "{err}");
-        assert!(err.contains("list_directory") || err.contains("近似候选"), "{err}");
+        assert!(
+            err.contains("list_directory") || err.contains("近似候选"),
+            "{err}"
+        );
     }
 
     /// 根路径是文件：指路 read_file，不静默空结果

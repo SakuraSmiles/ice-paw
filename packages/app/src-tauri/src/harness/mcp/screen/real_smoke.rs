@@ -80,7 +80,11 @@ fn assert_live_content(frame: &RgbaFrame, what: &str) {
 fn cursor_pos() -> (i32, i32) {
     let mut pt = POINT { x: 0, y: 0 };
     // SAFETY: 写入栈上 POINT；失败（无交互会话）返回 0——冒烟环境必然有。
-    assert_ne!(unsafe { GetCursorPos(&mut pt) }, 0, "GetCursorPos 失败（无交互会话？）");
+    assert_ne!(
+        unsafe { GetCursorPos(&mut pt) },
+        0,
+        "GetCursorPos 失败（无交互会话？）"
+    );
     (pt.x, pt.y)
 }
 
@@ -143,7 +147,10 @@ fn real_smoke_captures_full_monitor_window() {
     // ② 末位显示器（非主屏/负原点路径）
     let mi = monitors.len() - 1;
     let frame = b.capture(monitors[mi]).unwrap();
-    assert_eq!((frame.width, frame.height), (monitors[mi].width, monitors[mi].height));
+    assert_eq!(
+        (frame.width, frame.height),
+        (monitors[mi].width, monitors[mi].height)
+    );
     assert_live_content(&frame, "末位显示器捕获");
     println!(
         "显示器[{mi}] PNG: {}",
@@ -190,10 +197,7 @@ fn real_smoke_mouse_abs_lands_on_targets() {
     // 目标点 = 每台显示器中心：多屏机器天然覆盖负原点/非主屏的完整换算链
     //（img→phys 由生产代码换算，这里直接从物理坐标走 phys→abs→SendInput）。
     for (i, m) in monitors.iter().enumerate() {
-        let target = (
-            m.x + m.width as i32 / 2,
-            m.y + m.height as i32 / 2,
-        );
+        let target = (m.x + m.width as i32 / 2, m.y + m.height as i32 / 2);
         let (ax, ay) = phys_to_absolute(&layout, target.0, target.1);
         b.mouse_move_abs(ax, ay).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(150));

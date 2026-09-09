@@ -461,7 +461,8 @@ async fn stream_loop_inner(
         // 语义：只提醒一次（首达阈值那轮），不逐轮轰炸；与钩子注入共用 round_injected 通道。
         let budget_reminder = if effective_max_tokens != usize::MAX
             && cumulative_tokens * 10 >= effective_max_tokens * 9  // ≥90% 已用
-            && cumulative_tokens <= effective_max_tokens            // 未触顶（触顶走终止路径）
+            && cumulative_tokens <= effective_max_tokens
+        // 未触顶（触顶走终止路径）
         {
             let first = !budget_reminder_sent;
             budget_reminder_sent = true; // 首次置位；此后轮次 false
@@ -531,13 +532,12 @@ async fn stream_loop_inner(
                     // 跨轮 collected_usage——后者在 provider 间歇不回 usage 时保留
                     // 上一轮旧值，会被每轮重复累加导致虚高。
                     //（须在下方 `collected_usage = Some(u)` move 之前读取 u 的字段。）
-                    cumulative_tokens = cumulative_tokens.saturating_add(
-                        crate::harness::budget::billed_tokens(
+                    cumulative_tokens =
+                        cumulative_tokens.saturating_add(crate::harness::budget::billed_tokens(
                             u.prompt_tokens as u64,
                             u.cached_tokens as u64,
                             u.completion_tokens as u64,
-                        ) as usize,
-                    );
+                        ) as usize);
                     cumulative_cached_tokens =
                         cumulative_cached_tokens.saturating_add(u.cached_tokens as usize);
                     cumulative_prompt_tokens =
@@ -1093,7 +1093,11 @@ async fn stream_loop_inner(
                 &ev,
                 &current_asst_msg_id,
                 "doom_loop",
-                synthesize_usage(first_prompt_tokens, total_completion_tokens, collected_usage),
+                synthesize_usage(
+                    first_prompt_tokens,
+                    total_completion_tokens,
+                    collected_usage,
+                ),
                 first_prompt_tokens,
                 tool_round + 1,
             )

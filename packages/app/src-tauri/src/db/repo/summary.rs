@@ -396,10 +396,12 @@ mod tests {
             .unwrap();
         seed(&pool, "conv-s6").await;
         // 零事件会话（pre-Phase-0 旧库残留、backfill 未覆盖的形态）
-        sqlx::query("INSERT INTO conversations (id, agent_id, title) VALUES ('conv-s7', 'agent-s', 't')")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO conversations (id, agent_id, title) VALUES ('conv-s7', 'agent-s', 't')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
 
         // conv-s6：锚点消息 m-a + 事件序（seq 由 per-session MAX+1 分配）
         sqlx::query(
@@ -409,11 +411,10 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let anchor_rowid: i64 =
-            sqlx::query_scalar("SELECT rowid FROM messages WHERE id = 'm-a'")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let anchor_rowid: i64 = sqlx::query_scalar("SELECT rowid FROM messages WHERE id = 'm-a'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         // 事件 payload 对本 SQL 不敏感（只看 kind/message_id/seq），统一 "{}"。
         let mut seqs = Vec::new();
         for (kind, mid) in [
@@ -453,11 +454,10 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let zero_rowid: i64 =
-            sqlx::query_scalar("SELECT rowid FROM messages WHERE id = 'm-b'")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let zero_rowid: i64 = sqlx::query_scalar("SELECT rowid FROM messages WHERE id = 'm-b'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
 
         // 预置 pre-migration 形态的摘要行（covered_until_seq=NULL）
         insert_summary_message(&pool, "conv-s6", "有事件会话摘要", None, anchor_rowid)

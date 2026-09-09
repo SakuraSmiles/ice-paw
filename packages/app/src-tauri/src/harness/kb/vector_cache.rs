@@ -147,11 +147,14 @@ impl KbVectorCache {
         for id in kb_ids {
             let sig = sigs.get(id).copied().unwrap_or(EMPTY_KB_SIG);
             let chunks = entries.get(id).cloned().unwrap_or_default();
-            guard.insert(id.clone(), CacheEntry {
-                sig,
-                model: model.to_string(),
-                chunks,
-            });
+            guard.insert(
+                id.clone(),
+                CacheEntry {
+                    sig,
+                    model: model.to_string(),
+                    chunks,
+                },
+            );
         }
     }
 
@@ -313,11 +316,9 @@ mod tests {
             "模型不同应 miss"
         );
         // 同模型恢复命中
-        assert!(
-            cache
-                .with_matches(std::slice::from_ref(&kb), &sigs, "embedding-3", |_| ())
-                .is_some()
-        );
+        assert!(cache
+            .with_matches(std::slice::from_ref(&kb), &sigs, "embedding-3", |_| ())
+            .is_some());
     }
 
     #[test]
@@ -342,11 +343,9 @@ mod tests {
             );
         }
         // 签名回旧值 → 命中（比较纯按值）
-        assert!(
-            cache
-                .with_matches(std::slice::from_ref(&kb), &sigs, "embedding-3", |_| ())
-                .is_some()
-        );
+        assert!(cache
+            .with_matches(std::slice::from_ref(&kb), &sigs, "embedding-3", |_| ())
+            .is_some());
     }
 
     #[test]
@@ -361,11 +360,9 @@ mod tests {
 
         // k2 从未缓存 → all-or-nothing miss（即使 k1 签名仍匹配）
         let sigs2 = HashMap::from([(k1.clone(), (1, 1, 1, 1)), (k2.clone(), (1, 1, 1, 1))]);
-        assert!(
-            cache
-                .with_matches(&[k1.clone(), k2.clone()], &sigs2, "embedding-3", |_| ())
-                .is_none()
-        );
+        assert!(cache
+            .with_matches(&[k1.clone(), k2.clone()], &sigs2, "embedding-3", |_| ())
+            .is_none());
     }
 
     #[test]
@@ -387,11 +384,9 @@ mod tests {
 
         // k2 后来进 chunk → DB 签名出现 → miss（失效正确）
         let sigs2 = HashMap::from([(k1.clone(), (1, 1, 1, 1)), (k2.clone(), (1, 0, 9, 4))]);
-        assert!(
-            cache
-                .with_matches(&[k1.clone(), k2.clone()], &sigs2, "embedding-3", |_| ())
-                .is_none()
-        );
+        assert!(cache
+            .with_matches(&[k1.clone(), k2.clone()], &sigs2, "embedding-3", |_| ())
+            .is_none());
     }
 
     #[test]
@@ -410,7 +405,10 @@ mod tests {
 
         // 缓存面：k1 整体丢弃、k2 入账
         let (entries, skipped) = group_complete(decoded);
-        assert!(!entries.contains_key("k1"), "不完整 KB 不入缓存（下次重试懒生成）");
+        assert!(
+            !entries.contains_key("k1"),
+            "不完整 KB 不入缓存（下次重试懒生成）"
+        );
         assert_eq!(entries["k2"].len(), 1);
         assert_eq!(entries["k2"][0].file_path, "b.md");
         assert_eq!(skipped, vec!["k1".to_string()], "跳过名单供日志披露");

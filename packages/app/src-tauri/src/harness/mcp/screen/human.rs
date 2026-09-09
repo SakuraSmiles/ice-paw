@@ -126,9 +126,9 @@ mod hooks {
 
     use windows_sys::Win32::System::Threading::GetCurrentThreadId;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CallNextHookEx, GetMessageW, KBDLLHOOKSTRUCT, LLKHF_INJECTED, LLMHF_INJECTED, MSG,
-        MSLLHOOKSTRUCT, PostThreadMessageW, SetWindowsHookExW, UnhookWindowsHookEx,
-        WH_KEYBOARD_LL, WH_MOUSE_LL, WM_QUIT,
+        CallNextHookEx, GetMessageW, PostThreadMessageW, SetWindowsHookExW, UnhookWindowsHookEx,
+        KBDLLHOOKSTRUCT, LLKHF_INJECTED, LLMHF_INJECTED, MSG, MSLLHOOKSTRUCT, WH_KEYBOARD_LL,
+        WH_MOUSE_LL, WM_QUIT,
     };
 
     /// 本地常量（VK 码表同纪律：不 import windows-sys 常量，防跨版本漂移）。
@@ -173,18 +173,10 @@ mod hooks {
         let handle = std::thread::Builder::new()
             .name("screen-human-hook".into())
             .spawn(move || unsafe {
-                let mouse = SetWindowsHookExW(
-                    WH_MOUSE_LL,
-                    Some(mouse_proc),
-                    std::ptr::null_mut(),
-                    0,
-                );
-                let kbd = SetWindowsHookExW(
-                    WH_KEYBOARD_LL,
-                    Some(kbd_proc),
-                    std::ptr::null_mut(),
-                    0,
-                );
+                let mouse =
+                    SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_proc), std::ptr::null_mut(), 0);
+                let kbd =
+                    SetWindowsHookExW(WH_KEYBOARD_LL, Some(kbd_proc), std::ptr::null_mut(), 0);
                 if mouse.is_null() || kbd.is_null() {
                     if !mouse.is_null() {
                         UnhookWindowsHookEx(mouse);

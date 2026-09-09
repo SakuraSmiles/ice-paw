@@ -27,7 +27,7 @@
 
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::infra::protocol::{ToolAuthResponse, ToolAuthRespondedPayload};
+use crate::infra::protocol::{ToolAuthRespondedPayload, ToolAuthResponse};
 
 /// 主窗 label（tauri.conf.json `app.windows[0].label`）
 const MAIN_WINDOW: &str = "main";
@@ -71,7 +71,9 @@ fn show_toast_windows(app: &AppHandle, title: &str, body: &str, request_id: Opti
     use tauri_winrt_notification::Toast;
 
     // 模板行：title = 加粗标题行，text1 = 正文行（ToastText02 形态）
-    let mut toast = Toast::new(&app.config().identifier).title(title).text1(body);
+    let mut toast = Toast::new(&app.config().identifier)
+        .title(title)
+        .text1(body);
     if let Some(rid) = request_id {
         let app_handle = app.clone();
         let rid = rid.to_string();

@@ -22,9 +22,9 @@ use crate::error::{AppError, AppResult};
 use crate::harness::doc::{
     apply_edits_to_bytes_locked, apply_numbering_edits_to_bytes, apply_style_edits_to_bytes,
     build_builtin_template, generate_from_template, inspect_document, load_image,
-    validate_document, AssertSpec, BUILTIN_TEMPLATES, EditOp, InspectProjection, InspectRequest,
-    MAX_WRITE_BLOCKS, NumberingEditOp, StyleContainer, StyleEditOp, StyleType, ValidateReport,
-    WriteBlock,
+    validate_document, AssertSpec, EditOp, InspectProjection, InspectRequest, NumberingEditOp,
+    StyleContainer, StyleEditOp, StyleType, ValidateReport, WriteBlock, BUILTIN_TEMPLATES,
+    MAX_WRITE_BLOCKS,
 };
 
 use super::client::{McpClient, ToolContext};
@@ -246,7 +246,11 @@ impl McpClient for InspectDocxTool {
             total_blocks: report.total_blocks,
             range: report.range,
             has_more: report.has_more,
-            next_start: if report.has_more { Some(report.range.1 + 1) } else { None },
+            next_start: if report.has_more {
+                Some(report.range.1 + 1)
+            } else {
+                None
+            },
             content: report.content,
         };
         Ok(serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string()))
@@ -451,7 +455,10 @@ impl McpClient for ValidateDocxTool {
             .map_err(|e| AppError::Io(std::io::Error::other(format!("读取文件失败: {e}"))))?;
 
         let report = validate_document(&bytes, &parsed.assertions)?;
-        let result = ValidateDocxResult { path: parsed.path, report };
+        let result = ValidateDocxResult {
+            path: parsed.path,
+            report,
+        };
         Ok(serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string()))
     }
 }
@@ -488,7 +495,11 @@ struct EditDocxArgs {
 #[derive(Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 enum OperationSpec {
-    ReplaceText { block: usize, expect_prefix: String, new_text: String },
+    ReplaceText {
+        block: usize,
+        expect_prefix: String,
+        new_text: String,
+    },
     InsertParagraphAfter {
         block: usize,
         expect_prefix: String,
@@ -497,9 +508,16 @@ enum OperationSpec {
         #[serde(default)]
         style: Option<String>,
     },
-    DeleteBlock { block: usize, expect_prefix: String },
+    DeleteBlock {
+        block: usize,
+        expect_prefix: String,
+    },
     /// 改段落样式（标题升降级等）：style 接受显示名或样式 ID；正文 run 不动
-    SetStyle { block: usize, expect_prefix: String, style: String },
+    SetStyle {
+        block: usize,
+        expect_prefix: String,
+        style: String,
+    },
     /// 改格式：paragraph（对齐/行距/段前后/缩进）与 character（粗斜/字号/颜色/字体）
     /// 至少一项内有字段；None 字段原样保留
     SetFormat {
@@ -563,7 +581,13 @@ enum OperationSpec {
     /// 改单元格文本：(row, cell) 双 1-based，与 projection=table 网格同口径；
     /// 保 tcPr；\n = 格内多段。格式保真：新段落数与原格相等 → 逐段按位继承
     /// 原各段格式；不等 → 回落首段格式（摘要会标注）
-    SetCellText { block: usize, expect_prefix: String, row: usize, cell: usize, text: String },
+    SetCellText {
+        block: usize,
+        expect_prefix: String,
+        row: usize,
+        cell: usize,
+        text: String,
+    },
     /// 克隆模板行增行（after_row 缺省 = 末行）：整结构克隆（tcPr/gridSpan/vMerge
     /// 原样），格文本替换为 cells（缺省全空；填充段与模板格段数相等时逐段
     /// 继承格式）——合并格表格唯一正确增行方式
@@ -640,11 +664,17 @@ enum OperationSpec {
     /// 口径。结构重构（该行下方行号整体前移，与同表其他操作的行区间相交即拒）；
     /// 行内含纵向合并头且下方有续格 → 拒（指路先 split_cell）；仅剩 1 行 → 拒
     ///（指路 delete_block 删整表）
-    DeleteTableRow { block: usize, expect_prefix: String, row: usize },
+    DeleteTableRow {
+        block: usize,
+        expect_prefix: String,
+        row: usize,
+    },
     /// 清空正文（模板复用终件，D12）：删全部 body 块（含 sectPr 的块跳过——分节/
     /// 页面/页眉页脚结构保留）；expect_blocks = 当前块数指纹（防错删别人的文档）。
     /// 独占一批
-    ClearBody { expect_blocks: usize },
+    ClearBody {
+        expect_blocks: usize,
+    },
     /// 新建样式（最小出生：type/name/basedOn/qFormat；细节同批 set_style_element
     /// 补——寻址放应用期，create→set 天然可组合）。name/ID 双撞拒
     CreateStyle {
@@ -838,34 +868,87 @@ impl OperationSpec {
     fn into_family(self, workspace: Option<&str>) -> AppResult<FamilyOp> {
         Ok(match self {
             // ---- document 族 ----
-            OperationSpec::ReplaceText { block, expect_prefix, new_text } => {
-                FamilyOp::Doc(EditOp::ReplaceText { block, expect_prefix, new_text })
-            }
-            OperationSpec::InsertParagraphAfter { block, expect_prefix, text, style } => {
-                FamilyOp::Doc(EditOp::InsertParagraphAfter { block, expect_prefix, text, style })
-            }
-            OperationSpec::DeleteBlock { block, expect_prefix } => {
-                FamilyOp::Doc(EditOp::DeleteBlock { block, expect_prefix })
-            }
-            OperationSpec::SetStyle { block, expect_prefix, style } => {
-                FamilyOp::Doc(EditOp::SetStyle { block, expect_prefix, style })
-            }
-            OperationSpec::SetFormat { block, expect_prefix, paragraph, character } => {
-                FamilyOp::Doc(EditOp::SetFormat {
+            OperationSpec::ReplaceText {
+                block,
+                expect_prefix,
+                new_text,
+            } => FamilyOp::Doc(EditOp::ReplaceText {
+                block,
+                expect_prefix,
+                new_text,
+            }),
+            OperationSpec::InsertParagraphAfter {
+                block,
+                expect_prefix,
+                text,
+                style,
+            } => FamilyOp::Doc(EditOp::InsertParagraphAfter {
+                block,
+                expect_prefix,
+                text,
+                style,
+            }),
+            OperationSpec::DeleteBlock {
+                block,
+                expect_prefix,
+            } => FamilyOp::Doc(EditOp::DeleteBlock {
+                block,
+                expect_prefix,
+            }),
+            OperationSpec::SetStyle {
+                block,
+                expect_prefix,
+                style,
+            } => FamilyOp::Doc(EditOp::SetStyle {
+                block,
+                expect_prefix,
+                style,
+            }),
+            OperationSpec::SetFormat {
+                block,
+                expect_prefix,
+                paragraph,
+                character,
+            } => FamilyOp::Doc(EditOp::SetFormat {
+                block,
+                expect_prefix,
+                paragraph: paragraph.map(Into::into),
+                character: character.map(Into::into),
+            }),
+            OperationSpec::SetPprElement {
+                block,
+                expect_prefix,
+                element,
+                xml,
+            } => FamilyOp::Doc(EditOp::SetPprElement {
+                block,
+                expect_prefix,
+                element,
+                xml,
+            }),
+            OperationSpec::InsertTableAfter {
+                block,
+                expect_prefix,
+                rows,
+                rows_text,
+                header,
+                table_style,
+            } => {
+                let rows = resolve_table_rows(rows, rows_text)?;
+                FamilyOp::Doc(EditOp::InsertTableAfter {
                     block,
                     expect_prefix,
-                    paragraph: paragraph.map(Into::into),
-                    character: character.map(Into::into),
+                    rows,
+                    header,
+                    table_style,
                 })
             }
-            OperationSpec::SetPprElement { block, expect_prefix, element, xml } => {
-                FamilyOp::Doc(EditOp::SetPprElement { block, expect_prefix, element, xml })
-            }
-            OperationSpec::InsertTableAfter { block, expect_prefix, rows, rows_text, header, table_style } => {
-                let rows = resolve_table_rows(rows, rows_text)?;
-                FamilyOp::Doc(EditOp::InsertTableAfter { block, expect_prefix, rows, header, table_style })
-            }
-            OperationSpec::InsertImageAfter { block, expect_prefix, image_path, width_mm } => {
+            OperationSpec::InsertImageAfter {
+                block,
+                expect_prefix,
+                image_path,
+                width_mm,
+            } => {
                 // 图片装载（读侧第二路径：只读不授权 + 格式/大小闸在装载层）
                 let image = load_image(&image_path, workspace)?;
                 FamilyOp::Doc(EditOp::InsertImageAfter {
@@ -880,20 +963,41 @@ impl OperationSpec {
                     docpr_id: 0,
                 })
             }
-            OperationSpec::InsertTocAfter { block, expect_prefix, levels, hyperlink } => {
-                FamilyOp::Doc(EditOp::InsertTocAfter {
-                    block,
-                    expect_prefix,
-                    levels: levels.unwrap_or(3),
-                    hyperlink: hyperlink.unwrap_or(true),
-                })
-            }
-            OperationSpec::SetCellText { block, expect_prefix, row, cell, text } => {
-                FamilyOp::Doc(EditOp::SetCellText { block, expect_prefix, row, cell, text })
-            }
-            OperationSpec::InsertTableRowAfter { block, expect_prefix, after_row, cells } => {
-                FamilyOp::Doc(EditOp::InsertTableRowAfter { block, expect_prefix, after_row, cells })
-            }
+            OperationSpec::InsertTocAfter {
+                block,
+                expect_prefix,
+                levels,
+                hyperlink,
+            } => FamilyOp::Doc(EditOp::InsertTocAfter {
+                block,
+                expect_prefix,
+                levels: levels.unwrap_or(3),
+                hyperlink: hyperlink.unwrap_or(true),
+            }),
+            OperationSpec::SetCellText {
+                block,
+                expect_prefix,
+                row,
+                cell,
+                text,
+            } => FamilyOp::Doc(EditOp::SetCellText {
+                block,
+                expect_prefix,
+                row,
+                cell,
+                text,
+            }),
+            OperationSpec::InsertTableRowAfter {
+                block,
+                expect_prefix,
+                after_row,
+                cells,
+            } => FamilyOp::Doc(EditOp::InsertTableRowAfter {
+                block,
+                expect_prefix,
+                after_row,
+                cells,
+            }),
             OperationSpec::SetCellFormat {
                 block,
                 expect_prefix,
@@ -911,17 +1015,23 @@ impl OperationSpec {
                 character: character.map(Into::into),
                 style,
             }),
-            OperationSpec::SetTableElement { block, expect_prefix, level, row, cell, element, xml } => {
-                FamilyOp::Doc(EditOp::SetTableElement {
-                    block,
-                    expect_prefix,
-                    level: level.into(),
-                    row,
-                    cell,
-                    element,
-                    xml,
-                })
-            }
+            OperationSpec::SetTableElement {
+                block,
+                expect_prefix,
+                level,
+                row,
+                cell,
+                element,
+                xml,
+            } => FamilyOp::Doc(EditOp::SetTableElement {
+                block,
+                expect_prefix,
+                level: level.into(),
+                row,
+                cell,
+                element,
+                xml,
+            }),
             OperationSpec::MergeCells {
                 block,
                 expect_prefix,
@@ -941,44 +1051,63 @@ impl OperationSpec {
                 end_row,
                 end_cell,
             }),
-            OperationSpec::SplitCell { block, expect_prefix, direction, row, cell } => {
-                FamilyOp::Doc(EditOp::SplitCell {
-                    block,
-                    expect_prefix,
-                    direction: direction.into(),
-                    row,
-                    cell,
-                })
-            }
-            OperationSpec::DeleteTableRow { block, expect_prefix, row } => {
-                FamilyOp::Doc(EditOp::DeleteTableRow { block, expect_prefix, row })
-            }
+            OperationSpec::SplitCell {
+                block,
+                expect_prefix,
+                direction,
+                row,
+                cell,
+            } => FamilyOp::Doc(EditOp::SplitCell {
+                block,
+                expect_prefix,
+                direction: direction.into(),
+                row,
+                cell,
+            }),
+            OperationSpec::DeleteTableRow {
+                block,
+                expect_prefix,
+                row,
+            } => FamilyOp::Doc(EditOp::DeleteTableRow {
+                block,
+                expect_prefix,
+                row,
+            }),
             // ---- styles 族 ----
-            OperationSpec::CreateStyle { style_type, name, style_id, based_on } => {
-                FamilyOp::Style(StyleEditOp::CreateStyle {
-                    style_type: style_type.into(),
-                    name,
-                    style_id,
-                    based_on,
-                })
-            }
-            OperationSpec::SetStyleElement { style, container, element, xml } => {
-                FamilyOp::Style(StyleEditOp::SetStyleElement {
-                    style,
-                    container: container.into(),
-                    element,
-                    xml,
-                })
-            }
+            OperationSpec::CreateStyle {
+                style_type,
+                name,
+                style_id,
+                based_on,
+            } => FamilyOp::Style(StyleEditOp::CreateStyle {
+                style_type: style_type.into(),
+                name,
+                style_id,
+                based_on,
+            }),
+            OperationSpec::SetStyleElement {
+                style,
+                container,
+                element,
+                xml,
+            } => FamilyOp::Style(StyleEditOp::SetStyleElement {
+                style,
+                container: container.into(),
+                element,
+                xml,
+            }),
             // ---- numbering 族 ----
-            OperationSpec::SetNumberingElement { num_id, level, element, xml } => {
-                FamilyOp::Numbering(NumberingEditOp::SetNumberingElement {
-                    num_id,
-                    level,
-                    element,
-                    xml,
-                })
-            }
+            OperationSpec::SetNumberingElement {
+                num_id,
+                level,
+                element,
+                xml,
+            } => FamilyOp::Numbering(NumberingEditOp::SetNumberingElement {
+                num_id,
+                level,
+                element,
+                xml,
+            }),
             // ---- clear_body：document 族（走 apply_edits_to_bytes）----
             OperationSpec::ClearBody { expect_blocks } => {
                 FamilyOp::Doc(EditOp::ClearBody { expect_blocks })
@@ -1712,10 +1841,7 @@ impl EditDocxTool {
         })
         .await
         .map_err(|e| AppError::Internal(format!("edit_docx 手术任务失败: {e}")))??;
-        let mut tmp_name = canonical
-            .file_name()
-            .unwrap_or_default()
-            .to_os_string();
+        let mut tmp_name = canonical.file_name().unwrap_or_default().to_os_string();
         tmp_name.push(".icepaw-tmp");
         let tmp = canonical.with_file_name(tmp_name);
         if let Err(e) = write_and_rename(&tmp, &canonical, &new_bytes).await {
@@ -1931,7 +2057,10 @@ fn available_templates_hint(workspace: Option<&str>, shared_dir: Option<&Path>) 
     }
     let mut sections: Vec<String> = Vec::new();
     if let Some(ws) = workspace {
-        sections.push(dir_section("workspace templates/", &Path::new(ws).join("templates")));
+        sections.push(dir_section(
+            "workspace templates/",
+            &Path::new(ws).join("templates"),
+        ));
     }
     if let Some(sd) = shared_dir {
         sections.push(dir_section("共享模板目录", sd));
@@ -2168,10 +2297,11 @@ impl McpClient for WriteDocxTool {
         let template_spec = parsed.template.clone().unwrap_or_else(|| "report".into());
         // 共享模板目录从 AppHandle 推导（app_data_dir/templates/，boot 已 ensure
         // 落盘）；无 AppHandle（单测/无头环境）→ 仅 workspace + 内置档位两层。
-        let shared_dir = ctx
-            .app_handle
-            .as_ref()
-            .and_then(|h| crate::logging::data_dir(h).ok().map(|d| d.join("templates")));
+        let shared_dir = ctx.app_handle.as_ref().and_then(|h| {
+            crate::logging::data_dir(h)
+                .ok()
+                .map(|d| d.join("templates"))
+        });
         let template = resolve_template(
             &template_spec,
             ctx.workspace.as_deref(),
@@ -2179,9 +2309,10 @@ impl McpClient for WriteDocxTool {
         )
         .await?;
         // 生成 = clear_body→锚→顺序写→validate 自检（zip 手术 + 整文档再解析），同步重活
-        let generated = tokio::task::spawn_blocking(move || generate_from_template(&template, &blocks))
-            .await
-            .map_err(|e| AppError::Internal(format!("write_docx 生成任务失败: {e}")))??;
+        let generated =
+            tokio::task::spawn_blocking(move || generate_from_template(&template, &blocks))
+                .await
+                .map_err(|e| AppError::Internal(format!("write_docx 生成任务失败: {e}")))??;
 
         // 父目录好默认：缺失自动创建（copy_file 同款）
         if let Some(parent) = target.parent() {
@@ -2233,11 +2364,15 @@ mod tests {
 
     /// docx-rs 造最小真实包（zip 容器 + document.xml）。
     fn docx_bytes() -> Vec<u8> {
-        use docx_rs::{Docx, Document, Paragraph, Run};
+        use docx_rs::{Document, Docx, Paragraph, Run};
         let document =
             Document::new().add_paragraph(Paragraph::new().add_run(Run::new().add_text("正文段")));
         let mut cursor = std::io::Cursor::new(Vec::<u8>::new());
-        Docx::new().document(document).build().pack(&mut cursor).unwrap();
+        Docx::new()
+            .document(document)
+            .build()
+            .pack(&mut cursor)
+            .unwrap();
         cursor.into_inner()
     }
 
@@ -2292,13 +2427,17 @@ mod tests {
 
     /// 三段正文的最小真实包。
     fn three_para_docx() -> Vec<u8> {
-        use docx_rs::{Docx, Document, Paragraph, Run};
+        use docx_rs::{Document, Docx, Paragraph, Run};
         let document = Document::new()
             .add_paragraph(Paragraph::new().add_run(Run::new().add_text("第一段")))
             .add_paragraph(Paragraph::new().add_run(Run::new().add_text("第二段")))
             .add_paragraph(Paragraph::new().add_run(Run::new().add_text("第三段")));
         let mut cursor = std::io::Cursor::new(Vec::<u8>::new());
-        Docx::new().document(document).build().pack(&mut cursor).unwrap();
+        Docx::new()
+            .document(document)
+            .build()
+            .pack(&mut cursor)
+            .unwrap();
         cursor.into_inner()
     }
 
@@ -2329,7 +2468,16 @@ mod tests {
         let bytes = std::fs::read(&file).unwrap();
         let inspect = crate::harness::doc::inspect_document(
             &bytes,
-            &InspectRequest { projection: InspectProjection::Text, start: None, end: None, row: None, cell: None, style: None, num_id: None, level: None },
+            &InspectRequest {
+                projection: InspectProjection::Text,
+                start: None,
+                end: None,
+                row: None,
+                cell: None,
+                style: None,
+                num_id: None,
+                level: None,
+            },
         )
         .unwrap();
         assert!(inspect.content.contains("新插段"));
@@ -2398,7 +2546,10 @@ mod tests {
 
     #[test]
     fn edit_auth_level_is_path_whitelist() {
-        assert_eq!(EditDocxTool.authorization_level(), AuthorizationLevel::PathWhitelist);
+        assert_eq!(
+            EditDocxTool.authorization_level(),
+            AuthorizationLevel::PathWhitelist
+        );
     }
 
     /// 定义族走工具真入口：create→set 同批组合 + styledef 投影读回 + 部件互斥拒。
@@ -2518,9 +2669,8 @@ mod tests {
         let assertions: Vec<_> = (0..51)
             .map(|i| serde_json::json!({ "kind": "block_count", "equals": i }))
             .collect();
-        let args =
-            serde_json::json!({ "path": file.to_string_lossy(), "assertions": assertions })
-                .to_string();
+        let args = serde_json::json!({ "path": file.to_string_lossy(), "assertions": assertions })
+            .to_string();
         let err = tool.execute(&args).await.unwrap_err().to_string();
         assert!(err.contains("断言数超限"), "实际: {err}");
 
@@ -2571,7 +2721,11 @@ mod tests {
         let err = tool.execute(&args).await.unwrap_err().to_string();
         assert!(err.contains("区间外块"), "实际: {err}");
         assert!(err.contains("1..=2"), "区间要在文案里: {err}");
-        assert_eq!(std::fs::read(&file).unwrap(), before, "拒批文件逐字节 untouched");
+        assert_eq!(
+            std::fs::read(&file).unwrap(),
+            before,
+            "拒批文件逐字节 untouched"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -2633,11 +2787,15 @@ mod tests {
 
     /// 表格工具测试用锚段包。
     fn anchored_docx() -> Vec<u8> {
-        use docx_rs::{Docx, Document, Paragraph, Run};
+        use docx_rs::{Document, Docx, Paragraph, Run};
         let document =
             Document::new().add_paragraph(Paragraph::new().add_run(Run::new().add_text("锚段")));
         let mut cursor = std::io::Cursor::new(Vec::<u8>::new());
-        Docx::new().document(document).build().pack(&mut cursor).unwrap();
+        Docx::new()
+            .document(document)
+            .build()
+            .pack(&mut cursor)
+            .unwrap();
         cursor.into_inner()
     }
 
@@ -2664,9 +2822,8 @@ mod tests {
                 "op": "insert_table_after", "block": 1, "expect_prefix": "锚段"
             });
             op[form] = data;
-            let args =
-                serde_json::json!({ "path": file.to_string_lossy(), "operations": [op] })
-                    .to_string();
+            let args = serde_json::json!({ "path": file.to_string_lossy(), "operations": [op] })
+                .to_string();
             let out = tool.execute(&args).await.unwrap();
             let v: serde_json::Value = serde_json::from_str(&out).unwrap();
             assert_eq!(v["applied"], 1, "{form}: {out}");
@@ -2680,7 +2837,16 @@ mod tests {
         // 读回：表格内容正确落格（含 \| 还原的字面竖线）
         let inspect = crate::harness::doc::inspect_document(
             &file_bytes[0],
-            &InspectRequest { projection: InspectProjection::Table, start: None, end: None, row: None, cell: None, style: None, num_id: None, level: None },
+            &InspectRequest {
+                projection: InspectProjection::Table,
+                start: None,
+                end: None,
+                row: None,
+                cell: None,
+                style: None,
+                num_id: None,
+                level: None,
+            },
         )
         .unwrap();
         assert!(inspect.content.contains("a|b"), "{}", inspect.content);
@@ -2833,7 +2999,10 @@ mod tests {
 
         // 读回：四类内容全在且块序正确（text 投影带块号顺序输出）
         let text = read_back_text(&std::fs::read(&file).unwrap());
-        let pos = |needle: &str| text.find(needle).unwrap_or_else(|| panic!("缺 {needle}: {text}"));
+        let pos = |needle: &str| {
+            text.find(needle)
+                .unwrap_or_else(|| panic!("缺 {needle}: {text}"))
+        };
         assert!(pos("季度报告") < pos("本季度进展顺利。"));
         assert!(pos("本季度进展顺利。") < pos("交付"));
         assert!(pos("交付") < pos("下季度计划"));
@@ -2848,8 +3017,11 @@ mod tests {
         std::fs::create_dir_all(ws.join("templates")).unwrap();
         // 「家模板」= 内置模板字节落盘占位（真模板用户后续用 Word 造）
         let house = ws.join("templates").join("memo.docx");
-        std::fs::write(&house, crate::harness::doc::build_builtin_template("report").unwrap())
-            .unwrap();
+        std::fs::write(
+            &house,
+            crate::harness::doc::build_builtin_template("report").unwrap(),
+        )
+        .unwrap();
 
         let blocks = r#"[{"type":"paragraph","text":"内容"}]"#.to_string();
         let ctx_ws = write_ctx(Some(ws.to_string_lossy().to_string())).await;
@@ -2930,11 +3102,14 @@ mod tests {
         let shared = dir.join("shared");
         std::fs::create_dir_all(ws.join("templates")).unwrap();
         std::fs::create_dir_all(&shared).unwrap();
-        let (seed_name, seed_bytes) = crate::harness::doc::shared_templates::SHARED_TEMPLATE_SEEDS[0];
+        let (seed_name, seed_bytes) =
+            crate::harness::doc::shared_templates::SHARED_TEMPLATE_SEEDS[0];
 
         // 共享目录命中：无 workspace 也能用（共享目录不依赖 workspace）
         std::fs::write(shared.join(seed_name), seed_bytes).unwrap();
-        let bytes = resolve_template(seed_name, None, Some(&shared)).await.unwrap();
+        let bytes = resolve_template(seed_name, None, Some(&shared))
+            .await
+            .unwrap();
         assert_eq!(bytes, seed_bytes.to_vec());
 
         // workspace 优先于共享目录（更具体者赢）：同名时取 workspace 字节。
@@ -2999,7 +3174,10 @@ mod tests {
         assert!(text.contains("新标题"), "{text}");
         assert!(!text.contains("正文段"), "旧内容应已被替换: {text}");
         let backup_text = read_back_text(&std::fs::read(&backup).unwrap());
-        assert!(backup_text.contains("正文段"), "备份应是旧文件: {backup_text}");
+        assert!(
+            backup_text.contains("正文段"),
+            "备份应是旧文件: {backup_text}"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -3140,7 +3318,10 @@ mod tests {
             use std::io::Read;
             let mut a = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
             let mut m = Vec::new();
-            a.by_name("word/media/image1.png").unwrap().read_to_end(&mut m).unwrap();
+            a.by_name("word/media/image1.png")
+                .unwrap()
+                .read_to_end(&mut m)
+                .unwrap();
             m
         };
         assert_eq!(media, png, "media 部件应与源文件字节全等");
@@ -3187,11 +3368,9 @@ mod tests {
 
         let bytes = std::fs::read(&file).unwrap();
         assert!(zip_has(&bytes, "word/media/image1.png"), "media 应入包");
-        assert!(
-            zip_part(&bytes, "word/settings.xml")
-                .unwrap()
-                .contains("updateFields")
-        );
+        assert!(zip_part(&bytes, "word/settings.xml")
+            .unwrap()
+            .contains("updateFields"));
         let text = read_back_text(&bytes);
         assert!(text.contains("[域:TOC]"), "{text}");
         assert!(text.contains("[图片×1]"), "{text}");
@@ -3267,7 +3446,11 @@ mod tests {
             .iter()
             .map(|f| f["kind"].as_str().unwrap())
             .collect();
-        assert_eq!(kinds, ["block_field", "block_image", "block_image"], "{out}");
+        assert_eq!(
+            kinds,
+            ["block_field", "block_image", "block_image"],
+            "{out}"
+        );
 
         // 全过形态：存在性（省 equals）+ 子串两 kind 进摘要
         let args = serde_json::json!({
@@ -3288,7 +3471,10 @@ mod tests {
             .map(|k| k.as_str().unwrap())
             .collect();
         let kinds = kinds.join(",");
-        assert!(kinds.contains("block_image") && kinds.contains("block_field"), "{out}");
+        assert!(
+            kinds.contains("block_image") && kinds.contains("block_field"),
+            "{out}"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 }

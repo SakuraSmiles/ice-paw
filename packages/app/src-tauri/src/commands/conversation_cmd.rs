@@ -74,9 +74,9 @@ pub(crate) async fn hydrate_image_refs_json(
             let hydrated = idx
                 .and_then(|i| index.get(&mid).and_then(|bs| bs.get(i)).cloned())
                 .filter(|c| c.get("type").and_then(|t| t.as_str()) == Some("image"))
-                .unwrap_or_else(|| {
-                    serde_json::json!({"type": "text", "text": IMAGE_UNRECOVERABLE_MARKER})
-                });
+                .unwrap_or_else(
+                    || serde_json::json!({"type": "text", "text": IMAGE_UNRECOVERABLE_MARKER}),
+                );
             *b = hydrated;
         }
     }
@@ -191,8 +191,7 @@ pub async fn export_session_trajectory(
     let mut payload_values: Vec<serde_json::Value> = rows
         .iter()
         .map(|r| {
-            serde_json::from_str(&r.payload)
-                .unwrap_or(serde_json::Value::String(r.payload.clone()))
+            serde_json::from_str(&r.payload).unwrap_or(serde_json::Value::String(r.payload.clone()))
         })
         .collect();
     let mut payload_refs: Vec<&mut serde_json::Value> = payload_values.iter_mut().collect();

@@ -79,14 +79,12 @@ pub async fn index_directory(
     // embedding 预生成配置：循环外解析一次 + 构造一次 backend（双路径：profile
     // 引用链 → 旧四键回落）。未配置 / 引用无效 → None（跳过预生成，search_kb
     // 时懒生成兜底）。profile_id 供状态监控归因（旧格式 None 自动跳过记录）。
-    let backend_and_key = resolve_embedding_backend(app, pool)
-        .await
-        .and_then(|r| {
-            let pid = r.profile_id;
-            OpenAiEmbeddingBackend::new(r.model, r.base_url)
-                .ok()
-                .map(|be| (be, r.api_key, pid))
-        });
+    let backend_and_key = resolve_embedding_backend(app, pool).await.and_then(|r| {
+        let pid = r.profile_id;
+        OpenAiEmbeddingBackend::new(r.model, r.base_url)
+            .ok()
+            .map(|be| (be, r.api_key, pid))
+    });
 
     for (rel_path, abs_path) in &disk_files {
         seen.insert(rel_path.clone());

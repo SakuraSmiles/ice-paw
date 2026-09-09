@@ -579,10 +579,10 @@ impl McpClient for DelegateTool {
                 // RecvError：spawn 任务在发送完成信号前消失（panic / runtime 关闭）
                 Ok(Err(_)) => {
                     let prog = progress_summary_line(&ctx.pool, &child_conv_id).await;
-                    return Err(AppError::Internal(
-                        format!("子会话流式循环异常退出（未产出完成信号）——请如实告知用户该委派失败，\
-                     可在轨迹页查看子会话已落库的部分。{prog}"),
-                    ));
+                    return Err(AppError::Internal(format!(
+                        "子会话流式循环异常退出（未产出完成信号）——请如实告知用户该委派失败，\
+                     可在轨迹页查看子会话已落库的部分。{prog}"
+                    )));
                 }
             };
 
@@ -780,7 +780,11 @@ mod tests {
             None,
             tool,
             &args,
-            Some(if is_error { "失败示例：断言未过" } else { "ok" }),
+            Some(if is_error {
+                "失败示例：断言未过"
+            } else {
+                "ok"
+            }),
             is_error,
             10,
         )
@@ -816,10 +820,7 @@ mod tests {
         assert_eq!(v["total_successful_tool_calls"], 0);
         assert!(v["successful_tool_calls"].as_object().unwrap().is_empty());
         assert!(v["last_error"].is_null());
-        assert!(v["files_touched"]["paths"]
-            .as_array()
-            .unwrap()
-            .is_empty());
+        assert!(v["files_touched"]["paths"].as_array().unwrap().is_empty());
         assert_eq!(
             progress_summary_line(&pool, "conv-empty").await,
             "子会话无成功工具调用记录（可能死于起步阶段）。"
@@ -836,7 +837,10 @@ mod tests {
 
         let line = progress_summary_line(&pool, "conv-child").await;
         assert!(line.contains("成功工具调用 2 次"), "{line}");
-        assert!(line.contains("edit_docx×1"), "BTreeMap 名序聚合计数：{line}");
+        assert!(
+            line.contains("edit_docx×1"),
+            "BTreeMap 名序聚合计数：{line}"
+        );
         assert!(line.contains("validate_docx×1"), "{line}");
         assert!(line.contains("最后失败：edit_docx"), "{line}");
         assert!(line.ends_with('。'), "{line}");
@@ -847,12 +851,24 @@ mod tests {
         let pool = progress_pool().await;
         let ctx = crate::harness::event_log::EventCtx::new("conv-child", "turn-1", "agent-1");
         for i in 0..10 {
-            seed_tool_call(&pool, &ctx, i, "write_file", &format!("D:/doc/f{i}.md"), false).await;
+            seed_tool_call(
+                &pool,
+                &ctx,
+                i,
+                "write_file",
+                &format!("D:/doc/f{i}.md"),
+                false,
+            )
+            .await;
         }
         let v = collect_progress(&pool, "conv-child").await;
         let paths = v["files_touched"]["paths"].as_array().unwrap();
         assert_eq!(paths.len(), PROGRESS_MAX_FILES, "清单截到上限");
-        assert_eq!(v["files_touched"]["more"], 10 - PROGRESS_MAX_FILES, "截断计数披露");
+        assert_eq!(
+            v["files_touched"]["more"],
+            10 - PROGRESS_MAX_FILES,
+            "截断计数披露"
+        );
         assert_eq!(v["total_successful_tool_calls"], 10, "计数不截断");
     }
 }

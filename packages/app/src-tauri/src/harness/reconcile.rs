@@ -119,10 +119,12 @@ pub async fn reconcile_session(
     let ref_ids: HashSet<String> = derived
         .messages
         .iter()
-        .flat_map(|m| m.blocks.iter().filter_map(|b| match b {
-            PayloadBlock::ImageRef { message_id, .. } => Some(message_id.clone()),
-            _ => None,
-        }))
+        .flat_map(|m| {
+            m.blocks.iter().filter_map(|b| match b {
+                PayloadBlock::ImageRef { message_id, .. } => Some(message_id.clone()),
+                _ => None,
+            })
+        })
         .collect();
     if !ref_ids.is_empty() {
         let index: HashMap<String, Vec<ContentBlock>> = rows
@@ -747,7 +749,16 @@ mod tests {
         // discarded 容忍（规则 4）：事件有（含 assistant_message）但行不存在
         //（终止守卫已删占位）→ MISSING_IN_LEGACY 豁免为 discarded_row
         event_log::log_assistant_message(
-            &pool, &ev, "t1-gone", None, "", &[], None, None, 0, false,
+            &pool,
+            &ev,
+            "t1-gone",
+            None,
+            "",
+            &[],
+            None,
+            None,
+            0,
+            false,
         )
         .await;
         event_log::log_message_discarded(&pool, &ev, "t1-gone", "termination_guard_no_text").await;

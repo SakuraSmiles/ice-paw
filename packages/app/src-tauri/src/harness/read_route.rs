@@ -237,7 +237,11 @@ impl ReadRouteRegistry {
         }
         match self.last_decision(conversation_id) {
             Some(d) => {
-                self.spawn_refresh(pool.clone(), conversation_id.to_string(), chat_state.clone());
+                self.spawn_refresh(
+                    pool.clone(),
+                    conversation_id.to_string(),
+                    chat_state.clone(),
+                );
                 Ok(d)
             }
             None => self.resolve(pool, conversation_id).await,
@@ -265,7 +269,10 @@ impl ReadRouteRegistry {
         tokio::spawn(async move {
             // RAII：任何退出路径（含 panic）都释放单飞标记，防会话刷新永久卡死
             let _release = scopeguard::guard((), |_| {
-                inflight.lock().unwrap_or_else(|e| e.into_inner()).remove(&key);
+                inflight
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(&key);
             });
             // 等会话静默：2s 一查，上限 10 分钟（超时照跑——对账只读，
             // incomplete_turn 容忍项兜住未闭合轮；活着的长回合不值得等更久）
@@ -300,7 +307,14 @@ impl ReadRouteRegistry {
             match classify_session(&pool, &conv_id, max_seq, max_rowid).await {
                 Ok(decision) => {
                     if let Ok(mut w) = cache.write() {
-                        w.insert(conv_id.clone(), CacheEntry { max_seq, max_rowid, decision });
+                        w.insert(
+                            conv_id.clone(),
+                            CacheEntry {
+                                max_seq,
+                                max_rowid,
+                                decision,
+                            },
+                        );
                     }
                 }
                 Err(e) => {
@@ -429,10 +443,12 @@ pub async fn load_history_from_events(
     let ref_ids: HashSet<String> = derived
         .messages
         .iter()
-        .flat_map(|m| m.blocks.iter().filter_map(|b| match b {
-            PayloadBlock::ImageRef { message_id, .. } => Some(message_id.clone()),
-            _ => None,
-        }))
+        .flat_map(|m| {
+            m.blocks.iter().filter_map(|b| match b {
+                PayloadBlock::ImageRef { message_id, .. } => Some(message_id.clone()),
+                _ => None,
+            })
+        })
         .collect();
     if !ref_ids.is_empty() {
         let mut index: HashMap<String, Vec<ContentBlock>> = HashMap::new();
@@ -628,7 +644,10 @@ mod tests {
         .await;
 
         // 热路径：立即返回缓存决策（旧快照 = green），不等全量对账
-        let d2 = reg.resolve_for_turn(&pool, "c1", &chat_state).await.unwrap();
+        let d2 = reg
+            .resolve_for_turn(&pool, "c1", &chat_state)
+            .await
+            .unwrap();
         assert_eq!(
             d2.route,
             ReadRoute::Derive,
@@ -649,7 +668,10 @@ mod tests {
         let d3 = refreshed.expect("后台刷新应最终写回非绿决策");
         assert_eq!(d3.route, ReadRoute::Legacy);
         // 写回后指纹命中——再次热路径拿到新决策
-        let d4 = reg.resolve_for_turn(&pool, "c1", &chat_state).await.unwrap();
+        let d4 = reg
+            .resolve_for_turn(&pool, "c1", &chat_state)
+            .await
+            .unwrap();
         assert_eq!(d4.route, ReadRoute::Legacy);
     }
 

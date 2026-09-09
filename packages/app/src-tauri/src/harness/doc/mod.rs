@@ -23,10 +23,10 @@ mod docx_model;
 mod docx_pkg;
 mod docx_validate;
 mod docx_write;
-pub mod shared_templates;
 mod numbering;
 mod pdf;
 mod pdf_render;
+pub mod shared_templates;
 mod spreadsheet;
 mod styles;
 mod xml_dom;
@@ -61,8 +61,8 @@ pub use docx_validate::{validate_document, AssertSpec, ValidateReport, MAX_ASSER
 // write_docx 模板优先生成（D16 九波）：clear→锚→顺序写入→自检，纯编排复用
 // 手术链；内置模板代码内建（用户 Word 造正式模板后替换）。IO 在 mcp::docx_tool。
 pub use docx_write::{
-    build_builtin_template, generate_from_template, BUILTIN_TEMPLATES, GeneratedDoc,
-    MAX_WRITE_BLOCKS, WriteBlock,
+    build_builtin_template, generate_from_template, GeneratedDoc, WriteBlock, BUILTIN_TEMPLATES,
+    MAX_WRITE_BLOCKS,
 };
 
 // docx 包级增补通道（D18 十波）：图片 media/rels/CT/settings 只增补 + 图片装载

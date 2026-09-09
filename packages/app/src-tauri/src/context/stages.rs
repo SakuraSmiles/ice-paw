@@ -187,7 +187,11 @@ impl PipelineStage for SystemPromptStage {
         // D12：Word 文档样式偏好注入（agent.yaml `word_style_profile` 自由文字块）。
         // 原文进独立小节，不解析不校验——agent 写 docx 时据此选字体/字号/配色/
         // 表格样式（具体格式由工具层 edit_docx/set_table_element 等落地）。
-        if let Some(profile) = ctx.word_style_profile.take().filter(|s| !s.trim().is_empty()) {
+        if let Some(profile) = ctx
+            .word_style_profile
+            .take()
+            .filter(|s| !s.trim().is_empty())
+        {
             let section = format!("## Word 文档样式偏好\n\n{profile}");
             ctx.system_prompt = Some(match ctx.system_prompt.take() {
                 Some(s) => format!("{s}\n\n{section}"),
@@ -379,11 +383,7 @@ impl PipelineStage for ModalCapabilityStage {
         // chat:processing 心跳：OCR 每张图完成时回调一次（撑住前端 60s 静默超时窗口，
         // 多图串行 OCR 易超 60s）。视觉直通分支不构造回调（无 OCR，不发心跳）。
         // 提前计算 image 数量决定是否构造回调——避免给纯文本调用附加无用闭包。
-        let image_total = ctx
-            .final_blocks
-            .iter()
-            .filter(|b| b.is_image())
-            .count() as u32;
+        let image_total = ctx.final_blocks.iter().filter(|b| b.is_image()).count() as u32;
         // Box<dyn Fn> 必须先 bind 到 let 让生命周期跨越闭包创建作用域——
         // 直接 map().as_ref() 会让 Box 临时值被立刻 drop，借用失效。
         let cb_box: Option<Box<dyn Fn(u32, u32) + Send + Sync>> = if image_total > 0 {
@@ -406,8 +406,9 @@ impl PipelineStage for ModalCapabilityStage {
         } else {
             None
         };
-        let on_progress: Option<&(dyn Fn(u32, u32) + Send + Sync)> =
-            cb_box.as_deref().map(|b| b as &(dyn Fn(u32, u32) + Send + Sync));
+        let on_progress: Option<&(dyn Fn(u32, u32) + Send + Sync)> = cb_box
+            .as_deref()
+            .map(|b| b as &(dyn Fn(u32, u32) + Send + Sync));
         if image_total > 0 {
             if let Some(emitter) = ctx.emitter.as_ref() {
                 crate::harness::r#loop::emitter::emit_ser(

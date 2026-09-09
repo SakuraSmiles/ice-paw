@@ -47,14 +47,21 @@ pub enum WriteBlock {
     Paragraph { text: String, style: Option<String> },
     /// 表格：rows 矩阵（格内 \n=多段）；header 缺省 true（表头加粗+跨页重复）；
     /// table_style 显式表样式名（缺省默认全边框直排）
-    Table { rows: Vec<Vec<String>>, header: Option<bool>, table_style: Option<String> },
+    Table {
+        rows: Vec<Vec<String>>,
+        header: Option<bool>,
+        table_style: Option<String>,
+    },
     /// TOC 域段（D18 十波）：levels 1-9（目录收录的标题深度）；hyperlink 目录
     /// 项超链接。产物 = 裸 fldSimple 单段 + settings 自动置 updateFields——
     /// Word 打开即刷新；WPS 不保证（description 诚实边界：F9 手动刷新）
     Toc { levels: u32, hyperlink: bool },
     /// 图片段（D18 十波）：image 由工具壳 load_image 装载（字节/宽高/格式）；
     /// width_mm 显式宽（毫米，钳版心）；缺省 min(原生像素宽, 版心) 不放大小图
-    Image { image: ImagePayload, width_mm: Option<f64> },
+    Image {
+        image: ImagePayload,
+        width_mm: Option<f64>,
+    },
 }
 
 /// 生成结果摘要（工具壳转 JSON 用）。
@@ -110,7 +117,8 @@ pub fn generate_from_template(template: &[u8], blocks: &[WriteBlock]) -> AppResu
         return Err(AppError::Validation(
             "模板不支持: 该模板是多节文档（分节符内嵌段落），write_docx v1 只支持单节\
              模板。怎么办：copy_file 复制模板后用 edit_docx clear_body + 逐块写入\
-             （多节结构原样保留）。".into(),
+             （多节结构原样保留）。"
+                .into(),
         ));
     }
     // 3. 注入裸锚段
@@ -125,7 +133,11 @@ pub fn generate_from_template(template: &[u8], blocks: &[WriteBlock]) -> AppResu
     let mut i = 0usize;
     while i < blocks.len() {
         match &blocks[i] {
-            WriteBlock::Table { rows, header, table_style } => {
+            WriteBlock::Table {
+                rows,
+                header,
+                table_style,
+            } => {
                 // 表格与段落同锚互斥 → 独占一批；expect_prefix 留空（生成链内
                 // 的块都是本链刚写的，无跨调用陈旧心智可防）
                 let op = EditOp::InsertTableAfter {
@@ -181,7 +193,9 @@ pub fn generate_from_template(template: &[u8], blocks: &[WriteBlock]) -> AppResu
                     .take_while(|b| {
                         !matches!(
                             b,
-                            WriteBlock::Table { .. } | WriteBlock::Toc { .. } | WriteBlock::Image { .. }
+                            WriteBlock::Table { .. }
+                                | WriteBlock::Toc { .. }
+                                | WriteBlock::Image { .. }
                         )
                     })
                     .count();
@@ -209,13 +223,22 @@ pub fn generate_from_template(template: &[u8], blocks: &[WriteBlock]) -> AppResu
     // 5. 摘除锚段（我们注入的裸 <w:p/>，确定性安全；空指纹放行）
     let (nb, _) = apply_edits_to_bytes(
         &bytes,
-        &[EditOp::DeleteBlock { block: 1, expect_prefix: String::new() }],
+        &[EditOp::DeleteBlock {
+            block: 1,
+            expect_prefix: String::new(),
+        }],
     )?;
     bytes = nb;
 
     // 6. 生成自检（不过 = 引擎 bug，Err 而非数据）
     self_check(&bytes, blocks)?;
-    Ok(GeneratedDoc { bytes, paragraphs, tables, images, tocs })
+    Ok(GeneratedDoc {
+        bytes,
+        paragraphs,
+        tables,
+        images,
+        tocs,
+    })
 }
 
 /// heading 级别 → 样式名候选链（首中即用）：中文显示名 / 规范 w:name / 英文
@@ -307,7 +330,9 @@ fn inject_anchor(bytes: Vec<u8>) -> AppResult<Vec<u8>> {
 /// 失败 → Err（引擎 bug 语义，不该发生；此时工具壳尚未写盘，无半成品文件）。
 fn self_check(bytes: &[u8], blocks: &[WriteBlock]) -> AppResult<()> {
     let mut asserts: Vec<AssertSpec> = Vec::with_capacity(blocks.len() + 1);
-    asserts.push(AssertSpec::BlockCount { equals: blocks.len() });
+    asserts.push(AssertSpec::BlockCount {
+        equals: blocks.len(),
+    });
     for (idx, b) in blocks.iter().enumerate() {
         let block_no = idx + 1;
         match b {
@@ -347,7 +372,10 @@ fn self_check(bytes: &[u8], blocks: &[WriteBlock]) -> AppResult<()> {
                 });
             }
             WriteBlock::Image { .. } => {
-                asserts.push(AssertSpec::BlockImage { block: block_no, count: Some(1) });
+                asserts.push(AssertSpec::BlockImage {
+                    block: block_no,
+                    count: Some(1),
+                });
             }
         }
     }
@@ -363,7 +391,11 @@ fn self_check(bytes: &[u8], blocks: &[WriteBlock]) -> AppResult<()> {
         let preview: Vec<String> = failures.iter().take(5).cloned().collect();
         let more = failures.len() - preview.len();
         let shown = preview.join("；");
-        let suffix = if more > 0 { format!("…另 {more} 处") } else { String::new() };
+        let suffix = if more > 0 {
+            format!("…另 {more} 处")
+        } else {
+            String::new()
+        };
         return Err(AppError::Internal(format!(
             "生成自检失败: 产物与请求内容不一致（{} 处：{shown}{suffix}）。这是引擎缺陷\
              而非输入问题，请反馈；本次调用未写入任何文件。",
@@ -573,14 +605,23 @@ mod tests {
     );
 
     fn heading(level: u32, text: &str) -> WriteBlock {
-        WriteBlock::Heading { level, text: text.into() }
+        WriteBlock::Heading {
+            level,
+            text: text.into(),
+        }
     }
     fn para(text: &str) -> WriteBlock {
-        WriteBlock::Paragraph { text: text.into(), style: None }
+        WriteBlock::Paragraph {
+            text: text.into(),
+            style: None,
+        }
     }
     fn table(rows: &[&[&str]]) -> WriteBlock {
         WriteBlock::Table {
-            rows: rows.iter().map(|r| r.iter().map(|c| c.to_string()).collect()).collect(),
+            rows: rows
+                .iter()
+                .map(|r| r.iter().map(|c| c.to_string()).collect())
+                .collect(),
             header: None,
             table_style: None,
         }
@@ -661,8 +702,14 @@ mod tests {
         let out = generate_from_template(&tpl, &blocks).unwrap();
         // 产物 document.xml 里标题段挂 Heading1、正文段挂 Normal（显式样式链）
         let xml = docx::read_document_xml(&out.bytes).unwrap();
-        assert!(xml.contains(r#"<w:pStyle w:val="Heading1"/>"#), "标题段应挂 Heading1");
-        assert!(xml.contains(r#"<w:pStyle w:val="Normal"/>"#), "正文段应显式挂 Normal");
+        assert!(
+            xml.contains(r#"<w:pStyle w:val="Heading1"/>"#),
+            "标题段应挂 Heading1"
+        );
+        assert!(
+            xml.contains(r#"<w:pStyle w:val="Normal"/>"#),
+            "正文段应显式挂 Normal"
+        );
         // 保留 body 直属 sectPr（页面设置不丢）
         assert!(xml.contains("<w:sectPr>"));
     }
@@ -702,7 +749,9 @@ mod tests {
         let tpl = build_builtin_template("report").unwrap();
         let err = generate_from_template(&tpl, &[]).unwrap_err();
         assert!(err.to_string().starts_with("参数校验失败: 生成块无效:"));
-        let many: Vec<WriteBlock> = (0..MAX_WRITE_BLOCKS + 1).map(|i| para(&format!("p{i}"))).collect();
+        let many: Vec<WriteBlock> = (0..MAX_WRITE_BLOCKS + 1)
+            .map(|i| para(&format!("p{i}")))
+            .collect();
         let err = generate_from_template(&tpl, &many).unwrap_err();
         assert!(err.to_string().starts_with("参数校验失败: 生成块无效:"));
     }
@@ -729,7 +778,10 @@ mod tests {
         let tpl = synth_template(r#"<w:p/>"#, styles);
         let out = generate_from_template(&tpl, &[heading(2, "二级")]).unwrap();
         let xml = docx::read_document_xml(&out.bytes).unwrap();
-        assert!(xml.contains(r#"<w:pStyle w:val="2"/>"#), "应解析到实际 styleId=2");
+        assert!(
+            xml.contains(r#"<w:pStyle w:val="2"/>"#),
+            "应解析到实际 styleId=2"
+        );
     }
 
     #[test]
@@ -745,9 +797,18 @@ mod tests {
     fn more_than_fifty_asserts_chunked_in_self_check() {
         // 12×12=144 格表 + 首尾段 → 自检断言远超 50，分块口径下仍全过
         let tpl = build_builtin_template("report").unwrap();
-        let rows: Vec<Vec<String>> =
-            (0..12).map(|r| (0..12).map(|c| format!("r{r}c{c}")).collect()).collect();
-        let blocks = vec![para("前"), WriteBlock::Table { rows, header: None, table_style: None }, para("后")];
+        let rows: Vec<Vec<String>> = (0..12)
+            .map(|r| (0..12).map(|c| format!("r{r}c{c}")).collect())
+            .collect();
+        let blocks = vec![
+            para("前"),
+            WriteBlock::Table {
+                rows,
+                header: None,
+                table_style: None,
+            },
+            para("后"),
+        ];
         let out = generate_from_template(&tpl, &blocks).unwrap();
         assert_eq!(out.tables, 1);
     }

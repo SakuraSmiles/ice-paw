@@ -110,20 +110,20 @@ pub async fn test_embedding_config(
     profile_id: Option<String>,
 ) -> AppResult<()> {
     use crate::harness::provider::embedding::{EmbeddingBackend, OpenAiEmbeddingBackend};
-    let (provider, model, api_key, base_url) =
-        match profile_id.as_deref().filter(|s| !s.is_empty()) {
-            Some(pid) => {
-                let cred = profiles.inner().get_with_credentials(pid).await?;
-                (
-                    cred.profile.provider,
-                    cred.profile.model,
-                    cred.api_key,
-                    // get_with_credentials 已归一（行显式 > vault 兜底）；空串视同未设
-                    cred.base_url.filter(|s| !s.is_empty()),
-                )
-            }
-            None => (provider, model, api_key, base_url),
-        };
+    let (provider, model, api_key, base_url) = match profile_id.as_deref().filter(|s| !s.is_empty())
+    {
+        Some(pid) => {
+            let cred = profiles.inner().get_with_credentials(pid).await?;
+            (
+                cred.profile.provider,
+                cred.profile.model,
+                cred.api_key,
+                // get_with_credentials 已归一（行显式 > vault 兜底）；空串视同未设
+                cred.base_url.filter(|s| !s.is_empty()),
+            )
+        }
+        None => (provider, model, api_key, base_url),
+    };
     let url = match base_url.filter(|s| !s.is_empty()) {
         Some(u) => u,
         // 端点表收敛进 PROVIDERS 注册表 openai_url 档（ModelProfile Phase 1）：

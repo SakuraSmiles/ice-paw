@@ -38,11 +38,11 @@
 use async_trait::async_trait;
 use tracing::{debug, info, warn};
 
+use super::skeleton::skeletonize_messages;
+use super::slim::slim_tool_results;
 use crate::context::history::{resolve_window, sanitize_history};
 use crate::context::pipeline::{PipelineContext, PipelineStage};
 use crate::context::token::{estimate_message_tokens, estimate_messages_tokens, estimate_tokens};
-use super::skeleton::skeletonize_messages;
-use super::slim::slim_tool_results;
 use crate::db::repo::summary::{
     get_latest_summary_state, insert_summary_message, update_summary_message, SUMMARY_PREFIX,
 };
@@ -437,7 +437,8 @@ fn deterministic_fold(ctx: &mut PipelineContext, verbatim_start: usize, fold_end
     }
     let folded: Vec<ChatMessage> =
         skeletonize_messages(&ctx.history_messages[verbatim_start..fold_end]);
-    let mut out = Vec::with_capacity(ctx.history_messages.len() - (fold_end - verbatim_start) + folded.len());
+    let mut out =
+        Vec::with_capacity(ctx.history_messages.len() - (fold_end - verbatim_start) + folded.len());
     out.extend_from_slice(&ctx.history_messages[..verbatim_start]);
     out.extend(folded);
     out.extend_from_slice(&ctx.history_messages[fold_end..]);

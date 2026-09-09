@@ -38,11 +38,11 @@ pub async fn screen_channel_open(
                  会话可能已被删除，刷新会话列表后重试"
             ))
         })?;
-    let agent = repo::agent::get_by_id(pool.inner(), &conv.agent_id).await.ok();
+    let agent = repo::agent::get_by_id(pool.inner(), &conv.agent_id)
+        .await
+        .ok();
     let info = channel::AttachInfo {
-        agent_name: agent
-            .map(|a| a.name)
-            .unwrap_or_else(|| "未知 agent".into()),
+        agent_name: agent.map(|a| a.name).unwrap_or_else(|| "未知 agent".into()),
         conv_title: conv.title,
         purpose: String::new(),
     };
@@ -151,7 +151,11 @@ pub async fn screen_channel_cycle_hud_monitor(
     if !ch.is_active() {
         return Ok(ch.snapshot());
     }
-    let count = app.available_monitors().map(|m| m.len()).unwrap_or(1).max(1);
+    let count = app
+        .available_monitors()
+        .map(|m| m.len())
+        .unwrap_or(1)
+        .max(1);
     let current = ch.hud_monitor() as isize;
     let next = (current + delta as isize).rem_euclid(count as isize) as usize;
     ch.set_hud_monitor(next);

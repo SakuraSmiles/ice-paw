@@ -127,7 +127,9 @@ mod tests {
     fn error_kind_llm_slug_expansion() {
         use crate::error::AppError;
         assert_eq!(
-            error_kind(&AppError::Llm("HTTP 401 Unauthorized: invalid api key".into())),
+            error_kind(&AppError::Llm(
+                "HTTP 401 Unauthorized: invalid api key".into()
+            )),
             "llm.auth"
         );
         assert_eq!(
@@ -136,7 +138,10 @@ mod tests {
         );
         assert_eq!(error_kind(&AppError::Cancelled), "cancelled");
         assert_eq!(
-            error_kind(&AppError::NotFound { resource: "x", id: "1".into() }),
+            error_kind(&AppError::NotFound {
+                resource: "x",
+                id: "1".into()
+            }),
             "internal"
         );
     }

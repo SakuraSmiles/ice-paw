@@ -79,7 +79,8 @@ fn resolve_point(
         AppError::Validation(
             "screen 坐标基准缺失: 本会话还没有截图，坐标无从换算——\
              先调用 capture_screen（或 capture_window）建立坐标基准，\
-             再对图中的位置操作".into(),
+             再对图中的位置操作"
+                .into(),
         )
     })?;
     let cur = backend.virtual_screen()?;
@@ -222,14 +223,14 @@ impl McpClient for MouseMoveTool {
 
     async fn execute(&self, _args: &str) -> AppResult<String> {
         Err(AppError::Internal(
-            "mouse_move 必须通过 execute_with_output 调用（需要 conv_id 定位坐标基准 + 回传附图）".into(),
+            "mouse_move 必须通过 execute_with_output 调用（需要 conv_id 定位坐标基准 + 回传附图）"
+                .into(),
         ))
     }
 
     async fn execute_with_output(&self, args: &str, ctx: &ToolContext) -> AppResult<ToolOutput> {
-        let p: MouseMoveArgs = serde_json::from_str(args).map_err(|e| {
-            AppError::Validation(format!("mouse_move 参数解析失败: {e}"))
-        })?;
+        let p: MouseMoveArgs = serde_json::from_str(args)
+            .map_err(|e| AppError::Validation(format!("mouse_move 参数解析失败: {e}")))?;
         // 写 gate（§4.3 单写者令牌）：Off 首入兼容直过；他者持有 → 排队 park
         //（取消感知）；暂停 → 挂起；域内被关 → 家族错误。
         super::channel::global()
@@ -305,14 +306,14 @@ impl McpClient for MouseClickTool {
 
     async fn execute(&self, _args: &str) -> AppResult<String> {
         Err(AppError::Internal(
-            "mouse_click 必须通过 execute_with_output 调用（需要 conv_id 定位坐标基准 + 回传附图）".into(),
+            "mouse_click 必须通过 execute_with_output 调用（需要 conv_id 定位坐标基准 + 回传附图）"
+                .into(),
         ))
     }
 
     async fn execute_with_output(&self, args: &str, ctx: &ToolContext) -> AppResult<ToolOutput> {
-        let p: MouseClickArgs = serde_json::from_str(args).map_err(|e| {
-            AppError::Validation(format!("mouse_click 参数解析失败: {e}"))
-        })?;
+        let p: MouseClickArgs = serde_json::from_str(args)
+            .map_err(|e| AppError::Validation(format!("mouse_click 参数解析失败: {e}")))?;
         // 写 gate（§4.3 单写者令牌）：一次工具调用 = 一个原子步（按下+抬起不拆）。
         super::channel::global()
             .gate_write(&ctx.conv_id, ctx.cancel.as_ref())
@@ -332,10 +333,7 @@ impl McpClient for MouseClickTool {
                 echo.extend(echo_point(&meta, x, y, px, py));
             }
             (None, None) => {
-                echo.insert(
-                    "position".into(),
-                    "current_cursor".into(),
-                );
+                echo.insert("position".into(), "current_cursor".into());
             }
             // 半给坐标是最常见的模型笔误——直接拦下而不是悄悄用半个。
             _ => {
@@ -424,14 +422,14 @@ impl McpClient for MouseDragTool {
 
     async fn execute(&self, _args: &str) -> AppResult<String> {
         Err(AppError::Internal(
-            "mouse_drag 必须通过 execute_with_output 调用（需要 conv_id 定位坐标基准 + 回传附图）".into(),
+            "mouse_drag 必须通过 execute_with_output 调用（需要 conv_id 定位坐标基准 + 回传附图）"
+                .into(),
         ))
     }
 
     async fn execute_with_output(&self, args: &str, ctx: &ToolContext) -> AppResult<ToolOutput> {
-        let p: MouseDragArgs = serde_json::from_str(args).map_err(|e| {
-            AppError::Validation(format!("mouse_drag 参数解析失败: {e}"))
-        })?;
+        let p: MouseDragArgs = serde_json::from_str(args)
+            .map_err(|e| AppError::Validation(format!("mouse_drag 参数解析失败: {e}")))?;
         // 写 gate（§4.3）：整段插值拖拽 = 一个原子步，gate 在序列起点、步内不 park。
         super::channel::global()
             .gate_write(&ctx.conv_id, ctx.cancel.as_ref())
@@ -542,7 +540,10 @@ impl McpClient for MouseScrollTool {
     }
 
     fn auth_reason(&self) -> Option<String> {
-        Some("将模拟鼠标滚轮并回传操作后的屏幕截图给当前模型服务商（会真实作用于指针位置下的应用）".into())
+        Some(
+            "将模拟鼠标滚轮并回传操作后的屏幕截图给当前模型服务商（会真实作用于指针位置下的应用）"
+                .into(),
+        )
     }
 
     async fn execute(&self, _args: &str) -> AppResult<String> {
@@ -552,9 +553,8 @@ impl McpClient for MouseScrollTool {
     }
 
     async fn execute_with_output(&self, args: &str, ctx: &ToolContext) -> AppResult<ToolOutput> {
-        let p: MouseScrollArgs = serde_json::from_str(args).map_err(|e| {
-            AppError::Validation(format!("mouse_scroll 参数解析失败: {e}"))
-        })?;
+        let p: MouseScrollArgs = serde_json::from_str(args)
+            .map_err(|e| AppError::Validation(format!("mouse_scroll 参数解析失败: {e}")))?;
         // 写 gate（§4.3 单写者令牌）
         super::channel::global()
             .gate_write(&ctx.conv_id, ctx.cancel.as_ref())
@@ -764,9 +764,15 @@ mod tests {
 
     #[tokio::test]
     async fn move_requires_prior_capture() {
-        let tool = MouseMoveTool::new(Arc::new(FakeInputBackend::new()), Arc::new(ScreenState::new()));
+        let tool = MouseMoveTool::new(
+            Arc::new(FakeInputBackend::new()),
+            Arc::new(ScreenState::new()),
+        );
         let ctx = make_ctx("m0").await;
-        let err = tool.execute_with_output(r#"{"x":10,"y":10}"#, &ctx).await.unwrap_err();
+        let err = tool
+            .execute_with_output(r#"{"x":10,"y":10}"#, &ctx)
+            .await
+            .unwrap_err();
         assert!(
             err.to_string().contains("screen 坐标基准缺失"),
             "家族前缀应为坐标基准缺失，实际: {err}"
@@ -834,7 +840,10 @@ mod tests {
             .unwrap();
         assert_eq!(backend.moves.lock().unwrap().len(), 1);
         let buttons = backend.buttons.lock().unwrap().clone();
-        assert_eq!(buttons, vec![(MouseButton::Left, true), (MouseButton::Left, false)]);
+        assert_eq!(
+            buttons,
+            vec![(MouseButton::Left, true), (MouseButton::Left, false)]
+        );
 
         // double = 两段按压
         backend.buttons.lock().unwrap().clear();
@@ -848,7 +857,8 @@ mod tests {
         let state2 = Arc::new(ScreenState::new());
         let tool2 = MouseClickTool::new(backend.clone(), state2);
         let ctx2 = make_ctx("c1-nometa").await;
-        tool2.execute_with_output(r#"{"button":"right"}"#, &ctx2)
+        tool2
+            .execute_with_output(r#"{"button":"right"}"#, &ctx2)
             .await
             .unwrap();
         assert!(backend.moves.lock().unwrap().is_empty());
@@ -936,23 +946,37 @@ mod tests {
         let ctx = make_ctx("s1").await;
 
         // 原位滚动：无需坐标基准，dx/dy 透传
-        tool.execute_with_output(r#"{"dy":-3}"#, &ctx).await.unwrap();
-        assert_eq!(backend.scrolls.lock().unwrap().last().copied(), Some((0, -3)));
+        tool.execute_with_output(r#"{"dy":-3}"#, &ctx)
+            .await
+            .unwrap();
+        assert_eq!(
+            backend.scrolls.lock().unwrap().last().copied(),
+            Some((0, -3))
+        );
         assert!(backend.moves.lock().unwrap().is_empty());
 
         // 定点滚动：先移动后滚
         tool.execute_with_output(r#"{"x":800,"y":450,"dx":2,"dy":1}"#, &ctx)
             .await
             .unwrap();
-        assert_eq!(backend.scrolls.lock().unwrap().last().copied(), Some((2, 1)));
+        assert_eq!(
+            backend.scrolls.lock().unwrap().last().copied(),
+            Some((2, 1))
+        );
         assert_eq!(backend.moves.lock().unwrap().len(), 1);
 
         // 零滚动量拒绝
-        let err = tool.execute_with_output(r#"{"dx":0,"dy":0}"#, &ctx).await.unwrap_err();
+        let err = tool
+            .execute_with_output(r#"{"dx":0,"dy":0}"#, &ctx)
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("至少一个非零"));
 
         // 半给坐标拒绝
-        let err = tool.execute_with_output(r#"{"dy":1,"x":5}"#, &ctx).await.unwrap_err();
+        let err = tool
+            .execute_with_output(r#"{"dy":1,"x":5}"#, &ctx)
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("x 与 y 必须同时给出"));
     }
 
@@ -965,14 +989,23 @@ mod tests {
         let tool = MouseClickTool::new(backend.clone(), state.clone());
         let ctx = make_ctx("a1").await;
 
-        let out = tool.execute_with_output(r#"{"x":400,"y":300}"#, &ctx).await.unwrap();
+        let out = tool
+            .execute_with_output(r#"{"x":400,"y":300}"#, &ctx)
+            .await
+            .unwrap();
         assert!(out.image_png.is_some(), "点击后应附操作效果图");
 
         // 附图即时成为新基准：sent 尺寸与摘要 image_size 一致（Fake 1920×1080 → 长边 1600 档）
         let v: serde_json::Value = serde_json::from_str(&out.text).unwrap();
         let meta = state.get("a1").expect("附图后基准应已更新");
-        assert_eq!(v["image_size"]["width"].as_u64().unwrap(), meta.sent_width as u64);
-        assert_eq!(v["image_size"]["height"].as_u64().unwrap(), meta.sent_height as u64);
+        assert_eq!(
+            v["image_size"]["width"].as_u64().unwrap(),
+            meta.sent_width as u64
+        );
+        assert_eq!(
+            v["image_size"]["height"].as_u64().unwrap(),
+            meta.sent_height as u64
+        );
         assert_eq!(meta.sent_width, 1600, "首档长边 1600");
         // 摘要声明「本图即最新基准」的行为契约
         assert!(v["note"].as_str().unwrap().contains("most recent image"));
@@ -994,7 +1027,9 @@ mod tests {
         let tool = MouseClickTool::new(backend.clone(), state);
         let ctx = make_ctx("a2").await;
 
-        tool.execute_with_output(r#"{"x":10,"y":10}"#, &ctx).await.unwrap();
+        tool.execute_with_output(r#"{"x":10,"y":10}"#, &ctx)
+            .await
+            .unwrap();
         let captures = backend.captures.lock().unwrap().clone();
         let expected = PhysRect {
             x: 100,
@@ -1018,10 +1053,16 @@ mod tests {
         let ctx = make_ctx("a3").await;
 
         backend.fail_capture.store(true, Ordering::SeqCst);
-        let out = tool.execute_with_output(r#"{"x":400,"y":300}"#, &ctx).await.unwrap();
+        let out = tool
+            .execute_with_output(r#"{"x":400,"y":300}"#, &ctx)
+            .await
+            .unwrap();
         assert!(out.image_png.is_none(), "捕获失败不应附图");
         let v: serde_json::Value = serde_json::from_str(&out.text).unwrap();
-        assert!(v["action"].as_str().unwrap() == "mouse_click", "操作本身成功");
+        assert!(
+            v["action"].as_str().unwrap() == "mouse_click",
+            "操作本身成功"
+        );
         assert!(
             v["note"].as_str().unwrap().contains("capture_screen"),
             "降级 note 应指路 capture_screen，实际: {}",
@@ -1040,7 +1081,10 @@ mod tests {
 
         // vary_first=2：帧序列 = [变, 变, 0, 0, ...]——第 3 次比较（0==0）才稳定。
         backend.vary_first.store(2, Ordering::SeqCst);
-        let out = tool.execute_with_output(r#"{"x":400,"y":300}"#, &ctx).await.unwrap();
+        let out = tool
+            .execute_with_output(r#"{"x":400,"y":300}"#, &ctx)
+            .await
+            .unwrap();
         assert!(out.image_png.is_some(), "稳定后应附图");
         let v: serde_json::Value = serde_json::from_str(&out.text).unwrap();
         assert!(
@@ -1064,8 +1108,14 @@ mod tests {
         let ctx = make_ctx("a5").await;
 
         backend.vary_first.store(usize::MAX, Ordering::SeqCst);
-        let out = tool.execute_with_output(r#"{"x":400,"y":300}"#, &ctx).await.unwrap();
-        assert!(out.image_png.is_some(), "上限耗尽也应附图（如实呈现中间态）");
+        let out = tool
+            .execute_with_output(r#"{"x":400,"y":300}"#, &ctx)
+            .await
+            .unwrap();
+        assert!(
+            out.image_png.is_some(),
+            "上限耗尽也应附图（如实呈现中间态）"
+        );
         let v: serde_json::Value = serde_json::from_str(&out.text).unwrap();
         assert!(
             v["note"].as_str().unwrap().contains("still changing"),

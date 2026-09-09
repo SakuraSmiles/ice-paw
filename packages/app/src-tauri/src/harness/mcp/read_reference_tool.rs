@@ -189,8 +189,8 @@ mod tests {
     use super::*;
     use crate::db::models::{NewAgent, NewConversation, NewMessage};
     use crate::db::repo;
-    use sqlx::SqlitePool;
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use sqlx::SqlitePool;
     use std::str::FromStr;
 
     async fn test_pool() -> SqlitePool {
@@ -308,7 +308,14 @@ mod tests {
         // 目标会话内容（含一条 system 摘要行——应被跳过）
         seed_msg(&pool, "m1", "c2", "user", "旧问题一").await;
         seed_msg(&pool, "m2", "c2", "assistant", "旧回答一").await;
-        seed_msg(&pool, "m3", "c2", "system", "[Previous conversation summary]\nxx").await;
+        seed_msg(
+            &pool,
+            "m3",
+            "c2",
+            "system",
+            "[Previous conversation summary]\nxx",
+        )
+        .await;
 
         let out = ReadReferenceTool
             .execute_with_context(r#"{"target_id":"c2","page":1}"#, &ctx(&pool, "cur"))
@@ -371,8 +378,22 @@ mod tests {
         // 30 轮 × 每条 ~700 字符 ≈ 42K 字符 → 多页
         let long = "内".repeat(700);
         for t in 1..=30 {
-            seed_msg(&pool, &format!("u{t}"), "big", "user", &format!("第{t}轮{long}")).await;
-            seed_msg(&pool, &format!("a{t}"), "big", "assistant", &format!("答{t}{long}")).await;
+            seed_msg(
+                &pool,
+                &format!("u{t}"),
+                "big",
+                "user",
+                &format!("第{t}轮{long}"),
+            )
+            .await;
+            seed_msg(
+                &pool,
+                &format!("a{t}"),
+                "big",
+                "assistant",
+                &format!("答{t}{long}"),
+            )
+            .await;
         }
 
         let p1: serde_json::Value = serde_json::from_str(

@@ -180,9 +180,7 @@ pub fn inspect_document(bytes: &[u8], req: &InspectRequest) -> AppResult<Inspect
                 .into(),
         ));
     }
-    if req.projection == InspectProjection::Numbering
-        && req.level.is_some()
-        && req.num_id.is_none()
+    if req.projection == InspectProjection::Numbering && req.level.is_some() && req.num_id.is_none()
     {
         return Err(AppError::Validation(
             "参数校验失败：level 需要 num_id 同传（级寻址挂在编号实例下；\
@@ -207,7 +205,10 @@ pub fn inspect_document(bytes: &[u8], req: &InspectRequest) -> AppResult<Inspect
         resolve_range(total, req)?
     };
     // row/cell 仅 tblpr/ppr 表格块下钻使用（与其他投影的编址语义无关，误传即早失败）
-    let drills = matches!(req.projection, InspectProjection::Tblpr | InspectProjection::Ppr);
+    let drills = matches!(
+        req.projection,
+        InspectProjection::Tblpr | InspectProjection::Ppr
+    );
     if !drills && (req.row.is_some() || req.cell.is_some()) {
         return Err(AppError::Validation(
             "参数不适用：row/cell 仅 projection=tblpr（表格属性逐级下钻）与 projection=ppr \
@@ -217,14 +218,16 @@ pub fn inspect_document(bytes: &[u8], req: &InspectRequest) -> AppResult<Inspect
     }
     if drills && req.cell.is_some() && req.row.is_none() {
         return Err(AppError::Validation(
-            "参数校验失败：cell 需要 row 同传（level 寻址：row → 行级，row+cell → 格级）。"
-                .into(),
+            "参数校验失败：cell 需要 row 同传（level 寻址：row → 行级，row+cell → 格级）。".into(),
         ));
     }
 
     let mut content = String::new();
     render_header(&model, total, &mut content);
-    let ctx = RenderCtx { styles: &styles, numbers: &numbers };
+    let ctx = RenderCtx {
+        styles: &styles,
+        numbers: &numbers,
+    };
     match req.projection {
         InspectProjection::Outline => {
             for (i, block) in model.body.iter().enumerate().take(end).skip(start - 1) {
@@ -345,20 +348,26 @@ pub fn inspect_document(bytes: &[u8], req: &InspectRequest) -> AppResult<Inspect
                     "(区间内无表格块——表格块在 outline 投影显示为「▦ 表 R行×C列」，定位块号后再来)\n",
                 );
             } else if paragraphs > 0 {
-                content.push_str(&format!(
-                    "(区间内另有 {paragraphs} 个段落块无表属性)\n"
-                ));
+                content.push_str(&format!("(区间内另有 {paragraphs} 个段落块无表属性)\n"));
             }
         }
         InspectProjection::Styles => render_styles(&styles, &mut content),
-        InspectProjection::Styledef => {
-            render_styledef(bytes, &styles, req.style.as_deref().unwrap_or_default(), &mut content)?
-        }
+        InspectProjection::Styledef => render_styledef(
+            bytes,
+            &styles,
+            req.style.as_deref().unwrap_or_default(),
+            &mut content,
+        )?,
         InspectProjection::Numbering => {
             render_numbering(bytes, &model, &catalog, req.num_id, req.level, &mut content)?
         }
     }
-    Ok(InspectReport { total_blocks: total, range: (start, end), has_more, content })
+    Ok(InspectReport {
+        total_blocks: total,
+        range: (start, end),
+        has_more,
+        content,
+    })
 }
 
 /// 块区间解析：缺省按投影档给 span；越界报错（三段式）/clamp。
@@ -401,7 +410,9 @@ struct RenderCtx<'a> {
 
 /// 文档摘要头（三档共用）：规模 / 节与页面 / 修订警告。
 fn render_header(model: &docx_model::DocxDocument, total: usize, out: &mut String) {
-    out.push_str(&format!("共 {total} 块（1-based，段落 ¶ 与表格 ▦ 混排统一编号）"));
+    out.push_str(&format!(
+        "共 {total} 块（1-based，段落 ¶ 与表格 ▦ 混排统一编号）"
+    ));
     if !model.sections.is_empty() {
         let s = &model.sections[0];
         let page = match (s.page_w, s.page_h) {
@@ -409,7 +420,10 @@ fn render_header(model: &docx_model::DocxDocument, total: usize, out: &mut Strin
             _ => "尺寸未声明".to_string(),
         };
         let orient = s.orientation.as_deref().unwrap_or("portrait");
-        out.push_str(&format!(" | {} 节 | 页面 {page} {orient}", model.sections.len()));
+        out.push_str(&format!(
+            " | {} 节 | 页面 {page} {orient}",
+            model.sections.len()
+        ));
     }
     // 修订警告（roadmap 不变式：编辑默认不触碰修订 run——先让 agent 看见它们存在）
     let (ins, del) = count_revisions(&model.body);
@@ -450,7 +464,11 @@ fn render_headers_footers(
                 let desc = match rels.get(rid) {
                     Some(part) => {
                         let text = part_text(bytes, part, &mut cache)?;
-                        if text.is_empty() { "（空）".to_string() } else { indent_continuation(&text) }
+                        if text.is_empty() {
+                            "（空）".to_string()
+                        } else {
+                            indent_continuation(&text)
+                        }
                     }
                     None => format!("（引用 {rid} 在 rels 中悬空——部件缺失）"),
                 };
@@ -543,7 +561,11 @@ fn render_styles(styles: &Stylesheet, out: &mut String) {
             } else {
                 format!("←{}", chain.join("←"))
             },
-            if feats.is_empty() { "-".to_string() } else { feats.join(" ") },
+            if feats.is_empty() {
+                "-".to_string()
+            } else {
+                feats.join(" ")
+            },
         ));
     }
     let cap = InspectProjection::Styles.default_span();
@@ -628,8 +650,7 @@ fn render_numbering(
     let Some(xml) = docx::read_entry(bytes, "word/numbering.xml")? else {
         if num_id.is_some() {
             return Err(AppError::Validation(
-                "无编号部件: 本文档没有 word/numbering.xml（还没有任何自动编号列表）。"
-                    .into(),
+                "无编号部件: 本文档没有 word/numbering.xml（还没有任何自动编号列表）。".into(),
             ));
         }
         out.push_str(
@@ -690,7 +711,11 @@ fn render_numbering(
         let ids: Vec<String> = entries.iter().map(|(n, _)| n.to_string()).collect();
         return Err(AppError::Validation(format!(
             "编号引用或级别不存在: numId {nid} 不在编号目录。已有 numId: {}。",
-            if ids.is_empty() { "（空）".to_string() } else { ids.join("、") }
+            if ids.is_empty() {
+                "（空）".to_string()
+            } else {
+                ids.join("、")
+            }
         )));
     };
     let ilvls = catalog.ilvls_of_num(nid);
@@ -702,12 +727,18 @@ fn render_numbering(
         let ls: Vec<String> = ilvls.iter().map(|l| l.to_string()).collect();
         return Err(AppError::Validation(format!(
             "编号引用或级别不存在: numId {nid} 没有 level {lvl} 定义（已有级: {}）。",
-            if ls.is_empty() { "（空）".to_string() } else { ls.join("、") }
+            if ls.is_empty() {
+                "（空）".to_string()
+            } else {
+                ls.join("、")
+            }
         )));
     }
     // 结构寻位 raw w:lvl（abstractNum → 直接子级 w:lvl 按 ilvl——与 def_edit 同口径）
     let children = super::def_edit::root_children(&xml).ok_or_else(|| {
-        AppError::Validation("编号部件形态异常: numbering.xml 结构解析失败（文档可能损坏）。".into())
+        AppError::Validation(
+            "编号部件形态异常: numbering.xml 结构解析失败（文档可能损坏）。".into(),
+        )
     })?;
     let abs_id_str = abs_id.to_string();
     let abs_hit = children.iter().find(|c| {
@@ -724,9 +755,7 @@ fn render_numbering(
     let abs_xml = &xml[abs_hit.start..abs_hit.end];
     let lvl_str = lvl.to_string();
     let lvl_hit = super::def_edit::root_children(abs_xml)
-        .ok_or_else(|| {
-            AppError::Validation("编号部件形态异常: abstractNum 结构解析失败。".into())
-        })?
+        .ok_or_else(|| AppError::Validation("编号部件形态异常: abstractNum 结构解析失败。".into()))?
         .into_iter()
         .find(|c| {
             c.name == "w:lvl"
@@ -748,7 +777,10 @@ fn render_numbering(
     let shared = catalog.num_ids_of_abstract(abs_id);
     let share_note = if shared.len() > 1 {
         let ids: Vec<String> = shared.iter().map(|n| n.to_string()).collect();
-        format!("（影响 numId {}，共享 abstractNum {abs_id}）", ids.join("、"))
+        format!(
+            "（影响 numId {}，共享 abstractNum {abs_id}）",
+            ids.join("、")
+        )
     } else {
         String::new()
     };
@@ -775,7 +807,10 @@ fn render_num_section(
             .filter(|n| **n != nid)
             .map(|n| n.to_string())
             .collect();
-        format!("，与 numId {} 共享 abstractNum {abs_id}（改定义同影响）", others.join("、"))
+        format!(
+            "，与 numId {} 共享 abstractNum {abs_id}（改定义同影响）",
+            others.join("、")
+        )
     } else {
         String::new()
     };
@@ -848,7 +883,10 @@ fn render_outline_line(ctx: &RenderCtx, n: usize, block: &Block, out: &mut Strin
                     out.push_str(&format!("[{n}] ¶ {meta}{feature}\n"));
                 }
             } else {
-                out.push_str(&format!("[{n}] ¶ {meta} {}{feature}\n", summarize(&text, 60)));
+                out.push_str(&format!(
+                    "[{n}] ¶ {meta} {}{feature}\n",
+                    summarize(&text, 60)
+                ));
             }
         }
         Block::Table(t) => {
@@ -936,7 +974,8 @@ fn slice_raw_element<'a>(s: &'a str, name: &str) -> Option<&'a str> {
     Some(&s[start..close + close_tag.len()])
 }
 
-fn render_format_block(ctx: &RenderCtx, n: usize, block: &Block, out: &mut String) {    match block {
+fn render_format_block(ctx: &RenderCtx, n: usize, block: &Block, out: &mut String) {
+    match block {
         Block::Paragraph(p) => {
             out.push_str(&format!("[{n}] ¶ {}\n", para_meta(ctx, n, &p.props)));
             let chain = p
@@ -957,7 +996,8 @@ fn render_format_block(ctx: &RenderCtx, n: usize, block: &Block, out: &mut Strin
                 if run.text.is_empty() {
                     continue;
                 }
-                let eff_run = styles::effective_run(&run.props, &chain, &ctx.styles.doc_default_run);
+                let eff_run =
+                    styles::effective_run(&run.props, &chain, &ctx.styles.doc_default_run);
                 let mut line = format!(
                     "     run {} \"{}\" → {}",
                     i + 1,
@@ -984,7 +1024,10 @@ fn render_format_block(ctx: &RenderCtx, n: usize, block: &Block, out: &mut Strin
                 out.push_str(&format!("     r{}: {}\n", ri + 1, row_cells_summary(row)));
             }
             if t.rows.len() > MAX_ROWS {
-                out.push_str(&format!("     … 还有 {} 行（表格行编辑见 edit_docx）\n", t.rows.len() - MAX_ROWS));
+                out.push_str(&format!(
+                    "     … 还有 {} 行（表格行编辑见 edit_docx）\n",
+                    t.rows.len() - MAX_ROWS
+                ));
             }
         }
     }
@@ -995,7 +1038,11 @@ fn render_text_block(ctx: &RenderCtx, n: usize, block: &Block, out: &mut String)
     match block {
         Block::Paragraph(p) => {
             let text = para_text(p);
-            let num_prefix = ctx.numbers.get(&n).map(|t| format!("{t} ")).unwrap_or_default();
+            let num_prefix = ctx
+                .numbers
+                .get(&n)
+                .map(|t| format!("{t} "))
+                .unwrap_or_default();
             let feature = inline_feature_suffix(p);
             if text.trim().is_empty() {
                 if feature.is_empty() {
@@ -1007,7 +1054,11 @@ fn render_text_block(ctx: &RenderCtx, n: usize, block: &Block, out: &mut String)
                 // 段内软换行（w:br）原样保留为多行；特征标记挂尾行
                 let lines: Vec<&str> = text.split('\n').collect();
                 for (li, line) in lines.iter().enumerate() {
-                    let suffix = if li + 1 == lines.len() { feature.as_str() } else { "" };
+                    let suffix = if li + 1 == lines.len() {
+                        feature.as_str()
+                    } else {
+                        ""
+                    };
                     out.push_str(&format!("[{n}] {num_prefix}{line}{suffix}\n"));
                 }
             }
@@ -1052,7 +1103,12 @@ fn render_table_grid(ctx: &RenderCtx, n: usize, t: &docx_model::Table, out: &mut
     let cols: u32 = t
         .rows
         .iter()
-        .map(|r| r.cells.iter().map(|c| c.grid_span.unwrap_or(1)).sum::<u32>())
+        .map(|r| {
+            r.cells
+                .iter()
+                .map(|c| c.grid_span.unwrap_or(1))
+                .sum::<u32>()
+        })
         .max()
         .unwrap_or(0);
     out.push_str(&format!(
@@ -1201,12 +1257,15 @@ fn raw_row_xml<'a>(
         )));
     }
     let spans = super::docx_edit::direct_children_spans(block_xml, "tr");
-    spans.get(r - 1).map(|(s, e)| &block_xml[*s..*e]).ok_or_else(|| {
-        AppError::Validation(format!(
-            "单元格结构异常: 块 {n} 第 {r} 行在源码层定位失败（表格形态异常）。请用 \
+    spans
+        .get(r - 1)
+        .map(|(s, e)| &block_xml[*s..*e])
+        .ok_or_else(|| {
+            AppError::Validation(format!(
+                "单元格结构异常: 块 {n} 第 {r} 行在源码层定位失败（表格形态异常）。请用 \
              inspect_docx projection=table 复核。"
-        ))
-    })
+            ))
+        })
 }
 
 /// 行 XML 内取第 c 格的 XML 区间（1-based，与模型格序同口径）。
@@ -1359,7 +1418,11 @@ fn fmt_direct_run(p: &docx_model::RunProps) -> Option<String> {
         parts.push(if v { "u".into() } else { "u=off".into() });
     }
     if let Some(v) = p.strike {
-        parts.push(if v { "strike".into() } else { "strike=off".into() });
+        parts.push(if v {
+            "strike".into()
+        } else {
+            "strike=off".into()
+        });
     }
     if let Some(v) = p.size_half_pt {
         parts.push(format!("sz={v}"));
@@ -1376,7 +1439,11 @@ fn fmt_direct_run(p: &docx_model::RunProps) -> Option<String> {
     if let Some(v) = &p.font_ascii {
         parts.push(format!("ascii={v}"));
     }
-    if parts.is_empty() { None } else { Some(parts.join(" ")) }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" "))
+    }
 }
 
 /// 有效段落格式一行。
@@ -1431,7 +1498,9 @@ fn trim_float(v: f64) -> String {
 
 /// 表首行摘要（outline 表格行）。
 fn table_row_summary(row: Option<&docx_model::TableRow>) -> String {
-    let Some(row) = row else { return "(空表)".into() };
+    let Some(row) = row else {
+        return "(空表)".into();
+    };
     summarize(&row_cells_summary(row), 50)
 }
 
@@ -1470,102 +1539,132 @@ mod tests {
 
     /// 用 docx-rs 造真实包跑 inspect（zip + document.xml + styles.xml 全链路）。
     fn docx_bytes() -> Vec<u8> {
-        use docx_rs::{Docx, Document, Paragraph, Run};
+        use docx_rs::{Document, Docx, Paragraph, Run};
         let document = Document::new()
             .add_paragraph(Paragraph::new().add_run(Run::new().add_text("第一段正文")))
             .add_paragraph(Paragraph::new().add_run(Run::new().add_text("第二段")));
         let mut cursor = std::io::Cursor::new(Vec::<u8>::new());
-        Docx::new().document(document).build().pack(&mut cursor).unwrap();
+        Docx::new()
+            .document(document)
+            .build()
+            .pack(&mut cursor)
+            .unwrap();
         cursor.into_inner()
     }
 
     #[test]
     fn outline_text_format_on_real_package() {
         let bytes = docx_bytes();
-        let report = inspect_document(&bytes, &InspectRequest {
-            projection: InspectProjection::Outline,
-            start: None,
-            end: None,
-            row: None,
-            cell: None,
-            style: None,
-            num_id: None,
-            level: None,
-        })
+        let report = inspect_document(
+            &bytes,
+            &InspectRequest {
+                projection: InspectProjection::Outline,
+                start: None,
+                end: None,
+                row: None,
+                cell: None,
+                style: None,
+                num_id: None,
+                level: None,
+            },
+        )
         .unwrap();
         assert_eq!(report.total_blocks, 2);
         assert_eq!(report.range, (1, 2));
         assert!(!report.has_more);
-        assert!(report.content.contains("[1] ¶"), "outline 应有块 1: {}", report.content);
+        assert!(
+            report.content.contains("[1] ¶"),
+            "outline 应有块 1: {}",
+            report.content
+        );
         assert!(report.content.contains("第一段正文"));
 
-        let text = inspect_document(&bytes, &InspectRequest {
-            projection: InspectProjection::Text,
-            start: None,
-            end: None,
-            row: None,
-            cell: None,
-            style: None,
-            num_id: None,
-            level: None,
-        })
+        let text = inspect_document(
+            &bytes,
+            &InspectRequest {
+                projection: InspectProjection::Text,
+                start: None,
+                end: None,
+                row: None,
+                cell: None,
+                style: None,
+                num_id: None,
+                level: None,
+            },
+        )
         .unwrap();
         assert!(text.content.contains("[2] 第二段"));
 
-        let fmt = inspect_document(&bytes, &InspectRequest {
-            projection: InspectProjection::Format,
-            start: None,
-            end: None,
-            row: None,
-            cell: None,
-            style: None,
-            num_id: None,
-            level: None,
-        })
+        let fmt = inspect_document(
+            &bytes,
+            &InspectRequest {
+                projection: InspectProjection::Format,
+                start: None,
+                end: None,
+                row: None,
+                cell: None,
+                style: None,
+                num_id: None,
+                level: None,
+            },
+        )
         .unwrap();
-        assert!(fmt.content.contains("文本:"), "format 应有文本行: {}", fmt.content);
+        assert!(
+            fmt.content.contains("文本:"),
+            "format 应有文本行: {}",
+            fmt.content
+        );
     }
 
     #[test]
     fn range_validation_errors_and_clamps() {
         let bytes = docx_bytes();
         // start 越界 → 三段式报错
-        let err = inspect_document(&bytes, &InspectRequest {
-            projection: InspectProjection::Outline,
-            start: Some(5),
-            end: None,
-            row: None,
-            cell: None,
-            style: None,
-            num_id: None,
-            level: None,
-        })
+        let err = inspect_document(
+            &bytes,
+            &InspectRequest {
+                projection: InspectProjection::Outline,
+                start: Some(5),
+                end: None,
+                row: None,
+                cell: None,
+                style: None,
+                num_id: None,
+                level: None,
+            },
+        )
         .unwrap_err();
         assert!(err.to_string().contains("块号越界"), "实际: {err}");
         // end < start → 报错
-        let err = inspect_document(&bytes, &InspectRequest {
-            projection: InspectProjection::Outline,
-            start: Some(2),
-            end: Some(1),
-            row: None,
-            cell: None,
-            style: None,
-            num_id: None,
-            level: None,
-        })
+        let err = inspect_document(
+            &bytes,
+            &InspectRequest {
+                projection: InspectProjection::Outline,
+                start: Some(2),
+                end: Some(1),
+                row: None,
+                cell: None,
+                style: None,
+                num_id: None,
+                level: None,
+            },
+        )
         .unwrap_err();
         assert!(err.to_string().contains("区间无效"), "实际: {err}");
         // end 超总 → clamp 到 2
-        let report = inspect_document(&bytes, &InspectRequest {
-            projection: InspectProjection::Outline,
-            start: Some(1),
-            end: Some(99),
-            row: None,
-            cell: None,
-            style: None,
-            num_id: None,
-            level: None,
-        })
+        let report = inspect_document(
+            &bytes,
+            &InspectRequest {
+                projection: InspectProjection::Outline,
+                start: Some(1),
+                end: Some(99),
+                row: None,
+                cell: None,
+                style: None,
+                num_id: None,
+                level: None,
+            },
+        )
         .unwrap();
         assert_eq!(report.range, (1, 2));
         assert!(!report.has_more);
@@ -1624,7 +1723,8 @@ mod tests {
                 ("word/header1.xml", hdr_xml),
                 ("word/footer1.xml", ftr_xml),
             ] {
-                w.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+                w.start_file(name, zip::write::SimpleFileOptions::default())
+                    .unwrap();
                 w.write_all(data.as_bytes()).unwrap();
             }
             w.finish().unwrap();
@@ -1635,23 +1735,40 @@ mod tests {
     #[test]
     fn headers_footers_projection_renders_parts() {
         let bytes = hf_docx_bytes();
-        let report = inspect_document(&bytes, &InspectRequest {
-            projection: InspectProjection::HeadersFooters,
-            start: None,
-            end: None,
-            row: None,
-            cell: None,
-            style: None,
-            num_id: None,
-            level: None,
-        })
+        let report = inspect_document(
+            &bytes,
+            &InspectRequest {
+                projection: InspectProjection::HeadersFooters,
+                start: None,
+                end: None,
+                row: None,
+                cell: None,
+                style: None,
+                num_id: None,
+                level: None,
+            },
+        )
         .unwrap();
-        assert!(report.content.contains("2 节"), "节计数: {}", report.content);
+        assert!(
+            report.content.contains("2 节"),
+            "节计数: {}",
+            report.content
+        );
         assert_eq!(report.range, (1, 2), "range = 节区间");
         assert!(!report.has_more);
         // 部件内容 + 多行续行
-        assert!(report.content.contains("页眉 default: 页眉甲行\n    页眉乙行"), "{}", report.content);
-        assert!(report.content.contains("页脚 default: 页脚一行"), "{}", report.content);
+        assert!(
+            report
+                .content
+                .contains("页眉 default: 页眉甲行\n    页眉乙行"),
+            "{}",
+            report.content
+        );
+        assert!(
+            report.content.contains("页脚 default: 页脚一行"),
+            "{}",
+            report.content
+        );
         // 同部件多节引用（rIdH 两节）经缓存呈现一致
         assert_eq!(report.content.matches("页眉甲行").count(), 2);
         // rels 悬空引用诚实呈现（rIdMISSING 无对应 Relationship）
@@ -1660,16 +1777,19 @@ mod tests {
         assert!(!report.content.contains("media/a.png"));
 
         // start/end 不适用 → 家族报错
-        let err = inspect_document(&bytes, &InspectRequest {
-            projection: InspectProjection::HeadersFooters,
-            start: Some(1),
-            end: None,
-            row: None,
-            cell: None,
-            style: None,
-            num_id: None,
-            level: None,
-        })
+        let err = inspect_document(
+            &bytes,
+            &InspectRequest {
+                projection: InspectProjection::HeadersFooters,
+                start: Some(1),
+                end: None,
+                row: None,
+                cell: None,
+                style: None,
+                num_id: None,
+                level: None,
+            },
+        )
         .unwrap_err()
         .to_string();
         assert!(err.contains("不接受 start/end"), "实际: {err}");
@@ -1690,7 +1810,11 @@ mod tests {
         let mut buf = Vec::new();
         {
             let mut w = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
-            w.start_file("word/document.xml", zip::write::SimpleFileOptions::default()).unwrap();
+            w.start_file(
+                "word/document.xml",
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
             w.write_all(doc_xml.as_bytes()).unwrap();
             w.finish().unwrap();
         }
@@ -1700,40 +1824,66 @@ mod tests {
     #[test]
     fn table_projection_renders_grid_with_markers() {
         let bytes = tbl_docx_bytes();
-        let report = inspect_document(&bytes, &InspectRequest {
-            projection: InspectProjection::Table,
-            start: None,
-            end: None,
-            row: None,
-            cell: None,
-            style: None,
-            num_id: None,
-            level: None,
-        })
+        let report = inspect_document(
+            &bytes,
+            &InspectRequest {
+                projection: InspectProjection::Table,
+                start: None,
+                end: None,
+                row: None,
+                cell: None,
+                style: None,
+                num_id: None,
+                level: None,
+            },
+        )
         .unwrap();
         // 头行：真列数（跨列行 gridSpan 求和，非格数）
-        assert!(report.content.contains("[2] ▦ 表 2行×2列"), "{}", report.content);
+        assert!(
+            report.content.contains("[2] ▦ 表 2行×2列"),
+            "{}",
+            report.content
+        );
         // 跨列 / 续 / 空标注
-        assert!(report.content.contains("r1: 总览(跨2列)"), "{}", report.content);
+        assert!(
+            report.content.contains("r1: 总览(跨2列)"),
+            "{}",
+            report.content
+        );
         assert!(report.content.contains("(续)"), "{}", report.content);
         assert!(report.content.contains("(空)"), "{}", report.content);
         // 段落块不展开，但计数诚实
-        assert!(report.content.contains("1 个段落块未显示"), "{}", report.content);
+        assert!(
+            report.content.contains("1 个段落块未显示"),
+            "{}",
+            report.content
+        );
 
         // 无表格区间 → 指路（勿盲试）
-        let only_para = inspect_document(&bytes, &InspectRequest {
-            projection: InspectProjection::Table,
-            start: Some(1),
-            end: Some(1),
-            row: None,
-            cell: None,
-            style: None,
-            num_id: None,
-            level: None,
-        })
+        let only_para = inspect_document(
+            &bytes,
+            &InspectRequest {
+                projection: InspectProjection::Table,
+                start: Some(1),
+                end: Some(1),
+                row: None,
+                cell: None,
+                style: None,
+                num_id: None,
+                level: None,
+            },
+        )
         .unwrap();
-        assert!(only_para.content.contains("无表格块"), "{}", only_para.content);
-        assert!(only_para.content.contains("outline"), "应指向 outline: {}", only_para.content);
+        assert!(
+            only_para.content.contains("无表格块"),
+            "{}",
+            only_para.content
+        );
+        assert!(
+            only_para.content.contains("outline"),
+            "应指向 outline: {}",
+            only_para.content
+        );
     }
 
     /// ppr 下钻夹具（六波·缺口 3）：格内两段——首段带 ind chars 变体（生产形态：
@@ -1753,7 +1903,11 @@ mod tests {
         let mut buf = Vec::new();
         {
             let mut w = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
-            w.start_file("word/document.xml", zip::write::SimpleFileOptions::default()).unwrap();
+            w.start_file(
+                "word/document.xml",
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
             w.write_all(doc_xml.as_bytes()).unwrap();
             w.finish().unwrap();
         }
@@ -1764,111 +1918,142 @@ mod tests {
     fn ppr_projection_drills_into_cell_paragraphs() {
         let bytes = ppr_tbl_docx_bytes();
         // 默认：段落块照常 + 表格块指路下钻（不再一句「无段落属性」了事）
-        let report = inspect_document(&bytes, &InspectRequest {
-            projection: InspectProjection::Ppr,
-            start: None,
-            end: None,
-            row: None,
-            cell: None,
-            style: None,
-            num_id: None,
-            level: None,
-        })
+        let report = inspect_document(
+            &bytes,
+            &InspectRequest {
+                projection: InspectProjection::Ppr,
+                start: None,
+                end: None,
+                row: None,
+                cell: None,
+                style: None,
+                num_id: None,
+                level: None,
+            },
+        )
         .unwrap();
-        assert!(report.content.contains("#1\t(无 pPr)"), "{}", report.content);
         assert!(
-            report.content.contains("表格块——格内段落 pPr 用 row+cell 下钻"),
+            report.content.contains("#1\t(无 pPr)"),
+            "{}",
+            report.content
+        );
+        assert!(
+            report
+                .content
+                .contains("表格块——格内段落 pPr 用 row+cell 下钻"),
             "{}",
             report.content
         );
         // row+cell：格内逐段 pPr 原文
-        let drill = inspect_document(&bytes, &InspectRequest {
-            projection: InspectProjection::Ppr,
-            start: Some(2),
-            end: Some(2),
-            row: Some(1),
-            cell: Some(1),
-            style: None,
-            num_id: None,
-            level: None,
-        })
+        let drill = inspect_document(
+            &bytes,
+            &InspectRequest {
+                projection: InspectProjection::Ppr,
+                start: Some(2),
+                end: Some(2),
+                row: Some(1),
+                cell: Some(1),
+                style: None,
+                num_id: None,
+                level: None,
+            },
+        )
         .unwrap();
         assert!(drill.content.contains("[2] r1c1:"), "{}", drill.content);
         assert!(
-            drill
-                .content
-                .contains(r#"  p1: <w:pPr><w:ind w:firstLine="480" w:firstLineChars="200"/></w:pPr>"#),
+            drill.content.contains(
+                r#"  p1: <w:pPr><w:ind w:firstLine="480" w:firstLineChars="200"/></w:pPr>"#
+            ),
             "首段 pPr 原文: {}",
             drill.content
         );
         assert!(drill.content.contains("p2: (无 pPr)"), "{}", drill.content);
         // 邻格：自闭合空段 → (无 pPr)
-        let drill2 = inspect_document(&bytes, &InspectRequest {
-            projection: InspectProjection::Ppr,
-            start: Some(2),
-            end: Some(2),
-            row: Some(1),
-            cell: Some(2),
-            style: None,
-            num_id: None,
-            level: None,
-        })
+        let drill2 = inspect_document(
+            &bytes,
+            &InspectRequest {
+                projection: InspectProjection::Ppr,
+                start: Some(2),
+                end: Some(2),
+                row: Some(1),
+                cell: Some(2),
+                style: None,
+                num_id: None,
+                level: None,
+            },
+        )
         .unwrap();
         assert!(drill2.content.contains("[2] r1c2:"), "{}", drill2.content);
-        assert!(drill2.content.contains("p1: (无 pPr)"), "{}", drill2.content);
+        assert!(
+            drill2.content.contains("p1: (无 pPr)"),
+            "{}",
+            drill2.content
+        );
         // row 缺 cell：行级没有 pPr，家族报错
-        let err = inspect_document(&bytes, &InspectRequest {
-            projection: InspectProjection::Ppr,
-            start: Some(2),
-            end: Some(2),
-            row: Some(1),
-            cell: None,
-            style: None,
-            num_id: None,
-            level: None,
-        })
+        let err = inspect_document(
+            &bytes,
+            &InspectRequest {
+                projection: InspectProjection::Ppr,
+                start: Some(2),
+                end: Some(2),
+                row: Some(1),
+                cell: None,
+                style: None,
+                num_id: None,
+                level: None,
+            },
+        )
         .unwrap_err()
         .to_string();
         assert!(err.contains("需搭配 cell"), "实际: {err}");
         // 格越界三段式
-        let err = inspect_document(&bytes, &InspectRequest {
-            projection: InspectProjection::Ppr,
-            start: Some(2),
-            end: Some(2),
-            row: Some(1),
-            cell: Some(9),
-            style: None,
-            num_id: None,
-            level: None,
-        })
+        let err = inspect_document(
+            &bytes,
+            &InspectRequest {
+                projection: InspectProjection::Ppr,
+                start: Some(2),
+                end: Some(2),
+                row: Some(1),
+                cell: Some(9),
+                style: None,
+                num_id: None,
+                level: None,
+            },
+        )
         .unwrap_err()
         .to_string();
         assert!(err.contains("单元格越界"), "实际: {err}");
         // 区间混入段落块 + row 设定 → 与 tblpr 同判
-        let err = inspect_document(&bytes, &InspectRequest {
-            projection: InspectProjection::Ppr,
-            start: None,
-            end: None,
-            row: Some(1),
-            cell: Some(1),
-            style: None,
-            num_id: None,
-            level: None,
-        })
+        let err = inspect_document(
+            &bytes,
+            &InspectRequest {
+                projection: InspectProjection::Ppr,
+                start: None,
+                end: None,
+                row: Some(1),
+                cell: Some(1),
+                style: None,
+                num_id: None,
+                level: None,
+            },
+        )
         .unwrap_err()
         .to_string();
         assert!(err.contains("非表格块"), "实际: {err}");
         // 其他投影带 row 仍拒（守卫没被放宽误伤）
-        let err = inspect_document(&bytes, &InspectRequest {
-            projection: InspectProjection::Outline,
-            start: None,
-            end: None,
-            row: Some(1),
-            cell: None,
-            style: None,
-            num_id: None,
-            level: None,
-        })
+        let err = inspect_document(
+            &bytes,
+            &InspectRequest {
+                projection: InspectProjection::Outline,
+                start: None,
+                end: None,
+                row: Some(1),
+                cell: None,
+                style: None,
+                num_id: None,
+                level: None,
+            },
+        )
         .unwrap_err()
         .to_string();
         assert!(err.contains("参数不适用"), "实际: {err}");
@@ -1894,7 +2079,11 @@ mod tests {
         let mut buf = Vec::new();
         {
             let mut w = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
-            w.start_file("word/document.xml", zip::write::SimpleFileOptions::default()).unwrap();
+            w.start_file(
+                "word/document.xml",
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
             w.write_all(doc_xml.as_bytes()).unwrap();
             w.finish().unwrap();
         }
@@ -1904,16 +2093,19 @@ mod tests {
     #[test]
     fn table_projection_shows_format_markers() {
         let bytes = fmt_tbl_docx_bytes();
-        let report = inspect_document(&bytes, &InspectRequest {
-            projection: InspectProjection::Table,
-            start: None,
-            end: None,
-            row: None,
-            cell: None,
-            style: None,
-            num_id: None,
-            level: None,
-        })
+        let report = inspect_document(
+            &bytes,
+            &InspectRequest {
+                projection: InspectProjection::Table,
+                start: None,
+                end: None,
+                row: None,
+                cell: None,
+                style: None,
+                num_id: None,
+                level: None,
+            },
+        )
         .unwrap();
         // 表属性摘要行
         assert!(report.content.contains("表属性:"), "{}", report.content);
@@ -1922,137 +2114,189 @@ mod tests {
         assert!(report.content.contains("边框=自定义"), "{}", report.content);
         assert!(report.content.contains("宽=5000 pct"), "{}", report.content);
         // 格级标注
-        assert!(report.content.contains("表头甲(底纹#DDEEFF)(垂直=center)"), "{}", report.content);
-        assert!(report.content.contains("表头乙(自定边框)"), "{}", report.content);
+        assert!(
+            report.content.contains("表头甲(底纹#DDEEFF)(垂直=center)"),
+            "{}",
+            report.content
+        );
+        assert!(
+            report.content.contains("表头乙(自定边框)"),
+            "{}",
+            report.content
+        );
         // 无特征的格不挂标注（「数据」格无括号尾巴）
-        assert!(report.content.contains("r2: 数据 | (空)\n"), "{}", report.content);
+        assert!(
+            report.content.contains("r2: 数据 | (空)\n"),
+            "{}",
+            report.content
+        );
     }
 
     #[test]
     fn tblpr_projection_drills_three_levels() {
         let bytes = fmt_tbl_docx_bytes();
         // 表级
-        let report = inspect_document(&bytes, &InspectRequest {
-            projection: InspectProjection::Tblpr,
-            start: None,
-            end: None,
-            row: None,
-            cell: None,
-            style: None,
-            num_id: None,
-            level: None,
-        })
+        let report = inspect_document(
+            &bytes,
+            &InspectRequest {
+                projection: InspectProjection::Tblpr,
+                start: None,
+                end: None,
+                row: None,
+                cell: None,
+                style: None,
+                num_id: None,
+                level: None,
+            },
+        )
         .unwrap();
         assert!(
-            report.content.contains("[1] tblPr: <w:tblPr><w:tblStyle w:val=\"T1\"/>"),
+            report
+                .content
+                .contains("[1] tblPr: <w:tblPr><w:tblStyle w:val=\"T1\"/>"),
             "{}",
             report.content
         );
-        assert!(report.content.contains("</w:tblPr>"), "原文完整: {}", report.content);
+        assert!(
+            report.content.contains("</w:tblPr>"),
+            "原文完整: {}",
+            report.content
+        );
         // 行级
-        let report = inspect_document(&bytes, &InspectRequest {
-            projection: InspectProjection::Tblpr,
-            start: None,
-            end: None,
-            row: Some(1),
-            cell: None,
-            style: None,
-            num_id: None,
-            level: None,
-        })
-        .unwrap();
-        assert!(report.content.contains("[1] r1 trPr: (无 trPr)"), "{}", report.content);
-        // 格级
-        let report = inspect_document(&bytes, &InspectRequest {
-            projection: InspectProjection::Tblpr,
-            start: None,
-            end: None,
-            row: Some(1),
-            cell: Some(1),
-            style: None,
-            num_id: None,
-            level: None,
-        })
+        let report = inspect_document(
+            &bytes,
+            &InspectRequest {
+                projection: InspectProjection::Tblpr,
+                start: None,
+                end: None,
+                row: Some(1),
+                cell: None,
+                style: None,
+                num_id: None,
+                level: None,
+            },
+        )
         .unwrap();
         assert!(
-            report.content.contains("[1] r1c1 tcPr: <w:tcPr><w:shd w:val=\"clear\" w:fill=\"DDEEFF\"/>"),
+            report.content.contains("[1] r1 trPr: (无 trPr)"),
             "{}",
             report.content
         );
-        assert!(report.content.contains("<w:vAlign w:val=\"center\"/>"), "{}", report.content);
+        // 格级
+        let report = inspect_document(
+            &bytes,
+            &InspectRequest {
+                projection: InspectProjection::Tblpr,
+                start: None,
+                end: None,
+                row: Some(1),
+                cell: Some(1),
+                style: None,
+                num_id: None,
+                level: None,
+            },
+        )
+        .unwrap();
+        assert!(
+            report
+                .content
+                .contains("[1] r1c1 tcPr: <w:tcPr><w:shd w:val=\"clear\" w:fill=\"DDEEFF\"/>"),
+            "{}",
+            report.content
+        );
+        assert!(
+            report.content.contains("<w:vAlign w:val=\"center\"/>"),
+            "{}",
+            report.content
+        );
     }
 
     #[test]
     fn tblpr_projection_error_families() {
         let bytes = fmt_tbl_docx_bytes();
         // 行越界
-        let err = inspect_document(&bytes, &InspectRequest {
-            projection: InspectProjection::Tblpr,
-            start: None,
-            end: None,
-            row: Some(9),
-            cell: None,
-            style: None,
-            num_id: None,
-            level: None,
-        })
+        let err = inspect_document(
+            &bytes,
+            &InspectRequest {
+                projection: InspectProjection::Tblpr,
+                start: None,
+                end: None,
+                row: Some(9),
+                cell: None,
+                style: None,
+                num_id: None,
+                level: None,
+            },
+        )
         .unwrap_err()
         .to_string();
         assert!(err.contains("行号越界"), "实际: {err}");
         // 格越界
-        let err = inspect_document(&bytes, &InspectRequest {
-            projection: InspectProjection::Tblpr,
-            start: None,
-            end: None,
-            row: Some(1),
-            cell: Some(9),
-            style: None,
-            num_id: None,
-            level: None,
-        })
+        let err = inspect_document(
+            &bytes,
+            &InspectRequest {
+                projection: InspectProjection::Tblpr,
+                start: None,
+                end: None,
+                row: Some(1),
+                cell: Some(9),
+                style: None,
+                num_id: None,
+                level: None,
+            },
+        )
         .unwrap_err()
         .to_string();
         assert!(err.contains("单元格越界"), "实际: {err}");
         assert!(err.contains("projection=table"), "应指路网格视图: {err}");
         // cell 不带 row
-        let err = inspect_document(&bytes, &InspectRequest {
-            projection: InspectProjection::Tblpr,
-            start: None,
-            end: None,
-            row: None,
-            cell: Some(1),
-            style: None,
-            num_id: None,
-            level: None,
-        })
+        let err = inspect_document(
+            &bytes,
+            &InspectRequest {
+                projection: InspectProjection::Tblpr,
+                start: None,
+                end: None,
+                row: None,
+                cell: Some(1),
+                style: None,
+                num_id: None,
+                level: None,
+            },
+        )
         .unwrap_err()
         .to_string();
         assert!(err.contains("参数校验失败"), "实际: {err}");
         // row/cell 误传给其他投影
-        let err = inspect_document(&bytes, &InspectRequest {
-            projection: InspectProjection::Text,
-            start: None,
-            end: None,
-            row: Some(1),
-            cell: None,
-            style: None,
-            num_id: None,
-            level: None,
-        })
+        let err = inspect_document(
+            &bytes,
+            &InspectRequest {
+                projection: InspectProjection::Text,
+                start: None,
+                end: None,
+                row: Some(1),
+                cell: None,
+                style: None,
+                num_id: None,
+                level: None,
+            },
+        )
         .unwrap_err()
         .to_string();
         assert!(err.contains("参数不适用"), "实际: {err}");
         // row 指到段落块区间（fmt fixture 只有表——换带前导段的 tbl_docx_bytes，表=块 2）
-        let err = inspect_document(&tbl_docx_bytes(), &InspectRequest {
-            projection: InspectProjection::Tblpr,
-            start: Some(1),
-            end: Some(1),
-            row: Some(1),
-            cell: None,
-            style: None,
-            num_id: None,
-            level: None,
-        })
+        let err = inspect_document(
+            &tbl_docx_bytes(),
+            &InspectRequest {
+                projection: InspectProjection::Tblpr,
+                start: Some(1),
+                end: Some(1),
+                row: Some(1),
+                cell: None,
+                style: None,
+                num_id: None,
+                level: None,
+            },
+        )
         .unwrap_err()
         .to_string();
         assert!(err.contains("非表格块"), "实际: {err}");
@@ -2106,7 +2350,8 @@ mod tests {
                 ("word/styles.xml", styles_xml),
                 ("word/numbering.xml", numbering_xml.as_str()),
             ] {
-                w.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+                w.start_file(name, zip::write::SimpleFileOptions::default())
+                    .unwrap();
                 w.write_all(data.as_bytes()).unwrap();
             }
             w.finish().unwrap();
@@ -2144,7 +2389,9 @@ mod tests {
         );
         // 表样式的 type 与空特征
         assert!(
-            report.content.contains("ID=T1 | Grid Table | table | (无父) | -"),
+            report
+                .content
+                .contains("ID=T1 | Grid Table | table | (无父) | -"),
             "{}",
             report.content
         );
@@ -2168,7 +2415,9 @@ mod tests {
             report.content
         );
         assert!(
-            report.content.contains(r#"<w:style w:type="paragraph" w:styleId="2">"#),
+            report
+                .content
+                .contains(r#"<w:style w:type="paragraph" w:styleId="2">"#),
             "应含原文开标签: {}",
             report.content
         );
@@ -2215,8 +2464,11 @@ mod tests {
         let mut buf = Vec::new();
         {
             let mut w = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
-            w.start_file("word/document.xml", zip::write::SimpleFileOptions::default())
-                .unwrap();
+            w.start_file(
+                "word/document.xml",
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
             w.write_all(br#"<w:document xmlns:w="w"/>"#).unwrap();
             w.start_file("word/styles.xml", zip::write::SimpleFileOptions::default())
                 .unwrap();
@@ -2227,12 +2479,19 @@ mod tests {
         req.style = Some("同名".into());
         let err = inspect_document(&buf, &req).unwrap_err().to_string();
         assert!(err.contains("样式名重复"), "实际: {err}");
-        assert!(err.contains("a1") && err.contains("b2"), "应列全部 ID: {err}");
+        assert!(
+            err.contains("a1") && err.contains("b2"),
+            "应列全部 ID: {err}"
+        );
         // ID 寻址不受重名影响
         let mut req = def_req(InspectProjection::Styledef);
         req.style = Some("b2".into());
         let report = inspect_document(&buf, &req).unwrap();
-        assert!(report.content.contains(r#"w:styleId="b2""#), "{}", report.content);
+        assert!(
+            report.content.contains(r#"w:styleId="b2""#),
+            "{}",
+            report.content
+        );
     }
 
     #[test]
@@ -2265,7 +2524,11 @@ mod tests {
             report.content
         );
         // numId=33 无正文引用 → 0 处
-        assert!(report.content.contains("numId 33 → abstractNum 7"), "{}", report.content);
+        assert!(
+            report.content.contains("numId 33 → abstractNum 7"),
+            "{}",
+            report.content
+        );
 
         // 下钻：numId+level → w:lvl 原文（抄写源，须含完整标签）
         let mut req = def_req(InspectProjection::Numbering);
@@ -2273,12 +2536,16 @@ mod tests {
         req.level = Some(1);
         let report = inspect_document(&bytes, &req).unwrap();
         assert!(
-            report.content.contains("numId 21 level 1 定义原文（影响 numId 21、33，共享 abstractNum 7）"),
+            report
+                .content
+                .contains("numId 21 level 1 定义原文（影响 numId 21、33，共享 abstractNum 7）"),
             "{}",
             report.content
         );
         assert!(
-            report.content.contains(r#"<w:numFmt w:val="lowerLetter"/>"#),
+            report
+                .content
+                .contains(r#"<w:numFmt w:val="lowerLetter"/>"#),
             "{}",
             report.content
         );
@@ -2288,7 +2555,11 @@ mod tests {
         let mut req = def_req(InspectProjection::Numbering);
         req.num_id = Some(40);
         let report = inspect_document(&bytes, &req).unwrap();
-        assert!(report.content.contains("numId 40 → abstractNum 8"), "{}", report.content);
+        assert!(
+            report.content.contains("numId 40 → abstractNum 8"),
+            "{}",
+            report.content
+        );
 
         // 错误族
         let mut req = def_req(InspectProjection::Numbering);
@@ -2307,8 +2578,8 @@ mod tests {
         assert!(err.contains("参数校验失败"), "实际: {err}");
 
         // 无编号部件：清单诚实提示；点名下钻 → 报错
-        let report = inspect_document(&tbl_docx_bytes(), &def_req(InspectProjection::Numbering))
-            .unwrap();
+        let report =
+            inspect_document(&tbl_docx_bytes(), &def_req(InspectProjection::Numbering)).unwrap();
         assert!(report.content.contains("无编号部件"), "{}", report.content);
         let mut req = def_req(InspectProjection::Numbering);
         req.num_id = Some(1);

@@ -358,8 +358,14 @@ pub(crate) async fn run_agent_turn(
 
     // --- session_events 影子写入（Phase 0）：turn 用户侧事实 ---
     let ev = EventCtx::new(&conv_id, &user_msg_id, &agent.id);
-    event_log::log_user_message(pool, &ev, &user_msg_id, &user_content_snapshot, &persist_blocks)
-        .await;
+    event_log::log_user_message(
+        pool,
+        &ev,
+        &user_msg_id,
+        &user_content_snapshot,
+        &persist_blocks,
+    )
+    .await;
     // 附件留存事实——仅元信息（正文在 messages/分页表，字节在 files 表；防三重冗余）。
     if !attach_db_inputs.is_empty() {
         event_log::log_attachment_stored(
@@ -897,8 +903,11 @@ pub(crate) fn inject_into_system(
 /// 恒保留：它们是平台能力而非领域工具，收窄不应切断 agent 的自我配置与委派
 /// （delegate 在组装期按 conv.kind 注册，filter 兜底全局注册表可能含它的场景）。
 /// 模块级：组装期收窄披露日志与 filter 共用同一份名单。
-const PLATFORM_TOOLS: &[&str] =
-    &["propose_config_change", "read_agent_config", "delegate_to_agent"];
+const PLATFORM_TOOLS: &[&str] = &[
+    "propose_config_change",
+    "read_agent_config",
+    "delegate_to_agent",
+];
 
 /// ②-3：enabled_tools 名单过滤（纯函数）——非空名单 = 名单 ∪ 平台元工具；
 /// 空 / None = 原样全量（系统约定：空 ≡ 全开，与提案 guard / 出生模板同一判定）。
@@ -968,7 +977,12 @@ mod tests {
     fn snap_of(names: &[&str]) -> std::collections::HashMap<String, Arc<dyn McpClient>> {
         names
             .iter()
-            .map(|n| (n.to_string(), Arc::new(NamedStub(n.to_string())) as Arc<dyn McpClient>))
+            .map(|n| {
+                (
+                    n.to_string(),
+                    Arc::new(NamedStub(n.to_string())) as Arc<dyn McpClient>,
+                )
+            })
             .collect()
     }
 

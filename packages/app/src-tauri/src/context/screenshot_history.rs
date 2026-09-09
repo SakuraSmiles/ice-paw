@@ -77,10 +77,7 @@ pub(crate) fn compact_screenshot_history(
                 if img_idx >= keep_from {
                     new_content.push(b.clone());
                 } else if !marker_emitted {
-                    new_content.push(ContentBlock::text(marker_text(
-                        keep_from,
-                        keep_last_k,
-                    )));
+                    new_content.push(ContentBlock::text(marker_text(keep_from, keep_last_k)));
                     marker_emitted = true;
                 }
                 img_idx += 1;
@@ -184,7 +181,12 @@ mod tests {
     fn count_images(messages: &[ChatMessage]) -> usize {
         messages
             .iter()
-            .map(|m| m.content.iter().filter(|b| matches!(b, ContentBlock::Image { .. })).count())
+            .map(|m| {
+                m.content
+                    .iter()
+                    .filter(|b| matches!(b, ContentBlock::Image { .. }))
+                    .count()
+            })
             .sum()
     }
 
@@ -197,14 +199,15 @@ mod tests {
         // 保留的是靠后（较新）的 3 条；前 2 条各有一条 marker 且 ToolResult 原样
         for (i, m) in msgs.iter().enumerate() {
             assert!(
-                m.content.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. })),
+                m.content
+                    .iter()
+                    .any(|b| matches!(b, ContentBlock::ToolResult { .. })),
                 "ToolResult 块不得被压缩掉（{i}）"
             );
             if i < 2 {
-                assert!(m
-                    .content
-                    .iter()
-                    .any(|b| matches!(b, ContentBlock::Text { text } if text.contains("未随本条发送"))));
+                assert!(m.content.iter().any(
+                    |b| matches!(b, ContentBlock::Text { text } if text.contains("未随本条发送"))
+                ));
             }
         }
     }
@@ -221,7 +224,10 @@ mod tests {
         assert!(matches!(m.content[0], ContentBlock::ToolResult { .. }));
         assert!(matches!(m.content[1], ContentBlock::Text { .. }));
         assert_eq!(
-            m.content.iter().filter(|b| matches!(b, ContentBlock::Image { .. })).count(),
+            m.content
+                .iter()
+                .filter(|b| matches!(b, ContentBlock::Image { .. }))
+                .count(),
             3
         );
     }

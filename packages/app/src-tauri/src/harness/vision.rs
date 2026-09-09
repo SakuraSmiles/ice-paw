@@ -44,7 +44,12 @@ pub fn entry_to_credential(entry: &VisionConfigEntry, index: usize) -> Option<Vi
     if provider.is_empty() || model.is_empty() || api_key.is_empty() {
         return None;
     }
-    let base_url = match entry.base_url.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    let base_url = match entry
+        .base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         Some(u) => u.to_string(),
         None => default_vision_base_url(provider)?.to_string(),
     };
@@ -329,7 +334,10 @@ mod tests {
         // Coding 套餐 key 只认 Coding 端点；打标准端点必 1113「无可用资源包」（端点成对原则）
         let p = entries_prefs(vec![entry("glm-coding", "glm-5.3-flash", "gk")]);
         let chain = resolve_vision_entries(&p);
-        assert_eq!(chain[0].base_url, "https://open.bigmodel.cn/api/coding/paas/v4");
+        assert_eq!(
+            chain[0].base_url,
+            "https://open.bigmodel.cn/api/coding/paas/v4"
+        );
     }
 
     #[test]
@@ -343,10 +351,10 @@ mod tests {
     #[test]
     fn invalid_entries_are_skipped_not_blocking() {
         let p = entries_prefs(vec![
-            entry("", "some-model", "k"),       // provider 空
-            entry("glm", "  ", "k"),            // model 空（含空白）
-            entry("deepseek", "m", ""),         // key 空
-            entry("anthropic", "claude", "k"),  // provider 无视觉端点
+            entry("", "some-model", "k"),         // provider 空
+            entry("glm", "  ", "k"),              // model 空（含空白）
+            entry("deepseek", "m", ""),           // key 空
+            entry("anthropic", "claude", "k"),    // provider 无视觉端点
             entry("minimax", "MiniMax-M3", "mk"), // 有效
         ]);
         let chain = resolve_vision_entries(&p);
@@ -432,7 +440,10 @@ mod tests {
 
         // minimax-cn 标签同源
         let p = entries_prefs(vec![entry("minimax-cn", "MiniMax-M3", "mk")]);
-        assert_eq!(resolve_vision_entries(&p)[0].base_url, "https://api.minimaxi.com/v1");
+        assert_eq!(
+            resolve_vision_entries(&p)[0].base_url,
+            "https://api.minimaxi.com/v1"
+        );
     }
 
     #[test]

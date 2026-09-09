@@ -286,22 +286,30 @@ mod tests {
     #[tokio::test]
     async fn project_avatar_roundtrip() {
         let pool = test_pool().await;
-        create(&pool, &new_project(Some("data:image/webp;base64,xxx")), "p1")
-            .await
-            .expect("create");
+        create(
+            &pool,
+            &new_project(Some("data:image/webp;base64,xxx")),
+            "p1",
+        )
+        .await
+        .expect("create");
         let row = get_by_id(&pool, "p1").await.expect("get");
         assert_eq!(row.avatar.as_deref(), Some("data:image/webp;base64,xxx"));
         assert_eq!(row.icon.as_str(), "🚀");
 
         // 不带头像创建 → NULL（渲染层走渐变兜底）
-        create(&pool, &new_project(None), "p2").await.expect("create 2");
+        create(&pool, &new_project(None), "p2")
+            .await
+            .expect("create 2");
         assert_eq!(get_by_id(&pool, "p2").await.expect("get 2").avatar, None);
     }
 
     #[tokio::test]
     async fn project_avatar_update_double_option_semantics() {
         let pool = test_pool().await;
-        create(&pool, &new_project(None), "p1").await.expect("create");
+        create(&pool, &new_project(None), "p1")
+            .await
+            .expect("create");
 
         // 全 None = 不改
         let row = update(

@@ -169,7 +169,8 @@ pub(super) fn build_document(root: &Element) -> DocxDocument {
             }
         }
         "w:p" => {
-            doc.body.push(Block::Paragraph(parse_paragraph(root, &mut doc.sections)));
+            doc.body
+                .push(Block::Paragraph(parse_paragraph(root, &mut doc.sections)));
         }
         "w:tbl" => doc.body.push(Block::Table(parse_table(root))),
         _ => walk_blocks(&root.children, &mut doc.body, &mut doc.sections),
@@ -213,7 +214,12 @@ fn parse_paragraph(el: &Element, sections: &mut Vec<SectionProps>) -> Paragraph 
             }
         }
     }
-    Paragraph { runs, props, image_count, field_instrs }
+    Paragraph {
+        runs,
+        props,
+        image_count,
+        field_instrs,
+    }
 }
 
 /// 段内结构特征收集（D18 十波）：图片计数 + 域指令。与 collect_runs 分道——
@@ -283,7 +289,10 @@ pub(super) fn parse_para_props(p_pr: &Element) -> ParaProps {
                     .and_then(|v| v.parse::<u32>().ok());
                 if let Some(num_id) = num_id {
                     if num_id != 0 {
-                        props.numbering = Some(NumRef { num_id, ilvl: ilvl.unwrap_or(0) });
+                        props.numbering = Some(NumRef {
+                            num_id,
+                            ilvl: ilvl.unwrap_or(0),
+                        });
                     }
                 }
             }
@@ -304,13 +313,17 @@ fn collect_runs(el: &Element, ctx: RunCtx, runs: &mut Vec<Run>) {
     match el.name.as_str() {
         "w:r" => runs.push(parse_run(el, ctx)),
         "w:ins" => {
-            let ctx = RunCtx { revision: Some(Revision::Inserted) };
+            let ctx = RunCtx {
+                revision: Some(Revision::Inserted),
+            };
             for child in el.child_elements() {
                 collect_runs(child, ctx, runs);
             }
         }
         "w:del" => {
-            let ctx = RunCtx { revision: Some(Revision::Deleted) };
+            let ctx = RunCtx {
+                revision: Some(Revision::Deleted),
+            };
             for child in el.child_elements() {
                 collect_runs(child, ctx, runs);
             }
@@ -343,7 +356,11 @@ fn parse_run(el: &Element, ctx: RunCtx) -> Run {
             _ => flatten_exotic_inline(child, &mut text),
         }
     }
-    Run { text, props, revision: ctx.revision }
+    Run {
+        text,
+        props,
+        revision: ctx.revision,
+    }
 }
 
 /// 奇异子树（w:drawing / w:pict / mc:AlternateContent / 未知元素）的兜底文本收集：
@@ -433,7 +450,13 @@ fn parse_table(el: &Element) -> Table {
             TableRow { cells }
         })
         .collect();
-    Table { rows, style_id, shd_fill, has_borders, width_desc }
+    Table {
+        rows,
+        style_id,
+        shd_fill,
+        has_borders,
+        width_desc,
+    }
 }
 
 fn parse_cell(el: &Element) -> TableCell {
@@ -474,7 +497,14 @@ fn parse_cell(el: &Element) -> TableCell {
             }
         }
     }
-    TableCell { blocks, grid_span, v_merge, shd_fill, v_align, has_custom_borders }
+    TableCell {
+        blocks,
+        grid_span,
+        v_merge,
+        shd_fill,
+        v_align,
+        has_custom_borders,
+    }
 }
 
 fn parse_sect_pr(el: &Element) -> SectionProps {
@@ -620,8 +650,12 @@ mod tests {
 
     #[test]
     fn paragraphs_and_props() {
-        let doc = model(r#"<w:p><w:pPr><w:pStyle w:val="2"/><w:jc w:val="center"/><w:numPr><w:ilvl w:val="1"/><w:numId w:val="3"/></w:numPr></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="32"/><w:color w:val="FF0000"/><w:rFonts w:eastAsia="黑体" w:ascii="Times"/></w:rPr><w:t>标题</w:t></w:r></w:p>"#);
-        let Block::Paragraph(p) = &doc.body[0] else { panic!("应为段落") };
+        let doc = model(
+            r#"<w:p><w:pPr><w:pStyle w:val="2"/><w:jc w:val="center"/><w:numPr><w:ilvl w:val="1"/><w:numId w:val="3"/></w:numPr></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="32"/><w:color w:val="FF0000"/><w:rFonts w:eastAsia="黑体" w:ascii="Times"/></w:rPr><w:t>标题</w:t></w:r></w:p>"#,
+        );
+        let Block::Paragraph(p) = &doc.body[0] else {
+            panic!("应为段落")
+        };
         assert_eq!(p.props.style.as_deref(), Some("2"));
         assert_eq!(p.props.alignment.as_deref(), Some("center"));
         assert_eq!(p.props.numbering, Some(NumRef { num_id: 3, ilvl: 1 }));
@@ -637,8 +671,12 @@ mod tests {
 
     #[test]
     fn on_off_false_values() {
-        let doc = model(r#"<w:p><w:r><w:rPr><w:b w:val="false"/><w:i w:val="0"/></w:rPr><w:t>x</w:t></w:r></w:p>"#);
-        let Block::Paragraph(p) = &doc.body[0] else { panic!() };
+        let doc = model(
+            r#"<w:p><w:r><w:rPr><w:b w:val="false"/><w:i w:val="0"/></w:rPr><w:t>x</w:t></w:r></w:p>"#,
+        );
+        let Block::Paragraph(p) = &doc.body[0] else {
+            panic!()
+        };
         assert_eq!(p.runs[0].props.bold, Some(false));
         assert_eq!(p.runs[0].props.italic, Some(false));
     }
@@ -646,8 +684,12 @@ mod tests {
     #[test]
     fn revision_semantics() {
         // w:ins 文本计入；w:del 文本（w:delText）剔除但保留在模型
-        let doc = model(r#"<w:p><w:r><w:t>保留</w:t></w:r><w:ins><w:r><w:t>新增</w:t></w:r></w:ins><w:del><w:r><w:delText>旧文</w:delText></w:r></w:del></w:p>"#);
-        let Block::Paragraph(p) = &doc.body[0] else { panic!() };
+        let doc = model(
+            r#"<w:p><w:r><w:t>保留</w:t></w:r><w:ins><w:r><w:t>新增</w:t></w:r></w:ins><w:del><w:r><w:delText>旧文</w:delText></w:r></w:del></w:p>"#,
+        );
+        let Block::Paragraph(p) = &doc.body[0] else {
+            panic!()
+        };
         assert_eq!(p.runs.len(), 3);
         assert_eq!(p.runs[1].revision, Some(Revision::Inserted));
         assert_eq!(p.runs[2].revision, Some(Revision::Deleted));
@@ -661,7 +703,9 @@ mod tests {
             r#"<w:tbl><w:tr><w:tc><w:p><w:r><w:t>A1</w:t></w:r></w:p></w:tc><w:tc><w:tcPr><w:gridSpan w:val="2"/><w:vMerge w:val="restart"/></w:tcPr><w:p><w:r><w:t>B1</w:t></w:r></w:p></w:tc></w:tr>\
                <w:tr><w:tc><w:p><w:r><w:t>A2</w:t></w:r></w:p></w:tc><w:tc><w:tcPr><w:vMerge/></w:tcPr><w:p><w:r><w:t></w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
         );
-        let Block::Table(t) = &doc.body[0] else { panic!() };
+        let Block::Table(t) = &doc.body[0] else {
+            panic!()
+        };
         assert_eq!(t.rows.len(), 2);
         assert_eq!(t.rows[0].cells[1].grid_span, Some(2));
         // vMerge：显式 restart / 无 val = continue（OOXML 规范）
@@ -676,8 +720,12 @@ mod tests {
         let doc = model(
             r#"<w:tbl><w:tr><w:tc><w:tbl><w:tr><w:tc><w:p><w:r><w:t>内层</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p><w:r><w:t>外层</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
         );
-        let Block::Table(t) = &doc.body[0] else { panic!() };
-        let Block::Table(inner) = &t.rows[0].cells[0].blocks[0] else { panic!() };
+        let Block::Table(t) = &doc.body[0] else {
+            panic!()
+        };
+        let Block::Table(inner) = &t.rows[0].cells[0].blocks[0] else {
+            panic!()
+        };
         assert_eq!(text(&doc), "内层\n外层\n");
         assert_eq!(inner.rows.len(), 1);
     }
@@ -685,7 +733,9 @@ mod tests {
     #[test]
     fn transparent_containers_flatten() {
         // sdt（内容控件，TOC 常用）/ hyperlink 透明摊平，文本不丢
-        let doc = model(r#"<w:sdt><w:sdtContent><w:p><w:r><w:t>目录项</w:t></w:r></w:p></w:sdtContent></w:sdt><w:p><w:hyperlink><w:r><w:t>链接文字</w:t></w:r></w:hyperlink></w:p>"#);
+        let doc = model(
+            r#"<w:sdt><w:sdtContent><w:p><w:r><w:t>目录项</w:t></w:r></w:p></w:sdtContent></w:sdt><w:p><w:hyperlink><w:r><w:t>链接文字</w:t></w:r></w:hyperlink></w:p>"#,
+        );
         assert_eq!(doc.body.len(), 2);
         assert_eq!(text(&doc), "目录项\n链接文字\n");
     }
@@ -693,7 +743,9 @@ mod tests {
     #[test]
     fn exotic_drawing_text_flattened() {
         // 文本框藏在 w:drawing 内：文本保真，内层段落边界 → \n
-        let doc = model(r#"<w:p><w:r><w:t>前</w:t></w:r><w:r><w:drawing><w:pict><w:txbxContent><w:p><w:r><w:t>框内</w:t></w:r></w:p></w:txbxContent></w:pict></w:drawing></w:r><w:r><w:t>后</w:t></w:r></w:p>"#);
+        let doc = model(
+            r#"<w:p><w:r><w:t>前</w:t></w:r><w:r><w:drawing><w:pict><w:txbxContent><w:p><w:r><w:t>框内</w:t></w:r></w:p></w:txbxContent></w:pict></w:drawing></w:r><w:r><w:t>后</w:t></w:r></w:p>"#,
+        );
         assert_eq!(text(&doc), "前框内\n后\n");
     }
 
@@ -705,7 +757,10 @@ mod tests {
         );
         assert_eq!(doc.sections.len(), 2);
         assert_eq!(doc.sections[0].page_w, Some(11906));
-        assert_eq!(doc.sections[0].header_refs, vec![("default".to_string(), "rId4".to_string())]);
+        assert_eq!(
+            doc.sections[0].header_refs,
+            vec![("default".to_string(), "rId4".to_string())]
+        );
         assert_eq!(doc.sections[1].margin_left, Some(1800));
         assert_eq!(doc.sections[1].footer_refs[0].0, "first");
     }
@@ -714,14 +769,20 @@ mod tests {
     fn tab_stop_definitions_not_text() {
         // pPr 里的 tab 停靠点定义（格式元数据）不产生文本——旧扫描器的幻影 \t
         // 缺陷在 S0a 有意修复（见 corpus_tests::strip_tab_stops）
-        let doc = model(r#"<w:p><w:pPr><w:tabs><w:tab w:val="left" w:pos="864"/><w:tab w:val="right" w:pos="9350"/></w:tabs></w:pPr><w:r><w:t>A</w:t><w:tab/><w:t>B</w:t></w:r></w:p>"#);
+        let doc = model(
+            r#"<w:p><w:pPr><w:tabs><w:tab w:val="left" w:pos="864"/><w:tab w:val="right" w:pos="9350"/></w:tabs></w:pPr><w:r><w:t>A</w:t><w:tab/><w:t>B</w:t></w:r></w:p>"#,
+        );
         assert_eq!(text(&doc), "A\tB\n");
     }
 
     #[test]
     fn num_id_zero_is_none() {
-        let doc = model(r#"<w:p><w:pPr><w:numPr><w:numId w:val="0"/></w:numPr></w:pPr><w:r><w:t>x</w:t></w:r></w:p>"#);
-        let Block::Paragraph(p) = &doc.body[0] else { panic!() };
+        let doc = model(
+            r#"<w:p><w:pPr><w:numPr><w:numId w:val="0"/></w:numPr></w:pPr><w:r><w:t>x</w:t></w:r></w:p>"#,
+        );
+        let Block::Paragraph(p) = &doc.body[0] else {
+            panic!()
+        };
         assert!(p.props.numbering.is_none());
     }
 }

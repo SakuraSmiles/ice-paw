@@ -52,7 +52,8 @@ impl McpClient for RequestScreenSessionTool {
     async fn execute(&self, _args: &str) -> AppResult<String> {
         // 需要 conv_id + pool（附着信息查库），走 execute_with_output。
         Err(AppError::Internal(
-            "request_screen_session 必须通过 execute_with_output 调用（需要 conv_id + pool）".into(),
+            "request_screen_session 必须通过 execute_with_output 调用（需要 conv_id + pool）"
+                .into(),
         ))
     }
 

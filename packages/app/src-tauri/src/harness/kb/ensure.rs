@@ -366,8 +366,7 @@ mod tests {
     #[test]
     fn ensure_project_context_dir_creates_template_and_idempotent() {
         let ws = unique_temp_ws();
-        let dir =
-            ensure_project_context_dir(Some(ws.to_str().unwrap()), "p9", "测试项目").unwrap();
+        let dir = ensure_project_context_dir(Some(ws.to_str().unwrap()), "p9", "测试项目").unwrap();
         assert_eq!(dir, ws.join("projects").join("p9"));
         let md = std::fs::read_to_string(dir.join("project.md")).unwrap();
         assert!(md.contains("# 测试项目"));

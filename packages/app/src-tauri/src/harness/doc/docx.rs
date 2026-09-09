@@ -39,9 +39,8 @@ pub(super) fn extract(bytes: &[u8]) -> AppResult<ExtractedDoc> {
 /// document.xml 约定为 UTF-8；对极少数编码损坏的文件用 lossy 兜底（仅此一处，
 /// 不影响"非 office 走原文本解码"的总体约定——此处已确认是 docx）。
 pub(super) fn read_document_xml(bytes: &[u8]) -> AppResult<String> {
-    read_entry(bytes, "word/document.xml")?.ok_or_else(|| {
-        AppError::Internal("docx 内缺少 word/document.xml".to_string())
-    })
+    read_entry(bytes, "word/document.xml")?
+        .ok_or_else(|| AppError::Internal("docx 内缺少 word/document.xml".to_string()))
 }
 
 /// 从 docx (ZIP) 容器读出任意部件为字符串；部件不存在 → `Ok(None)`（styles.xml
@@ -165,8 +164,8 @@ pub(super) fn extract_text_from_xml(xml: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::xml_dom;
+    use super::*;
 
     /// golden 路径：扫描器 + normalize
     fn run(xml: &str) -> String {
@@ -192,7 +191,9 @@ mod tests {
     #[test]
     fn model_text_matches_golden_scanner() {
         // 基础形态
-        assert_zero_regression(r#"<w:p><w:r><w:t>Hello</w:t></w:r></w:p><w:p><w:r><w:t>World</w:t></w:r></w:p>"#);
+        assert_zero_regression(
+            r#"<w:p><w:r><w:t>Hello</w:t></w:r></w:p><w:p><w:r><w:t>World</w:t></w:r></w:p>"#,
+        );
         assert_zero_regression("<w:p><w:r><w:t xml:space=\"preserve\">保留空格</w:t></w:r></w:p>");
         // 实体（已知/数字/未知）
         assert_zero_regression(
@@ -210,7 +211,9 @@ mod tests {
         assert_zero_regression(
             r#"<w:p><w:ins><w:r><w:t>新增</w:t></w:r></w:ins><w:del><w:r><w:delText>旧文</w:delText></w:r></w:del></w:p>"#,
         );
-        assert_zero_regression(r#"<w:p><w:hyperlink><w:r><w:t>链接</w:t></w:r></w:hyperlink></w:p>"#);
+        assert_zero_regression(
+            r#"<w:p><w:hyperlink><w:r><w:t>链接</w:t></w:r></w:hyperlink></w:p>"#,
+        );
         assert_zero_regression(
             r#"<w:sdt><w:sdtContent><w:p><w:r><w:t>目录</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
         );

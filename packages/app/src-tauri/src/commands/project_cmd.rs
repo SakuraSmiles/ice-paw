@@ -235,10 +235,12 @@ async fn get_project_context_impl(
             conventions_md: String::new(),
         });
     };
-    let project_md =
-        tokio::fs::read_to_string(dir.join("project.md")).await.unwrap_or_default();
-    let conventions_md =
-        tokio::fs::read_to_string(dir.join("conventions.md")).await.unwrap_or_default();
+    let project_md = tokio::fs::read_to_string(dir.join("project.md"))
+        .await
+        .unwrap_or_default();
+    let conventions_md = tokio::fs::read_to_string(dir.join("conventions.md"))
+        .await
+        .unwrap_or_default();
     Ok(ProjectContextOut {
         available: true,
         dir: Some(dir.display().to_string()),
@@ -548,10 +550,7 @@ mod tests {
     fn unique_temp_ws() -> PathBuf {
         static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!(
-            "ice-paw-ctx-test-{}-{n}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("ice-paw-ctx-test-{}-{n}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -639,7 +638,12 @@ mod tests {
             .unwrap();
         seed_project(&pool, "p1", "P").await;
 
-        for evil in ["../agent.yaml", "agent.yaml", "project.md.bak", "./project.md"] {
+        for evil in [
+            "../agent.yaml",
+            "agent.yaml",
+            "project.md.bak",
+            "./project.md",
+        ] {
             let err = set_project_context_impl(&pool, "p1", evil, "x")
                 .await
                 .expect_err("白名单外文件应被拒");
@@ -753,7 +757,14 @@ mod tests {
         seed_agent_row(&pool).await;
         seed_project(&pool, "p1", "P").await;
 
-        seed_conv_row(&pool, "done", "delegation", Some("p1"), "2026-08-18 10:00:00").await;
+        seed_conv_row(
+            &pool,
+            "done",
+            "delegation",
+            Some("p1"),
+            "2026-08-18 10:00:00",
+        )
+        .await;
         repo::session_event::append(
             &pool,
             "done",
@@ -766,7 +777,14 @@ mod tests {
         .await
         .unwrap();
         // 损坏 payload：解析失败必须降级 None，不吞会话行
-        seed_conv_row(&pool, "corrupt", "delegation", Some("p1"), "2026-08-18 11:00:00").await;
+        seed_conv_row(
+            &pool,
+            "corrupt",
+            "delegation",
+            Some("p1"),
+            "2026-08-18 11:00:00",
+        )
+        .await;
         repo::session_event::append(
             &pool,
             "corrupt",
@@ -779,10 +797,25 @@ mod tests {
         .await
         .unwrap();
         // 进行中：有事件但无 turn_ended
-        seed_conv_row(&pool, "running", "delegation", Some("p1"), "2026-08-18 12:00:00").await;
-        repo::session_event::append(&pool, "running", "turn_context", "user", Some("t1"), None, "{}")
-            .await
-            .unwrap();
+        seed_conv_row(
+            &pool,
+            "running",
+            "delegation",
+            Some("p1"),
+            "2026-08-18 12:00:00",
+        )
+        .await;
+        repo::session_event::append(
+            &pool,
+            "running",
+            "turn_context",
+            "user",
+            Some("t1"),
+            None,
+            "{}",
+        )
+        .await
+        .unwrap();
 
         let tasks = list_project_tasks_impl(&pool, "p1").await.unwrap();
         assert_eq!(tasks.len(), 3, "损坏 payload 不吞行");
@@ -832,7 +865,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            tail.iter().map(|e| e.event.message_id.as_deref()).collect::<Vec<_>>(),
+            tail.iter()
+                .map(|e| e.event.message_id.as_deref())
+                .collect::<Vec<_>>(),
             vec![Some("m2"), Some("m3")]
         );
         // payload 已 parse 为对象 + 会话标注列挂上

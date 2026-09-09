@@ -72,7 +72,9 @@ impl NumberingCatalog {
 
     /// numId 已定义的 ilvl 清单（升序；def_edit 越界报错列已有级用）。
     pub(super) fn ilvls_of_num(&self, num_id: u32) -> Vec<u32> {
-        let Some(abs_id) = self.nums.get(&num_id) else { return Vec::new() };
+        let Some(abs_id) = self.nums.get(&num_id) else {
+            return Vec::new();
+        };
         let mut lvls: Vec<u32> = self
             .abstracts
             .get(abs_id)
@@ -96,8 +98,7 @@ impl NumberingCatalog {
 
     /// 全部 num 实例（numId 升序；numbering 投影逐 numId 分段用）。
     pub(super) fn num_entries(&self) -> Vec<(u32, u32)> {
-        let mut entries: Vec<(u32, u32)> =
-            self.nums.iter().map(|(&n, &a)| (n, a)).collect();
+        let mut entries: Vec<(u32, u32)> = self.nums.iter().map(|(&n, &a)| (n, a)).collect();
         entries.sort_unstable();
         entries
     }
@@ -177,8 +178,12 @@ pub(super) fn compute_numbers(
     let mut out: HashMap<usize, String> = HashMap::new();
     for (i, block) in body.iter().enumerate() {
         let Block::Paragraph(p) = block else { continue };
-        let Some(num) = &p.props.numbering else { continue };
-        let Some(def) = catalog.lvl_of(num.num_id, num.ilvl) else { continue };
+        let Some(num) = &p.props.numbering else {
+            continue;
+        };
+        let Some(def) = catalog.lvl_of(num.num_id, num.ilvl) else {
+            continue;
+        };
 
         // 本级 +1（首个出现从 start 起算：先重置为 start-1 再自增）
         let entry = counters
@@ -214,7 +219,13 @@ pub(super) fn sanitize_bullet_glyph(s: &str) -> String {
         return s.to_string();
     }
     s.chars()
-        .map(|c| if ('\u{E000}'..='\u{F8FF}').contains(&c) { '•' } else { c })
+        .map(|c| {
+            if ('\u{E000}'..='\u{F8FF}').contains(&c) {
+                '•'
+            } else {
+                c
+            }
+        })
         .collect()
 }
 
@@ -244,10 +255,7 @@ fn render_lvl_text(
         // 不是 1（真实语料有作者手调 start 对齐手写编号的形态：lvl1 start=2、
         // lvl2 start=6 → 首个 lvl2 段渲染 "1.2.6"；此前按 1 算成 "1.1.6"）。
         // 计数器值域 = {start-1（重置待复现）} ∪ {≥start}，故 < start 即回退 start。
-        let lvl_start = catalog
-            .lvl_of(num_id, ilvl)
-            .map(|d| d.start)
-            .unwrap_or(1);
+        let lvl_start = catalog.lvl_of(num_id, ilvl).map(|d| d.start).unwrap_or(1);
         let value = match counters.get(&(num_id, ilvl)).copied() {
             Some(v) if v >= lvl_start => v,
             _ => lvl_start,
@@ -274,10 +282,12 @@ fn render_number(num_fmt: &str, value: u32) -> String {
         "upperLetter" => to_letters(value, true),
         "lowerRoman" => to_roman(value, false),
         "upperRoman" => to_roman(value, true),
-        "chineseCounting" | "chineseCountingThousand" | "chineseLegalSimplified"
-        | "ideographDigital" | "japaneseCounting" | "japaneseDigitalTenThousand" => {
-            to_chinese(value)
-        }
+        "chineseCounting"
+        | "chineseCountingThousand"
+        | "chineseLegalSimplified"
+        | "ideographDigital"
+        | "japaneseCounting"
+        | "japaneseDigitalTenThousand" => to_chinese(value),
         // bullet / none：lvlText 通常无 %N 占位，占位出现时给空（符号列表无序数值）
         "bullet" | "none" => String::new(),
         _ => value.to_string(),
@@ -293,14 +303,29 @@ fn to_letters(mut n: u32, upper: bool) -> String {
         n /= 26;
     }
     let s: String = out.iter().rev().map(|&b| b as char).collect();
-    if upper { s.to_uppercase() } else { s }
+    if upper {
+        s.to_uppercase()
+    } else {
+        s
+    }
 }
 
 /// 罗马数字（1..=3999 标准；超界回退阿拉伯）。
 fn to_roman(n: u32, upper: bool) -> String {
     const PAIRS: [(u32, &str); 13] = [
-        (1000, "m"), (900, "cm"), (500, "d"), (400, "cd"), (100, "c"), (90, "xc"),
-        (50, "l"), (40, "xl"), (10, "x"), (9, "ix"), (5, "v"), (4, "iv"), (1, "i"),
+        (1000, "m"),
+        (900, "cm"),
+        (500, "d"),
+        (400, "cd"),
+        (100, "c"),
+        (90, "xc"),
+        (50, "l"),
+        (40, "xl"),
+        (10, "x"),
+        (9, "ix"),
+        (5, "v"),
+        (4, "iv"),
+        (1, "i"),
     ];
     if n == 0 || n >= 4000 {
         return n.to_string();
@@ -313,7 +338,11 @@ fn to_roman(n: u32, upper: bool) -> String {
             rest -= v;
         }
     }
-    if upper { out.to_uppercase() } else { out }
+    if upper {
+        out.to_uppercase()
+    } else {
+        out
+    }
 }
 
 /// 中文数字（chineseCountingThousand 进位式：二十一 / 一百零一 / 一千零一）。
@@ -366,10 +395,8 @@ mod tests {
     use super::*;
 
     fn numbering_xml(body: &str) -> NumberingCatalog {
-        let dom = xml_dom::parse(&format!(
-            r#"<w:numbering xmlns:w="w">{body}</w:numbering>"#
-        ))
-        .unwrap();
+        let dom =
+            xml_dom::parse(&format!(r#"<w:numbering xmlns:w="w">{body}</w:numbering>"#)).unwrap();
         parse_numbering(&dom)
     }
 
@@ -425,7 +452,11 @@ mod tests {
         assert_eq!(nums.get(&2), Some(&"a)".to_string()));
         assert_eq!(nums.get(&3), Some(&"b)".to_string()));
         assert_eq!(nums.get(&4), Some(&"2.".to_string()));
-        assert_eq!(nums.get(&5), Some(&"a)".to_string()), "子级应随父级清零重计");
+        assert_eq!(
+            nums.get(&5),
+            Some(&"a)".to_string()),
+            "子级应随父级清零重计"
+        );
     }
 
     #[test]
@@ -466,7 +497,11 @@ mod tests {
         let nums = compute_numbers(&body, &cat);
         assert_eq!(nums.get(&1), Some(&"1".to_string()));
         assert_eq!(nums.get(&2), Some(&"2".to_string()));
-        assert_eq!(nums.get(&3), Some(&"2.2.6".to_string()), "lvl1 未出现按 start=2");
+        assert_eq!(
+            nums.get(&3),
+            Some(&"2.2.6".to_string()),
+            "lvl1 未出现按 start=2"
+        );
     }
 
     #[test]

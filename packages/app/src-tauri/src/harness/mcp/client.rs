@@ -741,7 +741,10 @@ mod tests {
         }
         let defs = registry.list_tool_defs().await;
         let names: Vec<_> = defs.iter().map(|d| d.name.as_str()).collect();
-        assert!(names.windows(2).all(|w| w[0] <= w[1]), "出口应按名升序: {names:?}");
+        assert!(
+            names.windows(2).all(|w| w[0] <= w[1]),
+            "出口应按名升序: {names:?}"
+        );
         assert_eq!(names.first(), Some(&"alpha"));
     }
 

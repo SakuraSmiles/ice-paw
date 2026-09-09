@@ -29,7 +29,12 @@ use crate::db::repo;
 use crate::error::{AppError, AppResult};
 
 /// 可改写键白名单（新增键须同步 `validate_patched` 的回读分支）
-const WRITABLE_FIELDS: &[&str] = &["max_total_tokens", "tool_max_rounds", "temperature", "max_tokens"];
+const WRITABLE_FIELDS: &[&str] = &[
+    "max_total_tokens",
+    "tool_max_rounds",
+    "temperature",
+    "max_tokens",
+];
 
 /// 改写动作：设值 / 注释掉（注释掉 = 恢复默认自适应 + 自动续期）
 #[derive(Debug, Clone, PartialEq)]
@@ -1024,7 +1029,11 @@ mod tests {
     #[test]
     fn block_patch_inline_scalar_replaced() {
         // 用户手写的单行形态：键行替换为块，后续列 0 行不是块体、原样保留
-        let out = patch_agent_yaml_block("system_prompt: 单行值\nprovider: glm\n", "system_prompt", "新文本");
+        let out = patch_agent_yaml_block(
+            "system_prompt: 单行值\nprovider: glm\n",
+            "system_prompt",
+            "新文本",
+        );
         assert!(out.starts_with("system_prompt: |\n  新文本\n"));
         assert!(out.contains("provider: glm"));
         assert!(!out.contains("单行值"));
@@ -1051,13 +1060,11 @@ mod tests {
 
     #[test]
     fn block_patch_indented_and_prefixed_keys_not_matched() {
-        let yaml = "extra_params:\n  system_prompt: 内层\nsystem_prompt_x: 前缀\n# system_prompt: 注释\n";
+        let yaml =
+            "extra_params:\n  system_prompt: 内层\nsystem_prompt_x: 前缀\n# system_prompt: 注释\n";
         let out = patch_agent_yaml_block(yaml, "system_prompt", "新");
         // 无列 0 活跃键 → 追加，原有行一律不动
-        assert_eq!(
-            out,
-            format!("{yaml}system_prompt: |\n  新\n")
-        );
+        assert_eq!(out, format!("{yaml}system_prompt: |\n  新\n"));
     }
 
     #[test]
@@ -1066,7 +1073,10 @@ mod tests {
         let out = patch_agent_yaml_block(&sample_yaml(), "system_prompt", &text);
         let cfg: AgentFileConfig = serde_yaml::from_str(&out).unwrap();
         // | 块解析值恒带尾换行 → trim_end 对齐
-        assert_eq!(cfg.system_prompt.as_deref().map(str::trim_end), Some(text.as_str()));
+        assert_eq!(
+            cfg.system_prompt.as_deref().map(str::trim_end),
+            Some(text.as_str())
+        );
         // 其余字段不受影响
         assert_eq!(cfg.max_total_tokens, Some(800000));
         assert_eq!(cfg.tool_max_rounds, Some(50));
@@ -1106,11 +1116,8 @@ mod tests {
 
     #[test]
     fn word_profile_removal_drops_block_and_is_idempotent() {
-        let with_block = patch_agent_yaml_block(
-            &sample_yaml(),
-            "word_style_profile",
-            "表头黑体\n正文宋体",
-        );
+        let with_block =
+            patch_agent_yaml_block(&sample_yaml(), "word_style_profile", "表头黑体\n正文宋体");
         let removed = patch_agent_yaml_remove_block(&with_block, "word_style_profile");
         assert!(!removed.contains("word_style_profile"));
         assert!(!removed.contains("表头黑体"), "块体随键行整体摘除");
@@ -1122,14 +1129,21 @@ mod tests {
         assert_eq!(fields.word_style_profile, None);
 
         // 无键 = no-op（幂等摘除）；缩进子键 / 注释行不误伤
-        assert_eq!(patch_agent_yaml_remove_block(&sample_yaml(), "word_style_profile"), sample_yaml());
+        assert_eq!(
+            patch_agent_yaml_remove_block(&sample_yaml(), "word_style_profile"),
+            sample_yaml()
+        );
         let nested = "extra_params:\n  word_style_profile: 内层\n# word_style_profile: 注释\n";
-        assert_eq!(patch_agent_yaml_remove_block(nested, "word_style_profile"), nested);
+        assert_eq!(
+            patch_agent_yaml_remove_block(nested, "word_style_profile"),
+            nested
+        );
     }
 
     #[test]
     fn word_profile_removal_crlf_bom() {
-        let yaml = "\u{FEFF}provider: glm\r\nword_style_profile: |\r\n  偏好\r\ntool_max_rounds: 50\r\n";
+        let yaml =
+            "\u{FEFF}provider: glm\r\nword_style_profile: |\r\n  偏好\r\ntool_max_rounds: 50\r\n";
         let out = patch_agent_yaml_remove_block(yaml, "word_style_profile");
         assert!(out.starts_with('\u{FEFF}'));
         assert_eq!(out, "\u{FEFF}provider: glm\r\ntool_max_rounds: 50\r\n");
@@ -1148,19 +1162,35 @@ mod tests {
 
     #[test]
     fn set_float_overwrites_and_keeps_float_form() {
-        let out = patch_agent_yaml(&sample_yaml(), "temperature", &YamlPatchAction::SetFloat(0.3));
+        let out = patch_agent_yaml(
+            &sample_yaml(),
+            "temperature",
+            &YamlPatchAction::SetFloat(0.3),
+        );
         assert!(out.contains("temperature: 0.3\n"));
         // 整值浮点保持 `1.0` 形态（Display 会退化成 `1`）
-        let out2 = patch_agent_yaml(&sample_yaml(), "temperature", &YamlPatchAction::SetFloat(1.0));
+        let out2 = patch_agent_yaml(
+            &sample_yaml(),
+            "temperature",
+            &YamlPatchAction::SetFloat(1.0),
+        );
         assert!(out2.contains("temperature: 1.0\n"));
         // 缺键追加
-        let out3 = patch_agent_yaml("provider: glm\n", "temperature", &YamlPatchAction::SetFloat(0.5));
+        let out3 = patch_agent_yaml(
+            "provider: glm\n",
+            "temperature",
+            &YamlPatchAction::SetFloat(0.5),
+        );
         assert!(out3.contains("temperature: 0.5\n"));
     }
 
     #[test]
     fn set_float_validate_readback() {
-        let out = patch_agent_yaml(&sample_yaml(), "temperature", &YamlPatchAction::SetFloat(0.9));
+        let out = patch_agent_yaml(
+            &sample_yaml(),
+            "temperature",
+            &YamlPatchAction::SetFloat(0.9),
+        );
         let fields = validate_patched(&out, "temperature", &YamlPatchAction::SetFloat(0.9));
         assert!(fields.is_ok());
         // 回读不符（改成 0.9 但按 0.7 校验）→ 拒
@@ -1186,20 +1216,30 @@ mod tests {
         ]
         .join("\n")
             + "\n";
-        let out = patch_agent_yaml_seq(&yaml, "enabled_tools", &["t1_search_kb".into(), "t3_read_file".into()]);
+        let out = patch_agent_yaml_seq(
+            &yaml,
+            "enabled_tools",
+            &["t1_search_kb".into(), "t3_read_file".into()],
+        );
         assert!(out.contains("enabled_tools: [t1_search_kb, t3_read_file]\n"));
         assert!(!out.contains("- t2_write_file"));
         assert!(out.contains("temperature: 0.7"));
         // 重解析回读逐项相等
-        assert!(
-            validate_enabled_tools_patched(&out, Some(&["t1_search_kb".into(), "t3_read_file".into()])).is_ok()
-        );
+        assert!(validate_enabled_tools_patched(
+            &out,
+            Some(&["t1_search_kb".into(), "t3_read_file".into()])
+        )
+        .is_ok());
     }
 
     #[test]
     fn enabled_tools_seq_appends_and_flow_replace() {
         // 缺键追加（含需要引号的防御性名字）
-        let out = patch_agent_yaml_seq("provider: glm\n", "enabled_tools", &["a-b_1".into(), "we:ird".into()]);
+        let out = patch_agent_yaml_seq(
+            "provider: glm\n",
+            "enabled_tools",
+            &["a-b_1".into(), "we:ird".into()],
+        );
         assert!(out.contains("enabled_tools: [a-b_1, \"we:ird\"]\n"));
         // 已是 flow 单行 → 原位替换
         let out2 = patch_agent_yaml_seq(&out, "enabled_tools", &["only_one".into()]);
@@ -1267,10 +1307,7 @@ mod tests {
         // 存量 yaml 无镜像行（旧格式/用户删除）→ 追加（文件不重排、其余行不动）
         let yaml = "system_prompt: |\n  你好\ntemperature: 0.3\n";
         let out = sync_agent_yaml_mirror(yaml, "glm", "glm-5.2", None);
-        assert_eq!(
-            out,
-            format!("{yaml}provider: glm\nmodel: glm-5.2\n")
-        );
+        assert_eq!(out, format!("{yaml}provider: glm\nmodel: glm-5.2\n"));
         validate_mirror_sync(&out, "glm", "glm-5.2", None).unwrap();
     }
 
@@ -1284,7 +1321,8 @@ mod tests {
         let again = sync_agent_yaml_mirror(&out, "ollama", "qwen3", None);
         assert_eq!(out, again);
         // 从无到有再写回：Some 恢复行
-        let restored = sync_agent_yaml_mirror(&out, "ollama", "qwen3", Some("http://localhost:11434/v1"));
+        let restored =
+            sync_agent_yaml_mirror(&out, "ollama", "qwen3", Some("http://localhost:11434/v1"));
         assert!(restored.contains("base_url: http://localhost:11434/v1\n"));
     }
 
@@ -1319,8 +1357,7 @@ mod tests {
     #[test]
     fn mirror_sync_quotes_and_nested_keys_not_matched() {
         // 注释行 / 缩进子键 / 前缀相似键一律不误伤；缺活跃键 → 追加
-        let yaml =
-            "# provider: glm\nextra:\n  provider: 内层\nprovider_x: 前缀\n";
+        let yaml = "# provider: glm\nextra:\n  provider: 内层\nprovider_x: 前缀\n";
         let out = sync_agent_yaml_mirror(yaml, "glm", "glm-5.2", None);
         assert!(out.starts_with("# provider: glm\n"));
         assert!(out.contains("  provider: 内层\n"));
@@ -1336,6 +1373,9 @@ mod tests {
         assert!(validate_mirror_sync(&patched, "glm", "any", None).is_err());
         // 重解析过但行级回读不符（provider 行 ≠ 期望）→ 拒
         assert!(validate_mirror_sync("provider: glm\n", "deepseek", "m", None).is_err());
-        assert!(validate_mirror_sync("provider: glm\nmodel: m\n", "glm", "m", Some("https://x")).is_err());
+        assert!(
+            validate_mirror_sync("provider: glm\nmodel: m\n", "glm", "m", Some("https://x"))
+                .is_err()
+        );
     }
 }

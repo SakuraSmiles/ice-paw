@@ -33,8 +33,7 @@ use crate::error::{AppError, AppResult};
 
 use super::docx::read_entry;
 use super::docx_edit::{
-    parse_attrs, repack_part, truncate, validate_fragment, AppliedOp, PPR_ELEMENTS,
-    TBLPR_ELEMENTS,
+    parse_attrs, repack_part, truncate, validate_fragment, AppliedOp, PPR_ELEMENTS, TBLPR_ELEMENTS,
 };
 use super::numbering::parse_numbering;
 use super::styles::{parse_styles, Stylesheet};
@@ -47,33 +46,98 @@ use super::xml_dom;
 /// CT_Style 法定子元素，ECMA-376 schema 序。sectPr 不入 = 受保护于缺席
 /// （分节符不归样式管）；name 拒摘除（样式身份，见 guard_style_element）。
 const STYLE_ELEMENTS: [&str; 22] = [
-    "name", "aliases", "basedOn", "next", "link", "autoRedefine", "hidden",
-    "uiPriority", "semiHidden", "unhideWhenUsed", "qFormat", "locked",
-    "personal", "personalCompose", "personalReply", "rsid",
-    "pPr", "rPr", "tblPr", "trPr", "tcPr", "tblStylePr",
+    "name",
+    "aliases",
+    "basedOn",
+    "next",
+    "link",
+    "autoRedefine",
+    "hidden",
+    "uiPriority",
+    "semiHidden",
+    "unhideWhenUsed",
+    "qFormat",
+    "locked",
+    "personal",
+    "personalCompose",
+    "personalReply",
+    "rsid",
+    "pPr",
+    "rPr",
+    "tblPr",
+    "trPr",
+    "tcPr",
+    "tblStylePr",
 ];
 
 /// CT_RPr 法定子元素（style 的 rPr 容器内；docx_edit::apply_char_formats
 /// 硬编码序的完整化）。
 const RPR_ELEMENTS: [&str; 39] = [
-    "rStyle", "rFonts", "b", "bCs", "i", "iCs", "caps", "smallCaps", "strike",
-    "dstrike", "outline", "shadow", "emboss", "imprint", "noProof",
-    "snapToGrid", "vanish", "webHidden", "color", "spacing", "w", "kern",
-    "position", "sz", "szCs", "highlight", "u", "effect", "bdr", "shd",
-    "fitText", "vertAlign", "rtl", "cs", "em", "lang", "eastAsianLayout",
-    "specVanish", "oMath",
+    "rStyle",
+    "rFonts",
+    "b",
+    "bCs",
+    "i",
+    "iCs",
+    "caps",
+    "smallCaps",
+    "strike",
+    "dstrike",
+    "outline",
+    "shadow",
+    "emboss",
+    "imprint",
+    "noProof",
+    "snapToGrid",
+    "vanish",
+    "webHidden",
+    "color",
+    "spacing",
+    "w",
+    "kern",
+    "position",
+    "sz",
+    "szCs",
+    "highlight",
+    "u",
+    "effect",
+    "bdr",
+    "shd",
+    "fitText",
+    "vertAlign",
+    "rtl",
+    "cs",
+    "em",
+    "lang",
+    "eastAsianLayout",
+    "specVanish",
+    "oMath",
 ];
 
 /// CT_Lvl 法定子元素（numbering 的 w:lvl 内）。pPr/rPr 整元素替换——片段从
 /// projection=numbering 看到的原文复制。
 const LVL_ELEMENTS: [&str; 12] = [
-    "start", "numFmt", "lvlRestart", "pStyle", "isLgl", "suff", "lvlText",
-    "lvlPicBulletId", "legacy", "lvlJc", "pPr", "rPr",
+    "start",
+    "numFmt",
+    "lvlRestart",
+    "pStyle",
+    "isLgl",
+    "suff",
+    "lvlText",
+    "lvlPicBulletId",
+    "legacy",
+    "lvlJc",
+    "pPr",
+    "rPr",
 ];
 
 /// 修订记录元素：目标定义子树 / 片段中出现任一即拒改。
 const CHANGE_ELEMENTS: [&str; 5] = [
-    "pPrChange", "rPrChange", "tblPrChange", "trPrChange", "tcPrChange",
+    "pPrChange",
+    "rPrChange",
+    "tblPrChange",
+    "trPrChange",
+    "tcPrChange",
 ];
 
 // =========================================================================
@@ -216,7 +280,12 @@ pub(super) fn root_children(s: &str) -> Option<Vec<Child>> {
                 depth -= 1;
                 if depth == 0 {
                     if let Some((st, name)) = open.take() {
-                        out.push(Child { start: st, end: ev_end, name, self_closed: false });
+                        out.push(Child {
+                            start: st,
+                            end: ev_end,
+                            name,
+                            self_closed: false,
+                        });
                     }
                 }
             }
@@ -347,7 +416,11 @@ fn style_element_surgery(
 ) -> Option<(String, Outcome, String)> {
     if container == StyleContainer::Style {
         let (out, changed, _) = set_child_element(style_xml, element, frag, &STYLE_ELEMENTS)?;
-        let outcome = if changed { Outcome::Changed } else { Outcome::Absent };
+        let outcome = if changed {
+            Outcome::Changed
+        } else {
+            Outcome::Absent
+        };
         return Some((out.clone(), outcome, out));
     }
 
@@ -379,9 +452,17 @@ fn style_element_surgery(
         let out = format!("{}{}", &style_xml[..hit.start], &style_xml[hit.end..]);
         return Some((out, Outcome::Changed, "（容器已随摘空清理）".to_string()));
     }
-    let outcome = if changed { Outcome::Changed } else { Outcome::Absent };
+    let outcome = if changed {
+        Outcome::Changed
+    } else {
+        Outcome::Absent
+    };
     Some((
-        format!("{}{new_c}{}", &style_xml[..hit.start], &style_xml[hit.end..]),
+        format!(
+            "{}{new_c}{}",
+            &style_xml[..hit.start],
+            &style_xml[hit.end..]
+        ),
         outcome,
         new_c,
     ))
@@ -494,8 +575,7 @@ pub fn apply_style_edits_to_bytes(
 ) -> AppResult<(Vec<u8>, Vec<AppliedOp>)> {
     if ops.is_empty() {
         return Err(AppError::Validation(
-            "操作列表为空: styles 批至少需要一个操作（create_style / set_style_element）。"
-                .into(),
+            "操作列表为空: styles 批至少需要一个操作（create_style / set_style_element）。".into(),
         ));
     }
     let Some(mut xml) = read_entry(bytes, "word/styles.xml")? else {
@@ -517,7 +597,12 @@ pub fn apply_style_edits_to_bytes(
 
     for op in ops {
         match op {
-            StyleEditOp::CreateStyle { style_type, name, style_id, based_on } => {
+            StyleEditOp::CreateStyle {
+                style_type,
+                name,
+                style_id,
+                based_on,
+            } => {
                 let name_trim = name.trim();
                 if name_trim.is_empty() {
                     return Err(AppError::Validation(
@@ -570,9 +655,7 @@ pub fn apply_style_edits_to_bytes(
                 );
                 // 追加在最后一个 w:style 之后（</w:styles> 前）——latentStyles/
                 // docDefaults 永不碰，schema 序上 style 追加尾部天然正确
-                let insert_at = xml
-                    .rfind("</w:styles>")
-                    .ok_or_else(malformed_internal)?;
+                let insert_at = xml.rfind("</w:styles>").ok_or_else(malformed_internal)?;
                 xml.insert_str(insert_at, &el);
                 created += 1;
                 summaries.push(AppliedOp {
@@ -585,7 +668,12 @@ pub fn apply_style_edits_to_bytes(
                     target: Some(format!("style '{}'（ID {}）", name_trim, id)),
                 });
             }
-            StyleEditOp::SetStyleElement { style, container, element, xml: frag } => {
+            StyleEditOp::SetStyleElement {
+                style,
+                container,
+                element,
+                xml: frag,
+            } => {
                 guard_style_element(*container, element, frag.as_deref())?;
                 if let Some(f) = frag {
                     if let Some(m) = change_marker(f) {
@@ -613,7 +701,10 @@ pub fn apply_style_edits_to_bytes(
                 let hit = root_children(&xml)
                     .ok_or_else(malformed_internal)?
                     .into_iter()
-                    .find(|c| c.name == "w:style" && child_attr(&xml, c, "w:styleId").as_deref() == Some(id.as_str()))
+                    .find(|c| {
+                        c.name == "w:style"
+                            && child_attr(&xml, c, "w:styleId").as_deref() == Some(id.as_str())
+                    })
                     .ok_or_else(malformed_internal)?;
                 let style_xml = xml[hit.start..hit.end].to_string();
                 if let Some(m) = change_marker(&style_xml) {
@@ -690,7 +781,13 @@ pub fn apply_numbering_edits_to_bytes(
     let mut seen: HashSet<String> = HashSet::new();
     let mut summaries: Vec<AppliedOp> = Vec::new();
 
-    for NumberingEditOp::SetNumberingElement { num_id, level, element, xml: frag } in ops {
+    for NumberingEditOp::SetNumberingElement {
+        num_id,
+        level,
+        element,
+        xml: frag,
+    } in ops
+    {
         if *num_id == 0 {
             return Err(AppError::Validation(
                 "编号引用或级别不存在: numId 0 是 Word 的「显式无编号」标记，不是列表。\
@@ -737,15 +834,26 @@ pub fn apply_numbering_edits_to_bytes(
             return Err(AppError::Validation(format!(
                 "编号引用或级别不存在: numId {num_id} 不在编号目录。已有 numId: {}。\
                  完整清单用 inspect_docx projection=numbering 查看。",
-                if ids.is_empty() { "（空）".to_string() } else { ids.join("、") }
+                if ids.is_empty() {
+                    "（空）".to_string()
+                } else {
+                    ids.join("、")
+                }
             )));
         };
         if catalog.lvl_of(*num_id, *level).is_none() {
-            let lvls: Vec<String> =
-                catalog.ilvls_of_num(*num_id).iter().map(|l| l.to_string()).collect();
+            let lvls: Vec<String> = catalog
+                .ilvls_of_num(*num_id)
+                .iter()
+                .map(|l| l.to_string())
+                .collect();
             return Err(AppError::Validation(format!(
                 "编号引用或级别不存在: numId {num_id} 没有 level {level} 定义（已有级: {}）。",
-                if lvls.is_empty() { "（空）".to_string() } else { lvls.join("、") }
+                if lvls.is_empty() {
+                    "（空）".to_string()
+                } else {
+                    lvls.join("、")
+                }
             )));
         }
         // 结构寻位：abstractNum → 其直接子级 w:lvl（ilvl 匹配）
@@ -755,7 +863,8 @@ pub fn apply_numbering_edits_to_bytes(
             .into_iter()
             .find(|c| {
                 c.name == "w:abstractNum"
-                    && child_attr(&xml, c, "w:abstractNumId").as_deref() == Some(abs_id_str.as_str())
+                    && child_attr(&xml, c, "w:abstractNumId").as_deref()
+                        == Some(abs_id_str.as_str())
             })
             .ok_or_else(malformed_internal)?;
         let abs_xml = xml[abs_hit.start..abs_hit.end].to_string();
@@ -789,7 +898,11 @@ pub fn apply_numbering_edits_to_bytes(
         let shared = catalog.num_ids_of_abstract(abs_id);
         let share_note = if shared.len() > 1 {
             let ids: Vec<String> = shared.iter().map(|n| n.to_string()).collect();
-            format!("（影响 numId {}，共享 abstractNum {}）", ids.join("、"), abs_id)
+            format!(
+                "（影响 numId {}，共享 abstractNum {}）",
+                ids.join("、"),
+                abs_id
+            )
         } else {
             String::new()
         };
@@ -981,13 +1094,19 @@ mod tests {
         let t1_xml = &xml[t1.start..t1.end];
         let subs = root_children(t1_xml).unwrap();
         assert!(subs.iter().any(|c| c.name == "w:tblStylePr"));
-        assert!(!subs.iter().any(|c| c.name == "w:pPr"), "嵌套 pPr 不入直接子级");
+        assert!(
+            !subs.iter().any(|c| c.name == "w:pPr"),
+            "嵌套 pPr 不入直接子级"
+        );
     }
 
     #[test]
     fn root_children_rejects_malformed() {
         assert!(root_children("<w:styles><w:style>").is_none(), "未闭合");
-        assert!(root_children("<w:styles/>").is_some(), "自闭合根合法（无子级）");
+        assert!(
+            root_children("<w:styles/>").is_some(),
+            "自闭合根合法（无子级）"
+        );
     }
 
     // ------------------------------------------------------------------
@@ -1027,7 +1146,10 @@ mod tests {
             h1.find("<w:color").unwrap(),
             h1.find("<w:sz").unwrap(),
         );
-        assert!(b_at < color_at && color_at < sz_at, "color 按 schema 序落位");
+        assert!(
+            b_at < color_at && color_at < sz_at,
+            "color 按 schema 序落位"
+        );
     }
 
     #[test]
@@ -1049,7 +1171,10 @@ mod tests {
             ppr.find("<w:jc").unwrap(),
             ppr.find("<w:outlineLvl").unwrap(),
         );
-        assert!(sp_at < jc_at && jc_at < ol_at, "jc 按 schema 序落 spacing 后 outlineLvl 前");
+        assert!(
+            sp_at < jc_at && jc_at < ol_at,
+            "jc 按 schema 序落 spacing 后 outlineLvl 前"
+        );
     }
 
     #[test]
@@ -1323,7 +1448,10 @@ mod tests {
             ),
             "{after}"
         );
-        assert_eq!(sums[0].target.as_deref(), Some("style 'My Style'（ID MyStyle）"));
+        assert_eq!(
+            sums[0].target.as_deref(),
+            Some("style 'My Style'（ID MyStyle）")
+        );
 
         // 同批 create→set 组合（寻址放应用期）+ basedOn 解析到 ID + 显式 style_id
         let (_, after, _) = run_styles(
@@ -1346,7 +1474,10 @@ mod tests {
             ],
         );
         assert!(after.contains("w:styleId=\"tbl-x\""));
-        assert!(after.contains("<w:basedOn w:val=\"2\"/>"), "basedOn 解析到 ID 2");
+        assert!(
+            after.contains("<w:basedOn w:val=\"2\"/>"),
+            "basedOn 解析到 ID 2"
+        );
         assert!(after.contains("<w:tblBorders>"));
 
         // 名/ID 双撞拒
@@ -1457,7 +1588,10 @@ mod tests {
             Some("numId 21 lvl 0 lvlText（影响 numId 21、33，共享 abstractNum 7）")
         );
         // 非目标 abstractNum 8 逐字节不变 + document.xml 不变
-        assert_eq!(extract_abstract(&after, "8"), extract_abstract(&before, "8"));
+        assert_eq!(
+            extract_abstract(&after, "8"),
+            extract_abstract(&before, "8")
+        );
         assert_eq!(part_of(&out, "word/document.xml"), "<w:document/>");
     }
 
@@ -1572,5 +1706,3 @@ mod tests {
         assert!(err.contains("pPrChange"), "{err}");
     }
 }
-
-

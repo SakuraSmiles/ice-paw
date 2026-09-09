@@ -126,13 +126,9 @@ pub async fn send_message(
             // 物化是同步重活（base64 解码 + docx zip/pdf 渲染逐附件提取），包进
             // spawn_blocking 离开 async worker（Q6）；纯函数不写 DB 的性质不变。
             let mid = user_msg_id.clone();
-            tokio::task::spawn_blocking(move || {
-                materialize_file_blocks(&mid, final_blocks, &files)
-            })
-            .await
-            .map_err(|e| {
-                crate::error::AppError::Internal(format!("附件处理任务失败: {e}"))
-            })??
+            tokio::task::spawn_blocking(move || materialize_file_blocks(&mid, final_blocks, &files))
+                .await
+                .map_err(|e| crate::error::AppError::Internal(format!("附件处理任务失败: {e}")))??
         }
         _ => (final_blocks, Vec::new(), Vec::new()),
     };
@@ -184,11 +180,8 @@ pub async fn send_message(
     let cancel_guard = scopeguard::guard((), |_| chat_state.unregister(&conv_id_guard));
 
     // 降级链（B2-S2）：先于 AgentTurnInput 字面量组装（agent 字段简写会 move 行值）
-    let fallback = crate::commands::model_profile_cmd::production_fallback_plan(
-        &app,
-        pool.inner(),
-        &agent,
-    );
+    let fallback =
+        crate::commands::model_profile_cmd::production_fallback_plan(&app, pool.inner(), &agent);
 
     // --- 4. 委派 session_runner：历史解析 → Pipeline → 落库 → spawn 流式循环 ---
     // MA-1 抽取：send_message 保留输入预处理（校验/附件物化/视觉提示），「一次完整
@@ -336,10 +329,7 @@ pub async fn respond_tool_auth(
 /// 配置提案/dev 自检（纯提醒）。触发决策（失焦判定 + 恰一次簿记）全在前端，
 /// 本命令幂等发送。
 #[tauri::command]
-pub fn notify_approval(
-    app: AppHandle,
-    input: ApprovalNotifyInput,
-) -> AppResult<()> {
+pub fn notify_approval(app: AppHandle, input: ApprovalNotifyInput) -> AppResult<()> {
     crate::harness::approval_toast::show_approval_toast(
         &app,
         &input.title,

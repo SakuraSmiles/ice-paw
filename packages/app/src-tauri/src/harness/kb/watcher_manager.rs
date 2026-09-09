@@ -70,7 +70,13 @@ impl KbWatcherManager {
         let pool_for_consumer = pool.clone();
         let app_for_consumer = app.clone();
         tokio::task::spawn_blocking(move || {
-            run_consumer(rx, pool_for_consumer, dir_map_for_consumer, app_for_consumer, handle);
+            run_consumer(
+                rx,
+                pool_for_consumer,
+                dir_map_for_consumer,
+                app_for_consumer,
+                handle,
+            );
         });
 
         Ok(Self {

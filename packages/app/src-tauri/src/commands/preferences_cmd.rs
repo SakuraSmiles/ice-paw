@@ -69,8 +69,7 @@ pub async fn test_vision_config(
     let cred = vision::entry_to_credential(&entry, 1).ok_or_else(|| {
         crate::error::AppError::Validation(format!(
             "视觉配置条目无效：provider 未知或 provider/model/key 为空（{} / {}）",
-            entry.provider,
-            entry.model
+            entry.provider, entry.model
         ))
     })?;
 
@@ -113,7 +112,11 @@ mod tests {
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(TINY_PNG_B64)
             .expect("探针图 base64 应可解码");
-        assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n", "开头 8 字节须为 PNG magic");
+        assert_eq!(
+            &bytes[..8],
+            b"\x89PNG\r\n\x1a\n",
+            "开头 8 字节须为 PNG magic"
+        );
         // 尾部 IEND chunk 存在（完整性粗验）
         assert_eq!(&bytes[bytes.len() - 8..], b"\x49END\xae\x42\x60\x82");
     }

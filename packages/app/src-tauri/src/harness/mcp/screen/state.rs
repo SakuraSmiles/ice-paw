@@ -89,9 +89,7 @@ static GLOBAL: OnceLock<Arc<ScreenState>> = OnceLock::new();
 /// 进程级共享实例（capture_screen / 后续 capture_window 等工具共用同一坐标基准）。
 /// 返回 `Arc` clone 供工具持有；测试用 `ScreenState::new()` 隔离。
 pub fn global() -> Arc<ScreenState> {
-    GLOBAL
-        .get_or_init(|| Arc::new(ScreenState::new()))
-        .clone()
+    GLOBAL.get_or_init(|| Arc::new(ScreenState::new())).clone()
 }
 
 // =========================================================================
@@ -158,8 +156,7 @@ mod tests {
         //（比 c1 旧的全部 63 个），c1 存活；若多压 1 个（64 个）c1 也会出局。
         s.update("c1", meta(1));
         let older_than_refreshed = MAX_CONVERSATIONS as i32 - 1; // = c2..c64 共 63 个
-        for i in (MAX_CONVERSATIONS as i32 + 1)
-            ..=(MAX_CONVERSATIONS as i32 + older_than_refreshed)
+        for i in (MAX_CONVERSATIONS as i32 + 1)..=(MAX_CONVERSATIONS as i32 + older_than_refreshed)
         {
             s.update(&format!("c{i}"), meta(i));
         }

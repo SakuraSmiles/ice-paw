@@ -141,14 +141,12 @@ impl McpClient for ReadFileTool {
             ));
         }
 
-        let metadata = tokio::fs::metadata(&canonical)
-            .await
-            .map_err(|e| {
-                AppError::Io(std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    format!("文件不存在或不可访问: {e}"),
-                ))
-            })?;
+        let metadata = tokio::fs::metadata(&canonical).await.map_err(|e| {
+            AppError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("文件不存在或不可访问: {e}"),
+            ))
+        })?;
 
         // 目录直达 read 会报莫名的 os error 5（Windows 拒绝读目录）——显式指出该用哪个工具
         if metadata.is_dir() {
@@ -806,7 +804,11 @@ mod tests {
     #[tokio::test]
     async fn read_file_not_found_suggests_sibling() {
         let tool = ReadFileTool;
-        let err = tool.execute(r#"{"path": "Cargo.tom"}"#).await.unwrap_err().to_string();
+        let err = tool
+            .execute(r#"{"path": "Cargo.tom"}"#)
+            .await
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("文件不存在"), "{err}");
         assert!(err.contains("Cargo.toml"), "应给出近似候选: {err}");
     }
@@ -815,7 +817,11 @@ mod tests {
     #[tokio::test]
     async fn read_file_on_directory_gives_tool_guidance() {
         let tool = ReadFileTool;
-        let err = tool.execute(r#"{"path": "."}"#).await.unwrap_err().to_string();
+        let err = tool
+            .execute(r#"{"path": "."}"#)
+            .await
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("目录不是文件"), "{err}");
         assert!(err.contains("list_directory"), "{err}");
     }

@@ -39,7 +39,12 @@ pub struct StreamResult {
 /// 思考耗时收口：有起点才有值；终点未到（思考进行到流尾/取消）用当下时刻。
 /// 三个 StreamResult 构造点（cancel / Done / 自然尾）共用，勿在某处内联另一套。
 fn close_thinking_ms(started: Option<Instant>, ended: Option<Instant>) -> Option<u64> {
-    started.map(|s| ended.unwrap_or_else(Instant::now).duration_since(s).as_millis() as u64)
+    started.map(|s| {
+        ended
+            .unwrap_or_else(Instant::now)
+            .duration_since(s)
+            .as_millis() as u64
+    })
 }
 
 /// 一轮流式消费中收集到的工具调用信息
@@ -91,7 +96,12 @@ pub(crate) struct DeltaAggregator<'a> {
 impl<'a> DeltaAggregator<'a> {
     /// `now` 由调用方注入（显式时间域，单测可控，生产传 `Instant::now()`）。
     /// `last_flush` 初始化为 now：首个 delta 最多缓冲 40ms（首字延迟无感）。
-    fn new(emitter: &'a dyn LoopEmitter, conv_id: &'a str, asst_msg_id: &'a str, now: Instant) -> Self {
+    fn new(
+        emitter: &'a dyn LoopEmitter,
+        conv_id: &'a str,
+        asst_msg_id: &'a str,
+        now: Instant,
+    ) -> Self {
         Self {
             emitter,
             conv_id,
@@ -121,7 +131,8 @@ impl<'a> DeltaAggregator<'a> {
         if let Some((_, buf)) = self.pending_tool_deltas.iter_mut().find(|(i, _)| i == id) {
             buf.push_str(delta);
         } else {
-            self.pending_tool_deltas.push((id.to_string(), delta.to_string()));
+            self.pending_tool_deltas
+                .push((id.to_string(), delta.to_string()));
         }
     }
 
@@ -567,14 +578,31 @@ mod tests {
         let cancel = CancellationToken::new();
         let mut rs = round_state();
         let mut stream = boxed_stream(vec![
-            Ok(ChatDelta::Delta { content: "你".into() }),
-            Ok(ChatDelta::Delta { content: "好".into() }),
-            Ok(ChatDelta::Thinking { content: "思考".into() }),
-            Ok(ChatDelta::ToolCallStart { id: "t1".into(), name: "read_file".into() }),
-            Ok(ChatDelta::ToolCallDelta { id: "t1".into(), delta: r#"{"pa"#.into() }),
-            Ok(ChatDelta::ToolCallDelta { id: "t1".into(), delta: r#"th":1}"#.into() }),
+            Ok(ChatDelta::Delta {
+                content: "你".into(),
+            }),
+            Ok(ChatDelta::Delta {
+                content: "好".into(),
+            }),
+            Ok(ChatDelta::Thinking {
+                content: "思考".into(),
+            }),
+            Ok(ChatDelta::ToolCallStart {
+                id: "t1".into(),
+                name: "read_file".into(),
+            }),
+            Ok(ChatDelta::ToolCallDelta {
+                id: "t1".into(),
+                delta: r#"{"pa"#.into(),
+            }),
+            Ok(ChatDelta::ToolCallDelta {
+                id: "t1".into(),
+                delta: r#"th":1}"#.into(),
+            }),
             Ok(ChatDelta::ToolCallEnd { id: "t1".into() }),
-            Ok(ChatDelta::Done { finish_reason: Some("tool_use".into()) }),
+            Ok(ChatDelta::Done {
+                finish_reason: Some("tool_use".into()),
+            }),
         ]);
         let sr = consume_stream(&mut stream, &sink, &cancel, &mut rs, "c1", "m1")
             .await
@@ -588,7 +616,10 @@ mod tests {
         // 拼接守恒：无论真实时间如何分窗，事件拼接必等于原文
         assert_eq!(sink.joined("chat:chunk", "delta"), "你好");
         assert_eq!(sink.joined("chat:thinking", "content"), "思考");
-        assert_eq!(sink.joined("chat:tool-call-delta", "delta"), r#"{"path":1}"#);
+        assert_eq!(
+            sink.joined("chat:tool-call-delta", "delta"),
+            r#"{"path":1}"#
+        );
 
         // 保序：最后一条 tool-call-delta 必须先于 tool-call-end（End 前 flush 锁定）
         let events = sink.take();
@@ -609,8 +640,12 @@ mod tests {
         let cancel = CancellationToken::new();
         let mut rs = round_state();
         let mut stream = boxed_stream(vec![
-            Ok(ChatDelta::Delta { content: "a".into() }),
-            Ok(ChatDelta::Delta { content: "b".into() }),
+            Ok(ChatDelta::Delta {
+                content: "a".into(),
+            }),
+            Ok(ChatDelta::Delta {
+                content: "b".into(),
+            }),
             Err(AppError::Stream("boom".into())),
         ]);
         let err = consume_stream(&mut stream, &sink, &cancel, &mut rs, "c1", "m1")
@@ -628,8 +663,12 @@ mod tests {
         cancel.cancel();
         let mut rs = round_state();
         let mut stream = boxed_stream(vec![
-            Ok(ChatDelta::Delta { content: "x".into() }),
-            Ok(ChatDelta::Done { finish_reason: None }),
+            Ok(ChatDelta::Delta {
+                content: "x".into(),
+            }),
+            Ok(ChatDelta::Done {
+                finish_reason: None,
+            }),
         ]);
         let sr = consume_stream(&mut stream, &sink, &cancel, &mut rs, "c1", "m1")
             .await
@@ -647,10 +686,18 @@ mod tests {
         let cancel = CancellationToken::new();
         let mut rs = round_state();
         let mut stream = boxed_stream(vec![
-            Ok(ChatDelta::Thinking { content: "想".into() }),
-            Ok(ChatDelta::Thinking { content: "想2".into() }),
-            Ok(ChatDelta::Delta { content: "答".into() }),
-            Ok(ChatDelta::Done { finish_reason: Some("stop".into()) }),
+            Ok(ChatDelta::Thinking {
+                content: "想".into(),
+            }),
+            Ok(ChatDelta::Thinking {
+                content: "想2".into(),
+            }),
+            Ok(ChatDelta::Delta {
+                content: "答".into(),
+            }),
+            Ok(ChatDelta::Done {
+                finish_reason: Some("stop".into()),
+            }),
         ]);
         let sr = consume_stream(&mut stream, &sink, &cancel, &mut rs, "c1", "m1")
             .await
@@ -665,10 +712,17 @@ mod tests {
         let cancel = CancellationToken::new();
         let mut rs = round_state();
         let mut stream = boxed_stream(vec![
-            Ok(ChatDelta::Thinking { content: "想".into() }),
-            Ok(ChatDelta::ToolCallStart { id: "t1".into(), name: "read_file".into() }),
+            Ok(ChatDelta::Thinking {
+                content: "想".into(),
+            }),
+            Ok(ChatDelta::ToolCallStart {
+                id: "t1".into(),
+                name: "read_file".into(),
+            }),
             Ok(ChatDelta::ToolCallEnd { id: "t1".into() }),
-            Ok(ChatDelta::Done { finish_reason: Some("tool_use".into()) }),
+            Ok(ChatDelta::Done {
+                finish_reason: Some("tool_use".into()),
+            }),
         ]);
         let sr = consume_stream(&mut stream, &sink, &cancel, &mut rs, "c1", "m1")
             .await
@@ -683,8 +737,12 @@ mod tests {
         let mut rs = round_state();
         // 思考直达 Done（无正文无工具）：流尾收口（unwrap_or(now)）
         let mut stream = boxed_stream(vec![
-            Ok(ChatDelta::Thinking { content: "纯思考".into() }),
-            Ok(ChatDelta::Done { finish_reason: Some("stop".into()) }),
+            Ok(ChatDelta::Thinking {
+                content: "纯思考".into(),
+            }),
+            Ok(ChatDelta::Done {
+                finish_reason: Some("stop".into()),
+            }),
         ]);
         let sr = consume_stream(&mut stream, &sink, &cancel, &mut rs, "c1", "m1")
             .await
@@ -698,8 +756,12 @@ mod tests {
         let cancel = CancellationToken::new();
         let mut rs = round_state();
         let mut stream = boxed_stream(vec![
-            Ok(ChatDelta::Delta { content: "直接回答".into() }),
-            Ok(ChatDelta::Done { finish_reason: Some("stop".into()) }),
+            Ok(ChatDelta::Delta {
+                content: "直接回答".into(),
+            }),
+            Ok(ChatDelta::Done {
+                finish_reason: Some("stop".into()),
+            }),
         ]);
         let sr = consume_stream(&mut stream, &sink, &cancel, &mut rs, "c1", "m1")
             .await

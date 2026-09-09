@@ -167,18 +167,12 @@ pub(super) fn parse_styles(root: &Element) -> Stylesheet {
     for el in root.child_elements() {
         match el.name.as_str() {
             "w:docDefaults" => {
-                if let Some(rpd) = el
-                    .child_elements()
-                    .find(|e| e.name == "w:rPrDefault")
-                {
+                if let Some(rpd) = el.child_elements().find(|e| e.name == "w:rPrDefault") {
                     if let Some(rpr) = rpd.child_elements().find(|e| e.name == "w:rPr") {
                         sheet.doc_default_run = parse_run_props(rpr);
                     }
                 }
-                if let Some(ppd) = el
-                    .child_elements()
-                    .find(|e| e.name == "w:pPrDefault")
-                {
+                if let Some(ppd) = el.child_elements().find(|e| e.name == "w:pPrDefault") {
                     if let Some(ppr) = ppd.child_elements().find(|e| e.name == "w:pPr") {
                         sheet.doc_default_para = parse_para_props(ppr);
                     }
@@ -220,9 +214,7 @@ fn parse_style(el: &Element) -> Option<StyleDef> {
                     .find(|e| e.name == "w:outlineLvl")
                     .and_then(|e| e.attr("w:val"))
                     .and_then(|v| v.parse().ok());
-                def.has_numbering = child
-                    .child_elements()
-                    .any(|e| e.name == "w:numPr");
+                def.has_numbering = child.child_elements().any(|e| e.name == "w:numPr");
             }
             _ => {}
         }
@@ -332,7 +324,10 @@ mod tests {
             </w:styles>"#,
         );
         let chain = s.resolve_chain("3");
-        assert_eq!(chain.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(), ["3", "2", "1"]);
+        assert_eq!(
+            chain.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(),
+            ["3", "2", "1"]
+        );
         // 近者胜：sz 取 "2" 的 32，color 取 "1" 的 000000
         let empty = RunProps::default();
         let eff = effective_run(&empty, &chain, &empty);
@@ -340,11 +335,17 @@ mod tests {
         assert_eq!(eff.color.as_deref(), Some("000000"));
         assert_eq!(eff.italic, Some(true));
         // 直接格式覆盖一切
-        let direct = RunProps { size_half_pt: Some(28), ..Default::default() };
+        let direct = RunProps {
+            size_half_pt: Some(28),
+            ..Default::default()
+        };
         let eff = effective_run(&direct, &chain, &empty);
         assert_eq!(eff.size_half_pt, Some(28));
         // docDefaults 兜底（链上没人给 underline）
-        let dd = RunProps { underline: Some(true), ..Default::default() };
+        let dd = RunProps {
+            underline: Some(true),
+            ..Default::default()
+        };
         let eff = effective_run(&empty, &chain, &dd);
         assert_eq!(eff.underline, Some(true));
     }
@@ -375,7 +376,10 @@ mod tests {
         assert_eq!(eff.spacing_before, Some(120));
         assert_eq!(eff.indent_first_line, Some(480));
         // 直接对齐覆盖样式
-        let direct = ParaProps { alignment: Some("right".into()), ..Default::default() };
+        let direct = ParaProps {
+            alignment: Some("right".into()),
+            ..Default::default()
+        };
         let eff = effective_para(&direct, &chain, &ParaProps::default());
         assert_eq!(eff.alignment.as_deref(), Some("right"));
     }

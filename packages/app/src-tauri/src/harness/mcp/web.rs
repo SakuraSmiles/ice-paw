@@ -70,22 +70,19 @@ is truncated (`truncated: true`)."
             .build()
             .map_err(|e| AppError::Internal(format!("构建 HTTP client 失败: {e}")))?;
 
-        let resp = client
-            .get(&parsed.url)
-            .send()
-            .await
-            .map_err(|e| AppError::Internal(format!(
+        let resp = client.get(&parsed.url).send().await.map_err(|e| {
+            AppError::Internal(format!(
                 "web_fetch 请求失败: {e}。请检查 URL 格式（须带 http/https 协议头、\
                  无空格或非法字符）；URL 无误则为网络问题（断网/DNS/超时），稍后重试"
-            )))?;
+            ))
+        })?;
         let status = resp.status().as_u16();
-        let text = resp
-            .text()
-            .await
-            .map_err(|e| AppError::Internal(format!(
+        let text = resp.text().await.map_err(|e| {
+            AppError::Internal(format!(
                 "web_fetch 读取响应失败: {e}。连接已建立但正文传输中断，多为网络\
                  波动或服务端提前断开，稍后重试；多次失败可换 max_chars 不变仅重拉"
-            )))?;
+            ))
+        })?;
 
         let truncated = text.chars().count() > parsed.max_chars;
         let body = if truncated {

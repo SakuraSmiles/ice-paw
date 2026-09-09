@@ -217,10 +217,7 @@ impl MockProvider {
 
     /// 各次调用收到的 messages（按调用序；测试断言用）。
     pub fn received_messages(&self) -> Vec<Vec<ChatMessage>> {
-        self.received
-            .lock()
-            .map(|r| r.clone())
-            .unwrap_or_default()
+        self.received.lock().map(|r| r.clone()).unwrap_or_default()
     }
 
     /// 便利构造：默认 NormalReply 场景
@@ -1132,8 +1129,12 @@ mod tests {
             .await
             .expect("文本轮应构造 stream");
         let chunks = drain(s).await;
-        assert!(matches!(&chunks[0], ChatDelta::Delta { content } if content.contains("Final answer")));
-        assert!(matches!(&chunks.last(), Some(ChatDelta::Done { finish_reason: Some(ref r) }) if r == "stop"));
+        assert!(
+            matches!(&chunks[0], ChatDelta::Delta { content } if content.contains("Final answer"))
+        );
+        assert!(
+            matches!(&chunks.last(), Some(ChatDelta::Done { finish_reason: Some(ref r) }) if r == "stop")
+        );
         assert_eq!(provider.call_count(), 4);
     }
 
@@ -1147,7 +1148,9 @@ mod tests {
             MockScenario::FailNTimesThenNormal {
                 // 智谱 1113 措辞（含「无可用资源包」）→ classify_llm_error 判
                 // GlmResourcePack（Quota 族、不可重试）——降级链 e2e 的靶形态
-                error_message: "HTTP 429: {\"code\":1113,\"message\":\"余额不足或无可用资源包\"}（mock）".into(),
+                error_message:
+                    "HTTP 429: {\"code\":1113,\"message\":\"余额不足或无可用资源包\"}（mock）"
+                        .into(),
                 times: 2,
             },
         );
@@ -1195,7 +1198,9 @@ mod tests {
             &chunks[0],
             ChatDelta::Delta { content } if content == "Hello from MockProvider"
         ));
-        assert!(matches!(&chunks[2], ChatDelta::Done { finish_reason: Some(ref r) } if r == "stop"));
+        assert!(
+            matches!(&chunks[2], ChatDelta::Done { finish_reason: Some(ref r) } if r == "stop")
+        );
         assert_eq!(provider.call_count(), 3);
     }
 

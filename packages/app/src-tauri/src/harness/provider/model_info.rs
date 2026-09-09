@@ -379,12 +379,24 @@ mod tests {
             assert_eq!(utility_thinking(p, "glm-5.2"), UtilityThinking::None, "{p}");
         }
         // GLM + 可关思考的模型：disabled（思考通道不占额度）
-        assert_eq!(utility_thinking("glm", "glm-5.2"), UtilityThinking::Disabled);
-        assert_eq!(utility_thinking("glm-coding", "glm-5.1"), UtilityThinking::Disabled);
-        assert_eq!(utility_thinking("glm", "glm-5-turbo"), UtilityThinking::Disabled);
+        assert_eq!(
+            utility_thinking("glm", "glm-5.2"),
+            UtilityThinking::Disabled
+        );
+        assert_eq!(
+            utility_thinking("glm-coding", "glm-5.1"),
+            UtilityThinking::Disabled
+        );
+        assert_eq!(
+            utility_thinking("glm", "glm-5-turbo"),
+            UtilityThinking::Disabled
+        );
         assert_eq!(utility_thinking("glm", "glm-4v"), UtilityThinking::Disabled);
         // GLM + glm-5.3 系（思考常开，disabled 硬发整请求被拒）→ enabled+low
-        assert_eq!(utility_thinking("glm", "glm-5.3"), UtilityThinking::LowEffort);
+        assert_eq!(
+            utility_thinking("glm", "glm-5.3"),
+            UtilityThinking::LowEffort
+        );
         assert_eq!(
             utility_thinking("glm-coding", "glm-5.3-flash"),
             UtilityThinking::LowEffort

@@ -606,7 +606,11 @@ mod tests {
             Some("https://api.deepseek.com")
         );
         for p in ["minimax", "minimax-cn"] {
-            assert_eq!(provider_openai_url(p), Some("https://api.minimaxi.com/v1"), "{p}");
+            assert_eq!(
+                provider_openai_url(p),
+                Some("https://api.minimaxi.com/v1"),
+                "{p}"
+            );
         }
         for p in ["anthropic", "ollama", "custom", "totally-unknown"] {
             assert_eq!(provider_openai_url(p), None, "{p} 应无 OpenAI 兼容端点");
