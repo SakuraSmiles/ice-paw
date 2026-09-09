@@ -12,6 +12,7 @@
 -->
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onUnmounted } from "vue";
+import { useRouter } from "vue-router";
 import { useEscapeStack } from "../../composables/useEscapeStack";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ScreenShare } from "@lucide/vue";
@@ -76,6 +77,15 @@ const activeAgent = computed(() => {
   if (!conv) return null;
   return agent.getById(conv.agent_id);
 });
+
+const router = useRouter();
+/** agent 名点转（2026-09-09）：设置-智能体页 ?edit=<id> 深链——AgentSettings
+ *  加载完成后展开对应编辑卡并滚入视野（keep-alive 下二次进入走 onActivated） */
+function goAgentSettings() {
+  const id = activeAgent.value?.id;
+  if (!id) return;
+  void router.push({ name: "SettingsAgents", query: { edit: id } });
+}
 
 // ②-4：回合进行中显示**本回合发送时的模型快照**（chat store 发送时捕获）——
 // 中途改模型，头部立即变新名字但本回合仍用旧快照，会误导「改完即生效」；
@@ -267,7 +277,12 @@ async function toggleScreenShare() {
             :image="activeAgent.avatar"
             size="md"
           />
-          <span v-if="activeAgent" class="header-agent">{{ activeAgent.name }}</span>
+          <button
+            v-if="activeAgent"
+            class="header-agent header-agent-link"
+            :title="`查看「${activeAgent.name}」的配置（设置 · 智能体）`"
+            @click="goAgentSettings"
+          >{{ activeAgent.name }}</button>
           <span v-if="activeAgent" class="header-sep">·</span>
           <span v-if="activeAgent" class="header-model">{{ headerModel }}</span>
           <span v-else class="header-hint">选择一个对话开始</span>
@@ -363,6 +378,12 @@ async function toggleScreenShare() {
 /* 外层头像（xl=44px，占两行高度；用户上传时才有，无头像时元素 v-if 不渲染） */
 .header-agent-avatar-xl { flex: none; }
 .header-agent { font-size:var(--ip-text-caption-size); color:var(--ip-primary-600); line-height:1.4; font-weight:var(--ip-font-weight-medium); }
+/* agent 名点转（深链设置-智能体）：排版承 .header-agent，hover 下划线示意可点 */
+.header-agent-link {
+  border:none; background:transparent; padding:0; cursor:pointer;
+  font-family:inherit; border-radius:var(--ip-radius-sm);
+}
+.header-agent-link:hover { text-decoration:underline; text-underline-offset:3px; }
 .header-sep { font-size:var(--ip-text-caption-size); color:var(--ip-color-text-tertiary); line-height:1.4; }
 .header-model { font-size:var(--ip-text-caption-size); color:var(--ip-color-text-tertiary); line-height:1.4; }
 .header-hint { font-size:var(--ip-text-caption-size); color:var(--ip-color-text-disabled); line-height:1.4; }

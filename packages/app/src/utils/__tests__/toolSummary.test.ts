@@ -83,6 +83,65 @@ describe("summarizeToolCall：各工具摘要", () => {
     expect(s?.fileLabel).toBe("main.rs");
   });
 
+  it("行级 diff 三计数：字段齐 → 带出；缺字段/错误态/流式中 → null（不显示）", () => {
+    // edit_file 结果带三计数（后端非零才发）
+    const args = JSON.stringify({ path: "main.rs", old_string: "a", new_string: "b" });
+    const s = summarizeToolCall("edit_file", args, {
+      content: '{"replacements":1,"lines_added":2,"lines_removed":1,"lines_changed":3}', isError: false,
+    });
+    expect(s?.diff).toEqual({ added: 2, removed: 1, changed: 3 });
+
+    // write_file 新建全量新增：added=N
+    const w = summarizeToolCall("write_file",
+      JSON.stringify({ path: "D:/new.md", content: "a\nb" }), {
+        content: '{"bytes_written":3,"backup":null,"lines_added":2,"lines_removed":0,"lines_changed":0}', isError: false,
+      });
+    expect(w?.diff).toEqual({ added: 2, removed: 0, changed: 0 });
+
+    // 执行中（无结果）/ 错误态 → null；旧结果（无字段）走存量回填（下条用例）
+    expect(summarizeToolCall("edit_file", args, null)?.diff).toBeNull();
+    expect(summarizeToolCall("edit_file", args, {
+      content: 'edit_file: 未找到 old_string', isError: true,
+    })?.diff).toBeNull();
+
+    // 非 diff 族工具恒 null（move_file 双路径）
+    expect(summarizeToolCall("move_file",
+      JSON.stringify({ source: "D:/a.rs", destination: "D:/b.rs" }), null)?.diff).toBeNull();
+  });
+
+  it("存量回填：0.6.14 前的 edit_file 结果无三计数字段，从参数+replacements 重算", () => {
+    // 后端公式 = 单处 diff × 处数（replace_all 各处同构）；单处镜像 Rust 用例
+    // line_diff_stat("a\np\nq\nr\nz","a\nx\ny\nz") = (0,1,2) → ×3 处
+    const args = JSON.stringify({
+      path: "main.rs",
+      old_string: "a\np\nq\nr\nz",
+      new_string: "a\nx\ny\nz",
+      replace_all: true,
+    });
+    const s = summarizeToolCall("edit_file", args, {
+      content: '{"path":"main.rs","replacements":3,"backup":null}', isError: false,
+    });
+    expect(s?.diff).toEqual({ added: 0, removed: 3, changed: 6 });
+
+    // 写前字段齐的结果优先（回填只在 diff==null 时介入，不覆盖后端真值）
+    const withFields = summarizeToolCall("edit_file", args, {
+      content: '{"replacements":3,"lines_added":1,"lines_removed":0,"lines_changed":0}', isError: false,
+    });
+    expect(withFields?.diff).toEqual({ added: 1, removed: 0, changed: 0 });
+
+    // old==new（替换无实效）重算全零 → 不显示（与后端省字段语义一致）
+    expect(summarizeToolCall("edit_file",
+      JSON.stringify({ path: "m.rs", old_string: "same", new_string: "same" }), {
+        content: '{"replacements":1}', isError: false,
+      })?.diff).toBeNull();
+
+    // write_file 无回填通道（改前旧文件内容未入库），历史行保持 null
+    expect(summarizeToolCall("write_file",
+      JSON.stringify({ path: "D:/old.md", content: "a\nb" }), {
+        content: '{"bytes_written":4,"backup":"D:/.icepaw-backup/x"}', isError: false,
+      })?.diff).toBeNull();
+  });
+
   it("delete_file：文件删除带备份标注 / 目录删除无", () => {
     const args = JSON.stringify({ path: "D:/tmp/cache.txt" });
     expect(summarizeToolCall("delete_file", args, {

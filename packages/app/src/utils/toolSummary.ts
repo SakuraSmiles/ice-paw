@@ -28,6 +28,9 @@ export interface ToolLineSummary {
   fileTitle: string;
   /** revealItemInDir 目标（move/copy = destination，产物在目标位置） */
   revealPath: string;
+  /** 行级 diff 三计数（git 式 +N -M ~K，展示名后渲染；null = 后端未提供
+   *  （旧结果/读不动的旧内容/全零）不显示）。edit_file / write_file 专属 */
+  diff: { added: number; removed: number; changed: number } | null;
 }
 
 /** 路径 → basename（兼容 Windows `\` 与 Unix `/` 分隔符混用） */
@@ -97,7 +100,45 @@ function strOf(o: Record<string, unknown>, key: string): string | null {
   return typeof v === "string" ? v : null;
 }
 
-/** 单路径工具的公共骨架：文件名位 + 次级信息生成器 */
+/** 结果 JSON 三计数字段 → diff 统计。后端只在有非零统计时发字段（edit_file /
+ *  write_file；旧结果/错误态/读不动的旧内容/全零 → null，不显示） */
+function diffOf(r: Record<string, unknown> | null): ToolLineSummary["diff"] {
+  if (!r) return null;
+  const added = numOf(r, "lines_added");
+  const removed = numOf(r, "lines_removed");
+  const changed = numOf(r, "lines_changed");
+  if (added == null || removed == null || changed == null) return null;
+  return { added, removed, changed };
+}
+
+/** 镜像 Rust str::lines()：末尾 \n 不产生尾空行，行尾 \r 剥离（跨 CRLF 比较口径） */
+function linesOf(s: string): string[] {
+  if (s === "") return [];
+  const body = s.endsWith("\n") ? s.slice(0, -1) : s;
+  return body.split("\n").map((l) => (l.endsWith("\r") ? l.slice(0, -1) : l));
+}
+
+/** 行级三计数（后端 file_tools.rs line_diff_stat 的前端镜像，公式逐行对齐：
+ * 公共前缀/后缀行裁剪后中段配对，min 记「修改」、余数记纯增/纯删；全零 null）。
+ * 用途 = edit_file 存量记录回填（0.6.14 前的结果无三计数字段，但参数里的
+ * old/new_string 与旧字段 replacements 都在历史里，可重算）。 */
+function lineDiffStat(old: string, fresh: string): { added: number; removed: number; changed: number } | null {
+  const o = linesOf(old);
+  const n = linesOf(fresh);
+  let p = 0;
+  while (p < o.length && p < n.length && o[p] === n[p]) p += 1;
+  let s = 0;
+  while (s < o.length - p && s < n.length - p && o[o.length - 1 - s] === n[n.length - 1 - s]) s += 1;
+  const midOld = o.length - p - s;
+  const midNew = n.length - p - s;
+  const changed = Math.min(midOld, midNew);
+  const added = midNew - changed;
+  const removed = midOld - changed;
+  if (added === 0 && removed === 0 && changed === 0) return null;
+  return { added, removed, changed };
+}
+
+/** 单路径工具的公共骨架：文件名位 + 次级信息生成器（diff 字段有则带出） */
 function singlePathSummary(
   display: string,
   path: string,
@@ -111,6 +152,7 @@ function singlePathSummary(
     fileLabel: basenameOf(path),
     fileTitle: path,
     revealPath: path,
+    diff: diffOf(r),
   };
 }
 
@@ -124,6 +166,7 @@ function dualPathSummary(display: string, source: string, destination: string, s
     fileLabel: srcName === dstName ? dstName : `${srcName} → ${dstName}`,
     fileTitle: `${source} → ${destination}`,
     revealPath: destination,
+    diff: null,
   };
 }
 
@@ -157,12 +200,27 @@ export function summarizeToolCall(
         return created ? `新建${bytes != null ? ` · ${formatFileSize(bytes)}` : ""}` : `覆盖${bytes != null ? ` · ${formatFileSize(bytes)}` : ""}`;
       });
 
-    case "edit_file":
+    case "edit_file": {
       if (!path) return null;
-      return singlePathSummary(toolDisplayName(name), path, result, (r) => {
+      const summary = singlePathSummary(toolDisplayName(name), path, result, (r) => {
         const n = numOf(r, "replacements");
         return n != null ? `替换 ${n} 处` : "";
       });
+      // 存量记录回填：0.6.14 前的结果无三计数字段，但参数 old/new_string 与旧
+      // 字段 replacements 都在历史里——按后端同公式（单处 diff × 处数）重算，
+      // 历史行也出徽记。write_file 无此通道（改前旧文件内容未入库，补不了）。
+      if (summary.diff == null) {
+        const r = parseResultJson(result);
+        const n = r ? numOf(r, "replacements") : null;
+        const oldStr = strOf(args, "old_string");
+        const newStr = strOf(args, "new_string");
+        if (n != null && n > 0 && oldStr != null && newStr != null) {
+          const base = lineDiffStat(oldStr, newStr);
+          if (base) summary.diff = { added: base.added * n, removed: base.removed * n, changed: base.changed * n };
+        }
+      }
+      return summary;
+    }
 
     case "delete_file":
       if (!path) return null;

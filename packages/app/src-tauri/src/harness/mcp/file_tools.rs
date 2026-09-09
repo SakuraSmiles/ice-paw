@@ -134,6 +134,37 @@ fn cleanup_old_backups(backup_dir: &Path, original_filename: &str) -> AppResult<
 }
 
 // =========================================================================
+// 行级 diff 三计数（git 式 +N -M ~K，工具行 UI 数据源）
+// =========================================================================
+
+/// 行级三计数（added, removed, changed）：公共前缀/后缀行裁剪后，中段 old/new
+/// 各取 min 记「修改」，余数记纯增/纯删。单 hunk 场景与 git 统计一致；离散
+/// 多 hunk 会并段计数（UI 摘要用途，精度够用）。全零返回 None（调用方省字段，
+/// 前端不显示统计）。
+fn line_diff_stat(old: &str, new: &str) -> Option<(usize, usize, usize)> {
+    let o: Vec<&str> = old.lines().collect();
+    let n: Vec<&str> = new.lines().collect();
+    let mut p = 0;
+    while p < o.len() && p < n.len() && o[p] == n[p] {
+        p += 1;
+    }
+    let mut s = 0;
+    while s < o.len() - p && s < n.len() - p && o[o.len() - 1 - s] == n[n.len() - 1 - s] {
+        s += 1;
+    }
+    let mid_old = o.len() - p - s;
+    let mid_new = n.len() - p - s;
+    let changed = mid_old.min(mid_new);
+    let added = mid_new - changed;
+    let removed = mid_old - changed;
+    if added == 0 && removed == 0 && changed == 0 {
+        None
+    } else {
+        Some((added, removed, changed))
+    }
+}
+
+// =========================================================================
 // write_file
 // =========================================================================
 
@@ -215,19 +246,33 @@ is rejected — agent config changes must go through the propose_config_change t
         // 修改前自动备份
         let backup = backup_if_exists(path)?;
 
+        // 行级统计（git 式 +N -M ~K）：旧内容只在写前可得（写后读回的已是新内容）。
+        // 新建 = 全量新增；覆盖但旧内容读不动（二进制等）→ 省字段（前端诚实降级不显示）。
+        // 须在 parsed.content 被 into_bytes 消费前取引用。
+        let diff = match tokio::fs::read_to_string(path).await {
+            Ok(old) => line_diff_stat(&old, &parsed.content),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                line_diff_stat("", &parsed.content)
+            }
+            Err(_) => None,
+        };
+
         // PowerShell 5.1 把无 BOM 的 .ps1 按 ANSI/GBK 解码，中文参数全部乱码
         // （生产样本 2026-08-24：agent 写的 .ps1 中文实参变形 + 非终止错误不改
         // 退出码假绿）。仅 .ps1 补 UTF-8 BOM；.bat/.cmd 不补——cmd.exe 对 BOM 的
         // 处理不可靠（BOM 会粘进首行命令名）。
-        let content_bytes: Vec<u8> =
-            if path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("ps1")) {
-                let mut v = Vec::with_capacity(parsed.content.len() + 3);
-                v.extend_from_slice("\u{FEFF}".as_bytes());
-                v.extend_from_slice(parsed.content.as_bytes());
-                v
-            } else {
-                parsed.content.into_bytes()
-            };
+        let content_bytes: Vec<u8> = if path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("ps1"))
+        {
+            let mut v = Vec::with_capacity(parsed.content.len() + 3);
+            v.extend_from_slice("\u{FEFF}".as_bytes());
+            v.extend_from_slice(parsed.content.as_bytes());
+            v
+        } else {
+            parsed.content.into_bytes()
+        };
 
         tokio::fs::write(path, &content_bytes).await.map_err(|e| {
             AppError::Validation(format!(
@@ -237,12 +282,17 @@ is rejected — agent config changes must go through the propose_config_change t
             ))
         })?;
 
-        Ok(serde_json::json!({
+        let mut out = serde_json::json!({
             "path": parsed.path,
             "bytes_written": content_bytes.len(),
             "backup": backup,
-        })
-        .to_string())
+        });
+        if let Some((added, removed, changed)) = diff {
+            out["lines_added"] = added.into();
+            out["lines_removed"] = removed.into();
+            out["lines_changed"] = changed.into();
+        }
+        Ok(out.to_string())
     }
 }
 
@@ -286,7 +336,8 @@ fn edit_mismatch_hint(content: &str, old_string: &str) -> String {
     if !normed_old.is_empty() && norm(content).contains(&normed_old) {
         return "提示：忽略空白后可匹配——差异在空白/缩进。请用 read_file 读取目标区域，按实际内容逐字符复制。".into();
     }
-    "提示：文件中无相近内容——old_string 可能出自记忆而非当前文件。请先 read_file 读取文件实际内容。".into()
+    "提示：文件中无相近内容——old_string 可能出自记忆而非当前文件。请先 read_file 读取文件实际内容。"
+        .into()
 }
 
 #[async_trait]
@@ -378,12 +429,22 @@ version is backed up before editing."
             .await
             .map_err(AppError::Io)?;
 
-        Ok(serde_json::json!({
+        // 行级统计（git 式 +N -M ~K）：replace_all 时每处替换同构（old_string
+        // 逐字符相同才匹配得上），单处 diff × 次数即总量
+        let n_replaced: usize = if parsed.replace_all { count } else { 1 };
+        let diff = line_diff_stat(&parsed.old_string, &parsed.new_string)
+            .map(|(a, r, c)| (a * n_replaced, r * n_replaced, c * n_replaced));
+        let mut out = serde_json::json!({
             "path": parsed.path,
-            "replacements": if parsed.replace_all { count } else { 1 },
+            "replacements": n_replaced,
             "backup": backup,
-        })
-        .to_string())
+        });
+        if let Some((added, removed, changed)) = diff {
+            out["lines_added"] = added.into();
+            out["lines_removed"] = removed.into();
+            out["lines_changed"] = changed.into();
+        }
+        Ok(out.to_string())
     }
 }
 
@@ -749,6 +810,35 @@ mod tests {
         assert_eq!(s.matches('a').count(), 2);
     }
 
+    // ---- 行级 diff 三计数（git 式 +N -M ~K） ----
+
+    #[test]
+    fn line_diff_stat_shapes() {
+        // 新建（旧空）：全量新增
+        assert_eq!(line_diff_stat("", "a\nb\nc"), Some((3, 0, 0)));
+        // 清空：全量删除
+        assert_eq!(line_diff_stat("a\nb", ""), Some((0, 2, 0)));
+        // 单行内改：修改 1 行
+        assert_eq!(line_diff_stat("hello", "world"), Some((0, 0, 1)));
+        // 中段改写（前后缀公共行裁剪）：改 1 行
+        assert_eq!(line_diff_stat("a\nb\nc", "a\nx\nc"), Some((0, 0, 1)));
+        // 纯追加（前缀公共）：+2
+        assert_eq!(line_diff_stat("a\nb", "a\nb\nc\nd"), Some((2, 0, 0)));
+        // 纯删减（后缀公共）：-1
+        assert_eq!(line_diff_stat("a\nb\nc", "a\nc"), Some((0, 1, 0)));
+        // 混合：中段 old 3 行 new 2 行 → 改 2 删 1
+        assert_eq!(
+            line_diff_stat("a\np\nq\nr\nz", "a\nx\ny\nz"),
+            Some((0, 1, 2))
+        );
+        // 离散两处改动并段：中段公共行（b）计入修改——前缀/后缀裁剪抓不到
+        // 中间公共行，此场景高估（3 > 实际 2），UI 摘要可接受
+        assert_eq!(line_diff_stat("a\nb\nc", "x\nb\ny"), Some((0, 0, 3)));
+        // 无变化 / 同串替换 → None（省字段）
+        assert_eq!(line_diff_stat("same", "same"), None);
+        assert_eq!(line_diff_stat("", ""), None);
+    }
+
     #[test]
     fn move_and_create_dir_auth_levels() {
         assert_eq!(
@@ -918,7 +1008,10 @@ mod tests {
         assert!(out.contains(r#""backup":null"#), "新目标无需备份: {out}");
 
         assert!(src.exists(), "源保留（与 move_file 的本质区别）");
-        assert_eq!(std::fs::read_to_string(dir.join("out/copy.txt")).unwrap(), "内容");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("out/copy.txt")).unwrap(),
+            "内容"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -938,7 +1031,10 @@ mod tests {
         let out = CopyFileTool.execute(&args).await.expect("覆盖复制应成功");
         assert!(out.contains(".icepaw-backup"), "应报出目标备份路径: {out}");
 
-        assert_eq!(std::fs::read_to_string(dir.join("dst.txt")).unwrap(), "新内容");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("dst.txt")).unwrap(),
+            "新内容"
+        );
         let backup_dir = dir.join(".icepaw-backup");
         let entries: Vec<_> = std::fs::read_dir(&backup_dir).unwrap().collect();
         assert_eq!(entries.len(), 1, "应恰好一份备份");
@@ -986,7 +1082,10 @@ mod tests {
         })
         .to_string();
         let out = MoveFileTool.execute(&args).await.expect("恢复 move 应成功");
-        assert!(out.contains(r#""backup":null"#), "备份目录内的源不再备份: {out}");
+        assert!(
+            out.contains(r#""backup":null"#),
+            "备份目录内的源不再备份: {out}"
+        );
 
         // copy：源同上
         let args = serde_json::json!({
@@ -996,8 +1095,14 @@ mod tests {
         .to_string();
         CopyFileTool.execute(&args).await.expect("恢复 copy 应成功");
 
-        assert!(!dir.join(".icepaw-backup/.icepaw-backup").exists(), "不得出现嵌套备份目录");
-        assert_eq!(std::fs::read_to_string(dir.join("restored.txt")).unwrap(), "快照");
+        assert!(
+            !dir.join(".icepaw-backup/.icepaw-backup").exists(),
+            "不得出现嵌套备份目录"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("restored.txt")).unwrap(),
+            "快照"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1016,8 +1121,14 @@ mod tests {
         })
         .to_string();
         let out = CopyFileTool.execute(&args).await.expect("应成功");
-        assert!(out.contains(r#""backup":null"#), "备份目录内的目标不备份: {out}");
-        assert_eq!(std::fs::read_to_string(backup_dir.join("target.txt")).unwrap(), "新内容");
+        assert!(
+            out.contains(r#""backup":null"#),
+            "备份目录内的目标不备份: {out}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(backup_dir.join("target.txt")).unwrap(),
+            "新内容"
+        );
         assert!(!backup_dir.join(".icepaw-backup").exists(), "不得嵌套");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1035,7 +1146,11 @@ mod tests {
         WriteFileTool.execute(&args).await.unwrap();
 
         let bytes = std::fs::read(&target).unwrap();
-        assert_eq!(&bytes[..3], "\u{FEFF}".as_bytes(), ".ps1 必须 UTF-8 BOM 开头");
+        assert_eq!(
+            &bytes[..3],
+            "\u{FEFF}".as_bytes(),
+            ".ps1 必须 UTF-8 BOM 开头"
+        );
         assert_eq!(&bytes[3..], "Write-Output '中文参数'".as_bytes());
         let _ = std::fs::remove_dir_all(&dir);
     }

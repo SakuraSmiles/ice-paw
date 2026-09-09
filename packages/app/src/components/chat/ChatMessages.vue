@@ -1017,6 +1017,11 @@ const RESUMABLE_REASONS = new Set([
                               <div v-if="s" class="tool-toggle" @click="toggleToolCall(tu.id)">
                                 <StatusGlyph :status="getToolHasError(tu.id) ? 'error' : 'done'" />
                                 <span class="tool-name">{{ s.display }}</span>
+                                <span v-if="s.diff" class="tool-diff" title="行级变更：+ 新增 - 删除 ~ 修改">
+                                  <span v-if="s.diff.added" class="diff-add">+{{ s.diff.added }}</span>
+                                  <span v-if="s.diff.removed" class="diff-del">-{{ s.diff.removed }}</span>
+                                  <span v-if="s.diff.changed" class="diff-mod">~{{ s.diff.changed }}</span>
+                                </span>
                                 <span v-if="s.secondary" class="tool-secondary">{{ s.secondary }}</span>
                                 <span class="tool-file" title="在资源管理器中显示" @click.stop="revealFile(s.revealPath)">{{ s.fileLabel }}</span>
                                 <span class="tool-chevron">{{ expandedToolCalls.has(tu.id) ? '▾' : '▸' }}</span>
@@ -1073,6 +1078,11 @@ const RESUMABLE_REASONS = new Set([
                                 <StatusGlyph v-else status="running" variant="spinner" />
                                 <span class="tool-name">{{ s.display }}</span>
                                 <span v-if="call.result?.durationMs" class="tool-duration">{{ formatDuration(call.result.durationMs) }}</span>
+                                <span v-if="s.diff" class="tool-diff" title="行级变更：+ 新增 - 删除 ~ 修改">
+                                  <span v-if="s.diff.added" class="diff-add">+{{ s.diff.added }}</span>
+                                  <span v-if="s.diff.removed" class="diff-del">-{{ s.diff.removed }}</span>
+                                  <span v-if="s.diff.changed" class="diff-mod">~{{ s.diff.changed }}</span>
+                                </span>
                                 <span v-if="s.secondary" class="tool-secondary">{{ s.secondary }}</span>
                                 <span class="tool-file" title="在资源管理器中显示" @click.stop="revealFile(s.revealPath)">{{ s.fileLabel }}</span>
                                 <span class="tool-chevron">{{ expandedToolCalls.has(call.id) ? '▾' : '▸' }}</span>
@@ -1480,7 +1490,9 @@ const RESUMABLE_REASONS = new Set([
 .think-toggle:hover { background:var(--ip-color-bg-tertiary); }
 /* chevron 右移行尾（2026-09-04 拍板：状态 glyph 前置行首，展开操作在行尾） */
 .think-chevron { margin-left:auto; font-size: var(--ip-text-micro-size); color:var(--ip-color-text-disabled); line-height:1; width:10px; flex-shrink:0; transition:transform var(--ip-duration-fast) var(--ip-ease-out); }
-.think-label { font-size:var(--ip-text-caption-size); font-weight:var(--ip-font-weight-medium); color:var(--ip-color-text-tertiary); letter-spacing:0.3px; text-transform:uppercase; }
+/* 勿加 text-transform:uppercase——label 是中文不受影响，但会把后缀的耗时单位
+   （m/s）打成大写（2026-09-09 生产反馈：思考 · 1M 30S） */
+.think-label { font-size:var(--ip-text-caption-size); font-weight:var(--ip-font-weight-medium); color:var(--ip-color-text-tertiary); letter-spacing:0.3px; }
 .think-status { margin-left:8px; font-size:var(--ip-text-caption-size); color:var(--ip-color-text-disabled); }
 .think-body { margin:4px 0 4px 22px; padding:6px 0 6px 14px; border-left:2px solid var(--ip-primary-200); font-size:var(--ip-text-body-sm-size); color:var(--ip-color-text-secondary); line-height:1.6; white-space:pre-wrap; word-break:break-word; }
 /* 思考内容的 Markdown 继承 13px 字号 */
@@ -1509,6 +1521,12 @@ const RESUMABLE_REASONS = new Set([
 /* chevron 行尾（glyph 前置后；preview 的 margin-left:auto 已把尾部让出） */
 .tool-chevron { font-size: var(--ip-text-micro-size); color:var(--ip-color-text-disabled); line-height:1; width:10px; flex-shrink:0; }
 .tool-name { font-size:var(--ip-text-caption-size); font-weight:var(--ip-font-weight-medium); color:var(--ip-color-text-tertiary); white-space:nowrap; }
+/* 行级 diff 徽记（git 式 +N -M ~K，2026-09-09）：语义三色——success/danger/warning；
+   mono micro；行内 flex 容器收图标字体基线，不参与两侧截断 */
+.tool-diff { display:inline-flex; align-items:center; gap:4px; flex-shrink:0; font-family:var(--ip-font-mono, monospace); font-size:var(--ip-text-micro-size); line-height:1; white-space:nowrap; }
+.tool-diff .diff-add { color:var(--ip-success-text); }
+.tool-diff .diff-del { color:var(--ip-danger-text); }
+.tool-diff .diff-mod { color:var(--ip-warning-text); }
 .tool-duration { font-size: var(--ip-text-micro-size); color:var(--ip-color-text-disabled); font-family:var(--ip-font-mono, monospace); white-space:nowrap; flex-shrink:0; }
 /* 次级信息（左置，紧跟展示名）与文件名位（右锚可点 reveal，2026-09-07 布局拍板） */
 .tool-secondary { font-size:var(--ip-text-caption-size); color:var(--ip-color-text-disabled); white-space:nowrap; }

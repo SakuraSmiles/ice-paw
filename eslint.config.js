@@ -23,6 +23,7 @@ export default [
         // 浏览器主线程常用全局
         document: "readonly",
         window: "readonly",
+        CSS: "readonly",
         getComputedStyle: "readonly",
         navigator: "readonly",
         location: "readonly",
