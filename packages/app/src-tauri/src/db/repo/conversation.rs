@@ -7,9 +7,9 @@ use sqlx::SqlitePool;
 use crate::db::models::{ConversationRow, NewConversation};
 use crate::error::{AppError, AppResult};
 
-/// 全列清单（MA-1 起含 kind/initiator/parent 四列；`query_as<ConversationRow>`
-/// 要求 SELECT 覆盖全部字段，统一收口防止逐站点漂移）
-const CONV_COLS: &str = "id, agent_id, title, pinned, created_at, updated_at, tools_override, project_id, kind, initiator_type, initiator_agent_id, parent_conversation_id";
+/// 全列清单（MA-1 起含 kind/initiator/parent 四列，MA-3 加 inbox_policy；
+/// `query_as<ConversationRow>` 要求 SELECT 覆盖全部字段，统一收口防止逐站点漂移）
+const CONV_COLS: &str = "id, agent_id, title, pinned, created_at, updated_at, tools_override, project_id, kind, initiator_type, initiator_agent_id, parent_conversation_id, inbox_policy";
 
 /// 列出全部会话（不限 agent），按 `pinned DESC, updated_at DESC`
 pub async fn list_all(pool: &SqlitePool) -> AppResult<Vec<ConversationRow>> {
@@ -190,6 +190,28 @@ pub async fn move_to_project(
 ) -> AppResult<()> {
     let affected = sqlx::query("UPDATE conversations SET project_id = ? WHERE id = ?")
         .bind(project_id)
+        .bind(conversation_id)
+        .execute(pool)
+        .await?
+        .rows_affected();
+    if affected == 0 {
+        return Err(AppError::NotFound {
+            resource: "conversation",
+            id: conversation_id.to_string(),
+        });
+    }
+    Ok(())
+}
+
+/// MA-3: 更新收件政策（'accept' | 'hold' | 'refuse'；合法值由命令层校验，
+/// repo 层只管写）
+pub async fn update_inbox_policy(
+    pool: &SqlitePool,
+    conversation_id: &str,
+    policy: &str,
+) -> AppResult<()> {
+    let affected = sqlx::query("UPDATE conversations SET inbox_policy = ? WHERE id = ?")
+        .bind(policy)
         .bind(conversation_id)
         .execute(pool)
         .await?

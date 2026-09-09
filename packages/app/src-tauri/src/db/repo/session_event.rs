@@ -228,6 +228,51 @@ pub async fn max_seq(pool: &SqlitePool, session_id: &str) -> AppResult<i64> {
     Ok(max)
 }
 
+/// MA-3 收件箱投影：一个会话的全部待处理跨会话来件——有
+/// `cross_session_message` 但无同 message_id 的 `cross_session_message_settled`
+/// （find_open_turns 同款「有 A 无 B」模式）。seq 正序 = 投递顺序，
+/// 消费引擎与收件箱 UI 共用本入口。
+pub async fn list_pending_inbox(
+    pool: &SqlitePool,
+    session_id: &str,
+) -> AppResult<Vec<SessionEventRow>> {
+    let rows = sqlx::query_as::<_, SessionEventRow>(
+        "SELECT e.id, e.session_id, e.seq, e.kind, e.actor, e.turn_id, e.message_id, e.payload, e.created_at
+           FROM session_events e
+          WHERE e.session_id = ? AND e.kind = 'cross_session_message'
+            AND NOT EXISTS (
+                SELECT 1 FROM session_events s
+                 WHERE s.session_id = e.session_id
+                   AND s.kind = 'cross_session_message_settled'
+                   AND s.message_id = e.message_id)
+          ORDER BY e.seq ASC",
+    )
+    .bind(session_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// MA-3 收件箱徽标：全部会话的待处理来件计数（boot 时前端批量建
+/// `Map<convId, count>`；单会话增量由事件驱动维护，无需逐会话轮询）。
+pub async fn count_pending_inbox_all(pool: &SqlitePool) -> AppResult<Vec<(String, i64)>> {
+    let rows = sqlx::query_as::<_, (String, i64)>(
+        "SELECT e.session_id, COUNT(*)
+           FROM session_events e
+          WHERE e.kind = 'cross_session_message'
+            AND NOT EXISTS (
+                SELECT 1 FROM session_events s
+                 WHERE s.session_id = e.session_id
+                   AND s.kind = 'cross_session_message_settled'
+                   AND s.message_id = e.message_id)
+          GROUP BY e.session_id
+          ORDER BY e.session_id ASC",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 // =========================================================================
 // Phase 2B backfill（旧会话补事件）——append-only 边界的唯一例外，见模块头
 // =========================================================================
@@ -835,5 +880,69 @@ mod tests {
         assert_eq!(seqs(&rows), vec![1, 2], "回滚后原行原样");
         assert_eq!(rows[0].actor, "agent:agent-1", "真实事件未被删除");
         assert_eq!(rows[1].actor, BACKFILL_ACTOR, "旧 backfill 行未被删除");
+    }
+
+    #[tokio::test]
+    async fn pending_inbox_settled_filters_consumed_and_refused() {
+        let pool = fresh_pool().await;
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
+        seed_agent(&pool).await;
+        seed_conversation(&pool, "conv-1").await;
+        seed_conversation(&pool, "conv-2").await;
+
+        // xm-1: consumed；xm-2: pending；xm-3: refused；xm-4: pending（conv-2 隔离）
+        for (conv, mid) in [
+            ("conv-1", "xm-1"),
+            ("conv-1", "xm-2"),
+            ("conv-1", "xm-3"),
+            ("conv-2", "xm-4"),
+        ] {
+            append(
+                &pool,
+                conv,
+                "cross_session_message",
+                "agent:agent-src",
+                Some(&format!("cross:{mid}")),
+                Some(mid),
+                r#"{"v":1,"message_id":"x","content":"hi"}"#,
+            )
+            .await
+            .unwrap();
+        }
+        for (mid, action) in [("xm-1", "consumed"), ("xm-3", "refused")] {
+            append(
+                &pool,
+                "conv-1",
+                "cross_session_message_settled",
+                "user",
+                Some(&format!("cross:{mid}")),
+                Some(mid),
+                &format!(r#"{{"v":1,"message_id":"{mid}","action":"{action}","by":"auto"}}"#),
+            )
+            .await
+            .unwrap();
+        }
+
+        let pending = list_pending_inbox(&pool, "conv-1").await.unwrap();
+        assert_eq!(
+            pending.iter().map(|r| r.message_id.as_deref()).collect::<Vec<_>>(),
+            vec![Some("xm-2")],
+            "consumed/refused 均出队，seq 正序保留 pending"
+        );
+        assert_eq!(
+            pending[0].actor,
+            "agent:agent-src",
+            "收件箱保留源 agent 归因"
+        );
+
+        let all = count_pending_inbox_all(&pool).await.unwrap();
+        assert_eq!(
+            all,
+            vec![("conv-1".to_string(), 1), ("conv-2".to_string(), 1)],
+            "全量计数按会话分组"
+        );
     }
 }

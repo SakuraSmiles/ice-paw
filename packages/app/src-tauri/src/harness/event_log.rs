@@ -98,6 +98,8 @@ pub mod kind {
     pub const HOOK_INJECTED: &str = "hook_injected";
     pub const PLAN_UPDATED: &str = "plan_updated";
     pub const MODEL_SWITCH: &str = "model_switch";
+    pub const CROSS_SESSION_MESSAGE: &str = "cross_session_message";
+    pub const CROSS_SESSION_MESSAGE_SETTLED: &str = "cross_session_message_settled";
 }
 
 // =========================================================================
@@ -410,6 +412,51 @@ pub struct ModelSwitchPayload {
     /// 触发换档的错误原文（截断；换档路径不落 message_error，这里留诊断线）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+/// MA-3 跨会话来件（投递事实）。pending 语义 = 有本事件无同 message_id 的
+/// settled（`repo::session_event::list_pending_inbox`）。
+///
+/// **不属于任何回合**：turn_id 用独立值 `cross:{message_id}`（append_event
+/// 签名恒填 ctx.turn_id，EventCtx 由投递方如此构造）。消费时另有 user_message
+/// 事件（run_agent_turn 全链路照常），本 kind 不产消息行——derive skip。
+///
+/// **中继不带用户权威**（CC 经验不变式）：actor = `agent:<源agent_id>`
+/// 诚实归因；标题/agent 名打快照（源会话/agent 删除后收件箱展示不空）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CrossSessionMessagePayload {
+    #[serde(default = "version_one")]
+    pub v: u8,
+    /// 投递幂等/关联键（settled 事件同值关联）
+    pub message_id: String,
+    pub source_conversation_id: String,
+    /// 源会话标题快照
+    pub source_conversation_title: String,
+    pub source_agent_id: String,
+    /// 源 agent 名快照
+    pub source_agent_name: String,
+    /// 消息原文（工具入口限长截断）
+    pub content: String,
+    /// true = 消费回合结束自动把目标 agent 回复回投源会话（链一次止，
+    /// 回投消息本字段恒 false）
+    pub expect_reply: bool,
+    pub delivered_at_unix: u64,
+}
+
+/// MA-3 来件终态。`action = consumed`（已被消费回合物化进消息流，或已
+/// 批准占位待消费）| `refused`（用户拒收）。
+///
+/// settle 动作本质都在用户权限域（批准/拒绝是用户手势；auto 是用户 accept
+/// 政策的预授权执行）→ actor 恒 user，细分来源进 `by`。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CrossSessionMessageSettledPayload {
+    #[serde(default = "version_one")]
+    pub v: u8,
+    pub message_id: String,
+    /// "consumed" | "refused"
+    pub action: String,
+    /// "user-approval" | "auto" | "user-refused"
+    pub by: String,
 }
 
 // =========================================================================
@@ -791,6 +838,42 @@ pub async fn log_model_switch(pool: &SqlitePool, ctx: &EventCtx, payload: &Model
         kind::MODEL_SWITCH,
         &ctx.agent_actor(),
         None,
+        payload,
+    )
+    .await;
+}
+
+/// MA-3 跨会话来件投递（actor = 源 agent，诚实归因；ctx 由投递方以
+/// `turn_id = cross:{message_id}` 构造——不属于任何回合）。
+pub async fn log_cross_session_message(
+    pool: &SqlitePool,
+    ctx: &EventCtx,
+    payload: &CrossSessionMessagePayload,
+) {
+    append_event(
+        pool,
+        ctx,
+        kind::CROSS_SESSION_MESSAGE,
+        &ctx.agent_actor(),
+        Some(&payload.message_id),
+        payload,
+    )
+    .await;
+}
+
+/// MA-3 来件终态（actor 恒 user——批准/拒绝是用户权限域，auto 是 accept
+/// 政策的预授权执行，细分来源在 payload.by）。
+pub async fn log_cross_session_message_settled(
+    pool: &SqlitePool,
+    ctx: &EventCtx,
+    payload: &CrossSessionMessageSettledPayload,
+) {
+    append_event(
+        pool,
+        ctx,
+        kind::CROSS_SESSION_MESSAGE_SETTLED,
+        actor_user(),
+        Some(&payload.message_id),
         payload,
     )
     .await;
@@ -1421,5 +1504,70 @@ mod tests {
         .await;
         let back: SummaryPayload = sole_event_payload(&pool).await;
         assert_eq!(back.covered_until_rowid, 77);
+    }
+
+    /// MA-3 来件族 round-trip：投递（actor=源 agent、turn 独立、message_id 关联）
+    /// + 终态（actor=user）。
+    #[tokio::test]
+    async fn cross_session_message_round_trip() {
+        let pool = fresh_pool().await;
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
+        seed(&pool).await;
+
+        // 投递：ctx 按投递方契约构造（turn = cross:{message_id}，agent = 源 agent）
+        let relay_ctx = EventCtx::new("conv-1", "cross:xm-1", "agent-src");
+        log_cross_session_message(
+            &pool,
+            &relay_ctx,
+            &CrossSessionMessagePayload {
+                v: 1,
+                message_id: "xm-1".into(),
+                source_conversation_id: "conv-src".into(),
+                source_conversation_title: "源会话".into(),
+                source_agent_id: "agent-src".into(),
+                source_agent_name: "源 agent".into(),
+                content: "材质参数定稿了吗".into(),
+                expect_reply: true,
+                delivered_at_unix: 1_750_000_000,
+            },
+        )
+        .await;
+        let rows = session_event::list_by_session(&pool, "conv-1", None)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].kind, "cross_session_message");
+        assert_eq!(rows[0].actor, "agent:agent-src", "中继不带用户权威：源 agent 归因");
+        assert_eq!(rows[0].turn_id.as_deref(), Some("cross:xm-1"));
+        assert_eq!(rows[0].message_id.as_deref(), Some("xm-1"));
+        let back: CrossSessionMessagePayload = serde_json::from_str(&rows[0].payload).unwrap();
+        assert_eq!(back.source_conversation_title, "源会话");
+        assert!(back.expect_reply);
+
+        // 终态：actor 恒 user，message_id 关联
+        log_cross_session_message_settled(
+            &pool,
+            &relay_ctx,
+            &CrossSessionMessageSettledPayload {
+                v: 1,
+                message_id: "xm-1".into(),
+                action: "refused".into(),
+                by: "user-refused".into(),
+            },
+        )
+        .await;
+        let rows = session_event::list_by_session(&pool, "conv-1", None)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[1].kind, "cross_session_message_settled");
+        assert_eq!(rows[1].actor, "user");
+        assert_eq!(rows[1].message_id.as_deref(), Some("xm-1"));
+        let back: CrossSessionMessageSettledPayload =
+            serde_json::from_str(&rows[1].payload).unwrap();
+        assert_eq!(back.action, "refused");
     }
 }

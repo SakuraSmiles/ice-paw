@@ -461,6 +461,21 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        // conversations 表（01_init 最小形状）：migration 52 起 ALTER conversations
+        // 加 inbox_policy，伪造库须有此表（同上：run 只看登记，但 52 真执行）。
+        sqlx::query(
+            "CREATE TABLE conversations (
+              id TEXT PRIMARY KEY,
+              agent_id TEXT NOT NULL,
+              title TEXT NOT NULL DEFAULT '',
+              pinned INTEGER NOT NULL DEFAULT 0,
+              created_at TEXT NOT NULL DEFAULT (datetime('now')),
+              updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query("CREATE INDEX idx_model_profiles_sort ON model_profiles(sort_order ASC, created_at ASC)")
             .execute(&pool)
             .await

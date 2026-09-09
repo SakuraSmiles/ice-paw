@@ -538,6 +538,8 @@ pub struct ConversationRow {
     pub initiator_agent_id: Option<String>,
     /// MA-1: 委派图边——发起委派的父会话（ON DELETE SET NULL，父删边不删子）
     pub parent_conversation_id: Option<String>,
+    /// MA-3: 收件政策 'accept' | 'hold' | 'refuse'（migration 52，存量行默认 'hold'）
+    pub inbox_policy: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -563,11 +565,19 @@ pub struct Conversation {
     /// MA-1: 委派父会话（None = 非委派会话）
     #[serde(default)]
     pub parent_conversation_id: Option<String>,
+    /// MA-3: 收件政策 'accept' | 'hold' | 'refuse'（serde default 兼容旧缓存负载）
+    #[serde(default = "default_inbox_policy")]
+    pub inbox_policy: String,
 }
 
 /// `kind` 的 serde 默认值（旧负载无此字段时视为普通聊天会话）
 fn default_conversation_kind() -> String {
     "chat".to_string()
+}
+
+/// `inbox_policy` 的 serde 默认值（旧负载无此字段时保守视为扣住待批准）
+fn default_inbox_policy() -> String {
+    "hold".to_string()
 }
 
 impl From<ConversationRow> for Conversation {
@@ -591,6 +601,11 @@ impl From<ConversationRow> for Conversation {
             },
             initiator_agent_id: row.initiator_agent_id,
             parent_conversation_id: row.parent_conversation_id,
+            inbox_policy: if row.inbox_policy.is_empty() {
+                default_inbox_policy()
+            } else {
+                row.inbox_policy
+            },
         }
     }
 }

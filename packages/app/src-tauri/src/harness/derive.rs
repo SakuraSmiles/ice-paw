@@ -214,11 +214,16 @@ pub fn derive_history(events: &[SessionEventRow]) -> DeriveResult {
                 }
             }
             // 错误行（空内容双方不可见）/ 已删占位 → 不进回放。
-            // 其余 kind 均非消息行事实。plan_updated（计划快照）同为非消息行——
-            // 不容忍会记 DeriveIssue → reconcile 出 DERIVE_ISSUE → read_route 永久回退 Legacy。
+            // 其余 kind 均非消息行事实。plan_updated（计划快照）/ model_switch
+            // （换档事实）/ cross_session_message 族（MA-3 来件排队——消费时另有
+            // user_message）同为非消息行——不容忍会记 DeriveIssue → reconcile 出
+            // DERIVE_ISSUE → 永久污染对账报告。
+            // （model_switch 曾长期缺席此臂：生产事件已写入却恒产 DERIVE_ISSUE，
+            // 2026-09-09 MA-3 探查实锤，随本批修复。）
             "message_error" | "message_discarded" | "turn_context" | "turn_ended"
             | "modal_adapted" | "hook_injected" | "attachment_stored" | "summary_created"
-            | "summary_updated" | "tool_execution" | "plan_updated" => {}
+            | "summary_updated" | "tool_execution" | "plan_updated" | "model_switch"
+            | "cross_session_message" | "cross_session_message_settled" => {}
             other => result.issues.push(DeriveIssue {
                 seq,
                 kind: other.to_string(),
@@ -599,6 +604,47 @@ mod tests {
         ];
         let out = derive_history(&events);
         assert_eq!(out.messages.len(), 1, "只有 user 行");
+        assert!(out.issues.is_empty(), "issues: {:?}", out.issues);
+    }
+
+    /// model_switch 曾长期缺席 skip 臂（生产事件恒产 DERIVE_ISSUE 污染对账报告，
+    /// 2026-09-09 修复）——本测试锁死它必须静默跳过。
+    #[test]
+    fn derive_model_switch_ignored() {
+        let events = vec![
+            row(1, "user_message", Some("m-u1"), r#"{"v":1,"content":"q","blocks":[]}"#.into()),
+            row(
+                2,
+                "model_switch",
+                None,
+                r#"{"v":1,"from_model":"a","to_profile_id":"mp-1","to_alias":"主档","to_model":"b","reason":"quota","attempt":1}"#.into(),
+            ),
+        ];
+        let out = derive_history(&events);
+        assert_eq!(out.messages.len(), 1, "只有 user 行");
+        assert!(out.issues.is_empty(), "issues: {:?}", out.issues);
+    }
+
+    /// MA-3 来件族是非消息行事实：pending 排队由收件箱投影查询，消费时另有
+    /// user_message（run_agent_turn 全链路）——回放器静默跳过。
+    #[test]
+    fn derive_cross_session_family_ignored() {
+        let events = vec![
+            row(
+                1,
+                "cross_session_message",
+                Some("xm-1"),
+                r#"{"v":1,"message_id":"xm-1","source_conversation_id":"c1","source_conversation_title":"源","source_agent_id":"a1","source_agent_name":"甲","content":"hello","expect_reply":false,"delivered_at_unix":1}"#.into(),
+            ),
+            row(
+                2,
+                "cross_session_message_settled",
+                Some("xm-1"),
+                r#"{"v":1,"message_id":"xm-1","action":"consumed","by":"auto"}"#.into(),
+            ),
+        ];
+        let out = derive_history(&events);
+        assert!(out.messages.is_empty());
         assert!(out.issues.is_empty(), "issues: {:?}", out.issues);
     }
 }
