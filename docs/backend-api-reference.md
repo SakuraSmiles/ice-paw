@@ -100,6 +100,7 @@
 | `chat:tool-call-end` | `ChatToolCallEndPayload { conversation_id, message_id, id }` | 工具参数完毕 |
 | `chat:tool-result` | `ChatToolResultPayload { conversation_id, message_id, tool_use_id, content, is_error }` | 工具执行结果 |
 | `chat:summary-injected` | `ChatSummaryInjectedPayload { conversation_id, summary_tokens, original_count, kept_count }` | 摘要注入完成 |
+| `chat:budget` | `ChatBudgetPayload { conversation_id, cumulative_tokens, cumulative_cached_tokens, cumulative_prompt_tokens, effective_cap, initial_cap, renewal_index, max_renewals, renewed, round, miss_hint? }` | 会话级 token 预算 HUD（瞬态不入库）。`miss_hint`（③ 可观测化）：本轮全 miss（prompt ≥ 1024 且 cached == 0）时的本地归因 slug 数组，词表见 `turn_cost::miss_slug`（`first_request` / `tools_changed` / `system_stable_changed` / `os_env_changed` / `injection_changed` / `model_switched` / `no_detectable_change`）；null = 本轮非全 miss——归因是本地推断非 provider 报告 |
 | `chat:tool-auth-request` | `ToolAuthRequestPayload` | 工具执行需授权（Rust → 前端） |
 | （前端 emit）`chat:tool-auth-response` | `ToolAuthResponse { request_id, allowed }` | 工具授权响应（前端 → Rust） |
 | `chat:config-proposal` | `ConfigProposalPayload { request_id, conversation_id, message_id, tool_use_id, sensitivity, action, summary }` | 配置提案请求（Rust → 前端） |
@@ -183,7 +184,7 @@
   - `limit: Option<i64>`（可选；`None` 全量）
   - `before_seq: Option<i64>`（可选；仅 `limit` 存在时生效——尾部优先分页游标）
 - **返回**：`AppResult<Vec<SessionEvent>>` — 每元素 `{ id, session_id, seq, kind, actor, turn_id?, message_id?, payload, created_at }`；`payload` 为已 parse 的 JSON 对象（非法 JSON 降级为字符串值，与导出一致）。按 seq 正序 = 权威回放序。
-- **说明**：直接返回结构化列表供前端「轨迹回放」视图消费。读取模式：`limit=None` 全量正序（与 `export_session_trajectory` 同源视图）；`limit=Some(n)` 尾部优先——取最新 n 条（`before_seq=None`）或 seq 严格小于 `before_seq` 的最大 n 条（「加载更早」，repo `list_tail` DESC 取后反转），大会话不必一次全量拉取。会话不存在返回 NotFound。13 kind 与 payload 定义见 `harness/event_log.rs`。
+- **说明**：直接返回结构化列表供前端「轨迹回放」视图消费。读取模式：`limit=None` 全量正序（与 `export_session_trajectory` 同源视图）；`limit=Some(n)` 尾部优先——取最新 n 条（`before_seq=None`）或 seq 严格小于 `before_seq` 的最大 n 条（「加载更早」，repo `list_tail` DESC 取后反转），大会话不必一次全量拉取。会话不存在返回 NotFound。14 kind 与 payload 定义见 `harness/event_log.rs`（14th `context_breakdown` 详档见下节）。
 - **前端使用状态**：✅ 已使用（`bridge.trajectory.listEvents(conversationId, limit?, beforeSeq?)`）
 
 ### reconcile_session
@@ -201,6 +202,28 @@
 - **返回**：`AppResult<ReadRouteStatus>` — `{ entries: [{ conversation_id, route: "derive"|"legacy", reason, events_total, diffs }], resolved?: { route, reason, events_total, diffs } }`
 - **说明**：读路径路由诊断（session-event-log Phase 2A）。`entries` = 路由器缓存的所有会话条目（send_message 触发过的会话各走 derive/legacy 及原因）；`resolved` = 若传 conversation_id 则为其当场解析决策。路由判据：偏好 `session_read_path=legacy` 强制 legacy；零事件 → legacy(`no_events`)；对账有 diff → legacy(`reconcile_diffs:N`)；事件纪元前有旧行 → legacy(`mixed_epoch`)；否则 derive(`green`)。会话不存在返回 NotFound（仅当传了 conversation_id 时校验）。
 - **前端使用状态**：⬜ 暂未接 UI（Phase 2A 诊断出口，DevTools `invoke('get_read_route_status', { conversationId })` 或不传参看全局快照）
+
+### context_breakdown 事件（③ 上下文开销可观测化）
+
+`session_events` 第 14 个 kind——一条事件装**整回合**的上下文组成分解（构建期快照，同 `turn_context` 性质；derive 回放 skip 不产消息行）。emit 单点在 `stream_loop` wrapper（inner 返回后），故恒落在本回合 `turn_ended` 之后。零请求（provider 未回 usage 的回合）不产事件——轨迹页对该回合不渲染「上下文组成」区。
+
+**Payload**（`ContextBreakdownPayload`，`harness/event_log.rs`）：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `v` | `u8` | 版本（=1） |
+| `segments` | `Vec<Segment>` | 段级组成（Pipeline 终态事后聚合 = Model-visible 口径）。`Segment = { label, est, count? }`；label 词表（`context/anatomy.rs`，前后端共用字符串）：`system_persona` / `system_tool_hint` / `system_os_context` / `system_delegation_hint` / `system_word_style` / `tool_defs` / `summary` / `history` / `user_message` / `user_images`；est=0 段省略 |
+| `est_total` | `u64` | 各段估算之和（本地估算：CJK 1 token/字、其余约 4 字符/token，工具 JSON 偏低估） |
+| `actual_prompt_tokens` | `Option<u64>` | provider 回传的回合**首轮** prompt 真值（缺失 = 无 usage） |
+| `fingerprint` | `{ tools, system_stable, os_stable }` | 请求体稳定指纹三元组（各 12 hex FNV-1a，跨版本稳定）。`tools` 取轮 0 工具列表（回合起点基线）；`os_stable` 为 os_context 冻结时间行后的稳定核 |
+| `rounds` | `Vec<Round>` | 逐轮请求序列。`Round = { prompt, cached, tools_hash, injected, model_switched }`——`cached=0` 即全 miss |
+
+**miss 归因**（`chat:budget.miss_hint`，`harness/loop/turn_cost.rs::attribute_miss` 判定表）：
+
+- 门槛：`prompt ≥ 1024 && cached == 0`（部分未命中是常态，逐轮提示是噪声）
+- slug 词表：`first_request`（无任何基线，与其他互斥）/ `tools_changed` / `system_stable_changed`（仅轮 0 与上回合比）/ `os_env_changed`（仅轮 0）/ `injection_changed` / `model_switched` / `no_detectable_change`（疑 provider 缓存 TTL 过期）
+- 多 slug 并存（顺序稳定）；比对基线：轮 0 取上一回合 `context_breakdown` 的 fingerprint（`last_breakdown_payload` last-wins），轮 ≥1 取同回合上一轮内存快照
+- ⚠️ 措辞契约：归因是**本地推断**非 provider 报告——机理说明（TTL / 前缀块对齐）只住前端文案（`utils/missHint.ts`），后端只判「输入侧谁变了」的可观测事实
 
 ---
 
