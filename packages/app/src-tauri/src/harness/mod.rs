@@ -22,6 +22,7 @@ pub mod doc;
 pub mod error_mapping;
 pub mod event_log;
 pub mod hooks;
+pub mod inbox;
 pub mod kb;
 pub mod legacy_model_migration;
 pub mod r#loop;

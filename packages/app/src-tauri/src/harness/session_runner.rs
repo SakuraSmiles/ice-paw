@@ -511,8 +511,12 @@ pub(crate) async fn run_agent_turn(
         // 委派。全局注册表不含此工具（register_builtin 不注入），组装期按 kind
         // 决定：delegation 子会话拿不到它 → 委派深度=1 的结构性护栏（接收方不能
         // 二次委派，「A委派B、B委派回A」的乒乓球在结构上不可能）。
+        // MA-3：send_message_to_session 同条件注册——delegation 子会话同样拿不到
+        // 跨会话投递（防子会话侧信道绕过委派深度护栏；委派要回话走 tool_result）。
         if conv.kind == "chat" {
             reg.register(Arc::new(crate::harness::mcp::delegate::DelegateTool))
+                .await;
+            reg.register(Arc::new(crate::harness::mcp::relay::SendToSessionTool))
                 .await;
         }
 
@@ -899,14 +903,16 @@ pub(crate) fn inject_into_system(
     }
 }
 
-/// 平台元工具（`propose_config_change` / `read_agent_config` / `delegate_to_agent`）
-/// 恒保留：它们是平台能力而非领域工具，收窄不应切断 agent 的自我配置与委派
-/// （delegate 在组装期按 conv.kind 注册，filter 兜底全局注册表可能含它的场景）。
+/// 平台元工具（`propose_config_change` / `read_agent_config` / `delegate_to_agent` /
+/// `send_message_to_session`）恒保留：它们是平台能力而非领域工具，收窄不应切断
+/// agent 的自我配置、委派与跨会话通讯（delegate / send_message_to_session 在
+/// 组装期按 conv.kind 注册，filter 兜底全局注册表可能含它们的场景）。
 /// 模块级：组装期收窄披露日志与 filter 共用同一份名单。
 const PLATFORM_TOOLS: &[&str] = &[
     "propose_config_change",
     "read_agent_config",
     "delegate_to_agent",
+    "send_message_to_session",
 ];
 
 /// ②-3：enabled_tools 名单过滤（纯函数）——非空名单 = 名单 ∪ 平台元工具；

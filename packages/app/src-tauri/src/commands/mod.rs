@@ -10,6 +10,7 @@ pub mod chat_cmd;
 #[cfg(test)]
 mod chat_cmd_tests;
 pub mod conversation_cmd;
+pub mod inbox_cmd;
 pub mod kb_cmd;
 pub mod log_cmd;
 pub mod mcp_cmd;

@@ -16,6 +16,7 @@ pub mod manager;
 pub mod path_suggest;
 pub mod read_attachment_tool;
 pub mod read_reference_tool;
+pub mod relay;
 pub mod transport;
 pub mod types;
 // 内置 agentic 工具（文件读写编辑 / shell / grep / git / web）

@@ -140,6 +140,10 @@ pub fn run() {
             commands::conversation_cmd::get_read_route_status,
             commands::message_cmd::list_messages,
             commands::message_cmd::create_message,
+            // MA-3 收件箱（跨会话通讯）
+            commands::inbox_cmd::list_inbox,
+            commands::inbox_cmd::set_inbox_policy,
+            commands::inbox_cmd::respond_inbox_item,
             commands::chat_cmd::send_message,
             commands::chat_cmd::stop_generation,
             commands::chat_cmd::is_conversation_streaming,
@@ -399,6 +403,12 @@ pub fn run() {
                     }
                 });
             }
+
+            // 3d) MA-3 收件箱排空观察者：accept 会话的 turn_ended 广播 → 等静默
+            //     → pending 非空且配额未尽 → 消费下一条（链式排空）。零侵入
+            //     loop 退出路径（与 3c 同一广播源的独立订阅）。必须在 3c 之后
+            //     无依赖，独立 spawn 保证 lagged 互不传染。
+            harness::inbox::spawn_drain_watcher(handle.clone());
 
             // 4) REQ-XC-010: 注入 AgentCmd trait object (生产实现 SqlAgentCmd)
             // 覆盖 builder 阶段注入的 None 占位。
