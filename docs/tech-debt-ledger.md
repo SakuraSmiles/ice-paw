@@ -92,6 +92,46 @@
 | Q14 | z-index 局部 1-10 裸数字 ~22 处（ChatHeader/ChatMessages/Trajectory* 等）——令牌阶梯无局部堆叠档属规则与阶梯缺口，建议补 `--ip-z-local` 档后批量收编 | 低 | 📋 |
 | Q15 | 杂项低危（观察池，撞上再修）：删会话不脱屏幕通道附着（幽灵 HUD 条目）/ deleteConversation 不清 bgStreams·pendingAuth（后端 panic 无终态事件时残留）/ AuthRequestCard 250ms 倒计时 interval 常开 / thinkingDurations 只增不清 / SSE 消费端消失不早退 / gate 取消臂摘排队位后无 bump（HUD 滞后一拍）/ edit_file 写失败裸 Io 少恢复指引（对照 write_file 三段式）/ 11.5px·12.5px 幽灵档 / ✕✓✦ 文本字形 / 动效时长散点硬编码 / MockAgentCmd lock().unwrap() 风格债 / migration 编号跳号（10 从未存在；47 dev 期建删未发布，heal_dropped_migrations 已锁）/ corpus_tests.rs 硬编码语料修订计数（D7 精神边缘）/ 根 package.json 0.3.0 陈旧 / attachments.rs:304·cleanup.rs:151 expect 谓词分离隐性耦合 / docx unreachable·expect 理论面（工具路径内 catch_panic 兜住）/ channel.rs:198 注释漂移 | 低 | 👁 |
 
+## 批次 R — 2026-09-09 健康检查（五路并行扫描：后端不变式 / ModelProfile 线 / 错误路径并发 / 前端 / 文档对账）
+
+> 0.6.15 发版后全工程体检。基准 HEAD = 6c8b716，扫描只读未修。
+>
+> **干净面结论**：后端十条系统不变式 9 条成立、1 条弱违反（=既有 Q12，非新伤）；ModelProfile 八条不变式 6 条完全成立 + 1 真接缝（R1）；错误路径 P0/P1 **零发现**——非测试代码 unwrap/expect 仅 ~20 处全属内部不变量、await 持锁七处全短临界区、字节切片全有边界守卫；panic 纪律与「为什么敢这么写」论证注释真实生效。fmt 大重排（6c8b716，84 文件）零语义损伤；ModelProfile 穿线未稀释既有不变式（旋钮透传为 ②-1 时即存在的 Q12，穿线机械重构放大可见性）。
+>
+> **分诊执行（2026-09-09 用户拍板「建议批次全推进」）**：R1-R5 行为修复五件 + R6-R10 健壮性五件 + R11-R13 视觉三件 + R-D1~D7 文档批全部落地（四路并行修复互不碰文件 + 文档批主线；全量验证 cargo 1428 / vitest 464 / typecheck+lint 零警告；**2026-09-09 用户 dev 环境手测通过，四组已 commit**）。R14-R19 留观察池。
+>
+> 修复要点存档：R1 守卫扩到「行已处引用态 + model_profile_id 缺席 + 快照族手填」也拒；R2/R3 用闭包捕获发送时 convId（防 sendingConvId 易主）+ await 后 activeConvId 守卫；R6 按失败步骤分流（行查询 NotFound 才降级 legacy，fetch_api_key 一切错误=Corrupted 上抛——crypto 对槽位无记录也返回 NotFound，按错误变体分会误归）；R9 Mock 五+六处挂 #[cfg(test)]；R12 ChatHeader z:1 选 badge 而非 base（.chat-render 双 pane 是 absolute，base 会让 header 落败）。
+
+| # | 项 | 严重度 | 状态 |
+|---|---|---|---|
+| R1 | **提案卡 update_agent 审批绕过 ModelProfile 引用语义**：ConfigProposalCard.vue:152-160 批准时直传 provider/model/base_url 且不带 model_profile_id；后端守卫（agent_cmd.rs:141-163）只拦「同批设引用」组合——引用态 agent + 提案手填快照族放行入库，下轮聊天 profile 解析整体覆盖回 profile 值：**用户批准的换模型静默失效**，设置页先显示「已改」再回翻，agent.yaml 镜像同步还会把永不生效的值写进文件（镜像目的恰是「不误导排障」，agent_cmd.rs:784-796）。proposal_tool.rs:167 schema 仍鼓励模型提案 provider/model（持续生产这类提案）。修=守卫扩到「行已处引用态（old_has_primary）且 input.model_profile_id 非 Some(None) 且快照族手填」也拒（或前端提案卡对引用态 agent 改写字段分派） | 高（行为违背最小惊讶） ✅ 2026-09-09 |
+| R2 | **chat store 加载竞态**：loadMessages（stores/chat.ts:139-163）/loadMoreMessages（:165-182）await 前后无请求序号守卫，快速切会话 A→B 时 A 的晚到响应直接覆盖 B 的 messages + hasMore；loadMore 还会把旧会话 older 前插进新会话。修=await 后补 `if (convId !== activeConvId.value) return`（同库范式 useProjectTrajectory.ts:65） | 中 ✅ 2026-09-09 |
+| R3 | **发送失败回滚错键 + bgStreams 幽灵锁死**：sendMessage catch（stores/chat.ts:477-495）错误横幅按失败时刻 activeConvId 写（发送在途切到 B → 横幅挂 B 头上）+ 不清理 bgStreams——切回 A 恢复 `sending=true` 幽灵「生成中」而 catch 已 clearSendTimeout，无机制翻转，输入被锁需手点停止。修=回滚/报错一律以 sendingConvId 为键 + catch 里 `bgStreams.delete(sendingConvId)` | 中 ✅ 2026-09-09 |
+| R4 | **LogSettings 自动刷新定时器挂满生命周期**：5s setInterval 只在 onUnmounted 清理（LogSettings.vue:108-115），但该页在路由级 keep-alive 下离开只触发 deactivated——开过自动刷新后每 5s 一次隐藏页 invoke + 全量重渲，永不停止。修=照 McpSettings 先例补 onDeactivated 停 / onActivated 按 autoRefresh 重启 | 中 ✅ 2026-09-09 |
+| R5 | **useProjectTasks 监听无 keep-alive 静默门控**：两 Tauri 监听（delegation-started 无条件 refresh + turn_ended，useProjectTasks.ts:43-63）在项目详情页被缓存期间照常触发——2026-08-31 修了孪生 useProjectTrajectory、Q5 修了 TrajectoryView，此件漏网。修=同款 listenerLive gate + activated/deactivated 成对 | 中 ✅ 2026-09-09 |
+| R6 | **ModelProfile 运行时解析失败静默回落 legacy**：get_with_credentials（agent_cmd.rs:520-527）把「profile 行已删」与「行在但 Stronghold 槽位损坏」混成同一降级分支（warn + legacy_credentials）——后者在迁移型 agent（旧槽位保留）上静默换回旧 Key 继续跑，健康归因记到主档头上（active_profile_id 未变）污染数据；物化型新建 agent 反而诚实报错。修=resolve_profile_credentials 返回结构化错误（NotFound vs Stronghold），仅行缺失走降级 | 中低 ✅ 2026-09-09 |
+| R7 | set_mcp_enabled 吞库错（commands/mcp_cmd.rs:159）：`let _ = repo::mcp_server::update` 失败时内存态已翻转、命令返回成功，重启后开关静默回退旧值且无日志 | 低 ✅ 2026-09-09 |
+| R8 | checksum 自愈虚报（db/migrate.rs:276,341）：UPDATE 失败仍 healed+=1 打 info「自愈完成」——实际每次启动重复 warn 重试，日志无法发现自愈失败 | 低 ✅ 2026-09-09 |
+| R9 | MockAgentCmd / MockModelProfileCmd 未挂 `#[cfg(test)]`（agent_cmd.rs:889 / model_profile_cmd.rs:514——首处 cfg(test) 在 1169/802 行）：测试 mock 连同 `.lock().unwrap()` 编进生产二进制。ModelProfile 穿线遗漏可能性大 | 低 ✅ 2026-09-09 |
+| R10 | agent 建库后 KB 初始索引静默跳过（harness/kb/ensure.rs:223-227）：list_by_scope 失败 `.ok()` 后无日志（对比同文件 add_watch 失败有 warn），直到目录文件变更才被 watcher 补上 | 低 ✅ 2026-09-09 |
+| R11 | **暗色主题错误横幅刺眼亮红**：`.chat-error-banner`（ChatMessages.vue:1565）裸 `#fef2f2/#fecaca` 覆盖 ErrorBanner 自身 token（ErrorBanner.vue:92）；同文件 `.user-attachment-card`/`.user-ref-card`（:1358-1398）裸 `#ffffff/#1f2937/#f3f4f6` 硬编码浅色 | 低 ✅ 2026-09-09 |
+| R12 | 裸 z-index/字号/间距零头（并入 Q14 面）：跳到底按钮 `z-index:5`（ChatMessages.vue:1480——tokens.css:210 注释点名该用 `--ip-z-raised`）；AgentForm.vue:1454 + ModelSettings.vue:1427 tooltip `z-index:10`；ChatHeader :343/:417/:444；12.5px 字号（ChatMessages.vue:1391）+ 5px 间距（AgentForm:1441/ModelSettings:1417） | 低 ✅ 2026-09-09 |
+| R13 | 死样式 `.chat-error-icon/.chat-error-text`（ChatMessages.vue:1566-1567，ErrorBanner 化后遗留零引用） | 低 ✅ 2026-09-09 |
+| R14 | boot 存量抽离对 Stronghold 瞬时读失败固化（agent_profile_migration.rs:138 `unwrap_or_default()` → 按无 Key 跳过且标记照落，agent 永停留手动形态，仍可编辑转正；测试 :566-589 固化该语义）。收紧=区分 NotFound（终局跳过）与其他 Err（中止下轮重放） | 低 | 👁 |
+| R15 | 物化 list→create 非原子（profile_materialize.rs:60-99）：并发同配置双建理论窗口，桌面单用户难触达 | 低 | 👁 |
+| R16 | 4 处本地 `chars().take()` 截断器未走 infra/strings（docx_tool.rs:1214 / search.rs:122 / web.rs:89 / screen/channel.rs:809——panic 安全但非共享通道）+ 6 处裸 `AppError::Io` 出工具层（file_tools.rs:430,558-568,627,725-731,790——doom 签名稳定但缺工具名家族词与三段式） | 低 | 👁 |
+| R17 | 三处路径字符串拼接混用 `/`（agent_cmd.rs:622 / session_runner.rs:238 / kb/ensure.rs:194，`format!("{}/agents/{}")`）——当前消费方全走 PathBuf 安全，一旦有人拿去与 canonicalize 输出做字符串比较即翻车 | 低 | 👁 |
+| R18 | clearActiveConversation 无差别清 bgStreams（stores/chat.ts:760）：生成中切项目空间再切回，流式快照丢失，chunk 重建自愈但 done 前文本从中间开始 | 低 | 👁 |
+| R19 | McpSettings onActivated 仅距上次 >30s 才 reload（McpSettings.vue:57-61）：<30s 返回时不补 startPollIfNeeded——离场时有「初始化中…」的 server 状态冻结到手动操作 | 低 | 👁 |
+| R-D1 | **文档批·版本号漂移**：仅 tauri.conf.json 升 0.6.15；packages/app/package.json + src-tauri/Cargo.toml 停 0.6.3、根 package.json 停 0.3.0（安装包版本由 tauri.conf 决定，产物无错，纯文档性漂移；根 package.json 陈旧已列 Q15） | 低 ✅ 2026-09-09 |
+| R-D2 | **文档批·CHANGELOG 缺档**：最新条目停 0.6.10——缺 0.6.4 与 0.6.15 两档（0.6.11~0.6.14 版本号未使用，按 0.6.10 头注先例标注） | 低 ✅ 2026-09-09 |
+| R-D3 | **文档批·CLAUDE.md 当前状态节停在 0.6.10**（影响最大——不变式真相源）：ModelProfile 三阶段 / 降级链三拦截点 / 白屏二轮 / 工具行三件 / 通用页显式保存整批未写，后续会话会绕过已有实现重造 | 中 ✅ 2026-09-09 |
+| R-D4 | 文档批·架构树漂移：profile_* 五件（match/materialize/health/agent_profile_migration/legacy_model_migration）+ loop/fallback.rs + doc/ 整目录 + commands 四文件（model_profile_cmd/provider_cmd/screen_cmd/agent_yaml）不在树上；context/ 画在 harness/ 下实为顶层；**loop_engine 697→1377 行**（拆分红利吃回，观察是否再拆） | 低 ✅ 2026-09-09 |
+| R-D5 | 文档批·测试数字统一 1427/460（CLAUDE.md 两处矛盾 1350/416 vs 1332/362；CONTRIBUTING「51/712」差 3~9 倍；docs/architecture.md 同旧数且 Pipeline 清单缺 TokenWindow/ModalCapability/ScreenshotHistory 三 Stage、全文未提 session_events/screen/Word/ModelProfile） | 低 ✅ 2026-09-09 |
+| R-D6 | 文档批·照做会失败项：CONTRIBUTING 死链（指 memory/cargo-check-env.md，memory/ 目录已空）+ 根目录跑 `pnpm test:watch` Missing script（script 只在 packages/app） | 低 ✅ 2026-09-09 |
+| R-D7 | 文档批·computer-use-roadmap checkbox 与正文自相矛盾（§4.12 步骤 1-5 正文全「已落地」、checkbox 全未勾） | 低 ✅ 2026-09-09 |
+| R-D8 | 台账销项三件（本轮核实）：Q13-delegate 已补 13 测试（hud/approval_toast/session.rs 仍缺，保留）；CONTRIBUTING「会话导出」已实现（export_session_trajectory，搜索仍未做）；**即时保存负债清两件**——项目背景编辑区已迁草稿+显式保存（ProjectContextEditor.vue:56-74），负债只剩会话标题行内改名（ChatHeader.vue:235）+ 项目成员 chips 两处豁免区 | — | ✅ 核实 |
+
 ## 安全项
 
 | # | 项 | 备注 |

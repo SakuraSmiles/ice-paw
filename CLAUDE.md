@@ -2,7 +2,7 @@
 
 ## 项目概述
 IcePaw — 本地优先的 LLM 对话工作站。Tauri v2 (Rust) + Vue 3 (TypeScript) 桌面应用。
-当前版本：`0.6.10`。
+当前版本：`0.6.15`。
 
 ## 设计规则（用户拍板，勿翻案）
 
@@ -81,25 +81,41 @@ pnpm typecheck && pnpm lint && pnpm build   # 不覆盖视觉/CSS 回归
 
 ```
 packages/app/src-tauri/src/
-├── commands/         # Tauri 命令入口（chat/agent/conversation/mcp/kb/project/preferences/log/message）
+├── commands/         # Tauri 命令入口（chat/agent/agent_yaml/conversation/mcp/kb/project/preferences/log/
+│                     #   message/provider/model_profile/screen）
 ├── harness/          # 核心业务逻辑
-│   ├── mcp/          # MCP 工具系统（client trait/registry、内置工具、外部 server、bundled runtime、proposal_tool）
+│   ├── mcp/          # MCP 工具系统（client trait/registry、内置工具 file_tools/shell/docx_tool/screen/...、
+│   │                 #   外部 server、bundled runtime、proposal_tool/delegate/plan_tool）
 │   ├── provider/     # LLM provider 适配（anthropic/openai/mock + model_info 模型窗口表 + embedding）
-│   ├── loop_engine.rs# 主循环调度（697 行，已拆出 loop/ 子模块）
-│   ├── loop/         # 拆分出的子模块（context/events/reason/retry_round/stuck_detect/token_usage）
+│   ├── doc/          # Word 文档子系统（inspect 读侧投影 / edit zip 手术引擎 / styles / numbering / assets 共享模板）
+│   ├── loop_engine.rs# 主循环调度（已拆出 loop/ 子模块；膨胀观察：697→1377 行）
+│   ├── loop/         # 拆分出的子模块（context/events/reason/retry_round/stuck_detect/token_usage/
+│   │                 #   fallback 降级链换档）
 │   ├── tool_executor # 工具执行编排 + 授权流程
 │   ├── proposal_guard.rs / proposal_registry.rs  # 配置提案 guardrail + 通道
+│   ├── profile_match.rs / profile_materialize.rs / profile_health.rs
+│   │                 # ModelProfile 实体：去重键单一真相源 / 新建自动物化 / 健康三列
+│   ├── agent_profile_migration.rs / legacy_model_migration.rs
+│   │                 # boot 存量抽离（幂等标记）/ legacy Key 收编 Stronghold
+│   ├── session_runner.rs  # 回合编排（Pipeline 接线、LoopContext 构造唯一生产点）
+│   ├── event_log.rs / derive.rs / reconcile.rs / read_route.rs / backfill.rs
+│   │                 # 会话事件日志五件（typed emitters / 纯回放 / 对账 / 读路由 / boot 扫尾）
 │   ├── hooks.rs      # 对话钩子执行器（run_hooks + has_actions，4 接入点）
-│   ├── kb/           # RAG 知识库（embedding/indexer/parser/watcher/ensure）
-│   ├── budget.rs / summary_provider.rs / chat_state.rs / cleanup.rs / batch_writer.rs / oneshot_registry.rs / observable.rs
-│   └── context/      # 上下文管道（token 估算、历史加载、摘要、裁剪阶段）
+│   ├── kb/           # RAG 知识库（embedding/indexer/parser/watcher/ensure/vector_cache）
+│   ├── modal.rs / vision.rs  # 视觉两档制（能力探测 / 代读适配 / 条目链）
+│   └── budget.rs / summary_provider.rs / chat_state.rs / cleanup.rs / batch_writer.rs / oneshot_registry.rs / observable.rs
+├── context/          # 上下文管道（stages Pipeline：token 估算/历史加载/摘要/TokenWindow/ModalCapability/ScreenshotHistory）
 ├── db/               # sqlx 数据层（models/repo/migrations）
-├── infra/protocol.rs # 跨层事件 payload
-└── lib.rs            # 启动入口（registry 初始化、MCP boot）
+├── infra/            # protocol/（跨层事件 payload）+ strings/decode/file_validation/path_norm 等
+└── lib.rs            # 启动入口（registry 初始化、MCP boot、WebView2 缓存瘦身）
 packages/app/src/
-├── components/chat/  # 聊天 UI（ChatMessages, ConfigProposalCard, ToolAuthDialog...）
-├── composables/      # 前端逻辑组合（useChatEvents, useThinkingTimer, useScrollFollow, useTheme, useNewConversation）
-├── stores/           # Pinia 状态管理（chat, agent, project）
+├── components/       # 组件（chat/agent/common/kb/layout/mcp/project/trajectory 八子域）
+├── composables/      # 前端逻辑组合（useChatEvents/useModelProfiles/useProjectTrajectory 等 16 个）
+├── stores/           # Pinia 状态管理（chat, agent, project, screenChannel）
+├── pages/            # 路由页（settings/ 含各设置页、project/、screen/）
+├── router/           # 路由表
+├── data/             # 前端常量（stylePresets 等）
+├── utils/            # 工具函数（toolSummary/toolLabels/format 等）
 ├── api/bridge.ts     # Tauri invoke 统一入口
 └── types/index.ts    # 前端类型定义
 ```
@@ -113,6 +129,16 @@ agent 调用 `propose_config_change` 工具提出创建/修改 agent 提案 → 
 - 安全加固(132cf19)：写工具 `reject_sensitive()` 拦硬写 agent.yaml + `register_meta_tools()` 强制注入合法通道
 - **旋钮唯一写入通道不变式（2026-08-27 ②-1）**：旋钮字段（system_prompt / temperature / max_tokens / max_total_tokens / tool_max_rounds / enabled_tools / word_style_profile / hooks）的写入通道 = yaml 通道命令（`set_agent_system_prompt` / `set_agent_yaml_field`[整数族+temperature 浮点] / `set_agent_enabled_tools` / `set_agent_word_profile`），`update_agent` 只管出生证字段（name/provider/model/base_url/workspace/avatar/key）。出生 yaml 的活行遮蔽 DB 列（apply_to_row），写 DB = 「批准后生效」假象。ConfigProposalCard 批准路径按字段分派（编辑值 editFields 覆盖优先）；`base_url` 双层 Option：显式 Some=设/清、absent=保持（仅换厂商且有默认时跟随，`resolve_base_url_arg`——回归测试在 agent_cmd tests）
 - **⚠️ enabled_tools 镜像同步不变式（2026-08-31 生产实案）**：工具组装期收窄读的是 **DB 行**（yaml 仅加载时经 apply_to_row 遮蔽、字段 Some 才覆盖）——`set_agent_enabled_tools` 写完 yaml 必须镜像 DB 列（摘除→Some(None)=NULL、收窄→Some(Some)=同值 JSON），只摘 yaml 不清 DB = 旧白名单下次加载复活（工具静默缺失，0.6.1 真机两轮排查的根因）。组装期收窄生效时 session_runner 打 info 日志披露「保留 N/裁掉 M+名单」（治看不见，勿删）；生产排查线索：`enabled_tools: []` yaml 行 = 旧白名单阴影下的全开 workaround，根因修复后可摘
+
+### 模型配置实体化 · ModelProfile（0.6.11~0.6.15 三阶段，随 0.6.15 发版）
+模型配置从使用点散落抽成独立实体（`model_profiles` 表 + Stronghold 槽位 `profile:{id}`）：设置-模型页管理，视觉读取/语义检索/agent 对话统一引用——**Key 一处换全局生效**。
+- **四列快照制**：agent 行 `model_profile_id` NULL = legacy 路径零迁移义务；非 NULL 时 `get_with_credentials`（agent_cmd.rs）解析 profile 覆盖出参 provider/model/base_url/api_key，**值变才回写快照列**（值同零 UPDATE，repo 的 IS NOT NULL 安全比较）；前端 6 显示位读快照列自动正确。⚠️ 提案 update_agent 对引用态 agent 手填快照族字段会被下轮解析覆盖（批准假象）——update 守卫须拦（2026-09-09 批次 R1）。
+- **去重键单一真相源**：`profile_match.rs` GroupKey = 厂商+模型+归一端点+Key（trim/去尾斜杠/注册表默认合并）；新建自动物化（`profile_materialize.rs`）与 boot 存量抽离（`agent_profile_migration.rs`）同源——同配置复用既有实体不重复建。⚠️ 物化闭包三泛型直传勿收拢（rustc HRTB bug）。
+- **键数锁**：删除守卫三段式拒绝，查两条腿——`agents.model_profile_id = ?` OR `fallback_profile_ids LIKE '%"id"%'`（带引号防前缀碰撞）+ prefs 视觉/语义检索腿。
+- **降级链**（`loop/fallback.rs`）：`fallback_profile_ids` 有序多档，三拦截点——Quota 类不可重试分支（switch 先于 emit_round_error，**换档成功零错误终态**）/ RateLimited·Network 退避耗尽 loop-top / 分类表 `fallback_trigger`（Auth/Forbidden/ContextTooLong/Sensitive/Unknown 不换档）；换档重置 RetryState 但**预算 cap 不重置**；链尽走原终态；换档事件 `model_switch` kind + `chat:model-switched` toast。FallbackResolver trait 保 loop 链 Tauri-free（e2e 用 MapResolver）。
+- **boot 迁移次序铁律**：抽离标记先落再扫（跑过零扫描）；手动形态豁免与 `manual_materializable` 同构（需 Key 厂商无 Key / custom 缺端点 → 旁路 legacy 不硬造 keyless 实体）。
+- **健康归因**：`profile_health.rs` 三列（状态/最后错误/最后调用时间）；测试连接 `demote_unchanged_inputs`——入参与存量等值降级为 None 恢复归因（治「测试了但状态点不更新」）；链路测试 `test_agent_model_chain` 逐档**真发** 16 token 摘要请求（列模型是鉴权层动作验不出对话权益，Coding 1113 实案）+ Skipped（配置已删）刻意不记健康。
+- **前端形态**：新建 agent 保留手写表单（保存时后端物化，UI 不感知）；编辑只允许选实体——合并 tag 链选择器（vuedraggable + 键盘换位，首 tag=主档 badge，chainIds[0]=主/slice(1)=降级）；悬空引用诚实标「（配置已删除）」。⚠️ jsdom 测不了原生 DnD（顺序语义靠键盘用例覆盖）；`.conn-btn` 双位须作用域定位。
 
 ### MCP 工具系统
 - `McpClient` trait：name/description/parameters/execute/execute_with_context
@@ -195,8 +221,10 @@ agent 调用 `propose_config_change` 工具提出创建/修改 agent 提案 → 
 - **Phase 2B 阶段 2 摘要锚点 seq 化（2026-08-17）**：migration 46 `covered_until_seq`（= 被覆盖消息首现事件 seq，与 derive 排序位严格一致）+ 存量回填；`SummaryState`/insert/update/SELECT 双写双读；`ChatMessage.source_seq`（`#[serde(skip)]`，不进 LLM payload）；锚点定位 seq 优先 `.or_else` rowid 兜底；`SummaryPayload.covered_until_seq`（`#[serde(default)]`，旧事件零迁移）。显式双写过渡，回滚干净（列闲置无害）。
 - **Phase 2B 阶段 3 Image 双份存储治理（2026-08-17，3a 读侧 + 3b 写侧）**：消息类 payload 的 blocks 用 `PayloadBlock` untagged 双形态——`Full(ContentBlock)`（v1 内联，旧事件零迁移可读）/ `ImageRef{message_id, block_index}`（v2，字节只在 messages 行）。写侧唯一入口 `refify_blocks`（emitter 字段式签名内部做，调用方传与落库同值的 blocks）；读侧三路水合：derive `hydrate_image_refs`（纯同步 resolver 注入；未命中/越界/非 Image 降级 `Text("[图片内容已不可恢复]")`）+ `to_content_blocks` 防泄漏最后闸 + conversation_cmd JSON 级水合（list_session_events/export，前端零改动）。BACKFILL_VERSION=2（纯 backfill 会话删旧重写自愈，冻结会话保留 v1 照读）。**⚠️ 不变式：session_events 消息类 payload 禁止内联 Image base64——新增 message-kind emitter 必须经 `refify_blocks`，读侧必须经 `hydrate_image_refs` 水合后才能进对账/LLM 视图（ref 形态不得以非 Text 形态流出）**。
 
-## 当前状态（2026-09-07）
-- 版本 **0.6.10 已发版 push**（= 0.6.4 + 中间两轮测试包 0.6.8/0.6.9[仅装机未发布，0.6.5-0.6.7 版本号跳过未用] + 发版批：**读路径热路径三减** 12fd66a[发送每轮 O(N)——reconcile 后台化 + derive supersede 哈希 + tail-limit 前置，千轮 bench 1562→350ms；⚠️非绿检测延迟最多 1 turn、scopeguard 建在 async 块内] + **0.6.8 批五件**[工具行级摘要 150fefa（单行形态+思考耗时持久显示+委派卡精确绑回）/ 启动白屏根治 d2240fe（孤儿扫尾误匹配死循环+启动重活后台化+index.html 首帧骨架）/ run_command 引号根治 ee08f4a（raw_arg 直通道+kill_on_drop+回显防御）/ 探测链三小件 3c59caa（超时 10/20s+网络错误文案+base_url 双层 Option）/ 工具层二轮 7d14566（7 文件错误契约补课+设置页工具集搜索分组中文化）] + **0.6.9 批**[运行态 glyph 双形态定稿 b440570——工具调用行 spinner、其余九宫格（68a3799 回归修复后收口）] + **发版日三件**[工具展示名扩全 40 条中文 4643901 / 轨迹表思考续写图标双行根治 84aa6c5（⚠️lucide 进文本流一律显式 inline-block——base.css 全局 svg display:block reset 陷阱）/ 轨迹页事件类型筛选两件 21a3888（「仅对话」预设+类型多选下拉操纵同一 hiddenKinds、持久化 icepaw-traj-hidden-kinds 切会话不重置、「加载更早」scrollTop≤80 淡入门控）] + **发版日生产实案修复** 02b3edc[已删项目页死态常驻——keep-alive 缓存复活兜底（onActivated/watch 三路）+ 启动恢复死路由拦截（planRestore 加 allProjectIds 第 4 参，归档仍可直链）；⚠️外层 keep-alive 无 :key 是刻意的（会话切换不重挂载语义），布局级死态必须自兜 onActivated]；cargo 1350 / vitest 416）
+## 当前状态（2026-09-09）
+- **健康检查批次 R（2026-09-09，发版后体检；四组已 commit，dev 环境手测通过）**：五路扫描（后端不变式/ModelProfile 线/错误路径并发/前端/文档对账）30 条入 docs/tech-debt-ledger.md 批次 R——干净面：后端十条不变式 9 条成立、错误路径 P0/P1 零发现、fmt 零语义损伤。四批修复全推进：**行为五件**[R1 提案卡绕引用语义守卫（agent_cmd.rs validate_update_model_fields_conflict 扩分支：行已引用态 + model_profile_id 缺席 + 快照族手填 → 拒）+ R2/R3 chat store 竞态（await 后 activeConvId 守卫 + sendMessage 闭包捕获 roundConvId 防 sendingConvId 易主 + catch 清 bgStreams）+ R4 LogSettings/R5 useProjectTasks keep-alive 成对（listenerLive gate 样板）] + **健壮性五件**[R6 解析失败按步骤分流 ResolveProfileError{NotFound,Corrupted}——仅行缺降级 legacy、槽位坏上抛（⚠️crypto 对槽位无记录也返 NotFound，按错误变体分会误归）+ R7 set_mcp_enabled 吞错上抛 + R8 checksum 自愈真实计数 + R9 Mock 挂 #[cfg(test)] + R10 KB 初始索引失败 warn] + **视觉三件**[R11 暗色错误横幅/附件卡 token 化 + R12 z-index/字号/间距零头收编（⚠️ChatHeader z:1 选 badge 非 base——.chat-render 双 pane 是 absolute 压过非定位）+ R13 死样式删] + **文档八件**[版本号三处统一 0.6.15 / CHANGELOG 补 0.6.4+0.6.15 两档 / CLAUDE.md 状态节+ModelProfile 专节+架构树 / CONTRIBUTING·architecture·roadmap 勘误]；R14-R19 观察池。cargo 1428 / vitest 464
+- 版本 **0.6.15 已发版 push**（tag v0.6.15 + GitHub Release 带 NSIS exe；= 0.6.10 + 中间测试包 0.6.11~0.6.14[仅装机未发布，版本号未使用] + **模型配置实体化（ModelProfile）全线**：Phase 1 b2f079b[实体库+Stronghold 槽位+视觉/语义检索引用——Key 一处换全局生效；通用页管引用/模型页折叠卡实体库布局，用户拍板] + 通用页显式保存 79c5f53 + Phase 2 三笔 81c35df/cb0a145/54b11a7[agent 挂 model_profile_id 引用四列快照制 + 降级链 fallback_profile_ids 三拦截点换档 + boot 存量抽离幂等标记] + Phase 3 全批 455534c[新建保留手写表单保存时自动物化（去重键复用）/编辑合并 tag 链选择器（vuedraggable+键盘换位）/链路仿真测试 test_agent_model_chain 真发 16 token/健康归因双端根治 demote_unchanged_inputs] + **工具行三件** 1b90915[会话头 agent 名点转深链 + 行级 diff 三计数徽记（edit_file 存量回填前端镜像 lineDiffStat）+ 思考耗时小写] + **白屏二轮根治** bac93c4[WebView2 缓存瘦身：版本升级清 Cache/Code Cache + --disk-cache-size 50MB 封顶（⚠️prune 必须在 WebView2 启动前、additionalBrowserArgs 整体替换须带默认三条）+ 主窗 visible:false 双 show（前端 rAF + 后端 10s 兜底）+ boot 锚点日志] + **全仓 cargo fmt 规整** 6c8b716[84 文件零语义变化——工作区曾经历非标准紧凑化格式] + 设置页内容列限宽 1ba152e；cargo 1427 / vitest 460）
+- 上一版 **0.6.10 已发版 push**（= 0.6.4 + 中间两轮测试包 0.6.8/0.6.9[仅装机未发布，0.6.5-0.6.7 版本号跳过未用] + 发版批：**读路径热路径三减** 12fd66a[发送每轮 O(N)——reconcile 后台化 + derive supersede 哈希 + tail-limit 前置，千轮 bench 1562→350ms；⚠️非绿检测延迟最多 1 turn、scopeguard 建在 async 块内] + **0.6.8 批五件**[工具行级摘要 150fefa（单行形态+思考耗时持久显示+委派卡精确绑回）/ 启动白屏根治 d2240fe（孤儿扫尾误匹配死循环+启动重活后台化+index.html 首帧骨架）/ run_command 引号根治 ee08f4a（raw_arg 直通道+kill_on_drop+回显防御）/ 探测链三小件 3c59caa（超时 10/20s+网络错误文案+base_url 双层 Option）/ 工具层二轮 7d14566（7 文件错误契约补课+设置页工具集搜索分组中文化）] + **0.6.9 批**[运行态 glyph 双形态定稿 b440570——工具调用行 spinner、其余九宫格（68a3799 回归修复后收口）] + **发版日三件**[工具展示名扩全 40 条中文 4643901 / 轨迹表思考续写图标双行根治 84aa6c5（⚠️lucide 进文本流一律显式 inline-block——base.css 全局 svg display:block reset 陷阱）/ 轨迹页事件类型筛选两件 21a3888（「仅对话」预设+类型多选下拉操纵同一 hiddenKinds、持久化 icepaw-traj-hidden-kinds 切会话不重置、「加载更早」scrollTop≤80 淡入门控）] + **发版日生产实案修复** 02b3edc[已删项目页死态常驻——keep-alive 缓存复活兜底（onActivated/watch 三路）+ 启动恢复死路由拦截（planRestore 加 allProjectIds 第 4 参，归档仍可直链）；⚠️外层 keep-alive 无 :key 是刻意的（会话切换不重挂载语义），布局级死态必须自兜 onActivated]；cargo 1350 / vitest 416）
 - 上一版 **0.6.4 已发版 push**（= 0.6.3 + **2026-09-04 质检批次 Q 四组搭车**：核心批 7e374e6[copy/move 双路径越界授权改 all-match + doom 错误签名剥变体前缀壳 + 外部 MCP 超时清 pending 表 + event_bus Lagged 自愈] + 视觉规范批 40b164e[语义色圆点替 🟢🟡🔴/轨迹·KB·审批卡 Lucide 收编/tokens.css 自动暗区镜像补齐/间距令牌化/TrajectoryView keep-alive 监听成对] + 性能批 8f7d0b7[attachments·indexer·docx 同步重活 spawn_blocking 三件 + KB 语义检索四标量签名向量缓存——⚠️签名顺序不变式：签名先于数据读；rowid 回收陷阱靠 SUM(LENGTH(content)) 第四标量兜住] + **委派审批改造** d6c8ff0[L0 授权记忆会话级 AuthSessionRegistry + L2 委托时预授权两档，见 memory] + **审批通知直操作** 7838add[toast 批准/拒绝按钮 + 点主体前置主窗 + single-instance 防双开] + 通知恰一次 e906bf8 + 多轮工具回合冻结轮渲染修复 c9d2680[骨架门控改 item 级 isLiveAssistant] + CI Linux cfg 分支修复 dcf7884；cargo 1332 / vitest 362）
 - 上一版 **0.6.3 已发版 push**（= 0.6.2 + **侧边栏收起 rail 模式**[56px 单列行动栏 + 会话/项目 flyout + 主题钮迁 footer 恒 ≤1 实例 + ProjectSwitcher collapsed 变体菜单头部两入口，c4eb90d] + **底缘渐隐置底联动**[对话/轨迹两 tab 置底不透明，6cccabf] + CLAUDE.md 图标包名勘误[@lucide/vue]；vitest 341）
 - 上一版 **0.6.2 已发版 push**（= 0.6.1 + **enabled_tools 旧白名单复活根治**[0.6.1 生产实案修复：镜像同步 DB 列 + 组装收窄披露日志，80bba3d] + **Word 十波 D18 TOC+图片插入**[write_docx toc/image 块 + edit_docx insert_toc_after/insert_image_after + validate block_image/block_field + inspect 段尾标记 + 包级只增补通道] + **十一波 D19 生产坑三件抽象化**[占位段不是内容/重写按位继承/表内地址模拟器] + **生成期切项目详情卡顿三修**[bgStreams 原地 mutate/轨迹监听 keep-alive 生命周期/尾页 SQL 先 id 后回表，4ad70ef] + 输入区底缘渐隐；cargo 1317 / vitest 330）
@@ -208,8 +236,8 @@ agent 调用 `propose_config_change` 工具提出创建/修改 agent 提案 → 
 - **智谱 Coding 端点显式切换 + GLM 1113 指路（2026-08-26 生产实案，9540093 随 0.5.5）**：Coding 套餐 key 打标准端点报 1113「余额不足或无可用资源包」——**套餐有余额仍报**（Coding 额度只在 Coding 端点生效，标准/Coding 两套端点 key 不通用；「测试连接」自动回退救不了——列模型是鉴权层动作，标准端点也放行，假绿固化错误端点）。三件：① AgentForm URL 框下端点胶囊（endpointOptions：带 alt_urls 的可见厂商才渲染，当前仅智谱）——切换只换注册表地址仍只读防抄错、探测显式传所选端点不走多端点回退、存量按 URL 匹配高亮、切厂商归位默认 ② 错误分类细分 `GlmResourcePack`（措辞含「无可用资源包」智谱专属，须先于 429/余额通用分支）：文案三段式指路端点切换非只叫充值；不可重试与余额不足一致 ③ glm 注册表 note 更新。⚠️ 不变式：测试连接=鉴权层动作，列模型通 ≠ 该端点认可对话权益
 - 分支：仅 `main`
 - 近期递进：0.4.1 → 质量拍 Phase 1 + Word 能力演进整线（S0a→S0b→手术引擎→S3 首波→真机复盘两批→D9 set_ppr_element）→ 0.5.0 发版 → 生产实战反馈表格双缺口 → S3 三波表格四件（D10）→ 0.5.1 打包 → 生产反馈表格格式缺口 → 四波（D11）→ 样式通用抽象+个性化需求 → 五波（D12 双轨承载）→ 0.5.2 打包 → 生产 agent 缺口报告 → 六波修正三件（D13）→ 0.5.3 打包 → 缺口报告第二弹 → 七波删行+批组合（D14）→ 0.5.4 打包 → 换厂商根治+Coding 端点（0.5.5）→ **Computer Use 批次③+④ 全线 + 视觉两档制 + 配置一致性两批 → 0.6.0 发版（tag + GitHub Release）** → 八波验收五件 + 九波 write_docx + D17 共享模板 → 0.6.1 打包 → 十波 TOC+图片 + 十一波抽象化 + enabled_tools 根治 + 卡顿三修 → **0.6.2 发版 push**
-- `cargo test --lib` 1332 passed / 0 failed（+ 集成测试：session_runner_e2e 7、session_reconcile_e2e 6+2 ignored、session_event_log_e2e 3、memory_e2e 3、message_repo 7、provider 11）；clippy --tests -D warnings 0 警告；vitest 362
-- 仍待办：**0.6.4 真机手测**（① 委派审批五点：L0 同工具跨轮免弹[批「此工具本会话」后下一轮不再问]/委派卡两档选择/命令免问档子会话 run_command 直接跑/拒绝文案回父 agent/后台栈「允许」=逐次档 ② 通知六点：失焦恰一次/toast 批准·拒绝直操作/点通知主体前置主窗/双开防护/dev 模式来源显示 PowerShell 是预期 ③ 质检批验证：copy/move 目标越出工作区应弹 Confirm 而非静默放行/KB 语义检索二次调用走暖路径[debug 日志]/Word 编辑生成期间 UI 不卡[spawn_blocking]/大附件发送不冻结界面 ④ 多轮工具回合已冻结轮不再瞬态消失），**0.6.3 手测重点**（侧栏收起/展开过渡 + rail flyout 全链 + 菜单头部两入口 + 底缘渐隐置底联动），**0.6.2 真机手测**（① 0.6.1 遗留三件：write_docx 用 formal-report.docx 生成报告 Word/WPS 打开排版合格 / 共享模板目录存在·改不覆盖·删重建 / 委派实战观察 rows_text·validate_docx·范围锁 ② 十波 D18：write_docx 带 toc+image 生成报告——Word 目录自动生成、图片按版心宽；WPS 不刷则 F9 自愈文案可见；edit_docx 对既有文档插图后原文档逐字节未动 ③ 十一波 D19：整列横并一次调用成 + 足迹相交拒批文案 + 横并不再膨胀段落 ④ 卡顿三修：生成/改 Word 中切项目详情点击响应与消耗图加载——若仍复现抓主线程 longtask 定位），**0.6.0 真机手测**（① Computer Use：HUD 动态[写避让收缩体感/暂停终止实效/◀▶ 换屏]、人类优先让路体感、act-and-look 连贯性、批次③细项[中文输入/拖拽/滚轮/组合键/wait 中断]——看屏+坐标+点击已真机绿；多显示器需换硬件 ② 视觉两档制设置页已验收全绿，生产场景再观察），**0.5.5 真机手测**（① 换厂商三件：切厂商后 yaml 镜像同步/端点重置/必填新 Key 闸 ② Coding 端点切换：Coding 套餐 agent 切「Coding 端点」+ 新 Key 保存后会话能对话、1113 报错文案带指路 ③ 七波五点：delete_table_row 合并链场景[删头行应拒/删续格行]/同格 vAlign+tcBorders 一批/同锚多段链式序/跨表同批），**0.5.3 真机手测**（① 六波三件：跨机缩进压制[正文样式带首行缩进的文档里格内写 0 后 Word 打开无缩进]/格内样式/ppr 下钻寻址；② 0.5.2 遗留：merge/split[结构重构最高危] + 五波样式定义投影自洽 + word_style_profile 全链路[口头偏好→审批卡→yaml 落块→下回合 prompt 生效]；③ 0.5.0 遗留：set_format/set_style/set_ppr_element Word 打开验收、DB 诊断复跑 5.7%→<2%、风格预设手测；2026-08-26 跨机初测表格样式/边框/字体已绿；WPS 样本仍缺）、视觉适配/KB watcher/自动续写生产手测、proposal Phase 2（MCP 域）、V5 钩子未用未测、Word 后续波（条件批量替换）
+- `cargo test --lib` 1428 passed / 0 failed（+ 集成测试：session_runner_e2e 7、session_reconcile_e2e 6+2 ignored、session_event_log_e2e 3、memory_e2e 3、message_repo 7、provider 11）；clippy --tests -D warnings 0 警告；vitest 464（1428/464 = 0.6.15 发版 1427/460 + 健康检查批次 R 新增 1+4）
+- 仍待办：**0.6.15 真机手测**（① 白屏二轮五判据：升级首启清缓存稍慢属预期/窗口迟到即完整/EBWebView Cache 重建 ≤50MB 量级/日志两条 boot 锚点/审批 toast 前置与窗口状态记忆回归 ② edit_file 历史行徽记回填（write_file 历史行无徽记=诚实边界）+ agent 名点转含二次进入 keep-alive 路径 ③ ModelProfile 主链：新建物化/同配置复用/换 Key 全局生效/链选择器拖拽+键盘/链路仿真/降级链真发 429 造换档/删守卫——完整台账见 memory model-profile-phase2/3 ④ 通用页显式保存回归），**0.6.4 真机手测**（① 委派审批五点：L0 同工具跨轮免弹[批「此工具本会话」后下一轮不再问]/委派卡两档选择/命令免问档子会话 run_command 直接跑/拒绝文案回父 agent/后台栈「允许」=逐次档 ② 通知六点：失焦恰一次/toast 批准·拒绝直操作/点通知主体前置主窗/双开防护/dev 模式来源显示 PowerShell 是预期 ③ 质检批验证：copy/move 目标越出工作区应弹 Confirm 而非静默放行/KB 语义检索二次调用走暖路径[debug 日志]/Word 编辑生成期间 UI 不卡[spawn_blocking]/大附件发送不冻结界面 ④ 多轮工具回合已冻结轮不再瞬态消失），**0.6.3 手测重点**（侧栏收起/展开过渡 + rail flyout 全链 + 菜单头部两入口 + 底缘渐隐置底联动），**0.6.2 真机手测**（① 0.6.1 遗留三件：write_docx 用 formal-report.docx 生成报告 Word/WPS 打开排版合格 / 共享模板目录存在·改不覆盖·删重建 / 委派实战观察 rows_text·validate_docx·范围锁 ② 十波 D18：write_docx 带 toc+image 生成报告——Word 目录自动生成、图片按版心宽；WPS 不刷则 F9 自愈文案可见；edit_docx 对既有文档插图后原文档逐字节未动 ③ 十一波 D19：整列横并一次调用成 + 足迹相交拒批文案 + 横并不再膨胀段落 ④ 卡顿三修：生成/改 Word 中切项目详情点击响应与消耗图加载——若仍复现抓主线程 longtask 定位），**0.6.0 真机手测**（① Computer Use：HUD 动态[写避让收缩体感/暂停终止实效/◀▶ 换屏]、人类优先让路体感、act-and-look 连贯性、批次③细项[中文输入/拖拽/滚轮/组合键/wait 中断]——看屏+坐标+点击已真机绿；多显示器需换硬件 ② 视觉两档制设置页已验收全绿，生产场景再观察），**0.5.5 真机手测**（① 换厂商三件：切厂商后 yaml 镜像同步/端点重置/必填新 Key 闸 ② Coding 端点切换：Coding 套餐 agent 切「Coding 端点」+ 新 Key 保存后会话能对话、1113 报错文案带指路 ③ 七波五点：delete_table_row 合并链场景[删头行应拒/删续格行]/同格 vAlign+tcBorders 一批/同锚多段链式序/跨表同批），**0.5.3 真机手测**（① 六波三件：跨机缩进压制[正文样式带首行缩进的文档里格内写 0 后 Word 打开无缩进]/格内样式/ppr 下钻寻址；② 0.5.2 遗留：merge/split[结构重构最高危] + 五波样式定义投影自洽 + word_style_profile 全链路[口头偏好→审批卡→yaml 落块→下回合 prompt 生效]；③ 0.5.0 遗留：set_format/set_style/set_ppr_element Word 打开验收、DB 诊断复跑 5.7%→<2%、风格预设手测；2026-08-26 跨机初测表格样式/边框/字体已绿；WPS 样本仍缺）、视觉适配/KB watcher/自动续写生产手测、proposal Phase 2（MCP 域）、V5 钩子未用未测、Word 后续波（条件批量替换）
 - **预算诚实化不变式（0.3.9）**：新 provider usage 必须归一规范语义（prompt=总输入含命中、cached≤prompt；Anthropic 显式归一 + stream_consumer `into_canonical` 自愈兜底）；工具列表出口恒按名序（前缀缓存前提，勿回退）；DeepSeek 私有对优先于标准字段
 - **S1 真机验收 2026-08-17 四项绿**：backfill（sessions=9 events=824 failed=0 epoch_rows=0，版本标记=2）+ 恒 Derive（当日路由决策全 green diffs=0，含 backfill 会话续聊 seq 1..933 连续）+ 发图 v2 payload 无 base64（image_ref 162B 指针，本体 851KB/3.8MB 只在 messages 行；模型回复描述画面=水合进 LLM 视图实证）+ 摘要折叠 `covered_until_seq=726`/rowid=1710 双值落库
 

@@ -50,7 +50,7 @@ ice-paw/
 │   ├── app/                          # 主应用
 │   │   ├── src/                      # Vue 前端
 │   │   │   ├── api/bridge.ts         # Tauri IPC 统一入口
-│   │   │   ├── components/           # Vue 组件（chat/common/agent/mcp/kb/layout）
+│   │   │   ├── components/           # Vue 组件（chat/common/agent/mcp/kb/layout/project/trajectory）
 │   │   │   ├── composables/          # 可复用逻辑
 │   │   │   ├── pages/                # 路由页面
 │   │   │   ├── stores/               # Pinia 状态管理
@@ -62,7 +62,7 @@ ice-paw/
 │   │           ├── context/           # LLM 上下文装配 Pipeline
 │   │           ├── db/                # 数据库（models/repo/migrations）
 │   │           ├── harness/           # 核心运行时（provider/loop/mcp/kb）
-│   │           └── infra/             # 基础设施（protocol/cancel）
+│   │           └── infra/             # 基础设施（protocol/ 事件协议 + cancel、decode、file_validation、image_validation、path_norm、process、strings）
 │   └── ui/                           # 共享 UI 样式（CSS tokens）
 ├── docs/
 │   └── architecture.md               # 系统架构文档
@@ -82,15 +82,15 @@ ice-paw/
 | `pnpm typecheck` | TypeScript 类型检查 |
 | `pnpm lint` | ESLint |
 | `pnpm test` | 前端 Vitest 测试 |
-| `pnpm test:watch` | Vitest watch 模式 |
+| `pnpm test:watch` | Vitest watch 模式（script 仅定义在 packages/app，须在 packages/app 下执行） |
 
 ## 测试
 
 ### 前端
 
 ```bash
-pnpm test          # 51 tests（utils/stores/api）
-pnpm test:watch    # watch 模式
+pnpm test          # Vitest：utils/stores/api/composables/组件（460+，持续增长，以 CI 为准）
+pnpm test:watch    # watch 模式（须在 packages/app 下执行）
 ```
 
 ### Rust
@@ -100,12 +100,12 @@ cd packages/app/src-tauri
 
 # 需显式传 SODIUM_LIB_DIR（或 cd 到 src-tauri 让 Cargo 自动读取 .cargo/config.toml）
 SODIUM_LIB_DIR="path/to/sodium-prebuilt/libsodium/x64/Release/v143/static" \
-SODIUM_STATIC=true cargo test --lib   # 712 tests
+SODIUM_STATIC=true cargo test --lib   # 单元测试（1400+，持续增长，以 CI 为准）
 
 cargo clippy                           # Lint
 ```
 
-> SODIUM_LIB_DIR 详见 [cargo check 环境](memory/cargo-check-env.md)
+> SODIUM_LIB_DIR 的平台差异与配置方式详见 [CLAUDE.md](CLAUDE.md)「构建命令」节（权威版本）
 
 ## 代码规范
 
@@ -136,7 +136,7 @@ Stronghold key 派生：passphrase → blake2b256 → 32 字节 key。
 ## 路线图
 
 - [x] M1-M5：基础架构 + 多 Agent + 工具系统 + 项目空间
-- [x] 测试体系（712 Rust + 51 前端）
+- [x] 测试体系（Rust 1400+ + 前端 460+，持续增长，以 CI 为准）
 - [ ] OS keyring 接入替代固定 passphrase
 - [ ] 会话搜索 / 导出
 - [ ] 前端 E2E 测试（Playwright + Tauri driver）
