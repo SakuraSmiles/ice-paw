@@ -82,10 +82,10 @@ pnpm typecheck && pnpm lint && pnpm build   # 不覆盖视觉/CSS 回归
 ```
 packages/app/src-tauri/src/
 ├── commands/         # Tauri 命令入口（chat/agent/agent_yaml/conversation/mcp/kb/project/preferences/log/
-│                     #   message/provider/model_profile/screen）
+│                     #   message/provider/model_profile/screen/inbox）
 ├── harness/          # 核心业务逻辑
 │   ├── mcp/          # MCP 工具系统（client trait/registry、内置工具 file_tools/shell/docx_tool/screen/...、
-│   │                 #   外部 server、bundled runtime、proposal_tool/delegate/plan_tool）
+│   │                 #   外部 server、bundled runtime、proposal_tool/delegate/plan_tool/relay）
 │   ├── provider/     # LLM provider 适配（anthropic/openai/mock + model_info 模型窗口表 + embedding）
 │   ├── doc/          # Word 文档子系统（inspect 读侧投影 / edit zip 手术引擎 / styles / numbering / assets 共享模板）
 │   ├── loop_engine.rs# 主循环调度（已拆出 loop/ 子模块；膨胀观察：697→1377 行）
@@ -101,6 +101,7 @@ packages/app/src-tauri/src/
 │   ├── event_log.rs / derive.rs / reconcile.rs / read_route.rs / backfill.rs
 │   │                 # 会话事件日志五件（typed emitters / 纯回放 / 对账 / 读路由 / boot 扫尾）
 │   ├── hooks.rs      # 对话钩子执行器（run_hooks + has_actions，4 接入点）
+│   ├── inbox.rs      # MA-3 跨会话通讯（投递/收件三态/消费引擎/护栏）
 │   ├── kb/           # RAG 知识库（embedding/indexer/parser/watcher/ensure/vector_cache）
 │   ├── modal.rs / vision.rs  # 视觉两档制（能力探测 / 代读适配 / 条目链）
 │   └── budget.rs / summary_provider.rs / chat_state.rs / cleanup.rs / batch_writer.rs / oneshot_registry.rs / observable.rs
@@ -221,7 +222,21 @@ agent 调用 `propose_config_change` 工具提出创建/修改 agent 提案 → 
 - **Phase 2B 阶段 2 摘要锚点 seq 化（2026-08-17）**：migration 46 `covered_until_seq`（= 被覆盖消息首现事件 seq，与 derive 排序位严格一致）+ 存量回填；`SummaryState`/insert/update/SELECT 双写双读；`ChatMessage.source_seq`（`#[serde(skip)]`，不进 LLM payload）；锚点定位 seq 优先 `.or_else` rowid 兜底；`SummaryPayload.covered_until_seq`（`#[serde(default)]`，旧事件零迁移）。显式双写过渡，回滚干净（列闲置无害）。
 - **Phase 2B 阶段 3 Image 双份存储治理（2026-08-17，3a 读侧 + 3b 写侧）**：消息类 payload 的 blocks 用 `PayloadBlock` untagged 双形态——`Full(ContentBlock)`（v1 内联，旧事件零迁移可读）/ `ImageRef{message_id, block_index}`（v2，字节只在 messages 行）。写侧唯一入口 `refify_blocks`（emitter 字段式签名内部做，调用方传与落库同值的 blocks）；读侧三路水合：derive `hydrate_image_refs`（纯同步 resolver 注入；未命中/越界/非 Image 降级 `Text("[图片内容已不可恢复]")`）+ `to_content_blocks` 防泄漏最后闸 + conversation_cmd JSON 级水合（list_session_events/export，前端零改动）。BACKFILL_VERSION=2（纯 backfill 会话删旧重写自愈，冻结会话保留 v1 照读）。**⚠️ 不变式：session_events 消息类 payload 禁止内联 Image base64——新增 message-kind emitter 必须经 `refify_blocks`，读侧必须经 `hydrate_image_refs` 水合后才能进对账/LLM 视图（ref 形态不得以非 Text 形态流出）**。
 
+### 跨会话通讯（MA-3，2026-09-09 落地 0.7 批 B）
+与委派互补的异步对等通道：委派 = 同步阻塞、父 token 级联、深度=1、任务单元；MA-3 = 异步不阻塞、无级联、对话单元。会话 A 的 agent 调 `send_message_to_session` 向会话 B 投递，B 排队、空闲（或经批准）时消费一回合。
+- **投递语义（零冲突基石）**：pending 来件只 append `session_events`（`cross_session_message` kind，**不写 messages 表**——与目标在途回合零冲突，单写者仲裁由 chat_state.start 自然保持）；**消费 = 目标会话跑一回合**，复用 `run_agent_turn` 全链路（预算/工具/hooks/事件照常），物化一条带来源前缀的 user 消息——**derive 零改动**（user_message kind 照常派生）。终态 `cross_session_message_settled`（action=consumed|refused，by=auto|user-approval|user-refused）；**pending 定义 = 有投递无同 message_id 的 settled**（find_open_turns 同款 NOT EXISTS SQL）。
+- **收件三态**：`conversations.inbox_policy`（migration 52，默认 **hold**）——accept 自动消费 / hold 扣住待用户批准 / refuse 投递方工具立即 Err。粒度=会话；只投 kind='chat' 会话（delegation 子会话拒——防侧信道绕过深度护栏，工具注册条件与 delegate 同源）。
+- **投递工具**（壳 `harness/mcp/relay.rs`，引擎 `harness/inbox.rs`）：`target`（id 或标题唯一匹配，重名不猜）/ `content`（≤8000 字符超限拒收不截断）/ `expect_reply`（默认 false）。授权 `Always` 级——授权决策点是收件三态不是弹卡；hold 扣住是入队不是工具同步等待（立即返回 `{status:"held"}`，批准动作在收件箱）。
+- **消费引擎**（`harness/inbox.rs`）：触发三源——投递时 accept 且空闲即 spawn / accept 会话回合结束（turn_ended 广播 → drain watcher 等静默 2s×15s 上限 → 链式排空）/ hold 会话用户收件箱批准。**settled(consumed) 在 chat_state.start 成功后、spawn 前 append**（原子占位防双击双消费）。回合成败都算已处理（失败在会话内有 message_error 事实）。
+- **来源前缀锚**：`compose_incoming_text` 组装 `[来自会话「{title}」的 agent {name}｜如需回复用 send_message_to_session 工具，target={conv_id}]\n\n{content}`——来源标注兼回信指引（agent 与用户都可见，勿拆成隐藏 hint）；前端 `parseIncomingText` 逐字镜像解析（**格式改动两边同步**，形状锁测试 crossSession.test.ts 的 BACKEND_SAMPLE）。incoming 卡 = user 气泡检测 `[来自会话「` 前缀渲染来源标注头。
+- **expect_reply 回投**：消费回合完成 → 目标 agent 最终回复投回源会话（同一 deliver 复用，政策照查对称）；回投恒 expect_reply=false **链一次止**；回复为空不投。
+- **护栏**（常量在模块顶）：pending 队列上限 10（超限 Err 拒收）/ 同会话 10 分钟窗口自动消费 ≤6 次（内存窗口重启清零；超限留队待手动放行——**用户批准不占配额**）。
+- **命令四件**（`commands/inbox_cmd.rs`）：list_inbox（policy+pending 列表，单条坏 payload warn 跳过不挡列表）/ list_inbox_counts（侧栏 badge boot 批量）/ set_inbox_policy / respond_inbox_item（批准时会话忙 → Ok(false) 转 Err 三段式文案，来件留队零丢失）。
+- **前端五件**：`useInbox`（`session:event-appended` 总线过滤两 kind 增量维护计数 Map + 失焦且 hold 才 OS 通知恰一次 + refreshInboxCount 权威回正）/ ChatHeader 收件箱 popover（InboxPopover：批准即时 + 拒绝两步确认武装态 + 政策 segmented 乐观切）/ Sidebar 会话行 badge / incoming 卡（ChatMessages）/ 轨迹 CROSS 行（useTrajectory 词表）。
+- **⚠️ 不变式**：① 计数是气味不是真相——settled 本地算术抵扣可漂移（bus 丢帧），popover 打开与处置后必须走 list_inbox 权威刷新；② turn_id 归组键三侧同一 `cross:{message_id}`（投递/消费/拒绝），actor=`agent:<源id>` 诚实归因（中继消息不带用户权威）；③ derive skip 臂必须含两新 kind（否则 DeriveIssue 污染对账——顺手收编了 model_switch 既有漏项）；④ OS 通知不传 request_id（toast 按钮是工具授权 oneshot 协议，与收件箱处置不同域）。
+
 ## 当前状态（2026-09-09）
+- **0.7 批 B MA-3 跨会话通讯已落地（2026-09-09，cacaa70 后端地基 + b9bea59 通道引擎 + 083f32a 前端接线 + 文档 commit；未发版未 push）**：`send_message_to_session` 异步对等通道——pending 只入事件队列（不写 messages，与在途回合零冲突）、消费复用 run_agent_turn 全链路物化带来源前缀的 user 消息；收件三态 hold 默认（migration 52）、触发三源、expect_reply 回投链一次止、护栏常量四件；前端 useInbox/收件箱 popover/侧栏 badge/incoming 卡/轨迹 CROSS 行。详见「跨会话通讯（MA-3）」节。cargo 1443 / vitest 484
 - **0.7 批 A 首件已落地 db29be7（2026-09-09，发版后 commit push；手测随 2026-09-09 拍板整体通过）**：委派子会话降级链继承——`delegation_fallback_plan`（子 agent 自链优先，无链继承父 agent 配置链并摘除子主档同 id 档；父行读失败降级无链不阻塞委派）。核查发现子 agent 自链 0.6.15 已接线（delegate 与主链共用 `production_fallback_plan`），真缺口仅「无链继承」。cargo 1433
 - 版本 **0.6.16 已发版 push**（= 0.6.15 + **健康检查批次 R**——五路扫描 30 条入台账的四批修复：行为五件 ae31144[R1 提案卡绕引用语义守卫 + R2/R3 chat store 竞态 + R4/R5 keep-alive 成对] + 前端四件 3693b7f + 视觉三件 07ec5d6 + 文档八件 0ad03d0，明细见下条；**0.6 线收官**，0.7 蓝图四件已拍板见 memory 0-7-dev-plan：降级链继承 / MA-3 跨会话通讯 / 上下文开销可观测化 / diff 侧栏；cargo 1428 / vitest 464）
 - **健康检查批次 R（2026-09-09，发版后体检；四组已 commit，dev 环境手测通过）**：五路扫描（后端不变式/ModelProfile 线/错误路径并发/前端/文档对账）30 条入 docs/tech-debt-ledger.md 批次 R——干净面：后端十条不变式 9 条成立、错误路径 P0/P1 零发现、fmt 零语义损伤。四批修复全推进：**行为五件**[R1 提案卡绕引用语义守卫（agent_cmd.rs validate_update_model_fields_conflict 扩分支：行已引用态 + model_profile_id 缺席 + 快照族手填 → 拒）+ R2/R3 chat store 竞态（await 后 activeConvId 守卫 + sendMessage 闭包捕获 roundConvId 防 sendingConvId 易主 + catch 清 bgStreams）+ R4 LogSettings/R5 useProjectTasks keep-alive 成对（listenerLive gate 样板）] + **健壮性五件**[R6 解析失败按步骤分流 ResolveProfileError{NotFound,Corrupted}——仅行缺降级 legacy、槽位坏上抛（⚠️crypto 对槽位无记录也返 NotFound，按错误变体分会误归）+ R7 set_mcp_enabled 吞错上抛 + R8 checksum 自愈真实计数 + R9 Mock 挂 #[cfg(test)] + R10 KB 初始索引失败 warn] + **视觉三件**[R11 暗色错误横幅/附件卡 token 化 + R12 z-index/字号/间距零头收编（⚠️ChatHeader z:1 选 badge 非 base——.chat-render 双 pane 是 absolute 压过非定位）+ R13 死样式删] + **文档八件**[版本号三处统一 0.6.15 / CHANGELOG 补 0.6.4+0.6.15 两档 / CLAUDE.md 状态节+ModelProfile 专节+架构树 / CONTRIBUTING·architecture·roadmap 勘误]；R14-R19 观察池。cargo 1428 / vitest 464
@@ -238,7 +253,7 @@ agent 调用 `propose_config_change` 工具提出创建/修改 agent 提案 → 
 - **智谱 Coding 端点显式切换 + GLM 1113 指路（2026-08-26 生产实案，9540093 随 0.5.5）**：Coding 套餐 key 打标准端点报 1113「余额不足或无可用资源包」——**套餐有余额仍报**（Coding 额度只在 Coding 端点生效，标准/Coding 两套端点 key 不通用；「测试连接」自动回退救不了——列模型是鉴权层动作，标准端点也放行，假绿固化错误端点）。三件：① AgentForm URL 框下端点胶囊（endpointOptions：带 alt_urls 的可见厂商才渲染，当前仅智谱）——切换只换注册表地址仍只读防抄错、探测显式传所选端点不走多端点回退、存量按 URL 匹配高亮、切厂商归位默认 ② 错误分类细分 `GlmResourcePack`（措辞含「无可用资源包」智谱专属，须先于 429/余额通用分支）：文案三段式指路端点切换非只叫充值；不可重试与余额不足一致 ③ glm 注册表 note 更新。⚠️ 不变式：测试连接=鉴权层动作，列模型通 ≠ 该端点认可对话权益
 - 分支：仅 `main`
 - 近期递进：0.4.1 → 质量拍 Phase 1 + Word 能力演进整线（S0a→S0b→手术引擎→S3 首波→真机复盘两批→D9 set_ppr_element）→ 0.5.0 发版 → 生产实战反馈表格双缺口 → S3 三波表格四件（D10）→ 0.5.1 打包 → 生产反馈表格格式缺口 → 四波（D11）→ 样式通用抽象+个性化需求 → 五波（D12 双轨承载）→ 0.5.2 打包 → 生产 agent 缺口报告 → 六波修正三件（D13）→ 0.5.3 打包 → 缺口报告第二弹 → 七波删行+批组合（D14）→ 0.5.4 打包 → 换厂商根治+Coding 端点（0.5.5）→ **Computer Use 批次③+④ 全线 + 视觉两档制 + 配置一致性两批 → 0.6.0 发版（tag + GitHub Release）** → 八波验收五件 + 九波 write_docx + D17 共享模板 → 0.6.1 打包 → 十波 TOC+图片 + 十一波抽象化 + enabled_tools 根治 + 卡顿三修 → **0.6.2 发版 push**
-- `cargo test --lib` 1428 passed / 0 failed（+ 集成测试：session_runner_e2e 7、session_reconcile_e2e 6+2 ignored、session_event_log_e2e 3、memory_e2e 3、message_repo 7、provider 11）；clippy --tests -D warnings 0 警告；vitest 464（1428/464 = 0.6.15 发版 1427/460 + 健康检查批次 R 新增 1+4）
+- `cargo test --lib` 1443 passed / 0 failed（+ 集成测试：session_runner_e2e 7、session_reconcile_e2e 6+2 ignored、session_event_log_e2e 3、memory_e2e 3、message_repo 7、provider 11）；clippy --tests -D warnings 0 警告；vitest 484（1443/484 = 0.6.16 基线 1428/464 + MA-3 新增 10+20：后端 Commit 1 地基 4 + Commit 2 引擎 6，前端 Commit 3 五件 20）
 - 仍待办：**手测积压 2026-09-09 用户拍板整体通过**——全部历史手测观察点（0.5.x~0.6.16 与 0.7 批 A）不再逐项验证，生产使用驱动：出问题用户会报、报了即转修复（勿再把手测清单端出来催，验收信息以用户反馈为准）。真功能待办：proposal Phase 2（MCP 域）、V5 钩子未用未测、Word 后续波（条件批量替换）；UE5/Word 生产观察仍是 0.7 立项输入（P8 升格 / Computer Use 优化方向）
 - **预算诚实化不变式（0.3.9）**：新 provider usage 必须归一规范语义（prompt=总输入含命中、cached≤prompt；Anthropic 显式归一 + stream_consumer `into_canonical` 自愈兜底）；工具列表出口恒按名序（前缀缓存前提，勿回退）；DeepSeek 私有对优先于标准字段
 - **S1 真机验收 2026-08-17 四项绿**：backfill（sessions=9 events=824 failed=0 epoch_rows=0，版本标记=2）+ 恒 Derive（当日路由决策全 green diffs=0，含 backfill 会话续聊 seq 1..933 连续）+ 发图 v2 payload 无 base64（image_ref 162B 指针，本体 851KB/3.8MB 只在 messages 行；模型回复描述画面=水合进 LLM 视图实证）+ 摘要折叠 `covered_until_seq=726`/rowid=1710 双值落库

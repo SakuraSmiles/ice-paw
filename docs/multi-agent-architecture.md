@@ -219,6 +219,24 @@ pub async fn run_agent_turn(app: &AppHandle, input: AgentTurnInput)
 
 ## 6. MA-3 持久通道 + 背景消息互通
 
+> **实施状态（2026-09-09 已落地 v1，形态与草图不同）**：`send_message_to_session`
+> 异步对等通道——会话 A 的 agent 向会话 B 投递，B 排队、空闲（或经批准）时消费
+> 一回合。真相源与全量细节见 CLAUDE.md「跨会话通讯（MA-3）」节；与本节草图的
+> 偏差，按拍板记录：
+> - **全走既有 kind='chat' 会话**：未建 channel_participants 表、未立 kind='channel'
+>   会话形态（远期）；v1 是点对点投递（会话→会话），非多参与者通道。
+> - **6.1/6.2 消费位点与任务段 continuity 未做**：消费 = 目标会话跑一回合
+>   （run_agent_turn 全链路），来件物化为带来源前缀的 user 消息进既有上下文
+>   管道（TokenWindow/摘要照常）——无 per-agent `last_consumed_seq` 位点。
+> - **6.3 路由落在拉/推之间**：触发三源（投递时 accept 且空闲 / accept 回合
+>   结束排空 / hold 用户批准）是事件驱动的受限推；防风暴护栏 = 收件三态
+>   （hold 默认）+ pending 队列上限 10 + 10 分钟自动消费 ≤6 次，非速率/深度计数。
+> - **开放问题 ① 的实际解法**：立了独立 kind（`cross_session_message` 投递事实 +
+>   `cross_session_message_settled` 终态），非 user_message 加 initiator——pending
+>   只入事件队列不写 messages，与在途回合零冲突。
+> - **6.4 产物归属仲裁未做**（v1 对等单发，冲突面未变）；6.5 压缩表不变。
+> - @ 会话语义融合 / 用户直投入口 / notify_when_idle 留 P1。
+
 ### 6.1 模型
 
 ```sql
@@ -290,13 +308,14 @@ MA-1  schema45（会话类型四列 + project_members）+ session_runner 抽取 
 MA-2  任务台账派生 + project_trajectory_tail + 项目页任务/轨迹 tab（场景 B）
 MA-3  channel_participants + 任务段 continuity + 拉模式路由 + 产物仲裁（场景 C）
       └ 推模式（自动唤醒）带护栏，最后
+      （实际落地 2026-09-09 走了不同形态：见第 6 节实施状态批注）
 ```
 
 场景映射：**MA-1 = 场景 A（委派会话化）；MA-2 = 场景 B（任务台账+项目轨迹）；MA-3 = 场景 C（持久通道）**——逐个来，每阶段独立可验收、可打包；MA-1 打开的「委派=session」不变式是后两阶段的地基。
 
 ## 9. 风险与开放问题
 
-1. **① channel 消息的词表表达**：`user_message` 加 initiator 字段 vs 新 `message_posted` kind——MA-3 设计时定（倾向后者：语义不耦合人类轮次概念）。
+1. **① channel 消息的词表表达**：`user_message` 加 initiator 字段 vs 新 `message_posted` kind——MA-3 设计时定（倾向后者：语义不耦合人类轮次概念）。→ **已解（2026-09-09）**：立独立 kind `cross_session_message`/`cross_session_message_settled`（投递事实与消费物化分离），见第 6 节实施状态批注。
 2. **② 并发 SQLite 写**：父子 loop 并发写同库。现有 pool 多连接已支持，但委派高峰下的锁竞争未测——MA-1 真机观察 `database is locked` 频率，必要时 busy_timeout 调优。
 3. **③ 专家 agent 的 key 缺失/模型不可用**：委派失败的诚实回传路径（主 LLM 收到明确错误可换人/换法），不静默。
 4. **④ 子会话生命周期管理**：委派会话永久保留 vs 项目归档联动——v1 永久保留（日志无损优先），归档联动随 MA-2。

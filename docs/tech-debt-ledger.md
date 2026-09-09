@@ -157,6 +157,7 @@
 
 ## 🗑 划掉区（已核验消亡，勿复活）
 
+- **derive skip 臂漏 `model_switch`** → 既有 bug（不在任何批次条目——批次 R 扫描漏项，MA-3 探查时实锤：`session_runner_e2e.rs` 已在生产写入该 kind，derive 遇未列 kind 记 DeriveIssue 污染对账报告）。2026-09-09 随 MA-3 Commit 1（cacaa70）修复：skip 臂收编 `model_switch` + 新 `cross_session_message`/`cross_session_message_settled` 两 kind。
 - **A4 测试跑不起来（sodium DLL）** → 2026-08-13 钉真根因 = lib test harness 缺 comctl32 v6 manifest，build.rs 已修；`cargo test --lib` 831 passed。**可测试性三连的门控钥匙已开。**
 - **`.cargo/config.toml` 机器绝对路径** → 文件已不存在（2026-08-16 核验）。
 - **08-06 自查 31 项 FIXED** → 2026-08-08 四 agent 并行逐条对 HEAD 复核结清（R1-R9 / F1-F6 / U1-U4 等），明细见记忆 audit-2026-08-06，不再重列。
