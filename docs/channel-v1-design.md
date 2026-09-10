@@ -1,8 +1,8 @@
 # 频道 v1 串行共享流 · 设计稿（0.7 批 C）
 
-> 状态：**已过稿（2026-09-10 理念 + C8/C8b 深化 + §11 六确认点全部拍板关闭）**，待动代码。
-> 真相源声明：本文是频道 v1 的设计与实施蓝图；落地后 CLAUDE.md「频道」节为运行时真相源。
-> 接缝事实全部对码核实（文件:行号为 0.7.0 / commit 5b29b1a 时点）。
+> 状态：**已落地（2026-09-10 四批 commit：① 引擎 41d2bdc + ② 选举换帅 cf4b3db + ③ 前端 e129d46 + ④ 文档）**，待用户真机使用驱动反馈。
+> 真相源声明：落地后 **CLAUDE.md「频道 v1」节为运行时真相源**（本文保留设计动机与决策链；两处冲突以 CLAUDE.md 为准）。
+> 接缝事实全部对码核实（文件:行号为 0.7.0 / commit 5b29b1a 时点；落地批的实现细节以代码为准）。
 
 ---
 
@@ -449,14 +449,21 @@ LOGO → 搜索 → 新建对话 → ProjectSwitcher → 分隔线 → 列表（
 
 ---
 
-## 8. commit 拆批（4 批）
+## 8. commit 拆批（4 批）——全部落地（2026-09-10）
 
-1. `feat(channel)` 后端地基：migration 54 + channel.rs 引擎（路由/接力/护栏/触发点）+ 事件三 kind +
-   derive skip + sender 元数据双轨 + delegate 注册放开 + 删除守卫与项目删除频道归档 + Rust 测试。
-2. `feat(channel)` 选举与换帅：自选举流程 + 两档治理 + system prompt 频道段 + 频道命令（ensure/get/setCoordinator）+ 测试。
-3. `feat(chat)` 前端：侧边栏改版（含搜索框移除与归档频道入口）+ 频道页渲染分支（Header/Messages/
-   Input/Notice + 归档只读态）+ mention 通路 + bridge + vitest。
-4. `docs`：CHANGELOG / CLAUDE.md 频道节 + 架构树 / backend-api-reference / 本设计稿状态更新。
+1. ✅ `feat(channel)` 41d2bdc 后端地基：migration 54 + channel.rs 引擎（路由/接力/护栏/触发点）+ 事件三 kind +
+   derive skip + sender 元数据双轨 + delegate 注册放开 + 删除守卫与项目删除频道归档 + Rust 测试（cargo 1485）。
+2. ✅ `feat(channel)` cf4b3db 选举与换帅：自选举流程 + 两档治理 + system prompt 频道段（channel_hint）+
+   频道命令四件（ensure/get/setCoordinator/reelect）+ 测试（cargo 1488）。
+3. ✅ `feat(chat)` e129d46 前端：侧边栏改版（含搜索框移除与归档频道入口）+ 频道页渲染分支（Header/Messages/
+   Input/Notice + 归档只读态）+ mention 通路 + bridge + vitest +25（547）。
+4. ✅ `docs`：CHANGELOG [Unreleased] / CLAUDE.md 频道节 + 架构树 + 当前状态 / backend-api-reference
+   模块十一 + 本设计稿状态更新。
+
+**落地时实现取舍（与本文的细微出入，均以代码为准）**：护栏实值 = 链 8 / 有序对 2 / @5 / 频率 600s·6 /
+统筹失败 streak 2（§5 表同源）；选举投票 max_tokens 128；换帅/罢免后投影一律回落 joined_at 最早成员
+（ensure 同款语义）；sender enrichment 走 list_messages 派生回填（`sender_agent_name` 快照 +
+`turn_duration_ms`，非表列——migration 零新列）。
 
 ## 9. v1 边界（明确不做）
 

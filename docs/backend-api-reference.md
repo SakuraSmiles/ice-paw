@@ -5,10 +5,11 @@
 本文档梳理了 IcePaw 后端（`packages/app/src-tauri/src/`）所有 `#[tauri::command]` 标注的 Tauri Commands API。
 
 ### 统计
-- **已注册命令总数**：34 个
+- **已注册命令总数**：100 个（频道批后实数，`lib.rs::generate_handler` 逐行可数）
 - **未注册但已定义**：3 个（`list_providers` / `list_models` / `list_tool_defs`）
 - **仅后端内部使用**：1 个（`count_messages`，`#[allow(dead_code)]`）
 - **后端向前端 emit 的事件**：14 个（含 `chat:config-proposal` / `chat:config-proposal-response`）
+- ⚠️ **详档覆盖缺口（文档债，非命令缺失）**：inbox（4）/ model_profile / screen / log 命令族未立模块节——按批补档；本表命令数是权威口径
 
 ### 命令注册位置
 所有已注册命令在 `lib.rs` 的 `tauri::generate_handler![...]` 中集中管理。
@@ -27,6 +28,7 @@
 | Provider | `provider_cmd.rs` | 2（未注册） | 厂商/模型元信息 |
 | Tool | `tool_cmd.rs` | 1（未注册） | 工具定义列表 |
 | MCP | `mcp_cmd.rs` | 7 | MCP Server 配置 CRUD + 重启 + 工具列表 |
+| Channel | `channel_cmd.rs` | 4 | 频道 v1：懒建 / 视图 / 统筹者治理（0.7 批 C） |
 
 ---
 
@@ -78,10 +80,10 @@
 ### send_message
 
 - **参数**：
-  - `input: SendMessageInput` — `{ conversation_id, content?, content_blocks?, tools_enabled?, model? }`
-  - 注：`content_blocks` 优先于 `content`，至少提供其一；`model` 为会话级 model 覆盖（None=使用 Agent 默认）
+  - `input: SendMessageInput` — `{ conversation_id, content?, content_blocks?, tools_enabled?, model?, files?, mentions? }`
+  - 注：`content_blocks` 优先于 `content`，至少提供其一；`model` 为会话级 model 覆盖（None=使用 Agent 默认）；`mentions` 为频道 @ 点名的结构化目标（`Vec<agent_id>`，上限 5，去重保序）——**仅频道会话生效**（与 `project_agents` 成员比对，非成员静默剔除），1v1 会话忽略；成员侧的 @ 由后端 `parse_agent_mentions` 从文本解析（与前端 `collectMentions` 同构）
 - **返回**：`AppResult<()>`（立即返回，流式结果通过事件下发）
-- **说明**：核心聊天入口。流程：入参校验 → 取 Agent+API Key → 拼装 Pipeline 上下文 → 写用户消息+助手占位 → emit `chat:start` → spawn 流式协程。
+- **说明**：核心聊天入口。流程：入参校验 → 取 Agent+API Key → 拼装 Pipeline 上下文 → 写用户消息+助手占位 → emit `chat:start` → spawn 流式协程。频道会话（kind='channel'）在发送后有路由/接力/护栏治理（见 CLAUDE.md「频道 v1」节）；**在途发送不拦截**——物化为新链头，接力链取消（`channel_mention` blocked_reason=user_preempted 落事件）。
 - **前端使用状态**：✅ 已使用（`bridge.chat.sendMessage(input)`）
 
 #### 关联事件（后端 → 前端，非 Tauri Command，但前端必须订阅）
@@ -236,7 +238,7 @@
   - `limit: Option<i64>`（上限 1000，默认 100）
   - `before: Option<serde_json::Value>`（复合游标 `[created_at, rowid]`，前端传 JS 数组）
 - **返回**：`AppResult<Vec<Message>>`
-- **说明**：列出会话内消息，支持复合游标分页。`before` 格式为 `[created_at_str, rowid_int]`，由前端从上一页最末一条消息的对应字段回传。
+- **说明**：列出会话内消息，支持复合游标分页。`before` 格式为 `[created_at_str, rowid_int]`，由前端从上一页最末一条消息的对应字段回传。频道会话的消息行带 enrichment 三字段：`sender_agent_id`（发言成员，user 消息为 null）/ `sender_agent_name`（发言时快照，成员改名不追溯）/ `turn_duration_ms`（该回合耗时，供前端「生成中发出」区间标注；pre_phase0 旧消息无此数据为 null，前端诚实不标注）。
 - **前端使用状态**：✅ 已使用（`bridge.messages.list(conversationId, opts)`）
 
 ### create_message
@@ -503,6 +505,44 @@
 
 ---
 
+## 模块十一：Channel（频道 v1 —— 0.7 批 C）
+
+频道 = 项目 1:1 的串行共享流会话（`conversations.kind='channel'` + `project_id` 必填，部分唯一索引 `idx_channel_per_project` 保证一项目一活频道）。引擎行为（广播路由 / @ 接力 / 护栏 / 自选举 / 换帅）在 `harness/channel.rs`，本模块只是懒建 / 视图 / 用户治理出口。
+
+### ensure_channel
+
+- **参数**：`project_id: String`
+- **返回**：`AppResult<ChannelView>`
+- **说明**：幂等确保项目频道存在（事务内 SELECT+INSERT，存在即返回）。项目无成员时 Err 三段式指路项目设置；创建**不**触发选举（选举在首次广播时触发——避免打开频道就产生 LLM 调用）；统筹投影 = 现任 coordinator，无则 joined_at 最早成员（临时投影，正式统筹由自选举产生）；标题「{项目名} · 频道」。
+- **前端使用状态**：✅ 已使用（`bridge.channels.ensure(projectId)`——侧栏「开启频道」入口懒建）
+
+### get_channel
+
+- **参数**：`project_id: String`
+- **返回**：`AppResult<ChannelView>` — `{ channel: Conversation | null, members: ChannelMemberInfo[], coordinator_agent_id: string | null, coordinator_appointed: bool }`；`ChannelMemberInfo = { agent_id, name, role }`（role: 'coordinator' | 'lead' | 'member'）
+- **说明**：频道视图（活频道优先；无活频道回落归档频道供只读展示；两者皆无 = 未开启，channel=null）。
+- **前端使用状态**：✅ 已使用（`bridge.channels.get(projectId)`——选中频道会话时刷新投影）
+
+### set_channel_coordinator
+
+- **参数**：`conversation_id: String`，`agent_id: Option<String>`（Some=任命 / None=罢免）
+- **返回**：`AppResult<()>`
+- **说明**：用户治理（C5 指定档唯一入口）。任命：目标须是项目成员（非成员 Err 指路），旧统筹降 member、目标升 coordinator、频道行 agent_id 投影更新、换帅 streak 清零、`channel_coordinator`（action=appointed）落事件；同目标幂等成功。罢免：现任降 member、投影回落 joined_at 最早成员、`removed` 落事件——统筹空缺，下次广播触发自选举；本就空缺幂等成功。目标会话非频道 Err。
+- **前端使用状态**：✅ 已使用（`bridge.channels.setCoordinator(...)`——频道 popover 治理位）
+
+### reelect_channel_coordinator
+
+- **参数**：`conversation_id: String`
+- **返回**：`AppResult<()>`
+- **说明**：一键让系统补选（频道头部入口；指定档故障降级的推荐出口）——**绕过全员弃权熔断**（用户治理权最大），`election_running` 守卫照常防双跑。归档频道 Err（记录只读）。
+- **前端使用状态**：✅ 已使用（`bridge.channels.reelect(...)`——「让系统补选」按钮）
+
+#### 关联事件（session_events 词表，非 Tauri emit）
+
+频道行为事实走 append-only 事件日志（三 kind）：`channel_mention`（点名路由：from/to/hop_index/chain_remaining/blocked_reason——六拦截值 pair_repeat/chain_limit/frequency/user_preempted/ambiguous_name/coordinator_failed）、`channel_election`（phase: started/vote/result，投票与计票明细）、`channel_coordinator`（action: elected/appointed/removed/failed-over）。前端 `useChannel` 拉取过滤渲染为通知条（ChannelNotice），轨迹页归 CROSS 行。
+
+---
+
 ## 附录：错误类型（AppError）
 
 所有命令返回 `Result<T, AppError>`，AppError 枚举如下：
@@ -596,6 +636,8 @@ struct SendMessageInput {
     content_blocks?: Vec<ContentBlock>,  // 新接口：多模态块（优先）
     tools_enabled?: bool,       // 是否启用工具调用
     model?: String,             // 会话级模型覆盖（None=用Agent默认）
+    files?: Vec<InputFile>,     // 附件（OCR/视觉代读链路）
+    mentions?: Vec<String>,     // 频道 @ 点名目标 agent_id（上限 5，仅频道会话生效）
 }
 ```
 
@@ -621,6 +663,8 @@ struct Conversation {
     id: String, agent_id: String, title: String, pinned: bool,
     tools_override?: HashMap<String, bool>,
     project_id?: String,
+    kind?: String,              // 'chat'（默认/用户会话）| 'delegation'（委派子会话）| 'channel'（频道 v1）
+    archived_at?: String,       // 频道归档时刻（migration 54；项目永久删除时频道归档保留）
     created_at: String, updated_at: String,
 }
 ```
@@ -634,6 +678,9 @@ struct Message {
     token_count?: i32, error?: String,
     rowid: i64,  // 分页游标用（内部字段）
     summary_id?: String, model?: String,
+    sender_agent_id?: String,    // 频道 enrichment：发言成员（user 消息为 null）
+    sender_agent_name?: String,  // 频道 enrichment：发言时名快照（改名不追溯）
+    turn_duration_ms?: i64,      // 频道 enrichment：回合耗时（「生成中发出」区间标注）
     created_at: String,
 }
 ```
