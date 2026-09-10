@@ -134,6 +134,33 @@
 | R-D7 | 文档批·computer-use-roadmap checkbox 与正文自相矛盾（§4.12 步骤 1-5 正文全「已落地」、checkbox 全未勾） | 低 ✅ 2026-09-09 |
 | R-D8 | 台账销项三件（本轮核实）：Q13-delegate 已补 13 测试（hud/approval_toast/session.rs 仍缺，保留）；CONTRIBUTING「会话导出」已实现（export_session_trajectory，搜索仍未做）；**即时保存负债清两件**——项目背景编辑区已迁草稿+显式保存（ProjectContextEditor.vue:56-74），负债只剩会话标题行内改名（ChatHeader.vue:235）+ 项目成员 chips 两处豁免区 | — | ✅ 核实 |
 
+## 批次 T — 2026-09-10 MA-3 投递 + append-only 事件链路审计（四路扫描 + 生产库取证）
+
+> 0.7 批③落地后全链路体检：投递功能四路（relay 工具壳 / inbox 引擎 / 消费链 / 前端收件箱）+ 事件日志整线（emitters / derive / reconcile / read_route / backfill / refify）+ 周边（60s 超时 / Esc 栈 / 轨迹词表）。总账 52 检查项 = 48 成立 + 2 存疑全闭合（settled actor='user'×by='auto' = 文档化设计非伤；库内 kind 数 vs 文档 14 = 文档漂移）+ 2 漂移；生产库只读取证全绿。
+>
+> **分诊执行（2026-09-10 用户拍板「逐个修复」）**：行为三件 + 瀑布图词表 + C 级文档漂移五处落地（明细见下表 ✅ 行）；B 级防御性缺口七条 + D 级轻微六条全部观察池——均为有界/低频/诚实边界类，无用户可见行为伤。
+
+| # | 项 | 严重度 | 状态 |
+|---|---|---|---|
+| T1 | **Esc 栈空转条目吞事件**：useEscapeStack 模块级栈只触发栈顶 + stopImmediatePropagation——「常驻 setup 注册 + 条件浮层」形态（ChatHeader 收件箱/删除确认条、Sidebar 会话 flyout）的空转回调吞掉本该关浮层的 Esc（confirm 注册晚于 inbox 恒踞栈顶 → 收件箱开着 Esc 关不掉）；标题编辑输入框自身 Esc 处理同被吞。修=Entry 增 `active?: () => boolean` 谓词，Esc 自栈顶向下找首个活跃条目；全不活跃不消费事件放行组件自身 | 中 ✅ 2026-09-10 |
+| T2 | **sendMessage 在途回合拦截静默吞输入**：sending 全局单份（消费回合 assistant-start 也置位）下 `if (sending) return` 无反馈——用户看「发送没反应」。修=早退写 send_failed 横幅 + lastFailedSend 重试出口（与后端并发拒绝 catch 路径同款），附件 chips 不消费 | 中 ✅ 2026-09-10 |
+| T3 | **MA-3 消费回合无 live 流入**：消费回合 chat:start 的 ucb=None → 前端只 push assistant 占位、不带入 incoming user 行——观看中会话来件卡不出现（切走再切回才有）、回复凭空流出。修=外部回合判据（`!ucb && sendingConvId !== cid`）→ sending 即刻置位 + loadMessages 权威刷新（占位由 DB 行带入防重复）；顺手暴露 store 的 sendingConvId / loadMessages（原为内部成员，事件层不可达会 TypeError） | 中 ✅ 2026-09-10 |
+| T4 | 瀑布图词表缺 cross 两 kind：TrajectoryTimeline laneOf/KIND_LABELS 未收编 → 落模型道兜底 + 原始 slug 当 label。修=归 User 道（外来输入侧）+ label 镜像 useTrajectory 表格词表（跨会话来件/来件已消费（by 中文）） | 低 ✅ 2026-09-10 |
+| T5 | 文档漂移五处：CLAUDE.md 词表 14→18 kind（derive.rs 实证 3+15）+ drain 参数「2s×15s」→「2s 轮询·30s 上限」（inbox.rs:88-89 实值）；event_log.rs:72「全部 13 kind」+ 头部失效指针（migration 44 头注释只记初始集，改指本文件单一真相源）；models.rs default_inbox_policy "hold"→"accept"（对齐 migration 52 拍板默认）+ 两处注释；inbox.rs:399「hold（默认）」注释；reconcile.rs 模块头 skip 清单补 `incomplete_turn_legacy_rows`（代码 :205 在产文档缺席）。migration 52 文件本体刻意不动（已应用库 checksum 风险） | 低 ✅ 2026-09-10 |
+| T6 | 回投失败源会话零告知：expect_reply 回投 deliver 失败（目标拒收/队满）时源会话无任何提示——发起方 agent 与用户都以为已回。观察池最值得留意的一条；修法方向=deliver 失败时向源会话 append 一条 message_error 事实 | 中低 | 👁 |
+| T7 | deliver 的 cross_session_message append warn-only 失败仍返回 delivered（inbox.rs append_event 影子定位取舍的下游）：工具结果称已投递、事件无记录——pending 判定（NOT EXISTS settled）看不到它，来件成为「幽灵已投递」。Phase 0 影子定位是全局取舍，单点收紧须整线评估 | 低 | 👁 |
+| T8 | settled append 失败可二次消费：防双消费靠 settled 占位（chat_state.start 成功后 append），append 失败则批准/自动触发可再次 spawn——概率极低（同库写失败）且 chat_state 二次拒绝兜底 | 低 | 👁 |
+| T9 | MAX_PENDING check-then-act 竞态：并发投递同时过上限检查最多放行到 11 条（上限 10），有界无害 | 低 | 👁 |
+| T10 | auto 配额空烧：投递即时消费的配额在 spawn 前计数，spawn 前会话忙失败不回滚——窗口内最多烧掉 6/10min 额度，有界 | 低 | 👁 |
+| T11 | 消费 spawn 中删会话：spawn 后目标会话被删，回合照跑烧 token、settled 落到已删会话（事件 append 随会话级联删）。桌面单用户低频 | 低 | 👁 |
+| T12 | MANUAL_REPLY_GUARD 软上限：内存 Map 无清理，极长会话高频手动回投理论无界（条目 24B 级，实际无害）；重启清零 | 低 | 👁 |
+| T13 | boot 竞态 badge 少 1：list_inbox_counts 与首条事件广播的时序缝，popover 打开权威刷新自愈 | 低 | 👁 |
+| T14 | 收件箱 popover 开着切会话浮层残留（不跟随会话切换关闭；点外/Esc 可关） | 低 | 👁 |
+| T15 | relay.rs unwrap_or_default 吞 DB 错（list_conversations 内 conv 行读取失败静默空串）——展示层降级可接受，缺一条 debug 日志 | 低 | 👁 |
+| T16 | count_pending_inbox_all boot 全表 NOT EXISTS 扫描——会话量万级前无感知，届时加 pending 计数列或内存索引 | 低 | 👁 |
+| T17 | pending 积压放大 reconcile incomplete_turn 计数：cross:* turn 无 turn_ended 属设计（pending 不是回合），排查对账报告时排除该前缀（reconcile.rs 模块头已补注） | 低 | 👁 |
+| T18 | 失焦 OS 通知无补发（通知恰一次语义刻意取舍——错过即看 badge） | 低 | 👁 |
+
 ## 安全项
 
 | # | 项 | 备注 |
