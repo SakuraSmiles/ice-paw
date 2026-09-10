@@ -4,7 +4,7 @@
   内容三段：
   - pending 来件列表（源 agent 头像 + 源会话名 + 内容预览 + 相对时 + 批准/拒绝）
   - 拒绝 = 不可恢复处置（settled refused 永久出队）→ 两步确认（按钮武装态）
-  - 收件政策三态 segmented（accept 自动消费 / hold 扣住待批准 / refuse 拒收）
+  - 收件政策三态 segmented（accept 自动消费[默认] / hold 扣住待批准 / refuse 拒收）
 
   数据：打开与每次处置后都走 list_inbox 权威刷新（本地 badge 计数只是气味，
   会随处置回正——refreshInboxCount）。批准时会话忙 → 后端 Err，来件留队，
@@ -28,7 +28,7 @@ defineEmits<{ close: [] }>();
 
 const loading = ref(false);
 const items = ref<InboxItem[]>([]);
-const policy = ref("hold");
+const policy = ref("accept");
 const errorText = ref<string | null>(null);
 /** 处置中条目（禁重复点击；批准是即时动作，拒绝两步确认见 armedRefuseId） */
 const actingId = ref<string | null>(null);
@@ -36,10 +36,12 @@ const actingId = ref<string | null>(null);
  *  再点其它区域解除——编辑交互契约的按钮武装态载体） */
 const armedRefuseId = ref<string | null>(null);
 
-/** 收件政策三态（conversations.inbox_policy 词表；文案即语义，无 jargon） */
+/** 收件政策三态（conversations.inbox_policy 词表；文案即语义，无 jargon）。
+ *  2026-09-10 默认改 accept（「在 A 发起、切到 B 批准」反人类）；「（默认）」
+ *  标注跟随词表，勿随会话实际值漂移 */
 const POLICY_OPTIONS: { value: string; label: string; hint: string }[] = [
-  { value: "accept", label: "自动接收", hint: "来件排队，会话空闲时自动消费" },
-  { value: "hold", label: "需批准", hint: "来件扣在收件箱，你批准后才消费（默认）" },
+  { value: "accept", label: "自动接收（默认）", hint: "来件排队，会话空闲时自动消费" },
+  { value: "hold", label: "需批准", hint: "来件扣在收件箱，你批准后才消费（回复除外——回投免扣）" },
   { value: "refuse", label: "拒收", hint: "投递方工具立即报错，不再接收" },
 ];
 
@@ -152,7 +154,11 @@ function deliveredAgo(item: InboxItem): string {
             @click="refuse(item)"
             @blur="armedRefuseId === item.message_id && (armedRefuseId = null)"
           >{{ armedRefuseId === item.message_id ? "确认拒绝？" : "拒绝" }}</button>
-          <span v-if="item.expect_reply" class="inbox-reply-flag" title="批准后消费回合完成时，回复会自动投回源会话">
+          <span v-if="item.is_reply" class="inbox-reply-flag" title="这是你此前 expect_reply 投递的回投——对方对你上一条消息的回复">
+            <ArrowLeftRight :size="12" aria-hidden="true" />
+            回复
+          </span>
+          <span v-else-if="item.expect_reply" class="inbox-reply-flag" title="批准后消费回合完成时，回复会自动投回源会话">
             <ArrowLeftRight :size="12" aria-hidden="true" />
             期待回复
           </span>

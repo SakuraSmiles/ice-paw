@@ -6,9 +6,10 @@
 // - 增量：监听 session:event-appended（append 落库成功才广播，到达时行必可查）
 //   过滤 cross_session_message / cross_session_message_settled 两 kind 维护
 //   Map<convId, count>——与轨迹 live 追加同一通知源，零轮询；
-// - hold 来件 OS 通知：仅失焦时（有焦时应用内 badge 可见，通知是重复打扰；
-//   与审批通知同哲学）拉权威列表确认政策后纯提醒（不带 toast 按钮——按钮
-//   协议是工具授权 oneshot，与收件箱处置不同域）。
+// - 来件 OS 通知：仅失焦时（有焦时应用内 badge 可见，通知是重复打扰；
+//   与审批通知同哲学）拉权威列表按政策分流文案（hold=待批准 / accept=知会
+//   自动处理中；不带 toast 按钮——按钮协议是工具授权 oneshot，与收件箱
+//   处置不同域）。
 //
 // 计数是「气味」不是真相：settled 抵扣依赖本地算术，极端时序（bus 丢帧）可
 // 漂移 ±1；popover 打开与处置后都走 list_inbox 权威刷新回正。
@@ -38,18 +39,21 @@ export function useInbox() {
 /** 已发过 OS 通知的来件 id（恰一次簿记；随权威列表收缩清理，防 Set 无界） */
 const notifiedIds = new Set<string>();
 
-/** hold 来件失焦通知：拉权威列表确认政策（通知只服务 hold——accept 自动
- *  消费无需批准动作，refuse 根本收不到）。fire-and-forget，失败静默。 */
+/** 来件失焦通知：拉权威列表，按收件政策分流文案（2026-09-10 默认改 accept 后
+ *  通知不再只服务 hold——accept 会话收到的来件自动消费，通知转为知会性
+ *  「agent 正在处理」；hold 才是「待批准」的行动召唤；refuse 收不到来件，
+ *  政策值兜底防御）。fire-and-forget，失败静默。 */
 async function notifyHeldArrival(convId: string): Promise<void> {
   try {
     const view = await bridge.inbox.list(convId);
-    if (view.policy !== "hold") return;
+    if (view.policy === "refuse") return;
+    const held = view.policy === "hold";
     const live = new Set<string>();
     for (const item of view.items) {
       live.add(item.message_id);
       if (notifiedIds.has(item.message_id)) continue;
       notifiedIds.add(item.message_id);
-      notifyHeldItem(item);
+      notifyHeldItem(item, held);
     }
     for (const id of notifiedIds) if (!live.has(id)) notifiedIds.delete(id);
   } catch {
@@ -57,11 +61,11 @@ async function notifyHeldArrival(convId: string): Promise<void> {
   }
 }
 
-function notifyHeldItem(item: InboxItem): void {
+function notifyHeldItem(item: InboxItem, held: boolean): void {
   const preview = item.content.length > 60 ? `${item.content.slice(0, 60)}…` : item.content;
   // 不传 request_id = 纯提醒（toast 按钮是工具授权协议，收件箱处置须回应用内）
   void notifyApprovalNeeded(
-    "IcePaw · 跨会话消息待批准",
+    held ? "IcePaw · 跨会话消息待批准" : "IcePaw · 收到跨会话消息",
     `来自「${item.source_conversation_title}」的 agent ${item.source_agent_name}：${preview}`,
   );
 }

@@ -161,7 +161,8 @@ export interface Conversation {
   kind?: string;
   /** 委派子会话的父会话 id（kind='delegation' 时必有；后端深度=1 护栏保证父为 chat 会话） */
   parent_conversation_id?: string | null;
-  /** 收件政策（MA-3，migration 52）：'accept'=自动消费 · 'hold'=扣住待批准（默认）· 'refuse'=拒收 */
+  /** 收件政策（MA-3，migration 52；2026-09-10 默认 accept）：'accept'=自动消费（默认）·
+   *  'hold'=扣住待批准（回投免扣）· 'refuse'=拒收 */
   inbox_policy?: string;
 }
 
@@ -304,6 +305,16 @@ export interface Message {
   created_at: string;
   rowid: number;
   model: string | null;
+  /** MA-3 来件来源元数据（消费回合物化的 user 消息才有；后端 JSON 字符串，
+   *  坏数据后端已降级 null）。incoming 卡的权威数据源——有它就不走文本解析。 */
+  incoming_source?: IncomingSourceMeta | null;
+}
+
+/** MA-3 来件来源（与后端 event_log::IncomingSourceMeta 字段镜像） */
+export interface IncomingSourceMeta {
+  source_conversation_id: string;
+  source_conversation_title: string;
+  source_agent_name: string;
 }
 
 // ============================================================================
@@ -479,6 +490,8 @@ export interface InboxItem {
   source_agent_name: string;
   content: string;
   expect_reply: boolean;
+  /** 来件为 expect_reply 的回投（回投在 hold 政策下也免扣自动消费；pill 展示差异） */
+  is_reply?: boolean;
   delivered_at_unix: number;
 }
 

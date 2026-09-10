@@ -379,12 +379,16 @@ async function toggleScreenShare() {
 </template>
 
 <style scoped>
-/* z 走 badge 档而非 base：.chat-render 双 pane 是 position:absolute（绘制在
+/* z 走 dropdown 档而非 base：.chat-render 双 pane 是 position:absolute（绘制在
    非定位元素之上，见 ChatPage .chat-tabbar 注释），header 必须留在正档位才能
-   压过它们；badge(10) 仍低于 tabbar(raised)，与旧值 1 的相对层级完全一致。
+   压过它们。2026-09-10 badge→dropdown 提档：MA-3 收件箱 popover 挂在 header
+   内（自身 z=popover 1000 但被困在 header 的层叠上下文里——「父层提高子层
+   跟父」），badge(10) 低于 tabbar(raised 20) 时 popover 下垂部分被标签条/内容
+   区盖住；dropdown(100) 压过 raised 后 popover 才能完整盖住下方内容。
+   header 提档不破坏既有相对序：其内最高竞争者 confirm-bar 走 base 档相对层级。
    padding 垂直 14→12：间距令牌无 14 档就近收编（min-height:68 兜底，无头像
    态高度不变；有 xl 头像态 72→68） */
-.chat-header { display:flex; align-items:center; justify-content:space-between; padding:var(--ip-spacing-3) var(--ip-spacing-6); min-height:68px; border-bottom:1px solid var(--ip-color-border-default); background-color:var(--ip-color-bg-chat-header); backdrop-filter:blur(8px); flex-shrink:0; position:relative; z-index:var(--ip-z-badge); }
+.chat-header { display:flex; align-items:center; justify-content:space-between; padding:var(--ip-spacing-3) var(--ip-spacing-6); min-height:68px; border-bottom:1px solid var(--ip-color-border-default); background-color:var(--ip-color-bg-chat-header); backdrop-filter:blur(8px); flex-shrink:0; position:relative; z-index:var(--ip-z-dropdown); }
 /* 标签条在场（会话态）：去底边线，标题与标签条视觉一体（同底色无分割） */
 .chat-header.has-tabbar { border-bottom:none; }
 .header-left { display:flex; align-items:center; gap: var(--ip-spacing-3); min-width:0; }

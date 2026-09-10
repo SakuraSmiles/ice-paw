@@ -32,7 +32,7 @@ import { useActiveTurn, THRESHOLD_PX } from "../../composables/useActiveTurn";
 import { formatTokenCount, formatThinkingMs, formatFileSize } from "../../utils/format";
 import { shortCode, parseReferenceBlocks, resolveGroupMid } from "../../utils/refs";
 import type { ParsedRef } from "../../utils/refs";
-import { parseIncomingText, type IncomingInfo } from "../../utils/crossSession";
+import { incomingInfoOf, parseIncomingText, type IncomingInfo } from "../../utils/crossSession";
 import { memoized } from "../../utils/blockMemo";
 import { summarizeToolCall, dirnameOf, type ToolLineSummary } from "../../utils/toolSummary";
 import { toolDisplayName } from "../../utils/toolLabels";
@@ -341,9 +341,17 @@ function cleanUserContent(text: string | null | undefined): string {
 }
 
 // ===== MA-3 跨会话来件（incoming 卡）=====
-// 消费回合物化的 user 消息带来源标注头（后端 compose_incoming_text）；此处
-// 解析出 来源会话/agent/正文，头部可点跳源会话（同 openReference 会话分支）。
-/** 来件解析（memo 化：模板热路径每渲染每消息调用；字符串参数即缓存键） */
+// 消费回合物化的 user 消息带双块结构（后端 compose_incoming_blocks）+ 元数据
+// （messages.incoming_source，migration 53）。解析两级：元数据优先（权威数据
+// 源，格式演进免疫；正文取 content_blocks 末 Text 块），无元数据回退扁平文本
+// 解析（legacy 消息 / 元数据坏行降级）。头部可点跳源会话（同 openReference 会话分支）。
+/** 来件解析（消息级，元数据优先；模板每渲染多次调用，来源数据小解析开销可忽略） */
+function incomingMsgOf(msg: Message): IncomingInfo | null {
+  if (msg.incoming_source) return incomingInfoOf(msg);
+  return incomingOf(msg.content ?? '');
+}
+
+/** 扁平文本解析（memo 化兜底路径：字符串参数即缓存键） */
 const incomingOf = memoized((content: string): IncomingInfo | null => parseIncomingText(content));
 
 /** 源会话是否可达（已删则头部纯展示，不可点） */
@@ -355,10 +363,10 @@ function openIncomingSource(convId: string) {
   if (sourceConvExists(convId)) chat.selectConversation(convId);
 }
 
-/** 气泡正文：来件剥标注头显正文，普通消息走 cleanUserContent */
-function userBubbleText(content: string | null | undefined): string {
-  const inc = incomingOf(content ?? "");
-  return inc ? inc.body : cleanUserContent(content);
+/** 气泡正文：来件显正文块（元数据路径）/剥标注头（文本路径），普通消息走 cleanUserContent */
+function userBubbleText(msg: Message): string {
+  const inc = incomingMsgOf(msg);
+  return inc ? inc.body : cleanUserContent(msg.content);
 }
 
 /**
@@ -833,19 +841,20 @@ const RESUMABLE_REASONS = new Set([
             <div class="message-content user">
               <div v-if="cleanUserContent(group.items[0].msg.content) || hasUserMedia(group.items[0].msg) || parseReferenceBlocks(group.items[0].msg.content_blocks).length > 0" class="message-bubble">
                 <!-- MA-3 跨会话来件：来源标注头（点击跳源会话；源已删纯展示）。
-                     检测锚 = [来自会话「 前缀（与后端 compose_incoming_text 逐字一致） -->
+                     检测 = incoming_source 元数据优先（权威），无元数据回退
+                     [来自会话「 前缀文本解析（legacy） -->
                 <div
-                  v-if="incomingOf(group.items[0].msg.content ?? '')"
+                  v-if="incomingMsgOf(group.items[0].msg)"
                   class="user-incoming-head"
-                  :class="{ clickable: sourceConvExists(incomingOf(group.items[0].msg.content ?? '')!.sourceConvId) }"
-                  :title="sourceConvExists(incomingOf(group.items[0].msg.content ?? '')!.sourceConvId) ? '打开源会话' : '源会话已删除'"
-                  @click="openIncomingSource(incomingOf(group.items[0].msg.content ?? '')!.sourceConvId)"
+                  :class="{ clickable: sourceConvExists(incomingMsgOf(group.items[0].msg)!.sourceConvId) }"
+                  :title="sourceConvExists(incomingMsgOf(group.items[0].msg)!.sourceConvId) ? '打开源会话' : '源会话已删除'"
+                  @click="openIncomingSource(incomingMsgOf(group.items[0].msg)!.sourceConvId)"
                 >
                   <ArrowLeftRight :size="13" class="incoming-icon" aria-hidden="true" />
-                  <span class="incoming-src">来自「{{ incomingOf(group.items[0].msg.content ?? '')!.sourceTitle }}」的 agent {{ incomingOf(group.items[0].msg.content ?? '')!.agentName }}</span>
+                  <span class="incoming-src">来自「{{ incomingMsgOf(group.items[0].msg)!.sourceTitle }}」的 agent {{ incomingMsgOf(group.items[0].msg)!.agentName }}</span>
                   <span class="incoming-pill">跨会话消息</span>
                 </div>
-                <span v-if="userBubbleText(group.items[0].msg.content)" class="user-text">{{ userBubbleText(group.items[0].msg.content) }}</span>
+                <span v-if="userBubbleText(group.items[0].msg)" class="user-text">{{ userBubbleText(group.items[0].msg) }}</span>
 
                 <!-- @ 引用卡片（快照存在消息里；点击跳转：会话切换 / 消息定位） -->
                 <div

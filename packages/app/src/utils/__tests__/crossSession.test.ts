@@ -1,14 +1,74 @@
-// parseIncomingText 纯函数单测（MA-3 来件消费侧解析）。
-// 关键契约：与后端 harness/inbox.rs compose_incoming_text 的组装格式逐字镜像——
-// 格式改动两边同步（此处用后端产出的完整样例锁形状）。
+// MA-3 来件消费侧解析纯函数单测：incomingInfoOf（元数据优先）+ parseIncomingText
+// （文本兜底）。关键契约：文本格式与后端 harness/inbox.rs compose_incoming_annotation
+// 逐字镜像——格式改动两边同步（此处用后端产出的完整样例锁形状）；元数据路径
+// 与后端 IncomingSourceMeta 字段镜像。
 import { describe, expect, it } from "vitest";
-import { parseIncomingText, INCOMING_PREFIX_HEAD } from "../crossSession";
+import { incomingInfoOf, parseIncomingText, INCOMING_PREFIX_HEAD } from "../crossSession";
+import type { Message } from "../../types";
 
-/** 后端 compose_incoming_text 产出的完整样例（唯一组装点的形状锁） */
+/** 后端 compose_incoming_annotation 产出的完整样例（唯一组装点的形状锁） */
 const BACKEND_SAMPLE =
   "[来自会话「UE5 材质主控」的 agent 甲｜如需回复用 send_message_to_session 工具，target=conv-abc123]\n\n材质定稿了吗？缺一份金属度参考图。";
 
-describe("parseIncomingText", () => {
+/** 后端双块结构的 content_blocks 样例（标注块 + 正文块） */
+const BACKEND_BLOCKS = JSON.stringify([
+  { type: "text", text: "[来自会话「UE5 材质主控」的 agent 甲｜如需回复用 send_message_to_session 工具，target=conv-abc123]" },
+  { type: "text", text: "材质定稿了吗？缺一份金属度参考图。" },
+]);
+
+/** 消息替身（Pick<Message, ...> 的最小构造） */
+function msgOf(over: Partial<Pick<Message, "content" | "content_blocks" | "incoming_source">> = {}) {
+  return {
+    content: BACKEND_SAMPLE,
+    content_blocks: BACKEND_BLOCKS,
+    incoming_source: null,
+    ...over,
+  };
+}
+
+describe("incomingInfoOf（元数据优先）", () => {
+  it("有元数据 → 权威组装，不依赖文本格式（正文取 content_blocks 末 Text 块）", () => {
+    const info = incomingInfoOf(msgOf({
+      // content 故意放一段格式对不上的文本：元数据在场时文本不被信任
+      content: "任意扁平文本",
+      incoming_source: {
+        source_conversation_id: "conv-xyz",
+        source_conversation_title: "UE5 材质主控",
+        source_agent_name: "甲",
+      },
+    }));
+    expect(info).toEqual({
+      sourceTitle: "UE5 材质主控",
+      agentName: "甲",
+      sourceConvId: "conv-xyz",
+      body: "材质定稿了吗？缺一份金属度参考图。",
+    });
+  });
+
+  it("元数据 + content_blocks 坏 JSON → 正文回退扁平 content 剥头", () => {
+    const info = incomingInfoOf(msgOf({ content_blocks: "{broken" }));
+    expect(info?.body).toBe("材质定稿了吗？缺一份金属度参考图。");
+  });
+
+  it("无元数据 → 回退文本解析（legacy 路径不回退）", () => {
+    const info = incomingInfoOf(msgOf({ incoming_source: null }));
+    expect(info?.sourceConvId).toBe("conv-abc123");
+    expect(info?.body).toBe("材质定稿了吗？缺一份金属度参考图。");
+  });
+
+  it("元数据字段残缺（空 id）→ 不按元数据渲染，回退文本解析", () => {
+    const info = incomingInfoOf(msgOf({
+      incoming_source: {
+        source_conversation_id: "",
+        source_conversation_title: "UE5 材质主控",
+        source_agent_name: "甲",
+      },
+    }));
+    expect(info?.sourceConvId, "回退文本解析而非拿空 id 组装").toBe("conv-abc123");
+  });
+});
+
+describe("parseIncomingText（文本兜底）", () => {
   it("后端样例逐字段解析（形状锁：title/agent/源会话 id/正文）", () => {
     const info = parseIncomingText(BACKEND_SAMPLE);
     expect(info).toEqual({

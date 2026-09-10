@@ -61,4 +61,7 @@ export const TOOL_LABELS: Record<string, string> = {
   request_screen_session: "请求屏幕共享",
   // 委派
   delegate_to_agent: "委派任务",
+  // 跨会话通讯（MA-3）
+  send_message_to_session: "跨会话投递",
+  list_conversations: "列出会话",
 };

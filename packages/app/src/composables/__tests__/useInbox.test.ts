@@ -2,7 +2,8 @@
 // 锁定语义：
 // - boot counts 批量载入 / 事件增量算术（来件 +1、settled 抵扣删零）
 // - 其它 kind 零干扰（session:event-appended 是全事件总线，不是专属通道）
-// - 失焦通知三重 gating：失焦才查 + 权威列表 policy=hold 才发 + 恰一次簿记
+// - 失焦通知三重 gating：失焦才查 + 权威列表按政策分流（hold 待批准 / accept
+//   知会；refuse 兜底不发）+ 恰一次簿记
 // - refreshInboxCount 权威回正（badge 是气味，popover 是真相）
 // - cleanup 拆监听
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
@@ -137,12 +138,26 @@ describe("useInbox（MA-3 收件箱计数）", () => {
     expect(mockNotify).toHaveBeenCalledTimes(3);
   });
 
-  it("失焦 + accept：不通知（自动消费无需批准动作）", async () => {
+  it("失焦 + accept：知会性通知（2026-09-10 默认改 accept 后通知不再只服务 hold）", async () => {
     hasFocusSpy.mockReturnValue(false);
     mockList.mockResolvedValue(itemView("accept", ["m1"]));
     arrive("c1", "cross_session_message");
     await flush();
     expect(mockList).toHaveBeenCalledWith("c1"); // 权威确认照走（policy 是后端真相）
+    expect(mockNotify).toHaveBeenCalledTimes(1);
+    expect(mockNotify).toHaveBeenCalledWith({
+      title: "IcePaw · 收到跨会话消息", // 非「待批准」——自动消费，纯知会
+      body: '来自「主控」的 agent 甲：第 1 条来件内容',
+      request_id: undefined,
+    });
+  });
+
+  it("失焦 + refuse：不通知（收不到来件的政策值，兜底防御）", async () => {
+    hasFocusSpy.mockReturnValue(false);
+    mockList.mockResolvedValue(itemView("refuse", ["m1"]));
+    arrive("c1", "cross_session_message");
+    await flush();
+    expect(mockList).toHaveBeenCalledWith("c1");
     expect(mockNotify).not.toHaveBeenCalled();
   });
 

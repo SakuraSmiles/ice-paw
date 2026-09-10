@@ -23,9 +23,9 @@ describe("basenameOf / dirnameOf", () => {
 });
 
 describe("展示名词表", () => {
-  it("结构不变式：40 项、值非空、值唯一（仿 stylePresets 结构测试范式）", () => {
+  it("结构不变式：42 项、值非空、值唯一（仿 stylePresets 结构测试范式）", () => {
     const entries = Object.entries(TOOL_LABELS);
-    expect(entries.length).toBe(40);
+    expect(entries.length).toBe(42);
     for (const [, label] of entries) {
       expect(label.trim().length).toBeGreaterThan(0);
     }
