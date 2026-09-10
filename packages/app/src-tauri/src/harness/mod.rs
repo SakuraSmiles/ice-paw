@@ -15,6 +15,7 @@ pub mod authority;
 pub mod backfill;
 pub mod batch_writer;
 pub mod budget;
+pub mod channel;
 pub mod chat_state;
 pub mod cleanup;
 pub mod derive;

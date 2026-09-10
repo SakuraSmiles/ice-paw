@@ -546,6 +546,8 @@ impl McpClient for DelegateTool {
                 attach_file_inputs: Vec::new(),
                 emit_user_blocks: false,
                 incoming_source: None,
+                sender_name: None,
+                pre_materialized: false,
                 tools_enabled: true,
                 model_override: None,
                 cancel_token: child_cancel,

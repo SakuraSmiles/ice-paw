@@ -53,6 +53,12 @@ pub struct DerivedMessage {
     /// MA-3 来件来源元数据（user_message 专属；透传到 MessageRow 保持
     /// 「派生视图 == legacy 行视图」对称，LLM 视图不消费——标注块承担）。
     pub incoming_source: Option<crate::harness::event_log::IncomingSourceMeta>,
+    /// 频道发言者（assistant_message 专属，C10 双轨事件侧；1v1 恒 None）。
+    pub sender: Option<crate::harness::event_log::SenderMeta>,
+    /// 回合时长（payload duration_ms，C8b；supersede last-wins 取末次）。
+    /// 完成时间 = 行 created_at + 时长——「用户消息 ∈ 上一回合 [开始, 完成]」
+    /// 的判定原料（此前只活在事件侧，到不了消息页）。
+    pub turn_duration_ms: Option<i64>,
 }
 
 impl DerivedMessage {
@@ -152,6 +158,8 @@ pub fn derive_history(events: &[SessionEventRow]) -> DeriveResult {
                             first_seq: seq,
                             last_seq: seq,
                             incoming_source: p.incoming_source,
+                            sender: None,
+                            turn_duration_ms: None,
                         },
                     );
                 }
@@ -177,6 +185,8 @@ pub fn derive_history(events: &[SessionEventRow]) -> DeriveResult {
                             first_seq: seq,
                             last_seq: seq,
                             incoming_source: None,
+                            sender: None,
+                            turn_duration_ms: None,
                         },
                     );
                 }
@@ -196,6 +206,10 @@ pub fn derive_history(events: &[SessionEventRow]) -> DeriveResult {
                             existing.content = p.content;
                             existing.blocks = p.blocks;
                             existing.last_seq = seq;
+                            // last-wins：续写事件带最新时长/发送者（sender 理论上
+                            // 同回合恒同值，时长是末次终值）
+                            existing.turn_duration_ms = p.duration_ms.map(|d| d as i64);
+                            existing.sender = p.sender;
                         } else {
                             push_message(
                                 &mut result,
@@ -209,6 +223,8 @@ pub fn derive_history(events: &[SessionEventRow]) -> DeriveResult {
                                     first_seq: seq,
                                     last_seq: seq,
                                     incoming_source: None,
+                                    sender: p.sender,
+                                    turn_duration_ms: p.duration_ms.map(|d| d as i64),
                                 },
                             );
                         }
@@ -228,11 +244,15 @@ pub fn derive_history(events: &[SessionEventRow]) -> DeriveResult {
             // reconcile 出 DERIVE_ISSUE → 永久污染对账报告。
             // （model_switch 曾长期缺席此臂：生产事件已写入却恒产 DERIVE_ISSUE，
             // 2026-09-09 MA-3 探查实锤，随本批修复。）
+            // channel 三 kind（频道 v1）：选举过程 / 统筹者变更（轮外）/@ 跳，
+            // 行为性事实只进日志（C10b 分层）——派生投影在 channel 引擎 /
+            // 前端 ChannelNotice 消费，不产消息行。
             "message_error" | "message_discarded" | "turn_context" | "turn_ended"
             | "modal_adapted" | "hook_injected" | "attachment_stored" | "summary_created"
             | "summary_updated" | "tool_execution" | "plan_updated" | "model_switch"
             | "cross_session_message" | "cross_session_message_settled"
-            | "context_breakdown" => {}
+            | "context_breakdown" | "channel_election" | "channel_coordinator"
+            | "channel_mention" => {}
             other => result.issues.push(DeriveIssue {
                 seq,
                 kind: other.to_string(),

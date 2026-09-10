@@ -656,6 +656,9 @@ mod tests {
             model: None,
             source_seq: None,
             incoming_source: None,
+            sender_agent_id: None,
+            sender_agent_name: None,
+            turn_duration_ms: None,
         }
     }
 

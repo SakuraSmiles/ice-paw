@@ -463,12 +463,17 @@ mod tests {
         .unwrap();
         // conversations 表（01_init 最小形状）：migration 52 起 ALTER conversations
         // 加 inbox_policy，伪造库须有此表（同上：run 只看登记，但 52 真执行）。
+        // kind / project_id 列一并带上：migration 54 的部分唯一索引
+        // `ON conversations(project_id) WHERE kind='channel'` 引用两列，
+        // 缺列会让索引创建失败（run 真执行 54）。
         sqlx::query(
             "CREATE TABLE conversations (
               id TEXT PRIMARY KEY,
               agent_id TEXT NOT NULL,
               title TEXT NOT NULL DEFAULT '',
               pinned INTEGER NOT NULL DEFAULT 0,
+              kind TEXT,
+              project_id TEXT,
               created_at TEXT NOT NULL DEFAULT (datetime('now')),
               updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             )",

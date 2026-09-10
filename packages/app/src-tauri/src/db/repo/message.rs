@@ -68,7 +68,7 @@ pub async fn list_by_conversation(
 
     let rows = if let Some((before_ts, before_rowid)) = before {
         sqlx::query_as::<_, MessageRow>(
-            "SELECT id, conversation_id, role, content, content_blocks, token_count, error, created_at, rowid, summary_id, model, incoming_source
+            "SELECT id, conversation_id, role, content, content_blocks, token_count, error, created_at, rowid, summary_id, model, incoming_source, sender_agent_id
                FROM messages
               WHERE conversation_id = ?
                 AND (created_at < ? OR (created_at = ? AND rowid < ?))
@@ -84,7 +84,7 @@ pub async fn list_by_conversation(
         .await?
     } else {
         sqlx::query_as::<_, MessageRow>(
-            "SELECT id, conversation_id, role, content, content_blocks, token_count, error, created_at, rowid, summary_id, model, incoming_source
+            "SELECT id, conversation_id, role, content, content_blocks, token_count, error, created_at, rowid, summary_id, model, incoming_source, sender_agent_id
                FROM messages
               WHERE conversation_id = ?
               ORDER BY created_at DESC, rowid DESC
@@ -160,6 +160,43 @@ pub async fn list_turn_anchors(
         .collect())
 }
 
+/// 某消息之后的真实用户消息锚点（频道 v1 积压查询）。
+///
+/// [`TurnAnchor`] 同款排除（tool_result 占位行 + 空占位行——在途回合的工具轮
+/// user 行不是「用户发言」，混进来会把抢占检查误判成用户插话）；`rowid >` 以
+/// 消息 id 子查询定位（`sweep_sender_for_channel_turn` 同款模式）。按时间正序
+/// 返回——频道以「链头之后出现新 user 行」判定用户插话（C8 抢占检查），以
+/// 全部积压的**最后一条**为新链头。
+pub async fn list_user_anchors_after(
+    pool: &SqlitePool,
+    conversation_id: &str,
+    after_message_id: &str,
+) -> AppResult<Vec<TurnAnchor>> {
+    let rows: Vec<(String, Option<String>, String)> = sqlx::query_as(
+        "SELECT id, substr(content, 1, 120), created_at \
+           FROM messages \
+          WHERE conversation_id = ? AND role = 'user' \
+            AND rowid > (SELECT rowid FROM messages WHERE id = ?) \
+            AND NOT (TRIM(COALESCE(content, '')) = '' \
+                     AND COALESCE(content_blocks, '') LIKE '%\"type\":\"tool_result\"%') \
+            AND NOT (TRIM(COALESCE(content, '')) = '' \
+                     AND COALESCE(content_blocks, '') IN ('', '[]')) \
+          ORDER BY created_at ASC, rowid ASC",
+    )
+    .bind(conversation_id)
+    .bind(after_message_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(message_id, preview, created_at)| TurnAnchor {
+            message_id,
+            preview: preview.unwrap_or_default(),
+            created_at,
+        })
+        .collect())
+}
+
 /// 统计会话内的消息总数
 ///
 /// 返回 `i64` 以与 SQL `COUNT(*)` 对齐，且与 SQLite 的上限毫无关系。
@@ -184,7 +221,7 @@ pub async fn list_all_by_rowid(
     conversation_id: &str,
 ) -> AppResult<Vec<MessageRow>> {
     let rows = sqlx::query_as::<_, MessageRow>(
-        "SELECT id, conversation_id, role, content, content_blocks, token_count, error, created_at, rowid, summary_id, model, incoming_source
+        "SELECT id, conversation_id, role, content, content_blocks, token_count, error, created_at, rowid, summary_id, model, incoming_source, sender_agent_id
            FROM messages
           WHERE conversation_id = ?
           ORDER BY rowid ASC",
@@ -247,7 +284,7 @@ pub async fn get_content_blocks_by_id(pool: &SqlitePool, id: &str) -> AppResult<
 /// role/content/blocks/conversation_id；与私有 `get_by_id` 的 NotFound 语义区分）。
 pub async fn find_by_id(pool: &SqlitePool, id: &str) -> AppResult<Option<MessageRow>> {
     let row = sqlx::query_as::<_, MessageRow>(
-        "SELECT id, conversation_id, role, content, content_blocks, token_count, error, created_at, rowid, summary_id, model, incoming_source
+        "SELECT id, conversation_id, role, content, content_blocks, token_count, error, created_at, rowid, summary_id, model, incoming_source, sender_agent_id
            FROM messages WHERE id = ?",
     )
     .bind(id)
@@ -265,6 +302,33 @@ pub async fn set_incoming_source(pool: &SqlitePool, id: &str, json: &str) -> App
         .execute(pool)
         .await?;
     Ok(())
+}
+
+/// 频道发言者批量回填（C10 双轨列侧，`set_incoming_source` 同款二段写）。
+///
+/// 频道消费回合的 assistant 行由 run_agent_turn 正常创建（不带 sender——
+/// NewMessage 无此字段），引擎在回合完成后按「链头用户消息 rowid 起、
+/// `sender_agent_id IS NULL` 的 assistant 行」范围 sweep 打上执行成员 id。
+/// `IS NULL` 守卫保证幂等且不覆盖既有归属；行级渲染优先读本列（名字经
+/// 事件侧 SenderMeta 快照或查表得到）。返回受影响行数（0 = 无可标行，正常）。
+pub async fn sweep_sender_for_channel_turn(
+    pool: &SqlitePool,
+    conversation_id: &str,
+    since_message_id: &str,
+    agent_id: &str,
+) -> AppResult<u64> {
+    let affected = sqlx::query(
+        "UPDATE messages SET sender_agent_id = ? \
+         WHERE conversation_id = ? AND role = 'assistant' AND sender_agent_id IS NULL \
+           AND rowid >= (SELECT rowid FROM messages WHERE id = ?)",
+    )
+    .bind(agent_id)
+    .bind(conversation_id)
+    .bind(since_message_id)
+    .execute(pool)
+    .await?
+    .rows_affected();
+    Ok(affected)
 }
 
 /// 写入新消息
@@ -307,7 +371,7 @@ pub async fn create(pool: &SqlitePool, id: &str, new_msg: &NewMessage) -> AppRes
 
 async fn get_by_id(pool: &SqlitePool, id: &str) -> AppResult<MessageRow> {
     sqlx::query_as::<_, MessageRow>(
-        "SELECT id, conversation_id, role, content, content_blocks, token_count, error, created_at, rowid, summary_id, model, incoming_source
+        "SELECT id, conversation_id, role, content, content_blocks, token_count, error, created_at, rowid, summary_id, model, incoming_source, sender_agent_id
            FROM messages WHERE id = ?",
     )
     .bind(id)

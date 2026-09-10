@@ -30,11 +30,15 @@ use crate::infra::protocol::{ContentBlock, TokenUsage};
 ///
 /// `turn_id` 即 user_msg_id（每 turn 现生成 UUID v4，1:1 于 turn；重发 =
 /// 新 turn）。`agent_id` 用于 actor 标注（本期会话恒为该 agent，多 agent
-/// 通道落地时复用同一结构）。
+/// 通道落地时复用同一结构）。频道 v1：`agent_id` = 执行成员（回合级归因
+/// 已正确），`sender_name` 携带成员名字快照进 `AssistantMessagePayload.sender`
+/// （1v1 回合 None——隐含会话 agent，无需标注）。
 pub struct EventCtx {
     pub conv_id: String,
     pub turn_id: String,
     pub agent_id: String,
+    /// 频道回合执行成员名字快照（builder 注入；`new()` 三参签名不破 ~20 调用点）。
+    pub sender_name: Option<String>,
 }
 
 impl EventCtx {
@@ -44,7 +48,24 @@ impl EventCtx {
             conv_id: conv_id.to_string(),
             turn_id: turn_id.to_string(),
             agent_id: agent_id.to_string(),
+            sender_name: None,
         }
+    }
+
+    /// 频道回合注入成员名字（builder 式——调用链上仅 loop_engine 两处构造点需要）。
+    pub fn with_sender_name(mut self, name: Option<String>) -> Self {
+        self.sender_name = name;
+        self
+    }
+
+    /// assistant 消息的发送者元数据：频道回合 = (执行成员 id, 名字快照)。
+    pub fn sender_meta(&self) -> Option<SenderMeta> {
+        self.sender_name
+            .as_ref()
+            .map(|name| SenderMeta {
+                agent_id: self.agent_id.clone(),
+                agent_name: name.clone(),
+            })
     }
 
     /// actor 列取值：`agent:<uuid>`。
@@ -56,6 +77,11 @@ impl EventCtx {
 /// actor 列取值：`user`。
 pub fn actor_user() -> &'static str {
     "user"
+}
+
+/// actor 列取值：`system`（引擎决定类事件——选举裁决 / 换帅兜底 / @ 跳）。
+pub fn actor_system() -> &'static str {
+    "system"
 }
 
 // =========================================================================
@@ -70,7 +96,7 @@ pub struct SessionEventAppended {
     pub kind: String,
 }
 
-/// 进程内广播通道。append_event 是全部 18 kind 的唯一汇聚点，在这里 send
+/// 进程内广播通道。append_event 是全部 21 kind 的唯一汇聚点，在这里 send
 /// 一条通知即可覆盖所有事件源（含未来新增 kind），无需逐调用方接线。
 /// 无订阅者时 send 返回 Err——直接忽略（dev 测试 / 订阅任务未起时安静跳过）。
 static EVENT_BUS: OnceLock<broadcast::Sender<SessionEventAppended>> = OnceLock::new();
@@ -102,6 +128,11 @@ pub mod kind {
     pub const CROSS_SESSION_MESSAGE: &str = "cross_session_message";
     pub const CROSS_SESSION_MESSAGE_SETTLED: &str = "cross_session_message_settled";
     pub const CONTEXT_BREAKDOWN: &str = "context_breakdown";
+    /// 频道 v1 三 kind（design §3）：选举过程 / 统筹者变更（轮外）/ @ 跳。
+    /// derive skip 臂与前端 EV_KIND_TO_FILTER、summarizeEvent、laneOf 三处同步。
+    pub const CHANNEL_ELECTION: &str = "channel_election";
+    pub const CHANNEL_COORDINATOR: &str = "channel_coordinator";
+    pub const CHANNEL_MENTION: &str = "channel_mention";
 }
 
 // =========================================================================
@@ -219,6 +250,16 @@ pub struct IncomingSourceMeta {
     pub source_agent_name: String,
 }
 
+/// 频道发言者元数据（C10 双轨的事件侧；系统组装非 agent 手写）。
+/// agent_name 是**名字快照**——agent 后续改名/删除后回放仍显示发言当时的
+/// 名字（列侧 sender_agent_id 存 id，行级渲染优先读列、名字经查表可失效，
+/// 事件侧快照是归档频道的稳定真相）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SenderMeta {
+    pub agent_id: String,
+    pub agent_name: String,
+}
+
 /// assistant 消息权威快照（每轮 finalize 点一条）。
 ///
 /// **supersede 语义**：自动续写场景同一 message_id 会有多条本事件
@@ -237,6 +278,9 @@ pub struct AssistantMessagePayload {
     /// 真实条宽，且不受 created_at 秒精度限制）。旧事件无此字段 → None。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
+    /// 频道发言者（C10 双轨事件侧；1v1 回合 None = 隐含会话 agent，零标注）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender: Option<SenderMeta>,
     /// 工具轮序（0 起）
     pub round: u32,
     /// 自动续写（finish_reason=length/max_tokens 触发的同气泡续写）
@@ -481,6 +525,91 @@ pub struct CrossSessionMessageSettledPayload {
     pub by: String,
 }
 
+/// 频道自选举过程（design §3；一届选举 = started → N×vote → result 事件流，
+/// `turn_id = election:{发起消息id}` 归组）。actor=system；投票**内容**是成员
+/// 真话、走成员自己的 assistant 消息进共享流（C10b 分层），本事件只记引擎
+/// 观察到的投票事实。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelElectionPayload {
+    #[serde(default = "version_one")]
+    pub v: u8,
+    /// "started" | "vote" | "result"
+    pub phase: String,
+    /// phase=vote：一份投票（每次投票一条事件）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vote: Option<ChannelElectionVote>,
+    /// phase=result：票数表 + 胜者
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<ChannelElectionResult>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelElectionVote {
+    pub voter_agent_id: String,
+    /// 被投者（弃权 None——附 abstain_reason）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candidate_agent_id: Option<String>,
+    /// 理由摘要（投票 / 弃权共用）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelElectionResult {
+    /// 票数表（按 agent_id 排序稳定）
+    pub tally: Vec<ChannelElectionTallyItem>,
+    /// 胜者（全员弃权 = None → 统筹继续空缺，广播降级）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub winner_agent_id: Option<String>,
+    /// 平票裁决说明（"joined_at" = 最早加入者胜出）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tie_break: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelElectionTallyItem {
+    pub agent_id: String,
+    pub votes: u32,
+}
+
+/// 统筹者变更（轮外事件：无 turn_id，fork 创世 / backfill 同款容忍位）。
+/// actor 由 action 派生（appointed/removed = 用户手势 → user；
+/// elected/failed-over = 引擎决定 → system），emitter 内判定。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelCoordinatorPayload {
+    #[serde(default = "version_one")]
+    pub v: u8,
+    /// "elected"（自选举产出）| "appointed"（用户指定）| "removed"（用户罢免）
+    /// | "failed-over"（失败换帅自动补选）
+    pub action: String,
+    /// 变更后的统筹者（None = 空缺——罢免/换帅无继任，频道进广播降级态）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+    /// 原因（failed-over 带失败 streak 计数；user 指定带来源说明）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// @ 跳事实（跳发生与护栏拦截同记本 kind，拦截时带 blocked_reason）。
+/// `turn_id = chain:{链头消息id}`——事件 / 引擎 / 前端轨迹三侧同归组键。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelMentionPayload {
+    #[serde(default = "version_one")]
+    pub v: u8,
+    /// 发起方（None = 用户消息里的 @；Some = 成员回复终文里的 @）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_agent_id: Option<String>,
+    pub to_agent_id: String,
+    /// 本链当前跳序（1 起）
+    pub hop_index: u32,
+    /// 链剩余跳数（0 = 末跳）
+    pub chain_remaining: u32,
+    /// 护栏拦截原因：pair_repeat | chain_limit | frequency | ambiguous_name
+    /// | user_preempted（无 = 跳正常发生）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked_reason: Option<String>,
+}
+
 /// 上下文组成清单（③ 可观测化）——一条事件装整回合，构建期快照落库
 /// （turn_context 同类：非消息行事实，derive skip）。
 ///
@@ -566,7 +695,13 @@ async fn append_event(
         &ctx.conv_id,
         kind,
         actor,
-        Some(&ctx.turn_id),
+        // 空串降级 NULL：轮外事件（channel_coordinator 等）无 turn 归组，
+        // 存空串会让 reconcile 的 turn 集合出现 "" 假锚点。
+        if ctx.turn_id.is_empty() {
+            None
+        } else {
+            Some(&ctx.turn_id)
+        },
         message_id,
         &json,
     )
@@ -669,6 +804,7 @@ pub async fn log_assistant_message(
         blocks: refify_blocks(message_id, blocks),
         token_count,
         duration_ms,
+        sender: ctx.sender_meta(),
         round,
         continuation,
     };
@@ -981,6 +1117,58 @@ pub async fn log_cross_session_message_settled(
         payload,
     )
     .await;
+}
+
+// =========================================================================
+// 频道 v1 emitters（design §3：选举 / 统筹者变更 / @ 跳）
+// =========================================================================
+
+/// 选举过程事实。`ctx.turn_id` 须传 `election:{发起消息id}`（调用方格式化）。
+pub async fn log_channel_election(
+    pool: &SqlitePool,
+    ctx: &EventCtx,
+    message_id: &str,
+    payload: &ChannelElectionPayload,
+) {
+    append_event(
+        pool,
+        ctx,
+        kind::CHANNEL_ELECTION,
+        actor_system(),
+        Some(message_id),
+        payload,
+    )
+    .await;
+}
+
+/// 统筹者变更（轮外事件，无 turn_id——ctx.turn_id 传空串占位即可，落库侧
+/// turn_id 只在非空时才写）。actor 按 action 派生（用户手势 vs 引擎决定）。
+pub async fn log_channel_coordinator(
+    pool: &SqlitePool,
+    ctx: &EventCtx,
+    payload: &ChannelCoordinatorPayload,
+) {
+    let actor = if matches!(payload.action.as_str(), "appointed" | "removed") {
+        actor_user()
+    } else {
+        actor_system()
+    };
+    append_event(pool, ctx, kind::CHANNEL_COORDINATOR, actor, None, payload).await;
+}
+
+/// @ 跳事实。`ctx.turn_id` 须传 `chain:{链头消息id}`；`message_id` = 携带 @
+/// 的那条消息（用户消息或成员回复终文）。
+pub async fn log_channel_mention(
+    pool: &SqlitePool,
+    ctx: &EventCtx,
+    message_id: &str,
+    payload: &ChannelMentionPayload,
+) {
+    let actor = match payload.from_agent_id.as_deref() {
+        Some(id) => format!("agent:{id}"),
+        None => actor_user().to_string(),
+    };
+    append_event(pool, ctx, kind::CHANNEL_MENTION, &actor, Some(message_id), payload).await;
 }
 
 // =========================================================================

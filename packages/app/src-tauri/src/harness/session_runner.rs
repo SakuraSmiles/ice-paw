@@ -117,6 +117,16 @@ pub(crate) struct AgentTurnInput {
     /// messages.incoming_source（migration 53）+ user_message 事件 payload，
     /// 前端 incoming 卡的权威数据源。
     pub incoming_source: Option<crate::harness::event_log::IncomingSourceMeta>,
+    /// 频道 v1：执行成员名字快照——EventCtx.sender_name → assistant 事件
+    /// payload.sender（C10 双轨事件侧）+ 行级 sender sweep 的名字来源。
+    /// 1v1 / 委派回合 None（隐含会话 agent / 委派归父，无需标注）。
+    pub sender_name: Option<String>,
+    /// 频道 v1：用户消息已由发送入口物化（C8 两步拆分——行/事件/附件全在流里，
+    /// 回合只负责起跑）。true 时跳过用户侧落库与 user_message/attachment 事件
+    /// （重复 INSERT 会 PK 冲突，重复事件会污染对账平面）。链头锚定约定：
+    /// `user_msg_id` = 本链**最后一条**用户消息 id（reconcile 走查按位置把其后的
+    /// assistant 行归到最新 user 锚点下，事件侧 turn_id 必须同锚才构造性对齐）。
+    pub pre_materialized: bool,
     pub tools_enabled: bool,
     pub model_override: Option<String>,
     /// 已注册到 ChatState 的取消令牌（用户=新建；委派=父 token 的子链）
@@ -151,6 +161,8 @@ pub(crate) async fn run_agent_turn(
         attach_file_inputs,
         emit_user_blocks,
         incoming_source,
+        sender_name,
+        pre_materialized,
         tools_enabled,
         model_override,
         cancel_token,
@@ -257,10 +269,10 @@ pub(crate) async fn run_agent_turn(
         crate::harness::modal::gather_vision_candidates(env.tool_app.as_ref(), pool).await;
 
     // MA-1：可调度清单注入——主 agent 感知「能调度谁」（项目成员优先，否则全部
-    // agent，见 delegate::resolve_dispatchable）。仅用户会话：delegation 子会话没有
-    // delegate 工具（下方组装期按 kind 注册），注入清单只会误导。解析失败降级为
-    // 跳过注入（不阻塞发送；工具调用时还有集合校验兜底）。
-    if tools_enabled && conv.kind == "chat" {
+    // agent，见 delegate::resolve_dispatchable）。仅用户会话（1v1 + 频道成员同权）：
+    // delegation 子会话没有 delegate 工具（下方组装期按 kind 注册），注入清单只会
+    // 误导。解析失败降级为跳过注入（不阻塞发送；工具调用时还有集合校验兜底）。
+    if tools_enabled && matches!(conv.kind.as_str(), "chat" | "channel") {
         match crate::harness::mcp::delegate::resolve_dispatchable(
             pool,
             conv.project_id.as_deref(),
@@ -353,95 +365,101 @@ pub(crate) async fn run_agent_turn(
 
     // --- Pipeline 成功 → 落库（用户消息 + 分页块 + assistant 占位） ---
     // 全部 DB 写入推迟到此刻：前置任一失败都不落任何行，无孤儿用户消息。
-    // content_text 快照供 user_message 事件（create 会 move）。
-    let user_content_snapshot = content_text.clone();
-    repo::message::create(
-        pool,
-        &user_msg_id,
-        &NewMessage {
-            conversation_id: conv_id.clone(),
-            role: "user".into(),
-            content: content_text.clone(),
-            token_count: None,
-            error: None,
-            model: None,
-        },
-    )
-    .await?;
     // 回填 content_blocks：用适配前的原始 persist_blocks（含原图 + 附件卡片/正文）。
     // 视觉适配只改发给 LLM 的 messages，不改用户落库内容——历史回看须保留用户真实发送的图片。
     let blocks_json = serde_json::to_string(&persist_blocks).unwrap_or_else(|_| "[]".into());
-    repo::message::update_content_blocks(pool, &user_msg_id, &blocks_json).await?;
-    // 大附件分页块：消息行已存在（FK 父满足）。幂等：先清旧再批量插。
-    if !attach_db_inputs.is_empty() {
-        repo::message_attachment::delete_by_message(pool, &user_msg_id).await?;
-        repo::message_attachment::insert_batch(pool, &user_msg_id, &attach_db_inputs).await?;
-    }
-    // Phase B 视觉候选文件字节（扫描件等，文本提取为空）：同批写入。
-    if !attach_file_inputs.is_empty() {
-        repo::message_attachment_file::delete_by_message(pool, &user_msg_id).await?;
-        repo::message_attachment_file::insert_batch(pool, &user_msg_id, &attach_file_inputs)
-            .await?;
-    }
-    // MA-3 来件元数据（update_content_blocks 同款二段写；普通回合 None 零开销）。
-    if let Some(meta) = incoming_source.as_ref() {
-        if let Ok(json) = serde_json::to_string(meta) {
-            repo::message::set_incoming_source(pool, &user_msg_id, &json).await?;
-        }
-    }
-
-    // --- session_events 影子写入（Phase 0）：turn 用户侧事实 ---
+    // 本 turn 的事件上下文（守卫外声明：turn_context / 钩子事件两处下游复用——
+    // 频道消费回合跳过用户侧落库，但回合级快照照发）。
     let ev = EventCtx::new(&conv_id, &user_msg_id, &agent.id);
-    event_log::log_user_message(
-        pool,
-        &ev,
-        &user_msg_id,
-        &user_content_snapshot,
-        &persist_blocks,
-        incoming_source.as_ref(),
-    )
-    .await;
-    // 附件留存事实——仅元信息（正文在 messages/分页表，字节在 files 表；防三重冗余）。
-    if !attach_db_inputs.is_empty() {
-        event_log::log_attachment_stored(
+    // 频道消费回合（pre_materialized，C8 两步拆分的第二步）：用户侧行与事件已由
+    // 发送入口（chat_cmd 频道分支）先行落库——此处重复 INSERT 会 PK 冲突、重复
+    // user_message 事件污染对账平面，整块跳过。assistant 占位行照常创建；query
+    // 仍取触发内容（HistoryStage 已能读到物化行，llm_blocks 只装事实简报防双计）。
+    if !pre_materialized {
+        repo::message::create(
+            pool,
+            &user_msg_id,
+            &NewMessage {
+                conversation_id: conv_id.clone(),
+                role: "user".into(),
+                content: content_text.clone(),
+                token_count: None,
+                error: None,
+                model: None,
+            },
+        )
+        .await?;
+        repo::message::update_content_blocks(pool, &user_msg_id, &blocks_json).await?;
+        // 大附件分页块：消息行已存在（FK 父满足）。幂等：先清旧再批量插。
+        if !attach_db_inputs.is_empty() {
+            repo::message_attachment::delete_by_message(pool, &user_msg_id).await?;
+            repo::message_attachment::insert_batch(pool, &user_msg_id, &attach_db_inputs).await?;
+        }
+        // Phase B 视觉候选文件字节（扫描件等，文本提取为空）：同批写入。
+        if !attach_file_inputs.is_empty() {
+            repo::message_attachment_file::delete_by_message(pool, &user_msg_id).await?;
+            repo::message_attachment_file::insert_batch(pool, &user_msg_id, &attach_file_inputs)
+                .await?;
+        }
+        // MA-3 来件元数据（update_content_blocks 同款二段写；普通回合 None 零开销）。
+        if let Some(meta) = incoming_source.as_ref() {
+            if let Ok(json) = serde_json::to_string(meta) {
+                repo::message::set_incoming_source(pool, &user_msg_id, &json).await?;
+            }
+        }
+
+        // --- session_events 影子写入（Phase 0）：turn 用户侧事实 ---
+        event_log::log_user_message(
             pool,
             &ev,
             &user_msg_id,
-            &event_log::AttachmentStoredPayload::Pages {
-                v: 1,
-                items: attach_db_inputs
-                    .iter()
-                    .map(|c| event_log::AttachmentPageItem {
-                        idx: c.idx,
-                        name: c.name.clone(),
-                        kind: c.kind.clone(),
-                        label: c.label.clone(),
-                        token_est: c.token_est,
-                    })
-                    .collect(),
-            },
+            &content_text,
+            &persist_blocks,
+            incoming_source.as_ref(),
         )
         .await;
-    }
-    if !attach_file_inputs.is_empty() {
-        event_log::log_attachment_stored(
-            pool,
-            &ev,
-            &user_msg_id,
-            &event_log::AttachmentStoredPayload::Bytes {
-                v: 1,
-                items: attach_file_inputs
-                    .iter()
-                    .map(|f| event_log::AttachmentBytesItem {
-                        idx: f.idx,
-                        name: f.name.clone(),
-                        ext: f.ext.clone(),
-                        bytes_len: f.bytes.len(),
-                    })
-                    .collect(),
-            },
-        )
-        .await;
+        // 附件留存事实——仅元信息（正文在 messages/分页表，字节在 files 表；防三重冗余）。
+        if !attach_db_inputs.is_empty() {
+            event_log::log_attachment_stored(
+                pool,
+                &ev,
+                &user_msg_id,
+                &event_log::AttachmentStoredPayload::Pages {
+                    v: 1,
+                    items: attach_db_inputs
+                        .iter()
+                        .map(|c| event_log::AttachmentPageItem {
+                            idx: c.idx,
+                            name: c.name.clone(),
+                            kind: c.kind.clone(),
+                            label: c.label.clone(),
+                            token_est: c.token_est,
+                        })
+                        .collect(),
+                },
+            )
+            .await;
+        }
+        if !attach_file_inputs.is_empty() {
+            event_log::log_attachment_stored(
+                pool,
+                &ev,
+                &user_msg_id,
+                &event_log::AttachmentStoredPayload::Bytes {
+                    v: 1,
+                    items: attach_file_inputs
+                        .iter()
+                        .map(|f| event_log::AttachmentBytesItem {
+                            idx: f.idx,
+                            name: f.name.clone(),
+                            ext: f.ext.clone(),
+                            bytes_len: f.bytes.len(),
+                        })
+                        .collect(),
+                },
+            )
+            .await;
+        }
     }
 
     let asst_msg_id = Uuid::new_v4().to_string();
@@ -542,17 +560,19 @@ pub(crate) async fn run_agent_turn(
         let snap = filter_tools_by_allowlist(snap, allow.as_deref());
         let reg = McpRegistry::from_map(snap);
 
-        // MA-1：delegate 工具按会话类型注册——只有用户会话（kind='chat'）可发起
-        // 委派。全局注册表不含此工具（register_builtin 不注入），组装期按 kind
-        // 决定：delegation 子会话拿不到它 → 委派深度=1 的结构性护栏（接收方不能
-        // 二次委派，「A委派B、B委派回A」的乒乓球在结构上不可能）。
-        // MA-3：send_message_to_session 同条件注册——delegation 子会话同样拿不到
-        // 跨会话投递（防子会话侧信道绕过委派深度护栏；委派要回话走 tool_result）；
-        // list_conversations（寻址发现，只读概述）同条件——子会话无投递能力，
-        // 发现列表对它也只是噪音。
-        if conv.kind == "chat" {
+        // MA-1：delegate 工具按会话类型注册——用户会话（kind='chat'|'channel'）可
+        // 发起委派（频道成员同权：委派是任务分发，与频道接力正交）。全局注册表
+        // 不含此工具（register_builtin 不注入），组装期按 kind 决定：delegation
+        // 子会话拿不到它 → 委派深度=1 的结构性护栏（接收方不能二次委派，
+        // 「A委派B、B委派回A」的乒乓球在结构上不可能）。
+        // MA-3：relay 两工具仅 1v1 会话（kind='chat'）——delegation 子会话拿不到
+        // 跨会话投递（防侧信道绕过委派深度护栏；委派要回话走 tool_result）；频道
+        // 也不给（design §9 v1 边界：频道内不做跨会话投递，成员协作走共享流本身）。
+        if matches!(conv.kind.as_str(), "chat" | "channel") {
             reg.register(Arc::new(crate::harness::mcp::delegate::DelegateTool))
                 .await;
+        }
+        if conv.kind == "chat" {
             reg.register(Arc::new(crate::harness::mcp::relay::SendToSessionTool))
                 .await;
             reg.register(Arc::new(crate::harness::mcp::relay::ListConversationsTool))
@@ -682,6 +702,7 @@ pub(crate) async fn run_agent_turn(
         auth_session: env.auth_sessions.session_for(&conv.id),
         tool_registry,
         agent_id: conv.agent_id.clone(),
+        sender_name,
         project_id: conv.project_id.clone(),
         hooks,
         fallback,
@@ -789,6 +810,8 @@ pub(crate) struct StreamLoopInput {
     pub auth_session: crate::harness::authority::PathAuthSession,
     pub tool_registry: McpRegistry,
     pub agent_id: String,
+    /// 频道回合执行成员名字快照（C10 双轨 sender 事件侧的数据源；1v1 None）。
+    pub sender_name: Option<String>,
     pub project_id: Option<String>,
     pub hooks: HookConfig,
     /// 降级链（B2-S2）：透传进 LoopContext，换档发生在 stream_with_retry 重试现场
@@ -830,6 +853,7 @@ pub(crate) fn spawn_stream_loop(input: StreamLoopInput) {
         auth_session,
         tool_registry,
         agent_id,
+        sender_name,
         project_id,
         hooks,
         fallback,
@@ -889,6 +913,7 @@ pub(crate) fn spawn_stream_loop(input: StreamLoopInput) {
             asst_msg_id,
             user_msg_id,
             agent_id,
+            sender_agent_name: sender_name,
             project_id,
             emitter,
             tool_app,

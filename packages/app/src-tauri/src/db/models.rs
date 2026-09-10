@@ -541,6 +541,10 @@ pub struct ConversationRow {
     /// MA-3: 收件政策 'accept' | 'hold' | 'refuse'（migration 52，默认 'accept'
     /// ——2026-09-10 拍板：投递即自动消费，hold 扣住待批准是显式选择）
     pub inbox_policy: String,
+    /// 频道 v1: 归档时刻（migration 54，NULL = 活会话）。频道在项目永久删除时
+    /// 软删除为只读归档保留聊天记录；普通会话恒 NULL。
+    #[sqlx(default)]
+    pub archived_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -569,6 +573,9 @@ pub struct Conversation {
     /// MA-3: 收件政策 'accept' | 'hold' | 'refuse'（serde default 兼容旧缓存负载）
     #[serde(default = "default_inbox_policy")]
     pub inbox_policy: String,
+    /// 频道 v1: 归档时刻（NULL = 活会话；Some = 只读归档频道，原项目已删除）
+    #[serde(default)]
+    pub archived_at: Option<String>,
 }
 
 /// `kind` 的 serde 默认值（旧负载无此字段时视为普通聊天会话）
@@ -608,6 +615,7 @@ impl From<ConversationRow> for Conversation {
             } else {
                 row.inbox_policy
             },
+            archived_at: row.archived_at,
         }
     }
 }
@@ -669,6 +677,21 @@ pub struct MessageRow {
     /// IncomingSourceMeta 序列化。`#[sqlx(default)]` 兼容未列本列的 SELECT。
     #[sqlx(default)]
     pub incoming_source: Option<String>,
+    /// 频道 v1 发送者归属（migration 54，NULL = 用户消息或 1v1 隐含会话 agent）：
+    /// 共享流多成员发言的行级权威。二段 UPDATE 写入（`NewMessage` 不扩字段），
+    /// `#[sqlx(default)]` 兼容未列本列的 SELECT。
+    #[sqlx(default)]
+    pub sender_agent_id: Option<String>,
+    /// 发送者名字快照（**非表列**，仅 derive 读路径填充）：源 = 事件 payload
+    /// AssistantMessagePayload.sender.agent_name——归档频道成员表随项目删除后
+    /// 回看仍能显示名字。DB SELECT 读出的行恒 None。
+    #[sqlx(default)]
+    pub sender_agent_name: Option<String>,
+    /// 回合时长毫秒（**非表列**，C8b，仅 derive 读路径填充）：源 = 事件 payload
+    /// duration_ms（supersede last-wins）。完成时间 = 行 created_at + 时长——
+    /// 频道页「生成中发出」判定原料。DB SELECT 读出的行恒 None。
+    #[sqlx(default)]
+    pub turn_duration_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -696,6 +719,15 @@ pub struct Message {
     /// 降级 None——前端回落文本前缀解析，坏 JSON 不阻塞消息展示）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub incoming_source: Option<crate::harness::event_log::IncomingSourceMeta>,
+    /// 频道 v1 发送者 agent id（行级权威；NULL = 用户消息或 1v1 隐含会话 agent）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sender_agent_id: Option<String>,
+    /// 发送者名字快照（事件 payload 派生；频道页行级头像/名字显示用）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sender_agent_name: Option<String>,
+    /// 回合时长毫秒（C8b 派生；完成时间 = created_at + 时长，频道页区间标注用）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_duration_ms: Option<i64>,
 }
 
 impl From<MessageRow> for Message {
@@ -716,6 +748,9 @@ impl From<MessageRow> for Message {
                 .incoming_source
                 .as_deref()
                 .and_then(|s| serde_json::from_str(s).ok()),
+            sender_agent_id: row.sender_agent_id,
+            sender_agent_name: row.sender_agent_name,
+            turn_duration_ms: row.turn_duration_ms,
         }
     }
 }

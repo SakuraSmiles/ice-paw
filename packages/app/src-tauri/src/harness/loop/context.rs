@@ -42,6 +42,10 @@ pub(crate) struct LoopConfig {
     pub user_msg_id: String,
     /// RAG: 当前 Agent ID（透传给 ToolContext）
     pub agent_id: String,
+    /// 频道 v1：执行成员名字快照（C10 双轨 sender 事件侧——loop_engine 构造
+    /// EventCtx 时 `.with_sender_name` 注入，进 assistant_message payload.sender；
+    /// 1v1 回合 None = 隐含会话 agent，零标注）。
+    pub sender_agent_name: Option<String>,
     /// RAG: 当前项目 ID
     pub project_id: Option<String>,
 

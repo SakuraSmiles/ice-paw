@@ -53,6 +53,11 @@ pub struct SendMessageInput {
     /// `materialize_file_blocks`），因此不进 `ContentBlock` 枚举、base64 不落盘。
     #[serde(default)]
     pub files: Option<Vec<AttachedFile>>,
+    /// 频道 v1（C9 用户侧结构化 mentions）：前端 @ 弹层选中的成员 agent id 列表。
+    /// 仅 `kind='channel'` 会话消费（1v1 会话忽略）——零解析歧义，不生成
+    /// reference 块；成员侧的 @ 识别走后端文本解析（另一条通路）。
+    #[serde(default)]
+    pub mentions: Option<Vec<String>>,
 }
 
 /// 聊天文件附件（office/pdf）。

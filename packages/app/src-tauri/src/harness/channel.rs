@@ -1,0 +1,1273 @@
+//! 频道 v1 串行共享流引擎（项目频道 = 多成员共享一个对话流）。
+//!
+//! 与既有两条协作通道的分工：**委派**（delegate）是同步阻塞的父子任务单元、
+//! **跨会话投递**（inbox）是异步的对话单元——频道是**共址**单元：成员不互发
+//! 消息，而是读同一份会话历史（共享流），一时刻只有一名成员发言（chat_state
+//! 单写者结构性保证）。被 @ 的成员跑一个完整回合（复用
+//! [`session_runner::run_agent_turn`] 全链路：预算/工具/hooks/事件照常）。
+//!
+//! ## 路由（C3）
+//!
+//! - 用户消息带结构化 mentions（前端 @ 弹层）→ 被 @ 成员按出现序串行接令；
+//! - 无 @ 广播 → 统筹者（project_agents.role='coordinator'）接令；
+//! - 统筹空缺 → 批 2 选举接入前：消息诚实落流等待（warn 日志）；
+//! - 成员回复终文里的 @（文本解析，C9 成员侧规则）→ 回合结束触发接力。
+//!
+//! ## 发送两步拆分（C8）
+//!
+//! 用户消息**物化无条件成功**（行 + user_message 事件 + 附件即时落流，气泡
+//! 立即可见）；触发是第二步——会话在途就只落流（DB 的「链头之后新 user 行」
+//! 即积压真相），回合结束触发点接管：取消剩余接力 → CHAIN_HEAD_QUIET 静默
+//! 窗口（说完一起听）→ 积压全部消息合并为新链头（mentions = 各条顺序并集
+//! 去重）→ 走路由。真实还原群聊体验：执行期间插话不会丢也不会打断当前回合。
+//!
+//! ## 事实分层（C10b）
+//!
+//! 内容性事实（谁说了什么）物化 messages 行；行为性事实（引擎做了什么——
+//! 路由/接力/护栏拦截）只 append `channel_mention` 事件，不物化系统消息行
+//! （对账平面保持构造性零 diff）；对 agent 的告知走**频道事实简报**（回合
+//! 启动注入 llm_blocks、用完即弃不落库）。
+//!
+//! ## 链状态（内存态）
+//!
+//! 链头锚定 / 跳计数 / 有序对重复表 / 唤醒频率窗口全部内存（重启清零 = 链
+//! 死，诚实可接受——链是分钟级生命周期；落库可观测性全靠 `channel_mention`
+//! 事件，重启后轨迹仍完整）。**积压以 DB 为真相源**（流里链头之后的 user
+//! 锚点行），内存标记只是触发捷径——两者漂移时抢占检查按 DB 为准。
+//!
+//! ## 并发（设计稿 §4 定案：不追求 runtime 完美互斥）
+//!
+//! chat_state.start 是最终仲裁：两路并发触发时一路 start 成功、另一路把跳
+//! 放回队首静默退出，backlog 机制保证消息不丢自愈。已知残余：极窄竞速窗口
+//! 下同一跳可能多跑一回合（方向是「多干活」非丢消息，诚实可接受）。
+//!
+//! ## 护栏（防接力链无限延长与循环互 @）
+//!
+//! 串行共享流下不存在并发风暴，风暴只剩链无限延长（MAX_CHAIN_TURNS）与
+//! 乒乓互 @（MAX_PAIR_REPEAT）两形态。哲学同 inbox 的 MANUAL_REPLY_GUARD：
+//! **护栏不依赖模型听话**（系统级计数拦截）。频率闸（MENTION_WINDOW /
+//! MENTION_MAX_PER_MEMBER）只拦成员触发的跳——用户触发的跳不占频率（用户
+//! 治理权最大，且积压合并机制下用户跳不存在风暴面）。
+
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
+
+use sqlx::SqlitePool;
+use tauri::{AppHandle, Manager};
+
+use crate::commands::agent_cmd::AgentCmd;
+use crate::db::models::{ConversationRow, NewMessage};
+use crate::db::repo::{self, message::TurnAnchor};
+use crate::error::{AppError, AppResult};
+use crate::harness::chat_state::ChatState;
+use crate::harness::event_log::{self, ChannelMentionPayload, EventCtx};
+use crate::harness::provider;
+use crate::harness::session_runner::{self, AgentTurnInput, TurnEnv};
+use crate::infra::protocol::{AttachedFile, ContentBlock};
+
+/// 单条用户消息（合并后的新链头）触发的连续成员回合上限。
+/// 达到上限不再触发，`channel_mention` 记 chain_limit（前端提示条指路用户推进）。
+const MAX_CHAIN_TURNS: usize = 8;
+/// 同一有序对（发起者→被@者）在一条链内出现次数上限——A@B、B@A、A@B 第三次拦。
+const MAX_PAIR_REPEAT: usize = 2;
+/// 单条消息（或合并新链头）的 @ 数量上限，超出截断 + 诚实事件提示。
+const MAX_MENTIONS_PER_MSG: usize = 5;
+/// 成员唤醒频率窗口与上限（对齐 inbox AUTO_WINDOW/AUTO_CONSUME_MAX 同源语义：
+/// 「外部触发的回合频率」；只拦成员触发的跳，用户跳不占）。
+const MENTION_WINDOW: Duration = Duration::from_secs(600);
+const MENTION_MAX_PER_MEMBER: usize = 6;
+/// 用户积压 → 新链头启动前的静默窗口（C8）：窗口内又有新用户消息则重置
+/// ——「说完一起听」，防连发被拆成多条碎链。
+const CHAIN_HEAD_QUIET: Duration = Duration::from_secs(3);
+/// 等会话静默的轮询节奏与上限（inbox drain 同款：turn_ended 广播先于 cleanup
+/// unregister，正常 cleanup 在广播后数百 ms 内完成）。
+const QUIET_POLL: Duration = Duration::from_secs(2);
+const QUIET_TIMEOUT: Duration = Duration::from_secs(30);
+
+// =========================================================================
+// 纯函数：路由与 @ 文本解析（测试不依赖 DB）
+// =========================================================================
+
+/// 用户消息的路由决策（C3 路由表的函数化）。
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum ChannelRoute {
+    /// 串行触发这些成员（mentions 点名，或广播 → 统筹者单元素）
+    Members(Vec<String>),
+    /// 统筹空缺（项目无 role='coordinator' 成员）——批 2 选举接入
+    NeedsCoordinator,
+}
+
+/// 路由附注（诚实披露：截断与非成员过滤都让用户/前端可见，不静默吞）。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct RouteNotes {
+    /// 被 MAX_MENTIONS_PER_MSG 截断掉的数量
+    pub truncated: usize,
+    /// 被成员资格过滤掉的 mention 数
+    pub non_member: usize,
+}
+
+/// 路由一条（可能已合并多条积压的）用户消息。
+///
+/// mentions 非空 → 校验成员资格 + 去重保序 + 上限截断；空 → 统筹者接令；
+/// 统筹空缺 → NeedsCoordinator。统筹者同时出现在 mentions 里不特殊处理
+/// （@统筹者 = 点名，与广播接令同效，C3）。
+pub(crate) fn route_user_message(
+    mentions: &[String],
+    member_ids: &[String],
+    coordinator_id: Option<&str>,
+) -> (ChannelRoute, RouteNotes) {
+    let mut notes = RouteNotes::default();
+    let mut valid: Vec<String> = Vec::new();
+    for m in mentions {
+        if !member_ids.contains(m) {
+            notes.non_member += 1;
+            continue;
+        }
+        if !valid.contains(m) {
+            valid.push(m.clone());
+        }
+    }
+    if valid.len() > MAX_MENTIONS_PER_MSG {
+        notes.truncated = valid.len() - MAX_MENTIONS_PER_MSG;
+        valid.truncate(MAX_MENTIONS_PER_MSG);
+    }
+    if !valid.is_empty() {
+        return (ChannelRoute::Members(valid), notes);
+    }
+    match coordinator_id {
+        Some(c) => (ChannelRoute::Members(vec![c.to_string()]), notes),
+        None => (ChannelRoute::NeedsCoordinator, notes),
+    }
+}
+
+/// 成员回复终文的 @ 文本解析（C9 成员侧规则）。
+///
+/// - `@` 后按**最长前缀**精确匹配成员名（有「张三」「张三丰」时 @张三丰 命中后者）；
+/// - 重名歧义（同长度多个不同成员命中）不触发——诚实不猜；
+/// - 非成员名忽略（提及非成员不是指令）；
+/// - email 场景防御：`@` 前是字母/数字/下划线（xx@yy.com）不算 mention；
+/// - 结果去重保序，超过 [`MAX_MENTIONS_PER_MSG`] 截断；
+/// - `exclude`（发起者自身）过滤——@自己无接力意义。
+pub(crate) fn parse_agent_mentions(
+    text: &str,
+    members: &[(String, String)],
+    exclude: Option<&str>,
+) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out: Vec<String> = Vec::new();
+    for i in 0..chars.len() {
+        if chars[i] != '@' {
+            continue;
+        }
+        // email 防御：@ 紧跟在词字符之后不算 mention
+        if i > 0 && (chars[i - 1].is_alphanumeric() || chars[i - 1] == '_') {
+            continue;
+        }
+        let rest: String = chars[i + 1..].iter().collect();
+        // 最长前缀匹配；同长多命中（重名）= 歧义，跳过该位置
+        let mut best: Option<(&String, usize)> = None;
+        let mut ambiguous = false;
+        for (id, name) in members {
+            if name.is_empty() || !rest.starts_with(name.as_str()) {
+                continue;
+            }
+            match best {
+                Some((_, len)) if name.chars().count() > len => {
+                    best = Some((id, name.chars().count()));
+                    ambiguous = false;
+                }
+                Some((_, len)) if name.chars().count() == len => {
+                    // 同名不同 id 才算歧义（同 id 重复入列不会发生）
+                    if best.map(|(b, _)| b.as_str()) != Some(id.as_str()) {
+                        ambiguous = true;
+                    }
+                }
+                _ => best = Some((id, name.chars().count())),
+            }
+        }
+        let Some((id, _name_len)) = best else { continue };
+        if ambiguous {
+            tracing::info!(target: "ice_paw.channel", "成员名重名歧义，@ 不触发接力");
+            continue;
+        }
+        let id = id.clone();
+        if Some(id.as_str()) == exclude {
+            continue;
+        }
+        if !out.contains(&id) {
+            out.push(id);
+        }
+    }
+    if out.len() > MAX_MENTIONS_PER_MSG {
+        out.truncate(MAX_MENTIONS_PER_MSG);
+    }
+    out
+}
+
+/// 频道消费回合的事实简报规格（触发语境两形态）。
+pub(crate) enum BriefSpec {
+    /// 用户链头消费（count = 合并进本链头的积压条数）
+    UserBacklog { count: usize },
+    /// 成员接力跳
+    Relay { from_name: String },
+}
+
+/// 频道消费回合的事实简报（C10b：回合启动注入 llm_blocks，用完即弃不落库）。
+///
+/// 用户原话已在历史尾部（物化先行 + HistoryStage 全量读），简报只说明触发语境
+/// 防双计——这是频道回合「当前轮 user 消息」的全部内容。
+pub(crate) fn compose_channel_brief(brief: &BriefSpec) -> Vec<ContentBlock> {
+    let text = match brief {
+        BriefSpec::UserBacklog { count } => {
+            if *count > 1 {
+                format!(
+                    "[频道事实] 用户发送了 {count} 条新消息（见上方最近的用户消息，发出于上一回合执行期间），按时间先后理解为递进指示，请一并处理。"
+                )
+            } else {
+                "[频道事实] 用户在频道发送了新消息（见上方最近的用户消息），请处理。".to_string()
+            }
+        }
+        BriefSpec::Relay { from_name } => {
+            format!("[频道事实] 成员 {from_name} 在最近的回复中 @你并期待你接手，请阅读其消息并处理。")
+        }
+    };
+    vec![ContentBlock::text(text)]
+}
+
+// =========================================================================
+// 链运行时（内存态；临界区无 await）
+// =========================================================================
+
+/// 一跳（待执行或在途）。
+#[derive(Debug, Clone)]
+struct Hop {
+    agent_id: String,
+    /// 发起方（None = 用户消息触发；Some = 成员接力 from）
+    from: Option<String>,
+}
+
+/// 单频道运行时。字段语义见模块文档「链状态」。
+#[derive(Debug, Default)]
+struct ChannelRuntime {
+    /// 链头 = 触发本链的最后一条用户消息 id（run_agent_turn 的 turn_id 锚）
+    head_msg_id: Option<String>,
+    /// 已**发起**的成员回合计数（含在途；MAX_CHAIN_TURNS 计数口径）
+    turns_taken: usize,
+    /// 有序对计数（成员→成员；用户跳不计——无乒乓语义）
+    pair_counts: HashMap<(String, String), usize>,
+    /// 待执行跳队列（front = 下一跳）
+    pending: VecDeque<Hop>,
+    /// 在途跳（发起时记、回合结束时清——sender sweep 的执行成员来源）
+    current: Option<Hop>,
+    /// 各成员唤醒时刻窗（频率闸；只登记成员触发的跳）
+    wake_history: HashMap<String, VecDeque<Instant>>,
+    /// 物化待并集的用户 mentions（内存捷径；重启丢失 → 降级广播路由，可接受）
+    backlog_mentions: Vec<String>,
+}
+
+static RUNTIMES: OnceLock<Mutex<HashMap<String, ChannelRuntime>>> = OnceLock::new();
+
+fn runtimes() -> &'static Mutex<HashMap<String, ChannelRuntime>> {
+    RUNTIMES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 唤醒频率闸（成员跳专用）：窗口内已满 → false。
+fn wake_reserve(rt: &mut ChannelRuntime, agent_id: &str, now: Instant) -> bool {
+    let q = rt.wake_history.entry(agent_id.to_string()).or_default();
+    let cutoff = now - MENTION_WINDOW;
+    while q.front().is_some_and(|t| *t < cutoff) {
+        q.pop_front();
+    }
+    if q.len() >= MENTION_MAX_PER_MEMBER {
+        return false;
+    }
+    q.push_back(now);
+    true
+}
+
+// =========================================================================
+// 发送入口（chat_cmd 频道分支；C8 两步拆分的第 1 步 + 触发尝试）
+// =========================================================================
+
+/// 频道用户消息入口：物化（无条件成功）→ 尝试触发。
+///
+/// 预处理（附件 materialize / @ 引用展开）与 1v1 同款复用；物化块镜像
+/// `run_agent_turn` 的 `!pre_materialized` 段（行 + blocks + 附件 + user_message
+/// 事件——消费回合 pre_materialized=true 跳过同段，两处形态必须保持一致）。
+/// 会话在途就只落流（回合结束触发点读 DB 积压接管）。
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn handle_user_send(
+    app: &AppHandle,
+    pool: &SqlitePool,
+    chat_state: &ChatState,
+    conv: ConversationRow,
+    user_msg_id: String,
+    blocks: Vec<ContentBlock>,
+    content_text: String,
+    files: Option<Vec<AttachedFile>>,
+    mentions: Option<Vec<String>>,
+) -> AppResult<()> {
+    if conv.archived_at.is_some() {
+        return Err(AppError::Validation(format!(
+            "频道「{}」已归档（原项目已删除）——记录保留为只读，无法继续发送。\
+             如需继续协作，请在新项目开启新频道",
+            conv.title
+        )));
+    }
+    if conv.project_id.is_none() {
+        // C1 边界：散落频道不存在（ensure 只建挂项目的），防御性拒绝
+        return Err(AppError::Validation(
+            "频道未挂载项目（数据异常）——请重建频道或反馈问题".into(),
+        ));
+    }
+
+    // --- 附件物化（1v1 同款：纯函数不写 DB，spawn_blocking 离开 async worker）---
+    let (persist_blocks, attach_db_inputs, attach_file_inputs) = match files {
+        Some(files) if !files.is_empty() => {
+            crate::infra::file_validation::validate_files(&files)?;
+            let mid = user_msg_id.clone();
+            tokio::task::spawn_blocking(move || {
+                crate::harness::attachments::materialize_file_blocks(&mid, blocks, &files)
+            })
+            .await
+            .map_err(|e| AppError::Internal(format!("附件处理任务失败: {e}")))??
+        }
+        _ => (blocks, Vec::new(), Vec::new()),
+    };
+    // @ 引用展开（快照注入）：与 1v1 同款，失效降级不阻塞
+    let persist_blocks = crate::harness::references::materialize_reference_blocks(
+        pool,
+        &conv.id,
+        persist_blocks,
+        &content_text,
+    )
+    .await;
+
+    // --- 物化（无条件成功：行 + blocks + 附件 + user_message 事件）---
+    let blocks_json = serde_json::to_string(&persist_blocks).unwrap_or_else(|_| "[]".into());
+    repo::message::create(
+        pool,
+        &user_msg_id,
+        &NewMessage {
+            conversation_id: conv.id.clone(),
+            role: "user".into(),
+            content: content_text.clone(),
+            token_count: None,
+            error: None,
+            model: None,
+        },
+    )
+    .await?;
+    repo::message::update_content_blocks(pool, &user_msg_id, &blocks_json).await?;
+    if !attach_db_inputs.is_empty() {
+        repo::message_attachment::delete_by_message(pool, &user_msg_id).await?;
+        repo::message_attachment::insert_batch(pool, &user_msg_id, &attach_db_inputs).await?;
+    }
+    if !attach_file_inputs.is_empty() {
+        repo::message_attachment_file::delete_by_message(pool, &user_msg_id).await?;
+        repo::message_attachment_file::insert_batch(pool, &user_msg_id, &attach_file_inputs)
+            .await?;
+    }
+    let ev = EventCtx::new(&conv.id, &user_msg_id, &conv.agent_id);
+    event_log::log_user_message(pool, &ev, &user_msg_id, &content_text, &persist_blocks, None)
+        .await;
+    if !attach_db_inputs.is_empty() {
+        event_log::log_attachment_stored(
+            pool,
+            &ev,
+            &user_msg_id,
+            &event_log::AttachmentStoredPayload::Pages {
+                v: 1,
+                items: attach_db_inputs
+                    .iter()
+                    .map(|c| event_log::AttachmentPageItem {
+                        idx: c.idx,
+                        name: c.name.clone(),
+                        kind: c.kind.clone(),
+                        label: c.label.clone(),
+                        token_est: c.token_est,
+                    })
+                    .collect(),
+            },
+        )
+        .await;
+    }
+    if !attach_file_inputs.is_empty() {
+        event_log::log_attachment_stored(
+            pool,
+            &ev,
+            &user_msg_id,
+            &event_log::AttachmentStoredPayload::Bytes {
+                v: 1,
+                items: attach_file_inputs
+                    .iter()
+                    .map(|f| event_log::AttachmentBytesItem {
+                        idx: f.idx,
+                        name: f.name.clone(),
+                        ext: f.ext.clone(),
+                        bytes_len: f.bytes.len(),
+                    })
+                    .collect(),
+            },
+        )
+        .await;
+    }
+
+    // --- 登记 mentions（内存捷径，consume 时并集）---
+    if let Some(list) = mentions.as_deref().filter(|v| !v.is_empty()) {
+        let mut map = runtimes().lock().unwrap();
+        let rt = map.entry(conv.id.clone()).or_default();
+        for m in list {
+            if !rt.backlog_mentions.contains(m) {
+                rt.backlog_mentions.push(m.clone());
+            }
+        }
+    }
+
+    // --- 触发尝试（第 2 步）：在途只登记（DB 积压是真相源）---
+    if chat_state.is_streaming(&conv.id) {
+        tracing::info!(
+            target: "ice_paw.channel",
+            conv = %conv.id,
+            "频道在途回合期间收到用户消息，已落流（回合结束后合并处理）"
+        );
+        return Ok(());
+    }
+    let app = app.clone();
+    let pool = pool.clone();
+    let conv_for_spawn = conv.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = consume_backlog(&app, &pool, &conv_for_spawn).await {
+            tracing::warn!(target: "ice_paw.channel", "频道积压消费发起失败: {e}");
+        }
+    });
+    Ok(())
+}
+
+// =========================================================================
+// 积压消费（新链头路由 + 第一跳）
+// =========================================================================
+
+/// 消费积压：链头之后的全部用户消息合并为新链头 → 路由 → 触发第一跳。
+///
+/// 调用源：用户发送（空闲时）与回合结束触发点（抢占检查后）。并发安全靠
+/// chat_state.start 单写者兜底（start 失败 = 忙 → 消息留流，下次触发源接手）。
+async fn consume_backlog(
+    app: &AppHandle,
+    pool: &SqlitePool,
+    conv: &ConversationRow,
+) -> AppResult<()> {
+    let members = repo::project::list_member_profiles(
+        pool,
+        conv.project_id.as_deref().unwrap_or(""),
+    )
+    .await
+    .unwrap_or_default();
+    if members.is_empty() {
+        tracing::warn!(
+            target: "ice_paw.channel",
+            conv = %conv.id,
+            "频道项目已无成员，消息留在流中不消费"
+        );
+        return Ok(());
+    }
+    let coordinator_id = members
+        .iter()
+        .find(|m| m.role == "coordinator")
+        .map(|m| m.agent_id.clone());
+
+    // 旧链头（内存）；无 runtime 时以「当前最后一条 user 锚点」为界（不重消费历史）
+    let old_head: Option<String> = {
+        let map = runtimes().lock().unwrap();
+        map.get(&conv.id).and_then(|rt| rt.head_msg_id.clone())
+    };
+    let anchor_boundary: Option<String> = match old_head {
+        Some(h) => Some(h),
+        None => repo::message::list_turn_anchors(pool, &conv.id)
+            .await?
+            .last()
+            .map(|a| a.message_id.clone()),
+    };
+
+    let backlog: Vec<TurnAnchor> = match &anchor_boundary {
+        Some(b) => repo::message::list_user_anchors_after(pool, &conv.id, b).await?,
+        None => Vec::new(),
+    };
+    if backlog.is_empty() {
+        return Ok(()); // 无新消息（并发窗口内已被消费）
+    }
+    let new_head = backlog
+        .last()
+        .expect("backlog 非空必有尾")
+        .message_id
+        .clone();
+
+    // 新链：取消旧 pending（user_preempted 事件）+ 重置链内计数（频率窗跨链
+    // 保留）。锁段只收集数据，事件发射在锁外（guard 跨 await 会毒化 Send）。
+    let (cancelled, head_for_events, mentions_merged): (VecDeque<Hop>, String, Vec<String>) = {
+        let mut map = runtimes().lock().unwrap();
+        let rt = map.entry(conv.id.clone()).or_default();
+        let cancelled: VecDeque<Hop> = std::mem::take(&mut rt.pending);
+        let head_for_events = rt
+            .head_msg_id
+            .clone()
+            .unwrap_or_else(|| new_head.clone());
+        rt.turns_taken = 0;
+        rt.pair_counts.clear();
+        rt.head_msg_id = Some(new_head.clone());
+        let mentions = std::mem::take(&mut rt.backlog_mentions);
+        (cancelled, head_for_events, mentions)
+    };
+    for hop in cancelled {
+        emit_mention_blocked(pool, &conv.id, &head_for_events, &hop, "user_preempted").await;
+    }
+
+    let (route, notes) = route_user_message(
+        &mentions_merged,
+        &members
+            .iter()
+            .map(|m| m.agent_id.clone())
+            .collect::<Vec<_>>(),
+        coordinator_id.as_deref(),
+    );
+    if notes.truncated > 0 || notes.non_member > 0 {
+        tracing::info!(
+            target: "ice_paw.channel",
+            conv = %conv.id,
+            truncated = notes.truncated,
+            non_member = notes.non_member,
+            "mentions 路由调整（截断/非成员过滤）"
+        );
+    }
+    match route {
+        ChannelRoute::Members(list) => {
+            let n = list.len();
+            {
+                let mut map = runtimes().lock().unwrap();
+                let rt = map.entry(conv.id.clone()).or_default();
+                rt.pending = list
+                    .into_iter()
+                    .map(|agent_id| Hop {
+                        agent_id,
+                        from: None,
+                    })
+                    .collect();
+            }
+            tracing::info!(
+                target: "ice_paw.channel",
+                conv = %conv.id,
+                backlog = backlog.len(),
+                members = n,
+                "频道新链头消费（{} 条积压合并）",
+                backlog.len()
+            );
+            run_next_hop(app, pool, conv, &members, backlog.len()).await
+        }
+        ChannelRoute::NeedsCoordinator => {
+            // 批 2 接入自选举；当前诚实等待（消息已落流不丢失）
+            tracing::warn!(
+                target: "ice_paw.channel",
+                conv = %conv.id,
+                "频道无统筹者（role=coordinator 成员缺失），消息已落流待统筹者就位"
+            );
+            Ok(())
+        }
+    }
+}
+
+// =========================================================================
+// 跳执行（护栏 → 凭据 → 单写者仲裁 → run_agent_turn 全链路）
+// =========================================================================
+
+/// 锁段判定产物（guard 不跨 await——数据在锁内收集，动作在锁外执行）。
+enum NextStep {
+    /// 链达上限：取消全部剩余跳
+    ChainLimit { head: String, cancelled: VecDeque<Hop> },
+    /// 无链 / 队列空且无在途 → 链自然终结（或本就无事可做）
+    Stop { finish: bool },
+    /// 有序对乒乓闸拦截（拦此跳，链继续）
+    PairBlocked { head: String, hop: Hop },
+    /// 频率闸拦截（拦此跳，链继续）
+    FreqBlocked { head: String, hop: Hop },
+    /// 跳正常起跑
+    Go {
+        hop: Hop,
+        head: String,
+        hop_index: u32,
+        chain_remaining: u32,
+    },
+}
+
+/// 执行 pending 队列的下一跳。护栏拦截的跳记事件后跳过（继续后续跳）；
+/// 凭据/档案读不出的跳同样跳过；队列空 = 链自然终止（清理 runtime）。
+async fn run_next_hop(
+    app: &AppHandle,
+    pool: &SqlitePool,
+    conv: &ConversationRow,
+    members: &[repo::project::ProjectMemberProfile],
+    backlog_count: usize,
+) -> AppResult<()> {
+    loop {
+        // --- 锁内：取跳 + 护栏判定（临界区无 await；borrow 在块内收口）---
+        let step = {
+            let mut map = runtimes().lock().unwrap();
+            let Some(rt) = map.get_mut(&conv.id) else {
+                return Ok(());
+            };
+            if rt.turns_taken >= MAX_CHAIN_TURNS {
+                let head = rt.head_msg_id.clone().unwrap_or_default();
+                let cancelled: VecDeque<Hop> = std::mem::take(&mut rt.pending);
+                rt.current = None;
+                NextStep::ChainLimit { head, cancelled }
+            } else if let Some(hop) = rt.pending.pop_front() {
+                let head = rt.head_msg_id.clone().unwrap_or_default();
+                // 有序对乒乓闸（成员跳专用；用户跳不计不入）
+                let pair_blocked = hop.from.as_deref().is_some_and(|from| {
+                    let key = (from.to_string(), hop.agent_id.clone());
+                    let count = rt.pair_counts.entry(key).or_insert(0);
+                    if *count >= MAX_PAIR_REPEAT {
+                        true
+                    } else {
+                        *count += 1;
+                        false
+                    }
+                });
+                if pair_blocked {
+                    NextStep::PairBlocked { head, hop }
+                } else if hop.from.is_some()
+                    && !wake_reserve(rt, &hop.agent_id, Instant::now())
+                {
+                    // 频率闸（成员跳专用；用户跳不占频率）
+                    NextStep::FreqBlocked { head, hop }
+                } else {
+                    rt.turns_taken += 1;
+                    let hop_index = rt.turns_taken as u32;
+                    let chain_remaining = rt.pending.len() as u32;
+                    rt.current = Some(hop.clone());
+                    NextStep::Go {
+                        hop,
+                        head,
+                        hop_index,
+                        chain_remaining,
+                    }
+                }
+            } else {
+                // 队列空：链是否终结取决于在途跳（current）——本函数只在无在途时被调
+                NextStep::Stop {
+                    finish: rt.current.is_none(),
+                }
+            }
+        };
+
+        let (hop, head, hop_index, chain_remaining) = match step {
+            NextStep::ChainLimit { head, cancelled } => {
+                for hop in cancelled {
+                    emit_mention_blocked(pool, &conv.id, &head, &hop, "chain_limit").await;
+                }
+                finish_chain(&conv.id);
+                tracing::info!(
+                    target: "ice_paw.channel",
+                    conv = %conv.id,
+                    "接力已达上限（{MAX_CHAIN_TURNS} 跳），链终止——请用户推进"
+                );
+                return Ok(());
+            }
+            NextStep::Stop { finish } => {
+                if finish {
+                    finish_chain(&conv.id);
+                }
+                return Ok(());
+            }
+            NextStep::PairBlocked { head, hop } => {
+                emit_mention_blocked(pool, &conv.id, &head, &hop, "pair_repeat").await;
+                continue; // 拦此跳，链继续走后续跳
+            }
+            NextStep::FreqBlocked { head, hop } => {
+                emit_mention_blocked(pool, &conv.id, &head, &hop, "frequency").await;
+                continue;
+            }
+            NextStep::Go {
+                hop,
+                head,
+                hop_index,
+                chain_remaining,
+            } => (hop, head, hop_index, chain_remaining),
+        };
+
+        // --- 凭据预检（失败跳过该跳，链继续；跳没跑成不发正常事件）---
+        let agent_cmd = app.state::<Arc<dyn AgentCmd>>().inner().clone();
+        let creds = match agent_cmd.get_with_credentials(&hop.agent_id).await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(
+                    target: "ice_paw.channel",
+                    conv = %conv.id,
+                    member = %hop.agent_id,
+                    "成员凭据/档案读取失败（跳过该跳）: {e}"
+                );
+                clear_current(&conv.id, &hop.agent_id);
+                continue;
+            }
+        };
+        let llm_provider = match provider::create_provider(
+            &creds.agent.provider,
+            &creds.agent.model,
+            creds.base_url.as_deref(),
+            creds.agent.cache_prompt != 0,
+        ) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(
+                    target: "ice_paw.channel",
+                    conv = %conv.id,
+                    member = %hop.agent_id,
+                    "成员 provider 创建失败（跳过该跳）: {e}"
+                );
+                clear_current(&conv.id, &hop.agent_id);
+                continue;
+            }
+        };
+
+        // --- 单写者仲裁（忙 = 消息留流，触发点接手）---
+        let chat_state = app.state::<ChatState>().inner().clone();
+        let Ok(cancel_token) = chat_state.start(&conv.id) else {
+            // 放回队首；本轮结束的 turn_ended watcher 会再走 consume/run。
+            // 计数不回退（pair/wake 已记）——保守方向是「多拦」不是「漏拦」。
+            let mut map = runtimes().lock().unwrap();
+            if let Some(rt) = map.get_mut(&conv.id) {
+                rt.pending.push_front(hop.clone());
+                rt.current = None;
+            }
+            tracing::info!(
+                target: "ice_paw.channel",
+                conv = %conv.id,
+                "频道会话忙，跳暂缓（回合结束后接手）"
+            );
+            return Ok(());
+        };
+
+        // RAII 兜底：start 成功后、spawn 前的任何 `?` 早退自动 unregister
+        //（chat_cmd 同款；spawn 成功后注销责任移交 stream_loop 的 finalize_*）
+        let conv_id_guard = conv.id.clone();
+        let cancel_guard = scopeguard::guard((), |_| chat_state.unregister(&conv_id_guard));
+
+        // --- 跳确定发生：mention 事实事件（此时才发——凭据失败/忙回退不发）---
+        emit_mention(pool, &conv.id, &head, &hop, hop_index, chain_remaining).await;
+
+        // --- 回合起跑（pre_materialized：用户侧已物化，llm_blocks 只装事实简报）---
+        let brief_spec = match &hop.from {
+            None => BriefSpec::UserBacklog {
+                count: backlog_count.max(1),
+            },
+            Some(_) => BriefSpec::Relay {
+                from_name: hop
+                    .from
+                    .as_deref()
+                    .and_then(|id| members.iter().find(|m| m.agent_id == id))
+                    .map(|m| m.name.clone())
+                    .unwrap_or_else(|| "成员".to_string()),
+            },
+        };
+        let brief = compose_channel_brief(&brief_spec);
+        let brief_text = ContentBlock::join_text(&brief);
+        let fallback =
+            crate::commands::model_profile_cmd::production_fallback_plan(app, pool, &creds.agent);
+
+        // fire-and-forget：完成信号 drop（chat_cmd 用户路径同款），后续跳由
+        // turn_ended watcher 驱动——本函数不等待回合完成。
+        let _done = session_runner::run_agent_turn(
+            &TurnEnv {
+                emitter: crate::harness::r#loop::emitter::tauri_emitter(app.clone(), conv.id.clone()),
+                tool_app: Some(app.clone()),
+                pool: pool.clone(),
+                route_registry: app.state::<crate::harness::read_route::ReadRouteRegistry>().inner(),
+                chat_state: chat_state.clone(),
+                global_registry: Arc::clone(
+                    app.state::<Arc<crate::harness::mcp::McpRegistry>>().inner(),
+                ),
+                mcp_manager: Arc::clone(
+                    app.state::<Arc<crate::harness::mcp::McpServerManager>>().inner(),
+                ),
+                auth_registry: app
+                    .state::<crate::harness::tool_executor::ToolAuthRegistry>()
+                    .inner()
+                    .clone(),
+                auth_sessions: app
+                    .state::<crate::harness::authority::AuthSessionRegistry>()
+                    .inner()
+                    .clone(),
+            },
+            AgentTurnInput {
+                conv: conv.clone(),
+                agent: creds.agent.clone(),
+                hooks: creds.hooks,
+                word_style_profile: creds.word_style_profile,
+                provider: llm_provider,
+                api_key: creds.api_key,
+                // 链头锚定（reconcile 对齐）：链内所有跳的 turn_id 恒 = head
+                user_msg_id: head.clone(),
+                content_text: brief_text,
+                llm_blocks: brief,
+                persist_blocks: Vec::new(), // pre_materialized：不落用户侧
+                attach_db_inputs: Vec::new(),
+                attach_file_inputs: Vec::new(),
+                emit_user_blocks: false,
+                incoming_source: None,
+                sender_name: Some(creds.agent.name.clone()),
+                pre_materialized: true,
+                tools_enabled: true,
+                model_override: None,
+                cancel_token,
+                // 成员自己的链（委派子会话同权：自链优先）
+                fallback,
+            },
+        )
+        .await?;
+        // spawn 成功：注销责任已移交 stream_loop，解除守卫
+        scopeguard::ScopeGuard::into_inner(cancel_guard);
+        tracing::info!(
+            target: "ice_paw.channel",
+            conv = %conv.id,
+            member = %hop.agent_id,
+            "频道成员回合已发起"
+        );
+        return Ok(());
+    }
+}
+
+// =========================================================================
+// 回合结束触发点（EVENT_BUS 订阅 turn_ended；inbox drain watcher 同款模式）
+// =========================================================================
+
+/// 启动频道回合结束观察者（lib.rs setup 调用一次）。
+///
+/// 频道回合结束 → 等静默 → sender sweep → 抢占检查（有积压 = 新链头消费）/
+/// 无积压 = 解析终文 @ 接力。自然完成与用户终止两态同接（turn_ended 恒落）。
+pub fn spawn_channel_watcher(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let mut rx = event_log::event_bus().subscribe();
+        loop {
+            match rx.recv().await {
+                Ok(note) => {
+                    if note.kind != event_log::kind::TURN_ENDED {
+                        continue;
+                    }
+                    let app = app.clone();
+                    let conv_id = note.conversation_id.clone();
+                    tauri::async_runtime::spawn(async move {
+                        on_channel_turn_ended(&app, &conv_id).await;
+                    });
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(
+                        target: "ice_paw.channel",
+                        "频道观察者丢帧（{n}），本次触发跳过——下次 turn_ended 会再触发"
+                    );
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+}
+
+/// 频道回合结束处理（核心触发点）。
+async fn on_channel_turn_ended(app: &AppHandle, conv_id: &str) {
+    let pool = app.state::<SqlitePool>().inner().clone();
+    let conv = match repo::conversation::get_by_id(&pool, conv_id).await {
+        Ok(c) => c,
+        Err(_) => return, // 会话已删（CASCADE 清事件），无事可做
+    };
+    if conv.kind != "channel" || conv.archived_at.is_some() {
+        return;
+    }
+
+    // 等静默（turn_ended 广播先于 cleanup unregister）
+    let chat_state = app.state::<ChatState>().inner().clone();
+    let deadline = Instant::now() + QUIET_TIMEOUT;
+    while chat_state.is_streaming(conv_id) {
+        if Instant::now() >= deadline {
+            tracing::info!(
+                target: "ice_paw.channel",
+                conv = conv_id,
+                "触发点等待静默超时（{QUIET_TIMEOUT:?}），本轮放弃——下次触发源接手"
+            );
+            return;
+        }
+        tokio::time::sleep(QUIET_POLL).await;
+    }
+
+    // --- sender sweep（C10 行侧：链头起、IS NULL 的 assistant 行打执行成员）---
+    let (head, current) = {
+        let mut map = runtimes().lock().unwrap();
+        match map.get_mut(conv_id) {
+            Some(rt) => {
+                let head = rt.head_msg_id.clone();
+                let cur = rt.current.take();
+                (head, cur)
+            }
+            None => return, // 无链状态（非频道引擎发起的回合）
+        }
+    };
+    let Some(head) = head else { return };
+    if let Some(hop) = &current {
+        match repo::message::sweep_sender_for_channel_turn(&pool, conv_id, &head, &hop.agent_id)
+            .await
+        {
+            Ok(n) if n > 0 => {
+                tracing::debug!(
+                    target: "ice_paw.channel",
+                    conv = conv_id,
+                    member = %hop.agent_id,
+                    "sender sweep: {n} 条 assistant 行归属已标注"
+                );
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!(target: "ice_paw.channel", "sender sweep 失败: {e}"),
+        }
+    }
+    // TODO(批2/C5)：统筹者接令回合终态失败计数 → COORD_FAIL_STREAK 换帅档
+
+    // --- 抢占检查：链头之后有新 user 行 = 用户在回合期间插话 ---
+    let backlog = match repo::message::list_user_anchors_after(&pool, conv_id, &head).await {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!(target: "ice_paw.channel", "积压查询失败: {e}");
+            return;
+        }
+    };
+    if !backlog.is_empty() {
+        // 静默窗口：说完一起听（窗口内又有新 user 行 → 重置继续等）
+        let mut seen = backlog.len();
+        let deadline = Instant::now() + QUIET_TIMEOUT;
+        loop {
+            tokio::time::sleep(CHAIN_HEAD_QUIET).await;
+            match repo::message::list_user_anchors_after(&pool, conv_id, &head).await {
+                Ok(b) if b.len() > seen => seen = b.len(),
+                Ok(_) => break,
+                Err(_) => break,
+            }
+            if Instant::now() >= deadline {
+                break;
+            }
+        }
+        if let Err(e) = consume_backlog(app, &pool, &conv).await {
+            tracing::warn!(target: "ice_paw.channel", "抢占后积压消费失败: {e}");
+        }
+        return;
+    }
+
+    // --- 无积压：接力检查（解析本回合终文的 @，C9 成员侧规则）---
+    let members = repo::project::list_member_profiles(
+        &pool,
+        conv.project_id.as_deref().unwrap_or(""),
+    )
+    .await
+    .unwrap_or_default();
+    if members.is_empty() {
+        finish_chain(conv_id);
+        return;
+    }
+    let last_speaker = current.as_ref().map(|h| h.agent_id.clone());
+    let final_text = match last_turn_final_text(&pool, conv_id, &head).await {
+        Some(t) => t,
+        None => {
+            // 无终文（异常终态）——链按现状继续 pending（若有）
+            tracing::debug!(target: "ice_paw.channel", conv = conv_id, "本回合无终文可解析");
+            String::new()
+        }
+    };
+    let member_pairs: Vec<(String, String)> = members
+        .iter()
+        .map(|m| (m.agent_id.clone(), m.name.clone()))
+        .collect();
+    let mentioned = parse_agent_mentions(&final_text, &member_pairs, last_speaker.as_deref());
+    if !mentioned.is_empty() {
+        let hops: VecDeque<Hop> = mentioned
+            .into_iter()
+            .map(|agent_id| Hop {
+                agent_id,
+                from: last_speaker.clone(),
+            })
+            .collect();
+        let mut map = runtimes().lock().unwrap();
+        match map.get_mut(conv_id) {
+            Some(rt) => rt.pending.extend(hops),
+            None => return,
+        }
+    }
+    // pending 可能有货（上述 extend 或忙时放回的跳）——继续走
+    let has_pending = {
+        let map = runtimes().lock().unwrap();
+        map.get(conv_id)
+            .map(|rt| !rt.pending.is_empty())
+            .unwrap_or(false)
+    };
+    if has_pending {
+        if let Err(e) = run_next_hop(app, &pool, &conv, &members, 1).await {
+            tracing::warn!(target: "ice_paw.channel", "接力跳发起失败: {e}");
+        }
+    } else {
+        // 无 @ 无 pending：链自然终止
+        finish_chain(conv_id);
+    }
+}
+
+// =========================================================================
+// 事件发射与 runtime 小工具
+// =========================================================================
+
+/// 跳正常发生的 mention 事实（from=None → actor=user）。
+///
+/// turn_id/message_id 都锚链头——`chain:{链头id}` 三侧同归组键（事件词表
+/// 注释 / 引擎 / 前端轨迹），事件归组到链头回合；对账侧 channel_mention 属
+/// derive skip 臂，不参与行派生。
+async fn emit_mention(
+    pool: &SqlitePool,
+    conv_id: &str,
+    head: &str,
+    hop: &Hop,
+    hop_index: u32,
+    chain_remaining: u32,
+) {
+    let ctx = EventCtx::new(conv_id, &format!("chain:{head}"), &hop.agent_id);
+    event_log::log_channel_mention(
+        pool,
+        &ctx,
+        head,
+        &ChannelMentionPayload {
+            v: 1,
+            from_agent_id: hop.from.clone(),
+            to_agent_id: hop.agent_id.clone(),
+            hop_index,
+            chain_remaining,
+            blocked_reason: None,
+        },
+    )
+    .await;
+}
+
+/// 护栏拦截的 mention 事实（blocked_reason 必填；hop 计数无意义置 0）。
+async fn emit_mention_blocked(
+    pool: &SqlitePool,
+    conv_id: &str,
+    head: &str,
+    hop: &Hop,
+    reason: &str,
+) {
+    let ctx = EventCtx::new(conv_id, &format!("chain:{head}"), &hop.agent_id);
+    event_log::log_channel_mention(
+        pool,
+        &ctx,
+        head,
+        &ChannelMentionPayload {
+            v: 1,
+            from_agent_id: hop.from.clone(),
+            to_agent_id: hop.agent_id.clone(),
+            hop_index: 0,
+            chain_remaining: 0,
+            blocked_reason: Some(reason.to_string()),
+        },
+    )
+    .await;
+}
+
+/// 链终结：清理 runtime（head 一并丢弃——下次用户消息新建链）。
+fn finish_chain(conv_id: &str) {
+    runtimes().lock().unwrap().remove(conv_id);
+}
+
+/// 清除在途跳标记（凭据失败等未发起场景）。
+fn clear_current(conv_id: &str, agent_id: &str) {
+    let mut map = runtimes().lock().unwrap();
+    if let Some(rt) = map.get_mut(conv_id) {
+        if rt.current.as_ref().map(|h| h.agent_id.as_str()) == Some(agent_id) {
+            rt.current = None;
+        }
+    }
+}
+
+/// 本回合（turn_id = head 的最新 turn_ended）最终 assistant 正文。
+///
+/// turn_ended.message_id = 最后 assistant 消息（event_log 词表约定）——
+/// 接力 @ 解析读它的正文。
+async fn last_turn_final_text(pool: &SqlitePool, conv_id: &str, head: &str) -> Option<String> {
+    let mid = last_turn_message_id(pool, conv_id, head).await?;
+    sqlx::query_scalar::<_, String>("SELECT content FROM messages WHERE id = ?")
+        .bind(&mid)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+}
+
+/// 本回合终文的消息 id。
+async fn last_turn_message_id(pool: &SqlitePool, conv_id: &str, head: &str) -> Option<String> {
+    sqlx::query_scalar::<_, Option<String>>(
+        "SELECT message_id FROM session_events \
+          WHERE session_id = ? AND turn_id = ? AND kind = 'turn_ended' \
+          ORDER BY seq DESC LIMIT 1",
+    )
+    .bind(conv_id)
+    .bind(head)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .flatten()
+}
+
+// =========================================================================
+// 单元测试（纯函数面；async 全链路见手测——inbox 同款纪律）
+// =========================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---------- route_user_message 表驱动 ----------
+
+    #[test]
+    fn route_mentions_point_named_members_in_order() {
+        let (route, notes) = route_user_message(
+            &["a".into(), "b".into(), "a".into()],
+            &["a".into(), "b".into(), "c".into()],
+            Some("c"),
+        );
+        assert_eq!(route, ChannelRoute::Members(vec!["a".into(), "b".into()]));
+        assert_eq!(notes, RouteNotes::default());
+    }
+
+    #[test]
+    fn route_broadcast_goes_to_coordinator() {
+        let (route, _) = route_user_message(&[], &["a".into(), "b".into()], Some("b"));
+        assert_eq!(route, ChannelRoute::Members(vec!["b".into()]));
+    }
+
+    #[test]
+    fn route_no_coordinator_needs_election() {
+        let (route, _) = route_user_message(&[], &["a".into()], None);
+        assert_eq!(route, ChannelRoute::NeedsCoordinator);
+    }
+
+    #[test]
+    fn route_non_member_mentions_filtered_and_noted() {
+        // 全部无效 → 回落广播；部分无效 → 过滤但有效者仍点名
+        let (route, notes) = route_user_message(
+            &["ghost".into()],
+            &["a".into()],
+            Some("a"),
+        );
+        assert_eq!(route, ChannelRoute::Members(vec!["a".into()]));
+        assert_eq!(notes.non_member, 1);
+
+        let (route, notes) = route_user_message(
+            &["ghost".into(), "a".into()],
+            &["a".into()],
+            None,
+        );
+        assert_eq!(route, ChannelRoute::Members(vec!["a".into()]));
+        assert_eq!(notes.non_member, 1);
+    }
+
+    #[test]
+    fn route_truncates_to_mention_cap() {
+        let mentions: Vec<String> = (0..8).map(|i| format!("m{i}")).collect();
+        let members = mentions.clone();
+        let (route, notes) = route_user_message(&mentions, &members, None);
+        match route {
+            ChannelRoute::Members(list) => {
+                assert_eq!(list.len(), MAX_MENTIONS_PER_MSG);
+                assert_eq!(list[0], "m0"); // 保序截断
+            }
+            r => panic!("expected Members, got {r:?}"),
+        }
+        assert_eq!(notes.truncated, 8 - MAX_MENTIONS_PER_MSG);
+    }
+
+    // ---------- parse_agent_mentions ----------
+
+    fn members_fixture() -> Vec<(String, String)> {
+        vec![
+            ("agent-zhang".into(), "张三".into()),
+            ("agent-zhangf".into(), "张三丰".into()),
+            ("agent-li".into(), "李四".into()),
+        ]
+    }
+
+    #[test]
+    fn parse_hits_member_and_longest_prefix_wins() {
+        let out = parse_agent_mentions(
+            "@张三 看下这个，@张三丰 你也参与",
+            &members_fixture(),
+            None,
+        );
+        assert_eq!(out, vec!["agent-zhang".to_string(), "agent-zhangf".to_string()]);
+    }
+
+    #[test]
+    fn parse_email_defense() {
+        let out = parse_agent_mentions("发邮件到 someone@李四 试试", &members_fixture(), None);
+        // @ 前是字母数字 → 不算 mention
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn parse_non_member_and_self_ignored() {
+        let out = parse_agent_mentions(
+            "@王五 不在频道，@李四 来",
+            &members_fixture(),
+            Some("agent-li"), // 李四自己发起，@李四 不触发
+        );
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn parse_dedup_preserves_order_and_caps() {
+        let text = "@李四 @张三 @李四";
+        let out = parse_agent_mentions(text, &members_fixture(), None);
+        assert_eq!(out, vec!["agent-li".to_string(), "agent-zhang".to_string()]);
+    }
+
+    #[test]
+    fn parse_ambiguous_same_name_different_ids_skipped() {
+        // 两个不同成员同名「阿宝」→ 歧义不触发；同文本里 @李四 仍命中
+        let members = vec![
+            ("a1".into(), "阿宝".into()),
+            ("a2".into(), "阿宝".into()),
+            ("li".into(), "李四".into()),
+        ];
+        let out = parse_agent_mentions("@阿宝 和 @李四 讨论下", &members, None);
+        assert_eq!(out, vec!["li".to_string()]);
+    }
+
+    // ---------- compose_channel_brief ----------
+
+    #[test]
+    fn brief_single_and_multi_backlog_wording() {
+        let b1 = compose_channel_brief(&BriefSpec::UserBacklog { count: 1 });
+        let s1 = ContentBlock::join_text(&b1);
+        assert!(s1.contains("新消息") && !s1.contains("递进指示"));
+
+        let b3 = compose_channel_brief(&BriefSpec::UserBacklog { count: 3 });
+        let s3 = ContentBlock::join_text(&b3);
+        assert!(s3.contains("3 条新消息") && s3.contains("递进指示"));
+    }
+
+    // ---------- 护栏内存态（构造驱动）----------
+
+    #[test]
+    fn wake_reserve_caps_within_window() {
+        let mut rt = ChannelRuntime::default();
+        let now = Instant::now();
+        for _ in 0..MENTION_MAX_PER_MEMBER {
+            assert!(wake_reserve(&mut rt, "m", now));
+        }
+        // 窗口内第 7 次 → 拒
+        assert!(!wake_reserve(&mut rt, "m", now));
+        // 窗口外（未来时刻）旧记录滑出 → 又可用
+        assert!(wake_reserve(&mut rt, "m", now + MENTION_WINDOW + Duration::from_secs(1)));
+        // 不同成员互不干扰
+        assert!(wake_reserve(&mut rt, "other", now));
+    }
+}

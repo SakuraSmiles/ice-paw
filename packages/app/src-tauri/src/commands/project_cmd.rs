@@ -54,10 +54,11 @@ pub async fn update_project(
     repo::project::update(pool.inner(), &input).await
 }
 
-/// 删除项目（CASCADE 删成员；conversations.project_id 自动 SET NULL）
+/// 删除项目（CASCADE 删成员；普通会话 project_id 自动 SET NULL 转散落；
+/// 频道归档保留——channel v1 §2 归档矩阵，走 permanent_delete 的 false 旗标）
 #[tauri::command]
 pub async fn delete_project(pool: State<'_, SqlitePool>, id: String) -> AppResult<()> {
-    repo::project::delete(pool.inner(), &id).await
+    repo::project::permanent_delete(pool.inner(), &id, false).await
 }
 
 /// 批量更新排序

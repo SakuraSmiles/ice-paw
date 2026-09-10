@@ -411,6 +411,11 @@ pub fn run() {
             //     无依赖，独立 spawn 保证 lagged 互不传染。
             harness::inbox::spawn_drain_watcher(handle.clone());
 
+            // 3e) 频道 v1 回合结束观察者：频道回合的 turn_ended 广播 → 等静默
+            //     → sender sweep → 抢占检查/接力检查（成员终文 @ 解析）。
+            //     与 3c/3d 同一广播源的独立订阅，lagged 互不传染。
+            harness::channel::spawn_channel_watcher(handle.clone());
+
             // 4) REQ-XC-010: 注入 AgentCmd trait object (生产实现 SqlAgentCmd)
             // 覆盖 builder 阶段注入的 None 占位。
             let sql_agent_cmd: std::sync::Arc<dyn commands::agent_cmd::AgentCmd> =

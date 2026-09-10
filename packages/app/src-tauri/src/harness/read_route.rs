@@ -542,6 +542,9 @@ fn to_message_row(
             .incoming_source
             .as_ref()
             .and_then(|meta| serde_json::to_string(meta).ok()),
+        sender_agent_id: m.sender.as_ref().map(|s| s.agent_id.clone()),
+        sender_agent_name: m.sender.as_ref().map(|s| s.agent_name.clone()),
+        turn_duration_ms: m.turn_duration_ms,
     }
 }
 
@@ -714,6 +717,8 @@ mod tests {
             first_seq: 7,
             last_seq: 7,
             incoming_source: None,
+            sender: None,
+            turn_duration_ms: None,
         };
         let mut rowid_map = HashMap::new();
         rowid_map.insert("msg-1".into(), 42i64);
@@ -748,6 +753,8 @@ mod tests {
             first_seq: 9,
             last_seq: 9,
             incoming_source: None,
+            sender: None,
+            turn_duration_ms: None,
         };
         let empty_rowid: HashMap<String, i64> = HashMap::new();
         let empty_created: HashMap<String, String> = HashMap::new();

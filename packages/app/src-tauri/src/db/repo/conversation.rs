@@ -7,9 +7,10 @@ use sqlx::SqlitePool;
 use crate::db::models::{ConversationRow, NewConversation};
 use crate::error::{AppError, AppResult};
 
-/// 全列清单（MA-1 起含 kind/initiator/parent 四列，MA-3 加 inbox_policy；
-/// `query_as<ConversationRow>` 要求 SELECT 覆盖全部字段，统一收口防止逐站点漂移）
-const CONV_COLS: &str = "id, agent_id, title, pinned, created_at, updated_at, tools_override, project_id, kind, initiator_type, initiator_agent_id, parent_conversation_id, inbox_policy";
+/// 全列清单（MA-1 起含 kind/initiator/parent 四列，MA-3 加 inbox_policy，
+/// 频道 v1 加 archived_at；`query_as<ConversationRow>` 要求 SELECT 覆盖全部
+/// 字段，统一收口防止逐站点漂移）
+const CONV_COLS: &str = "id, agent_id, title, pinned, created_at, updated_at, tools_override, project_id, kind, initiator_type, initiator_agent_id, parent_conversation_id, inbox_policy, archived_at";
 
 /// 列出全部会话（不限 agent），按 `pinned DESC, updated_at DESC`
 pub async fn list_all(pool: &SqlitePool) -> AppResult<Vec<ConversationRow>> {
@@ -212,6 +213,124 @@ pub async fn update_inbox_policy(
 ) -> AppResult<()> {
     let affected = sqlx::query("UPDATE conversations SET inbox_policy = ? WHERE id = ?")
         .bind(policy)
+        .bind(conversation_id)
+        .execute(pool)
+        .await?
+        .rows_affected();
+    if affected == 0 {
+        return Err(AppError::NotFound {
+            resource: "conversation",
+            id: conversation_id.to_string(),
+        });
+    }
+    Ok(())
+}
+
+// =========================================================================
+// 频道 v1（design §2：kind='channel' + project_id 必填 + 每项目至多一个活频道）
+// =========================================================================
+
+/// 项目的活频道（kind='channel' 且未归档）。归档频道不参与路由/ensure——
+/// `archived_at IS NULL` 是「活」的唯一定义，所有频道读写入口共用本判定。
+pub async fn active_channel_for_project(
+    pool: &SqlitePool,
+    project_id: &str,
+) -> AppResult<Option<ConversationRow>> {
+    let row = sqlx::query_as::<_, ConversationRow>(&format!(
+        "SELECT {CONV_COLS} FROM conversations \
+         WHERE kind = 'channel' AND project_id = ? AND archived_at IS NULL"
+    ))
+    .bind(project_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+/// 幂等确保项目频道存在（不存在则创建）。并发竞态由
+/// `idx_channel_per_project` 唯一索引兜底：INSERT 撞约束时重查即得既有频道。
+///
+/// `agent_id` = 统筹者（调用方解析：现任若在任、否则 joined_at 最早成员）；
+/// 零成员会话由调用方拒绝（repo 层不做成员解析——那是引擎的职责域）。
+pub async fn ensure_channel(
+    pool: &SqlitePool,
+    project_id: &str,
+    title: &str,
+    coordinator_agent_id: &str,
+) -> AppResult<ConversationRow> {
+    if let Some(existing) = active_channel_for_project(pool, project_id).await? {
+        return Ok(existing);
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    let insert = sqlx::query(
+        "INSERT INTO conversations (id, agent_id, title, project_id, kind) \
+         VALUES (?, ?, ?, ?, 'channel')",
+    )
+    .bind(&id)
+    .bind(coordinator_agent_id)
+    .bind(title)
+    .bind(project_id)
+    .execute(pool)
+    .await;
+    match insert {
+        Ok(_) => {}
+        // 撞唯一索引（并发 ensure）：另一路已建，重查返回
+        Err(e) if is_unique_violation(&e) => {}
+        Err(e) => return Err(e.into()),
+    }
+    get_by_id(pool, &id).await
+}
+
+/// sqlite 唯一约束违反判定。走消息匹配而非 code()：ensure_channel 撞约束的
+/// 唯一来源就是 idx_channel_per_project，误报面为零；仓内无结构化 code 判定
+/// 先例，消息匹配是这里最轻的诚实实现。
+fn is_unique_violation(e: &sqlx::Error) -> bool {
+    e.to_string().contains("UNIQUE constraint failed")
+}
+
+/// 归档频道（软删除：活频道判定唯一出口，历史/事件日志全保留——append-only
+/// 日志无损不变式）。已归档再归档幂等（`archived_at IS NULL` 守卫）。
+pub async fn set_archived(pool: &SqlitePool, id: &str) -> AppResult<()> {
+    let affected =
+        sqlx::query("UPDATE conversations SET archived_at = datetime('now') WHERE id = ? AND archived_at IS NULL")
+            .bind(id)
+            .execute(pool)
+            .await?
+            .rows_affected();
+    // 行不存在 → NotFound；已归档（0 行但行在）→ 幂等成功。区分需查存在性：
+    // 归档是低频治理动作，多付一次 SELECT 换准确语义。
+    if affected == 0 && get_by_id(pool, id).await.is_err() {
+        return Err(AppError::NotFound {
+            resource: "conversation",
+            id: id.to_string(),
+        });
+    }
+    Ok(())
+}
+
+/// 某 agent 统筹的活频道（删 agent 守卫用：迁移或拒绝删除前先找到它们）。
+pub async fn channels_coordinated_by(
+    pool: &SqlitePool,
+    agent_id: &str,
+) -> AppResult<Vec<ConversationRow>> {
+    let rows = sqlx::query_as::<_, ConversationRow>(&format!(
+        "SELECT {CONV_COLS} FROM conversations \
+         WHERE kind = 'channel' AND agent_id = ? AND archived_at IS NULL"
+    ))
+    .bind(agent_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// 迁移频道统筹者（删 agent 守卫的迁移路径 / 换帅两档共用）。
+/// 不校验目标 agent 存在性（FK 兜底）；频道的 agent_id 语义 = 当前统筹者。
+pub async fn set_conversation_agent(
+    pool: &SqlitePool,
+    conversation_id: &str,
+    agent_id: &str,
+) -> AppResult<()> {
+    let affected = sqlx::query("UPDATE conversations SET agent_id = ? WHERE id = ?")
+        .bind(agent_id)
         .bind(conversation_id)
         .execute(pool)
         .await?

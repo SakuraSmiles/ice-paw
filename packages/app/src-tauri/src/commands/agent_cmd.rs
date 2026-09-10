@@ -879,6 +879,62 @@ impl AgentCmd for SqlAgentCmd {
     }
 
     async fn delete(&self, agent_id: &str) -> AppResult<()> {
+        // 频道 v1 删除守卫：conversations.agent_id 是 ON DELETE CASCADE——agent
+        // 是活跃频道（kind='channel' 且未归档）的投影时，删除会连带删掉整个
+        // 频道对话流。先迁移投影给「joined_at 最早的剩余成员」（选举平票同款
+        // 基准序）+ role 置 coordinator（统筹者真相源），换帅事实记
+        // channel_coordinator(failed-over) 事件；无剩余成员 → 拒删三段式。
+        // 归档频道不在守卫面：项目已删无候选可迁，随 CASCADE 消失（边缘路径，
+        // 边界披露见 CLAUDE.md 频道节）。
+        let channels =
+            repo::conversation::channels_coordinated_by(&self.pool, agent_id).await?;
+        for ch in channels {
+            let Some(pid) = ch.project_id.clone() else {
+                continue; // 散落频道不该存在（ensure 只建挂项目的），防御性跳过
+            };
+            let remaining: Vec<repo::project::ProjectMemberProfile> =
+                repo::project::list_member_profiles(&self.pool, &pid)
+                    .await
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|m| m.agent_id != agent_id)
+                    .collect();
+            let Some(successor) = remaining.first() else {
+                let proj_name = repo::project::get_by_id(&self.pool, &pid)
+                    .await
+                    .map(|p| p.name)
+                    .unwrap_or_else(|_| pid.clone());
+                return Err(AppError::Validation(format!(
+                    "无法删除：该 agent 是频道「{}」的最后成员，删除会连带删除整个频道对话。\
+                     请先为项目「{}」添加其他成员（频道将自动迁移给最早加入的成员），\
+                     或先删除频道所在项目",
+                    ch.title, proj_name
+                )));
+            };
+            repo::project::set_member_role(&self.pool, &pid, &successor.agent_id, "coordinator")
+                .await?;
+            repo::conversation::set_conversation_agent(&self.pool, &ch.id, &successor.agent_id)
+                .await?;
+            crate::harness::event_log::log_channel_coordinator(
+                &self.pool,
+                &crate::harness::event_log::EventCtx::new(&ch.id, "", &successor.agent_id),
+                &crate::harness::event_log::ChannelCoordinatorPayload {
+                    v: 1,
+                    action: "failed-over".into(),
+                    agent_id: Some(successor.agent_id.clone()),
+                    reason: Some(
+                        "统筹者 agent 被删除，自动迁移给最早加入的剩余成员".to_string(),
+                    ),
+                },
+            )
+            .await;
+            tracing::info!(
+                target: "ice_paw.agent",
+                "频道「{}」统筹者迁移（agent 删除守卫）: {agent_id} → {}",
+                ch.title,
+                successor.agent_id
+            );
+        }
         // 取消 watcher 监听（删 KB 数据前查 KB 行拿 directory；级联删除后查不到）。
         if let (Some(wm), Some(kb)) = (self.watcher(), self.agent_kb(agent_id).await) {
             wm.remove_watch(&kb.directory);

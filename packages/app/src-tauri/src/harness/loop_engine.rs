@@ -147,7 +147,8 @@ pub(crate) async fn stream_loop(ctx: &mut LoopContext, observable: &mut RoundSta
     // 「turn_ended 必须先于 cleanup unregister」硬规则不破）；零请求回合
     // （provider 未回任何 usage）take_payload 返回 None 安静跳过。
     if let Some(payload) = ctx.turn_cost.take_payload() {
-        let ev = EventCtx::new(&ctx.conv_id, &ctx.user_msg_id, &ctx.agent_id);
+        let ev = EventCtx::new(&ctx.conv_id, &ctx.user_msg_id, &ctx.agent_id)
+            .with_sender_name(ctx.sender_agent_name.clone());
         event_log::log_context_breakdown(&ctx.pool, &ev, &payload).await;
     }
     // REQ-XC-004: 不论退出路径，都关闭 BatchWriter 触发 final flush
@@ -267,7 +268,10 @@ async fn stream_loop_inner(
 ) {
     // session-events（Phase 0）：本 turn 的事件上下文（conv/turn/agent 三元组），
     // 全函数复用。事件全部 inline await（保序硬规则，见 event_log 模块注释）。
-    let ev = EventCtx::new(&ctx.conv_id, &ctx.user_msg_id, &ctx.agent_id);
+    // 频道回合：with_sender_name 注入执行成员名字快照（assistant_message
+    // payload.sender 的数据源；1v1 None 零标注）。
+    let ev = EventCtx::new(&ctx.conv_id, &ctx.user_msg_id, &ctx.agent_id)
+        .with_sender_name(ctx.sender_agent_name.clone());
 
     // 【彻底重构】每轮独立持久化，删除跨轮累积器（原 all_text / all_content_blocks）。
     //

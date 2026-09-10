@@ -88,6 +88,24 @@ pub async fn send_message(
     // --- 2. 取会话 + agent + api_key → 创建 provider ---
     // （先于写消息：conv/agent/provider 任一失败都应**不落任何 DB 行**，避免孤儿用户消息。）
     let conv = repo::conversation::get_by_id(pool.inner(), &conv_id).await?;
+    // 频道 v1 分流：项目频道（kind='channel'）走频道引擎（C8 两步拆分——物化
+    // 无条件成功 + 尝试触发）。执行成员由路由决定，此刻无需会话 agent 凭据；
+    // 归档频道在引擎入口拒绝（三段式文案）。1v1 路径零改动。
+    if conv.kind == "channel" {
+        let user_msg_id = Uuid::new_v4().to_string();
+        return crate::harness::channel::handle_user_send(
+            &app,
+            pool.inner(),
+            chat_state.inner(),
+            conv,
+            user_msg_id,
+            final_blocks,
+            content_text,
+            input.files,
+            input.mentions,
+        )
+        .await;
+    }
     let agent_with_creds = agent_cmd.get_with_credentials(&conv.agent_id).await?;
     let agent = agent_with_creds.agent;
     let api_key = agent_with_creds.api_key;
@@ -218,6 +236,8 @@ pub async fn send_message(
             attach_file_inputs,
             emit_user_blocks: has_files,
             incoming_source: None,
+            sender_name: None,
+            pre_materialized: false,
             tools_enabled,
             model_override,
             cancel_token,

@@ -339,6 +339,7 @@ mod tests {
             initiator_agent_id: None,
             parent_conversation_id: None,
             inbox_policy: "accept".into(),
+            archived_at: None,
         }
     }
 

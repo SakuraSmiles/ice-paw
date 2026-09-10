@@ -108,15 +108,6 @@ pub async fn update(pool: &SqlitePool, input: &UpdateProject) -> AppResult<Proje
     get_by_id(pool, &input.id).await
 }
 
-pub async fn delete(pool: &SqlitePool, id: &str) -> AppResult<()> {
-    // project_agents ON DELETE CASCADE 自动删；conversations.project_id ON DELETE SET NULL 自动置空
-    sqlx::query("DELETE FROM projects WHERE id = ?")
-        .bind(id)
-        .execute(pool)
-        .await?;
-    Ok(())
-}
-
 /// 归档 / 恢复项目（软删除开关）
 pub async fn set_archived(pool: &SqlitePool, id: &str, archived: bool) -> AppResult<()> {
     sqlx::query("UPDATE projects SET archived = ?, updated_at = datetime('now') WHERE id = ?")
@@ -130,6 +121,10 @@ pub async fn set_archived(pool: &SqlitePool, id: &str, archived: bool) -> AppRes
 /// 永久删除：delete_conversations=true 连同该项目会话一起删；
 /// false 则依赖 conversations.project_id ON DELETE SET NULL，会话转为散落。
 ///
+/// 频道 v1（design §2 归档矩阵）：**两旗标下频道均归档保留**——频道是多人
+/// 共享的项目资产，对话流不因项目删除而消失；归档后 project_id 随 FK SET
+/// NULL 转散落只读（前端按 archived_at 渲染归档态）。普通会话行为不变。
+///
 /// 整个操作在事务中执行——若删项目失败，会话不会丢。
 pub async fn permanent_delete(
     pool: &SqlitePool,
@@ -137,11 +132,21 @@ pub async fn permanent_delete(
     delete_conversations: bool,
 ) -> AppResult<()> {
     let mut txn = pool.begin().await?;
+    sqlx::query(
+        "UPDATE conversations SET archived_at = datetime('now') \
+          WHERE project_id = ? AND kind = 'channel' AND archived_at IS NULL",
+    )
+    .bind(id)
+    .execute(&mut *txn)
+    .await?;
     if delete_conversations {
-        sqlx::query("DELETE FROM conversations WHERE project_id = ?")
-            .bind(id)
-            .execute(&mut *txn)
-            .await?;
+        sqlx::query(
+            "DELETE FROM conversations WHERE project_id = ? \
+              AND (kind IS NULL OR kind != 'channel')",
+        )
+        .bind(id)
+        .execute(&mut *txn)
+        .await?;
     }
     sqlx::query("DELETE FROM projects WHERE id = ?")
         .bind(id)
@@ -166,6 +171,43 @@ pub async fn reorder(pool: &SqlitePool, ids: &[String]) -> AppResult<()> {
 }
 
 // ===== project_agents 管理 =====
+
+/// 频道成员档案（channel v1）：`project_agents` JOIN `agents` 一次取齐
+/// id / 名字 / role——频道路由、@ 文本解析、事实简报都要名字而非裸 id。
+/// agent 删除时成员行同亡（FK CASCADE，migration 13），INNER JOIN 不漏行。
+#[derive(Debug, Clone)]
+pub struct ProjectMemberProfile {
+    pub agent_id: String,
+    pub name: String,
+    /// 'coordinator'（频道统筹者标记，channel v1 起）| 'lead' | 'member'
+    pub role: String,
+    pub joined_at: String,
+}
+
+/// 列出项目成员档案（joined_at 正序——选举平票裁决与统筹者兜底解析的基准序）。
+pub async fn list_member_profiles(
+    pool: &SqlitePool,
+    project_id: &str,
+) -> AppResult<Vec<ProjectMemberProfile>> {
+    let rows: Vec<(String, String, String, String)> = sqlx::query_as(
+        "SELECT pa.agent_id, a.name, pa.role, pa.joined_at \
+           FROM project_agents pa JOIN agents a ON a.id = pa.agent_id \
+          WHERE pa.project_id = ? \
+          ORDER BY pa.joined_at ASC, pa.agent_id ASC",
+    )
+    .bind(project_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(agent_id, name, role, joined_at)| ProjectMemberProfile {
+            agent_id,
+            name,
+            role,
+            joined_at,
+        })
+        .collect())
+}
 
 pub async fn list_agents(pool: &SqlitePool, project_id: &str) -> AppResult<Vec<ProjectAgentRow>> {
     let rows = sqlx::query_as::<_, ProjectAgentRow>(
@@ -218,6 +260,30 @@ pub async fn set_agents(
             .await?;
     }
     txn.commit().await?;
+    Ok(())
+}
+
+/// 设置单成员 role（频道 v1：统筹者标记的任命/迁移——'coordinator' 真相源）。
+pub async fn set_member_role(
+    pool: &SqlitePool,
+    project_id: &str,
+    agent_id: &str,
+    role: &str,
+) -> AppResult<()> {
+    let affected =
+        sqlx::query("UPDATE project_agents SET role = ? WHERE project_id = ? AND agent_id = ?")
+            .bind(role)
+            .bind(project_id)
+            .bind(agent_id)
+            .execute(pool)
+            .await?
+            .rows_affected();
+    if affected == 0 {
+        return Err(AppError::NotFound {
+            resource: "project_member",
+            id: format!("{project_id}/{agent_id}"),
+        });
+    }
     Ok(())
 }
 

@@ -1392,6 +1392,9 @@ mod tests {
             model: None,
             source_seq: None,
             incoming_source: None,
+            sender_agent_id: None,
+            sender_agent_name: None,
+            turn_duration_ms: None,
         };
         assert_eq!(first_text_summary(&row), "短指令");
         // 裸 content 长文本：按字符截断 40 + 省略号（CJK 不出乱码）

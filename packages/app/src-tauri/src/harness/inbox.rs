@@ -570,6 +570,8 @@ pub async fn consume_pending(
             attach_file_inputs: Vec::new(),
             emit_user_blocks: false,
             incoming_source: Some(incoming_source),
+            sender_name: None,
+            pre_materialized: false,
             tools_enabled: true,
             model_override: None,
             cancel_token,
@@ -782,6 +784,7 @@ mod tests {
             initiator_agent_id: None,
             parent_conversation_id: None,
             inbox_policy: "accept".into(),
+            archived_at: None,
         }
     }
 
