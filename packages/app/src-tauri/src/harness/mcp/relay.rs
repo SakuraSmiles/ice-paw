@@ -85,7 +85,9 @@ impl McpClient for SendToSessionTool {
          'delivered' (consumption started - default policy auto-consumes), 'queued' (target busy, \
          auto-consume when free), or 'held' (target policy requires user approval). Set \
          expect_reply=true to have the target's answer sent back to this conversation \
-         automatically."
+         automatically; with it on, the target agent is instructed to answer directly in its \
+         turn (do NOT call send_message_to_session to reply - the system delivers the final \
+         answer back, calling it yourself would duplicate the reply)."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -102,7 +104,7 @@ impl McpClient for SendToSessionTool {
                 },
                 "expect_reply": {
                     "type": "boolean",
-                    "description": "If true, the target agent's final answer is delivered back to this conversation automatically. Default false."
+                    "description": "If true, the target agent's final answer is delivered back to this conversation automatically; the target is then told to answer directly (no need for it to call send_message_to_session). Default false."
                 }
             },
             "required": ["target", "content"]

@@ -127,13 +127,26 @@ pub async fn respond_inbox_item(
         })?;
 
     if allow {
-        // by=user-approval 不占自动配额；会话忙时 consume_pending 返回 Ok(false)
+        // by=user-approval 不占自动配额；会话忙时 consume_pending 返回 Ok(false)。
+        // busy 文案按语境分叉（2026-09-10 测试反馈）：accept / is_reply 的来件
+        // 本是自动消费（排队等空闲），撞上生成中是排队常态而非「批准失败」；
+        // hold 的批准才是真审批手势，保持「等本轮结束后再批准」。
+        let auto_context = conv.inbox_policy == "accept"
+            || serde_json::from_str::<CrossSessionMessagePayload>(&ev.payload)
+                .map(|p| p.is_reply)
+                .unwrap_or(false);
         let title = conv.title.clone();
         match inbox::consume_pending(&app, pool.inner(), conv, ev, "user-approval").await {
             Ok(true) => Ok(()),
-            Ok(false) => Err(AppError::Validation(format!(
-                "会话「{title}」正在生成中——来件已保留在收件箱，请等本轮结束后再批准"
-            ))),
+            Ok(false) => Err(AppError::Validation(if auto_context {
+                format!(
+                    "会话「{title}」正在处理上一条来件——本条已在队列中，其结束后会自动处理，无需手动操作"
+                )
+            } else {
+                format!(
+                    "会话「{title}」正在生成中——来件已保留在收件箱，请等本轮结束后再批准"
+                )
+            })),
             Err(e) => Err(e),
         }
     } else {

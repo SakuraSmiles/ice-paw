@@ -42,7 +42,10 @@
 //!   放行——用户批准不占配额）；内存窗口，重启清零可接受（护栏非计费）；
 //! - 投递只入 kind='chat' 会话（delegation 子会话拒——防子会话侧信道绕过
 //!   委派深度护栏；工具注册同款按 kind 判定）；
-//! - 回投（expect_reply=true）恒 expect_reply=false——链一次止。
+//! - 回投（expect_reply=true）恒 expect_reply=false——链一次止；
+//! - **双投递防重**（2026-09-10 真机实案）：expect_reply 开启时标注指引目标
+//!   agent 直接作答（不叫它调投递工具），且消费回合内已手动投回源会话则
+//!   跳过自动回投——两道闸防「手动回复 + 自动回投」每轮重复两条。
 //!
 //! ## 中继不带用户权威（CC 经验不变式）
 //!
@@ -96,14 +99,24 @@ pub const INCOMING_PREFIX_HEAD: &str = "[来自会话「";
 
 /// 组装来源标注块（独立 Text 块）：标注「这条消息从哪来、怎么回」——目标
 /// agent 需要它回信（target id），用户侧 UI 不再解析它（元数据接管）。
+///
+/// 回信指引按 `expect_reply` 分叉（2026-09-10 双投递根治）：投递方开了
+/// 自动回传时，指引目标 agent **直接作答**（系统会把最终回复投回源会话），
+/// 不再叫它调投递工具——否则听话的 agent 手动回一条 + 系统自动回投一条，
+/// 源会话每轮收到两条语义重复的消息（真机实案：4 条来件烧 2 个 ~97K 上下文
+/// 的多余整回合）。两分支都保留 `target=` 锚（前端文本兜底解析依赖它）。
 pub fn compose_incoming_annotation(
     source_title: &str,
     agent_name: &str,
     source_conv_id: &str,
+    expect_reply: bool,
 ) -> String {
-    format!(
-        "[来自会话「{source_title}」的 agent {agent_name}｜如需回复用 send_message_to_session 工具，target={source_conv_id}]"
-    )
+    let reply_hint = if expect_reply {
+        format!("对方已开启自动回传，直接作答即可（无需调用投递工具）；如需另行主动投递，target={source_conv_id}")
+    } else {
+        format!("如需回复用 send_message_to_session 工具，target={source_conv_id}")
+    };
+    format!("[来自会话「{source_title}」的 agent {agent_name}｜{reply_hint}]")
 }
 
 /// 组装消费回合的 user 消息**双块结构**：[来源标注块, 正文块]（系统组装，
@@ -116,6 +129,7 @@ pub fn compose_incoming_blocks(
     source_title: &str,
     agent_name: &str,
     source_conv_id: &str,
+    expect_reply: bool,
     content: &str,
 ) -> Vec<ContentBlock> {
     vec![
@@ -123,6 +137,7 @@ pub fn compose_incoming_blocks(
             source_title,
             agent_name,
             source_conv_id,
+            expect_reply,
         )),
         ContentBlock::text(content.to_string()),
     ]
@@ -133,11 +148,12 @@ pub fn compose_incoming_text(
     source_title: &str,
     agent_name: &str,
     source_conv_id: &str,
+    expect_reply: bool,
     content: &str,
 ) -> String {
     format!(
         "{}\n\n{content}",
-        compose_incoming_annotation(source_title, agent_name, source_conv_id)
+        compose_incoming_annotation(source_title, agent_name, source_conv_id, expect_reply)
     )
 }
 
@@ -165,6 +181,44 @@ fn auto_consume_reserve(conv_id: &str, now: Instant) -> bool {
     }
     q.push_back(now);
     true
+}
+
+// =========================================================================
+// 手动回投防重（双投递兜底；内存态与 AUTO_QUOTA 同性质）
+// =========================================================================
+
+/// 双投递防重登记（2026-09-10 测试反馈批②）：消费回合内 agent 按（旧）标注
+/// 指引或自身判断调 `send_message_to_session` 手动投回源会话时，expect_reply
+/// 的自动回投会**再投一条**——源会话每轮收到两条语义重复的消息。标注分叉
+/// （compose_incoming_annotation）是主修（agent 可见），本登记是兜底：不依赖
+/// 模型听话。键 `(源会话, 目标会话)` → 登记时刻；consume_pending 在回投前
+/// 检查「回合内是否已手动投回」，命中则跳过自动回投。
+static MANUAL_REPLY_GUARD: OnceLock<Mutex<HashMap<(String, String), Instant>>> = OnceLock::new();
+
+fn manual_reply_guard() -> &'static Mutex<HashMap<(String, String), Instant>> {
+    MANUAL_REPLY_GUARD.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 登记一次手动投递（deliver 的 `is_reply=false` 路径调用——自动回投自身
+/// 不登记）。容量护栏：超限时只留近 10 分钟（更早的登记对「回合内」判定
+/// 已无意义）。
+fn manual_reply_record(from_conv: &str, to_conv: &str) {
+    let mut map = manual_reply_guard().lock().unwrap();
+    if map.len() > 1024 {
+        let cutoff = Instant::now() - AUTO_WINDOW;
+        map.retain(|_, t| *t > cutoff);
+    }
+    map.insert((from_conv.to_string(), to_conv.to_string()), Instant::now());
+}
+
+/// 检查并取走「`turn_start` 之后是否存在 from→to 的手动投递」（consume_pending
+/// 回投前调用；take 语义防同一登记被两次消费吸收）。
+fn manual_reply_take(from_conv: &str, to_conv: &str, turn_start: Instant) -> bool {
+    let mut map = manual_reply_guard().lock().unwrap();
+    match map.remove(&(from_conv.to_string(), to_conv.to_string())) {
+        Some(t) => t >= turn_start,
+        None => false,
+    }
 }
 
 // =========================================================================
@@ -316,6 +370,13 @@ pub async fn deliver(
         "跨会话消息入队"
     );
 
+    // 手动投递登记（双投递防重）：消费回合结束后 expect_reply 回投前查——
+    // agent 已在本回合手动投回源会话则跳过自动回投（is_reply=true 的自动
+    // 回投自身不登记，防自吸收）
+    if !is_reply {
+        manual_reply_record(&source.conv_id, &target.id);
+    }
+
     // 可自动消费：accept，或 is_reply 例外（回投不受 hold 扣）
     if target.inbox_policy == "accept" || (is_reply && target.inbox_policy == "hold") {
         let chat_state = app.state::<ChatState>().inner().clone();
@@ -447,19 +508,23 @@ pub async fn consume_pending(
     .await;
 
     // --- 消费回合：来件物化为双块结构的 user 消息，run_agent_turn 全链路 ---
-    // blocks = [来源标注块, 正文块]（系统组装）；content 扁平快照走
-    // compose_incoming_text（检索/回退显示兼容）；incoming_source 元数据
-    // 是前端 incoming 卡的权威数据源（messages 列 + 事件 payload 双写）。
+    // blocks = [来源标注块, 正文块]（系统组装，标注按 expect_reply 分叉——
+    // 自动回传已开启时指引直接作答）；content 扁平快照走 compose_incoming_text
+    // （检索/回退显示兼容）；incoming_source 元数据是前端 incoming 卡的权威
+    // 数据源（messages 列 + 事件 payload 双写）。
+    let turn_start = Instant::now();
     let blocks = compose_incoming_blocks(
         &payload.source_conversation_title,
         &payload.source_agent_name,
         &payload.source_conversation_id,
+        payload.expect_reply,
         &payload.content,
     );
     let text = compose_incoming_text(
         &payload.source_conversation_title,
         &payload.source_agent_name,
         &payload.source_conversation_id,
+        payload.expect_reply,
         &payload.content,
     );
     let incoming_source = crate::harness::event_log::IncomingSourceMeta {
@@ -528,6 +593,8 @@ pub async fn consume_pending(
     // --- expect_reply 回投：完成后把目标 agent 最终回复投回源会话 ---
     // 链一次止（回投恒 expect_reply=false）；is_reply=true——不受源会话 hold
     // 扣（用户自己发起的回路），refuse 仍拦。回复为空不投（诚实：没内容可回）。
+    // **双投递防重**：回合内 agent 已手动投回源会话（manual_reply_take 命中）
+    // 则跳过自动回投——手动回复已满足回信意图，再投即重复。
     if payload.expect_reply {
         let app = app.clone();
         let pool = pool.clone();
@@ -539,9 +606,18 @@ pub async fn consume_pending(
             project_id: conv.project_id.clone(),
         };
         let reply_to = payload.source_conversation_id.clone();
+        let guard_conv_id = conv.id.clone();
         tauri::async_runtime::spawn(async move {
             match done_rx.await {
                 Ok(summary) => {
+                    if manual_reply_take(&guard_conv_id, &reply_to, turn_start) {
+                        tracing::info!(
+                            target: "ice_paw.inbox",
+                            to_conv = %reply_to,
+                            "消费回合内 agent 已手动投回源会话，跳过自动回投（防双投递）"
+                        );
+                        return;
+                    }
                     let reply = summary.final_text.trim();
                     if reply.is_empty() {
                         tracing::info!(
@@ -649,20 +725,36 @@ mod tests {
 
     #[test]
     fn compose_incoming_text_carries_prefix_and_reply_hint() {
-        let text = compose_incoming_text("主控", "甲", "conv-src", "材质定稿了吗");
+        let text = compose_incoming_text("主控", "甲", "conv-src", false, "材质定稿了吗");
         assert!(
             text.starts_with(INCOMING_PREFIX_HEAD),
             "前端检测锚必须在开头: {text}"
         );
         assert!(text.contains("主控」的 agent 甲"), "来源标注: {text}");
+        assert!(text.contains("send_message_to_session"), "手动回信指引: {text}");
         assert!(text.contains("target=conv-src"), "回信指引带源会话 id: {text}");
         assert!(text.ends_with("材质定稿了吗"));
         assert!(text.contains("\n\n"), "标注头与正文之间空行分隔");
     }
 
     #[test]
+    fn compose_annotation_expect_reply_branch_directs_direct_answer() {
+        // 自动回传已开启：指引直接作答，不再叫 agent 调投递工具（防双投递）；
+        // target= 锚保留（前端文本兜底解析依赖）
+        let auto = compose_incoming_annotation("主控", "甲", "conv-src", true);
+        assert!(auto.starts_with(INCOMING_PREFIX_HEAD), "检测锚: {auto}");
+        assert!(auto.contains("自动回传"), "告知回传已开启: {auto}");
+        assert!(auto.contains("直接作答"), "指引直接作答: {auto}");
+        assert!(auto.contains("target=conv-src"), "target 锚保留: {auto}");
+        // 手动分支：保持旧形态（回信走投递工具）
+        let manual = compose_incoming_annotation("主控", "甲", "conv-src", false);
+        assert!(manual.contains("send_message_to_session"), "手动回信指引: {manual}");
+        assert!(!manual.contains("直接作答"), "手动分支不指引作答: {manual}");
+    }
+
+    #[test]
     fn compose_incoming_blocks_is_annotation_plus_body() {
-        let blocks = compose_incoming_blocks("主控", "甲", "conv-src", "材质定稿了吗");
+        let blocks = compose_incoming_blocks("主控", "甲", "conv-src", true, "材质定稿了吗");
         assert_eq!(blocks.len(), 2, "双块结构：标注块 + 正文块");
         let ContentBlock::Text { text: head } = &blocks[0] else {
             panic!("首块必须是 Text");
@@ -733,5 +825,37 @@ mod tests {
         assert!(auto_consume_reserve(conv, later));
 
         quota_map().lock().unwrap().clear();
+    }
+
+    #[test]
+    fn manual_reply_guard_semantics() {
+        manual_reply_guard().lock().unwrap().clear();
+
+        // 回合内手动投递（登记时刻晚于 turn_start）→ 命中
+        let turn_start = Instant::now();
+        std::thread::sleep(Duration::from_millis(1));
+        manual_reply_record("conv-b", "conv-a");
+        assert!(
+            manual_reply_take("conv-b", "conv-a", turn_start),
+            "回合内的登记命中"
+        );
+        // take 是消费语义：同一登记不被二次吸收
+        assert!(
+            !manual_reply_take("conv-b", "conv-a", turn_start),
+            "已消费的登记不重复命中"
+        );
+
+        // 陈旧登记（回合开始之前遗留）不算——只认本回合内的手动投递
+        let future_turn = Instant::now() + Duration::from_secs(1);
+        manual_reply_record("conv-b", "conv-a");
+        assert!(
+            !manual_reply_take("conv-b", "conv-a", future_turn),
+            "回合前的陈旧登记不命中"
+        );
+
+        // 无登记的方向恒不命中
+        assert!(!manual_reply_take("conv-x", "conv-a", Instant::now()));
+
+        manual_reply_guard().lock().unwrap().clear();
     }
 }
