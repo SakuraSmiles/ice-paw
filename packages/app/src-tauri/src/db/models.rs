@@ -538,7 +538,8 @@ pub struct ConversationRow {
     pub initiator_agent_id: Option<String>,
     /// MA-1: 委派图边——发起委派的父会话（ON DELETE SET NULL，父删边不删子）
     pub parent_conversation_id: Option<String>,
-    /// MA-3: 收件政策 'accept' | 'hold' | 'refuse'（migration 52，存量行默认 'hold'）
+    /// MA-3: 收件政策 'accept' | 'hold' | 'refuse'（migration 52，默认 'accept'
+    /// ——2026-09-10 拍板：投递即自动消费，hold 扣住待批准是显式选择）
     pub inbox_policy: String,
 }
 
@@ -575,9 +576,10 @@ fn default_conversation_kind() -> String {
     "chat".to_string()
 }
 
-/// `inbox_policy` 的 serde 默认值（旧负载无此字段时保守视为扣住待批准）
+/// `inbox_policy` 的 serde 默认值（旧负载无此字段时视为自动消费——与
+/// migration 52 的列默认 accept 对齐，2026-09-10 拍板默认政策）
 fn default_inbox_policy() -> String {
-    "hold".to_string()
+    "accept".to_string()
 }
 
 impl From<ConversationRow> for Conversation {

@@ -14,8 +14,9 @@
 //! 接线一律在 harness/command 语义层，不放 repo 层（repo 不知 turn 语境，
 //! 且「占位 create + finalize」两点会双记）。
 //!
-//! 词表与不入日志项的完整清单见 `migrations/44_session_events.sql` 头注释
-//! 与 docs（BatchWriter 流式 flush / 合成续写 prompt / 工具排序均不入）。
+//! 词表以本文件的 typed emitter 集为单一真相源（现 18 kind；migration 44 头注释
+//! 只记建表时初始集，已滞后勿再引用）。不入日志项：BatchWriter 流式 flush /
+//! 合成续写 prompt / 工具排序（瞬态过程非事实）。
 
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
@@ -69,7 +70,7 @@ pub struct SessionEventAppended {
     pub kind: String,
 }
 
-/// 进程内广播通道。append_event 是全部 13 kind 的唯一汇聚点，在这里 send
+/// 进程内广播通道。append_event 是全部 18 kind 的唯一汇聚点，在这里 send
 /// 一条通知即可覆盖所有事件源（含未来新增 kind），无需逐调用方接线。
 /// 无订阅者时 send 返回 Err——直接忽略（dev 测试 / 订阅任务未起时安静跳过）。
 static EVENT_BUS: OnceLock<broadcast::Sender<SessionEventAppended>> = OnceLock::new();

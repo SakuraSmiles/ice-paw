@@ -396,7 +396,7 @@ pub async fn deliver(
             queue_position,
         });
     }
-    // hold（默认）及未知值：保守扣住
+    // hold 及未知值：保守扣住（默认政策是 accept，已在上面分支放行）
     Ok(DeliveryOutcome {
         status: "held",
         target_title: target.title,

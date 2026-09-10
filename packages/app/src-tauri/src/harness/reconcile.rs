@@ -16,6 +16,8 @@
 //! - `pre_phase0_no_events`：migration 44 之前的会话（零事件，无从对账）
 //! - `legacy_epoch_rows`：事件纪元之前的行（首个事件 turn 之前）
 //! - `incomplete_turn`：无 turn_ended 的 turn（崩溃/强杀，Phase 0 已知缺口）
+//! - `incomplete_turn_legacy_rows`：上述 turn 内已落库但无事件的 legacy 行
+//!   （跨会话来件 pending 等不完整 turn 也会计入——排查时排除 turn 前缀 `cross:`）
 //! - `error_row`：error 非空的行（内容空，LLM 双侧不可见；message_error 事件在场）
 //! - `discarded_row`：有 message_discarded/message_error 事件的 message_id 行不存在
 //!   （终止守卫删占位；cancel_top 场景行保留为空）
