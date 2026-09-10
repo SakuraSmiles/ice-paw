@@ -315,6 +315,11 @@ struct Hop {
 struct ChannelRuntime {
     /// 链头 = 触发本链的最后一条用户消息 id（run_agent_turn 的 turn_id 锚）
     head_msg_id: Option<String>,
+    /// 链头消息是否已被**真正派发**（run_next_hop 成功发起过成员回合）。
+    /// false = 头已登记但还没派发（等选举落定/会话忙暂缓）——重消费须走
+    /// **含头**查询（`list_user_anchors_from`），否则原消息被永久搁浅；
+    /// true = 头已被消费，走严格之后（`list_user_anchors_after`）。
+    head_dispatched: bool,
     /// 已**发起**的成员回合计数（含在途；MAX_CHAIN_TURNS 计数口径）
     turns_taken: usize,
     /// 有序对计数（成员→成员；用户跳不计——无乒乓语义）
@@ -604,22 +609,31 @@ async fn consume_backlog(
         .find(|m| m.role == "coordinator")
         .map(|m| m.agent_id.clone());
 
-    // 旧链头（内存）；无 runtime 时以「当前最后一条 user 锚点」为界（不重消费历史）
-    let old_head: Option<String> = {
+    // 积压边界三档（2026-09-10 生产实案修复：全新频道消息静默不被消费）：
+    // ① 有链头且已派发 → 严格之后（现行语义）；② 有链头未派发（等选举落定/
+    //    会话忙暂缓后重入）→ **含头**——链头消息自己还没被消费过；③ 无
+    //    runtime（重启/首条）→ 以「最后一条**真实** assistant 消息」为界
+    //    （其后全部 user 锚点 = 未消费积压；全新频道无 assistant 行 → 全部）。
+    //    ⚠️ 旧实现回退边界 = 最后一条 user 锚点 = 刚物化的消息自己 → backlog
+    //    恒空 → 路由整体静默 no-op（广播/点名全死，消息永久搁浅）。
+    let old_state: Option<(String, bool)> = {
         let map = runtimes().lock().unwrap();
-        map.get(&conv.id).and_then(|rt| rt.head_msg_id.clone())
+        map.get(&conv.id)
+            .and_then(|rt| rt.head_msg_id.clone().map(|h| (h, rt.head_dispatched)))
     };
-    let anchor_boundary: Option<String> = match old_head {
-        Some(h) => Some(h),
-        None => repo::message::list_turn_anchors(pool, &conv.id)
-            .await?
-            .last()
-            .map(|a| a.message_id.clone()),
-    };
-
-    let backlog: Vec<TurnAnchor> = match &anchor_boundary {
-        Some(b) => repo::message::list_user_anchors_after(pool, &conv.id, b).await?,
-        None => Vec::new(),
+    let backlog: Vec<TurnAnchor> = match old_state {
+        Some((head, true)) => {
+            repo::message::list_user_anchors_after(pool, &conv.id, &head).await?
+        }
+        Some((head, false)) => {
+            repo::message::list_user_anchors_from(pool, &conv.id, &head).await?
+        }
+        None => match repo::message::last_assistant_message_id(pool, &conv.id).await? {
+            Some(last_reply) => {
+                repo::message::list_user_anchors_after(pool, &conv.id, &last_reply).await?
+            }
+            None => repo::message::list_turn_anchors(pool, &conv.id).await?,
+        },
     };
     if backlog.is_empty() {
         return Ok(()); // 无新消息（并发窗口内已被消费）
@@ -632,6 +646,9 @@ async fn consume_backlog(
 
     // 新链：取消旧 pending（user_preempted 事件）+ 重置链内计数（频率窗跨链
     // 保留）。锁段只收集数据，事件发射在锁外（guard 跨 await 会毒化 Send）。
+    // ⚠️ 链头提交推迟到路由臂（Members 设头 / NeedsCoordinator 仅空缺时初始
+    // 化）——在此先行提交会把「登记了头但还没派发」的消息从重消费边界里吃
+    // 掉（选举完成后 on_coordinator_settled 重消费恒空 → 原广播永久搁浅）。
     let (cancelled, head_for_events, mentions_merged): (VecDeque<Hop>, String, Vec<String>) = {
         let mut map = runtimes().lock().unwrap();
         let rt = map.entry(conv.id.clone()).or_default();
@@ -642,7 +659,6 @@ async fn consume_backlog(
             .unwrap_or_else(|| new_head.clone());
         rt.turns_taken = 0;
         rt.pair_counts.clear();
-        rt.head_msg_id = Some(new_head.clone());
         let mentions = std::mem::take(&mut rt.backlog_mentions);
         (cancelled, head_for_events, mentions)
     };
@@ -706,6 +722,11 @@ async fn consume_backlog(
                         from: None,
                     })
                     .collect();
+                // 链头在此提交（路由确定、即将派发）；dispatched 由 run_next_hop
+                // 真正发起成功后置位——本臂到发起之间若失败（会话忙暂缓等），
+                // 重消费走含头查询，链头消息不丢。
+                rt.head_msg_id = Some(new_head.clone());
+                rt.head_dispatched = false;
             }
             tracing::info!(
                 target: "ice_paw.channel",
@@ -719,6 +740,25 @@ async fn consume_backlog(
         }
         ChannelRoute::NeedsCoordinator => {
             // C5：统筹空缺 → 触发自选举（消息已落流不丢；选举产出后 consume 接管）
+            {
+                let mut map = runtimes().lock().unwrap();
+                let rt = map.entry(conv.id.clone()).or_default();
+                // 仅空缺时初始化链头（dispatched=false → 选举完成后
+                // on_coordinator_settled 的重消费走含头查询取回本条消息）；已有
+                // 头不动——选举中 M2 到达重入时推进头会把 M1 搁浅在 from(M2)
+                // 边界之外。
+                if rt.head_msg_id.is_none() {
+                    rt.head_msg_id = Some(new_head.clone());
+                    rt.head_dispatched = false;
+                }
+                // 还原本轮 take 掉的 mentions（选举后重消费须按原意图路由，不
+                // 能降级成广播）；选举期间新登记的追加在后（时间序）。
+                if !mentions_merged.is_empty() {
+                    let mut restored = mentions_merged;
+                    restored.append(&mut rt.backlog_mentions);
+                    rt.backlog_mentions = restored;
+                }
+            }
             tracing::warn!(
                 target: "ice_paw.channel",
                 conv = %conv.id,
@@ -1318,6 +1358,14 @@ async fn run_next_hop(
         .await?;
         // spawn 成功：注销责任已移交 stream_loop，解除守卫
         scopeguard::ScopeGuard::into_inner(cancel_guard);
+        // 链头此刻起才算「已派发」——重消费边界从含头切回严格之后。
+        //（busy 回退/凭据失败 continue 等未发起路径不置位：跳没跑成 = 未派发。）
+        {
+            let mut map = runtimes().lock().unwrap();
+            if let Some(rt) = map.get_mut(&conv.id) {
+                rt.head_dispatched = true;
+            }
+        }
         tracing::info!(
             target: "ice_paw.channel",
             conv = %conv.id,
@@ -1959,5 +2007,68 @@ mod tests {
         assert_eq!(coord_streak_inc("conv-streak-test"), 2);
         coord_streak_reset("conv-streak-test");
         assert_eq!(coord_streak_get("conv-streak-test"), 0);
+    }
+
+    // ---------- 链头派发状态机（consume_backlog 边界三档的输入） ----------
+
+    /// consume_backlog 读 old_state 的同款锁读：None → DB 回退；Some((h,false))
+    /// → 含头重消费（等选举落定/暂缓期间消息不搁浅）；Some((h,true)) → 严格
+    /// 之后。生产实案 2026-09-10：旧实现无此区分且回退边界取错 → 首条广播
+    /// 静默 no-op。
+    #[test]
+    fn head_dispatch_state_readback_and_default() {
+        let conv = "conv-head-state-test";
+        finish_chain(conv); // 清残留
+
+        // 全新频道：无 runtime → old_state = None（DB 回退路径）
+        let none = {
+            let map = runtimes().lock().unwrap();
+            map.get(conv)
+                .and_then(|rt| rt.head_msg_id.clone().map(|h| (h, rt.head_dispatched)))
+        };
+        assert_eq!(none, None);
+
+        // NeedsCoordinator 登记（仅 head=None 时初始化，Default 派生 dispatched=false）
+        {
+            let mut map = runtimes().lock().unwrap();
+            let rt = map.entry(conv.to_string()).or_default();
+            if rt.head_msg_id.is_none() {
+                rt.head_msg_id = Some("m1".to_string());
+            }
+        }
+        // 选举中 M2 重入不推进头（NeedsCoordinator 臂仅空缺时初始化）
+        {
+            let mut map = runtimes().lock().unwrap();
+            let rt = map.entry(conv.to_string()).or_default();
+            if rt.head_msg_id.is_none() {
+                rt.head_msg_id = Some("m2".to_string());
+            }
+        }
+        let registered = {
+            let map = runtimes().lock().unwrap();
+            map.get(conv)
+                .and_then(|rt| rt.head_msg_id.clone().map(|h| (h, rt.head_dispatched)))
+        };
+        assert_eq!(
+            registered,
+            Some(("m1".to_string(), false)),
+            "登记未派发：重消费须含头，且头不被选举期重入推进"
+        );
+
+        // run_next_hop 派发成功语义：置 true → 下次走严格之后
+        {
+            let mut map = runtimes().lock().unwrap();
+            if let Some(rt) = map.get_mut(conv) {
+                rt.head_dispatched = true;
+            }
+        }
+        let dispatched = {
+            let map = runtimes().lock().unwrap();
+            map.get(conv)
+                .and_then(|rt| rt.head_msg_id.clone().map(|h| (h, rt.head_dispatched)))
+        };
+        assert_eq!(dispatched, Some(("m1".to_string(), true)));
+
+        finish_chain(conv); // 链终结：下次走 old_state=None → DB 回退，衔接正确
     }
 }

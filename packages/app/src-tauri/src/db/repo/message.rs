@@ -197,6 +197,64 @@ pub async fn list_user_anchors_after(
         .collect())
 }
 
+/// 某消息起（含该消息）的真实用户消息锚点（频道 v1 未派发链头重消费）。
+///
+/// 与 [`list_user_anchors_after`] 的唯一差异 = `rowid >=`（含头）——链头登记后
+/// **尚未派发任何成员回合**（等选举落定/会话忙暂缓）时，链头消息自身还没被
+/// 消费过，重消费必须把它包含进来；已派发则走 `after`（严格之后）。
+pub async fn list_user_anchors_from(
+    pool: &SqlitePool,
+    conversation_id: &str,
+    from_message_id: &str,
+) -> AppResult<Vec<TurnAnchor>> {
+    let rows: Vec<(String, Option<String>, String)> = sqlx::query_as(
+        "SELECT id, substr(content, 1, 120), created_at \
+           FROM messages \
+          WHERE conversation_id = ? AND role = 'user' \
+            AND rowid >= (SELECT rowid FROM messages WHERE id = ?) \
+            AND NOT (TRIM(COALESCE(content, '')) = '' \
+                     AND COALESCE(content_blocks, '') LIKE '%\"type\":\"tool_result\"%') \
+            AND NOT (TRIM(COALESCE(content, '')) = '' \
+                     AND COALESCE(content_blocks, '') IN ('', '[]')) \
+          ORDER BY created_at ASC, rowid ASC",
+    )
+    .bind(conversation_id)
+    .bind(from_message_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(message_id, preview, created_at)| TurnAnchor {
+            message_id,
+            preview: preview.unwrap_or_default(),
+            created_at,
+        })
+        .collect())
+}
+
+/// 会话内**最后一条真实 assistant 消息** id（频道 v1 无 runtime 时的重消费边界）。
+///
+/// 「真实」= content 非空（产出了可见终文）：回合启动即建的空 assistant 占位
+/// 行（崩溃/中断残留）与只含 tool_use/thinking 的中间行都不能当边界——否则
+/// 「已占位未回答」的用户消息会被永久排除出重消费面。错误回合若残留这类行
+/// → 该消息被重试消费（C5 streak 护栏有界，方向是「多干活」非丢消息）。
+/// 无任何真实 assistant 行 → None（全新频道：全部 user 锚点都是积压）。
+pub async fn last_assistant_message_id(
+    pool: &SqlitePool,
+    conversation_id: &str,
+) -> AppResult<Option<String>> {
+    let row: Option<(String,)> = sqlx::query_as(
+        "SELECT id FROM messages \
+          WHERE conversation_id = ? AND role = 'assistant' \
+            AND TRIM(COALESCE(content, '')) != '' \
+          ORDER BY rowid DESC LIMIT 1",
+    )
+    .bind(conversation_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(id,)| id))
+}
+
 /// 统计会话内的消息总数
 ///
 /// 返回 `i64` 以与 SQL `COUNT(*)` 对齐，且与 SQLite 的上限毫无关系。
@@ -672,5 +730,93 @@ mod tests {
             }
             e => panic!("expected NotFound, got {e:?}"),
         }
+    }
+
+    /// 频道积压查询族（`list_user_anchors_from` 含头 + 占位行排除）。
+    /// 生产实案 2026-09-10：旧回退边界 = 最后一条 user 锚点 = 刚物化的消息
+    /// 自己 → backlog 恒空 → 频道路由整体静默 no-op——含头查询是修复的地基。
+    #[tokio::test]
+    async fn channel_anchors_from_includes_head_and_filters_placeholders() {
+        let pool = fresh_pool().await;
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
+        seed_message(&pool, "u1", "conv-backlog").await; // content = "hello"
+
+        let new_msg = |role: &str, content: &str| NewMessage {
+            conversation_id: "conv-backlog".to_string(),
+            role: role.to_string(),
+            content: content.to_string(),
+            token_count: None,
+            error: None,
+            model: None,
+        };
+        create(&pool, "u2", &new_msg("user", "第二条")).await.unwrap();
+        // tool_result 占位 user 行（在途工具轮，非用户发言）→ 排除
+        create(&pool, "u-tool", &new_msg("user", "")).await.unwrap();
+        update_content_blocks(&pool, "u-tool", r#"[{"type":"tool_result","tool_use_id":"t1"}]"#)
+            .await
+            .unwrap();
+        // 空占位 user 行（崩溃残留）→ 排除
+        create(&pool, "u-empty", &new_msg("user", "")).await.unwrap();
+
+        let ids = |v: Vec<TurnAnchor>| v.into_iter().map(|a| a.message_id).collect::<Vec<_>>();
+
+        // 含头查询（head_dispatched=false 的重消费路径）：从 u2 起 = [u2]（含自己）
+        let from_u2 = list_user_anchors_from(&pool, "conv-backlog", "u2").await.unwrap();
+        assert_eq!(ids(from_u2), vec!["u2"]);
+        // 从 u1 起 = [u1, u2]（占位行两侧都不混入）
+        let from_u1 = list_user_anchors_from(&pool, "conv-backlog", "u1").await.unwrap();
+        assert_eq!(ids(from_u1), vec!["u1", "u2"]);
+        // 对照：严格之后（已派发路径）= [u2]
+        let after_u1 = list_user_anchors_after(&pool, "conv-backlog", "u1").await.unwrap();
+        assert_eq!(ids(after_u1), vec!["u2"]);
+    }
+
+    /// 频道无 runtime 时的重消费边界（`last_assistant_message_id`）：
+    /// 空 content 的 assistant 行（占位/纯 tool_use/纯 thinking）不产终文，
+    /// 不能当边界——否则其触发消息被永久排除出重消费面。
+    #[tokio::test]
+    async fn last_assistant_message_id_skips_non_text_rows() {
+        let pool = fresh_pool().await;
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
+        seed_message(&pool, "u1", "conv-boundary").await;
+
+        let new_msg = |content: &str| NewMessage {
+            conversation_id: "conv-boundary".to_string(),
+            role: "assistant".to_string(),
+            content: content.to_string(),
+            token_count: None,
+            error: None,
+            model: None,
+        };
+        // 占位行（content='' blocks='[]'）与纯 tool_use 行（content=''）都跳过
+        create(&pool, "a-ph", &new_msg("")).await.unwrap();
+        create(&pool, "a-tool", &new_msg("")).await.unwrap();
+        update_content_blocks(&pool, "a-tool", r#"[{"type":"tool_use","id":"t1","name":"x"}]"#)
+            .await
+            .unwrap();
+        create(&pool, "a-real", &new_msg("回答正文")).await.unwrap();
+        create(&pool, "a-ph2", &new_msg("  ")).await.unwrap(); // 纯空白也跳过
+
+        let last = last_assistant_message_id(&pool, "conv-boundary")
+            .await
+            .unwrap();
+        assert_eq!(last.as_deref(), Some("a-real"));
+
+        // 全部为空行 → None（全新频道：全部 user 锚点都是积压）
+        sqlx::query("INSERT INTO conversations (id, agent_id, title) VALUES ('conv-fresh', 'agent-1', 'fresh')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        create(&pool, "a-fresh-ph", &NewMessage { conversation_id: "conv-fresh".to_string(), role: "assistant".to_string(), content: String::new(), token_count: None, error: None, model: None })
+            .await
+            .unwrap();
+        let none = last_assistant_message_id(&pool, "conv-fresh").await.unwrap();
+        assert_eq!(none, None);
     }
 }
