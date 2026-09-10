@@ -314,8 +314,15 @@ async function toggleScreenShare() {
          删除确认 = 右锚定、向左横向扩展的确认条（覆盖星标，布局零位移） -->
     <div v-if="chat.activeConversation" class="header-right">
       <!-- MA-3 收件箱入口：来件 badge（hold 扣件批准出口 + 收件政策切换）。
-           仅普通会话——委派子会话不是跨会话通讯单位（工具注册同款 kind 判定） -->
-      <div v-if="chat.activeConversation.kind !== 'delegation'" ref="inboxZoneRef" class="inbox-zone">
+           仅挂项目的普通会话——散落会话结构性收不到投递（项目边界=同项目互投），
+           入口隐藏防死 UI；委派子会话同因不是通讯单位（工具注册同款 kind 判定）。
+           pending>0 恒显示——项目删除转散落（FK SET NULL）后已扣的 hold 来件
+           仍须有处置出口（防死信） -->
+      <div
+        v-if="chat.activeConversation.kind !== 'delegation' && (chat.activeConversation.project_id || inboxPending > 0)"
+        ref="inboxZoneRef"
+        class="inbox-zone"
+      >
         <button
           class="header-btn inbox-btn"
           :class="{ active: inboxOpen }"
