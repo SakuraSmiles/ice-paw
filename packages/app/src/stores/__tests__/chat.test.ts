@@ -226,8 +226,10 @@ describe("chatStore", () => {
     it("single-turn: chat:start → chat:chunk → chat:done accumulates text and resets", async () => {
       const { store, handlers } = await setupStream();
 
-      // 模拟 sendMessage 开始
+      // 模拟 sendMessage 开始（sendingConvId 是用户回合的判据锚——sendMessage
+      // 在 invoke 前必设，缺省会被 chat:start 误判为外部回合走权威刷新）
       store.sending = true;
+      store.sendingConvId = "c1";
       store.streamingText = "";
 
       // chat:start — 追加空 assistant 占位
@@ -411,6 +413,46 @@ describe("chatStore", () => {
       expect(store.streamingThinking).toBe("");
       expect(store.bgStreams.get("c1")).toBeDefined(); // 父会话文本被快照，切回可恢复
     });
+
+    it("外部回合（A2）：ucb 缺省且非用户发起 → sending 即刻置位 + 权威刷新 + 不本地 push 占位", async () => {
+      // MA-3 消费回合形态：emit_user_blocks=false（ucb=None）且 sendingConvId=null
+      //（不是本前端发起的回合）。incoming user 行后端已落库（带来源标注双块），
+      // 不刷新的话来件卡要等切走再切回才出现、回复看起来凭空流出。
+      const { store, handlers } = await setupStream();
+      store.sending = false;
+      const invokeCalls = mockInvoke.mock.calls.length;
+
+      const startH = handlers.get("chat:start")!;
+      startH({ payload: { conversation_id: "c1", user_message_id: "u-ext", assistant_message_id: "asst-ext" } });
+
+      expect(store.sending).toBe(true); // 生成中指示即刻可见（不等 assistant-start）
+      expect(store.messages).toHaveLength(0); // 同步段先清列表——占位由 DB 权威行带入
+      expect(mockInvoke.mock.calls.length).toBe(invokeCalls + 1);
+      expect(mockInvoke.mock.calls[mockInvoke.mock.calls.length - 1]?.[0]).toBe("list_messages"); // 权威刷新在途
+
+      await flushPromises();
+      // 刷新完成后也不本地 push 占位（mock 空返——没有 asst-ext 行即证明没塞占位）
+      expect(store.messages.filter((m) => m.id === "asst-ext")).toHaveLength(0);
+    });
+
+    it("纯文本用户回合（ucb 同为缺省）：sendingConvId 判据保住原路径——占位本地 push、不刷新", async () => {
+      // 后端 emit_user_blocks=has_files：纯文本用户回合 ucb 也是 None——判据只能
+      // 靠 sendingConvId（sendMessage 在 invoke 前已设）。误进外部分支会把乐观
+      // 气泡整页刷掉、占位与 DB 行重复。
+      const { store, handlers } = await setupStream();
+      store.sending = true;
+      store.sendingConvId = "c1";
+      const invokeCalls = mockInvoke.mock.calls.length;
+
+      const startH = handlers.get("chat:start")!;
+      startH({ payload: { conversation_id: "c1", user_message_id: "u-1", assistant_message_id: "asst-1" } });
+
+      expect(store.messages).toHaveLength(1);
+      expect(store.messages[0].id).toBe("asst-1"); // 本地占位照常
+      expect(store.messages[0].role).toBe("assistant");
+      expect(mockInvoke.mock.calls.length).toBe(invokeCalls); // 未发起 list_messages
+      expect(store.sending).toBe(true);
+    });
   });
 
   describe("sendMessage", () => {
@@ -430,6 +472,25 @@ describe("chatStore", () => {
       expect(store.streamingToolCalls.size).toBe(0);
       expect(store.lastError).toBeNull();
       expect(mockInvoke).toHaveBeenCalled();
+    });
+
+    it("在途回合早退可见化（A3）：写 send_failed 横幅 + lastFailedSend、不 invoke、附件不消费", async () => {
+      // sending 置位的回合形态有二——用户自己的回合未完 / 正在看的消费回合
+      //（chat:assistant-start 置位）。此前静默早退吞掉输入（用户只看到「发送没反应」）。
+      mockInvoke.mockClear();
+      const store = useChatStore();
+      store.conversations = [fakeConv("c1")];
+      store.activeConvId = "c1";
+      store.sending = true;
+      store.pendingImages = [{ data: "x", mediaType: "image/png", name: "a.png" }];
+
+      await store.sendMessage("第二条");
+
+      expect(store.lastErrors.get("c1")?.kind).toBe("send_failed");
+      expect(store.lastError).toContain("仍在处理中");
+      expect(store.lastFailedSend?.content).toBe("第二条"); // 横幅「重试」的数据源
+      expect(mockInvoke).not.toHaveBeenCalled(); // 没打进还在跑的回合
+      expect(store.pendingImages).toHaveLength(1); // chips 不消费（早退在并块组装之前）
     });
   });
 

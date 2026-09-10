@@ -160,10 +160,9 @@ function selectConvFromFlyout(id: string) {
   selectConv(id); // 复用：非首页先 router.push("/") 再选中
 }
 
-// Esc：全局关闭栈（Sidebar 常驻挂载 → 条目恒在栈底，仅 flyout 开着时消费，不吞别层）
-useEscapeStack(() => {
-  if (convFlyoutOpen.value) closeConvFlyout(true);
-});
+// Esc：全局关闭栈（Sidebar 常驻挂载 → 条目恒在栈底，active 谓词让路——flyout
+// 关着时不消费 Esc，放行给组件自身的 Esc 处理，如标题编辑输入框）
+useEscapeStack(() => closeConvFlyout(true), () => convFlyoutOpen.value);
 
 // 切路由关 flyout（不还焦点）：菜单语义绑定当前内容语境，路由已变语境即失效
 watch(

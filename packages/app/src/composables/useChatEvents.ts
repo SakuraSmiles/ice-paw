@@ -56,10 +56,26 @@ export async function useChatEvents(): Promise<() => void> {
 
   await subscribe<ChatStartPayload>("chat:start", (e) => {
     if (e.payload.conversation_id !== chat.activeConvId) return;
+    // 外部回合（MA-3 消费 / 委派子会话）：incoming user 行已由后端落库（带来源
+    // 标注双块），本地列表没有这条——不刷新的话来件卡要等切走再切回才出现、
+    // 回复看起来凭空流出。chat:start 时权威刷新一次，来件卡与 assistant 占位
+    //（DB 已建）一起带入，**勿再本地 push 占位**（会与 DB 行重复）。
+    // 判据 = sendingConvId 不是本会话：用户自己发起的回合（乐观气泡已在列表、
+    // 占位走本地 push）与消费回合在此分叉；hold 批准路径同样经此（spawn 的
+    // 回合照常 emit chat:start）。
+    const ucb = e.payload.user_content_blocks;
+    if (!ucb && chat.sendingConvId !== e.payload.conversation_id) {
+      // sending 即刻置位（等 assistant-start 才置的话 pipeline 段——历史加载/
+      // 摘要/OCR 可达数秒——侧栏无「生成中」、停止钮不出现；纯文本回合尤明显）。
+      // 60s 超时侧安全：chat:processing 不过滤会话恒重置计时，sendingConvId
+      // 为 null 时超时回调直接 return，不误翻转（回合由 chat:done 收尾）。
+      chat.sending = true;
+      void chat.loadMessages(e.payload.conversation_id);
+      return;
+    }
     // 含附件时：用后端 materialize 后的 content_blocks（含提取正文 Text 块）patch 乐观
     // 用户消息——前端发送时只放了 Attachment 占位卡片、拿不到提取正文，不 patch 的话
     // 附件详情弹窗会全程显示「无提取文本」（要等切换会话重载才恢复）。
-    const ucb = e.payload.user_content_blocks;
     if (ucb) {
       for (let i = chat.messages.length - 1; i >= 0; i--) {
         if (chat.messages[i].role === "user") {

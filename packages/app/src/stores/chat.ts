@@ -404,7 +404,20 @@ export const useChatStore = defineStore("chat", () => {
   }
 
   async function sendMessage(content: string, contentBlocks?: import("../types").ContentBlock[]) {
-    if (!activeConvId.value || sending.value) return;
+    if (!activeConvId.value) return;
+    if (sending.value) {
+      // 在途回合拦截可见化：sending 置位的回合形态有二——本会话用户发起的回合 /
+      // 正在看的消费回合（chat:assistant-start 置位）。此前静默早退吞掉输入
+      //（用户只看到「发送没反应」）；与后端并发拒绝（catch 路径）共用横幅 +
+      // 重试出口，附件 chips 不消费（早退发生在并块组装之前）。
+      lastFailedSend.value = { content, blocks: contentBlocks ?? [] };
+      setConvError(
+        activeConvId.value,
+        "上一条消息仍在处理中，这条没有发出。等上一条完成或先停止生成，再点重试。",
+        "send_failed",
+      );
+      return;
+    }
     sending.value = true;
     lastFailedSend.value = { content, blocks: contentBlocks ?? [] }; // 失败重发依据（chat:done 清）
     // 清掉当前会话的错误横幅（per-conv 隔离：只清本会话，不影响其它会话）
@@ -821,12 +834,15 @@ export const useChatStore = defineStore("chat", () => {
     budget, renewalNotice, updateBudget, modelSwitchNotice, updateModelSwitched,
     streamingToolCalls, streamingThinking, thinkingStartTime, thinkingDuration, lastThinkingContent, thinkingDurations,
     turnFirstIdx,
+    // sendingConvId 暴露为只读：事件层 chat:start 据此区分「用户发起的回合」与
+    // 「外部回合」（MA-3 消费 / 委派子会话——前者在 invoke 前已设本值）。
+    sendingConvId,
     // 事件层（useChatEvents）直接读写的内部 Map——暴露供其 mutate；对外读取走下方 computed
     bgStreams, pendingAuthRequests, pendingProposals, lastErrors,
     lastFailedSend, clearConvError, setConvError,
     activeConvAuthRequest, backgroundAuthRequests, pendingProposal, lastError, lastErrorKind,
     streamingConvIds,
-    loadConversations, selectConversation, loadMoreMessages,
+    loadConversations, selectConversation, loadMessages, loadMoreMessages,
     sendMessage, stopGeneration, respondToAuth, respondToProposal,
     deleteConversation, undoDeleteConversation, hasPendingDelete, pinConversation,
     // 事件层调用的状态动作（freezeCurrentAssistant 把流式态冻结进末条 assistant）

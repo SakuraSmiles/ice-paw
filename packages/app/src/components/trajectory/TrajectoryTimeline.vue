@@ -14,7 +14,8 @@
   4 泳道 + 左侧 56px 标签列（学 dsh：靠标签分区，泳道间不画分隔线；空泳道标签淡化恒显，
   道位稳定；泳道名用英文短名，与 canvas 内英文刻度同语言；顶部 6px 留白，标签列与
   canvas 泳道共用 TOP_PAD/LANE_H 保持逐像素对齐）：
-    0 User（蓝）  user_message / attachment_stored —— 输入侧（turn_context 折进表格轮次头，不上图）
+    0 User（蓝）  user_message / attachment_stored / cross_session_message(_settled) —— 输入侧
+                  （turn_context 折进表格轮次头，不上图；跨会话来件按「外来输入」归此道）
     1 Model（灰） assistant_message / summary_* / modal_adapted / message_error / message_discarded
     2 Tools（琥珀）tool_execution（tool_result_message 是 DB 结果行镜像，不上图）
     3 Hooks（绿） hook_injected —— 外挂逻辑干预对话流的审计面
@@ -100,6 +101,8 @@ function laneOf(kind: SessionEvent["kind"]): number {
     case "user_message":
     case "turn_context":
     case "attachment_stored":
+    case "cross_session_message":
+    case "cross_session_message_settled":
       return 0;
     case "assistant_message":
     case "summary_created":
@@ -129,6 +132,8 @@ const KIND_LABELS: Partial<Record<SessionEvent["kind"], string>> = {
   message_discarded: "消息丢弃",
   tool_execution: "工具",
   hook_injected: "钩子注入",
+  cross_session_message: "跨会话来件",
+  cross_session_message_settled: "来件终态",
 };
 
 function fmtClock(t: number): string {
@@ -200,6 +205,22 @@ function buildSpans() {
       if (typeof p.duration_ms === "number" && p.duration_ms >= 0) dur = p.duration_ms;
     } else if (ev.kind === "message_error") {
       isError = true;
+    } else if (ev.kind === "cross_session_message") {
+      // label 措辞镜像 useTrajectory 表格行（「跨会话来件」族），坏 payload 回退基础 label
+      const p = ev.payload as { source_conversation_title?: string; expect_reply?: boolean };
+      if (p.source_conversation_title) label += ` ← ${p.source_conversation_title}`;
+      if (p.expect_reply) label += " · 期待回复";
+    } else if (ev.kind === "cross_session_message_settled") {
+      const p = ev.payload as { action?: string; by?: string };
+      // by 词表镜像 useTrajectory 的 BY_LABELS（auto/用户批准/用户拒绝）
+      const BY_LABELS: Record<string, string> = {
+        auto: "自动",
+        "user-approval": "用户批准",
+        "user-refused": "用户拒绝",
+      };
+      const by = p.by ? BY_LABELS[p.by] ?? p.by : "";
+      label = p.action === "consumed" ? "来件已消费" : "来件已拒绝";
+      if (by) label += `（${by}）`;
     }
     // 隐式耗时兜底：无真实耗时 → 距本 turn 上一事件的间隔（首事件 prevT=null → 0）
     const effDur = dur ?? (prevT !== null && Number.isFinite(t) ? Math.max(0, t - prevT) : 0);

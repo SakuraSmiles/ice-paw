@@ -48,8 +48,10 @@ watch(inboxOpen, (open) => {
   if (open) document.addEventListener("click", onInboxDocClick);
   else document.removeEventListener("click", onInboxDocClick);
 });
-// Esc 关闭与删除确认条共用全局栈（互斥：只关栈顶）
-useEscapeStack(() => { inboxOpen.value = false; });
+// Esc 关闭与删除确认条共用全局栈（互斥：只关栈顶）。两条都是 setup 常驻注册
+// 的条件浮层——必须带 active 谓词，否则恒踞栈顶的空转回调会吞掉本该关浮层的
+// Esc（A1：confirm 注册晚于 inbox，无谓词时收件箱开着 Esc 命中的是 confirm）
+useEscapeStack(() => { inboxOpen.value = false; }, () => inboxOpen.value);
 
 const editing = ref(false);
 const editValue = ref("");
@@ -64,8 +66,8 @@ function onDocClick(e: MouseEvent) {
     confirming.value = false;
   }
 }
-// Esc 关闭确认态走全局栈（与其它浮层互斥，只关栈顶）
-useEscapeStack(() => { confirming.value = false; });
+// Esc 关闭确认态走全局栈（与其它浮层互斥，只关栈顶；active 谓词同上）
+useEscapeStack(() => { confirming.value = false; }, () => confirming.value);
 
 // U18: 只在确认条展开时注册监听，避免全局常驻
 watch(confirming, (open) => {

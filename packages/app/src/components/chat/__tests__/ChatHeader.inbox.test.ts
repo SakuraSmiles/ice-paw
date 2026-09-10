@@ -64,4 +64,16 @@ describe("ChatHeader 收件箱入口渲染条件", () => {
     await Promise.resolve();
     expect(wrapper.find(".inbox-zone").exists()).toBe(false);
   });
+
+  it("Esc 关闭打开的收件箱浮层（常驻注册带 active 谓词——删除确认条不再吞 Esc）", async () => {
+    const wrapper = await mountWith("c1", "p1");
+    await wrapper.find(".inbox-btn").trigger("click");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(wrapper.find(".inbox-popover").exists()).toBe(true); // 开了
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await Promise.resolve();
+    expect(wrapper.find(".inbox-popover").exists()).toBe(false); // Esc 关掉
+  });
 });
