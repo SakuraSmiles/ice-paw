@@ -41,10 +41,12 @@ const armedRefuseId = ref<string | null>(null);
 
 /** 收件政策三态（conversations.inbox_policy 词表；文案即语义，无 jargon）。
  *  2026-09-10 默认改 accept（「在 A 发起、切到 B 批准」反人类）；「（默认）」
- *  标注跟随词表，勿随会话实际值漂移 */
+ *  标注跟随词表，勿随会话实际值漂移。
+ *  ⚠️ hint 需恒单行（micro 11px × 340px 浮层内容宽 ≈ 28 字上限）——segmented
+ *  切档时 hint 逐行换会跳高度，超长文案收字数而非允许折行 */
 const POLICY_OPTIONS: { value: string; label: string; hint: string }[] = [
   { value: "accept", label: "自动接收（默认）", hint: "来件排队，会话空闲时自动消费" },
-  { value: "hold", label: "需批准", hint: "来件扣在收件箱，你批准后才消费（回复除外——回投免扣）" },
+  { value: "hold", label: "需批准", hint: "来件扣住，你批准后才消费；对方的回信除外" },
   { value: "refuse", label: "拒收", hint: "投递方工具立即报错，不再接收" },
 ];
 
@@ -139,7 +141,7 @@ function isAutoItem(item: InboxItem): boolean {
     <template v-else-if="items.length === 0">
       <div class="inbox-empty">
         <p>暂无待处理来件</p>
-        <p class="inbox-empty-sub">其他会话的 agent 向本会话投递的跨会话消息会出现在这里</p>
+        <p class="inbox-empty-sub">其他会话 agent 投递来的消息会出现在这里</p>
       </div>
     </template>
     <ul v-else class="inbox-list">
@@ -268,7 +270,10 @@ function isAutoItem(item: InboxItem): boolean {
 .inbox-policy-label { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
 .inbox-policy-seg { display: inline-flex; padding: 2px; background: var(--ip-color-bg-tertiary); border-radius: var(--ip-radius-md); gap: 2px; }
 .inbox-policy-btn {
-  flex: 1; padding: 4px 10px; border: none; border-radius: var(--ip-radius-sm);
+  /* 内容自适应最小宽 + 余量均分（非等分三份——「自动接收（默认）」最长，
+     等分档容不下会被挤成两行）；nowrap 是排版契约，恒单行 */
+  flex: 1 0 auto; white-space: nowrap;
+  padding: 4px 10px; border: none; border-radius: var(--ip-radius-sm);
   background: transparent; color: var(--ip-color-text-secondary);
   font-size: var(--ip-text-caption-size); font-family: inherit; cursor: pointer;
   transition: all var(--ip-duration-fast) var(--ip-ease-out);
