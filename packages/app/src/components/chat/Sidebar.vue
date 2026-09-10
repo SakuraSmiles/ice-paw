@@ -9,10 +9,11 @@ import { useNewConversation } from "../../composables/useNewConversation";
 import { useTheme } from "../../composables/useTheme";
 import { useResizablePanel } from "../../composables/useResizablePanel";
 import { useInbox } from "../../composables/useInbox";
+import { bridge } from "../../api/bridge";
 import PanelResizeHandle from "../common/PanelResizeHandle.vue";
 import EntityAvatar from "../common/EntityAvatar.vue";
 import ProjectSwitcher from "./ProjectSwitcher.vue";
-import { PanelLeftClose, PanelLeftOpen, MessageSquarePlus, MessagesSquare, Settings, Search, Star } from "@lucide/vue";
+import { PanelLeftClose, PanelLeftOpen, MessageSquarePlus, MessagesSquare, Settings, Hash, Star } from "@lucide/vue";
 import { useEscapeStack } from "../../composables/useEscapeStack";
 
 const router = useRouter();
@@ -115,7 +116,6 @@ function animDurationMs(): number {
 
 function toggleCollapsed() {
   if (convFlyoutOpen.value) closeConvFlyout();
-  searchQuery.value = ""; // 收起/展开都清搜索词，防 flyout 带着旧过滤开
   if (animTimer) clearTimeout(animTimer);
   animating.value = true; // 先挂类（overflow + transition），同 tick 换宽换树，
   collapsed.value = !collapsed.value; // Vue 批更新只布局一次，transition 从旧宽起跑
@@ -137,18 +137,17 @@ const sidebarStyle = computed(() => {
 // 搜索复用同一个 searchQuery（展开态搜索框与 flyout 搜索框互斥可见，无竞争）。
 // =========================================================================
 const convFlyoutOpen = ref(false);
-const flyoutSearchInput = ref<HTMLInputElement | null>(null);
+const flyoutMenuRef = ref<HTMLDivElement | null>(null);
 const convBtnRef = ref<HTMLButtonElement | null>(null);
 
 function openConvFlyout() {
   convFlyoutOpen.value = true;
-  nextTick(() => flyoutSearchInput.value?.focus()); // a11y 基线：焦点入搜索框
+  nextTick(() => flyoutMenuRef.value?.focus()); // a11y 基线：焦点入浮层
 }
 /** restoreFocus 仅在「用户交互关」（Esc / 点遮罩）时归还焦点给触发钮；
  *  编程关闭（选中会话/路由切换/收起侧栏）不抢焦点——rail 树可能正在卸载 */
 function closeConvFlyout(restoreFocus = false) {
   convFlyoutOpen.value = false;
-  searchQuery.value = ""; // 关闭即清空（下次打开不残留过滤）
   if (restoreFocus) convBtnRef.value?.focus();
 }
 function toggleConvFlyout() {
@@ -184,7 +183,6 @@ const chat = useChatStore();
 const agent = useAgentStore();
 // 新建会话逻辑（与欢迎页共用 useNewConversation，保证项目内限成员一致）
 const { showPicker, pickerAgentIds, ctaKind, startNew, onPickAgent } = useNewConversation();
-const searchQuery = ref("");
 
 // MA-1：侧栏只显示用户会话——delegation 后台子会话不污染主列表（可见入口是
 // 父会话委派卡片 / 项目页任务列表）。它们仍留在 store.conversations 里：
@@ -199,14 +197,61 @@ const scopedConversations = computed(() => {
     : visibleConversations.value.filter((c) => c.project_id === pid);
 });
 
-const filteredConversations = computed(() => {
-  if (!searchQuery.value.trim()) return scopedConversations.value;
-  const q = searchQuery.value.toLowerCase();
-  return scopedConversations.value.filter((c) => {
-    const agentName = agent.getById(c.agent_id)?.name?.toLowerCase() ?? "";
-    return c.title?.toLowerCase().includes(q) || agentName.includes(q);
-  });
+// =========================================================================
+// 频道 v1（§6.1 侧栏形态）：项目 scope = 活频道一行（未开启给「开启频道」
+// 懒建入口）；散落 scope = 归档频道列表（原项目已删除的只读频道，无则区块
+// 隐藏）。频道不进 isUserChat 过滤（kind='channel'），恒由本区块独占渲染。
+// =========================================================================
+/** 当前项目 scope 的活频道（部分唯一索引保证至多一条；null = 未开启） */
+const scopeChannel = computed(() => {
+  const pid = scopeProjectId.value;
+  if (pid === null) return null;
+  return (
+    chat.conversations.find(
+      (c) => c.kind === "channel" && c.project_id === pid && !c.archived_at,
+    ) ?? null
+  );
 });
+
+/** 散落 scope 的归档频道（项目删除 → FK SET NULL 转散落 + archived_at 落时间） */
+const archivedChannels = computed(() =>
+  chat.conversations.filter((c) => c.kind === "channel" && !c.project_id),
+);
+
+const channelEnsuring = ref(false);
+const channelEnsureError = ref<string | null>(null);
+
+/** 开启（或选中）当前项目的频道：懒建 ensure → 刷新列表 → 选中。失败文案
+ *  走行内 caption（后端三段式，如「项目还没有成员」）——侧栏无全局 toast
+ *  先例，不为此新建机制。 */
+async function openChannel() {
+  const pid = scopeProjectId.value;
+  if (pid === null || channelEnsuring.value) return;
+  const existing = scopeChannel.value;
+  if (existing) {
+    selectConv(existing.id);
+    return;
+  }
+  channelEnsuring.value = true;
+  channelEnsureError.value = null;
+  try {
+    const view = await bridge.channels.ensure(pid);
+    if (view.channel) {
+      await chat.loadConversations();
+      selectConv(view.channel.id);
+    }
+  } catch (e) {
+    console.error("开启频道失败:", e);
+    channelEnsureError.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    channelEnsuring.value = false;
+  }
+}
+
+/** 频道行 meta：统筹者名（conv.agent_id 是统筹者投影；无 = 首次广播前未选举） */
+function channelCoordinatorName(conv: { agent_id: string }): string {
+  return agent.getById(conv.agent_id)?.name ?? "待选举";
+}
 
 onMounted(async () => {
   agent.load();
@@ -280,29 +325,9 @@ function timeAgoLabel(dateStr: string): string {
       </button>
     </div>
 
-    <!-- 搜索框 -->
-    <div v-if="!collapsed" class="sidebar-search">
-      <div class="search-wrapper">
-        <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="11" cy="11" r="8" />
-          <line x1="21" y1="21" x2="16.65" y2="16.65" />
-        </svg>
-        <input v-model="searchQuery" type="text" class="search-input" placeholder="搜索对话..." />
-      </div>
-    </div>
-
-    <!-- 顶部固定区：新建对话（单行，常驻不随列表滚走）+ 项目空间胶囊（左内容右按钮） -->
+    <!-- 顶部固定区（顺序拍板 2026-09-10）：项目空间胶囊 → 项目频道 → 新建对话。
+         搜索框已随频道改版整体移除（无使用场景；rail flyout 内同步移除）。 -->
     <div v-if="!collapsed" class="sidebar-top">
-      <button class="conv-item conv-item-new" @click="newChat">
-        <div class="conv-item-title">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="12" y1="5" x2="12" y2="19" />
-            <line x1="5" y1="12" x2="19" y2="12" />
-          </svg>
-          <span class="conv-name">新建对话</span>
-        </div>
-      </button>
-
       <!-- 当前项目空间胶囊（开关态内部自持，select/create/manage/open 上交处理） -->
       <ProjectSwitcher
         :current-project-name="currentProjectName"
@@ -313,6 +338,75 @@ function timeAgoLabel(dateStr: string): string {
         @manage="gotoManage"
         @open="openProjectDetail"
       />
+
+      <!-- 项目频道（§6.1）：活频道一行 / 未开启给「开启频道」懒建入口；
+           归档频道只在散落 scope 出现（原项目已删除的只读记录） -->
+      <div v-if="scopeProjectId" class="channel-block">
+        <button
+          v-if="scopeChannel"
+          :class="['conv-item', 'channel-item', { active: isChatRoute && chat.activeConvId === scopeChannel.id, streaming: chat.streamingConvIds.has(scopeChannel.id) }]"
+          @click="selectConv(scopeChannel.id)"
+        >
+          <div class="conv-item-title">
+            <Hash :size="14" class="channel-hash" aria-hidden="true" />
+            <span class="conv-name">{{ scopeChannel.title || "项目频道" }}</span>
+          </div>
+          <div class="conv-meta">
+            <span class="conv-agent-tag">
+              <EntityAvatar
+                class="conv-agent-avatar"
+                :name="agent.getById(scopeChannel.agent_id)?.name || '?'"
+                :image="agent.getById(scopeChannel.agent_id)?.avatar ?? null"
+                size="xs"
+              />
+              <span class="conv-agent-name">统筹 · {{ channelCoordinatorName(scopeChannel) }}</span>
+            </span>
+            <span v-if="chat.streamingConvIds.has(scopeChannel.id)" class="stream-indicator" title="正在生成…">
+              <span class="stream-bars"><span class="bar"></span><span class="bar"></span><span class="bar"></span></span>生成中
+            </span>
+            <span v-else class="conv-time">{{ timeAgoLabel(scopeChannel.updated_at) }}</span>
+          </div>
+        </button>
+        <button
+          v-else
+          class="conv-item conv-item-new channel-open"
+          :disabled="channelEnsuring"
+          @click="openChannel"
+        >
+          <div class="conv-item-title">
+            <Hash :size="16" aria-hidden="true" />
+            <span class="conv-name">{{ channelEnsuring ? "开启中…" : "开启频道" }}</span>
+          </div>
+        </button>
+        <p v-if="channelEnsureError" class="channel-error">{{ channelEnsureError }}</p>
+      </div>
+      <template v-else-if="archivedChannels.length > 0">
+        <button
+          v-for="c in archivedChannels"
+          :key="c.id"
+          :class="['conv-item', 'channel-item', { active: isChatRoute && chat.activeConvId === c.id }]"
+          @click="selectConv(c.id)"
+        >
+          <div class="conv-item-title">
+            <Hash :size="14" class="channel-hash" aria-hidden="true" />
+            <span class="conv-name">{{ c.title || "项目频道" }}</span>
+            <span class="channel-archived-tag">已归档</span>
+          </div>
+          <div class="conv-meta">
+            <span class="conv-time">{{ timeAgoLabel(c.updated_at) }}</span>
+          </div>
+        </button>
+      </template>
+
+      <button class="conv-item conv-item-new" @click="newChat">
+        <div class="conv-item-title">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
+          </svg>
+          <span class="conv-name">新建对话</span>
+        </div>
+      </button>
     </div>
 
     <!-- 分隔线（钉在列表上方，不随列表滚动） -->
@@ -323,22 +417,21 @@ function timeAgoLabel(dateStr: string): string {
       <!-- 骨架屏只在「无可显示内容」时出现（首次加载语义）。若不加空判断，
            委派等触发的后台列表刷新会让骨架屏叠在仍可见的列表上方闪现 +
            布局下压再弹回（v-for 不在 v-if 互斥链内）——即"委派时侧栏异常动画" -->
-      <div v-if="chat.convLoading && filteredConversations.length === 0" key="conv-skeleton" class="conv-skeleton">
+      <div v-if="chat.convLoading && scopedConversations.length === 0" key="conv-skeleton" class="conv-skeleton">
         <div class="conv-skeleton-line" />
         <div class="conv-skeleton-line" />
         <div class="conv-skeleton-line" />
         <div class="conv-skeleton-line" />
         <div class="conv-skeleton-line" />
       </div>
-      <div v-else-if="searchQuery && filteredConversations.length === 0" key="conv-empty-search" class="conv-empty">无匹配对话</div>
-      <div v-else-if="!searchQuery && scopedConversations.length === 0 && agent.loaded" key="conv-empty-scope" class="conv-empty">
+      <div v-else-if="scopedConversations.length === 0 && agent.loaded" key="conv-empty-scope" class="conv-empty">
         <!-- 空态即引导：全新用户给出下一步方向，「新建对话」按钮此刻的行为就是去创建智能体 -->
         <template v-if="ctaKind === 'no-agents'">还没有智能体——点上方「新建对话」先创建一个</template>
         <template v-else>{{ scopeProjectId ? "项目内暂无对话" : "暂无对话" }}</template>
       </div>
 
       <button
-        v-for="conv in filteredConversations"
+        v-for="conv in scopedConversations"
         :key="conv.id"
         :class="['conv-item', { active: isChatRoute && chat.activeConvId === conv.id, streaming: chat.streamingConvIds.has(conv.id) }]"
         @click="selectConv(conv.id)"
@@ -417,8 +510,32 @@ function timeAgoLabel(dateStr: string): string {
         </button>
       </div>
 
-      <!-- 行动区：新建 / 会话列表入口（flyout）/ 项目空间（flyout） -->
+      <!-- 行动区（顺序对齐展开态：项目空间 → 项目频道 → 新建 / 会话列表入口） -->
       <div class="rail-actions">
+        <!-- 项目空间：收起变体（32px 图标钮 + 菜单向右弹；逻辑/emit 原班复用） -->
+        <ProjectSwitcher
+          collapsed
+          :current-project-name="currentProjectName"
+          :scope-project-id="scopeProjectId"
+          :projects="project.activeProjects"
+          @select="selectProject"
+          @create="quickCreateProject"
+          @manage="gotoManage"
+          @open="openProjectDetail"
+        />
+
+        <!-- 项目频道（散落 scope 隐藏——归档频道无生成态，rail 不给入口；
+             展开侧栏可从「已归档」列表进入） -->
+        <button
+          v-if="scopeProjectId"
+          class="btn-icon"
+          :class="{ active: isChatRoute && scopeChannel && chat.activeConvId === scopeChannel.id }"
+          title="项目频道"
+          @click="openChannel"
+        >
+          <Hash :size="20" />
+        </button>
+
         <button class="btn-icon" title="新建对话" @click="newChat">
           <MessageSquarePlus :size="20" />
         </button>
@@ -440,33 +557,27 @@ function timeAgoLabel(dateStr: string): string {
           <div class="flyout-overlay" :class="{ open: convFlyoutOpen }" @click="closeConvFlyout(true)" />
 
           <div
+            ref="flyoutMenuRef"
             class="flyout-menu"
             :class="{ open: convFlyoutOpen }"
             role="dialog"
             aria-label="会话列表"
+            tabindex="-1"
             :aria-hidden="!convFlyoutOpen || undefined"
           >
-            <div class="flyout-search">
-              <!-- 与展开态搜索框同款（.search-wrapper 直接复用；图标升 Lucide） -->
-              <div class="search-wrapper">
-                <Search :size="14" class="search-icon" />
-                <input ref="flyoutSearchInput" v-model="searchQuery" type="text" class="search-input" placeholder="搜索对话..." />
-              </div>
-            </div>
             <div class="flyout-list">
-              <div v-if="chat.convLoading && filteredConversations.length === 0" class="conv-skeleton">
+              <div v-if="chat.convLoading && scopedConversations.length === 0" class="conv-skeleton">
                 <div class="conv-skeleton-line" />
                 <div class="conv-skeleton-line" />
                 <div class="conv-skeleton-line" />
                 <div class="conv-skeleton-line" />
               </div>
-              <div v-else-if="searchQuery && filteredConversations.length === 0" class="conv-empty">无匹配对话</div>
-              <div v-else-if="!searchQuery && scopedConversations.length === 0 && agent.loaded" class="conv-empty">
+              <div v-else-if="scopedConversations.length === 0 && agent.loaded" class="conv-empty">
                 {{ scopeProjectId ? "项目内暂无对话" : "暂无对话" }}
               </div>
               <!-- ⚠️ 会话项与展开列表（上方 TransitionGroup 内）完全同款，两处同步改 -->
               <button
-                v-for="conv in filteredConversations"
+                v-for="conv in scopedConversations"
                 :key="conv.id"
                 :class="['conv-item', { active: isChatRoute && chat.activeConvId === conv.id, streaming: chat.streamingConvIds.has(conv.id) }]"
                 @click="selectConvFromFlyout(conv.id)"
@@ -501,18 +612,6 @@ function timeAgoLabel(dateStr: string): string {
             </div>
           </div>
         </div>
-
-        <!-- 项目空间：收起变体（32px 图标钮 + 菜单向右弹；逻辑/emit 原班复用） -->
-        <ProjectSwitcher
-          collapsed
-          :current-project-name="currentProjectName"
-          :scope-project-id="scopeProjectId"
-          :projects="project.activeProjects"
-          @select="selectProject"
-          @create="quickCreateProject"
-          @manage="gotoManage"
-          @open="openProjectDetail"
-        />
       </div>
 
       <!-- footer：设置单钮（主题钮收起态不出现，用户拍板 2026-09-01——展开态
@@ -589,59 +688,48 @@ function timeAgoLabel(dateStr: string): string {
   color: var(--ip-primary-600);
 }
 
-/* 搜索框 */
-.sidebar-search {
-  padding: 0 12px 12px;
-  flex-shrink: 0;
-}
-
-.search-wrapper {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  height: 34px;
-  padding: 0 10px;
-  background-color: var(--ip-color-bg-tertiary);
-  border: 1px solid transparent;
-  border-radius: var(--ip-radius-md);
-  transition: all var(--ip-duration-fast) var(--ip-ease-out);
-}
-
-.search-wrapper:focus-within {
-  border-color: var(--ip-color-border-focus);
-  background-color: var(--ip-color-bg-input);
-}
-
-.search-icon {
-  display: flex;
-  align-items: center;
-  flex-shrink: 0;
-  color: var(--ip-color-text-tertiary);
-}
-
-.search-input {
-  flex: 1;
-  height: 100%;
-  border: none;
-  outline: none;
-  background: transparent;
-  font-size: var(--ip-text-body-sm-size);
-  color: var(--ip-color-text-primary);
-  padding: 0;
-  line-height: 1;
-}
-
-.search-input::placeholder {
-  color: var(--ip-color-text-tertiary);
-}
-
-/* 顶部固定区：新建对话 + 项目空间胶囊（不随会话列表滚动） */
+/* 顶部固定区：项目空间胶囊 + 项目频道 + 新建对话（不随会话列表滚动） */
 .sidebar-top {
   display: flex;
   flex-direction: column;
   gap: 6px;
   padding: 0 8px 8px;
   flex-shrink: 0;
+}
+
+/* ===== 频道 v1 ===== */
+.channel-block {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Hash 图标进文本流：base.css 全局 svg display:block reset 陷阱——必须显式
+   inline-block，否则独占一行（84aa6c5 轨迹表同款） */
+.channel-hash {
+  display: inline-block;
+  flex-shrink: 0;
+  color: var(--ip-color-text-tertiary);
+}
+
+/* 归档频道「已归档」标（micro 胶囊，语义中性灰） */
+.channel-archived-tag {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 1px 6px;
+  border-radius: var(--ip-radius-full, 999px);
+  background: var(--ip-color-bg-tertiary);
+  color: var(--ip-color-text-tertiary);
+  font-size: var(--ip-text-micro-size);
+  line-height: 1.4;
+}
+
+/* 「开启频道」失败的行内错误文案（后端三段式原文；常驻至下次尝试成功） */
+.channel-error {
+  margin: 2px 4px 0;
+  font-size: var(--ip-text-micro-size);
+  color: var(--ip-danger-text);
+  line-height: 1.5;
 }
 
 /* 会话列表 */
@@ -1049,18 +1137,12 @@ function timeAgoLabel(dateStr: string): string {
   transform: none;
 }
 
-/* flyout 头部搜索：复用 .search-wrapper 同款样式（与展开态风格统一） */
-.flyout-search {
-  padding: var(--ip-spacing-2);
-  flex-shrink: 0;
-}
-
 /* flyout 列表：限高内滚（骨架/空态/会话项 class 全复用展开态那套） */
 .flyout-list {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 0 var(--ip-spacing-2) var(--ip-spacing-2);
+  padding: var(--ip-spacing-2);
   display: flex;
   flex-direction: column;
   gap: 2px;

@@ -158,6 +158,42 @@ pub async fn list_successful_tool_calls(
     Ok(rows)
 }
 
+/// 频道页消息列表 enrichment（频道 v1 批 3）：页内 assistant 消息的派生字段
+/// 回填源。`Message.sender_agent_name` / `turn_duration_ms` 是非表列派生字段
+/// （models.rs 注释）——列表直读路径恒 None，频道页行级头像与「生成中发出」
+/// 判定需要它们。按 message_id 集合查 `assistant_message` 事件（message_id 是
+/// 表列非 payload 字段）取 payload 两字段（sender 名 / 本轮生成耗时），
+/// **seq 正序**返回——调用方逐条插入即自然 last-wins（supersede：同
+/// message_id 多条取末条）。
+///
+/// json_extract 侧取两字段不拉全 payload（`$.blocks` 全文在大会话上是 MB 级）。
+pub async fn assistant_meta_by_message_ids(
+    pool: &SqlitePool,
+    session_id: &str,
+    message_ids: &[String],
+) -> AppResult<Vec<(String, Option<String>, Option<i64>)>> {
+    if message_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let placeholders = vec!["?"; message_ids.len()].join(", ");
+    let sql = format!(
+        "SELECT message_id, \
+                json_extract(payload, '$.sender.agent_name'), \
+                json_extract(payload, '$.duration_ms') \
+           FROM session_events \
+          WHERE session_id = ? AND kind = 'assistant_message' \
+            AND message_id IN ({placeholders}) \
+          ORDER BY seq ASC"
+    );
+    let mut q = sqlx::query_as::<_, (String, Option<String>, Option<i64>)>(&sql);
+    q = q.bind(session_id);
+    for id in message_ids {
+        q = q.bind(id);
+    }
+    let rows = q.fetch_all(pool).await?;
+    Ok(rows)
+}
+
 /// 委派进度报告（D15 八波④）：全部**失败**工具调用的 `(tool_name, result)`，
 /// seq 正序——调用方取末条即「最后一次失败」。与
 /// [`list_successful_tool_calls`] 对称（json_extract 侧取两字段不拉全 payload）。

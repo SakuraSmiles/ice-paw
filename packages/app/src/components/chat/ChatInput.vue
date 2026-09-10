@@ -27,6 +27,15 @@ const agentStore = useAgentStore();
 const projectStore = useProjectStore();
 const textareaRef = ref<HTMLTextAreaElement | null>(null);
 
+// ===== 频道 v1：@ 点名通路（与 1v1 @ 引用共用触发/弹层骨架，语义独立）=====
+// 频道 @ = 成员点名：不生成 reference 块、不注入快照——选中文本保留 `@名字 `
+// （全体成员可见点名对象）；mentions 由 send 时从文本解析成 agent_id 列表
+// （与后端成员侧 parse_agent_mentions 同构：最长前缀 + 重名歧义跳过）。
+const isChannelConv = computed(() => chat.activeConversation?.kind === "channel");
+const channelArchived = computed(
+  () => isChannelConv.value && chat.activeConversation?.archived_at != null,
+);
+
 const input = computed({
   get: () => chat.draftText,
   set: (v: string) => { chat.draftText = v; },
@@ -244,7 +253,7 @@ function atQueryClosed(before: string, atIdx: number): boolean {
  *  名字主体在左（agent 的 id 等宽淡色跟后，可省略），归属（项目名/模型）
  *  与类型词（会话/Agent/消息/回答）靠右，类型词定宽贴右缘纵向对齐。*/
 interface RefOption {
-  kind: "conversation" | "agent" | "message";
+  kind: "conversation" | "agent" | "message" | "mention";
   targetId: string;
   display: string; // `名称#短码`（落库展示，后端失效降级也用它）
   label: string; // 名字（弹层主文本）
@@ -264,6 +273,24 @@ const MESSAGE_POOL = 20; // 消息段参与过滤的池（当前会话最近 N �
 
 const refOptions = computed<RefOption[]>(() => {
   if (atQuery.value === null) return [];
+  // 频道分支：候选 = 频道成员（点名路由；不含 reference 语义）。归档频道
+  // 只读无发送，弹层不会出现（textarea disabled）。
+  if (isChannelConv.value) {
+    const q = atQuery.value.toLowerCase();
+    const out: RefOption[] = [];
+    for (const m of chat.channelView?.members ?? []) {
+      if (q && !m.name.toLowerCase().includes(q)) continue;
+      out.push({
+        kind: "mention", targetId: m.agent_id,
+        display: m.name, label: m.name,
+        owner: m.role === "coordinator" ? "统筹者" : m.role === "lead" ? "负责人" : undefined,
+        kindText: "成员",
+        avatar: agentStore.getById(m.agent_id)?.avatar ?? null,
+      });
+      if (out.length >= SECTION_CAP * 2) break;
+    }
+    return out;
+  }
   const q = atQuery.value.toLowerCase();
   const match = (s: string) => !q || s.toLowerCase().includes(q);
   const out: RefOption[] = [];
@@ -329,8 +356,10 @@ const atActive = computed(() => atQuery.value !== null && refOptions.value.lengt
 const activeIdx = ref(0);
 watch(refOptions, () => { activeIdx.value = 0; });
 
-/** 候选是否已在引用列表（弹层里直接可见「已引用」，不必点了才发现重复）。*/
+/** 候选是否已在引用列表（弹层里直接可见「已引用」，不必点了才发现重复）。
+ *  mention 无 chip 存储（文本即真相源），恒 false。*/
 function isPending(opt: RefOption): boolean {
+  if (opt.kind === "mention") return false;
   return chat.pendingRefs.some((r) => r.refKind === opt.kind && r.targetId === opt.targetId);
 }
 
@@ -357,6 +386,25 @@ const flashRef = ref<string | null>(null);
 let flashRefTimer: ReturnType<typeof setTimeout> | null = null;
 
 function chooseRef(opt: RefOption) {
+  // 频道点名分支：替换 `@query` → `@名字 `（文本保留点名可见），无 chip 无
+  // reference 块；mentions 由 send 时从文本解析（单一真相源，删文本即取消点名）
+  if (opt.kind === "mention") {
+    const el = textareaRef.value;
+    if (el) {
+      const pos = el.selectionStart ?? 0;
+      const atIdx = el.value.slice(0, pos).lastIndexOf("@");
+      if (atIdx >= 0) {
+        const next = el.value.slice(0, atIdx) + "@" + opt.label + " " + el.value.slice(pos);
+        input.value = next;
+        const caret = atIdx + opt.label.length + 2;
+        nextTick(() => el.setSelectionRange(caret, caret));
+      }
+    }
+    atQuery.value = null;
+    activeIdx.value = 0;
+    nextTick(() => textareaRef.value?.focus());
+    return;
+  }
   const el = textareaRef.value;
   if (el) {
     const pos = el.selectionStart ?? 0;
@@ -400,14 +448,40 @@ async function insertAtTrigger() {
 }
 
 // ===== 发送 =====
+
+/** 频道用户消息的 @ 解析 → agent_id 列表（与后端成员侧 parse_agent_mentions
+ *  同构：最长前缀精确匹配成员名 / email 防御 / 重名歧义跳过该位置 / 去重保序。
+ *  成员资格与上限截断由后端 route_user_message 权威校验，此处只做忠实提取）。 */
+function collectMentions(text: string): string[] {
+  const members = chat.channelView?.members ?? [];
+  if (members.length === 0) return [];
+  const chars = Array.from(text);
+  const out: string[] = [];
+  for (let i = 0; i < chars.length; i++) {
+    if (chars[i] !== "@") continue;
+    if (i > 0 && /[\p{L}\p{N}_]/u.test(chars[i - 1])) continue; // xx@yy.com 防御
+    const rest = chars.slice(i + 1).join("");
+    let best: { id: string; len: number } | null = null;
+    let ambiguous = false;
+    for (const m of members) {
+      if (!rest.startsWith(m.name)) continue;
+      if (!best || m.name.length > best.len) { best = { id: m.agent_id, len: m.name.length }; ambiguous = false; }
+      else if (m.name.length === best.len) ambiguous = true; // 重名同长 = 歧义不猜
+    }
+    if (best && !ambiguous && !out.includes(best.id)) out.push(best.id);
+  }
+  return out;
+}
+
 function send() {
   const text = input.value.trim();
-  if ((!text && chat.pendingImages.length === 0 && chat.pendingFiles.length === 0 && chat.pendingRefs.length === 0) || chat.sending) return;
+  if ((!text && chat.pendingImages.length === 0 && chat.pendingFiles.length === 0 && chat.pendingRefs.length === 0) || chat.sending || channelArchived.value) return;
 
   const blocks: ContentBlock[] = [];
   if (text) blocks.push({ type: "text", text });
+  const mentions = isChannelConv.value ? collectMentions(input.value) : undefined;
   chat.draftText = "";
-  chat.sendMessage(text, blocks);
+  chat.sendMessage(text, blocks, mentions);
   nextTick(() => {
     const el = textareaRef.value;
     if (el) el.style.height = "auto";
@@ -541,7 +615,8 @@ function handleKeydown(e: KeyboardEvent) {
             ref="textareaRef"
             v-model="input"
             class="chat-textarea"
-            placeholder="输入消息…（可拖拽/粘贴附件）"
+            :placeholder="channelArchived ? '频道已归档——记录只读保留' : '输入消息…（可拖拽/粘贴附件）'"
+            :disabled="channelArchived"
             rows="1"
             @keydown="handleKeydown"
             @input="onInput"
@@ -553,10 +628,10 @@ function handleKeydown(e: KeyboardEvent) {
              最右（比工具按钮大一圈，主操作视觉权重）——输入区因此全宽，
              右上不再为发送按钮留位 -->
         <div class="input-footer">
-          <button class="btn-img" :disabled="chat.sending" title="添加附件（图片 / docx / xlsx / xls / pdf）" @click="attachInput?.click()">
+          <button class="btn-img" :disabled="chat.sending || channelArchived" title="添加附件（图片 / docx / xlsx / xls / pdf）" @click="attachInput?.click()">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" /></svg>
           </button>
-          <button class="btn-img btn-at" :disabled="chat.sending" title="引用（@ 会话 / Agent / 消息）" @click="insertAtTrigger">
+          <button class="btn-img btn-at" :disabled="chat.sending || channelArchived" :title="isChannelConv ? '点名成员（@ 成员接力）' : '引用（@ 会话 / Agent / 消息）'" @click="insertAtTrigger">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4" /><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8" /></svg>
           </button>
           <!-- 中间位：预算 HUD（2026-08-22 拍板入栏）——有预算数据即占中，快捷键
@@ -564,9 +639,9 @@ function handleKeydown(e: KeyboardEvent) {
           <span v-if="chat.budget" class="input-hint budget-hint">
             <BudgetPill :budget="chat.budget" />
           </span>
-          <span v-else class="input-hint">{{ chat.sending ? "正在生成…" : "Enter 发送 · Shift+Enter 换行" }}</span>
+          <span v-else class="input-hint">{{ channelArchived ? "频道已归档" : isChannelConv ? (chat.sending ? "正在生成…" : "@ 成员点名接力 · 无 @ 时由统筹者接令") : chat.sending ? "正在生成…" : "Enter 发送 · Shift+Enter 换行" }}</span>
           <div class="btn-group">
-            <button v-if="!chat.sending" class="btn-send" :class="{ active: input.trim() || chat.pendingImages.length > 0 || chat.pendingFiles.length > 0 || chat.pendingRefs.length > 0 }" :disabled="!input.trim() && chat.pendingImages.length === 0 && chat.pendingFiles.length === 0 && chat.pendingRefs.length === 0" title="发送 (Enter)" @click="send">
+            <button v-if="!chat.sending" class="btn-send" :class="{ active: input.trim() || chat.pendingImages.length > 0 || chat.pendingFiles.length > 0 || chat.pendingRefs.length > 0 }" :disabled="channelArchived || (!input.trim() && chat.pendingImages.length === 0 && chat.pendingFiles.length === 0 && chat.pendingRefs.length === 0)" title="发送 (Enter)" @click="send">
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" />
               </svg>

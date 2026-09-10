@@ -15,7 +15,7 @@ import { ref, computed, watch, nextTick, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { useEscapeStack } from "../../composables/useEscapeStack";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Inbox, ScreenShare } from "@lucide/vue";
+import { Inbox, ScreenShare, Hash, Shield } from "@lucide/vue";
 import { useChatStore }from "../../stores/chat";
 import { useAgentStore } from "../../stores/agent";
 import { useScreenChannelStore } from "../../stores/screenChannel";
@@ -24,6 +24,7 @@ import { bridge } from "../../api/bridge";
 import EntityAvatar from "../common/EntityAvatar.vue";
 import StatusGlyph from "./StatusGlyph.vue";
 import InboxPopover from "./InboxPopover.vue";
+import ChannelPopover from "./ChannelPopover.vue";
 
 // hasTabbar：标题下方有标签条（会话态）→ 去掉底边线，与标签条视觉连成一体
 //（ChatPage 传入；欢迎态无标签条，保留分割线区分标题与欢迎内容）
@@ -80,6 +81,7 @@ watch(confirming, (open) => {
 onUnmounted(() => {
   document.removeEventListener("click", onDocClick);
   document.removeEventListener("click", onInboxDocClick);
+  document.removeEventListener("click", onChannelCoordDocClick);
 });
 
 // UI-E2 窗口标题随会话联动：桌面惯例（dock/窗口列表可辨当前会话），空回退产品名。
@@ -138,6 +140,38 @@ const delegation = computed(() => {
 function goBackToParent() {
   if (delegation.value?.parentId) chat.selectConversation(delegation.value.parentId);
 }
+
+// ===== 频道 v1：项目频道头部（徽章 + 统筹者胶囊 popover） =====
+const channel = computed(() => {
+  const conv = chat.activeConversation;
+  return conv && conv.kind === "channel" ? conv : null;
+});
+const channelArchived = computed(() => channel.value?.archived_at != null);
+
+/** 统筹者胶囊（活频道才有治理位；归档只读不渲染） */
+const channelCoordOpen = ref(false);
+const channelCoordZoneRef = ref<HTMLElement | null>(null);
+const channelCoordinatorName = computed(() => {
+  const cv = chat.channelView;
+  if (!cv?.coordinator_agent_id) return null;
+  return (
+    cv.members.find((m) => m.agent_id === cv.coordinator_agent_id)?.name
+    ?? agent.getById(cv.coordinator_agent_id)?.name
+    ?? null
+  );
+});
+
+function onChannelCoordDocClick(e: MouseEvent) {
+  if (channelCoordOpen.value && channelCoordZoneRef.value && !channelCoordZoneRef.value.contains(e.target as Node)) {
+    channelCoordOpen.value = false;
+  }
+}
+watch(channelCoordOpen, (open) => {
+  if (open) document.addEventListener("click", onChannelCoordDocClick);
+  else document.removeEventListener("click", onChannelCoordDocClick);
+});
+// Esc 走全局栈（active 谓词让路——浮层关着时不消费 Esc，同收件箱先例）
+useEscapeStack(() => { channelCoordOpen.value = false; }, () => channelCoordOpen.value);
 
 function startEdit() {
   const conv = chat.activeConversation;
@@ -288,6 +322,15 @@ async function toggleScreenShare() {
             />
             委派任务
           </span>
+          <!-- 频道 v1：项目频道徽章（归档态附「原项目已删除」标注——记录只读） -->
+          <span
+            v-else-if="channel"
+            class="header-kind-badge header-channel-badge"
+            :title="channelArchived ? '项目频道 · 已归档（原项目已删除），记录只读保留' : '项目频道：成员共享一条消息流，@ 点名路由'"
+          >
+            <Hash :size="12" aria-hidden="true" />
+            {{ channelArchived ? "项目频道 · 已归档" : "项目频道" }}
+          </span>
         </h1>
         <div class="header-meta">
           <!-- 副标题头像：仅子会话（kind='delegation'）显示 28px 小头像。
@@ -303,25 +346,49 @@ async function toggleScreenShare() {
           <button
             v-if="activeAgent"
             class="header-agent header-agent-link"
-            :title="`查看「${activeAgent.name}」的配置（设置 · 智能体）`"
+            :title="channel ? `当前统筹者「${activeAgent.name}」的配置（设置 · 智能体）` : `查看「${activeAgent.name}」的配置（设置 · 智能体）`"
             @click="goAgentSettings"
           >{{ activeAgent.name }}</button>
           <span v-if="activeAgent" class="header-sep">·</span>
           <span v-if="activeAgent" class="header-model">{{ headerModel }}</span>
-          <span v-else class="header-hint">选择一个对话开始</span>
+          <span v-if="channel && chat.channelView" class="header-model">· {{ chat.channelView.members.length }} 名成员</span>
+          <span v-else-if="!activeAgent" class="header-hint">选择一个对话开始</span>
         </div>
       </div>
     </div>
     <!-- 外置操作（UX #9）：屏幕共享开关 + 星标（左）+ 删除（右，占原「更多」位置）。
          删除确认 = 右锚定、向左横向扩展的确认条（覆盖星标，布局零位移） -->
     <div v-if="chat.activeConversation" class="header-right">
+      <!-- 频道 v1：统筹者胶囊（活频道才有治理位——归档频道只读不渲染）。
+           名字 = 频道视图的统筹位（含用户指定档）；未选举显示「待选举」 -->
+      <div
+        v-if="channel && !channelArchived"
+        ref="channelCoordZoneRef"
+        class="coord-zone"
+      >
+        <button
+          class="header-btn coord-btn"
+          :class="{ active: channelCoordOpen }"
+          :title="channelCoordinatorName ? `统筹者：${channelCoordinatorName}——点击管理成员与统筹位` : '统筹者待选举——首次广播时全员自选举'"
+          :aria-expanded="channelCoordOpen"
+          aria-haspopup="dialog"
+          @click.stop="channelCoordOpen = !channelCoordOpen"
+        >
+          <Shield :size="16" />
+          <span class="coord-name">{{ channelCoordinatorName ?? "待选举" }}</span>
+        </button>
+        <Transition name="overlay">
+          <ChannelPopover v-if="channelCoordOpen" :conv-id="channel.id" @close="channelCoordOpen = false" />
+        </Transition>
+      </div>
       <!-- MA-3 收件箱入口：来件 badge（hold 扣件批准出口 + 收件政策切换）。
            仅挂项目的普通会话——散落会话结构性收不到投递（项目边界=同项目互投），
-           入口隐藏防死 UI；委派子会话同因不是通讯单位（工具注册同款 kind 判定）。
+           入口隐藏防死 UI；委派子会话/频道同因不是通讯单位（工具注册同款 kind
+           判定——频道成员经 @ 点名路由，不走收件箱）。
            pending>0 恒显示——项目删除转散落（FK SET NULL）后已扣的 hold 来件
            仍须有处置出口（防死信） -->
       <div
-        v-if="chat.activeConversation.kind !== 'delegation' && (chat.activeConversation.project_id || inboxPending > 0)"
+        v-if="chat.activeConversation.kind !== 'delegation' && chat.activeConversation.kind !== 'channel' && (chat.activeConversation.project_id || inboxPending > 0)"
         ref="inboxZoneRef"
         class="inbox-zone"
       >
@@ -352,6 +419,7 @@ async function toggleScreenShare() {
       </button>
       <!-- 暂停屏幕操作（步骤 3）：通道 On 才出现；暂停中 Play 图标 + 语义 warning -->
       <button
+        v-if="!channelArchived"
         class="header-btn pin-btn"
         :class="{ 'pin-hidden': confirming, pinned: chat.activeConversation?.pinned }"
         :title="chat.activeConversation?.pinned ? '取消置顶' : '置顶'"
@@ -363,7 +431,8 @@ async function toggleScreenShare() {
         <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2z" /></svg>
       </button>
 
-      <div ref="deleteZoneRef" class="delete-zone">
+      <!-- 归档频道只读保留：删除/置顶随治理位一起隐藏（记录是项目史的一部分） -->
+      <div v-if="!channelArchived" ref="deleteZoneRef" class="delete-zone">
         <Transition name="confirmbar">
           <div v-if="confirming" class="confirm-bar" @click.stop>
             <span class="confirm-text">删除此对话？</span>
@@ -450,6 +519,17 @@ async function toggleScreenShare() {
 
 /* ===== MA-3 收件箱入口（badge 悬浮右上角；popover 右对齐下挂）===== */
 .inbox-zone { position: relative; display: flex; align-items: center; }
+
+/* ===== 频道 v1：统筹者胶囊（带名字的宽形态按钮；popover 右对齐下挂同收件箱） ===== */
+.coord-zone { position: relative; display: flex; align-items: center; }
+.coord-btn { width: auto; gap: 5px; padding: 0 10px; }
+.coord-btn.active { background-color: var(--ip-color-bg-tertiary); color: var(--ip-color-text-primary); }
+.coord-btn svg { color: var(--ip-primary-600); flex-shrink: 0; }
+.coord-name {
+  max-width: 120px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  font-size: var(--ip-text-caption-size); font-weight: var(--ip-font-weight-medium);
+  color: var(--ip-color-text-primary); line-height: 1.4;
+}
 .inbox-btn { position: relative; }
 .inbox-btn.active { background-color: var(--ip-color-bg-tertiary); color: var(--ip-color-text-primary); }
 .inbox-badge {

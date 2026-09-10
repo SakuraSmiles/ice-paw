@@ -37,7 +37,52 @@ pub async fn list_messages(
 
     let rows =
         repo::message::list_by_conversation(state.inner(), &conversation_id, limit, cursor).await?;
-    Ok(rows.into_iter().map(Message::from).collect())
+    let mut msgs: Vec<Message> = rows.into_iter().map(Message::from).collect();
+    enrich_channel_sender_meta(state.inner(), &conversation_id, &mut msgs).await?;
+    Ok(msgs)
+}
+
+/// 频道会话的列表读路径 enrichment：回填 `sender_agent_name` /
+/// `turn_duration_ms`（非表列派生字段，见 models.rs 注释）。
+///
+/// 触发判据 = 页内任一行带 `sender_agent_id`（频道成员回合 sweep 后才有；
+/// 1v1 会话恒 NULL 零开销直过）。数据源 = `assistant_message` 事件 payload
+/// （seq 正序 last-wins = supersede 语义）——行上已有值不覆写（防御位，
+/// 现行行侧恒 None）。翻页各页独立 enrichment，窗口外消息不查。
+async fn enrich_channel_sender_meta(
+    pool: &SqlitePool,
+    conversation_id: &str,
+    msgs: &mut [Message],
+) -> AppResult<()> {
+    if !msgs.iter().any(|m| m.sender_agent_id.is_some()) {
+        return Ok(()); // 非频道（或频道尚无成员回合）：零开销直过
+    }
+    let ids: Vec<String> = msgs
+        .iter()
+        .filter(|m| m.role == "assistant")
+        .map(|m| m.id.clone())
+        .collect();
+    let metas =
+        repo::session_event::assistant_meta_by_message_ids(pool, conversation_id, &ids).await?;
+    let mut by_id: std::collections::HashMap<String, (Option<String>, Option<i64>)> =
+        std::collections::HashMap::new();
+    for (mid, name, dur) in metas {
+        by_id.insert(mid, (name, dur)); // seq 正序 → 后写覆盖 = last-wins
+    }
+    for m in msgs.iter_mut() {
+        if m.role != "assistant" {
+            continue;
+        }
+        if let Some((name, dur)) = by_id.get(&m.id) {
+            if m.sender_agent_name.is_none() {
+                m.sender_agent_name = name.clone();
+            }
+            if m.turn_duration_ms.is_none() {
+                m.turn_duration_ms = *dur;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// 解析前端传来的 `before` 复合游标。

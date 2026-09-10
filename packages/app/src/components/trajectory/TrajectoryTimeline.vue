@@ -103,6 +103,9 @@ function laneOf(kind: SessionEvent["kind"]): number {
     case "attachment_stored":
     case "cross_session_message":
     case "cross_session_message_settled":
+    case "channel_election":
+    case "channel_coordinator":
+    case "channel_mention":
       return 0;
     case "assistant_message":
     case "summary_created":
@@ -134,6 +137,9 @@ const KIND_LABELS: Partial<Record<SessionEvent["kind"], string>> = {
   hook_injected: "钩子注入",
   cross_session_message: "跨会话来件",
   cross_session_message_settled: "来件终态",
+  channel_election: "频道选举",
+  channel_coordinator: "统筹位变更",
+  channel_mention: "频道点名",
 };
 
 function fmtClock(t: number): string {

@@ -14,6 +14,7 @@ import {
   type TurnHeaderRow,
 } from "../useTrajectory";
 import type { SessionEvent } from "../../types";
+import { shortCode } from "../../utils/refs";
 import { bridge } from "../../api/bridge";
 
 // composable 用例：bridge 走 Tauri invoke，测试环境用 vi.mock 替身
@@ -324,9 +325,9 @@ describe("buildRows 行模型", () => {
 });
 
 describe("类型筛选模型（FilterKey / 预设 / 计数 / 持久化）", () => {
-  it("结构：FILTER_KEYS 12 键唯一，DEFAULT_HIDDEN 是其子集（结构锁范式）", () => {
-    expect(FILTER_KEYS).toHaveLength(12);
-    expect(new Set(FILTER_KEYS).size).toBe(12);
+  it("结构：FILTER_KEYS 13 键唯一，DEFAULT_HIDDEN 是其子集（结构锁范式）", () => {
+    expect(FILTER_KEYS).toHaveLength(13);
+    expect(new Set(FILTER_KEYS).size).toBe(13);
     for (const k of DEFAULT_HIDDEN) expect(FILTER_KEYS).toContain(k);
   });
 
@@ -344,6 +345,9 @@ describe("类型筛选模型（FilterKey / 预设 / 计数 / 持久化）", () =
       ["model_switch", { from_model: "", to_profile_id: "mp-b", to_alias: "备用档", to_model: "glm-backup", reason: "quota", attempt: 1 }],
       ["cross_session_message", { message_id: "x1", source_conversation_id: "c-src", source_conversation_title: "主控", source_agent_id: "a1", source_agent_name: "甲", content: "材质定稿了吗", expect_reply: true, delivered_at_unix: 1 }],
       ["cross_session_message_settled", { message_id: "x1", action: "consumed", by: "user-approval" }],
+      ["channel_mention", { from_agent_id: "ag1", to_agent_id: "ag2", hop_index: 1, chain_remaining: 2, blocked_reason: null }],
+      ["channel_election", { phase: "vote", vote: { voter_agent_id: "ag1", candidate_agent_id: "ag2" } }],
+      ["channel_coordinator", { action: "appointed", agent_id: "ag1" }],
       ["modal_adapted", { stage: "s", mode: "m", items: [] }],
       ["hook_injected", { point: "p", prompt: "x" }],
       ["attachment_stored", { kind: "page", items: [] }],
@@ -382,6 +386,32 @@ describe("类型筛选模型（FilterKey / 预设 / 计数 / 持久化）", () =
     expect(r.isError).toBe(false);
     // 默认隐藏集不含 model_switch（三类辅助事件才默认藏）
     expect(DEFAULT_HIDDEN).not.toContain("model_switch");
+  });
+
+  it("频道协作三 kind（v1 串行共享流）：CROSS 行 + 短码摘要；计数入 channel 键；默认不隐藏", () => {
+    const tag = (id: string) => `成员#${shortCode(id)}`;
+    const rows = evRows([
+      ev("channel_mention", { from_agent_id: "ag1", to_agent_id: "ag2", hop_index: 1, chain_remaining: 2, blocked_reason: null }),
+      ev("channel_mention", { from_agent_id: null, to_agent_id: "ag1", hop_index: 1, chain_remaining: 0, blocked_reason: "user_preempted" }),
+      ev("channel_election", { phase: "result", result: { tally: [{ agent_id: "ag2", votes: 2 }], winner_agent_id: "ag2" } }),
+      ev("channel_coordinator", { action: "failed-over", agent_id: "ag2" }),
+    ]);
+    const evs = rows.events();
+    expect(evs.map((r) => r.kind)).toEqual(["cross", "cross", "cross", "cross"]);
+    expect(evs[0].label).toBe("CROSS");
+    // 正常点名：from → to + 跳数/余链；拦截态：blocked_reason 原样 + to 短码
+    expect(evs[0].summary).toBe(`${tag("ag1")} → 点名 ${tag("ag2")} 接力（第 1 跳 · 余 2）`);
+    expect(evs[1].summary).toBe(`点名被拦（user_preempted）：${tag("ag1")}`);
+    expect(evs[2].summary).toBe(`当选统筹者：${tag("ag2")}`);
+    expect(evs[3].summary).toBe(`${tag("ag2")} 统筹故障换帅至`);
+    // 计数走 channel 键（EV_KIND_TO_FILTER 三 kind 同键）
+    const c = countByFilterKey([
+      ev("channel_mention", { from_agent_id: "ag1", to_agent_id: "ag2", hop_index: 1, chain_remaining: 0, blocked_reason: null }),
+      ev("channel_election", { phase: "started" }),
+    ]);
+    expect(c.channel).toBe(2);
+    // 协作过程事实默认可见（三类辅助事件才默认藏）
+    expect(DEFAULT_HIDDEN).not.toContain("channel");
   });
 
   it("「仅对话」预设：只留用户/回复；isChatOnly 派生判据（无第二状态源）", () => {

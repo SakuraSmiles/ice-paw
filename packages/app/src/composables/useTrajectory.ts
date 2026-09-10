@@ -17,8 +17,12 @@
 //   多选下拉操纵同一状态，见 FILTER_GROUPS / DEFAULT_HIDDEN）
 import { ref } from "vue";
 import { bridge } from "../api/bridge";
+import { shortCode } from "../utils/refs";
 import type {
   AssistantMessagePayload,
+  ChannelCoordinatorPayload,
+  ChannelElectionPayload,
+  ChannelMentionPayload,
   ContentBlock,
   ContextBreakdownPayload,
   CrossSessionMessagePayload,
@@ -72,6 +76,7 @@ export type FilterKey =
   | "discarded"
   | "model_switch"
   | "cross_session"
+  | "channel"
   | "attachment_stored"
   | "modal_adapted"
   | "hook_injected";
@@ -79,11 +84,11 @@ export type FilterKey =
 /** 默认隐藏集：三类辅助事件（低频审计信息；与旧 showAux=false 行为等价） */
 export const DEFAULT_HIDDEN: FilterKey[] = ["attachment_stored", "modal_adapted", "hook_injected"];
 
-/** 「类型」下拉的分组与中文文案（4 组 12 键；TrajectoryToolbar 与 ProjectTimeline 共用） */
+/** 「类型」下拉的分组与中文文案（4 组 13 键；TrajectoryToolbar 与 ProjectTimeline 共用） */
 export const FILTER_GROUPS: { label: string; items: { key: FilterKey; label: string }[] }[] = [
   { label: "对话", items: [{ key: "user", label: "用户消息" }, { key: "assistant", label: "回复消息" }] },
   { label: "过程", items: [{ key: "tool", label: "工具调用" }, { key: "error", label: "错误" }] },
-  { label: "记录", items: [{ key: "summary", label: "摘要" }, { key: "plan", label: "计划" }, { key: "discarded", label: "废弃轮" }, { key: "model_switch", label: "模型切换" }, { key: "cross_session", label: "跨会话来件" }] },
+  { label: "记录", items: [{ key: "summary", label: "摘要" }, { key: "plan", label: "计划" }, { key: "discarded", label: "废弃轮" }, { key: "model_switch", label: "模型切换" }, { key: "cross_session", label: "跨会话来件" }, { key: "channel", label: "频道协作" }] },
   { label: "辅助", items: [{ key: "attachment_stored", label: "附件落库" }, { key: "modal_adapted", label: "视觉适配" }, { key: "hook_injected", label: "钩子注入" }] },
 ];
 
@@ -104,6 +109,9 @@ const EV_KIND_TO_FILTER: Record<string, FilterKey> = {
   model_switch: "model_switch",
   cross_session_message: "cross_session",
   cross_session_message_settled: "cross_session",
+  channel_election: "channel",
+  channel_coordinator: "channel",
+  channel_mention: "channel",
   attachment_stored: "attachment_stored",
   modal_adapted: "modal_adapted",
   hook_injected: "hook_injected",
@@ -406,6 +414,45 @@ function summarizeEvent(ev: SessionEvent): { kind: RowKind; summary: string; isE
         isThinking: false,
         isContinuation: false,
       };
+    }
+    case "channel_mention": {
+      const p = ev.payload as ChannelMentionPayload;
+      // 纯函数无 agent 名解析——成员以短码示（检查器有完整 payload）
+      const tag = (id: string): string => `成员#${shortCode(id)}`;
+      if (p.blocked_reason) {
+        return { kind: "cross", summary: `点名被拦（${p.blocked_reason}）：${tag(p.to_agent_id)}`, isError: false, durationMs: null, tokens: null, thinkingDerived: false, isThinking: false, isContinuation: false };
+      }
+      const from = p.from_agent_id ? `${tag(p.from_agent_id)} → ` : "";
+      return { kind: "cross", summary: `${from}点名 ${tag(p.to_agent_id)} 接力（第 ${p.hop_index} 跳 · 余 ${p.chain_remaining}）`, isError: false, durationMs: null, tokens: null, thinkingDerived: false, isThinking: false, isContinuation: false };
+    }
+    case "channel_election": {
+      const p = ev.payload as ChannelElectionPayload;
+      const tag = (id: string): string => `成员#${shortCode(id)}`;
+      let summary: string;
+      if (p.phase === "started") summary = "统筹者自选举发起";
+      else if (p.phase === "vote") {
+        summary = p.vote?.candidate_agent_id
+          ? `投票：${tag(p.vote.voter_agent_id)} → ${tag(p.vote.candidate_agent_id)}`
+          : `弃权：${tag(p.vote?.voter_agent_id ?? "")}`;
+      } else {
+        summary = p.result?.winner_agent_id
+          ? `当选统筹者：${tag(p.result.winner_agent_id)}`
+          : "全员弃权，统筹位空缺";
+      }
+      return { kind: "cross", summary, isError: false, durationMs: null, tokens: null, thinkingDerived: false, isThinking: false, isContinuation: false };
+    }
+    case "channel_coordinator": {
+      const p = ev.payload as ChannelCoordinatorPayload;
+      const tag = (id: string): string => `成员#${shortCode(id)}`;
+      const ACTION_LABELS: Record<string, string> = {
+        elected: "当选统筹者",
+        appointed: "被指定为统筹者",
+        removed: "统筹位被罢免",
+        "failed-over": "统筹故障换帅至",
+      };
+      const label = ACTION_LABELS[p.action] ?? p.action;
+      const who = p.agent_id ? tag(p.agent_id) : "空缺";
+      return { kind: "cross", summary: `${who} ${label}`, isError: false, durationMs: null, tokens: null, thinkingDerived: false, isThinking: false, isContinuation: false };
     }
     case "modal_adapted": {
       const p = ev.payload as ModalAdaptedPayload;

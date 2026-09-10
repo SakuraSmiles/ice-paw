@@ -95,7 +95,7 @@ describe("Sidebar 收起/展开（rail 模式）", () => {
     expect(w.findAll(".btn-theme-toggle").length).toBe(0);
   });
 
-  it("会话 flyout：开 → 搜索过滤 → 点项选中并关闭、搜索词清空", async () => {
+  it("会话 flyout：开 → 点项选中并关闭（搜索框已随频道改版移除，回归锁）", async () => {
     localStorage.setItem(COLLAPSED_KEY, "1");
     const w = await mountSidebar();
     seedConversations([conv("c1", "报告初稿"), conv("c2", "周会纪要")]);
@@ -106,15 +106,11 @@ describe("Sidebar 收起/展开（rail 模式）", () => {
     expect(menu.classes()).toContain("open");
     expect(w.findAll(".flyout-list .conv-item").length).toBe(2);
 
-    // 搜索过滤走与展开列表同一 searchQuery（标题/agent 名匹配）
-    await w.find(".flyout-search input").setValue("周会");
-    expect(w.findAll(".flyout-list .conv-item").length).toBe(1);
-    expect(w.find(".flyout-list .conv-name").text()).toBe("周会纪要");
+    // 搜索框整体移除（2026-09-10 用户拍板：暂无使用场景）——回归锁防复辟
+    expect(w.find(".flyout-search").exists()).toBe(false);
 
-    await w.findAll(".flyout-list .conv-item")[0].trigger("click");
+    await w.findAll(".flyout-list .conv-item")[1].trigger("click");
     expect(menu.classes()).not.toContain("open");
-    // 关即清搜索词（下次打开不残留上次过滤）
-    expect((w.find(".flyout-search input").element as HTMLInputElement).value).toBe("");
     // 点项 = 关 flyout + 走 selectConv 选中
     expect(useChatStore().activeConvId).toBe("c2");
   });

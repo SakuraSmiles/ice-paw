@@ -21,6 +21,7 @@ import type {
   ConfigProposalResponse,
   ChatBudgetPayload,
   ChatModelSwitchedPayload,
+  ChannelView,
 } from "../types";
 import { bridge } from "../api/bridge";
 import { useAgentStore } from "./agent";
@@ -127,7 +128,10 @@ export const useChatStore = defineStore("chat", () => {
     }
     lastFinishReason.value = null;
     clearBudget();
+    clearChannelQueuedNotice();
     loadMessages(id);
+    // 频道会话：拉成员/统筹者视图（异步不阻塞消息加载；非频道内部自清空）
+    void refreshChannelView();
   }
 
   // ===== 消息（含分页） =====
@@ -403,9 +407,80 @@ export const useChatStore = defineStore("chat", () => {
     if (sendTimeout) { clearTimeout(sendTimeout); sendTimeout = null; }
   }
 
-  async function sendMessage(content: string, contentBlocks?: import("../types").ContentBlock[]) {
+  /** 组装待发送内容：图片 → image 块、@ 引用 → reference 块、office/pdf 附件 →
+   *  attachment 块 + files（消费 chips，返回后端 send 的 files 入参）。
+   *  sendMessage 正常路径与频道在途插话分支共用——两路径都要消费已挂附件。
+   *  office/pdf 附件由后端 materialize 为 attachment（UI 卡片，不进 LLM）+ text
+   *  （提取正文，进 LLM）；前端乐观气泡只放元信息占位，后端为唯一真源
+   *  （会剥离乐观块并从 files 重建，故不污染 query/标题——join_text 跳过 attachment）。*/
+  function collectSendAttachments(blocks: import("../types").ContentBlock[]): import("../types").AttachedFile[] | undefined {
+    if (pendingImages.value.length > 0) {
+      for (const img of pendingImages.value) {
+        blocks.push({ type: "image", data: img.data, media_type: img.mediaType });
+      }
+      pendingImages.value = [];
+    }
+    // @ 引用：Reference 块（纯 UI 卡）进 blocks；后端 send 时为每个 Reference
+    // 紧随插入展开快照 Text（发 LLM）——Reference 本身保留落库渲染卡片。
+    if (pendingRefs.value.length > 0) {
+      for (const r of pendingRefs.value) {
+        blocks.push({ type: "reference", ref_kind: r.refKind, target_id: r.targetId, display: r.display });
+      }
+      pendingRefs.value = [];
+    }
+    let files: import("../types").AttachedFile[] | undefined;
+    if (pendingFiles.value.length > 0) {
+      files = pendingFiles.value.map((f) => ({ name: f.name, data: f.data }));
+      for (const f of pendingFiles.value) {
+        const dot = f.name.lastIndexOf(".");
+        const kind = dot >= 0 ? f.name.slice(dot + 1).toLowerCase() : "";
+        blocks.push({ type: "attachment", name: f.name, kind, size: f.size });
+      }
+      pendingFiles.value = [];
+    }
+    return files;
+  }
+
+  // ===== 频道 v1（kind='channel' 会话的成员/统筹者档案 + 在途插话提示） =====
+  const channelView = ref<ChannelView | null>(null);
+
+  /** 刷新激活会话的频道视图（selectConversation / 治理动作后调用）。
+   *  非频道会话直接清空。归档频道照常返回（头部只读展示用）。*/
+  async function refreshChannelView() {
+    const conv = activeConversation.value;
+    if (!conv || conv.kind !== "channel" || !conv.project_id) {
+      channelView.value = null;
+      return;
+    }
+    try {
+      channelView.value = await bridge.channels.get(conv.project_id);
+    } catch (e) {
+      console.error("加载频道视图失败:", e);
+    }
+  }
+
+  /** 频道在途插话轻提示（「当前回合结束后处理」）：插话发出即显示、5s 淡出
+   *  （renewalNotice 同款 timer 模式）——插话气泡本身经事件驱动刷新可见，
+   *  提示只补「何时被处理」这一层信息。*/
+  const channelQueuedNotice = ref(false);
+  let channelQueuedTimer: ReturnType<typeof setTimeout> | null = null;
+  function showChannelQueuedNotice() {
+    channelQueuedNotice.value = true;
+    if (channelQueuedTimer) clearTimeout(channelQueuedTimer);
+    channelQueuedTimer = setTimeout(() => {
+      channelQueuedNotice.value = false;
+      channelQueuedTimer = null;
+    }, 5000);
+  }
+  function clearChannelQueuedNotice() {
+    channelQueuedNotice.value = false;
+    if (channelQueuedTimer) { clearTimeout(channelQueuedTimer); channelQueuedTimer = null; }
+  }
+
+  async function sendMessage(content: string, contentBlocks?: import("../types").ContentBlock[], mentions?: string[]) {
     if (!activeConvId.value) return;
-    if (sending.value) {
+    const isChannel = activeConversation.value?.kind === "channel";
+    if (sending.value && !isChannel) {
       // 在途回合拦截可见化：sending 置位的回合形态有二——本会话用户发起的回合 /
       // 正在看的消费回合（chat:assistant-start 置位）。此前静默早退吞掉输入
       //（用户只看到「发送没反应」）；与后端并发拒绝（catch 路径）共用横幅 +
@@ -416,6 +491,24 @@ export const useChatStore = defineStore("chat", () => {
         "上一条消息仍在处理中，这条没有发出。等上一条完成或先停止生成，再点重试。",
         "send_failed",
       );
+      return;
+    }
+    if (sending.value && isChannel) {
+      // 频道在途插话（C8 发送不拦截）：后端 handle_user_send 物化无条件成功——
+      // 消息照发，但不打扰在途回合（不重置流式态、不做乐观占位 push——插话
+      // 落流事实经 user_message 事件驱动 loadMessages 权威刷新，本地占位会重复）。
+      const blocks = (contentBlocks ?? []).slice();
+      const files = collectSendAttachments(blocks);
+      showChannelQueuedNotice();
+      const queuedConvId = activeConvId.value;
+      try {
+        await bridge.chat.sendMessage(queuedConvId, content, blocks.length > 0 ? blocks : undefined, true, files, mentions);
+        touchConversation(queuedConvId);
+      } catch (e) {
+        console.error("频道插话发送失败:", e);
+        const raw = e instanceof Error ? e.message : String(e);
+        setConvError(queuedConvId, `请求没有送达（${raw}）。这条消息未发出。`, "send_failed");
+      }
       return;
     }
     sending.value = true;
@@ -441,37 +534,8 @@ export const useChatStore = defineStore("chat", () => {
     const agent = conv ? agentStore.getById(conv.agent_id) : null;
     currentModel.value = agent?.model ?? null;
 
-    // 如果有待发送图片，合并到 content_blocks
     const blocks = contentBlocks ?? [];
-    if (pendingImages.value.length > 0) {
-      for (const img of pendingImages.value) {
-        blocks.push({ type: "image", data: img.data, media_type: img.mediaType });
-      }
-      pendingImages.value = [];
-    }
-
-    // @ 引用：Reference 块（纯 UI 卡）进 blocks；后端 send 时为每个 Reference
-    // 紧随插入展开快照 Text（发 LLM）——Reference 本身保留落库渲染卡片。
-    if (pendingRefs.value.length > 0) {
-      for (const r of pendingRefs.value) {
-        blocks.push({ type: "reference", ref_kind: r.refKind, target_id: r.targetId, display: r.display });
-      }
-      pendingRefs.value = [];
-    }
-
-    // office/pdf 附件：后端 materialize 为 attachment（UI 卡片，不进 LLM）+ text（提取正文，进 LLM）。
-    // 前端无提取能力，乐观气泡只放 attachment 元信息卡片（name/kind/size）占位；
-    // 后端为唯一真源——会剥离这些乐观块并从 files 重建，故不污染 query/标题（join_text 跳过 attachment）。
-    let files: import("../types").AttachedFile[] | undefined;
-    if (pendingFiles.value.length > 0) {
-      files = pendingFiles.value.map((f) => ({ name: f.name, data: f.data }));
-      for (const f of pendingFiles.value) {
-        const dot = f.name.lastIndexOf(".");
-        const kind = dot >= 0 ? f.name.slice(dot + 1).toLowerCase() : "";
-        blocks.push({ type: "attachment", name: f.name, kind, size: f.size });
-      }
-      pendingFiles.value = [];
-    }
+    const files = collectSendAttachments(blocks);
 
     const blocksJson = blocks.length > 0 ? JSON.stringify(blocks) : "[]";
     const userMsg: Message = {
@@ -501,7 +565,7 @@ export const useChatStore = defineStore("chat", () => {
     resetSendTimeout();
 
     try {
-      await bridge.chat.sendMessage(activeConvId.value, content, blocks.length > 0 ? blocks : undefined, true, files);
+      await bridge.chat.sendMessage(activeConvId.value, content, blocks.length > 0 ? blocks : undefined, true, files, mentions);
     } catch (e) {
       // 发送失败必须「看得见」：错误横幅（含重试）+ 回滚乐观用户消息。
       // 此前只 console.error——并发防御（后端拒绝同会话在途时的新 send）被触发时
@@ -779,6 +843,8 @@ export const useChatStore = defineStore("chat", () => {
     pendingAuthRequests.value = new Map();
     draftText.value = "";
     pendingRefs.value = [];
+    channelView.value = null;
+    clearChannelQueuedNotice();
     openTrajectoryNext.value = false;
   }
 
@@ -799,6 +865,8 @@ export const useChatStore = defineStore("chat", () => {
     pendingProposals.value = new Map();
     pendingAuthRequests.value = new Map();
     pendingRefs.value = [];
+    channelView.value = null;
+    clearChannelQueuedNotice();
     openTrajectoryNext.value = false;
   }
 
@@ -850,5 +918,7 @@ export const useChatStore = defineStore("chat", () => {
     createConversation, clearActiveConversation, reset, addPendingRef,
     openTrajectoryNext, openConversationAtTrajectory,
     delegationChildByToolUse, bindDelegationChild,
+    // 频道 v1：视图（头部统筹者胶囊 / @ 弹层候选）+ 在途插话提示 + 治理后刷新
+    channelView, refreshChannelView, channelQueuedNotice,
   };
 });

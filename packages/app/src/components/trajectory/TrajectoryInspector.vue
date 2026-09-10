@@ -61,6 +61,7 @@ const SEGMENT_LABELS: Record<string, string> = {
   system_tool_hint: "工具提示",
   system_os_context: "运行环境",
   system_delegation_hint: "委派清单",
+  system_channel_hint: "频道协作",
   system_word_style: "样式档案",
   tool_defs: "工具定义",
   summary: "摘要",

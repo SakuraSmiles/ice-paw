@@ -164,12 +164,36 @@ export interface Conversation {
   /** 收件政策（MA-3，migration 52；2026-09-10 默认 accept）：'accept'=自动消费（默认）·
    *  'hold'=扣住待批准（回投免扣）· 'refuse'=拒收 */
   inbox_policy?: string;
+  /** 频道 v1 归档时刻（migration 54；NULL = 活会话。频道归档 = 原项目删除的
+   *  软删除：记录只读保留，散落 scope 侧栏可见「已归档」） */
+  archived_at?: string | null;
 }
 
 export interface NewConversation {
   agent_id: string;
   title?: string;
   project_id?: string | null;
+}
+
+// ============================================================================
+// 频道 v1（kind='channel' 会话的项目频道视图，commands/channel_cmd.rs 镜像）
+// ============================================================================
+
+/** 频道成员档案（@ 弹层候选 / 头部成员清单共用；= project_agents 现读投影） */
+export interface ChannelMemberInfo {
+  agent_id: string;
+  name: string;
+  /** 'coordinator' | 'lead' | 'member' */
+  role: string;
+}
+
+/** 频道视图：频道行（可能已归档）+ 成员 + 统筹者治理位 */
+export interface ChannelView {
+  channel: Conversation | null;
+  members: ChannelMemberInfo[];
+  coordinator_agent_id: string | null;
+  /** 统筹者是否用户手动指定（C5 两档：指定档故障不自动换帅 → 头部出「让系统补选」） */
+  coordinator_appointed: boolean;
 }
 
 // ============================================================================
@@ -308,6 +332,15 @@ export interface Message {
   /** MA-3 来件来源元数据（消费回合物化的 user 消息才有；后端 JSON 字符串，
    *  坏数据后端已降级 null）。incoming 卡的权威数据源——有它就不走文本解析。 */
   incoming_source?: IncomingSourceMeta | null;
+  /** 频道 v1 发送者 agent id（行级权威，migration 54；NULL = 用户消息或 1v1
+   *  隐含会话 agent）。频道页按它做行级头像与分组 sender 维度。 */
+  sender_agent_id?: string | null;
+  /** 发送者名字快照（列表读路径由 assistant_message 事件派生 enrichment；
+   *  归档频道回看时 agent 可能已删，名字快照是兜底）。 */
+  sender_agent_name?: string | null;
+  /** 本轮生成耗时毫秒（stream 开始 → finalize，非整回合时长；同上派生）。
+   *  完成时间 = created_at + 此值——「生成中发出」判定与组级时间区间用。 */
+  turn_duration_ms?: number | null;
 }
 
 /** MA-3 来件来源（与后端 event_log::IncomingSourceMeta 字段镜像） */
@@ -452,6 +485,9 @@ export type SessionEvent =
   | (SessionEventBase & { kind: "model_switch"; payload: ModelSwitchPayload })
   | (SessionEventBase & { kind: "cross_session_message"; payload: CrossSessionMessagePayload })
   | (SessionEventBase & { kind: "cross_session_message_settled"; payload: CrossSessionMessageSettledPayload })
+  | (SessionEventBase & { kind: "channel_election"; payload: ChannelElectionPayload })
+  | (SessionEventBase & { kind: "channel_coordinator"; payload: ChannelCoordinatorPayload })
+  | (SessionEventBase & { kind: "channel_mention"; payload: ChannelMentionPayload })
   | (SessionEventBase & { kind: "context_breakdown"; payload: ContextBreakdownPayload });
 
 // ============================================================================
@@ -499,6 +535,66 @@ export interface InboxItem {
 export interface InboxView {
   policy: string;
   items: InboxItem[];
+}
+
+// ============================================================================
+// 频道 v1（与后端 harness::event_log 三 payload 镜像；行为事实事件，
+// 不物化系统消息行——前端通知条据此渲染）
+// ============================================================================
+
+/** `channel_mention`——一跳路由事实（正常发生与护栏拦截两态）。turn_id 恒
+ *  `chain:{链头消息id}`（三侧同归组键）；from 缺省 = 用户消息触发。 */
+export interface ChannelMentionPayload {
+  v?: number;
+  /** 发起方（null = 用户 @ / 广播；有值 = 成员接力 from） */
+  from_agent_id?: string | null;
+  to_agent_id: string;
+  /** 本链第几跳（1 起；拦截态无意义置 0） */
+  hop_index: number;
+  /** 本跳之后队列剩余跳数 */
+  chain_remaining: number;
+  /** 护栏拦截原因（null = 正常发生）：
+   *  pair_repeat（乒乓互 @）· chain_limit（链达上限）· frequency（频率闸）·
+   *  user_preempted（用户插话取消）· ambiguous_name（重名歧义）·
+   *  coordinator_failed（指定档统筹故障降级） */
+  blocked_reason?: string | null;
+}
+
+/** `channel_election`——选举事实（一届 = started → N×vote → result 三相） */
+export interface ChannelElectionVote {
+  voter_agent_id: string;
+  /** null = 弃权（reason 说明） */
+  candidate_agent_id?: string | null;
+  reason?: string | null;
+}
+
+export interface ChannelElectionTallyItem {
+  agent_id: string;
+  votes: number;
+}
+
+export interface ChannelElectionResult {
+  tally: ChannelElectionTallyItem[];
+  /** null = 全员弃权（胜者空缺，广播降级态） */
+  winner_agent_id?: string | null;
+  /** 平票裁决方式（"joined_at" = 最早加入者胜出） */
+  tie_break?: string | null;
+}
+
+export interface ChannelElectionPayload {
+  v?: number;
+  phase: "started" | "vote" | "result";
+  vote?: ChannelElectionVote | null;
+  result?: ChannelElectionResult | null;
+}
+
+/** `channel_coordinator`——统筹位变更事实：
+ *  appointed / removed = 用户手势（C5 指定档）· elected / failed-over = 系统动作 */
+export interface ChannelCoordinatorPayload {
+  v?: number;
+  action: "elected" | "appointed" | "removed" | "failed-over";
+  agent_id?: string | null;
+  reason?: string | null;
 }
 
 export interface TurnContextPayload {
@@ -615,6 +711,11 @@ export interface ModelSwitchPayload {
   error?: string | null;
 }
 export interface UserMessagePayload { v?: number; content: string; blocks: ContentBlock[]; }
+/** 频道发言者标注（C10 双轨事件侧；1v1 回合缺省 = 隐含会话 agent） */
+export interface SenderMeta {
+  agent_id: string;
+  agent_name: string;
+}
 export interface AssistantMessagePayload {
   v?: number;
   model?: string | null;
@@ -622,6 +723,7 @@ export interface AssistantMessagePayload {
   blocks: ContentBlock[];
   token_count?: number | null;
   duration_ms?: number | null; // 本轮生成耗时（毫秒；事件纪元早期无此字段）
+  sender?: SenderMeta | null; // 频道成员回合才有（事件纪元 v1 起）
   round: number; // 0 起
   continuation: boolean; // 自动续写
 }

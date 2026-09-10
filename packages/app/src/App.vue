@@ -8,6 +8,7 @@ import { useProjectStore } from "./stores/project";
 import { useScreenChannelStore } from "./stores/screenChannel";
 import { useChatEvents } from "./composables/useChatEvents";
 import { initInbox } from "./composables/useInbox";
+import { initChannel } from "./composables/useChannel";
 import { loadTimezone } from "./utils/time";
 import { saveLastSession } from "./utils/sessionRestore";
 
@@ -42,9 +43,10 @@ watch(
     saveLastSession({ route, convId, projectId });
   },
 );
-// 事件监听拆卸函数（useChatEvents / initInbox / screenChannel.init 返回；卸载时调用，补齐此前缺失的 teardown）
+// 事件监听拆卸函数（useChatEvents / initInbox / initChannel / screenChannel.init 返回；卸载时调用，补齐此前缺失的 teardown）
 let cleanupChatEvents: (() => void) | null = null;
 let cleanupInbox: (() => void) | null = null;
+let cleanupChannel: (() => void) | null = null;
 let cleanupScreenChannel: (() => void) | null = null;
 
 // 文件拖拽全局守卫：拖文件到「输入框以外」的区域时，阻止浏览器默认行为（导航 / 打开文件）。
@@ -80,6 +82,8 @@ onMounted(async () => {
     cleanupChatEvents = await useChatEvents();
     // MA-3 收件箱计数（badge 数据源）：boot 批量 + 事件增量（与 chat 事件并列接线）
     cleanupInbox = await initInbox();
+    // 频道 v1：频道事件通知增量 + 插话落流（同一条零轮询总线，与收件箱并列）
+    cleanupChannel = await initChannel();
     loadTimezone();
     document.addEventListener("keydown", handleGlobalKeydown);
   }
@@ -93,6 +97,7 @@ onMounted(async () => {
 onUnmounted(() => {
   cleanupChatEvents?.();
   cleanupInbox?.();
+  cleanupChannel?.();
   cleanupScreenChannel?.();
   if (!isToolWindow) {
     document.removeEventListener("keydown", handleGlobalKeydown);

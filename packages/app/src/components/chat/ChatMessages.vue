@@ -13,9 +13,11 @@
 <script setup lang="ts">
 import { watch, nextTick, ref, computed, onActivated } from "vue";
 import { useRouter } from "vue-router";
-import { ArrowLeftRight } from "@lucide/vue";
+import { ArrowLeftRight, Shield } from "@lucide/vue";
 import { useChatStore } from "../../stores/chat";
-import { formatTime, formatDateLabel } from "../../utils/time";
+import { useAgentStore } from "../../stores/agent";
+import { useChannel, loadChannelNotices } from "../../composables/useChannel";
+import { formatTime, formatDateLabel, parseDbTime } from "../../utils/time";
 import MarkdownRenderer from "./MarkdownRenderer.vue";
 import ConfigProposalCard from "./ConfigProposalCard.vue";
 import DelegationCard from "./DelegationCard.vue";
@@ -38,9 +40,12 @@ import { summarizeToolCall, dirnameOf, type ToolLineSummary } from "../../utils/
 import { toolDisplayName } from "../../utils/toolLabels";
 import { revealItemInDir, openPath } from "@tauri-apps/plugin-opener";
 import ToolExpandDetail from "./ToolExpandDetail.vue";
-import type { Message, MessageRole, PlanItem } from "../../types";
+import EntityAvatar from "../common/EntityAvatar.vue";
+import ChannelNotice from "./ChannelNotice.vue";
+import type { Message, MessageRole, PlanItem, SessionEvent } from "../../types";
 
 const chat = useChatStore();
+const agent = useAgentStore();
 const router = useRouter();
 const listRef = ref<HTMLElement | null>(null);
 
@@ -79,6 +84,7 @@ watch(() => chat.activeConvId, (cid) => {
   clearPin(); // 旧会话的跳转钉子不可跨会话存活（composable 内锚点重载兜底，双保险）
   activeTurn.value = null;
   void loadAnchors(cid);
+  void loadChannelNotices(cid); // 频道事件通知（非频道会话内部清空，幂等）
 }, { immediate: true });
 watch(() => chat.messages[chat.messages.length - 1]?.id, () => {
   if (chat.activeConvId) void loadAnchors(chat.activeConvId);
@@ -681,24 +687,30 @@ interface MessageGroup {
   key: string;
   role: MessageRole;
   model: string | null;
+  /** 频道成员 id（messages.sender_agent_id；null = 1v1 会话/无 enrichment）。
+   *  分组维度之一：频道里不同成员的 assistant 各自成组，绝不合并。 */
+  sender: string | null;
   items: GroupedItem[];
   firstIdx: number;
   lastIdx: number;
 }
 
-/** 把 chat.messages 按「连续 assistant + 同 model」分组。tool_result-only user 被跳过
- *  且不切断 assistant 连续性（其内容并入上一条 assistant 的工具卡片）。数据层 messages 不变。*/
+/** 把 chat.messages 按「连续 assistant + 同 model + 同 sender」分组。tool_result-only
+ *  user 被跳过且不切断 assistant 连续性（其内容并入上一条 assistant 的工具卡片）。
+ *  数据层 messages 不变。*/
 const messageGroups = computed<MessageGroup[]>(() => {
   const out: MessageGroup[] = [];
   for (let i = 0; i < chat.messages.length; i++) {
     const msg = chat.messages[i];
     if (isToolResultOnlyUser(msg)) continue;
     const prev = out[out.length - 1];
+    const sender = msg.sender_agent_id ?? null;
     const mergeable =
       msg.role === "assistant" &&
       prev !== undefined &&
       prev.role === "assistant" &&
-      prev.model === (msg.model ?? null);
+      prev.model === (msg.model ?? null) &&
+      prev.sender === sender;
     if (mergeable) {
       prev.items.push({ msg, idx: i });
       prev.lastIdx = i;
@@ -707,6 +719,7 @@ const messageGroups = computed<MessageGroup[]>(() => {
         key: "grp-" + msg.id,
         role: msg.role,
         model: msg.model ?? null,
+        sender,
         items: [{ msg, idx: i }],
         firstIdx: i,
         lastIdx: i,
@@ -715,6 +728,70 @@ const messageGroups = computed<MessageGroup[]>(() => {
   }
   return out;
 });
+
+// ===== 频道 v1：通知交错 + 成员身份头 + 生成中发出标注 =====
+// 频道事件（选举/统筹/点名）是行为事实非消息——不进 messages，按 created_at
+// 与消息组交错渲染（useChannel 尾部窗口拉取 + bus 增量）。
+const { notices: channelNotices } = useChannel();
+const isChannelConv = computed(() => chat.activeConversation?.kind === "channel");
+
+/** 渲染层分组：给每组注入「组开始前发生」的频道事件（preNotices） */
+interface RenderGroup extends MessageGroup { preNotices: SessionEvent[] }
+const renderGroups = computed<RenderGroup[]>(() => {
+  const groups = messageGroups.value;
+  const ns = channelNotices.value;
+  if (ns.length === 0) return groups.map((g) => ({ ...g, preNotices: [] as SessionEvent[] }));
+  return groups.map((g) => {
+    const start = parseDbTime(g.items[0].msg.created_at).getTime();
+    return { ...g, preNotices: ns.filter((n) => parseDbTime(n.created_at).getTime() < start) };
+  });
+});
+
+/** 尾部通知：晚于最后一组开始的频道事件（在途接力/选举的实时尾巴） */
+const tailNotices = computed(() => {
+  const consumed = new Set<number>();
+  for (const g of renderGroups.value) for (const n of g.preNotices) consumed.add(n.id);
+  return channelNotices.value.filter((n) => !consumed.has(n.id));
+});
+
+/** 用户消息是否在最近前置 assistant 的生成窗口内发出（频道插话事实标注）。
+ *  判据：该 assistant 的 created_at + turn_duration_ms（本轮生成窗口）晚于本条
+ *  用户消息 created_at；无 duration 数据（旧消息未 enrich）诚实不标注。 */
+function sentDuringGeneration(item: GroupedItem): boolean {
+  if (item.msg.role !== "user") return false;
+  for (let i = item.idx - 1; i >= 0; i--) {
+    const m = chat.messages[i];
+    if (m.role !== "assistant") continue; // 夹在中间的 tool_result-only user 跳过
+    if (m.turn_duration_ms == null) return false;
+    return parseDbTime(m.created_at).getTime() + m.turn_duration_ms
+      > parseDbTime(item.msg.created_at).getTime();
+  }
+  return false;
+}
+
+/** 频道成员身份头取数（sender_agent_name 快照优先，agent store 兜底——成员
+ *  可能已删；coordinator = 频道视图当前统筹位，非历史事实的当下投影）。 */
+function channelSenderOf(g: MessageGroup): { name: string; image: string | null; coordinator: boolean } | null {
+  const id = g.sender;
+  if (!id) return null;
+  const a = agent.getById(id);
+  return {
+    name: g.items[0].msg.sender_agent_name || a?.name || "已退出成员",
+    image: a?.avatar ?? null,
+    coordinator: chat.channelView?.coordinator_agent_id === id,
+  };
+}
+
+/** 组级时间区间：开始（组首 created_at）→ 完成（组尾 created_at + 本轮生成
+ *  耗时）。无 duration 数据或同值时只显开始。频道会话的 assistant 组 footer 用。 */
+function groupTimeRange(g: MessageGroup): string {
+  const first = chat.messages[g.firstIdx];
+  const last = chat.messages[g.lastIdx];
+  const start = formatTime(first.created_at);
+  if (last.turn_duration_ms == null) return start;
+  const end = formatTime(new Date(parseDbTime(last.created_at).getTime() + last.turn_duration_ms).toISOString());
+  return end !== start ? `${start} → ${end}` : start;
+}
 
 /** 该 item 是否是当前正在流式的 assistant（活跃生成目标）。
  *  依据：sending 期间 messages 末条恒为流式 assistant 占位。*/
@@ -831,9 +908,11 @@ const RESUMABLE_REASONS = new Set([
     <div v-else-if="!chat.activeConvId" class="state-hint">选择一个对话开始</div>
     <div v-else-if="chat.messages.length === 0" class="state-hint">开始一段新的对话</div>
     <TransitionGroup v-else name="msg" tag="div" class="messages-container">
-      <template v-for="group in messageGroups" :key="group.key">
+      <template v-for="group in renderGroups" :key="group.key">
         <!-- 日期分组标签（基于组首）-->
         <div v-if="isNewDay(group.firstIdx)" class="date-divider">{{ formatDateLabel(chat.messages[group.firstIdx].created_at) }}</div>
+        <!-- 频道事件通知（组开始前发生：选举/统筹位/点名路由，按 created_at 交错） -->
+        <ChannelNotice v-for="n in group.preNotices" :key="'ntc-' + n.id" :event="n" />
         <!-- data-mid=组首消息 id：useScrollFollow 锚点捕获/恢复的 DOM 定位符 -->
         <div :class="['message-group', group.role]" :data-mid="group.items[0].msg.id">
           <!-- ===== 用户消息组（单条，透明壳）===== -->
@@ -936,6 +1015,8 @@ const RESUMABLE_REASONS = new Set([
               </div>
               <div v-if="cleanUserContent(group.items[0].msg.content) || hasUserMedia(group.items[0].msg) || parseReferenceBlocks(group.items[0].msg.content_blocks).length > 0" class="message-footer">
                 <div class="footer-left">
+                  <!-- 频道插话事实标注：发出时上一条回答仍在生成（不打断在途回合） -->
+                  <span v-if="isChannelConv && sentDuringGeneration(group.items[0])" class="gen-time-flag" title="发出时上一条回答仍在生成中——插话不打断在途回合">生成中发出</span>
                   <span class="message-time">{{ formatTime(group.items[0].msg.created_at) }}</span>
                 </div>
                 <div class="footer-actions">
@@ -957,6 +1038,15 @@ const RESUMABLE_REASONS = new Set([
 
           <!-- ===== 助手消息组（气泡块：连续多轮合并）===== -->
           <template v-else-if="group.role === 'assistant'">
+            <!-- 频道 v1：成员身份头（频道会话才有——1v1 会话头部已有 agent 身份）。
+                 单值包装取数（委派卡同款先例）；统筹者 Shield 是当下投影非历史事实 -->
+            <template v-for="sender in [channelSenderOf(group)]" :key="sender ? 'ch-head' : 'ch-none'">
+              <div v-if="isChannelConv && sender" class="channel-sender-head">
+                <EntityAvatar :name="sender.name" :image="sender.image" size="sm" />
+                <span class="channel-sender-name">{{ sender.name }}</span>
+                <Shield v-if="sender.coordinator" :size="12" class="channel-sender-shield" aria-hidden="true" />
+              </div>
+            </template>
             <div v-for="item in group.items" :key="item.msg.id" class="message-item">
               <!-- 三个点动画：仅当前流式 item 且无任何返回时显示 -->
               <div v-if="isLiveAssistant(item) && item.msg.content === '' && !chat.streamingThinking && toolCallList.length === 0" class="think-dots">
@@ -1159,10 +1249,11 @@ const RESUMABLE_REASONS = new Set([
               </template>
             </div>
 
-            <!-- 组级 footer：时间(组首) / model(一次) / token(求和) / 复制(组内文本) -->
+            <!-- 组级 footer：时间(组首) / model(一次) / token(求和) / 复制(组内文本)。
+                 频道会话时间带完成点（组尾 created_at + 本轮生成耗时） -->
             <div v-if="assistantGroupFooterVisible(group)" class="message-footer">
               <div class="footer-left">
-                <span class="message-time">{{ formatTime(chat.messages[group.firstIdx].created_at) }}</span>
+                <span class="message-time">{{ isChannelConv ? groupTimeRange(group) : formatTime(chat.messages[group.firstIdx].created_at) }}</span>
                 <span v-if="group.model" class="badge-model">{{ group.model }}</span>
                 <span v-if="groupTokenSum(group) > 0" class="badge-tokens">{{ groupTokenSum(group) }} tokens</span>
               </div>
@@ -1184,6 +1275,8 @@ const RESUMABLE_REASONS = new Set([
           </template>
         </div>
       </template>
+      <!-- 频道事件通知（末组之后：在途接力/选举的实时尾巴） -->
+      <ChannelNotice v-for="n in tailNotices" :key="'ntc-' + n.id" :event="n" />
     </TransitionGroup>
 
     <!-- 配置提案审批卡片（内联） -->
@@ -1492,6 +1585,15 @@ const RESUMABLE_REASONS = new Set([
 .message-group:hover .footer-actions { opacity:1; }
 .message-group:hover .message-footer { opacity:1; }
 .message-time { font-size: var(--ip-text-micro-size); color:var(--ip-color-text-disabled); }
+
+/* ===== 频道 v1：成员身份头 + 生成中发出标注 ===== */
+/* 成员头与组内首条留呼吸感；对齐组内内容左缘（assistant 组为左布局） */
+.channel-sender-head { display:flex; align-items:center; gap:6px; margin:2px 0 0 2px; }
+.channel-sender-name { font-size: var(--ip-text-caption-size); font-weight: var(--ip-font-weight-medium); color:var(--ip-color-text-secondary); }
+/* Shield 进文本流：显式 inline-block（base.css svg display:block reset 陷阱） */
+.channel-sender-shield { display:inline-block; color:var(--ip-primary-600); }
+/* 「生成中发出」事实标注（micro 主色调——是频道语境的插话事实，非错误态） */
+.gen-time-flag { font-size: var(--ip-text-micro-size); color:var(--ip-color-primary-tint-text); }
 .copy-btn { display:flex; align-items:center; justify-content:center; width:24px; height:24px; border-radius:var(--ip-radius-md); border:none; background:transparent; color:var(--ip-color-text-tertiary); cursor:pointer; transition:all var(--ip-duration-fast) var(--ip-ease-out); }
 .copy-btn:hover { background-color:var(--ip-color-bg-tertiary); color:var(--ip-color-text-secondary); }
 

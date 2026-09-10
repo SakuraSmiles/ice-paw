@@ -302,7 +302,7 @@ const messages = {
 };
 
 const chat = {
-  async sendMessage(conversationId: string, content: string, contentBlocks?: import("../types").ContentBlock[], toolsEnabled?: boolean, files?: import("../types").AttachedFile[]): Promise<void> {
+  async sendMessage(conversationId: string, content: string, contentBlocks?: import("../types").ContentBlock[], toolsEnabled?: boolean, files?: import("../types").AttachedFile[], mentions?: string[]): Promise<void> {
     try {
       await invoke<void>("send_message", {
         input: {
@@ -313,6 +313,8 @@ const chat = {
           // office/pdf 附件：后端在 send_message 入口 materialize 为 Text 块（doc::try_extract），
           // **不**进 content_blocks（文件是输入模态，非 ContentBlock）。
           files: files?.length ? files : undefined,
+          // 频道 @ 点名（agent id 数组；1v1 会话后端忽略——非频道无此路由分支）
+          mentions: mentions?.length ? mentions : undefined,
         },
       });
     } catch (err) { throw wrapInvokeError("chat.sendMessage", err); }
@@ -498,6 +500,29 @@ const inbox = {
   },
 };
 
+const channels = {
+  /** 幂等确保项目频道存在并返回视图（侧栏「开启频道」懒建；创建不触发选举） */
+  async ensure(projectId: string): Promise<import("../types").ChannelView> {
+    try { return await invoke<import("../types").ChannelView>("ensure_channel", { projectId }); }
+    catch (err) { throw wrapInvokeError("channels.ensure", err); }
+  },
+  /** 频道视图（含归档频道——前端归档入口只读展示用） */
+  async get(projectId: string): Promise<import("../types").ChannelView> {
+    try { return await invoke<import("../types").ChannelView>("get_channel", { projectId }); }
+    catch (err) { throw wrapInvokeError("channels.get", err); }
+  },
+  /** 用户治理：任命（agentId）/ 罢免（null）统筹者——C5 指定档入口 */
+  async setCoordinator(conversationId: string, agentId: string | null): Promise<void> {
+    try { await invoke<void>("set_channel_coordinator", { conversationId, agentId }); }
+    catch (err) { throw wrapInvokeError("channels.setCoordinator", err); }
+  },
+  /** 一键让系统补选统筹者（指定档故障降级的推荐出口；绕过全员弃权熔断） */
+  async reelect(conversationId: string): Promise<void> {
+    try { await invoke<void>("reelect_channel_coordinator", { conversationId }); }
+    catch (err) { throw wrapInvokeError("channels.reelect", err); }
+  },
+};
+
 const trajectory = {
   /** 读取会话事件流（seq 正序，payload 已 parse）；供「轨迹回放」视图消费。
    *  三形态：无参=全量 / limit+beforeSeq=尾部优先向前翻页 / limit+afterSeq=正向增量（live 追加轮询） */
@@ -584,5 +609,5 @@ const screen = {
   },
 };
 
-export const bridge = { agents, providers, modelProfiles, conversations, projects, messages, chat, preferences, mcp, kb, logs, inbox, trajectory, screen };
+export const bridge = { agents, providers, modelProfiles, conversations, projects, messages, chat, preferences, mcp, kb, logs, inbox, channels, trajectory, screen };
 export default bridge;
