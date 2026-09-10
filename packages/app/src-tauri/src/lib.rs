@@ -141,6 +141,10 @@ pub fn run() {
             commands::message_cmd::list_messages,
             commands::message_cmd::create_message,
             // MA-3 收件箱（跨会话通讯）
+            commands::channel_cmd::ensure_channel,
+            commands::channel_cmd::get_channel,
+            commands::channel_cmd::set_channel_coordinator,
+            commands::channel_cmd::reelect_channel_coordinator,
             commands::inbox_cmd::list_inbox,
             commands::inbox_cmd::list_inbox_counts,
             commands::inbox_cmd::set_inbox_policy,

@@ -26,13 +26,22 @@ const TOOL_HINT: &str = "你已启用工具调用能力。当用户要求读取�
 - 不知道、做不到或缺少条件时，直接说明，不要编造。\n\
 - 使用用户所用的语言回复。";
 
+/// 频道协作纪律（channel v1，仅 kind='channel' 会话注入）。
+///
+/// 平台层口径（风格中立）：只说清频道与 1v1 的**结构差异**——多人共享流、
+/// @ 交接、不重复劳动；不说协作风格（那是人格）。短一段刻意不超载：详细
+/// 协作礼仪由成员 agent 自己的人格与事实简报承载。
+pub(crate) const CHANNEL_HINT: &str = "你正在项目频道的共享对话流中与多位成员协作：你的回复对全体成员可见；需要某位成员接手时，在回复中 @对方名字；动手前先看流中已有的进展，不重复他人已完成的工作；对分工有疑问时，先说明你的理解再行动。";
+
 /// system prompt 的段级组成（③ 可观测化）。
 ///
 /// `joined()` 的拼接序 = 历史行为：persona → tool_hint → os_context →
 /// delegation_hint → word_style（后两段历史上由 SystemPromptStage 在
 /// build_system_prompt 输出之后追加，见 stages.rs——移入段结构时保持字节序）。
+/// channel_hint（频道 v1）插在 delegation_hint 与 word_style 之间——无历史
+/// 拼接路径可对齐，取协作语义相邻位。
 ///
-/// `stable_hash()` 只覆盖不含 os_context 的四段：os_context 含秒级当前时间
+/// `stable_hash()` 只覆盖不含 os_context 的五段：os_context 含秒级当前时间
 /// （os_context.rs），整段哈希恒变、对缓存前缀归因是恒真噪声；os_context 的
 /// 稳定核由 OsContextStage 单独产出（`PipelineContext::os_stable_hash`）。
 #[derive(Debug, Clone, Default)]
@@ -45,6 +54,8 @@ pub struct SystemPromptParts {
     pub os_context: Option<String>,
     /// MA-1 可调度清单（session_runner 填充，SystemPromptStage 移入）
     pub delegation_hint: Option<String>,
+    /// 频道协作纪律（channel v1：session_runner 按 kind 填充 CHANNEL_HINT）
+    pub channel_hint: Option<&'static str>,
     /// D12 Word 样式档案（格式化后小节，SystemPromptStage 移入）
     pub word_style: Option<String>,
 }
@@ -69,6 +80,7 @@ impl SystemPromptParts {
             tool_hint: tools_enabled.then_some(TOOL_HINT),
             os_context: (!os_context.is_empty()).then(|| os_context.to_string()),
             delegation_hint: None,
+            channel_hint: None,
             word_style: None,
         }
     }
@@ -80,19 +92,21 @@ impl SystemPromptParts {
             self.tool_hint,
             self.os_context.as_deref(),
             self.delegation_hint.as_deref(),
+            self.channel_hint,
             self.word_style.as_deref(),
         ];
         let joined: Vec<&str> = parts.into_iter().flatten().collect();
         (!joined.is_empty()).then(|| joined.join("\n\n"))
     }
 
-    /// 稳定段指纹（persona + tool_hint + delegation_hint + word_style，不含 os）。
-    /// FNV-1a 12 hex，跨版本稳定（anatomy::fnv1a_12hex）。
+    /// 稳定段指纹（persona + tool_hint + delegation_hint + channel_hint +
+    /// word_style，不含 os）。FNV-1a 12 hex，跨版本稳定（anatomy::fnv1a_12hex）。
     pub(crate) fn stable_hash(&self) -> String {
         crate::context::anatomy::fnv1a_12hex(&[
             self.persona.as_deref().unwrap_or(""),
             self.tool_hint.unwrap_or(""),
             self.delegation_hint.as_deref().unwrap_or(""),
+            self.channel_hint.unwrap_or(""),
             self.word_style.as_deref().unwrap_or(""),
         ])
     }

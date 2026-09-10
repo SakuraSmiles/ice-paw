@@ -53,6 +53,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use futures::StreamExt;
 use sqlx::SqlitePool;
 use tauri::{AppHandle, Manager};
 
@@ -61,10 +62,14 @@ use crate::db::models::{ConversationRow, NewMessage};
 use crate::db::repo::{self, message::TurnAnchor};
 use crate::error::{AppError, AppResult};
 use crate::harness::chat_state::ChatState;
-use crate::harness::event_log::{self, ChannelMentionPayload, EventCtx};
+use crate::harness::event_log::{
+    self, ChannelElectionPayload, ChannelElectionResult, ChannelElectionTallyItem,
+    ChannelElectionVote, ChannelCoordinatorPayload, ChannelMentionPayload, EventCtx,
+};
 use crate::harness::provider;
 use crate::harness::session_runner::{self, AgentTurnInput, TurnEnv};
-use crate::infra::protocol::{AttachedFile, ContentBlock};
+use crate::infra::cancel::CancellationToken;
+use crate::infra::protocol::{AttachedFile, ChatMessage, ContentBlock};
 
 /// 单条用户消息（合并后的新链头）触发的连续成员回合上限。
 /// 达到上限不再触发，`channel_mention` 记 chain_limit（前端提示条指路用户推进）。
@@ -84,6 +89,13 @@ const CHAIN_HEAD_QUIET: Duration = Duration::from_secs(3);
 /// unregister，正常 cleanup 在广播后数百 ms 内完成）。
 const QUIET_POLL: Duration = Duration::from_secs(2);
 const QUIET_TIMEOUT: Duration = Duration::from_secs(30);
+/// 统筹者接令回合连续失败阈值（C5 换帅第二档）：达到即罢免 + 自动补选
+/// （failed-over）。失败口径 = turn_ended.termination='error'（interrupted 是
+/// 用户手势、length 是额度顶格，都不归咎统筹者）。
+const COORD_FAIL_STREAK: usize = 2;
+/// 选举投票 mini 回合小额度（兼任健康检查——投票本身就是一次真实请求，
+/// 连不上的成员天然弃权，凭据/模型故障在选票里可见）。
+const ELECTION_VOTE_MAX_TOKENS: i32 = 128;
 
 // =========================================================================
 // 纯函数：路由与 @ 文本解析（测试不依赖 DB）
@@ -235,6 +247,57 @@ pub(crate) fn compose_channel_brief(brief: &BriefSpec) -> Vec<ContentBlock> {
     vec![ContentBlock::text(text)]
 }
 
+/// 从投票回复解析被投候选人（纯函数）。
+///
+/// 精确名字匹配 > 唯一子串命中；多命中（回复同时含多名成员名）与零命中同判
+/// 弃权——不猜。成员自投合法（可投自己）。
+pub(crate) fn match_candidate(reply: &str, members: &[(String, String)]) -> Option<String> {
+    let t = reply.trim();
+    if let Some((id, _)) = members.iter().find(|(_, name)| name == t) {
+        return Some(id.clone());
+    }
+    let hits: Vec<&(String, String)> = members
+        .iter()
+        .filter(|(_, name)| t.contains(name.as_str()))
+        .collect();
+    match hits.as_slice() {
+        [(id, _)] => Some(id.clone()),
+        _ => None, // 弃权 / 歧义 / 未识别
+    }
+}
+
+/// 计票 + 平票裁决（纯函数）。`members` 须为 joined_at 正序（list_member_profiles
+/// 天然如此）——平票时表序首个领先者 = 最早加入者。返回 (票数表按成员序, 胜者,
+/// 是否走了平票裁决)。全员弃权（最高票 0）胜者为 None。
+pub(crate) fn tally_votes(
+    votes: &[Option<String>],
+    member_ids: &[String],
+) -> (Vec<ChannelElectionTallyItem>, Option<String>, bool) {
+    let tally: Vec<ChannelElectionTallyItem> = member_ids
+        .iter()
+        .map(|id| ChannelElectionTallyItem {
+            agent_id: id.clone(),
+            votes: votes
+                .iter()
+                .filter(|v| v.as_deref() == Some(id.as_str()))
+                .count() as u32,
+        })
+        .collect();
+    let max = tally.iter().map(|t| t.votes).max().unwrap_or(0);
+    if max == 0 {
+        return (tally, None, false);
+    }
+    // 首个领先者 = joined_at 最早（成员表序 = tally 序）；先取值再移 tally（借用序）
+    let tie = tally.iter().filter(|t| t.votes == max).count() > 1;
+    match tally.iter().position(|t| t.votes == max) {
+        Some(i) => {
+            let winner = tally[i].agent_id.clone();
+            (tally, Some(winner), tie)
+        }
+        None => (tally, None, false),
+    }
+}
+
 // =========================================================================
 // 链运行时（内存态；临界区无 await）
 // =========================================================================
@@ -264,9 +327,73 @@ struct ChannelRuntime {
     wake_history: HashMap<String, VecDeque<Instant>>,
     /// 物化待并集的用户 mentions（内存捷径；重启丢失 → 降级广播路由，可接受）
     backlog_mentions: Vec<String>,
+    /// 选举进行中标记（防 NeedsCoordinator 并发触发双选举；选举完成/早退清）
+    election_running: bool,
 }
 
 static RUNTIMES: OnceLock<Mutex<HashMap<String, ChannelRuntime>>> = OnceLock::new();
+
+/// 统筹者失败 streak（conv_id → 连续 error 终态计数）。**独立于 ChannelRuntime**
+/// 存放：finish_chain 清链时 streak 必须跨链存活（第 1 次失败在链 A、第 2 次
+/// 在链 B 也要累计）；换帅或成功回合时清零，重启丢失 = 从头计（内存护栏哲学）。
+static COORD_STREAKS: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
+
+fn coord_streaks() -> &'static Mutex<HashMap<String, usize>> {
+    COORD_STREAKS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// streak 增一，返回增量后的值。
+fn coord_streak_inc(conv_id: &str) -> usize {
+    let mut map = coord_streaks().lock().unwrap();
+    let n = map.entry(conv_id.to_string()).or_insert(0);
+    *n += 1;
+    *n
+}
+
+/// streak 清零（回合成功 / 换帅完成）。
+fn coord_streak_reset(conv_id: &str) {
+    coord_streaks().lock().unwrap().remove(conv_id);
+}
+
+/// streak 现值（广播降级判定用；无记录 = 0）。
+fn coord_streak_get(conv_id: &str) -> usize {
+    coord_streaks().lock().unwrap().get(conv_id).copied().unwrap_or(0)
+}
+
+/// 统筹者是否用户手动指定（C5 两档治理的出身判定：指定档故障不自动换帅）。
+///
+/// 扫描该会话全部 `channel_coordinator` 事件，跟踪指向此 agent 的最近一次
+/// 出身动作：appointed → true；elected / failed-over → false（failed-over 后
+/// 复位须用户手动 appointed，防帅位震荡的「不自动复辟」在事件序上自然成立）。
+pub(crate) async fn coordinator_is_user_appointed(
+    pool: &SqlitePool,
+    conv_id: &str,
+    agent_id: &str,
+) -> bool {
+    let rows: Vec<String> = sqlx::query_scalar(
+        "SELECT payload FROM session_events \
+          WHERE session_id = ? AND kind = 'channel_coordinator' ORDER BY seq",
+    )
+    .bind(conv_id)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    let mut appointed = false;
+    for r in rows {
+        let Ok(p) = serde_json::from_str::<ChannelCoordinatorPayload>(&r) else {
+            continue;
+        };
+        if p.agent_id.as_deref() != Some(agent_id) {
+            continue;
+        }
+        match p.action.as_str() {
+            "appointed" => appointed = true,
+            "elected" | "failed-over" => appointed = false,
+            _ => {}
+        }
+    }
+    appointed
+}
 
 fn runtimes() -> &'static Mutex<HashMap<String, ChannelRuntime>> {
     RUNTIMES.get_or_init(|| Mutex::new(HashMap::new()))
@@ -523,6 +650,32 @@ async fn consume_backlog(
         emit_mention_blocked(pool, &conv.id, &head_for_events, &hop, "user_preempted").await;
     }
 
+    // C5 指定档故障降级：用户指定的统筹者连续失败达阈值 → 广播不派它接令
+    //（点名路由照常——@成员 仍触发）；事实事件提示用户处置（@成员 / 换统筹者 /
+    // 让系统补选）。系统自选的统筹者不会停留在此状态（自动换帅先行）。
+    if coordinator_id.is_some()
+        && mentions_merged.is_empty()
+        && coord_streak_get(&conv.id) >= COORD_FAIL_STREAK
+        && coordinator_is_user_appointed(
+            pool,
+            &conv.id,
+            coordinator_id.as_deref().unwrap_or(""),
+        )
+        .await
+    {
+        let coord_hop = Hop {
+            agent_id: coordinator_id.clone().unwrap_or_default(),
+            from: None,
+        };
+        emit_mention_blocked(pool, &conv.id, &new_head, &coord_hop, "coordinator_failed").await;
+        tracing::warn!(
+            target: "ice_paw.channel",
+            conv = %conv.id,
+            "统筹者连续故障（用户指定档）——广播降级为需点名，消息已落流待用户处置"
+        );
+        return Ok(());
+    }
+
     let (route, notes) = route_user_message(
         &mentions_merged,
         &members
@@ -565,20 +718,359 @@ async fn consume_backlog(
             run_next_hop(app, pool, conv, &members, backlog.len()).await
         }
         ChannelRoute::NeedsCoordinator => {
-            // 批 2 接入自选举；当前诚实等待（消息已落流不丢失）
+            // C5：统筹空缺 → 触发自选举（消息已落流不丢；选举产出后 consume 接管）
             tracing::warn!(
                 target: "ice_paw.channel",
                 conv = %conv.id,
-                "频道无统筹者（role=coordinator 成员缺失），消息已落流待统筹者就位"
+                "频道无统筹者（role=coordinator 成员缺失），触发自选举（积压 {} 条待消费）",
+                backlog.len()
             );
+            trigger_election(app, pool, conv).await;
             Ok(())
         }
     }
 }
 
 // =========================================================================
-// 跳执行（护栏 → 凭据 → 单写者仲裁 → run_agent_turn 全链路）
+// 自选举（C5：统筹空缺时成员互选定统筹者；一届 = started → N×vote → result）
 // =========================================================================
+
+/// 单成员投票 mini 回合的产物（引擎视角的一票）。
+struct CastVote {
+    /// 被投者（None = 弃权，reason 必填）
+    candidate: Option<String>,
+    reason: Option<String>,
+}
+
+/// 跑一届选举（spawn 调用；N 成员串行投票约 10~25s）。
+///
+/// 事实分层（C10b）：投票**内容**是成员真话——回复原文物化为 assistant 行进
+/// 共享流（sender 标注投票者，全员可见选举发言）；引擎观察到的投票事实
+/// （投给了谁/为何弃权）走 `channel_election` 事件。投票走 `stream_summary`
+/// 通道（小额度 128 + 思考开关纪律），连不上的成员天然弃权——**兼任健康检查**。
+/// 平票裁决 = joined_at 最早（成员表序）；全员弃权 = 胜者空缺（广播降级态，
+/// 下次 NeedsCoordinator 查 `last_election_all_abstained` 不再自动重选）。
+pub(crate) async fn run_election(app: &AppHandle, pool: &SqlitePool, conv: &ConversationRow) {
+    let Some(pid) = conv.project_id.clone() else { return };
+    let members = repo::project::list_member_profiles(pool, &pid)
+        .await
+        .unwrap_or_default();
+    if members.is_empty() {
+        tracing::warn!(target: "ice_paw.channel", conv = %conv.id, "选举取消：项目已无成员");
+        return;
+    }
+    let election_id = uuid::Uuid::new_v4().to_string();
+    let turn = format!("election:{election_id}");
+    let ctx = EventCtx::new(&conv.id, &turn, &conv.agent_id);
+    event_log::log_channel_election(
+        pool,
+        &ctx,
+        &election_id,
+        &ChannelElectionPayload {
+            v: 1,
+            phase: "started".into(),
+            vote: None,
+            result: None,
+        },
+    )
+    .await;
+
+    // 串行投票（每票一事件；凭据/请求失败的票诚实记弃权原因）
+    let member_pairs: Vec<(String, String)> = members
+        .iter()
+        .map(|m| (m.agent_id.clone(), m.name.clone()))
+        .collect();
+    let mut votes: Vec<Option<String>> = Vec::with_capacity(members.len());
+    for m in &members {
+        let cast = cast_vote(app, pool, conv, &turn, &member_pairs, m).await;
+        event_log::log_channel_election(
+            pool,
+            &ctx,
+            &election_id,
+            &ChannelElectionPayload {
+                v: 1,
+                phase: "vote".into(),
+                vote: Some(ChannelElectionVote {
+                    voter_agent_id: m.agent_id.clone(),
+                    candidate_agent_id: cast.candidate.clone(),
+                    reason: cast.reason.clone(),
+                }),
+                result: None,
+            },
+        )
+        .await;
+        votes.push(cast.candidate);
+    }
+
+    // 计票 + result 事件
+    let member_ids: Vec<String> = members.iter().map(|m| m.agent_id.clone()).collect();
+    let (tally, winner, tie) = tally_votes(&votes, &member_ids);
+    event_log::log_channel_election(
+        pool,
+        &ctx,
+        &election_id,
+        &ChannelElectionPayload {
+            v: 1,
+            phase: "result".into(),
+            vote: None,
+            result: Some(ChannelElectionResult {
+                tally,
+                winner_agent_id: winner.clone(),
+                tie_break: tie.then_some("joined_at".to_string()),
+            }),
+        },
+    )
+    .await;
+
+    match winner {
+        Some(w) => {
+            // 现统筹降回 member（换选场景；同人选连任则跳过）
+            if let Some(cur) = members
+                .iter()
+                .find(|m| m.role == "coordinator" && m.agent_id != w)
+            {
+                let _ = repo::project::set_member_role(pool, &pid, &cur.agent_id, "member").await;
+            }
+            if let Err(e) = repo::project::set_member_role(pool, &pid, &w, "coordinator").await {
+                tracing::warn!(target: "ice_paw.channel", "选举胜者 role 置位失败: {e}");
+                return;
+            }
+            if let Err(e) = repo::conversation::set_conversation_agent(pool, &conv.id, &w).await {
+                tracing::warn!(target: "ice_paw.channel", "选举胜者投影更新失败: {e}");
+            }
+            coord_streak_reset(&conv.id);
+            event_log::log_channel_coordinator(
+                pool,
+                &EventCtx::new(&conv.id, "", &w),
+                &ChannelCoordinatorPayload {
+                    v: 1,
+                    action: "elected".into(),
+                    agent_id: Some(w.clone()),
+                    reason: Some("自选举产出".into()),
+                },
+            )
+            .await;
+            tracing::info!(target: "ice_paw.channel", conv = %conv.id, "频道选举完成，新统筹者: {w}");
+        }
+        None => {
+            // 全员弃权：广播降级态（不设统筹）；下次 NeedsCoordinator 不自动重选
+            tracing::warn!(
+                target: "ice_paw.channel",
+                conv = %conv.id,
+                "频道选举全员弃权，统筹空缺（广播降级）——由用户指定统筹者解除"
+            );
+        }
+    }
+}
+
+/// 单成员投票 mini 回合：直连 provider（不占 chat_state 单写者——共识机制非
+/// 频道发言权）→ 回复原文物化 assistant 行 + assistant_message 事件（sender
+/// 标注投票者）→ 解析被投者。任何失败诚实弃权（不抛出——选举不因单票故障中止）。
+async fn cast_vote(
+    app: &AppHandle,
+    pool: &SqlitePool,
+    conv: &ConversationRow,
+    turn: &str,
+    member_pairs: &[(String, String)],
+    m: &repo::project::ProjectMemberProfile,
+) -> CastVote {
+    let agent_cmd = app.state::<Arc<dyn AgentCmd>>().inner().clone();
+    let creds = match agent_cmd.get_with_credentials(&m.agent_id).await {
+        Ok(c) => c,
+        Err(e) => {
+            return CastVote {
+                candidate: None,
+                reason: Some(format!("凭据/档案不可用（弃权）: {e}")),
+            }
+        }
+    };
+    let llm = match provider::create_provider(
+        &creds.agent.provider,
+        &creds.agent.model,
+        creds.base_url.as_deref(),
+        creds.agent.cache_prompt != 0,
+    ) {
+        Ok(p) => p,
+        Err(e) => {
+            return CastVote {
+                candidate: None,
+                reason: Some(format!("provider 创建失败（弃权）: {e}")),
+            }
+        }
+    };
+    let names = member_pairs
+        .iter()
+        .map(|(_, n)| n.as_str())
+        .collect::<Vec<_>>()
+        .join("、");
+    let prompt = format!(
+        "频道「{}」统筹者选举进行中。统筹者负责在无人点名时接手任务并协调成员分工。\n候选人（可投自己）：{names}。\n请只回复一个候选人名字（不带标点、不解释）；无法决定时回复：弃权。",
+        conv.title
+    );
+    let cancel = CancellationToken::new();
+    let stream = match llm
+        .stream_summary(
+            &creds.api_key,
+            vec![
+                ChatMessage::from_text(
+                    "system",
+                    "你是频道成员，正在参与统筹者选举投票，按成员的可靠性与能力判断。",
+                ),
+                ChatMessage::from_text("user", prompt),
+            ],
+            0.0, // 稳定可复现（摘要通道同款纪律）
+            ELECTION_VOTE_MAX_TOKENS,
+            cancel,
+        )
+        .await
+    {
+        Ok(s) => s,
+        Err(e) => {
+            return CastVote {
+                candidate: None,
+                reason: Some(format!("投票请求失败（弃权）: {e}")),
+            }
+        }
+    };
+    let mut full = String::new();
+    tokio::pin!(stream);
+    while let Some(result) = stream.next().await {
+        if let Ok(crate::infra::protocol::ChatDelta::Delta { content }) = result {
+            full.push_str(&content);
+        }
+    }
+    let reply = full.trim();
+    if reply.is_empty() {
+        return CastVote {
+            candidate: None,
+            reason: Some("模型返回空（弃权）".into()),
+        };
+    }
+    // 投票内容 = 成员真话：原文物化 assistant 行进共享流（sender 标注投票者）
+    let mid = uuid::Uuid::new_v4().to_string();
+    if repo::message::create(
+        pool,
+        &mid,
+        &NewMessage {
+            conversation_id: conv.id.clone(),
+            role: "assistant".into(),
+            content: reply.to_string(),
+            token_count: None,
+            error: None,
+            model: Some(creds.agent.model.clone()),
+        },
+    )
+    .await
+    .is_ok()
+    {
+        let ctx = EventCtx::new(&conv.id, turn, &m.agent_id)
+            .with_sender_name(Some(m.name.clone()));
+        event_log::log_assistant_message(
+            pool,
+            &ctx,
+            &mid,
+            Some(&creds.agent.model),
+            reply,
+            &[ContentBlock::text(reply.to_string())],
+            None,
+            None,
+            0,
+            false,
+        )
+        .await;
+    }
+    match match_candidate(reply, member_pairs) {
+        Some(id) => CastVote {
+            candidate: Some(id),
+            reason: None,
+        },
+        None => CastVote {
+            candidate: None,
+            reason: Some(format!("回复未识别出候选（弃权）: {reply}")),
+        },
+    }
+}
+
+/// 最近一届选举是否全员弃权（胜者空缺）——NeedsCoordinator 自动重选的熔断：
+/// 全员弃权说明成员都不愿/不能承担，自动重选只会空转；用户指定统筹者可解。
+async fn last_election_all_abstained(pool: &SqlitePool, conv_id: &str) -> bool {
+    let payload: Option<String> = sqlx::query_scalar(
+        "SELECT payload FROM session_events \
+          WHERE session_id = ? AND kind = 'channel_election' \
+          ORDER BY seq DESC LIMIT 1",
+    )
+    .bind(conv_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+    // 最近一条选举事件非 result（选举进行中/中断）不视为弃权终局
+    payload
+        .and_then(|p| serde_json::from_str::<ChannelElectionPayload>(&p).ok())
+        .and_then(|p| p.result)
+        .is_some_and(|r| r.winner_agent_id.is_none())
+}
+
+/// NeedsCoordinator 臂的选举触发（自动档：全员弃权熔断生效）。
+async fn trigger_election(app: &AppHandle, pool: &SqlitePool, conv: &ConversationRow) {
+    schedule_election(app, pool, conv, false).await;
+}
+
+/// 用户手势的补选入口（频道头部「让系统补选」按钮）——绕过全员弃权熔断
+///（用户治理权最大），election_running 守卫与完成后重消费照常。
+pub(crate) async fn manual_reelect(app: &AppHandle, pool: &SqlitePool, conv: &ConversationRow) {
+    schedule_election(app, pool, conv, true).await;
+}
+
+/// 选举调度公共体：全员弃权熔断（force 绕过）→ election_running 守卫 → spawn
+///（完成/早退清标记）→ run_election。
+///
+/// **选举后的积压重消费不在此处**——走事件总线（watcher 监听
+/// `channel_coordinator` 事件触发 [`on_coordinator_settled`]）。这不只是解耦
+/// 美感：consume_backlog 的 NeedsCoordinator 臂会再触发选举，直接 await 会形成
+/// 「schedule_election → consume_backlog → schedule_election」互递归，rustc 对
+/// 互相递归的 async future 无法自证 Send（spawn 边同样要求 Send，装箱也断不
+/// 了 trait 推断环）——经总线广播是结构性断环，且顺带让 appointed/removed
+/// 等用户治理动作也获得「统筹位落定 → 尝试消费积压」的同一语义。
+async fn schedule_election(
+    app: &AppHandle,
+    pool: &SqlitePool,
+    conv: &ConversationRow,
+    force: bool,
+) {
+    if !force && last_election_all_abstained(pool, &conv.id).await {
+        tracing::warn!(
+            target: "ice_paw.channel",
+            conv = %conv.id,
+            "统筹空缺且上次选举全员弃权——不自动重选，消息留流（用户可指定统筹者或手动补选）"
+        );
+        return;
+    }
+    {
+        let mut map = runtimes().lock().unwrap();
+        let rt = map.entry(conv.id.clone()).or_default();
+        if rt.election_running {
+            return; // 一届选举进行中，本触发静默让路（统筹位落定事件会再触发消费）
+        }
+        rt.election_running = true;
+    }
+    let app = app.clone();
+    let pool = pool.clone();
+    let conv = conv.clone();
+    tauri::async_runtime::spawn(async move {
+        // 任何出口（含早退/panic 展开）都清 running 标记——只清标记不删 runtime
+        //（链状态 [head/pending/频率窗] 与选举正交，误删会把活链打成孤儿）
+        let conv_id = conv.id.clone();
+        let _guard = scopeguard::guard((), |_| {
+            if let Some(rt) = runtimes().lock().unwrap().get_mut(&conv_id) {
+                rt.election_running = false;
+            }
+        });
+        run_election(&app, &pool, &conv).await;
+    });
+}
+
+
 
 /// 锁段判定产物（guard 不跨 await——数据在锁内收集，动作在锁外执行）。
 enum NextStep {
@@ -840,35 +1332,77 @@ async fn run_next_hop(
 // 回合结束触发点（EVENT_BUS 订阅 turn_ended；inbox drain watcher 同款模式）
 // =========================================================================
 
-/// 启动频道回合结束观察者（lib.rs setup 调用一次）。
-///
-/// 频道回合结束 → 等静默 → sender sweep → 抢占检查（有积压 = 新链头消费）/
-/// 无积压 = 解析终文 @ 接力。自然完成与用户终止两态同接（turn_ended 恒落）。
+/// 启动频道观察者（lib.rs setup 调用一次）。两路触发源：
+/// - `turn_ended` → 回合结束 → 等静默 → sender sweep → 抢占检查（有积压 =
+///   新链头消费）/ 无积压 = 解析终文 @ 接力。自然完成与用户终止两态同接。
+/// - `channel_coordinator` → 统筹位落定（elected/appointed/removed/failed-over）
+///   → 等静默 → 尝试消费积压。选举/治理完成后的重消费统一走此口（断开
+///   consume_backlog ↔ schedule_election 的互递归 Send 推断环，见
+///   [`schedule_election`] 注释）。
 pub fn spawn_channel_watcher(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         let mut rx = event_log::event_bus().subscribe();
         loop {
             match rx.recv().await {
                 Ok(note) => {
-                    if note.kind != event_log::kind::TURN_ENDED {
-                        continue;
+                    let is_turn = note.kind == event_log::kind::TURN_ENDED;
+                    let is_coord = note.kind == event_log::kind::CHANNEL_COORDINATOR;
+                    if is_turn || is_coord {
+                        let app = app.clone();
+                        let conv_id = note.conversation_id.clone();
+                        tauri::async_runtime::spawn(async move {
+                            // 两 handler 返回各自的 impl Future，无法装进同一
+                            // fn 指针——分支直调（各自的 Send 由 spawn 边验证）
+                            if is_turn {
+                                on_channel_turn_ended(&app, &conv_id).await;
+                            } else {
+                                on_coordinator_settled(&app, &conv_id).await;
+                            }
+                        });
                     }
-                    let app = app.clone();
-                    let conv_id = note.conversation_id.clone();
-                    tauri::async_runtime::spawn(async move {
-                        on_channel_turn_ended(&app, &conv_id).await;
-                    });
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                     tracing::warn!(
                         target: "ice_paw.channel",
-                        "频道观察者丢帧（{n}），本次触发跳过——下次 turn_ended 会再触发"
+                        "频道观察者丢帧（{n}），本次触发跳过——下次触发源会再触发"
                     );
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             }
         }
     });
+}
+
+/// 统筹位落定后的积压消费（election/appointed/removed/failed-over 全触发：
+/// 统筹位变化 = 路由前提变化，此前扣在流里的消息值得一试）。
+///
+/// 等静默与 turn_ended 路径同款（appointed 可能在会话在途时发生）；无统筹 /
+/// 全员弃权熔断会在 consume_backlog 内部诚实停手，无空转风险。
+async fn on_coordinator_settled(app: &AppHandle, conv_id: &str) {
+    let pool = app.state::<SqlitePool>().inner().clone();
+    let conv = match repo::conversation::get_by_id(&pool, conv_id).await {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    if conv.kind != "channel" || conv.archived_at.is_some() {
+        return;
+    }
+    let chat_state = app.state::<ChatState>().inner().clone();
+    let deadline = Instant::now() + QUIET_TIMEOUT;
+    while chat_state.is_streaming(conv_id) {
+        if Instant::now() >= deadline {
+            tracing::info!(
+                target: "ice_paw.channel",
+                conv = conv_id,
+                "统筹位落定后等待静默超时，本次放弃——下次触发源接手"
+            );
+            return;
+        }
+        tokio::time::sleep(QUIET_POLL).await;
+    }
+    if let Err(e) = consume_backlog(app, &pool, &conv).await {
+        tracing::warn!(target: "ice_paw.channel", "统筹位落定后积压消费失败: {e}");
+    }
 }
 
 /// 频道回合结束处理（核心触发点）。
@@ -926,7 +1460,48 @@ async fn on_channel_turn_ended(app: &AppHandle, conv_id: &str) {
             Err(e) => tracing::warn!(target: "ice_paw.channel", "sender sweep 失败: {e}"),
         }
     }
-    // TODO(批2/C5)：统筹者接令回合终态失败计数 → COORD_FAIL_STREAK 换帅档
+    // --- C5 换帅：统筹者接令回合终态失败计数 ---
+    // 仅当本回合执行者 == 现任统筹者才动计数（成员回合成败不归咎统筹者）；
+    // 失败口径 = termination='error'（interrupted=用户手势、length=额度顶格不算）；
+    // 成功清零、跨链累计（streak 独立存储）。达阈值 → 罢免 + 补选。
+    if let Some(hop) = &current {
+        let coordinator = repo::project::list_member_profiles(
+            &pool,
+            conv.project_id.as_deref().unwrap_or(""),
+        )
+        .await
+        .ok()
+        .and_then(|ms| ms.into_iter().find(|m| m.role == "coordinator"));
+        if coordinator.as_ref().map(|c| c.agent_id.as_str()) == Some(hop.agent_id.as_str()) {
+            let failed =
+                last_turn_termination(&pool, conv_id, &head).await.as_deref() == Some("error");
+            if failed {
+                let n = coord_streak_inc(conv_id);
+                tracing::warn!(
+                    target: "ice_paw.channel",
+                    conv = conv_id,
+                    streak = n,
+                    "统筹者接令回合失败（error 终态）"
+                );
+                if n >= COORD_FAIL_STREAK {
+                    if coordinator_is_user_appointed(&pool, conv_id, &hop.agent_id).await {
+                        // C5 指定档：不自动换帅（治理权不越权）——广播降级为
+                        // 「需点名」，下次广播发 blocked 事实事件提示用户处置。
+                        tracing::warn!(
+                            target: "ice_paw.channel",
+                            conv = conv_id,
+                            streak = n,
+                            "用户指定的统筹者连续失败——不自动换帅，广播降级为需点名"
+                        );
+                    } else {
+                        demote_and_reelect(app, &pool, &conv, &hop.agent_id, n).await;
+                    }
+                }
+            } else {
+                coord_streak_reset(conv_id);
+            }
+        }
+    }
 
     // --- 抢占检查：链头之后有新 user 行 = 用户在回合期间插话 ---
     let backlog = match repo::message::list_user_anchors_after(&pool, conv_id, &head).await {
@@ -1117,6 +1692,68 @@ async fn last_turn_message_id(pool: &SqlitePool, conv_id: &str, head: &str) -> O
     .flatten()
 }
 
+/// 本回合（turn_id = head 的最新 turn_ended）终止原因——换帅失败口径判定用。
+async fn last_turn_termination(pool: &SqlitePool, conv_id: &str, head: &str) -> Option<String> {
+    let payload: Option<String> = sqlx::query_scalar(
+        "SELECT payload FROM session_events \
+          WHERE session_id = ? AND turn_id = ? AND kind = 'turn_ended' \
+          ORDER BY seq DESC LIMIT 1",
+    )
+    .bind(conv_id)
+    .bind(head)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+    payload
+        .and_then(|p| {
+            serde_json::from_str::<crate::harness::event_log::TurnEndedPayload>(&p).ok()
+        })
+        .map(|p| p.termination)
+}
+
+/// 换帅（C5 第二档达阈值）：罢免现任（降回 member）+ failed-over 事件 + 清链 +
+/// 触发补选。不自动重跑失败消息（失败终态在流里对用户可见，用户可重发——1v1
+/// 同款体验）；projection（conv.agent_id）由选举胜者接管，全员弃权时停在
+/// joined_at 最早成员的 ensure 语义上。
+async fn demote_and_reelect(
+    app: &AppHandle,
+    pool: &SqlitePool,
+    conv: &ConversationRow,
+    demoted_id: &str,
+    streak: usize,
+) {
+    let Some(pid) = conv.project_id.clone() else {
+        return;
+    };
+    if let Err(e) = repo::project::set_member_role(pool, &pid, demoted_id, "member").await {
+        tracing::warn!(target: "ice_paw.channel", "换帅罢免 role 置位失败: {e}");
+        return;
+    }
+    coord_streak_reset(&conv.id);
+    event_log::log_channel_coordinator(
+        pool,
+        &EventCtx::new(&conv.id, "", demoted_id),
+        &ChannelCoordinatorPayload {
+            v: 1,
+            action: "failed-over".into(),
+            agent_id: Some(demoted_id.to_string()),
+            reason: Some(format!(
+                "连续 {streak} 次接令回合失败（error 终态），自动换帅"
+            )),
+        },
+    )
+    .await;
+    tracing::warn!(
+        target: "ice_paw.channel",
+        conv = %conv.id,
+        demoted = demoted_id,
+        "统筹者连续失败达阈值，已罢免并触发补选"
+    );
+    finish_chain(&conv.id);
+    trigger_election(app, pool, conv).await;
+}
+
 // =========================================================================
 // 单元测试（纯函数面；async 全链路见手测——inbox 同款纪律）
 // =========================================================================
@@ -1269,5 +1906,58 @@ mod tests {
         assert!(wake_reserve(&mut rt, "m", now + MENTION_WINDOW + Duration::from_secs(1)));
         // 不同成员互不干扰
         assert!(wake_reserve(&mut rt, "other", now));
+    }
+
+    // ---------- 选举（match_candidate / tally_votes / streak 存储） ----------
+
+    #[test]
+    fn match_candidate_exact_then_unique_substring() {
+        let members = vec![("a1".into(), "张三".into()), ("a2".into(), "李四".into())];
+        // 精确名（trim 后）优先
+        assert_eq!(match_candidate("张三", &members), Some("a1".into()));
+        assert_eq!(match_candidate("  张三  ", &members), Some("a1".into()));
+        // 唯一子串命中（模型回了句实话）
+        assert_eq!(
+            match_candidate("我投张三，他最靠谱", &members),
+            Some("a1".into())
+        );
+        // 多命中 = 歧义弃权；零命中 = 弃权；「弃权」字面非成员名 → None
+        assert_eq!(match_candidate("张三和李四都行", &members), None);
+        assert_eq!(match_candidate("弃权", &members), None);
+        assert_eq!(match_candidate("王五", &members), None);
+    }
+
+    #[test]
+    fn tally_votes_winner_tie_and_all_abstain() {
+        let ids = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        // 普通多数
+        let (t, w, tie) = tally_votes(
+            &[Some("a".into()), Some("a".into()), Some("b".into())],
+            &ids,
+        );
+        assert_eq!(w, Some("a".into()));
+        assert!(!tie);
+        assert_eq!(t.iter().find(|x| x.agent_id == "a").unwrap().votes, 2);
+        // 平票 → 表序首个（joined_at 最早）
+        let (_, w, tie) = tally_votes(&[Some("b".into()), Some("a".into()), None], &ids);
+        assert_eq!(w, Some("a".into()));
+        assert!(tie);
+        // 全员弃权 → 胜者空缺（不自动重选熔断的事实基础）
+        let (_, w, tie) = tally_votes(&[None, None, None], &ids);
+        assert_eq!(w, None);
+        assert!(!tie);
+    }
+
+    #[test]
+    fn coord_streak_survives_chain_finish_and_resets() {
+        coord_streak_reset("conv-streak-test");
+        assert_eq!(coord_streak_get("conv-streak-test"), 0);
+        assert_eq!(coord_streak_inc("conv-streak-test"), 1);
+        // finish_chain 清 runtime（链状态），streak 独立存储跨链存活
+        finish_chain("conv-streak-test");
+        assert_eq!(coord_streak_get("conv-streak-test"), 1);
+        assert_eq!(coord_streak_inc("conv-streak-test"), 2);
+        coord_streak_reset("conv-streak-test");
+        assert_eq!(coord_streak_get("conv-streak-test"), 0);
     }
 }

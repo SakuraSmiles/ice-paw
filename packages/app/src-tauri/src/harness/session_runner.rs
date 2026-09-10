@@ -238,6 +238,11 @@ pub(crate) async fn run_agent_turn(
     // 注入「Word 文档样式偏好」小节（delegation_hint 同款字段穿透）。
     pipeline_ctx.word_style_profile = word_style_profile;
 
+    // 频道协作纪律（channel v1）：仅频道会话注入结构差异纪律（多人共享流 /
+    // @ 交接 / 不重复劳动），1v1 与 delegation 子会话不注入。
+    pipeline_ctx.channel_hint =
+        (conv.kind == "channel").then_some(crate::context::system_prompt::CHANNEL_HINT);
+
     // chat:processing 心跳通道：把 emitter 注入 Pipeline，让 ModalCapabilityStage
     // 在 OCR 每张图完成后 emit 心跳（撑住前端 60s 静默超时窗口，多图串行 OCR 易超）。
     // 与 session-event-log 分工：本字段走的瞬态 UI 事件通道（LoopEmitter），

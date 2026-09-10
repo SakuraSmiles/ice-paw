@@ -199,6 +199,8 @@ impl PipelineStage for SystemPromptStage {
         // MA-1：可调度 agent 清单注入（仅 kind='chat' 会话由 runner 填充；顺位在
         // 工具提示之后、os_context 之前/之后的语义由调用方文本保证——此处进段结构）。
         parts.delegation_hint = ctx.delegation_hint.take();
+        // channel v1：频道协作纪律段（kind='channel' 由 runner 填充常量）。
+        parts.channel_hint = ctx.channel_hint.take();
         // D12：Word 文档样式偏好注入（agent.yaml `word_style_profile` 自由文字块）。
         // 原文进独立小节，不解析不校验——agent 写 docx 时据此选字体/字号/配色/
         // 表格样式（具体格式由工具层 edit_docx/set_table_element 等落地）。

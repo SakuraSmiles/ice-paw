@@ -25,6 +25,7 @@ pub(crate) const LABEL_SYSTEM_PERSONA: &str = "system_persona";
 pub(crate) const LABEL_SYSTEM_TOOL_HINT: &str = "system_tool_hint";
 pub(crate) const LABEL_SYSTEM_OS_CONTEXT: &str = "system_os_context";
 pub(crate) const LABEL_SYSTEM_DELEGATION_HINT: &str = "system_delegation_hint";
+pub(crate) const LABEL_SYSTEM_CHANNEL_HINT: &str = "system_channel_hint";
 pub(crate) const LABEL_SYSTEM_WORD_STYLE: &str = "system_word_style";
 pub(crate) const LABEL_TOOL_DEFS: &str = "tool_defs";
 pub(crate) const LABEL_SUMMARY: &str = "summary";
@@ -130,6 +131,12 @@ pub(crate) fn build_anatomy(ctx: &PipelineContext) -> ContextAnatomy {
             &mut segments,
             LABEL_SYSTEM_DELEGATION_HINT,
             parts.delegation_hint.as_deref().map_or(0, estimate_tokens),
+            None,
+        );
+        push_seg(
+            &mut segments,
+            LABEL_SYSTEM_CHANNEL_HINT,
+            parts.channel_hint.map_or(0, estimate_tokens),
             None,
         );
         push_seg(

@@ -246,6 +246,21 @@ pub async fn active_channel_for_project(
     Ok(row)
 }
 
+/// 项目的归档频道（get_channel 归档入口展示用；每项目至多一个历史频道行）。
+pub async fn archived_channel_for_project(
+    pool: &SqlitePool,
+    project_id: &str,
+) -> AppResult<Option<ConversationRow>> {
+    let row = sqlx::query_as::<_, ConversationRow>(&format!(
+        "SELECT {CONV_COLS} FROM conversations \
+         WHERE kind = 'channel' AND project_id = ? AND archived_at IS NOT NULL"
+    ))
+    .bind(project_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
 /// 幂等确保项目频道存在（不存在则创建）。并发竞态由
 /// `idx_channel_per_project` 唯一索引兜底：INSERT 撞约束时重查即得既有频道。
 ///
