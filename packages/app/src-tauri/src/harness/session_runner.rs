@@ -113,6 +113,10 @@ pub(crate) struct AgentTurnInput {
     pub attach_file_inputs: Vec<repo::message_attachment_file::AttachmentFileInput>,
     /// chat:start 是否携带 user_content_blocks（含附件时 patch 前端乐观消息）
     pub emit_user_blocks: bool,
+    /// MA-3 来件来源元数据（消费回合专属；普通/委派回合 None）——落
+    /// messages.incoming_source（migration 53）+ user_message 事件 payload，
+    /// 前端 incoming 卡的权威数据源。
+    pub incoming_source: Option<crate::harness::event_log::IncomingSourceMeta>,
     pub tools_enabled: bool,
     pub model_override: Option<String>,
     /// 已注册到 ChatState 的取消令牌（用户=新建；委派=父 token 的子链）
@@ -146,6 +150,7 @@ pub(crate) async fn run_agent_turn(
         attach_db_inputs,
         attach_file_inputs,
         emit_user_blocks,
+        incoming_source,
         tools_enabled,
         model_override,
         cancel_token,
@@ -378,6 +383,12 @@ pub(crate) async fn run_agent_turn(
         repo::message_attachment_file::insert_batch(pool, &user_msg_id, &attach_file_inputs)
             .await?;
     }
+    // MA-3 来件元数据（update_content_blocks 同款二段写；普通回合 None 零开销）。
+    if let Some(meta) = incoming_source.as_ref() {
+        if let Ok(json) = serde_json::to_string(meta) {
+            repo::message::set_incoming_source(pool, &user_msg_id, &json).await?;
+        }
+    }
 
     // --- session_events 影子写入（Phase 0）：turn 用户侧事实 ---
     let ev = EventCtx::new(&conv_id, &user_msg_id, &agent.id);
@@ -387,6 +398,7 @@ pub(crate) async fn run_agent_turn(
         &user_msg_id,
         &user_content_snapshot,
         &persist_blocks,
+        incoming_source.as_ref(),
     )
     .await;
     // 附件留存事实——仅元信息（正文在 messages/分页表，字节在 files 表；防三重冗余）。
@@ -535,11 +547,15 @@ pub(crate) async fn run_agent_turn(
         // 决定：delegation 子会话拿不到它 → 委派深度=1 的结构性护栏（接收方不能
         // 二次委派，「A委派B、B委派回A」的乒乓球在结构上不可能）。
         // MA-3：send_message_to_session 同条件注册——delegation 子会话同样拿不到
-        // 跨会话投递（防子会话侧信道绕过委派深度护栏；委派要回话走 tool_result）。
+        // 跨会话投递（防子会话侧信道绕过委派深度护栏；委派要回话走 tool_result）；
+        // list_conversations（寻址发现，只读概述）同条件——子会话无投递能力，
+        // 发现列表对它也只是噪音。
         if conv.kind == "chat" {
             reg.register(Arc::new(crate::harness::mcp::delegate::DelegateTool))
                 .await;
             reg.register(Arc::new(crate::harness::mcp::relay::SendToSessionTool))
+                .await;
+            reg.register(Arc::new(crate::harness::mcp::relay::ListConversationsTool))
                 .await;
         }
 
@@ -932,15 +948,16 @@ pub(crate) fn inject_into_system(
 }
 
 /// 平台元工具（`propose_config_change` / `read_agent_config` / `delegate_to_agent` /
-/// `send_message_to_session`）恒保留：它们是平台能力而非领域工具，收窄不应切断
-/// agent 的自我配置、委派与跨会话通讯（delegate / send_message_to_session 在
-/// 组装期按 conv.kind 注册，filter 兜底全局注册表可能含它们的场景）。
-/// 模块级：组装期收窄披露日志与 filter 共用同一份名单。
+/// `send_message_to_session` / `list_conversations`）恒保留：它们是平台能力而非
+/// 领域工具，收窄不应切断 agent 的自我配置、委派与跨会话通讯（delegate /
+/// send / list 在组装期按 conv.kind 注册，filter 兜底全局注册表可能含它们的
+/// 场景）。模块级：组装期收窄披露日志与 filter 共用同一份名单。
 const PLATFORM_TOOLS: &[&str] = &[
     "propose_config_change",
     "read_agent_config",
     "delegate_to_agent",
     "send_message_to_session",
+    "list_conversations",
 ];
 
 /// ②-3：enabled_tools 名单过滤（纯函数）——非空名单 = 名单 ∪ 平台元工具；

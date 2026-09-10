@@ -217,6 +217,7 @@ pub async fn send_message(
             attach_db_inputs,
             attach_file_inputs,
             emit_user_blocks: has_files,
+            incoming_source: None,
             tools_enabled,
             model_override,
             cancel_token,

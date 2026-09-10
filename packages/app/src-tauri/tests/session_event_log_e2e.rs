@@ -116,6 +116,7 @@ async fn full_tool_turn_sequence_is_replayable() {
         "msg-u1",
         "读一下 README",
         &[ContentBlock::text("读一下 README")],
+        None,
     )
     .await;
     log_attachment_stored(
@@ -314,6 +315,7 @@ async fn supersede_last_wins_and_seq_continues_across_turns() {
         "msg-u1",
         "写一篇长文",
         &[ContentBlock::text("写一篇长文")],
+        None,
     )
     .await;
     for (round, text) in [(0u32, "前半段"), (1u32, "前半段后半段")] {
@@ -365,7 +367,7 @@ async fn supersede_last_wins_and_seq_continues_across_turns() {
         },
     )
     .await;
-    log_user_message(&pool, &ev2, "msg-u2", "继续", &[ContentBlock::text("继续")]).await;
+    log_user_message(&pool, &ev2, "msg-u2", "继续", &[ContentBlock::text("继续")], None).await;
     log_assistant_message(
         &pool,
         &ev2,
@@ -466,6 +468,7 @@ async fn abort_and_discard_paths_form_complete_sequence() {
         "msg-u1",
         "跑一下构建",
         &[ContentBlock::text("跑一下构建")],
+        None,
     )
     .await;
     log_message_discarded(&pool, &ev1, "msg-a1", "termination_guard_no_text").await;
@@ -503,7 +506,7 @@ async fn abort_and_discard_paths_form_complete_sequence() {
         },
     )
     .await;
-    log_user_message(&pool, &ev2, "msg-u2", "你好", &[ContentBlock::text("你好")]).await;
+    log_user_message(&pool, &ev2, "msg-u2", "你好", &[ContentBlock::text("你好")], None).await;
     log_message_error(&pool, &ev2, "msg-a2", "Network", "connection refused").await;
     log_turn_ended(
         &pool,

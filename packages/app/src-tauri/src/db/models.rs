@@ -663,6 +663,10 @@ pub struct MessageRow {
     /// `#[sqlx(default)]` 兼容三个现有 SELECT（缺列取 Default）。
     #[sqlx(default)]
     pub source_seq: Option<i64>,
+    /// MA-3 来件来源元数据 JSON（migration 53，普通消息 NULL）：
+    /// IncomingSourceMeta 序列化。`#[sqlx(default)]` 兼容未列本列的 SELECT。
+    #[sqlx(default)]
+    pub incoming_source: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -686,6 +690,10 @@ pub struct Message {
     /// 实际使用的模型名（仅 assistant 消息有值）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// MA-3 来件来源元数据（解析后的对象形态；行内是 JSON 字符串，解析失败
+    /// 降级 None——前端回落文本前缀解析，坏 JSON 不阻塞消息展示）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub incoming_source: Option<crate::harness::event_log::IncomingSourceMeta>,
 }
 
 impl From<MessageRow> for Message {
@@ -702,6 +710,10 @@ impl From<MessageRow> for Message {
             rowid: row.rowid,
             summary_id: row.summary_id,
             model: row.model,
+            incoming_source: row
+                .incoming_source
+                .as_deref()
+                .and_then(|s| serde_json::from_str(s).ok()),
         }
     }
 }

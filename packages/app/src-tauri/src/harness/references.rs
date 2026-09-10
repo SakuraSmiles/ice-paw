@@ -655,6 +655,7 @@ mod tests {
             summary_id: None,
             model: None,
             source_seq: None,
+            incoming_source: None,
         }
     }
 

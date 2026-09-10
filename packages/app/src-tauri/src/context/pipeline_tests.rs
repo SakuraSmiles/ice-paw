@@ -77,6 +77,7 @@ pub(super) fn make_msg_row(role: &str, content: &str) -> MessageRow {
         summary_id: None,
         model: None,
         source_seq: None,
+        incoming_source: None,
     }
 }
 

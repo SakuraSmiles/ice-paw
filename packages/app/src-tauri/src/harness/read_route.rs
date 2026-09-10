@@ -538,6 +538,10 @@ fn to_message_row(
         summary_id: None,
         model: None,
         source_seq: Some(m.first_seq),
+        incoming_source: m
+            .incoming_source
+            .as_ref()
+            .and_then(|meta| serde_json::to_string(meta).ok()),
     }
 }
 
@@ -709,6 +713,7 @@ mod tests {
             turn_id: Some("t".into()),
             first_seq: 7,
             last_seq: 7,
+            incoming_source: None,
         };
         let mut rowid_map = HashMap::new();
         rowid_map.insert("msg-1".into(), 42i64);
@@ -742,6 +747,7 @@ mod tests {
             turn_id: None,
             first_seq: 9,
             last_seq: 9,
+            incoming_source: None,
         };
         let empty_rowid: HashMap<String, i64> = HashMap::new();
         let empty_created: HashMap<String, String> = HashMap::new();
@@ -829,7 +835,7 @@ mod tests {
         let ev = EventCtx::new("c1", "turn-1", "a1");
         let u = vec![ContentBlock::text("读一下 README")];
         write_row(pool, "turn-1", "user", "读一下 README", &u).await;
-        log_user_message(pool, &ev, "turn-1", "读一下 README", &u).await;
+        log_user_message(pool, &ev, "turn-1", "读一下 README", &u, None).await;
         log_turn_context(
             pool,
             &ev,

@@ -270,6 +270,8 @@ fn synthesize_events(rows: &[MessageRow]) -> (Vec<session_event::BackfillEvent>,
                         // ref 化：Image 换轻量引用（字节只在行）。空回退产物是
                         // Text，refify 原样过。
                         blocks: refify_blocks(&row.id, &effective_blocks(&row.content, &blocks)),
+                        // 合成事件不带 MA-3 来件元数据（旧行没有；反向合成不伪造）
+                        incoming_source: None,
                     },
                     &row.created_at,
                 ));

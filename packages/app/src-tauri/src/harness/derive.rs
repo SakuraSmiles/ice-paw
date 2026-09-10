@@ -50,6 +50,9 @@ pub struct DerivedMessage {
     pub first_seq: i64,
     /// 最后一次 supersede 的事件 seq（内容版本）
     pub last_seq: i64,
+    /// MA-3 来件来源元数据（user_message 专属；透传到 MessageRow 保持
+    /// 「派生视图 == legacy 行视图」对称，LLM 视图不消费——标注块承担）。
+    pub incoming_source: Option<crate::harness::event_log::IncomingSourceMeta>,
 }
 
 impl DerivedMessage {
@@ -148,6 +151,7 @@ pub fn derive_history(events: &[SessionEventRow]) -> DeriveResult {
                             turn_id: ev.turn_id.clone(),
                             first_seq: seq,
                             last_seq: seq,
+                            incoming_source: p.incoming_source,
                         },
                     );
                 }
@@ -172,6 +176,7 @@ pub fn derive_history(events: &[SessionEventRow]) -> DeriveResult {
                             turn_id: ev.turn_id.clone(),
                             first_seq: seq,
                             last_seq: seq,
+                            incoming_source: None,
                         },
                     );
                 }
@@ -203,6 +208,7 @@ pub fn derive_history(events: &[SessionEventRow]) -> DeriveResult {
                                     turn_id: ev.turn_id.clone(),
                                     first_seq: seq,
                                     last_seq: seq,
+                                    incoming_source: None,
                                 },
                             );
                         }

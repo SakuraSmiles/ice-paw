@@ -476,6 +476,20 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        // messages 表（01_init 最小形状）：migration 53 起 ALTER messages 加
+        // incoming_source（MA-3 来件元数据），伪造库须有此表（同上）。
+        sqlx::query(
+            "CREATE TABLE messages (
+              id TEXT PRIMARY KEY,
+              conversation_id TEXT NOT NULL,
+              role TEXT NOT NULL,
+              content TEXT NOT NULL DEFAULT '',
+              created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query("CREATE INDEX idx_model_profiles_sort ON model_profiles(sort_order ASC, created_at ASC)")
             .execute(&pool)
             .await

@@ -26,6 +26,10 @@ pub struct InboxItem {
     pub source_agent_name: String,
     pub content: String,
     pub expect_reply: bool,
+    /// 来件是否为 expect_reply 的回投（对用户仅展示差异：「回复」pill——回投
+    /// 在 hold 政策下也免扣自动消费，pill 提示这条来件的来路特殊性）
+    #[serde(default)]
+    pub is_reply: bool,
     pub delivered_at_unix: u64,
 }
 
@@ -55,6 +59,7 @@ pub async fn list_inbox(pool: State<'_, SqlitePool>, conversation_id: String) ->
                 source_agent_name: p.source_agent_name,
                 content: p.content,
                 expect_reply: p.expect_reply,
+                is_reply: p.is_reply,
                 delivered_at_unix: p.delivered_at_unix,
             }),
             // 单条坏行不挡整个收件箱（derive 同款「记 issue 不吞」——这里

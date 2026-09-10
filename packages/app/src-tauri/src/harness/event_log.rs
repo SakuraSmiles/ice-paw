@@ -201,6 +201,21 @@ pub struct UserMessagePayload {
     pub v: u8,
     pub content: String,
     pub blocks: Vec<PayloadBlock>,
+    /// MA-3 来件来源元数据（消费回合物化的 user 消息专属；普通消息 None）。
+    /// 前端 incoming 卡的**权威数据源**——文本前缀只是 LLM 视角的投影，
+    /// UI 不再解析文本（parseIncomingText 是 legacy 兜底）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incoming_source: Option<IncomingSourceMeta>,
+}
+
+/// MA-3 来件来源元数据（投递方身份快照，系统组装非 agent 手写）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IncomingSourceMeta {
+    pub source_conversation_id: String,
+    /// 源会话标题快照
+    pub source_conversation_title: String,
+    /// 源 agent 名快照
+    pub source_agent_name: String,
 }
 
 /// assistant 消息权威快照（每轮 finalize 点一条）。
@@ -441,6 +456,11 @@ pub struct CrossSessionMessagePayload {
     /// true = 消费回合结束自动把目标 agent 回复回投源会话（链一次止，
     /// 回投消息本字段恒 false）
     pub expect_reply: bool,
+    /// true = 本条是 expect_reply 的回投件（源会话用户自己发起的对话回路）。
+    /// 收件政策例外：回投不受 hold 扣（accept 排队消费）；refuse 仍拦
+    /// （用户治理权最大）。旧事件无此字段 → false。
+    #[serde(default)]
+    pub is_reply: bool,
     pub delivered_at_unix: u64,
 }
 
@@ -598,18 +618,21 @@ pub async fn log_context_breakdown(
 }
 
 /// 用户消息落库原文（actor=user）。字段式签名（Image 治理：`blocks` 的
-/// ref 化下沉 emitter 内部，调用方只管传与落库同值的 blocks）。
+/// ref 化下沉 emitter 内部，调用方只管传与落库同值的 blocks）；
+/// `incoming_source` = MA-3 来件元数据（普通消息传 None）。
 pub async fn log_user_message(
     pool: &SqlitePool,
     ctx: &EventCtx,
     message_id: &str,
     content: &str,
     blocks: &[ContentBlock],
+    incoming_source: Option<&IncomingSourceMeta>,
 ) {
     let payload = UserMessagePayload {
         v: version_two(),
         content: content.to_string(),
         blocks: refify_blocks(message_id, blocks),
+        incoming_source: incoming_source.cloned(),
     };
     append_event(
         pool,
@@ -1030,7 +1053,7 @@ mod tests {
                 size: 282_000,
             },
         ];
-        log_user_message(&pool, &ctx(), "msg-u1", "看这张图", &blocks).await;
+        log_user_message(&pool, &ctx(), "msg-u1", "看这张图", &blocks, None).await;
 
         let row: SessionEventRow = session_event::list_by_session(&pool, "conv-1", None)
             .await
@@ -1688,6 +1711,7 @@ mod tests {
                 source_agent_name: "源 agent".into(),
                 content: "材质参数定稿了吗".into(),
                 expect_reply: true,
+                is_reply: false,
                 delivered_at_unix: 1_750_000_000,
             },
         )

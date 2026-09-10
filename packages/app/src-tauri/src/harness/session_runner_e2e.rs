@@ -255,6 +255,7 @@ async fn run_turn_core(
         attach_db_inputs: Vec::new(),
         attach_file_inputs: Vec::new(),
         emit_user_blocks: false,
+        incoming_source: None,
         tools_enabled: tools,
         model_override: None,
         cancel_token: cancel.clone(),

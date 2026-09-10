@@ -494,7 +494,7 @@ mod tests {
             r#"[{"type":"text","text":"读文件"}]"#,
         )
         .await;
-        event_log::log_user_message(pool, &ev, turn, "读文件", &[text_block("读文件")]).await;
+        event_log::log_user_message(pool, &ev, turn, "读文件", &[text_block("读文件")], None).await;
         let a1_blocks = r#"[{"type":"tool_use","id":"tu_1","name":"read_file","input":"{}"}]"#;
         insert_row(pool, conv, &a1, "assistant", "", a1_blocks).await;
         event_log::log_assistant_message(
@@ -821,7 +821,7 @@ mod tests {
             r#"[{"type":"text","text":"写长文"}]"#,
         )
         .await;
-        event_log::log_user_message(&pool, &ev, "t1", "写长文", &[text_block("写长文")]).await;
+        event_log::log_user_message(&pool, &ev, "t1", "写长文", &[text_block("写长文")], None).await;
         insert_row(
             &pool,
             "conv",
@@ -897,7 +897,7 @@ mod tests {
             r#"[{"type":"text","text":"问"}]"#,
         )
         .await;
-        event_log::log_user_message(&pool, &ev, "t1", "问", &[text_block("问")]).await;
+        event_log::log_user_message(&pool, &ev, "t1", "问", &[text_block("问")], None).await;
         // rowid 序：a2 在前；事件序：a1 在前
         insert_row(
             &pool,

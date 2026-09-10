@@ -1,4 +1,5 @@
-//! `send_message_to_session` 工具——MA-3 跨会话通讯的 agent 投递入口。
+//! `send_message_to_session` / `list_conversations`——MA-3 跨会话通讯的 agent
+//! 入口（投递 + 寻址发现）。
 //!
 //! 会话 A 的 agent 向会话 B **异步**投递消息（与 [`super::delegate`] 的同步
 //! 阻塞形态互补不替代）：工具立即返回（`held`/`queued`/`delivered`），目标
@@ -6,16 +7,23 @@
 //! 护栏/expect_reply 回投全在彼处，本文件只是薄壳：目标解析 + 调用 + 结果
 //! JSON 化）。
 //!
+//! `list_conversations` 是**寻址发现**（2026-09-10 拍板）：agent 查全部会话的
+//! 概述元信息（id/标题/所属 agent/所属项目/更新时间），解决「投递必须点对点
+//! 但 agent 查不到地址、用户只能拿 @会话 兼职报地址」的语义混乱——@ 的语义
+//! 恒为「向内引用」（快照注入），不兼职寻址。**可见性 ≠ 写权限**：列表全量
+//! 可见（知道无害），投递层拦同项目边界（跨项目/散落会话看得到但投不了，
+//! 报错指路）。
+//!
 //! ## 注册边界（与 delegate 同款）
 //!
 //! 组装期按 `conv.kind == "chat"` 注册（session_runner）——delegation 子会话
-//! 拿不到本工具，防子会话侧信道绕过委派深度护栏；PLATFORM_TOOLS 白名单
+//! 拿不到本工具族，防子会话侧信道绕过委派深度护栏；PLATFORM_TOOLS 白名单
 //! 补入（enabled_tools 收窄不断跨会话通讯能力）。
 //!
 //! ## 授权
 //!
 //! `AuthorizationLevel::Always`（通用授权层不弹）——授权决策点是**收件三态**
-//! （目标会话的 inbox_policy：hold 默认扣住待用户批准），不是弹卡。
+//! （目标会话的 inbox_policy），不是弹卡。
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -70,10 +78,13 @@ impl McpClient for SendToSessionTool {
         "Send an async message to another conversation's agent. The message is queued in the \
          target's inbox and consumed when that conversation is free (the target agent runs a full \
          turn seeing it). Unlike delegate_to_agent this returns immediately - fire and forget. \
-         `target` accepts the conversation id or its exact title (ambiguous titles are rejected; \
-         use the id). Returns status: 'held' (waiting for the target user's approval - default), \
-         'queued' (auto-consume when the target is free), or 'delivered' (consumption started). \
-         Set expect_reply=true to have the target's answer sent back to this conversation \
+         HARD BOUNDARY: the target must belong to the SAME project as the current conversation \
+         (scattered conversations without a project cannot send or receive). Use \
+         list_conversations to find addressable ids/titles. `target` accepts the conversation id \
+         or its exact title (ambiguous titles are rejected; use the id). Returns status: \
+         'delivered' (consumption started - default policy auto-consumes), 'queued' (target busy, \
+         auto-consume when free), or 'held' (target policy requires user approval). Set \
+         expect_reply=true to have the target's answer sent back to this conversation \
          automatically."
     }
 
@@ -154,12 +165,13 @@ impl McpClient for SendToSessionTool {
             &target.id,
             &parsed.content,
             parsed.expect_reply,
+            false,
         )
         .await?;
 
         // --- 结果 JSON：状态三态 + 目标名 + 队列位（源 agent 据此告知用户） ---
         let note = match outcome.status {
-            "held" => Some("消息已进入对方收件箱，等待该会话用户批准后才会被消费（对方默认收件政策为扣留）"),
+            "held" => Some("消息已进入对方收件箱，等待该会话用户批准后才会被消费（对方收件政策设为需批准）"),
             "queued" => Some("对方会话正在生成中，消息已排队，将在其空闲时自动消费"),
             _ => None, // delivered：消费已开始，无需多言
         };
@@ -175,7 +187,8 @@ impl McpClient for SendToSessionTool {
     }
 }
 
-/// 投递方身份快照：本会话标题 + 本 agent 名（消费侧来源标注与事件归因用）。
+/// 投递方身份快照：本会话标题 + 本 agent 名 + 所属项目（来源标注 / 事件
+/// 归因 / 项目边界校验用）。
 async fn source_info(pool: &sqlx::SqlitePool, ctx: &ToolContext) -> AppResult<SourceInfo> {
     let conv = repo::conversation::get_by_id(pool, &ctx.conv_id)
         .await
@@ -190,7 +203,119 @@ async fn source_info(pool: &sqlx::SqlitePool, ctx: &ToolContext) -> AppResult<So
         conv_title: conv.title,
         agent_id: agent.id,
         agent_name: agent.name,
+        project_id: conv.project_id,
     })
+}
+
+// =========================================================================
+// list_conversations —— 寻址发现（概述元信息；可见性 ≠ 写权限）
+// =========================================================================
+
+/// 会话概述列表上限（按更新时间倒序截断——发现工具够用即止，全量灌入
+/// 只会稀释注意力；超限附 truncated 提示诚实边界）。
+const OVERVIEW_CAP: usize = 100;
+
+pub struct ListConversationsTool;
+
+/// 概述条目（纯函数产物，可测）：只含寻址所需的元信息——**零内容**。
+fn overview_entry(
+    conv: &ConversationRow,
+    agent_name: Option<&str>,
+    project_name: Option<&str>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "id": conv.id,
+        "title": conv.title,
+        "agent_name": agent_name.unwrap_or("（agent 已删除）"),
+        // 散落会话显式 null——agent 一眼看出「不能投」（投递层会再拦一道）
+        "project_id": conv.project_id,
+        "project_name": project_name,
+        "updated_at": conv.updated_at,
+    })
+}
+
+/// 组装概述 JSON（纯函数）：kind='chat' 过滤 + 按更新时间倒序 + 截断。
+fn conversation_overview_json(
+    chats: &[ConversationRow],
+    agent_names: &std::collections::HashMap<String, String>,
+    project_names: &std::collections::HashMap<String, String>,
+) -> serde_json::Value {
+    let mut sorted: Vec<&ConversationRow> = chats.iter().filter(|c| c.kind == "chat").collect();
+    sorted.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    let truncated = sorted.len() > OVERVIEW_CAP;
+    let items: Vec<serde_json::Value> = sorted
+        .into_iter()
+        .take(OVERVIEW_CAP)
+        .map(|c| {
+            overview_entry(
+                c,
+                agent_names.get(&c.agent_id).map(String::as_str),
+                c.project_id
+                    .as_ref()
+                    .and_then(|pid| project_names.get(pid).map(String::as_str)),
+            )
+        })
+        .collect();
+    let mut v = serde_json::json!({ "conversations": items });
+    if truncated {
+        v["note"] = serde_json::Value::String(format!(
+            "仅显示最近更新的 {OVERVIEW_CAP} 个会话（共 {} 个）",
+            chats.iter().filter(|c| c.kind == "chat").count()
+        ));
+    }
+    v
+}
+
+#[async_trait]
+impl McpClient for ListConversationsTool {
+    fn name(&self) -> &str {
+        "list_conversations"
+    }
+
+    fn description(&self) -> &str {
+        "List all conversations with addressing metadata only (id, title, owning agent, project, \
+         last-updated time) - NO content. Use this to find the target for \
+         send_message_to_session. Cross-session delivery only works between conversations in the \
+         SAME project (scattered conversations without a project cannot send or receive) - the \
+         list is visible in full, but delivery enforces the project boundary."
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({ "type": "object", "properties": {} })
+    }
+
+    /// 恒 Always：只读概述元信息（无内容），与 send 工具同款授权语义——
+    /// 权限闸在投递层（项目边界 + 收件政策），不在发现层。
+    fn authorization_level(&self) -> AuthorizationLevel {
+        AuthorizationLevel::Always
+    }
+
+    async fn execute(&self, _args: &str) -> AppResult<String> {
+        Err(AppError::Internal(
+            "list_conversations 必须通过 execute_with_context 调用".into(),
+        ))
+    }
+
+    async fn execute_with_context(&self, _args: &str, ctx: &ToolContext) -> AppResult<String> {
+        let chats = repo::conversation::list_all(&ctx.pool)
+            .await
+            .map_err(|e| AppError::Internal(format!("读取会话列表失败: {e}")))?;
+        let agent_names: std::collections::HashMap<String, String> =
+            repo::agent::list(&ctx.pool)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|a| (a.id, a.name))
+                .collect();
+        let project_names: std::collections::HashMap<String, String> =
+            repo::project::list(&ctx.pool)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|p| (p.id, p.name))
+                .collect();
+        Ok(conversation_overview_json(&chats, &agent_names, &project_names).to_string())
+    }
 }
 
 #[cfg(test)]
@@ -211,8 +336,59 @@ mod tests {
             initiator_type: None,
             initiator_agent_id: None,
             parent_conversation_id: None,
-            inbox_policy: "hold".into(),
+            inbox_policy: "accept".into(),
         }
+    }
+
+    fn conv_at(id: &str, title: &str, project: Option<&str>, updated: &str) -> ConversationRow {
+        ConversationRow {
+            updated_at: updated.into(),
+            project_id: project.map(str::to_string),
+            ..conv(id, title, "chat")
+        }
+    }
+
+    fn names(pairs: &[(&str, &str)]) -> std::collections::HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn overview_filters_delegation_and_sorts_by_recency() {
+        let chats = vec![
+            conv_at("c-1", "旧", None, "2026-01-01 00:00:00"),
+            conv("d-1", "任务", "delegation"),
+            conv_at("c-2", "新", None, "2026-09-01 00:00:00"),
+        ];
+        let v = conversation_overview_json(&chats, &names(&[("agent-1", "甲")]), &names(&[]));
+        let items = v["conversations"].as_array().unwrap();
+        assert_eq!(items.len(), 2, "delegation 子会话不入列表");
+        assert_eq!(items[0]["id"], "c-2", "按更新时间倒序");
+        assert_eq!(items[0]["agent_name"], "甲");
+        assert!(items[0]["project_id"].is_null(), "散落会话 project 显式 null");
+        assert!(v.get("note").is_none(), "未截断无 note");
+    }
+
+    #[test]
+    fn overview_carries_project_and_truncates_with_note() {
+        let mut chats: Vec<ConversationRow> = (0..OVERVIEW_CAP + 5)
+            .map(|i| conv_at(&format!("c-{i}"), &format!("会话{i}"), Some("p-1"), &format!("2026-09-{i:02} 00:00:00")))
+            .collect();
+        chats.push(conv("d-9", "子任务", "delegation"));
+        let v = conversation_overview_json(
+            &chats,
+            &names(&[("agent-1", "甲")]),
+            &names(&[("p-1", "主线项目")]),
+        );
+        let items = v["conversations"].as_array().unwrap();
+        assert_eq!(items.len(), OVERVIEW_CAP, "截断到上限");
+        assert_eq!(items[0]["project_name"], "主线项目");
+        assert_eq!(items[0]["project_id"], "p-1");
+        let note = v["note"].as_str().unwrap();
+        assert!(note.contains("仅显示"), "截断诚实披露: {note}");
+        assert!(note.contains(&format!("{}", OVERVIEW_CAP + 5)), "总数计入 chat 会话（delegation 不计）: {note}");
     }
 
     #[test]

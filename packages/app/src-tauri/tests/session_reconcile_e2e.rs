@@ -125,6 +125,7 @@ async fn script_consistent_turn(pool: &SqlitePool) {
         "turn-1",
         "看这张图，再读一下 README",
         &user_blocks,
+        None,
     )
     .await;
     log_attachment_stored(

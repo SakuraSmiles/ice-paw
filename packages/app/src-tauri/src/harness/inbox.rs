@@ -6,16 +6,29 @@
 //! 复用 [`session_runner::run_agent_turn`] 跑一回合，把来件物化为带来源
 //! 标注的 user 消息（derive 零改动）。
 //!
-//! ## 收件三态（conversations.inbox_policy，migration 52；CC 实测经验进不变式）
+//! ## 收件三态（conversations.inbox_policy，migration 52）
 //!
-//! - `hold`（默认）——来件扣住待用户批准（收件箱放行）。agent 间投递自动
-//!   触发 LLM 回合是花钱+扰动行为，默认不该静默发生；
-//! - `accept`——排队、目标空闲自动消费（用户显式信任的协作对手）；
+//! - `accept`（默认）——排队、目标空闲自动消费。默认值是 2026-09-10 测试
+//!   反馈后拍板：单用户应用所有会话同属一人，「在 A 发起、切到 B 批准」的
+//!   行为流反人类；防 agent 互扰由下方护栏（队列/配额）兜底，hold 降级为
+//!   显式治理档（想逐件过目时切）；
+//! - `hold`——来件扣住待用户批准（收件箱放行）；
 //! - `refuse`——拒收，投递方工具立即报错（源 agent 可感知）。
+//!   **is_reply 例外**：expect_reply 回投件不受 hold 扣（accept 排队消费）——
+//!   回投落的是源会话（用户自己发起的对话回路），再扣一次等于打断自己；
+//!   refuse 仍拦（用户治理权最大）。
+//!
+//! ## 项目边界（硬边界，2026-09-10 拍板）
+//!
+//! 源与目标会话必须挂**同一项目**（project_id 同值且皆非 NULL）——散落
+//! 会话（未挂项目）双向不可投。执行期校验（deliver 内 Err 指路「把会话挂
+//! 到同一项目」），非注册期隐藏工具：agent 能通过 `list_conversations`
+//! 看到全部会话的概述元信息（可见性），投递层拦权限——知道 ≠ 能发。
 //!
 //! ## 触发三源
 //!
-//! 1. 投递时目标空闲且 accept → 立即 spawn 消费（[`deliver`]）；
+//! 1. 投递时目标空闲且可自动消费（accept / is_reply）→ 立即 spawn 消费
+//!    （[`deliver`]）；
 //! 2. accept 会话回合结束 → [`spawn_drain_watcher`]（EVENT_BUS 订阅
 //!    turn_ended）排空检查，队列非空且配额未尽 → 下一条——消费回合自身
 //!    结束再广播 turn_ended，链式排空到队列空或配额尽；
@@ -33,8 +46,10 @@
 //!
 //! ## 中继不带用户权威（CC 经验不变式）
 //!
-//! 来件事件 actor = `agent:<源agent_id>` 诚实归因；消费回合物化的 user 消息
-//! 带来源前缀（[`compose_incoming_text`]，前端 incoming 卡检测锚）——目标
+//! 来件事件 actor = `agent:<源agent_id>` 诚实归因；消费回合物化的 user
+//! 消息是**双块结构**（[`compose_incoming_blocks`]：来源标注块 + 正文块，
+//! 系统组装非 agent 手写）+ `incoming_source` 元数据（messages 列 migration
+//! 53 + user_message 事件 payload，前端 incoming 卡的权威数据源）——目标
 //! agent 与用户都能看到「这条消息来自谁」，不冒充用户权威。
 
 use std::collections::{HashMap, VecDeque};
@@ -74,11 +89,46 @@ const DRAIN_QUIET_TIMEOUT: Duration = Duration::from_secs(30);
 // 纯函数（前端 incoming 卡同款锚；测试不依赖 DB）
 // =========================================================================
 
-/// 消费回合物化消息的来源前缀检测锚（前端 `[来自会话「` 开头即 incoming 卡）。
+/// 消费回合物化消息的来源前缀检测锚（legacy 兜底路径：前端 `[来自会话「`
+/// 开头即 incoming 卡。权威路径是 incoming_source 元数据，前缀只是 LLM
+/// 视角投影 + 旧消息兼容）。
 pub const INCOMING_PREFIX_HEAD: &str = "[来自会话「";
 
-/// 组装消费回合的 user 消息全文：来源标注头（兼回信指引，目标 agent 与
-/// 用户都可见——诚实呈现「这条消息从哪来、怎么回」）+ 原文。
+/// 组装来源标注块（独立 Text 块）：标注「这条消息从哪来、怎么回」——目标
+/// agent 需要它回信（target id），用户侧 UI 不再解析它（元数据接管）。
+pub fn compose_incoming_annotation(
+    source_title: &str,
+    agent_name: &str,
+    source_conv_id: &str,
+) -> String {
+    format!(
+        "[来自会话「{source_title}」的 agent {agent_name}｜如需回复用 send_message_to_session 工具，target={source_conv_id}]"
+    )
+}
+
+/// 组装消费回合的 user 消息**双块结构**：[来源标注块, 正文块]（系统组装，
+/// agent 不经手格式——「通过系统工具规范」的落点）。
+///
+/// LLM 视角两块文本自然可读；UI 侧正文块即气泡体（不再从全文剥前缀）。
+/// 旧全文形态（标注\n\n正文 单串）仍由 [`compose_incoming_text`] 产出，
+/// 用于 messages.content 扁平快照（检索/回退显示）。
+pub fn compose_incoming_blocks(
+    source_title: &str,
+    agent_name: &str,
+    source_conv_id: &str,
+    content: &str,
+) -> Vec<ContentBlock> {
+    vec![
+        ContentBlock::text(compose_incoming_annotation(
+            source_title,
+            agent_name,
+            source_conv_id,
+        )),
+        ContentBlock::text(content.to_string()),
+    ]
+}
+
+/// 组装消费回合的 user 消息全文（扁平快照）：来源标注头 + 原文。
 pub fn compose_incoming_text(
     source_title: &str,
     agent_name: &str,
@@ -86,7 +136,8 @@ pub fn compose_incoming_text(
     content: &str,
 ) -> String {
     format!(
-        "[来自会话「{source_title}」的 agent {agent_name}｜如需回复用 send_message_to_session 工具，target={source_conv_id}]\n\n{content}"
+        "{}\n\n{content}",
+        compose_incoming_annotation(source_title, agent_name, source_conv_id)
     )
 }
 
@@ -126,6 +177,31 @@ pub struct SourceInfo {
     pub conv_title: String,
     pub agent_id: String,
     pub agent_name: String,
+    /// 源会话所属项目（项目边界校验用；散落会话 None——散落双向不可投）
+    pub project_id: Option<String>,
+}
+
+/// 项目边界校验（纯函数）：源与目标必须挂同一项目（同值且皆非 NULL）。
+/// 违规返回三段式文案（Err 体），合规返回 None。
+pub fn project_boundary_error(
+    source_project: Option<&str>,
+    target: &ConversationRow,
+) -> Option<String> {
+    match (source_project, target.project_id.as_deref()) {
+        (Some(s), Some(t)) if s == t => None,
+        _ => Some(format!(
+            "目标会话「{}」与当前会话不在同一项目——跨会话投递仅支持同项目会话{}。\
+             请让用户把两个会话挂到同一项目，或改投同项目的其他会话",
+            target.title,
+            if target.project_id.is_none() && source_project.is_some() {
+                "（目标未挂项目）"
+            } else if source_project.is_none() {
+                "（当前会话未挂项目）"
+            } else {
+                ""
+            }
+        )),
+    }
 }
 
 /// 投递结果（工具 JSON 化回源 agent）。
@@ -137,9 +213,14 @@ pub struct DeliveryOutcome {
     pub queue_position: usize,
 }
 
-/// 投递一条跨会话消息：校验 → append `cross_session_message`（pending 入队）
-/// → accept 且空闲则立即触发消费。refuse 在 append 前拦截（投递失败不产生
+/// 投递一条跨会话消息：校验（项目边界 / refuse / 队列上限）→ append
+/// `cross_session_message`（pending 入队）→ 可自动消费（accept 或 is_reply
+/// 例外）且空闲则立即触发消费。refuse 在 append 前拦截（投递失败不产生
 /// 事实）。
+///
+/// `is_reply` = expect_reply 回投件（源会话用户自己发起的回路）——不受
+/// hold 扣（见模块文档「收件三态」），refuse 仍拦。
+#[allow(clippy::too_many_arguments)]
 pub async fn deliver(
     app: &AppHandle,
     pool: &SqlitePool,
@@ -147,6 +228,7 @@ pub async fn deliver(
     target_conv_id: &str,
     content: &str,
     expect_reply: bool,
+    is_reply: bool,
 ) -> AppResult<DeliveryOutcome> {
     let content = content.trim();
     if content.is_empty() {
@@ -181,6 +263,9 @@ pub async fn deliver(
             target.title, target.kind
         )));
     }
+    if let Some(msg) = project_boundary_error(source.project_id.as_deref(), &target) {
+        return Err(AppError::Validation(msg));
+    }
     if target.inbox_policy == "refuse" {
         return Err(AppError::Validation(format!(
             "目标会话「{}」已设置为拒收跨会话消息——请如实告知用户，或改用其他会话",
@@ -211,6 +296,7 @@ pub async fn deliver(
             source_agent_name: source.agent_name.clone(),
             content: content.to_string(),
             expect_reply,
+            is_reply,
             delivered_at_unix: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
@@ -226,10 +312,12 @@ pub async fn deliver(
         to_conv = %target.id,
         policy = %target.inbox_policy,
         expect_reply,
+        is_reply,
         "跨会话消息入队"
     );
 
-    if target.inbox_policy == "accept" {
+    // 可自动消费：accept，或 is_reply 例外（回投不受 hold 扣）
+    if target.inbox_policy == "accept" || (is_reply && target.inbox_policy == "hold") {
         let chat_state = app.state::<ChatState>().inner().clone();
         if !chat_state.is_streaming(&target.id) {
             // 立即消费（后台 spawn；配额在 consume_pending 内部检查，
@@ -358,13 +446,27 @@ pub async fn consume_pending(
     )
     .await;
 
-    // --- 消费回合：来件物化为带来源标注的 user 消息，run_agent_turn 全链路 ---
+    // --- 消费回合：来件物化为双块结构的 user 消息，run_agent_turn 全链路 ---
+    // blocks = [来源标注块, 正文块]（系统组装）；content 扁平快照走
+    // compose_incoming_text（检索/回退显示兼容）；incoming_source 元数据
+    // 是前端 incoming 卡的权威数据源（messages 列 + 事件 payload 双写）。
+    let blocks = compose_incoming_blocks(
+        &payload.source_conversation_title,
+        &payload.source_agent_name,
+        &payload.source_conversation_id,
+        &payload.content,
+    );
     let text = compose_incoming_text(
         &payload.source_conversation_title,
         &payload.source_agent_name,
         &payload.source_conversation_id,
         &payload.content,
     );
+    let incoming_source = crate::harness::event_log::IncomingSourceMeta {
+        source_conversation_id: payload.source_conversation_id.clone(),
+        source_conversation_title: payload.source_conversation_title.clone(),
+        source_agent_name: payload.source_agent_name.clone(),
+    };
     let fallback =
         crate::commands::model_profile_cmd::production_fallback_plan(app, pool, &creds.agent);
 
@@ -397,11 +499,12 @@ pub async fn consume_pending(
             api_key: creds.api_key,
             user_msg_id: Uuid::new_v4().to_string(),
             content_text: text.clone(),
-            llm_blocks: vec![ContentBlock::text(text.clone())],
-            persist_blocks: vec![ContentBlock::text(text)],
+            llm_blocks: blocks.clone(),
+            persist_blocks: blocks,
             attach_db_inputs: Vec::new(),
             attach_file_inputs: Vec::new(),
             emit_user_blocks: false,
+            incoming_source: Some(incoming_source),
             tools_enabled: true,
             model_override: None,
             cancel_token,
@@ -423,7 +526,8 @@ pub async fn consume_pending(
     );
 
     // --- expect_reply 回投：完成后把目标 agent 最终回复投回源会话 ---
-    // 链一次止（回投恒 expect_reply=false）；回复为空不投（诚实：没内容可回）。
+    // 链一次止（回投恒 expect_reply=false）；is_reply=true——不受源会话 hold
+    // 扣（用户自己发起的回路），refuse 仍拦。回复为空不投（诚实：没内容可回）。
     if payload.expect_reply {
         let app = app.clone();
         let pool = pool.clone();
@@ -432,6 +536,7 @@ pub async fn consume_pending(
             conv_title: conv.title.clone(),
             agent_id: conv.agent_id.clone(),
             agent_name: creds.agent.name.clone(),
+            project_id: conv.project_id.clone(),
         };
         let reply_to = payload.source_conversation_id.clone();
         tauri::async_runtime::spawn(async move {
@@ -446,7 +551,7 @@ pub async fn consume_pending(
                         );
                         return;
                     }
-                    if let Err(e) = deliver(&app, &pool, &source, &reply_to, reply, false).await {
+                    if let Err(e) = deliver(&app, &pool, &source, &reply_to, reply, false, true).await {
                         tracing::warn!(target: "ice_paw.inbox", "expect_reply 回投失败: {e}");
                     }
                 }
@@ -553,6 +658,61 @@ mod tests {
         assert!(text.contains("target=conv-src"), "回信指引带源会话 id: {text}");
         assert!(text.ends_with("材质定稿了吗"));
         assert!(text.contains("\n\n"), "标注头与正文之间空行分隔");
+    }
+
+    #[test]
+    fn compose_incoming_blocks_is_annotation_plus_body() {
+        let blocks = compose_incoming_blocks("主控", "甲", "conv-src", "材质定稿了吗");
+        assert_eq!(blocks.len(), 2, "双块结构：标注块 + 正文块");
+        let ContentBlock::Text { text: head } = &blocks[0] else {
+            panic!("首块必须是 Text");
+        };
+        assert!(head.starts_with(INCOMING_PREFIX_HEAD), "标注块带检测锚: {head}");
+        assert!(head.ends_with(']'), "标注块自闭合（不含正文）: {head}");
+        let ContentBlock::Text { text: body } = &blocks[1] else {
+            panic!("次块必须是 Text");
+        };
+        assert_eq!(body, "材质定稿了吗", "正文块 = 原文，不混标注");
+    }
+
+    fn target_row(project: Option<&str>) -> ConversationRow {
+        ConversationRow {
+            id: "c-target".into(),
+            agent_id: "agent-x".into(),
+            title: "材质".into(),
+            pinned: 0,
+            created_at: String::new(),
+            updated_at: String::new(),
+            tools_override: None,
+            project_id: project.map(str::to_string),
+            kind: "chat".into(),
+            initiator_type: None,
+            initiator_agent_id: None,
+            parent_conversation_id: None,
+            inbox_policy: "accept".into(),
+        }
+    }
+
+    #[test]
+    fn project_boundary_same_project_passes() {
+        assert!(project_boundary_error(Some("p-1"), &target_row(Some("p-1"))).is_none());
+    }
+
+    #[test]
+    fn project_boundary_scattered_rejected_both_ways() {
+        // 散落目标（源挂了项目）
+        assert!(project_boundary_error(Some("p-1"), &target_row(None)).is_some());
+        // 散落源（目标挂了项目）
+        assert!(project_boundary_error(None, &target_row(Some("p-1"))).is_some());
+        // 双散落也不可投（边界 = 必须同挂一个项目）
+        assert!(project_boundary_error(None, &target_row(None)).is_some());
+    }
+
+    #[test]
+    fn project_boundary_different_projects_rejected_with_hint() {
+        let err = project_boundary_error(Some("p-1"), &target_row(Some("p-2"))).unwrap();
+        assert!(err.contains("不在同一项目"), "文案指路项目边界: {err}");
+        assert!(err.contains("材质"), "文案点名目标会话: {err}");
     }
 
     #[test]

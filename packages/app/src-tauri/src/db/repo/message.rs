@@ -68,7 +68,7 @@ pub async fn list_by_conversation(
 
     let rows = if let Some((before_ts, before_rowid)) = before {
         sqlx::query_as::<_, MessageRow>(
-            "SELECT id, conversation_id, role, content, content_blocks, token_count, error, created_at, rowid, summary_id, model
+            "SELECT id, conversation_id, role, content, content_blocks, token_count, error, created_at, rowid, summary_id, model, incoming_source
                FROM messages
               WHERE conversation_id = ?
                 AND (created_at < ? OR (created_at = ? AND rowid < ?))
@@ -84,7 +84,7 @@ pub async fn list_by_conversation(
         .await?
     } else {
         sqlx::query_as::<_, MessageRow>(
-            "SELECT id, conversation_id, role, content, content_blocks, token_count, error, created_at, rowid, summary_id, model
+            "SELECT id, conversation_id, role, content, content_blocks, token_count, error, created_at, rowid, summary_id, model, incoming_source
                FROM messages
               WHERE conversation_id = ?
               ORDER BY created_at DESC, rowid DESC
@@ -184,7 +184,7 @@ pub async fn list_all_by_rowid(
     conversation_id: &str,
 ) -> AppResult<Vec<MessageRow>> {
     let rows = sqlx::query_as::<_, MessageRow>(
-        "SELECT id, conversation_id, role, content, content_blocks, token_count, error, created_at, rowid, summary_id, model
+        "SELECT id, conversation_id, role, content, content_blocks, token_count, error, created_at, rowid, summary_id, model, incoming_source
            FROM messages
           WHERE conversation_id = ?
           ORDER BY rowid ASC",
@@ -247,13 +247,24 @@ pub async fn get_content_blocks_by_id(pool: &SqlitePool, id: &str) -> AppResult<
 /// role/content/blocks/conversation_id；与私有 `get_by_id` 的 NotFound 语义区分）。
 pub async fn find_by_id(pool: &SqlitePool, id: &str) -> AppResult<Option<MessageRow>> {
     let row = sqlx::query_as::<_, MessageRow>(
-        "SELECT id, conversation_id, role, content, content_blocks, token_count, error, created_at, rowid, summary_id, model
+        "SELECT id, conversation_id, role, content, content_blocks, token_count, error, created_at, rowid, summary_id, model, incoming_source
            FROM messages WHERE id = ?",
     )
     .bind(id)
     .fetch_optional(pool)
     .await?;
     Ok(row)
+}
+
+/// 回填 MA-3 来件来源元数据 JSON（`update_content_blocks` 同款二段写模式：
+/// create 先落行、本 UPDATE 补列——NewMessage 不扩字段，全量构造点零改动）。
+pub async fn set_incoming_source(pool: &SqlitePool, id: &str, json: &str) -> AppResult<()> {
+    sqlx::query("UPDATE messages SET incoming_source = ? WHERE id = ?")
+        .bind(json)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 /// 写入新消息
@@ -296,7 +307,7 @@ pub async fn create(pool: &SqlitePool, id: &str, new_msg: &NewMessage) -> AppRes
 
 async fn get_by_id(pool: &SqlitePool, id: &str) -> AppResult<MessageRow> {
     sqlx::query_as::<_, MessageRow>(
-        "SELECT id, conversation_id, role, content, content_blocks, token_count, error, created_at, rowid, summary_id, model
+        "SELECT id, conversation_id, role, content, content_blocks, token_count, error, created_at, rowid, summary_id, model, incoming_source
            FROM messages WHERE id = ?",
     )
     .bind(id)

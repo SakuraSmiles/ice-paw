@@ -121,7 +121,7 @@ async fn synth_turn(pool: &SqlitePool, ctx: &EventCtx, turn: usize) {
     let u_content = filler(&format!("第 {turn} 轮任务"), 400);
     let u_blocks = vec![ContentBlock::text(u_content.clone())];
     write_row(pool, &turn_id, "user", &u_content, &u_blocks).await;
-    log_user_message(pool, ctx, &turn_id, &u_content, &u_blocks).await;
+    log_user_message(pool, ctx, &turn_id, &u_content, &u_blocks, None).await;
 
     log_turn_context(
         pool,
