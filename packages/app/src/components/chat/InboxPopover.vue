@@ -1,14 +1,17 @@
 <!--
-  InboxPopover — MA-3 收件箱浮层（hold 扣件的用户出口）
+  InboxPopover — MA-3 收件箱浮层（pending 来件的用户出口）
 
-  内容三段：
-  - pending 来件列表（源 agent 头像 + 源会话名 + 内容预览 + 相对时 + 批准/拒绝）
-  - 拒绝 = 不可恢复处置（settled refused 永久出队）→ 两步确认（按钮武装态）
-  - 收件政策三态 segmented（accept 自动消费[默认] / hold 扣住待批准 / refuse 拒收）
+  条目按语境分两视图（2026-09-10 测试反馈）：
+  - **队列视图**（accept 政策 / is_reply 回投件）：来件本会自动消费，撞上
+    生成中只是排队常态——条目标「排队中 · 会话空闲后自动处理」，主操作降级
+    为次要「立即处理」（不摘除——自动消费配额尽时手动放行是唯一通道，详见
+    title 说明）；
+  - **审批视图**（hold）：真审批手势——「批准并消费」主色钮。
+  拒绝 = 不可恢复处置（settled refused 永久出队）→ 两步确认（按钮武装态）。
 
   数据：打开与每次处置后都走 list_inbox 权威刷新（本地 badge 计数只是气味，
   会随处置回正——refreshInboxCount）。批准时会话忙 → 后端 Err，来件留队，
-  横幅显示错误文案（三段式来自后端）。
+  横幅显示错误文案（语境分叉的三段式来自后端）。
 
   Props: convId（目标会话 id）
   Emits: close（请求关闭浮层）
@@ -113,13 +116,21 @@ async function switchPolicy(next: string) {
 function deliveredAgo(item: InboxItem): string {
   return timeAgo(new Date(item.delivered_at_unix * 1000).toISOString());
 }
+
+/** 该来件是否走自动消费语境（accept 政策，或 is_reply 回投件——hold 下也免扣
+ *  自动消费）：队列视图呈现。政策 segmented 乐观切，条目呈现随 policy live 更新。 */
+function isAutoItem(item: InboxItem): boolean {
+  return policy.value === "accept" || item.is_reply === true;
+}
 </script>
 
 <template>
   <div class="inbox-popover" @click.stop>
     <div class="inbox-head">
       <span class="inbox-title">收件箱</span>
-      <span v-if="items.length" class="inbox-count">{{ items.length }} 条待处理</span>
+      <span v-if="items.length" class="inbox-count">
+        {{ policy === "accept" ? `${items.length} 条排队中` : `${items.length} 条待处理` }}
+      </span>
     </div>
 
     <div v-if="errorText" class="inbox-error">{{ errorText }}</div>
@@ -141,8 +152,19 @@ function deliveredAgo(item: InboxItem): string {
           <span class="inbox-item-time">{{ deliveredAgo(item) }}</span>
         </div>
         <p class="inbox-item-content">{{ item.content }}</p>
+        <p v-if="isAutoItem(item)" class="inbox-item-status">排队中 · 会话空闲后自动处理</p>
         <div class="inbox-item-actions">
+          <!-- 队列视图：主操作降级为次要「立即处理」（放行通道保留——自动消费
+               配额尽时留队的来件靠它放行，by=user-approval 不占配额） -->
           <button
+            v-if="isAutoItem(item)"
+            class="inbox-act"
+            :disabled="actingId === item.message_id"
+            title="通常无需手动处理；仅在自动消费停摆（如配额用尽）时手动放行"
+            @click="approve(item)"
+          >立即处理</button>
+          <button
+            v-else
             class="inbox-act inbox-act-approve"
             :disabled="actingId === item.message_id"
             @click="approve(item)"
@@ -224,6 +246,7 @@ function deliveredAgo(item: InboxItem): string {
   display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;
   white-space: pre-wrap; word-break: break-word;
 }
+.inbox-item-status { margin: 0; font-size: var(--ip-text-micro-size); color: var(--ip-color-text-tertiary); }
 .inbox-item-actions { display: flex; align-items: center; gap: 6px; }
 .inbox-act {
   padding: 3px 10px; border: 1px solid var(--ip-color-border-default); border-radius: var(--ip-radius-sm);

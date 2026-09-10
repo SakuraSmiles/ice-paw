@@ -10,6 +10,11 @@ import type { Message } from "../../types";
 const BACKEND_SAMPLE =
   "[来自会话「UE5 材质主控」的 agent 甲｜如需回复用 send_message_to_session 工具，target=conv-abc123]\n\n材质定稿了吗？缺一份金属度参考图。";
 
+/** expect_reply=true 分支样例（2026-09-10 双投递根治）：指引直接作答而非调
+ *  投递工具——target= 锚保留（文本兜底解析依赖它取源会话 id） */
+const BACKEND_SAMPLE_REPLY =
+  "[来自会话「UE5 材质主控」的 agent 甲｜对方已开启自动回传，直接作答即可（无需调用投递工具）；如需另行主动投递，target=conv-abc123]\n\n材质定稿了吗？缺一份金属度参考图。";
+
 /** 后端双块结构的 content_blocks 样例（标注块 + 正文块） */
 const BACKEND_BLOCKS = JSON.stringify([
   { type: "text", text: "[来自会话「UE5 材质主控」的 agent 甲｜如需回复用 send_message_to_session 工具，target=conv-abc123]" },
@@ -71,6 +76,16 @@ describe("incomingInfoOf（元数据优先）", () => {
 describe("parseIncomingText（文本兜底）", () => {
   it("后端样例逐字段解析（形状锁：title/agent/源会话 id/正文）", () => {
     const info = parseIncomingText(BACKEND_SAMPLE);
+    expect(info).toEqual({
+      sourceTitle: "UE5 材质主控",
+      agentName: "甲",
+      sourceConvId: "conv-abc123",
+      body: "材质定稿了吗？缺一份金属度参考图。",
+    });
+  });
+
+  it("expect_reply 分支样例：指引直接作答的标注头解析锚全兼容（target= 仍取到源会话 id）", () => {
+    const info = parseIncomingText(BACKEND_SAMPLE_REPLY);
     expect(info).toEqual({
       sourceTitle: "UE5 材质主控",
       agentName: "甲",

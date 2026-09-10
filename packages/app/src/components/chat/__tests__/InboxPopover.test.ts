@@ -1,6 +1,8 @@
 // InboxPopover 组件测试（MA-3 收件箱浮层）。
 // 锁定交互契约：
 // - 权威数据：挂载/处置后走 list_inbox（badge 本地计数只是气味）
+// - 条目双视图：accept / is_reply = 队列视图（排队中标注 + 次要「立即处理」
+//   放行通道）；hold = 审批视图（「批准并消费」主色）
 // - 批准 = 即时动作调 respond(true)；失败（会话忙）→ 后端三段式文案进横幅，来件留队
 // - 拒绝 = 不可恢复处置 → 两步确认（一次武装 danger 确认键、二次执行、blur 解除）
 // - 政策三态 segmented：乐观切 + 失败回滚
@@ -83,6 +85,39 @@ describe("InboxPopover", () => {
     const w = await mountPopo();
     expect(w.text()).toContain("暂无待处理来件");
     expect(w.findAll(".inbox-item")).toHaveLength(0);
+  });
+
+  it("accept 政策 → 队列视图：排队中标注 + 次要「立即处理」，主色批准钮不出现", async () => {
+    mockList.mockResolvedValue(view("accept", [item()]));
+    const w = await mountPopo();
+
+    expect(w.text()).toContain("1 条排队中");
+    expect(w.text()).toContain("排队中 · 会话空闲后自动处理");
+    expect(w.text()).toContain("立即处理");
+    expect(w.find(".inbox-act-approve").exists()).toBe(false);
+  });
+
+  it("hold 政策 → 审批视图：主色「批准并消费」恒在，无排队中标注（is_reply 例外走队列视图）", async () => {
+    mockList.mockResolvedValue(view("hold", [item(), item({ message_id: "m9", is_reply: true })]));
+    const w = await mountPopo();
+
+    expect(w.text()).toContain("2 条待处理");
+    expect(w.find(".inbox-act-approve").exists()).toBe(true);
+    // 普通 hold 条目无排队中标注；is_reply 回投件免扣自动消费 → 队列视图呈现
+    const statuses = w.findAll(".inbox-item-status");
+    expect(statuses).toHaveLength(1);
+  });
+
+  it("队列视图「立即处理」与审批视图同通道：respond(true) + 处置后权威重载", async () => {
+    mockList.mockResolvedValue(view("accept", [item()]));
+    const w = await mountPopo();
+
+    const actBtn = w.findAll(".inbox-act").find((b) => b.text() === "立即处理")!;
+    await actBtn.trigger("click");
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(mockRespond).toHaveBeenCalledWith("c1", "m1", true);
+    expect(mockList).toHaveBeenCalledTimes(3);
   });
 
   it("批准：respond(true) 即时执行；处置后权威重载", async () => {
