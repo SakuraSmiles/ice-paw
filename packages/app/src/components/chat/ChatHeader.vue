@@ -15,7 +15,7 @@ import { ref, computed, watch, nextTick, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { useEscapeStack } from "../../composables/useEscapeStack";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Inbox, ScreenShare, Hash, Shield } from "@lucide/vue";
+import { Inbox, ScreenShare, Users, Shield } from "@lucide/vue";
 import { useChatStore }from "../../stores/chat";
 import { useAgentStore } from "../../stores/agent";
 import { useScreenChannelStore } from "../../stores/screenChannel";
@@ -166,6 +166,18 @@ function onChannelCoordDocClick(e: MouseEvent) {
     channelCoordOpen.value = false;
   }
 }
+
+/** 频道子标题头像叠层（成员前 4 枚 + 溢出 +N；ChannelMemberInfo 无头像字段，
+ *  经 agent store 按成员 id 解析上传图，三级降级链由 EntityAvatar 承担） */
+const channelStackedAvatars = computed(() => {
+  const cv = chat.channelView;
+  if (!cv) return [] as Array<{ id: string; name: string; image: string | null }>;
+  return cv.members.slice(0, 4).map((m) => ({
+    id: m.agent_id,
+    name: m.name,
+    image: agent.getById(m.agent_id)?.avatar ?? null,
+  }));
+});
 watch(channelCoordOpen, (open) => {
   if (open) document.addEventListener("click", onChannelCoordDocClick);
   else document.removeEventListener("click", onChannelCoordDocClick);
@@ -274,9 +286,10 @@ async function toggleScreenShare() {
     <div class="header-left">
       <!-- 外层头像：仅主会话（kind !== 'delegation'）+ 用户上传过头像时才显示。
            xl=44px 占满主标题+副标题两行高度；正圆保证显示效果。
-           子会话走副标题 28px 小头像路径，避免两个头像并存。 -->
+           子会话走副标题 28px 小头像路径，避免两个头像并存。
+           频道态同样不渲染——那是统筹者投影（换帅会跳变），成员身份由子标题头像叠层承载。 -->
       <EntityAvatar
-        v-if="activeAgent?.avatar && chat.activeConversation?.kind !== 'delegation'"
+        v-if="activeAgent?.avatar && chat.activeConversation?.kind !== 'delegation' && !channel"
         class="header-agent-avatar-xl"
         :name="activeAgent.name"
         :image="activeAgent.avatar"
@@ -322,45 +335,76 @@ async function toggleScreenShare() {
             />
             委派任务
           </span>
-          <!-- 频道 v1：项目频道徽章（归档态附「原项目已删除」标注——记录只读） -->
+          <!-- 频道 v1：频道徽章紧跟标题（tag 形态，无 # 图标——2026-09-11 拍板）。
+               归档态换 warning 语义色（原项目已删除，记录只读） -->
           <span
             v-else-if="channel"
             class="header-kind-badge header-channel-badge"
+            :class="{ archived: channelArchived }"
             :title="channelArchived ? '项目频道 · 已归档（原项目已删除），记录只读保留' : '项目频道：成员共享一条消息流，@ 点名路由'"
           >
-            <Hash :size="12" aria-hidden="true" />
-            {{ channelArchived ? "项目频道 · 已归档" : "项目频道" }}
+            {{ channelArchived ? "已归档" : "频道" }}
           </span>
         </h1>
         <div class="header-meta">
+          <!-- 频道子标题（2026-09-11 设计，不再沿用 1v1 的「agent 名 · model」）：
+               成员头像叠层（前 4 枚 + 溢出 +N）+「N 名成员」+ 统筹者标注（待选举灰字）；
+               不显示统筹者模型——广播路由下每个成员都可能发言，显示某个人的模型是误导。
+               归档态换 warning「已归档 · 记录只读」，成员信息靠消息行 sender 快照（成员表已随项目消亡）。 -->
+          <template v-if="channel">
+            <template v-if="!channelArchived">
+              <span
+                v-if="chat.channelView"
+                class="channel-avatar-stack"
+                :title="chat.channelView.members.map((m) => m.name).join('、')"
+              >
+                <EntityAvatar
+                  v-for="a in channelStackedAvatars"
+                  :key="a.id"
+                  class="stack-avatar"
+                  :name="a.name"
+                  :image="a.image"
+                  size="sm"
+                />
+                <span v-if="chat.channelView.members.length > 4" class="stack-more">+{{ chat.channelView.members.length - 4 }}</span>
+              </span>
+              <span v-if="chat.channelView" class="header-model">{{ chat.channelView.members.length }} 名成员</span>
+              <span class="header-sep">·</span>
+              <Shield :size="12" class="channel-coord-shield" aria-hidden="true" />
+              <span class="header-model" :class="{ 'coord-pending': !channelCoordinatorName }">{{ channelCoordinatorName ?? "待选举" }}</span>
+            </template>
+            <span v-else class="header-model channel-archived-text">已归档 · 记录只读</span>
+          </template>
           <!-- 副标题头像：仅子会话（kind='delegation'）显示 28px 小头像。
                主会话（kind='chat'）保持纯文本「agent 名 · model」，
                外层 .header-left 的 44px 头像承担身份展示（仅在用户上传过 avatar 时）。 -->
-          <EntityAvatar
-            v-if="activeAgent && chat.activeConversation?.kind === 'delegation'"
-            class="header-agent-avatar"
-            :name="activeAgent.name"
-            :image="activeAgent.avatar"
-            size="md"
-          />
-          <button
-            v-if="activeAgent"
-            class="header-agent header-agent-link"
-            :title="channel ? `当前统筹者「${activeAgent.name}」的配置（设置 · 智能体）` : `查看「${activeAgent.name}」的配置（设置 · 智能体）`"
-            @click="goAgentSettings"
-          >{{ activeAgent.name }}</button>
-          <span v-if="activeAgent" class="header-sep">·</span>
-          <span v-if="activeAgent" class="header-model">{{ headerModel }}</span>
-          <span v-if="channel && chat.channelView" class="header-model">· {{ chat.channelView.members.length }} 名成员</span>
-          <span v-else-if="!activeAgent" class="header-hint">选择一个对话开始</span>
+          <template v-else>
+            <EntityAvatar
+              v-if="activeAgent && chat.activeConversation?.kind === 'delegation'"
+              class="header-agent-avatar"
+              :name="activeAgent.name"
+              :image="activeAgent.avatar"
+              size="md"
+            />
+            <button
+              v-if="activeAgent"
+              class="header-agent header-agent-link"
+              :title="`查看「${activeAgent.name}」的配置（设置 · 智能体）`"
+              @click="goAgentSettings"
+            >{{ activeAgent.name }}</button>
+            <span v-if="activeAgent" class="header-sep">·</span>
+            <span v-if="activeAgent" class="header-model">{{ headerModel }}</span>
+            <span v-if="!activeAgent" class="header-hint">选择一个对话开始</span>
+          </template>
         </div>
       </div>
     </div>
     <!-- 外置操作（UX #9）：屏幕共享开关 + 星标（左）+ 删除（右，占原「更多」位置）。
          删除确认 = 右锚定、向左横向扩展的确认条（覆盖星标，布局零位移） -->
     <div v-if="chat.activeConversation" class="header-right">
-      <!-- 频道 v1：统筹者胶囊（活频道才有治理位——归档频道只读不渲染）。
-           名字 = 频道视图的统筹位（含用户指定档）；未选举显示「待选举」 -->
+      <!-- 频道 v1：成员与统筹位入口（活频道才有治理位——归档频道只读不渲染）。
+           2026-09-11 改版：统筹者名字收进子标题，这里换成 32px Users 图标方钮
+           （名字信息不重复占位；title 仍带统筹者信息） -->
       <div
         v-if="channel && !channelArchived"
         ref="channelCoordZoneRef"
@@ -369,13 +413,12 @@ async function toggleScreenShare() {
         <button
           class="header-btn coord-btn"
           :class="{ active: channelCoordOpen }"
-          :title="channelCoordinatorName ? `统筹者：${channelCoordinatorName}——点击管理成员与统筹位` : '统筹者待选举——首次广播时全员自选举'"
+          :title="channelCoordinatorName ? `频道成员与统筹位（统筹者：${channelCoordinatorName}）` : '频道成员与统筹位（统筹者待选举）'"
           :aria-expanded="channelCoordOpen"
           aria-haspopup="dialog"
           @click.stop="channelCoordOpen = !channelCoordOpen"
         >
-          <Shield :size="16" />
-          <span class="coord-name">{{ channelCoordinatorName ?? "待选举" }}</span>
+          <Users :size="16" />
         </button>
         <Transition name="overlay">
           <ChannelPopover v-if="channelCoordOpen" :conv-id="channel.id" @close="channelCoordOpen = false" />
@@ -520,16 +563,20 @@ async function toggleScreenShare() {
 /* ===== MA-3 收件箱入口（badge 悬浮右上角；popover 右对齐下挂）===== */
 .inbox-zone { position: relative; display: flex; align-items: center; }
 
-/* ===== 频道 v1：统筹者胶囊（带名字的宽形态按钮；popover 右对齐下挂同收件箱） ===== */
+/* ===== 频道 v1：成员与统筹位图标方钮（popover 右对齐下挂同收件箱） ===== */
 .coord-zone { position: relative; display: flex; align-items: center; }
-.coord-btn { width: auto; gap: 5px; padding: 0 10px; }
 .coord-btn.active { background-color: var(--ip-color-bg-tertiary); color: var(--ip-color-text-primary); }
 .coord-btn svg { color: var(--ip-primary-600); flex-shrink: 0; }
-.coord-name {
-  max-width: 120px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
-  font-size: var(--ip-text-caption-size); font-weight: var(--ip-font-weight-medium);
-  color: var(--ip-color-text-primary); line-height: 1.4;
-}
+/* 频道徽章归档变体：warning 语义色（记录只读状态可见） */
+.header-channel-badge.archived { color: var(--ip-warning-text); background: var(--ip-warning-bg); border-color: var(--ip-warning-border); }
+/* 频道子标题：成员头像叠层（sm=20px，负 margin 叠压 + 头部底色描边分离） */
+.channel-avatar-stack { display: flex; align-items: center; flex-shrink: 0; }
+.stack-avatar { margin-left: -6px; border-radius: var(--ip-radius-full, 999px); box-shadow: 0 0 0 2px var(--ip-color-bg-chat-header); }
+.stack-avatar:first-child { margin-left: 0; }
+.stack-more { margin-left: 3px; font-size: var(--ip-text-micro-size); color: var(--ip-color-text-tertiary); line-height: 1.4; }
+.channel-coord-shield { color: var(--ip-primary-600); flex-shrink: 0; }
+.coord-pending { color: var(--ip-color-text-disabled); }
+.channel-archived-text { color: var(--ip-warning-text); }
 .inbox-btn { position: relative; }
 .inbox-btn.active { background-color: var(--ip-color-bg-tertiary); color: var(--ip-color-text-primary); }
 .inbox-badge {

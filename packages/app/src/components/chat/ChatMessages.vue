@@ -13,7 +13,7 @@
 <script setup lang="ts">
 import { watch, nextTick, ref, computed, onActivated } from "vue";
 import { useRouter } from "vue-router";
-import { ArrowLeftRight, Shield } from "@lucide/vue";
+import { ArrowLeftRight, AtSign, Shield } from "@lucide/vue";
 import { useChatStore } from "../../stores/chat";
 import { useAgentStore } from "../../stores/agent";
 import { useChannel, loadChannelNotices, type ElectionCard } from "../../composables/useChannel";
@@ -43,7 +43,7 @@ import ToolExpandDetail from "./ToolExpandDetail.vue";
 import EntityAvatar from "../common/EntityAvatar.vue";
 import ChannelNotice from "./ChannelNotice.vue";
 import ChannelElectionCard from "./ChannelElectionCard.vue";
-import type { Message, MessageRole, PlanItem, SessionEvent } from "../../types";
+import type { ChannelMentionPayload, Message, MessageRole, PlanItem, SessionEvent } from "../../types";
 
 const chat = useChatStore();
 const agent = useAgentStore();
@@ -766,26 +766,70 @@ const allInterstitials = computed<Interstitial[]>(() => {
  *  ⚠️ 勿回退成「每组 filter 全量 time < start」：
  *  历史卡/通知会随每条新消息重复出现（生产实案：每次发言前后都重复出选举卡，
  *  且 TransitionGroup 重复 key 引发错位渲染）。 */
-interface RenderGroup extends MessageGroup { preInterstitials: Interstitial[] }
+/** 吸入气泡身份行的接力来源标注（2026-09-11 拍板）：成员间接力通知不再走
+ *  居中细条，退位为被点名成员昵称行尾的一枚「@来源名」小标注（AtSign 图标 +
+ *  来源名，灰），完整句义进 hover title——完整事实流仍在轨迹页。 */
+interface MentionSource { key: string; from: string; title: string }
+
+type NoticeItem = Extract<Interstitial, { kind: "notice" }>;
+
+/** 吸入判据：未拦截的成员间接力通知（from ≠ null）+ 目标恰好是本组的发言
+ *  成员。护栏拦截/换帅类（blocked）与落空兜底（user 组/匿名组/晚于组）保留
+ *  居中条——吸入只发生在「被点名者自己的气泡」上。 */
+function absorbableInto(it: Interstitial, g: MessageGroup): it is NoticeItem {
+  if (it.kind !== "notice" || g.role !== "assistant" || !g.sender) return false;
+  const p = it.event.payload as ChannelMentionPayload;
+  return p.blocked_reason == null && !!p.from_agent_id && p.to_agent_id === g.sender;
+}
+
+function mentionSourceOf(it: NoticeItem, g: MessageGroup): MentionSource {
+  const p = it.event.payload as ChannelMentionPayload;
+  const from = agent.getById(p.from_agent_id ?? "")?.name ?? "已退出成员";
+  const toName = g.items[0].msg.sender_agent_name
+    || (g.sender ? agent.getById(g.sender)?.name : undefined)
+    || "已退出成员";
+  return { key: it.key, from, title: `${from} 点名 ${toName} 接力` };
+}
+
+interface RenderGroup extends MessageGroup {
+  preInterstitials: Interstitial[];
+  mentionSource: MentionSource | null;
+  /** 被本组吸入的交错单元 key 全集（含未成标注的多余条）——tail 消费集
+   *  必须一并收走，否则吸入的通知掉到尾部双渲染 */
+  absorbedKeys: string[];
+}
 const renderGroups = computed<RenderGroup[]>(() => {
   const items = allInterstitials.value;
   let cursor = 0;
   return messageGroups.value.map((g) => {
     const start = parseDbTime(g.items[0].msg.created_at).getTime();
     const pre: Interstitial[] = [];
+    const absorbed: NoticeItem[] = [];
     while (cursor < items.length && items[cursor].time <= start) {
-      pre.push(items[cursor]);
+      const it = items[cursor];
       cursor += 1;
+      if (absorbableInto(it, g)) absorbed.push(it);
+      else pre.push(it);
     }
-    return { ...g, preInterstitials: pre };
+    return {
+      ...g,
+      preInterstitials: pre,
+      mentionSource: absorbed[0] ? mentionSourceOf(absorbed[0], g) : null,
+      absorbedKeys: absorbed.map((it) => it.key),
+    };
   });
 });
 
 /** 尾部交错单元：晚于最后一组开始的频道事件（在途接力的实时尾巴 / 进行中的
- *  选举卡——result 事件到达时 useChannel 补拉后卡自然翻完成态） */
+ *  选举卡——result 事件到达时 useChannel 补拉后卡自然翻完成态）。消费集含
+ *  挂组（preInterstitials）与吸入（absorbedKeys）两路——漏收吸入 key 会让
+ *  已吸入的通知在尾部再出一条居中条（双渲染）。 */
 const tailInterstitials = computed(() => {
   const consumed = new Set<string>();
-  for (const g of renderGroups.value) for (const it of g.preInterstitials) consumed.add(it.key);
+  for (const g of renderGroups.value) {
+    for (const it of g.preInterstitials) consumed.add(it.key);
+    for (const k of g.absorbedKeys) consumed.add(k);
+  }
   return allInterstitials.value.filter((it) => !consumed.has(it.key));
 });
 
@@ -1088,6 +1132,11 @@ const RESUMABLE_REASONS = new Set([
                 <div v-if="isChannelConv && sender" class="channel-sender-head">
                   <span class="channel-sender-name">{{ sender.name }}</span>
                   <Shield v-if="sender.coordinator" :size="12" class="channel-sender-shield" aria-hidden="true" />
+                  <!-- 接力来源吸入标注：本气泡成员是被谁 @ 唤醒的（居中通知条退位，
+                       完整句义在 hover title） -->
+                  <span v-if="group.mentionSource" class="channel-mention-src" :title="group.mentionSource.title">
+                    <AtSign :size="12" aria-hidden="true" />{{ group.mentionSource.from }}
+                  </span>
                 </div>
               </template>
               <div class="assistant-body">
@@ -1669,6 +1718,10 @@ const RESUMABLE_REASONS = new Set([
 .channel-sender-name { font-size: var(--ip-text-body-sm-size); font-weight: var(--ip-font-weight-medium); color:var(--ip-color-text-secondary); }
 /* Shield 进文本流：显式 inline-block（base.css svg display:block reset 陷阱） */
 .channel-sender-shield { display:inline-block; color:var(--ip-primary-600); }
+/* 接力来源吸入标注：昵称行尾「@来源名」小标注（tertiary 灰 + micro，弱于
+   昵称本体；AtSign 同须 inline-block 防 base.css svg 块级化） */
+.channel-mention-src { display:inline-flex; align-items:center; gap:2px; margin-left:2px; color:var(--ip-color-text-tertiary); font-size:var(--ip-text-micro-size); }
+.channel-mention-src svg { display:inline-block; flex-shrink:0; }
 /* 「生成中发出」事实标注（micro 主色调——是频道语境的插话事实，非错误态） */
 .gen-time-flag { font-size: var(--ip-text-micro-size); color:var(--ip-color-primary-tint-text); }
 .copy-btn { display:flex; align-items:center; justify-content:center; width:24px; height:24px; border-radius:var(--ip-radius-md); border:none; background:transparent; color:var(--ip-color-text-tertiary); cursor:pointer; transition:all var(--ip-duration-fast) var(--ip-ease-out); }

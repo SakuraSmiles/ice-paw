@@ -3,7 +3,8 @@
 // ② 成员身份头（sender_agent_name 快照优先 + agent store 兜底「已退出成员」+
 //    当前统筹者 Shield 微标 = channelView 当下投影）
 // ③ 生成中发出标注（user 在前置 assistant 生成窗口内 → gen-time-flag）
-// ④ 频道事件通知按 created_at 与消息组交错（组前 preInterstitials + 尾部尾巴）
+// ④ 频道事件通知按 created_at 与消息组交错（组前 preInterstitials + 尾部尾巴；
+//    未拦截成员接力通知吸入被点名成员气泡身份行——「@来源」小标注，拦截/落空保留居中条）
 // ⑤ 选举聚合卡：一届选举一张卡与消息交错；投票行气泡跳过（票面进卡）
 // ⑨ 同秒平局挂组：通知事件与占位行落同一墙钟秒 → 挂到该成员自己的组（答前）
 // ⑩ 群聊气泡布局：头像独立气泡外（channel-avatar）+ 昵称行在气泡外（body 之外）
@@ -171,7 +172,7 @@ describe("ChatMessages 频道渲染", () => {
     expect(w.find('[data-mid="u2"]').find(".gen-time-flag").exists()).toBe(false);
   });
 
-  it("频道事件通知按 created_at 交错：组前注入 + 尾部尾巴（在途实时）", async () => {
+  it("频道事件通知按 created_at 交错：成员接力吸入 + 拦截居中 + 尾部尾巴（在途实时）", async () => {
     const w = await mountChannel([
       msg({ id: "u1", role: "user", content: "开始", created_at: "2026-09-10 10:00:00" }),
       msg({ id: "a1", role: "assistant", content: "写手答", created_at: "2026-09-10 10:00:05", sender_agent_id: "ag1", sender_agent_name: "写手" }),
@@ -179,18 +180,22 @@ describe("ChatMessages 频道渲染", () => {
     ]);
     // mount 后 watcher 的 loadChannelNotices 已 await（flushPromises）——此时注入。
     // fixtures 对齐 useChannel 过滤后的真实形态：用户自起首跳派发（from=null
-    // 且未拦截）已被过滤，此处用成员接力 + 广播拦截两条
+    // 且未拦截）已被过滤，此处用成员接力（→吸入审校气泡身份行）+ 广播拦截（→居中条）
     useChannel().notices.value = [
       noticeEv({ from_agent_id: "ag1", to_agent_id: "ag2", hop_index: 1, chain_remaining: 0, blocked_reason: null }, "2026-09-10T10:00:30Z"),
       noticeEv({ from_agent_id: null, to_agent_id: "ag1", broadcast: true, blocked_reason: "user_preempted" }, "2026-09-10T10:02:00Z"),
     ];
     await flushPromises();
 
+    // 未拦截成员接力（写手→审校，10:00:30 在 ag2 组前）吸入审校组身份行：
+    // 居中条退位为「@写手」小标注，完整句义进 hover title
+    const src = w.find('[data-mid="a2"]').find(".channel-mention-src");
+    expect(src.exists()).toBe(true);
+    expect(src.text()).toBe("写手");
+    expect(src.attributes("title")).toBe("写手 点名 审校 接力");
+    // 拦截类（广播被用户插话取消，10:02:00）保留居中条，晚于所有组 → 尾部
     const notices = w.findAll(".channel-notice");
-    expect(notices.length).toBe(2);
-    // 第一条（10:00:30，写手接力点名审校）在 ag2 组（10:01:00）开始前 → 落在该组前；
-    // 第二条（10:02:00，广播被用户插话取消）晚于所有组 → 尾部
-    expect(w.text()).toContain("写手 点名 审校 接力");
+    expect(notices.length).toBe(1);
     expect(w.text()).toContain("广播 · 写手：用户插话，接力取消");
   });
 
@@ -232,15 +237,15 @@ describe("ChatMessages 频道渲染", () => {
     expect(w.find(".election-result").exists()).toBe(false);
   });
 
-  it("历史交错单元只挂一次：早于多个组的卡/通知不随每条新消息重复（回归⑤）", async () => {
+  it("历史交错单元只挂一次：早于多个组的卡不随每条新消息重复；吸入通知尾部不复现（回归⑤）", async () => {
     const w = await mountChannel([
       msg({ id: "u1", role: "user", content: "第一条", created_at: "2026-09-10 10:00:00" }),
       msg({ id: "a1", role: "assistant", content: "写手答", created_at: "2026-09-10 10:00:05", sender_agent_id: "ag1", sender_agent_name: "写手" }),
       msg({ id: "a2", role: "assistant", content: "审校答", created_at: "2026-09-10 10:01:00", sender_agent_id: "ag2", sender_agent_name: "审校" }),
     ]);
-    // 卡早于所有组、通知夹在两组之间——各只出现一次。重复 bug 形态：每组
-    // filter 全量「time < 组开始」会把历史卡挂到后续每个组头上（每次发言
-    // 前后都重复出选举卡）+ TransitionGroup 重复 key 错位渲染。
+    // 卡早于所有组、接力通知（10:00:30）吸入 a2 组——各只出现一次。重复 bug
+    // 形态：每组 filter 全量「time < 组开始」会把历史卡挂到后续每个组头上 +
+    // TransitionGroup 重复 key 错位渲染；吸入漏收消费集则通知在尾部再出一条。
     const ch = useChannel();
     ch.electionCards.value = [{
       key: "election:e1",
@@ -254,16 +259,17 @@ describe("ChatMessages 频道渲染", () => {
     await flushPromises();
 
     expect(w.findAll(".election-card").length).toBe(1);
-    expect(w.findAll(".channel-notice").length).toBe(1);
-    // 位置：卡在最前组（u1）之前；通知在 a1 之后、a2 之前
+    expect(w.findAll(".channel-notice").length).toBe(0);
+    expect(w.findAll(".channel-mention-src").length).toBe(1);
+    // 位置：卡在最前组（u1）之前；吸入标注在 a2 组（被点名成员自己的气泡）
     const before = (a: { element: Element }, b: { element: Element }) =>
       (a.element.compareDocumentPosition(b.element) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
     expect(before(w.find(".election-card"), w.find('[data-mid="u1"]'))).toBe(true);
-    expect(before(w.find('[data-mid="a1"]'), w.find(".channel-notice"))).toBe(true);
-    expect(before(w.find(".channel-notice"), w.find('[data-mid="a2"]'))).toBe(true);
+    expect(w.find('[data-mid="a2"]').find(".channel-mention-src").exists()).toBe(true);
+    expect(w.find('[data-mid="a1"]').find(".channel-mention-src").exists()).toBe(false);
   });
 
-  it("同秒平局挂组：派发通知与占位行同墙钟秒 → 通知落在该成员回复之前（回归⑨）", async () => {
+  it("同秒平局挂组：派发通知与占位行同墙钟秒 → 吸入该成员自己的气泡（回归⑨）", async () => {
     const w = await mountChannel([
       msg({ id: "u1", role: "user", content: "开始", created_at: "2026-09-10 10:00:00" }),
       msg({ id: "a1", role: "assistant", content: "写手答", created_at: "2026-09-10 10:00:05", sender_agent_id: "ag1", sender_agent_name: "写手" }),
@@ -271,18 +277,42 @@ describe("ChatMessages 频道渲染", () => {
     ]);
     // 生产实案形态（DB 取证）：channel_mention 事件在派发时刻落库（chat_state.start
     // 后 spawn 前），审校占位行在 Pipeline 后几毫秒创建——两者落同一墙钟秒
-    // 10:00:30。严格小于会把通知滑过 ag2 自己的组，呈现在其答完之后（时间感倒读）。
+    // 10:00:30。严格小于会把通知滑过 ag2 自己的组（掉尾部居中条、吸入标注
+    // 消失）——时间感倒读。
     useChannel().notices.value = [
       noticeEv({ from_agent_id: "ag1", to_agent_id: "ag2", hop_index: 1, chain_remaining: 0, blocked_reason: null }, "2026-09-10T10:00:30Z"),
     ];
     await flushPromises();
 
-    expect(w.findAll(".channel-notice").length).toBe(1);
-    const before = (a: { element: Element }, b: { element: Element }) =>
-      (a.element.compareDocumentPosition(b.element) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
-    // 通知夹在写手答与审校答之间（审校被点名 → 审校答），而非滑到末组之后
-    expect(before(w.find('[data-mid="a1"]'), w.find(".channel-notice"))).toBe(true);
-    expect(before(w.find(".channel-notice"), w.find('[data-mid="a2"]'))).toBe(true);
+    // 吸入审校组身份行（@写手），无居中条、尾部零复现
+    expect(w.findAll(".channel-notice").length).toBe(0);
+    const src = w.find('[data-mid="a2"]').find(".channel-mention-src");
+    expect(src.exists()).toBe(true);
+    expect(src.text()).toBe("写手");
+  });
+
+  it("吸入锚定：仅未拦截成员接力且 to==组 sender 才吸入；拦截/落空保留居中条", async () => {
+    const w = await mountChannel([
+      msg({ id: "u1", role: "user", content: "开始", created_at: "2026-09-10 10:00:00" }),
+      msg({ id: "a1", role: "assistant", content: "写手答", created_at: "2026-09-10 10:00:05", sender_agent_id: "ag1", sender_agent_name: "写手" }),
+      msg({ id: "a2", role: "assistant", content: "审校答", created_at: "2026-09-10 10:01:00", sender_agent_id: "ag2", sender_agent_name: "审校" }),
+      msg({ id: "a3", role: "assistant", content: "无署名旧消息", created_at: "2026-09-10 10:02:00", sender_agent_id: null }),
+    ]);
+    useChannel().notices.value = [
+      // 拦截类（chain_limit）——即便 to 命中组 sender 也保留居中条（护栏事实
+      // 需要显性可见，吸入会把它藏进身份行）
+      noticeEv({ from_agent_id: "ag1", to_agent_id: "ag2", hop_index: 2, chain_remaining: 0, blocked_reason: "chain_limit" }, "2026-09-10T10:00:30Z"),
+      // to 不命中任何组 sender（agX 已退出）→ 无组可吸，落下一组前居中条
+      //（下一组恰是匿名组——user 组/匿名组同属「挂不上」兜底路径）
+      noticeEv({ from_agent_id: "ag1", to_agent_id: "agX", hop_index: 1, chain_remaining: 0, blocked_reason: null }, "2026-09-10T10:01:30Z"),
+    ];
+    await flushPromises();
+
+    expect(w.findAll(".channel-mention-src").length).toBe(0);
+    const notices = w.findAll(".channel-notice");
+    expect(notices.length).toBe(2);
+    expect(notices[0].text()).toContain("写手 @ 审校：接力链达上限");
+    expect(notices[1].text()).toContain("写手 点名 已退出成员 接力");
   });
 
   it("群聊气泡布局：头像/昵称在气泡外，气泡体=assistant-body；匿名组无头像无头（⑩）", async () => {

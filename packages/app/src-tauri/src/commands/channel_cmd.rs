@@ -98,7 +98,9 @@ pub async fn ensure_channel(
         .or_else(|| members.first())
         .map(|m| m.agent_id.clone())
         .unwrap_or_default();
-    let title = format!("{} · 频道", proj.name);
+    // 标题 = 项目名本体（2026-09-11 拍板：频道身份改由头部 tag 徽章呈现，
+    // 不再拼进标题字符串）；存量带「 · 频道」后缀的行由 migration 55 剥除。
+    let title = proj.name.clone();
     let conv = repo::conversation::ensure_channel(pool, &project_id, &title, &projection).await?;
     build_view(pool, Some(conv.into())).await
 }
