@@ -237,6 +237,9 @@ pub(crate) enum BriefSpec {
 /// 实案：四成员在隐形子会话里答完、频道只见统筹者汇总）。三种语境都注入
 /// 成员名册（@ 接力的可用性地基——成员名不在 prompt 里，模型就无法可靠 @
 /// 任何人）；广播臂额外说明统筹职责（适合谁答就 @ 谁分派，不必事事亲自答）。
+/// ⑦ 翻转注记：频道回合此后不再注册 delegate（session_runner 组装期 kind 闸
+/// 收成 'chat'——三轮实案：委派探测回传「看不到代码」的隔离答案固化统筹者
+/// 错误信念、@ 被绕空），@ 是成员协作唯一通道，名册即地基。
 pub(crate) fn compose_channel_brief(brief: &BriefSpec, roster: &str) -> Vec<ContentBlock> {
     let backlog_note = |count: usize| {
         if count > 1 {
@@ -1332,7 +1335,8 @@ async fn run_next_hop(
         // --- 回合起跑（pre_materialized：用户侧已物化，llm_blocks 只装事实简报）---
         // 名册（统筹者标（统筹））：@ 接力的可用性地基——模型不知道成员名就
         // 无法可靠 @ 任何人（⑥ 生产实案：统筹者被推着「问其他人」时转用
-        // delegate——子会话对频道不可见，群聊感消失）
+        // delegate——子会话对频道不可见，群聊感消失；⑦ 批已翻转——频道不再
+        // 注册 delegate，@ 是成员协作唯一通道）
         let roster = members
             .iter()
             .map(|m| {

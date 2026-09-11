@@ -274,10 +274,11 @@ pub(crate) async fn run_agent_turn(
         crate::harness::modal::gather_vision_candidates(env.tool_app.as_ref(), pool).await;
 
     // MA-1：可调度清单注入——主 agent 感知「能调度谁」（项目成员优先，否则全部
-    // agent，见 delegate::resolve_dispatchable）。仅用户会话（1v1 + 频道成员同权）：
-    // delegation 子会话没有 delegate 工具（下方组装期按 kind 注册），注入清单只会
-    // 误导。解析失败降级为跳过注入（不阻塞发送；工具调用时还有集合校验兜底）。
-    if tools_enabled && matches!(conv.kind.as_str(), "chat" | "channel") {
+    // agent，见 delegate::resolve_dispatchable）。仅 1v1 用户会话：delegation 子
+    // 会话没有 delegate 工具（下方组装期按 kind 注册），频道回合同样不注册
+    // （2026-09-11 翻转「频道同权」——清单注入会指引模型调用不存在的工具）。
+    // 解析失败降级为跳过注入（不阻塞发送；工具调用时还有集合校验兜底）。
+    if tools_enabled && conv.kind == "chat" {
         match crate::harness::mcp::delegate::resolve_dispatchable(
             pool,
             conv.project_id.as_deref(),
@@ -575,19 +576,19 @@ pub(crate) async fn run_agent_turn(
         let snap = filter_tools_by_allowlist(snap, allow.as_deref());
         let reg = McpRegistry::from_map(snap);
 
-        // MA-1：delegate 工具按会话类型注册——用户会话（kind='chat'|'channel'）可
-        // 发起委派（频道成员同权：委派是任务分发，与频道接力正交）。全局注册表
-        // 不含此工具（register_builtin 不注入），组装期按 kind 决定：delegation
-        // 子会话拿不到它 → 委派深度=1 的结构性护栏（接收方不能二次委派，
-        // 「A委派B、B委派回A」的乒乓球在结构上不可能）。
+        // MA-1：delegate 工具仅 1v1 用户会话（kind='chat'）。全局注册表不含此
+        // 工具（register_builtin 不注入），组装期按 kind 决定：delegation 子会话
+        // 拿不到它 → 委派深度=1 的结构性护栏（接收方不能二次委派，「A委派B、
+        // B委派回A」的乒乓球在结构上不可能）；频道回合同样不注册（2026-09-11
+        // 三轮生产实案翻转原「频道同权」拍板：两轮全走委派/委派探测——子会话
+        // 读不到频道历史，回传「看不到代码」的隔离答案固化统筹者错误信念、
+        // @ 接力被绕空；频道内成员协作唯一通道=@，共享流承载知识传播）。
         // MA-3：relay 两工具仅 1v1 会话（kind='chat'）——delegation 子会话拿不到
         // 跨会话投递（防侧信道绕过委派深度护栏；委派要回话走 tool_result）；频道
         // 也不给（design §9 v1 边界：频道内不做跨会话投递，成员协作走共享流本身）。
-        if matches!(conv.kind.as_str(), "chat" | "channel") {
+        if conv.kind == "chat" {
             reg.register(Arc::new(crate::harness::mcp::delegate::DelegateTool))
                 .await;
-        }
-        if conv.kind == "chat" {
             reg.register(Arc::new(crate::harness::mcp::relay::SendToSessionTool))
                 .await;
             reg.register(Arc::new(crate::harness::mcp::relay::ListConversationsTool))
