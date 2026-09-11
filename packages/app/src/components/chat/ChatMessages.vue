@@ -758,8 +758,12 @@ const allInterstitials = computed<Interstitial[]>(() => {
 });
 
 /** 渲染层分组：给每组注入「组开始前发生」的频道交错单元（preInterstitials）。
- *  每个交错单元只消费一次——挂到**首个**开始时间晚于它的组（双指针线性扫，
- *  消息组与交错单元均按时间升序）。⚠️ 勿回退成「每组 filter 全量 time < start」：
+ *  每个交错单元只消费一次——挂到**首个**开始时间不早于它的组（双指针线性扫，
+ *  消息组与交错单元均按时间升序）。比较符含等号（2026-09-11 实测修复⑨）：DB
+ *  时间戳秒级粒度，通知事件在派发时刻落库、目标成员占位行在 Pipeline 后几毫秒
+ *  创建——两者常落同一墙钟秒；严格小于会把通知滑过目标成员自己的组、呈现在其
+ *  答完之后（时间感倒读，生产实案：两条接力通知均晚一组呈现、末条落尾部）。
+ *  ⚠️ 勿回退成「每组 filter 全量 time < start」：
  *  历史卡/通知会随每条新消息重复出现（生产实案：每次发言前后都重复出选举卡，
  *  且 TransitionGroup 重复 key 引发错位渲染）。 */
 interface RenderGroup extends MessageGroup { preInterstitials: Interstitial[] }
@@ -769,7 +773,7 @@ const renderGroups = computed<RenderGroup[]>(() => {
   return messageGroups.value.map((g) => {
     const start = parseDbTime(g.items[0].msg.created_at).getTime();
     const pre: Interstitial[] = [];
-    while (cursor < items.length && items[cursor].time < start) {
+    while (cursor < items.length && items[cursor].time <= start) {
       pre.push(items[cursor]);
       cursor += 1;
     }

@@ -5,6 +5,7 @@
 // ③ 生成中发出标注（user 在前置 assistant 生成窗口内 → gen-time-flag）
 // ④ 频道事件通知按 created_at 与消息组交错（组前 preInterstitials + 尾部尾巴）
 // ⑤ 选举聚合卡：一届选举一张卡与消息交错；投票行气泡跳过（票面进卡）
+// ⑨ 同秒平局挂组：通知事件与占位行落同一墙钟秒 → 挂到该成员自己的组（答前）
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { ref } from "vue";
@@ -256,6 +257,28 @@ describe("ChatMessages 频道渲染", () => {
     const before = (a: { element: Element }, b: { element: Element }) =>
       (a.element.compareDocumentPosition(b.element) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
     expect(before(w.find(".election-card"), w.find('[data-mid="u1"]'))).toBe(true);
+    expect(before(w.find('[data-mid="a1"]'), w.find(".channel-notice"))).toBe(true);
+    expect(before(w.find(".channel-notice"), w.find('[data-mid="a2"]'))).toBe(true);
+  });
+
+  it("同秒平局挂组：派发通知与占位行同墙钟秒 → 通知落在该成员回复之前（回归⑨）", async () => {
+    const w = await mountChannel([
+      msg({ id: "u1", role: "user", content: "开始", created_at: "2026-09-10 10:00:00" }),
+      msg({ id: "a1", role: "assistant", content: "写手答", created_at: "2026-09-10 10:00:05", sender_agent_id: "ag1", sender_agent_name: "写手" }),
+      msg({ id: "a2", role: "assistant", content: "审校答", created_at: "2026-09-10 10:00:30", sender_agent_id: "ag2", sender_agent_name: "审校" }),
+    ]);
+    // 生产实案形态（DB 取证）：channel_mention 事件在派发时刻落库（chat_state.start
+    // 后 spawn 前），审校占位行在 Pipeline 后几毫秒创建——两者落同一墙钟秒
+    // 10:00:30。严格小于会把通知滑过 ag2 自己的组，呈现在其答完之后（时间感倒读）。
+    useChannel().notices.value = [
+      noticeEv({ from_agent_id: "ag1", to_agent_id: "ag2", hop_index: 1, chain_remaining: 0, blocked_reason: null }, "2026-09-10T10:00:30Z"),
+    ];
+    await flushPromises();
+
+    expect(w.findAll(".channel-notice").length).toBe(1);
+    const before = (a: { element: Element }, b: { element: Element }) =>
+      (a.element.compareDocumentPosition(b.element) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+    // 通知夹在写手答与审校答之间（审校被点名 → 审校答），而非滑到末组之后
     expect(before(w.find('[data-mid="a1"]'), w.find(".channel-notice"))).toBe(true);
     expect(before(w.find(".channel-notice"), w.find('[data-mid="a2"]'))).toBe(true);
   });
