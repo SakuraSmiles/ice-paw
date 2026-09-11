@@ -951,8 +951,9 @@ const RESUMABLE_REASONS = new Set([
           <ChannelElectionCard v-if="it.kind === 'election'" :card="it.card" />
           <ChannelNotice v-else :event="it.event" />
         </template>
-        <!-- data-mid=组首消息 id：useScrollFollow 锚点捕获/恢复的 DOM 定位符 -->
-        <div :class="['message-group', group.role]" :data-mid="group.items[0].msg.id">
+        <!-- data-mid=组首消息 id：useScrollFollow 锚点捕获/恢复的 DOM 定位符。
+             channel-msg：频道 assistant 组——外层气泡退位（背景移 .assistant-body）-->
+        <div :class="['message-group', group.role, { 'channel-msg': isChannelConv && group.role === 'assistant' }]" :data-mid="group.items[0].msg.id">
           <!-- ===== 用户消息组（单条，透明壳）===== -->
           <template v-if="group.role === 'user'">
             <div class="message-content user">
@@ -1076,15 +1077,20 @@ const RESUMABLE_REASONS = new Set([
 
           <!-- ===== 助手消息组（气泡块：连续多轮合并）===== -->
           <template v-else-if="group.role === 'assistant'">
-            <!-- 频道 v1：成员身份头（频道会话才有——1v1 会话头部已有 agent 身份）。
+            <!-- 频道群聊布局（2026-09-11 拍板）：参考常见聊天软件的群聊气泡——频道态
+                 wrap 转 grid 两列（头像独立左列 36px + 身体列），头像气泡外、昵称在
+                 气泡上方；气泡背景/圆角/padding 下放给 .assistant-body（外层退位透明）。
+                 1v1 态 wrap/body 双层透明直通，视觉与旧结构等价（头部已有 agent 身份）。
                  单值包装取数（委派卡同款先例）；统筹者 Shield 是当下投影非历史事实 -->
-            <template v-for="sender in [channelSenderOf(group)]" :key="sender ? 'ch-head' : 'ch-none'">
-              <div v-if="isChannelConv && sender" class="channel-sender-head">
-                <EntityAvatar :name="sender.name" :image="sender.image" size="sm" />
-                <span class="channel-sender-name">{{ sender.name }}</span>
-                <Shield v-if="sender.coordinator" :size="12" class="channel-sender-shield" aria-hidden="true" />
-              </div>
-            </template>
+            <div class="assistant-wrap" :class="{ channel: isChannelConv }">
+              <template v-for="sender in [channelSenderOf(group)]" :key="sender ? 'ch-head' : 'ch-none'">
+                <EntityAvatar v-if="isChannelConv && sender" :name="sender.name" :image="sender.image" size="lg" class="channel-avatar" />
+                <div v-if="isChannelConv && sender" class="channel-sender-head">
+                  <span class="channel-sender-name">{{ sender.name }}</span>
+                  <Shield v-if="sender.coordinator" :size="12" class="channel-sender-shield" aria-hidden="true" />
+                </div>
+              </template>
+              <div class="assistant-body">
             <div v-for="item in group.items" :key="item.msg.id" class="message-item">
               <!-- 三个点动画：仅当前流式 item 且无任何返回时显示 -->
               <div v-if="isLiveAssistant(item) && item.msg.content === '' && !chat.streamingThinking && toolCallList.length === 0" class="think-dots">
@@ -1310,6 +1316,8 @@ const RESUMABLE_REASONS = new Set([
                 </button>
               </div>
             </div>
+              </div><!-- /assistant-body：频道态=气泡体（背景/圆角/padding 承接者） -->
+            </div><!-- /assistant-wrap：频道态=群聊行（头像列+身体列 grid） -->
           </template>
         </div>
       </template>
@@ -1505,6 +1513,33 @@ const RESUMABLE_REASONS = new Set([
   border-radius:12px; border-bottom-left-radius:4px; padding:var(--ip-spacing-3) var(--ip-spacing-4); /* 垂直 14→12：间距令牌无 14 档，就近收编 */
 }
 .message-group.user { align-self:flex-end; max-width:70%; }
+
+/* ===== 频道群聊布局（2026-09-11 拍板：参考常见聊天软件群聊气泡）=====
+   1v1 态：wrap/body 双层透明直通（flex column + gap 等价旧结构，视觉零变化）。
+   频道态：wrap 转 grid 两列——头像独立左列（36px，跨两行）+ 身体列（昵称行 +
+   气泡体）；气泡背景/圆角/padding 从外层组容器下放给 .assistant-body。
+   ⚠️ 身体列孩子一律显式 grid-column:2 定位——匿名组（旧消息未 enrich、无头像无
+   头）只有 .assistant-body 一个孩子，靠自动放置会塌进 36px 头像列。 */
+.assistant-wrap { display:flex; flex-direction:column; gap:2px; min-width:0; }
+.assistant-wrap.channel {
+  display:grid;
+  grid-template-columns:36px minmax(0, 1fr);
+  column-gap:var(--ip-spacing-3, 12px);
+  row-gap:2px;
+}
+.channel-avatar { grid-column:1; grid-row:1 / span 2; align-self:start; flex-shrink:0; }
+.assistant-wrap.channel .channel-sender-head { grid-column:2; grid-row:1; }
+.assistant-wrap.channel .assistant-body { grid-column:2; grid-row:2; display:flex; flex-direction:column; gap:2px; min-width:0; }
+/* 频道态外层组容器退位：背景/圆角/padding 全部让给 .assistant-body（群聊行 = 头像列 + 气泡体） */
+.message-group.assistant.channel-msg {
+  background-color:transparent; color:inherit;
+  border-radius:0; padding:0;
+}
+.message-group.assistant.channel-msg .assistant-body {
+  background-color:var(--ip-color-bg-message-ai); color:var(--ip-color-text-message-ai);
+  border-radius:12px; border-bottom-left-radius:4px;
+  padding:var(--ip-spacing-3) var(--ip-spacing-4);
+}
 .message-content { display:flex; flex-direction:column; gap:4px; min-width:0; }
 .message-group.user .message-content { align-items:flex-end; }
 
@@ -1628,9 +1663,10 @@ const RESUMABLE_REASONS = new Set([
 .message-time { font-size: var(--ip-text-micro-size); color:var(--ip-color-text-disabled); }
 
 /* ===== 频道 v1：成员身份头 + 生成中发出标注 ===== */
-/* 成员头与组内首条留呼吸感；对齐组内内容左缘（assistant 组为左布局） */
-.channel-sender-head { display:flex; align-items:center; gap:6px; margin:2px 0 0 2px; }
-.channel-sender-name { font-size: var(--ip-text-caption-size); font-weight: var(--ip-font-weight-medium); color:var(--ip-color-text-secondary); }
+/* 群聊行形态（2026-09-11）：昵称行在气泡外（grid 身体列首行）；名字是身份锚点，
+   caption-12 → body-sm-13 醒目化；margin 归零（grid row-gap 接管行距） */
+.channel-sender-head { display:flex; align-items:center; gap:6px; }
+.channel-sender-name { font-size: var(--ip-text-body-sm-size); font-weight: var(--ip-font-weight-medium); color:var(--ip-color-text-secondary); }
 /* Shield 进文本流：显式 inline-block（base.css svg display:block reset 陷阱） */
 .channel-sender-shield { display:inline-block; color:var(--ip-primary-600); }
 /* 「生成中发出」事实标注（micro 主色调——是频道语境的插话事实，非错误态） */

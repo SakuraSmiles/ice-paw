@@ -6,6 +6,8 @@
 // ④ 频道事件通知按 created_at 与消息组交错（组前 preInterstitials + 尾部尾巴）
 // ⑤ 选举聚合卡：一届选举一张卡与消息交错；投票行气泡跳过（票面进卡）
 // ⑨ 同秒平局挂组：通知事件与占位行落同一墙钟秒 → 挂到该成员自己的组（答前）
+// ⑩ 群聊气泡布局：头像独立气泡外（channel-avatar）+ 昵称行在气泡外（body 之外）
+//    + 气泡体 = .assistant-body（内容结构与 1v1 一致）
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { ref } from "vue";
@@ -281,5 +283,30 @@ describe("ChatMessages 频道渲染", () => {
     // 通知夹在写手答与审校答之间（审校被点名 → 审校答），而非滑到末组之后
     expect(before(w.find('[data-mid="a1"]'), w.find(".channel-notice"))).toBe(true);
     expect(before(w.find(".channel-notice"), w.find('[data-mid="a2"]'))).toBe(true);
+  });
+
+  it("群聊气泡布局：头像/昵称在气泡外，气泡体=assistant-body；匿名组无头像无头（⑩）", async () => {
+    const w = await mountChannel([
+      msg({ id: "u1", role: "user", content: "开始" }),
+      msg({ id: "a1", role: "assistant", content: "写手答", sender_agent_id: "ag1", sender_agent_name: "写手" }),
+      msg({ id: "a2", role: "assistant", content: "审校答", sender_agent_id: "ag2", sender_agent_name: "审校" }),
+      msg({ id: "a3", role: "assistant", content: "无署名旧消息", sender_agent_id: null }),
+    ]);
+
+    // 头像独立列：有 sender 的组各一枚（lg 档），匿名组零头像
+    const avatars = w.findAll(".channel-avatar");
+    expect(avatars.length).toBe(2);
+    // 昵称行在气泡外：sender-head 不嵌在 assistant-body（气泡体）内
+    expect(w.find(".assistant-body .channel-sender-head").exists()).toBe(false);
+    expect(w.find(".assistant-wrap.channel .channel-sender-head").exists()).toBe(true);
+    // 气泡体承接内容：消息 item 与 footer 都在 body 内；wrap 层级 body 外有头像+昵称行
+    expect(w.find(".assistant-body .message-item").exists()).toBe(true);
+    expect(w.find(".assistant-body .message-footer").exists()).toBe(true);
+    // 匿名组：无头像无头，但仍有 body（grid 显式定位防塌进头像列）
+    const groups = w.findAll(".message-group.assistant.channel-msg");
+    expect(groups.length).toBe(3);
+    expect(groups[2].find(".channel-avatar").exists()).toBe(false);
+    expect(groups[2].find(".channel-sender-head").exists()).toBe(false);
+    expect(groups[2].find(".assistant-body").exists()).toBe(true);
   });
 });
