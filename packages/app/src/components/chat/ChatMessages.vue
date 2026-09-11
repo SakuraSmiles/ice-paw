@@ -13,7 +13,7 @@
 <script setup lang="ts">
 import { watch, nextTick, ref, computed, onActivated } from "vue";
 import { useRouter } from "vue-router";
-import { ArrowLeftRight, AtSign, Shield } from "@lucide/vue";
+import { ArrowLeftRight, AtSign, CornerUpRight, Shield } from "@lucide/vue";
 import { useChatStore } from "../../stores/chat";
 import { useAgentStore } from "../../stores/agent";
 import { useChannel, loadChannelNotices, type ElectionCard } from "../../composables/useChannel";
@@ -766,29 +766,39 @@ const allInterstitials = computed<Interstitial[]>(() => {
  *  ⚠️ 勿回退成「每组 filter 全量 time < start」：
  *  历史卡/通知会随每条新消息重复出现（生产实案：每次发言前后都重复出选举卡，
  *  且 TransitionGroup 重复 key 引发错位渲染）。 */
-/** 吸入气泡身份行的接力来源标注（2026-09-11 拍板）：成员间接力通知不再走
- *  居中细条，退位为被点名成员昵称行尾的一枚「@来源名」小标注（AtSign 图标 +
- *  来源名，灰），完整句义进 hover title——完整事实流仍在轨迹页。 */
-interface MentionSource { key: string; from: string; title: string }
+/** 吸入气泡身份行的接力来源标注（2026-09-11 拍板，⑫ 图标化）：被点名成员的
+ *  昵称行尾挂一枚小图标标注「这条回复是被触发的」，不显示发起者名字（文字
+ *  形态「@来源名」易被误读成气泡主人 @ 了谁）。图标两态直观分野发起者：
+ *  AtSign = 用户直接 @ 点名；CornerUpRight = 成员间接力（统筹者分派或成员
+ *  转 @）；无图标 = 广播直接应答（频道默认对话流）。发起者与完整句义进
+ *  hover title——完整事实流仍在轨迹页。 */
+interface MentionSource { key: string; userInitiated: boolean; title: string }
 
 type NoticeItem = Extract<Interstitial, { kind: "notice" }>;
 
-/** 吸入判据：未拦截的成员间接力通知（from ≠ null）+ 目标恰好是本组的发言
- *  成员。护栏拦截/换帅类（blocked）与落空兜底（user 组/匿名组/晚于组）保留
- *  居中条——吸入只发生在「被点名者自己的气泡」上。 */
+/** 吸入判据：未拦截通知 + 目标恰好是本组的发言成员 + 发起可归因（成员接力
+ *  from≠null，或用户真 @ 点名 from=null 且非广播——broadcast=true 的广播接令
+ *  不吸，统筹者直接应答是默认对话流无需标注）。护栏拦截/换帅类（blocked）
+ *  与落空兜底（user 组/匿名组/晚于组/to 不命中）保留居中条——吸入只发生在
+ *  「被点名者自己的气泡」上。 */
 function absorbableInto(it: Interstitial, g: MessageGroup): it is NoticeItem {
   if (it.kind !== "notice" || g.role !== "assistant" || !g.sender) return false;
   const p = it.event.payload as ChannelMentionPayload;
-  return p.blocked_reason == null && !!p.from_agent_id && p.to_agent_id === g.sender;
+  if (p.blocked_reason != null) return false;
+  if (p.to_agent_id !== g.sender) return false;
+  return !!p.from_agent_id || !p.broadcast;
 }
 
 function mentionSourceOf(it: NoticeItem, g: MessageGroup): MentionSource {
   const p = it.event.payload as ChannelMentionPayload;
-  const from = agent.getById(p.from_agent_id ?? "")?.name ?? "已退出成员";
   const toName = g.items[0].msg.sender_agent_name
     || (g.sender ? agent.getById(g.sender)?.name : undefined)
     || "已退出成员";
-  return { key: it.key, from, title: `${from} 点名 ${toName} 接力` };
+  if (p.from_agent_id) {
+    const from = agent.getById(p.from_agent_id)?.name ?? "已退出成员";
+    return { key: it.key, userInitiated: false, title: `${from} 点名 ${toName} 接力` };
+  }
+  return { key: it.key, userInitiated: true, title: `用户 点名 ${toName}` };
 }
 
 interface RenderGroup extends MessageGroup {
@@ -1132,10 +1142,11 @@ const RESUMABLE_REASONS = new Set([
                 <div v-if="isChannelConv && sender" class="channel-sender-head">
                   <span class="channel-sender-name">{{ sender.name }}</span>
                   <Shield v-if="sender.coordinator" :size="12" class="channel-sender-shield" aria-hidden="true" />
-                  <!-- 接力来源吸入标注：本气泡成员是被谁 @ 唤醒的（居中通知条退位，
-                       完整句义在 hover title） -->
+                  <!-- 触发来源吸入标注（⑫ 图标化）：本气泡成员是被谁唤醒的——
+                       AtSign=用户 @ 点名 / CornerUpRight=成员间接力；发起者进 hover title -->
                   <span v-if="group.mentionSource" class="channel-mention-src" :title="group.mentionSource.title">
-                    <AtSign :size="12" aria-hidden="true" />{{ group.mentionSource.from }}
+                    <AtSign v-if="group.mentionSource.userInitiated" :size="12" aria-hidden="true" />
+                    <CornerUpRight v-else :size="12" aria-hidden="true" />
                   </span>
                 </div>
               </template>
@@ -1718,9 +1729,10 @@ const RESUMABLE_REASONS = new Set([
 .channel-sender-name { font-size: var(--ip-text-body-sm-size); font-weight: var(--ip-font-weight-medium); color:var(--ip-color-text-secondary); }
 /* Shield 进文本流：显式 inline-block（base.css svg display:block reset 陷阱） */
 .channel-sender-shield { display:inline-block; color:var(--ip-primary-600); }
-/* 接力来源吸入标注：昵称行尾「@来源名」小标注（tertiary 灰 + micro，弱于
-   昵称本体；AtSign 同须 inline-block 防 base.css svg 块级化） */
-.channel-mention-src { display:inline-flex; align-items:center; gap:2px; margin-left:2px; color:var(--ip-color-text-tertiary); font-size:var(--ip-text-micro-size); }
+/* 触发来源吸入标注（⑫ 图标化）：昵称行尾一枚 12px 图标（AtSign/CornerUpRight，
+   tertiary 灰弱于昵称本体；显式 inline-block 防 base.css svg 块级化）——文字
+   形态「@来源名」易被误读成气泡主人 @ 了谁，改由 hover title 承载发起者 */
+.channel-mention-src { display:inline-flex; align-items:center; margin-left:2px; color:var(--ip-color-text-tertiary); }
 .channel-mention-src svg { display:inline-block; flex-shrink:0; }
 /* 「生成中发出」事实标注（micro 主色调——是频道语境的插话事实，非错误态） */
 .gen-time-flag { font-size: var(--ip-text-micro-size); color:var(--ip-color-primary-tint-text); }

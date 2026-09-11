@@ -46,9 +46,11 @@ describe("ChannelNotice（频道事件通知条）", () => {
     expect(w.find(".channel-notice").classes()).toContain("info");
   });
 
-  it("channel_mention from 缺省 = 用户点名", () => {
+  it("channel_mention from 缺省（真 @ 点名）= 用户点名；首跳不带「接力」（⑫ 分词）", () => {
+    // 真 @ 点名的常规路径是吸入被点名成员气泡（AtSign 图标）——此处居中条是
+    // 组不在加载窗口等兜底场景；首跳分词不带「接力」（接力 = 成员间二跳起）
     const w = mountNotice(ev("channel_mention", { from_agent_id: null, to_agent_id: "ag1", hop_index: 1, chain_remaining: 0 }));
-    expect(w.find(".channel-notice-text").text()).toBe("用户 点名 写手 接力");
+    expect(w.find(".channel-notice-text").text()).toBe("用户 点名 写手");
   });
 
   it("channel_mention 广播接令：broadcast=true →「广播 · X 接令」（非点名）", () => {

@@ -19,10 +19,12 @@
 //   票面已进卡，气泡再显一遍即重复；窗口外旧选举无卡时 Set 不含 → 照常气泡
 //   渲染，自然回退；
 // - 与卡 result 配对的 channel_coordinator(elected) 通知抑制（防「当选」双显）；
-// - 用户自起的首跳派发（channel_mention from=null 且未拦截——真 @ 点名或广播
-//   接令）不出通知条：用户自己发起的事答案气泡已带身份头，回显即噪音（生产
-//   实案：每条无 @ 广播都出「用户 点名 X 接力」，用户误以为自己 @ 过）。护栏
-//   拦截与成员接力保留；完整事实流在轨迹页。
+// - 首跳派发的通知分流（⑫ 图标化后）：广播接令（broadcast=true）不出通知条
+//   ——统筹者直接应答是频道默认对话流，回显即噪音（④ 生产实案：每条无 @ 广播
+//   都出「用户 点名 X 接力」，用户误以为自己 @ 过）；真 @ 点名（from=null 无
+//   broadcast）放行——常规路径在 ChatMessages 吸入被点名成员气泡成 AtSign
+//   图标（与成员接力 CornerUpRight 图标分野发起者）。护栏拦截与成员接力保留；
+//   完整事实流在轨迹页。
 //
 // 生命周期：App.vue onMounted 调 initChannel()（与 initInbox 并列），返回幂等
 // cleanup。会话切换拉取由 ChatMessages 的 activeConvId watcher 驱动
@@ -134,12 +136,13 @@ function applyEvents(evts: SessionEvent[]): void {
   }
 
   // ③ 通知条：剔除选举三 phase（进卡）+ 与卡配对的 elected 统筹事件（防「当选」
-  //    双显）+ **用户自起的首跳派发**（from=null 且未拦截——真 @ 点名或广播接令：
-  //    用户自己发起的事，答案气泡已带身份头，系统再回显一遍即噪音；生产实案——
-  //    每条无 @ 广播都出「用户 点名 X 接力」，用户误以为自己 @ 过）。护栏拦截
-  //    与成员接力（from 有值）保留——非显而易见的事实。appointed/removed/
-  //    failed-over 与无卡 elected（窗口边缘裁掉了对应选举）照常保留——抑制
-  //    判据是「窗口内有卡宣告同一胜者」。
+  //    双显）+ **广播接令**（from=null 且未拦截且 broadcast=true——统筹者直接
+  //    应答是频道默认对话流，回显即噪音；④ 生产实案：每条无 @ 广播都出「用户
+  //    点名 X 接力」被误读）。真 @ 点名（from=null 无 broadcast 位）放行——⑫
+  //    起在 ChatMessages 吸入被点名成员气泡成 AtSign 图标（广播缺席位的旧事件
+  //    按点名渲染，serde 契约 ④ 批既定容忍）。护栏拦截与成员接力（from 有值）
+  //    保留——非显而易见的事实。appointed/removed/failed-over 与无卡 elected
+  //    （窗口边缘裁掉了对应选举）照常保留——抑制判据是「窗口内有卡宣告同一胜者」。
   const winnerIds = new Set(
     cards.filter((c) => c.result?.winner_agent_id).map((c) => c.result!.winner_agent_id!),
   );
@@ -149,7 +152,8 @@ function applyEvents(evts: SessionEvent[]): void {
       if (e.kind === "channel_election") return false; // 已进卡
       if (e.kind === "channel_mention") {
         const p = e.payload as ChannelMentionPayload;
-        if (!p.blocked_reason && !p.from_agent_id) return false; // 用户自起派发不回显
+        // 广播接令不回显；点名/接力/拦截全放行（分流见块注释）
+        if (!p.blocked_reason && !p.from_agent_id && p.broadcast === true) return false;
       }
       if (e.kind === "channel_coordinator") {
         const p = e.payload as ChannelCoordinatorPayload;

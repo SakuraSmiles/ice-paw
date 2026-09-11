@@ -4,7 +4,8 @@
 //    当前统筹者 Shield 微标 = channelView 当下投影）
 // ③ 生成中发出标注（user 在前置 assistant 生成窗口内 → gen-time-flag）
 // ④ 频道事件通知按 created_at 与消息组交错（组前 preInterstitials + 尾部尾巴；
-//    未拦截成员接力通知吸入被点名成员气泡身份行——「@来源」小标注，拦截/落空保留居中条）
+//    未拦截接力通知吸入被点名成员气泡昵称行尾成图标标注——AtSign=用户 @ 点名 /
+//    CornerUpRight=成员间接力、发起者进 hover title（⑫ 图标化），拦截/落空保留居中条）
 // ⑤ 选举聚合卡：一届选举一张卡与消息交错；投票行气泡跳过（票面进卡）
 // ⑨ 同秒平局挂组：通知事件与占位行落同一墙钟秒 → 挂到该成员自己的组（答前）
 // ⑩ 群聊气泡布局：头像独立气泡外（channel-avatar）+ 昵称行在气泡外（body 之外）
@@ -13,6 +14,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { ref } from "vue";
 import { mount, flushPromises } from "@vue/test-utils";
+import { AtSign, CornerUpRight } from "@lucide/vue";
 import ChatMessages from "../ChatMessages.vue";
 import { useChatStore } from "../../../stores/chat";
 import { useAgentStore } from "../../../stores/agent";
@@ -187,12 +189,14 @@ describe("ChatMessages 频道渲染", () => {
     ];
     await flushPromises();
 
-    // 未拦截成员接力（写手→审校，10:00:30 在 ag2 组前）吸入审校组身份行：
-    // 居中条退位为「@写手」小标注，完整句义进 hover title
+    // 未拦截成员接力（写手→审校，10:00:30 在 ag2 组前）吸入审校组昵称行尾：
+    // 图标形态（⑫）——图标本体不承载发起者名字（文字「@来源」易误读成气泡
+    // 主人 @ 了谁），发起者与完整句义进 hover title
     const src = w.find('[data-mid="a2"]').find(".channel-mention-src");
     expect(src.exists()).toBe(true);
-    expect(src.text()).toBe("写手");
+    expect(src.text()).toBe(""); // 图标-only：无文字内容
     expect(src.attributes("title")).toBe("写手 点名 审校 接力");
+    expect(src.findComponent(CornerUpRight).exists()).toBe(true); // 成员间接力图标
     // 拦截类（广播被用户插话取消，10:02:00）保留居中条，晚于所有组 → 尾部
     const notices = w.findAll(".channel-notice");
     expect(notices.length).toBe(1);
@@ -284,14 +288,14 @@ describe("ChatMessages 频道渲染", () => {
     ];
     await flushPromises();
 
-    // 吸入审校组身份行（@写手），无居中条、尾部零复现
+    // 吸入审校组昵称行尾（⑫ 图标形态），无居中条、尾部零复现
     expect(w.findAll(".channel-notice").length).toBe(0);
     const src = w.find('[data-mid="a2"]').find(".channel-mention-src");
     expect(src.exists()).toBe(true);
-    expect(src.text()).toBe("写手");
+    expect(src.text()).toBe("");
   });
 
-  it("吸入锚定：仅未拦截成员接力且 to==组 sender 才吸入；拦截/落空保留居中条", async () => {
+  it("吸入锚定：仅未拦截接力且 to==组 sender 才吸入；拦截/落空保留居中条", async () => {
     const w = await mountChannel([
       msg({ id: "u1", role: "user", content: "开始", created_at: "2026-09-10 10:00:00" }),
       msg({ id: "a1", role: "assistant", content: "写手答", created_at: "2026-09-10 10:00:05", sender_agent_id: "ag1", sender_agent_name: "写手" }),
@@ -313,6 +317,36 @@ describe("ChatMessages 频道渲染", () => {
     expect(notices.length).toBe(2);
     expect(notices[0].text()).toContain("写手 @ 审校：接力链达上限");
     expect(notices[1].text()).toContain("写手 点名 已退出成员 接力");
+  });
+
+  it("点名/广播分野（⑫）：用户 @ 点名吸入 AtSign 图标；广播接令不吸（居中条兜底）", async () => {
+    const w = await mountChannel([
+      msg({ id: "u1", role: "user", content: "@写手 看下这段", created_at: "2026-09-10 10:00:00" }),
+      msg({ id: "a1", role: "assistant", content: "写手答", created_at: "2026-09-10 10:00:05", sender_agent_id: "ag1", sender_agent_name: "写手" }),
+      msg({ id: "a2", role: "assistant", content: "审校答", created_at: "2026-09-10 10:01:00", sender_agent_id: "ag2", sender_agent_name: "审校" }),
+    ]);
+    // 直注 notices 绕过 useChannel filter（filter 断言在 useChannel.election.test）：
+    // - 真 @ 点名（from=null 无 broadcast 位）→ 吸入被点名成员气泡 AtSign 图标，
+    //   title「用户 点名 X」（与成员接力 CornerUpRight 图标分野发起者）
+    // - 广播（broadcast=true）→ 不吸（absorbableInto 判 broadcast 排除——统筹者
+    //   直接应答是默认对话流无需标注）；此处居中条是「组不在窗口」的兜底形态
+    //   文档化——真实数据流里 broadcast=true 已被 useChannel filter 拦下
+    useChannel().notices.value = [
+      noticeEv({ from_agent_id: null, to_agent_id: "ag2", hop_index: 1, chain_remaining: 0, blocked_reason: null }, "2026-09-10T10:00:30Z"),
+      noticeEv({ from_agent_id: null, to_agent_id: "ag1", broadcast: true, hop_index: 1, chain_remaining: 0, blocked_reason: null }, "2026-09-10T10:01:30Z"),
+    ];
+    await flushPromises();
+
+    // 用户点名 → 吸入审校气泡，AtSign 图标 + hover 句义
+    const src = w.find('[data-mid="a2"]').find(".channel-mention-src");
+    expect(src.exists()).toBe(true);
+    expect(src.findComponent(AtSign).exists()).toBe(true);
+    expect(src.attributes("title")).toBe("用户 点名 审校");
+    // 广播 → 写手气泡无标注（默认对话流）
+    expect(w.find('[data-mid="a1"]').find(".channel-mention-src").exists()).toBe(false);
+    // 广播事件落兜底居中条（真实流被 filter 拦，此为直注路径的行为文档化）
+    expect(w.findAll(".channel-notice").length).toBe(1);
+    expect(w.findAll(".channel-notice")[0].text()).toContain("广播 · 写手 接令");
   });
 
   it("群聊气泡布局：头像/昵称在气泡外，气泡体=assistant-body；匿名组无头像无头（⑩）", async () => {
