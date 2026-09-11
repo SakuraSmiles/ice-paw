@@ -191,6 +191,14 @@ const { showPicker, pickerAgentIds, ctaKind, startNew, onPickAgent } = useNewCon
 const isUserChat = (c: { kind?: string }) => !c.kind || c.kind === "chat";
 const visibleConversations = computed(() => chat.conversations.filter(isUserChat));
 
+// 启动恢复候选 = 侧栏可见会话 + 频道会话——频道在侧栏由独立区块渲染（不进
+// visibleConversations），但它是用户主动停留的页面：关闭时停在频道、重启
+// 却因候选集缺频道而回退「最新会话」（生产实案 2026-09-11）。delegation
+// 后台子会话仍排除（用户上次主动停留的位置不该是后台子会话）。
+const restorableConversations = computed(() =>
+  chat.conversations.filter((c) => isUserChat(c) || c.kind === "channel"),
+);
+
 const scopedConversations = computed(() => {
   const pid = scopeProjectId.value;
   return pid === null
@@ -273,7 +281,7 @@ onMounted(async () => {
   if (!chat.activeConvId) {
     const plan = planRestore(
       loadLastSession(),
-      visibleConversations.value,
+      restorableConversations.value,
       new Set(project.activeProjects.map((p) => p.id)),
       new Set(project.list.map((p) => p.id)), // 全量（含归档）——route 守卫判「已永久删除」
     );

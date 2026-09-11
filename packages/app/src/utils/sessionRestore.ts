@@ -71,7 +71,8 @@ export interface RestoreConvLike {
 }
 
 /**
- * 恢复决策。convs 传侧栏可见会话（调用方已过滤 delegation），这里再按
+ * 恢复决策。convs 传恢复候选集（调用方已过滤 delegation；含频道会话——频道
+ * 在侧栏由独立区块渲染不进普通列表，但属用户主动停留的页面），这里再按
  * 「所属项目未归档」过滤一遍（activeProjectIds = 未归档项目 id 集）；
  * allProjectIds = 全量项目 id 集（含归档）——route 守卫判「已永久删除」用。
  */

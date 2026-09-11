@@ -211,4 +211,31 @@ describe("Sidebar 频道区块", () => {
     const w = await mountSidebar();
     expect(w.find(".sidebar-search").exists()).toBe(false);
   });
+
+  it("启动恢复含频道：关闭时停在频道 → 重启回频道而非回退最新会话（2026-09-11 生产实案回归锁）", async () => {
+    // 恢复发生在 onMounted（loadConversations 之后），数据必须由 invoke 分流供给
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "list_all_conversations") {
+        return [
+          // 普通会话 updated_at 更新——若候选集缺频道（旧行为），回退必选中它，
+          // 用例因此有判别力
+          conv("普通会话", { title: "普通会话", project_id: "p1", updated_at: "2026-09-11 12:00:00" }),
+          conv("ch-live", { title: "发布频道", kind: "channel", project_id: "p1", agent_id: "ag1" }),
+        ];
+      }
+      if (cmd === "list_projects") {
+        return [proj([{ agent_id: "ag1", role: "coordinator" }])];
+      }
+      return [];
+    });
+    // 上次停在频道（频道不进 visibleConversations——侧栏由独立区块渲染，
+    // 但恢复候选集须含它，否则 saved.convId 找不到 → 回退最新会话）
+    localStorage.setItem(
+      "icepaw-last-session",
+      JSON.stringify({ route: "/", convId: "ch-live", projectId: "p1" }),
+    );
+    await mountSidebar();
+    expect(useChatStore().activeConvId).toBe("ch-live");
+    expect(useProjectStore().activeProjectId).toBe("p1");
+  });
 });
