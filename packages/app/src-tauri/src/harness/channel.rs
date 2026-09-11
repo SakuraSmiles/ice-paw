@@ -1667,17 +1667,9 @@ async fn on_channel_turn_ended(app: &AppHandle, conv_id: &str) {
         .collect();
     let mentioned = parse_agent_mentions(&final_text, &member_pairs, last_speaker.as_deref());
     if !mentioned.is_empty() {
-        let hops: VecDeque<Hop> = mentioned
-            .into_iter()
-            .map(|agent_id| Hop {
-                agent_id,
-                from: last_speaker.clone(),
-                broadcast: false,
-            })
-            .collect();
         let mut map = runtimes().lock().unwrap();
         match map.get_mut(conv_id) {
-            Some(rt) => rt.pending.extend(hops),
+            Some(rt) => enqueue_relay_hops(rt, mentioned, last_speaker.clone()),
             None => return,
         }
     }
@@ -1762,6 +1754,30 @@ async fn emit_mention_blocked(
 /// 链终结：清理 runtime（head 一并丢弃——下次用户消息新建链）。
 fn finish_chain(conv_id: &str) {
     runtimes().lock().unwrap().remove(conv_id);
+}
+
+/// 接力入队：**按目标成员去重 + from 刷新**（2026-09-11 四轮生产实案）。
+///
+/// 生产风暴形态：统筹者 multi-@ 三成员后，首个被唤醒成员的报告尾又把其中
+/// 两名再 @ 一遍——无去重时同目标重复入队，FIFO 出队时唤醒已完成工作的
+/// 成员（陈旧提及五分钟后才出队、醒来困惑「已交付完毕」），队列膨胀又把
+/// 链顶到 chain_limit 截断。去重的正当性由共享流承载：被唤醒成员读的是
+/// 频道**全量**历史，一次唤醒即能看到流中全部指向它的 @，无需逐条各醒一次。
+///
+/// 已在队列的目标再次被 @ → 不重复入队，仅把该跳的 from 刷新为**最近一次
+/// @ 者**——出队时通知条「X 点名 Y 接力」与紧邻历史（最近一份以 @Y 结尾的
+/// 报告）对得上，治「提示文字与相邻气泡对不上」的渲染观感问题。
+fn enqueue_relay_hops(rt: &mut ChannelRuntime, mentioned: Vec<String>, from: Option<String>) {
+    for agent_id in mentioned {
+        match rt.pending.iter_mut().find(|h| h.agent_id == agent_id) {
+            Some(existing) => existing.from = from.clone(),
+            None => rt.pending.push_back(Hop {
+                agent_id,
+                from: from.clone(),
+                broadcast: false,
+            }),
+        }
+    }
 }
 
 /// 清除在途跳标记（凭据失败等未发起场景）。
@@ -2106,6 +2122,29 @@ mod tests {
         );
         // 单条积压：first == last，语义不变
         assert_eq!(election_register_head(&[anchor("only")]), "only");
+    }
+
+    // ---------- 接力入队去重（⑧ 生产实案回归锁） ----------
+
+    /// 生产实案 2026-09-11 四轮：统筹者 multi-@ [cb, dev, dev2] 后，cb 的报告
+    /// 尾再 @ [dev, dev2]——无去重时 dev/dev2 各被入队两次，第二次出队已是
+    /// 五分钟后的陈旧提及（成员醒来「已交付完毕」白跑、队列膨胀顶到
+    /// chain_limit）。去重后同目标只保留一跳，from 刷新为最近 @ 者（cb）。
+    #[test]
+    fn relay_enqueue_dedups_and_refreshes_from() {
+        let mut rt = ChannelRuntime::default();
+        enqueue_relay_hops(&mut rt, vec!["cb".into(), "dev".into(), "dev2".into()], Some("m3".into()));
+        enqueue_relay_hops(&mut rt, vec!["dev".into(), "dev2".into()], Some("cb".into()));
+        let ids: Vec<&str> = rt.pending.iter().map(|h| h.agent_id.as_str()).collect();
+        assert_eq!(ids, vec!["cb", "dev", "dev2"], "同目标不重复入队");
+        assert_eq!(rt.pending[0].from.as_deref(), Some("m3"), "未被再 @ 的跳 from 不动");
+        assert_eq!(rt.pending[1].from.as_deref(), Some("cb"), "from 刷新为最近 @ 者");
+        assert_eq!(rt.pending[2].from.as_deref(), Some("cb"), "from 刷新为最近 @ 者");
+        // 队列清空后同一目标可再次入队（合法的再次咨询——护栏 pair_counts 管频次）
+        rt.pending.clear();
+        enqueue_relay_hops(&mut rt, vec!["dev".into()], Some("m3".into()));
+        assert_eq!(rt.pending.len(), 1);
+        assert_eq!(rt.pending[0].from.as_deref(), Some("m3"));
     }
 
     #[test]

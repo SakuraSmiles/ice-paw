@@ -332,6 +332,10 @@ run_channel_turn(member, conv, chain_state)
   `send_message_to_session` / `list_conversations` **不注册给频道回合**（v1 砍法——频道内 @ 是原生通讯方式，
   跨会话投递从频道发起留 v2；`inbox.rs:314` deliver 拦 `kind != "chat"` 与 drain watcher `kind != "chat"`
   判定**维持现状**——频道不收投递，防侧信道绕过频道护栏，delegation 同款逻辑）。
+  `read_reference` 同闸收口（2026-09-11 ⑧ 批）：@ 引用快照钻取是 1v1 语义——频道 @ 纯寻址（C9）不产快照、
+  委派子会话无用户 @，调用结构性必败（生产实案：被唤醒成员困惑时反复调它 hunting「@ 我的那段」两连败）；
+  该工具在 `register_builtin` 全局注册（与 delegate 的按 kind 注册路径不同），收口走组装期 `snap.remove`
+  ——路径不同、闸相同。
 
 ### system prompt 注入（频道礼节段）
 

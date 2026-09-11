@@ -553,7 +553,16 @@ pub(crate) async fn run_agent_turn(
             .enabled_tools
             .as_deref()
             .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok());
-        let snap = env.global_registry.snapshot().await;
+        let mut snap = env.global_registry.snapshot().await;
+        // read_reference（@ 引用钻取）仅 1v1 会话：引用快照只在 1v1 用户 @
+        // 时物化，频道 @ 是纯寻址（C9）不产快照、委派子会话无用户 @——这两类
+        // 会话调用结构性必败「该会话未被当前对话引用过」，模型却看得到工具
+        // 就会去试（2026-09-11 四轮生产实案：频道成员被 @ 唤醒后困惑「没读到
+        // @ 我的那段」，反复调它 hunting 原文两连败）。与 delegate/relay 同闸
+        // 收口——频道内共享流本身就是全量视野，无需钻取通道。
+        if conv.kind != "chat" {
+            snap.remove("read_reference");
+        }
         // 治「看不见」：收窄生效时披露被裁名单（排障第一线索——2026-08-31 生产
         // 实案：旧白名单升级激活致工具静默缺失，无任何日志线索两轮才定位）。
         // 每回合一条、名单稳定时内容恒定，低噪；配 L2「状态上屏」哲学非 L3。
@@ -717,7 +726,11 @@ pub(crate) async fn run_agent_turn(
         // conv_id 已 move 进上方字段，这里用 conv.id（同一值）取会话记忆
         auth_session: env.auth_sessions.session_for(&conv.id),
         tool_registry,
-        agent_id: conv.agent_id.clone(),
+        // 事件 actor 与工具上下文的 agent 归属 = **执行成员**：频道回合的执行
+        // 者 ≠ 会话行 agent_id（那是统筹者投影）——此前取行值致频道回合的
+        // assistant_message / tool_execution 事件 actor 恒为统筹者、轨迹归因
+        // 失真（2026-09-11 四轮实案取证在案）；1v1 两者恒等，行为零变化。
+        agent_id: agent.id.clone(),
         sender_name,
         sender_agent_id,
         project_id: conv.project_id.clone(),
