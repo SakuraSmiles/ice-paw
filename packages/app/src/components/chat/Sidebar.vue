@@ -353,6 +353,10 @@ function timeAgoLabel(dateStr: string): string {
       </button>
     </div>
 
+    <!-- 分割线 ①：品牌头 / 工作区选择（2026-09-12 布局调整：分割线从
+         「新建对话/会话列表」边界改为两条语义边界，见下方 before-new-chat） -->
+    <div v-if="!collapsed" class="conv-divider after-header"></div>
+
     <!-- 顶部固定区（顺序拍板 2026-09-10）：项目空间胶囊 → 项目频道 → 新建对话。
          搜索框已随频道改版整体移除（无使用场景；rail flyout 内同步移除）。 -->
     <div v-if="!collapsed" class="sidebar-top">
@@ -427,6 +431,10 @@ function timeAgoLabel(dateStr: string): string {
         </button>
       </template>
 
+      <!-- 分割线 ②：频道区（项目附属）/ 新建对话（全局动作）；无项目且无
+           归档频道时不渲染（孤立分割线无语义分组可标） -->
+      <div v-if="scopeProjectId || archivedChannels.length > 0" class="conv-divider before-new-chat"></div>
+
       <button class="conv-item conv-item-new" @click="newChat">
         <div class="conv-item-title">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -437,9 +445,6 @@ function timeAgoLabel(dateStr: string): string {
         </div>
       </button>
     </div>
-
-    <!-- 分隔线（钉在列表上方，不随列表滚动） -->
-    <div v-if="!collapsed" class="conv-divider"></div>
 
     <!-- 会话列表（TransitionGroup：会话进出淡入、touchConversation 重排时平滑让位） -->
     <TransitionGroup v-if="!collapsed" name="conv-list" tag="nav" class="conv-list">
@@ -857,12 +862,22 @@ function timeAgoLabel(dateStr: string): string {
   font-weight: var(--ip-font-weight-medium);
 }
 
-/* 分隔线（钉在会话列表上方） */
+/* 分隔线（2026-09-12 布局调整：两条语义边界——品牌头/工作区选择、频道区/新建
+   对话；原「新建对话/会话列表」分割线移除，新建对话与会话列表连为一区） */
 .conv-divider {
   height: 1px;
   background-color: var(--ip-color-border-default);
-  margin: 0 12px 4px;
   flex-shrink: 0;
+}
+
+/* 品牌头之下：上距由 sidebar-header 的 padding 提供，下距对齐 sidebar-top 的 gap */
+.conv-divider.after-header {
+  margin: 0 12px 6px;
+}
+
+/* 新建对话之上：上下间距由 sidebar-top 的 gap: 6px 提供 */
+.conv-divider.before-new-chat {
+  margin: 0 12px;
 }
 
 .conv-item-title {
