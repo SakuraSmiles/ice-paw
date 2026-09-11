@@ -765,7 +765,11 @@ const allInterstitials = computed<Interstitial[]>(() => {
  *  答完之后（时间感倒读，生产实案：两条接力通知均晚一组呈现、末条落尾部）。
  *  ⚠️ 勿回退成「每组 filter 全量 time < start」：
  *  历史卡/通知会随每条新消息重复出现（生产实案：每次发言前后都重复出选举卡，
- *  且 TransitionGroup 重复 key 引发错位渲染）。 */
+ *  且 TransitionGroup 重复 key 引发错位渲染）。
+ *  ⑬ 延递补充：吸入候选挂不上当前组时不就地居中——同秒平局下首跳点名会先被
+ *  user 消息组吃掉（路由在物化后即刻派发，点名事件与用户行同墙钟秒）、
+ *  multi-@ 的其余跳撞上同秒的他人组，就地消化则目标气泡永远拿不到图标；
+ *  候选进 carry 向后续组递送直至目标组或尾部（isDeferrableMention）。 */
 /** 吸入气泡身份行的接力来源标注（2026-09-11 拍板，⑫ 图标化）：被点名成员的
  *  昵称行尾挂一枚小图标标注「这条回复是被触发的」，不显示发起者名字（文字
  *  形态「@来源名」易被误读成气泡主人 @ 了谁）。图标两态直观分野发起者：
@@ -776,17 +780,24 @@ interface MentionSource { key: string; userInitiated: boolean; title: string }
 
 type NoticeItem = Extract<Interstitial, { kind: "notice" }>;
 
-/** 吸入判据：未拦截通知 + 目标恰好是本组的发言成员 + 发起可归因（成员接力
- *  from≠null，或用户真 @ 点名 from=null 且非广播——broadcast=true 的广播接令
- *  不吸，统筹者直接应答是默认对话流无需标注）。护栏拦截/换帅类（blocked）
- *  与落空兜底（user 组/匿名组/晚于组/to 不命中）保留居中条——吸入只发生在
- *  「被点名者自己的气泡」上。 */
-function absorbableInto(it: Interstitial, g: MessageGroup): it is NoticeItem {
-  if (it.kind !== "notice" || g.role !== "assistant" || !g.sender) return false;
+/** 延递判据（⑬）：未拦截且发起可归因的点名 = 吸入候选（成员接力 from≠null，
+ *  或用户真 @ 点名 from=null 且非 broadcast——广播接令不候选，统筹者直接应答
+ *  是默认对话流无需标注）。护栏拦截/广播/选举卡不延递——事实性内容按时间
+ *  就地呈现；候选挂不上当前组时向后递送（见 renderGroups），全程无组可吸
+ *  才落尾部居中条（目标不在加载窗口/已退出的落空兜底）。 */
+function isDeferrableMention(it: Interstitial): it is NoticeItem {
+  if (it.kind !== "notice") return false;
   const p = it.event.payload as ChannelMentionPayload;
-  if (p.blocked_reason != null) return false;
-  if (p.to_agent_id !== g.sender) return false;
-  return !!p.from_agent_id || !p.broadcast;
+  return p.blocked_reason == null && (!!p.from_agent_id || !p.broadcast);
+}
+
+/** 吸入判据：吸入候选 + 目标恰好是本组的发言成员——吸入只发生在「被点名者
+ *  自己的气泡」上（护栏拦截类永不吸入，保留居中条显性可见）。 */
+function absorbableInto(it: Interstitial, g: MessageGroup): it is NoticeItem {
+  if (g.role !== "assistant" || !g.sender) return false;
+  if (!isDeferrableMention(it)) return false;
+  const p = it.event.payload as ChannelMentionPayload;
+  return p.to_agent_id === g.sender;
 }
 
 function mentionSourceOf(it: NoticeItem, g: MessageGroup): MentionSource {
@@ -811,15 +822,27 @@ interface RenderGroup extends MessageGroup {
 const renderGroups = computed<RenderGroup[]>(() => {
   const items = allInterstitials.value;
   let cursor = 0;
+  // 延递中的吸入候选：之前的组挂不上（同秒平局先撞 user 组/他人组），等
+  // 后续组的目标气泡（⑬；终局 = 某组吸入 或 尾部居中条）
+  let carry: NoticeItem[] = [];
   return messageGroups.value.map((g) => {
     const start = parseDbTime(g.items[0].msg.created_at).getTime();
     const pre: Interstitial[] = [];
     const absorbed: NoticeItem[] = [];
+    const deferred: NoticeItem[] = [];
     while (cursor < items.length && items[cursor].time <= start) {
       const it = items[cursor];
       cursor += 1;
       if (absorbableInto(it, g)) absorbed.push(it);
+      else if (isDeferrableMention(it)) deferred.push(it);
       else pre.push(it);
+    }
+    // 本窗口新候选 + 之前延递的一并复试：能吸则吸，挂不上继续延递
+    const retry = [...carry, ...deferred];
+    carry = [];
+    for (const it of retry) {
+      if (absorbableInto(it, g)) absorbed.push(it);
+      else carry.push(it);
     }
     return {
       ...g,
@@ -831,7 +854,8 @@ const renderGroups = computed<RenderGroup[]>(() => {
 });
 
 /** 尾部交错单元：晚于最后一组开始的频道事件（在途接力的实时尾巴 / 进行中的
- *  选举卡——result 事件到达时 useChannel 补拉后卡自然翻完成态）。消费集含
+ *  选举卡——result 事件到达时 useChannel 补拉后卡自然翻完成态）+ 延递到底
+ *  未找到目标气泡的点名（⑬ 落空兜底：目标不在加载窗口/已退出）。消费集含
  *  挂组（preInterstitials）与吸入（absorbedKeys）两路——漏收吸入 key 会让
  *  已吸入的通知在尾部再出一条居中条（双渲染）。 */
 const tailInterstitials = computed(() => {

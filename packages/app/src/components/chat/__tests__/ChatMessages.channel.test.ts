@@ -5,7 +5,9 @@
 // ③ 生成中发出标注（user 在前置 assistant 生成窗口内 → gen-time-flag）
 // ④ 频道事件通知按 created_at 与消息组交错（组前 preInterstitials + 尾部尾巴；
 //    未拦截接力通知吸入被点名成员气泡昵称行尾成图标标注——AtSign=用户 @ 点名 /
-//    CornerUpRight=成员间接力、发起者进 hover title（⑫ 图标化），拦截/落空保留居中条）
+//    CornerUpRight=成员间接力、发起者进 hover title（⑫ 图标化），拦截/落空保留
+//    居中条；吸入候选挂不上当前组时**延递**至目标组或尾部——⑬，同秒平局下首跳
+//    点名先撞 user 消息组、multi-@ 其余跳撞同秒他人组，就地消化目标气泡拿不到图标）
 // ⑤ 选举聚合卡：一届选举一张卡与消息交错；投票行气泡跳过（票面进卡）
 // ⑨ 同秒平局挂组：通知事件与占位行落同一墙钟秒 → 挂到该成员自己的组（答前）
 // ⑩ 群聊气泡布局：头像独立气泡外（channel-avatar）+ 昵称行在气泡外（body 之外）
@@ -306,8 +308,9 @@ describe("ChatMessages 频道渲染", () => {
       // 拦截类（chain_limit）——即便 to 命中组 sender 也保留居中条（护栏事实
       // 需要显性可见，吸入会把它藏进身份行）
       noticeEv({ from_agent_id: "ag1", to_agent_id: "ag2", hop_index: 2, chain_remaining: 0, blocked_reason: "chain_limit" }, "2026-09-10T10:00:30Z"),
-      // to 不命中任何组 sender（agX 已退出）→ 无组可吸，落下一组前居中条
-      //（下一组恰是匿名组——user 组/匿名组同属「挂不上」兜底路径）
+      // to 不命中任何组 sender（agX 已退出）→ 无组可吸；⑬ 延递语义下不再
+      // 就地落「下一组前」，延递到底落尾部居中条（目标不在窗口/已退出的
+      // 落空兜底——DOM 序仍晚于拦截条，断言不变）
       noticeEv({ from_agent_id: "ag1", to_agent_id: "agX", hop_index: 1, chain_remaining: 0, blocked_reason: null }, "2026-09-10T10:01:30Z"),
     ];
     await flushPromises();
@@ -347,6 +350,48 @@ describe("ChatMessages 频道渲染", () => {
     // 广播事件落兜底居中条（真实流被 filter 拦，此为直注路径的行为文档化）
     expect(w.findAll(".channel-notice").length).toBe(1);
     expect(w.findAll(".channel-notice")[0].text()).toContain("广播 · 写手 接令");
+  });
+
+  it("首跳点名同秒平局：延递越过 user 组吸入目标气泡（回归⑬）", async () => {
+    const w = await mountChannel([
+      msg({ id: "u1", role: "user", content: "@审校 看下这段", created_at: "2026-09-10 10:00:00" }),
+      // 路由在物化后即刻派发——点名事件与 user 行落同一墙钟秒；目标占位行在
+      // Pipeline 后几毫秒同秒创建。消费按组序先到 u1（user 组吸不了）——
+      // ⑬ 前就地渲染成 u1 组前居中条，目标气泡永远拿不到图标
+      msg({ id: "a1", role: "assistant", content: "审校答", created_at: "2026-09-10 10:00:00", sender_agent_id: "ag2", sender_agent_name: "审校" }),
+    ]);
+    useChannel().notices.value = [
+      noticeEv({ from_agent_id: null, to_agent_id: "ag2", hop_index: 1, chain_remaining: 0, blocked_reason: null }, "2026-09-10T10:00:00Z"),
+    ];
+    await flushPromises();
+
+    // 延递越过 user 组：吸入审校气泡 AtSign 图标，无居中条
+    expect(w.findAll(".channel-notice").length).toBe(0);
+    const src = w.find('[data-mid="a1"]').find(".channel-mention-src");
+    expect(src.exists()).toBe(true);
+    expect(src.findComponent(AtSign).exists()).toBe(true);
+    expect(src.attributes("title")).toBe("用户 点名 审校");
+  });
+
+  it("multi-@ 同秒多跳：各候选延递到各自目标气泡，他人组不就地消化（⑬）", async () => {
+    const w = await mountChannel([
+      msg({ id: "u1", role: "user", content: "@写手 @审校 各领一段", created_at: "2026-09-10 10:00:00" }),
+      msg({ id: "a1", role: "assistant", content: "写手答", created_at: "2026-09-10 10:00:02", sender_agent_id: "ag1", sender_agent_name: "写手" }),
+      msg({ id: "a2", role: "assistant", content: "审校答", created_at: "2026-09-10 10:00:40", sender_agent_id: "ag2", sender_agent_name: "审校" }),
+    ]);
+    // 两跳同秒派发（u1 同墙钟秒）：to=审校 的候选会先撞上写手组——延递语义
+    // 下须越过写手组落到审校自己的气泡，而不是在写手答前出居中条
+    useChannel().notices.value = [
+      noticeEv({ from_agent_id: null, to_agent_id: "ag1", hop_index: 1, chain_remaining: 0, blocked_reason: null }, "2026-09-10T10:00:00Z"),
+      noticeEv({ from_agent_id: null, to_agent_id: "ag2", hop_index: 2, chain_remaining: 0, blocked_reason: null }, "2026-09-10T10:00:00Z"),
+    ];
+    await flushPromises();
+
+    expect(w.findAll(".channel-notice").length).toBe(0);
+    expect(w.find('[data-mid="a1"]').find(".channel-mention-src").exists()).toBe(true);
+    const src2 = w.find('[data-mid="a2"]').find(".channel-mention-src");
+    expect(src2.exists()).toBe(true);
+    expect(src2.attributes("title")).toBe("用户 点名 审校");
   });
 
   it("群聊气泡布局：头像/昵称在气泡外，气泡体=assistant-body；匿名组无头像无头（⑩）", async () => {
