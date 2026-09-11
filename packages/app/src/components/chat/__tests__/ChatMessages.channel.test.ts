@@ -174,19 +174,21 @@ describe("ChatMessages 频道渲染", () => {
       msg({ id: "a1", role: "assistant", content: "写手答", created_at: "2026-09-10 10:00:05", sender_agent_id: "ag1", sender_agent_name: "写手" }),
       msg({ id: "a2", role: "assistant", content: "审校答", created_at: "2026-09-10 10:01:00", sender_agent_id: "ag2", sender_agent_name: "审校" }),
     ]);
-    // mount 后 watcher 的 loadChannelNotices 已 await（flushPromises）——此时注入
+    // mount 后 watcher 的 loadChannelNotices 已 await（flushPromises）——此时注入。
+    // fixtures 对齐 useChannel 过滤后的真实形态：用户自起首跳派发（from=null
+    // 且未拦截）已被过滤，此处用成员接力 + 广播拦截两条
     useChannel().notices.value = [
       noticeEv({ from_agent_id: "ag1", to_agent_id: "ag2", hop_index: 1, chain_remaining: 0, blocked_reason: null }, "2026-09-10T10:00:30Z"),
-      noticeEv({ from_agent_id: null, to_agent_id: "ag1", hop_index: 1, chain_remaining: 0, blocked_reason: null }, "2026-09-10T10:02:00Z"),
+      noticeEv({ from_agent_id: null, to_agent_id: "ag1", broadcast: true, blocked_reason: "user_preempted" }, "2026-09-10T10:02:00Z"),
     ];
     await flushPromises();
 
     const notices = w.findAll(".channel-notice");
     expect(notices.length).toBe(2);
-    // 第一条（10:00:30）在 ag2 组（10:01:00）开始前 → 落在该组前；
-    // 第二条（10:02:00）晚于所有组 → 尾部
+    // 第一条（10:00:30，写手接力点名审校）在 ag2 组（10:01:00）开始前 → 落在该组前；
+    // 第二条（10:02:00，广播被用户插话取消）晚于所有组 → 尾部
     expect(w.text()).toContain("写手 点名 审校 接力");
-    expect(w.text()).toContain("用户 点名 写手 接力");
+    expect(w.text()).toContain("广播 · 写手：用户插话，接力取消");
   });
 
   it("选举聚合卡：一届一张卡与消息交错；投票行气泡跳过（票面进卡不重复）", async () => {

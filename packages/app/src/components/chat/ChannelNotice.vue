@@ -45,9 +45,14 @@ const text = computed<string>(() => {
     const p = props.event.payload as import("../../types").ChannelMentionPayload;
     if (p.blocked_reason) {
       const label = BLOCKED_LABELS[p.blocked_reason] ?? p.blocked_reason;
-      const from = p.from_agent_id ? `${nameOf(p.from_agent_id)} @ ${nameOf(p.to_agent_id)}` : `点名 ${nameOf(p.to_agent_id)}`;
+      const from = p.from_agent_id
+        ? `${nameOf(p.from_agent_id)} @ ${nameOf(p.to_agent_id)}`
+        : p.broadcast ? `广播 · ${nameOf(p.to_agent_id)}` : `点名 ${nameOf(p.to_agent_id)}`;
       return `${from}：${label}`;
     }
+    // from=null 的成功派发已被 useChannel 过滤（用户自起不回显）——此处兜底
+    // 分词仍按 broadcast 诚实（广播接令 ≠ 点名）
+    if (!p.from_agent_id && p.broadcast) return `广播 · ${nameOf(p.to_agent_id)} 接令`;
     const from = p.from_agent_id ? nameOf(p.from_agent_id) : "用户";
     return `${from} 点名 ${nameOf(p.to_agent_id)} 接力`;
   }

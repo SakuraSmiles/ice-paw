@@ -420,7 +420,13 @@ function summarizeEvent(ev: SessionEvent): { kind: RowKind; summary: string; isE
       // 纯函数无 agent 名解析——成员以短码示（检查器有完整 payload）
       const tag = (id: string): string => `成员#${shortCode(id)}`;
       if (p.blocked_reason) {
-        return { kind: "cross", summary: `点名被拦（${p.blocked_reason}）：${tag(p.to_agent_id)}`, isError: false, durationMs: null, tokens: null, thinkingDerived: false, isThinking: false, isContinuation: false };
+        const act = p.broadcast ? "广播接令被拦" : "点名被拦";
+        return { kind: "cross", summary: `${act}（${p.blocked_reason}）：${tag(p.to_agent_id)}`, isError: false, durationMs: null, tokens: null, thinkingDerived: false, isThinking: false, isContinuation: false };
+      }
+      // from 空 + broadcast = 无 @ 广播由统筹者接令（非点名——生产实案：被误读
+      // 成「用户 @ 过」）；from 空 + 非 broadcast = 用户真 @ 点名
+      if (!p.from_agent_id && p.broadcast) {
+        return { kind: "cross", summary: `广播 · ${tag(p.to_agent_id)} 接令（第 ${p.hop_index} 跳 · 余 ${p.chain_remaining}）`, isError: false, durationMs: null, tokens: null, thinkingDerived: false, isThinking: false, isContinuation: false };
       }
       const from = p.from_agent_id ? `${tag(p.from_agent_id)} → ` : "";
       return { kind: "cross", summary: `${from}点名 ${tag(p.to_agent_id)} 接力（第 ${p.hop_index} 跳 · 余 ${p.chain_remaining}）`, isError: false, durationMs: null, tokens: null, thinkingDerived: false, isThinking: false, isContinuation: false };

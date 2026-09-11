@@ -4,9 +4,10 @@
 //   vote 累积 / result 覆写），多届互不混票
 // - electionVoteIds：election: 前缀 turn 的 assistant_message message_id 全集
 //   （ChatMessages 据此跳过投票行气泡）
-// - notices 过滤两道：channel_election 三 phase 全进卡不出通知行；与卡 result
-//   配对的 channel_coordinator(elected) 抑制（防「当选」双显）；appointed /
-//   removed / failed-over 与无卡 elected 照常保留
+// - notices 过滤三道：channel_election 三 phase 全进卡不出通知行；与卡 result
+//   配对的 channel_coordinator(elected) 抑制（防「当选」双显）；用户自起首跳
+//   派发（from=null 且未拦截——真 @ / 广播接令）不回显（答案气泡带身份头，
+//   回显即噪音）；appointed / removed / failed-over 与无卡 elected 照常保留
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { bridge } from "../../api/bridge";
@@ -124,21 +125,29 @@ describe("useChannel 选举聚合卡", () => {
     expect(cards[1].votes.length).toBe(1);
   });
 
-  it("通知过滤：选举三 phase 不出通知行；配对 elected 抑制、appointed 保留", async () => {
+  it("通知过滤：选举进卡；配对 elected 抑制；用户自起派发不回显、接力/拦截保留", async () => {
     await loadWith([
       ...electionEvents("e1", [{ voter: "ag1", candidate: "ag2" }], "ag2", "2026-09-11T10:00:00Z"),
       // 与卡配对的 elected → 抑制（防「当选」双显）
       ev("channel_coordinator", { v: 1, action: "elected", agent_id: "ag2", reason: "自选举产出" }, "2026-09-11T10:00:31Z"),
       // 用户治理动作 → 保留
       ev("channel_coordinator", { v: 1, action: "appointed", agent_id: "ag1", reason: null }, "2026-09-11T10:01:00Z"),
-      // 普通点名通知 → 保留
-      ev("channel_mention", { v: 1, from_agent_id: null, to_agent_id: "ag1", hop_index: 1, chain_remaining: 0, blocked_reason: null }, "2026-09-11T10:02:00Z"),
+      // 用户自起首跳派发（广播接令 / 真 @ 点名）→ 不回显：答案气泡已带身份头，
+      // 系统再通知一遍即噪音（生产实案：每条广播都出「用户 点名 X 接力」）
+      ev("channel_mention", { v: 1, from_agent_id: null, to_agent_id: "ag1", hop_index: 1, chain_remaining: 0, broadcast: true, blocked_reason: null }, "2026-09-11T10:01:30Z"),
+      ev("channel_mention", { v: 1, from_agent_id: null, to_agent_id: "ag2", hop_index: 1, chain_remaining: 0, blocked_reason: null }, "2026-09-11T10:01:40Z"),
+      // 成员接力（from 有值）→ 保留（谁派发谁不显而易见）
+      ev("channel_mention", { v: 1, from_agent_id: "ag2", to_agent_id: "ag1", hop_index: 2, chain_remaining: 0, blocked_reason: null }, "2026-09-11T10:02:00Z"),
+      // 护栏拦截 → 保留（解释「为什么没人应答」）
+      ev("channel_mention", { v: 1, from_agent_id: null, to_agent_id: "ag1", hop_index: 0, chain_remaining: 0, broadcast: true, blocked_reason: "user_preempted" }, "2026-09-11T10:02:10Z"),
     ]);
 
     const ns = useChannel().notices.value;
-    expect(ns.length).toBe(2);
-    expect(ns.map((n) => n.kind)).toEqual(["channel_coordinator", "channel_mention"]);
+    expect(ns.length).toBe(3);
+    expect(ns.map((n) => n.kind)).toEqual(["channel_coordinator", "channel_mention", "channel_mention"]);
     expect((ns[0].payload as { action: string }).action).toBe("appointed");
+    expect((ns[1].payload as { from_agent_id: string }).from_agent_id).toBe("ag2");
+    expect((ns[2].payload as { blocked_reason: string }).blocked_reason).toBe("user_preempted");
   });
 
   it("无卡 elected（窗口裁掉了对应选举）→ 照常保留通知行", async () => {

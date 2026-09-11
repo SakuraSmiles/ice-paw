@@ -393,17 +393,23 @@ describe("类型筛选模型（FilterKey / 预设 / 计数 / 持久化）", () =
     const rows = evRows([
       ev("channel_mention", { from_agent_id: "ag1", to_agent_id: "ag2", hop_index: 1, chain_remaining: 2, blocked_reason: null }),
       ev("channel_mention", { from_agent_id: null, to_agent_id: "ag1", hop_index: 1, chain_remaining: 0, blocked_reason: "user_preempted" }),
+      // broadcast 位分野（生产实案：广播接令被误读成「用户 @ 过」）
+      ev("channel_mention", { from_agent_id: null, to_agent_id: "ag1", hop_index: 1, chain_remaining: 0, broadcast: true, blocked_reason: null }),
+      ev("channel_mention", { from_agent_id: null, to_agent_id: "ag2", hop_index: 0, chain_remaining: 0, broadcast: true, blocked_reason: "coordinator_failed" }),
       ev("channel_election", { phase: "result", result: { tally: [{ agent_id: "ag2", votes: 2 }], winner_agent_id: "ag2" } }),
       ev("channel_coordinator", { action: "failed-over", agent_id: "ag2" }),
     ]);
     const evs = rows.events();
-    expect(evs.map((r) => r.kind)).toEqual(["cross", "cross", "cross", "cross"]);
+    expect(evs.map((r) => r.kind)).toEqual(["cross", "cross", "cross", "cross", "cross", "cross"]);
     expect(evs[0].label).toBe("CROSS");
     // 正常点名：from → to + 跳数/余链；拦截态：blocked_reason 原样 + to 短码
     expect(evs[0].summary).toBe(`${tag("ag1")} → 点名 ${tag("ag2")} 接力（第 1 跳 · 余 2）`);
     expect(evs[1].summary).toBe(`点名被拦（user_preempted）：${tag("ag1")}`);
-    expect(evs[2].summary).toBe(`当选统筹者：${tag("ag2")}`);
-    expect(evs[3].summary).toBe(`${tag("ag2")} 统筹故障换帅至`);
+    // 广播接令 ≠ 点名（from 空由 broadcast 分野）；广播拦截态同理
+    expect(evs[2].summary).toBe(`广播 · ${tag("ag1")} 接令（第 1 跳 · 余 0）`);
+    expect(evs[3].summary).toBe(`广播接令被拦（coordinator_failed）：${tag("ag2")}`);
+    expect(evs[4].summary).toBe(`当选统筹者：${tag("ag2")}`);
+    expect(evs[5].summary).toBe(`${tag("ag2")} 统筹故障换帅至`);
     // 计数走 channel 键（EV_KIND_TO_FILTER 三 kind 同键）
     const c = countByFilterKey([
       ev("channel_mention", { from_agent_id: "ag1", to_agent_id: "ag2", hop_index: 1, chain_remaining: 0, blocked_reason: null }),

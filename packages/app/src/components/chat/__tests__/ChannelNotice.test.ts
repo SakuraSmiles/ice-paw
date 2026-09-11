@@ -51,6 +51,18 @@ describe("ChannelNotice（频道事件通知条）", () => {
     expect(w.find(".channel-notice-text").text()).toBe("用户 点名 写手 接力");
   });
 
+  it("channel_mention 广播接令：broadcast=true →「广播 · X 接令」（非点名）", () => {
+    // from=null 的两义由 broadcast 分野——生产实案：每条无 @ 广播被渲染成
+    // 「用户 点名 X 接力」，用户误以为自己 @ 过
+    const w = mountNotice(ev("channel_mention", { from_agent_id: null, to_agent_id: "ag1", hop_index: 1, chain_remaining: 0, broadcast: true }));
+    expect(w.find(".channel-notice-text").text()).toBe("广播 · 写手 接令");
+  });
+
+  it("channel_mention 广播拦截：broadcast=true 前缀分词（coordinator_failed）", () => {
+    const w = mountNotice(ev("channel_mention", { from_agent_id: null, to_agent_id: "ag1", broadcast: true, blocked_reason: "coordinator_failed" }));
+    expect(w.find(".channel-notice-text").text()).toBe("广播 · 写手：统筹者故障，降级处理");
+  });
+
   it("channel_mention 拦截态：blocked_reason 中文词表 + tone=muted（user_preempted）", () => {
     const w = mountNotice(ev("channel_mention", { from_agent_id: "ag1", to_agent_id: "ag2", hop_index: 0, chain_remaining: 0, blocked_reason: "user_preempted" }));
     expect(w.find(".channel-notice-text").text()).toBe("写手 @ 审校：用户插话，接力取消");

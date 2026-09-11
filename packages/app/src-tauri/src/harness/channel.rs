@@ -320,8 +320,11 @@ fn election_register_head(backlog: &[TurnAnchor]) -> String {
 #[derive(Debug, Clone)]
 struct Hop {
     agent_id: String,
-    /// 发起方（None = 用户消息触发；Some = 成员接力 from）
+    /// 发起方（None = 用户消息触发——真 @ 点名或广播接令；Some = 成员接力 from）
     from: Option<String>,
+    /// 用户消息是广播（无 @）而非点名——事件 payload 的 broadcast 位来源，
+    /// 前端据此分词（「广播 · X 接令」vs「用户 点名 X 接力」）
+    broadcast: bool,
 }
 
 /// 单频道运行时。字段语义见模块文档「链状态」。
@@ -696,6 +699,7 @@ async fn consume_backlog(
         let coord_hop = Hop {
             agent_id: coordinator_id.clone().unwrap_or_default(),
             from: None,
+            broadcast: true,
         };
         emit_mention_blocked(pool, &conv.id, &new_head, &coord_hop, "coordinator_failed").await;
         tracing::warn!(
@@ -734,6 +738,8 @@ async fn consume_backlog(
                     .map(|agent_id| Hop {
                         agent_id,
                         from: None,
+                        // mentions 空 ⇔ 广播（统筹者接令）——事件词汇分野位
+                        broadcast: mentions_merged.is_empty(),
                     })
                     .collect();
                 // 链头在此提交（路由确定、即将派发）；dispatched 由 run_next_hop
@@ -1631,6 +1637,7 @@ async fn on_channel_turn_ended(app: &AppHandle, conv_id: &str) {
             .map(|agent_id| Hop {
                 agent_id,
                 from: last_speaker.clone(),
+                broadcast: false,
             })
             .collect();
         let mut map = runtimes().lock().unwrap();
@@ -1682,6 +1689,7 @@ async fn emit_mention(
             v: 1,
             from_agent_id: hop.from.clone(),
             to_agent_id: hop.agent_id.clone(),
+            broadcast: hop.broadcast,
             hop_index,
             chain_remaining,
             blocked_reason: None,
@@ -1707,6 +1715,7 @@ async fn emit_mention_blocked(
             v: 1,
             from_agent_id: hop.from.clone(),
             to_agent_id: hop.agent_id.clone(),
+            broadcast: hop.broadcast,
             hop_index: 0,
             chain_remaining: 0,
             blocked_reason: Some(reason.to_string()),

@@ -546,9 +546,12 @@ export interface InboxView {
  *  `chain:{链头消息id}`（三侧同归组键）；from 缺省 = 用户消息触发。 */
 export interface ChannelMentionPayload {
   v?: number;
-  /** 发起方（null = 用户 @ / 广播；有值 = 成员接力 from） */
+  /** 发起方（null = 用户消息触发——真 @ 点名或广播接令，由 broadcast 分野；有值 = 成员接力 from） */
   from_agent_id?: string | null;
   to_agent_id: string;
+  /** 广播接令（true = 无 @ 的用户消息由统筹者接令；false/缺席 = 真 @ 点名
+   *  或成员接力——from_agent_id 为 null 的两义由此分野，旧事件缺席按点名） */
+  broadcast?: boolean;
   /** 本链第几跳（1 起；拦截态无意义置 0） */
   hop_index: number;
   /** 本跳之后队列剩余跳数 */

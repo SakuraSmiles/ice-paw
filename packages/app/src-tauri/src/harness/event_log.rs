@@ -596,10 +596,16 @@ pub struct ChannelCoordinatorPayload {
 pub struct ChannelMentionPayload {
     #[serde(default = "version_one")]
     pub v: u8,
-    /// 发起方（None = 用户消息里的 @；Some = 成员回复终文里的 @）
+    /// 发起方（None = 用户消息触发——真 @ 点名或广播接令，由 broadcast 分野；
+    /// Some = 成员回复终文里的 @ 接力）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from_agent_id: Option<String>,
     pub to_agent_id: String,
+    /// 广播接令（true = 无 @ 的用户消息由统筹者接令；false/缺席 = 真 @ 点名
+    /// 或成员接力。from_agent_id 为 None 的两义由此分野；旧事件缺席按点名
+    /// 渲染，可接受）。skip false 保持旧事件 payload 字节不变。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub broadcast: bool,
     /// 本链当前跳序（1 起）
     pub hop_index: u32,
     /// 链剩余跳数（0 = 末跳）
