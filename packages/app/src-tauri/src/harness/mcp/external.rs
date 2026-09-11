@@ -515,9 +515,18 @@ pub struct ExternalToolProxy {
     parameters: serde_json::Value,
     server: Arc<dyn McpTransport>,
     trust_level: TrustLevel,
+    /// 所属 server 的 mcp_servers 配置 id——断线懒重启（按 server 定位）与
+    /// 会话级 server 信任（#11 第四档）的定位键。
+    server_config_id: String,
+    /// 所属 server 展示名（审批卡 server 档标注 / 断线错误文案）。
+    server_display_name: String,
 }
 
 impl ExternalToolProxy {
+    // 8 参均为构造必需的独立事实（身份 2 + 展示 2 + schema + 传输 + 信任 + 归属
+    // server 2），唯一调用点在 manager::start_server；grouping 进结构体只是把
+    // 列表挪个地方，此处显式 allow（仓内既有惯例，见 execute_tool_round）。
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         name: String,
         server_tool_name: String,
@@ -525,6 +534,8 @@ impl ExternalToolProxy {
         parameters: serde_json::Value,
         server: Arc<dyn McpTransport>,
         trust_level: TrustLevel,
+        server_config_id: String,
+        server_display_name: String,
     ) -> Self {
         Self {
             name,
@@ -533,6 +544,8 @@ impl ExternalToolProxy {
             parameters,
             server,
             trust_level,
+            server_config_id,
+            server_display_name,
         }
     }
 }
@@ -554,6 +567,14 @@ impl McpClient for ExternalToolProxy {
             TrustLevel::Trusted => AuthorizationLevel::Always,
             TrustLevel::Untrusted => AuthorizationLevel::Confirm,
         }
+    }
+
+    fn server_config_id(&self) -> Option<&str> {
+        Some(&self.server_config_id)
+    }
+
+    fn server_display_name(&self) -> Option<&str> {
+        Some(&self.server_display_name)
     }
 
     async fn execute(&self, args: &str) -> AppResult<String> {

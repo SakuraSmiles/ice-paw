@@ -40,6 +40,7 @@ pub async fn list_mcp_servers(
                     .or_insert_with(|| ServerEntry {
                         config: cfg,
                         status: ServerStatus::Disabled,
+                        last_workspace: None,
                     });
             }
         }

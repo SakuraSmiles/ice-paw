@@ -820,6 +820,9 @@ export interface ChatSummaryInjectedPayload {
 export interface ToolAuthRequestPayload {
   request_id: string; tool_use_id: string; tool_name: string; file_path: string;
   arguments: string; conversation_id: string; message_id: string; reason: string;
+  /** 所属外部 server 展示名（2026-09-11 ③）：外部 server 工具带出——审批卡据此
+   *  展示「此 Server（本会话）」第三档；内置工具缺省。*/
+  server_name?: string | null;
 }
 /** 委派授权请求（chat:delegation-auth-request）：delegate_to_agent 建子会话前
  *  弹卡——目标 agent + 任务全文 + 预授权档。与工具授权共用 oneshot 应答通道
@@ -829,8 +832,9 @@ export interface DelegationAuthRequestPayload {
   agent_name: string; agent_id: string; task: string;
 }
 /** #11 分层授权范围：once=仅本次（默认）/ this_dir=此目录含子目录（会话内）/
- *  this_tool=此工具（会话内，Confirm 级工具唯一扩围档）。与后端 AuthScope 对齐。*/
-export type AuthScope = "once" | "this_dir" | "this_tool";
+ *  this_tool=此工具（会话内，Confirm 级工具唯一扩围档）/ this_server=此 Server
+ *  （会话内，该 server 全部工具免问，2026-09-11 ③）。与后端 AuthScope 对齐。*/
+export type AuthScope = "once" | "this_dir" | "this_tool" | "this_server";
 /** 委派预授权档（两档拍板 2026-09-03）：commands=命令免问（预授子会话
  *  run_command 工具档）；缺省/undefined = 逐次审批。与后端 DelegationGrant 对齐。*/
 export type DelegationGrant = "commands";

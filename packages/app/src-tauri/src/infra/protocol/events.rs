@@ -283,10 +283,14 @@ pub struct ToolAuthRequestPayload {
     pub conversation_id: String,
     pub message_id: String,
     pub reason: String,
+    /// 所属外部 server 展示名（2026-09-11 ③）：外部 server 工具带出，前端据此
+    /// 展示「此 Server（本会话）」第三档；内置工具 None（旧前端按可选字段兼容）。
+    #[serde(default)]
+    pub server_name: Option<String>,
 }
 
 /// 授权范围（#11 分层授权记忆）：用户在审批卡上选择的「允许」生效档位。
-/// 默认 `Once`（仅本次）；`ThisDir`/`ThisTool` 记入会话级授权记忆，
+/// 默认 `Once`（仅本次）；`ThisDir`/`ThisTool`/`ThisServer` 记入会话级授权记忆，
 /// 本会话内同范围不再询问（L0 起跨轮持久，app 重启即清、不落盘）。
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
@@ -298,6 +302,9 @@ pub enum AuthScope {
     ThisDir,
     /// 此工具会话内免问（Confirm 级工具唯一可用的扩围档）
     ThisTool,
+    /// 此 Server 会话内免问（2026-09-11 ③ 第四档）：整 server 的全部工具本会话
+    /// 免问——UE 类大工具集一次批准全覆盖；非外部工具（无 server id）退化为工具档
+    ThisServer,
 }
 
 /// 委派预授权档（委托时刻前置的信任决策，2026-09-03 两档拍板）。
@@ -508,6 +515,7 @@ mod tests {
             conversation_id: "c-1".into(),
             message_id: "m-1".into(),
             reason: "路径 '/etc/passwd' 不在白名单中".into(),
+            server_name: None,
         };
         let json = serde_json::to_string(&p).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -517,8 +525,19 @@ mod tests {
         assert_eq!(parsed["file_path"], "/etc/passwd");
         assert_eq!(parsed["conversation_id"], "c-1");
         assert_eq!(parsed["message_id"], "m-1");
-        // 8 个字段
-        assert_eq!(parsed.as_object().unwrap().len(), 8);
+        // 9 个字段（server_name 恒序列化——None 为 null，前端按可选字段读）
+        assert_eq!(parsed.as_object().unwrap().len(), 9);
+    }
+
+    #[test]
+    fn auth_scope_this_server_serde_snake_case() {
+        // ③ 第四档（2026-09-11）：与前端 AuthScope 字面量对齐
+        let json = serde_json::to_string(&AuthScope::ThisServer).unwrap();
+        assert_eq!(json, r#""this_server""#);
+        let back: AuthScope = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, AuthScope::ThisServer);
+        // 旧前端/旧事件缺席 → 默认 Once（serde default 兼容面不动）
+        assert_eq!(AuthScope::default(), AuthScope::Once);
     }
 
     #[test]

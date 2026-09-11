@@ -95,8 +95,9 @@ impl AuthorizationDecision {
 
 /// 会话级分层授权记忆（#11；2026-09-03 起跨轮持久）
 ///
-/// 跟踪「本会话运行期内已被用户 `Allow`」的授权，三档 grant：
-/// 精确路径 / 目录（含子目录）/ 工具，判定序 **tool > dir > path**。
+/// 跟踪「本会话运行期内已被用户 `Allow`」的授权，四档 grant：
+/// 精确路径 / 目录（含子目录）/ 工具 / server，判定序 **tool > dir > path**
+///（server 档独立判定，只覆盖外部 server 工具，见 [`PathAuthSession::is_server_authorized`]）。
 /// 生命周期由 [`AuthSessionRegistry`] 按 conversation 管理：同一会话的
 /// 多次回合共享同表（「允许此工具」跨轮兑现），会话删除时清、app 重启
 /// 即清——**永不落盘、按会话隔离**；跨会话（跨 conversation / 跨重启）的
@@ -106,7 +107,7 @@ pub struct PathAuthSession {
     inner: Arc<Mutex<AuthGrants>>,
 }
 
-/// 三档授权集合（均存归一化形式）
+/// 四档授权集合（路径族存归一化形式；工具/server 存原样 id）
 #[derive(Debug, Clone, Default)]
 struct AuthGrants {
     /// 精确路径（auth_cache_key 归一）
@@ -115,6 +116,8 @@ struct AuthGrants {
     dirs: Vec<String>,
     /// 工具名（原样，工具名区分大小写）
     tools: HashSet<String>,
+    /// 外部 server 配置 id（2026-09-11 ③ 第四档：整 server 全部工具本会话免问）
+    servers: HashSet<String>,
 }
 
 impl PathAuthSession {
@@ -178,6 +181,21 @@ impl PathAuthSession {
         grants.tools.insert(tool.to_string());
     }
 
+    /// server 档是否已覆盖（2026-09-11 ③）：该外部 server 的全部工具本会话免问。
+    ///
+    /// 判定在 tool_executor 的 Confirm 臂做（此处不掺进 `is_authorized` 的
+    /// 路径族判定序——server 档按 server id 独立键控，覆盖面 = 该 server 的
+    /// 全部工具，与 path/dir 族不同轴）。
+    pub async fn is_server_authorized(&self, server_id: &str) -> bool {
+        self.inner.lock().await.servers.contains(server_id)
+    }
+
+    /// server 档入账（「此 Server（本会话）」——UE 类大工具集一次批准全覆盖）
+    pub async fn mark_server_authorized(&self, server_id: &str) {
+        let mut grants = self.inner.lock().await;
+        grants.servers.insert(server_id.to_string());
+    }
+
     /// 清空本表全部授权（显式重置场景；会话级移除由 registry 丢弃整表完成）
     pub async fn clear(&self) {
         let mut grants = self.inner.lock().await;
@@ -188,7 +206,7 @@ impl PathAuthSession {
     #[cfg(test)]
     pub async fn len(&self) -> usize {
         let grants = self.inner.lock().await;
-        grants.paths.len() + grants.dirs.len() + grants.tools.len()
+        grants.paths.len() + grants.dirs.len() + grants.tools.len() + grants.servers.len()
     }
 
     /// 是否为空
@@ -779,6 +797,47 @@ mod tests {
         )
         .await;
         assert!(d.is_allowed());
+    }
+
+    // ----- ③ server 档（2026-09-11 第四档）：按 server id 键控、不掺路径族 -----
+
+    #[tokio::test]
+    async fn server_grant_covers_only_its_own_server() {
+        let session = PathAuthSession::new();
+        session.mark_server_authorized("srv-ue").await;
+        assert!(session.is_server_authorized("srv-ue").await);
+        // 其它 server / 工具档 / 路径族都不沾光
+        assert!(!session.is_server_authorized("srv-other").await);
+        assert!(!session.is_tool_authorized("t1_spawn_actor").await);
+        assert!(!session.is_authorized("/any/path", "t1_spawn_actor").await);
+    }
+
+    #[tokio::test]
+    async fn server_grant_survives_across_turns_via_registry() {
+        // 与 registry_same_conv_shares_grants_across_turns 同柄语义：UE 30 工具
+        // 第一回合批 server 档，第二回合仍免问
+        let registry = AuthSessionRegistry::new();
+        registry
+            .session_for("conv-ue")
+            .mark_server_authorized("srv-ue")
+            .await;
+        let turn2 = registry.session_for("conv-ue");
+        assert!(turn2.is_server_authorized("srv-ue").await);
+        // 会话隔离照旧
+        assert!(
+            !registry
+                .session_for("conv-b")
+                .is_server_authorized("srv-ue")
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn server_grant_cleared_with_session() {
+        let session = PathAuthSession::new();
+        session.mark_server_authorized("srv-ue").await;
+        session.clear().await;
+        assert!(!session.is_server_authorized("srv-ue").await);
     }
 
     #[tokio::test]

@@ -73,11 +73,16 @@ const SCOPE_OPTIONS: Array<{ value: AuthScope; label: string }> = [
   { value: "once", label: "仅此一次" },
   { value: "this_dir", label: "此目录（含子目录）" },
   { value: "this_tool", label: "此工具（本会话）" },
+  { value: "this_server", label: "此 Server（本会话）" },
 ];
-/** 无路径（Confirm 级工具）无目录可言，隐藏此目录档 */
-const scopeOptions = computed(() =>
-  hasPath.value ? SCOPE_OPTIONS : SCOPE_OPTIONS.filter((o) => o.value !== "this_dir"),
-);
+/** 无路径（Confirm 级工具）无目录可言隐藏此目录档；非外部 server 工具无
+ *  server 可信隐藏此 Server 档（2026-09-11 ③——payload.server_name 带出） */
+const scopeOptions = computed(() => {
+  let opts = SCOPE_OPTIONS;
+  if (!hasPath.value) opts = opts.filter((o) => o.value !== "this_dir");
+  if (!toolReq.value?.server_name) opts = opts.filter((o) => o.value !== "this_server");
+  return opts;
+});
 
 function allow() {
   if (!req.value || expired.value) return;
@@ -113,12 +118,14 @@ function deny() {
           </span>
         </div>
 
-        <!-- L2 工具授权：路径 + 原因（单行省略，全文走 title）+ 参数折叠；
+        <!-- L2 工具授权：路径 + 原因（单行省略，全文走 title）+ server 来源标注
+             （外部 server 工具——「此 Server」档信任的对象要让用户看见）+ 参数折叠；
              委派授权：任务摘要 + 全文折叠 -->
         <div v-if="toolReq" class="auth-line2">
           <span v-if="hasPath" class="auth-path" :title="toolReq.file_path">{{ toolReq.file_path }}</span>
           <span v-if="hasPath && toolReq.reason" class="auth-dot">·</span>
           <span v-if="toolReq.reason" class="auth-reason" :title="toolReq.reason">{{ toolReq.reason }}</span>
+          <span v-if="toolReq.server_name" class="auth-path" title="此工具来自外部 MCP Server">Server: {{ toolReq.server_name }}</span>
           <details class="auth-args">
             <summary>参数</summary>
             <pre class="auth-json">{{ formatJson(toolReq.arguments) }}</pre>

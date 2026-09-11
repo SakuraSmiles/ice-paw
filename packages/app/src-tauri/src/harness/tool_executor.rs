@@ -25,6 +25,7 @@
 //!   确保只有一份全局监听。
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::Value;
@@ -41,8 +42,9 @@ use crate::harness::authority::{
 };
 use crate::harness::hooks::{has_actions, run_hooks};
 use crate::harness::mcp::client::ToolOutput;
+use crate::harness::mcp::manager::{is_transport_down_error, transport_down_message};
 use crate::harness::mcp::screen::channel as screen_channel;
-use crate::harness::mcp::{AuthorizationLevel, McpRegistry, ToolContext};
+use crate::harness::mcp::{AuthorizationLevel, McpRegistry, McpServerManager, ToolContext};
 pub use crate::harness::oneshot_registry::ToolAuthRegistry;
 use crate::infra::protocol::{
     AuthScope, ChatToolResultPayload, ContentBlock, PendingRequestCancelPayload,
@@ -64,7 +66,12 @@ use base64::Engine as _;
 #[allow(clippy::too_many_arguments)]
 /// 调用工具并把 `AppResult<ToolOutput>` 统一转成 `Result<ToolOutput, String>`
 ///（execute_tool_round 内部「允许执行」与「用户授权后执行」两路的共用入口，含 panic 兜底）。
+///
+/// ② 断线懒重启（2026-09-11）：外部 server 工具撞上「传输已断开」类错误时，
+/// 按 server 节流重启一次并重试本次调用；重试仍失败/节流内/重启失败给
+/// 家族前缀三段式错误（见 [`transport_down_message`]）。
 async fn invoke_tool(
+    server_manager: Option<&Arc<McpServerManager>>,
     registry: &McpRegistry,
     name: &str,
     args: &str,
@@ -84,7 +91,48 @@ async fn invoke_tool(
         .then(screen_channel::WriteBracket::enter);
     match registry.dispatch_catch_panic(name, args, ctx).await {
         Ok(out) => Ok(out),
-        Err(e) => Err(e.to_string()),
+        Err(e) => {
+            let raw = e.to_string();
+            // ② 懒重启：只对「确定性断开」生效（管道断/通道关/HTTP 连不上/404
+            // session 失效），超时不算——慢 ≠ 死，重启重试只会再等一遍。
+            // server_config_id 取自 registry 内的工具实例（ExternalToolProxy）；
+            // 重启后 start_server 会用同名工具重注册，重试 dispatch 拿到的
+            // 已是新传输上的新 proxy。
+            if let Some(mgr) = server_manager {
+                let server_meta = registry.get(name).await.and_then(|t| {
+                    t.server_config_id().map(|sid| {
+                        (sid.to_string(), t.server_display_name().unwrap_or(sid).to_string())
+                    })
+                });
+                if let Some((sid, server_name)) = server_meta {
+                    if is_transport_down_error(&raw) {
+                        return match mgr.lazy_restart(&sid, registry).await {
+                            Ok(true) => {
+                                tracing::info!(
+                                    target: "ice_paw.mcp",
+                                    tool = %name, server = %server_name,
+                                    "传输断开已懒重启，重试本次调用"
+                                );
+                                match registry.dispatch_catch_panic(name, args, ctx).await {
+                                    Ok(out) => Ok(out),
+                                    Err(e2) => {
+                                        Err(transport_down_message(&server_name, &e2.to_string()))
+                                    }
+                                }
+                            }
+                            // 节流窗口内已有一次重启（没救活）——直接给家族错误
+                            Ok(false) => Err(transport_down_message(&server_name, &raw)),
+                            // 重启失败（server 真起不来了 / 已禁用）——如实披露
+                            Err(re) => Err(transport_down_message(
+                                &server_name,
+                                &format!("{raw}；自动重连失败: {re}"),
+                            )),
+                        };
+                    }
+                }
+            }
+            Err(raw)
+        }
     }
 }
 
@@ -124,6 +172,12 @@ pub(crate) async fn execute_tool_round(
                     s.inner().clone()
                 },
             )
+    });
+    // ② 懒重启：外部 server 传输断开时按 server 重启（测试态 tool_app=None 跳过——
+    // 与 proposal_registry 同模式，S6）
+    let server_manager: Option<Arc<McpServerManager>> = tool_app.and_then(|app| {
+        app.try_state::<Arc<McpServerManager>>()
+            .map(|s: tauri::State<'_, Arc<McpServerManager>>| s.inner().clone())
     });
 
     // agent workspace 内的文件免授权（workspace 是 agent 的信任领地，
@@ -185,9 +239,36 @@ pub(crate) async fn execute_tool_round(
         // 加入的动作即知情同意）。只吃 Confirm，不碰 Deny（显式拒绝不被越权）。
         let decision = screen_channel::short_circuit(decision, tc_name, &tool_ctx.conv_id);
 
+        // ③ 会话级 server 信任（#11 第四档，2026-09-11）：Confirm 级外部工具，
+        // 所属 server 已被本会话「此 Server」档覆盖 → 放行。UE 类大工具集
+        // 一次批准全会话免问（否则 30 个工具要点 30 次卡）。内置工具无
+        // server_config_id 不沾光——server 信任只覆盖它自己的工具。
+        let decision = match decision {
+            AuthorizationDecision::Confirm { .. } => {
+                let sid = registry
+                    .get(tc_name)
+                    .await
+                    .and_then(|t| t.server_config_id().map(|s| s.to_string()));
+                match sid {
+                    Some(sid) if session.is_server_authorized(&sid).await => {
+                        tracing::info!(
+                            target: "ice_paw.tool_auth",
+                            tool = %tc_name, server_id = %sid,
+                            "会话级 server 信任放行"
+                        );
+                        AuthorizationDecision::Allow
+                    }
+                    _ => decision,
+                }
+            }
+            _ => decision,
+        };
+
         // 2. 根据决策执行
         let final_result: Result<ToolOutput, String> = match decision {
-            AuthorizationDecision::Allow => invoke_tool(registry, tc_name, tc_args, tool_ctx).await,
+            AuthorizationDecision::Allow => {
+                invoke_tool(server_manager.as_ref(), registry, tc_name, tc_args, tool_ctx).await
+            }
             AuthorizationDecision::Confirm {
                 request_id,
                 tool_name,
@@ -197,7 +278,12 @@ pub(crate) async fn execute_tool_round(
             } => {
                 // 2a. 注册 oneshot receiver
                 let rx = auth_registry.register(request_id.clone()).await;
-                // 2b. emit 事件给前端
+                // 2b. emit 事件给前端（server_name：外部 server 工具带出——
+                // 前端据此展示「此 Server（本会话）」第三档，2026-09-11 ③）
+                let server_name = registry
+                    .get(&tool_name)
+                    .await
+                    .and_then(|t| t.server_display_name().map(|s| s.to_string()));
                 let payload = ToolAuthRequestPayload {
                     request_id: request_id.clone(),
                     tool_use_id: tc_id.clone(),
@@ -207,6 +293,7 @@ pub(crate) async fn execute_tool_round(
                     conversation_id: tool_ctx.conv_id.clone(),
                     message_id: asst_msg_id.to_string(),
                     reason: reason.clone(),
+                    server_name,
                 };
                 let emit_result = serde_json::to_value(&payload)
                     .map_err(|e| AppError::Internal(format!("payload 序列化失败: {e}")))
@@ -245,6 +332,19 @@ pub(crate) async fn execute_tool_round(
                                 }
                                 AuthScope::ThisTool => {
                                     session.mark_tool_authorized(&tool_name).await;
+                                }
+                                // server 档（③ 2026-09-11）：整 server 本会话免问
+                                // （UE 类大工具集的批量信任）。按工具所属 server
+                                // 入账；非外部工具（无 server id）退化为工具档。
+                                AuthScope::ThisServer => {
+                                    match registry
+                                        .get(&tool_name)
+                                        .await
+                                        .and_then(|t| t.server_config_id().map(|s| s.to_string()))
+                                    {
+                                        Some(sid) => session.mark_server_authorized(&sid).await,
+                                        None => session.mark_tool_authorized(&tool_name).await,
+                                    }
                                 }
                                 AuthScope::ThisDir => match dir_grant_target(&path_key, &file_path)
                                 {
@@ -286,7 +386,8 @@ pub(crate) async fn execute_tool_round(
                                     }
                                 }
                             }
-                            invoke_tool(registry, tc_name, tc_args, tool_ctx).await
+                            invoke_tool(server_manager.as_ref(), registry, tc_name, tc_args, tool_ctx)
+                                .await
                         }
                         Some(_) => {
                             // 用户拒绝：写工具结果为拒绝错误

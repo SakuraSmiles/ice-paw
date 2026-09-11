@@ -108,6 +108,20 @@ pub trait McpClient: Send + Sync {
         None
     }
 
+    /// 所属外部 server 的配置 id（`ExternalToolProxy` 返回 Some；内置工具 None）。
+    ///
+    /// 两个消费方：断线懒重启（按 server 定位重启，2026-09-11 ②）与会话级
+    /// server 信任（#11 第四档，2026-09-11 ③）。内置工具返回 None 即不沾光。
+    fn server_config_id(&self) -> Option<&str> {
+        None
+    }
+
+    /// 所属外部 server 的展示名（审批卡「此 Server（本会话）」档标注 /
+    /// 断线错误文案用）。内置工具 None。
+    fn server_display_name(&self) -> Option<&str> {
+        None
+    }
+
     /// 执行工具
     ///
     /// - `args`：参数 JSON 字符串（由 LLM 产出）
