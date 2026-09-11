@@ -19,6 +19,7 @@ import {
   countByFilterKey,
   isChatOnly,
   loadHiddenKinds,
+  logicalTurnKey,
   saveHiddenKinds,
   specialOfEvent,
   DEFAULT_HIDDEN,
@@ -137,15 +138,15 @@ const rows = computed(() => {
 });
 
 /** 会话级汇总（工具栏 chip）：轮数含窗口前偏移（全局值）；事件/工具为已载窗口内计数。
- *  口径 = DISTINCT turn_id（⑮：频道链上同 turn_id 的多跳成员回合算一轮；轮外段
- *  chain:/cross:/election: 与 channel_coordinator NULL 不计）——与 buildRows 轮号
- *  及后端 count_turns_before 一致 */
+ *  口径 = DISTINCT 逻辑轮键（⑯：chain:/election: 归父进轮内——整条接力链算一轮；
+ *  轮外仅 cross: 与 channel_coordinator NULL 不计）——与 buildRows 轮号及后端
+ *  count_turns_before 一致 */
 const stats = computed(() => {
   let turns = 0;
   let tools = 0;
   const seen = new Set<string>();
   for (const ev of events.value) {
-    const tk = ev.turn_id ?? "__orphan__";
+    const tk = logicalTurnKey(ev.turn_id) ?? "__orphan__";
     if (!seen.has(tk) && !specialOfEvent(ev)) {
       turns += 1;
       seen.add(tk);
@@ -157,9 +158,11 @@ const stats = computed(() => {
 /** 搜索态下是否至少命中一行（全未命中时表格上方浮提示；ephemeral 行 match 恒 true 不算未命中） */
 const anyMatch = computed(() => rows.value.some((r) => r.type === "event" && r.match));
 
+/** 折叠全集键（collapseAll）：与 buildRows 的归组键同源归父——chain:/election:
+ *  并进父轮键，否则「全部收起」生成惰性键（chain:m1）永不匹配任何头 */
 const turnKeys = computed(() => {
   const keys = new Set<string>();
-  for (const ev of events.value) keys.add(ev.turn_id ?? "__orphan__");
+  for (const ev of events.value) keys.add(logicalTurnKey(ev.turn_id) ?? "__orphan__");
   return keys;
 });
 

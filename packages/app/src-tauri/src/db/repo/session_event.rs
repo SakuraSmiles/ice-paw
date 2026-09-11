@@ -441,13 +441,14 @@ pub async fn count_frozen_backfill_sessions(pool: &SqlitePool) -> AppResult<usiz
 ///
 /// 按 `COUNT(DISTINCT turn_id)` 计（`turn_id IS NULL` 的孤儿事件经 COALESCE 算作
 /// 一组，与前端 `__orphan__` 桶对应）。**轮外段排除**（与前端 specialOfEvent 同源）：
-/// 频道接力（`chain:{链头id}`）、跨会话来件（`cross:{message_id}`）、频道选举
-/// （`election:{发起id}`）不是对话轮且与成员/消费回合在时间线上交错（同 turn_id
-/// 非连续多段）；统筹位变更（`channel_coordinator`，turn_id=NULL 的轮外事实）同样
-/// 不计——不排除会被 COALESCE 归进孤儿组占一号。前端 buildRows 对轮外段不占
-/// 轮号，此处 DISTINCT 同步排除，两端口径一致。已知边缘误差：前端按「连续同
-/// turn_key 段」切桶，孤儿事件若被真实轮分隔成多段，前端算多桶而 DISTINCT 只算
-/// 一组——纪元前事件实际连续排列，此场景极罕见，偏差 ≤ 孤儿段数，可接受。
+/// 频道接力（`chain:{链头id}`）与频道选举（`election:{发起id}`）前端已⑯归父进轮内
+/// （logicalTurnKey 剥前缀——接力/选举是轮内日志，整条链算一轮）——SQL 排除这两
+/// 前缀后父 id（链头用户消息 id）自身必在计数中，DISTINCT 结果与「归父后整链一
+/// 轮」天然对齐；跨会话来件（`cross:{message_id}`）与统筹位变更（`channel_coordinator`，
+/// turn_id=NULL 的轮外事实）保持轮外独立段不计——coordinator 不排除会被 COALESCE
+/// 归进孤儿组占一号。两端口径一致。已知边缘误差：前端按「连续同逻辑轮键段」切
+/// 桶，孤儿事件若被真实轮分隔成多段，前端算多桶而 DISTINCT 只算一组——纪元前
+/// 事件实际连续排列，此场景极罕见，偏差 ≤ 孤儿段数，可接受。
 pub async fn count_turns_before(
     pool: &SqlitePool,
     session_id: &str,

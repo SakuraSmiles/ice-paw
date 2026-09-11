@@ -7,6 +7,7 @@ import {
   countByFilterKey,
   isChatOnly,
   loadHiddenKinds,
+  logicalTurnKey,
   saveHiddenKinds,
   specialTurnOf,
   specialOfEvent,
@@ -255,53 +256,64 @@ describe("buildRows 行模型", () => {
     expect(evRows(events).headers().map((h) => h.turnIndex)).toEqual([0, 1]);
   });
 
-  it("specialTurnOf/specialOfEvent：chain:/cross:/election: 判轮外段，coordinator 看 kind", () => {
-    expect(specialTurnOf("chain:m1")).toBe("channel");
+  it("logicalTurnKey/specialTurnOf/specialOfEvent：链归父 + 轮外段收窄（cross/coordinator）", () => {
+    // ⑯ 归父：chain:/election: 剥前缀并进父轮（接力/选举是轮内日志），其余键原样
+    expect(logicalTurnKey("chain:m1")).toBe("m1");
+    expect(logicalTurnKey("election:m1")).toBe("m1");
+    expect(logicalTurnKey("cross:x1")).toBe("cross:x1"); // 轮外键不归父
+    expect(logicalTurnKey("s1::chain:m1")).toBe("s1::m1"); // 项目时间线 scopeTurnKeys 形态
+    expect(logicalTurnKey("t1")).toBe("t1");
+    expect(logicalTurnKey("s1::t1")).toBe("s1::t1");
+    expect(logicalTurnKey(null)).toBeNull();
+    // 轮外段收窄：chain:/election: 归父后不再是轮外段，仅 cross: 保持
+    expect(specialTurnOf("chain:m1")).toBeNull();
+    expect(specialTurnOf("election:m1")).toBeNull();
     expect(specialTurnOf("cross:x1")).toBe("cross");
-    expect(specialTurnOf("election:m1")).toBe("election");
-    expect(specialTurnOf("s1::chain:m1")).toBe("channel"); // 项目时间线 scopeTurnKeys 形态
     expect(specialTurnOf("s1::cross:x1")).toBe("cross");
-    expect(specialTurnOf("s1::election:m1")).toBe("election");
     expect(specialTurnOf("t1")).toBeNull();
-    expect(specialTurnOf("s1::t1")).toBeNull();
     expect(specialTurnOf(null)).toBeNull();
     // specialOfEvent 超集：channel_coordinator 落 turn_id=NULL——单看 turn_key 判不出
     expect(specialOfEvent({ kind: "channel_coordinator", turn_id: null })).toBe("coordinator");
-    expect(specialOfEvent({ kind: "channel_mention", turn_id: "chain:m1" })).toBe("channel");
+    expect(specialOfEvent({ kind: "channel_mention", turn_id: "chain:m1" })).toBeNull(); // 归父进轮内
     expect(specialOfEvent({ kind: "assistant_message", turn_id: null })).toBeNull(); // 真孤儿事件不误判
   });
 
-  it("特殊段交错切桶：不占轮号、头 key 唯一、头字段取段首事件、同键多段齐折叠", () => {
-    // 频道时间线交错形态：m1 回合 → chain 派发段 → m2 全回合 → chain 成员报告尾 @ 段
+  it("晚到接力段归父成同轮二段：复用首段号、头字段取段首事件、同键齐折叠", () => {
+    // user_preempted 拦截事件在新链头之后落库——归父到已见过的 m1 成二段
+    //（「真→m2→同真」重入在归父后仅此形态：coordinator 轮外段插进链中同族）
     const events = [
       ev("user_message", { content: "q1", blocks: [] }, { turnId: "m1", messageId: "m1" }),
       ev("channel_mention", { from_agent_id: null, to_agent_id: "ag2", hop_index: 1, chain_remaining: 2, blocked_reason: null }, { turnId: "chain:m1" }),
       ev("user_message", { content: "q2", blocks: [] }, { turnId: "m2", messageId: "m2" }),
       ev("assistant_message", { content: "a2", blocks: [], round: 0, continuation: false }, { turnId: "m2", messageId: "m2" }),
       ev("turn_ended", ended(), { turnId: "m2" }),
-      ev("channel_mention", { from_agent_id: "ag3", to_agent_id: "ag2", hop_index: 2, chain_remaining: 1, blocked_reason: null }, { turnId: "chain:m1" }),
+      ev("channel_mention", { from_agent_id: "ag3", to_agent_id: "ag2", hop_index: 2, chain_remaining: 1, blocked_reason: "user_preempted" }, { turnId: "chain:m1" }),
     ];
     const { rows, headers } = evRows(events);
-    expect(headers()).toHaveLength(4); // m1 / chain 段1 / m2 / chain 段2
-    expect(headers().map((h) => h.special)).toEqual([null, "channel", null, "channel"]);
-    // 轮号：chain 段不占号 → m2 是第 2 轮（原实现被顶到第 3 轮）
-    expect(headers().map((h) => h.turnIndex)).toEqual([0, 0, 1, 1]);
-    // 行 key 全局唯一（原 th-${tk} 在交错段重复 → v-for 警告/行复用错位）
+    expect(headers()).toHaveLength(3); // m1（链头段含首跳 chain 行）/ m2 / m1 二段（晚到链段）
+    expect(headers().map((h) => h.turnKey)).toEqual(["m1", "m2", "m1"]);
+    expect(headers().map((h) => h.turnIndex)).toEqual([0, 1, 0]); // 二段复用首段号不虚增
+    expect(headers().map((h) => h.special)).toEqual([null, null, null]); // chain 已非轮外段
+    // 行 key 全局唯一（th-${tk} 多段重复 → v-for 警告/行复用错位）
     expect(new Set(rows.map((r) => r.key)).size).toBe(rows.length);
-    // 交错段头字段取段首事件自身（段 2 首 event = seq 6），非全局聚合首
-    expect(headers()[3].createdAt).toBe(events[5].created_at);
-    expect(headers()[3].turnMs).toBeNull(); // 特殊段无墙钟跨度（turnStats 跨着别人的回合）
-    // 折叠 chain:m1：同 turnKey 两段齐收（既有折叠语义保持）
-    const collapsed = evRows(events, { collapsedTurns: new Set(["chain:m1"]) }).rows;
-    expect(collapsed.filter((r) => r.type === "turn-header" && r.turnKey === "chain:m1")).toHaveLength(2);
-    expect(collapsed.filter((r) => r.type === "turn-header" && r.turnKey === "chain:m1" && r.collapsed)).toHaveLength(2);
-    expect(collapsed.filter((r) => r.type === "event" && r.turnKey === "chain:m1")).toHaveLength(0);
+    // 二段头字段取段首事件自身（seq 6），无墙钟跨度；首段 turnMs 覆盖全逻辑轮
+    //（含跨 m2 的 gap——晚到链段把 m1 的墙钟跨度拉到最后一事件，已接受边缘：
+    //  一轮一个总耗时只在首段头，统计口径诚实优先于精确分段）
+    expect(headers()[2].seq).toBe(events[5].seq);
+    expect(headers()[2].createdAt).toBe(events[5].created_at);
+    expect(headers()[2].turnMs).toBeNull();
+    expect(headers()[0].turnMs).toBe(5000); // ev1(:01) → ev6(:06)
+    // 折叠 m1：两段头齐收、m1 轮内事件行（含两条 chain CROSS 行）全收
+    const collapsed = evRows(events, { collapsedTurns: new Set(["m1"]) }).rows;
+    expect(collapsed.filter((r) => r.type === "turn-header" && r.turnKey === "m1")).toHaveLength(2);
+    expect(collapsed.filter((r) => r.type === "turn-header" && r.turnKey === "m1" && r.collapsed)).toHaveLength(2);
+    expect(collapsed.filter((r) => r.type === "event" && r.turnKey === "m1")).toHaveLength(0);
   });
 
-  it("同轮二段不膨胀：频道链上同 turn_id 被切段后复用首段号（DISTINCT turn_id 口径）", () => {
-    // 生产证据形态（频道 19660d0f）：链上成员回合共用链头消息 id 作 turn_id，回合间
-    // 穿插 chain: 派发段 → 同一 turn_id 被切成多段。段切换 ≠ 新轮——轮号按「新
-    // turn_id 首见」递增，与后端 count_turns_before 的 DISTINCT 口径对齐。
+  it("频道链归父单头：整条接力链一个轮组（⑯ logicalTurnKey 剥前缀）", () => {
+    // 生产证据形态（频道 19660d0f）：链上成员回合共用链头消息 id 作 turn_id，
+    // 回合间穿插 chain: 派发段。归父后 chain:/election: 剥前缀并进父轮——整链
+    // 连续段一个头、统计/耗时全链聚合、接力事件成轮内 CROSS 行、折叠一把收。
     const seg = (turn: string, mid: string) => [
       ev("turn_context", ctx(), { turnId: turn }),
       ev("assistant_message", { content: `答 ${mid}`, blocks: [], round: 0, continuation: false }, { turnId: turn, messageId: mid }),
@@ -311,31 +323,43 @@ describe("buildRows 行模型", () => {
       ev("user_message", { content: "q1", blocks: [] }, { turnId: "m1", messageId: "m1" }),
       ...seg("m1", "a1"),
       ev("channel_mention", { from_agent_id: "ag2", to_agent_id: "ag3", hop_index: 2, chain_remaining: 1, blocked_reason: null }, { turnId: "chain:m1" }),
-      ...seg("m1", "a2"), // 同 turn_id 二段（接力成员的回合）
+      ...seg("m1", "a2"), // 接力成员的回合（链上事件 tk 同为 m1，不再切段）
       ev("channel_mention", { from_agent_id: "ag3", to_agent_id: "ag2", hop_index: 3, chain_remaining: 0, blocked_reason: null }, { turnId: "chain:m1" }),
-      ...seg("m1", "a3"), // 同 turn_id 三段
+      ...seg("m1", "a3"),
       ev("user_message", { content: "q2", blocks: [] }, { turnId: "m2", messageId: "m2" }),
       ...seg("m2", "b1"),
     ];
-    const hs = evRows(events).headers();
-    // 头：m1 段1 / chain 段1 / m1 二段 / chain 段2（同键多段各自成头，key 带 seq 后缀唯一）
-    // / m1 三段 / m2
-    expect(hs).toHaveLength(6);
-    expect(hs.map((h) => h.special)).toEqual([null, "channel", null, "channel", null, null]);
-    // 原实现「段切换即新轮」把 m1 数成 3 轮（生产实案 16 真轮膨胀成 47 头号）；
-    // 新口径 m1 三段恒第 1 轮、m2 第 2 轮
-    expect(hs.map((h) => h.turnIndex)).toEqual([0, 0, 0, 0, 0, 1]);
-    // 同轮二段头字段取段首事件自身（events[5] = 二段 turn_context）、无墙钟跨度
-    expect(hs[2].seq).toBe(events[5].seq);
-    expect(hs[2].createdAt).toBe(events[5].created_at);
-    expect(hs[2].turnMs).toBeNull();
-    // 首段头仍是全轮聚合口径（统计/终止照常）
-    expect(hs[0].ended?.termination).toBe("stop");
-    expect(hs[0].roundCount).toBe(3);
+    const { rows, headers, events: evs } = evRows(events);
+    // ⑮ 前是 6 头（m1/chain/m1/chain/m1/m2）——归父后整链一头，全表只剩两轮
+    expect(headers()).toHaveLength(2);
+    expect(headers().map((h) => h.turnKey)).toEqual(["m1", "m2"]);
+    expect(headers().map((h) => h.turnIndex)).toEqual([0, 1]);
+    // 首头全链聚合：三条成员回复（roundCount）、last-wins 终止、头时间/seq 取链头
+    // 首事件、墙钟跨度覆盖全链（seqs 1..12 秒级差 = 11000ms）
+    const h0 = headers()[0];
+    expect(h0.roundCount).toBe(3);
+    expect(h0.ended?.termination).toBe("stop");
+    expect(h0.seq).toBe(events[0].seq);
+    expect(h0.createdAt).toBe(events[0].created_at);
+    expect(h0.turnMs).toBe(11000);
+    // 接力事件成轮内 CROSS 行（不再单独成段）
+    const crossRows = evs().filter((r) => r.kind === "cross");
+    expect(crossRows).toHaveLength(2);
+    for (const c of crossRows) {
+      expect(c.turnKey).toBe("m1");
+      expect(c.summary).toContain("接力");
+    }
+    expect(evs().every((r) => r.turnKey === "m1" || r.turnKey === "m2")).toBe(true);
+    // 行 key 唯一 + 折叠 m1 一把收（整链一个头，轮内事件行全收）
+    expect(new Set(rows.map((r) => r.key)).size).toBe(rows.length);
+    const collapsed = evRows(events, { collapsedTurns: new Set(["m1"]) }).rows;
+    expect(collapsed.filter((r) => r.type === "turn-header" && r.turnKey === "m1")).toHaveLength(1);
+    expect(collapsed.filter((r) => r.type === "event" && r.turnKey === "m1")).toHaveLength(0);
   });
 
-  it("election:/channel_coordinator 轮外段：不占轮号、coordinator 免「纪元前事件」错标", () => {
-    // ⑮ 补⑭ 漏网：election:{发起id} 段与 turn_id=NULL 的统筹位变更事件同为轮外事实
+  it("选举归父进发起轮；coordinator 保持轮外段不占号", () => {
+    // ⑯：election:{发起id} 归父进发起轮（选举是轮内日志）；channel_coordinator 落
+    // turn_id=NULL 的会话级事实保持轮外独立段（量极少，不归父）
     const events = [
       ev("user_message", { content: "q1", blocks: [] }, { turnId: "m1", messageId: "m1" }),
       ev("channel_election", { phase: "started" }, { turnId: "election:m1" }),
@@ -344,13 +368,15 @@ describe("buildRows 行模型", () => {
       ev("user_message", { content: "q2", blocks: [] }, { turnId: "m2", messageId: "m2" }),
     ];
     const hs = evRows(events).headers();
-    expect(hs.map((h) => h.special)).toEqual([null, "election", "coordinator", null]);
-    // 轮外不占号 → m2 仍是第 2 轮（原实现被顶到第 4 轮；coordinator 落孤儿桶占号）
-    expect(hs.map((h) => h.turnIndex)).toEqual([0, 0, 0, 1]);
-    // coordinator 头按 special 特殊化，不再错标「纪元前事件」（turnLabel 词表分派）
-    expect(hs[2].turnId).toBeNull();
-    expect(hs[2].special).toBe("coordinator");
-    expect(hs[2].turnMs).toBeNull();
+    // 选举事件并进 m1 轮内（不再单独成段）→ 仅 coordinator 一个轮外段
+    expect(hs).toHaveLength(3);
+    expect(hs.map((h) => h.special)).toEqual([null, "coordinator", null]);
+    expect(hs.map((h) => h.turnKey)).toEqual(["m1", "__orphan__", "m2"]);
+    // 轮外不占号 → m2 仍是第 2 轮；coordinator 免「纪元前事件」错标（special 分派）
+    expect(hs.map((h) => h.turnIndex)).toEqual([0, 0, 1]);
+    expect(hs[1].turnId).toBeNull();
+    expect(hs[1].special).toBe("coordinator");
+    expect(hs[1].turnMs).toBeNull();
   });
 
   it("M2：搜索文本跨 buildRows 调用命中一致（WeakMap 缓存不改变 match 语义）", () => {
