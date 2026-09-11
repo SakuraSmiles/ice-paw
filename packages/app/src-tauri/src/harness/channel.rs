@@ -217,10 +217,11 @@ pub(crate) fn parse_agent_mentions(
     out
 }
 
-/// 频道消费回合的事实简报规格（触发语境两形态）。
+/// 频道消费回合的事实简报规格（触发语境三形态）。
 pub(crate) enum BriefSpec {
-    /// 用户链头消费（count = 合并进本链头的积压条数）
-    UserBacklog { count: usize },
+    /// 用户链头消费（broadcast = 无 @ 广播 → 统筹者接令 / false = 用户 @ 点名；
+    /// count = 合并进本链头的积压条数）
+    UserInitiated { broadcast: bool, count: usize },
     /// 成员接力跳
     Relay { from_name: String },
 }
@@ -229,20 +230,35 @@ pub(crate) enum BriefSpec {
 ///
 /// 用户原话已在历史尾部（物化先行 + HistoryStage 全量读），简报只说明触发语境
 /// 防双计——这是频道回合「当前轮 user 消息」的全部内容。
-pub(crate) fn compose_channel_brief(brief: &BriefSpec) -> Vec<ContentBlock> {
+///
+/// 名册与统筹职责（2026-09-11 ⑥）：频道回合的 prompt 此前既无成员名册也无
+/// 角色语境——统筹者不知道自己是统筹者、不知道可以 @ 谁（只能从选举历史里
+/// 猜名字），被推着「问其他人」时转用 delegate（子会话对频道不可见，生产
+/// 实案：四成员在隐形子会话里答完、频道只见统筹者汇总）。三种语境都注入
+/// 成员名册（@ 接力的可用性地基——成员名不在 prompt 里，模型就无法可靠 @
+/// 任何人）；广播臂额外说明统筹职责（适合谁答就 @ 谁分派，不必事事亲自答）。
+pub(crate) fn compose_channel_brief(brief: &BriefSpec, roster: &str) -> Vec<ContentBlock> {
+    let backlog_note = |count: usize| {
+        if count > 1 {
+            format!(
+                "用户发送了 {count} 条新消息（见上方最近的用户消息，发出于上一回合执行期间），按时间先后理解为递进指示，一并处理。"
+            )
+        } else {
+            "用户在频道发送了新消息（见上方最近的用户消息）。".to_string()
+        }
+    };
     let text = match brief {
-        BriefSpec::UserBacklog { count } => {
-            if *count > 1 {
-                format!(
-                    "[频道事实] 用户发送了 {count} 条新消息（见上方最近的用户消息，发出于上一回合执行期间），按时间先后理解为递进指示，请一并处理。"
-                )
-            } else {
-                "[频道事实] 用户在频道发送了新消息（见上方最近的用户消息），请处理。".to_string()
-            }
-        }
-        BriefSpec::Relay { from_name } => {
-            format!("[频道事实] 成员 {from_name} 在最近的回复中 @你并期待你接手，请阅读其消息并处理。")
-        }
+        BriefSpec::UserInitiated { broadcast: true, count } => format!(
+            "[频道事实] {}这条消息没有 @ 点名——按频道规则由你（统筹者）接令：先判断是否更适合某位成员回答，适合就 @其名字分派（可多 @，被 @ 者会在频道接力发言、对全员可见）；确实通用或属于你职责的再亲自回答。\n频道成员：{roster}。",
+            backlog_note(*count),
+        ),
+        BriefSpec::UserInitiated { broadcast: false, count } => format!(
+            "[频道事实] {}这条消息 @了你——点名由你处理。\n频道成员：{roster}。需要其他成员接手时，你可以在回复中 @他们。",
+            backlog_note(*count),
+        ),
+        BriefSpec::Relay { from_name } => format!(
+            "[频道事实] 成员 {from_name} 在最近的回复中 @你并期待你接手，请阅读其消息并处理。\n频道成员：{roster}。需要其他成员接手时，你可以在回复中 @他们。"
+        ),
     };
     vec![ContentBlock::text(text)]
 }
@@ -1314,8 +1330,23 @@ async fn run_next_hop(
         emit_mention(pool, &conv.id, &head, &hop, hop_index, chain_remaining).await;
 
         // --- 回合起跑（pre_materialized：用户侧已物化，llm_blocks 只装事实简报）---
+        // 名册（统筹者标（统筹））：@ 接力的可用性地基——模型不知道成员名就
+        // 无法可靠 @ 任何人（⑥ 生产实案：统筹者被推着「问其他人」时转用
+        // delegate——子会话对频道不可见，群聊感消失）
+        let roster = members
+            .iter()
+            .map(|m| {
+                if m.role == "coordinator" {
+                    format!("{}（统筹）", m.name)
+                } else {
+                    m.name.clone()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("、");
         let brief_spec = match &hop.from {
-            None => BriefSpec::UserBacklog {
+            None => BriefSpec::UserInitiated {
+                broadcast: hop.broadcast,
                 count: backlog_count.max(1),
             },
             Some(_) => BriefSpec::Relay {
@@ -1327,7 +1358,7 @@ async fn run_next_hop(
                     .unwrap_or_else(|| "成员".to_string()),
             },
         };
-        let brief = compose_channel_brief(&brief_spec);
+        let brief = compose_channel_brief(&brief_spec, &roster);
         let brief_text = ContentBlock::join_text(&brief);
         let fallback =
             crate::commands::model_profile_cmd::production_fallback_plan(app, pool, &creds.agent);
@@ -1958,14 +1989,42 @@ mod tests {
     // ---------- compose_channel_brief ----------
 
     #[test]
-    fn brief_single_and_multi_backlog_wording() {
-        let b1 = compose_channel_brief(&BriefSpec::UserBacklog { count: 1 });
-        let s1 = ContentBlock::join_text(&b1);
+    fn brief_broadcast_coordinator_duty_and_roster() {
+        // 广播接令：统筹职责（@ 分派优先）+ 名册 + 单条措辞
+        let s1 = ContentBlock::join_text(&compose_channel_brief(
+            &BriefSpec::UserInitiated { broadcast: true, count: 1 },
+            "写手（统筹）、审校",
+        ));
+        assert!(s1.contains("统筹者") && s1.contains("@其名字"));
+        assert!(s1.contains("频道成员：写手（统筹）、审校。"));
         assert!(s1.contains("新消息") && !s1.contains("递进指示"));
 
-        let b3 = compose_channel_brief(&BriefSpec::UserBacklog { count: 3 });
-        let s3 = ContentBlock::join_text(&b3);
+        // 多条积压：递进指示措辞仍在
+        let s3 = ContentBlock::join_text(&compose_channel_brief(
+            &BriefSpec::UserInitiated { broadcast: true, count: 3 },
+            "写手（统筹）",
+        ));
         assert!(s3.contains("3 条新消息") && s3.contains("递进指示"));
+    }
+
+    #[test]
+    fn brief_user_mention_and_relay_carry_roster() {
+        // 用户 @ 点名：点名语境 + 名册 + 可再 @ 他人
+        let sm = ContentBlock::join_text(&compose_channel_brief(
+            &BriefSpec::UserInitiated { broadcast: false, count: 1 },
+            "写手（统筹）、审校",
+        ));
+        assert!(sm.contains("@了你") && sm.contains("点名由你处理"));
+        assert!(sm.contains("频道成员：写手（统筹）、审校。"));
+        assert!(!sm.contains("分派")); // 点名语境不带统筹分派职责
+
+        // 成员接力：from_name 语境 + 名册
+        let sr = ContentBlock::join_text(&compose_channel_brief(
+            &BriefSpec::Relay { from_name: "写手".into() },
+            "写手（统筹）、审校",
+        ));
+        assert!(sr.contains("成员 写手") && sr.contains("接手"));
+        assert!(sr.contains("频道成员："));
     }
 
     // ---------- 护栏内存态（构造驱动）----------
