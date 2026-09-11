@@ -16,6 +16,21 @@ import type { Conversation } from "../../../types";
 
 const mockInvoke = vi.mocked(invoke);
 const push = vi.fn();
+// startNew 的项目引导/成员过滤有专测（useNewConversation），这里只锁
+// 「flyout 新建入口 = 关 flyout + 走 startNew」的接线
+const startNew = vi.fn();
+vi.mock("../../../composables/useNewConversation", async () => {
+  const { ref } = await import("vue");
+  return {
+    useNewConversation: () => ({
+      showPicker: ref(false),
+      pickerAgentIds: ref([]),
+      ctaKind: ref(null),
+      startNew,
+      onPickAgent: vi.fn(),
+    }),
+  };
+});
 
 vi.mock("vue-router", () => ({
   useRouter: () => ({
@@ -104,15 +119,35 @@ describe("Sidebar 收起/展开（rail 模式）", () => {
     await w.find('.btn-icon[title="会话列表"]').trigger("click");
     const menu = w.find(".flyout-menu");
     expect(menu.classes()).toContain("open");
-    expect(w.findAll(".flyout-list .conv-item").length).toBe(2);
+    // flyout 顶部新建对话入口（2026-09-12 并入）+ 2 条会话
+    const items = w.findAll(".flyout-list .conv-item");
+    expect(items.length).toBe(3);
+    expect(items[0].classes()).toContain("conv-item-new");
 
     // 搜索框整体移除（2026-09-10 用户拍板：暂无使用场景）——回归锁防复辟
     expect(w.find(".flyout-search").exists()).toBe(false);
 
-    await w.findAll(".flyout-list .conv-item")[1].trigger("click");
+    await items[2].trigger("click");
     expect(menu.classes()).not.toContain("open");
     // 点项 = 关 flyout + 走 selectConv 选中
     expect(useChatStore().activeConvId).toBe("c2");
+  });
+
+  it("收起态新建对话：rail 无独立钮，flyout 顶部二级入口 = 关 flyout + startNew", async () => {
+    localStorage.setItem(COLLAPSED_KEY, "1");
+    const w = await mountSidebar();
+    // 独立钮已摘除（2026-09-12 用户拍板：不占 rail 位，并入会话 flyout）
+    expect(w.find('.btn-icon[title="新建对话"]').exists()).toBe(false);
+
+    await w.find('.btn-icon[title="会话列表"]').trigger("click");
+    const menu = w.find(".flyout-menu");
+    expect(menu.classes()).toContain("open");
+
+    await w.find(".flyout-list .conv-item-new").trigger("click");
+    expect(menu.classes()).not.toContain("open"); // 先关 flyout 再动作
+    expect(startNew).toHaveBeenCalledTimes(1);
+    // 空列表时新建入口恒在（flyout 空态也有出路）
+    expect(w.find(".flyout-list .conv-item-new").exists()).toBe(true);
   });
 
   it("展开钮：localStorage 落 0、宽度还原 sidebarWidth（默认 320）", async () => {

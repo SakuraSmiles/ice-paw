@@ -14,7 +14,7 @@ import { bridge } from "../../api/bridge";
 import PanelResizeHandle from "../common/PanelResizeHandle.vue";
 import EntityAvatar from "../common/EntityAvatar.vue";
 import ProjectSwitcher from "./ProjectSwitcher.vue";
-import { PanelLeftClose, PanelLeftOpen, MessageSquarePlus, MessagesSquare, Settings, Hash, Star } from "@lucide/vue";
+import { PanelLeftClose, PanelLeftOpen, MessagesSquare, Settings, Hash, Star } from "@lucide/vue";
 import { useEscapeStack } from "../../composables/useEscapeStack";
 
 const router = useRouter();
@@ -158,6 +158,12 @@ function toggleConvFlyout() {
 function selectConvFromFlyout(id: string) {
   closeConvFlyout();
   selectConv(id); // 复用：非首页先 router.push("/") 再选中
+}
+// flyout 内新建对话（2026-09-12 收起态并入）：关 flyout 再走 AgentPicker，
+// 与选中会话同款「先关后动作」——弹窗不压在 flyout 之上
+function newChatFromFlyout() {
+  closeConvFlyout();
+  newChat();
 }
 
 // Esc：全局关闭栈（Sidebar 常驻挂载 → 条目恒在栈底，active 谓词让路——flyout
@@ -544,7 +550,9 @@ function timeAgoLabel(dateStr: string): string {
         </button>
       </div>
 
-      <!-- 行动区（顺序对齐展开态：项目空间 → 项目频道 → 新建 / 会话列表入口） -->
+      <!-- 行动区（顺序对齐展开态：项目空间 → 项目频道 → 会话列表入口。
+           新建对话已并入会话 flyout 顶部——2026-09-12 用户拍板：收起态不占
+           rail 独立位，与展开态「新建对话连着会话列表」语义对齐） -->
       <div class="rail-actions">
         <!-- 项目空间：收起变体（32px 图标钮 + 菜单向右弹；逻辑/emit 原班复用） -->
         <ProjectSwitcher
@@ -568,10 +576,6 @@ function timeAgoLabel(dateStr: string): string {
           @click="openChannel"
         >
           <Hash :size="20" />
-        </button>
-
-        <button class="btn-icon" title="新建对话" @click="newChat">
-          <MessageSquarePlus :size="20" />
         </button>
 
         <div class="rail-flyout">
@@ -600,6 +604,18 @@ function timeAgoLabel(dateStr: string): string {
             :aria-hidden="!convFlyoutOpen || undefined"
           >
             <div class="flyout-list">
+              <!-- 新建对话（收起态二级入口，2026-09-12）：与展开态同款样式，
+                   点击关 flyout 再走 AgentPicker——与选中会话行为一致 -->
+              <button class="conv-item conv-item-new" @click="newChatFromFlyout">
+                <div class="conv-item-title">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="12" y1="5" x2="12" y2="19" />
+                    <line x1="5" y1="12" x2="19" y2="12" />
+                  </svg>
+                  <span class="conv-name">新建对话</span>
+                </div>
+              </button>
+              <div class="flyout-new-divider"></div>
               <div v-if="chat.convLoading && scopedConversations.length === 0" class="conv-skeleton">
                 <div class="conv-skeleton-line" />
                 <div class="conv-skeleton-line" />
@@ -1179,6 +1195,15 @@ function timeAgoLabel(dateStr: string): string {
   visibility: visible;
   pointer-events: auto;
   transform: none;
+}
+
+/* flyout 新建对话下缘分割线（呼应展开态「频道区/新建对话」边界之后的
+   新建对话连着列表——此处新建恒在顶，只留与列表的分界） */
+.flyout-new-divider {
+  height: 1px;
+  background-color: var(--ip-color-border-default);
+  margin: 0 12px 6px;
+  flex-shrink: 0;
 }
 
 /* flyout 列表：限高内滚（骨架/空态/会话项 class 全复用展开态那套） */
