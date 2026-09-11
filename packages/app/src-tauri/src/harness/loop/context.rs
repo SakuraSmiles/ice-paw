@@ -46,6 +46,13 @@ pub(crate) struct LoopConfig {
     /// EventCtx 时 `.with_sender_name` 注入，进 assistant_message payload.sender；
     /// 1v1 回合 None = 隐含会话 agent，零标注）。
     pub sender_agent_name: Option<String>,
+    /// 频道 v1：执行成员 id（C10 双轨 sender **行侧**出生打标——首占位在
+    /// session_runner 落库时、多轮工具回合的后续占位在 loop_engine 落库时经
+    /// `set_sender_agent` 写入 `messages.sender_agent_id`。出生即带身份 → live
+    /// 视图（chat:start 触发的 loadMessages）第一时间显示头像昵称，且 sweep
+    /// 的 `IS NULL` 守卫天然跳过。仅 conv.kind=='channel' 有值；1v1 回合 None
+    /// = 会话 agent 隐含归属，零标注零开销）。
+    pub sender_agent_id: Option<String>,
     /// RAG: 当前项目 ID
     pub project_id: Option<String>,
 

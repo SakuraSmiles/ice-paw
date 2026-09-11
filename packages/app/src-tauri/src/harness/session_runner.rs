@@ -472,6 +472,10 @@ pub(crate) async fn run_agent_turn(
     let effective_model = model_override
         .clone()
         .unwrap_or_else(|| agent.model.clone());
+    // 频道成员回合：执行成员 id（行侧 sender 出生打标——见 LoopConfig 同名字段
+    // 注释；1v1 回合 None 直过零开销）。须在下方 chat:start emit **之前**落库，
+    // 外部回合分支触发的 loadMessages 第一时间带身份。
+    let sender_agent_id = (conv.kind == "channel").then(|| agent.id.clone());
     repo::message::create(
         pool,
         &asst_msg_id,
@@ -485,6 +489,12 @@ pub(crate) async fn run_agent_turn(
         },
     )
     .await?;
+    if let Some(sid) = &sender_agent_id {
+        if let Err(e) = repo::message::set_sender_agent(pool, &asst_msg_id, sid).await {
+            // 打标失败不阻塞回合：sweep 的 IS NULL 兜底仍会在回合结束补上
+            tracing::warn!(target: "ice_paw.session_runner", conv = %conv_id, "频道占位行 sender 出生打标失败: {e}");
+        }
+    }
 
     // --- emit chat:start（cancel_token 已由调用方注册） ---
     // 含附件时把 materialize 后的 content_blocks 带给前端，patch 乐观用户消息。
@@ -708,6 +718,7 @@ pub(crate) async fn run_agent_turn(
         tool_registry,
         agent_id: conv.agent_id.clone(),
         sender_name,
+        sender_agent_id,
         project_id: conv.project_id.clone(),
         hooks,
         fallback,
@@ -817,6 +828,9 @@ pub(crate) struct StreamLoopInput {
     pub agent_id: String,
     /// 频道回合执行成员名字快照（C10 双轨 sender 事件侧的数据源；1v1 None）。
     pub sender_name: Option<String>,
+    /// 频道回合执行成员 id（C10 双轨 sender 行侧——loop_engine 多轮占位出生
+    /// 打标的数据源；1v1 None）。
+    pub sender_agent_id: Option<String>,
     pub project_id: Option<String>,
     pub hooks: HookConfig,
     /// 降级链（B2-S2）：透传进 LoopContext，换档发生在 stream_with_retry 重试现场
@@ -859,6 +873,7 @@ pub(crate) fn spawn_stream_loop(input: StreamLoopInput) {
         tool_registry,
         agent_id,
         sender_name,
+        sender_agent_id,
         project_id,
         hooks,
         fallback,
@@ -919,6 +934,7 @@ pub(crate) fn spawn_stream_loop(input: StreamLoopInput) {
             user_msg_id,
             agent_id,
             sender_agent_name: sender_name,
+            sender_agent_id,
             project_id,
             emitter,
             tool_app,

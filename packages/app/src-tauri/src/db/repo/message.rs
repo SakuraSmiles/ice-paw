@@ -389,6 +389,20 @@ pub async fn sweep_sender_for_channel_turn(
     Ok(affected)
 }
 
+/// 回填频道发言者（`set_incoming_source` 同款二段写；NewMessage 不扩字段防全量
+/// 构造点改动）。出生打标专用：频道成员回合占位 / 选举投票行在**创建时**即落
+/// 真实 sender——live 视图（外部回合 chat:start 触发的 loadMessages）第一时间
+/// 带身份，且 sweep 的 `IS NULL` 守卫天然跳过（不再误归属，生产实案 2026-09-11：
+/// 4 条投票行全被 sweep 盖成统筹者）。
+pub async fn set_sender_agent(pool: &SqlitePool, id: &str, agent_id: &str) -> AppResult<()> {
+    sqlx::query("UPDATE messages SET sender_agent_id = ? WHERE id = ?")
+        .bind(agent_id)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// 写入新消息
 pub async fn create(pool: &SqlitePool, id: &str, new_msg: &NewMessage) -> AppResult<MessageRow> {
     // 基本校验
@@ -818,5 +832,63 @@ mod tests {
             .unwrap();
         let none = last_assistant_message_id(&pool, "conv-fresh").await.unwrap();
         assert_eq!(none, None);
+    }
+
+    /// 出生打标 × sweep 互锁（生产实案 2026-09-11 回归锁）：出生带 sender 的行
+    /// （成员回合占位 / 选举投票行）被 sweep 的 `IS NULL` 守卫跳过——不会在
+    /// 回合结束时被盖成本链执行者；未打标的行照旧由 sweep 兜底。
+    #[tokio::test]
+    async fn birth_stamped_sender_survives_sweep() {
+        let pool = fresh_pool().await;
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
+        seed_message(&pool, "head-u1", "conv-sweep").await; // 链头 user 行（含 agent-1）
+        // 第二个成员（投票者）：sender_agent_id 有 FK → agents(id)，须真实行
+        sqlx::query(
+            "INSERT INTO agents (id, name, provider, model, system_prompt, api_key_ref, temperature, max_tokens, extra_params, sort_order, cache_prompt)
+             VALUES ('voter-x', '投票者', 'zhipu', 'glm-5.3', '', '', 0.7, 1024, '{}', 1, 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let new_msg = |content: &str| NewMessage {
+            conversation_id: "conv-sweep".to_string(),
+            role: "assistant".to_string(),
+            content: content.to_string(),
+            token_count: None,
+            error: None,
+            model: None,
+        };
+        // 投票行：出生即打标真实投票者 voter-x
+        create(&pool, "vote-1", &new_msg("弃权")).await.unwrap();
+        set_sender_agent(&pool, "vote-1", "voter-x").await.unwrap();
+        // 未打标行（旧路径 / 打标失败的兜底面）
+        create(&pool, "a-1", &new_msg("回答正文")).await.unwrap();
+
+        let n = sweep_sender_for_channel_turn(&pool, "conv-sweep", "head-u1", "agent-1")
+            .await
+            .unwrap();
+        assert_eq!(n, 1, "只 sweep 到未打标的一行");
+
+        async fn sender_of(pool: &SqlitePool, id: &str) -> String {
+            get_by_id(pool, id)
+                .await
+                .unwrap()
+                .sender_agent_id
+                .unwrap_or_default()
+        }
+        assert_eq!(
+            sender_of(&pool, "vote-1").await,
+            "voter-x",
+            "出生打标不被 sweep 覆盖"
+        );
+        assert_eq!(
+            sender_of(&pool, "a-1").await,
+            "agent-1",
+            "未打标行由 sweep 兜底"
+        );
     }
 }

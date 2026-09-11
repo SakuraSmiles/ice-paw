@@ -1345,6 +1345,14 @@ async fn stream_loop_inner(
             )
             .await;
         }
+        // 频道成员回合：下一轮占位同样出生打标（须在下方 chat:assistant-start emit
+        // 之前——前端 push 的占位继承列表身份，live 视图多轮也带头像昵称）。
+        // 打标失败不阻塞循环：sweep 的 IS NULL 兜底仍在回合结束补上。
+        if let Some(sid) = &ctx.sender_agent_id {
+            if let Err(e) = repo::message::set_sender_agent(&ctx.pool, &next_asst_id, sid).await {
+                tracing::warn!(target: "ice_paw.chat", conv = %ctx.conv_id, "频道下一轮占位 sender 打标失败: {e}");
+            }
+        }
         // 切 BatchWriter 到新 assistant（内部先 flush 当前 pending 再切 id）
         batch_writer.flush_now().await;
         batch_writer.set_msg_id(next_asst_id.clone()).await;

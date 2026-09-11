@@ -298,6 +298,20 @@ pub(crate) fn tally_votes(
     }
 }
 
+/// NeedsCoordinator 臂的链头登记值：积压**最早**一条（backlog 按时间正序）。
+///
+/// 该臂没有派发任何东西——选举完成后的含头重消费（`list_user_anchors_from`）
+/// 必须覆盖**全部**积压，头锚只能是首条。取 last（= Members 臂的 new_head 语义）
+/// 会把首条消息永久搁浅在 `from(last)` 边界之外（生产实案 2026-09-11：
+/// 积压 2 条、选举后只消费 1 条，昨日首条至今无人应答）。
+fn election_register_head(backlog: &[TurnAnchor]) -> String {
+    backlog
+        .first()
+        .expect("backlog 非空必有头")
+        .message_id
+        .clone()
+}
+
 // =========================================================================
 // 链运行时（内存态；临界区无 await）
 // =========================================================================
@@ -744,11 +758,11 @@ async fn consume_backlog(
                 let mut map = runtimes().lock().unwrap();
                 let rt = map.entry(conv.id.clone()).or_default();
                 // 仅空缺时初始化链头（dispatched=false → 选举完成后
-                // on_coordinator_settled 的重消费走含头查询取回本条消息）；已有
+                // on_coordinator_settled 的重消费走含头查询取回积压）；已有
                 // 头不动——选举中 M2 到达重入时推进头会把 M1 搁浅在 from(M2)
-                // 边界之外。
+                // 边界之外。头锚 = 积压**最早**一条（见 election_register_head）。
                 if rt.head_msg_id.is_none() {
-                    rt.head_msg_id = Some(new_head.clone());
+                    rt.head_msg_id = Some(election_register_head(&backlog));
                     rt.head_dispatched = false;
                 }
                 // 还原本轮 take 掉的 mentions（选举后重消费须按原意图路由，不
@@ -1003,6 +1017,12 @@ async fn cast_vote(
     .await
     .is_ok()
     {
+        // 出生打标投票者（行侧 sender 列）：投票行创建即带真实归属——否则
+        // sweep 的 IS NULL 兜底会在统筹者回合结束后把它们全部盖成统筹者
+        // （生产实案 2026-09-11：4 条投票行 sender 全被误标为同一名成员）。
+        if let Err(e) = repo::message::set_sender_agent(pool, &mid, &m.agent_id).await {
+            tracing::warn!(target: "ice_paw.channel", "投票行 sender 出生打标失败: {e}");
+        }
         let ctx = EventCtx::new(&conv.id, turn, &m.agent_id)
             .with_sender_name(Some(m.name.clone()));
         event_log::log_assistant_message(
@@ -1994,6 +2014,26 @@ mod tests {
         let (_, w, tie) = tally_votes(&[None, None, None], &ids);
         assert_eq!(w, None);
         assert!(!tie);
+    }
+
+    // ---------- 链头登记值（③ 生产实案回归锁） ----------
+
+    /// NeedsCoordinator 臂头锚 = 积压最早一条：该臂未派发任何东西，选举后的
+    /// 含头重消费面必须覆盖全部积压。生产实案 2026-09-11：头锚误取 last
+    /// → 积压 2 条只消费 1 条，首条永久搁浅。
+    #[test]
+    fn election_register_head_is_earliest_backlog() {
+        let anchor = |id: &str| crate::db::repo::message::TurnAnchor {
+            message_id: id.to_string(),
+            preview: String::new(),
+            created_at: String::new(),
+        };
+        assert_eq!(
+            election_register_head(&[anchor("m1"), anchor("m2"), anchor("m3")]),
+            "m1"
+        );
+        // 单条积压：first == last，语义不变
+        assert_eq!(election_register_head(&[anchor("only")]), "only");
     }
 
     #[test]
