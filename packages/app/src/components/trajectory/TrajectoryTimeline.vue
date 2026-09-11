@@ -20,13 +20,15 @@
     2 Tools（琥珀）tool_execution（tool_result_message 是 DB 结果行镜像，不上图）
     3 Hooks（绿） hook_injected —— 外挂逻辑干预对话流的审计面
   turn_ended 不占泳道：画成贯穿竖线的 turn 边界层（dsh turnBoundaries 同构），
-  序号模式底轴在边界处标「第 N 轮」（编号与表格 buildRows 对齐：孤儿桶占号但不标）。
+  序号模式底轴在边界处标「第 N 轮」（编号与表格 buildRows 对齐：孤儿桶占号但不标；
+  特殊段 chain:/cross: 不占号不画边界——行为事实作为 User 道 tick 呈现，无「轮」语义）。
 
   交互：hover 提示 · 点击块跳转表格行（emit pick(seq)）· 滚轮缩放（光标锚定）· 拖拽平移。
   canvas 绘制（DPR 感知），数千事件只画一次矩形批，无 DOM 压力。
 -->
 <script setup lang="ts">
 import { computed, onMounted, onBeforeUnmount, ref, watch } from "vue";
+import { specialTurnOf } from "../../composables/useTrajectory";
 import type { SessionEvent } from "../../types";
 
 const props = defineProps<{
@@ -159,7 +161,9 @@ function fmtRel(ms: number): string {
 
 /**
  * 事件流 → 域内 span + turn 边界。
- * 轮次编号镜像 buildRows：按 turn-key 切换递增、孤儿桶（turn_id=null）占号但不画边界。
+ * 轮次编号镜像 buildRows：按 turn-key 切换递增、孤儿桶（turn_id=null）占号但不画边界；
+ * 特殊段（chain:/cross:，specialTurnOf）不占号也不画边界——它们是穿插在回合间的
+ * 行为事实，作为 User 道的 tick 呈现，无「轮」语义。
  * turn_context / turn_ended / tool_result_message 不生成 span（零耗时元数据 / 边界层 / DB 镜像）。
  */
 function buildSpans() {
@@ -172,7 +176,7 @@ function buildSpans() {
   let curTk: string | null = null;
   // M3：窗口首桶的全局轮号从偏移起算（0 偏移时 -1+1=0，行为与原实现一致）
   let turnIndex = props.turnOffset - 1;
-  /** 本 turn 尚未打边界点（遇到首个可上图事件时落点）；null = 孤儿桶/已打点 */
+  /** 本 turn 尚未打边界点（遇到首个可上图事件时落点）；null = 孤儿桶/特殊段/已打点 */
   let pendingTurn: number | null = null;
   /**
    * 隐式耗时兜底（duration 模式）：上一可上图事件的墙钟（同 turn 内）。
@@ -186,9 +190,11 @@ function buildSpans() {
   for (const ev of props.events) {
     const tk = ev.turn_id ?? "__orphan__";
     if (tk !== curTk) {
-      turnIndex += 1;
+      // 特殊段不占轮号（镜像 buildRows——链/来件事件仍上图，只是无「轮」语义）
+      const special = specialTurnOf(tk);
+      if (!special) turnIndex += 1;
       curTk = tk;
-      pendingTurn = ev.turn_id != null ? turnIndex : null;
+      pendingTurn = ev.turn_id != null && !special ? turnIndex : null;
       prevT = null; // 跨 turn：不给新 turn 的首事件挂上一轮的尾巴
     }
     // turn_context / turn_ended / tool_result_message 不上图：配置快照是零耗时

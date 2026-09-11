@@ -5,7 +5,8 @@
   - 列头 32px（吸顶）：类型 | 内容 | token·耗时
   - turn-header 40px：整行带（浅底、去 rail 去圆角；左缘内缩 8px，比子项贴边——
     分组容器语义；第 N 轮 · 日期·时间 · 终止 | 错误 · 统计 · 耗时 · 用量），
-    点击折叠/展开；折叠态 = 只留头
+    点击折叠/展开；折叠态 = 只留头；特殊段（频道接力/跨会话来件）标签特殊化、
+    不占轮号、无终止徽与回复统计
   - event      36px：比 turn 头再内缩一层（左 16px）；[KIND 徽章][单行摘要
     ellipsis][token/耗时]，点击选中 → 检查器；hover/选中 = 圆角底色填充
     （kind 语义由徽章承担，无侧边色条）
@@ -16,7 +17,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { Brain, RotateCw, TriangleAlert } from "@lucide/vue";
-import type { TrajectoryRow } from "../../composables/useTrajectory";
+import type { TrajectoryRow, TurnHeaderRow } from "../../composables/useTrajectory";
 import { isWarnTermination, termLabel } from "../../utils/termLabels";
 
 const props = defineProps<{
@@ -220,6 +221,13 @@ function sessionOfHeader(turnId: string | null): { title: string; kind: string }
   return props.sessionMeta.get(sid) ?? null;
 }
 
+/** turn 头轮次标签：特殊段（频道接力/跨会话来件）不是对话轮——标签特殊化不占号 */
+function turnLabel(row: TurnHeaderRow): string {
+  if (row.special === "channel") return "频道接力";
+  if (row.special === "cross") return "跨会话来件";
+  return row.turnId ? `第 ${row.turnIndex + 1} 轮` : "纪元前事件";
+}
+
 /** 搜索命中片段切分：把 summary 按 query（大小写不敏感）切成 [普通, 命中, …] 段 */
 function splitHighlight(text: string): { text: string; hit: boolean }[] {
   const q = props.searching ? props.searchQuery.trim().toLowerCase() : "";
@@ -276,19 +284,22 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
             :class="{ 'th-session-delegation': sessionOfHeader(item.row.turnId)!.kind === 'delegation' }"
             :title="sessionOfHeader(item.row.turnId)!.kind === 'delegation' ? '委派任务会话' : '对话会话'"
           >{{ sessionOfHeader(item.row.turnId)!.title }}</span>
-          <span class="th-no">{{ item.row.turnId ? `第 ${item.row.turnIndex + 1} 轮` : "纪元前事件" }}</span>
+          <span class="th-no" :class="{ 'th-no-special': item.row.special }">{{ turnLabel(item.row) }}</span>
           <span v-if="item.row.dateLabel" class="th-date">{{ item.row.dateLabel }}</span>
           <span class="th-time">{{ fmtTime(item.row.createdAt) }}</span>
-          <span
-            v-if="item.row.ended"
-            class="th-term"
-            :class="{ 'th-term-warn': isWarnTermination(item.row.ended.termination) }"
-          >{{ termLabel(item.row.ended.termination) }}</span>
-          <span v-else class="th-term th-term-pending">进行中</span>
+          <!-- 特殊段（频道接力/跨会话来件）无 turn_ended——不渲染假「进行中」 -->
+          <template v-if="!item.row.special">
+            <span
+              v-if="item.row.ended"
+              class="th-term"
+              :class="{ 'th-term-warn': isWarnTermination(item.row.ended.termination) }"
+            >{{ termLabel(item.row.ended.termination) }}</span>
+            <span v-else class="th-term th-term-pending">进行中</span>
+          </template>
           <span class="th-right">
             <span v-if="item.row.errorCount" class="th-err" title="本轮错误事件数"><TriangleAlert :size="12" aria-hidden="true" /> {{ item.row.errorCount }}</span>
             <span v-if="item.row.matchCount" class="th-match">{{ item.row.matchCount }} 命中</span>
-            <span class="th-stats">{{ item.row.roundCount }} 条回复 · {{ item.row.toolCount }} 次工具</span>
+            <span v-if="!item.row.special" class="th-stats">{{ item.row.roundCount }} 条回复 · {{ item.row.toolCount }} 次工具</span>
             <span v-if="item.row.turnMs != null" class="th-usage">{{ fmtDuration(item.row.turnMs) }}</span>
             <span v-if="item.row.ended?.usage" class="th-usage" title="输入 / 输出 token">
               ↑{{ fmtTokens(item.row.ended.usage.prompt_tokens) }} ↓{{ fmtTokens(item.row.ended.usage.completion_tokens) }}
@@ -453,6 +464,8 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
   background: var(--ip-color-primary-tint-bg);
 }
 .th-no { font-weight: var(--ip-font-weight-semibold); color: var(--ip-color-text-primary); white-space: nowrap; }
+/* 特殊段标签（频道接力/跨会话来件）：非对话轮，弱化以别于真实轮号 */
+.th-no-special { color: var(--ip-color-text-secondary); }
 .th-date, .th-time {
   font-family: var(--ip-font-mono, monospace);
   font-size: var(--ip-text-micro-size);

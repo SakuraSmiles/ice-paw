@@ -8,6 +8,7 @@ import {
   isChatOnly,
   loadHiddenKinds,
   saveHiddenKinds,
+  specialTurnOf,
   DEFAULT_HIDDEN,
   FILTER_KEYS,
   type EventRow,
@@ -251,6 +252,43 @@ describe("buildRows 行模型", () => {
     expect(hs.map((h) => h.turnIndex)).toEqual([7, 8]); // 窗口前有 7 轮 → 首桶是第 8 轮
     // 偏移 0 = 窗口从头开始，行为与原实现一致
     expect(evRows(events).headers().map((h) => h.turnIndex)).toEqual([0, 1]);
+  });
+
+  it("specialTurnOf：chain:/cross: 判特殊段，scope 前缀（s1::）先剥再判", () => {
+    expect(specialTurnOf("chain:m1")).toBe("channel");
+    expect(specialTurnOf("cross:x1")).toBe("cross");
+    expect(specialTurnOf("s1::chain:m1")).toBe("channel"); // 项目时间线 scopeTurnKeys 形态
+    expect(specialTurnOf("s1::cross:x1")).toBe("cross");
+    expect(specialTurnOf("t1")).toBeNull();
+    expect(specialTurnOf("s1::t1")).toBeNull();
+    expect(specialTurnOf(null)).toBeNull();
+  });
+
+  it("特殊段交错切桶：不占轮号、头 key 唯一、头字段取段首事件、同键多段齐折叠", () => {
+    // 频道时间线交错形态：m1 回合 → chain 派发段 → m2 全回合 → chain 成员报告尾 @ 段
+    const events = [
+      ev("user_message", { content: "q1", blocks: [] }, { turnId: "m1", messageId: "m1" }),
+      ev("channel_mention", { from_agent_id: null, to_agent_id: "ag2", hop_index: 1, chain_remaining: 2, blocked_reason: null }, { turnId: "chain:m1" }),
+      ev("user_message", { content: "q2", blocks: [] }, { turnId: "m2", messageId: "m2" }),
+      ev("assistant_message", { content: "a2", blocks: [], round: 0, continuation: false }, { turnId: "m2", messageId: "m2" }),
+      ev("turn_ended", ended(), { turnId: "m2" }),
+      ev("channel_mention", { from_agent_id: "ag3", to_agent_id: "ag2", hop_index: 2, chain_remaining: 1, blocked_reason: null }, { turnId: "chain:m1" }),
+    ];
+    const { rows, headers } = evRows(events);
+    expect(headers()).toHaveLength(4); // m1 / chain 段1 / m2 / chain 段2
+    expect(headers().map((h) => h.special)).toEqual([null, "channel", null, "channel"]);
+    // 轮号：chain 段不占号 → m2 是第 2 轮（原实现被顶到第 3 轮）
+    expect(headers().map((h) => h.turnIndex)).toEqual([0, 0, 1, 1]);
+    // 行 key 全局唯一（原 th-${tk} 在交错段重复 → v-for 警告/行复用错位）
+    expect(new Set(rows.map((r) => r.key)).size).toBe(rows.length);
+    // 交错段头字段取段首事件自身（段 2 首 event = seq 6），非全局聚合首
+    expect(headers()[3].createdAt).toBe(events[5].created_at);
+    expect(headers()[3].turnMs).toBeNull(); // 特殊段无墙钟跨度（turnStats 跨着别人的回合）
+    // 折叠 chain:m1：同 turnKey 两段齐收（既有折叠语义保持）
+    const collapsed = evRows(events, { collapsedTurns: new Set(["chain:m1"]) }).rows;
+    expect(collapsed.filter((r) => r.type === "turn-header" && r.turnKey === "chain:m1")).toHaveLength(2);
+    expect(collapsed.filter((r) => r.type === "turn-header" && r.turnKey === "chain:m1" && r.collapsed)).toHaveLength(2);
+    expect(collapsed.filter((r) => r.type === "event" && r.turnKey === "chain:m1")).toHaveLength(0);
   });
 
   it("M2：搜索文本跨 buildRows 调用命中一致（WeakMap 缓存不改变 match 语义）", () => {

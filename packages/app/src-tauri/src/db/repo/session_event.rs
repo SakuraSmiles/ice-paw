@@ -440,9 +440,13 @@ pub async fn count_frozen_backfill_sessions(pool: &SqlitePool) -> AppResult<usiz
 /// 窗口前（`seq < before_seq` 一侧）的全局轮次数——轨迹尾部优先分页的轮号偏移（M3）。
 ///
 /// 按 `COUNT(DISTINCT turn_id)` 计（`turn_id IS NULL` 的孤儿事件经 COALESCE 算作
-/// 一组，与前端 `__orphan__` 桶对应）。已知边缘误差：前端按「连续同 turn_key 段」
-/// 切桶，孤儿事件若被真实轮分隔成多段，前端算多桶而 DISTINCT 只算一组——纪元前
-/// 事件实际连续排列，此场景极罕见，偏差 ≤ 孤儿段数，可接受。
+/// 一组，与前端 `__orphan__` 桶对应）。**特殊段排除**：频道行为事件
+/// （`chain:{链头id}`）与跨会话来件（`cross:{message_id}`）不是对话轮且与成员/
+/// 消费回合在时间线上交错（同 turn_id 非连续多段）——前端 buildRows 对它们不占
+/// 轮号（specialTurnOf），此处 DISTINCT 同步排除，两端口径一致。已知边缘误差：
+/// 前端按「连续同 turn_key 段」切桶，孤儿事件若被真实轮分隔成多段，前端算多桶而
+/// DISTINCT 只算一组——纪元前事件实际连续排列，此场景极罕见，偏差 ≤ 孤儿段数，
+/// 可接受。
 pub async fn count_turns_before(
     pool: &SqlitePool,
     session_id: &str,
@@ -450,7 +454,8 @@ pub async fn count_turns_before(
 ) -> AppResult<i64> {
     let (n,): (i64,) = sqlx::query_as(
         "SELECT COUNT(DISTINCT COALESCE(turn_id, '')) FROM session_events
-          WHERE session_id = ? AND seq < ?",
+          WHERE session_id = ? AND seq < ?
+            AND (turn_id IS NULL OR (turn_id NOT LIKE 'chain:%' AND turn_id NOT LIKE 'cross:%'))",
     )
     .bind(session_id)
     .bind(before_seq)
@@ -642,6 +647,56 @@ mod tests {
         );
         // 其他会话不受影响（无事件不报错）
         assert_eq!(count_turns_before(&pool, "conv-none", 99).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn count_turns_before_excludes_special_chain_and_cross() {
+        let pool = fresh_pool().await;
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
+        seed_agent(&pool).await;
+        seed_conversation(&pool, "conv-ch").await;
+
+        // 频道时间线交错形态：user 回合 m1 → chain 派发段 → m2 全回合 →
+        // chain 成员报告尾 @ 段；chain:{id} 同键多段但不占轮号（前端 specialTurnOf）
+        for (turn, msg) in [
+            (Some("m1"), Some("m1")),
+            (Some("chain:m1"), None),
+            (Some("m2"), Some("m2")),
+            (Some("chain:m1"), None),
+            (Some("cross:x1"), None),
+            (Some("cross:x1"), None),
+        ] {
+            append(
+                &pool,
+                "conv-ch",
+                "channel_mention",
+                "agent",
+                turn,
+                msg,
+                "{}",
+            )
+            .await
+            .unwrap();
+        }
+        // seq 1..6：只有 m1/m2 是对话轮——特殊段（chain:/cross:）不计数
+        assert_eq!(
+            count_turns_before(&pool, "conv-ch", 99).await.unwrap(),
+            2,
+            "chain:/cross: 特殊段全程排除"
+        );
+        assert_eq!(
+            count_turns_before(&pool, "conv-ch", 4).await.unwrap(),
+            2,
+            "seq<4 含 m1/m2 两真轮（中间 chain 段不占号）"
+        );
+        assert_eq!(
+            count_turns_before(&pool, "conv-ch", 3).await.unwrap(),
+            1,
+            "chain 段插在中间不占号"
+        );
     }
 
     #[tokio::test]

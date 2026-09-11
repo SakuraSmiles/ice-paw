@@ -172,6 +172,9 @@ export interface TurnHeaderRow {
   /** null = 事件纪元前的孤儿事件桶 */
   turnId: string | null;
   turnIndex: number;
+  /** 特殊段标记（specialTurnOf）：频道接力 / 跨会话来件不是对话轮——不占轮号、
+   *  标签特殊化、无终止徽与「N 条回复」统计（无 turn_ended 且统计恒 0 是噪音） */
+  special: "channel" | "cross" | null;
   seq: number;
   createdAt: string;
   collapsed: boolean;
@@ -239,6 +242,21 @@ export interface BuildRowsOptions {
 }
 
 const NULL_TURN = "__orphan__";
+
+/**
+ * 特殊 turn_key 谓词：频道接力链（`chain:{链头用户消息id}`）与跨会话来件
+ * （`cross:{message_id}`）不是对话轮——它们与成员/消费回合在时间线上交错出现
+ * （同 turn_key 非连续多段）。buildRows 对特殊段不占轮号、头标签特殊化
+ * （「频道接力」/「跨会话来件」）、无 turn_ended 不渲染假「进行中」。
+ * 项目时间线的 scopeTurnKeys 形态带 `${session_id}::` 前缀——先剥前缀再判。
+ */
+export function specialTurnOf(tk: string | null): "channel" | "cross" | null {
+  if (tk == null) return null;
+  const bare = tk.includes("::") ? tk.slice(tk.indexOf("::") + 2) : tk;
+  if (bare.startsWith("chain:")) return "channel";
+  if (bare.startsWith("cross:")) return "cross";
+  return null;
+}
 
 /**
  * 搜索文本缓存（M2）：key = 事件对象引用。append-only 保证同一对象的 payload
@@ -553,25 +571,35 @@ export function buildRows(events: SessionEvent[], opts: BuildRowsOptions): Traje
     if (tk !== currentTurnKey) {
       flushTurn();
       const st = turnStats.get(tk)!;
-      turnIndex += 1;
+      const special = specialTurnOf(tk);
+      if (!special) turnIndex += 1;
       currentTurnKey = tk;
-      const d = localDate(st.createdAt);
+      // 交错段（chain:/cross: 同键多段）头字段取段首事件自身——turnStats 全局
+      // 聚合的时间/跨度跨着别人的回合，会把段 1 的时刻显示在段 2 头上
+      const headAt = special ? ev.created_at : st.createdAt;
+      const d = localDate(headAt);
       const dateLabel = d && d !== prevDate ? d : null;
       if (d) prevDate = d;
       currentHeader = {
         type: "turn-header",
-        key: `th-${tk}`,
+        // key 带段首事件 seq 后缀：交错段同 turn_key 多个头，行 key 必须全局唯一
+        key: `th-${tk}@${ev.seq}`,
         turnKey: tk,
         turnId: ev.turn_id,
         turnIndex,
-        seq: st.firstSeq,
-        createdAt: st.createdAt,
+        special,
+        seq: special ? ev.seq : st.firstSeq,
+        createdAt: headAt,
         collapsed: opts.collapsedTurns.has(tk),
         matchCount: 0,
         roundCount: st.roundIds.size,
         toolCount: st.toolCount,
         errorCount: st.errorCount,
-        turnMs: Number.isFinite(st.firstAtMs) && Number.isFinite(st.lastAtMs) ? Math.max(0, st.lastAtMs - st.firstAtMs) : null,
+        turnMs: special
+          ? null
+          : Number.isFinite(st.firstAtMs) && Number.isFinite(st.lastAtMs)
+            ? Math.max(0, st.lastAtMs - st.firstAtMs)
+            : null,
         dateLabel,
         ended: st.ended,
         context: st.context,
@@ -651,8 +679,9 @@ export function useTrajectory() {
   let currentId: string | null = null;
   let minSeq: number | null = null;
 
-  /** 窗口还有更早内容时查一次全局轮偏移（含孤儿桶一组；与前端连续段切桶在
-   *  罕见的交错孤儿场景可差 1，可接受——见 repo::count_turns_before 注释）。 */
+  /** 窗口还有更早内容时查一次全局轮偏移（含孤儿桶一组；特殊段 chain:/cross:
+   *  两端一致不计数——见 repo::count_turns_before 注释；与前端连续段切桶在
+   *  罕见的交错孤儿场景可差 1，可接受）。 */
   async function refreshTurnOffset() {
     const id = currentId;
     if (!id || minSeq == null) return;
