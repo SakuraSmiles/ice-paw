@@ -152,7 +152,8 @@ async function reelect() {
 .channel-popover {
   position: absolute;
   top: calc(100% + 6px);
-  right: 0;
+  /* ⑰：锚点迁左侧子标题后左对齐下挂（右对齐会向左溢出窗口） */
+  left: 0;
   width: 320px;
   max-height: 420px;
   display: flex;
