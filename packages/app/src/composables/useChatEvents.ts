@@ -63,8 +63,13 @@ export async function useChatEvents(): Promise<() => void> {
     // 判据 = sendingConvId 不是本会话：用户自己发起的回合（乐观气泡已在列表、
     // 占位走本地 push）与消费回合在此分叉；hold 批准路径同样经此（spawn 的
     // 回合照常 emit chat:start）。
+    // 频道回合恒走权威刷新（2026-09-11）：占位行虽已出生打标 sender，但本地
+    // push 的占位没有该字段（chat:start payload 不带）——群聊 live 流的成员
+    // 回复要第一时间带头像昵称，只能从 DB 行取；用户消息 DB 行也已落库，整列
+    // 权威替换零重复。
     const ucb = e.payload.user_content_blocks;
-    if (!ucb && chat.sendingConvId !== e.payload.conversation_id) {
+    const isChannelConv = chat.activeConversation?.kind === "channel";
+    if ((!ucb && chat.sendingConvId !== e.payload.conversation_id) || isChannelConv) {
       // sending 即刻置位（等 assistant-start 才置的话 pipeline 段——历史加载/
       // 摘要/OCR 可达数秒——侧栏无「生成中」、停止钮不出现；纯文本回合尤明显）。
       // 60s 超时侧安全：chat:processing 不过滤会话恒重置计时，sendingConvId
@@ -147,6 +152,15 @@ export async function useChatEvents(): Promise<() => void> {
     chat.sending = true;
     chat.freezeCurrentAssistant();
     chat.resetRoundStreaming();
+    // 频道回合：新占位继承列表内上一条 assistant 的成员身份（payload 只有
+    // message_id 不带 sender；同回合执行成员不变，继承即正确）。1v1 上一条
+    // 恒 null → 与旧行为一致零标注。
+    const prevChannelSender = (() => {
+      for (let i = chat.messages.length - 1; i >= 0; i--) {
+        if (chat.messages[i].role === "assistant") return chat.messages[i].sender_agent_id ?? null;
+      }
+      return null;
+    })();
     chat.messages.push({
       id: e.payload.message_id,
       conversation_id: e.payload.conversation_id,
@@ -158,6 +172,7 @@ export async function useChatEvents(): Promise<() => void> {
       created_at: new Date().toISOString(),
       rowid: 0,
       model: chat.currentModel,
+      sender_agent_id: prevChannelSender,
     });
   });
 

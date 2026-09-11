@@ -16,7 +16,7 @@ import { useRouter } from "vue-router";
 import { ArrowLeftRight, Shield } from "@lucide/vue";
 import { useChatStore } from "../../stores/chat";
 import { useAgentStore } from "../../stores/agent";
-import { useChannel, loadChannelNotices } from "../../composables/useChannel";
+import { useChannel, loadChannelNotices, type ElectionCard } from "../../composables/useChannel";
 import { formatTime, formatDateLabel, parseDbTime } from "../../utils/time";
 import MarkdownRenderer from "./MarkdownRenderer.vue";
 import ConfigProposalCard from "./ConfigProposalCard.vue";
@@ -42,6 +42,7 @@ import { revealItemInDir, openPath } from "@tauri-apps/plugin-opener";
 import ToolExpandDetail from "./ToolExpandDetail.vue";
 import EntityAvatar from "../common/EntityAvatar.vue";
 import ChannelNotice from "./ChannelNotice.vue";
+import ChannelElectionCard from "./ChannelElectionCard.vue";
 import type { Message, MessageRole, PlanItem, SessionEvent } from "../../types";
 
 const chat = useChatStore();
@@ -703,6 +704,10 @@ const messageGroups = computed<MessageGroup[]>(() => {
   for (let i = 0; i < chat.messages.length; i++) {
     const msg = chat.messages[i];
     if (isToolResultOnlyUser(msg)) continue;
+    // 频道选举投票行：票面已聚合进选举卡（下方 interstitial），气泡再显一遍
+    // 即重复（生产反馈②：选举一件事零散多行）。窗口外旧选举无卡时 Set 不含
+    // → 照常气泡渲染，自然回退。
+    if (electionVoteIds.value.has(msg.id)) continue;
     const prev = out[out.length - 1];
     const sender = msg.sender_agent_id ?? null;
     const mergeable =
@@ -732,26 +737,42 @@ const messageGroups = computed<MessageGroup[]>(() => {
 // ===== 频道 v1：通知交错 + 成员身份头 + 生成中发出标注 =====
 // 频道事件（选举/统筹/点名）是行为事实非消息——不进 messages，按 created_at
 // 与消息组交错渲染（useChannel 尾部窗口拉取 + bus 增量）。
-const { notices: channelNotices } = useChannel();
+const { notices: channelNotices, electionCards, electionVoteIds } = useChannel();
 const isChannelConv = computed(() => chat.activeConversation?.kind === "channel");
 
-/** 渲染层分组：给每组注入「组开始前发生」的频道事件（preNotices） */
-interface RenderGroup extends MessageGroup { preNotices: SessionEvent[] }
+/** 交错渲染单元（频道）：通知条 | 选举聚合卡——统一按 created_at 排序与消息
+ *  组交错。选举卡是 useChannel 对一届选举 started→vote×N→result 的渲染前聚合
+ *  （数据层/轨迹 append-only 零改），取代零散通知行（生产反馈②）。 */
+type Interstitial =
+  | { kind: "notice"; key: string; time: number; event: SessionEvent }
+  | { kind: "election"; key: string; time: number; card: ElectionCard };
+
+const allInterstitials = computed<Interstitial[]>(() => {
+  const ns: Interstitial[] = channelNotices.value.map((e) => ({
+    kind: "notice", key: "ntc-" + e.id, time: parseDbTime(e.created_at).getTime(), event: e,
+  }));
+  const cs: Interstitial[] = electionCards.value.map((c) => ({
+    kind: "election", key: "elc-" + c.key, time: parseDbTime(c.createdAt).getTime(), card: c,
+  }));
+  return [...ns, ...cs].sort((a, b) => a.time - b.time);
+});
+
+/** 渲染层分组：给每组注入「组开始前发生」的频道交错单元（preInterstitials） */
+interface RenderGroup extends MessageGroup { preInterstitials: Interstitial[] }
 const renderGroups = computed<RenderGroup[]>(() => {
-  const groups = messageGroups.value;
-  const ns = channelNotices.value;
-  if (ns.length === 0) return groups.map((g) => ({ ...g, preNotices: [] as SessionEvent[] }));
-  return groups.map((g) => {
+  const items = allInterstitials.value;
+  return messageGroups.value.map((g) => {
     const start = parseDbTime(g.items[0].msg.created_at).getTime();
-    return { ...g, preNotices: ns.filter((n) => parseDbTime(n.created_at).getTime() < start) };
+    return { ...g, preInterstitials: items.filter((it) => it.time < start) };
   });
 });
 
-/** 尾部通知：晚于最后一组开始的频道事件（在途接力/选举的实时尾巴） */
-const tailNotices = computed(() => {
-  const consumed = new Set<number>();
-  for (const g of renderGroups.value) for (const n of g.preNotices) consumed.add(n.id);
-  return channelNotices.value.filter((n) => !consumed.has(n.id));
+/** 尾部交错单元：晚于最后一组开始的频道事件（在途接力的实时尾巴 / 进行中的
+ *  选举卡——result 事件到达时 useChannel 补拉后卡自然翻完成态） */
+const tailInterstitials = computed(() => {
+  const consumed = new Set<string>();
+  for (const g of renderGroups.value) for (const it of g.preInterstitials) consumed.add(it.key);
+  return allInterstitials.value.filter((it) => !consumed.has(it.key));
 });
 
 /** 用户消息是否在最近前置 assistant 的生成窗口内发出（频道插话事实标注）。
@@ -911,8 +932,11 @@ const RESUMABLE_REASONS = new Set([
       <template v-for="group in renderGroups" :key="group.key">
         <!-- 日期分组标签（基于组首）-->
         <div v-if="isNewDay(group.firstIdx)" class="date-divider">{{ formatDateLabel(chat.messages[group.firstIdx].created_at) }}</div>
-        <!-- 频道事件通知（组开始前发生：选举/统筹位/点名路由，按 created_at 交错） -->
-        <ChannelNotice v-for="n in group.preNotices" :key="'ntc-' + n.id" :event="n" />
+        <!-- 频道交错单元（组开始前发生：通知条/选举聚合卡，按 created_at 交错） -->
+        <template v-for="it in group.preInterstitials" :key="it.key">
+          <ChannelElectionCard v-if="it.kind === 'election'" :card="it.card" />
+          <ChannelNotice v-else :event="it.event" />
+        </template>
         <!-- data-mid=组首消息 id：useScrollFollow 锚点捕获/恢复的 DOM 定位符 -->
         <div :class="['message-group', group.role]" :data-mid="group.items[0].msg.id">
           <!-- ===== 用户消息组（单条，透明壳）===== -->
@@ -1275,8 +1299,11 @@ const RESUMABLE_REASONS = new Set([
           </template>
         </div>
       </template>
-      <!-- 频道事件通知（末组之后：在途接力/选举的实时尾巴） -->
-      <ChannelNotice v-for="n in tailNotices" :key="'ntc-' + n.id" :event="n" />
+      <!-- 频道交错单元（末组之后：在途接力通知 / 进行中或刚完成的选举卡） -->
+      <template v-for="it in tailInterstitials" :key="it.key">
+        <ChannelElectionCard v-if="it.kind === 'election'" :card="it.card" />
+        <ChannelNotice v-else :event="it.event" />
+      </template>
     </TransitionGroup>
 
     <!-- 配置提案审批卡片（内联） -->

@@ -3,7 +3,8 @@
 // ② 成员身份头（sender_agent_name 快照优先 + agent store 兜底「已退出成员」+
 //    当前统筹者 Shield 微标 = channelView 当下投影）
 // ③ 生成中发出标注（user 在前置 assistant 生成窗口内 → gen-time-flag）
-// ④ 频道事件通知按 created_at 与消息组交错（组前 preNotices + 尾部尾巴）
+// ④ 频道事件通知按 created_at 与消息组交错（组前 preInterstitials + 尾部尾巴）
+// ⑤ 选举聚合卡：一届选举一张卡与消息交错；投票行气泡跳过（票面进卡）
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { ref } from "vue";
@@ -11,7 +12,7 @@ import { mount, flushPromises } from "@vue/test-utils";
 import ChatMessages from "../ChatMessages.vue";
 import { useChatStore } from "../../../stores/chat";
 import { useAgentStore } from "../../../stores/agent";
-import { useChannel } from "../../../composables/useChannel";
+import { useChannel, type ElectionCard } from "../../../composables/useChannel";
 import type { Message, SessionEvent } from "../../../types";
 
 const push = vi.fn();
@@ -104,8 +105,11 @@ describe("ChatMessages 频道渲染", () => {
       { id: "ag1", name: "写手", provider: "zhipu", model: "glm-5.3", system_prompt: "", base_url: null, temperature: 0.7, max_tokens: 4096, extra_params: {}, sort_order: 0, cache_prompt: true, has_api_key: true, created_at: "", updated_at: "", avatar: null },
       { id: "ag2", name: "审校", provider: "zhipu", model: "glm-5.3", system_prompt: "", base_url: null, temperature: 0.7, max_tokens: 4096, extra_params: {}, sort_order: 0, cache_prompt: true, has_api_key: true, created_at: "", updated_at: "", avatar: null },
     ] as never;
-    // 模块级单例状态重置（上一个用例注入的 notices 不泄漏）
-    useChannel().notices.value = [];
+    // 模块级单例状态重置（上一个用例注入的 notices / 选举卡不泄漏）
+    const ch = useChannel();
+    ch.notices.value = [];
+    ch.electionCards.value = [];
+    ch.electionVoteIds.value = new Set();
   });
 
   it("sender 维度分组：同成员连续 assistant 合并，不同成员绝不合并", async () => {
@@ -183,5 +187,43 @@ describe("ChatMessages 频道渲染", () => {
     // 第二条（10:02:00）晚于所有组 → 尾部
     expect(w.text()).toContain("写手 点名 审校 接力");
     expect(w.text()).toContain("用户 点名 写手 接力");
+  });
+
+  it("选举聚合卡：一届一张卡与消息交错；投票行气泡跳过（票面进卡不重复）", async () => {
+    const w = await mountChannel([
+      msg({ id: "u1", role: "user", content: "大家好", created_at: "2026-09-10 10:00:00" }),
+      // 投票行（票面原文物化的 assistant 行；electionVoteIds 覆盖后不占气泡位）
+      msg({ id: "vote-1", role: "assistant", content: "审校", created_at: "2026-09-10 10:00:02", sender_agent_id: "ag1", sender_agent_name: "写手" }),
+      msg({ id: "a1", role: "assistant", content: "当选感言", created_at: "2026-09-10 10:00:05", sender_agent_id: "ag2", sender_agent_name: "审校" }),
+    ]);
+    const card: ElectionCard = {
+      key: "election:e1",
+      createdAt: "2026-09-10T10:00:02Z",
+      votes: [
+        { voter_agent_id: "ag1", candidate_agent_id: "ag2", reason: null },
+        { voter_agent_id: "ag2", candidate_agent_id: null, reason: "模型返回空（弃权）" },
+      ],
+      result: { tally: [], winner_agent_id: "ag2", tie_break: null },
+    };
+    const ch = useChannel();
+    ch.electionCards.value = [card];
+    ch.electionVoteIds.value = new Set(["vote-1"]);
+    await flushPromises();
+
+    // 卡渲染：标题 + 逐票行（投给/弃权+原因）+ 当选结果
+    expect(w.findAll(".election-card").length).toBe(1);
+    const cardText = w.find(".election-card").text();
+    expect(cardText).toContain("统筹者选举");
+    expect(cardText).toContain("投给 审校");
+    expect(cardText).toContain("弃权");
+    expect(cardText).toContain("审校 当选统筹者");
+    // 投票行不占气泡位（data-mid 无 vote-1）；当选感言照常
+    expect(w.find('[data-mid="vote-1"]').exists()).toBe(false);
+    expect(w.find('[data-mid="a1"]').exists()).toBe(true);
+    // 进行中卡（无 result）显示状态胶囊而非结果行
+    ch.electionCards.value = [{ ...card, key: "election:e2", result: null }];
+    await flushPromises();
+    expect(w.find(".election-head-status").text()).toBe("进行中");
+    expect(w.find(".election-result").exists()).toBe(false);
   });
 });
