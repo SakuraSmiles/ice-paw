@@ -2,9 +2,9 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/)，版本号遵循 [SemVer](https://semver.org/)。
 
-## [Unreleased]
+## [0.8.0] — 2026-09-11
 
-> 0.7 批 C：**频道 v1 串行共享流**——项目成员的群聊式协作（有主持的串行圆桌）。设计稿 `docs/channel-v1-design.md`（理念 + C1-C10b 决策 + 六确认点全拍板）；运行时真相源见 CLAUDE.md「频道 v1」节。
+> 从 0.7.0 以来的主要调整：**频道 v1 串行共享流**——项目成员的群聊式协作（有主持的串行圆桌：@点名必应答、广播由统筹者编排、护栏截断接力风暴），含实测五轮修复、群聊气泡 IM 化与轨迹按轮归组。设计稿 `docs/channel-v1-design.md`（理念 + C1-C10b 决策 + 六确认点全拍板）；运行时真相源见 CLAUDE.md「频道 v1」节。
 
 ### Added
 
