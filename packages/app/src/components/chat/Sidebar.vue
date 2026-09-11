@@ -9,6 +9,7 @@ import { useNewConversation } from "../../composables/useNewConversation";
 import { useTheme } from "../../composables/useTheme";
 import { useResizablePanel } from "../../composables/useResizablePanel";
 import { useInbox } from "../../composables/useInbox";
+import { listen } from "@tauri-apps/api/event";
 import { bridge } from "../../api/bridge";
 import PanelResizeHandle from "../common/PanelResizeHandle.vue";
 import EntityAvatar from "../common/EntityAvatar.vue";
@@ -248,10 +249,18 @@ async function openChannel() {
   }
 }
 
-/** 频道行 meta：统筹者名（conv.agent_id 是统筹者投影；无 = 首次广播前未选举） */
-function channelCoordinatorName(conv: { agent_id: string }): string {
-  return agent.getById(conv.agent_id)?.name ?? "待选举";
-}
+/** 频道行 meta：统筹者。权威源 = project.agents 的 role='coordinator'（与
+ *  后端 build_view / 路由同源）——**勿读 conv.agent_id**：ensure_channel 的
+ *  投影在未选举时刻意回落 joined_at 最早成员（临时投影不阻塞使用），拿它当
+ *  统筹者 = 选举前谎报名字（生产实案 2026-09-11 侧栏误显）。 */
+const scopeCoordinator = computed(() => {
+  const pid = scopeProjectId.value;
+  if (pid === null) return null;
+  const id = project.getById(pid)?.agents?.find((a) => a.role === "coordinator")?.agent_id;
+  return id ? (agent.getById(id) ?? null) : null;
+});
+
+const channelCoordinatorName = computed(() => scopeCoordinator.value?.name ?? "待选举");
 
 onMounted(async () => {
   agent.load();
@@ -297,11 +306,22 @@ function newChat() {
 // 相对时间每分钟自动刷新：nowTick 作为 timeAgo 的响应式依赖，变化时整列重渲染
 const nowTick = ref(Date.now());
 let nowTickInterval: ReturnType<typeof setInterval> | null = null;
-onMounted(() => {
+// 统筹位落定回正（channel_coordinator 事件：elected/appointed/removed/failed-over
+// 四动作都发）→ 强制刷新项目列表。agents[].role 是侧栏统筹者显示的权威源，
+// 选举完成时侧栏常驻可见，不回正会一直挂着过期的「待选举」/旧名字。
+let unlistenCoordEvent: (() => void) | null = null;
+onMounted(async () => {
   nowTickInterval = setInterval(() => (nowTick.value = Date.now()), 60000);
+  unlistenCoordEvent = await listen<{ conversation_id: string; kind: string }>(
+    "session:event-appended",
+    (e) => {
+      if (e.payload?.kind === "channel_coordinator") void project.load(true);
+    },
+  );
 });
 onUnmounted(() => {
   if (nowTickInterval) clearInterval(nowTickInterval);
+  unlistenCoordEvent?.();
   if (animTimer) clearTimeout(animTimer);
 });
 
@@ -354,12 +374,13 @@ function timeAgoLabel(dateStr: string): string {
           <div class="conv-meta">
             <span class="conv-agent-tag">
               <EntityAvatar
+                v-if="scopeCoordinator"
                 class="conv-agent-avatar"
-                :name="agent.getById(scopeChannel.agent_id)?.name || '?'"
-                :image="agent.getById(scopeChannel.agent_id)?.avatar ?? null"
+                :name="scopeCoordinator.name"
+                :image="scopeCoordinator.avatar ?? null"
                 size="xs"
               />
-              <span class="conv-agent-name">统筹 · {{ channelCoordinatorName(scopeChannel) }}</span>
+              <span class="conv-agent-name">统筹 · {{ channelCoordinatorName }}</span>
             </span>
             <span v-if="chat.streamingConvIds.has(scopeChannel.id)" class="stream-indicator" title="正在生成…">
               <span class="stream-bars"><span class="bar"></span><span class="bar"></span><span class="bar"></span></span>生成中
