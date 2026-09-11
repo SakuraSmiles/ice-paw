@@ -228,4 +228,35 @@ describe("ChatMessages 频道渲染", () => {
     expect(w.find(".election-head-status").text()).toBe("进行中");
     expect(w.find(".election-result").exists()).toBe(false);
   });
+
+  it("历史交错单元只挂一次：早于多个组的卡/通知不随每条新消息重复（回归⑤）", async () => {
+    const w = await mountChannel([
+      msg({ id: "u1", role: "user", content: "第一条", created_at: "2026-09-10 10:00:00" }),
+      msg({ id: "a1", role: "assistant", content: "写手答", created_at: "2026-09-10 10:00:05", sender_agent_id: "ag1", sender_agent_name: "写手" }),
+      msg({ id: "a2", role: "assistant", content: "审校答", created_at: "2026-09-10 10:01:00", sender_agent_id: "ag2", sender_agent_name: "审校" }),
+    ]);
+    // 卡早于所有组、通知夹在两组之间——各只出现一次。重复 bug 形态：每组
+    // filter 全量「time < 组开始」会把历史卡挂到后续每个组头上（每次发言
+    // 前后都重复出选举卡）+ TransitionGroup 重复 key 错位渲染。
+    const ch = useChannel();
+    ch.electionCards.value = [{
+      key: "election:e1",
+      createdAt: "2026-09-10T09:59:00Z",
+      votes: [],
+      result: { tally: [], winner_agent_id: "ag1", tie_break: null },
+    }];
+    ch.notices.value = [
+      noticeEv({ from_agent_id: "ag1", to_agent_id: "ag2", hop_index: 1, chain_remaining: 0, blocked_reason: null }, "2026-09-10T10:00:30Z"),
+    ];
+    await flushPromises();
+
+    expect(w.findAll(".election-card").length).toBe(1);
+    expect(w.findAll(".channel-notice").length).toBe(1);
+    // 位置：卡在最前组（u1）之前；通知在 a1 之后、a2 之前
+    const before = (a: { element: Element }, b: { element: Element }) =>
+      (a.element.compareDocumentPosition(b.element) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+    expect(before(w.find(".election-card"), w.find('[data-mid="u1"]'))).toBe(true);
+    expect(before(w.find('[data-mid="a1"]'), w.find(".channel-notice"))).toBe(true);
+    expect(before(w.find(".channel-notice"), w.find('[data-mid="a2"]'))).toBe(true);
+  });
 });

@@ -757,13 +757,23 @@ const allInterstitials = computed<Interstitial[]>(() => {
   return [...ns, ...cs].sort((a, b) => a.time - b.time);
 });
 
-/** 渲染层分组：给每组注入「组开始前发生」的频道交错单元（preInterstitials） */
+/** 渲染层分组：给每组注入「组开始前发生」的频道交错单元（preInterstitials）。
+ *  每个交错单元只消费一次——挂到**首个**开始时间晚于它的组（双指针线性扫，
+ *  消息组与交错单元均按时间升序）。⚠️ 勿回退成「每组 filter 全量 time < start」：
+ *  历史卡/通知会随每条新消息重复出现（生产实案：每次发言前后都重复出选举卡，
+ *  且 TransitionGroup 重复 key 引发错位渲染）。 */
 interface RenderGroup extends MessageGroup { preInterstitials: Interstitial[] }
 const renderGroups = computed<RenderGroup[]>(() => {
   const items = allInterstitials.value;
+  let cursor = 0;
   return messageGroups.value.map((g) => {
     const start = parseDbTime(g.items[0].msg.created_at).getTime();
-    return { ...g, preInterstitials: items.filter((it) => it.time < start) };
+    const pre: Interstitial[] = [];
+    while (cursor < items.length && items[cursor].time < start) {
+      pre.push(items[cursor]);
+      cursor += 1;
+    }
+    return { ...g, preInterstitials: pre };
   });
 });
 
