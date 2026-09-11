@@ -5,8 +5,8 @@
   - 列头 32px（吸顶）：类型 | 内容 | token·耗时
   - turn-header 40px：整行带（浅底、去 rail 去圆角；左缘内缩 8px，比子项贴边——
     分组容器语义；第 N 轮 · 日期·时间 · 终止 | 错误 · 统计 · 耗时 · 用量），
-    点击折叠/展开；折叠态 = 只留头；特殊段（频道接力/跨会话来件）标签特殊化、
-    不占轮号、无终止徽与回复统计
+    点击折叠/展开；折叠态 = 只留头；轮外段（频道接力/跨会话来件/频道选举/统筹位
+    变更）标签特殊化、不占轮号、无终止徽与回复统计
   - event      36px：比 turn 头再内缩一层（左 16px）；[KIND 徽章][单行摘要
     ellipsis][token/耗时]，点击选中 → 检查器；hover/选中 = 圆角底色填充
     （kind 语义由徽章承担，无侧边色条）
@@ -221,10 +221,13 @@ function sessionOfHeader(turnId: string | null): { title: string; kind: string }
   return props.sessionMeta.get(sid) ?? null;
 }
 
-/** turn 头轮次标签：特殊段（频道接力/跨会话来件）不是对话轮——标签特殊化不占号 */
+/** turn 头轮次标签：轮外段（频道接力/跨会话来件/频道选举/统筹位变更）不是对话轮
+ *  ——标签特殊化不占号；同轮二段（频道链多跳成员回合）与首段同号 */
 function turnLabel(row: TurnHeaderRow): string {
   if (row.special === "channel") return "频道接力";
   if (row.special === "cross") return "跨会话来件";
+  if (row.special === "election") return "频道选举";
+  if (row.special === "coordinator") return "统筹位变更";
   return row.turnId ? `第 ${row.turnIndex + 1} 轮` : "纪元前事件";
 }
 
@@ -287,7 +290,7 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
           <span class="th-no" :class="{ 'th-no-special': item.row.special }">{{ turnLabel(item.row) }}</span>
           <span v-if="item.row.dateLabel" class="th-date">{{ item.row.dateLabel }}</span>
           <span class="th-time">{{ fmtTime(item.row.createdAt) }}</span>
-          <!-- 特殊段（频道接力/跨会话来件）无 turn_ended——不渲染假「进行中」 -->
+          <!-- 轮外段（含同轮二段外的全部特殊段）无 turn_ended——不渲染假「进行中」 -->
           <template v-if="!item.row.special">
             <span
               v-if="item.row.ended"
@@ -464,7 +467,7 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
   background: var(--ip-color-primary-tint-bg);
 }
 .th-no { font-weight: var(--ip-font-weight-semibold); color: var(--ip-color-text-primary); white-space: nowrap; }
-/* 特殊段标签（频道接力/跨会话来件）：非对话轮，弱化以别于真实轮号 */
+/* 轮外段标签（频道接力/跨会话来件/频道选举/统筹位变更）：非对话轮，弱化以别于真实轮号 */
 .th-no-special { color: var(--ip-color-text-secondary); }
 .th-date, .th-time {
   font-family: var(--ip-font-mono, monospace);

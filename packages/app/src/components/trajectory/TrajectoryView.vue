@@ -20,7 +20,7 @@ import {
   isChatOnly,
   loadHiddenKinds,
   saveHiddenKinds,
-  specialTurnOf,
+  specialOfEvent,
   DEFAULT_HIDDEN,
   type FilterKey,
   type TrajectoryRow,
@@ -137,16 +137,18 @@ const rows = computed(() => {
 });
 
 /** 会话级汇总（工具栏 chip）：轮数含窗口前偏移（全局值）；事件/工具为已载窗口内计数。
- *  特殊段（chain:/cross:）不是对话轮不计数——与 buildRows 的轮号口径一致 */
+ *  口径 = DISTINCT turn_id（⑮：频道链上同 turn_id 的多跳成员回合算一轮；轮外段
+ *  chain:/cross:/election: 与 channel_coordinator NULL 不计）——与 buildRows 轮号
+ *  及后端 count_turns_before 一致 */
 const stats = computed(() => {
   let turns = 0;
   let tools = 0;
-  let lastTk: string | null = null;
+  const seen = new Set<string>();
   for (const ev of events.value) {
     const tk = ev.turn_id ?? "__orphan__";
-    if (tk !== lastTk && !specialTurnOf(tk)) {
+    if (!seen.has(tk) && !specialOfEvent(ev)) {
       turns += 1;
-      lastTk = tk;
+      seen.add(tk);
     }
     if (ev.kind === "tool_execution") tools += 1;
   }

@@ -20,15 +20,17 @@
     2 Tools（琥珀）tool_execution（tool_result_message 是 DB 结果行镜像，不上图）
     3 Hooks（绿） hook_injected —— 外挂逻辑干预对话流的审计面
   turn_ended 不占泳道：画成贯穿竖线的 turn 边界层（dsh turnBoundaries 同构），
-  序号模式底轴在边界处标「第 N 轮」（编号与表格 buildRows 对齐：孤儿桶占号但不标；
-  特殊段 chain:/cross: 不占号不画边界——行为事实作为 User 道 tick 呈现，无「轮」语义）。
+  序号模式底轴在边界处标「第 N 轮」（编号与表格 buildRows 对齐：DISTINCT turn_id 口径——
+  孤儿桶占号但不标；轮外段 chain:/cross:/election:/channel_coordinator 不占号不画边界，
+  行为事实作为 User 道 tick 呈现无「轮」语义；频道链上同 turn_id 的多跳成员回合被
+  chain: 派发事件切段后复用首段号，不重复递增、二段不再画边界）。
 
   交互：hover 提示 · 点击块跳转表格行（emit pick(seq)）· 滚轮缩放（光标锚定）· 拖拽平移。
   canvas 绘制（DPR 感知），数千事件只画一次矩形批，无 DOM 压力。
 -->
 <script setup lang="ts">
 import { computed, onMounted, onBeforeUnmount, ref, watch } from "vue";
-import { specialTurnOf } from "../../composables/useTrajectory";
+import { specialOfEvent } from "../../composables/useTrajectory";
 import type { SessionEvent } from "../../types";
 
 const props = defineProps<{
@@ -161,9 +163,11 @@ function fmtRel(ms: number): string {
 
 /**
  * 事件流 → 域内 span + turn 边界。
- * 轮次编号镜像 buildRows：按 turn-key 切换递增、孤儿桶（turn_id=null）占号但不画边界；
- * 特殊段（chain:/cross:，specialTurnOf）不占号也不画边界——它们是穿插在回合间的
- * 行为事实，作为 User 道的 tick 呈现，无「轮」语义。
+ * 轮次编号镜像 buildRows（DISTINCT turn_id 口径）：新 turn_id 首见递增（seenTurns），
+ * 孤儿桶（turn_id=null）占号但不画边界；轮外段（chain:/cross:/election: 与无 turn_id 的
+ * channel_coordinator，specialOfEvent）不占号也不画边界——它们是穿插在回合间的行为
+ * 事实，作为 User 道的 tick 呈现，无「轮」语义；同轮二段（频道链上被 chain: 派发
+ * 切段的多跳成员回合）复用首段号、不再画第二条轮边界。
  * turn_context / turn_ended / tool_result_message 不生成 span（零耗时元数据 / 边界层 / DB 镜像）。
  */
 function buildSpans() {
@@ -186,15 +190,23 @@ function buildSpans() {
    * 工具/assistant 的真实 duration_ms 永远优先，前端不覆盖。
    */
   let prevT: number | null = null;
+  // ⑮：同 turn_id 二段（频道链上被 chain: 派发分隔的多跳成员回合）复用首段号，
+  // 不重复递增——镜像 buildRows 的 seenTurns 口径（DISTINCT turn_id）
+  const seenTurns = new Map<string, number>();
 
   for (const ev of props.events) {
     const tk = ev.turn_id ?? "__orphan__";
     if (tk !== curTk) {
-      // 特殊段不占轮号（镜像 buildRows——链/来件事件仍上图，只是无「轮」语义）
-      const special = specialTurnOf(tk);
-      if (!special) turnIndex += 1;
+      // 轮外段不占轮号（镜像 buildRows——链/来件事件仍上图，只是无「轮」语义）；
+      // 同轮二段复用首段号且不再画轮边界（边界只标轮的起点）
+      const special = specialOfEvent(ev);
+      const secondSeg = special == null && seenTurns.has(tk);
+      if (special == null && !secondSeg) {
+        turnIndex += 1;
+        seenTurns.set(tk, turnIndex);
+      }
       curTk = tk;
-      pendingTurn = ev.turn_id != null && !special ? turnIndex : null;
+      pendingTurn = ev.turn_id != null && !special && !secondSeg ? turnIndex : null;
       prevT = null; // 跨 turn：不给新 turn 的首事件挂上一轮的尾巴
     }
     // turn_context / turn_ended / tool_result_message 不上图：配置快照是零耗时

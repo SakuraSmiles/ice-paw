@@ -440,13 +440,14 @@ pub async fn count_frozen_backfill_sessions(pool: &SqlitePool) -> AppResult<usiz
 /// 窗口前（`seq < before_seq` 一侧）的全局轮次数——轨迹尾部优先分页的轮号偏移（M3）。
 ///
 /// 按 `COUNT(DISTINCT turn_id)` 计（`turn_id IS NULL` 的孤儿事件经 COALESCE 算作
-/// 一组，与前端 `__orphan__` 桶对应）。**特殊段排除**：频道行为事件
-/// （`chain:{链头id}`）与跨会话来件（`cross:{message_id}`）不是对话轮且与成员/
-/// 消费回合在时间线上交错（同 turn_id 非连续多段）——前端 buildRows 对它们不占
-/// 轮号（specialTurnOf），此处 DISTINCT 同步排除，两端口径一致。已知边缘误差：
-/// 前端按「连续同 turn_key 段」切桶，孤儿事件若被真实轮分隔成多段，前端算多桶而
-/// DISTINCT 只算一组——纪元前事件实际连续排列，此场景极罕见，偏差 ≤ 孤儿段数，
-/// 可接受。
+/// 一组，与前端 `__orphan__` 桶对应）。**轮外段排除**（与前端 specialOfEvent 同源）：
+/// 频道接力（`chain:{链头id}`）、跨会话来件（`cross:{message_id}`）、频道选举
+/// （`election:{发起id}`）不是对话轮且与成员/消费回合在时间线上交错（同 turn_id
+/// 非连续多段）；统筹位变更（`channel_coordinator`，turn_id=NULL 的轮外事实）同样
+/// 不计——不排除会被 COALESCE 归进孤儿组占一号。前端 buildRows 对轮外段不占
+/// 轮号，此处 DISTINCT 同步排除，两端口径一致。已知边缘误差：前端按「连续同
+/// turn_key 段」切桶，孤儿事件若被真实轮分隔成多段，前端算多桶而 DISTINCT 只算
+/// 一组——纪元前事件实际连续排列，此场景极罕见，偏差 ≤ 孤儿段数，可接受。
 pub async fn count_turns_before(
     pool: &SqlitePool,
     session_id: &str,
@@ -455,7 +456,9 @@ pub async fn count_turns_before(
     let (n,): (i64,) = sqlx::query_as(
         "SELECT COUNT(DISTINCT COALESCE(turn_id, '')) FROM session_events
           WHERE session_id = ? AND seq < ?
-            AND (turn_id IS NULL OR (turn_id NOT LIKE 'chain:%' AND turn_id NOT LIKE 'cross:%'))",
+            AND NOT (turn_id IS NULL AND kind = 'channel_coordinator')
+            AND (turn_id IS NULL OR (turn_id NOT LIKE 'chain:%'
+                AND turn_id NOT LIKE 'cross:%' AND turn_id NOT LIKE 'election:%'))",
     )
     .bind(session_id)
     .bind(before_seq)
@@ -660,19 +663,22 @@ mod tests {
         seed_conversation(&pool, "conv-ch").await;
 
         // 频道时间线交错形态：user 回合 m1 → chain 派发段 → m2 全回合 →
-        // chain 成员报告尾 @ 段；chain:{id} 同键多段但不占轮号（前端 specialTurnOf）
-        for (turn, msg) in [
-            (Some("m1"), Some("m1")),
-            (Some("chain:m1"), None),
-            (Some("m2"), Some("m2")),
-            (Some("chain:m1"), None),
-            (Some("cross:x1"), None),
-            (Some("cross:x1"), None),
+        // chain 成员报告尾 @ 段 → 跨会话来件 ×2 → 选举段 → 统筹位变更（轮外，
+        // turn_id=NULL）；chain:{id} 同键多段不占轮号，election:/coordinator 同排除
+        for (kind, turn, msg) in [
+            ("assistant_message", Some("m1"), Some("m1")),
+            ("channel_mention", Some("chain:m1"), None),
+            ("assistant_message", Some("m2"), Some("m2")),
+            ("channel_mention", Some("chain:m1"), None),
+            ("cross_session_message", Some("cross:x1"), None),
+            ("cross_session_message", Some("cross:x1"), None),
+            ("channel_election", Some("election:m1"), None),
+            ("channel_coordinator", None, None),
         ] {
             append(
                 &pool,
                 "conv-ch",
-                "channel_mention",
+                kind,
                 "agent",
                 turn,
                 msg,
@@ -681,11 +687,13 @@ mod tests {
             .await
             .unwrap();
         }
-        // seq 1..6：只有 m1/m2 是对话轮——特殊段（chain:/cross:）不计数
+        // seq 1..8：只有 m1/m2 是对话轮——轮外段（chain:/cross:/election:
+        // 与无 turn_id 的 channel_coordinator）全程不计数；coordinator 若漏排除
+        // 会被 COALESCE 归进孤儿组虚增一号，本断言即守此关
         assert_eq!(
             count_turns_before(&pool, "conv-ch", 99).await.unwrap(),
             2,
-            "chain:/cross: 特殊段全程排除"
+            "chain:/cross:/election:/coordinator 轮外段全程排除"
         );
         assert_eq!(
             count_turns_before(&pool, "conv-ch", 4).await.unwrap(),
