@@ -425,6 +425,21 @@ pub(crate) async fn execute_tool_round(
             }
         };
 
+        // 全局输出治理（2026-09-12 UE5 实案）：① 文本内嵌 base64 图提取成真图，
+        // 走下方门②视觉统一适配（视觉 agent 注入 Image 块模型直读、非视觉代读）——
+        // 外部 server 把截图 base64 塞在 JSON 文本里返回，对模型是无用文本且实测
+        // 单次 1.75MB ≈ 125 万 token，回合中途追加后下一次 LLM 调用直接上下文超长
+        // （预算/裁剪只在回合起点跑）；② 剩余文本 256KB 兜底截断。审计表 /
+        // session 事件 / chat:tool-result / blocks 全走治理后的值（下游零重复治理）。
+        let mut extracted_images: Vec<(Vec<u8>, String)> = Vec::new();
+        let final_result = final_result
+            .map(|mut out| {
+                extracted_images = extract_embedded_images(&mut out.text);
+                out.text = cap_tool_output_text(out.text);
+                out
+            })
+            .map_err(cap_tool_output_text);
+
         // 3. emit tool-result + 收集 blocks
         let duration_ms = tool_start.elapsed().as_millis() as u64;
         let finished_at = now_sql();
@@ -493,13 +508,19 @@ pub(crate) async fn execute_tool_round(
                     content: out.text,
                     is_error: Some(false),
                 });
-                // 门②（事2）：工具回传 PNG → 按 agent「有效视觉能力」统一适配。
-                // 有效视觉 → 编码 base64 Image 块注入（模型直读；Anthropic/GLM tool_result 原生
-                //   支持 image block，OpenAI 适配层把 Image 拆为紧邻 role="user" image_url）。
-                // 非视觉 → 走多级凭据代读成文本，追加到本 ToolResult 的 content（绝不向非视觉
-                //   模型塞 Image → 400 / "看不到"）。当前仅 view_attachment_image 回传 PNG 且自身
-                //   已按 effective_vision 路由，本守卫是其外层的防御纵深（防未来未路由的工具）。
+                // 门②（事2）：工具回传图 → 按 agent「有效视觉能力」统一适配。
+                // 图源两路：工具原生 image_png + 文本内嵌 base64 提取图（2026-09-12
+                // UE5 实案扩充——外部 server 把截图 base64 塞在 JSON 文本里返回）。
+                // 有效视觉 → 编码 base64 Image 块注入（模型直读；Anthropic/GLM tool_result
+                //   原生支持 image block，OpenAI 适配层把 Image 拆为紧邻 role="user"
+                //   image_url）。非视觉 → 走多级凭据代读成文本，追加到本 ToolResult 的
+                //   content（绝不向非视觉模型塞 Image → 400 / "看不到"）。
+                let mut tool_images: Vec<(Vec<u8>, String)> = Vec::new();
                 if let Some(png) = out.image_png {
+                    tool_images.push((png, "image/png".to_string()));
+                }
+                tool_images.extend(extracted_images);
+                if !tool_images.is_empty() {
                     let agent_opt = repo::agent::get_by_id(&tool_ctx.pool, &tool_ctx.agent_id)
                         .await
                         .map_err(|e| {
@@ -523,17 +544,16 @@ pub(crate) async fn execute_tool_round(
                         .unwrap_or(false);
 
                     if eff_vision {
-                        let data = base64::engine::general_purpose::STANDARD.encode(&png);
-                        tool_result_blocks.push(ContentBlock::Image {
-                            data,
-                            media_type: "image/png".to_string(),
-                        });
-                        tracing::info!(
-                            target: "ice_paw.tool_image",
-                            tool = %tc_name,
-                            bytes = png.len(),
-                            "工具回传图片，已注入 Image 块给视觉 agent"
-                        );
+                        for (bytes, media_type) in tool_images {
+                            let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                            tool_result_blocks.push(ContentBlock::Image { data, media_type });
+                            tracing::info!(
+                                target: "ice_paw.tool_image",
+                                tool = %tc_name,
+                                bytes = bytes.len(),
+                                "工具回传图片，已注入 Image 块给视觉 agent"
+                            );
+                        }
                     } else {
                         // 非视觉：复用统一适配（两档制第二档——平台视觉配置链代读）。
                         // app_handle 经 ToolContext 通道（profile 引用链解 Stronghold 用）。
@@ -542,64 +562,67 @@ pub(crate) async fn execute_tool_round(
                             &tool_ctx.pool,
                         )
                         .await;
-                        let data = base64::engine::general_purpose::STANDARD.encode(&png);
-                        let tmp = vec![ContentBlock::image(data, "image/png")];
-                        let outcome = crate::harness::modal::adapt_blocks_for_vision(
-                            &tmp,
-                            false,
-                            &candidates,
-                            None,
-                            Some(&tool_ctx.pool),
-                        )
-                        .await;
-                        // session-events：工具返图的投影期适配入日志（stage=tool_image，
-                        // OCR 全文随 items 落库）。视觉直通分支不记——注入的 Image 块
-                        // 已由 tool_result_message 事件镜像。
-                        crate::harness::event_log::log_modal_adapted(
-                            &tool_ctx.pool,
-                            ev,
-                            &crate::harness::event_log::ModalAdaptedPayload {
-                                v: 1,
-                                stage: "tool_image".into(),
-                                mode: if outcome.ocr_replaced > 0 {
-                                    "ocr_substitute".into()
-                                } else {
-                                    "strip_with_hint".into()
+                        for (bytes, media_type) in tool_images {
+                            let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                            let tmp = vec![ContentBlock::image(data, media_type)];
+                            let outcome = crate::harness::modal::adapt_blocks_for_vision(
+                                &tmp,
+                                false,
+                                &candidates,
+                                None,
+                                Some(&tool_ctx.pool),
+                            )
+                            .await;
+                            // session-events：工具返图的投影期适配入日志（stage=tool_image，
+                            // OCR 全文随 items 落库）。视觉直通分支不记——注入的 Image 块
+                            // 已由 tool_result_message 事件镜像。逐图一事件（每次代读是
+                            // 独立 OCR 调用，粒度对齐调用事实）。
+                            crate::harness::event_log::log_modal_adapted(
+                                &tool_ctx.pool,
+                                ev,
+                                &crate::harness::event_log::ModalAdaptedPayload {
+                                    v: 1,
+                                    stage: "tool_image".into(),
+                                    mode: if outcome.ocr_replaced > 0 {
+                                        "ocr_substitute".into()
+                                    } else {
+                                        "strip_with_hint".into()
+                                    },
+                                    items: outcome.items.clone(),
                                 },
-                                items: outcome.items.clone(),
-                            },
-                        )
-                        .await;
-                        // 适配产出的文本（代读文本或诚实提示）追加到本 ToolResult content。
-                        let extra: String = outcome
-                            .blocks
-                            .iter()
-                            .filter_map(|b| b.as_text().map(|s| s.to_string()))
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        if !extra.is_empty() {
-                            if let Some(ContentBlock::ToolResult { content, .. }) =
-                                tool_result_blocks.last_mut()
-                            {
-                                content.push_str("\n\n[工具回传图片，当前模型无视觉能力，");
-                                content.push_str(if outcome.ocr_replaced > 0 {
-                                    "经视觉凭据代读为文本]\n"
-                                } else if outcome.drop_reason.is_some() {
-                                    // 有凭据但调用失败（敏感拒/限流/key 错/网络）——具体原因在下方诚实提示
-                                    "视觉凭据代读失败]\n"
-                                } else {
-                                    // 无凭据或 base64 损坏（未发起有效调用）
-                                    "且无可用视觉凭据代读]\n"
-                                });
-                                content.push_str(&extra);
+                            )
+                            .await;
+                            // 适配产出的文本（代读文本或诚实提示）追加到本 ToolResult content。
+                            let extra: String = outcome
+                                .blocks
+                                .iter()
+                                .filter_map(|b| b.as_text().map(|s| s.to_string()))
+                                .collect::<Vec<_>>()
+                                .join("\n");
+                            if !extra.is_empty() {
+                                if let Some(ContentBlock::ToolResult { content, .. }) =
+                                    tool_result_blocks.last_mut()
+                                {
+                                    content.push_str("\n\n[工具回传图片，当前模型无视觉能力，");
+                                    content.push_str(if outcome.ocr_replaced > 0 {
+                                        "经视觉凭据代读为文本]\n"
+                                    } else if outcome.drop_reason.is_some() {
+                                        // 有凭据但调用失败（敏感拒/限流/key 错/网络）——具体原因在下方诚实提示
+                                        "视觉凭据代读失败]\n"
+                                    } else {
+                                        // 无凭据或 base64 损坏（未发起有效调用）
+                                        "且无可用视觉凭据代读]\n"
+                                    });
+                                    content.push_str(&extra);
+                                }
                             }
+                            tracing::info!(
+                                target: "ice_paw.tool_image",
+                                tool = %tc_name,
+                                ocr_replaced = outcome.ocr_replaced,
+                                "工具回传图片，非视觉 agent 已代读/剥离（不再塞 Image 块）"
+                            );
                         }
-                        tracing::info!(
-                            target: "ice_paw.tool_image",
-                            tool = %tc_name,
-                            ocr_replaced = outcome.ocr_replaced,
-                            "工具回传图片，非视觉 agent 已代读/剥离（不再塞 Image 块）"
-                        );
                     }
                 }
             }
@@ -638,6 +661,214 @@ pub(crate) async fn execute_tool_round(
     }
 
     Ok(tool_result_blocks)
+}
+
+// ===========================================================================
+// 工具输出全局治理（2026-09-12 UE5 实案）：外部 server 可能把截图 base64 塞在
+// JSON 文本里返回（实测 call_tool 单次 1.75MB ≈ 125 万 token）——回合中途追加进
+// 上下文，下一次 LLM 调用直接上下文超长（Pipeline 预算/裁剪只在回合起点跑）。
+// 治理双闸：① 提取——文本内嵌 base64 图识别为真图走门②视觉通路（视觉 agent
+// 注入 Image 块模型直读、非视觉代读）；② 上限——剩余文本兜底截断（内置工具
+// 各有更紧的自查，本闸只兜「忘了自查 / 外部 server 不可控」的最坏情形）。
+// ===========================================================================
+
+/// 单次工具输出文本的全局字节上限（兜底闸；截断标记带原文字节数，诚实可观测）。
+const TOOL_OUTPUT_TEXT_CAP: usize = 256 * 1024;
+/// 单次结果最多提取的图片数（防一结果几十图刷爆视觉通路；超出原位置换省略）。
+const MAX_EXTRACTED_IMAGES: usize = 4;
+/// 参与提取判定的 base64 文本最短长度（更短的当噪声留在文本里）。
+const MIN_EXTRACT_B64_LEN: usize = 64;
+
+/// 兜底截断：超限走字节安全截断（多字节字符边界回退，永不 panic）。
+fn cap_tool_output_text(s: String) -> String {
+    if s.len() <= TOOL_OUTPUT_TEXT_CAP {
+        return s;
+    }
+    let orig = s.len();
+    tracing::warn!(
+        target: "ice_paw.tool_output",
+        bytes = orig,
+        cap = TOOL_OUTPUT_TEXT_CAP,
+        "工具输出超限，已截断（防上下文炸弹）"
+    );
+    crate::infra::strings::truncate_to_byte_boundary(
+        &s,
+        TOOL_OUTPUT_TEXT_CAP,
+        Some(&format!(
+            "\n...[输出已截断：原文 {orig} 字节，超出单次工具输出上限 {TOOL_OUTPUT_TEXT_CAP} 字节]"
+        )),
+    )
+}
+
+/// 提取文本中内嵌的 base64 图片，原位置换为短占位标记（文本返回去长度、图走视觉通路）。
+///
+/// 识别两种形态（魔数校验为准，mime 字段只作旁证——伪造 mime 的普通字节不提取）：
+/// - JSON 对象 `{ "data": "<base64>", "mimeType"|"mime_type"|"media_type": "image/*" }`
+///   （UE5 call_tool 实测形状 `{"returnValue":{"image":{"mimeType":"image/png","data":...}}}`）
+/// - 裸 data URI `data:image/png;base64,...`（JSON 内字符串或纯文本均覆盖）
+fn extract_embedded_images(text: &mut String) -> Vec<(Vec<u8>, String)> {
+    let mut images: Vec<(Vec<u8>, String)> = Vec::new();
+    let mut dropped = 0usize;
+    if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(text) {
+        walk_json_for_images(&mut v, &mut images, &mut dropped);
+        if images.is_empty() && dropped == 0 {
+            // 纯 JSON 但无内嵌图：保持原文（避免无谓的格式重排）
+            return Vec::new();
+        }
+        *text = serde_json::to_string(&v)
+            .unwrap_or_else(|_| "[工具输出图片提取后序列化失败]".to_string());
+    } else {
+        scan_data_uris(text, &mut images, &mut dropped);
+    }
+    if dropped > 0 {
+        text.push_str(&format!(
+            "\n[另有 {dropped} 张内嵌图片超出单次提取上限 {MAX_EXTRACTED_IMAGES}，已省略]"
+        ));
+    }
+    images
+}
+
+/// 递归走查 JSON 值：命中「data + image/* mime」对即提取；字符串里的 data URI 同样提取。
+fn walk_json_for_images(
+    v: &mut serde_json::Value,
+    images: &mut Vec<(Vec<u8>, String)>,
+    dropped: &mut usize,
+) {
+    match v {
+        serde_json::Value::Object(map) => {
+            let mime_is_image = ["mimeType", "mime_type", "media_type"].iter().any(|k| {
+                map.get(*k)
+                    .and_then(|m| m.as_str())
+                    .is_some_and(|m| m.starts_with("image/"))
+            });
+            if mime_is_image {
+                if let Some(data) = map.get("data").and_then(|d| d.as_str()) {
+                    if let Some(img) = decode_b64_image(data) {
+                        if images.len() < MAX_EXTRACTED_IMAGES {
+                            images.push(img);
+                            let _ = map.insert(
+                                "data".to_string(),
+                                serde_json::json!("[图片已提取为图像块，模型可直接查看]"),
+                            );
+                        } else {
+                            *dropped += 1;
+                            let _ = map.insert(
+                                "data".to_string(),
+                                serde_json::json!("[图片超出提取上限已省略]"),
+                            );
+                        }
+                    }
+                }
+            }
+            for (_k, child) in map.iter_mut() {
+                walk_json_for_images(child, images, dropped);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for child in items.iter_mut() {
+                walk_json_for_images(child, images, dropped);
+            }
+        }
+        serde_json::Value::String(s) => {
+            if s.starts_with("data:image/") {
+                if let Some(img) = decode_b64_image(s) {
+                    if images.len() < MAX_EXTRACTED_IMAGES {
+                        images.push(img);
+                        *s = "[图片已提取为图像块，模型可直接查看]".to_string();
+                    } else {
+                        *dropped += 1;
+                        *s = "[图片超出提取上限已省略]".to_string();
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// 纯文本扫描：提取裸 data URI 图片，原位置换为占位标记。
+fn scan_data_uris(text: &mut String, images: &mut Vec<(Vec<u8>, String)>, dropped: &mut usize) {
+    if !text.contains("data:image/") {
+        return;
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut rest: &str = text.as_str();
+    while let Some(pos) = rest.find("data:image/") {
+        out.push_str(&rest[..pos]);
+        let after = &rest[pos + "data:image/".len()..];
+        match after.split_once(";base64,") {
+            Some((meta, payload)) => {
+                let end = payload
+                    .find(|c: char| !(c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '='))
+                    .unwrap_or(payload.len());
+                match decode_b64_image(&payload[..end]) {
+                    Some(img) => {
+                        if images.len() < MAX_EXTRACTED_IMAGES {
+                            images.push(img);
+                            out.push_str("[图片已提取为图像块，模型可直接查看]");
+                        } else {
+                            *dropped += 1;
+                            out.push_str("[图片超出提取上限已省略]");
+                        }
+                    }
+                    None => {
+                        // 解不开（非图/坏 base64）：原样保留该段继续扫
+                        let keep_end = "data:image/".len() + meta.len() + ";base64,".len() + end;
+                        out.push_str(&rest[pos..pos + keep_end]);
+                    }
+                }
+                rest = &payload[end..];
+            }
+            None => {
+                // 非 base64 data URI（罕见）：保留前缀继续扫（防死循环）
+                out.push_str("data:image/");
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    *text = out;
+}
+
+/// 解码 base64 图片：data URI 前缀可选；字符集预检 + base64 解码 + 魔数嗅探三重闸，
+/// 任一不过返回 None（留在文本里，交给上限截断兜底）。媒体类型以魔数为准。
+fn decode_b64_image(data: &str) -> Option<(Vec<u8>, String)> {
+    let payload = if let Some(rest) = data.trim().strip_prefix("data:") {
+        rest.split_once(";base64,")?.1
+    } else {
+        data.trim()
+    };
+    if payload.len() < MIN_EXTRACT_B64_LEN {
+        return None;
+    }
+    if !payload
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'=')
+    {
+        return None;
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(payload)
+        .ok()?;
+    let media_type = sniff_image_mime(&bytes)?;
+    Some((bytes, media_type))
+}
+
+/// 图片魔数嗅探（类型判定唯一权威——mime 字段可伪造，魔数不会）。
+fn sniff_image_mime(b: &[u8]) -> Option<String> {
+    if b.starts_with(&[0x89, b'P', b'N', b'G']) {
+        Some("image/png".into())
+    } else if b.len() >= 3 && b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF {
+        Some("image/jpeg".into())
+    } else if b.starts_with(b"GIF8") {
+        Some("image/gif".into())
+    } else if b.len() >= 12 && &b[..4] == b"RIFF" && &b[8..12] == b"WEBP" {
+        Some("image/webp".into())
+    } else if b.starts_with(b"BM") {
+        Some("image/bmp".into())
+    } else {
+        None
+    }
 }
 
 /// 等待前端授权响应。
@@ -886,6 +1117,114 @@ fn dir_grant_target(path_key: &str, file_path: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 构造可过魔数嗅探的测试 PNG（≥ MIN_EXTRACT_B64_LEN 对应解码字节数）。
+    fn test_png_bytes() -> Vec<u8> {
+        let mut v = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        v.extend(std::iter::repeat_n(0x11u8, 72));
+        v
+    }
+
+    #[test]
+    fn extract_embedded_images_json_field_ue5_shape() {
+        let png = test_png_bytes();
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&png);
+        let mut text = format!(
+            r#"{{"returnValue":{{"image":{{"mimeType":"image/png","data":"{b64}"}}}}}}"#
+        );
+        let images = extract_embedded_images(&mut text);
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].0, png);
+        assert_eq!(images[0].1, "image/png");
+        assert!(!text.contains(&b64), "base64 应已从文本中移除");
+        assert!(text.contains("图片已提取为图像块"));
+        // 提取替换后仍是合法 JSON
+        assert!(serde_json::from_str::<serde_json::Value>(&text).is_ok());
+    }
+
+    #[test]
+    fn extract_embedded_images_plain_json_without_image_untouched() {
+        let orig = r#"{"ok":true,"items":[{"name":"Cube_3"}]}"#;
+        let mut text = orig.to_string();
+        let images = extract_embedded_images(&mut text);
+        assert!(images.is_empty());
+        assert_eq!(text, orig, "无内嵌图的 JSON 保持原文（零格式重排）");
+    }
+
+    #[test]
+    fn extract_embedded_images_data_uri_plain_text() {
+        let png = test_png_bytes();
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&png);
+        let mut text = format!("前文说明 data:image/png;base64,{b64} 后文说明");
+        let images = extract_embedded_images(&mut text);
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].1, "image/png");
+        assert!(text.contains("前文说明") && text.contains("后文说明"));
+        assert!(!text.contains(&b64));
+        assert!(text.contains("图片已提取为图像块"));
+    }
+
+    #[test]
+    fn extract_embedded_images_skips_non_image_magic() {
+        // mime 声称 image/png 但字节非图（魔数不匹配）→ 不提取、原文不动
+        let fake = vec![0u8; 128];
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&fake);
+        let orig = format!(r#"{{"mimeType":"image/png","data":"{b64}"}}"#);
+        let mut text = orig.clone();
+        let images = extract_embedded_images(&mut text);
+        assert!(images.is_empty());
+        assert_eq!(text, orig);
+    }
+
+    #[test]
+    fn extract_embedded_images_caps_at_limit() {
+        let png = test_png_bytes();
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&png);
+        let arr: Vec<String> = (0..6)
+            .map(|_| format!(r#"{{"mimeType":"image/png","data":"{b64}"}}"#))
+            .collect();
+        let mut text = format!("[{}]", arr.join(","));
+        let images = extract_embedded_images(&mut text);
+        assert_eq!(images.len(), MAX_EXTRACTED_IMAGES);
+        assert!(text.contains("另有 2 张"), "超出上限的图要诚实披露：{text}");
+    }
+
+    #[test]
+    fn extract_embedded_images_short_base64_left_alone() {
+        // 短于噪声阈值的 base64（小图标）留在文本里
+        let b64 = base64::engine::general_purpose::STANDARD.encode([1u8, 2, 3, 4]);
+        let orig = format!(r#"{{"mimeType":"image/png","data":"{b64}"}}"#);
+        let mut text = orig.clone();
+        assert!(extract_embedded_images(&mut text).is_empty());
+        assert_eq!(text, orig);
+    }
+
+    #[test]
+    fn cap_tool_output_text_small_untouched() {
+        let s = "a".repeat(1000);
+        assert_eq!(cap_tool_output_text(s.clone()), s);
+    }
+
+    #[test]
+    fn cap_tool_output_text_truncates_with_honest_marker() {
+        let s = "a".repeat(TOOL_OUTPUT_TEXT_CAP + 50_000);
+        let out = cap_tool_output_text(s.clone());
+        assert!(out.len() <= TOOL_OUTPUT_TEXT_CAP);
+        assert!(out.contains("输出已截断"));
+        assert!(
+            out.contains(&format!("原文 {}", TOOL_OUTPUT_TEXT_CAP + 50_000)),
+            "截断标记要带原文字节数：{out}"
+        );
+    }
+
+    #[test]
+    fn cap_tool_output_text_cjk_boundary_safe() {
+        // 多字节字符边界不 panic（truncate_to_byte_boundary 保证）
+        let s = "中".repeat(TOOL_OUTPUT_TEXT_CAP / 3 + 10_000);
+        let out = cap_tool_output_text(s);
+        assert!(out.len() <= TOOL_OUTPUT_TEXT_CAP);
+        assert!(out.contains("输出已截断"));
+    }
 
     #[test]
     fn extract_paths_from_args_with_path() {

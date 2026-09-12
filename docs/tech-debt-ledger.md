@@ -181,6 +181,7 @@
 - 会话/轨迹导出 Claude Code 兼容格式（借鉴拍，openclaw 03）—— OpenClaw「一键导入 CC 记忆」证明可迁移性是获客杠杆；我们反向做导出兼容即降低用户迁出顾虑。export_session_trajectory 加目标格式适配即可，撞上再做
 - skill 渐进披露（借鉴拍，opencode 04）—— name+description 常驻工具清单、正文按需注入；我们工具软裁剪已做相关性排序，此模式可延伸到 KB/help 注入（目录层），撞上再做
 - BeforeCompact hook（借鉴拍，opencode 04）—— opencode 压缩提示词可被插件整体替换；我们 hooks 四接入点可远期加第 5 个，压缩策略用户可编程
+- **回合中途预算复查**（2026-09-12 UE5 base64 巨块案二阶）——工具输出全局治理已治「单结果体积」（提取+256KB 截断，tool_executor 单点）；更深一层是回合内累积无闸：多轮工具结果合计仍可超窗口（Pipeline 预算/TokenWindow 只在回合起点跑一次）。修法 = loop 每轮 LLM 调用前重估工作上下文、超限触发轮间折叠——动 loop_engine 核心，等真实撞上（单结果闸后概率已大降）再立项
 
 ## 🗑 划掉区（已核验消亡，勿复活）
 
