@@ -2,7 +2,9 @@
 // ① 编辑态渲染/默认全开（无 scopes → 「全部工具」胶囊，保存零旋钮调用——不改不写）；
 // ② 自定义勾选 → 保存走旋钮通道 setToolScopes（不进 update 出生证 payload）；
 // ③ 「全部工具」清空草稿 → 保存摘除（null）；④ 已保存死条目（已删 server /
-// 裸工具名）保留进草稿防丢、chip 可摘；⑤ enabled_tools 白名单提示行。
+// 裸工具名）保留进草稿防丢、chip 可摘；⑤ 唯一权威（二批）：旧 enabled_tools
+// 白名单打开即并入草稿（平台元工具过滤）、保存工具面改动时随批摘除（次序先
+// scopes 后摘白名单）；不动工具面零强制迁移。
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mount, flushPromises, type VueWrapper } from "@vue/test-utils";
 import type { Agent } from "../../../types";
@@ -15,6 +17,7 @@ const providersListMock = vi.fn();
 const profilesListMock = vi.fn();
 const updateMock = vi.fn();
 const setToolScopesMock = vi.fn();
+const setEnabledToolsMock = vi.fn();
 const builtinToolsMock = vi.fn();
 const mcpListMock = vi.fn();
 
@@ -30,6 +33,7 @@ vi.mock("../../../api/bridge", () => ({
       update: (...a: unknown[]) => updateMock(...a),
       rotateKey: vi.fn(),
       setToolScopes: (...a: unknown[]) => setToolScopesMock(...a),
+      setEnabledTools: (...a: unknown[]) => setEnabledToolsMock(...a),
       list: async () => [],
     },
     modelProfiles: { list: (...a: unknown[]) => profilesListMock(...a) },
@@ -91,6 +95,7 @@ async function mountForm(agent: Agent | null = null) {
   mcpListMock.mockResolvedValue([UE5_SERVER]);
   updateMock.mockResolvedValue(editAgent());
   setToolScopesMock.mockResolvedValue({});
+  setEnabledToolsMock.mockResolvedValue({});
   const { default: AgentForm } = await import("../AgentForm.vue");
   const w = mount(AgentForm, { props: { agent }, attachTo: document.body });
   wrappers.push(w);
@@ -194,9 +199,48 @@ describe("AgentForm 工具集范围区块", () => {
     expect(setToolScopesMock).toHaveBeenCalledWith("ag-1", ["group:files", "run_command"]);
   });
 
-  it("enabled_tools 白名单生效 → 提示行可见（状态上屏，交集语义）", async () => {
-    const w = await mountForm(editAgent({ enabled_tools: ["read_file", "run_command"] }));
-    expect(w.text()).toContain("已启用工具白名单（2 项）");
+  it("旧白名单 → 接管声明 + 非平台条目并入草稿 chip；不动工具面保存零写入（零强制迁移）", async () => {
+    const w = await mountForm(editAgent({
+      enabled_tools: ["read_file", "propose_config_change"],
+    }));
+    // 接管声明取代旧「取交集」并列提示（并列即歧义，2026-09-12 二批拍板）
+    expect(w.text()).toContain("检测到旧版工具白名单（2 项）");
+    expect(w.text()).not.toContain("取交集");
+    // 非平台条目并入草稿 → 自定义态 + chip；平台元工具恒可见无需表达（过滤）
+    expect(w.findAll(".scope-pill")[1].classes()).toContain("active");
+    expect(w.findAll(".scope-extra-chip").map((c) => c.find(".chip-text").text()))
+      .toEqual(["read_file"]);
+
+    // 并入条目已在草稿基线内（非 dirty）→ 保存零旋钮调用，白名单原样保留
+    await saveBtn(w).trigger("click");
+    await flushPromises();
+    expect(setToolScopesMock).not.toHaveBeenCalled();
+    expect(setEnabledToolsMock).not.toHaveBeenCalled();
+  });
+
+  it("保存工具面改动 → scopes 落库后随批摘除旧白名单（次序锁：先写后摘）", async () => {
+    const w = await mountForm(editAgent({ enabled_tools: ["read_file"] }));
+    // 自定义态（chip read_file 已并入草稿基线）；再勾知识库组 → dirty
+    const kbOpt = w.findAll(".scope-option").find((o) => o.find(".opt-label").text() === "知识库")!;
+    await kbOpt.find("input").setValue(true);
+
+    await saveBtn(w).trigger("click");
+    await flushPromises();
+    // 白名单条目随批进 scopes（勾选顺序 = 基线在前、新勾在后）
+    expect(setToolScopesMock).toHaveBeenCalledWith("ag-1", ["read_file", "group:kb"]);
+    expect(setEnabledToolsMock).toHaveBeenCalledWith("ag-1", null);
+    // 先写 scopes 再摘白名单——中间态两侧并设 = 交集，只会更窄不会放宽
+    expect(setEnabledToolsMock.mock.invocationCallOrder[0])
+      .toBeGreaterThan(setToolScopesMock.mock.invocationCallOrder[0]);
+  });
+
+  it("旧白名单 + 切「全部工具」→ 保存双双摘除（真全开）", async () => {
+    const w = await mountForm(editAgent({ enabled_tools: ["read_file"] }));
+    await w.findAll(".scope-pill")[0].trigger("click");
+    await saveBtn(w).trigger("click");
+    await flushPromises();
+    expect(setToolScopesMock).toHaveBeenCalledWith("ag-1", null);
+    expect(setEnabledToolsMock).toHaveBeenCalledWith("ag-1", null);
   });
 
   it("新建态不渲染工具区块（创建后默认全开，收窄进编辑页）", async () => {

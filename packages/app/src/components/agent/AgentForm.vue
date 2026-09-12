@@ -505,11 +505,29 @@ function onSelectPreset(p: StylePreset | null) {
 // 缩小默认攻击面）；运行时授权（审批卡）与 Server 全局开关是另外两层——
 // 收窄 ≠ 免问。写入走旋钮唯一通道 set_agent_tool_scopes（yaml + DB 镜像
 // 双写），随表单主「保存」显式提交（草稿态，不改不写）。
-const savedScopes = ref<string[]>([...(props.agent?.tool_scopes ?? [])]);
+//
+// 唯一权威（2026-09-12 二批，用户拍板「并列即歧义」）：本区块是工具面的唯一
+// 编辑入口——旧版 enabled_tools 白名单（t 前缀名、会漂移）打开表单即并入草稿
+// （平台元工具除外，恒可见无需表达），保存工具面改动时随批摘除白名单；
+// 不动工具面则不碰（零强制迁移）。后端交集语义保留为手写 yaml 双设场景的
+// 防御组合，UI 不再并列呈现两套真相。
+/** 平台元工具（恒可见，无需进 scopes 表达）——与 session_runner::PLATFORM_TOOLS 同步 */
+const PLATFORM_TOOL_NAMES = new Set([
+  "propose_config_change",
+  "read_agent_config",
+  "delegate_to_agent",
+  "send_message_to_session",
+  "list_conversations",
+]);
+/** 旧白名单需要并入草稿的条目（平台元工具过滤掉——迁移后行为不变，纯去噪） */
+const whitelistMigrated = (props.agent?.enabled_tools ?? []).filter(
+  (t) => !PLATFORM_TOOL_NAMES.has(t),
+);
+const savedScopes = ref<string[]>([...(props.agent?.tool_scopes ?? []), ...whitelistMigrated]);
 /** 草稿（勾选变更不触后端）；「全部工具」= 清空草稿 = 摘除恢复全开 */
-const selectedScopes = ref<string[]>([...(props.agent?.tool_scopes ?? [])]);
+const selectedScopes = ref<string[]>([...(props.agent?.tool_scopes ?? []), ...whitelistMigrated]);
 const scopeMode = ref<"all" | "custom">(
-  (props.agent?.tool_scopes?.length ?? 0) > 0 ? "custom" : "all",
+  (props.agent?.tool_scopes?.length ?? 0) + whitelistMigrated.length > 0 ? "custom" : "all",
 );
 const customScope = computed(() => scopeMode.value === "custom");
 const scopesDirty = computed(
@@ -552,8 +570,8 @@ function removeExtraScope(v: string) {
   selectedScopes.value = selectedScopes.value.filter((x) => x !== v);
 }
 
-/** enabled_tools 白名单生效提示（状态上屏——白名单是另一层收窄，两相交集） */
-const hasToolsWhitelist = computed(() => (props.agent?.enabled_tools?.length ?? 0) > 0);
+/** 旧白名单仍在生效的条数（保存工具面改动时被本区块取代并摘除；0 = 无/已并入） */
+const legacyWhitelistCount = ref(props.agent?.enabled_tools?.length ?? 0);
 
 async function loadScopeSources() {
   try {
@@ -625,12 +643,18 @@ async function save() {
         fallback_profile_ids: chainIds.value.slice(1),
       });
       // 工具集范围走旋钮唯一通道（不进 update_agent 出生证）；空选 = 摘除恢复
-      // 全开。仅草稿变更时提交（不改不写——显式保存契约）
+      // 全开。仅草稿变更时提交（不改不写——显式保存契约）。唯一权威：工具面
+      // 落库后摘除旧白名单（其条目已并入草稿）；次序先 scopes 后摘白名单——
+      // 中间态两侧并设 = 交集，只会更窄不会放宽。
       if (scopesDirty.value) {
         await bridge.agents.setToolScopes(
           currentAgent.id,
           selectedScopes.value.length ? [...selectedScopes.value] : null,
         );
+        if (legacyWhitelistCount.value > 0) {
+          await bridge.agents.setEnabledTools(currentAgent.id, null);
+          legacyWhitelistCount.value = 0;
+        }
         savedScopes.value = [...selectedScopes.value];
       }
       const fresh = await bridge.agents.list();
@@ -1003,7 +1027,7 @@ function confirmDelete() {
             </div>
           </div>
           <p class="field-hint">收窄本 Agent 可见的工具面（降噪 / 省 token）；工具授权弹卡与 Server 开关不受影响</p>
-          <p v-if="hasToolsWhitelist" class="field-hint">已启用工具白名单（{{ props.agent?.enabled_tools?.length }} 项）——与工具集范围取交集生效</p>
+          <p v-if="legacyWhitelistCount > 0" class="field-hint">检测到旧版工具白名单（{{ legacyWhitelistCount }} 项）——保存工具面改动后将移除白名单，以本区块为准</p>
         </div>
       </div>
     </div>

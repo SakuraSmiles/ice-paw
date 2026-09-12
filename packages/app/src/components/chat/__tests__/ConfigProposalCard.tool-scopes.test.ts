@@ -1,7 +1,9 @@
 // ConfigProposalCard.tool-scopes.test.ts — 工具集范围提案的分派锁（2026-09-12 批）：
 // ① update 提案带 tool_scopes → 批准走旋钮通道 setToolScopes（不进 update_agent
 //    的出生证字段）；空数组 = 摘除语义原样透传；② create 提案带 tool_scopes →
-//    先 create（默认全开）后 setToolScopes 收窄；③ 不带 tool_scopes 的提案零调用。
+//    先 create（默认全开）后 setToolScopes 收窄；③ 不带 tool_scopes 的提案零调用；
+// ④ 唯一权威（二批）：update 提案带 tool_scopes 且未显式管理 enabled_tools →
+//    同步摘除目标 agent 旧白名单（交集语义下收窄对白名单 agent 无可见效果）。
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 import type { ConfigProposalPayload } from "../../../types";
@@ -100,6 +102,37 @@ describe("ConfigProposalCard tool_scopes 分派", () => {
     await clickApprove(w);
 
     expect(setToolScopesMock).toHaveBeenCalledWith("ag-1", []);
+  });
+
+  it("update 提案带 tool_scopes 且未带 enabled_tools → 同步摘除旧白名单（唯一权威，先写后摘）", async () => {
+    const w = await mountCard(
+      makeProposal({
+        action: "update_agent",
+        agent_id: "ag-1",
+        tool_scopes: ["group:kb"],
+      }),
+    );
+    await clickApprove(w);
+
+    expect(setToolScopesMock).toHaveBeenCalledWith("ag-1", ["group:kb"]);
+    expect(setEnabledToolsMock).toHaveBeenCalledWith("ag-1", null);
+    expect(setEnabledToolsMock.mock.invocationCallOrder[0])
+      .toBeGreaterThan(setToolScopesMock.mock.invocationCallOrder[0]);
+  });
+
+  it("update 提案同时带 tool_scopes + enabled_tools → 显式管理各走各的，不额外清白名单", async () => {
+    const w = await mountCard(
+      makeProposal({
+        action: "update_agent",
+        agent_id: "ag-1",
+        tool_scopes: ["group:kb"],
+        enabled_tools: ["read_file"],
+      }),
+    );
+    await clickApprove(w);
+
+    expect(setEnabledToolsMock).toHaveBeenCalledTimes(1);
+    expect(setEnabledToolsMock).toHaveBeenCalledWith("ag-1", ["read_file"]);
   });
 
   it("create 提案带 tool_scopes → 先 create 后 setToolScopes 收窄", async () => {

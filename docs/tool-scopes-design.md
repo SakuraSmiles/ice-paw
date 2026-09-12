@@ -56,6 +56,30 @@
   （七组 + 每台外部 server 一项），随表单主「保存」显式提交（草稿未动不写）；
   已保存死条目（已删 server / 裸名）以 chip 保留防丢、可单独摘。
 
+## 唯一权威与旧白名单并入（2026-09-12 二批，用户拍板「并列即歧义」）
+
+初版把 enabled_tools 与 tool_scopes 的交集语义用提示行并列展示（「与工具集
+范围取交集生效」），用户实测反馈：两套机制并排 = 「到底配置文件生效还是 UI
+生效」的歧义，提示行是创可贴。根治 = **AgentForm「工具」区块是工具面的唯一
+编辑权威**：
+
+- **打开即并入**：编辑态草稿种子 = `tool_scopes ∪ enabled_tools(非平台元工具)`
+  ——白名单条目以 chip 呈现（同死条目形态，可单独摘）；平台元工具过滤
+  （恒可见无需表达；vision-eye 类「3 平台工具白名单」打开后零噪音）。
+- **保存即接管**：工具面草稿变更（scopesDirty，含切「全部工具」）→
+  `setToolScopes(final)` 后 `setEnabledTools(null)`（**次序锁：先写后摘**——
+  中间态两侧并设 = 交集，只会更窄不会放宽）。提示行从「交集解释」换为接管
+  声明：「保存工具面改动后将移除白名单，以本区块为准」。
+- **零强制迁移**：不动工具面（含只改名字）保存 → 两个旋钮零写入，白名单
+  原样生效（存量 agent 不被无关保存顺手改写）。
+- **提案通道同规则**：update 提案带 tool_scopes 且未显式管理 enabled_tools →
+  批准时同步 `setEnabledTools(null)`（交集语义下收窄对白名单 agent 无可见
+  效果，同属歧义）；提案显式带 enabled_tools 则各走各的。
+- 后端交集语义**保留**：手写 yaml 两边都设的专家场景防御组合（交集 = 更窄
+  侧胜出），UI 只是保证用户不落在双设状态。
+- ⚠️ 前端 `PLATFORM_TOOL_NAMES`（AgentForm）与 `session_runner::PLATFORM_TOOLS`
+  两处同步（平台元工具新增时一起改）。
+
 ## 组装期过滤（session_runner）
 
 - `filter_tools_by_scopes`：平台元工具恒保留（PLATFORM_TOOLS：

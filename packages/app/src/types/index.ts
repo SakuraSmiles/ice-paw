@@ -20,7 +20,9 @@ export interface Agent {
   context_window?: number | null;
   enabled_tools?: string[] | null;
   /** 工具集范围（组选择三态：group:组键 / server:配置id / 裸工具名；null/空 = 全部，默认全开）。
-   *  与 enabled_tools 串联（交集）；写入走 set_agent_tool_scopes（旋钮唯一通道） */
+   *  写入走 set_agent_tool_scopes（旋钮唯一通道）；AgentForm「工具」区块是工具面唯一编辑
+   *  权威（旧白名单保存时并入并摘除）；与 enabled_tools 串联（交集）保留为手写 yaml
+   *  双设的防御语义 */
   tool_scopes?: string[] | null;
   supports_vision?: boolean;
   description?: string;

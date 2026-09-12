@@ -190,13 +190,19 @@ async function approve() {
           : (a.enabled_tools ?? []);
         await bridge.agents.setEnabledTools(a.agent_id, list);
       }
-      // 工具集范围走旋钮通道（同 enabled_tools：编辑值优先；空数组 = 摘除恢复全开）
+      // 工具集范围走旋钮通道（同 enabled_tools：编辑值优先；空数组 = 摘除恢复全开）。
+      // 唯一权威（2026-09-12 二批）：提案带 tool_scopes 且未显式管理 enabled_tools
+      // 时，同步摘除目标 agent 的旧白名单——交集语义下收窄对存量白名单 agent 无
+      // 可见效果（并列即歧义；AgentForm 同款接管规则）
       if (a.tool_scopes != null || edited("tool_scopes")) {
         const e = edited("tool_scopes");
         const list = e !== undefined
           ? e.split(",").map((s) => s.trim()).filter(Boolean)
           : (a.tool_scopes ?? []);
         await bridge.agents.setToolScopes(a.agent_id, list);
+        if (a.enabled_tools == null && !edited("enabled_tools")) {
+          await bridge.agents.setEnabledTools(a.agent_id, null);
+        }
       }
       // Word 样式偏好走 agent.yaml 专用命令（纯文件旁路，不进 DB 字段）；
       // `""` = 摘除语义由后端命令解释
