@@ -548,11 +548,21 @@ pub(crate) async fn run_agent_turn(
     // ②-3：`enabled_tools` 旋钮真生效——非空名单 = 收窄快照到名单 ∪ 平台元工具；
     // 空/缺 = 全开（不变）。名单来自 DB 行（出生 yaml 的 enabled_tools 经
     // apply_to_row 覆盖进 row，此处读行即生效值）。
+    //
+    // tool_scopes（2026-09-12 工具集权限控制批）：组选择三态
+    // （group:<组键> / server:<server id> / 裸工具名），与 enabled_tools **串联**
+    // ——先 scopes 后名单（交集）。与 enabled_tools 同读 DB 行（yaml 活行经
+    // apply_to_row 遮蔽）；写通道 set_agent_tool_scopes 双写 yaml+列（镜像不变式）。
     let tool_registry = if tools_enabled {
         let allow: Option<Vec<String>> = agent
             .enabled_tools
             .as_deref()
             .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok());
+        let scopes: Vec<String> = agent
+            .tool_scopes
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
+            .unwrap_or_default();
         let mut snap = env.global_registry.snapshot().await;
         // read_reference（@ 引用钻取）仅 1v1 会话：引用快照只在 1v1 用户 @
         // 时物化，频道 @ 是纯寻址（C9）不产快照、委派子会话无用户 @——这两类
@@ -562,6 +572,37 @@ pub(crate) async fn run_agent_turn(
         // 收口——频道内共享流本身就是全量视野，无需钻取通道。
         if conv.kind != "chat" {
             snap.remove("read_reference");
+        }
+        // tool_scopes 过滤：组/Server/裸名三态命中 ∨ 平台元工具恒保留（与
+        // enabled_tools 同语义）。死条目（对快照零命中）warn 可见——生产实案
+        // 3 个 agent 白名单里的 read_kb 不存在（真名 read_kb_document），
+        // **权限假象比缺工具危险**；server 条目零命中含「已删除或已禁用」两因。
+        if !scopes.is_empty() {
+            let inventory: Vec<(String, Option<String>)> = snap
+                .values()
+                .map(|c| (c.name().to_string(), c.server_config_id().map(String::from)))
+                .collect();
+            let dead = crate::harness::mcp::tool_scopes::dead_scope_entries(&scopes, &inventory);
+            if !dead.is_empty() {
+                tracing::warn!(
+                    target: "ice_paw.chat",
+                    "工具集范围死条目: agent={} 条目 [{}] 对当前工具快照零命中\
+                     （组键不存在 / 工具名拼错 / server 已删除或已禁用）",
+                    agent.id,
+                    dead.join(", ")
+                );
+            }
+            let before = snap.len();
+            snap = filter_tools_by_scopes(snap, &scopes);
+            tracing::info!(
+                target: "ice_paw.chat",
+                "工具集范围生效: agent={} scopes {} 项 [{}] → 保留 {} / 裁掉 {}",
+                agent.id,
+                scopes.len(),
+                scopes.join(", "),
+                snap.len(),
+                before - snap.len()
+            );
         }
         // 治「看不见」：收窄生效时披露被裁名单（排障第一线索——2026-08-31 生产
         // 实案：旧白名单升级激活致工具静默缺失，无任何日志线索两轮才定位）。
@@ -1036,6 +1077,28 @@ fn filter_tools_by_allowlist(
         .collect()
 }
 
+/// tool_scopes 工具集范围过滤（纯函数，2026-09-12 批）——三态命中
+/// （组 / server / 裸名，判定见 `mcp::tool_scopes::scope_allows`）∪ 平台元工具；
+/// 空 scopes = 原样全量（空 ≡ 全开）。与 enabled_tools 串联（先本函数后名单）。
+fn filter_tools_by_scopes(
+    snap: std::collections::HashMap<String, Arc<dyn McpClient>>,
+    scopes: &[String],
+) -> std::collections::HashMap<String, Arc<dyn McpClient>> {
+    if scopes.is_empty() {
+        return snap;
+    }
+    snap.into_iter()
+        .filter(|(name, client)| {
+            PLATFORM_TOOLS.contains(&name.as_str())
+                || crate::harness::mcp::tool_scopes::scope_allows(
+                    scopes,
+                    name,
+                    client.server_config_id(),
+                )
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1085,6 +1148,30 @@ mod tests {
         }
     }
 
+    /// tool_scopes 过滤测试替身：名字 + 外部 server 归属（模拟 t{idx}_ 前缀工具）
+    struct ServerOwnedStub {
+        name: String,
+        server_id: String,
+    }
+    #[async_trait::async_trait]
+    impl McpClient for ServerOwnedStub {
+        fn name(&self) -> &str {
+            &self.name
+        }
+        fn description(&self) -> &str {
+            "server stub"
+        }
+        fn parameters(&self) -> serde_json::Value {
+            serde_json::json!({})
+        }
+        async fn execute(&self, _args: &str) -> crate::error::AppResult<String> {
+            Ok("stub".into())
+        }
+        fn server_config_id(&self) -> Option<&str> {
+            Some(&self.server_id)
+        }
+    }
+
     fn snap_of(names: &[&str]) -> std::collections::HashMap<String, Arc<dyn McpClient>> {
         names
             .iter()
@@ -1128,6 +1215,68 @@ mod tests {
         assert_eq!(
             filter_tools_by_allowlist(snap.clone(), None).len(),
             snap.len()
+        );
+    }
+
+    /// tool_scopes 三态过滤 + 平台元工具恒保留 + 空 scopes 全开 + 与
+    /// enabled_tools 串联语义（交集）。
+    #[test]
+    fn tool_scopes_filter_group_server_tool_forms() {
+        let mut snap = snap_of(&[
+            "read_file",
+            "write_file",
+            "search_kb",
+            "propose_config_change",
+        ]);
+        snap.insert(
+            "t6_call_tool".to_string(),
+            Arc::new(ServerOwnedStub {
+                name: "t6_call_tool".to_string(),
+                server_id: "srv-ue5".to_string(),
+            }) as Arc<dyn McpClient>,
+        );
+
+        // 组 + server + 裸名三态命中，平台元工具恒保留
+        let scopes = vec![
+            "group:kb".to_string(),
+            "server:srv-ue5".to_string(),
+            "write_file".to_string(),
+        ];
+        let out = filter_tools_by_scopes(snap.clone(), &scopes);
+        let mut names: Vec<String> = out.keys().cloned().collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec![
+                "propose_config_change".to_string(),
+                "search_kb".to_string(),
+                "t6_call_tool".to_string(),
+                "write_file".to_string(),
+            ]
+        );
+
+        // 空 scopes = 全开
+        assert_eq!(filter_tools_by_scopes(snap.clone(), &[]).len(), snap.len());
+
+        // 串联语义：scopes 收窄后再走 enabled_tools 名单 = 交集（两侧都命中才留）
+        let narrowed = filter_tools_by_scopes(snap, &scopes);
+        let both = filter_tools_by_allowlist(
+            narrowed,
+            Some(&[
+                "search_kb".to_string(),
+                "write_file".to_string(),
+                "read_file".to_string(), // scopes 已裁，名单捞不回
+            ]),
+        );
+        let mut names: Vec<String> = both.keys().cloned().collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec![
+                "propose_config_change".to_string(),
+                "search_kb".to_string(),
+                "write_file".to_string(),
+            ]
         );
     }
 }

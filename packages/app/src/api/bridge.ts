@@ -97,6 +97,11 @@ const agents = {
     try { return await invoke<AgentYamlFields>("set_agent_enabled_tools", { agentId, tools }); }
     catch (err) { throw wrapInvokeError("agents.setEnabledTools", err); }
   },
+  /** 写 agent.yaml tool_scopes（组选择收窄：group:<组键>/server:<id>/裸工具名；null = 摘除恢复全开） */
+  async setToolScopes(agentId: string, scopes: string[] | null): Promise<AgentYamlFields> {
+    try { return await invoke<AgentYamlFields>("set_agent_tool_scopes", { agentId, scopes }); }
+    catch (err) { throw wrapInvokeError("agents.setToolScopes", err); }
+  },
 };
 
 const providers = {
@@ -423,9 +428,12 @@ const mcp = {
     try { return await invoke<boolean>("check_nodejs"); }
     catch { return false; }
   },
-  /** 列出内置工具清单（后端 register_builtin 单一来源，前端不再手抄） */
-  async listBuiltinTools(): Promise<{ name: string; description: string }[]> {
-    try { return await invoke<{ name: string; description: string }[]>("list_builtin_tools"); }
+  /** 列出内置工具清单（后端 register_builtin 单一来源，前端不再手抄）。
+   *  group = 工具组键（tool_scopes::TOOL_GROUPS 反查；null = 未分组，展示落「其他」） */
+  async listBuiltinTools(): Promise<{ name: string; description: string; group: string | null }[]> {
+    try {
+      return await invoke<{ name: string; description: string; group: string | null }[]>("list_builtin_tools");
+    }
     catch (err) { throw wrapInvokeError("mcp.listBuiltinTools", err); }
   },
 };

@@ -38,6 +38,35 @@ pub async fn get_by_id(pool: &SqlitePool, id: &str) -> AppResult<McpServerConfig
     Ok(row.into())
 }
 
+/// tool_index 高水位计数器的 preferences 键。
+///
+/// 2026-09-12 修复：原 `MAX(tool_index)+1` 分配在删除最高位 server 后会把
+/// 编号发给新 server——存量 enabled_tools 白名单里的 `t{idx}_xxx` 名字会静默
+/// 错绑到**另一个 server 的工具**（潜在提权口）。编号只进不退：计数器单调
+/// 递增，删 server 不回收。键缺失时以表内 MAX 播种（存量库首次创建时一次
+/// 对齐，之后只看计数器）。
+const TOOL_INDEX_HWM_KEY: &str = "mcp_tool_index_hwm";
+
+/// 分配下一个 tool_index（高水位，永不复用）。
+///
+/// 种子 = max(计数器, 表内 MAX)（防御计数器被手动清掉/落后于表内值），随后
+/// 写回计数器 = 分配值。创建是设置页用户驱动的低频操作，无并发竞态面；计数
+/// 器写失败不阻塞创建（下次种子逻辑仍以表内 MAX 兜底防复用）。
+async fn next_tool_index(pool: &SqlitePool) -> AppResult<i64> {
+    let stored: Option<i64> = super::preferences::get(pool, TOOL_INDEX_HWM_KEY)
+        .await?
+        .and_then(|v| v.parse().ok());
+    let max: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(tool_index), -1) FROM mcp_servers")
+        .fetch_one(pool)
+        .await?;
+    // Option::max（内在方法）会遮蔽 Ord::max——先解包再取大
+    let next = stored.unwrap_or(max).max(max) + 1;
+    if let Err(e) = super::preferences::set(pool, TOOL_INDEX_HWM_KEY, &next.to_string()).await {
+        tracing::warn!(target: "ice_paw.db", "tool_index 高水位计数器写回失败（下次以表内 MAX 兜底）: {e}");
+    }
+    Ok(next)
+}
+
 /// 创建 MCP Server 配置
 pub async fn create(pool: &SqlitePool, input: &NewMcpServer) -> AppResult<McpServerConfig> {
     let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -48,10 +77,11 @@ pub async fn create(pool: &SqlitePool, input: &NewMcpServer) -> AppResult<McpSer
         .map(|v| serde_json::to_string(v).unwrap_or_default())
         .unwrap_or_else(|| "{}".to_string());
     let headers_str = serde_json::to_string(&input.headers).unwrap_or_else(|_| "{}".to_string());
+    let tool_index = next_tool_index(pool).await?;
 
     sqlx::query(
         "INSERT INTO mcp_servers (id, name, description, command, args, env, enabled, trust_level, scope, runtime_kind, transport, url, headers, tool_index, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(tool_index), -1) + 1 FROM mcp_servers), ?, ?)",
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&input.id)
     .bind(&input.name)
@@ -66,6 +96,7 @@ pub async fn create(pool: &SqlitePool, input: &NewMcpServer) -> AppResult<McpSer
     .bind(input.transport.as_str())
     .bind(input.url.as_deref())
     .bind(&headers_str)
+    .bind(tool_index)
     .bind(&now)
     .bind(&now)
     .execute(pool)
@@ -271,5 +302,98 @@ impl From<McpServerRow> for McpServerConfig {
             created_at: row.created_at,
             updated_at: row.updated_at,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// in-memory SQLite + 全量 migrations
+    async fn test_pool() -> SqlitePool {
+        use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+        use std::str::FromStr;
+        let opts = SqliteConnectOptions::from_str("sqlite::memory:")
+            .expect("valid sqlite url")
+            .create_if_missing(true)
+            .foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .expect("connect in-memory sqlite");
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .expect("migrate");
+        pool
+    }
+
+    fn new_server(id: &str) -> NewMcpServer {
+        NewMcpServer {
+            id: id.into(),
+            name: format!("server-{id}"),
+            description: String::new(),
+            command: "node".into(),
+            args: vec![],
+            env: Some(serde_json::json!({})),
+            enabled: true,
+            trust_level: TrustLevel::Trusted,
+            scope: "per_agent".into(),
+            runtime_kind: RuntimeKind::System,
+            transport: TransportKind::Stdio,
+            url: None,
+            headers: serde_json::json!({}),
+        }
+    }
+
+    #[tokio::test]
+    async fn tool_index_assigns_sequential() {
+        let pool = test_pool().await;
+        let s1 = create(&pool, &new_server("s1")).await.expect("s1");
+        let s2 = create(&pool, &new_server("s2")).await.expect("s2");
+        assert_eq!(s1.tool_index, 0);
+        assert_eq!(s2.tool_index, 1);
+    }
+
+    #[tokio::test]
+    async fn tool_index_never_reused_after_delete() {
+        // 2026-09-12 回归锁：删最高位 server 后新 server 不得复用被删编号——
+        // 存量 enabled_tools 白名单的 t{idx}_ 前缀会静默错绑另一 server 的工具
+        let pool = test_pool().await;
+        create(&pool, &new_server("s1")).await.expect("s1");
+        create(&pool, &new_server("s2")).await.expect("s2");
+        create(&pool, &new_server("s3")).await.expect("s3"); // tool_index = 2
+
+        delete(&pool, "s3").await.expect("delete s3"); // MAX 回落到 1
+
+        let s4 = create(&pool, &new_server("s4")).await.expect("s4");
+        assert_eq!(
+            s4.tool_index, 3,
+            "删除后新建必须走高水位（3），不得回落 MAX+1=2 复用被删编号"
+        );
+
+        // 计数器持久：再删到只剩一个，编号依然单调递增
+        delete(&pool, "s4").await.expect("delete s4");
+        delete(&pool, "s2").await.expect("delete s2");
+        let s5 = create(&pool, &new_server("s5")).await.expect("s5");
+        assert_eq!(s5.tool_index, 4);
+    }
+
+    #[tokio::test]
+    async fn tool_index_seeds_from_table_max_for_legacy_db() {
+        // 存量库：计数器键缺失（升级到本版本前的库），播种逻辑以表内 MAX 起步
+        let pool = test_pool().await;
+        // 直接 INSERT 绕过 create——模拟高水位机制上线前建的行（无计数器键）
+        sqlx::query(
+            "INSERT INTO mcp_servers (id, name, description, command, args, env, enabled, trust_level, scope, runtime_kind, transport, url, headers, tool_index, created_at, updated_at)
+             VALUES ('legacy-1', 'legacy', '', 'node', '[]', '{}', 1, 'trusted', 'per_agent', 'system', 'stdio', NULL, '{}', 7, '2026-01-01 00:00:00', '2026-01-01 00:00:00')",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed legacy row");
+
+        let next = create(&pool, &new_server("s-new")).await.expect("new");
+        assert_eq!(next.tool_index, 8, "计数器缺失时以表内 MAX(7)+1 播种");
     }
 }

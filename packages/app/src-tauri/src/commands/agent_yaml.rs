@@ -655,6 +655,101 @@ pub async fn set_agent_enabled_tools(
     Ok(fields)
 }
 
+/// 序列写回读闸：整文件重解析 + `tool_scopes` 与请求逐项相等。
+fn validate_tool_scopes_patched(
+    new_content: &str,
+    expected: Option<&[String]>,
+) -> AppResult<AgentYamlFields> {
+    let cfg: AgentFileConfig = serde_yaml::from_str(new_content).map_err(|e| {
+        AppError::Validation(format!("改写后 agent.yaml 无法解析（已放弃写入）: {e}"))
+    })?;
+    let matches = match expected {
+        Some(items) => cfg.tool_scopes.as_deref() == Some(items),
+        None => cfg.tool_scopes.is_none(),
+    };
+    if !matches {
+        return Err(AppError::Validation(
+            "改写后 tool_scopes 回读值与请求不符（已放弃写入）".into(),
+        ));
+    }
+    Ok(AgentYamlFields::from_config(&cfg))
+}
+
+/// 写 / 摘除 agent.yaml `tool_scopes`（2026-09-12 工具集权限控制批——组选择
+/// 旋钮，与 enabled_tools 同族的唯一写入通道）。
+///
+/// 条目三态：`group:<组键>`（内置组固定名单快照）/ `server:<server 配置 id>`
+/// （外部 server 全部工具，t 前缀漂移免疫）/ 裸工具名（逃生舱）。
+/// `scopes = Some(非空 list)`：收窄；`None` **或空列表**：摘除键行（恢复全开，
+/// 空 ≡ 全开与 enabled_tools 同约定）。含冒号条目由 `yaml_flow_str` 自动加引号
+/// （裸写 `- group:files` 会被 YAML 解析成 map）。
+///
+/// **DB 列镜像**：同 `set_agent_enabled_tools` 的镜像同步不变式——组装期收窄
+/// 读 DB 行，只摘 yaml 不清 DB = 旧范围下次加载复活。
+#[tauri::command]
+pub async fn set_agent_tool_scopes(
+    cmd: State<'_, Arc<dyn AgentCmd>>,
+    pool: State<'_, SqlitePool>,
+    agent_id: String,
+    scopes: Option<Vec<String>>,
+) -> AppResult<AgentYamlFields> {
+    let scopes = scopes.filter(|v| !v.is_empty());
+    let row = cmd.inner().get(&agent_id).await?;
+    let dir = row.workspace_path.clone().ok_or_else(|| {
+        AppError::Validation(format!("agent {agent_id} 未配置工作区目录，无 agent.yaml"))
+    })?;
+    let yaml_path = std::path::Path::new(&dir).join("agent.yaml");
+    if !yaml_path.exists() {
+        return Err(AppError::NotFound {
+            resource: "agent.yaml",
+            id: yaml_path.display().to_string(),
+        });
+    }
+    let content = std::fs::read_to_string(&yaml_path)?;
+
+    let (new_content, fields, is_removal) = match &scopes {
+        Some(items) => {
+            let nc = patch_agent_yaml_seq(&content, "tool_scopes", items);
+            let f = validate_tool_scopes_patched(&nc, Some(items))?;
+            (nc, f, false)
+        }
+        None => {
+            let nc = patch_agent_yaml_remove_block(&content, "tool_scopes");
+            let f = validate_tool_scopes_patched(&nc, None)?;
+            (nc, f, true)
+        }
+    };
+
+    // 原子写：同目录 .tmp → rename（半途失败不会留下截断的 yaml）
+    let tmp_path = yaml_path.with_extension("yaml.tmp");
+    std::fs::write(&tmp_path, &new_content)?;
+    std::fs::rename(&tmp_path, &yaml_path)?;
+    tracing::info!(
+        target: "ice_paw.agent",
+        "agent.yaml 已改写: tool_scopes {}（{} 项）（{}）",
+        if is_removal { "摘除" } else { "收窄" },
+        scopes.as_ref().map_or(0, Vec::len),
+        yaml_path.display()
+    );
+
+    // DB 列镜像（同 enabled_tools：摘除 → Some(None)=NULL；收窄 → Some(Some)=同值）
+    repo::agent::update(
+        pool.inner(),
+        &agent_id,
+        &repo::agent::AgentRepoUpdate {
+            tool_scopes: Some(scopes.clone()),
+            ..Default::default()
+        },
+    )
+    .await
+    .map_err(|e| {
+        AppError::Io(std::io::Error::other(format!(
+            "agent.yaml 已改写但 DB 镜像同步失败（重试本操作即可，yaml 不会被重复改坏）: {e}"
+        )))
+    })?;
+    Ok(fields)
+}
+
 // ============================================================================
 // 镜像行同步（A，2026-08-26 生产反馈：UI 显示智谱而 yaml 停在出生时的 deepseek）
 // ============================================================================
@@ -1255,6 +1350,72 @@ mod tests {
         assert!(validate_enabled_tools_patched(&out, None).is_ok());
         // 键仍在时按 None 校验 → 拒
         assert!(validate_enabled_tools_patched(yaml, None).is_err());
+    }
+
+    // ---- tool_scopes 序列（组选择旋钮；含冒号条目是常态，引号化往返是重点锁） ----
+
+    #[test]
+    fn tool_scopes_seq_quotes_colon_entries() {
+        // 三态常态条目：group:/server: 含冒号必须引号化（裸写 `- group:files`
+        // 在 flow 序列里会被 YAML 解析成 map），裸工具名 plain 直写
+        let scopes = vec![
+            "group:files".to_string(),
+            "server:ue5-mcp".to_string(),
+            "run_command".to_string(),
+        ];
+        let out = patch_agent_yaml_seq(&sample_yaml(), "tool_scopes", &scopes);
+        assert!(out.contains(
+            "tool_scopes: [\"group:files\", \"server:ue5-mcp\", run_command]\n"
+        ));
+        // 重解析回读逐项相等（引号化不破坏语义）——validate 是往返的最终裁判
+        assert!(validate_tool_scopes_patched(&out, Some(&scopes)).is_ok());
+        // 邻居逐字节保留
+        assert!(out.contains("  你是一个品牌设计助手。"));
+        assert!(out.contains("tool_max_rounds: 50"));
+    }
+
+    #[test]
+    fn tool_scopes_seq_replaces_block_and_flow_forms() {
+        // 出生模板 / 既有 block 风格多行 → 整段替换
+        let block_form = [
+            "provider: glm",
+            "tool_scopes:",
+            "  - group:docx",
+            "  - write_docx",
+            "temperature: 0.7",
+        ]
+        .join("\n")
+            + "\n";
+        let out = patch_agent_yaml_seq(
+            &block_form,
+            "tool_scopes",
+            &["group:kb".to_string()],
+        );
+        assert!(out.contains("tool_scopes: [\"group:kb\"]\n"));
+        assert!(!out.contains("- group:docx"));
+        assert!(out.contains("temperature: 0.7"));
+        // 已是 flow 单行 → 原位替换
+        let out2 = patch_agent_yaml_seq(&out, "tool_scopes", &["group:web".to_string()]);
+        assert!(out2.contains("tool_scopes: [\"group:web\"]\n"));
+        assert!(!out2.contains("group:kb"));
+        // 缺键追加
+        let out3 = patch_agent_yaml_seq("provider: glm\n", "tool_scopes", &["git".to_string()]);
+        assert!(out3.ends_with("tool_scopes: [git]\n"));
+    }
+
+    #[test]
+    fn tool_scopes_removal_gates() {
+        let yaml = "tool_scopes: [\"group:files\"]\nprovider: glm\n";
+        let out = patch_agent_yaml_remove_block(yaml, "tool_scopes");
+        assert_eq!(out, "provider: glm\n");
+        assert!(validate_tool_scopes_patched(&out, None).is_ok());
+        // 键仍在时按 None 校验 → 拒
+        assert!(validate_tool_scopes_patched(yaml, None).is_err());
+        // 回读不符（写 A 校验 B）→ 拒
+        let other = patch_agent_yaml_seq("provider: glm\n", "tool_scopes", &["git".to_string()]);
+        assert!(
+            validate_tool_scopes_patched(&other, Some(&["group:web".to_string()])).is_err()
+        );
     }
 
     // ---- 镜像行同步（A：update() 后 provider/model/base_url 跟随 DB） ----

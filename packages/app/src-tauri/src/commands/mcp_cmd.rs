@@ -211,6 +211,9 @@ pub async fn check_nodejs() -> bool {
 pub struct BuiltinToolInfo {
     pub name: String,
     pub description: String,
+    /// 所属工具组键（tool_scopes::TOOL_GROUPS 反查；None = 未分组——前端落
+    /// 「其他」组展示，且不是合法 scope 组）。组语义固定名单快照，见 tool_scopes.rs。
+    pub group: Option<String>,
 }
 
 /// 列出所有内置工具（read_file / write_file / directory_tree …）。
@@ -230,6 +233,7 @@ pub async fn list_builtin_tools() -> AppResult<Vec<BuiltinToolInfo>> {
     Ok(defs
         .into_iter()
         .map(|d| BuiltinToolInfo {
+            group: crate::harness::mcp::tool_scopes::tool_group_of(&d.name).map(String::from),
             name: d.name,
             description: d.description,
         })

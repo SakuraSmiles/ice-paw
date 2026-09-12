@@ -17,8 +17,9 @@ import { useRouter } from "vue-router";
 import draggable from "vuedraggable";
 import { open } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import type { Agent, NewAgent, ModelChainTestResult, ProviderConnectionResult, ProviderInfo } from "../../types";
+import type { Agent, NewAgent, McpServerSnapshot, ModelChainTestResult, ProviderConnectionResult, ProviderInfo } from "../../types";
 import { bridge } from "../../api/bridge";
+import { TOOL_GROUP_LABELS, TOOL_GROUP_ORDER } from "../../data/toolGroups";
 import { loadProviders } from "../../composables/useProviders";
 import { useModelProfiles, profileById } from "../../composables/useModelProfiles";
 import GroupedSelect from "../common/GroupedSelect.vue";
@@ -243,6 +244,8 @@ onMounted(async () => {
   } catch {
     // 静默忽略
   }
+  // 工具集区块数据源（仅编辑态渲染；失败不阻塞表单）
+  if (isEdit.value) void loadScopeSources();
 });
 
 // 新建模式下，id 变化时自动更新工作区路径
@@ -497,6 +500,80 @@ function onSelectPreset(p: StylePreset | null) {
   pickerOpen.value = false;
 }
 
+// ---- 工具集范围（tool_scopes，2026-09-12 组选择批次；仅编辑态渲染） ----
+// 三层权限模型的**组装可见性**层：收窄 agent 能看到的工具面（降噪 / 省 token /
+// 缩小默认攻击面）；运行时授权（审批卡）与 Server 全局开关是另外两层——
+// 收窄 ≠ 免问。写入走旋钮唯一通道 set_agent_tool_scopes（yaml + DB 镜像
+// 双写），随表单主「保存」显式提交（草稿态，不改不写）。
+const savedScopes = ref<string[]>([...(props.agent?.tool_scopes ?? [])]);
+/** 草稿（勾选变更不触后端）；「全部工具」= 清空草稿 = 摘除恢复全开 */
+const selectedScopes = ref<string[]>([...(props.agent?.tool_scopes ?? [])]);
+const scopeMode = ref<"all" | "custom">(
+  (props.agent?.tool_scopes?.length ?? 0) > 0 ? "custom" : "all",
+);
+const customScope = computed(() => scopeMode.value === "custom");
+const scopesDirty = computed(
+  () =>
+    JSON.stringify([...selectedScopes.value].sort())
+    !== JSON.stringify([...savedScopes.value].sort()),
+);
+
+function setScopeMode(m: "all" | "custom") {
+  scopeMode.value = m;
+  if (m === "all") selectedScopes.value = [];
+}
+
+/** 选项数据源：内置组（list_builtin_tools 的 group 字段聚合计数）+ 外部 server 每台一项 */
+const groupCounts = ref<Record<string, number>>({});
+const mcpServers = ref<McpServerSnapshot[]>([]);
+const serversLoadError = ref("");
+
+interface ScopeOption { value: string; label: string; note: string }
+const scopeOptions = computed<ScopeOption[]>(() => {
+  const opts: ScopeOption[] = TOOL_GROUP_ORDER
+    .filter((k) => k !== "other")
+    .map((k) => ({
+      value: `group:${k}`,
+      label: TOOL_GROUP_LABELS[k] ?? k,
+      note: groupCounts.value[k] != null ? `${groupCounts.value[k]} 件` : "—",
+    }));
+  for (const s of mcpServers.value) {
+    opts.push({ value: `server:${s.id}`, label: s.name, note: "外部 Server 全部工具" });
+  }
+  return opts;
+});
+
+/** 已保存条目中不在选项里的（裸工具名 / 已删 server）——保留进草稿防丢，可单独摘除 */
+const extraScopes = computed(() =>
+  selectedScopes.value.filter((v) => !scopeOptions.value.some((o) => o.value === v)),
+);
+
+function removeExtraScope(v: string) {
+  selectedScopes.value = selectedScopes.value.filter((x) => x !== v);
+}
+
+/** enabled_tools 白名单生效提示（状态上屏——白名单是另一层收窄，两相交集） */
+const hasToolsWhitelist = computed(() => (props.agent?.enabled_tools?.length ?? 0) > 0);
+
+async function loadScopeSources() {
+  try {
+    const builtins = await bridge.mcp.listBuiltinTools();
+    const counts: Record<string, number> = {};
+    for (const t of builtins) {
+      const g = t.group ?? "other";
+      counts[g] = (counts[g] ?? 0) + 1;
+    }
+    groupCounts.value = counts;
+  } catch {
+    // 内置清单拉失败：组选项照常（计数显示「—」），不阻塞编辑
+  }
+  try {
+    mcpServers.value = await bridge.mcp.list();
+  } catch (e) {
+    serversLoadError.value = `外部 Server 列表加载失败：${e instanceof Error ? e.message : String(e)}`;
+  }
+}
+
 function validate(): boolean {
   if (!form.value.id.trim()) { error.value = "ID 不能为空"; return false; }
   if (!form.value.name.trim()) { error.value = "名称不能为空"; return false; }
@@ -547,6 +624,15 @@ async function save() {
         // 降级链随批提交（Some 权威语义：[] = 显式清空）
         fallback_profile_ids: chainIds.value.slice(1),
       });
+      // 工具集范围走旋钮唯一通道（不进 update_agent 出生证）；空选 = 摘除恢复
+      // 全开。仅草稿变更时提交（不改不写——显式保存契约）
+      if (scopesDirty.value) {
+        await bridge.agents.setToolScopes(
+          currentAgent.id,
+          selectedScopes.value.length ? [...selectedScopes.value] : null,
+        );
+        savedScopes.value = [...selectedScopes.value];
+      }
       const fresh = await bridge.agents.list();
       const real = fresh.find((a) => a.id === currentAgent.id);
       emit("saved", real ?? updated);
@@ -880,6 +966,45 @@ function confirmDelete() {
         </div>
         <p v-if="presetDone" class="field-hint preset-done">{{ presetDone }}</p>
         <p class="field-hint">在此目录下创建 <code>agent.yaml</code> 可配置 system_prompt、temperature 等</p>
+      </div>
+
+      <!-- 工具集范围（编辑态；组装可见性层——默认全开，自定义 = 组/Server 多选收窄） -->
+      <div v-if="isEdit" class="field">
+        <label class="field-label">工具</label>
+        <div class="scope-block">
+          <div class="scope-modes">
+            <button
+              type="button"
+              class="scope-pill"
+              :class="{ active: !customScope }"
+              @click="setScopeMode('all')"
+            >全部工具</button>
+            <button
+              type="button"
+              class="scope-pill"
+              :class="{ active: customScope }"
+              @click="setScopeMode('custom')"
+            >自定义</button>
+          </div>
+          <div v-if="customScope" class="scope-options">
+            <label v-for="opt in scopeOptions" :key="opt.value" class="scope-option">
+              <input v-model="selectedScopes" type="checkbox" :value="opt.value" />
+              <span class="opt-label">{{ opt.label }}</span>
+              <span class="opt-note">{{ opt.note }}</span>
+            </label>
+            <p v-if="serversLoadError" class="scope-warn">{{ serversLoadError }}</p>
+            <div v-if="extraScopes.length" class="scope-extras">
+              <span v-for="v in extraScopes" :key="v" class="scope-extra-chip">
+                <span class="chip-text">{{ v }}</span>
+                <button type="button" class="chip-x" title="移除此条目" @click="removeExtraScope(v)">
+                  <X :size="12" :stroke-width="2" class="chip-x-icon" />
+                </button>
+              </span>
+            </div>
+          </div>
+          <p class="field-hint">收窄本 Agent 可见的工具面（降噪 / 省 token）；工具授权弹卡与 Server 开关不受影响</p>
+          <p v-if="hasToolsWhitelist" class="field-hint">已启用工具白名单（{{ props.agent?.enabled_tools?.length }} 项）——与工具集范围取交集生效</p>
+        </div>
       </div>
     </div>
 
@@ -1314,6 +1439,102 @@ function confirmDelete() {
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 100%;
+}
+
+/* 工具集范围区块（编辑态；模式胶囊 + 分组多选） */
+.scope-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ip-spacing-2);
+}
+.scope-modes {
+  display: inline-flex;
+  gap: var(--ip-spacing-1);
+}
+.scope-pill {
+  padding: 2px 12px;
+  font-size: var(--ip-text-caption-size);
+  border-radius: var(--ip-radius-full);
+  border: 1px solid var(--ip-color-border-default);
+  background-color: var(--ip-color-bg-secondary);
+  color: var(--ip-color-text-secondary);
+  cursor: pointer;
+  transition: all var(--ip-duration-fast) var(--ip-ease-out);
+}
+.scope-pill.active {
+  background-color: var(--ip-color-primary-soft-bg);
+  border-color: var(--ip-primary-400);
+  color: var(--ip-primary-600);
+  font-weight: var(--ip-font-weight-medium);
+}
+.scope-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ip-spacing-1) var(--ip-spacing-3);
+  padding: var(--ip-spacing-2);
+  border: 1px solid var(--ip-color-border-default);
+  border-radius: var(--ip-radius-md);
+  background-color: var(--ip-color-bg-secondary);
+}
+.scope-option {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ip-spacing-1);
+  font-size: var(--ip-text-caption-size);
+  color: var(--ip-color-text-primary);
+  cursor: pointer;
+}
+.scope-option input[type="checkbox"] {
+  accent-color: var(--ip-primary-500);
+  margin: 0;
+}
+.opt-note {
+  font-size: var(--ip-text-micro-size);
+  color: var(--ip-color-text-tertiary);
+}
+.scope-warn {
+  width: 100%;
+  margin: 0;
+  font-size: var(--ip-text-micro-size);
+  color: var(--ip-warning-base);
+}
+.scope-extras {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ip-spacing-1);
+  width: 100%;
+}
+.scope-extra-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 4px 1px 8px;
+  border-radius: var(--ip-radius-full);
+  border: 1px dashed var(--ip-color-border-default);
+  font-size: var(--ip-text-micro-size);
+  font-family: var(--ip-font-mono, monospace);
+  color: var(--ip-color-text-secondary);
+}
+.chip-text {
+  word-break: break-all;
+}
+.chip-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: none;
+  background: transparent;
+  color: var(--ip-color-text-tertiary);
+  cursor: pointer;
+  padding: 0;
+}
+.chip-x:hover {
+  color: var(--ip-danger-base);
+}
+.chip-x-icon {
+  display: inline-block;
 }
 
 /* 工作区 */

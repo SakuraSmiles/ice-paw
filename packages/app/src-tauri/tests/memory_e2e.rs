@@ -103,6 +103,7 @@ async fn make_ctx(
         max_history_messages,
         context_window: None,
         enabled_tools: None,
+        tool_scopes: None,
         avatar: None,
         workspace_path: None,
         description: String::new(),

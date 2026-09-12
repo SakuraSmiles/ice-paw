@@ -7,6 +7,7 @@ import ErrorBanner from "../../components/common/ErrorBanner.vue";
 import type { McpServer, McpServerSnapshot } from "../../types";
 import { bridge } from "../../api/bridge";
 import { GLM_MCP_TEMPLATES, type GlmMcpTemplate } from "../../data/glmMcpTemplates";
+import { TOOL_GROUP_LABELS, TOOL_GROUP_ORDER } from "../../data/toolGroups";
 import { toolDisplayName } from "../../utils/toolLabels";
 
 const servers = ref<McpServerSnapshot[]>([]);
@@ -25,15 +26,14 @@ async function reload() {
     ]);
     servers.value = serverList;
     builtinTools.value = builtins
-      .map(t => {
-        const meta = BUILTIN_TOOL_META[t.name];
-        return {
-          name: t.name,
-          desc: meta?.zh ?? t.description,
-          orig: t.description,
-          category: meta?.category ?? "other",
-        };
-      })
+      .map(t => ({
+        name: t.name,
+        desc: BUILTIN_TOOL_META[t.name] ?? t.description,
+        orig: t.description,
+        // 分组读后端 TOOL_GROUPS 反查（组语义固定名单快照，单一真相源——
+        // 前端不再手抄 category 映射；未分组落「其他」展示兜底）
+        category: t.group ?? "other",
+      }))
       .sort((a, b) => a.name.localeCompare(b.name));
     lastLoadTime.value = Date.now();
   } catch (e) {
@@ -200,68 +200,63 @@ interface BuiltinToolRow {
   category: string;
 }
 
-// 工具分组顺序（「其他」兜底在末位：新增工具忘了补 meta 也能显示，不会漏）
-const BUILTIN_CATEGORIES: { key: string; label: string }[] = [
-  { key: "files", label: "文件与命令" },
-  { key: "web", label: "网络获取" },
-  { key: "kb", label: "知识库" },
-  { key: "attach", label: "附件与引用" },
-  { key: "docx", label: "Word 文档" },
-  { key: "config", label: "配置与计划" },
-  { key: "screen", label: "屏幕操作" },
-  { key: "other", label: "其他" },
-];
+// 工具分组顺序（「其他」兜底在末位：新增工具忘了进组也能显示，不会漏）。
+// 键序/标签走共享词表（AgentForm 工具区块同源）；分组判定读后端 group 字段
+const BUILTIN_CATEGORIES: { key: string; label: string }[] = TOOL_GROUP_ORDER.map(
+  key => ({ key, label: TOOL_GROUP_LABELS[key] ?? key }),
+);
 
-// 中文友好描述 + 分组（本地化文案层）：仅用于设置页展示，缺失时回退后端原始描述
-// 并落「其他」组。工具清单与计数始终来自后端，这里只决定某工具显示中文短描述
-// 还是后端原文——新增工具忘了补这里，工具照样显示（只是英文原文 + 其他组）。
-const BUILTIN_TOOL_META: Record<string, { zh: string; category: string }> = {
+// 中文友好描述（本地化文案层）：仅用于设置页展示，缺失时回退后端原始描述。
+// 工具清单/计数/分组均来自后端（list_builtin_tools 的 group = TOOL_GROUPS
+// 反查）——新增工具忘了补中文描述，工具照样显示（英文原文；分组由后端组表
+// 决定，未分组落「其他」）。
+const BUILTIN_TOOL_META: Record<string, string> = {
   // 文件与命令
-  read_file: { zh: "读取文件内容（office/PDF 提取，大文件分页）", category: "files" },
-  list_directory: { zh: "列出目录内容（非递归，目录优先排序）", category: "files" },
-  directory_tree: { zh: "递归目录树（跳噪音目录，限深 8）", category: "files" },
-  get_file_info: { zh: "文件元信息（大小/类型/时间戳）", category: "files" },
-  read_multiple_files: { zh: "批量读多个文件（≤20）", category: "files" },
-  write_file: { zh: "写入文件（覆盖，改前自动备份）", category: "files" },
-  edit_file: { zh: "精准字符串替换（先读后改）", category: "files" },
-  delete_file: { zh: "删除文件或空目录（文件先备份）", category: "files" },
-  move_file: { zh: "移动 / 重命名（跨盘自动复制）", category: "files" },
-  copy_file: { zh: "复制文件或目录（源保留）", category: "files" },
-  create_directory: { zh: "建目录含父目录（幂等）", category: "files" },
-  search_files: { zh: "正则内容搜索（grep 语义）", category: "files" },
-  run_command: { zh: "执行 shell 命令（需确认授权）", category: "files" },
-  git: { zh: "git 只读操作（status/diff/log/show）", category: "files" },
+  read_file: "读取文件内容（office/PDF 提取，大文件分页）",
+  list_directory: "列出目录内容（非递归，目录优先排序）",
+  directory_tree: "递归目录树（跳噪音目录，限深 8）",
+  get_file_info: "文件元信息（大小/类型/时间戳）",
+  read_multiple_files: "批量读多个文件（≤20）",
+  write_file: "写入文件（覆盖，改前自动备份）",
+  edit_file: "精准字符串替换（先读后改）",
+  delete_file: "删除文件或空目录（文件先备份）",
+  move_file: "移动 / 重命名（跨盘自动复制）",
+  copy_file: "复制文件或目录（源保留）",
+  create_directory: "建目录含父目录（幂等）",
+  search_files: "正则内容搜索（grep 语义）",
+  run_command: "执行 shell 命令（需确认授权）",
+  git: "git 只读操作（status/diff/log/show）",
   // 网络获取
-  web_fetch: { zh: "抓取 URL 正文（原文返回，自看状态码）", category: "web" },
+  web_fetch: "抓取 URL 正文（原文返回，自看状态码）",
   // 知识库
-  search_kb: { zh: "检索知识库（关键词+语义融合）", category: "kb" },
-  read_kb_document: { zh: "读取知识库文档全文", category: "kb" },
-  save_to_kb: { zh: "保存资料到知识库（Markdown）", category: "kb" },
+  search_kb: "检索知识库（关键词+语义融合）",
+  read_kb_document: "读取知识库文档全文",
+  save_to_kb: "保存资料到知识库（Markdown）",
   // 附件与引用
-  read_attachment_page: { zh: "按页读取聊天大附件", category: "attach" },
-  view_attachment_image: { zh: "视觉读取图片型附件（扫描件等）", category: "attach" },
-  read_reference: { zh: "读取 @引用 会话的快照全文", category: "attach" },
+  read_attachment_page: "按页读取聊天大附件",
+  view_attachment_image: "视觉读取图片型附件（扫描件等）",
+  read_reference: "读取 @引用 会话的快照全文",
   // Word 文档
-  inspect_docx: { zh: "读 Word 结构投影（五档下钻）", category: "docx" },
-  edit_docx: { zh: "编辑 Word（批量事务 + 自动备份）", category: "docx" },
-  validate_docx: { zh: "Word 断言验收（失败是数据非错误）", category: "docx" },
-  write_docx: { zh: "从模板生成整篇 Word 文档", category: "docx" },
+  inspect_docx: "读 Word 结构投影（五档下钻）",
+  edit_docx: "编辑 Word（批量事务 + 自动备份）",
+  validate_docx: "Word 断言验收（失败是数据非错误）",
+  write_docx: "从模板生成整篇 Word 文档",
   // 配置与计划
-  read_agent_config: { zh: "读取自己的 agent.yaml 配置", category: "config" },
-  propose_config_change: { zh: "提出 agent 配置变更提案（待审批）", category: "config" },
-  update_plan: { zh: "维护任务计划（待办清单）", category: "config" },
+  read_agent_config: "读取自己的 agent.yaml 配置",
+  propose_config_change: "提出 agent 配置变更提案（待审批）",
+  update_plan: "维护任务计划（待办清单）",
   // 屏幕操作
-  capture_screen: { zh: "截取整个屏幕画面", category: "screen" },
-  list_windows: { zh: "列出当前打开的窗口", category: "screen" },
-  capture_window: { zh: "截取指定窗口画面", category: "screen" },
-  mouse_move: { zh: "移动鼠标指针（需屏幕共享）", category: "screen" },
-  mouse_click: { zh: "点击鼠标（需屏幕共享）", category: "screen" },
-  mouse_drag: { zh: "拖拽鼠标（需屏幕共享）", category: "screen" },
-  mouse_scroll: { zh: "滚动鼠标滚轮（需屏幕共享）", category: "screen" },
-  type_text: { zh: "输入文字（需屏幕共享）", category: "screen" },
-  press_key: { zh: "按键 / 组合键（需屏幕共享）", category: "screen" },
-  wait: { zh: "等待指定秒数（屏幕操作节奏）", category: "screen" },
-  request_screen_session: { zh: "请求开启屏幕共享会话", category: "screen" },
+  capture_screen: "截取整个屏幕画面",
+  list_windows: "列出当前打开的窗口",
+  capture_window: "截取指定窗口画面",
+  mouse_move: "移动鼠标指针（需屏幕共享）",
+  mouse_click: "点击鼠标（需屏幕共享）",
+  mouse_drag: "拖拽鼠标（需屏幕共享）",
+  mouse_scroll: "滚动鼠标滚轮（需屏幕共享）",
+  type_text: "输入文字（需屏幕共享）",
+  press_key: "按键 / 组合键（需屏幕共享）",
+  wait: "等待指定秒数（屏幕操作节奏）",
+  request_screen_session: "请求开启屏幕共享会话",
 };
 
 // 搜索 + 分组视图：按工具名 / 中文描述 / 后端原文过滤；空分组隐藏（无搜索词 = 全部分组）

@@ -30,6 +30,7 @@ pub mod proposal_tool;
 pub mod screen;
 pub mod search;
 pub mod shell;
+pub mod tool_scopes;
 pub mod web;
 
 pub use client::{McpClient, McpRegistry, ToolContext};

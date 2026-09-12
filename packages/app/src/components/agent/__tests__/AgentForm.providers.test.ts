@@ -30,9 +30,15 @@ vi.mock("../../../api/bridge", () => ({
       create: (...a: unknown[]) => createMock(...a),
       update: (...a: unknown[]) => updateMock(...a),
       rotateKey: (...a: unknown[]) => rotateKeyMock(...a),
+      setToolScopes: vi.fn(),
       list: async () => [],
     },
     // AgentForm 挂载即拉模型配置列表（引用选择器数据源）——空表：手动用例不碰引用区
+    // 工具集区块数据源（编辑态挂载即拉；默认空——不驱动用例断言）
+    mcp: {
+      listBuiltinTools: async () => [],
+      list: async () => [],
+    },
     modelProfiles: { list: async () => [] },
   },
 }));

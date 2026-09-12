@@ -52,6 +52,7 @@ pub(super) fn make_agent() -> AgentRow {
         max_history_messages: None, // A3-2: None → 使用系统默认
         context_window: None,
         enabled_tools: None,
+        tool_scopes: None,
         supports_vision: 0,
         description: String::new(),
         avatar: None,

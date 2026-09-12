@@ -770,6 +770,8 @@ impl AgentCmd for SqlAgentCmd {
                 max_history_messages: input.max_history_messages,
                 context_window: input.context_window,
                 enabled_tools: input.enabled_tools.clone(),
+                // tool_scopes 是旋钮：唯一写入通道 set_agent_tool_scopes，不进 AgentUpdate
+                tool_scopes: None,
                 supports_vision: input.supports_vision,
                 workspace_path: input.workspace_path.clone(),
                 avatar: input.avatar.clone(),
@@ -1091,6 +1093,7 @@ impl AgentCmd for MockAgentCmd {
                 .enabled_tools
                 .as_ref()
                 .map(|v| serde_json::to_string(v).unwrap_or_else(|_| "[]".to_string())),
+            tool_scopes: None,
             supports_vision: if input.supports_vision { 1 } else { 0 },
             description: String::new(),
             avatar: None,
@@ -1275,6 +1278,7 @@ mod tests {
             max_history_messages: None,
             context_window: None,
             enabled_tools: None,
+            tool_scopes: None,
             supports_vision: 0,
             description: String::new(),
             avatar: None,

@@ -59,6 +59,7 @@ const visibleFields = computed(() => {
     if (c.max_tokens != null) fields.push({ key: "max_tokens", label: "Max Tokens", value: c.max_tokens, isKeySlot: false });
     if (c.base_url) fields.push({ key: "base_url", label: "Base URL", value: c.base_url, isKeySlot: false });
     if (c.enabled_tools?.length) fields.push({ key: "enabled_tools", label: "启用工具", value: c.enabled_tools.join(", "), isKeySlot: false });
+    if (c.tool_scopes?.length) fields.push({ key: "tool_scopes", label: "工具集范围", value: c.tool_scopes.join(", "), isKeySlot: false });
     if (c.workspace_path) fields.push({ key: "workspace_path", label: "工作区", value: c.workspace_path, isKeySlot: false });
     // API key: always shown as secure input
     fields.push({ key: "api_key", label: "API Key", value: "（必填）", isKeySlot: true });
@@ -73,6 +74,7 @@ const visibleFields = computed(() => {
     if (u.max_tokens != null) fields.push({ key: "max_tokens", label: "Max Tokens", value: u.max_tokens, isKeySlot: false });
     if (u.base_url != null) fields.push({ key: "base_url", label: "Base URL", value: u.base_url, isKeySlot: false });
     if (u.enabled_tools != null) fields.push({ key: "enabled_tools", label: "启用工具", value: u.enabled_tools.join(", "), isKeySlot: false });
+    if (u.tool_scopes != null) fields.push({ key: "tool_scopes", label: "工具集范围", value: u.tool_scopes.length ? u.tool_scopes.join(", ") : "（摘除，恢复全开）", isKeySlot: false });
     if (u.workspace_path != null) fields.push({ key: "workspace_path", label: "工作区", value: u.workspace_path, isKeySlot: false });
     // Word 样式偏好：空串 = 摘除（卡片上明示，避免误以为写成空块）
     if (u.word_style_profile != null) {
@@ -139,6 +141,11 @@ async function approve() {
         enabled_tools: a.enabled_tools ?? undefined,
         workspace_path: a.workspace_path ?? undefined,
       });
+      // 工具集范围不进出生证——create 后经旋钮通道落 yaml（默认全开的 agent
+      // 创建成功后再收窄，语义 = 用户批准的最终状态）
+      if (a.tool_scopes?.length) {
+        await bridge.agents.setToolScopes(a.id, a.tool_scopes);
+      }
     } else {
       const a = action.value as ProposalActionUpdateAgent;
       // 编辑值覆盖优先：批准的东西 = 卡片上现在显示的值（创建路径同款形状）
@@ -182,6 +189,14 @@ async function approve() {
           ? e.split(",").map((s) => s.trim()).filter(Boolean)
           : (a.enabled_tools ?? []);
         await bridge.agents.setEnabledTools(a.agent_id, list);
+      }
+      // 工具集范围走旋钮通道（同 enabled_tools：编辑值优先；空数组 = 摘除恢复全开）
+      if (a.tool_scopes != null || edited("tool_scopes")) {
+        const e = edited("tool_scopes");
+        const list = e !== undefined
+          ? e.split(",").map((s) => s.trim()).filter(Boolean)
+          : (a.tool_scopes ?? []);
+        await bridge.agents.setToolScopes(a.agent_id, list);
       }
       // Word 样式偏好走 agent.yaml 专用命令（纯文件旁路，不进 DB 字段）；
       // `""` = 摘除语义由后端命令解释

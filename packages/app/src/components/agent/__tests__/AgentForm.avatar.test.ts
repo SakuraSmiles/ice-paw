@@ -27,9 +27,15 @@ vi.mock("../../../api/bridge", () => ({
       create: (...a: unknown[]) => createMock(...a),
       update: (...a: unknown[]) => updateMock(...a),
       rotateKey: (...a: unknown[]) => rotateKeyMock(...a),
+      setToolScopes: vi.fn(),
       list: vi.fn(async () => []),
     },
     // 编辑态配置链数据源（Phase 3：模型身份 = 引用链，保存要求 ≥1 档）
+    // 工具集区块数据源（编辑态挂载即拉；默认空——不驱动用例断言）
+    mcp: {
+      listBuiltinTools: async () => [],
+      list: async () => [],
+    },
     modelProfiles: { list: (...a: unknown[]) => profilesListMock(...a) },
   },
 }));

@@ -644,6 +644,7 @@ mod tests {
             max_history_messages,
             context_window: None,
             enabled_tools: None,
+            tool_scopes: None,
             supports_vision: 0,
             description: String::new(),
             avatar: None,

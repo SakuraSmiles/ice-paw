@@ -39,6 +39,11 @@ pub struct AgentRow {
     /// Task 4: 工具白名单（NULL = 全部启用）。
     /// JSON 数组格式：`["read_file", "list_directory"]`
     pub enabled_tools: Option<String>,
+    /// 工具集范围（2026-09-12 工具集权限控制批；NULL = 全部，默认全开）。
+    /// JSON 数组串，条目三形态：`group:<组键>` / `server:<server 配置 id>` / 裸工具名。
+    /// 与 enabled_tools 串联（先 scopes 后名单）；组装期收窄读 DB 行——写通道
+    /// `set_agent_tool_scopes` 双写 yaml+本列（镜像同步不变式同 enabled_tools）。
+    pub tool_scopes: Option<String>,
     /// 是否支持图片输入（0 = 不支持, 1 = 支持）
     pub supports_vision: i32,
     /// M2-1: Agent 描述
@@ -112,6 +117,11 @@ pub struct AgentFileConfig {
     pub context_window: Option<i32>,
     #[serde(default)]
     pub enabled_tools: Option<Vec<String>>,
+    /// 工具集范围（2026-09-12 批）：条目三形态 `group:<组键>` / `server:<server id>` /
+    /// 裸工具名；None/空 = 全部（默认全开）。组名单是**固定快照**（建组时固化，
+    /// 新增内置工具不自动进组——安全面不静默扩大，用户拍板）。
+    #[serde(default)]
+    pub tool_scopes: Option<Vec<String>>,
     #[serde(default)]
     pub extra_params: Option<serde_json::Value>,
     /// 工具调用最大轮数（None = 使用系统默认 50）
@@ -190,6 +200,9 @@ impl AgentFileConfig {
         if let Some(v) = &self.enabled_tools {
             agent.enabled_tools = Some(v.clone());
         }
+        if let Some(v) = &self.tool_scopes {
+            agent.tool_scopes = Some(v.clone());
+        }
         if let Some(v) = &self.extra_params {
             agent.extra_params = v.clone();
         }
@@ -233,6 +246,9 @@ impl AgentFileConfig {
         }
         if let Some(v) = &self.enabled_tools {
             row.enabled_tools = Some(serde_json::to_string(v).unwrap_or_default());
+        }
+        if let Some(v) = &self.tool_scopes {
+            row.tool_scopes = Some(serde_json::to_string(v).unwrap_or_default());
         }
         if let Some(v) = &self.extra_params {
             row.extra_params = serde_json::to_string(v).unwrap_or_default();
@@ -282,6 +298,9 @@ pub struct Agent {
     /// Task 4: 工具白名单（None = 全部启用，Some(空 vec) = 全部禁用）。
     #[serde(default)]
     pub enabled_tools: Option<Vec<String>>,
+    /// 工具集范围（None = 全部，默认全开）。条目三形态见 AgentFileConfig.tool_scopes。
+    #[serde(default)]
+    pub tool_scopes: Option<Vec<String>>,
     /// 是否支持图片输入
     #[serde(default)]
     pub supports_vision: bool,
@@ -355,6 +374,10 @@ impl From<AgentRow> for Agent {
             context_window: row.context_window,
             enabled_tools: row
                 .enabled_tools
+                .as_deref()
+                .map(|s| serde_json::from_str::<Vec<String>>(s).unwrap_or_default()),
+            tool_scopes: row
+                .tool_scopes
                 .as_deref()
                 .map(|s| serde_json::from_str::<Vec<String>>(s).unwrap_or_default()),
             supports_vision: row.supports_vision != 0,

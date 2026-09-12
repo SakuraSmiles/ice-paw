@@ -19,6 +19,9 @@ export interface Agent {
   max_history_messages?: number | null;
   context_window?: number | null;
   enabled_tools?: string[] | null;
+  /** 工具集范围（组选择三态：group:组键 / server:配置id / 裸工具名；null/空 = 全部，默认全开）。
+   *  与 enabled_tools 串联（交集）；写入走 set_agent_tool_scopes（旋钮唯一通道） */
+  tool_scopes?: string[] | null;
   supports_vision?: boolean;
   description?: string;
   avatar?: string | null;
@@ -896,6 +899,8 @@ export interface ProposalActionCreateAgent {
   temperature?: number | null;
   max_tokens?: number | null;
   enabled_tools?: string[] | null;
+  /** 工具集范围（组选择三态：group:组键 / server:配置id / 裸工具名） */
+  tool_scopes?: string[] | null;
   workspace_path?: string | null;
 }
 
@@ -910,6 +915,8 @@ export interface ProposalActionUpdateAgent {
   temperature?: number | null;
   max_tokens?: number | null;
   enabled_tools?: string[] | null;
+  /** 工具集范围（同 CreateAgent；空数组 = 摘除恢复全开，null = 不改） */
+  tool_scopes?: string[] | null;
   workspace_path?: string | null;
   /** Word 文档样式偏好（自由文字块；空串 = 摘除 yaml 块） */
   word_style_profile?: string | null;

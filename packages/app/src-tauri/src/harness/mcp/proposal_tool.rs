@@ -58,6 +58,9 @@ struct ProposeConfigArgs {
     max_tokens: Option<i32>,
     #[serde(default)]
     enabled_tools: Option<Vec<String>>,
+    /// 工具集范围（create/update 通用；组选择三态条目）
+    #[serde(default)]
+    tool_scopes: Option<Vec<String>>,
     #[serde(default)]
     workspace_path: Option<String>,
 
@@ -94,6 +97,7 @@ fn into_proposal_action(args: &ProposeConfigArgs) -> AppResult<ProposalAction> {
                 temperature: args.temperature,
                 max_tokens: args.max_tokens,
                 enabled_tools: args.enabled_tools.clone(),
+                tool_scopes: args.tool_scopes.clone(),
                 workspace_path: args.workspace_path.clone(),
             })
         }
@@ -109,6 +113,7 @@ fn into_proposal_action(args: &ProposeConfigArgs) -> AppResult<ProposalAction> {
                 temperature: args.temperature,
                 max_tokens: args.max_tokens,
                 enabled_tools: args.enabled_tools.clone(),
+                tool_scopes: args.tool_scopes.clone(),
                 workspace_path: args.workspace_path.clone(),
                 word_style_profile: args.word_style_profile.clone(),
             })
@@ -133,7 +138,11 @@ impl McpClient for ProposeConfigChangeTool {
          或任何类似的创建 agent 请求时——你必须调用本工具。\
          \
          当用户要求修改 agent 名称、模型、system prompt、temperature、\
-         或启用的工具列表时——你必须调用本工具。\
+         启用的工具列表或工具集范围时——你必须调用本工具。\
+         \
+         当用户想给 agent 开放某个外部 MCP server 的工具（如「把 UE 工具开给我」）、\
+         或按组收窄工具面（如「只要文件工具」）时——用 tool_scopes 字段提案\
+         （group:组键 / server:配置id / 裸工具名，比逐个列工具名更稳）。\
          \
          当用户口头表达 Word 文档样式偏好（字体/字号/配色/表格样式）时，\
          用 action='update_agent' + word_style_profile 字段提案——\
@@ -197,6 +206,11 @@ impl McpClient for ProposeConfigChangeTool {
                     "type": "array",
                     "items": { "type": "string" },
                     "description": "为该 agent 启用的工具白名单。可填任意已注册工具名——含外部 MCP server 工具（形如 t6_call_tool；未启用的工具你自己看不到，名称可请用户提供，用户在「设置-MCP」页可查）。不填 = 启用全部已注册工具（默认全开）。常用内置：read_file, write_file, edit_file, run_command, git, search_kb。非空会触发额外用户确认。"
+                },
+                "tool_scopes": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "工具集范围（比 enabled_tools 更省心的收窄方式，二者可并用取交集）。条目三形态：'group:组键'（内置工具组，组键固定七个：files 文件与命令 / web 网页 / kb 知识库 / attach 附件 / docx Word 文档 / config 配置 / screen 屏幕读写）、'server:配置id'（某个外部 MCP server 的全部工具，id 可请用户提供、用户在「设置-MCP」页可查）、或裸工具名单独放行。不填 = 全部工具（默认全开）；update_agent 传空数组 [] = 摘除恢复全开。新增工具不自动进组，需收窄时显式列条目。非空会触发额外用户确认。"
                 },
                 "workspace_path": {
                     "type": "string",

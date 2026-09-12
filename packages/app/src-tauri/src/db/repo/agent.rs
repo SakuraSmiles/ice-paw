@@ -14,7 +14,7 @@ pub async fn list(pool: &SqlitePool) -> AppResult<Vec<AgentRow>> {
     let rows = sqlx::query_as::<_, AgentRow>(
         "SELECT id, name, provider, model, system_prompt, api_key_ref, base_url,
                 temperature, max_tokens, extra_params, sort_order, cache_prompt,
-                max_history_messages, enabled_tools, context_window,
+                max_history_messages, enabled_tools, tool_scopes, context_window,
                 supports_vision, description, avatar,
                 workspace_path, model_profile_id, fallback_profile_ids,
                 created_at, updated_at
@@ -31,7 +31,7 @@ pub async fn get_by_id(pool: &SqlitePool, id: &str) -> AppResult<AgentRow> {
     let row = sqlx::query_as::<_, AgentRow>(
         "SELECT id, name, provider, model, system_prompt, api_key_ref, base_url,
                 temperature, max_tokens, extra_params, sort_order, cache_prompt,
-                max_history_messages, enabled_tools, context_window,
+                max_history_messages, enabled_tools, tool_scopes, context_window,
                 supports_vision, description, avatar,
                 workspace_path, model_profile_id, fallback_profile_ids,
                 created_at, updated_at
@@ -132,6 +132,9 @@ pub struct AgentRepoUpdate {
     pub max_history_messages: Option<Option<i32>>,
     pub context_window: Option<Option<i32>>,
     pub enabled_tools: Option<Option<Vec<String>>>,
+    /// 工具集范围（2026-09-12 批）。双层 Option（None=不改 / Some(None)=清空恢复
+    /// 全开 / Some(Some)=设定）——set_agent_tool_scopes 镜像 DB 列依赖本语义。
+    pub tool_scopes: Option<Option<Vec<String>>>,
     pub supports_vision: Option<bool>,
     pub workspace_path: Option<Option<String>>,
     pub avatar: Option<Option<String>>,
@@ -193,6 +196,12 @@ pub async fn update(pool: &SqlitePool, id: &str, patch: &AgentRepoUpdate) -> App
             .as_ref()
             .map(|names| serde_json::to_string(names).unwrap_or_default());
     }
+    // 工具集范围双层 Option 语义（同 enabled_tools：镜像同步不变式）
+    if let Some(v) = &patch.tool_scopes {
+        current.tool_scopes = v
+            .as_ref()
+            .map(|names| serde_json::to_string(names).unwrap_or_default());
+    }
     if let Some(v) = patch.supports_vision {
         current.supports_vision = if v { 1 } else { 0 };
     }
@@ -219,8 +228,8 @@ pub async fn update(pool: &SqlitePool, id: &str, patch: &AgentRepoUpdate) -> App
             SET name = ?, provider = ?, model = ?, system_prompt = ?,
                 base_url = ?, temperature = ?, max_tokens = ?, extra_params = ?, sort_order = ?,
                 cache_prompt = ?, max_history_messages = ?,
-                enabled_tools = ?, supports_vision = ?, workspace_path = ?, context_window = ?,
-                avatar = ?, model_profile_id = ?, fallback_profile_ids = ?
+                enabled_tools = ?, tool_scopes = ?, supports_vision = ?, workspace_path = ?,
+                context_window = ?, avatar = ?, model_profile_id = ?, fallback_profile_ids = ?
           WHERE id = ?",
     )
     .bind(&current.name)
@@ -235,6 +244,7 @@ pub async fn update(pool: &SqlitePool, id: &str, patch: &AgentRepoUpdate) -> App
     .bind(current.cache_prompt)
     .bind(current.max_history_messages)
     .bind(&current.enabled_tools)
+    .bind(&current.tool_scopes)
     .bind(current.supports_vision)
     .bind(&current.workspace_path)
     .bind(current.context_window)
@@ -495,6 +505,52 @@ mod tests {
         .await
         .expect("update clear");
         assert_eq!(row.enabled_tools, None);
+    }
+
+    /// 工具集范围（2026-09-12 批）双层 Option 语义——set_agent_tool_scopes 写 yaml
+    /// 后镜像 DB 列依赖本语义（同 enabled_tools 镜像同步不变式）。
+    #[tokio::test]
+    async fn tool_scopes_update_double_option_semantics() {
+        let pool = test_pool().await;
+        create(&pool, &new_agent(None), "a1", "a1")
+            .await
+            .expect("create");
+        let row = get_by_id(&pool, "a1").await.expect("get");
+        assert_eq!(row.tool_scopes, None);
+
+        // Some(Some) = 设定（收窄镜像路径；含冒号条目原样进 JSON 串）
+        let scopes = vec![
+            "group:files".to_string(),
+            "server:srv-1".to_string(),
+            "run_command".to_string(),
+        ];
+        let row = update(
+            &pool,
+            "a1",
+            &AgentRepoUpdate {
+                tool_scopes: Some(Some(scopes)),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("update set");
+        assert_eq!(
+            row.tool_scopes.as_deref(),
+            Some(r#"["group:files","server:srv-1","run_command"]"#)
+        );
+
+        // Some(None) = 清空恢复全开（摘除镜像路径）
+        let row = update(
+            &pool,
+            "a1",
+            &AgentRepoUpdate {
+                tool_scopes: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("update clear");
+        assert_eq!(row.tool_scopes, None);
     }
 
     /// ModelProfile Phase 2：引用 / 降级链双层 Option 语义 + 快照列回写值变才写。

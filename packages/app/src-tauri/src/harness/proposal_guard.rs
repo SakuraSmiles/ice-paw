@@ -12,8 +12,8 @@
 //! - 提权/权限变更 → 拒绝
 //!
 //! ### 🟡 敏感（需用户确认）
-//! - 创建带 enabled_tools 的 agent
-//! - 修改 enabled_tools
+//! - 创建带 enabled_tools / tool_scopes 的 agent
+//! - 修改 enabled_tools / tool_scopes
 //!
 //! ### 🟢 非敏感（一键批准）
 //! - 创建无工具的 agent
@@ -47,6 +47,7 @@ pub fn validate_proposal(
             model,
             api_key,
             enabled_tools,
+            tool_scopes,
             ..
         } => {
             // --- 红线检查 ---
@@ -71,7 +72,8 @@ pub fn validate_proposal(
             }
 
             // --- 敏感度分级 ---
-            let has_tools = enabled_tools.as_ref().is_some_and(|t| !t.is_empty());
+            let has_tools = enabled_tools.as_ref().is_some_and(|t| !t.is_empty())
+                || tool_scopes.as_ref().is_some_and(|s| !s.is_empty());
 
             if has_tools {
                 warnings.push("新建的 agent 启用了工具调用，请确认工具列表符合预期。".into());
@@ -84,6 +86,7 @@ pub fn validate_proposal(
         ProposalAction::UpdateAgent {
             agent_id,
             enabled_tools,
+            tool_scopes,
             ..
         } => {
             // --- 红线检查 ---
@@ -98,9 +101,11 @@ pub fn validate_proposal(
             // 属敏感旋钮，届时须显式加 🟡 Medium 分支并给 warning。
 
             // --- 敏感度分级 ---
-            let changing_tools = enabled_tools.is_some();
+            let changing_tools = enabled_tools.is_some() || tool_scopes.is_some();
             if changing_tools {
-                warnings.push("正在修改 agent 的工具启用列表，请确认变更符合预期。".into());
+                warnings.push(
+                    "正在修改 agent 的工具面（启用名单/工具集范围），请确认变更符合预期。".into(),
+                );
                 Ok((SensitivityTier::Medium, warnings))
             } else {
                 Ok((SensitivityTier::Low, warnings))
@@ -129,6 +134,7 @@ mod tests {
             temperature: None,
             max_tokens: None,
             enabled_tools,
+            tool_scopes: None,
             workspace_path: None,
         }
     }
@@ -147,6 +153,7 @@ mod tests {
             temperature: None,
             max_tokens: None,
             enabled_tools: enabled_tools.unwrap_or(None),
+            tool_scopes: None,
             workspace_path: None,
             word_style_profile: None,
         }
@@ -187,6 +194,33 @@ mod tests {
         let (tier, warnings) = validate_proposal(&action, "caller-1").unwrap();
         assert_eq!(tier, SensitivityTier::Medium);
         assert!(!warnings.is_empty());
+    }
+
+    // === tool_scopes（工具集范围）= 工具面变更，Medium ===
+
+    #[test]
+    fn create_agent_with_scopes_is_medium_sensitivity() {
+        let mut action = make_create_agent("__SLOT__", None);
+        if let ProposalAction::CreateAgent { tool_scopes, .. } = &mut action {
+            *tool_scopes = Some(vec!["group:files".into(), "server:ue5".into()]);
+        }
+        let (tier, warnings) = validate_proposal(&action, "caller-1").unwrap();
+        assert_eq!(tier, SensitivityTier::Medium);
+        assert!(!warnings.is_empty());
+    }
+
+    #[test]
+    fn update_self_scopes_is_medium_sensitivity() {
+        // 非空收窄与空数组摘除（Some([])）都是工具面变更——都 Medium
+        for scopes in [Some(vec!["group:kb".into()]), Some(vec![])] {
+            let mut action = make_update_agent("caller-1", None);
+            if let ProposalAction::UpdateAgent { tool_scopes, .. } = &mut action {
+                *tool_scopes = scopes;
+            }
+            let (tier, warnings) = validate_proposal(&action, "caller-1").unwrap();
+            assert_eq!(tier, SensitivityTier::Medium);
+            assert!(!warnings.is_empty());
+        }
     }
 
     #[test]
@@ -236,6 +270,7 @@ mod tests {
             temperature: None,
             max_tokens: None,
             enabled_tools: None,
+            tool_scopes: None,
             workspace_path: None,
         };
         let err = validate_proposal(&action, "caller-1").unwrap_err();
@@ -255,6 +290,7 @@ mod tests {
             temperature: None,
             max_tokens: None,
             enabled_tools: None,
+            tool_scopes: None,
             workspace_path: None,
         };
         let err = validate_proposal(&action, "caller-1").unwrap_err();

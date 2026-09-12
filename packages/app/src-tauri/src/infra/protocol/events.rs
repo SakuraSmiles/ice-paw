@@ -399,6 +399,11 @@ pub enum ProposalAction {
         max_tokens: Option<i32>,
         #[serde(skip_serializing_if = "Option::is_none")]
         enabled_tools: Option<Vec<String>>,
+        /// 工具集范围（组选择三态：`group:<组键>` / `server:<server 配置 id>` /
+        /// 裸工具名；与 enabled_tools 串联=交集）。落地走 `set_agent_tool_scopes`
+        /// （yaml + DB 镜像双写）——新建路径在 create 之后追加调用。
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tool_scopes: Option<Vec<String>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         workspace_path: Option<String>,
     },
@@ -421,6 +426,11 @@ pub enum ProposalAction {
         max_tokens: Option<i32>,
         #[serde(skip_serializing_if = "Option::is_none")]
         enabled_tools: Option<Vec<String>>,
+        /// 工具集范围（同 CreateAgent 条目语义；`Some([])` = 摘除恢复全开，
+        /// null = 不改）。落地走 `set_agent_tool_scopes`，不进 update_agent
+        /// （旋钮唯一写入通道不变式）。
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tool_scopes: Option<Vec<String>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         workspace_path: Option<String>,
         /// Word 文档样式偏好（用户口头偏好的原文；`Some("")` = 摘除 yaml 块）。
@@ -629,6 +639,7 @@ mod tests {
             temperature: Some(0.7),
             max_tokens: None,
             enabled_tools: None,
+            tool_scopes: None,
             workspace_path: None,
         };
         let json = serde_json::to_string(&action).unwrap();
@@ -657,6 +668,7 @@ mod tests {
             temperature: Some(0.3),
             max_tokens: None,
             enabled_tools: None,
+            tool_scopes: None,
             workspace_path: None,
             word_style_profile: Some("正文宋体小四".into()),
         };
