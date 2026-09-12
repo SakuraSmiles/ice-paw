@@ -196,7 +196,7 @@ impl McpClient for ProposeConfigChangeTool {
                 "enabled_tools": {
                     "type": "array",
                     "items": { "type": "string" },
-                    "description": "为该 agent 启用的工具列表。常用：read_file, write_file, edit_file, list_directory, search_files, run_command, git, web_fetch, search_kb, save_to_kb。编程 agent 建议启用 read_file+write_file+edit_file+run_command+git+search_files。非空会触发额外用户确认。"
+                    "description": "为该 agent 启用的工具白名单。可填任意已注册工具名——含外部 MCP server 工具（形如 t6_call_tool；未启用的工具你自己看不到，名称可请用户提供，用户在「设置-MCP」页可查）。不填 = 启用全部已注册工具（默认全开）。常用内置：read_file, write_file, edit_file, run_command, git, search_kb。非空会触发额外用户确认。"
                 },
                 "workspace_path": {
                     "type": "string",
