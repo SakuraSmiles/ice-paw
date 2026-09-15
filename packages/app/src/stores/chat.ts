@@ -21,6 +21,7 @@ import type {
   ConfigProposalResponse,
   ChatBudgetPayload,
   ChatModelSwitchedPayload,
+  ChatRoundsRenewedPayload,
   ChannelView,
 } from "../types";
 import { bridge } from "../api/bridge";
@@ -257,6 +258,12 @@ export const useChatStore = defineStore("chat", () => {
     // 换档 toast 同生命周期（回合级瞬态通知）：切会话/新回合即清，不跨回合残留
     modelSwitchNotice.value = null;
     if (modelSwitchTimer) { clearTimeout(modelSwitchTimer); modelSwitchTimer = null; }
+    // 轮数续期 toast + 回合轮数事实同生命周期（selectConversation/sendMessage/
+    // clearActiveConversation 三点都汇聚到本函数，勿散清——与 lastFinishReason 重置点对齐）
+    roundsNotice.value = null;
+    if (roundsTimer) { clearTimeout(roundsTimer); roundsTimer = null; }
+    lastTurnRounds.value = null;
+    turnRoundRenewals.value = false;
   }
 
   // ===== 降级换档 toast（chat:model-switched 事件驱动；预算续期 toast 同款） =====
@@ -279,6 +286,27 @@ export const useChatStore = defineStore("chat", () => {
     modelSwitchTimer = setTimeout(() => {
       modelSwitchNotice.value = null;
       modelSwitchTimer = null;
+    }, 5000);
+  }
+
+  // ===== 轮数续期 toast（chat:rounds-renewed 事件驱动；预算/换档 toast 同款第三胞胎） =====
+  // lastTurnRounds / turnRoundRenewals：finish_reason=tool_use 提示行文案分叉的判据
+  //（「是否发生过续期」标志而非 rounds 字面比较——显式 tool_max_rounds=30 的用户
+  // 上限是 30，字面 50 会显示错误文案）。回合级单值，随 clearBudget 重置。
+  const roundsNotice = ref<string | null>(null);
+  let roundsTimer: ReturnType<typeof setTimeout> | null = null;
+  const lastTurnRounds = ref<number | null>(null);
+  const turnRoundRenewals = ref(false);
+
+  function updateRoundsRenewed(p: ChatRoundsRenewedPayload) {
+    turnRoundRenewals.value = true;
+    roundsNotice.value =
+      `已达 ${p.round} 轮，自动续期 ${p.renewal_index}/${p.max_renewals}` +
+      ` → 新上限 ${p.effective_max_rounds} 轮，任务继续`;
+    if (roundsTimer) clearTimeout(roundsTimer);
+    roundsTimer = setTimeout(() => {
+      roundsNotice.value = null;
+      roundsTimer = null;
     }, 5000);
   }
 
@@ -900,6 +928,7 @@ export const useChatStore = defineStore("chat", () => {
     messages, msgLoading, hasMore, loadingMore,
     sending, streamingText, draftText, pendingImages, pendingFiles, pendingRefs, lastFinishReason, currentModel,
     budget, renewalNotice, updateBudget, modelSwitchNotice, updateModelSwitched,
+    roundsNotice, updateRoundsRenewed, lastTurnRounds, turnRoundRenewals,
     streamingToolCalls, streamingThinking, thinkingStartTime, thinkingDuration, lastThinkingContent, thinkingDurations,
     turnFirstIdx,
     // sendingConvId 暴露为只读：事件层 chat:start 据此区分「用户发起的回合」与

@@ -395,6 +395,9 @@ export interface ChatDonePayload {
   message_id: string;
   finish_reason: string;
   usage?: { prompt_tokens: number; completion_tokens: number; cached_tokens: number };
+  /** 本 turn 完成的 LLM 轮数（与 turn_ended 事件的 rounds 同源同值）。
+   *  finish_reason=tool_use 提示行按此分叉文案；旧后端缺席 → undefined 回落通用文案 */
+  rounds?: number;
 }
 
 
@@ -702,6 +705,22 @@ export interface ChatModelSwitchedPayload {
   to_model: string;
   /** 换档触发原因 slug（quota / rate_limited / network） */
   reason: string;
+}
+/** `chat:rounds-renewed` 事件 payload — 工具轮数自动续期 toast（model-switched 同款三句式：
+ *  瞬态 UI 事件、不入 session-event-log——轮数事实由 turn_ended.rounds 落库） */
+export interface ChatRoundsRenewedPayload {
+  conversation_id: string;
+  message_id: string;
+  /** 触顶时的轮数（= initial_max_rounds × renewal_index） */
+  round: number;
+  /** 本次是第几次续期（1 起） */
+  renewal_index: number;
+  /** 续期额度（默认 4） */
+  max_renewals: number;
+  /** 初始轮数上限（每次续期 +此值） */
+  initial_max_rounds: number;
+  /** 续期后的新上限 */
+  effective_max_rounds: number;
 }
 /** `model_switch` 事件 payload — 降级链换档记录（harness::event_log::ModelSwitchPayload） */
 export interface ModelSwitchPayload {

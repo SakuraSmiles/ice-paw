@@ -34,6 +34,7 @@ import type {
   DelegationStartedPayload,
   ChatBudgetPayload,
   ChatModelSwitchedPayload,
+  ChatRoundsRenewedPayload,
 } from "../types";
 
 export async function useChatEvents(): Promise<() => void> {
@@ -141,6 +142,13 @@ export async function useChatEvents(): Promise<() => void> {
   await subscribe<ChatModelSwitchedPayload>("chat:model-switched", (e) => {
     if (e.payload.conversation_id !== chat.activeConvId) return;
     chat.updateModelSwitched(e.payload);
+  });
+
+  // 工具轮数自动续期 toast（① 自动续跑）：阶段 H 触顶续期时告知「还在跑」——
+  // 不弹会让人以为卡死。与 model-switched 同款：按激活会话过滤 + 5s 自动消失。
+  await subscribe<ChatRoundsRenewedPayload>("chat:rounds-renewed", (e) => {
+    if (e.payload.conversation_id !== chat.activeConvId) return;
+    chat.updateRoundsRenewed(e.payload);
   });
 
   // 多轮工具调用：每轮工具执行完毕后，后端创建下一轮 assistant 占位并 emit。  // 前端据此冻结上一条 assistant（写入 tool_use/text/thinking）+ 插入 user(tool_result)
@@ -317,6 +325,9 @@ export async function useChatEvents(): Promise<() => void> {
     chat.sending = false;
     chat.resetRoundStreaming();
     chat.lastFinishReason = e.payload.finish_reason;
+    // 回合轮数事实（与 turn_ended.rounds 同源）：finish_reason=tool_use 提示行
+    // 文案分叉用；旧后端缺席 → null 回落通用文案
+    chat.lastTurnRounds = e.payload.rounds ?? null;
     // 用 message_id 定位最终 assistant（freezeCurrentAssistant 可能已在末尾插入 user 消息，
     // 不能再假设末条索引），更新其 token_count
     if (e.payload.usage) {
@@ -343,6 +354,8 @@ export async function useChatEvents(): Promise<() => void> {
     chat.clearTurnAnchors();
     chat.resetRoundStreaming();
     chat.lastFinishReason = null;
+    chat.lastTurnRounds = null; // 错误回合无轮数语义，提示行判据同步失效
+    chat.turnRoundRenewals = false;
     // 错误横幅按会话隔离：只写到出错会话（此处 cid === activeConvId，已过上方 early-return）
     // kind 为后端单一真相源 slug（llm.auth 等），横幅据此挂「去检查配置」行动按钮
     chat.setConvError(cid, friendlyError(e.payload.message), e.payload.kind ?? "internal");

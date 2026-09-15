@@ -87,7 +87,9 @@ use crate::harness::r#loop::reason::retry_reason_label;
 use crate::harness::r#loop::retry_round::{stream_with_retry, RoundStreamResult};
 
 // emit_intermediate_round_state 已迁移到 crate::harness::r#loop::events
-use crate::harness::r#loop::events::{emit_budget_state, emit_intermediate_round_state};
+use crate::harness::r#loop::events::{
+    emit_budget_state, emit_intermediate_round_state, emit_rounds_renewed,
+};
 
 // ==========================================================================
 // W6.2: LoopConfig / LoopContext 已迁移到 crate::harness::r#loop::context
@@ -1291,6 +1293,18 @@ async fn stream_loop_inner(
                     tool_round + 1,
                     round_renewals,
                     ctx.budget.max_round_renewals,
+                    effective_max_rounds,
+                );
+                // 续期 toast（治「看不见」——生产实案 62 次撞顶用户全靠手点「继续」
+                // 才知道还在跑）；瞬态 UI 事件，事实由 turn_ended.rounds 落库承载
+                emit_rounds_renewed(
+                    ctx.emitter.as_ref(),
+                    &ctx.conv_id,
+                    &current_asst_msg_id,
+                    tool_round + 1,
+                    round_renewals,
+                    ctx.budget.max_round_renewals,
+                    initial_max_rounds,
                     effective_max_rounds,
                 );
             } else {

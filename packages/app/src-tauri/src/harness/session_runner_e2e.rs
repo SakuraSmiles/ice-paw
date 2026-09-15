@@ -791,6 +791,86 @@ async fn doom_loop_constant_failure_nudges_each_time_then_terminates() {
 }
 
 // =========================================================================
+// 场景 6c：工具轮数自动续期（B1 默认额度）—— ① 自动续跑 e2e。
+//
+// 形态：不设 tool_max_rounds（默认 50 + 自动续期 ×4），echo 恒成功 ×
+// {round} 占位参数逐轮变化（stuck 轮指纹随之变化；恒成功 doom 无连败可记
+// ——两检测都不干扰续期路径）。第 50 轮工具执行后阶段 H 触顶 → 续期 1/4
+// → 新上限 100 → 继续跑到文本收尾。
+// 预期：恰一条 chat:rounds-renewed（round=50 / renewal_index=1 /
+// max_renewals=4 / effective=100）+ turn_ended.rounds = 53（52 工具轮 +
+// 1 文本轮）+ chat:done payload rounds 同值（单一真相）。
+// =========================================================================
+
+#[tokio::test]
+async fn tool_rounds_renewal_emits_toast_and_continues() {
+    let pool = seeded_pool("{}").await;
+    let mut map = std::collections::HashMap::new();
+    map.insert("echo".to_string(), Arc::new(EchoTool) as Arc<dyn McpClient>);
+    let mut fx = run_turn_with_map(
+        pool,
+        MockScenario::ToolCallRepeat {
+            tool_name: "echo".into(),
+            arguments: r#"{"msg":"r{round}"}"#.into(),
+            times: 52,
+        },
+        map,
+    )
+    .await;
+    let summary = finish(&mut fx).await;
+
+    assert_eq!(summary.finish_reason, "stop", "续期后文本收尾，非 tool_use 终止");
+    assert_eq!(summary.rounds, 53, "52 工具轮 + 1 文本轮");
+    assert_eq!(fx.mock.call_count(), 53);
+
+    // UI：恰一条 chat:rounds-renewed，字段全量断言（①-1 toast 数据面）
+    let renewed: Vec<serde_json::Value> = fx
+        .emitter
+        .events
+        .lock()
+        .expect("emitter lock")
+        .iter()
+        .filter(|(n, _)| n == "chat:rounds-renewed")
+        .map(|(_, p)| p.clone())
+        .collect();
+    assert_eq!(renewed.len(), 1, "触顶一次只续一次: {renewed:?}");
+    let p = &renewed[0];
+    assert_eq!(p["round"], 50, "触顶轮数");
+    assert_eq!(p["renewal_index"], 1);
+    assert_eq!(p["max_renewals"], 4, "默认额度（不设 tool_max_rounds）");
+    assert_eq!(p["initial_max_rounds"], 50);
+    assert_eq!(p["effective_max_rounds"], 100, "50 + 初始 50");
+    assert_eq!(p["conversation_id"], "conv-e");
+
+    // 事实承载：turn_ended.rounds 落库 + chat:done.rounds 同源同值（单一真相）
+    let events = event_rows(&fx.pool).await;
+    assert_event_invariants(&events, &fx.user_msg_id);
+    let ended: crate::harness::event_log::TurnEndedPayload = serde_json::from_str(
+        &events
+            .iter()
+            .find(|r| r.kind == "turn_ended")
+            .expect("turn_ended 事件")
+            .payload,
+    )
+    .expect("turn_ended payload");
+    assert_eq!(ended.termination, "stop");
+    assert_eq!(ended.rounds, 53, "turn_ended.rounds 落库值");
+
+    let done: Vec<serde_json::Value> = fx
+        .emitter
+        .events
+        .lock()
+        .expect("emitter lock")
+        .iter()
+        .filter(|(n, _)| n == "chat:done")
+        .map(|(_, p)| p.clone())
+        .collect();
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0]["finish_reason"], "stop");
+    assert_eq!(done[0]["rounds"], 53, "chat:done payload 带 rounds（①-2 数据链）");
+}
+
+// =========================================================================
 // 场景 7：零事件旧行会话 —— Phase 2B legacy 读路径退役的行为锁定。
 //
 // 形态：会话有 pre-Phase-0 旧行（无事件），boot backfill 未覆盖的残留

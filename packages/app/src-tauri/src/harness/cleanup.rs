@@ -236,6 +236,7 @@ pub(crate) async fn finalize_success(
             message_id: final_asst_msg_id.to_string(),
             finish_reason: finish_reason.to_string(),
             usage,
+            rounds: Some(rounds),
         },
     );
 }
@@ -274,6 +275,7 @@ pub(crate) async fn finalize_cancel(
             message_id: asst_msg_id.to_string(),
             finish_reason: "abort".to_string(),
             usage: None,
+            rounds: Some(rounds),
         },
     );
 }
@@ -468,6 +470,42 @@ mod tests {
         assert_eq!(
             classify_termination_blocks(&[], true),
             TerminationDecision::PersistFallback
+        );
+    }
+
+    // --- ①-2 兜底：chat:done payload 的 rounds 序列化（skip_serializing_if 锁）---
+    // finalize 两处现恒 Some(rounds)（与 turn_ended.rounds 同源）；None 形态留给
+    // 旧字段兼容。若 skip 属性被误删，None 会序列化成 "rounds":null——前端
+    // `e.payload.rounds ?? null` 恰好等价，但 Some 形态多一个显式 null 字段会
+    // 让旧后端/新后端的 payload 面积分叉，此处两态都锁。
+
+    #[test]
+    fn chat_done_rounds_serializes_when_present() {
+        let payload = ChatDonePayload {
+            conversation_id: "c1".into(),
+            message_id: "m1".into(),
+            finish_reason: "stop".into(),
+            usage: None,
+            rounds: Some(53),
+        };
+        let v = serde_json::to_value(&payload).expect("serialize");
+        assert_eq!(v["rounds"], 53, "Some 必须带 rounds（①-2 数据链）");
+        assert_eq!(v["finish_reason"], "stop");
+    }
+
+    #[test]
+    fn chat_done_rounds_skipped_when_none() {
+        let payload = ChatDonePayload {
+            conversation_id: "c1".into(),
+            message_id: "m1".into(),
+            finish_reason: "abort".into(),
+            usage: None,
+            rounds: None,
+        };
+        let v = serde_json::to_value(&payload).expect("serialize");
+        assert!(
+            v.get("rounds").is_none(),
+            "None 必须整字段缺席（skip_serializing_if），非 null: {v}"
         );
     }
 }

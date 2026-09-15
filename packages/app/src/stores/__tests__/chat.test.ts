@@ -638,4 +638,58 @@ describe("chatStore", () => {
       expect(store.budget).toBeNull(); // 新回合新预算（后端 per-send）
     });
   });
+
+  describe("轮数续期 toast（chat:rounds-renewed → updateRoundsRenewed）", () => {
+    /** 最小 rounds-renewed payload 工厂（阶段 H 触顶续期的典型值） */
+    const roundsPayload = (overrides?: Partial<import("../../types").ChatRoundsRenewedPayload>) => ({
+      conversation_id: "c1",
+      message_id: "m1",
+      round: 50,
+      renewal_index: 1,
+      max_renewals: 4,
+      initial_max_rounds: 50,
+      effective_max_rounds: 100,
+      ...overrides,
+    });
+
+    it("续期事件：置位 toast 文案（触顶轮/续期序/新上限）+ 回合标志", () => {
+      const store = useChatStore();
+      store.updateRoundsRenewed(roundsPayload());
+      expect(store.roundsNotice).toContain("50 轮");
+      expect(store.roundsNotice).toContain("1/4");
+      expect(store.roundsNotice).toContain("100 轮");
+      expect(store.turnRoundRenewals).toBe(true); // ①-2 finish_reason 文案分叉判据
+    });
+
+    it("5s 后 toast 自动清除；回合标志保留（回合事实非瞬态，供 chat:done 后文案分叉）", () => {
+      vi.useFakeTimers();
+      const store = useChatStore();
+      store.updateRoundsRenewed(roundsPayload());
+      vi.advanceTimersByTime(5000);
+      expect(store.roundsNotice).toBeNull();
+      expect(store.turnRoundRenewals).toBe(true); // 回合内 toast 已清、事实仍在
+      vi.useRealTimers();
+    });
+
+    it("切会话 / 新回合发送：三态重置（clearBudget 汇聚点）", async () => {
+      mockInvoke.mockResolvedValue(undefined);
+      const store = useChatStore();
+      store.conversations = [fakeConv("c1"), fakeConv("c2")];
+      store.updateRoundsRenewed(roundsPayload());
+      store.lastTurnRounds = 53;
+
+      store.selectConversation("c2");
+      expect(store.roundsNotice).toBeNull();
+      expect(store.lastTurnRounds).toBeNull();
+      expect(store.turnRoundRenewals).toBe(false);
+
+      // 新回合（sendMessage 同走 clearBudget）
+      store.updateRoundsRenewed(roundsPayload());
+      store.lastTurnRounds = 53;
+      await store.sendMessage("继续");
+      expect(store.roundsNotice).toBeNull();
+      expect(store.lastTurnRounds).toBeNull();
+      expect(store.turnRoundRenewals).toBe(false);
+    });
+  });
 });
