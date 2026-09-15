@@ -16,7 +16,12 @@
    配 24px/行）——取证 DeepSeek 网页版（16/28=1.75）与 DSH 桌面（14/24=1.71）后
    用户重新拍板 24px 档，取代 09-05 二轮 1.5 判语；与气泡纯文本同值统一不变。
    块间距 8→12px（spacing-3）。同批：标题 700+不对称间距、表格横线化、引用
-   轻量化、行内代码去边框、:has 邻接收紧、列表缩进 20px、思考区紧凑档、宽表破列。 */
+   轻量化、行内代码去边框、:has 邻接收紧、列表缩进 20px、思考区紧凑档、宽表破列。
+   四轮（同日，真机反馈「还是松散」）：标题间距收紧——三轮 24/12 是 DS 文档
+   节奏，假设成段散文；agent 回复是碎片化短节（标题+两行正文），24px 断口把
+   正文切碎。收紧为 h1 20/8、h2 16/8、h3 16/6、h4-h6 12/4——下距一律压到段距
+   （12px）以下（标题紧贴自己的节），断口感只靠上距；:has 邻接规则随底距
+   收紧退役。 */
 
 .markdown-body {
   font-family: var(--ip-font-sans);
@@ -42,7 +47,7 @@
   font-size: 24px;
   line-height: 30px;
   font-weight: var(--ip-font-weight-bold, 700);
-  margin: var(--ip-spacing-6, 24px) 0 var(--ip-spacing-3, 12px);
+  margin: var(--ip-spacing-5, 20px) 0 var(--ip-spacing-2, 8px);
   color: var(--ip-color-text-primary, var(--ip-gray-900));
 }
 
@@ -52,7 +57,7 @@
   font-size: var(--ip-text-h2-size, 22px);
   line-height: var(--ip-text-h2-lh, 28px);
   font-weight: var(--ip-font-weight-bold, 700);
-  margin: var(--ip-spacing-6, 24px) 0 var(--ip-spacing-3, 12px);
+  margin: var(--ip-spacing-4, 16px) 0 var(--ip-spacing-2, 8px);
   color: var(--ip-color-text-primary, var(--ip-gray-900));
 }
 
@@ -61,7 +66,7 @@
   font-size: var(--ip-text-h3-size, 18px);
   line-height: var(--ip-text-h3-lh, 24px);
   font-weight: var(--ip-font-weight-bold, 700);
-  margin: var(--ip-spacing-6, 24px) 0 var(--ip-spacing-3, 12px);
+  margin: var(--ip-spacing-4, 16px) 0 var(--ip-spacing-1_5, 6px);
   color: var(--ip-color-text-primary, var(--ip-gray-900));
 }
 
@@ -74,19 +79,12 @@
   font-size: var(--ip-text-body-lg-size, 17px);
   line-height: var(--ip-text-body-lg-lh, 28px);
   font-weight: var(--ip-font-weight-semibold, 600);
-  margin: var(--ip-spacing-3, 12px) 0;
+  margin: var(--ip-spacing-3, 12px) 0 var(--ip-spacing-1, 4px);
   color: var(--ip-color-text-primary, var(--ip-gray-900));
 }
 
-/* 小标题紧贴后续列表（DS 系 8px 档，我们 6px=spacing-1_5）：:has() 上半边是
-   渐进增强——不支持 :has 的引擎里下半边 `+ ul` 仍生效，优雅降级 */
-.markdown-body :where(h4, h5, h6) + :where(ul, ol) {
-  margin-top: var(--ip-spacing-1_5, 6px);
-}
-
-.markdown-body :where(h4, h5, h6):has(+ :where(ul, ol)) {
-  margin-bottom: var(--ip-spacing-1_5, 6px);
-}
+/* 四轮起 :has 邻接收紧退役——h4-h6 底距已压到 4px，比原邻接规则（6px）更紧，
+   保留只会反向放大间距 */
 
 /* ------------------- 段落 ------------------- */
 
