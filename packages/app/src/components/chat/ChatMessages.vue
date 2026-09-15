@@ -176,6 +176,17 @@ function toggleToolCall(id: string) {
   expandedToolCalls.value = set;
 }
 
+// ③ 组级工具折叠的展开状态（默认折、存「已展开」——TrajectoryView collapsedTurns
+// 的拷贝式 toggle 范式，方向相反）。键 = 组键（grp-<msgId>），与 expandedToolCalls
+// （tool_use id）键空间不相交；折叠时不清理 expandedToolCalls——重展开恢复各行原展开态。
+const expandedToolGroups = ref<Set<string>>(new Set());
+
+function toggleToolGroup(key: string) {
+  const set = new Set(expandedToolGroups.value);
+  if (set.has(key)) set.delete(key); else set.add(key);
+  expandedToolGroups.value = set;
+}
+
 function toggleThinking(msgId: string) {
   const set = new Set(expandedThinking.value);
   if (set.has(msgId)) set.delete(msgId); else set.add(msgId);
@@ -920,6 +931,63 @@ function isTurnStreaming(item: GroupedItem): boolean {
   return chat.sending && chat.turnFirstIdx !== null && item.idx >= chat.turnFirstIdx;
 }
 
+// ===== ③ 组级工具折叠（生产实案：23% 回合 >20 次工具、峰值 150 行刷屏）=====
+/** 折叠阈值：连续 assistant 组内通用工具行 ≥8 才折叠（少量工具不折，保留直观流）。 */
+const TOOL_COLLAPSE_THRESHOLD = 8;
+
+/** 豁免谓词：该 tool_use 渲染为结构化卡片（委派/计划）而非通用行。
+ *  memo 化（summarizeCached 的 JSON-key 先例）；**计数与渲染必须共用同一判定**
+ *  （本函数 ↔ delegateCardFor/planCardFor 的非 null 条件）——否则「摘要说 42
+ *  实际显示 41」。委托 Err 的兜底通用行随折叠隐藏，错误态仍由卡片本体检出。 */
+const structuredCardKind = memoized((key: string): "delegate" | "plan" | null => {
+  const [name, input, isError] = JSON.parse(key) as [string, string, boolean];
+  if (name === "delegate_to_agent") return "delegate";
+  if (name === "update_plan" && !isError && parsePlanInput(input) != null) return "plan";
+  return null;
+});
+
+function structuredCardKindOf(tu: { id: string; name: string; input: string }): "delegate" | "plan" | null {
+  return structuredCardKind(JSON.stringify([tu.name, tu.input, getToolHasError(tu.id)]));
+}
+
+/** 各 assistant 组的工具行统计（跨 item 聚合——刷屏源是回合内多轮 × 每轮 3-5 条
+ *  在合并组里累积，非单行爆炸）。豁免（结构化卡）不计入：摘要行数 = 被隐藏的
+ *  通用行数，两口径天然一致。user 组不入表。 */
+const groupToolStats = computed<Map<string, { total: number; errors: number }>>(() => {
+  const stats = new Map<string, { total: number; errors: number }>();
+  for (const g of messageGroups.value) {
+    if (g.role !== "assistant") continue;
+    let total = 0;
+    let errors = 0;
+    for (const it of g.items) {
+      for (const tu of parseToolUseBlocks(it.msg.content_blocks)) {
+        if (structuredCardKindOf(tu) !== null) continue;
+        total++;
+        if (getToolHasError(tu.id)) errors++;
+      }
+    }
+    if (total > 0) stats.set(g.key, { total, errors });
+  }
+  return stats;
+});
+
+/** 组是否与本回合生成窗口相交（isTurnStreaming 的组级形态）：含 live item 的组
+ *  恒 lastIdx ≥ turnFirstIdx → 永不折叠（已冻结轮工具卡在 TTFT/纯文本流式期必须
+ *  可见，c9d2680 frozen-round 修复语义）；回合结束（clearTurnAnchors 置 null）才沉淀。 */
+function groupInLiveTurn(g: MessageGroup): boolean {
+  return chat.sending && chat.turnFirstIdx !== null && g.lastIdx >= chat.turnFirstIdx;
+}
+
+/** 组具备折叠资格（≥阈值且非生成中）——摘要行在折/展两态都渲染（toggle 载体）。 */
+function toolCollapseEligible(g: MessageGroup): boolean {
+  const s = groupToolStats.value.get(g.key);
+  return !!s && s.total >= TOOL_COLLAPSE_THRESHOLD && !groupInLiveTurn(g);
+}
+
+function isToolsCollapsed(g: MessageGroup): boolean {
+  return toolCollapseEligible(g) && !expandedToolGroups.value.has(g.key);
+}
+
 /** 该 item 是否是全局最后一条 assistant（用于 chat:done 后驻留的「思考·已完成」块）。*/
 function isLastAssistant(item: GroupedItem): boolean {
   return item.msg.role === "assistant" && item.idx === chat.messages.length - 1;
@@ -966,11 +1034,18 @@ const finishReasonLabels: Record<string, string> = {
 };
 
 /** finish_reason 文案：budget_exceeded 在有预算数据时附具体数字
- *  （已用 X / 上限 Y），让用户知道为什么这么快烧完、还剩多少跑道。 */
+ *  （已用 X / 上限 Y），让用户知道为什么这么快烧完、还剩多少跑道。
+ *  tool_use 按本回合是否发生过续期分叉（①-2）：无续期=用户配置的显式上限
+ *  （指路 agent.yaml）；有续期=默认额度用尽（含自动续期，指路改配置耗额度）。 */
 function finishReasonLabel(reason: string): string {
   if (reason === "budget_exceeded" && chat.budget) {
     const b = chat.budget;
     return `本次 token 预算已达上限（已用 ${formatTokenCount(b.cumulative_tokens)} / 上限 ${formatTokenCount(b.effective_cap)}）`;
+  }
+  if (reason === "tool_use" && chat.lastTurnRounds != null) {
+    return chat.turnRoundRenewals
+      ? `已达最大轮数（${chat.lastTurnRounds} 轮，含自动续期）`
+      : `已到你配置的 ${chat.lastTurnRounds} 轮上限（可在 agent.yaml 调整）`;
   }
   return finishReasonLabels[reason] || reason;
 }
@@ -1255,7 +1330,7 @@ const RESUMABLE_REASONS = new Set([
                           :rounds="d.rounds"
                           @open-child="openChildConv"
                         />
-                        <template v-if="d.hasError">
+                        <template v-if="d.hasError && !isToolsCollapsed(group)">
                           <div class="tool-toggle" @click="toggleToolCall(tu.id)">
                             <StatusGlyph status="error" />
                             <span class="tool-name">{{ toolDisplayName(tu.name) }}</span>
@@ -1274,6 +1349,9 @@ const RESUMABLE_REASONS = new Set([
                         <template v-for="p in [planCardFor(tu)]" :key="p ? 'plan-card' : 'plan-none'">
                           <PlanCard v-if="p" :items="p" @open-task="openChildConv" />
                           <template v-else>
+                            <!-- ③ 组级折叠：折叠时通用行整体隐藏（委派/计划卡豁免仍可见，
+                                 总量摘要行见组尾）；豁免判定与计数共用 structuredCardKind -->
+                            <template v-if="!isToolsCollapsed(group)">
                             <!-- 工具行摘要（P1 工具）：展示名 + 次级信息左置 + 文件名右锚可点；
                                  非 P1 / 参数畸形 → 通用行（展示名词表降级英文原值） -->
                             <template v-for="s in [summaryFor(tu)]" :key="s ? 'sum' : 'sum-none'">
@@ -1301,6 +1379,7 @@ const RESUMABLE_REASONS = new Set([
                                 </div>
                               </Transition>
                             </template>
+                            </template>
                           </template>
                         </template>
                       </template>
@@ -1308,7 +1387,8 @@ const RESUMABLE_REASONS = new Set([
                   </div>
                 </div>
 
-                <!-- 工具调用（当前流式） -->
+                <!-- 工具调用（当前流式）。③ 折叠互斥结构性成立：含 live item 的组
+                     恒 lastIdx ≥ turnFirstIdx → groupInLiveTurn → 永不折叠，本块零改动 -->
                 <div v-if="isLiveAssistant(item) && toolCallList.length > 0" class="tools-strip">
                   <div v-for="call in toolCallList" :key="call.id">
                     <!-- MA-1：流式中的委派卡片（参数逐字到达/结果即完成） -->
@@ -1375,6 +1455,21 @@ const RESUMABLE_REASONS = new Set([
                   </div>
                 </div>
               </template>
+            </div>
+
+            <!-- ③ 组级工具折叠摘要行（≥阈值且非生成中组；折/展两态都在场=toggle 载体）：
+                 折叠态一行总量「N 次工具调用 · M 失败」，展开态「收起 · N 次工具调用」。
+                 ⚠️ 必须在 item v-for 之外（与 message-item 同级）——多轮工具回合每轮
+                 一条消息；2026-09-15 真机实案：落在 item 内时 50 轮回合渲染 50 条重复
+                 摘要行、组间用户气泡被挤出视野（单 item 测试形态测不出此错位） -->
+            <div v-if="toolCollapseEligible(group)" class="tool-toggle tool-group-summary" @click="toggleToolGroup(group.key)">
+              <StatusGlyph :status="(groupToolStats.get(group.key)?.errors ?? 0) > 0 ? 'error' : 'done'" />
+              <template v-if="isToolsCollapsed(group)">
+                <span class="tool-name">{{ groupToolStats.get(group.key)?.total }} 次工具调用</span>
+                <span v-if="(groupToolStats.get(group.key)?.errors ?? 0) > 0" class="tool-fail-count">{{ groupToolStats.get(group.key)?.errors }} 失败</span>
+              </template>
+              <span v-else class="tool-name">收起 · {{ groupToolStats.get(group.key)?.total }} 次工具调用</span>
+              <span class="tool-chevron">{{ isToolsCollapsed(group) ? '▸' : '▾' }}</span>
             </div>
 
             <!-- 组级 footer：时间(组首) / model(一次) / token(求和) / 复制(组内文本)。
@@ -1464,6 +1559,13 @@ const RESUMABLE_REASONS = new Set([
     <Transition name="budget-toast">
       <div v-if="chat.modelSwitchNotice" class="budget-renewal-toast">
         <span class="budget-renewal-text">{{ chat.modelSwitchNotice }}</span>
+      </div>
+    </Transition>
+
+    <!-- 工具轮数续期 toast（① 自动续跑；前两个 toast 同款） -->
+    <Transition name="budget-toast">
+      <div v-if="chat.roundsNotice" class="budget-renewal-toast">
+        <span class="budget-renewal-text">{{ chat.roundsNotice }}</span>
       </div>
     </Transition>
 
@@ -1861,6 +1963,8 @@ const RESUMABLE_REASONS = new Set([
 .tool-file { margin-left:auto; margin-right:6px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:right; flex-shrink:1; font-size:var(--ip-text-caption-size); color:var(--ip-color-text-secondary); cursor:pointer; }
 .tool-file:hover { color:var(--ip-primary-600); text-decoration:underline; }
 .tool-preview { font-size:var(--ip-text-caption-size); color:var(--ip-color-text-disabled); margin-left:auto; margin-right:6px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:right; flex-shrink:1; }
+/* ③ 组级折叠摘要行的失败计数（warning 语义色；与 tool-diff 的加减速记同为行内强调位） */
+.tool-fail-count { font-size:var(--ip-text-caption-size); color:var(--ip-warning-text); white-space:nowrap; }
 
 /* 状态图标（StatusGlyph：环形对勾/3×3 像素格/环形叉，2026-09-04 语系统一）。
    行内紧凑节奏保持：glyph 14px 与 caption 字号同高，flex 自然居中。 */
