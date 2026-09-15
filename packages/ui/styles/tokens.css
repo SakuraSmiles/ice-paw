@@ -99,7 +99,10 @@
   --ip-line-height-relaxed:  1.33;
   --ip-line-height-loose:    1.60;
   --ip-line-height-loose2:   1.54;
-  --ip-line-height-loose3:   1.50;
+  /* loose3 2026-09-15 三轮 1.50→1.60（聊天正文 15px 配 24px 行高）——DS 系两端实证
+     （DSH 桌面 1.71 / 网页 1.75）后用户重新拍板；消费方 = 聊天文本簇（markdown-body
+     + 用户/助手气泡纯文本，同值统一），改值即全簇同步 */
+  --ip-line-height-loose3:   1.60;
   --ip-line-height-monospace: 1.57;
 
   /* 字重 token */

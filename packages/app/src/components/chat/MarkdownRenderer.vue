@@ -98,7 +98,13 @@ md.render = function (src: string): string {
   html = html.replace(/<li>\s*<p>([\s\S]*?)<\/p>/g, '<li>$1');
   // 表格包一层滚动 wrapper：避免给 <table> 设 display:block（会拆散 thead/tbody、
   // 列宽错位）；改为 wrapper 承担 overflow-x，table 保持原生表格布局。
-  html = html.replace(/<table[^>]*>[\s\S]*?<\/table>/g, '<div class="markdown-table-wrap">$&</div>');
+  // ≥4 列加 md-table-wide：宽表破列标记（markdown.css 宿主规则放宽气泡 85% 上限、
+  // 表格转 max-content 自然宽；DS 系同构阈值）。
+  html = html.replace(/<table[^>]*>[\s\S]*?<\/table>/g, (tableHtml) => {
+    const cols = (tableHtml.match(/<th[\s>]/g) ?? []).length;
+    const wide = cols >= 4 ? " md-table-wide" : "";
+    return `<div class="markdown-table-wrap${wide}">${tableHtml}</div>`;
+  });
   return html;
 };
 

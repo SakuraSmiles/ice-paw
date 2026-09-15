@@ -1,5 +1,6 @@
 // MarkdownRenderer — 代码块体验测试：fence 容器结构（语言标签/复制按钮）、
-// 折叠阈值与展开收起、复制委托、streaming 门控 class
+// 折叠阈值与展开收起、复制委托、streaming 门控 class；
+// 表格 wrapper 与宽表破列标记（md-table-wide，≥4 列，2026-09-15 三轮）
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { mount } from "@vue/test-utils";
 import MarkdownRenderer from "../MarkdownRenderer.vue";
@@ -97,5 +98,33 @@ describe("MarkdownRenderer 代码块", () => {
     const w = mount(MarkdownRenderer, { props: { content: "    indented code" } });
     expect(w.find(".md-code-block").exists()).toBe(false);
     expect(w.find("pre").exists()).toBe(true);
+  });
+});
+
+describe("MarkdownRenderer 表格", () => {
+  /** n 列的 GFM 表格 markdown 源 */
+  function table(cols: number): string {
+    const head = Array.from({ length: cols }, (_, i) => `h${i + 1}`).join(" | ");
+    const sep = Array.from({ length: cols }, () => "---").join(" | ");
+    const row = Array.from({ length: cols }, (_, i) => `v${i + 1}`).join(" | ");
+    return `| ${head} |\n| ${sep} |\n| ${row} |`;
+  }
+
+  it("表格包进 markdown-table-wrap 滚动容器（table 保持原生表格布局）", () => {
+    const w = mount(MarkdownRenderer, { props: { content: table(2) } });
+    expect(w.find(".markdown-table-wrap").exists()).toBe(true);
+    expect(w.find(".markdown-table-wrap table").exists()).toBe(true);
+  });
+
+  it("≥4 列标 md-table-wide（宽表破列开关，markdown.css 宿主规则消费）", () => {
+    const four = mount(MarkdownRenderer, { props: { content: table(4) } });
+    expect(four.find(".markdown-table-wrap").classes()).toContain("md-table-wide");
+    const five = mount(MarkdownRenderer, { props: { content: table(5) } });
+    expect(five.find(".markdown-table-wrap").classes()).toContain("md-table-wide");
+  });
+
+  it("<4 列不标 md-table-wide（窄表维持列内 100% 填充）", () => {
+    const w = mount(MarkdownRenderer, { props: { content: table(3) } });
+    expect(w.find(".markdown-table-wrap").classes()).not.toContain("md-table-wide");
   });
 });
