@@ -5,6 +5,7 @@ import {
   computePrependRestore,
   shouldTriggerPrepend,
   shouldEdgeTriggerPrepend,
+  shouldContinuePrependChain,
   forceRealizeAbove,
   clearForcedRealize,
   type ScrollAnchor,
@@ -113,6 +114,28 @@ describe("shouldEdgeTriggerPrepend（wheel 绝对顶边缘触发）", () => {
     // wheel 边缘只接管 scroll 事件物理上不再产生的 0 这一点位
     expect(shouldEdgeTriggerPrepend(40, -120)).toBe(false);
     expect(shouldEdgeTriggerPrepend(150, -120)).toBe(false);
+  });
+});
+
+describe("shouldContinuePrependChain（净高续拉）", () => {
+  it("链内累计净增不足一屏且还有更早 → 续拉（长工具回合整页并进折叠组 ≈0 净增）", () => {
+    // 分页计量单位是 messages 表行（50 行/页）而非渲染内容——一整页可以
+    // 只渲染出一条胶囊行；一次上滚至少带出一屏可读内容，不靠连续 wheel 凑
+    expect(shouldContinuePrependChain({ netHeight: 0, viewportHeight: 800, pagesLoaded: 1, hasMore: true })).toBe(true);
+    expect(shouldContinuePrependChain({ netHeight: 300, viewportHeight: 800, pagesLoaded: 2, hasMore: true })).toBe(true);
+  });
+
+  it("链内累计净增 ≥ 一屏 → 停（已带出足够可读内容）", () => {
+    expect(shouldContinuePrependChain({ netHeight: 800, viewportHeight: 800, pagesLoaded: 1, hasMore: true })).toBe(false);
+    expect(shouldContinuePrependChain({ netHeight: 1200, viewportHeight: 800, pagesLoaded: 3, hasMore: true })).toBe(false);
+  });
+
+  it("达单次手势页数上限（5 页）→ 停（防整段工具回合一次手势无限连拉）", () => {
+    expect(shouldContinuePrependChain({ netHeight: 0, viewportHeight: 800, pagesLoaded: 5, hasMore: true })).toBe(false);
+  });
+
+  it("没有更早消息 → 停（加载尽即止，不空转）", () => {
+    expect(shouldContinuePrependChain({ netHeight: 0, viewportHeight: 800, pagesLoaded: 1, hasMore: false })).toBe(false);
   });
 });
 

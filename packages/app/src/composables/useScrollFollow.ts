@@ -147,6 +147,37 @@ export function shouldEdgeTriggerPrepend(scrollTop: number, deltaY: number): boo
   return scrollTop <= 0 && deltaY < 0;
 }
 
+/** 净高续拉：单次上滚手势的前插链页数上限（防整段长工具回合一次手势无限连拉） */
+const PREPEND_CHAIN_MAX_PAGES = 5;
+
+/** 单次上滚手势的前插链状态（净高续拉）：cid 中途切会话即止；startHeight 是
+ *  链起点 scrollHeight（累计净增基线——单页 delta 在并组折叠态恒 ≈0，须按链
+ *  累计判「够不够一屏」）；pages 计已拉页数。 */
+interface PrependChain {
+  cid: string;
+  startHeight: number;
+  pages: number;
+}
+
+/**
+ * 净高续拉决策（纯函数，可测）：前插恢复完成后链内**累计**净增不足一屏 →
+ * 续拉下一页。根因（2026-09-16 六轮，用户分析确认）：分页计量单位是 messages
+ * 表消息行（50 行/页）而非渲染内容——长工具回合每轮 = 1 条 assistant 行
+ * （thinking/text/tool_use 混装）+ 1 条零渲染的 tool_result user 行，整页并进
+ * 折叠组后净增 ≈ 0（一条胶囊行）。位置正确性已与每页高度解耦（锚定恢复 +
+ * 强制实测），此处治效率下游：一次上滚至少带出一屏可读内容，不靠连续 wheel 凑。
+ */
+export function shouldContinuePrependChain(input: {
+  netHeight: number;
+  viewportHeight: number;
+  pagesLoaded: number;
+  hasMore: boolean;
+}): boolean {
+  if (!input.hasMore) return false;
+  if (input.pagesLoaded >= PREPEND_CHAIN_MAX_PAGES) return false;
+  return input.netHeight < input.viewportHeight;
+}
+
 export function useScrollFollow(listRef: Ref<HTMLElement | null>) {
   const chat = useChatStore();
   const showScrollBtn = ref(false);
@@ -223,10 +254,19 @@ export function useScrollFollow(listRef: Ref<HTMLElement | null>) {
    *  并组（首组组头易主、DOM 重建）与 content-visibility 估高下不可靠。程序化
    *  复位必须包 suppressScrollCheck：给 scrollTop 赋值同样发 scroll 事件，恢复后
    *  若 scrollTop 仍 <200 且再逢上滚事件 → 链式再触发多页加载（方向闸已把假
-   *  触发面收窄到真向上滚）。 */
-  function triggerPrependLoad() {
+   *  触发面收窄到真向上滚）。chain 参数透传净高续拉链状态（无参 = 新链起点，
+   *  恢复完成后不足一屏自动续拉，见 continueChainIfThin）。 */
+  function triggerPrependLoad(chain?: PrependChain) {
     const el = listRef.value;
     if (!el) return;
+    const cid = chat.activeConvId;
+    if (!cid) return; // 无活动会话无从分页（防御位：调用路径都在会话打开态）
+    const chainState: PrependChain = chain ?? {
+      cid,
+      startHeight: el.scrollHeight,
+      pages: 0,
+    };
+    chainState.pages += 1;
     paginating.value = true;
     const prevHeight = el.scrollHeight;
     const prevTop = el.scrollTop;
@@ -284,9 +324,15 @@ export function useScrollFollow(listRef: Ref<HTMLElement | null>) {
               }
               suppressScrollCheck = false;
               refreshFollowState();
+              // 净高续拉判定（恢复落定、强制覆盖已清后）：链内累计净增不足
+              // 一屏且还有更早 → 自动再拉一页（continueChainIfThin 详注）
+              continueChainIfThin(chainState);
             }, 150);
           } else {
             clearForcedRealize(forced);
+            // 净增 ≈0（整页并进折叠组/竞态空回）同样走续拉判定。延迟一拍脱出
+            // 同步流：外层 then 尾部还有 paginating 复位，此处重入会被立即清掉
+            setTimeout(() => continueChainIfThin(chainState), 0);
           }
         }
         paginating.value = false;
@@ -296,6 +342,26 @@ export function useScrollFollow(listRef: Ref<HTMLElement | null>) {
       // loadMoreMessages 拒绝也要放行 paginating——否则分页永久死锁
       paginating.value = false;
     });
+  }
+
+  /** 净高续拉执行（决策在纯函数 shouldContinuePrependChain）：链内累计净增
+   *  不足一屏 → 复用 triggerPrependLoad 续拉（chain 透传保基线与页数累计，
+   *  每页照常锚定复位——位置保持对 0 屏页与多屏页同样成立）。运行时守卫：
+   *  中途切会话即止、msgLoading/loadingMore/sending 不抢。 */
+  function continueChainIfThin(chain: PrependChain) {
+    const el = listRef.value;
+    if (!el) return;
+    if (chat.activeConvId !== chain.cid) return;
+    if (chat.msgLoading || chat.loadingMore || chat.sending) return;
+    if (
+      !shouldContinuePrependChain({
+        netHeight: el.scrollHeight - chain.startHeight,
+        viewportHeight: el.clientHeight,
+        pagesLoaded: chain.pages,
+        hasMore: chat.hasMore,
+      })
+    ) return;
+    triggerPrependLoad(chain);
   }
 
   /** wheel 绝对顶边缘触发（passive 只读意图，不拦截滚动）：scrollTop=0 处
