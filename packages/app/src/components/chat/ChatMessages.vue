@@ -982,7 +982,9 @@ function structuredCardKindOf(tu: { id: string; name: string; input: string }): 
 
 /** 各 assistant 组的工具行统计（跨 item 聚合——刷屏源是回合内多轮 × 每轮 3-5 条
  *  在合并组里累积，非单行爆炸）。豁免（结构化卡）不计入：摘要行数 = 被隐藏的
- *  通用行数，两口径天然一致。user 组不入表。 */
+ *  通用行数，两口径天然一致。user 组不入表。
+ *  Layer B 混源：item 带 msg.stats（回合制分页读时算好）直接求和零解析；无 stats
+ *  （live 流式行 / 旧命令行）回落本地解析——逐 item 粒度混用，组内不要求同源。 */
 const groupToolStats = computed<Map<string, { total: number; errors: number }>>(() => {
   const stats = new Map<string, { total: number; errors: number }>();
   for (const g of messageGroups.value) {
@@ -990,6 +992,12 @@ const groupToolStats = computed<Map<string, { total: number; errors: number }>>(
     let total = 0;
     let errors = 0;
     for (const it of g.items) {
+      const st = it.msg.stats;
+      if (st) {
+        total += st.tool_uses;
+        errors += st.tool_errors;
+        continue;
+      }
       for (const tu of parseToolUseBlocks(it.msg.content_blocks)) {
         if (structuredCardKindOf(tu) !== null) continue;
         total++;
@@ -1029,6 +1037,12 @@ const groupThinkingStats = computed<Map<string, { segs: GroupedThink[]; totalMs:
   const stats = new Map<string, { segs: GroupedThink[]; totalMs: number | null }>();
   for (const g of messageGroups.value) {
     if (g.role !== "assistant") continue;
+    // Layer B 快路径：组内 item 全带 stats 且段数和 <2 → 必不进聚合表（门槛 2），
+    // 免逐 item 解析思考块。混源组（live 行无 stats）走全量解析。
+    if (g.items.length > 0 && g.items.every((it) => it.msg.stats)) {
+      const segSum = g.items.reduce((n, it) => n + (it.msg.stats?.think_segs ?? 0), 0);
+      if (segSum < 2) continue;
+    }
     const segs: GroupedThink[] = [];
     let totalMs = 0;
     let hasMs = false;

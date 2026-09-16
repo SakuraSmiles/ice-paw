@@ -751,6 +751,24 @@ pub struct Message {
     /// 回合时长毫秒（C8b 派生；完成时间 = created_at + 时长，频道页区间标注用）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub turn_duration_ms: Option<i64>,
+    /// 统计事实（**非表列**，Layer B：`list_messages_by_turns` 读时算好随页返回）。
+    /// 前端组级聚合（工具计数/思考段数门槛）的省解析快路径——有它直接求和，
+    /// 无它（旧命令 / live 流式行）回落前端本地 JSON 解析。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stats: Option<MessageFacts>,
+}
+
+/// 消息统计事实（Layer B，计算在 `commands/message_cmd.rs::compute_page_facts`）。
+/// 口径镜像前端 ChatMessages.vue 的组级聚合（groupToolStats/groupThinkingStats），
+/// 豁免判定（结构化卡片不计入）在后端窄化冻结、两侧同 fixture 测试锁漂移。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct MessageFacts {
+    /// 通用工具行数（结构化卡豁免后）
+    pub tool_uses: u32,
+    /// 其中配对 tool_result is_error=true 的行数（未配对不计错）
+    pub tool_errors: u32,
+    /// 思考段数
+    pub think_segs: u32,
 }
 
 impl From<MessageRow> for Message {
@@ -774,6 +792,7 @@ impl From<MessageRow> for Message {
             sender_agent_id: row.sender_agent_id,
             sender_agent_name: row.sender_agent_name,
             turn_duration_ms: row.turn_duration_ms,
+            stats: None,
         }
     }
 }

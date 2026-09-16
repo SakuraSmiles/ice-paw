@@ -346,6 +346,22 @@ export interface Message {
   /** 本轮生成耗时毫秒（stream 开始 → finalize，非整回合时长；同上派生）。
    *  完成时间 = created_at + 此值——「生成中发出」判定与组级时间区间用。 */
   turn_duration_ms?: number | null;
+  /** 统计事实（非表列，Layer B：list_messages_by_turns 读时算好随页返回）。
+   *  组级聚合（工具计数/思考段数门槛）的省解析快路径——有它直接求和，
+   *  无它（旧命令行 / live 流式行）回落前端本地 JSON 解析。仅 assistant 行有。 */
+  stats?: MessageFacts | null;
+}
+
+/** 消息统计事实（Layer B，后端 compute_page_facts 产）。口径镜像 ChatMessages.vue
+ *  的组级聚合（groupToolStats/groupThinkingStats），豁免判定（结构化卡片不计入）
+ *  在后端窄化冻结、两侧同 fixture 测试锁漂移。 */
+export interface MessageFacts {
+  /** 通用工具行数（结构化卡豁免后） */
+  tool_uses: number;
+  /** 其中配对 tool_result is_error=true 的行数（未配对不计错） */
+  tool_errors: number;
+  /** 思考段数 */
+  think_segs: number;
 }
 
 /** MA-3 来件来源（与后端 event_log::IncomingSourceMeta 字段镜像） */
