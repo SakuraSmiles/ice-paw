@@ -96,7 +96,7 @@ export function computePrependRestore(input: {
  *  位置系统性漂移 Σ(估高−真高)，150ms 校正读到同一批估值也救不回。强制
  *  visible 后读 offsetTop 即同步布局出真值；清除时 clearForcedRealize 把实测
  *  高度钉进内联 contain-intrinsic-size，几何确定性不回弹。只强制锚之前的组
- *  （锚自身在视口内已实测），成本 ≤ 一页（50 条）消息组的一次同步布局。
+ *  （锚自身在视口内已实测），成本 ≤ 一页（回合制分页 ≤300 行）消息组的一次同步布局。
  *  返回被强制的元素列表，供定位完成后清除。 */
 export function forceRealizeAbove(container: HTMLElement, anchor: HTMLElement): HTMLElement[] {
   const forced: HTMLElement[] = [];
@@ -142,6 +142,10 @@ const LOAD_TRIGGER_PX = 200;
  * 「类似底部吸附」的顶部无限加载。方向闸后：向下滚 = 想离开历史区，永不加载；
  * 向上滚 = 「再看更早」意图，才触发。静止（惯性滚动到底 scrollTop 不再变）
  * 不重复触发。
+ *
+ * 2026-09-17 回合制分页换轨（Layer A）后「整页并进折叠组净增≈0」的形态已
+ * 结构性消失（页界=回合边界=组边界，每页必带 user 消息+终答可见内容）——
+ * 方向闸保留为兜底防御（异常数据/未来分页形态变化），勿删。
  */
 export function shouldTriggerPrepend(scrollTop: number, prevScrollTop: number): boolean {
   return scrollTop < LOAD_TRIGGER_PX && scrollTop < prevScrollTop;
@@ -192,6 +196,10 @@ interface PrependChain {
  * 不可见、净增 ≈0、滚动条物理上不能动（与「滚动条要动」互斥）——这类页不占
  * 「可见内容页」5 页上限，链继续拉到回合边界（出现可见内容、净增过屏）才停；
  * 总页数 20 硬上限兜底。
+ *
+ * 2026-09-17 回合制分页换轨（Layer A）后「整页并组净增≈0」形态已结构性消失
+ * （每页以真 user 消息开头、必带可见内容，单页即过屏）；链式续拉保留为
+ * 兜底（收纳折叠仍可能压低单页净增——8 工具组默认收成一行胶囊），勿删。
  */
 export function shouldContinuePrependChain(input: {
   netHeight: number;

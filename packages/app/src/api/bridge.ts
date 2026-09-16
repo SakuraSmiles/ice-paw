@@ -301,6 +301,9 @@ const projects = {
 };
 
 const messages = {
+  /** 行数分页（50 行/页）。**消息列表 UI 已切 listByTurns 回合制分页**（2026-09-17
+   *  Layer A 换轨）；本方法保留为回滚锚点 + 后端 references/read_reference/e2e
+   *  同源命令的前端对应面，勿删。 */
   async list(conversationId: string, opts?: { limit?: number; before?: [string, number] }): Promise<Message[]> {
     try { return await invoke<Message[]>("list_messages", { conversationId, ...opts }); }
     catch (err) { throw wrapInvokeError("messages.list", err); }

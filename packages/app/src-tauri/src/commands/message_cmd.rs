@@ -17,6 +17,9 @@ use crate::infra::protocol::ContentBlock;
 
 /// 列出会话内的消息（支持复合游标分页）
 ///
+/// **消息列表 UI 已切 [`list_messages_by_turns`]（回合制分页，2026-09-17 Layer A
+/// 换轨）**；本命令保留为回滚锚点——repo 层 `list_by_conversation` 另有
+/// references / read_reference_tool / e2e 三处消费方，勿摘。
 /// - `limit`：上限 1000，默认 100
 /// - `before`：复合游标 `[created_at, rowid]`，由前端从上一页结果的最末一条
 ///   消息的对应字段取出来回传；表示「取这两个游标之前的消息」。
