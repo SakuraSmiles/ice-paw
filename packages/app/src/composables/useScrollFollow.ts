@@ -58,6 +58,36 @@ function findTopGroupEl(el: HTMLElement): HTMLElement | null {
   return groups[lo];
 }
 
+/** 前插分页的恢复锚：组元素 data-mid + 距视口顶偏移（加载后按锚元素新
+ *  offsetTop 复位，用户读到的内容纹丝不动）。 */
+interface GroupAnchor {
+  mid: string;
+  viewportOffset: number;
+}
+
+/**
+ * 前插分页恢复的定位决策（纯函数，可测）：主锚 = 捕获时视口顶组元素；前插
+ * 并组会让窗口首组组头易主（data-mid 变化）→ 主锚查不到（null）时回退次组
+ * 锚（捕获时视口顶组的下一组——前插只动窗口首组，次组组头恒不变）；两者皆
+ * 失 → 高度差兜底（旧策略，content-visibility 估高下有漂移，仅兜底用）。
+ */
+export function computePrependRestore(input: {
+  primaryOffsetTop: number | null;
+  primaryViewportOffset: number;
+  fallbackOffsetTop: number | null;
+  fallbackViewportOffset: number;
+  prevScrollTop: number;
+  heightDelta: number;
+}): number {
+  if (input.primaryOffsetTop != null) {
+    return Math.max(0, input.primaryOffsetTop - input.primaryViewportOffset);
+  }
+  if (input.fallbackOffsetTop != null) {
+    return Math.max(0, input.fallbackOffsetTop - input.fallbackViewportOffset);
+  }
+  return Math.max(0, input.prevScrollTop + input.heightDelta);
+}
+
 export function useScrollFollow(listRef: Ref<HTMLElement | null>) {
   const chat = useChatStore();
   const showScrollBtn = ref(false);
@@ -66,7 +96,6 @@ export function useScrollFollow(listRef: Ref<HTMLElement | null>) {
   /** 分页加载进行中（期间不触发自动跟随 / 不重复分页 / 不采样锚点） */
   const paginating = ref(false);
   let suppressScrollCheck = false;
-  const scrollPosCache = { scrollHeight: 0, scrollTop: 0 };
 
   /** 按当前真实几何刷新按钮/跟随态。scroll 事件到不了的地方（内容塌陷/增高
    *  不触发 scroll、suppress 窗口内）状态会冻结在旧值——每次主动定位后调用。 */
@@ -114,21 +143,71 @@ export function useScrollFollow(listRef: Ref<HTMLElement | null>) {
 
     scheduleCapture();
 
-    // 分页触发：距顶部 200px 且还有更多数据
+    // 分页触发：距顶部 200px 且还有更多数据。恢复 = 锚定式（2026-09-16 Phase2
+    // 批修复「上滚一点就乱跳」）：捕获视口顶组为锚，加载后按锚元素新 offsetTop
+    // 复位——旧「scrollHeight 差值补偿」在前插并组（首组组头易主、DOM 重建）与
+    // content-visibility 估高下不可靠。程序化复位必须包 suppressScrollCheck：
+    // 给 scrollTop 赋值同样发 scroll 事件，收纳折叠使每页新增高度小、恢复后
+    // scrollTop 仍 <200 → 链式再触发多页加载 = 「轻微上滚乱跳」的第二根因。
     if (el.scrollTop < 200 && chat.hasMore && !chat.loadingMore && !chat.sending) {
       paginating.value = true;
-      scrollPosCache.scrollHeight = el.scrollHeight;
-      scrollPosCache.scrollTop = el.scrollTop;
+      const prevHeight = el.scrollHeight;
+      const prevTop = el.scrollTop;
+      const topEl = findTopGroupEl(el);
+      const primary: GroupAnchor | null = topEl && topEl.dataset.mid
+        ? { mid: topEl.dataset.mid, viewportOffset: topEl.offsetTop - el.scrollTop }
+        : null;
+      let fallback: GroupAnchor | null = null;
+      if (topEl) {
+        const groups = Array.from(el.querySelectorAll<HTMLElement>("[data-mid]"));
+        const next = groups[groups.indexOf(topEl) + 1];
+        if (next?.dataset.mid) {
+          fallback = { mid: next.dataset.mid, viewportOffset: next.offsetTop - el.scrollTop };
+        }
+      }
       chat.loadMoreMessages().then(() => {
         nextTick(() => {
           const newEl = listRef.value;
           if (newEl) {
-            const added = newEl.scrollHeight - scrollPosCache.scrollHeight;
-            newEl.scrollTop = scrollPosCache.scrollTop + added;
+            const heightDelta = newEl.scrollHeight - prevHeight;
+            // 无新增（加载尽/竞态）→ 不动滚动位置
+            if (heightDelta > 0) {
+              const primaryEl = primary
+                ? newEl.querySelector<HTMLElement>(`[data-mid="${CSS.escape(primary.mid)}"]`)
+                : null;
+              const fallbackEl = fallback
+                ? newEl.querySelector<HTMLElement>(`[data-mid="${CSS.escape(fallback.mid)}"]`)
+                : null;
+              suppressScrollCheck = true;
+              newEl.scrollTop = computePrependRestore({
+                primaryOffsetTop: primaryEl ? primaryEl.offsetTop : null,
+                primaryViewportOffset: primary?.viewportOffset ?? 0,
+                fallbackOffsetTop: fallbackEl ? fallbackEl.offsetTop : null,
+                fallbackViewportOffset: fallback?.viewportOffset ?? 0,
+                prevScrollTop: prevTop,
+                heightDelta,
+              });
+              // content-visibility 估高在首帧后被真实高度替换 → 150ms 后按锚
+              // 复位校正一次（positionAtAnchor 同款双段），随后解除 suppress
+              const fixMid = primaryEl ? primary!.mid : fallback?.mid ?? null;
+              const fixOffset = primaryEl ? primary!.viewportOffset : fallback?.viewportOffset ?? 0;
+              setTimeout(() => {
+                const e2 = listRef.value;
+                if (e2 && fixMid) {
+                  const n2 = e2.querySelector<HTMLElement>(`[data-mid="${CSS.escape(fixMid)}"]`);
+                  if (n2) e2.scrollTop = n2.offsetTop - fixOffset;
+                }
+                suppressScrollCheck = false;
+                refreshFollowState();
+              }, 150);
+            }
           }
           paginating.value = false;
           refreshFollowState();
         });
+      }).catch(() => {
+        // loadMoreMessages 拒绝也要放行 paginating——否则分页永久死锁
+        paginating.value = false;
       });
     }
   }

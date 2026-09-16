@@ -1,6 +1,6 @@
 // useScrollFollow 纯函数单测：滚动恢复决策（DOM 交互部分靠真机手测覆盖）
 import { describe, it, expect } from "vitest";
-import { planScrollRestore, type ScrollAnchor } from "../useScrollFollow";
+import { planScrollRestore, computePrependRestore, type ScrollAnchor } from "../useScrollFollow";
 
 const ids = (arr: string[]) => new Set(arr);
 
@@ -29,5 +29,39 @@ describe("planScrollRestore", () => {
     // 不写会残留「读历史」旧锚点 → 回来时错误原位恢复
     const a: ScrollAnchor = { messageId: "", offset: 0, atBottom: true };
     expect(planScrollRestore(a, ids(["m1"]))).toBe("bottom");
+  });
+});
+
+describe("computePrependRestore（前插分页恢复定位）", () => {
+  const base = {
+    primaryViewportOffset: 40,
+    fallbackViewportOffset: 120,
+    prevScrollTop: 150,
+    heightDelta: 2000,
+  };
+
+  it("主锚在场：锚元素新 offsetTop - 距视口顶偏移（用户读到的内容不动）", () => {
+    // 前插后主锚组整体下移 2000 → 复位后仍压在视口原位
+    expect(computePrependRestore({
+      ...base, primaryOffsetTop: 2040, fallbackOffsetTop: 2200,
+    })).toBe(2000);
+  });
+
+  it("主锚被并组吞掉（组头易主 data-mid 变化）→ 回退次组锚", () => {
+    expect(computePrependRestore({
+      ...base, primaryOffsetTop: null, fallbackOffsetTop: 2120,
+    })).toBe(2000); // 2120 - 120
+  });
+
+  it("主锚次锚皆失（极端：DOM 全重建）→ 高度差兜底（旧策略）", () => {
+    expect(computePrependRestore({
+      ...base, primaryOffsetTop: null, fallbackOffsetTop: null,
+    })).toBe(2150); // 150 + 2000
+  });
+
+  it("复位值钳制非负：锚在视口顶上方压线时不回弹负 scrollTop", () => {
+    expect(computePrependRestore({
+      ...base, primaryOffsetTop: 10, fallbackOffsetTop: 100,
+    })).toBe(0);
   });
 });
