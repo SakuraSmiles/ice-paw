@@ -1,11 +1,15 @@
 // ChatMessages.process-narrative.test.ts — 组级过程叙述收纳回归锁
 // （2026-09-16 拍板：多轮工具回合的过程碎句收进「过程叙述 · N 段」折叠行，
-//   正文中区只留末段正文；展开=过程段回 item 原位，时间线与工具行交错复原）。
+//   正文中区只留末段正文；展开=过程段回 item 原位，时间线与工具行交错复原。
+//   同日二轮两修：末段收束门控——末段碎句（冒号/截断收尾）组不收纳、全段直显
+//   （用户拍板「啰嗦总比偷偷干活没人知道好」）；空壳治理——收纳后无可见内容
+//   的 item 整个不渲染（旧形态空 .message-item×12px 轮距堆出 380px+ 空白））。
 //
-// 锁死六点：≥3 段默认折叠（只末段在场，折叠行恰一条）/ 展开回原位+收起态 /
-// 2 段不收纳（说明+结论的轻量实质正文不动）/ 生成中不收纳（frozen-round）/
-// 末段=最后有 content 的 item（末 item 纯工具轮不误判）/ 三区共存 DOM 序
-// （顶思 → 过程行 → 末段正文 → 工具行）。
+// 锁死九点：≥3 段且末段完整收尾默认折叠（只末段在场，折叠行恰一条）/
+// 展开回原位+收起态 / 2 段不收纳（轻量实质正文不动）/ 生成中不收纳
+// （frozen-round）/ 末段=最后有 content 的 item（末 item 纯工具轮不误判）/
+// 三区共存 DOM 序（顶思 → 过程行 → 末段正文 → 工具行）/ 末段碎句组不收纳
+// （门控）/ 折叠态空壳 item 不渲染（.message-item 计数）/ 豁免卡 item 在场。
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { ref } from "vue";
@@ -96,18 +100,18 @@ describe("组级过程叙述收纳", () => {
     push.mockReset();
   });
 
-  it("≥3 段默认折叠：折叠行恰一条报「过程叙述 · 3 段」，正文只末段在场", async () => {
+  it("≥3 段且末段完整收尾：默认折叠，折叠行恰一条报「过程叙述 · 3 段」，正文只末段在场", async () => {
     const w = await mountWith([
       textMsg("a1", "第一步说明："),
       textMsg("a2", "第二步说明："),
       textMsg("a3", "第三步说明："),
-      textMsg("a4", "最终结论在这里"),
+      textMsg("a4", "最终结论在这里。"),
     ]);
 
     const rows = w.findAll(".process-group-summary");
     expect(rows.length).toBe(1); // 组级恰一条（item v-for 之外的组级错位回归锁）
     expect(rows[0].text()).toContain("过程叙述 · 3 段");
-    expect(w.findAll(".md").map((m) => m.text())).toEqual(["最终结论在这里"]);
+    expect(w.findAll(".md").map((m) => m.text())).toEqual(["最终结论在这里。"]);
   });
 
   it("展开回原位：全段回 item 原位、行切「收起」态；再点收回只余末段", async () => {
@@ -115,17 +119,17 @@ describe("组级过程叙述收纳", () => {
       textMsg("a1", "第一步说明："),
       textMsg("a2", "第二步说明："),
       textMsg("a3", "第三步说明："),
-      textMsg("a4", "最终结论在这里"),
+      textMsg("a4", "最终结论在这里。"),
     ]);
 
     await w.findAll(".process-group-summary")[0].trigger("click");
     expect(w.findAll(".process-group-summary")[0].text()).toContain("收起 · 3 段过程叙述");
     expect(w.findAll(".md").map((m) => m.text())).toEqual([
-      "第一步说明：", "第二步说明：", "第三步说明：", "最终结论在这里",
+      "第一步说明：", "第二步说明：", "第三步说明：", "最终结论在这里。",
     ]);
 
     await w.findAll(".process-group-summary")[0].trigger("click");
-    expect(w.findAll(".md").map((m) => m.text())).toEqual(["最终结论在这里"]);
+    expect(w.findAll(".md").map((m) => m.text())).toEqual(["最终结论在这里。"]);
   });
 
   it("2 段不收纳：说明+结论的轻量两段全在场、无折叠行", async () => {
@@ -137,9 +141,9 @@ describe("组级过程叙述收纳", () => {
 
   it("生成中不收纳（frozen-round 语义）：流式正文实时在场，回合结束沉淀", async () => {
     const w = await mountWith([
-      textMsg("a1", "过程一"),
-      textMsg("a2", "过程二"),
-      textMsg("a3", "末段"),
+      textMsg("a1", "过程一："),
+      textMsg("a2", "过程二："),
+      textMsg("a3", "末段。"),
     ], true, 0); // sending + 组与生成窗口相交
 
     expect(w.findAll(".process-group-summary").length).toBe(0);
@@ -151,14 +155,14 @@ describe("组级过程叙述收纳", () => {
     await flushPromises();
 
     expect(w.findAll(".process-group-summary").length).toBe(1);
-    expect(w.findAll(".md").map((m) => m.text())).toEqual(["末段"]);
+    expect(w.findAll(".md").map((m) => m.text())).toEqual(["末段。"]);
   });
 
   it("末段判定：末 item 纯工具轮（无正文）时，末段 = 最后有 content 的 item", async () => {
     const w = await mountWith([
-      textMsg("a1", "过程一"),
-      textMsg("a2", "过程二"),
-      textMsg("a3", "真正结论"),
+      textMsg("a1", "过程一："),
+      textMsg("a2", "过程二："),
+      textMsg("a3", "真正结论。"),
       msg({
         id: "a4", role: "assistant", model: "glm-5.3", content: "",
         content_blocks: JSON.stringify([{ type: "tool_use", id: "tu-1", name: "read_file", input: "{}" }]),
@@ -168,7 +172,7 @@ describe("组级过程叙述收纳", () => {
     const rows = w.findAll(".process-group-summary");
     expect(rows.length).toBe(1);
     expect(rows[0].text()).toContain("过程叙述 · 2 段"); // count=3 → 过程段 2
-    expect(w.findAll(".md").map((m) => m.text())).toEqual(["真正结论"]);
+    expect(w.findAll(".md").map((m) => m.text())).toEqual(["真正结论。"]);
   });
 
   it("三区共存 DOM 序：顶思 → 过程行 → 末段正文 → 工具行（≥2 思考 + ≥3 正文 + ≥8 工具）", async () => {
@@ -176,7 +180,7 @@ describe("组级过程叙述收纳", () => {
     for (let i = 0; i < 4; i++) {
       msgs.push(msg({
         id: `a-${i}`, role: "assistant", model: "glm-5.3",
-        content: i < 3 ? `过程 ${i}` : "最终结论",
+        content: i < 3 ? `过程 ${i}：` : "最终结论。",
         content_blocks: JSON.stringify([
           { type: "thinking", thinking: `思考 ${i}`, duration_ms: 3000 },
           { type: "tool_use", id: `tu-${i}a`, name: "read_file", input: '{"path":"a.md"}' },
@@ -196,7 +200,7 @@ describe("组级过程叙述收纳", () => {
     expect(w.findAll(".think-group-summary").length).toBe(1); // 4 段思考聚合
     expect(w.findAll(".process-group-summary").length).toBe(1); // 4 段正文收纳
     expect(w.findAll(".tool-group-summary").length).toBe(1); // 8 次工具折叠
-    expect(w.findAll(".md").map((m) => m.text())).toEqual(["最终结论"]); // 只末段在场
+    expect(w.findAll(".md").map((m) => m.text())).toEqual(["最终结论。"]); // 只末段在场
 
     // DOM 序：思考行 < 过程行 < 末段正文 < 工具摘要行（顶部到中部到底部）
     const html = w.find(".assistant-body").html();
@@ -210,5 +214,117 @@ describe("组级过程叙述收纳", () => {
     for (let i = 0; i < positions.length - 1; i++) {
       expect(positions[i]).toBeLessThan(positions[i + 1]);
     }
+  });
+
+  // ===== 二轮两修（2026-09-16）：末段收束门控 + 空壳治理 =====
+
+  it("末段碎句组不收纳（门控）：末段冒号收尾 → 无折叠行、全段直显", async () => {
+    const w = await mountWith([
+      textMsg("a1", "第一步说明："),
+      textMsg("a2", "第二步说明："),
+      textMsg("a3", "第三步说明："),
+      textMsg("a4", "接下来执行："),
+    ]);
+
+    // 被截断回合（撞轮数上限等）的末段常是「宣布下一步」的碎句——收掉过程
+    // 只留它 = 交流障碍（生产库实测大组 38% 以碎句收束）。门控判末段形态。
+    expect(w.findAll(".process-group-summary").length).toBe(0);
+    expect(w.findAll(".md").map((m) => m.text())).toEqual([
+      "第一步说明：", "第二步说明：", "第三步说明：", "接下来执行：",
+    ]);
+  });
+
+  it("空壳治理：折叠态无可见内容的 item 不渲染（.message-item 只剩末段 item）", async () => {
+    const w = await mountWith([
+      textMsg("a1", "第一步说明："),
+      textMsg("a2", "第二步说明："),
+      textMsg("a3", "第三步说明："),
+      textMsg("a4", "最终结论在这里。"),
+    ]);
+
+    // 旧形态：a1-a3 内容藏了但 .message-item 骨架仍在，每个空壳吃 12px 轮距
+    // ——50 轮组堆出 380px+ 空白（真机实案）。滤除后 DOM 里只剩末段 item。
+    expect(w.findAll(".message-item").length).toBe(1);
+
+    // 展开过程收纳：空壳回场（内容回来了）
+    await w.findAll(".process-group-summary")[0].trigger("click");
+    expect(w.findAll(".message-item").length).toBe(4);
+  });
+
+  it("空壳治理：与工具折叠共存——纯工具轮空壳同样滤除，展开工具行后回场", async () => {
+    // 3 段正文（末段收尾）+ 每段 3 次工具 = 9 次 ≥8 → 工具折叠同场
+    const msgs: Message[] = [msg({ id: "u1", role: "user", content: "任务" })];
+    const texts = ["过程一：", "过程二：", "结论。"];
+    texts.forEach((text, i) => {
+      msgs.push(msg({
+        id: `a-${i}`, role: "assistant", model: "glm-5.3", content: text,
+        content_blocks: JSON.stringify([
+          { type: "tool_use", id: `tu-${i}a`, name: "read_file", input: '{"path":"a.md"}' },
+          { type: "tool_use", id: `tu-${i}b`, name: "read_file", input: '{"path":"b.md"}' },
+          { type: "tool_use", id: `tu-${i}c`, name: "read_file", input: '{"path":"c.md"}' },
+        ]),
+      }));
+      msgs.push(msg({
+        id: `tr-${i}`, role: "user", content: "",
+        content_blocks: JSON.stringify([
+          { type: "tool_result", tool_use_id: `tu-${i}a`, content: "ok", is_error: false },
+          { type: "tool_result", tool_use_id: `tu-${i}b`, content: "ok", is_error: false },
+          { type: "tool_result", tool_use_id: `tu-${i}c`, content: "ok", is_error: false },
+        ]),
+      }));
+    });
+    const w = await mountWith(msgs);
+
+    expect(w.findAll(".process-group-summary").length).toBe(1);
+    expect(w.findAll(".tool-group-summary").length).toBe(1);
+    // 双折叠同场：a-0/a-1 内容藏 + 工具藏 → 空壳滤除；只有 a-2（末段）在场
+    expect(w.findAll(".message-item").length).toBe(1);
+    expect(w.findAll(".md").map((m) => m.text())).toEqual(["结论。"]);
+
+    // 展开工具行：a-0/a-1 的工具区回场 → item 回场（正文仍收纳）
+    await w.findAll(".tool-group-summary")[0].trigger("click");
+    expect(w.findAll(".message-item").length).toBe(3);
+    expect(w.findAll(".md").map((m) => m.text())).toEqual(["结论。"]);
+  });
+
+  it("空壳治理：豁免卡（委派）独占的 item 不滤除——折叠态卡片在场", async () => {
+    // a1 过程段 + 8 通用工具（达折叠阈值）；a2 过程段；a3 末段；a4 仅一张委派卡
+    const msgs: Message[] = [
+      msg({ id: "u1", role: "user", content: "任务" }),
+      msg({
+        id: "a1", role: "assistant", model: "glm-5.3", content: "过程一：",
+        content_blocks: JSON.stringify(
+          Array.from({ length: 8 }, (_, i) => ({ type: "tool_use", id: `tu-${i}`, name: "read_file", input: '{"path":"a.md"}' })),
+        ),
+      }),
+      msg({
+        id: "tr1", role: "user", content: "",
+        content_blocks: JSON.stringify(
+          Array.from({ length: 8 }, (_, i) => ({ type: "tool_result", tool_use_id: `tu-${i}`, content: "ok", is_error: false })),
+        ),
+      }),
+      msg({
+        id: "a2", role: "assistant", model: "glm-5.3", content: "过程二：",
+        content_blocks: "[]",
+      }),
+      msg({
+        id: "a3", role: "assistant", model: "glm-5.3", content: "结论完成。",
+        content_blocks: "[]",
+      }),
+      msg({
+        id: "a4", role: "assistant", model: "glm-5.3", content: "",
+        content_blocks: JSON.stringify([{ type: "tool_use", id: "tu-dl", name: "delegate_to_agent", input: '{"agent_id":"dev-2","task":"t"}' }]),
+      }),
+      msg({
+        id: "tr2", role: "user", content: "",
+        content_blocks: JSON.stringify([{ type: "tool_result", tool_use_id: "tu-dl", content: '{"child_conversation_id":"c9","agent_name":"dev-2","finish_reason":"stop","rounds":3}', is_error: false }]),
+      }),
+    ];
+    const w = await mountWith(msgs);
+
+    // a1/a2（过程段，a1 工具折叠）空壳滤除；a3 末段在场；a4 委派卡豁免不滤
+    expect(w.findAll(".message-item").length).toBe(2);
+    expect(w.findAll(".delegation-stub").length).toBe(1); // 折叠态豁免卡在场
+    expect(w.findAll(".md").map((m) => m.text())).toEqual(["结论完成。"]);
   });
 });

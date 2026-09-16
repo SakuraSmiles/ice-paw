@@ -1045,16 +1045,36 @@ function thinkSegLabel(seg: GroupedThink): string {
   return seg.durationMs != null ? "思考 · " + formatThinkingMs(seg.durationMs) : "思考";
 }
 
-// ===== 组级过程叙述收纳（2026-09-16 拍板：正文中区只留末段正文）=====
+// ===== 组级过程叙述收纳（2026-09-16 拍板，同日二轮：末段收束门控 + 空壳治理）=====
 // 三明治收纳（思考顶/正文中/工具底）对多轮长回合缺第三层收纳：中间轮次的冒号
 // 碎句（「重新执行：」「修复后重跑：」）失去对应工具行后成串悬空堆叠（真机实案：
 // 16 次工具组 7 段正文全是过程叙述）。收纳后过程段折叠为「过程叙述 · N 段」，
 // 展开回 item 原位（与工具折叠同交互——时间线与工具行交错复原）。
+// 二轮两修（用户否决纯位置收纳——「末段是不是总结无从保证」）：
+// ① 收束门控：生产库实测（2026-09-16，242 个 ≥3 段候选组）：大组（≥10 段）
+//   仅 50% 末段完整收尾、38% 以冒号碎句收束——被截断的回合（撞轮数上限等）
+//   末段常是「宣布下一步」的碎句，收掉过程只留它 = 交流障碍。收纳只对末段
+//   完整收束的组生效（segConcluded 形态代理，宁严勿松：误判碎句只是啰嗦、
+//   误判总结才是「偷偷干活没人知道」——用户拍板）。
+// ② 空壳治理：收纳只藏 item 内容不收骨架，50 轮组 ≈ 30+ 个空 .message-item
+//   以每层 12px 轮距堆出数百 px 空白（真机实案 380px+）——空壳整个不渲染
+//   （visibleItemsOf）。
 /** 收纳阈值：组内非空正文段 ≥3（过程段 ≥2）才收纳；两段以下多为实质正文
  *  （说明+结论的轻量两段），过度收纳损害阅读。 */
 const PROCESS_NARRATIVE_MIN = 3;
 
-interface GroupProcessStats { count: number; lastContentIdx: number }
+/** 末段收束判定（门控）：剥尾部空白/markdown 强调符后，句末标点（。！？… 及
+ *  闭括号引号）或 markdown 结构收尾（代码块闭合 ``` / 表格行尾 |）= 完整收尾，
+ *  像「写完了的总结」；冒号/逗号/裸截断 = 引出下一步的过程碎句。 */
+const SEG_TERMINAL_CHARS = new Set("。！？!?.…”』」）)]");
+
+function segConcluded(text: string): boolean {
+  const t = text.replace(/[\s*_]+$/, "");
+  if (!t) return false;
+  return SEG_TERMINAL_CHARS.has(t[t.length - 1]) || t.endsWith("```") || t.endsWith("|");
+}
+
+interface GroupProcessStats { count: number; lastContentIdx: number; concluded: boolean }
 
 /** 各 assistant 组的正文段统计：count = 非空 content 的 item 数，lastContentIdx
  *  = 末段所在 item 下标（末 item 可能是无正文纯工具轮——末段=最后有 content 者）。 */
@@ -1064,18 +1084,23 @@ const groupProcessStats = computed<Map<string, GroupProcessStats>>(() => {
     if (g.role !== "assistant") continue;
     let count = 0;
     let lastContentIdx = -1;
+    let lastText = "";
     for (const it of g.items) {
-      if (it.msg.content) { count++; lastContentIdx = it.idx; }
+      if (it.msg.content) { count++; lastContentIdx = it.idx; lastText = it.msg.content; }
     }
-    if (count >= PROCESS_NARRATIVE_MIN) stats.set(g.key, { count, lastContentIdx });
+    if (count >= PROCESS_NARRATIVE_MIN) {
+      stats.set(g.key, { count, lastContentIdx, concluded: segConcluded(lastText) });
+    }
   }
   return stats;
 });
 
-/** 组具备收纳资格（≥阈值且非生成中——frozen-round 语义：流式正文实时在场，
- *  回合结束沉淀；与思考聚合/工具折叠同一判定）。 */
+/** 组具备收纳资格（≥阈值 + 末段完整收束 + 非生成中——frozen-round 语义：
+ *  流式正文实时在场，回合结束沉淀）。末段碎句组不收纳（全段直显）——被截断
+ *  的回合末段常是「宣布下一步」的冒号碎句，收掉过程只留它 = 交流障碍。 */
 function processCollapseEligible(g: MessageGroup): boolean {
-  return groupProcessStats.value.has(g.key) && !groupInLiveTurn(g);
+  const s = groupProcessStats.value.get(g.key);
+  return s != null && s.concluded && !groupInLiveTurn(g);
 }
 
 function isProcessCollapsed(g: MessageGroup): boolean {
@@ -1087,6 +1112,32 @@ function isProcessNarrativeItem(g: MessageGroup, item: GroupedItem): boolean {
   if (!isProcessCollapsed(g)) return false;
   const s = groupProcessStats.value.get(g.key);
   return s != null && item.idx !== s.lastContentIdx;
+}
+
+/** 折叠态下该 item 是否已无任何可见内容（空壳）。可见性四路：流式通道（live
+ *  item 恒在场）/ 正文（非过程收纳段）/ 思考（组未聚合且本 item 有思考块，或
+ *  刚结束驻留块）/ 工具（未折叠或含豁免卡）。三收纳在生成中组全不生效，
+ *  生成中组天然全可见；「刚结束」驻留思考块也保 item 在场（其载体在本 item）。 */
+function itemCollapsedAway(g: MessageGroup, item: GroupedItem): boolean {
+  if (isLiveAssistant(item)) return false;
+  if (item.msg.content && !isProcessNarrativeItem(g, item)) return false;
+  const thinkVisible =
+    !thinkingAggregateEligible(g) &&
+    (parseThinkingBlocks(item.msg.content_blocks).length > 0 ||
+      (isLastAssistant(item) && !!chat.thinkingDuration && !!chat.lastThinkingContent));
+  if (thinkVisible) return false;
+  const tus = parseToolUseBlocks(item.msg.content_blocks);
+  if (tus.length > 0 && (!isToolsCollapsed(g) || tus.some((tu) => structuredCardKindOf(tu) !== null))) {
+    return false;
+  }
+  return true;
+}
+
+/** 组内当前应渲染的 item（滤掉空壳）。收纳只藏内容不收 .message-item 骨架的
+ *  旧形态，会让 50 轮组 ≈ 30+ 个空壳以每层 12px 轮距堆出大片空白（真机实案
+ *  380px+，2026-09-16 二轮）——直接从 v-for 数据源滤除，空壳不进 DOM。 */
+function visibleItemsOf(g: MessageGroup): GroupedItem[] {
+  return g.items.filter((item) => !itemCollapsedAway(g, item));
 }
 
 /** 该 item 是否是全局最后一条 assistant（用于 chat:done 后驻留的「思考·已完成」块）。*/
@@ -1378,9 +1429,10 @@ const RESUMABLE_REASONS = new Set([
                 </div>
               </Transition>
             </template>
-            <!-- 组级过程叙述收纳（2026-09-16 拍板）：多轮回合过程碎句折叠，正文中
-                 区只留末段正文；展开=过程段回 item 原位。⚠️ 必须在 item v-for 之外
-                 （工具摘要行组级错位同族教训）。 -->
+            <!-- 组级过程叙述收纳（2026-09-16 拍板，二轮加末段收束门控）：多轮回合
+                 过程碎句折叠，正中区只留末段正文；末段碎句组（冒号/截断收尾）不收纳
+                 ——全段直显（收束判据见 script segConcluded）。展开=过程段回 item 原位。
+                 ⚠️ 必须在 item v-for 之外（工具摘要行组级错位同族教训）。 -->
             <div v-if="processCollapseEligible(group)" class="tool-toggle process-group-summary" @click="toggleProcessGroup(group.key)">
               <StatusGlyph status="done" />
               <template v-if="isProcessCollapsed(group)">
@@ -1389,7 +1441,7 @@ const RESUMABLE_REASONS = new Set([
               <span v-else class="tool-name">收起 · {{ (groupProcessStats.get(group.key)?.count ?? 0) - 1 }} 段过程叙述</span>
               <span class="tool-chevron">{{ isProcessCollapsed(group) ? '▸' : '▾' }}</span>
             </div>
-            <div v-for="item in group.items" :key="item.msg.id" class="message-item">
+            <div v-for="item in visibleItemsOf(group)" :key="item.msg.id" class="message-item">
               <!-- 三个点动画：仅当前流式 item 且无任何返回时显示 -->
               <div v-if="isLiveAssistant(item) && item.msg.content === '' && !chat.streamingThinking && toolCallList.length === 0" class="think-dots">
                 <span class="think-dot" /><span class="think-dot" /><span class="think-dot" />
