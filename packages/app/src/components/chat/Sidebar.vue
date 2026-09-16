@@ -853,15 +853,17 @@ function timeAgoLabel(dateStr: string): string {
   flex-direction: row;
   align-items: center;
   padding: 8px 12px;
-  /* 1.5px 主色浅档虚线：与普通会话行拉开「创建动作」区别度（背景不动，只强化边框）；
-     hover 加深到 primary-400（下方既有规则）——新建对话展开态/flyout 态/开启频道三入口同族 */
-  border: 1.5px dashed var(--ip-primary-300);
+  /* 1.5px 主色虚线：与普通会话行拉开「创建动作」区别度（背景不动，只强化边框）。
+     初版 primary-300（#93B7D8）用户实测「看不出效果」——升 primary-400 静态档、
+     hover 深 primary-500，虚线在明暗两主题下都读得出（2026-09-16 Phase2 加深）；
+     新建对话展开态/flyout 态/开启频道三入口同族 */
+  border: 1.5px dashed var(--ip-primary-400);
   background-color: transparent;
   transition: all var(--ip-duration-fast) var(--ip-ease-out);
 }
 
 .conv-item-new:hover {
-  border-color: var(--ip-primary-400);
+  border-color: var(--ip-primary-500);
   background-color: var(--ip-color-bg-tertiary);
 }
 
