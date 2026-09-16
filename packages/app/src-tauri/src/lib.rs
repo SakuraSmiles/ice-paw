@@ -140,6 +140,7 @@ pub fn run() {
             commands::conversation_cmd::reconcile_session,
             commands::conversation_cmd::get_read_route_status,
             commands::message_cmd::list_messages,
+            commands::message_cmd::list_messages_by_turns,
             commands::message_cmd::create_message,
             // MA-3 收件箱（跨会话通讯）
             commands::channel_cmd::ensure_channel,

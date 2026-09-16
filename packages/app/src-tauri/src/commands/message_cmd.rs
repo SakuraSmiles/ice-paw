@@ -42,6 +42,54 @@ pub async fn list_messages(
     Ok(msgs)
 }
 
+/// 回合制分页返回形状（`list_messages_by_turns`）：rows 时间正序 +
+/// has_more + 下页游标（本页最旧纳入回合的锚 rowid；has_more=false 时缺席）。
+#[derive(Debug, serde::Serialize)]
+pub struct MessageTurnPage {
+    pub rows: Vec<Message>,
+    pub has_more: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_before_anchor_rowid: Option<i64>,
+}
+
+/// 回合制分页（消息列表主读路径的换轨目标）：以真实 user 消息锚为回合头
+/// 取「最近 N 个回合」——每页必含可见内容、页界 = 回合边界（细节见
+/// `repo::message::list_by_turn_page` 文档）。
+///
+/// 游标必须原样回传 `before_anchor_rowid`，勿从前端 messages[0] 自造
+/// （乐观行 rowid:0 / 本地冻结行都不是锚）。编排镜像 [`list_messages`：
+/// 含频道 sender enrichment——漏掉只损 `sender_agent_name` /
+/// `turn_duration_ms` 两个 skip-if-none 字段，1v1 零感知]。
+#[tauri::command]
+pub async fn list_messages_by_turns(
+    state: State<'_, SqlitePool>,
+    conversation_id: String,
+    turns: Option<i64>,
+    before_anchor_rowid: Option<i64>,
+) -> AppResult<MessageTurnPage> {
+    if let Some(before) = before_anchor_rowid {
+        if before <= 0 {
+            return Err(crate::error::AppError::Validation(
+                "before_anchor_rowid 须为正 rowid".into(),
+            ));
+        }
+    }
+    let page = repo::message::list_by_turn_page(
+        state.inner(),
+        &conversation_id,
+        turns,
+        before_anchor_rowid,
+    )
+    .await?;
+    let mut msgs: Vec<Message> = page.rows.into_iter().map(Message::from).collect();
+    enrich_channel_sender_meta(state.inner(), &conversation_id, &mut msgs).await?;
+    Ok(MessageTurnPage {
+        rows: msgs,
+        has_more: page.has_more,
+        next_before_anchor_rowid: page.next_before_anchor_rowid,
+    })
+}
+
 /// 频道会话的列表读路径 enrichment：回填 `sender_agent_name` /
 /// `turn_duration_ms`（非表列派生字段，见 models.rs 注释）。
 ///
