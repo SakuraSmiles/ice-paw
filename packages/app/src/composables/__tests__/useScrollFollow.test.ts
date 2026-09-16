@@ -4,6 +4,7 @@ import {
   planScrollRestore,
   computePrependRestore,
   shouldTriggerPrepend,
+  shouldEdgeTriggerPrepend,
   type ScrollAnchor,
 } from "../useScrollFollow";
 
@@ -91,5 +92,24 @@ describe("shouldTriggerPrepend（前插分页方向闸）", () => {
   it("触发区外（≥200px）不触发，方向无关", () => {
     expect(shouldTriggerPrepend(250, 400)).toBe(false);
     expect(shouldTriggerPrepend(200, 500)).toBe(false); // 边界值=区外
+  });
+});
+
+describe("shouldEdgeTriggerPrepend（wheel 绝对顶边缘触发）", () => {
+  it("绝对顶继续上滚（scrollTop=0 + deltaY<0）→ 触发（连续上滚根治）", () => {
+    expect(shouldEdgeTriggerPrepend(0, -120)).toBe(true);
+    expect(shouldEdgeTriggerPrepend(0, -3)).toBe(true); // 触控板小步滚
+  });
+
+  it("绝对顶向下滚（deltaY>0 / =0）→ 不触发（0 是触发区内、向下归方向闸管）", () => {
+    expect(shouldEdgeTriggerPrepend(0, 100)).toBe(false);
+    expect(shouldEdgeTriggerPrepend(0, 0)).toBe(false); // 横向滚（shift+wheel）
+  });
+
+  it("非绝对顶（scrollTop>0）→ 不触发（1-199 触发区由 scroll 事件路径管辖）", () => {
+    // 并组折叠态恢复后常停在触发区内——此处的加载仍走 scroll 方向闸，
+    // wheel 边缘只接管 scroll 事件物理上不再产生的 0 这一点位
+    expect(shouldEdgeTriggerPrepend(40, -120)).toBe(false);
+    expect(shouldEdgeTriggerPrepend(150, -120)).toBe(false);
   });
 });

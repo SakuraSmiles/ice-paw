@@ -106,6 +106,19 @@ export function shouldTriggerPrepend(scrollTop: number, prevScrollTop: number): 
   return scrollTop < LOAD_TRIGGER_PX && scrollTop < prevScrollTop;
 }
 
+/**
+ * 前插分页**绝对顶边缘触发**决策（纯函数，可测）：scrollTop 已在 0 时 scroll
+ * 事件物理上不再产生（位置无法再变小）——「继续上滚想看更早」的意图只能从
+ * wheel 事件读取（deltaY<0，滚轮/触控板均发 wheel）。典型卡死场景（2026-09-16
+ * 四轮真机反馈「每次加载完继续上滚不上去，得先往下一下」）：并组折叠使新页
+ * 高度≈0 → 恢复正确保持原位但停在绝对顶 → wheel-up 无 scroll 事件 = 用户被
+ * 卡在已加载内容的顶部。触发区 1-199px 仍由 scroll 事件路径管辖
+ * （shouldTriggerPrepend 方向闸），本函数只接管 0 这一物理死点位。
+ */
+export function shouldEdgeTriggerPrepend(scrollTop: number, deltaY: number): boolean {
+  return scrollTop <= 0 && deltaY < 0;
+}
+
 export function useScrollFollow(listRef: Ref<HTMLElement | null>) {
   const chat = useChatStore();
   const showScrollBtn = ref(false);
@@ -167,75 +180,99 @@ export function useScrollFollow(listRef: Ref<HTMLElement | null>) {
 
     scheduleCapture();
 
-    // 分页触发：触发区 + **向上方向佐证**（shouldTriggerPrepend，2026-09-16
-    // 三轮「顶部吸附」根治：折叠并组使新页高度≈0、恢复后仍停在触发区，向下
-    // 轻滚也会再拉一页）+ 还有更多数据。恢复 = 锚定式（同日 Phase2 批修复
-    // 「上滚一点就乱跳」）：捕获视口顶组为锚，加载后按锚元素新 offsetTop
-    // 复位——旧「scrollHeight 差值补偿」在前插并组（首组组头易主、DOM 重建）与
-    // content-visibility 估高下不可靠。程序化复位必须包 suppressScrollCheck：
-    // 给 scrollTop 赋值同样发 scroll 事件，恢复后若 scrollTop 仍 <200 且再逢
-    // 上滚事件 → 链式再触发多页加载（方向闸已把假触发面收窄到真向上滚）。
+    // 分页触发（scroll 事件路径）：触发区 + **向上方向佐证**（shouldTriggerPrepend，
+    // 2026-09-16 三轮「顶部吸附」根治：折叠并组使新页高度≈0、恢复后仍停在触发区，
+    // 向下轻滚也会再拉一页）。加载与恢复逻辑在共享的 triggerPrependLoad（wheel
+    // 绝对顶边缘路径同款，见 onWheel）。
     if (shouldTriggerPrepend(el.scrollTop, prevScrollTop) && chat.hasMore && !chat.loadingMore && !chat.sending) {
-      paginating.value = true;
-      const prevHeight = el.scrollHeight;
-      const prevTop = el.scrollTop;
-      const topEl = findTopGroupEl(el);
-      const primary: GroupAnchor | null = topEl && topEl.dataset.mid
-        ? { mid: topEl.dataset.mid, viewportOffset: topEl.offsetTop - el.scrollTop }
-        : null;
-      let fallback: GroupAnchor | null = null;
-      if (topEl) {
-        const groups = Array.from(el.querySelectorAll<HTMLElement>("[data-mid]"));
-        const next = groups[groups.indexOf(topEl) + 1];
-        if (next?.dataset.mid) {
-          fallback = { mid: next.dataset.mid, viewportOffset: next.offsetTop - el.scrollTop };
-        }
-      }
-      chat.loadMoreMessages().then(() => {
-        nextTick(() => {
-          const newEl = listRef.value;
-          if (newEl) {
-            const heightDelta = newEl.scrollHeight - prevHeight;
-            // 无新增（加载尽/竞态）→ 不动滚动位置
-            if (heightDelta > 0) {
-              const primaryEl = primary
-                ? newEl.querySelector<HTMLElement>(`[data-mid="${CSS.escape(primary.mid)}"]`)
-                : null;
-              const fallbackEl = fallback
-                ? newEl.querySelector<HTMLElement>(`[data-mid="${CSS.escape(fallback.mid)}"]`)
-                : null;
-              suppressScrollCheck = true;
-              newEl.scrollTop = computePrependRestore({
-                primaryOffsetTop: primaryEl ? primaryEl.offsetTop : null,
-                primaryViewportOffset: primary?.viewportOffset ?? 0,
-                fallbackOffsetTop: fallbackEl ? fallbackEl.offsetTop : null,
-                fallbackViewportOffset: fallback?.viewportOffset ?? 0,
-                prevScrollTop: prevTop,
-                heightDelta,
-              });
-              // content-visibility 估高在首帧后被真实高度替换 → 150ms 后按锚
-              // 复位校正一次（positionAtAnchor 同款双段），随后解除 suppress
-              const fixMid = primaryEl ? primary!.mid : fallback?.mid ?? null;
-              const fixOffset = primaryEl ? primary!.viewportOffset : fallback?.viewportOffset ?? 0;
-              setTimeout(() => {
-                const e2 = listRef.value;
-                if (e2 && fixMid) {
-                  const n2 = e2.querySelector<HTMLElement>(`[data-mid="${CSS.escape(fixMid)}"]`);
-                  if (n2) e2.scrollTop = n2.offsetTop - fixOffset;
-                }
-                suppressScrollCheck = false;
-                refreshFollowState();
-              }, 150);
-            }
-          }
-          paginating.value = false;
-          refreshFollowState();
-        });
-      }).catch(() => {
-        // loadMoreMessages 拒绝也要放行 paginating——否则分页永久死锁
-        paginating.value = false;
-      });
+      triggerPrependLoad();
     }
+  }
+
+  /** 前插分页加载 + 锚定复位（scroll 触发区路径与 wheel 绝对顶边缘路径共用）。
+   *  恢复 = 锚定式（2026-09-16 Phase2 批修复「上滚一点就乱跳」）：捕获视口顶组
+   *  为锚，加载后按锚元素新 offsetTop 复位——旧「scrollHeight 差值补偿」在前插
+   *  并组（首组组头易主、DOM 重建）与 content-visibility 估高下不可靠。程序化
+   *  复位必须包 suppressScrollCheck：给 scrollTop 赋值同样发 scroll 事件，恢复后
+   *  若 scrollTop 仍 <200 且再逢上滚事件 → 链式再触发多页加载（方向闸已把假
+   *  触发面收窄到真向上滚）。 */
+  function triggerPrependLoad() {
+    const el = listRef.value;
+    if (!el) return;
+    paginating.value = true;
+    const prevHeight = el.scrollHeight;
+    const prevTop = el.scrollTop;
+    const topEl = findTopGroupEl(el);
+    const primary: GroupAnchor | null = topEl && topEl.dataset.mid
+      ? { mid: topEl.dataset.mid, viewportOffset: topEl.offsetTop - el.scrollTop }
+      : null;
+    let fallback: GroupAnchor | null = null;
+    if (topEl) {
+      const groups = Array.from(el.querySelectorAll<HTMLElement>("[data-mid]"));
+      const next = groups[groups.indexOf(topEl) + 1];
+      if (next?.dataset.mid) {
+        fallback = { mid: next.dataset.mid, viewportOffset: next.offsetTop - el.scrollTop };
+      }
+    }
+    chat.loadMoreMessages().then(() => {
+      nextTick(() => {
+        const newEl = listRef.value;
+        if (newEl) {
+          const heightDelta = newEl.scrollHeight - prevHeight;
+          // 无新增（加载尽/竞态）→ 不动滚动位置
+          if (heightDelta > 0) {
+            const primaryEl = primary
+              ? newEl.querySelector<HTMLElement>(`[data-mid="${CSS.escape(primary.mid)}"]`)
+              : null;
+            const fallbackEl = fallback
+              ? newEl.querySelector<HTMLElement>(`[data-mid="${CSS.escape(fallback.mid)}"]`)
+              : null;
+            suppressScrollCheck = true;
+            newEl.scrollTop = computePrependRestore({
+              primaryOffsetTop: primaryEl ? primaryEl.offsetTop : null,
+              primaryViewportOffset: primary?.viewportOffset ?? 0,
+              fallbackOffsetTop: fallbackEl ? fallbackEl.offsetTop : null,
+              fallbackViewportOffset: fallback?.viewportOffset ?? 0,
+              prevScrollTop: prevTop,
+              heightDelta,
+            });
+            // content-visibility 估高在首帧后被真实高度替换 → 150ms 后按锚
+            // 复位校正一次（positionAtAnchor 同款双段），随后解除 suppress
+            const fixMid = primaryEl ? primary!.mid : fallback?.mid ?? null;
+            const fixOffset = primaryEl ? primary!.viewportOffset : fallback?.viewportOffset ?? 0;
+            setTimeout(() => {
+              const e2 = listRef.value;
+              if (e2 && fixMid) {
+                const n2 = e2.querySelector<HTMLElement>(`[data-mid="${CSS.escape(fixMid)}"]`);
+                if (n2) e2.scrollTop = n2.offsetTop - fixOffset;
+              }
+              suppressScrollCheck = false;
+              refreshFollowState();
+            }, 150);
+          }
+        }
+        paginating.value = false;
+        refreshFollowState();
+      });
+    }).catch(() => {
+      // loadMoreMessages 拒绝也要放行 paginating——否则分页永久死锁
+      paginating.value = false;
+    });
+  }
+
+  /** wheel 绝对顶边缘触发（passive 只读意图，不拦截滚动）：scrollTop=0 处
+   *  scroll 事件物理上不再产生（shouldEdgeTriggerPrepend 详注）——继续上滚
+   *  的意图从 wheel 读取，接管 0-199 触发区之外的物理死点位。守卫链与 scroll
+   *  路径同构（suppress/paginating/msgLoading 早退 + hasMore/!loadingMore/
+   *  !sending）。wheel@0 捕获的主锚 viewportOffset=0 → 非并组恢复恰好落在
+   *  旧内容顶 = 加载前所在位置；并组折叠态停 0 可持续再触发 = 连续上滚。 */
+  function onWheel(e: WheelEvent) {
+    const el = listRef.value;
+    if (!el) return;
+    if (suppressScrollCheck || paginating.value || chat.msgLoading) return;
+    if (!shouldEdgeTriggerPrepend(el.scrollTop, e.deltaY)) return;
+    if (!chat.hasMore || chat.loadingMore || chat.sending) return;
+    triggerPrependLoad();
   }
 
   /** 定位到真实底部（content-visibility 屏外是估算高度，首帧后真实高度才
@@ -344,10 +381,13 @@ export function useScrollFollow(listRef: Ref<HTMLElement | null>) {
 
   onMounted(() => {
     listRef.value?.addEventListener("scroll", onScroll);
+    // passive：只读滚动意图（绝对顶 wheel-up 加载上一页），从不 preventDefault
+    listRef.value?.addEventListener("wheel", onWheel, { passive: true });
     scrollToBottom(false);
   });
   onUnmounted(() => {
     listRef.value?.removeEventListener("scroll", onScroll);
+    listRef.value?.removeEventListener("wheel", onWheel);
     if (captureTimer) clearTimeout(captureTimer);
   });
 
