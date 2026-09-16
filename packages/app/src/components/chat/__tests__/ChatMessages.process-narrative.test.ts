@@ -14,6 +14,9 @@
 // 过程行 → 末段正文 → 工具行）/ 碎句组也默认收纳（门控退役）无后续不标截断 /
 // 截断组「继续」续跑签名 → warning 标注 / 折叠态空壳 item 不渲染
 // （.message-item 计数）/ 豁免卡 item 在场。
+// 机制审计补锁（同日四轮）：分页前插并组键易主时——原全可见组预置展开 /
+// 手动展开态随组转移（过程+工具两层同路）/ 旧组已收纳未展开不误预置 /
+// @引用跳进收纳组自动展开（被引段直显）。
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { ref } from "vue";
@@ -357,5 +360,110 @@ describe("组级过程叙述收纳", () => {
     expect(w.findAll(".message-item").length).toBe(2);
     expect(w.findAll(".delegation-stub").length).toBe(1); // 折叠态豁免卡在场
     expect(w.findAll(".md").map((m) => m.text())).toEqual(["结论完成。"]);
+  });
+
+  // ===== 机制审计修复（2026-09-16）：分页前插合并的收纳态保全 + 跳转展开 =====
+
+  it("分页前插合并：原 2 段全可见组并入达 3 段 → 预置展开（阅读连续优先于默认收纳）", async () => {
+    const chat = useChatStore();
+    const w = await mountWith([
+      textMsg("a1", "第一步说明："),
+      textMsg("a2", "结论。"),
+    ]);
+    expect(w.findAll(".process-group-summary").length).toBe(0); // 2 段不收纳
+    expect(w.findAll(".md").length).toBe(2); // 用户正看着全部两段
+
+    // 模拟 loadMoreMessages 前插：更早的同组 assistant 并进窗口首组（组键易主 grp-a1 → grp-a0）。
+    // 修复前：新组首达阈值 → 默认收纳收走正在读的内容（长回合跨多页每次翻页都命中）
+    chat.messages = [textMsg("a0", "第零步说明："), ...chat.messages];
+    await flushPromises();
+
+    const rows = w.findAll(".process-group-summary");
+    expect(rows.length).toBe(1);
+    expect(rows[0].text()).toContain("收起 · 2 段过程叙述"); // 预置展开态（非默认收纳）
+    expect(w.findAll(".md").map((m) => m.text())).toEqual(["第零步说明：", "第一步说明：", "结论。"]);
+  });
+
+  it("分页前插合并：用户手动展开的收纳组键易主后保持展开（展开态随组转移）", async () => {
+    const chat = useChatStore();
+    const w = await mountWith([
+      textMsg("a1", "过程一："),
+      textMsg("a2", "过程二："),
+      textMsg("a3", "结论。"),
+    ]);
+    expect(w.findAll(".md").map((m) => m.text())).toEqual(["结论。"]); // 默认收纳
+    await w.findAll(".process-group-summary")[0].trigger("click"); // 手动展开
+    expect(w.findAll(".md").length).toBe(3);
+
+    chat.messages = [textMsg("a0", "过程零："), ...chat.messages];
+    await flushPromises();
+
+    // 修复前：旧键 grp-a1 从展开集消失 → 回落默认收纳（键易主 = 展开态静默重置）
+    expect(w.findAll(".process-group-summary")[0].text()).toContain("收起 · 3 段过程叙述");
+    expect(w.findAll(".md").map((m) => m.text())).toEqual(["过程零：", "过程一：", "过程二：", "结论。"]);
+  });
+
+  it("分页前插合并：旧组已达阈值且未展开 → 维持默认收纳（不误预置）", async () => {
+    const chat = useChatStore();
+    const w = await mountWith([
+      textMsg("a1", "过程一："),
+      textMsg("a2", "过程二："),
+      textMsg("a3", "结论。"),
+    ]);
+    expect(w.findAll(".process-group-summary")[0].text()).toContain("过程叙述 · 2 段"); // 从未展开
+
+    chat.messages = [textMsg("a0", "过程零："), ...chat.messages];
+    await flushPromises();
+
+    // 用户没展开过 → 并组后仍是默认收纳（预置只救「原本全可见」的组）
+    expect(w.findAll(".process-group-summary")[0].text()).toContain("过程叙述 · 3 段");
+    expect(w.findAll(".md").map((m) => m.text())).toEqual(["结论。"]);
+  });
+
+  it("分页前插合并：工具折叠展开态同路转移（组级三收纳共用转移通道）", async () => {
+    const chat = useChatStore();
+    const toolItem = (id: string): Message => msg({
+      id, role: "assistant", model: "glm-5.3", content: "",
+      content_blocks: JSON.stringify([
+        { type: "tool_use", id: `tu-${id}a`, name: "read_file", input: '{"path":"a.md"}' },
+        { type: "tool_use", id: `tu-${id}b`, name: "read_file", input: '{"path":"b.md"}' },
+      ]),
+    });
+    const w = await mountWith([toolItem("a1"), toolItem("a2"), toolItem("a3"), toolItem("a4")]);
+    expect(w.findAll(".tool-group-summary").length).toBe(1); // 8 次通用工具 ≥8 默认折叠
+    await w.findAll(".tool-group-summary")[0].trigger("click"); // 手动展开
+    expect(w.findAll(".tool-group-summary")[0].text()).toContain("收起 · 8 次工具调用");
+
+    chat.messages = [toolItem("a0"), ...chat.messages];
+    await flushPromises();
+
+    // 展开态随组转移到新键 grp-a0（10 次工具），不回落默认折叠
+    expect(w.findAll(".tool-group-summary")[0].text()).toContain("收起 · 10 次工具调用");
+  });
+
+  it("@引用跳转进默认收纳组：落点组过程收纳自动展开（被引段直显，非只见折叠行）", async () => {
+    // jsdom 无元素滚动实现，stub 掉 scrollTo（跳转定位本身不是本用例的断言面）
+    Element.prototype.scrollTo = vi.fn();
+    const w = await mountWith([
+      msg({ id: "u1", role: "user", content: "任务" }),
+      textMsg("a1", "过程一："),
+      textMsg("a2", "过程二："),
+      textMsg("a3", "过程三："),
+      textMsg("a4", "结论。"),
+      msg({
+        id: "u2", role: "user", content: "",
+        content_blocks: JSON.stringify([
+          { type: "reference", ref_kind: "message", target_id: "a1", display: "消息#0001" },
+        ]),
+      }),
+    ]);
+    expect(w.findAll(".md").map((m) => m.text())).toEqual(["结论。"]); // 组默认收纳
+
+    await w.find(".user-ref-card").trigger("click"); // @引用跳转 → jumpToTurn(组首)
+    await flushPromises();
+
+    // 修复前：落点只见「过程叙述 · 3 段」折叠行、被引内容仍藏着
+    expect(w.findAll(".md").map((m) => m.text())).toEqual(["过程一：", "过程二：", "过程三：", "结论。"]);
+    expect(w.findAll(".process-group-summary")[0].text()).toContain("收起");
   });
 });
