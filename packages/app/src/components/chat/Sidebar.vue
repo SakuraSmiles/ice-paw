@@ -853,7 +853,9 @@ function timeAgoLabel(dateStr: string): string {
   flex-direction: row;
   align-items: center;
   padding: 8px 12px;
-  border: 1px dashed var(--ip-color-border-default);
+  /* 1.5px 主色浅档虚线：与普通会话行拉开「创建动作」区别度（背景不动，只强化边框）；
+     hover 加深到 primary-400（下方既有规则）——新建对话展开态/flyout 态/开启频道三入口同族 */
+  border: 1.5px dashed var(--ip-primary-300);
   background-color: transparent;
   transition: all var(--ip-duration-fast) var(--ip-ease-out);
 }
