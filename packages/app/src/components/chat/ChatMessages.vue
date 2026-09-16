@@ -197,6 +197,16 @@ function toggleThinkingGroup(key: string) {
   expandedThinkingGroups.value = set;
 }
 
+// 组级过程叙述收纳的展开状态（2026-09-16 拍板：多轮回合过程碎句折叠、正中区
+// 只留末段正文；展开=过程段回 item 原位）。键 = 组键，与前两组 Set 同范式。
+const expandedProcessGroups = ref<Set<string>>(new Set());
+
+function toggleProcessGroup(key: string) {
+  const set = new Set(expandedProcessGroups.value);
+  if (set.has(key)) set.delete(key); else set.add(key);
+  expandedProcessGroups.value = set;
+}
+
 function toggleThinking(msgId: string) {
   const set = new Set(expandedThinking.value);
   if (set.has(msgId)) set.delete(msgId); else set.add(msgId);
@@ -1035,6 +1045,50 @@ function thinkSegLabel(seg: GroupedThink): string {
   return seg.durationMs != null ? "思考 · " + formatThinkingMs(seg.durationMs) : "思考";
 }
 
+// ===== 组级过程叙述收纳（2026-09-16 拍板：正文中区只留末段正文）=====
+// 三明治收纳（思考顶/正文中/工具底）对多轮长回合缺第三层收纳：中间轮次的冒号
+// 碎句（「重新执行：」「修复后重跑：」）失去对应工具行后成串悬空堆叠（真机实案：
+// 16 次工具组 7 段正文全是过程叙述）。收纳后过程段折叠为「过程叙述 · N 段」，
+// 展开回 item 原位（与工具折叠同交互——时间线与工具行交错复原）。
+/** 收纳阈值：组内非空正文段 ≥3（过程段 ≥2）才收纳；两段以下多为实质正文
+ *  （说明+结论的轻量两段），过度收纳损害阅读。 */
+const PROCESS_NARRATIVE_MIN = 3;
+
+interface GroupProcessStats { count: number; lastContentIdx: number }
+
+/** 各 assistant 组的正文段统计：count = 非空 content 的 item 数，lastContentIdx
+ *  = 末段所在 item 下标（末 item 可能是无正文纯工具轮——末段=最后有 content 者）。 */
+const groupProcessStats = computed<Map<string, GroupProcessStats>>(() => {
+  const stats = new Map<string, GroupProcessStats>();
+  for (const g of messageGroups.value) {
+    if (g.role !== "assistant") continue;
+    let count = 0;
+    let lastContentIdx = -1;
+    for (const it of g.items) {
+      if (it.msg.content) { count++; lastContentIdx = it.idx; }
+    }
+    if (count >= PROCESS_NARRATIVE_MIN) stats.set(g.key, { count, lastContentIdx });
+  }
+  return stats;
+});
+
+/** 组具备收纳资格（≥阈值且非生成中——frozen-round 语义：流式正文实时在场，
+ *  回合结束沉淀；与思考聚合/工具折叠同一判定）。 */
+function processCollapseEligible(g: MessageGroup): boolean {
+  return groupProcessStats.value.has(g.key) && !groupInLiveTurn(g);
+}
+
+function isProcessCollapsed(g: MessageGroup): boolean {
+  return processCollapseEligible(g) && !expandedProcessGroups.value.has(g.key);
+}
+
+/** 折叠态下该 item 的正文应隐藏（非末段正文 item）；展开态恒 false（回原位）。 */
+function isProcessNarrativeItem(g: MessageGroup, item: GroupedItem): boolean {
+  if (!isProcessCollapsed(g)) return false;
+  const s = groupProcessStats.value.get(g.key);
+  return s != null && item.idx !== s.lastContentIdx;
+}
+
 /** 该 item 是否是全局最后一条 assistant（用于 chat:done 后驻留的「思考·已完成」块）。*/
 function isLastAssistant(item: GroupedItem): boolean {
   return item.msg.role === "assistant" && item.idx === chat.messages.length - 1;
@@ -1324,6 +1378,17 @@ const RESUMABLE_REASONS = new Set([
                 </div>
               </Transition>
             </template>
+            <!-- 组级过程叙述收纳（2026-09-16 拍板）：多轮回合过程碎句折叠，正文中
+                 区只留末段正文；展开=过程段回 item 原位。⚠️ 必须在 item v-for 之外
+                 （工具摘要行组级错位同族教训）。 -->
+            <div v-if="processCollapseEligible(group)" class="tool-toggle process-group-summary" @click="toggleProcessGroup(group.key)">
+              <StatusGlyph status="done" />
+              <template v-if="isProcessCollapsed(group)">
+                <span class="tool-name">过程叙述 · {{ (groupProcessStats.get(group.key)?.count ?? 0) - 1 }} 段</span>
+              </template>
+              <span v-else class="tool-name">收起 · {{ (groupProcessStats.get(group.key)?.count ?? 0) - 1 }} 段过程叙述</span>
+              <span class="tool-chevron">{{ isProcessCollapsed(group) ? '▸' : '▾' }}</span>
+            </div>
             <div v-for="item in group.items" :key="item.msg.id" class="message-item">
               <!-- 三个点动画：仅当前流式 item 且无任何返回时显示 -->
               <div v-if="isLiveAssistant(item) && item.msg.content === '' && !chat.streamingThinking && toolCallList.length === 0" class="think-dots">
@@ -1384,8 +1449,9 @@ const RESUMABLE_REASONS = new Set([
                   </div>
                 </Transition>
 
-                <!-- 文字（按时间线顺序：thinking → 文本 → 工具，匹配 content_blocks）-->
-                <div v-if="item.msg.content" class="message-bubble">
+                <!-- 文字（按时间线顺序：thinking → 文本 → 工具，匹配 content_blocks）。
+                     过程收纳折叠态：非末段正文隐藏（收进顶部折叠行）；展开回原位 -->
+                <div v-if="item.msg.content && !isProcessNarrativeItem(group, item)" class="message-bubble">
                   <MarkdownRenderer :content="item.msg.content" :streaming="isLiveAssistant(item) || isTurnStreaming(item)" />
                 </div>
 
@@ -2046,6 +2112,9 @@ const RESUMABLE_REASONS = new Set([
 .think-group-summary { margin-bottom:2px; }
 .think-group-total { color:var(--ip-color-text-disabled); font-weight:var(--ip-font-weight-regular); }
 .think-group-stack { margin:2px 0 6px 22px; display:grid; gap:2px; }
+
+/* 组级过程叙述收纳行：复用 tool-toggle 行形态（与思考/工具两个收纳行同族视觉） */
+.process-group-summary { margin-bottom:2px; }
 
 /* 状态图标（StatusGlyph：环形对勾/3×3 像素格/环形叉，2026-09-04 语系统一）。
    行内紧凑节奏保持：glyph 14px 与 caption 字号同高，flex 自然居中。 */
