@@ -185,6 +185,22 @@ watch(
     if (dh > 0) scroller.value.scrollTop += dh;
   },
 );
+/** 滚动门控自愈（2026-09-16 生产反馈「『加载更早』胶囊未滚到顶也出现且不消失」）：
+ *  scrollTop ref 平时只靠 scroll 事件喂，但隐藏 tab 挂载（无布局不触发 scroll）、
+ *  内容增缩后浏览器钳制 scrollTop、程序性赋值等路径都可能不派发 scroll 事件——
+ *  ref 滞留陈旧值，earlierOn 门控就常显不退。任何 rows 变化（分页前插/折叠/筛选/
+ *  搜索命中/切换会话）落地后重读真实 DOM 位置归真，陈旧门控在下一个 rows 变化处
+ *  自愈。flush:post 确保读到补渲染后的真实位置。 */
+watch(
+  () => props.rows,
+  () => {
+    const el = scroller.value;
+    if (!el) return;
+    scrollTop.value = el.scrollTop;
+    viewportH.value = el.clientHeight;
+  },
+  { flush: "post" },
+);
 /** pinned 响应式暴露（父层贴底联动 UI——底缘渐隐显隐；exposed 代理自动解包 ref，
  *  模板读 tableRef.pinned 即建响应依赖）；isPinned() 保留供命令式快照读 */
 defineExpose({ scrollToSeq, scrollToTurn, scrollToKey, scrollToBottom, smoothScrollToBottom, isNearBottom, isPinned, pinned, beginPrepend });
