@@ -88,6 +88,24 @@ export function computePrependRestore(input: {
   return Math.max(0, input.prevScrollTop + input.heightDelta);
 }
 
+/** 前插分页触发区（距顶部 px） */
+const LOAD_TRIGGER_PX = 200;
+
+/**
+ * 前插分页触发决策（纯函数，可测）：触发区 <200px 内**还须向上滚动方向佐证**
+ * （scrollTop 严格小于上一帧）。仅位置条件不够的根因（2026-09-16 三轮真机实案
+ * 「顶部吸附 + 轻滚即加载」）：长工具回合常横跨 50 条分页边界——整页前插并进
+ * 窗口首组，而首组已折叠收纳（胶囊行+末段 ~300px），**新增高度 ≈ 0** → 恢复
+ * 正确保持原位（视觉像素未变）但 scrollTop 仍停在触发区内；此时**向下**轻滚的
+ * scroll 事件也满足 scrollTop<200 → 再拉一页 → 又并进折叠组 → 又回顶部 =
+ * 「类似底部吸附」的顶部无限加载。方向闸后：向下滚 = 想离开历史区，永不加载；
+ * 向上滚 = 「再看更早」意图，才触发。静止（惯性滚动到底 scrollTop 不再变）
+ * 不重复触发。
+ */
+export function shouldTriggerPrepend(scrollTop: number, prevScrollTop: number): boolean {
+  return scrollTop < LOAD_TRIGGER_PX && scrollTop < prevScrollTop;
+}
+
 export function useScrollFollow(listRef: Ref<HTMLElement | null>) {
   const chat = useChatStore();
   const showScrollBtn = ref(false);
@@ -130,11 +148,17 @@ export function useScrollFollow(listRef: Ref<HTMLElement | null>) {
     captureTimer = setTimeout(captureAnchor, 150);
   }
 
-  // 检测滚动位置：非底部显示按钮，靠近顶部触发分页
+  // 检测滚动位置：非底部显示按钮，靠近顶部触发分页。
+  // lastScrollTop 基线**无条件更新**（先于 suppress/paginating 早退）：程序化
+  // 复位（分页恢复/贴底/锚点定位）发出的 scroll 事件也要刷新基线，否则解除
+  // suppress 后首个真实事件的 delta 会拿陈旧位置算出假「向上」。
+  let lastScrollTop = 0;
   function onScroll() {
-    if (suppressScrollCheck || paginating.value || chat.msgLoading) return;
     const el = listRef.value;
     if (!el) return;
+    const prevScrollTop = lastScrollTop;
+    lastScrollTop = el.scrollTop;
+    if (suppressScrollCheck || paginating.value || chat.msgLoading) return;
 
     const distToBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
     showScrollBtn.value = distToBottom > 80;
@@ -143,13 +167,15 @@ export function useScrollFollow(listRef: Ref<HTMLElement | null>) {
 
     scheduleCapture();
 
-    // 分页触发：距顶部 200px 且还有更多数据。恢复 = 锚定式（2026-09-16 Phase2
-    // 批修复「上滚一点就乱跳」）：捕获视口顶组为锚，加载后按锚元素新 offsetTop
+    // 分页触发：触发区 + **向上方向佐证**（shouldTriggerPrepend，2026-09-16
+    // 三轮「顶部吸附」根治：折叠并组使新页高度≈0、恢复后仍停在触发区，向下
+    // 轻滚也会再拉一页）+ 还有更多数据。恢复 = 锚定式（同日 Phase2 批修复
+    // 「上滚一点就乱跳」）：捕获视口顶组为锚，加载后按锚元素新 offsetTop
     // 复位——旧「scrollHeight 差值补偿」在前插并组（首组组头易主、DOM 重建）与
     // content-visibility 估高下不可靠。程序化复位必须包 suppressScrollCheck：
-    // 给 scrollTop 赋值同样发 scroll 事件，收纳折叠使每页新增高度小、恢复后
-    // scrollTop 仍 <200 → 链式再触发多页加载 = 「轻微上滚乱跳」的第二根因。
-    if (el.scrollTop < 200 && chat.hasMore && !chat.loadingMore && !chat.sending) {
+    // 给 scrollTop 赋值同样发 scroll 事件，恢复后若 scrollTop 仍 <200 且再逢
+    // 上滚事件 → 链式再触发多页加载（方向闸已把假触发面收窄到真向上滚）。
+    if (shouldTriggerPrepend(el.scrollTop, prevScrollTop) && chat.hasMore && !chat.loadingMore && !chat.sending) {
       paginating.value = true;
       const prevHeight = el.scrollHeight;
       const prevTop = el.scrollTop;

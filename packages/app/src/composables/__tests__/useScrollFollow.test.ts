@@ -1,6 +1,11 @@
 // useScrollFollow 纯函数单测：滚动恢复决策（DOM 交互部分靠真机手测覆盖）
 import { describe, it, expect } from "vitest";
-import { planScrollRestore, computePrependRestore, type ScrollAnchor } from "../useScrollFollow";
+import {
+  planScrollRestore,
+  computePrependRestore,
+  shouldTriggerPrepend,
+  type ScrollAnchor,
+} from "../useScrollFollow";
 
 const ids = (arr: string[]) => new Set(arr);
 
@@ -63,5 +68,28 @@ describe("computePrependRestore（前插分页恢复定位）", () => {
     expect(computePrependRestore({
       ...base, primaryOffsetTop: 10, fallbackOffsetTop: 100,
     })).toBe(0);
+  });
+});
+
+describe("shouldTriggerPrepend（前插分页方向闸）", () => {
+  it("触发区内向上滚（delta<0）→ 触发（正常翻历史路径不变）", () => {
+    expect(shouldTriggerPrepend(180, 400)).toBe(true);
+    expect(shouldTriggerPrepend(0, 20)).toBe(true);
+  });
+
+  it("触发区内向下轻滚 → 不触发（顶部吸附根治：向下=想离开历史区）", () => {
+    // 折叠并组使新页高度≈0、恢复后停在触发区——旧逻辑仅凭位置即再拉一页
+    expect(shouldTriggerPrepend(40, 0)).toBe(false);
+    expect(shouldTriggerPrepend(150, 90)).toBe(false);
+  });
+
+  it("同位重复事件（惯性滚到 0 后 scrollTop 不再变）→ 不触发", () => {
+    expect(shouldTriggerPrepend(0, 0)).toBe(false);
+    expect(shouldTriggerPrepend(150, 150)).toBe(false);
+  });
+
+  it("触发区外（≥200px）不触发，方向无关", () => {
+    expect(shouldTriggerPrepend(250, 400)).toBe(false);
+    expect(shouldTriggerPrepend(200, 500)).toBe(false); // 边界值=区外
   });
 });
