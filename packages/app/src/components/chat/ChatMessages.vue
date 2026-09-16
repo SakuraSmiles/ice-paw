@@ -1130,47 +1130,19 @@ function isProcessCollapsed(g: MessageGroup): boolean {
   return processCollapseEligible(g) && !expandedProcessGroups.value.has(g.key);
 }
 
-// ===== 分页前插合并的收纳态保全（2026-09-16 机制审计修复）=====
+// ===== 分页前插合并的收纳态保全（2026-09-16 机制审计修复；同日七轮拍板改版）=====
 // loadMoreMessages 前插一页更早消息时，窗口原首组与新页尾续同 model/sender 则
 // 并组——组键 grp-<首条id> 随组头易主而变。三个收纳展开集按键存档，不转移 =
-// 用户手动展开被静默重置回收纳；更糟的是原本 <阈值 全可见的组并入后首达阈值，
-// 正在阅读的内容被默认收纳收走（长回合跨多页时每次翻页都命中——恰是收纳机制
-// 的主战场场景）。锚 = 组末条消息 id（前插只动组头、组尾恒定；尾部追加不变键）。
-function countGenericTools(g: MessageGroup): number {
-  let n = 0;
-  for (const it of g.items) {
-    for (const tu of parseToolUseBlocks(it.msg.content_blocks)) {
-      if (structuredCardKindOf(tu) === null) n++;
-    }
-  }
-  return n;
-}
-
-function countThinkSegs(g: MessageGroup): number {
-  let n = 0;
-  for (const it of g.items) n += parseThinkingBlocks(it.msg.content_blocks).length;
-  return n;
-}
-
-function countTextSegs(g: MessageGroup): number {
-  let n = 0;
-  for (const it of g.items) if (it.msg.content) n++;
-  return n;
-}
-
-/** 旧展开态转移到新键；旧组未达阈值（用户看的是全展开内容）而新组达阈值 →
- *  预置展开——阅读连续优先于默认收纳。旧组达阈值且未展开 = 用户没展开过，
- *  维持默认收纳（不预置）。 */
+// 用户手动展开被静默重置回收纳。锚 = 组末条消息 id（前插只动组头、组尾恒定；
+// 尾部追加不变键）。**预置展开分支已按用户拍板移除（2026-09-16 七轮）：翻历史
+// 分页时三收纳一律默认收起——原「原本全可见组并入达阈值 → 预置展开（阅读连续
+// 优先）」被推翻，读到折叠行想看再点开，不代替用户做展开决定。**
 function transferGroupExpansion(
   setRef: typeof expandedToolGroups,
   oldKey: string,
   newKey: string,
-  wasEligible: boolean,
-  isEligible: boolean,
 ) {
-  if (!wasEligible && !isEligible) return;
-  const had = setRef.value.has(oldKey);
-  if (!had && !(!wasEligible && isEligible)) return;
+  if (!setRef.value.has(oldKey)) return;
   const set = new Set(setRef.value);
   set.delete(oldKey);
   set.add(newKey);
@@ -1184,13 +1156,9 @@ watch(messageGroups, (groups, prev) => {
   for (const g of groups) {
     const og = oldByTail.get(g.items[g.items.length - 1].msg.id);
     if (!og || og.key === g.key) continue;
-    // 旧组资格须从 items 快照重算（组统计 Map 按当前键建，旧键查不到）
-    transferGroupExpansion(expandedToolGroups, og.key, g.key,
-      countGenericTools(og) >= TOOL_COLLAPSE_THRESHOLD, countGenericTools(g) >= TOOL_COLLAPSE_THRESHOLD);
-    transferGroupExpansion(expandedThinkingGroups, og.key, g.key,
-      countThinkSegs(og) >= 2, countThinkSegs(g) >= 2);
-    transferGroupExpansion(expandedProcessGroups, og.key, g.key,
-      countTextSegs(og) >= PROCESS_NARRATIVE_MIN, countTextSegs(g) >= PROCESS_NARRATIVE_MIN);
+    transferGroupExpansion(expandedToolGroups, og.key, g.key);
+    transferGroupExpansion(expandedThinkingGroups, og.key, g.key);
+    transferGroupExpansion(expandedProcessGroups, og.key, g.key);
   }
 });
 

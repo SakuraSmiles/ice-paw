@@ -15,9 +15,11 @@
 // （门控退役）无后续不标截断 /
 // 截断组「继续」续跑签名 → warning 标注 / 折叠态空壳 item 不渲染
 // （.message-item 计数）/ 豁免卡 item 在场。
-// 机制审计补锁（同日四轮）：分页前插并组键易主时——原全可见组预置展开 /
-// 手动展开态随组转移（过程+工具两层同路）/ 旧组已收纳未展开不误预置 /
-// @引用跳进收纳组自动展开（被引段直显）。
+// 机制审计补锁（同日四轮）+ 七轮拍板改版：分页前插并组键易主时——原全可见
+// 组并入达阈值**默认收纳**（「预置展开·阅读连续优先」已按用户拍板退役：
+// 翻历史分页时三收纳一律默认收起，想看再点开，不代替用户做展开决定）/
+// 手动展开态随组转移（过程+工具两层同路）/
+// @引用跳进收纳组自动展开（被引段直显——用户意图驱动，非分页场景）。
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { ref } from "vue";
@@ -382,7 +384,7 @@ describe("组级过程叙述收纳", () => {
 
   // ===== 机制审计修复（2026-09-16）：分页前插合并的收纳态保全 + 跳转展开 =====
 
-  it("分页前插合并：原 2 段全可见组并入达 3 段 → 预置展开（阅读连续优先于默认收纳）", async () => {
+  it("分页前插合并：原 2 段全可见组并入达 3 段 → 默认收纳（七轮拍板：预置展开退役，翻历史一律收起）", async () => {
     const chat = useChatStore();
     const w = await mountWith([
       textMsg("a1", "第一步说明："),
@@ -392,14 +394,15 @@ describe("组级过程叙述收纳", () => {
     expect(w.findAll(".md").length).toBe(2); // 用户正看着全部两段
 
     // 模拟 loadMoreMessages 前插：更早的同组 assistant 并进窗口首组（组键易主 grp-a1 → grp-a0）。
-    // 修复前：新组首达阈值 → 默认收纳收走正在读的内容（长回合跨多页每次翻页都命中）
+    // 四轮曾修「预置展开（阅读连续优先）」，七轮用户拍板推翻：翻历史分页时三收纳
+    // 一律默认收起——正在读的内容被收走就点开，不代替用户做展开决定。
     chat.messages = [textMsg("a0", "第零步说明："), ...chat.messages];
     await flushPromises();
 
     const rows = w.findAll(".process-group-summary");
     expect(rows.length).toBe(1);
-    expect(rows[0].text()).toContain("收起 · 2 段过程叙述"); // 预置展开态（非默认收纳）
-    expect(w.findAll(".md").map((m) => m.text())).toEqual(["第零步说明：", "第一步说明：", "结论。"]);
+    expect(rows[0].text()).toContain("过程叙述 · 2 段"); // 默认收纳（无预置展开）
+    expect(w.findAll(".md").map((m) => m.text())).toEqual(["结论。"]);
   });
 
   it("分页前插合并：用户手动展开的收纳组键易主后保持展开（展开态随组转移）", async () => {
@@ -433,7 +436,7 @@ describe("组级过程叙述收纳", () => {
     chat.messages = [textMsg("a0", "过程零："), ...chat.messages];
     await flushPromises();
 
-    // 用户没展开过 → 并组后仍是默认收纳（预置只救「原本全可见」的组）
+    // 用户没展开过 → 并组后仍是默认收纳（七轮起本就无预置分支，全路径一致）
     expect(w.findAll(".process-group-summary")[0].text()).toContain("过程叙述 · 3 段");
     expect(w.findAll(".md").map((m) => m.text())).toEqual(["结论。"]);
   });
