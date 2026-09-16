@@ -16,6 +16,7 @@ import EntityAvatar from "../common/EntityAvatar.vue";
 import ProjectSwitcher from "./ProjectSwitcher.vue";
 import { PanelLeftClose, PanelLeftOpen, MessagesSquare, Settings, Hash, Star } from "@lucide/vue";
 import { useEscapeStack } from "../../composables/useEscapeStack";
+import { reportBootProgress } from "../../utils/bootProgress";
 
 const router = useRouter();
 const project = useProjectStore();
@@ -280,6 +281,9 @@ onMounted(async () => {
   agent.load();
   await project.load();
   await chat.loadConversations();
+  // 启动数据链完成（agent 列表 + 项目 + 会话列表）→ 加载页 100%（null-safe：
+  // jsdom 测试/splash 已退场时 no-op）。恢复决策是同步纯函数，就绪不等它。
+  reportBootProgress(100, "就绪");
   // 启动恢复（planRestore 决策纯函数，记忆由 App.vue watch 落盘）：优先恢复
   // 「上次会话与所在页面」；持久化会话失效回退最近一条（原打开行为）；上次
   // 明确欢迎态则保持欢迎态。delegation 后台会话不作为恢复目标（用户上次

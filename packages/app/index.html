@@ -11,9 +11,17 @@
       （低配机 1-2s）。此段内联样式 + 字标让首帧即有内容，先于一切加载逻辑可见。
 
       生命周期改造：骨架是 #app 的**兄弟节点**（body 直接子级）——Vue mount 只替换
-      #app 内容，骨架不再被 mount 吞掉「一闪而过」；退场由 main.ts 接管——亮窗后
-      最少展示 1s，再挂 .boot-splash-out 淡出并移除节点（JS 挂死时骨架留存 = 诚实的
-      「启动中」而非空白窗）。pointer-events:none 保证任何时刻不挡输入。
+      #app 内容，骨架不再被 mount 吞掉「一闪而过」；退场由 main.ts 接管——**真实
+      就绪 + 亮窗起最少展示 2.5s** 双条件（utils/bootProgress.ts 上报链：模块执行
+      15 → mount 50 → 亮窗 60 → Sidebar 初始数据完成 100；~10s 超时兜底防上报链
+      断裂骨架滞留），再挂 .boot-splash-out 淡出并移除节点（JS 挂死时骨架留存 =
+      诚实的「启动中」而非空白窗）。pointer-events:none 保证任何时刻不挡输入。
+
+      进度条两形态（2026-09-16 Phase2：用户反馈循环动画像假进度——确实是假的）：
+      初始 indeterminate 循环滑动（bundle 未执行，无从知道进度），首次
+      reportBootProgress 调用挂 .boot-determinate 切确定性——animation:none、
+      width 由 JS 内联控制 + 280ms 过渡；.boot-status 状态行同步写入阶段文案
+      （「加载应用」→「初始化界面」→「加载会话数据」→「就绪」）。
 
       ⚠️ 全应用唯一硬编码颜色/系统字体栈/z-index 例外位：令牌体系（tokens.css /
       --ip-* / --ip-z-* / @fontsource 字体）全部打进 JS bundle，首帧必然不可用。
@@ -62,17 +70,32 @@
         background: #173d66;
         animation: boot-slide 1.4s ease-in-out infinite;
       }
+      /* 确定性形态（首次 reportBootProgress 挂上）：循环动画退场，width 全权
+         交给 bootProgress.ts 内联控制；translate 归零防循环动画末态残留偏移 */
+      .boot-bar-fill.boot-determinate {
+        animation: none;
+        transform: none;
+        transition: width 280ms ease-out;
+      }
       @keyframes boot-slide {
         0% { transform: translateX(-100%); }
         100% { transform: translateX(350%); }
+      }
+      /* 状态行：当前启动阶段文案（reportBootProgress label 写入） */
+      .boot-status {
+        font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+        font-size: 12px;
+        color: #6b7a8f;
       }
       @media (prefers-color-scheme: dark) {
         .boot-splash { background: #14181f; color: #5b8fcc; }
         .boot-bar { background: #1c222b; }
         .boot-bar-fill { background: #5b8fcc; }
+        .boot-status { color: #8b98a9; }
       }
       @media (prefers-reduced-motion: reduce) {
         .boot-bar-fill { animation: none; transform: translateX(100%); }
+        .boot-bar-fill.boot-determinate { transform: none; transition: none; }
         .boot-splash-out { transition: none; }
       }
     </style>
@@ -83,6 +106,7 @@
     <div id="boot-splash" class="boot-splash" aria-label="正在启动 IcePaw">
       <div class="boot-logo">IcePaw</div>
       <div class="boot-bar"><div class="boot-bar-fill"></div></div>
+      <div class="boot-status">正在启动…</div>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
