@@ -144,20 +144,26 @@ describe("③ 组级工具折叠", () => {
 
   it("阈值上（10 条）默认折：只摘要行；点开见全行 + 收起态；再点收回", async () => {
     const w = await mountWith(turnWithTools("b", 10));
-    // 默认折叠：通用行全隐、摘要行在场并报总量
+    // 默认折叠：通用行全隐、摘要行在场并报总量；六轮两态胶囊——收起无 is-open
+    // （实底软色 chip）+ aria-expanded=false
     expect(plainToolRows(w).length).toBe(0);
     const summary = w.findAll(".tool-group-summary");
     expect(summary.length).toBe(1);
     expect(summary[0].text()).toContain("10 次工具调用");
+    expect(summary[0].classes()).not.toContain("is-open");
+    expect(summary[0].attributes("aria-expanded")).toBe("false");
 
-    // 展开：全行回场，摘要切「收起」态
+    // 展开：全行回场，摘要切「收起」态（is-open 幽灵胶囊 + aria-expanded=true）
     await summary[0].trigger("click");
     expect(plainToolRows(w).length).toBe(10);
     expect(w.findAll(".tool-group-summary")[0].text()).toContain("收起 · 10 次工具调用");
+    expect(w.findAll(".tool-group-summary")[0].classes()).toContain("is-open");
+    expect(w.findAll(".tool-group-summary")[0].attributes("aria-expanded")).toBe("true");
 
     // 再点收回
     await w.findAll(".tool-group-summary")[0].trigger("click");
     expect(plainToolRows(w).length).toBe(0);
+    expect(w.findAll(".tool-group-summary")[0].classes()).not.toContain("is-open");
   });
 
   it("失败计数：含失败行组摘要带「N 失败」warning 徽记", async () => {

@@ -1489,22 +1489,26 @@ const RESUMABLE_REASONS = new Set([
                 </div>
               </template>
               <div class="assistant-body">
-            <!-- 组级收纳胶囊行（2026-09-16 四轮拍板：三行合一置气泡最前端）——
+            <!-- 组级收纳胶囊行（2026-09-16 五轮拍板：三行合一置气泡最前端）——
                  思考/工具/过程三胶囊并排（序固定 思考→工具→过程），各配语义
                  Lucide 图标（Brain/Wrench/MessageSquareText——图标表内容域，
                  原状态图标 done/error 与收纳语义不符，用户拍板换掉）。
                  置顶而非置底：底部工具行展开向上顶会把点击控件推出视野；置顶
                  展开向下流（details 语感），控件钉在位。
+                 六轮（用户反馈「不够明显、区别度不够」）：胶囊 chrome 对齐房内
+                 chip 语言（ChatHeader 频道 tag 徽章）——收起=实底软色胶囊（供能
+                 暗示「这里有内容」）、展开=幽灵描边胶囊（is-open，控件退位）；
+                 div→button 化 + aria-expanded（键盘可达基线）。
                  ⚠️ 胶囊必须在 item v-for 之外（与 message-item 同级——组级错位
                  教训：落 item 内 = 每轮一条重复摘要行）。 -->
             <div v-if="thinkingAggregateEligible(group) || toolCollapseEligible(group) || processCollapseEligible(group)" class="group-summary-pills">
-              <div v-if="thinkingAggregateEligible(group)" class="think-toggle summary-pill think-group-summary" @click="toggleThinkingGroup(group.key)">
+              <button v-if="thinkingAggregateEligible(group)" type="button" class="think-toggle summary-pill think-group-summary" :class="{ 'is-open': expandedThinkingGroups.has(group.key) }" :aria-expanded="expandedThinkingGroups.has(group.key)" @click="toggleThinkingGroup(group.key)">
                 <Brain :size="14" class="pill-glyph" aria-hidden="true" />
                 <span class="think-label">思考 · {{ groupThinkingStats.get(group.key)?.segs.length }} 段</span>
                 <span v-if="groupThinkingStats.get(group.key)?.totalMs != null" class="think-label think-group-total">{{ formatThinkingMs(groupThinkingStats.get(group.key)!.totalMs!) }}</span>
                 <span class="think-chevron">{{ expandedThinkingGroups.has(group.key) ? '▾' : '▸' }}</span>
-              </div>
-              <div v-if="toolCollapseEligible(group)" class="tool-toggle summary-pill tool-group-summary" @click="toggleToolGroup(group.key)">
+              </button>
+              <button v-if="toolCollapseEligible(group)" type="button" class="tool-toggle summary-pill tool-group-summary" :class="{ 'is-open': !isToolsCollapsed(group) }" :aria-expanded="!isToolsCollapsed(group)" @click="toggleToolGroup(group.key)">
                 <Wrench :size="14" class="pill-glyph" aria-hidden="true" />
                 <template v-if="isToolsCollapsed(group)">
                   <span class="tool-name">{{ groupToolStats.get(group.key)?.total }} 次工具调用</span>
@@ -1512,12 +1516,12 @@ const RESUMABLE_REASONS = new Set([
                 </template>
                 <span v-else class="tool-name">收起 · {{ groupToolStats.get(group.key)?.total }} 次工具调用</span>
                 <span class="tool-chevron">{{ isToolsCollapsed(group) ? '▸' : '▾' }}</span>
-              </div>
-              <div v-if="processCollapseEligible(group)" class="tool-toggle summary-pill process-group-summary" @click="toggleProcessGroup(group.key)">
+              </button>
+              <button v-if="processCollapseEligible(group)" type="button" class="tool-toggle summary-pill process-group-summary" :class="{ 'is-open': !isProcessCollapsed(group) }" :aria-expanded="!isProcessCollapsed(group)" @click="toggleProcessGroup(group.key)">
                 <MessageSquareText :size="14" class="pill-glyph" aria-hidden="true" />
                 <span class="tool-name" :class="{ 'process-truncated': isProcessCollapsed(group) && groupTruncatedAfter(group) }">{{ processRowLabel(group, isProcessCollapsed(group)) }}</span>
                 <span class="tool-chevron">{{ isProcessCollapsed(group) ? '▸' : '▾' }}</span>
-              </div>
+              </button>
             </div>
             <!-- 组级思考聚合（≥2 段）：收起=胶囊总量，展开=胶囊行下堆叠各段
                  （段内交互照旧，展开键与 item 内同构——聚合前后互通）。 -->
@@ -2240,20 +2244,55 @@ const RESUMABLE_REASONS = new Set([
 /* ③ 组级折叠摘要行的失败计数（warning 语义色；与 tool-diff 的加减速记同为行内强调位） */
 .tool-fail-count { font-size:var(--ip-text-caption-size); color:var(--ip-warning-text); white-space:nowrap; }
 
-/* 组级收纳胶囊行（2026-09-16 四轮：三行合一置气泡最前端）——思考/工具/过程
+/* 组级收纳胶囊行（2026-09-16 五轮：三行合一置气泡最前端）——思考/工具/过程
    三胶囊并排；flex-wrap 窄窗换行不截断；胶囊覆写行级 width:100% → 内容自适应宽 */
 .group-summary-pills { display:flex; flex-wrap:wrap; align-items:center; gap:var(--ip-spacing-1); margin-bottom:var(--ip-spacing-0_5); }
-.group-summary-pills .summary-pill { width:auto; flex-shrink:0; }
+/* 胶囊 chrome（2026-09-16 六轮：用户反馈「不够明显、区别度不够」）——对齐房内
+   chip 语言 ChatHeader .header-kind-badge（软底胶囊 = 可点开藏内容的供能暗示）；
+   两态对比承载状态自述：收起 = 实底软色胶囊（这里有内容，点开看）/ 展开 =
+   幽灵描边胶囊（is-open，内容已在场、控件退位）；hover 各自加深；边框两态恒
+   1px 防开合尺寸跳动。色值照抄 header-kind-badge 的 var+rgba 兜底写法
+   （--ip-primary-soft-border 全局无定义，rgba 兜底即频道 tag 徽章的实际渲染
+   形态）。全部规则收在 .group-summary-pills 前缀下与基类（.tool-toggle/
+   .think-toggle 行形态）无特异性争抢；按钮化后补 font/line-height 继承
+   （UA 按钮字体不随父走）。 */
+.group-summary-pills .summary-pill {
+  width:auto; flex-shrink:0;
+  padding:1px 8px; gap:4px;
+  border-radius:var(--ip-radius-full, 999px);
+  border:1px solid rgba(var(--ip-primary-500-rgb), 0.25);
+  background:var(--ip-color-primary-soft-bg, rgba(var(--ip-primary-500-rgb), 0.08));
+  color:var(--ip-primary-600);
+  font-family:inherit; font-size:inherit; line-height:inherit;
+  transition:background var(--ip-duration-fast) var(--ip-ease-out),
+             border-color var(--ip-duration-fast) var(--ip-ease-out),
+             color var(--ip-duration-fast) var(--ip-ease-out);
+}
+.group-summary-pills .summary-pill:hover { background:rgba(var(--ip-primary-500-rgb), 0.14); }
+/* 展开态：幽灵胶囊（透明底 + 默认描边 + tertiary 文本） */
+.group-summary-pills .summary-pill.is-open { background:transparent; border-color:var(--ip-color-border-default); color:var(--ip-color-text-tertiary); }
+.group-summary-pills .summary-pill.is-open:hover { background:var(--ip-color-bg-tertiary); }
+/* 胶囊内子元素随态取色：图标/标签/chevron 一律 inherit 胶囊色（收起=主色、
+   展开=tertiary），chevron 与总耗时再压一档透明度作次级信息 */
+.group-summary-pills .summary-pill .pill-glyph { color:inherit; }
+.group-summary-pills .summary-pill .tool-name,
+.group-summary-pills .summary-pill .think-label { color:inherit; }
+.group-summary-pills .summary-pill .tool-chevron,
+.group-summary-pills .summary-pill .think-chevron { color:inherit; opacity:0.65; }
+.group-summary-pills .summary-pill .think-group-total { color:inherit; opacity:0.75; }
 /* 胶囊语义图标（Brain 思考 / Wrench 工具 / MessageSquareText 过程叙述）：
    图标表内容域非状态——状态图标 done/error 与收纳语义不符（2026-09-16 用户
-   拍板换语义图标）；色阶与标签文本同步（tertiary） */
-.pill-glyph { color:var(--ip-color-text-tertiary); flex-shrink:0; }
+   拍板换语义图标）；色随胶囊态（上方 inherit 规则） */
+.pill-glyph { flex-shrink:0; }
 /* 思考聚合展开堆叠区（胶囊行正下方；左缩进 22px 与 think-body 同意象）；
-   总耗时是次级信息（disabled 色、常规字重） */
-.think-group-total { color:var(--ip-color-text-disabled); font-weight:var(--ip-font-weight-regular); }
+   总耗时是次级信息（常规字重；胶囊内色由上方 inherit+opacity 承载） */
+.think-group-total { font-weight:var(--ip-font-weight-regular); }
 .think-group-stack { margin:2px 0 6px 22px; display:grid; gap:2px; }
 /* 截断组标注（三轮换轴）：回合被截断是警示事实——warning 语义色（同
-   .tool-fail-count 先例），碎句尾段由它语境化、不再冒充结论 */
+   .tool-fail-count 先例），碎句尾段由它语境化、不再冒充结论。
+   ⚠️ scoped 版必须排在上方 .tool-name 的 inherit 覆写之后——两规则同为
+   (0,3,0)，同元素双类（tool-name+process-truncated）命中时后者胜 */
+.group-summary-pills .summary-pill .process-truncated { color:var(--ip-warning-text); }
 .process-truncated { color:var(--ip-warning-text); }
 
 /* 状态图标（StatusGlyph：环形对勾/3×3 像素格/环形叉，2026-09-04 语系统一）。

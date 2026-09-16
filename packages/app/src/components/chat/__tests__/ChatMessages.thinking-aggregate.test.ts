@@ -1,6 +1,6 @@
 // ChatMessages.thinking-aggregate.test.ts — 组级思考聚合回归锁
 // （2026-09-16 拍板：组内 ≥2 段思考收进气泡顶部——总开关 + 展开顶部堆叠；
-//   四轮起三收纳行合一为气泡最前端胶囊行：思考/工具/过程并排，思考胶囊
+//   五轮起三收纳行合一为气泡最前端胶囊行：思考/工具/过程并排，思考胶囊
 //   在首位，展开堆叠仍紧随胶囊行下方）。
 //
 // 锁死六点：≥2 段聚合（顶部一行 + item 内隐藏）/ 1 段不聚合（原位贴正文）/
@@ -132,6 +132,8 @@ describe("组级思考聚合", () => {
     ]);
 
     await w.findAll(".think-group-summary")[0].trigger("click");
+    // 六轮两态胶囊：展开 = is-open 幽灵胶囊
+    expect(w.findAll(".think-group-summary")[0].classes()).toContain("is-open");
     const segs = w.findAll(".think-group-stack .think-block");
     expect(segs.length).toBe(2); // 两段堆叠在顶部区
     expect(segs[0].text()).toContain("41s");
@@ -141,9 +143,10 @@ describe("组级思考聚合", () => {
     await segs[0].find(".think-toggle").trigger("click");
     expect(w.findAll(".think-group-stack .think-body .md")[0].text()).toBe("思考甲");
 
-    // 收回聚合：堆叠区消失、item 内思考行仍隐藏（聚合生效恒隐藏）
+    // 收回聚合：堆叠区消失、item 内思考行仍隐藏（聚合生效恒隐藏）；is-open 随之摘除
     await w.findAll(".think-group-summary")[0].trigger("click");
     expect(w.findAll(".think-group-stack").length).toBe(0);
+    expect(w.findAll(".think-group-summary")[0].classes()).not.toContain("is-open");
   });
 
   it("生成中不聚合（frozen-round 语义）：流式思考实时在原位", async () => {
@@ -179,7 +182,7 @@ describe("组级思考聚合", () => {
     expect(w.findAll(".think-group-summary")[0].text()).toContain("8 段");
     expect(w.findAll(".tool-group-summary").length).toBe(1);
     expect(w.findAll(".tool-group-summary")[0].text()).toContain("8 次工具调用");
-    // 两胶囊同排一行（2026-09-16 四轮：三行合一置气泡最前端）
+    // 两胶囊同排一行（2026-09-16 五轮：三行合一置气泡最前端）
     const pillsRow = w.find(".assistant-body .group-summary-pills");
     expect(pillsRow.find(".think-group-summary").exists()).toBe(true);
     expect(pillsRow.find(".tool-group-summary").exists()).toBe(true);

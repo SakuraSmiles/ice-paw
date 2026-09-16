@@ -11,7 +11,7 @@
 // 锁死十点：≥3 段默认折叠（只末段在场，折叠行恰一条）/ 展开回原位+收起态 /
 // 2 段不收纳（轻量实质正文不动）/ 生成中不收纳（frozen-round）/ 末段=最后
 // 有 content 的 item（末 item 纯工具轮不误判）/ 三区共存 DOM 序（胶囊行内
-// 思考→工具→过程 → 末段正文，2026-09-16 四轮三行合一）/ 碎句组也默认收纳
+// 思考→工具→过程 → 末段正文，2026-09-16 五轮三行合一）/ 碎句组也默认收纳
 // （门控退役）无后续不标截断 /
 // 截断组「继续」续跑签名 → warning 标注 / 折叠态空壳 item 不渲染
 // （.message-item 计数）/ 豁免卡 item 在场。
@@ -130,14 +130,19 @@ describe("组级过程叙述收纳", () => {
       textMsg("a4", "最终结论在这里。"),
     ]);
 
+    // 默认折叠无 is-open（六轮两态胶囊：收起 = 实底软色 chip）
+    expect(w.findAll(".process-group-summary")[0].classes()).not.toContain("is-open");
+
     await w.findAll(".process-group-summary")[0].trigger("click");
     expect(w.findAll(".process-group-summary")[0].text()).toContain("收起 · 3 段过程叙述");
+    expect(w.findAll(".process-group-summary")[0].classes()).toContain("is-open");
     expect(w.findAll(".md").map((m) => m.text())).toEqual([
       "第一步说明：", "第二步说明：", "第三步说明：", "最终结论在这里。",
     ]);
 
     await w.findAll(".process-group-summary")[0].trigger("click");
     expect(w.findAll(".md").map((m) => m.text())).toEqual(["最终结论在这里。"]);
+    expect(w.findAll(".process-group-summary")[0].classes()).not.toContain("is-open");
   });
 
   it("2 段不收纳：说明+结论的轻量两段全在场、无折叠行", async () => {
@@ -210,7 +215,7 @@ describe("组级过程叙述收纳", () => {
     expect(w.findAll(".tool-group-summary").length).toBe(1); // 8 次工具折叠
     expect(w.findAll(".md").map((m) => m.text())).toEqual(["最终结论。"]); // 只末段在场
 
-    // 三胶囊合一排在同一行容器（2026-09-16 四轮：三行合一置气泡最前端）
+    // 三胶囊合一排在同一行容器（2026-09-16 五轮：三行合一置气泡最前端）
     const pillsRow = w.find(".group-summary-pills");
     expect(pillsRow.exists()).toBe(true);
     expect(pillsRow.findAll(".summary-pill").length).toBe(3);
