@@ -5,6 +5,8 @@ import {
   computePrependRestore,
   shouldTriggerPrepend,
   shouldEdgeTriggerPrepend,
+  forceRealizeAbove,
+  clearForcedRealize,
   type ScrollAnchor,
 } from "../useScrollFollow";
 
@@ -111,5 +113,46 @@ describe("shouldEdgeTriggerPrepend（wheel 绝对顶边缘触发）", () => {
     // wheel 边缘只接管 scroll 事件物理上不再产生的 0 这一点位
     expect(shouldEdgeTriggerPrepend(40, -120)).toBe(false);
     expect(shouldEdgeTriggerPrepend(150, -120)).toBe(false);
+  });
+});
+
+describe("forceRealizeAbove / clearForcedRealize（恢复前强制实测）", () => {
+  // content-visibility 估高毒（2026-09-16 五轮）：offsetTop 量取必须在真实
+  // 高度下进行。jsdom 不做布局，此处锁内联样式的置/清契约（真值几何靠真机）
+  function fixture() {
+    const root = document.createElement("div");
+    const groups = [1, 2, 3, 4].map((i) => {
+      const g = document.createElement("div");
+      g.className = "message-group";
+      g.dataset.mid = `m${i}`;
+      root.appendChild(g);
+      return g;
+    });
+    return { root, groups };
+  }
+
+  it("只强制锚之前的组（锚自身与其后的组不动），命中即停", () => {
+    const { root, groups } = fixture();
+    const forced = forceRealizeAbove(root, groups[2]);
+    expect(forced).toEqual([groups[0], groups[1]]);
+    expect(groups[0].style.getPropertyValue("content-visibility")).toBe("visible");
+    expect(groups[1].style.getPropertyValue("content-visibility")).toBe("visible");
+    expect(groups[2].style.getPropertyValue("content-visibility")).toBe("");
+    expect(groups[3].style.getPropertyValue("content-visibility")).toBe("");
+  });
+
+  it("清除后内联覆盖全部移除（组回估高跳过态，记忆高度接管几何）", () => {
+    const { root, groups } = fixture();
+    const forced = forceRealizeAbove(root, groups[3]);
+    clearForcedRealize(forced);
+    for (const g of groups) {
+      expect(g.style.getPropertyValue("content-visibility")).toBe("");
+    }
+  });
+
+  it("锚是首组 → 零强制零成本（上方无屏外组）", () => {
+    const { root, groups } = fixture();
+    expect(forceRealizeAbove(root, groups[0])).toEqual([]);
+    expect(groups[0].style.getPropertyValue("content-visibility")).toBe("");
   });
 });

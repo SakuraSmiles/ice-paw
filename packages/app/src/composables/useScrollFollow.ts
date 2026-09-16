@@ -88,6 +88,34 @@ export function computePrependRestore(input: {
   return Math.max(0, input.prevScrollTop + input.heightDelta);
 }
 
+/** 恢复定位前把锚元素之前的消息组临时强制实测（content-visibility:visible）。
+ *  根因（2026-09-16 五轮真机「加载完不在原位」第一性分析）：屏外组布局高度
+ *  = 300px 估高（contain-intrinsic-size），真实高度只在与视口相邻首次渲染时
+ *  生效——恢复定位按估值把视口放到锚下方后，新前插组从此在视口外**永不实测**
+ *  （空间问题非时间问题，等多久都不实现），锚 offsetTop 永久基于估值 → 复位
+ *  位置系统性漂移 Σ(估高−真高)，150ms 校正读到同一批估值也救不回。强制
+ *  visible 后读 offsetTop 即同步布局出真值；contain-intrinsic-size 的 auto
+ *  前缀会记忆实测高度，clearForcedRealize 清除内联后组回估高跳过态但几何
+ *  不回弹。只强制锚之前的组（锚自身在视口内已实测），成本 ≤ 一页（50 条）
+ *  消息组的一次同步布局。返回被强制的元素列表，供定位完成后清除。 */
+export function forceRealizeAbove(container: HTMLElement, anchor: HTMLElement): HTMLElement[] {
+  const forced: HTMLElement[] = [];
+  const groups = container.querySelectorAll<HTMLElement>(".message-group[data-mid]");
+  for (const g of groups) {
+    if (g === anchor || g.contains(anchor)) break;
+    if (g.style.getPropertyValue("content-visibility") !== "visible") {
+      g.style.setProperty("content-visibility", "visible");
+      forced.push(g);
+    }
+  }
+  return forced;
+}
+
+/** 清除 forceRealizeAbove 的内联覆盖（组回到估高跳过态，记忆高度接管几何）。 */
+export function clearForcedRealize(forced: HTMLElement[]): void {
+  for (const g of forced) g.style.removeProperty("content-visibility");
+}
+
 /** 前插分页触发区（距顶部 px） */
 const LOAD_TRIGGER_PX = 200;
 
@@ -218,15 +246,21 @@ export function useScrollFollow(listRef: Ref<HTMLElement | null>) {
       nextTick(() => {
         const newEl = listRef.value;
         if (newEl) {
+          const primaryEl = primary
+            ? newEl.querySelector<HTMLElement>(`[data-mid="${CSS.escape(primary.mid)}"]`)
+            : null;
+          const fallbackEl = fallback
+            ? newEl.querySelector<HTMLElement>(`[data-mid="${CSS.escape(fallback.mid)}"]`)
+            : null;
+          // 强制实测锚之前的组再量取（2026-09-16 五轮「加载完不在原位」根治）：
+          // 新前插组布局用 300px 估高，真实高度要等与视口相邻首次渲染；而按估值
+          // 复位后视口落在它们下方 → 永不实测（空间问题非时间问题）→ 150ms
+          // 校正读到同一批估值 = 永久漂移。forceRealizeAbove 详注
+          const anchorEl = primaryEl ?? fallbackEl ?? null;
+          const forced = anchorEl ? forceRealizeAbove(newEl, anchorEl) : [];
           const heightDelta = newEl.scrollHeight - prevHeight;
           // 无新增（加载尽/竞态）→ 不动滚动位置
           if (heightDelta > 0) {
-            const primaryEl = primary
-              ? newEl.querySelector<HTMLElement>(`[data-mid="${CSS.escape(primary.mid)}"]`)
-              : null;
-            const fallbackEl = fallback
-              ? newEl.querySelector<HTMLElement>(`[data-mid="${CSS.escape(fallback.mid)}"]`)
-              : null;
             suppressScrollCheck = true;
             newEl.scrollTop = computePrependRestore({
               primaryOffsetTop: primaryEl ? primaryEl.offsetTop : null,
@@ -236,11 +270,13 @@ export function useScrollFollow(listRef: Ref<HTMLElement | null>) {
               prevScrollTop: prevTop,
               heightDelta,
             });
-            // content-visibility 估高在首帧后被真实高度替换 → 150ms 后按锚
-            // 复位校正一次（positionAtAnchor 同款双段），随后解除 suppress
             const fixMid = primaryEl ? primary!.mid : fallback?.mid ?? null;
             const fixOffset = primaryEl ? primary!.viewportOffset : fallback?.viewportOffset ?? 0;
+            // 150ms 校正（positionAtAnchor 同款双段）：**先清强制覆盖**再按锚复核
+            // ——contain-intrinsic-size:auto 已记忆实测高度，清除后组回估高
+            // 跳过态但几何不回弹；万一记忆未生效几何回弹，此处按真值自愈补滚
             setTimeout(() => {
+              clearForcedRealize(forced);
               const e2 = listRef.value;
               if (e2 && fixMid) {
                 const n2 = e2.querySelector<HTMLElement>(`[data-mid="${CSS.escape(fixMid)}"]`);
@@ -249,6 +285,8 @@ export function useScrollFollow(listRef: Ref<HTMLElement | null>) {
               suppressScrollCheck = false;
               refreshFollowState();
             }, 150);
+          } else {
+            clearForcedRealize(forced);
           }
         }
         paginating.value = false;
@@ -264,8 +302,9 @@ export function useScrollFollow(listRef: Ref<HTMLElement | null>) {
    *  scroll 事件物理上不再产生（shouldEdgeTriggerPrepend 详注）——继续上滚
    *  的意图从 wheel 读取，接管 0-199 触发区之外的物理死点位。守卫链与 scroll
    *  路径同构（suppress/paginating/msgLoading 早退 + hasMore/!loadingMore/
-   *  !sending）。wheel@0 捕获的主锚 viewportOffset=0 → 非并组恢复恰好落在
-   *  旧内容顶 = 加载前所在位置；并组折叠态停 0 可持续再触发 = 连续上滚。 */
+   *  !sending）。wheel@0 捕获的主锚 viewportOffset=0；落点正确性由共享的
+   *  triggerPrependLoad 恢复路径强制实测保证（forceRealizeAbove，五轮）。
+   *  并组折叠态停 0 可持续再触发 = 连续上滚。 */
   function onWheel(e: WheelEvent) {
     const el = listRef.value;
     if (!el) return;
@@ -324,10 +363,14 @@ export function useScrollFollow(listRef: Ref<HTMLElement | null>) {
     if (!node) return false;
     suppressScrollCheck = true;
     autoFollow.value = false; // 恢复到历史位 = 非跟随态（「跳到最新」按钮应显示）
+    // 强制实测锚之前的组（同前插恢复五轮根治）：offsetTop 必须在真实高度下
+    // 量取，否则回位落点被屏外估高毒染且视口落定后永不自愈
+    const forced = forceRealizeAbove(el, node);
     el.scrollTop = node.offsetTop - a.offset;
     await nextTick();
-    // content-visibility 首屏外高度是估算值：锚点进视口后按真实 offsetTop 再校
     setTimeout(() => {
+      // 先清强制覆盖（记忆高度接管几何），再按锚复核——几何回弹时自愈补滚一次
+      clearForcedRealize(forced);
       const e2 = listRef.value;
       if (e2 && chat.activeConvId === cid) {
         const n2 = e2.querySelector<HTMLElement>(sel);
