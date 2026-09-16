@@ -187,6 +187,16 @@ function toggleToolGroup(key: string) {
   expandedToolGroups.value = set;
 }
 
+// 组级思考聚合的展开状态（2026-09-16 拍板：组内 ≥2 段思考聚合到气泡顶部，
+// 总开关 + 展开顶部堆叠）。键 = 组键，与 expandedToolGroups 同范式。
+const expandedThinkingGroups = ref<Set<string>>(new Set());
+
+function toggleThinkingGroup(key: string) {
+  const set = new Set(expandedThinkingGroups.value);
+  if (set.has(key)) set.delete(key); else set.add(key);
+  expandedThinkingGroups.value = set;
+}
+
 function toggleThinking(msgId: string) {
   const set = new Set(expandedThinking.value);
   if (set.has(msgId)) set.delete(msgId); else set.add(msgId);
@@ -988,6 +998,43 @@ function isToolsCollapsed(g: MessageGroup): boolean {
   return toolCollapseEligible(g) && !expandedToolGroups.value.has(g.key);
 }
 
+// ===== 组级思考聚合（2026-09-16 拍板：≥2 段聚合到气泡顶部，与工具折叠对称——
+// 思考顶、正文中、工具总量底；生成中组不聚合——流式思考实时在场，回合结束沉淀）=====
+/** 聚合区的一段思考。key 与 item 内 think-block 展开键同构（msgId + '-h' + 段序），
+ *  聚合前后展开态互通；段耗时取块自身 duration_ms（持久口径——聚合区是历史回看
+ *  视角，thinkingDurations 内存 map 是「刚结束」瞬态且 per-message 对段级无意义）。 */
+interface GroupedThink { key: string; text: string; durationMs: number | null }
+
+const groupThinkingStats = computed<Map<string, { segs: GroupedThink[]; totalMs: number | null }>>(() => {
+  const stats = new Map<string, { segs: GroupedThink[]; totalMs: number | null }>();
+  for (const g of messageGroups.value) {
+    if (g.role !== "assistant") continue;
+    const segs: GroupedThink[] = [];
+    let totalMs = 0;
+    let hasMs = false;
+    for (const it of g.items) {
+      parseThinkingBlocks(it.msg.content_blocks).forEach((b, ti) => {
+        segs.push({ key: it.msg.id + "-h" + ti, text: b.thinking, durationMs: b.durationMs });
+        if (b.durationMs != null) { totalMs += b.durationMs; hasMs = true; }
+      });
+    }
+    // ≥2 段才聚合（1 段保持原位贴正文——短对话的思考-正文就近对应有价值）
+    if (segs.length >= 2) stats.set(g.key, { segs, totalMs: hasMs ? totalMs : null });
+  }
+  return stats;
+});
+
+/** 组具备思考聚合资格（≥2 段且非生成中）。聚合生效时 item 内思考行恒隐藏
+ *  （含「刚结束」驻留块——其内容已 freeze 进 content_blocks，聚合区承载）。 */
+function thinkingAggregateEligible(g: MessageGroup): boolean {
+  return groupThinkingStats.value.has(g.key) && !groupInLiveTurn(g);
+}
+
+/** 聚合段标签（镜像 item 内三态：块耗时 → 只显「思考」）。 */
+function thinkSegLabel(seg: GroupedThink): string {
+  return seg.durationMs != null ? "思考 · " + formatThinkingMs(seg.durationMs) : "思考";
+}
+
 /** 该 item 是否是全局最后一条 assistant（用于 chat:done 后驻留的「思考·已完成」块）。*/
 function isLastAssistant(item: GroupedItem): boolean {
   return item.msg.role === "assistant" && item.idx === chat.messages.length - 1;
@@ -1250,6 +1297,33 @@ const RESUMABLE_REASONS = new Set([
                 </div>
               </template>
               <div class="assistant-body">
+            <!-- 组级思考聚合（≥2 段）：收起=顶部一行总量，展开=顶部堆叠各段
+                 （段内交互照旧，展开键与 item 内同构——聚合前后互通）。
+                 ⚠️ 必须在 item v-for 之外（同工具摘要行的组级错位教训）。 -->
+            <template v-if="thinkingAggregateEligible(group)">
+              <div class="think-toggle think-group-summary" @click="toggleThinkingGroup(group.key)">
+                <StatusGlyph status="done" class="think-glyph" />
+                <span class="think-label">思考 · {{ groupThinkingStats.get(group.key)?.segs.length }} 段</span>
+                <span v-if="groupThinkingStats.get(group.key)?.totalMs != null" class="think-label think-group-total">{{ formatThinkingMs(groupThinkingStats.get(group.key)!.totalMs!) }}</span>
+                <span class="think-chevron">{{ expandedThinkingGroups.has(group.key) ? '▾' : '▸' }}</span>
+              </div>
+              <Transition name="think-fade">
+                <div v-if="expandedThinkingGroups.has(group.key)" class="think-group-stack">
+                  <div v-for="seg in groupThinkingStats.get(group.key)?.segs" :key="seg.key" class="think-block">
+                    <div class="think-toggle" @click="toggleThinking(seg.key)">
+                      <StatusGlyph status="done" class="think-glyph" />
+                      <span class="think-label">{{ thinkSegLabel(seg) }}</span>
+                      <span class="think-chevron">{{ expandedThinking.has(seg.key) ? '▾' : '▸' }}</span>
+                    </div>
+                    <Transition name="think-fade">
+                      <div v-if="expandedThinking.has(seg.key)" class="think-body">
+                        <MarkdownRenderer :content="seg.text" />
+                      </div>
+                    </Transition>
+                  </div>
+                </div>
+              </Transition>
+            </template>
             <div v-for="item in group.items" :key="item.msg.id" class="message-item">
               <!-- 三个点动画：仅当前流式 item 且无任何返回时显示 -->
               <div v-if="isLiveAssistant(item) && item.msg.content === '' && !chat.streamingThinking && toolCallList.length === 0" class="think-dots">
@@ -1262,9 +1336,10 @@ const RESUMABLE_REASONS = new Set([
                    TTFT/纯文本流式期间会被整块藏掉，直到下一轮首个 tool-call-start/thinking
                    才救回（生产实案 2026-09-03：上轮工具记录间歇性消失、done 后全恢复）。 -->
               <template v-if="item.msg.content || !isLiveAssistant(item) || chat.streamingThinking || toolCallList.length > 0">
-                <!-- 思考过程（历史消息）；末条且 done 块显示时跳过避免重复 -->
+                <!-- 思考过程（历史消息）；末条且 done 块显示时跳过避免重复；组级
+                     思考聚合生效时恒隐藏（顶部聚合区承载，防双渲染） -->
                 <template v-for="(think, ti) in parseThinkingBlocks(item.msg.content_blocks)" :key="'think-' + item.msg.id + '-' + ti">
-                  <div v-if="!(isLastAssistant(item) && chat.thinkingDuration && chat.lastThinkingContent)" class="think-block">
+                  <div v-if="!thinkingAggregateEligible(group) && !(isLastAssistant(item) && chat.thinkingDuration && chat.lastThinkingContent)" class="think-block">
                     <div class="think-toggle" @click="toggleThinking(item.msg.id + '-h' + ti)">
                       <StatusGlyph status="done" class="think-glyph" />
                       <!-- 耗时两级来源：内存 thinkingDurations（本轮会话，含多轮中间轮）
@@ -1295,7 +1370,7 @@ const RESUMABLE_REASONS = new Set([
                       </div>
                     </Transition>
                   </div>
-                  <div v-else-if="isLastAssistant(item) && chat.thinkingDuration && chat.lastThinkingContent" key="done" class="think-block">
+                  <div v-else-if="!thinkingAggregateEligible(group) && isLastAssistant(item) && chat.thinkingDuration && chat.lastThinkingContent" key="done" class="think-block">
                     <div class="think-toggle" @click="toggleThinking('done')">
                       <StatusGlyph status="done" class="think-glyph" />
                       <span class="think-label">思考 · {{ chat.thinkingDuration }}</span>
@@ -1965,6 +2040,12 @@ const RESUMABLE_REASONS = new Set([
 .tool-preview { font-size:var(--ip-text-caption-size); color:var(--ip-color-text-disabled); margin-left:auto; margin-right:6px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:right; flex-shrink:1; }
 /* ③ 组级折叠摘要行的失败计数（warning 语义色；与 tool-diff 的加减速记同为行内强调位） */
 .tool-fail-count { font-size:var(--ip-text-caption-size); color:var(--ip-warning-text); white-space:nowrap; }
+
+/* 组级思考聚合（2026-09-16 拍板：≥2 段收进气泡顶部）——顶部总量行 + 展开堆叠区
+   （左缩进 22px 与 think-body 同意象）；总耗时是次级信息（disabled 色、常规字重） */
+.think-group-summary { margin-bottom:2px; }
+.think-group-total { color:var(--ip-color-text-disabled); font-weight:var(--ip-font-weight-regular); }
+.think-group-stack { margin:2px 0 6px 22px; display:grid; gap:2px; }
 
 /* 状态图标（StatusGlyph：环形对勾/3×3 像素格/环形叉，2026-09-04 语系统一）。
    行内紧凑节奏保持：glyph 14px 与 caption 字号同高，flex 自然居中。 */
