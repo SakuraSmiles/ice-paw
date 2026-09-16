@@ -121,21 +121,31 @@ describe("shouldContinuePrependChain（净高续拉）", () => {
   it("链内累计净增不足一屏且还有更早 → 续拉（长工具回合整页并进折叠组 ≈0 净增）", () => {
     // 分页计量单位是 messages 表行（50 行/页）而非渲染内容——一整页可以
     // 只渲染出一条胶囊行；一次上滚至少带出一屏可读内容，不靠连续 wheel 凑
-    expect(shouldContinuePrependChain({ netHeight: 0, viewportHeight: 800, pagesLoaded: 1, hasMore: true })).toBe(true);
-    expect(shouldContinuePrependChain({ netHeight: 300, viewportHeight: 800, pagesLoaded: 2, hasMore: true })).toBe(true);
+    expect(shouldContinuePrependChain({ netHeight: 0, viewportHeight: 800, pagesLoaded: 1, productivePages: 0, hasMore: true })).toBe(true);
+    expect(shouldContinuePrependChain({ netHeight: 300, viewportHeight: 800, pagesLoaded: 2, productivePages: 1, hasMore: true })).toBe(true);
   });
 
   it("链内累计净增 ≥ 一屏 → 停（已带出足够可读内容）", () => {
-    expect(shouldContinuePrependChain({ netHeight: 800, viewportHeight: 800, pagesLoaded: 1, hasMore: true })).toBe(false);
-    expect(shouldContinuePrependChain({ netHeight: 1200, viewportHeight: 800, pagesLoaded: 3, hasMore: true })).toBe(false);
+    expect(shouldContinuePrependChain({ netHeight: 800, viewportHeight: 800, pagesLoaded: 1, productivePages: 1, hasMore: true })).toBe(false);
+    expect(shouldContinuePrependChain({ netHeight: 1200, viewportHeight: 800, pagesLoaded: 3, productivePages: 2, hasMore: true })).toBe(false);
   });
 
-  it("达单次手势页数上限（5 页）→ 停（防整段工具回合一次手势无限连拉）", () => {
-    expect(shouldContinuePrependChain({ netHeight: 0, viewportHeight: 800, pagesLoaded: 5, hasMore: true })).toBe(false);
+  it("「带出可见高度」的页达上限（5 页）→ 停（防多屏可见内容段一次手势连拉）", () => {
+    expect(shouldContinuePrependChain({ netHeight: 0, viewportHeight: 800, pagesLoaded: 5, productivePages: 5, hasMore: true })).toBe(false);
+  });
+
+  it("整页并组页不计数：净增≈0 的页连拉 8 页仍续拉（八轮拍板「链拉到可见内容为止」）", () => {
+    // 「默认收起」拍板下整页并组页结构性不可见、滚动条物理上不能动——
+    // 并组页不占 5 页可见内容上限，链继续拉到回合边界（可见内容出现）才停
+    expect(shouldContinuePrependChain({ netHeight: 0, viewportHeight: 800, pagesLoaded: 8, productivePages: 0, hasMore: true })).toBe(true);
+  });
+
+  it("总页数硬上限（20 页）→ 停（并组段再长也有界，500+ 行回合一次手势不全拉）", () => {
+    expect(shouldContinuePrependChain({ netHeight: 0, viewportHeight: 800, pagesLoaded: 20, productivePages: 0, hasMore: true })).toBe(false);
   });
 
   it("没有更早消息 → 停（加载尽即止，不空转）", () => {
-    expect(shouldContinuePrependChain({ netHeight: 0, viewportHeight: 800, pagesLoaded: 1, hasMore: false })).toBe(false);
+    expect(shouldContinuePrependChain({ netHeight: 0, viewportHeight: 800, pagesLoaded: 1, productivePages: 0, hasMore: false })).toBe(false);
   });
 });
 

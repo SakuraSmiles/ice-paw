@@ -160,16 +160,24 @@ export function shouldEdgeTriggerPrepend(scrollTop: number, deltaY: number): boo
   return scrollTop <= 0 && deltaY < 0;
 }
 
-/** 净高续拉：单次上滚手势的前插链页数上限（防整段长工具回合一次手势无限连拉） */
+/** 净高续拉：单次上滚手势「带出可见高度」的页数上限（防多屏可见内容段一次手势连拉） */
 const PREPEND_CHAIN_MAX_PAGES = 5;
+/** 净高续拉：单次上滚手势的**总页数**硬上限——整页并组页（净增≈0）不占上面
+ *  那个 5 页计数（拉到可见内容为止），但并组段再长也有界（500+ 行回合不全拉） */
+const PREPEND_CHAIN_MAX_PAGES_TOTAL = 20;
+/** 单页计为「带出可见高度」的最小净增：整页并组页净增 ≈0-2px（胶囊等高换头），
+ *  任何真实内容页 ≥ ~100px——50px 干净分界 */
+const PREPEND_CHAIN_PRODUCTIVE_MIN_DELTA = 50;
 
 /** 单次上滚手势的前插链状态（净高续拉）：cid 中途切会话即止；startHeight 是
  *  链起点 scrollHeight（累计净增基线——单页 delta 在并组折叠态恒 ≈0，须按链
- *  累计判「够不够一屏」）；pages 计已拉页数。 */
+ *  累计判「够不够一屏」）；pages 计已拉总页数；productivePages 只计带出可见
+ *  高度的页（整页并组≈0 净增不计数——拉到可见内容为止）。 */
 interface PrependChain {
   cid: string;
   startHeight: number;
   pages: number;
+  productivePages: number;
 }
 
 /**
@@ -178,16 +186,23 @@ interface PrependChain {
  * 表消息行（50 行/页）而非渲染内容——长工具回合每轮 = 1 条 assistant 行
  * （thinking/text/tool_use 混装）+ 1 条零渲染的 tool_result user 行，整页并进
  * 折叠组后净增 ≈ 0（一条胶囊行）。位置正确性已与每页高度解耦（锚定恢复 +
- * 强制实测），此处治效率下游：一次上滚至少带出一屏可读内容，不靠连续 wheel 凑。
+ * 强制实测钉高），此处治效率下游：一次上滚至少带出一屏可读内容，不靠连续
+ * wheel 凑。**整页并组页不计数（2026-09-16 八轮拍板「链拉到可见内容为止」）**：
+ * 长工具回合可横跨 10+ 页全部并进折叠胶囊——「默认收起」拍板下这些页结构性
+ * 不可见、净增 ≈0、滚动条物理上不能动（与「滚动条要动」互斥）——这类页不占
+ * 「可见内容页」5 页上限，链继续拉到回合边界（出现可见内容、净增过屏）才停；
+ * 总页数 20 硬上限兜底。
  */
 export function shouldContinuePrependChain(input: {
   netHeight: number;
   viewportHeight: number;
   pagesLoaded: number;
+  productivePages: number;
   hasMore: boolean;
 }): boolean {
   if (!input.hasMore) return false;
-  if (input.pagesLoaded >= PREPEND_CHAIN_MAX_PAGES) return false;
+  if (input.pagesLoaded >= PREPEND_CHAIN_MAX_PAGES_TOTAL) return false;
+  if (input.productivePages >= PREPEND_CHAIN_MAX_PAGES) return false;
   return input.netHeight < input.viewportHeight;
 }
 
@@ -278,6 +293,7 @@ export function useScrollFollow(listRef: Ref<HTMLElement | null>) {
       cid,
       startHeight: el.scrollHeight,
       pages: 0,
+      productivePages: 0,
     };
     chainState.pages += 1;
     paginating.value = true;
@@ -312,6 +328,9 @@ export function useScrollFollow(listRef: Ref<HTMLElement | null>) {
           const anchorEl = primaryEl ?? fallbackEl ?? null;
           const forced = anchorEl ? forceRealizeAbove(newEl, anchorEl) : [];
           const heightDelta = newEl.scrollHeight - prevHeight;
+          // 本页是否「带出可见高度」（八轮：整页并组≈0 净增不计数——链要拉到
+          // 可见内容为止，并组页只占总页数硬上限不占 5 页可见内容上限）
+          if (heightDelta >= PREPEND_CHAIN_PRODUCTIVE_MIN_DELTA) chainState.productivePages += 1;
           // 无新增（加载尽/竞态）→ 不动滚动位置
           if (heightDelta > 0) {
             suppressScrollCheck = true;
@@ -372,6 +391,7 @@ export function useScrollFollow(listRef: Ref<HTMLElement | null>) {
         netHeight: el.scrollHeight - chain.startHeight,
         viewportHeight: el.clientHeight,
         pagesLoaded: chain.pages,
+        productivePages: chain.productivePages,
         hasMore: chat.hasMore,
       })
     ) return;
