@@ -2245,8 +2245,11 @@ const RESUMABLE_REASONS = new Set([
 .tool-fail-count { font-size:var(--ip-text-caption-size); color:var(--ip-warning-text); white-space:nowrap; }
 
 /* 组级收纳胶囊行（2026-09-16 五轮：三行合一置气泡最前端）——思考/工具/过程
-   三胶囊并排；flex-wrap 窄窗换行不截断；胶囊覆写行级 width:100% → 内容自适应宽 */
-.group-summary-pills { display:flex; flex-wrap:wrap; align-items:center; gap:var(--ip-spacing-1); margin-bottom:var(--ip-spacing-0_5); }
+   三胶囊并排；flex-wrap 窄窗换行不截断；胶囊覆写行级 width:100% → 内容自适应宽。
+   与正文的间距对齐段落节奏（七轮拍板「留顶部强化呈现」）：下距 = spacing-3
+   （12px）恰为 .markdown-body p 的段底距——胶囊行是一段落级区块，不再贴着
+   正文；行内 gap 同步升至 spacing-2 让三枚 chip 各自成形 */
+.group-summary-pills { display:flex; flex-wrap:wrap; align-items:center; gap:var(--ip-spacing-2); margin-bottom:var(--ip-spacing-3); }
 /* 胶囊 chrome（2026-09-16 六轮：用户反馈「不够明显、区别度不够」）——对齐房内
    chip 语言 ChatHeader .header-kind-badge（软底胶囊 = 可点开藏内容的供能暗示）；
    两态对比承载状态自述：收起 = 实底软色胶囊（这里有内容，点开看）/ 展开 =
@@ -2258,7 +2261,7 @@ const RESUMABLE_REASONS = new Set([
    （UA 按钮字体不随父走）。 */
 .group-summary-pills .summary-pill {
   width:auto; flex-shrink:0;
-  padding:1px 8px; gap:4px;
+  padding:2px 10px; gap:4px;
   border-radius:var(--ip-radius-full, 999px);
   border:1px solid rgba(var(--ip-primary-500-rgb), 0.25);
   background:var(--ip-color-primary-soft-bg, rgba(var(--ip-primary-500-rgb), 0.08));
@@ -2273,12 +2276,21 @@ const RESUMABLE_REASONS = new Set([
 .group-summary-pills .summary-pill.is-open { background:transparent; border-color:var(--ip-color-border-default); color:var(--ip-color-text-tertiary); }
 .group-summary-pills .summary-pill.is-open:hover { background:var(--ip-color-bg-tertiary); }
 /* 胶囊内子元素随态取色：图标/标签/chevron 一律 inherit 胶囊色（收起=主色、
-   展开=tertiary），chevron 与总耗时再压一档透明度作次级信息 */
+   展开=tertiary），chevron 与总耗时再压一档透明度作次级信息。
+   字号/字重上调（七轮拍板「强化呈现」）：胶囊是折叠内容的唯一入口，标签升
+   body-sm-13 + semibold——比展开后的行级 tool-name（caption-12）大一档半档
+   字重，读作区块控件而非行内元数据；仅胶囊域内覆写，展开区各行照旧 */
 .group-summary-pills .summary-pill .pill-glyph { color:inherit; }
 .group-summary-pills .summary-pill .tool-name,
-.group-summary-pills .summary-pill .think-label { color:inherit; }
+.group-summary-pills .summary-pill .think-label {
+  color:inherit;
+  font-size:var(--ip-text-body-sm-size);
+  font-weight:var(--ip-font-weight-semibold);
+}
+/* 失败计数只升字号不碰颜色（warning 语义色刻意保留，见 .tool-fail-count 先例） */
+.group-summary-pills .summary-pill .tool-fail-count { font-size:var(--ip-text-body-sm-size); }
 .group-summary-pills .summary-pill .tool-chevron,
-.group-summary-pills .summary-pill .think-chevron { color:inherit; opacity:0.65; }
+.group-summary-pills .summary-pill .think-chevron { color:inherit; opacity:0.65; font-size:var(--ip-text-caption-size); }
 .group-summary-pills .summary-pill .think-group-total { color:inherit; opacity:0.75; }
 /* 胶囊语义图标（Brain 思考 / Wrench 工具 / MessageSquareText 过程叙述）：
    图标表内容域非状态——状态图标 done/error 与收纳语义不符（2026-09-16 用户
