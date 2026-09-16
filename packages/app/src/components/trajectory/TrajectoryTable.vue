@@ -416,7 +416,14 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
 }
 .ttab-earlier.on {
   opacity: 1;
-  visibility: visible;
+  /* inherit 而非 visible（2026-09-16 幽灵胶囊根治）：visibility 可被子代重开——
+     轨迹 pane 在 ChatPage 双 pane 布局里被 .pane-hidden{visibility:hidden} 隐藏，
+     这里若写 visible，sticky 胶囊会穿透隐藏 pane 画在会话页上（轨迹 pane 是后置
+     absolute 兄弟，盖在 chat pane 之上）——用户在会话页看到「加载更早」胶囊悬在
+     顶部且滚动/跳转最新都不消失（门控由轨迹表自身 scrollTop 驱动，与聊天区无关）。
+     inherit 跟随祖先：pane 活跃照常淡入，pane 隐藏则胶囊一并隐没。fade 过渡不受
+     影响（visibility 参与过渡，computed 值 hidden↔visible 照常插值）。 */
+  visibility: inherit;
   pointer-events: auto;
 }
 .ttab-earlier-btn {
