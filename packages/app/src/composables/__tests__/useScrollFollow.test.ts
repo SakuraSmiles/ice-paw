@@ -141,7 +141,7 @@ describe("shouldContinuePrependChain（净高续拉）", () => {
 
 describe("forceRealizeAbove / clearForcedRealize（恢复前强制实测）", () => {
   // content-visibility 估高毒（2026-09-16 五轮）：offsetTop 量取必须在真实
-  // 高度下进行。jsdom 不做布局，此处锁内联样式的置/清契约（真值几何靠真机）
+  // 高度下进行。jsdom 不做布局，此处锁内联样式的置/清/钉契约（真值几何靠真机）
   function fixture() {
     const root = document.createElement("div");
     const groups = [1, 2, 3, 4].map((i) => {
@@ -152,6 +152,11 @@ describe("forceRealizeAbove / clearForcedRealize（恢复前强制实测）", ()
       return g;
     });
     return { root, groups };
+  }
+  /** 桩实测高度（jsdom 无布局，offsetHeight 恒 0） */
+  function stubHeights(groups: HTMLElement[], heights: number[]) {
+    groups.forEach((g, i) =>
+      Object.defineProperty(g, "offsetHeight", { configurable: true, value: heights[i] }));
   }
 
   it("只强制锚之前的组（锚自身与其后的组不动），命中即停", () => {
@@ -164,13 +169,30 @@ describe("forceRealizeAbove / clearForcedRealize（恢复前强制实测）", ()
     expect(groups[3].style.getPropertyValue("content-visibility")).toBe("");
   });
 
-  it("清除后内联覆盖全部移除（组回估高跳过态，记忆高度接管几何）", () => {
+  it("清除时把实测高度钉进内联 contain-intrinsic-size（七轮：auto 记忆在强制窗口内不保证触发，清除即钉高防回弹）", () => {
     const { root, groups } = fixture();
+    stubHeights(groups, [680, 720, 700, 800]);
     const forced = forceRealizeAbove(root, groups[3]);
     clearForcedRealize(forced);
+    // content-visibility 内联全撤（组回跳过态、虚拟化省耗保留）
     for (const g of groups) {
       expect(g.style.getPropertyValue("content-visibility")).toBe("");
     }
+    // 占位高度 = 实测真值（保留 auto 前缀——组此后真实入画浏览器记忆自行接管）
+    expect(groups[0].style.getPropertyValue("contain-intrinsic-size")).toBe("auto 680px");
+    expect(groups[1].style.getPropertyValue("contain-intrinsic-size")).toBe("auto 720px");
+    expect(groups[2].style.getPropertyValue("contain-intrinsic-size")).toBe("auto 700px");
+    expect(groups[3].style.getPropertyValue("contain-intrinsic-size")).toBe("");
+  });
+
+  it("量不出高度（jsdom 无布局/极端未渲染 offsetHeight=0）→ 不写 0 值钉高", () => {
+    const { root, groups } = fixture();
+    stubHeights(groups, [0, 0, 0, 0]);
+    const forced = forceRealizeAbove(root, groups[2]);
+    clearForcedRealize(forced);
+    expect(groups[0].style.getPropertyValue("contain-intrinsic-size")).toBe("");
+    expect(groups[1].style.getPropertyValue("contain-intrinsic-size")).toBe("");
+    expect(groups[0].style.getPropertyValue("content-visibility")).toBe("");
   });
 
   it("锚是首组 → 零强制零成本（上方无屏外组）", () => {

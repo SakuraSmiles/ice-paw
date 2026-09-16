@@ -94,10 +94,10 @@ export function computePrependRestore(input: {
  *  生效——恢复定位按估值把视口放到锚下方后，新前插组从此在视口外**永不实测**
  *  （空间问题非时间问题，等多久都不实现），锚 offsetTop 永久基于估值 → 复位
  *  位置系统性漂移 Σ(估高−真高)，150ms 校正读到同一批估值也救不回。强制
- *  visible 后读 offsetTop 即同步布局出真值；contain-intrinsic-size 的 auto
- *  前缀会记忆实测高度，clearForcedRealize 清除内联后组回估高跳过态但几何
- *  不回弹。只强制锚之前的组（锚自身在视口内已实测），成本 ≤ 一页（50 条）
- *  消息组的一次同步布局。返回被强制的元素列表，供定位完成后清除。 */
+ *  visible 后读 offsetTop 即同步布局出真值；清除时 clearForcedRealize 把实测
+ *  高度钉进内联 contain-intrinsic-size，几何确定性不回弹。只强制锚之前的组
+ *  （锚自身在视口内已实测），成本 ≤ 一页（50 条）消息组的一次同步布局。
+ *  返回被强制的元素列表，供定位完成后清除。 */
 export function forceRealizeAbove(container: HTMLElement, anchor: HTMLElement): HTMLElement[] {
   const forced: HTMLElement[] = [];
   const groups = container.querySelectorAll<HTMLElement>(".message-group[data-mid]");
@@ -111,9 +111,22 @@ export function forceRealizeAbove(container: HTMLElement, anchor: HTMLElement): 
   return forced;
 }
 
-/** 清除 forceRealizeAbove 的内联覆盖（组回到估高跳过态，记忆高度接管几何）。 */
+/** 清除 forceRealizeAbove 的强制覆盖，并把实测高度钉进内联 contain-intrinsic-size。
+ *  根因（2026-09-16 七轮 headless 逐拍取证）：Chromium 的 last-remembered-size
+ *  只在元素「真实与视口相交的渲染帧」中记录——内联 content-visibility:visible
+ *  的强制实测窗口**不保证**触发记忆（racy：同场景两跑一出恒真一出全塌；对照
+ *  组里经历过真实视口相交的组恒不塌）。不钉高直接清除 → 组塌回 300px 估值 →
+ *  scrollHeight 缩水 → scrollTop 被钳 → 150ms 校正按估值量取把位置拖去错误
+ *  点位（实测 S1: 2148→948、S4: 2600→0，净高续拉的 scrollHeight 差同染）。
+ *  修法 = 清除前把实测高度写进内联 contain-intrinsic-size（保留 auto 前缀——
+ *  组此后真实入画时浏览器记忆会自行接管刷新）：组回跳过态（虚拟化省耗保留）
+ *  但占位高度 = 实测真值。offsetHeight 为 0（jsdom 无布局/极端未渲染）不写。 */
 export function clearForcedRealize(forced: HTMLElement[]): void {
-  for (const g of forced) g.style.removeProperty("content-visibility");
+  for (const g of forced) {
+    const h = g.offsetHeight;
+    if (h > 0) g.style.setProperty("contain-intrinsic-size", `auto ${h}px`);
+    g.style.removeProperty("content-visibility");
+  }
 }
 
 /** 前插分页触发区（距顶部 px） */
@@ -312,9 +325,10 @@ export function useScrollFollow(listRef: Ref<HTMLElement | null>) {
             });
             const fixMid = primaryEl ? primary!.mid : fallback?.mid ?? null;
             const fixOffset = primaryEl ? primary!.viewportOffset : fallback?.viewportOffset ?? 0;
-            // 150ms 校正（positionAtAnchor 同款双段）：**先清强制覆盖**再按锚复核
-            // ——contain-intrinsic-size:auto 已记忆实测高度，清除后组回估高
-            // 跳过态但几何不回弹；万一记忆未生效几何回弹，此处按真值自愈补滚
+            // 150ms 校正（positionAtAnchor 同款双段）：清除即钉高（clearForcedRealize
+            // 把实测高度写进内联 contain-intrinsic-size——auto 记忆在强制窗口内不保证
+            // 触发，详见其注），几何确定性不回弹 → 此处复核通常为 no-op；真漂移（图片
+            // 载入改高等）时按锚补滚一次
             setTimeout(() => {
               clearForcedRealize(forced);
               const e2 = listRef.value;
@@ -435,7 +449,8 @@ export function useScrollFollow(listRef: Ref<HTMLElement | null>) {
     el.scrollTop = node.offsetTop - a.offset;
     await nextTick();
     setTimeout(() => {
-      // 先清强制覆盖（记忆高度接管几何），再按锚复核——几何回弹时自愈补滚一次
+      // 清除即钉高（实测高度进内联 contain-intrinsic-size，几何不回弹——
+      // clearForcedRealize 详注），再按锚复核——真漂移时补滚一次
       clearForcedRealize(forced);
       const e2 = listRef.value;
       if (e2 && chat.activeConvId === cid) {
