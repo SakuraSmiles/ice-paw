@@ -5,7 +5,7 @@ import { useChatStore } from "../chat";
 import { useChatEvents } from "../../composables/useChatEvents";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { Message } from "../../types";
+import type { Message, MessageTurnPage } from "../../types";
 
 const mockInvoke = vi.mocked(invoke);
 const mockListen = vi.mocked(listen);
@@ -428,7 +428,7 @@ describe("chatStore", () => {
       expect(store.sending).toBe(true); // 生成中指示即刻可见（不等 assistant-start）
       expect(store.messages).toHaveLength(0); // 同步段先清列表——占位由 DB 权威行带入
       expect(mockInvoke.mock.calls.length).toBe(invokeCalls + 1);
-      expect(mockInvoke.mock.calls[mockInvoke.mock.calls.length - 1]?.[0]).toBe("list_messages"); // 权威刷新在途
+      expect(mockInvoke.mock.calls[mockInvoke.mock.calls.length - 1]?.[0]).toBe("list_messages_by_turns"); // 权威刷新在途
 
       await flushPromises();
       // 刷新完成后也不本地 push 占位（mock 空返——没有 asst-ext 行即证明没塞占位）
@@ -450,7 +450,7 @@ describe("chatStore", () => {
       expect(store.messages).toHaveLength(1);
       expect(store.messages[0].id).toBe("asst-1"); // 本地占位照常
       expect(store.messages[0].role).toBe("assistant");
-      expect(mockInvoke.mock.calls.length).toBe(invokeCalls); // 未发起 list_messages
+      expect(mockInvoke.mock.calls.length).toBe(invokeCalls); // 未发起 list_messages_by_turns
       expect(store.sending).toBe(true);
     });
   });
@@ -495,12 +495,12 @@ describe("chatStore", () => {
   });
 
   describe("加载竞态守卫（快速切换会话）", () => {
-    it("loadMessages：A 的晚到响应被丢弃——不整替 B 的 messages、不污染 hasMore", async () => {
+    it("loadMessages：A 的晚到响应被丢弃——不整替 B 的 messages、不污染 hasMore/游标", async () => {
       // 旧会话 c1 的 list 调用挂起（慢网络），新会话 c2 的调用立即返回
-      let resolveA!: (v: Message[]) => void;
-      const pendingA = new Promise<Message[]>((res) => { resolveA = res; });
+      let resolveA!: (v: MessageTurnPage) => void;
+      const pendingA = new Promise<MessageTurnPage>((res) => { resolveA = res; });
       mockInvoke.mockImplementationOnce(() => pendingA);
-      mockInvoke.mockResolvedValueOnce([fakeMsg("m-b1", "c2")]);
+      mockInvoke.mockResolvedValueOnce({ rows: [fakeMsg("m-b1", "c2")], has_more: false });
 
       const store = useChatStore();
       store.conversations = [fakeConv("c1"), fakeConv("c2")];
@@ -511,11 +511,16 @@ describe("chatStore", () => {
       expect(store.messages.map((m) => m.id)).toEqual(["m-b1"]);
       expect(store.msgLoading).toBe(false);
 
-      // c1 的响应此刻才到（满页 50 条）：过期响应必须整段丢弃
-      resolveA(Array.from({ length: 50 }, (_, i) => fakeMsg(`m-a${i}`, "c1")));
+      // c1 的响应此刻才到（满页 50 条 + has_more + 游标）：过期响应必须整段丢弃
+      resolveA({
+        rows: Array.from({ length: 50 }, (_, i) => fakeMsg(`m-a${i}`, "c1")),
+        has_more: true,
+        next_before_anchor_rowid: 9,
+      });
       await flushPromises();
       expect(store.messages.map((m) => m.id)).toEqual(["m-b1"]); // 未被 A 污染
-      expect(store.hasMore).toBe(false); // c2 不足 50 条——A 的满页没有污染 hasMore
+      expect(store.hasMore).toBe(false); // c2 终页——A 晚到页的 has_more 被丢弃
+      expect(store.pageCursor).toBe(null); // A 的游标 9 同样被丢弃
       expect(store.msgLoading).toBe(false);
     });
 
@@ -525,22 +530,88 @@ describe("chatStore", () => {
       store.activeConvId = "c1";
       store.messages = [fakeMsg("m-a2", "c1"), fakeMsg("m-a1", "c1")];
       store.hasMore = true;
+      store.pageCursor = 9;
 
-      let resolveOlder!: (v: Message[]) => void;
-      const pendingOlder = new Promise<Message[]>((res) => { resolveOlder = res; });
+      let resolveOlder!: (v: MessageTurnPage) => void;
+      const pendingOlder = new Promise<MessageTurnPage>((res) => { resolveOlder = res; });
       mockInvoke.mockImplementationOnce(() => pendingOlder); // c1 的 loadMore（在途）
-      mockInvoke.mockResolvedValueOnce([fakeMsg("m-b1", "c2")]); // 切到 c2 的首屏
+      mockInvoke.mockResolvedValueOnce({ rows: [fakeMsg("m-b1", "c2")], has_more: false }); // 切到 c2 的首屏
 
       const loading = store.loadMoreMessages(); // c1 分页在途
       store.selectConversation("c2"); // 切走（首屏立即返回）
       await flushPromises();
       expect(store.messages.map((m) => m.id)).toEqual(["m-b1"]);
 
-      resolveOlder([fakeMsg("m-a0", "c1")]); // c1 的 older 晚到
+      resolveOlder({ rows: [fakeMsg("m-a0", "c1")], has_more: false }); // c1 的 older 晚到
       await loading;
       await flushPromises();
       expect(store.messages.map((m) => m.id)).toEqual(["m-b1"]); // 未前插
       expect(store.loadingMore).toBe(false);
+    });
+  });
+
+  describe("回合制分页（list_messages_by_turns 换轨）", () => {
+    it("loadMessages：服务端 has_more 权威 + 游标入库 + pagedOnce 换会话复位", async () => {
+      mockInvoke.mockResolvedValueOnce({
+        rows: [fakeMsg("m2", "c1"), fakeMsg("m1", "c1")],
+        has_more: true,
+        next_before_anchor_rowid: 11,
+      });
+      const store = useChatStore();
+      store.conversations = [fakeConv("c1")];
+      store.activeConvId = "c1";
+      store.pagedOnce = true; // 上一会话翻过页的残留
+
+      await store.loadMessages("c1");
+      expect(mockInvoke).toHaveBeenCalledWith("list_messages_by_turns",
+        expect.objectContaining({ conversationId: "c1" }));
+      expect(store.messages.map((m) => m.id)).toEqual(["m2", "m1"]);
+      expect(store.hasMore).toBe(true);
+      expect(store.pageCursor).toBe(11);
+      expect(store.pagedOnce).toBe(false); // 复位
+    });
+
+    it("loadMoreMessages：游标用 store 字段而非 messages[0] 派生（头部乐观行 rowid:0 不是锚）", async () => {
+      mockInvoke.mockResolvedValueOnce({
+        rows: [fakeMsg("older-1", "c1")],
+        has_more: false,
+      });
+      const store = useChatStore();
+      store.conversations = [fakeConv("c1")];
+      store.activeConvId = "c1";
+      // 头部乐观行 rowid:0（本地冻结/流式占位形态）——旧机制拿它当游标会打错页
+      store.messages = [{ ...fakeMsg("m-head", "c1"), rowid: 0 }, fakeMsg("m1", "c1")];
+      store.hasMore = true;
+      store.pageCursor = 42;
+
+      await store.loadMoreMessages();
+      expect(mockInvoke).toHaveBeenCalledWith("list_messages_by_turns",
+        expect.objectContaining({ conversationId: "c1", beforeAnchorRowid: 42 }));
+      expect(store.messages.map((m) => m.id)).toEqual(["older-1", "m-head", "m1"]);
+      expect(store.hasMore).toBe(false); // 服务端权威（行数启发式已退役）
+      expect(store.pageCursor).toBe(null);
+      expect(store.pagedOnce).toBe(true); // 翻过一页
+    });
+
+    it("loadMoreMessages：hasMore=true 而游标缺席（服务端矛盾态）防御早退", async () => {
+      const store = useChatStore();
+      store.activeConvId = "c1";
+      store.messages = [fakeMsg("m1", "c1")];
+      store.hasMore = true;
+      store.pageCursor = null;
+      mockInvoke.mockClear();
+
+      await store.loadMoreMessages();
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    it("防御形状：mock 缺 rows 字段（默认空数组 mock）→ 空页 + hasMore=false，与旧空列表行为一致", async () => {
+      const store = useChatStore();
+      store.activeConvId = "c1";
+      await store.loadMessages("c1"); // beforeEach 默认 mockResolvedValue([])
+      expect(store.messages).toHaveLength(0);
+      expect(store.hasMore).toBe(false);
+      expect(store.pageCursor).toBe(null);
     });
   });
 

@@ -355,6 +355,15 @@ export interface IncomingSourceMeta {
   source_agent_name: string;
 }
 
+/** 回合制分页返回形状（list_messages_by_turns）：rows 时间正序 + 服务端权威
+ *  has_more + 下页游标（本页最旧纳入回合的锚 rowid；has_more=false 时缺席）。
+ *  游标必须原样回传，勿从前端 messages[0] 自造——乐观行 rowid:0 不是锚。 */
+export interface MessageTurnPage {
+  rows: Message[];
+  has_more: boolean;
+  next_before_anchor_rowid?: number | null;
+}
+
 // ============================================================================
 // 流式聊天事件 payload
 // ============================================================================

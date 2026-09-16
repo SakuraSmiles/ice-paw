@@ -1291,7 +1291,7 @@ const RESUMABLE_REASONS = new Set([
     />
     <!-- 分页加载指示器 -->
     <div v-if="chat.loadingMore" class="load-more-hint">加载更早消息…</div>
-    <div v-if="!chat.hasMore && chat.messages.length > 50" class="load-more-hint load-more-end">已显示全部消息</div>
+    <div v-if="!chat.hasMore && chat.pagedOnce" class="load-more-hint load-more-end">已显示全部消息</div>
 
     <div v-if="chat.msgLoading && chat.messages.length === 0" class="msg-skeleton">
       <div v-for="n in 5" :key="n" class="msg-skeleton-block">

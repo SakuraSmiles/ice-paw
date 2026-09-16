@@ -13,6 +13,7 @@ import type {
   Kb,
   KbDocument,
   Message,
+  MessageTurnPage,
   McpServer,
   McpServerSnapshot,
   McpServerUpdate,
@@ -303,6 +304,20 @@ const messages = {
   async list(conversationId: string, opts?: { limit?: number; before?: [string, number] }): Promise<Message[]> {
     try { return await invoke<Message[]>("list_messages", { conversationId, ...opts }); }
     catch (err) { throw wrapInvokeError("messages.list", err); }
+  },
+
+  /** 回合制分页（消息列表主读路径）：每页 = 最近 N 个回合的全部行，页界 =
+   *  回合边界 = 渲染组边界。游标必须原样回传 beforeAnchorRowid，勿从前端
+   *  messages[0] 自造（乐观行 rowid:0 / 本地冻结行都不是锚）。 */
+  async listByTurns(conversationId: string, opts?: { turns?: number; beforeAnchorRowid?: number }): Promise<MessageTurnPage> {
+    try {
+      return await invoke<MessageTurnPage>("list_messages_by_turns", {
+        conversationId,
+        turns: opts?.turns,
+        beforeAnchorRowid: opts?.beforeAnchorRowid,
+      });
+    }
+    catch (err) { throw wrapInvokeError("messages.listByTurns", err); }
   },
 };
 

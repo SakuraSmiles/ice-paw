@@ -140,6 +140,11 @@ export const useChatStore = defineStore("chat", () => {
   const msgLoading = ref(false);
   const hasMore = ref(true);
   const loadingMore = ref(false);
+  // 回合制分页游标（服务端权威锚 rowid，loadMoreMessages 唯一取用点）。
+  // 不从 messages[0] 派生：乐观行 rowid:0 / 本地冻结行永不是锚。
+  const pageCursor = ref<number | null>(null);
+  // 是否真发生过向上翻页（「已显示全部消息」终注条件——比旧行数推断准）。
+  const pagedOnce = ref(false);
 
   async function loadMessages(convId: string) {
     msgLoading.value = true;
@@ -148,15 +153,19 @@ export const useChatStore = defineStore("chat", () => {
     messages.value = [];
     hasMore.value = true;
     loadingMore.value = false;
+    pageCursor.value = null;
+    pagedOnce.value = false;
     try {
-      const page = await bridge.messages.list(convId, { limit: 50 });
+      const page = await bridge.messages.listByTurns(convId);
       // 竞态守卫（useProjectTrajectory 的 currentId !== pid 同款）：await 期间用户
       // 可能已切到别的会话——A→B 快速切换时 A 的晚到响应会整替 B 的 messages、
-      // 同步污染 hasMore。过期响应直接丢弃。
+      // 同步污染 hasMore/游标。过期响应直接丢弃。
       if (convId !== activeConvId.value) return;
-      messages.value = page;
-      // 如果返回不足 50 条，说明没有更多了
-      hasMore.value = page.length >= 50;
+      // 防御形状：mock/旧返回无 rows 字段时回落空页（hasMore=false 与旧行为一致）
+      const rows = Array.isArray(page?.rows) ? page.rows : [];
+      messages.value = rows;
+      hasMore.value = page?.has_more === true;
+      pageCursor.value = page?.next_before_anchor_rowid ?? null;
       // 切回正在流式的会话时，把恢复的 streamingText 同步到末条 assistant，
       // 否则 DB 占位为空、要等下一个 chunk 才显示
       if (sending.value && streamingText.value) {
@@ -175,21 +184,23 @@ export const useChatStore = defineStore("chat", () => {
   }
 
   async function loadMoreMessages() {
+    // pageCursor 空 = 服务端矛盾态防御（hasMore=true 而游标缺席）早退
     if (loadingMore.value || !hasMore.value || messages.value.length === 0) return;
+    if (pageCursor.value == null) return;
     if (!activeConvId.value) return;
     loadingMore.value = true;
     // 发起时记下会话：await 期间切走的话，旧会话的 older 消息不得前插进新会话列表
     const convId = activeConvId.value;
-    const oldest = messages.value[0];
+    const cursor = pageCursor.value;
     try {
-      const older = await bridge.messages.list(convId, {
-        limit: 50,
-        before: [oldest.created_at, oldest.rowid],
-      });
+      const page = await bridge.messages.listByTurns(convId, { beforeAnchorRowid: cursor });
       // 竞态守卫：切会话瞬间返回的旧会话分页直接丢弃（前插必须在守卫之后）
       if (convId !== activeConvId.value) return;
-      if (older.length < 50) hasMore.value = false;
+      const older = Array.isArray(page?.rows) ? page.rows : [];
+      hasMore.value = page?.has_more === true;
+      pageCursor.value = page?.next_before_anchor_rowid ?? null;
       messages.value = [...older, ...messages.value];
+      pagedOnce.value = true;
     } catch (e) {
       console.error("加载更早消息失败:", e);
     } finally {
@@ -925,7 +936,7 @@ export const useChatStore = defineStore("chat", () => {
   return {
     conversations, convLoading,
     activeConvId, activeConversation,
-    messages, msgLoading, hasMore, loadingMore,
+    messages, msgLoading, hasMore, loadingMore, pagedOnce, pageCursor,
     sending, streamingText, draftText, pendingImages, pendingFiles, pendingRefs, lastFinishReason, currentModel,
     budget, renewalNotice, updateBudget, modelSwitchNotice, updateModelSwitched,
     roundsNotice, updateRoundsRenewed, lastTurnRounds, turnRoundRenewals,
