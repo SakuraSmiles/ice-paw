@@ -42,6 +42,9 @@ pub async fn create_project(
     // 上下文目录同步建好：新项目即刻可编辑 project.md（不等下次启动的
     // boot 全量 ensure——OsContextStage 只读不建，缺目录期间注入静默为空）
     context_dir_ensured(pool.inner(), &row).await;
+    // 带初始成员建项目 = 成员就位：best-effort 自动建频道（空 agent_ids 由
+    // ensure_channel_auto 查实际成员后跳过）
+    crate::commands::channel_cmd::ensure_channel_auto(pool.inner(), &row.id).await;
     Ok(row)
 }
 
@@ -67,17 +70,20 @@ pub async fn reorder_projects(pool: State<'_, SqlitePool>, ids: Vec<String>) -> 
     repo::project::reorder(pool.inner(), &ids).await
 }
 
-/// 全量替换项目成员
+/// 全量替换项目成员（成员就位 → best-effort 自动建频道：幂等、空成员跳过、
+/// 失败不阻塞成员写入）
 #[tauri::command]
 pub async fn set_project_agents(
     pool: State<'_, SqlitePool>,
     project_id: String,
     members: Vec<(String, String)>,
 ) -> AppResult<()> {
-    repo::project::set_agents(pool.inner(), &project_id, &members).await
+    repo::project::set_agents(pool.inner(), &project_id, &members).await?;
+    crate::commands::channel_cmd::ensure_channel_auto(pool.inner(), &project_id).await;
+    Ok(())
 }
 
-/// 添加单个成员
+/// 添加单个成员（首个成员落位 = 频道存在前提就绪 → best-effort 自动建）
 #[tauri::command]
 pub async fn add_project_agent(
     pool: State<'_, SqlitePool>,
@@ -86,7 +92,9 @@ pub async fn add_project_agent(
     role: Option<String>,
 ) -> AppResult<()> {
     let r = role.as_deref().unwrap_or("member");
-    repo::project::add_agent(pool.inner(), &project_id, &agent_id, r).await
+    repo::project::add_agent(pool.inner(), &project_id, &agent_id, r).await?;
+    crate::commands::channel_cmd::ensure_channel_auto(pool.inner(), &project_id).await;
+    Ok(())
 }
 
 /// 移除单个成员

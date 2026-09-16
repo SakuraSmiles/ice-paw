@@ -76,6 +76,8 @@ async function addMember(agentId: string) {
   try {
     await bridge.projects.addAgent(projectId.value, agentId, "member");
     await project.load(true);
+    // 首个成员落位后端自动建频道——刷新会话缓存让侧栏频道行立即可见
+    await chat.loadConversations();
   } catch (e) {
     console.error("添加成员失败:", e);
   }

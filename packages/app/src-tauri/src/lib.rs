@@ -421,6 +421,28 @@ pub fn run() {
             //     与 3c/3d 同一广播源的独立订阅，lagged 互不传染。
             harness::channel::spawn_channel_watcher(handle.clone());
 
+            // 3f) 频道 v1 存量补建（成员就位即自动建，2026-09-16）：boot 扫
+            //     活跃项目，「有成员无活频道」自动 ensure（与成员写路径的
+            //     ensure_channel_auto 同源，幂等）。后台化 + 失败仅 warn 不阻塞
+            //     启动；归档项目不碰——搁置数据不静默长出新会话行，恢复归档后
+            //     下次 boot 或成员变更自然会建。
+            let pool_for_channel = pool.clone();
+            tauri::async_runtime::spawn(async move {
+                let projects = match db::repo::project::list(&pool_for_channel).await {
+                    Ok(rows) => rows,
+                    Err(e) => {
+                        tracing::warn!(
+                            target: "ice_paw.channel",
+                            "存量补建：加载项目列表失败（本次跳过）: {e}"
+                        );
+                        return;
+                    }
+                };
+                for p in projects.into_iter().filter(|p| !p.archived) {
+                    commands::channel_cmd::ensure_channel_auto(&pool_for_channel, &p.id).await;
+                }
+            });
+
             // 4) REQ-XC-010: 注入 AgentCmd trait object (生产实现 SqlAgentCmd)
             // 覆盖 builder 阶段注入的 None 占位。
             let sql_agent_cmd: std::sync::Arc<dyn commands::agent_cmd::AgentCmd> =

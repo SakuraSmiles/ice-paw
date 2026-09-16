@@ -85,6 +85,9 @@ async function createProject() {
       agent_ids: [...form.memberIds],
     };
     await project.create(input);
+    // 带初始成员创建 = 后端已自动建频道（成员就位即自动建）——刷新会话缓存，
+    // 侧栏频道行立即可见（boot/切页刷新之外的前端闭环）
+    await chat.loadConversations();
     isCreating.value = false;
     resetForm();
   } catch (e) {
@@ -153,6 +156,8 @@ async function addMember(p: Project, agentId: string) {
   try {
     await bridge.projects.addAgent(p.id, agentId, "member");
     await project.load(true);
+    // 首个成员落位后端自动建频道——刷新会话缓存让侧栏频道行立即可见
+    await chat.loadConversations();
   } catch (e) {
     console.error("添加成员失败:", e);
   }
