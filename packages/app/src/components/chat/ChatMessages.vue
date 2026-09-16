@@ -13,7 +13,7 @@
 <script setup lang="ts">
 import { watch, nextTick, ref, computed, onActivated } from "vue";
 import { useRouter } from "vue-router";
-import { ArrowLeftRight, AtSign, CornerUpRight, Shield } from "@lucide/vue";
+import { ArrowLeftRight, AtSign, Brain, CornerUpRight, MessageSquareText, Shield, Wrench } from "@lucide/vue";
 import { useChatStore } from "../../stores/chat";
 import { useAgentStore } from "../../stores/agent";
 import { useChannel, loadChannelNotices, type ElectionCard } from "../../composables/useChannel";
@@ -1489,43 +1489,54 @@ const RESUMABLE_REASONS = new Set([
                 </div>
               </template>
               <div class="assistant-body">
-            <!-- 组级思考聚合（≥2 段）：收起=顶部一行总量，展开=顶部堆叠各段
-                 （段内交互照旧，展开键与 item 内同构——聚合前后互通）。
-                 ⚠️ 必须在 item v-for 之外（同工具摘要行的组级错位教训）。 -->
-            <template v-if="thinkingAggregateEligible(group)">
-              <div class="think-toggle think-group-summary" @click="toggleThinkingGroup(group.key)">
-                <StatusGlyph status="done" class="think-glyph" />
+            <!-- 组级收纳胶囊行（2026-09-16 四轮拍板：三行合一置气泡最前端）——
+                 思考/工具/过程三胶囊并排（序固定 思考→工具→过程），各配语义
+                 Lucide 图标（Brain/Wrench/MessageSquareText——图标表内容域，
+                 原状态图标 done/error 与收纳语义不符，用户拍板换掉）。
+                 置顶而非置底：底部工具行展开向上顶会把点击控件推出视野；置顶
+                 展开向下流（details 语感），控件钉在位。
+                 ⚠️ 胶囊必须在 item v-for 之外（与 message-item 同级——组级错位
+                 教训：落 item 内 = 每轮一条重复摘要行）。 -->
+            <div v-if="thinkingAggregateEligible(group) || toolCollapseEligible(group) || processCollapseEligible(group)" class="group-summary-pills">
+              <div v-if="thinkingAggregateEligible(group)" class="think-toggle summary-pill think-group-summary" @click="toggleThinkingGroup(group.key)">
+                <Brain :size="14" class="pill-glyph" aria-hidden="true" />
                 <span class="think-label">思考 · {{ groupThinkingStats.get(group.key)?.segs.length }} 段</span>
                 <span v-if="groupThinkingStats.get(group.key)?.totalMs != null" class="think-label think-group-total">{{ formatThinkingMs(groupThinkingStats.get(group.key)!.totalMs!) }}</span>
                 <span class="think-chevron">{{ expandedThinkingGroups.has(group.key) ? '▾' : '▸' }}</span>
               </div>
-              <Transition name="think-fade">
-                <div v-if="expandedThinkingGroups.has(group.key)" class="think-group-stack">
-                  <div v-for="seg in groupThinkingStats.get(group.key)?.segs" :key="seg.key" class="think-block">
-                    <div class="think-toggle" @click="toggleThinking(seg.key)">
-                      <StatusGlyph status="done" class="think-glyph" />
-                      <span class="think-label">{{ thinkSegLabel(seg) }}</span>
-                      <span class="think-chevron">{{ expandedThinking.has(seg.key) ? '▾' : '▸' }}</span>
-                    </div>
-                    <Transition name="think-fade">
-                      <div v-if="expandedThinking.has(seg.key)" class="think-body">
-                        <MarkdownRenderer :content="seg.text" />
-                      </div>
-                    </Transition>
-                  </div>
-                </div>
-              </Transition>
-            </template>
-            <!-- 组级过程叙述收纳（2026-09-16 拍板，三轮：门控退役 + 截断标注）：
-                 多轮回合过程碎句折叠，正中区只留末段正文；组后用户以「继续」续跑 =
-                 截断组，收纳行换「回合被截断」warning 标注（判据见 groupTruncatedAfter）。
-                 展开=过程段回 item 原位。
-                 ⚠️ 必须在 item v-for 之外（工具摘要行组级错位同族教训）。 -->
-            <div v-if="processCollapseEligible(group)" class="tool-toggle process-group-summary" @click="toggleProcessGroup(group.key)">
-              <StatusGlyph status="done" />
-              <span class="tool-name" :class="{ 'process-truncated': isProcessCollapsed(group) && groupTruncatedAfter(group) }">{{ processRowLabel(group, isProcessCollapsed(group)) }}</span>
-              <span class="tool-chevron">{{ isProcessCollapsed(group) ? '▸' : '▾' }}</span>
+              <div v-if="toolCollapseEligible(group)" class="tool-toggle summary-pill tool-group-summary" @click="toggleToolGroup(group.key)">
+                <Wrench :size="14" class="pill-glyph" aria-hidden="true" />
+                <template v-if="isToolsCollapsed(group)">
+                  <span class="tool-name">{{ groupToolStats.get(group.key)?.total }} 次工具调用</span>
+                  <span v-if="(groupToolStats.get(group.key)?.errors ?? 0) > 0" class="tool-fail-count">{{ groupToolStats.get(group.key)?.errors }} 失败</span>
+                </template>
+                <span v-else class="tool-name">收起 · {{ groupToolStats.get(group.key)?.total }} 次工具调用</span>
+                <span class="tool-chevron">{{ isToolsCollapsed(group) ? '▸' : '▾' }}</span>
+              </div>
+              <div v-if="processCollapseEligible(group)" class="tool-toggle summary-pill process-group-summary" @click="toggleProcessGroup(group.key)">
+                <MessageSquareText :size="14" class="pill-glyph" aria-hidden="true" />
+                <span class="tool-name" :class="{ 'process-truncated': isProcessCollapsed(group) && groupTruncatedAfter(group) }">{{ processRowLabel(group, isProcessCollapsed(group)) }}</span>
+                <span class="tool-chevron">{{ isProcessCollapsed(group) ? '▸' : '▾' }}</span>
+              </div>
             </div>
+            <!-- 组级思考聚合（≥2 段）：收起=胶囊总量，展开=胶囊行下堆叠各段
+                 （段内交互照旧，展开键与 item 内同构——聚合前后互通）。 -->
+            <Transition name="think-fade">
+              <div v-if="thinkingAggregateEligible(group) && expandedThinkingGroups.has(group.key)" class="think-group-stack">
+                <div v-for="seg in groupThinkingStats.get(group.key)?.segs" :key="seg.key" class="think-block">
+                  <div class="think-toggle" @click="toggleThinking(seg.key)">
+                    <StatusGlyph status="done" class="think-glyph" />
+                    <span class="think-label">{{ thinkSegLabel(seg) }}</span>
+                    <span class="think-chevron">{{ expandedThinking.has(seg.key) ? '▾' : '▸' }}</span>
+                  </div>
+                  <Transition name="think-fade">
+                    <div v-if="expandedThinking.has(seg.key)" class="think-body">
+                      <MarkdownRenderer :content="seg.text" />
+                    </div>
+                  </Transition>
+                </div>
+              </div>
+            </Transition>
             <div v-for="item in visibleItemsOf(group)" :key="item.msg.id" class="message-item">
               <!-- 三个点动画：仅当前流式 item 且无任何返回时显示 -->
               <div v-if="isLiveAssistant(item) && item.msg.content === '' && !chat.streamingThinking && toolCallList.length === 0" class="think-dots">
@@ -1587,7 +1598,7 @@ const RESUMABLE_REASONS = new Set([
                 </Transition>
 
                 <!-- 文字（按时间线顺序：thinking → 文本 → 工具，匹配 content_blocks）。
-                     过程收纳折叠态：非末段正文隐藏（收进顶部折叠行）；展开回原位 -->
+                     过程收纳折叠态：非末段正文隐藏（收进顶部过程胶囊）；展开回原位 -->
                 <div v-if="item.msg.content && !isProcessNarrativeItem(group, item)" class="message-bubble">
                   <MarkdownRenderer :content="item.msg.content" :streaming="isLiveAssistant(item) || isTurnStreaming(item)" />
                 </div>
@@ -1733,21 +1744,6 @@ const RESUMABLE_REASONS = new Set([
                   </div>
                 </div>
               </template>
-            </div>
-
-            <!-- ③ 组级工具折叠摘要行（≥阈值且非生成中组；折/展两态都在场=toggle 载体）：
-                 折叠态一行总量「N 次工具调用 · M 失败」，展开态「收起 · N 次工具调用」。
-                 ⚠️ 必须在 item v-for 之外（与 message-item 同级）——多轮工具回合每轮
-                 一条消息；2026-09-15 真机实案：落在 item 内时 50 轮回合渲染 50 条重复
-                 摘要行、组间用户气泡被挤出视野（单 item 测试形态测不出此错位） -->
-            <div v-if="toolCollapseEligible(group)" class="tool-toggle tool-group-summary" @click="toggleToolGroup(group.key)">
-              <StatusGlyph :status="(groupToolStats.get(group.key)?.errors ?? 0) > 0 ? 'error' : 'done'" />
-              <template v-if="isToolsCollapsed(group)">
-                <span class="tool-name">{{ groupToolStats.get(group.key)?.total }} 次工具调用</span>
-                <span v-if="(groupToolStats.get(group.key)?.errors ?? 0) > 0" class="tool-fail-count">{{ groupToolStats.get(group.key)?.errors }} 失败</span>
-              </template>
-              <span v-else class="tool-name">收起 · {{ groupToolStats.get(group.key)?.total }} 次工具调用</span>
-              <span class="tool-chevron">{{ isToolsCollapsed(group) ? '▸' : '▾' }}</span>
             </div>
 
             <!-- 组级 footer：时间(组首) / model(一次) / token(求和) / 复制(组内文本)。
@@ -2244,14 +2240,18 @@ const RESUMABLE_REASONS = new Set([
 /* ③ 组级折叠摘要行的失败计数（warning 语义色；与 tool-diff 的加减速记同为行内强调位） */
 .tool-fail-count { font-size:var(--ip-text-caption-size); color:var(--ip-warning-text); white-space:nowrap; }
 
-/* 组级思考聚合（2026-09-16 拍板：≥2 段收进气泡顶部）——顶部总量行 + 展开堆叠区
-   （左缩进 22px 与 think-body 同意象）；总耗时是次级信息（disabled 色、常规字重） */
-.think-group-summary { margin-bottom:2px; }
+/* 组级收纳胶囊行（2026-09-16 四轮：三行合一置气泡最前端）——思考/工具/过程
+   三胶囊并排；flex-wrap 窄窗换行不截断；胶囊覆写行级 width:100% → 内容自适应宽 */
+.group-summary-pills { display:flex; flex-wrap:wrap; align-items:center; gap:var(--ip-spacing-1); margin-bottom:var(--ip-spacing-0_5); }
+.group-summary-pills .summary-pill { width:auto; flex-shrink:0; }
+/* 胶囊语义图标（Brain 思考 / Wrench 工具 / MessageSquareText 过程叙述）：
+   图标表内容域非状态——状态图标 done/error 与收纳语义不符（2026-09-16 用户
+   拍板换语义图标）；色阶与标签文本同步（tertiary） */
+.pill-glyph { color:var(--ip-color-text-tertiary); flex-shrink:0; }
+/* 思考聚合展开堆叠区（胶囊行正下方；左缩进 22px 与 think-body 同意象）；
+   总耗时是次级信息（disabled 色、常规字重） */
 .think-group-total { color:var(--ip-color-text-disabled); font-weight:var(--ip-font-weight-regular); }
 .think-group-stack { margin:2px 0 6px 22px; display:grid; gap:2px; }
-
-/* 组级过程叙述收纳行：复用 tool-toggle 行形态（与思考/工具两个收纳行同族视觉） */
-.process-group-summary { margin-bottom:2px; }
 /* 截断组标注（三轮换轴）：回合被截断是警示事实——warning 语义色（同
    .tool-fail-count 先例），碎句尾段由它语境化、不再冒充结论 */
 .process-truncated { color:var(--ip-warning-text); }

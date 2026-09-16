@@ -10,8 +10,9 @@
 //
 // 锁死十点：≥3 段默认折叠（只末段在场，折叠行恰一条）/ 展开回原位+收起态 /
 // 2 段不收纳（轻量实质正文不动）/ 生成中不收纳（frozen-round）/ 末段=最后
-// 有 content 的 item（末 item 纯工具轮不误判）/ 三区共存 DOM 序（顶思 →
-// 过程行 → 末段正文 → 工具行）/ 碎句组也默认收纳（门控退役）无后续不标截断 /
+// 有 content 的 item（末 item 纯工具轮不误判）/ 三区共存 DOM 序（胶囊行内
+// 思考→工具→过程 → 末段正文，2026-09-16 四轮三行合一）/ 碎句组也默认收纳
+// （门控退役）无后续不标截断 /
 // 截断组「继续」续跑签名 → warning 标注 / 折叠态空壳 item 不渲染
 // （.message-item 计数）/ 豁免卡 item 在场。
 // 机制审计补锁（同日四轮）：分页前插并组键易主时——原全可见组预置展开 /
@@ -182,7 +183,7 @@ describe("组级过程叙述收纳", () => {
     expect(w.findAll(".md").map((m) => m.text())).toEqual(["真正结论。"]);
   });
 
-  it("三区共存 DOM 序：顶思 → 过程行 → 末段正文 → 工具行（≥2 思考 + ≥3 正文 + ≥8 工具）", async () => {
+  it("三区共存 DOM 序：胶囊行内 思考→工具→过程 → 末段正文（≥2 思考 + ≥3 正文 + ≥8 工具）", async () => {
     const msgs: Message[] = [msg({ id: "u1", role: "user", content: "任务" })];
     for (let i = 0; i < 4; i++) {
       msgs.push(msg({
@@ -209,13 +210,25 @@ describe("组级过程叙述收纳", () => {
     expect(w.findAll(".tool-group-summary").length).toBe(1); // 8 次工具折叠
     expect(w.findAll(".md").map((m) => m.text())).toEqual(["最终结论。"]); // 只末段在场
 
-    // DOM 序：思考行 < 过程行 < 末段正文 < 工具摘要行（顶部到中部到底部）
+    // 三胶囊合一排在同一行容器（2026-09-16 四轮：三行合一置气泡最前端）
+    const pillsRow = w.find(".group-summary-pills");
+    expect(pillsRow.exists()).toBe(true);
+    expect(pillsRow.findAll(".summary-pill").length).toBe(3);
+
+    // 语义图标锁（用户拍板换掉状态图标）：Brain 思考 / Wrench 工具 /
+    // MessageSquareText 过程——lucide 默认类名携带图标名
+    const pillsHtml = pillsRow.html();
+    expect(pillsHtml).toContain("lucide-brain");
+    expect(pillsHtml).toContain("lucide-wrench");
+    expect(pillsHtml).toContain("lucide-message-square-text");
+
+    // DOM 序：胶囊行内 思考 → 工具 → 过程 → 末段正文（顶部到中部）
     const html = w.find(".assistant-body").html();
     const positions = [
       html.indexOf("think-group-summary"),
+      html.indexOf("tool-group-summary"),
       html.indexOf("process-group-summary"),
       html.indexOf("最终结论"),
-      html.indexOf("tool-group-summary"),
     ];
     expect(positions.every((p) => p >= 0)).toBe(true);
     for (let i = 0; i < positions.length - 1; i++) {

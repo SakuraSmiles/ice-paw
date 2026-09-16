@@ -1,6 +1,7 @@
 // ChatMessages.thinking-aggregate.test.ts — 组级思考聚合回归锁
 // （2026-09-16 拍板：组内 ≥2 段思考收进气泡顶部——总开关 + 展开顶部堆叠；
-//   思考顶 / 正文中 / 工具总量底，与工具折叠对称的过程收纳）。
+//   四轮起三收纳行合一为气泡最前端胶囊行：思考/工具/过程并排，思考胶囊
+//   在首位，展开堆叠仍紧随胶囊行下方）。
 //
 // 锁死六点：≥2 段聚合（顶部一行 + item 内隐藏）/ 1 段不聚合（原位贴正文）/
 // 展开堆叠（段块 + 段内交互）/ 生成中不聚合（frozen-round 语义——流式思考
@@ -157,7 +158,7 @@ describe("组级思考聚合", () => {
     expect(w.findAll(".message-item .think-block").length).toBe(1);
   });
 
-  it("与工具折叠共存：顶思底工同场（≥2 思考 + ≥8 工具组）", async () => {
+  it("与工具折叠共存：思考/工具同胶囊行并排（≥2 思考 + ≥8 工具组）", async () => {
     const msgs: Message[] = [msg({ id: "u1", role: "user", content: "任务" })];
     for (let i = 0; i < 8; i++) {
       msgs.push(msg({
@@ -178,9 +179,10 @@ describe("组级思考聚合", () => {
     expect(w.findAll(".think-group-summary")[0].text()).toContain("8 段");
     expect(w.findAll(".tool-group-summary").length).toBe(1);
     expect(w.findAll(".tool-group-summary")[0].text()).toContain("8 次工具调用");
-    // 顶部在前底部在后（DOM 序）
-    const body = w.find(".assistant-body");
-    expect(body.find(".think-group-summary").exists()).toBe(true);
+    // 两胶囊同排一行（2026-09-16 四轮：三行合一置气泡最前端）
+    const pillsRow = w.find(".assistant-body .group-summary-pills");
+    expect(pillsRow.find(".think-group-summary").exists()).toBe(true);
+    expect(pillsRow.find(".tool-group-summary").exists()).toBe(true);
   });
 
   it("聚合行组级恰一条（多 item 形态——工具摘要行组级错位同族回归锁）", async () => {
