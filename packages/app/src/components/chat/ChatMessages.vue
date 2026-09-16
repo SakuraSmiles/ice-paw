@@ -1045,36 +1045,28 @@ function thinkSegLabel(seg: GroupedThink): string {
   return seg.durationMs != null ? "思考 · " + formatThinkingMs(seg.durationMs) : "思考";
 }
 
-// ===== 组级过程叙述收纳（2026-09-16 拍板，同日二轮：末段收束门控 + 空壳治理）=====
+// ===== 组级过程叙述收纳（2026-09-16 拍板；三轮：门控退役 + 截断标注 + 空壳治理保留）=====
 // 三明治收纳（思考顶/正文中/工具底）对多轮长回合缺第三层收纳：中间轮次的冒号
-// 碎句（「重新执行：」「修复后重跑：」）失去对应工具行后成串悬空堆叠（真机实案：
+// 碎句（「重新执行：」「修复后重跑：」失去对应工具行后成串悬空堆叠（真机实案：
 // 16 次工具组 7 段正文全是过程叙述）。收纳后过程段折叠为「过程叙述 · N 段」，
 // 展开回 item 原位（与工具折叠同交互——时间线与工具行交错复原）。
-// 二轮两修（用户否决纯位置收纳——「末段是不是总结无从保证」）：
-// ① 收束门控：生产库实测（2026-09-16，242 个 ≥3 段候选组）：大组（≥10 段）
-//   仅 50% 末段完整收尾、38% 以冒号碎句收束——被截断的回合（撞轮数上限等）
-//   末段常是「宣布下一步」的碎句，收掉过程只留它 = 交流障碍。收纳只对末段
-//   完整收束的组生效（segConcluded 形态代理，宁严勿松：误判碎句只是啰嗦、
-//   误判总结才是「偷偷干活没人知道」——用户拍板）。
-// ② 空壳治理：收纳只藏 item 内容不收骨架，50 轮组 ≈ 30+ 个空 .message-item
-//   以每层 12px 轮距堆出数百 px 空白（真机实案 380px+）——空壳整个不渲染
-//   （visibleItemsOf）。
+// 演进三轮（用户拍板「组合拳」）：
+// ① 二轮末段收束门控（segConcluded 形态代理）**已退役**——dev 实测碎句组
+//   （大组 38%）全段直显，「偏多偏杂」依旧；且生产库交叉表实证：异常终态
+//   大组 95% 以冒号碎句收尾——**截断决定形态**，猜形态 = 猜截断，猜不准。
+// ② 三轮换轴：判定从「猜末段形态」换成「读回合结尾事实」——组后首条真 user
+//   消息是「继续」（撞顶续跑的形态签名，生产实案 60/62 走「继续」按钮）=
+//   截断组，收纳行换「回合被截断 · N 段过程」标注（warning 色）——碎句尾段
+//   被语境化，不再冒充结论；正常组维持「过程叙述 · N 段」。源头治理配套在
+//   平台层提示词两行（system_prompt.rs 2026-09-16），一周后复测验证。
+// ③ 空壳治理保留：收纳只藏 item 内容不收骨架，50 轮组 ≈ 30+ 个空
+//   .message-item 以每层 12px 轮距堆出数百 px 空白（真机实案 380px+）——
+//   空壳整个不渲染（visibleItemsOf）。
 /** 收纳阈值：组内非空正文段 ≥3（过程段 ≥2）才收纳；两段以下多为实质正文
  *  （说明+结论的轻量两段），过度收纳损害阅读。 */
 const PROCESS_NARRATIVE_MIN = 3;
 
-/** 末段收束判定（门控）：剥尾部空白/markdown 强调符后，句末标点（。！？… 及
- *  闭括号引号）或 markdown 结构收尾（代码块闭合 ``` / 表格行尾 |）= 完整收尾，
- *  像「写完了的总结」；冒号/逗号/裸截断 = 引出下一步的过程碎句。 */
-const SEG_TERMINAL_CHARS = new Set("。！？!?.…”』」）)]");
-
-function segConcluded(text: string): boolean {
-  const t = text.replace(/[\s*_]+$/, "");
-  if (!t) return false;
-  return SEG_TERMINAL_CHARS.has(t[t.length - 1]) || t.endsWith("```") || t.endsWith("|");
-}
-
-interface GroupProcessStats { count: number; lastContentIdx: number; concluded: boolean }
+interface GroupProcessStats { count: number; lastContentIdx: number }
 
 /** 各 assistant 组的正文段统计：count = 非空 content 的 item 数，lastContentIdx
  *  = 末段所在 item 下标（末 item 可能是无正文纯工具轮——末段=最后有 content 者）。 */
@@ -1084,23 +1076,44 @@ const groupProcessStats = computed<Map<string, GroupProcessStats>>(() => {
     if (g.role !== "assistant") continue;
     let count = 0;
     let lastContentIdx = -1;
-    let lastText = "";
     for (const it of g.items) {
-      if (it.msg.content) { count++; lastContentIdx = it.idx; lastText = it.msg.content; }
+      if (it.msg.content) { count++; lastContentIdx = it.idx; }
     }
     if (count >= PROCESS_NARRATIVE_MIN) {
-      stats.set(g.key, { count, lastContentIdx, concluded: segConcluded(lastText) });
+      stats.set(g.key, { count, lastContentIdx });
     }
   }
   return stats;
 });
 
-/** 组具备收纳资格（≥阈值 + 末段完整收束 + 非生成中——frozen-round 语义：
- *  流式正文实时在场，回合结束沉淀）。末段碎句组不收纳（全段直显）——被截断
- *  的回合末段常是「宣布下一步」的冒号碎句，收掉过程只留它 = 交流障碍。 */
+/** 组具备收纳资格（≥阈值 + 非生成中——frozen-round 语义：流式正文实时在场，
+ *  回合结束沉淀）。默认收纳全部达阈值组（三轮门控退役）。 */
 function processCollapseEligible(g: MessageGroup): boolean {
-  const s = groupProcessStats.value.get(g.key);
-  return s != null && s.concluded && !groupInLiveTurn(g);
+  return groupProcessStats.value.has(g.key) && !groupInLiveTurn(g);
+}
+
+/** 组后首条真 user 消息是否是「继续」——回合撞顶被截断后用户续跑的形态签名
+ *  （生产实案 60/62 续跑全走「继续」按钮 = sendMessage('继续')）。扫描跳过
+ *  tool_result-only 行；遇 assistant（换档降级/频道新成员组）= 非续跑。末组
+ *  无后续 → false（截断后未续跑的末组拿不到信号，碎句尾段直显无标注——罕见
+ *  口径，完备解是读 turn_ended 事件，暂不做）。 */
+function groupTruncatedAfter(g: MessageGroup): boolean {
+  for (let i = g.lastIdx + 1; i < chat.messages.length; i++) {
+    const m = chat.messages[i];
+    if (isToolResultOnlyUser(m)) continue;
+    if (m.role !== "user") return false;
+    return (m.content ?? "").trim() === "继续";
+  }
+  return false;
+}
+
+/** 收纳行标签：截断组「回合被截断 · N 段过程」（warning 色由模板 class 承载）、
+ *  正常组「过程叙述 · N 段」；展开态「收起 · N 段过程叙述」。N = 过程段数
+ *  （总段数 - 末段）。 */
+function processRowLabel(g: MessageGroup, collapsed: boolean): string {
+  const n = (groupProcessStats.value.get(g.key)?.count ?? 0) - 1;
+  if (!collapsed) return `收起 · ${n} 段过程叙述`;
+  return groupTruncatedAfter(g) ? `回合被截断 · ${n} 段过程` : `过程叙述 · ${n} 段`;
 }
 
 function isProcessCollapsed(g: MessageGroup): boolean {
@@ -1429,16 +1442,14 @@ const RESUMABLE_REASONS = new Set([
                 </div>
               </Transition>
             </template>
-            <!-- 组级过程叙述收纳（2026-09-16 拍板，二轮加末段收束门控）：多轮回合
-                 过程碎句折叠，正中区只留末段正文；末段碎句组（冒号/截断收尾）不收纳
-                 ——全段直显（收束判据见 script segConcluded）。展开=过程段回 item 原位。
+            <!-- 组级过程叙述收纳（2026-09-16 拍板，三轮：门控退役 + 截断标注）：
+                 多轮回合过程碎句折叠，正中区只留末段正文；组后用户以「继续」续跑 =
+                 截断组，收纳行换「回合被截断」warning 标注（判据见 groupTruncatedAfter）。
+                 展开=过程段回 item 原位。
                  ⚠️ 必须在 item v-for 之外（工具摘要行组级错位同族教训）。 -->
             <div v-if="processCollapseEligible(group)" class="tool-toggle process-group-summary" @click="toggleProcessGroup(group.key)">
               <StatusGlyph status="done" />
-              <template v-if="isProcessCollapsed(group)">
-                <span class="tool-name">过程叙述 · {{ (groupProcessStats.get(group.key)?.count ?? 0) - 1 }} 段</span>
-              </template>
-              <span v-else class="tool-name">收起 · {{ (groupProcessStats.get(group.key)?.count ?? 0) - 1 }} 段过程叙述</span>
+              <span class="tool-name" :class="{ 'process-truncated': isProcessCollapsed(group) && groupTruncatedAfter(group) }">{{ processRowLabel(group, isProcessCollapsed(group)) }}</span>
               <span class="tool-chevron">{{ isProcessCollapsed(group) ? '▸' : '▾' }}</span>
             </div>
             <div v-for="item in visibleItemsOf(group)" :key="item.msg.id" class="message-item">
@@ -2167,6 +2178,9 @@ const RESUMABLE_REASONS = new Set([
 
 /* 组级过程叙述收纳行：复用 tool-toggle 行形态（与思考/工具两个收纳行同族视觉） */
 .process-group-summary { margin-bottom:2px; }
+/* 截断组标注（三轮换轴）：回合被截断是警示事实——warning 语义色（同
+   .tool-fail-count 先例），碎句尾段由它语境化、不再冒充结论 */
+.process-truncated { color:var(--ip-warning-text); }
 
 /* 状态图标（StatusGlyph：环形对勾/3×3 像素格/环形叉，2026-09-04 语系统一）。
    行内紧凑节奏保持：glyph 14px 与 caption 字号同高，flex 自然居中。 */

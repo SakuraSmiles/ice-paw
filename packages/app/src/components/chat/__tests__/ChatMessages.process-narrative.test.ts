@@ -1,15 +1,19 @@
 // ChatMessages.process-narrative.test.ts — 组级过程叙述收纳回归锁
 // （2026-09-16 拍板：多轮工具回合的过程碎句收进「过程叙述 · N 段」折叠行，
 //   正文中区只留末段正文；展开=过程段回 item 原位，时间线与工具行交错复原。
-//   同日二轮两修：末段收束门控——末段碎句（冒号/截断收尾）组不收纳、全段直显
-//   （用户拍板「啰嗦总比偷偷干活没人知道好」）；空壳治理——收纳后无可见内容
-//   的 item 整个不渲染（旧形态空 .message-item×12px 轮距堆出 380px+ 空白））。
+//   同日三轮演进：二轮末段收束门控已**退役**（dev 实测碎句组全段直显依旧
+//   「偏多偏杂」+ 生产库实证截断决定形态——异常终态大组 95% 冒号收尾，猜形态
+//   = 猜不准）；三轮换轴 = 默认收纳全部 ≥3 段组 + 组后用户以「继续」续跑的
+//   截断组换「回合被截断 · N 段过程」warning 标注（碎句尾段被语境化，不再
+//   冒充结论）。空壳治理保留——收纳后无可见内容的 item 整个不渲染（旧形态
+//   空 .message-item×12px 轮距堆出 380px+ 空白）。）
 //
-// 锁死九点：≥3 段且末段完整收尾默认折叠（只末段在场，折叠行恰一条）/
-// 展开回原位+收起态 / 2 段不收纳（轻量实质正文不动）/ 生成中不收纳
-// （frozen-round）/ 末段=最后有 content 的 item（末 item 纯工具轮不误判）/
-// 三区共存 DOM 序（顶思 → 过程行 → 末段正文 → 工具行）/ 末段碎句组不收纳
-// （门控）/ 折叠态空壳 item 不渲染（.message-item 计数）/ 豁免卡 item 在场。
+// 锁死十点：≥3 段默认折叠（只末段在场，折叠行恰一条）/ 展开回原位+收起态 /
+// 2 段不收纳（轻量实质正文不动）/ 生成中不收纳（frozen-round）/ 末段=最后
+// 有 content 的 item（末 item 纯工具轮不误判）/ 三区共存 DOM 序（顶思 →
+// 过程行 → 末段正文 → 工具行）/ 碎句组也默认收纳（门控退役）无后续不标截断 /
+// 截断组「继续」续跑签名 → warning 标注 / 折叠态空壳 item 不渲染
+// （.message-item 计数）/ 豁免卡 item 在场。
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { ref } from "vue";
@@ -216,9 +220,9 @@ describe("组级过程叙述收纳", () => {
     }
   });
 
-  // ===== 二轮两修（2026-09-16）：末段收束门控 + 空壳治理 =====
+  // ===== 三轮换轴（2026-09-16）：门控退役 + 截断标注；空壳治理保留 =====
 
-  it("末段碎句组不收纳（门控）：末段冒号收尾 → 无折叠行、全段直显", async () => {
+  it("碎句组也默认收纳（门控退役）：末段冒号收尾、无『继续』后续 → 普通收纳行、无截断标注", async () => {
     const w = await mountWith([
       textMsg("a1", "第一步说明："),
       textMsg("a2", "第二步说明："),
@@ -226,12 +230,39 @@ describe("组级过程叙述收纳", () => {
       textMsg("a4", "接下来执行："),
     ]);
 
-    // 被截断回合（撞轮数上限等）的末段常是「宣布下一步」的碎句——收掉过程
-    // 只留它 = 交流障碍（生产库实测大组 38% 以碎句收束）。门控判末段形态。
-    expect(w.findAll(".process-group-summary").length).toBe(0);
-    expect(w.findAll(".md").map((m) => m.text())).toEqual([
-      "第一步说明：", "第二步说明：", "第三步说明：", "接下来执行：",
+    // 二轮门控（segConcluded 形态代理）已退役：dev 实测碎句组全段直显依旧
+    // 「偏多偏杂」，且生产库实证截断决定形态——判定轴从「猜末段形态」换成
+    // 「读回合结尾事实」（groupTruncatedAfter）。无后续消息 = 拿不到续跑
+    // 签名 → 普通收纳行（碎句尾段仍直显在场）。
+    const rows = w.findAll(".process-group-summary");
+    expect(rows.length).toBe(1);
+    expect(rows[0].text()).toContain("过程叙述 · 3 段");
+    expect(w.findAll(".process-truncated").length).toBe(0);
+    expect(w.findAll(".md").map((m) => m.text())).toEqual(["接下来执行："]);
+  });
+
+  it("截断组标注：组后首条真 user 消息是「继续」→ 收纳行「回合被截断」+ warning 类", async () => {
+    const w = await mountWith([
+      textMsg("a1", "第一步说明："),
+      textMsg("a2", "第二步说明："),
+      textMsg("a3", "第三步说明："),
+      textMsg("a4", "接下来执行："), // 撞轮数上限被截断的典型碎句尾段
+      msg({ id: "u2", role: "user", content: "继续" }), // 「继续」按钮 = sendMessage('继续')
+      textMsg("a5", "续跑后的结论。"),
     ]);
+
+    // 生产实案 60/62 截断续跑全走「继续」按钮——它是截断组的形态签名。
+    // 标注把碎句尾段语境化（「回合被截断」非结论），展开仍一键回原位。
+    const rows = w.findAll(".process-group-summary");
+    expect(rows.length).toBe(1); // 第二组仅 1 段不收纳
+    expect(rows[0].text()).toContain("回合被截断 · 3 段过程");
+    expect(w.findAll(".process-truncated").length).toBe(1);
+    expect(w.findAll(".md").map((m) => m.text())).toEqual(["接下来执行：", "续跑后的结论。"]);
+
+    // 展开态 = 事实已还原到行内，标注退场（收起态标签回归）
+    await rows[0].trigger("click");
+    expect(rows[0].text()).toContain("收起 · 3 段过程叙述");
+    expect(w.findAll(".process-truncated").length).toBe(0);
   });
 
   it("空壳治理：折叠态无可见内容的 item 不渲染（.message-item 只剩末段 item）", async () => {
