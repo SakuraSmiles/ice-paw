@@ -194,7 +194,7 @@
 | U3-3 | **ChatMessages 第一刀**：三胶囊 + 思考聚合 + 工具折叠 + 过程收纳段抽 MessageGroupCapsules 子组件 + 纯函数下沉 utils（约束：六份专项测试断言面零破坏） | 中 | ✅ 已修（c465063）：抽 MessageGroupCapsules 纯展示子组件（三胶囊+思考堆叠）+ transferKey/thinkSegLabel 下沉 utils/groupCollapse.ts；六份专项测试 60 用例零破坏 + 新增 7 纯函数单测 |
 | U3-4 | crypto.rs 474 行零测试（XChaCha20-Poly1305 加解密 + blake2b 密钥派生，与 K1 同域）——补单测 | 中 | ✅ 已修（af562d4）：crypto XChaCha20-Poly1305 加解密 + blake2b 密钥派生补单测 |
 | U3-5 | 观察升级候选（0.8.x 视余量，否则 0.9）：loop_engine 1431 行持续回涨（R-D4：697→1431 已超拆分前）再拆 / agent_cmd.rs 1841 God module（trait+SQL+DTO+yaml 镜像+频道级联同居）/ chat.ts 三份流式复位清单手工同步 / composables 两对复制（事件接线脚手架、分页三件套）抽象 | 中 | ✅ 已修（12acade + 35987d6 + 43a0ada + a711863）：① chat.ts 流式复位清单收敛单一真相源 ② composables 两对复制抽象（事件接线脚手架 + 分页三件套） ③ agent_cmd 拆 God module 为目录模块（trait/DTO·校验·yaml 镜像·SQL·mock 五面） ④ loop_engine 再拆终止收尾与 doom 扫描（termination + scan_and_nudge） |
-| U3-6 | 视觉令牌存量收编（渐进、一次一个组件域防 CSS 回归无测试网）：间距裸 px 646 处 58 文件（布局级 gap≥4px 174 处）/ hex 47 处 19 文件（#fff×16、AttachmentDetail Tailwind 原色、TrajectoryTimeline cssVar 二参回退）/ 非 token 字号 30 处（ErrorBanner 11.5/12.5px 脱档最刺眼）/ ✕✓✦ 文本字形 6 处——Q14/Q15 计数刷新，轨迹族 z-index 8 处聚集地已定位 | 低（体量大） | 留 0.9（拍板） |
+| U3-6 | 视觉令牌存量收编（渐进、一次一个组件域防 CSS 回归无测试网）：间距裸 px 646 处 58 文件（布局级 gap≥4px 174 处）/ hex 47 处 19 文件（#fff×16、AttachmentDetail Tailwind 原色、TrajectoryTimeline cssVar 二参回退）/ 非 token 字号 30 处（ErrorBanner 11.5/12.5px 脱档最刺眼）/ ✕✓✦ 文本字形 6 处——Q14/Q15 计数刷新，轨迹族 z-index 8 处聚集地已定位 | 低（体量大） | 🔶 0.9 首批切片已修（6df33f7）：✕✓✦ 字形 6 处全 Lucide 化 + 轨迹族 z-index 8 处 → --ip-z-* + ErrorBanner 脱档字号 3 处 → --ip-text-* + 新增 --ip-doc-* 文档辨识色令牌（AttachmentDetail/ChatMessages 同源收编 Tailwind 原色）。余（随 0.9.x 滚动）：间距裸 px 646 处、hex 剩余（#fff ~14 + cssVar 二参回退）、非 token 字号 ~27 处、AttachmentDetail ▾▸ 箭头字形 |
 
 ### U2-1 只读普查结论（2026-09-17 生产库取证）
 
