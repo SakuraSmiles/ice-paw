@@ -472,3 +472,99 @@ pub fn decrypt_blob(blob: &[u8]) -> AppResult<Vec<u8>> {
         ))
     })
 }
+
+// =========================================================================
+// 单元测试（U3-4：XChaCha20-Poly1305 加解密 + blake2b 密钥派生，此前零测试）
+// =========================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 密钥派生确定性——启动恢复 / 解密依赖「同 passphrase 必得同 key」。
+    #[test]
+    fn derive_stronghold_key_is_32_bytes_and_deterministic() {
+        let a = derive_stronghold_key(DEFAULT_PASSPHRASE.as_bytes());
+        let b = derive_stronghold_key(DEFAULT_PASSPHRASE.as_bytes());
+        assert_eq!(a.len(), STRONGHOLD_KEY_LEN);
+        assert_eq!(a, b);
+        // 不同 passphrase → 不同 key（128-bit 碰撞概率可忽略）
+        assert_ne!(a, derive_stronghold_key(b"some-other-passphrase"));
+    }
+
+    /// domain separation：memory_store 与 Stronghold vault 的 key 必须互不复用。
+    #[test]
+    fn memory_key_domain_separated_from_stronghold_key() {
+        let sh = derive_stronghold_key(DEFAULT_PASSPHRASE.as_bytes());
+        let mem = derive_memory_key();
+        assert_eq!(mem.len(), MEMORY_KEY_LEN);
+        assert_ne!(sh, mem, "两个用途的 key 因 domain 拼接而互不复用");
+    }
+
+    /// 往返：各种形态的明文（空 / 短 / 二进制 / 4KB / 中文）加密后都能无损解回。
+    #[test]
+    fn encrypt_decrypt_roundtrip_various_inputs() {
+        for plaintext in [
+            &b""[..],                         // 空明文 → 40 字节最小 BLOB
+            b"hello",
+            b"\x00\x01\x02\xff\xfe".as_slice(),
+            &[0xAAu8; 4096],                  // 4KB 二进制
+            "中文 UTF-8 内容".as_bytes(),
+        ] {
+            let blob = encrypt_blob(plaintext).unwrap();
+            assert_eq!(
+                blob.len(),
+                MEMORY_BLOB_MIN_LEN + plaintext.len(),
+                "BLOB 布局 = nonce 24B + 密文 + tag 16B"
+            );
+            assert_eq!(decrypt_blob(&blob).unwrap(), plaintext);
+        }
+    }
+
+    /// 每次加密用全新 nonce——同一明文两次加密得不同密文（随机碰撞 ~2^-192）。
+    #[test]
+    fn encrypt_uses_fresh_nonce_each_call() {
+        let plaintext = b"same plaintext";
+        let a = encrypt_blob(plaintext).unwrap();
+        let b = encrypt_blob(plaintext).unwrap();
+        assert_ne!(a, b);
+        assert_eq!(decrypt_blob(&a).unwrap(), plaintext);
+        assert_eq!(decrypt_blob(&b).unwrap(), plaintext);
+    }
+
+    /// 长度不足（< nonce+tag）→ Validation，且不 panic。
+    #[test]
+    fn decrypt_rejects_short_blob() {
+        let err = decrypt_blob(&[0u8; MEMORY_BLOB_MIN_LEN - 1]).unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
+    }
+
+    /// 密文被篡改（翻转末字节）→ Poly1305 tag 校验失败 → Validation。
+    #[test]
+    fn decrypt_rejects_tampered_ciphertext() {
+        let mut blob = encrypt_blob(b"secret data").unwrap();
+        let last = blob.len() - 1;
+        blob[last] ^= 0x01;
+        assert!(matches!(decrypt_blob(&blob), Err(AppError::Validation(_))));
+    }
+
+    /// 非本 key 加密（用不同 domain 派生的 key 造 BLOB）→ 认证失败。
+    #[test]
+    fn decrypt_rejects_wrong_key() {
+        type Blake2b256 = Blake2b<blake2::digest::consts::U32>;
+        let mut hasher = Blake2b256::new();
+        hasher.update(b"some-other-key-domain");
+        let wrong_key = hasher.finalize();
+        let cipher = XChaCha20Poly1305::new(Key::from_slice(&wrong_key));
+        let mut nonce_bytes = [0u8; MEMORY_NONCE_LEN];
+        OsRng.fill_bytes(&mut nonce_bytes);
+        let ct = cipher
+            .encrypt(XNonce::from_slice(&nonce_bytes), b"payload".as_slice())
+            .unwrap();
+        let mut blob = Vec::new();
+        blob.extend_from_slice(&nonce_bytes);
+        blob.extend_from_slice(&ct);
+
+        assert!(matches!(decrypt_blob(&blob), Err(AppError::Validation(_))));
+    }
+}
