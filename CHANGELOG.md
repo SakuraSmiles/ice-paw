@@ -2,6 +2,30 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/)，版本号遵循 [SemVer](https://semver.org/)。
 
+## [0.8.6] — 2026-09-17
+
+> 从 0.8.2 以来的全工程体检批次 U 一次发版收口（0.8.3 快修 / 0.8.4 稳定性 / 0.8.5 数据生命周期 / 0.8.6 架构刀与测试补课）。U3-6 视觉令牌收编留 0.9。
+
+### Added
+
+- **图片外置（DB 膨胀根治）**：图片类 tool_result 的 base64 不再内联进 `content_blocks`（单条最大 9MB，一周把库从 212MB 撑到 737MB），改为内容寻址外置到 `<data_dir>/images/`（blake2b 去重，同字节同文件），DB 只留指针、读侧水合回内联、文件缺失降级诚实提示；存量由 boot 后台一次性扫尾。库从 703MB 瘦回 ~90MB，字节零损。*.bak 迁移安全网快照（~1.6GB）由 boot 扫尾按 7 天保留清理。
+- **CI 接入前端 vitest**：此前 80 个前端测试文件从未进过 CI（ci.yml frontend job 无 test 步骤），现 `pnpm -r test` 进 CI，并补 `session_event_log_e2e` / `session_reconcile_e2e` 两个集成测试文件。
+- **展示字体 LXGW WenKai 接电**：~90 个 @font-face 分片从未被 import、真机恒静默回退宋体——补 import 后展示字体真机生效。
+
+### Fixed
+
+- **WebView2 创建失败即崩溃**：生产三次 HRESULT 0x8007139F → panic 闪退；改为可读三段式对话框（发生了什么 + 为什么 + 怎么办）+ 兜底日志 + 退出码 1（非瞬态不做进程内重试，指引重装运行时）。
+- **sendingConvId 漂移误杀活回合**：后台会话恢复只置 sending 不设 id、后台 done 早退不清，第二条消息打进运行中回合被静默拒；恢复同步 id + 清陈旧 id。
+- **前端核心路径失败静默族**：会话/消息加载失败空白列表、新建会话点击零反馈、项目成员·归档·删除失败无提示——统一 loadError / banner 可见化。
+- **频道会话 reconcile_diffs 非绿**：选举投票行按事件 turn 前缀跳过归因，消假 MISSING_IN_DERIVED 告警。
+- **会话标题改名**：blur 即存 + 失败零反馈 → 草稿 + 显式保存 + 失败可见（编辑契约最后真负债收口）；项目成员 chips 同步迁显式保存。
+- **其他修复**：CI clippy 红（collapsible_match 收拢，本地/CI 工具链版本漂移教训）、loadMoreMessages 往返守卫失效、channel_cmd 统筹移除吞错、GroupedSelect 焦点环、McpSettings 警告块令牌化、日志体积卫生（工具名列表截断 + stderr 横幅去重）。
+
+### Changed
+
+- **架构刀四批**（可维护性，零行为变化）：agent_yaml 六连同步 IO 收敛单一原子改写 helper；两处层次倒置修复（降级链计划下沉 harness、LlmProvider trait 归 infra/protocol 破环）；ChatMessages 抽 MessageGroupCapsules 子组件 + 纯函数下沉；chat.ts 三份流式复位清单收敛单一真相源；composables 两对复制抽象；agent_cmd 拆 God module 为目录模块；loop_engine 再拆终止收尾与 doom 扫描。
+- **测试补课**：crypto XChaCha20-Poly1305 加解密 + blake2b 密钥派生补单测。
+
 ## [0.8.2] — 2026-09-17
 
 > 从 0.8.1 以来的主要调整：**工具集权限 tool_scopes**（按 Agent 开放/收窄工具面）+ **工具输出全局治理**（UE5 截图 base64 提取 + 截断兜底）+ **聊天区长回合展示组合拳**（思考聚合/工具折叠/过程收纳三胶囊）+ **滚动与回合制分页整线**。
