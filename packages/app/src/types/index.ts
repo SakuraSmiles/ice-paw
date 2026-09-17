@@ -923,6 +923,8 @@ export interface ScreenChannelState {
   paused: boolean;
   opened_at: number | null;
   hud_monitor: number;
+  /** HUD 工具栏窗 + 红边框窗是否就绪（主线程创建成功后 true；失败/未建 false） */
+  hud_ready: boolean;
   attached: ScreenChannelAttached[];
   holder: string | null;
   queue: string[];

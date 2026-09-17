@@ -53,9 +53,9 @@ pub async fn screen_channel_open(
         conv = %conversation_id, agent = %info.agent_name, newly_opened = newly,
         "屏幕通道开启/附着（用户开关）"
     );
-    if newly {
-        hud::ensure_windows(&app);
-    }
+    // 无条件 ensure（不只 newly）：已 Active 时窗口若缺失则补建——自愈
+    // 「Active 且窗口缺失」；已存在则只重定位（幂等）。
+    hud::ensure_windows(&app);
     Ok(ch.snapshot())
 }
 

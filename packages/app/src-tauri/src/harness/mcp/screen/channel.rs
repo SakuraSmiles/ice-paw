@@ -99,6 +99,9 @@ pub struct ScreenChannelState {
     /// 开启时刻（unix 秒；HUD 时长显示用，无自动过期 §4.6）。
     pub opened_at: Option<u64>,
     pub hud_monitor: usize,
+    /// HUD 工具栏窗 + 红边框窗是否就绪（主线程创建成功后置 true；失败/未建
+    /// 为 false）。治「已激活但无窗」的静默——前端据此提示可见性未就绪。
+    pub hud_ready: bool,
     /// 按 conv_id 稳定排序（HashMap 序不定，负载须可断言/可渲染稳定）。
     pub attached: Vec<AttachedConv>,
     /// 写者令牌持有会话（步骤 3 起有值）。
@@ -120,6 +123,7 @@ impl ScreenChannelState {
             paused: false,
             opened_at: None,
             hud_monitor: 0,
+            hud_ready: false,
             attached: Vec::new(),
             holder: None,
             queue: Vec::new(),
@@ -143,6 +147,9 @@ struct Active {
     /// HUD 所在显示器索引（步骤 2；序号属 tauri available_monitors，与 GDI
     /// backend.monitors 顺序无对应关系——HUD 定位是窗口层自治域）。
     hud_monitor: usize,
+    /// HUD/红边框两扇窗是否已就绪（hud.rs 主线程创建成功后回写；Off→Active
+    /// 初始为 false，创建完成或失败才翻转——治「已激活但无窗」的静默）。
+    hud_ready: bool,
     /// 写件执行中计数（B7：>0 = HUD 收缩。写件执行全程含 gate 排队——排队/
     /// human park 期间收缩同样是「给用户让路」，语义反而更贴切）。
     write_in_flight: u64,
@@ -190,6 +197,7 @@ impl Active {
             token: WriteToken::Free,
             queue: VecDeque::new(),
             hud_monitor: 0,
+            hud_ready: false,
             write_in_flight: 0,
         }
     }
@@ -526,6 +534,18 @@ impl ScreenChannel {
         self.lock().as_ref().map_or(0, |a| a.hud_monitor)
     }
 
+    /// 回写 HUD/红边框就绪态（hud.rs 主线程创建完成后调用；Off 状态 no-op——
+    /// 通道已清空无 Active 可写）。真值变化才 bump（低频：开/关/自愈各一次）。
+    pub fn set_hud_ready(&self, ready: bool) {
+        let changed = self
+            .lock()
+            .as_mut()
+            .is_some_and(|a| std::mem::replace(&mut a.hud_ready, ready) != ready);
+        if changed {
+            self.bump();
+        }
+    }
+
     /// 写件执行开始（B7 写操作避让）：write_in_flight +1 → HUD 收缩。
     /// 计数翻转 bump 广播（HUD 需即时收缩，等 1s 轮询会闪整条）。
     pub fn note_write_begin(&self) {
@@ -658,6 +678,7 @@ impl ScreenChannel {
                     paused: a.paused,
                     opened_at: Some(a.opened_at_unix),
                     hud_monitor: a.hud_monitor,
+                    hud_ready: a.hud_ready,
                     attached,
                     holder: match &a.token {
                         WriteToken::Free => None,
@@ -1360,6 +1381,25 @@ mod tests {
         let s = ch.snapshot();
         assert_eq!(s.status, "off");
         assert!(!s.writing);
+    }
+
+    #[test]
+    fn set_hud_ready_reflects_in_snapshot_and_noop_when_off() {
+        let ch = ScreenChannel::new();
+        // Off 初始 false；Off 状态回写 no-op（无 Active 可写）
+        assert!(!ch.snapshot().hud_ready);
+        ch.set_hud_ready(true);
+        assert!(!ch.snapshot().hud_ready);
+
+        // Active 初始 false（窗口创建完成前）；回写 true 后 snapshot 如实上报
+        ch.open("c1", info("a"));
+        assert!(!ch.snapshot().hud_ready);
+        ch.set_hud_ready(true);
+        assert!(ch.snapshot().hud_ready);
+
+        // stop 清空回 off 形态，hud_ready 归 false（残留不携带）
+        ch.stop();
+        assert!(!ch.snapshot().hud_ready);
     }
 
     #[test]

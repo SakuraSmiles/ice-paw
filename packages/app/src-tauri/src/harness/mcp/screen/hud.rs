@@ -8,8 +8,15 @@
 //!   danger 描边——「屏幕正在被共享」的持续可见信号。内容 = `/screen-frame`
 //!   纯 CSS 页，零交互零权限。
 //!
-//! 全部 best-effort：窗口层失败只 warn 不反噬通道状态（通道是授权与仲裁的
-//! 单位，可见性是锦上添花——A7 同款分层思路）。
+//! 全部 best-effort：窗口层失败不反噬通道状态（通道是授权与仲裁的单位，可见
+//! 性是锦上添花——A7 同款分层思路），但失败**不再静默**：error 级日志 + 通道
+//! 快照 `hud_ready=false`，前端据此提示「已激活但可见信号未就绪」。
+//!
+//! ⚠️ 线程纪律（2026-09-17 修复）：WebView2 窗口创建必须跑主线程——async
+//! 命令上下文是 tokio worker 线程，其上 `WebviewWindowBuilder::build()` 报
+//! 0x8007139F（组状态不可用）必败。`ensure_windows`/`move_hud` 经
+//! `run_on_main_thread` 派发；已有窗口的重定位/重整形走 tao 内部派发，无需
+//! 手动上主线程。
 //!
 //! ⚠️ Rust 侧窗口 API 不受 capability 约束（ACL 只 gate 前端 invoke/plugin
 //! 命令）；HUD 页需要的 `core:event:default` 在 capabilities/screen-hud.json。
@@ -32,18 +39,49 @@ const HUD_TOP_MARGIN_PX: i32 = 12;
 const MINI_W: f64 = 132.0;
 const MINI_H: f64 = 28.0;
 
-/// 确保两扇窗存在（通道 Off→Active 时调用；已存在则只重定位，幂等）。
-/// 创建顺序：先 frame 后 HUD（后建者在上——HUD 必须压住红边框可点）。
+/// 确保两扇窗存在（通道 Active 时调用；已存在则只重定位，幂等——每次附着/
+/// 打开都调 = 自愈「Active 且窗口缺失」）。创建顺序：先 frame 后 HUD（后建者
+/// 在上——HUD 必须压住红边框可点）。整段派发主线程（WebView2 build 需主线程）。
 pub fn ensure_windows(app: &tauri::AppHandle) {
+    let main = app.clone();
+    if let Err(e) = app.run_on_main_thread(move || {
+        ensure_windows_on_main(&main);
+    }) {
+        tracing::error!(
+            target: "ice_paw.screen_channel",
+            error = %e,
+            "HUD 窗主线程派发失败——屏幕共享已开启但 HUD/红边框未就绪"
+        );
+        channel::global().set_hud_ready(false);
+    }
+}
+
+/// 主线程内执行：枚举显示器 + 建 frame + 建 HUD，读回就绪态写回通道快照。
+fn ensure_windows_on_main(app: &tauri::AppHandle) {
     let monitors = match app.available_monitors() {
         Ok(m) if !m.is_empty() => m,
         _ => {
-            tracing::warn!(target: "ice_paw.screen_channel", "HUD 窗创建跳过：拿不到显示器列表");
+            tracing::error!(
+                target: "ice_paw.screen_channel",
+                "HUD 窗创建失败：拿不到显示器列表——屏幕共享已开启但无可见信号"
+            );
+            channel::global().set_hud_ready(false);
             return;
         }
     };
     ensure_frame(app, &monitors);
     ensure_hud(app, &monitors, channel::global().hud_monitor());
+    // 就绪判据 = 两扇窗都已建出（get_webview_window 命中）。build 失败已在
+    // ensure_* 内 error 级披露，这里补一道「建了仍缺失」的收口兜底。
+    let ready = app.get_webview_window(FRAME_LABEL).is_some()
+        && app.get_webview_window(HUD_LABEL).is_some();
+    if !ready {
+        tracing::error!(
+            target: "ice_paw.screen_channel",
+            "HUD/红边框窗创建后仍缺失（frame/ HUD 至少一扇未就绪）"
+        );
+    }
+    channel::global().set_hud_ready(ready);
 }
 
 /// 摧毁两扇窗（通道 Active→Off 时调用；不存在则无事，幂等）。
@@ -57,13 +95,17 @@ pub fn destroy_windows(app: &tauri::AppHandle) {
     }
 }
 
-/// HUD 切显示器（cycle 命令调用）：重定位到目标显示器顶部居中。
+/// HUD 切显示器（cycle 命令调用）：重定位到目标显示器顶部居中。派发主线程
+/// （ensure_hud 缺窗时会补建，build 需主线程——与 ensure_windows 同纪律）。
 pub fn move_hud(app: &tauri::AppHandle, index: usize) {
-    let monitors = match app.available_monitors() {
-        Ok(m) if !m.is_empty() => m,
-        _ => return,
-    };
-    ensure_hud(app, &monitors, index);
+    let main = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let monitors = match main.available_monitors() {
+            Ok(m) if !m.is_empty() => m,
+            _ => return,
+        };
+        ensure_hud(&main, &monitors, index);
+    });
 }
 
 /// HUD 窗形态切换（B7 写避让 / 手动收起，前端按 writing/collapsed 态驱动）：
@@ -137,7 +179,7 @@ fn ensure_hud(app: &tauri::AppHandle, monitors: &[tauri::Monitor], index: usize)
     match built {
         Ok(_) => tracing::info!(target: "ice_paw.screen_channel", index, "HUD 工具栏窗已创建"),
         Err(e) => {
-            tracing::warn!(target: "ice_paw.screen_channel", error = %e, "HUD 工具栏窗创建失败")
+            tracing::error!(target: "ice_paw.screen_channel", error = %e, "HUD 工具栏窗创建失败")
         }
     }
 }
@@ -191,7 +233,7 @@ fn ensure_frame(app: &tauri::AppHandle, monitors: &[tauri::Monitor]) {
     let win = match built {
         Ok(win) => win,
         Err(e) => {
-            tracing::warn!(target: "ice_paw.screen_channel", error = %e, "红边框窗创建失败");
+            tracing::error!(target: "ice_paw.screen_channel", error = %e, "红边框窗创建失败");
             return;
         }
     };

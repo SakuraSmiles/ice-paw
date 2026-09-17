@@ -293,8 +293,11 @@ async function togglePin() {
 const screenAttachedHere = computed(() =>
   screenChannel.isAttached(chat.activeConversation?.id),
 );
+/** 通道已开启但 HUD/红边框未就绪（窗口创建失败或尚未完成）——治静默激活 */
+const screenUnready = computed(() => screenChannel.isOn && !screenChannel.state.hud_ready);
 const screenBtnTitle = computed(() => {
   if (!screenChannel.isOn) return "开启屏幕共享：本会话可直接截屏与操作屏幕（免逐次授权）";
+  if (screenUnready.value) return "屏幕共享已开启，但 HUD/红边框未就绪——共享仍生效，仅可见提示不可用";
   if (screenAttachedHere.value) return "屏幕共享中——点击关闭（所有会话退出共享）";
   return "加入屏幕共享：本会话同样免逐次授权";
 });
@@ -492,7 +495,7 @@ async function toggleScreenShare() {
       <!-- 屏幕共享通道开关（批次④ 步骤 1）：附着态图标常显主色（状态可见） -->
       <button
         class="header-btn screen-btn"
-        :class="{ active: screenAttachedHere }"
+        :class="{ active: screenAttachedHere, unready: screenUnready }"
         :title="screenBtnTitle"
         :disabled="screenChannel.busy"
         @click="toggleScreenShare"
@@ -655,6 +658,8 @@ async function toggleScreenShare() {
 .screen-btn svg { color: var(--ip-color-text-tertiary); }
 .screen-btn:hover svg { color: var(--ip-color-text-primary); }
 .screen-btn.active svg { color: var(--ip-primary-500); }
+/* 通道已开启但 HUD/红边框未就绪：warning 语义色警示（共享仍生效，仅可见信号缺失） */
+.screen-btn.unready svg { color: var(--ip-warning-base); }
 .screen-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 /* ===== 外置星标（UX #9）：确认条展开时淡出让位（布局不动，条覆盖其上） ===== */
 .pin-btn { transition:opacity var(--ip-duration-fast) var(--ip-ease-out), background-color var(--ip-duration-fast) var(--ip-ease-out), color var(--ip-duration-fast) var(--ip-ease-out); }

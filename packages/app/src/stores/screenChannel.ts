@@ -15,6 +15,7 @@ const OFF_STATE: ScreenChannelState = {
   paused: false,
   opened_at: null,
   hud_monitor: 0,
+  hud_ready: false,
   attached: [],
   holder: null,
   queue: [],

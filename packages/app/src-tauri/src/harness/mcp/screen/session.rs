@@ -68,10 +68,10 @@ impl McpClient for RequestScreenSessionTool {
             "屏幕通道开启/附着（request_screen_session 用户批准）"
         );
         // 状态广播由 open 的 bump 自动完成（步骤 2 起通道内建 broadcaster）。
-        if newly {
-            if let Some(app) = &ctx.app_handle {
-                super::hud::ensure_windows(app);
-            }
+        // 无条件 ensure（不只 newly）：已 Active 时窗口若缺失则补建（自愈），
+        // 已存在则只重定位——与页面开关路径同纪律（hud::ensure_windows 幂等）。
+        if let Some(app) = &ctx.app_handle {
+            super::hud::ensure_windows(app);
         }
         let msg = if newly {
             "屏幕共享通道已开启，本会话已附着——截屏与操作工具即刻起免逐次授权，可连续操作屏幕。\
