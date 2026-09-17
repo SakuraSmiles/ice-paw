@@ -842,4 +842,74 @@ describe("chatStore", () => {
       expect(store.turnRoundRenewals).toBe(false);
     });
   });
+
+  describe("U3-5 ① 流式复位清单单一真相源", () => {
+    /** 灌满流式核心/思考结论态/工具调用/回合锚点，供复位断言「全清、零漂移」。 */
+    function seedStreamingState(store: ReturnType<typeof useChatStore>) {
+      store.sending = true;
+      store.streamingText = "partial text";
+      store.streamingThinking = "thinking…";
+      store.thinkingStartTime = 1_700_000_000_000;
+      store.thinkingDuration = "30s";
+      store.lastThinkingContent = "some thinking";
+      store.sendingConvId = "c1";
+      store.turnFirstIdx = 0;
+      store.streamingToolCalls = new Map([
+        ["tc-1", { id: "tc-1", name: "read_file", arguments: "{}", ended: true, result: null }],
+      ]);
+      store.bgStreams = new Map([["c2", { text: "bg", thinking: "" }]]);
+    }
+
+    it("reset()：流式核心 + 思考结论态 + 工具调用 + 回合锚点全清（此前漏清 streamingToolCalls）", () => {
+      const store = useChatStore();
+      store.conversations = [fakeConv("c1")];
+      store.activeConvId = "c1";
+      seedStreamingState(store);
+
+      store.reset();
+
+      expect(store.streamingText).toBe("");
+      expect(store.streamingThinking).toBe("");
+      expect(store.thinkingStartTime).toBeNull();
+      expect(store.streamingToolCalls.size).toBe(0);
+      expect(store.thinkingDuration).toBeNull();
+      expect(store.lastThinkingContent).toBeNull();
+      expect(store.sending).toBe(false);
+      expect(store.sendingConvId).toBeNull();
+      expect(store.turnFirstIdx).toBeNull();
+      expect(store.bgStreams.size).toBe(0);
+    });
+
+    it("clearActiveConversation()：思考结论态 + 回合锚点全清（此前漏清 thinkingDuration/lastThinkingContent 与锚点）", () => {
+      const store = useChatStore();
+      store.conversations = [fakeConv("c1")];
+      store.activeConvId = "c1";
+      seedStreamingState(store);
+
+      store.clearActiveConversation();
+
+      expect(store.streamingText).toBe("");
+      expect(store.streamingThinking).toBe("");
+      expect(store.streamingToolCalls.size).toBe(0);
+      expect(store.thinkingDuration).toBeNull();
+      expect(store.lastThinkingContent).toBeNull();
+      expect(store.sendingConvId).toBeNull();
+      expect(store.turnFirstIdx).toBeNull();
+    });
+
+    it("clearActiveConversation()：保留 conversations 列表与草稿（切空间语义——只清激活会话运行时）", () => {
+      const store = useChatStore();
+      store.conversations = [fakeConv("c1")];
+      store.activeConvId = "c1";
+      store.draftText = "未发送的草稿";
+      seedStreamingState(store);
+
+      store.clearActiveConversation();
+
+      expect(store.conversations).toHaveLength(1);
+      expect(store.draftText).toBe("未发送的草稿");
+      expect(store.activeConvId).toBeNull();
+      expect(store.messages).toHaveLength(0);
+    });
+  });
 });

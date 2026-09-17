@@ -597,10 +597,7 @@ export const useChatStore = defineStore("chat", () => {
       m.delete(activeConvId.value);
       lastErrors.value = m;
     }
-    streamingText.value = "";
-    streamingThinking.value = "";
-    streamingToolCalls.value = new Map();
-    thinkingStartTime.value = null;
+    resetRoundStreaming(); // 流式核心复位走单一切入点（text/thinking/toolCalls/thinkingStartTime）
     thinkingDuration.value = null;
     lastThinkingContent.value = null;
     lastFinishReason.value = null;
@@ -924,49 +921,45 @@ export const useChatStore = defineStore("chat", () => {
     return conv;
   }
 
-  function reset() {
-    // 事件监听器由 useChatEvents 管理（App.vue 卸载时拆卸）；这里只清状态 + 超时
+  /** 会话运行时状态整体复位（reset 全清与 clearActiveConversation 切空间共用）。
+   *  U3-5 ①：三份流式复位清单收敛单一真相源——reset / clearActiveConversation 曾
+   *  各自手抄一份流式字段，逐字段漂移（reset 漏清 streamingToolCalls，
+   *  clearActiveConversation 漏清 thinkingDuration / lastThinkingContent 与回合锚点，
+   *  把上一会话/上一空间的流式与思考状态泄漏进新视图）。流式核心走
+   *  resetRoundStreaming、回合锚点走 clearTurnAnchors；思考结论态
+   *  （thinkingDuration / lastThinkingContent）整体清场时显式清——轮末仍需保留
+   *  供展开查看，故不并入 resetRoundStreaming。 */
+  function resetSessionRuntimeState() {
     clearSendTimeout();
-    conversations.value = [];
     activeConvId.value = null;
     messages.value = [];
     sending.value = false;
     clearTurnAnchors();
-    streamingText.value = "";
-    streamingThinking.value = "";
-    thinkingStartTime.value = null;
+    resetRoundStreaming();
     thinkingDuration.value = null;
     lastThinkingContent.value = null;
     bgStreams.value = new Map();
     pendingProposals.value = new Map();
     pendingAuthRequests.value = new Map();
-    draftText.value = "";
     pendingRefs.value = [];
     channelView.value = null;
     clearChannelQueuedNotice();
     openTrajectoryNext.value = false;
   }
 
+  function reset() {
+    // 事件监听器由 useChatEvents 管理（App.vue 卸载时拆卸）；这里只清状态 + 超时
+    conversations.value = [];
+    resetSessionRuntimeState();
+    draftText.value = "";
+  }
+
   /** 清除当前选中会话（切项目空间时调用）：保留 conversations 列表与草稿，
    *  只重置激活会话相关状态，让右侧回到「欢迎/新建会话」态，不携带上个空间的会话。*/
   function clearActiveConversation() {
-    clearSendTimeout();
-    activeConvId.value = null;
-    messages.value = [];
-    sending.value = false;
-    streamingText.value = "";
-    streamingThinking.value = "";
-    thinkingStartTime.value = null;
-    streamingToolCalls.value = new Map();
+    resetSessionRuntimeState();
     lastFinishReason.value = null;
     clearBudget();
-    bgStreams.value = new Map();
-    pendingProposals.value = new Map();
-    pendingAuthRequests.value = new Map();
-    pendingRefs.value = [];
-    channelView.value = null;
-    clearChannelQueuedNotice();
-    openTrajectoryNext.value = false;
   }
 
 
