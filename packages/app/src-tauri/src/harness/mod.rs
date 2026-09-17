@@ -22,6 +22,7 @@ pub mod derive;
 pub mod doc;
 pub mod error_mapping;
 pub mod event_log;
+pub mod fallback_plan;
 pub mod hooks;
 pub mod inbox;
 pub mod kb;

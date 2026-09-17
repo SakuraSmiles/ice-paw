@@ -533,7 +533,7 @@ pub async fn consume_pending(
         source_agent_name: payload.source_agent_name.clone(),
     };
     let fallback =
-        crate::commands::model_profile_cmd::production_fallback_plan(app, pool, &creds.agent);
+        crate::harness::fallback_plan::production_fallback_plan(app, pool, &creds.agent);
 
     let done_rx = session_runner::run_agent_turn(
         &TurnEnv {

@@ -1365,7 +1365,7 @@ async fn run_next_hop(
         let brief = compose_channel_brief(&brief_spec, &roster);
         let brief_text = ContentBlock::join_text(&brief);
         let fallback =
-            crate::commands::model_profile_cmd::production_fallback_plan(app, pool, &creds.agent);
+            crate::harness::fallback_plan::production_fallback_plan(app, pool, &creds.agent);
 
         // fire-and-forget：完成信号 drop（chat_cmd 用户路径同款），后续跳由
         // turn_ended watcher 驱动——本函数不等待回合完成。

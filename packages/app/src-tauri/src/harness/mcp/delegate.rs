@@ -554,7 +554,7 @@ impl McpClient for DelegateTool {
                 // 降级链（0.7 批 A 继承）：专家 agent 自己的链优先；无链时继承
                 // 父（统筹）agent 的降级链——委派子会话与用户回合同权降级，
                 // 链尽走原终态。父行读取失败降级为无链，不阻塞委派
-                fallback: crate::commands::model_profile_cmd::delegation_fallback_plan(
+                fallback: crate::harness::fallback_plan::delegation_fallback_plan(
                     &app,
                     &ctx.pool,
                     &creds.agent,
