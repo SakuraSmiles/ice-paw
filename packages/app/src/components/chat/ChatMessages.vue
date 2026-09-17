@@ -2044,11 +2044,11 @@ const RESUMABLE_REASONS = new Set([
 .att-icon {
   flex:none; width:26px; height:26px; border-radius:6px;
   display:flex; align-items:center; justify-content:center;
-  font-size: var(--ip-text-micro-size); font-weight:700; color:#fff; letter-spacing:-0.5px;
+  font-size: var(--ip-text-micro-size); font-weight:700; color:var(--ip-color-text-on-primary); letter-spacing:-0.5px;
 }
-.att-icon[data-kind="pdf"] { background:rgba(220,38,38,0.9); }
-.att-icon[data-kind="docx"] { background:rgba(37,99,235,0.9); }
-.att-icon[data-kind="xlsx"], .att-icon[data-kind="xls"] { background:rgba(22,163,74,0.9); }
+.att-icon[data-kind="pdf"] { background:rgba(var(--ip-doc-pdf-rgb), 0.9); }
+.att-icon[data-kind="docx"] { background:rgba(var(--ip-doc-word-rgb), 0.9); }
+.att-icon[data-kind="xlsx"], .att-icon[data-kind="xls"] { background:rgba(var(--ip-doc-excel-rgb), 0.9); }
 .att-info { display:flex; flex-direction:column; min-width:0; line-height:1.35; }
 .att-name { font-size:var(--ip-text-body-sm-size); font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .att-meta { font-size: var(--ip-text-micro-size); color:var(--ip-color-text-tertiary); }

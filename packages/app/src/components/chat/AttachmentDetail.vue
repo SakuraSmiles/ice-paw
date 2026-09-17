@@ -12,6 +12,7 @@
 -->
 <script setup lang="ts">
 import { reactive } from "vue";
+import { X } from "@lucide/vue";
 
 const props = defineProps<{
   attachments: { name: string; kind: string; size: number }[];
@@ -44,7 +45,7 @@ import { useEscapeStack } from "../../composables/useEscapeStack";
       <div class="att-detail-panel" @click.stop>
         <div class="att-detail-header">
           <span class="att-detail-title">附件详情<template v-if="attachments.length > 1">（{{ attachments.length }} 个）</template></span>
-          <button class="att-detail-close" title="关闭 (Esc)" @click="emit('close')">✕</button>
+          <button class="att-detail-close" title="关闭 (Esc)" @click="emit('close')"><X :size="16" /></button>
         </div>
         <div class="att-detail-list">
           <div v-for="(att, i) in attachments" :key="i" class="att-detail-item" :class="{ open: expanded[i] }">
@@ -90,7 +91,7 @@ import { useEscapeStack } from "../../composables/useEscapeStack";
 .att-detail-close {
   width: 28px; height: 28px; border: none; border-radius: 6px;
   background: transparent; color: var(--ip-color-text-secondary);
-  cursor: pointer; font-size: 14px;
+  cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
 }
 .att-detail-close:hover { background: var(--ip-color-bg-hover); color: var(--ip-color-text-primary); }
 
@@ -106,11 +107,11 @@ import { useEscapeStack } from "../../composables/useEscapeStack";
 .att-detail-icon {
   flex: none; width: 32px; height: 32px; border-radius: 7px;
   display: flex; align-items: center; justify-content: center;
-  font-size: 13px; font-weight: 700; color: #fff;
+  font-size: 13px; font-weight: 700; color: var(--ip-color-text-on-primary);
 }
-.att-detail-icon[data-kind="pdf"] { background: #dc2626; }
-.att-detail-icon[data-kind="docx"] { background: #2563eb; }
-.att-detail-icon[data-kind="xlsx"], .att-detail-icon[data-kind="xls"] { background: #16a34a; }
+.att-detail-icon[data-kind="pdf"] { background: var(--ip-doc-pdf); }
+.att-detail-icon[data-kind="docx"] { background: var(--ip-doc-word); }
+.att-detail-icon[data-kind="xlsx"], .att-detail-icon[data-kind="xls"] { background: var(--ip-doc-excel); }
 .att-detail-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .att-detail-name {
   font-size: 13px; font-weight: 500; color: var(--ip-color-text-primary);

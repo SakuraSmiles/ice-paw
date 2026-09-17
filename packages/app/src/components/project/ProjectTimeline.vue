@@ -12,6 +12,7 @@
 -->
 <script setup lang="ts">
 import { computed, nextTick, onActivated, onMounted, ref, watch } from "vue";
+import { X } from "@lucide/vue";
 import {
   buildRows,
   chatOnlyHidden,
@@ -217,7 +218,7 @@ onActivated(async () => {
           @keydown.esc.stop.prevent="query = ''"
           @keydown.enter.stop.prevent="searchJump($event.shiftKey ? -1 : 1)"
         />
-        <button v-if="query" class="pt-search-clear" title="清空（Esc）" @click="query = ''">✕</button>
+        <button v-if="query" class="pt-search-clear" title="清空（Esc）" @click="query = ''"><X :size="12" /></button>
       </div>
 
       <button class="pt-pill-btn" :class="{ folded: anyCollapsed }" :title="anyCollapsed ? '展开所有轮次' : '折叠所有轮次'" @click="toggleTurns">
@@ -324,6 +325,7 @@ onActivated(async () => {
 }
 .pt-search input::placeholder { color: var(--ip-color-text-placeholder); }
 .pt-search-clear {
+  display: inline-flex; align-items: center; justify-content: center;
   border: none; background: none; padding: 0 2px;
   font-size: var(--ip-text-micro-size); color: var(--ip-color-text-tertiary); cursor: pointer;
   border-radius: var(--ip-radius-full); flex-shrink: 0;

@@ -11,6 +11,7 @@
 -->
 <script setup lang="ts">
 import { ref } from "vue";
+import { X } from "@lucide/vue";
 import TrajectoryKindFilter from "./TrajectoryKindFilter.vue";
 import type { FilterKey } from "../../composables/useTrajectory";
 
@@ -63,7 +64,7 @@ defineExpose({ focusSearch });
         @keydown.esc.stop.prevent="emit('update:query', '')"
         @keydown.enter.stop.prevent="emit('search-jump', $event.shiftKey ? -1 : 1)"
       />
-      <button v-if="query" class="tbar-search-clear" title="清空（Esc）" @click="emit('update:query', '')">✕</button>
+      <button v-if="query" class="tbar-search-clear" title="清空（Esc）" @click="emit('update:query', '')"><X :size="12" /></button>
     </div>
 
     <button
@@ -158,6 +159,9 @@ defineExpose({ focusSearch });
 }
 .tbar-search input::placeholder { color: var(--ip-color-text-placeholder); }
 .tbar-search-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: none;
   background: none;
   padding: 0 2px;

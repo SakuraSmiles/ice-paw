@@ -66,7 +66,7 @@ defineEmits<{ retry: []; dismiss: []; action: [] }>();
   gap: 6px;
   margin: 6px 0 0;
   padding: 0;
-  font-size: 11.5px;
+  font-size: var(--ip-text-micro-size);
   line-height: 1.5;
   color: var(--ip-danger-base);
 }
@@ -92,7 +92,7 @@ defineEmits<{ retry: []; dismiss: []; action: [] }>();
   background: var(--ip-danger-bg);
   border: 1px solid var(--ip-danger-border);
   color: var(--ip-danger-text);
-  font-size: 12.5px;
+  font-size: var(--ip-text-caption-size);
   line-height: 1.5;
 }
 .eb-icon { flex-shrink: 0; color: var(--ip-danger-base); }
@@ -105,7 +105,7 @@ defineEmits<{ retry: []; dismiss: []; action: [] }>();
   background: transparent;
   border-radius: 6px;
   padding: 3px 10px;
-  font-size: 11.5px;
+  font-size: var(--ip-text-micro-size);
   font-weight: 600;
   color: inherit;
   cursor: pointer;

@@ -381,7 +381,7 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
 .ttab-cols {
   position: sticky;
   top: 0;
-  z-index: 4;
+  z-index: var(--ip-z-badge);
   display: flex;
   align-items: center;
   gap: var(--ip-spacing-3);
@@ -405,7 +405,7 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
 .ttab-earlier {
   position: sticky;
   top: 32px;
-  z-index: 3;
+  z-index: var(--ip-z-base);
   display: flex;
   justify-content: center;
   padding: 10px 0;

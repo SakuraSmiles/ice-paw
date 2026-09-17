@@ -27,6 +27,7 @@ import MarkdownRenderer from "../chat/MarkdownRenderer.vue";
 import ImagePreview from "../chat/ImagePreview.vue";
 import { termLabel } from "../../utils/termLabels";
 import { formatTokenCount } from "../../utils/format";
+import { X, Check } from "@lucide/vue";
 
 const props = defineProps<{ row: TrajectoryRow }>();
 const emit = defineEmits<{ close: [] }>();
@@ -270,7 +271,7 @@ async function copyPayload() {
       <span v-if="ev" class="insp-kind" :class="`ev-${ev.kind}`">{{ ev.label }}</span>
       <span v-else-if="header" class="insp-kind insp-kind-head">{{ header.turnId ? `第 ${header.turnIndex + 1} 轮` : "纪元前事件" }}</span>
       <span v-if="ev" class="insp-meta">#{{ ev.seq }} · {{ ev.event.actor }} · {{ compactTime(ev.createdAt) }}</span>
-      <button class="insp-close" title="关闭" @click="emit('close')">✕</button>
+      <button class="insp-close" title="关闭" @click="emit('close')"><X :size="14" /></button>
     </header>
 
     <nav class="insp-tabs">
@@ -553,7 +554,7 @@ async function copyPayload() {
       <template v-else-if="activeTab === 'payload'">
         <div class="isec">
           <div class="ipre-toolbar">
-            <button class="ipre-copy" @click="copyPayload">{{ copied ? "已复制 ✓" : "复制 JSON" }}</button>
+            <button class="ipre-copy" @click="copyPayload"><Check v-if="copied" :size="12" />{{ copied ? "已复制" : "复制 JSON" }}</button>
           </div>
           <pre class="ipre ipre-raw">{{ rawPayload(row) }}</pre>
         </div>
@@ -582,7 +583,7 @@ async function copyPayload() {
 .insp-head {
   position: sticky;
   top: 0;
-  z-index: 2;
+  z-index: var(--ip-z-badge);
   display: flex;
   align-items: center;
   gap: var(--ip-spacing-2);
@@ -746,6 +747,9 @@ async function copyPayload() {
 .ipre-err { color: var(--ip-danger-base); }
 .ipre-raw { max-height: none; }
 .ipre-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: var(--ip-text-micro-size);
   padding: 2px 10px;
   border-radius: var(--ip-radius-full);

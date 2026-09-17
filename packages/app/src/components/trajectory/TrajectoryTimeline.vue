@@ -764,7 +764,7 @@ const labels = computed(() => LANE_LABELS.map((text, i) => ({ text, active: lane
   top: 0;
   bottom: 16px;
   width: 26px;
-  z-index: 4;
+  z-index: var(--ip-z-base);
   display: flex;
   align-items: center;
   justify-content: flex-start;
@@ -793,7 +793,7 @@ const labels = computed(() => LANE_LABELS.map((text, i) => ({ text, active: lane
   border-radius: var(--ip-radius-sm);
   box-shadow: var(--ip-shadow-sm);
   white-space: nowrap;
-  z-index: 5;
+  z-index: var(--ip-z-badge);
 }
 .tt-empty {
   position: absolute;

@@ -14,7 +14,7 @@ import { bridge } from "../../api/bridge";
 import PanelResizeHandle from "../common/PanelResizeHandle.vue";
 import EntityAvatar from "../common/EntityAvatar.vue";
 import ProjectSwitcher from "./ProjectSwitcher.vue";
-import { PanelLeftClose, PanelLeftOpen, MessagesSquare, Settings, Hash, Star } from "@lucide/vue";
+import { PanelLeftClose, PanelLeftOpen, MessagesSquare, Settings, Hash, Star, Sparkle } from "@lucide/vue";
 import { useEscapeStack } from "../../composables/useEscapeStack";
 import { reportBootProgress } from "../../utils/bootProgress";
 
@@ -355,7 +355,7 @@ function timeAgoLabel(dateStr: string): string {
     <!-- 顶部：标题 + 收起侧栏（主题钮已移 footer，2026-09-01） -->
     <div v-if="!collapsed" class="sidebar-header">
       <div class="sidebar-brand" role="button" tabindex="0" @click="router.push('/')" @keydown.enter="router.push('/')" @keydown.space.prevent="router.push('/')">
-        <span class="brand-icon">✦</span>
+        <span class="brand-icon"><Sparkle :size="20" /></span>
         <span class="brand-name">IcePaw</span>
       </div>
       <button class="btn-icon" title="收起侧边栏" @click="toggleCollapsed">

@@ -513,7 +513,7 @@ onBeforeUnmount(() => {
     color-mix(in srgb, var(--ip-color-bg-secondary) 74%, transparent) 78%,
     var(--ip-color-bg-secondary));
   pointer-events: none;
-  z-index: 1;
+  z-index: var(--ip-z-base);
   transition: opacity var(--ip-duration-fast) var(--ip-ease-out);
 }
 .traj-table-wrap.fade-off::after { opacity: 0; }
@@ -524,7 +524,7 @@ onBeforeUnmount(() => {
   top: 44px;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 6;
+  z-index: var(--ip-z-badge);
   padding: 4px 16px;
   font-size: var(--ip-text-caption-size);
   color: var(--ip-color-text-secondary);
@@ -549,7 +549,7 @@ onBeforeUnmount(() => {
   position: absolute;
   top: 40px;
   right: 16px;
-  z-index: 10;
+  z-index: var(--ip-z-badge);
   padding: 8px 14px;
   background: var(--ip-color-bg-elevated);
   border: 1px solid var(--ip-color-border-default);

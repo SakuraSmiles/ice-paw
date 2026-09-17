@@ -382,6 +382,16 @@
   --ip-info-text:    var(--ip-primary-700);
   --ip-info-border:  #9BC2E6;
 
+  /* 身份层·文档类型辨识色（v2.0，U3-6）：文件类型图标底色——pdf 红 / Word 蓝 /
+     Excel 绿。属身份层点缀（同 agent 紫），非语义层：PDF 的红 ≠ danger 错误红。
+     三主题恒值（辨识色不随明暗变化）；rgb 镜像供 alpha 合成（同 --ip-primary-*-rgb）。 */
+  --ip-doc-pdf:       #dc2626;
+  --ip-doc-word:      #2563eb;
+  --ip-doc-excel:     #16a34a;
+  --ip-doc-pdf-rgb:   220, 38, 38;
+  --ip-doc-word-rgb:  37, 99, 235;
+  --ip-doc-excel-rgb: 22, 163, 74;
+
   /* ------------------- 10. 语义层 token（组件引用的统一入口） ------------------- */
 
   /* 背景层次（§1.1.4） */
