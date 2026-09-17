@@ -12,6 +12,7 @@ use sqlx::SqlitePool;
 
 use crate::db::models::{MessageRow, NewMessage};
 use crate::error::{AppError, AppResult};
+use crate::infra::image_store;
 
 const DEFAULT_LIMIT: i64 = 100;
 const MAX_LIMIT: i64 = 1000;
@@ -47,6 +48,16 @@ AND NOT (TRIM(COALESCE(content, '')) = '' AND COALESCE(content_blocks, '') IN ('
 /// 回合 span 取行 SQL 前缀（列清单照抄 [`list_by_conversation`]——13 列全量，
 /// 与旧读路径同构）。
 const SPAN_SELECT: &str = "SELECT id, conversation_id, role, content, content_blocks, token_count, error, created_at, rowid, summary_id, model, incoming_source, sender_agent_id FROM messages WHERE conversation_id = ?";
+
+/// 读侧水合（U2-1 图片外置）：把 `content_blocks` 里的 `image_file` 指针读回
+/// 内联 base64。生产唯一入口 `image_store::hydrate_json`——目录未初始化（测试 /
+/// boot 前）时恒等 no-op，纯文本行的 `image_file` 快路径原样直过。逐行调用，
+/// 保「repo 返回即内联形态」的不变式，覆盖所有下游 `parse_content_blocks` 消费点。
+async fn hydrate_rows(rows: &mut [MessageRow]) {
+    for row in rows.iter_mut() {
+        row.content_blocks = image_store::hydrate_json(&row.content_blocks).await;
+    }
+}
 
 /// 列出会话内的消息（复合游标分页）
 ///
@@ -123,6 +134,7 @@ pub async fn list_by_conversation(
     // 反转，按时间正序返回（chat 友好的顺序）
     let mut rows = rows;
     rows.reverse();
+    hydrate_rows(&mut rows).await;
     Ok(rows)
 }
 
@@ -323,6 +335,7 @@ pub async fn list_by_turn_page(
                 .fetch_all(pool)
                 .await?;
             rows.reverse();
+            hydrate_rows(&mut rows).await;
             return Ok(TurnPageRows {
                 rows,
                 has_more: false,
@@ -376,7 +389,8 @@ pub async fn list_by_turn_page(
     let has_more = stopped_early || has_more_window;
     let next_cursor = if has_more { last_included_anchor } else { None };
     spans.reverse();
-    let rows = spans.into_iter().flatten().collect();
+    let mut rows: Vec<MessageRow> = spans.into_iter().flatten().collect();
+    hydrate_rows(&mut rows).await;
     Ok(TurnPageRows {
         rows,
         has_more,
@@ -456,7 +470,7 @@ pub async fn list_all_by_rowid(
     pool: &SqlitePool,
     conversation_id: &str,
 ) -> AppResult<Vec<MessageRow>> {
-    let rows = sqlx::query_as::<_, MessageRow>(
+    let mut rows = sqlx::query_as::<_, MessageRow>(
         "SELECT id, conversation_id, role, content, content_blocks, token_count, error, created_at, rowid, summary_id, model, incoming_source, sender_agent_id
            FROM messages
           WHERE conversation_id = ?
@@ -465,6 +479,7 @@ pub async fn list_all_by_rowid(
     .bind(conversation_id)
     .fetch_all(pool)
     .await?;
+    hydrate_rows(&mut rows).await;
     Ok(rows)
 }
 
@@ -513,19 +528,27 @@ pub async fn get_content_blocks_by_id(pool: &SqlitePool, id: &str) -> AppResult<
         .bind(id)
         .fetch_optional(pool)
         .await?;
-    Ok(row.map(|(content_blocks,)| content_blocks))
+    // 读侧水合：Image 引用 resolve（derive.rs::hydrate_image_refs）从这里取字节——
+    // 必须返回内联 base64 形态，否则 resolve 拿到的 Image.data 是空串（offload 后）。
+    Ok(match row {
+        Some((content_blocks,)) => Some(image_store::hydrate_json(&content_blocks).await),
+        None => None,
+    })
 }
 
 /// 按消息 id 取整行，不存在返回 None（@ 引用展开用：需要
 /// role/content/blocks/conversation_id；与私有 `get_by_id` 的 NotFound 语义区分）。
 pub async fn find_by_id(pool: &SqlitePool, id: &str) -> AppResult<Option<MessageRow>> {
-    let row = sqlx::query_as::<_, MessageRow>(
+    let mut row = sqlx::query_as::<_, MessageRow>(
         "SELECT id, conversation_id, role, content, content_blocks, token_count, error, created_at, rowid, summary_id, model, incoming_source, sender_agent_id
            FROM messages WHERE id = ?",
     )
     .bind(id)
     .fetch_optional(pool)
     .await?;
+    if let Some(r) = row.as_mut() {
+        r.content_blocks = image_store::hydrate_json(&r.content_blocks).await;
+    }
     Ok(row)
 }
 
@@ -620,7 +643,7 @@ pub async fn create(pool: &SqlitePool, id: &str, new_msg: &NewMessage) -> AppRes
 }
 
 async fn get_by_id(pool: &SqlitePool, id: &str) -> AppResult<MessageRow> {
-    sqlx::query_as::<_, MessageRow>(
+    let mut row = sqlx::query_as::<_, MessageRow>(
         "SELECT id, conversation_id, role, content, content_blocks, token_count, error, created_at, rowid, summary_id, model, incoming_source, sender_agent_id
            FROM messages WHERE id = ?",
     )
@@ -630,7 +653,9 @@ async fn get_by_id(pool: &SqlitePool, id: &str) -> AppResult<MessageRow> {
     .ok_or_else(|| AppError::NotFound {
         resource: "message",
         id: id.to_string(),
-    })
+    })?;
+    row.content_blocks = image_store::hydrate_json(&row.content_blocks).await;
+    Ok(row)
 }
 
 /// 更新消息内容（流式生成结束后回写完整文本）
@@ -651,13 +676,18 @@ pub async fn update_content(pool: &SqlitePool, id: &str, content: &str) -> AppRe
 }
 
 /// 更新消息的 content_blocks 字段（P2-1 工具调用场景）
+///
+/// **写侧唯一入口（U2-1 图片外置）**：落库前把内联 base64 图片外置为文件，
+/// DB 只留 `image_file` 指针。`offload_json` 目录未初始化 / 无图片块时恒等直过，
+/// 测试与 boot 早于目录初始化时零行为变化。
 pub async fn update_content_blocks(
     pool: &SqlitePool,
     id: &str,
     content_blocks: &str,
 ) -> AppResult<()> {
+    let content_blocks = image_store::offload_json(content_blocks).await;
     let affected = sqlx::query("UPDATE messages SET content_blocks = ? WHERE id = ?")
-        .bind(content_blocks)
+        .bind(&content_blocks)
         .bind(id)
         .execute(pool)
         .await?
@@ -669,6 +699,68 @@ pub async fn update_content_blocks(
         });
     }
     Ok(())
+}
+
+/// 图片外置存量迁移报告（U2-1）。
+#[derive(Debug, Default, Clone, serde::Serialize)]
+pub struct OffloadReport {
+    /// 扫描到的含 `"type":"image"` 块的消息行数。
+    pub scanned: u64,
+    /// 本次实际外置了至少一张图的行数。
+    pub offloaded: u64,
+    /// 已外置 / 无图 / 坏 base64 等无变化的行数。
+    pub unchanged: u64,
+    /// 外置或行更新失败、保留内联的行数（下次 boot 重试）。
+    pub failed: u64,
+}
+
+/// 图片外置存量迁移（U2-1 boot 扫尾）：把 `messages.content_blocks` 里内联
+/// base64 图片外置为文件，逐行原子、幂等、崩溃安全。
+///
+/// - **幂等**：已外置（`image_file` 在场）的行 `offload_json` 原样直过。
+/// - **崩溃安全**：文件写经 `write_dedup`（临时文件 + 原子 rename）去重；行
+///   UPDATE 单条原子——崩在哪一行，重跑只从该行起，已外置行零成本跳过。
+/// - **软失败**：坏 base64 / 写文件失败的行保留内联（下次 boot 重试），绝不
+///   因外置失败丢字节。
+///
+/// 失败不阻塞启动（调用方 warn 后照常）；返回统计供日志披露。
+pub async fn offload_all_images(pool: &SqlitePool) -> OffloadReport {
+    let mut report = OffloadReport::default();
+    // 扫描谓词与 offload_json 快路径同源（`"image"` 子串）；已外置行仍含
+    // `"type":"image"`，一并扫进来幂等跳过，无需区分「内联 vs 已外置」。
+    let rows: Vec<(String, String)> = match sqlx::query_as::<_, (String, String)>(
+        "SELECT id, content_blocks FROM messages WHERE content_blocks LIKE '%\"image\"%'",
+    )
+    .fetch_all(pool)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::warn!(target: "ice_paw.image_store", "扫描含图消息失败（跳过本次外置）: {e}");
+            return report;
+        }
+    };
+    report.scanned = rows.len() as u64;
+    for (id, content_blocks) in rows {
+        let offloaded = image_store::offload_json(&content_blocks).await;
+        if offloaded == content_blocks {
+            report.unchanged += 1;
+            continue;
+        }
+        match sqlx::query("UPDATE messages SET content_blocks = ? WHERE id = ?")
+            .bind(&offloaded)
+            .bind(&id)
+            .execute(pool)
+            .await
+        {
+            Ok(_) => report.offloaded += 1,
+            Err(e) => {
+                tracing::warn!(target: "ice_paw.image_store", id, "外置行更新失败（保留内联）: {e}");
+                report.failed += 1;
+            }
+        }
+    }
+    report
 }
 
 /// 更新消息错误字段（流式生成失败时记录）

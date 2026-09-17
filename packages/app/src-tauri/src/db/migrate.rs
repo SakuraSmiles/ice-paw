@@ -375,6 +375,47 @@ pub async fn heal_dropped_migrations(pool: &SqlitePool, migrator: &Migrator) {
     }
 }
 
+/// 清理过期的 DB 备份（U2-1 DB 膨胀治理）。
+///
+/// 破坏性迁移（DROP COLUMN）与 tool_result 孤儿修复在改写 DB 前会把整库复制成
+/// `ice-paw.db.*.bak` 作安全网。这些备份体积 = 当时的整库大小（生产实测单份
+/// 700MB+），且从不清理——一周 5 份积压 ~1.6GB。策略：只保留最近 7 天的备份，
+/// 过期即删（与日志保留 7 天同一口径）。迁移是 boot 期一次性事件，备份只在
+/// 「刚跑完迁移、应用成功启动」的窗口内有回滚价值，7 天已远超该窗口。
+/// 调用时机：`init_pool` 尾部（迁移 + 孤儿修复全部成功后），不会删掉本次
+/// 刚生成、仍可能需要的备份。
+pub fn cleanup_stale_db_backups(data_dir: &Path) {
+    let cutoff = std::time::SystemTime::now()
+        - std::time::Duration::from_secs(7 * 24 * 60 * 60);
+    cleanup_stale_db_backups_before(data_dir, cutoff);
+}
+
+/// 内核：删除 mtime 早于 `cutoff` 的 DB 备份文件。抽出 cutoff 供测试注入
+/// （生产用「7 天前」；测试用「未来时刻」/「epoch」验证删/留两分支）。
+fn cleanup_stale_db_backups_before(data_dir: &Path, cutoff: std::time::SystemTime) {
+    let Ok(entries) = std::fs::read_dir(data_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        // 只碰 DB 备份（ice-paw.db 前缀 + .bak/.data_bak 后缀），不碰 -wal/-shm/其它文件
+        let is_backup = name.starts_with("ice-paw.db")
+            && (name.ends_with(".bak") || name.ends_with(".data_bak"));
+        if !is_backup {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else { continue };
+        let Ok(modified) = meta.modified() else { continue };
+        if modified < cutoff && std::fs::remove_file(entry.path()).is_ok() {
+            info!(
+                target: "ice_paw.db",
+                "已清理过期 DB 备份: {}（>7 天）",
+                name
+            );
+        }
+    }
+}
+
 // =========================================================================
 // 单元测试
 // =========================================================================
@@ -748,5 +789,55 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(before.0, after.0, "无缺席记录时不应改动 _sqlx_migrations");
+    }
+
+    /// 造一组带不同后缀的假文件（含 DB 本体 + WAL/SHM + 备份），返回目录。
+    fn seed_backup_dir() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("icepaw-bak-test-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for f in [
+            "ice-paw.db",
+            "ice-paw.db-wal",
+            "ice-paw.db-shm",
+            "ice-paw.db.bak",
+            "ice-paw.db.pre-56-drop.bak",
+            "ice-paw.db.data_bak",
+            "unrelated.json",
+        ] {
+            std::fs::write(dir.join(f), b"x").unwrap();
+        }
+        dir
+    }
+
+    /// 未来时刻 cutoff → 全部备份文件「过期」删除；本体/WAL/SHM/无关文件零触碰。
+    #[test]
+    fn cleanup_deletes_only_old_db_backups() {
+        let dir = seed_backup_dir();
+        let future = std::time::SystemTime::now() + std::time::Duration::from_secs(3600);
+        cleanup_stale_db_backups_before(&dir, future);
+
+        assert!(!dir.join("ice-paw.db.bak").exists());
+        assert!(!dir.join("ice-paw.db.pre-56-drop.bak").exists());
+        assert!(!dir.join("ice-paw.db.data_bak").exists());
+        // 非备份文件恒保留
+        assert!(dir.join("ice-paw.db").exists());
+        assert!(dir.join("ice-paw.db-wal").exists());
+        assert!(dir.join("ice-paw.db-shm").exists());
+        assert!(dir.join("unrelated.json").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// epoch cutoff（1970）→ 一切文件 mtime 都晚于它，零删除。
+    #[test]
+    fn cleanup_keeps_recent_backups() {
+        let dir = seed_backup_dir();
+        cleanup_stale_db_backups_before(&dir, std::time::SystemTime::UNIX_EPOCH);
+
+        assert!(dir.join("ice-paw.db.bak").exists());
+        assert!(dir.join("ice-paw.db.pre-56-drop.bak").exists());
+        assert!(dir.join("ice-paw.db.data_bak").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -187,14 +187,21 @@
 | U1-3 | **前端核心路径失败静默族**：会话/消息加载失败仅 console → 空白列表无错误态（chat.ts:59/178/205）/ 新建会话失败点击零反馈（useNewConversation.ts:54）/ 项目成员·归档·永久删除失败无提示（ProjectList.vue:230 等 8 处）→ 统一 loadError/banner 模式（GeneralSettings 已是好样板） | 中高 | ✅ 已修待 commit（convLoadError/msgLoadError/loadMoreError + createError + ProjectList actionError 全链路可见） |
 | U1-4 | **read_route 非绿：频道会话 reconcile_diffs 未消化**：9-11 密发 45 条 ERROR（频道 19660d0f diffs:4 ×28 + 3d52a0d1 diffs:2 ×17），此后每读必告警「派生历史可能缺行」——跑 reconcile_session 定 diff 类型（疑频道 sender 打标/sweep 改行 vs 事件回放），emitter 修或文档化容忍 | 中高 | ✅ 已修待 commit（election: 投票行按事件 turn 前缀跳过归因，消假 MISSING_IN_DERIVED） |
 | U1-5 | loadMoreMessages A→B→A 往返守卫失效（loadingMore 被 loadMessages 重置后旧分页响应放行，R2 残余，chat.ts:186-210） | 中低 | ✅ 已修待 commit（msgEpoch 计数器守卫 + 用例） |
-| U2-1 | **DB 膨胀治理**：一周 212MB→737MB（UE5 截图会话期；图片类 tool_result 无保留/压缩/外置策略）+ AppData *.bak 1.6GB 无清理策略——先关窗只读普查表分布再定策 | 中高 | 📋 |
-| U2-2 | 日志体积卫生：「请求携带 N 工具定义」全量工具名列表截断（198 次/日）+ 内置 server stderr 横幅去重（单日 11.9MB 的主要构成） | 低 | 📋 |
+| U2-1 | **DB 膨胀治理**：一周 212MB→737MB（UE5 截图会话期；图片类 tool_result 无保留/压缩/外置策略）+ AppData *.bak 1.6GB 无清理策略——先关窗只读普查表分布再定策 | 中高 | ✅ 已修待 commit：*.bak 清理（`cleanup_stale_db_backups` boot 扫尾，7 天保留）+ **图片外置**（拍板「外置到文件目录」——`infra/image_store.rs` 内容寻址 lossless 外置到 `<data_dir>/images/`，DB 只留 `image_file` 指针、读侧水合回内联；写侧接入 `update_content_blocks`/`cleanup`、读侧接入 repo 全读函数、boot 后台 sweep `offload_all_images`；软失败保留内联不丢字节；6 单测 + 路径逃逸/坏 base64/坏 JSON/去重幂等全锁） |
+| U2-2 | 日志体积卫生：「请求携带 N 工具定义」全量工具名列表截断（198 次/日）+ 内置 server stderr 横幅去重（单日 11.9MB 的主要构成） | 低 | ✅ 已修待 commit（openai 工具名截断前 10 名 + `StderrDeduper` 连续重复行折叠） |
 | U3-1 | **agent_yaml.rs 六连「同步 IO + 复制粘贴」**：6 个 async 命令内 std::fs read/write/rename（:287 等 12 处跑在 tokio worker）+ read-modify-atomic-write 全套重复五遍——抽公共原子改写 helper 一次治两病 | 中 | 📋 |
 | U3-2 | **层次倒置两处**：① harness 反向依赖 commands（channel.rs:60 / inbox.rs:66 / delegate.rs:48 调 commands::model_profile_cmd::production_fallback_plan——fallback 计划应下沉 harness）；② infra/protocol/mod.rs:31 re-export 上游 LlmProvider 成环（trait 应归 protocol）。与 loop 去 AppHandle 化方向相悖 | 中 | 📋 |
 | U3-3 | **ChatMessages 第一刀**：三胶囊 + 思考聚合 + 工具折叠 + 过程收纳段抽 MessageGroupCapsules 子组件 + 纯函数下沉 utils（约束：六份专项测试断言面零破坏） | 中 | 📋 |
 | U3-4 | crypto.rs 474 行零测试（XChaCha20-Poly1305 加解密 + blake2b 密钥派生，与 K1 同域）——补单测 | 中 | 📋 |
 | U3-5 | 观察升级候选（0.8.x 视余量，否则 0.9）：loop_engine 1431 行持续回涨（R-D4：697→1431 已超拆分前）再拆 / agent_cmd.rs 1841 God module（trait+SQL+DTO+yaml 镜像+频道级联同居）/ chat.ts 三份流式复位清单手工同步 / composables 两对复制（事件接线脚手架、分页三件套）抽象 | 中 | 👁→📋 待拍板 |
 | U3-6 | 视觉令牌存量收编（渐进、一次一个组件域防 CSS 回归无测试网）：间距裸 px 646 处 58 文件（布局级 gap≥4px 174 处）/ hex 47 处 19 文件（#fff×16、AttachmentDetail Tailwind 原色、TrajectoryTimeline cssVar 二参回退）/ 非 token 字号 30 处（ErrorBanner 11.5/12.5px 脱档最刺眼）/ ✕✓✦ 文本字形 6 处——Q14/Q15 计数刷新，轨迹族 z-index 8 处聚集地已定位 | 低（体量大） | 👁 |
+
+### U2-1 只读普查结论（2026-09-17 生产库取证）
+
+- **库体积**：`ice-paw.db` 703MB；`messages.content_blocks` 单列 613MB（~87%）是膨胀主体。
+- **元凶**：图片类 tool_result 的 base64 **内联**在 `content_blocks` JSON 里（块形 `{"type":"image","data":"<base64>","media_type":"image/png"}`）——767 条消息含图，最大单条 9MB（UE5 截图），violates `message_attachment_files`「大字节外置、messages 不胀」的既有设计原则。
+- **`*.bak` 背份**：5 份 = `ice-paw.db.bak`/`.data_bak`（旧 1MB×2）+ `pre-tool-result-migration.bak`（213MB）+ `pre-inbox-drop.bak`（213MB）+ `pre-56-drop.bak`（735MB），合计 ~1.6GB，均迁移安全网快照、从未清理——**已由 `cleanup_stale_db_backups`（7 天保留）收口**。
+- **图片外置（2026-09-17 拍板「外置到文件目录」并落地）**：lossless、可逆、DB 瘦身——内联 base64 字节外置到 `<data_dir>/images/<blake2b-16B-hex>.<ext>`，内容寻址去重（同字节同文件），DB 只留 `image_file` 指针。落库形态 `{"type":"image","data":"","media_type":...,"image_file":"<hash>.png"}`（`data` 保留空串防 `ContentBlock::Image` 反序列化失败）；读侧 `hydrate_json` 读回内联、文件缺失降级 `[图片内容已不可恢复]`、路径逃逸判坏降级。存量由 boot 后台 `offload_all_images` 一次性扫尾（`content_blocks LIKE '%"image"%'` 行，UPDATE 只写变化行）。**权衡**：DB 从 703MB 瘦回 ~90MB，字节零损（未选有损压缩——用户优先数据可逆）；写文件失败软失败保留内联、下次 sweep 重试。
 
 ## 安全项
 

@@ -18,6 +18,7 @@ use sqlx::SqlitePool;
 use crate::db::repo;
 use crate::harness::error_mapping::friendly_error;
 use crate::harness::event_log::{self, EventCtx};
+use crate::infra::image_store;
 use crate::infra::protocol::{ChatDonePayload, ChatErrorPayload, ContentBlock, TokenUsage};
 
 /// Token 数未知时的占位值（provider 未返回 usage）。用 0：前端 badge 的
@@ -40,6 +41,10 @@ pub(crate) async fn finalize_assistant_message(
         tracing::error!(target: "ice_paw.cleanup", "ContentBlock 序列化失败 (msg_id={}): {}", asst_msg_id, e);
         "[]".to_string()
     });
+    // U2-1 图片外置：assistant 块当前恒不含 Image（Text/ToolUse/Thinking/…），
+    // 本调用是防御性 no-op——本函数走裸 SQL 绕过 update_content_blocks，若未来
+    // assistant 块引入图片，这里保证落库形态与主写路径一致（内联 → 外置）。
+    let blocks_json = image_store::offload_json(&blocks_json).await;
     let token_count = completion_tokens
         .map(|t| t.max(1) as i32)
         .unwrap_or(MIN_TOKEN_COUNT);

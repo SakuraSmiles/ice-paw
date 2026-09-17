@@ -82,6 +82,10 @@ pub async fn init_pool(app: &AppHandle) -> AppResult<SqlitePool> {
         );
     }
 
+    // 5.6) 清理过期 DB 备份（U2-1）：迁移 + 孤儿修复全部成功后才删，避免误删
+    //      本次刚生成、仍可能用于回滚的安全网快照。
+    migrate::cleanup_stale_db_backups(&data_dir);
+
     // 6) 注入到 tauri 状态（app 持有 + 返回给 setup 钩子）
     app.manage(pool.clone());
 

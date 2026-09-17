@@ -318,6 +318,19 @@ pub fn run() {
                 pool.size()
             );
 
+            // 2a) 图片外置目录初始化（U2-1）：<app_data_dir>/images——必须先于任何
+            //     offload / hydrate 调用（写路径 update_content_blocks、读路径 repo
+            //     水合、下方 boot 存量迁移 sweep 都依赖此 OnceLock；未初始化时两者
+            //     都是恒等 no-op，内联 base64 兜底，零数据风险）。
+            if let Ok(data_dir) = crate::logging::data_dir(&handle) {
+                crate::infra::image_store::init(&data_dir);
+            } else {
+                tracing::warn!(
+                    target: "ice_paw.image_store",
+                    "解析 app_data_dir 失败，图片外置禁用（内联兜底）"
+                );
+            }
+
             // 2b) + 2b-2) boot 自愈两件（崩溃扫尾 + 旧会话 backfill）——后台化：
             //      纯增量幂等扫尾，不阻塞首屏任何读路径（晚 1-2 秒完成无感）。
             //      曾在主线程 block_on 跑，大库上把 setup 拖长 → 窗口已显示而
@@ -351,6 +364,20 @@ pub fn run() {
                             failed = bf.failed,
                             epoch_rows = bf.epoch_rows,
                             "旧会话事件 backfill 完成"
+                        );
+                    }
+
+                    // 图片外置存量迁移（U2-1 DB 膨胀治理）：内联 base64 图片 →
+                    // 文件指针。逐行幂等、崩溃安全，失败保留内联（下次 boot 重试）。
+                    let img = db::repo::message::offload_all_images(&sweep_pool).await;
+                    if img.offloaded > 0 || img.failed > 0 {
+                        tracing::info!(
+                            target: "ice_paw.image_store",
+                            scanned = img.scanned,
+                            offloaded = img.offloaded,
+                            unchanged = img.unchanged,
+                            failed = img.failed,
+                            "图片外置存量迁移完成"
                         );
                     }
                 });

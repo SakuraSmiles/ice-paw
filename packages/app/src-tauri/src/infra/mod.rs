@@ -3,6 +3,7 @@
 pub mod cancel;
 pub mod decode;
 pub mod file_validation;
+pub mod image_store;
 pub mod image_validation;
 pub mod path_norm;
 pub mod process;

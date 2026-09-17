@@ -30,7 +30,10 @@ use crate::infra::protocol::ContentBlock;
 
 /// Image 引用水合未命中（行已删 / content_blocks 变形）时的降级占位文本。
 /// 诚实标注字节不可恢复，不让 ref 静默消失。
-pub const IMAGE_UNRECOVERABLE_MARKER: &str = "[图片内容已不可恢复]";
+///
+/// 单一真相源在 `infra::image_store`（协议层，避免 infra→harness 反向依赖），
+/// 此处 re-export 保持既有引用路径（conversation_cmd / message.rs doc / 本模块）不变。
+pub use crate::infra::image_store::IMAGE_UNRECOVERABLE_MARKER;
 
 /// 回放出的一条消息（与 legacy 行提取结果同构，reconcile 按 message_id 对齐）。
 #[derive(Debug, Clone, PartialEq)]

@@ -302,14 +302,28 @@ impl OpenAiAdapter {
             reasoning_effort,
         };
 
-        // 调试日志：确认工具是否注入
+        // 调试日志：确认工具是否注入。工具名列表截断到前 10 个——生产单会话
+        // 84 个工具、全量列表 198 次/日 × ~700B 是日志噪声主构成之一（U2-2），
+        // 前 10 名 + 总数已足够排查。
         if let Some(ref t) = body.tools {
-            tracing::info!(
-                target: "ice_paw.llm",
-                "请求携带 {} 个工具定义: names={:?}",
-                t.len(),
-                t.iter().map(|x| &x.function.name).collect::<Vec<_>>()
-            );
+            const MAX_NAMES_IN_LOG: usize = 10;
+            let names: Vec<_> = t.iter().map(|x| &x.function.name).collect();
+            if names.len() > MAX_NAMES_IN_LOG {
+                tracing::info!(
+                    target: "ice_paw.llm",
+                    "请求携带 {} 个工具定义: names={:?} …(余 {} 个省略)",
+                    t.len(),
+                    &names[..MAX_NAMES_IN_LOG],
+                    names.len() - MAX_NAMES_IN_LOG
+                );
+            } else {
+                tracing::info!(
+                    target: "ice_paw.llm",
+                    "请求携带 {} 个工具定义: names={:?}",
+                    t.len(),
+                    names
+                );
+            }
         } else {
             tracing::debug!(target: "ice_paw.llm", "请求未携带工具定义");
         }

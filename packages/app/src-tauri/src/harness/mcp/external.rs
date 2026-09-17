@@ -192,12 +192,17 @@ impl ExternalMcpServer {
         // 创建取消信号（stdout 和 stderr 读取任务共享）
         let stop = Arc::new(Notify::new());
 
-        // 捕获 stderr 日志（带取消机制，与 stdout 共享同一个 stop Notify）
+        // 捕获 stderr 日志（带取消机制，与 stdout 共享同一个 stop Notify）。
+        // 折叠连续重复行：内置 server（sequential-thinking 等）会把进度横幅/空行
+        // 原样刷到 stderr——生产实测单日「[stderr] 深度推理: 」恒同 2260 条、
+        // 单条横幅 300+ 次，是 11.9MB/日日志的主构成。首行照记，重复累计，
+        // 遇不同行时补记「上一条重复 N 次」（U2-2 日志体积卫生）。
         let name_for_err = name.clone();
         let stop_for_stderr = stop.clone();
         if let Some(stderr) = child.stderr.take() {
             tokio::spawn(async move {
                 let mut reader = BufReader::new(stderr);
+                let mut deduper = StderrDeduper::new();
                 let mut line = String::new();
                 loop {
                     tokio::select! {
@@ -206,13 +211,19 @@ impl ExternalMcpServer {
                             match result {
                                 Ok(0) => break,
                                 Ok(_) => {
-                                    tracing::warn!(target: "ice_paw.mcp", "[stderr] {}: {}", name_for_err, line.trim_end());
+                                    for out in deduper.on_line(line.trim_end()) {
+                                        tracing::warn!(target: "ice_paw.mcp", "[stderr] {}: {}", name_for_err, out);
+                                    }
                                     line.clear();
                                 }
                                 Err(_) => break,
                             }
                         }
                     }
+                }
+                // 流结束时补记最后一段尚未落盘的重复计数
+                for out in deduper.flush() {
+                    tracing::warn!(target: "ice_paw.mcp", "[stderr] {}: {}", name_for_err, out);
                 }
             });
         }
@@ -606,6 +617,54 @@ pub fn tool_def_from_mcp(def: &McpToolDefinition) -> ToolDef {
     }
 }
 
+/// stderr 连续重复行折叠器（U2-2 日志体积卫生）。
+///
+/// 语义：首行立即产出；随后每遇相同行仅计数不产出；遇不同行时先补记
+/// 「上一条重复 N 次」（N>0 时）再产出新行。`flush()` 在流结束时补记最后一段
+/// 的重复计数（进程退出前可能还挂着未落盘的重复段）。
+struct StderrDeduper {
+    pending: Option<(String, u32)>,
+}
+
+impl StderrDeduper {
+    fn new() -> Self {
+        Self { pending: None }
+    }
+
+    /// 处理一行，返回需立即落日志的行（可能为空：重复行暂存等待合并）。
+    fn on_line(&mut self, line: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        match self.pending.take() {
+            None => {
+                self.pending = Some((line.to_string(), 0));
+                out.push(line.to_string());
+            }
+            Some((prev, repeat)) if prev == line => {
+                self.pending = Some((prev, repeat + 1));
+            }
+            Some((_prev, repeat)) => {
+                if repeat > 0 {
+                    out.push(format!("(上一条 stderr 行重复 {} 次)", repeat));
+                }
+                self.pending = Some((line.to_string(), 0));
+                out.push(line.to_string());
+            }
+        }
+        out
+    }
+
+    /// 流结束：补记最后一段的重复计数。
+    fn flush(&mut self) -> Vec<String> {
+        let mut out = Vec::new();
+        if let Some((_, repeat)) = self.pending.take() {
+            if repeat > 0 {
+                out.push(format!("(上一条 stderr 行重复 {} 次)", repeat));
+            }
+        }
+        out
+    }
+}
+
 // =========================================================================
 // 单测
 // =========================================================================
@@ -658,5 +717,49 @@ mod tests {
             },
             AuthorizationLevel::Confirm
         );
+    }
+
+    #[test]
+    fn stderr_deduper_collapses_consecutive_repeats() {
+        let mut d = StderrDeduper::new();
+        let mut out = Vec::new();
+        for l in ["A", "A", "A", "B", "B", "C"] {
+            out.extend(d.on_line(l));
+        }
+        out.extend(d.flush());
+        assert_eq!(
+            out,
+            vec![
+                "A",
+                "(上一条 stderr 行重复 2 次)",
+                "B",
+                "(上一条 stderr 行重复 1 次)",
+                "C",
+            ]
+        );
+    }
+
+    #[test]
+    fn stderr_deduper_passes_unique_lines_through() {
+        let mut d = StderrDeduper::new();
+        let mut out = Vec::new();
+        for l in ["x", "y", "z"] {
+            out.extend(d.on_line(l));
+        }
+        out.extend(d.flush());
+        assert_eq!(out, vec!["x", "y", "z"]);
+    }
+
+    #[test]
+    fn stderr_deduper_flushes_trailing_repeat() {
+        let mut d = StderrDeduper::new();
+        let mut out = Vec::new();
+        out.extend(d.on_line("A"));
+        out.extend(d.on_line("A"));
+        out.extend(d.on_line("A"));
+        // 未 flush 前只有首行产出
+        assert_eq!(out, vec!["A"]);
+        out.extend(d.flush());
+        assert_eq!(out, vec!["A", "(上一条 stderr 行重复 2 次)"]);
     }
 }
