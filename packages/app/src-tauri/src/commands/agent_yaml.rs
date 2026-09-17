@@ -242,12 +242,46 @@ fn validate_patched(
 
 /// 读取某 agent 的 yaml 预算字段。文件缺失 / 无 workspace / 解析失败 → None
 /// （前端语义：全部默认自适应，字段区显示空）。
-fn read_fields(workspace_path: &Option<String>) -> Option<AgentYamlFields> {
+async fn read_fields(workspace_path: &Option<String>) -> Option<AgentYamlFields> {
     let dir = workspace_path.as_ref()?;
     let yaml_path = std::path::Path::new(dir).join("agent.yaml");
-    let content = std::fs::read_to_string(yaml_path).ok()?;
+    let content = tokio::fs::read_to_string(yaml_path).await.ok()?;
     let cfg: AgentFileConfig = serde_yaml::from_str(&content).ok()?;
     Some(AgentYamlFields::from_config(&cfg))
+}
+
+/// 解析 workspace → agent.yaml 路径并读回内容（async IO，不阻塞 tokio worker）。
+///
+/// 无 workspace → Validation「未配置工作区目录」；文件缺失 → NotFound。
+/// 六个写命令（标量 / system_prompt / word_profile / enabled_tools / tool_scopes）
+/// 此前各自复制这段「取路径 → 查存在 → 同步读」，U3-1 收敛为单一入口。
+async fn read_agent_yaml(
+    workspace_path: &Option<String>,
+    agent_id: &str,
+) -> AppResult<(std::path::PathBuf, String)> {
+    let dir = workspace_path.as_ref().ok_or_else(|| {
+        AppError::Validation(format!("agent {agent_id} 未配置工作区目录，无 agent.yaml"))
+    })?;
+    let yaml_path = std::path::Path::new(dir).join("agent.yaml");
+    if !yaml_path.exists() {
+        return Err(AppError::NotFound {
+            resource: "agent.yaml",
+            id: yaml_path.display().to_string(),
+        });
+    }
+    let content = tokio::fs::read_to_string(&yaml_path).await?;
+    Ok((yaml_path, content))
+}
+
+/// 原子改写 agent.yaml：写同目录 `.tmp` 后 rename（半途失败不留截断 yaml）。
+///
+/// async（tokio::fs）——写命令此前用 `std::fs::write + rename` 在 tokio worker
+/// 上同步 IO，且这套「临时文件 + rename」复制粘贴六遍，U3-1 收敛为一处。
+async fn atomic_write_yaml(yaml_path: &std::path::Path, new_content: &str) -> AppResult<()> {
+    let tmp_path = yaml_path.with_extension("yaml.tmp");
+    tokio::fs::write(&tmp_path, new_content).await?;
+    tokio::fs::rename(&tmp_path, yaml_path).await?;
+    Ok(())
 }
 
 /// 读取 agent.yaml 预算字段（None = 默认自适应 + 自动续期）
@@ -257,7 +291,7 @@ pub async fn get_agent_yaml_fields(
     agent_id: String,
 ) -> AppResult<AgentYamlFields> {
     let row = cmd.inner().get(&agent_id).await?;
-    Ok(read_fields(&row.workspace_path).unwrap_or_default())
+    Ok(read_fields(&row.workspace_path).await.unwrap_or_default())
 }
 
 /// 设置 / 注释掉单个标量字段（预算整数族 + `temperature` 浮点族）。
@@ -274,17 +308,7 @@ pub async fn set_agent_yaml_field(
     value: Option<f64>,
 ) -> AppResult<AgentYamlFields> {
     let row = cmd.inner().get(&agent_id).await?;
-    let dir = row.workspace_path.clone().ok_or_else(|| {
-        AppError::Validation(format!("agent {agent_id} 未配置工作区目录，无 agent.yaml"))
-    })?;
-    let yaml_path = std::path::Path::new(&dir).join("agent.yaml");
-    if !yaml_path.exists() {
-        return Err(AppError::NotFound {
-            resource: "agent.yaml",
-            id: yaml_path.display().to_string(),
-        });
-    }
-    let content = std::fs::read_to_string(&yaml_path)?;
+    let (yaml_path, content) = read_agent_yaml(&row.workspace_path, &agent_id).await?;
 
     // 整数族（预算/出力上限）收整数；temperature 浮点族 0 合法（如 OpenAI 确定性档）
     const INT_FIELDS: &[&str] = &["max_total_tokens", "tool_max_rounds", "max_tokens"];
@@ -317,10 +341,7 @@ pub async fn set_agent_yaml_field(
     let new_content = patch_agent_yaml(&content, &field, &action);
     let fields = validate_patched(&new_content, &field, &action)?;
 
-    // 原子写：同目录 .tmp → rename（半途失败不会留下截断的 yaml）
-    let tmp_path = yaml_path.with_extension("yaml.tmp");
-    std::fs::write(&tmp_path, &new_content)?;
-    std::fs::rename(&tmp_path, &yaml_path)?;
+    atomic_write_yaml(&yaml_path, &new_content).await?;
     tracing::info!(
         target: "ice_paw.agent",
         "agent.yaml 已改写: {field} → {action:?}（{}）",
@@ -364,25 +385,12 @@ pub async fn set_agent_system_prompt(
         ));
     }
     let row = cmd.inner().get(&agent_id).await?;
-    let dir = row.workspace_path.clone().ok_or_else(|| {
-        AppError::Validation(format!("agent {agent_id} 未配置工作区目录，无 agent.yaml"))
-    })?;
-    let yaml_path = std::path::Path::new(&dir).join("agent.yaml");
-    if !yaml_path.exists() {
-        return Err(AppError::NotFound {
-            resource: "agent.yaml",
-            id: yaml_path.display().to_string(),
-        });
-    }
-    let content = std::fs::read_to_string(&yaml_path)?;
+    let (yaml_path, content) = read_agent_yaml(&row.workspace_path, &agent_id).await?;
 
     let new_content = patch_agent_yaml_block(&content, "system_prompt", &text);
     let fields = validate_system_prompt_patched(&new_content, &text)?;
 
-    // 原子写：同目录 .tmp → rename（半途失败不会留下截断的 yaml）
-    let tmp_path = yaml_path.with_extension("yaml.tmp");
-    std::fs::write(&tmp_path, &new_content)?;
-    std::fs::rename(&tmp_path, &yaml_path)?;
+    atomic_write_yaml(&yaml_path, &new_content).await?;
     tracing::info!(
         target: "ice_paw.agent",
         "agent.yaml 已改写: system_prompt ← {} 行（{}）",
@@ -459,17 +467,7 @@ pub async fn set_agent_word_profile(
 ) -> AppResult<AgentYamlFields> {
     let trimmed = text.unwrap_or_default().trim().to_string();
     let row = cmd.inner().get(&agent_id).await?;
-    let dir = row.workspace_path.clone().ok_or_else(|| {
-        AppError::Validation(format!("agent {agent_id} 未配置工作区目录，无 agent.yaml"))
-    })?;
-    let yaml_path = std::path::Path::new(&dir).join("agent.yaml");
-    if !yaml_path.exists() {
-        return Err(AppError::NotFound {
-            resource: "agent.yaml",
-            id: yaml_path.display().to_string(),
-        });
-    }
-    let content = std::fs::read_to_string(&yaml_path)?;
+    let (yaml_path, content) = read_agent_yaml(&row.workspace_path, &agent_id).await?;
 
     let (new_content, fields, is_removal) = if trimmed.is_empty() {
         let nc = patch_agent_yaml_remove_block(&content, "word_style_profile");
@@ -481,10 +479,7 @@ pub async fn set_agent_word_profile(
         (nc, f, false)
     };
 
-    // 原子写：同目录 .tmp → rename（半途失败不会留下截断的 yaml）
-    let tmp_path = yaml_path.with_extension("yaml.tmp");
-    std::fs::write(&tmp_path, &new_content)?;
-    std::fs::rename(&tmp_path, &yaml_path)?;
+    atomic_write_yaml(&yaml_path, &new_content).await?;
     tracing::info!(
         target: "ice_paw.agent",
         "agent.yaml 已改写: word_style_profile {}（{}）",
@@ -599,17 +594,7 @@ pub async fn set_agent_enabled_tools(
 ) -> AppResult<AgentYamlFields> {
     let tools = tools.filter(|v| !v.is_empty());
     let row = cmd.inner().get(&agent_id).await?;
-    let dir = row.workspace_path.clone().ok_or_else(|| {
-        AppError::Validation(format!("agent {agent_id} 未配置工作区目录，无 agent.yaml"))
-    })?;
-    let yaml_path = std::path::Path::new(&dir).join("agent.yaml");
-    if !yaml_path.exists() {
-        return Err(AppError::NotFound {
-            resource: "agent.yaml",
-            id: yaml_path.display().to_string(),
-        });
-    }
-    let content = std::fs::read_to_string(&yaml_path)?;
+    let (yaml_path, content) = read_agent_yaml(&row.workspace_path, &agent_id).await?;
 
     let (new_content, fields, is_removal) = match &tools {
         Some(items) => {
@@ -624,10 +609,7 @@ pub async fn set_agent_enabled_tools(
         }
     };
 
-    // 原子写：同目录 .tmp → rename（半途失败不会留下截断的 yaml）
-    let tmp_path = yaml_path.with_extension("yaml.tmp");
-    std::fs::write(&tmp_path, &new_content)?;
-    std::fs::rename(&tmp_path, &yaml_path)?;
+    atomic_write_yaml(&yaml_path, &new_content).await?;
     tracing::info!(
         target: "ice_paw.agent",
         "agent.yaml 已改写: enabled_tools {}（{} 项）（{}）",
@@ -695,17 +677,7 @@ pub async fn set_agent_tool_scopes(
 ) -> AppResult<AgentYamlFields> {
     let scopes = scopes.filter(|v| !v.is_empty());
     let row = cmd.inner().get(&agent_id).await?;
-    let dir = row.workspace_path.clone().ok_or_else(|| {
-        AppError::Validation(format!("agent {agent_id} 未配置工作区目录，无 agent.yaml"))
-    })?;
-    let yaml_path = std::path::Path::new(&dir).join("agent.yaml");
-    if !yaml_path.exists() {
-        return Err(AppError::NotFound {
-            resource: "agent.yaml",
-            id: yaml_path.display().to_string(),
-        });
-    }
-    let content = std::fs::read_to_string(&yaml_path)?;
+    let (yaml_path, content) = read_agent_yaml(&row.workspace_path, &agent_id).await?;
 
     let (new_content, fields, is_removal) = match &scopes {
         Some(items) => {
@@ -720,10 +692,7 @@ pub async fn set_agent_tool_scopes(
         }
     };
 
-    // 原子写：同目录 .tmp → rename（半途失败不会留下截断的 yaml）
-    let tmp_path = yaml_path.with_extension("yaml.tmp");
-    std::fs::write(&tmp_path, &new_content)?;
-    std::fs::rename(&tmp_path, &yaml_path)?;
+    atomic_write_yaml(&yaml_path, &new_content).await?;
     tracing::info!(
         target: "ice_paw.agent",
         "agent.yaml 已改写: tool_scopes {}（{} 项）（{}）",
@@ -868,7 +837,9 @@ fn validate_mirror_sync(
 /// - 文件不存在 → Ok（**不创建**——镜像只跟随已存在的文件）
 /// - 内容无变化（逐字节相等）→ 直接返回，不动文件
 /// - 写前闸 + 原子写（同目录 .tmp → rename）
-pub fn sync_agent_yaml_mirror_file(
+///
+/// async（tokio::fs）——U3-1 去同步 IO；`atomic_write_yaml` 收敛原子写样板。
+pub async fn sync_agent_yaml_mirror_file(
     workspace_dir: &str,
     provider: &str,
     model: &str,
@@ -878,16 +849,14 @@ pub fn sync_agent_yaml_mirror_file(
     if !yaml_path.exists() {
         return Ok(());
     }
-    let content = std::fs::read_to_string(&yaml_path)?;
+    let content = tokio::fs::read_to_string(&yaml_path).await?;
     let new_content = sync_agent_yaml_mirror(content.as_str(), provider, model, base_url);
     if new_content == content {
         return Ok(());
     }
     validate_mirror_sync(&new_content, provider, model, base_url)?;
 
-    let tmp_path = yaml_path.with_extension("yaml.tmp");
-    std::fs::write(&tmp_path, &new_content)?;
-    std::fs::rename(&tmp_path, &yaml_path)?;
+    atomic_write_yaml(&yaml_path, &new_content).await?;
     tracing::info!(
         target: "ice_paw.agent",
         "agent.yaml 镜像已同步: provider={provider} model={model}（{}）",

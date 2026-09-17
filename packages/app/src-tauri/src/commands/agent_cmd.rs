@@ -832,7 +832,9 @@ impl AgentCmd for SqlAgentCmd {
                 &row.provider,
                 &row.model,
                 row.base_url.as_deref(),
-            ) {
+            )
+            .await
+            {
                 tracing::warn!(
                     target: "ice_paw.agent",
                     "agent.yaml 镜像同步失败（DB 已更新，文件保持原样）: {e}"
