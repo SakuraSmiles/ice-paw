@@ -18,6 +18,7 @@
 import { ref } from "vue";
 import { bridge } from "../api/bridge";
 import { shortCode } from "../utils/refs";
+import { createEarlierPagination } from "./earlierPagination";
 import type {
   AssistantMessagePayload,
   ChannelCoordinatorPayload,
@@ -721,16 +722,21 @@ export const TRAJECTORY_PAGE_SIZE = 1000;
 export function useTrajectory() {
   const events = ref<SessionEvent[]>([]);
   const loading = ref(false);
-  const loadingEarlier = ref(false);
-  const error = ref<string | null>(null);
   /** 事件纪元前的旧会话（零事件，Phase 2A legacy 路由）→ UI 空态提示，非 bug */
   const legacy = ref(false);
-  const hasMore = ref(false);
   /** 窗口前（更早分页一侧）的全局轮次数（M3：轮号全局偏移；0 = 窗口从头开始） */
   const turnOffset = ref(0);
 
   let currentId: string | null = null;
-  let minSeq: number | null = null;
+  // 「加载更早」三件套 + 游标/错误，见 earlierPagination.ts——与 useProjectTrajectory
+  // 同款收敛；onPage 钩子 = 窗口起点前移后重查全局轮偏移（M3）。
+  const pagination = createEarlierPagination<SessionEvent>({
+    currentId: () => currentId,
+    pageSize: TRAJECTORY_PAGE_SIZE,
+    fetch: (id, beforeSeq) => bridge.trajectory.listEvents(id, TRAJECTORY_PAGE_SIZE, beforeSeq),
+    cursorOf: (e) => e.seq,
+    onPage: () => void refreshTurnOffset(),
+  });
 
   /** 窗口还有更早内容时查一次全局轮偏移（含孤儿桶一组；轮外段 cross: 与无
    *  turn_id 的 channel_coordinator 两端一致不计数，chain:/election: 归父后父
@@ -738,6 +744,7 @@ export function useTrajectory() {
    *  turn_id，与 buildRows 同源）。 */
   async function refreshTurnOffset() {
     const id = currentId;
+    const minSeq = pagination.minCursor.value;
     if (!id || minSeq == null) return;
     try {
       const n = await bridge.trajectory.turnOffset(id, minSeq);
@@ -750,22 +757,21 @@ export function useTrajectory() {
   async function load(conversationId: string) {
     currentId = conversationId;
     loading.value = true;
-    error.value = null;
+    pagination.error.value = null;
     try {
       const page = await bridge.trajectory.listEvents(conversationId, TRAJECTORY_PAGE_SIZE);
       if (currentId !== conversationId) return; // 切换会话竞态守卫
       legacy.value = page.length === 0;
       events.value = page;
-      hasMore.value = page.length === TRAJECTORY_PAGE_SIZE;
-      minSeq = page.length ? page[0].seq : null;
+      pagination.markFirstPage(page);
       turnOffset.value = 0;
-      if (hasMore.value) void refreshTurnOffset();
+      if (pagination.hasMore.value) void refreshTurnOffset();
     } catch (e) {
       if (currentId !== conversationId) return;
-      error.value = e instanceof Error ? e.message : String(e);
+      pagination.error.value = e instanceof Error ? e.message : String(e);
       events.value = [];
       legacy.value = false;
-      hasMore.value = false;
+      pagination.hasMore.value = false;
     } finally {
       if (currentId === conversationId) loading.value = false;
     }
@@ -803,24 +809,18 @@ export function useTrajectory() {
     }
   }
 
-  /** 「加载更早」：以当前已载最小 seq 为游标向前翻一页 */
-  async function loadEarlier() {
-    if (!currentId || minSeq == null || loadingEarlier.value || !hasMore.value) return;
-    loadingEarlier.value = true;
-    try {
-      const page = await bridge.trajectory.listEvents(currentId, TRAJECTORY_PAGE_SIZE, minSeq);
-      if (currentId !== null && page.length) {
-        minSeq = page[0].seq;
-        events.value = [...page, ...events.value];
-      }
-      hasMore.value = page.length === TRAJECTORY_PAGE_SIZE;
-      if (hasMore.value) void refreshTurnOffset(); // M3：窗口起点前移，重查全局偏移
-    } catch (e) {
-      error.value = e instanceof Error ? e.message : String(e);
-    } finally {
-      loadingEarlier.value = false;
-    }
-  }
+  /** 「加载更早」：以当前已载最小 seq 为游标向前翻一页（逻辑在 earlierPagination） */
+  const loadEarlier = () => pagination.loadEarlier(events);
 
-  return { events, loading, loadingEarlier, error, legacy, hasMore, turnOffset, load, loadEarlier, refreshLatest };
+  return {
+    events, loading,
+    loadingEarlier: pagination.loadingEarlier,
+    error: pagination.error,
+    legacy,
+    hasMore: pagination.hasMore,
+    turnOffset,
+    load,
+    loadEarlier,
+    refreshLatest,
+  };
 }

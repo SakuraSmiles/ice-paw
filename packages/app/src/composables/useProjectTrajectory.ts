@@ -9,11 +9,13 @@
 //    无全局轮序，轮号弱化为段序号，调用方注释写明）
 // 3. live 过滤带「项目会话集」：事件通知按 conversation_id 过滤，本 composable
 //    不知道项目会话集（chat store 才知道），由调用方传 isProjectConv 谓词
-import { ref, onMounted, onBeforeUnmount, onActivated, onDeactivated, toValue } from "vue";
+import { ref, onMounted, onBeforeUnmount, toValue } from "vue";
 import type { MaybeRefOrGetter } from "vue";
 import { listen } from "@tauri-apps/api/event";
 import { bridge } from "../api/bridge";
 import type { ProjectEvent, SessionEvent } from "../types";
+import { useKeepAliveListeners } from "./useKeepAliveListeners";
+import { createEarlierPagination } from "./earlierPagination";
 
 /** 与 useTrajectory 同款页宽（项目轴事件量 ≥ 单会话，同量级防御） */
 export const PROJECT_TRAJECTORY_PAGE_SIZE = 1000;
@@ -47,30 +49,34 @@ export function useProjectTrajectory(
 ) {
   const events = ref<ProjectEvent[]>([]);
   const loading = ref(false);
-  const loadingEarlier = ref(false);
-  const error = ref<string | null>(null);
-  const hasMore = ref(false);
 
   let currentId: string | null = null;
-  let minId: number | null = null;
+  // 「加载更早」三件套（hasMore/loadingEarlier/loadEarlier）+ 游标/错误，见
+  // earlierPagination.ts——与 useTrajectory 同款收敛，此处只留首屏 load 与 live 增量。
+  const pagination = createEarlierPagination<ProjectEvent>({
+    currentId: () => currentId,
+    pageSize: PROJECT_TRAJECTORY_PAGE_SIZE,
+    fetch: (pid, beforeId) =>
+      bridge.projects.listEvents(pid, { limit: PROJECT_TRAJECTORY_PAGE_SIZE, beforeId }),
+    cursorOf: (e) => e.id,
+  });
 
   async function load() {
     const pid = toValue(projectId);
     if (!pid) return;
     currentId = pid;
     loading.value = true;
-    error.value = null;
+    pagination.error.value = null;
     try {
       const page = await bridge.projects.listEvents(pid, { limit: PROJECT_TRAJECTORY_PAGE_SIZE });
       if (currentId !== pid) return; // 切换项目竞态守卫
       events.value = page;
-      hasMore.value = page.length === PROJECT_TRAJECTORY_PAGE_SIZE;
-      minId = page.length ? page[0].id : null;
+      pagination.markFirstPage(page);
     } catch (e) {
       if (currentId !== pid) return;
-      error.value = e instanceof Error ? e.message : String(e);
+      pagination.error.value = e instanceof Error ? e.message : String(e);
       events.value = [];
-      hasMore.value = false;
+      pagination.hasMore.value = false;
     } finally {
       if (currentId === pid) loading.value = false;
     }
@@ -98,41 +104,18 @@ export function useProjectTrajectory(
     }
   }
 
-  /** 「加载更早」：以当前已载最小全局 id 为游标向前翻一页 */
-  async function loadEarlier() {
-    const pid = currentId;
-    if (!pid || minId == null || loadingEarlier.value || !hasMore.value) return;
-    loadingEarlier.value = true;
-    try {
-      const page = await bridge.projects.listEvents(pid, { limit: PROJECT_TRAJECTORY_PAGE_SIZE, beforeId: minId });
-      if (currentId === pid && page.length) {
-        minId = page[0].id;
-        events.value = [...page, ...events.value];
-      }
-      hasMore.value = page.length === PROJECT_TRAJECTORY_PAGE_SIZE;
-    } catch (e) {
-      error.value = e instanceof Error ? e.message : String(e);
-    } finally {
-      loadingEarlier.value = false;
-    }
-  }
+  /** 「加载更早」：以当前已载最小全局 id 为游标向前翻一页（逻辑在 earlierPagination） */
+  const loadEarlier = () => pagination.loadEarlier(events);
 
   // ---- live 更新（D6：事件驱动，不做常驻轮询；onActivated 补拉由页面层调） ----
   // 会话级过滤 = 已载会话集 ∪ 项目会话集（谓词）。新委派子会话两边都不在 →
   // chat:delegation-started 无条件补一轮（payload 无项目字段，宁多拉不漏拉——
   // after_id 查询本身项目域过滤，多拉只是幂等空返）。
-  //
-  // ⚠️ keep-alive 生命周期（2026-08-31 生产卡顿修复）：项目详情页被 AppLayout
-  // 的路由级 keep-alive 缓存——onBeforeUnmount 在离开路由时**不触发**，监听器
-  // 会挂满整个应用生命周期：此后任何页面上的事件落库（生成期的工具轮/回合
-  // 事件高频）都会驱动 refreshLatest（invoke + 尾页 SQL + buildRows 重派生），
-  // 在已离开的页面上空转。onDeactivated 暂停、onActivated 恢复（错过的增量由
-  // 页面层 onActivated 补拉兜底，本层不重复拉）。非 keep-alive 环境两钩子不
-  // 触发、flag 恒 true，行为与旧版一致。
+  // keep-alive 静默门控 + 监听器生命周期走 useKeepAliveListeners（收敛样板见其头注释）。
+  const { isLive, register } = useKeepAliveListeners();
   const loadedConvIds = () => new Set(events.value.map((e) => e.session_id));
-  let listenerLive = true;
   function onEventAppended(payload: { conversation_id: string; kind: string }) {
-    if (!listenerLive) return;
+    if (!isLive()) return;
     if (!loadedConvIds().has(payload.conversation_id) && !isProjectConv(payload.conversation_id)) return;
     scheduleRefresh();
   }
@@ -151,28 +134,31 @@ export function useProjectTrajectory(
     }, REFRESH_DEBOUNCE_MS);
   }
 
-  const unlisteners: Array<() => void> = [];
   onMounted(async () => {
     // 初始 load 由视图层驱动（首载后要贴底，与 useTrajectory/TrajectoryView 同分工）
-    unlisteners.push(
+    register(
       await listen<{ conversation_id: string; kind: string }>("session:event-appended", (e) => {
         onEventAppended(e.payload);
       }),
     );
-    unlisteners.push(await listen("chat:delegation-started", () => {
-      if (listenerLive) scheduleRefresh();
+    register(await listen("chat:delegation-started", () => {
+      if (isLive()) scheduleRefresh();
     }));
   });
-  onDeactivated(() => { listenerLive = false; });
-  onActivated(() => { listenerLive = true; });
   onBeforeUnmount(() => {
     if (refreshTimer != null) {
       clearTimeout(refreshTimer);
       refreshTimer = null;
     }
-    unlisteners.forEach((u) => u());
-    unlisteners.length = 0;
   });
 
-  return { events, loading, loadingEarlier, error, hasMore, load, loadEarlier, refreshLatest };
+  return {
+    events, loading,
+    loadingEarlier: pagination.loadingEarlier,
+    error: pagination.error,
+    hasMore: pagination.hasMore,
+    load,
+    loadEarlier,
+    refreshLatest,
+  };
 }
