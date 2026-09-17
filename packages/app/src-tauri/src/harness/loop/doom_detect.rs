@@ -16,6 +16,9 @@
 
 use std::collections::HashMap;
 
+use crate::harness::event_log::{self, EventCtx, HookInjectedPayload};
+use crate::infra::protocol::ContentBlock;
+
 /// 连败达到该次数 → 在 tool_result 尾部注入纠正指令
 pub(crate) const NUDGE_AT: u32 = 3;
 /// 连败达到该次数 → 终止回合
@@ -109,6 +112,68 @@ impl DoomLoopTracker {
         let prefix = format!("{tool}|");
         self.streaks.retain(|k, _| !k.starts_with(&prefix));
     }
+}
+
+/// 阶段 E 出口的扫描 + nudge（从 `loop_engine::stream_loop_inner` 拆出，U3-5 ④）。
+///
+/// 遍历本轮 `tool_result_blocks`，按「工具名 + 错误家族」更新 [`DoomLoopTracker`]：
+/// 连败达 [`NUDGE_AT`] 逐次在对应 tool_result 尾部注入纠正指令（模型可见 → 走
+/// `hook_injected` 事件留痕），达 [`TERMINATE_AT`] 返回 `true`（调用方据此终止）。
+/// 同工具任一次成功 → 清零该工具全部签名。
+pub(crate) async fn scan_and_nudge(
+    pool: &sqlx::SqlitePool,
+    ev: &EventCtx,
+    doom: &mut DoomLoopTracker,
+    tool_result_blocks: &mut [ContentBlock],
+    completed_calls: &[(String, String, String)],
+) -> bool {
+    let mut terminate = false;
+    for block in tool_result_blocks.iter_mut() {
+        let ContentBlock::ToolResult {
+            tool_use_id,
+            content,
+            is_error,
+        } = block
+        else {
+            continue;
+        };
+        let Some((_, tc_name, _)) = completed_calls
+            .iter()
+            .find(|(id, _, _)| id == &*tool_use_id)
+        else {
+            continue;
+        };
+        if is_error.unwrap_or(false) {
+            let streak = doom.record_failure(tc_name, content);
+            if streak >= TERMINATE_AT {
+                terminate = true;
+            } else if streak >= NUDGE_AT {
+                let nudge = nudge_text(tc_name, streak);
+                tracing::warn!(
+                    target: "ice_paw.loop",
+                    "doom_loop 纠正指令注入: tool={} streak={}",
+                    tc_name,
+                    streak
+                );
+                // 模型可见注入 → 入事件日志（复用 hook_injected 通道，point 区分；
+                // derive 对 hook_injected 不派生消息，仅审计留痕）
+                event_log::log_hook_injected(
+                    pool,
+                    ev,
+                    &HookInjectedPayload {
+                        v: 1,
+                        point: "doom_loop_nudge".into(),
+                        prompt: nudge.clone(),
+                    },
+                )
+                .await;
+                content.push_str(&nudge);
+            }
+        } else {
+            doom.record_success(tc_name);
+        }
+    }
+    terminate
 }
 
 #[cfg(test)]

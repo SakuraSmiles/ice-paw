@@ -22,6 +22,11 @@
 //!     （跳档 / swap 五字段 / model_switch 事件 + chat:model-switched toast）
 //! - `events`：loop 事件发射
 //!   - `emit_intermediate_round_state()` — 发射中间 round-state 事件
+//! - `termination`：终止收尾辅助（U3-5 ④ loop_engine 再拆）
+//!   - `budget_exceeded_fallback()` — 预算超限终止提示文案（纯函数）
+//!   - `finalize_guard_logged()` — 终止守卫落盘 + assistant_message/message_discarded 事件镜像
+//! - `doom_detect`：doom_loop 检测（P10④）
+//!   - `scan_and_nudge()` — 阶段 E 出口扫描 tool_result + 注入 nudge（返回是否终止）
 //!
 //! 这些函数无业务副作用（`events` 仅 emit Tauri 事件），便于独立单元测试。
 
@@ -33,5 +38,6 @@ pub(crate) mod fallback;
 pub(crate) mod reason;
 pub(crate) mod retry_round;
 pub(crate) mod stuck_detect;
+pub(crate) mod termination;
 pub(crate) mod turn_cost;
 pub(crate) mod token_usage;
