@@ -13,12 +13,13 @@
 <script setup lang="ts">
 import { watch, nextTick, ref, computed, onActivated } from "vue";
 import { useRouter } from "vue-router";
-import { ArrowLeftRight, AtSign, Brain, CornerUpRight, MessageSquareText, Shield, Wrench } from "@lucide/vue";
+import { ArrowLeftRight, AtSign, CornerUpRight, Shield } from "@lucide/vue";
 import { useChatStore } from "../../stores/chat";
 import { useAgentStore } from "../../stores/agent";
 import { useChannel, loadChannelNotices, type ElectionCard } from "../../composables/useChannel";
 import { formatTime, formatDateLabel, parseDbTime } from "../../utils/time";
 import MarkdownRenderer from "./MarkdownRenderer.vue";
+import MessageGroupCapsules from "./MessageGroupCapsules.vue";
 import ConfigProposalCard from "./ConfigProposalCard.vue";
 import DelegationCard from "./DelegationCard.vue";
 import PlanCard from "./PlanCard.vue";
@@ -36,6 +37,7 @@ import { shortCode, parseReferenceBlocks, resolveGroupMid } from "../../utils/re
 import type { ParsedRef } from "../../utils/refs";
 import { incomingInfoOf, parseIncomingText, type IncomingInfo } from "../../utils/crossSession";
 import { memoized } from "../../utils/blockMemo";
+import { transferKey, type ThinkSegment } from "../../utils/groupCollapse";
 import { summarizeToolCall, dirnameOf, type ToolLineSummary } from "../../utils/toolSummary";
 import { toolDisplayName } from "../../utils/toolLabels";
 import { revealItemInDir, openPath } from "@tauri-apps/plugin-opener";
@@ -1028,13 +1030,12 @@ function isToolsCollapsed(g: MessageGroup): boolean {
 
 // ===== 组级思考聚合（2026-09-16 拍板：≥2 段聚合到气泡顶部，与工具折叠对称——
 // 思考顶、正文中、工具总量底；生成中组不聚合——流式思考实时在场，回合结束沉淀）=====
-/** 聚合区的一段思考。key 与 item 内 think-block 展开键同构（msgId + '-h' + 段序），
- *  聚合前后展开态互通；段耗时取块自身 duration_ms（持久口径——聚合区是历史回看
- *  视角，thinkingDurations 内存 map 是「刚结束」瞬态且 per-message 对段级无意义）。 */
-interface GroupedThink { key: string; text: string; durationMs: number | null }
+/** 聚合段类型 ThinkSegment 与标签函数 thinkSegLabel 已下沉 utils/groupCollapse.ts
+ *  （U3-3 第一刀）。段耗时取块自身 duration_ms（持久口径——聚合区是历史回看视角，
+ *  thinkingDurations 内存 map 是「刚结束」瞬态且 per-message 对段级无意义）。 */
 
-const groupThinkingStats = computed<Map<string, { segs: GroupedThink[]; totalMs: number | null }>>(() => {
-  const stats = new Map<string, { segs: GroupedThink[]; totalMs: number | null }>();
+const groupThinkingStats = computed<Map<string, { segs: ThinkSegment[]; totalMs: number | null }>>(() => {
+  const stats = new Map<string, { segs: ThinkSegment[]; totalMs: number | null }>();
   for (const g of messageGroups.value) {
     if (g.role !== "assistant") continue;
     // Layer B 快路径：组内 item 全带 stats 且段数和 <2 → 必不进聚合表（门槛 2），
@@ -1043,7 +1044,7 @@ const groupThinkingStats = computed<Map<string, { segs: GroupedThink[]; totalMs:
       const segSum = g.items.reduce((n, it) => n + (it.msg.stats?.think_segs ?? 0), 0);
       if (segSum < 2) continue;
     }
-    const segs: GroupedThink[] = [];
+    const segs: ThinkSegment[] = [];
     let totalMs = 0;
     let hasMs = false;
     for (const it of g.items) {
@@ -1062,11 +1063,6 @@ const groupThinkingStats = computed<Map<string, { segs: GroupedThink[]; totalMs:
  *  （含「刚结束」驻留块——其内容已 freeze 进 content_blocks，聚合区承载）。 */
 function thinkingAggregateEligible(g: MessageGroup): boolean {
   return groupThinkingStats.value.has(g.key) && !groupInLiveTurn(g);
-}
-
-/** 聚合段标签（镜像 item 内三态：块耗时 → 只显「思考」）。 */
-function thinkSegLabel(seg: GroupedThink): string {
-  return seg.durationMs != null ? "思考 · " + formatThinkingMs(seg.durationMs) : "思考";
 }
 
 // ===== 组级过程叙述收纳（2026-09-16 拍板；三轮：门控退役 + 截断标注 + 空壳治理保留）=====
@@ -1157,10 +1153,7 @@ function transferGroupExpansion(
   newKey: string,
 ) {
   if (!setRef.value.has(oldKey)) return;
-  const set = new Set(setRef.value);
-  set.delete(oldKey);
-  set.add(newKey);
-  setRef.value = set;
+  setRef.value = transferKey(setRef.value, oldKey, newKey);
 }
 
 watch(messageGroups, (groups, prev) => {
@@ -1487,58 +1480,32 @@ const RESUMABLE_REASONS = new Set([
                 </div>
               </template>
               <div class="assistant-body">
-            <!-- 组级收纳胶囊行（2026-09-16 五轮拍板：三行合一置气泡最前端）——
-                 思考/工具/过程三胶囊并排（序固定 思考→工具→过程），各配语义
-                 Lucide 图标（Brain/Wrench/MessageSquareText——图标表内容域，
-                 原状态图标 done/error 与收纳语义不符，用户拍板换掉）。
-                 置顶而非置底：底部工具行展开向上顶会把点击控件推出视野；置顶
-                 展开向下流（details 语感），控件钉在位。
-                 六轮（用户反馈「不够明显、区别度不够」）：胶囊 chrome 对齐房内
-                 chip 语言（ChatHeader 频道 tag 徽章）——收起=实底软色胶囊（供能
-                 暗示「这里有内容」）、展开=幽灵描边胶囊（is-open，控件退位）；
-                 div→button 化 + aria-expanded（键盘可达基线）。
+            <!-- 组级收纳胶囊行 + 展开后的思考堆叠（U3-3 第一刀：整体下沉
+                 MessageGroupCapsules 纯展示子组件）。三胶囊并排（序固定 思考→
+                 工具→过程，语义 Lucide 图标）+ 思考聚合展开堆叠；收纳判定/展开
+                 态/标签仍由本组件算好作原语传入，子组件只渲染 + 转发 toggle。
                  ⚠️ 胶囊必须在 item v-for 之外（与 message-item 同级——组级错位
                  教训：落 item 内 = 每轮一条重复摘要行）。 -->
-            <div v-if="thinkingAggregateEligible(group) || toolCollapseEligible(group) || processCollapseEligible(group)" class="group-summary-pills">
-              <button v-if="thinkingAggregateEligible(group)" type="button" class="think-toggle summary-pill think-group-summary" :class="{ 'is-open': expandedThinkingGroups.has(group.key) }" :aria-expanded="expandedThinkingGroups.has(group.key)" @click="toggleThinkingGroup(group.key)">
-                <Brain :size="14" class="pill-glyph" aria-hidden="true" />
-                <span class="think-label">思考 · {{ groupThinkingStats.get(group.key)?.segs.length }} 段</span>
-                <span v-if="groupThinkingStats.get(group.key)?.totalMs != null" class="think-label think-group-total">{{ formatThinkingMs(groupThinkingStats.get(group.key)!.totalMs!) }}</span>
-                <span class="think-chevron">{{ expandedThinkingGroups.has(group.key) ? '▾' : '▸' }}</span>
-              </button>
-              <button v-if="toolCollapseEligible(group)" type="button" class="tool-toggle summary-pill tool-group-summary" :class="{ 'is-open': !isToolsCollapsed(group) }" :aria-expanded="!isToolsCollapsed(group)" @click="toggleToolGroup(group.key)">
-                <Wrench :size="14" class="pill-glyph" aria-hidden="true" />
-                <template v-if="isToolsCollapsed(group)">
-                  <span class="tool-name">{{ groupToolStats.get(group.key)?.total }} 次工具调用</span>
-                  <span v-if="(groupToolStats.get(group.key)?.errors ?? 0) > 0" class="tool-fail-count">{{ groupToolStats.get(group.key)?.errors }} 失败</span>
-                </template>
-                <span v-else class="tool-name">收起 · {{ groupToolStats.get(group.key)?.total }} 次工具调用</span>
-                <span class="tool-chevron">{{ isToolsCollapsed(group) ? '▸' : '▾' }}</span>
-              </button>
-              <button v-if="processCollapseEligible(group)" type="button" class="tool-toggle summary-pill process-group-summary" :class="{ 'is-open': !isProcessCollapsed(group) }" :aria-expanded="!isProcessCollapsed(group)" @click="toggleProcessGroup(group.key)">
-                <MessageSquareText :size="14" class="pill-glyph" aria-hidden="true" />
-                <span class="tool-name" :class="{ 'process-truncated': isProcessCollapsed(group) && groupTruncatedAfter(group) }">{{ processRowLabel(group, isProcessCollapsed(group)) }}</span>
-                <span class="tool-chevron">{{ isProcessCollapsed(group) ? '▸' : '▾' }}</span>
-              </button>
-            </div>
-            <!-- 组级思考聚合（≥2 段）：收起=胶囊总量，展开=胶囊行下堆叠各段
-                 （段内交互照旧，展开键与 item 内同构——聚合前后互通）。 -->
-            <Transition name="think-fade">
-              <div v-if="thinkingAggregateEligible(group) && expandedThinkingGroups.has(group.key)" class="think-group-stack">
-                <div v-for="seg in groupThinkingStats.get(group.key)?.segs" :key="seg.key" class="think-block">
-                  <div class="think-toggle" @click="toggleThinking(seg.key)">
-                    <StatusGlyph status="done" class="think-glyph" />
-                    <span class="think-label">{{ thinkSegLabel(seg) }}</span>
-                    <span class="think-chevron">{{ expandedThinking.has(seg.key) ? '▾' : '▸' }}</span>
-                  </div>
-                  <Transition name="think-fade">
-                    <div v-if="expandedThinking.has(seg.key)" class="think-body">
-                      <MarkdownRenderer :content="seg.text" />
-                    </div>
-                  </Transition>
-                </div>
-              </div>
-            </Transition>
+            <MessageGroupCapsules
+              :thinking-eligible="thinkingAggregateEligible(group)"
+              :tool-eligible="toolCollapseEligible(group)"
+              :process-eligible="processCollapseEligible(group)"
+              :thinking-expanded="expandedThinkingGroups.has(group.key)"
+              :thinking-seg-count="groupThinkingStats.get(group.key)?.segs.length ?? 0"
+              :thinking-total-ms="groupThinkingStats.get(group.key)?.totalMs ?? null"
+              :segs="groupThinkingStats.get(group.key)?.segs ?? []"
+              :expanded-seg-keys="expandedThinking"
+              :tools-collapsed="isToolsCollapsed(group)"
+              :tool-total="groupToolStats.get(group.key)?.total ?? 0"
+              :tool-errors="groupToolStats.get(group.key)?.errors ?? 0"
+              :process-collapsed="isProcessCollapsed(group)"
+              :process-truncated="groupTruncatedAfter(group)"
+              :process-label="processRowLabel(group, isProcessCollapsed(group))"
+              @toggle-thinking="toggleThinkingGroup(group.key)"
+              @toggle-tools="toggleToolGroup(group.key)"
+              @toggle-process="toggleProcessGroup(group.key)"
+              @toggle-seg="toggleThinking"
+            />
             <div v-for="item in visibleItemsOf(group)" :key="item.msg.id" class="message-item">
               <!-- 三个点动画：仅当前流式 item 且无任何返回时显示 -->
               <div v-if="isLiveAssistant(item) && item.msg.content === '' && !chat.streamingThinking && toolCallList.length === 0" class="think-dots">
@@ -2251,72 +2218,6 @@ const RESUMABLE_REASONS = new Set([
 .tool-file { margin-left:auto; margin-right:6px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:right; flex-shrink:1; font-size:var(--ip-text-caption-size); color:var(--ip-color-text-secondary); cursor:pointer; }
 .tool-file:hover { color:var(--ip-primary-600); text-decoration:underline; }
 .tool-preview { font-size:var(--ip-text-caption-size); color:var(--ip-color-text-disabled); margin-left:auto; margin-right:6px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:right; flex-shrink:1; }
-/* ③ 组级折叠摘要行的失败计数（warning 语义色；与 tool-diff 的加减速记同为行内强调位） */
-.tool-fail-count { font-size:var(--ip-text-caption-size); color:var(--ip-warning-text); white-space:nowrap; }
-
-/* 组级收纳胶囊行（2026-09-16 五轮：三行合一置气泡最前端）——思考/工具/过程
-   三胶囊并排；flex-wrap 窄窗换行不截断；胶囊覆写行级 width:100% → 内容自适应宽。
-   与正文的间距对齐段落节奏（七轮拍板「留顶部强化呈现」）：下距 = spacing-3
-   （12px）恰为 .markdown-body p 的段底距——胶囊行是一段落级区块，不再贴着
-   正文；行内 gap 同步升至 spacing-2 让三枚 chip 各自成形 */
-.group-summary-pills { display:flex; flex-wrap:wrap; align-items:center; gap:var(--ip-spacing-2); margin-bottom:var(--ip-spacing-3); }
-/* 胶囊 chrome（2026-09-16 六轮：用户反馈「不够明显、区别度不够」）——对齐房内
-   chip 语言 ChatHeader .header-kind-badge（软底胶囊 = 可点开藏内容的供能暗示）；
-   两态对比承载状态自述：收起 = 实底软色胶囊（这里有内容，点开看）/ 展开 =
-   幽灵描边胶囊（is-open，内容已在场、控件退位）；hover 各自加深；边框两态恒
-   1px 防开合尺寸跳动。色值照抄 header-kind-badge 的 var+rgba 兜底写法
-   （--ip-primary-soft-border 全局无定义，rgba 兜底即频道 tag 徽章的实际渲染
-   形态）。全部规则收在 .group-summary-pills 前缀下与基类（.tool-toggle/
-   .think-toggle 行形态）无特异性争抢；按钮化后补 font/line-height 继承
-   （UA 按钮字体不随父走）。 */
-.group-summary-pills .summary-pill {
-  width:auto; flex-shrink:0;
-  padding:2px 10px; gap:4px;
-  border-radius:var(--ip-radius-full, 999px);
-  border:1px solid rgba(var(--ip-primary-500-rgb), 0.25);
-  background:var(--ip-color-primary-soft-bg, rgba(var(--ip-primary-500-rgb), 0.08));
-  color:var(--ip-primary-600);
-  font-family:inherit; font-size:inherit; line-height:inherit;
-  transition:background var(--ip-duration-fast) var(--ip-ease-out),
-             border-color var(--ip-duration-fast) var(--ip-ease-out),
-             color var(--ip-duration-fast) var(--ip-ease-out);
-}
-.group-summary-pills .summary-pill:hover { background:rgba(var(--ip-primary-500-rgb), 0.14); }
-/* 展开态：幽灵胶囊（透明底 + 默认描边 + tertiary 文本） */
-.group-summary-pills .summary-pill.is-open { background:transparent; border-color:var(--ip-color-border-default); color:var(--ip-color-text-tertiary); }
-.group-summary-pills .summary-pill.is-open:hover { background:var(--ip-color-bg-tertiary); }
-/* 胶囊内子元素随态取色：图标/标签/chevron 一律 inherit 胶囊色（收起=主色、
-   展开=tertiary），chevron 与总耗时再压一档透明度作次级信息。
-   字号/字重上调（七轮拍板「强化呈现」）：胶囊是折叠内容的唯一入口，标签升
-   body-sm-13 + semibold——比展开后的行级 tool-name（caption-12）大一档半档
-   字重，读作区块控件而非行内元数据；仅胶囊域内覆写，展开区各行照旧 */
-.group-summary-pills .summary-pill .pill-glyph { color:inherit; }
-.group-summary-pills .summary-pill .tool-name,
-.group-summary-pills .summary-pill .think-label {
-  color:inherit;
-  font-size:var(--ip-text-body-sm-size);
-  font-weight:var(--ip-font-weight-semibold);
-}
-/* 失败计数只升字号不碰颜色（warning 语义色刻意保留，见 .tool-fail-count 先例） */
-.group-summary-pills .summary-pill .tool-fail-count { font-size:var(--ip-text-body-sm-size); }
-.group-summary-pills .summary-pill .tool-chevron,
-.group-summary-pills .summary-pill .think-chevron { color:inherit; opacity:0.65; font-size:var(--ip-text-caption-size); }
-.group-summary-pills .summary-pill .think-group-total { color:inherit; opacity:0.75; }
-/* 胶囊语义图标（Brain 思考 / Wrench 工具 / MessageSquareText 过程叙述）：
-   图标表内容域非状态——状态图标 done/error 与收纳语义不符（2026-09-16 用户
-   拍板换语义图标）；色随胶囊态（上方 inherit 规则） */
-.pill-glyph { flex-shrink:0; }
-/* 思考聚合展开堆叠区（胶囊行正下方；左缩进 22px 与 think-body 同意象）；
-   总耗时是次级信息（常规字重；胶囊内色由上方 inherit+opacity 承载） */
-.think-group-total { font-weight:var(--ip-font-weight-regular); }
-.think-group-stack { margin:2px 0 6px 22px; display:grid; gap:2px; }
-/* 截断组标注（三轮换轴）：回合被截断是警示事实——warning 语义色（同
-   .tool-fail-count 先例），碎句尾段由它语境化、不再冒充结论。
-   ⚠️ scoped 版必须排在上方 .tool-name 的 inherit 覆写之后——两规则同为
-   (0,3,0)，同元素双类（tool-name+process-truncated）命中时后者胜 */
-.group-summary-pills .summary-pill .process-truncated { color:var(--ip-warning-text); }
-.process-truncated { color:var(--ip-warning-text); }
-
 /* 状态图标（StatusGlyph：环形对勾/3×3 像素格/环形叉，2026-09-04 语系统一）。
    行内紧凑节奏保持：glyph 14px 与 caption 字号同高，flex 自然居中。 */
 
