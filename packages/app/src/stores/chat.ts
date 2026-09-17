@@ -26,6 +26,7 @@ import type {
 } from "../types";
 import { bridge } from "../api/bridge";
 import { useAgentStore } from "./agent";
+import { useProjectStore } from "./project";
 
 /** 授权等待上限，与后端 tool_executor::wait_for_auth_response 的 TIMEOUT 对齐
  *  （120s 到点后端自动取消并发 tool-auth-request-cancel 清条目）*/
@@ -73,6 +74,17 @@ export const useChatStore = defineStore("chat", () => {
     conversations.value.find((c) => c.id === activeConvId.value) ?? null,
   );
 
+  /** 侧栏高亮目标 id（导航一致性）：委派子会话在侧栏不可见（isUserChat 过滤），
+   *  选中委派子会话时高亮应落到父会话（parent_conversation_id，深度=1 保证父为
+   *  chat 会话）；其余会话高亮即自身。 */
+  const highlightConvId = computed(() => {
+    const c = activeConversation.value;
+    if (c?.kind === "delegation" && c.parent_conversation_id) {
+      return c.parent_conversation_id;
+    }
+    return activeConvId.value;
+  });
+
   // ===== 委派卡按 tool_use 绑定子会话（MA-1 修正） =====
   // delegation-started 事件到达时登记：tool_use_id → child_conv_id。同轮多卡
   // 并行委派时，每张 running 卡的「打开任务」按自己的 tool_use id 查表精确跳转
@@ -102,6 +114,15 @@ export const useChatStore = defineStore("chat", () => {
     turnFirstIdx.value = null;
   }
 
+  /** 把项目 scope 同步到目标会话所属项目（散落 = null）。目标会话不在缓存时
+   *  不动（返回 false 供调用方决定是否稍后补同步）。 */
+  function syncProjectScope(id: string): boolean {
+    const target = conversations.value.find((c) => c.id === id);
+    if (!target) return false;
+    useProjectStore().setActiveProject(target.project_id ?? null);
+    return true;
+  }
+
   function selectConversation(id: string) {
     const oldId = activeConvId.value;
     // 离开「正在流式」的会话：把当前流式文本快照到 bgStreams，切回时可恢复。
@@ -114,6 +135,10 @@ export const useChatStore = defineStore("chat", () => {
       });
     }
     activeConvId.value = id;
+    // 导航一致性：选中会话时同步项目 scope（侧栏跟随主会话走）。目标会话
+    // 尚不在缓存时跳过（委派子会话后台新建）——由 openConversationAtTrajectory
+    // 在刷新会话列表后补一次同步，此处避免「先切散落再跳回」的闪动。
+    syncProjectScope(id);
     // 流式态无条件先整体复位（跨会话隔离）：后台快照只追踪 text/thinking，
     // 工具调用/多轮结构不入快照——不复位就会把上一会话的流式状态带进新会话视图。
     resetRoundStreaming();
@@ -980,15 +1005,18 @@ export const useChatStore = defineStore("chat", () => {
   /** 打开（可能在列表外的）会话并直接落到轨迹 tab。附带刷新会话列表：
    *  委派子会话是后台新建的，当前 conversations 缓存里还没有它——不刷新的话
    *  activeConversation 查不到、头部标题/agent 名会空。 */
-  function openConversationAtTrajectory(id: string) {
+  async function openConversationAtTrajectory(id: string) {
     openTrajectoryNext.value = true;
     selectConversation(id);
-    void loadConversations();
+    await loadConversations();
+    // 导航一致性：委派子会话常在 conversations 缓存外（后台新建），上面的
+    // selectConversation 未同步 scope——刷新列表后再补一次（子会话继承父项目）。
+    syncProjectScope(id);
   }
 
   return {
     conversations, convLoading, convLoadError,
-    activeConvId, activeConversation,
+    activeConvId, activeConversation, highlightConvId,
     messages, msgLoading, hasMore, loadingMore, pagedOnce, pageCursor,
     msgLoadError, loadMoreError,
     sending, streamingText, draftText, pendingImages, pendingFiles, pendingRefs, lastFinishReason, currentModel,

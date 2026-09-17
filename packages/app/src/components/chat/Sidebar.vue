@@ -486,7 +486,7 @@ function timeAgoLabel(dateStr: string): string {
       <button
         v-for="conv in scopedConversations"
         :key="conv.id"
-        :class="['conv-item', { active: isChatRoute && chat.activeConvId === conv.id, streaming: chat.streamingConvIds.has(conv.id) }]"
+        :class="['conv-item', { active: isChatRoute && chat.highlightConvId === conv.id, streaming: chat.streamingConvIds.has(conv.id) }]"
         @click="selectConv(conv.id)"
       >
         <div class="conv-item-title">
@@ -650,7 +650,7 @@ function timeAgoLabel(dateStr: string): string {
               <button
                 v-for="conv in scopedConversations"
                 :key="conv.id"
-                :class="['conv-item', { active: isChatRoute && chat.activeConvId === conv.id, streaming: chat.streamingConvIds.has(conv.id) }]"
+                :class="['conv-item', { active: isChatRoute && chat.highlightConvId === conv.id, streaming: chat.streamingConvIds.has(conv.id) }]"
                 @click="selectConvFromFlyout(conv.id)"
               >
                 <div class="conv-item-title">
