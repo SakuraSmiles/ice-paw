@@ -203,7 +203,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 20px 28px 0;
+  padding: var(--ip-spacing-5) var(--ip-spacing-7) 0;
   flex-shrink: 0;
   height: 56px;
   gap: var(--ip-spacing-3);
@@ -238,7 +238,7 @@ onUnmounted(() => {
   align-items: center;
   gap: 5px;
   height: 28px;
-  padding: 0 12px;
+  padding: 0 var(--ip-spacing-3);
   font-size: var(--ip-text-caption-size);
   font-weight: var(--ip-font-weight-medium);
   color: var(--ip-color-text-secondary);
@@ -269,7 +269,7 @@ onUnmounted(() => {
 .log-area {
   flex: 1;
   min-height: 0;
-  padding: 8px 28px 24px;
+  padding: var(--ip-spacing-2) var(--ip-spacing-7) var(--ip-spacing-6);
   display: flex;
   flex-direction: column;
 }
@@ -289,9 +289,9 @@ onUnmounted(() => {
 .log-body {
   flex: 1;
   overflow-y: auto;
-  padding: 8px 0;
+  padding: var(--ip-spacing-2) 0;
   font-family: var(--ip-font-mono);
-  font-size: 12px;
+  font-size: var(--ip-text-caption-size);
   line-height: 1.75;
 }
 
@@ -299,7 +299,7 @@ onUnmounted(() => {
   display: flex;
   align-items: flex-start;
   gap: var(--ip-spacing-3);
-  padding: 0 16px 0 14px;
+  padding: 0 var(--ip-spacing-4) 0 14px;
   /* 左侧 2px 严重度色条（默认透明，ERROR/WARN 着色） */
   border-left: 2px solid transparent;
   color: var(--ip-color-text-secondary);
@@ -384,7 +384,7 @@ onUnmounted(() => {
 /* 行数提示（极简：卡片外、无框无底色，右下角淡字） */
 .log-foot {
   flex-shrink: 0;
-  margin-top: 8px;
+  margin-top: var(--ip-spacing-2);
   text-align: right;
   font-size: var(--ip-text-caption-size);
   color: var(--ip-color-text-tertiary);

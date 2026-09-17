@@ -334,8 +334,8 @@ function openTask(id: string) {
 
 /* 胶囊：与 tab 同排右侧（ChatPage 标签条），任务·计划组文案 + 进行中脉冲 */
 .task-pill {
-  display: flex; align-items: center; gap: 6px;
-  padding: 4px 12px; border-radius: var(--ip-radius-full, 999px);
+  display: flex; align-items: center; gap: var(--ip-spacing-1_5);
+  padding: 4px var(--ip-spacing-3); border-radius: var(--ip-radius-full, 999px);
   border: 1px solid var(--ip-color-border-default);
   background: var(--ip-color-bg-secondary);
   color: var(--ip-color-text-secondary);
@@ -363,7 +363,7 @@ function openTask(id: string) {
 .task-popover {
   position: absolute; top: calc(100% + 6px); right: 0; z-index: var(--ip-z-dropdown);
   width: min(420px, calc(100vw - var(--msg-col-right, 80px) - 30px));
-  max-height: 58vh; padding: 6px;
+  max-height: 58vh; padding: var(--ip-spacing-1_5);
   display: flex; flex-direction: column;
   background: var(--ip-color-bg-elevated);
   border: 1px solid var(--ip-color-border-default);
@@ -372,14 +372,14 @@ function openTask(id: string) {
 }
 .task-popover.dual { width: min(880px, calc(100vw - var(--msg-col-right, 80px) - 30px)); }
 .task-columns {
-  display: flex; flex-wrap: wrap; gap: 6px;
+  display: flex; flex-wrap: wrap; gap: var(--ip-spacing-1_5);
   flex: 1 1 auto; min-height: 0; overflow-y: auto; /* 窄窗堆叠态的整体滚动 */
 }
 .task-col { flex: 1 1 0; min-width: 260px; display: flex; flex-direction: column; gap: 2px; }
 .col-head {
   display: flex; align-items: center; gap: var(--ip-spacing-2);
   font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary);
-  padding: 4px 10px 6px;
+  padding: 4px var(--ip-spacing-2_5) var(--ip-spacing-1_5);
 }
 .col-count { font-weight: var(--ip-font-weight-medium); color: var(--ip-color-text-secondary); }
 /* 列身：高度由弹窗 58vh 经 flex 链分配（内容短=自适应高，超出=列内滚动）；
@@ -395,7 +395,7 @@ function openTask(id: string) {
 .plan-progress-fill { display: block; height: 100%; border-radius: 2px; background: var(--ip-primary-500); transition: width var(--ip-duration-fast) var(--ip-ease-out); }
 .task-row {
   display: flex; align-items: center; gap: var(--ip-spacing-2); width: 100%;
-  padding: 7px 10px; border: none; border-radius: var(--ip-radius-md);
+  padding: 7px var(--ip-spacing-2_5); border: none; border-radius: var(--ip-radius-md);
   background: transparent; cursor: pointer; text-align: left;
   transition: background var(--ip-duration-fast) var(--ip-ease-out);
 }
@@ -409,15 +409,15 @@ function openTask(id: string) {
 .task-row-agent {
   flex-shrink: 0; max-width: 120px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
   font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary);
-  padding: 1px 8px; border-radius: var(--ip-radius-full, 999px);
+  padding: 1px var(--ip-spacing-2); border-radius: var(--ip-radius-full, 999px);
   background: var(--ip-color-bg-tertiary);
 }
-.task-more { padding: 6px 10px 4px; font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
+.task-more { padding: var(--ip-spacing-1_5) var(--ip-spacing-2_5) 4px; font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
 
 /* 计划条目行（与 PlanCard 同款状态标记，非按钮——仅挂任务的条目可点） */
 .task-plan-row {
   display: flex; align-items: center; gap: var(--ip-spacing-2);
-  padding: 6px 10px; border-radius: var(--ip-radius-md);
+  padding: var(--ip-spacing-1_5) var(--ip-spacing-2_5); border-radius: var(--ip-radius-md);
   transition: background-color var(--ip-duration-fast) var(--ip-ease-out);
 }
 .task-plan-link { cursor: pointer; }

@@ -971,8 +971,8 @@ onActivated(async () => {
 .content-header {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 20px 28px 0;
+  gap: var(--ip-spacing-1_5);
+  padding: var(--ip-spacing-5) var(--ip-spacing-7) 0;
   flex-shrink: 0;
   height: 56px;
 }
@@ -1001,7 +1001,7 @@ onActivated(async () => {
 .profile-list {
   flex: 1;
   overflow-y: auto;
-  padding: 8px 28px 24px;
+  padding: var(--ip-spacing-2) var(--ip-spacing-7) var(--ip-spacing-6);
   display: flex;
   flex-direction: column;
   gap: var(--ip-spacing-2);
@@ -1009,7 +1009,7 @@ onActivated(async () => {
 }
 
 .profile-card {
-  padding: 12px 16px;
+  padding: var(--ip-spacing-3) var(--ip-spacing-4);
   background-color: var(--ip-color-bg-secondary);
   border: 1px solid var(--ip-color-border-default);
   border-radius: var(--ip-card-radius);
@@ -1062,7 +1062,7 @@ onActivated(async () => {
 .row-title {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--ip-spacing-1_5);
   min-width: 0;
 }
 .card-name {
@@ -1088,7 +1088,7 @@ onActivated(async () => {
 .ref-count {
   flex-shrink: 0;
   margin-left: auto;
-  padding: 0 6px;
+  padding: 0 var(--ip-spacing-1_5);
   line-height: 18px;
   font-size: var(--ip-text-micro-size);
   color: var(--ip-color-text-secondary);
@@ -1105,7 +1105,7 @@ onActivated(async () => {
 .row-sub {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--ip-spacing-1_5);
   min-width: 0;
   font-size: var(--ip-text-caption-size);
   /* 行高锚定 18px = tag 高（AgentSettings 同款：全局行高 1.6 的分数行盒与
@@ -1121,7 +1121,7 @@ onActivated(async () => {
   min-width: 0;
   flex-shrink: 1;
   height: 18px;
-  padding: 0 7px 0 6px;
+  padding: 0 7px 0 var(--ip-spacing-1_5);
   border-radius: var(--ip-radius-full);
   background-color: var(--ip-color-bg-tertiary);
   color: var(--ip-color-text-tertiary);
@@ -1173,8 +1173,8 @@ onActivated(async () => {
 
 /* ===== 展开面板（全字段编辑） ===== */
 .expand-panel {
-  margin-top: 12px;
-  padding-top: 12px;
+  margin-top: var(--ip-spacing-3);
+  padding-top: var(--ip-spacing-3);
   border-top: 1px solid var(--ip-color-border-default);
   display: flex;
   flex-direction: column;
@@ -1203,7 +1203,7 @@ onActivated(async () => {
 }
 .action-btns {
   display: flex;
-  gap: 6px;
+  gap: var(--ip-spacing-1_5);
   flex-shrink: 0;
 }
 .delete-btn { flex-shrink: 0; margin-bottom: 4px; }
@@ -1231,7 +1231,7 @@ onActivated(async () => {
 .field-label {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--ip-spacing-1_5);
   font-size: var(--ip-text-caption-size);
   font-weight: var(--ip-font-weight-medium);
   color: var(--ip-color-text-secondary);
@@ -1239,7 +1239,7 @@ onActivated(async () => {
 
 .input-group {
   display: flex;
-  gap: 6px;
+  gap: var(--ip-spacing-1_5);
   align-items: center;
 }
 
@@ -1248,7 +1248,7 @@ onActivated(async () => {
 .form-input {
   width: 100%;
   height: var(--ip-input-h-sm);
-  padding: 0 10px;
+  padding: 0 var(--ip-spacing-2_5);
   font-size: var(--ip-text-body-sm-size);
   color: var(--ip-color-text-primary);
   background-color: var(--ip-color-bg-tertiary);
@@ -1285,7 +1285,7 @@ onActivated(async () => {
   justify-content: center;
   gap: 4px;
   height: var(--ip-input-h-sm);
-  padding: 0 12px;
+  padding: 0 var(--ip-spacing-3);
   font-size: var(--ip-text-body-sm-size);
   font-weight: var(--ip-font-weight-medium);
   color: var(--ip-color-text-secondary);
@@ -1308,7 +1308,7 @@ onActivated(async () => {
   justify-content: center;
   gap: 4px;
   height: var(--ip-input-h-sm);
-  padding: 0 12px;
+  padding: 0 var(--ip-spacing-3);
   font-size: var(--ip-text-body-sm-size);
   font-weight: var(--ip-font-weight-medium);
   color: white;
@@ -1373,7 +1373,7 @@ onActivated(async () => {
 .embed-key-link:hover { text-decoration: underline; }
 
 .empty-hint {
-  padding: 16px 12px;
+  padding: var(--ip-spacing-4) var(--ip-spacing-3);
   text-align: center;
   font-size: var(--ip-text-caption-size);
   color: var(--ip-color-text-tertiary);

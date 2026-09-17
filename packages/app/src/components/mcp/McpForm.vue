@@ -274,7 +274,7 @@ function confirmDelete() {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  margin-top: 10px;
+  margin-top: var(--ip-spacing-2_5);
 }
 
 /* 区段标题（caption，无框靠留白分区） */
@@ -282,7 +282,7 @@ function confirmDelete() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 10px;
+  margin-bottom: var(--ip-spacing-2_5);
 }
 .section-title {
   font-size: var(--ip-text-caption-size);
@@ -297,8 +297,8 @@ function confirmDelete() {
 }
 
 .form-error {
-  padding: 8px 12px;
-  margin-bottom: 8px;
+  padding: var(--ip-spacing-2) var(--ip-spacing-3);
+  margin-bottom: var(--ip-spacing-2);
   background-color: var(--ip-danger-bg);
   border: 1px solid var(--ip-danger-border);
   border-radius: var(--ip-radius-md);
@@ -329,7 +329,7 @@ function confirmDelete() {
 .field-label {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--ip-spacing-1_5);
   font-size: var(--ip-text-caption-size);
   font-weight: var(--ip-font-weight-medium);
   color: var(--ip-color-text-secondary);
@@ -344,7 +344,7 @@ function confirmDelete() {
 .input {
   width: 100%;
   height: var(--ip-input-h-sm);
-  padding: 0 10px;
+  padding: 0 var(--ip-spacing-2_5);
   font-size: var(--ip-text-body-sm-size);
   color: var(--ip-color-text-primary);
   background-color: var(--ip-color-bg-tertiary);
@@ -367,12 +367,12 @@ function confirmDelete() {
 .dyn-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--ip-spacing-1_5);
 }
 .dyn-row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--ip-spacing-1_5);
 }
 .dyn-key {
   flex: 0 0 120px;
@@ -459,7 +459,7 @@ function confirmDelete() {
 /* 文字按钮（取消） */
 .btn-link {
   height: 28px;
-  padding: 0 10px;
+  padding: 0 var(--ip-spacing-2_5);
   font-size: var(--ip-text-body-sm-size);
   color: var(--ip-color-text-secondary);
   background: none;
@@ -478,7 +478,7 @@ function confirmDelete() {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: var(--ip-spacing-1_5);
   padding: 0 14px;
   font-size: var(--ip-text-body-sm-size);
   font-weight: var(--ip-font-weight-medium);
@@ -502,7 +502,7 @@ function confirmDelete() {
   align-items: center;
   gap: 5px;
   margin-top: 14px;
-  padding: 4px 8px;
+  padding: 4px var(--ip-spacing-2);
   font-size: var(--ip-text-caption-size);
   color: var(--ip-danger-base);
   background: none;

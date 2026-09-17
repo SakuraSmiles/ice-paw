@@ -993,7 +993,7 @@ const hasFilterResults = computed(() => {
 .content-header {
   display: flex;
   align-items: center;
-  padding: 20px 28px 0;
+  padding: var(--ip-spacing-5) var(--ip-spacing-7) 0;
   flex-shrink: 0;
   height: 56px;
 }
@@ -1017,7 +1017,7 @@ const hasFilterResults = computed(() => {
 .settings-list {
   flex: 1;
   width: 100%;
-  padding: 8px 28px 24px;
+  padding: var(--ip-spacing-2) var(--ip-spacing-7) var(--ip-spacing-6);
   display: flex;
   flex-direction: column;
   gap: var(--ip-spacing-3);
@@ -1043,7 +1043,7 @@ const hasFilterResults = computed(() => {
 .card-title {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--ip-spacing-1_5);
   margin: 0;
   font-size: var(--ip-text-body-sm-size);
   font-weight: var(--ip-font-weight-semibold);
@@ -1065,7 +1065,7 @@ const hasFilterResults = computed(() => {
 .field-label {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--ip-spacing-1_5);
   font-size: var(--ip-text-caption-size);
   font-weight: var(--ip-font-weight-medium);
   color: var(--ip-color-text-secondary);
@@ -1086,7 +1086,7 @@ const hasFilterResults = computed(() => {
 /* ===== 输入组 ===== */
 .input-group {
   display: flex;
-  gap: 6px;
+  gap: var(--ip-spacing-1_5);
   align-items: center;
 }
 
@@ -1095,7 +1095,7 @@ const hasFilterResults = computed(() => {
 .form-input {
   width: 100%;
   height: var(--ip-input-h-sm);
-  padding: 0 10px;
+  padding: 0 var(--ip-spacing-2_5);
   font-size: var(--ip-text-body-sm-size);
   color: var(--ip-color-text-primary);
   background-color: var(--ip-color-bg-tertiary);
@@ -1161,7 +1161,7 @@ const hasFilterResults = computed(() => {
   justify-content: center;
   gap: 4px;
   height: var(--ip-input-h-sm);
-  padding: 0 12px;
+  padding: 0 var(--ip-spacing-3);
   font-size: var(--ip-text-body-sm-size);
   font-weight: var(--ip-font-weight-medium);
   color: var(--ip-color-text-secondary);
@@ -1183,7 +1183,7 @@ const hasFilterResults = computed(() => {
 .card-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 6px;
+  gap: var(--ip-spacing-1_5);
 }
 .btn-primary {
   display: inline-flex;
@@ -1191,7 +1191,7 @@ const hasFilterResults = computed(() => {
   justify-content: center;
   gap: 4px;
   height: var(--ip-input-h-sm);
-  padding: 0 12px;
+  padding: 0 var(--ip-spacing-3);
   font-size: var(--ip-text-body-sm-size);
   font-weight: var(--ip-font-weight-medium);
   color: white;
@@ -1262,7 +1262,7 @@ const hasFilterResults = computed(() => {
 }
 .vision-tag {
   flex-shrink: 0;
-  padding: 1px 8px;
+  padding: 1px var(--ip-spacing-2);
   font-size: var(--ip-text-micro-size);
   font-weight: var(--ip-font-weight-medium);
   border-radius: var(--ip-radius-sm);
@@ -1270,7 +1270,7 @@ const hasFilterResults = computed(() => {
   border: 1px solid var(--ip-color-border-default);
 }
 .vision-tag--primary {
-  color: #fff;
+  color: var(--ip-color-text-on-primary);
   background: var(--ip-primary-600);
   border-color: var(--ip-primary-600);
 }
@@ -1334,7 +1334,7 @@ const hasFilterResults = computed(() => {
   transform: translateX(-50%);
   max-width: 260px;
   width: max-content;
-  padding: 5px 10px;
+  padding: 5px var(--ip-spacing-2_5);
   font-size: var(--ip-text-caption-size);
   font-weight: var(--ip-font-weight-regular);
   color: var(--ip-color-text-on-primary);
@@ -1364,7 +1364,7 @@ const hasFilterResults = computed(() => {
 
 .tz-row {
   display: flex;
-  gap: 6px;
+  gap: var(--ip-spacing-1_5);
   align-items: center;
 }
 
@@ -1375,7 +1375,7 @@ const hasFilterResults = computed(() => {
   gap: 4px;
   flex-shrink: 0;
   height: var(--ip-input-h-sm);
-  padding: 0 10px;
+  padding: 0 var(--ip-spacing-2_5);
   font-size: var(--ip-text-body-sm-size);
   font-weight: var(--ip-font-weight-medium);
   color: var(--ip-color-text-secondary);
@@ -1417,7 +1417,7 @@ const hasFilterResults = computed(() => {
   display: flex;
   align-items: center;
   height: var(--ip-input-h-sm);
-  padding: 0 0 0 10px;
+  padding: 0 0 0 var(--ip-spacing-2_5);
   background-color: var(--ip-color-bg-tertiary);
   border: 1px solid var(--ip-color-border-default);
   border-radius: var(--ip-radius-md);
@@ -1490,7 +1490,7 @@ const hasFilterResults = computed(() => {
 }
 
 .tz-group-label {
-  padding: 5px 10px 2px;
+  padding: 5px var(--ip-spacing-2_5) 2px;
   font-size: var(--ip-text-micro-size);
   font-weight: var(--ip-font-weight-semibold);
   color: var(--ip-color-text-tertiary);
@@ -1502,7 +1502,7 @@ const hasFilterResults = computed(() => {
   justify-content: space-between;
   gap: var(--ip-spacing-2);
   width: 100%;
-  padding: 5px 10px;
+  padding: 5px var(--ip-spacing-2_5);
   text-align: left;
   font-size: var(--ip-text-body-sm-size);
   color: var(--ip-color-text-primary);
@@ -1539,7 +1539,7 @@ const hasFilterResults = computed(() => {
 }
 
 .tz-empty {
-  padding: 7px 10px;
+  padding: 7px var(--ip-spacing-2_5);
   font-size: var(--ip-text-body-sm-size);
   color: var(--ip-color-text-tertiary);
   text-align: center;

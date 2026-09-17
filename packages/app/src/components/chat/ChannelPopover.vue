@@ -173,7 +173,7 @@ async function reelect() {
 .channel-error {
   font-size: var(--ip-text-caption-size); color: var(--ip-danger-text);
   background: var(--ip-danger-bg); border-radius: var(--ip-radius-md);
-  padding: 6px 10px; line-height: 1.5;
+  padding: var(--ip-spacing-1_5) var(--ip-spacing-2_5); line-height: 1.5;
 }
 .channel-empty {
   margin: 0; padding: var(--ip-spacing-4) var(--ip-spacing-2);
@@ -182,16 +182,16 @@ async function reelect() {
 }
 
 .channel-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; overflow-y: auto; }
-.channel-member { display: flex; align-items: center; gap: var(--ip-spacing-2); padding: 6px var(--ip-spacing-2); border-radius: var(--ip-radius-md); }
+.channel-member { display: flex; align-items: center; gap: var(--ip-spacing-2); padding: var(--ip-spacing-1_5) var(--ip-spacing-2); border-radius: var(--ip-radius-md); }
 .channel-member:hover { background: var(--ip-color-bg-secondary); }
-.channel-member-info { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 6px; }
+.channel-member-info { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: var(--ip-spacing-1_5); }
 .channel-member-name { font-size: var(--ip-text-body-sm-size); font-weight: var(--ip-font-weight-medium); color: var(--ip-color-text-primary); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .channel-member-role { display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0; font-size: var(--ip-text-micro-size); color: var(--ip-color-text-tertiary); }
 /* Shield 图标进文本流：显式 inline-block（base.css svg display:block reset 陷阱） */
 .channel-member-role svg { display: inline-block; color: var(--ip-color-primary-tint-text, var(--ip-primary-600)); }
 
 .channel-act {
-  flex-shrink: 0; padding: 3px 10px;
+  flex-shrink: 0; padding: 3px var(--ip-spacing-2_5);
   border: 1px solid var(--ip-color-border-default); border-radius: var(--ip-radius-sm);
   background: transparent; color: var(--ip-color-text-secondary);
   font-size: var(--ip-text-caption-size); font-family: inherit; cursor: pointer;
@@ -207,7 +207,7 @@ async function reelect() {
 .channel-reelect {
   align-self: flex-start;
   display: inline-flex; align-items: center; gap: 5px;
-  padding: 4px 12px; border: none; border-radius: var(--ip-radius-sm);
+  padding: 4px var(--ip-spacing-3); border: none; border-radius: var(--ip-radius-sm);
   background: transparent; color: var(--ip-color-text-secondary);
   font-size: var(--ip-text-caption-size); font-family: inherit; cursor: pointer;
   transition: all var(--ip-duration-fast) var(--ip-ease-out);

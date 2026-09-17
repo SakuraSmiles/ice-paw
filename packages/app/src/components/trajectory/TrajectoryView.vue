@@ -525,7 +525,7 @@ onBeforeUnmount(() => {
   left: 50%;
   transform: translateX(-50%);
   z-index: var(--ip-z-badge);
-  padding: 4px 16px;
+  padding: 4px var(--ip-spacing-4);
   font-size: var(--ip-text-caption-size);
   color: var(--ip-color-text-secondary);
   background: var(--ip-color-bg-elevated);
@@ -550,7 +550,7 @@ onBeforeUnmount(() => {
   top: 40px;
   right: 16px;
   z-index: var(--ip-z-badge);
-  padding: 8px 14px;
+  padding: var(--ip-spacing-2) 14px;
   background: var(--ip-color-bg-elevated);
   border: 1px solid var(--ip-color-border-default);
   border-radius: var(--ip-radius-md);

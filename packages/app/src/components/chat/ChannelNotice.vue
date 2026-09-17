@@ -116,7 +116,7 @@ const timeLabel = computed(() => timeAgo(props.event.created_at));
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: var(--ip-spacing-1_5);
   max-width: 100%;
   padding: 2px var(--ip-spacing-2);
   margin: var(--ip-spacing-1) auto;

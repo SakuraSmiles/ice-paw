@@ -126,7 +126,7 @@ watch(() => chat.activeConvId, () => {
   display: flex;
   align-items: center;
   gap: var(--ip-spacing-2_5);
-  padding: 0 24px;
+  padding: 0 var(--ip-spacing-6);
   background: var(--ip-color-bg-chat-header);
   backdrop-filter: blur(8px);
   flex-shrink: 0;
@@ -140,8 +140,8 @@ watch(() => chat.activeConvId, () => {
 .chat-tab {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px 20px;
+  gap: var(--ip-spacing-1_5);
+  padding: var(--ip-spacing-2) var(--ip-spacing-5);
   border: none;
   background: none;
   cursor: pointer;

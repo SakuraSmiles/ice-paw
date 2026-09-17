@@ -311,7 +311,7 @@
 .markdown-body :not(pre) > code {
   font-family: var(--ip-font-mono);
   font-size: 0.875em; /* 比正文略小，符合行业惯例 */
-  padding: 2px 6px;
+  padding: 2px var(--ip-spacing-1_5);
   margin: 0 2px;
   /* 去描边（三轮 DS 系同构）：底色 chip 已足够圈定，描边在正文里显噪 */
   background: var(--ip-code-inline-bg);
@@ -399,14 +399,14 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 5px 6px 5px 14px;
+  padding: 5px var(--ip-spacing-1_5) 5px 14px;
   background: var(--ip-code-head-bg);
   border-bottom: 1px solid var(--ip-code-border);
 }
 
 .md-code-lang {
   font-family: var(--ip-font-mono);
-  font-size: 11px;
+  font-size: var(--ip-text-micro-size);
   line-height: 1;
   color: var(--ip-code-head-text);
   user-select: none;
@@ -415,9 +415,9 @@
 .md-code-copy,
 .md-code-toggle {
   font-family: inherit;
-  font-size: 12px;
+  font-size: var(--ip-text-caption-size);
   line-height: 1;
-  padding: 5px 8px;
+  padding: 5px var(--ip-spacing-2);
   border: 0;
   border-radius: var(--ip-radius-sm, 4px);
   background: transparent;
@@ -615,7 +615,7 @@
 .markdown-body-kbd,
 .markdown-body kbd {
   display: inline-block;
-  padding: 1px 6px;
+  padding: 1px var(--ip-spacing-1_5);
   font-family: var(--ip-font-mono);
   font-size: 0.85em;
   background: var(--ip-color-bg-secondary, var(--ip-gray-50));

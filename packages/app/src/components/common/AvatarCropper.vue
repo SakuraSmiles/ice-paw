@@ -156,8 +156,8 @@ function zoom(dir: 1 | -1) {
   background: var(--ip-color-bg-primary);
   box-shadow: var(--ip-shadow-lg);
 }
-.ac-title { font-size: var(--ip-text-body-size); font-weight: 600; color: var(--ip-color-text-primary); margin: 0 0 12px; }
-.ac-sub { font-weight: 400; font-size: var(--ip-text-micro-size); color: var(--ip-color-text-tertiary); margin-left: 8px; }
+.ac-title { font-size: var(--ip-text-body-size); font-weight: 600; color: var(--ip-color-text-primary); margin: 0 0 var(--ip-spacing-3); }
+.ac-sub { font-weight: 400; font-size: var(--ip-text-micro-size); color: var(--ip-color-text-tertiary); margin-left: var(--ip-spacing-2); }
 
 .ac-crop-wrap {
   height: 280px;
@@ -173,7 +173,7 @@ function zoom(dir: 1 | -1) {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: var(--ip-spacing-2);
   border: 1.5px dashed var(--ip-color-border-default);
   border-radius: var(--ip-radius-md);
   color: var(--ip-color-text-tertiary);
@@ -183,8 +183,8 @@ function zoom(dir: 1 | -1) {
 }
 .ac-empty:hover { border-color: var(--ip-primary-400); color: var(--ip-primary-600); }
 
-.ac-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 12px; }
-.ac-zoom { display: flex; align-items: center; gap: 6px; }
+.ac-foot { display: flex; align-items: center; justify-content: space-between; margin-top: var(--ip-spacing-3); }
+.ac-zoom { display: flex; align-items: center; gap: var(--ip-spacing-1_5); }
 .ac-zoom-btn {
   width: 24px; height: 24px;
   border: 1px solid var(--ip-color-border-default);
@@ -196,17 +196,17 @@ function zoom(dir: 1 | -1) {
 }
 .ac-zoom-btn:hover { color: var(--ip-primary-600); border-color: var(--ip-primary-400); }
 .ac-err { font-size: var(--ip-text-micro-size); color: var(--ip-danger-base); }
-.ac-actions { display: flex; gap: 8px; }
+.ac-actions { display: flex; gap: var(--ip-spacing-2); }
 .ac-btn {
   height: 30px;
-  padding: 0 16px;
+  padding: 0 var(--ip-spacing-4);
   border: none;
   border-radius: var(--ip-radius-md);
   font-size: var(--ip-text-body-sm-size);
   font-weight: 500;
   cursor: pointer;
 }
-.ac-btn.primary { background: var(--ip-primary-500); color: #fff; }
+.ac-btn.primary { background: var(--ip-primary-500); color: var(--ip-color-text-on-primary); }
 .ac-btn.primary:hover:not(:disabled) { background: var(--ip-primary-600); }
 .ac-btn.primary:disabled { opacity: 0.5; cursor: not-allowed; }
 .ac-btn.ghost { background: transparent; color: var(--ip-color-text-secondary); }

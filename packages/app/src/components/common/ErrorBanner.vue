@@ -20,6 +20,8 @@
 //               不传则不渲染。适合错误原因不在本页、需跳走处理的场景。
 //   - dismissible?: boolean 仅 banner；默认 false
 // Emits: retry / dismiss / action
+import { X } from "@lucide/vue";
+
 defineProps<{
   variant?: "inline" | "banner";
   title: string;
@@ -53,7 +55,7 @@ defineEmits<{ retry: []; dismiss: []; action: [] }>();
     <span class="eb-actions">
       <button v-if="actionLabel" type="button" class="eb-retry" @click="$emit('action')">{{ actionLabel }}</button>
       <button v-if="retryLabel !== null" type="button" class="eb-retry" @click="$emit('retry')">{{ retryLabel ?? "重试" }}</button>
-      <button v-if="dismissible" type="button" class="eb-dismiss" title="关闭" aria-label="关闭" @click="$emit('dismiss')">×</button>
+      <button v-if="dismissible" type="button" class="eb-dismiss" title="关闭" aria-label="关闭" @click="$emit('dismiss')"><X :size="14" aria-hidden="true" /></button>
     </span>
   </div>
 </template>
@@ -63,8 +65,8 @@ defineEmits<{ retry: []; dismiss: []; action: [] }>();
 .eb-inline {
   display: flex;
   align-items: baseline;
-  gap: 6px;
-  margin: 6px 0 0;
+  gap: var(--ip-spacing-1_5);
+  margin: var(--ip-spacing-1_5) 0 0;
   padding: 0;
   font-size: var(--ip-text-micro-size);
   line-height: 1.5;
@@ -87,7 +89,7 @@ defineEmits<{ retry: []; dismiss: []; action: [] }>();
   display: flex;
   align-items: center;
   gap: var(--ip-spacing-2_5);
-  padding: 9px 12px;
+  padding: 9px var(--ip-spacing-3);
   border-radius: 9px;
   background: var(--ip-danger-bg);
   border: 1px solid var(--ip-danger-border);
@@ -99,12 +101,12 @@ defineEmits<{ retry: []; dismiss: []; action: [] }>();
 .eb-text { flex: 1; min-width: 0; }
 .eb-title { font-weight: 600; }
 .eb-detail { opacity: 0.82; }
-.eb-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.eb-actions { display: flex; align-items: center; gap: var(--ip-spacing-1_5); flex-shrink: 0; }
 .eb-retry {
   border: 1px solid currentColor;
   background: transparent;
   border-radius: 6px;
-  padding: 3px 10px;
+  padding: 3px var(--ip-spacing-2_5);
   font-size: var(--ip-text-micro-size);
   font-weight: 600;
   color: inherit;
@@ -115,8 +117,9 @@ defineEmits<{ retry: []; dismiss: []; action: [] }>();
   border: none;
   background: transparent;
   padding: 2px 5px;
-  font-size: 15px;
-  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   color: inherit;
   opacity: 0.55;
   cursor: pointer;

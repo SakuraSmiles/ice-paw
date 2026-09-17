@@ -13,7 +13,7 @@
 <script setup lang="ts">
 import { watch, nextTick, ref, computed, onActivated } from "vue";
 import { useRouter } from "vue-router";
-import { ArrowLeftRight, AtSign, CornerUpRight, Shield } from "@lucide/vue";
+import { ArrowLeftRight, AtSign, ChevronDown, ChevronRight, CornerUpRight, Shield } from "@lucide/vue";
 import { useChatStore } from "../../stores/chat";
 import { useAgentStore } from "../../stores/agent";
 import { useChannel, loadChannelNotices, type ElectionCard } from "../../composables/useChannel";
@@ -1539,7 +1539,8 @@ const RESUMABLE_REASONS = new Set([
                       <!-- 耗时两级来源：内存 thinkingDurations（本轮会话，含多轮中间轮）
                            → 块内 duration_ms（后端落库，重启后兜底）→ 无则只显示「思考」 -->
                       <span class="think-label">{{ chat.thinkingDurations.has(item.msg.id) ? '思考 · ' + chat.thinkingDurations.get(item.msg.id) : think.durationMs != null ? '思考 · ' + formatThinkingMs(think.durationMs) : '思考' }}</span>
-                      <span class="think-chevron">{{ expandedThinking.has(item.msg.id + '-h' + ti) ? '▾' : '▸' }}</span>
+                      <ChevronDown v-if="expandedThinking.has(item.msg.id + '-h' + ti)" :size="12" class="think-chevron" aria-hidden="true" />
+                      <ChevronRight v-else :size="12" class="think-chevron" aria-hidden="true" />
                     </div>
                     <Transition name="think-fade">
                       <div v-if="expandedThinking.has(item.msg.id + '-h' + ti)" class="think-body">
@@ -1556,7 +1557,8 @@ const RESUMABLE_REASONS = new Set([
                       <StatusGlyph status="running" class="think-glyph" />
                       <span class="think-label">思考</span>
                       <span class="think-status">进行中… {{ thinkingElapsed }}</span>
-                      <span class="think-chevron">{{ expandedThinking.has('streaming') ? '▾' : '▸' }}</span>
+                      <ChevronDown v-if="expandedThinking.has('streaming')" :size="12" class="think-chevron" aria-hidden="true" />
+                      <ChevronRight v-else :size="12" class="think-chevron" aria-hidden="true" />
                     </div>
                     <Transition name="think-fade">
                       <div v-if="expandedThinking.has('streaming')" class="think-body">
@@ -1568,7 +1570,8 @@ const RESUMABLE_REASONS = new Set([
                     <div class="think-toggle" @click="toggleThinking('done')">
                       <StatusGlyph status="done" class="think-glyph" />
                       <span class="think-label">思考 · {{ chat.thinkingDuration }}</span>
-                      <span class="think-chevron">{{ expandedThinking.has('done') ? '▾' : '▸' }}</span>
+                      <ChevronDown v-if="expandedThinking.has('done')" :size="12" class="think-chevron" aria-hidden="true" />
+                      <ChevronRight v-else :size="12" class="think-chevron" aria-hidden="true" />
                     </div>
                     <Transition name="think-fade">
                       <div v-if="expandedThinking.has('done')" class="think-body">
@@ -1605,7 +1608,8 @@ const RESUMABLE_REASONS = new Set([
                             <StatusGlyph status="error" />
                             <span class="tool-name">{{ toolDisplayName(tu.name) }}</span>
                             <span class="tool-preview">调用失败</span>
-                            <span class="tool-chevron">{{ expandedToolCalls.has(tu.id) ? '▾' : '▸' }}</span>
+                            <ChevronDown v-if="expandedToolCalls.has(tu.id)" :size="12" class="tool-chevron" aria-hidden="true" />
+                                <ChevronRight v-else :size="12" class="tool-chevron" aria-hidden="true" />
                           </div>
                           <Transition name="tool-slide">
                             <div v-if="expandedToolCalls.has(tu.id)" class="tool-expand">
@@ -1635,13 +1639,15 @@ const RESUMABLE_REASONS = new Set([
                                 </span>
                                 <span v-if="s.secondary" class="tool-secondary">{{ s.secondary }}</span>
                                 <span class="tool-file" title="在资源管理器中显示" @click.stop="revealFile(s.revealPath)">{{ s.fileLabel }}</span>
-                                <span class="tool-chevron">{{ expandedToolCalls.has(tu.id) ? '▾' : '▸' }}</span>
+                                <ChevronDown v-if="expandedToolCalls.has(tu.id)" :size="12" class="tool-chevron" aria-hidden="true" />
+                                <ChevronRight v-else :size="12" class="tool-chevron" aria-hidden="true" />
                               </div>
                               <div v-else class="tool-toggle" @click="toggleToolCall(tu.id)">
                                 <StatusGlyph :status="getToolHasError(tu.id) ? 'error' : 'done'" />
                                 <span class="tool-name">{{ toolDisplayName(tu.name) }}</span>
                                 <span class="tool-preview">{{ truncateJson(tu.input) }}</span>
-                                <span class="tool-chevron">{{ expandedToolCalls.has(tu.id) ? '▾' : '▸' }}</span>
+                                <ChevronDown v-if="expandedToolCalls.has(tu.id)" :size="12" class="tool-chevron" aria-hidden="true" />
+                                <ChevronRight v-else :size="12" class="tool-chevron" aria-hidden="true" />
                               </div>
                               <Transition name="tool-slide">
                                 <div v-if="expandedToolCalls.has(tu.id)" class="tool-expand">
@@ -1698,7 +1704,8 @@ const RESUMABLE_REASONS = new Set([
                                 </span>
                                 <span v-if="s.secondary" class="tool-secondary">{{ s.secondary }}</span>
                                 <span class="tool-file" title="在资源管理器中显示" @click.stop="revealFile(s.revealPath)">{{ s.fileLabel }}</span>
-                                <span class="tool-chevron">{{ expandedToolCalls.has(call.id) ? '▾' : '▸' }}</span>
+                                <ChevronDown v-if="expandedToolCalls.has(call.id)" :size="12" class="tool-chevron" aria-hidden="true" />
+                                <ChevronRight v-else :size="12" class="tool-chevron" aria-hidden="true" />
                               </div>
                               <div v-else class="tool-toggle" @click="toggleToolCall(call.id)">
                                 <StatusGlyph
@@ -1710,7 +1717,8 @@ const RESUMABLE_REASONS = new Set([
                                 <span class="tool-name">{{ toolDisplayName(call.name) }}</span>
                                 <span v-if="call.result?.durationMs" class="tool-duration">{{ formatDuration(call.result.durationMs) }}</span>
                                 <span class="tool-preview">{{ truncateJson(call.arguments || '') }}</span>
-                                <span class="tool-chevron">{{ expandedToolCalls.has(call.id) ? '▾' : '▸' }}</span>
+                                <ChevronDown v-if="expandedToolCalls.has(call.id)" :size="12" class="tool-chevron" aria-hidden="true" />
+                                <ChevronRight v-else :size="12" class="tool-chevron" aria-hidden="true" />
                               </div>
                               <Transition name="tool-slide">
                                 <div v-if="expandedToolCalls.has(call.id)" class="tool-expand">
@@ -1864,7 +1872,7 @@ const RESUMABLE_REASONS = new Set([
    底 padding 16px：贴底静息的呼吸位（旧值 32px 是为「常驻渐隐让尾部落带中段」
    设计的，渐隐改随 autoFollow 联动后贴底无蒙层，理由死掉回归紧凑值） */
 .messages-area { flex:1; overflow-y:auto; scrollbar-gutter:stable; padding:var(--ip-spacing-6) 0 var(--ip-spacing-4); position:relative; }
-.messages-container { display:flex; flex-direction:column; gap: var(--ip-spacing-4); padding:0 var(--msg-col-right) 0 48px; }
+.messages-container { display:flex; flex-direction:column; gap: var(--ip-spacing-4); padding:0 var(--msg-col-right) 0 var(--ip-spacing-12); }
 
 /* ===== 底缘渐隐（2026-09-01 联动改版：随贴底状态显隐 + 96px）=====
    非贴底（autoFollow=false，读历史/中途滚离）时内容贴近输入框逐渐变淡：
@@ -1900,7 +1908,7 @@ const RESUMABLE_REASONS = new Set([
 .messages-wrap.fade-off::after { opacity: 0; }
 
 /* ===== 分页指示 ===== */
-.load-more-hint { text-align:center; font-size:var(--ip-text-caption-size); color:var(--ip-color-text-tertiary); padding:8px var(--msg-col-right) 8px 48px; }
+.load-more-hint { text-align:center; font-size:var(--ip-text-caption-size); color:var(--ip-color-text-tertiary); padding:var(--ip-spacing-2) var(--msg-col-right) var(--ip-spacing-2) var(--ip-spacing-12); }
 .load-more-end { color:var(--ip-color-text-disabled); }
 .load-more-error { color: var(--ip-danger-base); }
 .load-more-retry {
@@ -1916,13 +1924,13 @@ const RESUMABLE_REASONS = new Set([
 .load-more-retry:hover { opacity: 0.8; }
 
 /* ===== 日期分组 ===== */
-.date-divider { display:flex; align-items:center; gap: var(--ip-spacing-3); padding:20px var(--msg-col-right) 8px 48px; font-size:var(--ip-text-caption-size); color:var(--ip-color-text-disabled); }
+.date-divider { display:flex; align-items:center; gap: var(--ip-spacing-3); padding:var(--ip-spacing-5) var(--msg-col-right) var(--ip-spacing-2) var(--ip-spacing-12); font-size:var(--ip-text-caption-size); color:var(--ip-color-text-disabled); }
 .date-divider::before, .date-divider::after { content:''; flex:1; height:1px; background:var(--ip-color-border-default); }
 
 /* ===== finish_reason 提示（B3：中性提示 + 可续跑类「继续」按钮）===== */
-.finish-reason { display:flex; align-items:center; justify-content:center; gap: var(--ip-spacing-2); padding:4px var(--msg-col-right) 0 48px; }
-.finish-reason span { display:inline-block; font-size:var(--ip-text-caption-size); color:var(--ip-color-text-tertiary); padding:2px 10px; border-radius:var(--ip-radius-full); background:var(--ip-color-bg-tertiary); }
-.continue-btn { font-size:var(--ip-text-caption-size); color:var(--ip-color-text-secondary); padding:2px 12px; border-radius:var(--ip-radius-full); border:1px solid var(--ip-color-border-default); background:var(--ip-color-bg-secondary); cursor:pointer; transition:all var(--ip-duration-fast) var(--ip-ease-out); }
+.finish-reason { display:flex; align-items:center; justify-content:center; gap: var(--ip-spacing-2); padding:4px var(--msg-col-right) 0 var(--ip-spacing-12); }
+.finish-reason span { display:inline-block; font-size:var(--ip-text-caption-size); color:var(--ip-color-text-tertiary); padding:2px var(--ip-spacing-2_5); border-radius:var(--ip-radius-full); background:var(--ip-color-bg-tertiary); }
+.continue-btn { font-size:var(--ip-text-caption-size); color:var(--ip-color-text-secondary); padding:2px var(--ip-spacing-3); border-radius:var(--ip-radius-full); border:1px solid var(--ip-color-border-default); background:var(--ip-color-bg-secondary); cursor:pointer; transition:all var(--ip-duration-fast) var(--ip-ease-out); }
 .continue-btn:hover { color:var(--ip-color-text-primary); border-color:var(--ip-color-border-strong); }
 
 /* ===== 预算续期 toast（非阻塞；messages-wrap 相对定位承载）===== */
@@ -1930,7 +1938,7 @@ const RESUMABLE_REASONS = new Set([
   position:absolute; top:12px; left:50%; transform:translateX(-50%);
   z-index:var(--ip-z-notification, 1500);
   display:flex; align-items:center;
-  padding:6px 16px; border-radius:var(--ip-radius-md);
+  padding:var(--ip-spacing-1_5) var(--ip-spacing-4); border-radius:var(--ip-radius-md);
   background:var(--ip-color-bg-elevated, var(--ip-color-bg-secondary));
   border:1px solid var(--ip-color-primary-soft-bg);
   box-shadow:var(--ip-shadow-md);
@@ -1999,21 +2007,21 @@ const RESUMABLE_REASONS = new Set([
 /* 组内多条 assistant item：item 内子项适度间距，轮次之间留白区分（呼吸感；
    2026-09-05 排版批 16→12——组内轮次是同一回答的连续段落，12px 足够分节，
    组间 gap 16px 保持承担「不同回答」的更大分隔） */
-.message-group.assistant .message-item { display:flex; flex-direction:column; gap:6px; }
+.message-group.assistant .message-item { display:flex; flex-direction:column; gap:var(--ip-spacing-1_5); }
 .message-group.assistant .message-item + .message-item { margin-top: var(--ip-spacing-3, 12px); }
 
 /* ===== 用户消息气泡 ===== */
 /* flex column + 统一 gap：正文 / 引用卡 / 附件卡（含堆叠）/ 图片（含堆叠）纵向
    排布的唯一间距来源——旧实现靠各元素零散 margin-top（6/4/0px 不一，单图单卡
    贴正文），多元素混排时参差；卡片的独立 margin 已移除，调间距只改 gap。 */
-.message-group.user .message-bubble { display:flex; flex-direction:column; gap: var(--ip-spacing-2); padding:10px 16px; border-radius:12px; font-size:var(--ip-text-body-size); line-height:var(--ip-line-height-loose3, 1.6); white-space:pre-wrap; word-break:break-word; background-color:var(--ip-color-bg-user-bubble); color:var(--ip-color-text-on-user-bubble); border-bottom-right-radius:4px; }
+.message-group.user .message-bubble { display:flex; flex-direction:column; gap: var(--ip-spacing-2); padding:var(--ip-spacing-2_5) var(--ip-spacing-4); border-radius:12px; font-size:var(--ip-text-body-size); line-height:var(--ip-line-height-loose3, 1.6); white-space:pre-wrap; word-break:break-word; background-color:var(--ip-color-bg-user-bubble); color:var(--ip-color-text-on-user-bubble); border-bottom-right-radius:4px; }
 
 /* ===== MA-3 跨会话来件来源标注头（气泡内首行；气泡底色深→文字用 on-bubble 色）===== */
-.user-incoming-head { display:flex; align-items:center; gap:6px; min-width:0; padding-bottom:6px; border-bottom:1px solid rgba(255,255,255,0.18); }
+.user-incoming-head { display:flex; align-items:center; gap:var(--ip-spacing-1_5); min-width:0; padding-bottom:var(--ip-spacing-1_5); border-bottom:1px solid rgba(255,255,255,0.18); }
 .user-incoming-head.clickable { cursor:pointer; }
 .incoming-icon { flex-shrink:0; color:var(--ip-color-text-on-user-bubble); opacity:0.8; display:inline-block; }
 .incoming-src { flex:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; font-size:var(--ip-text-caption-size); font-weight:var(--ip-font-weight-medium); }
-.incoming-pill { flex-shrink:0; font-size:var(--ip-text-micro-size); line-height:1; padding:3px 8px; border-radius:var(--ip-radius-full, 999px); background:rgba(255,255,255,0.16); }
+.incoming-pill { flex-shrink:0; font-size:var(--ip-text-micro-size); line-height:1; padding:3px var(--ip-spacing-2); border-radius:var(--ip-radius-full, 999px); background:rgba(255,255,255,0.16); }
 
 /* ===== 助手消息文字（无自带背景，由组容器承载气泡块）=====
    行高走 loose3（1.6）与用户气泡/ markdown-body 同值——2026-09-15 排版批三轮
@@ -2031,10 +2039,10 @@ const RESUMABLE_REASONS = new Set([
    表面/文字走语义令牌（暗色主题修复）：卡底选 secondary 而非 elevated——
    hover 档 tertiary 在暗色下恰等于 elevated（同为 gray-800）会吞掉 hover 反馈，
    secondary(850)→tertiary(800) 明暗两主题都有可见变化；明色下两档同白，观感不变 */
-.user-attachments { display:flex; flex-direction:column; gap:4px; margin-top:6px; }
+.user-attachments { display:flex; flex-direction:column; gap:4px; margin-top:var(--ip-spacing-1_5); }
 .user-attachment-card {
   display:flex; align-items:center; gap: var(--ip-spacing-2);
-  padding:6px 10px; border-radius:8px;
+  padding:var(--ip-spacing-1_5) var(--ip-spacing-2_5); border-radius:8px;
   background:var(--ip-color-bg-secondary);
   border:1px solid rgba(0,0,0,0.08);
   box-shadow:0 1px 2px rgba(0,0,0,0.06);
@@ -2063,8 +2071,8 @@ const RESUMABLE_REASONS = new Set([
    表面/文字同附件卡走语义令牌（secondary 卡底 + tertiary hover，暗色主题修复）；
    字号 12.5→caption(12px) 就近收编档位 */
 .user-ref-card {
-  display:flex; align-items:center; gap:6px;
-  max-width:260px; padding:5px 10px; border-radius:8px;
+  display:flex; align-items:center; gap:var(--ip-spacing-1_5);
+  max-width:260px; padding:5px var(--ip-spacing-2_5); border-radius:8px;
   background:var(--ip-color-bg-secondary); border:1px solid rgba(0,0,0,0.08);
   box-shadow:0 1px 2px rgba(0,0,0,0.06);
   cursor:pointer; transition:background var(--ip-duration-fast) var(--ip-ease-out);
@@ -2100,17 +2108,17 @@ const RESUMABLE_REASONS = new Set([
 /* 堆叠溢出角标（图/文档通用） */
 .stack-badge {
   position:absolute; right:-6px; bottom:-6px; z-index: var(--ip-z-raised);
-  min-width:22px; height:22px; padding:0 6px;
+  min-width:22px; height:22px; padding:0 var(--ip-spacing-1_5);
   border-radius:999px;
-  background:rgba(0,0,0,0.6); color:#fff;
+  background:rgba(0,0,0,0.6); color: var(--ip-white);
   font-size: var(--ip-text-micro-size); font-weight:600; line-height:22px; text-align:center;
   border:1.5px solid rgba(255,255,255,0.85);
 }
 
 /* ===== 消息底部（时间 + 复制按钮） ===== */
 .message-footer { display:flex; align-items:center; justify-content:space-between; gap: var(--ip-spacing-2); margin-top:2px; padding:0 4px; }
-.footer-left { display:flex; align-items:center; gap:6px; }
-.footer-actions { display:flex; align-items:center; gap:6px; opacity:0; transition:opacity var(--ip-duration-fast) var(--ip-ease-out); }
+.footer-left { display:flex; align-items:center; gap:var(--ip-spacing-1_5); }
+.footer-actions { display:flex; align-items:center; gap:var(--ip-spacing-1_5); opacity:0; transition:opacity var(--ip-duration-fast) var(--ip-ease-out); }
 .message-group:hover .footer-actions { opacity:1; }
 .message-group:hover .message-footer { opacity:1; }
 .message-time { font-size: var(--ip-text-micro-size); color:var(--ip-color-text-disabled); }
@@ -2118,7 +2126,7 @@ const RESUMABLE_REASONS = new Set([
 /* ===== 频道 v1：成员身份头 + 生成中发出标注 ===== */
 /* 群聊行形态（2026-09-11）：昵称行在气泡外（grid 身体列首行）；名字是身份锚点，
    caption-12 → body-sm-13 醒目化；margin 归零（grid row-gap 接管行距） */
-.channel-sender-head { display:flex; align-items:center; gap:6px; }
+.channel-sender-head { display:flex; align-items:center; gap:var(--ip-spacing-1_5); }
 .channel-sender-name { font-size: var(--ip-text-body-sm-size); font-weight: var(--ip-font-weight-medium); color:var(--ip-color-text-secondary); }
 /* Shield 进文本流：显式 inline-block（base.css svg display:block reset 陷阱） */
 .channel-sender-shield { display:inline-block; color:var(--ip-primary-600); }
@@ -2132,7 +2140,7 @@ const RESUMABLE_REASONS = new Set([
 .copy-btn { display:flex; align-items:center; justify-content:center; width:24px; height:24px; border-radius:var(--ip-radius-md); border:none; background:transparent; color:var(--ip-color-text-tertiary); cursor:pointer; transition:all var(--ip-duration-fast) var(--ip-ease-out); }
 .copy-btn:hover { background-color:var(--ip-color-bg-tertiary); color:var(--ip-color-text-secondary); }
 
-.badge-model { font-size: var(--ip-text-micro-size); color:var(--ip-color-text-tertiary); padding:1px 6px; border-radius:var(--ip-radius-sm); background:var(--ip-color-bg-tertiary); white-space:nowrap; }
+.badge-model { font-size: var(--ip-text-micro-size); color:var(--ip-color-text-tertiary); padding:1px var(--ip-spacing-1_5); border-radius:var(--ip-radius-sm); background:var(--ip-color-bg-tertiary); white-space:nowrap; }
 .badge-tokens { font-size: var(--ip-text-micro-size); color:var(--ip-color-text-tertiary); white-space:nowrap; font-variant-numeric:tabular-nums; }
 
 /* ===== 思考中动画 ===== */
@@ -2143,7 +2151,7 @@ const RESUMABLE_REASONS = new Set([
 @keyframes think-bounce { 0%,80%,100% { transform:translateY(0); opacity:0.4; } 40% { transform:translateY(-6px); opacity:1; } }
 
 /* ===== 流式光标 ===== */
-.cursor-bar { display:flex; justify-content:flex-start; align-items:center; gap: var(--ip-spacing-2_5); padding:4px 48px 0; }
+.cursor-bar { display:flex; justify-content:flex-start; align-items:center; gap: var(--ip-spacing-2_5); padding:4px var(--ip-spacing-12) 0; }
 .cursor-track { display:flex; align-items:center; gap: var(--ip-spacing-2); padding:4px 0; }
 .cursor-label { font-size:var(--ip-text-caption-size); color:var(--ip-color-text-tertiary); }
 /* 生成指示的脉冲点已由 StatusGlyph running 像素格取代（2026-09-04 语系统一）；
@@ -2153,7 +2161,7 @@ const RESUMABLE_REASONS = new Set([
 .state-hint { height:100%; display:flex; align-items:center; justify-content:center; gap: var(--ip-spacing-2); color:var(--ip-color-text-tertiary); font-size:var(--ip-text-body-sm-size); }
 
 /* 骨架屏：消息列表加载中 */
-.msg-skeleton { display:flex; flex-direction:column; gap:24px; padding: var(--ip-spacing-6); }
+.msg-skeleton { display:flex; flex-direction:column; gap:var(--ip-spacing-6); padding: var(--ip-spacing-6); }
 .msg-skeleton-block { display:flex; flex-direction:column; gap: var(--ip-spacing-2); }
 .msg-skeleton-line {
   height:14px; border-radius:var(--ip-radius-sm);
@@ -2183,15 +2191,15 @@ const RESUMABLE_REASONS = new Set([
 
 /* ===== 思考过程（无边框无背景，左绿线标识） ===== */
 .think-block { margin:0; }
-.think-toggle { display:flex; align-items:center; gap:6px; padding:2px 6px; cursor:pointer; user-select:none; border-radius:var(--ip-radius-sm); transition:all var(--ip-duration-fast) var(--ip-ease-out); width:100%; }
+.think-toggle { display:flex; align-items:center; gap:var(--ip-spacing-1_5); padding:2px var(--ip-spacing-1_5); cursor:pointer; user-select:none; border-radius:var(--ip-radius-sm); transition:all var(--ip-duration-fast) var(--ip-ease-out); width:100%; }
 .think-toggle:hover { background:var(--ip-color-bg-tertiary); }
 /* chevron 右移行尾（2026-09-04 拍板：状态 glyph 前置行首，展开操作在行尾） */
-.think-chevron { margin-left:auto; font-size: var(--ip-text-micro-size); color:var(--ip-color-text-disabled); line-height:1; width:10px; flex-shrink:0; transition:transform var(--ip-duration-fast) var(--ip-ease-out); }
+.think-chevron { margin-left:auto; color:var(--ip-color-text-disabled); flex-shrink:0; }
 /* 勿加 text-transform:uppercase——label 是中文不受影响，但会把后缀的耗时单位
    （m/s）打成大写（2026-09-09 生产反馈：思考 · 1M 30S） */
 .think-label { font-size:var(--ip-text-caption-size); font-weight:var(--ip-font-weight-medium); color:var(--ip-color-text-tertiary); letter-spacing:0.3px; }
-.think-status { margin-left:8px; font-size:var(--ip-text-caption-size); color:var(--ip-color-text-disabled); }
-.think-body { margin:4px 0 4px 22px; padding:6px 0 6px 14px; border-left:2px solid var(--ip-primary-200); font-size:var(--ip-text-body-sm-size); color:var(--ip-color-text-secondary); line-height:1.6; white-space:pre-wrap; word-break:break-word; }
+.think-status { margin-left:var(--ip-spacing-2); font-size:var(--ip-text-caption-size); color:var(--ip-color-text-disabled); }
+.think-body { margin:4px 0 4px 22px; padding:var(--ip-spacing-1_5) 0 var(--ip-spacing-1_5) 14px; border-left:2px solid var(--ip-primary-200); font-size:var(--ip-text-body-sm-size); color:var(--ip-color-text-secondary); line-height:1.6; white-space:pre-wrap; word-break:break-word; }
 /* 思考内容的 Markdown 继承 13px 字号 */
 .think-body .markdown-body { font-size:inherit; color:inherit; line-height:inherit; }
 
@@ -2213,10 +2221,10 @@ const RESUMABLE_REASONS = new Set([
 
 /* ===== 工具调用（无边框，block 行布局，与思考视觉对齐） ===== */
 .tools-strip { display:flex; flex-direction:column; gap:1px; margin:0; }
-.tool-toggle { display:flex; align-items:center; gap:6px; padding:2px 6px; cursor:pointer; user-select:none; border-radius:var(--ip-radius-sm); transition:background var(--ip-duration-fast) var(--ip-ease-out); width:100%; }
+.tool-toggle { display:flex; align-items:center; gap:var(--ip-spacing-1_5); padding:2px var(--ip-spacing-1_5); cursor:pointer; user-select:none; border-radius:var(--ip-radius-sm); transition:background var(--ip-duration-fast) var(--ip-ease-out); width:100%; }
 .tool-toggle:hover { background:var(--ip-color-bg-tertiary); }
 /* chevron 行尾（glyph 前置后；preview 的 margin-left:auto 已把尾部让出） */
-.tool-chevron { font-size: var(--ip-text-micro-size); color:var(--ip-color-text-disabled); line-height:1; width:10px; flex-shrink:0; }
+.tool-chevron { color:var(--ip-color-text-disabled); flex-shrink:0; }
 .tool-name { font-size:var(--ip-text-caption-size); font-weight:var(--ip-font-weight-medium); color:var(--ip-color-text-tertiary); white-space:nowrap; }
 /* 行级 diff 徽记（git 式 +N -M ~K，2026-09-09）：语义三色——success/danger/warning；
    mono micro；行内 flex 容器收图标字体基线，不参与两侧截断 */
@@ -2227,19 +2235,19 @@ const RESUMABLE_REASONS = new Set([
 .tool-duration { font-size: var(--ip-text-micro-size); color:var(--ip-color-text-disabled); font-family:var(--ip-font-mono, monospace); white-space:nowrap; flex-shrink:0; }
 /* 次级信息（左置，紧跟展示名）与文件名位（右锚可点 reveal，2026-09-07 布局拍板） */
 .tool-secondary { font-size:var(--ip-text-caption-size); color:var(--ip-color-text-disabled); white-space:nowrap; }
-.tool-file { margin-left:auto; margin-right:6px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:right; flex-shrink:1; font-size:var(--ip-text-caption-size); color:var(--ip-color-text-secondary); cursor:pointer; }
+.tool-file { margin-left:auto; margin-right:var(--ip-spacing-1_5); min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:right; flex-shrink:1; font-size:var(--ip-text-caption-size); color:var(--ip-color-text-secondary); cursor:pointer; }
 .tool-file:hover { color:var(--ip-primary-600); text-decoration:underline; }
-.tool-preview { font-size:var(--ip-text-caption-size); color:var(--ip-color-text-disabled); margin-left:auto; margin-right:6px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:right; flex-shrink:1; }
+.tool-preview { font-size:var(--ip-text-caption-size); color:var(--ip-color-text-disabled); margin-left:auto; margin-right:var(--ip-spacing-1_5); min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:right; flex-shrink:1; }
 /* 状态图标（StatusGlyph：环形对勾/3×3 像素格/环形叉，2026-09-04 语系统一）。
    行内紧凑节奏保持：glyph 14px 与 caption 字号同高，flex 自然居中。 */
 
 /* 展开详情（左绿线 + 缩进，与思考 body 统一） */
-.tool-expand { margin:2px 0 2px 22px; padding:4px 0 6px 14px; border-left:2px solid var(--ip-primary-200); max-height:400px; overflow-y:auto; }
-.tool-expand-group { margin-bottom:8px; }
+.tool-expand { margin:2px 0 2px 22px; padding:4px 0 var(--ip-spacing-1_5) 14px; border-left:2px solid var(--ip-primary-200); max-height:400px; overflow-y:auto; }
+.tool-expand-group { margin-bottom:var(--ip-spacing-2); }
 .tool-expand-group:last-child { margin-bottom:0; }
 .tool-expand-hdr { font-size: var(--ip-text-micro-size); font-weight:var(--ip-font-weight-semibold); color:var(--ip-color-text-tertiary); margin-bottom:4px; letter-spacing:0.5px; }
 .tool-expand-hdr.hdr-err { color:var(--ip-danger-base); }
-.tool-expand-code { font-size:var(--ip-text-caption-size); font-family:var(--ip-font-mono, monospace); white-space:pre-wrap; word-break:break-word; color:var(--ip-code-text); background:var(--ip-code-bg); padding:6px 8px; border-radius:var(--ip-radius-sm); margin:0; line-height:1.5; max-height:200px; overflow-y:auto; }
+.tool-expand-code { font-size:var(--ip-text-caption-size); font-family:var(--ip-font-mono, monospace); white-space:pre-wrap; word-break:break-word; color:var(--ip-code-text); background:var(--ip-code-bg); padding:var(--ip-spacing-1_5) var(--ip-spacing-2); border-radius:var(--ip-radius-sm); margin:0; line-height:1.5; max-height:200px; overflow-y:auto; }
 .tool-expand-code.code-err { color:var(--ip-danger-base); }
 .tool-expand-pending { font-size:var(--ip-text-caption-size); color:var(--ip-color-text-disabled); font-style:italic; }
 
@@ -2250,16 +2258,16 @@ const RESUMABLE_REASONS = new Set([
   from { opacity:0; transform:translateY(-3px); }
   to   { opacity:1; transform:translateY(0); }
 }
-.tool-detail-group { margin-bottom:8px; }
+.tool-detail-group { margin-bottom:var(--ip-spacing-2); }
 .tool-detail-group:last-child { margin-bottom:0; }
 .tool-detail-hdr { font-size: var(--ip-text-micro-size); font-weight:var(--ip-font-weight-semibold); color:var(--ip-color-text-tertiary); margin-bottom:4px; text-transform:uppercase; letter-spacing:0.5px; }
 .tool-detail-hdr.hdr-err { color:var(--ip-danger-base); }
-.tool-detail-code { font-size:var(--ip-text-caption-size); font-family:var(--ip-font-mono, monospace); white-space:pre-wrap; word-break:break-word; color:var(--ip-color-text-secondary); background:var(--ip-color-bg-tertiary); padding:6px 8px; border-radius:var(--ip-radius-sm); max-height:180px; overflow-y:auto; margin:0; line-height:1.5; }
+.tool-detail-code { font-size:var(--ip-text-caption-size); font-family:var(--ip-font-mono, monospace); white-space:pre-wrap; word-break:break-word; color:var(--ip-color-text-secondary); background:var(--ip-color-bg-tertiary); padding:var(--ip-spacing-1_5) var(--ip-spacing-2); border-radius:var(--ip-radius-sm); max-height:180px; overflow-y:auto; margin:0; line-height:1.5; }
 .tool-detail-code.code-err { color:var(--ip-danger-base); }
 .tool-detail-pending { font-size:var(--ip-text-caption-size); color:var(--ip-color-text-disabled); font-style:italic; }
-.proposal-wrapper { padding: 0 48px; }
+.proposal-wrapper { padding: 0 var(--ip-spacing-12); }
 /* 定位/排版微调层：底色与边框走 danger 语义令牌（明暗自适应，与 ErrorBanner
    自身 .eb-banner 同值——此前裸 hex 覆盖组件令牌，暗色主题下整条横幅发亮）；
    文字色由 .eb-banner 的 --ip-danger-text 提供，此处不重复声明 */
-.chat-error-banner { display:flex; align-items:flex-start; gap: var(--ip-spacing-2); margin:8px 16px; padding:10px 14px; background:var(--ip-danger-bg); border:1px solid var(--ip-danger-border); border-radius:var(--ip-radius-md); font-size:var(--ip-text-body-sm-size); }
+.chat-error-banner { display:flex; align-items:flex-start; gap: var(--ip-spacing-2); margin:var(--ip-spacing-2) var(--ip-spacing-4); padding:var(--ip-spacing-2_5) 14px; background:var(--ip-danger-bg); border:1px solid var(--ip-danger-border); border-radius:var(--ip-radius-md); font-size:var(--ip-text-body-sm-size); }
 </style>

@@ -11,7 +11,7 @@
   - toggle-seg：payload = 思考段展开键（与 item 内 think-block 同构）
 -->
 <script setup lang="ts">
-import { Brain, MessageSquareText, Wrench } from "@lucide/vue";
+import { Brain, ChevronDown, ChevronRight, MessageSquareText, Wrench } from "@lucide/vue";
 import MarkdownRenderer from "./MarkdownRenderer.vue";
 import StatusGlyph from "./StatusGlyph.vue";
 import { formatThinkingMs } from "../../utils/format";
@@ -62,7 +62,8 @@ const emit = defineEmits<{
       <Brain :size="14" class="pill-glyph" aria-hidden="true" />
       <span class="think-label">思考 · {{ thinkingSegCount }} 段</span>
       <span v-if="thinkingTotalMs != null" class="think-label think-group-total">{{ formatThinkingMs(thinkingTotalMs) }}</span>
-      <span class="think-chevron">{{ thinkingExpanded ? '▾' : '▸' }}</span>
+      <ChevronDown v-if="thinkingExpanded" :size="12" class="think-chevron" aria-hidden="true" />
+      <ChevronRight v-else :size="12" class="think-chevron" aria-hidden="true" />
     </button>
     <button v-if="toolEligible" type="button" class="tool-toggle summary-pill tool-group-summary" :class="{ 'is-open': !toolsCollapsed }" :aria-expanded="!toolsCollapsed" @click="emit('toggle-tools')">
       <Wrench :size="14" class="pill-glyph" aria-hidden="true" />
@@ -71,12 +72,14 @@ const emit = defineEmits<{
         <span v-if="toolErrors > 0" class="tool-fail-count">{{ toolErrors }} 失败</span>
       </template>
       <span v-else class="tool-name">收起 · {{ toolTotal }} 次工具调用</span>
-      <span class="tool-chevron">{{ toolsCollapsed ? '▸' : '▾' }}</span>
+      <ChevronRight v-if="toolsCollapsed" :size="12" class="tool-chevron" aria-hidden="true" />
+      <ChevronDown v-else :size="12" class="tool-chevron" aria-hidden="true" />
     </button>
     <button v-if="processEligible" type="button" class="tool-toggle summary-pill process-group-summary" :class="{ 'is-open': !processCollapsed }" :aria-expanded="!processCollapsed" @click="emit('toggle-process')">
       <MessageSquareText :size="14" class="pill-glyph" aria-hidden="true" />
       <span class="tool-name" :class="{ 'process-truncated': processCollapsed && processTruncated }">{{ processLabel }}</span>
-      <span class="tool-chevron">{{ processCollapsed ? '▸' : '▾' }}</span>
+      <ChevronRight v-if="processCollapsed" :size="12" class="tool-chevron" aria-hidden="true" />
+      <ChevronDown v-else :size="12" class="tool-chevron" aria-hidden="true" />
     </button>
   </div>
   <Transition name="think-fade">
@@ -85,7 +88,8 @@ const emit = defineEmits<{
         <div class="think-toggle" @click="emit('toggle-seg', seg.key)">
           <StatusGlyph status="done" class="think-glyph" />
           <span class="think-label">{{ thinkSegLabel(seg) }}</span>
-          <span class="think-chevron">{{ expandedSegKeys.has(seg.key) ? '▾' : '▸' }}</span>
+          <ChevronDown v-if="expandedSegKeys.has(seg.key)" :size="12" class="think-chevron" aria-hidden="true" />
+          <ChevronRight v-else :size="12" class="think-chevron" aria-hidden="true" />
         </div>
         <Transition name="think-fade">
           <div v-if="expandedSegKeys.has(seg.key)" class="think-body">
@@ -101,13 +105,13 @@ const emit = defineEmits<{
 /* ===== 思考/工具基类（与 ChatMessages 内 item 渲染同族——scoped 隔离不继承，
    子组件需复制一份；⚠️ 两处样式须保持同步，改动请一并修改父组件） ===== */
 .think-block { margin:0; }
-.think-toggle { display:flex; align-items:center; gap:6px; padding:2px 6px; cursor:pointer; user-select:none; border-radius:var(--ip-radius-sm); transition:all var(--ip-duration-fast) var(--ip-ease-out); width:100%; }
+.think-toggle { display:flex; align-items:center; gap:var(--ip-spacing-1_5); padding:2px var(--ip-spacing-1_5); cursor:pointer; user-select:none; border-radius:var(--ip-radius-sm); transition:all var(--ip-duration-fast) var(--ip-ease-out); width:100%; }
 .think-toggle:hover { background:var(--ip-color-bg-tertiary); }
-.think-chevron { margin-left:auto; font-size: var(--ip-text-micro-size); color:var(--ip-color-text-disabled); line-height:1; width:10px; flex-shrink:0; transition:transform var(--ip-duration-fast) var(--ip-ease-out); }
+.think-chevron { margin-left:auto; color:var(--ip-color-text-disabled); flex-shrink:0; }
 /* 勿加 text-transform:uppercase——label 是中文不受影响，但会把后缀的耗时单位
    （m/s）打成大写（2026-09-09 生产反馈：思考 · 1M 30S） */
 .think-label { font-size:var(--ip-text-caption-size); font-weight:var(--ip-font-weight-medium); color:var(--ip-color-text-tertiary); letter-spacing:0.3px; }
-.think-body { margin:4px 0 4px 22px; padding:6px 0 6px 14px; border-left:2px solid var(--ip-primary-200); font-size:var(--ip-text-body-sm-size); color:var(--ip-color-text-secondary); line-height:1.6; white-space:pre-wrap; word-break:break-word; }
+.think-body { margin:4px 0 4px 22px; padding:var(--ip-spacing-1_5) 0 var(--ip-spacing-1_5) 14px; border-left:2px solid var(--ip-primary-200); font-size:var(--ip-text-body-sm-size); color:var(--ip-color-text-secondary); line-height:1.6; white-space:pre-wrap; word-break:break-word; }
 .think-body .markdown-body { font-size:inherit; color:inherit; line-height:inherit; }
 
 .think-fade-enter-active { animation:think-in 0.2s ease-out; }
@@ -117,9 +121,9 @@ const emit = defineEmits<{
   to   { opacity:1; transform:translateY(0); }
 }
 
-.tool-toggle { display:flex; align-items:center; gap:6px; padding:2px 6px; cursor:pointer; user-select:none; border-radius:var(--ip-radius-sm); transition:background var(--ip-duration-fast) var(--ip-ease-out); width:100%; }
+.tool-toggle { display:flex; align-items:center; gap:var(--ip-spacing-1_5); padding:2px var(--ip-spacing-1_5); cursor:pointer; user-select:none; border-radius:var(--ip-radius-sm); transition:background var(--ip-duration-fast) var(--ip-ease-out); width:100%; }
 .tool-toggle:hover { background:var(--ip-color-bg-tertiary); }
-.tool-chevron { font-size: var(--ip-text-micro-size); color:var(--ip-color-text-disabled); line-height:1; width:10px; flex-shrink:0; }
+.tool-chevron { color:var(--ip-color-text-disabled); flex-shrink:0; }
 .tool-name { font-size:var(--ip-text-caption-size); font-weight:var(--ip-font-weight-medium); color:var(--ip-color-text-tertiary); white-space:nowrap; }
 .tool-fail-count { font-size:var(--ip-text-caption-size); color:var(--ip-warning-text); white-space:nowrap; }
 
@@ -131,7 +135,7 @@ const emit = defineEmits<{
 .group-summary-pills { display:flex; flex-wrap:wrap; align-items:center; gap:var(--ip-spacing-2); margin-bottom:var(--ip-spacing-3); }
 .group-summary-pills .summary-pill {
   width:auto; flex-shrink:0;
-  padding:2px 10px; gap:4px;
+  padding:2px var(--ip-spacing-2_5); gap:4px;
   border-radius:var(--ip-radius-full, 999px);
   border:1px solid rgba(var(--ip-primary-500-rgb), 0.25);
   background:var(--ip-color-primary-soft-bg, rgba(var(--ip-primary-500-rgb), 0.08));
@@ -155,11 +159,11 @@ const emit = defineEmits<{
 }
 .group-summary-pills .summary-pill .tool-fail-count { font-size:var(--ip-text-body-sm-size); }
 .group-summary-pills .summary-pill .tool-chevron,
-.group-summary-pills .summary-pill .think-chevron { color:inherit; opacity:0.65; font-size:var(--ip-text-caption-size); }
+.group-summary-pills .summary-pill .think-chevron { color:inherit; opacity:0.65; }
 .group-summary-pills .summary-pill .think-group-total { color:inherit; opacity:0.75; }
 .pill-glyph { flex-shrink:0; }
 .think-group-total { font-weight:var(--ip-font-weight-regular); }
-.think-group-stack { margin:2px 0 6px 22px; display:grid; gap:2px; }
+.think-group-stack { margin:2px 0 var(--ip-spacing-1_5) 22px; display:grid; gap:2px; }
 /* 截断组标注：回合被截断是警示事实——warning 语义色；⚠️ 必须排在上方 .tool-name
    inherit 覆写之后——两规则同为 (0,3,0)，同元素双类命中时后者胜 */
 .group-summary-pills .summary-pill .process-truncated { color:var(--ip-warning-text); }

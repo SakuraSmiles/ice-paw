@@ -14,7 +14,7 @@
 // L2 任务摘要（title 全文 + 折叠展开）、L3 预授权档单选（逐次审批 / 命令免问），
 // 后端忽略 scope 只看 delegation_grant。
 import { ref, computed, watch, onMounted, onBeforeUnmount } from "vue";
-import { Lock } from "@lucide/vue";
+import { Lock, ChevronRight } from "@lucide/vue";
 import { useChatStore, TOOL_AUTH_TIMEOUT_MS } from "../../stores/chat";
 import { formatJson } from "../../utils/format";
 import type { AuthScope } from "../../types";
@@ -127,14 +127,14 @@ function deny() {
           <span v-if="toolReq.reason" class="auth-reason" :title="toolReq.reason">{{ toolReq.reason }}</span>
           <span v-if="toolReq.server_name" class="auth-path" title="此工具来自外部 MCP Server">Server: {{ toolReq.server_name }}</span>
           <details class="auth-args">
-            <summary>参数</summary>
+            <summary><ChevronRight :size="12" class="auth-args-chev" aria-hidden="true" />参数</summary>
             <pre class="auth-json">{{ formatJson(toolReq.arguments) }}</pre>
           </details>
         </div>
         <div v-else-if="delegationReq" class="auth-line2">
           <span class="auth-reason delegation-task" :title="delegationReq.task">{{ delegationReq.task }}</span>
           <details class="auth-args">
-            <summary>任务全文</summary>
+            <summary><ChevronRight :size="12" class="auth-args-chev" aria-hidden="true" />任务全文</summary>
             <pre class="auth-json">{{ delegationReq.task }}</pre>
           </details>
         </div>
@@ -204,7 +204,7 @@ function deny() {
   position: relative;
   /* 宽度对齐输入框列（ChatInput .input-container max-width:800px + 居中）：
      审批卡悬在输入框正上方，横贯整个内容区（2K 宽屏尤甚）视觉割裂且压迫 */
-  margin: 0 auto 8px;
+  margin: 0 auto var(--ip-spacing-2);
   width: min(calc(100% - 48px), 800px);
   background: var(--ip-color-bg-elevated);
   border: 1px solid var(--ip-color-border-default);
@@ -238,7 +238,7 @@ function deny() {
 .auth-line1 {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--ip-spacing-1_5);
   min-width: 0;
 }
 .auth-icon { color: var(--ip-primary-600); flex-shrink: 0; }
@@ -266,7 +266,7 @@ function deny() {
 .auth-line2 {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--ip-spacing-1_5);
   min-width: 0;
   font-size: var(--ip-text-caption-size);
 }
@@ -279,7 +279,7 @@ function deny() {
   font-family: var(--ip-font-mono, monospace);
   color: var(--ip-color-text-secondary);
   background: var(--ip-color-bg-tertiary);
-  padding: 1px 6px;
+  padding: 1px var(--ip-spacing-1_5);
   border-radius: var(--ip-radius-sm);
 }
 .auth-dot { color: var(--ip-color-text-disabled); flex-shrink: 0; }
@@ -307,10 +307,13 @@ function deny() {
   border: 1px solid var(--ip-color-border-default);
   border-radius: var(--ip-radius-md);
   box-shadow: var(--ip-shadow-md);
-  padding: 4px 8px 8px;
+  padding: 4px var(--ip-spacing-2) var(--ip-spacing-2);
   max-width: 70%;
 }
 .auth-args summary {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   font-size: var(--ip-text-caption-size);
   color: var(--ip-color-text-tertiary);
   cursor: pointer;
@@ -318,8 +321,8 @@ function deny() {
   white-space: nowrap;
   list-style: none;
 }
-.auth-args summary::before { content: "▸ "; }
-.auth-args[open] summary::before { content: "▾ "; }
+.auth-args summary .auth-args-chev { flex-shrink: 0; transition: transform var(--ip-duration-fast) var(--ip-ease-out); }
+.auth-args[open] summary .auth-args-chev { transform: rotate(90deg); }
 .auth-args summary:hover { color: var(--ip-color-text-secondary); }
 .auth-json {
   font-size: var(--ip-text-caption-size);
@@ -328,7 +331,7 @@ function deny() {
   word-break: break-word;
   color: var(--ip-color-text-secondary);
   background: var(--ip-color-bg-tertiary);
-  padding: 6px 8px;
+  padding: var(--ip-spacing-1_5) var(--ip-spacing-2);
   border-radius: var(--ip-radius-sm);
   max-height: 160px;
   overflow-y: auto;
@@ -353,7 +356,7 @@ function deny() {
 }
 .auth-scope-opt {
   flex-shrink: 0;
-  padding: 2px 10px;
+  padding: 2px var(--ip-spacing-2_5);
   border-radius: var(--ip-radius-full, 999px);
   border: 1px solid var(--ip-color-border-default);
   background: var(--ip-color-bg-secondary);
@@ -366,11 +369,11 @@ function deny() {
 .auth-scope-opt.active {
   background: var(--ip-primary-500);
   border-color: var(--ip-primary-500);
-  color: #fff;
+  color: var(--ip-color-text-on-primary);
 }
 .auth-scope-opt:disabled { opacity: 0.5; cursor: not-allowed; }
 
-.auth-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.auth-actions { display: flex; gap: var(--ip-spacing-1_5); flex-shrink: 0; }
 .auth-btn {
   padding: 4px 14px;
   border-radius: var(--ip-radius-md);

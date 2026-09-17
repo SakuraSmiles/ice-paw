@@ -232,7 +232,7 @@ function onConfirm() {
   align-items: center;
   gap: 5px;
   height: 30px;
-  padding: 0 16px;
+  padding: 0 var(--ip-spacing-4);
   font-size: var(--ip-text-body-sm-size);
   font-weight: 500;
   color: var(--ip-color-text-secondary);
@@ -312,7 +312,7 @@ function onConfirm() {
 }
 .sp-btn {
   height: 30px;
-  padding: 0 16px;
+  padding: 0 var(--ip-spacing-4);
   border: none;
   border-radius: var(--ip-radius-md);
   font-size: var(--ip-text-body-sm-size);
@@ -321,7 +321,7 @@ function onConfirm() {
 }
 .sp-btn.primary {
   background: var(--ip-primary-500);
-  color: #fff;
+  color: var(--ip-color-text-on-primary);
 }
 .sp-btn.primary:disabled {
   opacity: 0.6;

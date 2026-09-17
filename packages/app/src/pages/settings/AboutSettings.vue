@@ -56,7 +56,7 @@ onMounted(async () => {
 .content-header {
   display: flex;
   align-items: center;
-  padding: 20px 28px 0;
+  padding: var(--ip-spacing-5) var(--ip-spacing-7) 0;
   flex-shrink: 0;
   height: 56px;
 }
@@ -74,7 +74,7 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  padding: var(--ip-spacing-4) 28px var(--ip-spacing-4);
+  padding: var(--ip-spacing-4) var(--ip-spacing-7) var(--ip-spacing-4);
   overflow-y: auto;
 }
 

@@ -82,7 +82,7 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 20px;
+  gap: var(--ip-spacing-5);
 }
 
 .splash-logo {

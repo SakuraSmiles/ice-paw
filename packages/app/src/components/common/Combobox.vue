@@ -241,7 +241,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   height: var(--ip-select-option-h, 36px);
-  padding: 0 0 0 12px;
+  padding: 0 0 0 var(--ip-spacing-3);
   background-color: var(--ip-color-bg-tertiary);
   border: 1px solid var(--ip-color-border-default);
   border-radius: var(--ip-radius-md);
@@ -318,7 +318,7 @@ onUnmounted(() => {
 .combobox-option {
   display: block;
   width: 100%;
-  padding: 7px 10px;
+  padding: 7px var(--ip-spacing-2_5);
   text-align: left;
   font-size: var(--ip-text-body-sm-size);
   color: var(--ip-color-text-primary);
@@ -343,7 +343,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 6px 10px;
+  padding: var(--ip-spacing-1_5) var(--ip-spacing-2_5);
 }
 
 .combobox-option-note {
@@ -358,7 +358,7 @@ onUnmounted(() => {
 }
 
 .combobox-empty {
-  padding: 7px 10px;
+  padding: 7px var(--ip-spacing-2_5);
   font-size: var(--ip-text-body-sm-size);
   color: var(--ip-color-text-tertiary);
   text-align: center;

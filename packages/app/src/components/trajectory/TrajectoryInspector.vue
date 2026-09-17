@@ -587,7 +587,7 @@ async function copyPayload() {
   display: flex;
   align-items: center;
   gap: var(--ip-spacing-2);
-  padding: 10px 16px 6px;
+  padding: var(--ip-spacing-2_5) var(--ip-spacing-4) var(--ip-spacing-1_5);
   background: var(--ip-color-bg-secondary);
   flex-shrink: 0;
 }
@@ -613,7 +613,7 @@ async function copyPayload() {
 .ev-plan { color: var(--ip-success-text); background: var(--ip-success-bg); }
 
 /* 计划清单行：与 PlanCard/TaskPanel 同款状态标记（局部 scoped，不复用跨组件样式） */
-.iplan-row { display: flex; align-items: flex-start; gap: var(--ip-spacing-2); padding: 6px 0; }
+.iplan-row { display: flex; align-items: flex-start; gap: var(--ip-spacing-2); padding: var(--ip-spacing-1_5) 0; }
 .iplan-mark {
   width: 8px; height: 8px; margin-top: 5px; flex-shrink: 0;
   border-radius: var(--ip-radius-full);
@@ -644,7 +644,7 @@ async function copyPayload() {
   background: none;
   color: var(--ip-color-text-tertiary);
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--ip-text-caption-size);
   border-radius: var(--ip-radius-full);
   transition: var(--ip-transition-colors);
 }
@@ -669,7 +669,7 @@ async function copyPayload() {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 8px 12px;
+  padding: var(--ip-spacing-2) var(--ip-spacing-3);
   border: none;
   background: none;
   cursor: pointer;
@@ -691,12 +691,12 @@ async function copyPayload() {
 }
 .insp-tab.active .itab-badge { background: var(--ip-color-primary-soft-bg, var(--ip-primary-50)); color: var(--ip-primary-600); }
 
-.insp-body { flex: 1; overflow-y: auto; padding: 14px 16px 16px; min-height: 0; }
+.insp-body { flex: 1; overflow-y: auto; padding: 14px var(--ip-spacing-4) var(--ip-spacing-4); min-height: 0; }
 
 /* 分节卡片：浮在 bg-secondary 面板上的 bg-primary 卡，层次即结构 */
 .isec {
-  margin-bottom: 12px;
-  padding: 12px 14px;
+  margin-bottom: var(--ip-spacing-3);
+  padding: var(--ip-spacing-3) 14px;
   background: var(--ip-color-bg-primary);
   border: 1px solid var(--ip-color-border-default);
   border-radius: var(--ip-radius-md);
@@ -705,7 +705,7 @@ async function copyPayload() {
   font-size: var(--ip-text-caption-size);
   font-weight: var(--ip-font-weight-semibold);
   color: var(--ip-color-text-primary);
-  margin: 0 0 10px;
+  margin: 0 0 var(--ip-spacing-2_5);
   display: flex;
   align-items: center;
   gap: var(--ip-spacing-2);
@@ -728,7 +728,7 @@ async function copyPayload() {
 .iprev-think { font-style: italic; color: var(--ip-color-text-tertiary); }
 .iprev-err { color: var(--ip-danger-base); }
 
-.isub { font-size: var(--ip-text-micro-size); font-weight: var(--ip-font-weight-semibold); color: var(--ip-color-text-tertiary); letter-spacing: 0.5px; margin: 12px 0 6px; }
+.isub { font-size: var(--ip-text-micro-size); font-weight: var(--ip-font-weight-semibold); color: var(--ip-color-text-tertiary); letter-spacing: 0.5px; margin: var(--ip-spacing-3) 0 var(--ip-spacing-1_5); }
 .isub-err { color: var(--ip-danger-text); }
 
 .ipre {
@@ -738,7 +738,7 @@ async function copyPayload() {
   word-break: break-word;
   background: var(--ip-code-bg);
   color: var(--ip-code-text);
-  padding: 10px;
+  padding: var(--ip-spacing-2_5);
   border-radius: var(--ip-radius-md);
   margin: 0;
   overflow-y: auto;
@@ -751,7 +751,7 @@ async function copyPayload() {
   align-items: center;
   gap: 4px;
   font-size: var(--ip-text-micro-size);
-  padding: 2px 10px;
+  padding: 2px var(--ip-spacing-2_5);
   border-radius: var(--ip-radius-full);
   border: 1px solid var(--ip-color-border-default);
   background: var(--ip-color-bg-secondary);
@@ -759,7 +759,7 @@ async function copyPayload() {
   cursor: pointer;
 }
 .ipre-copy:hover { color: var(--ip-color-text-primary); background: var(--ip-color-bg-tertiary); }
-.ipre-toolbar { display: flex; justify-content: flex-end; margin-bottom: 8px; }
+.ipre-toolbar { display: flex; justify-content: flex-end; margin-bottom: var(--ip-spacing-2); }
 .ev-err-text { color: var(--ip-danger-base); }
 
 /* 思考全文：专属 tab + 卡片已划界，不再加左边线分组条 */
@@ -773,7 +773,7 @@ async function copyPayload() {
   line-height: 1.7;
 }
 
-.itags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.itags { display: flex; flex-wrap: wrap; gap: var(--ip-spacing-1_5); margin-bottom: var(--ip-spacing-2); }
 .itag {
   font-size: var(--ip-text-micro-size);
   padding: 2px 9px;
@@ -787,13 +787,13 @@ async function copyPayload() {
 
 .imono { font-family: var(--ip-font-mono, monospace); }
 
-.iimgs { display: flex; gap: var(--ip-spacing-2_5); flex-wrap: wrap; margin-top: 10px; }
+.iimgs { display: flex; gap: var(--ip-spacing-2_5); flex-wrap: wrap; margin-top: var(--ip-spacing-2_5); }
 
 /* 引用/文档卡列表（user_message 正文 tab）：轻量行卡 = 类型胶囊 + 元信息 */
-.iref-list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.iref-list { display: flex; flex-direction: column; gap: var(--ip-spacing-1_5); margin-top: var(--ip-spacing-2_5); }
 .iref, .idoc {
   display: flex; align-items: center; gap: var(--ip-spacing-2);
-  padding: 5px 10px; border-radius: var(--ip-radius-md);
+  padding: 5px var(--ip-spacing-2_5); border-radius: var(--ip-radius-md);
   background: var(--ip-color-bg-tertiary); font-size: var(--ip-text-caption-size);
 }
 .iref-kind {
@@ -808,7 +808,7 @@ async function copyPayload() {
 .iref-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .iimg { width: 96px; height: 96px; object-fit: cover; border-radius: var(--ip-radius-md); cursor: pointer; border: 1px solid var(--ip-color-border-default); }
 
-.iadapted { margin: 8px 0; font-size: var(--ip-text-caption-size); color: var(--ip-color-text-secondary); }
+.iadapted { margin: var(--ip-spacing-2) 0; font-size: var(--ip-text-caption-size); color: var(--ip-color-text-secondary); }
 .iattach-row {
   display: flex;
   align-items: baseline;
@@ -838,5 +838,5 @@ async function copyPayload() {
   padding: 2px 7px; border-radius: var(--ip-radius-full);
   background: var(--ip-color-bg-tertiary); color: var(--ip-color-text-secondary);
 }
-.ibd-foot { margin-top: 8px; font-size: var(--ip-text-micro-size); color: var(--ip-color-text-tertiary); line-height: 1.5; }
+.ibd-foot { margin-top: var(--ip-spacing-2); font-size: var(--ip-text-micro-size); color: var(--ip-color-text-tertiary); line-height: 1.5; }
 </style>

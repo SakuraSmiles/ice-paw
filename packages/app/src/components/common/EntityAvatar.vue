@@ -120,9 +120,9 @@ function onImgError() {
 /* 尺寸梯度：xs 侧栏小标签 / sm 菜单与列表行 / md 聊天头与选择器 / lg 表单预览 / xl ChatHeader 占两行高度 */
 .size-xs { width: 16px; height: 16px; font-size: var(--ip-text-micro-size); }
 .size-sm { width: 20px; height: 20px; font-size: var(--ip-text-micro-size); }
-.size-md { width: 28px; height: 28px; font-size: 13px; }
-.size-lg { width: 36px; height: 36px; font-size: 16px; }
-.size-xl { width: 44px; height: 44px; font-size: 18px; }
+.size-md { width: 28px; height: 28px; font-size: var(--ip-text-body-sm-size); }
+.size-lg { width: 36px; height: 36px; font-size: var(--ip-text-body-size); }
+.size-xl { width: 44px; height: 44px; font-size: var(--ip-text-h3-size); }
 
 /* 小尺寸（xs/sm）：仅描边不加投影——16-20px 上投影只剩噪点 */
 .size-xs,

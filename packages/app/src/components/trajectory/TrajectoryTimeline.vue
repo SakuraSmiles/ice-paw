@@ -310,7 +310,9 @@ function buildSpans() {
   t1 = d1;
 }
 
-/** CSS 变量取值（canvas fillStyle 不解析 var()，需先问 computed style） */
+/** CSS 变量取值（canvas fillStyle 不解析 var()，需先问 computed style）。
+ *  fallback 二参仅在「无 CSS 变量可用」时兜底（jsdom 测试 / 令牌样式未载入），
+ *  值须镜像 tokens.css `:root`（浅色）档——单一真相源在 tokens.css，勿在此另起炉灶。 */
 function cssVar(name: string, fallback: string): string {
   const v = getComputedStyle(track.value ?? document.documentElement).getPropertyValue(name).trim();
   return v || fallback;
@@ -320,7 +322,7 @@ let colors: Record<string, string> = {};
 function resolveColors() {
   colors = {
     danger: cssVar("--ip-danger-base", "#B83D3D"),
-    lane0: cssVar("--ip-primary-500", "#4680C2"),
+    lane0: cssVar("--ip-primary-500", "#1E4976"),
     lane1: cssVar("--ip-gray-500", "#6B7785"),
     lane2: cssVar("--ip-warning-base", "#B8862A"),
     lane3: cssVar("--ip-success-base", "#2D8B66"),
@@ -731,7 +733,7 @@ const labels = computed(() => LANE_LABELS.map((text, i) => ({ text, active: lane
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  padding-top: 6px;
+  padding-top: var(--ip-spacing-1_5);
   border-right: 1px solid var(--ip-color-border-default);
 }
 .tt-labels span {
@@ -739,7 +741,7 @@ const labels = computed(() => LANE_LABELS.map((text, i) => ({ text, active: lane
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  padding-right: 8px;
+  padding-right: var(--ip-spacing-2);
   font-size: var(--ip-text-micro-size);
   letter-spacing: 0.3px;
   color: var(--ip-color-text-tertiary);
@@ -774,7 +776,7 @@ const labels = computed(() => LANE_LABELS.map((text, i) => ({ text, active: lane
   appearance: none;
   background: linear-gradient(to right, var(--ip-color-bg-secondary) 0, var(--ip-color-bg-secondary) 40%, transparent 100%);
   color: var(--ip-color-text-tertiary);
-  font-size: 12px;
+  font-size: var(--ip-text-caption-size);
   cursor: pointer;
   opacity: 0.72;
 }
@@ -784,7 +786,7 @@ const labels = computed(() => LANE_LABELS.map((text, i) => ({ text, active: lane
 .tt-tip {
   position: absolute;
   pointer-events: none;
-  padding: 2px 8px;
+  padding: 2px var(--ip-spacing-2);
   font-size: var(--ip-text-micro-size);
   font-family: var(--ip-font-mono, monospace);
   color: var(--ip-color-text-primary);

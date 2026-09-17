@@ -1053,12 +1053,12 @@ function confirmDelete() {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  margin-top: 10px;
+  margin-top: var(--ip-spacing-2_5);
 }
 
 .form-error {
-  padding: 8px 12px;
-  margin-bottom: 8px;
+  padding: var(--ip-spacing-2) var(--ip-spacing-3);
+  margin-bottom: var(--ip-spacing-2);
   background-color: var(--ip-danger-bg);
   border: 1px solid var(--ip-danger-border);
   border-radius: var(--ip-radius-md);
@@ -1129,7 +1129,7 @@ function confirmDelete() {
 .field-label {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--ip-spacing-1_5);
   font-size: var(--ip-text-caption-size);
   font-weight: var(--ip-font-weight-medium);
   color: var(--ip-color-text-secondary);
@@ -1168,7 +1168,7 @@ function confirmDelete() {
 .input {
   width: 100%;
   height: var(--ip-input-h-sm);
-  padding: 0 10px;
+  padding: 0 var(--ip-spacing-2_5);
   font-size: var(--ip-text-body-sm-size);
   color: var(--ip-color-text-primary);
   background-color: var(--ip-color-bg-tertiary);
@@ -1196,11 +1196,11 @@ function confirmDelete() {
 .endpoint-row {
   display: flex;
   gap: 4px;
-  margin-top: 6px;
+  margin-top: var(--ip-spacing-1_5);
 }
 .endpoint-opt,
 .mode-pill {
-  padding: 0 10px;
+  padding: 0 var(--ip-spacing-2_5);
   font-size: var(--ip-text-micro-size);
   line-height: 20px;
   color: var(--ip-color-text-secondary);
@@ -1234,7 +1234,7 @@ function confirmDelete() {
   align-items: center;
   gap: 4px;
   min-height: var(--ip-input-h-sm);
-  padding: 3px 4px 3px 8px;
+  padding: 3px 4px 3px var(--ip-spacing-2);
   box-sizing: border-box;
   background-color: var(--ip-color-bg-tertiary);
   border: 1px solid var(--ip-color-border-default);
@@ -1265,7 +1265,7 @@ function confirmDelete() {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 0 2px 0 6px;
+  padding: 0 2px 0 var(--ip-spacing-1_5);
   font-size: var(--ip-text-micro-size);
   line-height: 20px;
   color: var(--ip-color-text-body);
@@ -1345,8 +1345,8 @@ function confirmDelete() {
 .chain-option {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
+  gap: var(--ip-spacing-1_5);
+  padding: 4px var(--ip-spacing-2);
   border: none;
   border-radius: var(--ip-radius-sm);
   background: transparent;
@@ -1383,7 +1383,7 @@ function confirmDelete() {
 }
 .chain-option--new {
   margin-top: 2px;
-  padding-top: 6px;
+  padding-top: var(--ip-spacing-1_5);
   border-top: 1px solid var(--ip-color-border-default);
   border-radius: 0;
   color: var(--ip-primary-600);
@@ -1391,7 +1391,7 @@ function confirmDelete() {
 }
 .chain-empty {
   margin: 0;
-  padding: 4px 8px;
+  padding: 4px var(--ip-spacing-2);
   font-size: var(--ip-text-micro-size);
   color: var(--ip-color-text-tertiary);
 }
@@ -1400,7 +1400,7 @@ function confirmDelete() {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 6px;
+  gap: var(--ip-spacing-1_5);
   min-height: 20px;
 }
 .chain-test-row .conn-ok,
@@ -1427,7 +1427,7 @@ function confirmDelete() {
 .label-row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--ip-spacing-1_5);
 }
 .label-row .conn-ok,
 .label-row .conn-err {
@@ -1437,7 +1437,7 @@ function confirmDelete() {
 
 .conn-btn {
   height: 20px;
-  padding: 0 8px;
+  padding: 0 var(--ip-spacing-2);
   font-size: var(--ip-text-micro-size);
   color: var(--ip-primary-600);
   background-color: var(--ip-color-primary-soft-bg);
@@ -1476,7 +1476,7 @@ function confirmDelete() {
   gap: var(--ip-spacing-1);
 }
 .scope-pill {
-  padding: 2px 12px;
+  padding: 2px var(--ip-spacing-3);
   font-size: var(--ip-text-caption-size);
   border-radius: var(--ip-radius-full);
   border: 1px solid var(--ip-color-border-default);
@@ -1532,7 +1532,7 @@ function confirmDelete() {
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  padding: 1px 4px 1px 8px;
+  padding: 1px 4px 1px var(--ip-spacing-2);
   border-radius: var(--ip-radius-full);
   border: 1px dashed var(--ip-color-border-default);
   font-size: var(--ip-text-micro-size);
@@ -1564,7 +1564,7 @@ function confirmDelete() {
 /* 工作区 */
 .workspace-group {
   display: flex;
-  gap: 6px;
+  gap: var(--ip-spacing-1_5);
   align-items: center;
 }
 .workspace-input {
@@ -1599,7 +1599,7 @@ function confirmDelete() {
   display: inline-flex;
   align-items: center;
   height: 22px;
-  padding: 0 8px;
+  padding: 0 var(--ip-spacing-2);
   font-size: var(--ip-text-micro-size);
   font-weight: var(--ip-font-weight-semibold);
   color: var(--ip-color-primary-tint-text);
@@ -1611,7 +1611,7 @@ function confirmDelete() {
 /* 风格预设入口（与 agent.yaml 徽章同排；弹层 Teleport 到 body） */
 .ws-preset-btn {
   height: 22px;
-  padding: 0 8px;
+  padding: 0 var(--ip-spacing-2);
   flex-shrink: 0;
   font-size: var(--ip-text-micro-size);
   color: var(--ip-color-text-secondary);
@@ -1716,7 +1716,7 @@ function confirmDelete() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 10px;
+  margin-bottom: var(--ip-spacing-2_5);
 }
 .section-title {
   font-size: var(--ip-text-caption-size);
@@ -1733,7 +1733,7 @@ function confirmDelete() {
 /* 文字按钮（取消） */
 .btn-link {
   height: 28px;
-  padding: 0 10px;
+  padding: 0 var(--ip-spacing-2_5);
   font-size: var(--ip-text-body-sm-size);
   color: var(--ip-color-text-secondary);
   background: none;
@@ -1759,7 +1759,7 @@ function confirmDelete() {
   align-items: center;
   gap: 5px;
   margin-top: 14px;
-  padding: 4px 8px;
+  padding: 4px var(--ip-spacing-2);
   font-size: var(--ip-text-caption-size);
   color: var(--ip-danger-base);
   background: none;
@@ -1777,7 +1777,7 @@ function confirmDelete() {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: var(--ip-spacing-1_5);
   height: var(--ip-input-h-sm);
   padding: 0 14px;
   font-size: var(--ip-text-body-sm-size);

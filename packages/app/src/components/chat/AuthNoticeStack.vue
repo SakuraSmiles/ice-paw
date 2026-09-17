@@ -151,7 +151,7 @@ function isDelegation(
   border: none;
   background: none;
   cursor: pointer;
-  padding: 0 12px 8px;
+  padding: 0 var(--ip-spacing-3) var(--ip-spacing-2);
   font: inherit;
   color: inherit;
 }
@@ -184,7 +184,7 @@ function isDelegation(
 }
 .notice-btn {
   flex: 1;
-  padding: 5px 10px;
+  padding: 5px var(--ip-spacing-2_5);
   border-radius: var(--ip-radius-md);
   font-size: var(--ip-text-caption-size);
   font-weight: var(--ip-font-weight-medium);

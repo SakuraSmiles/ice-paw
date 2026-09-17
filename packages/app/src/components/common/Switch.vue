@@ -46,7 +46,7 @@ function toggle() {
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  background-color: #fff;
+  background-color: var(--ip-white);
   transition: transform var(--ip-duration-fast) var(--ip-ease-out);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
 }

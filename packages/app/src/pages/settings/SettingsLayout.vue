@@ -106,7 +106,7 @@ function navigate(key: string) {
 .settings-header {
   display: flex;
   align-items: center;
-  padding: 14px 32px;
+  padding: 14px var(--ip-spacing-8);
   min-height: 68px;
   border-bottom: 1px solid var(--ip-color-border-default);
   background-color: var(--ip-color-bg-chat-header);
@@ -124,7 +124,7 @@ function navigate(key: string) {
 /* ===== 留白区域 ===== */
 .settings-body {
   flex: 1;
-  padding: 24px 32px;
+  padding: var(--ip-spacing-6) var(--ip-spacing-8);
   min-height: 0;
   display: flex;
   align-items: flex-start;
@@ -138,7 +138,7 @@ function navigate(key: string) {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 78px 32px 0 0;
+  padding: 78px var(--ip-spacing-8) 0 0;
   background: none;
   border: none;
   border-radius: 0;
@@ -152,7 +152,7 @@ function navigate(key: string) {
   align-items: center;
   gap: var(--ip-spacing-2_5);
   width: 100%;
-  padding: 10px 12px 10px 16px;
+  padding: var(--ip-spacing-2_5) var(--ip-spacing-3) var(--ip-spacing-2_5) var(--ip-spacing-4);
   text-align: left;
   cursor: pointer;
   border: none;

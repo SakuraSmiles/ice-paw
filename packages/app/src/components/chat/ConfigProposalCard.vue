@@ -295,7 +295,7 @@ async function reject() {
 
 <style scoped>
 .proposal-card {
-  margin: 8px 0;
+  margin: var(--ip-spacing-2) 0;
   border: 1px solid var(--ip-color-border-default);
   border-radius: var(--ip-radius-lg);
   background: var(--ip-color-bg-elevated);
@@ -318,7 +318,7 @@ async function reject() {
   display: flex;
   align-items: center;
   gap: var(--ip-spacing-2);
-  padding: 10px 14px 4px;
+  padding: var(--ip-spacing-2_5) 14px 4px;
 }
 
 .proposal-badge {
@@ -327,7 +327,7 @@ async function reject() {
   gap: var(--ip-spacing-1);
   font-size: var(--ip-text-micro-size);
   font-weight: var(--ip-font-weight-semibold);
-  padding: 1px 8px;
+  padding: 1px var(--ip-spacing-2);
   border-radius: var(--ip-radius-full);
 }
 
@@ -368,14 +368,14 @@ async function reject() {
 }
 
 .proposal-summary {
-  padding: 2px 14px 8px;
+  padding: 2px 14px var(--ip-spacing-2);
   font-size: var(--ip-text-caption-size);
   color: var(--ip-color-text-secondary);
   line-height: 1.5;
 }
 
 .proposal-fields {
-  padding: 0 14px 8px;
+  padding: 0 14px var(--ip-spacing-2);
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -404,7 +404,7 @@ async function reject() {
 
 .field-input {
   flex: 1;
-  padding: 2px 6px;
+  padding: 2px var(--ip-spacing-1_5);
   border: 1px solid var(--ip-color-border-default);
   border-radius: var(--ip-radius-sm);
   font-size: var(--ip-text-micro-size);
@@ -419,23 +419,23 @@ async function reject() {
 }
 
 .proposal-error {
-  margin: 0 14px 8px;
+  margin: 0 14px var(--ip-spacing-2);
   font-size: var(--ip-text-caption-size);
   color: var(--ip-danger-base);
-  padding: 4px 8px;
+  padding: 4px var(--ip-spacing-2);
   background: var(--ip-danger-soft-bg);
   border-radius: var(--ip-radius-sm);
 }
 
 .proposal-footer {
   display: flex;
-  gap: 6px;
-  padding: 6px 14px 10px;
+  gap: var(--ip-spacing-1_5);
+  padding: var(--ip-spacing-1_5) 14px var(--ip-spacing-2_5);
   border-top: 1px solid var(--ip-color-border-default);
 }
 
 .btn {
-  padding: 4px 12px;
+  padding: 4px var(--ip-spacing-3);
   border-radius: var(--ip-radius-md);
   font-size: var(--ip-text-caption-size);
   font-weight: var(--ip-font-weight-medium);

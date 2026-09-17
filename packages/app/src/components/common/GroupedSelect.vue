@@ -218,7 +218,7 @@ function onKeydown(e: KeyboardEvent) {
   gap: var(--ip-spacing-2);
   width: 100%;
   height: 30px;
-  padding: 0 4px 0 10px;
+  padding: 0 4px 0 var(--ip-spacing-2_5);
   font-size: var(--ip-text-body-sm-size);
   color: var(--ip-color-text-primary);
   background-color: var(--ip-color-bg-tertiary);
@@ -293,8 +293,8 @@ function onKeydown(e: KeyboardEvent) {
 .gs-group-label {
   display: flex;
   align-items: baseline;
-  gap: 6px;
-  padding: 8px 10px 3px;
+  gap: var(--ip-spacing-1_5);
+  padding: var(--ip-spacing-2) var(--ip-spacing-2_5) 3px;
 }
 /* 品牌图标（slot 内容属父作用域，须 :deep）；svg 无基线，垂直居中更稳 */
 .gs-group-label :deep(.provider-icon) {
@@ -326,7 +326,7 @@ function onKeydown(e: KeyboardEvent) {
   justify-content: space-between;
   gap: var(--ip-spacing-2);
   width: 100%;
-  padding: 6px 10px 6px 20px;
+  padding: var(--ip-spacing-1_5) var(--ip-spacing-2_5) var(--ip-spacing-1_5) var(--ip-spacing-5);
   text-align: left;
   font-size: var(--ip-text-body-sm-size);
   color: var(--ip-color-text-primary);
@@ -369,7 +369,7 @@ function onKeydown(e: KeyboardEvent) {
 }
 
 .gs-empty {
-  padding: 12px;
+  padding: var(--ip-spacing-3);
   font-size: var(--ip-text-body-sm-size);
   color: var(--ip-color-text-tertiary);
   text-align: center;

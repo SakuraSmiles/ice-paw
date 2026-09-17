@@ -112,7 +112,7 @@ const timeLabel = computed(() => timeAgo(props.card.createdAt));
   color: var(--ip-primary-600);
   border: 1px solid var(--ip-color-border-focus);
   border-radius: var(--ip-radius-full);
-  padding: 0 6px;
+  padding: 0 var(--ip-spacing-1_5);
 }
 .election-head-time {
   margin-left: auto;

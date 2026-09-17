@@ -295,17 +295,17 @@ const validateDocxView = computed(() => {
 </template>
 
 <style scoped>
-.expand-group { margin-bottom: 8px; }
+.expand-group { margin-bottom: var(--ip-spacing-2); }
 .expand-group:last-child { margin-bottom: 0; }
 .expand-hdr { font-size: var(--ip-text-micro-size); font-weight: var(--ip-font-weight-semibold); color: var(--ip-color-text-tertiary); margin-bottom: 4px; letter-spacing: 0.5px; }
 .expand-hdr.hdr-err { color: var(--ip-danger-base); }
-.expand-code { font-size: var(--ip-text-caption-size); font-family: var(--ip-font-mono, monospace); white-space: pre-wrap; word-break: break-word; color: var(--ip-code-text); background: var(--ip-code-bg); padding: 6px 8px; border-radius: var(--ip-radius-sm); margin: 0; line-height: 1.5; max-height: 200px; overflow-y: auto; }
+.expand-code { font-size: var(--ip-text-caption-size); font-family: var(--ip-font-mono, monospace); white-space: pre-wrap; word-break: break-word; color: var(--ip-code-text); background: var(--ip-code-bg); padding: var(--ip-spacing-1_5) var(--ip-spacing-2); border-radius: var(--ip-radius-sm); margin: 0; line-height: 1.5; max-height: 200px; overflow-y: auto; }
 .expand-code.code-err { color: var(--ip-danger-base); }
 .expand-pending { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-disabled); font-style: italic; }
 .expand-meta { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); padding-top: 4px; }
 
 /* 红绿对照（语义层 danger/success，浅暗双主题自适应） */
-.diff-block { margin-bottom: 8px; border-radius: var(--ip-radius-sm); padding: 6px 8px; }
+.diff-block { margin-bottom: var(--ip-spacing-2); border-radius: var(--ip-radius-sm); padding: var(--ip-spacing-1_5) var(--ip-spacing-2); }
 .diff-block .expand-hdr { margin-bottom: 2px; }
 .diff-block .expand-code { background: transparent; padding: 0; max-height: 160px; }
 .diff-del { background: color-mix(in srgb, var(--ip-danger-base) 8%, transparent); }
@@ -316,13 +316,13 @@ const validateDocxView = computed(() => {
 /* 逐操作 / 断言清单 */
 .op-list { display: flex; flex-direction: column; gap: 4px; }
 .op-row { display: flex; align-items: baseline; gap: var(--ip-spacing-2); min-width: 0; font-size: var(--ip-text-caption-size); line-height: 1.5; }
-.op-tag { flex: none; padding: 0 6px; border-radius: var(--ip-radius-full); background: var(--ip-color-bg-tertiary); color: var(--ip-color-text-secondary); font-size: var(--ip-text-micro-size); white-space: nowrap; }
+.op-tag { flex: none; padding: 0 var(--ip-spacing-1_5); border-radius: var(--ip-radius-full); background: var(--ip-color-bg-tertiary); color: var(--ip-color-text-secondary); font-size: var(--ip-text-micro-size); white-space: nowrap; }
 .op-target { flex: none; color: var(--ip-color-text-secondary); font-family: var(--ip-font-mono, monospace); font-size: var(--ip-text-micro-size); white-space: nowrap; }
 .op-change { min-width: 0; color: var(--ip-color-text-tertiary); word-break: break-all; }
 .op-fail .op-tag { background: color-mix(in srgb, var(--ip-danger-base) 10%, transparent); color: var(--ip-danger-base); }
 .op-fail .op-change { color: var(--ip-danger-base); }
 
 /* 原始 JSON 折叠 */
-.raw-toggle { margin-top: 8px; padding: 0; border: none; background: transparent; cursor: pointer; font-size: var(--ip-text-micro-size); color: var(--ip-color-text-disabled); text-decoration: underline dotted; }
+.raw-toggle { margin-top: var(--ip-spacing-2); padding: 0; border: none; background: transparent; cursor: pointer; font-size: var(--ip-text-micro-size); color: var(--ip-color-text-disabled); text-decoration: underline dotted; }
 .raw-toggle:hover { color: var(--ip-color-text-secondary); }
 </style>

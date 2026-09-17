@@ -672,7 +672,7 @@ function handleKeydown(e: KeyboardEvent) {
 <style scoped>
 /* 无上边线（2026-09-01 用户拍板）：与消息区的分隔改由内容底缘渐隐承担
    （见 ChatMessages .messages-wrap::after），比横线柔和 */
-.input-area { flex-shrink:0; padding:16px 24px 24px; }
+.input-area { flex-shrink:0; padding:var(--ip-spacing-4) var(--ip-spacing-6) var(--ip-spacing-6); }
 .input-container { max-width:800px; margin:0 auto; display:flex; flex-direction:column; gap: var(--ip-spacing-2); }
 
 /* ===== 图片预览条 ===== */
@@ -683,8 +683,8 @@ function handleKeydown(e: KeyboardEvent) {
 .preview-item:hover .preview-remove { opacity:1; }
 
 /* ===== 文件附件预览条 ===== */
-.file-strip { display:flex; gap:6px; flex-wrap:wrap; }
-.file-chip { display:flex; align-items:center; gap:6px; max-width:240px; padding:4px 8px; border-radius:var(--ip-radius-md); background-color:var(--ip-color-bg-tertiary); border:1px solid var(--ip-color-border-default); color:var(--ip-color-text-secondary); font-size:12px; }
+.file-strip { display:flex; gap:var(--ip-spacing-1_5); flex-wrap:wrap; }
+.file-chip { display:flex; align-items:center; gap:var(--ip-spacing-1_5); max-width:240px; padding:4px var(--ip-spacing-2); border-radius:var(--ip-radius-md); background-color:var(--ip-color-bg-tertiary); border:1px solid var(--ip-color-border-default); color:var(--ip-color-text-secondary); font-size:var(--ip-text-caption-size); }
 .file-chip-icon { flex-shrink:0; color:var(--ip-primary-600); }
 .file-chip-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .file-chip-size { flex-shrink:0; color:var(--ip-color-text-disabled); font-size: var(--ip-text-micro-size); }
@@ -705,7 +705,7 @@ function handleKeydown(e: KeyboardEvent) {
 
 /* ===== @ 引用弹层（输入框上方） ===== */
 .at-popover { position:absolute; left:8px; right:8px; bottom:calc(100% + 6px); z-index: var(--ip-z-raised); max-height:280px; overflow-y:auto; background-color:var(--ip-color-bg-primary); border:1px solid var(--ip-color-border-default); border-radius:var(--ip-radius-md); box-shadow:0 4px 16px rgba(0,0,0,0.12); padding:4px; }
-.at-option { display:flex; align-items:center; gap: var(--ip-spacing-2); width:100%; padding:7px 10px; border:none; border-radius:var(--ip-radius-sm); background:transparent; cursor:pointer; text-align:left; }
+.at-option { display:flex; align-items:center; gap: var(--ip-spacing-2); width:100%; padding:7px var(--ip-spacing-2_5); border:none; border-radius:var(--ip-radius-sm); background:transparent; cursor:pointer; text-align:left; }
 /* agent 候选头像（sm=20px，EntityAvatar 三级链；会话/消息候选无头像） */
 .at-option-avatar { flex-shrink: 0; }
 .at-option.active { background-color:var(--ip-color-bg-hover); }
@@ -713,7 +713,7 @@ function handleKeydown(e: KeyboardEvent) {
  * 不加 tag/勾等额外元素（行内文本已密，选中态靠底色与字色一眼可辨） */
 .at-option.selected { background-color:var(--ip-color-primary-soft-bg); }
 .at-option.selected .at-option-label { color:var(--ip-primary-600); }
-.at-option-label { flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; color:var(--ip-color-text-primary); }
+.at-option-label { flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--ip-text-body-sm-size); color:var(--ip-color-text-primary); }
 /* agent id：名字后的等宽淡色尾随（完整 id 放 title，挤压时省略） */
 .at-option-id { flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size: var(--ip-text-micro-size); color:var(--ip-color-text-disabled); font-family:var(--ip-font-mono, monospace); }
 /* 右侧组：归属（项目名/模型，超长省略）+ 类型词定宽贴右缘，跨行纵向对齐 */
@@ -733,7 +733,7 @@ function handleKeydown(e: KeyboardEvent) {
   40% { background-color:var(--ip-primary-50, var(--ip-primary-100)); border-color:var(--ip-primary-400, var(--ip-primary-600)); }
 }
 /* 输入区全宽（右上不再为发送按钮留位）；四周到边框统一留呼吸间隙 */
-.input-row { display:flex; align-items:flex-start; padding:12px 12px 0; }
+.input-row { display:flex; align-items:flex-start; padding:var(--ip-spacing-3) var(--ip-spacing-3) 0; }
 .input-wrapper:focus-within { border-color:var(--ip-color-border-focus); box-shadow:0 0 0 3px rgba(var(--ip-primary-500-rgb), 0.12); }
 .input-wrapper.is-sending { border-color:var(--ip-primary-400); box-shadow:0 0 0 3px rgba(var(--ip-primary-500-rgb), 0.08); }
 .input-wrapper.drag-over { border-color:var(--ip-primary-500); box-shadow:0 0 0 3px rgba(var(--ip-primary-500-rgb), 0.18); background-color:var(--ip-primary-50); }
@@ -741,7 +741,7 @@ function handleKeydown(e: KeyboardEvent) {
 /* 底部工具栏：附件/引用（24px）… 提示居中 … 发送（32px，大一圈）。
    底边对齐（flex-end）：大小混排的按钮行底边齐平更稳，居中会让 24px
    小按钮悬在大按钮半腰 */
-.input-footer { display:flex; align-items:flex-end; gap:6px; padding:4px 12px 7px; }
+.input-footer { display:flex; align-items:flex-end; gap:var(--ip-spacing-1_5); padding:4px var(--ip-spacing-3) 7px; }
 .btn-img { display:flex; align-items:center; justify-content:center; width:24px; height:24px; border-radius:var(--ip-radius-md); border:none; background:transparent; color:var(--ip-color-text-tertiary); cursor:pointer; transition:all var(--ip-duration-fast) var(--ip-ease-out); }
 .btn-img:hover { background-color:var(--ip-color-bg-tertiary); color:var(--ip-primary-600); }
 .btn-img:disabled { opacity:0.35; cursor:not-allowed; }
@@ -760,7 +760,7 @@ function handleKeydown(e: KeyboardEvent) {
 @keyframes stop-enter { from { opacity:0; transform:scale(0.85); } to { opacity:1; transform:scale(1); } }
 /* 快捷键提示：占据左右按钮之间的剩余空间并居中（输入框内部的轻脚注） */
 .input-hint { flex:1; min-width:0; font-size: var(--ip-text-micro-size); color:var(--ip-color-text-disabled); text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.attach-warn { font-size:12px; line-height:1.5; white-space:pre-line; color:var(--ip-danger-base); text-align:center; margin:0; }
+.attach-warn { font-size:var(--ip-text-caption-size); line-height:1.5; white-space:pre-line; color:var(--ip-danger-base); text-align:center; margin:0; }
 /* 预算 HUD 占据 footer 中间位（复用 input-hint 的 flex:1 居中槽）：HUD 自身
    inline-flex，外套一层做居中排布 */
 .budget-hint { display:flex; justify-content:center; align-items:center; }

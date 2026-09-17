@@ -14,6 +14,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from "vue";
 import { useEscapeStack } from "../../composables/useEscapeStack";
+import { ChevronLeft, ChevronRight } from "@lucide/vue";
 
 const props = defineProps<{
   images: { data: string; mediaType: string }[];
@@ -64,7 +65,7 @@ onUnmounted(() => {
   <Teleport to="body">
     <div class="image-preview-mask" @click="emit('close')" @wheel.prevent="onWheel">
       <div class="preview-counter">{{ index + 1 }} / {{ images.length }}</div>
-      <button v-if="images.length > 1 && index > 0" class="preview-nav prev" title="上一张 (←)" @click="prev">‹</button>
+      <button v-if="images.length > 1 && index > 0" class="preview-nav prev" title="上一张 (←)" @click="prev"><ChevronLeft :size="28" aria-hidden="true" /></button>
       <img
         :src="srcOf(index)"
         class="preview-img"
@@ -72,7 +73,7 @@ onUnmounted(() => {
         draggable="false"
         @click="toggleZoom"
       />
-      <button v-if="images.length > 1 && index < images.length - 1" class="preview-nav next" title="下一张 (→)" @click="next">›</button>
+      <button v-if="images.length > 1 && index < images.length - 1" class="preview-nav next" title="下一张 (→)" @click="next"><ChevronRight :size="28" aria-hidden="true" /></button>
       <div class="preview-hint">滚轮/双击缩放 · Esc 关闭</div>
     </div>
   </Teleport>
@@ -96,14 +97,14 @@ onUnmounted(() => {
 }
 .preview-counter {
   position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
-  color: rgba(255, 255, 255, 0.85); font-size: 14px;
+  color: rgba(255, 255, 255, 0.85); font-size: var(--ip-text-body-size);
   background: rgba(0, 0, 0, 0.4); padding: 4px 14px; border-radius: 999px;
 }
 .preview-nav {
   position: absolute; top: 50%; transform: translateY(-50%);
   width: 48px; height: 48px; border: none; border-radius: 50%;
-  background: rgba(255, 255, 255, 0.15); color: #fff;
-  font-size: 28px; line-height: 1; cursor: pointer;
+  background: rgba(255, 255, 255, 0.15); color: var(--ip-white);
+  cursor: pointer;
   display: flex; align-items: center; justify-content: center;
   transition: background 0.15s;
 }
@@ -112,6 +113,6 @@ onUnmounted(() => {
 .preview-nav.next { right: 24px; }
 .preview-hint {
   position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
-  color: rgba(255, 255, 255, 0.5); font-size: 12px;
+  color: rgba(255, 255, 255, 0.5); font-size: var(--ip-text-caption-size);
 }
 </style>

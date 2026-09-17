@@ -16,7 +16,7 @@
 -->
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { Brain, RotateCw, TriangleAlert } from "@lucide/vue";
+import { Brain, ChevronDown, ChevronRight, RotateCw, TriangleAlert } from "@lucide/vue";
 import type { TrajectoryRow, TurnHeaderRow } from "../../composables/useTrajectory";
 import { isWarnTermination, termLabel } from "../../utils/termLabels";
 
@@ -295,7 +295,8 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
       >
         <!-- turn 分割头：左（折叠箭头 + 会话徽章 + 轮次 + 日期·时间 + 终止）｜右（⚠ · 统计 · 耗时 · 用量） -->
         <template v-if="item.row.type === 'turn-header'">
-          <span class="th-chevron">{{ item.row.collapsed ? "▸" : "▾" }}</span>
+          <ChevronRight v-if="item.row.collapsed" :size="12" class="th-chevron" aria-hidden="true" />
+          <ChevronDown v-else :size="12" class="th-chevron" aria-hidden="true" />
           <span
             v-if="sessionOfHeader(item.row.turnId)"
             class="th-session"
@@ -386,7 +387,7 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
   align-items: center;
   gap: var(--ip-spacing-3);
   height: 32px;
-  padding: 0 20px 0 32px;
+  padding: 0 var(--ip-spacing-5) 0 var(--ip-spacing-8);
   background: var(--ip-color-bg-secondary);
   border-bottom: 1px solid var(--ip-color-border-default);
   font-size: var(--ip-text-micro-size);
@@ -408,7 +409,7 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
   z-index: var(--ip-z-base);
   display: flex;
   justify-content: center;
-  padding: 10px 0;
+  padding: var(--ip-spacing-2_5) 0;
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
@@ -459,7 +460,7 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
   right: 8px;
   margin-top: 2px;
   height: 36px; /* 槽 40px：上下各留 2px 呼吸缝 */
-  padding: 0 12px;
+  padding: 0 var(--ip-spacing-3);
   background: var(--ip-color-bg-tertiary);
   font-size: var(--ip-text-caption-size);
   transition: background var(--ip-duration-fast) var(--ip-ease-out);
@@ -472,14 +473,14 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
 .trow-turn-header.turn-errored { background: var(--ip-danger-bg); }
 .trow-turn-header.turn-errored:hover { background: var(--ip-danger-bg); filter: brightness(0.97); }
 .trow-turn-header.turn-errored.turn-selected { background: var(--ip-color-bg-sidebar-item-active); }
-.th-chevron { font-size: var(--ip-text-micro-size); color: var(--ip-color-text-tertiary); width: 10px; flex-shrink: 0; }
+.th-chevron { color: var(--ip-color-text-tertiary); flex-shrink: 0; }
 /* 会话徽章（跨会话合并流）：委派会话走 tint 令牌（soft 系，勿直接 primary 底），
    chat 会话中性；max-width 兜长标题（title 悬停看全名） */
 .th-session {
   max-width: 140px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-size: var(--ip-text-micro-size); line-height: 18px;
-  padding: 0 8px; border-radius: var(--ip-radius-full);
+  padding: 0 var(--ip-spacing-2); border-radius: var(--ip-radius-full);
   color: var(--ip-color-text-tertiary);
   background: var(--ip-color-bg-secondary);
   flex-shrink: 0;
@@ -500,12 +501,12 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
 }
 .th-date {
   color: var(--ip-color-text-tertiary);
-  padding: 1px 6px;
+  padding: 1px var(--ip-spacing-1_5);
   background: var(--ip-color-bg-tertiary);
   border-radius: var(--ip-radius-sm);
 }
 .th-term {
-  padding: 1px 8px;
+  padding: 1px var(--ip-spacing-2);
   border-radius: var(--ip-radius-full);
   background: var(--ip-color-bg-secondary);
   color: var(--ip-color-text-tertiary);
@@ -541,14 +542,14 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
   gap: 3px;
   color: var(--ip-danger-text);
   background: var(--ip-danger-bg);
-  padding: 1px 8px;
+  padding: 1px var(--ip-spacing-2);
   border-radius: var(--ip-radius-full);
   font-size: var(--ip-text-micro-size);
 }
 .th-match {
   color: var(--ip-primary-600);
   background: var(--ip-color-primary-soft-bg, var(--ip-primary-50));
-  padding: 1px 8px;
+  padding: 1px var(--ip-spacing-2);
   border-radius: var(--ip-radius-full);
   font-size: var(--ip-text-micro-size);
 }
@@ -566,7 +567,7 @@ function splitHighlight(text: string): { text: string; hit: boolean }[] {
   right: 8px;
   margin-top: 1px;
   height: 34px; /* 槽 36px：上下缝各 1px */
-  padding: 0 16px;
+  padding: 0 var(--ip-spacing-4);
   font-size: var(--ip-text-caption-size);
   border-radius: var(--ip-radius-md);
   transition: background var(--ip-duration-fast) var(--ip-ease-out);

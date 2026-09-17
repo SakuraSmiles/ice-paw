@@ -77,7 +77,7 @@ const title = computed(() => {
 .budget-pill {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--ip-spacing-1_5);
   font-size: var(--ip-text-caption-size);
   color: var(--ip-color-text-tertiary);
   white-space: nowrap;

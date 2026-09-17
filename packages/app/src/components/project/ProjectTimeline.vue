@@ -304,7 +304,7 @@ onActivated(async () => {
 .pt-search {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--ip-spacing-1_5);
   width: 260px;
   height: 26px;
   padding: 0 9px;
@@ -333,7 +333,7 @@ onActivated(async () => {
   height: 26px;
   display: inline-flex;
   align-items: center;
-  padding: 0 12px;
+  padding: 0 var(--ip-spacing-3);
   font-size: var(--ip-text-caption-size);
   color: var(--ip-color-text-secondary);
   background: var(--ip-color-bg-tertiary);
@@ -356,7 +356,7 @@ onActivated(async () => {
   height: 26px;
   display: inline-flex;
   align-items: center;
-  padding: 0 12px;
+  padding: 0 var(--ip-spacing-3);
   font-size: var(--ip-text-caption-size);
   color: var(--ip-color-text-secondary);
   background: var(--ip-color-bg-tertiary);
@@ -395,7 +395,7 @@ onActivated(async () => {
   left: 50%;
   transform: translateX(-50%);
   z-index: 6;
-  padding: 4px 16px;
+  padding: 4px var(--ip-spacing-4);
   font-size: var(--ip-text-caption-size);
   color: var(--ip-color-text-secondary);
   background: var(--ip-color-bg-elevated);

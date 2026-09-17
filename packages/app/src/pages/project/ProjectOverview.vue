@@ -367,8 +367,8 @@ const donutSegs = computed(() => {
 }
 .stat-card {
   display: flex; flex-direction: column; justify-content: center;
-  gap: 6px;
-  padding: 18px 20px;
+  gap: var(--ip-spacing-1_5);
+  padding: 18px var(--ip-spacing-5);
   background-color: var(--ip-color-bg-secondary);
   border-radius: var(--ip-radius-lg);
   font-family: inherit; text-align: left;
@@ -381,7 +381,7 @@ const donutSegs = computed(() => {
 .stat-card-click:hover .stat-value { color: var(--ip-primary-600); }
 
 .stat-value {
-  font-size: 28px; line-height: 1.1;
+  font-size: var(--ip-text-h1-size); line-height: 1.1;
   font-weight: var(--ip-font-weight-semibold);
   color: var(--ip-color-text-primary);
   font-variant-numeric: tabular-nums;
@@ -395,7 +395,7 @@ const donutSegs = computed(() => {
 .stat-card-click:hover .label-chevron { opacity: 0.8; }
 
 /* 任务状态宽卡 */
-.task-mix { padding: 16px 20px; gap: var(--ip-spacing-2_5); }
+.task-mix { padding: var(--ip-spacing-4) var(--ip-spacing-5); gap: var(--ip-spacing-2_5); }
 .mix-body { display: flex; flex-direction: column; gap: var(--ip-spacing-2_5); flex: 1; justify-content: center; }
 .mix-bar {
   display: flex; gap: 2px;
@@ -441,7 +441,7 @@ const donutSegs = computed(() => {
 .share-body {
   display: flex;
   align-items: center;
-  gap: 32px;
+  gap: var(--ip-spacing-8);
 }
 
 /* 环图：SVG 弧段 + 绝对定位中心文字（160px 大环做视觉锚点） */
@@ -468,7 +468,7 @@ const donutSegs = computed(() => {
   pointer-events: none;
 }
 .donut-value {
-  font-size: 20px;
+  font-size: var(--ip-text-h2-size);
   font-weight: var(--ip-font-weight-semibold);
   color: var(--ip-color-text-primary);
   font-variant-numeric: tabular-nums;
@@ -567,7 +567,7 @@ const donutSegs = computed(() => {
 .share-row.dim .count-msgs { opacity: 0.35; }
 .mix-meta {
   display: flex; justify-content: space-between; gap: var(--ip-spacing-3);
-  padding-top: 8px;
+  padding-top: var(--ip-spacing-2);
   border-top: 1px solid var(--ip-color-border-default);
   font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary);
   font-variant-numeric: tabular-nums;

@@ -133,7 +133,7 @@ const FINISH_LABEL: Record<string, string> = {
   color: var(--ip-primary-600);
   font-size: var(--ip-text-caption-size);
   cursor: pointer;
-  padding: 2px 6px;
+  padding: 2px var(--ip-spacing-1_5);
   border-radius: var(--ip-radius-sm);
 }
 .dlg-open:hover { background: var(--ip-primary-soft-bg, rgba(0, 0, 0, 0.05)); }

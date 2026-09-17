@@ -66,13 +66,13 @@ function openTask(it: PlanItem) {
   border-left: 3px solid var(--ip-primary-400);
   border-radius: var(--ip-radius-md);
   background: var(--ip-primary-soft-bg, var(--ip-color-bg-secondary));
-  padding: 8px 12px;
+  padding: var(--ip-spacing-2) var(--ip-spacing-3);
   display: flex;
   flex-direction: column;
   gap: 5px;
   max-width: 560px;
 }
-.plan-head { display: flex; align-items: center; gap: 6px; }
+.plan-head { display: flex; align-items: center; gap: var(--ip-spacing-1_5); }
 .plan-icon { color: var(--ip-primary-500); flex-shrink: 0; }
 .plan-title { font-size: var(--ip-text-body-sm-size); font-weight: var(--ip-font-weight-semibold); color: var(--ip-color-text-primary); }
 .plan-progress { margin-left: auto; font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); font-variant-numeric: tabular-nums; }

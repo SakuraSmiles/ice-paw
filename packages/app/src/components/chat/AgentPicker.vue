@@ -69,7 +69,7 @@ const visibleAgents = computed(() =>
 }
 .picker-header {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 16px 16px 12px; flex-shrink: 0;
+  padding: var(--ip-spacing-4) var(--ip-spacing-4) var(--ip-spacing-3); flex-shrink: 0;
 }
 .picker-title { font-size: var(--ip-text-h3-size); font-weight: var(--ip-font-weight-semibold); color: var(--ip-color-text-primary); margin: 0; }
 .picker-close {
@@ -81,12 +81,12 @@ const visibleAgents = computed(() =>
 .picker-close:hover { background: var(--ip-color-bg-tertiary); color: var(--ip-color-text-primary); }
 
 .picker-list {
-  flex: 1; overflow-y: auto; padding: 4px 8px 12px;
+  flex: 1; overflow-y: auto; padding: 4px var(--ip-spacing-2) var(--ip-spacing-3);
   display: flex; flex-direction: column; gap: 2px;
 }
 .picker-item {
   display: flex; align-items: center; gap: var(--ip-spacing-3);
-  width: 100%; padding: 10px 12px; text-align: left;
+  width: 100%; padding: var(--ip-spacing-2_5) var(--ip-spacing-3); text-align: left;
   border: none; border-radius: var(--ip-radius-lg); cursor: pointer;
   background: transparent; font: inherit; color: inherit;
   transition: background-color var(--ip-duration-fast) var(--ip-ease-out);

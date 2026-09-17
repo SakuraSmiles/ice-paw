@@ -232,15 +232,15 @@ function isAutoItem(item: InboxItem): boolean {
 .inbox-error {
   font-size: var(--ip-text-caption-size); color: var(--ip-danger-text);
   background: var(--ip-danger-bg); border-radius: var(--ip-radius-md);
-  padding: 6px 10px; line-height: 1.5;
+  padding: var(--ip-spacing-1_5) var(--ip-spacing-2_5); line-height: 1.5;
 }
 .inbox-empty { padding: var(--ip-spacing-4) var(--ip-spacing-2); text-align: center; }
 .inbox-empty p { margin: 0; font-size: var(--ip-text-body-sm-size); color: var(--ip-color-text-secondary); }
 .inbox-empty-sub { margin-top: 4px; font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
 
 .inbox-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--ip-spacing-2); overflow-y: auto; }
-.inbox-item { display: flex; flex-direction: column; gap: 6px; padding: var(--ip-spacing-3); background: var(--ip-color-bg-secondary); border: 1px solid var(--ip-color-border-default); border-radius: var(--ip-radius-md); }
-.inbox-item-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.inbox-item { display: flex; flex-direction: column; gap: var(--ip-spacing-1_5); padding: var(--ip-spacing-3); background: var(--ip-color-bg-secondary); border: 1px solid var(--ip-color-border-default); border-radius: var(--ip-radius-md); }
+.inbox-item-head { display: flex; align-items: center; gap: var(--ip-spacing-1_5); min-width: 0; }
 .inbox-item-source { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: var(--ip-text-caption-size); font-weight: var(--ip-font-weight-medium); color: var(--ip-color-text-primary); }
 .inbox-item-time { flex-shrink: 0; font-size: var(--ip-text-micro-size); color: var(--ip-color-text-tertiary); }
 .inbox-item-content {
@@ -249,9 +249,9 @@ function isAutoItem(item: InboxItem): boolean {
   white-space: pre-wrap; word-break: break-word;
 }
 .inbox-item-status { margin: 0; font-size: var(--ip-text-micro-size); color: var(--ip-color-text-tertiary); }
-.inbox-item-actions { display: flex; align-items: center; gap: 6px; }
+.inbox-item-actions { display: flex; align-items: center; gap: var(--ip-spacing-1_5); }
 .inbox-act {
-  padding: 3px 10px; border: 1px solid var(--ip-color-border-default); border-radius: var(--ip-radius-sm);
+  padding: 3px var(--ip-spacing-2_5); border: 1px solid var(--ip-color-border-default); border-radius: var(--ip-radius-sm);
   background: transparent; color: var(--ip-color-text-secondary);
   font-size: var(--ip-text-caption-size); font-family: inherit; cursor: pointer;
   transition: all var(--ip-duration-fast) var(--ip-ease-out);
@@ -261,19 +261,19 @@ function isAutoItem(item: InboxItem): boolean {
 .inbox-act-approve { color: var(--ip-primary-600); border-color: var(--ip-primary-soft-border, rgba(var(--ip-primary-500-rgb), 0.35)); }
 .inbox-act-approve:hover:not(:disabled) { background: var(--ip-primary-soft-bg); color: var(--ip-primary-600); }
 /* 拒绝两步确认：武装态转 danger 确认键（第一击武装、第二击执行、blur 解除） */
-.inbox-act-armed { color: #fff; background: var(--ip-danger-base); border-color: var(--ip-danger-base); }
-.inbox-act-armed:hover:not(:disabled) { color: #fff; background: var(--ip-danger-base); opacity: 0.9; }
+.inbox-act-armed { color: var(--ip-color-text-on-danger); background: var(--ip-danger-base); border-color: var(--ip-danger-base); }
+.inbox-act-armed:hover:not(:disabled) { color: var(--ip-color-text-on-danger); background: var(--ip-danger-base); opacity: 0.9; }
 .inbox-reply-flag { display: inline-flex; align-items: center; gap: 3px; font-size: var(--ip-text-micro-size); color: var(--ip-color-text-tertiary); }
 .inbox-reply-flag svg { display: inline-block; }
 
-.inbox-policy { display: flex; flex-direction: column; gap: 6px; padding-top: var(--ip-spacing-2); border-top: 1px solid var(--ip-color-border-default); }
+.inbox-policy { display: flex; flex-direction: column; gap: var(--ip-spacing-1_5); padding-top: var(--ip-spacing-2); border-top: 1px solid var(--ip-color-border-default); }
 .inbox-policy-label { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
 .inbox-policy-seg { display: inline-flex; padding: 2px; background: var(--ip-color-bg-tertiary); border-radius: var(--ip-radius-md); gap: 2px; }
 .inbox-policy-btn {
   /* 内容自适应最小宽 + 余量均分（非等分三份——「自动接收（默认）」最长，
      等分档容不下会被挤成两行）；nowrap 是排版契约，恒单行 */
   flex: 1 0 auto; white-space: nowrap;
-  padding: 4px 10px; border: none; border-radius: var(--ip-radius-sm);
+  padding: 4px var(--ip-spacing-2_5); border: none; border-radius: var(--ip-radius-sm);
   background: transparent; color: var(--ip-color-text-secondary);
   font-size: var(--ip-text-caption-size); font-family: inherit; cursor: pointer;
   transition: all var(--ip-duration-fast) var(--ip-ease-out);

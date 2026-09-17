@@ -184,10 +184,10 @@ function openContextSettings() {
 .welcome-cta {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--ip-spacing-1_5);
   height: 38px;
-  padding: 0 20px;
-  margin-top: 6px;
+  padding: 0 var(--ip-spacing-5);
+  margin-top: var(--ip-spacing-1_5);
   border-radius: var(--ip-radius-md);
   background-color: var(--ip-primary-500);
   color: white;
@@ -210,9 +210,9 @@ function openContextSettings() {
 .ctx-pill {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--ip-spacing-1_5);
   height: 26px;
-  padding: 0 10px;
+  padding: 0 var(--ip-spacing-2_5);
   margin-top: 2px;
   border: 1px solid transparent;
   border-radius: var(--ip-radius-full);
@@ -230,9 +230,9 @@ function openContextSettings() {
 .keyless-pill {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--ip-spacing-1_5);
   height: 26px;
-  padding: 0 10px;
+  padding: 0 var(--ip-spacing-2_5);
   border: 1px solid var(--ip-warning-border);
   border-radius: var(--ip-radius-full);
   background-color: var(--ip-warning-bg);
@@ -247,9 +247,9 @@ function openContextSettings() {
 .welcome-create-error {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--ip-spacing-1_5);
   height: 26px;
-  padding: 0 10px;
+  padding: 0 var(--ip-spacing-2_5);
   border: 1px solid var(--ip-danger-border);
   border-radius: var(--ip-radius-full);
   background-color: var(--ip-danger-bg);

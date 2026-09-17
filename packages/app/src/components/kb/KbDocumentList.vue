@@ -258,7 +258,7 @@ const directoryShort = computed(() => {
   gap: 4px;
   flex-shrink: 0;
   height: 26px;
-  padding: 0 10px;
+  padding: 0 var(--ip-spacing-2_5);
   font-size: var(--ip-text-caption-size);
   font-weight: var(--ip-font-weight-medium);
   color: var(--ip-color-text-secondary);
@@ -294,14 +294,14 @@ const directoryShort = computed(() => {
 .kb-hint {
   font-size: var(--ip-text-caption-size);
   color: var(--ip-color-text-tertiary);
-  padding: 8px 0;
+  padding: var(--ip-spacing-2) 0;
 }
 
 /* ===== 文档卡片 ===== */
 .kb-docs {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--ip-spacing-1_5);
 }
 /* 封顶仅用于 flat 模式（内嵌 agent 展开面板，空间有限，内部滚动）。
    全局知识库页（非 flat）不封顶，交给外层 .kb-page-content 滚动，避免双重滚动 + 留白。 */
@@ -310,7 +310,7 @@ const directoryShort = computed(() => {
   overflow-y: auto;
 }
 .kb-doc-card {
-  padding: 10px 12px;
+  padding: var(--ip-spacing-2_5) var(--ip-spacing-3);
   background-color: var(--ip-color-bg-tertiary);
   border: 1px solid var(--ip-color-border-default);
   border-radius: var(--ip-radius-md);
@@ -321,7 +321,7 @@ const directoryShort = computed(() => {
 }
 /* 扁平模式（内嵌展开面板用）：去边框呈行式，hover 才浮起淡背景 */
 .kb-doc-card.doc-flat {
-  padding: 8px 6px;
+  padding: var(--ip-spacing-2) var(--ip-spacing-1_5);
   background: none;
   border: none;
 }
@@ -332,7 +332,7 @@ const directoryShort = computed(() => {
 .doc-title-row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--ip-spacing-1_5);
   flex-wrap: wrap;
 }
 .doc-title {
@@ -342,7 +342,7 @@ const directoryShort = computed(() => {
 }
 .doc-tag {
   font-size: var(--ip-text-micro-size);
-  padding: 0 6px;
+  padding: 0 var(--ip-spacing-1_5);
   line-height: 18px;
   color: var(--ip-color-primary-tint-text);
   background-color: var(--ip-color-bg-secondary);
@@ -380,7 +380,7 @@ const directoryShort = computed(() => {
   flex-direction: column;
   align-items: center;
   gap: 5px;
-  padding: 18px 12px;
+  padding: 18px var(--ip-spacing-3);
   text-align: center;
 }
 .kb-empty svg {
@@ -398,10 +398,10 @@ const directoryShort = computed(() => {
 }
 
 /* ===== 加载失败态（UI-2）：与空态同位置的第三种状态 ===== */
-.kb-load-fail { padding: 24px 12px; display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; }
-.kb-load-fail-icon { width: 30px; height: 30px; border-radius: 50%; background: var(--ip-danger-bg); color: var(--ip-danger-base); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 15px; margin-bottom: 2px; }
+.kb-load-fail { padding: var(--ip-spacing-6) var(--ip-spacing-3); display: flex; flex-direction: column; align-items: center; gap: var(--ip-spacing-1_5); text-align: center; }
+.kb-load-fail-icon { width: 30px; height: 30px; border-radius: 50%; background: var(--ip-danger-bg); color: var(--ip-danger-base); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: var(--ip-text-body-size); margin-bottom: 2px; }
 .kb-load-fail-title { font-size: var(--ip-text-body-sm-size); font-weight: 600; color: var(--ip-danger-text); }
 .kb-load-fail-why { font-size: var(--ip-text-caption-size); color: var(--ip-danger-base); opacity: .8; }
-.kb-load-fail-retry { margin-top: 6px; border: 1px solid var(--ip-danger-base); background: transparent; color: var(--ip-danger-text); border-radius: var(--ip-radius-md); padding: 4px 16px; font-size: var(--ip-text-body-sm-size); font-weight: var(--ip-font-weight-medium); cursor: pointer; }
+.kb-load-fail-retry { margin-top: var(--ip-spacing-1_5); border: 1px solid var(--ip-danger-base); background: transparent; color: var(--ip-danger-text); border-radius: var(--ip-radius-md); padding: 4px var(--ip-spacing-4); font-size: var(--ip-text-body-sm-size); font-weight: var(--ip-font-weight-medium); cursor: pointer; }
 .kb-load-fail-retry:hover { background: var(--ip-danger-bg); }
 </style>

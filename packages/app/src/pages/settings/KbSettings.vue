@@ -30,7 +30,7 @@ import KbDocumentList from "../../components/kb/KbDocumentList.vue";
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 20px 28px 0;
+  padding: var(--ip-spacing-5) var(--ip-spacing-7) 0;
   flex-shrink: 0;
   height: 56px;
 }
@@ -45,7 +45,7 @@ import KbDocumentList from "../../components/kb/KbDocumentList.vue";
 .kb-page-content {
   flex: 1;
   overflow-y: auto;
-  padding: 8px 28px 24px;
+  padding: var(--ip-spacing-2) var(--ip-spacing-7) var(--ip-spacing-6);
   min-height: 0;
 }
 </style>

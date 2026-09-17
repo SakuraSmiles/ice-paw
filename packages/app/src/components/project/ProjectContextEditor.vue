@@ -135,16 +135,16 @@ async function openDir() {
 
 <style scoped>
 /* 样式自持（从 ProjectList 编辑区原样搬入），不依赖父级 scoped CSS */
-.field { display: flex; flex-direction: column; gap: 6px; }
+.field { display: flex; flex-direction: column; gap: var(--ip-spacing-1_5); }
 .field-label {
   font-size: var(--ip-text-caption-size); font-weight: var(--ip-font-weight-medium);
   color: var(--ip-color-text-secondary);
-  display: flex; align-items: center; gap: 6px;
+  display: flex; align-items: center; gap: var(--ip-spacing-1_5);
 }
 .hint { color: var(--ip-color-text-tertiary); font-weight: var(--ip-font-weight-regular); }
 
 .ctx-dir-btn {
-  margin-left: auto; height: 22px; padding: 0 8px;
+  margin-left: auto; height: 22px; padding: 0 var(--ip-spacing-2);
   font-size: var(--ip-text-caption-size); font-family: inherit;
   color: var(--ip-color-text-tertiary); background: none;
   border: 1px solid var(--ip-color-border-default); border-radius: var(--ip-radius-full);
@@ -153,13 +153,13 @@ async function openDir() {
 }
 .ctx-dir-btn:hover { color: var(--ip-primary-600); border-color: var(--ip-primary-300); }
 .ctx-guide {
-  padding: 10px 12px;
+  padding: var(--ip-spacing-2_5) var(--ip-spacing-3);
   font-size: var(--ip-text-caption-size); color: var(--ip-color-text-secondary);
   background-color: var(--ip-color-bg-tertiary);
   border-radius: var(--ip-radius-md);
 }
 .ctx-md {
-  width: 100%; padding: 10px 12px;
+  width: 100%; padding: var(--ip-spacing-2_5) var(--ip-spacing-3);
   background-color: var(--ip-color-bg-tertiary);
   border: 1px solid transparent;
   border-radius: var(--ip-radius-md);
@@ -173,7 +173,7 @@ async function openDir() {
 .ctx-md:disabled { opacity: 0.6; }
 .ctx-md::placeholder { color: var(--ip-color-text-disabled); }
 .conv-toggle {
-  display: flex; align-items: center; gap: 6px;
+  display: flex; align-items: center; gap: var(--ip-spacing-1_5);
   background: none; border: none; padding: 0; cursor: pointer;
   font-family: inherit; font-size: var(--ip-text-caption-size);
   color: var(--ip-color-text-tertiary);
@@ -188,7 +188,7 @@ async function openDir() {
 .form-error { font-size: var(--ip-text-caption-size); color: var(--ip-danger-text); }
 
 .btn {
-  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--ip-spacing-1_5);
   border-radius: var(--ip-radius-md); cursor: pointer; font-family: inherit;
   transition: all var(--ip-duration-fast) var(--ip-ease-out);
 }

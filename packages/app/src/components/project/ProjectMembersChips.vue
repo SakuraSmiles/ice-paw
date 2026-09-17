@@ -50,17 +50,17 @@ function remove(id: string) {
 
 <style scoped>
 /* 样式自持（从 ProjectList 编辑区原样搬入），不依赖父级 scoped CSS */
-.field { display: flex; flex-direction: column; gap: 6px; }
+.field { display: flex; flex-direction: column; gap: var(--ip-spacing-1_5); }
 .field-label {
   font-size: var(--ip-text-caption-size); font-weight: var(--ip-font-weight-medium);
   color: var(--ip-color-text-secondary);
-  display: flex; align-items: center; gap: 6px;
+  display: flex; align-items: center; gap: var(--ip-spacing-1_5);
 }
 
 .members-empty { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
-.member-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.member-chips { display: flex; flex-wrap: wrap; gap: var(--ip-spacing-1_5); }
 .member-chip {
-  height: 28px; padding: 0 12px;
+  height: 28px; padding: 0 var(--ip-spacing-3);
   font-size: var(--ip-text-body-sm-size);
   color: var(--ip-color-text-secondary);
   background-color: var(--ip-color-bg-tertiary);

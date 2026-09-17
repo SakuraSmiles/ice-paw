@@ -109,7 +109,7 @@ function openTask(task: ProjectTask) {
 .ledger { display: flex; flex-direction: column; gap: 2px; }
 
 .ledger-empty {
-  padding: 20px 12px;
+  padding: var(--ip-spacing-5) var(--ip-spacing-3);
   font-size: var(--ip-text-caption-size);
   color: var(--ip-color-text-tertiary);
 }
@@ -119,7 +119,7 @@ function openTask(task: ProjectTask) {
   grid-template-columns: 92px minmax(0, 1fr) 90px 90px 64px 48px 88px;
   align-items: center;
   gap: var(--ip-spacing-2);
-  padding: 6px 10px;
+  padding: var(--ip-spacing-1_5) var(--ip-spacing-2_5);
 }
 .ledger-head {
   font-size: var(--ip-text-micro-size);
@@ -147,7 +147,7 @@ function openTask(task: ProjectTask) {
 .col-num { font-variant-numeric: tabular-nums; text-align: right; }
 .col-time { font-variant-numeric: tabular-nums; color: var(--ip-color-text-disabled); }
 
-.col-state { display: flex; align-items: center; gap: 6px; }
+.col-state { display: flex; align-items: center; gap: var(--ip-spacing-1_5); }
 
 /* 状态点五态：running 脉冲 / done 绿 / failed 红 / interrupted 琥珀 /
    ended-other 中性（历史补录诚实标注，非异常） */

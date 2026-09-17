@@ -211,7 +211,7 @@ async function archive() {
   display: flex;
   flex-direction: column;
   gap: var(--ip-spacing-3);
-  padding: 18px 20px;
+  padding: 18px var(--ip-spacing-5);
   background-color: var(--ip-color-bg-secondary);
   border: 1px solid var(--ip-color-border-default);
   border-radius: var(--ip-radius-lg);
@@ -228,7 +228,7 @@ async function archive() {
 .form-actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--ip-spacing-2); }
 
 .btn {
-  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--ip-spacing-1_5);
   border-radius: var(--ip-radius-md); cursor: pointer; font-family: inherit;
   transition: all var(--ip-duration-fast) var(--ip-ease-out);
 }
@@ -244,7 +244,7 @@ async function archive() {
 .btn-danger:hover:not(:disabled) { background-color: var(--ip-danger-bg); }
 .btn-confirm { background-color: var(--ip-primary-500); color: white; }
 .btn-link {
-  height: 30px; padding: 0 8px; background: none; border: none; cursor: pointer;
+  height: 30px; padding: 0 var(--ip-spacing-2); background: none; border: none; cursor: pointer;
   font-size: var(--ip-text-body-sm-size); color: var(--ip-color-text-secondary); font-family: inherit;
 }
 .btn-link:hover:not(:disabled) { color: var(--ip-color-text-primary); }
@@ -264,7 +264,7 @@ async function archive() {
   border: 1px solid var(--ip-color-border-default);
   border-radius: var(--ip-radius-xl);
   box-shadow: var(--ip-shadow-xl);
-  padding: 20px;
+  padding: var(--ip-spacing-5);
   display: flex; flex-direction: column; gap: var(--ip-spacing-3);
 }
 .perm-title { margin: 0; font-size: var(--ip-text-h3-size); font-weight: var(--ip-font-weight-semibold); color: var(--ip-color-text-primary); }

@@ -223,7 +223,7 @@ function aliasDangling(agent: Agent): boolean {
 
 .content-header {
   display: flex; align-items: center;
-  padding: 20px 28px 0; flex-shrink: 0; height: 56px;
+  padding: var(--ip-spacing-5) var(--ip-spacing-7) 0; flex-shrink: 0; height: 56px;
 }
 .content-title {
   font-size: var(--ip-text-h3-size); font-weight: var(--ip-font-weight-semibold);
@@ -232,13 +232,13 @@ function aliasDangling(agent: Agent): boolean {
 
 /* ===== 列表 ===== */
 .agent-list {
-  flex: 1; overflow-y: auto; padding: 8px 28px 24px;
+  flex: 1; overflow-y: auto; padding: var(--ip-spacing-2) var(--ip-spacing-7) var(--ip-spacing-6);
   display: flex; flex-direction: column; gap: var(--ip-spacing-2); min-height: 0;
 }
 
 /* ===== 卡片 ===== */
 .agent-card {
-  padding: 14px 16px;
+  padding: 14px var(--ip-spacing-4);
   background-color: var(--ip-color-bg-secondary);
   border: 1px solid var(--ip-color-border-default);
   border-radius: var(--ip-radius-lg);
@@ -298,7 +298,7 @@ function aliasDangling(agent: Agent): boolean {
   display: flex; flex-direction: column; gap: 3px;
 }
 
-.card-name-row { display: flex; align-items: center; gap: 6px; }
+.card-name-row { display: flex; align-items: center; gap: var(--ip-spacing-1_5); }
 .card-name {
   font-size: var(--ip-text-body-sm-size);
   font-weight: var(--ip-font-weight-semibold);
@@ -308,7 +308,7 @@ function aliasDangling(agent: Agent): boolean {
 .new-hint { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); padding-left: 22px; }
 
 .card-meta-row {
-  display: flex; align-items: center; gap: 6px;
+  display: flex; align-items: center; gap: var(--ip-spacing-1_5);
   font-size: var(--ip-text-caption-size);
   /* 行高锚定 18px = tag 高：别名文本行盒与固定高 tag 严格同盒居中。
      勿删——全局行高 1.6（≈19.2px 分数高）与固定高 tag 混排会产生半像素错位 */
@@ -331,7 +331,7 @@ function aliasDangling(agent: Agent): boolean {
 .card-model {
   display: inline-flex; align-items: center; gap: 4px;
   min-width: 0; flex-shrink: 1;
-  height: 18px; padding: 0 7px 0 6px;
+  height: 18px; padding: 0 7px 0 var(--ip-spacing-1_5);
   border-radius: var(--ip-radius-full);
   background-color: var(--ip-color-bg-tertiary);
   color: var(--ip-color-text-tertiary);
@@ -349,7 +349,7 @@ function aliasDangling(agent: Agent): boolean {
   flex-shrink: 0;
   font-size: var(--ip-text-micro-size); color: var(--ip-color-text-tertiary);
   background: var(--ip-color-bg-tertiary);
-  padding: 0 6px; line-height: 18px;
+  padding: 0 var(--ip-spacing-1_5); line-height: 18px;
   border-radius: var(--ip-radius-full);
 }
 .card-tag-warn { color: var(--ip-warning-text); background: var(--ip-warning-bg); }
@@ -365,13 +365,13 @@ function aliasDangling(agent: Agent): boolean {
 }
 
 .card-desc {
-  margin: 8px 0 0 48px;
+  margin: var(--ip-spacing-2) 0 0 var(--ip-spacing-12);
   font-size: var(--ip-text-caption-size);
   color: var(--ip-color-text-tertiary);
   line-height: 1.5;
 }
 .card-workspace {
-  margin: 4px 0 0 48px;
+  margin: 4px 0 0 var(--ip-spacing-12);
   font-size: var(--ip-text-caption-size);
   color: var(--ip-color-text-disabled);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -380,8 +380,8 @@ function aliasDangling(agent: Agent): boolean {
 
 /* ===== 展开面板（编辑表单 + 知识库） ===== */
 .expand-panel {
-  margin-top: 12px;
-  padding-top: 12px;
+  margin-top: var(--ip-spacing-3);
+  padding-top: var(--ip-spacing-3);
   border-top: 1px solid var(--ip-color-border-default);
 }
 
@@ -400,6 +400,6 @@ function aliasDangling(agent: Agent): boolean {
 }
 
 /* ===== 状态 ===== */
-.loading-state { padding: 20px; text-align: center; color: var(--ip-color-text-tertiary); font-size: var(--ip-text-body-sm-size); }
-.empty-hint { padding: 16px 12px; text-align: center; font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
+.loading-state { padding: var(--ip-spacing-5); text-align: center; color: var(--ip-color-text-tertiary); font-size: var(--ip-text-body-sm-size); }
+.empty-hint { padding: var(--ip-spacing-4) var(--ip-spacing-3); text-align: center; font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
 </style>

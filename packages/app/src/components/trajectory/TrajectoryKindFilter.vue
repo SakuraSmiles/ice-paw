@@ -114,7 +114,7 @@ onUnmounted(() => {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 0 10px 0 12px;
+  padding: 0 var(--ip-spacing-2_5) 0 var(--ip-spacing-3);
   font-size: var(--ip-text-caption-size);
   color: var(--ip-color-text-secondary);
   background: var(--ip-color-bg-tertiary);
@@ -153,7 +153,7 @@ onUnmounted(() => {
 }
 
 .tkf-group {
-  padding: var(--ip-spacing-2) 10px 2px;
+  padding: var(--ip-spacing-2) var(--ip-spacing-2_5) 2px;
   font-size: var(--ip-text-micro-size);
   font-weight: var(--ip-font-weight-semibold);
   letter-spacing: 0.02em;
@@ -168,7 +168,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: var(--ip-spacing-2);
-  padding: 4px 10px;
+  padding: 4px var(--ip-spacing-2_5);
   border-radius: var(--ip-radius-sm);
   cursor: pointer;
   user-select: none;
@@ -234,7 +234,7 @@ onUnmounted(() => {
   border-top: 1px solid var(--ip-color-border-default);
 }
 .tkf-reset {
-  padding: 2px 10px;
+  padding: 2px var(--ip-spacing-2_5);
   font-size: var(--ip-text-caption-size);
   color: var(--ip-color-text-secondary);
   background: none;

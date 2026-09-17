@@ -204,7 +204,7 @@ async function ingestFile(f: File) {
   align-items: center;
   justify-content: center;
   background: rgba(20, 30, 45, 0.55);
-  color: #fff;
+  color: var(--ip-white);
   font-size: var(--ip-text-micro-size);
   opacity: 0;
   transition: opacity var(--ip-duration-fast) var(--ip-ease-out);
@@ -222,7 +222,7 @@ async function ingestFile(f: File) {
   border-radius: 50%;
   border: none;
   background: rgba(0, 0, 0, 0.5);
-  color: #fff;
+  color: var(--ip-white);
   display: flex;
   align-items: center;
   justify-content: center;

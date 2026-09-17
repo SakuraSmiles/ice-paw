@@ -45,7 +45,7 @@ defineEmits<{ cancel: []; confirm: [] }>();
 .embed-switch-panel {
   width: 380px;
   max-width: 90vw;
-  padding: 20px 22px;
+  padding: var(--ip-spacing-5) 22px;
   background: var(--ip-color-bg-primary);
   border: 1px solid var(--ip-color-border-default);
   border-radius: 12px;
@@ -80,14 +80,14 @@ defineEmits<{ cancel: []; confirm: [] }>();
   display: flex;
   justify-content: flex-end;
   gap: var(--ip-spacing-2);
-  margin-top: 6px;
+  margin-top: var(--ip-spacing-1_5);
 }
 .btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   height: var(--ip-input-h-sm);
-  padding: 0 12px;
+  padding: 0 var(--ip-spacing-3);
   font-size: var(--ip-text-body-sm-size);
   font-weight: var(--ip-font-weight-medium);
   color: var(--ip-color-text-secondary);
@@ -103,7 +103,7 @@ defineEmits<{ cancel: []; confirm: [] }>();
   align-items: center;
   justify-content: center;
   height: var(--ip-input-h-sm);
-  padding: 0 12px;
+  padding: 0 var(--ip-spacing-3);
   font-size: var(--ip-text-body-sm-size);
   font-weight: var(--ip-font-weight-medium);
   color: white;

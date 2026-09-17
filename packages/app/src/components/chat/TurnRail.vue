@@ -147,7 +147,7 @@ function tickTime(iso: string): string {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
+  gap: var(--ip-spacing-1_5);
   z-index: 3;
 }
 
@@ -176,7 +176,7 @@ function tickTime(iso: string): string {
   border: none;
   background: transparent;
   color: var(--ip-color-text-disabled);
-  font-size: 12px;
+  font-size: var(--ip-text-caption-size);
   line-height: 1;
   cursor: pointer;
   transition: color var(--ip-duration-fast) var(--ip-ease-out);
@@ -229,7 +229,7 @@ function tickTime(iso: string): string {
   flex-direction: column;
   gap: 2px;
   max-width: 300px;
-  padding: 8px 12px;
+  padding: var(--ip-spacing-2) var(--ip-spacing-3);
   background: var(--ip-color-bg-elevated);
   border: 1px solid var(--ip-color-border-default);
   border-radius: var(--ip-radius-md);

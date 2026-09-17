@@ -720,7 +720,7 @@ function timeAgoLabel(dateStr: string): string {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 16px;
+  padding: 14px var(--ip-spacing-4);
   min-height: 68px;
   flex-shrink: 0;
 }
@@ -732,7 +732,6 @@ function timeAgoLabel(dateStr: string): string {
 }
 
 .brand-icon {
-  font-size: 20px;
   color: var(--ip-primary-500);
 }
 
@@ -763,8 +762,8 @@ function timeAgoLabel(dateStr: string): string {
 .sidebar-top {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 0 8px 8px;
+  gap: var(--ip-spacing-1_5);
+  padding: 0 var(--ip-spacing-2) var(--ip-spacing-2);
   flex-shrink: 0;
 }
 
@@ -787,7 +786,7 @@ function timeAgoLabel(dateStr: string): string {
 .channel-archived-tag {
   flex-shrink: 0;
   margin-left: auto;
-  padding: 1px 6px;
+  padding: 1px var(--ip-spacing-1_5);
   border-radius: var(--ip-radius-full, 999px);
   background: var(--ip-color-bg-tertiary);
   color: var(--ip-color-text-tertiary);
@@ -808,14 +807,14 @@ function timeAgoLabel(dateStr: string): string {
   position: relative; /* leave-active 绝对定位的锚（离场项脱离流防跳动） */
   flex: 1;
   overflow-y: auto;
-  padding: 0 8px;
+  padding: 0 var(--ip-spacing-2);
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
 
 .conv-loading, .conv-empty {
-  padding: 20px 12px;
+  padding: var(--ip-spacing-5) var(--ip-spacing-3);
   text-align: center;
   font-size: var(--ip-text-body-sm-size);
   color: var(--ip-color-text-tertiary);
@@ -823,7 +822,7 @@ function timeAgoLabel(dateStr: string): string {
 
 /* 会话列表加载失败（UI-3 批）：inline 错误 + 重试 */
 .conv-error {
-  padding: 8px 12px;
+  padding: var(--ip-spacing-2) var(--ip-spacing-3);
   font-size: var(--ip-text-body-sm-size);
   color: var(--ip-danger-base);
 }
@@ -840,7 +839,7 @@ function timeAgoLabel(dateStr: string): string {
 .conv-error-retry:hover { opacity: 0.8; }
 
 /* 骨架屏：侧栏会话列表加载中 */
-.conv-skeleton { display: flex; flex-direction: column; gap: var(--ip-spacing-2); padding: 8px 12px; }
+.conv-skeleton { display: flex; flex-direction: column; gap: var(--ip-spacing-2); padding: var(--ip-spacing-2) var(--ip-spacing-3); }
 .conv-skeleton-line {
   height: 16px; border-radius: var(--ip-radius-sm);
   background: linear-gradient(90deg, var(--ip-color-bg-tertiary) 25%, var(--ip-color-bg-secondary) 50%, var(--ip-color-bg-tertiary) 75%);
@@ -860,7 +859,7 @@ function timeAgoLabel(dateStr: string): string {
   flex-direction: column;
   gap: 2px;
   width: 100%;
-  padding: 10px 12px;
+  padding: var(--ip-spacing-2_5) var(--ip-spacing-3);
   text-align: left;
   border-radius: var(--ip-radius-lg);
   cursor: pointer;
@@ -891,7 +890,7 @@ function timeAgoLabel(dateStr: string): string {
 .conv-item-new {
   flex-direction: row;
   align-items: center;
-  padding: 8px 12px;
+  padding: var(--ip-spacing-2) var(--ip-spacing-3);
   /* 1.5px 主色虚线：与普通会话行拉开「创建动作」区别度（背景不动，只强化边框）。
      初版 primary-300（#93B7D8）用户实测「看不出效果」——升 primary-400 静态档、
      hover 深 primary-500，虚线在明暗两主题下都读得出（2026-09-16 Phase2 加深）；
@@ -907,7 +906,7 @@ function timeAgoLabel(dateStr: string): string {
 }
 
 .conv-item-new .conv-item-title {
-  gap: 6px;
+  gap: var(--ip-spacing-1_5);
   color: var(--ip-color-primary-tint-text);
 }
 
@@ -931,12 +930,12 @@ function timeAgoLabel(dateStr: string): string {
 
 /* 品牌头之下：上距由 sidebar-header 的 padding 提供，下距对齐 sidebar-top 的 gap */
 .conv-divider.after-header {
-  margin: 0 12px 6px;
+  margin: 0 var(--ip-spacing-3) var(--ip-spacing-1_5);
 }
 
 /* 新建对话之上：上下间距由 sidebar-top 的 gap: 6px 提供 */
 .conv-divider.before-new-chat {
-  margin: 0 12px;
+  margin: 0 var(--ip-spacing-3);
 }
 
 .conv-item-title {
@@ -967,7 +966,7 @@ function timeAgoLabel(dateStr: string): string {
   justify-content: center;
   border-radius: var(--ip-radius-full, 999px);
   background: var(--ip-primary-500);
-  color: #fff;
+  color: var(--ip-color-text-on-primary);
   font-size: var(--ip-text-micro-size);
   font-weight: var(--ip-font-weight-semibold);
   line-height: 1;
@@ -987,7 +986,7 @@ function timeAgoLabel(dateStr: string): string {
 .conv-meta {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--ip-spacing-1_5);
   width: 100%;
 }
 
@@ -1079,7 +1078,7 @@ function timeAgoLabel(dateStr: string): string {
    rail 态由 .rail-footer 覆盖回纵向） */
 .sidebar-footer {
   position: relative;
-  padding: 8px;
+  padding: var(--ip-spacing-2);
   border-top: 1px solid var(--ip-color-border-default);
   flex-shrink: 0;
   display: flex;
@@ -1092,9 +1091,9 @@ function timeAgoLabel(dateStr: string): string {
 .footer-btn {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--ip-spacing-1_5);
   width: 100%;
-  padding: 8px 12px;
+  padding: var(--ip-spacing-2) var(--ip-spacing-3);
   border-radius: var(--ip-radius-md);
   font-size: var(--ip-text-body-sm-size);
   color: var(--ip-color-text-secondary);
@@ -1245,7 +1244,7 @@ function timeAgoLabel(dateStr: string): string {
 .flyout-new-divider {
   height: 1px;
   background-color: var(--ip-color-border-default);
-  margin: 0 12px 6px;
+  margin: 0 var(--ip-spacing-3) var(--ip-spacing-1_5);
   flex-shrink: 0;
 }
 

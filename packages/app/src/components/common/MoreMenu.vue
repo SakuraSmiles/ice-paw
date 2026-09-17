@@ -125,7 +125,7 @@ onUnmounted(() => document.removeEventListener("click", onDocClick, true));
 .more-item {
   display: block;
   width: 100%;
-  padding: 7px 10px;
+  padding: 7px var(--ip-spacing-2_5);
   text-align: left;
   font-size: var(--ip-text-body-sm-size);
   color: var(--ip-color-text-primary);
@@ -151,7 +151,7 @@ onUnmounted(() => document.removeEventListener("click", onDocClick, true));
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 12px;
+  padding: var(--ip-spacing-2) var(--ip-spacing-3);
   gap: var(--ip-spacing-2);
 }
 .confirm-text {

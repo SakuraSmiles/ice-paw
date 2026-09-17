@@ -261,7 +261,7 @@ function confirmCreate() {
   gap: var(--ip-spacing-2);
   flex: 1;
   min-width: 0;
-  padding: 7px 10px;
+  padding: 7px var(--ip-spacing-2_5);
   border: none;
   background: none;
   cursor: pointer;
@@ -374,10 +374,10 @@ function confirmCreate() {
 .switcher-create {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--ip-spacing-1_5);
   flex: 1;
   min-width: 0;
-  padding: 5px 8px;
+  padding: 5px var(--ip-spacing-2);
   border: 1px solid var(--ip-primary-400);
   border-radius: var(--ip-radius-md);
   background: var(--ip-color-bg-primary);
@@ -477,7 +477,7 @@ function confirmCreate() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 16px 6px;
+  padding: var(--ip-spacing-2) var(--ip-spacing-4) var(--ip-spacing-1_5);
   background-color: var(--ip-color-bg-elevated);
   border-bottom: 1px solid var(--ip-color-border-default);
 }
@@ -513,7 +513,7 @@ function confirmCreate() {
 
 /* 菜单内迷你表单行：内部控件复用 .switcher-create 同款，外沿对齐列表容器 */
 .menu-create-row {
-  margin: 6px 6px 0;
+  margin: var(--ip-spacing-1_5) var(--ip-spacing-1_5) 0;
 }
 
 .switcher-item {
@@ -521,7 +521,7 @@ function confirmCreate() {
   align-items: center;
   gap: var(--ip-spacing-2);
   width: 100%;
-  padding: 7px 10px;
+  padding: 7px var(--ip-spacing-2_5);
   border-radius: var(--ip-radius-md);
   border: none;
   background: none;
@@ -548,7 +548,7 @@ function confirmCreate() {
 }
 
 .switcher-list {
-  padding: 6px;
+  padding: var(--ip-spacing-1_5);
   display: flex;
   flex-direction: column;
   gap: 2px;

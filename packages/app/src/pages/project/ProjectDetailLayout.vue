@@ -163,14 +163,14 @@ watch(current, (cur) => {
    内容区分界）；tab 样式复刻 .chat-tab（同尺寸/层次/hover 档） */
 .tab-bar {
   display: flex; gap: var(--ip-spacing-2_5);
-  padding: 0 24px;
+  padding: 0 var(--ip-spacing-6);
   background: var(--ip-color-bg-chat-header);
   backdrop-filter: blur(8px);
   flex-shrink: 0;
 }
 .tab-item {
-  display: flex; align-items: center; gap: 6px;
-  padding: 8px 20px;
+  display: flex; align-items: center; gap: var(--ip-spacing-1_5);
+  padding: var(--ip-spacing-2) var(--ip-spacing-5);
   border: none; background: none; cursor: pointer;
   font-family: inherit; font-size: var(--ip-text-body-sm-size);
   color: var(--ip-color-text-tertiary);
@@ -182,7 +182,7 @@ watch(current, (cur) => {
 
 .detail-body {
   flex: 1; min-height: 0;
-  padding: 20px 24px 24px;
+  padding: var(--ip-spacing-5) var(--ip-spacing-6) var(--ip-spacing-6);
   display: flex; flex-direction: column;
 }
 .load-error {
@@ -190,7 +190,7 @@ watch(current, (cur) => {
   font-size: var(--ip-text-body-sm-size);
 }
 .btn-link {
-  height: 30px; padding: 0 8px; background: none; border: none; cursor: pointer;
+  height: 30px; padding: 0 var(--ip-spacing-2); background: none; border: none; cursor: pointer;
   font-size: var(--ip-text-body-sm-size); color: var(--ip-primary-600); font-family: inherit;
 }
 </style>

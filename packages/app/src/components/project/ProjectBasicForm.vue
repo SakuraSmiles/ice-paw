@@ -80,17 +80,17 @@ async function pickWorkspace() {
 /* 样式自持（从 ProjectList 编辑区原样搬入），不依赖父级 scoped CSS */
 .basic-form { display: flex; flex-direction: column; gap: 14px; }
 
-.field { display: flex; flex-direction: column; gap: 6px; }
+.field { display: flex; flex-direction: column; gap: var(--ip-spacing-1_5); }
 .field-label {
   font-size: var(--ip-text-caption-size); font-weight: var(--ip-font-weight-medium);
   color: var(--ip-color-text-secondary);
-  display: flex; align-items: center; gap: 6px;
+  display: flex; align-items: center; gap: var(--ip-spacing-1_5);
 }
 .req { color: var(--ip-danger-text); }
 .opt { color: var(--ip-color-text-tertiary); font-weight: var(--ip-font-weight-regular); }
 
 .input {
-  height: 34px; padding: 0 10px;
+  height: 34px; padding: 0 var(--ip-spacing-2_5);
   background-color: var(--ip-color-bg-tertiary);
   border: 1px solid transparent;
   border-radius: var(--ip-radius-md);
@@ -100,7 +100,7 @@ async function pickWorkspace() {
 }
 .input:focus { outline: none; border-color: var(--ip-color-border-focus); background-color: var(--ip-color-bg-input); }
 
-.workspace-group { display: flex; gap: 6px; }
+.workspace-group { display: flex; gap: var(--ip-spacing-1_5); }
 .workspace-input { flex: 1; cursor: pointer; font-family: var(--ip-font-mono); }
 .ws-btn {
   display: flex; align-items: center; justify-content: center;
