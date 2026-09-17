@@ -6,6 +6,7 @@
 
 pub mod agent_cmd;
 pub mod agent_yaml;
+pub mod app_cmd;
 pub mod chat_cmd;
 #[cfg(test)]
 mod chat_cmd_tests;

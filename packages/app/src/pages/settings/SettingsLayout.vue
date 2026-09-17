@@ -14,6 +14,7 @@ const categories = [
   { key: "mcp", label: "工具集", icon: "mcp" },
   { key: "kb", label: "知识库", icon: "kb" },
   { key: "logs", label: "日志", icon: "logs" },
+  { key: "about", label: "关于", icon: "about" },
 ];
 
 const activeCategory = computed(() => {
@@ -69,6 +70,10 @@ function navigate(key: string) {
             <!-- 日志图标 -->
             <svg v-else-if="cat.icon === 'logs'" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="8" y1="13" x2="16" y2="13" /><line x1="8" y1="17" x2="13" y2="17" />
+            </svg>
+            <!-- 关于图标（info 圆） -->
+            <svg v-else-if="cat.icon === 'about'" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10" /><path d="M12 16v-4" /><path d="M12 8h.01" />
             </svg>
           </span>
           <span class="nav-label">{{ cat.label }}</span>

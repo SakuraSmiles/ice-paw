@@ -503,6 +503,14 @@ const logs = {
   },
 };
 
+const appInfo = {
+  /** 应用身份信息（设置-关于页）：productName / version / identifier */
+  async get(): Promise<{ productName: string; version: string; identifier: string }> {
+    try { return await invoke<{ productName: string; version: string; identifier: string }>("get_app_info"); }
+    catch (err) { throw wrapInvokeError("appInfo.get", err); }
+  },
+};
+
 const inbox = {
   /** 收件箱视图（pending 来件 + 当前收件政策；打开 popover 时权威刷新） */
   async list(conversationId: string): Promise<import("../types").InboxView> {
@@ -635,5 +643,5 @@ const screen = {
   },
 };
 
-export const bridge = { agents, providers, modelProfiles, conversations, projects, messages, chat, preferences, mcp, kb, logs, inbox, channels, trajectory, screen };
+export const bridge = { agents, providers, modelProfiles, conversations, projects, messages, chat, preferences, mcp, kb, logs, appInfo, inbox, channels, trajectory, screen };
 export default bridge;

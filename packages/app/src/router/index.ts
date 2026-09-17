@@ -96,6 +96,12 @@ const routes: RouteRecordRaw[] = [
             component: () => import("../pages/settings/LogSettings.vue"),
             meta: { title: "运行日志" },
           },
+          {
+            path: "about",
+            name: "SettingsAbout",
+            component: () => import("../pages/settings/AboutSettings.vue"),
+            meta: { title: "关于" },
+          },
         ],
       },
     ],
