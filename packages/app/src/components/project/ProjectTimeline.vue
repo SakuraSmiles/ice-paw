@@ -287,9 +287,7 @@ onActivated(async () => {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  border: 1px solid var(--ip-color-border-default);
-  border-radius: var(--ip-radius-lg);
-  background: var(--ip-color-bg-secondary);
+  background: var(--ip-color-bg-primary);
   overflow: hidden;
 }
 .ptimeline:focus { outline: none; }
@@ -301,7 +299,6 @@ onActivated(async () => {
   gap: var(--ip-spacing-3);
   height: 40px;
   padding: 0 14px;
-  border-bottom: 1px solid var(--ip-color-border-default);
   flex-shrink: 0;
 }
 .pt-search {
@@ -380,6 +377,14 @@ onActivated(async () => {
 
 .pt-main { flex: 1; display: flex; min-height: 0; }
 .pt-table-wrap { flex: 1; display: flex; position: relative; min-width: 0; min-height: 0; }
+
+/* 无边框模式（2026-09-17 用户拍板）：吸顶列头去底线、底色对齐页面（bg-primary），
+   与内容融合。:deep 穿透进复用的 TrajectoryTable 内部——仅本项目轨迹生效，
+   不动会话轨迹视图（TrajectoryView 的列头底色 bg-secondary 与自身面板一致）。 */
+.ptimeline :deep(.ttab-cols) {
+  background: var(--ip-color-bg-primary);
+  border-bottom: none;
+}
 
 .pt-empty { flex: 1; display: flex; align-items: center; justify-content: center; font-size: var(--ip-text-body-sm-size); color: var(--ip-color-text-tertiary); }
 .pt-empty.pt-error { color: var(--ip-danger-base); }
