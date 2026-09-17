@@ -189,10 +189,10 @@
 | U1-5 | loadMoreMessages A→B→A 往返守卫失效（loadingMore 被 loadMessages 重置后旧分页响应放行，R2 残余，chat.ts:186-210） | 中低 | ✅ 已修待 commit（msgEpoch 计数器守卫 + 用例） |
 | U2-1 | **DB 膨胀治理**：一周 212MB→737MB（UE5 截图会话期；图片类 tool_result 无保留/压缩/外置策略）+ AppData *.bak 1.6GB 无清理策略——先关窗只读普查表分布再定策 | 中高 | ✅ 已修待 commit：*.bak 清理（`cleanup_stale_db_backups` boot 扫尾，7 天保留）+ **图片外置**（拍板「外置到文件目录」——`infra/image_store.rs` 内容寻址 lossless 外置到 `<data_dir>/images/`，DB 只留 `image_file` 指针、读侧水合回内联；写侧接入 `update_content_blocks`/`cleanup`、读侧接入 repo 全读函数、boot 后台 sweep `offload_all_images`；软失败保留内联不丢字节；6 单测 + 路径逃逸/坏 base64/坏 JSON/去重幂等全锁） |
 | U2-2 | 日志体积卫生：「请求携带 N 工具定义」全量工具名列表截断（198 次/日）+ 内置 server stderr 横幅去重（单日 11.9MB 的主要构成） | 低 | ✅ 已修待 commit（openai 工具名截断前 10 名 + `StderrDeduper` 连续重复行折叠） |
-| U3-1 | **agent_yaml.rs 六连「同步 IO + 复制粘贴」**：6 个 async 命令内 std::fs read/write/rename（:287 等 12 处跑在 tokio worker）+ read-modify-atomic-write 全套重复五遍——抽公共原子改写 helper 一次治两病 | 中 | 📋 |
-| U3-2 | **层次倒置两处**：① harness 反向依赖 commands（channel.rs:60 / inbox.rs:66 / delegate.rs:48 调 commands::model_profile_cmd::production_fallback_plan——fallback 计划应下沉 harness）；② infra/protocol/mod.rs:31 re-export 上游 LlmProvider 成环（trait 应归 protocol）。与 loop 去 AppHandle 化方向相悖 | 中 | 📋 |
-| U3-3 | **ChatMessages 第一刀**：三胶囊 + 思考聚合 + 工具折叠 + 过程收纳段抽 MessageGroupCapsules 子组件 + 纯函数下沉 utils（约束：六份专项测试断言面零破坏） | 中 | 📋 |
-| U3-4 | crypto.rs 474 行零测试（XChaCha20-Poly1305 加解密 + blake2b 密钥派生，与 K1 同域）——补单测 | 中 | 📋 |
+| U3-1 | **agent_yaml.rs 六连「同步 IO + 复制粘贴」**：6 个 async 命令内 std::fs read/write/rename（:287 等 12 处跑在 tokio worker）+ read-modify-atomic-write 全套重复五遍——抽公共原子改写 helper 一次治两病 | 中 | ✅ 已修（c2f6b62）：抽 `atomic_write_yaml` 公共原子改写 helper，6 命令去同步 IO + 收敛五遍复制样板 |
+| U3-2 | **层次倒置两处**：① harness 反向依赖 commands（channel.rs:60 / inbox.rs:66 / delegate.rs:48 调 commands::model_profile_cmd::production_fallback_plan——fallback 计划应下沉 harness）；② infra/protocol/mod.rs:31 re-export 上游 LlmProvider 成环（trait 应归 protocol）。与 loop 去 AppHandle 化方向相悖 | 中 | ✅ 已修（7895a02 + 9c11f3e）：① fallback 计划下沉 harness（commands 留 re-export 零改动）② LlmProvider trait 归 infra/protocol 破环 |
+| U3-3 | **ChatMessages 第一刀**：三胶囊 + 思考聚合 + 工具折叠 + 过程收纳段抽 MessageGroupCapsules 子组件 + 纯函数下沉 utils（约束：六份专项测试断言面零破坏） | 中 | ✅ 已修（c465063）：抽 MessageGroupCapsules 纯展示子组件（三胶囊+思考堆叠）+ transferKey/thinkSegLabel 下沉 utils/groupCollapse.ts；六份专项测试 60 用例零破坏 + 新增 7 纯函数单测 |
+| U3-4 | crypto.rs 474 行零测试（XChaCha20-Poly1305 加解密 + blake2b 密钥派生，与 K1 同域）——补单测 | 中 | ✅ 已修（af562d4）：crypto XChaCha20-Poly1305 加解密 + blake2b 密钥派生补单测 |
 | U3-5 | 观察升级候选（0.8.x 视余量，否则 0.9）：loop_engine 1431 行持续回涨（R-D4：697→1431 已超拆分前）再拆 / agent_cmd.rs 1841 God module（trait+SQL+DTO+yaml 镜像+频道级联同居）/ chat.ts 三份流式复位清单手工同步 / composables 两对复制（事件接线脚手架、分页三件套）抽象 | 中 | 👁→📋 待拍板 |
 | U3-6 | 视觉令牌存量收编（渐进、一次一个组件域防 CSS 回归无测试网）：间距裸 px 646 处 58 文件（布局级 gap≥4px 174 处）/ hex 47 处 19 文件（#fff×16、AttachmentDetail Tailwind 原色、TrajectoryTimeline cssVar 二参回退）/ 非 token 字号 30 处（ErrorBanner 11.5/12.5px 脱档最刺眼）/ ✕✓✦ 文本字形 6 处——Q14/Q15 计数刷新，轨迹族 z-index 8 处聚集地已定位 | 低（体量大） | 👁 |
 
