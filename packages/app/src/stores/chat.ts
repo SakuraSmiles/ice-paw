@@ -43,6 +43,8 @@ export const useChatStore = defineStore("chat", () => {
   // ===== 会话列表（全部会话，不限 agent） =====
   const conversations = ref<Conversation[]>([]);
   const convLoading = ref(false);
+  // 会话列表加载失败（页级数据源失败，UI-3 批：空白列表不再静默——错误态 + 重试）
+  const convLoadError = ref<string | null>(null);
 
   async function loadConversations() {
     convLoading.value = true;
@@ -55,8 +57,10 @@ export const useChatStore = defineStore("chat", () => {
       conversations.value = hidden.size > 0
         ? fresh.filter((c) => !hidden.has(c.id))
         : fresh;
+      convLoadError.value = null;
     } catch (e) {
       console.error("加载会话列表失败:", e);
+      convLoadError.value = e instanceof Error ? e.message : String(e);
     } finally {
       convLoading.value = false;
     }
@@ -123,6 +127,9 @@ export const useChatStore = defineStore("chat", () => {
       sending.value = true;
       streamingText.value = bg.text;
       streamingThinking.value = bg.thinking;
+      // 回合归属同步：恢复的流式内容属于 id 的回合——sending 与 sendingConvId
+      // 必须一起动（60s 超时确认按 sendingConvId 问后端；缺失会误判、陈旧会误杀）
+      sendingConvId.value = id;
       bgStreams.value.delete(id);
     } else {
       sending.value = false;
@@ -145,6 +152,16 @@ export const useChatStore = defineStore("chat", () => {
   const pageCursor = ref<number | null>(null);
   // 是否真发生过向上翻页（「已显示全部消息」终注条件——比旧行数推断准）。
   const pagedOnce = ref(false);
+  // 分页请求纪元：loadMessages 每次递增，令在途的 loadMore 失效。
+  // 治 A→B→A 往返（R2 残余）：loadMessages 会把 loadingMore 复位，旧 A 分页响应
+  // 在往返后 convId 又等于 A、被 convId 守卫放行——epoch 守卫补上这道闸，
+  // 丢弃跨「重载」的陈旧分页（其游标已与重载后的首屏脱节，前插会重复/错位）。
+  const msgEpoch = ref(0);
+  // 消息首屏加载失败（页级数据源失败，UI-3 批：空白消息区不再静默——错误态 + 重试）。
+  // retry 闭包捕获 convId，重试只针对发起时那个会话（切换后由新 loadMessages 覆盖）。
+  const msgLoadError = ref<{ msg: string; retry: () => void } | null>(null);
+  // 翻页加载失败（inline 提示，附重试——正文已在场，只欠更早一页）
+  const loadMoreError = ref<string | null>(null);
 
   async function loadMessages(convId: string) {
     msgLoading.value = true;
@@ -155,6 +172,9 @@ export const useChatStore = defineStore("chat", () => {
     loadingMore.value = false;
     pageCursor.value = null;
     pagedOnce.value = false;
+    msgEpoch.value += 1;
+    msgLoadError.value = null;
+    loadMoreError.value = null;
     try {
       const page = await bridge.messages.listByTurns(convId);
       // 竞态守卫（useProjectTrajectory 的 currentId !== pid 同款）：await 期间用户
@@ -176,6 +196,13 @@ export const useChatStore = defineStore("chat", () => {
       }
     } catch (e) {
       console.error("加载消息列表失败:", e);
+      // 只对仍激活的会话表态：过期会话的失败无界面承载（activeConvId 已易主）
+      if (convId === activeConvId.value) {
+        msgLoadError.value = {
+          msg: e instanceof Error ? e.message : String(e),
+          retry: () => loadMessages(convId),
+        };
+      }
     } finally {
       // 只有仍是激活会话的加载才复位加载态：过期请求清 flag 会把新会话的
       // 「加载中」提前翻成完成（ChatMessages 的滚动恢复 watcher 盯 msgLoading 边沿）。
@@ -189,23 +216,35 @@ export const useChatStore = defineStore("chat", () => {
     if (pageCursor.value == null) return;
     if (!activeConvId.value) return;
     loadingMore.value = true;
-    // 发起时记下会话：await 期间切走的话，旧会话的 older 消息不得前插进新会话列表
+    // 发起时记下会话 + 纪元：await 期间切走的话，旧会话的 older 消息不得前插进
+    // 新会话列表；A→B→A 往返时 convId 守卫失效（往返后 convId 又等于 A），
+    // epoch 守卫补闸——跨重载的陈旧分页直接丢弃。
     const convId = activeConvId.value;
     const cursor = pageCursor.value;
+    const epoch = msgEpoch.value;
     try {
       const page = await bridge.messages.listByTurns(convId, { beforeAnchorRowid: cursor });
       // 竞态守卫：切会话瞬间返回的旧会话分页直接丢弃（前插必须在守卫之后）
       if (convId !== activeConvId.value) return;
+      // 跨重载守卫：loadMessages 已把 messages/游标换成新首屏，旧分页的游标
+      // 与之脱节，前插会重复或错位——整段丢弃。
+      if (epoch !== msgEpoch.value) return;
       const older = Array.isArray(page?.rows) ? page.rows : [];
       hasMore.value = page?.has_more === true;
       pageCursor.value = page?.next_before_anchor_rowid ?? null;
       messages.value = [...older, ...messages.value];
       pagedOnce.value = true;
+      loadMoreError.value = null;
     } catch (e) {
       console.error("加载更早消息失败:", e);
+      // 只对仍激活会话表态（正文已在场，inline 提示即可，不挡正文）
+      if (convId === activeConvId.value && epoch === msgEpoch.value) {
+        loadMoreError.value = e instanceof Error ? e.message : String(e);
+      }
     } finally {
-      // 过期请求不清 loadingMore：清了会放行新会话的重复 loadMore（双拉双前插）
-      if (convId === activeConvId.value) loadingMore.value = false;
+      // 过期请求不清 loadingMore：清了会放行新会话的重复 loadMore（双拉双前插）。
+      // 跨重载同理（loadMessages 已复位 loadingMore，此处不再动它）。
+      if (convId === activeConvId.value && epoch === msgEpoch.value) loadingMore.value = false;
     }
   }
 
@@ -637,7 +676,8 @@ export const useChatStore = defineStore("chat", () => {
   }
 
   async function stopGeneration() {
-    if (!activeConvId.value) return;
+    const cid = activeConvId.value;
+    if (!cid) return;
     clearSendTimeout();
     // 乐观停止「生成中」状态（隐藏光标）。**不清空 streaming 内容**——交由后端
     // cancel → finalize_cancel emit 的 chat:done(abort) 走 freezeCurrentAssistant
@@ -646,8 +686,28 @@ export const useChatStore = defineStore("chat", () => {
     sending.value = false;
     clearTurnAnchors();
     try {
-      await bridge.chat.stopGeneration(activeConvId.value);
-    } catch { /* 静默忽略 */ }
+      await bridge.chat.stopGeneration(cid);
+    } catch (e) {
+      // 停止失败不再静默（U0-11）：先问后端真相——仍在生成则回滚乐观停止
+      //（否则停止钮消失、sending=false 下新消息会被后端「在途生成」拒绝，
+      // 用户以为停了实际没停）；确认已死则维持停止。turnFirstIdx 不重建
+      //（流式折叠视图降级为普通追加，chat:done 冻结不依赖它）。
+      let alive = false;
+      try {
+        alive = await bridge.chat.isStreaming(cid);
+      } catch { /* 后端不可达——按已死处理（60s 超时确认同款语义） */ }
+      if (alive) {
+        sending.value = true;
+        sendingConvId.value = cid;
+        resetSendTimeout();
+      }
+      setConvError(
+        cid,
+        `停止生成失败（${e instanceof Error ? e.message : String(e)}）——` +
+          (alive ? "回合仍在继续，可再点一次停止。" : "回合似乎已结束，稍候界面会自行恢复。"),
+        "stop_failed",
+      );
+    }
   }
 
   /** 发送授权响应（#11 带 scope 范围档；委派授权带 delegationGrant 预授权档）。
@@ -934,9 +994,10 @@ export const useChatStore = defineStore("chat", () => {
   }
 
   return {
-    conversations, convLoading,
+    conversations, convLoading, convLoadError,
     activeConvId, activeConversation,
     messages, msgLoading, hasMore, loadingMore, pagedOnce, pageCursor,
+    msgLoadError, loadMoreError,
     sending, streamingText, draftText, pendingImages, pendingFiles, pendingRefs, lastFinishReason, currentModel,
     budget, renewalNotice, updateBudget, modelSwitchNotice, updateModelSwitched,
     roundsNotice, updateRoundsRenewed, lastTurnRounds, turnRoundRenewals,

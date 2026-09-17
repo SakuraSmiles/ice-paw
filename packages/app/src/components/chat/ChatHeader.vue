@@ -54,9 +54,18 @@ watch(inboxOpen, (open) => {
 // Esc（A1：confirm 注册晚于 inbox，无谓词时收件箱开着 Esc 命中的是 confirm）
 useEscapeStack(() => { inboxOpen.value = false; }, () => inboxOpen.value);
 
+// ===== 标题行内改名（编辑契约：草稿态 + 显式保存/取消；U0-6 摘除 blur 即存） =====
 const editing = ref(false);
 const editValue = ref("");
 const editInput = ref<HTMLInputElement | null>(null);
+/** 保存失败文案（后端 AppError 本身是三段式；空串 = 无错误） */
+const titleError = ref("");
+/** 保存成功后的「已保存」淡出标记（短驻确认，timer 摘） */
+const titleSaved = ref(false);
+const savingTitle = ref(false);
+let titleSavedTimer: number | undefined;
+
+const canSaveTitle = computed(() => !!editValue.value.trim());
 
 // ===== 删除确认条（UX #9：右锚定向左扩展，取代旧菜单内嵌确认）=====
 const confirming = ref(false);
@@ -82,6 +91,7 @@ onUnmounted(() => {
   document.removeEventListener("click", onDocClick);
   document.removeEventListener("click", onInboxDocClick);
   document.removeEventListener("click", onChannelCoordDocClick);
+  window.clearTimeout(titleSavedTimer); // 「已保存」淡出 timer（U0-6）
 });
 
 // UI-E2 窗口标题随会话联动：桌面惯例（dock/窗口列表可辨当前会话），空回退产品名。
@@ -189,35 +199,62 @@ function startEdit() {
   const conv = chat.activeConversation;
   if (!conv) return;
   editValue.value = conv.title || "";
+  titleError.value = "";
   editing.value = true;
   nextTick(() => editInput.value?.focus());
 }
 
 async function saveEdit() {
   const conv = chat.activeConversation;
-  if (!conv) return;
-  editing.value = false;
+  if (!conv || savingTitle.value) return;
   const newTitle = editValue.value.trim();
-  // U13: 拒绝空标题或纯空白标题，恢复旧值
+  // U13：空/纯空白标题非法——保持编辑态给可见提示（不再静默回滚）
   if (!newTitle) {
-    editValue.value = conv.title || "";
+    titleError.value = "标题不能为空——输入内容，或点「取消」放弃修改";
+    editInput.value?.focus();
     return;
   }
-  if (newTitle !== (conv.title || "")) {
-    try {
-      await bridge.conversations.rename(conv.id, newTitle);
-      conv.title = newTitle;
-    } catch (e) {
-      // 重命名失败：标题不改（保持旧值），仅记录日志，避免 unhandled rejection
-      console.error("重命名会话失败:", e);
-    }
+  // 未改动直接收起：零请求，也不给「已保存」假反馈
+  if (newTitle === (conv.title || "")) {
+    editing.value = false;
+    titleError.value = "";
+    return;
+  }
+  savingTitle.value = true;
+  try {
+    await bridge.conversations.rename(conv.id, newTitle);
+    conv.title = newTitle;
+    editing.value = false;
+    titleError.value = "";
+    showSavedFlag();
+  } catch (e) {
+    // 保存失败可见（U0-6：此前仅 console.error，用户零感知）——保持编辑态，
+    // 后端文案本身是三段式；可改后重试或「取消」回滚
+    titleError.value = e instanceof Error ? e.message : String(e);
+    editInput.value?.focus();
+  } finally {
+    savingTitle.value = false;
   }
 }
 
-function cancelEdit() { editing.value = false; }
+/** 保存成功「已保存」淡出（编辑契约成功反馈；重入先清旧 timer） */
+function showSavedFlag() {
+  titleSaved.value = true;
+  window.clearTimeout(titleSavedTimer);
+  titleSavedTimer = window.setTimeout(() => { titleSaved.value = false; }, 1600);
+}
+
+function cancelEdit() {
+  editing.value = false;
+  titleError.value = "";
+  // 草稿回滚（startEdit 重进时也会重置，此处保持值语义干净）
+  const conv = chat.activeConversation;
+  editValue.value = conv?.title || "";
+}
 
 function handleKeydown(e: KeyboardEvent) {
-  if (e.key === "Enter") saveEdit();
+  // isComposing：中文输入法选词回车不触发保存（同输入框 IME 防护语义）
+  if (e.key === "Enter" && !e.isComposing) saveEdit();
   if (e.key === "Escape") cancelEdit();
 }
 
@@ -296,15 +333,21 @@ async function toggleScreenShare() {
         size="xl"
       />
       <div class="header-info">
-        <input
-          v-if="editing"
-          ref="editInput"
-          v-model="editValue"
-          class="header-edit-input"
-          @keydown="handleKeydown"
-          @blur="saveEdit"
-          @click.stop
-        />
+        <!-- 行内改名（编辑契约：草稿 + 显式保存/取消，blur 不再即存——U0-6）。
+             失败文案贴身（后端三段式），空标题由保存禁用 + 提示双闸兜住 -->
+        <div v-if="editing" class="header-edit-row">
+          <input
+            ref="editInput"
+            v-model="editValue"
+            class="header-edit-input"
+            :class="{ 'is-error': !!titleError }"
+            @keydown="handleKeydown"
+            @click.stop
+          />
+          <button type="button" class="title-edit-btn is-save" :disabled="!canSaveTitle || savingTitle" @click.stop="saveEdit">保存</button>
+          <button type="button" class="title-edit-btn" :disabled="savingTitle" @click.stop="cancelEdit">取消</button>
+          <span v-if="titleError" class="title-edit-error" :title="titleError">{{ titleError }}</span>
+        </div>
         <h1 v-else class="header-title" @dblclick="startEdit">
           <!-- MA-1：委派子会话的回路——面包屑式上文（父会话 › 本任务）。
                父会话即返回入口（点击回父会话），比独立返回按钮更贴合
@@ -321,6 +364,10 @@ async function toggleScreenShare() {
           </button>
           <span v-if="delegation?.parentId" class="crumb-sep">/</span>
           <span class="header-title-text">{{ chat.activeConversation?.title || "新对话" }}</span>
+          <!-- 保存成功「已保存」淡出（编辑契约成功反馈；titleSaved timer 短驻） -->
+          <Transition name="title-saved">
+            <span v-if="titleSaved" class="title-saved-flag">已保存</span>
+          </Transition>
           <!-- MA-1 任务详情 v1：徽章升级为「委派任务」+ 状态 glyph（进行中像素格/已结束中性环；
                done/failed 精确终态是 MA-2 台账，不伪造） -->
           <span
@@ -532,7 +579,20 @@ async function toggleScreenShare() {
 .header-kind-badge { display:inline-flex; align-items:center; gap:3px; margin-left:8px; font-size:var(--ip-text-caption-size); font-weight:var(--ip-font-weight-medium); color:var(--ip-primary-600); background:var(--ip-primary-soft-bg, rgba(var(--ip-primary-500-rgb), 0.08)); border:1px solid var(--ip-primary-soft-border, rgba(var(--ip-primary-500-rgb), 0.25)); border-radius:var(--ip-radius-full, 999px); padding:1px 8px; vertical-align:middle; }
 .header-title-text { padding-bottom:1px; border-bottom:1px solid transparent; transition:border-color var(--ip-duration-fast) var(--ip-ease-out); }
 .header-title:hover .header-title-text { border-bottom-color:var(--ip-color-text-tertiary); }
-.header-edit-input { font-size:var(--ip-text-body-size); font-weight:var(--ip-font-weight-semibold); color:var(--ip-color-text-primary); background:var(--ip-color-bg-input); border:1px solid var(--ip-color-border-focus); border-radius:var(--ip-radius-md); padding:2px 8px; outline:none; width:100%; min-width:200px; font-family:inherit; box-shadow:0 0 0 3px rgba(var(--ip-primary-500-rgb), 0.12); }
+/* ===== 行内改名（U0-6 显式保存契约）===== */
+.header-edit-row { display:flex; align-items:center; gap:var(--ip-spacing-2); width:100%; min-width:0; }
+.header-edit-input { flex:1; min-width:160px; font-size:var(--ip-text-body-size); font-weight:var(--ip-font-weight-semibold); color:var(--ip-color-text-primary); background:var(--ip-color-bg-input); border:1px solid var(--ip-color-border-focus); border-radius:var(--ip-radius-md); padding:2px 8px; outline:none; font-family:inherit; box-shadow:0 0 0 3px rgba(var(--ip-primary-500-rgb), 0.12); }
+.header-edit-input.is-error { border-color:var(--ip-danger-base); box-shadow:none; }
+.title-edit-btn { flex:none; height:24px; padding:0 10px; font-size:var(--ip-text-caption-size); font-weight:var(--ip-font-weight-medium); font-family:inherit; color:var(--ip-color-text-secondary); background:transparent; border:1px solid var(--ip-color-border-default); border-radius:var(--ip-radius-md); cursor:pointer; transition:all var(--ip-duration-fast) var(--ip-ease-out); }
+.title-edit-btn:hover { border-color:var(--ip-primary-300); color:var(--ip-primary-600); }
+.title-edit-btn.is-save { color:var(--ip-color-text-on-primary); background:var(--ip-primary-500); border-color:var(--ip-primary-500); }
+.title-edit-btn.is-save:hover { background:var(--ip-primary-600); border-color:var(--ip-primary-600); }
+.title-edit-btn:disabled { opacity:0.55; cursor:not-allowed; }
+.title-edit-error { flex:0 1 auto; max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--ip-text-micro-size); color:var(--ip-danger-text); }
+/* 「已保存」短驻淡出（编辑契约成功反馈） */
+.title-saved-flag { display:inline-flex; align-items:center; margin-left:8px; padding:0 8px; line-height:18px; font-size:var(--ip-text-micro-size); font-weight:var(--ip-font-weight-medium); color:var(--ip-success-text); background:var(--ip-success-bg); border-radius:var(--ip-radius-full, 999px); }
+.title-saved-enter-active, .title-saved-leave-active { transition:opacity var(--ip-duration-fast) var(--ip-ease-out); }
+.title-saved-enter-from, .title-saved-leave-to { opacity:0; }
 .header-meta { display:flex; align-items:center; gap:6px; }
 /* agent 头像（md=28px，EntityAvatar 三级链） */
 .header-agent-avatar { flex: none; }

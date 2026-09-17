@@ -6,6 +6,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>IcePaw</title>
     <!--
+      LXGW WenKai 展示字体接电（2026-09-17 U0-5）：tokens.css --ip-font-display 的
+      中文回退族（'LXGW WenKai'）。字体分片与 @font-face 声明一直在 public/fonts/wenkai/
+      （97 个 unicode-range 分片 woff2 + lxgwwenkai-regular.css），但从未被 import——
+      展示位中文恒静默回退宋体。资产本就随包分发（public/ 全量复制进安装包），此处
+      接电零体积增量。public 目录文件不能走 Vite CSS @import（解析不到），link 引用是
+      正确通道；本地文件无网络往返，渲染阻塞可忽略。unicode-range 分片 = 按需加载，
+      未用到的片不下载。首帧骨架字体不受影响（骨架用系统字体栈，见下方例外位注释）。
+    -->
+    <link rel="stylesheet" href="/fonts/wenkai/lxgwwenkai-regular.css" />
+    <!--
       首帧启动骨架（2026-09-07 白屏根治批；2026-09-16 加载页批次改造）：
       WebView 加载 HTML → JS bundle 执行完 → Vue mount 之间存在纯白窗口
       （低配机 1-2s）。此段内联样式 + 字标让首帧即有内容，先于一切加载逻辑可见。

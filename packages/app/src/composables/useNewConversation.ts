@@ -21,6 +21,8 @@ export function useNewConversation() {
   const router = useRouter();
 
   const showPicker = ref(false);
+  // 新建会话失败（UI-3 批：点击零反馈 → inline 错误态 + 重试可见）
+  const createError = ref<string | null>(null);
 
   const inProject = computed(() => project.activeProjectId !== null);
   const memberAgentIds = computed(() =>
@@ -49,11 +51,13 @@ export function useNewConversation() {
   /** 真正建会话：归入当前项目空间，并回到首页展示。 */
   async function create(agentId: string) {
     showPicker.value = false;
+    createError.value = null;
     try {
       await chat.createConversation(agentId, project.activeProjectId);
       if (router.currentRoute.value.name !== "Home") router.push("/");
     } catch (e) {
       console.error("新建会话失败:", e);
+      createError.value = e instanceof Error ? e.message : String(e);
     }
   }
 
@@ -74,5 +78,5 @@ export function useNewConversation() {
     create(agentId);
   }
 
-  return { showPicker, pickerAgentIds, ctaKind, ctaLabel, startNew, onPickAgent };
+  return { showPicker, pickerAgentIds, ctaKind, ctaLabel, createError, startNew, onPickAgent };
 }

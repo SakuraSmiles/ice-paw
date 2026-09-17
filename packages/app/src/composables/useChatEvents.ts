@@ -278,6 +278,10 @@ export async function useChatEvents(): Promise<() => void> {
       // 后台会话完成：后端已把最终态落库，清掉快照即可（不触活跃 UI，无需前端 freeze）
       chat.bgStreams.delete(cid);
       recentErrorConvs.delete(cid);
+      // 回合锚点失效：若该后台会话正是 sendingConvId 指向的发起回合，一并清掉——
+      // 否则陈旧 id 被 60s 超时探测误判（会话已死 → 误翻 sending → 第二条消息
+      // 打进还在跑的其他回合，U1-2）
+      if (chat.sendingConvId === cid) chat.sendingConvId = null;
       return;
     }
     // 错误后的配套 chat:done(abort)：chat:error 已是终态（写了错误文案 + 重置），

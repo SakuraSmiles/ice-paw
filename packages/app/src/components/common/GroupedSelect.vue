@@ -235,6 +235,12 @@ function onKeydown(e: KeyboardEvent) {
   background-color: var(--ip-color-bg-input);
   box-shadow: var(--ip-shadow-focus);
 }
+/* 焦点环跟随焦点本身（focus-within）而非 open 态类——input 的 outline:none
+   由这里承接替代（键盘可达基线规则 ⑨：不得抵消焦点环而不补替代） */
+.gs-control:focus-within {
+  border-color: var(--ip-color-border-focus);
+  box-shadow: var(--ip-shadow-focus);
+}
 .gs-disabled .gs-control {
   opacity: 0.6;
   cursor: not-allowed;
@@ -250,7 +256,7 @@ function onKeydown(e: KeyboardEvent) {
   color: inherit;
   background: transparent;
   border: none;
-  outline: none;
+  outline: none; /* 焦点环由外层 .gs-control:focus-within 承接（键盘可达基线） */
 }
 .gs-input::placeholder {
   color: var(--ip-color-text-placeholder);

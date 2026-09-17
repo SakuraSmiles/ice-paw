@@ -414,6 +414,51 @@ describe("chatStore", () => {
       expect(store.bgStreams.get("c1")).toBeDefined(); // 父会话文本被快照，切回可恢复
     });
 
+    it("U1-2：后台会话 chat:done 清掉陈旧 sendingConvId（防 60s 超时误判杀活回合）", async () => {
+      const { store, handlers } = await setupStream();
+      store.conversations = [fakeConv("c1"), fakeConv("c2")];
+      store.activeConvId = "c1";
+      store.sending = true;
+      store.sendingConvId = "c1"; // c1 回合发起锚
+
+      // 切到 c2：c1 的流式态快照进 bgStreams、sending 复位（sendingConvId 保持 c1）
+      store.selectConversation("c2");
+      await flushPromises();
+      expect(store.sending).toBe(false);
+      expect(store.sendingConvId).toBe("c1"); // 陈旧锚仍在
+
+      // c1 后台回合完成 → chat:done(c1) 走后台早退分支 → 锚随之失效
+      const doneH = handlers.get("chat:done")!;
+      doneH({ payload: { conversation_id: "c1", message_id: "x", finish_reason: "stop", usage: null } });
+      expect(store.sendingConvId).toBeNull(); // ← 修复点：不再把死会话的 id 留给超时探测
+      expect(store.bgStreams.has("c1")).toBe(false);
+    });
+
+    it("U1-2：切回后台流式会话恢复时同步 sendingConvId（60s 超时确认问对会话）", async () => {
+      const { store, handlers } = await setupStream();
+      store.conversations = [fakeConv("c1"), fakeConv("c2")];
+      store.activeConvId = "c1";
+      store.sending = false;
+
+      // 外部回合（MA-3 消费）：sending 置位但不设 sendingConvId（判据锚为 null）
+      const startH = handlers.get("chat:start")!;
+      startH({ payload: { conversation_id: "c1", user_message_id: "u-ext", assistant_message_id: "asst-ext" } });
+      expect(store.sending).toBe(true);
+      expect(store.sendingConvId).toBeNull();
+
+      // 切到 c2：c1 流式态进 bgStreams、sending 复位
+      store.selectConversation("c2");
+      await flushPromises();
+      expect(store.bgStreams.has("c1")).toBe(true);
+
+      // 切回 c1：bg 恢复流式态，sendingConvId 同步指向 c1（修复点——缺失则恢复后
+      // sending=true 而锚为 null，超时确认无从问起）
+      store.selectConversation("c1");
+      await flushPromises();
+      expect(store.sending).toBe(true);
+      expect(store.sendingConvId).toBe("c1");
+    });
+
     it("外部回合（A2）：ucb 缺省且非用户发起 → sending 即刻置位 + 权威刷新 + 不本地 push 占位", async () => {
       // MA-3 消费回合形态：emit_user_blocks=false（ucb=None）且 sendingConvId=null
       //（不是本前端发起的回合）。incoming user 行后端已落库（带来源标注双块），
@@ -546,6 +591,40 @@ describe("chatStore", () => {
       await loading;
       await flushPromises();
       expect(store.messages.map((m) => m.id)).toEqual(["m-b1"]); // 未前插
+      expect(store.loadingMore).toBe(false);
+    });
+
+    it("loadMoreMessages：A→B→A 往返后旧分页响应被 epoch 守卫丢弃（不重复前插）", async () => {
+      const store = useChatStore();
+      store.conversations = [fakeConv("c1"), fakeConv("c2")];
+      store.activeConvId = "c1";
+      store.messages = [fakeMsg("m-a2", "c1"), fakeMsg("m-a1", "c1")];
+      store.hasMore = true;
+      store.pageCursor = 9;
+
+      let resolveOlder!: (v: MessageTurnPage) => void;
+      const pendingOlder = new Promise<MessageTurnPage>((res) => { resolveOlder = res; });
+      // 1) c1 的 loadMore（在途，纪元 e0）
+      mockInvoke.mockImplementationOnce(() => pendingOlder);
+      // 2) 切到 c2 的首屏（纪元 e1）
+      mockInvoke.mockResolvedValueOnce({ rows: [fakeMsg("m-b1", "c2")], has_more: false });
+      // 3) 切回 c1 的重载首屏（纪元 e2）——与旧 loadMore 的游标脱节
+      mockInvoke.mockResolvedValueOnce({
+        rows: [fakeMsg("m-a3", "c1"), fakeMsg("m-a2", "c1")],
+        has_more: false,
+      });
+
+      const loading = store.loadMoreMessages(); // c1 分页在途（纪元 e0）
+      store.selectConversation("c2"); // 切走（loadMessages 立即返回，纪元→e1）
+      await flushPromises();
+      store.selectConversation("c1"); // 切回（loadMessages 立即返回，纪元→e2）
+      await flushPromises();
+      expect(store.messages.map((m) => m.id)).toEqual(["m-a3", "m-a2"]);
+
+      resolveOlder({ rows: [fakeMsg("m-a0", "c1")], has_more: false }); // e0 的 older 晚到
+      await loading;
+      await flushPromises();
+      expect(store.messages.map((m) => m.id)).toEqual(["m-a3", "m-a2"]); // 未重复前插
       expect(store.loadingMore).toBe(false);
     });
   });

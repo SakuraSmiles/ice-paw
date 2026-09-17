@@ -74,7 +74,7 @@ pub fn run() {
             harness::approval_toast::focus_main_window(app);
         }));
     }
-    builder
+    builder = builder
         // 仅保留 opener 业务插件
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -593,9 +593,107 @@ pub fn run() {
                 boot_start.elapsed().as_millis()
             );
             Ok(())
-        })
-        .run(context)
-        .expect("error while running tauri application");
+        });
+
+    // U1-1：WebView2 环境创建失败时 tauri 在 Ready 分支 panic（app.rs:1425
+    // "Failed to setup app"），发生在我们的 setup 闭包**之前**（tauri 的 setup()
+    // 先建窗、后跑 app.setup 闭包）——logging/panic hook 均未就绪，用户只见
+    // 「程序已停止工作」+ 零日志。catch_unwind 兜住 → 可读错误对话框 + 兜底
+    // 日志 + 明确退出码。（release profile panic=unwind 已开，catch_unwind 有效；
+    // build 阶段失败走 Err 分支，同样兜住。）
+    let identifier = context.config().identifier.clone();
+    let run_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        builder.run(context)
+    }));
+    match run_result {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            fatal_boot_error(&identifier, &format!("应用构建失败: {e}"));
+            std::process::exit(1);
+        }
+        Err(payload) => {
+            fatal_boot_error(&identifier, &panic_payload_to_string(payload.as_ref()));
+            std::process::exit(1);
+        }
+    }
+}
+
+/// 从 `catch_unwind` 的 panic payload 提取可读消息（覆盖最常见的 &str / String）。
+fn panic_payload_to_string(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "unknown panic payload".to_string()
+    }
+}
+
+/// 启动期致命错误统一出口：三段式可读文案 + 兜底日志 +（Windows）原生对话框。
+///
+/// 此路径发生在 tracing 未初始化时（WebView2 panic 先于 setup 闭包），故兜底日志
+/// 独立写文件（不依赖 tracing-appender），路径与正式日志同目录便于一起排查。
+fn fatal_boot_error(identifier: &str, raw: &str) {
+    let msg = format!(
+        "发生了什么：IcePaw 无法创建应用界面，WebView2 运行时初始化失败。\n\
+         为什么：系统 WebView2 运行时不可用、损坏或被组策略拦截。\n\
+         怎么办：重装「Microsoft Edge WebView2 运行时」（developer.microsoft.com/microsoft-edge/webview2）后重启应用；若仍失败，请查看日志目录。\n\n\
+         技术细节：\n{raw}"
+    );
+
+    #[cfg(windows)]
+    {
+        write_boot_panic_log(identifier, &msg);
+        show_fatal_error_dialog(&msg);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = identifier;
+        eprintln!("[ice_paw] 启动失败: {msg}");
+    }
+}
+
+/// 兜底日志：写 `{LOCALAPPDATA}/{identifier}/logs/ice-paw.boot-panic.log`（append）。
+/// tracing 未就绪时唯一可用的持久化出口——正常日志目录同一位置，排查时一起看。
+#[cfg(windows)]
+fn write_boot_panic_log(identifier: &str, msg: &str) {
+    let Ok(local) = std::env::var("LOCALAPPDATA") else {
+        return;
+    };
+    let dir = std::path::PathBuf::from(local).join(identifier).join("logs");
+    if std::fs::create_dir_all(&dir).is_ok() {
+        let path = dir.join("ice-paw.boot-panic.log");
+        let line = format!(
+            "{}\n{}\n\n",
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
+            msg
+        );
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
+    }
+}
+
+/// Windows 原生错误对话框（MessageBoxW）。空 hwnd = 归属桌面，桌面应用在无窗口
+/// 时也可弹（这正是 WebView2 建窗失败的场景——本就没有窗口可挂）。
+#[cfg(windows)]
+fn show_fatal_error_dialog(msg: &str) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+
+    let title: Vec<u16> = "IcePaw 启动失败".encode_utf16().chain(std::iter::once(0)).collect();
+    let text: Vec<u16> = msg.encode_utf16().chain(std::iter::once(0)).collect();
+    // SAFETY: 两个 PCWSTR 均指向以 NUL 结尾的本地 Vec（生命周期覆盖调用全程）；
+    // hwnd 传 null 使消息框以桌面为父。
+    unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            text.as_ptr(),
+            title.as_ptr(),
+            MB_OK | MB_ICONERROR,
+        );
+    }
 }
 
 // =========================================================================
@@ -676,6 +774,15 @@ fn prune_impl(root: &std::path::Path, version: &str) {
 
 #[cfg(test)]
 mod tests {
+    // U1-1：panic payload 提取覆盖最常见的两种形态（&str 字面量 / String 格式化）。
+    #[test]
+    fn panic_payload_to_string_extracts_str_and_string() {
+        let p = std::panic::catch_unwind(|| panic!("boom")).unwrap_err();
+        assert_eq!(super::panic_payload_to_string(p.as_ref()), "boom");
+        let p = std::panic::catch_unwind(|| panic!("code {}", 42)).unwrap_err();
+        assert_eq!(super::panic_payload_to_string(p.as_ref()), "code 42");
+    }
+
     // prune 的目录副作用在 tmp 目录验证（真实 EBWebView 布局缩样）
     #[cfg(windows)]
     #[test]

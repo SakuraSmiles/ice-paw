@@ -26,6 +26,7 @@ vi.mock("../../../composables/useNewConversation", async () => {
       showPicker: ref(false),
       pickerAgentIds: ref([]),
       ctaKind: ref(null),
+      createError: ref(null),
       startNew,
       onPickAgent: vi.fn(),
     }),

@@ -1,21 +1,26 @@
 <script setup lang="ts">
 // ProjectMembersChips.vue — 项目成员 chips（已选 × 移除 / 候选 + 添加）共享组件。
 // 双入口复用：ProjectList 展开区 + 项目详情页设置 tab。agent 名单解析内部
-// 走 agent store；增删语义「立即持久化」上交父级（emit add/remove → 父级调
-// bridge 后 reload），本组件不持有中间态——两入口行为天然一致。
+// 走 agent store。值走 v-model（草稿语义，与 ProjectBasicForm 同构）——点击
+// chip 只改草稿并 emit update:memberIds，持久化上交父级显式保存（编辑契约
+// U0-7：摘除「点击即持久化」旧路径，本组件无状态无中间态，两入口行为一致）。
 import { computed } from "vue";
 import { useAgentStore } from "../../stores/agent";
 
 const props = defineProps<{ memberIds: string[] }>();
-const emit = defineEmits<{
-  add: [agentId: string];
-  remove: [agentId: string];
-}>();
+const emit = defineEmits<{ "update:memberIds": [ids: string[]] }>();
 
 const agent = useAgentStore();
 const memberSet = computed(() => new Set(props.memberIds));
 /** 未入项目的 agent = 候选（+ 前缀） */
 const candidates = computed(() => agent.list.filter((a) => !memberSet.value.has(a.id)));
+
+function add(id: string) {
+  emit("update:memberIds", [...props.memberIds, id]);
+}
+function remove(id: string) {
+  emit("update:memberIds", props.memberIds.filter((m) => m !== id));
+}
 </script>
 
 <template>
@@ -29,7 +34,7 @@ const candidates = computed(() => agent.list.filter((a) => !memberSet.value.has(
         type="button"
         class="member-chip selected"
         :title="`移除 ${agent.getById(m)?.name ?? ''}`"
-        @click="emit('remove', m)"
+        @click="remove(m)"
       >× {{ agent.getById(m)?.name ?? '未知' }}</button>
       <button
         v-for="a in candidates"
@@ -37,7 +42,7 @@ const candidates = computed(() => agent.list.filter((a) => !memberSet.value.has(
         type="button"
         class="member-chip"
         :title="`添加 ${a.name}`"
-        @click="emit('add', a.id)"
+        @click="add(a.id)"
       >+ {{ a.name }}</button>
     </div>
   </div>

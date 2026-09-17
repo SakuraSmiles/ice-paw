@@ -1,6 +1,6 @@
 // sharedEditComponents.test.ts — MA-2 抽出的三个共享编辑组件行为锁定：
 // ProjectBasicForm（单对象 v-model + 目录选择内聚）/ ProjectMembersChips
-// （chips add/remove 上交）/ ProjectContextEditor（自持加载·脏检查·分文件保存）。
+// （chips 名单 v-model 上交——U0-7 显式保存契约）/ ProjectContextEditor（自持加载·脏检查·分文件保存）。
 // 双入口（ProjectList 展开区 + 项目详情页设置 tab）共用，本文件锁组件契约。
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
@@ -100,7 +100,7 @@ describe("ProjectMembersChips", () => {
     return mount(ProjectMembersChips, { props: { memberIds } });
   }
 
-  it("已选 × 移除 / 候选 + 添加，emit 上交（不直接持久化）", async () => {
+  it("已选 × 移除 / 候选 + 添加，名单整组 v-model 上交（不直接持久化）", async () => {
     const w = mountChips(["a1"]);
     const chips = w.findAll(".member-chip");
     expect(chips).toHaveLength(2); // 1 已选 + 1 候选
@@ -108,10 +108,12 @@ describe("ProjectMembersChips", () => {
     expect(chips[0].classes()).toContain("selected");
     expect(chips[1].text()).toContain("乙");
 
+    // U0-7 契约：emit 的是新名单整组（update:memberIds），持久化上交父级显式保存
     await chips[0].trigger("click");
-    expect(w.emitted("remove")?.[0]).toEqual(["a1"]);
+    expect(w.emitted("update:memberIds")?.[0]).toEqual([[]]);
+    // 组件无状态：props 未变，第二次点击仍从 ["a1"] 出发（草稿由父级持有）
     await chips[1].trigger("click");
-    expect(w.emitted("add")?.[0]).toEqual(["a2"]);
+    expect(w.emitted("update:memberIds")?.[1]).toEqual([["a1", "a2"]]);
   });
 
   it("成员与候选都空 → 暂无可用智能体引导", () => {

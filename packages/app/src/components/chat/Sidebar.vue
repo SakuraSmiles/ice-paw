@@ -190,7 +190,7 @@ import AgentPicker from "./AgentPicker.vue";
 const chat = useChatStore();
 const agent = useAgentStore();
 // 新建会话逻辑（与欢迎页共用 useNewConversation，保证项目内限成员一致）
-const { showPicker, pickerAgentIds, ctaKind, startNew, onPickAgent } = useNewConversation();
+const { showPicker, pickerAgentIds, ctaKind, createError, startNew, onPickAgent } = useNewConversation();
 
 // MA-1：侧栏只显示用户会话——delegation 后台子会话不污染主列表（可见入口是
 // 父会话委派卡片 / 项目页任务列表）。它们仍留在 store.conversations 里：
@@ -454,10 +454,19 @@ function timeAgoLabel(dateStr: string): string {
           <span class="conv-name">新建对话</span>
         </div>
       </button>
+      <p v-if="createError" class="channel-error">
+        新建对话失败
+        <button type="button" class="conv-error-retry" @click="newChat">重试</button>
+      </p>
     </div>
 
     <!-- 会话列表（TransitionGroup：会话进出淡入、touchConversation 重排时平滑让位） -->
     <TransitionGroup v-if="!collapsed" name="conv-list" tag="nav" class="conv-list">
+      <!-- 会话列表加载失败（UI-3 批：空白列表不再静默——错误态 + 重试） -->
+      <div v-if="chat.convLoadError" key="conv-error" class="conv-error">
+        会话列表加载失败
+        <button type="button" class="conv-error-retry" @click="chat.loadConversations()">重试</button>
+      </div>
       <!-- 骨架屏只在「无可显示内容」时出现（首次加载语义）。若不加空判断，
            委派等触发的后台列表刷新会让骨架屏叠在仍可见的列表上方闪现 +
            布局下压再弹回（v-for 不在 v-if 互斥链内）——即"委派时侧栏异常动画" -->
@@ -619,7 +628,15 @@ function timeAgoLabel(dateStr: string): string {
                   <span class="conv-name">新建对话</span>
                 </div>
               </button>
+              <p v-if="createError" class="channel-error">
+                新建对话失败
+                <button type="button" class="conv-error-retry" @click="newChatFromFlyout">重试</button>
+              </p>
               <div class="flyout-new-divider"></div>
+              <div v-if="chat.convLoadError" class="conv-error">
+                会话列表加载失败
+                <button type="button" class="conv-error-retry" @click="chat.loadConversations()">重试</button>
+              </div>
               <div v-if="chat.convLoading && scopedConversations.length === 0" class="conv-skeleton">
                 <div class="conv-skeleton-line" />
                 <div class="conv-skeleton-line" />
@@ -803,6 +820,24 @@ function timeAgoLabel(dateStr: string): string {
   font-size: var(--ip-text-body-sm-size);
   color: var(--ip-color-text-tertiary);
 }
+
+/* 会话列表加载失败（UI-3 批）：inline 错误 + 重试 */
+.conv-error {
+  padding: 8px 12px;
+  font-size: var(--ip-text-body-sm-size);
+  color: var(--ip-danger-base);
+}
+.conv-error-retry {
+  border: none;
+  background: none;
+  padding: 0 2px;
+  font: inherit;
+  color: var(--ip-danger-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.conv-error-retry:hover { opacity: 0.8; }
 
 /* 骨架屏：侧栏会话列表加载中 */
 .conv-skeleton { display: flex; flex-direction: column; gap: var(--ip-spacing-2); padding: 8px 12px; }

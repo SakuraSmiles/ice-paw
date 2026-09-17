@@ -1303,8 +1303,24 @@ const RESUMABLE_REASONS = new Set([
       @action="router.push('/settings/agents')"
       @dismiss="chat.clearConvError()"
     />
+    <!-- 消息加载失败（UI-3 批：空白消息区不再静默——错误态 + 重试） -->
+    <ErrorBanner
+      v-if="chat.msgLoadError"
+      variant="banner"
+      class="chat-error-banner"
+      title="消息加载失败"
+      :detail="chat.msgLoadError.msg + '。下方可能不是最新内容，点重试重新加载。'"
+      retry-label="重试"
+      dismissible
+      @retry="chat.msgLoadError.retry()"
+      @dismiss="chat.msgLoadError = null"
+    />
     <!-- 分页加载指示器 -->
     <div v-if="chat.loadingMore" class="load-more-hint">加载更早消息…</div>
+    <div v-if="chat.loadMoreError" class="load-more-hint load-more-error">
+      加载更早消息失败
+      <button type="button" class="load-more-retry" @click="chat.loadMoreMessages()">重试</button>
+    </div>
     <div v-if="!chat.hasMore && chat.pagedOnce" class="load-more-hint load-more-end">已显示全部消息</div>
 
     <div v-if="chat.msgLoading && chat.messages.length === 0" class="msg-skeleton">
@@ -1907,6 +1923,18 @@ const RESUMABLE_REASONS = new Set([
 /* ===== 分页指示 ===== */
 .load-more-hint { text-align:center; font-size:var(--ip-text-caption-size); color:var(--ip-color-text-tertiary); padding:8px var(--msg-col-right) 8px 48px; }
 .load-more-end { color:var(--ip-color-text-disabled); }
+.load-more-error { color: var(--ip-danger-base); }
+.load-more-retry {
+  border: none;
+  background: none;
+  padding: 0 2px;
+  font: inherit;
+  color: var(--ip-danger-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.load-more-retry:hover { opacity: 0.8; }
 
 /* ===== 日期分组 ===== */
 .date-divider { display:flex; align-items:center; gap: var(--ip-spacing-3); padding:20px var(--msg-col-right) 8px 48px; font-size:var(--ip-text-caption-size); color:var(--ip-color-text-disabled); }

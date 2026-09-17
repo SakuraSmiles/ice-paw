@@ -23,6 +23,10 @@
 //!   （终止守卫删占位；cancel_top 场景行保留为空）
 //! - `empty_placeholder`：空 assistant 占位（content+blocks 全空、无 error 无事件）
 //!   ——step-0 修复前的历史数据容忍项，新数据不应再出现
+//! - `election_vote_row`：频道选举投票行——cast_vote 物化的 assistant 行 + 事件，
+//!   其 turn 为合成 turn `election:{id}`（无 turn_ended，不参与比对）；行侧位置
+//!   归因会把它误挂到上一个真实 turn 造成 MISSING_IN_DERIVED 假阳性，故按事件
+//!   turn 前缀 `election:` 先行跳过（事件与行都在场，不是真丢行）
 //! - `summary_row` / `non_conversational_role`：摘要行 / tool 角色行（双侧本就不进上下文）
 //! - `derived_unmapped_turn`：回放消息无法归属任何事件 turn（异常，待观察）
 //!
@@ -171,6 +175,22 @@ pub async fn reconcile_session(
     }
     report.turns_total = turn_order.len();
 
+    // 频道选举投票行：cast_vote 物化的 assistant 行 + assistant_message 事件，
+    // 其 turn 为合成 turn `election:{id}`（无 turn_ended，不参与逐 turn 比对）。
+    // 行侧位置归因没有该 turn 的 user 锚点，会把投票行误挂到上一个真实 turn →
+    // MISSING_IN_DERIVED 假阳性。事件与行都在场（emitter 正确），故按事件
+    // turn 前缀先行跳过，不是真丢行。
+    let mut election_vote_ids: HashSet<&str> = HashSet::new();
+    for ev in &events {
+        if ev.kind == "assistant_message" {
+            if let (Some(t), Some(mid)) = (ev.turn_id.as_deref(), ev.message_id.as_deref()) {
+                if t.starts_with("election:") {
+                    election_vote_ids.insert(mid);
+                }
+            }
+        }
+    }
+
     // A 侧：legacy 行提取 + 行→turn 归属（锚点 = 该 turn 的 user 行；其后的行
     // 顺次归属，直到下一个事件 turn 锚点。锚点前的行 = 事件纪元之前）。
     let evented_turn_ids: HashSet<&str> = turn_order.iter().map(|s| s.as_str()).collect();
@@ -183,6 +203,10 @@ pub async fn reconcile_session(
         }
         if !matches!(row.role.as_str(), "user" | "assistant" | "system") {
             skip.add("non_conversational_role", 1);
+            continue;
+        }
+        if election_vote_ids.contains(row.id.as_str()) {
+            skip.add("election_vote_row", 1);
             continue;
         }
         if row.role == "user" && evented_turn_ids.contains(row.id.as_str()) {

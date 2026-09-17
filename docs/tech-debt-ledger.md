@@ -161,6 +161,41 @@
 | T17 | pending 积压放大 reconcile incomplete_turn 计数：cross:* turn 无 turn_ended 属设计（pending 不是回合），排查对账报告时排除该前缀（reconcile.rs 模块头已补注） | 低 | 👁 |
 | T18 | 失焦 OS 通知无补发（通知恰一次语义刻意取舍——错过即看 badge） | 低 | 👁 |
 
+## 批次 U — 0.8.x 版本目标（2026-09-17 四路审计 + 生产取证 + in-app agent 报告交叉）
+
+> 0.8.2 发版后全工程体检，定为 **0.8.x 大版本整线目标**：U0 快修（0.8.3）→ U1 稳定性（0.8.4）→ U2 数据生命周期（0.8.5）→ U3 架构刀与测试补课。输入 = 四路并行审计（后端架构 / 前端架构与状态 / 工程卫生 / UX 十则）+ 生产取证（日志 / DB / 崩溃信号）+ 用户 in-app agent 自查报告交叉核实。
+>
+> **干净面**：SQL 注入零 / N+1 零 / 事件 inline-await 铁律零违例 / 前端类型卫生优秀（@ts-ignore 0、any 仅 4 处）/ bridge 零绕过 / TODO·console·死代码近零 / 编辑契约四负债已迁二。风险集中在**门禁没接电、少数静默失败、层级倒置与巨件、视觉令牌存量**。
+>
+> **in-app agent 报告交叉核实（防复活）**：R1 事实过时（41 commit 已随 0.8.2 推平，ahead=0 实证；仅留「批次内多推 checkpoint」惯例）；R2 半错——ChatMessages 有六份专项测试（channel / frozen-round / process-narrative / stats-fastpath / thinking-aggregate / tool-collapse，mount+DOM 断言），「防线完全缺席」不成立，真问题 = 纯函数困在 2324 行 SFC（→U3-3）；**R3 误报驳回**——vue ^3.5.13，且 Vue3 reactive Map.set 对已有键本就触发 SET 键级依赖，生产流式渲染日常在用即反证；R4 部分采纳（核心 = CI 接电 U0-2；coverage 门槛/四元组单人仓过重→观察）；R6 不采纳（localStorage 写频与体量无实害）；R9 半采纳（.gitattributes 已锁源码 LF，editorconfig 只补编辑器侧，无急迫性）；R5/R7/R8/R10 采纳并入下列相应项。生产取证另给观察池补证据：UE5 重连 UX（9-14 单日断线懒重启 83 次实锤）、回合中途预算复查（DB 膨胀同源）。
+
+| # | 项 | 严重度 | 状态 |
+|---|---|---|---|
+| U0-1 | **0.8.2 CI clippy 红**：walk_json_for_images String 臂嵌套 if 触发 clippy 1.98 collapsible_match（本地工具链旧未拦）——match guard 收拢已修（2026-09-17 待 commit push）；教训：本地与 CI clippy 版本漂移，考虑 rust-toolchain.toml 钉版或发版清单加「CI 同款 clippy」一步 | 高（main CI 红） | ✅ 已修待 commit |
+| U0-2 | **CI 从未跑过前端 673 个 vitest**：ci.yml frontend job 无 test 步骤（脚本已在根 package.json `pnpm -r test`）——一行级改动，80 个测试文件形同虚设 | 高 | ✅ 已修待 commit |
+| U0-3 | CI 缺 session_event_log_e2e / session_reconcile_e2e 两集成测试文件（事件日志与对账守门人本身无门禁） | 中 | ✅ 已修待 commit |
+| U0-4 | 发版文档三处：CHANGELOG 缺 0.8.2 档 / README 徽章停 0.4.0 / CLAUDE.md 编辑契约负债清单过时（通用页各卡、项目背景实测已迁完，真剩 = 会话标题 + 项目成员 chips）——发版流程补一步检查 | 中低 | ✅ 已修待 commit |
+| U0-5 | **展示字体 LXGW WenKai 死资产**：tokens.css --ip-font-display 引用之、public/fonts/wenkai/ ~90 个 @font-face 分片从未被任何文件 import——展示字体真机恒静默回退宋体。一行 import 接电（验首启离线 + 子集体积）或摘除资产改令牌 | 中高 | ✅ 已修待 commit（import 接电）|
+| U0-6 | **会话标题改名 = 编辑契约最后真负债**且双违规：blur 即存（ChatHeader.vue:305）+ 失败仅 console 零反馈（:210）→ 迁草稿 + 显式保存 + 失败可见 | 中高 | ✅ 已修待 commit（含 7 用例回归锁）|
+| U0-7 | ProjectMembersChips 点击 chip 即持久化（编辑契约另一残留，组件头注释自认）→ 迁显式 | 中低 | ✅ 已修待 commit（v-model 草稿 + 三测试改写）|
+| U0-8 | channel_cmd.rs:211 统筹移除后会话改投 `let _ = set_conversation_agent` 静默吞错——频道路由语义错位且无日志 | 中 | ✅ 已修待 commit |
+| U0-9 | GroupedSelect 主输入框 outline:none 无焦点替代（键盘可达性实伤，GroupedSelect.vue:253） | 中低 | ✅ 已修待 commit |
+| U0-10 | McpSettings 琥珀警告块六色 hex 与 --ip-warning-* 语义层平行（暗色不跟随，McpSettings.vue:587） | 中低 | ✅ 已修待 commit |
+| U0-11 | 顺手包：死依赖 ×3（@fontsource-variable/jetbrains-mono / tauri plugin-fs JS 绑定 / plugin-notification JS 绑定）/ 死导出（avatar.ts compressAvatar×2 ~40 行、useResolvedChain）/ 孤儿文件 src/loop/mod.rs（与真实现 harness/loop/ 同名误导）/ useChatEvents 清理链 race（App.vue onMounted await 前卸载 → 监听悬挂）/ useScrollFollow 短 timer 登记 + anchors Map LRU / stopGeneration 乐观翻转 + 静默 catch / agent_cmd update_model_snapshot 两处 `let _ =` / .editorconfig（不含 end_of_line） | 低 | ✅ 已修待 commit |
+| U1-1 | **WebView2 创建失败即 panic 崩溃**：9-15/16 生产三次（HRESULT 0x8007139F → tauri app.rs:1425 expect），无重试/降级——先定位失败窗口（主窗 vs HUD 工具栏窗）再加重试 + 可读错误 | 高 | ✅ 已修待 commit（`.run` 包 catch_unwind：可读三段式对话框 + 兜底日志 + 退出码 1；未做进程内重试——0x8007139F=运行时缺失/损坏非瞬态，重试在对话框「怎么办」引导重装） |
+| U1-2 | **sendingConvId 漂移可误杀活回合**：bgStreams 恢复只置 sending 不设 sendingConvId（chat.ts:121）+ 后台会话 chat:done 早退不清 + 超时拿陈旧 id 探测已死会话 → 翻 sending → 第二条消息打进运行中回合（R2/R3 修复的残余缺口；先复现再修） | 高 | ✅ 已修待 commit（bg 恢复同步 sendingConvId + bg chat:done 清陈旧 id + 2 用例） |
+| U1-3 | **前端核心路径失败静默族**：会话/消息加载失败仅 console → 空白列表无错误态（chat.ts:59/178/205）/ 新建会话失败点击零反馈（useNewConversation.ts:54）/ 项目成员·归档·永久删除失败无提示（ProjectList.vue:230 等 8 处）→ 统一 loadError/banner 模式（GeneralSettings 已是好样板） | 中高 | ✅ 已修待 commit（convLoadError/msgLoadError/loadMoreError + createError + ProjectList actionError 全链路可见） |
+| U1-4 | **read_route 非绿：频道会话 reconcile_diffs 未消化**：9-11 密发 45 条 ERROR（频道 19660d0f diffs:4 ×28 + 3d52a0d1 diffs:2 ×17），此后每读必告警「派生历史可能缺行」——跑 reconcile_session 定 diff 类型（疑频道 sender 打标/sweep 改行 vs 事件回放），emitter 修或文档化容忍 | 中高 | ✅ 已修待 commit（election: 投票行按事件 turn 前缀跳过归因，消假 MISSING_IN_DERIVED） |
+| U1-5 | loadMoreMessages A→B→A 往返守卫失效（loadingMore 被 loadMessages 重置后旧分页响应放行，R2 残余，chat.ts:186-210） | 中低 | ✅ 已修待 commit（msgEpoch 计数器守卫 + 用例） |
+| U2-1 | **DB 膨胀治理**：一周 212MB→737MB（UE5 截图会话期；图片类 tool_result 无保留/压缩/外置策略）+ AppData *.bak 1.6GB 无清理策略——先关窗只读普查表分布再定策 | 中高 | 📋 |
+| U2-2 | 日志体积卫生：「请求携带 N 工具定义」全量工具名列表截断（198 次/日）+ 内置 server stderr 横幅去重（单日 11.9MB 的主要构成） | 低 | 📋 |
+| U3-1 | **agent_yaml.rs 六连「同步 IO + 复制粘贴」**：6 个 async 命令内 std::fs read/write/rename（:287 等 12 处跑在 tokio worker）+ read-modify-atomic-write 全套重复五遍——抽公共原子改写 helper 一次治两病 | 中 | 📋 |
+| U3-2 | **层次倒置两处**：① harness 反向依赖 commands（channel.rs:60 / inbox.rs:66 / delegate.rs:48 调 commands::model_profile_cmd::production_fallback_plan——fallback 计划应下沉 harness）；② infra/protocol/mod.rs:31 re-export 上游 LlmProvider 成环（trait 应归 protocol）。与 loop 去 AppHandle 化方向相悖 | 中 | 📋 |
+| U3-3 | **ChatMessages 第一刀**：三胶囊 + 思考聚合 + 工具折叠 + 过程收纳段抽 MessageGroupCapsules 子组件 + 纯函数下沉 utils（约束：六份专项测试断言面零破坏） | 中 | 📋 |
+| U3-4 | crypto.rs 474 行零测试（XChaCha20-Poly1305 加解密 + blake2b 密钥派生，与 K1 同域）——补单测 | 中 | 📋 |
+| U3-5 | 观察升级候选（0.8.x 视余量，否则 0.9）：loop_engine 1431 行持续回涨（R-D4：697→1431 已超拆分前）再拆 / agent_cmd.rs 1841 God module（trait+SQL+DTO+yaml 镜像+频道级联同居）/ chat.ts 三份流式复位清单手工同步 / composables 两对复制（事件接线脚手架、分页三件套）抽象 | 中 | 👁→📋 待拍板 |
+| U3-6 | 视觉令牌存量收编（渐进、一次一个组件域防 CSS 回归无测试网）：间距裸 px 646 处 58 文件（布局级 gap≥4px 174 处）/ hex 47 处 19 文件（#fff×16、AttachmentDetail Tailwind 原色、TrajectoryTimeline cssVar 二参回退）/ 非 token 字号 30 处（ErrorBanner 11.5/12.5px 脱档最刺眼）/ ✕✓✦ 文本字形 6 处——Q14/Q15 计数刷新，轨迹族 z-index 8 处聚集地已定位 | 低（体量大） | 👁 |
+
 ## 安全项
 
 | # | 项 | 备注 |

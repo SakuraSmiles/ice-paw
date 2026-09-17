@@ -584,9 +584,10 @@ const filteredBuiltinGroups = computed(() => {
 
 .loading-state { padding: 20px; text-align: center; color: var(--ip-color-text-tertiary); font-size: var(--ip-text-body-sm-size); }
 .empty-hint { padding: 16px 12px; text-align: center; font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
-.node-warning { display: flex; align-items: flex-start; gap: var(--ip-spacing-2); margin: 0 0 12px; padding: 10px 14px; background: #fffbeb; border: 1px solid #fde68a; border-radius: var(--ip-radius-md); font-size: var(--ip-text-body-sm-size); color: #92400e; }
-.node-warning a { color: #d97706; font-weight: var(--ip-font-weight-medium); }
-.node-warn-icon { display: flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; background: #f59e0b; color: #fff; font-size: 12px; font-weight: 700; flex-shrink: 0; }
+/* 语义层 warning 三件套（--ip-warning-* 三区同步，暗色自动跟随；U0-10 收编裸 hex） */
+.node-warning { display: flex; align-items: flex-start; gap: var(--ip-spacing-2); margin: 0 0 12px; padding: 10px 14px; background: var(--ip-warning-bg); border: 1px solid var(--ip-warning-border); border-radius: var(--ip-radius-md); font-size: var(--ip-text-body-sm-size); color: var(--ip-warning-text); }
+.node-warning a { color: var(--ip-warning-base); font-weight: var(--ip-font-weight-medium); }
+.node-warn-icon { display: flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; background: var(--ip-warning-base); color: #fff; font-size: 12px; font-weight: 700; flex-shrink: 0; }
 
 /* ---- GLM 模板卡片：折叠态对齐 new-card（虚线入口），展开内复用 builtin-tools 列表风 ---- */
 .glm-card { border: 1px dashed var(--ip-color-border-default); background-color: transparent; }

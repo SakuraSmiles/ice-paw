@@ -5,7 +5,7 @@
 //
 // 失败降级：console.error + 空表——引用链选择器回落为空态提示，不卡设置页。
 
-import { computed, ref } from "vue";
+import { ref } from "vue";
 import { bridge } from "../api/bridge";
 import type { ModelProfile } from "../types";
 
@@ -51,9 +51,4 @@ export function resolveProfileChain(list: ModelProfile[], ids: string[]): ModelP
 /** 引用链是否含指定 id（卡 A 编辑守卫的判据——改 provider/model 弹重建提示用） */
 export function chainReferences(chainIds: string[], profileId: string): boolean {
   return chainIds.includes(profileId);
-}
-
-/** 供模板直接用的派生：当前引用链（悬空引用过滤后） */
-export function useResolvedChain(ids: () => string[]) {
-  return computed(() => resolveProfileChain(profiles.value, ids()));
 }

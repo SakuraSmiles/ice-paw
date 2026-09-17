@@ -24,7 +24,7 @@ const router = useRouter();
 const chat = useChatStore();
 const project = useProjectStore();
 const agentStore = useAgentStore();
-const { showPicker, pickerAgentIds, ctaKind, ctaLabel, startNew, onPickAgent } = useNewConversation();
+const { showPicker, pickerAgentIds, ctaKind, ctaLabel, createError, startNew, onPickAgent } = useNewConversation();
 
 const inProject = computed(() => project.activeProjectId !== null);
 const projectName = computed(() => project.activeProject?.name ?? "");
@@ -111,6 +111,11 @@ function openContextSettings() {
         <TriangleAlert :size="12" />
         <span>智能体未配置 API Key，发送消息会失败</span>
         <span class="keyless-action">去配置</span>
+      </button>
+      <button v-if="createError" class="welcome-create-error" @click="startNew">
+        <TriangleAlert :size="12" />
+        <span>新建对话失败：{{ createError }}</span>
+        <span class="welcome-create-error-action">重试</span>
       </button>
       <button
         v-if="ctxState === 'ready' || ctxState === 'empty'"
@@ -237,4 +242,21 @@ function openContextSettings() {
   cursor: pointer;
 }
 .keyless-action { font-weight: var(--ip-font-weight-medium); text-decoration: underline; text-underline-offset: 2px; }
+
+/* 新建会话失败（U1-3：点击零反馈 → danger 语义 inline 错误态 + 重试可见） */
+.welcome-create-error {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--ip-danger-border);
+  border-radius: var(--ip-radius-full);
+  background-color: var(--ip-danger-bg);
+  color: var(--ip-danger-text);
+  font-family: inherit;
+  font-size: var(--ip-text-caption-size);
+  cursor: pointer;
+}
+.welcome-create-error-action { font-weight: var(--ip-font-weight-medium); text-decoration: underline; text-underline-offset: 2px; }
 </style>

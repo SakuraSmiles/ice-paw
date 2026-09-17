@@ -104,6 +104,8 @@ const editForm = reactive({
   description: "",
   workspacePath: "",
 });
+/** 成员草稿（U0-7：与基础信息同批显式提交——chips 点击只改草稿不再即存） */
+const editMembers = ref<string[]>([]);
 const editError = ref("");
 const savingEdit = ref(false);
 
@@ -117,6 +119,7 @@ function toggleEdit(p: Project) {
   editForm.name = p.name;
   editForm.description = p.description || "";
   editForm.workspacePath = p.workspace_path || "";
+  editMembers.value = memberIdsOf(p);
   editError.value = "";
 }
 
@@ -134,6 +137,12 @@ async function saveEdit(p: Project) {
   savingEdit.value = true;
   editError.value = "";
   try {
+    // 成员变更（全量替换一次调用；含频道自动建/投影维护）先于基础信息——
+    // 半途失败时 editError 可见，重试幂等
+    const origMembers = memberIdsOf(p);
+    if (JSON.stringify([...editMembers.value].sort()) !== JSON.stringify([...origMembers].sort())) {
+      await bridge.projects.setAgents(p.id, editMembers.value.map((id) => [id, "member"]));
+    }
     await project.update({
       id: p.id,
       name: editForm.name.trim(),
@@ -141,6 +150,10 @@ async function saveEdit(p: Project) {
       workspace_path: editForm.workspacePath.trim() || null,
       // 身份字段（头像/主题色已移除，avatar/theme_color 不进 payload——库存值原地保留）
     });
+    // 成员有实际变更时刷新会话缓存（首成员落位自动建频道——侧栏频道行立即可见）
+    if (editMembers.value.length !== origMembers.length || !editMembers.value.every((id) => origMembers.includes(id))) {
+      await chat.loadConversations();
+    }
     expandedId.value = null;
   } catch (e) {
     editError.value = e instanceof Error ? e.message : "保存失败";
@@ -152,24 +165,6 @@ async function saveEdit(p: Project) {
 function memberIdsOf(p: Project): string[] {
   return (p.agents ?? []).map((a) => a.agent_id);
 }
-async function addMember(p: Project, agentId: string) {
-  try {
-    await bridge.projects.addAgent(p.id, agentId, "member");
-    await project.load(true);
-    // 首个成员落位后端自动建频道——刷新会话缓存让侧栏频道行立即可见
-    await chat.loadConversations();
-  } catch (e) {
-    console.error("添加成员失败:", e);
-  }
-}
-async function removeMember(p: Project, agentId: string) {
-  try {
-    await bridge.projects.removeAgent(p.id, agentId);
-    await project.load(true);
-  } catch (e) {
-    console.error("移除成员失败:", e);
-  }
-}
 
 // ===== 归档 / 恢复 / 永久删除 =====
 const showArchived = ref(false);
@@ -177,6 +172,8 @@ const permTarget = ref<Project | null>(null);
 const permMode = ref<"loose" | "delete">("loose");
 const permDeleting = ref(false);
 const confirmArchiveTarget = ref<Project | null>(null);
+// 归档/恢复/永久删除失败（U1-3：console.error 静默 → 页面级可见错误横幅）
+const actionError = ref("");
 
 function convCountOf(p: Project | null): number {
   if (!p) return 0;
@@ -191,12 +188,14 @@ async function confirmArchive() {
   const p = confirmArchiveTarget.value;
   if (!p) return;
   confirmArchiveTarget.value = null;
+  actionError.value = "";
   if (expandedId.value === p.id) expandedId.value = null;
   try {
     await project.archive(p.id);
     await chat.loadConversations();
   } catch (e) {
     console.error("归档项目失败:", e);
+    actionError.value = `归档「${p.name}」失败：${e instanceof Error ? e.message : String(e)}`;
   }
 }
 
@@ -205,11 +204,13 @@ function cancelArchive() {
 }
 
 async function unarchiveProject(p: Project) {
+  actionError.value = "";
   try {
     await project.unarchive(p.id);
     await chat.loadConversations();
   } catch (e) {
     console.error("恢复项目失败:", e);
+    actionError.value = `恢复「${p.name}」失败：${e instanceof Error ? e.message : String(e)}`;
   }
 }
 
@@ -222,12 +223,14 @@ async function confirmPermDelete() {
   const p = permTarget.value;
   if (!p || permDeleting.value) return;
   permDeleting.value = true;
+  actionError.value = "";
   try {
     await project.permanentDelete(p.id, permMode.value === "delete");
     permTarget.value = null;
     await chat.loadConversations(); // 会话去向变更（转散落/已删），刷新缓存
   } catch (e) {
     console.error("永久删除项目失败:", e);
+    actionError.value = `永久删除「${p.name}」失败：${e instanceof Error ? e.message : String(e)}`;
   } finally {
     permDeleting.value = false;
   }
@@ -282,6 +285,16 @@ onMounted(() => {
     <div class="content-header">
       <h2 class="content-title">项目</h2>
       <span class="header-hint">以项目隔离工作区、绑定源码目录、组织多 agent 协作</span>
+    </div>
+
+    <!-- 归档/恢复/永久删除失败（U1-3）：页面级可见错误横幅，常驻至关闭 -->
+    <div v-if="actionError" class="action-error" role="alert">
+      <span class="action-error-text">{{ actionError }}</span>
+      <button type="button" class="action-error-close" aria-label="关闭" @click="actionError = ''">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+        </svg>
+      </button>
     </div>
 
     <div class="proj-list">
@@ -428,11 +441,7 @@ onMounted(() => {
             :model-value="editForm"
             @update:model-value="Object.assign(editForm, $event)"
           />
-          <ProjectMembersChips
-            :member-ids="memberIdsOf(p)"
-            @add="(agentId) => addMember(p, agentId)"
-            @remove="(agentId) => removeMember(p, agentId)"
-          />
+          <ProjectMembersChips v-model:member-ids="editMembers" />
           <ProjectContextEditor :project-id="p.id" />
 
           <div v-if="editError" class="form-error">{{ editError }}</div>
@@ -651,6 +660,35 @@ onMounted(() => {
 /* 项目背景编辑区样式已随 ProjectContextEditor 组件自持搬走 */
 
 .form-error { font-size: var(--ip-text-caption-size); color: var(--ip-danger-text); }
+
+/* 归档/恢复/永久删除失败横幅（U1-3） */
+.action-error {
+  display: flex;
+  align-items: center;
+  gap: var(--ip-spacing-2);
+  margin: 0 28px var(--ip-spacing-3);
+  padding: 8px 12px;
+  border: 1px solid var(--ip-danger-border);
+  border-radius: var(--ip-radius-md);
+  background-color: var(--ip-danger-bg);
+  color: var(--ip-danger-text);
+  font-size: var(--ip-text-body-sm-size);
+  line-height: 1.5;
+}
+.action-error-text { flex: 1; min-width: 0; }
+.action-error-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border: none;
+  background: none;
+  padding: 2px;
+  color: var(--ip-danger-text);
+  cursor: pointer;
+  border-radius: var(--ip-radius-sm);
+}
+.action-error-close:hover { background-color: var(--ip-color-bg-tertiary); }
 
 .form-actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--ip-spacing-2); }
 

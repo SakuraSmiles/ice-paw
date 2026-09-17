@@ -1,0 +1,21 @@
+# EditorConfig — 编辑器侧统一基础格式（2026-09-17 U0-11）
+# 换行符不在此设（无 end_of_line）：.gitattributes 已锁源码 LF，
+# Windows 工作区存在本地策略差异，双处强设会打架（批次 R R9 结论）。
+root = true
+
+[*]
+charset = utf-8
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.py]
+indent_style = space
+indent_size = 4
+
+[*.{md,yml,yaml,json,ts,tsx,js,mjs,cjs,vue,css,html}]
+indent_style = space
+indent_size = 2
+
+[*.{rs,toml}]
+indent_style = space
+indent_size = 4

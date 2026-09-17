@@ -206,10 +206,12 @@ pub async fn set_channel_coordinator(
                 return Ok(()); // 本就空缺：幂等成功
             };
             repo::project::set_member_role(pool, &pid, &cur.agent_id, "member").await?;
-            // 投影回落 joined_at 最早成员（ensure 同款语义；零成员由 FK 不可能）
+            // 投影回落 joined_at 最早成员（ensure 同款语义；零成员由 FK 不可能）。
+            // 与上方任命分支同款 `?` 传播：失败静默吞掉会留下「频道路由仍指向
+            // 已罢免统筹者」的语义错位且无任何日志（U0-8）。
             if let Some(earliest) = members.iter().find(|m| m.agent_id != cur.agent_id) {
-                let _ = repo::conversation::set_conversation_agent(pool, &conv.id, &earliest.agent_id)
-                    .await;
+                repo::conversation::set_conversation_agent(pool, &conv.id, &earliest.agent_id)
+                    .await?;
             }
             event_log::log_channel_coordinator(
                 pool,

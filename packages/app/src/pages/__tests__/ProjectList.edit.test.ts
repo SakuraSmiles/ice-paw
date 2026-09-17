@@ -101,23 +101,29 @@ describe("ProjectList 编辑区（共享组件化后回归）", () => {
     expect(w.findComponent(ProjectBasicForm).exists()).toBe(false); // 收起
   });
 
-  it("成员 chips emit → add_project_agent + 列表刷新", async () => {
+  it("成员 chips 只改草稿，随「保存」全量提交（set_project_agents）并收起", async () => {
     mockBackend([project("p1", "Alpha")]);
     const w = await mountList();
     await w.find(".proj-card:not(.new-card)").trigger("click");
     await flushPromises();
 
-    w.findComponent(ProjectMembersChips).vm.$emit("add", "a2");
+    // v-model 草稿更新（a1 → a1+a2）——此刻零持久化调用（U0-7 显式保存契约）
+    w.findComponent(ProjectMembersChips).vm.$emit("update:memberIds", ["a1", "a2"]);
+    await flushPromises();
+    expect(mockInvoke.mock.calls.some(([c]) => c === "set_project_agents")).toBe(false);
+
+    await w.findAll("button").find((b) => b.text() === "保存")!.trigger("click");
     await flushPromises();
 
-    expect(mockInvoke).toHaveBeenCalledWith("add_project_agent", {
+    // 成员全量替换一次调用（含频道自动建）+ 基础信息照常 update_project，随后收起
+    expect(mockInvoke).toHaveBeenCalledWith("set_project_agents", {
       projectId: "p1",
-      agentId: "a2",
-      role: "member",
+      members: [["a1", "member"], ["a2", "member"]],
     });
-    // addMember 内 project.load(true) 刷新（二次 list_projects）
-    const listCalls = mockInvoke.mock.calls.filter(([c]) => c === "list_projects");
-    expect(listCalls.length).toBeGreaterThanOrEqual(2);
+    expect(mockInvoke).toHaveBeenCalledWith("update_project", {
+      input: expect.objectContaining({ id: "p1" }),
+    });
+    expect(w.findComponent(ProjectMembersChips).exists()).toBe(false); // 收起
   });
 
   it("空名保存拦截（不发 update_project）", async () => {

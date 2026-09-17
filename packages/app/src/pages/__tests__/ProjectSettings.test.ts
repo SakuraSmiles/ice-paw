@@ -35,12 +35,21 @@ function project(): Project {
   };
 }
 
-/** 设置页触达的后端命令按需分发（store 未预载时 ProjectList 同款兜底语义） */
+/** 设置页触达的后端命令按需分发（store 未预载时 ProjectList 同款兜底语义）。
+ *  行可变：set_project_agents 后回读反映新名单（成员保存的 read-after-write） */
 function mockBackend() {
-  mockInvoke.mockImplementation((async (cmd: string) => {
+  const row = project();
+  mockInvoke.mockImplementation((async (cmd: string, args: Record<string, unknown>) => {
     switch (cmd) {
       case "list_projects":
-        return [project()];
+        return [row];
+      case "set_project_agents": {
+        const members = (args?.members ?? []) as [string, string][];
+        row.agents = members.map(([id, role]) => ({
+          project_id: row.id, agent_id: id, role, joined_at: "2026-08-18 00:00:00",
+        }));
+        return undefined;
+      }
       case "list_all_conversations":
         return [];
       case "get_project_context":
@@ -105,11 +114,29 @@ describe("ProjectSettings 设置 tab", () => {
     expect(w.find(".form-error").text()).toContain("项目名称不能为空");
   });
 
-  it("成员 chips emit → add_project_agent + 刷新", async () => {
+  it("成员 chips 只改草稿，随「保存」全量提交并收起操作行（显式契约）", async () => {
     const { w } = await mountSettings();
-    w.findComponent(ProjectMembersChips).vm.$emit("add", "a2");
+    // 页面上「可用（非禁用）的保存」——基础信息未脏时唯一，成员卡出现操作行后 +1
+    const enabledSaves = () =>
+      w.findAll("button").filter((b) => b.text() === "保存" && b.attributes("disabled") === undefined);
+    expect(enabledSaves()).toHaveLength(0); // 未脏：成员卡无操作行
+
+    // v-model 草稿更新（a1 → a1+a2）——此刻零持久化调用
+    w.findComponent(ProjectMembersChips).vm.$emit("update:memberIds", ["a1", "a2"]);
     await flushPromises();
-    expect(mockInvoke).toHaveBeenCalledWith("add_project_agent", { projectId: "p1", agentId: "a2", role: "member" });
+    expect(mockInvoke.mock.calls.some(([c]) => c === "set_project_agents")).toBe(false);
+    expect(enabledSaves()).toHaveLength(1); // 成员卡操作行出现
+
+    await enabledSaves()[0].trigger("click");
+    await flushPromises();
+    expect(mockInvoke).toHaveBeenCalledWith("set_project_agents", {
+      projectId: "p1",
+      members: [["a1", "member"], ["a2", "member"]],
+    });
+    // 保存后权威刷新（list_projects 回读新名单）+ 会话缓存刷新，操作行收起
+    expect(mockInvoke.mock.calls.some(([c]) => c === "list_projects")).toBe(true);
+    expect(mockInvoke.mock.calls.some(([c]) => c === "list_all_conversations")).toBe(true);
+    expect(enabledSaves()).toHaveLength(0);
   });
 
   it("归档：确认弹窗 → archive_project + 回项目列表", async () => {

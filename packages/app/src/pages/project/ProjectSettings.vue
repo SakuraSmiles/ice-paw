@@ -1,9 +1,8 @@
 <script setup lang="ts">
 // ProjectSettings.vue — 项目详情「设置」tab（MA-2 Commit 7）：三共享组件编排
 // （ProjectBasicForm / ProjectMembersChips / ProjectContextEditor，与 ProjectList
-// 展开区双入口复用）+ 归档入口。与展开区的差异只在容器：这里是页面级常驻区，
-// 基础信息有显式保存/取消（表单脏检查），成员与项目背景仍是即时保存语义
-// （组件内自带保存按钮/上交持久化，见 Commit 4 边界）。
+// 展开区双入口复用）+ 归档入口。全卡显式保存契约：基础信息与成员各持草稿 +
+// 脏检查驱动的保存/取消（U0-7 成员迁入）；项目背景组件自持草稿 + 独立保存钮。
 import { computed, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useProjectStore } from "../../stores/project";
@@ -70,24 +69,39 @@ async function save() {
   }
 }
 
-// ---- 成员（即时持久化，与 ProjectList 展开区同款） ----
+// ---- 成员（显式保存契约：chips 点击只改草稿，「保存」全量提交一次——U0-7
+//      摘除点击即存；dirty 才出现操作行，取消回滚，失败贴卡可见） ----
 const memberIds = computed(() => (current.value?.agents ?? []).map((a) => a.agent_id));
-async function addMember(agentId: string) {
+const memberDraft = ref<string[]>([]);
+const memberError = ref("");
+const savingMembers = ref(false);
+const membersDirty = computed(() =>
+  JSON.stringify([...memberIds.value].sort()) !== JSON.stringify([...memberDraft.value].sort()),
+);
+
+function resetMembers() {
+  memberDraft.value = [...memberIds.value];
+  memberError.value = "";
+}
+watch(projectId, resetMembers, { immediate: true });
+// 权威列表刷新（他处保存/后台同步）时草稿未动则跟随，动了保持用户草稿
+watch(memberIds, () => {
+  if (!membersDirty.value) memberDraft.value = [...memberIds.value];
+});
+
+async function saveMembers() {
+  if (!current.value || savingMembers.value) return;
+  savingMembers.value = true;
+  memberError.value = "";
   try {
-    await bridge.projects.addAgent(projectId.value, agentId, "member");
+    await bridge.projects.setAgents(projectId.value, memberDraft.value.map((id) => [id, "member"]));
     await project.load(true);
-    // 首个成员落位后端自动建频道——刷新会话缓存让侧栏频道行立即可见
+    // 成员变化可能建/动频道（首成员自动建、投影维护）——刷新会话缓存让侧栏立即可见
     await chat.loadConversations();
   } catch (e) {
-    console.error("添加成员失败:", e);
-  }
-}
-async function removeMember(agentId: string) {
-  try {
-    await bridge.projects.removeAgent(projectId.value, agentId);
-    await project.load(true);
-  } catch (e) {
-    console.error("移除成员失败:", e);
+    memberError.value = e instanceof Error ? e.message : "保存成员失败";
+  } finally {
+    savingMembers.value = false;
   }
 }
 
@@ -129,8 +143,15 @@ async function archive() {
 
     <section class="settings-card">
       <h3 class="card-title">成员</h3>
-      <p class="card-hint">项目成员可被委派任务，也可在项目空间内开新会话（增删即时生效）</p>
-      <ProjectMembersChips :member-ids="memberIds" @add="addMember" @remove="removeMember" />
+      <p class="card-hint">项目成员可被委派任务，也可在项目空间内开新会话</p>
+      <ProjectMembersChips v-model:member-ids="memberDraft" />
+      <div v-if="memberError" class="form-error">{{ memberError }}</div>
+      <div v-if="membersDirty" class="form-actions">
+        <button class="btn-link" :disabled="savingMembers" @click="resetMembers">取消</button>
+        <button class="btn btn-primary btn-sm" :disabled="savingMembers" @click="saveMembers">
+          {{ savingMembers ? "保存中" : "保存" }}
+        </button>
+      </div>
     </section>
 
     <section class="settings-card">

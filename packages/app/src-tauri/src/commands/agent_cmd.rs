@@ -524,14 +524,22 @@ impl AgentCmd for SqlAgentCmd {
                 .await
             {
                 Ok(cred) => {
-                    let _ = repo::agent::update_model_snapshot(
+                    // 快照回写失败不阻塞对话（快照列仅显示用，下轮解析会再写），
+                    // 但不再静默吞（U0-11）：warn 留排查线索
+                    if let Err(e) = repo::agent::update_model_snapshot(
                         &self.pool,
                         &agent.id,
                         &cred.profile.provider,
                         &cred.profile.model,
                         cred.base_url.as_deref(),
                     )
-                    .await;
+                    .await
+                    {
+                        tracing::warn!(
+                            target: "ice_paw.agent",
+                            "agent {agent_id} 模型快照回写失败（仅显示用，不阻塞）: {e}"
+                        );
+                    }
                     agent.provider = cred.profile.provider.clone();
                     agent.model = cred.profile.model.clone();
                     (cred.api_key, cred.base_url)
@@ -783,14 +791,23 @@ impl AgentCmd for SqlAgentCmd {
         // 引用快照回写：repo update 落引用列后紧跟写快照三列（值变才写），再取
         // 新行让下游（yaml 镜像 / DTO 返回）都拿到解析后的模型身份
         let row = if let Some((provider, model, base_url)) = profile_snapshot {
-            let _ = repo::agent::update_model_snapshot(
+            // 快照回写失败不阻塞更新主流程（快照列仅显示用，下轮解析会再写），
+            // 但不再静默吞（U0-11）：warn 留排查线索
+            if let Err(e) = repo::agent::update_model_snapshot(
                 &self.pool,
                 &input.id,
                 &provider,
                 &model,
                 base_url.as_deref(),
             )
-            .await;
+            .await
+            {
+                tracing::warn!(
+                    target: "ice_paw.agent",
+                    "agent {} 模型快照回写失败（仅显示用，不阻塞）: {e}",
+                    input.id
+                );
+            }
             repo::agent::get_by_id(&self.pool, &input.id).await?
         } else {
             row

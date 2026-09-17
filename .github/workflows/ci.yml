@@ -74,7 +74,7 @@ jobs:
         run: cargo check --profile ci
 
       - name: cargo test
-        run: "cargo test --profile ci --lib && cargo test --profile ci --test provider_test && cargo test --profile ci --test message_repo_test && cargo test --profile ci --test memory_e2e"
+        run: "cargo test --profile ci --lib && cargo test --profile ci --test provider_test && cargo test --profile ci --test message_repo_test && cargo test --profile ci --test memory_e2e && cargo test --profile ci --test session_event_log_e2e && cargo test --profile ci --test session_reconcile_e2e"
 
       - name: cargo clippy
         run: "cargo clippy --profile ci --lib -- -D warnings"
@@ -109,6 +109,11 @@ jobs:
 
       - name: Lint
         run: pnpm run lint
+
+      # 2026-09-17 U0-2：前端测试进 CI（此前 673 个 vitest 从未在 CI 跑过，
+      # 本地才是唯一门禁）。根 package.json `test` = `pnpm -r test` 递归各包。
+      - name: Test
+        run: pnpm test
 
       - name: Build
         run: pnpm run build

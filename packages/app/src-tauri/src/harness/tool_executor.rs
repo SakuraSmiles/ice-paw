@@ -769,16 +769,14 @@ fn walk_json_for_images(
                 walk_json_for_images(child, images, dropped);
             }
         }
-        serde_json::Value::String(s) => {
-            if s.starts_with("data:image/") {
-                if let Some(img) = decode_b64_image(s) {
-                    if images.len() < MAX_EXTRACTED_IMAGES {
-                        images.push(img);
-                        *s = "[图片已提取为图像块，模型可直接查看]".to_string();
-                    } else {
-                        *dropped += 1;
-                        *s = "[图片超出提取上限已省略]".to_string();
-                    }
+        serde_json::Value::String(s) if s.starts_with("data:image/") => {
+            if let Some(img) = decode_b64_image(s) {
+                if images.len() < MAX_EXTRACTED_IMAGES {
+                    images.push(img);
+                    *s = "[图片已提取为图像块，模型可直接查看]".to_string();
+                } else {
+                    *dropped += 1;
+                    *s = "[图片超出提取上限已省略]".to_string();
                 }
             }
         }

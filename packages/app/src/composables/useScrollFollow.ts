@@ -24,8 +24,18 @@ export interface ScrollAnchor {
 }
 
 /** 会话 id → 锚点。模块级：组件重挂载（HMR/未来多实例）也不丢阅读位置。
- *  条目极小（三个字段），随访问过的会话线性增长，无需淘汰。 */
+ *  条目极小（三个字段）但随访问过的会话线性增长——设保留上限做近似 LRU
+ *  （Map 插入序，重访先删再插刷新位；U0-11），长期使用有界。 */
 const anchors = new Map<string, ScrollAnchor>();
+const ANCHORS_MAX = 100;
+
+function rememberAnchor(cid: string, a: ScrollAnchor) {
+  anchors.delete(cid); // 重访刷新插入序（LRU 近似）
+  anchors.set(cid, a);
+  if (anchors.size > ANCHORS_MAX) {
+    anchors.delete(anchors.keys().next().value as string); // 最旧条目
+  }
+}
 
 /**
  * 恢复决策（纯函数，可测）：
@@ -236,6 +246,19 @@ export function useScrollFollow(listRef: Ref<HTMLElement | null>) {
   // ---- 锚点捕获：滚动停稳后 150ms 采样（快滑中间态无价值） ----
   let captureTimer: ReturnType<typeof setTimeout> | undefined;
 
+  // 短 timer 登记（U0-11）：校正/续拉/贴底定时器统一经 later 挂账，卸载时
+  // 全部撤销——迟到的回调不再对已卸载实例翻转 suppress/paginating
+  // （此前仅 captureTimer 被清，其余六处裸 setTimeout 悬挂至多 500ms）
+  const pendingTimers = new Set<ReturnType<typeof setTimeout>>();
+  function later(fn: () => void, ms: number) {
+    const t = setTimeout(() => {
+      pendingTimers.delete(t);
+      fn();
+    }, ms);
+    pendingTimers.add(t);
+    return t;
+  }
+
   function captureAnchor() {
     const el = listRef.value;
     const cid = chat.activeConvId;
@@ -244,7 +267,7 @@ export function useScrollFollow(listRef: Ref<HTMLElement | null>) {
     if (!el || !cid || chat.msgLoading || paginating.value || chat.messages.length === 0) return;
     const group = findTopGroupEl(el);
     if (!group) return;
-    anchors.set(cid, {
+    rememberAnchor(cid, {
       messageId: group.dataset.mid!,
       offset: group.offsetTop - el.scrollTop,
       atBottom: el.scrollHeight - el.scrollTop - el.clientHeight <= FOLLOW_THRESHOLD,
@@ -356,7 +379,7 @@ export function useScrollFollow(listRef: Ref<HTMLElement | null>) {
             // 把实测高度写进内联 contain-intrinsic-size——auto 记忆在强制窗口内不保证
             // 触发，详见其注），几何确定性不回弹 → 此处复核通常为 no-op；真漂移（图片
             // 载入改高等）时按锚补滚一次
-            setTimeout(() => {
+            later(() => {
               clearForcedRealize(forced);
               const e2 = listRef.value;
               if (e2 && fixMid) {
@@ -373,7 +396,7 @@ export function useScrollFollow(listRef: Ref<HTMLElement | null>) {
             clearForcedRealize(forced);
             // 净增 ≈0（整页并进折叠组/竞态空回）同样走续拉判定。延迟一拍脱出
             // 同步流：外层 then 尾部还有 paginating 复位，此处重入会被立即清掉
-            setTimeout(() => continueChainIfThin(chainState), 0);
+            later(() => continueChainIfThin(chainState), 0);
           }
         }
         paginating.value = false;
@@ -440,23 +463,23 @@ export function useScrollFollow(listRef: Ref<HTMLElement | null>) {
     showScrollBtn.value = false;
     // 显式贴底同步改写锚点意图：suppress 窗口内滚动事件不采样，
     // 不写会残留「读历史」旧锚点 → 回来时错误原位恢复
-    if (cid) anchors.set(cid, { messageId: "", offset: 0, atBottom: true });
+    if (cid) rememberAnchor(cid, { messageId: "", offset: 0, atBottom: true });
     el.scrollTo({ top: el.scrollHeight, behavior: smooth !== false ? "smooth" : "instant" });
     if (smooth !== false) {
       // smooth 动画期间内容可能增高（图片/流式），一次 scrollHeight 快照会停在
       // 离底差一截处（「跳到最新不准确」的根因）——动画结束后按真高度校正一次
-      setTimeout(() => {
+      later(() => {
         snapToRealBottom();
         suppressScrollCheck = false;
         refreshFollowState();
       }, 500);
     } else {
-      setTimeout(() => {
+      later(() => {
         snapToRealBottom();
         suppressScrollCheck = false;
         refreshFollowState();
         // 首帧渲染后 content-visibility 真实高度才稳定，再校一档
-        setTimeout(snapToRealBottom, 300);
+        later(snapToRealBottom, 300);
       }, 50);
     }
   }
@@ -476,7 +499,7 @@ export function useScrollFollow(listRef: Ref<HTMLElement | null>) {
     const forced = forceRealizeAbove(el, node);
     el.scrollTop = node.offsetTop - a.offset;
     await nextTick();
-    setTimeout(() => {
+    later(() => {
       // 清除即钉高（实测高度进内联 contain-intrinsic-size，几何不回弹——
       // clearForcedRealize 详注），再按锚复核——真漂移时补滚一次
       clearForcedRealize(forced);
@@ -541,6 +564,8 @@ export function useScrollFollow(listRef: Ref<HTMLElement | null>) {
     listRef.value?.removeEventListener("scroll", onScroll);
     listRef.value?.removeEventListener("wheel", onWheel);
     if (captureTimer) clearTimeout(captureTimer);
+    for (const t of pendingTimers) clearTimeout(t);
+    pendingTimers.clear();
   });
 
   return { showScrollBtn, autoFollow, paginating, scrollToBottom, restoreForConversation };

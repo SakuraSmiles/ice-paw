@@ -77,24 +77,38 @@ function handleGlobalKeydown(e: KeyboardEvent) {
   }
 }
 
+// U0-11 竞态防护：onMounted 内订阅逐个 await 握手，卸载可能先于握手完成
+// （HMR/测试快速重挂载）——迟到的监听器没人再拆卸即永久悬挂。每个 await
+// 完成后先看卸载标志：已卸载就地自拆并止步（后续 addEventListener 也不再挂）。
+let unmounted = false;
+
 onMounted(async () => {
   if (!isToolWindow) {
-    cleanupChatEvents = await useChatEvents();
+    const c1 = await useChatEvents();
+    if (unmounted) return void c1();
+    cleanupChatEvents = c1;
     // MA-3 收件箱计数（badge 数据源）：boot 批量 + 事件增量（与 chat 事件并列接线）
-    cleanupInbox = await initInbox();
+    const c2 = await initInbox();
+    if (unmounted) return void c2();
+    cleanupInbox = c2;
     // 频道 v1：频道事件通知增量 + 插话落流（同一条零轮询总线，与收件箱并列）
-    cleanupChannel = await initChannel();
+    const c3 = await initChannel();
+    if (unmounted) return void c3();
+    cleanupChannel = c3;
     loadTimezone();
     document.addEventListener("keydown", handleGlobalKeydown);
   }
   // 屏幕共享通道（批次④）：初拉通道态 + 订阅全量事件（幂等；进程级单例，重启即 Off）。
   // 工具窗（HUD）也要接线——它就是这些事件的消费者。
-  cleanupScreenChannel = await screenChannel.init();
+  const c4 = await screenChannel.init();
+  if (unmounted) return void c4();
+  cleanupScreenChannel = c4;
   document.addEventListener("dragover", handleGlobalDragOver);
   document.addEventListener("drop", handleGlobalDrop);
 });
 
 onUnmounted(() => {
+  unmounted = true;
   cleanupChatEvents?.();
   cleanupInbox?.();
   cleanupChannel?.();
