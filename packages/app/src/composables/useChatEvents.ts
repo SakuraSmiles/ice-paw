@@ -28,6 +28,8 @@ import type {
   ChatToolResultPayload,
   ChatThinkingPayload,
   ChatProcessingPayload,
+  ChatSummaryStartedPayload,
+  ChatSummaryInjectedPayload,
   ToolAuthRequestPayload,
   DelegationAuthRequestPayload,
   ConfigProposalPayload,
@@ -117,6 +119,23 @@ export async function useChatEvents(): Promise<() => void> {
     chat.resetSendTimeout();
   });
 
+  // 摘要压缩进行中信号（0.9 阶段提示）：气泡 footer「压缩历史消息中」的驱动。
+  // 摘要发生在 Pipeline 起点、先于 chat:start，故不依赖 sending；按激活会话过滤
+  // 防后台会话的摘要事件污染当前会话 footer。summary 是同步阻塞的 LLM 调用，
+  // 顺带 resetSendTimeout 撑住 60s 静默窗口。
+  await subscribe<ChatSummaryStartedPayload>("chat:summary-started", (e) => {
+    if (e.payload.conversation_id !== chat.activeConvId) return;
+    chat.resetSendTimeout();
+    chat.summarizing = true;
+  });
+
+  // 摘要完成收尾（仅成功路径 emit；失败/返回空走确定性折叠无此事件——由首 token /
+  // assistant-start 兜底复位）。此前前端未订阅此事件，本次为阶段提示接上。
+  await subscribe<ChatSummaryInjectedPayload>("chat:summary-injected", (e) => {
+    if (e.payload.conversation_id !== chat.activeConvId) return;
+    chat.summarizing = false;
+  });
+
   // MA-1 UX：委派子会话创建成功即通知——刷新会话列表让子会话行立刻可见
   //（任务胶囊有数据、运行中委派卡片可跳）。child_conversation_id 此刻起即可达，
   // 不必等完成时的 tool_result 回传。
@@ -198,6 +217,9 @@ export async function useChatEvents(): Promise<() => void> {
       return;
     }
     chat.resetSendTimeout();
+    // 首 token 复位「压缩中」：摘要失败的确定性折叠路径无 summary-injected 收尾，
+    // 流式一旦开始即表明摘要阶段已过（纯文本回合无 assistant-start 兜底，只能靠这里）。
+    chat.summarizing = false;
     chat.streamingText += e.payload.delta;
     const idx = chat.messages.length - 1;
     if (idx >= 0 && chat.messages[idx].role === "assistant") {

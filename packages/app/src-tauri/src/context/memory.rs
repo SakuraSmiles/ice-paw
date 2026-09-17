@@ -279,6 +279,19 @@ impl MemoryStage {
             "MemoryStage: 触发滚动折叠",
         );
 
+        // 0.9 阶段提示：摘要压缩进行中信号（前端气泡 footer「压缩历史消息中」）。
+        // 完成信号复用 chat:summary-injected（仅成功路径）；失败/返回空走确定性
+        // 折叠不发 injected，前端以首 token / assistant-start 兜底复位 summarizing。
+        if let Some(emitter) = ctx.emitter.as_ref() {
+            crate::harness::r#loop::emitter::emit_ser(
+                emitter.as_ref(),
+                "chat:summary-started",
+                &crate::infra::protocol::ChatSummaryStartedPayload {
+                    conversation_id: ctx.conversation_id.clone(),
+                },
+            );
+        }
+
         // 摘要是优化而非对话的前提：调用失败（网络 / 端点拒收 / 熔断跳过）绝不
         // 阻塞主对话——与「返回空」同路径降级（注入既有摘要 + 丢已覆盖前缀），
         // 下轮重试。provider 侧（summary_provider）已对失败计数熔断。

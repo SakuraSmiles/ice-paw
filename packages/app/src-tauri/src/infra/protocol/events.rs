@@ -285,6 +285,16 @@ pub struct ChatSummaryInjectedPayload {
     pub kept_count: u32,
 }
 
+/// `chat:summary-started` 事件 payload（0.9 阶段提示）
+///
+/// MemoryStage 即将发起摘要压缩时通知前端——气泡 footer 显示「压缩历史消息中」。
+/// 完成信号复用既有 `chat:summary-injected`（仅成功路径）；摘要失败/返回空走
+/// 确定性折叠不发 injected，前端以首 token / assistant-start 兜底复位 summarizing。
+#[derive(Clone, Serialize)]
+pub struct ChatSummaryStartedPayload {
+    pub conversation_id: String,
+}
+
 // === A2-3 工具授权事件 payload ===
 
 /// `chat:tool-auth-request` 事件 payload (Rust → Frontend)

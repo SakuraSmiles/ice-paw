@@ -105,6 +105,10 @@ export const useChatStore = defineStore("chat", () => {
     streamingThinking.value = "";
     streamingToolCalls.value = new Map();
     thinkingStartTime.value = null;
+    // 摘要压缩进行中信号（chat:summary-started 置位）同生命周期复位——摘要发生在
+    // Pipeline 起点、先于首轮流式，故随流式态一起清，防失败路径（无 summary-injected
+    // 收尾）残留到下一回合。见 useChatEvents 的 summary-started/injected 订阅。
+    summarizing.value = false;
   }
 
   /** 回合终结统一收尾：清回合锚点（turnFirstIdx 令 streaming 视图折叠沉淀；
@@ -395,6 +399,10 @@ export const useChatStore = defineStore("chat", () => {
   }
   const streamingToolCalls = ref<Map<string, ToolCallState>>(new Map());
   const streamingThinking = ref("");
+  /** 摘要压缩进行中（chat:summary-started 置位 / summary-injected·首 token 复位）。
+   *  0.9 阶段提示：气泡 footer「压缩历史消息中」的驱动信号。回合级瞬态，
+   *  随 resetRoundStreaming 复位（防失败路径残留）。 */
+  const summarizing = ref(false);
   const thinkingStartTime = ref<number | null>(null);
   const thinkingDuration = ref<string | null>(null);
   /** 思考结束后保留内容，让用户仍可展开查看 */
@@ -1022,7 +1030,7 @@ export const useChatStore = defineStore("chat", () => {
     sending, streamingText, draftText, pendingImages, pendingFiles, pendingRefs, lastFinishReason, currentModel,
     budget, renewalNotice, updateBudget, modelSwitchNotice, updateModelSwitched,
     roundsNotice, updateRoundsRenewed, lastTurnRounds, turnRoundRenewals,
-    streamingToolCalls, streamingThinking, thinkingStartTime, thinkingDuration, lastThinkingContent, thinkingDurations,
+    streamingToolCalls, streamingThinking, summarizing, thinkingStartTime, thinkingDuration, lastThinkingContent, thinkingDurations,
     turnFirstIdx,
     // sendingConvId 暴露为只读：事件层 chat:start 据此区分「用户发起的回合」与
     // 「外部回合」（MA-3 消费 / 委派子会话——前者在 invoke 前已设本值）。

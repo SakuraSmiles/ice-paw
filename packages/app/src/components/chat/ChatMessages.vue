@@ -40,6 +40,7 @@ import { memoized } from "../../utils/blockMemo";
 import { transferKey, type ThinkSegment } from "../../utils/groupCollapse";
 import { summarizeToolCall, dirnameOf, type ToolLineSummary } from "../../utils/toolSummary";
 import { toolDisplayName } from "../../utils/toolLabels";
+import { phaseOf } from "../../utils/streamingPhase";
 import { revealItemInDir, openPath } from "@tauri-apps/plugin-opener";
 import ToolExpandDetail from "./ToolExpandDetail.vue";
 import EntityAvatar from "../common/EntityAvatar.vue";
@@ -62,6 +63,17 @@ const CONFIG_FIXABLE_ERROR_KINDS = new Set([
 ]);
 const errorActionable = computed(() =>
   chat.lastErrorKind ? CONFIG_FIXABLE_ERROR_KINDS.has(chat.lastErrorKind) : false,
+);
+
+// 生成中气泡 footer 的动态阶段（0.9 阶段提示）：纯函数 phaseOf 把流式状态映射为
+// 阶段文案（调用工具中/等待结果/回答中/思考中/压缩中/准备中），替换静态「正在生成…」。
+const streamingPhase = computed(() =>
+  phaseOf({
+    streamingText: chat.streamingText,
+    streamingThinking: chat.streamingThinking,
+    streamingToolCalls: chat.streamingToolCalls.values(),
+    summarizing: chat.summarizing,
+  }),
 );
 
 // 滚动跟随 + 分页 + 阅读位置记忆（逻辑抽到 composable：自动贴底 / 上滚暂停 /
@@ -1770,7 +1782,7 @@ const RESUMABLE_REASONS = new Set([
 
     <div v-if="chat.sending && chat.messages.length > 0" class="cursor-bar">
       <div class="cursor-track">
-        <StatusGlyph status="running" /><span class="cursor-label">正在生成…</span>
+        <StatusGlyph status="running" /><span class="cursor-label">{{ streamingPhase }}</span>
       </div>
     </div>
 

@@ -18,6 +18,7 @@ import { useChatStore } from "../../stores/chat";
 import { useAgentStore } from "../../stores/agent";
 import { useProjectStore } from "../../stores/project";
 import { shortCode } from "../../utils/refs";
+import { phaseOf } from "../../utils/streamingPhase";
 import EntityAvatar from "../common/EntityAvatar.vue";
 import BudgetPill from "./BudgetPill.vue";
 import type { ContentBlock } from "../../types";
@@ -40,6 +41,17 @@ const input = computed({
   get: () => chat.draftText,
   set: (v: string) => { chat.draftText = v; },
 });
+
+// 生成中阶段文案（0.9 阶段提示）：输入区 hint 与气泡 footer 同源读 phaseOf，
+// 生成中不再只显示「正在生成…」，而随流式状态显示「思考中/回答中/压缩中…」。
+const sendingPhase = computed(() =>
+  phaseOf({
+    streamingText: chat.streamingText,
+    streamingThinking: chat.streamingThinking,
+    streamingToolCalls: chat.streamingToolCalls.values(),
+    summarizing: chat.summarizing,
+  }),
+);
 
 watch(() => chat.sending, (sending) => {
   if (!sending) nextTick(() => textareaRef.value?.focus());
@@ -639,7 +651,7 @@ function handleKeydown(e: KeyboardEvent) {
           <span v-if="chat.budget" class="input-hint budget-hint">
             <BudgetPill :budget="chat.budget" />
           </span>
-          <span v-else class="input-hint">{{ channelArchived ? "频道已归档" : isChannelConv ? (chat.sending ? "正在生成…" : "@ 成员点名接力 · 无 @ 时由统筹者接令") : chat.sending ? "正在生成…" : "Enter 发送 · Shift+Enter 换行" }}</span>
+          <span v-else class="input-hint">{{ channelArchived ? "频道已归档" : isChannelConv ? (chat.sending ? sendingPhase : "@ 成员点名接力 · 无 @ 时由统筹者接令") : chat.sending ? sendingPhase : "Enter 发送 · Shift+Enter 换行" }}</span>
           <div class="btn-group">
             <button v-if="!chat.sending" class="btn-send" :class="{ active: input.trim() || chat.pendingImages.length > 0 || chat.pendingFiles.length > 0 || chat.pendingRefs.length > 0 }" :disabled="channelArchived || (!input.trim() && chat.pendingImages.length === 0 && chat.pendingFiles.length === 0 && chat.pendingRefs.length === 0)" title="发送 (Enter)" @click="send">
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

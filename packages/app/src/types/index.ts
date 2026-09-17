@@ -861,6 +861,11 @@ export interface ChatThinkingPayload {
 export interface ChatSummaryInjectedPayload {
   conversation_id: string; summary_tokens: number; original_count: number; kept_count: number;
 }
+/** 摘要压缩进行中信号（0.9 阶段提示）：MemoryStage 发起摘要前 emit，
+ *  气泡 footer「压缩历史消息中」的驱动；完成信号复用 summary-injected（仅成功路径）。 */
+export interface ChatSummaryStartedPayload {
+  conversation_id: string;
+}
 
 // ============================================================================
 // 工具授权事件
