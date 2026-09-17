@@ -28,66 +28,10 @@ pub use model_info::{
 };
 pub use openai::OpenAiAdapter;
 
-use std::pin::Pin;
 use std::sync::Arc;
 
-use async_trait::async_trait;
-
 use crate::error::AppResult;
-use crate::harness::chat_state::CancellationToken;
-use crate::infra::protocol::{ChatDelta, ChatMessage, ToolDef};
-
-/// LLM 提供方接口（从 `infra::protocol` 迁入，归属 provider 模块）
-///
-/// 实现方需提供 `stream_chat`，返回一个异步 Stream 逐块产出 `ChatDelta`。
-/// 调用方在消费 Stream 时应定期检查 `cancel.is_cancelled()` 以支持用户停止。
-#[async_trait]
-pub trait LlmProvider: Send + Sync {
-    /// 流式聊天
-    #[allow(clippy::too_many_arguments)]
-    async fn stream_chat(
-        &self,
-        api_key: &str,
-        messages: Vec<ChatMessage>,
-        tools: Option<Vec<ToolDef>>,
-        temperature: f64,
-        max_tokens: i32,
-        model: Option<&str>,
-        cancel: CancellationToken,
-    ) -> AppResult<Pin<Box<dyn futures::Stream<Item = AppResult<ChatDelta>> + Send>>>;
-
-    /// 摘要专用通道（滚动摘要等内部小额度调用）。
-    ///
-    /// 根因（2026-08-15 生产诊断）：glm-5.2 等 thinking 模型会把小额度
-    /// `max_tokens`（摘要仅 512）全部烧在思考通道（`reasoning_content`），
-    /// `content` 恒为空 → 滚动摘要从未成功 → 全量历史每轮重发 → 预算熔断。
-    /// 默认实现与 `stream_chat` 完全等价；OpenAI Adapter 覆写之，对支持
-    /// 思考开关的 provider（GLM）显式注入 `thinking: {"type":"disabled"}`。
-    /// 聊天主路径不走此方法，行为零变化。
-    #[allow(clippy::too_many_arguments)]
-    async fn stream_summary(
-        &self,
-        api_key: &str,
-        messages: Vec<ChatMessage>,
-        temperature: f64,
-        max_tokens: i32,
-        cancel: CancellationToken,
-    ) -> AppResult<Pin<Box<dyn futures::Stream<Item = AppResult<ChatDelta>> + Send>>> {
-        self.stream_chat(
-            api_key,
-            messages,
-            None, // 摘要不启用工具
-            temperature,
-            max_tokens,
-            None, // 摘要固定走 Adapter 默认 model
-            cancel,
-        )
-        .await
-    }
-
-    /// 返回当前 Provider 实际使用的模型名（用于消息级记录）
-    fn model_name(&self) -> &str;
-}
+use crate::infra::protocol::LlmProvider;
 
 // =========================================================================
 // 工厂函数（从 llm/mod.rs 迁入）+ Provider 目录（单一真相源）

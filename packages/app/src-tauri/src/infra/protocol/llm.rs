@@ -1,6 +1,12 @@
 //! LLM 数据结构 — 发给 LLM 的消息/内容块/流式增量/工具定义
 
+use std::pin::Pin;
+
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+
+use crate::error::AppResult;
+use crate::infra::cancel::CancellationToken;
 
 // =========================================================================
 // LLM 数据结构
@@ -270,6 +276,60 @@ pub struct ToolDef {
     pub description: String,
     /// JSON Schema（parameters）
     pub parameters: serde_json::Value,
+}
+
+/// LLM 提供方接口（U3-2 ② 从 `harness::provider` 迁回 `infra::protocol`——
+/// 破除「infra 反向依赖 harness」的层级倒置；`CancellationToken` 依赖改走
+/// [`crate::infra::cancel`] 直连，不再经 harness 中转）。
+///
+/// 实现方需提供 `stream_chat`，返回一个异步 Stream 逐块产出 [`ChatDelta`]。
+/// 调用方在消费 Stream 时应定期检查 `cancel.is_cancelled()` 以支持用户停止。
+#[async_trait]
+pub trait LlmProvider: Send + Sync {
+    /// 流式聊天
+    #[allow(clippy::too_many_arguments)]
+    async fn stream_chat(
+        &self,
+        api_key: &str,
+        messages: Vec<ChatMessage>,
+        tools: Option<Vec<ToolDef>>,
+        temperature: f64,
+        max_tokens: i32,
+        model: Option<&str>,
+        cancel: CancellationToken,
+    ) -> AppResult<Pin<Box<dyn futures::Stream<Item = AppResult<ChatDelta>> + Send>>>;
+
+    /// 摘要专用通道（滚动摘要等内部小额度调用）。
+    ///
+    /// 根因（2026-08-15 生产诊断）：glm-5.2 等 thinking 模型会把小额度
+    /// `max_tokens`（摘要仅 512）全部烧在思考通道（`reasoning_content`），
+    /// `content` 恒为空 → 滚动摘要从未成功 → 全量历史每轮重发 → 预算熔断。
+    /// 默认实现与 `stream_chat` 完全等价；OpenAI Adapter 覆写之，对支持
+    /// 思考开关的 provider（GLM）显式注入 `thinking: {"type":"disabled"}`。
+    /// 聊天主路径不走此方法，行为零变化。
+    #[allow(clippy::too_many_arguments)]
+    async fn stream_summary(
+        &self,
+        api_key: &str,
+        messages: Vec<ChatMessage>,
+        temperature: f64,
+        max_tokens: i32,
+        cancel: CancellationToken,
+    ) -> AppResult<Pin<Box<dyn futures::Stream<Item = AppResult<ChatDelta>> + Send>>> {
+        self.stream_chat(
+            api_key,
+            messages,
+            None, // 摘要不启用工具
+            temperature,
+            max_tokens,
+            None, // 摘要固定走 Adapter 默认 model
+            cancel,
+        )
+        .await
+    }
+
+    /// 返回当前 Provider 实际使用的模型名（用于消息级记录）
+    fn model_name(&self) -> &str;
 }
 
 // =========================================================================

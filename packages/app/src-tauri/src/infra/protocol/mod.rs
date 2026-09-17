@@ -11,7 +11,6 @@
 //!
 //! 兼容 re-export（历史上从本模块迁出，保留路径）：
 //! - 图片校验 → `infra::image_validation`
-//! - `LlmProvider` trait → `harness::provider`
 
 mod events;
 mod input;
@@ -26,6 +25,3 @@ pub use super::image_validation::{
     is_supported_image_media_type, strip_empty_image_blocks, validate_images, MAX_IMAGE_COUNT,
     MAX_IMAGE_SIZE, SUPPORTED_IMAGE_MEDIA_TYPES,
 };
-
-// Re-export: LlmProvider trait（从 infra/protocol 迁至 harness/provider，保留兼容路径）
-pub use crate::harness::provider::LlmProvider;
