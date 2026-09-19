@@ -47,6 +47,7 @@ pub mod references;
 pub mod retry;
 pub mod scoring;
 pub mod session_runner;
+pub mod steer;
 #[cfg(test)]
 mod session_runner_e2e;
 pub mod stream_consumer;

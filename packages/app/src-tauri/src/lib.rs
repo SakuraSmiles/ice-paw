@@ -450,7 +450,12 @@ pub fn run() {
             //     与 3c/3d 同一广播源的独立订阅，lagged 互不传染。
             harness::channel::spawn_channel_watcher(handle.clone());
 
-            // 3f) 频道 v1 存量补建（成员就位即自动建，2026-09-16）：boot 扫
+            // 3f) Steer 1v1 回合结束观察者：1v1 回合的 turn_ended 广播 → 等静默
+            //     → 查积压 → 消费最旧一条（pre_materialized 新回合）。
+            //     与 3c/3d/3e 同一广播源的独立订阅，lagged 互不传染。
+            harness::steer::spawn_steer_watcher(handle.clone());
+
+            // 3g) 频道 v1 存量补建（成员就位即自动建，2026-09-16）：boot 扫
             //     活跃项目，「有成员无活频道」自动 ensure（与成员写路径的
             //     ensure_channel_auto 同源，幂等）。后台化 + 失败仅 warn 不阻塞
             //     启动；归档项目不碰——搁置数据不静默长出新会话行，恢复归档后

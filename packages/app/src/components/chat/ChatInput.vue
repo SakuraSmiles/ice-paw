@@ -485,9 +485,19 @@ function collectMentions(text: string): string[] {
   return out;
 }
 
+/** 发送可用性：输入/附件/引用任一非空。生成中插话（Steer 1v1 / C8 频道）同样
+ *  可发送——「生成中」不再是发送的拦截条件，路由交由 store 的 sendMessage
+ *  内部分支（Steer/频道/正常三路）。 */
+const canSend = computed(() =>
+  !!input.value.trim() ||
+  chat.pendingImages.length > 0 ||
+  chat.pendingFiles.length > 0 ||
+  chat.pendingRefs.length > 0,
+);
+
 function send() {
   const text = input.value.trim();
-  if ((!text && chat.pendingImages.length === 0 && chat.pendingFiles.length === 0 && chat.pendingRefs.length === 0) || chat.sending || channelArchived.value) return;
+  if (!canSend.value || channelArchived.value) return;
 
   const blocks: ContentBlock[] = [];
   if (text) blocks.push({ type: "text", text });
@@ -652,13 +662,13 @@ function handleKeydown(e: KeyboardEvent) {
             <BudgetPill :budget="chat.budget" />
           </span>
           <span v-else class="input-hint">{{ channelArchived ? "频道已归档" : isChannelConv ? (chat.sending ? sendingPhase : "@ 成员点名接力 · 无 @ 时由统筹者接令") : chat.sending ? sendingPhase : "Enter 发送 · Shift+Enter 换行" }}</span>
-          <div class="btn-group">
-            <button v-if="!chat.sending" class="btn-send" :class="{ active: input.trim() || chat.pendingImages.length > 0 || chat.pendingFiles.length > 0 || chat.pendingRefs.length > 0 }" :disabled="channelArchived || (!input.trim() && chat.pendingImages.length === 0 && chat.pendingFiles.length === 0 && chat.pendingRefs.length === 0)" title="发送 (Enter)" @click="send">
+          <div class="btn-group" :class="{ 'is-steering': chat.sending }">
+            <button class="btn-send" :class="{ active: canSend }" :disabled="channelArchived || !canSend" title="发送 (Enter)" @click="send">
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" />
               </svg>
             </button>
-            <button v-else class="btn-stop" title="停止生成" @click="chat.stopGeneration()">
+            <button v-if="chat.sending" class="btn-stop" title="停止生成" @click="chat.stopGeneration()">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2" /></svg>
             </button>
           </div>
@@ -751,11 +761,16 @@ function handleKeydown(e: KeyboardEvent) {
 .chat-textarea:disabled { opacity:0.35; cursor:not-allowed; }
 
 .btn-group { position:relative; width:32px; height:32px; flex-shrink:0; }
+/* 生成中双按钮并存（Steer/C8 插话）：发送在右（主操作位不变）、停止在左（临时附加），
+   组宽 32→68（32 + 4 间距 + 32）——发送按钮不再被停止按钮替换 */
+.btn-group.is-steering { width:68px; }
 .btn-send { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; border-radius:var(--ip-radius-md); background-color:var(--ip-color-bg-tertiary); color:var(--ip-color-text-disabled); border:none; cursor:pointer; transition:all var(--ip-duration-fast) var(--ip-ease-out); }
 .btn-send.active { background-color:var(--ip-color-bg-user-bubble); color:white; }
 .btn-send.active:hover { opacity:0.9; transform:scale(1.05); }
 .btn-send.active:active { transform:scale(0.95); }
+.btn-group.is-steering .btn-send { left:36px; }
 .btn-stop { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; border-radius:var(--ip-radius-md); background-color:var(--ip-danger-base); color:white; border:none; cursor:pointer; transition:all var(--ip-duration-fast) var(--ip-ease-out); animation:stop-enter 0.2s ease-out; }
+.btn-group.is-steering .btn-stop { right:36px; }
 .btn-stop:hover { opacity:0.9; }
 @keyframes stop-enter { from { opacity:0; transform:scale(0.85); } to { opacity:1; transform:scale(1); } }
 /* 快捷键提示：占据左右按钮之间的剩余空间并居中（输入框内部的轻脚注） */

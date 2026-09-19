@@ -43,7 +43,7 @@ pub async fn send_message(
     global_registry: State<'_, Arc<McpRegistry>>,
     mcp_manager: State<'_, Arc<McpServerManager>>,
     route_registry: State<'_, crate::harness::read_route::ReadRouteRegistry>,
-) -> AppResult<()> {
+) -> AppResult<String> {
     tracing::info!(target: "ice_paw.chat", "send_message 被调用: conv={} model={:?} tools={}",
         input.conversation_id, input.model, input.tools_enabled);
     // --- 1. 入参校验：content_blocks 优先，回退到 legacy content ---
@@ -105,6 +105,43 @@ pub async fn send_message(
             input.mentions,
         )
         .await;
+    }
+    // Steer（1v1 生成中插话）：会话在途时物化用户消息 + 打断在途回合（置位 cancel），
+    // 由 steer watcher 在 turn_ended 广播后等静默续跑新回合。用户消息无条件成功——
+    // DB 积压为真相源（与频道 C8「无条件物化」同款）。空闲走下方原路径零改动。
+    if conv.kind == "chat" && chat_state.is_streaming(&conv_id) {
+        let user_msg_id = Uuid::new_v4().to_string();
+        crate::harness::channel::materialize_user_message(
+            pool.inner(),
+            &conv,
+            &user_msg_id,
+            final_blocks,
+            &content_text,
+            input.files,
+        )
+        .await?;
+        if chat_state.stop(&conv_id) {
+            // 置位成功：在途回合将在下一工具边界收尾（finalize_cancel → turn_ended
+            // → unregister → chat:done），steer watcher 接手消费积压。
+            return Ok(user_msg_id);
+        }
+        // stop 返回 false = 会话恰在物化期间收尾（token 已注销）→ 无新 turn_ended
+        // 再触发，手动接管积压消费防 B 搁浅。
+        let app_for_spawn = app.clone();
+        let pool_for_spawn = pool.inner().clone();
+        let conv_for_spawn = conv.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = crate::harness::steer::consume_steer_backlog(
+                &app_for_spawn,
+                &pool_for_spawn,
+                &conv_for_spawn,
+            )
+            .await
+            {
+                tracing::warn!(target: "ice_paw.steer", "Steer 兜底积压消费失败: {e}");
+            }
+        });
+        return Ok(user_msg_id);
     }
     let agent_with_creds = agent_cmd.get_with_credentials(&conv.agent_id).await?;
     let agent = agent_with_creds.agent;
@@ -228,7 +265,7 @@ pub async fn send_message(
             word_style_profile,
             provider: llm_provider,
             api_key,
-            user_msg_id,
+            user_msg_id: user_msg_id.clone(),
             content_text,
             llm_blocks: final_blocks,
             persist_blocks,
@@ -249,7 +286,7 @@ pub async fn send_message(
     // spawn 成功：注销责任已移交 stream_loop（其 finalize_success/finalize_cancel → cleanup →
     // unregister），解除守卫，避免此处 Ok 返回时误注销导致 is_streaming 提前翻转。
     scopeguard::ScopeGuard::into_inner(cancel_guard);
-    Ok(())
+    Ok(user_msg_id)
 }
 
 /// 停止指定会话的流式生成。

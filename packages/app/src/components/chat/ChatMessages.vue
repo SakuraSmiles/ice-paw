@@ -1451,6 +1451,8 @@ const RESUMABLE_REASONS = new Set([
                 <div class="footer-left">
                   <!-- 频道插话事实标注：发出时上一条回答仍在生成（不打断在途回合） -->
                   <span v-if="isChannelConv && sentDuringGeneration(group.items[0])" class="gen-time-flag" title="发出时上一条回答仍在生成中——插话不打断在途回合">生成中发出</span>
+                  <!-- Steer（1v1）插话角标：已打断在途生成，回合结束后自动续跑处理 -->
+                  <span v-if="!isChannelConv && chat.queuedSteerIds.has(group.items[0].msg.id)" class="steer-queued-flag" title="已打断在途生成，当前回合结束后自动处理">排队中</span>
                   <span class="message-time">{{ formatTime(group.items[0].msg.created_at) }}</span>
                 </div>
                 <div class="footer-actions">
@@ -2137,6 +2139,9 @@ const RESUMABLE_REASONS = new Set([
 .channel-mention-src svg { display:inline-block; flex-shrink:0; }
 /* 「生成中发出」事实标注（micro 主色调——是频道语境的插话事实，非错误态） */
 .gen-time-flag { font-size: var(--ip-text-micro-size); color:var(--ip-color-primary-tint-text); }
+/* Steer「排队中」角标（micro 主色 dashed 描边胶囊——1v1 插话事实，非错误态；
+   dashed 与「生成中发出」的纯文字形态分野，强调「尚未处理」的临时态） */
+.steer-queued-flag { font-size: var(--ip-text-micro-size); line-height:1; color:var(--ip-color-primary-tint-text); padding:2px var(--ip-spacing-2); border:1px dashed var(--ip-color-primary-tint-text); border-radius:var(--ip-radius-full); white-space:nowrap; }
 .copy-btn { display:flex; align-items:center; justify-content:center; width:24px; height:24px; border-radius:var(--ip-radius-md); border:none; background:transparent; color:var(--ip-color-text-tertiary); cursor:pointer; transition:all var(--ip-duration-fast) var(--ip-ease-out); }
 .copy-btn:hover { background-color:var(--ip-color-bg-tertiary); color:var(--ip-color-text-secondary); }
 

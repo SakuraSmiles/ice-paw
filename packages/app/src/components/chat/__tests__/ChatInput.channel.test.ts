@@ -156,3 +156,37 @@ describe("ChatInput 频道 @ 点名", () => {
     expect(mockInvoke.mock.calls.some((c) => c[0] === "send_message")).toBe(false);
   });
 });
+
+describe("ChatInput 生成中双按钮（Steer/C8 插话入口）", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    mockInvoke.mockReset();
+    mockInvoke.mockResolvedValue(undefined as never);
+    const projects = useProjectStore();
+    projects.list = [];
+    projects.loaded = true;
+  });
+
+  it("1v1 生成中：发送与停止并存（发送不被替换），输入后点发送 invoke send_message", async () => {
+    const chat = useChatStore();
+    chat.conversations = [{ id: "c1", agent_id: "ag1", title: "普通会话", pinned: false, created_at: "", updated_at: "", project_id: null, kind: "chat" }];
+    chat.activeConvId = "c1";
+    chat.sending = true; // 在途回合（Steer 触发前提）
+
+    const wrapper = mount(ChatInput);
+    // 生成中双按钮并存：发送按钮仍在（不再被 v-else 替换成停止）+ 停止按钮出现
+    expect(wrapper.find(".btn-send").exists()).toBe(true);
+    expect(wrapper.find(".btn-stop").exists()).toBe(true);
+    expect(wrapper.find(".btn-group").classes()).toContain("is-steering");
+
+    // 空输入时发送按钮 disabled（无内容可发）；停止按钮可点
+    expect((wrapper.find(".btn-send").element as HTMLButtonElement).disabled).toBe(true);
+
+    // 输入后发送按钮 active + 可点，点发送走 Steer 插话（invoke send_message）
+    await type(wrapper, "等等，改一下方向");
+    expect((wrapper.find(".btn-send").element as HTMLButtonElement).disabled).toBe(false);
+    await wrapper.find(".btn-send").trigger("click");
+    await Promise.resolve();
+    expect(mockInvoke.mock.calls.some((c) => c[0] === "send_message")).toBe(true);
+  });
+});

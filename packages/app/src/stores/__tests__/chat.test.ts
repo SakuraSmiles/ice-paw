@@ -519,10 +519,12 @@ describe("chatStore", () => {
       expect(mockInvoke).toHaveBeenCalled();
     });
 
-    it("在途回合早退可见化（A3）：写 send_failed 横幅 + lastFailedSend、不 invoke、附件不消费", async () => {
+    it("在途回合插话（Steer A3）：invoke send_message + 排队角标 + 乐观插入，不写 send_failed", async () => {
       // sending 置位的回合形态有二——用户自己的回合未完 / 正在看的消费回合
-      //（chat:assistant-start 置位）。此前静默早退吞掉输入（用户只看到「发送没反应」）。
-      mockInvoke.mockClear();
+      //（chat:assistant-start 置位）。Steer 不再静默早退吞输入：后端在会话在途时
+      // 物化用户消息 + 打断在途回合，返回 msgId；前端登记「排队中」角标 + 乐观
+      // 插入即时可见（turn B 的 chat:start 权威 loadMessages 整替，零重复）。
+      mockInvoke.mockResolvedValue("msg-b");
       const store = useChatStore();
       store.conversations = [fakeConv("c1")];
       store.activeConvId = "c1";
@@ -531,11 +533,14 @@ describe("chatStore", () => {
 
       await store.sendMessage("第二条");
 
-      expect(store.lastErrors.get("c1")?.kind).toBe("send_failed");
-      expect(store.lastError).toContain("仍在处理中");
-      expect(store.lastFailedSend?.content).toBe("第二条"); // 横幅「重试」的数据源
-      expect(mockInvoke).not.toHaveBeenCalled(); // 没打进还在跑的回合
-      expect(store.pendingImages).toHaveLength(1); // chips 不消费（早退在并块组装之前）
+      expect(mockInvoke).toHaveBeenCalledWith("send_message", expect.objectContaining({
+        input: expect.objectContaining({ conversation_id: "c1", content: "第二条" }),
+      }));
+      expect(store.queuedSteerIds.has("msg-b")).toBe(true); // 「排队中」角标簿记
+      expect(store.messages.map((m) => m.id)).toEqual(["msg-b"]); // 乐观插入即时可见
+      expect(store.messages[0].role).toBe("user");
+      expect(store.lastErrors.get("c1")?.kind).toBeUndefined(); // 不再写 send_failed 横幅
+      expect(store.lastError).toBeNull();
     });
   });
 

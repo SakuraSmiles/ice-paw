@@ -59,6 +59,13 @@ function evRows(events: SessionEvent[], opts?: Partial<Parameters<typeof buildRo
 }
 
 describe("buildRows 行模型", () => {
+  // seq 全局自增跨用例累计；turnMs/墙钟断言依赖「事件秒数连续」，跨用例累计会让
+  // 后续用例的 seq%60 撞上分钟回绕 → 秒数倒流 → turnMs 被钳 0。逐用例归零，让每个
+  // 用例的事件秒数从 :01 起、稳定连续（无 60 回绕）。
+  beforeEach(() => {
+    seq = 0;
+  });
+
   it("完整 turn：context/ended 折进头，事件各一行", () => {
     const events = [
       ev("turn_context", ctx()),
@@ -278,9 +285,10 @@ describe("buildRows 行模型", () => {
     expect(specialOfEvent({ kind: "assistant_message", turn_id: null })).toBeNull(); // 真孤儿事件不误判
   });
 
-  it("晚到接力段归父成同轮二段：复用首段号、头字段取段首事件、同键齐折叠", () => {
-    // user_preempted 拦截事件在新链头之后落库——归父到已见过的 m1 成二段
-    //（「真→m2→同真」重入在归父后仅此形态：coordinator 轮外段插进链中同族）
+  it("晚到链段折回父轮连续段：普通轮交错不再切二段（Steer 插话同族）", () => {
+    // user_preempted 拦截事件在新链头之后落库——归父到已见过的 m1。⑯ 前「真→m2→
+    // 同真」重入切出二段头；本批起普通轮交错（晚到 chain 段、Steer 插话打断的旧回合
+    // 尾）在 orderTurnEvents 里折回连续段——两轮各一个头、头字段取段首事件、同键齐折叠。
     const events = [
       ev("user_message", { content: "q1", blocks: [] }, { turnId: "m1", messageId: "m1" }),
       ev("channel_mention", { from_agent_id: null, to_agent_id: "ag2", hop_index: 1, chain_remaining: 2, blocked_reason: null }, { turnId: "chain:m1" }),
@@ -289,25 +297,64 @@ describe("buildRows 行模型", () => {
       ev("turn_ended", ended(), { turnId: "m2" }),
       ev("channel_mention", { from_agent_id: "ag3", to_agent_id: "ag2", hop_index: 2, chain_remaining: 1, blocked_reason: "user_preempted" }, { turnId: "chain:m1" }),
     ];
-    const { rows, headers } = evRows(events);
-    expect(headers()).toHaveLength(3); // m1（链头段含首跳 chain 行）/ m2 / m1 二段（晚到链段）
-    expect(headers().map((h) => h.turnKey)).toEqual(["m1", "m2", "m1"]);
-    expect(headers().map((h) => h.turnIndex)).toEqual([0, 1, 0]); // 二段复用首段号不虚增
-    expect(headers().map((h) => h.special)).toEqual([null, null, null]); // chain 已非轮外段
+    const { rows, headers, events: evs } = evRows(events);
+    expect(headers()).toHaveLength(2); // m1（链头段含两条 chain 行）/ m2 —— 晚到链段折回 m1 连续段
+    expect(headers().map((h) => h.turnKey)).toEqual(["m1", "m2"]);
+    expect(headers().map((h) => h.turnIndex)).toEqual([0, 1]); // 不再虚增二段号
+    expect(headers().map((h) => h.special)).toEqual([null, null]); // chain 已非轮外段
     // 行 key 全局唯一（th-${tk} 多段重复 → v-for 警告/行复用错位）
     expect(new Set(rows.map((r) => r.key)).size).toBe(rows.length);
-    // 二段头字段取段首事件自身（seq 6），无墙钟跨度；首段 turnMs 覆盖全逻辑轮
-    //（含跨 m2 的 gap——晚到链段把 m1 的墙钟跨度拉到最后一事件，已接受边缘：
-    //  一轮一个总耗时只在首段头，统计口径诚实优先于精确分段）
-    expect(headers()[2].seq).toBe(events[5].seq);
-    expect(headers()[2].createdAt).toBe(events[5].created_at);
-    expect(headers()[2].turnMs).toBeNull();
+    // 首头墙钟跨度覆盖全逻辑轮（含晚到链段拉到的最后一事件，已接受边缘：一轮一个总耗时）
     expect(headers()[0].turnMs).toBe(5000); // ev1(:01) → ev6(:06)
-    // 折叠 m1：两段头齐收、m1 轮内事件行（含两条 chain CROSS 行）全收
+    // 晚到 chain 段折进 m1 轮内成 CROSS 行（两条接力，seq 序在轮内保持）
+    expect(evs().filter((r) => r.turnKey === "m1" && r.kind === "cross")).toHaveLength(2);
+    // 折叠 m1：单头齐收、m1 轮内事件行（含两条 chain CROSS 行）全收
     const collapsed = evRows(events, { collapsedTurns: new Set(["m1"]) }).rows;
-    expect(collapsed.filter((r) => r.type === "turn-header" && r.turnKey === "m1")).toHaveLength(2);
-    expect(collapsed.filter((r) => r.type === "turn-header" && r.turnKey === "m1" && r.collapsed)).toHaveLength(2);
+    expect(collapsed.filter((r) => r.type === "turn-header" && r.turnKey === "m1")).toHaveLength(1);
+    expect(collapsed.filter((r) => r.type === "turn-header" && r.turnKey === "m1" && r.collapsed)).toHaveLength(1);
     expect(collapsed.filter((r) => r.type === "event" && r.turnKey === "m1")).toHaveLength(0);
+  });
+
+  it("Steer 插话交错：旧回合尾折回旧回合，两轮各一个头（不再「第 6/7/6/7 轮」）", () => {
+    // 生产证据形态（1v1 Steer 测试会话 4f9d06be，seq 63-76）：插话打断把新回合用户
+    // 消息（t7 user_message seq72）在旧回合 soft-cancel 完成前物化落库，旧回合尾
+    //（assistant + turn_ended(abort) + context_breakdown seq73-75）晚于新回合头落库。
+    // 按 seq 顺序归组曾切出「第 6 轮 / 第 7 轮 / 第 6 轮 / 第 7 轮」重复头。
+    const events = [
+      ev("user_message", { content: "写文档", blocks: [] }, { turnId: "t6", messageId: "t6" }),
+      ev("turn_context", ctx(), { turnId: "t6" }),
+      ev("assistant_message", { content: "a1", blocks: [], round: 0, continuation: false }, { turnId: "t6", messageId: "m1" }),
+      ev("tool_execution", { tool_call_id: "c1", tool_name: "bash", arguments: "{}", result: "ok", is_error: false, duration_ms: 1 }, { turnId: "t6", messageId: "m1" }),
+      ev("assistant_message", { content: "a2", blocks: [], round: 0, continuation: false }, { turnId: "t6", messageId: "m2" }),
+      ev("user_message", { content: "能不能顺便告诉我写了什么？", blocks: [] }, { turnId: "t7", messageId: "t7" }), // 插话：先于旧回合 turn_ended 落库
+      ev("assistant_message", { content: "a3", blocks: [], round: 2, continuation: false, duration_ms: 63958 }, { turnId: "t6", messageId: "m3" }), // 旧回合尾：被中止的末条回复
+      ev("turn_ended", ended("abort"), { turnId: "t6" }),
+      ev("context_breakdown", { v: 1, segments: [], est_total: 0, actual_prompt_tokens: 0, fingerprint: {} }, { turnId: "t6" }),
+      ev("turn_context", ctx(), { turnId: "t7" }),
+      ev("assistant_message", { content: "b1", blocks: [], round: 0, continuation: false }, { turnId: "t7", messageId: "m4" }),
+      ev("tool_execution", { tool_call_id: "c2", tool_name: "read_file", arguments: "{}", result: "ok", is_error: false, duration_ms: 1 }, { turnId: "t7", messageId: "m4" }),
+      ev("turn_ended", ended(), { turnId: "t7" }),
+    ];
+    const { rows, headers, events: evs } = evRows(events);
+    expect(headers()).toHaveLength(2); // 每轮一个头，无重复「第 6 轮」
+    expect(headers().map((h) => h.turnKey)).toEqual(["t6", "t7"]);
+    expect(headers().map((h) => h.turnIndex)).toEqual([0, 1]);
+    // 旧回合尾折回旧回合：t6 轮内事件连续（user/assistant/tool/assistant/assistant），
+    // 插话 user 落在 t7 段内
+    expect(evs().map((r) => r.turnKey)).toEqual(["t6", "t6", "t6", "t6", "t6", "t7", "t7", "t7"]);
+    // 旧回合统计全链聚合：3 条回复（a1/a2/a3）、1 工具、终止 abort
+    const h6 = headers()[0];
+    expect(h6.roundCount).toBe(3);
+    expect(h6.toolCount).toBe(1);
+    expect(h6.ended?.termination).toBe("abort");
+    // 插话的 user 行在 t7 段、非 t6 段（重排后 t6 尾已折回，插话行紧随 t7 头）
+    const userRows = evs().filter((r) => r.kind === "user");
+    expect(userRows.map((r) => r.turnKey)).toEqual(["t6", "t7"]);
+    // 行 key 全局唯一 + 折叠 t6 一把收
+    expect(new Set(rows.map((r) => r.key)).size).toBe(rows.length);
+    const collapsed = evRows(events, { collapsedTurns: new Set(["t6"]) }).rows;
+    expect(collapsed.filter((r) => r.type === "turn-header" && r.turnKey === "t6")).toHaveLength(1);
+    expect(collapsed.filter((r) => r.type === "event" && r.turnKey === "t6")).toHaveLength(0);
   });
 
   it("频道链归父单头：整条接力链一个轮组（⑯ logicalTurnKey 剥前缀）", () => {

@@ -464,37 +464,25 @@ fn wake_reserve(rt: &mut ChannelRuntime, agent_id: &str, now: Instant) -> bool {
 /// `run_agent_turn` 的 `!pre_materialized` 段（行 + blocks + 附件 + user_message
 /// 事件——消费回合 pre_materialized=true 跳过同段，两处形态必须保持一致）。
 /// 会话在途就只落流（回合结束触发点读 DB 积压接管）。
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn handle_user_send(
-    app: &AppHandle,
+/// 用户消息物化（1v1 Steer 与频道 C8 共用的无条件落流块）。
+///
+/// 行 + content_blocks + 附件（分页/字节）+ user_message + attachment 事件——
+/// 与 `run_agent_turn` 的 `!pre_materialized` 段镜像（消费回合 pre_materialized=true
+/// 跳过同段，两处形态必须保持一致）。纯「落流」无触发语义：调用方决定后续是
+/// 打断（Steer 1v1）还是登记积压（频道 C8）。
+pub(crate) async fn materialize_user_message(
     pool: &SqlitePool,
-    chat_state: &ChatState,
-    conv: ConversationRow,
-    user_msg_id: String,
+    conv: &ConversationRow,
+    user_msg_id: &str,
     blocks: Vec<ContentBlock>,
-    content_text: String,
+    content_text: &str,
     files: Option<Vec<AttachedFile>>,
-    mentions: Option<Vec<String>>,
 ) -> AppResult<()> {
-    if conv.archived_at.is_some() {
-        return Err(AppError::Validation(format!(
-            "频道「{}」已归档（原项目已删除）——记录保留为只读，无法继续发送。\
-             如需继续协作，请在新项目开启新频道",
-            conv.title
-        )));
-    }
-    if conv.project_id.is_none() {
-        // C1 边界：散落频道不存在（ensure 只建挂项目的），防御性拒绝
-        return Err(AppError::Validation(
-            "频道未挂载项目（数据异常）——请重建频道或反馈问题".into(),
-        ));
-    }
-
     // --- 附件物化（1v1 同款：纯函数不写 DB，spawn_blocking 离开 async worker）---
     let (persist_blocks, attach_db_inputs, attach_file_inputs) = match files {
         Some(files) if !files.is_empty() => {
             crate::infra::file_validation::validate_files(&files)?;
-            let mid = user_msg_id.clone();
+            let mid = user_msg_id.to_string();
             tokio::task::spawn_blocking(move || {
                 crate::harness::attachments::materialize_file_blocks(&mid, blocks, &files)
             })
@@ -508,7 +496,7 @@ pub(crate) async fn handle_user_send(
         pool,
         &conv.id,
         persist_blocks,
-        &content_text,
+        content_text,
     )
     .await;
 
@@ -516,35 +504,34 @@ pub(crate) async fn handle_user_send(
     let blocks_json = serde_json::to_string(&persist_blocks).unwrap_or_else(|_| "[]".into());
     repo::message::create(
         pool,
-        &user_msg_id,
+        user_msg_id,
         &NewMessage {
             conversation_id: conv.id.clone(),
             role: "user".into(),
-            content: content_text.clone(),
+            content: content_text.to_string(),
             token_count: None,
             error: None,
             model: None,
         },
     )
     .await?;
-    repo::message::update_content_blocks(pool, &user_msg_id, &blocks_json).await?;
+    repo::message::update_content_blocks(pool, user_msg_id, &blocks_json).await?;
     if !attach_db_inputs.is_empty() {
-        repo::message_attachment::delete_by_message(pool, &user_msg_id).await?;
-        repo::message_attachment::insert_batch(pool, &user_msg_id, &attach_db_inputs).await?;
+        repo::message_attachment::delete_by_message(pool, user_msg_id).await?;
+        repo::message_attachment::insert_batch(pool, user_msg_id, &attach_db_inputs).await?;
     }
     if !attach_file_inputs.is_empty() {
-        repo::message_attachment_file::delete_by_message(pool, &user_msg_id).await?;
-        repo::message_attachment_file::insert_batch(pool, &user_msg_id, &attach_file_inputs)
+        repo::message_attachment_file::delete_by_message(pool, user_msg_id).await?;
+        repo::message_attachment_file::insert_batch(pool, user_msg_id, &attach_file_inputs)
             .await?;
     }
-    let ev = EventCtx::new(&conv.id, &user_msg_id, &conv.agent_id);
-    event_log::log_user_message(pool, &ev, &user_msg_id, &content_text, &persist_blocks, None)
-        .await;
+    let ev = EventCtx::new(&conv.id, user_msg_id, &conv.agent_id);
+    event_log::log_user_message(pool, &ev, user_msg_id, content_text, &persist_blocks, None).await;
     if !attach_db_inputs.is_empty() {
         event_log::log_attachment_stored(
             pool,
             &ev,
-            &user_msg_id,
+            user_msg_id,
             &event_log::AttachmentStoredPayload::Pages {
                 v: 1,
                 items: attach_db_inputs
@@ -565,7 +552,7 @@ pub(crate) async fn handle_user_send(
         event_log::log_attachment_stored(
             pool,
             &ev,
-            &user_msg_id,
+            user_msg_id,
             &event_log::AttachmentStoredPayload::Bytes {
                 v: 1,
                 items: attach_file_inputs
@@ -581,6 +568,40 @@ pub(crate) async fn handle_user_send(
         )
         .await;
     }
+    Ok(())
+}
+
+/// 频道用户消息入口：物化（无条件成功）→ 尝试触发。
+///
+/// 物化块见 [`materialize_user_message`]（Steer 1v1 与频道共用）；会话在途就只
+/// 落流（回合结束触发点读 DB 积压接管）。
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn handle_user_send(
+    app: &AppHandle,
+    pool: &SqlitePool,
+    chat_state: &ChatState,
+    conv: ConversationRow,
+    user_msg_id: String,
+    blocks: Vec<ContentBlock>,
+    content_text: String,
+    files: Option<Vec<AttachedFile>>,
+    mentions: Option<Vec<String>>,
+) -> AppResult<String> {
+    if conv.archived_at.is_some() {
+        return Err(AppError::Validation(format!(
+            "频道「{}」已归档（原项目已删除）——记录保留为只读，无法继续发送。\
+             如需继续协作，请在新项目开启新频道",
+            conv.title
+        )));
+    }
+    if conv.project_id.is_none() {
+        // C1 边界：散落频道不存在（ensure 只建挂项目的），防御性拒绝
+        return Err(AppError::Validation(
+            "频道未挂载项目（数据异常）——请重建频道或反馈问题".into(),
+        ));
+    }
+
+    materialize_user_message(pool, &conv, &user_msg_id, blocks, &content_text, files).await?;
 
     // --- 登记 mentions（内存捷径，consume 时并集）---
     if let Some(list) = mentions.as_deref().filter(|v| !v.is_empty()) {
@@ -600,7 +621,7 @@ pub(crate) async fn handle_user_send(
             conv = %conv.id,
             "频道在途回合期间收到用户消息，已落流（回合结束后合并处理）"
         );
-        return Ok(());
+        return Ok(user_msg_id);
     }
     let app = app.clone();
     let pool = pool.clone();
@@ -610,7 +631,7 @@ pub(crate) async fn handle_user_send(
             tracing::warn!(target: "ice_paw.channel", "频道积压消费发起失败: {e}");
         }
     });
-    Ok(())
+    Ok(user_msg_id)
 }
 
 // =========================================================================

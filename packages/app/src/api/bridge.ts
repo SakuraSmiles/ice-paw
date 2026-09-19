@@ -325,9 +325,11 @@ const messages = {
 };
 
 const chat = {
-  async sendMessage(conversationId: string, content: string, contentBlocks?: import("../types").ContentBlock[], toolsEnabled?: boolean, files?: import("../types").AttachedFile[], mentions?: string[]): Promise<void> {
+  async sendMessage(conversationId: string, content: string, contentBlocks?: import("../types").ContentBlock[], toolsEnabled?: boolean, files?: import("../types").AttachedFile[], mentions?: string[]): Promise<string> {
     try {
-      await invoke<void>("send_message", {
+      // 返回用户消息 id（后端 user_msg_id）：1v1 生成中插话（Steer）用其定位「排队中」
+      // 角标；普通路径忽略返回值零影响。
+      return await invoke<string>("send_message", {
         input: {
           conversation_id: conversationId,
           content: content || undefined,

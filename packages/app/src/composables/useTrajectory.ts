@@ -535,12 +535,78 @@ function summarizeEvent(ev: SessionEvent): { kind: RowKind; summary: string; isE
 }
 
 /**
+ * 回合连续性重排（Steer 插话交错引入的「真→真→同真」）。1v1 回合模型假定非特殊
+ * turn_id 会话内不交错，但 Steer 的插话打断把新回合的用户消息在旧回合 soft-cancel
+ * 完成前就物化落库（新回合 user_message 先于旧回合 turn_ended），造成两个普通
+ * turn_id 的事件在 seq 上交错——按 seq 顺序归组会切出「第 6 轮 / 第 7 轮 / 第 6
+ * 轮 / 第 7 轮」的重复头。
+ *
+ * 修法 = 呈现层按轮归组：特殊段（cross: 与 turn_id=NULL 的 channel_coordinator，
+ * specialOfEvent）是穿插在回合间的行为事实，作为「屏障」保持原位（重排不跨过它
+ * 们）；屏障之间的连续非特殊事件按「逻辑轮键首见」聚成连续块（块内仍按 seq 升序
+ * → supersede/墙钟跨度口径不变）。串行回合零交错 → 重排是恒等 no-op；Steer 交错 →
+ * 旧回合尾（含 turn_ended）折回旧回合头，两轮各成连续一段。时间线（buildSpans）是
+ * 时间轴定位视图，保持 seq 序不重排（重叠如实呈现），与表格的「轮连续性」分工。
+ */
+function orderTurnEvents(events: SessionEvent[]): SessionEvent[] {
+  // 分段：特殊事件为屏障，屏障之间是一段连续非特殊事件
+  const runs: SessionEvent[][] = [];
+  const specials: SessionEvent[] = []; // 屏障事件，保持原序
+  const marks: number[] = []; // specials[i] 落库时其前已完成的 run 数（重插槽位）
+  let cur: SessionEvent[] = [];
+  for (const ev of events) {
+    if (specialOfEvent(ev) != null) {
+      if (cur.length) runs.push(cur);
+      cur = [];
+      specials.push(ev);
+      marks.push(runs.length);
+    } else {
+      cur.push(ev);
+    }
+  }
+  if (cur.length) runs.push(cur);
+
+  // 段内：按逻辑轮键首见位置稳定分组（同轮连续、轮内保段内原相对序）。组序用段内
+  // 首见「位置」而非 seq 值——项目流 seq 按会话独立编号可重复，值比较会把两会话同
+  // seq 的组序打平交错；位置序恒全序、免 sort 比较器留平局。
+  for (const run of runs) {
+    if (run.length < 2) continue;
+    const order: string[] = [];
+    const groups = new Map<string, SessionEvent[]>();
+    for (const ev of run) {
+      const tk = logicalTurnKey(ev.turn_id) ?? NULL_TURN;
+      let g = groups.get(tk);
+      if (!g) {
+        g = [];
+        groups.set(tk, g);
+        order.push(tk);
+      }
+      g.push(ev);
+    }
+    let w = 0;
+    for (const tk of order) for (const ev of groups.get(tk)!) run[w++] = ev;
+  }
+
+  // 重组：屏障按原序插回（先 drain 到 barrier 前的 run，再放 barrier，续）
+  const out: SessionEvent[] = [];
+  let r = 0;
+  for (let i = 0; i < specials.length; i++) {
+    while (r < marks[i]) out.push(...runs[r++]);
+    out.push(specials[i]);
+  }
+  while (r < runs.length) out.push(...runs[r++]);
+  return out;
+}
+
+/**
  * seq 正序事件流 → 表格行。纯函数。
  *
  * 输入假定已按 seq 升序（list_session_events 的保证）。
  */
 export function buildRows(events: SessionEvent[], opts: BuildRowsOptions): TrajectoryRow[] {
   const q = opts.query.trim().toLowerCase();
+  // 回合连续性重排：普通轮交错（Steer 插话）折回连续段；特殊段屏障保持原位
+  events = orderTurnEvents(events);
 
   // 预扫：supersede 索引（同 (turn,message) 的 assistant 取最后一条）+ turn 统计
   const lastIndexOf = new Map<string, number>();
@@ -590,8 +656,9 @@ export function buildRows(events: SessionEvent[], opts: BuildRowsOptions): Traje
   let turnIndex = opts.turnOffset - 1;
   // 轮号按「新逻辑轮键首见」递增（⑯：chain:/election: 归父进轮内——整条接力链
   // 一个连续段一个头、统计/耗时全链聚合；轮外仅 cross:/coordinator。二段头仅在
-  // coordinator 轮外段插进链中或晚到 chain 段时出现（同键重入复用首段号）；与
-  // 后端 count_turns_before 的 DISTINCT 口径对齐）
+  // coordinator 轮外段插进链中时出现（同键重入复用首段号）；晚到 chain 段与 Steer
+  // 插话交错的普通轮已由 orderTurnEvents 折回连续段，不再产生二段头。与后端
+  // count_turns_before 的 DISTINCT 口径对齐）
   const seenTurns = new Map<string, number>();
   let prevDate = ""; // 跨天检测：仅日期变化时在头上标 MM-DD
   // 折叠时暂存本 turn 的事件行（搜索需要 matchCount，先攒后放）

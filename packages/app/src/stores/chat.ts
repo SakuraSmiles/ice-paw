@@ -213,6 +213,7 @@ export const useChatStore = defineStore("chat", () => {
       // 防御形状：mock/旧返回无 rows 字段时回落空页（hasMore=false 与旧行为一致）
       const rows = Array.isArray(page?.rows) ? page.rows : [];
       messages.value = rows;
+      pruneQueuedSteers(); // Steer「排队中」角标剪枝（turn B 启动后角标随 assistant 出现摘除）
       hasMore.value = page?.has_more === true;
       pageCursor.value = page?.next_before_anchor_rowid ?? null;
       // 切回正在流式的会话时，把恢复的 streamingText 同步到末条 assistant，
@@ -588,20 +589,77 @@ export const useChatStore = defineStore("chat", () => {
     if (channelQueuedTimer) { clearTimeout(channelQueuedTimer); channelQueuedTimer = null; }
   }
 
+  // ===== Steer（1v1 生成中插话）「排队中」角标簿记 =====
+  // 发送时后端返回 msgId（= 落库用户消息 id，turn_id == user_msg_id 不变式），
+  // 登记进集合；loadMessages 权威落流后反向扫描剪枝——凡其后已出现 assistant
+  // 消息（turn B 启动/应答，含占位行）即摘除。消息 id 全局唯一（UUID），
+  // 跨会话不误匹配；未应答插话的角标跨切换保留（继续排队是真实状态）。
+  const queuedSteerIds = ref<Set<string>>(new Set());
+
+  // Steer 插话「预告一次 abort」：插话发送时置位（会话 id），chat:done 到达时消费。
+  // 该 abort 是插话打断（非用户主动停止），呈现层静默衔接——设计稿 §11 transition
+  // prompt deferred（「已手动停止」不该在插话打断时出现）。stop 返回 false 的兜底
+  // 路径（会话已自然收尾、无 abort）由下一次正常 send 清 null 防残留。
+  const steerAbortExpected = ref<string | null>(null);
+
+  /** 剪枝「排队中」角标：反向扫描当前消息列表，queuedSteer 消息之后出现
+   *  assistant 即视为已接手（turn B 启动）。原地 mutate Set（同 bgStreams 模式）。*/
+  function pruneQueuedSteers() {
+    if (queuedSteerIds.value.size === 0) return;
+    let hasAssistantAfter = false;
+    for (let i = messages.value.length - 1; i >= 0; i--) {
+      const m = messages.value[i];
+      if (m.role === "assistant") {
+        hasAssistantAfter = true;
+      } else if (m.role === "user" && queuedSteerIds.value.has(m.id)) {
+        if (hasAssistantAfter) queuedSteerIds.value.delete(m.id);
+      }
+    }
+  }
+
   async function sendMessage(content: string, contentBlocks?: import("../types").ContentBlock[], mentions?: string[]) {
     if (!activeConvId.value) return;
     const isChannel = activeConversation.value?.kind === "channel";
     if (sending.value && !isChannel) {
-      // 在途回合拦截可见化：sending 置位的回合形态有二——本会话用户发起的回合 /
-      // 正在看的消费回合（chat:assistant-start 置位）。此前静默早退吞掉输入
-      //（用户只看到「发送没反应」）；与后端并发拒绝（catch 路径）共用横幅 +
-      // 重试出口，附件 chips 不消费（早退发生在并块组装之前）。
-      lastFailedSend.value = { content, blocks: contentBlocks ?? [] };
-      setConvError(
-        activeConvId.value,
-        "上一条消息仍在处理中，这条没有发出。等上一条完成或先停止生成，再点重试。",
-        "send_failed",
-      );
+      // Steer（1v1 生成中插话）：后端在会话在途时物化用户消息 + 打断在途回合，
+      // turn_ended 后由 steer watcher 自动续跑新回合。消息无条件成功（DB 积压为
+      // 真相源），返回 msgId 供「排队中」角标定位。乐观插入即时可见（turn B 的
+      // chat:start 会权威 loadMessages 整替，零重复）；不重置流式态、不动回合锚点
+      //（它们仍归属在途回合 A，由其 chat:done 收尾）。
+      const blocks = (contentBlocks ?? []).slice();
+      const files = collectSendAttachments(blocks);
+      const steerConvId = activeConvId.value;
+      const steerModel = currentModel.value;
+      // 预告一次 abort：后端 Steer 分支会 stop 在途回合 → chat:done(abort)。该 abort
+      // 是插话打断而非用户手动停止，事件层据此静默（不显「已手动停止」）。
+      steerAbortExpected.value = steerConvId;
+      try {
+        const msgId = await bridge.chat.sendMessage(
+          steerConvId, content, blocks.length > 0 ? blocks : undefined, true, files, mentions,
+        );
+        queuedSteerIds.value.add(msgId);
+        messages.value = [
+          ...messages.value,
+          {
+            id: msgId,
+            conversation_id: steerConvId,
+            role: "user",
+            content,
+            content_blocks: blocks.length > 0 ? JSON.stringify(blocks) : "[]",
+            token_count: null,
+            error: null,
+            created_at: new Date().toISOString(),
+            rowid: 0,
+            model: steerModel,
+          },
+        ];
+        touchConversation(steerConvId);
+      } catch (e) {
+        console.error("1v1 插话发送失败:", e);
+        const raw = e instanceof Error ? e.message : String(e);
+        steerAbortExpected.value = null; // 发送失败无 abort，作废预告
+        setConvError(steerConvId, `请求没有送达（${raw}）。这条消息未发出。`, "send_failed");
+      }
       return;
     }
     if (sending.value && isChannel) {
@@ -622,6 +680,7 @@ export const useChatStore = defineStore("chat", () => {
       }
       return;
     }
+    steerAbortExpected.value = null; // 正常回合开始，作废旧插话预告（防 stop-false 兜底残留）
     sending.value = true;
     lastFailedSend.value = { content, blocks: contentBlocks ?? [] }; // 失败重发依据（chat:done 清）
     // 清掉当前会话的错误横幅（per-conv 隔离：只清本会话，不影响其它会话）
@@ -1050,5 +1109,8 @@ export const useChatStore = defineStore("chat", () => {
     delegationChildByToolUse, bindDelegationChild,
     // 频道 v1：视图（头部统筹者胶囊 / @ 弹层候选）+ 在途插话提示 + 治理后刷新
     channelView, refreshChannelView, channelQueuedNotice,
+    // Steer（1v1 生成中插话）：「排队中」角标集合（ChatMessages 按消息 id 查询渲染）
+    // + 插话打断的 abort 预告（事件层据此静默衔接，不显「已手动停止」）
+    queuedSteerIds, steerAbortExpected,
   };
 });
