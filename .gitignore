@@ -78,3 +78,6 @@ target-clippy/
 docs/*
 !docs/user-guide.md
 !docs/screenshots/
+
+# CLAUDE.md 是内部开发指引（含生产实案与决策记录），不入公开仓库
+CLAUDE.md
