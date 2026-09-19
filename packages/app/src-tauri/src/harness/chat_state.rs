@@ -90,6 +90,17 @@ impl ChatState {
         let map = self.lock();
         map.contains_key(conv_id)
     }
+
+    /// 快照某会话**此刻在途回合**的取消令牌（Steer 分支用，W1 ②）。
+    ///
+    /// 与 [`Self::stop`] 的差别 = 回合身份：stop 取消「调用时刻注册表里的那个
+    /// 令牌」——大附件物化耗时超过回合 A 自然收尾时，迟到的 stop 会误伤已起跑
+    /// 的后续回合 B。本方法把快照令牌交还调用方，由调用方在物化完成后点名取消
+    /// 快照令牌；A 已收尾则快照成死令牌，cancel 只是置位一个无人再读的布尔
+    ///（[`CancellationToken::cancel`] 幂等无害），不伤后来者。
+    pub fn token_of(&self, conv_id: &str) -> Option<CancellationToken> {
+        self.lock().get(conv_id).cloned()
+    }
 }
 
 impl Default for ChatState {
@@ -103,5 +114,46 @@ impl Clone for ChatState {
         Self {
             inner: self.inner.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 空闲会话（无在途令牌）→ None（Steer 分支据此走普通发送路径）。
+    #[test]
+    fn token_of_none_when_idle() {
+        let state = ChatState::new();
+        assert!(state.token_of("conv-idle").is_none());
+    }
+
+    /// 在途回合 → Some(共享同柄令牌)：cancel 快照 = cancel 本体。
+    #[test]
+    fn token_of_snapshots_live_token() {
+        let state = ChatState::new();
+        let live = state.start("conv-live").unwrap();
+
+        let snapshot = state.token_of("conv-live").expect("在途应有快照");
+        snapshot.cancel();
+        assert!(live.is_cancelled(), "快照与本体共享底层状态");
+        assert!(snapshot.is_cancelled());
+    }
+
+    /// W1 ② 核心场景回归锁：快照后 A 收尾注销、新回合 B 注册新令牌——
+    /// 迟到的快照 cancel 绝不能打到 B（stop 误伤续跑回合的根因）。
+    #[test]
+    fn dead_snapshot_cancel_never_hits_new_turn() {
+        let state = ChatState::new();
+        let _a = state.start("conv-race").unwrap();
+        let stale = state.token_of("conv-race").unwrap();
+
+        // A 自然收尾 → 注销；续跑回合 B 起跑 → 新令牌在册
+        state.unregister("conv-race");
+        let b = state.start("conv-race").unwrap();
+
+        stale.cancel(); // 迟到的取消打在已注销的快照上
+        assert!(!b.is_cancelled(), "死令牌 cancel 不得误伤新回合 B");
+        assert!(state.is_streaming("conv-race"), "B 仍在途");
     }
 }

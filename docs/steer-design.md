@@ -1,6 +1,6 @@
 # Steer（生成中插话）设计小稿 v1
 
-> **状态：设计稿，未实施。** 2026-09-18 用户拍板：Steer 先行，长期记忆作为未来线路。
+> **状态：已实施（随 0.9.1 发版）；2026-09-19 W1 批修订——搁浅族根治（marker 记账 + 令牌快照 + boot 扫尾，见 §5/§8/§10.3/§12）。** 2026-09-18 用户拍板：Steer 先行，长期记忆作为未来线路。
 > 本文档只定「生成中用户发送一条消息、agent 在下一工具边界改道」的机制，**不写代码**。
 > 方向 = **无状态 + 路线乙**（拆两道 turn 保留上下文），明确**不引入世界状态/长期记忆**。
 
@@ -64,16 +64,19 @@ cancel 标志位在 loop 两个 yield 点被轮询（[loop_engine.rs](packages/a
 ```
 用户在 agent 生成中发送 B
   → 前端放行（不拦截），invoke sendMessage(conv, B)
-  → 后端 send_message(1v1)：chat_state.is_streaming(conv) == true
+  → 后端 send_message(1v1)：chat_state.token_of(conv) == Some(in_flight)（快照令牌，W1 ②）
        → 【Steer 分支】物化 B（复用 channel handle_user_send 物化块）
-       → chat_state.stop(conv)   // 置位 cancel token，不 unregister
-       → 返回 Ok（消息已落库）
+       → in_flight.cancel()   // 点名取消快照令牌——stop 无回合身份，大附件物化
+                              // 超 A 自然收尾时会误伤已起跑的续跑回合；A 已收尾
+                              // 则 cancel 打在死令牌上（幂等无害）
+       → 返回 Ok（消息已落库；死令牌分支手动 spawn 兜底积压消费）
   → 前端靠 user_message 事件权威刷新，B 气泡出现（标「已排队，本轮边界后生效」）
   → 在途 loop 在下一个 yield 点（①或②）命中 cancel
        → finalize_cancel：turn_ended(abort) → unregister → chat:done(abort)
   → 1v1 turn_ended 广播触发 watcher
        → 静默窗（复用 inbox/channel 的 2s 轮询 · 30s 上限）等落定
-       → 查积压：存在「无后续 turn 的 user 消息 B」
+       → 查积压（marker 记账，W1 ①）：user_message 事件在场且无
+         turn_context/turn_ended 标记的 B（`list_unconsumed_user_anchors`）
        → run_agent_turn(pre_materialized=true) 开新回合 B
   → 回合 B 走完整 Pipeline（read_route → derive 读历史，天然含回合 A 已 finalize 的全部轮次 + B）
 ```
@@ -103,6 +106,7 @@ cancel 标志位在 loop 两个 yield 点被轮询（[loop_engine.rs](packages/a
 
 - 回合 A：steer 后必然走到 `finalize_cancel` → `turn_ended(abort)` **落库后才 unregister**，A 是**已 closed** 的干净回合。
 - 回合 B：若半途崩溃，是普通「无 turn_ended 尾巴」，走现有 `backfill`/`reconcile` 的 incomplete_turn 处理，**无新增边**（B 是普通回合，不是特殊形态）。
+- **B 物化后、消费回合起跑前崩溃/重启（W1 ③）**：turn_ended watcher 不再触发、前端「排队中」角标随重启清零，积压若无扫尾即永久搁浅。boot 扫尾 `spawn_boot_sweep`（lib.rs setup，`conversations_with_unconsumed_anchors` 圈 1v1 会话）逐会话 `consume_steer_backlog` 自愈——marker 记账下幂等，正常 boot 零命中零成本。
 
 ---
 
@@ -117,7 +121,7 @@ cancel 标志位在 loop 两个 yield 点被轮询（[loop_engine.rs](packages/a
 
 1. **text-only 回复中发送**：模型正在写最终答案（无 tool_use），steer 置位 cancel 后，loop 无下一个工具轮、自然走 `finalize_success` 收尾 → steer 消息成为下一回合的正常起头（等价 Queue，符合 Claude Code「text-only 等到结束」）。
 2. **一次长回合内连发多条（已定论：数据层各自成回合，不合并）**：`turn_id == user_msg_id` 是 append-only 日志最深不变式，derive / reconcile / 轨迹轮号 / MemoryStage 摘要锚点 / MA-3 pending 判定全部建在它上面——数据层合并 = 动地基，否。连发 B1/B2/B3 各自成回合、串行完整执行。**连发互不打断**靠「静默窗口」：steer 触发 cancel 后 watcher 不立即开新回合，先等短静默窗（复用频道 `CHAIN_HEAD_QUIET` 3s）让连发到齐——B2/B3 在 B1 start 前已进积压，不再是「新发送」，不会去 cancel B1。**「看着像 1 回合」留给呈现层**（纯渲染归组，频道轨迹「逻辑轮键归父」已有先例），后做、不碰数据。
-3. **发送后立即又发（A 已 unregister、B 未 start 的窗口）**：watcher 与正常发送路径都走 `chat_state.start` 原子认领，撞上返回「在途」→ watcher 退避重试（复用 channel 的等静默轮询），不会双跑。
+3. **发送后立即又发（A 已 unregister、B 未 start 的窗口）**：watcher 与正常发送路径都走 `chat_state.start` 原子认领，撞上返回「在途」→ watcher 退避重试（复用 channel 的等静默轮询），不会双跑。**W1 ① 已按此落地**：`consume_steer_backlog` 撞忙不放弃——退避回循环头等静默、按剩余积压续接；积压边界 = marker 记账非「最近 turn_ended 之后」推断，任何触发源（watcher / 死令牌兜底 / boot 扫尾）读到同一账面，撞忙放弃不再丢边界。
 4. **委派子会话 / 频道**：不涉及——Steer 只对 `kind='chat'` 的 1v1。
 
 ---
@@ -130,17 +134,20 @@ cancel 标志位在 loop 两个 yield 点被轮询（[loop_engine.rs](packages/a
 
 ---
 
-## 12. 实施文件清单（仅标注，未实施）
+## 12. 实施文件清单（已实施随 0.9.1；W1 批增补）
 
 | 文件 | 改动 |
 |---|---|
-| `packages/app/src-tauri/src/commands/chat_cmd.rs` | 1v1 分支：`is_streaming` 时走 Steer 分支（物化 + `chat_state.stop`），空闲走原路径 |
-| `packages/app/src-tauri/src/harness/channel.rs`（或抽公共） | 把 `handle_user_send` 的物化块抽成 1v1 可复用；turn_ended 积压消费从 `kind=channel` 专属泛化到 1v1 |
-| `packages/app/src-tauri/src/harness/`（新 watcher 或复用 inbox drain） | 1v1 turn_ended watcher：查积压 → 静默窗 → `run_agent_turn(pre_materialized=true)` |
+| `packages/app/src-tauri/src/commands/chat_cmd.rs` | 1v1 分支：`token_of` 快照在途令牌 → 物化 → 点名 cancel 快照（W1 ② 单快照设计），空闲走原路径 |
+| `packages/app/src-tauri/src/harness/channel.rs` | `materialize_user_message` 抽成 1v1 可复用（物化块 + `user_message` 事件即 marker 入账） |
+| `packages/app/src-tauri/src/harness/steer.rs` | 1v1 turn_ended watcher：查积压 → 静默窗 → `run_agent_turn(pre_materialized=true)`；W1 批 = busy-retry 退避循环（`consume_steer_backlog`）+ `spawn_boot_sweep` + 简报测试 |
+| `packages/app/src-tauri/src/harness/chat_state.rs` | W1 ②：`token_of`（快照在途回合令牌，回合身份版 stop） |
+| `packages/app/src-tauri/src/db/repo/message.rs` | W1 ①：`list_unconsumed_user_anchors` / `conversations_with_unconsumed_anchors`（marker 记账三腿谓词）+ 回归测试 |
+| `packages/app/src-tauri/src/lib.rs` | W1 ③：`spawn_boot_sweep` boot 挂点 |
 | `packages/app/src/stores/chat.ts` | `sendMessage` 守卫放行 + 不乐观 push + steer 标记 |
 | `packages/app/src/composables/useChatEvents.ts` | `user_message` 事件分支泛化到 1v1（权威刷新 steer 气泡） |
 
-**零改动**：`session_runner.rs`（`pre_materialized` 现成）、`chat_state.rs`（start/stop/is_streaming 现成）、`cleanup.rs`（finalize 对称性现成）、`loop_engine.rs`（cancel yield 点现成）、`event_log.rs`（零新 kind）。
+**零改动**：`session_runner.rs`（`pre_materialized` 现成）、`cleanup.rs`（finalize 对称性现成）、`loop_engine.rs`（cancel yield 点现成）、`event_log.rs`（零新 kind——积压记账复用既有 `user_message`/`turn_context`/`turn_ended` 三 kind）。
 
 ---
 

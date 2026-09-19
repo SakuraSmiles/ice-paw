@@ -106,42 +106,48 @@ pub async fn send_message(
         )
         .await;
     }
-    // Steer（1v1 生成中插话）：会话在途时物化用户消息 + 打断在途回合（置位 cancel），
-    // 由 steer watcher 在 turn_ended 广播后等静默续跑新回合。用户消息无条件成功——
-    // DB 积压为真相源（与频道 C8「无条件物化」同款）。空闲走下方原路径零改动。
-    if conv.kind == "chat" && chat_state.is_streaming(&conv_id) {
-        let user_msg_id = Uuid::new_v4().to_string();
-        crate::harness::channel::materialize_user_message(
-            pool.inner(),
-            &conv,
-            &user_msg_id,
-            final_blocks,
-            &content_text,
-            input.files,
-        )
-        .await?;
-        if chat_state.stop(&conv_id) {
-            // 置位成功：在途回合将在下一工具边界收尾（finalize_cancel → turn_ended
-            // → unregister → chat:done），steer watcher 接手消费积压。
+    // Steer（1v1 生成中插话）：先快照在途回合令牌，物化用户消息 B 后**点名取消
+    // 快照令牌**（不复用 stop——stop 无回合身份：大附件物化超过回合 A 自然收尾
+    // 时，迟到的 stop 会误伤已起跑的续跑回合 B，W1 ②），由 steer watcher 在
+    // turn_ended 广播后等静默续跑新回合。用户消息无条件成功——DB 积压为真相源
+    //（与频道 C8「无条件物化」同款）。空闲走下方原路径零改动。
+    if conv.kind == "chat" {
+        if let Some(in_flight) = chat_state.token_of(&conv_id) {
+            let user_msg_id = Uuid::new_v4().to_string();
+            crate::harness::channel::materialize_user_message(
+                pool.inner(),
+                &conv,
+                &user_msg_id,
+                final_blocks,
+                &content_text,
+                input.files,
+            )
+            .await?;
+            in_flight.cancel();
+            if chat_state.is_streaming(&conv_id) {
+                // 快照令牌仍在册（A 命中 cancel）：将在下一工具边界收尾
+                //（finalize_cancel → turn_ended → unregister → chat:done），
+                // steer watcher 接手消费积压。
+                return Ok(user_msg_id);
+            }
+            // 死令牌分支 = A 恰在物化期间自然收尾（cancel 打在已注销的快照上
+            // = 无害 no-op）→ 无新 turn_ended 再触发，手动接管积压消费防 B 搁浅。
+            let app_for_spawn = app.clone();
+            let pool_for_spawn = pool.inner().clone();
+            let conv_for_spawn = conv.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = crate::harness::steer::consume_steer_backlog(
+                    &app_for_spawn,
+                    &pool_for_spawn,
+                    &conv_for_spawn,
+                )
+                .await
+                {
+                    tracing::warn!(target: "ice_paw.steer", "Steer 兜底积压消费失败: {e}");
+                }
+            });
             return Ok(user_msg_id);
         }
-        // stop 返回 false = 会话恰在物化期间收尾（token 已注销）→ 无新 turn_ended
-        // 再触发，手动接管积压消费防 B 搁浅。
-        let app_for_spawn = app.clone();
-        let pool_for_spawn = pool.inner().clone();
-        let conv_for_spawn = conv.clone();
-        tauri::async_runtime::spawn(async move {
-            if let Err(e) = crate::harness::steer::consume_steer_backlog(
-                &app_for_spawn,
-                &pool_for_spawn,
-                &conv_for_spawn,
-            )
-            .await
-            {
-                tracing::warn!(target: "ice_paw.steer", "Steer 兜底积压消费失败: {e}");
-            }
-        });
-        return Ok(user_msg_id);
     }
     let agent_with_creds = agent_cmd.get_with_credentials(&conv.agent_id).await?;
     let agent = agent_with_creds.agent;

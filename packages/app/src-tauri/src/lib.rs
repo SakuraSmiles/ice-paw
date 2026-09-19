@@ -455,6 +455,13 @@ pub fn run() {
             //     与 3c/3d/3e 同一广播源的独立订阅，lagged 互不传染。
             harness::steer::spawn_steer_watcher(handle.clone());
 
+            // 3f-b) Steer boot 扫尾（W1 ③）：进程死亡/重启会把物化后未消费的
+            //     steer 消息 B 搁在流里（turn_ended watcher 不再触发、前端
+            //     「排队中」角标随重启清零）。boot 扫一遍有未消费锚点的 1v1
+            //     会话逐个消费自愈——marker 记账下幂等，正常 boot 零命中零
+            //     成本。后台化 + 失败仅 warn 不阻塞启动。
+            harness::steer::spawn_boot_sweep(handle.clone(), pool.clone());
+
             // 3g) 频道 v1 存量补建（成员就位即自动建，2026-09-16）：boot 扫
             //     活跃项目，「有成员无活频道」自动 ensure（与成员写路径的
             //     ensure_channel_auto 同源，幂等）。后台化 + 失败仅 warn 不阻塞

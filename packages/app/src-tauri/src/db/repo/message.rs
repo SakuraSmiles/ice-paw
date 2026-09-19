@@ -258,6 +258,78 @@ pub async fn list_user_anchors_from(
         .collect())
 }
 
+/// 未消费的 steer 积压锚点（W1 ① marker 记账，1v1 专用）。
+///
+/// 积压判定 = 「已入账、未消费」三腿：
+/// 1. [`REAL_USER_ANCHOR_PREDICATE`]——真实用户消息（排除 tool_result 占位行
+///    与空占位行，与频道积压查询族同一谓词）；
+/// 2. `EXISTS user_message 事件`——已入账：物化时刻即落事件（channel.rs
+///    `materialize_user_message`）。同时排除 Phase 0 之前的零事件旧行——混合
+///    纪元会话里远古行没有任何事件，不排除会把千年未答消息误判成积压；
+/// 3. `NOT EXISTS turn_context/turn_ended 标记`——未被任何回合消费。
+///    `turn_context` 在每回合起跑时无条件落库（session_runner，无路径分叉），
+///    `turn_ended` 是 backfill 对 legacy 回合的合成形态（turn_context 永不
+///    合成）——两标记合并覆盖「跑过/答过」的一切历史形态。
+///
+/// 取代旧「最近 turn_ended turn_id 之后」的推断边界：推断在撞忙放弃、崩溃
+/// 重启两个场景下会把积压算丢（搁浅族根因，W1），marker 记账下账面即真相源，
+/// 任何触发源读到同一积压。
+pub async fn list_unconsumed_user_anchors(
+    pool: &SqlitePool,
+    conversation_id: &str,
+) -> AppResult<Vec<TurnAnchor>> {
+    let sql = format!(
+        "SELECT m.id, substr(m.content, 1, 120), m.created_at \
+           FROM messages m \
+          WHERE m.conversation_id = ? AND {REAL_USER_ANCHOR_PREDICATE} \
+            AND EXISTS (SELECT 1 FROM session_events e \
+                         WHERE e.session_id = m.conversation_id AND e.turn_id = m.id \
+                           AND e.kind = 'user_message') \
+            AND NOT EXISTS (SELECT 1 FROM session_events e \
+                             WHERE e.session_id = m.conversation_id AND e.turn_id = m.id \
+                               AND e.kind IN ('turn_context','turn_ended')) \
+          ORDER BY m.created_at ASC, m.rowid ASC"
+    );
+    let rows: Vec<(String, Option<String>, String)> = sqlx::query_as(&sql)
+        .bind(conversation_id)
+        .fetch_all(pool)
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(message_id, preview, created_at)| TurnAnchor {
+            message_id,
+            preview: preview.unwrap_or_default(),
+            created_at,
+        })
+        .collect())
+}
+
+/// 有未消费 steer 锚点的 1v1 会话清单（W1 ③ boot 扫尾用）。
+///
+/// 与 [`list_unconsumed_user_anchors`] 同一 marker 口径（三腿谓词原样复用），
+/// `kind='chat'` 过滤——频道 user 行的消费标记锚在 `chain:` 前缀 turn_id 上、
+/// delegation 子会话有自己的消费引擎，均不归 steer 扫尾管（对应消费侧的
+/// kind 闸）。boot 时查一遍：崩溃/重启把物化后未消费的 steer 消息 B 搁在流
+/// 里（turn_ended watcher 不再触发、前端「排队中」角标随重启清零），扫出来
+/// 逐会话消费自愈；正常 boot（无搁浅）零命中零成本。
+pub async fn conversations_with_unconsumed_anchors(pool: &SqlitePool) -> AppResult<Vec<String>> {
+    let sql = format!(
+        "SELECT DISTINCT m.conversation_id \
+           FROM messages m \
+           JOIN conversations c ON c.id = m.conversation_id \
+          WHERE c.kind = 'chat' AND {REAL_USER_ANCHOR_PREDICATE} \
+            AND EXISTS (SELECT 1 FROM session_events e \
+                         WHERE e.session_id = m.conversation_id AND e.turn_id = m.id \
+                           AND e.kind = 'user_message') \
+            AND NOT EXISTS (SELECT 1 FROM session_events e \
+                             WHERE e.session_id = m.conversation_id AND e.turn_id = m.id \
+                               AND e.kind IN ('turn_context','turn_ended')) \
+          ORDER BY m.conversation_id"
+    );
+    let ids: Vec<String> = sqlx::query_scalar(&sql).fetch_all(pool).await?;
+    Ok(ids)
+}
+
 /// 回合制分页结果：rows 为 rowid ASC 时间正序消息；has_more = 还有更早回合
 /// （或本页被行数闸提前截断）；next_before_anchor_rowid = 下页游标（本页最旧
 /// 纳入 span 的锚 rowid；has_more=false 时恒 None——防陈旧游标被误用，前端
@@ -1160,6 +1232,103 @@ mod tests {
             "agent-1",
             "未打标行由 sweep 兜底"
         );
+    }
+
+    // ---- Steer 积压 marker 记账（W1 ①）----
+
+    /// 直落事件（actor 任意——marker 谓词只看 kind 与 turn_id）。
+    async fn append_event(pool: &SqlitePool, conv_id: &str, kind: &str, turn_id: &str) {
+        crate::db::repo::session_event::append(
+            pool,
+            conv_id,
+            kind,
+            "user",
+            Some(turn_id),
+            Some(turn_id),
+            "{}",
+        )
+        .await
+        .unwrap();
+    }
+
+    /// 三腿谓词全景：搁浅 B（仅 user_message 事件）在积压、多条按时间 ASC（消费
+    /// 最旧一条）；turn_context（回合起跑标记）与 turn_ended-only（backfill 对
+    /// legacy 回合的合成形态）都算已答；零事件旧行（Phase 0 前）与占位行
+    /// （tool_result / 空占位，即使带事件）不入账。
+    #[tokio::test]
+    async fn steer_backlog_marker_accounting() {
+        let pool = fresh_pool().await;
+        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        seed_message(&pool, "u-strand-1", "conv-steer").await; // content = "hello"
+        let new_msg = |content: &str| NewMessage {
+            conversation_id: "conv-steer".to_string(),
+            role: "user".to_string(),
+            content: content.to_string(),
+            token_count: None,
+            error: None,
+            model: None,
+        };
+        create(&pool, "u-consumed", &new_msg("已答")).await.unwrap();
+        create(&pool, "u-backfilled", &new_msg("旧库补记")).await.unwrap();
+        create(&pool, "u-legacy", &new_msg("远古行")).await.unwrap();
+        create(&pool, "u-tool", &new_msg("")).await.unwrap();
+        update_content_blocks(&pool, "u-tool", r#"[{"type":"tool_result","tool_use_id":"t1"}]"#)
+            .await
+            .unwrap();
+        create(&pool, "u-empty", &new_msg("")).await.unwrap();
+        create(&pool, "u-strand-2", &new_msg("第二条搁浅")).await.unwrap();
+
+        // 事件面：物化即落 user_message；消费/已答各有标记
+        append_event(&pool, "conv-steer", "user_message", "u-strand-1").await;
+        append_event(&pool, "conv-steer", "user_message", "u-strand-2").await;
+        append_event(&pool, "conv-steer", "user_message", "u-consumed").await;
+        append_event(&pool, "conv-steer", "turn_context", "u-consumed").await;
+        append_event(&pool, "conv-steer", "user_message", "u-backfilled").await;
+        append_event(&pool, "conv-steer", "turn_ended", "u-backfilled").await;
+        append_event(&pool, "conv-steer", "user_message", "u-tool").await; // 占位行带事件也不入账
+
+        let ids =
+            |v: Vec<TurnAnchor>| v.into_iter().map(|a| a.message_id).collect::<Vec<_>>();
+        let backlog = list_unconsumed_user_anchors(&pool, "conv-steer").await.unwrap();
+        assert_eq!(
+            ids(backlog),
+            vec!["u-strand-1", "u-strand-2"],
+            "只留搁浅 B 两条（时间 ASC；legacy/占位/已答不入账）"
+        );
+    }
+
+    /// boot 扫尾清单（W1 ③）：只圈 1v1（kind='chat'）——频道 user 行的消费标记
+    /// 锚在 `chain:` 前缀 turn_id 上、delegation 子会话有自己的消费引擎，kind
+    /// 闸是对应消费侧 kind 闸的显性防线；已答会话零命中。
+    #[tokio::test]
+    async fn conversations_with_unconsumed_anchors_scopes_to_chat() {
+        let pool = fresh_pool().await;
+        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        seed_message(&pool, "u-strand", "conv-chat").await; // 会话 kind 默认 'chat'
+        seed_turn_conv(&pool, "conv-chat-done").await;
+        seed_turn_conv(&pool, "conv-chan").await;
+        sqlx::query("UPDATE conversations SET kind = 'channel' WHERE id = 'conv-chan'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let new_msg = |conv: &str, content: &str| NewMessage {
+            conversation_id: conv.to_string(),
+            role: "user".to_string(),
+            content: content.to_string(),
+            token_count: None,
+            error: None,
+            model: None,
+        };
+        create(&pool, "u-answered", &new_msg("conv-chat-done", "已答")).await.unwrap();
+        create(&pool, "u-chan", &new_msg("conv-chan", "频道搁浅")).await.unwrap();
+
+        append_event(&pool, "conv-chat", "user_message", "u-strand").await;
+        append_event(&pool, "conv-chat-done", "user_message", "u-answered").await;
+        append_event(&pool, "conv-chat-done", "turn_context", "u-answered").await;
+        append_event(&pool, "conv-chan", "user_message", "u-chan").await;
+
+        let convs = conversations_with_unconsumed_anchors(&pool).await.unwrap();
+        assert_eq!(convs, vec!["conv-chat"], "只圈出 1v1 搁浅会话");
     }
 
     // ---- 回合制分页（list_by_turn_page）----

@@ -1,9 +1,11 @@
 //! Steer（1v1 生成中插话）引擎：自动打断在途回合 + turn_ended 后自动续跑。
 //!
 //! 机制 = 两个现成能力的接线（docs/steer-design.md §2）：
-//! - **打断**半：`chat_cmd` 的 Steer 分支在会话在途时物化用户消息 B，再调
-//!   [`ChatState::stop`]（复用 `CancellationToken::cancel()`——loop 在 yield 点
-//!   轮询，到达即由 [`crate::harness::cleanup::finalize_cancel`] 对称收尾）；
+//! - **打断**半：`chat_cmd` 的 Steer 分支先快照在途回合令牌（[`ChatState::token_of`]），
+//!   物化用户消息 B 后**点名取消快照令牌**（W1 ②：stop 无回合身份——大附件
+//!   物化超过回合 A 自然收尾时，迟到的 stop 会误伤已起跑的续跑回合 B；死令牌
+//!   cancel = 无害 no-op），loop 在 yield 点轮询，到达即由
+//!   [`crate::harness::cleanup::finalize_cancel`] 对称收尾；
 //! - **续跑**半：本模块订阅 turn_ended 广播 → 等静默 → 查积压（DB 为真相源，
 //!   复用频道 C8 的「用户消息无条件物化」）→ `run_agent_turn(pre_materialized=true)`
 //!   开新回合 B。
@@ -13,19 +15,26 @@
 //! 重读历史即得上下文连续性。无新事件 kind、不动 loop 核心、不动 append-only
 //! 日志模型（见设计稿 §4/§13）。
 //!
-//! ## 积压边界（关键）
+//! ## 积压边界（marker 记账，W1 ①）
 //!
-//! 积压 = 最近一次 `turn_ended` 的 `turn_id`（即该回合的 `user_msg_id`，由
-//! `turn_id == user_msg_id` 最深不变式保证）之后的真实用户消息锚点。steer 消息
-//! B 在回合 A 在途时物化，rowid 必在 A 的用户消息之后，故被 `list_user_anchors_after`
-//! 命中。连发 B1/B2/B3 各自成回合、串行完整执行（每次消费**最旧一条**，
-//! `user_msg_id = anchor.message_id`——数据层不合并，见设计稿 §10.2/§11.1）。
+//! 积压 = 「已入账、未消费」的真实用户消息锚点（
+//! `repo::message::list_unconsumed_user_anchors`）：`user_message` 事件在场
+//! （已入账，同时排除 Phase 0 前零事件旧行）且无 `turn_context`/`turn_ended`
+//! 标记（未消费；turn_context 恒在每回合起跑落库，turn_ended 兜 backfill
+//! 合成形态）。旧版「最近 turn_ended turn_id 之后」的推断边界有两个洞——撞忙
+//! 放弃会把边界让给并发回合（积压无痕消失）、boot 后无从得知未消费面（崩溃
+//! 搁浅）——marker 记账两侧皆治：账面即真相源，任何触发源（turn_ended
+//! watcher / chat_cmd 兜底 / boot 扫尾）读到同一积压。连发 B1/B2/B3 各自成
+//! 回合、串行完整执行（每次消费**最旧一条**，`user_msg_id = anchor.message_id`
+//! ——数据层不合并，见设计稿 §10.2/§11.1）。
 //!
 //! ## 并发
 //!
-//! chat_state.start 是最终仲裁（与频道同款哲学）：两路并发触发时一路 start 成功、
-//! 另一路把消息留流静默退出，积压以 DB 为真相源自愈。已知残余：极窄竞速窗口下
-//! 消息可能稍晚被消费（方向是「多干活」非丢消息，诚实可接受）。
+//! chat_state.start 是最终仲裁（与频道同款哲学）：撞忙不放弃——退避回循环
+//! 头等静默、按剩余积压续接（设计稿 §10.3 承诺的退避重试，W1 ① 落地）。
+//! 两路并发触发时一路 start 成功、另一路循环等待；账面（marker 记账）保证
+//! 不丢不重。已知残余：极窄竞速窗口下消息可能稍晚被消费（方向是「多干活」
+//! 非丢消息，诚实可接受）。
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -121,83 +130,79 @@ async fn on_steer_turn_ended(app: &AppHandle, conv_id: &str) {
     }
 }
 
-/// 消费 1v1 积压：最近一次 turn_ended 之后的真实用户消息 → 静默窗 → 消费最旧一条。
+/// 消费 1v1 积压：未消费的用户消息锚点（marker 记账）→ 静默窗 → 消费最旧
+/// 一条；撞忙不放弃，退避重试直到发起成功或超时。
 ///
-/// 调用源：`on_steer_turn_ended`（turn_ended 广播）与 `chat_cmd` Steer 分支的
-/// stop-false 兜底（会话恰在物化期间收尾 → 无新 turn_ended 再触发，手动接管）。
-/// 并发安全靠 chat_state.start 单写者兜底（start 失败 = 忙 → 消息留流，下次触发
-/// 源接手）。
+/// 调用源：`on_steer_turn_ended`（turn_ended 广播）、`chat_cmd` Steer 分支的
+/// 死令牌兜底（A 恰在物化期间自然收尾 → 无新 turn_ended 再触发，手动接管）、
+/// boot 扫尾 [`spawn_boot_sweep`]。并发安全靠 chat_state.start 单写者兜底：
+/// 撞忙 = 并发触发源已起跑，回到循环头等它收尾再按剩余积压续接（§10.3）。
 pub(crate) async fn consume_steer_backlog(
     app: &AppHandle,
     pool: &SqlitePool,
     conv: &ConversationRow,
 ) -> AppResult<()> {
-    // 等静默（turn_ended 广播先于 cleanup unregister；stop-false 兜底路径
-    // is_streaming 已 false，此处直过）
     let chat_state = app.state::<ChatState>().inner().clone();
     let deadline = Instant::now() + QUIET_TIMEOUT;
-    while chat_state.is_streaming(&conv.id) {
-        if Instant::now() >= deadline {
-            tracing::info!(
-                target: "ice_paw.steer",
-                conv = %conv.id,
-                "触发点等待静默超时（{QUIET_TIMEOUT:?}），本轮放弃——下次触发源接手"
-            );
-            return Ok(());
-        }
-        tokio::time::sleep(QUIET_POLL).await;
-    }
-
-    // 积压边界 = 最近一次 turn_ended 的 turn_id（= 该回合 user_msg_id，
-    // turn_id == user_msg_id 不变式）
-    let Some(boundary) = last_turn_ended_id(pool, &conv.id).await else {
-        return Ok(()); // 无已完成回合（异常，正常 turn_ended 触发必命中）
-    };
-
-    let mut backlog = repo::message::list_user_anchors_after(pool, &conv.id, &boundary).await?;
-    if backlog.is_empty() {
-        return Ok(()); // 无 steer 消息（普通回合正常收尾）
-    }
-
-    // 静默窗口（连发聚合）：窗口内又有新 user 行 → 重置继续等（说完一起听）
-    let mut seen = backlog.len();
-    let deadline = Instant::now() + QUIET_TIMEOUT;
     loop {
-        tokio::time::sleep(CHAIN_HEAD_QUIET).await;
-        match repo::message::list_user_anchors_after(pool, &conv.id, &boundary).await {
-            Ok(b) if b.len() > seen => seen = b.len(),
-            Ok(_) => break,
-            Err(_) => break,
+        // 等静默（turn_ended 广播先于 cleanup unregister；兜底/boot 路径
+        // is_streaming 已 false，此处直过）
+        while chat_state.is_streaming(&conv.id) {
+            if Instant::now() >= deadline {
+                tracing::info!(
+                    target: "ice_paw.steer",
+                    conv = %conv.id,
+                    "触发点等待静默超时（{QUIET_TIMEOUT:?}），本轮放弃——下次触发源接手"
+                );
+                return Ok(());
+            }
+            tokio::time::sleep(QUIET_POLL).await;
         }
-        if Instant::now() >= deadline {
-            break;
-        }
-    }
-    backlog = repo::message::list_user_anchors_after(pool, &conv.id, &boundary).await?;
-    if backlog.is_empty() {
-        return Ok(());
-    }
 
-    // 消费**最旧一条**（anchor = backlog.first()；其余留待本轮 turn_ended 触发点
-    // 续接——连发各自成回合、串行完整执行，数据层不合并）
-    let anchor = backlog.first().expect("backlog 非空必有头").message_id.clone();
-    let count = backlog.len();
-    run_steer_turn(app, pool, conv, &anchor, count).await
+        // 积压 = 未消费锚点（marker 记账，见模块头「积压边界」）
+        let mut backlog = repo::message::list_unconsumed_user_anchors(pool, &conv.id).await?;
+        if backlog.is_empty() {
+            return Ok(()); // 无积压（普通回合正常收尾 / 已被并发触发源消费）
+        }
+
+        // 静默窗口（连发聚合）：窗口内又有新 user 行 → 重置继续等（说完一起听）
+        let mut seen = backlog.len();
+        let quiet_deadline = Instant::now() + QUIET_TIMEOUT;
+        loop {
+            tokio::time::sleep(CHAIN_HEAD_QUIET).await;
+            match repo::message::list_unconsumed_user_anchors(pool, &conv.id).await {
+                Ok(b) if b.len() > seen => seen = b.len(),
+                Ok(_) => break,
+                Err(_) => break,
+            }
+            if Instant::now() >= quiet_deadline {
+                break;
+            }
+        }
+        backlog = repo::message::list_unconsumed_user_anchors(pool, &conv.id).await?;
+        if backlog.is_empty() {
+            return Ok(()); // 窗口期被并发触发源消费完毕
+        }
+
+        // 消费**最旧一条**（anchor = backlog.first()；其余留待本轮 turn_ended 触发点
+        // 续接——连发各自成回合、串行完整执行，数据层不合并）
+        let anchor = backlog.first().expect("backlog 非空必有头").message_id.clone();
+        let count = backlog.len();
+        match run_steer_turn(app, pool, conv, &anchor, count).await? {
+            SteerTurnOutcome::Dispatched => return Ok(()),
+            // 撞忙 = 并发触发源已起跑：退避回循环头等它收尾、按剩余积压续接
+            //（§10.3）——旧版在此放弃，推断边界下积压可能就此搁浅（W1 ①）。
+            SteerTurnOutcome::Busy => continue,
+        }
+    }
 }
 
-/// 最近一次 turn_ended 的 turn_id（即该回合的 user_msg_id）。无则 None。
-async fn last_turn_ended_id(pool: &SqlitePool, conv_id: &str) -> Option<String> {
-    sqlx::query_scalar::<_, String>(
-        "SELECT turn_id FROM session_events \
-          WHERE session_id = ? AND kind = 'turn_ended' \
-            AND turn_id IS NOT NULL AND turn_id != '' \
-          ORDER BY seq DESC LIMIT 1",
-    )
-    .bind(conv_id)
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten()
+/// 消费一条 steer 积压的结果（`consume_steer_backlog` 的退避重试循环用）。
+enum SteerTurnOutcome {
+    /// 回合已发起（fire-and-forget；注销责任已移交 stream_loop 的 finalize_*）
+    Dispatched,
+    /// 会话忙（chat_state.start 撞忙）——消息留流，调用方退避后按剩余积压续接
+    Busy,
 }
 
 /// 消费一条 steer 积压为完整回合（fire-and-forget，频道 `run_next_hop` 同款）。
@@ -211,7 +216,7 @@ async fn run_steer_turn(
     conv: &ConversationRow,
     anchor: &str,
     count: usize,
-) -> AppResult<()> {
+) -> AppResult<SteerTurnOutcome> {
     // --- 预检：会话 agent 凭据 + provider（失败留流，下次触发源接手）---
     let agent_cmd = app.state::<Arc<dyn AgentCmd>>().inner().clone();
     let creds = agent_cmd.get_with_credentials(&conv.agent_id).await?;
@@ -222,15 +227,15 @@ async fn run_steer_turn(
         creds.agent.cache_prompt != 0,
     )?;
 
-    // --- 单写者仲裁（忙 = 消息留流，触发点接手）---
+    // --- 单写者仲裁（忙 = 交回调用方退避重试，W1 ①）---
     let chat_state = app.state::<ChatState>().inner().clone();
     let Ok(cancel_token) = chat_state.start(&conv.id) else {
         tracing::info!(
             target: "ice_paw.steer",
             conv = %conv.id,
-            "会话忙，steer 消费暂缓（回合结束后接手）"
+            "会话忙，steer 消费退避重试（等在途回合收尾后接手）"
         );
-        return Ok(());
+        return Ok(SteerTurnOutcome::Busy);
     };
     // RAII 兜底：start 成功后、spawn 前的任何 `?` 早退自动 unregister
     //（chat_cmd 同款；spawn 成功后注销责任移交 stream_loop 的 finalize_*）
@@ -299,5 +304,78 @@ async fn run_steer_turn(
         conv = %conv.id,
         "steer 消费回合已发起（积压 {count} 条，消费最旧一条）"
     );
-    Ok(())
+    Ok(SteerTurnOutcome::Dispatched)
+}
+
+// =========================================================================
+// boot 扫尾（W1 ③：崩溃/重启搁浅积压的自愈入口）
+// =========================================================================
+
+/// boot 扫尾（lib.rs setup 调用一次）：扫有未消费 steer 锚点的 1v1 会话，逐会话
+/// 消费积压。
+///
+/// 覆盖场景：steer 消息 B 物化后、消费回合起跑前进程死亡/重启——turn_ended
+/// watcher 不再触发、前端「排队中」角标随重启清零，积压若无扫尾即永久搁浅
+///（B 永不回答）。幂等：marker 记账下已消费面自然排除，正常 boot（无搁浅）
+/// 零命中零成本。后台化 + 失败仅 warn 不阻塞启动（与孤儿 turn 补记等既有
+/// boot 扫尾同款纪律）；不动刚 boot 时的在途回合（等静默由
+/// `consume_steer_backlog` 自带）。
+pub fn spawn_boot_sweep(app: AppHandle, pool: SqlitePool) {
+    tauri::async_runtime::spawn(async move {
+        let convs = match repo::message::conversations_with_unconsumed_anchors(&pool).await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(
+                    target: "ice_paw.steer",
+                    "boot steer 扫尾查询失败（本次跳过）: {e}"
+                );
+                return;
+            }
+        };
+        if convs.is_empty() {
+            return;
+        }
+        tracing::info!(
+            target: "ice_paw.steer",
+            "boot steer 扫尾：发现 {n} 个搁浅积压会话，逐会话消费",
+            n = convs.len()
+        );
+        for conv_id in convs {
+            // 查询已按 kind='chat' 过滤；行在此间被删时跳过（CASCADE 清事件后
+            // marker 面自洽，get 双保险）
+            let Ok(conv) = repo::conversation::get_by_id(&pool, &conv_id).await else {
+                continue;
+            };
+            if conv.kind != "chat" {
+                continue;
+            }
+            if let Err(e) = consume_steer_backlog(&app, &pool, &conv).await {
+                tracing::warn!(
+                    target: "ice_paw.steer",
+                    conv = %conv_id,
+                    "boot steer 扫尾消费失败: {e}"
+                );
+            }
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 简报文案两分支：单条 vs 连发（连发须披露条数与「优先处理最近一条」）。
+    #[test]
+    fn steer_brief_single_vs_burst() {
+        let one = compose_steer_brief(1);
+        assert_eq!(one.len(), 1);
+        let one_text = ContentBlock::join_text(&one);
+        assert!(one_text.contains("一条新消息"));
+        assert!(!one_text.contains("优先处理最近一条"));
+
+        let many = compose_steer_brief(3);
+        let many_text = ContentBlock::join_text(&many);
+        assert!(many_text.contains("3 条新消息"));
+        assert!(many_text.contains("优先处理最近一条"));
+    }
 }
