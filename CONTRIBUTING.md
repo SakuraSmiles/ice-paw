@@ -64,11 +64,9 @@ ice-paw/
 │   │           ├── harness/           # 核心运行时（provider/loop/mcp/kb）
 │   │           └── infra/             # 基础设施（protocol/ 事件协议 + cancel、decode、file_validation、image_validation、path_norm、process、strings）
 │   └── ui/                           # 共享 UI 样式（CSS tokens）
-├── docs/                              # 架构/设计真相源与使用指南
+├── docs/                              # 用户文档（使用指南；内部设计文档不入公开仓库）
 └── pnpm-workspace.yaml
 ```
-
-> 详细架构见 [docs/architecture.md](docs/architecture.md)
 
 ## 常用命令
 

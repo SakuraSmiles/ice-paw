@@ -1,12 +1,16 @@
+<div align="center">
+
 # IcePaw
 
 ### 本地优先的 AI 多 Agent 桌面工作站
 
-配好几个 Agent，把对话、文件、代码、文档和屏幕都交给它们——数据全部留在你的电脑上。
+多个 AI Agent 在本地为你工作——对话、写文档、跑命令、看屏幕，数据不离开你的电脑。
 
 [![CI](https://github.com/SakuraSmiles/ice-paw/actions/workflows/ci.yml/badge.svg)](https://github.com/SakuraSmiles/ice-paw/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Version](https://img.shields.io/badge/version-0.9.2-blue)](https://github.com/SakuraSmiles/ice-paw/releases)
+
+</div>
 
 ## 界面预览
 
@@ -64,11 +68,7 @@ pnpm tauri:build   # 产物在 packages/app/src-tauri/target/release/bundle/
 ## 文档
 
 - [使用指南](docs/user-guide.md)
-- [架构文档](docs/architecture.md)
-- [多 Agent 协作设计](docs/multi-agent-architecture.md)
 - [贡献指南](CONTRIBUTING.md)
-
-各子系统的设计真相源（Steer / 频道 / 工具权限 / 屏幕读写 / Word 能力路线等）见 [docs/](docs/) 目录。
 
 ## 常见问题
 

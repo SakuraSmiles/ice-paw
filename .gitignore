@@ -72,3 +72,9 @@ brand/
 # docx 语料（真实工程文档，用户拍板严禁版本控制/上传；仅本地供 corpus 测试运行时读取）
 packages/app/src-tauri/tests/fixtures/docx/*.docx
 target-clippy/
+
+# docs/ 只公开用户向内容（使用指南/截图）；设计与路线文档是内部开发资产，
+# 白名单反转——新增文档默认不公开，需公开时显式加白名单
+docs/*
+!docs/user-guide.md
+!docs/screenshots/
