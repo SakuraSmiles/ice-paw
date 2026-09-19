@@ -14,6 +14,7 @@
 -->
 <script setup lang="ts">
 import { computed, watch, nextTick, ref } from "vue";
+import { Loader2 } from "@lucide/vue";
 import { useChatStore } from "../../stores/chat";
 import { useAgentStore } from "../../stores/agent";
 import { useProjectStore } from "../../stores/project";
@@ -51,6 +52,18 @@ const sendingPhase = computed(() =>
     streamingToolCalls: chat.streamingToolCalls.values(),
     summarizing: chat.summarizing,
   }),
+);
+
+// Steer 插话衔接态（§11 过渡提示的轻量版）：回合 A 被 abort 收尾（chat:done →
+// sending=false）到回合 B 起跑之间存在 3s+ 静默窗（后端 CHAIN_HEAD_QUIET 聚合
+// 连发）——此窗输入区不该长得跟真空闲一样（假信号：用户以为消息丢了/停了）。
+// 判据 = 排队角标仍命中当前会话消息（messages 即当前会话列表，天然会话归属
+// 守卫：切走不显、切回复显）；回合 B 起跑 sending=true 即让位生成中形态。
+const steerPending = computed(
+  () =>
+    !chat.sending &&
+    chat.queuedSteerIds.size > 0 &&
+    chat.messages.some((m) => chat.queuedSteerIds.has(m.id)),
 );
 
 watch(() => chat.sending, (sending) => {
@@ -586,7 +599,7 @@ function handleKeydown(e: KeyboardEvent) {
         </div>
       </div>
 
-      <div class="input-wrapper" :class="{ 'is-sending': chat.sending, 'drag-over': dragOver }" @dragover="onDragOver" @dragleave="onDragLeave" @drop="onDrop">
+      <div class="input-wrapper" :class="{ 'is-sending': chat.sending || steerPending, 'drag-over': dragOver }" @dragover="onDragOver" @dragleave="onDragLeave" @drop="onDrop">
         <!-- @ 引用弹层（输入框上方；mousedown.prevent 保证点选不丢 textarea 焦点） -->
         <div v-if="atActive" class="at-popover">
           <button
@@ -661,7 +674,11 @@ function handleKeydown(e: KeyboardEvent) {
           <span v-if="chat.budget" class="input-hint budget-hint">
             <BudgetPill :budget="chat.budget" />
           </span>
-          <span v-else class="input-hint">{{ channelArchived ? "频道已归档" : isChannelConv ? (chat.sending ? sendingPhase : "@ 成员点名接力 · 无 @ 时由统筹者接令") : chat.sending ? sendingPhase : "Enter 发送 · Shift+Enter 换行" }}</span>
+          <!-- steerPending 优先于一切空闲文案：插话排队中（静默窗内）不显真空闲 -->
+          <span v-else class="input-hint">
+            <template v-if="steerPending"><Loader2 :size="12" class="spin" />插话排队中，即将继续…</template>
+            <template v-else>{{ channelArchived ? "频道已归档" : isChannelConv ? (chat.sending ? sendingPhase : "@ 成员点名接力 · 无 @ 时由统筹者接令") : chat.sending ? sendingPhase : "Enter 发送 · Shift+Enter 换行" }}</template>
+          </span>
           <div class="btn-group" :class="{ 'is-steering': chat.sending }">
             <button class="btn-send" :class="{ active: canSend }" :disabled="channelArchived || !canSend" title="发送 (Enter)" @click="send">
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -775,6 +792,12 @@ function handleKeydown(e: KeyboardEvent) {
 @keyframes stop-enter { from { opacity:0; transform:scale(0.85); } to { opacity:1; transform:scale(1); } }
 /* 快捷键提示：占据左右按钮之间的剩余空间并居中（输入框内部的轻脚注） */
 .input-hint { flex:1; min-width:0; font-size: var(--ip-text-micro-size); color:var(--ip-color-text-disabled); text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+/* Steer 衔接态：hint 行内 spinner（lucide 进文本流须显式 inline-block——
+   base.css 全局 svg display:block reset 陷阱）+ 旋转动画与 reduced-motion 降级 */
+.input-hint :deep(.spin) { display:inline-block; vertical-align:-2px; margin-right:4px; }
+.spin { animation: rotate-cw 1s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+@keyframes rotate-cw { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 .attach-warn { font-size:var(--ip-text-caption-size); line-height:1.5; white-space:pre-line; color:var(--ip-danger-base); text-align:center; margin:0; }
 /* 预算 HUD 占据 footer 中间位（复用 input-hint 的 flex:1 居中槽）：HUD 自身
    inline-flex，外套一层做居中排布 */
