@@ -168,6 +168,8 @@
 > **干净面**：SQL 注入零 / N+1 零 / 事件 inline-await 铁律零违例 / 前端类型卫生优秀（@ts-ignore 0、any 仅 4 处）/ bridge 零绕过 / TODO·console·死代码近零 / 编辑契约四负债已迁二。风险集中在**门禁没接电、少数静默失败、层级倒置与巨件、视觉令牌存量**。
 >
 > **in-app agent 报告交叉核实（防复活）**：R1 事实过时（41 commit 已随 0.8.2 推平，ahead=0 实证；仅留「批次内多推 checkpoint」惯例）；R2 半错——ChatMessages 有六份专项测试（channel / frozen-round / process-narrative / stats-fastpath / thinking-aggregate / tool-collapse，mount+DOM 断言），「防线完全缺席」不成立，真问题 = 纯函数困在 2324 行 SFC（→U3-3）；**R3 误报驳回**——vue ^3.5.13，且 Vue3 reactive Map.set 对已有键本就触发 SET 键级依赖，生产流式渲染日常在用即反证；R4 部分采纳（核心 = CI 接电 U0-2；coverage 门槛/四元组单人仓过重→观察）；R6 不采纳（localStorage 写频与体量无实害）；R9 半采纳（.gitattributes 已锁源码 LF，editorconfig 只补编辑器侧，无急迫性）；R5/R7/R8/R10 采纳并入下列相应项。生产取证另给观察池补证据：UE5 重连 UX（9-14 单日断线懒重启 83 次实锤）、回合中途预算复查（DB 膨胀同源）。
+>
+> **2026-09-19 勘误**：本批各行「已修待 commit」均已落盘——U0/U1/U2 随 0.8.3–0.8.6（cf534e9）与 0.9.0（7a8c2d8）提交发版；U2-1「库从 703MB 瘦回 ~90MB」指逻辑内容外置后的瘦身体量，**物理文件未收缩**（2026-09-19 实测 free pages 534.7MB，回收方案见批次 W3）。
 
 | # | 项 | 严重度 | 状态 |
 |---|---|---|---|
@@ -203,6 +205,24 @@
 - **`*.bak` 背份**：5 份 = `ice-paw.db.bak`/`.data_bak`（旧 1MB×2）+ `pre-tool-result-migration.bak`（213MB）+ `pre-inbox-drop.bak`（213MB）+ `pre-56-drop.bak`（735MB），合计 ~1.6GB，均迁移安全网快照、从未清理——**已由 `cleanup_stale_db_backups`（7 天保留）收口**。
 - **图片外置（2026-09-17 拍板「外置到文件目录」并落地）**：lossless、可逆、DB 瘦身——内联 base64 字节外置到 `<data_dir>/images/<blake2b-16B-hex>.<ext>`，内容寻址去重（同字节同文件），DB 只留 `image_file` 指针。落库形态 `{"type":"image","data":"","media_type":...,"image_file":"<hash>.png"}`（`data` 保留空串防 `ContentBlock::Image` 反序列化失败）；读侧 `hydrate_json` 读回内联、文件缺失降级 `[图片内容已不可恢复]`、路径逃逸判坏降级。存量由 boot 后台 `offload_all_images` 一次性扫尾（`content_blocks LIKE '%"image"%'` 行，UPDATE 只写变化行）。**权衡**：DB 从 703MB 瘦回 ~90MB，字节零损（未选有损压缩——用户优先数据可逆）；写文件失败软失败保留内联、下次 sweep 重试。
 
+## 批次 W — 2026-09-19 大检查（五路扫描 + Steer 批对抗审查）
+
+> 0.9.0 发版后、Steer 批 commit 前的全工程体检（用户委托「代码卫生、架构设计、用户体验等多维度」）：验证链/CI · 后端卫生 · 前端卫生 · UX 契约 · 生产数据五路并行扫描 + Steer 批对抗审查；发现全部对台账 Q/R/T/U 与观察池去重后入本批。
+>
+> **干净面**：四条全仓级纪律实测零违规（事件 inline-await 铁律 18+ spawn 点逐一核查 / commands 层生产 unwrap·expect 0 / TODO 真实债务全仓仅 1 条 / process::Command·fs 授权面全量核查）；CI 三连绿（7a8c2d8 / cf534e9 / d2073bc）；生产数据五项零异常（损坏行/孤儿事件/reconcile 污染/语义检索索引/会话引用全零）；UX 十则 7/10 完美；前端 console.log 0 / invoke 单点 / localStorage 键值成对。
+>
+> **分诊（2026-09-19 用户拍板：Steer 批原样 commit 发版，W1 挂账排期）**：
+
+| # | 项 | 严重度 | 状态 |
+|---|---|---|---|
+| W1 | **Steer 搁浅族**（对抗审查 P1×2 + P2×2）：①积压边界启发式假设「消息按序起跑」——A abort→chat:done 即刻置 sending=false，而 watcher 还要等 ≥3s 静默窗，此间隙用户补发 C 先赢 start，watcher 醒来 start(插话) 撞忙即**放弃**（steer.rs:227-234；设计稿 §10.3 承诺的是退避重试），C 的 turn_ended 把边界推过插话——积压无痕消失、角标被 prune 静默摘除（触发场景 = 插话打断后立刻补一句，高频）；②`stop()` 无回合身份（chat_cmd.rs:123）——大附件物化超过静默窗时，迟到的 stop 命中已起跑的续跑回合，B 在首个 yield 点被 abort 且无响应永挂「排队中」；③无 boot 扫尾——B 物化后 start 前崩溃/重启，积压永久搁浅且前端角标随重启清零；④steer.rs 零后端测试（stranding 族无回归锁；频道 C8 同族当年有 7 用例）。修法方向 = 消费进度显式记账，或 busy 放弃时携带原 boundary 重试/登记 + boot 扫尾 + stranding 回归测试 | 高 | 🔴 |
+| W2 | **错误呈现 last-mile**（前端/UX 两路交叉证实）：裸 `e.message` 直出 ×3（ChannelPopover.vue:57 / ProjectSettings.vue:66,102 / ProjectList.vue:94,159）+ 16+ 手写错误横幅未收编 ErrorBanner（三段式排版分叉）+ 8 处手写 click-outside 未抽共享 | 中高 | 📋 |
+| W3 | **DB 空间 534.7MB 未回收**：U2-1 图片外置后物理文件从未收缩（freelist_count=136875/180031 页 × 4096B 实证：free 534.7MB / used 168.6MB；auto_vacuum=0，UPDATE 释放页滞留文件）——外置省下的空间滞在 free pages。方策待定：boot 后台按 freelist 阈值一次性 VACUUM 最简（需评估耗时与磁盘余量） | 中 | 📋 |
+| W4 | **轨迹时间格式化 4 处绕过统一通道**：TrajectoryTable.vue:213 / TrajectoryTimeline.vue:151 / TrajectoryInspector.vue:161 / useTrajectory.ts:311 localDate——手写解析/格式化并存，时区口径（UTC 解析 vs 本地显示）混用风险（北京时间无夏令时现状无害，属口径债非现症） | 中低 | 📋 |
+| W5 | **失败静默族残余**：batch_writer.rs:313 sender-drop 退出路径 flush 失败无日志（对照显式关闭路径有 warn——流式正文尾部无痕丢失面）/ channel.rs:932 选举换选时旧统筹降级 set_member_role 失败被 let _ 吞（可短暂双 coordinator，同函数升级路径有 warn）/ kb/ensure.rs:103 种子写失败静默 + 无条件「已创建」/ chat.ts:872 延迟删除失败静默 / steer.rs:189 last_turn_ended_id 查询错吞成 None 无 warn | 中低 | 📋 |
+| W6 | **杂项包**：z-index 裸数字 7 处（GeneralSettings:1347 / ProjectTimeline:397 / TaskLedger:129 / AuthRequestCard:305 / PanelResizeHandle:38 / ProjectSwitcher:476 / TurnRail:151——Q14 计数刷新）/ ProjectSwitcher.vue:385 焦点缺口 + TrajectoryTimeline `.tt-earlier` outline 无替代 / file_tools.rs:545 MoveFileTool 注释仍写 Q1 修复前授权语义（安全语义级误导）/ channel.rs:461 双段旧契约注释 / Steer P3 批（send_failed 横幅无重试钮 / steerAbortExpected 残留吞「已手动停止」提示 / pruneQueuedSteers 连发角标提前摘除 / 回合 B content_text 简报套话进相关性检索）/ ChatMessages·GeneralSettings 8 处 setTimeout 未清理 + ChatMessages 无 onUnmounted / useModelProfiles test-only exports / mm:ss 格式化重复实现 | 低 | 📋 |
+| W7 | **文案规范尾巴**：数字与单位空格（format.ts:69「30s」/ TrajectoryTable「850ms」——规范「214 ms」形）+ 绝对时直出 3 处（TaskLedger:102 / TaskPanel:295 / ProjectList:432——应 timeAgo + hover 绝对时） | 低 | 📋 |
+
 ## 安全项
 
 | # | 项 | 备注 |
@@ -224,6 +244,11 @@
 - skill 渐进披露（借鉴拍，opencode 04）—— name+description 常驻工具清单、正文按需注入；我们工具软裁剪已做相关性排序，此模式可延伸到 KB/help 注入（目录层），撞上再做
 - BeforeCompact hook（借鉴拍，opencode 04）—— opencode 压缩提示词可被插件整体替换；我们 hooks 四接入点可远期加第 5 个，压缩策略用户可编程
 - **回合中途预算复查**（2026-09-12 UE5 base64 巨块案二阶）——工具输出全局治理已治「单结果体积」（提取+256KB 截断，tool_executor 单点）；更深一层是回合内累积无闸：多轮工具结果合计仍可超窗口（Pipeline 预算/TokenWindow 只在回合起点跑一次）。修法 = loop 每轮 LLM 调用前重估工作上下文、超限触发轮间折叠——动 loop_engine 核心，等真实撞上（单结果闸后概率已大降）再立项
+- **docx 四件套 ~16,250 行成最大质量块**（2026-09-19 大检查量化刷新；docx_edit.rs 8456 全仓最大、docx_tool 3480、docx_inspect 2607）——巨件方向拆分候选，随下次 docx 波次顺势切片
+- **send_message 回涨 255 行**（chat_cmd.rs；S3 曾瘦至 ~160，channel/steer 双分流叠加附件编排所致）——编排下沉候选；会话存在性校验样板 ×11 同向
+- **AppHandle 穿透 kb/migration 旁支未收口**（U3-2 loop/emitter 抽象方向延续，主体已破环、旁支残留）
+- **reject_sensitive 无 Windows 设备名/UNC 纵深**（file_tools.rs:41——防御纵深单层；主闸 PathWhitelist/Q1 all-match 无实际旁路，Q1 同域）
+- **ChatMessages 2278 行二刀候选**（U3-3 第一刀后仍为前端最大件；全前端 22 文件 >500 行）
 
 ## 🗑 划掉区（已核验消亡，勿复活）
 
