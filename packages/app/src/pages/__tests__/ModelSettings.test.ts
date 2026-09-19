@@ -351,7 +351,7 @@ describe("ModelSettings 设置·模型页（实体库）", () => {
     await w.findAll("button").find((b) => b.text() === "创建")!.trigger("click");
     await flushPromises();
     expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "create_model_profile")).toBe(false);
-    expect(w.find(".test-fail-text").text()).toContain("别名必填");
+    expect(w.find(".eb-inline").text()).toContain("别名必填"); // W2：表单错误行收编 ErrorBanner（inline 形态）
   });
 
   it("创建表单测试连接：草稿值探测（无 profileId）+ URL 占位真实展示所选厂商默认端点", async () => {

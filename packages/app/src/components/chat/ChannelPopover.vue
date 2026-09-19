@@ -20,6 +20,8 @@ import { ref, computed, watch } from "vue";
 import { Shield, Users } from "@lucide/vue";
 import { bridge } from "../../api/bridge";
 import { useChatStore } from "../../stores/chat";
+import ErrorBanner from "../common/ErrorBanner.vue";
+import { msgOf, stripInvokePrefix } from "../../utils/errors";
 import EntityAvatar from "../common/EntityAvatar.vue";
 
 const props = defineProps<{ convId: string }>();
@@ -54,7 +56,7 @@ async function appoint(agentId: string) {
     await bridge.channels.setCoordinator(props.convId, agentId);
     await chat.refreshChannelView();
   } catch (e) {
-    errorText.value = e instanceof Error ? e.message : String(e);
+    errorText.value = stripInvokePrefix(msgOf(e));
   } finally {
     actingId.value = null;
   }
@@ -67,7 +69,7 @@ async function remove(agentId: string) {
     await bridge.channels.setCoordinator(props.convId, null);
     await chat.refreshChannelView();
   } catch (e) {
-    errorText.value = e instanceof Error ? e.message : String(e);
+    errorText.value = stripInvokePrefix(msgOf(e));
   } finally {
     actingId.value = null;
   }
@@ -80,7 +82,7 @@ async function reelect() {
     await bridge.channels.reelect(props.convId);
     await chat.refreshChannelView();
   } catch (e) {
-    errorText.value = e instanceof Error ? e.message : String(e);
+    errorText.value = stripInvokePrefix(msgOf(e));
   } finally {
     reelecting.value = false;
   }
@@ -94,7 +96,7 @@ async function reelect() {
       <span class="channel-count">{{ view?.members.length ?? 0 }} 名</span>
     </div>
 
-    <div v-if="errorText" class="channel-error">{{ errorText }}</div>
+    <ErrorBanner v-if="errorText" variant="inline" title="操作失败" :detail="errorText" :retry-label="null" />
 
     <div v-if="!view" class="channel-hint">加载中…</div>
     <ul v-else-if="view.members.length === 0" class="channel-empty">
@@ -170,11 +172,6 @@ async function reelect() {
 .channel-title { font-size: var(--ip-text-body-sm-size); font-weight: var(--ip-font-weight-semibold); color: var(--ip-color-text-primary); }
 .channel-count { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
 .channel-hint { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); padding: var(--ip-spacing-2) 0; }
-.channel-error {
-  font-size: var(--ip-text-caption-size); color: var(--ip-danger-text);
-  background: var(--ip-danger-bg); border-radius: var(--ip-radius-md);
-  padding: var(--ip-spacing-1_5) var(--ip-spacing-2_5); line-height: 1.5;
-}
 .channel-empty {
   margin: 0; padding: var(--ip-spacing-4) var(--ip-spacing-2);
   text-align: center; font-size: var(--ip-text-body-sm-size);

@@ -540,6 +540,7 @@ impl McpClient for DelegateTool {
                 api_key: creds.api_key,
                 user_msg_id: Uuid::new_v4().to_string(),
                 content_text: task_text.clone(),
+                relevance_query: None,
                 llm_blocks: vec![ContentBlock::text(task_text.clone())],
                 persist_blocks: vec![ContentBlock::text(task_text)],
                 attach_db_inputs: Vec::new(),

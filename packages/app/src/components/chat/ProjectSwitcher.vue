@@ -393,6 +393,11 @@ function confirmCreate() {
   color: var(--ip-color-text-primary);
   padding: 0;
 }
+/* 键盘焦点环（outline:none 的替代——无障碍基线 ⑨） */
+.create-input:focus-visible {
+  outline: 2px solid var(--ip-primary-500);
+  outline-offset: 2px;
+}
 .create-input::placeholder { color: var(--ip-color-text-tertiary); }
 .create-actions { display: flex; gap: 2px; flex-shrink: 0; }
 .create-btn {
@@ -473,7 +478,7 @@ function confirmCreate() {
 .switcher-menu-header {
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: var(--ip-z-badge);
   display: flex;
   align-items: center;
   justify-content: space-between;

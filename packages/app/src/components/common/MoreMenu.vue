@@ -2,7 +2,8 @@
 // MoreMenu.vue — 更多操作下拉菜单（⋮ kebab）
 // 通用下拉：点 ⋙ 展开菜单项，点外部收起。
 // item 带 confirmText 时，点击不立即触发，而是就地切换为「确认/取消」二次确认态。
-import { ref, onMounted, onUnmounted } from "vue";
+import { ref } from "vue";
+import { useClickOutside } from "../../composables/useClickOutside";
 
 defineProps<{
   items: { label: string; value: string; danger?: boolean; confirmText?: string }[];
@@ -36,16 +37,15 @@ function cancelConfirm() {
   confirming.value = null;
 }
 
-function onDocClick(e: MouseEvent) {
-  if (wrapRef.value && !wrapRef.value.contains(e.target as Node)) {
-    open.value = false;
-    confirming.value = null;
-  }
-}
-// 用 capture 阶段监听：MoreMenu 常处在带 @click.stop 的容器（如 expand-panel）内，
-// 冒泡阶段会被 stop 拦截导致收不到外部点击；capture 在 stop 之前触发，能正常收起。
-onMounted(() => document.addEventListener("click", onDocClick, true));
-onUnmounted(() => document.removeEventListener("click", onDocClick, true));
+// 外点收起并复位二次确认态。capture 阶段监听：MoreMenu 常处在带 @click.stop 的
+// 容器（如 expand-panel）内，冒泡阶段会被 stop 拦截导致收不到外部点击；capture
+// 在 stop 之前触发，能正常收起。只在展开期间监听。
+useClickOutside(
+  wrapRef,
+  () => { open.value = false; confirming.value = null; },
+  () => open.value,
+  { capture: true },
+);
 </script>
 
 <template>

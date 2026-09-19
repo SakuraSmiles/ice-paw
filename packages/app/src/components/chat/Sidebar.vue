@@ -4,6 +4,8 @@ import { ref, computed, watch, nextTick, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { useProjectStore } from "../../stores/project";
 import { parseDbTime, timeAgo } from "../../utils/time";
+import ErrorBanner from "../common/ErrorBanner.vue";
+import { msgOf, stripInvokePrefix } from "../../utils/errors";
 import { loadLastSession, planRestore } from "../../utils/sessionRestore";
 import { useNewConversation } from "../../composables/useNewConversation";
 import { useTheme } from "../../composables/useTheme";
@@ -258,7 +260,7 @@ async function openChannel() {
     }
   } catch (e) {
     console.error("开启频道失败:", e);
-    channelEnsureError.value = e instanceof Error ? e.message : String(e);
+    channelEnsureError.value = stripInvokePrefix(msgOf(e));
   } finally {
     channelEnsuring.value = false;
   }
@@ -421,7 +423,7 @@ function timeAgoLabel(dateStr: string): string {
             <span class="conv-name">{{ channelEnsuring ? "开启中…" : "开启频道" }}</span>
           </div>
         </button>
-        <p v-if="channelEnsureError" class="channel-error">{{ channelEnsureError }}</p>
+        <ErrorBanner v-if="channelEnsureError" variant="inline" title="开启频道失败" :detail="channelEnsureError" :retry-label="null" />
       </div>
       <template v-else-if="archivedChannels.length > 0">
         <button
@@ -454,19 +456,13 @@ function timeAgoLabel(dateStr: string): string {
           <span class="conv-name">新建对话</span>
         </div>
       </button>
-      <p v-if="createError" class="channel-error">
-        新建对话失败
-        <button type="button" class="conv-error-retry" @click="newChat">重试</button>
-      </p>
+      <ErrorBanner v-if="createError" variant="inline" title="新建对话失败" :detail="createError" retry-label="重试" @retry="newChat" />
     </div>
 
     <!-- 会话列表（TransitionGroup：会话进出淡入、touchConversation 重排时平滑让位） -->
     <TransitionGroup v-if="!collapsed" name="conv-list" tag="nav" class="conv-list">
       <!-- 会话列表加载失败（UI-3 批：空白列表不再静默——错误态 + 重试） -->
-      <div v-if="chat.convLoadError" key="conv-error" class="conv-error">
-        会话列表加载失败
-        <button type="button" class="conv-error-retry" @click="chat.loadConversations()">重试</button>
-      </div>
+      <ErrorBanner v-if="chat.convLoadError" key="conv-error" variant="inline" title="会话列表加载失败" :detail="chat.convLoadError" retry-label="重试" @retry="chat.loadConversations()" />
       <!-- 骨架屏只在「无可显示内容」时出现（首次加载语义）。若不加空判断，
            委派等触发的后台列表刷新会让骨架屏叠在仍可见的列表上方闪现 +
            布局下压再弹回（v-for 不在 v-if 互斥链内）——即"委派时侧栏异常动画" -->
@@ -628,15 +624,9 @@ function timeAgoLabel(dateStr: string): string {
                   <span class="conv-name">新建对话</span>
                 </div>
               </button>
-              <p v-if="createError" class="channel-error">
-                新建对话失败
-                <button type="button" class="conv-error-retry" @click="newChatFromFlyout">重试</button>
-              </p>
+              <ErrorBanner v-if="createError" variant="inline" title="新建对话失败" :detail="createError" retry-label="重试" @retry="newChatFromFlyout" />
               <div class="flyout-new-divider"></div>
-              <div v-if="chat.convLoadError" class="conv-error">
-                会话列表加载失败
-                <button type="button" class="conv-error-retry" @click="chat.loadConversations()">重试</button>
-              </div>
+              <ErrorBanner v-if="chat.convLoadError" variant="inline" title="会话列表加载失败" :detail="chat.convLoadError" retry-label="重试" @retry="chat.loadConversations()" />
               <div v-if="chat.convLoading && scopedConversations.length === 0" class="conv-skeleton">
                 <div class="conv-skeleton-line" />
                 <div class="conv-skeleton-line" />
@@ -794,14 +784,6 @@ function timeAgoLabel(dateStr: string): string {
   line-height: 1.4;
 }
 
-/* 「开启频道」失败的行内错误文案（后端三段式原文；常驻至下次尝试成功） */
-.channel-error {
-  margin: 2px 4px 0;
-  font-size: var(--ip-text-micro-size);
-  color: var(--ip-danger-text);
-  line-height: 1.5;
-}
-
 /* 会话列表 */
 .conv-list {
   position: relative; /* leave-active 绝对定位的锚（离场项脱离流防跳动） */
@@ -819,24 +801,6 @@ function timeAgoLabel(dateStr: string): string {
   font-size: var(--ip-text-body-sm-size);
   color: var(--ip-color-text-tertiary);
 }
-
-/* 会话列表加载失败（UI-3 批）：inline 错误 + 重试 */
-.conv-error {
-  padding: var(--ip-spacing-2) var(--ip-spacing-3);
-  font-size: var(--ip-text-body-sm-size);
-  color: var(--ip-danger-base);
-}
-.conv-error-retry {
-  border: none;
-  background: none;
-  padding: 0 2px;
-  font: inherit;
-  color: var(--ip-danger-text);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-  cursor: pointer;
-}
-.conv-error-retry:hover { opacity: 0.8; }
 
 /* 骨架屏：侧栏会话列表加载中 */
 .conv-skeleton { display: flex; flex-direction: column; gap: var(--ip-spacing-2); padding: var(--ip-spacing-2) var(--ip-spacing-3); }

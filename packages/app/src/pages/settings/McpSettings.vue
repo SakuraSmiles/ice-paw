@@ -9,6 +9,7 @@ import { bridge } from "../../api/bridge";
 import { GLM_MCP_TEMPLATES, type GlmMcpTemplate } from "../../data/glmMcpTemplates";
 import { TOOL_GROUP_LABELS, TOOL_GROUP_ORDER } from "../../data/toolGroups";
 import { toolDisplayName } from "../../utils/toolLabels";
+import { msgOf, stripInvokePrefix } from "../../utils/errors";
 
 const servers = ref<McpServerSnapshot[]>([]);
 const loading = ref(true);
@@ -38,7 +39,7 @@ async function reload() {
     lastLoadTime.value = Date.now();
   } catch (e) {
     console.error("加载 MCP Server 列表失败:", e);
-    loadError.value = e instanceof Error ? e.message : String(e);
+    loadError.value = stripInvokePrefix(msgOf(e));
   } finally {
     loading.value = false;
   }
@@ -469,12 +470,14 @@ const filteredBuiltinGroups = computed(() => {
       </div>
 
       <div v-if="loading && !servers.length" class="loading-state">加载中...</div>
-      <div v-else-if="loadError && !servers.length" class="load-fail">
-        <span class="load-fail-icon">!</span>
-        <span class="load-fail-msg">MCP Server 列表加载失败</span>
-        <span class="load-fail-why">{{ loadError }}</span>
-        <button type="button" class="load-fail-retry" @click="reload">重试</button>
-      </div>
+      <ErrorBanner
+        v-else-if="loadError && !servers.length"
+        variant="banner"
+        title="MCP Server 列表加载失败"
+        :detail="loadError"
+        retry-label="重试"
+        @retry="reload"
+      />
       <div v-else-if="!loading && servers.length === 0" class="empty-hint">还没有 MCP Server，点上方「新建」接入</div>
     </div>
   </div>

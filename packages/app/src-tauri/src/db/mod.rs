@@ -6,6 +6,7 @@
 pub mod migrate;
 pub mod models;
 pub mod repo;
+pub mod space;
 
 use std::path::PathBuf;
 use std::str::FromStr;

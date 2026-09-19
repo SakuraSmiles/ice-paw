@@ -6,6 +6,9 @@
 //   - 预告命中且 finish_reason=abort → lastFinishReason=null（静默）+ 预告消费
 //   - 预告命中但 finish_reason=stop（自然收尾）→ 预告失效消费，正常设 stop
 //   - 无预告的 abort（真手动停止）→ lastFinishReason=abort（照常提示）
+// 消费契约（Steer P3 4.2）：预告在任何 chat:done 到达时无条件清（单回合一次性
+// 信号，防跨回合/跨会话残留）；stopGeneration 主动停止也作废预告（手动停止不该
+// 被静默——回归锁在 chat.test.ts stopGeneration 用例）。
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { listen } from "@tauri-apps/api/event";
@@ -76,7 +79,7 @@ describe("Steer 插话打断：chat:done(abort) 静默衔接", () => {
     expect(chat.lastFinishReason).toBe("abort"); // 保留「已手动停止」
   });
 
-  it("预告指向其他会话（cid 不匹配）→ 不消费，abort 照常提示", () => {
+  it("预告指向其他会话（cid 不匹配）→ 静默不生效 abort 照常提示；预告仍消费（Steer P3：任何 chat:done 即清，防跨回合残留）", () => {
     const chat = useChatStore();
     chat.activeConvId = "c1";
     chat.messages = [];
@@ -84,7 +87,7 @@ describe("Steer 插话打断：chat:done(abort) 静默衔接", () => {
 
     handlers.get("chat:done")!({ payload: donePayload("abort") });
 
-    expect(chat.lastFinishReason).toBe("abort");
-    expect(chat.steerAbortExpected).toBe("c2"); // 未消费
+    expect(chat.lastFinishReason).toBe("abort"); // 静默判据按会话匹配——c1 的 abort 照常提示
+    expect(chat.steerAbortExpected).toBeNull(); // 但预告即消费（单回合一次性信号，防残留）
   });
 });

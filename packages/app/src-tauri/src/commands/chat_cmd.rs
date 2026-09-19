@@ -82,7 +82,7 @@ pub async fn send_message(
     let model_override = input.model.clone();
     // 用户原始文本 query（仅 Text 块，**不含**附件提取文本）——用于标题/钩子/检索，
     // 避免整份文档灌进 query 噪声。附件内容在下方 materialize 后进 final_blocks 给 LLM。
-    // （runner 内部以 content_text 同时作消息正文与检索 query。）
+    // （runner 侧检索 query 走 relevance_query 字段，此处不传 = None，回落本 content_text。）
     let content_text = ContentBlock::join_text(&final_blocks);
 
     // --- 2. 取会话 + agent + api_key → 创建 provider ---
@@ -273,6 +273,7 @@ pub async fn send_message(
             api_key,
             user_msg_id: user_msg_id.clone(),
             content_text,
+            relevance_query: None,
             llm_blocks: final_blocks,
             persist_blocks,
             attach_db_inputs,

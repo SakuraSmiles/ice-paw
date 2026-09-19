@@ -137,6 +137,6 @@ describe("ProjectList 编辑区（共享组件化后回归）", () => {
     await flushPromises();
 
     expect(mockInvoke.mock.calls.some(([c]) => c === "update_project")).toBe(false);
-    expect(w.find(".form-error").text()).toContain("项目名称不能为空");
+    expect(w.find(".eb-inline").text()).toContain("项目名称不能为空"); // W2：表单错误行收编 ErrorBanner（inline 形态）
   });
 });

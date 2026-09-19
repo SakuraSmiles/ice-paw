@@ -83,7 +83,7 @@ describe("buildRows 行模型", () => {
     expect(h.toolCount).toBe(1);
     expect(h.ended?.termination).toBe("stop");
     expect(h.context?.effective_model).toBe("glm-5.2");
-    expect(h.dateLabel).toBe("08-14"); // 首个 turn 恒标日期
+    expect(h.dateLabel).toBe("8月14日"); // 首个 turn 恒标日期（W4：统一走 formatDateLabel「M月D日」形态）
     expect(h.turnMs).toBe(4000); // 首→末事件墙钟（fixture 秒 1→5）
     expect(h.errorCount).toBe(0);
 
@@ -249,7 +249,7 @@ describe("buildRows 行模型", () => {
     ];
     const hs = evRows(events).headers();
     expect(hs.map((h) => h.turnIndex)).toEqual([0, 1, 2]);
-    expect(hs.map((h) => h.dateLabel)).toEqual(["08-14", null, null]); // 同日只在首个 turn 标日期
+    expect(hs.map((h) => h.dateLabel)).toEqual(["8月14日", null, null]); // 同日只在首个 turn 标日期
   });
 
   it("M3：turnOffset 让窗口内轮号从全局偏移起算（尾部优先分页）", () => {

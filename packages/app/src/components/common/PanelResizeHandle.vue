@@ -35,7 +35,7 @@ const emit = defineEmits<{ dragstart: [e: PointerEvent]; reset: [] }>();
 <style scoped>
 .panel-resize-handle {
   cursor: col-resize;
-  z-index: 5;
+  z-index: var(--ip-z-badge);
   touch-action: none; /* 拖拽优先于滚动/触摸手势 */
 }
 /* overlay：贴面板边缘悬空（热区横跨边框两侧） */

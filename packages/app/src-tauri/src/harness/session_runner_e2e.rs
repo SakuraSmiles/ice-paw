@@ -250,6 +250,7 @@ async fn run_turn_core(
         api_key: "e2e-key".into(),
         user_msg_id: user_msg_id.clone(),
         content_text: "hello".into(),
+        relevance_query: None,
         llm_blocks: vec![ContentBlock::text("hello")],
         persist_blocks: vec![ContentBlock::text("hello")],
         attach_db_inputs: Vec::new(),

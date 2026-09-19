@@ -30,6 +30,7 @@ import EmbedSwitchOverlay from "../../components/common/EmbedSwitchOverlay.vue";
 import { useProviders } from "../../composables/useProviders";
 import { useModelProfiles, profileById } from "../../composables/useModelProfiles";
 import { timeAgo, formatDate, formatTime } from "../../utils/time";
+import { msgOf, stripInvokePrefix } from "../../utils/errors";
 import type { Agent, ModelProfile, ModelProfileUpdate, ProviderInfo, UserPreferences } from "../../types";
 
 // =========================================================================
@@ -50,15 +51,6 @@ const savedTip = ref(false);
 function flashSaved() {
   savedTip.value = true;
   setTimeout(() => { savedTip.value = false; }, 2000);
-}
-
-function msgOf(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
-}
-
-/** 错误文案剥掉 invoke 层包装前缀（[op/kind] 内部错误: ），只留正文 */
-function stripInvokePrefix(msg: string): string {
-  return msg.replace(/^\[[^\]]*\]\s*(?:内部错误:\s*)?/, "");
 }
 
 function okFailMsg(t: TestState): string {
@@ -759,10 +751,7 @@ onActivated(async () => {
               <div class="field-label">端点 URL</div>
               <input v-model="createDraft.baseUrl" type="text" class="form-input" :placeholder="urlPlaceholder(createDraft.provider)" />
             </div>
-            <div v-if="createError" class="test-result">
-              <X :size="14" class="test-fail-icon" />
-              <span class="test-fail-text">{{ createError }}</span>
-            </div>
+            <ErrorBanner v-if="createError" variant="inline" title="创建失败" :detail="createError" :retry-label="null" />
             <div class="create-actions">
               <button class="btn" :disabled="creatingBusy" @click="isCreating = false">取消</button>
               <button class="btn-primary" :disabled="creatingBusy" @click="submitCreate">

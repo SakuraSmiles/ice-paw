@@ -100,12 +100,21 @@ pub fn ensure_project_context_dir(
          修改后即时生效，无需重启。\n",
         project_name
     );
-    let _ = std::fs::write(&project_md, content);
-    tracing::info!(
-        target: "ice_paw.kb",
-        "已创建项目上下文目录: {}",
-        dir.display()
-    );
+    match std::fs::write(&project_md, content) {
+        Ok(()) => {
+            tracing::info!(
+                target: "ice_paw.kb",
+                "已创建项目上下文目录: {}",
+                dir.display()
+            );
+        }
+        Err(e) => {
+            tracing::warn!(
+                target: "ice_paw.kb",
+                "写入默认 project.md 失败（目录已创建）: {e}"
+            );
+        }
+    }
     Some(dir)
 }
 

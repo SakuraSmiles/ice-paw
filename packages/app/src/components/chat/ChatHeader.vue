@@ -14,6 +14,7 @@
 import { ref, computed, watch, nextTick, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { useEscapeStack } from "../../composables/useEscapeStack";
+import { useClickOutside } from "../../composables/useClickOutside";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Inbox, ScreenShare, Shield } from "@lucide/vue";
 import { useChatStore }from "../../stores/chat";
@@ -40,15 +41,8 @@ const inboxOpen = ref(false);
 const inboxZoneRef = ref<HTMLElement | null>(null);
 const inboxPending = computed(() => (chat.activeConversation ? pendingOf(chat.activeConversation.id) : 0));
 
-function onInboxDocClick(e: MouseEvent) {
-  if (inboxOpen.value && inboxZoneRef.value && !inboxZoneRef.value.contains(e.target as Node)) {
-    inboxOpen.value = false;
-  }
-}
-watch(inboxOpen, (open) => {
-  if (open) document.addEventListener("click", onInboxDocClick);
-  else document.removeEventListener("click", onInboxDocClick);
-});
+// 外点关闭（展开期间监听；卸载由 composable 自清）
+useClickOutside(inboxZoneRef, () => { inboxOpen.value = false; }, () => inboxOpen.value);
 // Esc 关闭与删除确认条共用全局栈（互斥：只关栈顶）。两条都是 setup 常驻注册
 // 的条件浮层——必须带 active 谓词，否则恒踞栈顶的空转回调会吞掉本该关浮层的
 // Esc（A1：confirm 注册晚于 inbox，无谓词时收件箱开着 Esc 命中的是 confirm）
@@ -71,26 +65,12 @@ const canSaveTitle = computed(() => !!editValue.value.trim());
 const confirming = ref(false);
 const deleteZoneRef = ref<HTMLElement | null>(null);
 
-function onDocClick(e: MouseEvent) {
-  if (confirming.value && deleteZoneRef.value && !deleteZoneRef.value.contains(e.target as Node)) {
-    confirming.value = false;
-  }
-}
 // Esc 关闭确认态走全局栈（与其它浮层互斥，只关栈顶；active 谓词同上）
 useEscapeStack(() => { confirming.value = false; }, () => confirming.value);
 
-// U18: 只在确认条展开时注册监听，避免全局常驻
-watch(confirming, (open) => {
-  if (open) {
-    document.addEventListener("click", onDocClick);
-  } else {
-    document.removeEventListener("click", onDocClick);
-  }
-});
+// U18: 只在确认条展开时监听外点（active 谓词随开合挂/摘，避免全局常驻）
+useClickOutside(deleteZoneRef, () => { confirming.value = false; }, () => confirming.value);
 onUnmounted(() => {
-  document.removeEventListener("click", onDocClick);
-  document.removeEventListener("click", onInboxDocClick);
-  document.removeEventListener("click", onChannelCoordDocClick);
   window.clearTimeout(titleSavedTimer); // 「已保存」淡出 timer（U0-6）
 });
 
@@ -171,11 +151,7 @@ const channelCoordinatorName = computed(() => {
   );
 });
 
-function onChannelCoordDocClick(e: MouseEvent) {
-  if (channelCoordOpen.value && channelCoordZoneRef.value && !channelCoordZoneRef.value.contains(e.target as Node)) {
-    channelCoordOpen.value = false;
-  }
-}
+// 外点关闭（展开期间监听；卸载由 composable 自清）
 
 /** 频道子标题头像叠层（成员前 4 枚 + 溢出 +N；ChannelMemberInfo 无头像字段，
  *  经 agent store 按成员 id 解析上传图，三级降级链由 EntityAvatar 承担） */
@@ -188,10 +164,7 @@ const channelStackedAvatars = computed(() => {
     image: agent.getById(m.agent_id)?.avatar ?? null,
   }));
 });
-watch(channelCoordOpen, (open) => {
-  if (open) document.addEventListener("click", onChannelCoordDocClick);
-  else document.removeEventListener("click", onChannelCoordDocClick);
-});
+useClickOutside(channelCoordZoneRef, () => { channelCoordOpen.value = false; }, () => channelCoordOpen.value);
 // Esc 走全局栈（active 谓词让路——浮层关着时不消费 Esc，同收件箱先例）
 useEscapeStack(() => { channelCoordOpen.value = false; }, () => channelCoordOpen.value);
 

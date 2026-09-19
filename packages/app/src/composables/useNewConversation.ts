@@ -13,6 +13,7 @@ import { useRouter } from "vue-router";
 import { useProjectStore } from "../stores/project";
 import { useAgentStore } from "../stores/agent";
 import { useChatStore } from "../stores/chat";
+import { msgOf, stripInvokePrefix } from "../utils/errors";
 
 export function useNewConversation() {
   const project = useProjectStore();
@@ -57,7 +58,7 @@ export function useNewConversation() {
       if (router.currentRoute.value.name !== "Home") router.push("/");
     } catch (e) {
       console.error("新建会话失败:", e);
-      createError.value = e instanceof Error ? e.message : String(e);
+      createError.value = stripInvokePrefix(msgOf(e));
     }
   }
 

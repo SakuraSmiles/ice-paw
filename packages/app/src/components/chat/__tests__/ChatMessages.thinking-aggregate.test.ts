@@ -111,7 +111,7 @@ describe("组级思考聚合", () => {
     const summary = w.findAll(".think-group-summary");
     expect(summary.length).toBe(1);
     expect(summary[0].text()).toContain("思考 · 2 段");
-    expect(summary[0].text()).toContain("53s"); // 41000+12000 总耗时（formatThinkingMs 整秒形态）
+    expect(summary[0].text()).toContain("53 s"); // 41000+12000 总耗时（formatThinkingMs 整秒形态，数字与单位间空格）
 
     // item 内思考行隐藏（聚合区承载）；正文照常在场
     expect(w.findAll(".message-item .think-block").length).toBe(0);
@@ -136,7 +136,7 @@ describe("组级思考聚合", () => {
     expect(w.findAll(".think-group-summary")[0].classes()).toContain("is-open");
     const segs = w.findAll(".think-group-stack .think-block");
     expect(segs.length).toBe(2); // 两段堆叠在顶部区
-    expect(segs[0].text()).toContain("41s");
+    expect(segs[0].text()).toContain("41 s");
     expect(w.findAll(".message-item .think-block").length).toBe(0); // item 内仍隐藏
 
     // 段内交互：点第一段 → 内容可见

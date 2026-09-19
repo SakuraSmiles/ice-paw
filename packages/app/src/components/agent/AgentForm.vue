@@ -12,7 +12,7 @@
 // - 旁路（提案 CreateAgent 等凭据不齐的 legacy 行）编辑时选实体即转正
 import AvatarField from "../common/AvatarField.vue";
 import { ExternalLink, ChevronDown, X, Plus, HelpCircle } from "@lucide/vue";
-import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from "vue";
+import { ref, computed, onMounted, nextTick, watch } from "vue";
 import { useRouter } from "vue-router";
 import draggable from "vuedraggable";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -22,6 +22,7 @@ import { bridge } from "../../api/bridge";
 import { TOOL_GROUP_LABELS, TOOL_GROUP_ORDER } from "../../data/toolGroups";
 import { loadProviders } from "../../composables/useProviders";
 import { useModelProfiles, profileById } from "../../composables/useModelProfiles";
+import { useClickOutside } from "../../composables/useClickOutside";
 import GroupedSelect from "../common/GroupedSelect.vue";
 import ProviderIcon from "../common/ProviderIcon.vue";
 import type { ComboboxGroup, ComboboxItem } from "../common/Combobox.vue";
@@ -143,9 +144,8 @@ function toggleChain() {
 function closeChain() {
   chainOpen.value = false;
 }
-function onDocClick(e: MouseEvent) {
-  if (!chainWrapRef.value?.contains(e.target as Node)) closeChain();
-}
+// 下拉外点关闭（展开期间监听；卸载由 composable 自清）
+useClickOutside(chainWrapRef, closeChain, () => chainOpen.value);
 const router = useRouter();
 /** 下拉内「＋ 新建模型配置」→ 设置-模型页（编辑想换全新配置由这里兜住） */
 function goCreateProfile() {
@@ -233,8 +233,7 @@ onMounted(async () => {
   if (!isEdit.value && !form.value.base_url && !isCustomModel.value && currentProvider.value) {
     form.value.base_url = currentProvider.value.default_url;
   }
-  // 下拉外点关闭（挂在 document 上，卸载时移除）
-  document.addEventListener("click", onDocClick);
+  // 下拉外点关闭已迁 useClickOutside（composable 自清，无监听残留）
   try {
     const prefs = await bridge.preferences.get();
     defaultWorkspace.value = (prefs.default_workspace_path ?? "").replace(/\\/g, "/");
@@ -253,10 +252,6 @@ watch(() => form.value.id, (newId) => {
   if (!props.agent && defaultWorkspace.value && newId) {
     form.value.workspace_path = `${defaultWorkspace.value.replace(/\/$/, "")}/agents/${newId}`;
   }
-});
-
-onBeforeUnmount(() => {
-  document.removeEventListener("click", onDocClick);
 });
 
 // ---- 当前 provider 的目录元数据（目录未加载时按「最保守」降级：要 key、有默认地址空） ----

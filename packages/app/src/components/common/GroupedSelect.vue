@@ -13,7 +13,8 @@
 //   目录外名字的唯一入口（自定义 OpenAI 兼容端点 / Ollama 本地模型）
 // - 组头插槽 `group-icon`（参数 group）：组名前的品牌图标位
 // - 控件插槽 `control-icon`：控件前缀（如当前选中条目的品牌图标）
-import { ref, computed, onMounted, onUnmounted, nextTick, watch } from "vue";
+import { ref, computed, nextTick, watch } from "vue";
+import { useClickOutside } from "../../composables/useClickOutside";
 import type { ComboboxGroup, ComboboxItem } from "./Combobox.vue";
 
 const props = withDefaults(defineProps<{
@@ -99,14 +100,9 @@ function syncDraft() {
   draft.value = displayLabel.value;
 }
 
-function onDocClick(e: MouseEvent) {
-  if (open.value && root.value && !root.value.contains(e.target as Node)) {
-    open.value = false;
-    syncDraft();
-  }
-}
-onMounted(() => document.addEventListener("mousedown", onDocClick));
-onUnmounted(() => document.removeEventListener("mousedown", onDocClick));
+// 外点收起 + 草稿归位。mousedown 抢在点击生效前判定（combobox 输入框形态）；
+// 只在展开期间监听
+useClickOutside(root, () => { open.value = false; syncDraft(); }, () => open.value, { event: "mousedown" });
 
 async function onInputFocus() {
   if (props.disabled) return;

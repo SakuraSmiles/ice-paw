@@ -40,15 +40,3 @@ export function useModelProfiles() {
 export function profileById(list: ModelProfile[], id: string): ModelProfile | undefined {
   return list.find((p) => p.id === id);
 }
-
-/** 引用链批量解析为 profile 列表（保序；悬空 id 跳过——展示层用，不在此 warn） */
-export function resolveProfileChain(list: ModelProfile[], ids: string[]): ModelProfile[] {
-  return ids
-    .map((id) => profileById(list, id))
-    .filter((p): p is ModelProfile => Boolean(p));
-}
-
-/** 引用链是否含指定 id（卡 A 编辑守卫的判据——改 provider/model 弹重建提示用） */
-export function chainReferences(chainIds: string[], profileId: string): boolean {
-  return chainIds.includes(profileId);
-}

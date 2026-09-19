@@ -111,7 +111,7 @@ describe("ProjectSettings 设置 tab", () => {
     await w.findAll("button").find((b) => b.text() === "保存")!.trigger("click");
     await flushPromises();
     expect(mockInvoke.mock.calls.some(([c]) => c === "update_project")).toBe(false);
-    expect(w.find(".form-error").text()).toContain("项目名称不能为空");
+    expect(w.find(".eb-inline").text()).toContain("项目名称不能为空"); // W2：表单错误行收编 ErrorBanner（inline 形态）
   });
 
   it("成员 chips 只改草稿，随「保存」全量提交并收起操作行（显式契约）", async () => {

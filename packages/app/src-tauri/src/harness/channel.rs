@@ -460,11 +460,8 @@ fn wake_reserve(rt: &mut ChannelRuntime, agent_id: &str, now: Instant) -> bool {
 
 /// 频道用户消息入口：物化（无条件成功）→ 尝试触发。
 ///
-/// 预处理（附件 materialize / @ 引用展开）与 1v1 同款复用；物化块镜像
-/// `run_agent_turn` 的 `!pre_materialized` 段（行 + blocks + 附件 + user_message
-/// 事件——消费回合 pre_materialized=true 跳过同段，两处形态必须保持一致）。
-/// 会话在途就只落流（回合结束触发点读 DB 积压接管）。
-/// 用户消息物化（1v1 Steer 与频道 C8 共用的无条件落流块）。
+/// 预处理（附件 materialize / @ 引用展开）与 1v1 同款复用。会话在途就只落流
+/// （回合结束触发点读 DB 积压接管）。
 ///
 /// 行 + content_blocks + 附件（分页/字节）+ user_message + attachment 事件——
 /// 与 `run_agent_turn` 的 `!pre_materialized` 段镜像（消费回合 pre_materialized=true
@@ -929,7 +926,14 @@ pub(crate) async fn run_election(app: &AppHandle, pool: &SqlitePool, conv: &Conv
                 .iter()
                 .find(|m| m.role == "coordinator" && m.agent_id != w)
             {
-                let _ = repo::project::set_member_role(pool, &pid, &cur.agent_id, "member").await;
+                if let Err(e) =
+                    repo::project::set_member_role(pool, &pid, &cur.agent_id, "member").await
+                {
+                    tracing::warn!(
+                        target: "ice_paw.channel",
+                        "选举旧统筹降级失败（短暂双 coordinator 可见，下次选举自愈）: {e}"
+                    );
+                }
             }
             if let Err(e) = repo::project::set_member_role(pool, &pid, &w, "coordinator").await {
                 tracing::warn!(target: "ice_paw.channel", "选举胜者 role 置位失败: {e}");
@@ -1385,6 +1389,16 @@ async fn run_next_hop(
         };
         let brief = compose_channel_brief(&brief_spec, &roster);
         let brief_text = ContentBlock::join_text(&brief);
+        // 4.4：简报文本是引擎语境说明非用户意图——检索 query 用链头用户消息
+        // 原话（head 行 content）；行缺失/读失败回落简报（None → runner 兜底）。
+        let relevance_query = match repo::message::find_by_id(pool, &head).await {
+            Ok(Some(row)) => Some(row.content),
+            Ok(None) => None,
+            Err(e) => {
+                tracing::warn!(target: "ice_paw.channel", "链头用户消息原话读取失败（query 回落简报）: {e}");
+                None
+            }
+        };
         let fallback =
             crate::harness::fallback_plan::production_fallback_plan(app, pool, &creds.agent);
 
@@ -1422,6 +1436,7 @@ async fn run_next_hop(
                 // 链头锚定（reconcile 对齐）：链内所有跳的 turn_id 恒 = head
                 user_msg_id: head.clone(),
                 content_text: brief_text,
+                relevance_query,
                 llm_blocks: brief,
                 persist_blocks: Vec::new(), // pre_materialized：不落用户侧
                 attach_db_inputs: Vec::new(),

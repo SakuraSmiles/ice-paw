@@ -12,6 +12,7 @@ import { bridge } from "../../api/bridge";
 import { loadProviders, providerLabelOf } from "../../composables/useProviders";
 import { useModelProfiles, profileById } from "../../composables/useModelProfiles";
 import { useAgentStore } from "../../stores/agent";
+import { msgOf, stripInvokePrefix } from "../../utils/errors";
 
 const store = useAgentStore();
 // 单一数据源：直接从 Pinia store 派生，避免本地 ref 与 store 不一致
@@ -32,7 +33,7 @@ async function loadAgents() {
     await applyDeepLinkEdit();
   } catch (e) {
     console.error("加载 Agent 列表失败:", e);
-    loadError.value = e instanceof Error ? e.message : String(e);
+    loadError.value = stripInvokePrefix(msgOf(e));
   } finally {
     loading.value = false;
   }
@@ -207,12 +208,14 @@ function aliasDangling(agent: Agent): boolean {
       </div>
 
       <div v-if="loading && !agents.length" class="loading-state">加载中...</div>
-      <div v-else-if="loadError" class="load-fail">
-        <span class="load-fail-icon">!</span>
-        <span class="load-fail-msg">Agent 列表加载失败</span>
-        <span class="load-fail-why">{{ loadError }}</span>
-        <button type="button" class="load-fail-retry" @click="loadAgents">重试</button>
-      </div>
+      <ErrorBanner
+        v-else-if="loadError"
+        variant="banner"
+        title="Agent 列表加载失败"
+        :detail="loadError"
+        retry-label="重试"
+        @retry="loadAgents"
+      />
       <div v-else-if="agents.length === 0" class="empty-hint">还没有其他智能体，点上方「新建智能体」创建</div>
     </div>
   </div>

@@ -213,7 +213,7 @@ export const useChatStore = defineStore("chat", () => {
       // 防御形状：mock/旧返回无 rows 字段时回落空页（hasMore=false 与旧行为一致）
       const rows = Array.isArray(page?.rows) ? page.rows : [];
       messages.value = rows;
-      pruneQueuedSteers(); // Steer「排队中」角标剪枝（turn B 启动后角标随 assistant 出现摘除）
+      pruneQueuedSteers(); // Steer「排队中」角标剪枝（每回合 assistant 出现摘最旧命中一条，FIFO 接手对齐）
       hasMore.value = page?.has_more === true;
       pageCursor.value = page?.next_before_anchor_rowid ?? null;
       // 切回正在流式的会话时，把恢复的 streamingText 同步到末条 assistant，
@@ -603,18 +603,24 @@ export const useChatStore = defineStore("chat", () => {
   const steerAbortExpected = ref<string | null>(null);
 
   /** 剪枝「排队中」角标：反向扫描当前消息列表，queuedSteer 消息之后出现
-   *  assistant 即视为已接手（turn B 启动）。原地 mutate Set（同 bgStreams 模式）。*/
+   *  assistant 即视为已接手（turn B 启动）。一次只摘最旧命中一条（Steer P3 4.3：
+   *  积压多条插话 FIFO 逐回合各自接手——后端 marker 记账一次消费一个锚点，
+   *  一次全摘会把仍在排队的后续插话误标「已接手」；每回合收尾/新事件都会触发
+   *  loadMessages，逐次收敛）。原地 mutate Set（同 bgStreams 模式）。*/
   function pruneQueuedSteers() {
     if (queuedSteerIds.value.size === 0) return;
     let hasAssistantAfter = false;
+    let oldestHit: string | null = null;
     for (let i = messages.value.length - 1; i >= 0; i--) {
       const m = messages.value[i];
       if (m.role === "assistant") {
         hasAssistantAfter = true;
       } else if (m.role === "user" && queuedSteerIds.value.has(m.id)) {
-        if (hasAssistantAfter) queuedSteerIds.value.delete(m.id);
+        // 反向扫描依次命中由新到旧；扫完全程留在手上的即最旧命中，摘它一条
+        if (hasAssistantAfter) oldestHit = m.id;
       }
     }
+    if (oldestHit) queuedSteerIds.value.delete(oldestHit);
   }
 
   async function sendMessage(content: string, contentBlocks?: import("../types").ContentBlock[], mentions?: string[]) {
@@ -658,6 +664,7 @@ export const useChatStore = defineStore("chat", () => {
         console.error("1v1 插话发送失败:", e);
         const raw = e instanceof Error ? e.message : String(e);
         steerAbortExpected.value = null; // 发送失败无 abort，作废预告
+        lastFailedSend.value = { content, blocks }; // Steer P3 4.1：横幅「重试」钮以它为据（此前 steer 失败无重试出口）
         setConvError(steerConvId, `请求没有送达（${raw}）。这条消息未发出。`, "send_failed");
       }
       return;
@@ -676,6 +683,7 @@ export const useChatStore = defineStore("chat", () => {
       } catch (e) {
         console.error("频道插话发送失败:", e);
         const raw = e instanceof Error ? e.message : String(e);
+        lastFailedSend.value = { content, blocks }; // Steer P3 4.1：失败可见 + 重试出口
         setConvError(queuedConvId, `请求没有送达（${raw}）。这条消息未发出。`, "send_failed");
       }
       return;
@@ -768,6 +776,9 @@ export const useChatStore = defineStore("chat", () => {
     const cid = activeConvId.value;
     if (!cid) return;
     clearSendTimeout();
+    // 用户主动停止（Steer P3 4.2）：作废插话预告——预告在场会把本次手动停止的
+    // abort done 误静默成「插话打断」（不显「已手动停止」）
+    steerAbortExpected.value = null;
     // 乐观停止「生成中」状态（隐藏光标）。**不清空 streaming 内容**——交由后端
     // cancel → finalize_cancel emit 的 chat:done(abort) 走 freezeCurrentAssistant
     // 统一把已生成的部分冻结到末条 assistant。若这里先清空，chat:done 的 freeze
@@ -871,6 +882,17 @@ export const useChatStore = defineStore("chat", () => {
         await bridge.conversations.delete(id);
       } catch (e) {
         console.error("删除会话失败:", e);
+        // 后端删除失败：恢复会话回列表（否则 5s 后会话凭空消失、数据仍在）。
+        // 恢复形态镜像 undoDeleteConversation——按更新时间重排序 + 空位时恢复激活。
+        if (conv) {
+          conversations.value = [...conversations.value, conv].sort(
+            (a, b) => parseDbTime(b.updated_at).getTime() - parseDbTime(a.updated_at).getTime(),
+          );
+          if (!activeConvId.value) {
+            activeConvId.value = conv.id;
+            loadMessages(conv.id);
+          }
+        }
       } finally {
         pendingDelete.value.delete(id);
       }

@@ -27,6 +27,7 @@ import MarkdownRenderer from "../chat/MarkdownRenderer.vue";
 import ImagePreview from "../chat/ImagePreview.vue";
 import { termLabel } from "../../utils/termLabels";
 import { formatTokenCount } from "../../utils/format";
+import { formatDate, formatTime } from "../../utils/time";
 import { X, Check } from "@lucide/vue";
 
 const props = defineProps<{ row: TrajectoryRow }>();
@@ -154,12 +155,11 @@ function fullTime(iso: string): string {
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
 }
 
-/** 头部紧凑时间（MM-DD HH:MM:SS，等宽对齐；完整时间在概要里） */
+/** 头部紧凑时间（日期 + HH:MM:SS，等宽对齐；完整时间在概要里）——
+ *  日期/时刻统一走 utils/time（用户偏好时区，非 OS 本地） */
 function compactTime(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  const t = formatTime(iso, true);
+  return t ? `${formatDate(iso)} ${t}` : iso;
 }
 
 // ---- 概要页预览素材 ----
@@ -322,7 +322,7 @@ async function copyPayload() {
             </div>
             <div v-if="header.ended?.user_token_count != null" class="ikv"><span>用户消息 token</span><b>{{ header.ended.user_token_count }}</b></div>
             <div class="ikv"><span>轮次统计</span><b>{{ header.roundCount }} 条回复 · {{ header.toolCount }} 次工具<template v-if="header.errorCount"> · 错误 {{ header.errorCount }}</template></b></div>
-            <div v-if="header.turnMs != null" class="ikv"><span>墙钟耗时</span><b>{{ (header.turnMs / 1000).toFixed(1) }}s</b></div>
+            <div v-if="header.turnMs != null" class="ikv"><span>墙钟耗时</span><b>{{ (header.turnMs / 1000).toFixed(1) }} s</b></div>
           </section>
           <!-- ③ 可观测化：本回合 prompt 组成分解 + 逐轮命中（无数据回合不渲染） -->
           <section v-if="header.breakdown" class="isec">
@@ -359,7 +359,7 @@ async function copyPayload() {
             <span class="itag">第 {{ asstP.round + 1 }} 轮输出</span>
             <span v-if="asstP.continuation" class="itag itag-warn">自动续写</span>
             <span v-if="asstP.token_count != null" class="itag">{{ asstP.token_count }} tok</span>
-            <span v-if="asstP.duration_ms != null" class="itag">{{ (asstP.duration_ms / 1000).toFixed(1) }}s</span>
+            <span v-if="asstP.duration_ms != null" class="itag">{{ (asstP.duration_ms / 1000).toFixed(1) }} s</span>
           </div>
           <div class="ikv"><span>块构成</span><b>{{ blockComposition || "（空消息）" }}</b></div>
           <!-- 预览多行截断；无正文时镜像表格的「思考代摘要」逻辑 -->

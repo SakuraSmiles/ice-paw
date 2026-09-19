@@ -352,9 +352,10 @@ export async function useChatEvents(): Promise<() => void> {
     chat.resetRoundStreaming();
     // Steer 插话打断的 abort：静默衔接（设计稿 §11 transition prompt deferred）——
     // 不设 lastFinishReason（否则误显「已手动停止」）。预告在任何 chat:done 到达时
-    // 消费（自然 stop 时预告同样失效清掉，防 stop-false 兜底残留）。
+    // 无条件消费（Steer P3 4.2：预告是单回合一次性信号，跨回合/跨会话残留只会
+    // 让后续 abort 判定失真；自然 stop、他会话 done 同样失效清掉）。
     const steerAbort = chat.steerAbortExpected === cid;
-    if (steerAbort) chat.steerAbortExpected = null;
+    chat.steerAbortExpected = null;
     chat.lastFinishReason = steerAbort && e.payload.finish_reason === "abort"
       ? null
       : e.payload.finish_reason;

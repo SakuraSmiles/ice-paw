@@ -31,6 +31,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onBeforeUnmount, ref, watch } from "vue";
 import { logicalTurnKey, specialOfEvent } from "../../composables/useTrajectory";
+import { formatTime } from "../../utils/time";
 import type { SessionEvent } from "../../types";
 
 const props = defineProps<{
@@ -146,19 +147,18 @@ const KIND_LABELS: Partial<Record<SessionEvent["kind"], string>> = {
   channel_mention: "频道点名",
 };
 
+/** 墙钟刻度（HH:MM:SS）——统一走 utils/time（用户偏好时区，非 OS 本地） */
 function fmtClock(t: number): string {
-  const d = new Date(t);
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  return formatTime(new Date(t).toISOString(), true);
 }
 
 function fmtRel(ms: number): string {
-  if (ms < 1000) return `${Math.round(ms)}ms`;
+  if (ms < 1000) return `${Math.round(ms)} ms`;
   const s = ms / 1000;
-  if (s < 60) return `${s.toFixed(1)}s`;
+  if (s < 60) return `${s.toFixed(1)} s`;
   const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m${Math.round(s % 60)}s`;
-  return `${Math.floor(m / 60)}h${m % 60}m`;
+  if (m < 60) return `${m}m ${Math.round(s % 60)}s`;
+  return `${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
 /**
@@ -584,7 +584,7 @@ function onMove(e: MouseEvent) {
           ` · ${r.first.timeText}` +
           (r.totalMs != null
             ? r.totalMs > 0
-              ? ` · ${(r.totalMs / 1000).toFixed(1)}s`
+              ? ` · ${(r.totalMs / 1000).toFixed(1)} s`
               : " · 瞬时"
             : " · 耗时未记录"),
       }
@@ -782,6 +782,8 @@ const labels = computed(() => LANE_LABELS.map((text, i) => ({ text, active: lane
 }
 .tt-earlier:hover { opacity: 1; color: var(--ip-color-text-primary); }
 .tt-earlier:disabled { cursor: wait; }
+/* 键盘焦点环（outline:none 的替代——无障碍基线 ⑨；窄条内收防溢出按钮外） */
+.tt-earlier:focus-visible { outline: 2px solid var(--ip-primary-500); outline-offset: -2px; }
 
 .tt-tip {
   position: absolute;

@@ -245,6 +245,17 @@ async fn run_steer_turn(
     // --- 事实简报（用户原话已在历史尾部，简报只说明插话语境）---
     let brief = compose_steer_brief(count);
     let brief_text = ContentBlock::join_text(&brief);
+    // 4.4：简报文本是引擎语境说明非用户意图——检索 query 用被消费消息的
+    // 用户原话（anchor 行 content）；行缺失/读失败回落简报（None → runner
+    // 用 content_text 兜底）。
+    let relevance_query = match repo::message::find_by_id(pool, anchor).await {
+        Ok(Some(row)) => Some(row.content),
+        Ok(None) => None,
+        Err(e) => {
+            tracing::warn!(target: "ice_paw.steer", "积压消息原话读取失败（query 回落简报）: {e}");
+            None
+        }
+    };
     let fallback =
         crate::harness::fallback_plan::production_fallback_plan(app, pool, &creds.agent);
 
@@ -282,6 +293,7 @@ async fn run_steer_turn(
             // turn_id == user_msg_id：steer 消息 B 自己的 turn 锚 = B 的 message_id
             user_msg_id: anchor.to_string(),
             content_text: brief_text,
+            relevance_query,
             llm_blocks: brief,
             persist_blocks: Vec::new(), // pre_materialized：不落用户侧
             attach_db_inputs: Vec::new(),

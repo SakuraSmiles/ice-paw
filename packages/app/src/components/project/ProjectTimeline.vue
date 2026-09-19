@@ -394,7 +394,7 @@ onActivated(async () => {
   top: 44px;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 6;
+  z-index: var(--ip-z-badge);
   padding: 4px var(--ip-spacing-4);
   font-size: var(--ip-text-caption-size);
   color: var(--ip-color-text-secondary);

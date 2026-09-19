@@ -9,11 +9,13 @@ import { useProjectStore } from "../stores/project";
 import { useAgentStore } from "../stores/agent";
 import { useChatStore } from "../stores/chat";
 import { bridge } from "../api/bridge";
-import { formatTime, parseDbTime } from "../utils/time";
+import { formatTime, parseDbTime, timeAgo, formatDate } from "../utils/time";
 import ProjectBasicForm from "../components/project/ProjectBasicForm.vue";
 import ProjectMembersChips from "../components/project/ProjectMembersChips.vue";
 import ProjectContextEditor from "../components/project/ProjectContextEditor.vue";
 import type { NewProject, Project } from "../types";
+import ErrorBanner from "../components/common/ErrorBanner.vue";
+import { msgOf, stripInvokePrefix } from "../utils/errors";
 
 const project = useProjectStore();
 const agent = useAgentStore();
@@ -91,7 +93,7 @@ async function createProject() {
     isCreating.value = false;
     resetForm();
   } catch (e) {
-    error.value = e instanceof Error ? e.message : "创建项目失败";
+    error.value = stripInvokePrefix(msgOf(e));
   } finally {
     saving.value = false;
   }
@@ -156,7 +158,7 @@ async function saveEdit(p: Project) {
     }
     expandedId.value = null;
   } catch (e) {
-    editError.value = e instanceof Error ? e.message : "保存失败";
+    editError.value = stripInvokePrefix(msgOf(e));
   } finally {
     savingEdit.value = false;
   }
@@ -365,7 +367,7 @@ onMounted(() => {
             </div>
           </div>
 
-          <div v-if="error" class="form-error">{{ error }}</div>
+          <ErrorBanner v-if="error" variant="inline" title="创建失败" :detail="error" :retry-label="null" />
 
           <div class="form-actions">
             <button class="btn-link" @click="toggleNew">取消</button>
@@ -429,7 +431,7 @@ onMounted(() => {
               <span class="task-dot" :class="{ running: taskRunning(c.id) }"></span>
               <span class="task-title">{{ c.title || "委派任务" }}</span>
               <span class="task-agent">{{ agent.getById(c.agent_id)?.name || "" }}</span>
-              <span class="task-time">{{ formatTime(c.updated_at) }}</span>
+              <span class="task-time" :title="formatDate(c.updated_at) + ' ' + formatTime(c.updated_at)">{{ timeAgo(c.updated_at) }}</span>
             </button>
           </div>
         </div>
@@ -444,7 +446,7 @@ onMounted(() => {
           <ProjectMembersChips v-model:member-ids="editMembers" />
           <ProjectContextEditor :project-id="p.id" />
 
-          <div v-if="editError" class="form-error">{{ editError }}</div>
+          <ErrorBanner v-if="editError" variant="inline" title="保存失败" :detail="editError" :retry-label="null" />
 
           <div class="form-actions">
             <button class="btn-link" @click="cancelEdit">取消</button>
@@ -658,8 +660,6 @@ onMounted(() => {
 }
 
 /* 项目背景编辑区样式已随 ProjectContextEditor 组件自持搬走 */
-
-.form-error { font-size: var(--ip-text-caption-size); color: var(--ip-danger-text); }
 
 /* 归档/恢复/永久删除失败横幅（U1-3） */
 .action-error {

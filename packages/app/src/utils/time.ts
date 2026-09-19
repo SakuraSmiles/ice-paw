@@ -82,6 +82,13 @@ export function formatTime(iso: string, seconds = false): string {
   return seconds ? `${base}:${pad(d.getSeconds())}` : base;
 }
 
+/** 秒数 → mm:ss 计时器文案（分/秒两位恒宽防跳动）——授权倒计时、屏幕共享
+ *  时长共用；入参取秒（小数向上取整，与倒计时 ceil 口径一致）。 */
+export function formatMmSs(totalSeconds: number): string {
+  const s = Math.max(0, Math.ceil(totalSeconds));
+  return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+}
+
 /** 相对时间（刚刚 / N分钟前 / N小时前 / N天前 / 日期）——侧栏会话列表、
  *  项目概览共用。now 参数化：调用方传响应式时钟（如 Sidebar 的 nowTick）
  *  建立 reactive 依赖，每分钟刷新整列。 */

@@ -134,7 +134,7 @@ cancel 标志位在 loop 两个 yield 点被轮询（[loop_engine.rs](packages/a
 
 ---
 
-## 12. 实施文件清单（已实施随 0.9.1；W1 批增补）
+## 12. 实施文件清单（已实施随 0.9.1；W1 批 + W 批 Steer P3 增补）
 
 | 文件 | 改动 |
 |---|---|
@@ -145,9 +145,11 @@ cancel 标志位在 loop 两个 yield 点被轮询（[loop_engine.rs](packages/a
 | `packages/app/src-tauri/src/db/repo/message.rs` | W1 ①：`list_unconsumed_user_anchors` / `conversations_with_unconsumed_anchors`（marker 记账三腿谓词）+ 回归测试 |
 | `packages/app/src-tauri/src/lib.rs` | W1 ③：`spawn_boot_sweep` boot 挂点 |
 | `packages/app/src/stores/chat.ts` | `sendMessage` 守卫放行 + 不乐观 push + steer 标记 |
-| `packages/app/src/composables/useChatEvents.ts` | `user_message` 事件分支泛化到 1v1（权威刷新 steer 气泡） |
+| `packages/app/src/composables/useChatEvents.ts` | `user_message` 事件分支泛化到 1v1（权威刷新 steer 气泡）；W 批 P3：`steerAbortExpected` 预告在任何 chat:done 到达时无条件消费（单回合一次性信号，跨回合/跨会话残留会让 abort 判定失真） |
+| `packages/app/src/stores/chat.ts` | W 批 P3：steer/频道插话失败写 `lastFailedSend`（横幅「重试」出口——此前 steer 失败无重试）；`stopGeneration` 清 `steerAbortExpected`（防手动停止被预告误消音）；`pruneQueuedSteers` 只摘最旧命中一条（对齐后端 marker 记账一次消费一个锚点的 FIFO 接手——一次全摘 = 仍在排队的后续插话被误标「已接手」） |
+| `packages/app/src-tauri/src/harness/session_runner.rs` | W 批 P3：`StreamLoopInput.relevance_query`——Steer/频道简报回合的 `content_text` 是引擎语境说明非用户意图，相关性检索 query 改传用户原话（steer.rs 取积压消息原文 / channel.rs 取链头用户消息原文），None 回落 `content_text`。治「回合 B 事实简报的套话文案进相关性检索」——工具软裁剪会把简报样板句当 query 打分，检索质量失真 |
 
-**零改动**：`session_runner.rs`（`pre_materialized` 现成）、`cleanup.rs`（finalize 对称性现成）、`loop_engine.rs`（cancel yield 点现成）、`event_log.rs`（零新 kind——积压记账复用既有 `user_message`/`turn_context`/`turn_ended` 三 kind）。
+**零改动（原批口径）**：`cleanup.rs`（finalize 对称性现成）、`loop_engine.rs`（cancel yield 点现成）、`event_log.rs`（零新 kind——积压记账复用既有 `user_message`/`turn_context`/`turn_ended` 三 kind）。`session_runner.rs` 原批零改动，W 批 P3 增 `relevance_query` 一字段（见上行）。
 
 ---
 

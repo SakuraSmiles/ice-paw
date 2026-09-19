@@ -362,11 +362,13 @@ describe("chatStore", () => {
       mockInvoke.mockResolvedValue(undefined);
       const { store } = await setupStream();
       store.sending = true;
+      store.steerAbortExpected = "c1"; // Steer 插话预告在场
 
       await store.stopGeneration();
 
       expect(store.sending).toBe(false);
       expect(mockInvoke).toHaveBeenCalledWith("stop_generation", { conversationId: "c1" });
+      expect(store.steerAbortExpected).toBeNull(); // 手动停止作废预告（Steer P3 4.2——否则本次 abort 被误静默）
     });
 
     it("bgStreams: events for non-active conversation do NOT affect active streaming", async () => {
@@ -541,6 +543,28 @@ describe("chatStore", () => {
       expect(store.messages[0].role).toBe("user");
       expect(store.lastErrors.get("c1")?.kind).toBeUndefined(); // 不再写 send_failed 横幅
       expect(store.lastError).toBeNull();
+    });
+
+    it("Steer P3 4.3：pruneQueuedSteers 每次只摘最旧命中一条（FIFO 接手对齐，积压不全摘）", async () => {
+      // 积压 A1/A2 两条插话，turn B 只应答 A1（后端 marker 记账一次消费一个锚点）——
+      // 角标簿记必须对齐：一次全摘会把仍在排队的 A2 误标「已接手」（角标失真）。
+      mockInvoke.mockResolvedValueOnce({
+        rows: [
+          fakeMsg("a1", "c1"),
+          fakeMsg("a2", "c1"),
+          { ...fakeMsg("asst-b", "c1"), role: "assistant" },
+        ],
+        has_more: false,
+      });
+      const store = useChatStore();
+      store.activeConvId = "c1";
+      store.queuedSteerIds.add("a1");
+      store.queuedSteerIds.add("a2");
+
+      await store.loadMessages("c1");
+
+      expect(store.queuedSteerIds.has("a1")).toBe(false); // 最旧命中被摘（A1 已由 turn B 接手）
+      expect(store.queuedSteerIds.has("a2")).toBe(true); // A2 仍在排队——后续回合逐次收敛
     });
   });
 

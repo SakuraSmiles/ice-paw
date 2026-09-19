@@ -484,6 +484,14 @@ pub fn run() {
                 }
             });
 
+            // 3h) DB 空间回收（W3）：U2-1 图片外置后物理文件从未收缩（free 页
+            //     滞留）。boot 按阈值一次性 VACUUM——free 占比 ≥25% 且 ≥64MB
+            //     才值得跑；正常库幂等零成本，失败仅 warn 下次启动重试。
+            let vacuum_pool = pool.clone();
+            tauri::async_runtime::spawn(async move {
+                db::space::boot_vacuum_sweep(vacuum_pool).await;
+            });
+
             // 4) REQ-XC-010: 注入 AgentCmd trait object (生产实现 SqlAgentCmd)
             // 覆盖 builder 阶段注入的 None 占位。
             let sql_agent_cmd: std::sync::Arc<dyn commands::agent_cmd::AgentCmd> =

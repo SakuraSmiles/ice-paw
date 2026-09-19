@@ -310,7 +310,14 @@ async fn run_writer_loop(
                         // sender 全部 drop（writer 被回收）→ 退出循环
                         let mut guard = inner.lock().await;
                         if !guard.pending_text.is_empty() {
-                            let _ = flush_locked(&mut guard).await;
+                            if let Err(e) = flush_locked(&mut guard).await {
+                                warn!(
+                                    target: "ice_paw.batch_writer",
+                                    "flush 失败（sender-drop 退出）: msg_id={}, err={}",
+                                    guard.msg_id,
+                                    e
+                                );
+                            }
                         }
                         return;
                     }

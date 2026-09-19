@@ -17,6 +17,7 @@ import { ref, computed, watch, onMounted, onBeforeUnmount } from "vue";
 import { Lock, ChevronRight } from "@lucide/vue";
 import { useChatStore, TOOL_AUTH_TIMEOUT_MS } from "../../stores/chat";
 import { formatJson } from "../../utils/format";
+import { formatMmSs } from "../../utils/time";
 import type { AuthScope } from "../../types";
 
 const chat = useChatStore();
@@ -61,10 +62,7 @@ const remainingMs = computed(() =>
 );
 const expired = computed(() => remainingMs.value <= 0);
 const urgent = computed(() => remainingMs.value <= 20_000);
-const remainingLabel = computed(() => {
-  const s = Math.max(0, Math.ceil(remainingMs.value / 1000));
-  return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
-});
+const remainingLabel = computed(() => formatMmSs(remainingMs.value / 1000));
 const progressPct = computed(() =>
   Math.max(0, Math.min(100, (remainingMs.value / TOOL_AUTH_TIMEOUT_MS) * 100)),
 );
@@ -302,7 +300,7 @@ function deny() {
   position: absolute;
   right: 12px;
   top: 34px;
-  z-index: 2;
+  z-index: var(--ip-z-badge);
   background: var(--ip-color-bg-elevated);
   border: 1px solid var(--ip-color-border-default);
   border-radius: var(--ip-radius-md);

@@ -10,6 +10,7 @@ import { ref, onMounted, onBeforeUnmount } from "vue";
 import { useRouter } from "vue-router";
 import { Lock } from "@lucide/vue";
 import { useChatStore, TOOL_AUTH_TIMEOUT_MS } from "../../stores/chat";
+import { formatMmSs } from "../../utils/time";
 import type {
   DelegationAuthRequestPayload,
   ToolAuthRequestPayload,
@@ -32,8 +33,7 @@ onMounted(() => {
 onBeforeUnmount(() => { if (timer) clearInterval(timer); });
 
 function remainingLabel(receivedAt: number): string {
-  const s = Math.max(0, Math.ceil((TOOL_AUTH_TIMEOUT_MS - (now.value - receivedAt)) / 1000));
-  return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+  return formatMmSs((TOOL_AUTH_TIMEOUT_MS - (now.value - receivedAt)) / 1000);
 }
 function urgent(receivedAt: number): boolean {
   return TOOL_AUTH_TIMEOUT_MS - (now.value - receivedAt) <= 20_000;

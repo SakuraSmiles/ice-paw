@@ -40,8 +40,8 @@ describe("transferKey", () => {
 });
 
 describe("thinkSegLabel", () => {
-  it("有耗时 → 「思考 · 30s」（秒/分换算走 formatThinkingMs 单一真相源）", () => {
-    expect(thinkSegLabel({ durationMs: 30_000 })).toBe("思考 · 30s");
+  it("有耗时 → 「思考 · 30 s」（秒/分换算走 formatThinkingMs 单一真相源，数字与单位间空格）", () => {
+    expect(thinkSegLabel({ durationMs: 30_000 })).toBe("思考 · 30 s");
   });
 
   it("分/秒复合耗时", () => {

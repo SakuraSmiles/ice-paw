@@ -148,7 +148,7 @@ function tickTime(iso: string): string {
   flex-direction: column;
   align-items: center;
   gap: var(--ip-spacing-1_5);
-  z-index: 3;
+  z-index: var(--ip-z-badge);
 }
 
 /* 位置徽标：N/M，等宽数字防跳动；未知轮次时当前位灰显。

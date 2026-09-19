@@ -101,8 +101,12 @@ pub(crate) struct AgentTurnInput {
     pub api_key: String,
     /// 预生成的用户消息 ID（附件分页提示里已嵌此 id，必须复用）
     pub user_msg_id: String,
-    /// 用户消息正文（落库 content + 检索 query）
+    /// 用户消息正文（落库 content；检索 query 走 relevance_query，None 回落本值）
     pub content_text: String,
+    /// 检索相关性 query（Pipeline current_user_query + 工具相关性排序用）。
+    /// Steer/频道简报回合的 content_text 是引擎语境说明非用户意图——作 query
+    /// 会污染工具相关性排序；此字段传用户原话。None = 用 content_text。
+    pub relevance_query: Option<String>,
     /// 发给 LLM 的用户 blocks（materialize + 视觉元提示后）
     pub llm_blocks: Vec<ContentBlock>,
     /// 落库/事件用的原始 blocks（用户真实发送内容，不含视觉适配视图）
@@ -155,6 +159,7 @@ pub(crate) async fn run_agent_turn(
         api_key,
         user_msg_id,
         content_text,
+        relevance_query,
         llm_blocks: final_blocks,
         persist_blocks,
         attach_db_inputs,
@@ -168,6 +173,9 @@ pub(crate) async fn run_agent_turn(
         cancel_token,
         fallback,
     } = input;
+    // 检索 query：显式传入（Steer/频道简报回合的用户原话）优先，None 回落
+    // content_text（普通/inbox/delegate 路径零变化）。
+    let relevance = relevance_query.unwrap_or_else(|| content_text.clone());
 
     let conv_id = conv.id.clone();
     let pool = &env.pool;
@@ -223,7 +231,7 @@ pub(crate) async fn run_agent_turn(
         history,
         final_blocks,
         tools_enabled,
-        Some(content_text.clone()),
+        Some(relevance.clone()),
         tool_call_history.clone(),
         crate::context::token::ContextBudget {
             max_input_tokens: context_window,
@@ -756,7 +764,7 @@ pub(crate) async fn run_agent_turn(
         user_msg_id,
         asst_msg_id,
         tools_enabled,
-        query: Some(content_text),
+        query: Some(relevance),
         call_history: tool_call_history,
         model_override,
         asst_model: Some(effective_model),

@@ -15,15 +15,17 @@
   - 图标一律 @lucide/vue（HelpCircle/Folder/FolderOpen/LocateFixed/ChevronDown...）
 -->
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, onActivated } from "vue";
+import { ref, computed, onMounted, onActivated, onUnmounted } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
 import { bridge } from "../../api/bridge";
 import { setTimezone } from "../../utils/time";
+import { msgOf, stripInvokePrefix } from "../../utils/errors";
 import ErrorBanner from "../../components/common/ErrorBanner.vue";
 import Combobox from "../../components/common/Combobox.vue";
 import EmbedSwitchOverlay from "../../components/common/EmbedSwitchOverlay.vue";
 import type { ComboboxItem } from "../../components/common/Combobox.vue";
 import { useProviders } from "../../composables/useProviders";
+import { useClickOutside } from "../../composables/useClickOutside";
 import { useModelProfiles, profileById } from "../../composables/useModelProfiles";
 import {
   HelpCircle, Folder, FolderOpen, LocateFixed, ChevronDown,
@@ -40,9 +42,17 @@ const saveErrors = ref<Record<string, { msg: string; retry?: () => void }>>({});
 /** 保存成功提示（键 = 卡片），2s 淡出（状态上屏；显式保存模式下表示「刚保存成功」） */
 const savedTip = ref<Record<string, boolean>>({});
 
+/** 短定时器登记（W6）：卸载即清，防迟到回调碰已卸载组件 */
+const shortTimers = new Set<ReturnType<typeof setTimeout>>();
+function later(fn: () => void, ms: number): void {
+  const t = setTimeout(() => { shortTimers.delete(t); fn(); }, ms);
+  shortTimers.add(t);
+}
+onUnmounted(() => { shortTimers.forEach(clearTimeout); shortTimers.clear(); });
+
 function flashSaved(key: string) {
   savedTip.value[key] = true;
-  setTimeout(() => { savedTip.value[key] = false; }, 2000);
+  later(() => { savedTip.value[key] = false; }, 2000);
 }
 
 // ---- 服务端快照（保存成功后更新；「取消」的回滚基准）----
@@ -89,7 +99,7 @@ async function load() {
     embedDraft.value = server.value.embeddingId;
   } catch (e) {
     console.error("加载设置失败:", e);
-    loadError.value = e instanceof Error ? e.message : String(e);
+    loadError.value = stripInvokePrefix(msgOf(e));
   } finally {
     loading.value = false;
   }
@@ -132,7 +142,7 @@ async function saveLocalCard() {
     flashSaved("local");
   } catch (e) {
     console.error("保存失败:", e);
-    saveErrors.value.local = { msg: e instanceof Error ? e.message : String(e), retry: () => void saveLocalCard() };
+    saveErrors.value.local = { msg: stripInvokePrefix(msgOf(e)), retry: () => void saveLocalCard() };
   } finally {
     localSaving.value = false;
   }
@@ -161,7 +171,7 @@ async function openDataDir() {
     await bridge.logs.openDataDir();
   } catch (e) {
     console.error("打开数据目录失败:", e);
-    saveErrors.value.datadir = { msg: e instanceof Error ? e.message : String(e), retry: () => void openDataDir() };
+    saveErrors.value.datadir = { msg: stripInvokePrefix(msgOf(e)), retry: () => void openDataDir() };
   }
 }
 
@@ -204,15 +214,6 @@ type TestState =
   | { status: "testing" }
   | { status: "ok"; msg: string }
   | { status: "fail"; msg: string };
-
-function msgOf(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
-}
-
-/** 错误文案剥掉 invoke 层包装前缀（[op/kind] 内部错误: ），只留正文 */
-function stripInvokePrefix(msg: string): string {
-  return msg.replace(/^\[[^\]]*\]\s*(?:内部错误:\s*)?/, "");
-}
 
 function okFailMsg(t: TestState): string {
   return t.status === "ok" || t.status === "fail" ? stripInvokePrefix(t.msg) : "";
@@ -414,7 +415,7 @@ async function confirmEmbeddingSwitch() {
     const stats = await bridge.kb.rebuildAllEmbeddings();
     pendingSwitch.value = null;
     switchInfo.value = `已切换并重建 ${stats.chunks} 个向量（${stats.kbs} 个知识库）`;
-    setTimeout(() => { switchInfo.value = null; }, 4000);
+    later(() => { switchInfo.value = null; }, 4000);
   } catch (e) {
     // 引用已切、重建失败：诚实区分（不是「未切换」）——overlay 关闭，错误留卡内
     pendingSwitch.value = null;
@@ -585,7 +586,7 @@ function onInput(e: Event) {
 function openDropdown() {
   tzInputOpen.value = true;
   tzFilterText.value = "";
-  setTimeout(() => tzInputRef.value?.focus(), 0);
+  later(() => tzInputRef.value?.focus(), 0);
 }
 
 /** 关闭下拉 */
@@ -599,7 +600,7 @@ function onInputFocus() {
   tzInputOpen.value = true;
   tzFilterText.value = "";
   // 确保输入框可编辑并清空显示
-  setTimeout(() => {
+  later(() => {
     if (tzInputRef.value) {
       tzInputRef.value.value = "";
     }
@@ -608,7 +609,7 @@ function onInputFocus() {
 
 function onInputBlur() {
   // 延迟关闭让点击选项先触发
-  setTimeout(() => {
+  later(() => {
     if (!(tzDropdownRef.value?.contains(document.activeElement))) {
       closeDropdown();
     }
@@ -619,16 +620,8 @@ function onInputKeydown(e: KeyboardEvent) {
   if (e.key === "Escape") closeDropdown();
 }
 
-/** 点击外部关闭 */
-function onDocClick(e: MouseEvent) {
-  const el = tzWrapRef.value;
-  if (el && !el.contains(e.target as Node)) {
-    closeDropdown();
-  }
-}
-
-onMounted(() => document.addEventListener("click", onDocClick));
-onUnmounted(() => document.removeEventListener("click", onDocClick));
+/** 点击外部关闭（下拉展开期间监听） */
+useClickOutside(tzWrapRef, closeDropdown, () => tzInputOpen.value);
 
 /** 过滤选项计数 — 空结果时展示无匹配 */
 const hasFilterResults = computed(() => {
@@ -1344,7 +1337,7 @@ const hasFilterResults = computed(() => {
   pointer-events: none;
   opacity: 0;
   transition: opacity var(--ip-duration-fast) var(--ip-ease-out);
-  z-index: 10;
+  z-index: var(--ip-z-badge);
   line-height: 1.5;
   text-align: center;
 }

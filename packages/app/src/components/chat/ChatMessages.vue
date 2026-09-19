@@ -11,7 +11,7 @@
   Emits: 无
 -->
 <script setup lang="ts">
-import { watch, nextTick, ref, computed, onActivated } from "vue";
+import { watch, nextTick, ref, computed, onActivated, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { ArrowLeftRight, AtSign, ChevronDown, ChevronRight, CornerUpRight, Shield } from "@lucide/vue";
 import { useChatStore } from "../../stores/chat";
@@ -172,9 +172,17 @@ function scheduleJumpCorrection(root: HTMLElement, el: HTMLElement, desired: num
   if ("onscrollend" in root) {
     root.addEventListener("scrollend", check, { once: true });
   } else {
-    setTimeout(check, 500);
+    later(check, 500);
   }
 }
+
+// ---- 短定时器登记（W6）：卸载即清——迟到回调不再碰已卸载组件的 ref ----
+const shortTimers = new Set<ReturnType<typeof setTimeout>>();
+function later(fn: () => void, ms: number): void {
+  const t = setTimeout(() => { shortTimers.delete(t); fn(); }, ms);
+  shortTimers.add(t);
+}
+onUnmounted(() => { shortTimers.forEach(clearTimeout); shortTimers.clear(); });
 
 // 工具调用卡片展开状态
 const expandedToolCalls = ref<Set<string>>(new Set());
@@ -237,12 +245,7 @@ function toggleThinking(msgId: string) {
   expandedThinking.value = set;
 }
 
-import { truncateJson } from "../../utils/format";
-
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
-}
+import { truncateJson, formatDurationMs as formatDuration } from "../../utils/format";
 
 /** 判断一个 assistant 消息是否有非 text 的附属内容（tool/thinking）。
  *  memo 化：模板热路径每渲染每消息调用（见 utils/blockMemo.ts）。 */
@@ -319,7 +322,7 @@ async function copyContent(content: string, id?: string) {
   }
   if (!id) return;
   copiedId.value = ok ? id : "fail:" + id;
-  setTimeout(() => { copiedId.value = null; }, 2000);
+  later(() => { copiedId.value = null; }, 2000);
 }
 
 /** 错误横幅「重试」：以同内容重发上一条失败发送（store.lastFailedSend 为据）。*/
@@ -342,7 +345,7 @@ function quoteMessage(msgId: string, role: string) {
     display: `${kindLabel}#${shortCode(msgId)}`,
   });
   quotedId.value = msgId;
-  setTimeout(() => { if (quotedId.value === msgId) quotedId.value = null; }, 2000);
+  later(() => { if (quotedId.value === msgId) quotedId.value = null; }, 2000);
 }
 
 /** 历史引用卡片点击跳转：会话 → 打开该会话；消息 → 同会话滚动定位；

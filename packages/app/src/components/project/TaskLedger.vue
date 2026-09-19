@@ -9,7 +9,7 @@ import { useRouter } from "vue-router";
 import { useChatStore } from "../../stores/chat";
 import { useAgentStore } from "../../stores/agent";
 import { taskStatus, TASK_STATUS_LABELS } from "../../utils/taskStatus";
-import { formatTime, parseDbTime } from "../../utils/time";
+import { formatTime, parseDbTime, timeAgo, formatDate } from "../../utils/time";
 import type { ProjectTask } from "../../types";
 
 const props = defineProps<{ tasks: ProjectTask[] }>();
@@ -56,10 +56,10 @@ function durationLabel(task: ProjectTask, status: string): string {
       ? parseDbTime(task.ended_at).getTime()
       : Date.now();
   const sec = Math.max(0, Math.round((end - start) / 1000));
-  if (sec < 60) return `${sec}s`;
-  if (sec < 3600) return `${Math.floor(sec / 60)}m${sec % 60}s`;
+  if (sec < 60) return `${sec} s`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m ${sec % 60}s`;
   const h = Math.floor(sec / 3600);
-  return `${h}h${Math.floor((sec % 3600) / 60)}m`;
+  return `${h}h ${Math.floor((sec % 3600) / 60)}m`;
 }
 
 function openTask(task: ProjectTask) {
@@ -99,7 +99,7 @@ function openTask(task: ProjectTask) {
         <span class="col-agent">{{ r.initiatorName }}</span>
         <span class="col-num">{{ r.durationLabel }}</span>
         <span class="col-num">{{ r.task.rounds ?? "—" }}</span>
-        <span class="col-time">{{ formatTime(r.task.updated_at) }}</span>
+        <span class="col-time" :title="formatDate(r.task.updated_at) + ' ' + formatTime(r.task.updated_at)">{{ timeAgo(r.task.updated_at) }}</span>
       </button>
     </template>
   </div>
@@ -126,7 +126,7 @@ function openTask(task: ProjectTask) {
   color: var(--ip-color-text-tertiary);
   position: sticky; top: 0;
   background: var(--ip-color-bg-primary);
-  z-index: 1;
+  z-index: var(--ip-z-badge);
 }
 .ledger-row {
   border: none; border-radius: var(--ip-radius-md);

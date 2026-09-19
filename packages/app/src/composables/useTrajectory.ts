@@ -17,6 +17,7 @@
 //   多选下拉操纵同一状态，见 FILTER_GROUPS / DEFAULT_HIDDEN）
 import { ref } from "vue";
 import { bridge } from "../api/bridge";
+import { formatDateLabel } from "../utils/time";
 import { shortCode } from "../utils/refs";
 import { createEarlierPagination } from "./earlierPagination";
 import type {
@@ -304,11 +305,9 @@ export function specialOfEvent(ev: Pick<SessionEvent, "kind" | "turn_id">): Spec
  */
 const searchTextCache = new WeakMap<SessionEvent, string>();
 
-/** 本地日期标签 MM-DD（解析失败返回 ""，不参与跨天比较） */
+/** 轮头日期标签（今天/昨天/M月D日，用户偏好时区；失败返回 ""，不参与跨天比较） */
 function localDate(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  return `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  return formatDateLabel(iso) ?? "";
 }
 
 /** 取首行文本（摘要用；去 Markdown 标记的最小努力：直接裁首个换行） */

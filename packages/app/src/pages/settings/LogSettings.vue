@@ -5,6 +5,8 @@ import { ref, computed, onMounted, onUnmounted, onActivated, onDeactivated, next
 import { bridge } from "../../api/bridge";
 import { formatTime } from "../../utils/time";
 import Switch from "../../components/common/Switch.vue";
+import ErrorBanner from "../../components/common/ErrorBanner.vue";
+import { msgOf, stripInvokePrefix } from "../../utils/errors";
 
 const AUTO_INTERVAL_MS = 5000;
 
@@ -85,7 +87,7 @@ async function load() {
     await nextTick();
     scrollToBottom();
   } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e);
+    error.value = stripInvokePrefix(msgOf(e));
     rawLines.value = [];
   } finally {
     loading.value = false;
@@ -158,13 +160,14 @@ onUnmounted(() => {
         <!-- 加载中 -->
         <div v-if="loading && !rawLines.length" class="log-state">加载中…</div>
         <!-- 错误 -->
-        <div v-else-if="error" class="log-state is-error">
-          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
-          </svg>
-          <span>读取日志失败：{{ error }}</span>
-          <button type="button" class="refresh-btn" @click="load">重试</button>
-        </div>
+        <ErrorBanner
+          v-else-if="error"
+          variant="banner"
+          title="读取日志失败"
+          :detail="error"
+          retry-label="重试"
+          @retry="load"
+        />
         <!-- 空 -->
         <div v-else-if="!rawLines.length" class="log-state">暂无日志记录</div>
         <!-- 日志列表 -->
@@ -399,10 +402,5 @@ onUnmounted(() => {
   gap: var(--ip-spacing-2_5);
   color: var(--ip-color-text-tertiary);
   font-size: var(--ip-text-body-sm-size);
-}
-.log-state.is-error {
-  flex-direction: column;
-  gap: var(--ip-spacing-3);
-  color: var(--ip-danger-text);
 }
 </style>

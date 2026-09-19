@@ -19,10 +19,11 @@ import { computed, ref, watch, onMounted, onBeforeUnmount, nextTick } from "vue"
 import { listen } from "@tauri-apps/api/event";
 import { useChatStore } from "../../stores/chat";
 import { useAgentStore } from "../../stores/agent";
-import { formatTime, parseDbTime } from "../../utils/time";
+import { formatTime, parseDbTime, timeAgo, formatDate } from "../../utils/time";
 import { bridge } from "../../api/bridge";
 import type { PlanSnapshot } from "../../types";
 import { budgetDoneRows } from "./taskBudget";
+import { useClickOutside } from "../../composables/useClickOutside";
 import StatusGlyph from "./StatusGlyph.vue";
 
 const chat = useChatStore();
@@ -31,6 +32,15 @@ const agentStore = useAgentStore();
 /** 旧数据「委派: 」前缀展示侧归一剥离（UX #4：新生成标题已无前缀，零 migration）*/
 function delegationTitle(raw: string): string {
   return raw.replace(/^委派:\s*/, "") || "委派任务";
+}
+
+/** 任务行时间（文案规范 ⑧：相对时 + hover 绝对时；updatedAt 已是 parseDbTime 归一时间戳） */
+function taskTime(updatedAt: number): string {
+  return timeAgo(new Date(updatedAt).toISOString());
+}
+function taskTimeTitle(updatedAt: number): string {
+  const iso = new Date(updatedAt).toISOString();
+  return `${formatDate(iso)} ${formatTime(iso)}`;
 }
 
 /** 计划条目 status → 状态图标语系（StatusGlyph 五态映射） */
@@ -194,16 +204,8 @@ watch(tasks, (list) => {
   }
 }, { immediate: true });
 
-function onDocClick(e: MouseEvent) {
-  if (open.value && panelRef.value && !panelRef.value.contains(e.target as Node)) {
-    open.value = false;
-  }
-}
-watch(open, (v) => {
-  if (v) document.addEventListener("click", onDocClick);
-  else document.removeEventListener("click", onDocClick);
-});
-onBeforeUnmount(() => document.removeEventListener("click", onDocClick));
+// 外点收起（展开期间监听；卸载由 composable 自清）
+useClickOutside(panelRef, () => { open.value = false; }, () => open.value);
 
 // 切会话：收起 + 计划随数据源切换重载（任务 computed 自更新）
 watch(() => chat.activeConvId, () => {
@@ -292,7 +294,7 @@ function openTask(id: string) {
                   <StatusGlyph :status="t.running ? 'running' : 'pending'" :label="t.running ? undefined : '已结束'" />
                   <span class="task-row-title" :title="t.title">{{ t.title }}</span>
                   <span v-if="t.agentName" class="task-row-agent">{{ t.agentName }}</span>
-                  <span class="task-row-time">{{ formatTime(new Date(t.updatedAt).toISOString()) }}</span>
+                  <span class="task-row-time" :title="taskTimeTitle(t.updatedAt)">{{ taskTime(t.updatedAt) }}</span>
                 </button>
               </TransitionGroup>
               <div v-if="hiddenTaskCount > 0" class="task-more">还有 {{ hiddenTaskCount }} 个任务</div>

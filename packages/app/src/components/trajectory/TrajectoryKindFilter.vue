@@ -13,6 +13,7 @@
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { ChevronDown } from "@lucide/vue";
 import { DEFAULT_HIDDEN, FILTER_GROUPS, type FilterKey } from "../../composables/useTrajectory";
+import { useClickOutside } from "../../composables/useClickOutside";
 
 const props = defineProps<{
   /** 隐藏的类型键集合（数组形态便于 v-model 语义与测试断言） */
@@ -47,21 +48,14 @@ function resetDefault() {
   emit("update:hidden", [...DEFAULT_HIDDEN]);
 }
 
-function onDocClick(e: MouseEvent) {
-  if (open.value && wrapRef.value && !wrapRef.value.contains(e.target as Node)) open.value = false;
-}
 function onKeydown(e: KeyboardEvent) {
   if (e.key === "Escape" && open.value) open.value = false;
 }
-// capture 阶段监听：工具栏可能处在带 @click.stop 的容器内，冒泡会被拦导致收不到外部点击
-onMounted(() => {
-  document.addEventListener("click", onDocClick, true);
-  document.addEventListener("keydown", onKeydown);
-});
-onUnmounted(() => {
-  document.removeEventListener("click", onDocClick, true);
-  document.removeEventListener("keydown", onKeydown);
-});
+onMounted(() => document.addEventListener("keydown", onKeydown));
+onUnmounted(() => document.removeEventListener("keydown", onKeydown));
+// 外点收起（capture 阶段：工具栏可能处在带 @click.stop 的容器内，冒泡会被拦
+// 导致收不到外部点击）；只在展开期间监听
+useClickOutside(wrapRef, () => { open.value = false; }, () => open.value, { capture: true });
 </script>
 
 <template>

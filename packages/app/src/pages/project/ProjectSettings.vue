@@ -11,6 +11,8 @@ import { bridge } from "../../api/bridge";
 import ProjectBasicForm from "../../components/project/ProjectBasicForm.vue";
 import ProjectMembersChips from "../../components/project/ProjectMembersChips.vue";
 import ProjectContextEditor from "../../components/project/ProjectContextEditor.vue";
+import ErrorBanner from "../../components/common/ErrorBanner.vue";
+import { msgOf, stripInvokePrefix } from "../../utils/errors";
 
 const route = useRoute();
 const router = useRouter();
@@ -63,7 +65,7 @@ async function save() {
       // 身份字段（头像/主题色已移除，avatar/theme_color 不进 payload——库存值原地保留）
     });
   } catch (e) {
-    editError.value = e instanceof Error ? e.message : "保存失败";
+    editError.value = stripInvokePrefix(msgOf(e));
   } finally {
     saving.value = false;
   }
@@ -99,7 +101,7 @@ async function saveMembers() {
     // 成员变化可能建/动频道（首成员自动建、投影维护）——刷新会话缓存让侧栏立即可见
     await chat.loadConversations();
   } catch (e) {
-    memberError.value = e instanceof Error ? e.message : "保存成员失败";
+    memberError.value = stripInvokePrefix(msgOf(e));
   } finally {
     savingMembers.value = false;
   }
@@ -132,7 +134,7 @@ async function archive() {
         :model-value="editForm"
         @update:model-value="Object.assign(editForm, $event)"
       />
-      <div v-if="editError" class="form-error">{{ editError }}</div>
+      <ErrorBanner v-if="editError" variant="inline" title="保存失败" :detail="editError" :retry-label="null" />
       <div class="form-actions">
         <button class="btn-link" :disabled="!dirty || saving" @click="resetForm">取消</button>
         <button class="btn btn-primary btn-sm" :disabled="!dirty || saving" @click="save">
@@ -145,7 +147,7 @@ async function archive() {
       <h3 class="card-title">成员</h3>
       <p class="card-hint">项目成员可被委派任务，也可在项目空间内开新会话</p>
       <ProjectMembersChips v-model:member-ids="memberDraft" />
-      <div v-if="memberError" class="form-error">{{ memberError }}</div>
+      <ErrorBanner v-if="memberError" variant="inline" title="保存成员失败" :detail="memberError" :retry-label="null" />
       <div v-if="membersDirty" class="form-actions">
         <button class="btn-link" :disabled="savingMembers" @click="resetMembers">取消</button>
         <button class="btn btn-primary btn-sm" :disabled="savingMembers" @click="saveMembers">
@@ -224,7 +226,6 @@ async function archive() {
 }
 .card-hint { margin: -6px 0 0; font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
 
-.form-error { font-size: var(--ip-text-caption-size); color: var(--ip-danger-text); }
 .form-actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--ip-spacing-2); }
 
 .btn {

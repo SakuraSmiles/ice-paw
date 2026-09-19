@@ -183,7 +183,7 @@ describe("Sidebar 频道区块", () => {
 
     await w.find(".channel-open").trigger("click");
     await flushPromises();
-    expect(w.find(".channel-error").text()).toContain("项目还没有成员");
+    expect(w.find(".eb-inline").text()).toContain("项目还没有成员"); // W2：行内错误收编 ErrorBanner（inline 形态）
     // 失败后可重试（ensuring 复位、入口仍在）
     expect(w.find(".channel-open").exists()).toBe(true);
   });

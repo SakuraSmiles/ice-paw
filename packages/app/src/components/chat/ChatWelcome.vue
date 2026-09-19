@@ -18,6 +18,7 @@ import { useChatStore } from "../../stores/chat";
 import { useProjectStore } from "../../stores/project";
 import { useAgentStore } from "../../stores/agent";
 import { useNewConversation } from "../../composables/useNewConversation";
+import ErrorBanner from "../common/ErrorBanner.vue";
 import AgentPicker from "./AgentPicker.vue";
 
 const router = useRouter();
@@ -112,11 +113,14 @@ function openContextSettings() {
         <span>智能体未配置 API Key，发送消息会失败</span>
         <span class="keyless-action">去配置</span>
       </button>
-      <button v-if="createError" class="welcome-create-error" @click="startNew">
-        <TriangleAlert :size="12" />
-        <span>新建对话失败：{{ createError }}</span>
-        <span class="welcome-create-error-action">重试</span>
-      </button>
+      <ErrorBanner
+        v-if="createError"
+        variant="inline"
+        title="新建对话失败"
+        :detail="createError"
+        retry-label="重试"
+        @retry="startNew"
+      />
       <button
         v-if="ctxState === 'ready' || ctxState === 'empty'"
         class="ctx-pill"
@@ -242,21 +246,4 @@ function openContextSettings() {
   cursor: pointer;
 }
 .keyless-action { font-weight: var(--ip-font-weight-medium); text-decoration: underline; text-underline-offset: 2px; }
-
-/* 新建会话失败（U1-3：点击零反馈 → danger 语义 inline 错误态 + 重试可见） */
-.welcome-create-error {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--ip-spacing-1_5);
-  height: 26px;
-  padding: 0 var(--ip-spacing-2_5);
-  border: 1px solid var(--ip-danger-border);
-  border-radius: var(--ip-radius-full);
-  background-color: var(--ip-danger-bg);
-  color: var(--ip-danger-text);
-  font-family: inherit;
-  font-size: var(--ip-text-caption-size);
-  cursor: pointer;
-}
-.welcome-create-error-action { font-weight: var(--ip-font-weight-medium); text-decoration: underline; text-underline-offset: 2px; }
 </style>

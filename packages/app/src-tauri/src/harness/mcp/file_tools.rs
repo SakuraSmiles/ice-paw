@@ -542,9 +542,10 @@ impl McpClient for DeleteFileTool {
 /// 同卷用 rename（原子）；跨卷 rename 失败时回退 copy + remove。源文件若存在，移动前
 /// 自动备份（复用 [`backup_if_exists`]）。
 ///
-/// **授权**：tool_executor 经 `source` 字段提取路径做白名单校验（见
-/// `extract_path_from_args`），source 在 workspace 内则免授权；destination 由本工具的
-/// `reject_sensitive` 兜底拦截敏感路径。
+/// **授权**：tool_executor 经 `extract_paths_from_args` 提取 source 与 destination
+/// 双路径做白名单校验——all-match（Q1）：两条都在 workspace 内才免授权，任一越界
+/// 即走弹窗审批，destination 不得成为旁路面。本工具的 `reject_sensitive` 另拦敏感
+/// 路径（/proc 等），不含 workspace 边界——两层职责互补不互代。
 pub struct MoveFileTool;
 
 #[derive(Deserialize)]

@@ -38,7 +38,7 @@ function onFile(e: Event) {
   (e.target as HTMLInputElement).value = "";
   if (!f) return;
   if (f.size > AVATAR_MAX_SRC_BYTES) {
-    errMsg.value = `图片过大（${(f.size / 1024 / 1024).toFixed(1)}MB），请选择 10MB 以内的图片`;
+    errMsg.value = `图片过大（${(f.size / 1024 / 1024).toFixed(1)} MB），请选择 10 MB 以内的图片`;
     return;
   }
   errMsg.value = "";

@@ -1,11 +1,11 @@
 // useModelProfiles.test.ts — 模型配置共享加载层锁定：
 // 模块级缓存（两次 load 一次请求）+ force 强刷（增删改后）+ 失败降级清缓存
-// + 纯函数（profileById / resolveProfileChain 保序悬空跳过 / chainReferences）。
+// + 纯函数 profileById（resolveProfileChain / chainReferences 生产零引用，W6 迁回本地实现）。
 // ⚠️ 缓存用例有顺序依赖（模块级单例贯穿本文件），vitest 按文件内顺序执行。
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import {
-  loadModelProfiles, useModelProfiles, profileById, resolveProfileChain, chainReferences,
+  loadModelProfiles, useModelProfiles, profileById,
 } from "../useModelProfiles";
 import type { ModelProfile } from "../../types";
 
@@ -17,6 +17,16 @@ function profile(id: string, alias = id): ModelProfile {
     sort_order: 0, created_at: "2026-09-08 00:00:00", updated_at: "2026-09-08 00:00:00",
     has_api_key: true,
   };
+}
+
+// resolveProfileChain / chainReferences：test-only（生产零引用，W6 自 useModelProfiles 移入）
+function resolveProfileChain(list: ModelProfile[], ids: string[]): ModelProfile[] {
+  return ids
+    .map((id) => profileById(list, id))
+    .filter((p): p is ModelProfile => Boolean(p));
+}
+function chainReferences(chainIds: string[], profileId: string): boolean {
+  return chainIds.includes(profileId);
 }
 
 describe("useModelProfiles 共享加载", () => {

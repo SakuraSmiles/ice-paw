@@ -57,7 +57,7 @@ export function formatTokenCompact(n: number): string {
 }
 
 /**
- * 思考耗时格式化（ms → 「30s」/「1m 30s」）。
+ * 思考耗时格式化（ms → 「30 s」/「1m 30s」；数字与单位间空格，复合串内部紧凑）。
  *
  * 单一真相源：流式计时显示（useThinkingTimer）、冻结时写入
  * thinkingDurations、历史思考块的 duration_ms 兜底显示共用——
@@ -66,7 +66,19 @@ export function formatTokenCompact(n: number): string {
  */
 export function formatThinkingMs(ms: number): string {
   const s = Math.floor(ms / 1000);
-  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
+  return s < 60 ? `${s} s` : `${Math.floor(s / 60)}m ${s % 60}s`;
+}
+
+/**
+ * 事件/回合耗时格式化（ms → 「214 ms」/「3.2 s」；null → 空串）。
+ *
+ * 单一真相源：轨迹表轮头与事件行、聊天区工具行摘要共用——两处各写一份
+ * 会在单位空格与小数位上漂移（文案规范：数字与单位间空格）。
+ */
+export function formatDurationMs(ms: number | null): string {
+  if (ms == null) return "";
+  if (ms < 1000) return `${ms} ms`;
+  return `${(ms / 1000).toFixed(1)} s`;
 }
 
 /**

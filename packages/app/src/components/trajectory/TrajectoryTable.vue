@@ -19,6 +19,8 @@ import { computed, ref, watch } from "vue";
 import { Brain, ChevronDown, ChevronRight, RotateCw, TriangleAlert } from "@lucide/vue";
 import type { TrajectoryRow, TurnHeaderRow } from "../../composables/useTrajectory";
 import { isWarnTermination, termLabel } from "../../utils/termLabels";
+import { formatTime } from "../../utils/time";
+import { formatDurationMs as fmtDuration } from "../../utils/format";
 
 const props = defineProps<{
   rows: TrajectoryRow[];
@@ -207,20 +209,13 @@ defineExpose({ scrollToSeq, scrollToTurn, scrollToKey, scrollToBottom, smoothScr
 
 // 终止原因文案：单一真相源在 utils/termLabels（词表外裸透原值）
 
+/** 轮头时刻（HH:MM:SS）——统一走 utils/time（用户偏好时区，非 OS 本地） */
 function fmtTime(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`;
-}
-
-function fmtDuration(ms: number | null): string {
-  if (ms == null) return "";
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
+  return formatTime(iso, true) || iso;
 }
 
 function fmtTokens(n: number): string {
-  return n >= 10000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+  return n >= 10000 ? `${(n / 1000).toFixed(1)}K` : String(n);
 }
 
 /** 事件行选中判定：跨会话流优先 row key（seq 跨会话可重复），单会话按 seq */

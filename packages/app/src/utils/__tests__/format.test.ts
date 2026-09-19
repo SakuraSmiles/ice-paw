@@ -43,11 +43,11 @@ describe("formatTokenCount", () => {
 });
 
 describe("formatThinkingMs", () => {
-  it("秒档：整数秒（floor），与流式计时显示同一形态", () => {
-    expect(formatThinkingMs(0)).toBe("0s");
-    expect(formatThinkingMs(999)).toBe("0s");
-    expect(formatThinkingMs(30_000)).toBe("30s");
-    expect(formatThinkingMs(59_999)).toBe("59s");
+  it("秒档：整数秒（floor），与流式计时显示同一形态（W7：数字与单位间空格）", () => {
+    expect(formatThinkingMs(0)).toBe("0 s");
+    expect(formatThinkingMs(999)).toBe("0 s");
+    expect(formatThinkingMs(30_000)).toBe("30 s");
+    expect(formatThinkingMs(59_999)).toBe("59 s");
   });
 
   it("分级：分 + 余秒", () => {

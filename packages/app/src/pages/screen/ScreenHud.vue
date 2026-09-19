@@ -16,6 +16,7 @@ import {
 } from "@lucide/vue";
 import { useScreenChannelStore } from "../../stores/screenChannel";
 import { bridge } from "../../api/bridge";
+import { formatMmSs } from "../../utils/time";
 
 const screenChannel = useScreenChannelStore();
 const state = computed(() => screenChannel.state);
@@ -40,13 +41,11 @@ let pollTimer: number | undefined;
 
 function durationText(): string {
   const opened = state.value.opened_at;
-  if (!opened) return "0:00";
+  if (!opened) return "00:00";
   const s = Math.max(0, now.value - opened);
   const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = s % 60;
-  if (h > 0) return `${h} 时 ${m} 分`;
-  return `${m}:${String(sec).padStart(2, "0")}`;
+  if (h > 0) return `${h} 时 ${Math.floor((s % 3600) / 60)} 分`;
+  return formatMmSs(s);
 }
 
 /** 令牌持有者的展示信息（agent 名 + purpose；不在附着名单时回落 conv id） */

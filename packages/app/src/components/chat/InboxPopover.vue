@@ -23,6 +23,8 @@ import { bridge } from "../../api/bridge";
 import { refreshInboxCount } from "../../composables/useInbox";
 import { timeAgo } from "../../utils/time";
 import type { InboxItem } from "../../types";
+import ErrorBanner from "../common/ErrorBanner.vue";
+import { msgOf, stripInvokePrefix } from "../../utils/errors";
 import EntityAvatar from "../common/EntityAvatar.vue";
 
 const props = defineProps<{ convId: string }>();
@@ -59,7 +61,7 @@ async function load() {
     items.value = view.items;
     policy.value = view.policy;
   } catch (e) {
-    errorText.value = e instanceof Error ? e.message : String(e);
+    errorText.value = stripInvokePrefix(msgOf(e));
     items.value = [];
   } finally {
     loading.value = false;
@@ -78,7 +80,7 @@ async function approve(item: InboxItem) {
     void refreshInboxCount(props.convId);
   } catch (e) {
     // 会话忙：来件留队零丢失，显示后端三段式文案
-    errorText.value = e instanceof Error ? e.message : String(e);
+    errorText.value = stripInvokePrefix(msgOf(e));
   } finally {
     actingId.value = null;
   }
@@ -97,7 +99,7 @@ async function refuse(item: InboxItem) {
     await load();
     void refreshInboxCount(props.convId);
   } catch (e) {
-    errorText.value = e instanceof Error ? e.message : String(e);
+    errorText.value = stripInvokePrefix(msgOf(e));
   } finally {
     actingId.value = null;
   }
@@ -111,7 +113,7 @@ async function switchPolicy(next: string) {
     await bridge.inbox.setPolicy(props.convId, next);
   } catch (e) {
     policy.value = prev; // 失败回滚
-    errorText.value = e instanceof Error ? e.message : String(e);
+    errorText.value = stripInvokePrefix(msgOf(e));
   }
 }
 
@@ -135,7 +137,7 @@ function isAutoItem(item: InboxItem): boolean {
       </span>
     </div>
 
-    <div v-if="errorText" class="inbox-error">{{ errorText }}</div>
+    <ErrorBanner v-if="errorText" variant="inline" title="操作失败" :detail="errorText" :retry-label="null" />
 
     <div v-if="loading" class="inbox-hint">加载中…</div>
     <template v-else-if="items.length === 0">
@@ -229,11 +231,6 @@ function isAutoItem(item: InboxItem): boolean {
 .inbox-title { font-size: var(--ip-text-body-sm-size); font-weight: var(--ip-font-weight-semibold); color: var(--ip-color-text-primary); }
 .inbox-count { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
 .inbox-hint { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); padding: var(--ip-spacing-2) 0; }
-.inbox-error {
-  font-size: var(--ip-text-caption-size); color: var(--ip-danger-text);
-  background: var(--ip-danger-bg); border-radius: var(--ip-radius-md);
-  padding: var(--ip-spacing-1_5) var(--ip-spacing-2_5); line-height: 1.5;
-}
 .inbox-empty { padding: var(--ip-spacing-4) var(--ip-spacing-2); text-align: center; }
 .inbox-empty p { margin: 0; font-size: var(--ip-text-body-sm-size); color: var(--ip-color-text-secondary); }
 .inbox-empty-sub { margin-top: 4px; font-size: var(--ip-text-caption-size); color: var(--ip-color-text-tertiary); }
