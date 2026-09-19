@@ -56,6 +56,8 @@ pnpm tauri:build   # 产物在 packages/app/src-tauri/target/release/bundle/
 - [多 Agent 协作设计](docs/multi-agent-architecture.md)
 - [贡献指南](CONTRIBUTING.md)
 
+各子系统的设计真相源（Steer / 频道 / 工具权限 / 屏幕读写 / Word 能力路线等）见 [docs/](docs/) 目录。
+
 ## FAQ
 
 **支持哪些 Provider？**  

@@ -1,183 +1,139 @@
 # 使用指南
 
-## 安装
+> 适用于 0.9.x。产品内也有帮助：给任意 Agent 说「打开知识库帮助」或在知识库里找「帮助」文档，有每项能力的详细说明。
 
-从 [Releases](https://github.com/your-org/ice-paw/releases) 页面下载安装包。Windows 使用 `.msi`，macOS 使用 `.dmg`，Linux 使用 `.AppImage`。
+## 安装与首次启动
 
-首次启动时，应用会自动在本地创建 SQLite 数据库和 Stronghold 加密 vault，无需注册或联网。
+从 [Releases](https://github.com/SakuraSmiles/ice-paw/releases) 页面下载 Windows 安装包（NSIS `.exe`，内置离线 WebView2 运行时，免管理员安装）。macOS（Apple Silicon）目前从源码构建（见 [CONTRIBUTING](../CONTRIBUTING.md)）。
 
-## 配置 API Key
+首次启动会在本地自动创建 SQLite 数据库与 Stronghold 加密 vault——无需注册账号、无需联网。卸载不会删除你的数据；彻底清理请删除下方「数据目录」整个文件夹。
 
-IcePaw 不内置任何 API Key，需要自行提供。打开设置（右上角齿轮图标）→ Agents → 新建 Agent：
+## 快速上手：第一个 Agent
 
-1. 选择 Provider（OpenAI、Anthropic、智谱 GLM、DeepSeek、MiniMax）
-2. 填写 API Key
-3. 选择模型，填写 Agent 名称和 ID
-4. 点击创建
+**设置 → Agent → 新建**：填写名字、选厂商（OpenAI / Anthropic / 智谱 / DeepSeek / MiniMax 或任何兼容端点）、选模型、填 API Key。保存即可回到主页开聊。
 
-API Key 存储在 Stronghold vault 中，不会明文写入数据库。Key 仅在与 LLM Provider 通信时使用，不会发送给任何第三方服务器。
+保存时后端会自动把「厂商 + 模型 + 端点 + Key」物化成一条**模型配置**（见「模型配置与降级链」）——同样的配置只存一份，换 Key 一处生效全局。API Key 只进 Stronghold 加密 vault，数据库不落明文，也不会发送给任何第三方。
 
-如果使用中转 API 或兼容端点，在创建 Agent 时填写 `base_url` 即可，留空则使用 Provider 默认地址。
+也可以**在对话里让 Agent 帮你建 Agent**：说「帮我创建一个写代码的 agent」，Agent 会提交提案卡片——字段可编辑、API Key 槽位由你亲手填写（Agent 全程碰不到真实密钥），点批准才生效。
 
-## Agent
+## 对话
 
-Agent 是一组配置的集合：Provider、模型、System Prompt、温度参数等。同一个 Agent 可以开启多个对话，对话之间互不影响。
+侧栏「新建对话」选择 Agent 开始。回复流式渲染；Agent 调用工具时会显示工具卡片（参数、结果、行级 diff），点击展开详情。
 
-### 使用 agent.yaml
+### 生成中插话
 
-如果为 Agent 设置了 workspace 路径，可以在该目录下放置 `agent.yaml`，应用会自动读取：
+Agent 正在生成时你仍然可以直接发送——在途回复会在下一个工具边界干净截断（已写出的内容保留），你的新消息以「排队中」角标呈现，静默几秒（连发的插话会等到齐）后自动续跑处理。不必等它说完。
 
-```yaml
-system_prompt: "你是一个 Rust 代码审查助手..."
-temperature: 0.3
-```
+### 图片与文档
 
-修改文件后即时生效，无需重启。Agent 设置页上会显示绿色标签提示已读取 `agent.yaml`。
+输入框一个按钮统一添加附件：图片（单张 ≤5MB）、`.docx` / `.xlsx` / `.xls` / `.pdf`（≤100MB，自动分页提取为文本）。有视觉能力的模型直接看图；没有视觉能力的模型自动走「视觉代读」（在设置 → 通用配置一个视觉模型，图片会被代读成文字描述，而不是被丢弃）。
+
+### 会话操作
+
+- **重命名**：点会话头部标题进入编辑，显式「保存」或「取消」
+- **置顶**：会话头部星标按钮
+- **删除**：会话头部删除按钮（两步确认，不可恢复）
+- 生成中切换到其他会话再切回来，已生成的部分会保留
+
+## Agent 进阶
+
+### agent.yaml
+
+为 Agent 指定 workspace 后，可在该目录放置 `agent.yaml` 覆盖专家旋钮（`system_prompt` / `temperature` / `max_tokens` / `enabled_tools` / `word_style_profile` / `hooks` 等），修改即时生效。出生证字段（名字、厂商、模型、Key）走应用界面管理，不进 yaml。
+
+在应用里也有「打开 agent.yaml」入口；Agent 还可以通过提案通道请求修改自己的配置（仍需你批准）。
+
+### 风格
+
+Agent 的 System Prompt 是它的人格——设置里提供三档风格预设素材，插入即文本，之后随意改，零版本纠缠。
 
 ### 对话钩子（hooks）
 
-在 `agent.yaml` 中可以配置生命周期回调，在对话的不同阶段自动触发操作：
+`agent.yaml` 中可配置四个触发点的自动动作（注入 prompt / 调用工具 / 记日志）：
 
 ```yaml
 hooks:
   conversation_start:
     - action: inject_prompt
       content: "本次对话全程使用中文回复。"
-  before_llm:
-    - action: inject_prompt
-      content: "请先列出你的分析步骤，再给出结论。"
-    - action: log
-      message: "新的一轮 LLM 调用开始。"
   after_tool:
     - action: log
       message: "工具执行完毕。"
-  conversation_end:
-    - action: call_tool
-      tool: save_to_kb
-      args: '{"title":"对话摘要","content":"...","scope":"agent"}'
 ```
 
-支持的触发点：`conversation_start` / `before_llm` / `after_tool` / `conversation_end`。
-支持的动作：`inject_prompt`（注入 prompt）、`call_tool`（调用工具）、`log`（写日志）。
-钩子失败不会中断对话，仅记录警告日志。
+触发点：`conversation_start` / `before_llm` / `after_tool` / `conversation_end`。钩子失败只记警告，不打断对话。
 
-### 从对话中创建 Agent
+## 模型配置与降级链
 
-除了在设置页手动创建，也可以**在对话中直接让 Agent 帮你创建 Agent**。对 Agent 说「帮我建一个写代码的助手」——Agent 会调用 `propose_config_change` 工具生成提案，对话中会出现审批卡片：
+**设置 → 模型** 是模型配置的实体库：每条配置（别名、厂商、模型、端点、Key）独立管理，「测试」按钮真发一次小请求验证对话权益；健康状态（正常 / 额度耗尽 / 未调用）随调用归因。
 
-1. 卡片展开显示所有配置字段（名称、Provider、模型、System Prompt 等）
-2. API Key 为安全输入框，需手动填写（Agent 无法获取真实密钥）
-3. 点「批准」即可完成创建，新 Agent 立刻在侧栏和设置中可见
-4. 也可以点「编辑」修改字段后再批准，或点「拒绝」放弃
+编辑 Agent 时通过合并 tag 选择器挂链：首位是主档，其后是**降级链**——主档额度耗尽或被限流时自动换下一档继续跑（换档有 toast 提示，事件入轨迹），链尽才走原终态。视觉读取与知识库语义检索各自的模型也在**设置 → 通用**里引用同库配置。
 
-Agent 只能创建和修改 Agent，无法删除或修改其他 Agent 的配置。API Key 永远不会经过 Agent——Agent 只能填占位符 `__SLOT__`，你在卡片上亲手填的真实 key 直接存入 Stronghold。
+## 项目空间与频道
 
-### 编辑与删除
+### 项目
 
-点击 Agent 卡片展开编辑面板，可以修改 Provider、模型、API Key、`base_url` 等配置。删除 Agent 时，已有的对话记录不会丢失。
+侧栏切到项目后，会话与 Agent 按项目归类；项目可指定 workspace（作为文件工具的默认工作目录）、管理成员 Agent。项目可归档（收起但数据完整）；永久删除时可选「连同会话删除」或「仅删项目、会话转散落保留」。
 
-## 对话
+### 项目轨迹页
 
-侧栏点击「新建对话」并选择 Agent 即可开始。回复采用流式输出，逐字渲染。
+项目详情的「时间线」跨会话回放全量事件流——每轮对话的工具调用、预算消耗、成员接力一屏可查，支持按类型筛选与全文搜索。
 
-当 Agent 调用工具时（如读文件、执行命令），对话中会显示调用卡片，包含工具名、参数和执行结果，点击可以展开查看详情。
+### 频道（群聊）
 
-附带的图片会转为 base64 编码发送给模型。不支持图片理解的模型会自动隐藏图片附件。
+项目成员可开启**频道**：全体成员共用一条消息流，一个时刻只有一人在发言。@ 点名指定谁接力；不点名则由统筹者接令（自己答或分派给合适的成员）；护栏自动截断接力风暴。频道里生成中发消息同样不拦截（新链头接管）。
 
-### 会话操作
+## 多 Agent 协作
 
-- **重命名**：双击标题进入编辑模式，Enter 确认，Escape 取消
-- **置顶**：侧栏会话项右侧菜单 → 置顶
-- **删除**：侧栏会话项右侧菜单 → 删除（不可恢复）
-- **搜索**：侧栏顶部搜索框，输入标题关键词实时过滤
+- **委派**：Agent 把子任务委派给其他 Agent——每个委派是完整子会话（有自己的轨迹、预算与工具授权），进度实时汇报回父对话，任务面板可查
+- **跨会话信箱**：会话之间异步互投消息（同项目内），收件策略可设自动接收 / 需批准 / 拒收；期待回复的来件在对方回答后自动回投
+- 与频道的分工：委派是「同步干活的任务单元」、信箱是「异步留言」、频道是「大家都在场的群聊」
 
-### 切换会话
-
-如果在某个会话中正在生成回复，切换到其他会话再切回来，已生成的部分内容会被保留（bgStreams 快照机制），不需要等生成完成才能切走。
-
-## 项目空间
-
-项目空间用于将相关的 Agent 和会话归类管理。例如将「工作」和「个人项目」分别建立 project，切换时各自独立，互不干扰。
-
-### 创建与配置
-
-侧栏顶部下拉 → 管理项目 → 新建项目。填写名称、描述，选择初始成员 Agent。可以指定 workspace 路径，该路径会作为当前项目下文件工具的默认工作目录。
-
-### 归档与删除
-
-暂时不用的项目可以归档——从活跃列表中收起，内部会话保持完整。需要时恢复即可。
-
-永久删除时会弹窗确认：选择「连同会话删除」则对话全部移除；选择「仅删除项目」则对话变为散落状态（无项目归属，但数据保留）。
-
-## 工具（MCP）
-
-Agent 可以调用两类工具：内置工具和外部 MCP Server 接入的工具。
+## 工具与授权
 
 ### 内置工具
 
-以下工具开箱即用：
+开箱即用，按族分组：文件读写与目录（read/write/edit/move/search 等）、Shell 命令、只读 Git、网页抓取、知识库检索、附件分页读取、Word 文档（读取投影 / 精确编辑 / 整篇生成）、屏幕读写（截图 / 点击 / 键鼠）、配置提案。设置 → 工具 里可看完整清单。
 
-| 工具 | 功能 |
-|------|------|
-| `read_file` / `write_file` / `edit_file` | 文件读写和精确替换 |
-| `list_directory` | 列出目录内容 |
-| `directory_tree` | 递归目录树（跳过 .git/node_modules 等，限深度 8 / 节点 2000） |
-| `move_file` | 移动 / 重命名文件（跨卷回退 copy+delete，源文件自动备份） |
-| `create_directory` | 建目录含父目录（幂等） |
-| `get_file_info` | 文件元信息（大小 / 类型 / 只读 / 修改·创建·访问时间） |
-| `read_multiple_files` | 批量读取 ≤20 个文件（单文件 >1MB 跳过） |
-| `search_files` | 正则搜索文件内容（基于 ripgrep） |
-| `run_command` | 执行 Shell 命令（每次调用弹窗确认） |
-| `git` | 只读 Git 操作：status / diff / log / show |
-| `web_fetch` | 抓取网页内容并转为 Markdown |
-| `search_kb` / `read_kb_document` | 搜索和读取知识库文档 |
-| `read_agent_config` | 读取 Agent 自身的 agent.yaml 配置 |
-| `propose_config_change` | 提案创建或修改 Agent，用户审批后生效 |
+### 授权四档
 
-> 以上 `directory_tree` / `move_file` / `create_directory` / `get_file_info` / `read_multiple_files` 为 0.2.5+ native 内置工具，授权统一为 `PathWhitelist`。
+工具调用弹卡批准时可选：**仅此一次** / **此目录**（同目录后续免问）/ **此 Server（本会话）**（整台外部 Server 的全部工具本会话免问）。安全只读类（如 `git status`）不弹卡直接执行；同类操作获批后有会话级授权记忆。
 
-### 权限分级
+### 工具面收窄
 
-工具调用采用三级权限模型：
+编辑 Agent 可收窄它的工具面：按内置组（文件 / Word / 屏幕等）、按外部 Server、或按单个工具名勾选——收窄只影响「看得到什么」，授权弹卡仍是安全边界。
 
-- **Always**：安全只读操作，不需要用户确认（如 `git status`、`web_fetch`）
-- **Confirm**：需要用户逐次批准的操作（如 `run_command`）
-- **PathWhitelist**：限定在工作区路径内的文件操作
+### 外部 MCP Server
 
-### 接入外部 MCP Server
+设置 → 工具 添加外部 MCP Server，支持 **stdio**（如 `npx -y …`）与 **streamable HTTP**（如 UE5 内置 MCP 的 `http://localhost:8000/mcp`）两种传输。断线后自动懒重启重试一次（禁用的 Server 永不自动复活）；外部 Server 子进程的环境变量经白名单过滤，不泄漏本机 API Key。
 
-如果现有工具不满足需求，可以在设置 → Tools (MCP) 中添加外部 MCP Server。填写启动命令（如 `npx -y @anthropic/mcp-server-postgres`）、参数、环境变量（如数据库连接串），并选择 scope：
+## Word 文档能力
 
-- `global`：所有 Agent 共享
-- `per_agent`：仅指定 Agent 可用
+Agent 能直接处理 Word：读取时给模型结构化投影（大纲 / 格式 / 表格网格）；编辑走精确操作（替换 / 插段 / 表格手术 / 样式定义），批内事务全有或全无、写前自动备份；也可以从模板一次生成整篇文档（自动目录、生成自检不过不落盘）。样式偏好可写进 agent.yaml 的 `word_style_profile`。
 
-信任级别设为 `trusted` 则跳过确认弹窗，`untrusted` 则每次调用都需批准。外部 Server 子进程的环境变量经过白名单过滤，不会泄漏本机的 API Key。
+## 屏幕读写
+
+需要看屏幕的 Agent 可申请**屏幕共享会话**——批准一次，本轮会话内截图 / 点击 / 键鼠操作免逐次弹卡；共享期间桌面有红边框与 HUD 工具栏，你可以随时暂停或终止；你本人在用键鼠时 Agent 自动让路。
 
 ## 知识库
 
-将本地文档目录绑定为知识库后，Agent 可以通过 `search_kb` 搜索相关内容并在对话中引用。
+把本地文档目录绑定为知识库后，Agent 通过 `search_kb` 语义检索引用。三级作用域：全局（设置 → 知识库）、Agent 级（`<workspace>/kb/`）、项目级（`<project_workspace>/kb/`）。放入即自动索引、改动同步更新；配置 embedding 模型后按语义相似度排序（模型在设置 → 通用 配置）。应用自带帮助文档（在知识库里），Agent 也能自己查操作事实。
 
-知识库按 scope 分为三级：
+## 设置总览
 
-- **全局**：设置 → Knowledge Base 中配置
-- **Agent 级**：`<agent_workspace>/kb/` 目录
-- **项目级**：`<project_workspace>/kb/` 目录
+| 页 | 管什么 |
+|---|---|
+| 通用 | 默认 workspace、时区、主题、视觉读取与语义检索的模型引用 |
+| 模型 | 模型配置实体库（新建 / 编辑 / 测试 / 健康状态） |
+| Agent | Agent 出生证管理、编辑、agent.yaml 入口 |
+| 工具 | 内置工具清单、外部 MCP Server、工具面 |
+| 知识库 | 全局知识库目录绑定与索引 |
+| 日志 | 按天轮转的运行日志（排障先看这里） |
+| 关于 | 版本、标识符、许可 |
 
-支持的文件格式包括 `.md`、`.txt`、`.json` 等。放入文件后会自动索引，修改或删除文件后索引同步更新。如果配置了 embedding 模型，检索时按语义相似度排序。需要强制重建索引时，可以在设置页点 Reindex。
+## 数据、迁移与日志
 
-## 设置
-
-右上角齿轮图标打开设置页，共五个 Tab：
-
-- **General**：默认 workspace 路径、时区（点 Detect 自动检测）、数据目录（点文件夹图标打开）、主题、字体大小、键盘快捷键
-- **Agents**：管理 Agent 的创建、编辑和删除
-- **Tools (MCP)**：管理内置工具和外部 MCP Server
-- **Knowledge Base**：管理全局知识库
-- **Logs**：查看运行日志（按天轮转，排查网络错误、工具执行失败、MCP 连接异常等）
-
-## 数据目录
-
-各平台的应用数据目录路径：
+各平台应用数据目录：
 
 | 平台 | 路径 |
 |------|------|
@@ -185,10 +141,10 @@ Agent 可以调用两类工具：内置工具和外部 MCP Server 接入的工�
 | macOS | `~/Library/Application Support/com.icepaw.app/` |
 | Linux | `~/.local/share/com.icepaw.app/` |
 
-目录下的主要文件：
+目录主要内容：`ice-paw.db`（对话与配置）、`stronghold.hold`（加密 vault）、`images/`（图片外置内容——迁移必带，否则历史图片不可恢复）、`logs/`（运行日志）、`templates/`（Word 共享模板）。
 
-- `ice-paw.db` — 对话记录、Agent 配置、项目信息（SQLite）
-- `stronghold.hold` — API Key 加密 vault
-- `logs/` — 运行日志
+**迁移到新设备**：把整个应用数据目录复制到新设备对应路径即可。数据不出本机——同步、备份策略由你自己的工具决定。
 
-换设备时，将整个目录复制到新设备对应路径即可迁移全部数据。
+## 反馈
+
+遇到问题或想提议功能请[提交 Issue](https://github.com/SakuraSmiles/ice-paw/issues)——bug 报告带上版本号（设置 → 关于）与日志片段（设置 → 日志）会大大加快定位。
