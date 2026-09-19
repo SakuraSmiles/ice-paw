@@ -91,6 +91,13 @@ const routes: RouteRecordRaw[] = [
             meta: { title: "全局知识库" },
           },
           {
+            // 定时任务（0.9.3）：到点自动跑一个完整 agent 回合——列表/表单/执行日志
+            path: "tasks",
+            name: "SettingsTasks",
+            component: () => import("../pages/settings/TaskSettings.vue"),
+            meta: { title: "定时任务" },
+          },
+          {
             path: "logs",
             name: "SettingsLogs",
             component: () => import("../pages/settings/LogSettings.vue"),

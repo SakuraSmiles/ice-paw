@@ -1256,3 +1256,74 @@ export interface RebuildStats {
   kbs: number;
   chunks: number;
 }
+
+// =========================================================================
+// 定时任务（0.9.3，migration 57）——设计真相源 docs/scheduled-tasks-design.md
+// =========================================================================
+
+/** 调度档位：once | daily | weekly | interval | cron（schedule_data JSON 载荷见下） */
+export type TaskScheduleKind = "once" | "daily" | "weekly" | "interval" | "cron";
+
+/** 档位 JSON 载荷（按 kind 取对应形态；weekly 的 weekdays 为 0-6，0=周一） */
+export interface TaskScheduleData {
+  /** once：'YYYY-MM-DD HH:MM:SS' */
+  at?: string;
+  /** daily/weekly：'HH:MM' */
+  time?: string;
+  /** weekly：命中日 0-6（0=周一） */
+  weekdays?: number[];
+  /** interval：分钟（后端钳制 ≥10） */
+  minutes?: number;
+  /** cron：6/7 域表达式 */
+  expr?: string;
+}
+
+export interface ScheduledTask {
+  id: string;
+  name: string;
+  agent_id: string;
+  schedule_kind: TaskScheduleKind;
+  schedule_data: string;
+  prompt: string;
+  /** NULL = 专属会话懒建（首跑物化时创建并回写） */
+  target_conv_id: string | null;
+  /** run_once | skip（错过语义） */
+  miss_policy: string;
+  /** NULL = 不转发 */
+  deliver_to_conv_id: string | null;
+  enabled: number;
+  /** 本地时间 'YYYY-MM-DD HH:MM:SS'；NULL = 一次性任务已完成或未排程 */
+  next_run: string | null;
+  last_run_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** 执行记录（task_runs）——执行日志页数据源 */
+export interface TaskRun {
+  id: string;
+  task_id: string;
+  conv_id: string | null;
+  /** running | done | error | missed */
+  status: string;
+  summary: string | null;
+  error: string | null;
+  started_at: string;
+  finished_at: string | null;
+}
+
+/** 设置页列表视图：任务 + 最近一次执行（后端 serde flatten） */
+export interface ScheduledTaskView extends ScheduledTask {
+  last_run: TaskRun | null;
+}
+
+/** 侧栏快速入口：跨任务最近执行（含任务名） */
+export interface RecentTaskRun {
+  run_id: string;
+  task_id: string;
+  task_name: string;
+  status: string;
+  summary: string | null;
+  started_at: string;
+  finished_at: string | null;
+}

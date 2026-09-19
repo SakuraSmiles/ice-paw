@@ -11,6 +11,7 @@ import { useNewConversation } from "../../composables/useNewConversation";
 import { useTheme } from "../../composables/useTheme";
 import { useResizablePanel } from "../../composables/useResizablePanel";
 import { useInbox } from "../../composables/useInbox";
+import TaskQuickEntry from "./TaskQuickEntry.vue";
 import { listen } from "@tauri-apps/api/event";
 import { bridge } from "../../api/bridge";
 import PanelResizeHandle from "../common/PanelResizeHandle.vue";
@@ -518,6 +519,8 @@ function timeAgoLabel(dateStr: string): string {
          动画起点自动跟随按钮新位置，useTheme 按 .btn-theme-toggle 探测零改动。
          收起态不放主题钮（用户拍板）：此份即全应用唯一实例） -->
     <div v-if="!collapsed" class="sidebar-footer">
+      <!-- 定时任务快速入口（设置钮上方；无执行记录整体不渲染） -->
+      <TaskQuickEntry />
       <button class="footer-btn" :class="{ active: isSettingsPage }" @click="router.push('/settings/general')">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="3" />

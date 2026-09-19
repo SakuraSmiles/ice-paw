@@ -536,6 +536,55 @@ const inbox = {
   },
 };
 
+const tasks = {
+  /** 设置页列表：任务 + 最近一次执行（状态徽数据源） */
+  async list(): Promise<import("../types").ScheduledTaskView[]> {
+    try { return await invoke<import("../types").ScheduledTaskView[]>("list_scheduled_tasks"); }
+    catch (err) { throw wrapInvokeError("tasks.list", err); }
+  },
+  /** 新建任务（后端校验档位并算首个 next_run；一次性过期时间当场拒收） */
+  async create(input: {
+    name: string; agent_id: string; schedule_kind: string; schedule_data: string; prompt: string;
+    miss_policy?: string; deliver_to_conv_id?: string | null; enabled?: number;
+  }): Promise<import("../types").ScheduledTask> {
+    try { return await invoke<import("../types").ScheduledTask>("create_scheduled_task", { input }); }
+    catch (err) { throw wrapInvokeError("tasks.create", err); }
+  },
+  /** 部分更新（None 不改；schedule/enabled 变更后端重算 next_run） */
+  async update(input: {
+    id: string; name?: string; agent_id?: string; schedule_kind?: string; schedule_data?: string;
+    prompt?: string; miss_policy?: string; deliver_to_conv_id?: string | null; enabled?: number;
+  }): Promise<import("../types").ScheduledTask> {
+    try { return await invoke<import("../types").ScheduledTask>("update_scheduled_task", { input }); }
+    catch (err) { throw wrapInvokeError("tasks.update", err); }
+  },
+  /** 删除任务（执行记录随任务清；载体会话保留） */
+  async remove(id: string): Promise<void> {
+    try { await invoke<void>("delete_scheduled_task", { id }); }
+    catch (err) { throw wrapInvokeError("tasks.remove", err); }
+  },
+  /** 手动触发（fire-and-forget，不动调度计划；结果看执行记录/载体会话） */
+  async runNow(id: string): Promise<void> {
+    try { await invoke<void>("run_scheduled_task_now", { id }); }
+    catch (err) { throw wrapInvokeError("tasks.runNow", err); }
+  },
+  /** 单任务执行历史（执行日志页） */
+  async runs(taskId: string, limit?: number): Promise<import("../types").TaskRun[]> {
+    try { return await invoke<import("../types").TaskRun[]>("list_task_runs", { taskId, limit }); }
+    catch (err) { throw wrapInvokeError("tasks.runs", err); }
+  },
+  /** 跨任务最近执行（侧栏快速入口） */
+  async recentRuns(limit?: number): Promise<import("../types").RecentTaskRun[]> {
+    try { return await invoke<import("../types").RecentTaskRun[]>("list_recent_task_runs", { limit }); }
+    catch (err) { throw wrapInvokeError("tasks.recentRuns", err); }
+  },
+  /** 档位预览：未来三个运行时点（cron 逃生舱防写错） */
+  async preview(kind: string, data: string): Promise<string[]> {
+    try { return await invoke<string[]>("preview_schedule", { kind, data }); }
+    catch (err) { throw wrapInvokeError("tasks.preview", err); }
+  }
+};
+
 const channels = {
   /** 幂等确保项目频道存在并返回视图（侧栏「开启频道」懒建；创建不触发选举） */
   async ensure(projectId: string): Promise<import("../types").ChannelView> {
@@ -645,5 +694,5 @@ const screen = {
   },
 };
 
-export const bridge = { agents, providers, modelProfiles, conversations, projects, messages, chat, preferences, mcp, kb, logs, appInfo, inbox, channels, trajectory, screen };
+export const bridge = { agents, providers, modelProfiles, conversations, projects, messages, chat, preferences, mcp, kb, logs, appInfo, inbox, tasks, channels, trajectory, screen };
 export default bridge;

@@ -151,6 +151,14 @@ pub fn run() {
             commands::inbox_cmd::list_inbox_counts,
             commands::inbox_cmd::set_inbox_policy,
             commands::inbox_cmd::respond_inbox_item,
+            commands::task_cmd::list_scheduled_tasks,
+            commands::task_cmd::create_scheduled_task,
+            commands::task_cmd::update_scheduled_task,
+            commands::task_cmd::delete_scheduled_task,
+            commands::task_cmd::run_scheduled_task_now,
+            commands::task_cmd::list_task_runs,
+            commands::task_cmd::list_recent_task_runs,
+            commands::task_cmd::preview_schedule,
             commands::chat_cmd::send_message,
             commands::chat_cmd::stop_generation,
             commands::chat_cmd::is_conversation_streaming,
@@ -491,6 +499,12 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 db::space::boot_vacuum_sweep(vacuum_pool).await;
             });
+
+            // 3i) 定时任务（0.9.3）：调度主循环（60s tick）+ boot 错过扫尾
+            //     （按任务级 miss_policy 补跑一次/顺延留痕）。全局并发 1 由
+            //     单循环串行天然保证（设计真相源 docs/scheduled-tasks-design.md）。
+            harness::scheduler::spawn_scheduler(handle.clone(), pool.clone());
+            harness::scheduler::spawn_boot_sweep(handle.clone(), pool.clone());
 
             // 4) REQ-XC-010: 注入 AgentCmd trait object (生产实现 SqlAgentCmd)
             // 覆盖 builder 阶段注入的 None 占位。

@@ -1336,3 +1336,74 @@ pub struct UpdateProject {
     #[serde(default, deserialize_with = "deserialize_double_option")]
     pub avatar: Option<Option<String>>,
 }
+
+// =========================================================================
+// 定时任务（0.9.3，migration 57）——设计真相源 docs/scheduled-tasks-design.md
+// =========================================================================
+
+/// 定时任务实体。`next_run` 为本地时间 'YYYY-MM-DD HH:MM:SS'（NULL = 一次性
+/// 任务已完成或未排程）；调度器 60s tick 扫 `enabled ∧ next_run <= now`。
+#[derive(Debug, Clone, FromRow, Serialize)]
+pub struct ScheduledTaskRow {
+    pub id: String,
+    pub name: String,
+    pub agent_id: String,
+    /// once | daily | weekly | interval | cron
+    pub schedule_kind: String,
+    /// 档位 JSON 载荷（解析见 harness/scheduler.rs::parse_spec）
+    pub schedule_data: String,
+    pub prompt: String,
+    /// NULL = 专属会话懒建（首跑物化时创建并回写）
+    pub target_conv_id: Option<String>,
+    /// run_once | skip（错过语义，boot 扫尾分叉）
+    pub miss_policy: String,
+    /// NULL = 不转发（配置了则跑完经 MA-3 deliver 投摘要到目标会话）
+    pub deliver_to_conv_id: Option<String>,
+    pub enabled: i32,
+    pub next_run: Option<String>,
+    pub last_run_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// 新建任务载荷（命令层）。schedule 由前端按档位组好传 JSON 字符串。
+#[derive(Debug, Clone, Deserialize)]
+pub struct NewScheduledTask {
+    pub name: String,
+    pub agent_id: String,
+    pub schedule_kind: String,
+    pub schedule_data: String,
+    pub prompt: String,
+    pub miss_policy: Option<String>,
+    pub deliver_to_conv_id: Option<String>,
+    pub enabled: Option<i32>,
+}
+
+/// 任务更新载荷（部分更新语义：None = 不改）。target_conv_id 不可改
+/// （换载体 = 新任务，设计 §3）；schedule 可改（改后 next_run 重算）。
+#[derive(Debug, Clone, Deserialize)]
+pub struct ScheduledTaskUpdate {
+    pub id: String,
+    pub name: Option<String>,
+    pub agent_id: Option<String>,
+    pub schedule_kind: Option<String>,
+    pub schedule_data: Option<String>,
+    pub prompt: Option<String>,
+    pub miss_policy: Option<String>,
+    pub deliver_to_conv_id: Option<Option<String>>,
+    pub enabled: Option<i32>,
+}
+
+/// 执行记录（task_runs）——执行日志页数据源，每轮一条。
+#[derive(Debug, Clone, FromRow, Serialize)]
+pub struct TaskRunRow {
+    pub id: String,
+    pub task_id: String,
+    pub conv_id: Option<String>,
+    /// running | done | error | missed
+    pub status: String,
+    pub summary: Option<String>,
+    pub error: Option<String>,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+}

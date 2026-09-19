@@ -13,6 +13,7 @@ mod chat_cmd_tests;
 pub mod channel_cmd;
 pub mod conversation_cmd;
 pub mod inbox_cmd;
+pub mod task_cmd;
 pub mod kb_cmd;
 pub mod log_cmd;
 pub mod mcp_cmd;

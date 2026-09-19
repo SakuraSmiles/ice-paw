@@ -56,6 +56,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 # search_files 工具：正则内容搜索
 regex = "1"
 chrono = { version = "0.4", features = ["serde"] }
+cron = "0.12"
 thiserror = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -18,5 +18,6 @@ pub mod project;
 pub mod project_ledger;
 pub mod session_event;
 pub mod summary;
+pub mod task;
 pub mod template;
 pub mod tool_call;
