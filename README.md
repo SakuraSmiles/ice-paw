@@ -14,7 +14,11 @@ Agent 可以执行 Shell 命令、读写文件、检索知识库，还能把任�
 
 ## 截图
 
-<!-- 截图：浅色主题聊天页 / 深色主题 / 项目轨迹页（占位待替换，见下方说明） -->
+![浅色主题聊天页](docs/screenshots/chat-light.png)
+
+| 深色主题 | 会话轨迹 |
+|---|---|
+| ![深色主题聊天页](docs/screenshots/chat-dark.png) | ![会话轨迹页](docs/screenshots/trajectory.png) |
 
 ## 功能
 
