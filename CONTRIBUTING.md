@@ -20,9 +20,9 @@
 
 | 工具 | 版本 | 说明 |
 |------|------|------|
-| Node.js | **18+** | 推荐 20 LTS |
+| Node.js | **20+** | CI 使用 22；推荐 20 LTS 及以上 |
 | pnpm | **9+** | monorepo 包管理 |
-| Rust | **1.75+** | Tauri 2 MSRV 1.77；推荐 rustup stable |
+| Rust | **1.77+** | Tauri 2 MSRV；推荐 rustup stable |
 | OS | Windows / macOS / Linux | 需 WebView（Win: WebView2 / macOS: WKWebView / Linux: WebKitGTK） |
 
 > 平台工具链细节见 [Tauri 官方文档](https://v2.tauri.app/start/prerequisites/)
@@ -33,8 +33,8 @@
 # 安装依赖
 pnpm install
 
-# 启动开发模式（Vite + Tauri 窗口）
-pnpm tauri dev
+# 启动开发模式（Vite + Tauri 窗口；须在仓库根目录运行）
+pnpm tauri:dev
 ```
 
 首次启动会自动：
@@ -64,9 +64,7 @@ ice-paw/
 │   │           ├── harness/           # 核心运行时（provider/loop/mcp/kb）
 │   │           └── infra/             # 基础设施（protocol/ 事件协议 + cancel、decode、file_validation、image_validation、path_norm、process、strings）
 │   └── ui/                           # 共享 UI 样式（CSS tokens）
-├── docs/
-│   └── architecture.md               # 系统架构文档
-├── memory/                            # 项目记忆与迭代计划
+├── docs/                              # 架构/设计真相源与使用指南
 └── pnpm-workspace.yaml
 ```
 
@@ -77,7 +75,8 @@ ice-paw/
 | 命令 | 作用 |
 |------|------|
 | `pnpm dev` | 仅 Vite 开发服务器（端口 1420） |
-| `pnpm tauri dev` | Tauri 开发环境（前端 HMR + Rust 热编译） |
+| `pnpm tauri:dev` | Tauri 开发环境（前端 HMR + Rust 热编译；须在仓库根目录运行） |
+| `pnpm tauri:build` | 打包安装包（须在仓库根目录运行；产物在 packages/app/src-tauri/target/release/bundle/） |
 | `pnpm build` | 类型检查 + 生产构建 |
 | `pnpm typecheck` | TypeScript 类型检查 |
 | `pnpm lint` | ESLint |
@@ -89,7 +88,7 @@ ice-paw/
 ### 前端
 
 ```bash
-pnpm test          # Vitest：utils/stores/api/composables/组件（460+，持续增长，以 CI 为准）
+pnpm test          # Vitest：utils/stores/api/composables/组件（700+，持续增长，以 CI 为准）
 pnpm test:watch    # watch 模式（须在 packages/app 下执行）
 ```
 
@@ -100,7 +99,7 @@ cd packages/app/src-tauri
 
 # 需显式传 SODIUM_LIB_DIR（或 cd 到 src-tauri 让 Cargo 自动读取 .cargo/config.toml）
 SODIUM_LIB_DIR="path/to/sodium-prebuilt/libsodium/x64/Release/v143/static" \
-SODIUM_STATIC=true cargo test --lib   # 单元测试（1400+，持续增长，以 CI 为准）
+SODIUM_STATIC=true cargo test --lib   # 单元测试（1500+，持续增长，以 CI 为准）
 
 cargo clippy                           # Lint
 ```
@@ -136,9 +135,10 @@ Stronghold key 派生：passphrase → blake2b256 → 32 字节 key。
 ## 路线图
 
 - [x] M1-M5：基础架构 + 多 Agent + 工具系统 + 项目空间
-- [x] 测试体系（Rust 1400+ + 前端 460+，持续增长，以 CI 为准）
+- [x] 测试体系（Rust 1500+ + 前端 700+，持续增长，以 CI 为准）
+- [x] 会话轨迹导出（`export_session_trajectory` JSONL）
 - [ ] OS keyring 接入替代固定 passphrase
-- [ ] 会话搜索 / 导出
+- [ ] 会话全文搜索
 - [ ] 前端 E2E 测试（Playwright + Tauri driver）
 
 ## 许可
