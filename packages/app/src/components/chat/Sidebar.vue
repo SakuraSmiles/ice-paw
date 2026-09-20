@@ -44,7 +44,10 @@ const currentProjectName = computed(() =>
 function selectProject(id: string | null) {
   project.setActiveProject(id);
   if (id === TASK_SCOPE) {
-    // 定时任务虚拟空间：无详情页——选最近任务会话回首页（无则欢迎态）
+    // 定时任务虚拟空间：无详情页——选最近任务会话回首页（无则欢迎态）。
+    // ⚠️ 顺序：先选会话再定 scope——selectConversation 会按会话所属项目同步
+    // scope（0.9.0 导航一致性），散落载体在此把 scope 覆写回 null；TASK_SCOPE
+    // 必须后置定住，否则侧栏「一闪而过」退回散落。
     const tasksConvs = visibleConversations.value.filter((c) => taskConvIds.value.has(c.id));
     if (tasksConvs.length > 0) {
       const latest = tasksConvs.reduce((a, b) =>
@@ -54,6 +57,7 @@ function selectProject(id: string | null) {
     } else {
       chat.clearActiveConversation();
     }
+    project.setActiveProject(TASK_SCOPE);
     router.push("/");
     return;
   }
