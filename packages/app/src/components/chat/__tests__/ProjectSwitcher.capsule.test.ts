@@ -89,7 +89,7 @@ describe("ProjectSwitcher 胶囊形态", () => {
     expect(w.find(".switcher-overlay").classes()).toContain("open");
     expect(w.findAll(".switcher-item").length).toBe(4); // 散落 + 定时任务 + 2 项目
     // 菜单行圆点接线：项目行主色圆点、散落行 muted 灰点（均无内联色）
-    expect(w.findAll(".switcher-item .item-dot").length).toBe(3); // 散落 + 2 项目（定时任务项是 Clock 图标无 dot）
+    expect(w.findAll(".switcher-item .item-dot").length).toBe(4); // 散落 + 定时任务 + 2 项目
     expect(w.find(".switcher-item .item-dot.muted").exists()).toBe(true);
     expect(w.findAll(".switcher-item .item-dot")[1].attributes("style")).toBeUndefined();
 

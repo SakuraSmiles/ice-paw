@@ -5,7 +5,6 @@
 // 开关态（isOpen）与快速新建表单态内部自持；select / create / manage / open
 // 通过 emit 上交 Sidebar 处理。
 import { ref, computed, nextTick } from "vue";
-import { Clock } from "@lucide/vue";
 import { TASK_SCOPE } from "../../stores/project";
 import { Folder, FolderPlus, List } from "@lucide/vue";
 import type { Project } from "../../types";
@@ -226,9 +225,10 @@ function confirmCreate() {
             <polyline points="20 6 9 17 4 12" />
           </svg>
         </button>
-        <!-- 定时任务虚拟空间（0.9.20）：列表 = 全部任务载体会话 -->
+        <!-- 定时任务虚拟空间（0.9.20）：列表 = 全部任务载体会话。mark 形态与
+             散落同款 muted dot（同为非项目虚拟空间，视觉归族；辨识靠名字） -->
         <button class="switcher-item" :class="{ active: scopeProjectId === TASK_SCOPE }" @click="onSelect(TASK_SCOPE)">
-          <span class="item-mark"><Clock :size="13" class="item-clock" /></span>
+          <span class="item-mark"><span class="item-dot muted" /></span>
           <span class="item-name">定时任务</span>
           <svg v-if="scopeProjectId === TASK_SCOPE" class="item-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="20 6 9 17 4 12" />
@@ -563,7 +563,6 @@ function confirmCreate() {
   height: 8px;
 }
 
-.item-clock { color: var(--ip-color-text-tertiary); }
 .switcher-list {
   padding: var(--ip-spacing-1_5);
   display: flex;
