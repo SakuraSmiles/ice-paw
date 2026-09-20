@@ -331,7 +331,7 @@ const deliverTargets = computed(() => chatStore.conversations);
             <div class="row-title">
               <Plus :size="16" class="new-plus" />
               <span class="card-name new-name">新建定时任务</span>
-              <span class="new-hint">到点自动让 Agent 执行一轮任务</span>
+              <span class="new-hint">按计划自动执行</span>
             </div>
             <ChevronRight :size="16" class="card-chevron" :class="{ rotated: expandedId === 'new' }" />
           </div>
@@ -339,7 +339,7 @@ const deliverTargets = computed(() => chatStore.conversations);
             <div class="row-grid two">
               <div class="field">
                 <div class="field-label">名称</div>
-                <input v-model="draft.name" type="text" class="form-input" placeholder="如：每日项目进度汇报" />
+                <input v-model="draft.name" type="text" class="form-input" placeholder="每日进度汇报" />
               </div>
               <div class="field">
                 <div class="field-label">Agent</div>
@@ -362,7 +362,7 @@ const deliverTargets = computed(() => chatStore.conversations);
                 </div>
               </div>
               <div v-if="draft.kind === 'weekly'" class="field">
-                <div class="field-label">命中日（周一起算）</div>
+                <div class="field-label">星期</div>
                 <div class="weekday-row">
                   <button
                     v-for="w in WEEKDAY_OPTIONS" :key="w" type="button"
@@ -373,8 +373,8 @@ const deliverTargets = computed(() => chatStore.conversations);
               </div>
             </div>
             <div class="field">
-              <div class="field-label">提示词（每次执行发给 Agent 的内容）</div>
-              <textarea v-model="draft.prompt" rows="3" class="form-input prompt-area" placeholder="如：查看项目里各会话最近的进展，汇总成三行日报。" />
+              <div class="field-label">提示词</div>
+              <textarea v-model="draft.prompt" rows="3" class="form-input prompt-area" placeholder="每日汇总项目进展" />
             </div>
             <p v-if="previewError" class="preview-error">{{ previewError }}</p>
             <p v-else-if="previewTimes.length" class="preview-ok">接下来：{{ previewTimes.join(" → ") }}</p>
@@ -382,31 +382,30 @@ const deliverTargets = computed(() => chatStore.conversations);
 
             <button type="button" class="adv-toggle" @click="advancedOpen = !advancedOpen">
               <ChevronRight :size="13" class="adv-chevron" :class="{ rotated: advancedOpen }" />
-              进阶（错过策略 / 结果转发）
+              进阶选项
             </button>
             <div v-if="advancedOpen" class="adv-body">
               <div class="row-grid two">
                 <div class="field">
-                  <div class="field-label">应用未运行时错过</div>
+                  <div class="field-label">错过时</div>
                   <select v-model="draft.miss_policy" class="form-input">
                     <option value="run_once">下次启动补跑一次</option>
                     <option value="skip">跳过并顺延（记录「已错过」）</option>
                   </select>
                 </div>
                 <div class="field">
-                  <div class="field-label">结果转发到会话（可选）</div>
+                  <div class="field-label">结果转发</div>
                   <select v-model="draft.deliver_to" class="form-input">
                     <option :value="null">不转发</option>
                     <option v-for="c in deliverTargets" :key="c.id" :value="c.id">{{ c.title || c.id }}</option>
                   </select>
                 </div>
               </div>
-              <p class="expand-foot">转发走跨会话投递通道——目标会话按其收件政策消费（自动接收 / 需批准）。</p>
+              <p class="expand-foot">结果将投递至所选会话。</p>
             </div>
 
             <ErrorBanner v-if="formError" variant="inline" title="创建失败" :detail="formError" :retry-label="null" />
-            <div class="row-actions">
-              <p class="expand-foot">任务在专属会话中执行，历史累积、轨迹可回放。</p>
+            <div class="row-actions end">
               <div class="action-btns">
                 <button class="btn" @click="expandedId = null">取消</button>
                 <button class="btn-primary" :disabled="!canSave || saving" @click="save">{{ saving ? "创建中…" : "创建" }}</button>
@@ -455,7 +454,7 @@ const deliverTargets = computed(() => chatStore.conversations);
             <div class="row-grid two">
               <div class="field">
                 <div class="field-label">名称</div>
-                <input v-model="draft.name" type="text" class="form-input" placeholder="如：每日项目进度汇报" />
+                <input v-model="draft.name" type="text" class="form-input" placeholder="每日进度汇报" />
               </div>
               <div class="field">
                 <div class="field-label">Agent</div>
@@ -478,7 +477,7 @@ const deliverTargets = computed(() => chatStore.conversations);
                 </div>
               </div>
               <div v-if="draft.kind === 'weekly'" class="field">
-                <div class="field-label">命中日（周一起算）</div>
+                <div class="field-label">星期</div>
                 <div class="weekday-row">
                   <button
                     v-for="w in WEEKDAY_OPTIONS" :key="w" type="button"
@@ -489,8 +488,8 @@ const deliverTargets = computed(() => chatStore.conversations);
               </div>
             </div>
             <div class="field">
-              <div class="field-label">提示词（每次执行发给 Agent 的内容）</div>
-              <textarea v-model="draft.prompt" rows="3" class="form-input prompt-area" placeholder="如：查看项目里各会话最近的进展，汇总成三行日报。" />
+              <div class="field-label">提示词</div>
+              <textarea v-model="draft.prompt" rows="3" class="form-input prompt-area" placeholder="每日汇总项目进展" />
             </div>
             <p v-if="previewError" class="preview-error">{{ previewError }}</p>
             <p v-else-if="previewTimes.length" class="preview-ok">接下来：{{ previewTimes.join(" → ") }}</p>
@@ -498,26 +497,26 @@ const deliverTargets = computed(() => chatStore.conversations);
 
             <button type="button" class="adv-toggle" @click="advancedOpen = !advancedOpen">
               <ChevronRight :size="13" class="adv-chevron" :class="{ rotated: advancedOpen }" />
-              进阶（错过策略 / 结果转发）
+              进阶选项
             </button>
             <div v-if="advancedOpen" class="adv-body">
               <div class="row-grid two">
                 <div class="field">
-                  <div class="field-label">应用未运行时错过</div>
+                  <div class="field-label">错过时</div>
                   <select v-model="draft.miss_policy" class="form-input">
                     <option value="run_once">下次启动补跑一次</option>
                     <option value="skip">跳过并顺延（记录「已错过」）</option>
                   </select>
                 </div>
                 <div class="field">
-                  <div class="field-label">结果转发到会话（可选）</div>
+                  <div class="field-label">结果转发</div>
                   <select v-model="draft.deliver_to" class="form-input">
                     <option :value="null">不转发</option>
                     <option v-for="c in deliverTargets" :key="c.id" :value="c.id">{{ c.title || c.id }}</option>
                   </select>
                 </div>
               </div>
-              <p class="expand-foot">转发走跨会话投递通道——目标会话按其收件政策消费（自动接收 / 需批准）。</p>
+              <p class="expand-foot">结果将投递至所选会话。</p>
             </div>
 
             <!-- 执行记录（展开面板内，任务自己的运行历史） -->
@@ -546,7 +545,7 @@ const deliverTargets = computed(() => chatStore.conversations);
                 <button class="btn" @click="toggleEnabled(t)">{{ t.enabled ? "停用" : "启用" }}</button>
                 <button
                   :class="['btn', { 'delete-confirm-btn': armedDelete === t.id }]"
-                  :title="armedDelete === t.id ? '再点一次确认删除（执行记录一并清除，任务会话保留）' : '删除任务'"
+                  :title="armedDelete === t.id ? '再次点击确认删除' : '删除'"
                   @click="confirmDelete(t)"
                 >{{ armedDelete === t.id ? "确认删除" : "删除" }}</button>
               </div>
@@ -559,7 +558,7 @@ const deliverTargets = computed(() => chatStore.conversations);
           </div>
         </div>
 
-        <p v-if="tasks.length === 0" class="empty-hint">还没有定时任务——点上方「新建定时任务」创建第一个，例如「每天 9 点汇报项目进度」。</p>
+        <p v-if="tasks.length === 0" class="empty-hint">暂无定时任务</p>
       </div>
     </template>
   </div>
@@ -780,6 +779,7 @@ const deliverTargets = computed(() => chatStore.conversations);
   justify-content: space-between;
   gap: var(--ip-spacing-2);
 }
+.row-actions.end { justify-content: flex-end; }
 .expand-foot {
   margin: 0;
   font-size: var(--ip-text-micro-size);

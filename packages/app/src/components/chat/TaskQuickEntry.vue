@@ -32,7 +32,7 @@ const statusTitle = (s: string) =>
 </script>
 
 <template>
-  <div v-if="runs.length" class="task-entry" title="定时任务最近执行——点击管理">
+  <div v-if="runs.length" class="task-entry" title="定时任务">
     <!-- 单行常驻（最近一条） -->
     <button class="entry-line" @click="router.push('/settings/tasks')">
       <span :class="['dot', runs[0]!.status]" :title="statusTitle(runs[0]!.status)" />
