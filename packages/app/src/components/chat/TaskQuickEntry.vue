@@ -59,8 +59,9 @@ const statusTitle = (s: string) =>
 <style scoped>
 .task-entry { position: relative; margin: 0 var(--ip-spacing-3) var(--ip-spacing-1); }
 
-.entry-line { display: flex; align-items: center; gap: 6px; width: 100%; padding: var(--ip-spacing-1_5) var(--ip-spacing-2_5); border: 1px solid var(--ip-color-border-default); border-radius: var(--ip-radius-md); background: var(--ip-color-bg-secondary); color: var(--ip-color-text-secondary); font: inherit; font-size: var(--ip-text-micro-size); cursor: pointer; transition: border-color var(--ip-duration-fast) var(--ip-ease-out); }
-.entry-line:hover { border-color: var(--ip-primary-400); }
+/* 入口行：侧栏原生件风格（朴素行 + hover 微亮，footer-btn 同视觉重量） */
+.entry-line { display: flex; align-items: center; gap: 6px; width: 100%; padding: var(--ip-spacing-1_5) var(--ip-spacing-2_5); border: none; border-radius: var(--ip-radius-md); background: transparent; color: var(--ip-color-text-secondary); font: inherit; font-size: var(--ip-text-micro-size); cursor: pointer; transition: background-color var(--ip-duration-fast) var(--ip-ease-out), color var(--ip-duration-fast) var(--ip-ease-out); }
+.entry-line:hover { background-color: var(--ip-color-bg-tertiary); color: var(--ip-color-text-primary); }
 .entry-line:hover + .entry-pop, .entry-pop:hover { opacity: 1; visibility: visible; transform: translateY(0); }
 
 .entry-icon { flex-shrink: 0; color: var(--ip-color-icon-muted); }

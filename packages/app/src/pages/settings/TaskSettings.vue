@@ -1,8 +1,8 @@
 <script setup lang="ts">
 // TaskSettings.vue — 设置·定时任务（0.9.3）：对齐设置页折叠卡族设计语言
-// （ModelSettings/AgentSettings 同款）——新建入口 = 列表第一条虚线卡；实体卡
-// 收起态纯摘要双行（点整卡展开编辑 + 执行记录 + 治理动作）；状态徽 = dot +
-// 文案 + 相对时。设计真相源 docs/scheduled-tasks-design.md（六点拍板不变）。
+// （ModelSettings/AgentSettings 同款骨架与 token——profile-card 折叠卡 / 新建卡
+// 卡内展开 / row-grid 表单 / row-actions 左右分区 / health-chip 状态徽）。
+// 设计真相源 docs/scheduled-tasks-design.md（六点拍板不变）。
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ChevronRight, Clock, Plus } from "@lucide/vue";
@@ -24,7 +24,6 @@ const loading = ref(false);
 /** 展开的卡（新建卡 = "new"；互斥单开，族内惯例） */
 const expandedId = ref<string | null>(null);
 const runsCache = ref<Map<string, TaskRun[]>>(new Map());
-/** 立即运行的行内反馈（展开面板内按钮） */
 const justTriggered = ref(false);
 
 const WEEKDAY_LABELS = ["一", "二", "三", "四", "五", "六", "日"];
@@ -51,8 +50,9 @@ function scheduleLabel(kind: string, dataJson: string): string {
 
 const statusLabel = (s: string) =>
   ({ running: "运行中", done: "已完成", error: "失败", missed: "已错过" }[s] ?? s);
+/** 状态 → health-chip 语义档（族内四档：success/warning/danger/neutral） */
 const statusTone = (s: string) =>
-  ({ running: "ok", done: "ok", error: "danger", missed: "warn" }[s] ?? "neutral");
+  ({ running: "warning", done: "success", error: "danger", missed: "neutral" }[s] ?? "neutral");
 
 const agentName = (id: string) => agentStore.list.find((a) => a.id === id)?.name ?? "（已删除）";
 const convTitle = (id: string | null) =>
@@ -80,7 +80,6 @@ async function toggleExpand(id: string) {
   }
   expandedId.value = id;
   if (id !== "new") {
-    closeForm();
     fillDraftFromTask(tasks.value.find((t) => t.id === id));
     try {
       runsCache.value.set(id, await bridge.tasks.runs(id, 20));
@@ -198,8 +197,6 @@ const draft = reactive<Draft>({
   prompt: "", miss_policy: "run_once", deliver_to: null,
 });
 
-function closeForm() { draftFor.value = null; formError.value = ""; }
-
 function emptyDraft(): void {
   draftFor.value = null;
   formError.value = "";
@@ -271,7 +268,6 @@ async function save() {
       await bridge.tasks.create(payload);
     }
     expandedId.value = null;
-    closeForm();
     await load();
   } catch (e) {
     formError.value = msgOf(e);
@@ -312,8 +308,10 @@ const deliverTargets = computed(() => chatStore.conversations);
 </script>
 
 <template>
-  <div class="task-settings">
-    <h2 class="content-title">定时任务</h2>
+  <div class="settings-content-inner">
+    <div class="content-header">
+      <h2 class="content-title">定时任务</h2>
+    </div>
 
     <div v-if="loading" class="loading-state">加载中...</div>
     <template v-else>
@@ -326,9 +324,9 @@ const deliverTargets = computed(() => chatStore.conversations);
         @retry="load"
       />
 
-      <div class="card-list">
-        <!-- 新建卡（列表第一条，虚线边框；点击展开创建表单） -->
-        <div class="task-card new-card" :class="{ expanded: expandedId === 'new' }" @click="toggleNew">
+      <div class="profile-list">
+        <!-- 新建卡片（列表第一条，虚线边框；点击展开创建表单——表单在卡内，族内形态） -->
+        <div class="profile-card new-card" :class="{ expanded: expandedId === 'new' }" @click="toggleNew">
           <div class="card-top">
             <div class="row-title">
               <Plus :size="16" class="new-plus" />
@@ -337,19 +335,99 @@ const deliverTargets = computed(() => chatStore.conversations);
             </div>
             <ChevronRight :size="16" class="card-chevron" :class="{ rotated: expandedId === 'new' }" />
           </div>
+          <div v-if="expandedId === 'new'" class="expand-panel" @click.stop>
+            <div class="row-grid two">
+              <div class="field">
+                <div class="field-label">名称</div>
+                <input v-model="draft.name" type="text" class="form-input" placeholder="如：每日项目进度汇报" />
+              </div>
+              <div class="field">
+                <div class="field-label">Agent</div>
+                <select v-model="draft.agent_id" class="form-input">
+                  <option v-for="a in agentStore.list" :key="a.id" :value="a.id">{{ a.name }}</option>
+                </select>
+              </div>
+            </div>
+            <div class="row-grid two">
+              <div class="field">
+                <div class="field-label">调度</div>
+                <div class="input-group">
+                  <select v-model="draft.kind" class="form-input kind-select">
+                    <option v-for="o in KIND_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
+                  </select>
+                  <input v-if="draft.kind === 'daily' || draft.kind === 'weekly'" v-model="draft.time" type="time" class="form-input" />
+                  <input v-else-if="draft.kind === 'once'" v-model="draft.at" type="datetime-local" class="form-input" />
+                  <input v-else-if="draft.kind === 'interval'" v-model.number="draft.minutes" type="number" min="10" step="5" class="form-input" />
+                  <input v-else-if="draft.kind === 'cron'" v-model="draft.expr" type="text" class="form-input cron-input" placeholder="秒 分 时 日 月 周" />
+                </div>
+              </div>
+              <div v-if="draft.kind === 'weekly'" class="field">
+                <div class="field-label">命中日（周一起算）</div>
+                <div class="weekday-row">
+                  <button
+                    v-for="w in WEEKDAY_OPTIONS" :key="w" type="button"
+                    :class="['wd', { on: draft.weekdays.includes(w) }]"
+                    @click="draft.weekdays.includes(w) ? draft.weekdays = draft.weekdays.filter((x) => x !== w) : draft.weekdays.push(w)"
+                  >{{ WEEKDAY_LABELS[w] }}</button>
+                </div>
+              </div>
+            </div>
+            <div class="field">
+              <div class="field-label">提示词（每次执行发给 Agent 的内容）</div>
+              <textarea v-model="draft.prompt" rows="3" class="form-input prompt-area" placeholder="如：查看项目里各会话最近的进展，汇总成三行日报。" />
+            </div>
+            <p v-if="previewError" class="preview-error">{{ previewError }}</p>
+            <p v-else-if="previewTimes.length" class="preview-ok">接下来：{{ previewTimes.join(" → ") }}</p>
+            <p v-else-if="draft.kind === 'interval'" class="preview-hint">最小间隔 10 分钟</p>
+
+            <button type="button" class="adv-toggle" @click="advancedOpen = !advancedOpen">
+              <ChevronRight :size="13" class="adv-chevron" :class="{ rotated: advancedOpen }" />
+              进阶（错过策略 / 结果转发）
+            </button>
+            <div v-if="advancedOpen" class="adv-body">
+              <div class="row-grid two">
+                <div class="field">
+                  <div class="field-label">应用未运行时错过</div>
+                  <select v-model="draft.miss_policy" class="form-input">
+                    <option value="run_once">下次启动补跑一次</option>
+                    <option value="skip">跳过并顺延（记录「已错过」）</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <div class="field-label">结果转发到会话（可选）</div>
+                  <select v-model="draft.deliver_to" class="form-input">
+                    <option :value="null">不转发</option>
+                    <option v-for="c in deliverTargets" :key="c.id" :value="c.id">{{ c.title || c.id }}</option>
+                  </select>
+                </div>
+              </div>
+              <p class="expand-foot">转发走跨会话投递通道——目标会话按其收件政策消费（自动接收 / 需批准）。</p>
+            </div>
+
+            <ErrorBanner v-if="formError" variant="inline" title="创建失败" :detail="formError" :retry-label="null" />
+            <div class="row-actions">
+              <p class="expand-foot">任务在专属会话中执行，历史累积、轨迹可回放。</p>
+              <div class="action-btns">
+                <button class="btn" @click="expandedId = null">取消</button>
+                <button class="btn-primary" :disabled="!canSave || saving" @click="save">{{ saving ? "创建中…" : "创建" }}</button>
+              </div>
+            </div>
+          </div>
         </div>
 
-        <!-- 实体卡 -->
+        <div class="list-divider"></div>
+
+        <!-- 任务实体列表（收起单行摘要 / 展开编辑 + 执行记录 + 治理动作） -->
         <div
           v-for="t in tasks"
           :key="t.id"
-          class="task-card"
+          class="profile-card"
           :class="{ expanded: expandedId === t.id }"
           @click="toggleExpand(t.id)"
         >
-          <!-- 收起态：纯摘要双行（族内惯例——点整卡展开） -->
           <div class="card-top">
             <div class="card-main">
+              <!-- 首行：任务名 + 下次运行（右锚定胶囊，ref-count 同形态） -->
               <div class="row-title">
                 <Clock :size="13" class="card-clock" />
                 <span class="card-name">{{ t.name }}</span>
@@ -357,9 +435,12 @@ const deliverTargets = computed(() => chatStore.conversations);
                   {{ t.enabled ? (t.next_run ? `下次 ${timeAgo(t.next_run)}` : "已完成") : "已停用" }}
                 </span>
               </div>
+              <!-- 次行：agent · 调度人话 · 转发（card-model 同形态 tag）+ 最近状态（右锚定） -->
               <div class="row-sub">
-                <span class="sub-left">{{ agentName(t.agent_id) }} · {{ scheduleLabel(t.schedule_kind, t.schedule_data) }}
-                  <template v-if="t.deliver_to_conv_id"> · 转发至「{{ convTitle(t.deliver_to_conv_id) }}」</template>
+                <span class="card-model">
+                  <span class="card-model-name">{{ agentName(t.agent_id) }} · {{ scheduleLabel(t.schedule_kind, t.schedule_data) }}
+                    <template v-if="t.deliver_to_conv_id"> · 转发至「{{ convTitle(t.deliver_to_conv_id) }}」</template>
+                  </span>
                 </span>
                 <span v-if="t.last_run" class="health-chip" :class="`health-chip--${statusTone(t.last_run.status)}`" :title="t.last_run.started_at">
                   <span class="health-dot" aria-hidden="true"></span>{{ statusLabel(t.last_run.status) }} · {{ timeAgo(t.last_run.started_at) }}
@@ -371,24 +452,23 @@ const deliverTargets = computed(() => chatStore.conversations);
 
           <!-- 展开态：编辑表单 + 执行记录 + 治理动作 -->
           <div v-if="expandedId === t.id" class="expand-panel" @click.stop>
-            <div class="form-grid">
-              <label class="field">
-                <span class="field-label">名称</span>
+            <div class="row-grid two">
+              <div class="field">
+                <div class="field-label">名称</div>
                 <input v-model="draft.name" type="text" class="form-input" placeholder="如：每日项目进度汇报" />
-              </label>
-              <label class="field">
-                <span class="field-label">Agent</span>
+              </div>
+              <div class="field">
+                <div class="field-label">Agent</div>
                 <select v-model="draft.agent_id" class="form-input">
                   <option v-for="a in agentStore.list" :key="a.id" :value="a.id">{{ a.name }}</option>
                 </select>
-              </label>
+              </div>
             </div>
-
-            <div class="form-grid">
+            <div class="row-grid two">
               <div class="field">
-                <span class="field-label">调度</span>
-                <div class="sched-row">
-                  <select v-model="draft.kind" class="form-input">
+                <div class="field-label">调度</div>
+                <div class="input-group">
+                  <select v-model="draft.kind" class="form-input kind-select">
                     <option v-for="o in KIND_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
                   </select>
                   <input v-if="draft.kind === 'daily' || draft.kind === 'weekly'" v-model="draft.time" type="time" class="form-input" />
@@ -398,7 +478,7 @@ const deliverTargets = computed(() => chatStore.conversations);
                 </div>
               </div>
               <div v-if="draft.kind === 'weekly'" class="field">
-                <span class="field-label">命中日（周一起算）</span>
+                <div class="field-label">命中日（周一起算）</div>
                 <div class="weekday-row">
                   <button
                     v-for="w in WEEKDAY_OPTIONS" :key="w" type="button"
@@ -408,150 +488,74 @@ const deliverTargets = computed(() => chatStore.conversations);
                 </div>
               </div>
             </div>
-
-            <label class="field">
-              <span class="field-label">提示词（每次执行发给 Agent 的内容）</span>
-              <textarea v-model="draft.prompt" rows="3" class="form-input" placeholder="如：查看项目里各会话最近的进展，汇总成三行日报。" />
-            </label>
-
+            <div class="field">
+              <div class="field-label">提示词（每次执行发给 Agent 的内容）</div>
+              <textarea v-model="draft.prompt" rows="3" class="form-input prompt-area" placeholder="如：查看项目里各会话最近的进展，汇总成三行日报。" />
+            </div>
             <p v-if="previewError" class="preview-error">{{ previewError }}</p>
             <p v-else-if="previewTimes.length" class="preview-ok">接下来：{{ previewTimes.join(" → ") }}</p>
             <p v-else-if="draft.kind === 'interval'" class="preview-hint">最小间隔 10 分钟</p>
 
-            <!-- 进阶折叠 -->
             <button type="button" class="adv-toggle" @click="advancedOpen = !advancedOpen">
               <ChevronRight :size="13" class="adv-chevron" :class="{ rotated: advancedOpen }" />
               进阶（错过策略 / 结果转发）
             </button>
             <div v-if="advancedOpen" class="adv-body">
-              <div class="form-grid">
-                <label class="field">
-                  <span class="field-label">应用未运行时错过</span>
+              <div class="row-grid two">
+                <div class="field">
+                  <div class="field-label">应用未运行时错过</div>
                   <select v-model="draft.miss_policy" class="form-input">
                     <option value="run_once">下次启动补跑一次</option>
                     <option value="skip">跳过并顺延（记录「已错过」）</option>
                   </select>
-                </label>
-                <label class="field">
-                  <span class="field-label">结果转发到会话（可选）</span>
+                </div>
+                <div class="field">
+                  <div class="field-label">结果转发到会话（可选）</div>
                   <select v-model="draft.deliver_to" class="form-input">
                     <option :value="null">不转发</option>
                     <option v-for="c in deliverTargets" :key="c.id" :value="c.id">{{ c.title || c.id }}</option>
                   </select>
-                </label>
+                </div>
               </div>
-              <p class="adv-hint">转发走跨会话投递通道——目标会话按其收件政策消费（自动接收 / 需批准）。</p>
+              <p class="expand-foot">转发走跨会话投递通道——目标会话按其收件政策消费（自动接收 / 需批准）。</p>
             </div>
-
-            <p v-if="formError" class="form-error">{{ formError }}</p>
 
             <!-- 执行记录（展开面板内，任务自己的运行历史） -->
             <div class="runs-block">
               <div class="runs-head">
                 <span class="runs-title">执行记录</span>
-                <button v-if="t.target_conv_id" class="btn btn-ghost" @click="openConversation(t.target_conv_id)">打开任务会话</button>
+                <button v-if="t.target_conv_id" class="btn" @click="openConversation(t.target_conv_id)">打开任务会话</button>
               </div>
               <p v-if="(runsCache.get(t.id) ?? []).length === 0" class="runs-empty">还没有执行记录。</p>
               <div v-for="r in runsCache.get(t.id) ?? []" :key="r.id" class="run-row">
-                <span :class="['status-dot', statusTone(r.status)]" :title="statusLabel(r.status)" />
-                <span class="run-time">{{ r.started_at }}</span>
+                <span :class="['health-chip', `health-chip--${statusTone(r.status)}`, 'run-chip']" :title="r.started_at">
+                  <span class="health-dot" aria-hidden="true"></span>{{ statusLabel(r.status) }}
+                </span>
                 <span class="run-summary">
                   <template v-if="r.status === 'error'">{{ r.error }}</template>
-                  <template v-else>{{ r.summary ?? (r.status === "running" ? "执行中…" : statusLabel(r.status)) }}</template>
+                  <template v-else>{{ r.summary ?? (r.status === "running" ? "执行中…" : "") }}</template>
                 </span>
               </div>
             </div>
 
-            <!-- 操作行（治理动作族内惯例在展开面板内） -->
-            <div class="ops-row">
-              <button class="btn btn-primary" :disabled="!canSave || saving" @click="save">{{ saving ? "保存中…" : "保存" }}</button>
-              <button class="btn" @click="expandedId = null">取消</button>
-              <span class="ops-gap" />
-              <button class="btn" :disabled="justTriggered" @click="runNow(t)">{{ justTriggered ? "已发起…" : "立即运行" }}</button>
-              <button class="btn" @click="toggleEnabled(t)">{{ t.enabled ? "停用" : "启用" }}</button>
-              <button
-                :class="['btn', 'btn-del', { armed: armedDelete === t.id }]"
-                :title="armedDelete === t.id ? '再点一次确认删除（执行记录一并清除，任务会话保留）' : '删除任务'"
-                @click="confirmDelete(t)"
-              >{{ armedDelete === t.id ? "确认删除" : "删除" }}</button>
-            </div>
-          </div>
-        </div>
-
-        <!-- 新建卡展开态（创建表单） -->
-        <div v-if="expandedId === 'new'" class="task-card new-form-card" @click.stop>
-          <div class="form-grid">
-            <label class="field">
-              <span class="field-label">名称</span>
-              <input v-model="draft.name" type="text" class="form-input" placeholder="如：每日项目进度汇报" />
-            </label>
-            <label class="field">
-              <span class="field-label">Agent</span>
-              <select v-model="draft.agent_id" class="form-input">
-                <option v-for="a in agentStore.list" :key="a.id" :value="a.id">{{ a.name }}</option>
-              </select>
-            </label>
-          </div>
-          <div class="form-grid">
-            <div class="field">
-              <span class="field-label">调度</span>
-              <div class="sched-row">
-                <select v-model="draft.kind" class="form-input">
-                  <option v-for="o in KIND_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
-                </select>
-                <input v-if="draft.kind === 'daily' || draft.kind === 'weekly'" v-model="draft.time" type="time" class="form-input" />
-                <input v-else-if="draft.kind === 'once'" v-model="draft.at" type="datetime-local" class="form-input" />
-                <input v-else-if="draft.kind === 'interval'" v-model.number="draft.minutes" type="number" min="10" step="5" class="form-input" />
-                <input v-else-if="draft.kind === 'cron'" v-model="draft.expr" type="text" class="form-input cron-input" placeholder="秒 分 时 日 月 周" />
-              </div>
-            </div>
-            <div v-if="draft.kind === 'weekly'" class="field">
-              <span class="field-label">命中日（周一起算）</span>
-              <div class="weekday-row">
+            <ErrorBanner v-if="formError" variant="inline" title="保存失败" :detail="formError" :retry-label="null" />
+            <div class="row-actions">
+              <!-- 治理动作（左） -->
+              <div class="action-btns">
+                <button class="btn" :disabled="justTriggered" @click="runNow(t)">{{ justTriggered ? "已发起…" : "立即运行" }}</button>
+                <button class="btn" @click="toggleEnabled(t)">{{ t.enabled ? "停用" : "启用" }}</button>
                 <button
-                  v-for="w in WEEKDAY_OPTIONS" :key="w" type="button"
-                  :class="['wd', { on: draft.weekdays.includes(w) }]"
-                  @click="draft.weekdays.includes(w) ? draft.weekdays = draft.weekdays.filter((x) => x !== w) : draft.weekdays.push(w)"
-                >{{ WEEKDAY_LABELS[w] }}</button>
+                  :class="['btn', { 'delete-confirm-btn': armedDelete === t.id }]"
+                  :title="armedDelete === t.id ? '再点一次确认删除（执行记录一并清除，任务会话保留）' : '删除任务'"
+                  @click="confirmDelete(t)"
+                >{{ armedDelete === t.id ? "确认删除" : "删除" }}</button>
+              </div>
+              <!-- 保存 / 取消（右，族内惯例） -->
+              <div class="action-btns">
+                <button class="btn" @click="expandedId = null">取消</button>
+                <button class="btn-primary" :disabled="!canSave || saving" @click="save">{{ saving ? "保存中…" : "保存" }}</button>
               </div>
             </div>
-          </div>
-          <label class="field">
-            <span class="field-label">提示词（每次执行发给 Agent 的内容）</span>
-            <textarea v-model="draft.prompt" rows="3" class="form-input" placeholder="如：查看项目里各会话最近的进展，汇总成三行日报。" />
-          </label>
-          <p v-if="previewError" class="preview-error">{{ previewError }}</p>
-          <p v-else-if="previewTimes.length" class="preview-ok">接下来：{{ previewTimes.join(" → ") }}</p>
-          <p v-else-if="draft.kind === 'interval'" class="preview-hint">最小间隔 10 分钟</p>
-
-          <button type="button" class="adv-toggle" @click="advancedOpen = !advancedOpen">
-            <ChevronRight :size="13" class="adv-chevron" :class="{ rotated: advancedOpen }" />
-            进阶（错过策略 / 结果转发）
-          </button>
-          <div v-if="advancedOpen" class="adv-body">
-            <div class="form-grid">
-              <label class="field">
-                <span class="field-label">应用未运行时错过</span>
-                <select v-model="draft.miss_policy" class="form-input">
-                  <option value="run_once">下次启动补跑一次</option>
-                  <option value="skip">跳过并顺延（记录「已错过」）</option>
-                </select>
-              </label>
-              <label class="field">
-                <span class="field-label">结果转发到会话（可选）</span>
-                <select v-model="draft.deliver_to" class="form-input">
-                  <option :value="null">不转发</option>
-                  <option v-for="c in deliverTargets" :key="c.id" :value="c.id">{{ c.title || c.id }}</option>
-                </select>
-              </label>
-            </div>
-            <p class="adv-hint">转发走跨会话投递通道——目标会话按其收件政策消费（自动接收 / 需批准）。</p>
-          </div>
-
-          <p v-if="formError" class="form-error">{{ formError }}</p>
-          <div class="ops-row">
-            <button class="btn btn-primary" :disabled="!canSave || saving" @click="save">{{ saving ? "创建中…" : "创建" }}</button>
-            <button class="btn" @click="expandedId = null">取消</button>
           </div>
         </div>
 
@@ -562,97 +566,426 @@ const deliverTargets = computed(() => chatStore.conversations);
 </template>
 
 <style scoped>
-.task-settings { display: flex; flex-direction: column; gap: var(--ip-spacing-4); padding-bottom: var(--ip-spacing-8); }
-.content-title { margin: 0; font-size: var(--ip-text-h3-size); font-weight: var(--ip-font-weight-semibold); color: var(--ip-color-text-primary); }
-.loading-state { padding: var(--ip-spacing-8); text-align: center; color: var(--ip-color-text-disabled); }
+/* ===== 页面布局（族内同款） ===== */
+.settings-content-inner {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  min-height: 0;
+}
+.content-header {
+  display: flex;
+  align-items: center;
+  gap: var(--ip-spacing-1_5);
+  padding: var(--ip-spacing-5) var(--ip-spacing-7) 0;
+  flex-shrink: 0;
+  height: 56px;
+}
+.content-title {
+  font-size: var(--ip-text-h3-size);
+  font-weight: var(--ip-font-weight-semibold);
+  color: var(--ip-color-text-primary);
+  margin: 0;
+}
+.loading-state {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ip-color-text-tertiary);
+  font-size: var(--ip-text-body-sm-size);
+}
+.profile-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--ip-spacing-2) var(--ip-spacing-7) var(--ip-spacing-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ip-spacing-2);
+  min-height: 0;
+}
 
-/* ===== 卡片族（对齐 profile-card 设计语言） ===== */
-.card-list { display: flex; flex-direction: column; gap: var(--ip-spacing-2); }
-.task-card { border: 1px solid var(--ip-color-border-default); border-radius: var(--ip-radius-lg); background: var(--ip-color-bg-secondary); cursor: pointer; transition: border-color var(--ip-duration-fast) var(--ip-ease-out); }
-.task-card:hover { border-color: var(--ip-color-border-strong, var(--ip-color-border-default)); }
-.task-card.expanded { border-color: var(--ip-primary-400); }
+/* ===== 折叠卡片（族内同款） ===== */
+.profile-card {
+  padding: var(--ip-spacing-3) var(--ip-spacing-4);
+  background-color: var(--ip-color-bg-secondary);
+  border: 1px solid var(--ip-color-border-default);
+  border-radius: var(--ip-card-radius);
+  cursor: pointer;
+  transition: all var(--ip-duration-fast) var(--ip-ease-out);
+}
+.profile-card:hover {
+  border-color: var(--ip-primary-300);
+  box-shadow: var(--ip-shadow-sm);
+}
+.profile-card.expanded {
+  border-color: var(--ip-primary-400);
+  box-shadow: var(--ip-shadow-sm);
+}
+.new-card {
+  border: 1px dashed var(--ip-color-border-default);
+  background-color: transparent;
+}
+.new-card:hover {
+  border-color: var(--ip-primary-400);
+  background-color: var(--ip-color-bg-tertiary);
+}
+.new-card.expanded {
+  border-style: solid;
+  border-color: var(--ip-primary-400);
+  background-color: var(--ip-color-bg-secondary);
+}
+.list-divider {
+  height: 1px;
+  background-color: var(--ip-color-border-default);
+  margin: 2px 4px;
+}
 
-.new-card { border: 1px dashed var(--ip-color-border-default); background: transparent; }
-.new-card:hover { border-color: var(--ip-primary-400); background: var(--ip-color-bg-tertiary); }
-.new-card.expanded { border-style: dashed; background: var(--ip-color-bg-secondary); }
-.new-plus { color: var(--ip-primary-500); }
-.new-name { color: var(--ip-primary-600); }
-.new-hint { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-disabled); font-weight: var(--ip-font-weight-regular); }
-.new-form-card { padding: var(--ip-spacing-4); display: flex; flex-direction: column; gap: var(--ip-spacing-3); cursor: default; }
-
-.card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--ip-spacing-2); padding: var(--ip-spacing-3) var(--ip-spacing-4); }
-.card-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-.row-title { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.card-top {
+  display: flex;
+  align-items: center;
+  gap: var(--ip-spacing-2);
+  cursor: pointer;
+}
+.card-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.row-title {
+  display: flex;
+  align-items: center;
+  gap: var(--ip-spacing-1_5);
+  min-width: 0;
+}
 .card-clock { flex-shrink: 0; color: var(--ip-color-icon-muted); }
-.card-name { font-size: var(--ip-text-body-15-size); font-weight: var(--ip-font-weight-medium); color: var(--ip-color-text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.next-run { margin-left: auto; flex-shrink: 0; font-size: var(--ip-text-caption-size); color: var(--ip-color-text-secondary); }
-.row-sub { display: flex; align-items: center; justify-content: space-between; gap: var(--ip-spacing-2); min-width: 0; }
-.sub-left { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--ip-text-body-sm-size);
+  font-weight: var(--ip-font-weight-semibold);
+  color: var(--ip-color-text-primary);
+}
+.new-plus { flex-shrink: 0; color: var(--ip-color-primary-tint-text); }
+.new-name { color: var(--ip-color-primary-tint-text); flex-shrink: 0; }
+.new-hint {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--ip-text-caption-size);
+  color: var(--ip-color-text-tertiary);
+}
 
-.health-chip { display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0; padding: 1px 8px; border-radius: 999px; font-size: var(--ip-text-micro-size); }
-.health-chip .health-dot { width: 6px; height: 6px; border-radius: 50%; }
-.health-chip--ok { background: rgba(16, 122, 87, 0.12); color: var(--ip-success-base, #107757); }
-.health-chip--ok .health-dot { background: var(--ip-success-base, #107757); }
-.health-chip--danger { background: rgba(178, 58, 38, 0.12); color: var(--ip-danger-base); }
-.health-chip--danger .health-dot { background: var(--ip-danger-base); }
-.health-chip--warn { background: rgba(146, 108, 18, 0.12); color: var(--ip-warning-base, #926c12); }
-.health-chip--warn .health-dot { background: var(--ip-warning-base, #926c12); }
+/* 下次运行（首行右锚定胶囊，ref-count 同形态） */
+.next-run {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 0 var(--ip-spacing-1_5);
+  line-height: 18px;
+  font-size: var(--ip-text-micro-size);
+  color: var(--ip-color-text-secondary);
+  background-color: var(--ip-color-bg-tertiary);
+  border-radius: var(--ip-radius-full);
+  white-space: nowrap;
+}
 
-.card-chevron { flex-shrink: 0; color: var(--ip-color-icon-muted); transition: transform var(--ip-duration-fast) var(--ip-ease-out); }
-.card-chevron.rotated { transform: rotate(90deg); }
+.row-sub {
+  display: flex;
+  align-items: center;
+  gap: var(--ip-spacing-1_5);
+  min-width: 0;
+  font-size: var(--ip-text-caption-size);
+  line-height: 18px;
+  color: var(--ip-color-text-secondary);
+}
+.card-model {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  flex-shrink: 1;
+  height: 18px;
+  padding: 0 7px 0 var(--ip-spacing-1_5);
+  border-radius: var(--ip-radius-full);
+  background-color: var(--ip-color-bg-tertiary);
+  color: var(--ip-color-text-tertiary);
+}
+.card-model-name {
+  min-width: 0;
+  line-height: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--ip-font-mono);
+  font-size: var(--ip-text-micro-size);
+}
 
-/* ===== 展开面板（编辑表单 + 执行记录 + 操作） ===== */
-.expand-panel { display: flex; flex-direction: column; gap: var(--ip-spacing-3); padding: var(--ip-spacing-4); border-top: 1px solid var(--ip-color-border-default); cursor: default; }
+/* 最近状态（次行右锚定，health-chip 族内同款） */
+.health-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  margin-left: auto;
+  font-size: var(--ip-text-micro-size);
+  white-space: nowrap;
+  color: var(--ip-color-text-secondary);
+}
+.health-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--ip-radius-full);
+  background-color: currentColor;
+  flex-shrink: 0;
+}
+.health-chip--success { color: var(--ip-success-text); }
+.health-chip--warning { color: var(--ip-warning-text); }
+.health-chip--danger { color: var(--ip-danger-text); }
+.health-chip--neutral { color: var(--ip-color-text-disabled); }
 
-.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--ip-spacing-3); }
-.field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-.field-label { font-size: var(--ip-text-caption-size); color: var(--ip-color-text-secondary); }
-.form-input { padding: var(--ip-spacing-2) var(--ip-spacing-2_5); border: 1px solid var(--ip-color-border-default); border-radius: var(--ip-radius-md); background: var(--ip-color-bg-primary); color: var(--ip-color-text-primary); font: inherit; width: 100%; box-sizing: border-box; }
-textarea.form-input { resize: vertical; }
-.sched-row { display: flex; gap: var(--ip-spacing-2); }
-.sched-row select { flex-shrink: 0; width: auto; }
-.sched-row input { flex: 1; min-width: 0; }
-.cron-input { font-family: var(--ip-font-mono, monospace); }
+.card-chevron {
+  flex-shrink: 0;
+  color: var(--ip-color-text-disabled);
+  transition: transform var(--ip-duration-fast) var(--ip-ease-out);
+}
+.card-chevron.rotated {
+  transform: rotate(90deg);
+  color: var(--ip-primary-600);
+}
 
+/* ===== 展开面板（族内同款） ===== */
+.expand-panel {
+  margin-top: var(--ip-spacing-3);
+  padding-top: var(--ip-spacing-3);
+  border-top: 1px solid var(--ip-color-border-default);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ip-spacing-2);
+  cursor: default;
+}
+.row-grid {
+  display: grid;
+  gap: var(--ip-spacing-2);
+  align-items: end;
+}
+.row-grid.two { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ip-spacing-2);
+}
+.expand-foot {
+  margin: 0;
+  font-size: var(--ip-text-micro-size);
+  color: var(--ip-color-text-disabled);
+  line-height: 1.5;
+}
+.action-btns {
+  display: flex;
+  gap: var(--ip-spacing-1_5);
+  flex-shrink: 0;
+}
+/* 删除武装态（两步确认第二步）：danger 语义（族内 delete-confirm-btn 同款） */
+.delete-confirm-btn {
+  color: var(--ip-danger-text);
+  border-color: var(--ip-danger-border);
+  white-space: nowrap;
+}
+.delete-confirm-btn:hover {
+  color: var(--ip-color-text-on-primary);
+  background-color: var(--ip-danger-base);
+  border-color: var(--ip-danger-base);
+}
+
+/* ===== 字段（族内同款） ===== */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.field-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ip-spacing-1_5);
+  font-size: var(--ip-text-caption-size);
+  font-weight: var(--ip-font-weight-medium);
+  color: var(--ip-color-text-secondary);
+}
+.input-group {
+  display: flex;
+  gap: var(--ip-spacing-1_5);
+  align-items: center;
+}
+.form-input {
+  width: 100%;
+  height: var(--ip-input-h-sm);
+  padding: 0 var(--ip-spacing-2_5);
+  font-size: var(--ip-text-body-sm-size);
+  color: var(--ip-color-text-primary);
+  background-color: var(--ip-color-bg-tertiary);
+  border: 1px solid var(--ip-color-border-default);
+  border-radius: var(--ip-radius-md);
+  outline: none;
+  transition: all var(--ip-duration-fast) var(--ip-ease-out);
+}
+.form-input:focus {
+  border-color: var(--ip-color-border-focus);
+  background-color: var(--ip-color-bg-input);
+  box-shadow: 0 0 0 3px rgba(var(--ip-primary-500-rgb), 0.12);
+}
+.form-input::placeholder {
+  color: var(--ip-color-text-placeholder);
+}
+/* 调度行：档位下拉固定窄 + 参数输入占满 */
+.kind-select { flex-shrink: 0; width: auto; }
+.input-group > .form-input { flex: 1; min-width: 0; width: auto; }
+.cron-input { font-family: var(--ip-font-mono); }
+/* 提示词多行（族内表单全单行，此处按需扩展——高度自适应、行距正常） */
+textarea.prompt-area {
+  height: auto;
+  min-height: 68px;
+  padding: var(--ip-spacing-1_5) var(--ip-spacing-2_5);
+  line-height: 1.5;
+  resize: vertical;
+}
+
+/* 命中日 chips */
 .weekday-row { display: flex; gap: 4px; flex-wrap: wrap; }
-.wd { width: 30px; height: 26px; border: 1px solid var(--ip-color-border-default); border-radius: var(--ip-radius-sm); background: var(--ip-color-bg-primary); color: var(--ip-color-text-secondary); cursor: pointer; font: inherit; font-size: var(--ip-text-caption-size); }
-.wd.on { border-color: var(--ip-primary-500); color: var(--ip-primary-600); background: rgba(var(--ip-primary-500-rgb), 0.08); }
+.wd {
+  height: var(--ip-input-h-sm);
+  width: 32px;
+  border: 1px solid var(--ip-color-border-default);
+  border-radius: var(--ip-radius-md);
+  background-color: var(--ip-color-bg-tertiary);
+  color: var(--ip-color-text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--ip-text-caption-size);
+  transition: all var(--ip-duration-fast) var(--ip-ease-out);
+}
+.wd.on {
+  border-color: var(--ip-primary-500);
+  color: var(--ip-primary-600);
+  background-color: rgba(var(--ip-primary-500-rgb), 0.08);
+}
 
-.preview-ok { margin: 0; font-size: var(--ip-text-caption-size); color: var(--ip-color-text-secondary); }
-.preview-error { margin: 0; font-size: var(--ip-text-caption-size); color: var(--ip-danger-base); }
-.preview-hint { margin: 0; font-size: var(--ip-text-caption-size); color: var(--ip-color-text-disabled); }
+/* 预览行 */
+.preview-ok { margin: 0; font-size: var(--ip-text-micro-size); color: var(--ip-color-text-secondary); line-height: 1.5; }
+.preview-error { margin: 0; font-size: var(--ip-text-micro-size); color: var(--ip-danger-text); line-height: 1.5; }
+.preview-hint { margin: 0; font-size: var(--ip-text-micro-size); color: var(--ip-color-text-disabled); line-height: 1.5; }
 
-.adv-toggle { display: inline-flex; align-items: center; gap: 4px; align-self: flex-start; border: none; background: none; color: var(--ip-color-text-secondary); font: inherit; font-size: var(--ip-text-body-sm-size); cursor: pointer; padding: 0; }
+/* 进阶折叠 */
+.adv-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  align-self: flex-start;
+  border: none;
+  background: none;
+  color: var(--ip-color-text-secondary);
+  font: inherit;
+  font-size: var(--ip-text-body-sm-size);
+  cursor: pointer;
+  padding: 0;
+}
 .adv-toggle:hover { color: var(--ip-color-text-primary); }
 .adv-chevron { transition: transform var(--ip-duration-fast) var(--ip-ease-out); }
 .adv-chevron.rotated { transform: rotate(90deg); }
-.adv-body { display: flex; flex-direction: column; gap: var(--ip-spacing-2); padding: var(--ip-spacing-3); border-left: 2px solid var(--ip-color-border-default); }
-.adv-hint { margin: 0; font-size: var(--ip-text-micro-size); color: var(--ip-color-text-disabled); }
-
-.form-error { margin: 0; font-size: var(--ip-text-body-sm-size); color: var(--ip-danger-base); }
+.adv-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ip-spacing-2);
+  padding: var(--ip-spacing-2) var(--ip-spacing-3);
+  border-left: 2px solid var(--ip-color-border-default);
+}
 
 /* ===== 执行记录 ===== */
-.runs-block { display: flex; flex-direction: column; gap: var(--ip-spacing-1_5); padding: var(--ip-spacing-3); border: 1px solid var(--ip-color-border-default); border-radius: var(--ip-radius-md); }
-.runs-head { display: flex; align-items: center; justify-content: space-between; }
-.runs-title { font-size: var(--ip-text-caption-size); font-weight: var(--ip-font-weight-medium); color: var(--ip-color-text-secondary); }
+.runs-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ip-spacing-1_5);
+  padding: var(--ip-spacing-2) var(--ip-spacing-3);
+  border: 1px solid var(--ip-color-border-default);
+  border-radius: var(--ip-radius-md);
+}
+.runs-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.runs-title {
+  font-size: var(--ip-text-caption-size);
+  font-weight: var(--ip-font-weight-medium);
+  color: var(--ip-color-text-secondary);
+}
 .runs-empty { margin: 0; font-size: var(--ip-text-micro-size); color: var(--ip-color-text-disabled); }
-.run-row { display: flex; align-items: center; gap: var(--ip-spacing-2); min-width: 0; padding: 2px 0; }
-.status-dot { flex-shrink: 0; width: 7px; height: 7px; border-radius: 50%; }
-.status-dot.ok { background: var(--ip-success-base, #107757); }
-.status-dot.danger { background: var(--ip-danger-base); }
-.status-dot.warn { background: var(--ip-warning-base, #926c12); }
-.run-time { flex-shrink: 0; font-size: var(--ip-text-micro-size); color: var(--ip-color-text-disabled); font-family: var(--ip-font-mono, monospace); }
-.run-summary { flex: 1; min-width: 0; font-size: var(--ip-text-caption-size); color: var(--ip-color-text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-row {
+  display: flex;
+  align-items: center;
+  gap: var(--ip-spacing-1_5);
+  min-width: 0;
+  padding: 1px 0;
+}
+.run-chip { margin-left: 0; }
+.run-summary {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--ip-text-caption-size);
+  color: var(--ip-color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
-/* ===== 操作行 ===== */
-.ops-row { display: flex; align-items: center; gap: var(--ip-spacing-2); flex-wrap: wrap; }
-.ops-gap { flex: 1; }
-.btn { padding: var(--ip-spacing-2) var(--ip-spacing-3_5); border: 1px solid var(--ip-color-border-default); border-radius: var(--ip-radius-md); background: transparent; color: var(--ip-color-text-secondary); font: inherit; cursor: pointer; }
-.btn:hover { color: var(--ip-color-text-primary); }
-.btn:disabled { opacity: 0.45; cursor: not-allowed; }
-.btn-primary { border: none; background: var(--ip-primary-500); color: #fff; }
-.btn-primary:hover { background: var(--ip-primary-600); color: #fff; }
-.btn-del:hover, .btn-del.armed { color: var(--ip-danger-base); border-color: var(--ip-danger-base); }
+/* ===== 按钮（族内同款） ===== */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: var(--ip-input-h-sm);
+  padding: 0 var(--ip-spacing-3);
+  font-size: var(--ip-text-body-sm-size);
+  font-weight: var(--ip-font-weight-medium);
+  color: var(--ip-color-text-secondary);
+  background-color: var(--ip-color-bg-tertiary);
+  border: 1px solid var(--ip-color-border-default);
+  border-radius: var(--ip-radius-md);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all var(--ip-duration-fast) var(--ip-ease-out);
+}
+.btn:hover {
+  background-color: var(--ip-color-bg-secondary);
+  border-color: var(--ip-color-border-focus);
+  color: var(--ip-primary-600);
+}
+.btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: var(--ip-input-h-sm);
+  padding: 0 var(--ip-spacing-3);
+  font-size: var(--ip-text-body-sm-size);
+  font-weight: var(--ip-font-weight-medium);
+  color: white;
+  background-color: var(--ip-primary-500);
+  border: none;
+  border-radius: var(--ip-radius-md);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all var(--ip-duration-fast) var(--ip-ease-out);
+}
+.btn-primary:hover { background-color: var(--ip-primary-600); }
+.btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
 
 .empty-hint { margin: 0; padding: var(--ip-spacing-6); text-align: center; font-size: var(--ip-text-body-sm-size); color: var(--ip-color-text-disabled); }
 </style>
