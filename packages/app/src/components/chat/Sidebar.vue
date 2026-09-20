@@ -238,6 +238,12 @@ async function loadTaskConvIds() {
     taskConvIds.value = new Set(
       list.map((t) => t.target_conv_id).filter((x): x is string => !!x),
     );
+    // 新懒建的载体会话不在 store.conversations（快照早于懒建）→ 权威刷新回显
+    // （task scope 列表才看得到；刷新后集合收敛，下轮不再触发）
+    const known = new Set(chat.conversations.map((c) => c.id));
+    if ([...taskConvIds.value].some((id) => !known.has(id))) {
+      chat.loadConversations();
+    }
   } catch { /* 非关键路径，下轮再试 */ }
 }
 onMounted(() => {
@@ -429,7 +435,7 @@ function timeAgoLabel(dateStr: string): string {
 
       <!-- 项目频道（§6.1）：活频道一行 / 未开启给「开启频道」懒建入口；
            归档频道只在散落 scope 出现（原项目已删除的只读记录） -->
-      <div v-if="scopeProjectId" class="channel-block">
+      <div v-if="scopeProjectId && scopeProjectId !== TASK_SCOPE" class="channel-block">
         <button
           v-if="scopeChannel"
           :class="['conv-item', 'channel-item', { active: isChatRoute && chat.activeConvId === scopeChannel.id, streaming: chat.streamingConvIds.has(scopeChannel.id) }]"
