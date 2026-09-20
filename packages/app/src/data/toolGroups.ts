@@ -13,6 +13,7 @@ export const TOOL_GROUP_LABELS: Record<string, string> = {
   attach: "附件与引用",
   docx: "Word 文档",
   config: "配置与计划",
+  tasks: "定时任务",
   screen: "屏幕读写",
   other: "其他",
 };
@@ -25,6 +26,7 @@ export const TOOL_GROUP_ORDER: string[] = [
   "attach",
   "docx",
   "config",
+  "tasks",
   "screen",
   "other",
 ];

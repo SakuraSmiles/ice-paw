@@ -651,6 +651,14 @@ pub(crate) async fn run_agent_turn(
                 .await;
             reg.register(Arc::new(crate::harness::mcp::relay::ListConversationsTool))
                 .await;
+            // 定时任务三件（0.9.3，Always + 后治理——见 task_tools.rs 模块头）：
+            // 同 chat-only 闸（委派子会话不给持久化副作用出口）
+            reg.register(Arc::new(crate::harness::mcp::task_tools::ListScheduledTasksTool))
+                .await;
+            reg.register(Arc::new(crate::harness::mcp::task_tools::CreateScheduledTaskTool))
+                .await;
+            reg.register(Arc::new(crate::harness::mcp::task_tools::DeleteScheduledTaskTool))
+                .await;
         }
 
         // 后台异步绑定 per_agent server workspace（不阻塞消息发送）
@@ -1067,6 +1075,9 @@ const PLATFORM_TOOLS: &[&str] = &[
     "delegate_to_agent",
     "send_message_to_session",
     "list_conversations",
+    "list_scheduled_tasks",
+    "create_scheduled_task",
+    "delete_scheduled_task",
 ];
 
 /// ②-3：enabled_tools 名单过滤（纯函数）——非空名单 = 名单 ∪ 平台元工具；
