@@ -1,10 +1,12 @@
 <script setup lang="ts">
 // TaskQuickEntry.vue — 侧栏定时任务快速入口（设置按钮上方）。
-// 形态拍板（设计 §7）：单行常驻（最近一条：状态点 + 任务名 + 相对时）+ hover
-// 展开最多 3 条；无执行记录不渲染（空状态不占侧栏）；点击进设置·定时任务。
-// 数据 = 30s 轮询跨任务最近执行（task_runs 派生管理数据，无事件流——轮询是
-// 轻量兜底；onUnmounted 清理定时器，W6 批纪律）。
-import { onMounted, onUnmounted, ref } from "vue";
+// 形态（2026-09-20 用户定稿）：默认两行——上行 = 最近一次执行（状态点 + 名 +
+// 相对时），下行 = 最近一次将要执行（Clock + 名 + timeUntil 预告）；两行任一
+// 存在才渲染（无任务整体隐藏）。hover 展开最近 3 条执行记录 + 管理入口。
+// 数据 = 30s 轮询（tasks 列表取 next_run 最近的启用任务 + recentRuns 最近
+// 执行）；OS 失焦通知同一轮询驱动（新终态 run 且 document.hidden → 系统通知，
+// 恰一次语义）。
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { Clock } from "@lucide/vue";
 import {
@@ -13,16 +15,27 @@ import {
   sendNotification,
 } from "@tauri-apps/plugin-notification";
 import { bridge } from "../../api/bridge";
-import { timeAgo } from "../../utils/time";
-import type { RecentTaskRun } from "../../types";
+import { timeAgo, timeUntil } from "../../utils/time";
+import type { RecentTaskRun, ScheduledTaskView } from "../../types";
 
 const router = useRouter();
-const runs = ref<RecentTaskRun[]>([]);
+const recent = ref<RecentTaskRun[]>([]);
+const nextTask = ref<ScheduledTaskView | null>(null);
 let timer: ReturnType<typeof setInterval> | null = null;
 
-// ===== OS 失焦通知（0.9.3 补批）：任务完成/失败且应用不在前台时系统通知 =====
+/** 最近一次将要执行：启用 ∧ 有 next_run 的任务中 next_run 最小者 */
+function pickNextTask(list: ScheduledTaskView[]): ScheduledTaskView | null {
+  let best: ScheduledTaskView | null = null;
+  for (const t of list) {
+    if (!t.enabled || !t.next_run) continue;
+    if (!best || t.next_run < best.next_run!) best = t;
+  }
+  return best;
+}
+
+// ===== OS 失焦通知：任务完成/失败且应用不在前台时系统通知 =====
 // 恰一次语义：run_id 进已通知集不再重发（容量 50 滚动防泄漏）；聚焦时静默
-// （用户自己能看到侧栏入口）。权限失败静默降级（入口可见性兜底）。
+// （用户自己能看到入口）。权限失败静默降级（入口可见性兜底）。
 let notifiedRunIds = new Set<string>();
 let notifReady = false;
 
@@ -48,7 +61,6 @@ function maybeNotify(list: RecentTaskRun[]): void {
       body: r.status === "error" ? (r.summary ?? "查看执行记录了解详情") : (firstLine || "点击查看结果"),
     });
   }
-  // 滚动清理（容量 50：recentRuns 只取 3，50 足够跨长会话去重）
   if (notifiedRunIds.size > 50) {
     notifiedRunIds = new Set([...notifiedRunIds].slice(-50));
   }
@@ -56,9 +68,13 @@ function maybeNotify(list: RecentTaskRun[]): void {
 
 async function refresh() {
   try {
-    const list = await bridge.tasks.recentRuns(3);
-    runs.value = list;
-    maybeNotify(list);
+    const [list, runs] = await Promise.all([
+      bridge.tasks.list(),
+      bridge.tasks.recentRuns(3),
+    ]);
+    nextTask.value = pickNextTask(list);
+    recent.value = runs;
+    maybeNotify(runs);
   } catch { /* 下轮再试——快速入口是非关键路径，不弹错误 */ }
 }
 
@@ -69,23 +85,32 @@ onMounted(() => {
 });
 onUnmounted(() => { if (timer) clearInterval(timer); });
 
+const lastRun = computed(() => recent.value[0] ?? null);
+/** 两行任一存在才渲染（无任务整体隐藏） */
+const visible = computed(() => !!lastRun.value || !!nextTask.value);
+
 const statusTitle = (s: string) =>
   ({ done: "已完成", running: "运行中", error: "失败", missed: "已错过" }[s] ?? s);
 </script>
 
 <template>
-  <div v-if="runs.length" class="task-entry" title="定时任务">
-    <!-- 单行常驻（最近一条） -->
-    <button class="entry-line" @click="router.push('/settings/tasks')">
-      <span :class="['dot', runs[0]!.status]" :title="statusTitle(runs[0]!.status)" />
-      <Clock :size="12" class="entry-icon" />
-      <span class="entry-name">{{ runs[0]!.task_name }}</span>
-      <span class="entry-time">{{ timeAgo(runs[0]!.started_at) }}</span>
+  <div v-if="visible" class="task-entry">
+    <!-- 上行：最近一次执行（状态点 + 名 + 相对时） -->
+    <button v-if="lastRun" class="entry-line" title="定时任务" @click="router.push('/settings/tasks')">
+      <span :class="['dot', lastRun.status]" :title="statusTitle(lastRun.status)" />
+      <span class="entry-name">{{ lastRun.task_name }}</span>
+      <span class="entry-time">{{ timeAgo(lastRun.started_at) }}</span>
     </button>
-    <!-- hover 展开面板（最多 3 条） -->
-    <div class="entry-pop">
+    <!-- 下行：最近一次将要执行（Clock + 名 + 预告） -->
+    <button v-if="nextTask" class="entry-line" title="定时任务" @click="router.push('/settings/tasks')">
+      <Clock :size="12" class="entry-icon" />
+      <span class="entry-name">{{ nextTask.name }}</span>
+      <span class="entry-time">{{ timeUntil(nextTask.next_run!) }}</span>
+    </button>
+    <!-- hover 展开面板（最近 3 条执行） -->
+    <div v-if="recent.length" class="entry-pop">
       <button
-        v-for="r in runs" :key="r.run_id"
+        v-for="r in recent" :key="r.run_id"
         class="pop-row" @click="router.push('/settings/tasks')"
       >
         <span :class="['dot', r.status]" :title="statusTitle(r.status)" />
@@ -99,12 +124,12 @@ const statusTitle = (s: string) =>
 </template>
 
 <style scoped>
-.task-entry { position: relative; margin: 0 var(--ip-spacing-3) var(--ip-spacing-1); flex-shrink: 0; }
+.task-entry { position: relative; margin: 0 var(--ip-spacing-3) var(--ip-spacing-1); flex-shrink: 0; display: flex; flex-direction: column; gap: 1px; }
 
 /* 入口行：侧栏原生件风格（朴素行 + hover 微亮，footer-btn 同视觉重量） */
-.entry-line { display: flex; align-items: center; gap: 6px; width: 100%; padding: var(--ip-spacing-1_5) var(--ip-spacing-2_5); border: none; border-radius: var(--ip-radius-md); background: transparent; color: var(--ip-color-text-secondary); font: inherit; font-size: var(--ip-text-micro-size); cursor: pointer; transition: background-color var(--ip-duration-fast) var(--ip-ease-out), color var(--ip-duration-fast) var(--ip-ease-out); }
+.entry-line { display: flex; align-items: center; gap: 6px; width: 100%; padding: var(--ip-spacing-1) var(--ip-spacing-2_5); border: none; border-radius: var(--ip-radius-md); background: transparent; color: var(--ip-color-text-secondary); font: inherit; font-size: var(--ip-text-micro-size); cursor: pointer; transition: background-color var(--ip-duration-fast) var(--ip-ease-out), color var(--ip-duration-fast) var(--ip-ease-out); }
 .entry-line:hover { background-color: var(--ip-color-bg-tertiary); color: var(--ip-color-text-primary); }
-.entry-line:hover + .entry-pop, .entry-pop:hover { opacity: 1; visibility: visible; transform: translateY(0); }
+.entry-line:hover ~ .entry-pop, .entry-pop:hover { opacity: 1; visibility: visible; transform: translateY(0); }
 
 .entry-icon { flex-shrink: 0; color: var(--ip-color-icon-muted); }
 .entry-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ip-color-text-primary); }

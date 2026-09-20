@@ -92,6 +92,23 @@ export function formatMmSs(totalSeconds: number): string {
 /** 相对时间（刚刚 / N分钟前 / N小时前 / N天前 / 日期）——侧栏会话列表、
  *  项目概览共用。now 参数化：调用方传响应式时钟（如 Sidebar 的 nowTick）
  *  建立 reactive 依赖，每分钟刷新整列。 */
+/** 未来时刻的相对时（定时任务预告用）：与 timeAgo 同族的时间格式化。
+ *  <1 分钟「即将」/ 分钟·小时·天后 / 跨更远给「明天 HH:MM」「M月D日 HH:MM」
+ *  （本地时区；过去时刻回退「即将」防负数文案）。 */
+export function timeUntil(dateStr: string, now: number = Date.now()): string {
+  const d = parseDbTime(dateStr);
+  const diff = d.getTime() - now;
+  if (diff <= 60_000) return "即将";
+  const mins = Math.floor(diff / 60000);
+  if (mins < 60) return `${mins}分钟后`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}小时后`;
+  const days = Math.floor(hours / 24);
+  if (days === 1) return `明天 ${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}`;
+  if (days < 7) return `${days}天后`;
+  return `${d.getMonth() + 1}月${d.getDate()}日 ${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}`;
+}
+
 export function timeAgo(dateStr: string, now: number = Date.now()): string {
   const d = parseDbTime(dateStr);
   const diff = now - d.getTime();
