@@ -657,6 +657,8 @@ pub(crate) async fn run_agent_turn(
                 .await;
             reg.register(Arc::new(crate::harness::mcp::task_tools::CreateScheduledTaskTool))
                 .await;
+            reg.register(Arc::new(crate::harness::mcp::task_tools::UpdateScheduledTaskTool))
+                .await;
             reg.register(Arc::new(crate::harness::mcp::task_tools::DeleteScheduledTaskTool))
                 .await;
         }
@@ -1077,6 +1079,7 @@ const PLATFORM_TOOLS: &[&str] = &[
     "list_conversations",
     "list_scheduled_tasks",
     "create_scheduled_task",
+    "update_scheduled_task",
     "delete_scheduled_task",
 ];
 

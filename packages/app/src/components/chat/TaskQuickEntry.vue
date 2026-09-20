@@ -7,6 +7,11 @@
 import { onMounted, onUnmounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { Clock } from "@lucide/vue";
+import {
+  isPermissionGranted,
+  requestPermission,
+  sendNotification,
+} from "@tauri-apps/plugin-notification";
 import { bridge } from "../../api/bridge";
 import { timeAgo } from "../../utils/time";
 import type { RecentTaskRun } from "../../types";
@@ -15,13 +20,50 @@ const router = useRouter();
 const runs = ref<RecentTaskRun[]>([]);
 let timer: ReturnType<typeof setInterval> | null = null;
 
+// ===== OS 失焦通知（0.9.3 补批）：任务完成/失败且应用不在前台时系统通知 =====
+// 恰一次语义：run_id 进已通知集不再重发（容量 50 滚动防泄漏）；聚焦时静默
+// （用户自己能看到侧栏入口）。权限失败静默降级（入口可见性兜底）。
+let notifiedRunIds = new Set<string>();
+let notifReady = false;
+
+async function ensureNotifPermission(): Promise<void> {
+  if (notifReady) return;
+  try {
+    if (!(await isPermissionGranted())) {
+      notifReady = (await requestPermission()) === "granted";
+    } else {
+      notifReady = true;
+    }
+  } catch { notifReady = false; }
+}
+
+function maybeNotify(list: RecentTaskRun[]): void {
+  if (!notifReady || !document.hidden) return;
+  for (const r of list) {
+    if (r.status === "running" || notifiedRunIds.has(r.run_id)) continue;
+    notifiedRunIds.add(r.run_id);
+    const firstLine = (r.summary ?? "").split("\n")[0].trim();
+    sendNotification({
+      title: r.status === "error" ? `定时任务失败：${r.task_name}` : `定时任务完成：${r.task_name}`,
+      body: r.status === "error" ? (r.summary ?? "查看执行记录了解详情") : (firstLine || "点击查看结果"),
+    });
+  }
+  // 滚动清理（容量 50：recentRuns 只取 3，50 足够跨长会话去重）
+  if (notifiedRunIds.size > 50) {
+    notifiedRunIds = new Set([...notifiedRunIds].slice(-50));
+  }
+}
+
 async function refresh() {
   try {
-    runs.value = await bridge.tasks.recentRuns(3);
+    const list = await bridge.tasks.recentRuns(3);
+    runs.value = list;
+    maybeNotify(list);
   } catch { /* 下轮再试——快速入口是非关键路径，不弹错误 */ }
 }
 
 onMounted(() => {
+  ensureNotifPermission();
   refresh();
   timer = setInterval(refresh, 30_000);
 });

@@ -210,6 +210,12 @@ fn ensure_help_docs(default_workspace: &str) {
             include_str!("../../../resources/help/channel.md"),
             &[],
         ),
+        // ---- 2026-09-20 定时任务批：新增（首发，known_hashes 为空）----
+        HelpDoc::new(
+            "scheduled-tasks.md",
+            include_str!("../../../resources/help/scheduled-tasks.md"),
+            &[],
+        ),
     ];
     let mut written = 0;
     let mut updated = 0;

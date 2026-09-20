@@ -66,5 +66,6 @@ export const TOOL_LABELS: Record<string, string> = {
   list_conversations: "列出会话",
   list_scheduled_tasks: "列出定时任务",
   create_scheduled_task: "创建定时任务",
+  update_scheduled_task: "修改定时任务",
   delete_scheduled_task: "删除定时任务",
 };

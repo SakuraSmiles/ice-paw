@@ -74,6 +74,7 @@ pub const TOOL_GROUPS: &[(&str, &[&str])] = &[
         &[
             "list_scheduled_tasks",
             "create_scheduled_task",
+            "update_scheduled_task",
             "delete_scheduled_task",
         ],
     ),
@@ -199,7 +200,8 @@ mod tests {
             // 配置与计划
             "read_agent_config", "propose_config_change", "update_plan",
             // 定时任务三件（组装期注册，同 delegate/relay 性质）
-            "list_scheduled_tasks", "create_scheduled_task", "delete_scheduled_task",
+            "list_scheduled_tasks", "create_scheduled_task", "update_scheduled_task",
+            "delete_scheduled_task",
             // 屏幕十一件
             "capture_screen", "list_windows", "capture_window", "mouse_move",
             "mouse_click", "mouse_drag", "mouse_scroll", "type_text", "press_key",
