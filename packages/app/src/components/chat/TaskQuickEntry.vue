@@ -127,35 +127,37 @@ const statusTone = (s: string) =>
 <style scoped>
 .task-entry { position: relative; margin: 0 var(--ip-spacing-3) var(--ip-spacing-1); flex-shrink: 0; display: flex; flex-direction: column; gap: 1px; }
 
-/* 入口行：侧栏原生件风格（朴素行 + hover 微亮，footer-btn 同视觉重量） */
-.entry-line { display: flex; align-items: center; gap: 6px; width: 100%; padding: var(--ip-spacing-1) var(--ip-spacing-2_5); border: none; border-radius: var(--ip-radius-md); background: transparent; color: var(--ip-color-text-secondary); font: inherit; font-size: var(--ip-text-micro-size); cursor: pointer; transition: background-color var(--ip-duration-fast) var(--ip-ease-out), color var(--ip-duration-fast) var(--ip-ease-out); }
+/* 入口行：grid 三列硬对齐（用户拍板 2026-09-20）——状态列固定宽 / 中间名字
+   从左往右 / 右列时间右对齐；列位锁定不受内容宽度影响（flex 的 min-width
+   在中文字符宽度差异下仍有像素级漂移，grid 模板列彻底消除） */
+.entry-line { display: grid; grid-template-columns: 3.5em minmax(0, 1fr) auto; align-items: center; column-gap: 6px; width: 100%; padding: var(--ip-spacing-1) var(--ip-spacing-2_5); border: none; border-radius: var(--ip-radius-md); background: transparent; color: var(--ip-color-text-secondary); font: inherit; font-size: var(--ip-text-micro-size); cursor: pointer; transition: background-color var(--ip-duration-fast) var(--ip-ease-out), color var(--ip-duration-fast) var(--ip-ease-out); }
 .entry-line:hover { background-color: var(--ip-color-bg-tertiary); color: var(--ip-color-text-primary); }
 .entry-line:hover ~ .entry-pop, .entry-pop:hover { opacity: 1; visibility: visible; transform: translateY(0); }
 
-/* 状态胶囊（两行统一形态）：等宽 min-width 保证名字起点对齐 */
+/* 状态胶囊：grid 首列整列填充居中（列宽已由模板锁定 3.5em） */
 .tag {
-  flex-shrink: 0;
-  min-width: 3.6em;
+  width: 100%;
   text-align: center;
   line-height: 1.4;
   font-size: var(--ip-text-micro-size);
   color: var(--ip-color-text-disabled);
+  white-space: nowrap;
 }
 .tag--ok { color: var(--ip-success-text); }
 .tag--danger { color: var(--ip-danger-text); }
 .tag--warn { color: var(--ip-warning-text); }
 .tag--muted { color: var(--ip-color-text-disabled); }
 .tag--next { color: var(--ip-primary-600); }
-.entry-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ip-color-text-primary); }
-.entry-time { flex-shrink: 0; color: var(--ip-color-text-disabled); }
+.entry-name { justify-self: start; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ip-color-text-primary); }
+.entry-time { justify-self: end; color: var(--ip-color-text-disabled); }
 
 /* hover 面板：绝对定位于入口上方（footer 区在底部），与收起态 flyout 同 z 档 */
 .entry-pop { position: absolute; bottom: calc(100% + 4px); left: 0; right: 0; z-index: var(--ip-z-dropdown, 100); display: flex; flex-direction: column; padding: var(--ip-spacing-1_5); border: 1px solid var(--ip-color-border-default); border-radius: var(--ip-radius-md); background: var(--ip-color-bg-secondary); box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14); opacity: 0; visibility: hidden; transform: translateY(4px); transition: opacity var(--ip-duration-fast) var(--ip-ease-out), transform var(--ip-duration-fast) var(--ip-ease-out), visibility var(--ip-duration-fast); }
 
-.pop-row { display: flex; align-items: center; gap: 6px; padding: var(--ip-spacing-1_5) var(--ip-spacing-2); border: none; border-radius: var(--ip-radius-sm); background: transparent; color: var(--ip-color-text-secondary); font: inherit; font-size: var(--ip-text-micro-size); cursor: pointer; text-align: left; }
+.pop-row { display: grid; grid-template-columns: 3.5em minmax(0, 1fr) auto; align-items: center; column-gap: 6px; width: 100%; padding: var(--ip-spacing-1_5) var(--ip-spacing-2); border: none; border-radius: var(--ip-radius-sm); background: transparent; color: var(--ip-color-text-secondary); font: inherit; font-size: var(--ip-text-micro-size); cursor: pointer; text-align: left; }
 .pop-row:hover { background: var(--ip-color-bg-tertiary); }
-.pop-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ip-color-text-primary); }
-.pop-time { flex-shrink: 0; color: var(--ip-color-text-disabled); }
+.pop-name { justify-self: start; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ip-color-text-primary); }
+.pop-time { justify-self: end; color: var(--ip-color-text-disabled); }
 .pop-manage { margin-top: 2px; padding: var(--ip-spacing-1_5) var(--ip-spacing-2); border: none; border-top: 1px solid var(--ip-color-border-default); background: transparent; color: var(--ip-primary-600); font: inherit; font-size: var(--ip-text-micro-size); cursor: pointer; text-align: left; }
 .pop-manage:hover { color: var(--ip-primary-700, var(--ip-primary-600)); }
 </style>
