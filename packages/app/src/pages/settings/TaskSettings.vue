@@ -3,7 +3,7 @@
 // （ModelSettings/AgentSettings 同款骨架与 token——profile-card 折叠卡 / 新建卡
 // 卡内展开 / row-grid 表单 / row-actions 左右分区 / health-chip 状态徽）。
 // 设计真相源 docs/scheduled-tasks-design.md（六点拍板不变）。
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ChevronRight, Clock, Plus } from "@lucide/vue";
 import ErrorBanner from "../../components/common/ErrorBanner.vue";
@@ -12,6 +12,7 @@ import { useAgentStore } from "../../stores/agent";
 import { useChatStore } from "../../stores/chat";
 import { msgOf } from "../../utils/errors";
 import { timeAgo } from "../../utils/time";
+import { scheduleLabel } from "../../utils/taskSchedule";
 import type { ScheduledTaskView, TaskRun, TaskScheduleKind } from "../../types";
 
 const router = useRouter();
@@ -30,22 +31,6 @@ const WEEKDAY_LABELS = ["一", "二", "三", "四", "五", "六", "日"];
 
 function parseData(json: string): Record<string, unknown> {
   try { return JSON.parse(json) as Record<string, unknown>; } catch { return {}; }
-}
-
-/** 调度人话摘要（收起卡次行 + 表单回显） */
-function scheduleLabel(kind: string, dataJson: string): string {
-  const d = parseData(dataJson);
-  switch (kind) {
-    case "once": return `一次性 ${d.at ?? "?"}`;
-    case "daily": return `每天 ${d.time ?? "?"}`;
-    case "weekly": {
-      const days = Array.isArray(d.weekdays) ? (d.weekdays as number[]).map((w) => WEEKDAY_LABELS[w] ?? "?").join("/") : "?";
-      return `每周${days} ${d.time ?? "?"}`;
-    }
-    case "interval": return `每 ${d.minutes ?? "?"} 分钟`;
-    case "cron": return `cron：${d.expr ?? "?"}`;
-    default: return kind;
-  }
 }
 
 const statusLabel = (s: string) =>
@@ -71,6 +56,22 @@ async function load() {
 }
 
 onMounted(load);
+onUnmounted(() => { if (runsPollTimer) clearInterval(runsPollTimer); });
+
+/** 执行记录运行中回正：展开面板存在 running 行时 5s 轮询刷新（回合耗时
+ * 远超手动触发的 3s/12s 定时刷新，无此轮询状态会钉死在「运行中」；
+ * 无 running 零动作零开销） */
+let runsPollTimer: ReturnType<typeof setInterval> | null = null;
+runsPollTimer = setInterval(async () => {
+  const id = expandedId.value;
+  if (id === null || id === "new") return;
+  const runs = runsCache.value.get(id);
+  if (!runs?.some((r) => r.status === "running")) return;
+  try {
+    runsCache.value.set(id, await bridge.tasks.runs(id, 20));
+    await load(); // 收起态状态徽同步回正
+  } catch { /* 下轮再试 */ }
+}, 5000);
 
 /** 卡片展开/收起（点整卡 = 编辑 + 执行记录 + 治理动作；展开时拉执行记录） */
 async function toggleExpand(id: string) {

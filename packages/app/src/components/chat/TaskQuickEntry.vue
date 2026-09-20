@@ -57,7 +57,7 @@ const statusTitle = (s: string) =>
 </template>
 
 <style scoped>
-.task-entry { position: relative; margin: 0 var(--ip-spacing-3) var(--ip-spacing-1); }
+.task-entry { position: relative; margin: 0 var(--ip-spacing-3) var(--ip-spacing-1); flex-shrink: 0; }
 
 /* 入口行：侧栏原生件风格（朴素行 + hover 微亮，footer-btn 同视觉重量） */
 .entry-line { display: flex; align-items: center; gap: 6px; width: 100%; padding: var(--ip-spacing-1_5) var(--ip-spacing-2_5); border: none; border-radius: var(--ip-radius-md); background: transparent; color: var(--ip-color-text-secondary); font: inherit; font-size: var(--ip-text-micro-size); cursor: pointer; transition: background-color var(--ip-duration-fast) var(--ip-ease-out), color var(--ip-duration-fast) var(--ip-ease-out); }

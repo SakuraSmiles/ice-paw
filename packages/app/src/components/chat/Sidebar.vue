@@ -518,9 +518,10 @@ function timeAgoLabel(dateStr: string): string {
     <!-- 底部：设置（左）+ 明暗切换（右，2026-09-01 自 header 迁入——圆形扩散
          动画起点自动跟随按钮新位置，useTheme 按 .btn-theme-toggle 探测零改动。
          收起态不放主题钮（用户拍板）：此份即全应用唯一实例） -->
+    <!-- 定时任务快速入口（footer 上方独立块——footer 是横排容器，竖块入内会挤乱；
+         无执行记录整体不渲染） -->
+    <TaskQuickEntry v-if="!collapsed" />
     <div v-if="!collapsed" class="sidebar-footer">
-      <!-- 定时任务快速入口（设置钮上方；无执行记录整体不渲染） -->
-      <TaskQuickEntry />
       <button class="footer-btn" :class="{ active: isSettingsPage }" @click="router.push('/settings/general')">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="3" />

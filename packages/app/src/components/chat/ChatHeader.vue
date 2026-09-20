@@ -11,7 +11,7 @@
   Emits: 无
 -->
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, onUnmounted } from "vue";
+import { ref, computed, watch, nextTick, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { useEscapeStack } from "../../composables/useEscapeStack";
 import { useClickOutside } from "../../composables/useClickOutside";
@@ -22,6 +22,8 @@ import { useAgentStore } from "../../stores/agent";
 import { useScreenChannelStore } from "../../stores/screenChannel";
 import { useInbox } from "../../composables/useInbox";
 import { bridge } from "../../api/bridge";
+import { scheduleLabel } from "../../utils/taskSchedule";
+import type { ScheduledTask } from "../../types";
 import EntityAvatar from "../common/EntityAvatar.vue";
 import StatusGlyph from "./StatusGlyph.vue";
 import InboxPopover from "./InboxPopover.vue";
@@ -130,6 +132,28 @@ const delegation = computed(() => {
 function goBackToParent() {
   if (delegation.value?.parentId) chat.selectConversation(delegation.value.parentId);
 }
+
+// ===== 定时任务载体识别（0.9.3）：任务专属会话头辨识——徽章「定时任务」+ =====
+// ===== 副标题调度人话。tasks 列表 60s 轮询（任务量小；创建多经设置页/agent =====
+// ===== 工具，切会话即时性由轮询覆盖）；onUnmounted 清理（W6 纪律）。
+const taskByConv = ref<Map<string, ScheduledTask>>(new Map());
+let taskListTimer: ReturnType<typeof setInterval> | null = null;
+async function refreshTaskByConv() {
+  try {
+    const list = await bridge.tasks.list();
+    const m = new Map<string, ScheduledTask>();
+    for (const v of list) if (v.target_conv_id) m.set(v.target_conv_id, v);
+    taskByConv.value = m;
+  } catch { /* 非关键路径，下轮再试 */ }
+}
+onMounted(() => {
+  refreshTaskByConv();
+  taskListTimer = setInterval(refreshTaskByConv, 60_000);
+});
+onUnmounted(() => { if (taskListTimer) clearInterval(taskListTimer); });
+const activeTask = computed(() =>
+  taskByConv.value.get(chat.activeConversation?.id ?? "") ?? null,
+);
 
 // ===== 频道 v1：项目频道头部（徽章 + 统筹者胶囊 popover） =====
 const channel = computed(() => {
@@ -368,6 +392,14 @@ async function toggleScreenShare() {
           >
             {{ channelArchived ? "已归档" : "频道" }}
           </span>
+          <!-- 定时任务（0.9.3）：任务专属会话徽章（频道/委派同款 tag 位） -->
+          <span
+            v-else-if="activeTask"
+            class="header-kind-badge header-task-badge"
+            :title="`定时任务「${activeTask.name}」的专属会话 · ${scheduleLabel(activeTask.schedule_kind, activeTask.schedule_data)} · 每轮执行结果与历史都在这里`"
+          >
+            定时任务
+          </span>
         </h1>
         <div class="header-meta">
           <!-- 频道子标题（2026-09-11 设计，不再沿用 1v1 的「agent 名 · model」）：
@@ -427,6 +459,10 @@ async function toggleScreenShare() {
               :title="`查看「${activeAgent.name}」的配置（设置 · 智能体）`"
               @click="goAgentSettings"
             >{{ activeAgent.name }}</button>
+            <template v-if="activeTask">
+              <span class="header-sep">·</span>
+              <span class="header-task-sched">{{ scheduleLabel(activeTask.schedule_kind, activeTask.schedule_data) }}</span>
+            </template>
             <span v-if="activeAgent" class="header-sep">·</span>
             <span v-if="activeAgent" class="header-model">{{ headerModel }}</span>
             <span v-if="!activeAgent" class="header-hint">选择一个对话开始</span>
@@ -606,6 +642,7 @@ async function toggleScreenShare() {
 .channel-subtitle-btn:hover .stack-avatar,
 .channel-subtitle-btn.open .stack-avatar { box-shadow: 0 0 0 2px var(--ip-color-bg-tertiary); }
 /* 频道徽章归档变体：warning 语义色（记录只读状态可见） */
+.header-task-sched { color: var(--ip-color-text-tertiary); }
 .header-channel-badge.archived { color: var(--ip-warning-text); background: var(--ip-warning-bg); border-color: var(--ip-warning-border); }
 /* 频道子标题：成员头像叠层（sm=20px，负 margin 叠压 + 头部底色描边分离） */
 .channel-avatar-stack { display: flex; align-items: center; flex-shrink: 0; }
