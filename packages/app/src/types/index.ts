@@ -955,6 +955,7 @@ export interface ProposalActionCreateAgent {
   /** 工具集范围（组选择三态：group:组键 / server:配置id / 裸工具名） */
   tool_scopes?: string[] | null;
   workspace_path?: string | null;
+  model_profile_id?: string | null;
 }
 
 export interface ProposalActionUpdateAgent {
@@ -973,6 +974,7 @@ export interface ProposalActionUpdateAgent {
   workspace_path?: string | null;
   /** Word 文档样式偏好（自由文字块；空串 = 摘除 yaml 块） */
   word_style_profile?: string | null;
+  model_profile_id?: string | null;
 }
 
 export type ProposalAction = ProposalActionCreateAgent | ProposalActionUpdateAgent;

@@ -67,7 +67,7 @@ pub const TOOL_GROUPS: &[(&str, &[&str])] = &[
     ),
     (
         "config",
-        &["read_agent_config", "propose_config_change", "update_plan"],
+        &["read_agent_config", "list_model_profiles", "propose_config_change", "update_plan"],
     ),
     (
         "tasks",
@@ -198,7 +198,7 @@ mod tests {
             "write_file", "edit_file", "delete_file", "move_file", "copy_file",
             "create_directory", "run_command", "search_files", "git", "web_fetch",
             // 配置与计划
-            "read_agent_config", "propose_config_change", "update_plan",
+            "read_agent_config", "list_model_profiles", "propose_config_change", "update_plan",
             // 定时任务三件（组装期注册，同 delegate/relay 性质）
             "list_scheduled_tasks", "create_scheduled_task", "update_scheduled_task",
             "delete_scheduled_task",

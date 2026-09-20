@@ -136,6 +136,7 @@ mod tests {
             enabled_tools,
             tool_scopes: None,
             workspace_path: None,
+            model_profile_id: None,
         }
     }
 
@@ -156,6 +157,7 @@ mod tests {
             tool_scopes: None,
             workspace_path: None,
             word_style_profile: None,
+            model_profile_id: None,
         }
     }
 
@@ -272,6 +274,7 @@ mod tests {
             enabled_tools: None,
             tool_scopes: None,
             workspace_path: None,
+            model_profile_id: None,
         };
         let err = validate_proposal(&action, "caller-1").unwrap_err();
         assert!(err.to_string().contains("id"));
@@ -292,6 +295,7 @@ mod tests {
             enabled_tools: None,
             tool_scopes: None,
             workspace_path: None,
+            model_profile_id: None,
         };
         let err = validate_proposal(&action, "caller-1").unwrap_err();
         assert!(err.to_string().contains("name"));

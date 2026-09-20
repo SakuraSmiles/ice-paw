@@ -29,7 +29,7 @@ use super::types::AuthorizationLevel;
 /// **唯一合法通道**（绕过它直接改文件会被 `reject_sensitive` 拦截），`read_agent_config`
 /// 是读取自身配置的正规通道。若被裁剪掉，agent 会退而用文件工具直接改 agent.yaml，
 /// 击穿配置提案审批系统。详见 `McpRegistry::register_meta_tools`。
-const PLATFORM_META_TOOLS: &[&str] = &["propose_config_change", "read_agent_config"];
+const PLATFORM_META_TOOLS: &[&str] = &["propose_config_change", "read_agent_config", "list_model_profiles"];
 
 // =========================================================================
 // ToolContext — 工具执行上下文（RAG: agent_id/project_id 透传）

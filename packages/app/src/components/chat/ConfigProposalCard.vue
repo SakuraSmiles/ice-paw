@@ -19,6 +19,19 @@ const props = defineProps<{
 }>();
 
 const apiKey = ref("");
+
+// ===== 模型配置实体（0.9.3 引用化）：id → 别名映射（卡片显示人话而非 uuid）=====
+const profileAlias = ref<Map<string, string>>(new Map());
+import { onMounted } from "vue";
+onMounted(async () => {
+  try {
+    const list = await bridge.modelProfiles.list();
+    profileAlias.value = new Map(list.map((p) => [p.id, p.alias]));
+  } catch { /* 显示回退原始 id */ }
+});
+function profileLabel(id: string): string {
+  return profileAlias.value.get(id) ?? id;
+}
 const editing = ref(false);
 const applying = ref(false);
 const errorMsg = ref<string | null>(null);
@@ -46,7 +59,7 @@ const sensitivityClass = computed(() => `sensitivity-${props.proposal.sensitivit
 /** 可显示的字段列表 */
 const visibleFields = computed(() => {
   const a = action.value;
-  const fields: { key: string; label: string; value: unknown; isKeySlot: boolean }[] = [];
+  const fields: { key: string; label: string; value: unknown; isKeySlot: boolean; isProfileRef?: boolean }[] = [];
 
   if (isCreate.value) {
     const c = a as ProposalActionCreateAgent;
@@ -61,8 +74,13 @@ const visibleFields = computed(() => {
     if (c.enabled_tools?.length) fields.push({ key: "enabled_tools", label: "启用工具", value: c.enabled_tools.join(", "), isKeySlot: false });
     if (c.tool_scopes?.length) fields.push({ key: "tool_scopes", label: "工具集范围", value: c.tool_scopes.join(", "), isKeySlot: false });
     if (c.workspace_path) fields.push({ key: "workspace_path", label: "工作区", value: c.workspace_path, isKeySlot: false });
-    // API key: always shown as secure input
-    fields.push({ key: "api_key", label: "API Key", value: "（必填）", isKeySlot: true });
+    // 模型配置引用（0.9.3 引用化）：显示实体选择，key 槽不出现（凭据授权已由
+    // 用户建实体完成——审批卡是授权界面不是凭据收集界面）
+    if (c.model_profile_id) {
+      fields.push({ key: "model_profile_id", label: "模型配置", value: c.model_profile_id, isKeySlot: false, isProfileRef: true });
+    } else {
+      fields.push({ key: "api_key", label: "API Key", value: "（必填）", isKeySlot: true });
+    }
   } else {
     const u = a as ProposalActionUpdateAgent;
     fields.push({ key: "agent_id", label: "Agent ID", value: u.agent_id, isKeySlot: false });
@@ -77,6 +95,9 @@ const visibleFields = computed(() => {
     if (u.tool_scopes != null) fields.push({ key: "tool_scopes", label: "工具集范围", value: u.tool_scopes.length ? u.tool_scopes.join(", ") : "（摘除，恢复全开）", isKeySlot: false });
     if (u.workspace_path != null) fields.push({ key: "workspace_path", label: "工作区", value: u.workspace_path, isKeySlot: false });
     // Word 样式偏好：空串 = 摘除（卡片上明示，避免误以为写成空块）
+    if (u.model_profile_id != null) {
+      fields.push({ key: "model_profile_id", label: "模型配置", value: u.model_profile_id === "" ? "（解除引用）" : u.model_profile_id, isKeySlot: false, isProfileRef: true });
+    }
     if (u.word_style_profile != null) {
       fields.push({
         key: "word_style_profile",
@@ -91,6 +112,9 @@ const visibleFields = computed(() => {
 });
 
 function fieldDisplayValue(field: { key: string; value: unknown }): string {
+  if (field.key === "model_profile_id" && typeof field.value === "string" && field.value) {
+    return `「${profileLabel(field.value)}」`;
+  }
   if (editing.value && editFields.value[field.key] !== undefined) {
     return editFields.value[field.key];
   }
@@ -102,8 +126,8 @@ function startEdit() {
   editing.value = true;
   const fields: Record<string, string> = {};
   for (const f of visibleFields.value) {
-    // 多行自由文字块不入单行编辑（String() 会压掉换行，损坏原文）
-    if (!f.isKeySlot && f.key !== "word_style_profile") {
+    // 多行自由文字块与实体引用不入单行编辑（引用改选走下方选择器/或拒后重提）
+    if (!f.isKeySlot && f.key !== "word_style_profile" && f.key !== "model_profile_id") {
       fields[f.key] = String(f.value ?? "");
     }
   }
@@ -122,8 +146,11 @@ async function approve() {
   try {
     if (isCreate.value) {
       const a = action.value as ProposalActionCreateAgent;
-      const key = apiKey.value.trim();
-      if (!key) {
+      // 引用路径（0.9.3）：卡片无 key 输入，直传 model_profile_id（后端解析实体
+      // 写快照列）；直填路径保持 key 必填
+      const refProfileId = editing.value ? (editFields.value.model_profile_id || a.model_profile_id) : a.model_profile_id;
+      const key = refProfileId ? "" : apiKey.value.trim();
+      if (!refProfileId && !key) {
         errorMsg.value = "请填写 API Key";
         applying.value = false;
         return;
@@ -134,6 +161,7 @@ async function approve() {
         provider: editing.value ? (editFields.value.provider || a.provider) : a.provider,
         model: editing.value ? (editFields.value.model || a.model) : a.model,
         api_key: key,
+        model_profile_id: refProfileId ?? undefined,
         base_url: a.base_url ?? undefined,
         system_prompt: a.system_prompt ?? undefined,
         temperature: a.temperature ?? undefined,
@@ -270,7 +298,7 @@ async function reject() {
         />
         <!-- 编辑模式下的可编辑字段（agent_id/id 只读；多行偏好块不入单行编辑） -->
         <input
-          v-if="editing && !field.isKeySlot && field.key !== 'agent_id' && field.key !== 'id' && field.key !== 'word_style_profile'"
+          v-if="editing && !field.isKeySlot && field.key !== 'agent_id' && field.key !== 'id' && field.key !== 'word_style_profile' && field.key !== 'model_profile_id'"
           v-model="editFields[field.key]"
           type="text"
           class="field-input"

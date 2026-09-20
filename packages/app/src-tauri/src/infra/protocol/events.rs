@@ -443,6 +443,10 @@ pub enum ProposalAction {
         tool_scopes: Option<Vec<String>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         workspace_path: Option<String>,
+        /// 模型配置实体引用（0.9.3 引用化）：批准时直接挂既有 ModelProfile——
+        /// 卡片不出现 key 输入。api_key 仍恒 "__SLOT__"（guard 不变式保持）。
+        #[serde(skip_serializing_if = "Option::is_none")]
+        model_profile_id: Option<String>,
     },
     /// 更新 agent（只能更新当前 agent 自己）
     UpdateAgent {
@@ -474,6 +478,9 @@ pub enum ProposalAction {
         /// 落地走 `set_agent_word_profile`（agent.yaml 纯文件旁路，D12 双轨承载）
         #[serde(skip_serializing_if = "Option::is_none")]
         word_style_profile: Option<String>,
+        /// 模型配置实体引用（0.9.3 引用化；语义同 CreateAgent 条目）
+        #[serde(skip_serializing_if = "Option::is_none")]
+        model_profile_id: Option<String>,
     },
 }
 
@@ -678,6 +685,7 @@ mod tests {
             enabled_tools: None,
             tool_scopes: None,
             workspace_path: None,
+            model_profile_id: None,
         };
         let json = serde_json::to_string(&action).unwrap();
         assert!(json.contains(r#""action":"create_agent""#));
@@ -707,6 +715,7 @@ mod tests {
             enabled_tools: None,
             tool_scopes: None,
             workspace_path: None,
+            model_profile_id: None,
             word_style_profile: Some("正文宋体小四".into()),
         };
         let json = serde_json::to_string(&action).unwrap();

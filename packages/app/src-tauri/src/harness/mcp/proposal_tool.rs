@@ -63,6 +63,10 @@ struct ProposeConfigArgs {
     tool_scopes: Option<Vec<String>>,
     #[serde(default)]
     workspace_path: Option<String>,
+    /// 模型配置实体引用（create/update 通用；list_model_profiles 查可用 id）——
+    /// 引用路径卡片不出现 key 输入
+    #[serde(default)]
+    model_profile_id: Option<String>,
 
     // ---- update_agent 字段 ----
     #[serde(default)]
@@ -99,6 +103,7 @@ fn into_proposal_action(args: &ProposeConfigArgs) -> AppResult<ProposalAction> {
                 enabled_tools: args.enabled_tools.clone(),
                 tool_scopes: args.tool_scopes.clone(),
                 workspace_path: args.workspace_path.clone(),
+                model_profile_id: args.model_profile_id.clone(),
             })
         }
         "update_agent" => {
@@ -116,6 +121,7 @@ fn into_proposal_action(args: &ProposeConfigArgs) -> AppResult<ProposalAction> {
                 tool_scopes: args.tool_scopes.clone(),
                 workspace_path: args.workspace_path.clone(),
                 word_style_profile: args.word_style_profile.clone(),
+                model_profile_id: args.model_profile_id.clone(),
             })
         }
         other => Err(AppError::Validation(format!(
@@ -148,7 +154,7 @@ impl McpClient for ProposeConfigChangeTool {
          用 action='update_agent' + word_style_profile 字段提案——\
          批准一次，之后所有 Word 文档自动遵循。\
          新建 agent：action='create_agent'，填写 id/name/provider/model，\
-         api_key 固定为 '__SLOT__'（用户在审批卡片上填写真实 key）。\
+         优先填 model_profile_id 引用既有模型配置（先用 list_model_profiles 查可用 id/别名/provider/model 并照抄到 provider/model 字段）——用户只需批准、卡片无需填 key；仅当用户要用尚未配置的新凭据时才由用户在卡片手填（api_key 恒为 '__SLOT__'）。\
          \
          修改 agent：action='update_agent'，agent_id 设为当前 agent 自己的 ID\
          （如不确定，先调 read_agent_config 查看）。\
@@ -173,6 +179,10 @@ impl McpClient for ProposeConfigChangeTool {
                     "type": "string",
                     "description": "【create_agent 必填】显示名称（如「代码助手」「翻译官」）。update_agent 可选。"
                 },
+                "model_profile_id": {
+                    "type": "string",
+                    "description": "Preferred: reference an existing model profile by id (see list_model_profiles). The approval card then needs NO key input. Still fill provider/model copied from the referenced profile, and api_key stays '__SLOT__'."
+                },
                 "provider": {
                     "type": "string",
                     "enum": ["anthropic", "openai", "deepseek", "glm", "minimax"],
@@ -184,7 +194,7 @@ impl McpClient for ProposeConfigChangeTool {
                 },
                 "api_key": {
                     "type": "string",
-                    "description": "【create_agent 必填，固定值】必须填 '__SLOT__'。真实 key 由用户在审批卡片上填写。"
+                    "description": "【create_agent 必填，固定值】必须填 '__SLOT__'。真实 key 由用户在审批卡片上填写（引用 model_profile_id 时无需手填）。"
                 },
                 "base_url": {
                     "type": "string",
@@ -417,6 +427,57 @@ fn emit_proposal_cancel(app: &tauri::AppHandle, request_id: &str, conv_id: &str,
 // =========================================================================
 // 单元测试
 // =========================================================================
+
+// =========================================================================
+// list_model_profiles（0.9.3 引用化配套）：提案引用的实体发现——脱敏只读
+// =========================================================================
+
+pub struct ListModelProfilesTool;
+
+#[async_trait]
+impl McpClient for ListModelProfilesTool {
+    fn name(&self) -> &str {
+        "list_model_profiles"
+    }
+
+    fn description(&self) -> &str {
+        "List the user's model profiles (credential entities referenced by agents). Returns \
+         id, alias, provider, model and last health for each - NEVER any api key. Use it \
+         before proposing agent creation/update with model_profile_id (referencing beats \
+         asking the user to retype a key). Show the alias to the user when proposing."
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({ "type": "object", "properties": {} })
+    }
+
+    fn authorization_level(&self) -> AuthorizationLevel {
+        AuthorizationLevel::Always
+    }
+
+    async fn execute(&self, _args: &str) -> AppResult<String> {
+        Err(AppError::Internal(
+            "list_model_profiles 必须通过 execute_with_context 调用".into(),
+        ))
+    }
+
+    async fn execute_with_context(&self, _args: &str, ctx: &ToolContext) -> AppResult<String> {
+        let rows = crate::db::repo::model_profile::list(&ctx.pool).await?;
+        let items: Vec<serde_json::Value> = rows
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "id": r.id,
+                    "alias": r.alias,
+                    "provider": r.provider,
+                    "model": r.model,
+                    "last_health": r.last_health,
+                })
+            })
+            .collect();
+        Ok(serde_json::json!({ "profiles": items }).to_string())
+    }
+}
 
 #[cfg(test)]
 mod tests {

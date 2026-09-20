@@ -44,6 +44,8 @@ export const TOOL_LABELS: Record<string, string> = {
   write_docx: "生成文档",
   validate_docx: "校验文档",
   // 配置与计划
+  list_model_profiles: "列出模型配置",
+
   read_agent_config: "读取配置",
   propose_config_change: "提出配置提案",
   update_plan: "更新计划",
