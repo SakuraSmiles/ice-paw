@@ -10,6 +10,7 @@ import ErrorBanner from "../../components/common/ErrorBanner.vue";
 import { bridge } from "../../api/bridge";
 import { useAgentStore } from "../../stores/agent";
 import { useChatStore } from "../../stores/chat";
+import { useProjectStore, TASK_SCOPE } from "../../stores/project";
 import { msgOf } from "../../utils/errors";
 import { timeAgo } from "../../utils/time";
 import { scheduleLabel } from "../../utils/taskSchedule";
@@ -18,6 +19,7 @@ import type { ScheduledTaskView, TaskRun, TaskScheduleKind } from "../../types";
 const router = useRouter();
 const agentStore = useAgentStore();
 const chatStore = useChatStore();
+const projectStore = useProjectStore();
 
 const tasks = ref<ScheduledTaskView[]>([]);
 const loadError = ref("");
@@ -97,10 +99,11 @@ function toggleNew() {
   }
 }
 
-/** 跳转载体会话（无载体 = 尚未跑过） */
+/** 跳转载体会话（无载体 = 尚未跑过）——任务会话语义上进任务空间 */
 function openConversation(convId: string | null) {
   if (!convId) return;
-  chatStore.selectConversation(convId);
+  projectStore.setActiveProject(TASK_SCOPE);
+  chatStore.selectConversation(convId, true); // keepScope：scope 已显式定为任务空间
   router.push("/");
 }
 

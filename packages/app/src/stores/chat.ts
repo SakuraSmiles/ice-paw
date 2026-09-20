@@ -127,7 +127,7 @@ export const useChatStore = defineStore("chat", () => {
     return true;
   }
 
-  function selectConversation(id: string) {
+  function selectConversation(id: string, keepScope = false) {
     const oldId = activeConvId.value;
     // 离开「正在流式」的会话：把当前流式文本快照到 bgStreams，切回时可恢复。
     // 原地 set（勿整替 Map）：整替会触发 streamingConvIds 的 keys 迭代依赖，
@@ -139,10 +139,14 @@ export const useChatStore = defineStore("chat", () => {
       });
     }
     activeConvId.value = id;
-    // 导航一致性：选中会话时同步项目 scope（侧栏跟随主会话走）。目标会话
-    // 尚不在缓存时跳过（委派子会话后台新建）——由 openConversationAtTrajectory
-    // 在刷新会话列表后补一次同步，此处避免「先切散落再跳回」的闪动。
-    syncProjectScope(id);
+    // 导航一致性（按意图分流，2026-09-20 第一性原理定稿）：默认（跨空间跳转
+    // ——轨迹/委派回父/@ 引用/来件卡）同步 scope 到会话归属（侧栏跟随防错位）；
+    // keepScope=true（空间内导航——侧栏列表点行、启动恢复、切空间自动选中、
+    // 任务会话打开）不覆写——列表本身已是 scope 过滤的产物，点行是空间内操作，
+    // 用户显式选择的 scope 优先于数据推导。目标会话尚不在缓存时跳过（委派
+    // 子会话后台新建）——由 openConversationAtTrajectory 在刷新会话列表后补
+    // 一次同步。
+    if (!keepScope) syncProjectScope(id);
     // 流式态无条件先整体复位（跨会话隔离）：后台快照只追踪 text/thinking，
     // 工具调用/多轮结构不入快照——不复位就会把上一会话的流式状态带进新会话视图。
     resetRoundStreaming();
@@ -1031,7 +1035,7 @@ export const useChatStore = defineStore("chat", () => {
     } else {
       conversations.value.splice(firstUnpinned, 0, conv);
     }
-    selectConversation(conv.id);
+    selectConversation(conv.id, true); // 新会话归当前 scope 创建——scope 已正确
     return conv;
   }
 

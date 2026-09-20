@@ -45,19 +45,16 @@ function selectProject(id: string | null) {
   project.setActiveProject(id);
   if (id === TASK_SCOPE) {
     // 定时任务虚拟空间：无详情页——选最近任务会话回首页（无则欢迎态）。
-    // ⚠️ 顺序：先选会话再定 scope——selectConversation 会按会话所属项目同步
-    // scope（0.9.0 导航一致性），散落载体在此把 scope 覆写回 null；TASK_SCOPE
-    // 必须后置定住，否则侧栏「一闪而过」退回散落。
+    // keepScope 选中（入口通用调用刚设完 scope——散落载体不得覆写哨兵）。
     const tasksConvs = visibleConversations.value.filter((c) => taskConvIds.value.has(c.id));
     if (tasksConvs.length > 0) {
       const latest = tasksConvs.reduce((a, b) =>
         parseDbTime(b.updated_at) > parseDbTime(a.updated_at) ? b : a
       );
-      chat.selectConversation(latest.id);
+      chat.selectConversation(latest.id, true);
     } else {
       chat.clearActiveConversation();
     }
-    project.setActiveProject(TASK_SCOPE);
     router.push("/");
     return;
   }
@@ -73,7 +70,7 @@ function selectProject(id: string | null) {
     const latest = scoped.reduce((a, b) =>
       parseDbTime(b.updated_at) > parseDbTime(a.updated_at) ? b : a
     );
-    chat.selectConversation(latest.id);
+    chat.selectConversation(latest.id, true); // keepScope：调用方刚定完 scope
   } else {
     chat.clearActiveConversation();
   }
@@ -353,7 +350,7 @@ onMounted(async () => {
     );
     project.setActiveProject(plan.projectId);
     if (plan.convId) {
-      chat.selectConversation(plan.convId);
+      chat.selectConversation(plan.convId, true); // keepScope：scope 由恢复计划决定（含 TASK_SCOPE 哨兵）
     } else {
       chat.clearActiveConversation();
     }
@@ -365,11 +362,12 @@ onMounted(async () => {
 });
 
 function selectConv(id: string) {
+  // 空间内导航：侧栏列表点行——scope 永不变（列表即 scope 过滤产物）
   // 非首页（设置 / 项目页）点击会话 → 回首页展示聊天
   if (router.currentRoute.value.name !== "Home") {
     router.push("/");
   }
-  chat.selectConversation(id);
+  chat.selectConversation(id, true); // keepScope：空间内导航
 }
 
 function newChat() {
