@@ -21,10 +21,11 @@ pub async fn create(
     next_run: Option<&str>,
 ) -> AppResult<ScheduledTaskRow> {
     let miss_policy = new_task.miss_policy.as_deref().unwrap_or("run_once");
+    let preauth = new_task.preauth.as_deref().unwrap_or("none");
     let enabled = new_task.enabled.unwrap_or(1);
     sqlx::query(
-        "INSERT INTO scheduled_tasks (id, name, agent_id, schedule_kind, schedule_data, prompt, miss_policy, deliver_to_conv_id, enabled, next_run)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO scheduled_tasks (id, name, agent_id, schedule_kind, schedule_data, prompt, miss_policy, deliver_to_conv_id, preauth, enabled, next_run)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(id)
     .bind(&new_task.name)
@@ -34,6 +35,7 @@ pub async fn create(
     .bind(&new_task.prompt)
     .bind(miss_policy)
     .bind(&new_task.deliver_to_conv_id)
+    .bind(preauth)
     .bind(enabled)
     .bind(next_run)
     .execute(pool)
@@ -84,6 +86,7 @@ pub async fn update(pool: &SqlitePool, upd: &ScheduledTaskUpdate) -> AppResult<(
             prompt = COALESCE(?, prompt),
             miss_policy = COALESCE(?, miss_policy),
             deliver_to_conv_id = COALESCE(?, deliver_to_conv_id),
+            preauth = COALESCE(?, preauth),
             enabled = COALESCE(?, enabled),
             updated_at = datetime('now','localtime')
          WHERE id = ?",
@@ -95,6 +98,7 @@ pub async fn update(pool: &SqlitePool, upd: &ScheduledTaskUpdate) -> AppResult<(
     .bind(&upd.prompt)
     .bind(&upd.miss_policy)
     .bind(&upd.deliver_to_conv_id)
+    .bind(&upd.preauth)
     .bind(upd.enabled)
     .bind(&upd.id)
     .execute(pool)

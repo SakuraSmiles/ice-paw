@@ -545,7 +545,7 @@ const tasks = {
   /** 新建任务（后端校验档位并算首个 next_run；一次性过期时间当场拒收） */
   async create(input: {
     name: string; agent_id: string; schedule_kind: string; schedule_data: string; prompt: string;
-    miss_policy?: string; deliver_to_conv_id?: string | null; enabled?: number;
+    miss_policy?: string; deliver_to_conv_id?: string | null; preauth?: string; enabled?: number;
   }): Promise<import("../types").ScheduledTask> {
     try { return await invoke<import("../types").ScheduledTask>("create_scheduled_task", { input }); }
     catch (err) { throw wrapInvokeError("tasks.create", err); }
@@ -553,7 +553,7 @@ const tasks = {
   /** 部分更新（None 不改；schedule/enabled 变更后端重算 next_run） */
   async update(input: {
     id: string; name?: string; agent_id?: string; schedule_kind?: string; schedule_data?: string;
-    prompt?: string; miss_policy?: string; deliver_to_conv_id?: string | null; enabled?: number;
+    prompt?: string; miss_policy?: string; deliver_to_conv_id?: string | null; preauth?: string; enabled?: number;
   }): Promise<import("../types").ScheduledTask> {
     try { return await invoke<import("../types").ScheduledTask>("update_scheduled_task", { input }); }
     catch (err) { throw wrapInvokeError("tasks.update", err); }

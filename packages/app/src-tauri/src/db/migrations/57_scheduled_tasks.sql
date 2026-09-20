@@ -21,6 +21,10 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
     miss_policy TEXT NOT NULL DEFAULT 'run_once',
     -- NULL = 不转发；转发走 MA-3 deliver（目标会话按其收件政策消费）
     deliver_to_conv_id TEXT,
+    -- 无人值守预授权：none（默认，Confirm 照常弹卡 2 分钟超时拒绝）/
+    -- commands（run_command 免问，委派同款 seed）/ all（本任务会话全部
+    -- Confirm 工具免问——巡检类重工具任务；屏幕家族仍走通道治理不进预授权）
+    preauth TEXT NOT NULL DEFAULT 'none',
     enabled INTEGER NOT NULL DEFAULT 1,
     next_run TEXT,
     last_run_at TEXT,

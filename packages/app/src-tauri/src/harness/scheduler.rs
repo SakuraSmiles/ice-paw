@@ -335,6 +335,55 @@ pub async fn execute_task(
     let conv_id_guard = conv.id.clone();
     let cancel_guard = scopeguard::guard((), |_| chat_state.unregister(&conv_id_guard));
 
+    // --- 无人值守预授权 seed（2026-09-20 拍板三档）：任务 = 用户事先委托的
+    //     自动化，授权范围建任务时划定——治理权最大原则。必须在回合 spawn 前
+    //     完成（委派 4.5 同款时序）；只写载体会话的授权记忆（他处零污染），
+    //     生效路径 = Confirm 级判定的 is_tool_authorized 分支。屏幕家族仍走
+    //     通道治理不进预授权（委派不变式 3 对齐：request_screen_session 排除）。
+    match t.preauth.as_str() {
+        "commands" => {
+            app.state::<crate::harness::authority::AuthSessionRegistry>()
+                .inner()
+                .session_for(&conv.id)
+                .mark_tool_authorized("run_command")
+                .await;
+            tracing::info!(
+                target: "ice_paw.scheduler",
+                task = %t.name,
+                "任务预授权: commands 档（载体会话 run_command 免问）"
+            );
+        }
+        "all" => {
+            let registry = app
+                .state::<std::sync::Arc<crate::harness::mcp::McpRegistry>>()
+                .inner()
+                .clone();
+            let snap = registry.snapshot().await;
+            let mut seeded = 0usize;
+            let session = app
+                .state::<crate::harness::authority::AuthSessionRegistry>()
+                .inner();
+            // 复用 session_for：逐工具 mark（幂等）
+            for (name, tool) in &snap {
+                if *name == "request_screen_session" {
+                    continue; // 屏幕家族走通道治理，不进预授权
+                }
+                if tool.authorization_level()
+                    == crate::harness::mcp::types::AuthorizationLevel::Confirm
+                {
+                    session.session_for(&conv.id).mark_tool_authorized(name).await;
+                    seeded += 1;
+                }
+            }
+            tracing::info!(
+                target: "ice_paw.scheduler",
+                task = %t.name,
+                "任务预授权: all 档（载体会话 {seeded} 个 Confirm 工具免问）"
+            );
+        }
+        _ => {}
+    }
+
     // --- 执行记录（running；载体会话已确定） ---
     let run_id = Uuid::new_v4().to_string();
     task::insert_run(pool, &run_id, &t.id, &conv.id).await?;

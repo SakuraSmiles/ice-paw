@@ -1291,6 +1291,8 @@ export interface ScheduledTask {
   miss_policy: string;
   /** NULL = 不转发 */
   deliver_to_conv_id: string | null;
+  /** 无人值守预授权：none | commands | all */
+  preauth: string;
   enabled: number;
   /** 本地时间 'YYYY-MM-DD HH:MM:SS'；NULL = 一次性任务已完成或未排程 */
   next_run: string | null;

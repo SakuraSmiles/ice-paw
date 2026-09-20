@@ -1359,6 +1359,8 @@ pub struct ScheduledTaskRow {
     pub miss_policy: String,
     /// NULL = 不转发（配置了则跑完经 MA-3 deliver 投摘要到目标会话）
     pub deliver_to_conv_id: Option<String>,
+    /// 无人值守预授权：none | commands | all（见 migration 57 注释）
+    pub preauth: String,
     pub enabled: i32,
     pub next_run: Option<String>,
     pub last_run_at: Option<String>,
@@ -1376,6 +1378,7 @@ pub struct NewScheduledTask {
     pub prompt: String,
     pub miss_policy: Option<String>,
     pub deliver_to_conv_id: Option<String>,
+    pub preauth: Option<String>,
     pub enabled: Option<i32>,
 }
 
@@ -1391,6 +1394,7 @@ pub struct ScheduledTaskUpdate {
     pub prompt: Option<String>,
     pub miss_policy: Option<String>,
     pub deliver_to_conv_id: Option<Option<String>>,
+    pub preauth: Option<String>,
     pub enabled: Option<i32>,
 }
 

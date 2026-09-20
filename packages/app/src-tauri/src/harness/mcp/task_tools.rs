@@ -253,6 +253,9 @@ impl McpClient for CreateScheduledTaskTool {
             prompt: parsed.prompt,
             miss_policy: None,
             deliver_to_conv_id,
+            // 预授权范围是用户治理决策——agent 工具不暴露此参数，恒走默认
+            // none（用户可在设置页为任务改档）
+            preauth: None,
             enabled: None,
         };
         let id = Uuid::new_v4().to_string();

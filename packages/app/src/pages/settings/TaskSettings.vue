@@ -190,12 +190,13 @@ interface Draft {
   prompt: string;
   miss_policy: "run_once" | "skip";
   deliver_to: string | null;
+  preauth: "none" | "commands" | "all";
 }
 
 const draft = reactive<Draft>({
   name: "", agent_id: "", kind: "daily",
   at: "", time: "09:00", weekdays: [1], minutes: 30, expr: "0 0 9 * * *",
-  prompt: "", miss_policy: "run_once", deliver_to: null,
+  prompt: "", miss_policy: "run_once", deliver_to: null, preauth: "none",
 });
 
 function emptyDraft(): void {
@@ -205,7 +206,7 @@ function emptyDraft(): void {
   Object.assign(draft, {
     name: "", agent_id: agentStore.list[0]?.id ?? "",
     kind: "daily", at: "", time: "09:00", weekdays: [1], minutes: 30, expr: "0 0 9 * * *",
-    prompt: "", miss_policy: "run_once", deliver_to: null,
+    prompt: "", miss_policy: "run_once", deliver_to: null, preauth: "none",
   });
 }
 
@@ -227,6 +228,7 @@ function fillDraftFromTask(t: ScheduledTaskView | undefined) {
     prompt: t.prompt,
     miss_policy: (t.miss_policy === "skip" ? "skip" : "run_once") as Draft["miss_policy"],
     deliver_to: t.deliver_to_conv_id,
+    preauth: (["none", "commands", "all"].includes(t.preauth) ? t.preauth : "none") as Draft["preauth"],
   });
 }
 
@@ -262,6 +264,7 @@ async function save() {
       prompt: draft.prompt,
       miss_policy: draft.miss_policy,
       deliver_to_conv_id: draft.deliver_to,
+      preauth: draft.preauth,
     };
     if (draftFor.value) {
       await bridge.tasks.update({ id: draftFor.value, ...payload });
@@ -401,6 +404,14 @@ const deliverTargets = computed(() => chatStore.conversations);
                     <option v-for="c in deliverTargets" :key="c.id" :value="c.id">{{ c.title || c.id }}</option>
                   </select>
                 </div>
+                <div class="field">
+                  <div class="field-label">无人值守</div>
+                  <select v-model="draft.preauth" class="form-input">
+                    <option value="none">工具调用照常确认</option>
+                    <option value="commands">命令免确认</option>
+                    <option value="all">全部工具免确认</option>
+                  </select>
+                </div>
               </div>
               <p class="expand-foot">结果将投递至所选会话。</p>
             </div>
@@ -514,6 +525,14 @@ const deliverTargets = computed(() => chatStore.conversations);
                   <select v-model="draft.deliver_to" class="form-input">
                     <option :value="null">不转发</option>
                     <option v-for="c in deliverTargets" :key="c.id" :value="c.id">{{ c.title || c.id }}</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <div class="field-label">无人值守</div>
+                  <select v-model="draft.preauth" class="form-input">
+                    <option value="none">工具调用照常确认</option>
+                    <option value="commands">命令免确认</option>
+                    <option value="all">全部工具免确认</option>
                   </select>
                 </div>
               </div>
