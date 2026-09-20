@@ -35,6 +35,7 @@ const titleText = computed(() =>
 const descText = computed(() => {
   if (ctaKind.value === "no-agents") return "你还没有创建智能体，先创建一个再开始对话";
   if (ctaKind.value === "no-members") return "该项目还没有成员，先添加成员再开始对话";
+  if (ctaKind.value === "task-empty") return "暂无任务会话——创建定时任务后，执行产生的会话会归到这里";
   if (inProject.value) return "选择一位项目成员开始对话";
   return "选择一位助手开始对话";
 });

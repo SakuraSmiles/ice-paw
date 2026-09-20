@@ -10,7 +10,7 @@
 
 import { ref, computed } from "vue";
 import { useRouter } from "vue-router";
-import { useProjectStore } from "../stores/project";
+import { useProjectStore, TASK_SCOPE } from "../stores/project";
 import { useAgentStore } from "../stores/agent";
 import { useChatStore } from "../stores/chat";
 import { msgOf, stripInvokePrefix } from "../utils/errors";
@@ -38,7 +38,9 @@ export function useNewConversation() {
   );
 
   /** 入口行为：无 agent / 项目无成员 / 正常新建 */
-  const ctaKind = computed<"no-agents" | "no-members" | "new-chat">(() => {
+  const ctaKind = computed<"no-agents" | "no-members" | "new-chat" | "task-empty">(() => {
+    // 定时任务虚拟空间：无「新建对话」语义——引导去设置建任务（载体懒建）
+    if (project.activeProjectId === TASK_SCOPE) return "task-empty";
     if (!hasAgents.value) return "no-agents";
     if (inProject.value && !hasMembers.value) return "no-members";
     return "new-chat";
@@ -46,6 +48,7 @@ export function useNewConversation() {
   const ctaLabel = computed(() => {
     if (ctaKind.value === "no-agents") return "去创建智能体";
     if (ctaKind.value === "no-members") return "去添加成员";
+    if (ctaKind.value === "task-empty") return "去创建定时任务";
     return "新建对话";
   });
 
@@ -66,6 +69,7 @@ export function useNewConversation() {
   function startNew() {
     if (ctaKind.value === "no-agents") { router.push("/settings/agents"); return; }
     if (ctaKind.value === "no-members") { router.push("/projects"); return; }
+    if (ctaKind.value === "task-empty") { router.push("/settings/tasks"); return; }
     const ids = pickerAgentIds.value;
     const count = ids ? ids.length : agent.list.length;
     if (count === 1) {
