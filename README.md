@@ -8,7 +8,7 @@
 
 [![CI](https://github.com/SakuraSmiles/ice-paw/actions/workflows/ci.yml/badge.svg)](https://github.com/SakuraSmiles/ice-paw/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-0.9.2-blue)](https://github.com/SakuraSmiles/ice-paw/releases)
+[![Version](https://img.shields.io/badge/version-0.9.3-blue)](https://github.com/SakuraSmiles/ice-paw/releases)
 
 </div>
 
