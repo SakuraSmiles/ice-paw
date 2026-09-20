@@ -32,7 +32,7 @@
 use std::str::FromStr;
 use std::time::Duration;
 
-use chrono::{Datelike, DateTime, Local, NaiveTime, TimeZone};
+use chrono::{Datelike, DateTime, Local, NaiveTime, TimeZone, Utc};
 use sqlx::SqlitePool;
 use tauri::{AppHandle, Manager};
 use uuid::Uuid;
@@ -209,8 +209,9 @@ pub fn preview_next_runs(spec: &SchedSpec, n: usize) -> Vec<String> {
     out
 }
 
-fn fmt_local(dt: DateTime<Local>) -> String {
-    dt.format("%Y-%m-%d %H:%M:%S").to_string()
+/// 存库格式：本地调度时刻 → UTC 字符串（DB 惯例 UTC 存储；显示层转本地）。
+fn fmt_store(dt: DateTime<Local>) -> String {
+    dt.with_timezone(&Utc).format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
 // =========================================================================
@@ -519,7 +520,7 @@ fn spec_placeholder(kind: &str, data: &str) -> SchedSpec {
 async fn advance_schedule(pool: &SqlitePool, t: &ScheduledTaskRow, spec: &SchedSpec) {
     match next_run_after(spec, Local::now()) {
         Some(next) => {
-            let _ = task::schedule_next(pool, &t.id, Some(&fmt_local(next)), None).await;
+            let _ = task::schedule_next(pool, &t.id, Some(&fmt_store(next)), None).await;
         }
         None => {
             // 一次性任务完成：禁用 + next_run 置空（不删——执行日志保留）
@@ -546,7 +547,7 @@ async fn record_error_run(
 /// tick 扫描并串行执行 due 任务（单循环 = 全局并发 1）。撞忙任务不动 next_run，
 /// 下一轮自然重试。
 async fn sweep_due(app: &AppHandle, pool: &SqlitePool) {
-    let now = task::local_now_str();
+    let now = task::utc_now_str();
     let due = match task::due_tasks(pool, &now).await {
         Ok(d) => d,
         Err(e) => {
@@ -587,7 +588,7 @@ pub fn spawn_scheduler(app: AppHandle, pool: SqlitePool) {
 pub fn spawn_boot_sweep(app: AppHandle, pool: SqlitePool) {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(BOOT_SWEEP_DELAY).await;
-        let now = task::local_now_str();
+        let now = task::utc_now_str();
         let due = match task::due_tasks(&pool, &now).await {
             Ok(d) => d,
             Err(e) => {
@@ -604,7 +605,7 @@ pub fn spawn_boot_sweep(app: AppHandle, pool: SqlitePool) {
                 // 顺延到未来首个时点 + missed 留痕（诚实：错过的次数可查）
                 if let Ok(spec) = parse_spec(&t.schedule_kind, &t.schedule_data) {
                     if let Some(next) = next_run_after(&spec, Local::now()) {
-                        let _ = task::schedule_next(&pool, &t.id, Some(&fmt_local(next)), None).await;
+                        let _ = task::schedule_next(&pool, &t.id, Some(&fmt_store(next)), None).await;
                     } else {
                         let _ = task::schedule_next(&pool, &t.id, None, Some(0)).await;
                     }

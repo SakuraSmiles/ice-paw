@@ -9,9 +9,9 @@ use sqlx::{FromRow, SqlitePool};
 use crate::db::models::{NewScheduledTask, ScheduledTaskRow, ScheduledTaskUpdate, TaskRunRow};
 use crate::error::{AppError, AppResult};
 
-/// 本地时间字符串（DB 惯例格式）。
-pub fn local_now_str() -> String {
-    chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
+/// UTC 时间字符串（全 DB 惯例：UTC 存储，显示层 parseDbTime 转本地）。
+pub fn utc_now_str() -> String {
+    chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
 pub async fn create(
@@ -88,7 +88,7 @@ pub async fn update(pool: &SqlitePool, upd: &ScheduledTaskUpdate) -> AppResult<(
             deliver_to_conv_id = COALESCE(?, deliver_to_conv_id),
             preauth = COALESCE(?, preauth),
             enabled = COALESCE(?, enabled),
-            updated_at = datetime('now','localtime')
+            updated_at = datetime('now')
          WHERE id = ?",
     )
     .bind(&upd.name)
@@ -123,8 +123,8 @@ pub async fn schedule_next(
     let next_run = next_run.map(str::to_string);
     sqlx::query(
         "UPDATE scheduled_tasks
-         SET next_run = ?, last_run_at = datetime('now','localtime'),
-             enabled = COALESCE(?, enabled), updated_at = datetime('now','localtime')
+         SET next_run = ?, last_run_at = datetime('now'),
+             enabled = COALESCE(?, enabled), updated_at = datetime('now')
          WHERE id = ?",
     )
     .bind(&next_run)
@@ -187,7 +187,7 @@ pub async fn finish_run(
 ) -> AppResult<()> {
     sqlx::query(
         "UPDATE task_runs SET status = ?, summary = ?, error = ?,
-            finished_at = datetime('now','localtime') WHERE id = ?",
+            finished_at = datetime('now') WHERE id = ?",
     )
     .bind(status)
     .bind(summary)

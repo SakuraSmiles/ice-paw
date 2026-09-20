@@ -2,7 +2,8 @@
 -- 设计真相源 docs/scheduled-tasks-design.md（2026-09-19 拍板六点）。
 -- 载体 = 仅专属会话懒建（target_conv_id 首跑物化时回写）；结果可配置转发投递
 -- （deliver_to_conv_id 走 MA-3 通道）；错过策略任务级（run_once 补跑一次 / skip 顺延）。
--- next_run 为本地时间字符串 'YYYY-MM-DD HH:MM:SS'（字典序比较即可判 due）；
+-- 时间戳全 UTC 存储（datetime('now')，对齐全 DB 惯例——parseDbTime 按 UTC 解析转本地显示）；
+-- 调度计算按本地语义（用户输入 09:00 = 本地九点），存库时 Local→UTC 转换。
 -- 一次性任务完成后置 NULL 并禁用（NULL 不命中 due 扫描）。
 
 CREATE TABLE IF NOT EXISTS scheduled_tasks (
@@ -28,8 +29,8 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
     enabled INTEGER NOT NULL DEFAULT 1,
     next_run TEXT,
     last_run_at TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS task_runs (
@@ -40,7 +41,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
     status TEXT NOT NULL,
     summary TEXT,
     error TEXT,
-    started_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    started_at TEXT NOT NULL DEFAULT (datetime('now')),
     finished_at TEXT
 );
 

@@ -12,7 +12,7 @@ import { useAgentStore } from "../../stores/agent";
 import { useChatStore } from "../../stores/chat";
 import { useProjectStore, TASK_SCOPE } from "../../stores/project";
 import { msgOf } from "../../utils/errors";
-import { timeAgo } from "../../utils/time";
+import { formatDate, formatTime, parseDbTime, timeAgo } from "../../utils/time";
 import { scheduleLabel } from "../../utils/taskSchedule";
 import type { ScheduledTaskView, TaskRun, TaskScheduleKind } from "../../types";
 
@@ -40,6 +40,15 @@ const statusLabel = (s: string) =>
 /** 状态 → health-chip 语义档（族内四档：success/warning/danger/neutral） */
 const statusTone = (s: string) =>
   ({ running: "warning", done: "success", error: "danger", missed: "neutral" }[s] ?? "neutral");
+
+/** 下次运行的 hover 绝对时（DB 存 UTC——parseDbTime 转本地格式化，勿裸出原串） */
+function nextRunTitle(nextRun: string | null): string | undefined {
+  if (!nextRun) return undefined;
+  try {
+    const d = parseDbTime(nextRun);
+    return `${formatDate(d.toISOString())} ${formatTime(d.toISOString())}`;
+  } catch { return nextRun; }
+}
 
 const agentName = (id: string) => agentStore.list.find((a) => a.id === id)?.name ?? "（已删除）";
 const convTitle = (id: string | null) =>
@@ -445,7 +454,7 @@ const deliverTargets = computed(() => chatStore.conversations);
               <div class="row-title">
                 <Clock :size="13" class="card-clock" />
                 <span class="card-name">{{ t.name }}</span>
-                <span class="next-run" :title="t.next_run ?? undefined">
+                <span class="next-run" :title="nextRunTitle(t.next_run)">
                   {{ t.enabled ? (t.next_run ? `下次 ${timeAgo(t.next_run)}` : "已完成") : "已停用" }}
                 </span>
               </div>

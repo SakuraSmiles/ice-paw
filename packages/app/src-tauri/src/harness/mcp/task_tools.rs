@@ -263,7 +263,7 @@ impl McpClient for CreateScheduledTaskTool {
             &ctx.pool,
             &id,
             &new_task,
-            Some(&next_run.format("%Y-%m-%d %H:%M:%S").to_string()),
+            Some(&next_run.with_timezone(&chrono::Utc).format("%Y-%m-%d %H:%M:%S").to_string()),
         )
         .await?;
 
@@ -555,7 +555,7 @@ impl McpClient for UpdateScheduledTaskTool {
         task::schedule_next(
             &ctx.pool,
             &existing.id,
-            Some(&next_run.format("%Y-%m-%d %H:%M:%S").to_string()),
+            Some(&next_run.with_timezone(&chrono::Utc).format("%Y-%m-%d %H:%M:%S").to_string()),
             None,
         )
         .await?;

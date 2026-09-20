@@ -8,7 +8,6 @@
 // 恰一次语义）。
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useRouter } from "vue-router";
-import { Clock } from "@lucide/vue";
 import {
   isPermissionGranted,
   requestPermission,
@@ -91,19 +90,22 @@ const visible = computed(() => !!lastRun.value || !!nextTask.value);
 
 const statusTitle = (s: string) =>
   ({ done: "已完成", running: "运行中", error: "失败", missed: "已错过" }[s] ?? s);
+/** 状态胶囊语义档（health-chip 同四档 + next 主色） */
+const statusTone = (s: string) =>
+  ({ running: "warn", done: "ok", error: "danger", missed: "muted" }[s] ?? "muted");
 </script>
 
 <template>
   <div v-if="visible" class="task-entry">
-    <!-- 上行：最近一次执行（状态点 + 名 + 相对时） -->
+    <!-- 上行：最近一次执行（状态胶囊 + 名 + 相对时） -->
     <button v-if="lastRun" class="entry-line" title="定时任务" @click="router.push('/settings/tasks')">
-      <span :class="['dot', lastRun.status]" :title="statusTitle(lastRun.status)" />
+      <span :class="['tag', `tag--${statusTone(lastRun.status)}`]">{{ statusTitle(lastRun.status) }}</span>
       <span class="entry-name">{{ lastRun.task_name }}</span>
       <span class="entry-time">{{ timeAgo(lastRun.started_at) }}</span>
     </button>
-    <!-- 下行：最近一次将要执行（Clock + 名 + 预告） -->
+    <!-- 下行：最近一次将要执行（「下一次」胶囊 + 名 + 预告）——胶囊等宽两行对齐 -->
     <button v-if="nextTask" class="entry-line" title="定时任务" @click="router.push('/settings/tasks')">
-      <Clock :size="12" class="entry-icon" />
+      <span class="tag tag--next">下一次</span>
       <span class="entry-name">{{ nextTask.name }}</span>
       <span class="entry-time">{{ timeUntil(nextTask.next_run!) }}</span>
     </button>
@@ -113,9 +115,8 @@ const statusTitle = (s: string) =>
         v-for="r in recent" :key="r.run_id"
         class="pop-row" @click="router.push('/settings/tasks')"
       >
-        <span :class="['dot', r.status]" :title="statusTitle(r.status)" />
+        <span :class="['tag', `tag--${statusTone(r.status)}`]">{{ statusTitle(r.status) }}</span>
         <span class="pop-name">{{ r.task_name }}</span>
-        <span class="pop-status">{{ statusTitle(r.status) }}</span>
         <span class="pop-time">{{ timeAgo(r.started_at) }}</span>
       </button>
       <button class="pop-manage" @click="router.push('/settings/tasks')">管理定时任务…</button>
@@ -131,15 +132,22 @@ const statusTitle = (s: string) =>
 .entry-line:hover { background-color: var(--ip-color-bg-tertiary); color: var(--ip-color-text-primary); }
 .entry-line:hover ~ .entry-pop, .entry-pop:hover { opacity: 1; visibility: visible; transform: translateY(0); }
 
-.entry-icon { flex-shrink: 0; color: var(--ip-color-icon-muted); }
+/* 状态胶囊（两行统一形态）：等宽 min-width 保证名字起点对齐 */
+.tag {
+  flex-shrink: 0;
+  min-width: 3.6em;
+  text-align: center;
+  line-height: 1.4;
+  font-size: var(--ip-text-micro-size);
+  color: var(--ip-color-text-disabled);
+}
+.tag--ok { color: var(--ip-success-text); }
+.tag--danger { color: var(--ip-danger-text); }
+.tag--warn { color: var(--ip-warning-text); }
+.tag--muted { color: var(--ip-color-text-disabled); }
+.tag--next { color: var(--ip-primary-600); }
 .entry-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ip-color-text-primary); }
 .entry-time { flex-shrink: 0; color: var(--ip-color-text-disabled); }
-
-.dot { flex-shrink: 0; width: 6px; height: 6px; border-radius: 50%; }
-.dot.done { background: var(--ip-success-base, #107757); }
-.dot.running { background: var(--ip-primary-500); }
-.dot.error { background: var(--ip-danger-base); }
-.dot.missed { background: var(--ip-warning-base, #926c12); }
 
 /* hover 面板：绝对定位于入口上方（footer 区在底部），与收起态 flyout 同 z 档 */
 .entry-pop { position: absolute; bottom: calc(100% + 4px); left: 0; right: 0; z-index: var(--ip-z-dropdown, 100); display: flex; flex-direction: column; padding: var(--ip-spacing-1_5); border: 1px solid var(--ip-color-border-default); border-radius: var(--ip-radius-md); background: var(--ip-color-bg-secondary); box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14); opacity: 0; visibility: hidden; transform: translateY(4px); transition: opacity var(--ip-duration-fast) var(--ip-ease-out), transform var(--ip-duration-fast) var(--ip-ease-out), visibility var(--ip-duration-fast); }
@@ -147,7 +155,6 @@ const statusTitle = (s: string) =>
 .pop-row { display: flex; align-items: center; gap: 6px; padding: var(--ip-spacing-1_5) var(--ip-spacing-2); border: none; border-radius: var(--ip-radius-sm); background: transparent; color: var(--ip-color-text-secondary); font: inherit; font-size: var(--ip-text-micro-size); cursor: pointer; text-align: left; }
 .pop-row:hover { background: var(--ip-color-bg-tertiary); }
 .pop-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ip-color-text-primary); }
-.pop-status { flex-shrink: 0; color: var(--ip-color-text-disabled); }
 .pop-time { flex-shrink: 0; color: var(--ip-color-text-disabled); }
 .pop-manage { margin-top: 2px; padding: var(--ip-spacing-1_5) var(--ip-spacing-2); border: none; border-top: 1px solid var(--ip-color-border-default); background: transparent; color: var(--ip-primary-600); font: inherit; font-size: var(--ip-text-micro-size); cursor: pointer; text-align: left; }
 .pop-manage:hover { color: var(--ip-primary-700, var(--ip-primary-600)); }

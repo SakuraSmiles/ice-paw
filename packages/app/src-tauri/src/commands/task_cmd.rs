@@ -34,8 +34,9 @@ pub struct TaskView {
 /// 侧栏快速入口视图：跨任务最近执行（含任务名）。
 pub use crate::db::repo::task::RecentRunView;
 
-fn fmt_local(dt: chrono::DateTime<chrono::Local>) -> String {
-    dt.format("%Y-%m-%d %H:%M:%S").to_string()
+/// 存库格式：本地时刻 → UTC 字符串（DB 惯例 UTC 存储）。
+fn fmt_store(dt: chrono::DateTime<chrono::Local>) -> String {
+    dt.with_timezone(&chrono::Utc).format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
 /// 校验档位并算首个 next_run（enabled 任务必非空；一次性过期时间拒收——
@@ -46,7 +47,7 @@ fn first_next_run(kind: &str, data: &str, enabled: bool) -> AppResult<Option<Str
         return Ok(None);
     }
     match scheduler::next_run_after(&spec, chrono::Local::now()) {
-        Some(next) => Ok(Some(fmt_local(next))),
+        Some(next) => Ok(Some(fmt_store(next))),
         None => Err(AppError::Internal(
             "一次性任务的时间已在过去——请选未来时间，或创建后点「立即运行」".into(),
         )),
