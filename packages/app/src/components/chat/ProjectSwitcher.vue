@@ -5,6 +5,8 @@
 // 开关态（isOpen）与快速新建表单态内部自持；select / create / manage / open
 // 通过 emit 上交 Sidebar 处理。
 import { ref, computed, nextTick } from "vue";
+import { Clock } from "@lucide/vue";
+import { TASK_SCOPE } from "../../stores/project";
 import { Folder, FolderPlus, List } from "@lucide/vue";
 import type { Project } from "../../types";
 
@@ -43,6 +45,7 @@ function onManage() {
 /** 名称区点击 → 项目详情页（散落态按钮 disabled，防御性兜底） */
 function onOpenDetail() {
   if (!props.scopeProjectId) return;
+  if (props.scopeProjectId === TASK_SCOPE) return; // 虚拟空间无详情页
   emit("open", props.scopeProjectId);
 }
 
@@ -117,7 +120,7 @@ function confirmCreate() {
           class="proj-name"
           :class="{ scoped: isScoped }"
           :disabled="!isScoped"
-          :title="isScoped ? `${currentProjectName}——点击查看项目详情` : '散落会话：不属于任何项目的会话'"
+          :title="scopeProjectId === TASK_SCOPE ? '定时任务：定时执行的任务会话' : isScoped ? `${currentProjectName}——点击查看项目详情` : '散落会话：不属于任何项目的会话'"
           @click="onOpenDetail"
         >
           <!-- 圆点（scoped=主色，散落=灰点；头像/主题色功能已移除，纯状态标记） -->
@@ -220,6 +223,14 @@ function confirmCreate() {
           <span class="item-mark"><span class="item-dot muted" /></span>
           <span class="item-name">散落会话</span>
           <svg v-if="!isScoped" class="item-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="20 6 9 17 4 12" />
+          </svg>
+        </button>
+        <!-- 定时任务虚拟空间（0.9.20）：列表 = 全部任务载体会话 -->
+        <button class="switcher-item" :class="{ active: scopeProjectId === TASK_SCOPE }" @click="onSelect(TASK_SCOPE)">
+          <span class="item-mark"><Clock :size="13" class="item-clock" /></span>
+          <span class="item-name">定时任务</span>
+          <svg v-if="scopeProjectId === TASK_SCOPE" class="item-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="20 6 9 17 4 12" />
           </svg>
         </button>
@@ -552,6 +563,7 @@ function confirmCreate() {
   height: 8px;
 }
 
+.item-clock { color: var(--ip-color-text-tertiary); }
 .switcher-list {
   padding: var(--ip-spacing-1_5);
   display: flex;

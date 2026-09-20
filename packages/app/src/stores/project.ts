@@ -1,6 +1,11 @@
 // 项目（Project）状态管理
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
+
+/** 定时任务虚拟空间哨兵（2026-09-20）：项目切换器「散落会话」下的第三类
+ *  scope——侧栏列表 = 全部定时任务载体会话。非真实项目 id：activeProject
+ * 恒 null、不进项目校验/详情页/恢复降级逻辑的普通分支（各处显式放行）。 */
+export const TASK_SCOPE = "__scheduled_tasks__";
 import type { Project, NewProject, UpdateProject, ProjectContext } from "../types";
 import { bridge } from "../api/bridge";
 
@@ -25,7 +30,8 @@ export const useProjectStore = defineStore("project", () => {
         list.value = await bridge.projects.list();
         loaded.value = true;
         // 校验 activeProjectId：若指向已删除/归档的项目则清空，避免 app 处于"已选项目但找不到"的无效状态
-        if (activeProjectId.value && !list.value.some((p) => p.id === activeProjectId.value)) {
+        // （定时任务哨兵 scope 不是项目 id，跳过校验）
+        if (activeProjectId.value && activeProjectId.value !== TASK_SCOPE && !list.value.some((p) => p.id === activeProjectId.value)) {
           setActiveProject(null);
         }
       } catch (e) {
@@ -43,6 +49,10 @@ export const useProjectStore = defineStore("project", () => {
   function setActiveProject(id: string | null): void {
     if (id === null) {
       activeProjectId.value = null;
+      return;
+    }
+    if (id === TASK_SCOPE) {
+      activeProjectId.value = TASK_SCOPE;
       return;
     }
     if (!loaded.value) {

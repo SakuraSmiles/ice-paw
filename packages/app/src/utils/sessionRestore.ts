@@ -76,6 +76,8 @@ export interface RestoreConvLike {
  * 「所属项目未归档」过滤一遍（activeProjectIds = 未归档项目 id 集）；
  * allProjectIds = 全量项目 id 集（含归档）——route 守卫判「已永久删除」用。
  */
+import { TASK_SCOPE } from "../stores/project";
+
 export function planRestore(
   saved: LastSessionState | null,
   convs: RestoreConvLike[],
@@ -142,6 +144,8 @@ function latestValid(
 
 /** scope 指向已归档/已删项目时降级散落 */
 function scopeOrNull(pid: string | null, activeProjectIds: ReadonlySet<string>): string | null {
+  // 定时任务虚拟空间哨兵不是项目 id，显式放行（重启忠实还原 task scope）
+  if (pid === TASK_SCOPE) return TASK_SCOPE;
   return pid !== null && activeProjectIds.has(pid) ? pid : null;
 }
 

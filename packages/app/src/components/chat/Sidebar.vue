@@ -3,6 +3,7 @@
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { useProjectStore } from "../../stores/project";
+import { TASK_SCOPE } from "../../stores/project";
 import { parseDbTime, timeAgo } from "../../utils/time";
 import ErrorBanner from "../common/ErrorBanner.vue";
 import { msgOf, stripInvokePrefix } from "../../utils/errors";
@@ -35,11 +36,27 @@ const isChatRoute = computed(() => router.currentRoute.value.name === "Home");
 // 会话列表 scope 唯一真相源：当前选中的项目空间（null = 散落会话）。
 // 与路由解耦：在项目里点开会话去首页聊天时，侧栏仍保持该项目 scope，不会闪回散落。
 const scopeProjectId = computed(() => project.activeProjectId);
-const currentProjectName = computed(() => project.activeProject?.name ?? "散落会话");
+const currentProjectName = computed(() =>
+  project.activeProjectId === TASK_SCOPE ? "定时任务" : project.activeProject?.name ?? "散落会话",
+);
 
 // ProjectSwitcher 的 select/manage 上交处理（开关态由组件内部自持）
 function selectProject(id: string | null) {
   project.setActiveProject(id);
+  if (id === TASK_SCOPE) {
+    // 定时任务虚拟空间：无详情页——选最近任务会话回首页（无则欢迎态）
+    const tasksConvs = visibleConversations.value.filter((c) => taskConvIds.value.has(c.id));
+    if (tasksConvs.length > 0) {
+      const latest = tasksConvs.reduce((a, b) =>
+        parseDbTime(b.updated_at) > parseDbTime(a.updated_at) ? b : a
+      );
+      chat.selectConversation(latest.id);
+    } else {
+      chat.clearActiveConversation();
+    }
+    router.push("/");
+    return;
+  }
   if (id !== null) {
     // 切项目 → 直达项目详情页（2026-08-18 用户拍板）：先看台账/轨迹再进会话；
     // 会话上下文不动，从详情页点侧栏会话照常回首页
@@ -209,11 +226,37 @@ const restorableConversations = computed(() =>
   chat.conversations.filter((c) => isUserChat(c) || c.kind === "channel"),
 );
 
+// ===== 定时任务虚拟空间（0.9.20）：任务载体会话归 TASK_SCOPE 独占渲染 =====
+// 识别靠 scheduled_tasks.target_conv_id 集合（不改 conversations.kind——任务
+// 会话仍是 kind='chat'，回合工具面/inbox/steer 语义全部不动，仅侧栏呈现层
+// 归组）。tasks 列表 60s 轻轮询（新任务懒建载体后侧栏回显）。
+const taskConvIds = ref<Set<string>>(new Set());
+let taskConvTimer: ReturnType<typeof setInterval> | null = null;
+async function loadTaskConvIds() {
+  try {
+    const list = await bridge.tasks.list();
+    taskConvIds.value = new Set(
+      list.map((t) => t.target_conv_id).filter((x): x is string => !!x),
+    );
+  } catch { /* 非关键路径，下轮再试 */ }
+}
+onMounted(() => {
+  loadTaskConvIds();
+  taskConvTimer = setInterval(loadTaskConvIds, 60_000);
+});
+onUnmounted(() => { if (taskConvTimer) clearInterval(taskConvTimer); });
+const isTaskScope = computed(() => scopeProjectId.value === TASK_SCOPE);
+
 const scopedConversations = computed(() => {
   const pid = scopeProjectId.value;
-  return pid === null
+  if (pid === TASK_SCOPE) {
+    // 定时任务虚拟空间：全部任务载体会话（跨项目；散落/项目 scope 亦排除之）
+    return visibleConversations.value.filter((c) => taskConvIds.value.has(c.id));
+  }
+  const base = pid === null
     ? visibleConversations.value.filter((c) => !c.project_id)
     : visibleConversations.value.filter((c) => c.project_id === pid);
+  return base.filter((c) => !taskConvIds.value.has(c.id));
 });
 
 // =========================================================================
@@ -448,7 +491,7 @@ function timeAgoLabel(dateStr: string): string {
            归档频道时不渲染（孤立分割线无语义分组可标） -->
       <div v-if="scopeProjectId || archivedChannels.length > 0" class="conv-divider before-new-chat"></div>
 
-      <button class="conv-item conv-item-new" @click="newChat">
+      <button v-if="!isTaskScope" class="conv-item conv-item-new" @click="newChat">
         <div class="conv-item-title">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <line x1="12" y1="5" x2="12" y2="19" />
@@ -476,7 +519,8 @@ function timeAgoLabel(dateStr: string): string {
       </div>
       <div v-else-if="scopedConversations.length === 0 && agent.loaded" key="conv-empty-scope" class="conv-empty">
         <!-- 空态即引导：全新用户给出下一步方向，「新建对话」按钮此刻的行为就是去创建智能体 -->
-        <template v-if="ctaKind === 'no-agents'">还没有智能体——点上方「新建对话」先创建一个</template>
+        <template v-if="isTaskScope">暂无任务会话——创建定时任务后自动生成</template>
+        <template v-else-if="ctaKind === 'no-agents'">还没有智能体——点上方「新建对话」先创建一个</template>
         <template v-else>{{ scopeProjectId ? "项目内暂无对话" : "暂无对话" }}</template>
       </div>
 

@@ -87,13 +87,13 @@ describe("ProjectSwitcher 胶囊形态", () => {
     // 菜单常驻 DOM（class 驱动开合），断言 open 类
     expect(w.find(".switcher-menu").classes()).toContain("open");
     expect(w.find(".switcher-overlay").classes()).toContain("open");
-    expect(w.findAll(".switcher-item").length).toBe(3); // 散落 + 2 项目
+    expect(w.findAll(".switcher-item").length).toBe(4); // 散落 + 定时任务 + 2 项目
     // 菜单行圆点接线：项目行主色圆点、散落行 muted 灰点（均无内联色）
-    expect(w.findAll(".switcher-item .item-dot").length).toBe(3); // 散落 + 2 项目
+    expect(w.findAll(".switcher-item .item-dot").length).toBe(3); // 散落 + 2 项目（定时任务项是 Clock 图标无 dot）
     expect(w.find(".switcher-item .item-dot.muted").exists()).toBe(true);
     expect(w.findAll(".switcher-item .item-dot")[1].attributes("style")).toBeUndefined();
 
-    await w.findAll(".switcher-item")[2].trigger("click"); // Beta
+    await w.findAll(".switcher-item")[3].trigger("click"); // Beta（0 散落/1 定时任务/2 Alpha/3 Beta）
     expect(w.emitted("select")?.[0]).toEqual(["p2"]);
     expect(w.find(".switcher-menu").classes()).not.toContain("open");
     expect(w.find(".switcher-overlay").classes()).not.toContain("open");

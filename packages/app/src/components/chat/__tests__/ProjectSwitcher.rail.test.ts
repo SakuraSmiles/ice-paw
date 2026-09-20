@@ -48,15 +48,15 @@ describe("ProjectSwitcher 收起态（rail）", () => {
     expect(w.find(".switcher-rail-btn").attributes("title")).toContain("Alpha");
   });
 
-  it("图标钮开菜单：列表原班（散落 + 2 项目），选中 emit select 并自关", async () => {
+  it("图标钮开菜单：列表原班（散落 + 定时任务 + 2 项目），选中 emit select 并自关", async () => {
     const w = mountRail();
     await w.find(".switcher-rail-btn").trigger("click");
     const menu = w.find(".switcher-menu");
     expect(menu.classes()).toContain("open");
     expect(w.find(".switcher-overlay").classes()).toContain("open");
-    expect(w.findAll(".switcher-item").length).toBe(3);
+    expect(w.findAll(".switcher-item").length).toBe(4); // 散落 + 定时任务虚拟空间 + 2 项目
 
-    await w.findAll(".switcher-item")[2].trigger("click"); // Beta
+    await w.findAll(".switcher-item")[3].trigger("click"); // Beta（0 散落/1 定时任务/2 Alpha/3 Beta）
     expect(w.emitted("select")?.[0]).toEqual(["p2"]);
     expect(menu.classes()).not.toContain("open");
     expect(w.find(".switcher-overlay").classes()).not.toContain("open");
@@ -104,7 +104,7 @@ describe("ProjectSwitcher 收起态（rail）", () => {
     await w.find('.menu-action-btn[title="快速新建项目"]').trigger("click");
     await w.find(".menu-create-row .create-input").setValue("半截输入");
 
-    await w.findAll(".switcher-item")[2].trigger("click"); // Beta
+    await w.findAll(".switcher-item")[3].trigger("click"); // Beta（0 散落/1 定时任务/2 Alpha/3 Beta）
     expect(w.emitted("select")?.[0]).toEqual(["p2"]);
     expect(w.emitted("create")).toBeUndefined();
     expect(w.find(".switcher-menu").classes()).not.toContain("open");
