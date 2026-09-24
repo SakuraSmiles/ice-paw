@@ -581,7 +581,7 @@ mod tests {
     }
 
     async fn make_ctx(conv: &str) -> ToolContext {
-        ToolContext {
+        let ctx = ToolContext {
             tool_use_id: None,
             conv_id: conv.into(),
             agent_id: "a1".into(),
@@ -593,7 +593,19 @@ mod tests {
             proposal_registry: None,
             turn_id: None,
             cancel: None,
-        }
+        };
+        // Off 提议制（2026-09-24）：工具在通道 Off 时一律家族错误——测试态
+        // 统一预开通道（= 用户已批准共享的等价态；串行测试无跨用例泄漏问题，
+        // global 单例被后续用例的 open 幂等覆盖）
+        crate::harness::mcp::screen::channel::global().open_for_test(
+            conv,
+            crate::harness::mcp::screen::channel::AttachInfo {
+                agent_name: "测试".into(),
+                conv_title: "测试会话".into(),
+                purpose: "测试".into(),
+            },
+        );
+        ctx
     }
 
     #[tokio::test]

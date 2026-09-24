@@ -642,16 +642,16 @@ mod tests {
 
     #[test]
     fn probe_candidates_glm_falls_back_to_coding() {
-        // 未显式指定：智谱按 标准 → Coding 顺序回退（key 不通用，自动匹配）
+        // 未显式指定：默认 Coding Plan → 标准端点回退（2026-09-24 拍板反转）
         let glm = info("glm");
         let c = probe_candidates(&glm, None);
         assert_eq!(c.len(), 2);
-        assert_eq!(c[0].1, "https://open.bigmodel.cn/api/paas/v4");
+        assert_eq!(c[0].1, "https://open.bigmodel.cn/api/coding/paas/v4");
         assert_eq!(
             c[1],
             (
-                "Coding 端点".to_string(),
-                "https://open.bigmodel.cn/api/coding/paas/v4".to_string()
+                "标准端点".to_string(),
+                "https://open.bigmodel.cn/api/paas/v4".to_string()
             )
         );
         // 无备选的 provider：单候选

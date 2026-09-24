@@ -324,6 +324,27 @@ impl ModelProfileCmd for SqlModelProfileCmd {
             );
         }
 
+        // 引用 agent 快照列同步回写（2026-09-24 用户实案：改实体后会话头仍显
+        // 旧模型——四列快照「值变才回写」原只在下次对话的 get_with_credentials
+        // 发生，滞后窗口内配置页 A / 会话头 B 不一致且规律难总结）。warn-only
+        // 不阻塞保存（失败回落旧行为：下次对话补写）。
+        let sync_url = row.base_url.clone();
+        if let Err(e) = repo::agent::update_model_snapshot_by_profile(
+            &self.pool,
+            &row.id,
+            &row.provider,
+            &row.model,
+            sync_url.as_deref(),
+        )
+        .await
+        {
+            tracing::warn!(
+                target: "ice_paw.model_profile",
+                "profile {} 更新后同步引用 agent 快照失败（下次对话补写）: {e}",
+                row.id
+            );
+        }
+
         Ok(self.profile_dto(row))
     }
 
@@ -809,10 +830,10 @@ mod tests {
     fn profile_url_follows_provider_on_switch() {
         // 未换厂商：不注入默认地址（保持「不改」语义）
         assert_eq!(default_url_on_provider_switch(false, Some("glm")), None);
-        // 换厂商：注册表默认地址
+        // 换厂商：注册表默认地址（默认 = Coding Plan，2026-09-24 拍板）
         assert_eq!(
             default_url_on_provider_switch(true, Some("glm")).as_deref(),
-            Some("https://open.bigmodel.cn/api/paas/v4")
+            Some("https://open.bigmodel.cn/api/coding/paas/v4")
         );
         // custom / 未知 → None（保持不改）
         assert_eq!(default_url_on_provider_switch(true, Some("custom")), None);

@@ -73,7 +73,7 @@ fn switch_base_url_follows_provider() {
     // 换厂商：注册表默认地址（端点跟随厂商，防 DB 残留旧厂商 URL）
     assert_eq!(
         default_url_on_provider_switch(true, Some("glm")).as_deref(),
-        Some("https://open.bigmodel.cn/api/paas/v4")
+        Some("https://open.bigmodel.cn/api/coding/paas/v4") // 默认 = Coding Plan（2026-09-24 拍板）
     );
     assert_eq!(
         default_url_on_provider_switch(true, Some("deepseek")).as_deref(),

@@ -352,6 +352,31 @@ pub async fn delete(pool: &SqlitePool, id: &str) -> AppResult<()> {
     Ok(())
 }
 
+pub async fn update_model_snapshot_by_profile(
+    pool: &SqlitePool,
+    model_profile_id: &str,
+    provider: &str,
+    model: &str,
+    base_url: Option<&str>,
+) -> AppResult<u64> {
+    let affected = sqlx::query(
+        "UPDATE agents SET provider = ?, model = ?, base_url = ?
+          WHERE model_profile_id = ?
+            AND (provider IS NOT ? OR model IS NOT ? OR base_url IS NOT ?)",
+    )
+    .bind(provider)
+    .bind(model)
+    .bind(base_url)
+    .bind(model_profile_id)
+    .bind(provider)
+    .bind(model)
+    .bind(base_url)
+    .execute(pool)
+    .await?
+    .rows_affected();
+    Ok(affected)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

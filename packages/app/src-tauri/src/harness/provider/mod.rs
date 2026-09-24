@@ -102,10 +102,12 @@ const PROVIDERS: &[ProviderDesc] = &[
         models: &["gpt-4o", "gpt-4o-mini", "o3-mini", "gpt-4.1", "gpt-4.1-mini"],
     },
     ProviderDesc {
-        name: "glm", protocol: ProviderProtocol::OpenAI, default_url: "https://open.bigmodel.cn/api/paas/v4",
-        openai_url: Some("https://open.bigmodel.cn/api/paas/v4"),
-        alt_urls: &[("Coding 端点", "https://open.bigmodel.cn/api/coding/paas/v4")],
-        label: "智谱", note: Some("GLM 系列；标准/Coding 端点可切换，Coding 套餐请选 Coding 端点；5.3 系思考常开不可关"),
+        // 默认走 Coding Plan 端点（2026-09-24 用户拍板：本人 Coding 套餐，
+        // 标准端点转为备选——存量空 base_url 的配置自动跟随新默认）
+        name: "glm", protocol: ProviderProtocol::OpenAI, default_url: "https://open.bigmodel.cn/api/coding/paas/v4",
+        openai_url: Some("https://open.bigmodel.cn/api/paas/v4"), // 兼容族推导（embedding/视觉）固定标准端点——Coding 端点无 embeddings API
+        alt_urls: &[("标准端点", "https://open.bigmodel.cn/api/paas/v4")],
+        label: "智谱", note: Some("GLM 系列；默认 Coding Plan 端点，标准套餐请切「标准端点」；5.3 系思考常开不可关"),
         requires_key: true, requires_base_url: false,
         key_url: Some("https://open.bigmodel.cn/usercenter/proj-mgmt/apikeys"),
         hidden: false,
@@ -396,7 +398,7 @@ mod tests {
         // GLM 双端点：标准 paas 与 Coding Plan 订阅端点必须可区分（key 不通用）
         assert_eq!(
             default_base_url("glm"),
-            "https://open.bigmodel.cn/api/paas/v4"
+            "https://open.bigmodel.cn/api/coding/paas/v4"
         );
         assert_eq!(
             default_base_url("glm-coding"),
@@ -443,8 +445,8 @@ mod tests {
         assert_eq!(
             glm.alt_urls,
             vec![(
-                "Coding 端点".to_string(),
-                "https://open.bigmodel.cn/api/coding/paas/v4".to_string()
+                "标准端点".to_string(),
+                "https://open.bigmodel.cn/api/paas/v4".to_string()
             )]
         );
         for i in &infos {

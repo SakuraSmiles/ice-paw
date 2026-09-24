@@ -73,6 +73,16 @@ pub const WRITE_TOOLS: &[&str] = &[
     "press_key",
 ];
 
+// 测试旁路标志：仅 open_for_test（工具级测试的 make_ctx）置位——并行
+// cargo test 共享全局单例会互相抢令牌（无超时 park = 挂死整轮），工具测试
+// 要验的是工具逻辑非排队仲裁。channel.rs 内部仲裁语义测试用独立
+// ScreenChannel::new() 且不置位，排队行为保持真实（thread-local 按测试
+// 线程隔离）。
+#[cfg(test)]
+thread_local! {
+    static TEST_SKIP_ARBITRATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// 附着会话信息（HUD「谁在用」；步骤 1 无 HUD，先供状态事件与日志）。
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AttachInfo {
@@ -290,6 +300,21 @@ impl ScreenChannel {
         newly
     }
 
+    /// 测试辅助：与 [`open`](Self::open) 同态但不装人类优先钩子（LL 全局钩子
+    /// 在测试进程会挂死 cargo test——测试环境无物理输入语义，跳过安装）。
+    #[cfg(test)]
+    pub fn open_for_test(&self, conv_id: &str, info: AttachInfo) {
+        TEST_SKIP_ARBITRATION.with(|f| f.set(true));
+        let mut g = self.lock();
+        let active = g.get_or_insert_with(Active::new);
+        active.attached.insert(conv_id.to_string(), info);
+        // 同时授予写令牌：全局单例跨测试共享，前测持有令牌不归还（归还挂
+        // 生产 loop 退出钩子，测试无此钩）会让后测的 gate_write 无超时 park
+        active.grant_token_to(conv_id);
+        drop(g);
+        self.bump();
+    }
+
     /// 仅在通道已 Active 时附着本会话（首用批准路径：批准加入 ≠ 开启通道）。
     /// 返回 true = 实际新附着（Off / 已附着返回 false，幂等；仅真附着才 bump）。
     pub fn attach_if_active(&self, conv_id: &str, info: AttachInfo) -> bool {
@@ -392,7 +417,17 @@ impl ScreenChannel {
                                 .into(),
                         ));
                     }
-                    return Ok(()); // Off 兼容路径：不进通道域，逐次 Confirm 兜授权
+                    // Off 提议制（2026-09-24 用户拍板，翻转原「首入兼容直过」）：
+                    // 未开启 = agent 无屏幕访问权，不静默放行——错误指路唯一合法
+                    // 入口 request_screen_session（Confirm 提议→用户批准→通道建立，
+                    // 下一轮工具族即真实可用）。治「agent 对屏幕工具权重过高」：
+                    // 看得见工具但不等于用得着，提议权在用户。
+                    return Err(AppError::Validation(
+                        "screen 通道未开启: 屏幕读写工具需要用户先授权。\
+                         请调用 request_screen_session 工具向用户申请开启屏幕共享\
+                         （说明你想做什么、为什么需要看/操作屏幕），用户批准后方可使用"
+                            .into(),
+                    ));
                 };
                 entered = true;
                 if a.paused {
@@ -439,6 +474,20 @@ impl ScreenChannel {
                     ParkReason::WaitToken
                 }
             };
+            // 测试旁路：仅 WaitToken（并行 cargo test 共享全局单例互相抢令牌，
+            // 无超时 park = 挂死整轮测试——测试要验的是工具逻辑非排队仲裁，
+            // 直接授予自己继续；cfg(test) 不进生产二进制）。human/pause park
+            // 是被测行为本体，保持真实 park。
+            #[cfg(test)]
+            if matches!(reason, ParkReason::WaitToken) && TEST_SKIP_ARBITRATION.get() {
+                let mut g = self.lock();
+                if let Some(a) = g.as_mut() {
+                    a.grant_token_to(conv_id);
+                }
+                drop(g);
+                self.bump();
+                continue;
+            }
             // park：等状态突变唤醒、对话取消打断（B1）、去抖心跳自醒（§4.5）。
             // wait_cancel_safe(None) 永不完成——cancel 臂退化为纯等待。
             tokio::select! {
@@ -981,14 +1030,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn gate_off_first_entry_passes_for_compat() {
+    async fn gate_off_is_proposal_mode_error() {
+        // Off 提议制（2026-09-24 翻转原「首入兼容直过」）：未开启 = 家族错误
+        // 指路 request_screen_session——agent 被迫走提议，提议权在用户
         let ch = ScreenChannel::new();
-        // Off 首入 = 向后兼容路径（§4.1 入口 3）：不进通道域，授权回落逐次 Confirm
-        ch.gate_read(None).await.expect("Off 首入读应过（兼容）");
-        ch.gate_write("c1", None)
-            .await
-            .expect("Off 首入写应过（兼容）");
-        // 不产生任何通道状态（无令牌、无排队）
+        let err = ch.gate_read(None).await.expect_err("Off 读应拒（提议制）");
+        assert!(err.to_string().contains("screen 通道未开启"));
+        assert!(err.to_string().contains("request_screen_session"));
+        let err = ch.gate_write("c1", None).await.expect_err("Off 写应拒（提议制）");
+        assert!(err.to_string().contains("screen 通道未开启"));
+        // 不产生任何通道状态（拒绝路径零副作用）
         let s = ch.snapshot();
         assert_eq!(s.status, "off");
         assert_eq!(s.holder, None);
