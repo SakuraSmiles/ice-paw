@@ -663,6 +663,18 @@ pub(crate) async fn run_agent_turn(
                 .await;
         }
 
+        // 回合预检：复活 Failed 的启用 server（UE5 编辑器重开实案——懒重启只救
+        // Running 假死，Failed 后无任何自动拉起路径，用户被迫去设置页点保存）。
+        // 内含 30s 节流（与调用期懒重启共用），无 Failed 零成本；不阻塞——复活
+        // 是尽力而为，本回合赶不上就下回合（调用期家族错误如实披露）。
+        {
+            let mgr = Arc::clone(&env.mcp_manager);
+            let reg2 = Arc::clone(&env.global_registry);
+            tauri::async_runtime::spawn(async move {
+                mgr.revive_failed(&reg2).await;
+            });
+        }
+
         // 后台异步绑定 per_agent server workspace（不阻塞消息发送）
         if let Some(workspace) = agent.workspace_path.as_deref() {
             let mcp_configs = repo::mcp_server::list_all(pool).await.unwrap_or_else(|e| {

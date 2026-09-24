@@ -578,6 +578,39 @@ impl McpServerManager {
         }
     }
 
+    /// 回合开始前复活 Failed 的启用 server（2026-09-24 UE5 实案根治）：
+    /// 调用期懒重启只救「Running 假死」（UE5 关闭后首次调用失败 → 懒重启 →
+    /// server 已死握手失败 → 标 Failed 收场）；此后用户重开 UE5 编辑器，再无
+    /// 任何路径把它拉起来——只有设置页保存走 start_server。本方法在每个回合
+    /// 工具组装前扫 enabled ∧ Failed 的 server 逐个重试（复用 lazy_restart 的
+    /// 30s 节流，防每回合风暴；best-effort——复活失败保持 Failed，错误留给
+    /// 调用期家族错误披露）。扫表 = O(服务器数) 读锁，无 Failed 零成本。
+    pub async fn revive_failed(&self, registry: &McpRegistry) {
+        let failed: Vec<String> = {
+            let entries = self.entries.read().await;
+            entries
+                .iter()
+                .filter(|(_, e)| {
+                    e.config.enabled && matches!(e.status, ServerStatus::Failed { .. })
+                })
+                .map(|(id, _)| id.clone())
+                .collect()
+        };
+        for id in failed {
+            // 节流借用 lazy_restart 的窗口（同 server 30s 内只试一次）——
+            // 直接调 lazy_restart（含节流 + 禁用拒绝 + 完整 start_server）
+            match self.lazy_restart(&id, registry).await {
+                Ok(true) => tracing::info!(
+                    target: "ice_paw.mcp",
+                    server = %id,
+                    "回合预检：Failed server 已自动复活（外部服务恢复了）"
+                ),
+                Ok(false) => {} // 节流窗口内——留给调用期懒重启
+                Err(_) => {}    // 仍起不来——保持 Failed，调用期如实披露
+            }
+        }
+    }
+
     /// 检查是否有 Failed 状态的 server（供前端提示用）
     pub async fn failed_server_count(&self) -> usize {
         let entries = self.entries.read().await;
