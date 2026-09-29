@@ -528,8 +528,11 @@ pub(crate) async fn run_agent_turn(
     let tool_max_rounds = agent.tool_max_rounds();
     let agent_max_tokens = agent.max_total_tokens();
     let budget_max_tokens = agent_max_tokens.unwrap_or_else(|| {
+        // context_window = 0 视为未设置（脏值 → 0×3=0 预算 = 每轮触顶的隐性
+        // 炸弹；filter 掉走默认表兜底）
         let window = agent
             .context_window
+            .filter(|v| *v > 0)
             .map(|v| v as usize)
             .or_else(|| provider::default_context_window(&agent.provider, &agent.model))
             .unwrap_or(128_000);
@@ -540,6 +543,19 @@ pub(crate) async fn run_agent_turn(
     } else {
         crate::harness::budget::DEFAULT_AUTO_RENEWALS
     };
+
+    // 回合起点披露预算构成（撞顶排障取证：0.9.x 用户报告「经常撞循环上限需
+    // 人工继续」——终止文案只有数字，配置从哪来（agent 行窗口值 / 默认表 /
+    // 显式硬上限）只有这条日志能回答）
+    tracing::info!(
+        target: "ice_paw.chat",
+        window_source = if agent.context_window.filter(|v| *v > 0).is_some() { "agent_row" } else { "registry_default" },
+        context_window = agent.context_window.filter(|v| *v > 0).map(|v| v as usize).unwrap_or_else(|| 128_000),
+        budget_cap = budget_max_tokens,
+        budget_renewals,
+        tool_rounds_cap = tool_max_rounds.unwrap_or(50),
+        "回合预算配置（3× 窗口 model-aware；显式 max=硬上限额度 0）"
+    );
 
     // 单轮输出上限：agent.max_tokens 与模型策展表取 max（只抬不降）。
     // 公式抽至 loop::fallback::effective_output_cap 共用（降级链换档后按新模型重算）。
