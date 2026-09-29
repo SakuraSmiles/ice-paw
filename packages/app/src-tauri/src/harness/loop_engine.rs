@@ -846,6 +846,16 @@ async fn stream_loop_inner(
         // 阶段 C 已对当前占位落库+发事件 → loop 顶 cancel 不再补 discard（见标记定义处）
         current_asst_finalized = true;
 
+        // 【续写链终结（2026-09-29 长任务审计修复）】本轮产生了工具调用 = 续写链
+        // 被打断：本轮 assistant 已以「前缀+增量」全文落盘（阶段 C 用 msg_text），
+        // 且阶段 H 将切换到**新占位**——旧前缀的使命结束。必须在切换前清空
+        // continue_full_text，否则后续每一轮的 msg_text 都会错误拼接旧前缀
+        //（缺陷形态：段1 截断→续写轮"段2"带工具调用→轮 3+ 每条新 assistant
+        //   落盘为"段1+本轮文本"——段 2 丢失 + 段 1 重复写入每条消息）。
+        if !completed_calls.is_empty() && !continue_full_text.is_empty() {
+            continue_full_text.clear();
+        }
+
         // 最终轮（本轮无工具调用）→ 当前 assistant 已 finalize。
         // round_blocks 此时无 ToolUse，落盘安全。
         if completed_calls.is_empty() {
