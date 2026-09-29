@@ -96,6 +96,9 @@ pub struct PipelineContext {
     pub project_workspace: Option<String>,
     /// 项目上下文目录（IcePaw 管理的 {workspace}/projects/{id}/，存 project.md）
     pub project_context_dir: Option<String>,
+    /// 项目简报（ProjectBriefStage 产出：成员名册 + 近况摘要——SystemPromptStage
+    /// 拼接进 system prompt。None = 散落会话 / 无成员无摘要）
+    pub project_brief: Option<String>,
     /// 已解析的 agent 明文 API key（DB 只存引用槽位，由 `chat_cmd` 解析后注入）。
     /// 供 LLM 调用使用；视觉代读已不消费它（两档制：非视觉 agent 走平台视觉配置链，
     /// 见 `modal::gather_vision_candidates`）。
@@ -197,6 +200,7 @@ impl PipelineContext {
             turn_id: None,
             project_workspace: None,
             project_context_dir: None,
+            project_brief: None,
             api_key: None,
             vision_candidates: Vec::new(),
             emitter: None,
@@ -281,6 +285,9 @@ impl PipelineRunner {
         Self::new(vec![
             Box::new(TemplateStage::new(pool)),
             Box::new(OsContextStage::new(pool)),
+            // 项目简报（2026-09-29 项目维度存在感批）：挂项目的会话注入成员
+            // 名册 + 近况摘要——须在 SystemPromptStage 之前（后者拼接）
+            Box::new(super::stages::project_brief::ProjectBriefStage),
             Box::new(SystemPromptStage),
             Box::new(HistoryStage),
             Box::new(ToolFailureFoldStage),

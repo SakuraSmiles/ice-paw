@@ -32,6 +32,8 @@ use crate::db::repo;
 use crate::error::AppResult;
 use crate::infra::protocol::{ChatMessage, ContentBlock};
 
+pub(crate) mod project_brief;
+
 // =========================================================================
 // Stage 1: TemplateStage — 模板查询 + 变量渲染
 // =========================================================================
@@ -119,6 +121,7 @@ impl PipelineStage for OsContextStage {
         // 先取出 owned 值再进闭包（闭包捕获 &ctx 会与下方的字段赋值借用冲突）
         let agent_ws = ctx.agent.workspace_path.clone();
         let project_ws = ctx.project_workspace.clone();
+        let project_brief = ctx.project_brief.clone();
         let build = move |now: chrono::DateTime<chrono::Utc>| {
             let mut s = crate::context::os_context::build_os_context_at(
                 tz.as_deref(),
@@ -131,6 +134,10 @@ impl PipelineStage for OsContextStage {
             }
             if let Some(conv) = &conventions_md {
                 s.push_str(&format!("\n\n## 编码规范\n{conv}"));
+            }
+            // 项目简报（2026-09-29）：成员名册 + 近况摘要（ProjectBriefStage 产出）
+            if let Some(brief) = &project_brief {
+                s.push_str(brief);
             }
             s
         };
