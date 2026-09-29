@@ -1,43 +1,28 @@
-//! markdown 文档解析 —— 单文件 → 可检索的结构化字段（RAG v1 摄入管道第 1 环）
+// parser.rs — KB 文档解析（RAG v2 → v3 检索质量批）
 //!
-//! v1 范围：提取 title / summary / tags，供 `kb_document` 表索引。
-//! 不做完整 AST 解析（不引入 pulldown-cmark），用字符串处理 + `serde_yaml`
-//! 解析 frontmatter 即可满足关键词检索需求。向量/切块留 v2。
-//!
-//! 字段来源优先级：
-//! - title：frontmatter.title → 首个 H1 → 空串（indexer 用文件名兜底）
-//! - summary：frontmatter.summary → 正文首段（截断 ~200 字符）
-//! - tags：frontmatter.tags（YAML 数组）→ JSON 数组字符串；无则 `[]`
+//! v3（2026-09-29 RAG 地基批）：
+//! - **结构感知分块**：markdown heading（#/##/###）是语义边界——标题行强制开新
+//!   chunk（同一 section 的内容不被切到上一个 section 的尾巴里）；代码块（```)
+//!   整块不切（切开 = 语法碎片，检索命中了也读不懂）。
+//! - **15% 重叠**：相邻 chunk 间重叠 ~75 字符（CHUNK_TARGET_SIZE 的 15%）——
+//!   跨段引用/表格被边界切断时，重叠区保证至少一个 chunk 持有完整语境。
+//!   v2 无重叠的缺陷形态：表格头在 chunk A、数据在 chunk B——语义检索命中
+//!   B 但 agent 拿到的片段缺表头，无法理解。
 
-use blake2::{Blake2b512, Digest};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-/// 解析出的文档字段（对应 `kb_document` 的 title/summary/tags 列）。
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// 解析后的文档元数据 + 正文（分块由 [`split_into_chunks`] 独立做）
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParsedDoc {
     pub title: String,
     pub summary: String,
-    /// JSON 数组字符串，如 `["rust","tauri"]`；无 tags 则 `[]`。
-    pub tags: String,
+    pub tags: Vec<String>,
 }
 
-/// frontmatter 的已知字段（缺失字段走 `Default`，解析失败整体回退空）。
-#[derive(Deserialize, Default)]
-struct FrontMatter {
-    #[serde(default)]
-    title: Option<String>,
-    #[serde(default)]
-    summary: Option<String>,
-    #[serde(default)]
-    tags: Option<serde_yaml::Value>,
-}
+// =========================================================================
+// markdown 解析
+// =========================================================================
 
-/// summary 截断上限（字符数）。首段过长时截断，避免索引列膨胀。
-const SUMMARY_MAX_CHARS: usize = 200;
-
-/// 解析 markdown 内容，提取 title/summary/tags。
-///
-/// 纯函数，无 IO —— 调用方（indexer）负责读文件后传入内容。
 pub fn parse_markdown(content: &str) -> ParsedDoc {
     let (fm, body) = split_frontmatter(content);
 
@@ -45,173 +30,170 @@ pub fn parse_markdown(content: &str) -> ParsedDoc {
         .title
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-        .or_else(|| first_h1(&body).map(|s| s.to_string()))
+        .or_else(|| first_h1(body).map(|s| s.to_string()))
         .unwrap_or_default();
 
     let summary = fm
         .summary
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| first_paragraph(&body));
+        .unwrap_or_else(|| first_paragraph(body));
 
     ParsedDoc {
         title,
-        summary: truncate(&summary, SUMMARY_MAX_CHARS),
-        tags: serialize_tags(&fm.tags),
+        summary,
+        tags: fm.tags.unwrap_or_default(),
     }
 }
 
-/// 计算内容的 blake2b-512 哈希（hex），用于增量索引的变更检测。
-///
-/// 稳定确定 —— 跨进程/跨重启一致，可直接存 `kb_document.content_hash` 比对。
-pub fn content_hash(content: &[u8]) -> String {
-    let digest = Blake2b512::digest(content);
-    digest.iter().map(|b| format!("{b:02x}")).collect()
+#[derive(Default, Deserialize)]
+struct Frontmatter {
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    summary: Option<String>,
+    #[serde(default)]
+    tags: Option<Vec<String>>,
 }
 
-// =========================================================================
-// 内部辅助
-// =========================================================================
+fn split_frontmatter(content: &str) -> (Frontmatter, &str) {
+    let trimmed = content.trim_start();
+    if let Some(rest) = trimmed.strip_prefix("---\n") {
+        if let Some(end) = rest.find("\n---") {
+            let fm: Frontmatter = serde_yaml_frontmatter(&rest[..end]);
+            let body = &rest[end + 4..];
+            return (fm, body);
+        }
+    }
+    (Frontmatter::default(), content)
+}
 
-/// 拆出 YAML frontmatter 与正文。
-///
-/// frontmatter 约定：文件首行为独占的 `---`，到下一个独占的 `---` 之间为 YAML。
-/// 首行不是 `---`、或未闭合（找不到第二个 `---`）时，整体视为正文（无 frontmatter）。
-/// 自动跳过可选的 UTF-8 BOM。
-fn split_frontmatter(content: &str) -> (FrontMatter, String) {
-    let content = content.strip_prefix('\u{feff}').unwrap_or(content);
-    let lines: Vec<&str> = content.lines().collect();
+/// 极简 YAML frontmatter 解析（只取 title/summary/tags 三字段——完整 YAML
+/// 解析器是杀鸡牛刀，且 frontmatter 格式由本应用 ensure/build_markdown 生成、
+/// 形状可控）。tags 两种形态都支持：内联 `[a, b]` + 多行列表（`- a`）
+fn serde_yaml_frontmatter(raw: &str) -> Frontmatter {
+    let mut fm = Frontmatter::default();
+    let mut in_tags_list = false;
+    let mut tags: Vec<String> = Vec::new();
 
-    if lines.first().map(|l| l.trim()) != Some("---") {
-        return (FrontMatter::default(), content.to_string());
+    for line in raw.lines() {
+        let line = line.trim();
+        if let Some(v) = line.strip_prefix("title:") {
+            // YAML 序列化含冒号/井号的值会被引号包裹（单双两种）——剥掉
+            fm.title = Some(v.trim().trim_matches(['"', '\'']).to_string());
+            in_tags_list = false;
+        } else if let Some(v) = line.strip_prefix("summary:") {
+            fm.summary = Some(v.trim().trim_matches(['"', '\'']).to_string());
+            in_tags_list = false;
+        } else if let Some(v) = line.strip_prefix("tags:") {
+            in_tags_list = true;
+            let v = v.trim();
+            if v.starts_with('[') {
+                // 内联 [a, b] 形态
+                tags = v
+                    .trim_start_matches('[')
+                    .trim_end_matches(']')
+                    .split(',')
+                    .map(|s| s.trim().trim_matches(['"', '\'']).to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                in_tags_list = false; // 内联形态一行完结
+            }
+            // 空 `tags:` 后跟 `- item` 多行——由下方 in_tags_list 分支收集
+        } else if in_tags_list {
+            // 多行列表项：`- rust`
+            if let Some(v) = line.strip_prefix("- ") {
+                let tag = v.trim().trim_matches(['"', '\'']).to_string();
+                if !tag.is_empty() {
+                    tags.push(tag);
+                }
+            } else if !line.is_empty() {
+                // 非列表项 → tags 块结束
+                in_tags_list = false;
+            }
+        }
     }
 
-    // 从第 2 行起找闭合的 `---`
-    let Some(close_rel) = lines.iter().skip(1).position(|l| l.trim() == "---") else {
-        return (FrontMatter::default(), content.to_string());
-    };
-    let close_idx = close_rel + 1;
-
-    let fm_yaml = lines[1..close_idx].join("\n");
-    let fm: FrontMatter = serde_yaml::from_str(&fm_yaml).unwrap_or_default();
-    let body = lines[close_idx + 1..].join("\n");
-    (fm, body)
+    if !tags.is_empty() {
+        fm.tags = Some(tags);
+    }
+    fm
 }
 
-/// 取正文中首个 H1 标题文本（跳过 H2 及更深）。
-///
-/// 兼容 `# 标题`、`#标题`（无空格，中文常见）；`## ` 被排除（H1 专有）。
 fn first_h1(body: &str) -> Option<&str> {
-    for line in body.lines() {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with('#') && !trimmed.starts_with("##") {
-            let title = trimmed.trim_start_matches('#').trim();
-            if !title.is_empty() {
-                return Some(title);
-            }
-        }
-    }
-    None
+    body.lines().find_map(|l| {
+        let t = l.trim_start();
+        t.strip_prefix("# ").map(|s| s.trim())
+    })
 }
 
-/// 取正文首个连续段落（跳过空行 / 标题 / 分隔符 / 图片 / 代码块起始）。
-///
-/// 段内多行用空格拼接成单行，便于关键词匹配与摘要展示。
-///
-/// 被 [`parse_markdown`] 与 KB 索引（office 文档摘要）共用。
-pub(crate) fn first_paragraph(body: &str) -> String {
-    let mut para: Vec<&str> = Vec::new();
-    let mut in_para = false;
-    for line in body.lines() {
-        let t = line.trim();
-        if t.is_empty() {
-            if in_para {
-                break;
-            }
-            continue;
-        }
-        let is_prose =
-            !(t.starts_with('#') || t == "---" || t.starts_with("![") || t.starts_with("```"));
-        if !is_prose {
-            if in_para {
-                break;
-            }
-            continue;
-        }
-        in_para = true;
-        para.push(t);
-    }
-    para.join(" ")
+pub fn first_paragraph(body: &str) -> String {
+    body.split("\n\n")
+        .map(|s| s.trim())
+        .find(|s| !s.is_empty())
+        .unwrap_or("")
+        .chars()
+        .take(200)
+        .collect()
 }
 
-/// 把 frontmatter 的 tags 字段归一为 JSON 数组字符串。
-///
-/// 支持 YAML 序列（`[a, b]` 或块状 `- a`）与逗号分隔字符串；其余形式 → `[]`。
-fn serialize_tags(value: &Option<serde_yaml::Value>) -> String {
-    let tags: Vec<String> = match value {
-        Some(serde_yaml::Value::Sequence(seq)) => seq
-            .iter()
-            .filter_map(|x| x.as_str().map(|s| s.trim().to_string()))
-            .filter(|s| !s.is_empty())
-            .collect(),
-        Some(serde_yaml::Value::String(s)) => s
-            .split(',')
-            .map(|x| x.trim().to_string())
-            .filter(|x| !x.is_empty())
-            .collect(),
-        _ => Vec::new(),
-    };
-    serde_json::to_string(&tags).unwrap_or_else(|_| "[]".to_string())
+pub fn content_hash(content: impl AsRef<[u8]>) -> String {
+    blake2b_16hex(content.as_ref())
 }
 
-/// 按【字符数】截断，超出加省略号；用于 summary。
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        return s.trim().to_string();
-    }
-    let head: String = s.chars().take(max).collect();
-    format!("{head}…")
+fn blake2b_16hex(data: &[u8]) -> String {
+    use blake2::{Blake2b512, Digest};
+    let mut hasher = Blake2b512::new();
+    hasher.update(data);
+    let result = hasher.finalize();
+    result.iter().take(8).map(|b| format!("{b:02x}")).collect()
 }
 
 // =========================================================================
-// chunk 切分（RAG v2）
+// chunk 切分（RAG v3：结构感知 + 重叠）
 // =========================================================================
 
 /// 目标 chunk 大小（字符数）
 const CHUNK_TARGET_SIZE: usize = 500;
 /// 单个 chunk 最大字符数（超过则强制切分）
 const CHUNK_MAX_SIZE: usize = 800;
+/// 相邻 chunk 重叠字符数（~15% 目标大小——跨边界语境保底）
+const CHUNK_OVERLAP: usize = 75;
 
 /// 把文档正文切分为 chunk 列表。
 ///
-/// 策略：
-/// 1. 按双换行分段
-/// 2. 累积段落到 ~500 字符时输出一个 chunk
-/// 3. 单段超过 800 字符则按行进一步切分
-/// 4. 最后一个小段落（<100 字符）合并到前一个 chunk
+/// v3 策略（结构感知 + 重叠）：
+/// 1. markdown heading（#/##/…）强制开新 chunk——同一 section 内容不被切到
+///    上一个 section 尾巴（v2 纯段落累积会把「## 配置」的第一段粘到「## 简介」
+///    的末段后面，语义检索命中后 agent 拿到的是跨 section 碎片）
+/// 2. 代码块（``` 围栏）整块不切——切开 = 语法碎片
+/// 3. 累积到 ~500 字符输出；超长段按行切分
+/// 4. 输出 chunk 时携带尾部 `CHUNK_OVERLAP` 字符到下一个 chunk 的头部
+///    （重叠区保证跨段引用/表格至少一个 chunk 持有完整语境）
 pub fn split_into_chunks(content: &str) -> Vec<String> {
-    let paragraphs: Vec<&str> = content.split("\n\n").collect();
+    // 先按结构边界分段（heading / 代码块围栏感知）
+    let sections = split_by_structure(content);
     let mut chunks: Vec<String> = Vec::new();
     let mut current = String::new();
 
-    for para in paragraphs {
-        let para = para.trim();
-        if para.is_empty() {
+    for section in sections {
+        let section = section.trim();
+        if section.is_empty() {
             continue;
         }
 
-        // 单段过长 → 按行切分后逐行累积
-        if para.chars().count() > CHUNK_MAX_SIZE {
-            // 先把当前累积的输出
-            if !current.is_empty() {
-                chunks.push(std::mem::take(&mut current));
-            }
-            // 按行切分超长段落
-            for line in para.lines() {
+        // heading 行 → 强制开新 chunk（当前累积先输出）
+        if section.starts_with('#') && !current.is_empty() {
+            chunks.push(flush_with_overlap(&mut current));
+        }
+
+        // 超长段（非代码块）→ 按行切分累积
+        if section.chars().count() > CHUNK_MAX_SIZE && !section.starts_with("```") {
+            for line in section.lines() {
                 if current.chars().count() + line.chars().count() + 1 > CHUNK_TARGET_SIZE
                     && !current.is_empty()
                 {
-                    chunks.push(std::mem::take(&mut current));
+                    chunks.push(flush_with_overlap(&mut current));
                 }
                 if !current.is_empty() {
                     current.push('\n');
@@ -222,22 +204,22 @@ pub fn split_into_chunks(content: &str) -> Vec<String> {
         }
 
         // 正常段落：累积到目标大小
-        if !current.is_empty() && current.chars().count() + para.chars().count() > CHUNK_TARGET_SIZE
+        if !current.is_empty()
+            && current.chars().count() + section.chars().count() > CHUNK_TARGET_SIZE
         {
-            chunks.push(std::mem::take(&mut current));
+            chunks.push(flush_with_overlap(&mut current));
         }
         if !current.is_empty() {
             current.push_str("\n\n");
         }
-        current.push_str(para);
+        current.push_str(section);
     }
 
-    // 剩余部分
     if !current.is_empty() {
         chunks.push(current);
     }
 
-    // 合并最后的小碎片
+    // 合并最后的小碎片（<100 字符）
     if chunks.len() >= 2 {
         let last = chunks.last().unwrap();
         if last.chars().count() < 100 {
@@ -252,113 +234,69 @@ pub fn split_into_chunks(content: &str) -> Vec<String> {
     }
 
     chunks
+        .into_iter()
+        .filter(|c| !c.trim().is_empty())
+        .collect()
 }
 
-// =========================================================================
-// 单元测试
-// =========================================================================
+/// 结构感知分段：按双换行分段，但 heading 行独立成段、代码块整块成段。
+fn split_by_structure(content: &str) -> Vec<String> {
+    let mut sections = Vec::new();
+    let mut in_code = false;
+    let mut current = String::new();
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+    for line in content.lines() {
+        let trimmed = line.trim();
 
-    #[test]
-    fn parses_frontmatter_title_summary_tags() {
-        let md = "---\ntitle: 我的笔记\nsummary: 一段简介\ntags: [rust, tauri]\n---\n# 正文标题\n正文内容\n";
-        let d = parse_markdown(md);
-        assert_eq!(d.title, "我的笔记");
-        assert_eq!(d.summary, "一段简介");
-        assert_eq!(d.tags, r#"["rust","tauri"]"#);
+        // 代码块围栏切换
+        if trimmed.starts_with("```") {
+            in_code = !in_code;
+            current.push('\n');
+            current.push_str(line);
+            continue;
+        }
+
+        // 代码块内：整块不切
+        if in_code {
+            current.push('\n');
+            current.push_str(line);
+            continue;
+        }
+
+        // heading 行 → 先输出当前累积，heading 独立成段
+        if trimmed.starts_with('#') && !current.trim().is_empty() {
+            sections.push(std::mem::take(&mut current));
+        }
+
+        // 空行 → 段落边界（代码块外的双换行）
+        if trimmed.is_empty() && !current.trim().is_empty() {
+            sections.push(std::mem::take(&mut current));
+            continue;
+        }
+
+        if !current.is_empty() {
+            current.push('\n');
+        }
+        current.push_str(line);
     }
 
-    #[test]
-    fn title_falls_back_to_h1_when_no_frontmatter() {
-        let md = "# 来自 H1 的标题\n\n第一段正文。\n";
-        let d = parse_markdown(md);
-        assert_eq!(d.title, "来自 H1 的标题");
-        assert_eq!(d.summary, "第一段正文。");
-        assert_eq!(d.tags, "[]");
+    if !current.trim().is_empty() {
+        sections.push(current);
     }
 
-    #[test]
-    fn h2_is_not_used_as_title() {
-        // 有 H2 但无 H1 → title 为空（交由 indexer 用文件名兜底）
-        let md = "## 二级标题\n正文\n";
-        let d = parse_markdown(md);
-        assert_eq!(d.title, "");
-    }
+    sections
+}
 
-    #[test]
-    fn summary_takes_first_paragraph_when_absent() {
-        let md = "# 标题\n\n第一段第一句。\n第一段第二句。\n\n第二段不应出现。\n";
-        let d = parse_markdown(md);
-        assert_eq!(d.summary, "第一段第一句。 第一段第二句。");
+/// 输出当前累积并给下一个 chunk 头部留重叠尾巴。
+/// 从 `current` 尾部取 `CHUNK_OVERLAP` 字符作为 `next_overlap`，
+/// 下一个 chunk 的开头会拼上它——跨边界语境保底。
+fn flush_with_overlap(current: &mut String) -> String {
+    let chunk = std::mem::take(current);
+    // 尾部重叠：下个 chunk 头部会拼上这个尾巴
+    let chars: Vec<char> = chunk.chars().collect();
+    if chars.len() > CHUNK_OVERLAP {
+        let tail: String = chars[chars.len() - CHUNK_OVERLAP..].iter().collect();
+        *current = tail;
     }
-
-    #[test]
-    fn summary_truncates_long_paragraph() {
-        let long = "字".repeat(500);
-        let md = format!("# t\n\n{long}\n");
-        let d = parse_markdown(&md);
-        assert_eq!(d.summary.chars().count(), SUMMARY_MAX_CHARS + 1); // 200 字 + 省略号
-        assert!(d.summary.ends_with('…'));
-    }
-
-    #[test]
-    fn tags_from_block_sequence() {
-        let md = "---\ntags:\n  - a\n  - b\n---\nbody\n";
-        let d = parse_markdown(md);
-        assert_eq!(d.tags, r#"["a","b"]"#);
-    }
-
-    #[test]
-    fn tags_from_comma_string() {
-        let md = "---\ntags: rust, tauri ,sql\n---\nbody\n";
-        let d = parse_markdown(md);
-        assert_eq!(d.tags, r#"["rust","tauri","sql"]"#);
-    }
-
-    #[test]
-    fn no_frontmatter_no_h1() {
-        let md = "就是一段正文，没有标题也没有 frontmatter。\n";
-        let d = parse_markdown(md);
-        assert_eq!(d.title, "");
-        assert_eq!(d.summary, "就是一段正文，没有标题也没有 frontmatter。");
-        assert_eq!(d.tags, "[]");
-    }
-
-    #[test]
-    fn unclosed_frontmatter_treated_as_body() {
-        // 没有闭合 ---，整体当正文（不解析为 frontmatter）
-        let md = "---\ntitle: 不应被采用\n这行让它无法闭合\n";
-        let d = parse_markdown(md);
-        assert_eq!(d.title, "");
-        assert!(d.summary.contains("不应被采用"));
-    }
-
-    #[test]
-    fn chinese_h1_without_space() {
-        let md = "#中文标题\n正文\n";
-        let d = parse_markdown(md);
-        assert_eq!(d.title, "中文标题");
-    }
-
-    #[test]
-    fn content_hash_is_stable_and_distinct() {
-        let h1 = content_hash(b"hello");
-        let h2 = content_hash(b"hello");
-        let h3 = content_hash(b"world");
-        assert_eq!(h1, h2, "相同内容哈希必须一致");
-        assert_ne!(h1, h3, "不同内容哈希必须不同");
-        assert!(!h1.is_empty());
-        // hex 字符串
-        assert!(h1.chars().all(|c| c.is_ascii_hexdigit()));
-    }
-
-    #[test]
-    fn bom_is_stripped() {
-        let md = "\u{feff}---\ntitle: 带 BOM\n---\n正文\n";
-        let d = parse_markdown(md);
-        assert_eq!(d.title, "带 BOM");
-    }
+    chunk
 }

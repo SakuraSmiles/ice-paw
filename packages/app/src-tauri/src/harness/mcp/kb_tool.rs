@@ -116,6 +116,7 @@ impl McpClient for SearchKbTool {
                     file_path: h.file_path,
                     title: h.title,
                     summary: h.summary,
+                    passage: None, // 文档级命中无 chunk 正文——语义路才带片段
                 })
                 .collect();
 
@@ -159,6 +160,9 @@ struct SearchHitOut {
     file_path: String,
     title: String,
     summary: String,
+    /// 命中片段（RAG v3：chunk 正文截取——agent 免二跳 read_file 直读关键段）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    passage: Option<String>,
 }
 
 /// RRF（Reciprocal Rank Fusion）融合关键词与语义两路检索结果。
@@ -356,11 +360,23 @@ fn semantic_hits(
                     file_path: chunk.file_path.clone(),
                     title: chunk.title.clone(),
                     summary: chunk.summary.clone(),
+                    passage: Some(excerpt(&chunk.content, 200)),
                 });
             }
         }
     }
     results
+}
+
+/// 截取 chunk 正文前 `n` 字符作为命中片段（尾加省略号提示有后续）。
+fn excerpt(content: &str, n: usize) -> String {
+    let chars: Vec<char> = content.chars().collect();
+    if chars.len() <= n {
+        content.to_string()
+    } else {
+        let s: String = chars[..n].iter().collect();
+        format!("{s}…")
+    }
 }
 
 fn non_empty(v: Vec<SearchHitOut>) -> Option<Vec<SearchHitOut>> {
@@ -863,7 +879,7 @@ mod tests {
         );
         let parsed = parse_markdown(&md);
         assert_eq!(parsed.title, "标题: 含冒号 与 #井号");
-        assert_eq!(parsed.tags, r#"["rust","笔记"]"#);
+        assert_eq!(parsed.tags, vec!["rust".to_string(), "笔记".to_string()]);
         assert!(parsed.summary.contains("正文内容"));
     }
 
@@ -990,6 +1006,7 @@ mod tests {
             file_path: p.into(),
             title: p.into(),
             summary: "s".into(),
+        passage: None,
         };
         let kw = vec![mk("a.md"), mk("b.md")];
         let sem = vec![mk("b.md"), mk("c.md")];
@@ -1005,6 +1022,7 @@ mod tests {
             file_path: p.into(),
             title: p.into(),
             summary: "s".into(),
+        passage: None,
         };
         let out = rrf_fuse(vec![mk("a.md"), mk("b.md")], vec![], 5);
         assert_eq!(out.len(), 2);
@@ -1018,6 +1036,7 @@ mod tests {
             file_path: p.into(),
             title: p.into(),
             summary: "s".into(),
+        passage: None,
         };
         let out = rrf_fuse(vec![mk("a.md"), mk("b.md")], vec![], 1);
         assert_eq!(out.len(), 1, "limit 截断");

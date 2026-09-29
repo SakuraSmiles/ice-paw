@@ -135,7 +135,7 @@ pub async fn index_directory(
                     let p = ParsedDoc {
                         title: d.title.unwrap_or_default(),
                         summary: first_paragraph(&d.text),
-                        tags: "[]".into(),
+                        tags: Vec::new(),
                     };
                     ExtractOutcome::Text((d.text, p))
                 }
@@ -183,7 +183,7 @@ pub async fn index_directory(
             rel_path,
             &title,
             &parsed.summary,
-            &parsed.tags,
+            &serde_json::to_string(&parsed.tags).unwrap_or_else(|_| "[]".into()),
             Some(&hash),
             mtime.as_deref(),
         )

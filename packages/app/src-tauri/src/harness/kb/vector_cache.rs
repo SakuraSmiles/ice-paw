@@ -65,6 +65,9 @@ pub struct CachedChunk {
     pub file_path: String,
     pub title: String,
     pub summary: String,
+    /// chunk 正文（RAG v3：检索结果带片段——agent 免二跳 read_file；
+    /// 缓存持有它比事后回查 DB 便宜——冷路径加载时已在手）
+    pub content: String,
     pub vec: Vec<f32>,
 }
 
@@ -214,6 +217,7 @@ pub fn decode_cold(chunks: &[ChunkWithEmbedding]) -> ColdDecode {
                 file_path: c.file_path.clone(),
                 title: c.title.clone(),
                 summary: c.summary.clone(),
+                content: c.content.clone(),
                 vec: bytes_to_embedding(bytes),
             }),
             _ => {
@@ -273,6 +277,7 @@ mod tests {
             file_path: file.into(),
             title: format!("t-{id}"),
             summary: "s".into(),
+            content: String::new(),
             vec: vec![1.0, 0.0],
         }
     }
