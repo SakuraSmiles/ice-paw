@@ -278,6 +278,11 @@ impl McpRegistry {
 
     /// 注册内置工具
     pub fn register_builtin(&self) {
+        // 原生能力发现四件（2026-09-29：项目/检索/台账——只读 Always）
+        self.register_sync(Arc::new(super::discovery_tools::ListProjectsTool));
+        self.register_sync(Arc::new(super::discovery_tools::GetProjectDetailsTool));
+        self.register_sync(Arc::new(super::discovery_tools::SearchConversationsTool));
+        self.register_sync(Arc::new(super::discovery_tools::GetTaskLedgerTool));
         // 只读 / 知识库
         self.register_sync(Arc::new(super::internal::ReadFileTool));
         // Word 结构投影（S0b：outline/format/text 三档；块编址是 edit_docx 的地址地基）

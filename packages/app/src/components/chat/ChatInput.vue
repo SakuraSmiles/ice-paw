@@ -14,12 +14,13 @@
 -->
 <script setup lang="ts">
 import { computed, watch, nextTick, ref } from "vue";
-import { Loader2 } from "@lucide/vue";
+import { Loader2, Shield, Zap } from "@lucide/vue";
 import { useChatStore } from "../../stores/chat";
 import { useAgentStore } from "../../stores/agent";
 import { useProjectStore } from "../../stores/project";
 import { shortCode } from "../../utils/refs";
 import { phaseOf } from "../../utils/streamingPhase";
+import { bridge } from "../../api/bridge";
 import EntityAvatar from "../common/EntityAvatar.vue";
 import BudgetPill from "./BudgetPill.vue";
 import type { ContentBlock } from "../../types";
@@ -59,6 +60,25 @@ const sendingPhase = computed(() =>
 // 连发）——此窗输入区不该长得跟真空闲一样（假信号：用户以为消息丢了/停了）。
 // 判据 = 排队角标仍命中当前会话消息（messages 即当前会话列表，天然会话归属
 // 守卫：切走不显、切回复显）；回合 B 起跑 sending=true 即让位生成中形态。
+// ===== 会话级全自动选择器（migration 58，2026-09-29 用户定址输入框——参考
+// Claude Code/Codex 的全允许选择）：两档循环切换（审批 ⇄ 全自动）。常驻于
+// 发送钮左侧——生成中（发送+停止双按钮态）也在场：切换影响的是后续回合的
+// 授权（registry 即时生效），本回合在途审批卡不受影响。
+const modeSwitching = ref(false);
+async function cycleApproveMode() {
+  const conv = chat.activeConversation;
+  if (!conv || modeSwitching.value) return;
+  modeSwitching.value = true;
+  try {
+    await bridge.inbox.setAutoApprove(conv.id, !conv.auto_approve);
+    await chat.loadConversations(); // 权威回读（单字段乐观翻转后回正）
+  } catch (err) {
+    console.warn("[chat-input] 切换全自动失败", err);
+  } finally {
+    modeSwitching.value = false;
+  }
+}
+
 const steerPending = computed(
   () =>
     !chat.sending &&
@@ -679,6 +699,20 @@ function handleKeydown(e: KeyboardEvent) {
             <template v-if="steerPending"><Loader2 :size="12" class="spin" />插话排队中，即将继续…</template>
             <template v-else>{{ channelArchived ? "频道已归档" : isChannelConv ? (chat.sending ? sendingPhase : "@ 成员点名接力 · 无 @ 时由统筹者接令") : chat.sending ? sendingPhase : "Enter 发送 · Shift+Enter 换行" }}</template>
           </span>
+          <!-- 全自动选择器（用户定址 2026-09-29）：发送钮左侧常驻——两档循环，
+               生成中双按钮态同样在场（影响后续回合授权） -->
+          <button
+            class="approve-mode"
+            :class="{ auto: chat.activeConversation?.auto_approve }"
+            :disabled="modeSwitching || !chat.activeConversation"
+            :title="chat.activeConversation?.auto_approve
+              ? '全自动已开启：工具调用免审批（委派任务同权；屏幕共享除外）。点击切回逐次审批'
+              : '点击开启全自动：本会话工具调用免审批（含委派任务；屏幕共享除外）'"
+            @click="cycleApproveMode"
+          >
+            <component :is="chat.activeConversation?.auto_approve ? Zap : Shield" :size="13" />
+            <span>{{ chat.activeConversation?.auto_approve ? "全自动" : "审批" }}</span>
+          </button>
           <div class="btn-group" :class="{ 'is-steering': chat.sending }">
             <button class="btn-send" :class="{ active: canSend }" :disabled="channelArchived || !canSend" title="发送 (Enter)" @click="send">
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -777,6 +811,10 @@ function handleKeydown(e: KeyboardEvent) {
 .chat-textarea::placeholder { color:var(--ip-color-text-placeholder); }
 .chat-textarea:disabled { opacity:0.35; cursor:not-allowed; }
 
+.approve-mode { display:inline-flex; align-items:center; gap:4px; height:26px; padding:0 var(--ip-spacing-2); margin-right:var(--ip-spacing-1); flex-shrink:0; border:1px solid var(--ip-color-border-default); border-radius:var(--ip-radius-full); background:transparent; color:var(--ip-color-text-secondary); font:inherit; font-size:var(--ip-text-micro-size); cursor:pointer; white-space:nowrap; transition:all var(--ip-duration-fast) var(--ip-ease-out); }
+.approve-mode:hover { background-color:var(--ip-color-bg-tertiary); }
+.approve-mode.auto { color:var(--ip-warning-text); border-color:var(--ip-warning-border, var(--ip-warning-text)); }
+.approve-mode:disabled { opacity:0.5; cursor:not-allowed; }
 .btn-group { position:relative; width:32px; height:32px; flex-shrink:0; }
 /* 生成中双按钮并存（Steer/C8 插话）：发送在右（主操作位不变）、停止在左（临时附加），
    组宽 32→68（32 + 4 间距 + 32）——发送按钮不再被停止按钮替换 */
