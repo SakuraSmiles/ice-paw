@@ -199,19 +199,18 @@ mod tests {
             for agent in ["", "agent 人设"] {
                 for tools in [false, true] {
                     for os in ["", "## 运行环境\nOS: Windows"] {
-                        let base =
-                            SystemPromptParts::build(rendered, agent, tools, os).joined();
+                        let base = SystemPromptParts::build(rendered, agent, tools, os).joined();
                         // 历史 delegation/word_style 追加路径（stages.rs 原样模拟）
                         let mut legacy = base.clone();
-                        for section in ["委派清单 hint", "## Word 文档样式偏好\n\n正文"] {
+                        for section in ["委派清单 hint", "## Word 文档样式偏好\n\n正文"]
+                        {
                             legacy = Some(match legacy.take() {
                                 Some(s) => format!("{s}\n\n{section}"),
                                 None => section.to_string(),
                             });
                         }
                         // Parts 路径
-                        let mut parts =
-                            SystemPromptParts::build(rendered, agent, tools, os);
+                        let mut parts = SystemPromptParts::build(rendered, agent, tools, os);
                         parts.delegation_hint = Some("委派清单 hint".into());
                         parts.word_style = Some("## Word 文档样式偏好\n\n正文".into());
                         assert_eq!(
@@ -229,7 +228,11 @@ mod tests {
     fn stable_hash_excludes_os_context() {
         let a = SystemPromptParts::build(None, "人设", true, "OS 甲");
         let b = SystemPromptParts::build(None, "人设", true, "OS 乙（时间行已变）");
-        assert_eq!(a.stable_hash(), b.stable_hash(), "os 变化不得影响稳定段哈希");
+        assert_eq!(
+            a.stable_hash(),
+            b.stable_hash(),
+            "os 变化不得影响稳定段哈希"
+        );
 
         // 稳定段任一变化 → 哈希变
         let c = SystemPromptParts::build(None, "人设（改）", true, "OS 甲");

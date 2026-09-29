@@ -1108,25 +1108,39 @@ mod tests {
             error: None,
             model: None,
         };
-        create(&pool, "u2", &new_msg("user", "第二条")).await.unwrap();
-        // tool_result 占位 user 行（在途工具轮，非用户发言）→ 排除
-        create(&pool, "u-tool", &new_msg("user", "")).await.unwrap();
-        update_content_blocks(&pool, "u-tool", r#"[{"type":"tool_result","tool_use_id":"t1"}]"#)
+        create(&pool, "u2", &new_msg("user", "第二条"))
             .await
             .unwrap();
+        // tool_result 占位 user 行（在途工具轮，非用户发言）→ 排除
+        create(&pool, "u-tool", &new_msg("user", "")).await.unwrap();
+        update_content_blocks(
+            &pool,
+            "u-tool",
+            r#"[{"type":"tool_result","tool_use_id":"t1"}]"#,
+        )
+        .await
+        .unwrap();
         // 空占位 user 行（崩溃残留）→ 排除
-        create(&pool, "u-empty", &new_msg("user", "")).await.unwrap();
+        create(&pool, "u-empty", &new_msg("user", ""))
+            .await
+            .unwrap();
 
         let ids = |v: Vec<TurnAnchor>| v.into_iter().map(|a| a.message_id).collect::<Vec<_>>();
 
         // 含头查询（head_dispatched=false 的重消费路径）：从 u2 起 = [u2]（含自己）
-        let from_u2 = list_user_anchors_from(&pool, "conv-backlog", "u2").await.unwrap();
+        let from_u2 = list_user_anchors_from(&pool, "conv-backlog", "u2")
+            .await
+            .unwrap();
         assert_eq!(ids(from_u2), vec!["u2"]);
         // 从 u1 起 = [u1, u2]（占位行两侧都不混入）
-        let from_u1 = list_user_anchors_from(&pool, "conv-backlog", "u1").await.unwrap();
+        let from_u1 = list_user_anchors_from(&pool, "conv-backlog", "u1")
+            .await
+            .unwrap();
         assert_eq!(ids(from_u1), vec!["u1", "u2"]);
         // 对照：严格之后（已派发路径）= [u2]
-        let after_u1 = list_user_anchors_after(&pool, "conv-backlog", "u1").await.unwrap();
+        let after_u1 = list_user_anchors_after(&pool, "conv-backlog", "u1")
+            .await
+            .unwrap();
         assert_eq!(ids(after_u1), vec!["u2"]);
     }
 
@@ -1153,9 +1167,13 @@ mod tests {
         // 占位行（content='' blocks='[]'）与纯 tool_use 行（content=''）都跳过
         create(&pool, "a-ph", &new_msg("")).await.unwrap();
         create(&pool, "a-tool", &new_msg("")).await.unwrap();
-        update_content_blocks(&pool, "a-tool", r#"[{"type":"tool_use","id":"t1","name":"x"}]"#)
-            .await
-            .unwrap();
+        update_content_blocks(
+            &pool,
+            "a-tool",
+            r#"[{"type":"tool_use","id":"t1","name":"x"}]"#,
+        )
+        .await
+        .unwrap();
         create(&pool, "a-real", &new_msg("回答正文")).await.unwrap();
         create(&pool, "a-ph2", &new_msg("  ")).await.unwrap(); // 纯空白也跳过
 
@@ -1169,10 +1187,23 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        create(&pool, "a-fresh-ph", &NewMessage { conversation_id: "conv-fresh".to_string(), role: "assistant".to_string(), content: String::new(), token_count: None, error: None, model: None })
+        create(
+            &pool,
+            "a-fresh-ph",
+            &NewMessage {
+                conversation_id: "conv-fresh".to_string(),
+                role: "assistant".to_string(),
+                content: String::new(),
+                token_count: None,
+                error: None,
+                model: None,
+            },
+        )
+        .await
+        .unwrap();
+        let none = last_assistant_message_id(&pool, "conv-fresh")
             .await
             .unwrap();
-        let none = last_assistant_message_id(&pool, "conv-fresh").await.unwrap();
         assert_eq!(none, None);
     }
 
@@ -1187,7 +1218,7 @@ mod tests {
             .await
             .unwrap();
         seed_message(&pool, "head-u1", "conv-sweep").await; // 链头 user 行（含 agent-1）
-        // 第二个成员（投票者）：sender_agent_id 有 FK → agents(id)，须真实行
+                                                            // 第二个成员（投票者）：sender_agent_id 有 FK → agents(id)，须真实行
         sqlx::query(
             "INSERT INTO agents (id, name, provider, model, system_prompt, api_key_ref, temperature, max_tokens, extra_params, sort_order, cache_prompt)
              VALUES ('voter-x', '投票者', 'zhipu', 'glm-5.3', '', '', 0.7, 1024, '{}', 1, 0)",
@@ -1258,7 +1289,10 @@ mod tests {
     #[tokio::test]
     async fn steer_backlog_marker_accounting() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed_message(&pool, "u-strand-1", "conv-steer").await; // content = "hello"
         let new_msg = |content: &str| NewMessage {
             conversation_id: "conv-steer".to_string(),
@@ -1269,14 +1303,22 @@ mod tests {
             model: None,
         };
         create(&pool, "u-consumed", &new_msg("已答")).await.unwrap();
-        create(&pool, "u-backfilled", &new_msg("旧库补记")).await.unwrap();
-        create(&pool, "u-legacy", &new_msg("远古行")).await.unwrap();
-        create(&pool, "u-tool", &new_msg("")).await.unwrap();
-        update_content_blocks(&pool, "u-tool", r#"[{"type":"tool_result","tool_use_id":"t1"}]"#)
+        create(&pool, "u-backfilled", &new_msg("旧库补记"))
             .await
             .unwrap();
+        create(&pool, "u-legacy", &new_msg("远古行")).await.unwrap();
+        create(&pool, "u-tool", &new_msg("")).await.unwrap();
+        update_content_blocks(
+            &pool,
+            "u-tool",
+            r#"[{"type":"tool_result","tool_use_id":"t1"}]"#,
+        )
+        .await
+        .unwrap();
         create(&pool, "u-empty", &new_msg("")).await.unwrap();
-        create(&pool, "u-strand-2", &new_msg("第二条搁浅")).await.unwrap();
+        create(&pool, "u-strand-2", &new_msg("第二条搁浅"))
+            .await
+            .unwrap();
 
         // 事件面：物化即落 user_message；消费/已答各有标记
         append_event(&pool, "conv-steer", "user_message", "u-strand-1").await;
@@ -1287,9 +1329,10 @@ mod tests {
         append_event(&pool, "conv-steer", "turn_ended", "u-backfilled").await;
         append_event(&pool, "conv-steer", "user_message", "u-tool").await; // 占位行带事件也不入账
 
-        let ids =
-            |v: Vec<TurnAnchor>| v.into_iter().map(|a| a.message_id).collect::<Vec<_>>();
-        let backlog = list_unconsumed_user_anchors(&pool, "conv-steer").await.unwrap();
+        let ids = |v: Vec<TurnAnchor>| v.into_iter().map(|a| a.message_id).collect::<Vec<_>>();
+        let backlog = list_unconsumed_user_anchors(&pool, "conv-steer")
+            .await
+            .unwrap();
         assert_eq!(
             ids(backlog),
             vec!["u-strand-1", "u-strand-2"],
@@ -1303,7 +1346,10 @@ mod tests {
     #[tokio::test]
     async fn conversations_with_unconsumed_anchors_scopes_to_chat() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed_message(&pool, "u-strand", "conv-chat").await; // 会话 kind 默认 'chat'
         seed_turn_conv(&pool, "conv-chat-done").await;
         seed_turn_conv(&pool, "conv-chan").await;
@@ -1319,8 +1365,12 @@ mod tests {
             error: None,
             model: None,
         };
-        create(&pool, "u-answered", &new_msg("conv-chat-done", "已答")).await.unwrap();
-        create(&pool, "u-chan", &new_msg("conv-chan", "频道搁浅")).await.unwrap();
+        create(&pool, "u-answered", &new_msg("conv-chat-done", "已答"))
+            .await
+            .unwrap();
+        create(&pool, "u-chan", &new_msg("conv-chan", "频道搁浅"))
+            .await
+            .unwrap();
 
         append_event(&pool, "conv-chat", "user_message", "u-strand").await;
         append_event(&pool, "conv-chat-done", "user_message", "u-answered").await;
@@ -1360,10 +1410,19 @@ mod tests {
     }
 
     /// 建一个回合：真 user 锚 + N 条 assistant 行，返回锚 rowid。
-    async fn seed_turn(pool: &SqlitePool, conv: &str, anchor_id: &str, assistant_rows: usize) -> i64 {
-        create(pool, anchor_id, &turn_msg(conv, "user", &format!("问题 {anchor_id}")))
-            .await
-            .unwrap();
+    async fn seed_turn(
+        pool: &SqlitePool,
+        conv: &str,
+        anchor_id: &str,
+        assistant_rows: usize,
+    ) -> i64 {
+        create(
+            pool,
+            anchor_id,
+            &turn_msg(conv, "user", &format!("问题 {anchor_id}")),
+        )
+        .await
+        .unwrap();
         for i in 0..assistant_rows {
             create(
                 pool,
@@ -1380,13 +1439,18 @@ mod tests {
     #[tokio::test]
     async fn turn_page_first_load_includes_tail_turns_with_cursor() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed_turn_conv(&pool, "conv-tp1").await;
         seed_turn(&pool, "conv-tp1", "t1", 1).await; // 2 行
         let t2 = seed_turn(&pool, "conv-tp1", "t2", 2).await; // 3 行
         seed_turn(&pool, "conv-tp1", "t3", 3).await; // 4 行
 
-        let page = list_by_turn_page(&pool, "conv-tp1", Some(2), None).await.unwrap();
+        let page = list_by_turn_page(&pool, "conv-tp1", Some(2), None)
+            .await
+            .unwrap();
         // 尾回合（未完成尾同规）全量含：t2 + t3 两回合 = 7 行
         assert_eq!(page.rows.len(), 7);
         assert_eq!(page.rows[0].id, "t2");
@@ -1400,15 +1464,22 @@ mod tests {
     #[tokio::test]
     async fn turn_page_terminal_residue_merges_before_first_anchor() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed_turn_conv(&pool, "conv-tp2").await;
         // 首锚前的 assistant 残留行（崩溃恢复/占位残留形态）
-        create(&pool, "r0", &turn_msg("conv-tp2", "assistant", "残留行")).await.unwrap();
+        create(&pool, "r0", &turn_msg("conv-tp2", "assistant", "残留行"))
+            .await
+            .unwrap();
         seed_turn(&pool, "conv-tp2", "t1", 0).await;
         let t2 = seed_turn(&pool, "conv-tp2", "t2", 1).await;
         seed_turn(&pool, "conv-tp2", "t3", 1).await;
 
-        let p1 = list_by_turn_page(&pool, "conv-tp2", Some(2), None).await.unwrap();
+        let p1 = list_by_turn_page(&pool, "conv-tp2", Some(2), None)
+            .await
+            .unwrap();
         assert!(p1.has_more);
         assert_eq!(p1.next_before_anchor_rowid, Some(t2));
 
@@ -1425,12 +1496,19 @@ mod tests {
     #[tokio::test]
     async fn turn_page_first_load_terminal_single_span_full() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed_turn_conv(&pool, "conv-tp2b").await;
-        create(&pool, "r0", &turn_msg("conv-tp2b", "assistant", "残留行")).await.unwrap();
+        create(&pool, "r0", &turn_msg("conv-tp2b", "assistant", "残留行"))
+            .await
+            .unwrap();
         seed_turn(&pool, "conv-tp2b", "t1", 1).await;
 
-        let page = list_by_turn_page(&pool, "conv-tp2b", None, None).await.unwrap();
+        let page = list_by_turn_page(&pool, "conv-tp2b", None, None)
+            .await
+            .unwrap();
         let ids: Vec<&str> = page.rows.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(ids, vec!["r0", "t1", "t1-a0"]);
         assert!(!page.has_more);
@@ -1442,18 +1520,33 @@ mod tests {
     #[tokio::test]
     async fn turn_page_anchor_predicate_matches_list_turn_anchors() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
-        seed_turn_conv(&pool, "conv-tp3").await;
-        create(&pool, "u1", &turn_msg("conv-tp3", "user", "第一条")).await.unwrap();
-        // tool_result 占位 user 行 → 非锚
-        create(&pool, "u-tool", &turn_msg("conv-tp3", "user", "")).await.unwrap();
-        update_content_blocks(&pool, "u-tool", r#"[{"type":"tool_result","tool_use_id":"t1"}]"#)
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
             .await
             .unwrap();
+        seed_turn_conv(&pool, "conv-tp3").await;
+        create(&pool, "u1", &turn_msg("conv-tp3", "user", "第一条"))
+            .await
+            .unwrap();
+        // tool_result 占位 user 行 → 非锚
+        create(&pool, "u-tool", &turn_msg("conv-tp3", "user", ""))
+            .await
+            .unwrap();
+        update_content_blocks(
+            &pool,
+            "u-tool",
+            r#"[{"type":"tool_result","tool_use_id":"t1"}]"#,
+        )
+        .await
+        .unwrap();
         // 空占位 user 行 → 非锚
-        create(&pool, "u-empty", &turn_msg("conv-tp3", "user", "")).await.unwrap();
+        create(&pool, "u-empty", &turn_msg("conv-tp3", "user", ""))
+            .await
+            .unwrap();
         // 纯图 user 行（content 空、blocks 非空且无 tool_result）→ 真锚（误伤 guard）
-        create(&pool, "u-img", &turn_msg("conv-tp3", "user", "")).await.unwrap();
+        create(&pool, "u-img", &turn_msg("conv-tp3", "user", ""))
+            .await
+            .unwrap();
         update_content_blocks(
             &pool,
             "u-img",
@@ -1462,13 +1555,17 @@ mod tests {
         .await
         .unwrap();
         let u_img = get_by_id(&pool, "u-img").await.unwrap().rowid;
-        create(&pool, "u2", &turn_msg("conv-tp3", "user", "第二条")).await.unwrap();
+        create(&pool, "u2", &turn_msg("conv-tp3", "user", "第二条"))
+            .await
+            .unwrap();
         let u2 = get_by_id(&pool, "u2").await.unwrap().rowid;
 
         let mut collected: Vec<String> = Vec::new();
         let mut cursor: Option<i64> = None;
         for _ in 0..5 {
-            let page = list_by_turn_page(&pool, "conv-tp3", Some(1), cursor).await.unwrap();
+            let page = list_by_turn_page(&pool, "conv-tp3", Some(1), cursor)
+                .await
+                .unwrap();
             collected.extend(page.rows.iter().map(|r| r.id.clone()));
             if !page.has_more {
                 assert_eq!(page.next_before_anchor_rowid, None);
@@ -1481,8 +1578,16 @@ mod tests {
         sorted.sort();
         sorted.dedup();
         assert_eq!(sorted.len(), 5, "全部行恰一次：{collected:?}");
-        assert_eq!(collected.first().map(String::as_str), Some("u2"), "首页 = 最新锚");
-        assert_eq!(collected.last().map(String::as_str), Some("u-empty"), "终页含最旧行");
+        assert_eq!(
+            collected.first().map(String::as_str),
+            Some("u2"),
+            "首页 = 最新锚"
+        );
+        assert_eq!(
+            collected.last().map(String::as_str),
+            Some("u-empty"),
+            "终页含最旧行"
+        );
 
         // 同源锁：分页锚集合 == list_turn_anchors
         let anchors = list_turn_anchors(&pool, "conv-tp3").await.unwrap();
@@ -1498,7 +1603,10 @@ mod tests {
     #[tokio::test]
     async fn turn_page_row_cap_truncates_honestly_and_reassembles() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed_turn_conv(&pool, "conv-tp4").await;
         seed_turn(&pool, "conv-tp4", "t1", 174).await; // 175 行/回合
         let t2 = seed_turn(&pool, "conv-tp4", "t2", 174).await;
@@ -1508,11 +1616,16 @@ mod tests {
         let mut cursor: Option<i64> = None;
         let mut pages = 0;
         loop {
-            let page = list_by_turn_page(&pool, "conv-tp4", Some(2), cursor).await.unwrap();
+            let page = list_by_turn_page(&pool, "conv-tp4", Some(2), cursor)
+                .await
+                .unwrap();
             pages += 1;
             // 行数闸（300）下每页只装得下 1 个 175 行回合
             assert_eq!(page.rows.len(), 175, "第 {pages} 页 = 恰一回合");
-            assert!(page.rows[0].id.starts_with('t'), "页头是回合锚（页界=回合边界）");
+            assert!(
+                page.rows[0].id.starts_with('t'),
+                "页头是回合锚（页界=回合边界）"
+            );
             all.extend(page.rows.iter().map(|r| r.id.clone()));
             if !page.has_more {
                 assert_eq!(page.next_before_anchor_rowid, None);
@@ -1534,12 +1647,17 @@ mod tests {
     #[tokio::test]
     async fn turn_page_giant_turn_gets_own_page() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed_turn_conv(&pool, "conv-tp5").await;
         seed_turn(&pool, "conv-tp5", "giant", 349).await; // 350 行
         let small = seed_turn(&pool, "conv-tp5", "small", 1).await; // 2 行
 
-        let p1 = list_by_turn_page(&pool, "conv-tp5", None, None).await.unwrap();
+        let p1 = list_by_turn_page(&pool, "conv-tp5", None, None)
+            .await
+            .unwrap();
         assert_eq!(p1.rows.len(), 2, "首页只装小回合（巨回合探测超闸留下页）");
         assert!(p1.has_more);
         assert_eq!(p1.next_before_anchor_rowid, Some(small));
@@ -1547,7 +1665,11 @@ mod tests {
         let p2 = list_by_turn_page(&pool, "conv-tp5", None, p1.next_before_anchor_rowid)
             .await
             .unwrap();
-        assert_eq!(p2.rows.len(), 350, "巨回合独立成页（首纳入 span 全量，超闸例外）");
+        assert_eq!(
+            p2.rows.len(),
+            350,
+            "巨回合独立成页（首纳入 span 全量，超闸例外）"
+        );
         assert!(!p2.has_more);
         assert_eq!(p2.next_before_anchor_rowid, None);
     }
@@ -1556,16 +1678,31 @@ mod tests {
     #[tokio::test]
     async fn turn_page_zero_anchor_conversation_falls_back_to_tail_rows() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
-        seed_turn_conv(&pool, "conv-tp6").await;
-        create(&pool, "r1", &turn_msg("conv-tp6", "assistant", "回复")).await.unwrap();
-        create(&pool, "u-tool", &turn_msg("conv-tp6", "user", "")).await.unwrap();
-        update_content_blocks(&pool, "u-tool", r#"[{"type":"tool_result","tool_use_id":"t1"}]"#)
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
             .await
             .unwrap();
-        create(&pool, "u-empty", &turn_msg("conv-tp6", "user", "")).await.unwrap();
+        seed_turn_conv(&pool, "conv-tp6").await;
+        create(&pool, "r1", &turn_msg("conv-tp6", "assistant", "回复"))
+            .await
+            .unwrap();
+        create(&pool, "u-tool", &turn_msg("conv-tp6", "user", ""))
+            .await
+            .unwrap();
+        update_content_blocks(
+            &pool,
+            "u-tool",
+            r#"[{"type":"tool_result","tool_use_id":"t1"}]"#,
+        )
+        .await
+        .unwrap();
+        create(&pool, "u-empty", &turn_msg("conv-tp6", "user", ""))
+            .await
+            .unwrap();
 
-        let page = list_by_turn_page(&pool, "conv-tp6", None, None).await.unwrap();
+        let page = list_by_turn_page(&pool, "conv-tp6", None, None)
+            .await
+            .unwrap();
         let ids: Vec<&str> = page.rows.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(ids, vec!["r1", "u-tool", "u-empty"], "fallback 尾部行 ASC");
         assert!(!page.has_more);
@@ -1577,12 +1714,17 @@ mod tests {
     #[tokio::test]
     async fn turn_page_stale_cursor_returns_empty_page_not_fallback() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed_turn_conv(&pool, "conv-tp7").await;
         seed_turn(&pool, "conv-tp7", "u1", 1).await; // 会话有真实回合
 
         // 空池首条消息 rowid=1；锚 rowid < 1 不存在 → 窗口空
-        let page = list_by_turn_page(&pool, "conv-tp7", Some(2), Some(1)).await.unwrap();
+        let page = list_by_turn_page(&pool, "conv-tp7", Some(2), Some(1))
+            .await
+            .unwrap();
         assert!(page.rows.is_empty(), "空页，不是 fallback 的 2 行");
         assert!(!page.has_more);
         assert_eq!(page.next_before_anchor_rowid, None);
@@ -1592,7 +1734,10 @@ mod tests {
     #[tokio::test]
     async fn turn_page_turns_clamping() {
         let pool = fresh_pool().await;
-        sqlx::migrate!("./src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("./src/db/migrations")
+            .run(&pool)
+            .await
+            .unwrap();
         seed_turn_conv(&pool, "conv-tp8").await;
         for i in 1..=5 {
             seed_turn(&pool, "conv-tp8", &format!("t{i}"), 0).await;
@@ -1600,17 +1745,23 @@ mod tests {
 
         // 非法值 → 默认 8 → 5 回合一页全量
         for bad in [0, -3] {
-            let page = list_by_turn_page(&pool, "conv-tp8", Some(bad), None).await.unwrap();
+            let page = list_by_turn_page(&pool, "conv-tp8", Some(bad), None)
+                .await
+                .unwrap();
             assert_eq!(page.rows.len(), 5, "turns={bad} 回落默认 8");
             assert!(!page.has_more);
         }
         // 上限原样合法
-        let page = list_by_turn_page(&pool, "conv-tp8", Some(50), None).await.unwrap();
+        let page = list_by_turn_page(&pool, "conv-tp8", Some(50), None)
+            .await
+            .unwrap();
         assert_eq!(page.rows.len(), 5);
         assert!(!page.has_more);
         // 正常分页
         let t4 = get_by_id(&pool, "t4").await.unwrap().rowid;
-        let page = list_by_turn_page(&pool, "conv-tp8", Some(2), None).await.unwrap();
+        let page = list_by_turn_page(&pool, "conv-tp8", Some(2), None)
+            .await
+            .unwrap();
         let ids: Vec<&str> = page.rows.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(ids, vec!["t4", "t5"]);
         assert!(page.has_more);

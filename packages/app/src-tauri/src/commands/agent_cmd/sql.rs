@@ -237,7 +237,9 @@ impl AgentCmd for SqlAgentCmd {
                 let pid = pid.to_string();
                 let cred = resolve_profile_credentials(&self.app, &self.pool, &pid)
                     .await
-                    .map_err(|e| AppError::Validation(format!("引用的模型配置不可用（{pid}）：{e}")))?;
+                    .map_err(|e| {
+                        AppError::Validation(format!("引用的模型配置不可用（{pid}）：{e}"))
+                    })?;
                 profile_snapshot = Some((cred.profile.provider, cred.profile.model, cred.base_url));
                 resolved_profile = Some(pid);
             }
@@ -254,12 +256,8 @@ impl AgentCmd for SqlAgentCmd {
                 )
                 .await?;
                 // 解析回读拿规范快照值（刚建的行，同时校验落库成功）
-                let cred = resolve_profile_credentials(
-                    &self.app,
-                    &self.pool,
-                    &m.profile_id,
-                )
-                .await?;
+                let cred =
+                    resolve_profile_credentials(&self.app, &self.pool, &m.profile_id).await?;
                 profile_snapshot = Some((cred.profile.provider, cred.profile.model, cred.base_url));
                 resolved_profile = Some(m.profile_id.clone());
                 tracing::info!(
@@ -386,7 +384,9 @@ impl AgentCmd for SqlAgentCmd {
             Some(Some(pid)) if !pid.trim().is_empty() => {
                 let cred = resolve_profile_credentials(&self.app, &self.pool, pid)
                     .await
-                    .map_err(|e| AppError::Validation(format!("引用的模型配置不可用（{pid}）：{e}")))?;
+                    .map_err(|e| {
+                        AppError::Validation(format!("引用的模型配置不可用（{pid}）：{e}"))
+                    })?;
                 Some((cred.profile.provider, cred.profile.model, cred.base_url))
             }
             _ => None,
@@ -457,13 +457,9 @@ impl AgentCmd for SqlAgentCmd {
         // 镜像行——它们是创建时写入的信息性镜像（运行时不读），不更新会与 UI 分裂
         // 误导排障。文件不存在不创建；失败 best-effort warn（DB 已更新，不回滚）。
         if let Some(ws) = row.workspace_path.as_deref() {
-            if let Err(e) = sync_agent_yaml_mirror_file(
-                ws,
-                &row.provider,
-                &row.model,
-                row.base_url.as_deref(),
-            )
-            .await
+            if let Err(e) =
+                sync_agent_yaml_mirror_file(ws, &row.provider, &row.model, row.base_url.as_deref())
+                    .await
             {
                 tracing::warn!(
                     target: "ice_paw.agent",
@@ -537,8 +533,7 @@ impl AgentCmd for SqlAgentCmd {
         // channel_coordinator(failed-over) 事件；无剩余成员 → 拒删三段式。
         // 归档频道不在守卫面：项目已删无候选可迁，随 CASCADE 消失（边缘路径，
         // 边界披露见 CLAUDE.md 频道节）。
-        let channels =
-            repo::conversation::channels_coordinated_by(&self.pool, agent_id).await?;
+        let channels = repo::conversation::channels_coordinated_by(&self.pool, agent_id).await?;
         for ch in channels {
             let Some(pid) = ch.project_id.clone() else {
                 continue; // 散落频道不该存在（ensure 只建挂项目的），防御性跳过
@@ -573,9 +568,7 @@ impl AgentCmd for SqlAgentCmd {
                     v: 1,
                     action: "failed-over".into(),
                     agent_id: Some(successor.agent_id.clone()),
-                    reason: Some(
-                        "统筹者 agent 被删除，自动迁移给最早加入的剩余成员".to_string(),
-                    ),
+                    reason: Some("统筹者 agent 被删除，自动迁移给最早加入的剩余成员".to_string()),
                 },
             )
             .await;

@@ -186,7 +186,11 @@ pub(crate) async fn consume_steer_backlog(
 
         // 消费**最旧一条**（anchor = backlog.first()；其余留待本轮 turn_ended 触发点
         // 续接——连发各自成回合、串行完整执行，数据层不合并）
-        let anchor = backlog.first().expect("backlog 非空必有头").message_id.clone();
+        let anchor = backlog
+            .first()
+            .expect("backlog 非空必有头")
+            .message_id
+            .clone();
         let count = backlog.len();
         match run_steer_turn(app, pool, conv, &anchor, count).await? {
             SteerTurnOutcome::Dispatched => return Ok(()),
@@ -256,8 +260,7 @@ async fn run_steer_turn(
             None
         }
     };
-    let fallback =
-        crate::harness::fallback_plan::production_fallback_plan(app, pool, &creds.agent);
+    let fallback = crate::harness::fallback_plan::production_fallback_plan(app, pool, &creds.agent);
 
     // fire-and-forget：完成信号 drop（chat_cmd 用户路径同款），后续积压由
     // turn_ended watcher 驱动——本函数不等待回合完成。
@@ -266,13 +269,16 @@ async fn run_steer_turn(
             emitter: crate::harness::r#loop::emitter::tauri_emitter(app.clone(), conv.id.clone()),
             tool_app: Some(app.clone()),
             pool: pool.clone(),
-            route_registry: app.state::<crate::harness::read_route::ReadRouteRegistry>().inner(),
+            route_registry: app
+                .state::<crate::harness::read_route::ReadRouteRegistry>()
+                .inner(),
             chat_state: chat_state.clone(),
             global_registry: Arc::clone(
                 app.state::<Arc<crate::harness::mcp::McpRegistry>>().inner(),
             ),
             mcp_manager: Arc::clone(
-                app.state::<Arc<crate::harness::mcp::McpServerManager>>().inner(),
+                app.state::<Arc<crate::harness::mcp::McpServerManager>>()
+                    .inner(),
             ),
             auth_registry: app
                 .state::<crate::harness::tool_executor::ToolAuthRegistry>()

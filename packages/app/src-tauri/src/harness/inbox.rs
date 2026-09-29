@@ -68,10 +68,10 @@ use crate::db::models::{ConversationRow, SessionEventRow};
 use crate::db::repo::{self, session_event};
 use crate::error::{AppError, AppResult};
 use crate::harness::chat_state::ChatState;
-use crate::harness::provider;
 use crate::harness::event_log::{
     self, CrossSessionMessagePayload, CrossSessionMessageSettledPayload, EventCtx,
 };
+use crate::harness::provider;
 use crate::harness::session_runner::{self, AgentTurnInput, TurnEnv};
 use crate::infra::protocol::ContentBlock;
 
@@ -419,7 +419,9 @@ fn spawn_consume_one(app: AppHandle, pool: SqlitePool, conv: ConversationRow, by
                 return;
             }
         };
-        let Some(ev) = pending.first().cloned() else { return };
+        let Some(ev) = pending.first().cloned() else {
+            return;
+        };
         let conv_id = conv.id.clone();
         match consume_pending(&app, &pool, conv, ev, by).await {
             Ok(true) => {}
@@ -459,18 +461,20 @@ pub async fn consume_pending(
         return Ok(false);
     }
 
-    let payload: CrossSessionMessagePayload = serde_json::from_str(&ev.payload).map_err(|e| {
-        AppError::Internal(format!("来件 payload 解析失败（seq={}）: {e}", ev.seq))
-    })?;
+    let payload: CrossSessionMessagePayload = serde_json::from_str(&ev.payload)
+        .map_err(|e| AppError::Internal(format!("来件 payload 解析失败（seq={}）: {e}", ev.seq)))?;
 
     // --- 预检：目标会话 agent 档案 + 凭据 + provider（失败不出队不留痕） ---
     let agent_cmd = app.state::<Arc<dyn AgentCmd>>().inner().clone();
-    let creds = agent_cmd.get_with_credentials(&conv.agent_id).await.map_err(|e| {
-        AppError::Internal(format!(
-            "读取会话 agent（{}）配置/凭据失败: {e}——来件留在收件箱，修复 agent 配置后可再消费",
-            conv.agent_id
-        ))
-    })?;
+    let creds = agent_cmd
+        .get_with_credentials(&conv.agent_id)
+        .await
+        .map_err(|e| {
+            AppError::Internal(format!(
+                "读取会话 agent（{}）配置/凭据失败: {e}——来件留在收件箱，修复 agent 配置后可再消费",
+                conv.agent_id
+            ))
+        })?;
     let llm_provider = provider::create_provider(
         &creds.agent.provider,
         &creds.agent.model,
@@ -493,8 +497,11 @@ pub async fn consume_pending(
     let cancel_guard = scopeguard::guard((), |_| chat_state.unregister(&conv_id_guard));
 
     // --- 出队占位（settled consumed；append-only，不回滚） ---
-    let settle_ctx =
-        EventCtx::new(&conv.id, &format!("cross:{}", payload.message_id), &payload.source_agent_id);
+    let settle_ctx = EventCtx::new(
+        &conv.id,
+        &format!("cross:{}", payload.message_id),
+        &payload.source_agent_id,
+    );
     event_log::log_cross_session_message_settled(
         pool,
         &settle_ctx,
@@ -532,19 +539,23 @@ pub async fn consume_pending(
         source_conversation_title: payload.source_conversation_title.clone(),
         source_agent_name: payload.source_agent_name.clone(),
     };
-    let fallback =
-        crate::harness::fallback_plan::production_fallback_plan(app, pool, &creds.agent);
+    let fallback = crate::harness::fallback_plan::production_fallback_plan(app, pool, &creds.agent);
 
     let done_rx = session_runner::run_agent_turn(
         &TurnEnv {
             emitter: crate::harness::r#loop::emitter::tauri_emitter(app.clone(), conv.id.clone()),
             tool_app: Some(app.clone()),
             pool: pool.clone(),
-            route_registry: app.state::<crate::harness::read_route::ReadRouteRegistry>().inner(),
+            route_registry: app
+                .state::<crate::harness::read_route::ReadRouteRegistry>()
+                .inner(),
             chat_state: chat_state.clone(),
-            global_registry: Arc::clone(app.state::<Arc<crate::harness::mcp::McpRegistry>>().inner()),
+            global_registry: Arc::clone(
+                app.state::<Arc<crate::harness::mcp::McpRegistry>>().inner(),
+            ),
             mcp_manager: Arc::clone(
-                app.state::<Arc<crate::harness::mcp::McpServerManager>>().inner(),
+                app.state::<Arc<crate::harness::mcp::McpServerManager>>()
+                    .inner(),
             ),
             auth_registry: app
                 .state::<crate::harness::tool_executor::ToolAuthRegistry>()
@@ -630,7 +641,9 @@ pub async fn consume_pending(
                         );
                         return;
                     }
-                    if let Err(e) = deliver(&app, &pool, &source, &reply_to, reply, false, true).await {
+                    if let Err(e) =
+                        deliver(&app, &pool, &source, &reply_to, reply, false, true).await
+                    {
                         tracing::warn!(target: "ice_paw.inbox", "expect_reply 回投失败: {e}");
                     }
                 }
@@ -734,8 +747,14 @@ mod tests {
             "前端检测锚必须在开头: {text}"
         );
         assert!(text.contains("主控」的 agent 甲"), "来源标注: {text}");
-        assert!(text.contains("send_message_to_session"), "手动回信指引: {text}");
-        assert!(text.contains("target=conv-src"), "回信指引带源会话 id: {text}");
+        assert!(
+            text.contains("send_message_to_session"),
+            "手动回信指引: {text}"
+        );
+        assert!(
+            text.contains("target=conv-src"),
+            "回信指引带源会话 id: {text}"
+        );
         assert!(text.ends_with("材质定稿了吗"));
         assert!(text.contains("\n\n"), "标注头与正文之间空行分隔");
     }
@@ -751,7 +770,10 @@ mod tests {
         assert!(auto.contains("target=conv-src"), "target 锚保留: {auto}");
         // 手动分支：保持旧形态（回信走投递工具）
         let manual = compose_incoming_annotation("主控", "甲", "conv-src", false);
-        assert!(manual.contains("send_message_to_session"), "手动回信指引: {manual}");
+        assert!(
+            manual.contains("send_message_to_session"),
+            "手动回信指引: {manual}"
+        );
         assert!(!manual.contains("直接作答"), "手动分支不指引作答: {manual}");
     }
 
@@ -762,7 +784,10 @@ mod tests {
         let ContentBlock::Text { text: head } = &blocks[0] else {
             panic!("首块必须是 Text");
         };
-        assert!(head.starts_with(INCOMING_PREFIX_HEAD), "标注块带检测锚: {head}");
+        assert!(
+            head.starts_with(INCOMING_PREFIX_HEAD),
+            "标注块带检测锚: {head}"
+        );
         assert!(head.ends_with(']'), "标注块自闭合（不含正文）: {head}");
         let ContentBlock::Text { text: body } = &blocks[1] else {
             panic!("次块必须是 Text");
@@ -821,7 +846,10 @@ mod tests {
 
         // 窗口内 6 次全过
         for i in 0..AUTO_CONSUME_MAX {
-            assert!(auto_consume_reserve(conv, t0 + Duration::from_secs(i as u64)));
+            assert!(auto_consume_reserve(
+                conv,
+                t0 + Duration::from_secs(i as u64)
+            ));
         }
         // 第 7 次拒绝
         assert!(!auto_consume_reserve(conv, t0 + Duration::from_secs(10)));

@@ -505,10 +505,10 @@ mod tests {
     #[test]
     fn encrypt_decrypt_roundtrip_various_inputs() {
         for plaintext in [
-            &b""[..],                         // 空明文 → 40 字节最小 BLOB
+            &b""[..], // 空明文 → 40 字节最小 BLOB
             b"hello",
             b"\x00\x01\x02\xff\xfe".as_slice(),
-            &[0xAAu8; 4096],                  // 4KB 二进制
+            &[0xAAu8; 4096], // 4KB 二进制
             "中文 UTF-8 内容".as_bytes(),
         ] {
             let blob = encrypt_blob(plaintext).unwrap();

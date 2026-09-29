@@ -101,7 +101,10 @@ async fn invoke_tool(
             if let Some(mgr) = server_manager {
                 let server_meta = registry.get(name).await.and_then(|t| {
                     t.server_config_id().map(|sid| {
-                        (sid.to_string(), t.server_display_name().unwrap_or(sid).to_string())
+                        (
+                            sid.to_string(),
+                            t.server_display_name().unwrap_or(sid).to_string(),
+                        )
                     })
                 });
                 if let Some((sid, server_name)) = server_meta {
@@ -290,7 +293,14 @@ pub(crate) async fn execute_tool_round(
         // 2. 根据决策执行
         let final_result: Result<ToolOutput, String> = match decision {
             AuthorizationDecision::Allow => {
-                invoke_tool(server_manager.as_ref(), registry, tc_name, tc_args, tool_ctx).await
+                invoke_tool(
+                    server_manager.as_ref(),
+                    registry,
+                    tc_name,
+                    tc_args,
+                    tool_ctx,
+                )
+                .await
             }
             AuthorizationDecision::Confirm {
                 request_id,
@@ -409,8 +419,14 @@ pub(crate) async fn execute_tool_round(
                                     }
                                 }
                             }
-                            invoke_tool(server_manager.as_ref(), registry, tc_name, tc_args, tool_ctx)
-                                .await
+                            invoke_tool(
+                                server_manager.as_ref(),
+                                registry,
+                                tc_name,
+                                tc_args,
+                                tool_ctx,
+                            )
+                            .await
                         }
                         Some(_) => {
                             // 用户拒绝：写工具结果为拒绝错误
@@ -820,7 +836,9 @@ fn scan_data_uris(text: &mut String, images: &mut Vec<(Vec<u8>, String)>, droppe
         match after.split_once(";base64,") {
             Some((meta, payload)) => {
                 let end = payload
-                    .find(|c: char| !(c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '='))
+                    .find(|c: char| {
+                        !(c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '=')
+                    })
                     .unwrap_or(payload.len());
                 match decode_b64_image(&payload[..end]) {
                     Some(img) => {
@@ -1150,9 +1168,8 @@ mod tests {
     fn extract_embedded_images_json_field_ue5_shape() {
         let png = test_png_bytes();
         let b64 = base64::engine::general_purpose::STANDARD.encode(&png);
-        let mut text = format!(
-            r#"{{"returnValue":{{"image":{{"mimeType":"image/png","data":"{b64}"}}}}}}"#
-        );
+        let mut text =
+            format!(r#"{{"returnValue":{{"image":{{"mimeType":"image/png","data":"{b64}"}}}}}}"#);
         let images = extract_embedded_images(&mut text);
         assert_eq!(images.len(), 1);
         assert_eq!(images[0].0, png);

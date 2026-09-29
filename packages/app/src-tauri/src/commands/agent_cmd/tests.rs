@@ -2,12 +2,12 @@
 //!
 //! 覆盖三块：校验/端点跟随纯函数、MockAgentCmd trait 行为、出生 yaml 模板去雷。
 
-use super::*;
 use super::default_yaml::build_default_agent_yaml_content;
 use super::validation::{
     default_url_on_provider_switch, manual_materializable, resolve_base_url_arg,
     validate_new_agent, validate_update_model_fields_conflict,
 };
+use super::*;
 use crate::db::models::{AgentRow, NewAgent};
 use crate::error::AppError;
 
@@ -411,8 +411,7 @@ fn default_yaml_template_comments_out_hard_caps() {
     for line in content.lines() {
         let trimmed = line.trim_start();
         assert!(
-            !(trimmed.starts_with("tool_max_rounds:")
-                || trimmed.starts_with("max_total_tokens:")),
+            !(trimmed.starts_with("tool_max_rounds:") || trimmed.starts_with("max_total_tokens:")),
             "不得有活跃硬上限行: {line}"
         );
     }
@@ -433,10 +432,9 @@ fn agent_update_model_profile_serde_three_forms() {
     assert_eq!(absent.fallback_profile_ids, None);
 
     // JSON null → Some(None)（解除引用 / 清链）
-    let nulled: AgentUpdate = serde_json::from_str(
-        r#"{"id":"a1","model_profile_id":null,"fallback_profile_ids":null}"#,
-    )
-    .unwrap();
+    let nulled: AgentUpdate =
+        serde_json::from_str(r#"{"id":"a1","model_profile_id":null,"fallback_profile_ids":null}"#)
+            .unwrap();
     assert_eq!(nulled.model_profile_id, Some(None));
     assert_eq!(nulled.fallback_profile_ids, Some(None));
 

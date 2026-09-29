@@ -847,7 +847,8 @@ mod tests {
             r#"[{"type":"text","text":"写长文"}]"#,
         )
         .await;
-        event_log::log_user_message(&pool, &ev, "t1", "写长文", &[text_block("写长文")], None).await;
+        event_log::log_user_message(&pool, &ev, "t1", "写长文", &[text_block("写长文")], None)
+            .await;
         insert_row(
             &pool,
             "conv",

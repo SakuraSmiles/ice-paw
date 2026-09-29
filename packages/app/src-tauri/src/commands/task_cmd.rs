@@ -36,7 +36,9 @@ pub use crate::db::repo::task::RecentRunView;
 
 /// 存库格式：本地时刻 → UTC 字符串（DB 惯例 UTC 存储）。
 fn fmt_store(dt: chrono::DateTime<chrono::Local>) -> String {
-    dt.with_timezone(&chrono::Utc).format("%Y-%m-%d %H:%M:%S").to_string()
+    dt.with_timezone(&chrono::Utc)
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string()
 }
 
 /// 校验档位并算首个 next_run（enabled 任务必非空；一次性过期时间拒收——
@@ -121,16 +123,19 @@ pub async fn update_scheduled_task(
     task::update(&pool, &input).await?;
 
     // schedule 或 enabled 变更 → 重算 next_run（一次性过期同样拒收——除非禁用）
-    let kind = input.schedule_kind.as_ref().unwrap_or(&existing.schedule_kind);
-    let data = input.schedule_data.as_ref().unwrap_or(&existing.schedule_data);
+    let kind = input
+        .schedule_kind
+        .as_ref()
+        .unwrap_or(&existing.schedule_kind);
+    let data = input
+        .schedule_data
+        .as_ref()
+        .unwrap_or(&existing.schedule_data);
     let enabled = match input.enabled {
         Some(v) => v != 0,
         None => existing.enabled != 0,
     };
-    if input.schedule_kind.is_some()
-        || input.schedule_data.is_some()
-        || input.enabled.is_some()
-    {
+    if input.schedule_kind.is_some() || input.schedule_data.is_some() || input.enabled.is_some() {
         let next = first_next_run(kind, data, enabled)?;
         task::schedule_next(&pool, &input.id, next.as_deref(), None).await?;
     }
@@ -146,7 +151,11 @@ pub async fn delete_scheduled_task(pool: State<'_, SqlitePool>, id: String) -> A
 
 /// 手动触发：fire-and-forget（回合异步跑，UI 由执行记录/会话事件驱动刷新）。
 #[tauri::command]
-pub async fn run_scheduled_task_now(app: AppHandle, pool: State<'_, SqlitePool>, id: String) -> AppResult<()> {
+pub async fn run_scheduled_task_now(
+    app: AppHandle,
+    pool: State<'_, SqlitePool>,
+    id: String,
+) -> AppResult<()> {
     // 存在性当场校验（404 回显而非静默）
     task::get_by_id(&pool, &id)
         .await?

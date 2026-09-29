@@ -176,9 +176,11 @@ fn ensure_help_docs(default_workspace: &str) {
             include_str!("../../../resources/help/project-workspace.md"),
             &["3c399afa06d8b73c"],
         ),
-        HelpDoc::new("faq.md", include_str!("../../../resources/help/faq.md"), &[
-            "29b185fb67391af7",
-        ]),
+        HelpDoc::new(
+            "faq.md",
+            include_str!("../../../resources/help/faq.md"),
+            &["29b185fb67391af7"],
+        ),
         // ---- 2026-09-11 全面更新批：新增六篇（首发，known_hashes 为空）----
         HelpDoc::new(
             "model-profiles.md",
@@ -297,7 +299,10 @@ fn sync_help_doc(dir: &Path, doc: &HelpDoc) -> HelpSyncOutcome {
             }
         }
     };
-    if matches!(action, HelpSyncOutcome::WriteNew | HelpSyncOutcome::Upgraded) {
+    if matches!(
+        action,
+        HelpSyncOutcome::WriteNew | HelpSyncOutcome::Upgraded
+    ) {
         if let Err(e) = std::fs::write(&path, doc.content) {
             tracing::warn!(
                 target: "ice_paw.kb",

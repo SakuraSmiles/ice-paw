@@ -49,10 +49,7 @@ pub const TOOL_GROUPS: &[(&str, &[&str])] = &[
         ],
     ),
     ("web", &["web_fetch"]),
-    (
-        "kb",
-        &["search_kb", "read_kb_document", "save_to_kb"],
-    ),
+    ("kb", &["search_kb", "read_kb_document", "save_to_kb"]),
     (
         "attach",
         &[
@@ -164,10 +161,7 @@ pub fn scope_allows(scopes: &[String], name: &str, server_id: Option<&str>) -> b
 /// （真名 `read_kb_document`）——**权限假象比缺工具危险**，零命中必须 warn 可见。
 /// `server:<id>` 零命中的可能原因：server 已删除 / 已禁用（禁用的 server 工具
 /// 不进快照，属预期而非错误——warn 文案由调用方给全口径）。
-pub fn dead_scope_entries(
-    scopes: &[String],
-    tools: &[(String, Option<String>)],
-) -> Vec<String> {
+pub fn dead_scope_entries(scopes: &[String], tools: &[(String, Option<String>)]) -> Vec<String> {
     scopes
         .iter()
         .filter(|raw| {
@@ -195,27 +189,61 @@ mod tests {
     fn groups_cover_all_registered_tools() {
         let registered: &[&str] = &[
             // 只读 / 文件
-            "read_file", "list_directory", "directory_tree", "get_file_info",
+            "read_file",
+            "list_directory",
+            "directory_tree",
+            "get_file_info",
             "read_multiple_files",
             // Word 四件
-            "inspect_docx", "edit_docx", "validate_docx", "write_docx",
+            "inspect_docx",
+            "edit_docx",
+            "validate_docx",
+            "write_docx",
             // KB
-            "search_kb", "save_to_kb", "read_kb_document",
+            "search_kb",
+            "save_to_kb",
+            "read_kb_document",
             // 附件与引用
-            "read_attachment_page", "view_attachment_image", "read_reference",
+            "read_attachment_page",
+            "view_attachment_image",
+            "read_reference",
             // agentic 工具集
-            "write_file", "edit_file", "delete_file", "move_file", "copy_file",
-            "create_directory", "run_command", "search_files", "git", "web_fetch",
+            "write_file",
+            "edit_file",
+            "delete_file",
+            "move_file",
+            "copy_file",
+            "create_directory",
+            "run_command",
+            "search_files",
+            "git",
+            "web_fetch",
             // 配置与计划
-            "read_agent_config", "list_model_profiles", "list_projects", "get_project_details",
-            "search_conversations", "get_task_ledger", "propose_config_change", "update_plan",
+            "read_agent_config",
+            "list_model_profiles",
+            "list_projects",
+            "get_project_details",
+            "search_conversations",
+            "get_task_ledger",
+            "propose_config_change",
+            "update_plan",
             // 定时任务三件（组装期注册，同 delegate/relay 性质）
-            "list_scheduled_tasks", "create_scheduled_task", "update_scheduled_task",
+            "list_scheduled_tasks",
+            "create_scheduled_task",
+            "update_scheduled_task",
             "delete_scheduled_task",
             // 屏幕十一件
-            "capture_screen", "list_windows", "capture_window", "mouse_move",
-            "mouse_click", "mouse_drag", "mouse_scroll", "type_text", "press_key",
-            "wait", "request_screen_session",
+            "capture_screen",
+            "list_windows",
+            "capture_window",
+            "mouse_move",
+            "mouse_click",
+            "mouse_drag",
+            "mouse_scroll",
+            "type_text",
+            "press_key",
+            "wait",
+            "request_screen_session",
         ];
         for tool in registered {
             assert!(
@@ -231,20 +259,36 @@ mod tests {
                 seen.push(m);
             }
         }
-        assert_eq!(seen.len(), registered.len(), "组内总件数应 = 注册件数（无多余幽灵名）");
+        assert_eq!(
+            seen.len(),
+            registered.len(),
+            "组内总件数应 = 注册件数（无多余幽灵名）"
+        );
     }
 
     #[test]
     fn parse_entry_three_forms() {
-        assert_eq!(parse_scope_entry("group:files"), Some(ScopeEntry::Group("files")));
-        assert_eq!(parse_scope_entry("server:ue5"), Some(ScopeEntry::Server("ue5")));
-        assert_eq!(parse_scope_entry("run_command"), Some(ScopeEntry::Tool("run_command")));
+        assert_eq!(
+            parse_scope_entry("group:files"),
+            Some(ScopeEntry::Group("files"))
+        );
+        assert_eq!(
+            parse_scope_entry("server:ue5"),
+            Some(ScopeEntry::Server("ue5"))
+        );
+        assert_eq!(
+            parse_scope_entry("run_command"),
+            Some(ScopeEntry::Tool("run_command"))
+        );
         // 空串 / 纯前缀 / 纯空白 → None（死条目）
         assert_eq!(parse_scope_entry(""), None);
         assert_eq!(parse_scope_entry("group:"), None);
         assert_eq!(parse_scope_entry("   "), None);
         // 前后空白容错
-        assert_eq!(parse_scope_entry("  group:kb  "), Some(ScopeEntry::Group("kb")));
+        assert_eq!(
+            parse_scope_entry("  group:kb  "),
+            Some(ScopeEntry::Group("kb"))
+        );
     }
 
     #[test]
@@ -277,9 +321,9 @@ mod tests {
     fn dead_entries_detected() {
         let scopes = vec![
             "group:kb".to_string(),
-            "read_kb".to_string(),          // 死条目（真名 read_kb_document——生产实案）
-            "server:gone".to_string(),      // server 已删
-            "group:bogus".to_string(),      // 未知组键
+            "read_kb".to_string(), // 死条目（真名 read_kb_document——生产实案）
+            "server:gone".to_string(), // server 已删
+            "group:bogus".to_string(), // 未知组键
         ];
         let tools = vec![
             ("search_kb".to_string(), None),

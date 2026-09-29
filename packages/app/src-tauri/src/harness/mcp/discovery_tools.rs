@@ -22,7 +22,6 @@ use crate::error::{AppError, AppResult};
 use super::client::{McpClient, ToolContext};
 use super::types::AuthorizationLevel;
 
-
 /// 任务状态三档（与 project_cmd termination_bucket 同源口径）：
 /// stop/end_turn = done；无终态 = running；其余（abort/doom/budget…）= failed。
 fn task_status_of(t: &repo::project_ledger::ProjectTaskRow) -> &'static str {
@@ -74,9 +73,7 @@ impl McpClient for ListProjectsTool {
 
     async fn execute_with_context(&self, _args: &str, ctx: &ToolContext) -> AppResult<String> {
         let projects = repo::project::list(&ctx.pool).await?;
-        let agents = repo::agent::list(&ctx.pool)
-            .await
-            .unwrap_or_default();
+        let agents = repo::agent::list(&ctx.pool).await.unwrap_or_default();
         let name_of = |id: &str| {
             agents
                 .iter()
@@ -172,16 +169,13 @@ impl McpClient for GetProjectDetailsTool {
     }
 
     async fn execute_with_context(&self, args: &str, ctx: &ToolContext) -> AppResult<String> {
-        let parsed: ProjectRefArgs = serde_json::from_str(args).map_err(|e| {
-            AppError::Validation(format!("get_project_details 参数解析失败: {e}"))
-        })?;
+        let parsed: ProjectRefArgs = serde_json::from_str(args)
+            .map_err(|e| AppError::Validation(format!("get_project_details 参数解析失败: {e}")))?;
         let p = resolve_project(&ctx.pool, &parsed.project).await?;
         let members = repo::project::list_agents(&ctx.pool, &p.id)
             .await
             .unwrap_or_default();
-        let agents = repo::agent::list(&ctx.pool)
-            .await
-            .unwrap_or_default();
+        let agents = repo::agent::list(&ctx.pool).await.unwrap_or_default();
         let name_of = |id: &str| {
             agents
                 .iter()
@@ -280,16 +274,18 @@ impl McpClient for SearchConversationsTool {
     }
 
     async fn execute_with_context(&self, args: &str, ctx: &ToolContext) -> AppResult<String> {
-        let parsed: SearchArgs = serde_json::from_str(args).map_err(|e| {
-            AppError::Validation(format!("search_conversations 参数解析失败: {e}"))
-        })?;
+        let parsed: SearchArgs = serde_json::from_str(args)
+            .map_err(|e| AppError::Validation(format!("search_conversations 参数解析失败: {e}")))?;
         let q = parsed.query.trim();
         if q.is_empty() {
             return Err(AppError::Validation("检索词不能为空".into()));
         }
         let limit = parsed.limit.unwrap_or(20).clamp(1, 50);
         // LIKE 转义（%/_ 用户字面量）
-        let esc = q.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+        let esc = q
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
         let pattern = format!("%{esc}%");
         let rows: Vec<(String, String, String, String, String)> = sqlx::query_as(
             "SELECT c.id, COALESCE(c.title, ''), c.agent_id, m.content, m.created_at \
@@ -303,9 +299,7 @@ impl McpClient for SearchConversationsTool {
         .await
         .map_err(|e| AppError::Internal(format!("会话内容检索失败: {e}")))?;
 
-        let agents = repo::agent::list(&ctx.pool)
-            .await
-            .unwrap_or_default();
+        let agents = repo::agent::list(&ctx.pool).await.unwrap_or_default();
         let name_of = |id: &str| {
             agents
                 .iter()
@@ -386,14 +380,11 @@ impl McpClient for GetTaskLedgerTool {
     }
 
     async fn execute_with_context(&self, args: &str, ctx: &ToolContext) -> AppResult<String> {
-        let parsed: ProjectRefArgs = serde_json::from_str(args).map_err(|e| {
-            AppError::Validation(format!("get_task_ledger 参数解析失败: {e}"))
-        })?;
+        let parsed: ProjectRefArgs = serde_json::from_str(args)
+            .map_err(|e| AppError::Validation(format!("get_task_ledger 参数解析失败: {e}")))?;
         let p = resolve_project(&ctx.pool, &parsed.project).await?;
         let tasks = repo::project_ledger::list_project_tasks(&ctx.pool, &p.id).await?;
-        let agents = repo::agent::list(&ctx.pool)
-            .await
-            .unwrap_or_default();
+        let agents = repo::agent::list(&ctx.pool).await.unwrap_or_default();
         let name_of = |id: &str| {
             agents
                 .iter()
@@ -414,8 +405,6 @@ impl McpClient for GetTaskLedgerTool {
                 })
             })
             .collect();
-        Ok(
-            serde_json::json!({ "project": p.name, "tasks": items }).to_string(),
-        )
+        Ok(serde_json::json!({ "project": p.name, "tasks": items }).to_string())
     }
 }

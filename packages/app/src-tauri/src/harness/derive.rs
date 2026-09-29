@@ -250,11 +250,23 @@ pub fn derive_history(events: &[SessionEventRow]) -> DeriveResult {
             // channel 三 kind（频道 v1）：选举过程 / 统筹者变更（轮外）/@ 跳，
             // 行为性事实只进日志（C10b 分层）——派生投影在 channel 引擎 /
             // 前端 ChannelNotice 消费，不产消息行。
-            "message_error" | "message_discarded" | "turn_context" | "turn_ended"
-            | "modal_adapted" | "hook_injected" | "attachment_stored" | "summary_created"
-            | "summary_updated" | "tool_execution" | "plan_updated" | "model_switch"
-            | "cross_session_message" | "cross_session_message_settled"
-            | "context_breakdown" | "channel_election" | "channel_coordinator"
+            "message_error"
+            | "message_discarded"
+            | "turn_context"
+            | "turn_ended"
+            | "modal_adapted"
+            | "hook_injected"
+            | "attachment_stored"
+            | "summary_created"
+            | "summary_updated"
+            | "tool_execution"
+            | "plan_updated"
+            | "model_switch"
+            | "cross_session_message"
+            | "cross_session_message_settled"
+            | "context_breakdown"
+            | "channel_election"
+            | "channel_coordinator"
             | "channel_mention" => {}
             other => result.issues.push(DeriveIssue {
                 seq,

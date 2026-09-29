@@ -45,7 +45,10 @@ const POLICIES: &[&str] = &["accept", "hold", "refuse"];
 
 /// 列出一个会话的收件箱（pending 来件 + 当前政策）。
 #[tauri::command]
-pub async fn list_inbox(pool: State<'_, SqlitePool>, conversation_id: String) -> AppResult<InboxView> {
+pub async fn list_inbox(
+    pool: State<'_, SqlitePool>,
+    conversation_id: String,
+) -> AppResult<InboxView> {
     let conv = repo::conversation::get_by_id(pool.inner(), &conversation_id).await?;
     let rows = session_event::list_pending_inbox(pool.inner(), &conversation_id).await?;
     let mut items = Vec::with_capacity(rows.len());
@@ -143,9 +146,7 @@ pub async fn respond_inbox_item(
                     "会话「{title}」正在处理上一条来件——本条已在队列中，其结束后会自动处理，无需手动操作"
                 )
             } else {
-                format!(
-                    "会话「{title}」正在生成中——来件已保留在收件箱，请等本轮结束后再批准"
-                )
+                format!("会话「{title}」正在生成中——来件已保留在收件箱，请等本轮结束后再批准")
             })),
             Err(e) => Err(e),
         }
@@ -185,6 +186,8 @@ pub async fn set_conversation_auto_approve(
     on: bool,
 ) -> AppResult<()> {
     repo::conversation::set_auto_approve(pool.inner(), &conversation_id, on).await?;
-    crate::harness::auto_approve::global().set(&conversation_id, on).await;
+    crate::harness::auto_approve::global()
+        .set(&conversation_id, on)
+        .await;
     Ok(())
 }

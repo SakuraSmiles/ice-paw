@@ -672,9 +672,8 @@ pub fn run() {
     // 日志 + 明确退出码。（release profile panic=unwind 已开，catch_unwind 有效；
     // build 阶段失败走 Err 分支，同样兜住。）
     let identifier = context.config().identifier.clone();
-    let run_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        builder.run(context)
-    }));
+    let run_result =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| builder.run(context)));
     match run_result {
         Ok(Ok(())) => {}
         Ok(Err(e)) => {
@@ -730,7 +729,9 @@ fn write_boot_panic_log(identifier: &str, msg: &str) {
     let Ok(local) = std::env::var("LOCALAPPDATA") else {
         return;
     };
-    let dir = std::path::PathBuf::from(local).join(identifier).join("logs");
+    let dir = std::path::PathBuf::from(local)
+        .join(identifier)
+        .join("logs");
     if std::fs::create_dir_all(&dir).is_ok() {
         let path = dir.join("ice-paw.boot-panic.log");
         let line = format!(
@@ -752,7 +753,10 @@ fn write_boot_panic_log(identifier: &str, msg: &str) {
 fn show_fatal_error_dialog(msg: &str) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
 
-    let title: Vec<u16> = "IcePaw 启动失败".encode_utf16().chain(std::iter::once(0)).collect();
+    let title: Vec<u16> = "IcePaw 启动失败"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
     let text: Vec<u16> = msg.encode_utf16().chain(std::iter::once(0)).collect();
     // SAFETY: 两个 PCWSTR 均指向以 NUL 结尾的本地 Vec（生命周期覆盖调用全程）；
     // hwnd 传 null 使消息框以桌面为父。

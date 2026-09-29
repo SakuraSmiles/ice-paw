@@ -92,7 +92,10 @@ pub async fn set_auto_approve(pool: &SqlitePool, id: &str, on: bool) -> AppResul
         .await?
         .rows_affected();
     if affected == 0 {
-        return Err(AppError::NotFound { resource: "conversation", id: id.to_string() });
+        return Err(AppError::NotFound {
+            resource: "conversation",
+            id: id.to_string(),
+        });
     }
     Ok(())
 }

@@ -102,7 +102,12 @@ pub(crate) fn build_os_context(
     agent_workspace: Option<&str>,
     project_workspace: Option<&str>,
 ) -> String {
-    build_os_context_at(timezone, agent_workspace, project_workspace, chrono::Utc::now())
+    build_os_context_at(
+        timezone,
+        agent_workspace,
+        project_workspace,
+        chrono::Utc::now(),
+    )
 }
 
 /// 尽力获取用户主目录

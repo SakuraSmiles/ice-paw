@@ -60,12 +60,10 @@ impl EventCtx {
 
     /// assistant 消息的发送者元数据：频道回合 = (执行成员 id, 名字快照)。
     pub fn sender_meta(&self) -> Option<SenderMeta> {
-        self.sender_name
-            .as_ref()
-            .map(|name| SenderMeta {
-                agent_id: self.agent_id.clone(),
-                agent_name: name.clone(),
-            })
+        self.sender_name.as_ref().map(|name| SenderMeta {
+            agent_id: self.agent_id.clone(),
+            agent_name: name.clone(),
+        })
     }
 
     /// actor 列取值：`agent:<uuid>`。
@@ -1174,7 +1172,15 @@ pub async fn log_channel_mention(
         Some(id) => format!("agent:{id}"),
         None => actor_user().to_string(),
     };
-    append_event(pool, ctx, kind::CHANNEL_MENTION, &actor, Some(message_id), payload).await;
+    append_event(
+        pool,
+        ctx,
+        kind::CHANNEL_MENTION,
+        &actor,
+        Some(message_id),
+        payload,
+    )
+    .await;
 }
 
 // =========================================================================
@@ -1916,7 +1922,10 @@ mod tests {
             .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].kind, "cross_session_message");
-        assert_eq!(rows[0].actor, "agent:agent-src", "中继不带用户权威：源 agent 归因");
+        assert_eq!(
+            rows[0].actor, "agent:agent-src",
+            "中继不带用户权威：源 agent 归因"
+        );
         assert_eq!(rows[0].turn_id.as_deref(), Some("cross:xm-1"));
         assert_eq!(rows[0].message_id.as_deref(), Some("xm-1"));
         let back: CrossSessionMessagePayload = serde_json::from_str(&rows[0].payload).unwrap();

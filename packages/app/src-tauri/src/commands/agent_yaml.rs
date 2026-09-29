@@ -1333,9 +1333,7 @@ mod tests {
             "run_command".to_string(),
         ];
         let out = patch_agent_yaml_seq(&sample_yaml(), "tool_scopes", &scopes);
-        assert!(out.contains(
-            "tool_scopes: [\"group:files\", \"server:ue5-mcp\", run_command]\n"
-        ));
+        assert!(out.contains("tool_scopes: [\"group:files\", \"server:ue5-mcp\", run_command]\n"));
         // 重解析回读逐项相等（引号化不破坏语义）——validate 是往返的最终裁判
         assert!(validate_tool_scopes_patched(&out, Some(&scopes)).is_ok());
         // 邻居逐字节保留
@@ -1355,11 +1353,7 @@ mod tests {
         ]
         .join("\n")
             + "\n";
-        let out = patch_agent_yaml_seq(
-            &block_form,
-            "tool_scopes",
-            &["group:kb".to_string()],
-        );
+        let out = patch_agent_yaml_seq(&block_form, "tool_scopes", &["group:kb".to_string()]);
         assert!(out.contains("tool_scopes: [\"group:kb\"]\n"));
         assert!(!out.contains("- group:docx"));
         assert!(out.contains("temperature: 0.7"));
@@ -1382,9 +1376,7 @@ mod tests {
         assert!(validate_tool_scopes_patched(yaml, None).is_err());
         // 回读不符（写 A 校验 B）→ 拒
         let other = patch_agent_yaml_seq("provider: glm\n", "tool_scopes", &["git".to_string()]);
-        assert!(
-            validate_tool_scopes_patched(&other, Some(&["group:web".to_string()])).is_err()
-        );
+        assert!(validate_tool_scopes_patched(&other, Some(&["group:web".to_string()])).is_err());
     }
 
     // ---- 镜像行同步（A：update() 后 provider/model/base_url 跟随 DB） ----

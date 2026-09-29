@@ -175,7 +175,9 @@ pub(crate) fn parse_sse_stream<S, E>(
                 _ = tokio::time::sleep(std::time::Duration::from_millis(200)) => continue,
                 c = byte_stream.next() => c,
             };
-            let Some(chunk_result) = chunk_result else { break };
+            let Some(chunk_result) = chunk_result else {
+                break;
+            };
 
             let chunk = match chunk_result {
                 Ok(c) => c,

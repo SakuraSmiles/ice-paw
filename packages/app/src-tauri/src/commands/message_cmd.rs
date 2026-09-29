@@ -309,7 +309,11 @@ mod tests {
     }
 
     fn facts_of(tool_uses: u32, tool_errors: u32, think_segs: u32) -> Option<MessageFacts> {
-        Some(MessageFacts { tool_uses, tool_errors, think_segs })
+        Some(MessageFacts {
+            tool_uses,
+            tool_errors,
+            think_segs,
+        })
     }
 
     // ===== compute_page_facts：豁免三态（同 fixture 互指 ChatMessages.tool-collapse.test.ts）=====
@@ -318,8 +322,16 @@ mod tests {
     fn facts_delegate_always_exempt_even_error() {
         // 前端用例「豁免不计数」同 fixture：delegate_to_agent 恒豁免（含 Err 兜底行）
         let rows = [
-            row("a1", "assistant", r#"[{"type":"tool_use","id":"e-dl","name":"delegate_to_agent","input":"{\"agent_id\":\"dev-2\",\"task\":\"t\"}"}]"#),
-            row("u1", "user", r#"[{"type":"tool_result","tool_use_id":"e-dl","content":"err","is_error":true}]"#),
+            row(
+                "a1",
+                "assistant",
+                r#"[{"type":"tool_use","id":"e-dl","name":"delegate_to_agent","input":"{\"agent_id\":\"dev-2\",\"task\":\"t\"}"}]"#,
+            ),
+            row(
+                "u1",
+                "user",
+                r#"[{"type":"tool_result","tool_use_id":"e-dl","content":"err","is_error":true}]"#,
+            ),
         ];
         assert_eq!(compute_page_facts(&rows), vec![facts_of(0, 0, 0), None]);
     }
@@ -327,21 +339,51 @@ mod tests {
     #[test]
     fn facts_update_plan_steps_exempt_but_error_not() {
         // steps 是数组合法豁免（is_error=false 配对）；配对 Err 则落回通用行计错
-        let ok = row("a1", "assistant", r#"[{"type":"tool_use","id":"e-pl","name":"update_plan","input":"{\"steps\":[{\"text\":\"a\",\"status\":\"pending\"}]}"}]"#);
-        let ok_result = row("u1", "user", r#"[{"type":"tool_result","tool_use_id":"e-pl","content":"{\"ok\":true}","is_error":false}]"#);
-        assert_eq!(compute_page_facts(&[ok, ok_result]), vec![facts_of(0, 0, 0), None]);
+        let ok = row(
+            "a1",
+            "assistant",
+            r#"[{"type":"tool_use","id":"e-pl","name":"update_plan","input":"{\"steps\":[{\"text\":\"a\",\"status\":\"pending\"}]}"}]"#,
+        );
+        let ok_result = row(
+            "u1",
+            "user",
+            r#"[{"type":"tool_result","tool_use_id":"e-pl","content":"{\"ok\":true}","is_error":false}]"#,
+        );
+        assert_eq!(
+            compute_page_facts(&[ok, ok_result]),
+            vec![facts_of(0, 0, 0), None]
+        );
 
-        let err = row("a2", "assistant", r#"[{"type":"tool_use","id":"e-pl2","name":"update_plan","input":"{\"steps\":[]}"}]"#);
-        let err_result = row("u2", "user", r#"[{"type":"tool_result","tool_use_id":"e-pl2","content":"bad","is_error":true}]"#);
-        assert_eq!(compute_page_facts(&[err, err_result]), vec![facts_of(1, 1, 0), None]);
+        let err = row(
+            "a2",
+            "assistant",
+            r#"[{"type":"tool_use","id":"e-pl2","name":"update_plan","input":"{\"steps\":[]}"}]"#,
+        );
+        let err_result = row(
+            "u2",
+            "user",
+            r#"[{"type":"tool_result","tool_use_id":"e-pl2","content":"bad","is_error":true}]"#,
+        );
+        assert_eq!(
+            compute_page_facts(&[err, err_result]),
+            vec![facts_of(1, 1, 0), None]
+        );
     }
 
     #[test]
     fn facts_update_plan_missing_steps_not_exempt() {
         // steps 缺失（{"ok":true}——前端 fixture 同款）→ 非计划卡，通用行计数
         let rows = [
-            row("a1", "assistant", r#"[{"type":"tool_use","id":"x","name":"update_plan","input":"{\"ok\":true}"}]"#),
-            row("u1", "user", r#"[{"type":"tool_result","tool_use_id":"x","content":"ok","is_error":false}]"#),
+            row(
+                "a1",
+                "assistant",
+                r#"[{"type":"tool_use","id":"x","name":"update_plan","input":"{\"ok\":true}"}]"#,
+            ),
+            row(
+                "u1",
+                "user",
+                r#"[{"type":"tool_result","tool_use_id":"x","content":"ok","is_error":false}]"#,
+            ),
         ];
         assert_eq!(compute_page_facts(&rows), vec![facts_of(1, 0, 0), None]);
     }
@@ -353,11 +395,19 @@ mod tests {
         // 跨行配对：assistant tool_use + user tool_result（is_error=true）计错；
         // 未配对（无 result 行）不计错——前端 getToolHasError 缺省 false 对齐
         let rows = [
-            row("a1", "assistant", r#"[
+            row(
+                "a1",
+                "assistant",
+                r#"[
                 {"type":"tool_use","id":"t1","name":"read_file","input":"{\"path\":\"a.md\"}"},
                 {"type":"tool_use","id":"t2","name":"read_file","input":"{\"path\":\"b.md\"}"}
-            ]"#),
-            row("u1", "user", r#"[{"type":"tool_result","tool_use_id":"t1","content":"文件不存在: a.md","is_error":true}]"#),
+            ]"#,
+            ),
+            row(
+                "u1",
+                "user",
+                r#"[{"type":"tool_result","tool_use_id":"t1","content":"文件不存在: a.md","is_error":true}]"#,
+            ),
         ];
         assert_eq!(compute_page_facts(&rows), vec![facts_of(2, 1, 0), None]);
     }
@@ -366,11 +416,26 @@ mod tests {
     fn facts_same_id_last_wins() {
         // 同 id 多条 tool_result 后者胜（supersede 形态；前端 toolResultIndex 同口径）
         let rows = [
-            row("a1", "assistant", r#"[{"type":"tool_use","id":"t1","name":"read_file","input":"{}"}]"#),
-            row("u1", "user", r#"[{"type":"tool_result","tool_use_id":"t1","content":"v1","is_error":false}]"#),
-            row("u2", "user", r#"[{"type":"tool_result","tool_use_id":"t1","content":"v2","is_error":true}]"#),
+            row(
+                "a1",
+                "assistant",
+                r#"[{"type":"tool_use","id":"t1","name":"read_file","input":"{}"}]"#,
+            ),
+            row(
+                "u1",
+                "user",
+                r#"[{"type":"tool_result","tool_use_id":"t1","content":"v1","is_error":false}]"#,
+            ),
+            row(
+                "u2",
+                "user",
+                r#"[{"type":"tool_result","tool_use_id":"t1","content":"v2","is_error":true}]"#,
+            ),
         ];
-        assert_eq!(compute_page_facts(&rows), vec![facts_of(1, 1, 0), None, None]);
+        assert_eq!(
+            compute_page_facts(&rows),
+            vec![facts_of(1, 1, 0), None, None]
+        );
     }
 
     #[test]
@@ -395,13 +460,20 @@ mod tests {
             row("a1", "assistant", "[]"),
             row("a2", "assistant", "not-json{{{"),
         ];
-        assert_eq!(compute_page_facts(&rows), vec![facts_of(0, 0, 0), facts_of(0, 0, 0)]);
+        assert_eq!(
+            compute_page_facts(&rows),
+            vec![facts_of(0, 0, 0), facts_of(0, 0, 0)]
+        );
     }
 
     #[test]
     fn facts_user_rows_none_assistant_zero_some() {
         let rows = [
-            row("u1", "user", r#"[{"type":"tool_result","tool_use_id":"t1","content":"ok","is_error":false}]"#),
+            row(
+                "u1",
+                "user",
+                r#"[{"type":"tool_result","tool_use_id":"t1","content":"ok","is_error":false}]"#,
+            ),
             row("a1", "assistant", r#"[]"#),
         ];
         assert_eq!(compute_page_facts(&rows), vec![None, facts_of(0, 0, 0)]);
@@ -415,14 +487,24 @@ mod tests {
         // 工具名/形状改动须与前端 ChatMessages.vue structuredCardKind 两边一起动——
         // 前端回归锁在 ChatMessages.tool-collapse.test.ts 用例 4/5。
         let cases: &[(&str, &str, bool, bool)] = &[
-            ("delegate_to_agent", r#"{"agent_id":"dev-2","task":"t"}"#, false, true),
+            (
+                "delegate_to_agent",
+                r#"{"agent_id":"dev-2","task":"t"}"#,
+                false,
+                true,
+            ),
             ("delegate_to_agent", r#"{"agent_id":"dev-2"}"#, true, true), // 委派恒豁免（Err 兜底通用行也藏进卡）
-            ("update_plan", r#"{"steps":[{"text":"a","status":"pending"}]}"#, false, true),
+            (
+                "update_plan",
+                r#"{"steps":[{"text":"a","status":"pending"}]}"#,
+                false,
+                true,
+            ),
             ("update_plan", r#"{"steps":[]}"#, false, true), // 空 steps 合法（agent 主动清空）
             ("update_plan", r#"{"steps":[]}"#, true, false), // 配对 Err 落回通用行
             ("update_plan", r#"{"ok":true}"#, false, false), // steps 缺失
             ("update_plan", r#"{"steps":"not-array"}"#, false, false), // steps 非数组
-            ("update_plan", "not-json", false, false), // 参数非 JSON
+            ("update_plan", "not-json", false, false),       // 参数非 JSON
             ("read_file", r#"{"path":"a.md"}"#, false, false), // 普通工具永不豁免
         ];
         for (name, input, is_err, expected) in cases {

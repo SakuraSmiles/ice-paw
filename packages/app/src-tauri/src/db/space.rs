@@ -54,12 +54,15 @@ pub fn should_vacuum(stats: &SpaceStats) -> bool {
 
 /// 读页统计（PRAGMA 三读：freelist_count / page_count / page_size）。
 pub async fn read_space_stats(pool: &SqlitePool) -> AppResult<SpaceStats> {
-    let freelist_pages =
-        sqlx::query_scalar::<_, i64>("PRAGMA freelist_count").fetch_one(pool).await? as u64;
-    let total_pages =
-        sqlx::query_scalar::<_, i64>("PRAGMA page_count").fetch_one(pool).await? as u64;
-    let page_size =
-        sqlx::query_scalar::<_, i64>("PRAGMA page_size").fetch_one(pool).await? as u64;
+    let freelist_pages = sqlx::query_scalar::<_, i64>("PRAGMA freelist_count")
+        .fetch_one(pool)
+        .await? as u64;
+    let total_pages = sqlx::query_scalar::<_, i64>("PRAGMA page_count")
+        .fetch_one(pool)
+        .await? as u64;
+    let page_size = sqlx::query_scalar::<_, i64>("PRAGMA page_size")
+        .fetch_one(pool)
+        .await? as u64;
     Ok(SpaceStats {
         freelist_pages,
         total_pages,

@@ -124,9 +124,24 @@ pub(crate) fn build_anatomy(ctx: &PipelineContext) -> ContextAnatomy {
     let mut segments: Vec<AnatomySegment> = Vec::new();
 
     if let Some(parts) = &ctx.system_parts {
-        push_seg(&mut segments, LABEL_SYSTEM_PERSONA, parts.persona.as_deref().map_or(0, estimate_tokens), None);
-        push_seg(&mut segments, LABEL_SYSTEM_TOOL_HINT, parts.tool_hint.map_or(0, estimate_tokens), None);
-        push_seg(&mut segments, LABEL_SYSTEM_OS_CONTEXT, parts.os_context.as_deref().map_or(0, estimate_tokens), None);
+        push_seg(
+            &mut segments,
+            LABEL_SYSTEM_PERSONA,
+            parts.persona.as_deref().map_or(0, estimate_tokens),
+            None,
+        );
+        push_seg(
+            &mut segments,
+            LABEL_SYSTEM_TOOL_HINT,
+            parts.tool_hint.map_or(0, estimate_tokens),
+            None,
+        );
+        push_seg(
+            &mut segments,
+            LABEL_SYSTEM_OS_CONTEXT,
+            parts.os_context.as_deref().map_or(0, estimate_tokens),
+            None,
+        );
         push_seg(
             &mut segments,
             LABEL_SYSTEM_DELEGATION_HINT,
@@ -173,7 +188,12 @@ pub(crate) fn build_anatomy(ctx: &PipelineContext) -> ContextAnatomy {
         }
     }
     push_seg(&mut segments, LABEL_USER_MESSAGE, user_text, None);
-    push_seg(&mut segments, LABEL_USER_IMAGES, image_tokens, (image_count > 0).then_some(image_count));
+    push_seg(
+        &mut segments,
+        LABEL_USER_IMAGES,
+        image_tokens,
+        (image_count > 0).then_some(image_count),
+    );
 
     ContextAnatomy {
         segments,
@@ -212,14 +232,20 @@ mod tests {
             h ^= 0x1f;
             h = h.wrapping_mul(0x0100_0000_01b3);
         }
-        assert_eq!(fnv1a_12hex(&["glm", "glm-5.3", "https://api", "sk-key"]), format!("{h:012x}"));
+        assert_eq!(
+            fnv1a_12hex(&["glm", "glm-5.3", "https://api", "sk-key"]),
+            format!("{h:012x}")
+        );
     }
 
     #[test]
     fn fnv_separator_byte_disambiguates_adjacent_parts() {
         assert_ne!(fnv1a_12hex(&["ab", "c"]), fnv1a_12hex(&["a", "bc"]));
         assert_ne!(fnv1a_12hex(&["a", ""]), fnv1a_12hex(&["", "a"])); // 位置敏感
-        assert_eq!(fnv1a_12hex(&[]), format!("{:012x}", 0xcbf2_9ce4_8422_2325u64));
+        assert_eq!(
+            fnv1a_12hex(&[]),
+            format!("{:012x}", 0xcbf2_9ce4_8422_2325u64)
+        );
     }
 
     fn tool_def(name: &str, desc: &str) -> ToolDef {
@@ -239,7 +265,10 @@ mod tests {
         assert_ne!(hash_tool_defs(&b), hash_tool_defs(&c));
         let d = [tool_def("a_tool", "d1"), tool_def("b_tool", "d2")];
         assert_eq!(hash_tool_defs(&b), hash_tool_defs(&d));
-        assert_eq!(hash_tool_defs(&[]), format!("{:012x}", 0xcbf2_9ce4_8422_2325u64));
+        assert_eq!(
+            hash_tool_defs(&[]),
+            format!("{:012x}", 0xcbf2_9ce4_8422_2325u64)
+        );
     }
 
     /// anatomy 聚合不查库——一个裸 in-memory pool 即可（无 migration 无种子）。
@@ -331,9 +360,17 @@ mod tests {
                 "user_images",
             ]
         );
-        let history = anatomy.segments.iter().find(|s| s.label == "history").unwrap();
+        let history = anatomy
+            .segments
+            .iter()
+            .find(|s| s.label == "history")
+            .unwrap();
         assert_eq!(history.count, Some(2));
-        let images = anatomy.segments.iter().find(|s| s.label == "user_images").unwrap();
+        let images = anatomy
+            .segments
+            .iter()
+            .find(|s| s.label == "user_images")
+            .unwrap();
         assert_eq!(images.count, Some(1));
         assert_eq!(images.est, 85); // IMAGE_TOKEN_FLOOR
         assert!(!anatomy.system_stable_hash.is_empty());
@@ -345,8 +382,14 @@ mod tests {
         // system_parts = None（散落测试构造）：system 五段全跳过
         let ctx = make_ctx().await;
         let anatomy = build_anatomy(&ctx);
-        assert!(anatomy.segments.iter().all(|s| !s.label.starts_with("system_")));
-        assert!(anatomy.segments.iter().all(|s| s.est > 0), "est=0 段必须省略");
+        assert!(anatomy
+            .segments
+            .iter()
+            .all(|s| !s.label.starts_with("system_")));
+        assert!(
+            anatomy.segments.iter().all(|s| s.est > 0),
+            "est=0 段必须省略"
+        );
         assert_eq!(anatomy.system_stable_hash, "");
         assert_eq!(anatomy.os_stable_hash, "");
     }

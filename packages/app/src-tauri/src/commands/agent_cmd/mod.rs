@@ -44,17 +44,17 @@
 
 mod default_yaml;
 mod domain;
-mod sql;
-mod validation;
 #[cfg(test)]
 mod mock;
+mod sql;
 #[cfg(test)]
 mod tests;
+mod validation;
 
 pub use self::domain::{AgentCmd, AgentWithCredentials};
-pub use self::sql::SqlAgentCmd;
 #[cfg(test)]
 pub use self::mock::MockAgentCmd;
+pub use self::sql::SqlAgentCmd;
 
 use std::sync::Arc;
 

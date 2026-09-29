@@ -385,8 +385,7 @@ pub async fn heal_dropped_migrations(pool: &SqlitePool, migrator: &Migrator) {
 /// 调用时机：`init_pool` 尾部（迁移 + 孤儿修复全部成功后），不会删掉本次
 /// 刚生成、仍可能需要的备份。
 pub fn cleanup_stale_db_backups(data_dir: &Path) {
-    let cutoff = std::time::SystemTime::now()
-        - std::time::Duration::from_secs(7 * 24 * 60 * 60);
+    let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(7 * 24 * 60 * 60);
     cleanup_stale_db_backups_before(data_dir, cutoff);
 }
 
@@ -405,7 +404,9 @@ fn cleanup_stale_db_backups_before(data_dir: &Path, cutoff: std::time::SystemTim
             continue;
         }
         let Ok(meta) = entry.metadata() else { continue };
-        let Ok(modified) = meta.modified() else { continue };
+        let Ok(modified) = meta.modified() else {
+            continue;
+        };
         if modified < cutoff && std::fs::remove_file(entry.path()).is_ok() {
             info!(
                 target: "ice_paw.db",

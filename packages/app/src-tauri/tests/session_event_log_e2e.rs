@@ -367,7 +367,15 @@ async fn supersede_last_wins_and_seq_continues_across_turns() {
         },
     )
     .await;
-    log_user_message(&pool, &ev2, "msg-u2", "继续", &[ContentBlock::text("继续")], None).await;
+    log_user_message(
+        &pool,
+        &ev2,
+        "msg-u2",
+        "继续",
+        &[ContentBlock::text("继续")],
+        None,
+    )
+    .await;
     log_assistant_message(
         &pool,
         &ev2,
@@ -506,7 +514,15 @@ async fn abort_and_discard_paths_form_complete_sequence() {
         },
     )
     .await;
-    log_user_message(&pool, &ev2, "msg-u2", "你好", &[ContentBlock::text("你好")], None).await;
+    log_user_message(
+        &pool,
+        &ev2,
+        "msg-u2",
+        "你好",
+        &[ContentBlock::text("你好")],
+        None,
+    )
+    .await;
     log_message_error(&pool, &ev2, "msg-a2", "Network", "connection refused").await;
     log_turn_ended(
         &pool,

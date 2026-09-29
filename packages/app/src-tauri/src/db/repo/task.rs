@@ -40,17 +40,16 @@ pub async fn create(
     .bind(next_run)
     .execute(pool)
     .await?;
-    get_by_id(pool, id).await?
+    get_by_id(pool, id)
+        .await?
         .ok_or_else(|| AppError::Internal("定时任务创建后读取失败".into()))
 }
 
 pub async fn get_by_id(pool: &SqlitePool, id: &str) -> AppResult<Option<ScheduledTaskRow>> {
-    let row = sqlx::query_as::<_, ScheduledTaskRow>(
-        "SELECT * FROM scheduled_tasks WHERE id = ?",
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await?;
+    let row = sqlx::query_as::<_, ScheduledTaskRow>("SELECT * FROM scheduled_tasks WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
     Ok(row)
 }
 
@@ -167,14 +166,12 @@ pub async fn insert_run(
     task_id: &str,
     conv_id: &str,
 ) -> AppResult<()> {
-    sqlx::query(
-        "INSERT INTO task_runs (id, task_id, conv_id, status) VALUES (?, ?, ?, 'running')",
-    )
-    .bind(id)
-    .bind(task_id)
-    .bind(conv_id)
-    .execute(pool)
-    .await?;
+    sqlx::query("INSERT INTO task_runs (id, task_id, conv_id, status) VALUES (?, ?, ?, 'running')")
+        .bind(id)
+        .bind(task_id)
+        .bind(conv_id)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 

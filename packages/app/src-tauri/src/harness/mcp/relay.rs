@@ -149,13 +149,14 @@ impl McpClient for SendToSessionTool {
             .into_iter()
             .filter(|c| c.kind == "chat")
             .collect::<Vec<_>>();
-        let target = resolve_session_target(by_id.as_ref(), &chats, &parsed.target).ok_or_else(|| {
-            AppError::Validation(format!(
-                "找不到会话 '{}'——请确认标题完全一致（重名标题须用会话 id），\
+        let target =
+            resolve_session_target(by_id.as_ref(), &chats, &parsed.target).ok_or_else(|| {
+                AppError::Validation(format!(
+                    "找不到会话 '{}'——请确认标题完全一致（重名标题须用会话 id），\
                  或请用户提供目标会话 id",
-                parsed.target
-            ))
-        })?;
+                    parsed.target
+                ))
+            })?;
 
         // --- 投递方身份快照（来源标注 + 事件归因用；读取失败诚实报错） ---
         let source = source_info(&ctx.pool, ctx).await?;
@@ -173,7 +174,9 @@ impl McpClient for SendToSessionTool {
 
         // --- 结果 JSON：状态三态 + 目标名 + 队列位（源 agent 据此告知用户） ---
         let note = match outcome.status {
-            "held" => Some("消息已进入对方收件箱，等待该会话用户批准后才会被消费（对方收件政策设为需批准）"),
+            "held" => Some(
+                "消息已进入对方收件箱，等待该会话用户批准后才会被消费（对方收件政策设为需批准）",
+            ),
             "queued" => Some("对方会话正在生成中，消息已排队，将在其空闲时自动消费"),
             _ => None, // delivered：消费已开始，无需多言
         };
@@ -302,13 +305,12 @@ impl McpClient for ListConversationsTool {
         let chats = repo::conversation::list_all(&ctx.pool)
             .await
             .map_err(|e| AppError::Internal(format!("读取会话列表失败: {e}")))?;
-        let agent_names: std::collections::HashMap<String, String> =
-            repo::agent::list(&ctx.pool)
-                .await
-                .unwrap_or_default()
-                .into_iter()
-                .map(|a| (a.id, a.name))
-                .collect();
+        let agent_names: std::collections::HashMap<String, String> = repo::agent::list(&ctx.pool)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|a| (a.id, a.name))
+            .collect();
         let project_names: std::collections::HashMap<String, String> =
             repo::project::list(&ctx.pool)
                 .await
@@ -371,14 +373,24 @@ mod tests {
         assert_eq!(items.len(), 2, "delegation 子会话不入列表");
         assert_eq!(items[0]["id"], "c-2", "按更新时间倒序");
         assert_eq!(items[0]["agent_name"], "甲");
-        assert!(items[0]["project_id"].is_null(), "散落会话 project 显式 null");
+        assert!(
+            items[0]["project_id"].is_null(),
+            "散落会话 project 显式 null"
+        );
         assert!(v.get("note").is_none(), "未截断无 note");
     }
 
     #[test]
     fn overview_carries_project_and_truncates_with_note() {
         let mut chats: Vec<ConversationRow> = (0..OVERVIEW_CAP + 5)
-            .map(|i| conv_at(&format!("c-{i}"), &format!("会话{i}"), Some("p-1"), &format!("2026-09-{i:02} 00:00:00")))
+            .map(|i| {
+                conv_at(
+                    &format!("c-{i}"),
+                    &format!("会话{i}"),
+                    Some("p-1"),
+                    &format!("2026-09-{i:02} 00:00:00"),
+                )
+            })
             .collect();
         chats.push(conv("d-9", "子任务", "delegation"));
         let v = conversation_overview_json(
@@ -392,7 +404,10 @@ mod tests {
         assert_eq!(items[0]["project_id"], "p-1");
         let note = v["note"].as_str().unwrap();
         assert!(note.contains("仅显示"), "截断诚实披露: {note}");
-        assert!(note.contains(&format!("{}", OVERVIEW_CAP + 5)), "总数计入 chat 会话（delegation 不计）: {note}");
+        assert!(
+            note.contains(&format!("{}", OVERVIEW_CAP + 5)),
+            "总数计入 chat 会话（delegation 不计）: {note}"
+        );
     }
 
     #[test]

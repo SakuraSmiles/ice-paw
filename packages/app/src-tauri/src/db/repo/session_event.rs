@@ -676,17 +676,9 @@ mod tests {
             ("channel_election", Some("election:m1"), None),
             ("channel_coordinator", None, None),
         ] {
-            append(
-                &pool,
-                "conv-ch",
-                kind,
-                "agent",
-                turn,
-                msg,
-                "{}",
-            )
-            .await
-            .unwrap();
+            append(&pool, "conv-ch", kind, "agent", turn, msg, "{}")
+                .await
+                .unwrap();
         }
         // seq 1..8：只有 m1/m2 是对话轮——轮外段（chain:/cross:/election:
         // 与无 turn_id 的 channel_coordinator）全程不计数；coordinator 若漏排除
@@ -881,9 +873,17 @@ mod tests {
         seed_conversation(&pool, "conv-1").await;
         seed_conversation(&pool, "conv-2").await;
 
-        append(&pool, "conv-1", "turn_context", "agent:agent-1", None, None, "{}")
-            .await
-            .unwrap();
+        append(
+            &pool,
+            "conv-1",
+            "turn_context",
+            "agent:agent-1",
+            None,
+            None,
+            "{}",
+        )
+        .await
+        .unwrap();
         append(
             &pool,
             "conv-1",
@@ -923,9 +923,17 @@ mod tests {
         assert_eq!(p.as_deref(), Some(r#"{"v":1,"first":false}"#), "取最新一条");
         // 无 breakdown 会话（只有其他 kind）返回 None，不报错
         seed_conversation(&pool, "conv-3").await;
-        append(&pool, "conv-3", "turn_context", "agent:agent-1", None, None, "{}")
-            .await
-            .unwrap();
+        append(
+            &pool,
+            "conv-3",
+            "turn_context",
+            "agent:agent-1",
+            None,
+            None,
+            "{}",
+        )
+        .await
+        .unwrap();
         assert_eq!(
             last_breakdown_payload(&pool, "conv-3").await.unwrap(),
             None,
@@ -1117,13 +1125,15 @@ mod tests {
 
         let pending = list_pending_inbox(&pool, "conv-1").await.unwrap();
         assert_eq!(
-            pending.iter().map(|r| r.message_id.as_deref()).collect::<Vec<_>>(),
+            pending
+                .iter()
+                .map(|r| r.message_id.as_deref())
+                .collect::<Vec<_>>(),
             vec![Some("xm-2")],
             "consumed/refused 均出队，seq 正序保留 pending"
         );
         assert_eq!(
-            pending[0].actor,
-            "agent:agent-src",
+            pending[0].actor, "agent:agent-src",
             "收件箱保留源 agent 归因"
         );
 

@@ -870,7 +870,8 @@ mod tests {
             async fn get_with_credentials(
                 &self,
                 _profile_id: &str,
-            ) -> AppResult<crate::commands::model_profile_cmd::ModelProfileWithCredentials> {
+            ) -> AppResult<crate::commands::model_profile_cmd::ModelProfileWithCredentials>
+            {
                 Err(AppError::Stronghold("store.get: boom".into()))
             }
             async fn record_health(&self, _profile_id: &str, health: &str, _detail: Option<&str>) {

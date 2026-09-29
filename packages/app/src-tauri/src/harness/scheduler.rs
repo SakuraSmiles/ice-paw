@@ -32,7 +32,7 @@
 use std::str::FromStr;
 use std::time::Duration;
 
-use chrono::{Datelike, DateTime, Local, NaiveTime, TimeZone, Utc};
+use chrono::{DateTime, Datelike, Local, NaiveTime, TimeZone, Utc};
 use sqlx::SqlitePool;
 use tauri::{AppHandle, Manager};
 use uuid::Uuid;
@@ -102,8 +102,11 @@ fn parse_hhmm(s: &str) -> AppResult<NaiveTime> {
 }
 
 fn parse_local(s: &str) -> AppResult<DateTime<Local>> {
-    let naive = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
-        .map_err(|e| AppError::Internal(format!("时间格式无效（应为 YYYY-MM-DD HH:MM:SS）: {s} — {e}")))?;
+    let naive = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").map_err(|e| {
+        AppError::Internal(format!(
+            "时间格式无效（应为 YYYY-MM-DD HH:MM:SS）: {s} — {e}"
+        ))
+    })?;
     Local
         .from_local_datetime(&naive)
         .single()
@@ -121,7 +124,9 @@ pub fn parse_spec(kind: &str, data: &str) -> AppResult<SchedSpec> {
         "daily" => {
             let d: TimeOnlyData = serde_json::from_str(data)
                 .map_err(|e| AppError::Internal(format!("daily 档位载荷无效: {e}")))?;
-            Ok(SchedSpec::Daily { time: parse_hhmm(&d.time)? })
+            Ok(SchedSpec::Daily {
+                time: parse_hhmm(&d.time)?,
+            })
         }
         "weekly" => {
             let d: WeeklyData = serde_json::from_str(data)
@@ -131,12 +136,17 @@ pub fn parse_spec(kind: &str, data: &str) -> AppResult<SchedSpec> {
                     "weekly 档位 weekdays 无效（应为 0-6 非空数组，0=周一）".into(),
                 ));
             }
-            Ok(SchedSpec::Weekly { weekdays: d.weekdays, time: parse_hhmm(&d.time)? })
+            Ok(SchedSpec::Weekly {
+                weekdays: d.weekdays,
+                time: parse_hhmm(&d.time)?,
+            })
         }
         "interval" => {
             let d: IntervalData = serde_json::from_str(data)
                 .map_err(|e| AppError::Internal(format!("interval 档位载荷无效: {e}")))?;
-            Ok(SchedSpec::Interval { minutes: d.minutes.max(MIN_INTERVAL_MINUTES) })
+            Ok(SchedSpec::Interval {
+                minutes: d.minutes.max(MIN_INTERVAL_MINUTES),
+            })
         }
         "cron" => {
             let d: CronData = serde_json::from_str(data)
@@ -181,9 +191,7 @@ pub fn next_run_after(spec: &SchedSpec, after: DateTime<Local>) -> Option<DateTi
                 day += chrono::Duration::days(1);
             }
         }
-        SchedSpec::Interval { minutes } => {
-            Some(after + chrono::Duration::minutes(*minutes))
-        }
+        SchedSpec::Interval { minutes } => Some(after + chrono::Duration::minutes(*minutes)),
         SchedSpec::Cron(expr) => {
             let sched = cron::Schedule::from_str(expr).ok()?;
             // after 用调用方时区（本地）——cron 字段按本地时间解释（「0 9 * * *」
@@ -211,7 +219,9 @@ pub fn preview_next_runs(spec: &SchedSpec, n: usize) -> Vec<String> {
 
 /// 存库格式：本地调度时刻 → UTC 字符串（DB 惯例 UTC 存储；显示层转本地）。
 fn fmt_store(dt: DateTime<Local>) -> String {
-    dt.with_timezone(&Utc).format("%Y-%m-%d %H:%M:%S").to_string()
+    dt.with_timezone(&Utc)
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string()
 }
 
 // =========================================================================
@@ -288,7 +298,12 @@ pub async fn execute_task(
             // 档位坏（手改库等）——调度触发记 error run + 推进 next 防每分钟重试
             if scheduled {
                 record_error_run(pool, t, None, &e.to_string()).await;
-                advance_schedule(pool, t, &spec_placeholder(&t.schedule_kind, &t.schedule_data)).await;
+                advance_schedule(
+                    pool,
+                    t,
+                    &spec_placeholder(&t.schedule_kind, &t.schedule_data),
+                )
+                .await;
             }
             return Err(e);
         }
@@ -297,12 +312,15 @@ pub async fn execute_task(
     // --- 预检：agent 凭据 + provider（同 inbox 消费模型；失败不静默） ---
     let pre = async {
         let agent_cmd = app.state::<std::sync::Arc<dyn AgentCmd>>().inner().clone();
-        let creds = agent_cmd.get_with_credentials(&t.agent_id).await.map_err(|e| {
-            AppError::Internal(format!(
-                "读取任务 agent（{}）配置/凭据失败: {e}——请到设置·智能体检查该 agent",
-                t.agent_id
-            ))
-        })?;
+        let creds = agent_cmd
+            .get_with_credentials(&t.agent_id)
+            .await
+            .map_err(|e| {
+                AppError::Internal(format!(
+                    "读取任务 agent（{}）配置/凭据失败: {e}——请到设置·智能体检查该 agent",
+                    t.agent_id
+                ))
+            })?;
         let llm_provider = provider::create_provider(
             &creds.agent.provider,
             &creds.agent.model,
@@ -373,7 +391,10 @@ pub async fn execute_task(
                 if tool.authorization_level()
                     == crate::harness::mcp::types::AuthorizationLevel::Confirm
                 {
-                    session.session_for(&conv.id).mark_tool_authorized(name).await;
+                    session
+                        .session_for(&conv.id)
+                        .mark_tool_authorized(name)
+                        .await;
                     seeded += 1;
                 }
             }
@@ -396,23 +417,28 @@ pub async fn execute_task(
     let annotation = format!("[定时任务 · {}]", t.name);
     let blocks = vec![
         ContentBlock::Text { text: annotation },
-        ContentBlock::Text { text: t.prompt.clone() },
+        ContentBlock::Text {
+            text: t.prompt.clone(),
+        },
     ];
-    let fallback =
-        crate::harness::fallback_plan::production_fallback_plan(app, pool, &creds.agent);
+    let fallback = crate::harness::fallback_plan::production_fallback_plan(app, pool, &creds.agent);
 
     let result = session_runner::run_agent_turn(
         &TurnEnv {
             emitter: crate::harness::r#loop::emitter::tauri_emitter(app.clone(), conv.id.clone()),
             tool_app: Some(app.clone()),
             pool: pool.clone(),
-            route_registry: app.state::<crate::harness::read_route::ReadRouteRegistry>().inner(),
+            route_registry: app
+                .state::<crate::harness::read_route::ReadRouteRegistry>()
+                .inner(),
             chat_state: chat_state.clone(),
             global_registry: std::sync::Arc::clone(
-                app.state::<std::sync::Arc<crate::harness::mcp::McpRegistry>>().inner(),
+                app.state::<std::sync::Arc<crate::harness::mcp::McpRegistry>>()
+                    .inner(),
             ),
             mcp_manager: std::sync::Arc::clone(
-                app.state::<std::sync::Arc<crate::harness::mcp::McpServerManager>>().inner(),
+                app.state::<std::sync::Arc<crate::harness::mcp::McpServerManager>>()
+                    .inner(),
             ),
             auth_registry: app
                 .state::<crate::harness::tool_executor::ToolAuthRegistry>()
@@ -491,10 +517,9 @@ pub async fn execute_task(
                 agent_name: creds.agent.name.clone(),
                 project_id: conv.project_id.clone(),
             };
-            let deliver_result = crate::harness::inbox::deliver(
-                app, pool, &source, dst, &final_text, false, false,
-            )
-            .await;
+            let deliver_result =
+                crate::harness::inbox::deliver(app, pool, &source, dst, &final_text, false, false)
+                    .await;
             let note = match deliver_result {
                 Ok(_) => "\\n[转发投递：已送达]".to_string(),
                 Err(e) => format!("\\n[转发投递失败：{e}]"),
@@ -514,7 +539,9 @@ pub async fn execute_task(
 /// 档位解析失败时的占位推进（interval 分钟后重试一次坏档位不再死循环）。
 fn spec_placeholder(kind: &str, data: &str) -> SchedSpec {
     let _ = (kind, data);
-    SchedSpec::Interval { minutes: MIN_INTERVAL_MINUTES }
+    SchedSpec::Interval {
+        minutes: MIN_INTERVAL_MINUTES,
+    }
 }
 
 /// 推进调度：once → 完成禁用；其余 → 下一个时点。last_run_at 一并落。
@@ -606,7 +633,8 @@ pub fn spawn_boot_sweep(app: AppHandle, pool: SqlitePool) {
                 // 顺延到未来首个时点 + missed 留痕（诚实：错过的次数可查）
                 if let Ok(spec) = parse_spec(&t.schedule_kind, &t.schedule_data) {
                     if let Some(next) = next_run_after(&spec, Local::now()) {
-                        let _ = task::schedule_next(&pool, &t.id, Some(&fmt_store(next)), None).await;
+                        let _ =
+                            task::schedule_next(&pool, &t.id, Some(&fmt_store(next)), None).await;
                     } else {
                         let _ = task::schedule_next(&pool, &t.id, None, Some(0)).await;
                     }
@@ -660,7 +688,9 @@ mod tests {
 
     #[test]
     fn daily_next_run_crosses_midnight() {
-        let spec = SchedSpec::Daily { time: NaiveTime::from_hms_opt(9, 0, 0).unwrap() };
+        let spec = SchedSpec::Daily {
+            time: NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+        };
         // 09:30 当天已过 → 次日 09:00
         let next = next_run_after(&spec, local(2026, 9, 20, 9, 30)).unwrap();
         assert_eq!(next, local(2026, 9, 21, 9, 0));
@@ -679,7 +709,7 @@ mod tests {
         // 2026-09-17 是周四
         let next = next_run_after(&spec, local(2026, 9, 17, 10, 0)).unwrap();
         assert_eq!(next, local(2026, 9, 18, 8, 0)); // 周五
-        // 同日早于 08:00 → 当天（周四不在集 → 周五）
+                                                    // 同日早于 08:00 → 当天（周四不在集 → 周五）
         let next = next_run_after(&spec, local(2026, 9, 17, 6, 0)).unwrap();
         assert_eq!(next, local(2026, 9, 18, 8, 0));
     }

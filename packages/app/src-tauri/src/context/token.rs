@@ -116,7 +116,10 @@ pub fn estimate_message_tokens(m: &ChatMessage) -> usize {
 /// 工具密集 agent 可达数 K token）——上下文体检的 `tool_defs` 段用。
 /// ⚠️ JSON schema 估算按普通文本走（低估已知，展示侧带偏差披露）。
 pub fn estimate_tool_def_tokens(def: &crate::infra::protocol::ToolDef) -> usize {
-    estimate_tokens(&def.name) + estimate_tokens(&def.description) + estimate_tokens(&def.parameters.to_string()) + TOOL_BLOCK_OVERHEAD
+    estimate_tokens(&def.name)
+        + estimate_tokens(&def.description)
+        + estimate_tokens(&def.parameters.to_string())
+        + TOOL_BLOCK_OVERHEAD
 }
 
 /// 估算一组 `ChatMessage` 的总 token 数（block 级，覆盖工具 / 图片 / 思考块）。

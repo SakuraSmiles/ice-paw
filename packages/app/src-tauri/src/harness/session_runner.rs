@@ -347,9 +347,7 @@ pub(crate) async fn run_agent_turn(
     // last-wins 必是上回合），warn-only：查不到/坏 JSON 降级无基线（归因走
     // first_request，诚实降级不阻塞对话）。
     let prev_baseline = match repo::session_event::last_breakdown_payload(pool, &conv_id).await {
-        Ok(Some(json)) => {
-            crate::harness::r#loop::turn_cost::PrevBaseline::from_payload(&json)
-        }
+        Ok(Some(json)) => crate::harness::r#loop::turn_cost::PrevBaseline::from_payload(&json),
         Ok(None) => None,
         Err(e) => {
             tracing::warn!(
@@ -669,14 +667,22 @@ pub(crate) async fn run_agent_turn(
                 .await;
             // 定时任务三件（0.9.3，Always + 后治理——见 task_tools.rs 模块头）：
             // 同 chat-only 闸（委派子会话不给持久化副作用出口）
-            reg.register(Arc::new(crate::harness::mcp::task_tools::ListScheduledTasksTool))
-                .await;
-            reg.register(Arc::new(crate::harness::mcp::task_tools::CreateScheduledTaskTool))
-                .await;
-            reg.register(Arc::new(crate::harness::mcp::task_tools::UpdateScheduledTaskTool))
-                .await;
-            reg.register(Arc::new(crate::harness::mcp::task_tools::DeleteScheduledTaskTool))
-                .await;
+            reg.register(Arc::new(
+                crate::harness::mcp::task_tools::ListScheduledTasksTool,
+            ))
+            .await;
+            reg.register(Arc::new(
+                crate::harness::mcp::task_tools::CreateScheduledTaskTool,
+            ))
+            .await;
+            reg.register(Arc::new(
+                crate::harness::mcp::task_tools::UpdateScheduledTaskTool,
+            ))
+            .await;
+            reg.register(Arc::new(
+                crate::harness::mcp::task_tools::DeleteScheduledTaskTool,
+            ))
+            .await;
         }
 
         // 回合预检：复活 Failed 的启用 server（UE5 编辑器重开实案——懒重启只救

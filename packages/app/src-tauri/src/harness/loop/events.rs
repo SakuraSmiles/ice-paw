@@ -4,9 +4,7 @@
 //! `tauri::AppHandle`），失败仅 warn，不影响主流程。
 
 use crate::harness::observable::RoundState;
-use crate::infra::protocol::{
-    ChatBudgetPayload, ChatRoundStatePayload, ChatRoundsRenewedPayload,
-};
+use crate::infra::protocol::{ChatBudgetPayload, ChatRoundStatePayload, ChatRoundsRenewedPayload};
 
 /// 中间 round-state 事件发射 — 供前端 ChatStatusBar 实时显示进度。
 pub(crate) fn emit_intermediate_round_state(
@@ -55,9 +53,7 @@ pub(crate) fn emit_budget_state(
         max_renewals,
         renewed,
         round,
-        miss_hint: miss_hint
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_vec()),
+        miss_hint: miss_hint.filter(|s| !s.is_empty()).map(|s| s.to_vec()),
     };
     crate::harness::r#loop::emitter::emit_ser(emitter, "chat:budget", &payload);
 }

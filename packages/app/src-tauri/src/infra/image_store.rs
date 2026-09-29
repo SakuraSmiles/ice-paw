@@ -129,14 +129,18 @@ async fn offload_json_into(json: &str, dir: &Path) -> String {
     };
     let mut changed = false;
     for block in arr.iter_mut() {
-        let Some(obj) = block.as_object_mut() else { continue };
+        let Some(obj) = block.as_object_mut() else {
+            continue;
+        };
         if obj.get("type").and_then(|v| v.as_str()) != Some("image") {
             continue;
         }
         if obj.contains_key(IMAGE_FILE_KEY) {
             continue; // 已外置
         }
-        let Some(data) = obj.get("data").and_then(|v| v.as_str()) else { continue };
+        let Some(data) = obj.get("data").and_then(|v| v.as_str()) else {
+            continue;
+        };
         if data.is_empty() {
             continue; // 空图（剥离层已处理）不外置
         }
@@ -147,7 +151,11 @@ async fn offload_json_into(json: &str, dir: &Path) -> String {
         let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(data) else {
             continue; // 坏 base64 → 保留原样（读侧 parse 自会容错）
         };
-        let filename = format!("{}.{}", content_hash(&decoded), ext_for_media_type(media_type));
+        let filename = format!(
+            "{}.{}",
+            content_hash(&decoded),
+            ext_for_media_type(media_type)
+        );
         match write_dedup(dir, &filename, &decoded).await {
             Ok(()) => {
                 obj.insert("data".to_string(), serde_json::Value::String(String::new()));
@@ -196,7 +204,9 @@ async fn hydrate_json_from(json: &str, dir: &Path) -> String {
     };
     let mut changed = false;
     for block in arr.iter_mut() {
-        let Some(obj) = block.as_object_mut() else { continue };
+        let Some(obj) = block.as_object_mut() else {
+            continue;
+        };
         if obj.get("type").and_then(|v| v.as_str()) != Some("image") {
             continue;
         }
@@ -244,7 +254,8 @@ mod tests {
     use super::*;
 
     fn tmp_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("icepaw_imgstore_{}_{}", tag, uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("icepaw_imgstore_{}_{}", tag, uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }

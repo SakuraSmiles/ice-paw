@@ -31,7 +31,6 @@ pub fn global() -> &'static AutoApproveRegistry {
 }
 
 impl AutoApproveRegistry {
-
     /// boot 种子：扫全部开启的会话。
     pub async fn seed_from_db(&self, pool: &SqlitePool) {
         match crate::db::repo::conversation::list_auto_approve_ids(pool).await {

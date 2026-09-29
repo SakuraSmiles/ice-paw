@@ -1037,7 +1037,10 @@ mod tests {
         let err = ch.gate_read(None).await.expect_err("Off 读应拒（提议制）");
         assert!(err.to_string().contains("screen 通道未开启"));
         assert!(err.to_string().contains("request_screen_session"));
-        let err = ch.gate_write("c1", None).await.expect_err("Off 写应拒（提议制）");
+        let err = ch
+            .gate_write("c1", None)
+            .await
+            .expect_err("Off 写应拒（提议制）");
         assert!(err.to_string().contains("screen 通道未开启"));
         // 不产生任何通道状态（拒绝路径零副作用）
         let s = ch.snapshot();

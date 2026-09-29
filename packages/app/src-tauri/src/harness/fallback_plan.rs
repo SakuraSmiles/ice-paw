@@ -98,8 +98,8 @@ pub(crate) async fn resolve_profile_credentials(
             AppError::NotFound { id, .. } => ResolveProfileError::NotFound { id },
             other => ResolveProfileError::Corrupted(other),
         })?;
-    let (api_key, vault_base_url) = crypto::fetch_api_key(app, &row.api_key_ref)
-        .map_err(ResolveProfileError::Corrupted)?;
+    let (api_key, vault_base_url) =
+        crypto::fetch_api_key(app, &row.api_key_ref).map_err(ResolveProfileError::Corrupted)?;
     let base_url = row
         .base_url
         .as_deref()
@@ -253,10 +253,7 @@ mod tests {
     use super::*;
 
     /// 委派降级链测试夹具：只关心 model_profile_id / fallback_profile_ids 两列
-    fn deleg_agent_row(
-        model_profile_id: Option<&str>,
-        fallback_ids: Option<&str>,
-    ) -> AgentRow {
+    fn deleg_agent_row(model_profile_id: Option<&str>, fallback_ids: Option<&str>) -> AgentRow {
         AgentRow {
             id: "a1".into(),
             name: "n".into(),

@@ -63,8 +63,8 @@ use crate::db::repo::{self, message::TurnAnchor};
 use crate::error::{AppError, AppResult};
 use crate::harness::chat_state::ChatState;
 use crate::harness::event_log::{
-    self, ChannelElectionPayload, ChannelElectionResult, ChannelElectionTallyItem,
-    ChannelElectionVote, ChannelCoordinatorPayload, ChannelMentionPayload, EventCtx,
+    self, ChannelCoordinatorPayload, ChannelElectionPayload, ChannelElectionResult,
+    ChannelElectionTallyItem, ChannelElectionVote, ChannelMentionPayload, EventCtx,
 };
 use crate::harness::provider;
 use crate::harness::session_runner::{self, AgentTurnInput, TurnEnv};
@@ -198,7 +198,9 @@ pub(crate) fn parse_agent_mentions(
                 _ => best = Some((id, name.chars().count())),
             }
         }
-        let Some((id, _name_len)) = best else { continue };
+        let Some((id, _name_len)) = best else {
+            continue;
+        };
         if ambiguous {
             tracing::info!(target: "ice_paw.channel", "成员名重名歧义，@ 不触发接力");
             continue;
@@ -398,7 +400,12 @@ fn coord_streak_reset(conv_id: &str) {
 
 /// streak 现值（广播降级判定用；无记录 = 0）。
 fn coord_streak_get(conv_id: &str) -> usize {
-    coord_streaks().lock().unwrap().get(conv_id).copied().unwrap_or(0)
+    coord_streaks()
+        .lock()
+        .unwrap()
+        .get(conv_id)
+        .copied()
+        .unwrap_or(0)
 }
 
 /// 统筹者是否用户手动指定（C5 两档治理的出身判定：指定档故障不自动换帅）。
@@ -519,8 +526,7 @@ pub(crate) async fn materialize_user_message(
     }
     if !attach_file_inputs.is_empty() {
         repo::message_attachment_file::delete_by_message(pool, user_msg_id).await?;
-        repo::message_attachment_file::insert_batch(pool, user_msg_id, &attach_file_inputs)
-            .await?;
+        repo::message_attachment_file::insert_batch(pool, user_msg_id, &attach_file_inputs).await?;
     }
     let ev = EventCtx::new(&conv.id, user_msg_id, &conv.agent_id);
     event_log::log_user_message(pool, &ev, user_msg_id, content_text, &persist_blocks, None).await;
@@ -644,12 +650,10 @@ async fn consume_backlog(
     pool: &SqlitePool,
     conv: &ConversationRow,
 ) -> AppResult<()> {
-    let members = repo::project::list_member_profiles(
-        pool,
-        conv.project_id.as_deref().unwrap_or(""),
-    )
-    .await
-    .unwrap_or_default();
+    let members =
+        repo::project::list_member_profiles(pool, conv.project_id.as_deref().unwrap_or(""))
+            .await
+            .unwrap_or_default();
     if members.is_empty() {
         tracing::warn!(
             target: "ice_paw.channel",
@@ -676,12 +680,8 @@ async fn consume_backlog(
             .and_then(|rt| rt.head_msg_id.clone().map(|h| (h, rt.head_dispatched)))
     };
     let backlog: Vec<TurnAnchor> = match old_state {
-        Some((head, true)) => {
-            repo::message::list_user_anchors_after(pool, &conv.id, &head).await?
-        }
-        Some((head, false)) => {
-            repo::message::list_user_anchors_from(pool, &conv.id, &head).await?
-        }
+        Some((head, true)) => repo::message::list_user_anchors_after(pool, &conv.id, &head).await?,
+        Some((head, false)) => repo::message::list_user_anchors_from(pool, &conv.id, &head).await?,
         None => match repo::message::last_assistant_message_id(pool, &conv.id).await? {
             Some(last_reply) => {
                 repo::message::list_user_anchors_after(pool, &conv.id, &last_reply).await?
@@ -707,10 +707,7 @@ async fn consume_backlog(
         let mut map = runtimes().lock().unwrap();
         let rt = map.entry(conv.id.clone()).or_default();
         let cancelled: VecDeque<Hop> = std::mem::take(&mut rt.pending);
-        let head_for_events = rt
-            .head_msg_id
-            .clone()
-            .unwrap_or_else(|| new_head.clone());
+        let head_for_events = rt.head_msg_id.clone().unwrap_or_else(|| new_head.clone());
         rt.turns_taken = 0;
         rt.pair_counts.clear();
         let mentions = std::mem::take(&mut rt.backlog_mentions);
@@ -726,12 +723,8 @@ async fn consume_backlog(
     if coordinator_id.is_some()
         && mentions_merged.is_empty()
         && coord_streak_get(&conv.id) >= COORD_FAIL_STREAK
-        && coordinator_is_user_appointed(
-            pool,
-            &conv.id,
-            coordinator_id.as_deref().unwrap_or(""),
-        )
-        .await
+        && coordinator_is_user_appointed(pool, &conv.id, coordinator_id.as_deref().unwrap_or(""))
+            .await
     {
         let coord_hop = Hop {
             agent_id: coordinator_id.clone().unwrap_or_default(),
@@ -848,7 +841,9 @@ struct CastVote {
 /// 平票裁决 = joined_at 最早（成员表序）；全员弃权 = 胜者空缺（广播降级态，
 /// 下次 NeedsCoordinator 查 `last_election_all_abstained` 不再自动重选）。
 pub(crate) async fn run_election(app: &AppHandle, pool: &SqlitePool, conv: &ConversationRow) {
-    let Some(pid) = conv.project_id.clone() else { return };
+    let Some(pid) = conv.project_id.clone() else {
+        return;
+    };
     let members = repo::project::list_member_profiles(pool, &pid)
         .await
         .unwrap_or_default();
@@ -1073,8 +1068,7 @@ async fn cast_vote(
         if let Err(e) = repo::message::set_sender_agent(pool, &mid, &m.agent_id).await {
             tracing::warn!(target: "ice_paw.channel", "投票行 sender 出生打标失败: {e}");
         }
-        let ctx = EventCtx::new(&conv.id, turn, &m.agent_id)
-            .with_sender_name(Some(m.name.clone()));
+        let ctx = EventCtx::new(&conv.id, turn, &m.agent_id).with_sender_name(Some(m.name.clone()));
         event_log::log_assistant_message(
             pool,
             &ctx,
@@ -1180,12 +1174,13 @@ async fn schedule_election(
     });
 }
 
-
-
 /// 锁段判定产物（guard 不跨 await——数据在锁内收集，动作在锁外执行）。
 enum NextStep {
     /// 链达上限：取消全部剩余跳
-    ChainLimit { head: String, cancelled: VecDeque<Hop> },
+    ChainLimit {
+        head: String,
+        cancelled: VecDeque<Hop>,
+    },
     /// 无链 / 队列空且无在途 → 链自然终结（或本就无事可做）
     Stop { finish: bool },
     /// 有序对乒乓闸拦截（拦此跳，链继续）
@@ -1237,9 +1232,7 @@ async fn run_next_hop(
                 });
                 if pair_blocked {
                     NextStep::PairBlocked { head, hop }
-                } else if hop.from.is_some()
-                    && !wake_reserve(rt, &hop.agent_id, Instant::now())
-                {
+                } else if hop.from.is_some() && !wake_reserve(rt, &hop.agent_id, Instant::now()) {
                     // 频率闸（成员跳专用；用户跳不占频率）
                     NextStep::FreqBlocked { head, hop }
                 } else {
@@ -1406,16 +1399,22 @@ async fn run_next_hop(
         // turn_ended watcher 驱动——本函数不等待回合完成。
         let _done = session_runner::run_agent_turn(
             &TurnEnv {
-                emitter: crate::harness::r#loop::emitter::tauri_emitter(app.clone(), conv.id.clone()),
+                emitter: crate::harness::r#loop::emitter::tauri_emitter(
+                    app.clone(),
+                    conv.id.clone(),
+                ),
                 tool_app: Some(app.clone()),
                 pool: pool.clone(),
-                route_registry: app.state::<crate::harness::read_route::ReadRouteRegistry>().inner(),
+                route_registry: app
+                    .state::<crate::harness::read_route::ReadRouteRegistry>()
+                    .inner(),
                 chat_state: chat_state.clone(),
                 global_registry: Arc::clone(
                     app.state::<Arc<crate::harness::mcp::McpRegistry>>().inner(),
                 ),
                 mcp_manager: Arc::clone(
-                    app.state::<Arc<crate::harness::mcp::McpServerManager>>().inner(),
+                    app.state::<Arc<crate::harness::mcp::McpServerManager>>()
+                        .inner(),
                 ),
                 auth_registry: app
                     .state::<crate::harness::tool_executor::ToolAuthRegistry>()
@@ -1610,16 +1609,16 @@ async fn on_channel_turn_ended(app: &AppHandle, conv_id: &str) {
     // 失败口径 = termination='error'（interrupted=用户手势、length=额度顶格不算）；
     // 成功清零、跨链累计（streak 独立存储）。达阈值 → 罢免 + 补选。
     if let Some(hop) = &current {
-        let coordinator = repo::project::list_member_profiles(
-            &pool,
-            conv.project_id.as_deref().unwrap_or(""),
-        )
-        .await
-        .ok()
-        .and_then(|ms| ms.into_iter().find(|m| m.role == "coordinator"));
+        let coordinator =
+            repo::project::list_member_profiles(&pool, conv.project_id.as_deref().unwrap_or(""))
+                .await
+                .ok()
+                .and_then(|ms| ms.into_iter().find(|m| m.role == "coordinator"));
         if coordinator.as_ref().map(|c| c.agent_id.as_str()) == Some(hop.agent_id.as_str()) {
-            let failed =
-                last_turn_termination(&pool, conv_id, &head).await.as_deref() == Some("error");
+            let failed = last_turn_termination(&pool, conv_id, &head)
+                .await
+                .as_deref()
+                == Some("error");
             if failed {
                 let n = coord_streak_inc(conv_id);
                 tracing::warn!(
@@ -1678,12 +1677,10 @@ async fn on_channel_turn_ended(app: &AppHandle, conv_id: &str) {
     }
 
     // --- 无积压：接力检查（解析本回合终文的 @，C9 成员侧规则）---
-    let members = repo::project::list_member_profiles(
-        &pool,
-        conv.project_id.as_deref().unwrap_or(""),
-    )
-    .await
-    .unwrap_or_default();
+    let members =
+        repo::project::list_member_profiles(&pool, conv.project_id.as_deref().unwrap_or(""))
+            .await
+            .unwrap_or_default();
     if members.is_empty() {
         finish_chain(conv_id);
         return;
@@ -1870,9 +1867,7 @@ async fn last_turn_termination(pool: &SqlitePool, conv_id: &str, head: &str) -> 
     .ok()
     .flatten();
     payload
-        .and_then(|p| {
-            serde_json::from_str::<crate::harness::event_log::TurnEndedPayload>(&p).ok()
-        })
+        .and_then(|p| serde_json::from_str::<crate::harness::event_log::TurnEndedPayload>(&p).ok())
         .map(|p| p.termination)
 }
 
@@ -1954,19 +1949,11 @@ mod tests {
     #[test]
     fn route_non_member_mentions_filtered_and_noted() {
         // 全部无效 → 回落广播；部分无效 → 过滤但有效者仍点名
-        let (route, notes) = route_user_message(
-            &["ghost".into()],
-            &["a".into()],
-            Some("a"),
-        );
+        let (route, notes) = route_user_message(&["ghost".into()], &["a".into()], Some("a"));
         assert_eq!(route, ChannelRoute::Members(vec!["a".into()]));
         assert_eq!(notes.non_member, 1);
 
-        let (route, notes) = route_user_message(
-            &["ghost".into(), "a".into()],
-            &["a".into()],
-            None,
-        );
+        let (route, notes) = route_user_message(&["ghost".into(), "a".into()], &["a".into()], None);
         assert_eq!(route, ChannelRoute::Members(vec!["a".into()]));
         assert_eq!(notes.non_member, 1);
     }
@@ -1998,12 +1985,12 @@ mod tests {
 
     #[test]
     fn parse_hits_member_and_longest_prefix_wins() {
-        let out = parse_agent_mentions(
-            "@张三 看下这个，@张三丰 你也参与",
-            &members_fixture(),
-            None,
+        let out =
+            parse_agent_mentions("@张三 看下这个，@张三丰 你也参与", &members_fixture(), None);
+        assert_eq!(
+            out,
+            vec!["agent-zhang".to_string(), "agent-zhangf".to_string()]
         );
-        assert_eq!(out, vec!["agent-zhang".to_string(), "agent-zhangf".to_string()]);
     }
 
     #[test]
@@ -2048,7 +2035,10 @@ mod tests {
     fn brief_broadcast_coordinator_duty_and_roster() {
         // 广播接令：统筹职责（@ 分派优先）+ 名册 + 单条措辞
         let s1 = ContentBlock::join_text(&compose_channel_brief(
-            &BriefSpec::UserInitiated { broadcast: true, count: 1 },
+            &BriefSpec::UserInitiated {
+                broadcast: true,
+                count: 1,
+            },
             "写手（统筹）、审校",
         ));
         assert!(s1.contains("统筹者") && s1.contains("@其名字"));
@@ -2057,7 +2047,10 @@ mod tests {
 
         // 多条积压：递进指示措辞仍在
         let s3 = ContentBlock::join_text(&compose_channel_brief(
-            &BriefSpec::UserInitiated { broadcast: true, count: 3 },
+            &BriefSpec::UserInitiated {
+                broadcast: true,
+                count: 3,
+            },
             "写手（统筹）",
         ));
         assert!(s3.contains("3 条新消息") && s3.contains("递进指示"));
@@ -2067,7 +2060,10 @@ mod tests {
     fn brief_user_mention_and_relay_carry_roster() {
         // 用户 @ 点名：点名语境 + 名册 + 可再 @ 他人
         let sm = ContentBlock::join_text(&compose_channel_brief(
-            &BriefSpec::UserInitiated { broadcast: false, count: 1 },
+            &BriefSpec::UserInitiated {
+                broadcast: false,
+                count: 1,
+            },
             "写手（统筹）、审校",
         ));
         assert!(sm.contains("@了你") && sm.contains("点名由你处理"));
@@ -2076,7 +2072,9 @@ mod tests {
 
         // 成员接力：from_name 语境 + 名册
         let sr = ContentBlock::join_text(&compose_channel_brief(
-            &BriefSpec::Relay { from_name: "写手".into() },
+            &BriefSpec::Relay {
+                from_name: "写手".into(),
+            },
             "写手（统筹）、审校",
         ));
         assert!(sr.contains("成员 写手") && sr.contains("接手"));
@@ -2095,7 +2093,11 @@ mod tests {
         // 窗口内第 7 次 → 拒
         assert!(!wake_reserve(&mut rt, "m", now));
         // 窗口外（未来时刻）旧记录滑出 → 又可用
-        assert!(wake_reserve(&mut rt, "m", now + MENTION_WINDOW + Duration::from_secs(1)));
+        assert!(wake_reserve(
+            &mut rt,
+            "m",
+            now + MENTION_WINDOW + Duration::from_secs(1)
+        ));
         // 不同成员互不干扰
         assert!(wake_reserve(&mut rt, "other", now));
     }
@@ -2169,13 +2171,33 @@ mod tests {
     #[test]
     fn relay_enqueue_dedups_and_refreshes_from() {
         let mut rt = ChannelRuntime::default();
-        enqueue_relay_hops(&mut rt, vec!["cb".into(), "dev".into(), "dev2".into()], Some("m3".into()));
-        enqueue_relay_hops(&mut rt, vec!["dev".into(), "dev2".into()], Some("cb".into()));
+        enqueue_relay_hops(
+            &mut rt,
+            vec!["cb".into(), "dev".into(), "dev2".into()],
+            Some("m3".into()),
+        );
+        enqueue_relay_hops(
+            &mut rt,
+            vec!["dev".into(), "dev2".into()],
+            Some("cb".into()),
+        );
         let ids: Vec<&str> = rt.pending.iter().map(|h| h.agent_id.as_str()).collect();
         assert_eq!(ids, vec!["cb", "dev", "dev2"], "同目标不重复入队");
-        assert_eq!(rt.pending[0].from.as_deref(), Some("m3"), "未被再 @ 的跳 from 不动");
-        assert_eq!(rt.pending[1].from.as_deref(), Some("cb"), "from 刷新为最近 @ 者");
-        assert_eq!(rt.pending[2].from.as_deref(), Some("cb"), "from 刷新为最近 @ 者");
+        assert_eq!(
+            rt.pending[0].from.as_deref(),
+            Some("m3"),
+            "未被再 @ 的跳 from 不动"
+        );
+        assert_eq!(
+            rt.pending[1].from.as_deref(),
+            Some("cb"),
+            "from 刷新为最近 @ 者"
+        );
+        assert_eq!(
+            rt.pending[2].from.as_deref(),
+            Some("cb"),
+            "from 刷新为最近 @ 者"
+        );
         // 队列清空后同一目标可再次入队（合法的再次咨询——护栏 pair_counts 管频次）
         rt.pending.clear();
         enqueue_relay_hops(&mut rt, vec!["dev".into()], Some("m3".into()));

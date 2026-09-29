@@ -60,11 +60,17 @@ fn compose_schedule(args: &CreateArgs) -> AppResult<(String, String)> {
     let mut out: Option<(String, String)> = None;
     if let Some(cron) = args.cron.as_deref() {
         picked += 1;
-        out = Some(("cron".into(), serde_json::json!({ "expr": cron }).to_string()));
+        out = Some((
+            "cron".into(),
+            serde_json::json!({ "expr": cron }).to_string(),
+        ));
     }
     if let Some(time) = args.daily_time.as_deref() {
         picked += 1;
-        out = Some(("daily".into(), serde_json::json!({ "time": time }).to_string()));
+        out = Some((
+            "daily".into(),
+            serde_json::json!({ "time": time }).to_string(),
+        ));
     }
     if let Some(minutes) = args.interval_minutes {
         picked += 1;
@@ -125,14 +131,17 @@ impl McpClient for ListScheduledTasksTool {
         let rows = task::list(&ctx.pool).await?;
         let mut items = Vec::with_capacity(rows.len());
         for t in &rows {
-            let last = task::list_runs(&ctx.pool, &t.id, 1).await.ok().and_then(|r| {
-                r.into_iter().next().map(|run| {
-                    serde_json::json!({
-                        "status": run.status,
-                        "at": run.started_at,
+            let last = task::list_runs(&ctx.pool, &t.id, 1)
+                .await
+                .ok()
+                .and_then(|r| {
+                    r.into_iter().next().map(|run| {
+                        serde_json::json!({
+                            "status": run.status,
+                            "at": run.started_at,
+                        })
                     })
-                })
-            });
+                });
             items.push(serde_json::json!({
                 "id": t.id,
                 "name": t.name,
@@ -234,9 +243,7 @@ impl McpClient for CreateScheduledTaskTool {
         // 档位即校验 + 首个 next_run（一次性过去时间当场拒——同命令层口径）
         let spec = scheduler::parse_spec(&kind, &data)?;
         let next_run = scheduler::next_run_after(&spec, chrono::Local::now()).ok_or_else(|| {
-            AppError::Validation(
-                "一次性任务的时间已在过去——请选择未来时间".into(),
-            )
+            AppError::Validation("一次性任务的时间已在过去——请选择未来时间".into())
         })?;
 
         // 转发目标解析（id 精确 → 标题唯一；重名不猜——relay 同哲学）
@@ -247,7 +254,10 @@ impl McpClient for CreateScheduledTaskTool {
 
         let new_task = NewScheduledTask {
             name: parsed.name.trim().to_string(),
-            agent_id: parsed.agent_id.clone().unwrap_or_else(|| ctx.agent_id.clone()),
+            agent_id: parsed
+                .agent_id
+                .clone()
+                .unwrap_or_else(|| ctx.agent_id.clone()),
             schedule_kind: kind,
             schedule_data: data,
             prompt: parsed.prompt,
@@ -263,7 +273,12 @@ impl McpClient for CreateScheduledTaskTool {
             &ctx.pool,
             &id,
             &new_task,
-            Some(&next_run.with_timezone(&chrono::Utc).format("%Y-%m-%d %H:%M:%S").to_string()),
+            Some(
+                &next_run
+                    .with_timezone(&chrono::Utc)
+                    .format("%Y-%m-%d %H:%M:%S")
+                    .to_string(),
+            ),
         )
         .await?;
 
@@ -498,7 +513,10 @@ impl McpClient for UpdateScheduledTaskTool {
             };
             compose_schedule(&pseudo)?
         } else {
-            (existing.schedule_kind.clone(), existing.schedule_data.clone())
+            (
+                existing.schedule_kind.clone(),
+                existing.schedule_data.clone(),
+            )
         };
         let spec = scheduler::parse_spec(&kind, &data)?;
         let next_run = scheduler::next_run_after(&spec, chrono::Local::now()).ok_or_else(|| {
@@ -555,7 +573,12 @@ impl McpClient for UpdateScheduledTaskTool {
         task::schedule_next(
             &ctx.pool,
             &existing.id,
-            Some(&next_run.with_timezone(&chrono::Utc).format("%Y-%m-%d %H:%M:%S").to_string()),
+            Some(
+                &next_run
+                    .with_timezone(&chrono::Utc)
+                    .format("%Y-%m-%d %H:%M:%S")
+                    .to_string(),
+            ),
             None,
         )
         .await?;

@@ -446,7 +446,12 @@ impl McpServerManager {
                     id: config_id.to_string(),
                 })?
         };
-        if !config.enabled || matches!(self.entry_kind(config_id).await, Some(ServerStatusKind::Disabled)) {
+        if !config.enabled
+            || matches!(
+                self.entry_kind(config_id).await,
+                Some(ServerStatusKind::Disabled)
+            )
+        {
             return Err(AppError::Validation(format!(
                 "MCP Server '{}' 已禁用，不会自动重连；如需使用请在 设置 → MCP/工具集 中启用它",
                 config.name
@@ -692,9 +697,7 @@ mod tests {
         ));
         // external.rs 实际形态：send_request 的 rx 关闭（无 server 名）
         assert!(is_transport_down_error("内部错误: MCP Server 通道关闭"));
-        assert!(is_transport_down_error(
-            "IO 错误: connection reset by peer"
-        ));
+        assert!(is_transport_down_error("IO 错误: connection reset by peer"));
     }
 
     #[test]
@@ -781,7 +784,10 @@ mod tests {
                 last_workspace: None,
             },
         );
-        let err = mgr.lazy_restart("srv-disabled", &registry).await.unwrap_err();
+        let err = mgr
+            .lazy_restart("srv-disabled", &registry)
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("已禁用"), "实际: {err}");
     }
 

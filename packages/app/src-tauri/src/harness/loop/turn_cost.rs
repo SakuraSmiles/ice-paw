@@ -14,7 +14,7 @@
 //! 后端只判「输入侧谁变了」这个可观测事实。
 
 use crate::harness::event_log::{
-    ContextBreakdownPayload, ContextBreakdownFingerprint, ContextBreakdownRound,
+    ContextBreakdownFingerprint, ContextBreakdownPayload, ContextBreakdownRound,
     ContextBreakdownSegment,
 };
 use crate::infra::protocol::ToolDef;
@@ -126,7 +126,10 @@ pub(crate) struct MissInput<'a> {
 /// 多 slug 并存（顺序 = 词表序，展示稳定）；`first_request` 与其他互斥。
 /// system / os 稳定段只在轮 0 与上回合比——Pipeline 每回合只跑一次，回合内
 /// 逐轮 system 恒同，轮 ≥1 比对是恒真噪声。
-pub(crate) fn attribute_miss(cur: &MissInput<'_>, prev: Option<&PrevBaseline>) -> Vec<&'static str> {
+pub(crate) fn attribute_miss(
+    cur: &MissInput<'_>,
+    prev: Option<&PrevBaseline>,
+) -> Vec<&'static str> {
     let Some(prev) = prev else {
         return vec![miss_slug::FIRST_REQUEST];
     };
@@ -208,7 +211,12 @@ impl TurnCostRecorder {
     }
 
     /// provider 回传 usage 后调用。返回 miss 归因 slug 数组（非全 miss 返回 None）。
-    pub(crate) fn record_usage(&mut self, prompt: u64, cached: u64, injected: bool) -> Option<Vec<String>> {
+    pub(crate) fn record_usage(
+        &mut self,
+        prompt: u64,
+        cached: u64,
+        injected: bool,
+    ) -> Option<Vec<String>> {
         let switched = self.pending_switch;
         self.pending_switch = false;
         let round_zero = self.rounds.is_empty();
@@ -368,7 +376,10 @@ mod tests {
     fn attribute_round_ge1_skips_system_os_compare() {
         // 同回合内 system/os 恒同；轮 ≥1 即使传不同值也不归因（防恒真噪声）
         let p = prev(T, S, O, false, false);
-        let out = attribute_miss(&input(T, "changed", "changed", false, false, false), Some(&p));
+        let out = attribute_miss(
+            &input(T, "changed", "changed", false, false, false),
+            Some(&p),
+        );
         assert_eq!(out, vec![miss_slug::NO_DETECTABLE_CHANGE]);
     }
 

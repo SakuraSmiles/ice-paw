@@ -96,7 +96,8 @@ pub(crate) async fn ensure_channel_row(
         .or_else(|| members.first())
         .map(|m| m.agent_id.clone())
         .unwrap_or_default();
-    let conv = repo::conversation::ensure_channel(pool, project_id, &proj.name, &projection).await?;
+    let conv =
+        repo::conversation::ensure_channel(pool, project_id, &proj.name, &projection).await?;
     Ok(Some(conv))
 }
 
@@ -135,14 +136,18 @@ pub async fn ensure_channel(
 
 /// 频道视图（含归档频道——前端归档入口只读展示用）。
 #[tauri::command]
-pub async fn get_channel(pool: State<'_, SqlitePool>, project_id: String) -> AppResult<ChannelView> {
+pub async fn get_channel(
+    pool: State<'_, SqlitePool>,
+    project_id: String,
+) -> AppResult<ChannelView> {
     let pool = pool.inner();
     let conv = repo::conversation::active_channel_for_project(pool, &project_id).await?;
     match conv {
         Some(c) => build_view(pool, Some(c.into())).await,
         // 活频道不存在 → 查归档频道（归档入口展示）；两者皆无 = 未开启
         None => {
-            let archived = repo::conversation::archived_channel_for_project(pool, &project_id).await?;
+            let archived =
+                repo::conversation::archived_channel_for_project(pool, &project_id).await?;
             build_view(pool, archived.map(Into::into)).await
         }
     }
@@ -339,12 +344,10 @@ mod tests {
         // 空项目：None + 不产生频道行（空项目不产生空频道会话）
         let out = ensure_channel_row(&pool, "p1").await.unwrap();
         assert!(out.is_none());
-        assert!(
-            repo::conversation::active_channel_for_project(&pool, "p1")
-                .await
-                .unwrap()
-                .is_none()
-        );
+        assert!(repo::conversation::active_channel_for_project(&pool, "p1")
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]
@@ -361,19 +364,28 @@ mod tests {
             .unwrap();
 
         // 首次：建行——标题=项目名本体；投影=现任 coordinator（a2）优先
-        let conv = ensure_channel_row(&pool, "p1").await.unwrap().expect("channel row");
+        let conv = ensure_channel_row(&pool, "p1")
+            .await
+            .unwrap()
+            .expect("channel row");
         assert_eq!(conv.kind, "channel");
         assert_eq!(conv.title, "项目-p1");
         assert_eq!(conv.agent_id, "a2");
         assert_eq!(conv.project_id.as_deref(), Some("p1"));
 
         // 幂等：二次调用返回既有行（同 id，不重复建）
-        let again = ensure_channel_row(&pool, "p1").await.unwrap().expect("channel row");
+        let again = ensure_channel_row(&pool, "p1")
+            .await
+            .unwrap()
+            .expect("channel row");
         assert_eq!(again.id, conv.id);
 
         // 自动路径 wrapper：已有频道时零动作、不报错（成员写路径每次都调）
         ensure_channel_auto(&pool, "p1").await;
-        let third = ensure_channel_row(&pool, "p1").await.unwrap().expect("channel row");
+        let third = ensure_channel_row(&pool, "p1")
+            .await
+            .unwrap()
+            .expect("channel row");
         assert_eq!(third.id, conv.id);
     }
 

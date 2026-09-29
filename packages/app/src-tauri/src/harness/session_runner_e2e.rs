@@ -820,7 +820,10 @@ async fn tool_rounds_renewal_emits_toast_and_continues() {
     .await;
     let summary = finish(&mut fx).await;
 
-    assert_eq!(summary.finish_reason, "stop", "续期后文本收尾，非 tool_use 终止");
+    assert_eq!(
+        summary.finish_reason, "stop",
+        "续期后文本收尾，非 tool_use 终止"
+    );
     assert_eq!(summary.rounds, 53, "52 工具轮 + 1 文本轮");
     assert_eq!(fx.mock.call_count(), 53);
 
@@ -868,7 +871,10 @@ async fn tool_rounds_renewal_emits_toast_and_continues() {
         .collect();
     assert_eq!(done.len(), 1);
     assert_eq!(done[0]["finish_reason"], "stop");
-    assert_eq!(done[0]["rounds"], 53, "chat:done payload 带 rounds（①-2 数据链）");
+    assert_eq!(
+        done[0]["rounds"], 53,
+        "chat:done payload 带 rounds（①-2 数据链）"
+    );
 }
 
 // =========================================================================
