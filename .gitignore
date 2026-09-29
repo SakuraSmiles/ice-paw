@@ -81,3 +81,6 @@ docs/*
 
 # CLAUDE.md 是内部开发指引（含生产实案与决策记录），不入公开仓库
 CLAUDE.md
+
+# AGENTS.md 是开发工具自动生成的镜像（与本地 CLAUDE.md 同源），非项目文件
+AGENTS.md
